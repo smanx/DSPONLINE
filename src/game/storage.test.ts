@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { createInitialState, placeBuilding, setActivePlanet, setFuelItem } from "./engine";
+import { createInitialState, placeBuilding, setActivePlanet, setFuelItem, setLogisticsItem } from "./engine";
 import { loadGame, saveGame } from "./storage";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
@@ -9,7 +9,7 @@ const SAVE_KEY = "dsp-idle-network.save.v1";
 describe("game storage", () => {
   beforeEach(() => window.localStorage.clear());
 
-  it("round-trips a v11 multi-planet research save", () => {
+  it("round-trips a v12 multi-planet research save", () => {
     const state = createInitialState();
     state.research.selectedTechId = "electromagnetic_matrix";
     state.research.queuedTechIds = ["electromagnetism"];
@@ -18,7 +18,7 @@ describe("game storage", () => {
     saveGame(state);
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(11);
+    expect(loaded.version).toBe(12);
     expect(loaded.activePlanetId).toBe("home");
     expect(loaded.planetMetrics.ashen.powerFactor).toBe(1);
     expect(loaded.research.selectedTechId).toBe("electromagnetic_matrix");
@@ -44,7 +44,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(11);
+    expect(loaded.version).toBe(12);
     expect(loaded.tray.iron_ore).toBe(4);
     expect(loaded.entities[0].outputs.iron_ore).toBe(3);
     expect(loaded.entities.every((entity) => entity.progress === 0)).toBe(true);
@@ -62,8 +62,8 @@ describe("game storage", () => {
     expect(loaded.entities.some((entity) => entity.resourceId === "titanium_ore")).toBe(true);
     expect(loaded.entities.some((entity) => entity.resourceId === "water")).toBe(true);
     expect(loaded.entities.some((entity) => entity.resourceId === "sulfuric_acid")).toBe(true);
-    expect(loaded.entities.filter((entity) => entity.planetId === "home" && entity.kind === "vein")).toHaveLength(6);
-    expect(loaded.entities.filter((entity) => entity.planetId === "ashen" && entity.kind === "vein")).toHaveLength(7);
+    expect(loaded.entities.filter((entity) => entity.planetId === "home" && entity.kind === "vein")).toHaveLength(7);
+    expect(loaded.entities.filter((entity) => entity.planetId === "ashen" && entity.kind === "vein")).toHaveLength(12);
   });
 
   it("migrates numeric research progress and tops up around deployed starter equipment", () => {
@@ -165,7 +165,7 @@ describe("game storage", () => {
 
     const loaded = loadGame().state;
     const station = loaded.entities.find((entity) => entity.kind === "station")!;
-    expect(loaded.version).toBe(11);
+    expect(loaded.version).toBe(12);
     expect(station.stationVessels).toBe(1);
     expect(station.stationMinimumLoad).toBe(1);
   });
@@ -219,7 +219,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(11);
+    expect(loaded.version).toBe(12);
     expect(loaded.dysonSwarm).toEqual({
       sailsInOrbit: 0,
       totalLaunched: 0,
@@ -341,7 +341,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(11);
+    expect(loaded.version).toBe(12);
     expect(loaded.belts[0]).toMatchObject({ id: "legacy_belt", tier: 1, progress: 0.5 });
     expect(loaded.construction).toMatchObject({
       plane_smelter: 0,
@@ -395,7 +395,7 @@ describe("game storage", () => {
 
     const loaded = loadGame().state;
     const migrated = loaded.entities.find((entity) => entity.id === assembler.id)!;
-    expect(loaded.version).toBe(11);
+    expect(loaded.version).toBe(12);
     expect(loaded.construction.spray_coater).toBe(0);
     expect(migrated).toMatchObject({ sprayCoaterInstalled: false, proliferatorPoints: 0, proliferatorBonusProgress: {} });
     expect(migrated.proliferatorTier).toBeUndefined();
@@ -454,7 +454,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(11);
+    expect(loaded.version).toBe(12);
     expect(loaded.belts[0]).toMatchObject({ id: "v9_belt", tier: 2, sorterTier: 1, progress: 0.25 });
     expect(loaded.planetTrays.giant).toEqual({});
     expect(loaded.planetMetrics.giant.powerFactor).toBe(1);
@@ -500,7 +500,7 @@ describe("game storage", () => {
     });
   });
 
-  it("migrates v10 power records into the v11 energy model", () => {
+  it("migrates v10 power records into the current energy model", () => {
     let current = createInitialState();
     current.construction.thermal_power_plant = 1;
     current = placeBuilding(current, "thermal_power_plant", { x: 0, y: 0 });
@@ -518,7 +518,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(11);
+    expect(loaded.version).toBe(12);
     expect(loaded.construction).toMatchObject({
       solar_panel: 0,
       geothermal_power_station: 0,
@@ -569,6 +569,38 @@ describe("game storage", () => {
       recipeId: "accumulator_discharge",
       inputs: { charged_accumulator: 2 },
       outputs: { accumulator: 1 },
+    });
+  });
+
+  it("migrates v11 saves with every rare source and new production slot", () => {
+    const current = createInitialState();
+    const legacy = JSON.parse(JSON.stringify(current));
+    legacy.version = 11;
+    const rareItems = ["optical_grating_crystal", "kimberlite_ore", "fractal_silicon", "organic_crystal", "spiniform_stalagmite_crystal", "unipolar_magnet"];
+    legacy.entities = legacy.entities.filter((entity: { resourceId?: string }) => !rareItems.includes(entity.resourceId ?? ""));
+    delete legacy.construction.quantum_chemical_plant;
+    delete legacy.construction.fractionator;
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
+
+    const loaded = loadGame().state;
+    expect(loaded.version).toBe(12);
+    expect(loaded.entities.filter((entity) => entity.kind === "vein").map((entity) => entity.resourceId)).toEqual(expect.arrayContaining(rareItems));
+    expect(loaded.construction).toMatchObject({ quantum_chemical_plant: 0, fractionator: 0 });
+  });
+
+  it("round-trips an orbital collector configured for fire ice", () => {
+    let state = createInitialState();
+    state.construction.orbital_collector = 1;
+    state = setActivePlanet(state, "giant");
+    state = placeBuilding(state, "orbital_collector", { x: 0, y: 0 });
+    const collector = state.entities.find((entity) => entity.buildingId === "orbital_collector")!;
+    state = setLogisticsItem(state, collector.id, "fire_ice");
+    state.entities.find((entity) => entity.id === collector.id)!.outputs.fire_ice = 25;
+    saveGame(state);
+
+    expect(loadGame().state.entities.find((entity) => entity.id === collector.id)).toMatchObject({
+      storedItemId: "fire_ice",
+      outputs: { fire_ice: 25 },
     });
   });
 });

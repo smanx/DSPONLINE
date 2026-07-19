@@ -10,6 +10,12 @@ export type ItemId =
   | "crude_oil"
   | "silicon_ore"
   | "titanium_ore"
+  | "fire_ice"
+  | "kimberlite_ore"
+  | "fractal_silicon"
+  | "optical_grating_crystal"
+  | "spiniform_stalagmite_crystal"
+  | "unipolar_magnet"
   | "water"
   | "sulfuric_acid"
   | "iron_ingot"
@@ -48,6 +54,7 @@ export type ItemId =
   | "super_magnetic_ring"
   | "particle_container"
   | "deuterium"
+  | "hydrogen_fuel_rod"
   | "deuteron_fuel_rod"
   | "titanium_glass"
   | "casimir_crystal"
@@ -85,6 +92,7 @@ export type TechId =
   | "solar_energy"
   | "energy_storage"
   | "geothermal_power"
+  | "fractionation"
   | "high_efficiency_plasma_control"
   | "energy_matrix"
   | "xray_cracking"
@@ -99,6 +107,8 @@ export type TechId =
   | "orbital_collection"
   | "space_warp"
   | "nanomaterials"
+  | "rare_resource_utilization"
+  | "quantum_chemical_engineering"
   | "information_matrix"
   | "research_speed_1"
   | "miniature_particle_collider"
@@ -146,6 +156,8 @@ export type BuildingId =
   | "oil_refinery"
   | "water_pump"
   | "chemical_plant"
+  | "quantum_chemical_plant"
+  | "fractionator"
   | "miniature_particle_collider"
   | "em_rail_ejector"
   | "ray_receiver"
@@ -193,6 +205,15 @@ export type RecipeId =
   | "accumulator"
   | "accumulator_charge"
   | "accumulator_discharge"
+  | "hydrogen_fuel_rod"
+  | "deuterium_fractionation"
+  | "graphene_from_fire_ice"
+  | "diamond_from_kimberlite"
+  | "crystal_silicon_from_fractal"
+  | "photon_combiner_from_grating"
+  | "casimir_crystal_advanced"
+  | "carbon_nanotube_from_spiniform"
+  | "particle_container_from_unipolar"
   | "graphene"
   | "carbon_nanotube"
   | "proliferator_mk1"
@@ -290,7 +311,7 @@ export interface BuildingDefinition {
   outputCapacity: number;
   accepts?: "solid" | "fluid" | "any";
   tier?: BeltTier;
-  family?: "smelter" | "assembler";
+  family?: "smelter" | "assembler" | "chemical";
   description: string;
 }
 
@@ -448,7 +469,7 @@ export interface ResearchState {
 }
 
 export interface GameState {
-  version: 11;
+  version: 12;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];

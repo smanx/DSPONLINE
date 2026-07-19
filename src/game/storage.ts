@@ -110,7 +110,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
   const entities = saved.entities.map((entity: FactoryEntity) => {
     const planetId = validPlanetId(entity.planetId) ? entity.planetId : inferLegacyPlanet(entity);
@@ -149,7 +149,7 @@ function migrateGame(value: unknown): GameState | null {
       routingCursor: Math.max(0, Math.floor(entity.routingCursor ?? 0)),
       distributionMode: entity.kind === "splitter" ? entity.distributionMode ?? "balanced" : entity.distributionMode,
       storedItemId: orbitalCollector
-        ? entity.storedItemId === "deuterium" ? "deuterium" : "hydrogen"
+        ? entity.storedItemId === "deuterium" || entity.storedItemId === "fire_ice" ? entity.storedItemId : "hydrogen"
         : entity.storedItemId,
       stationMode: entity.kind === "station" ? orbitalCollector ? "supply" : entity.stationMode ?? "supply" : entity.stationMode,
       stationProgress: entity.kind === "station" ? Math.max(0, entity.stationProgress ?? 0) : entity.stationProgress,
@@ -291,7 +291,7 @@ function migrateGame(value: unknown): GameState | null {
   return {
     ...initial,
     ...saved,
-    version: 11,
+    version: 12,
     activePlanetId,
     entities,
     belts,

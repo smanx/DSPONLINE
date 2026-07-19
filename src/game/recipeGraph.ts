@@ -22,6 +22,12 @@ export const RESOURCE_SOURCES: Partial<Record<ItemId, ResourceSourceDefinition>>
   stone: SOLID_VEIN_SOURCE(["home", "ashen"]),
   silicon_ore: SOLID_VEIN_SOURCE(["ashen"]),
   titanium_ore: SOLID_VEIN_SOURCE(["ashen"]),
+  kimberlite_ore: SOLID_VEIN_SOURCE(["ashen"]),
+  fractal_silicon: SOLID_VEIN_SOURCE(["ashen"]),
+  optical_grating_crystal: SOLID_VEIN_SOURCE(["home"]),
+  spiniform_stalagmite_crystal: SOLID_VEIN_SOURCE(["ashen"]),
+  unipolar_magnet: SOLID_VEIN_SOURCE(["ashen"]),
+  organic_crystal: SOLID_VEIN_SOURCE(["ashen"]),
   crude_oil: {
     label: "原油涌泉萃取",
     planetIds: ["home"],
@@ -47,6 +53,12 @@ export const RESOURCE_SOURCES: Partial<Record<ItemId, ResourceSourceDefinition>>
     manual: false,
   },
   deuterium: {
+    label: "气态巨星轨道采集",
+    planetIds: ["giant"],
+    extractorBuildingId: "orbital_collector",
+    manual: false,
+  },
+  fire_ice: {
     label: "气态巨星轨道采集",
     planetIds: ["giant"],
     extractorBuildingId: "orbital_collector",

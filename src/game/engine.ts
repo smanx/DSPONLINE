@@ -148,7 +148,7 @@ export function createInitialState(): GameState {
   const ashenMetrics = emptyMetrics();
   const giantMetrics = emptyMetrics();
   return {
-    version: 11,
+    version: 12,
     nextId: 1,
     activePlanetId: "home",
     entities: [
@@ -158,6 +158,7 @@ export function createInitialState(): GameState {
       makeVein("vein_water", "home", "water", -150, -250),
       makeVein("vein_oil", "home", "crude_oil", -150, 35),
       makeVein("vein_coal", "home", "coal", -150, 320),
+      makeVein("vein_optical_grating", "home", "optical_grating_crystal", 490, 320),
       makeVein("ashen_iron", "ashen", "iron_ore", -470, -250),
       makeVein("ashen_copper", "ashen", "copper_ore", -470, 35),
       makeVein("ashen_stone", "ashen", "stone", -470, 320),
@@ -165,6 +166,11 @@ export function createInitialState(): GameState {
       makeVein("vein_titanium", "ashen", "titanium_ore", -150, 35),
       makeVein("ashen_coal", "ashen", "coal", -150, 320),
       makeVein("ashen_sulfuric", "ashen", "sulfuric_acid", 170, -250),
+      makeVein("ashen_kimberlite", "ashen", "kimberlite_ore", 490, -250),
+      makeVein("ashen_fractal_silicon", "ashen", "fractal_silicon", 490, 35),
+      makeVein("ashen_organic_crystal", "ashen", "organic_crystal", 490, 320),
+      makeVein("ashen_spiniform", "ashen", "spiniform_stalagmite_crystal", 810, -250),
+      makeVein("ashen_unipolar", "ashen", "unipolar_magnet", 810, 35),
     ],
     belts: [],
     cargo: null,
@@ -197,6 +203,8 @@ export function createInitialState(): GameState {
       oil_refinery: 0,
       water_pump: 0,
       chemical_plant: 0,
+      quantum_chemical_plant: 0,
+      fractionator: 0,
       miniature_particle_collider: 0,
       em_rail_ejector: 0,
       ray_receiver: 0,
@@ -1169,7 +1177,9 @@ function resetStationRuntime(state: GameState): void {
 
 function runOrbitalCollectors(state: GameState, seconds: number): void {
   for (const collector of state.entities.filter((entity) => entity.buildingId === "orbital_collector")) {
-    const itemId = collector.storedItemId === "deuterium" ? "deuterium" : "hydrogen";
+    const itemId = collector.storedItemId === "deuterium" || collector.storedItemId === "fire_ice"
+      ? collector.storedItemId
+      : "hydrogen";
     collector.storedItemId = itemId;
     collector.stationMode = "supply";
     const capacity = getBuilding("orbital_collector").outputCapacity * Math.max(1, collector.machineCount);
@@ -1179,7 +1189,7 @@ function runOrbitalCollectors(state: GameState, seconds: number): void {
       collector.progress = 0;
       continue;
     }
-    const rate = (itemId === "deuterium" ? 0.2 : 1) * collector.machineCount;
+    const rate = (itemId === "deuterium" ? 0.2 : itemId === "fire_ice" ? 0.5 : 1) * collector.machineCount;
     collector.progress = round((collector.progress ?? 0) + rate * seconds, 6);
     const produced = Math.min(free, Math.floor(collector.progress + EPSILON));
     collector.outputs[itemId] = current + produced;
@@ -1467,7 +1477,7 @@ function refundBelts(state: GameState, belts: BeltConnection[]): void {
 function logisticsAccepts(entity: FactoryEntity, itemId: ItemId): boolean {
   if ((entity.kind !== "storage" && entity.kind !== "splitter" && entity.kind !== "station") || !entity.buildingId) return false;
   if (entity.buildingId === "orbital_collector") {
-    return (itemId === "hydrogen" || itemId === "deuterium") && (!entity.storedItemId || entity.storedItemId === itemId);
+    return (itemId === "hydrogen" || itemId === "deuterium" || itemId === "fire_ice") && (!entity.storedItemId || entity.storedItemId === itemId);
   }
   const accepts = getBuilding(entity.buildingId).accepts ?? "any";
   const itemKind = ITEMS[itemId].kind;
@@ -2226,7 +2236,9 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
 
   if (entity.kind === "station") {
     if (entity.buildingId === "orbital_collector") {
-      const itemId = entity.storedItemId === "deuterium" ? "deuterium" : "hydrogen";
+      const itemId = entity.storedItemId === "deuterium" || entity.storedItemId === "fire_ice"
+        ? entity.storedItemId
+        : "hydrogen";
       const capacity = getBuilding("orbital_collector").outputCapacity * Math.max(1, entity.machineCount);
       if ((entity.outputs[itemId] ?? 0) >= capacity - EPSILON) {
         return { code: "output-blocked", label: `${ITEMS[itemId].name}储量已满`, tone: "blocked" };

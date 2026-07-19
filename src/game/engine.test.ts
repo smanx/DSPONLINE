@@ -68,9 +68,17 @@ describe("factory simulation", () => {
       matrix_lab: 2,
       conveyor_belt_mk1: 10,
     });
-    expect(state.entities.filter((entity) => entity.kind === "vein")).toHaveLength(13);
-    expect(state.entities.filter((entity) => entity.kind === "vein" && entity.planetId === "home")).toHaveLength(6);
-    expect(state.entities.filter((entity) => entity.kind === "vein" && entity.planetId === "ashen")).toHaveLength(7);
+    expect(state.entities.filter((entity) => entity.kind === "vein")).toHaveLength(19);
+    expect(state.entities.filter((entity) => entity.kind === "vein").map((entity) => entity.resourceId)).toEqual(expect.arrayContaining([
+      "kimberlite_ore",
+      "fractal_silicon",
+      "optical_grating_crystal",
+      "organic_crystal",
+      "spiniform_stalagmite_crystal",
+      "unipolar_magnet",
+    ]));
+    expect(state.entities.filter((entity) => entity.kind === "vein" && entity.planetId === "home")).toHaveLength(7);
+    expect(state.entities.filter((entity) => entity.kind === "vein" && entity.planetId === "ashen")).toHaveLength(12);
     expect(state.planetMetrics.giant.powerFactor).toBe(1);
     expect(state.entities.map((entity) => entity.resourceId)).toEqual(expect.arrayContaining(["silicon_ore", "titanium_ore", "water", "sulfuric_acid"]));
   });
@@ -1736,5 +1744,106 @@ describe("factory simulation", () => {
     expect(exchanger.inputs.charged_accumulator).toBe(0);
     expect(exchanger.outputs.accumulator).toBe(1);
     expect(exchanger.storedEnergyMj).toBe(0);
+  });
+
+  it("fractionates hydrogen into deuterium while returning the remaining hydrogen", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("fractionation");
+    state.construction.wind_turbine = 3;
+    state.construction.fractionator = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 3);
+    state = placeBuilding(state, "fractionator", { x: 0, y: 0 });
+    const fractionator = state.entities.find((entity) => entity.buildingId === "fractionator")!;
+    fractionator.inputs.hydrogen = 20;
+    state = advanceSimulation(state, 2);
+
+    const result = state.entities.find((entity) => entity.id === fractionator.id)!;
+    expect(result.inputs.hydrogen).toBe(0);
+    expect(result.outputs).toMatchObject({ hydrogen: 18, deuterium: 2 });
+    expect(result.productionRate).toBe(600);
+  });
+
+  it("manufactures hydrogen fuel rods and burns them in thermal power plants", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("fractionation");
+    state.construction.wind_turbine = 1;
+    state.construction.assembling_machine_mk1 = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 });
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    state = setEntityRecipe(state, assembler.id, "hydrogen_fuel_rod");
+    state.entities.find((entity) => entity.id === assembler.id)!.inputs = { titanium_ingot: 1, hydrogen: 10 };
+    state = advanceSimulation(state, 8);
+    expect(state.entities.find((entity) => entity.id === assembler.id)?.outputs.hydrogen_fuel_rod).toBe(2);
+
+    state.construction.thermal_power_plant = 1;
+    state = placeBuilding(state, "thermal_power_plant", { x: 250, y: 0 });
+    const thermal = state.entities.find((entity) => entity.buildingId === "thermal_power_plant")!;
+    state = setFuelItem(state, thermal.id, "hydrogen_fuel_rod");
+    expect(state.entities.find((entity) => entity.id === thermal.id)?.fuelItemId).toBe("hydrogen_fuel_rod");
+  });
+
+  it("runs every rare-resource alternative recipe", () => {
+    const cases = [
+      { buildingId: "chemical_plant", recipeId: "graphene_from_fire_ice", inputs: { fire_ice: 2 }, outputs: { graphene: 2, hydrogen: 1 }, seconds: 2 },
+      { buildingId: "arc_smelter", recipeId: "diamond_from_kimberlite", inputs: { kimberlite_ore: 1 }, outputs: { diamond: 2 }, seconds: 1.5 },
+      { buildingId: "arc_smelter", recipeId: "crystal_silicon_from_fractal", inputs: { fractal_silicon: 1 }, outputs: { crystal_silicon: 2 }, seconds: 1.5 },
+      { buildingId: "assembling_machine_mk1", recipeId: "photon_combiner_from_grating", inputs: { optical_grating_crystal: 1, circuit_board: 1 }, outputs: { photon_combiner: 1 }, seconds: 4 },
+      { buildingId: "assembling_machine_mk1", recipeId: "casimir_crystal_advanced", inputs: { optical_grating_crystal: 4, graphene: 2, hydrogen: 12 }, outputs: { casimir_crystal: 1 }, seconds: 6 },
+      { buildingId: "chemical_plant", recipeId: "carbon_nanotube_from_spiniform", inputs: { spiniform_stalagmite_crystal: 6 }, outputs: { carbon_nanotube: 2 }, seconds: 4 },
+      { buildingId: "assembling_machine_mk1", recipeId: "particle_container_from_unipolar", inputs: { unipolar_magnet: 10, copper_ingot: 2 }, outputs: { particle_container: 1 }, seconds: 6 },
+    ] as const;
+
+    for (const definition of cases) {
+      let state = createInitialState();
+      state.research.completedTechIds.push("rare_resource_utilization");
+      state.construction.wind_turbine = 8;
+      state.construction[definition.buildingId] = 1;
+      state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 8);
+      state = placeBuilding(state, definition.buildingId, { x: 0, y: 0 });
+      const machine = state.entities.find((entity) => entity.buildingId === definition.buildingId)!;
+      state = setEntityRecipe(state, machine.id, definition.recipeId);
+      state.entities.find((entity) => entity.id === machine.id)!.inputs = { ...definition.inputs };
+      state = advanceSimulation(state, definition.seconds);
+      expect(state.entities.find((entity) => entity.id === machine.id)?.outputs, definition.recipeId).toMatchObject(definition.outputs);
+    }
+  });
+
+  it("upgrades a chemical plant in place and doubles its recipe speed", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("polymer_chemistry", "quantum_chemical_engineering");
+    state.construction.wind_turbine = 8;
+    state.construction.chemical_plant = 1;
+    state.construction.quantum_chemical_plant = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 8);
+    state = placeBuilding(state, "chemical_plant", { x: 0, y: 0 });
+    const chemical = state.entities.find((entity) => entity.buildingId === "chemical_plant")!;
+    state = setEntityRecipe(state, chemical.id, "organic_crystal");
+    state.entities.find((entity) => entity.id === chemical.id)!.inputs = { plastic: 2, refined_oil: 1, water: 1 };
+    expect(canUpgradeEntity(state, chemical.id)).toBe(true);
+    state = upgradeEntity(state, chemical.id);
+    state = advanceSimulation(state, 3);
+
+    expect(state.entities.find((entity) => entity.id === chemical.id)).toMatchObject({
+      buildingId: "quantum_chemical_plant",
+      recipeId: "organic_crystal",
+      outputs: { organic_crystal: 1 },
+    });
+  });
+
+  it("collects fire ice from a gas giant orbital collector", () => {
+    let state = createInitialState();
+    state.construction.orbital_collector = 1;
+    state = setActivePlanet(state, "giant");
+    state = placeBuilding(state, "orbital_collector", { x: 0, y: 0 });
+    const collector = state.entities.find((entity) => entity.buildingId === "orbital_collector")!;
+    state = setLogisticsItem(state, collector.id, "fire_ice");
+    state = advanceSimulation(state, 2);
+
+    expect(state.entities.find((entity) => entity.id === collector.id)).toMatchObject({
+      storedItemId: "fire_ice",
+      outputs: { fire_ice: 1 },
+      productionRate: 30,
+    });
   });
 });

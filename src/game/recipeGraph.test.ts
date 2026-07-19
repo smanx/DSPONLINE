@@ -41,4 +41,21 @@ describe("recipe graph", () => {
     expect(getVirtualRecipeResult(getRecipe("solar_sail_launch")!)).toBe("戴森云轨道太阳帆");
     expect(getVirtualRecipeResult(getRecipe("carrier_rocket_launch")!)).toBe("戴森球永久结构点");
   });
+
+  it("indexes rare veins, gas-giant fire ice and every alternative recipe", () => {
+    expect(getResourceSource("fire_ice")).toMatchObject({
+      extractorBuildingId: "orbital_collector",
+      planetIds: ["giant"],
+      manual: false,
+    });
+    expect(getResourceSource("organic_crystal")).toMatchObject({ planetIds: ["ashen"], manual: true });
+    expect(getProducingRecipes("organic_crystal").map((recipe) => recipe.id)).toContain("organic_crystal");
+    expect(getProducingRecipes("graphene").map((recipe) => recipe.id)).toEqual(expect.arrayContaining(["graphene", "graphene_from_fire_ice"]));
+    expect(getProducingRecipes("diamond").map((recipe) => recipe.id)).toEqual(expect.arrayContaining(["diamond", "diamond_from_kimberlite"]));
+    expect(getProducingRecipes("crystal_silicon").map((recipe) => recipe.id)).toContain("crystal_silicon_from_fractal");
+    expect(getProducingRecipes("photon_combiner").map((recipe) => recipe.id)).toContain("photon_combiner_from_grating");
+    expect(getProducingRecipes("casimir_crystal").map((recipe) => recipe.id)).toContain("casimir_crystal_advanced");
+    expect(getProducingRecipes("carbon_nanotube").map((recipe) => recipe.id)).toContain("carbon_nanotube_from_spiniform");
+    expect(getProducingRecipes("particle_container").map((recipe) => recipe.id)).toContain("particle_container_from_unipolar");
+  });
 });

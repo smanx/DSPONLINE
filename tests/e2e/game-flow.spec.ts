@@ -699,6 +699,52 @@ async function openCompleteEnergyGame(page: Page) {
   await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
 }
 
+async function openRareResourceStageGame(page: Page) {
+  await page.addInitScript(() => {
+    const entityBase = {
+      planetId: "home",
+      machineCount: 1,
+      minerCount: 0,
+      inputs: {},
+      outputs: {},
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+    };
+    const state = {
+      version: 12,
+      nextId: 9,
+      activePlanetId: "home",
+      entities: [
+        { ...entityBase, id: "rare_wind", kind: "power", position: { x: 300, y: -620 }, buildingId: "wind_turbine", machineCount: 20, powerOutputKw: 6000 },
+        { ...entityBase, id: "rare_fractionator", kind: "machine", position: { x: 300, y: -300 }, buildingId: "fractionator", recipeId: "deuterium_fractionation", inputs: { hydrogen: 20 } },
+        { ...entityBase, id: "rare_chemical", kind: "machine", position: { x: 650, y: -300 }, buildingId: "chemical_plant", recipeId: "graphene_from_fire_ice", inputs: { fire_ice: 4 } },
+        { ...entityBase, id: "rare_quantum", kind: "machine", position: { x: 1000, y: -300 }, buildingId: "quantum_chemical_plant", recipeId: "carbon_nanotube_from_spiniform", inputs: { spiniform_stalagmite_crystal: 12 } },
+        { ...entityBase, id: "rare_smelter", kind: "machine", position: { x: 300, y: 90 }, buildingId: "arc_smelter", recipeId: "diamond_from_kimberlite", inputs: { kimberlite_ore: 2 } },
+        { ...entityBase, id: "rare_assembler", kind: "machine", position: { x: 650, y: 90 }, buildingId: "assembling_machine_mk1", recipeId: "particle_container_from_unipolar", inputs: { unipolar_magnet: 20, copper_ingot: 4 } },
+        { ...entityBase, id: "rare_thermal", kind: "power", position: { x: 1000, y: 90 }, buildingId: "thermal_power_plant", fuelItemId: "hydrogen_fuel_rod", fuelRemainingMj: 27, inputs: { hydrogen_fuel_rod: 2 }, powerInputKw: 0, powerOutputKw: 0 },
+        { ...entityBase, id: "rare_collector", kind: "station", planetId: "giant", position: { x: 0, y: 0 }, buildingId: "orbital_collector", storedItemId: "fire_ice", stationMode: "supply", stationProgress: 0, stationTrips: 0, stationLastTransfer: 0, outputs: { fire_ice: 25 } },
+      ],
+      belts: [],
+      construction: { quantum_chemical_plant: 1, fractionator: 1, conveyor_belt_mk1: 6 },
+      tray: { hydrogen_fuel_rod: 2 },
+      planetTrays: { home: { hydrogen_fuel_rod: 2 }, ashen: {}, giant: {} },
+      totalProduced: { hydrogen_fuel_rod: 2, fire_ice: 25 },
+      research: {
+        selectedTechId: null,
+        queuedTechIds: [],
+        progressByTech: {},
+        completedTechIds: ["fractionation", "nanomaterials", "quantum_chip", "interstellar_logistics", "rare_resource_utilization", "gravity_matrix", "quantum_chemical_engineering"],
+      },
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
 test("manual mining feeds a powered smelter", async ({ page }) => {
   await page.setViewportSize({ width: 1560, height: 960 });
   await freshGame(page);
@@ -785,12 +831,12 @@ test("factory nodes follow the pointer before release", async ({ page }) => {
   expect(during!.y).toBeGreaterThan(before!.y + 40);
   await page.mouse.up();
   await page.waitForTimeout(500);
-  await expect(page.locator(".react-flow__node")).toHaveCount(7);
+  await expect(page.locator(".react-flow__node")).toHaveCount(8);
   await expect.poll(async () => page.locator(".react-flow__node").evaluateAll((elements) =>
     elements.filter((element) => {
       const rect = element.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== "hidden";
-    }).length)).toBe(7);
+    }).length)).toBe(8);
   await expect(node).toBeVisible();
 });
 
@@ -816,8 +862,8 @@ test("dragging a construction card keeps the canvas nodes visible", async ({ pag
   const canvas = page.locator(".react-flow__pane");
   await page.getByTitle("部署风力涡轮机").dragTo(canvas, { targetPosition: { x: 650, y: 210 } });
   await expect(page.locator(".power-node")).toBeVisible();
-  await expect(page.locator(".vein-node")).toHaveCount(6);
-  await expect(page.locator(".react-flow__node")).toHaveCount(7);
+  await expect(page.locator(".vein-node")).toHaveCount(7);
+  await expect(page.locator(".react-flow__node")).toHaveCount(8);
 });
 
 test("construction batches place exact machine and miner groups", async ({ page }) => {
@@ -946,8 +992,8 @@ test("yellow matrix industry exposes remote resources, chemistry and three-color
   await expect(water).toContainText("抽水站 ×1");
 
   await page.getByTitle("切换到烬原 II").click();
-  await expect(page.locator(".vein-node").filter({ hasText: "硅石" })).toHaveCount(1);
-  await expect(page.locator(".vein-node").filter({ hasText: "钛石" })).toHaveCount(1);
+  await expect(page.locator(".vein-node").filter({ has: page.getByText("硅石", { exact: true }) })).toHaveCount(1);
+  await expect(page.locator(".vein-node").filter({ has: page.getByText("钛石", { exact: true }) })).toHaveCount(1);
   await expect(page.locator(".vein-node").filter({ hasText: "硫酸海洋" })).toHaveCount(1);
   await expect(page.locator(".vein-node").filter({ hasText: "海洋水源" })).toHaveCount(0);
   await page.getByTitle("切换到澄海 I").click();
@@ -1647,4 +1693,72 @@ test("renewables, storage, fusion and artificial stars form a complete energy la
   }).toBeLessThanOrEqual(390);
   await expect(page.locator(".game-notice")).toBeHidden({ timeout: 4_000 });
   await page.screenshot({ path: "artifacts/qa/complete-energy-390.png", fullPage: true });
+});
+
+test("rare resources, fractionation and quantum chemistry expose every alternative chain", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openRareResourceStageGame(page);
+  await page.locator(".react-flow__controls-fitview").click();
+
+  await expect(page.locator(".vein-node").filter({ hasText: "光栅石" })).toBeVisible();
+  const fractionator = page.locator(".machine-node").filter({ hasText: "分馏塔" });
+  await expect(fractionator.getByTitle("取出氢")).toBeVisible();
+  await expect(fractionator.getByTitle("拿取氢")).toBeVisible();
+  await expect(fractionator.getByTitle("拿取氘")).toBeVisible();
+
+  const chemical = page.locator(".machine-node").filter({ hasText: "可燃冰裂解" });
+  await expect(chemical.getByTitle("取出可燃冰")).toBeVisible();
+  await expect(chemical.getByTitle("拿取石墨烯")).toBeVisible();
+  await chemical.click();
+  const inspector = page.locator(".inspector-content");
+  await expect(inspector.getByTitle("升级为量子化工厂")).toBeVisible();
+  await inspector.getByTitle("升级为量子化工厂").click();
+  await expect(chemical).toContainText("量子化工厂");
+  await expect(chemical).toContainText("可燃冰裂解");
+
+  const thermal = page.locator(".power-node").filter({ hasText: "火力发电厂" });
+  await thermal.click();
+  await expect(page.locator(".inspector-content select")).toHaveValue("hydrogen_fuel_rod");
+  await expect(page.locator(".inspector-content select option").filter({ hasText: "氢燃料棒" })).toHaveCount(1);
+  await page.screenshot({ path: "artifacts/qa/rare-alternatives-home-1440.png", fullPage: true });
+
+  await page.getByLabel("打开配方图鉴").click();
+  const codex = page.getByRole("dialog", { name: "配方图鉴" });
+  await codex.getByLabel("搜索配方物品").fill("石墨烯");
+  await codex.locator(".recipe-index > button").filter({ hasText: "石墨烯" }).click();
+  await expect(codex.locator(".recipe-method").filter({ hasText: "可燃冰裂解" })).toContainText("可燃冰");
+  await expect(codex.locator(".recipe-method").filter({ hasText: "石墨烯" }).first()).toContainText("化工厂");
+  await codex.getByLabel("搜索配方物品").fill("有机晶体");
+  await codex.locator(".recipe-index > button").filter({ hasText: "有机晶体" }).click();
+  await expect(codex.locator(".recipe-method--source")).toContainText("烬原 II");
+  await expect(codex.locator(".recipe-section").first().locator(".recipe-method:not(.recipe-method--source)").filter({ hasText: "有机晶体" })).toContainText("塑料");
+  await page.screenshot({ path: "artifacts/qa/rare-recipe-codex-1440.png", fullPage: true });
+  await page.getByLabel("关闭配方图鉴").click();
+
+  await page.getByLabel("打开科技树").click();
+  for (const technology of ["流体分馏", "稀有资源利用", "量子化工"]) {
+    await expect(page.locator(".technology-node").filter({ hasText: technology })).toHaveCount(1);
+  }
+  await page.getByLabel("关闭科技树").click();
+
+  await page.getByTitle("切换到烬原 II").click();
+  await page.locator(".react-flow__controls-fitview").click();
+  for (const resource of ["金伯利矿石", "分形硅石", "有机晶体", "刺笋结晶", "单极磁石"]) {
+    await expect(page.locator(".vein-node").filter({ hasText: resource })).toHaveCount(1);
+  }
+  await page.screenshot({ path: "artifacts/qa/rare-resource-field-1440.png", fullPage: true });
+
+  await page.getByTitle("切换到苍岚 III").click();
+  const collector = page.locator(".station-node").filter({ hasText: "轨道采集器" });
+  await collector.click();
+  await expect(page.locator(".station-inspector select")).toHaveValue("fire_ice");
+  await expect(collector.getByTitle("拿取可燃冰")).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".station-inspector select option").filter({ hasText: "可燃冰" })).toHaveCount(1);
+  await expect.poll(async () => {
+    const box = await page.locator(".inspector-panel").boundingBox();
+    return box ? Math.ceil(box.x + box.width) : Number.POSITIVE_INFINITY;
+  }).toBeLessThanOrEqual(390);
+  await expect(page.locator(".game-notice")).toBeHidden({ timeout: 4_000 });
+  await page.screenshot({ path: "artifacts/qa/rare-orbital-collector-390.png", fullPage: true });
 });

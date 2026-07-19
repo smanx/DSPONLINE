@@ -607,7 +607,7 @@ function EntityInspector({
     const collector = entity.buildingId === "orbital_collector";
     const peer = planetary ? findPlanetaryPeer(game, entity) : findInterstellarPeer(game, entity);
     const acceptedItems = collector
-      ? [ITEMS.hydrogen, ITEMS.deuterium]
+      ? [ITEMS.hydrogen, ITEMS.deuterium, ITEMS.fire_ice]
       : Object.values(ITEMS);
     const vehicleCapacity = planetary ? getStationDroneCapacity(entity) : getStationVesselCapacity(entity);
     const vehicleCount = planetary
@@ -988,6 +988,8 @@ const BUILD_ORDER: Array<BuildingId | ConveyorBeltId> = [
   "oil_refinery",
   "water_pump",
   "chemical_plant",
+  "quantum_chemical_plant",
+  "fractionator",
   "miniature_particle_collider",
   "em_rail_ejector",
   "vertical_launching_silo",
@@ -1010,6 +1012,7 @@ function buildIcon(id: BuildingId | ConveyorBeltId) {
   if (id === "matrix_lab") return <FlaskConical size={18} />;
   if (id === "storage_mk1") return <Database size={18} />;
   if (id === "storage_tank" || id === "oil_extractor" || id === "water_pump") return <Droplets size={18} />;
+  if (id === "fractionator") return <Droplets size={18} />;
   if (id === "splitter_4way") return <GitFork size={18} />;
   if (id === "miniature_particle_collider") return <Atom size={18} />;
   if (id === "em_rail_ejector") return <Satellite size={18} />;
