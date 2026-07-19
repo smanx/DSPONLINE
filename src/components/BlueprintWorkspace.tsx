@@ -1,4 +1,4 @@
-import { ArrowUp, BoxSelect, Check, Copy, Layers3, MousePointer2, PackageOpen, Trash2, X } from "lucide-react";
+import { ArrowUp, BoxSelect, Check, Copy, Focus, Layers3, MousePointer2, PackageOpen, Trash2, X } from "lucide-react";
 import { getConstructionDefinition, getPlanet } from "../game/content";
 import { canPlaceBlueprint, getBlueprintRequirements } from "../game/engine";
 import type { BlueprintDefinition, GameState } from "../game/types";
@@ -27,10 +27,11 @@ export function CanvasSelectionTools({ selectionMode, blueprintCount, onModeChan
   );
 }
 
-export function SelectionToolbar({ selectedCount, eligibleCount, canUpgrade, onCopy, onUpgrade, onRemove }: {
+export function SelectionToolbar({ selectedCount, eligibleCount, canUpgrade, onFocus, onCopy, onUpgrade, onRemove }: {
   selectedCount: number;
   eligibleCount: number;
   canUpgrade: boolean;
+  onFocus: () => void;
   onCopy: () => void;
   onUpgrade: () => void;
   onRemove: () => void;
@@ -39,6 +40,7 @@ export function SelectionToolbar({ selectedCount, eligibleCount, canUpgrade, onC
   return (
     <div className="selection-toolbar nodrag nopan" role="toolbar" aria-label="选区操作">
       <span><BoxSelect size={14} /><strong>{selectedCount}</strong> 已选</span>
+      <button type="button" onClick={onFocus} title="定位到所选设备" aria-label="定位到所选设备"><Focus size={16} /></button>
       <button type="button" disabled={eligibleCount === 0} onClick={onCopy} title="复制所选设备为蓝图并进入粘贴" aria-label="复制所选为蓝图"><Copy size={16} /></button>
       <button type="button" disabled={!canUpgrade} onClick={onUpgrade} title="批量升级所有可升级设备" aria-label="批量升级所选设备"><ArrowUp size={16} /></button>
       <button className="danger" type="button" onClick={onRemove} title="批量回收所选设备" aria-label="批量回收所选设备"><Trash2 size={16} /></button>

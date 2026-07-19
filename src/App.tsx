@@ -16,6 +16,7 @@ import {
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  BuildingPlacementCursor,
   CargoCursor,
   ConstructionDock,
   HeaderControls,
@@ -54,8 +55,10 @@ import {
   dropCargoToEntity,
   dropCargoToTray,
   exploreStarSystem,
+  getAcceptedInputs,
   getBeltCapacity,
   getEntityOperatingStatus,
+  getProducedOutputs,
   handcraftRecipe,
   installSprayCoater,
   installMiner,
@@ -151,10 +154,14 @@ function FactoryGame() {
   const achievementCountRef = useRef(game.achievements.unlockedIds.length);
   const miningTimerRef = useRef<number | null>(null);
   const nodeDragActiveRef = useRef(false);
+  const selectedEntityIdsRef = useRef<string[]>([]);
+  const selectedBeltIdRef = useRef<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const { screenToFlowPosition, setViewport } = useReactFlow();
+  const { screenToFlowPosition, setCenter, setViewport } = useReactFlow();
 
   useEffect(() => { gameRef.current = game; }, [game]);
+  useEffect(() => { selectedEntityIdsRef.current = selectedEntityIds; }, [selectedEntityIds]);
+  useEffect(() => { selectedBeltIdRef.current = selectedBeltId; }, [selectedBeltId]);
 
   const playTone = useCallback((kind: "confirm" | "complete" | "alert", force = false) => {
     if (!force && !gameRef.current.settings.soundEnabled) return;
@@ -244,6 +251,9 @@ function FactoryGame() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const editing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement || Boolean(target?.isContentEditable);
       if (event.key === "Escape") {
         setPlacement(null);
         setTechnologyOpen(false);
@@ -257,7 +267,23 @@ function FactoryGame() {
         setBlueprintPlacementId(null);
         setSelectionMode(false);
         setSelectedEntityIds([]);
+        setSelectedBeltId(null);
         setGame((current) => dropCargoToTray(current));
+      } else if (event.key === "Delete" && !editing && !document.querySelector('[role="dialog"]')) {
+        const entityIds = selectedEntityIdsRef.current.filter((entityId) =>
+          gameRef.current.entities.some((entity) => entity.id === entityId && entity.kind !== "vein"));
+        const beltId = selectedBeltIdRef.current;
+        if (entityIds.length > 0) {
+          event.preventDefault();
+          setGame((current) => removeEntities(current, entityIds));
+          setSelectedEntityIds([]);
+          setNotice(`已回收 ${entityIds.length} 个所选设备`);
+        } else if (beltId) {
+          event.preventDefault();
+          setGame((current) => removeBelt(current, beltId));
+          setSelectedBeltId(null);
+          setNotice("所选运输线已回收");
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -385,6 +411,20 @@ function FactoryGame() {
     setViewport({ x: 510, y: 250, zoom: 0.84 }, { duration: state.settings.reducedMotion ? 0 : 180 });
   }, [onMiningStop, setNodes, setViewport]);
 
+  const focusEntityIds = useCallback((entityIds: string[]) => {
+    const selected = gameRef.current.entities.filter((entity) => entityIds.includes(entity.id));
+    if (selected.length === 0) return;
+    const center = selected.reduce((total, entity) => ({
+      x: total.x + entity.position.x + 128,
+      y: total.y + entity.position.y + 90,
+    }), { x: 0, y: 0 });
+    const duration = gameRef.current.settings.reducedMotion ? 0 : 260;
+    setCenter(center.x / selected.length, center.y / selected.length, {
+      zoom: selected.length === 1 ? 1.05 : selected.length <= 3 ? 0.85 : 0.65,
+      duration,
+    });
+  }, [setCenter]);
+
   const selectAlert = useCallback((alert: FactoryAlert) => {
     if (gameRef.current.activePlanetId !== alert.planetId) onPlanetChange(alert.planetId);
     setSelectedEntityIds([alert.entityId]);
@@ -392,9 +432,10 @@ function FactoryGame() {
     setInspectorTab("inspect");
     setMobilePanel("inspector");
     setOperationsOpen(false);
+    focusEntityIds([alert.entityId]);
     setNotice(`已定位：${alert.title} · ${alert.reason}`);
     playTone("alert");
-  }, [onPlanetChange, playTone]);
+  }, [focusEntityIds, onPlanetChange, playTone]);
 
   const refreshSaveSlots = useCallback(() => setSaveSlots(getSaveSlotSummaries()), []);
 
@@ -537,6 +578,20 @@ function FactoryGame() {
     };
   }), [game.activePlanetId, game.belts, selectedBeltId]);
 
+  const isValidConnection = useCallback((connection: Connection | Edge) => {
+    const sourceItem = parseHandleItem(connection.sourceHandle);
+    const targetItem = parseHandleItem(connection.targetHandle);
+    if (!connection.source || !connection.target || connection.source === connection.target ||
+      !sourceItem || sourceItem !== targetItem) return false;
+    const state = gameRef.current;
+    const source = state.entities.find((entity) => entity.id === connection.source);
+    const target = state.entities.find((entity) => entity.id === connection.target);
+    const constructionId = getBeltConstructionId(beltTier);
+    return Boolean(source && target && source.planetId === target.planetId &&
+      getProducedOutputs(source).includes(sourceItem) && getAcceptedInputs(target, state).includes(sourceItem) &&
+      (state.construction[constructionId] ?? 0) >= 1);
+  }, [beltTier]);
+
   const onConnect = useCallback((connection: Connection) => {
     const sourceItem = parseHandleItem(connection.sourceHandle);
     const targetItem = parseHandleItem(connection.targetHandle);
@@ -558,7 +613,9 @@ function FactoryGame() {
       return;
     }
     setGame((current) => connectBelt(current, connection.source!, connection.target!, sourceItem, beltTier));
-  }, [beltTier]);
+    setNotice(`${ITEMS[sourceItem].name}运输线已建立 · Mk.${tierName}`);
+    playTone("confirm");
+  }, [beltTier, playTone]);
 
   const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: OnSelectionChangeParams<FactoryFlowNode, Edge>) => {
     const ids = selectedNodes.map((node) => node.id);
@@ -728,6 +785,7 @@ function FactoryGame() {
             onNodesChange={onNodesChange}
             onSelectionChange={onSelectionChange}
             onConnect={onConnect}
+            isValidConnection={isValidConnection}
             onNodeClick={onNodeClick}
             onNodeDragStart={() => { nodeDragActiveRef.current = true; }}
             onNodeDragStop={(_event, node, draggedNodes) => {
@@ -747,6 +805,9 @@ function FactoryGame() {
             onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
             minZoom={0.3}
             maxZoom={1.6}
+            connectionRadius={30}
+            connectionLineStyle={{ stroke: "#62b5ae", strokeWidth: 2, strokeDasharray: "6 5" }}
+            connectOnClick
             defaultViewport={{ x: 510, y: 250, zoom: 0.84 }}
             panOnScroll
             panOnDrag={[1, 2]}
@@ -785,6 +846,7 @@ function FactoryGame() {
             selectedCount={selectedEntityIds.length}
             eligibleCount={blueprintEligibleIds.length}
             canUpgrade={canUpgradeEntities(game, selectedEntityIds)}
+            onFocus={() => focusEntityIds(selectedEntityIds)}
             onCopy={copySelectionAsBlueprint}
             onUpgrade={() => {
               setGame((current) => upgradeEntities(current, selectedEntityIds));
@@ -927,6 +989,7 @@ function FactoryGame() {
       />
       <OfflineReportWorkspace report={offlineReport} onClose={() => setOfflineReport(null)} />
       <button className="mobile-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setMobilePanel(null)} />
+      <BuildingPlacementCursor buildingId={game.cargo ? null : placement} count={placementCount} x={pointer.x} y={pointer.y} />
       <CargoCursor cargo={game.cargo} x={pointer.x} y={pointer.y} />
       {activeBlueprint ? <BlueprintPlacementCursor blueprint={activeBlueprint} x={pointer.x} y={pointer.y + (game.cargo ? 42 : 0)} /> : null}
       {notice ? <div className="game-notice" role="status">{notice}</div> : null}

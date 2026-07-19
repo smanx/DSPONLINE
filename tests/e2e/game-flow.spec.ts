@@ -1161,6 +1161,8 @@ test("dragging matching ports creates a belt connection", async ({ page }) => {
   const targetBox = await target.boundingBox();
   expect(sourceBox).not.toBeNull();
   expect(targetBox).not.toBeNull();
+  expect(sourceBox!.width).toBeGreaterThanOrEqual(14.5);
+  expect(targetBox!.width).toBeGreaterThanOrEqual(14.5);
   await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
   await page.mouse.down();
   await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 12 });
@@ -1168,6 +1170,7 @@ test("dragging matching ports creates a belt connection", async ({ page }) => {
   await page.mouse.up();
 
   await expect(page.locator(".react-flow__edge")).toHaveCount(1);
+  await expect(page.locator(".game-notice")).toContainText(/铁矿石运输线已建立|成就解锁：物流脉搏/);
   await expect(page.getByText("0.0 / 3 s⁻¹")).toBeVisible();
   await page.screenshot({ path: "artifacts/qa/belt-connection-1280.png", fullPage: true });
 });
@@ -2218,8 +2221,17 @@ test("operations center diagnoses equipment and records achievement progress", a
 
   await minerAlert.click();
   await expect(operations).not.toBeVisible();
-  await expect(page.locator('.react-flow__node[data-id="operations_iron"] .factory-node')).toHaveClass(/factory-node--selected/);
+  const selectedMiner = page.locator('.react-flow__node[data-id="operations_iron"] .factory-node');
+  await expect(selectedMiner).toHaveClass(/factory-node--selected/);
   await expect(page.locator(".inspector-panel")).toContainText("电网断电");
+  await expect.poll(async () => {
+    const nodeBounds = await selectedMiner.boundingBox();
+    const canvasBounds = await page.locator(".factory-canvas").boundingBox();
+    if (!nodeBounds || !canvasBounds) return false;
+    const nodeCenter = nodeBounds.x + nodeBounds.width / 2;
+    const canvasCenter = canvasBounds.x + canvasBounds.width / 2;
+    return Math.abs(nodeCenter - canvasCenter) < 90;
+  }).toBe(true);
 
   await page.getByLabel("打开运营中心").click();
   await operations.locator(".operations-tabs").getByRole("button", { name: /成就/ }).click();
@@ -2311,4 +2323,53 @@ test("running equipment uses semantic animation and reduced motion disables it",
   await page.locator(".react-flow__controls-fitview").click();
   await expect(page.locator(".factory-canvas").evaluate((element) => element.scrollWidth <= element.clientWidth)).resolves.toBe(true);
   await page.screenshot({ path: "artifacts/qa/animation-feedback-390.png", fullPage: true });
+});
+
+test("placement preview, selection focus and keyboard recycle keep canvas work direct", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await freshGame(page);
+  await page.getByTitle("部署风力涡轮机").click();
+  const canvas = page.locator(".react-flow__pane");
+  const canvasBounds = await canvas.boundingBox();
+  await page.mouse.move(canvasBounds!.x + canvasBounds!.width * 0.72, canvasBounds!.y + 230);
+  const preview = page.locator(".building-placement-cursor");
+  await expect(preview).toContainText("风力涡轮机");
+  await expect(preview).toContainText("×1");
+  await page.screenshot({ path: "artifacts/qa/interaction-placement-1440.png", fullPage: true });
+
+  await canvas.click({ position: { x: Math.round(canvasBounds!.width * 0.72), y: 230 } });
+  await expect(preview).not.toBeVisible();
+  const turbine = page.locator(".power-node").filter({ hasText: "风力涡轮机" });
+  await turbine.click();
+  await page.getByLabel("定位到所选设备").click();
+  await expect.poll(async () => {
+    const nodeBounds = await turbine.boundingBox();
+    const visibleCanvas = await page.locator(".factory-canvas").boundingBox();
+    if (!nodeBounds || !visibleCanvas) return false;
+    return Math.abs(nodeBounds.x + nodeBounds.width / 2 - (visibleCanvas.x + visibleCanvas.width / 2)) < 90;
+  }).toBe(true);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("toolbar", { name: "选区操作" })).toBeVisible();
+  await page.getByLabel("打开检查器").click();
+  await expect.poll(async () => page.locator(".inspector-panel").evaluate((element) =>
+    element.getBoundingClientRect().left >= window.innerWidth - 1)).toBe(true);
+  await page.getByLabel("定位到所选设备").click();
+  await expect.poll(async () => {
+    const bounds = await turbine.boundingBox();
+    return Boolean(bounds && Math.abs(bounds.x + bounds.width / 2 - 195) < 70);
+  }).toBe(true);
+  await expect.poll(async () => page.evaluate(() => [
+    ".game-header",
+    '[role="toolbar"][aria-label="选区操作"]',
+    ".construction-dock",
+  ].filter((selector) => {
+    const bounds = document.querySelector(selector)?.getBoundingClientRect();
+    return !bounds || bounds.left < -1 || bounds.right > window.innerWidth + 1;
+  }))).toEqual([]);
+  await page.screenshot({ path: "artifacts/qa/interaction-selection-390.png", fullPage: true });
+  await page.keyboard.press("Delete");
+  await expect(turbine).not.toBeVisible();
+  await expect(page.getByTitle("部署风力涡轮机")).toContainText("×3");
+  await expect(page.locator(".game-notice")).toContainText("已回收 1 个所选设备");
 });

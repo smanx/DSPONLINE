@@ -1160,6 +1160,23 @@ export function CargoCursor({ cargo, x, y }: { cargo: CargoStack | null; x: numb
   );
 }
 
+export function BuildingPlacementCursor({ buildingId, count, x, y }: {
+  buildingId: BuildingId | null;
+  count: PlacementCount;
+  x: number;
+  y: number;
+}) {
+  if (!buildingId) return null;
+  const building = getBuilding(buildingId);
+  return (
+    <div className="building-placement-cursor" style={{ transform: `translate3d(${x + 16}px, ${y + 16}px, 0)` }}>
+      <i>{buildIcon(buildingId)}</i>
+      <span>{building.name}</span>
+      <strong>×{count}</strong>
+    </div>
+  );
+}
+
 export function HeaderControls({
   game,
   onPauseToggle,
