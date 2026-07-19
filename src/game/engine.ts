@@ -25,6 +25,7 @@ import {
 import type {
   BeltTier,
   BeltConnection,
+  BlueprintDefinition,
   BuildingId,
   ConstructionId,
   EnergyMode,
@@ -101,6 +102,11 @@ function copyState(state: GameState): GameState {
     exploration: {
       unlockedSystemIds: [...state.exploration.unlockedSystemIds],
     },
+    blueprints: state.blueprints.map((blueprint) => ({
+      ...blueprint,
+      entities: blueprint.entities.map((entity) => ({ ...entity, offset: { ...entity.offset } })),
+      belts: blueprint.belts.map((belt) => ({ ...belt })),
+    })),
     metrics: { ...state.metrics },
     planetMetrics: Object.fromEntries(Object.entries(state.planetMetrics).map(([planetId, metrics]) => [
       planetId,
@@ -153,7 +159,7 @@ function makeVein(id: string, planetId: PlanetId, resourceId: ItemId, x: number,
 export function createInitialState(): GameState {
   const planetMetrics = Object.fromEntries(PLANET_LIST.map((planet) => [planet.id, emptyMetrics()])) as GameState["planetMetrics"];
   return {
-    version: 13,
+    version: 14,
     nextId: 1,
     activePlanetId: "home",
     entities: [
@@ -239,6 +245,7 @@ export function createInitialState(): GameState {
       completedTechIds: [],
     },
     exploration: { unlockedSystemIds: ["helios"] },
+    blueprints: [],
     elapsedSeconds: 0,
     metrics: { ...planetMetrics.home },
     planetMetrics,
@@ -1422,6 +1429,189 @@ export function moveEntity(state: GameState, entityId: string, position: { x: nu
   };
 }
 
+export function moveEntities(state: GameState, positions: Array<{ id: string; position: { x: number; y: number } }>): GameState {
+  const positionById = new Map(positions.map((entry) => [entry.id, entry.position]));
+  if (positionById.size === 0) return state;
+  return {
+    ...state,
+    entities: state.entities.map((entity) => {
+      const position = positionById.get(entity.id);
+      return position ? { ...entity, position: { ...position } } : entity;
+    }),
+  };
+}
+
+export function getBlueprintEligibleEntityIds(state: GameState, entityIds: string[]): string[] {
+  const selectedIds = new Set(entityIds);
+  return state.entities
+    .filter((entity) => entity.planetId === state.activePlanetId && entity.kind !== "vein" && entity.buildingId && selectedIds.has(entity.id))
+    .map((entity) => entity.id);
+}
+
+export function createBlueprint(state: GameState, entityIds: string[], name?: string): GameState {
+  const eligibleIds = getBlueprintEligibleEntityIds(state, entityIds);
+  if (eligibleIds.length === 0) return state;
+  const selected = state.entities.filter((entity) => eligibleIds.includes(entity.id));
+  const originX = Math.min(...selected.map((entity) => entity.position.x));
+  const originY = Math.min(...selected.map((entity) => entity.position.y));
+  const keyById = new Map(selected.map((entity, index) => [entity.id, `node_${index + 1}`]));
+  const blueprint: BlueprintDefinition = {
+    id: `blueprint_${state.nextId}`,
+    name: name?.trim().slice(0, 32) || `蓝图 ${String(state.blueprints.length + 1).padStart(2, "0")}`,
+    entities: selected.map((entity) => ({
+      key: keyById.get(entity.id)!,
+      buildingId: entity.buildingId!,
+      offset: { x: entity.position.x - originX, y: entity.position.y - originY },
+      machineCount: Math.max(1, Math.floor(entity.machineCount)),
+      recipeId: entity.recipeId,
+      storedItemId: entity.storedItemId,
+      distributionMode: entity.distributionMode,
+      fuelItemId: entity.fuelItemId,
+      energyMode: entity.energyMode,
+      stationMode: entity.stationMode,
+      stationMinimumLoad: entity.stationMinimumLoad,
+      stationWarpEnabled: entity.stationWarpEnabled,
+      sprayCoaterInstalled: entity.sprayCoaterInstalled,
+      proliferatorTier: entity.proliferatorTier,
+      proliferatorMode: entity.proliferatorMode,
+    })),
+    belts: state.belts
+      .filter((belt) => keyById.has(belt.source) && keyById.has(belt.target))
+      .map((belt, index) => ({
+        key: `line_${index + 1}`,
+        sourceKey: keyById.get(belt.source)!,
+        targetKey: keyById.get(belt.target)!,
+        itemId: belt.itemId,
+        lanes: belt.lanes,
+        tier: belt.tier,
+        sorterTier: belt.sorterTier,
+        priority: belt.priority,
+      })),
+  };
+  const next = copyState(state);
+  next.blueprints.push(blueprint);
+  next.nextId += 1;
+  return next;
+}
+
+export function renameBlueprint(state: GameState, blueprintId: string, name: string): GameState {
+  const normalized = name.trim().slice(0, 32);
+  if (!normalized || !state.blueprints.some((blueprint) => blueprint.id === blueprintId)) return state;
+  return {
+    ...state,
+    blueprints: state.blueprints.map((blueprint) => blueprint.id === blueprintId ? { ...blueprint, name: normalized } : blueprint),
+  };
+}
+
+export function removeBlueprint(state: GameState, blueprintId: string): GameState {
+  if (!state.blueprints.some((blueprint) => blueprint.id === blueprintId)) return state;
+  return { ...state, blueprints: state.blueprints.filter((blueprint) => blueprint.id !== blueprintId) };
+}
+
+export function getBlueprintRequirements(blueprint: BlueprintDefinition): Array<{ constructionId: ConstructionId; amount: number }> {
+  const requirements = new Map<ConstructionId, number>();
+  const add = (constructionId: ConstructionId, amount: number) => {
+    requirements.set(constructionId, (requirements.get(constructionId) ?? 0) + amount);
+  };
+  for (const entity of blueprint.entities) {
+    add(entity.buildingId, entity.machineCount);
+    if (entity.sprayCoaterInstalled) add("spray_coater", 1);
+  }
+  for (const belt of blueprint.belts) {
+    add(getBeltConstructionId(belt.tier), belt.lanes);
+    if (belt.sorterTier > 1) add(getSorterConstructionId(belt.sorterTier), belt.lanes);
+  }
+  return [...requirements].map(([constructionId, amount]) => ({ constructionId, amount }));
+}
+
+export function canPlaceBlueprint(state: GameState, blueprintId: string): boolean {
+  const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
+  if (!blueprint || blueprint.entities.length === 0 ||
+    blueprint.entities.some((entity) => !canPlaceBuildingOnPlanet(entity.buildingId, state.activePlanetId))) return false;
+  return getBlueprintRequirements(blueprint).every((requirement) =>
+    (state.construction[requirement.constructionId] ?? 0) >= requirement.amount);
+}
+
+export function placeBlueprint(state: GameState, blueprintId: string, position: { x: number; y: number }): GameState {
+  const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
+  if (!blueprint || !canPlaceBlueprint(state, blueprintId)) return state;
+  const next = copyState(state);
+  for (const requirement of getBlueprintRequirements(blueprint)) {
+    next.construction[requirement.constructionId] = (next.construction[requirement.constructionId] ?? 0) - requirement.amount;
+  }
+  const entityIdByKey = new Map<string, string>();
+  for (const template of blueprint.entities) {
+    const building = getBuilding(template.buildingId);
+    const entityId = `entity_${next.nextId}`;
+    next.nextId += 1;
+    entityIdByKey.set(template.key, entityId);
+    const recipe = getRecipe(template.recipeId);
+    const recipeId = recipe && buildingSupportsRecipe(template.buildingId, recipe) &&
+      (!recipe.requiredTechId || isTechnologyCompleted(next, recipe.requiredTechId))
+      ? recipe.id
+      : getRecipesForBuilding(template.buildingId).find((candidate) => !candidate.requiredTechId || isTechnologyCompleted(next, candidate.requiredTechId))?.id;
+    next.entities.push({
+      id: entityId,
+      kind: building.kind === "power" ? "power" : building.kind === "storage" ? "storage" :
+        building.kind === "splitter" ? "splitter" : building.kind === "station" ? "station" : "machine",
+      planetId: next.activePlanetId,
+      position: { x: position.x + template.offset.x, y: position.y + template.offset.y },
+      buildingId: template.buildingId,
+      recipeId,
+      storedItemId: template.storedItemId,
+      distributionMode: building.kind === "splitter" ? template.distributionMode ?? "balanced" : undefined,
+      fuelItemId: template.fuelItemId,
+      fuelRemainingMj: getFuelItemIdsForBuilding(template.buildingId).length > 0 ? 0 : undefined,
+      powerOutputKw: building.kind === "power" ? 0 : undefined,
+      powerInputKw: building.kind === "power" ? 0 : undefined,
+      storedEnergyMj: template.buildingId === "accumulator" || template.buildingId === "energy_exchanger" ? 0 : undefined,
+      energyMode: template.buildingId === "accumulator" ? "auto" : template.buildingId === "energy_exchanger" ? template.energyMode ?? "charge" : undefined,
+      stationMode: building.kind === "station" ? template.stationMode ?? "supply" : undefined,
+      stationProgress: building.kind === "station" ? 0 : undefined,
+      stationTrips: building.kind === "station" ? 0 : undefined,
+      stationLastTransfer: building.kind === "station" ? 0 : undefined,
+      stationDrones: template.buildingId === "planetary_logistics_station" ? 0 : undefined,
+      stationVessels: building.kind === "station" ? 0 : undefined,
+      stationWarpers: template.buildingId === "interstellar_logistics_station" ? 0 : undefined,
+      stationWarpEnabled: template.buildingId === "interstellar_logistics_station" ? template.stationWarpEnabled !== false : undefined,
+      stationMinimumLoad: building.kind === "station" ? template.stationMinimumLoad ?? 1 : undefined,
+      sprayCoaterInstalled: template.sprayCoaterInstalled,
+      proliferatorTier: template.sprayCoaterInstalled ? template.proliferatorTier ?? 1 : undefined,
+      proliferatorMode: template.sprayCoaterInstalled ? template.proliferatorMode ?? "normal" : undefined,
+      proliferatorPoints: 0,
+      proliferatorBonusProgress: {},
+      machineCount: template.machineCount,
+      minerCount: 0,
+      inputs: {},
+      outputs: {},
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+    });
+  }
+  for (const template of blueprint.belts) {
+    const source = entityIdByKey.get(template.sourceKey);
+    const target = entityIdByKey.get(template.targetKey);
+    if (!source || !target) continue;
+    next.belts.push({
+      id: `belt_${next.nextId}`,
+      planetId: next.activePlanetId,
+      source,
+      target,
+      itemId: template.itemId,
+      lanes: template.lanes,
+      tier: template.tier,
+      sorterTier: template.sorterTier,
+      progress: 0,
+      priority: template.priority,
+      lastFlow: 0,
+    });
+    next.nextId += 1;
+  }
+  return next;
+}
+
 export function canPlaceBuildingOnPlanet(buildingId: BuildingId, planetId: PlanetId): boolean {
   if (getPlanet(planetId).kind === "gas-giant") return buildingId === "orbital_collector";
   if (buildingId === "orbital_collector") return false;
@@ -2053,6 +2243,12 @@ export function removeEntity(state: GameState, entityId: string): GameState {
   return next;
 }
 
+export function removeEntities(state: GameState, entityIds: string[]): GameState {
+  let next = state;
+  for (const entityId of [...new Set(entityIds)]) next = removeEntity(next, entityId);
+  return next;
+}
+
 export function canUpgradeEntity(state: GameState, entityId: string): boolean {
   const entity = state.entities.find((item) => item.id === entityId);
   if (!entity?.buildingId || entity.kind === "vein") return false;
@@ -2073,6 +2269,18 @@ export function upgradeEntity(state: GameState, entityId: string): GameState {
   next.construction[targetId] = (next.construction[targetId] ?? 0) - entity.machineCount;
   next.construction[sourceId] = (next.construction[sourceId] ?? 0) + entity.machineCount;
   entity.buildingId = targetId;
+  return next;
+}
+
+export function canUpgradeEntities(state: GameState, entityIds: string[]): boolean {
+  return entityIds.some((entityId) => canUpgradeEntity(state, entityId));
+}
+
+export function upgradeEntities(state: GameState, entityIds: string[]): GameState {
+  let next = state;
+  for (const entityId of [...new Set(entityIds)]) {
+    if (canUpgradeEntity(next, entityId)) next = upgradeEntity(next, entityId);
+  }
   return next;
 }
 

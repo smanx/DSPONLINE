@@ -10,6 +10,7 @@ import {
   adjustStationVessels,
   advanceSimulation,
   canExploreStarSystem,
+  canPlaceBlueprint,
   canInstallSprayCoater,
   canUpgradeBelt,
   canUpgradeEntity,
@@ -18,12 +19,14 @@ import {
   canSelectTechnology,
   connectBelt,
   craftConstruction,
+  createBlueprint,
   createInitialState,
   dropCargoToEntity,
   dropCargoToTray,
   exploreStarSystem,
   getEntityOperatingStatus,
   getBeltCapacity,
+  getBlueprintRequirements,
   getEntityExtraProductBonus,
   getEntityProliferatorPowerMultiplier,
   getEntityProliferatorSpeedMultiplier,
@@ -37,9 +40,11 @@ import {
   manualMine,
   moveEntityInputToEntity,
   moveEntityInputToTray,
+  moveEntities,
   pickFromEntity,
   pickFromEntityInput,
   placeBuilding,
+  placeBlueprint,
   removeEntity,
   removeQueuedTechnology,
   selectTechnology,
@@ -55,6 +60,7 @@ import {
   setStationWarpEnabled,
   setSplitterMode,
   upgradeBelt,
+  upgradeEntities,
   upgradeEntity,
   upgradeSorter,
 } from "./engine";
@@ -111,6 +117,66 @@ describe("factory simulation", () => {
     state = setActivePlanet(state, "frost");
     expect(state.activePlanetId).toBe("frost");
     expect(setActivePlanet(state, "magnetar").activePlanetId).toBe("magnetar");
+  });
+
+  it("captures configured nodes and internal logistics as a deployable blueprint", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("high_speed_logistics");
+    state.construction.storage_mk1 = 4;
+    state.construction.conveyor_belt_mk2 = 2;
+    state.construction.sorter_mk2 = 1;
+    state = placeBuilding(state, "storage_mk1", { x: 100, y: 80 });
+    state = placeBuilding(state, "storage_mk1", { x: 460, y: 220 });
+    const [source, target] = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+    state = setLogisticsItem(state, source.id, "iron_ingot");
+    state = setLogisticsItem(state, target.id, "iron_ingot");
+    state.entities.find((entity) => entity.id === source.id)!.outputs.iron_ingot = 80;
+    state = connectBelt(state, source.id, target.id, "iron_ingot", 2);
+    state = upgradeSorter(state, state.belts[0].id);
+    state = createBlueprint(state, [source.id, target.id], "铁块缓存链");
+
+    const blueprint = state.blueprints[0];
+    expect(blueprint).toMatchObject({ name: "铁块缓存链" });
+    expect(blueprint.entities).toHaveLength(2);
+    expect(blueprint.entities.map((entity) => entity.offset)).toEqual([{ x: 0, y: 0 }, { x: 360, y: 140 }]);
+    expect(blueprint.belts).toEqual([expect.objectContaining({ itemId: "iron_ingot", tier: 2, sorterTier: 2, lanes: 1 })]);
+    expect(getBlueprintRequirements(blueprint)).toEqual(expect.arrayContaining([
+      { constructionId: "storage_mk1", amount: 2 },
+      { constructionId: "conveyor_belt_mk2", amount: 1 },
+      { constructionId: "sorter_mk2", amount: 1 },
+    ]));
+
+    state.construction.sorter_mk2 = 1;
+    state = setActivePlanet(state, "ashen");
+    expect(canPlaceBlueprint(state, blueprint.id)).toBe(true);
+    state = placeBlueprint(state, blueprint.id, { x: -200, y: -100 });
+    const copies = state.entities.filter((entity) => entity.planetId === "ashen" && entity.buildingId === "storage_mk1");
+    expect(copies).toHaveLength(2);
+    expect(copies.map((entity) => entity.position)).toEqual([{ x: -200, y: -100 }, { x: 160, y: 40 }]);
+    expect(copies.every((entity) => entity.storedItemId === "iron_ingot" && (entity.outputs.iron_ingot ?? 0) === 0)).toBe(true);
+    expect(state.belts.filter((belt) => belt.planetId === "ashen")).toEqual([
+      expect.objectContaining({ itemId: "iron_ingot", tier: 2, sorterTier: 2 }),
+    ]);
+    expect(state.construction).toMatchObject({ storage_mk1: 0, conveyor_belt_mk2: 0, sorter_mk2: 0 });
+  });
+
+  it("moves and upgrades a multi-node selection in one command", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("high_speed_assembling");
+    state.construction.assembling_machine_mk2 = 2;
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 300, y: 0 });
+    const assemblers = state.entities.filter((entity) => entity.buildingId === "assembling_machine_mk1");
+    state = moveEntities(state, [
+      { id: assemblers[0].id, position: { x: 50, y: 90 } },
+      { id: assemblers[1].id, position: { x: 350, y: 90 } },
+    ]);
+    state = upgradeEntities(state, assemblers.map((entity) => entity.id));
+    expect(state.entities.filter((entity) => assemblers.some((selected) => selected.id === entity.id))).toEqual([
+      expect.objectContaining({ buildingId: "assembling_machine_mk2", position: { x: 50, y: 90 } }),
+      expect.objectContaining({ buildingId: "assembling_machine_mk2", position: { x: 350, y: 90 } }),
+    ]);
+    expect(state.construction.assembling_machine_mk2).toBe(0);
   });
 
   it("mines manually and feeds a compatible machine", () => {

@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { createInitialState, placeBuilding, setActivePlanet, setFuelItem, setLogisticsItem } from "./engine";
+import { createBlueprint, createInitialState, placeBuilding, setActivePlanet, setFuelItem, setLogisticsItem } from "./engine";
 import { loadGame, saveGame } from "./storage";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
@@ -9,7 +9,7 @@ const SAVE_KEY = "dsp-idle-network.save.v1";
 describe("game storage", () => {
   beforeEach(() => window.localStorage.clear());
 
-  it("round-trips a v13 multi-planet research save", () => {
+  it("round-trips a v14 multi-planet research save", () => {
     const state = createInitialState();
     state.research.selectedTechId = "electromagnetic_matrix";
     state.research.queuedTechIds = ["electromagnetism"];
@@ -18,7 +18,7 @@ describe("game storage", () => {
     saveGame(state);
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(13);
+    expect(loaded.version).toBe(14);
     expect(loaded.activePlanetId).toBe("home");
     expect(loaded.planetMetrics.ashen.powerFactor).toBe(1);
     expect(loaded.research.selectedTechId).toBe("electromagnetic_matrix");
@@ -44,7 +44,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(13);
+    expect(loaded.version).toBe(14);
     expect(loaded.tray.iron_ore).toBe(4);
     expect(loaded.entities[0].outputs.iron_ore).toBe(3);
     expect(loaded.entities.every((entity) => entity.progress === 0)).toBe(true);
@@ -167,7 +167,7 @@ describe("game storage", () => {
 
     const loaded = loadGame().state;
     const station = loaded.entities.find((entity) => entity.kind === "station")!;
-    expect(loaded.version).toBe(13);
+    expect(loaded.version).toBe(14);
     expect(station.stationVessels).toBe(1);
     expect(station.stationMinimumLoad).toBe(1);
   });
@@ -221,7 +221,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(13);
+    expect(loaded.version).toBe(14);
     expect(loaded.dysonSwarm).toEqual({
       sailsInOrbit: 0,
       totalLaunched: 0,
@@ -343,7 +343,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(13);
+    expect(loaded.version).toBe(14);
     expect(loaded.belts[0]).toMatchObject({ id: "legacy_belt", tier: 1, progress: 0.5 });
     expect(loaded.construction).toMatchObject({
       plane_smelter: 0,
@@ -397,7 +397,7 @@ describe("game storage", () => {
 
     const loaded = loadGame().state;
     const migrated = loaded.entities.find((entity) => entity.id === assembler.id)!;
-    expect(loaded.version).toBe(13);
+    expect(loaded.version).toBe(14);
     expect(loaded.construction.spray_coater).toBe(0);
     expect(migrated).toMatchObject({ sprayCoaterInstalled: false, proliferatorPoints: 0, proliferatorBonusProgress: {} });
     expect(migrated.proliferatorTier).toBeUndefined();
@@ -456,7 +456,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(13);
+    expect(loaded.version).toBe(14);
     expect(loaded.belts[0]).toMatchObject({ id: "v9_belt", tier: 2, sorterTier: 1, progress: 0.25 });
     expect(loaded.planetTrays.giant).toEqual({});
     expect(loaded.planetMetrics.giant.powerFactor).toBe(1);
@@ -520,7 +520,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(13);
+    expect(loaded.version).toBe(14);
     expect(loaded.construction).toMatchObject({
       solar_panel: 0,
       geothermal_power_station: 0,
@@ -585,7 +585,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(13);
+    expect(loaded.version).toBe(14);
     expect(loaded.entities.filter((entity) => entity.kind === "vein").map((entity) => entity.resourceId)).toEqual(expect.arrayContaining(rareItems));
     expect(loaded.construction).toMatchObject({ quantum_chemical_plant: 0, fractionator: 0 });
   });
@@ -604,6 +604,34 @@ describe("game storage", () => {
       storedItemId: "fire_ice",
       outputs: { fire_ice: 25 },
     });
+  });
+
+  it("round-trips v14 blueprints and initializes an empty library for v13 saves", () => {
+    let state = createInitialState();
+    state.construction.storage_mk1 = 1;
+    state = placeBuilding(state, "storage_mk1", { x: 120, y: 80 });
+    const storage = state.entities.find((entity) => entity.buildingId === "storage_mk1")!;
+    state = setLogisticsItem(state, storage.id, "processor");
+    state = createBlueprint(state, [storage.id], "处理器缓存");
+    saveGame(state);
+
+    let loaded = loadGame().state;
+    expect(loaded.version).toBe(14);
+    expect(loaded.blueprints).toEqual([
+      expect.objectContaining({
+        name: "处理器缓存",
+        entities: [expect.objectContaining({ buildingId: "storage_mk1", storedItemId: "processor", offset: { x: 0, y: 0 } })],
+        belts: [],
+      }),
+    ]);
+
+    const legacy = JSON.parse(JSON.stringify(state));
+    legacy.version = 13;
+    delete legacy.blueprints;
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
+    loaded = loadGame().state;
+    expect(loaded.version).toBe(14);
+    expect(loaded.blueprints).toEqual([]);
   });
 
   it("migrates v12 rare nodes and exploration access into the multi-system save", () => {
@@ -628,7 +656,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(13);
+    expect(loaded.version).toBe(14);
     expect(loaded.exploration.unlockedSystemIds).toEqual(["helios", "borealis", "neutron"]);
     expect(loaded.planetTrays).toMatchObject({ frost: {}, boreal_giant: {}, magnetar: {} });
     expect(loaded.entities.find((entity) => entity.id === "vein_optical_grating")).toMatchObject({

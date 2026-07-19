@@ -300,6 +300,7 @@ type InspectorTab = "inspect" | "fabricate";
 
 interface InspectorPanelProps {
   game: GameState;
+  selectedEntities: FactoryEntity[];
   selectedEntity: FactoryEntity | null;
   selectedBelt: BeltConnection | null;
   tab: InspectorTab;
@@ -325,6 +326,36 @@ interface InspectorPanelProps {
   onProliferatorConfiguration: (entityId: string, tier: ProliferatorTier, mode: ProliferatorMode) => void;
   onRemoveEntity: (entityId: string) => void;
   onRemoveBelt: (beltId: string) => void;
+}
+
+function MultiSelectionInspector({ game, entities }: { game: GameState; entities: FactoryEntity[] }) {
+  const ids = new Set(entities.map((entity) => entity.id));
+  const equipmentCount = entities.reduce((sum, entity) => sum + entity.machineCount + entity.minerCount, 0);
+  const ratedDemand = entities.reduce((sum, entity) => {
+    if (entity.kind === "vein" && entity.minerCount > 0) {
+      return sum + (getBuilding(getExtractorBuildingId(entity.resourceId!)).powerDemandKw ?? 0) * entity.minerCount;
+    }
+    return sum + (entity.buildingId ? (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount : 0);
+  }, 0);
+  const internalLines = game.belts.filter((belt) => ids.has(belt.source) && ids.has(belt.target)).length;
+  const running = entities.filter((entity) => getEntityOperatingStatus(game, entity).tone === "running").length;
+  const composition = new Map<string, number>();
+  for (const entity of entities) {
+    const name = entity.kind === "vein" ? ITEMS[entity.resourceId!].name : getBuilding(entity.buildingId!).name;
+    composition.set(name, (composition.get(name) ?? 0) + Math.max(entity.machineCount, entity.minerCount, 1));
+  }
+  return (
+    <div className="inspector-content multi-selection-inspector">
+      <div className="inspector-identity"><i className="building-mark"><Layers3 size={18} /></i><div><span>画布多选</span><strong>已选择 {entities.length} 个节点</strong></div></div>
+      <dl className="metric-ledger">
+        <div><dt>设备总数</dt><dd>{equipmentCount}</dd></div>
+        <div><dt>运行节点</dt><dd>{running}/{entities.length}</dd></div>
+        <div><dt>内部运输线</dt><dd>{internalLines}</dd></div>
+        <div><dt>额定耗电</dt><dd>{ratedDemand.toFixed(0)} kW</dd></div>
+      </dl>
+      <section className="selection-composition"><span>选区构成</span><div>{[...composition].map(([name, count]) => <p key={name}><strong>{name}</strong><em>×{count}</em></p>)}</div></section>
+    </div>
+  );
 }
 
 function InspectorEmpty({ game }: { game: GameState }) {
@@ -959,7 +990,9 @@ export function InspectorPanel(props: InspectorPanelProps) {
           <Wrench size={15} /> 基础制造
         </button>
       </div>
-      {props.tab === "fabricate" ? <Fabricator game={props.game} onCraft={props.onCraft} onCraftItem={props.onCraftItem} /> : props.selectedEntity ? (
+      {props.tab === "fabricate" ? <Fabricator game={props.game} onCraft={props.onCraft} onCraftItem={props.onCraftItem} /> : props.selectedEntities.length > 1 ? (
+        <MultiSelectionInspector game={props.game} entities={props.selectedEntities} />
+      ) : props.selectedEntity ? (
         <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} />
       ) : props.selectedBelt ? (
         <BeltInspector game={props.game} belt={props.selectedBelt} onPriorityChange={props.onBeltPriorityChange} onUpgrade={props.onUpgradeBelt} onSorterUpgrade={props.onUpgradeSorter} onRemove={props.onRemoveBelt} />

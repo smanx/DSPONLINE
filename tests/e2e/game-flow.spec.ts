@@ -787,6 +787,44 @@ async function openStellarExplorationGame(page: Page) {
   await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
 }
 
+async function openBlueprintStageGame(page: Page) {
+  await page.addInitScript(() => {
+    const entityBase = {
+      planetId: "home",
+      machineCount: 1,
+      minerCount: 0,
+      inputs: {},
+      outputs: {},
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+    };
+    const state = {
+      version: 14,
+      nextId: 4,
+      activePlanetId: "home",
+      entities: [
+        { ...entityBase, id: "blueprint_source", kind: "machine", position: { x: -300, y: -120 }, buildingId: "assembling_machine_mk1", recipeId: "circuit_board", outputs: { circuit_board: 12 } },
+        { ...entityBase, id: "blueprint_target", kind: "machine", position: { x: 80, y: -120 }, buildingId: "assembling_machine_mk1", recipeId: "processor" },
+      ],
+      belts: [{ id: "blueprint_line", planetId: "home", source: "blueprint_source", target: "blueprint_target", itemId: "circuit_board", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 0, lastFlow: 0 }],
+      construction: { assembling_machine_mk1: 2, assembling_machine_mk2: 2, conveyor_belt_mk1: 1 },
+      tray: {},
+      planetTrays: { home: {}, ashen: {}, giant: {}, frost: {}, boreal_giant: {}, magnetar: {} },
+      totalProduced: {},
+      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["processor", "high_speed_assembling"] },
+      exploration: { unlockedSystemIds: ["helios"] },
+      blueprints: [],
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+  await expect(page.locator(".machine-node")).toHaveCount(2);
+}
+
 test("manual mining feeds a powered smelter", async ({ page }) => {
   await page.setViewportSize({ width: 1560, height: 960 });
   await freshGame(page);
@@ -1858,4 +1896,72 @@ test("stellar exploration unlocks remote planets and enables a warped logistics 
   await expect(starMap.locator(".star-map-route").evaluate((element) => element.scrollWidth <= element.clientWidth)).resolves.toBe(true);
   await expect(starMap.locator(".star-system-card")).toHaveCount(3);
   await page.screenshot({ path: "artifacts/qa/stellar-map-390.png", fullPage: true });
+});
+
+test("box selection copies, pastes, moves and upgrades a production blueprint", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openBlueprintStageGame(page);
+  const source = page.locator(".machine-node").filter({ hasText: "电路板" }).first();
+  const target = page.locator(".machine-node").filter({ hasText: "处理器" }).first();
+
+  const boxSelect = async () => {
+    const sourceBox = await source.boundingBox();
+    const targetBox = await target.boundingBox();
+    expect(sourceBox).not.toBeNull();
+    expect(targetBox).not.toBeNull();
+    await page.getByLabel("框选模式").click();
+    const left = Math.min(sourceBox!.x, targetBox!.x) - 12;
+    const top = Math.min(sourceBox!.y, targetBox!.y) - 12;
+    const right = Math.max(sourceBox!.x + sourceBox!.width, targetBox!.x + targetBox!.width) + 12;
+    const bottom = Math.max(sourceBox!.y + sourceBox!.height, targetBox!.y + targetBox!.height) + 12;
+    await page.mouse.move(right, bottom);
+    await page.mouse.down();
+    await page.mouse.move(left, top, { steps: 14 });
+    await page.mouse.up();
+    await expect(page.locator(".react-flow__node.selected")).toHaveCount(2);
+    await expect(page.getByRole("toolbar", { name: "选区操作" })).toContainText("2");
+  };
+
+  await boxSelect();
+  await page.getByLabel("复制所选为蓝图").click();
+  await expect(page.locator(".blueprint-placement-cursor")).toContainText("蓝图 01");
+  await page.locator(".react-flow__pane").click({ position: { x: 700, y: 100 } });
+  await expect(page.locator(".machine-node")).toHaveCount(4);
+  await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+  await expect(page.locator(".game-notice")).toContainText("部署完成");
+
+  await page.getByLabel("打开蓝图库").click();
+  const library = page.getByRole("dialog", { name: "蓝图库" });
+  await expect(library.locator(".blueprint-card")).toHaveCount(1);
+  await expect(library.locator(".blueprint-card")).toContainText("2 节点 · 1 线路");
+  await expect(library.locator(".blueprint-requirements")).toContainText("制造台 Mk.I 0/2");
+  const nameInput = library.locator(".blueprint-card input");
+  await nameInput.fill("处理器模块");
+  await nameInput.press("Enter");
+  await expect(nameInput).toHaveValue("处理器模块");
+  await page.screenshot({ path: "artifacts/qa/blueprint-library-1440.png", fullPage: true });
+  await page.getByLabel("关闭蓝图库").click();
+
+  await boxSelect();
+  const targetBeforeMove = await target.boundingBox();
+  const sourceHeader = source.locator(".factory-node__header");
+  const sourceHeaderBox = await sourceHeader.boundingBox();
+  await page.mouse.move(sourceHeaderBox!.x + 50, sourceHeaderBox!.y + 18);
+  await page.mouse.down();
+  await page.mouse.move(sourceHeaderBox!.x + 130, sourceHeaderBox!.y + 68, { steps: 10 });
+  await page.mouse.up();
+  const targetAfterMove = await target.boundingBox();
+  expect(targetAfterMove!.x).toBeGreaterThan(targetBeforeMove!.x + 55);
+  expect(targetAfterMove!.y).toBeGreaterThan(targetBeforeMove!.y + 30);
+
+  await page.getByLabel("批量升级所选设备").click();
+  await expect(page.locator(".machine-node").filter({ hasText: "制造台 Mk.II" })).toHaveCount(2);
+  await page.screenshot({ path: "artifacts/qa/blueprint-batch-upgrade-1440.png", fullPage: true });
+
+  await page.getByLabel("打开蓝图库").click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(library).toBeVisible();
+  await expect.poll(async () => library.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(library.locator(".blueprint-card input")).toHaveValue("处理器模块");
+  await page.screenshot({ path: "artifacts/qa/blueprint-library-390.png", fullPage: true });
 });

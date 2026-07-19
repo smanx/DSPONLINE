@@ -6,11 +6,13 @@ import {
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
+  SelectionMode,
   useNodesState,
   useReactFlow,
   type Connection,
   type Edge,
   type NodeMouseHandler,
+  type OnSelectionChangeParams,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -25,6 +27,7 @@ import { NODE_TYPES, type FactoryFlowNode, type FactoryNodeData } from "./compon
 import { RecipeWorkspace } from "./components/RecipeWorkspace";
 import { StatisticsWorkspace } from "./components/StatisticsWorkspace";
 import { StarMapWorkspace } from "./components/StarMapWorkspace";
+import { BlueprintPlacementCursor, BlueprintWorkspace, CanvasSelectionTools, SelectionToolbar } from "./components/BlueprintWorkspace";
 import { TechnologyWorkspace } from "./components/TechnologyWorkspace";
 import { ITEMS, getBeltConstructionId, getBuilding, getBuildingUpgradeTarget, getPlanet, getTechnology } from "./game/content";
 import {
@@ -34,7 +37,10 @@ import {
   adjustStationVessels,
   advanceSimulation,
   connectBelt,
+  canPlaceBlueprint,
+  canUpgradeEntities,
   craftConstruction,
+  createBlueprint,
   createInitialState,
   dropCargoToEntity,
   dropCargoToTray,
@@ -49,14 +55,17 @@ import {
   moveEntityInputToTray,
   moveEntityOutputToEntity,
   moveEntityOutputToTray,
-  moveEntity,
+  moveEntities,
   moveTrayItemToEntity,
   pickFromEntity,
   pickFromEntityInput,
   pickFromTray,
   placeBuilding,
+  placeBlueprint,
   removeBelt,
+  removeBlueprint,
   removeEntity,
+  removeEntities,
   removeQueuedTechnology,
   selectTechnology,
   setBeltPriority,
@@ -72,8 +81,11 @@ import {
   setStationWarpEnabled,
   setSplitterMode,
   upgradeBelt,
+  upgradeEntities,
   upgradeEntity,
   upgradeSorter,
+  getBlueprintEligibleEntityIds,
+  renameBlueprint,
 } from "./game/engine";
 import { clearGame, loadGame, saveGame } from "./game/storage";
 import type { BeltTier, BuildingId, DraggedItemSourceKind, EnergyMode, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad } from "./game/types";
@@ -95,7 +107,7 @@ function minerPlacementHint(buildingId: BuildingId): string {
 function FactoryGame() {
   const [loaded] = useState(loadGame);
   const [game, setGame] = useState(loaded.state);
-  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([]);
   const [selectedBeltId, setSelectedBeltId] = useState<string | null>(null);
   const [placement, setPlacement] = useState<BuildingId | null>(null);
   const [beltTier, setBeltTier] = useState<BeltTier>(1);
@@ -106,6 +118,9 @@ function FactoryGame() {
   const [statisticsOpen, setStatisticsOpen] = useState(false);
   const [recipesOpen, setRecipesOpen] = useState(false);
   const [starMapOpen, setStarMapOpen] = useState(false);
+  const [blueprintsOpen, setBlueprintsOpen] = useState(false);
+  const [blueprintPlacementId, setBlueprintPlacementId] = useState<string | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
   const [miningEntityId, setMiningEntityId] = useState<string | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<FactoryFlowNode>([]);
   const [notice, setNotice] = useState<string | null>(() => loaded.offlineSeconds >= 1
@@ -174,6 +189,10 @@ function FactoryGame() {
         setStatisticsOpen(false);
         setRecipesOpen(false);
         setStarMapOpen(false);
+        setBlueprintsOpen(false);
+        setBlueprintPlacementId(null);
+        setSelectionMode(false);
+        setSelectedEntityIds([]);
         setGame((current) => dropCargoToTray(current));
       }
     };
@@ -259,9 +278,10 @@ function FactoryGame() {
     onMiningStop();
     const cargo = gameRef.current.cargo;
     setGame((current) => setActivePlanet(current, planetId));
-    setSelectedEntityId(null);
+    setSelectedEntityIds([]);
     setSelectedBeltId(null);
     setPlacement(null);
+    setBlueprintPlacementId(null);
     setNodes([]);
     setViewport({ x: 510, y: 250, zoom: 0.84 }, { duration: 180 });
     if (cargo) {
@@ -325,12 +345,12 @@ function FactoryGame() {
             connectedInputItemIds: game.belts.filter((belt) => belt.target === entity.id).map((belt) => belt.itemId),
             status: getEntityOperatingStatus(game, entity),
           } as FactoryNodeData,
-          selected: selectedEntityId === entity.id,
-          draggable: !placement,
+          selected: selectedEntityIds.includes(entity.id),
+          draggable: !placement && !blueprintPlacementId,
         } satisfies FactoryFlowNode;
       });
     });
-  }, [commonNodeData, game.activePlanetId, game.entities, placement, selectedEntityId, setNodes]);
+  }, [blueprintPlacementId, commonNodeData, game.activePlanetId, game.entities, placement, selectedEntityIds, setNodes]);
 
   const edges = useMemo<Edge[]>(() => game.belts.filter((belt) => belt.planetId === game.activePlanetId).map((belt) => {
     const item = ITEMS[belt.itemId];
@@ -376,15 +396,34 @@ function FactoryGame() {
     setGame((current) => connectBelt(current, connection.source!, connection.target!, sourceItem, beltTier));
   }, [beltTier]);
 
-  const onNodeClick: NodeMouseHandler<FactoryFlowNode> = useCallback((_event, node) => {
-    if (placement) return;
-    setSelectedEntityId(node.id);
+  const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: OnSelectionChangeParams<FactoryFlowNode, Edge>) => {
+    const ids = selectedNodes.map((node) => node.id);
+    setSelectedEntityIds((current) => current.length === ids.length && current.every((id, index) => id === ids[index]) ? current : ids);
+    if (ids.length > 0) setSelectedBeltId(null);
+    else if (selectedEdges.length === 1) setSelectedBeltId(selectedEdges[0].id);
+  }, []);
+
+  const onNodeClick: NodeMouseHandler<FactoryFlowNode> = useCallback((event, node) => {
+    if (placement || blueprintPlacementId) return;
+    setSelectedEntityIds((current) => event.shiftKey
+      ? current.includes(node.id) ? current.filter((id) => id !== node.id) : [...current, node.id]
+      : [node.id]);
     setSelectedBeltId(null);
     setInspectorTab("inspect");
-    setMobilePanel("inspector");
-  }, [placement]);
+    if (!selectionMode) setMobilePanel("inspector");
+  }, [blueprintPlacementId, placement, selectionMode]);
 
   const onPaneClick = useCallback((event: React.MouseEvent) => {
+    if (blueprintPlacementId) {
+      const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const deployable = canPlaceBlueprint(gameRef.current, blueprintPlacementId);
+      const blueprintName = gameRef.current.blueprints.find((blueprint) => blueprint.id === blueprintPlacementId)?.name ?? "蓝图";
+      setGame((current) => placeBlueprint(current, blueprintPlacementId, position));
+      setBlueprintPlacementId(null);
+      setSelectedEntityIds([]);
+      setNotice(deployable ? `${blueprintName}部署完成` : `${blueprintName}施工库存不足或与当前行星不兼容`);
+      return;
+    }
     if (placement) {
       if (getBuilding(placement).kind === "miner") {
         setNotice(minerPlacementHint(placement));
@@ -395,9 +434,9 @@ function FactoryGame() {
       setPlacement(null);
       return;
     }
-    setSelectedEntityId(null);
+    setSelectedEntityIds([]);
     setSelectedBeltId(null);
-  }, [placement, placementCount, screenToFlowPosition]);
+  }, [blueprintPlacementId, placement, placementCount, screenToFlowPosition]);
 
   const onCanvasDrop = useCallback((event: React.DragEvent) => {
     const buildingId = event.dataTransfer.getData("application/factory-building") as BuildingId;
@@ -413,26 +452,54 @@ function FactoryGame() {
     setBeltTier(1);
   }, [placementCount, screenToFlowPosition]);
 
-  const selectedEntity = game.entities.find((entity) => entity.id === selectedEntityId && entity.planetId === game.activePlanetId) ?? null;
+  const selectedEntities = game.entities.filter((entity) => selectedEntityIds.includes(entity.id) && entity.planetId === game.activePlanetId);
+  const selectedEntity = selectedEntities.length === 1 ? selectedEntities[0] : null;
   const selectedBelt = game.belts.find((belt) => belt.id === selectedBeltId && belt.planetId === game.activePlanetId) ?? null;
+  const blueprintEligibleIds = getBlueprintEligibleEntityIds(game, selectedEntityIds);
+  const activeBlueprint = game.blueprints.find((blueprint) => blueprint.id === blueprintPlacementId) ?? null;
+
+  const copySelectionAsBlueprint = () => {
+    if (blueprintEligibleIds.length === 0) {
+      setNotice("选区中没有可复制的设备");
+      return;
+    }
+    const blueprintId = `blueprint_${gameRef.current.nextId}`;
+    setGame((current) => createBlueprint(current, blueprintEligibleIds));
+    setBlueprintPlacementId(blueprintId);
+    setPlacement(null);
+    setSelectionMode(false);
+    setNotice(`已复制 ${blueprintEligibleIds.length} 个设备，点击画布粘贴蓝图`);
+  };
+
+  const deployBlueprint = (blueprintId: string) => {
+    setBlueprintPlacementId(blueprintId);
+    setBlueprintsOpen(false);
+    setPlacement(null);
+    setSelectionMode(false);
+    setSelectedEntityIds([]);
+    setNotice("点击画布确定蓝图部署位置");
+  };
 
   const reset = () => {
     clearGame();
     setGame(createInitialState());
     setPlacement(null);
     setPlacementCount(1);
-    setSelectedEntityId(null);
+    setSelectedEntityIds([]);
     setSelectedBeltId(null);
     setNodes([]);
     setTechnologyOpen(false);
     setStatisticsOpen(false);
     setRecipesOpen(false);
     setStarMapOpen(false);
+    setBlueprintsOpen(false);
+    setBlueprintPlacementId(null);
+    setSelectionMode(false);
     setNotice("当前工厂已重置");
   };
 
   return (
-    <main className={`game-shell${placement ? " game-shell--placing" : ""}${mobilePanel ? ` mobile-panel--${mobilePanel}` : ""}`}>
+    <main className={`game-shell${placement || blueprintPlacementId ? " game-shell--placing" : ""}${selectionMode ? " game-shell--selecting" : ""}${mobilePanel ? ` mobile-panel--${mobilePanel}` : ""}`}>
       <HeaderControls
         game={game}
         onPauseToggle={() => setGame((current) => setPaused(current, !current.paused))}
@@ -463,14 +530,16 @@ function FactoryGame() {
             edges={edges}
             nodeTypes={NODE_TYPES}
             onNodesChange={onNodesChange}
+            onSelectionChange={onSelectionChange}
             onConnect={onConnect}
             onNodeClick={onNodeClick}
-            onNodeDragStop={(_event, node) => {
-              setGame((current) => moveEntity(current, node.id, node.position));
+            onNodeDragStop={(_event, node, draggedNodes) => {
+              const moved = draggedNodes.length > 0 ? draggedNodes : [node];
+              setGame((current) => moveEntities(current, moved.map((candidate) => ({ id: candidate.id, position: candidate.position }))));
             }}
             onEdgeClick={(_event, edge) => {
               setSelectedBeltId(edge.id);
-              setSelectedEntityId(null);
+              setSelectedEntityIds([]);
               setInspectorTab("inspect");
               setMobilePanel("inspector");
             }}
@@ -482,6 +551,10 @@ function FactoryGame() {
             defaultViewport={{ x: 510, y: 250, zoom: 0.84 }}
             panOnScroll
             panOnDrag={[1, 2]}
+            selectionOnDrag={selectionMode}
+            selectionMode={SelectionMode.Full}
+            selectionKeyCode={null}
+            multiSelectionKeyCode="Shift"
             zoomOnDoubleClick={false}
             deleteKeyCode={null}
             fitViewOptions={{ padding: 0.18 }}
@@ -497,6 +570,32 @@ function FactoryGame() {
             <Controls position="bottom-left" showInteractive={false} />
           </ReactFlow>
           <PlanetNavigator game={game} onPlanetChange={onPlanetChange} />
+          <CanvasSelectionTools
+            selectionMode={selectionMode}
+            blueprintCount={game.blueprints.length}
+            onModeChange={(enabled) => {
+              setSelectionMode(enabled);
+              setPlacement(null);
+              setBlueprintPlacementId(null);
+              if (!enabled) setSelectedEntityIds([]);
+            }}
+            onOpenBlueprints={() => { setBlueprintsOpen(true); setSelectionMode(false); setMobilePanel(null); }}
+          />
+          <SelectionToolbar
+            selectedCount={selectedEntityIds.length}
+            eligibleCount={blueprintEligibleIds.length}
+            canUpgrade={canUpgradeEntities(game, selectedEntityIds)}
+            onCopy={copySelectionAsBlueprint}
+            onUpgrade={() => {
+              setGame((current) => upgradeEntities(current, selectedEntityIds));
+              setNotice("已批量升级选区内可升级设备");
+            }}
+            onRemove={() => {
+              setGame((current) => removeEntities(current, selectedEntityIds));
+              setSelectedEntityIds([]);
+              setNotice("选区设备已回收至施工托盘");
+            }}
+          />
           <div className="canvas-status">
             <span className={game.paused ? "paused" : "running"}>{game.paused ? "模拟暂停" : "实时运行"}</span>
             <strong>{getPlanet(game.activePlanetId).name} · {getPlanet(game.activePlanetId).code}工厂区</strong>
@@ -504,6 +603,7 @@ function FactoryGame() {
         </section>
         <InspectorPanel
           game={game}
+          selectedEntities={selectedEntities}
           selectedEntity={selectedEntity}
           selectedBelt={selectedBelt}
           tab={inspectorTab}
@@ -547,7 +647,7 @@ function FactoryGame() {
           onCraftItem={(recipeId, batches) => setGame((current) => handcraftRecipe(current, recipeId, batches))}
           onRemoveEntity={(entityId) => {
             setGame((current) => removeEntity(current, entityId));
-            setSelectedEntityId(null);
+            setSelectedEntityIds((current) => current.filter((id) => id !== entityId));
           }}
           onRemoveBelt={(beltId) => {
             setGame((current) => removeBelt(current, beltId));
@@ -560,7 +660,7 @@ function FactoryGame() {
         placement={placement}
         beltTier={beltTier}
         placementCount={placementCount}
-        onPlacementChange={setPlacement}
+        onPlacementChange={(buildingId) => { setPlacement(buildingId); setBlueprintPlacementId(null); setSelectionMode(false); setSelectedEntityIds([]); }}
         onBeltTierChange={setBeltTier}
         onPlacementCountChange={(count) => { setPlacementCount(count); setPlacement(null); }}
         onOpenFabricator={() => { setInspectorTab("fabricate"); setMobilePanel("inspector"); }}
@@ -581,8 +681,20 @@ function FactoryGame() {
         onExplore={onExploreSystem}
         onTravel={(planetId) => { onPlanetChange(planetId); setStarMapOpen(false); }}
       />
+      <BlueprintWorkspace
+        open={blueprintsOpen}
+        game={game}
+        onClose={() => setBlueprintsOpen(false)}
+        onDeploy={deployBlueprint}
+        onRemove={(blueprintId) => {
+          setGame((current) => removeBlueprint(current, blueprintId));
+          if (blueprintPlacementId === blueprintId) setBlueprintPlacementId(null);
+        }}
+        onRename={(blueprintId, name) => setGame((current) => renameBlueprint(current, blueprintId, name))}
+      />
       <button className="mobile-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setMobilePanel(null)} />
       <CargoCursor cargo={game.cargo} x={pointer.x} y={pointer.y} />
+      {activeBlueprint ? <BlueprintPlacementCursor blueprint={activeBlueprint} x={pointer.x} y={pointer.y + (game.cargo ? 42 : 0)} /> : null}
       {notice ? <div className="game-notice" role="status">{notice}</div> : null}
     </main>
   );

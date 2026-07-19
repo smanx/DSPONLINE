@@ -491,8 +491,44 @@ export interface ExplorationState {
   unlockedSystemIds: StarSystemId[];
 }
 
+export interface BlueprintEntityTemplate {
+  key: string;
+  buildingId: BuildingId;
+  offset: XYPosition;
+  machineCount: number;
+  recipeId?: RecipeId;
+  storedItemId?: ItemId;
+  distributionMode?: "balanced" | "priority";
+  fuelItemId?: ItemId;
+  energyMode?: EnergyMode;
+  stationMode?: "supply" | "demand";
+  stationMinimumLoad?: StationMinimumLoad;
+  stationWarpEnabled?: boolean;
+  sprayCoaterInstalled?: boolean;
+  proliferatorTier?: ProliferatorTier;
+  proliferatorMode?: ProliferatorMode;
+}
+
+export interface BlueprintBeltTemplate {
+  key: string;
+  sourceKey: string;
+  targetKey: string;
+  itemId: ItemId;
+  lanes: number;
+  tier: BeltTier;
+  sorterTier: SorterTier;
+  priority: 0 | 1;
+}
+
+export interface BlueprintDefinition {
+  id: string;
+  name: string;
+  entities: BlueprintEntityTemplate[];
+  belts: BlueprintBeltTemplate[];
+}
+
 export interface GameState {
-  version: 13;
+  version: 14;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -505,6 +541,7 @@ export interface GameState {
   totalProduced: Partial<Record<ItemId, number>>;
   research: ResearchState;
   exploration: ExplorationState;
+  blueprints: BlueprintDefinition[];
   elapsedSeconds: number;
   metrics: FactoryMetrics;
   planetMetrics: Record<PlanetId, FactoryMetrics>;

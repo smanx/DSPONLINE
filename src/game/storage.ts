@@ -6,8 +6,8 @@ import {
   advanceSimulation,
   createInitialState,
 } from "./engine";
-import { PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, getBuilding, getExtractorBuildingId, getPlanet, getTechnology } from "./content";
-import type { BeltConnection, BeltTier, BuildingId, ConstructionId, EnergyMode, FactoryEntity, GameState, ItemId, PlanetId, ProliferatorMode, ProliferatorTier, StarSystemId, StationMinimumLoad, TechId } from "./types";
+import { BUILDINGS, ITEMS, PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, getBuilding, getExtractorBuildingId, getPlanet, getRecipe, getTechnology } from "./content";
+import type { BeltConnection, BeltTier, BlueprintDefinition, BuildingId, ConstructionId, EnergyMode, FactoryEntity, GameState, ItemId, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad, TechId } from "./types";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
 
@@ -114,7 +114,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
   const entities = saved.entities.map((entity: FactoryEntity) => {
     const currentResource = saved.version < 13
@@ -272,6 +272,58 @@ function migrateGame(value: unknown): GameState | null {
   if (saved.version < 13 && completedTechIds.includes("rare_resource_utilization")) {
     unlockedSystemIds.push(...(["borealis", "neutron"] as StarSystemId[]).filter((systemId) => !unlockedSystemIds.includes(systemId)));
   }
+  const blueprints: BlueprintDefinition[] = saved.version >= 14 && Array.isArray(saved.blueprints)
+    ? saved.blueprints.flatMap((blueprint: Record<string, any>, blueprintIndex: number) => {
+      if (!Array.isArray(blueprint.entities)) return [];
+      const blueprintEntities = blueprint.entities.flatMap((entity: Record<string, any>, entityIndex: number) => {
+        if (typeof entity.buildingId !== "string" || !(entity.buildingId in BUILDINGS)) return [];
+        const recipeId = typeof entity.recipeId === "string" && getRecipe(entity.recipeId as RecipeId) ? entity.recipeId as RecipeId : undefined;
+        const storedItemId = typeof entity.storedItemId === "string" && entity.storedItemId in ITEMS ? entity.storedItemId as ItemId : undefined;
+        const fuelItemId = typeof entity.fuelItemId === "string" && entity.fuelItemId in ITEMS ? entity.fuelItemId as ItemId : undefined;
+        return [{
+          key: typeof entity.key === "string" && entity.key ? entity.key : `node_${entityIndex + 1}`,
+          buildingId: entity.buildingId as BuildingId,
+          offset: {
+            x: typeof entity.offset?.x === "number" && Number.isFinite(entity.offset.x) ? entity.offset.x : 0,
+            y: typeof entity.offset?.y === "number" && Number.isFinite(entity.offset.y) ? entity.offset.y : 0,
+          },
+          machineCount: Math.max(1, nonNegativeInteger(entity.machineCount)),
+          recipeId,
+          storedItemId,
+          distributionMode: entity.distributionMode === "priority" ? "priority" as const : entity.distributionMode === "balanced" ? "balanced" as const : undefined,
+          fuelItemId,
+          energyMode: validEnergyMode(entity.energyMode) ? entity.energyMode : undefined,
+          stationMode: entity.stationMode === "demand" ? "demand" as const : entity.stationMode === "supply" ? "supply" as const : undefined,
+          stationMinimumLoad: validStationMinimumLoad(entity.stationMinimumLoad) ? entity.stationMinimumLoad : undefined,
+          stationWarpEnabled: typeof entity.stationWarpEnabled === "boolean" ? entity.stationWarpEnabled : undefined,
+          sprayCoaterInstalled: Boolean(entity.sprayCoaterInstalled),
+          proliferatorTier: validProliferatorTier(entity.proliferatorTier) ? entity.proliferatorTier : undefined,
+          proliferatorMode: validProliferatorMode(entity.proliferatorMode) ? entity.proliferatorMode : undefined,
+        }];
+      });
+      if (blueprintEntities.length === 0) return [];
+      const keys = new Set(blueprintEntities.map((entity) => entity.key));
+      const blueprintBelts = Array.isArray(blueprint.belts) ? blueprint.belts.flatMap((belt: Record<string, any>, beltIndex: number) => {
+        if (!keys.has(belt.sourceKey) || !keys.has(belt.targetKey) || typeof belt.itemId !== "string" || !(belt.itemId in ITEMS)) return [];
+        return [{
+          key: typeof belt.key === "string" && belt.key ? belt.key : `line_${beltIndex + 1}`,
+          sourceKey: belt.sourceKey as string,
+          targetKey: belt.targetKey as string,
+          itemId: belt.itemId as ItemId,
+          lanes: Math.max(1, nonNegativeInteger(belt.lanes)),
+          tier: validBeltTier(belt.tier) ? belt.tier : 1,
+          sorterTier: validBeltTier(belt.sorterTier) ? belt.sorterTier : 1,
+          priority: belt.priority === 1 ? 1 as const : 0 as const,
+        }];
+      }) : [];
+      return [{
+        id: typeof blueprint.id === "string" && blueprint.id ? blueprint.id : `blueprint_migrated_${blueprintIndex + 1}`,
+        name: typeof blueprint.name === "string" && blueprint.name.trim() ? blueprint.name.trim().slice(0, 32) : `蓝图 ${String(blueprintIndex + 1).padStart(2, "0")}`,
+        entities: blueprintEntities,
+        belts: blueprintBelts,
+      } as BlueprintDefinition];
+    })
+    : [];
   const structurePoints = saved.version >= 7 ? nonNegativeInteger(saved.dysonSphere?.structurePoints) : 0;
   const shellCapacity = structurePoints * DYSON_SHELL_CAPACITY_PER_STRUCTURE;
   const shellSails = saved.version >= 7
@@ -310,7 +362,7 @@ function migrateGame(value: unknown): GameState | null {
   return {
     ...initial,
     ...saved,
-    version: 13,
+    version: 14,
     activePlanetId,
     entities,
     belts,
@@ -326,6 +378,7 @@ function migrateGame(value: unknown): GameState | null {
       completedTechIds,
     },
     exploration: { unlockedSystemIds },
+    blueprints,
     metrics: { ...planetMetrics[activePlanetId] },
     planetMetrics,
     dysonSwarm,
