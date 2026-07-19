@@ -618,6 +618,87 @@ async function openCompleteLogisticsGame(page: Page) {
   await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
 }
 
+async function openCompleteEnergyGame(page: Page) {
+  await page.addInitScript(() => {
+    const entityBase = {
+      machineCount: 1,
+      minerCount: 0,
+      inputs: {},
+      outputs: {},
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+      powerInputKw: 0,
+      powerOutputKw: 0,
+    };
+    const emptyMetrics = {
+      generationKw: 0,
+      demandKw: 0,
+      powerFactor: 1,
+      windGenerationKw: 0,
+      solarGenerationKw: 0,
+      geothermalGenerationKw: 0,
+      thermalGenerationKw: 0,
+      fusionGenerationKw: 0,
+      artificialStarGenerationKw: 0,
+      rayGenerationKw: 0,
+      storageDischargeKw: 0,
+      storageChargeKw: 0,
+      storedEnergyMj: 0,
+      storageCapacityMj: 0,
+      fuelReserveSeconds: 0,
+      totalItemsPerMinute: 0,
+    };
+    const homeMetrics = {
+      ...emptyMetrics,
+      generationKw: 88620,
+      demandKw: 20000,
+      solarGenerationKw: 720,
+      fusionGenerationKw: 3324,
+      artificialStarGenerationKw: 15956,
+      storedEnergyMj: 45,
+      storageCapacityMj: 180,
+      fuelReserveSeconds: 61,
+    };
+    const state = {
+      version: 11,
+      nextId: 8,
+      activePlanetId: "home",
+      entities: [
+        { ...entityBase, id: "energy_solar", kind: "power", planetId: "home", position: { x: 320, y: -500 }, buildingId: "solar_panel", machineCount: 2, powerOutputKw: 720, utilization: 1 },
+        { ...entityBase, id: "energy_accumulator", kind: "power", planetId: "home", position: { x: 680, y: -500 }, buildingId: "accumulator", storedEnergyMj: 45, energyMode: "auto", progress: 0.5 },
+        { ...entityBase, id: "energy_exchanger", kind: "power", planetId: "home", position: { x: 1040, y: -500 }, buildingId: "energy_exchanger", recipeId: "accumulator_charge", energyMode: "charge", storedEnergyMj: 0, inputs: { accumulator: 1 } },
+        { ...entityBase, id: "energy_fusion", kind: "power", planetId: "home", position: { x: 520, y: -100 }, buildingId: "mini_fusion_power_plant", fuelItemId: "deuteron_fuel_rod", fuelRemainingMj: 200, inputs: { deuteron_fuel_rod: 1 }, powerOutputKw: 3324, utilization: 0.2216 },
+        { ...entityBase, id: "energy_star", kind: "power", planetId: "home", position: { x: 900, y: -100 }, buildingId: "artificial_star", fuelItemId: "antimatter_fuel_rod", fuelRemainingMj: 3600, inputs: { antimatter_fuel_rod: 1 }, powerOutputKw: 15956, utilization: 0.2216 },
+        { ...entityBase, id: "ashen_solar", kind: "power", planetId: "ashen", position: { x: 520, y: -320 }, buildingId: "solar_panel", powerOutputKw: 540, utilization: 1 },
+        { ...entityBase, id: "ashen_geothermal", kind: "power", planetId: "ashen", position: { x: 900, y: -320 }, buildingId: "geothermal_power_station", powerOutputKw: 4800, utilization: 1 },
+      ],
+      belts: [],
+      construction: { solar_panel: 1, geothermal_power_station: 1, thermal_power_plant: 1, mini_fusion_power_plant: 1, artificial_star: 1, accumulator: 1, energy_exchanger: 1 },
+      tray: {},
+      planetTrays: { home: {}, ashen: {}, giant: {} },
+      totalProduced: {},
+      metrics: homeMetrics,
+      planetMetrics: {
+        home: homeMetrics,
+        ashen: { ...emptyMetrics, generationKw: 5340, solarGenerationKw: 540, geothermalGenerationKw: 4800 },
+        giant: emptyMetrics,
+      },
+      research: {
+        selectedTechId: null,
+        queuedTechIds: [],
+        progressByTech: {},
+        completedTechIds: ["solar_energy", "energy_storage", "geothermal_power", "miniature_particle_collider", "fusion_power", "antimatter", "artificial_star"],
+      },
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
 test("manual mining feeds a powered smelter", async ({ page }) => {
   await page.setViewportSize({ width: 1560, height: 960 });
   await freshGame(page);
@@ -1494,4 +1575,76 @@ test("planetary drones, orbital collection, station warpers and sorter upgrades 
   await expect.poll(async () => inspector.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await expect(page.getByLabel("行星切换").getByRole("button")).toHaveCount(3);
   await page.screenshot({ path: "artifacts/qa/orbital-collector-390.png", fullPage: true });
+});
+
+test("renewables, storage, fusion and artificial stars form a complete energy layer", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openCompleteEnergyGame(page);
+  await page.locator(".react-flow__controls-fitview").click();
+  for (const building of ["太阳能板", "地热发电站", "微型聚变发电站", "人造恒星", "蓄电器", "能量枢纽"]) {
+    await expect(page.locator(".construction-item").filter({ hasText: building })).toHaveCount(1);
+  }
+
+  const accumulator = page.locator(".power-node").filter({ hasText: "蓄电器" }).filter({ hasNotText: "能量枢纽" });
+  await accumulator.click();
+  await expect(page.locator(".energy-inspector")).toContainText("45.00 / 90 MJ");
+  await expect(page.locator(".energy-meter")).toHaveAttribute("aria-valuenow", "50");
+
+  const exchanger = page.locator(".power-node").filter({ hasText: "能量枢纽" });
+  await exchanger.click();
+  const inspector = page.locator(".energy-inspector");
+  await expect(inspector).toContainText("蓄电器 → 蓄电器（满）");
+  await inspector.getByRole("button", { name: "放电", exact: true }).click();
+  await expect(inspector).toContainText("蓄电器（满） → 蓄电器");
+  await expect(exchanger.getByTitle("投入蓄电器（满）")).toBeVisible();
+  await expect(exchanger.getByTitle("拿取蓄电器")).toBeVisible();
+
+  const fusion = page.locator(".power-node").filter({ hasText: "微型聚变发电站" });
+  await fusion.click();
+  await expect(page.locator(".inspector-content select option")).toHaveCount(2);
+  await expect(page.locator(".inspector-content select")).toHaveValue("deuteron_fuel_rod");
+  const star = page.locator(".power-node").filter({ hasText: "人造恒星" });
+  await star.click();
+  await expect(page.locator(".inspector-content select")).toHaveValue("antimatter_fuel_rod");
+  await page.screenshot({ path: "artifacts/qa/complete-energy-home-1440.png", fullPage: true });
+
+  await page.getByLabel("打开生产统计").click();
+  await page.getByRole("tab", { name: "电力" }).click();
+  const powerStatistics = page.locator(".statistics-power");
+  await expect(powerStatistics).toContainText("太阳能容量");
+  await expect(powerStatistics).toContainText("地热容量");
+  await expect(powerStatistics).toContainText("聚变出力");
+  await expect(powerStatistics).toContainText("人造恒星");
+  await expect(powerStatistics).toContainText("储能水平");
+  await page.screenshot({ path: "artifacts/qa/complete-energy-statistics-1440.png", fullPage: true });
+  await page.getByLabel("关闭生产统计").click();
+
+  await page.getByLabel("打开科技树").click();
+  for (const technology of ["太阳能收集", "能量储存", "地热发电", "可控核聚变", "人造恒星"]) {
+    await expect(page.locator(".technology-node").filter({ hasText: technology })).toHaveCount(1);
+  }
+  await page.getByLabel("关闭科技树").click();
+
+  await page.getByTitle("切换到烬原 II").click();
+  await page.locator(".react-flow__controls-fitview").click();
+  const geothermal = page.locator(".power-node").filter({ hasText: "地热发电站" });
+  await expect(geothermal).toBeVisible();
+  await expect(page.locator(".power-node").filter({ hasText: "太阳能板" }).locator(".power-output")).toContainText("540 kW");
+  await geothermal.click();
+  await page.screenshot({ path: "artifacts/qa/complete-energy-1440.png", fullPage: true });
+
+  await page.getByTitle("切换到澄海 I").click();
+  await page.locator(".react-flow__controls-fitview").click();
+  await exchanger.click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".inspector-panel")).toBeVisible();
+  await expect(page.locator(".energy-inspector")).toContainText("能量枢纽");
+  await expect(page.locator(".energy-inspector")).toContainText("蓄电器（满） → 蓄电器");
+  await expect.poll(async () => page.locator(".inspector-panel").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect.poll(async () => {
+    const box = await page.locator(".inspector-panel").boundingBox();
+    return box ? Math.ceil(box.x + box.width) : Number.POSITIVE_INFINITY;
+  }).toBeLessThanOrEqual(390);
+  await expect(page.locator(".game-notice")).toBeHidden({ timeout: 4_000 });
+  await page.screenshot({ path: "artifacts/qa/complete-energy-390.png", fullPage: true });
 });

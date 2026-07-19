@@ -2,7 +2,6 @@ import {
   BUILDINGS,
   CONSTRUCTION,
   FUEL_ENERGY_MJ,
-  FUEL_ITEM_IDS,
   ITEMS,
   PLANET_LIST,
   PROLIFERATOR_ITEM_IDS,
@@ -12,6 +11,8 @@ import {
   getBuildingUpgradeTarget,
   getConstructionDefinition,
   getExtractorBuildingId,
+  getFuelEfficiency,
+  getFuelItemIdsForBuilding,
   getPlanet,
   getProliferator,
   getRecipe,
@@ -24,6 +25,7 @@ import type {
   BeltConnection,
   BuildingId,
   ConstructionId,
+  EnergyMode,
   EntityOperatingStatus,
   FactoryEntity,
   GameState,
@@ -40,7 +42,7 @@ import type {
 
 const BELT_CAPACITY_PER_SECOND: Record<BeltTier, number> = { 1: 6, 2: 12, 3: 30 };
 const SORTER_CAPACITY_PER_SECOND: Record<SorterTier, number> = { 1: 3, 2: 6, 3: 12 };
-const THERMAL_EFFICIENCY = 0.8;
+export const ACCUMULATOR_ENERGY_MJ = 90;
 export const SOLAR_SAIL_POWER_KW = 36;
 export const SOLAR_SAIL_LIFETIME_SECONDS = 1200;
 export const RAY_RECEIVER_CAPACITY_KW = 6000;
@@ -108,8 +110,16 @@ function emptyMetrics(): GameState["metrics"] {
     demandKw: 0,
     powerFactor: 1,
     windGenerationKw: 0,
+    solarGenerationKw: 0,
+    geothermalGenerationKw: 0,
     thermalGenerationKw: 0,
+    fusionGenerationKw: 0,
+    artificialStarGenerationKw: 0,
     rayGenerationKw: 0,
+    storageDischargeKw: 0,
+    storageChargeKw: 0,
+    storedEnergyMj: 0,
+    storageCapacityMj: 0,
     fuelReserveSeconds: 0,
     totalItemsPerMinute: 0,
   };
@@ -138,7 +148,7 @@ export function createInitialState(): GameState {
   const ashenMetrics = emptyMetrics();
   const giantMetrics = emptyMetrics();
   return {
-    version: 10,
+    version: 11,
     nextId: 1,
     activePlanetId: "home",
     entities: [
@@ -162,7 +172,13 @@ export function createInitialState(): GameState {
     planetTrays: { home: {}, ashen: {}, giant: {} },
     construction: {
       wind_turbine: 3,
+      solar_panel: 0,
+      geothermal_power_station: 0,
       thermal_power_plant: 0,
+      mini_fusion_power_plant: 0,
+      artificial_star: 0,
+      accumulator: 0,
+      energy_exchanger: 0,
       mining_machine: 2,
       arc_smelter: 3,
       plane_smelter: 0,
@@ -450,9 +466,16 @@ interface PowerPlan {
   demandKw: number;
   factor: number;
   windGenerationKw: number;
+  solarGenerationKw: number;
+  geothermalGenerationKw: number;
   thermalGenerationKw: number;
+  fusionGenerationKw: number;
+  artificialStarGenerationKw: number;
   rayGenerationKw: number;
-  thermalOutputByEntity: Map<string, number>;
+  storageDischargeKw: number;
+  storageChargeKw: number;
+  powerOutputByEntity: Map<string, number>;
+  powerInputByEntity: Map<string, number>;
 }
 
 interface DysonReceptionPlan {
@@ -545,34 +568,130 @@ function calculateDysonReception(state: GameState): DysonReceptionPlan {
   };
 }
 
+const FUEL_GENERATOR_IDS: BuildingId[] = ["thermal_power_plant", "mini_fusion_power_plant", "artificial_star"];
+
+function isFuelGenerator(entity: FactoryEntity): boolean {
+  return Boolean(entity.buildingId && FUEL_GENERATOR_IDS.includes(entity.buildingId));
+}
+
 function fuelEnergyAvailable(entity: FactoryEntity): number {
-  if (!entity.fuelItemId) return Math.max(0, entity.fuelRemainingMj ?? 0);
+  if (!entity.fuelItemId || !entity.buildingId ||
+    !getFuelItemIdsForBuilding(entity.buildingId).includes(entity.fuelItemId)) return 0;
   const energyPerItem = FUEL_ENERGY_MJ[entity.fuelItemId] ?? 0;
   return Math.max(0, entity.fuelRemainingMj ?? 0) +
     Math.floor((entity.inputs[entity.fuelItemId] ?? 0) + EPSILON) * energyPerItem;
 }
 
-function thermalCapacityForStep(entity: FactoryEntity, seconds: number): number {
-  if (entity.buildingId !== "thermal_power_plant" || !entity.fuelItemId || seconds <= EPSILON) return 0;
-  const rated = (getBuilding("thermal_power_plant").powerGenerationKw ?? 0) * entity.machineCount;
-  const fuelLimited = fuelEnergyAvailable(entity) * THERMAL_EFFICIENCY * 1000 / seconds;
+function fuelGeneratorCapacityForStep(entity: FactoryEntity, seconds: number): number {
+  if (!isFuelGenerator(entity) || !entity.buildingId || seconds <= EPSILON) return 0;
+  const rated = (getBuilding(entity.buildingId).powerGenerationKw ?? 0) * entity.machineCount;
+  const fuelLimited = fuelEnergyAvailable(entity) * getFuelEfficiency(entity.buildingId) * 1000 / seconds;
   return Math.min(rated, fuelLimited);
+}
+
+function energyCapacity(entity: FactoryEntity): number {
+  return (entity.buildingId ? getBuilding(entity.buildingId).energyCapacityMj ?? 0 : 0) * entity.machineCount;
+}
+
+function storedEnergy(entity: FactoryEntity): number {
+  return Math.min(energyCapacity(entity), Math.max(0, entity.storedEnergyMj ?? 0));
+}
+
+function itemOutputFree(entity: FactoryEntity, itemId: ItemId): number {
+  if (!entity.buildingId) return 0;
+  const capacity = getBuilding(entity.buildingId).outputCapacity * Math.max(1, entity.machineCount);
+  return Math.floor(Math.max(0, capacity - (entity.outputs[itemId] ?? 0)) + EPSILON);
+}
+
+function accumulatorDischargeCapacityForStep(entity: FactoryEntity, seconds: number): number {
+  if (entity.buildingId !== "accumulator" || seconds <= EPSILON) return 0;
+  const rated = (getBuilding("accumulator").powerGenerationKw ?? 0) * entity.machineCount;
+  return Math.min(rated, storedEnergy(entity) * 1000 / seconds);
+}
+
+function accumulatorChargeCapacityForStep(entity: FactoryEntity, seconds: number): number {
+  if (entity.buildingId !== "accumulator" || seconds <= EPSILON) return 0;
+  const rated = (getBuilding("accumulator").powerChargeKw ?? 0) * entity.machineCount;
+  return Math.min(rated, Math.max(0, energyCapacity(entity) - storedEnergy(entity)) * 1000 / seconds);
+}
+
+function exchangerDischargeCapacityForStep(entity: FactoryEntity, seconds: number): number {
+  if (entity.buildingId !== "energy_exchanger" || entity.energyMode !== "discharge" || seconds <= EPSILON) return 0;
+  const activeEnergy = storedEnergy(entity);
+  const activeCells = activeEnergy > EPSILON ? 1 : 0;
+  const queuedCells = Math.floor((entity.inputs.charged_accumulator ?? 0) + EPSILON);
+  const usableCells = Math.min(activeCells + queuedCells, itemOutputFree(entity, "accumulator"));
+  const availableEnergyMj = usableCells > 0
+    ? activeEnergy + Math.max(0, usableCells - activeCells) * ACCUMULATOR_ENERGY_MJ
+    : 0;
+  const rated = (getBuilding("energy_exchanger").powerGenerationKw ?? 0) * entity.machineCount;
+  return Math.min(rated, availableEnergyMj * 1000 / seconds);
+}
+
+function exchangerChargeCapacityForStep(entity: FactoryEntity, seconds: number): number {
+  if (entity.buildingId !== "energy_exchanger" || entity.energyMode !== "charge" || seconds <= EPSILON) return 0;
+  const activeEnergy = storedEnergy(entity);
+  const activeCells = activeEnergy > EPSILON ? 1 : 0;
+  const queuedCells = Math.floor((entity.inputs.accumulator ?? 0) + EPSILON);
+  const usableCells = Math.min(activeCells + queuedCells, itemOutputFree(entity, "charged_accumulator"));
+  const availableCapacityMj = usableCells > 0
+    ? usableCells * ACCUMULATOR_ENERGY_MJ - activeEnergy
+    : 0;
+  const rated = (getBuilding("energy_exchanger").powerChargeKw ?? 0) * entity.machineCount;
+  return Math.min(rated, Math.max(0, availableCapacityMj) * 1000 / seconds);
+}
+
+interface PowerCandidate {
+  entity: FactoryEntity;
+  capacity: number;
+}
+
+function allocatePower(candidates: PowerCandidate[], requestedKw: number, outputs: Map<string, number>): number {
+  const capacity = candidates.reduce((sum, candidate) => sum + candidate.capacity, 0);
+  const allocated = Math.min(Math.max(0, requestedKw), capacity);
+  for (const candidate of candidates) {
+    outputs.set(candidate.entity.id, capacity > EPSILON ? allocated * candidate.capacity / capacity : 0);
+  }
+  return allocated;
 }
 
 function calculatePower(state: GameState, seconds: number, planetId: PlanetId, reception: DysonReceptionPlan): PowerPlan {
   let windGenerationKw = 0;
+  let solarGenerationKw = 0;
+  let geothermalGenerationKw = 0;
   let demandKw = 0;
   const rayGenerationKw = reception.rayPowerByPlanet.get(planetId) ?? 0;
-  const thermalCandidates: Array<{ entity: FactoryEntity; capacity: number }> = [];
+  const fuelCandidates: PowerCandidate[] = [];
+  const accumulatorCandidates: PowerCandidate[] = [];
+  const exchangerDischargeCandidates: PowerCandidate[] = [];
+  const accumulatorChargeCandidates: PowerCandidate[] = [];
+  const exchangerChargeCandidates: PowerCandidate[] = [];
+  const powerOutputByEntity = new Map<string, number>();
+  const powerInputByEntity = new Map<string, number>();
 
   for (const entity of state.entities) {
     if (entity.planetId !== planetId) continue;
     if (entity.kind === "power" && entity.buildingId) {
-      if (entity.buildingId === "thermal_power_plant") {
-        const capacity = thermalCapacityForStep(entity, seconds);
-        if (capacity > EPSILON) thermalCandidates.push({ entity, capacity });
+      if (isFuelGenerator(entity)) {
+        const capacity = fuelGeneratorCapacityForStep(entity, seconds);
+        if (capacity > EPSILON) fuelCandidates.push({ entity, capacity });
+      } else if (entity.buildingId === "accumulator") {
+        const discharge = accumulatorDischargeCapacityForStep(entity, seconds);
+        const charge = accumulatorChargeCapacityForStep(entity, seconds);
+        if (discharge > EPSILON) accumulatorCandidates.push({ entity, capacity: discharge });
+        if (charge > EPSILON) accumulatorChargeCandidates.push({ entity, capacity: charge });
+      } else if (entity.buildingId === "energy_exchanger") {
+        const discharge = exchangerDischargeCapacityForStep(entity, seconds);
+        const charge = exchangerChargeCapacityForStep(entity, seconds);
+        if (discharge > EPSILON) exchangerDischargeCandidates.push({ entity, capacity: discharge });
+        if (charge > EPSILON) exchangerChargeCandidates.push({ entity, capacity: charge });
       } else {
-        windGenerationKw += (getBuilding(entity.buildingId).powerGenerationKw ?? 0) * entity.machineCount;
+        const rated = (getBuilding(entity.buildingId).powerGenerationKw ?? 0) * entity.machineCount;
+        const output = entity.buildingId === "solar_panel" && entity.planetId === "ashen" ? rated * 1.5 : rated;
+        powerOutputByEntity.set(entity.id, output);
+        if (entity.buildingId === "solar_panel") solarGenerationKw += output;
+        else if (entity.buildingId === "geothermal_power_station") geothermalGenerationKw += output;
+        else windGenerationKw += output;
       }
     } else if (entity.kind === "vein" && entity.minerCount > 0) {
       const extractor = extractorFor(entity);
@@ -590,65 +709,159 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, r
     }
   }
 
-  const thermalCapacityKw = thermalCandidates.reduce((sum, candidate) => sum + candidate.capacity, 0);
-  const baseGenerationKw = windGenerationKw + rayGenerationKw;
-  const generationKw = baseGenerationKw + thermalCapacityKw;
-  const servedDemandKw = Math.min(demandKw, generationKw);
-  const thermalGenerationKw = Math.min(thermalCapacityKw, Math.max(0, servedDemandKw - baseGenerationKw));
-  const thermalOutputByEntity = new Map<string, number>();
-  for (const candidate of thermalCandidates) {
-    const share = thermalCapacityKw > EPSILON ? thermalGenerationKw * candidate.capacity / thermalCapacityKw : 0;
-    thermalOutputByEntity.set(candidate.entity.id, share);
-  }
+  const baseGenerationKw = windGenerationKw + solarGenerationKw + geothermalGenerationKw + rayGenerationKw;
+  const exchangerCapacityKw = exchangerDischargeCandidates.reduce((sum, candidate) => sum + candidate.capacity, 0);
+  const fuelCapacityKw = fuelCandidates.reduce((sum, candidate) => sum + candidate.capacity, 0);
+  const accumulatorCapacityKw = accumulatorCandidates.reduce((sum, candidate) => sum + candidate.capacity, 0);
+  const generationKw = baseGenerationKw + exchangerCapacityKw + fuelCapacityKw + accumulatorCapacityKw;
+  let missingKw = Math.max(0, Math.min(demandKw, generationKw) - baseGenerationKw);
+  const exchangerGenerationKw = allocatePower(exchangerDischargeCandidates, missingKw, powerOutputByEntity);
+  missingKw -= exchangerGenerationKw;
+  const fuelGenerationKw = allocatePower(fuelCandidates, missingKw, powerOutputByEntity);
+  missingKw -= fuelGenerationKw;
+  const accumulatorGenerationKw = allocatePower(accumulatorCandidates, missingKw, powerOutputByEntity);
+
+  let surplusKw = Math.max(0, baseGenerationKw - demandKw);
+  const exchangerChargeKw = allocatePower(exchangerChargeCandidates, surplusKw, powerInputByEntity);
+  surplusKw -= exchangerChargeKw;
+  const accumulatorChargeKw = allocatePower(accumulatorChargeCandidates, surplusKw, powerInputByEntity);
+  const fuelOutput = (buildingId: BuildingId) => fuelCandidates.reduce((sum, candidate) =>
+    candidate.entity.buildingId === buildingId ? sum + (powerOutputByEntity.get(candidate.entity.id) ?? 0) : sum, 0);
 
   return {
     generationKw,
     demandKw,
     factor: demandKw <= EPSILON ? 1 : Math.min(1, generationKw / demandKw),
     windGenerationKw,
-    thermalGenerationKw,
+    solarGenerationKw,
+    geothermalGenerationKw,
+    thermalGenerationKw: fuelOutput("thermal_power_plant"),
+    fusionGenerationKw: fuelOutput("mini_fusion_power_plant"),
+    artificialStarGenerationKw: fuelOutput("artificial_star"),
     rayGenerationKw,
-    thermalOutputByEntity,
+    storageDischargeKw: exchangerGenerationKw + accumulatorGenerationKw,
+    storageChargeKw: exchangerChargeKw + accumulatorChargeKw,
+    powerOutputByEntity,
+    powerInputByEntity,
   };
 }
 
-function runThermalGenerators(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId): void {
-  for (const entity of state.entities) {
-    if (entity.planetId !== planetId || entity.buildingId !== "thermal_power_plant") continue;
-    const outputKw = power.thermalOutputByEntity.get(entity.id) ?? 0;
-    const ratedKw = (getBuilding("thermal_power_plant").powerGenerationKw ?? 0) * entity.machineCount;
-    entity.powerOutputKw = round(outputKw, 2);
-    entity.utilization = ratedKw > EPSILON ? round(outputKw / ratedKw, 4) : 0;
-    entity.productionRate = 0;
-    if (outputKw <= EPSILON || !entity.fuelItemId) continue;
-
-    const energyPerItem = FUEL_ENERGY_MJ[entity.fuelItemId] ?? 0;
-    let requiredHeatMj = outputKw * seconds / (1000 * THERMAL_EFFICIENCY);
-    let remainingHeatMj = Math.max(0, entity.fuelRemainingMj ?? 0);
-    while (requiredHeatMj > EPSILON) {
-      if (remainingHeatMj <= EPSILON) {
-        const queuedFuel = Math.floor((entity.inputs[entity.fuelItemId] ?? 0) + EPSILON);
-        if (queuedFuel < 1 || energyPerItem <= EPSILON) break;
-        entity.inputs[entity.fuelItemId] = queuedFuel - 1;
-        remainingHeatMj += energyPerItem;
-      }
-      const burned = Math.min(requiredHeatMj, remainingHeatMj);
-      requiredHeatMj -= burned;
-      remainingHeatMj -= burned;
+function burnFuel(entity: FactoryEntity, outputKw: number, seconds: number): void {
+  if (!entity.buildingId || !entity.fuelItemId || outputKw <= EPSILON) return;
+  const energyPerItem = FUEL_ENERGY_MJ[entity.fuelItemId] ?? 0;
+  let requiredHeatMj = outputKw * seconds / (1000 * getFuelEfficiency(entity.buildingId));
+  let remainingHeatMj = Math.max(0, entity.fuelRemainingMj ?? 0);
+  while (requiredHeatMj > EPSILON) {
+    if (remainingHeatMj <= EPSILON) {
+      const queuedFuel = Math.floor((entity.inputs[entity.fuelItemId] ?? 0) + EPSILON);
+      if (queuedFuel < 1 || energyPerItem <= EPSILON) break;
+      entity.inputs[entity.fuelItemId] = queuedFuel - 1;
+      remainingHeatMj += energyPerItem;
     }
-    entity.fuelRemainingMj = round(Math.max(0, remainingHeatMj), 6);
+    const burned = Math.min(requiredHeatMj, remainingHeatMj);
+    requiredHeatMj -= burned;
+    remainingHeatMj -= burned;
+  }
+  entity.fuelRemainingMj = round(Math.max(0, remainingHeatMj), 6);
+}
+
+function chargeExchanger(state: GameState, entity: FactoryEntity, energyMj: number): number {
+  let remaining = Math.max(0, energyMj);
+  let stored = storedEnergy(entity);
+  let completed = 0;
+  while (remaining > EPSILON) {
+    if (stored <= EPSILON) {
+      const queued = Math.floor((entity.inputs.accumulator ?? 0) + EPSILON);
+      if (queued < 1 || itemOutputFree(entity, "charged_accumulator") < 1) break;
+      entity.inputs.accumulator = queued - 1;
+    }
+    const charged = Math.min(remaining, ACCUMULATOR_ENERGY_MJ - stored);
+    stored += charged;
+    remaining -= charged;
+    if (stored + EPSILON >= ACCUMULATOR_ENERGY_MJ) {
+      entity.outputs.charged_accumulator = Math.floor((entity.outputs.charged_accumulator ?? 0) + 1);
+      state.totalProduced.charged_accumulator = Math.floor((state.totalProduced.charged_accumulator ?? 0) + 1);
+      stored = 0;
+      completed += 1;
+    }
+  }
+  entity.storedEnergyMj = round(stored, 6);
+  entity.progress = stored / ACCUMULATOR_ENERGY_MJ;
+  return completed;
+}
+
+function dischargeExchanger(state: GameState, entity: FactoryEntity, energyMj: number): number {
+  let remaining = Math.max(0, energyMj);
+  let stored = storedEnergy(entity);
+  let completed = 0;
+  while (remaining > EPSILON) {
+    if (stored <= EPSILON) {
+      const queued = Math.floor((entity.inputs.charged_accumulator ?? 0) + EPSILON);
+      if (queued < 1 || itemOutputFree(entity, "accumulator") < 1) break;
+      entity.inputs.charged_accumulator = queued - 1;
+      stored = ACCUMULATOR_ENERGY_MJ;
+    }
+    const discharged = Math.min(remaining, stored);
+    stored -= discharged;
+    remaining -= discharged;
+    if (stored <= EPSILON) {
+      entity.outputs.accumulator = Math.floor((entity.outputs.accumulator ?? 0) + 1);
+      state.totalProduced.accumulator = Math.floor((state.totalProduced.accumulator ?? 0) + 1);
+      stored = 0;
+      completed += 1;
+    }
+  }
+  entity.storedEnergyMj = round(stored, 6);
+  entity.progress = stored > EPSILON ? 1 - stored / ACCUMULATOR_ENERGY_MJ : 0;
+  return completed;
+}
+
+function runPowerFacilities(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId): void {
+  for (const entity of state.entities) {
+    if (entity.planetId !== planetId || entity.kind !== "power" || !entity.buildingId) continue;
+    const outputKw = power.powerOutputByEntity.get(entity.id) ?? 0;
+    const inputKw = power.powerInputByEntity.get(entity.id) ?? 0;
+    const building = getBuilding(entity.buildingId);
+    const ratedKw = (building.powerGenerationKw ?? 0) * entity.machineCount;
+    entity.powerOutputKw = round(outputKw, 2);
+    entity.powerInputKw = round(inputKw, 2);
+    entity.utilization = ratedKw > EPSILON ? round(Math.max(outputKw, inputKw) / ratedKw, 4) : 0;
+    entity.productionRate = 0;
+
+    if (isFuelGenerator(entity)) {
+      burnFuel(entity, outputKw, seconds);
+    } else if (entity.buildingId === "accumulator") {
+      const capacity = energyCapacity(entity);
+      entity.storedEnergyMj = round(Math.min(capacity, Math.max(0,
+        storedEnergy(entity) + inputKw * seconds / 1000 - outputKw * seconds / 1000)), 6);
+      entity.progress = capacity > EPSILON ? entity.storedEnergyMj / capacity : 0;
+    } else if (entity.buildingId === "energy_exchanger") {
+      const completed = entity.energyMode === "discharge"
+        ? dischargeExchanger(state, entity, outputKw * seconds / 1000)
+        : chargeExchanger(state, entity, inputKw * seconds / 1000);
+      entity.productionRate = seconds > EPSILON ? round(completed * 60 / seconds, 2) : 0;
+    }
   }
 }
 
 function fuelReserveSeconds(state: GameState, planetId: PlanetId): number {
   let electricEnergyMj = 0;
-  let ratedThermalKw = 0;
+  let ratedGeneratorKw = 0;
   for (const entity of state.entities) {
-    if (entity.planetId !== planetId || entity.buildingId !== "thermal_power_plant") continue;
-    electricEnergyMj += fuelEnergyAvailable(entity) * THERMAL_EFFICIENCY;
-    ratedThermalKw += (getBuilding("thermal_power_plant").powerGenerationKw ?? 0) * entity.machineCount;
+    if (entity.planetId !== planetId || !isFuelGenerator(entity) || !entity.buildingId) continue;
+    electricEnergyMj += fuelEnergyAvailable(entity) * getFuelEfficiency(entity.buildingId);
+    ratedGeneratorKw += (getBuilding(entity.buildingId).powerGenerationKw ?? 0) * entity.machineCount;
   }
-  return ratedThermalKw > EPSILON ? round(electricEnergyMj * 1000 / ratedThermalKw, 1) : 0;
+  return ratedGeneratorKw > EPSILON ? round(electricEnergyMj * 1000 / ratedGeneratorKw, 1) : 0;
+}
+
+function gridStoredEnergy(state: GameState, planetId: PlanetId): { stored: number; capacity: number } {
+  return state.entities.reduce((total, entity) => {
+    if (entity.planetId !== planetId || (entity.buildingId !== "accumulator" && entity.buildingId !== "energy_exchanger")) return total;
+    total.stored += storedEnergy(entity);
+    total.capacity += energyCapacity(entity);
+    return total;
+  }, { stored: 0, capacity: 0 });
 }
 
 function transferLogisticsBuffers(state: GameState): void {
@@ -1078,17 +1291,26 @@ function simulateStep(state: GameState, seconds: number): void {
   for (const planet of PLANET_LIST) {
     const power = calculatePower(state, seconds, planet.id, reception);
     powerByPlanet.set(planet.id, power);
-    runThermalGenerators(state, seconds, power, planet.id);
+    runPowerFacilities(state, seconds, power, planet.id);
     runMiners(state, seconds, power.factor, planet.id);
     runMachines(state, seconds, power.factor, planet.id);
     runRayReceivers(state, seconds, reception, planet.id);
+    const storage = gridStoredEnergy(state, planet.id);
     state.planetMetrics[planet.id] = {
       generationKw: round(power.generationKw, 2),
       demandKw: round(power.demandKw, 2),
       powerFactor: round(power.factor, 4),
       windGenerationKw: round(power.windGenerationKw, 2),
+      solarGenerationKw: round(power.solarGenerationKw, 2),
+      geothermalGenerationKw: round(power.geothermalGenerationKw, 2),
       thermalGenerationKw: round(power.thermalGenerationKw, 2),
+      fusionGenerationKw: round(power.fusionGenerationKw, 2),
+      artificialStarGenerationKw: round(power.artificialStarGenerationKw, 2),
       rayGenerationKw: round(power.rayGenerationKw, 2),
+      storageDischargeKw: round(power.storageDischargeKw, 2),
+      storageChargeKw: round(power.storageChargeKw, 2),
+      storedEnergyMj: round(storage.stored, 3),
+      storageCapacityMj: round(storage.capacity, 3),
       fuelReserveSeconds: fuelReserveSeconds(state, planet.id),
       totalItemsPerMinute: round(state.entities.reduce((sum, entity) =>
         entity.planetId === planet.id ? sum + entity.productionRate : sum, 0), 2),
@@ -1150,7 +1372,9 @@ export function moveEntity(state: GameState, entityId: string, position: { x: nu
 }
 
 export function canPlaceBuildingOnPlanet(buildingId: BuildingId, planetId: PlanetId): boolean {
-  return planetId === "giant" ? buildingId === "orbital_collector" : buildingId !== "orbital_collector";
+  if (planetId === "giant") return buildingId === "orbital_collector";
+  if (buildingId === "orbital_collector") return false;
+  return buildingId !== "geothermal_power_station" || planetId === "ashen";
 }
 
 export function placeBuilding(state: GameState, buildingId: BuildingId, position: { x: number; y: number }, count = 1): GameState {
@@ -1187,8 +1411,11 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
     stationWarpers: buildingId === "interstellar_logistics_station" ? 0 : undefined,
     stationWarpEnabled: buildingId === "interstellar_logistics_station" ? true : undefined,
     stationMinimumLoad: building.kind === "station" ? 1 : undefined,
-    fuelRemainingMj: buildingId === "thermal_power_plant" ? 0 : undefined,
-    powerOutputKw: buildingId === "thermal_power_plant" ? 0 : undefined,
+    fuelRemainingMj: getFuelItemIdsForBuilding(buildingId).length > 0 ? 0 : undefined,
+    powerOutputKw: building.kind === "power" ? 0 : undefined,
+    powerInputKw: building.kind === "power" ? 0 : undefined,
+    storedEnergyMj: buildingId === "accumulator" || buildingId === "energy_exchanger" ? 0 : undefined,
+    energyMode: buildingId === "accumulator" ? "auto" : buildingId === "energy_exchanger" ? "charge" : undefined,
     utilization: 0,
     productionRate: 0,
   });
@@ -1248,14 +1475,14 @@ function logisticsAccepts(entity: FactoryEntity, itemId: ItemId): boolean {
   return compatibleKind && (!entity.storedItemId || entity.storedItemId === itemId);
 }
 
-function thermalAccepts(entity: FactoryEntity, itemId: ItemId): boolean {
-  return entity.buildingId === "thermal_power_plant" && FUEL_ITEM_IDS.includes(itemId) &&
-    (!entity.fuelItemId || entity.fuelItemId === itemId);
+function fuelGeneratorAccepts(entity: FactoryEntity, itemId: ItemId): boolean {
+  return Boolean(entity.buildingId && getFuelItemIdsForBuilding(entity.buildingId).includes(itemId) &&
+    (!entity.fuelItemId || entity.fuelItemId === itemId));
 }
 
 function targetConsumes(state: GameState, entity: FactoryEntity, itemId: ItemId): boolean {
   if (logisticsAccepts(entity, itemId)) return true;
-  if (thermalAccepts(entity, itemId)) return true;
+  if (fuelGeneratorAccepts(entity, itemId)) return true;
   if (entity.sprayCoaterInstalled && getEntityProliferatorItemId(entity) === itemId) return true;
   const recipe = getRecipe(entity.recipeId);
   if (recipe?.id === "matrix_research") {
@@ -1268,7 +1495,7 @@ function configureTargetItem(entity: FactoryEntity, itemId: ItemId): void {
   if ((entity.kind === "storage" || entity.kind === "splitter" || entity.kind === "station") && !entity.storedItemId) {
     entity.storedItemId = itemId;
   }
-  if (entity.buildingId === "thermal_power_plant" && !entity.fuelItemId && FUEL_ITEM_IDS.includes(itemId)) {
+  if (entity.buildingId && !entity.fuelItemId && getFuelItemIdsForBuilding(entity.buildingId).includes(itemId)) {
     entity.fuelItemId = itemId;
   }
 }
@@ -1701,13 +1928,34 @@ export function setStationMinimumLoad(state: GameState, entityId: string, minimu
 
 export function setFuelItem(state: GameState, entityId: string, itemId: ItemId): GameState {
   const current = state.entities.find((entity) => entity.id === entityId);
-  if (!current || current.buildingId !== "thermal_power_plant" || !FUEL_ITEM_IDS.includes(itemId)) return state;
+  if (!current?.buildingId || !getFuelItemIdsForBuilding(current.buildingId).includes(itemId)) return state;
   if (current.fuelItemId === itemId) return state;
   const next = copyState(state);
   const entity = next.entities.find((candidate) => candidate.id === entityId)!;
   for (const [bufferedItemId, amount] of Object.entries(entity.inputs)) addToTray(next, bufferedItemId as ItemId, amount ?? 0);
   entity.inputs = {};
   entity.fuelItemId = itemId;
+  entity.powerOutputKw = 0;
+  const removedBelts = next.belts.filter((belt) => belt.source === entityId || belt.target === entityId);
+  refundBelts(next, removedBelts);
+  next.belts = next.belts.filter((belt) => belt.source !== entityId && belt.target !== entityId);
+  return next;
+}
+
+export function setEnergyMode(state: GameState, entityId: string, mode: EnergyMode): GameState {
+  const current = state.entities.find((entity) => entity.id === entityId);
+  if (!current || current.buildingId !== "energy_exchanger" || mode === "auto" ||
+    current.energyMode === mode || storedEnergy(current) > EPSILON) return state;
+  const next = copyState(state);
+  const entity = next.entities.find((candidate) => candidate.id === entityId)!;
+  for (const [itemId, amount] of Object.entries(entity.inputs)) addToTray(next, itemId as ItemId, amount ?? 0);
+  for (const [itemId, amount] of Object.entries(entity.outputs)) addToTray(next, itemId as ItemId, amount ?? 0);
+  entity.inputs = {};
+  entity.outputs = {};
+  entity.energyMode = mode;
+  entity.recipeId = mode === "discharge" ? "accumulator_discharge" : "accumulator_charge";
+  entity.progress = 0;
+  entity.powerInputKw = 0;
   entity.powerOutputKw = 0;
   const removedBelts = next.belts.filter((belt) => belt.source === entityId || belt.target === entityId);
   refundBelts(next, removedBelts);
@@ -1941,11 +2189,37 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
     return { code: "running", label: "采矿中", tone: "running" };
   }
 
-  if (entity.buildingId === "thermal_power_plant") {
+  if (isFuelGenerator(entity)) {
     if (!entity.fuelItemId) return { code: "no-fuel-selected", label: "未选择燃料", tone: "blocked" };
     if (fuelEnergyAvailable(entity) <= EPSILON) return { code: "missing-fuel", label: `缺少${ITEMS[entity.fuelItemId].name}`, tone: "blocked" };
-    if ((entity.powerOutputKw ?? 0) > EPSILON) return { code: "running", label: "燃烧发电中", tone: "running" };
-    return { code: "grid-standby", label: "电网无需火电", tone: "idle" };
+    if ((entity.powerOutputKw ?? 0) > EPSILON) {
+      const label = entity.buildingId === "artificial_star" ? "反物质湮灭中" : entity.buildingId === "mini_fusion_power_plant" ? "聚变发电中" : "燃烧发电中";
+      return { code: "running", label, tone: "running" };
+    }
+    return { code: "grid-standby", label: "电网暂无缺口", tone: "idle" };
+  }
+
+  if (entity.buildingId === "accumulator") {
+    const stored = storedEnergy(entity);
+    const capacity = energyCapacity(entity);
+    if ((entity.powerInputKw ?? 0) > EPSILON) return { code: "running", label: "吸收富余电力", tone: "running" };
+    if ((entity.powerOutputKw ?? 0) > EPSILON) return { code: "running", label: "补充电网缺口", tone: "running" };
+    if (stored >= capacity - EPSILON) return { code: "grid-standby", label: "储能已满", tone: "idle" };
+    if (stored <= EPSILON) return { code: "grid-standby", label: "储能已空", tone: "idle" };
+    return { code: "grid-standby", label: "电网平衡待机", tone: "idle" };
+  }
+
+  if (entity.buildingId === "energy_exchanger") {
+    const charging = entity.energyMode !== "discharge";
+    const inputId: ItemId = charging ? "accumulator" : "charged_accumulator";
+    const outputId: ItemId = charging ? "charged_accumulator" : "accumulator";
+    if (itemOutputFree(entity, outputId) < 1) return { code: "output-blocked", label: `${ITEMS[outputId].name}输出已满`, tone: "blocked" };
+    if ((entity.inputs[inputId] ?? 0) < 1 && storedEnergy(entity) <= EPSILON) {
+      return { code: "missing-input", label: `等待${ITEMS[inputId].name}`, tone: "idle" };
+    }
+    if (charging && (entity.powerInputKw ?? 0) > EPSILON) return { code: "running", label: "蓄电器充电中", tone: "running" };
+    if (!charging && (entity.powerOutputKw ?? 0) > EPSILON) return { code: "running", label: "蓄电器放电中", tone: "running" };
+    return { code: "grid-standby", label: charging ? "等待电网富余" : "电网暂无缺口", tone: "idle" };
   }
 
   if (entity.kind === "power") return { code: "running", label: "持续发电", tone: "running" };

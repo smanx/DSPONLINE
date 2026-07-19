@@ -1,8 +1,6 @@
-import { FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, getBuilding, getExtractorBuildingId, getProliferator, getRecipe, getTechnology } from "./content";
+import { FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, getBuilding, getExtractorBuildingId, getFuelEfficiency, getFuelItemIdsForBuilding, getProliferator, getRecipe, getTechnology } from "./content";
 import { getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getProliferatorSprayCost, getRecipeSpeedMultiplier } from "./engine";
 import type { EntityOperatingStatus, FactoryEntity, GameState, ItemId } from "./types";
-
-const THERMAL_EFFICIENCY = 0.8;
 
 export interface ItemStatistics {
   itemId: ItemId;
@@ -52,9 +50,11 @@ function equipmentName(entity: FactoryEntity): string {
 
 function processName(entity: FactoryEntity, state: GameState): string {
   if (entity.kind === "vein" && entity.resourceId) return ITEMS[entity.resourceId].name;
-  if (entity.buildingId === "thermal_power_plant") {
+  if (entity.buildingId && getFuelItemIdsForBuilding(entity.buildingId).length > 0) {
     return entity.fuelItemId ? `燃烧${ITEMS[entity.fuelItemId].name}` : "未选择燃料";
   }
+  if (entity.buildingId === "accumulator") return "自动充放电";
+  if (entity.buildingId === "energy_exchanger") return entity.energyMode === "discharge" ? "满蓄电器放电" : "空蓄电器充电";
   if (entity.kind === "storage" || entity.kind === "splitter") {
     return entity.storedItemId ? ITEMS[entity.storedItemId].name : "未配置物流物品";
   }
@@ -139,14 +139,41 @@ export function calculateFactoryStatistics(state: GameState): FactoryStatistics 
       continue;
     }
 
-    if (entity.buildingId === "thermal_power_plant" && entity.fuelItemId) {
+    if (entity.buildingId && entity.fuelItemId && getFuelItemIdsForBuilding(entity.buildingId).includes(entity.fuelItemId)) {
       const energyMj = FUEL_ENERGY_MJ[entity.fuelItemId] ?? 0;
       const consumption = energyMj > 0
-        ? (entity.powerOutputKw ?? 0) * 60 / (1000 * THERMAL_EFFICIENCY * energyMj)
+        ? (entity.powerOutputKw ?? 0) * 60 / (1000 * getFuelEfficiency(entity.buildingId) * energyMj)
         : 0;
       const fuel = recordFor(entity.fuelItemId);
       fuel.consumptionPerMinute += consumption;
       fuel.consumerCount += 1;
+      continue;
+    }
+
+    if (entity.kind === "power" && (entity.buildingId === "accumulator" || entity.buildingId === "energy_exchanger")) {
+      const building = getBuilding(entity.buildingId);
+      if (entity.planetId === state.activePlanetId) {
+        powerConsumers.push({
+          entityId: entity.id,
+          equipmentName: building.name,
+          ratedDemandKw: (building.powerChargeKw ?? 0) * entity.machineCount,
+          activeDemandKw: entity.powerInputKw ?? 0,
+          status,
+        });
+      }
+      if (entity.buildingId === "energy_exchanger") {
+        const recipe = getRecipe(entity.recipeId);
+        for (const input of recipe?.inputs ?? []) {
+          const record = recordFor(input.itemId);
+          record.consumptionPerMinute += entity.productionRate * input.amount;
+          record.consumerCount += 1;
+        }
+        for (const output of recipe?.outputs ?? []) {
+          const record = recordFor(output.itemId);
+          record.productionPerMinute += entity.productionRate * output.amount;
+          record.producerCount += 1;
+        }
+      }
       continue;
     }
 

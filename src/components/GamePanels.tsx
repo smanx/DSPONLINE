@@ -2,6 +2,8 @@ import {
   Atom,
   ArrowUp,
   BarChart3,
+  BatteryCharging,
+  BatteryFull,
   BookOpen,
   Box,
   Check,
@@ -30,6 +32,7 @@ import {
   Search,
   Sparkles,
   Sun,
+  ThermometerSun,
   LockKeyhole,
   Trash2,
   Wind,
@@ -38,7 +41,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { ItemHoverCard } from "./ItemReference";
-import { CONSTRUCTION, FUEL_ENERGY_MJ, FUEL_ITEM_IDS, ITEMS, PLANET_LIST, RECIPES_BY_BUILDING, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getSorterConstructionId, getTechnology, isConveyorBeltId } from "../game/content";
+import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES_BY_BUILDING, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getSorterConstructionId, getTechnology, isConveyorBeltId } from "../game/content";
 import { DYSON_SHELL_CAPACITY_PER_STRUCTURE, RAY_RECEIVER_CAPACITY_KW, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMiningSpeedMultiplier, getPlanetMetrics, getProliferatorSprayCost, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationMinimumLoad, getStationVesselCapacity, getStationWarperCapacity, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import type {
   BeltTier,
@@ -48,6 +51,7 @@ import type {
   ConstructionId,
   ConveyorBeltId,
   DraggedItemSourceKind,
+  EnergyMode,
   FactoryEntity,
   GameState,
   ItemId,
@@ -299,6 +303,7 @@ interface InspectorPanelProps {
   onRecipeChange: (entityId: string, recipeId: RecipeId) => void;
   onLogisticsItemChange: (entityId: string, itemId: ItemId) => void;
   onFuelChange: (entityId: string, itemId: ItemId) => void;
+  onEnergyModeChange: (entityId: string, mode: EnergyMode) => void;
   onStationModeChange: (entityId: string, mode: "supply" | "demand") => void;
   onStationVesselAdjust: (entityId: string, delta: number) => void;
   onStationDroneAdjust: (entityId: string, delta: number) => void;
@@ -342,11 +347,12 @@ function InspectorEmpty({ game }: { game: GameState }) {
         <div><dt>生产节点</dt><dd>{planetEntities.length}</dd></div>
         <div><dt>已部署设备</dt><dd>{machines}</dd></div>
         <div><dt>物流连接</dt><dd>{game.belts.filter((belt) => belt.planetId === game.activePlanetId).length}</dd></div>
-        <div><dt>风力容量</dt><dd>{game.metrics.windGenerationKw.toFixed(0)} kW</dd></div>
+        <div><dt>可再生能源</dt><dd>{(game.metrics.windGenerationKw + game.metrics.solarGenerationKw + game.metrics.geothermalGenerationKw).toFixed(0)} kW</dd></div>
         <div><dt>射线电力</dt><dd>{game.metrics.rayGenerationKw.toFixed(0)} kW</dd></div>
         <div><dt>戴森球功率</dt><dd>{game.dysonSphere.generationKw.toFixed(0)} kW</dd></div>
-        <div><dt>火电出力</dt><dd>{game.metrics.thermalGenerationKw.toFixed(0)} kW</dd></div>
-        <div><dt>火电续航</dt><dd>{reserveLabel}</dd></div>
+        <div><dt>燃料发电</dt><dd>{(game.metrics.thermalGenerationKw + game.metrics.fusionGenerationKw + game.metrics.artificialStarGenerationKw).toFixed(0)} kW</dd></div>
+        <div><dt>燃料续航</dt><dd>{reserveLabel}</dd></div>
+        <div><dt>电网储能</dt><dd>{game.metrics.storedEnergyMj.toFixed(1)} / {game.metrics.storageCapacityMj.toFixed(0)} MJ</dd></div>
         <div><dt>最大耗电设备</dt><dd>{topConsumer?.demand ? `${topConsumer.name} ${topConsumer.demand.toFixed(0)} kW` : "-"}</dd></div>
         <div><dt>运行时间</dt><dd>{Math.floor(game.elapsedSeconds / 60)} min</dd></div>
       </dl>
@@ -454,6 +460,7 @@ function EntityInspector({
   onRecipeChange,
   onLogisticsItemChange,
   onFuelChange,
+  onEnergyModeChange,
   onStationModeChange,
   onStationVesselAdjust,
   onStationDroneAdjust,
@@ -471,6 +478,7 @@ function EntityInspector({
   onRecipeChange: (entityId: string, recipeId: RecipeId) => void;
   onLogisticsItemChange: (entityId: string, itemId: ItemId) => void;
   onFuelChange: (entityId: string, itemId: ItemId) => void;
+  onEnergyModeChange: (entityId: string, mode: EnergyMode) => void;
   onStationModeChange: (entityId: string, mode: "supply" | "demand") => void;
   onStationVesselAdjust: (entityId: string, delta: number) => void;
   onStationDroneAdjust: (entityId: string, delta: number) => void;
@@ -506,20 +514,21 @@ function EntityInspector({
 
   const building = getBuilding(entity.buildingId!);
 
-  if (entity.buildingId === "thermal_power_plant") {
+  const fuelOptions = getFuelItemIdsForBuilding(entity.buildingId!);
+  if (fuelOptions.length > 0) {
     const fuelId = entity.fuelItemId;
     const ratedPower = (building.powerGenerationKw ?? 0) * entity.machineCount;
     return (
       <div className="inspector-content">
         <div className="inspector-identity">
-          <i className="building-mark building-mark--thermal"><Flame size={18} /></i>
+          <i className="building-mark building-mark--thermal">{entity.buildingId === "mini_fusion_power_plant" ? <Atom size={18} /> : <Flame size={18} />}</i>
           <div><span>可调度能源设施</span><strong>{building.name} ×{entity.machineCount}</strong></div>
         </div>
         <label className="recipe-select">
           <span>当前燃料</span>
           <select value={fuelId ?? ""} onChange={(event) => onFuelChange(entity.id, event.target.value as ItemId)}>
             <option value="" disabled>选择燃料</option>
-            {FUEL_ITEM_IDS.map((itemId) => <option value={itemId} key={itemId}>{ITEMS[itemId].name} · {FUEL_ENERGY_MJ[itemId]} MJ</option>)}
+            {fuelOptions.map((itemId) => <option value={itemId} key={itemId}>{ITEMS[itemId].name} · {FUEL_ENERGY_MJ[itemId]} MJ</option>)}
           </select>
         </label>
         <dl className="metric-ledger">
@@ -528,8 +537,64 @@ function EntityInspector({
           <div><dt>额定出力</dt><dd>{ratedPower.toFixed(0)} kW</dd></div>
           <div><dt>燃料库存</dt><dd>{fuelId ? formatAmount(entity.inputs[fuelId] ?? 0) : "-"}</dd></div>
           <div><dt>单件热值</dt><dd>{fuelId ? `${FUEL_ENERGY_MJ[fuelId]} MJ` : "-"}</dd></div>
-          <div><dt>炉膛余热</dt><dd>{(entity.fuelRemainingMj ?? 0).toFixed(2)} MJ</dd></div>
+          <div><dt>反应余能</dt><dd>{(entity.fuelRemainingMj ?? 0).toFixed(2)} MJ</dd></div>
         </dl>
+        <p className="inspector-description">{building.description}</p>
+        <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}><Trash2 size={15} /> 回收设备</button>
+      </div>
+    );
+  }
+
+  if (entity.buildingId === "accumulator") {
+    const capacity = (building.energyCapacityMj ?? 0) * entity.machineCount;
+    const stored = Math.min(capacity, Math.max(0, entity.storedEnergyMj ?? 0));
+    const percent = capacity > 0 ? Math.round(stored / capacity * 100) : 0;
+    return (
+      <div className="inspector-content energy-inspector">
+        <div className="inspector-identity">
+          <i className="building-mark building-mark--energy"><BatteryFull size={18} /></i>
+          <div><span>电网缓冲储能</span><strong>{building.name} ×{entity.machineCount}</strong></div>
+        </div>
+        <div className="energy-meter" role="progressbar" aria-label="蓄电器储能" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+          <i style={{ width: `${percent}%` }} /><span>储能水平</span><strong>{percent}%</strong>
+        </div>
+        <dl className="metric-ledger">
+          <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
+          <div><dt>当前储能</dt><dd>{stored.toFixed(2)} / {capacity.toFixed(0)} MJ</dd></div>
+          <div><dt>充电功率</dt><dd>{(entity.powerInputKw ?? 0).toFixed(0)} kW</dd></div>
+          <div><dt>放电功率</dt><dd>{(entity.powerOutputKw ?? 0).toFixed(0)} kW</dd></div>
+          <div><dt>最大功率</dt><dd>{((building.powerGenerationKw ?? 0) * entity.machineCount).toFixed(0)} kW</dd></div>
+        </dl>
+        <p className="inspector-description">{building.description}</p>
+        <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}><Trash2 size={15} /> 回收设备</button>
+      </div>
+    );
+  }
+
+  if (entity.buildingId === "energy_exchanger") {
+    const charging = entity.energyMode !== "discharge";
+    const inputId: ItemId = charging ? "accumulator" : "charged_accumulator";
+    const outputId: ItemId = charging ? "charged_accumulator" : "accumulator";
+    const switchingLocked = (entity.storedEnergyMj ?? 0) > 0.0001;
+    return (
+      <div className="inspector-content energy-inspector">
+        <div className="inspector-identity">
+          <i className="building-mark building-mark--energy"><BatteryCharging size={18} /></i>
+          <div><span>可运输储能设施</span><strong>{building.name} ×{entity.machineCount}</strong></div>
+        </div>
+        <div className="segmented-control" aria-label="能量枢纽模式">
+          <button className={charging ? "active" : ""} type="button" disabled={switchingLocked} onClick={() => onEnergyModeChange(entity.id, "charge")}>充电</button>
+          <button className={!charging ? "active" : ""} type="button" disabled={switchingLocked} onClick={() => onEnergyModeChange(entity.id, "discharge")}>放电</button>
+        </div>
+        <dl className="metric-ledger">
+          <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
+          <div><dt>转换方向</dt><dd>{ITEMS[inputId].name} → {ITEMS[outputId].name}</dd></div>
+          <div><dt>输入库存</dt><dd>{formatAmount(entity.inputs[inputId] ?? 0)}</dd></div>
+          <div><dt>输出库存</dt><dd>{formatAmount(entity.outputs[outputId] ?? 0)}</dd></div>
+          <div><dt>当前功率</dt><dd>{charging ? `-${(entity.powerInputKw ?? 0).toFixed(0)}` : (entity.powerOutputKw ?? 0).toFixed(0)} kW</dd></div>
+          <div><dt>单元能量</dt><dd>90 MJ</dd></div>
+        </dl>
+        {switchingLocked ? <p className="energy-mode-lock">当前蓄电器周期完成后可切换模式</p> : null}
         <p className="inspector-description">{building.description}</p>
         <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}><Trash2 size={15} /> 回收设备</button>
       </div>
@@ -668,7 +733,7 @@ function EntityInspector({
   return (
     <div className="inspector-content">
       <div className="inspector-identity">
-        <i className={`building-mark${rayReceiver ? " building-mark--ray" : ""}`}>{entity.kind === "power" ? <Wind size={18} /> : railEjector ? <Satellite size={18} /> : launchSilo ? <Rocket size={18} /> : rayReceiver ? <RadioTower size={18} /> : <Factory size={18} />}</i>
+        <i className={`building-mark${rayReceiver ? " building-mark--ray" : ""}`}>{entity.kind === "power" ? entity.buildingId === "solar_panel" ? <Sun size={18} /> : entity.buildingId === "geothermal_power_station" ? <ThermometerSun size={18} /> : <Wind size={18} /> : railEjector ? <Satellite size={18} /> : launchSilo ? <Rocket size={18} /> : rayReceiver ? <RadioTower size={18} /> : <Factory size={18} />}</i>
         <div><span>{entity.kind === "power" ? "能源设施" : railEjector ? "恒星轨道设施" : launchSilo ? "戴森球建造设施" : rayReceiver ? "戴森系统接收设施" : "生产设备"}</span><strong>{building.name} ×{entity.machineCount}</strong></div>
       </div>
       {entity.kind === "machine" ? (
@@ -683,7 +748,8 @@ function EntityInspector({
         {entity.kind === "power" ? (
           <>
             <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
-            <div><dt>额定发电</dt><dd>{((building.powerGenerationKw ?? 0) * entity.machineCount).toFixed(0)} kW</dd></div>
+            <div><dt>实时发电</dt><dd>{(entity.powerOutputKw ?? 0).toFixed(0)} kW</dd></div>
+            <div><dt>额定发电</dt><dd>{((building.powerGenerationKw ?? 0) * entity.machineCount * (entity.buildingId === "solar_panel" && entity.planetId === "ashen" ? 1.5 : 1)).toFixed(0)} kW</dd></div>
           </>
         ) : (
           <>
@@ -888,7 +954,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
         </button>
       </div>
       {props.tab === "fabricate" ? <Fabricator game={props.game} onCraft={props.onCraft} onCraftItem={props.onCraftItem} /> : props.selectedEntity ? (
-        <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} />
+        <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} />
       ) : props.selectedBelt ? (
         <BeltInspector game={props.game} belt={props.selectedBelt} onPriorityChange={props.onBeltPriorityChange} onUpgrade={props.onUpgradeBelt} onSorterUpgrade={props.onUpgradeSorter} onRemove={props.onRemoveBelt} />
       ) : <InspectorEmpty game={props.game} />}
@@ -898,7 +964,13 @@ export function InspectorPanel(props: InspectorPanelProps) {
 
 const BUILD_ORDER: Array<BuildingId | ConveyorBeltId> = [
   "wind_turbine",
+  "solar_panel",
+  "geothermal_power_station",
   "thermal_power_plant",
+  "mini_fusion_power_plant",
+  "artificial_star",
+  "accumulator",
+  "energy_exchanger",
   "mining_machine",
   "arc_smelter",
   "plane_smelter",
@@ -927,7 +999,13 @@ const BUILD_ORDER: Array<BuildingId | ConveyorBeltId> = [
 
 function buildIcon(id: BuildingId | ConveyorBeltId) {
   if (id === "wind_turbine") return <Wind size={18} />;
+  if (id === "solar_panel") return <Sun size={18} />;
+  if (id === "geothermal_power_station") return <ThermometerSun size={18} />;
   if (id === "thermal_power_plant") return <Flame size={18} />;
+  if (id === "mini_fusion_power_plant") return <Atom size={18} />;
+  if (id === "artificial_star") return <Sun size={18} />;
+  if (id === "accumulator") return <BatteryFull size={18} />;
+  if (id === "energy_exchanger") return <BatteryCharging size={18} />;
   if (id === "mining_machine") return <Pickaxe size={18} />;
   if (id === "matrix_lab") return <FlaskConical size={18} />;
   if (id === "storage_mk1") return <Database size={18} />;
@@ -1001,7 +1079,7 @@ export function ConstructionDock({ game, placement, beltTier, placementCount, on
                 onPlacementChange(id);
               }}
               onDragEnd={() => onPlacementChange(null)}
-              title={!compatiblePlanet ? game.activePlanetId === "giant" ? `${label}不能部署在气态巨星` : `${label}只能部署在气态巨星` : isBelt ? `选择${label}连接节点端口` : `部署${label}${placementCount > 1 ? ` ×${placementCount}` : ""}`}
+              title={!compatiblePlanet ? id === "geothermal_power_station" ? `${label}只能部署在烬原 II` : game.activePlanetId === "giant" ? `${label}不能部署在气态巨星` : `${label}只能部署在气态巨星` : isBelt ? `选择${label}连接节点端口` : `部署${label}${placementCount > 1 ? ` ×${placementCount}` : ""}`}
             >
               <i>{buildIcon(id)}</i>
               <span>{label}</span>

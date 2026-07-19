@@ -44,6 +44,7 @@ import {
   setActivePlanet,
   setBeltPriority,
   setEntityRecipe,
+  setEnergyMode,
   setFuelItem,
   setLogisticsItem,
   setProliferatorConfiguration,
@@ -1647,5 +1648,93 @@ describe("factory simulation", () => {
     state = placeBuilding(state, "orbital_collector", { x: 0, y: 0 });
     expect(state.entities.filter((entity) => entity.planetId === "giant")).toHaveLength(1);
     expect(state.construction.orbital_collector).toBe(0);
+  });
+
+  it("applies planetary solar output and restricts geothermal plants to the lava planet", () => {
+    let state = createInitialState();
+    state.construction.solar_panel = 2;
+    state.construction.geothermal_power_station = 2;
+    state = placeBuilding(state, "solar_panel", { x: 0, y: 0 });
+    expect(placeBuilding(state, "geothermal_power_station", { x: 200, y: 0 })).toBe(state);
+    state = setActivePlanet(state, "ashen");
+    state = placeBuilding(state, "solar_panel", { x: 0, y: 0 });
+    state = placeBuilding(state, "geothermal_power_station", { x: 200, y: 0 });
+    state = advanceSimulation(state, 1);
+
+    expect(state.planetMetrics.home.solarGenerationKw).toBe(360);
+    expect(state.planetMetrics.home.geothermalGenerationKw).toBe(0);
+    expect(state.planetMetrics.ashen.solarGenerationKw).toBe(540);
+    expect(state.planetMetrics.ashen.geothermalGenerationKw).toBe(4800);
+  });
+
+  it("charges stationary accumulators from surplus and discharges them into a grid deficit", () => {
+    let state = createInitialState();
+    state.construction.wind_turbine = 2;
+    state.construction.accumulator = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 2);
+    state = placeBuilding(state, "accumulator", { x: 220, y: 0 });
+    state = advanceSimulation(state, 10);
+    let accumulator = state.entities.find((entity) => entity.buildingId === "accumulator")!;
+    expect(accumulator.storedEnergyMj).toBeCloseTo(6, 4);
+    expect(state.metrics.storageChargeKw).toBe(600);
+
+    state = installMiner(state, "vein_iron", 2);
+    state = advanceSimulation(state, 5);
+    accumulator = state.entities.find((entity) => entity.buildingId === "accumulator")!;
+    expect(accumulator.storedEnergyMj).toBeCloseTo(4.8, 4);
+    expect(state.metrics.storageDischargeKw).toBe(240);
+    expect(state.metrics.powerFactor).toBe(1);
+  });
+
+  it("dispatches fusion and artificial-star generators with their dedicated fuel", () => {
+    let state = createInitialState();
+    state.construction.mini_fusion_power_plant = 1;
+    state.construction.artificial_star = 1;
+    state = placeBuilding(state, "mini_fusion_power_plant", { x: 0, y: 0 });
+    state = placeBuilding(state, "artificial_star", { x: 220, y: 0 });
+    const fusion = state.entities.find((entity) => entity.buildingId === "mini_fusion_power_plant")!;
+    const star = state.entities.find((entity) => entity.buildingId === "artificial_star")!;
+    expect(setFuelItem(state, fusion.id, "coal")).toBe(state);
+    state = setFuelItem(state, fusion.id, "deuteron_fuel_rod");
+    state = setFuelItem(state, star.id, "antimatter_fuel_rod");
+    state.entities.find((entity) => entity.id === fusion.id)!.inputs.deuteron_fuel_rod = 1;
+    state.entities.find((entity) => entity.id === star.id)!.inputs.antimatter_fuel_rod = 1;
+    state = installMiner(state, "vein_iron", 2);
+    state = advanceSimulation(state, 1);
+
+    expect(state.metrics.fusionGenerationKw).toBeGreaterThan(0);
+    expect(state.metrics.artificialStarGenerationKw).toBeGreaterThan(0);
+    expect(state.metrics.fusionGenerationKw + state.metrics.artificialStarGenerationKw).toBe(840);
+    expect(state.entities.find((entity) => entity.id === fusion.id)?.fuelRemainingMj).toBeGreaterThan(0);
+    expect(state.entities.find((entity) => entity.id === star.id)?.fuelRemainingMj).toBeGreaterThan(0);
+  });
+
+  it("charges and discharges transportable accumulators through an energy exchanger", () => {
+    let state = createInitialState();
+    state.construction.wind_turbine = 150;
+    state.construction.energy_exchanger = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 150);
+    state = placeBuilding(state, "energy_exchanger", { x: 260, y: 0 });
+    const exchangerId = state.entities.find((entity) => entity.buildingId === "energy_exchanger")!.id;
+    state.entities.find((entity) => entity.id === exchangerId)!.inputs.accumulator = 1;
+    state = advanceSimulation(state, 1);
+    expect(state.entities.find((entity) => entity.id === exchangerId)?.storedEnergyMj).toBe(45);
+    expect(setEnergyMode(state, exchangerId, "discharge")).toBe(state);
+    state = advanceSimulation(state, 1);
+    let exchanger = state.entities.find((entity) => entity.id === exchangerId)!;
+    expect(exchanger.outputs.charged_accumulator).toBe(1);
+    expect(exchanger.storedEnergyMj).toBe(0);
+
+    state = setEnergyMode(state, exchangerId, "discharge");
+    expect(state.tray.charged_accumulator).toBe(1);
+    state.tray.charged_accumulator = 0;
+    state.entities.find((entity) => entity.id === exchangerId)!.inputs.charged_accumulator = 1;
+    state.entities.find((entity) => entity.buildingId === "wind_turbine")!.machineCount = 0;
+    state = installMiner(state, "vein_iron", 2);
+    state = advanceSimulation(state, 108);
+    exchanger = state.entities.find((entity) => entity.id === exchangerId)!;
+    expect(exchanger.inputs.charged_accumulator).toBe(0);
+    expect(exchanger.outputs.accumulator).toBe(1);
+    expect(exchanger.storedEnergyMj).toBe(0);
   });
 });

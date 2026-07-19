@@ -1,5 +1,7 @@
 import {
   Atom,
+  BatteryCharging,
+  BatteryFull,
   Database,
   Droplets,
   Factory,
@@ -15,12 +17,13 @@ import {
   Satellite,
   Sparkles,
   Sun,
+  ThermometerSun,
   Wind,
   Zap,
 } from "lucide-react";
 import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
 import { useEffect } from "react";
-import { FUEL_ENERGY_MJ, FUEL_ITEM_IDS, ITEMS, MATRIX_ITEM_IDS, getBuilding, getExtractorBuildingId, getItem, getProliferator, getRecipe, getRecipesForBuilding } from "../game/content";
+import { FUEL_ENERGY_MJ, ITEMS, MATRIX_ITEM_IDS, getBuilding, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getProliferator, getRecipe, getRecipesForBuilding } from "../game/content";
 import { getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getStationDroneCapacity, getStationVesselCapacity } from "../game/engine";
 import { ItemHoverCard } from "./ItemReference";
 import type {
@@ -31,6 +34,7 @@ import type {
   DysonSphereState,
   EntityKind,
   EntityOperatingStatus,
+  EnergyMode,
   FactoryEntity,
   ItemAmount,
   ItemId,
@@ -55,6 +59,7 @@ export interface FactoryNodeData extends Record<string, unknown> {
   onAddBuilding: (entityId: string, buildingId: BuildingId, count: PlacementCount) => void;
   onRecipeChange: (entityId: string, recipeId: RecipeId) => void;
   onFuelChange: (entityId: string, itemId: ItemId) => void;
+  onEnergyModeChange: (entityId: string, mode: EnergyMode) => void;
   researchLabel: string | null;
   researchCosts: ItemAmount[];
   connectedInputItemIds: ItemId[];
@@ -529,14 +534,27 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const { entity, placement, cargo } = data;
   const building = getBuilding(entity.buildingId!);
-  useDynamicHandles(entity.id, entity.fuelItemId ?? "no-fuel-port");
+  const recipe = getRecipe(entity.recipeId);
+  const fuelOptions = getFuelItemIdsForBuilding(entity.buildingId!);
+  const fuelGenerator = fuelOptions.length > 0;
+  const accumulator = entity.buildingId === "accumulator";
+  const exchanger = entity.buildingId === "energy_exchanger";
+  const solar = entity.buildingId === "solar_panel";
+  const geothermal = entity.buildingId === "geothermal_power_station";
+  useDynamicHandles(entity.id, `${entity.fuelItemId ?? "no-fuel-port"}:${recipe?.id ?? "no-energy-recipe"}`);
   const adding = placement === entity.buildingId;
-  const thermal = entity.buildingId === "thermal_power_plant";
   const fuelId = entity.fuelItemId;
-  const ratedPower = (building.powerGenerationKw ?? 0) * entity.machineCount;
+  const environmentMultiplier = solar && entity.planetId === "ashen" ? 1.5 : 1;
+  const ratedPower = (building.powerGenerationKw ?? 0) * entity.machineCount * environmentMultiplier;
+  const energyCapacity = (building.energyCapacityMj ?? 0) * entity.machineCount;
+  const energyPercent = energyCapacity > 0 ? (entity.storedEnergyMj ?? 0) / energyCapacity : 0;
+  const acceptsItems = fuelGenerator || exchanger;
+  const icon = accumulator ? <BatteryFull size={19} /> : exchanger ? <BatteryCharging size={19} /> :
+    solar ? <Sun size={19} /> : geothermal ? <ThermometerSun size={19} /> : fuelGenerator ? <Flame size={19} /> : <Wind size={19} />;
+  const category = accumulator ? "电网缓冲储能" : exchanger ? "可运输储能" : fuelGenerator ? "可调度能源" : solar ? "恒星辐射发电" : geothermal ? "熔岩地热发电" : "行星电网";
   return (
     <article
-      className={`factory-node power-node${thermal ? " thermal-node" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}`}
+      className={`factory-node power-node${fuelGenerator ? " thermal-node" : ""}${accumulator || exchanger ? " storage-power-node" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}`}
       onClick={(event) => {
         if (!adding) return;
         event.preventDefault();
@@ -545,7 +563,7 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       }}
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes("application/factory-building") ||
-          (thermal && event.dataTransfer.types.includes("application/factory-item"))) event.preventDefault();
+          (acceptsItems && event.dataTransfer.types.includes("application/factory-item"))) event.preventDefault();
       }}
       onDrop={(event) => {
         const buildingId = event.dataTransfer.getData("application/factory-building") as BuildingId;
@@ -555,7 +573,7 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           data.onAddBuilding(entity.id, buildingId, data.placementCount);
           return;
         }
-        if (!thermal) return;
+        if (!acceptsItems) return;
         const draggedItem = event.dataTransfer.getData("application/factory-item") as ItemId;
         if (!draggedItem) return;
         event.preventDefault();
@@ -566,33 +584,62 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       }}
     >
       <header className="factory-node__header">
-        <div className="node-icon node-icon--power">{thermal ? <Flame size={19} /> : <Wind size={19} />}</div>
+        <div className="node-icon node-icon--power">{icon}</div>
         <div>
-          <span>{thermal ? "可调度能源" : "行星电网"}</span>
+          <span>{category}</span>
           <strong>{building.name}</strong>
         </div>
         <small>×{entity.machineCount}</small>
       </header>
-      {thermal && selected ? (
+      {fuelGenerator && selected ? (
         <label className="node-inline-select nodrag nopan" onPointerDown={(event) => event.stopPropagation()}>
           <span>燃烧燃料</span>
           <select value={fuelId ?? ""} onChange={(event) => data.onFuelChange(entity.id, event.target.value as ItemId)}>
             <option value="" disabled>选择燃料</option>
-            {FUEL_ITEM_IDS.map((itemId) => <option value={itemId} key={itemId}>{ITEMS[itemId].name} · {FUEL_ENERGY_MJ[itemId]} MJ</option>)}
+            {fuelOptions.map((itemId) => <option value={itemId} key={itemId}>{ITEMS[itemId].name} · {FUEL_ENERGY_MJ[itemId]} MJ</option>)}
           </select>
         </label>
       ) : null}
+      {exchanger && selected ? (
+        <label className="node-inline-select nodrag nopan" onPointerDown={(event) => event.stopPropagation()}>
+          <span>能量模式</span>
+          <select value={entity.energyMode === "discharge" ? "discharge" : "charge"} disabled={(entity.storedEnergyMj ?? 0) > 0.0001} onChange={(event) => data.onEnergyModeChange(entity.id, event.target.value as EnergyMode)}>
+            <option value="charge">充电 · 空 → 满</option>
+            <option value="discharge">放电 · 满 → 空</option>
+          </select>
+        </label>
+      ) : null}
+      {accumulator || exchanger ? (
+        <WorkCycle
+          label={accumulator ? "储能电量" : entity.energyMode === "discharge" ? "放电周期" : "充电周期"}
+          progress={accumulator ? energyPercent : entity.progress}
+          active={!data.paused && ((entity.powerInputKw ?? 0) > 0.001 || (entity.powerOutputKw ?? 0) > 0.001)}
+          efficiency={entity.utilization}
+        />
+      ) : null}
       <div className="power-output">
-        {thermal ? <Flame size={17} /> : <Zap size={17} />}
-        <span>{thermal ? data.status.label : "额定发电"}</span>
-        <strong>{thermal ? `${(entity.powerOutputKw ?? 0).toFixed(0)} / ${ratedPower.toFixed(0)} kW` : `${ratedPower.toFixed(0)} kW`}</strong>
+        {accumulator || exchanger ? <BatteryCharging size={17} /> : fuelGenerator ? <Flame size={17} /> : <Zap size={17} />}
+        <span>{fuelGenerator || accumulator || exchanger ? data.status.label : "额定发电"}</span>
+        <strong>{(entity.powerInputKw ?? 0) > 0.001 ? `-${(entity.powerInputKw ?? 0).toFixed(0)} kW` : fuelGenerator || accumulator || exchanger ? `${(entity.powerOutputKw ?? 0).toFixed(0)} / ${ratedPower.toFixed(0)} kW` : `${ratedPower.toFixed(0)} kW`}</strong>
       </div>
-      {thermal && fuelId ? (
+      {fuelGenerator && fuelId ? (
         <div className="thermal-fuel">
           <InputSlot entityId={entity.id} itemId={fuelId} amount={entity.inputs[fuelId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} />
           <span>炉膛余热 <strong>{(entity.fuelRemainingMj ?? 0).toFixed(2)} MJ</strong></span>
         </div>
-      ) : thermal ? <div className="thermal-empty">未配置燃料</div> : null}
+      ) : fuelGenerator ? <div className="thermal-empty">未配置燃料</div> : null}
+      {exchanger && recipe ? (
+        <div className="node-io energy-exchange-io">
+          <div className="node-io__column">
+            <span className="node-io__label">输入</span>
+            {recipe.inputs.map((input) => <InputSlot key={input.itemId} entityId={entity.id} itemId={input.itemId} amount={entity.inputs[input.itemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} />)}
+          </div>
+          <div className="node-io__column node-io__column--output">
+            <span className="node-io__label">输出</span>
+            {recipe.outputs.map((output) => <OutputSlot key={output.itemId} entityId={entity.id} itemId={output.itemId} amount={entity.outputs[output.itemId] ?? 0} onPick={data.onPickOutput} />)}
+          </div>
+        </div>
+      ) : null}
     </article>
   );
 }

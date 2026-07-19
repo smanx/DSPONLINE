@@ -85,6 +85,8 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
   logistics_drone: { id: "logistics_drone", name: "物流运输机", symbol: "LD", color: "#70aeb0", kind: "solid", description: "装载到行星物流站后执行同一行星内的无线运输，每架运载 25 件货物。" },
   logistics_vessel: { id: "logistics_vessel", name: "物流运输船", symbol: "LV", color: "#d4865d", kind: "solid", description: "装载到星际物流站后执行跨行星运输，每艘运载 100 件货物。" },
   space_warper: { id: "space_warper", name: "空间翘曲器", symbol: "Wrp", color: "#8c79c7", kind: "solid", description: "供物流运输船跨恒星航行时消耗的曲率驱动介质。" },
+  accumulator: { id: "accumulator", name: "蓄电器", symbol: "Acc", color: "#789993", kind: "solid", description: "可由能量枢纽充电并跨行星运输的空储能单元。" },
+  charged_accumulator: { id: "charged_accumulator", name: "蓄电器（满）", symbol: "Acc+", color: "#8fc8a3", kind: "solid", description: "储有 90 MJ 电能，可在能量枢纽放电后还原为空蓄电器。" },
   graphene: { id: "graphene", name: "石墨烯", symbol: "Gr", color: "#749692", kind: "solid", description: "由高能石墨剥离形成的二维碳材料。" },
   carbon_nanotube: { id: "carbon_nanotube", name: "碳纳米管", symbol: "CNT", color: "#7e969d", kind: "solid", description: "石墨烯与钛材料形成的高强度纳米结构。" },
   proliferator_mk1: { id: "proliferator_mk1", name: "增产剂 Mk.I", symbol: "P1", color: "#8f9872", kind: "solid", description: "由煤加工的基础喷涂介质，每件提供 12 个喷涂点数。" },
@@ -166,10 +168,42 @@ export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
     powerGenerationKw: 300, speed: 1, inputCapacity: 0, outputCapacity: 0,
     description: "向当前星球电网提供 300 kW 电力。",
   },
+  solar_panel: {
+    id: "solar_panel", name: "太阳能板", shortName: "太阳能板", kind: "power",
+    powerGenerationKw: 360, speed: 1, inputCapacity: 0, outputCapacity: 0,
+    description: "将恒星辐射直接送入行星电网，烬原 II 的高日照环境可提升 50% 出力。",
+  },
+  geothermal_power_station: {
+    id: "geothermal_power_station", name: "地热发电站", shortName: "地热站", kind: "power",
+    powerGenerationKw: 4800, speed: 1, inputCapacity: 0, outputCapacity: 0,
+    description: "只能部署在烬原 II，利用熔岩地热持续提供 4.8 MW 稳定电力。",
+  },
   thermal_power_plant: {
     id: "thermal_power_plant", name: "火力发电厂", shortName: "火电厂", kind: "power",
     powerGenerationKw: 2160, speed: 1, inputCapacity: 120, outputCapacity: 0,
     description: "按电网缺口燃烧燃料，额定输出 2.16 MW，热能转换效率为 80%。",
+  },
+  mini_fusion_power_plant: {
+    id: "mini_fusion_power_plant", name: "微型聚变发电站", shortName: "聚变站", kind: "power",
+    powerGenerationKw: 15000, speed: 1, inputCapacity: 120, outputCapacity: 0,
+    description: "消耗氘核燃料棒按电网缺口提供最高 15 MW 聚变电力。",
+  },
+  artificial_star: {
+    id: "artificial_star", name: "人造恒星", shortName: "人造恒星", kind: "power",
+    powerGenerationKw: 72000, speed: 1, inputCapacity: 120, outputCapacity: 0,
+    description: "以反物质燃料棒维持湮灭反应，按电网缺口提供最高 72 MW 电力。",
+  },
+  accumulator: {
+    id: "accumulator", name: "蓄电器", shortName: "蓄电器", kind: "power",
+    powerGenerationKw: 900, powerChargeKw: 900, energyCapacityMj: 90,
+    speed: 1, inputCapacity: 0, outputCapacity: 0,
+    description: "内置 90 MJ 储能，电网富余时自动充电，供电不足时自动放电。",
+  },
+  energy_exchanger: {
+    id: "energy_exchanger", name: "能量枢纽", shortName: "能量枢纽", kind: "power",
+    powerGenerationKw: 45000, powerChargeKw: 45000, energyCapacityMj: 90,
+    speed: 1, inputCapacity: 120, outputCapacity: 120,
+    description: "以 45 MW 功率在空蓄电器与满蓄电器之间转换，形成可运输的跨行星储能闭环。",
   },
   mining_machine: {
     id: "mining_machine", name: "采矿机", shortName: "采矿机", kind: "miner",
@@ -308,6 +342,9 @@ export const RECIPES: Record<RecipeId, RecipeDefinition> = {
   logistics_drone: { id: "logistics_drone", name: "物流运输机", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "planetary_logistics", inputs: [{ itemId: "steel", amount: 5 }, { itemId: "processor", amount: 2 }, { itemId: "electromagnetic_turbine", amount: 2 }], outputs: [{ itemId: "logistics_drone", amount: 1 }] },
   logistics_vessel: { id: "logistics_vessel", name: "物流运输船", buildingId: "assembling_machine_mk1", duration: 8, requiredTechId: "interstellar_logistics", inputs: [{ itemId: "titanium_alloy", amount: 10 }, { itemId: "processor", amount: 10 }, { itemId: "plasma_exciter", amount: 4 }], outputs: [{ itemId: "logistics_vessel", amount: 1 }] },
   space_warper: { id: "space_warper", name: "空间翘曲器", buildingId: "assembling_machine_mk1", duration: 10, requiredTechId: "space_warp", inputs: [{ itemId: "graviton_lens", amount: 1 }], outputs: [{ itemId: "space_warper", amount: 1 }] },
+  accumulator: { id: "accumulator", name: "蓄电器", buildingId: "assembling_machine_mk1", duration: 5, requiredTechId: "energy_storage", inputs: [{ itemId: "iron_ingot", amount: 6 }, { itemId: "magnetic_coil", amount: 6 }, { itemId: "circuit_board", amount: 4 }], outputs: [{ itemId: "accumulator", amount: 1 }] },
+  accumulator_charge: { id: "accumulator_charge", name: "蓄电器充电", buildingId: "energy_exchanger", duration: 2, requiredTechId: "energy_storage", inputs: [{ itemId: "accumulator", amount: 1 }], outputs: [{ itemId: "charged_accumulator", amount: 1 }] },
+  accumulator_discharge: { id: "accumulator_discharge", name: "蓄电器放电", buildingId: "energy_exchanger", duration: 2, requiredTechId: "energy_storage", inputs: [{ itemId: "charged_accumulator", amount: 1 }], outputs: [{ itemId: "accumulator", amount: 1 }] },
   graphene: { id: "graphene", name: "石墨烯", buildingId: "chemical_plant", duration: 3, requiredTechId: "nanomaterials", inputs: [{ itemId: "energetic_graphite", amount: 3 }, { itemId: "sulfuric_acid", amount: 1 }], outputs: [{ itemId: "graphene", amount: 2 }] },
   carbon_nanotube: { id: "carbon_nanotube", name: "碳纳米管", buildingId: "chemical_plant", duration: 4, requiredTechId: "nanomaterials", inputs: [{ itemId: "graphene", amount: 3 }, { itemId: "titanium_ingot", amount: 1 }], outputs: [{ itemId: "carbon_nanotube", amount: 2 }] },
   proliferator_mk1: { id: "proliferator_mk1", name: "增产剂 Mk.I", buildingId: "assembling_machine_mk1", duration: 0.5, requiredTechId: "proliferator_1", inputs: [{ itemId: "coal", amount: 1 }], outputs: [{ itemId: "proliferator_mk1", amount: 1 }] },
@@ -422,7 +459,13 @@ export function isSorterId(id: ConstructionId): id is SorterId {
 
 export const CONSTRUCTION: ConstructionDefinition[] = [
   { buildingId: "wind_turbine", name: "风力涡轮机", outputAmount: 1, requiredTechId: "electromagnetism", costs: [{ itemId: "iron_ingot", amount: 6 }, { itemId: "gear", amount: 1 }, { itemId: "magnetic_coil", amount: 3 }] },
+  { buildingId: "solar_panel", name: "太阳能板", outputAmount: 1, requiredTechId: "solar_energy", costs: [{ itemId: "copper_ingot", amount: 10 }, { itemId: "high_purity_silicon", amount: 10 }, { itemId: "circuit_board", amount: 5 }] },
+  { buildingId: "geothermal_power_station", name: "地热发电站", outputAmount: 1, requiredTechId: "geothermal_power", costs: [{ itemId: "steel", amount: 15 }, { itemId: "titanium_alloy", amount: 8 }, { itemId: "processor", amount: 4 }] },
   { buildingId: "thermal_power_plant", name: "火力发电厂", outputAmount: 1, requiredTechId: "thermal_power", costs: [{ itemId: "iron_ingot", amount: 10 }, { itemId: "stone_brick", amount: 4 }, { itemId: "gear", amount: 4 }, { itemId: "magnetic_coil", amount: 4 }] },
+  { buildingId: "mini_fusion_power_plant", name: "微型聚变发电站", outputAmount: 1, requiredTechId: "fusion_power", costs: [{ itemId: "titanium_alloy", amount: 12 }, { itemId: "super_magnetic_ring", amount: 10 }, { itemId: "carbon_nanotube", amount: 8 }, { itemId: "processor", amount: 4 }] },
+  { buildingId: "artificial_star", name: "人造恒星", outputAmount: 1, requiredTechId: "artificial_star", costs: [{ itemId: "titanium_alloy", amount: 20 }, { itemId: "frame_material", amount: 20 }, { itemId: "annihilation_constraint_sphere", amount: 10 }, { itemId: "quantum_chip", amount: 10 }] },
+  { buildingId: "accumulator", name: "蓄电器", outputAmount: 1, requiredTechId: "energy_storage", costs: [{ itemId: "iron_ingot", amount: 6 }, { itemId: "magnetic_coil", amount: 6 }, { itemId: "circuit_board", amount: 4 }] },
+  { buildingId: "energy_exchanger", name: "能量枢纽", outputAmount: 1, requiredTechId: "energy_storage", costs: [{ itemId: "steel", amount: 40 }, { itemId: "titanium_alloy", amount: 40 }, { itemId: "processor", amount: 40 }, { itemId: "particle_container", amount: 8 }] },
   { buildingId: "mining_machine", name: "采矿机", outputAmount: 1, requiredTechId: "automatic_metallurgy", costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "circuit_board", amount: 2 }, { itemId: "magnetic_coil", amount: 2 }, { itemId: "gear", amount: 2 }] },
   { buildingId: "arc_smelter", name: "电弧熔炉", outputAmount: 1, requiredTechId: "automatic_metallurgy", costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "stone_brick", amount: 2 }, { itemId: "circuit_board", amount: 4 }, { itemId: "magnetic_coil", amount: 2 }] },
   { buildingId: "plane_smelter", name: "位面熔炉", outputAmount: 1, requiredTechId: "plane_smelting", costs: [{ itemId: "titanium_alloy", amount: 15 }, { itemId: "processor", amount: 8 }, { itemId: "super_magnetic_ring", amount: 4 }, { itemId: "plane_filter", amount: 4 }] },
@@ -464,6 +507,12 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     summary: "掌握稳定电磁场与基础风力发电设备的批量制造。",
     unlocks: ["风力涡轮机制造"],
   },
+  solar_energy: {
+    id: "solar_energy", name: "太阳能收集", tier: 2, costs: [{ itemId: "electromagnetic_matrix", amount: 8 }],
+    prerequisites: ["electromagnetism"],
+    summary: "将高纯硅光伏阵列接入行星电网，建立无需燃料的日照发电能力。",
+    unlocks: ["太阳能板", "行星日照系数"],
+  },
   automatic_metallurgy: {
     id: "automatic_metallurgy", name: "自动化冶金", tier: 1, costs: [{ itemId: "electromagnetic_matrix", amount: 5 }], prerequisites: ["electromagnetic_matrix"],
     summary: "把矿物开采和高温冶炼纳入自动生产体系。",
@@ -496,6 +545,20 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     prerequisites: ["high_efficiency_plasma_control"],
     summary: "把氢的能级结构和高能石墨编码为第二种科学矩阵。",
     unlocks: ["高能石墨", "能量矩阵生产", "红色矩阵科研"],
+  },
+  energy_storage: {
+    id: "energy_storage", name: "能量储存", tier: 5,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 15 }, { itemId: "energy_matrix", amount: 15 }],
+    prerequisites: ["energy_matrix", "basic_logistics"],
+    summary: "把电网富余能量封装进可运输蓄电器，并通过能量枢纽在行星间调配电力。",
+    unlocks: ["蓄电器", "能量枢纽", "满蓄电器", "自动削峰填谷"],
+  },
+  geothermal_power: {
+    id: "geothermal_power", name: "地热发电", tier: 6,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 18 }, { itemId: "energy_matrix", amount: 18 }],
+    prerequisites: ["energy_storage", "high_efficiency_plasma_control"],
+    summary: "利用熔岩行星的高温地幔建立不受日照影响的稳定基础电源。",
+    unlocks: ["地热发电站", "烬原 II 熔岩电力"],
   },
   high_speed_assembling: {
     id: "high_speed_assembling", name: "高速装配工艺", tier: 5,
@@ -672,6 +735,18 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     summary: "以强磁场约束高能粒子，实现氘富集并为奇异物质生产建立设备基础。",
     unlocks: ["微型粒子对撞机", "电磁动力组件", "氘", "氘核燃料棒", "粒子容器"],
   },
+  fusion_power: {
+    id: "fusion_power", name: "可控核聚变", tier: 14,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 40 },
+      { itemId: "energy_matrix", amount: 40 },
+      { itemId: "structure_matrix", amount: 40 },
+      { itemId: "information_matrix", amount: 40 },
+    ],
+    prerequisites: ["miniature_particle_collider", "energy_storage"],
+    summary: "以氘核燃料棒维持稳定聚变反应，为中后期工业提供高密度可调度电力。",
+    unlocks: ["微型聚变发电站", "15 MW 聚变电力"],
+  },
   quantum_chip: {
     id: "quantum_chip", name: "量子芯片", tier: 13,
     costs: [
@@ -799,6 +874,19 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     summary: "在粒子对撞机中拆分临界光子，并将反物质封装为高密度可调度燃料。",
     unlocks: ["质能转换", "湮灭约束球", "反物质燃料棒"],
   },
+  artificial_star: {
+    id: "artificial_star", name: "人造恒星", tier: 19,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 100 },
+      { itemId: "energy_matrix", amount: 100 },
+      { itemId: "structure_matrix", amount: 100 },
+      { itemId: "information_matrix", amount: 100 },
+      { itemId: "gravity_matrix", amount: 100 },
+    ],
+    prerequisites: ["antimatter", "fusion_power"],
+    summary: "在强约束场中持续湮灭反物质燃料，将终局燃料链转化为超高功率电源。",
+    unlocks: ["人造恒星", "72 MW 反物质电力"],
+  },
   universe_matrix: {
     id: "universe_matrix", name: "宇宙矩阵", tier: 19,
     costs: [
@@ -883,6 +971,19 @@ export const FUEL_ENERGY_MJ: Partial<Record<ItemId, number>> = {
 };
 
 export const FUEL_ITEM_IDS = Object.keys(FUEL_ENERGY_MJ) as ItemId[];
+
+const FUSION_FUEL_ITEM_IDS: ItemId[] = ["deuteron_fuel_rod"];
+const ARTIFICIAL_STAR_FUEL_ITEM_IDS: ItemId[] = ["antimatter_fuel_rod"];
+
+export function getFuelItemIdsForBuilding(buildingId: BuildingId): ItemId[] {
+  if (buildingId === "mini_fusion_power_plant") return FUSION_FUEL_ITEM_IDS;
+  if (buildingId === "artificial_star") return ARTIFICIAL_STAR_FUEL_ITEM_IDS;
+  return buildingId === "thermal_power_plant" ? FUEL_ITEM_IDS : [];
+}
+
+export function getFuelEfficiency(buildingId: BuildingId): number {
+  return buildingId === "thermal_power_plant" ? 0.8 : 1;
+}
 
 export function getPlanet(id: PlanetId): PlanetDefinition {
   return PLANETS[id];

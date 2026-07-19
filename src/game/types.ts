@@ -34,6 +34,8 @@ export type ItemId =
   | "logistics_drone"
   | "logistics_vessel"
   | "space_warper"
+  | "accumulator"
+  | "charged_accumulator"
   | "graphene"
   | "carbon_nanotube"
   | "proliferator_mk1"
@@ -80,6 +82,9 @@ export type TechId =
   | "basic_assembling"
   | "basic_logistics"
   | "thermal_power"
+  | "solar_energy"
+  | "energy_storage"
+  | "geothermal_power"
   | "high_efficiency_plasma_control"
   | "energy_matrix"
   | "xray_cracking"
@@ -97,12 +102,14 @@ export type TechId =
   | "information_matrix"
   | "research_speed_1"
   | "miniature_particle_collider"
+  | "fusion_power"
   | "quantum_chip"
   | "gravity_matrix"
   | "research_speed_2"
   | "dyson_swarm"
   | "ray_receiver"
   | "antimatter"
+  | "artificial_star"
   | "universe_matrix"
   | "research_speed_3"
   | "high_speed_assembling"
@@ -120,7 +127,13 @@ export type TechId =
 
 export type BuildingId =
   | "wind_turbine"
+  | "solar_panel"
+  | "geothermal_power_station"
   | "thermal_power_plant"
+  | "mini_fusion_power_plant"
+  | "artificial_star"
+  | "accumulator"
+  | "energy_exchanger"
   | "mining_machine"
   | "arc_smelter"
   | "plane_smelter"
@@ -177,6 +190,9 @@ export type RecipeId =
   | "logistics_drone"
   | "logistics_vessel"
   | "space_warper"
+  | "accumulator"
+  | "accumulator_charge"
+  | "accumulator_discharge"
   | "graphene"
   | "carbon_nanotube"
   | "proliferator_mk1"
@@ -223,6 +239,7 @@ export type RecipeId =
 export type EntityKind = "vein" | "machine" | "power" | "storage" | "splitter" | "station";
 export type PlacementCount = 1 | 2 | 5 | 10;
 export type StationMinimumLoad = 0.1 | 0.25 | 0.5 | 1;
+export type EnergyMode = "auto" | "charge" | "discharge";
 
 export interface ItemAmount {
   itemId: ItemId;
@@ -266,6 +283,8 @@ export interface BuildingDefinition {
   kind: "machine" | "miner" | "power" | "storage" | "splitter" | "station";
   powerDemandKw?: number;
   powerGenerationKw?: number;
+  powerChargeKw?: number;
+  energyCapacityMj?: number;
   speed: number;
   inputCapacity: number;
   outputCapacity: number;
@@ -307,6 +326,9 @@ export interface FactoryEntity {
   fuelItemId?: ItemId;
   fuelRemainingMj?: number;
   powerOutputKw?: number;
+  powerInputKw?: number;
+  storedEnergyMj?: number;
+  energyMode?: EnergyMode;
   stationMode?: "supply" | "demand";
   stationProgress?: number;
   stationTrips?: number;
@@ -359,8 +381,16 @@ export interface FactoryMetrics {
   demandKw: number;
   powerFactor: number;
   windGenerationKw: number;
+  solarGenerationKw: number;
+  geothermalGenerationKw: number;
   thermalGenerationKw: number;
+  fusionGenerationKw: number;
+  artificialStarGenerationKw: number;
   rayGenerationKw: number;
+  storageDischargeKw: number;
+  storageChargeKw: number;
+  storedEnergyMj: number;
+  storageCapacityMj: number;
   fuelReserveSeconds: number;
   totalItemsPerMinute: number;
 }
@@ -418,7 +448,7 @@ export interface ResearchState {
 }
 
 export interface GameState {
-  version: 10;
+  version: 11;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];

@@ -6,8 +6,8 @@ import {
   advanceSimulation,
   createInitialState,
 } from "./engine";
-import { getBeltConstructionId, getExtractorBuildingId, getTechnology } from "./content";
-import type { BeltConnection, BeltTier, BuildingId, ConstructionId, FactoryEntity, GameState, ItemId, PlanetId, ProliferatorMode, ProliferatorTier, StationMinimumLoad, TechId } from "./types";
+import { getBeltConstructionId, getBuilding, getExtractorBuildingId, getTechnology } from "./content";
+import type { BeltConnection, BeltTier, BuildingId, ConstructionId, EnergyMode, FactoryEntity, GameState, ItemId, PlanetId, ProliferatorMode, ProliferatorTier, StationMinimumLoad, TechId } from "./types";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
 
@@ -96,6 +96,10 @@ function validProliferatorMode(value: unknown): value is ProliferatorMode {
   return value === "normal" || value === "extra" || value === "speed";
 }
 
+function validEnergyMode(value: unknown): value is EnergyMode {
+  return value === "auto" || value === "charge" || value === "discharge";
+}
+
 function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
   if (entity.id.startsWith("ashen_")) return "ashen";
   if (entity.resourceId === "silicon_ore" || entity.resourceId === "titanium_ore") return "ashen";
@@ -106,7 +110,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
   const entities = saved.entities.map((entity: FactoryEntity) => {
     const planetId = validPlanetId(entity.planetId) ? entity.planetId : inferLegacyPlanet(entity);
@@ -115,6 +119,11 @@ function migrateGame(value: unknown): GameState | null {
     const planetaryStation = entity.buildingId === "planetary_logistics_station";
     const interstellarStation = entity.buildingId === "interstellar_logistics_station";
     const orbitalCollector = entity.buildingId === "orbital_collector";
+    const accumulator = entity.buildingId === "accumulator";
+    const energyExchanger = entity.buildingId === "energy_exchanger";
+    const storedEnergyCapacity = accumulator || energyExchanger
+      ? (getBuilding(entity.buildingId!).energyCapacityMj ?? 0) * Math.max(0, Math.floor(entity.machineCount ?? 0))
+      : 0;
     if (saved.version < 4 && position.x < -650 && (planetId === "ashen" || entity.resourceId === "water")) {
       position.x += 640;
     }
@@ -129,6 +138,14 @@ function migrateGame(value: unknown): GameState | null {
       progress: typeof entity.progress === "number" ? Math.max(0, entity.progress) : 0,
       fuelRemainingMj: typeof entity.fuelRemainingMj === "number" ? Math.max(0, entity.fuelRemainingMj) : 0,
       powerOutputKw: typeof entity.powerOutputKw === "number" ? Math.max(0, entity.powerOutputKw) : 0,
+      powerInputKw: typeof entity.powerInputKw === "number" ? Math.max(0, entity.powerInputKw) : 0,
+      storedEnergyMj: accumulator || energyExchanger ? Math.min(storedEnergyCapacity, nonNegativeNumber(entity.storedEnergyMj)) : undefined,
+      energyMode: accumulator ? "auto" : energyExchanger
+        ? validEnergyMode(entity.energyMode) && entity.energyMode !== "auto" ? entity.energyMode : "charge"
+        : undefined,
+      recipeId: energyExchanger
+        ? entity.energyMode === "discharge" ? "accumulator_discharge" : "accumulator_charge"
+        : entity.recipeId,
       routingCursor: Math.max(0, Math.floor(entity.routingCursor ?? 0)),
       distributionMode: entity.kind === "splitter" ? entity.distributionMode ?? "balanced" : entity.distributionMode,
       storedItemId: orbitalCollector
@@ -274,7 +291,7 @@ function migrateGame(value: unknown): GameState | null {
   return {
     ...initial,
     ...saved,
-    version: 10,
+    version: 11,
     activePlanetId,
     entities,
     belts,

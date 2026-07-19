@@ -118,10 +118,17 @@ export function StatisticsWorkspace({ open, game, onClose }: StatisticsWorkspace
             <div><span>电力需求</span><strong>{game.metrics.demandKw.toFixed(0)} kW</strong></div>
             <div><span>可用容量</span><strong>{game.metrics.generationKw.toFixed(0)} kW</strong></div>
             <div><span>风力容量</span><strong>{game.metrics.windGenerationKw.toFixed(0)} kW</strong></div>
+            <div><span>太阳能容量</span><strong>{game.metrics.solarGenerationKw.toFixed(0)} kW</strong></div>
+            <div><span>地热容量</span><strong>{game.metrics.geothermalGenerationKw.toFixed(0)} kW</strong></div>
             <div><span>射线电力</span><strong>{game.metrics.rayGenerationKw.toFixed(0)} kW</strong></div>
             <div><span>火电出力</span><strong>{game.metrics.thermalGenerationKw.toFixed(0)} kW</strong></div>
+            <div><span>聚变出力</span><strong>{game.metrics.fusionGenerationKw.toFixed(0)} kW</strong></div>
+            <div><span>人造恒星</span><strong>{game.metrics.artificialStarGenerationKw.toFixed(0)} kW</strong></div>
             <div><span>供电效率</span><strong>{Math.round(game.metrics.powerFactor * 100)}%</strong></div>
-            <div><span>火电续航</span><strong>{reserveTime(game.metrics.fuelReserveSeconds)}</strong></div>
+            <div><span>燃料续航</span><strong>{reserveTime(game.metrics.fuelReserveSeconds)}</strong></div>
+            <div><span>储能水平</span><strong>{game.metrics.storedEnergyMj.toFixed(1)} / {game.metrics.storageCapacityMj.toFixed(0)} MJ</strong></div>
+            <div><span>储能充电</span><strong>{game.metrics.storageChargeKw.toFixed(0)} kW</strong></div>
+            <div><span>储能放电</span><strong>{game.metrics.storageDischargeKw.toFixed(0)} kW</strong></div>
             <div><span>在轨太阳帆</span><strong>{game.dysonSwarm.sailsInOrbit.toLocaleString("zh-CN")}</strong></div>
             <div><span>戴森云功率</span><strong>{(game.dysonSwarm.generationKw / 1000).toFixed(2)} MW</strong></div>
             <div><span>永久结构点</span><strong>{game.dysonSphere.structurePoints.toLocaleString("zh-CN")}</strong></div>

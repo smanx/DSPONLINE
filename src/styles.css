@@ -1390,6 +1390,17 @@ select:focus-visible {
   color: var(--coral);
 }
 
+.storage-power-node .node-icon--power,
+.building-mark--energy {
+  border-color: #486b5f;
+  color: var(--green);
+}
+
+.storage-power-node .power-output svg,
+.storage-power-node .power-output strong {
+  color: var(--green);
+}
+
 .thermal-fuel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1418,6 +1429,51 @@ select:focus-visible {
   color: var(--muted);
   font-size: 9px;
   text-align: center;
+}
+
+.energy-exchange-io {
+  border-top: 1px solid var(--line);
+}
+
+.energy-meter {
+  position: relative;
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  overflow: hidden;
+  margin-top: 12px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-low);
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.energy-meter > i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-right: 1px solid rgba(112, 187, 133, 0.45);
+  background: rgba(63, 116, 78, 0.32);
+  transition: width 120ms linear;
+}
+
+.energy-meter > span,
+.energy-meter > strong {
+  position: relative;
+  z-index: 1;
+}
+
+.energy-meter > strong {
+  color: var(--green);
+}
+
+.energy-mode-lock {
+  margin: 10px 0 0;
+  color: var(--yellow);
+  font-size: 9px;
 }
 
 .canvas-status {

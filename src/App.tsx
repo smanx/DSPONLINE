@@ -60,6 +60,7 @@ import {
   setBeltPriority,
   setActivePlanet,
   setEntityRecipe,
+  setEnergyMode,
   setFuelItem,
   setLogisticsItem,
   setPaused,
@@ -73,7 +74,7 @@ import {
   upgradeSorter,
 } from "./game/engine";
 import { clearGame, loadGame, saveGame } from "./game/storage";
-import type { BeltTier, BuildingId, DraggedItemSourceKind, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StationMinimumLoad } from "./game/types";
+import type { BeltTier, BuildingId, DraggedItemSourceKind, EnergyMode, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StationMinimumLoad } from "./game/types";
 
 type InspectorTab = "inspect" | "fabricate";
 
@@ -246,6 +247,10 @@ function FactoryGame() {
     setGame((current) => setFuelItem(current, entityId, itemId));
   }, []);
 
+  const onEnergyModeChange = useCallback((entityId: string, mode: EnergyMode) => {
+    setGame((current) => setEnergyMode(current, entityId, mode));
+  }, []);
+
   const onPlanetChange = useCallback((planetId: PlanetId) => {
     onMiningStop();
     const cargo = gameRef.current.cargo;
@@ -281,6 +286,7 @@ function FactoryGame() {
       onAddBuilding,
       onRecipeChange,
       onFuelChange,
+      onEnergyModeChange,
       researchLabel: technology?.name ?? null,
       researchCosts: technology?.costs.filter((cost) => (progress[cost.itemId] ?? 0) < cost.amount) ?? [],
       completedTechIds: game.research.completedTechIds,
@@ -292,7 +298,7 @@ function FactoryGame() {
       dysonSwarm: game.dysonSwarm,
       dysonSphere: game.dysonSphere,
     };
-  }, [game.belts, game.cargo, game.dysonSphere, game.dysonSwarm, game.elapsedSeconds, game.paused, game.research.completedTechIds, game.research.progressByTech, game.research.selectedTechId, miningEntityId, onAddBuilding, onDropCargo, onDropDraggedItem, onFuelChange, onInstallMiner, onMiningStart, onMiningStop, onPickInput, onPickOutput, onRecipeChange, placement, placementCount]);
+  }, [game.belts, game.cargo, game.dysonSphere, game.dysonSwarm, game.elapsedSeconds, game.paused, game.research.completedTechIds, game.research.progressByTech, game.research.selectedTechId, miningEntityId, onAddBuilding, onDropCargo, onDropDraggedItem, onEnergyModeChange, onFuelChange, onInstallMiner, onMiningStart, onMiningStop, onPickInput, onPickOutput, onRecipeChange, placement, placementCount]);
 
   useEffect(() => {
     setNodes((current) => {
@@ -493,6 +499,7 @@ function FactoryGame() {
           onTabChange={setInspectorTab}
           onRecipeChange={onRecipeChange}
           onFuelChange={onFuelChange}
+          onEnergyModeChange={onEnergyModeChange}
           onStationModeChange={(entityId, mode) => setGame((current) => setStationMode(current, entityId, mode))}
           onStationVesselAdjust={(entityId, delta) => setGame((current) => adjustStationVessels(current, entityId, delta))}
           onStationDroneAdjust={(entityId, delta) => setGame((current) => adjustStationDrones(current, entityId, delta))}
