@@ -1,7 +1,7 @@
-import { Check, FlaskConical, ListOrdered, LockKeyhole, Play, X } from "lucide-react";
+import { Check, FlaskConical, Gauge, ListOrdered, LockKeyhole, PackageCheck, Pickaxe, Play, Rocket, Satellite, Timer, X, Zap } from "lucide-react";
 import type { CSSProperties } from "react";
 import { MATRIX_ITEM_IDS, PLANET_LIST, TECHNOLOGY_LIST, getItem, getTechnology } from "../game/content";
-import { canQueueTechnology, isTechnologyCompleted } from "../game/engine";
+import { canQueueTechnology, getDysonSailAbsorptionMultiplier, getInterstellarCargoCapacity, getLogisticsSpeedMultiplier, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getRayReceiverCapacityKw, getRecipeSpeedMultiplier, getSolarSailLifetimeSeconds, isTechnologyCompleted } from "../game/engine";
 import type { GameState, ItemId, TechId } from "../game/types";
 import { ItemHoverCard } from "./ItemReference";
 
@@ -76,6 +76,18 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
             ))}
           </div>
         </div>
+        <section className="technology-upgrade-overview" aria-label="全局科技升级效果">
+          <header><Gauge size={13} /><span>全局升级效果</span></header>
+          <div>
+            <span><Pickaxe size={13} /><small>固体采矿</small><strong>{getMiningSpeedMultiplier(game).toFixed(2)}×</strong></span>
+            <span><FlaskConical size={13} /><small>科研吞吐</small><strong>{getRecipeSpeedMultiplier(game, "matrix_research").toFixed(2)}×</strong></span>
+            <span><Rocket size={13} /><small>物流航速</small><strong>{getLogisticsSpeedMultiplier(game).toFixed(2)}×</strong></span>
+            <span><PackageCheck size={13} /><small>机 / 船载荷</small><strong>{getPlanetaryCargoCapacity(game)} / {getInterstellarCargoCapacity(game)}</strong></span>
+            <span><Timer size={13} /><small>太阳帆寿命</small><strong>{Math.round(getSolarSailLifetimeSeconds(game) / 60)} min</strong></span>
+            <span><Satellite size={13} /><small>单站接收</small><strong>{(getRayReceiverCapacityKw(game) / 1000).toFixed(1)} MW</strong></span>
+            <span><Zap size={13} /><small>壳面吸附</small><strong>{getDysonSailAbsorptionMultiplier(game).toFixed(2)}×</strong></span>
+          </div>
+        </section>
       </div>
 
       <div className="technology-tree" style={{ "--technology-tier-count": maximumTier + 1 } as CSSProperties}>

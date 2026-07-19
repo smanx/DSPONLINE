@@ -33,8 +33,16 @@ import {
   getEntityExtraProductBonus,
   getEntityProliferatorPowerMultiplier,
   getEntityProliferatorSpeedMultiplier,
+  getDysonSailAbsorptionMultiplier,
+  getInterstellarCargoCapacity,
+  getInterstellarTripSeconds,
+  getLogisticsSpeedMultiplier,
   getMiningSpeedMultiplier,
+  getPlanetaryCargoCapacity,
+  getPlanetaryTripSeconds,
+  getRayReceiverCapacityKw,
   getRecipeSpeedMultiplier,
+  getSolarSailLifetimeSeconds,
   getSorterCapacity,
   getStationDroneCapacity,
   handcraftRecipe,
@@ -68,8 +76,33 @@ import {
   upgradeEntity,
   upgradeSorter,
 } from "./engine";
+import { TECHNOLOGY_LIST } from "./content";
 
 describe("factory simulation", () => {
+  it("keeps the complete technology graph valid, acyclic and tier ordered", () => {
+    const technologies = new Map(TECHNOLOGY_LIST.map((technology) => [technology.id, technology]));
+    const visiting = new Set<string>();
+    const visited = new Set<string>();
+    const visit = (techId: string) => {
+      if (visited.has(techId)) return;
+      expect(visiting.has(techId), `technology cycle at ${techId}`).toBe(false);
+      visiting.add(techId);
+      const technology = technologies.get(techId as typeof TECHNOLOGY_LIST[number]["id"])!;
+      expect(technology).toBeDefined();
+      expect(technology.costs.every((cost) => Number.isInteger(cost.amount) && cost.amount > 0)).toBe(true);
+      for (const prerequisiteId of technology.prerequisites) {
+        const prerequisite = technologies.get(prerequisiteId);
+        expect(prerequisite, `${techId} prerequisite ${prerequisiteId}`).toBeDefined();
+        expect(prerequisite!.tier).toBeLessThanOrEqual(technology.tier);
+        visit(prerequisiteId);
+      }
+      visiting.delete(techId);
+      visited.add(techId);
+    };
+    for (const technology of TECHNOLOGY_LIST) visit(technology.id);
+    expect(visited.size).toBe(TECHNOLOGY_LIST.length);
+  });
+
   it("starts with the requested construction kit and six distinct planets across three systems", () => {
     const state = createInitialState();
     expect(state.construction).toMatchObject({
@@ -1160,6 +1193,21 @@ describe("factory simulation", () => {
     expect(Number.isInteger(state.dysonSwarm.totalExpired)).toBe(true);
   });
 
+  it("extends solar-sail lifetime through both orbital endurance upgrades", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("dyson_swarm", "solar_sail_life_1", "solar_sail_life_2");
+    state.dysonSwarm.sailsInOrbit = 10;
+    state.dysonSwarm.totalLaunched = 10;
+
+    expect(getSolarSailLifetimeSeconds(state)).toBe(2400);
+    state = advanceSimulation(state, 120);
+    expect(state.dysonSwarm.sailsInOrbit).toBe(10);
+    expect(state.dysonSwarm.totalExpired).toBe(0);
+    state = advanceSimulation(state, 120);
+    expect(state.dysonSwarm.sailsInOrbit).toBe(9);
+    expect(state.dysonSwarm.totalExpired).toBe(1);
+  });
+
   it("shares one Dyson swarm across planets without duplicating receiver power", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("ray_receiver");
@@ -1205,6 +1253,21 @@ describe("factory simulation", () => {
     const powerReceiver = state.entities.find((entity) => entity.id === receiver.id)!;
     expect(state.planetMetrics.home.rayGenerationKw).toBe(RAY_RECEIVER_CAPACITY_KW);
     expect(getEntityOperatingStatus(state, powerReceiver).code).toBe("running");
+  });
+
+  it("raises each ray receiver to twelve megawatts after both transmission upgrades", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("ray_receiver", "ray_transmission_1", "ray_transmission_2");
+    state.construction.ray_receiver = 1;
+    state = placeBuilding(state, "ray_receiver", { x: 0, y: 0 });
+    state.dysonSphere.structurePoints = 13;
+    state.dysonSphere.totalRocketsLaunched = 13;
+    state = advanceSimulation(state, 0.1);
+
+    expect(getRayReceiverCapacityKw(state)).toBe(12_000);
+    expect(state.dysonSwarm.receiverLoadKw).toBe(12_000);
+    expect(state.planetMetrics.home.rayGenerationKw).toBe(12_000);
+    expect(state.entities.find((entity) => entity.buildingId === "ray_receiver")?.powerOutputKw).toBe(12_000);
   });
 
   it("runs mass-energy conversion, antimatter fuel and universe matrix recipes", () => {
@@ -1434,6 +1497,21 @@ describe("factory simulation", () => {
     expect(getDysonShellCapacity(state)).toBe(120);
   });
 
+  it("doubles planned shell absorption after the terminal efficiency upgrade", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("dyson_sphere_program", "dyson_shell", "dyson_absorption_1");
+    state.dysonSphere.structurePoints = 16;
+    state.dysonSphere.totalRocketsLaunched = 16;
+    state.dysonSwarm.sailsInOrbit = 100;
+    state.dysonSwarm.totalLaunched = 100;
+    state = createStandardDysonLayer(state, "helios");
+
+    expect(getDysonSailAbsorptionMultiplier(state)).toBe(2);
+    state = advanceSimulation(state, 5);
+    expect(state.dysonPlans.helios.shellSails).toBe(16);
+    expect(state.dysonSphere.totalSailsAbsorbed).toBe(16);
+  });
+
   it("handcrafts assembler recipes in whole batches", () => {
     let state = createInitialState();
     state.tray.iron_ingot = 8;
@@ -1618,17 +1696,27 @@ describe("factory simulation", () => {
     base = installMiner(base, "vein_iron");
     base = placeBuilding(base, "wind_turbine", { x: 0, y: 0 }, 2);
     const upgradedSeed = structuredClone(base);
+    const tierTwoSeed = structuredClone(base);
+    const tierThreeSeed = structuredClone(base);
 
     base = advanceSimulation(base, 4);
     upgradedSeed.research.completedTechIds.push("mining_speed_1");
     const upgraded = advanceSimulation(upgradedSeed, 4);
+    tierTwoSeed.research.completedTechIds.push("mining_speed_1", "mining_speed_2");
+    const tierTwo = advanceSimulation(tierTwoSeed, 4);
+    tierThreeSeed.research.completedTechIds.push("mining_speed_1", "mining_speed_2", "mining_speed_3");
+    const tierThree = advanceSimulation(tierThreeSeed, 4);
     expect(getMiningSpeedMultiplier(base)).toBe(1);
     expect(getMiningSpeedMultiplier(upgraded)).toBe(1.5);
+    expect(getMiningSpeedMultiplier(tierTwo)).toBe(2);
+    expect(getMiningSpeedMultiplier(tierThree)).toBe(3);
     expect(base.entities.find((entity) => entity.id === "vein_iron")?.outputs.iron_ore).toBe(2);
     expect(upgraded.entities.find((entity) => entity.id === "vein_iron")?.outputs.iron_ore).toBe(3);
+    expect(tierTwo.entities.find((entity) => entity.id === "vein_iron")?.outputs.iron_ore).toBe(4);
+    expect(tierThree.entities.find((entity) => entity.id === "vein_iron")?.outputs.iron_ore).toBe(6);
 
     let fluid = createInitialState();
-    fluid.research.completedTechIds.push("mining_speed_1");
+    fluid.research.completedTechIds.push("mining_speed_1", "mining_speed_2", "mining_speed_3");
     fluid.construction.water_pump = 1;
     fluid.construction.wind_turbine = 1;
     fluid = installMiner(fluid, "vein_water");
@@ -1796,6 +1884,41 @@ describe("factory simulation", () => {
     expect(state.entities.find((entity) => entity.id === demand.id)?.outputs.iron_ingot).toBe(50);
     expect(state.entities.find((entity) => entity.id === demand.id)?.stationTrips).toBe(2);
     expect(getEntityOperatingStatus(state, state.entities.find((entity) => entity.id === demand.id)!)).toMatchObject({ code: "running" });
+  });
+
+  it("applies logistics engine and cargo upgrades to real station dispatches", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push(
+      "logistics_engine_1",
+      "logistics_engine_2",
+      "logistics_capacity_1",
+      "logistics_capacity_2",
+    );
+    state.construction.wind_turbine = 4;
+    state.construction.planetary_logistics_station = 2;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 4);
+    state = placeBuilding(state, "planetary_logistics_station", { x: -200, y: 0 });
+    state = placeBuilding(state, "planetary_logistics_station", { x: 300, y: 0 });
+    const [supply, demand] = state.entities.filter((entity) => entity.buildingId === "planetary_logistics_station");
+    state = setLogisticsItem(state, supply.id, "processor");
+    state = setLogisticsItem(state, demand.id, "processor");
+    state = setStationMode(state, demand.id, "demand");
+    state = setStationMinimumLoad(state, demand.id, 1);
+    state.entities.find((entity) => entity.id === supply.id)!.outputs.processor = 100;
+    state.tray.logistics_drone = 1;
+    state = adjustStationDrones(state, demand.id, 1);
+
+    expect(getLogisticsSpeedMultiplier(state)).toBe(2);
+    expect(getPlanetaryCargoCapacity(state)).toBe(50);
+    expect(getInterstellarCargoCapacity(state)).toBe(200);
+    expect(getPlanetaryTripSeconds(state)).toBe(4);
+    expect(getInterstellarTripSeconds(state)).toBe(15);
+    expect(getInterstellarTripSeconds(state, true)).toBe(6);
+    state = advanceSimulation(state, 4.1);
+
+    expect(state.entities.find((entity) => entity.id === supply.id)?.outputs.processor).toBe(50);
+    expect(state.entities.find((entity) => entity.id === demand.id)?.outputs.processor).toBe(50);
+    expect(state.entities.find((entity) => entity.id === demand.id)?.stationLastTransfer).toBe(50);
   });
 
   it("collects gas-giant hydrogen and supplies an interstellar demand station", () => {

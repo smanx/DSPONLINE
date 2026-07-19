@@ -114,7 +114,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
   const entities = saved.entities.map((entity: FactoryEntity) => {
     const currentResource = saved.version < 13
@@ -439,7 +439,7 @@ function migrateGame(value: unknown): GameState | null {
   return {
     ...initial,
     ...saved,
-    version: 15,
+    version: 16,
     activePlanetId,
     entities,
     belts,

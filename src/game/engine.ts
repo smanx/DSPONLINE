@@ -188,7 +188,7 @@ function makeVein(id: string, planetId: PlanetId, resourceId: ItemId, x: number,
 export function createInitialState(): GameState {
   const planetMetrics = Object.fromEntries(PLANET_LIST.map((planet) => [planet.id, emptyMetrics()])) as GameState["planetMetrics"];
   return {
-    version: 15,
+    version: 16,
     nextId: 1,
     activePlanetId: "home",
     entities: [
@@ -316,7 +316,50 @@ export function getRecipeSpeedMultiplier(state: GameState, recipeId: RecipeId | 
 }
 
 export function getMiningSpeedMultiplier(state: GameState): number {
+  if (state.research.completedTechIds.includes("mining_speed_3")) return 3;
+  if (state.research.completedTechIds.includes("mining_speed_2")) return 2;
   return state.research.completedTechIds.includes("mining_speed_1") ? 1.5 : 1;
+}
+
+export function getLogisticsSpeedMultiplier(state: GameState): number {
+  return 1 + (state.research.completedTechIds.includes("logistics_engine_1") ? 0.5 : 0) +
+    (state.research.completedTechIds.includes("logistics_engine_2") ? 0.5 : 0);
+}
+
+export function getPlanetaryCargoCapacity(state: GameState): number {
+  const multiplier = 1 + (state.research.completedTechIds.includes("logistics_capacity_1") ? 0.5 : 0) +
+    (state.research.completedTechIds.includes("logistics_capacity_2") ? 0.5 : 0);
+  return Math.round(PLANETARY_CARGO_PER_DRONE * multiplier);
+}
+
+export function getInterstellarCargoCapacity(state: GameState): number {
+  const multiplier = 1 + (state.research.completedTechIds.includes("logistics_capacity_1") ? 0.5 : 0) +
+    (state.research.completedTechIds.includes("logistics_capacity_2") ? 0.5 : 0);
+  return Math.round(INTERSTELLAR_CARGO_PER_VESSEL * multiplier);
+}
+
+export function getPlanetaryTripSeconds(state: GameState): number {
+  return PLANETARY_TRIP_SECONDS / getLogisticsSpeedMultiplier(state);
+}
+
+export function getInterstellarTripSeconds(state: GameState, requiresWarp = false): number {
+  return (requiresWarp ? WARP_TRIP_SECONDS : INTERSTELLAR_TRIP_SECONDS) / getLogisticsSpeedMultiplier(state);
+}
+
+export function getSolarSailLifetimeSeconds(state: GameState): number {
+  const multiplier = 1 + (state.research.completedTechIds.includes("solar_sail_life_1") ? 0.5 : 0) +
+    (state.research.completedTechIds.includes("solar_sail_life_2") ? 0.5 : 0);
+  return SOLAR_SAIL_LIFETIME_SECONDS * multiplier;
+}
+
+export function getRayReceiverCapacityKw(state: GameState): number {
+  const multiplier = 1 + (state.research.completedTechIds.includes("ray_transmission_1") ? 0.5 : 0) +
+    (state.research.completedTechIds.includes("ray_transmission_2") ? 0.5 : 0);
+  return RAY_RECEIVER_CAPACITY_KW * multiplier;
+}
+
+export function getDysonSailAbsorptionMultiplier(state: GameState): number {
+  return state.research.completedTechIds.includes("dyson_absorption_1") ? 2 : 1;
 }
 
 function proliferatorApplies(entity: FactoryEntity, recipe: RecipeDefinition | undefined): boolean {
@@ -469,10 +512,10 @@ export function getStationMinimumLoad(station: FactoryEntity): StationMinimumLoa
     : 1;
 }
 
-export function getStationMinimumCargo(station: FactoryEntity): number {
+export function getStationMinimumCargo(state: GameState, station: FactoryEntity): number {
   const vehicleCapacity = station.buildingId === "planetary_logistics_station"
-    ? PLANETARY_CARGO_PER_DRONE
-    : INTERSTELLAR_CARGO_PER_VESSEL;
+    ? getPlanetaryCargoCapacity(state)
+    : getInterstellarCargoCapacity(state);
   return Math.ceil(vehicleCapacity * getStationMinimumLoad(station));
 }
 
@@ -489,7 +532,7 @@ function planetaryDispatchableDrones(state: GameState, station: FactoryEntity): 
   const capacity = getBuilding("planetary_logistics_station").outputCapacity * Math.max(1, demand.machineCount);
   const available = Math.floor((supply.outputs[itemId] ?? 0) + EPSILON);
   const free = Math.floor(Math.max(0, capacity - (demand.outputs[itemId] ?? 0)) + EPSILON);
-  const minimumCargo = getStationMinimumCargo(demand);
+  const minimumCargo = getStationMinimumCargo(state, demand);
   const drones = Math.min(getStationDroneCapacity(demand), Math.max(0, Math.floor(demand.stationDrones ?? 0)));
   return Math.max(0, Math.min(drones, Math.floor(available / minimumCargo), Math.floor(free / minimumCargo)));
 }
@@ -503,7 +546,7 @@ function stationDispatchableVessels(state: GameState, station: FactoryEntity): n
   const capacity = getBuilding("interstellar_logistics_station").outputCapacity * Math.max(1, demand.machineCount);
   const available = Math.floor((supply.outputs[itemId] ?? 0) + EPSILON);
   const free = Math.floor(Math.max(0, capacity - (demand.outputs[itemId] ?? 0)) + EPSILON);
-  const minimumCargo = getStationMinimumCargo(demand);
+  const minimumCargo = getStationMinimumCargo(state, demand);
   const vessels = Math.min(
     getStationVesselCapacity(demand),
     Math.max(0, Math.floor(demand.stationVessels ?? 0)),
@@ -554,7 +597,7 @@ function decayDysonSwarm(state: GameState, seconds: number): void {
     return;
   }
   const accumulatedDecay = Math.max(0, state.dysonSwarm.decayProgress) +
-    sails * seconds / SOLAR_SAIL_LIFETIME_SECONDS;
+    sails * seconds / getSolarSailLifetimeSeconds(state);
   const expired = Math.min(sails, Math.floor(accumulatedDecay + EPSILON));
   state.dysonSwarm.sailsInOrbit = sails - expired;
   state.dysonSwarm.totalExpired = Math.floor(state.dysonSwarm.totalExpired + expired);
@@ -917,7 +960,7 @@ function absorbDysonSails(state: GameState, seconds: number): void {
   }
 
   const accumulated = Math.max(0, state.dysonSphere.absorptionProgress) +
-    structurePoints * DYSON_SAIL_ABSORPTION_PER_STRUCTURE_PER_SECOND * seconds;
+    structurePoints * DYSON_SAIL_ABSORPTION_PER_STRUCTURE_PER_SECOND * getDysonSailAbsorptionMultiplier(state) * seconds;
   const absorbed = Math.min(free, sailsInOrbit, Math.floor(accumulated + EPSILON));
   state.dysonSwarm.sailsInOrbit = sailsInOrbit - absorbed;
   let remaining = absorbed;
@@ -941,15 +984,16 @@ function calculateDysonReception(state: GameState): DysonReceptionPlan {
   const receivers = state.entities.filter((entity) =>
     entity.kind === "machine" && entity.buildingId === "ray_receiver" && entity.machineCount > 0 &&
     (entity.recipeId === "ray_power" || entity.recipeId === "critical_photon") && canMachineRun(state, entity));
+  const ratedCapacityKw = getRayReceiverCapacityKw(state);
   const receiverCapacityKw = receivers.reduce((sum, entity) =>
-    sum + RAY_RECEIVER_CAPACITY_KW * entity.machineCount, 0);
+    sum + ratedCapacityKw * entity.machineCount, 0);
   const generationKw = totalDysonGenerationKw(state);
   const efficiency = receiverCapacityKw <= EPSILON ? 0 : Math.min(1, generationKw / receiverCapacityKw);
   const allocationByEntity = new Map<string, number>();
   const rayPowerByPlanet = new Map<PlanetId, number>();
 
   for (const receiver of receivers) {
-    const allocationKw = RAY_RECEIVER_CAPACITY_KW * receiver.machineCount * efficiency;
+    const allocationKw = ratedCapacityKw * receiver.machineCount * efficiency;
     allocationByEntity.set(receiver.id, allocationKw);
     if (receiver.recipeId === "ray_power") {
       rayPowerByPlanet.set(receiver.planetId, (rayPowerByPlanet.get(receiver.planetId) ?? 0) + allocationKw);
@@ -1611,13 +1655,13 @@ function runPlanetaryStations(state: GameState, seconds: number, powerByPlanet: 
     }
     const powerFactor = powerByPlanet.get(demand.planetId)?.factor ?? 0;
     if (powerFactor <= EPSILON) continue;
-    demand.stationProgress = round((demand.stationProgress ?? 0) + seconds * powerFactor / PLANETARY_TRIP_SECONDS, 6);
+    demand.stationProgress = round((demand.stationProgress ?? 0) + seconds * powerFactor / getPlanetaryTripSeconds(state), 6);
     supply.stationProgress = demand.stationProgress;
     demand.utilization = powerFactor;
     supply.utilization = powerFactor;
     if ((demand.stationProgress ?? 0) + EPSILON < 1) continue;
 
-    const cargoLimit = PLANETARY_CARGO_PER_DRONE * dispatchableDrones;
+    const cargoLimit = getPlanetaryCargoCapacity(state) * dispatchableDrones;
     const transferred = Math.min(available, free, cargoLimit);
     supply.outputs[itemId] = available - transferred;
     demand.outputs[itemId] = Math.floor((demand.outputs[itemId] ?? 0) + transferred);
@@ -1657,14 +1701,14 @@ function runInterstellarStations(state: GameState, seconds: number, powerByPlane
     const powerFactor = Math.min(sourcePower, targetPower);
     if (powerFactor <= EPSILON) continue;
     const requiresWarp = stationRouteRequiresWarp(demand, supply);
-    const tripSeconds = requiresWarp ? WARP_TRIP_SECONDS : INTERSTELLAR_TRIP_SECONDS;
+    const tripSeconds = getInterstellarTripSeconds(state, requiresWarp);
     demand.stationProgress = round((demand.stationProgress ?? 0) + seconds * powerFactor / tripSeconds, 6);
     supply.stationProgress = demand.stationProgress;
     demand.utilization = powerFactor;
     supply.utilization = powerFactor;
 
     if ((demand.stationProgress ?? 0) + EPSILON < 1) continue;
-    const cargoLimit = INTERSTELLAR_CARGO_PER_VESSEL * dispatchableVessels;
+    const cargoLimit = getInterstellarCargoCapacity(state) * dispatchableVessels;
     const transferred = Math.min(available, free, cargoLimit);
     supply.outputs[itemId] = available - transferred;
     demand.outputs[itemId] = Math.floor((demand.outputs[itemId] ?? 0) + transferred);
@@ -2881,7 +2925,7 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
     const stationBuildingId = planetary ? "planetary_logistics_station" : "interstellar_logistics_station";
     const capacity = getBuilding(stationBuildingId).outputCapacity * Math.max(1, demand.machineCount);
     const free = Math.floor(Math.max(0, capacity - (demand.outputs[itemId] ?? 0)) + EPSILON);
-    const minimumCargo = getStationMinimumCargo(demand);
+    const minimumCargo = getStationMinimumCargo(state, demand);
     if (planetary) {
       const drones = Math.min(getStationDroneCapacity(demand), Math.max(0, Math.floor(demand.stationDrones ?? 0)));
       if (drones < 1) return { code: "missing-drone", label: "缺少物流运输机", tone: "blocked" };
@@ -2938,7 +2982,7 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
     const blocked = recipe.outputs.some((output) =>
       capacity - (entity.outputs[output.itemId] ?? 0) + EPSILON < output.amount);
     if (blocked) return { code: "output-blocked", label: "临界光子缓存已满", tone: "blocked" };
-    const ratedKw = RAY_RECEIVER_CAPACITY_KW * entity.machineCount;
+    const ratedKw = getRayReceiverCapacityKw(state) * entity.machineCount;
     const receivedKw = Math.max(0, entity.powerOutputKw ?? 0);
     if (totalDysonGenerationKw(state) <= EPSILON || receivedKw <= EPSILON) {
       return { code: "missing-dyson-swarm", label: "等待戴森系统能量", tone: "blocked" };

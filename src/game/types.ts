@@ -127,6 +127,17 @@ export type TechId =
   | "high_speed_assembling"
   | "high_speed_logistics"
   | "mining_speed_1"
+  | "mining_speed_2"
+  | "mining_speed_3"
+  | "logistics_engine_1"
+  | "logistics_engine_2"
+  | "logistics_capacity_1"
+  | "logistics_capacity_2"
+  | "solar_sail_life_1"
+  | "solar_sail_life_2"
+  | "ray_transmission_1"
+  | "ray_transmission_2"
+  | "dyson_absorption_1"
   | "plane_smelting"
   | "quantum_printing"
   | "super_magnetic_logistics"
@@ -571,7 +582,7 @@ export interface BlueprintDefinition {
 }
 
 export interface GameState {
-  version: 15;
+  version: 16;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];

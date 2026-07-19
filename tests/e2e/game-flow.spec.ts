@@ -604,6 +604,58 @@ async function openDysonPlannerGame(page: Page) {
   await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
 }
 
+async function openTechnologyUpgradeGame(page: Page) {
+  await page.addInitScript(() => {
+    const entityBase = {
+      planetId: "home",
+      machineCount: 1,
+      minerCount: 0,
+      inputs: {},
+      outputs: {},
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+    };
+    const state = {
+      version: 15,
+      nextId: 3,
+      activePlanetId: "home",
+      entities: [
+        { ...entityBase, id: "upgrade_station", kind: "station", position: { x: -180, y: 0 }, buildingId: "planetary_logistics_station", storedItemId: "processor", stationMode: "demand", stationDrones: 1, stationVessels: 0, stationProgress: 0, stationTrips: 0, stationLastTransfer: 0, stationMinimumLoad: 0.5 },
+        { ...entityBase, id: "upgrade_receiver", kind: "machine", position: { x: 280, y: 0 }, buildingId: "ray_receiver", recipeId: "ray_power", powerOutputKw: 0 },
+      ],
+      belts: [],
+      construction: {},
+      tray: {},
+      planetTrays: { home: {}, ashen: {}, giant: {}, frost: {}, boreal_giant: {}, magnetar: {} },
+      totalProduced: {},
+      research: {
+        selectedTechId: null,
+        queuedTechIds: [],
+        progressByTech: {},
+        completedTechIds: [
+          "mining_speed_1", "mining_speed_2", "mining_speed_3",
+          "research_speed_1", "research_speed_2", "research_speed_3",
+          "logistics_engine_1", "logistics_engine_2",
+          "logistics_capacity_1", "logistics_capacity_2",
+          "solar_sail_life_1", "solar_sail_life_2",
+          "ray_transmission_1", "ray_transmission_2", "dyson_absorption_1",
+          "planetary_logistics", "ray_receiver", "dyson_swarm", "dyson_shell",
+        ],
+      },
+      exploration: { unlockedSystemIds: ["helios"] },
+      blueprints: [],
+      dysonSwarm: { sailsInOrbit: 0, totalLaunched: 0, totalExpired: 0, decayProgress: 0, generationKw: 0, receiverLoadKw: 0 },
+      dysonSphere: { structurePoints: 0, totalRocketsLaunched: 0, shellSails: 0, totalSailsAbsorbed: 0, absorptionProgress: 0, generationKw: 0 },
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
 async function openCompleteLogisticsGame(page: Page) {
   await page.addInitScript(() => {
     const entityBase = {
@@ -1740,6 +1792,39 @@ test("Dyson planner builds independent orbital layers across unlocked star syste
   await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await expect(planner.locator(".dyson-orbit-canvas")).toBeVisible();
   await page.screenshot({ path: "artifacts/qa/dyson-planner-390.png", fullPage: true });
+});
+
+test("technology upgrades expose balanced global effects in research and equipment views", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openTechnologyUpgradeGame(page);
+  await page.getByLabel("打开科技树").click();
+  const technology = page.getByRole("dialog", { name: "科技树" });
+  const upgrades = technology.getByLabel("全局科技升级效果");
+  await expect(upgrades).toContainText("固体采矿3.00×");
+  await expect(upgrades).toContainText("科研吞吐1.75×");
+  await expect(upgrades).toContainText("物流航速2.00×");
+  await expect(upgrades).toContainText("机 / 船载荷50 / 200");
+  await expect(upgrades).toContainText("太阳帆寿命40 min");
+  await expect(upgrades).toContainText("单站接收12.0 MW");
+  await expect(upgrades).toContainText("壳面吸附2.00×");
+  await expect(technology.locator(".technology-node").filter({ hasText: "壳面吸附效率" })).toHaveClass(/technology-node--complete/);
+  await page.screenshot({ path: "artifacts/qa/technology-upgrades-1440.png", fullPage: true });
+
+  await page.getByLabel("关闭科技树").click();
+  await page.locator('.react-flow__node[data-id="upgrade_station"] .station-node').evaluate((element: HTMLElement) => element.click());
+  const inspector = page.locator(".inspector-panel");
+  await expect(inspector).toContainText("单机载荷50 件/架");
+  await expect(inspector).toContainText("最低启航货量25 件/架");
+  await expect(inspector).toContainText("额定航程4.0 秒");
+  await page.locator('.react-flow__node[data-id="upgrade_receiver"] .machine-node').evaluate((element: HTMLElement) => element.click());
+  await expect(inspector).toContainText("额定接收12000 kW");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByLabel("打开科技树").click();
+  await expect(upgrades).toBeVisible();
+  await expect.poll(async () => technology.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/technology-upgrades-390.png", fullPage: true });
 });
 
 test("planetary drones, orbital collection, station warpers and sorter upgrades form a complete logistics layer", async ({ page }) => {

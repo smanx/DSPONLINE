@@ -43,7 +43,7 @@ import {
 import { useState } from "react";
 import { ItemHoverCard } from "./ItemReference";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES_BY_BUILDING, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getSorterConstructionId, getTechnology, isConveyorBeltId } from "../game/content";
-import { RAY_RECEIVER_CAPACITY_KW, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMiningSpeedMultiplier, getPlanetMetrics, getProliferatorSprayCost, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationMinimumLoad, getStationVesselCapacity, getStationWarperCapacity, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
+import { canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationMinimumLoad, getStationVesselCapacity, getStationWarperCapacity, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import type {
   BeltTier,
   BeltConnection,
@@ -660,6 +660,10 @@ function EntityInspector({
     const availableWarpers = Math.max(0, Math.floor(game.tray.space_warper ?? 0));
     const warpUnlocked = isTechnologyCompleted(game, "space_warp");
     const minimumLoad = getStationMinimumLoad(entity);
+    const unitCargo = planetary ? getPlanetaryCargoCapacity(game) : getInterstellarCargoCapacity(game);
+    const routeSeconds = planetary
+      ? getPlanetaryTripSeconds(game)
+      : getInterstellarTripSeconds(game, Boolean(peer && stationRouteRequiresWarp(entity, peer)));
     return (
       <div className="inspector-content station-inspector">
         <div className="inspector-identity">
@@ -713,7 +717,9 @@ function EntityInspector({
           <div><dt>{collector ? "供应目标" : "航线目标"}</dt><dd>{peer ? collector ? `${getPlanet(peer.planetId).name} · ${peer.id}` : planetary ? peer.id : getPlanet(peer.planetId).name : "未配对"}</dd></div>
           <div><dt>输入缓存</dt><dd>{itemId ? formatAmount(entity.inputs[itemId] ?? 0) : "-"}</dd></div>
           <div><dt>可用库存</dt><dd>{itemId ? formatAmount(entity.outputs[itemId] ?? 0) : "-"}</dd></div>
-          {!collector ? <div><dt>最低启航货量</dt><dd>{getStationMinimumCargo(entity)} 件/{planetary ? "架" : "船"}</dd></div> : null}
+          {!collector ? <div><dt>单机载荷</dt><dd>{unitCargo} 件/{planetary ? "架" : "船"}</dd></div> : null}
+          {!collector ? <div><dt>最低启航货量</dt><dd>{getStationMinimumCargo(game, entity)} 件/{planetary ? "架" : "船"}</dd></div> : null}
+          {!collector ? <div><dt>额定航程</dt><dd>{routeSeconds.toFixed(1)} 秒</dd></div> : null}
           <div><dt>{collector ? "采集周期" : `${vehicleName}航程`}</dt><dd>{Math.floor((collector ? entity.progress : entity.stationProgress ?? 0) * 100)}%</dd></div>
           <div><dt>完成航次</dt><dd>{entity.stationTrips ?? 0}</dd></div>
           <div><dt>最近运量</dt><dd>{entity.stationLastTransfer ?? 0}</dd></div>
@@ -796,7 +802,7 @@ function EntityInspector({
             <div><dt>当前负载</dt><dd>{Math.round(entity.utilization * 100)}%</dd></div>
             {rayReceiver ? <div><dt>接收功率</dt><dd>{(entity.powerOutputKw ?? 0).toFixed(0)} kW</dd></div> : null}
             <div><dt>{railEjector || launchSilo ? "发射速率" : "实际产出"}</dt><dd>{recipe?.id === "ray_power" ? `${(entity.powerOutputKw ?? 0).toFixed(0)} kW` : `${entity.productionRate.toFixed(1)}/min`}</dd></div>
-            <div><dt>{rayReceiver ? "额定接收" : "额定耗电"}</dt><dd>{rayReceiver ? `${RAY_RECEIVER_CAPACITY_KW * entity.machineCount} kW` : `${((building.powerDemandKw ?? 0) * entity.machineCount).toFixed(0)} kW`}</dd></div>
+            <div><dt>{rayReceiver ? "额定接收" : "额定耗电"}</dt><dd>{rayReceiver ? `${getRayReceiverCapacityKw(game) * entity.machineCount} kW` : `${((building.powerDemandKw ?? 0) * entity.machineCount).toFixed(0)} kW`}</dd></div>
             {entity.kind === "machine" && entity.sprayCoaterInstalled ? (
               <>
                 <div><dt>喷涂速度</dt><dd>{getEntityProliferatorSpeedMultiplier(entity).toFixed(2)}×</dd></div>

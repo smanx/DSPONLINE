@@ -3509,6 +3509,69 @@ select:focus-visible {
   color: var(--coral);
 }
 
+.technology-upgrade-overview {
+  display: grid;
+  min-width: 0;
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.technology-upgrade-overview > header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.technology-upgrade-overview > header svg {
+  color: var(--yellow);
+}
+
+.technology-upgrade-overview > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(7, minmax(92px, 1fr));
+  gap: 5px;
+}
+
+.technology-upgrade-overview > div > span {
+  display: grid;
+  min-width: 0;
+  min-height: 34px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-rows: 1fr 1fr;
+  align-items: center;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: #121a17;
+}
+
+.technology-upgrade-overview > div svg {
+  grid-row: 1 / 3;
+  color: var(--cyan);
+}
+
+.technology-upgrade-overview small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.technology-upgrade-overview strong {
+  color: var(--text-soft);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
 .technology-tree {
   display: grid;
   min-width: 0;
@@ -5808,6 +5871,20 @@ select:focus-visible {
   .research-queue {
     grid-template-columns: 1fr;
     gap: 5px;
+  }
+
+  .technology-upgrade-overview {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+
+  .technology-upgrade-overview > div {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .technology-upgrade-overview > div > span {
+    min-width: 112px;
   }
 
   .technology-tree {
