@@ -28,6 +28,8 @@ import { TechnologyWorkspace } from "./components/TechnologyWorkspace";
 import { ITEMS, getBeltConstructionId, getBuilding, getBuildingUpgradeTarget, getPlanet, getTechnology } from "./game/content";
 import {
   addBuildingToGroup,
+  adjustStationDrones,
+  adjustStationWarpers,
   adjustStationVessels,
   advanceSimulation,
   connectBelt,
@@ -64,9 +66,11 @@ import {
   setProliferatorConfiguration,
   setStationMode,
   setStationMinimumLoad,
+  setStationWarpEnabled,
   setSplitterMode,
   upgradeBelt,
   upgradeEntity,
+  upgradeSorter,
 } from "./game/engine";
 import { clearGame, loadGame, saveGame } from "./game/storage";
 import type { BeltTier, BuildingId, DraggedItemSourceKind, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StationMinimumLoad } from "./game/types";
@@ -491,6 +495,9 @@ function FactoryGame() {
           onFuelChange={onFuelChange}
           onStationModeChange={(entityId, mode) => setGame((current) => setStationMode(current, entityId, mode))}
           onStationVesselAdjust={(entityId, delta) => setGame((current) => adjustStationVessels(current, entityId, delta))}
+          onStationDroneAdjust={(entityId, delta) => setGame((current) => adjustStationDrones(current, entityId, delta))}
+          onStationWarperAdjust={(entityId, delta) => setGame((current) => adjustStationWarpers(current, entityId, delta))}
+          onStationWarpEnabled={(entityId, enabled) => setGame((current) => setStationWarpEnabled(current, entityId, enabled))}
           onStationMinimumLoadChange={(entityId, minimumLoad: StationMinimumLoad) => setGame((current) => setStationMinimumLoad(current, entityId, minimumLoad))}
           onLogisticsItemChange={(entityId, itemId) => setGame((current) => setLogisticsItem(current, entityId, itemId))}
           onSplitterModeChange={(entityId, mode) => setGame((current) => setSplitterMode(current, entityId, mode))}
@@ -504,6 +511,10 @@ function FactoryGame() {
           onUpgradeBelt={(beltId) => {
             setGame((current) => upgradeBelt(current, beltId));
             setNotice("运输线升级完成");
+          }}
+          onUpgradeSorter={(beltId) => {
+            setGame((current) => upgradeSorter(current, beltId));
+            setNotice("分拣器升级完成");
           }}
           onInstallSprayCoater={(entityId) => {
             setGame((current) => installSprayCoater(current, entityId));

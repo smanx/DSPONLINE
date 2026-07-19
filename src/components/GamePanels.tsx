@@ -38,14 +38,15 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { ItemHoverCard } from "./ItemReference";
-import { CONSTRUCTION, FUEL_ENERGY_MJ, FUEL_ITEM_IDS, ITEMS, PLANET_LIST, RECIPES_BY_BUILDING, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getTechnology, isConveyorBeltId } from "../game/content";
-import { DYSON_SHELL_CAPACITY_PER_STRUCTURE, RAY_RECEIVER_CAPACITY_KW, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canUpgradeBelt, canUpgradeEntity, findInterstellarPeer, getBeltCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMiningSpeedMultiplier, getPlanetMetrics, getProliferatorSprayCost, getStationMinimumCargo, getStationMinimumLoad, getStationVesselCapacity, isProliferatorEligible, isTechnologyCompleted } from "../game/engine";
+import { CONSTRUCTION, FUEL_ENERGY_MJ, FUEL_ITEM_IDS, ITEMS, PLANET_LIST, RECIPES_BY_BUILDING, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getSorterConstructionId, getTechnology, isConveyorBeltId } from "../game/content";
+import { DYSON_SHELL_CAPACITY_PER_STRUCTURE, RAY_RECEIVER_CAPACITY_KW, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMiningSpeedMultiplier, getPlanetMetrics, getProliferatorSprayCost, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationMinimumLoad, getStationVesselCapacity, getStationWarperCapacity, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import type {
   BeltTier,
   BeltConnection,
   BuildingId,
   CargoStack,
   ConstructionId,
+  ConveyorBeltId,
   DraggedItemSourceKind,
   FactoryEntity,
   GameState,
@@ -55,6 +56,7 @@ import type {
   ProliferatorMode,
   ProliferatorTier,
   RecipeId,
+  SorterTier,
   StationMinimumLoad,
 } from "../game/types";
 
@@ -88,6 +90,10 @@ export function ResourceRail({ game, onPickTray, onDropCargo, onDropDraggedItem 
   const hasEquipmentUpgrade = game.entities.some((entity) =>
     entity.buildingId === "assembling_machine_mk2" || entity.buildingId === "assembling_machine_mk3" || entity.buildingId === "plane_smelter");
   const hasBeltUpgrade = game.belts.some((belt) => belt.tier > 1);
+  const hasSorterUpgrade = game.belts.some((belt) => belt.sorterTier > 1);
+  const hasPlanetaryTrip = game.entities.some((entity) => entity.buildingId === "planetary_logistics_station" && (entity.stationTrips ?? 0) > 0);
+  const hasOrbitalCollector = game.entities.some((entity) => entity.buildingId === "orbital_collector");
+  const hasStationWarper = game.entities.some((entity) => entity.buildingId === "interstellar_logistics_station" && (entity.stationWarpers ?? 0) > 0);
   const hasSprayCoater = game.entities.some((entity) => entity.sprayCoaterInstalled);
   const hasActiveProliferation = game.entities.some((entity) => entity.sprayCoaterInstalled && entity.proliferatorMode !== "normal");
   const objectives = [
@@ -102,6 +108,10 @@ export function ResourceRail({ game, onPickTray, onDropCargo, onDropDraggedItem 
     { label: "产出能量矩阵", complete: (game.totalProduced.energy_matrix ?? 0) >= 1 },
     { label: "完成首次设备升级", complete: hasEquipmentUpgrade },
     { label: "建立高速运输线", complete: hasBeltUpgrade },
+    { label: "升级物流分拣器", complete: hasSorterUpgrade },
+    { label: "完成行星无人机配送", complete: hasPlanetaryTrip },
+    { label: "部署轨道采集器", complete: hasOrbitalCollector },
+    { label: "装载空间翘曲器", complete: hasStationWarper },
     { label: "安装首台喷涂机", complete: hasSprayCoater },
     { label: "启动增产生产线", complete: hasActiveProliferation },
     { label: "产出结构矩阵", complete: (game.totalProduced.structure_matrix ?? 0) >= 1 },
@@ -291,6 +301,9 @@ interface InspectorPanelProps {
   onFuelChange: (entityId: string, itemId: ItemId) => void;
   onStationModeChange: (entityId: string, mode: "supply" | "demand") => void;
   onStationVesselAdjust: (entityId: string, delta: number) => void;
+  onStationDroneAdjust: (entityId: string, delta: number) => void;
+  onStationWarperAdjust: (entityId: string, delta: number) => void;
+  onStationWarpEnabled: (entityId: string, enabled: boolean) => void;
   onStationMinimumLoadChange: (entityId: string, minimumLoad: StationMinimumLoad) => void;
   onSplitterModeChange: (entityId: string, mode: "balanced" | "priority") => void;
   onBeltPriorityChange: (beltId: string, priority: 0 | 1) => void;
@@ -298,6 +311,7 @@ interface InspectorPanelProps {
   onCraftItem: (recipeId: RecipeId, batches: number) => void;
   onUpgradeEntity: (entityId: string) => void;
   onUpgradeBelt: (beltId: string) => void;
+  onUpgradeSorter: (beltId: string) => void;
   onInstallSprayCoater: (entityId: string) => void;
   onProliferatorConfiguration: (entityId: string, tier: ProliferatorTier, mode: ProliferatorMode) => void;
   onRemoveEntity: (entityId: string) => void;
@@ -442,6 +456,9 @@ function EntityInspector({
   onFuelChange,
   onStationModeChange,
   onStationVesselAdjust,
+  onStationDroneAdjust,
+  onStationWarperAdjust,
+  onStationWarpEnabled,
   onStationMinimumLoadChange,
   onSplitterModeChange,
   onInstallSprayCoater,
@@ -456,6 +473,9 @@ function EntityInspector({
   onFuelChange: (entityId: string, itemId: ItemId) => void;
   onStationModeChange: (entityId: string, mode: "supply" | "demand") => void;
   onStationVesselAdjust: (entityId: string, delta: number) => void;
+  onStationDroneAdjust: (entityId: string, delta: number) => void;
+  onStationWarperAdjust: (entityId: string, delta: number) => void;
+  onStationWarpEnabled: (entityId: string, enabled: boolean) => void;
   onStationMinimumLoadChange: (entityId: string, minimumLoad: StationMinimumLoad) => void;
   onSplitterModeChange: (entityId: string, mode: "balanced" | "priority") => void;
   onInstallSprayCoater: (entityId: string) => void;
@@ -518,58 +538,83 @@ function EntityInspector({
 
   if (entity.kind === "station") {
     const itemId = entity.storedItemId;
-    const peer = findInterstellarPeer(game, entity);
-    const acceptedItems = Object.values(ITEMS);
-    const vesselCapacity = getStationVesselCapacity(entity);
-    const vesselCount = Math.min(vesselCapacity, Math.max(0, Math.floor(entity.stationVessels ?? 0)));
-    const availableVessels = Math.max(0, Math.floor(game.tray.logistics_vessel ?? 0));
+    const planetary = entity.buildingId === "planetary_logistics_station";
+    const collector = entity.buildingId === "orbital_collector";
+    const peer = planetary ? findPlanetaryPeer(game, entity) : findInterstellarPeer(game, entity);
+    const acceptedItems = collector
+      ? [ITEMS.hydrogen, ITEMS.deuterium]
+      : Object.values(ITEMS);
+    const vehicleCapacity = planetary ? getStationDroneCapacity(entity) : getStationVesselCapacity(entity);
+    const vehicleCount = planetary
+      ? Math.min(vehicleCapacity, Math.max(0, Math.floor(entity.stationDrones ?? 0)))
+      : Math.min(vehicleCapacity, Math.max(0, Math.floor(entity.stationVessels ?? 0)));
+    const vehicleItemId: ItemId = planetary ? "logistics_drone" : "logistics_vessel";
+    const availableVehicles = Math.max(0, Math.floor(game.tray[vehicleItemId] ?? 0));
+    const vehicleName = planetary ? "物流运输机" : "物流运输船";
+    const warperCapacity = getStationWarperCapacity(entity);
+    const warperCount = Math.min(warperCapacity, Math.max(0, Math.floor(entity.stationWarpers ?? 0)));
+    const availableWarpers = Math.max(0, Math.floor(game.tray.space_warper ?? 0));
+    const warpUnlocked = isTechnologyCompleted(game, "space_warp");
     const minimumLoad = getStationMinimumLoad(entity);
     return (
       <div className="inspector-content station-inspector">
         <div className="inspector-identity">
           <i className="building-mark building-mark--station"><Orbit size={18} /></i>
-          <div><span>跨行星物流设施</span><strong>{building.name} ×{entity.machineCount}</strong></div>
+          <div><span>{collector ? "气态巨星轨道设施" : planetary ? "行星内物流设施" : "跨行星物流设施"}</span><strong>{building.name} ×{entity.machineCount}</strong></div>
         </div>
         <label className="recipe-select">
-          <span>星际货物</span>
+          <span>{collector ? "采集资源" : planetary ? "行星货物" : "星际货物"}</span>
           <select value={itemId ?? ""} onChange={(event) => onLogisticsItemChange(entity.id, event.target.value as ItemId)}>
             <option value="" disabled>选择货物</option>
             {acceptedItems.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
           </select>
         </label>
-        <div className="segmented-control" aria-label="星际站供需模式">
+        {!collector ? <div className="segmented-control" aria-label={planetary ? "行星站供需模式" : "星际站供需模式"}>
           <button className={entity.stationMode !== "demand" ? "active" : ""} type="button" onClick={() => onStationModeChange(entity.id, "supply")}>供应</button>
           <button className={entity.stationMode === "demand" ? "active" : ""} type="button" onClick={() => onStationModeChange(entity.id, "demand")}>需求</button>
-        </div>
-        <div className="station-fleet-control">
+        </div> : null}
+        {!collector ? <div className="station-fleet-control">
           <div className="station-control-heading">
-            <span>运输船泊位</span>
-            <small>托盘 {availableVessels}</small>
+            <span>{planetary ? "运输机泊位" : "运输船泊位"}</span>
+            <small>托盘 {availableVehicles}</small>
           </div>
           <div className="station-fleet-stepper">
-            <button type="button" title="卸载 1 艘物流运输船" aria-label="卸载 1 艘物流运输船" disabled={vesselCount < 1} onClick={() => onStationVesselAdjust(entity.id, -1)}><Minus size={15} /></button>
-            <strong><Rocket size={15} /> {vesselCount} / {vesselCapacity}</strong>
-            <button type="button" title="装载 1 艘物流运输船" aria-label="装载 1 艘物流运输船" disabled={availableVessels < 1 || vesselCount >= vesselCapacity} onClick={() => onStationVesselAdjust(entity.id, 1)}><Plus size={15} /></button>
+            <button type="button" title={`卸载 1 ${planetary ? "架" : "艘"}${vehicleName}`} aria-label={`卸载 1 ${planetary ? "架" : "艘"}${vehicleName}`} disabled={vehicleCount < 1} onClick={() => planetary ? onStationDroneAdjust(entity.id, -1) : onStationVesselAdjust(entity.id, -1)}><Minus size={15} /></button>
+            <strong>{planetary ? <Orbit size={15} /> : <Rocket size={15} />} {vehicleCount} / {vehicleCapacity}</strong>
+            <button type="button" title={`装载 1 ${planetary ? "架" : "艘"}${vehicleName}`} aria-label={`装载 1 ${planetary ? "架" : "艘"}${vehicleName}`} disabled={availableVehicles < 1 || vehicleCount >= vehicleCapacity} onClick={() => planetary ? onStationDroneAdjust(entity.id, 1) : onStationVesselAdjust(entity.id, 1)}><Plus size={15} /></button>
           </div>
-        </div>
-        <div className="station-load-control">
+        </div> : null}
+        {!collector && !planetary ? <div className="station-warper-control">
+          <label className="toggle-row">
+            <input type="checkbox" checked={entity.stationWarpEnabled !== false} disabled={!warpUnlocked} onChange={(event) => onStationWarpEnabled(entity.id, event.target.checked)} />
+            <span>{warpUnlocked ? "允许跨恒星翘曲" : "空间翘曲科技未解锁"}</span>
+          </label>
+          <div className="station-control-heading"><span>翘曲器仓</span><small>托盘 {availableWarpers}</small></div>
+          <div className="station-fleet-stepper">
+            <button type="button" aria-label="卸载 1 个空间翘曲器" disabled={warperCount < 1} onClick={() => onStationWarperAdjust(entity.id, -1)}><Minus size={15} /></button>
+            <strong><Sparkles size={15} /> {warperCount} / {warperCapacity}</strong>
+            <button type="button" aria-label="装载 1 个空间翘曲器" disabled={!warpUnlocked || availableWarpers < 1 || warperCount >= warperCapacity} onClick={() => onStationWarperAdjust(entity.id, 1)}><Plus size={15} /></button>
+          </div>
+        </div> : null}
+        {!collector ? <div className="station-load-control">
           <span>最低装载率</span>
-          <div className="segmented-control segmented-control--four" aria-label="运输船最低装载率">
+          <div className="segmented-control segmented-control--four" aria-label={`${vehicleName}最低装载率`}>
             {([0.1, 0.25, 0.5, 1] as StationMinimumLoad[]).map((load) => (
               <button className={minimumLoad === load ? "active" : ""} type="button" key={load} onClick={() => onStationMinimumLoadChange(entity.id, load)}>{Math.round(load * 100)}%</button>
             ))}
           </div>
-        </div>
+        </div> : null}
         <dl className="metric-ledger">
           <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
-          <div><dt>航线目标</dt><dd>{peer ? getPlanet(peer.planetId).name : "未配对"}</dd></div>
+          <div><dt>{collector ? "供应目标" : "航线目标"}</dt><dd>{peer ? collector ? `${getPlanet(peer.planetId).name} · ${peer.id}` : planetary ? peer.id : getPlanet(peer.planetId).name : "未配对"}</dd></div>
           <div><dt>输入缓存</dt><dd>{itemId ? formatAmount(entity.inputs[itemId] ?? 0) : "-"}</dd></div>
           <div><dt>可用库存</dt><dd>{itemId ? formatAmount(entity.outputs[itemId] ?? 0) : "-"}</dd></div>
-          <div><dt>最低启航货量</dt><dd>{getStationMinimumCargo(entity)} 件/船</dd></div>
-          <div><dt>运输船航程</dt><dd>{Math.floor((entity.stationProgress ?? 0) * 100)}%</dd></div>
+          {!collector ? <div><dt>最低启航货量</dt><dd>{getStationMinimumCargo(entity)} 件/{planetary ? "架" : "船"}</dd></div> : null}
+          <div><dt>{collector ? "采集周期" : `${vehicleName}航程`}</dt><dd>{Math.floor((collector ? entity.progress : entity.stationProgress ?? 0) * 100)}%</dd></div>
           <div><dt>完成航次</dt><dd>{entity.stationTrips ?? 0}</dd></div>
           <div><dt>最近运量</dt><dd>{entity.stationLastTransfer ?? 0}</dd></div>
-          <div><dt>额定耗电</dt><dd>{((building.powerDemandKw ?? 0) * entity.machineCount).toFixed(0)} kW</dd></div>
+          {!collector && !planetary ? <div><dt>航线类型</dt><dd>{peer && stationRouteRequiresWarp(entity, peer) ? "跨恒星 · 需翘曲" : "恒星系内"}</dd></div> : null}
+          <div><dt>{collector ? "采集速率" : "额定耗电"}</dt><dd>{collector ? `${entity.productionRate.toFixed(1)}/min` : `${((building.powerDemandKw ?? 0) * entity.machineCount).toFixed(0)} kW`}</dd></div>
         </dl>
         <p className="inspector-description">{building.description}</p>
         <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}><Trash2 size={15} /> 回收设备</button>
@@ -673,11 +718,12 @@ function beltTierRoman(tier: BeltTier): string {
   return tier === 3 ? "III" : tier === 2 ? "II" : "I";
 }
 
-function BeltInspector({ game, belt, onPriorityChange, onUpgrade, onRemove }: {
+function BeltInspector({ game, belt, onPriorityChange, onUpgrade, onSorterUpgrade, onRemove }: {
   game: GameState;
   belt: BeltConnection;
   onPriorityChange: (beltId: string, priority: 0 | 1) => void;
   onUpgrade: (beltId: string) => void;
+  onSorterUpgrade: (beltId: string) => void;
   onRemove: (beltId: string) => void;
 }) {
   const item = getItem(belt.itemId);
@@ -687,6 +733,11 @@ function BeltInspector({ game, belt, onPriorityChange, onUpgrade, onRemove }: {
   const targetDefinition = targetId ? getConstructionDefinition(targetId) : undefined;
   const targetStock = targetId ? game.construction[targetId] ?? 0 : 0;
   const targetUnlocked = !targetDefinition?.requiredTechId || isTechnologyCompleted(game, targetDefinition.requiredTechId);
+  const sorterTargetTier = belt.sorterTier < 3 ? (belt.sorterTier + 1) as SorterTier : null;
+  const sorterTargetId = sorterTargetTier ? getSorterConstructionId(sorterTargetTier) : null;
+  const sorterTargetDefinition = sorterTargetId ? getConstructionDefinition(sorterTargetId) : undefined;
+  const sorterTargetStock = sorterTargetId ? game.construction[sorterTargetId] ?? 0 : 0;
+  const sorterTargetUnlocked = !sorterTargetDefinition?.requiredTechId || isTechnologyCompleted(game, sorterTargetDefinition.requiredTechId);
   return (
     <div className="inspector-content">
       <div className="inspector-identity">
@@ -695,9 +746,11 @@ function BeltInspector({ game, belt, onPriorityChange, onUpgrade, onRemove }: {
       </div>
       <dl className="metric-ledger">
         <div><dt>传送带等级</dt><dd>Mk.{beltTierRoman(belt.tier)}</dd></div>
+        <div><dt>分拣器等级</dt><dd>Mk.{beltTierRoman(belt.sorterTier)}</dd></div>
         <div><dt>并行线路</dt><dd>×{belt.lanes}</dd></div>
         <div><dt>当前流量</dt><dd>{belt.lastFlow.toFixed(2)}/s</dd></div>
         <div><dt>线路上限</dt><dd>{capacity.toFixed(0)}/s</dd></div>
+        <div><dt>分拣上限</dt><dd>{getSorterCapacity(belt).toFixed(0)}/s</dd></div>
       </dl>
       <div className="capacity-bar"><i style={{ width: `${Math.min(100, belt.lastFlow / capacity * 100)}%`, backgroundColor: item.color }} /></div>
       <label className="toggle-row">
@@ -714,6 +767,19 @@ function BeltInspector({ game, belt, onPriorityChange, onUpgrade, onRemove }: {
           <button type="button" disabled={!canUpgradeBelt(game, belt.id)} onClick={() => onUpgrade(belt.id)} title={targetUnlocked ? `升级为传送带 Mk.${beltTierRoman(targetTier)}` : `需要科技：${getTechnology(targetDefinition?.requiredTechId)?.name ?? "未解锁"}`}>
             {targetUnlocked ? <ArrowUp size={14} /> : <LockKeyhole size={14} />}
             {targetUnlocked ? `升级线路 ×${belt.lanes}` : "科技锁定"}
+          </button>
+        </section>
+      ) : null}
+      {sorterTargetTier && sorterTargetId ? (
+        <section className="equipment-upgrade equipment-upgrade--sorter">
+          <header><span><ArrowUp size={14} />分拣器升级</span><strong>Mk.{beltTierRoman(belt.sorterTier)} → Mk.{beltTierRoman(sorterTargetTier)}</strong></header>
+          <dl>
+            <div><dt>分拣上限</dt><dd>{getSorterCapacity(belt).toFixed(0)} → {getSorterCapacity({ ...belt, sorterTier: sorterTargetTier }).toFixed(0)}/s</dd></div>
+            <div><dt>升级分拣器</dt><dd>{sorterTargetStock}/{belt.lanes}</dd></div>
+          </dl>
+          <button type="button" disabled={!canUpgradeSorter(game, belt.id)} onClick={() => onSorterUpgrade(belt.id)} title={sorterTargetUnlocked ? `升级为分拣器 Mk.${beltTierRoman(sorterTargetTier)}` : `需要科技：${getTechnology(sorterTargetDefinition?.requiredTechId)?.name ?? "未解锁"}`}>
+            {sorterTargetUnlocked ? <ArrowUp size={14} /> : <LockKeyhole size={14} />}
+            {sorterTargetUnlocked ? `升级分拣器 ×${belt.lanes}` : "科技锁定"}
           </button>
         </section>
       ) : null}
@@ -822,15 +888,15 @@ export function InspectorPanel(props: InspectorPanelProps) {
         </button>
       </div>
       {props.tab === "fabricate" ? <Fabricator game={props.game} onCraft={props.onCraft} onCraftItem={props.onCraftItem} /> : props.selectedEntity ? (
-        <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} />
+        <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} />
       ) : props.selectedBelt ? (
-        <BeltInspector game={props.game} belt={props.selectedBelt} onPriorityChange={props.onBeltPriorityChange} onUpgrade={props.onUpgradeBelt} onRemove={props.onRemoveBelt} />
+        <BeltInspector game={props.game} belt={props.selectedBelt} onPriorityChange={props.onBeltPriorityChange} onUpgrade={props.onUpgradeBelt} onSorterUpgrade={props.onUpgradeSorter} onRemove={props.onRemoveBelt} />
       ) : <InspectorEmpty game={props.game} />}
     </aside>
   );
 }
 
-const BUILD_ORDER: ConstructionId[] = [
+const BUILD_ORDER: Array<BuildingId | ConveyorBeltId> = [
   "wind_turbine",
   "thermal_power_plant",
   "mining_machine",
@@ -854,10 +920,12 @@ const BUILD_ORDER: ConstructionId[] = [
   "em_rail_ejector",
   "vertical_launching_silo",
   "ray_receiver",
+  "planetary_logistics_station",
   "interstellar_logistics_station",
+  "orbital_collector",
 ];
 
-function buildIcon(id: ConstructionId) {
+function buildIcon(id: BuildingId | ConveyorBeltId) {
   if (id === "wind_turbine") return <Wind size={18} />;
   if (id === "thermal_power_plant") return <Flame size={18} />;
   if (id === "mining_machine") return <Pickaxe size={18} />;
@@ -869,7 +937,7 @@ function buildIcon(id: ConstructionId) {
   if (id === "em_rail_ejector") return <Satellite size={18} />;
   if (id === "vertical_launching_silo") return <Rocket size={18} />;
   if (id === "ray_receiver") return <RadioTower size={18} />;
-  if (id === "interstellar_logistics_station") return <Orbit size={18} />;
+  if (id === "planetary_logistics_station" || id === "interstellar_logistics_station" || id === "orbital_collector") return <Orbit size={18} />;
   if (isConveyorBeltId(id)) return <Layers3 size={18} />;
   return <Factory size={18} />;
 }
@@ -909,15 +977,16 @@ export function ConstructionDock({ game, placement, beltTier, placementCount, on
           const active = isBelt ? beltTier === itemBeltTier : placement === id;
           const label = isBelt ? `传送带 Mk.${beltTierRoman(itemBeltTier!)}` : getBuilding(id).name;
           const requiredCount = isBelt ? 1 : placementCount;
+          const compatiblePlanet = isBelt ? game.activePlanetId !== "giant" : canPlaceBuildingOnPlanet(id, game.activePlanetId);
           return (
             <button
               className={`construction-item${active ? " construction-item--active" : ""}`}
               type="button"
               key={id}
-              disabled={count < requiredCount}
-              draggable={count >= requiredCount && !isBelt}
+              disabled={count < requiredCount || !compatiblePlanet}
+              draggable={count >= requiredCount && compatiblePlanet && !isBelt}
               onClick={() => {
-                if (count < requiredCount) return;
+                if (count < requiredCount || !compatiblePlanet) return;
                 if (isBelt) {
                   onBeltTierChange(itemBeltTier!);
                   onPlacementChange(null);
@@ -932,7 +1001,7 @@ export function ConstructionDock({ game, placement, beltTier, placementCount, on
                 onPlacementChange(id);
               }}
               onDragEnd={() => onPlacementChange(null)}
-              title={isBelt ? `选择${label}连接节点端口` : `部署${label}${placementCount > 1 ? ` ×${placementCount}` : ""}`}
+              title={!compatiblePlanet ? game.activePlanetId === "giant" ? `${label}不能部署在气态巨星` : `${label}只能部署在气态巨星` : isBelt ? `选择${label}连接节点端口` : `部署${label}${placementCount > 1 ? ` ×${placementCount}` : ""}`}
             >
               <i>{buildIcon(id)}</i>
               <span>{label}</span>

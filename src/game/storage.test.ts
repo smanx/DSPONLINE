@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { createInitialState, placeBuilding, setFuelItem } from "./engine";
+import { createInitialState, placeBuilding, setActivePlanet, setFuelItem } from "./engine";
 import { loadGame, saveGame } from "./storage";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
@@ -9,7 +9,7 @@ const SAVE_KEY = "dsp-idle-network.save.v1";
 describe("game storage", () => {
   beforeEach(() => window.localStorage.clear());
 
-  it("round-trips a v9 multi-planet research save", () => {
+  it("round-trips a v10 multi-planet research save", () => {
     const state = createInitialState();
     state.research.selectedTechId = "electromagnetic_matrix";
     state.research.queuedTechIds = ["electromagnetism"];
@@ -18,7 +18,7 @@ describe("game storage", () => {
     saveGame(state);
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(9);
+    expect(loaded.version).toBe(10);
     expect(loaded.activePlanetId).toBe("home");
     expect(loaded.planetMetrics.ashen.powerFactor).toBe(1);
     expect(loaded.research.selectedTechId).toBe("electromagnetic_matrix");
@@ -44,7 +44,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(9);
+    expect(loaded.version).toBe(10);
     expect(loaded.tray.iron_ore).toBe(4);
     expect(loaded.entities[0].outputs.iron_ore).toBe(3);
     expect(loaded.entities.every((entity) => entity.progress === 0)).toBe(true);
@@ -165,7 +165,7 @@ describe("game storage", () => {
 
     const loaded = loadGame().state;
     const station = loaded.entities.find((entity) => entity.kind === "station")!;
-    expect(loaded.version).toBe(9);
+    expect(loaded.version).toBe(10);
     expect(station.stationVessels).toBe(1);
     expect(station.stationMinimumLoad).toBe(1);
   });
@@ -219,7 +219,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(9);
+    expect(loaded.version).toBe(10);
     expect(loaded.dysonSwarm).toEqual({
       sailsInOrbit: 0,
       totalLaunched: 0,
@@ -341,7 +341,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(9);
+    expect(loaded.version).toBe(10);
     expect(loaded.belts[0]).toMatchObject({ id: "legacy_belt", tier: 1, progress: 0.5 });
     expect(loaded.construction).toMatchObject({
       plane_smelter: 0,
@@ -366,6 +366,7 @@ describe("game storage", () => {
       itemId: "iron_ore",
       lanes: 1,
       tier: 2,
+      sorterTier: 1,
       progress: 0.25,
       priority: 0,
       lastFlow: 4,
@@ -394,7 +395,7 @@ describe("game storage", () => {
 
     const loaded = loadGame().state;
     const migrated = loaded.entities.find((entity) => entity.id === assembler.id)!;
-    expect(loaded.version).toBe(9);
+    expect(loaded.version).toBe(10);
     expect(loaded.construction.spray_coater).toBe(0);
     expect(migrated).toMatchObject({ sprayCoaterInstalled: false, proliferatorPoints: 0, proliferatorBonusProgress: {} });
     expect(migrated.proliferatorTier).toBeUndefined();
@@ -420,6 +421,82 @@ describe("game storage", () => {
       proliferatorMode: "normal",
       proliferatorPoints: 3,
       proliferatorBonusProgress: { gear: 0.75 },
+    });
+  });
+
+  it("migrates v9 belts and planet records into the v10 logistics model", () => {
+    let current = createInitialState();
+    current = placeBuilding(current, "arc_smelter", { x: 100, y: 0 });
+    const smelter = current.entities.find((entity) => entity.buildingId === "arc_smelter")!;
+    current.belts.push({
+      id: "v9_belt",
+      planetId: "home",
+      source: "vein_iron",
+      target: smelter.id,
+      itemId: "iron_ore",
+      lanes: 1,
+      tier: 2,
+      sorterTier: 1,
+      progress: 0.25,
+      priority: 0,
+      lastFlow: 3,
+    });
+    const legacy = JSON.parse(JSON.stringify(current));
+    legacy.version = 9;
+    delete legacy.belts[0].sorterTier;
+    delete legacy.planetTrays.giant;
+    delete legacy.planetMetrics.giant;
+    delete legacy.construction.planetary_logistics_station;
+    delete legacy.construction.orbital_collector;
+    delete legacy.construction.sorter_mk1;
+    delete legacy.construction.sorter_mk2;
+    delete legacy.construction.sorter_mk3;
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
+
+    const loaded = loadGame().state;
+    expect(loaded.version).toBe(10);
+    expect(loaded.belts[0]).toMatchObject({ id: "v9_belt", tier: 2, sorterTier: 1, progress: 0.25 });
+    expect(loaded.planetTrays.giant).toEqual({});
+    expect(loaded.planetMetrics.giant.powerFactor).toBe(1);
+    expect(loaded.construction).toMatchObject({
+      planetary_logistics_station: 0,
+      orbital_collector: 0,
+      sorter_mk1: 0,
+      sorter_mk2: 0,
+      sorter_mk3: 0,
+    });
+  });
+
+  it("round-trips planetary fleets, warpers and a gas-giant collector", () => {
+    let state = createInitialState();
+    state.construction.planetary_logistics_station = 1;
+    state.construction.interstellar_logistics_station = 1;
+    state.construction.orbital_collector = 1;
+    state = placeBuilding(state, "planetary_logistics_station", { x: 0, y: 0 });
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 300, y: 0 });
+    state.entities.find((entity) => entity.buildingId === "planetary_logistics_station")!.stationDrones = 7;
+    const interstellar = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    interstellar.stationVessels = 3;
+    interstellar.stationWarpers = 4;
+    interstellar.stationWarpEnabled = false;
+    state = setActivePlanet(state, "giant");
+    state = placeBuilding(state, "orbital_collector", { x: 0, y: 0 });
+    state.tray.deuterium = 9;
+    saveGame(state);
+
+    const loaded = loadGame().state;
+    expect(loaded.activePlanetId).toBe("giant");
+    expect(loaded.tray.deuterium).toBe(9);
+    expect(loaded.entities.find((entity) => entity.buildingId === "planetary_logistics_station")?.stationDrones).toBe(7);
+    expect(loaded.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")).toMatchObject({
+      stationVessels: 3,
+      stationWarpers: 4,
+      stationWarpEnabled: false,
+    });
+    expect(loaded.entities.find((entity) => entity.buildingId === "orbital_collector")).toMatchObject({
+      planetId: "giant",
+      storedItemId: "hydrogen",
+      stationMode: "supply",
     });
   });
 });

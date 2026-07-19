@@ -40,6 +40,18 @@ export const RESOURCE_SOURCES: Partial<Record<ItemId, ResourceSourceDefinition>>
     extractorBuildingId: "water_pump",
     manual: false,
   },
+  hydrogen: {
+    label: "气态巨星轨道采集",
+    planetIds: ["giant"],
+    extractorBuildingId: "orbital_collector",
+    manual: false,
+  },
+  deuterium: {
+    label: "气态巨星轨道采集",
+    planetIds: ["giant"],
+    extractorBuildingId: "orbital_collector",
+    manual: false,
+  },
 };
 
 const RECIPE_LIST = Object.values(RECIPES);

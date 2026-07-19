@@ -21,7 +21,7 @@ import {
 import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
 import { useEffect } from "react";
 import { FUEL_ENERGY_MJ, FUEL_ITEM_IDS, ITEMS, MATRIX_ITEM_IDS, getBuilding, getExtractorBuildingId, getItem, getProliferator, getRecipe, getRecipesForBuilding } from "../game/content";
-import { getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getStationVesselCapacity } from "../game/engine";
+import { getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getStationDroneCapacity, getStationVesselCapacity } from "../game/engine";
 import { ItemHoverCard } from "./ItemReference";
 import type {
   BuildingId,
@@ -459,8 +459,12 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const adding = placement === entity.buildingId;
   const isSplitter = entity.kind === "splitter";
   const isStation = entity.kind === "station";
-  const stationVesselCapacity = getStationVesselCapacity(entity);
-  const stationVessels = Math.min(stationVesselCapacity, Math.max(0, Math.floor(entity.stationVessels ?? 0)));
+  const planetaryStation = entity.buildingId === "planetary_logistics_station";
+  const orbitalCollector = entity.buildingId === "orbital_collector";
+  const stationVehicleCapacity = planetaryStation ? getStationDroneCapacity(entity) : getStationVesselCapacity(entity);
+  const stationVehicles = planetaryStation
+    ? Math.min(stationVehicleCapacity, Math.max(0, Math.floor(entity.stationDrones ?? 0)))
+    : Math.min(stationVehicleCapacity, Math.max(0, Math.floor(entity.stationVessels ?? 0)));
 
   return (
     <article
@@ -491,32 +495,32 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
     >
       <header className="factory-node__header">
         <div className="node-icon">{isStation ? <Orbit size={18} /> : isSplitter ? <GitFork size={18} /> : <Database size={18} />}</div>
-        <div><span>{isStation ? "跨行星运输" : isSplitter ? "物流分配" : "物流缓存"}</span><strong>{building.name}</strong></div>
+        <div><span>{orbitalCollector ? "气态巨星采集" : planetaryStation ? "行星无线运输" : isStation ? "跨行星运输" : isSplitter ? "物流分配" : "物流缓存"}</span><strong>{building.name}</strong></div>
         <small>×{entity.machineCount}</small>
       </header>
       <WorkCycle
-        label={isStation ? "运输船航程" : "物流周期"}
-        progress={isStation ? entity.stationProgress ?? 0 : data.networkTime % 1}
+        label={orbitalCollector ? "采集周期" : planetaryStation ? "运输机航程" : isStation ? "运输船航程" : "物流周期"}
+        progress={orbitalCollector ? entity.progress : isStation ? entity.stationProgress ?? 0 : data.networkTime % 1}
         active={!data.paused && (isStation ? entity.utilization > 0.001 : data.activeLogisticsEntityIds.includes(entity.id))}
         efficiency={isStation ? entity.utilization : data.activeLogisticsEntityIds.includes(entity.id) ? 1 : 0}
       />
       {itemId ? (
-        <div className="node-io logistics-io">
-          <div className="node-io__column">
+        <div className={`node-io logistics-io${orbitalCollector ? " logistics-io--collector" : ""}`}>
+          {!orbitalCollector ? <div className="node-io__column">
             <span className="node-io__label">输入</span>
             <InputSlot entityId={entity.id} itemId={itemId} amount={entity.inputs[itemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} />
-          </div>
+          </div> : null}
           <div className="node-io__column node-io__column--output">
             <span className="node-io__label">输出</span>
             <OutputSlot entityId={entity.id} itemId={itemId} amount={entity.outputs[itemId] ?? 0} onPick={data.onPickOutput} />
           </div>
         </div>
       ) : (
-        <div className="logistics-empty">{isStation ? "在检查器中选择星际货物" : "拖入物品或在检查器中选择缓存类型"}</div>
+        <div className="logistics-empty">{planetaryStation ? "在检查器中选择行星货物" : isStation ? "在检查器中选择星际货物" : "拖入物品或在检查器中选择缓存类型"}</div>
       )}
       <footer className="factory-node__footer">
         <span title={data.status.label}>{data.status.label}</span>
-        <span title={isStation ? `累计 ${entity.stationTrips ?? 0} 航次` : undefined}>{isStation ? `${entity.stationMode === "demand" ? "需求" : "供应"} · ${stationVessels}/${stationVesselCapacity} 舰队` : isSplitter ? entity.distributionMode === "priority" ? "优先分流" : "均衡分流" : `${building.outputCapacity * entity.machineCount} 容量`}</span>
+        <span title={isStation ? `累计 ${entity.stationTrips ?? 0} 航次` : undefined}>{orbitalCollector ? `${itemId ? ITEMS[itemId].name : "资源"} · ${entity.productionRate.toFixed(1)}/min` : isStation ? `${entity.stationMode === "demand" ? "需求" : "供应"} · ${stationVehicles}/${stationVehicleCapacity} ${planetaryStation ? "机队" : "舰队"}` : isSplitter ? entity.distributionMode === "priority" ? "优先分流" : "均衡分流" : `${building.outputCapacity * entity.machineCount} 容量`}</span>
       </footer>
     </article>
   );

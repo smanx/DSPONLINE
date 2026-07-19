@@ -1,6 +1,6 @@
 import type { XYPosition } from "@xyflow/react";
 
-export type PlanetId = "home" | "ashen";
+export type PlanetId = "home" | "ashen" | "giant";
 
 export type ItemId =
   | "iron_ore"
@@ -31,7 +31,9 @@ export type ItemId =
   | "titanium_alloy"
   | "microcrystalline_component"
   | "processor"
+  | "logistics_drone"
   | "logistics_vessel"
+  | "space_warper"
   | "graphene"
   | "carbon_nanotube"
   | "proliferator_mk1"
@@ -87,7 +89,10 @@ export type TechId =
   | "structure_matrix"
   | "titanium_alloy"
   | "processor"
+  | "planetary_logistics"
   | "interstellar_logistics"
+  | "orbital_collection"
+  | "space_warp"
   | "nanomaterials"
   | "information_matrix"
   | "research_speed_1"
@@ -132,16 +137,20 @@ export type BuildingId =
   | "em_rail_ejector"
   | "ray_receiver"
   | "vertical_launching_silo"
+  | "planetary_logistics_station"
   | "interstellar_logistics_station"
+  | "orbital_collector"
   | "storage_mk1"
   | "storage_tank"
   | "splitter_4way";
 
 export type BeltTier = 1 | 2 | 3;
+export type SorterTier = 1 | 2 | 3;
 export type ProliferatorTier = 1 | 2 | 3;
 export type ProliferatorMode = "normal" | "extra" | "speed";
 export type ConveyorBeltId = "conveyor_belt_mk1" | "conveyor_belt_mk2" | "conveyor_belt_mk3";
-export type ConstructionId = BuildingId | ConveyorBeltId;
+export type SorterId = "sorter_mk1" | "sorter_mk2" | "sorter_mk3";
+export type ConstructionId = BuildingId | ConveyorBeltId | SorterId;
 
 export type RecipeId =
   | "iron_ingot"
@@ -165,7 +174,9 @@ export type RecipeId =
   | "titanium_alloy"
   | "microcrystalline_component"
   | "processor"
+  | "logistics_drone"
   | "logistics_vessel"
+  | "space_warper"
   | "graphene"
   | "carbon_nanotube"
   | "proliferator_mk1"
@@ -234,6 +245,8 @@ export interface PlanetDefinition {
   color: string;
   environment: string;
   resources: string;
+  kind: "terrestrial" | "gas-giant";
+  systemId: string;
 }
 
 export interface RecipeDefinition {
@@ -299,7 +312,10 @@ export interface FactoryEntity {
   stationTrips?: number;
   stationLastTransfer?: number;
   stationPeerId?: string;
+  stationDrones?: number;
   stationVessels?: number;
+  stationWarpers?: number;
+  stationWarpEnabled?: boolean;
   stationMinimumLoad?: StationMinimumLoad;
   sprayCoaterInstalled?: boolean;
   proliferatorTier?: ProliferatorTier;
@@ -324,6 +340,7 @@ export interface BeltConnection {
   itemId: ItemId;
   lanes: number;
   tier: BeltTier;
+  sorterTier: SorterTier;
   progress: number;
   priority: 0 | 1;
   lastFlow: number;
@@ -383,7 +400,10 @@ export interface EntityOperatingStatus {
     | "grid-standby"
     | "missing-route"
     | "missing-vessel"
+    | "missing-drone"
+    | "missing-warper"
     | "waiting-load"
+    | "collecting"
     | "missing-dyson-swarm"
     | "unconfigured";
   label: string;
@@ -398,7 +418,7 @@ export interface ResearchState {
 }
 
 export interface GameState {
-  version: 9;
+  version: 10;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];

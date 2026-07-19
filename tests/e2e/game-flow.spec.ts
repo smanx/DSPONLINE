@@ -99,6 +99,7 @@ async function openYellowStageGame(page: Page) {
           "structure_matrix",
           "titanium_alloy",
           "processor",
+          "planetary_logistics",
         ],
       },
       paused: false,
@@ -537,6 +538,86 @@ async function openProliferatorStageGame(page: Page) {
   await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
 }
 
+async function openChemicalRoutingGame(page: Page) {
+  await page.addInitScript(() => {
+    const entityBase = {
+      planetId: "home",
+      machineCount: 1,
+      minerCount: 0,
+      inputs: {},
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+    };
+    const state = {
+      version: 10,
+      nextId: 5,
+      activePlanetId: "home",
+      entities: [
+        { ...entityBase, id: "plastic_source", kind: "storage", position: { x: 250, y: -430 }, buildingId: "storage_mk1", storedItemId: "plastic", outputs: { plastic: 20 } },
+        { ...entityBase, id: "oil_source", kind: "storage", position: { x: 250, y: -150 }, buildingId: "storage_tank", storedItemId: "refined_oil", outputs: { refined_oil: 20 } },
+        { ...entityBase, id: "water_source", kind: "storage", position: { x: 250, y: 130 }, buildingId: "storage_tank", storedItemId: "water", outputs: { water: 20 } },
+        { ...entityBase, id: "organic_chemical", kind: "machine", position: { x: 720, y: -150 }, buildingId: "chemical_plant", recipeId: "organic_crystal", outputs: {} },
+      ],
+      belts: [],
+      construction: { conveyor_belt_mk1: 3 },
+      tray: {},
+      planetTrays: { home: {}, ashen: {}, giant: {} },
+      totalProduced: {},
+      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["polymer_chemistry"] },
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
+async function openCompleteLogisticsGame(page: Page) {
+  await page.addInitScript(() => {
+    const entityBase = {
+      machineCount: 1,
+      minerCount: 0,
+      inputs: {},
+      outputs: {},
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+    };
+    const state = {
+      version: 10,
+      nextId: 8,
+      activePlanetId: "home",
+      entities: [
+        { ...entityBase, id: "logistics_wind", kind: "power", planetId: "home", position: { x: -420, y: -500 }, buildingId: "wind_turbine", machineCount: 10 },
+        { ...entityBase, id: "local_supply", kind: "station", planetId: "home", position: { x: -380, y: -170 }, buildingId: "planetary_logistics_station", storedItemId: "iron_ingot", stationMode: "supply", stationProgress: 0.96, stationTrips: 0, stationLastTransfer: 0, stationDrones: 0, stationMinimumLoad: 0.5, outputs: { iron_ingot: 100 } },
+        { ...entityBase, id: "local_demand", kind: "station", planetId: "home", position: { x: 10, y: -170 }, buildingId: "planetary_logistics_station", storedItemId: "iron_ingot", stationMode: "demand", stationProgress: 0.96, stationTrips: 0, stationLastTransfer: 0, stationDrones: 2, stationMinimumLoad: 0.5 },
+        { ...entityBase, id: "hydrogen_demand", kind: "station", planetId: "home", position: { x: 400, y: -170 }, buildingId: "interstellar_logistics_station", storedItemId: "hydrogen", stationMode: "demand", stationProgress: 0.98, stationTrips: 0, stationLastTransfer: 0, stationVessels: 1, stationWarpers: 2, stationWarpEnabled: true, stationMinimumLoad: 0.1 },
+        { ...entityBase, id: "sorter_storage", kind: "storage", planetId: "home", position: { x: -210, y: 240 }, buildingId: "storage_mk1", storedItemId: "iron_ore", outputs: { iron_ore: 20 } },
+        { ...entityBase, id: "sorter_smelter", kind: "machine", planetId: "home", position: { x: 190, y: 240 }, buildingId: "arc_smelter", recipeId: "iron_ingot" },
+        { ...entityBase, id: "giant_collector", kind: "station", planetId: "giant", position: { x: 0, y: 0 }, buildingId: "orbital_collector", storedItemId: "hydrogen", stationMode: "supply", stationProgress: 0, stationTrips: 0, stationLastTransfer: 0, outputs: { hydrogen: 100 } },
+      ],
+      belts: [{ id: "sorter_demo", planetId: "home", source: "sorter_storage", target: "sorter_smelter", itemId: "iron_ore", lanes: 1, tier: 2, sorterTier: 1, progress: 0, priority: 0, lastFlow: 0 }],
+      construction: { sorter_mk2: 1 },
+      tray: { space_warper: 1 },
+      planetTrays: { home: { space_warper: 1 }, ashen: {}, giant: {} },
+      totalProduced: {},
+      research: {
+        selectedTechId: null,
+        queuedTechIds: [],
+        progressByTech: {},
+        completedTechIds: ["planetary_logistics", "interstellar_logistics", "space_warp", "high_speed_logistics"],
+      },
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
 test("manual mining feeds a powered smelter", async ({ page }) => {
   await page.setViewportSize({ width: 1560, height: 960 });
   await freshGame(page);
@@ -727,7 +808,7 @@ test("dragging matching ports creates a belt connection", async ({ page }) => {
   await page.mouse.up();
 
   await expect(page.locator(".react-flow__edge")).toHaveCount(1);
-  await expect(page.getByText("0.0 / 6 s⁻¹")).toBeVisible();
+  await expect(page.getByText("0.0 / 3 s⁻¹")).toBeVisible();
   await page.screenshot({ path: "artifacts/qa/belt-connection-1280.png", fullPage: true });
 });
 
@@ -837,7 +918,7 @@ test("planet navigation exposes independent factories and a live interstellar ro
   await expect(page.locator(".station-inspector")).toContainText("澄海 I");
   await expect(page.locator(".station-inspector")).toContainText("最近运量");
   await expect(page.locator(".station-inspector")).toContainText("100");
-  await expect(page.locator(".station-fleet-stepper strong")).toContainText("1 / 10");
+  await expect(page.locator(".station-fleet-control .station-fleet-stepper strong")).toContainText("1 / 10");
   await expect(page.getByRole("button", { name: "100%", exact: true })).toHaveClass(/active/);
   await page.screenshot({ path: "artifacts/qa/interstellar-logistics-1440.png", fullPage: true });
 });
@@ -1137,7 +1218,7 @@ test("production equipment and belt lanes upgrade in place without losing the ne
   await expect(page.getByTitle("升级为传送带 Mk.II")).toBeEnabled();
   await page.getByTitle("升级为传送带 Mk.II").click();
   await expect(page.locator(".inspector-content")).toContainText("Mk.II");
-  await expect(page.locator(".inspector-content")).toContainText("12/s");
+  await expect(page.locator(".inspector-content")).toContainText("3/s");
   await expect(page.locator(".react-flow__edge-text")).toContainText("Mk.II");
   await expect(page.locator(".react-flow__edge")).toHaveCount(1);
   await page.screenshot({ path: "artifacts/qa/equipment-upgrade-1440.png", fullPage: true });
@@ -1341,4 +1422,76 @@ test("spray coating closes the Mk.III proliferator logistics and extra-output lo
   await inspector.locator(".proliferator-control").scrollIntoViewIfNeeded();
   await expect.poll(async () => inspector.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/qa/proliferator-loop-390.png", fullPage: true });
+});
+
+test("a chemical plant accepts plastic, refined oil and water transport lines together", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openChemicalRoutingGame(page);
+  await page.locator(".react-flow__controls-fitview").click();
+  const chemical = page.locator(".machine-node").filter({ hasText: "有机晶体" });
+  await expect(chemical.getByTitle("投入塑料")).toBeVisible();
+  await expect(chemical.getByTitle("投入精炼油")).toBeVisible();
+  await expect(chemical.getByTitle("投入水")).toBeVisible();
+
+  const connect = async (sourceText: string, itemText: string, expectedEdges: number) => {
+    const source = page.locator(".logistics-node").filter({ hasText: sourceText }).locator(".factory-handle--output");
+    const target = chemical.locator(".node-port--input").filter({ hasText: itemText }).locator(".factory-handle--input");
+    const sourceBox = await source.boundingBox();
+    const targetBox = await target.boundingBox();
+    expect(sourceBox).not.toBeNull();
+    expect(targetBox).not.toBeNull();
+    await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 12 });
+    await page.waitForTimeout(120);
+    await page.mouse.up();
+    await expect(page.locator(".react-flow__edge")).toHaveCount(expectedEdges);
+  };
+
+  await connect("塑料", "塑料", 1);
+  await connect("精炼油", "精炼油", 2);
+  await connect("水", "水", 3);
+  await expect(page.getByTitle("选择传送带 Mk.I连接节点端口", { exact: true })).toContainText("×0");
+  await page.screenshot({ path: "artifacts/qa/chemical-three-input-routing-1440.png", fullPage: true });
+});
+
+test("planetary drones, orbital collection, station warpers and sorter upgrades form a complete logistics layer", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openCompleteLogisticsGame(page);
+  await page.locator(".react-flow__controls-fitview").click();
+
+  const localDemand = page.locator(".station-node").filter({ hasText: "行星物流站" }).filter({ hasText: "需求" });
+  await localDemand.click();
+  const inspector = page.locator(".inspector-panel");
+  await expect(inspector).toContainText("运输机泊位");
+  await expect(inspector.locator(".station-fleet-stepper strong")).toContainText("2 / 50");
+  await page.getByLabel("继续模拟").click();
+  await expect.poll(async () => Number(await localDemand.getByTitle("拿取铁块").locator("strong").textContent()), { timeout: 4_000 }).toBeGreaterThanOrEqual(50);
+
+  const hydrogenDemand = page.locator(".station-node").filter({ hasText: "星际物流站" });
+  await hydrogenDemand.click();
+  await expect(inspector).toContainText("翘曲器仓");
+  await expect(inspector).toContainText("2 / 50");
+  await expect.poll(async () => Number(await hydrogenDemand.getByTitle("拿取氢").locator("strong").textContent()), { timeout: 4_000 }).toBeGreaterThanOrEqual(10);
+  await page.screenshot({ path: "artifacts/qa/complete-logistics-home-1440.png", fullPage: true });
+
+  await page.locator(".react-flow__edge").click();
+  await expect(inspector).toContainText("分拣器等级");
+  await inspector.getByRole("button", { name: "升级分拣器 ×1" }).click();
+  await expect(inspector).toContainText("Mk.II");
+  await expect(inspector).toContainText("6/s");
+
+  await page.getByTitle("切换到苍岚 III").click();
+  const collector = page.locator(".station-node").filter({ hasText: "轨道采集器" });
+  await collector.click();
+  await expect(inspector).toContainText("气态巨星轨道设施");
+  await expect(inspector).toContainText("采集资源");
+  await expect(inspector).toContainText("轨道采集氢中");
+  await page.screenshot({ path: "artifacts/qa/orbital-collector-1440.png", fullPage: true });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(inspector).toBeVisible();
+  await expect.poll(async () => inspector.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(page.getByLabel("行星切换").getByRole("button")).toHaveCount(3);
+  await page.screenshot({ path: "artifacts/qa/orbital-collector-390.png", fullPage: true });
 });

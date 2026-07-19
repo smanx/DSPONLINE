@@ -1334,6 +1334,10 @@ select:focus-visible {
   align-items: center;
 }
 
+.logistics-io--collector {
+  grid-template-columns: 1fr;
+}
+
 .logistics-empty {
   display: grid;
   min-height: 72px;
@@ -1747,9 +1751,14 @@ select:focus-visible {
 }
 
 .station-fleet-control,
+.station-warper-control,
 .station-load-control {
   padding: 12px 0;
   border-bottom: 1px solid var(--line);
+}
+
+.station-warper-control .toggle-row {
+  margin: 0 0 10px;
 }
 
 .station-control-heading {

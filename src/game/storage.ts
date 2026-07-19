@@ -77,7 +77,7 @@ function deployedCount(entities: FactoryEntity[], buildingId: BuildingId): numbe
 }
 
 function validPlanetId(value: unknown): value is PlanetId {
-  return value === "home" || value === "ashen";
+  return value === "home" || value === "ashen" || value === "giant";
 }
 
 function validStationMinimumLoad(value: unknown): value is StationMinimumLoad {
@@ -106,12 +106,15 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
   const entities = saved.entities.map((entity: FactoryEntity) => {
     const planetId = validPlanetId(entity.planetId) ? entity.planetId : inferLegacyPlanet(entity);
     const position = { ...entity.position };
     const sprayCoaterInstalled = Boolean(entity.sprayCoaterInstalled);
+    const planetaryStation = entity.buildingId === "planetary_logistics_station";
+    const interstellarStation = entity.buildingId === "interstellar_logistics_station";
+    const orbitalCollector = entity.buildingId === "orbital_collector";
     if (saved.version < 4 && position.x < -650 && (planetId === "ashen" || entity.resourceId === "water")) {
       position.x += 640;
     }
@@ -128,13 +131,19 @@ function migrateGame(value: unknown): GameState | null {
       powerOutputKw: typeof entity.powerOutputKw === "number" ? Math.max(0, entity.powerOutputKw) : 0,
       routingCursor: Math.max(0, Math.floor(entity.routingCursor ?? 0)),
       distributionMode: entity.kind === "splitter" ? entity.distributionMode ?? "balanced" : entity.distributionMode,
-      stationMode: entity.kind === "station" ? entity.stationMode ?? "supply" : entity.stationMode,
+      storedItemId: orbitalCollector
+        ? entity.storedItemId === "deuterium" ? "deuterium" : "hydrogen"
+        : entity.storedItemId,
+      stationMode: entity.kind === "station" ? orbitalCollector ? "supply" : entity.stationMode ?? "supply" : entity.stationMode,
       stationProgress: entity.kind === "station" ? Math.max(0, entity.stationProgress ?? 0) : entity.stationProgress,
       stationTrips: entity.kind === "station" ? Math.max(0, Math.floor(entity.stationTrips ?? 0)) : entity.stationTrips,
       stationLastTransfer: entity.kind === "station" ? Math.max(0, Math.floor(entity.stationLastTransfer ?? 0)) : entity.stationLastTransfer,
-      stationVessels: entity.kind === "station"
+      stationDrones: planetaryStation ? nonNegativeInteger(entity.stationDrones) : undefined,
+      stationVessels: interstellarStation
         ? saved.version < 5 ? 1 : Math.max(0, Math.floor(entity.stationVessels ?? 0))
-        : entity.stationVessels,
+        : undefined,
+      stationWarpers: interstellarStation ? nonNegativeInteger(entity.stationWarpers) : undefined,
+      stationWarpEnabled: interstellarStation ? entity.stationWarpEnabled !== false : undefined,
       stationMinimumLoad: entity.kind === "station"
         ? validStationMinimumLoad(entity.stationMinimumLoad) ? entity.stationMinimumLoad : 1
         : entity.stationMinimumLoad,
@@ -170,6 +179,7 @@ function migrateGame(value: unknown): GameState | null {
       planetId: validPlanetId(belt.planetId) ? belt.planetId : source?.planetId ?? "home",
       lanes: Math.max(1, Math.floor(belt.lanes ?? 1)),
       tier: saved.version >= 8 && validBeltTier(belt.tier) ? belt.tier : 1,
+      sorterTier: saved.version >= 10 && validBeltTier(belt.sorterTier) ? belt.sorterTier : 1,
       progress: typeof belt.progress === "number" ? Math.max(0, belt.progress) : 0,
       priority: belt.priority === 1 ? 1 as const : 0 as const,
       lastFlow: typeof belt.lastFlow === "number" ? belt.lastFlow : 0,
@@ -218,11 +228,13 @@ function migrateGame(value: unknown): GameState | null {
   const planetTrays: GameState["planetTrays"] = {
     home: saved.version < 4 ? savedActiveTray : integerRecord(saved.planetTrays?.home),
     ashen: integerRecord(saved.planetTrays?.ashen),
+    giant: integerRecord(saved.planetTrays?.giant),
   };
   if (saved.version >= 4 && saved.tray && typeof saved.tray === "object") planetTrays[activePlanetId] = savedActiveTray;
   const planetMetrics: GameState["planetMetrics"] = {
     home: { ...initial.planetMetrics.home, ...(saved.version < 4 ? saved.metrics ?? {} : saved.planetMetrics?.home ?? {}) },
     ashen: { ...initial.planetMetrics.ashen, ...(saved.planetMetrics?.ashen ?? {}) },
+    giant: { ...initial.planetMetrics.giant, ...(saved.planetMetrics?.giant ?? {}) },
   };
   const structurePoints = saved.version >= 7 ? nonNegativeInteger(saved.dysonSphere?.structurePoints) : 0;
   const shellCapacity = structurePoints * DYSON_SHELL_CAPACITY_PER_STRUCTURE;
@@ -262,7 +274,7 @@ function migrateGame(value: unknown): GameState | null {
   return {
     ...initial,
     ...saved,
-    version: 9,
+    version: 10,
     activePlanetId,
     entities,
     belts,

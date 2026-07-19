@@ -12,6 +12,8 @@ import type {
   ProliferatorTier,
   RecipeDefinition,
   RecipeId,
+  SorterId,
+  SorterTier,
   TechnologyDefinition,
   TechId,
 } from "./types";
@@ -24,6 +26,8 @@ export const PLANETS: Record<PlanetId, PlanetDefinition> = {
     color: "#61b2aa",
     environment: "海洋型行星",
     resources: "铁、铜、石、煤、原油、水",
+    kind: "terrestrial",
+    systemId: "helios",
   },
   ashen: {
     id: "ashen",
@@ -32,6 +36,18 @@ export const PLANETS: Record<PlanetId, PlanetDefinition> = {
     color: "#d8794d",
     environment: "熔岩型行星",
     resources: "钛、硅、铁、铜、石、煤、硫酸",
+    kind: "terrestrial",
+    systemId: "helios",
+  },
+  giant: {
+    id: "giant",
+    name: "苍岚 III",
+    code: "气态巨星",
+    color: "#75a9bd",
+    environment: "冰气态巨星",
+    resources: "氢、氘",
+    kind: "gas-giant",
+    systemId: "helios",
   },
 };
 
@@ -66,7 +82,9 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
   titanium_alloy: { id: "titanium_alloy", name: "钛合金", symbol: "TiA", color: "#9d9cb9", kind: "solid", description: "钛、钢材与硫酸共同形成的耐高温星际结构材料。" },
   microcrystalline_component: { id: "microcrystalline_component", name: "微晶元件", symbol: "McC", color: "#67a994", kind: "solid", description: "以高纯硅块制造的精密半导体元件。" },
   processor: { id: "processor", name: "处理器", symbol: "CPU", color: "#60a985", kind: "solid", description: "星际物流与高级自动化设备的核心控制单元。" },
+  logistics_drone: { id: "logistics_drone", name: "物流运输机", symbol: "LD", color: "#70aeb0", kind: "solid", description: "装载到行星物流站后执行同一行星内的无线运输，每架运载 25 件货物。" },
   logistics_vessel: { id: "logistics_vessel", name: "物流运输船", symbol: "LV", color: "#d4865d", kind: "solid", description: "装载到星际物流站后执行跨行星运输，每艘运载 100 件货物。" },
+  space_warper: { id: "space_warper", name: "空间翘曲器", symbol: "Wrp", color: "#8c79c7", kind: "solid", description: "供物流运输船跨恒星航行时消耗的曲率驱动介质。" },
   graphene: { id: "graphene", name: "石墨烯", symbol: "Gr", color: "#749692", kind: "solid", description: "由高能石墨剥离形成的二维碳材料。" },
   carbon_nanotube: { id: "carbon_nanotube", name: "碳纳米管", symbol: "CNT", color: "#7e969d", kind: "solid", description: "石墨烯与钛材料形成的高强度纳米结构。" },
   proliferator_mk1: { id: "proliferator_mk1", name: "增产剂 Mk.I", symbol: "P1", color: "#8f9872", kind: "solid", description: "由煤加工的基础喷涂介质，每件提供 12 个喷涂点数。" },
@@ -233,10 +251,20 @@ export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
     powerDemandKw: 18000, speed: 1, inputCapacity: 180, outputCapacity: 0,
     description: "消耗小型运载火箭，在恒星轨道持续建设戴森球永久结构。",
   },
+  planetary_logistics_station: {
+    id: "planetary_logistics_station", name: "行星物流站", shortName: "行星站", kind: "station",
+    powerDemandKw: 600, speed: 1, inputCapacity: 600, outputCapacity: 600, accepts: "any",
+    description: "在同一行星内与异向站点自动配对，由需求站调度物流运输机完成无线货运。",
+  },
   interstellar_logistics_station: {
     id: "interstellar_logistics_station", name: "星际物流站", shortName: "星际站", kind: "station",
     powerDemandKw: 1200, speed: 1, inputCapacity: 1000, outputCapacity: 1000, accepts: "any",
     description: "与另一行星的异向站点自动配对，由需求站调度已装载的运输船执行跨行星货运。",
+  },
+  orbital_collector: {
+    id: "orbital_collector", name: "轨道采集器", shortName: "轨道采集器", kind: "station",
+    speed: 1, inputCapacity: 0, outputCapacity: 2000, accepts: "fluid",
+    description: "只能部署在气态巨星，持续采集氢或氘，并作为星际物流系统的远程供应端。",
   },
   storage_mk1: {
     id: "storage_mk1", name: "小型储物仓", shortName: "储物仓", kind: "storage",
@@ -277,7 +305,9 @@ export const RECIPES: Record<RecipeId, RecipeDefinition> = {
   titanium_alloy: { id: "titanium_alloy", name: "钛合金", buildingId: "arc_smelter", duration: 12, requiredTechId: "titanium_alloy", inputs: [{ itemId: "titanium_ingot", amount: 4 }, { itemId: "steel", amount: 4 }, { itemId: "sulfuric_acid", amount: 8 }], outputs: [{ itemId: "titanium_alloy", amount: 4 }] },
   microcrystalline_component: { id: "microcrystalline_component", name: "微晶元件", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "processor", inputs: [{ itemId: "high_purity_silicon", amount: 2 }, { itemId: "copper_ingot", amount: 1 }], outputs: [{ itemId: "microcrystalline_component", amount: 1 }] },
   processor: { id: "processor", name: "处理器", buildingId: "assembling_machine_mk1", duration: 3, requiredTechId: "processor", inputs: [{ itemId: "circuit_board", amount: 2 }, { itemId: "microcrystalline_component", amount: 2 }], outputs: [{ itemId: "processor", amount: 1 }] },
+  logistics_drone: { id: "logistics_drone", name: "物流运输机", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "planetary_logistics", inputs: [{ itemId: "steel", amount: 5 }, { itemId: "processor", amount: 2 }, { itemId: "electromagnetic_turbine", amount: 2 }], outputs: [{ itemId: "logistics_drone", amount: 1 }] },
   logistics_vessel: { id: "logistics_vessel", name: "物流运输船", buildingId: "assembling_machine_mk1", duration: 8, requiredTechId: "interstellar_logistics", inputs: [{ itemId: "titanium_alloy", amount: 10 }, { itemId: "processor", amount: 10 }, { itemId: "plasma_exciter", amount: 4 }], outputs: [{ itemId: "logistics_vessel", amount: 1 }] },
+  space_warper: { id: "space_warper", name: "空间翘曲器", buildingId: "assembling_machine_mk1", duration: 10, requiredTechId: "space_warp", inputs: [{ itemId: "graviton_lens", amount: 1 }], outputs: [{ itemId: "space_warper", amount: 1 }] },
   graphene: { id: "graphene", name: "石墨烯", buildingId: "chemical_plant", duration: 3, requiredTechId: "nanomaterials", inputs: [{ itemId: "energetic_graphite", amount: 3 }, { itemId: "sulfuric_acid", amount: 1 }], outputs: [{ itemId: "graphene", amount: 2 }] },
   carbon_nanotube: { id: "carbon_nanotube", name: "碳纳米管", buildingId: "chemical_plant", duration: 4, requiredTechId: "nanomaterials", inputs: [{ itemId: "graphene", amount: 3 }, { itemId: "titanium_ingot", amount: 1 }], outputs: [{ itemId: "carbon_nanotube", amount: 2 }] },
   proliferator_mk1: { id: "proliferator_mk1", name: "增产剂 Mk.I", buildingId: "assembling_machine_mk1", duration: 0.5, requiredTechId: "proliferator_1", inputs: [{ itemId: "coal", amount: 1 }], outputs: [{ itemId: "proliferator_mk1", amount: 1 }] },
@@ -348,6 +378,12 @@ export const BELT_CONSTRUCTION_BY_TIER: Record<BeltTier, ConveyorBeltId> = {
   3: "conveyor_belt_mk3",
 };
 
+export const SORTER_CONSTRUCTION_BY_TIER: Record<SorterTier, SorterId> = {
+  1: "sorter_mk1",
+  2: "sorter_mk2",
+  3: "sorter_mk3",
+};
+
 export function getRecipesForBuilding(buildingId: BuildingId): RecipeDefinition[] {
   return RECIPES_BY_BUILDING[RECIPE_BUILDING_BASE[buildingId] ?? buildingId] ?? [];
 }
@@ -368,8 +404,20 @@ export function getBeltTier(id: ConveyorBeltId): BeltTier {
   return id === "conveyor_belt_mk3" ? 3 : id === "conveyor_belt_mk2" ? 2 : 1;
 }
 
+export function getSorterConstructionId(tier: SorterTier): SorterId {
+  return SORTER_CONSTRUCTION_BY_TIER[tier];
+}
+
+export function getSorterTier(id: SorterId): SorterTier {
+  return id === "sorter_mk3" ? 3 : id === "sorter_mk2" ? 2 : 1;
+}
+
 export function isConveyorBeltId(id: ConstructionId): id is ConveyorBeltId {
   return id === "conveyor_belt_mk1" || id === "conveyor_belt_mk2" || id === "conveyor_belt_mk3";
+}
+
+export function isSorterId(id: ConstructionId): id is SorterId {
+  return id === "sorter_mk1" || id === "sorter_mk2" || id === "sorter_mk3";
 }
 
 export const CONSTRUCTION: ConstructionDefinition[] = [
@@ -386,6 +434,9 @@ export const CONSTRUCTION: ConstructionDefinition[] = [
   { buildingId: "conveyor_belt_mk1", name: "传送带 Mk.I", outputAmount: 3, requiredTechId: "basic_logistics", costs: [{ itemId: "iron_ingot", amount: 2 }, { itemId: "gear", amount: 1 }] },
   { buildingId: "conveyor_belt_mk2", name: "传送带 Mk.II", outputAmount: 3, requiredTechId: "high_speed_logistics", costs: [{ itemId: "iron_ingot", amount: 2 }, { itemId: "gear", amount: 1 }, { itemId: "magnetic_coil", amount: 2 }] },
   { buildingId: "conveyor_belt_mk3", name: "传送带 Mk.III", outputAmount: 3, requiredTechId: "super_magnetic_logistics", costs: [{ itemId: "graphene", amount: 2 }, { itemId: "electromagnetic_turbine", amount: 2 }, { itemId: "super_magnetic_ring", amount: 1 }] },
+  { buildingId: "sorter_mk1", name: "分拣器 Mk.I", outputAmount: 1, requiredTechId: "basic_logistics", costs: [{ itemId: "iron_ingot", amount: 1 }, { itemId: "circuit_board", amount: 1 }] },
+  { buildingId: "sorter_mk2", name: "分拣器 Mk.II", outputAmount: 1, requiredTechId: "high_speed_logistics", costs: [{ itemId: "electric_motor", amount: 1 }, { itemId: "circuit_board", amount: 2 }] },
+  { buildingId: "sorter_mk3", name: "分拣器 Mk.III", outputAmount: 1, requiredTechId: "super_magnetic_logistics", costs: [{ itemId: "electromagnetic_turbine", amount: 1 }, { itemId: "super_magnetic_ring", amount: 1 }] },
   { buildingId: "storage_mk1", name: "小型储物仓", outputAmount: 1, requiredTechId: "basic_logistics", costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "stone_brick", amount: 4 }] },
   { buildingId: "splitter_4way", name: "四向分流器", outputAmount: 1, requiredTechId: "basic_logistics", costs: [{ itemId: "iron_ingot", amount: 3 }, { itemId: "gear", amount: 2 }, { itemId: "circuit_board", amount: 1 }] },
   { buildingId: "storage_tank", name: "储液罐", outputAmount: 1, requiredTechId: "high_efficiency_plasma_control", costs: [{ itemId: "iron_ingot", amount: 8 }, { itemId: "stone_brick", amount: 4 }, { itemId: "glass", amount: 4 }] },
@@ -397,7 +448,9 @@ export const CONSTRUCTION: ConstructionDefinition[] = [
   { buildingId: "em_rail_ejector", name: "电磁轨道弹射器", outputAmount: 1, requiredTechId: "dyson_swarm", costs: [{ itemId: "steel", amount: 20 }, { itemId: "gear", amount: 20 }, { itemId: "processor", amount: 5 }, { itemId: "super_magnetic_ring", amount: 10 }] },
   { buildingId: "ray_receiver", name: "射线接收站", outputAmount: 1, requiredTechId: "ray_receiver", costs: [{ itemId: "steel", amount: 20 }, { itemId: "high_purity_silicon", amount: 20 }, { itemId: "photon_combiner", amount: 10 }, { itemId: "processor", amount: 5 }] },
   { buildingId: "vertical_launching_silo", name: "垂直发射井", outputAmount: 1, requiredTechId: "vertical_launching_silo", costs: [{ itemId: "steel", amount: 80 }, { itemId: "titanium_alloy", amount: 80 }, { itemId: "frame_material", amount: 30 }, { itemId: "graviton_lens", amount: 20 }, { itemId: "quantum_chip", amount: 10 }] },
+  { buildingId: "planetary_logistics_station", name: "行星物流站", outputAmount: 1, requiredTechId: "planetary_logistics", costs: [{ itemId: "steel", amount: 20 }, { itemId: "titanium_ingot", amount: 20 }, { itemId: "processor", amount: 10 }] },
   { buildingId: "interstellar_logistics_station", name: "星际物流站", outputAmount: 1, requiredTechId: "interstellar_logistics", costs: [{ itemId: "steel", amount: 30 }, { itemId: "titanium_alloy", amount: 40 }, { itemId: "processor", amount: 20 }] },
+  { buildingId: "orbital_collector", name: "轨道采集器", outputAmount: 1, requiredTechId: "orbital_collection", costs: [{ itemId: "titanium_alloy", amount: 40 }, { itemId: "super_magnetic_ring", amount: 20 }, { itemId: "graphene", amount: 20 }] },
 ];
 
 export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
@@ -528,6 +581,17 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     summary: "以高纯硅制造微晶元件和处理器，为远程物流调度建立计算基础。",
     unlocks: ["微晶元件", "处理器配方"],
   },
+  planetary_logistics: {
+    id: "planetary_logistics", name: "行星物流系统", tier: 9,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 10 },
+      { itemId: "energy_matrix", amount: 10 },
+      { itemId: "structure_matrix", amount: 10 },
+    ],
+    prerequisites: ["structure_matrix", "processor", "high_speed_logistics"],
+    summary: "以物流运输机连接同一行星内的供需站，跨越画布完成无线物资调度。",
+    unlocks: ["行星物流站", "物流运输机", "同星球无线运输"],
+  },
   interstellar_logistics: {
     id: "interstellar_logistics", name: "星际物流理论", tier: 9,
     costs: [
@@ -535,7 +599,7 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
       { itemId: "energy_matrix", amount: 12 },
       { itemId: "structure_matrix", amount: 12 },
     ],
-    prerequisites: ["structure_matrix", "titanium_alloy", "processor"],
+    prerequisites: ["planetary_logistics", "titanium_alloy", "processor"],
     summary: "整合高级结构材料与处理器，建立可调度的跨行星运输船航线。",
     unlocks: ["星际物流站", "物流运输船", "跨行星运输调度"],
   },
@@ -549,6 +613,17 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     prerequisites: ["titanium_alloy", "processor"],
     summary: "把碳与硅材料推进到纳米尺度，为高密度信息载体建立材料基础。",
     unlocks: ["石墨烯", "碳纳米管", "晶格硅"],
+  },
+  orbital_collection: {
+    id: "orbital_collection", name: "气态行星开采", tier: 11,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 25 },
+      { itemId: "energy_matrix", amount: 25 },
+      { itemId: "structure_matrix", amount: 25 },
+    ],
+    prerequisites: ["interstellar_logistics", "nanomaterials"],
+    summary: "将采集与星际供应整合到气态巨星轨道，持续获取氢和少量氘。",
+    unlocks: ["轨道采集器", "苍岚 III 轨道部署", "氢与氘自动采集"],
   },
   information_matrix: {
     id: "information_matrix", name: "信息矩阵", tier: 11,
@@ -632,6 +707,19 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     prerequisites: ["miniature_particle_collider", "quantum_chip"],
     summary: "将奇异物质、引力透镜与量子芯片组合为第五阶段科研矩阵。",
     unlocks: ["奇异物质", "引力透镜", "引力矩阵生产", "绿色矩阵科研"],
+  },
+  space_warp: {
+    id: "space_warp", name: "空间翘曲", tier: 15,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 30 },
+      { itemId: "energy_matrix", amount: 30 },
+      { itemId: "structure_matrix", amount: 30 },
+      { itemId: "information_matrix", amount: 30 },
+      { itemId: "gravity_matrix", amount: 30 },
+    ],
+    prerequisites: ["gravity_matrix", "interstellar_logistics"],
+    summary: "以引力透镜折叠航线距离，为跨恒星物流运输船提供曲率航行能力。",
+    unlocks: ["空间翘曲器", "星际站翘曲器仓", "跨恒星航线准备"],
   },
   quantum_printing: {
     id: "quantum_printing", name: "量子打印技术", tier: 15,

@@ -150,6 +150,14 @@ export function calculateFactoryStatistics(state: GameState): FactoryStatistics 
       continue;
     }
 
+    if (entity.buildingId === "orbital_collector" && entity.storedItemId) {
+      const output = recordFor(entity.storedItemId);
+      output.productionPerMinute += entity.productionRate;
+      output.producerCount += 1;
+      if (status.tone === "blocked") output.blockedProducerCount += 1;
+      continue;
+    }
+
     if (entity.kind === "station" && entity.buildingId) {
       const ratedDemandKw = (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount;
       const demanding = ["running", "low-power", "no-power"].includes(status.code);
