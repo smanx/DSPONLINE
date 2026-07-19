@@ -1,15 +1,15 @@
 /** @vitest-environment jsdom */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { createBlueprint, createInitialState, createStandardDysonLayer, placeBuilding, setActivePlanet, setFuelItem, setLogisticsItem } from "./engine";
-import { loadGame, saveGame } from "./storage";
+import { createBlueprint, createInitialState, createStandardDysonLayer, installMiner, placeBuilding, setActivePlanet, setFuelItem, setLogisticsItem } from "./engine";
+import { clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot } from "./storage";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
 
 describe("game storage", () => {
   beforeEach(() => window.localStorage.clear());
 
-  it("round-trips a v16 multi-planet research save", () => {
+  it("round-trips a v17 multi-planet research save", () => {
     const state = createInitialState();
     state.research.selectedTechId = "electromagnetic_matrix";
     state.research.queuedTechIds = ["electromagnetism"];
@@ -18,7 +18,7 @@ describe("game storage", () => {
     saveGame(state);
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.activePlanetId).toBe("home");
     expect(loaded.planetMetrics.ashen.powerFactor).toBe(1);
     expect(loaded.research.selectedTechId).toBe("electromagnetic_matrix");
@@ -27,7 +27,81 @@ describe("game storage", () => {
     expect(loaded.planetTrays.ashen.titanium_ore).toBe(9);
   });
 
-  it("migrates v15 research and Dyson plans into the v16 upgrade model", () => {
+  it("migrates v16 saves with persistent settings and achievement defaults", () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialState()));
+    legacy.version = 16;
+    delete legacy.settings;
+    delete legacy.achievements;
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
+
+    const loaded = loadGame().state;
+    expect(loaded.version).toBe(17);
+    expect(loaded.settings).toEqual({
+      simulationSpeed: 1,
+      performanceMode: false,
+      reducedMotion: false,
+      soundEnabled: false,
+      autosaveIntervalSeconds: 2,
+    });
+    expect(loaded.achievements.unlockedIds).toEqual([]);
+  });
+
+  it("round-trips v17 settings and filters unknown achievement ids", () => {
+    const state = createInitialState();
+    state.settings = {
+      simulationSpeed: 4,
+      performanceMode: true,
+      reducedMotion: true,
+      soundEnabled: true,
+      autosaveIntervalSeconds: 30,
+    };
+    state.achievements.unlockedIds = ["first_manual_mine", "dyson_swarm_online"];
+    const serialized = JSON.parse(exportGame(state));
+    serialized.state.achievements.unlockedIds.push("unknown_achievement");
+
+    const imported = importGame(JSON.stringify(serialized));
+    expect(imported?.settings).toEqual(state.settings);
+    expect(imported?.achievements.unlockedIds).toEqual(["first_manual_mine", "dyson_swarm_online"]);
+    expect(importGame("not-json")).toBeNull();
+  });
+
+  it("reports exact offline production deltas", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 });
+    state = installMiner(state, "vein_iron", 1);
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now() - 5_000, state }));
+
+    const loaded = loadGame();
+    expect(loaded.offlineSeconds).toBeGreaterThanOrEqual(4);
+    expect(loaded.offlineReport).not.toBeNull();
+    expect(loaded.offlineReport?.produced).toEqual(expect.arrayContaining([
+      expect.objectContaining({ itemId: "iron_ore", amount: expect.any(Number) }),
+    ]));
+    expect(loaded.offlineReport?.produced.find((item) => item.itemId === "iron_ore")?.amount).toBeGreaterThan(0);
+  });
+
+  it("saves, loads, summarizes and clears three independent local slots", () => {
+    const first = createInitialState();
+    first.elapsedSeconds = 120;
+    first.research.completedTechIds.push("electromagnetic_matrix");
+    saveGameSlot(1, first);
+
+    const second = createInitialState();
+    second.elapsedSeconds = 360;
+    second.dysonSphere.structurePoints = 4;
+    saveGameSlot(2, second);
+
+    expect(getSaveSlotSummaries()).toEqual([
+      expect.objectContaining({ slotId: 1, elapsedSeconds: 120, completedTechCount: 1 }),
+      expect.objectContaining({ slotId: 2, elapsedSeconds: 360, structurePoints: 4 }),
+    ]);
+    expect(loadGameSlot(1)?.state.elapsedSeconds).toBeGreaterThanOrEqual(120);
+    clearGameSlot(1);
+    expect(loadGameSlot(1)).toBeNull();
+    expect(getSaveSlotSummaries().map((slot) => slot.slotId)).toEqual([2]);
+  });
+
+  it("migrates v15 research and Dyson plans into the v17 operations model", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("dyson_sphere_program", "dyson_shell", "mining_speed_1");
     state.dysonSphere.structurePoints = 16;
@@ -37,7 +111,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.research.completedTechIds).toEqual(expect.arrayContaining(["dyson_sphere_program", "dyson_shell", "mining_speed_1"]));
     expect(loaded.dysonPlans.helios.layers[0]).toMatchObject({
       name: "标准壳层 1",
@@ -63,7 +137,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.tray.iron_ore).toBe(4);
     expect(loaded.entities[0].outputs.iron_ore).toBe(3);
     expect(loaded.entities.every((entity) => entity.progress === 0)).toBe(true);
@@ -186,7 +260,7 @@ describe("game storage", () => {
 
     const loaded = loadGame().state;
     const station = loaded.entities.find((entity) => entity.kind === "station")!;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(station.stationVessels).toBe(1);
     expect(station.stationMinimumLoad).toBe(1);
   });
@@ -240,7 +314,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.dysonSwarm).toEqual({
       sailsInOrbit: 0,
       totalLaunched: 0,
@@ -362,7 +436,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.belts[0]).toMatchObject({ id: "legacy_belt", tier: 1, progress: 0.5 });
     expect(loaded.construction).toMatchObject({
       plane_smelter: 0,
@@ -416,7 +490,7 @@ describe("game storage", () => {
 
     const loaded = loadGame().state;
     const migrated = loaded.entities.find((entity) => entity.id === assembler.id)!;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.construction.spray_coater).toBe(0);
     expect(migrated).toMatchObject({ sprayCoaterInstalled: false, proliferatorPoints: 0, proliferatorBonusProgress: {} });
     expect(migrated.proliferatorTier).toBeUndefined();
@@ -475,7 +549,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.belts[0]).toMatchObject({ id: "v9_belt", tier: 2, sorterTier: 1, progress: 0.25 });
     expect(loaded.planetTrays.giant).toEqual({});
     expect(loaded.planetMetrics.giant.powerFactor).toBe(1);
@@ -539,7 +613,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.construction).toMatchObject({
       solar_panel: 0,
       geothermal_power_station: 0,
@@ -604,7 +678,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.entities.filter((entity) => entity.kind === "vein").map((entity) => entity.resourceId)).toEqual(expect.arrayContaining(rareItems));
     expect(loaded.construction).toMatchObject({ quantum_chemical_plant: 0, fractionator: 0 });
   });
@@ -635,7 +709,7 @@ describe("game storage", () => {
     saveGame(state);
 
     let loaded = loadGame().state;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.blueprints).toEqual([
       expect.objectContaining({
         name: "处理器缓存",
@@ -649,7 +723,7 @@ describe("game storage", () => {
     delete legacy.blueprints;
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
     loaded = loadGame().state;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.blueprints).toEqual([]);
   });
 
@@ -668,7 +742,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.dysonPlans.helios).toMatchObject({
       systemId: "helios",
       activeLayerId: null,
@@ -681,7 +755,7 @@ describe("game storage", () => {
     expect(loaded.dysonSphere).toMatchObject({ structurePoints: 7, shellSails: 11, totalRocketsLaunched: 9, totalSailsAbsorbed: 13 });
   });
 
-  it("round-trips independent v16 Dyson layers across multiple star systems", () => {
+  it("round-trips independent v17 Dyson layers across multiple star systems", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("dyson_sphere_program", "dyson_shell");
     state.exploration.unlockedSystemIds.push("borealis");
@@ -700,7 +774,7 @@ describe("game storage", () => {
     saveGame(state);
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.dysonPlans.helios.layers[0]).toMatchObject({
       name: "标准壳层 1",
       nodes: expect.arrayContaining([expect.objectContaining({ completedStructurePoints: 1 })]),
@@ -735,7 +809,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.exploration.unlockedSystemIds).toEqual(["helios", "borealis", "neutron"]);
     expect(loaded.planetTrays).toMatchObject({ frost: {}, boreal_giant: {}, magnetar: {} });
     expect(loaded.entities.find((entity) => entity.id === "vein_optical_grating")).toMatchObject({

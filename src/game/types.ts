@@ -274,6 +274,23 @@ export type EntityKind = "vein" | "machine" | "power" | "storage" | "splitter" |
 export type PlacementCount = 1 | 2 | 5 | 10;
 export type StationMinimumLoad = 0.1 | 0.25 | 0.5 | 1;
 export type EnergyMode = "auto" | "charge" | "discharge";
+export type SimulationSpeed = 1 | 2 | 4;
+export type AutosaveIntervalSeconds = 2 | 10 | 30;
+
+export type AchievementId =
+  | "first_manual_mine"
+  | "automated_mining"
+  | "first_logistics_line"
+  | "stable_power_grid"
+  | "electromagnetic_matrix_online"
+  | "energy_matrix_online"
+  | "six_matrix_mastery"
+  | "planetary_logistics_online"
+  | "interstellar_delivery"
+  | "rare_resource_harvest"
+  | "dyson_swarm_online"
+  | "permanent_dyson_structure"
+  | "multi_system_industry";
 
 export interface ItemAmount {
   itemId: ItemId;
@@ -545,6 +562,18 @@ export interface ExplorationState {
   unlockedSystemIds: StarSystemId[];
 }
 
+export interface GameSettings {
+  simulationSpeed: SimulationSpeed;
+  performanceMode: boolean;
+  reducedMotion: boolean;
+  soundEnabled: boolean;
+  autosaveIntervalSeconds: AutosaveIntervalSeconds;
+}
+
+export interface AchievementState {
+  unlockedIds: AchievementId[];
+}
+
 export interface BlueprintEntityTemplate {
   key: string;
   buildingId: BuildingId;
@@ -582,7 +611,7 @@ export interface BlueprintDefinition {
 }
 
 export interface GameState {
-  version: 16;
+  version: 17;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -595,6 +624,8 @@ export interface GameState {
   totalProduced: Partial<Record<ItemId, number>>;
   research: ResearchState;
   exploration: ExplorationState;
+  settings: GameSettings;
+  achievements: AchievementState;
   blueprints: BlueprintDefinition[];
   elapsedSeconds: number;
   metrics: FactoryMetrics;

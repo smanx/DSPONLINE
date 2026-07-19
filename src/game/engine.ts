@@ -188,7 +188,7 @@ function makeVein(id: string, planetId: PlanetId, resourceId: ItemId, x: number,
 export function createInitialState(): GameState {
   const planetMetrics = Object.fromEntries(PLANET_LIST.map((planet) => [planet.id, emptyMetrics()])) as GameState["planetMetrics"];
   return {
-    version: 16,
+    version: 17,
     nextId: 1,
     activePlanetId: "home",
     entities: [
@@ -274,6 +274,14 @@ export function createInitialState(): GameState {
       completedTechIds: [],
     },
     exploration: { unlockedSystemIds: ["helios"] },
+    settings: {
+      simulationSpeed: 1,
+      performanceMode: false,
+      reducedMotion: false,
+      soundEnabled: false,
+      autosaveIntervalSeconds: 2,
+    },
+    achievements: { unlockedIds: [] },
     blueprints: [],
     elapsedSeconds: 0,
     metrics: { ...planetMetrics.home },

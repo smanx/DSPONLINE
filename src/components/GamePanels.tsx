@@ -4,6 +4,7 @@ import {
   BarChart3,
   BatteryCharging,
   BatteryFull,
+  Bell,
   BookOpen,
   Box,
   Check,
@@ -1169,6 +1170,8 @@ export function HeaderControls({
   onOpenTechnology,
   onOpenStatistics,
   onOpenStarMap,
+  onOpenOperations,
+  alertCount,
 }: {
   game: GameState;
   onPauseToggle: () => void;
@@ -1179,6 +1182,8 @@ export function HeaderControls({
   onOpenTechnology: () => void;
   onOpenStatistics: () => void;
   onOpenStarMap: () => void;
+  onOpenOperations: () => void;
+  alertCount: number;
 }) {
   const powerTone = game.metrics.powerFactor >= 0.999 ? "positive" : game.metrics.powerFactor > 0 ? "warning" : "negative";
   return (
@@ -1194,6 +1199,9 @@ export function HeaderControls({
         <div><FlaskConical size={16} /><span>蓝 / 红 / 黄 / 紫 / 绿 / 白矩阵</span><strong>{formatAmount(game.totalProduced.electromagnetic_matrix ?? 0)}<small> / {formatAmount(game.totalProduced.energy_matrix ?? 0)} / {formatAmount(game.totalProduced.structure_matrix ?? 0)} / {formatAmount(game.totalProduced.information_matrix ?? 0)} / {formatAmount(game.totalProduced.gravity_matrix ?? 0)} / {formatAmount(game.totalProduced.universe_matrix ?? 0)}</small></strong></div>
       </div>
       <div className="header-actions">
+        <button className={`header-alert-command${alertCount > 0 ? " header-alert-command--active" : ""}`} type="button" onClick={onOpenOperations} title="打开运营中心" aria-label="打开运营中心">
+          <Bell size={17} />{alertCount > 0 ? <span>{Math.min(99, alertCount)}</span> : null}
+        </button>
         <button type="button" onClick={onOpenStarMap} title="打开星图" aria-label="打开星图"><Telescope size={17} /></button>
         <button type="button" onClick={onOpenStatistics} title="打开生产统计" aria-label="打开生产统计"><BarChart3 size={17} /></button>
         <button type="button" onClick={onOpenRecipes} title="打开配方图鉴" aria-label="打开配方图鉴"><BookOpen size={17} /></button>

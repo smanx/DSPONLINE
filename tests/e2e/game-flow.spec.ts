@@ -907,6 +907,77 @@ async function openBlueprintStageGame(page: Page) {
   await expect(page.locator(".machine-node")).toHaveCount(2);
 }
 
+async function openOperationsStageGame(page: Page) {
+  await page.addInitScript(() => {
+    if (window.localStorage.getItem("dsp-idle-network.save.v1")) return;
+    const state = {
+      version: 16,
+      nextId: 2,
+      activePlanetId: "home",
+      entities: [{
+        id: "operations_iron",
+        kind: "vein",
+        planetId: "home",
+        position: { x: -220, y: -80 },
+        resourceId: "iron_ore",
+        extractorBuildingId: "mining_machine",
+        machineCount: 0,
+        minerCount: 1,
+        inputs: {},
+        outputs: { iron_ore: 0 },
+        progress: 0,
+        routingCursor: 0,
+        utilization: 0,
+        productionRate: 0,
+      }],
+      belts: [],
+      construction: {},
+      tray: {},
+      totalProduced: { electromagnetic_matrix: 1 },
+      manualMined: 1,
+      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: [] },
+      exploration: { unlockedSystemIds: ["helios"] },
+      paused: false,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
+async function openOfflineStageGame(page: Page) {
+  await page.addInitScript(() => {
+    const base = {
+      planetId: "home",
+      inputs: {},
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+    };
+    const state = {
+      version: 16,
+      nextId: 3,
+      activePlanetId: "home",
+      entities: [
+        { ...base, id: "offline_iron", kind: "vein", position: { x: -220, y: -80 }, resourceId: "iron_ore", extractorBuildingId: "mining_machine", machineCount: 0, minerCount: 1, outputs: { iron_ore: 0 } },
+        { ...base, id: "offline_wind", kind: "power", position: { x: 120, y: -80 }, buildingId: "wind_turbine", machineCount: 3, minerCount: 0, outputs: {}, powerOutputKw: 0 },
+      ],
+      belts: [],
+      construction: {},
+      tray: {},
+      totalProduced: {},
+      manualMined: 0,
+      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: [] },
+      exploration: { unlockedSystemIds: ["helios"] },
+      paused: false,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now() - 6_000, state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
 test("manual mining feeds a powered smelter", async ({ page }) => {
   await page.setViewportSize({ width: 1560, height: 960 });
   await freshGame(page);
@@ -2129,4 +2200,84 @@ test("box selection copies, pastes, moves and upgrades a production blueprint", 
   await expect.poll(async () => library.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await expect(library.locator(".blueprint-card input")).toHaveValue("处理器模块");
   await page.screenshot({ path: "artifacts/qa/blueprint-library-390.png", fullPage: true });
+});
+
+test("operations center diagnoses equipment and records achievement progress", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openOperationsStageGame(page);
+  await page.getByLabel("打开运营中心").click();
+  const operations = page.getByRole("dialog", { name: "运营中心" });
+  await expect(operations).toBeVisible();
+
+  const minerAlert = operations.locator(".alert-row").filter({ hasText: "铁矿石" });
+  await expect(minerAlert).toContainText("电网断电");
+  await expect(minerAlert).toContainText("澄海 I");
+  await page.screenshot({ path: "artifacts/qa/operations-alerts-1440.png", fullPage: true });
+
+  await minerAlert.click();
+  await expect(operations).not.toBeVisible();
+  await expect(page.locator('.react-flow__node[data-id="operations_iron"] .factory-node')).toHaveClass(/factory-node--selected/);
+  await expect(page.locator(".inspector-panel")).toContainText("电网断电");
+
+  await page.getByLabel("打开运营中心").click();
+  await operations.locator(".operations-tabs").getByRole("button", { name: /成就/ }).click();
+  await expect(operations.locator(".achievement-row").filter({ hasText: "第一镐" })).toHaveClass(/achievement-row--complete/);
+  await expect(operations.locator(".achievement-row").filter({ hasText: "自动化开端" })).toHaveClass(/achievement-row--complete/);
+  await expect(operations.locator(".achievement-row").filter({ hasText: "蓝色火花" })).toHaveClass(/achievement-row--complete/);
+});
+
+test("operations settings and local save slots persist across reload", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openOperationsStageGame(page);
+  await page.getByLabel("打开运营中心").click();
+  let operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.locator(".operations-tabs").getByRole("button", { name: "设置" }).click();
+  await operations.getByRole("button", { name: "4×" }).click();
+  await operations.locator(".setting-row").filter({ hasText: "性能模式" }).click();
+  await operations.locator(".setting-row").filter({ hasText: "减少动态效果" }).click();
+  await operations.locator(".setting-row").filter({ hasText: "操作音效" }).click();
+  await operations.getByRole("button", { name: "30 秒" }).click();
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-performance-mode", "true");
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-reduced-motion", "true");
+
+  await page.waitForTimeout(700);
+  await operations.locator(".operations-tabs").getByRole("button", { name: "存档" }).click();
+  await operations.getByRole("button", { name: "立即保存" }).click();
+  const elapsedSeconds = await page.evaluate(() => JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1")!).state.elapsedSeconds as number);
+  expect(elapsedSeconds).toBeGreaterThan(1.5);
+
+  await operations.getByLabel("保存到槽位 1").click();
+  await expect(operations.locator(".save-slot").filter({ hasText: "本地槽位 1" })).toHaveClass(/save-slot--occupied/);
+  const downloadPromise = page.waitForEvent("download");
+  await operations.getByRole("button", { name: "导出 JSON" }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/^dsp-idle-save-.*\.json$/);
+  await page.screenshot({ path: "artifacts/qa/operations-saves-1440.png", fullPage: true });
+
+  await page.reload();
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-performance-mode", "true");
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-reduced-motion", "true");
+  await page.getByLabel("打开运营中心").click();
+  operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.locator(".operations-tabs").getByRole("button", { name: "设置" }).click();
+  await expect(operations.locator(".setting-row").filter({ hasText: "性能模式" }).locator('input[type="checkbox"]')).toBeChecked();
+  await expect(operations.locator(".setting-row").filter({ hasText: "减少动态效果" }).locator('input[type="checkbox"]')).toBeChecked();
+  await expect(operations.locator(".setting-row").filter({ hasText: "操作音效" }).locator('input[type="checkbox"]')).toBeChecked();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(async () => operations.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/operations-settings-390.png", fullPage: true });
+});
+
+test("offline report summarizes production before entering the factory", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openOfflineStageGame(page);
+  const report = page.getByRole("dialog", { name: "离线结算报告" });
+  await expect(report).toBeVisible();
+  await expect(report.locator(".offline-runtime")).toContainText("秒");
+  await expect(report.locator(".offline-production-list")).toContainText("铁矿石");
+  await expect(report.locator(".offline-production-list").getByText(/^\+\d+/).first()).toBeVisible();
+  await page.screenshot({ path: "artifacts/qa/offline-report-1440.png", fullPage: true });
+  await report.getByRole("button", { name: "确认结算" }).click();
+  await expect(report).not.toBeVisible();
 });

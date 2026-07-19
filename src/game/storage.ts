@@ -7,9 +7,13 @@ import {
   createInitialState,
 } from "./engine";
 import { BUILDINGS, ITEMS, PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, getBuilding, getExtractorBuildingId, getPlanet, getRecipe, getTechnology } from "./content";
+import { isAchievementId } from "./progression";
 import type { BeltConnection, BeltTier, BlueprintDefinition, BuildingId, ConstructionId, DysonLayerState, DysonSpherePlanState, EnergyMode, FactoryEntity, GameState, ItemId, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad, TechId } from "./types";
 
-const SAVE_KEY = "dsp-idle-network.save.v1";
+export const SAVE_KEY = "dsp-idle-network.save.v1";
+const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
+
+export type SaveSlotId = 1 | 2 | 3;
 
 interface SaveEnvelope {
   savedAt: number;
@@ -19,6 +23,24 @@ interface SaveEnvelope {
 export interface LoadedGame {
   state: GameState;
   offlineSeconds: number;
+  offlineReport: OfflineReport | null;
+}
+
+export interface OfflineReport {
+  seconds: number;
+  produced: Array<{ itemId: ItemId; amount: number }>;
+  completedTechIds: TechId[];
+  structurePointsAdded: number;
+  shellSailsAdded: number;
+}
+
+export interface SaveSlotSummary {
+  slotId: SaveSlotId;
+  savedAt: number;
+  elapsedSeconds: number;
+  completedTechCount: number;
+  structurePoints: number;
+  activePlanetId: PlanetId;
 }
 
 function integerRecord(value: unknown): Partial<Record<ItemId, number>> {
@@ -104,6 +126,14 @@ function validEnergyMode(value: unknown): value is EnergyMode {
   return value === "auto" || value === "charge" || value === "discharge";
 }
 
+function validSimulationSpeed(value: unknown): value is GameState["settings"]["simulationSpeed"] {
+  return value === 1 || value === 2 || value === 4;
+}
+
+function validAutosaveInterval(value: unknown): value is GameState["settings"]["autosaveIntervalSeconds"] {
+  return value === 2 || value === 10 || value === 30;
+}
+
 function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
   if (entity.id.startsWith("ashen_")) return "ashen";
   if (entity.resourceId === "silicon_ore" || entity.resourceId === "titanium_ore") return "ashen";
@@ -111,10 +141,10 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
   return "home";
 }
 
-function migrateGame(value: unknown): GameState | null {
+export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
   const entities = saved.entities.map((entity: FactoryEntity) => {
     const currentResource = saved.version < 13
@@ -435,11 +465,31 @@ function migrateGame(value: unknown): GameState | null {
       ? Math.min(swarmGenerationKw + dysonSphere.generationKw, nonNegativeNumber(saved.dysonSwarm?.receiverLoadKw))
       : 0,
   };
+  const settings: GameState["settings"] = {
+    simulationSpeed: validSimulationSpeed(saved.settings?.simulationSpeed)
+      ? saved.settings.simulationSpeed
+      : initial.settings.simulationSpeed,
+    performanceMode: typeof saved.settings?.performanceMode === "boolean"
+      ? saved.settings.performanceMode
+      : initial.settings.performanceMode,
+    reducedMotion: typeof saved.settings?.reducedMotion === "boolean"
+      ? saved.settings.reducedMotion
+      : initial.settings.reducedMotion,
+    soundEnabled: typeof saved.settings?.soundEnabled === "boolean"
+      ? saved.settings.soundEnabled
+      : initial.settings.soundEnabled,
+    autosaveIntervalSeconds: validAutosaveInterval(saved.settings?.autosaveIntervalSeconds)
+      ? saved.settings.autosaveIntervalSeconds
+      : initial.settings.autosaveIntervalSeconds,
+  };
+  const unlockedAchievementIds = Array.isArray(saved.achievements?.unlockedIds)
+    ? [...new Set(saved.achievements.unlockedIds.filter(isAchievementId))]
+    : [];
 
   return {
     ...initial,
     ...saved,
-    version: 16,
+    version: 17,
     activePlanetId,
     entities,
     belts,
@@ -455,6 +505,8 @@ function migrateGame(value: unknown): GameState | null {
       completedTechIds,
     },
     exploration: { unlockedSystemIds },
+    settings,
+    achievements: { unlockedIds: unlockedAchievementIds },
     blueprints,
     metrics: { ...planetMetrics[activePlanetId] },
     planetMetrics,
@@ -464,34 +516,120 @@ function migrateGame(value: unknown): GameState | null {
   } as GameState;
 }
 
+function persistentState(state: GameState): GameState {
+  return {
+    ...state,
+    planetTrays: { ...state.planetTrays, [state.activePlanetId]: { ...state.tray } },
+  };
+}
+
+function saveEnvelope(state: GameState, savedAt = Date.now()): SaveEnvelope {
+  return { state: persistentState(state), savedAt };
+}
+
+function buildOfflineReport(before: GameState, after: GameState, seconds: number): OfflineReport {
+  const produced = (Object.keys(ITEMS) as ItemId[]).flatMap((itemId) => {
+    const amount = Math.max(0, Math.floor((after.totalProduced[itemId] ?? 0) - (before.totalProduced[itemId] ?? 0)));
+    return amount > 0 ? [{ itemId, amount }] : [];
+  }).sort((left, right) => right.amount - left.amount);
+  const beforeTechIds = new Set(before.research.completedTechIds);
+  return {
+    seconds,
+    produced,
+    completedTechIds: after.research.completedTechIds.filter((techId) => !beforeTechIds.has(techId)),
+    structurePointsAdded: Math.max(0, after.dysonSphere.structurePoints - before.dysonSphere.structurePoints),
+    shellSailsAdded: Math.max(0, after.dysonSphere.shellSails - before.dysonSphere.shellSails),
+  };
+}
+
+function parseEnvelope(raw: string, advanceOffline: boolean): LoadedGame | null {
+  const parsed = JSON.parse(raw) as SaveEnvelope | Record<string, unknown>;
+  const envelope = "state" in parsed
+    ? parsed as SaveEnvelope
+    : { state: parsed, savedAt: Date.now() } satisfies SaveEnvelope;
+  const state = migrateGame(envelope.state);
+  if (!state) return null;
+  const savedAt = typeof envelope.savedAt === "number" && Number.isFinite(envelope.savedAt)
+    ? envelope.savedAt
+    : Date.now();
+  const offlineSeconds = advanceOffline && !state.paused
+    ? Math.min(8 * 60 * 60, Math.max(0, (Date.now() - savedAt) / 1000))
+    : 0;
+  const advanced = offlineSeconds >= 1 ? advanceSimulation(state, offlineSeconds) : state;
+  return {
+    state: advanced,
+    offlineSeconds,
+    offlineReport: offlineSeconds >= 1 ? buildOfflineReport(state, advanced, offlineSeconds) : null,
+  };
+}
+
 export function loadGame(): LoadedGame {
   try {
     const raw = window.localStorage.getItem(SAVE_KEY);
-    if (!raw) return { state: createInitialState(), offlineSeconds: 0 };
-    const envelope = JSON.parse(raw) as SaveEnvelope;
-    const state = migrateGame(envelope.state);
-    if (!state) return { state: createInitialState(), offlineSeconds: 0 };
-    const offlineSeconds = state.paused
-      ? 0
-      : Math.min(8 * 60 * 60, Math.max(0, (Date.now() - envelope.savedAt) / 1000));
-    return {
-      state: offlineSeconds >= 1 ? advanceSimulation(state, offlineSeconds) : state,
-      offlineSeconds,
-    };
+    if (!raw) return { state: createInitialState(), offlineSeconds: 0, offlineReport: null };
+    return parseEnvelope(raw, true) ?? { state: createInitialState(), offlineSeconds: 0, offlineReport: null };
   } catch {
-    return { state: createInitialState(), offlineSeconds: 0 };
+    return { state: createInitialState(), offlineSeconds: 0, offlineReport: null };
   }
 }
 
 export function saveGame(state: GameState): void {
-  const envelope: SaveEnvelope = {
-    state: {
-      ...state,
-      planetTrays: { ...state.planetTrays, [state.activePlanetId]: { ...state.tray } },
-    },
-    savedAt: Date.now(),
-  };
-  window.localStorage.setItem(SAVE_KEY, JSON.stringify(envelope));
+  window.localStorage.setItem(SAVE_KEY, JSON.stringify(saveEnvelope(state)));
+}
+
+export function exportGame(state: GameState): string {
+  return JSON.stringify(saveEnvelope(state), null, 2);
+}
+
+export function importGame(raw: string): GameState | null {
+  try {
+    return parseEnvelope(raw, false)?.state ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSlotKey(slotId: SaveSlotId): string {
+  return `${SAVE_SLOT_KEY_PREFIX}.${slotId}`;
+}
+
+export function saveGameSlot(slotId: SaveSlotId, state: GameState): void {
+  window.localStorage.setItem(saveSlotKey(slotId), JSON.stringify(saveEnvelope(state)));
+}
+
+export function loadGameSlot(slotId: SaveSlotId): LoadedGame | null {
+  try {
+    const raw = window.localStorage.getItem(saveSlotKey(slotId));
+    return raw ? parseEnvelope(raw, true) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearGameSlot(slotId: SaveSlotId): void {
+  window.localStorage.removeItem(saveSlotKey(slotId));
+}
+
+export function getSaveSlotSummaries(): SaveSlotSummary[] {
+  return ([1, 2, 3] as SaveSlotId[]).flatMap((slotId) => {
+    try {
+      const raw = window.localStorage.getItem(saveSlotKey(slotId));
+      if (!raw) return [];
+      const parsed = JSON.parse(raw) as SaveEnvelope;
+      const state = migrateGame(parsed.state);
+      if (!state) return [];
+      return [{
+        slotId,
+        savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : 0,
+        elapsedSeconds: state.elapsedSeconds,
+        completedTechCount: state.research.completedTechIds.length,
+        structurePoints: state.dysonSphere.structurePoints,
+        activePlanetId: state.activePlanetId,
+      }];
+    } catch {
+      return [];
+    }
+  });
 }
 
 export function clearGame(): void {

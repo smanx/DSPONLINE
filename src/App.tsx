@@ -29,8 +29,11 @@ import { StatisticsWorkspace } from "./components/StatisticsWorkspace";
 import { StarMapWorkspace } from "./components/StarMapWorkspace";
 import { BlueprintPlacementCursor, BlueprintWorkspace, CanvasSelectionTools, SelectionToolbar } from "./components/BlueprintWorkspace";
 import { DysonPlannerWorkspace } from "./components/DysonPlannerWorkspace";
+import { OfflineReportWorkspace } from "./components/OfflineReportWorkspace";
+import { OperationsWorkspace, type OperationsTab } from "./components/OperationsWorkspace";
 import { TechnologyWorkspace } from "./components/TechnologyWorkspace";
 import { ITEMS, getBeltConstructionId, getBuilding, getBuildingUpgradeTarget, getPlanet, getTechnology } from "./game/content";
+import { getFactoryAlerts, type FactoryAlert } from "./game/alerts";
 import {
   addBuildingToGroup,
   addDysonLayer,
@@ -99,8 +102,9 @@ import {
   planDysonShell,
   renameBlueprint,
 } from "./game/engine";
-import { clearGame, loadGame, saveGame } from "./game/storage";
-import type { BeltTier, BuildingId, DraggedItemSourceKind, EnergyMode, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad } from "./game/types";
+import { getAchievement, unlockAchievements } from "./game/progression";
+import { clearGame, clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot, type OfflineReport, type SaveSlotId } from "./game/storage";
+import type { BeltTier, BuildingId, DraggedItemSourceKind, EnergyMode, GameSettings, GameState, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad } from "./game/types";
 
 type InspectorTab = "inspect" | "fabricate";
 
@@ -132,34 +136,57 @@ function FactoryGame() {
   const [starMapOpen, setStarMapOpen] = useState(false);
   const [blueprintsOpen, setBlueprintsOpen] = useState(false);
   const [dysonPlannerOpen, setDysonPlannerOpen] = useState(false);
+  const [operationsOpen, setOperationsOpen] = useState(false);
+  const [operationsTab, setOperationsTab] = useState<OperationsTab>("alerts");
+  const [offlineReport, setOfflineReport] = useState<OfflineReport | null>(loaded.offlineReport);
+  const [saveSlots, setSaveSlots] = useState(getSaveSlotSummaries);
   const [blueprintPlacementId, setBlueprintPlacementId] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [miningEntityId, setMiningEntityId] = useState<string | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<FactoryFlowNode>([]);
-  const [notice, setNotice] = useState<string | null>(() => loaded.offlineSeconds >= 1
-    ? `离线运行 ${Math.floor(loaded.offlineSeconds / 60)} 分钟，生产网络已完成结算`
-    : null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [pointer, setPointer] = useState({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const gameRef = useRef(game);
   const completedTechCountRef = useRef(game.research.completedTechIds.length);
+  const achievementCountRef = useRef(game.achievements.unlockedIds.length);
   const miningTimerRef = useRef<number | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const { screenToFlowPosition, setViewport } = useReactFlow();
 
   useEffect(() => { gameRef.current = game; }, [game]);
+
+  const playTone = useCallback((kind: "confirm" | "complete" | "alert", force = false) => {
+    if (!force && !gameRef.current.settings.soundEnabled) return;
+    const context = audioContextRef.current ?? new AudioContext();
+    audioContextRef.current = context;
+    if (context.state === "suspended") void context.resume();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const frequency = kind === "complete" ? 780 : kind === "alert" ? 310 : 560;
+    oscillator.type = kind === "alert" ? "triangle" : "sine";
+    oscillator.frequency.setValueAtTime(frequency, context.currentTime);
+    if (kind === "complete") oscillator.frequency.exponentialRampToValueAtTime(1040, context.currentTime + 0.12);
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.055, context.currentTime + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.18);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.2);
+  }, []);
 
   useEffect(() => {
     let previous = performance.now();
     const timer = window.setInterval(() => {
       const now = performance.now();
-      const seconds = Math.min(0.5, Math.max(0, (now - previous) / 1000));
+      const seconds = Math.min(1, Math.max(0, (now - previous) / 1000)) * game.settings.simulationSpeed;
       previous = now;
       setGame((current) => advanceSimulation(current, seconds));
-    }, 100);
+    }, game.settings.performanceMode ? 250 : 100);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [game.settings.performanceMode, game.settings.simulationSpeed]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => saveGame(gameRef.current), 2000);
+    const timer = window.setInterval(() => saveGame(gameRef.current), game.settings.autosaveIntervalSeconds * 1000);
     const saveNow = () => saveGame(gameRef.current);
     window.addEventListener("beforeunload", saveNow);
     return () => {
@@ -167,7 +194,9 @@ function FactoryGame() {
       window.removeEventListener("beforeunload", saveNow);
       saveNow();
     };
-  }, []);
+  }, [game.settings.autosaveIntervalSeconds]);
+
+  useEffect(() => () => { if (audioContextRef.current) void audioContextRef.current.close(); }, []);
 
   useEffect(() => {
     const updatePointer = (event: PointerEvent | DragEvent) => setPointer({ x: event.clientX, y: event.clientY });
@@ -189,10 +218,27 @@ function FactoryGame() {
     const count = game.research.completedTechIds.length;
     if (count > completedTechCountRef.current) {
       const technology = getTechnology(game.research.completedTechIds.at(-1));
-      if (technology) setNotice(`${technology.name}研究完成`);
+      if (technology) {
+        setNotice(`${technology.name}研究完成`);
+        playTone("complete");
+      }
     }
     completedTechCountRef.current = count;
-  }, [game.research.completedTechIds]);
+  }, [game.research.completedTechIds, playTone]);
+
+  useEffect(() => {
+    setGame((current) => unlockAchievements(current).state);
+  }, [game]);
+
+  useEffect(() => {
+    const count = game.achievements.unlockedIds.length;
+    if (count > achievementCountRef.current) {
+      const achievement = getAchievement(game.achievements.unlockedIds.at(-1));
+      if (achievement) setNotice(`成就解锁：${achievement.name}`);
+      playTone("complete");
+    }
+    achievementCountRef.current = count;
+  }, [game.achievements.unlockedIds, playTone]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -204,6 +250,8 @@ function FactoryGame() {
         setStarMapOpen(false);
         setBlueprintsOpen(false);
         setDysonPlannerOpen(false);
+        setOperationsOpen(false);
+        setOfflineReport(null);
         setBlueprintPlacementId(null);
         setSelectionMode(false);
         setSelectedEntityIds([]);
@@ -310,6 +358,99 @@ function FactoryGame() {
     setGame((current) => exploreStarSystem(current, systemId));
     setNotice("恒星勘探完成，永久航标已写入星图");
   }, []);
+
+  const alerts = useMemo(() => getFactoryAlerts(game), [game]);
+
+  const updateSettings = useCallback((settings: Partial<GameSettings>) => {
+    setGame((current) => ({ ...current, settings: { ...current.settings, ...settings } }));
+    if (settings.soundEnabled === true) playTone("confirm", true);
+  }, [playTone]);
+
+  const restoreGame = useCallback((state: GameState, report: OfflineReport | null = null) => {
+    onMiningStop();
+    gameRef.current = state;
+    completedTechCountRef.current = state.research.completedTechIds.length;
+    achievementCountRef.current = state.achievements.unlockedIds.length;
+    setGame(state);
+    setOfflineReport(report);
+    setSelectedEntityIds([]);
+    setSelectedBeltId(null);
+    setPlacement(null);
+    setBlueprintPlacementId(null);
+    setSelectionMode(false);
+    setNodes([]);
+    setOperationsOpen(false);
+    setViewport({ x: 510, y: 250, zoom: 0.84 }, { duration: state.settings.reducedMotion ? 0 : 180 });
+  }, [onMiningStop, setNodes, setViewport]);
+
+  const selectAlert = useCallback((alert: FactoryAlert) => {
+    if (gameRef.current.activePlanetId !== alert.planetId) onPlanetChange(alert.planetId);
+    setSelectedEntityIds([alert.entityId]);
+    setSelectedBeltId(null);
+    setInspectorTab("inspect");
+    setMobilePanel("inspector");
+    setOperationsOpen(false);
+    setNotice(`已定位：${alert.title} · ${alert.reason}`);
+    playTone("alert");
+  }, [onPlanetChange, playTone]);
+
+  const refreshSaveSlots = useCallback(() => setSaveSlots(getSaveSlotSummaries()), []);
+
+  const manualSave = useCallback(() => {
+    saveGame(gameRef.current);
+    setNotice("主存档已保存");
+    playTone("confirm");
+  }, [playTone]);
+
+  const downloadSave = useCallback(() => {
+    const blob = new Blob([exportGame(gameRef.current)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `dsp-idle-save-${new Date().toISOString().slice(0, 10)}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setNotice("存档 JSON 已导出");
+    playTone("confirm");
+  }, [playTone]);
+
+  const importSave = useCallback((raw: string) => {
+    const state = importGame(raw);
+    if (!state) {
+      setNotice("存档导入失败：文件格式或版本无效");
+      playTone("alert");
+      return;
+    }
+    saveGame(state);
+    restoreGame(state);
+    setNotice("存档导入完成");
+    playTone("complete");
+  }, [playTone, restoreGame]);
+
+  const saveToSlot = useCallback((slotId: SaveSlotId) => {
+    saveGameSlot(slotId, gameRef.current);
+    refreshSaveSlots();
+    setNotice(`已保存到本地槽位 ${slotId}`);
+    playTone("confirm");
+  }, [playTone, refreshSaveSlots]);
+
+  const loadFromSlot = useCallback((slotId: SaveSlotId) => {
+    const slot = loadGameSlot(slotId);
+    if (!slot) {
+      setNotice(`槽位 ${slotId} 没有可用存档`);
+      return;
+    }
+    saveGame(slot.state);
+    restoreGame(slot.state, slot.offlineReport);
+    setNotice(`已载入本地槽位 ${slotId}`);
+    playTone("complete");
+  }, [playTone, restoreGame]);
+
+  const deleteSlot = useCallback((slotId: SaveSlotId) => {
+    clearGameSlot(slotId);
+    refreshSaveSlots();
+    setNotice(`本地槽位 ${slotId} 已清空`);
+  }, [refreshSaveSlots]);
 
   const commonNodeData = useMemo<Omit<FactoryNodeData, "entity" | "status" | "connectedInputItemIds">>(() => {
     const technology = getTechnology(game.research.selectedTechId);
@@ -497,7 +638,9 @@ function FactoryGame() {
 
   const reset = () => {
     clearGame();
-    setGame(createInitialState());
+    const initial = createInitialState();
+    initial.settings = { ...gameRef.current.settings };
+    setGame(initial);
     setPlacement(null);
     setPlacementCount(1);
     setSelectedEntityIds([]);
@@ -508,17 +651,37 @@ function FactoryGame() {
     setRecipesOpen(false);
     setStarMapOpen(false);
     setBlueprintsOpen(false);
+    setDysonPlannerOpen(false);
+    setOperationsOpen(false);
+    setOfflineReport(null);
     setBlueprintPlacementId(null);
     setSelectionMode(false);
     setNotice("当前工厂已重置");
   };
 
   return (
-    <main className={`game-shell${placement || blueprintPlacementId ? " game-shell--placing" : ""}${selectionMode ? " game-shell--selecting" : ""}${mobilePanel ? ` mobile-panel--${mobilePanel}` : ""}`}>
+    <main
+      className={`game-shell${placement || blueprintPlacementId ? " game-shell--placing" : ""}${selectionMode ? " game-shell--selecting" : ""}${mobilePanel ? ` mobile-panel--${mobilePanel}` : ""}`}
+      data-reduced-motion={game.settings.reducedMotion ? "true" : "false"}
+      data-performance-mode={game.settings.performanceMode ? "true" : "false"}
+    >
       <HeaderControls
         game={game}
+        alertCount={alerts.length}
         onPauseToggle={() => setGame((current) => setPaused(current, !current.paused))}
         onReset={reset}
+        onOpenOperations={() => {
+          setOperationsOpen(true);
+          setOperationsTab("alerts");
+          setTechnologyOpen(false);
+          setStatisticsOpen(false);
+          setRecipesOpen(false);
+          setStarMapOpen(false);
+          setBlueprintsOpen(false);
+          setDysonPlannerOpen(false);
+          setMobilePanel(null);
+          setNotice(null);
+        }}
         onOpenResources={() => { setMobilePanel((current) => current === "resources" ? null : "resources"); setNotice(null); }}
         onOpenInspector={() => { setMobilePanel((current) => current === "inspector" ? null : "inspector"); setNotice(null); }}
         onOpenRecipes={() => { setRecipesOpen(true); setTechnologyOpen(false); setStatisticsOpen(false); setMobilePanel(null); setNotice(null); }}
@@ -582,6 +745,7 @@ function FactoryGame() {
             zoomOnDoubleClick={false}
             deleteKeyCode={null}
             fitViewOptions={{ padding: 0.18 }}
+            onlyRenderVisibleElements={game.settings.performanceMode}
             proOptions={{ hideAttribution: true }}
           >
             <Background variant={BackgroundVariant.Dots} gap={20} size={1.1} color="#3c4743" />
@@ -732,6 +896,24 @@ function FactoryGame() {
         onPlanShell={(systemId, layerId) => setGame((current) => planDysonShell(current, systemId, layerId))}
         onClearShell={(systemId, layerId) => setGame((current) => clearDysonShells(current, systemId, layerId))}
       />
+      <OperationsWorkspace
+        open={operationsOpen}
+        tab={operationsTab}
+        game={game}
+        alerts={alerts}
+        slots={saveSlots}
+        onClose={() => setOperationsOpen(false)}
+        onTabChange={setOperationsTab}
+        onAlertSelect={selectAlert}
+        onSettingsChange={updateSettings}
+        onManualSave={manualSave}
+        onExport={downloadSave}
+        onImport={importSave}
+        onSaveSlot={saveToSlot}
+        onLoadSlot={loadFromSlot}
+        onDeleteSlot={deleteSlot}
+      />
+      <OfflineReportWorkspace report={offlineReport} onClose={() => setOfflineReport(null)} />
       <button className="mobile-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setMobilePanel(null)} />
       <CargoCursor cargo={game.cargo} x={pointer.x} y={pointer.y} />
       {activeBlueprint ? <BlueprintPlacementCursor blueprint={activeBlueprint} x={pointer.x} y={pointer.y + (game.cargo ? 42 : 0)} /> : null}
