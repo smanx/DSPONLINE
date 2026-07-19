@@ -28,6 +28,8 @@ import type {
   BlueprintDefinition,
   BuildingId,
   ConstructionId,
+  DysonLayerState,
+  DysonSpherePlanState,
   EnergyMode,
   EntityOperatingStatus,
   FactoryEntity,
@@ -114,6 +116,33 @@ function copyState(state: GameState): GameState {
     ])) as GameState["planetMetrics"],
     dysonSwarm: { ...state.dysonSwarm },
     dysonSphere: { ...state.dysonSphere },
+    dysonPlans: Object.fromEntries(Object.entries(state.dysonPlans).map(([systemId, plan]) => [
+      systemId,
+      {
+        ...plan,
+        layers: plan.layers.map((layer) => ({
+          ...layer,
+          nodes: layer.nodes.map((node) => ({ ...node })),
+          frames: layer.frames.map((frame) => ({ ...frame })),
+          shells: layer.shells.map((shell) => ({ ...shell, boundaryFrameIds: [...shell.boundaryFrameIds] })),
+        })),
+      },
+    ])) as GameState["dysonPlans"],
+  };
+}
+
+function createEmptyDysonPlans(): GameState["dysonPlans"] {
+  const createPlan = (systemId: StarSystemId): DysonSpherePlanState => ({
+    systemId,
+    activeLayerId: null,
+    structurePoints: 0,
+    shellSails: 0,
+    layers: [],
+  });
+  return {
+    helios: createPlan("helios"),
+    borealis: createPlan("borealis"),
+    neutron: createPlan("neutron"),
   };
 }
 
@@ -159,7 +188,7 @@ function makeVein(id: string, planetId: PlanetId, resourceId: ItemId, x: number,
 export function createInitialState(): GameState {
   const planetMetrics = Object.fromEntries(PLANET_LIST.map((planet) => [planet.id, emptyMetrics()])) as GameState["planetMetrics"];
   return {
-    version: 14,
+    version: 15,
     nextId: 1,
     activePlanetId: "home",
     entities: [
@@ -265,6 +294,7 @@ export function createInitialState(): GameState {
       absorptionProgress: 0,
       generationKw: 0,
     },
+    dysonPlans: createEmptyDysonPlans(),
     paused: false,
   };
 }
@@ -532,28 +562,357 @@ function decayDysonSwarm(state: GameState, seconds: number): void {
   state.dysonSwarm.generationKw = state.dysonSwarm.sailsInOrbit * SOLAR_SAIL_POWER_KW;
 }
 
+function dysonFrameComplete(frame: DysonLayerState["frames"][number]): boolean {
+  return frame.completedStructurePoints >= frame.requiredStructurePoints;
+}
+
+function dysonShellActive(layer: DysonLayerState, shell: DysonLayerState["shells"][number]): boolean {
+  return shell.boundaryFrameIds.length > 0 && shell.boundaryFrameIds.every((frameId) => {
+    const frame = layer.frames.find((candidate) => candidate.id === frameId);
+    return Boolean(frame && dysonFrameComplete(frame));
+  });
+}
+
+function reconcileDysonPlan(plan: DysonSpherePlanState): void {
+  let structureBudget = Math.max(0, Math.floor(plan.structurePoints));
+  plan.structurePoints = structureBudget;
+  for (const layer of plan.layers) {
+    for (const node of layer.nodes) {
+      node.requiredStructurePoints = Math.max(1, Math.floor(node.requiredStructurePoints));
+      node.completedStructurePoints = Math.min(node.requiredStructurePoints, structureBudget);
+      structureBudget -= node.completedStructurePoints;
+    }
+    for (const frame of layer.frames) {
+      frame.requiredStructurePoints = Math.max(1, Math.floor(frame.requiredStructurePoints));
+      frame.completedStructurePoints = Math.min(frame.requiredStructurePoints, structureBudget);
+      structureBudget -= frame.completedStructurePoints;
+    }
+  }
+  let sailBudget = Math.max(0, Math.floor(plan.shellSails));
+  plan.shellSails = sailBudget;
+  for (const layer of plan.layers) {
+    for (const shell of layer.shells) {
+      shell.sailCapacity = Math.max(1, Math.floor(shell.sailCapacity));
+      shell.absorbedSails = dysonShellActive(layer, shell) ? Math.min(shell.sailCapacity, sailBudget) : 0;
+      sailBudget -= shell.absorbedSails;
+    }
+  }
+}
+
+function syncLegacySphereIntoPlans(state: GameState): void {
+  const plans = Object.values(state.dysonPlans);
+  const plannedStructure = plans.reduce((sum, plan) => sum + Math.max(0, Math.floor(plan.structurePoints)), 0);
+  const plannedSails = plans.reduce((sum, plan) => sum + Math.max(0, Math.floor(plan.shellSails)), 0);
+  if (state.dysonSphere.structurePoints > plannedStructure) {
+    state.dysonPlans.helios.structurePoints += Math.floor(state.dysonSphere.structurePoints - plannedStructure);
+  }
+  if (state.dysonSphere.shellSails > plannedSails) {
+    state.dysonPlans.helios.shellSails += Math.floor(state.dysonSphere.shellSails - plannedSails);
+  }
+  for (const plan of plans) reconcileDysonPlan(plan);
+}
+
+function dysonPlanShellCapacity(plan: DysonSpherePlanState): number {
+  const shells = plan.layers.flatMap((layer) => layer.shells.map((shell) => ({ layer, shell })));
+  if (shells.length === 0) return plan.layers.length === 0 ? plan.structurePoints * DYSON_SHELL_CAPACITY_PER_STRUCTURE : 0;
+  return shells.reduce((sum, entry) => sum + (dysonShellActive(entry.layer, entry.shell) ? entry.shell.sailCapacity : 0), 0);
+}
+
+export function getDysonShellCapacity(state: GameState): number {
+  const plans = Object.values(state.dysonPlans);
+  const hasPlannedLayer = plans.some((plan) => plan.layers.length > 0);
+  if (!hasPlannedLayer) return Math.floor(state.dysonSphere.structurePoints) * DYSON_SHELL_CAPACITY_PER_STRUCTURE;
+  return plans.reduce((sum, plan) => sum + dysonPlanShellCapacity(plan), 0);
+}
+
+export function getDysonPlanTotals(plan: DysonSpherePlanState) {
+  const nodes = plan.layers.flatMap((layer) => layer.nodes);
+  const frames = plan.layers.flatMap((layer) => layer.frames);
+  const shells = plan.layers.flatMap((layer) => layer.shells.map((shell) => ({ layer, shell })));
+  const plannedStructure = nodes.reduce((sum, node) => sum + node.requiredStructurePoints, 0) +
+    frames.reduce((sum, frame) => sum + frame.requiredStructurePoints, 0);
+  const completedStructure = nodes.reduce((sum, node) => sum + node.completedStructurePoints, 0) +
+    frames.reduce((sum, frame) => sum + frame.completedStructurePoints, 0);
+  return {
+    layerCount: plan.layers.length,
+    nodeCount: nodes.length,
+    frameCount: frames.length,
+    shellCount: shells.length,
+    plannedStructure,
+    completedStructure,
+    sailCapacity: shells.length > 0
+      ? shells.reduce((sum, entry) => sum + (dysonShellActive(entry.layer, entry.shell) ? entry.shell.sailCapacity : 0), 0)
+      : plan.layers.length === 0 ? plan.structurePoints * DYSON_SHELL_CAPACITY_PER_STRUCTURE : 0,
+    absorbedSails: plan.shellSails,
+  };
+}
+
+function normalizeDysonAngle(angle: number): number {
+  return ((Math.round(angle * 10) / 10) % 360 + 360) % 360;
+}
+
+function dysonFrameRequirement(radius: number, sourceAngle: number, targetAngle: number): number {
+  const direct = Math.abs(sourceAngle - targetAngle) % 360;
+  const arc = Math.min(direct, 360 - direct);
+  return Math.max(1, Math.ceil(radius / 10_000 * arc / 45));
+}
+
+function canEditDysonSystem(state: GameState, systemId: StarSystemId): boolean {
+  return isStarSystemUnlocked(state, systemId) && isTechnologyCompleted(state, "dyson_sphere_program");
+}
+
+export function addDysonLayer(state: GameState, systemId: StarSystemId): GameState {
+  if (!canEditDysonSystem(state, systemId) || state.dysonPlans[systemId].layers.length >= 8) return state;
+  const next = copyState(state);
+  syncLegacySphereIntoPlans(next);
+  const plan = next.dysonPlans[systemId];
+  const layer: DysonLayerState = {
+    id: `dyson_layer_${next.nextId}`,
+    name: `壳层 ${plan.layers.length + 1}`,
+    radius: 10_000 + plan.layers.length * 4_000,
+    inclination: 0,
+    longitude: 0,
+    nodes: [],
+    frames: [],
+    shells: [],
+  };
+  next.nextId += 1;
+  plan.layers.push(layer);
+  plan.activeLayerId = layer.id;
+  reconcileDysonPlan(plan);
+  return next;
+}
+
+export function createStandardDysonLayer(state: GameState, systemId: StarSystemId, nodeCount = 8): GameState {
+  if (!canEditDysonSystem(state, systemId) || state.dysonPlans[systemId].layers.length >= 8) return state;
+  const count = Math.max(3, Math.min(16, Math.floor(nodeCount)));
+  const next = copyState(state);
+  syncLegacySphereIntoPlans(next);
+  const plan = next.dysonPlans[systemId];
+  const radius = 10_000 + plan.layers.length * 4_000;
+  const layer: DysonLayerState = {
+    id: `dyson_layer_${next.nextId}`,
+    name: `标准壳层 ${plan.layers.length + 1}`,
+    radius,
+    inclination: plan.layers.length % 2 === 0 ? 0 : 18,
+    longitude: plan.layers.length * 24 % 360,
+    nodes: [],
+    frames: [],
+    shells: [],
+  };
+  next.nextId += 1;
+  for (let index = 0; index < count; index += 1) {
+    layer.nodes.push({
+      id: `dyson_node_${next.nextId}`,
+      angle: index * 360 / count,
+      requiredStructurePoints: 1,
+      completedStructurePoints: 0,
+    });
+    next.nextId += 1;
+  }
+  for (let index = 0; index < count; index += 1) {
+    const source = layer.nodes[index];
+    const target = layer.nodes[(index + 1) % count];
+    const frame = {
+      id: `dyson_frame_${next.nextId}`,
+      sourceNodeId: source.id,
+      targetNodeId: target.id,
+      requiredStructurePoints: dysonFrameRequirement(radius, source.angle, target.angle),
+      completedStructurePoints: 0,
+    };
+    next.nextId += 1;
+    layer.frames.push(frame);
+    if (isTechnologyCompleted(next, "dyson_shell")) {
+      layer.shells.push({
+        id: `dyson_shell_${next.nextId}`,
+        sourceNodeId: source.id,
+        targetNodeId: target.id,
+        boundaryFrameIds: [frame.id],
+        sailCapacity: frame.requiredStructurePoints * DYSON_SHELL_CAPACITY_PER_STRUCTURE,
+        absorbedSails: 0,
+      });
+      next.nextId += 1;
+    }
+  }
+  plan.layers.push(layer);
+  plan.activeLayerId = layer.id;
+  reconcileDysonPlan(plan);
+  return next;
+}
+
+export function setActiveDysonLayer(state: GameState, systemId: StarSystemId, layerId: string): GameState {
+  if (!state.dysonPlans[systemId].layers.some((layer) => layer.id === layerId)) return state;
+  return {
+    ...state,
+    dysonPlans: {
+      ...state.dysonPlans,
+      [systemId]: { ...state.dysonPlans[systemId], activeLayerId: layerId },
+    },
+  };
+}
+
+export function setDysonLayerOrbit(state: GameState, systemId: StarSystemId, layerId: string, orbit: { radius?: number; inclination?: number; longitude?: number }): GameState {
+  if (!canEditDysonSystem(state, systemId) || !state.dysonPlans[systemId].layers.some((layer) => layer.id === layerId)) return state;
+  const next = copyState(state);
+  const layer = next.dysonPlans[systemId].layers.find((candidate) => candidate.id === layerId)!;
+  if (orbit.radius != null) layer.radius = Math.max(5_000, Math.min(50_000, Math.round(orbit.radius)));
+  if (orbit.inclination != null) layer.inclination = Math.max(-90, Math.min(90, Math.round(orbit.inclination)));
+  if (orbit.longitude != null) layer.longitude = normalizeDysonAngle(orbit.longitude);
+  for (const frame of layer.frames) {
+    const source = layer.nodes.find((node) => node.id === frame.sourceNodeId);
+    const target = layer.nodes.find((node) => node.id === frame.targetNodeId);
+    if (source && target) frame.requiredStructurePoints = dysonFrameRequirement(layer.radius, source.angle, target.angle);
+  }
+  for (const shell of layer.shells) {
+    const frame = layer.frames.find((candidate) => shell.boundaryFrameIds.includes(candidate.id));
+    if (frame) shell.sailCapacity = frame.requiredStructurePoints * DYSON_SHELL_CAPACITY_PER_STRUCTURE;
+  }
+  reconcileDysonPlan(next.dysonPlans[systemId]);
+  return next;
+}
+
+export function removeDysonLayer(state: GameState, systemId: StarSystemId, layerId: string): GameState {
+  if (!canEditDysonSystem(state, systemId) || !state.dysonPlans[systemId].layers.some((layer) => layer.id === layerId)) return state;
+  const next = copyState(state);
+  const plan = next.dysonPlans[systemId];
+  plan.layers = plan.layers.filter((layer) => layer.id !== layerId);
+  if (plan.activeLayerId === layerId) plan.activeLayerId = plan.layers[0]?.id ?? null;
+  reconcileDysonPlan(plan);
+  return next;
+}
+
+export function addDysonNode(state: GameState, systemId: StarSystemId, layerId: string, angle: number): GameState {
+  const layer = state.dysonPlans[systemId].layers.find((candidate) => candidate.id === layerId);
+  const normalized = normalizeDysonAngle(angle);
+  if (!canEditDysonSystem(state, systemId) || !layer || layer.nodes.length >= 24 ||
+    layer.nodes.some((node) => Math.min(Math.abs(node.angle - normalized), 360 - Math.abs(node.angle - normalized)) < 5)) return state;
+  const next = copyState(state);
+  next.dysonPlans[systemId].layers.find((candidate) => candidate.id === layerId)!.nodes.push({
+    id: `dyson_node_${next.nextId}`,
+    angle: normalized,
+    requiredStructurePoints: 1,
+    completedStructurePoints: 0,
+  });
+  next.nextId += 1;
+  reconcileDysonPlan(next.dysonPlans[systemId]);
+  return next;
+}
+
+export function removeDysonNode(state: GameState, systemId: StarSystemId, layerId: string, nodeId: string): GameState {
+  const layer = state.dysonPlans[systemId].layers.find((candidate) => candidate.id === layerId);
+  if (!canEditDysonSystem(state, systemId) || !layer?.nodes.some((node) => node.id === nodeId)) return state;
+  const next = copyState(state);
+  const target = next.dysonPlans[systemId].layers.find((candidate) => candidate.id === layerId)!;
+  const removedFrameIds = new Set(target.frames.filter((frame) => frame.sourceNodeId === nodeId || frame.targetNodeId === nodeId).map((frame) => frame.id));
+  target.nodes = target.nodes.filter((node) => node.id !== nodeId);
+  target.frames = target.frames.filter((frame) => !removedFrameIds.has(frame.id));
+  target.shells = target.shells.filter((shell) => shell.sourceNodeId !== nodeId && shell.targetNodeId !== nodeId && !shell.boundaryFrameIds.some((frameId) => removedFrameIds.has(frameId)));
+  reconcileDysonPlan(next.dysonPlans[systemId]);
+  return next;
+}
+
+export function connectDysonNodes(state: GameState, systemId: StarSystemId, layerId: string, sourceNodeId: string, targetNodeId: string): GameState {
+  const layer = state.dysonPlans[systemId].layers.find((candidate) => candidate.id === layerId);
+  const source = layer?.nodes.find((node) => node.id === sourceNodeId);
+  const target = layer?.nodes.find((node) => node.id === targetNodeId);
+  const exists = layer?.frames.some((frame) =>
+    (frame.sourceNodeId === sourceNodeId && frame.targetNodeId === targetNodeId) ||
+    (frame.sourceNodeId === targetNodeId && frame.targetNodeId === sourceNodeId));
+  if (!canEditDysonSystem(state, systemId) || !layer || !source || !target || sourceNodeId === targetNodeId || exists) return state;
+  const next = copyState(state);
+  next.dysonPlans[systemId].layers.find((candidate) => candidate.id === layerId)!.frames.push({
+    id: `dyson_frame_${next.nextId}`,
+    sourceNodeId,
+    targetNodeId,
+    requiredStructurePoints: dysonFrameRequirement(layer.radius, source.angle, target.angle),
+    completedStructurePoints: 0,
+  });
+  next.nextId += 1;
+  reconcileDysonPlan(next.dysonPlans[systemId]);
+  return next;
+}
+
+export function autoConnectDysonLayer(state: GameState, systemId: StarSystemId, layerId: string): GameState {
+  const layer = state.dysonPlans[systemId].layers.find((candidate) => candidate.id === layerId);
+  if (!canEditDysonSystem(state, systemId) || !layer || layer.nodes.length < 3) return state;
+  let next = state;
+  const sorted = [...layer.nodes].sort((a, b) => a.angle - b.angle);
+  for (let index = 0; index < sorted.length; index += 1) {
+    next = connectDysonNodes(next, systemId, layerId, sorted[index].id, sorted[(index + 1) % sorted.length].id);
+  }
+  return next;
+}
+
+export function planDysonShell(state: GameState, systemId: StarSystemId, layerId: string): GameState {
+  if (!isTechnologyCompleted(state, "dyson_shell")) return state;
+  const connected = autoConnectDysonLayer(state, systemId, layerId);
+  const layer = connected.dysonPlans[systemId].layers.find((candidate) => candidate.id === layerId);
+  if (!layer || layer.nodes.length < 3) return state;
+  const next = copyState(connected);
+  const target = next.dysonPlans[systemId].layers.find((candidate) => candidate.id === layerId)!;
+  const sorted = [...target.nodes].sort((a, b) => a.angle - b.angle);
+  for (let index = 0; index < sorted.length; index += 1) {
+    const source = sorted[index];
+    const destination = sorted[(index + 1) % sorted.length];
+    const exists = target.shells.some((shell) =>
+      (shell.sourceNodeId === source.id && shell.targetNodeId === destination.id) ||
+      (shell.sourceNodeId === destination.id && shell.targetNodeId === source.id));
+    const frame = target.frames.find((candidate) =>
+      (candidate.sourceNodeId === source.id && candidate.targetNodeId === destination.id) ||
+      (candidate.sourceNodeId === destination.id && candidate.targetNodeId === source.id));
+    if (exists || !frame) continue;
+    target.shells.push({
+      id: `dyson_shell_${next.nextId}`,
+      sourceNodeId: source.id,
+      targetNodeId: destination.id,
+      boundaryFrameIds: [frame.id],
+      sailCapacity: frame.requiredStructurePoints * DYSON_SHELL_CAPACITY_PER_STRUCTURE,
+      absorbedSails: 0,
+    });
+    next.nextId += 1;
+  }
+  reconcileDysonPlan(next.dysonPlans[systemId]);
+  return next;
+}
+
+export function clearDysonShells(state: GameState, systemId: StarSystemId, layerId: string): GameState {
+  if (!canEditDysonSystem(state, systemId)) return state;
+  const next = copyState(state);
+  const layer = next.dysonPlans[systemId].layers.find((candidate) => candidate.id === layerId);
+  if (!layer) return state;
+  layer.shells = [];
+  reconcileDysonPlan(next.dysonPlans[systemId]);
+  return next;
+}
+
+function launchDysonStructure(state: GameState, systemId: StarSystemId, amount: number): void {
+  syncLegacySphereIntoPlans(state);
+  state.dysonPlans[systemId].structurePoints += Math.max(0, Math.floor(amount));
+  state.dysonSphere.totalRocketsLaunched = Math.floor(state.dysonSphere.totalRocketsLaunched + amount);
+  reconcileDysonPlan(state.dysonPlans[systemId]);
+  updateDysonSphereGeneration(state);
+}
+
 function updateDysonSphereGeneration(state: GameState): void {
+  syncLegacySphereIntoPlans(state);
+  state.dysonSphere.structurePoints = Object.values(state.dysonPlans).reduce((sum, plan) => sum + plan.structurePoints, 0);
+  state.dysonSphere.shellSails = Object.values(state.dysonPlans).reduce((sum, plan) => sum + plan.shellSails, 0);
   state.dysonSphere.generationKw =
     Math.floor(state.dysonSphere.structurePoints) * DYSON_STRUCTURE_POWER_KW +
     Math.floor(state.dysonSphere.shellSails) * DYSON_SHELL_SAIL_POWER_KW;
 }
 
 function absorbDysonSails(state: GameState, seconds: number): void {
+  updateDysonSphereGeneration(state);
   const structurePoints = Math.max(0, Math.floor(state.dysonSphere.structurePoints));
   const shellSails = Math.max(0, Math.floor(state.dysonSphere.shellSails));
-  state.dysonSphere.structurePoints = structurePoints;
-  state.dysonSphere.shellSails = shellSails;
-  if (!isTechnologyCompleted(state, "dyson_shell") || structurePoints < 1 || seconds <= EPSILON) {
-    updateDysonSphereGeneration(state);
-    return;
-  }
+  if (!isTechnologyCompleted(state, "dyson_shell") || structurePoints < 1 || seconds <= EPSILON) return;
 
-  const capacity = structurePoints * DYSON_SHELL_CAPACITY_PER_STRUCTURE;
+  const capacity = getDysonShellCapacity(state);
   const free = Math.max(0, capacity - shellSails);
   const sailsInOrbit = Math.max(0, Math.floor(state.dysonSwarm.sailsInOrbit));
   if (free < 1 || sailsInOrbit < 1) {
     if (free < 1) state.dysonSphere.absorptionProgress = 0;
-    updateDysonSphereGeneration(state);
     return;
   }
 
@@ -561,7 +920,14 @@ function absorbDysonSails(state: GameState, seconds: number): void {
     structurePoints * DYSON_SAIL_ABSORPTION_PER_STRUCTURE_PER_SECOND * seconds;
   const absorbed = Math.min(free, sailsInOrbit, Math.floor(accumulated + EPSILON));
   state.dysonSwarm.sailsInOrbit = sailsInOrbit - absorbed;
-  state.dysonSphere.shellSails = shellSails + absorbed;
+  let remaining = absorbed;
+  for (const plan of Object.values(state.dysonPlans)) {
+    const planFree = Math.max(0, dysonPlanShellCapacity(plan) - plan.shellSails);
+    const assigned = Math.min(remaining, planFree);
+    plan.shellSails += assigned;
+    remaining -= assigned;
+    reconcileDysonPlan(plan);
+  }
   state.dysonSphere.totalSailsAbsorbed = Math.floor(state.dysonSphere.totalSailsAbsorbed + absorbed);
   state.dysonSphere.absorptionProgress = round(Math.min(0.999999, Math.max(0, accumulated - absorbed)), 6);
   updateDysonSphereGeneration(state);
@@ -1120,8 +1486,7 @@ function runMachines(state: GameState, seconds: number, powerFactor: number, pla
         state.dysonSwarm.totalLaunched = Math.floor(state.dysonSwarm.totalLaunched + cycles);
       }
       if (recipe.id === "carrier_rocket_launch" && cycles > 0) {
-        state.dysonSphere.structurePoints = Math.floor(state.dysonSphere.structurePoints + cycles);
-        state.dysonSphere.totalRocketsLaunched = Math.floor(state.dysonSphere.totalRocketsLaunched + cycles);
+        launchDysonStructure(state, getPlanet(entity.planetId).systemId, cycles);
       }
       const extraProductBonus = getEntityExtraProductBonus(entity);
       for (const output of recipe.outputs) {

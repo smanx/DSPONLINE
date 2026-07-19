@@ -28,10 +28,13 @@ import { RecipeWorkspace } from "./components/RecipeWorkspace";
 import { StatisticsWorkspace } from "./components/StatisticsWorkspace";
 import { StarMapWorkspace } from "./components/StarMapWorkspace";
 import { BlueprintPlacementCursor, BlueprintWorkspace, CanvasSelectionTools, SelectionToolbar } from "./components/BlueprintWorkspace";
+import { DysonPlannerWorkspace } from "./components/DysonPlannerWorkspace";
 import { TechnologyWorkspace } from "./components/TechnologyWorkspace";
 import { ITEMS, getBeltConstructionId, getBuilding, getBuildingUpgradeTarget, getPlanet, getTechnology } from "./game/content";
 import {
   addBuildingToGroup,
+  addDysonLayer,
+  addDysonNode,
   adjustStationDrones,
   adjustStationWarpers,
   adjustStationVessels,
@@ -39,8 +42,11 @@ import {
   connectBelt,
   canPlaceBlueprint,
   canUpgradeEntities,
+  clearDysonShells,
+  connectDysonNodes,
   craftConstruction,
   createBlueprint,
+  createStandardDysonLayer,
   createInitialState,
   dropCargoToEntity,
   dropCargoToTray,
@@ -64,6 +70,8 @@ import {
   placeBlueprint,
   removeBelt,
   removeBlueprint,
+  removeDysonLayer,
+  removeDysonNode,
   removeEntity,
   removeEntities,
   removeQueuedTechnology,
@@ -71,6 +79,8 @@ import {
   setBeltPriority,
   setActivePlanet,
   setEntityRecipe,
+  setActiveDysonLayer,
+  setDysonLayerOrbit,
   setEnergyMode,
   setFuelItem,
   setLogisticsItem,
@@ -85,6 +95,8 @@ import {
   upgradeEntity,
   upgradeSorter,
   getBlueprintEligibleEntityIds,
+  autoConnectDysonLayer,
+  planDysonShell,
   renameBlueprint,
 } from "./game/engine";
 import { clearGame, loadGame, saveGame } from "./game/storage";
@@ -119,6 +131,7 @@ function FactoryGame() {
   const [recipesOpen, setRecipesOpen] = useState(false);
   const [starMapOpen, setStarMapOpen] = useState(false);
   const [blueprintsOpen, setBlueprintsOpen] = useState(false);
+  const [dysonPlannerOpen, setDysonPlannerOpen] = useState(false);
   const [blueprintPlacementId, setBlueprintPlacementId] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [miningEntityId, setMiningEntityId] = useState<string | null>(null);
@@ -190,6 +203,7 @@ function FactoryGame() {
         setRecipesOpen(false);
         setStarMapOpen(false);
         setBlueprintsOpen(false);
+        setDysonPlannerOpen(false);
         setBlueprintPlacementId(null);
         setSelectionMode(false);
         setSelectedEntityIds([]);
@@ -474,6 +488,7 @@ function FactoryGame() {
   const deployBlueprint = (blueprintId: string) => {
     setBlueprintPlacementId(blueprintId);
     setBlueprintsOpen(false);
+    setDysonPlannerOpen(false);
     setPlacement(null);
     setSelectionMode(false);
     setSelectedEntityIds([]);
@@ -514,6 +529,15 @@ function FactoryGame() {
       <div className="game-workspace">
         <ResourceRail
           game={game}
+          onOpenDysonPlanner={() => {
+            setDysonPlannerOpen(true);
+            setBlueprintsOpen(false);
+            setStarMapOpen(false);
+            setTechnologyOpen(false);
+            setStatisticsOpen(false);
+            setRecipesOpen(false);
+            setMobilePanel(null);
+          }}
           onPickTray={(itemId) => setGame((current) => pickFromTray(current, itemId))}
           onDropCargo={() => setGame((current) => dropCargoToTray(current))}
           onDropDraggedItem={(itemId, sourceKind, sourceId) => {
@@ -691,6 +715,22 @@ function FactoryGame() {
           if (blueprintPlacementId === blueprintId) setBlueprintPlacementId(null);
         }}
         onRename={(blueprintId, name) => setGame((current) => renameBlueprint(current, blueprintId, name))}
+      />
+      <DysonPlannerWorkspace
+        open={dysonPlannerOpen}
+        game={game}
+        onClose={() => setDysonPlannerOpen(false)}
+        onAddLayer={(systemId) => setGame((current) => addDysonLayer(current, systemId))}
+        onAddStandardLayer={(systemId) => setGame((current) => createStandardDysonLayer(current, systemId))}
+        onSelectLayer={(systemId, layerId) => setGame((current) => setActiveDysonLayer(current, systemId, layerId))}
+        onOrbitChange={(systemId, layerId, orbit) => setGame((current) => setDysonLayerOrbit(current, systemId, layerId, orbit))}
+        onRemoveLayer={(systemId, layerId) => setGame((current) => removeDysonLayer(current, systemId, layerId))}
+        onAddNode={(systemId, layerId, angle) => setGame((current) => addDysonNode(current, systemId, layerId, angle))}
+        onRemoveNode={(systemId, layerId, nodeId) => setGame((current) => removeDysonNode(current, systemId, layerId, nodeId))}
+        onConnectNodes={(systemId, layerId, sourceNodeId, targetNodeId) => setGame((current) => connectDysonNodes(current, systemId, layerId, sourceNodeId, targetNodeId))}
+        onAutoConnect={(systemId, layerId) => setGame((current) => autoConnectDysonLayer(current, systemId, layerId))}
+        onPlanShell={(systemId, layerId) => setGame((current) => planDysonShell(current, systemId, layerId))}
+        onClearShell={(systemId, layerId) => setGame((current) => clearDysonShells(current, systemId, layerId))}
       />
       <button className="mobile-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setMobilePanel(null)} />
       <CargoCursor cargo={game.cargo} x={pointer.x} y={pointer.y} />

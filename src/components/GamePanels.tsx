@@ -43,7 +43,7 @@ import {
 import { useState } from "react";
 import { ItemHoverCard } from "./ItemReference";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES_BY_BUILDING, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getSorterConstructionId, getTechnology, isConveyorBeltId } from "../game/content";
-import { DYSON_SHELL_CAPACITY_PER_STRUCTURE, RAY_RECEIVER_CAPACITY_KW, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMiningSpeedMultiplier, getPlanetMetrics, getProliferatorSprayCost, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationMinimumLoad, getStationVesselCapacity, getStationWarperCapacity, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
+import { RAY_RECEIVER_CAPACITY_KW, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMiningSpeedMultiplier, getPlanetMetrics, getProliferatorSprayCost, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationMinimumLoad, getStationVesselCapacity, getStationWarperCapacity, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import type {
   BeltTier,
   BeltConnection,
@@ -76,12 +76,13 @@ function ItemMark({ itemId }: { itemId: ItemId }) {
 
 interface ResourceRailProps {
   game: GameState;
+  onOpenDysonPlanner: () => void;
   onPickTray: (itemId: ItemId) => void;
   onDropCargo: () => void;
   onDropDraggedItem: (itemId: ItemId, sourceKind: DraggedItemSourceKind, sourceId?: string) => void;
 }
 
-export function ResourceRail({ game, onPickTray, onDropCargo, onDropDraggedItem }: ResourceRailProps) {
+export function ResourceRail({ game, onOpenDysonPlanner, onPickTray, onDropCargo, onDropDraggedItem }: ResourceRailProps) {
   const [dragOver, setDragOver] = useState(false);
   const trayItems = (Object.entries(game.tray) as Array<[ItemId, number]>)
     .filter(([, amount]) => amount > 0.001)
@@ -143,7 +144,7 @@ export function ResourceRail({ game, onPickTray, onDropCargo, onDropDraggedItem 
   const swarmLoad = dysonGenerationKw > 0
     ? Math.min(100, game.dysonSwarm.receiverLoadKw / dysonGenerationKw * 100)
     : 0;
-  const shellCapacity = game.dysonSphere.structurePoints * DYSON_SHELL_CAPACITY_PER_STRUCTURE;
+  const shellCapacity = getDysonShellCapacity(game);
 
   return (
     <aside
@@ -222,6 +223,7 @@ export function ResourceRail({ game, onPickTray, onDropCargo, onDropDraggedItem 
           <span>运载火箭 <strong>{formatAmount(game.dysonSphere.totalRocketsLaunched)}</strong></span>
           <span>永久吸附 <strong>{formatAmount(game.dysonSphere.totalSailsAbsorbed)}</strong></span>
         </div>
+        <button className="dyson-planner-command" type="button" onClick={onOpenDysonPlanner} title="打开戴森球规划"><Orbit size={14} />戴森球规划</button>
       </section>
 
       <section className="rail-block tray-block">

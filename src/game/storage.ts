@@ -7,7 +7,7 @@ import {
   createInitialState,
 } from "./engine";
 import { BUILDINGS, ITEMS, PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, getBuilding, getExtractorBuildingId, getPlanet, getRecipe, getTechnology } from "./content";
-import type { BeltConnection, BeltTier, BlueprintDefinition, BuildingId, ConstructionId, EnergyMode, FactoryEntity, GameState, ItemId, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad, TechId } from "./types";
+import type { BeltConnection, BeltTier, BlueprintDefinition, BuildingId, ConstructionId, DysonLayerState, DysonSpherePlanState, EnergyMode, FactoryEntity, GameState, ItemId, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad, TechId } from "./types";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
 
@@ -114,7 +114,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
   const entities = saved.entities.map((entity: FactoryEntity) => {
     const currentResource = saved.version < 13
@@ -342,10 +342,87 @@ function migrateGame(value: unknown): GameState | null {
     absorptionProgress: saved.version >= 7 ? nonNegativeNumber(saved.dysonSphere?.absorptionProgress) % 1 : 0,
     generationKw: structurePoints * DYSON_STRUCTURE_POWER_KW + shellSails * DYSON_SHELL_SAIL_POWER_KW,
   };
+  const dysonPlans = Object.fromEntries((Object.keys(STAR_SYSTEMS) as StarSystemId[]).map((systemId) => {
+    const savedPlan = saved.version >= 15 ? saved.dysonPlans?.[systemId] : undefined;
+    const layers: DysonLayerState[] = Array.isArray(savedPlan?.layers) ? savedPlan.layers.flatMap((layer: Record<string, any>, layerIndex: number) => {
+      const nodes = Array.isArray(layer.nodes) ? layer.nodes.flatMap((node: Record<string, any>, nodeIndex: number) => {
+        const required = Math.max(1, nonNegativeInteger(node.requiredStructurePoints));
+        const rawAngle = typeof node.angle === "number" && Number.isFinite(node.angle) ? node.angle : 0;
+        return [{
+          id: typeof node.id === "string" && node.id ? node.id : `dyson_node_migrated_${layerIndex}_${nodeIndex}`,
+          angle: ((rawAngle % 360) + 360) % 360,
+          requiredStructurePoints: required,
+          completedStructurePoints: Math.min(required, nonNegativeInteger(node.completedStructurePoints)),
+        }];
+      }) : [];
+      const nodeIds = new Set(nodes.map((node) => node.id));
+      const frames = Array.isArray(layer.frames) ? layer.frames.flatMap((frame: Record<string, any>, frameIndex: number) => {
+        if (!nodeIds.has(frame.sourceNodeId) || !nodeIds.has(frame.targetNodeId) || frame.sourceNodeId === frame.targetNodeId) return [];
+        const required = Math.max(1, nonNegativeInteger(frame.requiredStructurePoints));
+        return [{
+          id: typeof frame.id === "string" && frame.id ? frame.id : `dyson_frame_migrated_${layerIndex}_${frameIndex}`,
+          sourceNodeId: frame.sourceNodeId as string,
+          targetNodeId: frame.targetNodeId as string,
+          requiredStructurePoints: required,
+          completedStructurePoints: Math.min(required, nonNegativeInteger(frame.completedStructurePoints)),
+        }];
+      }) : [];
+      const frameIds = new Set(frames.map((frame) => frame.id));
+      const shells = Array.isArray(layer.shells) ? layer.shells.flatMap((shell: Record<string, any>, shellIndex: number) => {
+        const boundaryFrameIds = Array.isArray(shell.boundaryFrameIds)
+          ? [...new Set((shell.boundaryFrameIds as unknown[]).filter((frameId): frameId is string => typeof frameId === "string" && frameIds.has(frameId)))]
+          : [];
+        if (!nodeIds.has(shell.sourceNodeId) || !nodeIds.has(shell.targetNodeId) || boundaryFrameIds.length === 0) return [];
+        const capacity = Math.max(1, nonNegativeInteger(shell.sailCapacity));
+        return [{
+          id: typeof shell.id === "string" && shell.id ? shell.id : `dyson_shell_migrated_${layerIndex}_${shellIndex}`,
+          sourceNodeId: shell.sourceNodeId as string,
+          targetNodeId: shell.targetNodeId as string,
+          boundaryFrameIds,
+          sailCapacity: capacity,
+          absorbedSails: Math.min(capacity, nonNegativeInteger(shell.absorbedSails)),
+        }];
+      }) : [];
+      const radius = typeof layer.radius === "number" && Number.isFinite(layer.radius) ? layer.radius : 10_000;
+      const inclination = typeof layer.inclination === "number" && Number.isFinite(layer.inclination) ? layer.inclination : 0;
+      const longitude = typeof layer.longitude === "number" && Number.isFinite(layer.longitude) ? layer.longitude : 0;
+      return [{
+        id: typeof layer.id === "string" && layer.id ? layer.id : `dyson_layer_migrated_${layerIndex}`,
+        name: typeof layer.name === "string" && layer.name.trim() ? layer.name.trim().slice(0, 32) : `壳层 ${layerIndex + 1}`,
+        radius: Math.max(5_000, Math.min(50_000, Math.round(radius))),
+        inclination: Math.max(-90, Math.min(90, Math.round(inclination))),
+        longitude: ((longitude % 360) + 360) % 360,
+        nodes,
+        frames,
+        shells,
+      }];
+    }) : [];
+    const activeLayerId = typeof savedPlan?.activeLayerId === "string" && layers.some((layer) => layer.id === savedPlan.activeLayerId)
+      ? savedPlan.activeLayerId as string
+      : layers[0]?.id ?? null;
+    return [systemId, {
+      systemId,
+      activeLayerId,
+      structurePoints: saved.version >= 15
+        ? nonNegativeInteger(savedPlan?.structurePoints)
+        : systemId === "helios" ? structurePoints : 0,
+      shellSails: saved.version >= 15
+        ? nonNegativeInteger(savedPlan?.shellSails)
+        : systemId === "helios" ? shellSails : 0,
+      layers,
+    } satisfies DysonSpherePlanState];
+  })) as GameState["dysonPlans"];
+  const plannedStructurePoints = Object.values(dysonPlans).reduce((sum, plan) => sum + plan.structurePoints, 0);
+  const plannedShellSails = Object.values(dysonPlans).reduce((sum, plan) => sum + plan.shellSails, 0);
+  dysonSphere.structurePoints = Math.max(dysonSphere.structurePoints, plannedStructurePoints);
+  dysonSphere.shellSails = Math.max(dysonSphere.shellSails, plannedShellSails);
+  dysonSphere.totalRocketsLaunched = Math.max(dysonSphere.totalRocketsLaunched, dysonSphere.structurePoints);
+  dysonSphere.totalSailsAbsorbed = Math.max(dysonSphere.totalSailsAbsorbed, dysonSphere.shellSails);
+  dysonSphere.generationKw = dysonSphere.structurePoints * DYSON_STRUCTURE_POWER_KW + dysonSphere.shellSails * DYSON_SHELL_SAIL_POWER_KW;
   const sailsInOrbit = saved.version >= 6 ? nonNegativeInteger(saved.dysonSwarm?.sailsInOrbit) : 0;
   const totalExpired = saved.version >= 6 ? nonNegativeInteger(saved.dysonSwarm?.totalExpired) : 0;
   const totalLaunched = saved.version >= 6
-    ? Math.max(sailsInOrbit + totalExpired + totalSailsAbsorbed, nonNegativeInteger(saved.dysonSwarm?.totalLaunched))
+    ? Math.max(sailsInOrbit + totalExpired + dysonSphere.totalSailsAbsorbed, nonNegativeInteger(saved.dysonSwarm?.totalLaunched))
     : 0;
   const swarmGenerationKw = sailsInOrbit * SOLAR_SAIL_POWER_KW;
   const dysonSwarm: GameState["dysonSwarm"] = {
@@ -362,7 +439,7 @@ function migrateGame(value: unknown): GameState | null {
   return {
     ...initial,
     ...saved,
-    version: 14,
+    version: 15,
     activePlanetId,
     entities,
     belts,
@@ -383,6 +460,7 @@ function migrateGame(value: unknown): GameState | null {
     planetMetrics,
     dysonSwarm,
     dysonSphere,
+    dysonPlans,
   } as GameState;
 }
 

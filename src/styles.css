@@ -305,6 +305,27 @@ select:focus-visible {
   font-size: 8px;
 }
 
+.dyson-planner-command {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 9px;
+  border: 1px solid #3c5f57;
+  border-radius: 4px;
+  background: #16221e;
+  color: var(--cyan);
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.dyson-planner-command:hover {
+  border-color: var(--cyan-deep);
+  background: #192b25;
+}
+
 .dyson-orbit-readout strong {
   color: var(--text);
   font-size: 15px;
@@ -3633,6 +3654,576 @@ select:focus-visible {
   display: none;
 }
 
+.dyson-planner-workspace {
+  position: fixed;
+  z-index: 92;
+  inset: 68px 0 108px;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: 64px minmax(0, 1fr);
+  background: #0a0f0d;
+}
+
+.dyson-planner-header {
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) auto 48px;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  background: #111714;
+}
+
+.dyson-planner-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 11px;
+  padding: 0 18px;
+}
+
+.dyson-planner-title > i {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  border: 1px solid #675a36;
+  border-radius: 50%;
+  color: var(--yellow);
+  font-style: normal;
+}
+
+.dyson-planner-title > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dyson-planner-title span,
+.dyson-planner-headline span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.dyson-planner-title strong {
+  font-size: 17px;
+}
+
+.dyson-planner-headline {
+  display: flex;
+  gap: 20px;
+  padding: 0 18px;
+}
+
+.dyson-planner-headline strong {
+  margin-left: 4px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.dyson-planner-close {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-self: center;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+.dyson-planner-layout {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: 220px minmax(360px, 1fr) 294px;
+}
+
+.dyson-plan-sidebar,
+.dyson-layer-inspector {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+  background: #101613;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.dyson-plan-sidebar {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+}
+
+.dyson-layer-inspector {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+}
+
+.dyson-system-tabs {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--line);
+}
+
+.dyson-system-tabs button {
+  display: grid;
+  min-height: 48px;
+  grid-template-columns: 27px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.dyson-system-tabs button:last-child {
+  border-bottom: 0;
+}
+
+.dyson-system-tabs button.active {
+  background: #18231f;
+}
+
+.dyson-system-tabs button > i {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-style: normal;
+}
+
+.dyson-system-tabs button > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dyson-system-tabs strong {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dyson-system-tabs small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.dyson-layer-heading {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 11px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.dyson-layer-heading strong {
+  color: var(--text-soft);
+}
+
+.dyson-layer-list {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+.dyson-layer-list > button {
+  display: grid;
+  width: 100%;
+  min-height: 54px;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.dyson-layer-list > button.active {
+  box-shadow: inset 3px 0 0 var(--cyan);
+  background: #18221e;
+}
+
+.dyson-layer-list > button > b {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  color: var(--cyan);
+  font-size: 8px;
+}
+
+.dyson-layer-list > button > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dyson-layer-list > button strong {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dyson-layer-list > button small,
+.dyson-layer-list > button em {
+  color: var(--muted);
+  font-size: 7px;
+  font-style: normal;
+}
+
+.dyson-layer-list > button em {
+  color: var(--yellow);
+}
+
+.dyson-layer-empty,
+.dyson-inspector-empty {
+  display: flex;
+  min-height: 150px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.dyson-layer-commands {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-top: 1px solid var(--line);
+}
+
+.dyson-layer-commands button,
+.dyson-layer-actions button {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-right: 1px solid var(--line);
+  background: #16201c;
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: 8px;
+}
+
+.dyson-layer-commands button:last-child {
+  border-right: 0;
+}
+
+.dyson-layer-commands button:disabled,
+.dyson-layer-actions button:disabled {
+  color: #505a56;
+  cursor: default;
+}
+
+.dyson-orbit-stage {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: 42px minmax(0, 1fr);
+  place-items: center;
+  overflow: hidden;
+  background: #0a0f0d;
+}
+
+.dyson-stage-summary {
+  z-index: 2;
+  display: flex;
+  width: 100%;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.dyson-stage-summary span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 8px;
+}
+
+.dyson-stage-summary svg,
+.dyson-stage-summary strong {
+  color: var(--cyan);
+}
+
+.dyson-orbit-canvas {
+  width: min(100%, calc(100vh - 240px));
+  max-width: 720px;
+  height: auto;
+  aspect-ratio: 1;
+  overflow: visible;
+  cursor: crosshair;
+}
+
+.dyson-star-halo {
+  fill: none;
+  stroke: #6a5d38;
+  stroke-width: 1;
+}
+
+.dyson-star-core {
+  fill: currentColor;
+  stroke: #f0d27d;
+  stroke-width: 2;
+}
+
+.dyson-orbit-ring {
+  fill: none;
+  stroke: #45534d;
+  stroke-dasharray: 4 6;
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.dyson-orbit-layer.active .dyson-orbit-ring {
+  stroke: var(--cyan);
+  stroke-width: 1.8;
+}
+
+.dyson-shell-sector {
+  fill: #4c9388;
+  stroke: none;
+}
+
+.dyson-frame {
+  stroke: #6c6250;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.dyson-frame--complete {
+  stroke: var(--yellow);
+}
+
+.dyson-orbit-node {
+  fill: #171e1b;
+  stroke: #9a8759;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  cursor: pointer;
+}
+
+.dyson-orbit-node--complete {
+  fill: var(--yellow);
+  stroke: #f2d47f;
+}
+
+.dyson-orbit-node.selected {
+  fill: var(--cyan);
+  stroke: #d4f1ea;
+  stroke-width: 3;
+}
+
+.dyson-planner-lock {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: #151a18;
+  color: var(--muted);
+  font-size: 10px;
+  transform: translate(-50%, -50%);
+}
+
+.dyson-layer-inspector > header {
+  display: grid;
+  min-height: 64px;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dyson-layer-inspector > header > i {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid #635838;
+  border-radius: 50%;
+  color: var(--yellow);
+  font-style: normal;
+}
+
+.dyson-layer-inspector > header > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dyson-layer-inspector > header span {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.dyson-layer-inspector > header strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dyson-layer-inspector > header em {
+  color: var(--cyan);
+  font-size: 8px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.dyson-orbit-control {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dyson-orbit-control > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.dyson-orbit-control strong {
+  color: var(--text-soft);
+  font-size: 9px;
+}
+
+.dyson-orbit-control input {
+  width: 100%;
+  accent-color: var(--cyan);
+}
+
+.dyson-layer-ledger {
+  padding: 9px 13px;
+}
+
+.dyson-layer-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 8px;
+  border-block: 1px solid var(--line);
+}
+
+.dyson-layer-actions button:last-child {
+  border-right: 0;
+}
+
+.dyson-node-selection {
+  display: grid;
+  min-height: 42px;
+  grid-template-columns: minmax(0, 1fr) auto 34px;
+  align-items: center;
+  gap: 7px;
+  padding-left: 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.dyson-node-selection > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.dyson-node-selection strong {
+  color: var(--cyan);
+}
+
+.dyson-node-selection button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.dyson-node-selection button:hover {
+  color: var(--coral);
+}
+
+.dyson-layer-remove {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 12px;
+  border: 1px solid #623b34;
+  border-radius: 4px;
+  background: #251714;
+  color: #d78978;
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.dyson-plan-status {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-top: auto;
+  border-top: 1px solid var(--line);
+}
+
+.dyson-plan-status span {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-right: 1px solid var(--line);
+  color: var(--text-soft);
+  font-size: 8px;
+}
+
+.dyson-plan-status span:last-child {
+  border-right: 0;
+}
+
 .blueprint-workspace {
   position: fixed;
   z-index: 90;
@@ -4902,6 +5493,99 @@ select:focus-visible {
     grid-template-rows: 56px minmax(0, 1fr);
   }
 
+  .dyson-planner-workspace {
+    inset: 58px 0 96px;
+    grid-template-rows: 56px minmax(0, 1fr);
+  }
+
+  .dyson-planner-header {
+    grid-template-columns: minmax(150px, 1fr) auto 42px;
+  }
+
+  .dyson-planner-title {
+    gap: 8px;
+    padding: 0 9px;
+  }
+
+  .dyson-planner-title > i {
+    width: 32px;
+    height: 32px;
+    flex-basis: 32px;
+  }
+
+  .dyson-planner-title span,
+  .dyson-planner-headline span:not(:first-child) {
+    display: none;
+  }
+
+  .dyson-planner-title strong {
+    font-size: 14px;
+  }
+
+  .dyson-planner-headline {
+    padding: 0 5px;
+  }
+
+  .dyson-planner-layout {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    overflow: auto;
+  }
+
+  .dyson-plan-sidebar,
+  .dyson-layer-inspector {
+    flex: 0 0 auto;
+    overflow: visible;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .dyson-system-tabs {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .dyson-system-tabs button {
+    min-width: 138px;
+    border-right: 1px solid var(--line);
+    border-bottom: 0;
+  }
+
+  .dyson-layer-list {
+    display: flex;
+    max-height: 112px;
+    overflow-x: auto;
+  }
+
+  .dyson-layer-list > button {
+    min-width: 190px;
+    border-right: 1px solid var(--line);
+  }
+
+  .dyson-layer-empty {
+    width: 100%;
+    min-height: 62px;
+  }
+
+  .dyson-orbit-stage {
+    flex: 0 0 auto;
+    min-height: 390px;
+    grid-template-rows: 42px 348px;
+  }
+
+  .dyson-orbit-canvas {
+    width: min(100%, 348px);
+  }
+
+  .dyson-layer-inspector {
+    min-height: 360px;
+  }
+
+  .dyson-plan-status {
+    margin-top: 12px;
+  }
+
   .blueprint-workspace {
     inset: 58px 0 96px;
     grid-template-rows: 56px minmax(0, 1fr);
@@ -5381,6 +6065,38 @@ select:focus-visible {
 
   .star-map-header {
     grid-template-columns: minmax(148px, 1fr) auto 38px;
+  }
+
+  .dyson-planner-header {
+    grid-template-columns: minmax(145px, 1fr) auto 38px;
+  }
+
+  .dyson-planner-headline span {
+    display: none;
+  }
+
+  .dyson-planner-headline::after {
+    content: "轨道规划";
+    color: var(--muted);
+    font-size: 8px;
+  }
+
+  .dyson-stage-summary {
+    gap: 9px;
+  }
+
+  .dyson-stage-summary span {
+    gap: 3px;
+    font-size: 7px;
+  }
+
+  .dyson-orbit-stage {
+    min-height: 362px;
+    grid-template-rows: 42px 320px;
+  }
+
+  .dyson-orbit-canvas {
+    width: min(100%, 320px);
   }
 
   .blueprint-header {

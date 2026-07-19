@@ -555,17 +555,47 @@ async function openChemicalRoutingGame(page: Page) {
       nextId: 5,
       activePlanetId: "home",
       entities: [
-        { ...entityBase, id: "plastic_source", kind: "storage", position: { x: 250, y: -430 }, buildingId: "storage_mk1", storedItemId: "plastic", outputs: { plastic: 20 } },
-        { ...entityBase, id: "oil_source", kind: "storage", position: { x: 250, y: -150 }, buildingId: "storage_tank", storedItemId: "refined_oil", outputs: { refined_oil: 20 } },
-        { ...entityBase, id: "water_source", kind: "storage", position: { x: 250, y: 130 }, buildingId: "storage_tank", storedItemId: "water", outputs: { water: 20 } },
-        { ...entityBase, id: "organic_chemical", kind: "machine", position: { x: 720, y: -150 }, buildingId: "chemical_plant", recipeId: "organic_crystal", outputs: {} },
+        { ...entityBase, id: "plastic_source", kind: "machine", position: { x: 250, y: -430 }, buildingId: "chemical_plant", recipeId: "plastic", outputs: { plastic: 20 } },
+        { ...entityBase, id: "oil_source", kind: "machine", position: { x: 250, y: -150 }, buildingId: "oil_refinery", recipeId: "plasma_refining", outputs: { refined_oil: 20 } },
+        { ...entityBase, id: "water_source", kind: "vein", position: { x: 250, y: 130 }, resourceId: "water", outputs: { water: 20 } },
+        { ...entityBase, id: "organic_chemical", kind: "machine", position: { x: 720, y: -150 }, buildingId: "chemical_plant", recipeId: "plastic", outputs: {} },
       ],
       belts: [],
       construction: { conveyor_belt_mk1: 3 },
       tray: {},
       planetTrays: { home: {}, ashen: {}, giant: {} },
       totalProduced: {},
-      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["polymer_chemistry"] },
+      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["high_efficiency_plasma_control", "basic_chemical_engineering", "polymer_chemistry"] },
+      paused: false,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
+async function openDysonPlannerGame(page: Page) {
+  await page.addInitScript(() => {
+    const state = {
+      version: 14,
+      nextId: 1,
+      activePlanetId: "home",
+      entities: [],
+      belts: [],
+      construction: {},
+      tray: {},
+      planetTrays: { home: {}, ashen: {}, giant: {}, frost: {}, boreal_giant: {}, magnetar: {} },
+      totalProduced: {},
+      research: {
+        selectedTechId: null,
+        queuedTechIds: [],
+        progressByTech: {},
+        completedTechIds: ["dyson_sphere_program", "dyson_shell"],
+      },
+      exploration: { unlockedSystemIds: ["helios", "borealis"] },
+      blueprints: [],
+      dysonSwarm: { sailsInOrbit: 0, totalLaunched: 0, totalExpired: 0, decayProgress: 0, generationKw: 0, receiverLoadKw: 0 },
+      dysonSphere: { structurePoints: 32, totalRocketsLaunched: 32, shellSails: 0, totalSailsAbsorbed: 0, absorptionProgress: 0, generationKw: 30_720 },
       paused: true,
     };
     window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
@@ -1635,31 +1665,81 @@ test("a chemical plant accepts plastic, refined oil and water transport lines to
   await page.setViewportSize({ width: 1440, height: 900 });
   await openChemicalRoutingGame(page);
   await page.locator(".react-flow__controls-fitview").click();
-  const chemical = page.locator(".machine-node").filter({ hasText: "有机晶体" });
+  const chemical = page.locator('.react-flow__node[data-id="organic_chemical"] .machine-node');
+  await chemical.click();
+  await chemical.locator(".node-inline-select select").selectOption("organic_crystal");
+  await expect(chemical).toContainText("有机晶体");
   await expect(chemical.getByTitle("投入塑料")).toBeVisible();
   await expect(chemical.getByTitle("投入精炼油")).toBeVisible();
   await expect(chemical.getByTitle("投入水")).toBeVisible();
 
-  const connect = async (sourceText: string, itemText: string, expectedEdges: number) => {
-    const source = page.locator(".logistics-node").filter({ hasText: sourceText }).locator(".factory-handle--output");
+  const connect = async (sourceId: string, itemText: string, expectedEdges: number) => {
+    const source = page.locator(`.react-flow__node[data-id="${sourceId}"]`).locator(".node-port").filter({ hasText: itemText }).locator(".factory-handle--output");
     const target = chemical.locator(".node-port--input").filter({ hasText: itemText }).locator(".factory-handle--input");
     const sourceBox = await source.boundingBox();
     const targetBox = await target.boundingBox();
     expect(sourceBox).not.toBeNull();
     expect(targetBox).not.toBeNull();
-    await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
+    await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2);
     await page.mouse.down();
-    await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 12 });
-    await page.waitForTimeout(120);
+    await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2, { steps: 12 });
+    await page.waitForTimeout(600);
     await page.mouse.up();
     await expect(page.locator(".react-flow__edge")).toHaveCount(expectedEdges);
   };
 
-  await connect("塑料", "塑料", 1);
-  await connect("精炼油", "精炼油", 2);
-  await connect("水", "水", 3);
+  await connect("plastic_source", "塑料", 1);
+  await connect("oil_source", "精炼油", 2);
+  await connect("water_source", "水", 3);
   await expect(page.getByTitle("选择传送带 Mk.I连接节点端口", { exact: true })).toContainText("×0");
   await page.screenshot({ path: "artifacts/qa/chemical-three-input-routing-1440.png", fullPage: true });
+});
+
+test("Dyson planner builds independent orbital layers across unlocked star systems", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDysonPlannerGame(page);
+  await page.getByTitle("打开戴森球规划").click();
+  const planner = page.getByRole("dialog", { name: "戴森球规划" });
+  await expect(planner).toBeVisible();
+  await expect(planner.getByTitle("规划赫利俄斯戴森球")).toBeVisible();
+  await expect(planner.getByTitle("规划北冕座戴森球")).toBeVisible();
+
+  await planner.getByTitle("新建八节点闭合标准壳层").click();
+  const summary = planner.locator(".dyson-stage-summary");
+  await expect(summary.locator("span").filter({ hasText: "节点" })).toContainText("8");
+  await expect(summary.locator("span").filter({ hasText: "框架" })).toContainText("8");
+  await expect(summary.locator("span").filter({ hasText: "壳面" })).toContainText("8");
+  await expect(planner.locator(".dyson-layer-list > button")).toHaveCount(1);
+
+  const radius = planner.locator(".dyson-orbit-control").filter({ hasText: "轨道半径" });
+  const inclination = planner.locator(".dyson-orbit-control").filter({ hasText: "轨道倾角" });
+  const longitude = planner.locator(".dyson-orbit-control").filter({ hasText: "升交点经度" });
+  await radius.locator("input").fill("20000");
+  await inclination.locator("input").fill("37");
+  await longitude.locator("input").fill("124");
+  await expect(radius).toContainText("20,000 m");
+  await expect(inclination).toContainText("37°");
+  await expect(longitude).toContainText("124°");
+
+  await planner.getByTitle("规划北冕座戴森球").click();
+  await expect(planner.locator(".dyson-layer-list > button")).toHaveCount(0);
+  await planner.getByTitle("新建八节点闭合标准壳层").click();
+  await expect(planner.locator(".dyson-layer-list > button")).toHaveCount(1);
+  await expect(planner.locator(".dyson-layer-inspector > header")).toContainText("标准壳层 1");
+
+  await planner.getByTitle("规划赫利俄斯戴森球").click();
+  await expect(radius.locator("input")).toHaveValue("20000");
+  await expect(inclination.locator("input")).toHaveValue("37");
+  await expect(longitude.locator("input")).toHaveValue("124");
+  await expect(planner.locator(".dyson-orbit-node")).toHaveCount(8);
+  await page.screenshot({ path: "artifacts/qa/dyson-planner-1440.png", fullPage: true });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await planner.locator(".dyson-orbit-stage").scrollIntoViewIfNeeded();
+  await expect.poll(async () => planner.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await expect(planner.locator(".dyson-orbit-canvas")).toBeVisible();
+  await page.screenshot({ path: "artifacts/qa/dyson-planner-390.png", fullPage: true });
 });
 
 test("planetary drones, orbital collection, station warpers and sorter upgrades form a complete logistics layer", async ({ page }) => {

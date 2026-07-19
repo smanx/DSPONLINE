@@ -453,6 +453,49 @@ export interface DysonSphereState {
   generationKw: number;
 }
 
+export interface DysonNodeState {
+  id: string;
+  angle: number;
+  requiredStructurePoints: number;
+  completedStructurePoints: number;
+}
+
+export interface DysonFrameState {
+  id: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  requiredStructurePoints: number;
+  completedStructurePoints: number;
+}
+
+export interface DysonShellState {
+  id: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  boundaryFrameIds: string[];
+  sailCapacity: number;
+  absorbedSails: number;
+}
+
+export interface DysonLayerState {
+  id: string;
+  name: string;
+  radius: number;
+  inclination: number;
+  longitude: number;
+  nodes: DysonNodeState[];
+  frames: DysonFrameState[];
+  shells: DysonShellState[];
+}
+
+export interface DysonSpherePlanState {
+  systemId: StarSystemId;
+  activeLayerId: string | null;
+  structurePoints: number;
+  shellSails: number;
+  layers: DysonLayerState[];
+}
+
 export interface EntityOperatingStatus {
   code:
     | "running"
@@ -528,7 +571,7 @@ export interface BlueprintDefinition {
 }
 
 export interface GameState {
-  version: 14;
+  version: 15;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -547,6 +590,7 @@ export interface GameState {
   planetMetrics: Record<PlanetId, FactoryMetrics>;
   dysonSwarm: DysonSwarmState;
   dysonSphere: DysonSphereState;
+  dysonPlans: Record<StarSystemId, DysonSpherePlanState>;
   paused: boolean;
 }
 

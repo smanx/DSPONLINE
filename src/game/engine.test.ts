@@ -21,12 +21,15 @@ import {
   craftConstruction,
   createBlueprint,
   createInitialState,
+  createStandardDysonLayer,
   dropCargoToEntity,
   dropCargoToTray,
   exploreStarSystem,
   getEntityOperatingStatus,
   getBeltCapacity,
   getBlueprintRequirements,
+  getDysonPlanTotals,
+  getDysonShellCapacity,
   getEntityExtraProductBonus,
   getEntityProliferatorPowerMultiplier,
   getEntityProliferatorSpeedMultiplier,
@@ -46,6 +49,7 @@ import {
   placeBuilding,
   placeBlueprint,
   removeEntity,
+  removeDysonNode,
   removeQueuedTechnology,
   selectTechnology,
   setActivePlanet,
@@ -1345,6 +1349,89 @@ describe("factory simulation", () => {
       graviton_lens: 0,
       quantum_chip: 0,
     });
+  });
+
+  it("creates an eight-node standard Dyson layer with closed frames and shell sectors", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("dyson_sphere_program", "dyson_shell");
+    state = createStandardDysonLayer(state, "helios");
+
+    const layer = state.dysonPlans.helios.layers[0];
+    expect(layer.nodes).toHaveLength(8);
+    expect(layer.frames).toHaveLength(8);
+    expect(layer.shells).toHaveLength(8);
+    expect(getDysonPlanTotals(state.dysonPlans.helios)).toMatchObject({
+      layerCount: 1,
+      nodeCount: 8,
+      frameCount: 8,
+      shellCount: 8,
+      plannedStructure: 16,
+      completedStructure: 0,
+      sailCapacity: 0,
+    });
+  });
+
+  it("allocates legacy structure into the first planned layer and activates only completed frames", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("dyson_sphere_program", "dyson_shell");
+    state.dysonSphere.structurePoints = 8;
+    state.dysonSphere.totalRocketsLaunched = 8;
+    state = createStandardDysonLayer(state, "helios");
+
+    let layer = state.dysonPlans.helios.layers[0];
+    expect(layer.nodes.every((node) => node.completedStructurePoints === node.requiredStructurePoints)).toBe(true);
+    expect(layer.frames.every((frame) => frame.completedStructurePoints === 0)).toBe(true);
+    expect(getDysonShellCapacity(state)).toBe(0);
+    expect(getDysonPlanTotals(state.dysonPlans.helios).sailCapacity).toBe(0);
+
+    state.dysonPlans.helios.structurePoints = 16;
+    state.dysonSphere.structurePoints = 16;
+    state = advanceSimulation(state, 0.1);
+    layer = state.dysonPlans.helios.layers[0];
+    expect(layer.frames.every((frame) => frame.completedStructurePoints === frame.requiredStructurePoints)).toBe(true);
+    expect(getDysonShellCapacity(state)).toBe(160);
+  });
+
+  it("assigns launched rockets to the silo's star system without changing other plans", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("dyson_sphere_program", "vertical_launching_silo");
+    state.exploration.unlockedSystemIds.push("borealis");
+    state = setActivePlanet(state, "frost");
+    state.construction.wind_turbine = 100;
+    state.construction.vertical_launching_silo = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 100);
+    state = placeBuilding(state, "vertical_launching_silo", { x: 300, y: 0 });
+    const silo = state.entities.find((entity) => entity.buildingId === "vertical_launching_silo")!;
+    state.entities.find((entity) => entity.id === silo.id)!.inputs.small_carrier_rocket = 1;
+    state = advanceSimulation(state, 6);
+
+    expect(state.dysonPlans.borealis.structurePoints).toBe(1);
+    expect(state.dysonPlans.helios.structurePoints).toBe(0);
+    expect(state.dysonPlans.neutron.structurePoints).toBe(0);
+    expect(state.dysonSphere.structurePoints).toBe(1);
+  });
+
+  it("caps shell absorption at completed planned capacity and removes dependent geometry with a node", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("dyson_sphere_program", "dyson_shell");
+    state.dysonSphere.structurePoints = 16;
+    state.dysonSphere.totalRocketsLaunched = 16;
+    state.dysonSwarm.sailsInOrbit = 500;
+    state.dysonSwarm.totalLaunched = 500;
+    state = createStandardDysonLayer(state, "helios");
+    state = advanceSimulation(state, 120);
+
+    expect(state.dysonPlans.helios.shellSails).toBe(160);
+    expect(state.dysonSphere.shellSails).toBe(160);
+    expect(getDysonPlanTotals(state.dysonPlans.helios).sailCapacity).toBe(160);
+
+    const layer = state.dysonPlans.helios.layers[0];
+    state = removeDysonNode(state, "helios", layer.id, layer.nodes[0].id);
+    const reduced = state.dysonPlans.helios.layers[0];
+    expect(reduced.nodes).toHaveLength(7);
+    expect(reduced.frames).toHaveLength(6);
+    expect(reduced.shells).toHaveLength(6);
+    expect(getDysonShellCapacity(state)).toBe(120);
   });
 
   it("handcrafts assembler recipes in whole batches", () => {
