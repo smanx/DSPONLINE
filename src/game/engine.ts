@@ -5,6 +5,7 @@ import {
   FUEL_ITEM_IDS,
   ITEMS,
   PLANET_LIST,
+  PROLIFERATOR_ITEM_IDS,
   buildingSupportsRecipe,
   getBeltConstructionId,
   getBuilding,
@@ -12,6 +13,7 @@ import {
   getConstructionDefinition,
   getExtractorBuildingId,
   getPlanet,
+  getProliferator,
   getRecipe,
   getRecipesForBuilding,
   getTechnology,
@@ -26,6 +28,9 @@ import type {
   GameState,
   ItemId,
   PlanetId,
+  ProliferatorMode,
+  ProliferatorTier,
+  RecipeDefinition,
   RecipeId,
   StationMinimumLoad,
   TechId,
@@ -63,6 +68,7 @@ function copyState(state: GameState): GameState {
       position: { ...entity.position },
       inputs: { ...entity.inputs },
       outputs: { ...entity.outputs },
+      proliferatorBonusProgress: { ...entity.proliferatorBonusProgress },
     })),
     belts: state.belts.map((belt) => ({ ...belt })),
     cargo: state.cargo ? { ...state.cargo, origin: state.cargo.origin ? { ...state.cargo.origin } : undefined } : null,
@@ -124,7 +130,7 @@ export function createInitialState(): GameState {
   const homeMetrics = emptyMetrics();
   const ashenMetrics = emptyMetrics();
   return {
-    version: 8,
+    version: 9,
     nextId: 1,
     activePlanetId: "home",
     entities: [
@@ -155,6 +161,7 @@ export function createInitialState(): GameState {
       assembling_machine_mk1: 3,
       assembling_machine_mk2: 0,
       assembling_machine_mk3: 0,
+      spray_coater: 0,
       matrix_lab: 2,
       conveyor_belt_mk1: 10,
       conveyor_belt_mk2: 0,
@@ -223,6 +230,53 @@ export function getMiningSpeedMultiplier(state: GameState): number {
   return state.research.completedTechIds.includes("mining_speed_1") ? 1.5 : 1;
 }
 
+function proliferatorApplies(entity: FactoryEntity, recipe: RecipeDefinition | undefined): boolean {
+  return Boolean(entity.sprayCoaterInstalled && entity.proliferatorTier && entity.proliferatorMode &&
+    entity.proliferatorMode !== "normal" && recipe && recipe.inputs.length > 0 && recipe.outputs.length > 0);
+}
+
+export function isProliferatorEligible(entity: FactoryEntity): boolean {
+  const recipe = getRecipe(entity.recipeId);
+  return entity.kind === "machine" && entity.buildingId !== "spray_coater" && Boolean(recipe?.inputs.length && recipe.outputs.length);
+}
+
+export function getEntityProliferatorItemId(entity: FactoryEntity): ItemId | undefined {
+  return entity.proliferatorTier ? getProliferator(entity.proliferatorTier).itemId : undefined;
+}
+
+export function getEntityProliferatorSpeedMultiplier(entity: FactoryEntity): number {
+  const recipe = getRecipe(entity.recipeId);
+  if (!proliferatorApplies(entity, recipe) || entity.proliferatorMode !== "speed") return 1;
+  return 1 + getProliferator(entity.proliferatorTier!).speedBonus;
+}
+
+export function getEntityProliferatorPowerMultiplier(entity: FactoryEntity): number {
+  const recipe = getRecipe(entity.recipeId);
+  return proliferatorApplies(entity, recipe) ? getProliferator(entity.proliferatorTier!).powerMultiplier : 1;
+}
+
+export function getEntityExtraProductBonus(entity: FactoryEntity): number {
+  const recipe = getRecipe(entity.recipeId);
+  if (!proliferatorApplies(entity, recipe) || entity.proliferatorMode !== "extra") return 0;
+  return getProliferator(entity.proliferatorTier!).extraProductBonus;
+}
+
+export function getProliferatorSprayCost(recipe: RecipeDefinition | undefined): number {
+  return recipe ? Math.max(1, recipe.inputs.reduce((sum, input) => sum + input.amount, 0)) : 1;
+}
+
+function availableProliferatorPoints(entity: FactoryEntity): number {
+  const definition = entity.proliferatorTier ? getProliferator(entity.proliferatorTier) : undefined;
+  if (!definition) return 0;
+  return Math.max(0, entity.proliferatorPoints ?? 0) +
+    Math.floor((entity.inputs[definition.itemId] ?? 0) + EPSILON) * definition.sprayPoints;
+}
+
+function availableProliferatorCycles(entity: FactoryEntity, recipe: RecipeDefinition): number {
+  if (!proliferatorApplies(entity, recipe)) return Number.POSITIVE_INFINITY;
+  return availableProliferatorPoints(entity) / getProliferatorSprayCost(recipe);
+}
+
 function availableInputCycles(state: GameState, entity: FactoryEntity): number {
   const recipe = getRecipe(entity.recipeId);
   if (!recipe) return 0;
@@ -238,14 +292,31 @@ function availableOutputCycles(entity: FactoryEntity): number {
   const recipe = getRecipe(entity.recipeId);
   if (!recipe || !entity.buildingId) return 0;
   const capacity = getBuilding(entity.buildingId).outputCapacity * Math.max(1, entity.machineCount);
-  return recipe.outputs.reduce((available, output) =>
-    Math.min(available, Math.max(0, capacity - (entity.outputs[output.itemId] ?? 0)) / output.amount), Number.POSITIVE_INFINITY);
+  const extraProductBonus = getEntityExtraProductBonus(entity);
+  return recipe.outputs.reduce((available, output) => {
+    const free = Math.floor(Math.max(0, capacity - (entity.outputs[output.itemId] ?? 0)) + EPSILON);
+    let low = 0;
+    let high = Math.floor(free / output.amount);
+    const bonusProgress = entity.proliferatorBonusProgress?.[output.itemId] ?? 0;
+    while (low < high) {
+      const candidate = Math.ceil((low + high) / 2);
+      const bonus = Math.floor(bonusProgress + output.amount * candidate * extraProductBonus + EPSILON);
+      if (output.amount * candidate + bonus <= free) low = candidate;
+      else high = candidate - 1;
+    }
+    return Math.min(available, low);
+  }, Number.POSITIVE_INFINITY);
 }
 
 function canMachineRun(state: GameState, entity: FactoryEntity): boolean {
   if (entity.recipeId === "matrix_research" && !state.research.selectedTechId) return false;
   const recipe = getRecipe(entity.recipeId);
   if (recipe?.requiredTechId && !isTechnologyCompleted(state, recipe.requiredTechId)) return false;
+  if (proliferatorApplies(entity, recipe)) {
+    const definition = getProliferator(entity.proliferatorTier!);
+    if (!isTechnologyCompleted(state, definition.requiredTechId) ||
+      Math.floor(availableProliferatorCycles(entity, recipe!) + EPSILON) < 1) return false;
+  }
   return entity.kind === "machine" && Boolean(recipe) &&
     Math.floor(availableInputCycles(state, entity) + EPSILON) >= 1 &&
     Math.floor(availableOutputCycles(entity) + EPSILON) >= 1;
@@ -443,7 +514,8 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, r
     } else if (entity.buildingId === "ray_receiver") {
       continue;
     } else if (canMachineRun(state, entity) && entity.buildingId) {
-      demandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount;
+      demandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount *
+        getEntityProliferatorPowerMultiplier(entity);
     } else if (entity.kind === "station" && entity.buildingId && stationRouteReady(state, entity)) {
       demandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount;
     }
@@ -646,6 +718,21 @@ function runMiners(state: GameState, seconds: number, powerFactor: number, plane
   }
 }
 
+function consumeProliferatorPoints(entity: FactoryEntity, recipe: RecipeDefinition, cycles: number): void {
+  if (!proliferatorApplies(entity, recipe) || cycles < 1) return;
+  const definition = getProliferator(entity.proliferatorTier!);
+  const requiredPoints = getProliferatorSprayCost(recipe) * cycles;
+  let points = Math.max(0, entity.proliferatorPoints ?? 0);
+  if (points < requiredPoints) {
+    const requiredItems = Math.ceil((requiredPoints - points) / definition.sprayPoints);
+    const availableItems = Math.floor((entity.inputs[definition.itemId] ?? 0) + EPSILON);
+    const consumedItems = Math.min(requiredItems, availableItems);
+    entity.inputs[definition.itemId] = availableItems - consumedItems;
+    points += consumedItems * definition.sprayPoints;
+  }
+  entity.proliferatorPoints = Math.max(0, points - requiredPoints);
+}
+
 function runMachines(state: GameState, seconds: number, powerFactor: number, planetId: PlanetId): void {
   for (const entity of state.entities) {
     const recipe = getRecipe(entity.recipeId);
@@ -657,7 +744,8 @@ function runMachines(state: GameState, seconds: number, powerFactor: number, pla
       continue;
     }
     const building = getBuilding(entity.buildingId);
-    const cyclesPerSecond = building.speed * entity.machineCount * getRecipeSpeedMultiplier(state, recipe.id) / recipe.duration;
+    const cyclesPerSecond = building.speed * entity.machineCount * getRecipeSpeedMultiplier(state, recipe.id) *
+      getEntityProliferatorSpeedMultiplier(entity) / recipe.duration;
     const potentialCycles = cyclesPerSecond * seconds * powerFactor;
     if (recipe.requiredTechId && !isTechnologyCompleted(state, recipe.requiredTechId)) {
       entity.progress = 0;
@@ -667,7 +755,7 @@ function runMachines(state: GameState, seconds: number, powerFactor: number, pla
     }
     const fullInputCycles = Math.floor(availableInputCycles(state, entity) + EPSILON);
     const fullOutputCycles = Math.floor(availableOutputCycles(entity) + EPSILON);
-    let maximumCycles = Math.min(fullInputCycles, fullOutputCycles);
+    let maximumCycles = Math.min(fullInputCycles, fullOutputCycles, Math.floor(availableProliferatorCycles(entity, recipe) + EPSILON));
     if (maximumCycles < 1 || potentialCycles <= EPSILON) {
       entity.utilization = 0;
       entity.productionRate = 0;
@@ -713,6 +801,7 @@ function runMachines(state: GameState, seconds: number, powerFactor: number, pla
       for (const input of recipe.inputs) {
         entity.inputs[input.itemId] = Math.max(0, Math.floor((entity.inputs[input.itemId] ?? 0) - input.amount * cycles));
       }
+      consumeProliferatorPoints(entity, recipe, cycles);
       if (recipe.id === "solar_sail_launch" && cycles > 0) {
         state.dysonSwarm.sailsInOrbit = Math.floor(state.dysonSwarm.sailsInOrbit + cycles);
         state.dysonSwarm.totalLaunched = Math.floor(state.dysonSwarm.totalLaunched + cycles);
@@ -721,8 +810,15 @@ function runMachines(state: GameState, seconds: number, powerFactor: number, pla
         state.dysonSphere.structurePoints = Math.floor(state.dysonSphere.structurePoints + cycles);
         state.dysonSphere.totalRocketsLaunched = Math.floor(state.dysonSphere.totalRocketsLaunched + cycles);
       }
+      const extraProductBonus = getEntityExtraProductBonus(entity);
       for (const output of recipe.outputs) {
-        const produced = output.amount * cycles;
+        const baseProduced = output.amount * cycles;
+        const accumulatedBonus = (entity.proliferatorBonusProgress?.[output.itemId] ?? 0) +
+          baseProduced * extraProductBonus;
+        const bonusProduced = Math.floor(accumulatedBonus + EPSILON);
+        entity.proliferatorBonusProgress ??= {};
+        entity.proliferatorBonusProgress[output.itemId] = round(Math.max(0, accumulatedBonus - bonusProduced), 6);
+        const produced = baseProduced + bonusProduced;
         entity.outputs[output.itemId] = Math.floor((entity.outputs[output.itemId] ?? 0) + produced);
         state.totalProduced[output.itemId] = Math.floor((state.totalProduced[output.itemId] ?? 0) + produced);
       }
@@ -733,7 +829,7 @@ function runMachines(state: GameState, seconds: number, powerFactor: number, pla
     entity.utilization = round(powerFactor * activityFactor, 4);
     const unitsPerCycle = recipe.id === "matrix_research" || recipe.id === "solar_sail_launch" || recipe.id === "carrier_rocket_launch"
       ? 1
-      : recipe.outputs.reduce((sum, output) => sum + output.amount, 0);
+      : recipe.outputs.reduce((sum, output) => sum + output.amount, 0) * (1 + getEntityExtraProductBonus(entity));
     entity.productionRate = round(cyclesPerSecond * unitsPerCycle * 60 * entity.utilization, 2);
   }
 }
@@ -1002,6 +1098,7 @@ function thermalAccepts(entity: FactoryEntity, itemId: ItemId): boolean {
 function targetConsumes(state: GameState, entity: FactoryEntity, itemId: ItemId): boolean {
   if (logisticsAccepts(entity, itemId)) return true;
   if (thermalAccepts(entity, itemId)) return true;
+  if (entity.sprayCoaterInstalled && getEntityProliferatorItemId(entity) === itemId) return true;
   const recipe = getRecipe(entity.recipeId);
   if (recipe?.id === "matrix_research") {
     return remainingResearchCosts(state).some((cost) => cost.itemId === itemId);
@@ -1030,12 +1127,61 @@ export function setEntityRecipe(state: GameState, entityId: string, recipeId: Re
   entity.inputs = {};
   entity.outputs = {};
   entity.progress = 0;
+  entity.proliferatorBonusProgress = {};
   if (entity.buildingId === "ray_receiver") entity.powerOutputKw = 0;
   entity.recipeId = recipeId;
 
   const removedBelts = next.belts.filter((belt) => belt.source === entityId || belt.target === entityId);
   refundBelts(next, removedBelts);
   next.belts = next.belts.filter((belt) => belt.source !== entityId && belt.target !== entityId);
+  return next;
+}
+
+export function canInstallSprayCoater(state: GameState, entityId: string): boolean {
+  const entity = state.entities.find((item) => item.id === entityId);
+  return Boolean(entity && !entity.sprayCoaterInstalled && isProliferatorEligible(entity) &&
+    isTechnologyCompleted(state, "proliferator_1") && (state.construction.spray_coater ?? 0) >= 1);
+}
+
+export function installSprayCoater(state: GameState, entityId: string): GameState {
+  if (!canInstallSprayCoater(state, entityId)) return state;
+  const next = copyState(state);
+  const entity = next.entities.find((candidate) => candidate.id === entityId)!;
+  entity.sprayCoaterInstalled = true;
+  entity.proliferatorMode = "normal";
+  entity.proliferatorTier = 1;
+  entity.proliferatorPoints = 0;
+  entity.proliferatorBonusProgress = {};
+  next.construction.spray_coater = (next.construction.spray_coater ?? 0) - 1;
+  return next;
+}
+
+export function setProliferatorConfiguration(
+  state: GameState,
+  entityId: string,
+  tier: ProliferatorTier,
+  mode: ProliferatorMode,
+): GameState {
+  const current = state.entities.find((entity) => entity.id === entityId);
+  const definition = getProliferator(tier);
+  if (!current?.sprayCoaterInstalled || !isProliferatorEligible(current) ||
+    !isTechnologyCompleted(state, definition.requiredTechId)) return state;
+  if (current.proliferatorTier === tier && current.proliferatorMode === mode) return state;
+  const next = copyState(state);
+  const entity = next.entities.find((candidate) => candidate.id === entityId)!;
+  if (entity.proliferatorTier !== tier) {
+    const previousItemId = getEntityProliferatorItemId(entity);
+    if (previousItemId) {
+      addToTray(next, previousItemId, Math.floor(entity.inputs[previousItemId] ?? 0));
+      entity.inputs[previousItemId] = 0;
+    }
+    const removedBelts = next.belts.filter((belt) => belt.target === entityId && PROLIFERATOR_ITEM_IDS.includes(belt.itemId));
+    refundBelts(next, removedBelts);
+    next.belts = next.belts.filter((belt) => !removedBelts.includes(belt));
+    entity.proliferatorPoints = 0;
+  }
+  entity.proliferatorTier = tier;
+  entity.proliferatorMode = mode;
   return next;
 }
 
@@ -1370,6 +1516,9 @@ export function removeEntity(state: GameState, entityId: string): GameState {
   if (target.kind === "station" && (target.stationVessels ?? 0) > 0) {
     addToTray(next, "logistics_vessel", Math.floor(target.stationVessels ?? 0));
   }
+  if (target.sprayCoaterInstalled) {
+    next.construction.spray_coater = (next.construction.spray_coater ?? 0) + 1;
+  }
   if (target.buildingId) {
     next.construction[target.buildingId] = (next.construction[target.buildingId] ?? 0) + target.machineCount;
   }
@@ -1628,8 +1777,12 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
 
   if (entity.buildingId) {
     const capacity = getBuilding(entity.buildingId).outputCapacity * Math.max(1, entity.machineCount);
-    const blocked = recipe.outputs.filter((output) =>
-      capacity - (entity.outputs[output.itemId] ?? 0) + EPSILON < output.amount);
+    const extraProductBonus = getEntityExtraProductBonus(entity);
+    const blocked = recipe.outputs.filter((output) => {
+      const bonus = Math.floor((entity.proliferatorBonusProgress?.[output.itemId] ?? 0) +
+        output.amount * extraProductBonus + EPSILON);
+      return capacity - (entity.outputs[output.itemId] ?? 0) + EPSILON < output.amount + bonus;
+    });
     if (blocked.length > 0) {
       return { code: "output-blocked", label: `输出堵塞：${blocked.map((output) => ITEMS[output.itemId].name).join("、")}`, tone: "blocked" };
     }
@@ -1643,6 +1796,11 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
     return { code: "missing-input", label: `缺少${missing.map((input) => ITEMS[input.itemId].name).join("、")}`, tone: "blocked" };
   }
 
+  if (proliferatorApplies(entity, recipe) && Math.floor(availableProliferatorCycles(entity, recipe) + EPSILON) < 1) {
+    const itemId = getEntityProliferatorItemId(entity)!;
+    return { code: "missing-proliferator", label: `缺少${ITEMS[itemId].name}`, tone: "blocked" };
+  }
+
   if (planetMetrics.powerFactor <= EPSILON) return { code: "no-power", label: "电网断电", tone: "blocked" };
   if (planetMetrics.powerFactor < 0.999) {
     return { code: "low-power", label: `供电不足 · ${Math.round(planetMetrics.powerFactor * 100)}%`, tone: "warning" };
@@ -1654,7 +1812,9 @@ export function getAcceptedInputs(entity: FactoryEntity, state?: GameState): Ite
   if ((entity.kind === "storage" || entity.kind === "splitter" || entity.kind === "station") && entity.storedItemId) return [entity.storedItemId];
   if (entity.buildingId === "thermal_power_plant" && entity.fuelItemId) return [entity.fuelItemId];
   if (entity.recipeId === "matrix_research" && state) return remainingResearchCosts(state).map((cost) => cost.itemId);
-  return getRecipe(entity.recipeId)?.inputs.map((input) => input.itemId) ?? [];
+  const recipeInputs = getRecipe(entity.recipeId)?.inputs.map((input) => input.itemId) ?? [];
+  const proliferatorItemId = entity.sprayCoaterInstalled ? getEntityProliferatorItemId(entity) : undefined;
+  return proliferatorItemId ? [...recipeInputs, proliferatorItemId] : recipeInputs;
 }
 
 export function getProducedOutputs(entity: FactoryEntity): ItemId[] {

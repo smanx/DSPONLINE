@@ -7,7 +7,7 @@ import {
   createInitialState,
 } from "./engine";
 import { getBeltConstructionId, getExtractorBuildingId, getTechnology } from "./content";
-import type { BeltConnection, BeltTier, BuildingId, ConstructionId, FactoryEntity, GameState, ItemId, PlanetId, StationMinimumLoad, TechId } from "./types";
+import type { BeltConnection, BeltTier, BuildingId, ConstructionId, FactoryEntity, GameState, ItemId, PlanetId, ProliferatorMode, ProliferatorTier, StationMinimumLoad, TechId } from "./types";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
 
@@ -35,6 +35,14 @@ function nonNegativeInteger(value: unknown): number {
 
 function nonNegativeNumber(value: unknown): number {
   return Math.max(0, typeof value === "number" && Number.isFinite(value) ? value : 0);
+}
+
+function fractionalRecord(value: unknown): Partial<Record<ItemId, number>> {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).map(([key, amount]) => [
+    key,
+    nonNegativeNumber(amount) % 1,
+  ])) as Partial<Record<ItemId, number>>;
 }
 
 const STARTER_TOTALS: Partial<Record<ConstructionId, number>> = {
@@ -80,6 +88,14 @@ function validBeltTier(value: unknown): value is BeltTier {
   return value === 1 || value === 2 || value === 3;
 }
 
+function validProliferatorTier(value: unknown): value is ProliferatorTier {
+  return value === 1 || value === 2 || value === 3;
+}
+
+function validProliferatorMode(value: unknown): value is ProliferatorMode {
+  return value === "normal" || value === "extra" || value === "speed";
+}
+
 function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
   if (entity.id.startsWith("ashen_")) return "ashen";
   if (entity.resourceId === "silicon_ore" || entity.resourceId === "titanium_ore") return "ashen";
@@ -90,11 +106,12 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
   const entities = saved.entities.map((entity: FactoryEntity) => {
     const planetId = validPlanetId(entity.planetId) ? entity.planetId : inferLegacyPlanet(entity);
     const position = { ...entity.position };
+    const sprayCoaterInstalled = Boolean(entity.sprayCoaterInstalled);
     if (saved.version < 4 && position.x < -650 && (planetId === "ashen" || entity.resourceId === "water")) {
       position.x += 640;
     }
@@ -121,6 +138,15 @@ function migrateGame(value: unknown): GameState | null {
       stationMinimumLoad: entity.kind === "station"
         ? validStationMinimumLoad(entity.stationMinimumLoad) ? entity.stationMinimumLoad : 1
         : entity.stationMinimumLoad,
+      sprayCoaterInstalled,
+      proliferatorTier: sprayCoaterInstalled
+        ? validProliferatorTier(entity.proliferatorTier) ? entity.proliferatorTier : 1
+        : undefined,
+      proliferatorMode: sprayCoaterInstalled
+        ? validProliferatorMode(entity.proliferatorMode) ? entity.proliferatorMode : "normal"
+        : undefined,
+      proliferatorPoints: sprayCoaterInstalled ? nonNegativeInteger(entity.proliferatorPoints) : 0,
+      proliferatorBonusProgress: sprayCoaterInstalled ? fractionalRecord(entity.proliferatorBonusProgress) : {},
       extractorBuildingId: entity.kind === "vein" && entity.minerCount > 0
         ? entity.extractorBuildingId ?? getExtractorBuildingId(entity.resourceId!)
         : entity.extractorBuildingId,
@@ -236,7 +262,7 @@ function migrateGame(value: unknown): GameState | null {
   return {
     ...initial,
     ...saved,
-    version: 8,
+    version: 9,
     activePlanetId,
     entities,
     belts,

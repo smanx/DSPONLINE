@@ -1249,6 +1249,50 @@ select:focus-visible {
   grid-template-columns: 27px minmax(0, 1fr) auto;
 }
 
+.proliferator-readout {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid #29453e;
+  background: #101b18;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.proliferator-readout svg {
+  color: var(--cyan);
+}
+
+.proliferator-readout span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proliferator-readout strong {
+  color: var(--text-soft);
+  font-size: 8px;
+}
+
+.proliferator-readout--extra {
+  border-top-color: #315b46;
+  background: #132019;
+}
+
+.proliferator-readout--extra svg,
+.proliferator-readout--extra strong {
+  color: var(--green);
+}
+
+.proliferator-readout--speed {
+  border-top-color: #31575b;
+  background: #121e20;
+}
+
 .research-target {
   display: flex;
   min-height: 35px;
@@ -1595,6 +1639,111 @@ select:focus-visible {
 .segmented-control--four {
   grid-template-columns: repeat(4, 1fr);
   margin-top: 7px;
+}
+
+.proliferator-control {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #35534a;
+  border-radius: 5px;
+  background: #111b18;
+}
+
+.proliferator-control > header,
+.proliferator-control--install > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.proliferator-control > header span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--cyan);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.proliferator-control > header strong {
+  color: var(--green);
+  font-size: 9px;
+  text-align: right;
+}
+
+.proliferator-tier {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 11px;
+}
+
+.proliferator-tier button,
+.proliferator-control--install button {
+  min-height: 30px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.proliferator-tier button.active {
+  border-color: var(--cyan-deep);
+  background: #20322d;
+  color: var(--cyan);
+}
+
+.proliferator-tier button:disabled,
+.proliferator-control--install button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.proliferator-mode {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 6px;
+}
+
+.proliferator-control dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  margin: 12px 0 0;
+}
+
+.proliferator-control dl div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.proliferator-control dt,
+.proliferator-control--install > div span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.proliferator-control dd,
+.proliferator-control--install > div strong {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 9px;
+}
+
+.proliferator-control--install > div {
+  margin: 12px 0 8px;
+}
+
+.proliferator-control--install button {
+  display: inline-flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 .station-fleet-control,

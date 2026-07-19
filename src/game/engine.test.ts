@@ -7,6 +7,7 @@ import {
   SOLAR_SAIL_POWER_KW,
   adjustStationVessels,
   advanceSimulation,
+  canInstallSprayCoater,
   canUpgradeBelt,
   canUpgradeEntity,
   canQueueTechnology,
@@ -18,9 +19,13 @@ import {
   dropCargoToTray,
   getEntityOperatingStatus,
   getBeltCapacity,
+  getEntityExtraProductBonus,
+  getEntityProliferatorPowerMultiplier,
+  getEntityProliferatorSpeedMultiplier,
   getMiningSpeedMultiplier,
   getRecipeSpeedMultiplier,
   handcraftRecipe,
+  installSprayCoater,
   installMiner,
   manualMine,
   moveEntityInputToEntity,
@@ -36,6 +41,7 @@ import {
   setEntityRecipe,
   setFuelItem,
   setLogisticsItem,
+  setProliferatorConfiguration,
   setStationMode,
   setStationMinimumLoad,
   setSplitterMode,
@@ -1334,5 +1340,139 @@ describe("factory simulation", () => {
     fluid = advanceSimulation(fluid, 3);
     expect(fluid.entities.find((entity) => entity.id === "vein_water")?.outputs.water).toBe(3);
     expect(fluid.entities.find((entity) => entity.id === "vein_water")?.productionRate).toBe(60);
+  });
+
+  it("locks spray-coater installation behind technology and returns the module on removal", () => {
+    let state = createInitialState();
+    state.construction.spray_coater = 1;
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+
+    expect(canInstallSprayCoater(state, assembler.id)).toBe(false);
+    expect(installSprayCoater(state, assembler.id)).toBe(state);
+
+    state.research.completedTechIds.push("proliferator_1");
+    expect(canInstallSprayCoater(state, assembler.id)).toBe(true);
+    state = installSprayCoater(state, assembler.id);
+    expect(state.entities.find((entity) => entity.id === assembler.id)).toMatchObject({
+      sprayCoaterInstalled: true,
+      proliferatorTier: 1,
+      proliferatorMode: "normal",
+      proliferatorPoints: 0,
+    });
+    expect(state.construction.spray_coater).toBe(0);
+
+    state = removeEntity(state, assembler.id);
+    expect(state.construction.spray_coater).toBe(1);
+  });
+
+  it("consumes spray points and accumulates only whole extra products", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("proliferator_1");
+    state.construction.spray_coater = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 2);
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 240, y: 0 });
+    const assemblerId = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!.id;
+    state = installSprayCoater(state, assemblerId);
+    state = setProliferatorConfiguration(state, assemblerId, 1, "extra");
+    const assembler = state.entities.find((entity) => entity.id === assemblerId)!;
+    assembler.inputs.iron_ingot = 12;
+    assembler.inputs.proliferator_mk1 = 1;
+
+    state = advanceSimulation(state, 10.7);
+    let result = state.entities.find((entity) => entity.id === assemblerId)!;
+    expect(result.outputs.gear).toBe(9);
+    expect(result.inputs.proliferator_mk1).toBe(0);
+    expect(result.proliferatorPoints).toBe(4);
+    expect(result.proliferatorBonusProgress?.gear).toBe(0);
+
+    state = advanceSimulation(state, 5.4);
+    result = state.entities.find((entity) => entity.id === assemblerId)!;
+    expect(result.outputs.gear).toBe(13);
+    expect(result.proliferatorPoints).toBe(0);
+    expect(result.proliferatorBonusProgress?.gear).toBe(0.5);
+    expect(Number.isInteger(result.outputs.gear ?? 0)).toBe(true);
+    result.inputs.iron_ingot = 1;
+    expect(getEntityOperatingStatus(state, result)).toMatchObject({ code: "missing-proliferator", tone: "blocked" });
+  });
+
+  it("applies Mk.III speed and power multipliers to an active production node", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("proliferator_1", "proliferator_2", "proliferator_3");
+    state.construction.spray_coater = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 3);
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 240, y: 0 });
+    const assemblerId = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!.id;
+    state = installSprayCoater(state, assemblerId);
+    state = setProliferatorConfiguration(state, assemblerId, 3, "speed");
+    const assembler = state.entities.find((entity) => entity.id === assemblerId)!;
+    assembler.inputs.iron_ingot = 10;
+    assembler.inputs.proliferator_mk3 = 1;
+
+    expect(getEntityProliferatorSpeedMultiplier(assembler)).toBe(2);
+    expect(getEntityProliferatorPowerMultiplier(assembler)).toBe(2.5);
+    expect(getEntityExtraProductBonus(assembler)).toBe(0);
+    state = advanceSimulation(state, 1);
+
+    const result = state.entities.find((entity) => entity.id === assemblerId)!;
+    expect(result.outputs.gear).toBe(1);
+    expect(result.progress).toBe(0.5);
+    expect(result.proliferatorPoints).toBe(59);
+    expect(state.metrics.demandKw).toBe(675);
+  });
+
+  it("refunds the previous proliferator input and belt when changing tiers", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("proliferator_1", "proliferator_2");
+    state.construction.spray_coater = 1;
+    state.construction.assembling_machine_mk1 = 2;
+    state.construction.conveyor_belt_mk1 = 1;
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 240, y: 0 });
+    const [source, target] = state.entities.filter((entity) => entity.buildingId === "assembling_machine_mk1");
+    state = setEntityRecipe(state, source.id, "proliferator_mk1");
+    state = installSprayCoater(state, target.id);
+    state.entities.find((entity) => entity.id === target.id)!.inputs.proliferator_mk1 = 3;
+    state = connectBelt(state, source.id, target.id, "proliferator_mk1");
+    expect(state.belts).toHaveLength(1);
+    expect(state.construction.conveyor_belt_mk1).toBe(0);
+
+    state = setProliferatorConfiguration(state, target.id, 2, "extra");
+    const result = state.entities.find((entity) => entity.id === target.id)!;
+    expect(result.proliferatorTier).toBe(2);
+    expect(result.inputs.proliferator_mk1).toBe(0);
+    expect(state.tray.proliferator_mk1).toBe(3);
+    expect(state.belts).toHaveLength(0);
+    expect(state.construction.conveyor_belt_mk1).toBe(1);
+  });
+
+  it("clears fractional extra-product progress when the recipe changes", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    assembler.proliferatorBonusProgress = { gear: 0.875 };
+    state = setEntityRecipe(state, assembler.id, "circuit_board");
+    expect(state.entities.find((entity) => entity.id === assembler.id)?.proliferatorBonusProgress).toEqual({});
+  });
+
+  it("uses the final output slot when an extra product has not accumulated yet", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("proliferator_1");
+    state.construction.spray_coater = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 2);
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 240, y: 0 });
+    const assemblerId = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!.id;
+    state = installSprayCoater(state, assemblerId);
+    state = setProliferatorConfiguration(state, assemblerId, 1, "extra");
+    const assembler = state.entities.find((entity) => entity.id === assemblerId)!;
+    assembler.inputs.iron_ingot = 1;
+    assembler.inputs.proliferator_mk1 = 1;
+    assembler.outputs.gear = 119;
+
+    state = advanceSimulation(state, 1.4);
+    const result = state.entities.find((entity) => entity.id === assemblerId)!;
+    expect(result.outputs.gear).toBe(120);
+    expect(result.proliferatorBonusProgress?.gear).toBe(0.125);
+    expect(getEntityOperatingStatus(state, result).code).toBe("output-blocked");
   });
 });

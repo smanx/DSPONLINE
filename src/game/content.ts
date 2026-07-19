@@ -9,6 +9,7 @@ import type {
   ItemId,
   PlanetDefinition,
   PlanetId,
+  ProliferatorTier,
   RecipeDefinition,
   RecipeId,
   TechnologyDefinition,
@@ -68,6 +69,9 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
   logistics_vessel: { id: "logistics_vessel", name: "物流运输船", symbol: "LV", color: "#d4865d", kind: "solid", description: "装载到星际物流站后执行跨行星运输，每艘运载 100 件货物。" },
   graphene: { id: "graphene", name: "石墨烯", symbol: "Gr", color: "#749692", kind: "solid", description: "由高能石墨剥离形成的二维碳材料。" },
   carbon_nanotube: { id: "carbon_nanotube", name: "碳纳米管", symbol: "CNT", color: "#7e969d", kind: "solid", description: "石墨烯与钛材料形成的高强度纳米结构。" },
+  proliferator_mk1: { id: "proliferator_mk1", name: "增产剂 Mk.I", symbol: "P1", color: "#8f9872", kind: "solid", description: "由煤加工的基础喷涂介质，每件提供 12 个喷涂点数。" },
+  proliferator_mk2: { id: "proliferator_mk2", name: "增产剂 Mk.II", symbol: "P2", color: "#56a58f", kind: "solid", description: "加入金刚石强化的增产剂，每件提供 24 个喷涂点数。" },
+  proliferator_mk3: { id: "proliferator_mk3", name: "增产剂 Mk.III", symbol: "P3", color: "#628fba", kind: "solid", description: "利用碳纳米管稳定喷涂结构，每件提供 60 个喷涂点数。" },
   crystal_silicon: { id: "crystal_silicon", name: "晶格硅", symbol: "CSi", color: "#84b5a5", kind: "solid", description: "由高纯硅块进一步重排得到的精密晶格材料。" },
   particle_broadband: { id: "particle_broadband", name: "粒子宽带", symbol: "PB", color: "#b486b1", kind: "solid", description: "由纳米碳、晶格硅与塑料制造的信息载体。" },
   electric_motor: { id: "electric_motor", name: "电动机", symbol: "Mot", color: "#547e91", kind: "solid", description: "由铁、齿轮与磁线圈制造的基础动力组件。" },
@@ -112,6 +116,32 @@ export const MATRIX_ITEM_IDS: ItemId[] = [
   "universe_matrix",
 ];
 
+export interface ProliferatorDefinition {
+  tier: ProliferatorTier;
+  itemId: ItemId;
+  sprayPoints: number;
+  extraProductBonus: number;
+  speedBonus: number;
+  powerMultiplier: number;
+  requiredTechId: TechId;
+}
+
+export const PROLIFERATORS: Record<ProliferatorTier, ProliferatorDefinition> = {
+  1: { tier: 1, itemId: "proliferator_mk1", sprayPoints: 12, extraProductBonus: 0.125, speedBonus: 0.25, powerMultiplier: 1.3, requiredTechId: "proliferator_1" },
+  2: { tier: 2, itemId: "proliferator_mk2", sprayPoints: 24, extraProductBonus: 0.2, speedBonus: 0.5, powerMultiplier: 1.7, requiredTechId: "proliferator_2" },
+  3: { tier: 3, itemId: "proliferator_mk3", sprayPoints: 60, extraProductBonus: 0.25, speedBonus: 1, powerMultiplier: 2.5, requiredTechId: "proliferator_3" },
+};
+
+export const PROLIFERATOR_ITEM_IDS = Object.values(PROLIFERATORS).map((definition) => definition.itemId);
+
+export function getProliferator(tier: ProliferatorTier): ProliferatorDefinition {
+  return PROLIFERATORS[tier];
+}
+
+export function getProliferatorTier(itemId: ItemId): ProliferatorTier | undefined {
+  return (Object.values(PROLIFERATORS).find((definition) => definition.itemId === itemId)?.tier);
+}
+
 export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
   wind_turbine: {
     id: "wind_turbine", name: "风力涡轮机", shortName: "风机", kind: "power",
@@ -152,6 +182,11 @@ export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
     id: "assembling_machine_mk3", name: "制造台 Mk.III", shortName: "制造台 Mk.III", kind: "machine",
     powerDemandKw: 1080, speed: 1.5, inputCapacity: 240, outputCapacity: 240, tier: 3, family: "assembler",
     description: "以 1.5 倍配方速度进行量子级装配，是最高等级的通用制造设备。",
+  },
+  spray_coater: {
+    id: "spray_coater", name: "喷涂机", shortName: "喷涂模块", kind: "machine",
+    powerDemandKw: 90, speed: 1, inputCapacity: 600, outputCapacity: 0,
+    description: "作为生产节点的内联模块消耗增产剂，为当前配方提供额外产出或生产加速。",
   },
   matrix_lab: {
     id: "matrix_lab", name: "矩阵研究站", shortName: "研究站", kind: "machine",
@@ -245,6 +280,9 @@ export const RECIPES: Record<RecipeId, RecipeDefinition> = {
   logistics_vessel: { id: "logistics_vessel", name: "物流运输船", buildingId: "assembling_machine_mk1", duration: 8, requiredTechId: "interstellar_logistics", inputs: [{ itemId: "titanium_alloy", amount: 10 }, { itemId: "processor", amount: 10 }, { itemId: "plasma_exciter", amount: 4 }], outputs: [{ itemId: "logistics_vessel", amount: 1 }] },
   graphene: { id: "graphene", name: "石墨烯", buildingId: "chemical_plant", duration: 3, requiredTechId: "nanomaterials", inputs: [{ itemId: "energetic_graphite", amount: 3 }, { itemId: "sulfuric_acid", amount: 1 }], outputs: [{ itemId: "graphene", amount: 2 }] },
   carbon_nanotube: { id: "carbon_nanotube", name: "碳纳米管", buildingId: "chemical_plant", duration: 4, requiredTechId: "nanomaterials", inputs: [{ itemId: "graphene", amount: 3 }, { itemId: "titanium_ingot", amount: 1 }], outputs: [{ itemId: "carbon_nanotube", amount: 2 }] },
+  proliferator_mk1: { id: "proliferator_mk1", name: "增产剂 Mk.I", buildingId: "assembling_machine_mk1", duration: 0.5, requiredTechId: "proliferator_1", inputs: [{ itemId: "coal", amount: 1 }], outputs: [{ itemId: "proliferator_mk1", amount: 1 }] },
+  proliferator_mk2: { id: "proliferator_mk2", name: "增产剂 Mk.II", buildingId: "assembling_machine_mk1", duration: 1, requiredTechId: "proliferator_2", inputs: [{ itemId: "proliferator_mk1", amount: 2 }, { itemId: "diamond", amount: 1 }], outputs: [{ itemId: "proliferator_mk2", amount: 1 }] },
+  proliferator_mk3: { id: "proliferator_mk3", name: "增产剂 Mk.III", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "proliferator_3", inputs: [{ itemId: "proliferator_mk2", amount: 2 }, { itemId: "carbon_nanotube", amount: 1 }], outputs: [{ itemId: "proliferator_mk3", amount: 1 }] },
   crystal_silicon: { id: "crystal_silicon", name: "晶格硅", buildingId: "arc_smelter", duration: 2, requiredTechId: "nanomaterials", inputs: [{ itemId: "high_purity_silicon", amount: 1 }], outputs: [{ itemId: "crystal_silicon", amount: 1 }] },
   particle_broadband: { id: "particle_broadband", name: "粒子宽带", buildingId: "assembling_machine_mk1", duration: 8, requiredTechId: "information_matrix", inputs: [{ itemId: "carbon_nanotube", amount: 2 }, { itemId: "crystal_silicon", amount: 2 }, { itemId: "plastic", amount: 1 }], outputs: [{ itemId: "particle_broadband", amount: 1 }] },
   electric_motor: { id: "electric_motor", name: "电动机", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "iron_ingot", amount: 2 }, { itemId: "gear", amount: 1 }, { itemId: "magnetic_coil", amount: 1 }], outputs: [{ itemId: "electric_motor", amount: 1 }] },
@@ -343,6 +381,7 @@ export const CONSTRUCTION: ConstructionDefinition[] = [
   { buildingId: "assembling_machine_mk1", name: "制造台 Mk.I", outputAmount: 1, requiredTechId: "basic_assembling", costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "gear", amount: 8 }, { itemId: "circuit_board", amount: 4 }] },
   { buildingId: "assembling_machine_mk2", name: "制造台 Mk.II", outputAmount: 1, requiredTechId: "high_speed_assembling", costs: [{ itemId: "steel", amount: 8 }, { itemId: "gear", amount: 8 }, { itemId: "circuit_board", amount: 8 }, { itemId: "magnetic_coil", amount: 4 }] },
   { buildingId: "assembling_machine_mk3", name: "制造台 Mk.III", outputAmount: 1, requiredTechId: "quantum_printing", costs: [{ itemId: "titanium_alloy", amount: 8 }, { itemId: "particle_broadband", amount: 8 }, { itemId: "quantum_chip", amount: 4 }] },
+  { buildingId: "spray_coater", name: "喷涂机", outputAmount: 1, requiredTechId: "proliferator_1", costs: [{ itemId: "steel", amount: 4 }, { itemId: "circuit_board", amount: 4 }, { itemId: "plasma_exciter", amount: 2 }] },
   { buildingId: "matrix_lab", name: "矩阵研究站", outputAmount: 1, requiredTechId: "electromagnetic_matrix", costs: [{ itemId: "iron_ingot", amount: 8 }, { itemId: "glass", amount: 4 }, { itemId: "circuit_board", amount: 4 }, { itemId: "magnetic_coil", amount: 4 }] },
   { buildingId: "conveyor_belt_mk1", name: "传送带 Mk.I", outputAmount: 3, requiredTechId: "basic_logistics", costs: [{ itemId: "iron_ingot", amount: 2 }, { itemId: "gear", amount: 1 }] },
   { buildingId: "conveyor_belt_mk2", name: "传送带 Mk.II", outputAmount: 3, requiredTechId: "high_speed_logistics", costs: [{ itemId: "iron_ingot", amount: 2 }, { itemId: "gear", amount: 1 }, { itemId: "magnetic_coil", amount: 2 }] },
@@ -426,6 +465,13 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     summary: "优化采矿机切削轨迹和矿脉覆盖，使全部固体采矿节点持续增产。",
     unlocks: ["固体矿物开采速度 +50%"],
   },
+  proliferator_1: {
+    id: "proliferator_1", name: "增产剂 Mk.I", tier: 6,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 20 }, { itemId: "energy_matrix", amount: 20 }],
+    prerequisites: ["energy_matrix", "high_speed_assembling", "high_speed_logistics"],
+    summary: "将煤加工为可控喷涂介质，并建立生产节点的内联喷涂模块。",
+    unlocks: ["增产剂 Mk.I", "喷涂机", "额外产出与加速模式"],
+  },
   xray_cracking: {
     id: "xray_cracking", name: "X 射线裂解", tier: 5,
     costs: [{ itemId: "electromagnetic_matrix", amount: 10 }, { itemId: "energy_matrix", amount: 10 }],
@@ -460,6 +506,13 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     prerequisites: ["high_strength_crystal", "polymer_chemistry"],
     summary: "以钛晶石和金刚石编码物质结构，建立第三阶段科研矩阵。",
     unlocks: ["钛晶石", "结构矩阵生产", "黄色矩阵科研"],
+  },
+  proliferator_2: {
+    id: "proliferator_2", name: "增产剂 Mk.II", tier: 8,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 25 }, { itemId: "energy_matrix", amount: 25 }, { itemId: "structure_matrix", amount: 20 }],
+    prerequisites: ["structure_matrix", "high_strength_crystal", "proliferator_1"],
+    summary: "利用金刚石稳定喷涂颗粒，在更高耗电下提升增产或加速收益。",
+    unlocks: ["增产剂 Mk.II", "额外产出 +20%", "生产加速 +50%"],
   },
   titanium_alloy: {
     id: "titanium_alloy", name: "钛合金", tier: 8,
@@ -507,6 +560,18 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     prerequisites: ["interstellar_logistics", "nanomaterials"],
     summary: "将粒子宽带与处理器编码为高密度信息模型，建立第四阶段科研矩阵。",
     unlocks: ["粒子宽带", "信息矩阵生产", "紫色矩阵科研"],
+  },
+  proliferator_3: {
+    id: "proliferator_3", name: "增产剂 Mk.III", tier: 12,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 30 },
+      { itemId: "energy_matrix", amount: 30 },
+      { itemId: "structure_matrix", amount: 30 },
+      { itemId: "information_matrix", amount: 30 },
+    ],
+    prerequisites: ["information_matrix", "nanomaterials", "proliferator_2"],
+    summary: "以碳纳米管维持高密度喷涂结构，获得最高增产与生产加速效果。",
+    unlocks: ["增产剂 Mk.III", "额外产出 +25%", "生产加速 +100%"],
   },
   research_speed_1: {
     id: "research_speed_1", name: "科研速度 I", tier: 12,

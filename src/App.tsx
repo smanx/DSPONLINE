@@ -38,6 +38,7 @@ import {
   getBeltCapacity,
   getEntityOperatingStatus,
   handcraftRecipe,
+  installSprayCoater,
   installMiner,
   manualMine,
   moveEntityInputToEntity,
@@ -60,6 +61,7 @@ import {
   setFuelItem,
   setLogisticsItem,
   setPaused,
+  setProliferatorConfiguration,
   setStationMode,
   setStationMinimumLoad,
   setSplitterMode,
@@ -67,7 +69,7 @@ import {
   upgradeEntity,
 } from "./game/engine";
 import { clearGame, loadGame, saveGame } from "./game/storage";
-import type { BeltTier, BuildingId, DraggedItemSourceKind, ItemId, PlacementCount, PlanetId, RecipeId, StationMinimumLoad } from "./game/types";
+import type { BeltTier, BuildingId, DraggedItemSourceKind, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StationMinimumLoad } from "./game/types";
 
 type InspectorTab = "inspect" | "fabricate";
 
@@ -502,6 +504,15 @@ function FactoryGame() {
           onUpgradeBelt={(beltId) => {
             setGame((current) => upgradeBelt(current, beltId));
             setNotice("运输线升级完成");
+          }}
+          onInstallSprayCoater={(entityId) => {
+            setGame((current) => installSprayCoater(current, entityId));
+            setNotice("喷涂模块安装完成，可接入增产剂并选择生产模式");
+          }}
+          onProliferatorConfiguration={(entityId, tier: ProliferatorTier, mode: ProliferatorMode) => {
+            setGame((current) => setProliferatorConfiguration(current, entityId, tier, mode));
+            const modeName = mode === "extra" ? "额外产出" : mode === "speed" ? "生产加速" : "正常生产";
+            setNotice(`喷涂配置已切换：Mk.${tier === 3 ? "III" : tier === 2 ? "II" : "I"} · ${modeName}`);
           }}
           onCraft={(buildingId) => setGame((current) => craftConstruction(current, buildingId))}
           onCraftItem={(recipeId, batches) => setGame((current) => handcraftRecipe(current, recipeId, batches))}

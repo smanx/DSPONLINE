@@ -13,13 +13,15 @@ import {
   RadioTower,
   Rocket,
   Satellite,
+  Sparkles,
   Sun,
   Wind,
   Zap,
 } from "lucide-react";
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { FUEL_ENERGY_MJ, FUEL_ITEM_IDS, ITEMS, MATRIX_ITEM_IDS, getBuilding, getExtractorBuildingId, getItem, getRecipe, getRecipesForBuilding } from "../game/content";
-import { getStationVesselCapacity } from "../game/engine";
+import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
+import { useEffect } from "react";
+import { FUEL_ENERGY_MJ, FUEL_ITEM_IDS, ITEMS, MATRIX_ITEM_IDS, getBuilding, getExtractorBuildingId, getItem, getProliferator, getRecipe, getRecipesForBuilding } from "../game/content";
+import { getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getStationVesselCapacity } from "../game/engine";
 import { ItemHoverCard } from "./ItemReference";
 import type {
   BuildingId,
@@ -69,6 +71,14 @@ export type FactoryFlowNode = Node<FactoryNodeData, EntityKind>;
 
 function formatAmount(value: number): string {
   return Math.floor(value).toLocaleString("zh-CN");
+}
+
+function useDynamicHandles(entityId: string, signature: string): void {
+  const updateNodeInternals = useUpdateNodeInternals();
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => updateNodeInternals(entityId));
+    return () => window.cancelAnimationFrame(frame);
+  }, [entityId, signature, updateNodeInternals]);
 }
 
 function ItemBadge({ itemId, amount, muted = false }: { itemId: ItemId; amount: number; muted?: boolean }) {
@@ -287,7 +297,13 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
     (entity.inputs[itemId] ?? 0) > 0 ||
     data.completedTechIds.includes(itemId as TechId))
     .map((itemId) => ({ itemId, amount: 1 }));
-  const inputs = recipe?.id === "matrix_research" ? researchInputs : recipe?.inputs ?? [];
+  const recipeInputs = recipe?.id === "matrix_research" ? researchInputs : recipe?.inputs ?? [];
+  const proliferatorItemId = entity.sprayCoaterInstalled ? getEntityProliferatorItemId(entity) : undefined;
+  const inputs = proliferatorItemId && !recipeInputs.some((input) => input.itemId === proliferatorItemId)
+    ? [...recipeInputs, { itemId: proliferatorItemId, amount: 1 }]
+    : recipeInputs;
+  const outputIds = recipe?.outputs.map((output) => output.itemId) ?? [];
+  useDynamicHandles(entity.id, `${inputs.map((input) => input.itemId).join(",")}>${outputIds.join(",")}`);
   const acceptsCargo = cargo && inputs.some((input) => input.itemId === cargo.itemId);
   const adding = placement === entity.buildingId;
   const utilizationTone = data.status.tone === "running" ? "good" : data.status.tone === "warning" ? "partial" : data.status.tone === "blocked" ? "blocked" : "idle";
@@ -302,6 +318,10 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       (data.completedTechIds.includes("research_speed_2") ? 0.25 : 0) +
       (data.completedTechIds.includes("research_speed_3") ? 0.25 : 0)
     : 1;
+  const proliferator = entity.proliferatorTier ? getProliferator(entity.proliferatorTier) : null;
+  const proliferatorPoints = proliferator
+    ? Math.floor((entity.proliferatorPoints ?? 0) + (entity.inputs[proliferator.itemId] ?? 0) * proliferator.sprayPoints)
+    : 0;
 
   const add = (event: React.MouseEvent) => {
     if (!adding) return;
@@ -412,9 +432,16 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           ) : null}
         </div>
       </div> : null}
+      {entity.sprayCoaterInstalled && proliferator ? (
+        <div className={`proliferator-readout proliferator-readout--${entity.proliferatorMode ?? "normal"}`}>
+          <Sparkles size={13} />
+          <span>{entity.proliferatorMode === "extra" ? "额外产出" : entity.proliferatorMode === "speed" ? "生产加速" : "喷涂待机"} · Mk.{proliferator.tier === 3 ? "III" : proliferator.tier === 2 ? "II" : "I"}</span>
+          <strong>{proliferatorPoints} 点</strong>
+        </div>
+      ) : null}
       <footer className="factory-node__footer">
-        <span><Zap size={11} /> {rayReceiver ? `${(entity.powerOutputKw ?? 0).toFixed(0)} kW 接收` : `${((building.powerDemandKw ?? 0) * entity.machineCount).toFixed(0)} kW`}</span>
-        <span><Gauge size={11} /> {railEjector ? `累计 ${formatAmount(data.dysonSwarm.totalLaunched)} 帆` : launchSilo ? `累计 ${formatAmount(data.dysonSphere.totalRocketsLaunched)} 枚` : `${(building.speed * speedMultiplier).toFixed(2)}×`}</span>
+        <span><Zap size={11} /> {rayReceiver ? `${(entity.powerOutputKw ?? 0).toFixed(0)} kW 接收` : `${((building.powerDemandKw ?? 0) * entity.machineCount * getEntityProliferatorPowerMultiplier(entity)).toFixed(0)} kW`}</span>
+        <span><Gauge size={11} /> {railEjector ? `累计 ${formatAmount(data.dysonSwarm.totalLaunched)} 帆` : launchSilo ? `累计 ${formatAmount(data.dysonSphere.totalRocketsLaunched)} 枚` : `${(building.speed * speedMultiplier * getEntityProliferatorSpeedMultiplier(entity)).toFixed(2)}×`}</span>
       </footer>
     </article>
   );
@@ -424,6 +451,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const { entity, cargo, placement } = data;
   const building = getBuilding(entity.buildingId!);
   const itemId = entity.storedItemId;
+  useDynamicHandles(entity.id, itemId ?? "unconfigured");
   const cargoKind = cargo ? getItem(cargo.itemId).kind : null;
   const acceptsCargo = Boolean(cargo && (!itemId || cargo.itemId === itemId) && (
     building.accepts === "any" || building.accepts === cargoKind || (building.accepts === "solid" && cargoKind === "matrix")
@@ -497,6 +525,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const { entity, placement, cargo } = data;
   const building = getBuilding(entity.buildingId!);
+  useDynamicHandles(entity.id, entity.fuelItemId ?? "no-fuel-port");
   const adding = placement === entity.buildingId;
   const thermal = entity.buildingId === "thermal_power_plant";
   const fuelId = entity.fuelItemId;

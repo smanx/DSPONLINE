@@ -1,5 +1,5 @@
-import { FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, getBuilding, getExtractorBuildingId, getRecipe, getTechnology } from "./content";
-import { getEntityOperatingStatus, getRecipeSpeedMultiplier } from "./engine";
+import { FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, getBuilding, getExtractorBuildingId, getProliferator, getRecipe, getTechnology } from "./content";
+import { getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getProliferatorSprayCost, getRecipeSpeedMultiplier } from "./engine";
 import type { EntityOperatingStatus, FactoryEntity, GameState, ItemId } from "./types";
 
 const THERMAL_EFFICIENCY = 0.8;
@@ -167,8 +167,10 @@ export function calculateFactoryStatistics(state: GameState): FactoryStatistics 
 
     const recipe = getRecipe(entity.recipeId);
     if (entity.kind !== "machine" || !entity.buildingId || !recipe) continue;
-    const cyclesPerMinute = getBuilding(entity.buildingId).speed * entity.machineCount * getRecipeSpeedMultiplier(state, recipe.id) / recipe.duration * 60 * entity.utilization;
-    const ratedDemandKw = (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount;
+    const cyclesPerMinute = getBuilding(entity.buildingId).speed * entity.machineCount * getRecipeSpeedMultiplier(state, recipe.id) *
+      getEntityProliferatorSpeedMultiplier(entity) / recipe.duration * 60 * entity.utilization;
+    const ratedDemandKw = (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount *
+      getEntityProliferatorPowerMultiplier(entity);
     const demanding = ["running", "low-power", "no-power"].includes(status.code);
     if (ratedDemandKw > 0 && entity.planetId === state.activePlanetId) {
       powerConsumers.push({
@@ -202,9 +204,17 @@ export function calculateFactoryStatistics(state: GameState): FactoryStatistics 
       record.consumptionPerMinute += cyclesPerMinute * input.amount;
       record.consumerCount += 1;
     }
+    const proliferatorItemId = getEntityProliferatorItemId(entity);
+    if (proliferatorItemId && getEntityProliferatorPowerMultiplier(entity) > 1) {
+      const proliferator = recordFor(proliferatorItemId);
+      const sprayPoints = entity.proliferatorTier ? getProliferator(entity.proliferatorTier).sprayPoints : 1;
+      proliferator.consumptionPerMinute += cyclesPerMinute * getProliferatorSprayCost(recipe) / sprayPoints;
+      proliferator.consumerCount += 1;
+    }
+    const extraProductMultiplier = 1 + getEntityExtraProductBonus(entity);
     for (const output of recipe.outputs) {
       const record = recordFor(output.itemId);
-      record.productionPerMinute += cyclesPerMinute * output.amount;
+      record.productionPerMinute += cyclesPerMinute * output.amount * extraProductMultiplier;
       record.producerCount += 1;
       if (status.tone === "blocked") record.blockedProducerCount += 1;
     }

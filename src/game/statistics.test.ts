@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { advanceSimulation, createInitialState, installMiner, placeBuilding, setFuelItem } from "./engine";
+import { advanceSimulation, createInitialState, installMiner, installSprayCoater, placeBuilding, setFuelItem, setProliferatorConfiguration } from "./engine";
 import { calculateFactoryStatistics } from "./statistics";
 
 describe("factory statistics", () => {
@@ -49,5 +49,26 @@ describe("factory statistics", () => {
     expect(state.metrics.thermalGenerationKw).toBe(420);
     expect(coal.consumptionPerMinute).toBeCloseTo(11.67, 2);
     expect(coal.consumerCount).toBe(1);
+  });
+
+  it("includes proliferator output, consumption and power multipliers", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("proliferator_1");
+    state.construction.spray_coater = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 2);
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 240, y: 0 });
+    const assemblerId = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!.id;
+    state = installSprayCoater(state, assemblerId);
+    state = setProliferatorConfiguration(state, assemblerId, 1, "extra");
+    const assembler = state.entities.find((entity) => entity.id === assemblerId)!;
+    assembler.inputs.iron_ingot = 20;
+    assembler.inputs.proliferator_mk1 = 2;
+    state = advanceSimulation(state, 1);
+
+    const statistics = calculateFactoryStatistics(state);
+    expect(statistics.items.find((item) => item.itemId === "gear")).toMatchObject({ productionPerMinute: 50.63 });
+    expect(statistics.items.find((item) => item.itemId === "iron_ingot")).toMatchObject({ consumptionPerMinute: 45 });
+    expect(statistics.items.find((item) => item.itemId === "proliferator_mk1")).toMatchObject({ consumptionPerMinute: 3.75 });
+    expect(statistics.powerConsumers.find((consumer) => consumer.entityId === assemblerId)).toMatchObject({ ratedDemandKw: 351 });
   });
 });

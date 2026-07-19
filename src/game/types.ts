@@ -34,6 +34,9 @@ export type ItemId =
   | "logistics_vessel"
   | "graphene"
   | "carbon_nanotube"
+  | "proliferator_mk1"
+  | "proliferator_mk2"
+  | "proliferator_mk3"
   | "crystal_silicon"
   | "particle_broadband"
   | "electric_motor"
@@ -103,6 +106,9 @@ export type TechId =
   | "plane_smelting"
   | "quantum_printing"
   | "super_magnetic_logistics"
+  | "proliferator_1"
+  | "proliferator_2"
+  | "proliferator_3"
   | "dyson_sphere_program"
   | "vertical_launching_silo"
   | "dyson_shell";
@@ -116,6 +122,7 @@ export type BuildingId =
   | "assembling_machine_mk1"
   | "assembling_machine_mk2"
   | "assembling_machine_mk3"
+  | "spray_coater"
   | "matrix_lab"
   | "oil_extractor"
   | "oil_refinery"
@@ -131,6 +138,8 @@ export type BuildingId =
   | "splitter_4way";
 
 export type BeltTier = 1 | 2 | 3;
+export type ProliferatorTier = 1 | 2 | 3;
+export type ProliferatorMode = "normal" | "extra" | "speed";
 export type ConveyorBeltId = "conveyor_belt_mk1" | "conveyor_belt_mk2" | "conveyor_belt_mk3";
 export type ConstructionId = BuildingId | ConveyorBeltId;
 
@@ -159,6 +168,9 @@ export type RecipeId =
   | "logistics_vessel"
   | "graphene"
   | "carbon_nanotube"
+  | "proliferator_mk1"
+  | "proliferator_mk2"
+  | "proliferator_mk3"
   | "crystal_silicon"
   | "particle_broadband"
   | "electric_motor"
@@ -289,6 +301,11 @@ export interface FactoryEntity {
   stationPeerId?: string;
   stationVessels?: number;
   stationMinimumLoad?: StationMinimumLoad;
+  sprayCoaterInstalled?: boolean;
+  proliferatorTier?: ProliferatorTier;
+  proliferatorMode?: ProliferatorMode;
+  proliferatorPoints?: number;
+  proliferatorBonusProgress?: Partial<Record<ItemId, number>>;
   routingCursor: number;
   machineCount: number;
   minerCount: number;
@@ -361,6 +378,7 @@ export interface EntityOperatingStatus {
     | "no-power"
     | "low-power"
     | "missing-fuel"
+    | "missing-proliferator"
     | "no-fuel-selected"
     | "grid-standby"
     | "missing-route"
@@ -380,7 +398,7 @@ export interface ResearchState {
 }
 
 export interface GameState {
-  version: 8;
+  version: 9;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];

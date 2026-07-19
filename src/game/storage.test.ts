@@ -9,7 +9,7 @@ const SAVE_KEY = "dsp-idle-network.save.v1";
 describe("game storage", () => {
   beforeEach(() => window.localStorage.clear());
 
-  it("round-trips a v8 multi-planet research save", () => {
+  it("round-trips a v9 multi-planet research save", () => {
     const state = createInitialState();
     state.research.selectedTechId = "electromagnetic_matrix";
     state.research.queuedTechIds = ["electromagnetism"];
@@ -18,7 +18,7 @@ describe("game storage", () => {
     saveGame(state);
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(8);
+    expect(loaded.version).toBe(9);
     expect(loaded.activePlanetId).toBe("home");
     expect(loaded.planetMetrics.ashen.powerFactor).toBe(1);
     expect(loaded.research.selectedTechId).toBe("electromagnetic_matrix");
@@ -44,7 +44,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(8);
+    expect(loaded.version).toBe(9);
     expect(loaded.tray.iron_ore).toBe(4);
     expect(loaded.entities[0].outputs.iron_ore).toBe(3);
     expect(loaded.entities.every((entity) => entity.progress === 0)).toBe(true);
@@ -165,7 +165,7 @@ describe("game storage", () => {
 
     const loaded = loadGame().state;
     const station = loaded.entities.find((entity) => entity.kind === "station")!;
-    expect(loaded.version).toBe(8);
+    expect(loaded.version).toBe(9);
     expect(station.stationVessels).toBe(1);
     expect(station.stationMinimumLoad).toBe(1);
   });
@@ -219,7 +219,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(8);
+    expect(loaded.version).toBe(9);
     expect(loaded.dysonSwarm).toEqual({
       sailsInOrbit: 0,
       totalLaunched: 0,
@@ -341,7 +341,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(8);
+    expect(loaded.version).toBe(9);
     expect(loaded.belts[0]).toMatchObject({ id: "legacy_belt", tier: 1, progress: 0.5 });
     expect(loaded.construction).toMatchObject({
       plane_smelter: 0,
@@ -376,5 +376,50 @@ describe("game storage", () => {
     expect(loaded.entities.find((entity) => entity.id === assembler.id)?.buildingId).toBe("assembling_machine_mk2");
     expect(loaded.belts[0]).toMatchObject({ id: "belt_mk2", tier: 2, progress: 0.25 });
     expect(loaded.construction.conveyor_belt_mk1).toBe(2);
+  });
+
+  it("migrates v8 production nodes into a consistent empty proliferator state", () => {
+    let current = createInitialState();
+    current = placeBuilding(current, "assembling_machine_mk1", { x: 100, y: 0 });
+    const legacy = JSON.parse(JSON.stringify(current));
+    legacy.version = 8;
+    delete legacy.construction.spray_coater;
+    const assembler = legacy.entities.find((entity: { buildingId?: string }) => entity.buildingId === "assembling_machine_mk1");
+    delete assembler.sprayCoaterInstalled;
+    delete assembler.proliferatorTier;
+    delete assembler.proliferatorMode;
+    delete assembler.proliferatorPoints;
+    delete assembler.proliferatorBonusProgress;
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
+
+    const loaded = loadGame().state;
+    const migrated = loaded.entities.find((entity) => entity.id === assembler.id)!;
+    expect(loaded.version).toBe(9);
+    expect(loaded.construction.spray_coater).toBe(0);
+    expect(migrated).toMatchObject({ sprayCoaterInstalled: false, proliferatorPoints: 0, proliferatorBonusProgress: {} });
+    expect(migrated.proliferatorTier).toBeUndefined();
+    expect(migrated.proliferatorMode).toBeUndefined();
+  });
+
+  it("sanitizes malformed v9 proliferator module fields", () => {
+    let current = createInitialState();
+    current = placeBuilding(current, "assembling_machine_mk1", { x: 100, y: 0 });
+    const saved = JSON.parse(JSON.stringify(current));
+    const assembler = saved.entities.find((entity: { buildingId?: string }) => entity.buildingId === "assembling_machine_mk1");
+    assembler.sprayCoaterInstalled = true;
+    assembler.proliferatorTier = 99;
+    assembler.proliferatorMode = "invalid";
+    assembler.proliferatorPoints = 3.9;
+    assembler.proliferatorBonusProgress = { gear: 2.75 };
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: saved }));
+
+    const migrated = loadGame().state.entities.find((entity) => entity.id === assembler.id)!;
+    expect(migrated).toMatchObject({
+      sprayCoaterInstalled: true,
+      proliferatorTier: 1,
+      proliferatorMode: "normal",
+      proliferatorPoints: 3,
+      proliferatorBonusProgress: { gear: 0.75 },
+    });
   });
 });

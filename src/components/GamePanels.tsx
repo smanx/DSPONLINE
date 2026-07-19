@@ -28,6 +28,7 @@ import {
   Rocket,
   Satellite,
   Search,
+  Sparkles,
   Sun,
   LockKeyhole,
   Trash2,
@@ -37,8 +38,8 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { ItemHoverCard } from "./ItemReference";
-import { CONSTRUCTION, FUEL_ENERGY_MJ, FUEL_ITEM_IDS, ITEMS, PLANET_LIST, RECIPES_BY_BUILDING, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getItem, getPlanet, getRecipe, getRecipesForBuilding, getTechnology, isConveyorBeltId } from "../game/content";
-import { DYSON_SHELL_CAPACITY_PER_STRUCTURE, RAY_RECEIVER_CAPACITY_KW, canCraftConstruction, canHandcraftRecipe, canUpgradeBelt, canUpgradeEntity, findInterstellarPeer, getBeltCapacity, getEntityOperatingStatus, getMiningSpeedMultiplier, getPlanetMetrics, getStationMinimumCargo, getStationMinimumLoad, getStationVesselCapacity, isTechnologyCompleted } from "../game/engine";
+import { CONSTRUCTION, FUEL_ENERGY_MJ, FUEL_ITEM_IDS, ITEMS, PLANET_LIST, RECIPES_BY_BUILDING, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getTechnology, isConveyorBeltId } from "../game/content";
+import { DYSON_SHELL_CAPACITY_PER_STRUCTURE, RAY_RECEIVER_CAPACITY_KW, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canUpgradeBelt, canUpgradeEntity, findInterstellarPeer, getBeltCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMiningSpeedMultiplier, getPlanetMetrics, getProliferatorSprayCost, getStationMinimumCargo, getStationMinimumLoad, getStationVesselCapacity, isProliferatorEligible, isTechnologyCompleted } from "../game/engine";
 import type {
   BeltTier,
   BeltConnection,
@@ -51,6 +52,8 @@ import type {
   ItemId,
   PlacementCount,
   PlanetId,
+  ProliferatorMode,
+  ProliferatorTier,
   RecipeId,
   StationMinimumLoad,
 } from "../game/types";
@@ -85,6 +88,8 @@ export function ResourceRail({ game, onPickTray, onDropCargo, onDropDraggedItem 
   const hasEquipmentUpgrade = game.entities.some((entity) =>
     entity.buildingId === "assembling_machine_mk2" || entity.buildingId === "assembling_machine_mk3" || entity.buildingId === "plane_smelter");
   const hasBeltUpgrade = game.belts.some((belt) => belt.tier > 1);
+  const hasSprayCoater = game.entities.some((entity) => entity.sprayCoaterInstalled);
+  const hasActiveProliferation = game.entities.some((entity) => entity.sprayCoaterInstalled && entity.proliferatorMode !== "normal");
   const objectives = [
     { label: "完成首次采集", complete: game.manualMined >= 1 },
     { label: "取得 4 个铁块", complete: (game.totalProduced.iron_ingot ?? 0) >= 4 },
@@ -97,6 +102,8 @@ export function ResourceRail({ game, onPickTray, onDropCargo, onDropDraggedItem 
     { label: "产出能量矩阵", complete: (game.totalProduced.energy_matrix ?? 0) >= 1 },
     { label: "完成首次设备升级", complete: hasEquipmentUpgrade },
     { label: "建立高速运输线", complete: hasBeltUpgrade },
+    { label: "安装首台喷涂机", complete: hasSprayCoater },
+    { label: "启动增产生产线", complete: hasActiveProliferation },
     { label: "产出结构矩阵", complete: (game.totalProduced.structure_matrix ?? 0) >= 1 },
     { label: "产出钛合金", complete: (game.totalProduced.titanium_alloy ?? 0) >= 1 },
     { label: "产出处理器", complete: (game.totalProduced.processor ?? 0) >= 1 },
@@ -291,6 +298,8 @@ interface InspectorPanelProps {
   onCraftItem: (recipeId: RecipeId, batches: number) => void;
   onUpgradeEntity: (entityId: string) => void;
   onUpgradeBelt: (beltId: string) => void;
+  onInstallSprayCoater: (entityId: string) => void;
+  onProliferatorConfiguration: (entityId: string, tier: ProliferatorTier, mode: ProliferatorMode) => void;
   onRemoveEntity: (entityId: string) => void;
   onRemoveBelt: (beltId: string) => void;
 }
@@ -364,6 +373,67 @@ function EquipmentUpgradeControl({ game, entity, onUpgrade }: {
   );
 }
 
+function ProliferatorControl({ game, entity, onInstall, onConfigure }: {
+  game: GameState;
+  entity: FactoryEntity;
+  onInstall: (entityId: string) => void;
+  onConfigure: (entityId: string, tier: ProliferatorTier, mode: ProliferatorMode) => void;
+}) {
+  if (!isProliferatorEligible(entity)) return null;
+  const stock = game.construction.spray_coater ?? 0;
+  if (!entity.sprayCoaterInstalled) {
+    const unlocked = isTechnologyCompleted(game, "proliferator_1");
+    return (
+      <section className="proliferator-control proliferator-control--install">
+        <header><span><Sparkles size={14} />生产喷涂</span><strong>模块未安装</strong></header>
+        <div><span>喷涂机库存</span><strong>{stock}/1</strong></div>
+        <button type="button" disabled={!canInstallSprayCoater(game, entity.id)} onClick={() => onInstall(entity.id)} title={unlocked ? "安装喷涂机" : "需要科技：增产剂 Mk.I"}>
+          {unlocked ? <Wrench size={14} /> : <LockKeyhole size={14} />}{unlocked ? "安装喷涂模块" : "科技锁定"}
+        </button>
+      </section>
+    );
+  }
+
+  const tier = entity.proliferatorTier ?? 1;
+  const definition = getProliferator(tier);
+  const recipe = getRecipe(entity.recipeId);
+  const availablePoints = Math.floor((entity.proliferatorPoints ?? 0) +
+    (entity.inputs[definition.itemId] ?? 0) * definition.sprayPoints);
+  const mode = entity.proliferatorMode ?? "normal";
+  const modeEffect = mode === "extra"
+    ? `额外产出 +${Math.round(getEntityExtraProductBonus(entity) * 1000) / 10}%`
+    : mode === "speed"
+      ? `生产速度 +${Math.round((getEntityProliferatorSpeedMultiplier(entity) - 1) * 100)}%`
+      : "不消耗喷涂点数";
+  return (
+    <section className="proliferator-control">
+      <header><span><Sparkles size={14} />生产喷涂</span><strong>{modeEffect}</strong></header>
+      <div className="proliferator-tier" aria-label="增产剂等级">
+        {([1, 2, 3] as ProliferatorTier[]).map((option) => {
+          const optionDefinition = getProliferator(option);
+          const unlocked = isTechnologyCompleted(game, optionDefinition.requiredTechId);
+          return <button className={tier === option ? "active" : ""} type="button" disabled={!unlocked} key={option} onClick={() => onConfigure(entity.id, option, mode)} title={unlocked ? getItem(optionDefinition.itemId).name : `需要科技：${getTechnology(optionDefinition.requiredTechId)?.name}`}>
+            Mk.{option === 3 ? "III" : option === 2 ? "II" : "I"}
+          </button>;
+        })}
+      </div>
+      <div className="segmented-control proliferator-mode" aria-label="生产喷涂模式">
+        {(["normal", "extra", "speed"] as ProliferatorMode[]).map((option) => (
+          <button className={mode === option ? "active" : ""} type="button" key={option} onClick={() => onConfigure(entity.id, tier, option)}>
+            {{ normal: "正常", extra: "增产", speed: "加速" }[option]}
+          </button>
+        ))}
+      </div>
+      <dl>
+        <div><dt>可用点数</dt><dd>{availablePoints}</dd></div>
+        <div><dt>单件点数</dt><dd>{definition.sprayPoints}</dd></div>
+        <div><dt>每周期消耗</dt><dd>{getProliferatorSprayCost(recipe)}</dd></div>
+        <div><dt>耗电倍率</dt><dd>{getEntityProliferatorPowerMultiplier(entity).toFixed(2)}×</dd></div>
+      </dl>
+    </section>
+  );
+}
+
 function EntityInspector({
   game,
   entity,
@@ -374,6 +444,8 @@ function EntityInspector({
   onStationVesselAdjust,
   onStationMinimumLoadChange,
   onSplitterModeChange,
+  onInstallSprayCoater,
+  onProliferatorConfiguration,
   onUpgrade,
   onRemove,
 }: {
@@ -386,6 +458,8 @@ function EntityInspector({
   onStationVesselAdjust: (entityId: string, delta: number) => void;
   onStationMinimumLoadChange: (entityId: string, minimumLoad: StationMinimumLoad) => void;
   onSplitterModeChange: (entityId: string, mode: "balanced" | "priority") => void;
+  onInstallSprayCoater: (entityId: string) => void;
+  onProliferatorConfiguration: (entityId: string, tier: ProliferatorTier, mode: ProliferatorMode) => void;
   onUpgrade: (entityId: string) => void;
   onRemove: (entityId: string) => void;
 }) {
@@ -573,12 +647,19 @@ function EntityInspector({
             {rayReceiver ? <div><dt>接收功率</dt><dd>{(entity.powerOutputKw ?? 0).toFixed(0)} kW</dd></div> : null}
             <div><dt>{railEjector || launchSilo ? "发射速率" : "实际产出"}</dt><dd>{recipe?.id === "ray_power" ? `${(entity.powerOutputKw ?? 0).toFixed(0)} kW` : `${entity.productionRate.toFixed(1)}/min`}</dd></div>
             <div><dt>{rayReceiver ? "额定接收" : "额定耗电"}</dt><dd>{rayReceiver ? `${RAY_RECEIVER_CAPACITY_KW * entity.machineCount} kW` : `${((building.powerDemandKw ?? 0) * entity.machineCount).toFixed(0)} kW`}</dd></div>
+            {entity.kind === "machine" && entity.sprayCoaterInstalled ? (
+              <>
+                <div><dt>喷涂速度</dt><dd>{getEntityProliferatorSpeedMultiplier(entity).toFixed(2)}×</dd></div>
+                <div><dt>喷涂耗电</dt><dd>{getEntityProliferatorPowerMultiplier(entity).toFixed(2)}×</dd></div>
+              </>
+            ) : null}
             <div><dt>配方周期</dt><dd>{recipe?.id === "ray_power" ? "连续" : recipe ? `${recipe.duration.toFixed(1)} s` : "-"}</dd></div>
             {railEjector ? <div><dt>戴森云轨道帆</dt><dd>{formatAmount(game.dysonSwarm.sailsInOrbit)}</dd></div> : null}
             {launchSilo ? <div><dt>永久结构点</dt><dd>{formatAmount(game.dysonSphere.structurePoints)}</dd></div> : null}
           </>
         )}
       </dl>
+      <ProliferatorControl game={game} entity={entity} onInstall={onInstallSprayCoater} onConfigure={onProliferatorConfiguration} />
       <EquipmentUpgradeControl game={game} entity={entity} onUpgrade={onUpgrade} />
       <p className="inspector-description">{building.description}</p>
       <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}>
@@ -741,7 +822,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
         </button>
       </div>
       {props.tab === "fabricate" ? <Fabricator game={props.game} onCraft={props.onCraft} onCraftItem={props.onCraftItem} /> : props.selectedEntity ? (
-        <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onSplitterModeChange={props.onSplitterModeChange} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} />
+        <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} />
       ) : props.selectedBelt ? (
         <BeltInspector game={props.game} belt={props.selectedBelt} onPriorityChange={props.onBeltPriorityChange} onUpgrade={props.onUpgradeBelt} onRemove={props.onRemoveBelt} />
       ) : <InspectorEmpty game={props.game} />}

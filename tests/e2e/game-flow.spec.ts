@@ -499,6 +499,44 @@ async function openHandCarryGame(page: Page) {
   await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
 }
 
+async function openProliferatorStageGame(page: Page) {
+  await page.addInitScript(() => {
+    const entityBase = {
+      planetId: "home",
+      minerCount: 0,
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+    };
+    const state = {
+      version: 9,
+      nextId: 4,
+      activePlanetId: "home",
+      entities: [
+        { ...entityBase, id: "spray_wind", kind: "power", position: { x: -260, y: -820 }, buildingId: "wind_turbine", machineCount: 3, inputs: {}, outputs: {} },
+        { ...entityBase, id: "spray_storage", kind: "storage", position: { x: -260, y: -560 }, buildingId: "storage_mk1", storedItemId: "proliferator_mk3", machineCount: 1, inputs: {}, outputs: { proliferator_mk3: 5 } },
+        { ...entityBase, id: "spray_assembler", kind: "machine", position: { x: 180, y: -560 }, buildingId: "assembling_machine_mk1", recipeId: "gear", machineCount: 1, inputs: { iron_ingot: 20 }, outputs: {} },
+      ],
+      belts: [],
+      construction: { spray_coater: 1, conveyor_belt_mk1: 1 },
+      tray: {},
+      planetTrays: { home: {}, ashen: {} },
+      totalProduced: {},
+      research: {
+        selectedTechId: null,
+        queuedTechIds: [],
+        progressByTech: {},
+        completedTechIds: ["proliferator_1", "proliferator_2", "proliferator_3"],
+      },
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
 test("manual mining feeds a powered smelter", async ({ page }) => {
   await page.setViewportSize({ width: 1560, height: 960 });
   await freshGame(page);
@@ -685,6 +723,7 @@ test("dragging matching ports creates a belt connection", async ({ page }) => {
   await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
   await page.mouse.down();
   await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 12 });
+  await page.waitForTimeout(120);
   await page.mouse.up();
 
   await expect(page.locator(".react-flow__edge")).toHaveCount(1);
@@ -1250,4 +1289,56 @@ test("thermal power accepts fuel and responds to mining demand", async ({ page }
   await expect.poll(async () => plant.textContent()).toContain("燃烧发电中");
   await expect.poll(async () => Number((await plant.locator(".power-output strong").textContent())?.split("/")[0].trim())).toBeGreaterThan(0);
   await page.screenshot({ path: "artifacts/qa/thermal-power-1440.png", fullPage: true });
+});
+
+test("spray coating closes the Mk.III proliferator logistics and extra-output loop", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openProliferatorStageGame(page);
+  await page.locator(".react-flow__controls-fitview").click();
+
+  const assembler = page.locator(".machine-node").filter({ hasText: "齿轮" });
+  await assembler.click();
+  const inspector = page.locator(".inspector-panel");
+  await expect(inspector.locator(".proliferator-control")).toContainText("模块未安装");
+  await inspector.getByRole("button", { name: "安装喷涂模块" }).click();
+  await inspector.locator(".proliferator-tier").getByRole("button", { name: "Mk.III" }).click();
+  await inspector.locator(".proliferator-mode").getByRole("button", { name: "增产" }).click();
+  await expect(assembler.locator(".proliferator-readout")).toContainText("额外产出 · Mk.III");
+  await expect(assembler.getByTitle("投入增产剂 Mk.III")).toBeVisible();
+
+  const storage = page.locator(".logistics-node").filter({ hasText: "增产剂 Mk.III" });
+  const source = storage.locator(".factory-handle--output");
+  const target = assembler.locator(".node-port--input").filter({ hasText: "增产剂 Mk.III" }).locator(".factory-handle--input");
+  const sourceBox = await source.boundingBox();
+  const targetBox = await target.boundingBox();
+  expect(sourceBox).not.toBeNull();
+  expect(targetBox).not.toBeNull();
+  await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 12 });
+  await page.waitForTimeout(120);
+  await page.mouse.up();
+  await expect(page.locator(".react-flow__edge")).toHaveCount(1);
+
+  await page.getByLabel("继续模拟").click();
+  const gearOutput = assembler.getByTitle("拿取齿轮");
+  await expect.poll(async () => Number(await gearOutput.locator("strong").textContent()), { timeout: 12_000 }).toBeGreaterThanOrEqual(5);
+  await expect.poll(async () => Number(await gearOutput.locator("strong").textContent()) % 1).toBe(0);
+  await expect(assembler.locator(".proliferator-readout strong")).not.toHaveText("0 点");
+  await page.locator(".react-flow__controls-zoomin").click();
+  await page.locator(".react-flow__controls-zoomin").click();
+  await page.screenshot({ path: "artifacts/qa/proliferator-loop-1440.png", fullPage: true });
+
+  await page.getByLabel("打开生产统计").click();
+  const statistics = page.getByRole("dialog", { name: "生产统计" });
+  await expect(statistics.locator(".statistics-row").filter({ hasText: "增产剂 Mk.III" })).toBeVisible();
+  await expect(statistics.locator(".statistics-row").filter({ hasText: "齿轮" })).toBeVisible();
+  await statistics.getByLabel("关闭生产统计").click();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByLabel("打开检查器").click();
+  await expect(inspector.locator(".proliferator-control")).toBeVisible();
+  await inspector.locator(".proliferator-control").scrollIntoViewIfNeeded();
+  await expect.poll(async () => inspector.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/proliferator-loop-390.png", fullPage: true });
 });
