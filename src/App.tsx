@@ -14,7 +14,7 @@ import {
   type NodeMouseHandler,
   type OnSelectionChangeParams,
 } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BuildingPlacementCursor,
   CargoCursor,
@@ -25,14 +25,8 @@ import {
   ResourceRail,
 } from "./components/GamePanels";
 import { NODE_TYPES, type FactoryFlowNode, type FactoryNodeData } from "./components/FactoryNodes";
-import { RecipeWorkspace } from "./components/RecipeWorkspace";
-import { StatisticsWorkspace } from "./components/StatisticsWorkspace";
-import { StarMapWorkspace } from "./components/StarMapWorkspace";
 import { BlueprintPlacementCursor, BlueprintWorkspace, CanvasSelectionTools, SelectionToolbar } from "./components/BlueprintWorkspace";
-import { DysonPlannerWorkspace } from "./components/DysonPlannerWorkspace";
-import { OfflineReportWorkspace } from "./components/OfflineReportWorkspace";
-import { OperationsWorkspace, type OperationsTab } from "./components/OperationsWorkspace";
-import { TechnologyWorkspace } from "./components/TechnologyWorkspace";
+import type { OperationsTab } from "./components/OperationsWorkspace";
 import { ITEMS, getBeltConstructionId, getBuilding, getBuildingUpgradeTarget, getPlanet, getTechnology } from "./game/content";
 import { getFactoryAlerts, type FactoryAlert } from "./game/alerts";
 import {
@@ -110,6 +104,18 @@ import { clearGame, clearGameSlot, exportGame, getSaveSlotSummaries, importGame,
 import type { BeltTier, BuildingId, DraggedItemSourceKind, EnergyMode, GameSettings, GameState, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad } from "./game/types";
 
 type InspectorTab = "inspect" | "fabricate";
+
+const RecipeWorkspace = lazy(() => import("./components/RecipeWorkspace").then((module) => ({ default: module.RecipeWorkspace })));
+const StatisticsWorkspace = lazy(() => import("./components/StatisticsWorkspace").then((module) => ({ default: module.StatisticsWorkspace })));
+const StarMapWorkspace = lazy(() => import("./components/StarMapWorkspace").then((module) => ({ default: module.StarMapWorkspace })));
+const DysonPlannerWorkspace = lazy(() => import("./components/DysonPlannerWorkspace").then((module) => ({ default: module.DysonPlannerWorkspace })));
+const OfflineReportWorkspace = lazy(() => import("./components/OfflineReportWorkspace").then((module) => ({ default: module.OfflineReportWorkspace })));
+const OperationsWorkspace = lazy(() => import("./components/OperationsWorkspace").then((module) => ({ default: module.OperationsWorkspace })));
+const TechnologyWorkspace = lazy(() => import("./components/TechnologyWorkspace").then((module) => ({ default: module.TechnologyWorkspace })));
+
+function WorkspaceLoading() {
+  return <div className="workspace-loading" role="status"><i /><span>正在载入工作区</span></div>;
+}
 
 function parseHandleItem(handle: string | null | undefined): ItemId | null {
   if (!handle) return null;
@@ -495,6 +501,21 @@ function FactoryGame() {
     setNotice(`本地槽位 ${slotId} 已清空`);
   }, [refreshSaveSlots]);
 
+  const beltNodeIndex = useMemo(() => {
+    const connectedInputsByTarget = new Map<string, ItemId[]>();
+    const activeEntityIds = new Set<string>();
+    for (const belt of game.belts) {
+      const inputs = connectedInputsByTarget.get(belt.target) ?? [];
+      inputs.push(belt.itemId);
+      connectedInputsByTarget.set(belt.target, inputs);
+      if (belt.lastFlow > 0.001) {
+        activeEntityIds.add(belt.source);
+        activeEntityIds.add(belt.target);
+      }
+    }
+    return { connectedInputsByTarget, activeEntityIds: [...activeEntityIds] };
+  }, [game.belts]);
+
   const commonNodeData = useMemo<Omit<FactoryNodeData, "entity" | "status" | "connectedInputItemIds">>(() => {
     const technology = getTechnology(game.research.selectedTechId);
     const progress = technology ? game.research.progressByTech[technology.id] ?? {} : {};
@@ -519,13 +540,11 @@ function FactoryGame() {
       completedTechIds: game.research.completedTechIds,
       networkTime: game.elapsedSeconds,
       paused: game.paused,
-      activeLogisticsEntityIds: [...new Set(game.belts
-        .filter((belt) => belt.lastFlow > 0.001)
-        .flatMap((belt) => [belt.source, belt.target]))],
+      activeLogisticsEntityIds: beltNodeIndex.activeEntityIds,
       dysonSwarm: game.dysonSwarm,
       dysonSphere: game.dysonSphere,
     };
-  }, [game.belts, game.cargo, game.dysonSphere, game.dysonSwarm, game.elapsedSeconds, game.paused, game.research.completedTechIds, game.research.progressByTech, game.research.selectedTechId, miningEntityId, onAddBuilding, onDropCargo, onDropDraggedItem, onEnergyModeChange, onFuelChange, onInstallMiner, onMiningStart, onMiningStop, onPickInput, onPickOutput, onRecipeChange, placement, placementCount]);
+  }, [beltNodeIndex.activeEntityIds, game.cargo, game.dysonSphere, game.dysonSwarm, game.elapsedSeconds, game.paused, game.research.completedTechIds, game.research.progressByTech, game.research.selectedTechId, miningEntityId, onAddBuilding, onDropCargo, onDropDraggedItem, onEnergyModeChange, onFuelChange, onInstallMiner, onMiningStart, onMiningStop, onPickInput, onPickOutput, onRecipeChange, placement, placementCount]);
 
   useEffect(() => {
     if (nodeDragActiveRef.current) return;
@@ -541,7 +560,7 @@ function FactoryGame() {
           data: {
             ...commonNodeData,
             entity,
-            connectedInputItemIds: game.belts.filter((belt) => belt.target === entity.id).map((belt) => belt.itemId),
+            connectedInputItemIds: beltNodeIndex.connectedInputsByTarget.get(entity.id) ?? [],
             status: getEntityOperatingStatus(game, entity),
           } as FactoryNodeData,
           selected: selectedEntityIds.includes(entity.id),
@@ -549,7 +568,7 @@ function FactoryGame() {
         } satisfies FactoryFlowNode;
       });
     });
-  }, [blueprintPlacementId, commonNodeData, game.activePlanetId, game.entities, placement, selectedEntityIds, setNodes]);
+  }, [beltNodeIndex.connectedInputsByTarget, blueprintPlacementId, commonNodeData, game.activePlanetId, game.entities, placement, selectedEntityIds, setNodes]);
 
   const edges = useMemo<Edge[]>(() => game.belts.filter((belt) => belt.planetId === game.activePlanetId).map((belt) => {
     const item = ITEMS[belt.itemId];
@@ -927,22 +946,6 @@ function FactoryGame() {
         onPlacementCountChange={(count) => { setPlacementCount(count); setPlacement(null); }}
         onOpenFabricator={() => { setInspectorTab("fabricate"); setMobilePanel("inspector"); }}
       />
-      <TechnologyWorkspace
-        open={technologyOpen}
-        game={game}
-        onClose={() => setTechnologyOpen(false)}
-        onSelect={(techId) => setGame((current) => selectTechnology(current, techId))}
-        onRemoveQueued={(techId) => setGame((current) => removeQueuedTechnology(current, techId))}
-      />
-      {statisticsOpen ? <StatisticsWorkspace open game={game} onClose={() => setStatisticsOpen(false)} /> : null}
-      <RecipeWorkspace open={recipesOpen} game={game} onClose={() => setRecipesOpen(false)} />
-      <StarMapWorkspace
-        open={starMapOpen}
-        game={game}
-        onClose={() => setStarMapOpen(false)}
-        onExplore={onExploreSystem}
-        onTravel={(planetId) => { onPlanetChange(planetId); setStarMapOpen(false); }}
-      />
       <BlueprintWorkspace
         open={blueprintsOpen}
         game={game}
@@ -954,40 +957,66 @@ function FactoryGame() {
         }}
         onRename={(blueprintId, name) => setGame((current) => renameBlueprint(current, blueprintId, name))}
       />
-      <DysonPlannerWorkspace
-        open={dysonPlannerOpen}
-        game={game}
-        onClose={() => setDysonPlannerOpen(false)}
-        onAddLayer={(systemId) => setGame((current) => addDysonLayer(current, systemId))}
-        onAddStandardLayer={(systemId) => setGame((current) => createStandardDysonLayer(current, systemId))}
-        onSelectLayer={(systemId, layerId) => setGame((current) => setActiveDysonLayer(current, systemId, layerId))}
-        onOrbitChange={(systemId, layerId, orbit) => setGame((current) => setDysonLayerOrbit(current, systemId, layerId, orbit))}
-        onRemoveLayer={(systemId, layerId) => setGame((current) => removeDysonLayer(current, systemId, layerId))}
-        onAddNode={(systemId, layerId, angle) => setGame((current) => addDysonNode(current, systemId, layerId, angle))}
-        onRemoveNode={(systemId, layerId, nodeId) => setGame((current) => removeDysonNode(current, systemId, layerId, nodeId))}
-        onConnectNodes={(systemId, layerId, sourceNodeId, targetNodeId) => setGame((current) => connectDysonNodes(current, systemId, layerId, sourceNodeId, targetNodeId))}
-        onAutoConnect={(systemId, layerId) => setGame((current) => autoConnectDysonLayer(current, systemId, layerId))}
-        onPlanShell={(systemId, layerId) => setGame((current) => planDysonShell(current, systemId, layerId))}
-        onClearShell={(systemId, layerId) => setGame((current) => clearDysonShells(current, systemId, layerId))}
-      />
-      <OperationsWorkspace
-        open={operationsOpen}
-        tab={operationsTab}
-        game={game}
-        alerts={alerts}
-        slots={saveSlots}
-        onClose={() => setOperationsOpen(false)}
-        onTabChange={setOperationsTab}
-        onAlertSelect={selectAlert}
-        onSettingsChange={updateSettings}
-        onManualSave={manualSave}
-        onExport={downloadSave}
-        onImport={importSave}
-        onSaveSlot={saveToSlot}
-        onLoadSlot={loadFromSlot}
-        onDeleteSlot={deleteSlot}
-      />
-      <OfflineReportWorkspace report={offlineReport} onClose={() => setOfflineReport(null)} />
+      <Suspense fallback={<WorkspaceLoading />}>
+        {technologyOpen ? (
+          <TechnologyWorkspace
+            open
+            game={game}
+            onClose={() => setTechnologyOpen(false)}
+            onSelect={(techId) => setGame((current) => selectTechnology(current, techId))}
+            onRemoveQueued={(techId) => setGame((current) => removeQueuedTechnology(current, techId))}
+          />
+        ) : null}
+        {statisticsOpen ? <StatisticsWorkspace open game={game} onClose={() => setStatisticsOpen(false)} /> : null}
+        {recipesOpen ? <RecipeWorkspace open game={game} onClose={() => setRecipesOpen(false)} /> : null}
+        {starMapOpen ? (
+          <StarMapWorkspace
+            open
+            game={game}
+            onClose={() => setStarMapOpen(false)}
+            onExplore={onExploreSystem}
+            onTravel={(planetId) => { onPlanetChange(planetId); setStarMapOpen(false); }}
+          />
+        ) : null}
+        {dysonPlannerOpen ? (
+          <DysonPlannerWorkspace
+            open
+            game={game}
+            onClose={() => setDysonPlannerOpen(false)}
+            onAddLayer={(systemId) => setGame((current) => addDysonLayer(current, systemId))}
+            onAddStandardLayer={(systemId) => setGame((current) => createStandardDysonLayer(current, systemId))}
+            onSelectLayer={(systemId, layerId) => setGame((current) => setActiveDysonLayer(current, systemId, layerId))}
+            onOrbitChange={(systemId, layerId, orbit) => setGame((current) => setDysonLayerOrbit(current, systemId, layerId, orbit))}
+            onRemoveLayer={(systemId, layerId) => setGame((current) => removeDysonLayer(current, systemId, layerId))}
+            onAddNode={(systemId, layerId, angle) => setGame((current) => addDysonNode(current, systemId, layerId, angle))}
+            onRemoveNode={(systemId, layerId, nodeId) => setGame((current) => removeDysonNode(current, systemId, layerId, nodeId))}
+            onConnectNodes={(systemId, layerId, sourceNodeId, targetNodeId) => setGame((current) => connectDysonNodes(current, systemId, layerId, sourceNodeId, targetNodeId))}
+            onAutoConnect={(systemId, layerId) => setGame((current) => autoConnectDysonLayer(current, systemId, layerId))}
+            onPlanShell={(systemId, layerId) => setGame((current) => planDysonShell(current, systemId, layerId))}
+            onClearShell={(systemId, layerId) => setGame((current) => clearDysonShells(current, systemId, layerId))}
+          />
+        ) : null}
+        {operationsOpen ? (
+          <OperationsWorkspace
+            open
+            tab={operationsTab}
+            game={game}
+            alerts={alerts}
+            slots={saveSlots}
+            onClose={() => setOperationsOpen(false)}
+            onTabChange={setOperationsTab}
+            onAlertSelect={selectAlert}
+            onSettingsChange={updateSettings}
+            onManualSave={manualSave}
+            onExport={downloadSave}
+            onImport={importSave}
+            onSaveSlot={saveToSlot}
+            onLoadSlot={loadFromSlot}
+            onDeleteSlot={deleteSlot}
+          />
+        ) : null}
+        {offlineReport ? <OfflineReportWorkspace report={offlineReport} onClose={() => setOfflineReport(null)} /> : null}
+      </Suspense>
       <button className="mobile-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setMobilePanel(null)} />
       <BuildingPlacementCursor buildingId={game.cargo ? null : placement} count={placementCount} x={pointer.x} y={pointer.y} />
       <CargoCursor cargo={game.cargo} x={pointer.x} y={pointer.y} />

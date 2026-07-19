@@ -2373,3 +2373,24 @@ test("placement preview, selection focus and keyboard recycle keep canvas work d
   await expect(page.getByTitle("部署风力涡轮机")).toContainText("×3");
   await expect(page.locator(".game-notice")).toContainText("已回收 1 个所选设备");
 });
+
+test("large workspaces load on demand with polished desktop and mobile hierarchy", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openTechnologyUpgradeGame(page);
+  const technologyModuleLoaded = () => page.evaluate(() => performance.getEntriesByType("resource")
+    .some((entry) => entry.name.includes("TechnologyWorkspace")));
+  expect(await technologyModuleLoaded()).toBe(false);
+
+  await page.getByLabel("打开科技树").click();
+  const technology = page.getByRole("dialog", { name: "科技树" });
+  await expect(technology).toBeVisible();
+  await expect.poll(technologyModuleLoaded).toBe(true);
+  await expect(technology.locator(".technology-upgrade-overview")).toBeVisible();
+  await page.waitForTimeout(220);
+  await page.screenshot({ path: "artifacts/qa/frontend-polish-1440.png", fullPage: true });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(async () => technology.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(technology.locator(".technology-upgrade-overview")).toBeVisible();
+  await page.screenshot({ path: "artifacts/qa/frontend-polish-390.png", fullPage: true });
+});

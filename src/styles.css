@@ -6421,6 +6421,117 @@ select {
   to { opacity: 1; transform: translate(-50%, 0); }
 }
 
+.workspace-loading {
+  position: fixed;
+  z-index: 130;
+  inset: 68px 0 108px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  background: rgba(10, 15, 13, 0.88);
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.workspace-loading > i {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: workspace-loading-spin 700ms linear infinite;
+}
+
+@keyframes workspace-loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+.factory-node {
+  --node-accent: var(--cyan);
+}
+
+.vein-node {
+  --node-accent: #9aa6a0;
+}
+
+.machine-node {
+  --node-accent: #67b88c;
+}
+
+.logistics-node {
+  --node-accent: #62a9c8;
+}
+
+.station-node {
+  --node-accent: #d8795d;
+}
+
+.power-node {
+  --node-accent: var(--yellow);
+}
+
+.factory-node__header {
+  border-left: 3px solid color-mix(in srgb, var(--node-accent) 78%, #28312d);
+}
+
+.factory-node--status-blocked:not(.factory-node--selected) {
+  border-color: color-mix(in srgb, var(--coral) 48%, var(--line-strong));
+}
+
+.factory-node--status-warning:not(.factory-node--selected) {
+  border-color: color-mix(in srgb, var(--yellow) 40%, var(--line-strong));
+}
+
+.header-metrics > div:nth-child(1) {
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--blue) 70%, transparent);
+}
+
+.header-metrics > div:nth-child(2) {
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--green) 70%, transparent);
+}
+
+.header-metrics > div:nth-child(3) {
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--yellow) 68%, transparent);
+}
+
+.header-metrics > div:nth-child(4) {
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--coral) 65%, transparent);
+}
+
+.technology-node,
+.recipe-method,
+.statistics-row,
+.issue-row,
+.consumer-row,
+.achievement-row,
+.alert-row,
+.fabricator-row,
+.save-slot {
+  content-visibility: auto;
+  contain: layout style;
+  contain-intrinsic-block-size: 72px;
+}
+
+.technology-node {
+  contain-intrinsic-block-size: 124px;
+}
+
+.recipe-method {
+  contain-intrinsic-block-size: 150px;
+}
+
+* {
+  scrollbar-color: #405049 #111714;
+  scrollbar-width: thin;
+}
+
+@media (max-width: 760px) {
+  .workspace-loading {
+    inset: 58px 0 96px;
+  }
+}
+
 @media (max-width: 430px) {
   .game-header {
     grid-template-columns: minmax(124px, 1fr) auto;
