@@ -1,6 +1,7 @@
 import type { XYPosition } from "@xyflow/react";
 
-export type PlanetId = "home" | "ashen" | "giant";
+export type StarSystemId = "helios" | "borealis" | "neutron";
+export type PlanetId = "home" | "ashen" | "giant" | "frost" | "boreal_giant" | "magnetar";
 
 export type ItemId =
   | "iron_ore"
@@ -106,6 +107,7 @@ export type TechId =
   | "interstellar_logistics"
   | "orbital_collection"
   | "space_warp"
+  | "stellar_exploration"
   | "nanomaterials"
   | "rare_resource_utilization"
   | "quantum_chemical_engineering"
@@ -284,7 +286,24 @@ export interface PlanetDefinition {
   environment: string;
   resources: string;
   kind: "terrestrial" | "gas-giant";
-  systemId: string;
+  systemId: StarSystemId;
+  orbitIndex: number;
+  solarMultiplier: number;
+  orbitalYields?: Partial<Record<ItemId, number>>;
+}
+
+export interface StarSystemDefinition {
+  id: StarSystemId;
+  name: string;
+  code: string;
+  starType: string;
+  color: string;
+  distanceLy: number;
+  description: string;
+  planetIds: PlanetId[];
+  explorationCost: ItemAmount[];
+  requiredTechId?: TechId;
+  prerequisiteSystemId?: StarSystemId;
 }
 
 export interface RecipeDefinition {
@@ -468,8 +487,12 @@ export interface ResearchState {
   completedTechIds: TechId[];
 }
 
+export interface ExplorationState {
+  unlockedSystemIds: StarSystemId[];
+}
+
 export interface GameState {
-  version: 12;
+  version: 13;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -481,6 +504,7 @@ export interface GameState {
   manualMined: number;
   totalProduced: Partial<Record<ItemId, number>>;
   research: ResearchState;
+  exploration: ExplorationState;
   elapsedSeconds: number;
   metrics: FactoryMetrics;
   planetMetrics: Record<PlanetId, FactoryMetrics>;

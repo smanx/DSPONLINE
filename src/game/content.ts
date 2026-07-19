@@ -14,6 +14,8 @@ import type {
   RecipeId,
   SorterId,
   SorterTier,
+  StarSystemDefinition,
+  StarSystemId,
   TechnologyDefinition,
   TechId,
 } from "./types";
@@ -25,9 +27,11 @@ export const PLANETS: Record<PlanetId, PlanetDefinition> = {
     code: "母星",
     color: "#61b2aa",
     environment: "海洋型行星",
-    resources: "铁、铜、石、煤、原油、水、光栅石",
+    resources: "铁、铜、石、煤、原油、水",
     kind: "terrestrial",
     systemId: "helios",
+    orbitIndex: 1,
+    solarMultiplier: 1,
   },
   ashen: {
     id: "ashen",
@@ -35,9 +39,11 @@ export const PLANETS: Record<PlanetId, PlanetDefinition> = {
     code: "熔岩星",
     color: "#d8794d",
     environment: "熔岩型行星",
-    resources: "钛、硅、铁、铜、石、煤、硫酸及多种稀有矿物",
+    resources: "钛、硅、铁、铜、石、煤、硫酸、金伯利矿、分形硅、有机晶体",
     kind: "terrestrial",
     systemId: "helios",
+    orbitIndex: 2,
+    solarMultiplier: 1.5,
   },
   giant: {
     id: "giant",
@@ -48,10 +54,97 @@ export const PLANETS: Record<PlanetId, PlanetDefinition> = {
     resources: "氢、氘、可燃冰",
     kind: "gas-giant",
     systemId: "helios",
+    orbitIndex: 3,
+    solarMultiplier: 0,
+    orbitalYields: { hydrogen: 1, deuterium: 0.2, fire_ice: 0.5 },
+  },
+  frost: {
+    id: "frost",
+    name: "霜原 I",
+    code: "冰原星",
+    color: "#91b8c4",
+    environment: "永冻冰原行星",
+    resources: "铁、铜、钛、硅、可燃冰、光栅石、刺笋结晶",
+    kind: "terrestrial",
+    systemId: "borealis",
+    orbitIndex: 1,
+    solarMultiplier: 0.8,
+  },
+  boreal_giant: {
+    id: "boreal_giant",
+    name: "青冥 II",
+    code: "冰巨星",
+    color: "#6b94ad",
+    environment: "富可燃冰气态巨星",
+    resources: "氢、氘、高丰度可燃冰",
+    kind: "gas-giant",
+    systemId: "borealis",
+    orbitIndex: 2,
+    solarMultiplier: 0,
+    orbitalYields: { hydrogen: 0.8, deuterium: 0.12, fire_ice: 1 },
+  },
+  magnetar: {
+    id: "magnetar",
+    name: "极夜 I",
+    code: "磁暴星",
+    color: "#a48ac2",
+    environment: "中子星潮汐锁定行星",
+    resources: "铁、铜、钛、硅、单极磁石",
+    kind: "terrestrial",
+    systemId: "neutron",
+    orbitIndex: 1,
+    solarMultiplier: 0.45,
   },
 };
 
 export const PLANET_LIST = Object.values(PLANETS);
+
+export const STAR_SYSTEMS: Record<StarSystemId, StarSystemDefinition> = {
+  helios: {
+    id: "helios",
+    name: "赫利俄斯",
+    code: "母恒星系",
+    starType: "G 型主序星",
+    color: "#e1b452",
+    distanceLy: 0,
+    description: "工业网络的起点，拥有海洋、熔岩与气态巨星三种基础生态。",
+    planetIds: ["home", "ashen", "giant"],
+    explorationCost: [],
+  },
+  borealis: {
+    id: "borealis",
+    name: "北冕座",
+    code: "冰晶恒星系",
+    starType: "K 型橙矮星",
+    color: "#79aeb9",
+    distanceLy: 4.2,
+    description: "低温行星保存了天然微观结构，是可燃冰与高阶晶体的主要产区。",
+    planetIds: ["frost", "boreal_giant"],
+    explorationCost: [
+      { itemId: "space_warper", amount: 2 },
+      { itemId: "information_matrix", amount: 10 },
+    ],
+    requiredTechId: "stellar_exploration",
+  },
+  neutron: {
+    id: "neutron",
+    name: "赫卡忒",
+    code: "中子星系",
+    starType: "中子星",
+    color: "#a88ec5",
+    distanceLy: 11.8,
+    description: "极端磁场重塑了行星矿层，可持续开采极为稀有的单极磁石。",
+    planetIds: ["magnetar"],
+    explorationCost: [
+      { itemId: "space_warper", amount: 5 },
+      { itemId: "gravity_matrix", amount: 20 },
+    ],
+    requiredTechId: "stellar_exploration",
+    prerequisiteSystemId: "borealis",
+  },
+};
+
+export const STAR_SYSTEM_LIST = Object.values(STAR_SYSTEMS);
 
 export const ITEMS: Record<ItemId, ItemDefinition> = {
   iron_ore: { id: "iron_ore", name: "铁矿石", symbol: "Fe", color: "#9aa6a8", kind: "solid", description: "铁系生产链的基础矿物。" },
@@ -858,6 +951,19 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     summary: "以引力透镜折叠航线距离，为跨恒星物流运输船提供曲率航行能力。",
     unlocks: ["空间翘曲器", "星际站翘曲器仓", "跨恒星航线准备"],
   },
+  stellar_exploration: {
+    id: "stellar_exploration", name: "恒星探索", tier: 16,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 40 },
+      { itemId: "energy_matrix", amount: 40 },
+      { itemId: "structure_matrix", amount: 40 },
+      { itemId: "information_matrix", amount: 40 },
+      { itemId: "gravity_matrix", amount: 40 },
+    ],
+    prerequisites: ["space_warp", "rare_resource_utilization"],
+    summary: "校准恒星级导航阵列，消耗勘探补给发现远方恒星系并建立永久航标。",
+    unlocks: ["星图", "北冕座勘探", "赫卡忒中子星系勘探"],
+  },
   quantum_printing: {
     id: "quantum_printing", name: "量子打印技术", tier: 15,
     costs: [
@@ -1050,6 +1156,14 @@ export function getFuelEfficiency(buildingId: BuildingId): number {
 
 export function getPlanet(id: PlanetId): PlanetDefinition {
   return PLANETS[id];
+}
+
+export function getStarSystem(id: StarSystemId): StarSystemDefinition {
+  return STAR_SYSTEMS[id];
+}
+
+export function getPlanetsForSystem(id: StarSystemId): PlanetDefinition[] {
+  return STAR_SYSTEMS[id].planetIds.map((planetId) => PLANETS[planetId]);
 }
 
 export function getExtractorBuildingId(resourceId: ItemId): BuildingId {

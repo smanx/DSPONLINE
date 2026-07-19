@@ -24,6 +24,7 @@ import {
 import { NODE_TYPES, type FactoryFlowNode, type FactoryNodeData } from "./components/FactoryNodes";
 import { RecipeWorkspace } from "./components/RecipeWorkspace";
 import { StatisticsWorkspace } from "./components/StatisticsWorkspace";
+import { StarMapWorkspace } from "./components/StarMapWorkspace";
 import { TechnologyWorkspace } from "./components/TechnologyWorkspace";
 import { ITEMS, getBeltConstructionId, getBuilding, getBuildingUpgradeTarget, getPlanet, getTechnology } from "./game/content";
 import {
@@ -37,6 +38,7 @@ import {
   createInitialState,
   dropCargoToEntity,
   dropCargoToTray,
+  exploreStarSystem,
   getBeltCapacity,
   getEntityOperatingStatus,
   handcraftRecipe,
@@ -74,7 +76,7 @@ import {
   upgradeSorter,
 } from "./game/engine";
 import { clearGame, loadGame, saveGame } from "./game/storage";
-import type { BeltTier, BuildingId, DraggedItemSourceKind, EnergyMode, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StationMinimumLoad } from "./game/types";
+import type { BeltTier, BuildingId, DraggedItemSourceKind, EnergyMode, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad } from "./game/types";
 
 type InspectorTab = "inspect" | "fabricate";
 
@@ -103,6 +105,7 @@ function FactoryGame() {
   const [technologyOpen, setTechnologyOpen] = useState(false);
   const [statisticsOpen, setStatisticsOpen] = useState(false);
   const [recipesOpen, setRecipesOpen] = useState(false);
+  const [starMapOpen, setStarMapOpen] = useState(false);
   const [miningEntityId, setMiningEntityId] = useState<string | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<FactoryFlowNode>([]);
   const [notice, setNotice] = useState<string | null>(() => loaded.offlineSeconds >= 1
@@ -170,6 +173,7 @@ function FactoryGame() {
         setTechnologyOpen(false);
         setStatisticsOpen(false);
         setRecipesOpen(false);
+        setStarMapOpen(false);
         setGame((current) => dropCargoToTray(current));
       }
     };
@@ -267,6 +271,11 @@ function FactoryGame() {
       setNotice(`已切换至${getPlanet(planetId).name}`);
     }
   }, [onMiningStop, setNodes, setViewport]);
+
+  const onExploreSystem = useCallback((systemId: StarSystemId) => {
+    setGame((current) => exploreStarSystem(current, systemId));
+    setNotice("恒星勘探完成，永久航标已写入星图");
+  }, []);
 
   const commonNodeData = useMemo<Omit<FactoryNodeData, "entity" | "status" | "connectedInputItemIds">>(() => {
     const technology = getTechnology(game.research.selectedTechId);
@@ -418,6 +427,7 @@ function FactoryGame() {
     setTechnologyOpen(false);
     setStatisticsOpen(false);
     setRecipesOpen(false);
+    setStarMapOpen(false);
     setNotice("当前工厂已重置");
   };
 
@@ -432,6 +442,7 @@ function FactoryGame() {
         onOpenRecipes={() => { setRecipesOpen(true); setTechnologyOpen(false); setStatisticsOpen(false); setMobilePanel(null); setNotice(null); }}
         onOpenTechnology={() => { setTechnologyOpen(true); setRecipesOpen(false); setStatisticsOpen(false); setMobilePanel(null); setNotice(null); }}
         onOpenStatistics={() => { setStatisticsOpen(true); setRecipesOpen(false); setTechnologyOpen(false); setMobilePanel(null); setNotice(null); }}
+        onOpenStarMap={() => { setStarMapOpen(true); setStatisticsOpen(false); setRecipesOpen(false); setTechnologyOpen(false); setMobilePanel(null); setNotice(null); }}
       />
       <div className="game-workspace">
         <ResourceRail
@@ -563,6 +574,13 @@ function FactoryGame() {
       />
       {statisticsOpen ? <StatisticsWorkspace open game={game} onClose={() => setStatisticsOpen(false)} /> : null}
       <RecipeWorkspace open={recipesOpen} game={game} onClose={() => setRecipesOpen(false)} />
+      <StarMapWorkspace
+        open={starMapOpen}
+        game={game}
+        onClose={() => setStarMapOpen(false)}
+        onExplore={onExploreSystem}
+        onTravel={(planetId) => { onPlanetChange(planetId); setStarMapOpen(false); }}
+      />
       <button className="mobile-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setMobilePanel(null)} />
       <CargoCursor cargo={game.cargo} x={pointer.x} y={pointer.y} />
       {notice ? <div className="game-notice" role="status">{notice}</div> : null}

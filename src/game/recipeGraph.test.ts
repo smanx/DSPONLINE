@@ -4,6 +4,7 @@ import {
   getProducingRecipes,
   getResearchUses,
   getResourceSource,
+  getResourceSources,
   getVirtualRecipeResult,
 } from "./recipeGraph";
 import { getRecipe } from "./content";
@@ -12,7 +13,7 @@ describe("recipe graph", () => {
   it("finds natural sources and every direct consumer", () => {
     expect(getResourceSource("iron_ore")).toMatchObject({
       extractorBuildingId: "mining_machine",
-      planetIds: ["home", "ashen"],
+      planetIds: ["home", "ashen", "frost", "magnetar"],
       manual: true,
     });
     expect(getConsumingRecipes("iron_ore").map((recipe) => recipe.id)).toEqual(
@@ -45,9 +46,13 @@ describe("recipe graph", () => {
   it("indexes rare veins, gas-giant fire ice and every alternative recipe", () => {
     expect(getResourceSource("fire_ice")).toMatchObject({
       extractorBuildingId: "orbital_collector",
-      planetIds: ["giant"],
+      planetIds: ["giant", "boreal_giant"],
       manual: false,
     });
+    expect(getResourceSources("fire_ice")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ extractorBuildingId: "orbital_collector" }),
+      expect.objectContaining({ extractorBuildingId: "mining_machine", planetIds: ["frost"] }),
+    ]));
     expect(getResourceSource("organic_crystal")).toMatchObject({ planetIds: ["ashen"], manual: true });
     expect(getProducingRecipes("organic_crystal").map((recipe) => recipe.id)).toContain("organic_crystal");
     expect(getProducingRecipes("graphene").map((recipe) => recipe.id)).toEqual(expect.arrayContaining(["graphene", "graphene_from_fire_ice"]));

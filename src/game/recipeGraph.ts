@@ -15,55 +15,58 @@ const SOLID_VEIN_SOURCE = (planetIds: PlanetId[]): ResourceSourceDefinition => (
   manual: true,
 });
 
-export const RESOURCE_SOURCES: Partial<Record<ItemId, ResourceSourceDefinition>> = {
-  iron_ore: SOLID_VEIN_SOURCE(["home", "ashen"]),
-  copper_ore: SOLID_VEIN_SOURCE(["home", "ashen"]),
-  coal: SOLID_VEIN_SOURCE(["home", "ashen"]),
-  stone: SOLID_VEIN_SOURCE(["home", "ashen"]),
-  silicon_ore: SOLID_VEIN_SOURCE(["ashen"]),
-  titanium_ore: SOLID_VEIN_SOURCE(["ashen"]),
-  kimberlite_ore: SOLID_VEIN_SOURCE(["ashen"]),
-  fractal_silicon: SOLID_VEIN_SOURCE(["ashen"]),
-  optical_grating_crystal: SOLID_VEIN_SOURCE(["home"]),
-  spiniform_stalagmite_crystal: SOLID_VEIN_SOURCE(["ashen"]),
-  unipolar_magnet: SOLID_VEIN_SOURCE(["ashen"]),
-  organic_crystal: SOLID_VEIN_SOURCE(["ashen"]),
-  crude_oil: {
+export const RESOURCE_SOURCES: Partial<Record<ItemId, ResourceSourceDefinition[]>> = {
+  iron_ore: [SOLID_VEIN_SOURCE(["home", "ashen", "frost", "magnetar"])],
+  copper_ore: [SOLID_VEIN_SOURCE(["home", "ashen", "frost", "magnetar"])],
+  coal: [SOLID_VEIN_SOURCE(["home", "ashen"])],
+  stone: [SOLID_VEIN_SOURCE(["home", "ashen"])],
+  silicon_ore: [SOLID_VEIN_SOURCE(["ashen", "frost", "magnetar"])],
+  titanium_ore: [SOLID_VEIN_SOURCE(["ashen", "frost", "magnetar"])],
+  kimberlite_ore: [SOLID_VEIN_SOURCE(["ashen"])],
+  fractal_silicon: [SOLID_VEIN_SOURCE(["ashen"])],
+  optical_grating_crystal: [SOLID_VEIN_SOURCE(["frost"])],
+  spiniform_stalagmite_crystal: [SOLID_VEIN_SOURCE(["frost"])],
+  unipolar_magnet: [SOLID_VEIN_SOURCE(["magnetar"])],
+  organic_crystal: [SOLID_VEIN_SOURCE(["ashen"])],
+  crude_oil: [{
     label: "原油涌泉萃取",
     planetIds: ["home"],
     extractorBuildingId: "oil_extractor",
     manual: false,
-  },
-  water: {
+  }],
+  water: [{
     label: "海洋抽取",
     planetIds: ["home"],
     extractorBuildingId: "water_pump",
     manual: false,
-  },
-  sulfuric_acid: {
+  }],
+  sulfuric_acid: [{
     label: "硫酸海洋抽取",
     planetIds: ["ashen"],
     extractorBuildingId: "water_pump",
     manual: false,
-  },
-  hydrogen: {
+  }],
+  hydrogen: [{
     label: "气态巨星轨道采集",
-    planetIds: ["giant"],
+    planetIds: ["giant", "boreal_giant"],
     extractorBuildingId: "orbital_collector",
     manual: false,
-  },
-  deuterium: {
+  }],
+  deuterium: [{
     label: "气态巨星轨道采集",
-    planetIds: ["giant"],
+    planetIds: ["giant", "boreal_giant"],
     extractorBuildingId: "orbital_collector",
     manual: false,
-  },
-  fire_ice: {
-    label: "气态巨星轨道采集",
-    planetIds: ["giant"],
-    extractorBuildingId: "orbital_collector",
-    manual: false,
-  },
+  }],
+  fire_ice: [
+    {
+      label: "气态巨星轨道采集",
+      planetIds: ["giant", "boreal_giant"],
+      extractorBuildingId: "orbital_collector",
+      manual: false,
+    },
+    SOLID_VEIN_SOURCE(["frost"]),
+  ],
 };
 
 const RECIPE_LIST = Object.values(RECIPES);
@@ -81,7 +84,11 @@ export function getResearchUses(itemId: ItemId): TechnologyDefinition[] {
 }
 
 export function getResourceSource(itemId: ItemId): ResourceSourceDefinition | undefined {
-  return RESOURCE_SOURCES[itemId];
+  return RESOURCE_SOURCES[itemId]?.[0];
+}
+
+export function getResourceSources(itemId: ItemId): ResourceSourceDefinition[] {
+  return RESOURCE_SOURCES[itemId] ?? [];
 }
 
 export function getVirtualRecipeResult(recipe: RecipeDefinition): string | null {

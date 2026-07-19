@@ -6,8 +6,8 @@ import {
   advanceSimulation,
   createInitialState,
 } from "./engine";
-import { getBeltConstructionId, getBuilding, getExtractorBuildingId, getTechnology } from "./content";
-import type { BeltConnection, BeltTier, BuildingId, ConstructionId, EnergyMode, FactoryEntity, GameState, ItemId, PlanetId, ProliferatorMode, ProliferatorTier, StationMinimumLoad, TechId } from "./types";
+import { PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, getBuilding, getExtractorBuildingId, getPlanet, getTechnology } from "./content";
+import type { BeltConnection, BeltTier, BuildingId, ConstructionId, EnergyMode, FactoryEntity, GameState, ItemId, PlanetId, ProliferatorMode, ProliferatorTier, StarSystemId, StationMinimumLoad, TechId } from "./types";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
 
@@ -77,7 +77,11 @@ function deployedCount(entities: FactoryEntity[], buildingId: BuildingId): numbe
 }
 
 function validPlanetId(value: unknown): value is PlanetId {
-  return value === "home" || value === "ashen" || value === "giant";
+  return typeof value === "string" && PLANET_LIST.some((planet) => planet.id === value);
+}
+
+function validStarSystemId(value: unknown): value is StarSystemId {
+  return typeof value === "string" && value in STAR_SYSTEMS;
 }
 
 function validStationMinimumLoad(value: unknown): value is StationMinimumLoad {
@@ -110,11 +114,18 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
   const entities = saved.entities.map((entity: FactoryEntity) => {
-    const planetId = validPlanetId(entity.planetId) ? entity.planetId : inferLegacyPlanet(entity);
+    const currentResource = saved.version < 13
+      ? initial.entities.find((candidate) => candidate.kind === "vein" && candidate.id === entity.id)
+      : undefined;
+    const legacyRelocation = currentResource
+      ? { planetId: currentResource.planetId, position: currentResource.position }
+      : undefined;
+    const planetId = legacyRelocation?.planetId ?? (validPlanetId(entity.planetId) ? entity.planetId : inferLegacyPlanet(entity));
     const position = { ...entity.position };
+    if (legacyRelocation) Object.assign(position, legacyRelocation.position);
     const sprayCoaterInstalled = Boolean(entity.sprayCoaterInstalled);
     const planetaryStation = entity.buildingId === "planetary_logistics_station";
     const interstellarStation = entity.buildingId === "interstellar_logistics_station";
@@ -149,7 +160,7 @@ function migrateGame(value: unknown): GameState | null {
       routingCursor: Math.max(0, Math.floor(entity.routingCursor ?? 0)),
       distributionMode: entity.kind === "splitter" ? entity.distributionMode ?? "balanced" : entity.distributionMode,
       storedItemId: orbitalCollector
-        ? entity.storedItemId === "deuterium" || entity.storedItemId === "fire_ice" ? entity.storedItemId : "hydrogen"
+        ? entity.storedItemId && (getPlanet(planetId).orbitalYields?.[entity.storedItemId] ?? 0) > 0 ? entity.storedItemId : "hydrogen"
         : entity.storedItemId,
       stationMode: entity.kind === "station" ? orbitalCollector ? "supply" : entity.stationMode ?? "supply" : entity.stationMode,
       stationProgress: entity.kind === "station" ? Math.max(0, entity.stationProgress ?? 0) : entity.stationProgress,
@@ -242,17 +253,25 @@ function migrateGame(value: unknown): GameState | null {
 
   const activePlanetId = validPlanetId(saved.activePlanetId) ? saved.activePlanetId : "home";
   const savedActiveTray = integerRecord(saved.tray);
-  const planetTrays: GameState["planetTrays"] = {
-    home: saved.version < 4 ? savedActiveTray : integerRecord(saved.planetTrays?.home),
-    ashen: integerRecord(saved.planetTrays?.ashen),
-    giant: integerRecord(saved.planetTrays?.giant),
-  };
+  const planetTrays = Object.fromEntries(PLANET_LIST.map((planet) => [
+    planet.id,
+    planet.id === "home" && saved.version < 4 ? savedActiveTray : integerRecord(saved.planetTrays?.[planet.id]),
+  ])) as GameState["planetTrays"];
   if (saved.version >= 4 && saved.tray && typeof saved.tray === "object") planetTrays[activePlanetId] = savedActiveTray;
-  const planetMetrics: GameState["planetMetrics"] = {
-    home: { ...initial.planetMetrics.home, ...(saved.version < 4 ? saved.metrics ?? {} : saved.planetMetrics?.home ?? {}) },
-    ashen: { ...initial.planetMetrics.ashen, ...(saved.planetMetrics?.ashen ?? {}) },
-    giant: { ...initial.planetMetrics.giant, ...(saved.planetMetrics?.giant ?? {}) },
-  };
+  const planetMetrics = Object.fromEntries(PLANET_LIST.map((planet) => [
+    planet.id,
+    {
+      ...initial.planetMetrics[planet.id],
+      ...(planet.id === "home" && saved.version < 4 ? saved.metrics ?? {} : saved.planetMetrics?.[planet.id] ?? {}),
+    },
+  ])) as GameState["planetMetrics"];
+  const persistedSystems = Array.isArray(saved.exploration?.unlockedSystemIds)
+    ? (saved.exploration.unlockedSystemIds as unknown[]).filter(validStarSystemId)
+    : [];
+  const unlockedSystemIds = [...new Set<StarSystemId>(["helios", ...persistedSystems])];
+  if (saved.version < 13 && completedTechIds.includes("rare_resource_utilization")) {
+    unlockedSystemIds.push(...(["borealis", "neutron"] as StarSystemId[]).filter((systemId) => !unlockedSystemIds.includes(systemId)));
+  }
   const structurePoints = saved.version >= 7 ? nonNegativeInteger(saved.dysonSphere?.structurePoints) : 0;
   const shellCapacity = structurePoints * DYSON_SHELL_CAPACITY_PER_STRUCTURE;
   const shellSails = saved.version >= 7
@@ -291,7 +310,7 @@ function migrateGame(value: unknown): GameState | null {
   return {
     ...initial,
     ...saved,
-    version: 12,
+    version: 13,
     activePlanetId,
     entities,
     belts,
@@ -306,6 +325,7 @@ function migrateGame(value: unknown): GameState | null {
       progressByTech: researchProgress(saved.research?.progressByTech),
       completedTechIds,
     },
+    exploration: { unlockedSystemIds },
     metrics: { ...planetMetrics[activePlanetId] },
     planetMetrics,
     dysonSwarm,

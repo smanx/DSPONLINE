@@ -32,6 +32,7 @@ import {
   Search,
   Sparkles,
   Sun,
+  Telescope,
   ThermometerSun,
   LockKeyhole,
   Trash2,
@@ -272,9 +273,12 @@ export function ResourceRail({ game, onPickTray, onDropCargo, onDropDraggedItem 
 }
 
 export function PlanetNavigator({ game, onPlanetChange }: { game: GameState; onPlanetChange: (planetId: PlanetId) => void }) {
+  const activeSystemId = getPlanet(game.activePlanetId).systemId;
+  const visiblePlanets = PLANET_LIST.filter((planet) => planet.systemId === activeSystemId &&
+    game.exploration.unlockedSystemIds.includes(planet.systemId));
   return (
     <nav className="planet-navigator nodrag nopan" aria-label="行星切换">
-      {PLANET_LIST.map((planet) => {
+      {visiblePlanets.map((planet) => {
         const active = game.activePlanetId === planet.id;
         const metrics = getPlanetMetrics(game, planet.id);
         const deviceCount = game.entities.reduce((sum, entity) =>
@@ -607,7 +611,9 @@ function EntityInspector({
     const collector = entity.buildingId === "orbital_collector";
     const peer = planetary ? findPlanetaryPeer(game, entity) : findInterstellarPeer(game, entity);
     const acceptedItems = collector
-      ? [ITEMS.hydrogen, ITEMS.deuterium, ITEMS.fire_ice]
+      ? Object.entries(getPlanet(entity.planetId).orbitalYields ?? {})
+        .filter(([, rate]) => (rate ?? 0) > 0)
+        .map(([itemId]) => ITEMS[itemId as ItemId])
       : Object.values(ITEMS);
     const vehicleCapacity = planetary ? getStationDroneCapacity(entity) : getStationVesselCapacity(entity);
     const vehicleCount = planetary
@@ -749,7 +755,7 @@ function EntityInspector({
           <>
             <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
             <div><dt>实时发电</dt><dd>{(entity.powerOutputKw ?? 0).toFixed(0)} kW</dd></div>
-            <div><dt>额定发电</dt><dd>{((building.powerGenerationKw ?? 0) * entity.machineCount * (entity.buildingId === "solar_panel" && entity.planetId === "ashen" ? 1.5 : 1)).toFixed(0)} kW</dd></div>
+            <div><dt>额定发电</dt><dd>{((building.powerGenerationKw ?? 0) * entity.machineCount * (entity.buildingId === "solar_panel" ? getPlanet(entity.planetId).solarMultiplier : 1)).toFixed(0)} kW</dd></div>
           </>
         ) : (
           <>
@@ -1058,7 +1064,8 @@ export function ConstructionDock({ game, placement, beltTier, placementCount, on
           const active = isBelt ? beltTier === itemBeltTier : placement === id;
           const label = isBelt ? `传送带 Mk.${beltTierRoman(itemBeltTier!)}` : getBuilding(id).name;
           const requiredCount = isBelt ? 1 : placementCount;
-          const compatiblePlanet = isBelt ? game.activePlanetId !== "giant" : canPlaceBuildingOnPlanet(id, game.activePlanetId);
+          const activePlanet = getPlanet(game.activePlanetId);
+          const compatiblePlanet = isBelt ? activePlanet.kind !== "gas-giant" : canPlaceBuildingOnPlanet(id, game.activePlanetId);
           return (
             <button
               className={`construction-item${active ? " construction-item--active" : ""}`}
@@ -1082,7 +1089,7 @@ export function ConstructionDock({ game, placement, beltTier, placementCount, on
                 onPlacementChange(id);
               }}
               onDragEnd={() => onPlacementChange(null)}
-              title={!compatiblePlanet ? id === "geothermal_power_station" ? `${label}只能部署在烬原 II` : game.activePlanetId === "giant" ? `${label}不能部署在气态巨星` : `${label}只能部署在气态巨星` : isBelt ? `选择${label}连接节点端口` : `部署${label}${placementCount > 1 ? ` ×${placementCount}` : ""}`}
+              title={!compatiblePlanet ? id === "geothermal_power_station" ? `${label}只能部署在烬原 II` : activePlanet.kind === "gas-giant" ? `${label}不能部署在气态巨星` : `${label}只能部署在气态巨星` : isBelt ? `选择${label}连接节点端口` : `部署${label}${placementCount > 1 ? ` ×${placementCount}` : ""}`}
             >
               <i>{buildIcon(id)}</i>
               <span>{label}</span>
@@ -1120,6 +1127,7 @@ export function HeaderControls({
   onOpenRecipes,
   onOpenTechnology,
   onOpenStatistics,
+  onOpenStarMap,
 }: {
   game: GameState;
   onPauseToggle: () => void;
@@ -1129,6 +1137,7 @@ export function HeaderControls({
   onOpenRecipes: () => void;
   onOpenTechnology: () => void;
   onOpenStatistics: () => void;
+  onOpenStarMap: () => void;
 }) {
   const powerTone = game.metrics.powerFactor >= 0.999 ? "positive" : game.metrics.powerFactor > 0 ? "warning" : "negative";
   return (
@@ -1144,6 +1153,7 @@ export function HeaderControls({
         <div><FlaskConical size={16} /><span>蓝 / 红 / 黄 / 紫 / 绿 / 白矩阵</span><strong>{formatAmount(game.totalProduced.electromagnetic_matrix ?? 0)}<small> / {formatAmount(game.totalProduced.energy_matrix ?? 0)} / {formatAmount(game.totalProduced.structure_matrix ?? 0)} / {formatAmount(game.totalProduced.information_matrix ?? 0)} / {formatAmount(game.totalProduced.gravity_matrix ?? 0)} / {formatAmount(game.totalProduced.universe_matrix ?? 0)}</small></strong></div>
       </div>
       <div className="header-actions">
+        <button type="button" onClick={onOpenStarMap} title="打开星图" aria-label="打开星图"><Telescope size={17} /></button>
         <button type="button" onClick={onOpenStatistics} title="打开生产统计" aria-label="打开生产统计"><BarChart3 size={17} /></button>
         <button type="button" onClick={onOpenRecipes} title="打开配方图鉴" aria-label="打开配方图鉴"><BookOpen size={17} /></button>
         <button type="button" onClick={onOpenTechnology} title="打开科技树" aria-label="打开科技树"><FlaskConical size={17} /></button>

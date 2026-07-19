@@ -745,6 +745,48 @@ async function openRareResourceStageGame(page: Page) {
   await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
 }
 
+async function openStellarExplorationGame(page: Page) {
+  await page.addInitScript(() => {
+    const entityBase = {
+      machineCount: 1,
+      minerCount: 0,
+      inputs: {},
+      outputs: {},
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+    };
+    const state = {
+      version: 13,
+      nextId: 5,
+      activePlanetId: "home",
+      entities: [
+        { ...entityBase, id: "stellar_home_wind", kind: "power", planetId: "home", position: { x: -300, y: -220 }, buildingId: "wind_turbine", machineCount: 4 },
+        { ...entityBase, id: "stellar_demand", kind: "station", planetId: "home", position: { x: 160, y: -100 }, buildingId: "interstellar_logistics_station", storedItemId: "optical_grating_crystal", stationMode: "demand", stationProgress: 0.96, stationTrips: 0, stationLastTransfer: 0, stationVessels: 1, stationWarpers: 1, stationWarpEnabled: true, stationMinimumLoad: 0.1 },
+        { ...entityBase, id: "stellar_frost_wind", kind: "power", planetId: "frost", position: { x: -300, y: -220 }, buildingId: "wind_turbine", machineCount: 4 },
+        { ...entityBase, id: "stellar_supply", kind: "station", planetId: "frost", position: { x: 160, y: -100 }, buildingId: "interstellar_logistics_station", storedItemId: "optical_grating_crystal", stationMode: "supply", stationProgress: 0.96, stationTrips: 0, stationLastTransfer: 0, stationVessels: 0, stationWarpers: 0, stationWarpEnabled: true, stationMinimumLoad: 0.1, outputs: { optical_grating_crystal: 20 } },
+      ],
+      belts: [],
+      construction: {},
+      tray: { space_warper: 7, information_matrix: 10, gravity_matrix: 20, titanium_ingot: 12 },
+      planetTrays: { home: { space_warper: 7, information_matrix: 10, gravity_matrix: 20, titanium_ingot: 12 }, ashen: {}, giant: {}, frost: {}, boreal_giant: {}, magnetar: {} },
+      totalProduced: {},
+      research: {
+        selectedTechId: null,
+        queuedTechIds: [],
+        progressByTech: {},
+        completedTechIds: ["space_warp", "rare_resource_utilization", "stellar_exploration"],
+      },
+      exploration: { unlockedSystemIds: ["helios"] },
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
 test("manual mining feeds a powered smelter", async ({ page }) => {
   await page.setViewportSize({ width: 1560, height: 960 });
   await freshGame(page);
@@ -831,12 +873,12 @@ test("factory nodes follow the pointer before release", async ({ page }) => {
   expect(during!.y).toBeGreaterThan(before!.y + 40);
   await page.mouse.up();
   await page.waitForTimeout(500);
-  await expect(page.locator(".react-flow__node")).toHaveCount(8);
+  await expect(page.locator(".react-flow__node")).toHaveCount(7);
   await expect.poll(async () => page.locator(".react-flow__node").evaluateAll((elements) =>
     elements.filter((element) => {
       const rect = element.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== "hidden";
-    }).length)).toBe(8);
+    }).length)).toBe(7);
   await expect(node).toBeVisible();
 });
 
@@ -862,8 +904,8 @@ test("dragging a construction card keeps the canvas nodes visible", async ({ pag
   const canvas = page.locator(".react-flow__pane");
   await page.getByTitle("部署风力涡轮机").dragTo(canvas, { targetPosition: { x: 650, y: 210 } });
   await expect(page.locator(".power-node")).toBeVisible();
-  await expect(page.locator(".vein-node")).toHaveCount(7);
-  await expect(page.locator(".react-flow__node")).toHaveCount(8);
+  await expect(page.locator(".vein-node")).toHaveCount(6);
+  await expect(page.locator(".react-flow__node")).toHaveCount(7);
 });
 
 test("construction batches place exact machine and miner groups", async ({ page }) => {
@@ -1700,7 +1742,6 @@ test("rare resources, fractionation and quantum chemistry expose every alternati
   await openRareResourceStageGame(page);
   await page.locator(".react-flow__controls-fitview").click();
 
-  await expect(page.locator(".vein-node").filter({ hasText: "光栅石" })).toBeVisible();
   const fractionator = page.locator(".machine-node").filter({ hasText: "分馏塔" });
   await expect(fractionator.getByTitle("取出氢")).toBeVisible();
   await expect(fractionator.getByTitle("拿取氢")).toBeVisible();
@@ -1737,18 +1778,31 @@ test("rare resources, fractionation and quantum chemistry expose every alternati
 
   await page.getByLabel("打开科技树").click();
   for (const technology of ["流体分馏", "稀有资源利用", "量子化工"]) {
-    await expect(page.locator(".technology-node").filter({ hasText: technology })).toHaveCount(1);
+    await expect(page.locator(".technology-node").filter({ has: page.getByText(technology, { exact: true }) })).toHaveCount(1);
   }
   await page.getByLabel("关闭科技树").click();
 
   await page.getByTitle("切换到烬原 II").click();
   await page.locator(".react-flow__controls-fitview").click();
-  for (const resource of ["金伯利矿石", "分形硅石", "有机晶体", "刺笋结晶", "单极磁石"]) {
+  for (const resource of ["金伯利矿石", "分形硅石", "有机晶体"]) {
+    await expect(page.locator(".vein-node").filter({ hasText: resource })).toHaveCount(1);
+  }
+
+  await page.getByLabel("打开星图").click();
+  await page.getByRole("dialog", { name: "星图" }).locator(".star-system-card").filter({ has: page.getByText("北冕座", { exact: true }) }).getByRole("button", { name: /霜原 I/ }).click();
+  await page.locator(".react-flow__controls-fitview").click();
+  for (const resource of ["光栅石", "刺笋结晶", "可燃冰"]) {
     await expect(page.locator(".vein-node").filter({ hasText: resource })).toHaveCount(1);
   }
   await page.screenshot({ path: "artifacts/qa/rare-resource-field-1440.png", fullPage: true });
 
-  await page.getByTitle("切换到苍岚 III").click();
+  await page.getByLabel("打开星图").click();
+  await page.getByRole("dialog", { name: "星图" }).locator(".star-system-card").filter({ hasText: "赫卡忒" }).getByRole("button", { name: /极夜 I/ }).click();
+  await page.locator(".react-flow__controls-fitview").click();
+  await expect(page.locator(".vein-node").filter({ hasText: "单极磁石" })).toHaveCount(1);
+
+  await page.getByLabel("打开星图").click();
+  await page.getByRole("dialog", { name: "星图" }).locator(".star-system-card").filter({ hasText: "赫利俄斯" }).getByRole("button", { name: /苍岚 III/ }).click();
   const collector = page.locator(".station-node").filter({ hasText: "轨道采集器" });
   await collector.click();
   await expect(page.locator(".station-inspector select")).toHaveValue("fire_ice");
@@ -1761,4 +1815,47 @@ test("rare resources, fractionation and quantum chemistry expose every alternati
   }).toBeLessThanOrEqual(390);
   await expect(page.locator(".game-notice")).toBeHidden({ timeout: 4_000 });
   await page.screenshot({ path: "artifacts/qa/rare-orbital-collector-390.png", fullPage: true });
+});
+
+test("stellar exploration unlocks remote planets and enables a warped logistics route", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openStellarExplorationGame(page);
+  await page.getByTitle("拿取钛块").click();
+  await expect(page.locator(".cargo-slot")).toContainText("钛块");
+
+  await page.getByLabel("打开星图").click();
+  const starMap = page.getByRole("dialog", { name: "星图" });
+  await expect(starMap.locator(".star-system-card")).toHaveCount(3);
+  const borealis = starMap.locator(".star-system-card").filter({ has: page.getByText("北冕座", { exact: true }) });
+  const neutron = starMap.locator(".star-system-card").filter({ has: page.getByText("赫卡忒", { exact: true }) });
+  await expect(borealis).toContainText("未勘探");
+  await expect(neutron.getByRole("button", { name: "勘探赫卡忒" })).toBeDisabled();
+
+  await borealis.getByRole("button", { name: "勘探北冕座" }).click();
+  await expect(borealis).toContainText("已发现");
+  await expect(neutron.getByRole("button", { name: "勘探赫卡忒" })).toBeEnabled();
+  await neutron.getByRole("button", { name: "勘探赫卡忒" }).click();
+  await expect(neutron).toContainText("已发现");
+  await page.screenshot({ path: "artifacts/qa/stellar-map-1440.png", fullPage: true });
+
+  await borealis.getByRole("button", { name: /霜原 I/ }).click();
+  await expect(page.locator(".canvas-status")).toContainText("霜原 I");
+  await expect(page.locator(".vein-node").filter({ hasText: "光栅石" })).toBeVisible();
+  await expect(page.locator(".cargo-slot")).toContainText("钛块");
+  await expect(page.locator(".game-notice")).toContainText("托钛天王");
+
+  await page.getByLabel("继续模拟").click();
+  const supply = page.locator(".station-node").filter({ hasText: "星际物流站" });
+  await supply.click();
+  const tripRow = page.locator(".station-inspector .metric-ledger > div").filter({ hasText: "完成航次" });
+  await expect(tripRow).toContainText("1", { timeout: 3_000 });
+  await expect(page.locator(".station-inspector")).toContainText("跨恒星");
+  await page.screenshot({ path: "artifacts/qa/stellar-frost-route-1440.png", fullPage: true });
+
+  await page.getByLabel("打开星图").click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(starMap).toBeVisible();
+  await expect(starMap.locator(".star-map-route").evaluate((element) => element.scrollWidth <= element.clientWidth)).resolves.toBe(true);
+  await expect(starMap.locator(".star-system-card")).toHaveCount(3);
+  await page.screenshot({ path: "artifacts/qa/stellar-map-390.png", fullPage: true });
 });

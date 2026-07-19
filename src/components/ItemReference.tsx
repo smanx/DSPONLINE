@@ -2,7 +2,7 @@ import { Factory, FlaskConical, MapPin } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { getCompatibleRecipeBuildings, getItem, getPlanet } from "../game/content";
-import { getConsumingRecipes, getProducingRecipes, getResearchUses, getResourceSource } from "../game/recipeGraph";
+import { getConsumingRecipes, getProducingRecipes, getResearchUses, getResourceSources } from "../game/recipeGraph";
 import type { ItemId } from "../game/types";
 
 interface TooltipAnchor {
@@ -28,7 +28,7 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
     producers: getProducingRecipes(itemId),
     consumers: getConsumingRecipes(itemId),
     research: getResearchUses(itemId),
-    source: getResourceSource(itemId),
+    sources: getResourceSources(itemId),
   }), [itemId]);
 
   useEffect(() => {
@@ -71,10 +71,10 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
             <span><strong>{item.name}</strong><small>{KIND_LABELS[item.kind]}</small></span>
           </header>
           <p>{item.description}</p>
-          {details.source ? (
+          {details.sources.length > 0 ? (
             <div className="item-hover-line">
               <MapPin size={13} />
-              <span><b>来源</b>{details.source.label} · {details.source.planetIds.map((id) => getPlanet(id).name).join(" / ")}</span>
+              <span><b>来源</b>{details.sources[0].label} · {details.sources[0].planetIds.map((id) => getPlanet(id).name).join(" / ")}{details.sources.length > 1 ? ` · 另 ${details.sources.length - 1} 种` : ""}</span>
             </div>
           ) : null}
           {primaryRecipe ? (
@@ -89,7 +89,7 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
               <span><b>用途</b>{details.consumers.length} 项生产配方{details.research.length > 0 ? ` · ${details.research.length} 项科技` : ""}</span>
             </div>
           ) : null}
-          {!details.source && !primaryRecipe ? <div className="item-hover-empty">暂无已登记的生产来源</div> : null}
+          {details.sources.length === 0 && !primaryRecipe ? <div className="item-hover-empty">暂无已登记的生产来源</div> : null}
         </aside>,
         document.body,
       ) : null}

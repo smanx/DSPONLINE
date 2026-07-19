@@ -5,6 +5,7 @@ import {
   ITEMS,
   PLANET_LIST,
   PROLIFERATOR_ITEM_IDS,
+  STAR_SYSTEMS,
   buildingSupportsRecipe,
   getBeltConstructionId,
   getBuilding,
@@ -18,6 +19,7 @@ import {
   getRecipe,
   getRecipesForBuilding,
   getSorterConstructionId,
+  getStarSystem,
   getTechnology,
 } from "./content";
 import type {
@@ -36,6 +38,7 @@ import type {
   RecipeDefinition,
   RecipeId,
   SorterTier,
+  StarSystemId,
   StationMinimumLoad,
   TechId,
 } from "./types";
@@ -51,6 +54,7 @@ export const DYSON_SHELL_SAIL_POWER_KW = 36;
 export const DYSON_SHELL_CAPACITY_PER_STRUCTURE = 20;
 export const DYSON_SAIL_ABSORPTION_PER_STRUCTURE_PER_SECOND = 0.1;
 export const INTERSTELLAR_TRIP_SECONDS = 30;
+export const WARP_TRIP_SECONDS = 12;
 export const INTERSTELLAR_CARGO_PER_VESSEL = 100;
 export const STATION_VESSELS_PER_BUILDING = 10;
 export const PLANETARY_TRIP_SECONDS = 8;
@@ -93,6 +97,9 @@ function copyState(state: GameState): GameState {
         { ...progress },
       ])),
       completedTechIds: [...state.research.completedTechIds],
+    },
+    exploration: {
+      unlockedSystemIds: [...state.exploration.unlockedSystemIds],
     },
     metrics: { ...state.metrics },
     planetMetrics: Object.fromEntries(Object.entries(state.planetMetrics).map(([planetId, metrics]) => [
@@ -144,11 +151,9 @@ function makeVein(id: string, planetId: PlanetId, resourceId: ItemId, x: number,
 }
 
 export function createInitialState(): GameState {
-  const homeMetrics = emptyMetrics();
-  const ashenMetrics = emptyMetrics();
-  const giantMetrics = emptyMetrics();
+  const planetMetrics = Object.fromEntries(PLANET_LIST.map((planet) => [planet.id, emptyMetrics()])) as GameState["planetMetrics"];
   return {
-    version: 12,
+    version: 13,
     nextId: 1,
     activePlanetId: "home",
     entities: [
@@ -158,7 +163,6 @@ export function createInitialState(): GameState {
       makeVein("vein_water", "home", "water", -150, -250),
       makeVein("vein_oil", "home", "crude_oil", -150, 35),
       makeVein("vein_coal", "home", "coal", -150, 320),
-      makeVein("vein_optical_grating", "home", "optical_grating_crystal", 490, 320),
       makeVein("ashen_iron", "ashen", "iron_ore", -470, -250),
       makeVein("ashen_copper", "ashen", "copper_ore", -470, 35),
       makeVein("ashen_stone", "ashen", "stone", -470, 320),
@@ -169,13 +173,23 @@ export function createInitialState(): GameState {
       makeVein("ashen_kimberlite", "ashen", "kimberlite_ore", 490, -250),
       makeVein("ashen_fractal_silicon", "ashen", "fractal_silicon", 490, 35),
       makeVein("ashen_organic_crystal", "ashen", "organic_crystal", 490, 320),
-      makeVein("ashen_spiniform", "ashen", "spiniform_stalagmite_crystal", 810, -250),
-      makeVein("ashen_unipolar", "ashen", "unipolar_magnet", 810, 35),
+      makeVein("frost_iron", "frost", "iron_ore", -470, -250),
+      makeVein("frost_copper", "frost", "copper_ore", -470, 35),
+      makeVein("frost_titanium", "frost", "titanium_ore", -470, 320),
+      makeVein("frost_silicon", "frost", "silicon_ore", -150, -250),
+      makeVein("frost_fire_ice", "frost", "fire_ice", -150, 35),
+      makeVein("vein_optical_grating", "frost", "optical_grating_crystal", -150, 320),
+      makeVein("ashen_spiniform", "frost", "spiniform_stalagmite_crystal", 170, -250),
+      makeVein("magnetar_iron", "magnetar", "iron_ore", -470, -250),
+      makeVein("magnetar_copper", "magnetar", "copper_ore", -470, 35),
+      makeVein("magnetar_titanium", "magnetar", "titanium_ore", -150, -250),
+      makeVein("magnetar_silicon", "magnetar", "silicon_ore", -150, 35),
+      makeVein("ashen_unipolar", "magnetar", "unipolar_magnet", 170, -250),
     ],
     belts: [],
     cargo: null,
     tray: {},
-    planetTrays: { home: {}, ashen: {}, giant: {} },
+    planetTrays: Object.fromEntries(PLANET_LIST.map((planet) => [planet.id, {}])) as GameState["planetTrays"],
     construction: {
       wind_turbine: 3,
       solar_panel: 0,
@@ -224,9 +238,10 @@ export function createInitialState(): GameState {
       progressByTech: {},
       completedTechIds: [],
     },
+    exploration: { unlockedSystemIds: ["helios"] },
     elapsedSeconds: 0,
-    metrics: homeMetrics,
-    planetMetrics: { home: homeMetrics, ashen: ashenMetrics, giant: giantMetrics },
+    metrics: { ...planetMetrics.home },
+    planetMetrics,
     dysonSwarm: {
       sailsInOrbit: 0,
       totalLaunched: 0,
@@ -378,6 +393,7 @@ export function findInterstellarPeer(state: GameState, station: FactoryEntity): 
       : candidate.buildingId === "interstellar_logistics_station" ||
         (station.stationMode === "demand" && candidate.buildingId === "orbital_collector");
     return candidate.kind === "station" && compatible && candidate.planetId !== station.planetId &&
+      isStarSystemUnlocked(state, getPlanet(candidate.planetId).systemId) &&
       candidate.stationMode === peerMode && candidate.storedItemId === station.storedItemId;
   });
 }
@@ -695,7 +711,7 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, r
         if (charge > EPSILON) exchangerChargeCandidates.push({ entity, capacity: charge });
       } else {
         const rated = (getBuilding(entity.buildingId).powerGenerationKw ?? 0) * entity.machineCount;
-        const output = entity.buildingId === "solar_panel" && entity.planetId === "ashen" ? rated * 1.5 : rated;
+        const output = entity.buildingId === "solar_panel" ? rated * getPlanet(entity.planetId).solarMultiplier : rated;
         powerOutputByEntity.set(entity.id, output);
         if (entity.buildingId === "solar_panel") solarGenerationKw += output;
         else if (entity.buildingId === "geothermal_power_station") geothermalGenerationKw += output;
@@ -1177,9 +1193,10 @@ function resetStationRuntime(state: GameState): void {
 
 function runOrbitalCollectors(state: GameState, seconds: number): void {
   for (const collector of state.entities.filter((entity) => entity.buildingId === "orbital_collector")) {
-    const itemId = collector.storedItemId === "deuterium" || collector.storedItemId === "fire_ice"
+    const yields = getPlanet(collector.planetId).orbitalYields ?? {};
+    const itemId = collector.storedItemId && (yields[collector.storedItemId] ?? 0) > 0
       ? collector.storedItemId
-      : "hydrogen";
+      : (Object.keys(yields)[0] as ItemId | undefined) ?? "hydrogen";
     collector.storedItemId = itemId;
     collector.stationMode = "supply";
     const capacity = getBuilding("orbital_collector").outputCapacity * Math.max(1, collector.machineCount);
@@ -1189,7 +1206,7 @@ function runOrbitalCollectors(state: GameState, seconds: number): void {
       collector.progress = 0;
       continue;
     }
-    const rate = (itemId === "deuterium" ? 0.2 : itemId === "fire_ice" ? 0.5 : 1) * collector.machineCount;
+    const rate = (yields[itemId] ?? 0) * collector.machineCount;
     collector.progress = round((collector.progress ?? 0) + rate * seconds, 6);
     const produced = Math.min(free, Math.floor(collector.progress + EPSILON));
     collector.outputs[itemId] = current + produced;
@@ -1268,7 +1285,7 @@ function runInterstellarStations(state: GameState, seconds: number, powerByPlane
     const powerFactor = Math.min(sourcePower, targetPower);
     if (powerFactor <= EPSILON) continue;
     const requiresWarp = stationRouteRequiresWarp(demand, supply);
-    const tripSeconds = requiresWarp ? Math.max(4, INTERSTELLAR_TRIP_SECONDS / 4) : INTERSTELLAR_TRIP_SECONDS;
+    const tripSeconds = requiresWarp ? WARP_TRIP_SECONDS : INTERSTELLAR_TRIP_SECONDS;
     demand.stationProgress = round((demand.stationProgress ?? 0) + seconds * powerFactor / tripSeconds, 6);
     supply.stationProgress = demand.stationProgress;
     demand.utilization = powerFactor;
@@ -1351,8 +1368,32 @@ export function setPaused(state: GameState, paused: boolean): GameState {
   return { ...state, paused };
 }
 
+export function isStarSystemUnlocked(state: GameState, systemId: StarSystemId): boolean {
+  return state.exploration.unlockedSystemIds.includes(systemId);
+}
+
+export function canExploreStarSystem(state: GameState, systemId: StarSystemId): boolean {
+  const system = STAR_SYSTEMS[systemId];
+  if (!system || isStarSystemUnlocked(state, systemId)) return false;
+  if (system.requiredTechId && !isTechnologyCompleted(state, system.requiredTechId)) return false;
+  if (system.prerequisiteSystemId && !isStarSystemUnlocked(state, system.prerequisiteSystemId)) return false;
+  return system.explorationCost.every((cost) => (state.tray[cost.itemId] ?? 0) + EPSILON >= cost.amount);
+}
+
+export function exploreStarSystem(state: GameState, systemId: StarSystemId): GameState {
+  if (!canExploreStarSystem(state, systemId)) return state;
+  const next = copyState(state);
+  for (const cost of getStarSystem(systemId).explorationCost) {
+    next.tray[cost.itemId] = Math.floor((next.tray[cost.itemId] ?? 0) - cost.amount);
+  }
+  next.planetTrays[next.activePlanetId] = { ...next.tray };
+  next.exploration.unlockedSystemIds.push(systemId);
+  return next;
+}
+
 export function setActivePlanet(state: GameState, planetId: PlanetId): GameState {
-  if (!PLANET_LIST.some((planet) => planet.id === planetId) || state.activePlanetId === planetId) return state;
+  const planet = PLANET_LIST.find((candidate) => candidate.id === planetId);
+  if (!planet || !isStarSystemUnlocked(state, planet.systemId) || state.activePlanetId === planetId) return state;
   const next = copyState(state);
   next.planetTrays[next.activePlanetId] = { ...next.tray };
   next.activePlanetId = planetId;
@@ -1382,7 +1423,7 @@ export function moveEntity(state: GameState, entityId: string, position: { x: nu
 }
 
 export function canPlaceBuildingOnPlanet(buildingId: BuildingId, planetId: PlanetId): boolean {
-  if (planetId === "giant") return buildingId === "orbital_collector";
+  if (getPlanet(planetId).kind === "gas-giant") return buildingId === "orbital_collector";
   if (buildingId === "orbital_collector") return false;
   return buildingId !== "geothermal_power_station" || planetId === "ashen";
 }
@@ -1411,7 +1452,9 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
     progress: 0,
     routingCursor: 0,
     distributionMode: building.kind === "splitter" ? "balanced" : undefined,
-    storedItemId: buildingId === "orbital_collector" ? "hydrogen" : undefined,
+    storedItemId: buildingId === "orbital_collector"
+      ? (Object.keys(getPlanet(state.activePlanetId).orbitalYields ?? {})[0] as ItemId | undefined) ?? "hydrogen"
+      : undefined,
     stationMode: building.kind === "station" ? "supply" : undefined,
     stationProgress: building.kind === "station" ? 0 : undefined,
     stationTrips: building.kind === "station" ? 0 : undefined,
@@ -1477,7 +1520,7 @@ function refundBelts(state: GameState, belts: BeltConnection[]): void {
 function logisticsAccepts(entity: FactoryEntity, itemId: ItemId): boolean {
   if ((entity.kind !== "storage" && entity.kind !== "splitter" && entity.kind !== "station") || !entity.buildingId) return false;
   if (entity.buildingId === "orbital_collector") {
-    return (itemId === "hydrogen" || itemId === "deuterium" || itemId === "fire_ice") && (!entity.storedItemId || entity.storedItemId === itemId);
+    return (getPlanet(entity.planetId).orbitalYields?.[itemId] ?? 0) > 0 && (!entity.storedItemId || entity.storedItemId === itemId);
   }
   const accepts = getBuilding(entity.buildingId).accepts ?? "any";
   const itemKind = ITEMS[itemId].kind;
@@ -2236,9 +2279,10 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
 
   if (entity.kind === "station") {
     if (entity.buildingId === "orbital_collector") {
-      const itemId = entity.storedItemId === "deuterium" || entity.storedItemId === "fire_ice"
+      const yields = getPlanet(entity.planetId).orbitalYields ?? {};
+      const itemId = entity.storedItemId && (yields[entity.storedItemId] ?? 0) > 0
         ? entity.storedItemId
-        : "hydrogen";
+        : (Object.keys(yields)[0] as ItemId | undefined) ?? "hydrogen";
       const capacity = getBuilding("orbital_collector").outputCapacity * Math.max(1, entity.machineCount);
       if ((entity.outputs[itemId] ?? 0) >= capacity - EPSILON) {
         return { code: "output-blocked", label: `${ITEMS[itemId].name}储量已满`, tone: "blocked" };

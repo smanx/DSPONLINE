@@ -9,6 +9,7 @@ import {
   adjustStationWarpers,
   adjustStationVessels,
   advanceSimulation,
+  canExploreStarSystem,
   canInstallSprayCoater,
   canUpgradeBelt,
   canUpgradeEntity,
@@ -20,6 +21,7 @@ import {
   createInitialState,
   dropCargoToEntity,
   dropCargoToTray,
+  exploreStarSystem,
   getEntityOperatingStatus,
   getBeltCapacity,
   getEntityExtraProductBonus,
@@ -58,7 +60,7 @@ import {
 } from "./engine";
 
 describe("factory simulation", () => {
-  it("starts with the requested construction kit and three distinct resource planets", () => {
+  it("starts with the requested construction kit and six distinct planets across three systems", () => {
     const state = createInitialState();
     expect(state.construction).toMatchObject({
       wind_turbine: 3,
@@ -68,7 +70,7 @@ describe("factory simulation", () => {
       matrix_lab: 2,
       conveyor_belt_mk1: 10,
     });
-    expect(state.entities.filter((entity) => entity.kind === "vein")).toHaveLength(19);
+    expect(state.entities.filter((entity) => entity.kind === "vein")).toHaveLength(28);
     expect(state.entities.filter((entity) => entity.kind === "vein").map((entity) => entity.resourceId)).toEqual(expect.arrayContaining([
       "kimberlite_ore",
       "fractal_silicon",
@@ -77,10 +79,38 @@ describe("factory simulation", () => {
       "spiniform_stalagmite_crystal",
       "unipolar_magnet",
     ]));
-    expect(state.entities.filter((entity) => entity.kind === "vein" && entity.planetId === "home")).toHaveLength(7);
-    expect(state.entities.filter((entity) => entity.kind === "vein" && entity.planetId === "ashen")).toHaveLength(12);
+    expect(state.entities.filter((entity) => entity.kind === "vein" && entity.planetId === "home")).toHaveLength(6);
+    expect(state.entities.filter((entity) => entity.kind === "vein" && entity.planetId === "ashen")).toHaveLength(10);
+    expect(state.entities.filter((entity) => entity.kind === "vein" && entity.planetId === "frost")).toHaveLength(7);
+    expect(state.entities.filter((entity) => entity.kind === "vein" && entity.planetId === "magnetar")).toHaveLength(5);
     expect(state.planetMetrics.giant.powerFactor).toBe(1);
+    expect(state.planetMetrics.boreal_giant.powerFactor).toBe(1);
+    expect(state.exploration.unlockedSystemIds).toEqual(["helios"]);
     expect(state.entities.map((entity) => entity.resourceId)).toEqual(expect.arrayContaining(["silicon_ore", "titanium_ore", "water", "sulfuric_acid"]));
+  });
+
+  it("locks remote systems until exploration consumes the required supplies", () => {
+    let state = createInitialState();
+    expect(setActivePlanet(state, "frost")).toBe(state);
+    expect(canExploreStarSystem(state, "borealis")).toBe(false);
+
+    state.research.completedTechIds.push("stellar_exploration");
+    state.tray.space_warper = 7;
+    state.tray.information_matrix = 10;
+    state.tray.gravity_matrix = 20;
+    expect(canExploreStarSystem(state, "borealis")).toBe(true);
+    state = exploreStarSystem(state, "borealis");
+    expect(state.exploration.unlockedSystemIds).toEqual(["helios", "borealis"]);
+    expect(state.tray.space_warper).toBe(5);
+    expect(state.tray.information_matrix).toBe(0);
+    expect(canExploreStarSystem(state, "neutron")).toBe(true);
+    state = exploreStarSystem(state, "neutron");
+    expect(state.exploration.unlockedSystemIds).toEqual(["helios", "borealis", "neutron"]);
+    expect(state.tray.space_warper).toBe(0);
+    expect(state.tray.gravity_matrix).toBe(0);
+    state = setActivePlanet(state, "frost");
+    expect(state.activePlanetId).toBe("frost");
+    expect(setActivePlanet(state, "magnetar").activePlanetId).toBe("magnetar");
   });
 
   it("mines manually and feeds a compatible machine", () => {
@@ -944,6 +974,38 @@ describe("factory simulation", () => {
     expect(demand.stationTrips).toBe(1);
     expect(demand.stationLastTransfer).toBe(100);
     expect(Number.isInteger(demand.outputs.titanium_ingot)).toBe(true);
+  });
+
+  it("uses a warper and the warp flight time for cargo sent between star systems", () => {
+    let state = createInitialState();
+    state.exploration.unlockedSystemIds.push("borealis");
+    state.research.completedTechIds.push("space_warp");
+    state.construction.wind_turbine = 8;
+    state.construction.interstellar_logistics_station = 2;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 4);
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 300, y: 0 });
+    const supplyId = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!.id;
+    state = setLogisticsItem(state, supplyId, "optical_grating_crystal");
+    state.entities.find((entity) => entity.id === supplyId)!.outputs.optical_grating_crystal = 100;
+
+    state = setActivePlanet(state, "frost");
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 4);
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 300, y: 0 });
+    const demandId = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station" && entity.id !== supplyId)!.id;
+    state = setLogisticsItem(state, demandId, "optical_grating_crystal");
+    state = setStationMode(state, demandId, "demand");
+    state.tray.logistics_vessel = 1;
+    state.tray.space_warper = 1;
+    state = adjustStationVessels(state, demandId, 1);
+    state = adjustStationWarpers(state, demandId, 1);
+
+    state = advanceSimulation(state, 11.5);
+    expect(state.entities.find((entity) => entity.id === demandId)?.outputs.optical_grating_crystal ?? 0).toBe(0);
+    state = advanceSimulation(state, 0.6);
+    const demand = state.entities.find((entity) => entity.id === demandId)!;
+    expect(demand.outputs.optical_grating_crystal).toBe(100);
+    expect(demand.stationWarpers).toBe(0);
+    expect(demand.stationTrips).toBe(1);
   });
 
   it("respects minimum vessel loads, dispatches multiple vessels and returns the fleet", () => {

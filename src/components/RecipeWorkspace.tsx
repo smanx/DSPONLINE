@@ -18,7 +18,7 @@ import {
   getConsumingRecipes,
   getProducingRecipes,
   getResearchUses,
-  getResourceSource,
+  getResourceSources,
   getVirtualRecipeResult,
 } from "../game/recipeGraph";
 import type { GameState, ItemId, RecipeDefinition } from "../game/types";
@@ -118,7 +118,7 @@ export function RecipeWorkspace({ open, game, onClose }: {
     const term = query.trim().toLocaleLowerCase("zh-CN");
     const matchesSearch = !term || `${item.name} ${item.symbol} ${item.id} ${item.description}`.toLocaleLowerCase("zh-CN").includes(term);
     if (!matchesSearch) return false;
-    if (filter === "raw") return Boolean(getResourceSource(item.id));
+    if (filter === "raw") return getResourceSources(item.id).length > 0;
     if (filter === "solid") return item.kind === "solid";
     if (filter === "fluid") return item.kind === "fluid";
     if (filter === "matrix") return item.kind === "matrix";
@@ -127,7 +127,7 @@ export function RecipeWorkspace({ open, game, onClose }: {
 
   if (!open) return null;
   const item = getItem(selectedItemId);
-  const source = getResourceSource(selectedItemId);
+  const sources = getResourceSources(selectedItemId);
   const producingRecipes = getProducingRecipes(selectedItemId);
   const consumingRecipes = getConsumingRecipes(selectedItemId);
   const researchUses = getResearchUses(selectedItemId);
@@ -169,7 +169,7 @@ export function RecipeWorkspace({ open, game, onClose }: {
         <aside className="recipe-index" aria-label="物品索引">
           {visibleItems.length === 0 ? <div className="recipe-index-empty">没有符合条件的物品</div> : visibleItems.map((candidate) => {
             const producerCount = getProducingRecipes(candidate.id).length;
-            const natural = Boolean(getResourceSource(candidate.id));
+            const natural = getResourceSources(candidate.id).length > 0;
             return (
               <button className={selectedItemId === candidate.id ? "active" : ""} type="button" key={candidate.id} onClick={() => selectItem(candidate.id)}>
                 <ItemMark itemId={candidate.id} />
@@ -183,10 +183,10 @@ export function RecipeWorkspace({ open, game, onClose }: {
         <div className="recipe-detail">
           <header className="recipe-item-header">
             <ItemMark itemId={selectedItemId} />
-            <div><span>{item.kind === "matrix" ? "科研矩阵" : item.kind === "fluid" ? "流体物品" : source ? "天然资源" : "工业物品"}</span><strong>{item.name}</strong><p>{item.description}</p></div>
+            <div><span>{item.kind === "matrix" ? "科研矩阵" : item.kind === "fluid" ? "流体物品" : sources.length > 0 ? "天然资源" : "工业物品"}</span><strong>{item.name}</strong><p>{item.description}</p></div>
             <dl>
               <div><dt>网络库存</dt><dd>{stock.toLocaleString("zh-CN")}</dd></div>
-              <div><dt>生产方式</dt><dd>{producingRecipes.length + (source ? 1 : 0)}</dd></div>
+              <div><dt>生产方式</dt><dd>{producingRecipes.length + sources.length}</dd></div>
               <div><dt>下游流程</dt><dd>{consumingRecipes.length}</dd></div>
             </dl>
           </header>
@@ -200,19 +200,19 @@ export function RecipeWorkspace({ open, game, onClose }: {
           </section>
 
           <section className="recipe-section">
-            <header><Factory size={16} /><span>生产方式</span><strong>{producingRecipes.length + (source ? 1 : 0)}</strong></header>
+            <header><Factory size={16} /><span>生产方式</span><strong>{producingRecipes.length + sources.length}</strong></header>
             <div className="recipe-method-grid">
-              {source ? (
-                <article className="recipe-method recipe-method--source">
-                  <header><i><Pickaxe size={15} /></i><span><strong>{source.label}</strong><small>{getBuilding(source.extractorBuildingId).name}</small></span><em><MapPin size={12} />资源点</em></header>
+              {sources.map((source) => (
+                <article className="recipe-method recipe-method--source" key={`${source.extractorBuildingId}-${source.label}`}>
+                  <header><i><Pickaxe size={15} /></i><span><strong>{source.label}</strong><small>{getBuilding(source.extractorBuildingId).name}</small></span><em><MapPin size={12} />天然来源</em></header>
                   <div className="recipe-source-planets">
                     {source.planetIds.map((planetId) => <span key={planetId}><i style={{ color: getPlanet(planetId).color }}><MapPin size={13} /></i>{getPlanet(planetId).name}</span>)}
                   </div>
                   <footer><span>{source.manual ? "可手动采集或自动开采" : "必须部署采集设备"}</span><span className="recipe-unlock recipe-unlock--ready"><Check size={11} />资源来源</span></footer>
                 </article>
-              ) : null}
+              ))}
               {producingRecipes.map((recipe) => <RecipeFlowCard recipe={recipe} game={game} onSelect={selectItem} key={recipe.id} />)}
-              {!source && producingRecipes.length === 0 ? <div className="recipe-section-empty">暂无已登记的生产方式</div> : null}
+              {sources.length === 0 && producingRecipes.length === 0 ? <div className="recipe-section-empty">暂无已登记的生产方式</div> : null}
             </div>
           </section>
 
