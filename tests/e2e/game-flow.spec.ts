@@ -1814,6 +1814,8 @@ test("a chemical plant accepts plastic, refined oil and water transport lines to
   await connect("plastic_source", "塑料", 1);
   await connect("oil_source", "精炼油", 2);
   await connect("water_source", "水", 3);
+  await expect(page.locator(".factory-edge--active")).toHaveCount(3);
+  await expect.poll(async () => page.locator(".factory-edge--active .react-flow__edge-path").first().evaluate((element) => getComputedStyle(element).animationName)).toContain("factory-belt-flow");
   await expect(page.getByTitle("选择传送带 Mk.I连接节点端口", { exact: true })).toContainText("×0");
   await page.screenshot({ path: "artifacts/qa/chemical-three-input-routing-1440.png", fullPage: true });
 });
@@ -2280,4 +2282,33 @@ test("offline report summarizes production before entering the factory", async (
   await page.screenshot({ path: "artifacts/qa/offline-report-1440.png", fullPage: true });
   await report.getByRole("button", { name: "确认结算" }).click();
   await expect(report).not.toBeVisible();
+});
+
+test("running equipment uses semantic animation and reduced motion disables it", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openOfflineStageGame(page);
+  await page.getByRole("dialog", { name: "离线结算报告" }).getByRole("button", { name: "确认结算" }).click();
+  await page.locator(".react-flow__controls-fitview").click();
+  const runningNode = page.locator(".factory-node--status-running").first();
+  await expect(runningNode).toBeVisible();
+  await expect(runningNode.locator(".work-cycle--active")).toBeVisible();
+  await expect.poll(async () => runningNode.evaluate((element) => getComputedStyle(element, "::after").animationName)).toContain("factory-node-scan");
+  await expect.poll(async () => runningNode.locator(".work-cycle--active > i").evaluate((element) => getComputedStyle(element, "::after").animationName)).toContain("factory-cycle-sheen");
+  await page.screenshot({ path: "artifacts/qa/animation-feedback-1440.png", fullPage: true });
+
+  await page.getByLabel("打开运营中心").click();
+  const operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.locator(".operations-tabs").getByRole("button", { name: "设置" }).click();
+  await operations.locator(".setting-row").filter({ hasText: "减少动态效果" }).click();
+  await operations.getByLabel("关闭运营中心").click();
+  const durationMs = await runningNode.evaluate((element) => {
+    const value = getComputedStyle(element, "::after").animationDuration;
+    return value.endsWith("ms") ? Number.parseFloat(value) : Number.parseFloat(value) * 1000;
+  });
+  expect(durationMs).toBeLessThanOrEqual(0.02);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator(".react-flow__controls-fitview").click();
+  await expect(page.locator(".factory-canvas").evaluate((element) => element.scrollWidth <= element.clientWidth)).resolves.toBe(true);
+  await page.screenshot({ path: "artifacts/qa/animation-feedback-390.png", fullPage: true });
 });

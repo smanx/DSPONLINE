@@ -22,7 +22,7 @@ import {
   Zap,
 } from "lucide-react";
 import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FUEL_ENERGY_MJ, ITEMS, MATRIX_ITEM_IDS, getBuilding, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getProliferator, getRecipe, getRecipesForBuilding } from "../game/content";
 import { getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getStationDroneCapacity, getStationVesselCapacity } from "../game/engine";
 import { ItemHoverCard } from "./ItemReference";
@@ -112,6 +112,14 @@ function WorkCycle({
 }) {
   const normalized = Math.max(0, Math.min(1, progress));
   const percent = Math.round(normalized * 100);
+  const previousProgressRef = useRef(normalized);
+  const [completionPulse, setCompletionPulse] = useState(0);
+  useEffect(() => {
+    if (active && previousProgressRef.current > 0.72 && normalized < 0.28) {
+      setCompletionPulse((current) => current + 1);
+    }
+    previousProgressRef.current = normalized;
+  }, [active, normalized]);
   return (
     <div
       className={`work-cycle${active ? " work-cycle--active" : ""}`}
@@ -122,6 +130,7 @@ function WorkCycle({
       aria-valuenow={percent}
     >
       <i style={{ width: `${percent}%` }} />
+      {completionPulse > 0 ? <b className="work-cycle__completion" key={completionPulse} aria-hidden="true" /> : null}
       <span>{label}</span>
       <strong>{active ? `${percent}% · 效率 ${Math.round(efficiency * 100)}%` : percent > 0 ? `${percent}% · 暂停` : "待机"}</strong>
     </div>
@@ -238,7 +247,7 @@ export function VeinNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
-      className={`factory-node vein-node${selected ? " factory-node--selected" : ""}${installing ? " factory-node--placement" : ""}`}
+      className={`factory-node vein-node factory-node--status-${data.status.tone}${selected ? " factory-node--selected" : ""}${installing ? " factory-node--placement" : ""}`}
       onClick={install}
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes("application/factory-building")) event.preventDefault();
@@ -337,7 +346,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
-      className={`factory-node machine-node${building.tier && building.tier > 1 ? ` factory-node--tier-${building.tier}` : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
+      className={`factory-node machine-node factory-node--status-${data.status.tone}${building.tier && building.tier > 1 ? ` factory-node--tier-${building.tier}` : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
       onClick={add}
       onDragOver={(event) => {
         if (event.dataTransfer.types.some((type) => type === "application/factory-item" || type === "application/factory-building")) {
@@ -473,7 +482,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
-      className={`factory-node logistics-node${isStation ? " station-node" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
+      className={`factory-node logistics-node factory-node--status-${data.status.tone}${isStation ? " station-node" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
       onClick={(event) => {
         if (!adding) return;
         event.preventDefault();
@@ -554,7 +563,7 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const category = accumulator ? "电网缓冲储能" : exchanger ? "可运输储能" : fuelGenerator ? "可调度能源" : solar ? "恒星辐射发电" : geothermal ? "熔岩地热发电" : "行星电网";
   return (
     <article
-      className={`factory-node power-node${fuelGenerator ? " thermal-node" : ""}${accumulator || exchanger ? " storage-power-node" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}`}
+      className={`factory-node power-node factory-node--status-${data.status.tone}${fuelGenerator ? " thermal-node" : ""}${accumulator || exchanger ? " storage-power-node" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}`}
       onClick={(event) => {
         if (!adding) return;
         event.preventDefault();

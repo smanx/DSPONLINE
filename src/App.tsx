@@ -102,7 +102,7 @@ import {
   planDysonShell,
   renameBlueprint,
 } from "./game/engine";
-import { getAchievement, unlockAchievements } from "./game/progression";
+import { getAchievement, getNewAchievementIds, unlockAchievements } from "./game/progression";
 import { clearGame, clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot, type OfflineReport, type SaveSlotId } from "./game/storage";
 import type { BeltTier, BuildingId, DraggedItemSourceKind, EnergyMode, GameSettings, GameState, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad } from "./game/types";
 
@@ -150,6 +150,7 @@ function FactoryGame() {
   const completedTechCountRef = useRef(game.research.completedTechIds.length);
   const achievementCountRef = useRef(game.achievements.unlockedIds.length);
   const miningTimerRef = useRef<number | null>(null);
+  const nodeDragActiveRef = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const { screenToFlowPosition, setViewport } = useReactFlow();
 
@@ -227,6 +228,7 @@ function FactoryGame() {
   }, [game.research.completedTechIds, playTone]);
 
   useEffect(() => {
+    if (getNewAchievementIds(game).length === 0) return;
     setGame((current) => unlockAchievements(current).state);
   }, [game]);
 
@@ -485,6 +487,7 @@ function FactoryGame() {
   }, [game.belts, game.cargo, game.dysonSphere, game.dysonSwarm, game.elapsedSeconds, game.paused, game.research.completedTechIds, game.research.progressByTech, game.research.selectedTechId, miningEntityId, onAddBuilding, onDropCargo, onDropDraggedItem, onEnergyModeChange, onFuelChange, onInstallMiner, onMiningStart, onMiningStop, onPickInput, onPickOutput, onRecipeChange, placement, placementCount]);
 
   useEffect(() => {
+    if (nodeDragActiveRef.current) return;
     setNodes((current) => {
       const existing = new Map(current.map((node) => [node.id, node]));
       return game.entities.filter((entity) => entity.planetId === game.activePlanetId).map((entity) => {
@@ -510,17 +513,23 @@ function FactoryGame() {
   const edges = useMemo<Edge[]>(() => game.belts.filter((belt) => belt.planetId === game.activePlanetId).map((belt) => {
     const item = ITEMS[belt.itemId];
     const capacity = getBeltCapacity(belt);
+    const flowRatio = capacity > 0 ? Math.min(1, belt.lastFlow / capacity) : 0;
     return {
       id: belt.id,
       source: belt.source,
       target: belt.target,
       sourceHandle: `out:${belt.itemId}`,
       targetHandle: `in:${belt.itemId}`,
+      className: `factory-edge${belt.lastFlow > 0.001 ? " factory-edge--active" : ""}`,
       selected: selectedBeltId === belt.id,
       animated: belt.lastFlow > 0.001,
       label: `Mk.${belt.tier === 3 ? "III" : belt.tier === 2 ? "II" : "I"} · ${belt.lastFlow.toFixed(1)} / ${capacity.toFixed(0)} s⁻¹`,
       markerEnd: { type: MarkerType.ArrowClosed, color: item.color },
-      style: { stroke: item.color, strokeWidth: selectedBeltId === belt.id ? 3 : 2 },
+      style: {
+        stroke: item.color,
+        strokeWidth: selectedBeltId === belt.id ? 3 : 2,
+        animationDuration: `${Math.max(0.36, 1.15 - flowRatio * 0.7).toFixed(2)}s`,
+      },
       labelStyle: { fill: "#d7dedb", fontSize: 10, fontWeight: 650 },
       labelBgStyle: { fill: "#171d1b", fillOpacity: 0.94 },
       labelBgPadding: [5, 3] as [number, number],
@@ -720,9 +729,12 @@ function FactoryGame() {
             onSelectionChange={onSelectionChange}
             onConnect={onConnect}
             onNodeClick={onNodeClick}
+            onNodeDragStart={() => { nodeDragActiveRef.current = true; }}
             onNodeDragStop={(_event, node, draggedNodes) => {
+              nodeDragActiveRef.current = false;
               const moved = draggedNodes.length > 0 ? draggedNodes : [node];
-              setGame((current) => moveEntities(current, moved.map((candidate) => ({ id: candidate.id, position: candidate.position }))));
+              const positions = moved.map((candidate) => ({ id: candidate.id, position: candidate.position }));
+              window.requestAnimationFrame(() => setGame((current) => moveEntities(current, positions)));
             }}
             onEdgeClick={(_event, edge) => {
               setSelectedBeltId(edge.id);
