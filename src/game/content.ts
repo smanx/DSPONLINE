@@ -1,0 +1,766 @@
+import type {
+  BeltTier,
+  BuildingDefinition,
+  BuildingId,
+  ConstructionId,
+  ConstructionDefinition,
+  ConveyorBeltId,
+  ItemDefinition,
+  ItemId,
+  PlanetDefinition,
+  PlanetId,
+  RecipeDefinition,
+  RecipeId,
+  TechnologyDefinition,
+  TechId,
+} from "./types";
+
+export const PLANETS: Record<PlanetId, PlanetDefinition> = {
+  home: {
+    id: "home",
+    name: "澄海 I",
+    code: "母星",
+    color: "#61b2aa",
+    environment: "海洋型行星",
+    resources: "铁、铜、石、煤、原油、水",
+  },
+  ashen: {
+    id: "ashen",
+    name: "烬原 II",
+    code: "熔岩星",
+    color: "#d8794d",
+    environment: "熔岩型行星",
+    resources: "钛、硅、铁、铜、石、煤、硫酸",
+  },
+};
+
+export const PLANET_LIST = Object.values(PLANETS);
+
+export const ITEMS: Record<ItemId, ItemDefinition> = {
+  iron_ore: { id: "iron_ore", name: "铁矿石", symbol: "Fe", color: "#9aa6a8", kind: "solid", description: "铁系生产链的基础矿物。" },
+  copper_ore: { id: "copper_ore", name: "铜矿石", symbol: "Cu", color: "#d2764c", kind: "solid", description: "电气元件所需的基础矿物。" },
+  coal: { id: "coal", name: "煤矿", symbol: "C", color: "#6e7471", kind: "solid", description: "燃料和高能石墨的基础资源。" },
+  stone: { id: "stone", name: "石矿", symbol: "St", color: "#b5a68d", kind: "solid", description: "建筑材料与玻璃的基础原料。" },
+  crude_oil: { id: "crude_oil", name: "原油", symbol: "Oil", color: "#735d46", kind: "fluid", description: "从原油涌泉持续萃取的化工原料。" },
+  silicon_ore: { id: "silicon_ore", name: "硅石", symbol: "SiO", color: "#78948c", kind: "solid", description: "远端矿区出产的半导体基础矿物。" },
+  titanium_ore: { id: "titanium_ore", name: "钛石", symbol: "TiO", color: "#80769c", kind: "solid", description: "远端矿区出产的高强度金属矿物。" },
+  water: { id: "water", name: "水", symbol: "H2O", color: "#529fc1", kind: "fluid", description: "由抽水站从海洋水源持续取得的化工原料。" },
+  sulfuric_acid: { id: "sulfuric_acid", name: "硫酸", symbol: "H2S", color: "#b7b957", kind: "fluid", description: "可由化工厂合成，也可从熔岩星硫酸海洋直接抽取。" },
+  iron_ingot: { id: "iron_ingot", name: "铁块", symbol: "I", color: "#c1cbcc", kind: "solid", description: "最常用的基础结构材料。" },
+  copper_ingot: { id: "copper_ingot", name: "铜块", symbol: "C", color: "#e18b5d", kind: "solid", description: "导电元件的基础材料。" },
+  magnet: { id: "magnet", name: "磁铁", symbol: "M", color: "#718da4", kind: "solid", description: "磁场设备的基础零件。" },
+  stone_brick: { id: "stone_brick", name: "石材", symbol: "Br", color: "#c5bba9", kind: "solid", description: "耐热建筑结构材料。" },
+  glass: { id: "glass", name: "玻璃", symbol: "Gl", color: "#8fc7c6", kind: "solid", description: "科研和光学设备所需材料。" },
+  steel: { id: "steel", name: "钢材", symbol: "Stl", color: "#7f9298", kind: "solid", description: "重型工业设备所需的高强度结构材料。" },
+  gear: { id: "gear", name: "齿轮", symbol: "G", color: "#d2aa5b", kind: "solid", description: "机械传动结构的通用零件。" },
+  magnetic_coil: { id: "magnetic_coil", name: "磁线圈", symbol: "Mc", color: "#dd6d5b", kind: "solid", description: "由磁铁与铜块绕制而成。" },
+  circuit_board: { id: "circuit_board", name: "电路板", symbol: "Cb", color: "#78b776", kind: "solid", description: "自动化设备的基础控制元件。" },
+  prism: { id: "prism", name: "棱镜", symbol: "Pr", color: "#8ecbc3", kind: "solid", description: "由玻璃加工成的光学元件。" },
+  plasma_exciter: { id: "plasma_exciter", name: "电浆激发器", symbol: "Px", color: "#d78961", kind: "solid", description: "原油萃取和精炼设备的关键部件。" },
+  energetic_graphite: { id: "energetic_graphite", name: "高能石墨", symbol: "EG", color: "#817b8f", kind: "solid", description: "能源矩阵所需的高密度碳材料。" },
+  refined_oil: { id: "refined_oil", name: "精炼油", symbol: "RO", color: "#c99a4b", kind: "fluid", description: "原油精炼的主要液体产物。" },
+  hydrogen: { id: "hydrogen", name: "氢", symbol: "H", color: "#9dd5d3", kind: "fluid", description: "能源矩阵和后续化工链的重要气体资源。" },
+  high_purity_silicon: { id: "high_purity_silicon", name: "高纯硅块", symbol: "Si", color: "#73aaa1", kind: "solid", description: "处理器与精密电子元件的基础半导体材料。" },
+  titanium_ingot: { id: "titanium_ingot", name: "钛块", symbol: "Ti", color: "#978db4", kind: "solid", description: "结构矩阵产业链所需的高强度金属材料。" },
+  titanium_alloy: { id: "titanium_alloy", name: "钛合金", symbol: "TiA", color: "#9d9cb9", kind: "solid", description: "钛、钢材与硫酸共同形成的耐高温星际结构材料。" },
+  microcrystalline_component: { id: "microcrystalline_component", name: "微晶元件", symbol: "McC", color: "#67a994", kind: "solid", description: "以高纯硅块制造的精密半导体元件。" },
+  processor: { id: "processor", name: "处理器", symbol: "CPU", color: "#60a985", kind: "solid", description: "星际物流与高级自动化设备的核心控制单元。" },
+  logistics_vessel: { id: "logistics_vessel", name: "物流运输船", symbol: "LV", color: "#d4865d", kind: "solid", description: "装载到星际物流站后执行跨行星运输，每艘运载 100 件货物。" },
+  graphene: { id: "graphene", name: "石墨烯", symbol: "Gr", color: "#749692", kind: "solid", description: "由高能石墨剥离形成的二维碳材料。" },
+  carbon_nanotube: { id: "carbon_nanotube", name: "碳纳米管", symbol: "CNT", color: "#7e969d", kind: "solid", description: "石墨烯与钛材料形成的高强度纳米结构。" },
+  crystal_silicon: { id: "crystal_silicon", name: "晶格硅", symbol: "CSi", color: "#84b5a5", kind: "solid", description: "由高纯硅块进一步重排得到的精密晶格材料。" },
+  particle_broadband: { id: "particle_broadband", name: "粒子宽带", symbol: "PB", color: "#b486b1", kind: "solid", description: "由纳米碳、晶格硅与塑料制造的信息载体。" },
+  electric_motor: { id: "electric_motor", name: "电动机", symbol: "Mot", color: "#547e91", kind: "solid", description: "由铁、齿轮与磁线圈制造的基础动力组件。" },
+  electromagnetic_turbine: { id: "electromagnetic_turbine", name: "电磁涡轮", symbol: "Tur", color: "#4f9b9e", kind: "solid", description: "高速电磁设备与粒子容器所需的动力核心。" },
+  super_magnetic_ring: { id: "super_magnetic_ring", name: "超级磁场环", symbol: "SMR", color: "#3fa6a0", kind: "solid", description: "约束高能粒子和制造氘核燃料棒的强磁组件。" },
+  particle_container: { id: "particle_container", name: "粒子容器", symbol: "PC", color: "#71a9aa", kind: "solid", description: "利用电磁涡轮与石墨烯约束高能粒子的容器。" },
+  deuterium: { id: "deuterium", name: "氘", symbol: "D", color: "#86c7d0", kind: "fluid", description: "由氢在粒子对撞过程中富集得到的高能同位素。" },
+  deuteron_fuel_rod: { id: "deuteron_fuel_rod", name: "氘核燃料棒", symbol: "DFR", color: "#67b8c0", kind: "solid", description: "以氘和超级磁场环封装的高密度燃料。" },
+  titanium_glass: { id: "titanium_glass", name: "钛化玻璃", symbol: "TiG", color: "#8fc6c1", kind: "solid", description: "兼具高透明度与结构强度的精密材料。" },
+  casimir_crystal: { id: "casimir_crystal", name: "卡西米尔晶体", symbol: "Cas", color: "#74b9a4", kind: "solid", description: "利用氢与纳米材料形成的量子级晶体。" },
+  plane_filter: { id: "plane_filter", name: "位面过滤器", symbol: "PF", color: "#75a2bd", kind: "solid", description: "由卡西米尔晶体与钛化玻璃组成的精密过滤结构。" },
+  quantum_chip: { id: "quantum_chip", name: "量子芯片", symbol: "QC", color: "#6d8ec0", kind: "solid", description: "引力矩阵所需的高性能量子运算核心。" },
+  strange_matter: { id: "strange_matter", name: "奇异物质", symbol: "SM", color: "#ae86bf", kind: "solid", description: "由粒子对撞机在极端能级下制造的非常规物质。" },
+  graviton_lens: { id: "graviton_lens", name: "引力透镜", symbol: "GL", color: "#8fb676", kind: "solid", description: "利用奇异物质改变局部引力场的精密器件。" },
+  photon_combiner: { id: "photon_combiner", name: "光子合并器", symbol: "PhC", color: "#d8b65f", kind: "solid", description: "汇聚光能并稳定太阳帆工作面的光学部件。" },
+  solar_sail: { id: "solar_sail", name: "太阳帆", symbol: "Sail", color: "#e4c55f", kind: "solid", description: "由电磁轨道弹射器发射到恒星轨道，为戴森云提供能量。" },
+  critical_photon: { id: "critical_photon", name: "临界光子", symbol: "CP", color: "#d8e2d7", kind: "solid", description: "射线接收站在光子模式下凝聚的高能光子。" },
+  antimatter: { id: "antimatter", name: "反物质", symbol: "AM", color: "#d3c4e5", kind: "fluid", description: "由临界光子进行质能转换得到的高能物质。" },
+  annihilation_constraint_sphere: { id: "annihilation_constraint_sphere", name: "湮灭约束球", symbol: "ACS", color: "#93a5b8", kind: "solid", description: "约束反物质湮灭反应的精密容器。" },
+  antimatter_fuel_rod: { id: "antimatter_fuel_rod", name: "反物质燃料棒", symbol: "AFR", color: "#c9bde1", kind: "solid", description: "封装反物质与氢的终极高密度燃料。" },
+  frame_material: { id: "frame_material", name: "框架材料", symbol: "Frm", color: "#7faeb0", kind: "solid", description: "由碳纳米管、钛合金和高纯硅构成的戴森球高强度骨架材料。" },
+  dyson_sphere_component: { id: "dyson_sphere_component", name: "戴森球组件", symbol: "DSC", color: "#81b79f", kind: "solid", description: "封装框架、太阳帆和处理器的戴森球结构组件。" },
+  small_carrier_rocket: { id: "small_carrier_rocket", name: "小型运载火箭", symbol: "Rkt", color: "#d18a58", kind: "solid", description: "由垂直发射井送入恒星轨道，用于建设戴森球永久结构。" },
+  diamond: { id: "diamond", name: "金刚石", symbol: "Dia", color: "#a8d5ce", kind: "solid", description: "由高能石墨重排形成的高强度晶体。" },
+  plastic: { id: "plastic", name: "塑料", symbol: "Pl", color: "#d1c3a3", kind: "solid", description: "精炼油与高能石墨合成的高分子材料。" },
+  organic_crystal: { id: "organic_crystal", name: "有机晶体", symbol: "Org", color: "#74ad69", kind: "solid", description: "由塑料、精炼油和水合成的有机材料。" },
+  titanium_crystal: { id: "titanium_crystal", name: "钛晶石", symbol: "TiC", color: "#b19ac8", kind: "solid", description: "钛块与有机晶体形成的结构矩阵中间体。" },
+  electromagnetic_matrix: { id: "electromagnetic_matrix", name: "电磁矩阵", symbol: "EM", color: "#56b8cf", kind: "matrix", description: "第一阶段科研矩阵。" },
+  energy_matrix: { id: "energy_matrix", name: "能量矩阵", symbol: "En", color: "#d85f50", kind: "matrix", description: "由氢与高能石墨制成的第二阶段科研矩阵。" },
+  structure_matrix: { id: "structure_matrix", name: "结构矩阵", symbol: "Str", color: "#dfba48", kind: "matrix", description: "由金刚石与钛晶石制成的第三阶段科研矩阵。" },
+  information_matrix: { id: "information_matrix", name: "信息矩阵", symbol: "Inf", color: "#9b77cf", kind: "matrix", description: "由粒子宽带与处理器制成的第四阶段科研矩阵。" },
+  gravity_matrix: { id: "gravity_matrix", name: "引力矩阵", symbol: "Grv", color: "#77bd76", kind: "matrix", description: "由引力透镜与量子芯片制成的第五阶段科研矩阵。" },
+  universe_matrix: { id: "universe_matrix", name: "宇宙矩阵", symbol: "Uni", color: "#d9dedb", kind: "matrix", description: "五色矩阵与反物质融合形成的最终阶段科研矩阵。" },
+};
+
+export const MATRIX_ITEM_IDS: ItemId[] = [
+  "electromagnetic_matrix",
+  "energy_matrix",
+  "structure_matrix",
+  "information_matrix",
+  "gravity_matrix",
+  "universe_matrix",
+];
+
+export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
+  wind_turbine: {
+    id: "wind_turbine", name: "风力涡轮机", shortName: "风机", kind: "power",
+    powerGenerationKw: 300, speed: 1, inputCapacity: 0, outputCapacity: 0,
+    description: "向当前星球电网提供 300 kW 电力。",
+  },
+  thermal_power_plant: {
+    id: "thermal_power_plant", name: "火力发电厂", shortName: "火电厂", kind: "power",
+    powerGenerationKw: 2160, speed: 1, inputCapacity: 120, outputCapacity: 0,
+    description: "按电网缺口燃烧燃料，额定输出 2.16 MW，热能转换效率为 80%。",
+  },
+  mining_machine: {
+    id: "mining_machine", name: "采矿机", shortName: "采矿机", kind: "miner",
+    powerDemandKw: 420, speed: 0.5, inputCapacity: 0, outputCapacity: 180,
+    description: "安装在矿脉上，持续把矿物送入节点输出缓存。",
+  },
+  arc_smelter: {
+    id: "arc_smelter", name: "电弧熔炉", shortName: "熔炉", kind: "machine",
+    powerDemandKw: 360, speed: 1, inputCapacity: 120, outputCapacity: 120, tier: 1, family: "smelter",
+    description: "处理矿石、磁铁和基础建材。",
+  },
+  plane_smelter: {
+    id: "plane_smelter", name: "位面熔炉", shortName: "位面熔炉", kind: "machine",
+    powerDemandKw: 1440, speed: 2, inputCapacity: 240, outputCapacity: 240, tier: 2, family: "smelter",
+    description: "以双倍配方速度处理全部熔炼配方，适合高吞吐冶金产线。",
+  },
+  assembling_machine_mk1: {
+    id: "assembling_machine_mk1", name: "制造台 Mk.I", shortName: "制造台", kind: "machine",
+    powerDemandKw: 270, speed: 0.75, inputCapacity: 120, outputCapacity: 120, tier: 1, family: "assembler",
+    description: "以 0.75 倍配方速度组装基础零件。",
+  },
+  assembling_machine_mk2: {
+    id: "assembling_machine_mk2", name: "制造台 Mk.II", shortName: "制造台 Mk.II", kind: "machine",
+    powerDemandKw: 540, speed: 1, inputCapacity: 180, outputCapacity: 180, tier: 2, family: "assembler",
+    description: "以标准配方速度组装物品，在相同节点规模下提供更高吞吐。",
+  },
+  assembling_machine_mk3: {
+    id: "assembling_machine_mk3", name: "制造台 Mk.III", shortName: "制造台 Mk.III", kind: "machine",
+    powerDemandKw: 1080, speed: 1.5, inputCapacity: 240, outputCapacity: 240, tier: 3, family: "assembler",
+    description: "以 1.5 倍配方速度进行量子级装配，是最高等级的通用制造设备。",
+  },
+  matrix_lab: {
+    id: "matrix_lab", name: "矩阵研究站", shortName: "研究站", kind: "machine",
+    powerDemandKw: 480, speed: 1, inputCapacity: 120, outputCapacity: 120,
+    description: "生产并研究科学矩阵。",
+  },
+  oil_extractor: {
+    id: "oil_extractor", name: "原油萃取站", shortName: "萃取站", kind: "miner",
+    powerDemandKw: 840, speed: 1, inputCapacity: 0, outputCapacity: 300,
+    description: "安装在原油涌泉上，持续萃取原油。",
+  },
+  oil_refinery: {
+    id: "oil_refinery", name: "原油精炼厂", shortName: "精炼厂", kind: "machine",
+    powerDemandKw: 960, speed: 1, inputCapacity: 240, outputCapacity: 240,
+    description: "执行原油精炼和 X 射线裂解等多产物配方。",
+  },
+  water_pump: {
+    id: "water_pump", name: "抽水站", shortName: "抽水站", kind: "miner",
+    powerDemandKw: 300, speed: 1, inputCapacity: 0, outputCapacity: 300,
+    description: "部署在水或硫酸海洋上，以每秒 1 单位的基础速度抽取流体。",
+  },
+  chemical_plant: {
+    id: "chemical_plant", name: "化工厂", shortName: "化工厂", kind: "machine",
+    powerDemandKw: 720, speed: 1, inputCapacity: 240, outputCapacity: 240,
+    description: "执行塑料、有机晶体等高分子化工配方。",
+  },
+  miniature_particle_collider: {
+    id: "miniature_particle_collider", name: "微型粒子对撞机", shortName: "对撞机", kind: "machine",
+    powerDemandKw: 12000, speed: 1, inputCapacity: 600, outputCapacity: 600,
+    description: "消耗大量电力进行氘富集与奇异物质制造。",
+  },
+  em_rail_ejector: {
+    id: "em_rail_ejector", name: "电磁轨道弹射器", shortName: "轨道弹射器", kind: "machine",
+    powerDemandKw: 1800, speed: 1, inputCapacity: 180, outputCapacity: 0,
+    description: "消耗太阳帆并将其发射到恒星轨道，持续扩充戴森云。",
+  },
+  ray_receiver: {
+    id: "ray_receiver", name: "射线接收站", shortName: "接收站", kind: "machine",
+    speed: 1, inputCapacity: 0, outputCapacity: 120,
+    description: "共享戴森云恒星能，可切换电力输出或临界光子生成模式。",
+  },
+  vertical_launching_silo: {
+    id: "vertical_launching_silo", name: "垂直发射井", shortName: "发射井", kind: "machine",
+    powerDemandKw: 18000, speed: 1, inputCapacity: 180, outputCapacity: 0,
+    description: "消耗小型运载火箭，在恒星轨道持续建设戴森球永久结构。",
+  },
+  interstellar_logistics_station: {
+    id: "interstellar_logistics_station", name: "星际物流站", shortName: "星际站", kind: "station",
+    powerDemandKw: 1200, speed: 1, inputCapacity: 1000, outputCapacity: 1000, accepts: "any",
+    description: "与另一行星的异向站点自动配对，由需求站调度已装载的运输船执行跨行星货运。",
+  },
+  storage_mk1: {
+    id: "storage_mk1", name: "小型储物仓", shortName: "储物仓", kind: "storage",
+    speed: 1, inputCapacity: 600, outputCapacity: 600, accepts: "solid",
+    description: "缓存一种固体物品，并向后续物流线路持续供货。",
+  },
+  storage_tank: {
+    id: "storage_tank", name: "储液罐", shortName: "储液罐", kind: "storage",
+    speed: 1, inputCapacity: 1200, outputCapacity: 1200, accepts: "fluid",
+    description: "缓存原油、精炼油、氢或氘等流体资源。",
+  },
+  splitter_4way: {
+    id: "splitter_4way", name: "四向分流器", shortName: "分流器", kind: "splitter",
+    speed: 1, inputCapacity: 24, outputCapacity: 24, accepts: "any",
+    description: "在多条输出运输线之间均分物资，并支持优先线路。",
+  },
+};
+
+export const RECIPES: Record<RecipeId, RecipeDefinition> = {
+  iron_ingot: { id: "iron_ingot", name: "铁块", buildingId: "arc_smelter", duration: 1, inputs: [{ itemId: "iron_ore", amount: 1 }], outputs: [{ itemId: "iron_ingot", amount: 1 }] },
+  copper_ingot: { id: "copper_ingot", name: "铜块", buildingId: "arc_smelter", duration: 1, inputs: [{ itemId: "copper_ore", amount: 1 }], outputs: [{ itemId: "copper_ingot", amount: 1 }] },
+  magnet: { id: "magnet", name: "磁铁", buildingId: "arc_smelter", duration: 1.5, inputs: [{ itemId: "iron_ore", amount: 1 }], outputs: [{ itemId: "magnet", amount: 1 }] },
+  stone_brick: { id: "stone_brick", name: "石材", buildingId: "arc_smelter", duration: 1, inputs: [{ itemId: "stone", amount: 1 }], outputs: [{ itemId: "stone_brick", amount: 1 }] },
+  glass: { id: "glass", name: "玻璃", buildingId: "arc_smelter", duration: 2, inputs: [{ itemId: "stone", amount: 2 }], outputs: [{ itemId: "glass", amount: 1 }] },
+  steel: { id: "steel", name: "钢材", buildingId: "arc_smelter", duration: 3, requiredTechId: "high_efficiency_plasma_control", inputs: [{ itemId: "iron_ingot", amount: 3 }], outputs: [{ itemId: "steel", amount: 1 }] },
+  energetic_graphite: { id: "energetic_graphite", name: "高能石墨", buildingId: "arc_smelter", duration: 2, requiredTechId: "energy_matrix", inputs: [{ itemId: "coal", amount: 2 }], outputs: [{ itemId: "energetic_graphite", amount: 1 }] },
+  gear: { id: "gear", name: "齿轮", buildingId: "assembling_machine_mk1", duration: 1, inputs: [{ itemId: "iron_ingot", amount: 1 }], outputs: [{ itemId: "gear", amount: 1 }] },
+  magnetic_coil: { id: "magnetic_coil", name: "磁线圈", buildingId: "assembling_machine_mk1", duration: 1, inputs: [{ itemId: "magnet", amount: 2 }, { itemId: "copper_ingot", amount: 1 }], outputs: [{ itemId: "magnetic_coil", amount: 2 }] },
+  circuit_board: { id: "circuit_board", name: "电路板", buildingId: "assembling_machine_mk1", duration: 1, inputs: [{ itemId: "iron_ingot", amount: 2 }, { itemId: "copper_ingot", amount: 1 }], outputs: [{ itemId: "circuit_board", amount: 2 }] },
+  prism: { id: "prism", name: "棱镜", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "high_efficiency_plasma_control", inputs: [{ itemId: "glass", amount: 3 }], outputs: [{ itemId: "prism", amount: 2 }] },
+  plasma_exciter: { id: "plasma_exciter", name: "电浆激发器", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "high_efficiency_plasma_control", inputs: [{ itemId: "magnetic_coil", amount: 4 }, { itemId: "prism", amount: 2 }], outputs: [{ itemId: "plasma_exciter", amount: 1 }] },
+  plasma_refining: { id: "plasma_refining", name: "等离子精炼", buildingId: "oil_refinery", duration: 4, requiredTechId: "high_efficiency_plasma_control", inputs: [{ itemId: "crude_oil", amount: 2 }], outputs: [{ itemId: "refined_oil", amount: 2 }, { itemId: "hydrogen", amount: 1 }] },
+  xray_cracking: { id: "xray_cracking", name: "X 射线裂解", buildingId: "oil_refinery", duration: 4, requiredTechId: "xray_cracking", inputs: [{ itemId: "refined_oil", amount: 2 }, { itemId: "hydrogen", amount: 1 }], outputs: [{ itemId: "energetic_graphite", amount: 1 }, { itemId: "hydrogen", amount: 3 }] },
+  high_purity_silicon: { id: "high_purity_silicon", name: "高纯硅块", buildingId: "arc_smelter", duration: 2, requiredTechId: "high_strength_crystal", inputs: [{ itemId: "silicon_ore", amount: 2 }], outputs: [{ itemId: "high_purity_silicon", amount: 1 }] },
+  silicon_ore_from_stone: { id: "silicon_ore_from_stone", name: "石矿提炼硅石", buildingId: "arc_smelter", duration: 10, requiredTechId: "high_strength_crystal", inputs: [{ itemId: "stone", amount: 10 }], outputs: [{ itemId: "silicon_ore", amount: 1 }] },
+  titanium_ingot: { id: "titanium_ingot", name: "钛块", buildingId: "arc_smelter", duration: 2, requiredTechId: "high_strength_crystal", inputs: [{ itemId: "titanium_ore", amount: 2 }], outputs: [{ itemId: "titanium_ingot", amount: 1 }] },
+  sulfuric_acid: { id: "sulfuric_acid", name: "硫酸", buildingId: "chemical_plant", duration: 6, requiredTechId: "titanium_alloy", inputs: [{ itemId: "refined_oil", amount: 6 }, { itemId: "stone", amount: 8 }, { itemId: "water", amount: 4 }], outputs: [{ itemId: "sulfuric_acid", amount: 4 }] },
+  titanium_alloy: { id: "titanium_alloy", name: "钛合金", buildingId: "arc_smelter", duration: 12, requiredTechId: "titanium_alloy", inputs: [{ itemId: "titanium_ingot", amount: 4 }, { itemId: "steel", amount: 4 }, { itemId: "sulfuric_acid", amount: 8 }], outputs: [{ itemId: "titanium_alloy", amount: 4 }] },
+  microcrystalline_component: { id: "microcrystalline_component", name: "微晶元件", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "processor", inputs: [{ itemId: "high_purity_silicon", amount: 2 }, { itemId: "copper_ingot", amount: 1 }], outputs: [{ itemId: "microcrystalline_component", amount: 1 }] },
+  processor: { id: "processor", name: "处理器", buildingId: "assembling_machine_mk1", duration: 3, requiredTechId: "processor", inputs: [{ itemId: "circuit_board", amount: 2 }, { itemId: "microcrystalline_component", amount: 2 }], outputs: [{ itemId: "processor", amount: 1 }] },
+  logistics_vessel: { id: "logistics_vessel", name: "物流运输船", buildingId: "assembling_machine_mk1", duration: 8, requiredTechId: "interstellar_logistics", inputs: [{ itemId: "titanium_alloy", amount: 10 }, { itemId: "processor", amount: 10 }, { itemId: "plasma_exciter", amount: 4 }], outputs: [{ itemId: "logistics_vessel", amount: 1 }] },
+  graphene: { id: "graphene", name: "石墨烯", buildingId: "chemical_plant", duration: 3, requiredTechId: "nanomaterials", inputs: [{ itemId: "energetic_graphite", amount: 3 }, { itemId: "sulfuric_acid", amount: 1 }], outputs: [{ itemId: "graphene", amount: 2 }] },
+  carbon_nanotube: { id: "carbon_nanotube", name: "碳纳米管", buildingId: "chemical_plant", duration: 4, requiredTechId: "nanomaterials", inputs: [{ itemId: "graphene", amount: 3 }, { itemId: "titanium_ingot", amount: 1 }], outputs: [{ itemId: "carbon_nanotube", amount: 2 }] },
+  crystal_silicon: { id: "crystal_silicon", name: "晶格硅", buildingId: "arc_smelter", duration: 2, requiredTechId: "nanomaterials", inputs: [{ itemId: "high_purity_silicon", amount: 1 }], outputs: [{ itemId: "crystal_silicon", amount: 1 }] },
+  particle_broadband: { id: "particle_broadband", name: "粒子宽带", buildingId: "assembling_machine_mk1", duration: 8, requiredTechId: "information_matrix", inputs: [{ itemId: "carbon_nanotube", amount: 2 }, { itemId: "crystal_silicon", amount: 2 }, { itemId: "plastic", amount: 1 }], outputs: [{ itemId: "particle_broadband", amount: 1 }] },
+  electric_motor: { id: "electric_motor", name: "电动机", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "iron_ingot", amount: 2 }, { itemId: "gear", amount: 1 }, { itemId: "magnetic_coil", amount: 1 }], outputs: [{ itemId: "electric_motor", amount: 1 }] },
+  electromagnetic_turbine: { id: "electromagnetic_turbine", name: "电磁涡轮", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "electric_motor", amount: 2 }, { itemId: "magnetic_coil", amount: 2 }], outputs: [{ itemId: "electromagnetic_turbine", amount: 1 }] },
+  super_magnetic_ring: { id: "super_magnetic_ring", name: "超级磁场环", buildingId: "assembling_machine_mk1", duration: 3, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "electromagnetic_turbine", amount: 2 }, { itemId: "magnet", amount: 3 }, { itemId: "energetic_graphite", amount: 1 }], outputs: [{ itemId: "super_magnetic_ring", amount: 1 }] },
+  particle_container: { id: "particle_container", name: "粒子容器", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "electromagnetic_turbine", amount: 2 }, { itemId: "copper_ingot", amount: 2 }, { itemId: "graphene", amount: 2 }], outputs: [{ itemId: "particle_container", amount: 1 }] },
+  deuterium: { id: "deuterium", name: "氘富集", buildingId: "miniature_particle_collider", duration: 5, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "hydrogen", amount: 10 }], outputs: [{ itemId: "deuterium", amount: 5 }] },
+  deuteron_fuel_rod: { id: "deuteron_fuel_rod", name: "氘核燃料棒", buildingId: "assembling_machine_mk1", duration: 6, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "titanium_alloy", amount: 1 }, { itemId: "deuterium", amount: 20 }, { itemId: "super_magnetic_ring", amount: 1 }], outputs: [{ itemId: "deuteron_fuel_rod", amount: 2 }] },
+  titanium_glass: { id: "titanium_glass", name: "钛化玻璃", buildingId: "assembling_machine_mk1", duration: 5, requiredTechId: "quantum_chip", inputs: [{ itemId: "glass", amount: 2 }, { itemId: "titanium_ingot", amount: 2 }, { itemId: "water", amount: 2 }], outputs: [{ itemId: "titanium_glass", amount: 2 }] },
+  casimir_crystal: { id: "casimir_crystal", name: "卡西米尔晶体", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "quantum_chip", inputs: [{ itemId: "titanium_crystal", amount: 1 }, { itemId: "graphene", amount: 2 }, { itemId: "hydrogen", amount: 12 }], outputs: [{ itemId: "casimir_crystal", amount: 1 }] },
+  plane_filter: { id: "plane_filter", name: "位面过滤器", buildingId: "assembling_machine_mk1", duration: 12, requiredTechId: "quantum_chip", inputs: [{ itemId: "casimir_crystal", amount: 1 }, { itemId: "titanium_glass", amount: 2 }], outputs: [{ itemId: "plane_filter", amount: 1 }] },
+  quantum_chip: { id: "quantum_chip", name: "量子芯片", buildingId: "assembling_machine_mk1", duration: 6, requiredTechId: "quantum_chip", inputs: [{ itemId: "processor", amount: 2 }, { itemId: "plane_filter", amount: 2 }], outputs: [{ itemId: "quantum_chip", amount: 1 }] },
+  strange_matter: { id: "strange_matter", name: "奇异物质", buildingId: "miniature_particle_collider", duration: 8, requiredTechId: "gravity_matrix", inputs: [{ itemId: "particle_container", amount: 2 }, { itemId: "iron_ingot", amount: 2 }, { itemId: "deuterium", amount: 10 }], outputs: [{ itemId: "strange_matter", amount: 1 }] },
+  graviton_lens: { id: "graviton_lens", name: "引力透镜", buildingId: "assembling_machine_mk1", duration: 6, requiredTechId: "gravity_matrix", inputs: [{ itemId: "diamond", amount: 4 }, { itemId: "strange_matter", amount: 1 }], outputs: [{ itemId: "graviton_lens", amount: 1 }] },
+  photon_combiner: { id: "photon_combiner", name: "光子合并器", buildingId: "assembling_machine_mk1", duration: 3, requiredTechId: "dyson_swarm", inputs: [{ itemId: "prism", amount: 2 }, { itemId: "circuit_board", amount: 1 }], outputs: [{ itemId: "photon_combiner", amount: 1 }] },
+  solar_sail: { id: "solar_sail", name: "太阳帆", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "dyson_swarm", inputs: [{ itemId: "graphene", amount: 1 }, { itemId: "photon_combiner", amount: 1 }], outputs: [{ itemId: "solar_sail", amount: 2 }] },
+  solar_sail_launch: { id: "solar_sail_launch", name: "太阳帆发射", buildingId: "em_rail_ejector", duration: 12, requiredTechId: "dyson_swarm", inputs: [{ itemId: "solar_sail", amount: 1 }], outputs: [] },
+  ray_power: { id: "ray_power", name: "电力接收", buildingId: "ray_receiver", duration: 1, requiredTechId: "ray_receiver", inputs: [], outputs: [] },
+  critical_photon: { id: "critical_photon", name: "临界光子", buildingId: "ray_receiver", duration: 10, requiredTechId: "ray_receiver", inputs: [], outputs: [{ itemId: "critical_photon", amount: 1 }] },
+  antimatter: { id: "antimatter", name: "质能转换", buildingId: "miniature_particle_collider", duration: 2, requiredTechId: "antimatter", inputs: [{ itemId: "critical_photon", amount: 2 }], outputs: [{ itemId: "hydrogen", amount: 2 }, { itemId: "antimatter", amount: 2 }] },
+  annihilation_constraint_sphere: { id: "annihilation_constraint_sphere", name: "湮灭约束球", buildingId: "assembling_machine_mk1", duration: 20, requiredTechId: "antimatter", inputs: [{ itemId: "particle_container", amount: 1 }, { itemId: "processor", amount: 1 }], outputs: [{ itemId: "annihilation_constraint_sphere", amount: 1 }] },
+  antimatter_fuel_rod: { id: "antimatter_fuel_rod", name: "反物质燃料棒", buildingId: "assembling_machine_mk1", duration: 12, requiredTechId: "antimatter", inputs: [{ itemId: "antimatter", amount: 10 }, { itemId: "hydrogen", amount: 10 }, { itemId: "annihilation_constraint_sphere", amount: 1 }, { itemId: "titanium_alloy", amount: 1 }], outputs: [{ itemId: "antimatter_fuel_rod", amount: 2 }] },
+  frame_material: { id: "frame_material", name: "框架材料", buildingId: "assembling_machine_mk1", duration: 6, requiredTechId: "dyson_sphere_program", inputs: [{ itemId: "carbon_nanotube", amount: 4 }, { itemId: "titanium_alloy", amount: 1 }, { itemId: "high_purity_silicon", amount: 1 }], outputs: [{ itemId: "frame_material", amount: 1 }] },
+  dyson_sphere_component: { id: "dyson_sphere_component", name: "戴森球组件", buildingId: "assembling_machine_mk1", duration: 8, requiredTechId: "dyson_sphere_program", inputs: [{ itemId: "frame_material", amount: 3 }, { itemId: "solar_sail", amount: 3 }, { itemId: "processor", amount: 3 }], outputs: [{ itemId: "dyson_sphere_component", amount: 1 }] },
+  small_carrier_rocket: { id: "small_carrier_rocket", name: "小型运载火箭", buildingId: "assembling_machine_mk1", duration: 6, requiredTechId: "vertical_launching_silo", inputs: [{ itemId: "dyson_sphere_component", amount: 2 }, { itemId: "deuteron_fuel_rod", amount: 4 }, { itemId: "quantum_chip", amount: 2 }], outputs: [{ itemId: "small_carrier_rocket", amount: 1 }] },
+  carrier_rocket_launch: { id: "carrier_rocket_launch", name: "运载火箭发射", buildingId: "vertical_launching_silo", duration: 6, requiredTechId: "vertical_launching_silo", inputs: [{ itemId: "small_carrier_rocket", amount: 1 }], outputs: [] },
+  diamond: { id: "diamond", name: "金刚石", buildingId: "arc_smelter", duration: 2, requiredTechId: "high_strength_crystal", inputs: [{ itemId: "energetic_graphite", amount: 1 }], outputs: [{ itemId: "diamond", amount: 1 }] },
+  plastic: { id: "plastic", name: "塑料", buildingId: "chemical_plant", duration: 3, requiredTechId: "basic_chemical_engineering", inputs: [{ itemId: "refined_oil", amount: 2 }, { itemId: "energetic_graphite", amount: 1 }], outputs: [{ itemId: "plastic", amount: 1 }] },
+  organic_crystal: { id: "organic_crystal", name: "有机晶体", buildingId: "chemical_plant", duration: 6, requiredTechId: "polymer_chemistry", inputs: [{ itemId: "plastic", amount: 2 }, { itemId: "refined_oil", amount: 1 }, { itemId: "water", amount: 1 }], outputs: [{ itemId: "organic_crystal", amount: 1 }] },
+  titanium_crystal: { id: "titanium_crystal", name: "钛晶石", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "structure_matrix", inputs: [{ itemId: "titanium_ingot", amount: 3 }, { itemId: "organic_crystal", amount: 1 }], outputs: [{ itemId: "titanium_crystal", amount: 1 }] },
+  electromagnetic_matrix: { id: "electromagnetic_matrix", name: "电磁矩阵", buildingId: "matrix_lab", duration: 3, inputs: [{ itemId: "magnetic_coil", amount: 1 }, { itemId: "circuit_board", amount: 1 }], outputs: [{ itemId: "electromagnetic_matrix", amount: 1 }] },
+  energy_matrix: { id: "energy_matrix", name: "能量矩阵", buildingId: "matrix_lab", duration: 6, requiredTechId: "energy_matrix", inputs: [{ itemId: "energetic_graphite", amount: 2 }, { itemId: "hydrogen", amount: 2 }], outputs: [{ itemId: "energy_matrix", amount: 1 }] },
+  structure_matrix: { id: "structure_matrix", name: "结构矩阵", buildingId: "matrix_lab", duration: 8, requiredTechId: "structure_matrix", inputs: [{ itemId: "diamond", amount: 1 }, { itemId: "titanium_crystal", amount: 1 }], outputs: [{ itemId: "structure_matrix", amount: 1 }] },
+  information_matrix: { id: "information_matrix", name: "信息矩阵", buildingId: "matrix_lab", duration: 10, requiredTechId: "information_matrix", inputs: [{ itemId: "particle_broadband", amount: 2 }, { itemId: "processor", amount: 2 }], outputs: [{ itemId: "information_matrix", amount: 1 }] },
+  gravity_matrix: { id: "gravity_matrix", name: "引力矩阵", buildingId: "matrix_lab", duration: 24, requiredTechId: "gravity_matrix", inputs: [{ itemId: "graviton_lens", amount: 1 }, { itemId: "quantum_chip", amount: 1 }], outputs: [{ itemId: "gravity_matrix", amount: 2 }] },
+  universe_matrix: { id: "universe_matrix", name: "宇宙矩阵", buildingId: "matrix_lab", duration: 15, requiredTechId: "universe_matrix", inputs: [{ itemId: "electromagnetic_matrix", amount: 1 }, { itemId: "energy_matrix", amount: 1 }, { itemId: "structure_matrix", amount: 1 }, { itemId: "information_matrix", amount: 1 }, { itemId: "gravity_matrix", amount: 1 }, { itemId: "antimatter", amount: 1 }], outputs: [{ itemId: "universe_matrix", amount: 1 }] },
+  matrix_research: { id: "matrix_research", name: "科研模式", buildingId: "matrix_lab", duration: 3, inputs: [], outputs: [] },
+};
+
+export const RECIPES_BY_BUILDING = Object.values(RECIPES).reduce(
+  (groups, recipe) => {
+    (groups[recipe.buildingId] ??= []).push(recipe);
+    return groups;
+  },
+  {} as Partial<Record<BuildingId, RecipeDefinition[]>>,
+);
+
+const RECIPE_BUILDING_BASE: Partial<Record<BuildingId, BuildingId>> = {
+  assembling_machine_mk2: "assembling_machine_mk1",
+  assembling_machine_mk3: "assembling_machine_mk1",
+  plane_smelter: "arc_smelter",
+};
+
+export const BUILDING_UPGRADES: Partial<Record<BuildingId, BuildingId>> = {
+  assembling_machine_mk1: "assembling_machine_mk2",
+  assembling_machine_mk2: "assembling_machine_mk3",
+  arc_smelter: "plane_smelter",
+};
+
+export const BELT_CONSTRUCTION_BY_TIER: Record<BeltTier, ConveyorBeltId> = {
+  1: "conveyor_belt_mk1",
+  2: "conveyor_belt_mk2",
+  3: "conveyor_belt_mk3",
+};
+
+export function getRecipesForBuilding(buildingId: BuildingId): RecipeDefinition[] {
+  return RECIPES_BY_BUILDING[RECIPE_BUILDING_BASE[buildingId] ?? buildingId] ?? [];
+}
+
+export function buildingSupportsRecipe(buildingId: BuildingId, recipe: RecipeDefinition): boolean {
+  return (RECIPE_BUILDING_BASE[buildingId] ?? buildingId) === recipe.buildingId;
+}
+
+export function getBuildingUpgradeTarget(buildingId: BuildingId): BuildingId | undefined {
+  return BUILDING_UPGRADES[buildingId];
+}
+
+export function getBeltConstructionId(tier: BeltTier): ConveyorBeltId {
+  return BELT_CONSTRUCTION_BY_TIER[tier];
+}
+
+export function getBeltTier(id: ConveyorBeltId): BeltTier {
+  return id === "conveyor_belt_mk3" ? 3 : id === "conveyor_belt_mk2" ? 2 : 1;
+}
+
+export function isConveyorBeltId(id: ConstructionId): id is ConveyorBeltId {
+  return id === "conveyor_belt_mk1" || id === "conveyor_belt_mk2" || id === "conveyor_belt_mk3";
+}
+
+export const CONSTRUCTION: ConstructionDefinition[] = [
+  { buildingId: "wind_turbine", name: "风力涡轮机", outputAmount: 1, requiredTechId: "electromagnetism", costs: [{ itemId: "iron_ingot", amount: 6 }, { itemId: "gear", amount: 1 }, { itemId: "magnetic_coil", amount: 3 }] },
+  { buildingId: "thermal_power_plant", name: "火力发电厂", outputAmount: 1, requiredTechId: "thermal_power", costs: [{ itemId: "iron_ingot", amount: 10 }, { itemId: "stone_brick", amount: 4 }, { itemId: "gear", amount: 4 }, { itemId: "magnetic_coil", amount: 4 }] },
+  { buildingId: "mining_machine", name: "采矿机", outputAmount: 1, requiredTechId: "automatic_metallurgy", costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "circuit_board", amount: 2 }, { itemId: "magnetic_coil", amount: 2 }, { itemId: "gear", amount: 2 }] },
+  { buildingId: "arc_smelter", name: "电弧熔炉", outputAmount: 1, requiredTechId: "automatic_metallurgy", costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "stone_brick", amount: 2 }, { itemId: "circuit_board", amount: 4 }, { itemId: "magnetic_coil", amount: 2 }] },
+  { buildingId: "plane_smelter", name: "位面熔炉", outputAmount: 1, requiredTechId: "plane_smelting", costs: [{ itemId: "titanium_alloy", amount: 15 }, { itemId: "processor", amount: 8 }, { itemId: "super_magnetic_ring", amount: 4 }, { itemId: "plane_filter", amount: 4 }] },
+  { buildingId: "assembling_machine_mk1", name: "制造台 Mk.I", outputAmount: 1, requiredTechId: "basic_assembling", costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "gear", amount: 8 }, { itemId: "circuit_board", amount: 4 }] },
+  { buildingId: "assembling_machine_mk2", name: "制造台 Mk.II", outputAmount: 1, requiredTechId: "high_speed_assembling", costs: [{ itemId: "steel", amount: 8 }, { itemId: "gear", amount: 8 }, { itemId: "circuit_board", amount: 8 }, { itemId: "magnetic_coil", amount: 4 }] },
+  { buildingId: "assembling_machine_mk3", name: "制造台 Mk.III", outputAmount: 1, requiredTechId: "quantum_printing", costs: [{ itemId: "titanium_alloy", amount: 8 }, { itemId: "particle_broadband", amount: 8 }, { itemId: "quantum_chip", amount: 4 }] },
+  { buildingId: "matrix_lab", name: "矩阵研究站", outputAmount: 1, requiredTechId: "electromagnetic_matrix", costs: [{ itemId: "iron_ingot", amount: 8 }, { itemId: "glass", amount: 4 }, { itemId: "circuit_board", amount: 4 }, { itemId: "magnetic_coil", amount: 4 }] },
+  { buildingId: "conveyor_belt_mk1", name: "传送带 Mk.I", outputAmount: 3, requiredTechId: "basic_logistics", costs: [{ itemId: "iron_ingot", amount: 2 }, { itemId: "gear", amount: 1 }] },
+  { buildingId: "conveyor_belt_mk2", name: "传送带 Mk.II", outputAmount: 3, requiredTechId: "high_speed_logistics", costs: [{ itemId: "iron_ingot", amount: 2 }, { itemId: "gear", amount: 1 }, { itemId: "magnetic_coil", amount: 2 }] },
+  { buildingId: "conveyor_belt_mk3", name: "传送带 Mk.III", outputAmount: 3, requiredTechId: "super_magnetic_logistics", costs: [{ itemId: "graphene", amount: 2 }, { itemId: "electromagnetic_turbine", amount: 2 }, { itemId: "super_magnetic_ring", amount: 1 }] },
+  { buildingId: "storage_mk1", name: "小型储物仓", outputAmount: 1, requiredTechId: "basic_logistics", costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "stone_brick", amount: 4 }] },
+  { buildingId: "splitter_4way", name: "四向分流器", outputAmount: 1, requiredTechId: "basic_logistics", costs: [{ itemId: "iron_ingot", amount: 3 }, { itemId: "gear", amount: 2 }, { itemId: "circuit_board", amount: 1 }] },
+  { buildingId: "storage_tank", name: "储液罐", outputAmount: 1, requiredTechId: "high_efficiency_plasma_control", costs: [{ itemId: "iron_ingot", amount: 8 }, { itemId: "stone_brick", amount: 4 }, { itemId: "glass", amount: 4 }] },
+  { buildingId: "oil_extractor", name: "原油萃取站", outputAmount: 1, requiredTechId: "high_efficiency_plasma_control", costs: [{ itemId: "steel", amount: 12 }, { itemId: "stone_brick", amount: 12 }, { itemId: "circuit_board", amount: 6 }, { itemId: "plasma_exciter", amount: 4 }] },
+  { buildingId: "oil_refinery", name: "原油精炼厂", outputAmount: 1, requiredTechId: "high_efficiency_plasma_control", costs: [{ itemId: "steel", amount: 10 }, { itemId: "stone_brick", amount: 10 }, { itemId: "circuit_board", amount: 6 }, { itemId: "plasma_exciter", amount: 6 }] },
+  { buildingId: "water_pump", name: "抽水站", outputAmount: 1, requiredTechId: "basic_chemical_engineering", costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "stone_brick", amount: 8 }, { itemId: "circuit_board", amount: 2 }, { itemId: "magnetic_coil", amount: 2 }] },
+  { buildingId: "chemical_plant", name: "化工厂", outputAmount: 1, requiredTechId: "basic_chemical_engineering", costs: [{ itemId: "steel", amount: 8 }, { itemId: "stone_brick", amount: 8 }, { itemId: "glass", amount: 8 }, { itemId: "circuit_board", amount: 4 }] },
+  { buildingId: "miniature_particle_collider", name: "微型粒子对撞机", outputAmount: 1, requiredTechId: "miniature_particle_collider", costs: [{ itemId: "titanium_alloy", amount: 20 }, { itemId: "processor", amount: 20 }, { itemId: "super_magnetic_ring", amount: 20 }, { itemId: "graphene", amount: 20 }] },
+  { buildingId: "em_rail_ejector", name: "电磁轨道弹射器", outputAmount: 1, requiredTechId: "dyson_swarm", costs: [{ itemId: "steel", amount: 20 }, { itemId: "gear", amount: 20 }, { itemId: "processor", amount: 5 }, { itemId: "super_magnetic_ring", amount: 10 }] },
+  { buildingId: "ray_receiver", name: "射线接收站", outputAmount: 1, requiredTechId: "ray_receiver", costs: [{ itemId: "steel", amount: 20 }, { itemId: "high_purity_silicon", amount: 20 }, { itemId: "photon_combiner", amount: 10 }, { itemId: "processor", amount: 5 }] },
+  { buildingId: "vertical_launching_silo", name: "垂直发射井", outputAmount: 1, requiredTechId: "vertical_launching_silo", costs: [{ itemId: "steel", amount: 80 }, { itemId: "titanium_alloy", amount: 80 }, { itemId: "frame_material", amount: 30 }, { itemId: "graviton_lens", amount: 20 }, { itemId: "quantum_chip", amount: 10 }] },
+  { buildingId: "interstellar_logistics_station", name: "星际物流站", outputAmount: 1, requiredTechId: "interstellar_logistics", costs: [{ itemId: "steel", amount: 30 }, { itemId: "titanium_alloy", amount: 40 }, { itemId: "processor", amount: 20 }] },
+];
+
+export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
+  electromagnetic_matrix: {
+    id: "electromagnetic_matrix", name: "电磁矩阵", tier: 0, costs: [{ itemId: "electromagnetic_matrix", amount: 3 }], prerequisites: [],
+    summary: "建立以电磁矩阵承载研究数据的基础科研体系。",
+    unlocks: ["矩阵研究站制造", "蓝色矩阵科研"],
+  },
+  electromagnetism: {
+    id: "electromagnetism", name: "电磁学", tier: 1, costs: [{ itemId: "electromagnetic_matrix", amount: 5 }], prerequisites: ["electromagnetic_matrix"],
+    summary: "掌握稳定电磁场与基础风力发电设备的批量制造。",
+    unlocks: ["风力涡轮机制造"],
+  },
+  automatic_metallurgy: {
+    id: "automatic_metallurgy", name: "自动化冶金", tier: 1, costs: [{ itemId: "electromagnetic_matrix", amount: 5 }], prerequisites: ["electromagnetic_matrix"],
+    summary: "把矿物开采和高温冶炼纳入自动生产体系。",
+    unlocks: ["采矿机制造", "电弧熔炉制造"],
+  },
+  basic_assembling: {
+    id: "basic_assembling", name: "基础制造工艺", tier: 2, costs: [{ itemId: "electromagnetic_matrix", amount: 8 }], prerequisites: ["automatic_metallurgy"],
+    summary: "标准化零件定位、装配和质量检测流程。",
+    unlocks: ["制造台 Mk.I 制造"],
+  },
+  basic_logistics: {
+    id: "basic_logistics", name: "基础物流系统", tier: 2, costs: [{ itemId: "electromagnetic_matrix", amount: 8 }], prerequisites: ["electromagnetism"],
+    summary: "建立可持续扩建的标准化物料运输线路。",
+    unlocks: ["传送带 Mk.I 制造", "小型储物仓", "四向分流器"],
+  },
+  thermal_power: {
+    id: "thermal_power", name: "火力发电", tier: 2, costs: [{ itemId: "electromagnetic_matrix", amount: 8 }],
+    prerequisites: ["electromagnetism", "automatic_metallurgy"],
+    summary: "把煤与化工燃料转换为可调度电力，为高耗能工业提供稳定能源。",
+    unlocks: ["火力发电厂", "多燃料发电", "按需燃烧"],
+  },
+  high_efficiency_plasma_control: {
+    id: "high_efficiency_plasma_control", name: "高效电浆控制", tier: 3, costs: [{ itemId: "electromagnetic_matrix", amount: 12 }],
+    prerequisites: ["basic_assembling", "basic_logistics", "thermal_power"],
+    summary: "为原油萃取、等离子精炼与能源矩阵研究建立控制基础。",
+    unlocks: ["原油萃取站", "原油精炼厂", "储液罐", "钢材与电浆部件"],
+  },
+  energy_matrix: {
+    id: "energy_matrix", name: "能量矩阵", tier: 4, costs: [{ itemId: "electromagnetic_matrix", amount: 15 }],
+    prerequisites: ["high_efficiency_plasma_control"],
+    summary: "把氢的能级结构和高能石墨编码为第二种科学矩阵。",
+    unlocks: ["高能石墨", "能量矩阵生产", "红色矩阵科研"],
+  },
+  high_speed_assembling: {
+    id: "high_speed_assembling", name: "高速装配工艺", tier: 5,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 15 }, { itemId: "energy_matrix", amount: 15 }],
+    prerequisites: ["energy_matrix", "basic_assembling"],
+    summary: "改进装配设备的定位与驱动机构，让生产节点在原有配方上获得更高吞吐。",
+    unlocks: ["制造台 Mk.II", "制造台原地升级"],
+  },
+  high_speed_logistics: {
+    id: "high_speed_logistics", name: "高速物流系统", tier: 5,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 15 }, { itemId: "energy_matrix", amount: 15 }],
+    prerequisites: ["energy_matrix", "basic_logistics"],
+    summary: "以电磁涡轮提高运输线路驱动频率，在相同线路数量下提升物流上限。",
+    unlocks: ["传送带 Mk.II", "运输线原地升级"],
+  },
+  mining_speed_1: {
+    id: "mining_speed_1", name: "高效采矿 I", tier: 5,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 15 }, { itemId: "energy_matrix", amount: 15 }],
+    prerequisites: ["energy_matrix", "automatic_metallurgy"],
+    summary: "优化采矿机切削轨迹和矿脉覆盖，使全部固体采矿节点持续增产。",
+    unlocks: ["固体矿物开采速度 +50%"],
+  },
+  xray_cracking: {
+    id: "xray_cracking", name: "X 射线裂解", tier: 5,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 10 }, { itemId: "energy_matrix", amount: 10 }],
+    prerequisites: ["energy_matrix"],
+    summary: "利用高能光子裂解精炼油，重新分配氢与碳材料产出。",
+    unlocks: ["X 射线裂解配方", "氢与石墨替代路线"],
+  },
+  high_strength_crystal: {
+    id: "high_strength_crystal", name: "高强度晶体", tier: 5,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 10 }, { itemId: "energy_matrix", amount: 10 }],
+    prerequisites: ["energy_matrix"],
+    summary: "建立硅、钛与碳晶体的高温精炼流程，为结构材料提供基础。",
+    unlocks: ["高纯硅块", "钛块", "金刚石", "石矿提炼硅石"],
+  },
+  basic_chemical_engineering: {
+    id: "basic_chemical_engineering", name: "基础化工", tier: 5,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 10 }, { itemId: "energy_matrix", amount: 10 }],
+    prerequisites: ["energy_matrix"],
+    summary: "建立水资源输送与高分子反应设备，开始生产塑料。",
+    unlocks: ["抽水站", "化工厂", "塑料配方"],
+  },
+  polymer_chemistry: {
+    id: "polymer_chemistry", name: "高分子化工", tier: 6,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 15 }, { itemId: "energy_matrix", amount: 15 }],
+    prerequisites: ["basic_chemical_engineering", "xray_cracking"],
+    summary: "把塑料、精炼油与水重组为稳定的有机晶体。",
+    unlocks: ["有机晶体配方"],
+  },
+  structure_matrix: {
+    id: "structure_matrix", name: "结构矩阵", tier: 7,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 20 }, { itemId: "energy_matrix", amount: 20 }],
+    prerequisites: ["high_strength_crystal", "polymer_chemistry"],
+    summary: "以钛晶石和金刚石编码物质结构，建立第三阶段科研矩阵。",
+    unlocks: ["钛晶石", "结构矩阵生产", "黄色矩阵科研"],
+  },
+  titanium_alloy: {
+    id: "titanium_alloy", name: "钛合金", tier: 8,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 20 }, { itemId: "energy_matrix", amount: 20 }, { itemId: "structure_matrix", amount: 10 }],
+    prerequisites: ["structure_matrix"],
+    summary: "利用硫酸改善钛与钢材的晶格结构，制造可承受星际航行环境的结构材料。",
+    unlocks: ["硫酸合成", "钛合金配方", "熔岩星硫酸海洋开采"],
+  },
+  processor: {
+    id: "processor", name: "处理器", tier: 8,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 20 }, { itemId: "energy_matrix", amount: 20 }, { itemId: "structure_matrix", amount: 10 }],
+    prerequisites: ["structure_matrix"],
+    summary: "以高纯硅制造微晶元件和处理器，为远程物流调度建立计算基础。",
+    unlocks: ["微晶元件", "处理器配方"],
+  },
+  interstellar_logistics: {
+    id: "interstellar_logistics", name: "星际物流理论", tier: 9,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 12 },
+      { itemId: "energy_matrix", amount: 12 },
+      { itemId: "structure_matrix", amount: 12 },
+    ],
+    prerequisites: ["structure_matrix", "titanium_alloy", "processor"],
+    summary: "整合高级结构材料与处理器，建立可调度的跨行星运输船航线。",
+    unlocks: ["星际物流站", "物流运输船", "跨行星运输调度"],
+  },
+  nanomaterials: {
+    id: "nanomaterials", name: "纳米材料", tier: 10,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 20 },
+      { itemId: "energy_matrix", amount: 20 },
+      { itemId: "structure_matrix", amount: 20 },
+    ],
+    prerequisites: ["titanium_alloy", "processor"],
+    summary: "把碳与硅材料推进到纳米尺度，为高密度信息载体建立材料基础。",
+    unlocks: ["石墨烯", "碳纳米管", "晶格硅"],
+  },
+  information_matrix: {
+    id: "information_matrix", name: "信息矩阵", tier: 11,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 30 },
+      { itemId: "energy_matrix", amount: 30 },
+      { itemId: "structure_matrix", amount: 30 },
+    ],
+    prerequisites: ["interstellar_logistics", "nanomaterials"],
+    summary: "将粒子宽带与处理器编码为高密度信息模型，建立第四阶段科研矩阵。",
+    unlocks: ["粒子宽带", "信息矩阵生产", "紫色矩阵科研"],
+  },
+  research_speed_1: {
+    id: "research_speed_1", name: "科研速度 I", tier: 12,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 20 },
+      { itemId: "energy_matrix", amount: 20 },
+      { itemId: "structure_matrix", amount: 20 },
+      { itemId: "information_matrix", amount: 20 },
+    ],
+    prerequisites: ["information_matrix"],
+    summary: "以四色矩阵优化科研站的演算管线，提高持续研究吞吐。",
+    unlocks: ["矩阵研究速度 +25%"],
+  },
+  miniature_particle_collider: {
+    id: "miniature_particle_collider", name: "微型粒子对撞机", tier: 13,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 30 },
+      { itemId: "energy_matrix", amount: 30 },
+      { itemId: "structure_matrix", amount: 30 },
+      { itemId: "information_matrix", amount: 30 },
+    ],
+    prerequisites: ["information_matrix"],
+    summary: "以强磁场约束高能粒子，实现氘富集并为奇异物质生产建立设备基础。",
+    unlocks: ["微型粒子对撞机", "电磁动力组件", "氘", "氘核燃料棒", "粒子容器"],
+  },
+  quantum_chip: {
+    id: "quantum_chip", name: "量子芯片", tier: 13,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 30 },
+      { itemId: "energy_matrix", amount: 30 },
+      { itemId: "structure_matrix", amount: 30 },
+      { itemId: "information_matrix", amount: 30 },
+    ],
+    prerequisites: ["information_matrix", "nanomaterials"],
+    summary: "利用卡西米尔晶体和位面过滤器构建高密度量子运算核心。",
+    unlocks: ["钛化玻璃", "卡西米尔晶体", "位面过滤器", "量子芯片"],
+  },
+  plane_smelting: {
+    id: "plane_smelting", name: "位面冶金", tier: 14,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 30 },
+      { itemId: "energy_matrix", amount: 30 },
+      { itemId: "structure_matrix", amount: 30 },
+      { itemId: "information_matrix", amount: 30 },
+    ],
+    prerequisites: ["miniature_particle_collider", "quantum_chip", "titanium_alloy"],
+    summary: "利用强磁约束与位面过滤结构重构熔炼腔体，在相同节点规模下实现双倍冶金吞吐。",
+    unlocks: ["位面熔炉", "熔炉原地升级", "熔炼速度 2.00×"],
+  },
+  gravity_matrix: {
+    id: "gravity_matrix", name: "引力矩阵", tier: 14,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 40 },
+      { itemId: "energy_matrix", amount: 40 },
+      { itemId: "structure_matrix", amount: 40 },
+      { itemId: "information_matrix", amount: 40 },
+    ],
+    prerequisites: ["miniature_particle_collider", "quantum_chip"],
+    summary: "将奇异物质、引力透镜与量子芯片组合为第五阶段科研矩阵。",
+    unlocks: ["奇异物质", "引力透镜", "引力矩阵生产", "绿色矩阵科研"],
+  },
+  quantum_printing: {
+    id: "quantum_printing", name: "量子打印技术", tier: 15,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 30 },
+      { itemId: "energy_matrix", amount: 30 },
+      { itemId: "structure_matrix", amount: 30 },
+      { itemId: "information_matrix", amount: 30 },
+      { itemId: "gravity_matrix", amount: 30 },
+    ],
+    prerequisites: ["gravity_matrix", "high_speed_assembling"],
+    summary: "用量子芯片和粒子宽带控制精密装配过程，进一步压缩高阶物品生产周期。",
+    unlocks: ["制造台 Mk.III", "装配速度 1.50×"],
+  },
+  super_magnetic_logistics: {
+    id: "super_magnetic_logistics", name: "超级磁场物流", tier: 15,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 30 },
+      { itemId: "energy_matrix", amount: 30 },
+      { itemId: "structure_matrix", amount: 30 },
+      { itemId: "information_matrix", amount: 30 },
+      { itemId: "gravity_matrix", amount: 30 },
+    ],
+    prerequisites: ["gravity_matrix", "high_speed_logistics"],
+    summary: "以超级磁场环稳定高速运输线路，使单线路吞吐提升至基础传送带的五倍。",
+    unlocks: ["传送带 Mk.III", "单线物流 30/s"],
+  },
+  research_speed_2: {
+    id: "research_speed_2", name: "科研速度 II", tier: 15,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 20 },
+      { itemId: "energy_matrix", amount: 20 },
+      { itemId: "structure_matrix", amount: 20 },
+      { itemId: "information_matrix", amount: 20 },
+      { itemId: "gravity_matrix", amount: 20 },
+    ],
+    prerequisites: ["gravity_matrix", "research_speed_1"],
+    summary: "以五色矩阵继续优化科研站演算管线，使研究吞吐累计提升 50%。",
+    unlocks: ["矩阵研究速度累计 +50%"],
+  },
+  dyson_swarm: {
+    id: "dyson_swarm", name: "戴森云", tier: 16,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 50 },
+      { itemId: "energy_matrix", amount: 50 },
+      { itemId: "structure_matrix", amount: 50 },
+      { itemId: "information_matrix", amount: 50 },
+      { itemId: "gravity_matrix", amount: 50 },
+    ],
+    prerequisites: ["gravity_matrix"],
+    summary: "以电磁轨道弹射器将太阳帆持续送入恒星轨道，建立可扩张但会衰减的戴森云。",
+    unlocks: ["光子合并器", "太阳帆", "电磁轨道弹射器", "戴森云发电"],
+  },
+  ray_receiver: {
+    id: "ray_receiver", name: "射线接收站", tier: 17,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 60 },
+      { itemId: "energy_matrix", amount: 60 },
+      { itemId: "structure_matrix", amount: 60 },
+      { itemId: "information_matrix", amount: 60 },
+      { itemId: "gravity_matrix", amount: 60 },
+    ],
+    prerequisites: ["dyson_swarm"],
+    summary: "跨行星共享戴森云输出，并在直接发电和临界光子生成之间分配恒星能。",
+    unlocks: ["射线接收站", "电力接收模式", "临界光子模式"],
+  },
+  antimatter: {
+    id: "antimatter", name: "质能储存", tier: 18,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 80 },
+      { itemId: "energy_matrix", amount: 80 },
+      { itemId: "structure_matrix", amount: 80 },
+      { itemId: "information_matrix", amount: 80 },
+      { itemId: "gravity_matrix", amount: 80 },
+    ],
+    prerequisites: ["ray_receiver"],
+    summary: "在粒子对撞机中拆分临界光子，并将反物质封装为高密度可调度燃料。",
+    unlocks: ["质能转换", "湮灭约束球", "反物质燃料棒"],
+  },
+  universe_matrix: {
+    id: "universe_matrix", name: "宇宙矩阵", tier: 19,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 100 },
+      { itemId: "energy_matrix", amount: 100 },
+      { itemId: "structure_matrix", amount: 100 },
+      { itemId: "information_matrix", amount: 100 },
+      { itemId: "gravity_matrix", amount: 100 },
+    ],
+    prerequisites: ["antimatter"],
+    summary: "把五色矩阵的研究数据与反物质统一编码，形成最终阶段的白色科研矩阵。",
+    unlocks: ["宇宙矩阵生产", "六色矩阵科研"],
+  },
+  research_speed_3: {
+    id: "research_speed_3", name: "科研速度 III", tier: 20,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 30 },
+      { itemId: "energy_matrix", amount: 30 },
+      { itemId: "structure_matrix", amount: 30 },
+      { itemId: "information_matrix", amount: 30 },
+      { itemId: "gravity_matrix", amount: 30 },
+      { itemId: "universe_matrix", amount: 30 },
+    ],
+    prerequisites: ["universe_matrix", "research_speed_2"],
+    summary: "以六色矩阵统一科研站演算管线，使研究吞吐累计提升至 75%。",
+    unlocks: ["矩阵研究速度累计 +75%"],
+  },
+  dyson_sphere_program: {
+    id: "dyson_sphere_program", name: "戴森球计划", tier: 21,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 100 },
+      { itemId: "energy_matrix", amount: 100 },
+      { itemId: "structure_matrix", amount: 100 },
+      { itemId: "information_matrix", amount: 100 },
+      { itemId: "gravity_matrix", amount: 100 },
+      { itemId: "universe_matrix", amount: 100 },
+    ],
+    prerequisites: ["universe_matrix"],
+    summary: "以框架材料和戴森球组件建立可永久存在的恒星级能源结构。",
+    unlocks: ["框架材料", "戴森球组件", "戴森球结构规划"],
+  },
+  vertical_launching_silo: {
+    id: "vertical_launching_silo", name: "垂直发射井", tier: 22,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 120 },
+      { itemId: "energy_matrix", amount: 120 },
+      { itemId: "structure_matrix", amount: 120 },
+      { itemId: "information_matrix", amount: 120 },
+      { itemId: "gravity_matrix", amount: 120 },
+      { itemId: "universe_matrix", amount: 120 },
+    ],
+    prerequisites: ["dyson_sphere_program"],
+    summary: "制造小型运载火箭并通过高功率垂直发射井建设戴森球结构节点。",
+    unlocks: ["小型运载火箭", "垂直发射井", "永久结构点"],
+  },
+  dyson_shell: {
+    id: "dyson_shell", name: "戴森壳面", tier: 23,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 150 },
+      { itemId: "energy_matrix", amount: 150 },
+      { itemId: "structure_matrix", amount: 150 },
+      { itemId: "information_matrix", amount: 150 },
+      { itemId: "gravity_matrix", amount: 150 },
+      { itemId: "universe_matrix", amount: 200 },
+    ],
+    prerequisites: ["vertical_launching_silo"],
+    summary: "让戴森球结构自动吸附轨道太阳帆，将临时戴森云转化为永久发电壳面。",
+    unlocks: ["太阳帆自动吸附", "永久壳面发电", "结构容量扩张"],
+  },
+};
+
+export const TECHNOLOGY_LIST = Object.values(TECHNOLOGIES);
+
+export const FUEL_ENERGY_MJ: Partial<Record<ItemId, number>> = {
+  coal: 2.7,
+  crude_oil: 4,
+  energetic_graphite: 6.3,
+  refined_oil: 4.4,
+  hydrogen: 8,
+  deuteron_fuel_rod: 600,
+  antimatter_fuel_rod: 7200,
+};
+
+export const FUEL_ITEM_IDS = Object.keys(FUEL_ENERGY_MJ) as ItemId[];
+
+export function getPlanet(id: PlanetId): PlanetDefinition {
+  return PLANETS[id];
+}
+
+export function getExtractorBuildingId(resourceId: ItemId): BuildingId {
+  if (resourceId === "crude_oil") return "oil_extractor";
+  if (resourceId === "water" || resourceId === "sulfuric_acid") return "water_pump";
+  return "mining_machine";
+}
+
+export function getItem(id: ItemId): ItemDefinition {
+  return ITEMS[id];
+}
+
+export function getBuilding(id: BuildingId): BuildingDefinition {
+  return BUILDINGS[id];
+}
+
+export function getConstructionDefinition(id: ConstructionId): ConstructionDefinition | undefined {
+  return CONSTRUCTION.find((definition) => definition.buildingId === id);
+}
+
+export function getCompatibleRecipeBuildings(recipe: RecipeDefinition): BuildingDefinition[] {
+  return Object.values(BUILDINGS).filter((building) => buildingSupportsRecipe(building.id, recipe));
+}
+
+export function getRecipe(id: RecipeId | undefined): RecipeDefinition | undefined {
+  return id ? RECIPES[id] : undefined;
+}
+
+export function getTechnology(id: TechId | null | undefined): TechnologyDefinition | undefined {
+  return id ? TECHNOLOGIES[id] : undefined;
+}
