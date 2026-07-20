@@ -17,18 +17,35 @@ import type { BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, Blue
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
+const SAVE_BACKUP_KEY = `${SAVE_KEY}.backup`;
+const SAVE_SNAPSHOT_KEY_PREFIX = `${SAVE_KEY}.snapshot`;
+const SAVE_SNAPSHOT_LIMIT = 5;
+const SAVE_FORMAT_VERSION = 2;
+const AUTO_SNAPSHOT_MIN_SECONDS = 30;
 
 export type SaveSlotId = 1 | 2 | 3;
 
+export type SaveIntegrityStatus = "valid" | "legacy" | "repaired" | "corrupt";
+
 interface SaveEnvelope {
+  formatVersion?: number;
+  kind?: "primary" | "slot" | "snapshot";
+  reason?: string;
   savedAt: number;
   state: GameState | Record<string, unknown>;
+  checksum?: string;
 }
 
 export interface LoadedGame {
   state: GameState;
   offlineSeconds: number;
   offlineReport: OfflineReport | null;
+  recovery?: SaveRecovery;
+}
+
+export interface SaveRecovery {
+  source: "primary" | "backup" | "snapshot" | "fresh";
+  issues: string[];
 }
 
 export interface OfflineReport {
@@ -49,6 +66,35 @@ export interface SaveSlotSummary {
   completedTechCount: number;
   structurePoints: number;
   activePlanetId: PlanetId;
+  integrity: SaveIntegrityStatus;
+  valid: boolean;
+  issues: string[];
+}
+
+export interface SaveSnapshotSummary {
+  id: string;
+  savedAt: number;
+  elapsedSeconds: number;
+  completedTechCount: number;
+  structurePoints: number;
+  activePlanetId: PlanetId;
+  reason: string;
+  integrity: SaveIntegrityStatus;
+  valid: boolean;
+  issues: string[];
+}
+
+export interface SaveInspection {
+  valid: boolean;
+  repairable: boolean;
+  integrity: SaveIntegrityStatus;
+  formatVersion: number | null;
+  stateVersion: number | null;
+  savedAt: number | null;
+  checksum: "valid" | "missing" | "invalid";
+  issues: string[];
+  state: GameState | null;
+  summary: Omit<SaveSlotSummary, "slotId" | "integrity" | "valid" | "issues"> | null;
 }
 
 function integerRecord(value: unknown): Partial<Record<ItemId, number>> {
@@ -79,6 +125,58 @@ function nonNegativeRecord(value: unknown): Partial<Record<ItemId, number>> {
   if (!value || typeof value !== "object") return {};
   return Object.fromEntries(Object.entries(value).flatMap(([key, amount]) =>
     key in ITEMS ? [[key, nonNegativeNumber(amount)]] : [])) as Partial<Record<ItemId, number>>;
+}
+
+/**
+ * A small synchronous checksum keeps save validation available in workers,
+ * tests, and older browsers where Web Crypto may not be available yet.
+ * It is an integrity check, not a security boundary.
+ */
+function checksumFor(formatVersion: number, state: unknown): string {
+  let projected = state;
+  // Achievement ids are an extensible registry. Ignore ids unknown to this
+  // client so a newer export can still be imported and migrated safely.
+  if (isRecord(state)) {
+    const cloned = JSON.parse(JSON.stringify(state)) as Record<string, any>;
+    projected = cloned;
+    if (isRecord(cloned.achievements) && Array.isArray(cloned.achievements.unlockedIds)) {
+      cloned.achievements.unlockedIds = cloned.achievements.unlockedIds.filter(isAchievementId);
+    }
+  }
+  const payload = JSON.stringify({ formatVersion, state: projected });
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < payload.length; index += 1) {
+    hash ^= payload.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function envelopeFor(state: GameState, savedAt = Date.now(), kind: SaveEnvelope["kind"] = "primary", reason?: string): SaveEnvelope {
+  const persistent = persistentState(state);
+  const envelope: SaveEnvelope = {
+    formatVersion: SAVE_FORMAT_VERSION,
+    kind,
+    ...(reason ? { reason } : {}),
+    savedAt,
+    state: persistent,
+  };
+  envelope.checksum = checksumFor(SAVE_FORMAT_VERSION, persistent);
+  return envelope;
+}
+
+function summaryForState(state: GameState): Omit<SaveSlotSummary, "slotId" | "integrity" | "valid" | "issues"> {
+  return {
+    savedAt: 0,
+    elapsedSeconds: state.elapsedSeconds,
+    completedTechCount: state.research.completedTechIds.length,
+    structurePoints: state.dysonSphere.structurePoints,
+    activePlanetId: state.activePlanetId,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 const STARTER_TOTALS: Partial<Record<ConstructionId, number>> = {
@@ -977,10 +1075,6 @@ function persistentState(state: GameState): GameState {
   };
 }
 
-function saveEnvelope(state: GameState, savedAt = Date.now()): SaveEnvelope {
-  return { state: persistentState(state), savedAt };
-}
-
 function buildOfflineReport(before: GameState, after: GameState, seconds: number): OfflineReport {
   const produced = (Object.keys(ITEMS) as ItemId[]).flatMap((itemId) => {
     const amount = Math.max(0, Math.floor((after.totalProduced[itemId] ?? 0) - (before.totalProduced[itemId] ?? 0)));
@@ -1009,16 +1103,108 @@ function buildOfflineReport(before: GameState, after: GameState, seconds: number
   };
 }
 
-function parseEnvelope(raw: string, advanceOffline: boolean): LoadedGame | null {
-  const parsed = JSON.parse(raw) as SaveEnvelope | Record<string, unknown>;
-  const envelope = "state" in parsed
-    ? parsed as SaveEnvelope
-    : { state: parsed, savedAt: Date.now() } satisfies SaveEnvelope;
-  const state = migrateGame(envelope.state);
-  if (!state) return null;
+/** Inspect an imported or locally stored envelope without advancing time. */
+export function inspectSave(raw: string): SaveInspection {
+  const invalid = (issues: string[], formatVersion: number | null = null, stateVersion: number | null = null): SaveInspection => ({
+    valid: false,
+    repairable: false,
+    integrity: "corrupt",
+    formatVersion,
+    stateVersion,
+    savedAt: null,
+    checksum: "invalid",
+    issues,
+    state: null,
+    summary: null,
+  });
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return invalid(["无法解析 JSON 文件"]);
+  }
+  if (!isRecord(parsed)) return invalid(["存档根节点必须是对象"]);
+
+  const hasEnvelope = "state" in parsed;
+  const envelope = hasEnvelope ? parsed : { state: parsed, savedAt: Date.now() };
+  if (!isRecord(envelope.state)) return invalid(["存档缺少有效的 state 数据"]);
+
+  const rawFormatVersion = envelope.formatVersion;
+  const formatVersion = typeof rawFormatVersion === "number" && Number.isFinite(rawFormatVersion)
+    ? Math.floor(rawFormatVersion)
+    : 1;
+  const rawStateVersion = envelope.state.version;
+  const stateVersion = typeof rawStateVersion === "number" && Number.isFinite(rawStateVersion)
+    ? Math.floor(rawStateVersion)
+    : null;
   const savedAt = typeof envelope.savedAt === "number" && Number.isFinite(envelope.savedAt)
     ? envelope.savedAt
     : Date.now();
+  const issues: string[] = [];
+  if (formatVersion < 1) return invalid(["存档格式版本无效"], formatVersion, stateVersion);
+  if (formatVersion > SAVE_FORMAT_VERSION) {
+    return invalid([`存档格式 v${formatVersion} 高于当前客户端支持的 v${SAVE_FORMAT_VERSION}`], formatVersion, stateVersion);
+  }
+
+  let checksum: SaveInspection["checksum"] = "missing";
+  let checksumMatchedAfterMigration = false;
+  if (typeof envelope.checksum === "string" && envelope.checksum.length > 0) {
+    const expected = checksumFor(formatVersion, envelope.state);
+    checksum = envelope.checksum === expected ? "valid" : "invalid";
+  } else {
+    issues.push("旧版存档没有完整性校验，导入后会自动补写");
+  }
+
+  let state: GameState | null = null;
+  try {
+    state = migrateGame(envelope.state);
+  } catch {
+    return invalid(["存档数据结构无法修复"], formatVersion, stateVersion);
+  }
+  if (!state) return invalid(["游戏状态版本不受支持或缺少实体列表"], formatVersion, stateVersion);
+
+  if (checksum === "invalid" && typeof envelope.checksum === "string") {
+    // Unknown legacy fields (for example an achievement added by a newer
+    // client) are removed by migration. Accept that lossless normalization,
+    // but still reject changes to meaningful game state.
+    checksumMatchedAfterMigration = envelope.checksum === checksumFor(formatVersion, state);
+    if (!checksumMatchedAfterMigration) return invalid(["完整性校验失败：文件可能被截断或修改"], formatVersion, stateVersion);
+    checksum = "valid";
+    issues.push("检测到可忽略的旧字段差异，已按当前目录标准化");
+  }
+
+  const migrated = stateVersion !== state.version;
+  const formatUpgrade = formatVersion < SAVE_FORMAT_VERSION || !hasEnvelope;
+  if (migrated) issues.push(`游戏状态已从 v${stateVersion ?? "未知"} 迁移到 v${state.version}`);
+  if (!hasEnvelope) issues.push("检测到旧版裸状态格式");
+  if (formatUpgrade && !hasEnvelope) issues.push(`导入后会升级到存档格式 v${SAVE_FORMAT_VERSION}`);
+  const integrity: SaveIntegrityStatus = migrated || formatUpgrade || checksumMatchedAfterMigration
+    ? "repaired"
+    : checksum === "missing" ? "legacy" : "valid";
+  const summary = {
+    ...summaryForState(state),
+    savedAt,
+  };
+  return {
+    valid: true,
+    repairable: true,
+    integrity,
+    formatVersion,
+    stateVersion,
+    savedAt,
+    checksum,
+    issues,
+    state,
+    summary,
+  };
+}
+
+function parseEnvelope(raw: string, advanceOffline: boolean): LoadedGame | null {
+  const inspection = inspectSave(raw);
+  if (!inspection.valid || !inspection.state) return null;
+  const state = inspection.state;
+  const savedAt = inspection.savedAt ?? Date.now();
   const offlineSeconds = advanceOffline && !state.paused
     ? Math.min(getOfflineSimulationLimitSeconds(state), Math.max(0, (Date.now() - savedAt) / 1000))
     : 0;
@@ -1032,20 +1218,44 @@ function parseEnvelope(raw: string, advanceOffline: boolean): LoadedGame | null 
 
 export function loadGame(): LoadedGame {
   try {
-    const raw = window.localStorage.getItem(SAVE_KEY);
-    if (!raw) return { state: createInitialState(), offlineSeconds: 0, offlineReport: null };
-    return parseEnvelope(raw, true) ?? { state: createInitialState(), offlineSeconds: 0, offlineReport: null };
+    const candidates: Array<{ source: SaveRecovery["source"]; raw: string | null; issues?: string[] }> = [
+      { source: "primary", raw: window.localStorage.getItem(SAVE_KEY) },
+      { source: "backup", raw: window.localStorage.getItem(SAVE_BACKUP_KEY), issues: ["主存档校验失败，已回退到最近一次有效备份"] },
+    ];
+    for (const key of listSnapshotKeys()) {
+      candidates.push({ source: "snapshot", raw: window.localStorage.getItem(key), issues: ["主存档不可用，已回退到自动快照"] });
+    }
+    for (const candidate of candidates) {
+      if (!candidate.raw) continue;
+      const loaded = parseEnvelope(candidate.raw, true);
+      if (!loaded) continue;
+      if (candidate.source !== "primary") loaded.recovery = { source: candidate.source, issues: candidate.issues ?? [] };
+      return loaded;
+    }
+    return {
+      state: createInitialState(),
+      offlineSeconds: 0,
+      offlineReport: null,
+      recovery: { source: "fresh", issues: ["没有找到可恢复的存档，已创建新工厂"] },
+    };
   } catch {
-    return { state: createInitialState(), offlineSeconds: 0, offlineReport: null };
+    return { state: createInitialState(), offlineSeconds: 0, offlineReport: null, recovery: { source: "fresh", issues: ["本地存储不可用，已创建临时工厂"] } };
   }
 }
 
 export function saveGame(state: GameState): void {
-  window.localStorage.setItem(SAVE_KEY, JSON.stringify(saveEnvelope(state)));
+  try {
+    const previous = window.localStorage.getItem(SAVE_KEY);
+    if (previous && inspectSave(previous).valid) window.localStorage.setItem(SAVE_BACKUP_KEY, previous);
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify(envelopeFor(state)));
+    maybeSaveAutomaticSnapshot(state);
+  } catch {
+    // Quota errors should not stop the simulation loop; the next save can retry.
+  }
 }
 
 export function exportGame(state: GameState): string {
-  return JSON.stringify(saveEnvelope(state), null, 2);
+  return JSON.stringify(envelopeFor(state), null, 2);
 }
 
 export function importGame(raw: string): GameState | null {
@@ -1061,7 +1271,7 @@ function saveSlotKey(slotId: SaveSlotId): string {
 }
 
 export function saveGameSlot(slotId: SaveSlotId, state: GameState): void {
-  window.localStorage.setItem(saveSlotKey(slotId), JSON.stringify(saveEnvelope(state)));
+  window.localStorage.setItem(saveSlotKey(slotId), JSON.stringify(envelopeFor(state, Date.now(), "slot")));
 }
 
 export function loadGameSlot(slotId: SaveSlotId): LoadedGame | null {
@@ -1082,21 +1292,105 @@ export function getSaveSlotSummaries(): SaveSlotSummary[] {
     try {
       const raw = window.localStorage.getItem(saveSlotKey(slotId));
       if (!raw) return [];
-      const parsed = JSON.parse(raw) as SaveEnvelope;
-      const state = migrateGame(parsed.state);
-      if (!state) return [];
+      const inspection = inspectSave(raw);
+      const parsed = JSON.parse(raw) as Partial<SaveEnvelope>;
+      const summary = inspection.summary ?? {
+        savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : 0,
+        elapsedSeconds: 0,
+        completedTechCount: 0,
+        structurePoints: 0,
+        activePlanetId: "home" as PlanetId,
+      };
       return [{
         slotId,
-        savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : 0,
-        elapsedSeconds: state.elapsedSeconds,
-        completedTechCount: state.research.completedTechIds.length,
-        structurePoints: state.dysonSphere.structurePoints,
-        activePlanetId: state.activePlanetId,
+        ...summary,
+        integrity: inspection.integrity,
+        valid: inspection.valid,
+        issues: inspection.issues,
       }];
     } catch {
       return [];
     }
   });
+}
+
+function listSnapshotKeys(): string[] {
+  const sequenceKey = `${SAVE_SNAPSHOT_KEY_PREFIX}.sequence`;
+  return Object.keys(window.localStorage)
+    .filter((key) => key.startsWith(`${SAVE_SNAPSHOT_KEY_PREFIX}.`) && key !== sequenceKey)
+    .sort((left, right) => right.localeCompare(left));
+}
+
+function nextSnapshotSequence(): number {
+  const sequenceKey = `${SAVE_SNAPSHOT_KEY_PREFIX}.sequence`;
+  const previous = Number(window.localStorage.getItem(sequenceKey) ?? 0);
+  const next = Number.isFinite(previous) ? Math.max(0, Math.floor(previous)) + 1 : 1;
+  window.localStorage.setItem(sequenceKey, String(next));
+  return next;
+}
+
+function maybeSaveAutomaticSnapshot(state: GameState): void {
+  const latest = getSaveSnapshotSummaries().find((snapshot) => snapshot.valid);
+  if (!latest || state.elapsedSeconds < latest.elapsedSeconds || state.elapsedSeconds - latest.elapsedSeconds >= AUTO_SNAPSHOT_MIN_SECONDS) {
+    saveGameSnapshot(state, "自动快照");
+  }
+}
+
+export function saveGameSnapshot(state: GameState, reason = "自动快照"): SaveSnapshotSummary | null {
+  try {
+    const savedAt = Date.now();
+    const sequence = nextSnapshotSequence();
+    const id = `${savedAt}-${sequence}`;
+    const key = `${SAVE_SNAPSHOT_KEY_PREFIX}.${id}`;
+    window.localStorage.setItem(key, JSON.stringify(envelopeFor(state, savedAt, "snapshot", reason)));
+    const keys = listSnapshotKeys();
+    for (const staleKey of keys.slice(SAVE_SNAPSHOT_LIMIT)) window.localStorage.removeItem(staleKey);
+    return getSaveSnapshotSummaries().find((snapshot) => snapshot.id === id) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function getSaveSnapshotSummaries(): SaveSnapshotSummary[] {
+  return listSnapshotKeys().flatMap((key) => {
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return [];
+      const inspection = inspectSave(raw);
+      const parsed = JSON.parse(raw) as Partial<SaveEnvelope>;
+      const id = key.slice(`${SAVE_SNAPSHOT_KEY_PREFIX}.`.length);
+      const summary = inspection.summary ?? {
+        savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : 0,
+        elapsedSeconds: 0,
+        completedTechCount: 0,
+        structurePoints: 0,
+        activePlanetId: "home" as PlanetId,
+      };
+      return [{
+        id,
+        ...summary,
+        reason: typeof parsed.reason === "string" && parsed.reason ? parsed.reason : "自动快照",
+        integrity: inspection.integrity,
+        valid: inspection.valid,
+        issues: inspection.issues,
+      }];
+    } catch {
+      return [];
+    }
+  }).sort((left, right) => right.savedAt - left.savedAt);
+}
+
+export function loadSaveSnapshot(id: string): GameState | null {
+  try {
+    const raw = window.localStorage.getItem(`${SAVE_SNAPSHOT_KEY_PREFIX}.${id}`);
+    return raw ? parseEnvelope(raw, false)?.state ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearSaveSnapshot(id: string): void {
+  window.localStorage.removeItem(`${SAVE_SNAPSHOT_KEY_PREFIX}.${id}`);
 }
 
 export function clearGame(): void {

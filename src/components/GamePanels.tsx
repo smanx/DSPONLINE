@@ -1307,6 +1307,7 @@ interface ConstructionDockProps {
   onBeltTierChange: (tier: BeltTier) => void;
   onPlacementCountChange: (count: PlacementCount) => void;
   onOpenFabricator: () => void;
+  onCraft: (buildingId: ConstructionId) => void;
 }
 
 const PLACEMENT_COUNTS: PlacementCount[] = [1, 2, 5, 10];
@@ -1320,7 +1321,7 @@ const CONSTRUCTION_CATEGORY_IDS: Record<Exclude<ConstructionCategory, "all">, Se
   dyson: new Set(["em_rail_ejector", "vertical_launching_silo", "ray_receiver"]),
 };
 
-export function ConstructionDock({ game, placement, beltTier, placementCount, onPlacementChange, onBeltTierChange, onPlacementCountChange, onOpenFabricator }: ConstructionDockProps) {
+export function ConstructionDock({ game, placement, beltTier, placementCount, onPlacementChange, onBeltTierChange, onPlacementCountChange, onOpenFabricator, onCraft }: ConstructionDockProps) {
   const [category, setCategory] = useState<ConstructionCategory>("all");
   const visibleBuildOrder = category === "all" ? BUILD_ORDER : BUILD_ORDER.filter((id) => CONSTRUCTION_CATEGORY_IDS[category].has(id));
   return (
@@ -1353,35 +1354,45 @@ export function ConstructionDock({ game, placement, beltTier, placementCount, on
           const requiredCount = isBelt ? 1 : placementCount;
           const activePlanet = getPlanet(game.activePlanetId);
           const compatiblePlanet = isBelt ? activePlanet.kind !== "gas-giant" : canPlaceBuildingOnPlanet(id, game.activePlanetId);
+          const craftable = canCraftConstruction(game, id);
           return (
-            <button
-              className={`construction-item${active ? " construction-item--active" : ""}`}
-              type="button"
-              key={id}
-              disabled={count < requiredCount || !compatiblePlanet}
-              draggable={count >= requiredCount && compatiblePlanet && !isBelt}
-              onClick={() => {
-                if (count < requiredCount || !compatiblePlanet) return;
-                if (isBelt) {
-                  onBeltTierChange(itemBeltTier!);
-                  onPlacementChange(null);
-                } else {
-                  onPlacementChange(active ? null : id);
-                }
-              }}
-              onDragStart={(event) => {
-                if (isBelt) return;
-                event.dataTransfer.setData("application/factory-building", id);
-                event.dataTransfer.effectAllowed = "move";
-                onPlacementChange(id);
-              }}
-              onDragEnd={() => onPlacementChange(null)}
-              title={!compatiblePlanet ? id === "geothermal_power_station" ? `${label}只能部署在烬原 II` : activePlanet.kind === "gas-giant" ? `${label}不能部署在气态巨星` : `${label}只能部署在气态巨星` : isBelt ? `选择${label}连接节点端口` : `部署${label}${placementCount > 1 ? ` ×${placementCount}` : ""}`}
-            >
-              <i>{buildIcon(id)}</i>
-              <span>{label}</span>
-              <strong>×{count}</strong>
-            </button>
+            <div className={`construction-item-shell${active ? " construction-item-shell--active" : ""}`} key={id}>
+              <button
+                className={`construction-item${active ? " construction-item--active" : ""}`}
+                type="button"
+                disabled={count < requiredCount || !compatiblePlanet}
+                draggable={count >= requiredCount && compatiblePlanet && !isBelt}
+                onClick={() => {
+                  if (count < requiredCount || !compatiblePlanet) return;
+                  if (isBelt) {
+                    onBeltTierChange(itemBeltTier!);
+                    onPlacementChange(null);
+                  } else {
+                    onPlacementChange(active ? null : id);
+                  }
+                }}
+                onDragStart={(event) => {
+                  if (isBelt) return;
+                  event.dataTransfer.setData("application/factory-building", id);
+                  event.dataTransfer.effectAllowed = "move";
+                  onPlacementChange(id);
+                }}
+                onDragEnd={() => onPlacementChange(null)}
+                title={!compatiblePlanet ? id === "geothermal_power_station" ? `${label}只能部署在烬原 II` : activePlanet.kind === "gas-giant" ? `${label}不能部署在气态巨星` : `${label}只能部署在气态巨星` : isBelt ? `选择${label}连接节点端口` : `部署${label}${placementCount > 1 ? ` ×${placementCount}` : ""}`}
+              >
+                <i>{buildIcon(id)}</i>
+                <span>{label}</span>
+                <strong>×{count}</strong>
+              </button>
+              <button
+                className="construction-item-craft"
+                type="button"
+                disabled={!craftable}
+                onClick={() => onCraft(id)}
+                title={craftable ? `制造${label}` : `材料或科技不足，无法制造${label}`}
+                aria-label={`制造${label}`}
+              ><Hammer size={12} /></button>
+            </div>
           );
         })}
       </div>

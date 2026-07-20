@@ -164,7 +164,9 @@ import { getDifficultyDefinition } from "./game/difficulty";
 import { analyzeBeltNetwork, diagnoseBelt, getBeltBundleMap, getPortOccupancy } from "./game/network";
 import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
 import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
-import { clearGame, clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot, type OfflineReport, type SaveSlotId } from "./game/storage";
+import { clearGame, clearGameSlot, clearSaveSnapshot, exportGame, getSaveSlotSummaries, getSaveSnapshotSummaries, inspectSave, loadGame, loadGameSlot, loadSaveSnapshot, saveGame, saveGameSnapshot, saveGameSlot, type OfflineReport, type SaveInspection, type SaveSlotId, type SaveSnapshotSummary } from "./game/storage";
+import { runSimulationBenchmark } from "./game/benchmark";
+import { createContentPackTemplate, parseContentPack, type ModValidationResult } from "./game/mods";
 import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CargoStackSize, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 
@@ -277,6 +279,10 @@ function FactoryGame() {
   const [operationsTab, setOperationsTab] = useState<OperationsTab>("alerts");
   const [offlineReport, setOfflineReport] = useState<OfflineReport | null>(loaded.offlineReport);
   const [saveSlots, setSaveSlots] = useState(getSaveSlotSummaries);
+  const [saveSnapshots, setSaveSnapshots] = useState<SaveSnapshotSummary[]>(getSaveSnapshotSummaries);
+  const [importPreview, setImportPreview] = useState<SaveInspection | null>(null);
+  const [pendingImportState, setPendingImportState] = useState<GameState | null>(null);
+  const [modValidation, setModValidation] = useState<ModValidationResult | null>(null);
   const [blueprintPlacementId, setBlueprintPlacementId] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [miningEntityId, setMiningEntityId] = useState<string | null>(null);
@@ -319,6 +325,10 @@ function FactoryGame() {
   useEffect(() => { selectedEntityIdsRef.current = selectedEntityIds; }, [selectedEntityIds]);
   useEffect(() => { selectedBeltIdRef.current = selectedBeltId; }, [selectedBeltId]);
   useEffect(() => { pointerRef.current = pointer; }, [pointer]);
+  useEffect(() => {
+    if (!loaded.recovery || loaded.recovery.source === "primary") return;
+    setNotice(loaded.recovery.issues[0] ?? "已从备用存档恢复");
+  }, [loaded.recovery]);
 
   const playTone = useCallback((kind: InteractionSound, force = false) => {
     if (!force && !gameRef.current.settings.soundEnabled) return;
@@ -1054,13 +1064,17 @@ function FactoryGame() {
     setFocusedBeltNetworkId(null);
   }, []);
 
-  const refreshSaveSlots = useCallback(() => setSaveSlots(getSaveSlotSummaries()), []);
+  const refreshSaveData = useCallback(() => {
+    setSaveSlots(getSaveSlotSummaries());
+    setSaveSnapshots(getSaveSnapshotSummaries());
+  }, []);
 
   const manualSave = useCallback(() => {
     saveGame(gameRef.current);
+    refreshSaveData();
     setNotice("主存档已保存");
     playTone("confirm");
-  }, [playTone]);
+  }, [playTone, refreshSaveData]);
 
   const downloadSave = useCallback(() => {
     const blob = new Blob([exportGame(gameRef.current)], { type: "application/json" });
@@ -1075,24 +1089,39 @@ function FactoryGame() {
   }, [playTone]);
 
   const importSave = useCallback((raw: string) => {
-    const state = importGame(raw);
-    if (!state) {
-      setNotice("存档导入失败：文件格式或版本无效");
+    const inspection = inspectSave(raw);
+    if (!inspection.valid || !inspection.state) {
+      setNotice(`存档导入失败：${inspection.issues[0] ?? "文件格式或版本无效"}`);
       playTone("alert");
       return;
     }
-    saveGame(state);
-    restoreGame(state);
-    setNotice("存档导入完成");
+    setImportPreview(inspection);
+    setPendingImportState(inspection.state);
+    setNotice(inspection.integrity === "valid" ? "已读取存档，请确认导入" : "存档可修复，请确认导入");
+  }, [playTone]);
+
+  const cancelImport = useCallback(() => {
+    setImportPreview(null);
+    setPendingImportState(null);
+  }, []);
+
+  const confirmImport = useCallback(() => {
+    if (!pendingImportState) return;
+    saveGame(pendingImportState);
+    restoreGame(pendingImportState);
+    refreshSaveData();
+    setImportPreview(null);
+    setPendingImportState(null);
+    setNotice("存档导入完成，已自动创建回滚快照");
     playTone("complete");
-  }, [playTone, restoreGame]);
+  }, [pendingImportState, playTone, refreshSaveData, restoreGame]);
 
   const saveToSlot = useCallback((slotId: SaveSlotId) => {
     saveGameSlot(slotId, gameRef.current);
-    refreshSaveSlots();
+    refreshSaveData();
     setNotice(`已保存到本地槽位 ${slotId}`);
     playTone("confirm");
-  }, [playTone, refreshSaveSlots]);
+  }, [playTone, refreshSaveData]);
 
   const loadFromSlot = useCallback((slotId: SaveSlotId) => {
     const slot = loadGameSlot(slotId);
@@ -1102,15 +1131,73 @@ function FactoryGame() {
     }
     saveGame(slot.state);
     restoreGame(slot.state, slot.offlineReport);
+    refreshSaveData();
     setNotice(`已载入本地槽位 ${slotId}`);
     playTone("complete");
-  }, [playTone, restoreGame]);
+  }, [playTone, refreshSaveData, restoreGame]);
 
   const deleteSlot = useCallback((slotId: SaveSlotId) => {
     clearGameSlot(slotId);
-    refreshSaveSlots();
+    refreshSaveData();
     setNotice(`本地槽位 ${slotId} 已清空`);
-  }, [refreshSaveSlots]);
+  }, [refreshSaveData]);
+
+  const createSnapshot = useCallback(() => {
+    const snapshot = saveGameSnapshot(gameRef.current, "手动快照");
+    refreshSaveData();
+    setNotice(snapshot ? "手动快照已创建" : "快照创建失败：本地存储空间不足");
+    playTone(snapshot ? "confirm" : "alert");
+  }, [playTone, refreshSaveData]);
+
+  const loadSnapshot = useCallback((snapshotId: string) => {
+    const state = loadSaveSnapshot(snapshotId);
+    if (!state) {
+      setNotice("快照不可用，可能已损坏");
+      playTone("alert");
+      return;
+    }
+    saveGame(state);
+    restoreGame(state);
+    refreshSaveData();
+    setNotice("已回滚到自动快照");
+    playTone("complete");
+  }, [playTone, refreshSaveData, restoreGame]);
+
+  const deleteSnapshot = useCallback((snapshotId: string) => {
+    clearSaveSnapshot(snapshotId);
+    refreshSaveData();
+    setNotice("自动快照已删除");
+  }, [refreshSaveData]);
+
+  const runBenchmark = useCallback(() => {
+    const report = runSimulationBenchmark(gameRef.current, 60, 60);
+    setNotice(`确定性诊断${report.deterministic ? "通过" : "失败"} · 60 秒模拟 ${report.durationMs}ms · ${report.stepsPerSecond.toFixed(1)} 步/秒`);
+    playTone(report.deterministic ? "confirm" : "alert");
+  }, [playTone]);
+
+  const validateMod = useCallback((raw: string) => {
+    const result = parseContentPack(raw);
+    setModValidation(result);
+    setNotice(result.valid ? "内容包校验通过" : `内容包校验失败：${result.issues.find((issue) => issue.severity === "error")?.message ?? "请检查定义"}`);
+    playTone(result.valid ? "confirm" : "alert");
+  }, [playTone]);
+
+  const downloadModTemplate = useCallback(() => {
+    const blob = new Blob([JSON.stringify(createContentPackTemplate(), null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "dsp-content-pack-template.json";
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setNotice("内容包模板已导出");
+    playTone("confirm");
+  }, [playTone]);
+
+  useEffect(() => {
+    const timer = window.setInterval(refreshSaveData, 5_000);
+    return () => window.clearInterval(timer);
+  }, [refreshSaveData]);
 
   useEffect(() => {
     if (!connectionHint || connectionDraft) return;
@@ -1546,7 +1633,7 @@ function FactoryGame() {
         : compatible ? `${blueprintName}已加入施工队列，材料齐备后自动部署` : `${blueprintName}与当前行星不兼容`);
       return;
     }
-    if (!selectionMode && !connectionDraft) {
+    if (!selectionMode && !connectionDraft && !placement) {
       const flowPoint = screenToFlowPosition({ x: event.clientX, y: event.clientY });
       const nodeById = new Map(nodes.map((node) => [node.id, node]));
       let nearest: { beltId: string; distance: number } | null = null;
@@ -1577,9 +1664,23 @@ function FactoryGame() {
         return;
       }
       const position = snapFlowPosition(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
-      if (placeBuilding(gameRef.current, placement, position, placementCount) !== gameRef.current) playTone("place");
+      const placedState = placeBuilding(gameRef.current, placement, position, placementCount);
+      if (placedState === gameRef.current) {
+        setNotice("材料不足或当前位置无法放置");
+        setPlacement(null);
+        playTone("alert");
+        return;
+      }
+      playTone("place");
       commitGame((current) => placeBuilding(current, placement, position, placementCount));
-      setPlacement(null);
+      const keepContinuous = event.ctrlKey;
+      const remaining = placedState.construction[placement] ?? 0;
+      if (keepContinuous && remaining >= placementCount) {
+        setNotice(`已放置${getBuilding(placement).name} · Ctrl 连续建造中`);
+      } else {
+        setPlacement(null);
+        if (keepContinuous) setNotice(`已放置${getBuilding(placement).name} · 材料不足，连续建造结束`);
+      }
       return;
     }
     setSelectedEntityIds([]);
@@ -2034,6 +2135,18 @@ function FactoryGame() {
         onBeltTierChange={setBeltTier}
         onPlacementCountChange={(count) => { setPlacementCount(count); setPlacement(null); }}
         onOpenFabricator={() => { setInspectorTab("fabricate"); setMobilePanel("inspector"); }}
+        onCraft={(buildingId) => {
+          const before = gameRef.current;
+          const after = craftConstruction(before, buildingId);
+          if (after === before) {
+            setNotice("制造失败：材料或科技不足");
+            playTone("alert");
+            return;
+          }
+          commitGame((current) => craftConstruction(current, buildingId));
+          setNotice(`${getConstructionDefinition(buildingId)?.name ?? "建筑"}已制造`);
+          playTone("confirm");
+        }}
       />
       <BlueprintWorkspace
         open={blueprintsOpen}
@@ -2185,6 +2298,9 @@ function FactoryGame() {
             game={game}
             alerts={alerts}
             slots={saveSlots}
+            snapshots={saveSnapshots}
+            importPreview={importPreview}
+            modValidation={modValidation}
             onClose={() => setOperationsOpen(false)}
             onTabChange={setOperationsTab}
             onAlertSelect={selectAlert}
@@ -2192,9 +2308,17 @@ function FactoryGame() {
             onManualSave={manualSave}
             onExport={downloadSave}
             onImport={importSave}
+            onConfirmImport={confirmImport}
+            onCancelImport={cancelImport}
             onSaveSlot={saveToSlot}
             onLoadSlot={loadFromSlot}
             onDeleteSlot={deleteSlot}
+            onCreateSnapshot={createSnapshot}
+            onLoadSnapshot={loadSnapshot}
+            onDeleteSnapshot={deleteSnapshot}
+            onRunBenchmark={runBenchmark}
+            onValidateMod={validateMod}
+            onExportModTemplate={downloadModTemplate}
           />
         ) : null}
         {offlineReport ? <OfflineReportWorkspace report={offlineReport} onClose={() => setOfflineReport(null)} /> : null}

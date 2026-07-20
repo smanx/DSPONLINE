@@ -5,14 +5,18 @@ import {
   Clock3,
   Cpu,
   Download,
+  FileCheck2,
   Gauge,
   HardDrive,
+  History,
   MapPin,
   Save,
   Settings2,
   Trash2,
   Trophy,
   Upload,
+  RotateCcw,
+  ShieldCheck,
   Volume2,
   VolumeX,
   X,
@@ -23,7 +27,8 @@ import { getPlanet } from "../game/content";
 import { DIFFICULTY_DEFINITIONS } from "../game/difficulty";
 import { ACHIEVEMENTS, getAchievementProgress } from "../game/progression";
 import type { FactoryAlert } from "../game/alerts";
-import type { SaveSlotId, SaveSlotSummary } from "../game/storage";
+import type { SaveInspection, SaveIntegrityStatus, SaveSlotId, SaveSlotSummary, SaveSnapshotSummary } from "../game/storage";
+import type { ModValidationResult } from "../game/mods";
 import type { AutosaveIntervalSeconds, DifficultyMode, GameSettings, GameState, SimulationSpeed } from "../game/types";
 
 export type OperationsTab = "alerts" | "achievements" | "settings" | "saves";
@@ -34,6 +39,9 @@ interface OperationsWorkspaceProps {
   game: GameState;
   alerts: FactoryAlert[];
   slots: SaveSlotSummary[];
+  snapshots: SaveSnapshotSummary[];
+  importPreview: SaveInspection | null;
+  modValidation: ModValidationResult | null;
   onClose: () => void;
   onTabChange: (tab: OperationsTab) => void;
   onAlertSelect: (alert: FactoryAlert) => void;
@@ -41,9 +49,17 @@ interface OperationsWorkspaceProps {
   onManualSave: () => void;
   onExport: () => void;
   onImport: (raw: string) => void;
+  onConfirmImport: () => void;
+  onCancelImport: () => void;
   onSaveSlot: (slotId: SaveSlotId) => void;
   onLoadSlot: (slotId: SaveSlotId) => void;
   onDeleteSlot: (slotId: SaveSlotId) => void;
+  onCreateSnapshot: () => void;
+  onLoadSnapshot: (snapshotId: string) => void;
+  onDeleteSnapshot: (snapshotId: string) => void;
+  onRunBenchmark: () => void;
+  onValidateMod: (raw: string) => void;
+  onExportModTemplate: () => void;
 }
 
 const TABS: Array<{ id: OperationsTab; label: string; icon: typeof Bell }> = [
@@ -135,7 +151,7 @@ function ToggleSetting({ checked, label, value, icon, onChange }: {
   );
 }
 
-function SettingsPanel({ game, onChange }: { game: GameState; onChange: (settings: Partial<GameSettings>) => void }) {
+function SettingsPanel({ game, onChange, onRunBenchmark }: { game: GameState; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void }) {
   const { settings } = game;
   return (
     <div className="operations-panel operations-settings">
@@ -182,13 +198,44 @@ function SettingsPanel({ game, onChange }: { game: GameState; onChange: (setting
         </div>
         <p className="settings-help">{DIFFICULTY_DEFINITIONS.find((definition) => definition.id === settings.difficulty)?.summary ?? "按当前原型的默认节奏运行。"}</p>
       </section>
+      <section className="settings-group settings-diagnostics">
+        <header><ShieldCheck size={14} /><span>模拟诊断</span><small>确定性与性能</small></header>
+        <button type="button" onClick={onRunBenchmark}><Gauge size={14} />运行 60 秒基准</button>
+      </section>
     </div>
   );
 }
 
-function SavesPanel({ game, slots, onManualSave, onExport, onImport, onSaveSlot, onLoadSlot, onDeleteSlot }: Pick<OperationsWorkspaceProps,
-  "game" | "slots" | "onManualSave" | "onExport" | "onImport" | "onSaveSlot" | "onLoadSlot" | "onDeleteSlot">) {
+function integrityLabel(status: SaveIntegrityStatus): string {
+  if (status === "valid") return "校验通过";
+  if (status === "legacy") return "旧格式"
+  if (status === "repaired") return "可修复"
+  return "损坏"
+}
+
+function SavesPanel({
+  game,
+  slots,
+  snapshots,
+  importPreview,
+  modValidation,
+  onManualSave,
+  onExport,
+  onImport,
+  onConfirmImport,
+  onCancelImport,
+  onSaveSlot,
+  onLoadSlot,
+  onDeleteSlot,
+  onCreateSnapshot,
+  onLoadSnapshot,
+  onDeleteSnapshot,
+  onValidateMod,
+  onExportModTemplate,
+}: Pick<OperationsWorkspaceProps,
+  "game" | "slots" | "snapshots" | "importPreview" | "modValidation" | "onManualSave" | "onExport" | "onImport" | "onConfirmImport" | "onCancelImport" | "onSaveSlot" | "onLoadSlot" | "onDeleteSlot" | "onCreateSnapshot" | "onLoadSnapshot" | "onDeleteSnapshot" | "onValidateMod" | "onExportModTemplate">) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const modInputRef = useRef<HTMLInputElement>(null);
   const summaryBySlot = new Map(slots.map((slot) => [slot.slotId, slot]));
   return (
     <div className="operations-panel operations-saves">
@@ -198,6 +245,7 @@ function SavesPanel({ game, slots, onManualSave, onExport, onImport, onSaveSlot,
       </header>
       <section className="save-primary-actions">
         <button type="button" onClick={onManualSave}><Save size={15} /><span>立即保存</span></button>
+        <button type="button" onClick={onCreateSnapshot}><History size={15} /><span>创建快照</span></button>
         <button type="button" onClick={onExport}><Download size={15} /><span>导出 JSON</span></button>
         <button type="button" onClick={() => fileInputRef.current?.click()}><Upload size={15} /><span>导入 JSON</span></button>
         <input
@@ -212,27 +260,55 @@ function SavesPanel({ game, slots, onManualSave, onExport, onImport, onSaveSlot,
           }}
         />
       </section>
+      {importPreview ? <section className="save-import-preview" aria-label="存档导入预览">
+        <header><div><FileCheck2 size={15} /><strong>导入预览</strong></div><span className={`save-integrity save-integrity--${importPreview.integrity}`}>{integrityLabel(importPreview.integrity)}</span></header>
+        <div className="save-preview-metrics">
+          <span><small>状态版本</small><strong>v{importPreview.stateVersion ?? "?"}</strong></span>
+          <span><small>运行时间</small><strong>{formatRuntime(importPreview.summary?.elapsedSeconds ?? 0)}</strong></span>
+          <span><small>实体</small><strong>{importPreview.state?.entities.length ?? 0}</strong></span>
+          <span><small>科技</small><strong>{importPreview.summary?.completedTechCount ?? 0}</strong></span>
+        </div>
+        {importPreview.issues.length > 0 ? <ul>{importPreview.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul> : null}
+        <footer><button type="button" onClick={onCancelImport}>取消</button><button className="primary" type="button" onClick={onConfirmImport}><ShieldCheck size={14} />修复并导入</button></footer>
+      </section> : null}
       <div className="save-slot-list">
         {([1, 2, 3] as SaveSlotId[]).map((slotId) => {
           const summary = summaryBySlot.get(slotId);
           return (
-            <article className={`save-slot${summary ? " save-slot--occupied" : ""}`} key={slotId}>
+            <article className={`save-slot${summary ? " save-slot--occupied" : ""}${summary && !summary.valid ? " save-slot--invalid" : ""}`} key={slotId}>
               <i><HardDrive size={17} /></i>
               <div>
                 <strong>本地槽位 {slotId}</strong>
                 {summary ? (
-                  <span>{new Date(summary.savedAt).toLocaleString("zh-CN")} · 科技 {summary.completedTechCount} · 结构 {summary.structurePoints}</span>
+                  <span>{new Date(summary.savedAt).toLocaleString("zh-CN")} · 科技 {summary.completedTechCount} · 结构 {summary.structurePoints} · {integrityLabel(summary.integrity)}</span>
                 ) : <span>空槽位</span>}
               </div>
               <div className="save-slot-actions">
                 <button type="button" onClick={() => onSaveSlot(slotId)} title={`保存到槽位 ${slotId}`} aria-label={`保存到槽位 ${slotId}`}><Save size={14} /></button>
-                <button type="button" disabled={!summary} onClick={() => onLoadSlot(slotId)} title={`载入槽位 ${slotId}`} aria-label={`载入槽位 ${slotId}`}><Upload size={14} /></button>
+                <button type="button" disabled={!summary?.valid} onClick={() => onLoadSlot(slotId)} title={`载入槽位 ${slotId}`} aria-label={`载入槽位 ${slotId}`}><Upload size={14} /></button>
                 <button type="button" disabled={!summary} onClick={() => onDeleteSlot(slotId)} title={`删除槽位 ${slotId}`} aria-label={`删除槽位 ${slotId}`}><Trash2 size={14} /></button>
               </div>
             </article>
           );
         })}
       </div>
+      <section className="save-snapshot-section">
+        <header><div><History size={14} /><strong>自动快照</strong><small>最近 {snapshots.length}/5</small></div><span>可回滚</span></header>
+        {snapshots.length === 0 ? <p className="save-empty-note">模拟运行后会自动保留最近快照</p> : <div className="save-snapshot-list">
+          {snapshots.map((snapshot) => <article className={`save-snapshot-row${snapshot.valid ? "" : " save-snapshot-row--invalid"}`} key={snapshot.id}>
+            <i>{snapshot.valid ? <ShieldCheck size={14} /> : <FileCheck2 size={14} />}</i>
+            <div><strong>{snapshot.reason}</strong><span>{new Date(snapshot.savedAt).toLocaleTimeString("zh-CN")} · {formatRuntime(snapshot.elapsedSeconds)} · 科技 {snapshot.completedTechCount}</span></div>
+            <button type="button" disabled={!snapshot.valid} onClick={() => onLoadSnapshot(snapshot.id)} title="回滚到此快照" aria-label={`回滚到快照 ${snapshot.id}`}><RotateCcw size={13} /></button>
+            <button type="button" onClick={() => onDeleteSnapshot(snapshot.id)} title="删除快照" aria-label={`删除快照 ${snapshot.id}`}><Trash2 size={13} /></button>
+          </article>)}
+        </div>}
+      </section>
+      <section className="content-pack-section">
+        <header><div><FileCheck2 size={14} /><strong>内容包校验</strong></div><small>只读检查，不会修改核心目录</small></header>
+        <div className="content-pack-actions"><button type="button" onClick={() => modInputRef.current?.click()}><Upload size={14} />选择内容包 JSON</button><button type="button" onClick={onExportModTemplate}><Download size={14} />导出模板</button></div>
+        <input ref={modInputRef} type="file" accept="application/json,.json" aria-label="选择内容包文件" onChange={async (event) => { const file = event.target.files?.[0]; if (file) onValidateMod(await file.text()); event.target.value = ""; }} />
+        {modValidation ? <div className={`content-pack-result${modValidation.valid ? " content-pack-result--valid" : " content-pack-result--invalid"}`}><strong>{modValidation.valid ? "内容包校验通过" : "内容包存在问题"}</strong><span>{modValidation.manifest?.name ?? "未识别内容包"} · 物品 {modValidation.counts.items} · 配方 {modValidation.counts.recipes} · 科技 {modValidation.counts.technologies}</span>{modValidation.issues.slice(0, 3).map((issue) => <small key={`${issue.code}-${issue.path}`}>{issue.severity === "error" ? "错误" : "提示"}：{issue.message}</small>)}</div> : null}
+      </section>
     </div>
   );
 }
@@ -267,7 +343,7 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
       <div className="operations-body">
         {props.tab === "alerts" ? <AlertsPanel alerts={props.alerts} onSelect={props.onAlertSelect} /> : null}
         {props.tab === "achievements" ? <AchievementsPanel game={props.game} /> : null}
-        {props.tab === "settings" ? <SettingsPanel game={props.game} onChange={props.onSettingsChange} /> : null}
+        {props.tab === "settings" ? <SettingsPanel game={props.game} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} /> : null}
         {props.tab === "saves" ? <SavesPanel {...props} /> : null}
       </div>
     </section>

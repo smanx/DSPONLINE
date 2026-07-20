@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { addCanvasBookmark, addDysonSwarmOrbit, connectBelt, createBlueprint, createInitialState, createStandardDysonLayer, installMiner, placeBuilding, queueBlueprint, queueHandcraftRecipe, setActivePlanet, setBeltRouteOffsetY, setBlueprintTransform, setDysonLaunchMode, setDysonLaunchThrottle, setDysonSwarmOrbit, setFuelItem, setLogisticsItem } from "./engine";
 import { createProductionPlan } from "./planning";
-import { clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot } from "./storage";
+import { clearGameSlot, exportGame, getSaveSlotSummaries, getSaveSnapshotSummaries, importGame, inspectSave, loadGame, loadGameSlot, loadSaveSnapshot, saveGame, saveGameSnapshot, saveGameSlot } from "./storage";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
@@ -1019,5 +1019,33 @@ describe("game storage", () => {
       galacticCredits: 42_000,
     });
     expect(getOfflineSimulationLimitSeconds(roundTrip)).toBe(10 * 24 * 60 * 60);
+  });
+
+  it("detects tampering and keeps a valid automatic snapshot for recovery", () => {
+    const state = createInitialState();
+    state.elapsedSeconds = 44;
+    saveGame(state);
+    const raw = JSON.parse(window.localStorage.getItem(SAVE_KEY)!);
+    raw.state.elapsedSeconds = 999;
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify(raw));
+    const inspection = inspectSave(JSON.stringify(raw));
+    expect(inspection.valid).toBe(false);
+    expect(inspection.issues[0]).toContain("完整性校验失败");
+    const loaded = loadGame();
+    expect(loaded.recovery?.source).toBe("snapshot");
+    expect(loaded.state.elapsedSeconds).toBe(44);
+  });
+
+  it("lists, loads and trims manual snapshots", () => {
+    const states = Array.from({ length: 7 }, (_, index) => {
+      const state = createInitialState();
+      state.elapsedSeconds = index + 1;
+      return state;
+    });
+    states.forEach((state) => saveGameSnapshot(state, "测试快照"));
+    const summaries = getSaveSnapshotSummaries();
+    expect(summaries).toHaveLength(5);
+    expect(summaries[0].reason).toBe("测试快照");
+    expect(loadSaveSnapshot(summaries[0].id)?.elapsedSeconds).toBe(7);
   });
 });

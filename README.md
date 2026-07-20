@@ -60,6 +60,9 @@
 - `Ctrl/Cmd + K` 命令面板可搜索工作区、暂停/性能设置和任意物品配方，并支持键盘选择、触摸点击、焦点恢复与运行事件记录。
 - 设备超过 300 个时自动启用画布低负载视觉层；触摸设备会放大端口和主要操作目标，不改变模拟精度。
 - 主存档支持 JSON 导入导出、立即保存与三个独立本地槽位；兼容 v1-v23 存档迁移。
+- 存档发布层使用格式 v2 校验和、主存档备份与最近 5 个自动快照；导入会先展示版本/实体/科技摘要，损坏主存档会自动回退到备份或快照。
+- 运营中心可运行 60 秒确定性模拟基准，并校验外部内容包（新物品、建筑、配方和科技只能使用新 ID，引用必须闭合）。
+- 生产构建包含 `manifest.webmanifest` 与离线 service worker，可安装为桌面/PWA；内容包格式当前为 v1，游戏状态仍兼容 v1-v23。
 - 桌面工作区与移动端资源/检查器抽屉。
 
 ## 试玩
@@ -91,6 +94,9 @@ npm run test:e2e
 - `src/game/alerts.ts`：跨行星设备状态诊断与警报聚合。
 - `src/game/difficulty.ts`：工业难度预设与平衡倍率。
 - `src/game/progression.ts`：工业成就定义、进度计算与幂等解锁。
+- `src/game/storage.ts`：主存档、校验和、自动快照、回滚与版本迁移。
+- `src/game/benchmark.ts`：确定性哈希检查与模拟性能基准。
+- `src/game/mods.ts`：外部内容包格式与引用/冲突校验。
 - `src/components/FactoryNodes.tsx`：矿脉、机器、发电、仓储、分流与星际物流节点。
 - `src/components/GamePanels.tsx`：分行星库存、行星导航、制造、检查器和施工界面。
 - `src/components/StatisticsWorkspace.tsx`：生产、电力与瓶颈分析工作区。

@@ -2907,6 +2907,64 @@ test("canvas placement supports toolbar and keyboard undo redo", async ({ page }
   await expect(page.locator(".game-notice")).toContainText("已重做");
 });
 
+test("construction cards craft in place and Ctrl-click chains building placement", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openSeededGame(page);
+  await page.addInitScript(() => {
+    const raw = window.localStorage.getItem("dsp-idle-network.save.v1");
+    const envelope = JSON.parse(raw!);
+    envelope.state.tray = { iron_ingot: 20, stone_brick: 10, gear: 10, magnetic_coil: 10 };
+    envelope.state.planetTrays = { ...(envelope.state.planetTrays ?? {}), home: envelope.state.tray };
+    envelope.state.research.completedTechIds = [...new Set([...(envelope.state.research.completedTechIds ?? []), "thermal_power"])]
+    envelope.state.construction.thermal_power_plant = 0;
+    delete envelope.checksum;
+    delete envelope.formatVersion;
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify(envelope));
+  });
+  await page.reload();
+  const craftButton = page.getByLabel("制造火力发电厂");
+  await expect(craftButton).toBeEnabled();
+  await craftButton.click();
+  await expect(page.locator(".construction-item-shell").filter({ hasText: "火力发电厂" })).toContainText("×1");
+
+  await openBlueprintStageGame(page);
+  await page.getByTitle("部署制造台 Mk.I", { exact: true }).click();
+  const emptyPanePoints = await page.evaluate(() => {
+    const pane = document.querySelector<HTMLElement>(".react-flow__pane");
+    if (!pane) return [] as Array<{ x: number; y: number }>;
+    const rect = pane.getBoundingClientRect();
+    const points: Array<{ x: number; y: number }> = [];
+    for (let y = rect.top + 150; y < rect.bottom - 180; y += 35) {
+      for (let x = rect.left + 170; x < rect.right - 260; x += 45) {
+        const target = document.elementFromPoint(x, y);
+        if (target instanceof Element && target.closest(".react-flow__pane") && !target.closest(".react-flow__minimap, .react-flow__controls, .react-flow__node")) points.push({ x, y });
+      }
+    }
+    return points;
+  });
+  expect(emptyPanePoints.length).toBeGreaterThan(1);
+  await page.keyboard.down("Control");
+  await page.mouse.click(emptyPanePoints[0].x, emptyPanePoints[0].y);
+  await expect(page.getByTitle("部署制造台 Mk.I", { exact: true })).toHaveClass(/construction-item--active/);
+  const secondPoint = await page.evaluate(() => {
+    const pane = document.querySelector<HTMLElement>(".react-flow__pane");
+    if (!pane) return null;
+    const rect = pane.getBoundingClientRect();
+    for (let y = rect.bottom - 230; y > rect.top + 160; y -= 40) {
+      for (let x = rect.right - 300; x > rect.left + 180; x -= 50) {
+        const target = document.elementFromPoint(x, y);
+        if (target instanceof Element && target.closest(".react-flow__pane") && !target.closest(".react-flow__minimap, .react-flow__controls, .react-flow__node")) return { x, y };
+      }
+    }
+    return null;
+  });
+  expect(secondPoint).not.toBeNull();
+  await page.mouse.click(secondPoint!.x, secondPoint!.y);
+  await page.keyboard.up("Control");
+  await expect(page.locator(".machine-node")).toHaveCount(4);
+  await expect(page.locator(".game-notice")).toContainText(/连续建造|材料不足/);
+});
+
 test("command palette navigates workspaces, focuses recipes and preserves keyboard flow", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openSeededGame(page);
@@ -3009,6 +3067,44 @@ test("operations settings and local save slots persist across reload", async ({ 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect.poll(async () => operations.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/qa/operations-settings-390.png", fullPage: true });
+});
+
+test("save preview, snapshots, content-pack validation and simulation diagnostics stay recoverable", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openOperationsStageGame(page);
+  await page.getByLabel("打开运营中心").click();
+  const operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "存档" }).click();
+  await operations.getByRole("button", { name: "立即保存" }).click();
+  await operations.getByRole("button", { name: "创建快照" }).click();
+  await expect(operations.locator(".save-snapshot-row").first()).toBeVisible();
+
+  const savedRaw = await page.evaluate(() => window.localStorage.getItem("dsp-idle-network.save.v1"));
+  expect(savedRaw).toContain("checksum");
+  await operations.locator('input[aria-label="选择要导入的存档文件"]').setInputFiles({
+    name: "preview.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(savedRaw!, "utf8"),
+  });
+  await expect(operations.locator(".save-import-preview")).toBeVisible();
+  await expect(operations.locator(".save-import-preview")).toContainText("校验通过");
+  await operations.locator(".save-import-preview").getByRole("button", { name: "修复并导入" }).click();
+  await expect(operations.locator(".save-import-preview")).toBeHidden();
+  await page.getByLabel("打开运营中心").click();
+  const reopenedOperations = page.getByRole("dialog", { name: "运营中心" });
+  await reopenedOperations.locator(".operations-tabs").getByRole("tab", { name: "存档" }).click();
+
+  await reopenedOperations.locator('input[aria-label="选择内容包文件"]').setInputFiles({
+    name: "pack.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({ formatVersion: 1, id: "qa_pack", name: "QA 内容包", version: "0.1.0" }), "utf8"),
+  });
+  await expect(reopenedOperations.locator(".content-pack-result--valid")).toContainText("内容包校验通过");
+
+  await reopenedOperations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await reopenedOperations.getByRole("button", { name: "运行 60 秒基准" }).click();
+  await expect(page.locator(".game-notice")).toContainText("确定性诊断通过");
+  await page.screenshot({ path: "artifacts/qa/save-recovery-1440.png", fullPage: true });
 });
 
 test("offline report summarizes production before entering the factory", async ({ page }) => {
