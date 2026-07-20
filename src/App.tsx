@@ -330,6 +330,7 @@ function FactoryGame() {
           simulationPendingSecondsRef.current += submission.seconds;
           return current;
         }
+        if (!event.data.changed) return current;
         gameRef.current = event.data.state;
         return event.data.state;
       });

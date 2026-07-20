@@ -2492,7 +2492,7 @@ test("workspace hierarchy filters construction, collapses rails and adapts detai
   const nodeHeight = await vein.evaluate((element) => (element as HTMLElement).offsetHeight);
   for (let index = 0; index < 4; index += 1) await page.locator(".react-flow__controls-zoomout").click();
   await expect(page.locator(".game-shell")).toHaveAttribute("data-zoom-lod", "compact");
-  await expect(vein.locator(".manual-mine")).toHaveCSS("visibility", "hidden");
+  await expect(vein.locator(".manual-mine")).toHaveCSS("opacity", "0.12");
   await expect.poll(async () => vein.evaluate((element) => (element as HTMLElement).offsetHeight)).toBe(nodeHeight);
 
   await page.getByLabel("打开主线任务中心").first().click();

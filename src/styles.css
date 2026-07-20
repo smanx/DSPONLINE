@@ -7296,6 +7296,7 @@ select:focus-visible {
 
 .react-flow__edge.factory-edge--active .react-flow__edge-path {
   stroke-dasharray: 2 7;
+  animation: factory-belt-flow 1.05s linear infinite;
   filter: drop-shadow(0 0 2px color-mix(in srgb, currentColor 42%, transparent));
 }
 
@@ -7322,7 +7323,7 @@ select:focus-visible {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
   color: var(--muted);
   font-size: 8px;
-  pointer-events: all;
+  pointer-events: none;
   white-space: nowrap;
 }
 
@@ -8929,8 +8930,23 @@ select {
 .game-shell[data-zoom-lod="compact"] .react-flow__node:not(.selected) .orbital-launch-track,
 .game-shell[data-zoom-lod="compact"] .factory-edge-label {
   visibility: hidden;
-  opacity: 0;
+  opacity: 0.14;
   pointer-events: none;
+}
+
+.game-shell[data-zoom-lod="compact"] .react-flow__node:not(.selected) .machine-status,
+.game-shell[data-zoom-lod="compact"] .react-flow__node:not(.selected) .vein-readout,
+.game-shell[data-zoom-lod="compact"] .react-flow__node:not(.selected) .work-cycle,
+.game-shell[data-zoom-lod="compact"] .react-flow__node:not(.selected) .node-io,
+.game-shell[data-zoom-lod="compact"] .react-flow__node:not(.selected) .manual-mine,
+.game-shell[data-zoom-lod="compact"] .react-flow__node:not(.selected) .power-output,
+.game-shell[data-zoom-lod="compact"] .react-flow__node:not(.selected) .thermal-fuel,
+.game-shell[data-zoom-lod="compact"] .react-flow__node:not(.selected) .logistics-empty,
+.game-shell[data-zoom-lod="compact"] .react-flow__node:not(.selected) .factory-node__footer,
+.game-shell[data-zoom-lod="compact"] .react-flow__node:not(.selected) .proliferator-readout,
+.game-shell[data-zoom-lod="compact"] .react-flow__node:not(.selected) .orbital-launch-track {
+  visibility: visible;
+  opacity: 0.12;
 }
 
 .game-shell[data-zoom-lod="compact"] .react-flow__node:not(.selected) .factory-node__header > div:nth-child(2) > span {
