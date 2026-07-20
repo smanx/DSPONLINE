@@ -1,4 +1,4 @@
-import { ArrowUp, BoxSelect, Check, Clock3, Copy, FlipHorizontal2, Focus, Layers3, MousePointer2, PackageOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Redo2, RotateCw, Trash2, Undo2, X } from "lucide-react";
+import { ArrowUp, BoxSelect, Check, Clock3, Copy, FlipHorizontal2, Focus, Layers3, MousePointer2, PackageOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Redo2, RotateCw, Route, Trash2, Undo2, X } from "lucide-react";
 import { getConstructionDefinition, getItem, getPlanet, getRecipe, getRecipesForBuilding } from "../game/content";
 import { canPlaceBlueprint, canQueueBlueprint, getBlueprintRequirements, getConstructionQueueDeficits, isTechnologyCompleted } from "../game/engine";
 import type { BlueprintDefinition, BlueprintMirror, BlueprintRotation, GameState, RecipeId } from "../game/types";
@@ -12,15 +12,17 @@ function blueprintBuildingSummary(blueprint: BlueprintDefinition): string[] {
   return [...counts].map(([name, amount]) => `${name} ×${amount}`);
 }
 
-export function CanvasSelectionTools({ selectionMode, blueprintCount, canUndo, canRedo, leftSidebarCollapsed, rightSidebarCollapsed, onModeChange, onOpenBlueprints, onUndo, onRedo, onToggleLeftSidebar, onToggleRightSidebar }: {
+export function CanvasSelectionTools({ selectionMode, blueprintCount, beltCount, canUndo, canRedo, leftSidebarCollapsed, rightSidebarCollapsed, onModeChange, onOpenBlueprints, onOpenNetworks, onUndo, onRedo, onToggleLeftSidebar, onToggleRightSidebar }: {
   selectionMode: boolean;
   blueprintCount: number;
+  beltCount: number;
   canUndo: boolean;
   canRedo: boolean;
   leftSidebarCollapsed: boolean;
   rightSidebarCollapsed: boolean;
   onModeChange: (enabled: boolean) => void;
   onOpenBlueprints: () => void;
+  onOpenNetworks: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onToggleLeftSidebar: () => void;
@@ -31,6 +33,7 @@ export function CanvasSelectionTools({ selectionMode, blueprintCount, canUndo, c
       <button className={!selectionMode ? "active" : ""} type="button" onClick={() => onModeChange(false)} title="指针与节点移动" aria-label="指针模式"><MousePointer2 size={16} /></button>
       <button className={selectionMode ? "active" : ""} type="button" onClick={() => onModeChange(true)} title="拖拽框选节点，可按 Shift 增减选择" aria-label="框选模式"><BoxSelect size={16} /></button>
       <button type="button" onClick={onOpenBlueprints} title="打开蓝图库" aria-label="打开蓝图库"><Layers3 size={16} /><em>{blueprintCount}</em></button>
+      <button type="button" onClick={onOpenNetworks} title="打开生产网络总览" aria-label="打开生产网络总览"><Route size={16} /><em>{beltCount}</em></button>
       <span className="canvas-selection-tools__separator" />
       <button type="button" disabled={!canUndo} onClick={onUndo} title="撤销上一步工厂操作 (Ctrl+Z)" aria-label="撤销"><Undo2 size={16} /></button>
       <button type="button" disabled={!canRedo} onClick={onRedo} title="重做工厂操作 (Ctrl+Y)" aria-label="重做"><Redo2 size={16} /></button>

@@ -184,6 +184,7 @@ export type BuildingId =
 
 export type BeltTier = 1 | 2 | 3;
 export type SorterTier = 1 | 2 | 3;
+export type BeltRouteMode = "bezier" | "auto" | "upper" | "lower" | "manual";
 export type ProliferatorTier = 1 | 2 | 3;
 export type ProliferatorMode = "normal" | "extra" | "speed";
 export type ConveyorBeltId = "conveyor_belt_mk1" | "conveyor_belt_mk2" | "conveyor_belt_mk3";
@@ -557,6 +558,8 @@ export interface BeltConnection {
   totalTransferred?: number;
   congestion?: number;
   lastFlow: number;
+  routeMode?: BeltRouteMode;
+  routeOffsetY?: number;
 }
 
 export interface StationSlot {
@@ -820,9 +823,18 @@ export interface GameSettings {
   performanceMode: boolean;
   reducedMotion: boolean;
   soundEnabled: boolean;
+  beltHeatmapEnabled: boolean;
   autosaveIntervalSeconds: AutosaveIntervalSeconds;
   resourceMode: ResourceMode;
   difficulty: DifficultyMode;
+}
+
+export interface CanvasBookmark {
+  id: string;
+  name: string;
+  planetId: PlanetId;
+  viewport: { x: number; y: number; zoom: number };
+  createdAtSeconds: number;
 }
 
 export interface AchievementState {
@@ -862,6 +874,8 @@ export interface BlueprintBeltTemplate {
   priority: LogisticsPriority;
   stackSize?: CargoStackSize;
   monitorEnabled?: boolean;
+  routeMode?: BeltRouteMode;
+  routeOffsetY?: number;
 }
 
 export type BlueprintRotation = 0 | 90 | 180 | 270;
@@ -935,6 +949,7 @@ export interface GameState {
   settings: GameSettings;
   achievements: AchievementState;
   campaign: CampaignState;
+  canvasBookmarks: CanvasBookmark[];
   blueprints: BlueprintDefinition[];
   constructionQueue: ConstructionQueueEntry[];
   productionPlans: ProductionTargetPlan[];

@@ -54,7 +54,9 @@ import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES_BY_BUILDING, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getSorterConstructionId, getTechnology, isConveyorBeltId } from "../game/content";
 import { POWER_GRID_IDS, POWER_GRID_LABELS, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltNetworkIds, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationSlots, getStationVesselCapacity, getStationWarperCapacity, isEntityInPowerCoverage, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import { getPlanetIndustrialProfile } from "../game/galaxy";
+import { analyzeBeltNetwork } from "../game/network";
 import type {
+  BeltRouteMode,
   BeltTier,
   BeltConnection,
   BuildingId,
@@ -303,6 +305,12 @@ interface InspectorPanelProps {
   onBeltPriorityChange: (beltId: string, priority: 0 | 1 | 2) => void;
   onBeltStackSizeChange: (beltId: string, stackSize: CargoStackSize) => void;
   onBeltMonitorChange: (beltId: string, enabled: boolean) => void;
+  onBeltRouteModeChange: (beltId: string, routeMode: BeltRouteMode) => void;
+  onBeltRouteOffsetChange: (beltId: string, routeOffsetY: number) => void;
+  onApplyBeltConfigurationToNetwork: (beltId: string) => void;
+  onFocusBeltNetwork: (beltId: string) => void;
+  onRemoveBeltNetwork: (beltId: string) => void;
+  focusedBeltNetworkId: string | null;
   onUpgradeBeltNetwork: (beltId: string) => void;
   onUpgradeSorterNetwork: (beltId: string) => void;
   onCopyBeltConfiguration: (beltId: string) => void;
@@ -975,13 +983,18 @@ function beltTierRoman(tier: BeltTier): string {
   return tier === 3 ? "III" : tier === 2 ? "II" : "I";
 }
 
-function BeltInspector({ game, belt, hasCopiedConfiguration, onPriorityChange, onStackSizeChange, onMonitorChange, onUpgrade, onSorterUpgrade, onUpgradeNetwork, onSorterUpgradeNetwork, onCopyConfiguration, onPasteConfiguration, onRemove }: {
+function BeltInspector({ game, belt, hasCopiedConfiguration, focused, onPriorityChange, onStackSizeChange, onMonitorChange, onRouteModeChange, onRouteOffsetChange, onApplyConfigurationToNetwork, onFocusNetwork, onUpgrade, onSorterUpgrade, onUpgradeNetwork, onSorterUpgradeNetwork, onCopyConfiguration, onPasteConfiguration, onRemove, onRemoveNetwork }: {
   game: GameState;
   belt: BeltConnection;
   hasCopiedConfiguration: boolean;
+  focused: boolean;
   onPriorityChange: (beltId: string, priority: 0 | 1 | 2) => void;
   onStackSizeChange: (beltId: string, stackSize: CargoStackSize) => void;
   onMonitorChange: (beltId: string, enabled: boolean) => void;
+  onRouteModeChange: (beltId: string, routeMode: BeltRouteMode) => void;
+  onRouteOffsetChange: (beltId: string, routeOffsetY: number) => void;
+  onApplyConfigurationToNetwork: (beltId: string) => void;
+  onFocusNetwork: (beltId: string) => void;
   onUpgrade: (beltId: string) => void;
   onSorterUpgrade: (beltId: string) => void;
   onUpgradeNetwork: (beltId: string) => void;
@@ -989,6 +1002,7 @@ function BeltInspector({ game, belt, hasCopiedConfiguration, onPriorityChange, o
   onCopyConfiguration: (beltId: string) => void;
   onPasteConfiguration: (beltId: string) => void;
   onRemove: (beltId: string) => void;
+  onRemoveNetwork: (beltId: string) => void;
 }) {
   const item = getItem(belt.itemId);
   const capacity = getBeltCapacity(belt);
@@ -1005,6 +1019,8 @@ function BeltInspector({ game, belt, hasCopiedConfiguration, onPriorityChange, o
   const networkIds = getBeltNetworkIds(game, belt.id);
   const stackSize = belt.stackSize ?? 1;
   const congestion = belt.congestion ?? 0;
+  const network = analyzeBeltNetwork(game, belt.id);
+  const routeMode = belt.routeMode ?? "auto";
   return (
     <div className="inspector-content">
       <div className="inspector-identity">
@@ -1024,16 +1040,33 @@ function BeltInspector({ game, belt, hasCopiedConfiguration, onPriorityChange, o
         <div><dt>拥堵指数</dt><dd className={congestion > 0.8 ? "status-text status-text--blocked" : ""}>{Math.round(congestion * 100)}%</dd></div>
       </dl>
       <div className="capacity-bar"><i style={{ width: `${Math.min(100, belt.lastFlow / capacity * 100)}%`, backgroundColor: item.color }} /></div>
+      {network ? <section className={`belt-network-diagnostic belt-network-diagnostic--${network.health}`}>
+        <header><span><Route size={14} />连续网络诊断</span><strong>{network.label}</strong></header>
+        <div>
+          <span>线路 <strong>{network.beltIds.length}</strong></span>
+          <span>节点 <strong>{network.entityIds.length}</strong></span>
+          <span>上游 <strong>{network.sourceEntityIds.length}</strong></span>
+          <span>下游 <strong>{network.sinkEntityIds.length}</strong></span>
+        </div>
+        <div className="belt-network-load"><i><b style={{ width: `${Math.min(100, network.utilization * 100)}%` }} /></i><span>综合利用率 {Math.round(network.utilization * 100)}%</span><strong>最高拥堵 {Math.round(network.maxCongestion * 100)}%</strong></div>
+      </section> : null}
       <section className="belt-routing-controls">
         <span>线路优先级</span>
         <div className="segmented-control">{([0, 1, 2] as const).map((priority) => <button className={belt.priority === priority ? "active" : ""} type="button" key={priority} onClick={() => onPriorityChange(belt.id, priority)}>{priority === 2 ? "高" : priority === 1 ? "标准" : "低"}</button>)}</div>
         <span>货物堆叠</span>
         <div className="segmented-control">{([1, 2, 4] as CargoStackSize[]).map((size) => <button className={stackSize === size ? "active" : ""} type="button" disabled={!canSetBeltStackSize(game, size)} key={size} onClick={() => onStackSizeChange(belt.id, size)}>×{size}</button>)}</div>
+        <span>画布路由</span>
+        <div className="segmented-control belt-route-mode">{([
+          ["bezier", "曲线"], ["auto", "避让"], ["upper", "上绕"], ["lower", "下绕"], ["manual", "手动"],
+        ] as Array<[BeltRouteMode, string]>).map(([mode, label]) => <button className={routeMode === mode ? "active" : ""} type="button" key={mode} onClick={() => onRouteModeChange(belt.id, mode)}>{label}</button>)}</div>
+        {routeMode === "manual" ? <label className="belt-route-offset"><span>控制点高度</span><input type="range" min={-600} max={600} step={20} value={belt.routeOffsetY ?? 0} onChange={(event) => onRouteOffsetChange(belt.id, Number(event.target.value))} /><output>{belt.routeOffsetY ?? 0}</output></label> : null}
         <label className="toggle-row"><input type="checkbox" checked={belt.monitorEnabled ?? false} onChange={(event) => onMonitorChange(belt.id, event.target.checked)} /><span>启用线路流量监测</span></label>
       </section>
       <div className="belt-clipboard-actions">
         <button type="button" onClick={() => onCopyConfiguration(belt.id)}><ClipboardCopy size={14} />复制设置</button>
         <button type="button" disabled={!hasCopiedConfiguration} onClick={() => onPasteConfiguration(belt.id)}><ClipboardPaste size={14} />粘贴设置</button>
+        <button type="button" onClick={() => onApplyConfigurationToNetwork(belt.id)}><Layers3 size={14} />设置应用整网</button>
+        <button type="button" className={focused ? "active" : ""} onClick={() => onFocusNetwork(belt.id)}><Route size={14} />{focused ? "取消网络聚焦" : "聚焦上下游"}</button>
       </div>
       {targetTier && targetId ? (
         <section className="equipment-upgrade equipment-upgrade--belt">
@@ -1066,6 +1099,9 @@ function BeltInspector({ game, belt, hasCopiedConfiguration, onPriorityChange, o
       <button className="danger-command" type="button" onClick={() => onRemove(belt.id)}>
         <Trash2 size={15} /> 回收运输线
       </button>
+      {network && network.beltIds.length > 1 ? <button className="danger-command danger-command--network" type="button" onClick={() => onRemoveNetwork(belt.id)}>
+        <Trash2 size={15} /> 回收整条网络 ×{network.beltIds.length}
+      </button> : null}
     </div>
   );
 }
@@ -1172,7 +1208,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
       ) : props.selectedEntity ? (
          <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} />
       ) : props.selectedBelt ? (
-        <BeltInspector game={props.game} belt={props.selectedBelt} hasCopiedConfiguration={props.hasCopiedBeltConfiguration} onPriorityChange={props.onBeltPriorityChange} onStackSizeChange={props.onBeltStackSizeChange} onMonitorChange={props.onBeltMonitorChange} onUpgrade={props.onUpgradeBelt} onSorterUpgrade={props.onUpgradeSorter} onUpgradeNetwork={props.onUpgradeBeltNetwork} onSorterUpgradeNetwork={props.onUpgradeSorterNetwork} onCopyConfiguration={props.onCopyBeltConfiguration} onPasteConfiguration={props.onPasteBeltConfiguration} onRemove={props.onRemoveBelt} />
+        <BeltInspector game={props.game} belt={props.selectedBelt} hasCopiedConfiguration={props.hasCopiedBeltConfiguration} focused={props.focusedBeltNetworkId === props.selectedBelt.id} onPriorityChange={props.onBeltPriorityChange} onStackSizeChange={props.onBeltStackSizeChange} onMonitorChange={props.onBeltMonitorChange} onRouteModeChange={props.onBeltRouteModeChange} onRouteOffsetChange={props.onBeltRouteOffsetChange} onApplyConfigurationToNetwork={props.onApplyBeltConfigurationToNetwork} onFocusNetwork={props.onFocusBeltNetwork} onUpgrade={props.onUpgradeBelt} onSorterUpgrade={props.onUpgradeSorter} onUpgradeNetwork={props.onUpgradeBeltNetwork} onSorterUpgradeNetwork={props.onUpgradeSorterNetwork} onCopyConfiguration={props.onCopyBeltConfiguration} onPasteConfiguration={props.onPasteBeltConfiguration} onRemove={props.onRemoveBelt} onRemoveNetwork={props.onRemoveBeltNetwork} />
       ) : <InspectorEmpty game={props.game} />}
     </aside>
   );

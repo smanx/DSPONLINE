@@ -10,9 +10,11 @@ import {
   adjustStationDrones,
   adjustStationWarpers,
   adjustStationVessels,
+  addCanvasBookmark,
   addDysonSwarmOrbit,
   advanceSimulation,
   applyBeltConfiguration,
+  applyBeltConfigurationToNetwork,
   canExploreStarSystem,
   canColonizePlanet,
   canPlaceBlueprint,
@@ -74,6 +76,8 @@ import {
   processConstructionQueue,
   queueBlueprint,
   removeEntity,
+  removeBeltNetwork,
+  removeCanvasBookmark,
   removeDysonNode,
   removeDysonSwarmOrbit,
   removeQueuedTechnology,
@@ -84,6 +88,8 @@ import {
   setActivePlanet,
   setActiveDysonSwarmOrbit,
   setBeltPriority,
+  setBeltRouteMode,
+  setBeltRouteOffsetY,
   setBlueprintRecipeOverride,
   setBlueprintTransform,
   setBeltMonitorEnabled,
@@ -96,6 +102,7 @@ import {
   setDysonSwarmOrbit,
   setRecipeFocus,
   setRecipeFocusMode,
+  renameCanvasBookmark,
   setEntitiesRecipe,
   setEnergyMode,
   setFuelItem,
@@ -898,6 +905,53 @@ describe("factory simulation", () => {
       titanium_ingot: 3,
       sulfuric_acid: 3,
     });
+  });
+
+  it("applies routing configuration to and removes a continuous belt network", () => {
+    let state = createInitialState();
+    state.construction.storage_mk1 = 1;
+    state.construction.arc_smelter = 1;
+    state.construction.conveyor_belt_mk1 = 2;
+    state = placeBuilding(state, "storage_mk1", { x: 0, y: 0 });
+    state = placeBuilding(state, "arc_smelter", { x: 400, y: 0 });
+    const storage = state.entities.find((entity) => entity.buildingId === "storage_mk1")!;
+    const smelter = state.entities.find((entity) => entity.buildingId === "arc_smelter")!;
+    state = setLogisticsItem(state, storage.id, "iron_ore");
+    state = connectBelt(state, "vein_iron", storage.id, "iron_ore");
+    state = connectBelt(state, storage.id, smelter.id, "iron_ore");
+    state = setBeltPriority(state, state.belts[0].id, 2);
+    state = setBeltMonitorEnabled(state, state.belts[0].id, true);
+    state = setBeltRouteMode(state, state.belts[0].id, "upper");
+    state = applyBeltConfigurationToNetwork(state, state.belts[0].id);
+
+    expect(state.belts).toHaveLength(2);
+    expect(state.belts.every((belt) => belt.priority === 2 && belt.monitorEnabled && belt.routeMode === "upper")).toBe(true);
+    state = removeBeltNetwork(state, state.belts[0].id);
+    expect(state.belts).toHaveLength(0);
+    expect(state.construction.conveyor_belt_mk1).toBe(2);
+  });
+
+  it("persists manual route control points and manages deterministic canvas bookmarks", () => {
+    let state = createInitialState();
+    state.construction.arc_smelter = 1;
+    state.construction.conveyor_belt_mk1 = 1;
+    state = placeBuilding(state, "arc_smelter", { x: 300, y: 0 });
+    const smelter = state.entities.find((entity) => entity.buildingId === "arc_smelter")!;
+    state = connectBelt(state, "vein_iron", smelter.id, "iron_ore");
+    state = setBeltRouteOffsetY(state, state.belts[0].id, 720);
+    expect(state.belts[0]).toMatchObject({ routeMode: "manual", routeOffsetY: 600 });
+
+    state = addCanvasBookmark(state, "home", { x: 123.4, y: -88.8, zoom: 0.873 }, "炼铁区");
+    expect(state.canvasBookmarks).toEqual([expect.objectContaining({
+      name: "炼铁区",
+      planetId: "home",
+      viewport: { x: 123, y: -89, zoom: 0.87 },
+    })]);
+    const bookmarkId = state.canvasBookmarks[0].id;
+    state = renameCanvasBookmark(state, bookmarkId, "高炉主线");
+    expect(state.canvasBookmarks[0].name).toBe("高炉主线");
+    state = removeCanvasBookmark(state, bookmarkId);
+    expect(state.canvasBookmarks).toEqual([]);
   });
 
   it("splits output fairly and can reserve flow for a priority line", () => {

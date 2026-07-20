@@ -1168,6 +1168,60 @@ async function openEdgeOverlapGame(page: Page) {
   await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
 }
 
+async function openBeltNetworkGame(page: Page) {
+  await page.addInitScript(() => {
+    const base = { planetId: "home", machineCount: 1, minerCount: 0, inputs: {}, outputs: {}, progress: 0, routingCursor: 0, utilization: 0, productionRate: 0 };
+    const storage = (id: string, x: number, outputs: Record<string, number> = {}) => ({
+      ...base,
+      id,
+      kind: "storage",
+      position: { x, y: 0 },
+      buildingId: "storage_mk1",
+      storedItemId: "iron_ingot",
+      outputs,
+    });
+    const belt = (id: string, source: string, target: string) => ({
+      id,
+      planetId: "home",
+      source,
+      target,
+      itemId: "iron_ingot",
+      lanes: 1,
+      tier: 1,
+      sorterTier: 1,
+      progress: 0,
+      priority: 0,
+      stackSize: 1,
+      monitorEnabled: false,
+      totalTransferred: 0,
+      congestion: 0,
+      lastFlow: 0,
+      routeMode: "auto",
+    });
+    const state = {
+      version: 23,
+      nextId: 8,
+      activePlanetId: "home",
+      entities: [
+        storage("network_source", -420, { iron_ingot: 40 }),
+        storage("network_buffer", 0, { iron_ingot: 10 }),
+        storage("network_sink", 420),
+        { ...base, id: "network_unrelated", kind: "power", position: { x: 0, y: 360 }, buildingId: "wind_turbine", powerOutputKw: 0 },
+      ],
+      belts: [belt("network_belt_1", "network_source", "network_buffer"), belt("network_belt_2", "network_buffer", "network_sink")],
+      construction: { conveyor_belt_mk1: 0 },
+      tray: {},
+      planetTrays: { home: {} },
+      totalProduced: {},
+      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["basic_logistics"] },
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
 async function openOfflineStageGame(page: Page) {
   await page.addInitScript(() => {
     const base = {
@@ -1818,7 +1872,7 @@ test("production equipment and belt lanes upgrade in place without losing the ne
   await expect(page.locator(".inspector-identity")).toContainText("制造台 Mk.II ×1");
   await expect(page.locator(".react-flow__edge")).toHaveCount(1);
 
-  await page.locator(".react-flow__edge-interaction").click({ force: true });
+  await page.locator(".react-flow__edge").evaluate((element: SVGGElement) => element.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   await expect(page.locator(".inspector-content")).toContainText("传送带等级");
   await expect(page.getByTitle("升级为传送带 Mk.II")).toBeEnabled();
   await page.getByTitle("升级为传送带 Mk.II").click();
@@ -2067,7 +2121,7 @@ test("a chemical plant accepts plastic, refined oil and water transport lines to
     ["labels", ".react-flow__edgelabel-renderer"],
     ["nodes", ".react-flow__nodes"],
   ].map(([key, selector]) => [key, Number.parseInt(getComputedStyle(document.querySelector(selector)!).zIndex || "0", 10)])));
-  expect(layerZIndexes.edgeHitLayer).toBeGreaterThan(layerZIndexes.nodes);
+  expect(layerZIndexes.edgeHitLayer).toBeLessThan(layerZIndexes.nodes);
   expect(layerZIndexes.visibleEdges).toBeLessThan(layerZIndexes.nodes);
   expect(layerZIndexes.labels).toBeLessThan(layerZIndexes.nodes);
   await expect(page.getByTitle("选择传送带 Mk.I连接节点端口", { exact: true })).toContainText("×0");
@@ -2194,6 +2248,71 @@ test("a building card owns clicks where a belt passes behind it", async ({ page 
   await page.mouse.click(point.x, point.y);
   await expect(blocker).toHaveClass(/selected/);
   await expect(page.locator(".react-flow__edge.selected")).toHaveCount(0);
+});
+
+test("continuous belt networks diagnose, reroute, focus, synchronize and recycle as one", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openBeltNetworkGame(page);
+  await page.locator(".react-flow__controls-fitview").click();
+
+  const edges = page.locator(".react-flow__edge");
+  await expect(edges).toHaveCount(2);
+  await page.getByLabel("打开生产网络总览").click();
+  const statistics = page.getByRole("dialog", { name: "生产统计" });
+  await expect(statistics.getByRole("tab", { name: /网络/ })).toHaveAttribute("aria-selected", "true");
+  await expect(statistics.locator(".network-row")).toHaveCount(1);
+  await statistics.getByLabel("吞吐热力图").check();
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-network-heatmap", "true");
+  await statistics.locator(".network-row input[type=checkbox]").check();
+  await statistics.getByLabel("批量线路路由").selectOption("lower");
+  await statistics.getByRole("button", { name: "批量改道" }).click();
+  await statistics.getByLabel("画布书签名称").fill("铁块主干");
+  await statistics.getByLabel("保存当前画布视角").click();
+  await expect(statistics.getByLabel("铁块主干名称")).toHaveValue("铁块主干");
+  await page.screenshot({ path: "artifacts/qa/network-overview-3-desktop.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(async () => statistics.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(statistics.locator(".network-row")).toBeVisible();
+  await page.screenshot({ path: "artifacts/qa/network-overview-3-mobile.png", fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await statistics.getByLabel("定位铁块网络").click();
+  await expect(statistics).toHaveCount(0);
+
+  await edges.first().evaluate((element: SVGGElement) => element.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  const inspector = page.locator(".inspector-panel");
+  await expect(inspector.locator(".belt-network-diagnostic")).toContainText("连续网络诊断");
+  await expect(inspector.locator(".belt-network-diagnostic")).toContainText("线路 2");
+
+  const beforePath = await page.locator(".factory-edge-visual-path").first().getAttribute("d");
+  await inspector.getByRole("button", { name: "手动", exact: true }).click();
+  await inspector.locator(".belt-route-offset input").fill("240");
+  await expect(inspector.locator(".belt-route-offset output")).toHaveText("240");
+  const manualPath = await page.locator(".factory-edge-visual-path").first().getAttribute("d");
+  expect(manualPath).not.toBe(beforePath);
+  await inspector.getByRole("button", { name: "上绕", exact: true }).click();
+  const afterPath = await page.locator(".factory-edge-visual-path").first().getAttribute("d");
+  expect(afterPath).not.toBe(manualPath);
+  await inspector.getByRole("button", { name: "高", exact: true }).click();
+  await inspector.getByRole("button", { name: "设置应用整网" }).click();
+
+  await edges.nth(1).evaluate((element: SVGGElement) => element.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await expect(inspector.getByRole("button", { name: "上绕", exact: true })).toHaveClass(/active/);
+  await expect(inspector.getByRole("button", { name: "高", exact: true })).toHaveClass(/active/);
+  await inspector.getByRole("button", { name: "聚焦上下游" }).click();
+  await expect(page.locator('.react-flow__node[data-id="network_unrelated"]')).toHaveClass(/factory-flow-node--network-dim/);
+  await expect(page.locator(".network-focus-indicator")).toContainText("2 线路");
+  await page.screenshot({ path: "artifacts/qa/belt-network-3-desktop.png", fullPage: true });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  if (!await page.locator(".game-shell").evaluate((element) => element.classList.contains("mobile-panel--inspector"))) {
+    await page.getByLabel("打开检查器").click();
+  }
+  await expect(inspector.locator(".belt-network-diagnostic")).toBeVisible();
+  await expect.poll(async () => inspector.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/belt-network-3-mobile.png", fullPage: true });
+  await inspector.getByRole("button", { name: "回收整条网络 ×2" }).click();
+  await expect(page.locator(".react-flow__edge")).toHaveCount(0);
+  await expect(page.getByTitle("选择传送带 Mk.I连接节点端口")).toContainText("×4");
 });
 
 test("Dyson planner builds independent orbital layers across unlocked star systems", async ({ page }) => {
@@ -2349,7 +2468,7 @@ test("planetary drones, orbital collection, station warpers and sorter upgrades 
   await expect.poll(async () => Number(await hydrogenDemand.getByTitle("拿取氢").locator("strong").textContent()), { timeout: 4_000 }).toBeGreaterThanOrEqual(10);
   await page.screenshot({ path: "artifacts/qa/complete-logistics-home-1440.png", fullPage: true });
 
-  await page.locator(".react-flow__edge").click();
+  await page.locator(".react-flow__edge").evaluate((element: SVGGElement) => element.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   await expect(inspector).toContainText("分拣器等级");
   await inspector.getByRole("button", { name: "升级分拣器 ×1" }).click();
   await expect(inspector).toContainText("Mk.II");

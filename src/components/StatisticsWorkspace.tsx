@@ -1,4 +1,4 @@
-import { AlertTriangle, BarChart3, Box, Calculator, CircleCheckBig, Factory, Gauge, Orbit, Pause, Play, Plus, Rocket, Route, Search, Send, Sparkles, Trash2, TrendingUp, X, Zap } from "lucide-react";
+import { AlertTriangle, ArrowUp, BarChart3, Bookmark, BookmarkPlus, Box, Calculator, CheckSquare, CircleCheckBig, ClipboardCopy, Factory, Focus, Gauge, Layers3, MapPin, Orbit, Pause, Play, Plus, Rocket, Route, Search, Send, Sparkles, Trash2, TrendingUp, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ITEMS, PLANET_LIST, getBuilding, getItem, getPlanet, getRecipe } from "../game/content";
 import { calculateProductionPlan, getProductionRecipeOptions } from "../game/planning";
@@ -6,10 +6,11 @@ import { calculateFactoryStatistics, type ItemStatistics } from "../game/statist
 import { getGalacticIndustrySnapshot, getPowerGridMetrics, POWER_GRID_IDS, POWER_GRID_LABELS } from "../game/engine";
 import { GALACTIC_EXPORT_DEFINITIONS, INFINITE_RESEARCH_DEFINITIONS, getGalacticExportTarget, getInfiniteResearchCompletion, getInfiniteResearchCost, getInfiniteResearchLevel } from "../game/endgame";
 import { getPlanetIndustrialProfile } from "../game/galaxy";
-import type { GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, RecipeId } from "../game/types";
+import { listBeltNetworks, type BeltHealth } from "../game/network";
+import type { BeltRouteMode, CanvasBookmark, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, RecipeId } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
-export type StatisticsTab = "production" | "planning" | "power" | "issues" | "galaxy";
+export type StatisticsTab = "production" | "networks" | "planning" | "power" | "issues" | "galaxy";
 type ItemFilter = "all" | "producing" | "deficit" | "blocked";
 type ItemSort = "production" | "consumption" | "net" | "inventory" | "name";
 
@@ -28,6 +29,16 @@ interface StatisticsWorkspaceProps {
   onGalacticExportEnabled: (projectId: GalacticExportProjectId, enabled: boolean) => void;
   onGalacticExportPriority: (projectId: GalacticExportProjectId, priority: LogisticsPriority) => void;
   onDispatchGalacticExport: (projectId: GalacticExportProjectId) => void;
+  onFocusBeltNetwork: (beltId: string, planetId: PlanetId) => void;
+  onBulkBeltUpgrade: (beltIds: string[], target: "belt" | "sorter") => void;
+  onBulkBeltRoute: (beltIds: string[], routeMode: BeltRouteMode) => void;
+  onBulkBeltConfiguration: (beltIds: string[]) => void;
+  onBulkBeltRemove: (beltIds: string[]) => void;
+  onBeltHeatmapChange: (enabled: boolean) => void;
+  onAddCanvasBookmark: (name: string) => void;
+  onRenameCanvasBookmark: (bookmarkId: string, name: string) => void;
+  onOpenCanvasBookmark: (bookmark: CanvasBookmark) => void;
+  onRemoveCanvasBookmark: (bookmarkId: string) => void;
   focusTab?: StatisticsTab | null;
 }
 
@@ -56,7 +67,87 @@ function sortItems(items: ItemStatistics[], sort: ItemSort): ItemStatistics[] {
   });
 }
 
-export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, focusTab }: StatisticsWorkspaceProps) {
+const NETWORK_HEALTH_LABELS: Record<BeltHealth, string> = {
+  healthy: "稳定",
+  underused: "低负载",
+  starved: "缺料",
+  congested: "拥堵",
+  idle: "等待",
+};
+
+function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark }: Pick<StatisticsWorkspaceProps,
+  "game" | "onFocusBeltNetwork" | "onBulkBeltUpgrade" | "onBulkBeltRoute" | "onBulkBeltConfiguration" | "onBulkBeltRemove" | "onBeltHeatmapChange" | "onAddCanvasBookmark" | "onRenameCanvasBookmark" | "onOpenCanvasBookmark" | "onRemoveCanvasBookmark">) {
+  const [scope, setScope] = useState<"active" | "all">("active");
+  const [health, setHealth] = useState<BeltHealth | "all">("all");
+  const [query, setQuery] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [routeMode, setRouteMode] = useState<BeltRouteMode>("auto");
+  const [bookmarkName, setBookmarkName] = useState("");
+  const allNetworks = useMemo(() => listBeltNetworks(game, scope === "active" ? game.activePlanetId : undefined), [game, scope]);
+  const networks = useMemo(() => allNetworks.filter((network) => {
+    if (health !== "all" && network.health !== health) return false;
+    const term = query.trim().toLocaleLowerCase("zh-CN");
+    return !term || `${getItem(network.itemId).name} ${getPlanet(network.planetId).name} ${network.label}`.toLocaleLowerCase("zh-CN").includes(term);
+  }), [allNetworks, health, query]);
+  const visibleIds = networks.map((network) => network.originBeltId);
+  const selectedVisible = selectedIds.filter((id) => visibleIds.includes(id));
+  const selectedCount = selectedVisible.length;
+  const totalFlow = allNetworks.reduce((sum, network) => sum + network.totalFlow, 0);
+  const totalCapacity = allNetworks.reduce((sum, network) => sum + network.totalCapacity, 0);
+  const problemCount = allNetworks.filter((network) => network.health === "congested" || network.health === "starved").length;
+
+  useEffect(() => {
+    setSelectedIds((current) => current.filter((id) => allNetworks.some((network) => network.originBeltId === id)));
+  }, [allNetworks]);
+
+  const toggleNetwork = (id: string) => setSelectedIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  return (
+    <div className="statistics-content network-overview">
+      <section className="network-summary-band">
+        <div><span>连续网络</span><strong>{allNetworks.length}</strong><small>{scope === "active" ? getPlanet(game.activePlanetId).name : "全星区"}</small></div>
+        <div><span>实时吞吐</span><strong>{totalFlow.toFixed(1)}<small>/s</small></strong><small>容量 {totalCapacity.toFixed(0)}/s</small></div>
+        <div className={problemCount > 0 ? "warning" : ""}><span>需处理</span><strong>{problemCount}</strong><small>拥堵或缺料</small></div>
+        <label className="network-heatmap-toggle"><input type="checkbox" checked={game.settings.beltHeatmapEnabled} onChange={(event) => onBeltHeatmapChange(event.target.checked)} /><span>吞吐热力图</span><strong>{game.settings.beltHeatmapEnabled ? "显示中" : "关闭"}</strong></label>
+      </section>
+      <div className="network-toolbar">
+        <label className="statistics-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="物品、行星或状态" aria-label="筛选运输网络" /></label>
+        <div className="statistics-filter network-scope" aria-label="网络范围"><button type="button" className={scope === "active" ? "active" : ""} onClick={() => setScope("active")}>当前行星</button><button type="button" className={scope === "all" ? "active" : ""} onClick={() => setScope("all")}>全星区</button></div>
+        <label className="statistics-sort"><span>状态</span><select value={health} onChange={(event) => setHealth(event.target.value as BeltHealth | "all")}><option value="all">全部</option>{Object.entries(NETWORK_HEALTH_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+      </div>
+      <section className={`network-batch-bar${selectedCount > 0 ? " network-batch-bar--active" : ""}`} aria-label="批量线路操作">
+        <button type="button" className="network-select-all" onClick={() => setSelectedIds(selectedCount === visibleIds.length ? [] : visibleIds)}><CheckSquare size={14} />{selectedCount === visibleIds.length && visibleIds.length > 0 ? "取消全选" : "选择当前结果"}</button>
+        <strong>{selectedCount} 个网络</strong>
+        <button type="button" disabled={selectedCount === 0} onClick={() => onBulkBeltUpgrade(selectedVisible, "belt")}><ArrowUp size={14} />升级传送带</button>
+        <button type="button" disabled={selectedCount === 0} onClick={() => onBulkBeltUpgrade(selectedVisible, "sorter")}><Layers3 size={14} />升级分拣器</button>
+        <label><select value={routeMode} onChange={(event) => setRouteMode(event.target.value as BeltRouteMode)} aria-label="批量线路路由"><option value="auto">自动避让</option><option value="bezier">曲线</option><option value="upper">上绕</option><option value="lower">下绕</option><option value="manual">手动控制点</option></select><button type="button" disabled={selectedCount === 0} onClick={() => onBulkBeltRoute(selectedVisible, routeMode)}><Route size={14} />批量改道</button></label>
+        <button type="button" disabled={selectedCount < 2} onClick={() => onBulkBeltConfiguration(selectedVisible)} title="使用首个所选网络的设置覆盖其余网络"><ClipboardCopy size={14} />同步首条设置</button>
+        <button className="danger" type="button" disabled={selectedCount === 0} onClick={() => { onBulkBeltRemove(selectedVisible); setSelectedIds([]); }}><Trash2 size={14} />批量回收</button>
+      </section>
+      <div className="network-workspace-layout">
+        <section className="network-ledger">
+          <header><span>选择 / 物品</span><span>行星与拓扑</span><span>吞吐</span><span>诊断</span><span>定位</span></header>
+          <div>{networks.length === 0 ? <div className="statistics-empty"><Route size={22} /><span>没有符合条件的运输网络</span></div> : networks.map((network) => {
+            const bottleneck = network.diagnostics.find((diagnostic) => diagnostic.beltId === network.bottleneckBeltId);
+            return <article className={`network-row network-row--${network.health}${selectedIds.includes(network.originBeltId) ? " network-row--selected" : ""}`} key={network.originBeltId}>
+              <label><input type="checkbox" checked={selectedIds.includes(network.originBeltId)} onChange={() => toggleNetwork(network.originBeltId)} /><ItemMark itemId={network.itemId} /><span><strong>{getItem(network.itemId).name}</strong><small>{NETWORK_HEALTH_LABELS[network.health]}</small></span></label>
+              <span><strong>{getPlanet(network.planetId).name}</strong><small>{network.beltIds.length} 线路 · {network.entityIds.length} 节点 · {network.sourceEntityIds.length}→{network.sinkEntityIds.length}</small></span>
+              <span className="network-throughput"><i><b style={{ width: `${network.utilization * 100}%` }} /></i><strong>{network.totalFlow.toFixed(1)} / {network.totalCapacity.toFixed(0)} s⁻¹</strong><small>{Math.round(network.utilization * 100)}% 利用率</small></span>
+              <span><strong>{network.label}</strong><small>{bottleneck?.label ?? "无瓶颈"}{network.capacityDeficit > 0.01 ? ` · 缺口 ${network.capacityDeficit.toFixed(1)}/s` : ""}</small></span>
+              <button type="button" onClick={() => onFocusBeltNetwork(network.originBeltId, network.planetId)} title={`定位${getItem(network.itemId).name}网络`} aria-label={`定位${getItem(network.itemId).name}网络`}><Focus size={15} /></button>
+            </article>;
+          })}</div>
+        </section>
+        <aside className="canvas-bookmarks">
+          <header><Bookmark size={15} /><span>画布书签</span><strong>{game.canvasBookmarks.length}/24</strong></header>
+          <form onSubmit={(event) => { event.preventDefault(); onAddCanvasBookmark(bookmarkName); setBookmarkName(""); }}><input value={bookmarkName} onChange={(event) => setBookmarkName(event.target.value)} maxLength={28} placeholder={`${getPlanet(game.activePlanetId).name}视角`} aria-label="画布书签名称" /><button type="submit" title="保存当前画布视角" aria-label="保存当前画布视角"><BookmarkPlus size={14} /></button></form>
+          <div>{game.canvasBookmarks.length === 0 ? <p><MapPin size={18} /><span>尚未保存视角</span></p> : game.canvasBookmarks.map((bookmark) => <article key={bookmark.id}><MapPin size={13} /><span><input defaultValue={bookmark.name} aria-label={`${bookmark.name}名称`} onBlur={(event) => onRenameCanvasBookmark(bookmark.id, event.target.value)} /><small>{getPlanet(bookmark.planetId).name} · {Math.round(bookmark.viewport.zoom * 100)}%</small></span><button type="button" onClick={() => onOpenCanvasBookmark(bookmark)} title={`打开${bookmark.name}`} aria-label={`打开${bookmark.name}`}><Focus size={13} /></button><button className="danger" type="button" onClick={() => onRemoveCanvasBookmark(bookmark.id)} title={`删除${bookmark.name}`} aria-label={`删除${bookmark.name}`}><Trash2 size={13} /></button></article>)}</div>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark, focusTab }: StatisticsWorkspaceProps) {
   const [tab, setTab] = useState<StatisticsTab>("production");
   const [filter, setFilter] = useState<ItemFilter>("all");
   const [sort, setSort] = useState<ItemSort>("production");
@@ -109,6 +200,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
 
       <nav className="statistics-tabs" role="tablist" aria-label="统计视图">
         <button type="button" role="tab" aria-selected={tab === "production"} className={tab === "production" ? "active" : ""} onClick={() => setTab("production")}><Factory size={15} />生产</button>
+        <button type="button" role="tab" aria-selected={tab === "networks"} className={tab === "networks" ? "active" : ""} onClick={() => setTab("networks")}><Route size={15} />网络 <strong>{listBeltNetworks(game).length}</strong></button>
         <button type="button" role="tab" aria-selected={tab === "planning"} className={tab === "planning" ? "active" : ""} onClick={() => setTab("planning")}><Calculator size={15} />规划 <strong>{game.productionPlans.length}</strong></button>
         <button type="button" role="tab" aria-selected={tab === "power"} className={tab === "power" ? "active" : ""} onClick={() => setTab("power")}><Zap size={15} />电力</button>
         <button type="button" role="tab" aria-selected={tab === "issues"} className={tab === "issues" ? "active" : ""} onClick={() => setTab("issues")}><AlertTriangle size={15} />瓶颈 <strong>{statistics.issues.length}</strong></button>
@@ -145,6 +237,8 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
           </div>
         </div>
       ) : null}
+
+      {tab === "networks" ? <NetworkOverview game={game} onFocusBeltNetwork={onFocusBeltNetwork} onBulkBeltUpgrade={onBulkBeltUpgrade} onBulkBeltRoute={onBulkBeltRoute} onBulkBeltConfiguration={onBulkBeltConfiguration} onBulkBeltRemove={onBulkBeltRemove} onBeltHeatmapChange={onBeltHeatmapChange} onAddCanvasBookmark={onAddCanvasBookmark} onRenameCanvasBookmark={onRenameCanvasBookmark} onOpenCanvasBookmark={onOpenCanvasBookmark} onRemoveCanvasBookmark={onRemoveCanvasBookmark} /> : null}
 
       {tab === "planning" ? (
         <div className="statistics-content production-planning">

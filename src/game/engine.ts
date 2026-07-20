@@ -31,6 +31,7 @@ import {
 } from "./galaxy";
 import type {
   BeltTier,
+  BeltRouteMode,
   BeltConnection,
   BlueprintDefinition,
   BlueprintMirror,
@@ -138,6 +139,7 @@ function copyState(state: GameState): GameState {
       proliferatorBonusProgress: { ...entity.proliferatorBonusProgress },
     })),
     belts: state.belts.map((belt) => ({ ...belt })),
+    canvasBookmarks: state.canvasBookmarks.map((bookmark) => ({ ...bookmark, viewport: { ...bookmark.viewport } })),
     cargo: state.cargo ? { ...state.cargo, origin: state.cargo.origin ? { ...state.cargo.origin } : undefined } : null,
     tray: { ...state.tray },
     planetTrays,
@@ -445,6 +447,7 @@ export function createInitialState(): GameState {
       performanceMode: false,
       reducedMotion: false,
       soundEnabled: false,
+      beltHeatmapEnabled: false,
       autosaveIntervalSeconds: 2,
       resourceMode: "finite",
       difficulty: "standard",
@@ -456,6 +459,7 @@ export function createInitialState(): GameState {
       completedTaskIds: [],
       rewardedTaskIds: [],
     },
+    canvasBookmarks: [],
     blueprints: [],
     constructionQueue: [],
     productionPlans: [],
@@ -3021,6 +3025,8 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
         priority: belt.priority,
         stackSize: belt.stackSize,
         monitorEnabled: belt.monitorEnabled,
+        routeMode: belt.routeMode ?? "auto",
+        routeOffsetY: belt.routeOffsetY,
       })),
     externalPorts: state.belts
       .filter((belt) => keyById.has(belt.source) !== keyById.has(belt.target))
@@ -3236,6 +3242,8 @@ export function placeBlueprint(
       priority: template.priority,
       stackSize: template.stackSize ?? 1,
       monitorEnabled: template.monitorEnabled ?? false,
+      routeMode: template.routeMode ?? "auto",
+      routeOffsetY: template.routeOffsetY,
       totalTransferred: 0,
       congestion: 0,
       lastFlow: 0,
@@ -3501,6 +3509,39 @@ export function setRecipeFocusPosition(state: GameState, position: { x: number; 
   const y = Number.isFinite(position.y) ? Math.max(8, Math.round(position.y)) : state.recipeFocus.position.y;
   if (state.recipeFocus.position.x === x && state.recipeFocus.position.y === y) return state;
   return { ...state, recipeFocus: { ...state.recipeFocus, position: { x, y } } };
+}
+
+export function addCanvasBookmark(
+  state: GameState,
+  planetId: PlanetId,
+  viewport: { x: number; y: number; zoom: number },
+  name?: string,
+): GameState {
+  if (!PLANET_LIST.some((planet) => planet.id === planetId) || !Number.isFinite(viewport.x) ||
+    !Number.isFinite(viewport.y) || !Number.isFinite(viewport.zoom)) return state;
+  const bookmark = {
+    id: `bookmark_${state.nextId}`,
+    name: name?.trim().slice(0, 28) || `${getPlanet(planetId).name}视角 ${state.canvasBookmarks.length + 1}`,
+    planetId,
+    viewport: {
+      x: Math.round(viewport.x),
+      y: Math.round(viewport.y),
+      zoom: Math.max(0.1, Math.min(2.5, Math.round(viewport.zoom * 100) / 100)),
+    },
+    createdAtSeconds: Math.max(0, state.elapsedSeconds),
+  } satisfies GameState["canvasBookmarks"][number];
+  return { ...state, nextId: state.nextId + 1, canvasBookmarks: [...state.canvasBookmarks, bookmark].slice(-24) };
+}
+
+export function renameCanvasBookmark(state: GameState, bookmarkId: string, name: string): GameState {
+  const trimmed = name.trim().slice(0, 28);
+  if (!trimmed || !state.canvasBookmarks.some((bookmark) => bookmark.id === bookmarkId)) return state;
+  return { ...state, canvasBookmarks: state.canvasBookmarks.map((bookmark) => bookmark.id === bookmarkId ? { ...bookmark, name: trimmed } : bookmark) };
+}
+
+export function removeCanvasBookmark(state: GameState, bookmarkId: string): GameState {
+  if (!state.canvasBookmarks.some((bookmark) => bookmark.id === bookmarkId)) return state;
+  return { ...state, canvasBookmarks: state.canvasBookmarks.filter((bookmark) => bookmark.id !== bookmarkId) };
 }
 
 export function setEntitiesRecipe(state: GameState, entityIds: string[], recipeId: RecipeId): GameState {
@@ -3789,6 +3830,7 @@ export function connectBelt(state: GameState, sourceId: string, targetId: string
       totalTransferred: 0,
       congestion: 0,
       lastFlow: 0,
+      routeMode: "auto",
     });
     next.nextId += 1;
   }
@@ -4281,6 +4323,25 @@ export function setBeltMonitorEnabled(state: GameState, beltId: string, enabled:
   };
 }
 
+const BELT_ROUTE_MODES: BeltRouteMode[] = ["bezier", "auto", "upper", "lower", "manual"];
+
+export function setBeltRouteMode(state: GameState, beltId: string, routeMode: BeltRouteMode): GameState {
+  if (!BELT_ROUTE_MODES.includes(routeMode) || !state.belts.some((belt) => belt.id === beltId)) return state;
+  return {
+    ...state,
+    belts: state.belts.map((belt) => belt.id === beltId ? { ...belt, routeMode } : belt),
+  };
+}
+
+export function setBeltRouteOffsetY(state: GameState, beltId: string, routeOffsetY: number): GameState {
+  if (!Number.isFinite(routeOffsetY) || !state.belts.some((belt) => belt.id === beltId)) return state;
+  const offset = Math.max(-600, Math.min(600, Math.round(routeOffsetY)));
+  return {
+    ...state,
+    belts: state.belts.map((belt) => belt.id === beltId ? { ...belt, routeMode: "manual", routeOffsetY: offset } : belt),
+  };
+}
+
 export function getBeltNetworkIds(state: GameState, beltId: string): string[] {
   const origin = state.belts.find((belt) => belt.id === beltId);
   if (!origin) return [];
@@ -4309,6 +4370,42 @@ export function upgradeSorterNetwork(state: GameState, beltId: string): GameStat
   return getBeltNetworkIds(state, beltId).reduce((current, id) => upgradeSorter(current, id), state);
 }
 
+export function setBeltNetworkRouteMode(state: GameState, beltId: string, routeMode: BeltRouteMode): GameState {
+  if (!BELT_ROUTE_MODES.includes(routeMode)) return state;
+  const ids = new Set(getBeltNetworkIds(state, beltId));
+  if (ids.size === 0) return state;
+  return { ...state, belts: state.belts.map((belt) => ids.has(belt.id) ? { ...belt, routeMode } : belt) };
+}
+
+export function applyBeltConfigurationToNetwork(state: GameState, sourceBeltId: string): GameState {
+  const source = state.belts.find((belt) => belt.id === sourceBeltId);
+  if (!source) return state;
+  const ids = new Set(getBeltNetworkIds(state, sourceBeltId));
+  const stackSize = canSetBeltStackSize(state, source.stackSize ?? 1) ? source.stackSize ?? 1 : 1;
+  return {
+    ...state,
+    belts: state.belts.map((belt) => ids.has(belt.id) ? {
+      ...belt,
+      priority: source.priority,
+      stackSize,
+      monitorEnabled: source.monitorEnabled,
+      routeMode: source.routeMode ?? "auto",
+      routeOffsetY: source.routeOffsetY,
+      progress: 0,
+    } : belt),
+  };
+}
+
+export function removeBeltNetwork(state: GameState, beltId: string): GameState {
+  const ids = new Set(getBeltNetworkIds(state, beltId));
+  if (ids.size === 0) return state;
+  const next = copyState(state);
+  const removed = next.belts.filter((belt) => ids.has(belt.id));
+  refundBelts(next, removed);
+  next.belts = next.belts.filter((belt) => !ids.has(belt.id));
+  return next;
+}
+
 export function applyBeltConfiguration(state: GameState, sourceBeltId: string, targetBeltId: string): GameState {
   const source = state.belts.find((belt) => belt.id === sourceBeltId);
   const target = state.belts.find((belt) => belt.id === targetBeltId);
@@ -4321,6 +4418,8 @@ export function applyBeltConfiguration(state: GameState, sourceBeltId: string, t
       priority: source.priority,
       stackSize,
       monitorEnabled: source.monitorEnabled,
+      routeMode: source.routeMode ?? "auto",
+      routeOffsetY: source.routeOffsetY,
       progress: 0,
     } : belt),
   };

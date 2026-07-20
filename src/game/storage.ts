@@ -13,7 +13,7 @@ import { isDifficultyMode } from "./difficulty";
 import { isAchievementId } from "./progression";
 import { createGalaxyState, createVeinReserve, isInfiniteResource } from "./galaxy";
 import { createEndgameState, getOfflineSimulationLimitSeconds } from "./endgame";
-import type { BeltConnection, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CargoStackSize, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
+import type { BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CargoStackSize, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -134,6 +134,16 @@ function validPriority(value: unknown): value is LogisticsPriority {
 
 function validCargoStackSize(value: unknown): value is CargoStackSize {
   return value === 1 || value === 2 || value === 4;
+}
+
+function validBeltRouteMode(value: unknown): value is BeltRouteMode {
+  return value === "bezier" || value === "auto" || value === "upper" || value === "lower" || value === "manual";
+}
+
+function routeOffset(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(-600, Math.min(600, Math.round(value)))
+    : undefined;
 }
 
 function validBlueprintRotation(value: unknown): value is BlueprintRotation {
@@ -438,6 +448,8 @@ export function migrateGame(value: unknown): GameState | null {
       priority: validPriority(belt.priority) ? belt.priority : 0,
       stackSize: validCargoStackSize(belt.stackSize) ? belt.stackSize : 1,
       monitorEnabled: Boolean(belt.monitorEnabled),
+      routeMode: validBeltRouteMode(belt.routeMode) ? belt.routeMode : "auto",
+      routeOffsetY: routeOffset(belt.routeOffsetY),
       totalTransferred: nonNegativeInteger(belt.totalTransferred),
       congestion: Math.min(1, nonNegativeNumber(belt.congestion)),
       lastFlow: typeof belt.lastFlow === "number" ? belt.lastFlow : 0,
@@ -576,6 +588,8 @@ export function migrateGame(value: unknown): GameState | null {
           priority: validPriority(belt.priority) ? belt.priority : 0,
           stackSize: validCargoStackSize(belt.stackSize) ? belt.stackSize : 1,
           monitorEnabled: Boolean(belt.monitorEnabled),
+          routeMode: validBeltRouteMode(belt.routeMode) ? belt.routeMode : "auto",
+          routeOffsetY: routeOffset(belt.routeOffsetY),
         }];
       }) : [];
       const externalPorts = Array.isArray(blueprint.externalPorts) ? blueprint.externalPorts.flatMap((port: Record<string, any>, portIndex: number) => {
@@ -833,6 +847,9 @@ export function migrateGame(value: unknown): GameState | null {
     soundEnabled: typeof saved.settings?.soundEnabled === "boolean"
       ? saved.settings.soundEnabled
       : initial.settings.soundEnabled,
+    beltHeatmapEnabled: typeof saved.settings?.beltHeatmapEnabled === "boolean"
+      ? saved.settings.beltHeatmapEnabled
+      : initial.settings.beltHeatmapEnabled,
     autosaveIntervalSeconds: validAutosaveInterval(saved.settings?.autosaveIntervalSeconds)
       ? saved.settings.autosaveIntervalSeconds
       : initial.settings.autosaveIntervalSeconds,
@@ -848,6 +865,27 @@ export function migrateGame(value: unknown): GameState | null {
       y: typeof saved.recipeFocus?.position?.y === "number" && Number.isFinite(saved.recipeFocus.position.y) ? Math.max(8, Math.round(saved.recipeFocus.position.y)) : initial.recipeFocus.position.y,
     },
   };
+
+  const canvasBookmarks: GameState["canvasBookmarks"] = Array.isArray(saved.canvasBookmarks)
+    ? saved.canvasBookmarks.slice(-24).flatMap((bookmark: Record<string, any>, index: number) => {
+      if (!validPlanetId(bookmark.planetId) || typeof bookmark.viewport !== "object" ||
+        !Number.isFinite(bookmark.viewport?.x) || !Number.isFinite(bookmark.viewport?.y) ||
+        !Number.isFinite(bookmark.viewport?.zoom)) return [];
+      return [{
+        id: typeof bookmark.id === "string" && bookmark.id ? bookmark.id : `bookmark_migrated_${index + 1}`,
+        name: typeof bookmark.name === "string" && bookmark.name.trim()
+          ? bookmark.name.trim().slice(0, 28)
+          : `${getPlanet(bookmark.planetId).name}视角`,
+        planetId: bookmark.planetId,
+        viewport: {
+          x: Math.round(bookmark.viewport.x),
+          y: Math.round(bookmark.viewport.y),
+          zoom: Math.max(0.1, Math.min(2.5, Math.round(bookmark.viewport.zoom * 100) / 100)),
+        },
+        createdAtSeconds: nonNegativeNumber(bookmark.createdAtSeconds),
+      }];
+    })
+    : [];
 
   const powerGridMetrics: GameState["powerGridMetrics"] = Object.fromEntries(PLANET_LIST.map((planet) => [
     planet.id,
@@ -885,6 +923,7 @@ export function migrateGame(value: unknown): GameState | null {
     settings,
     achievements: { unlockedIds: unlockedAchievementIds },
     campaign: normalizeCampaignState(saved.campaign),
+    canvasBookmarks,
     blueprints,
     constructionQueue,
     productionPlans,

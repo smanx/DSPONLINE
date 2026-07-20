@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { addDysonSwarmOrbit, createBlueprint, createInitialState, createStandardDysonLayer, installMiner, placeBuilding, queueBlueprint, setActivePlanet, setBlueprintTransform, setDysonLaunchMode, setDysonLaunchThrottle, setDysonSwarmOrbit, setFuelItem, setLogisticsItem } from "./engine";
+import { addCanvasBookmark, addDysonSwarmOrbit, connectBelt, createBlueprint, createInitialState, createStandardDysonLayer, installMiner, placeBuilding, queueBlueprint, setActivePlanet, setBeltRouteOffsetY, setBlueprintTransform, setDysonLaunchMode, setDysonLaunchThrottle, setDysonSwarmOrbit, setFuelItem, setLogisticsItem } from "./engine";
 import { createProductionPlan } from "./planning";
 import { clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot } from "./storage";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
@@ -43,6 +43,7 @@ describe("game storage", () => {
       performanceMode: false,
       reducedMotion: false,
       soundEnabled: false,
+      beltHeatmapEnabled: false,
       autosaveIntervalSeconds: 2,
       resourceMode: "infinite",
       difficulty: "standard",
@@ -57,6 +58,7 @@ describe("game storage", () => {
       performanceMode: true,
       reducedMotion: true,
       soundEnabled: true,
+      beltHeatmapEnabled: true,
       autosaveIntervalSeconds: 30,
       resourceMode: "infinite",
       difficulty: "standard",
@@ -783,6 +785,44 @@ describe("game storage", () => {
     loaded = loadGame().state;
     expect(loaded.version).toBe(23);
     expect(loaded.blueprints).toEqual([]);
+  });
+
+  it("round-trips belt routing and defaults missing legacy routes to automatic avoidance", () => {
+    let state = createInitialState();
+    state.construction.storage_mk1 = 2;
+    state = placeBuilding(state, "storage_mk1", { x: 120, y: 80 });
+    state = placeBuilding(state, "storage_mk1", { x: 520, y: 80 });
+    const [source, target] = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+    state = setLogisticsItem(state, source.id, "iron_ingot");
+    state = setLogisticsItem(state, target.id, "iron_ingot");
+    state.entities.find((entity) => entity.id === source.id)!.outputs.iron_ingot = 20;
+    state = connectBelt(state, source.id, target.id, "iron_ingot");
+    state = setBeltRouteOffsetY(state, state.belts[0].id, -180);
+    state = createBlueprint(state, [source.id, target.id], "上绕缓存链");
+    state = addCanvasBookmark(state, "home", { x: 240, y: -120, zoom: 0.75 }, "缓存区");
+    state.settings.beltHeatmapEnabled = true;
+    saveGame(state);
+
+    let loaded = loadGame().state;
+    expect(loaded.belts[0]).toMatchObject({ routeMode: "manual", routeOffsetY: -180 });
+    expect(loaded.blueprints[0].belts[0]).toMatchObject({ routeMode: "manual", routeOffsetY: -180 });
+    expect(loaded.canvasBookmarks[0]).toMatchObject({ name: "缓存区", viewport: { x: 240, y: -120, zoom: 0.75 } });
+    expect(loaded.settings.beltHeatmapEnabled).toBe(true);
+
+    const legacy = JSON.parse(JSON.stringify(state));
+    legacy.version = 22;
+    delete legacy.belts[0].routeMode;
+    delete legacy.belts[0].routeOffsetY;
+    delete legacy.blueprints[0].belts[0].routeMode;
+    delete legacy.blueprints[0].belts[0].routeOffsetY;
+    delete legacy.canvasBookmarks;
+    delete legacy.settings.beltHeatmapEnabled;
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
+    loaded = loadGame().state;
+    expect(loaded.belts[0].routeMode).toBe("auto");
+    expect(loaded.blueprints[0].belts[0].routeMode).toBe("auto");
+    expect(loaded.canvasBookmarks).toEqual([]);
+    expect(loaded.settings.beltHeatmapEnabled).toBe(false);
   });
 
   it("migrates the legacy v14 Dyson sphere totals into the Helios system plan", () => {

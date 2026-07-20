@@ -32,10 +32,12 @@ import { EDGE_TYPES, FactoryConnectionLine, type FactoryFlowEdge } from "./compo
 import { BlueprintPlacementCursor, BlueprintWorkspace, CanvasSelectionTools, SelectionToolbar } from "./components/BlueprintWorkspace";
 import { RecipeFocusPanel } from "./components/RecipeFocusPanel";
 import type { OperationsTab } from "./components/OperationsWorkspace";
+import type { StatisticsTab } from "./components/StatisticsWorkspace";
 import { ITEMS, RECIPES, getBeltConstructionId, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getPlanet, getTechnology } from "./game/content";
 import { getFactoryAlerts, type FactoryAlert } from "./game/alerts";
 import {
   addBuildingToGroup,
+  addCanvasBookmark,
   applyBeltConfiguration,
   addDysonLayer,
   addDysonNode,
@@ -44,6 +46,7 @@ import {
   adjustStationWarpers,
   adjustStationVessels,
   advanceSimulation,
+  applyBeltConfigurationToNetwork,
   canConnectBelt,
   connectBelt,
   canPlaceBlueprint,
@@ -62,6 +65,7 @@ import {
   exploreStarSystem,
   getAcceptedInputs,
   getBeltCapacity,
+  getBeltNetworkIds,
   getEntityOperatingStatus,
   getProducedOutputs,
   handcraftRecipe,
@@ -82,6 +86,8 @@ import {
   placeBlueprint,
   queueBlueprint,
   removeBelt,
+  removeBeltNetwork,
+  removeCanvasBookmark,
   removeBlueprint,
   removeDysonLayer,
   removeDysonNode,
@@ -91,6 +97,9 @@ import {
   removeQueuedTechnology,
   selectTechnology,
   setBeltPriority,
+  setBeltRouteMode,
+  setBeltRouteOffsetY,
+  setBeltNetworkRouteMode,
   setBlueprintRecipeOverride,
   setBlueprintTransform,
   setBeltMonitorEnabled,
@@ -143,13 +152,15 @@ import {
   autoConnectDysonLayer,
   planDysonShell,
   renameBlueprint,
+  renameCanvasBookmark,
 } from "./game/engine";
 import { getAchievement, getNewAchievementIds, unlockAchievements } from "./game/progression";
 import { getDifficultyDefinition } from "./game/difficulty";
+import { analyzeBeltNetwork, diagnoseBelt, getBeltBundleMap, getPortOccupancy } from "./game/network";
 import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
 import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
 import { clearGame, clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot, type OfflineReport, type SaveSlotId } from "./game/storage";
-import type { BeltTier, BuildingId, CampaignTaskId, CargoStackSize, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
+import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CargoStackSize, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 
 type InspectorTab = "inspect" | "fabricate";
@@ -199,6 +210,14 @@ function distanceToSegment(point: { x: number; y: number }, start: { x: number; 
   return Math.hypot(point.x - (start.x + ratio * dx), point.y - (start.y + ratio * dy));
 }
 
+function beltHeatColor(utilization: number): string {
+  if (utilization >= 0.9) return "#ef7f68";
+  if (utilization >= 0.65) return "#e2be58";
+  if (utilization >= 0.35) return "#72bd88";
+  if (utilization > 0.01) return "#59a9c5";
+  return "#697771";
+}
+
 const RecipeWorkspace = lazy(() => import("./components/RecipeWorkspace").then((module) => ({ default: module.RecipeWorkspace })));
 const StatisticsWorkspace = lazy(() => import("./components/StatisticsWorkspace").then((module) => ({ default: module.StatisticsWorkspace })));
 const StarMapWorkspace = lazy(() => import("./components/StarMapWorkspace").then((module) => ({ default: module.StarMapWorkspace })));
@@ -229,6 +248,7 @@ function FactoryGame() {
   const [game, setGame] = useState(loaded.state);
   const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([]);
   const [selectedBeltId, setSelectedBeltId] = useState<string | null>(null);
+  const [focusedBeltNetworkId, setFocusedBeltNetworkId] = useState<string | null>(null);
   const [copiedBeltConfigurationId, setCopiedBeltConfigurationId] = useState<string | null>(null);
   const [placement, setPlacement] = useState<BuildingId | null>(null);
   const [beltTier, setBeltTier] = useState<BeltTier>(1);
@@ -239,7 +259,7 @@ function FactoryGame() {
   const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false);
   const [technologyOpen, setTechnologyOpen] = useState(false);
   const [statisticsOpen, setStatisticsOpen] = useState(false);
-  const [statisticsFocusTab, setStatisticsFocusTab] = useState<"production" | "planning" | "power" | "issues" | "galaxy" | null>(null);
+  const [statisticsFocusTab, setStatisticsFocusTab] = useState<StatisticsTab | null>(null);
   const [recipesOpen, setRecipesOpen] = useState(false);
   const [starMapOpen, setStarMapOpen] = useState(false);
   const [blueprintsOpen, setBlueprintsOpen] = useState(false);
@@ -738,6 +758,7 @@ function FactoryGame() {
     setGame((current) => setActivePlanet(current, planetId));
     setSelectedEntityIds([]);
     setSelectedBeltId(null);
+    setFocusedBeltNetworkId(null);
     setPlacement(null);
     setBlueprintPlacementId(null);
     setNodes([]);
@@ -787,6 +808,7 @@ function FactoryGame() {
     setOfflineReport(report);
     setSelectedEntityIds([]);
     setSelectedBeltId(null);
+    setFocusedBeltNetworkId(null);
     setPlacement(null);
     setBlueprintPlacementId(null);
     setSelectionMode(false);
@@ -813,6 +835,30 @@ function FactoryGame() {
       duration,
     });
   }, [setCenter]);
+
+  const focusBeltNetwork = useCallback((beltId: string, planetId?: PlanetId) => {
+    const snapshot = analyzeBeltNetwork(gameRef.current, beltId);
+    if (!snapshot) return;
+    const destination = planetId ?? snapshot.planetId;
+    if (gameRef.current.activePlanetId !== destination) onPlanetChange(destination);
+    setFocusedBeltNetworkId(beltId);
+    setHighlightedTaskId(null);
+    setSelectedBeltId(beltId);
+    setSelectedEntityIds([]);
+    setInspectorTab("inspect");
+    setStatisticsOpen(false);
+    setMobilePanel(null);
+    window.setTimeout(() => focusEntityIds(snapshot.entityIds), gameRef.current.settings.reducedMotion ? 0 : 40);
+  }, [focusEntityIds, onPlanetChange]);
+
+  const openCanvasBookmark = useCallback((bookmark: CanvasBookmark) => {
+    if (gameRef.current.activePlanetId !== bookmark.planetId) onPlanetChange(bookmark.planetId);
+    setStatisticsOpen(false);
+    setFocusedBeltNetworkId(null);
+    setHighlightedTaskId(null);
+    window.setTimeout(() => setViewport(bookmark.viewport, { duration: gameRef.current.settings.reducedMotion ? 0 : 260 }), gameRef.current.settings.reducedMotion ? 0 : 40);
+    setNotice(`已打开画布书签：${bookmark.name}`);
+  }, [onPlanetChange, setViewport]);
 
   const selectAlert = useCallback((alert: FactoryAlert) => {
     if (gameRef.current.activePlanetId !== alert.planetId) onPlanetChange(alert.planetId);
@@ -849,7 +895,10 @@ function FactoryGame() {
   }, []);
 
   const navigateFromCampaign = useCallback((navigation: CampaignNavigation, taskId?: CampaignTaskId) => {
-    if (taskId) setHighlightedTaskId(taskId);
+    if (taskId) {
+      setHighlightedTaskId(taskId);
+      setFocusedBeltNetworkId(null);
+    }
     setCampaignOpen(false);
     setCampaignFocusItemId(null);
     setCampaignFocusTechId(null);
@@ -929,6 +978,7 @@ function FactoryGame() {
   const onSelectCampaignTask = useCallback((taskId: CampaignTaskId) => {
     setGame((current) => selectCampaignTask(current, taskId));
     setHighlightedTaskId(taskId);
+    setFocusedBeltNetworkId(null);
   }, []);
 
   const refreshSaveSlots = useCallback(() => setSaveSlots(getSaveSlotSummaries()), []);
@@ -1037,8 +1087,21 @@ function FactoryGame() {
         activeEntityIds.add(belt.target);
       }
     }
-    return { connectedInputsByTarget, activeEntityIds: [...activeEntityIds] };
-  }, [game.belts]);
+    return { connectedInputsByTarget, activeEntityIds: [...activeEntityIds], occupancy: getPortOccupancy(game) };
+  }, [game]);
+
+  const beltBundleMap = useMemo(() => getBeltBundleMap(game), [game.activePlanetId, game.belts]);
+  const focusedBeltNetwork = useMemo(() => focusedBeltNetworkId
+    ? analyzeBeltNetwork(game, focusedBeltNetworkId)
+    : null, [focusedBeltNetworkId, game]);
+  const focusedNetworkBeltIds = useMemo(() => new Set(focusedBeltNetwork?.beltIds ?? []), [focusedBeltNetwork]);
+  const focusedNetworkEntityIds = useMemo(() => new Set(focusedBeltNetwork?.entityIds ?? []), [focusedBeltNetwork]);
+
+  useEffect(() => {
+    if (focusedBeltNetworkId && !game.belts.some((belt) => belt.id === focusedBeltNetworkId)) {
+      setFocusedBeltNetworkId(null);
+    }
+  }, [focusedBeltNetworkId, game.belts]);
 
   const taskHighlight = useMemo(() => {
     const task = highlightedTaskId ? getCampaignTask(highlightedTaskId) : undefined;
@@ -1075,7 +1138,7 @@ function FactoryGame() {
     return { entityIds, beltIds, itemIds };
   }, [game, highlightedTaskId]);
 
-  const commonNodeData = useMemo<Omit<FactoryNodeData, "entity" | "status" | "connectedInputItemIds">>(() => {
+  const commonNodeData = useMemo<Omit<FactoryNodeData, "entity" | "status" | "connectedInputItemIds" | "inputBeltCounts" | "outputBeltCounts">>(() => {
     const technology = getTechnology(game.research.selectedTechId);
     const progress = technology ? game.research.progressByTech[technology.id] ?? {} : {};
     return {
@@ -1123,62 +1186,113 @@ function FactoryGame() {
               ...commonNodeData,
               entity,
               connectedInputItemIds: beltNodeIndex.connectedInputsByTarget.get(entity.id) ?? [],
+              inputBeltCounts: beltNodeIndex.occupancy.input.get(entity.id) ?? {},
+              outputBeltCounts: beltNodeIndex.occupancy.output.get(entity.id) ?? {},
               status: getEntityOperatingStatus(game, entity),
             } as FactoryNodeData,
             selected: selectedEntityIds.includes(entity.id),
             className: highlightedTaskId
               ? taskHighlight.entityIds.has(entity.id) ? "factory-flow-node--task-focus" : "factory-flow-node--task-dim"
-              : undefined,
+              : focusedBeltNetwork
+                ? focusedNetworkEntityIds.has(entity.id) ? "factory-flow-node--network-focus" : "factory-flow-node--network-dim"
+                : undefined,
             draggable: !placement && !blueprintPlacementId,
           } satisfies FactoryFlowNode;
         });
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [beltNodeIndex.connectedInputsByTarget, blueprintPlacementId, commonNodeData, game.activePlanetId, game.entities, highlightedTaskId, placement, selectedEntityIds, setNodes, taskHighlight.entityIds]);
+  }, [beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, commonNodeData, focusedBeltNetwork, focusedNetworkEntityIds, game.activePlanetId, game.entities, highlightedTaskId, placement, selectedEntityIds, setNodes, taskHighlight.entityIds]);
 
-  const edges = useMemo<FactoryFlowEdge[]>(() => game.belts.filter((belt) => belt.planetId === game.activePlanetId).map((belt) => {
-    const item = ITEMS[belt.itemId];
-    const capacity = getBeltCapacity(belt);
-    const flowRatio = capacity > 0 ? Math.min(1, belt.lastFlow / capacity) : 0;
-    return {
-      id: belt.id,
-      type: "factory",
-      source: belt.source,
-      target: belt.target,
-      sourceHandle: `out:${belt.itemId}`,
-      targetHandle: `in:${belt.itemId}`,
-      className: `factory-edge${belt.lastFlow > 0.001 ? " factory-edge--active" : ""}${highlightedTaskId ? taskHighlight.beltIds.has(belt.id) ? " factory-edge--task-focus" : " factory-edge--task-dim" : ""}`,
-      selected: selectedBeltId === belt.id,
-      // The canvas CSS keeps every belt layer below factory cards. Selected
-      // belts are only raised relative to other belts for emphasis.
-      zIndex: selectedBeltId === belt.id ? 1 : 0,
-      interactionWidth: 36,
-      markerEnd: { type: MarkerType.ArrowClosed, color: item.color },
-      data: {
-        itemId: belt.itemId,
-        itemName: item.name,
-        itemSymbol: item.symbol,
-        color: item.color,
-        tier: belt.tier,
-        flow: belt.lastFlow,
-        capacity,
-        stackSize: belt.stackSize ?? 1,
-        congestion: belt.congestion ?? 0,
-        monitored: belt.monitorEnabled ?? false,
-        durationSeconds: Math.max(0.55, 1.65 - flowRatio * 0.9),
-        detailVisible: !largeFactoryMode && viewportZoom >= 0.55,
-        motionEnabled: !game.settings.performanceMode && !game.settings.reducedMotion,
-        taskTone: highlightedTaskId
-          ? taskHighlight.beltIds.has(belt.id) ? "focus" : "dim"
-          : "normal",
-      },
-      style: {
-        stroke: item.color,
-        strokeWidth: selectedBeltId === belt.id ? 3 : 2,
-      },
-    } satisfies FactoryFlowEdge;
-  }), [game.activePlanetId, game.belts, game.settings.performanceMode, game.settings.reducedMotion, highlightedTaskId, largeFactoryMode, selectedBeltId, taskHighlight.beltIds, viewportZoom]);
+  const edges = useMemo<FactoryFlowEdge[]>(() => {
+    const rects = nodes.map((node) => ({
+      id: node.id,
+      x: node.position.x,
+      y: node.position.y,
+      width: node.measured?.width ?? 256,
+      height: node.measured?.height ?? 180,
+    }));
+    const rectById = new Map(rects.map((rect) => [rect.id, rect]));
+    const routeCenterFor = (belt: GameState["belts"][number], bundleIndex: number, bundleSize: number) => {
+      const mode = belt.routeMode ?? "auto";
+      if (mode === "bezier" || largeFactoryMode) return undefined;
+      const source = rectById.get(belt.source);
+      const target = rectById.get(belt.target);
+      if (!source || !target) return undefined;
+      const sourceY = source.y + source.height / 2;
+      const targetY = target.y + target.height / 2;
+      const bundleOffset = (bundleIndex - (bundleSize - 1) / 2) * 18;
+      if (mode === "manual") return (sourceY + targetY) / 2 + (belt.routeOffsetY ?? 0) + bundleOffset;
+      if (mode === "upper") return Math.min(source.y, target.y) - 64 + bundleOffset;
+      if (mode === "lower") return Math.max(source.y + source.height, target.y + target.height) + 64 + bundleOffset;
+      const sourceX = source.x + source.width;
+      const targetX = target.x;
+      const left = Math.min(sourceX, targetX);
+      const right = Math.max(sourceX, targetX);
+      const blockers = rects.filter((rect) => {
+        if (rect.id === source.id || rect.id === target.id || rect.x > right || rect.x + rect.width < left) return false;
+        const ratio = right - left > 0.001 ? (rect.x + rect.width / 2 - left) / (right - left) : 0.5;
+        const routeY = sourceY + (targetY - sourceY) * Math.max(0, Math.min(1, ratio));
+        return routeY >= rect.y - 18 && routeY <= rect.y + rect.height + 18;
+      });
+      if (blockers.length === 0) return (sourceY + targetY) / 2 + bundleOffset;
+      const upper = Math.min(sourceY, targetY, ...blockers.map((rect) => rect.y)) - 52;
+      const lower = Math.max(sourceY, targetY, ...blockers.map((rect) => rect.y + rect.height)) + 52;
+      const midpoint = (sourceY + targetY) / 2;
+      return (Math.abs(midpoint - upper) <= Math.abs(lower - midpoint) ? upper : lower) + bundleOffset;
+    };
+    return game.belts.filter((belt) => belt.planetId === game.activePlanetId).map((belt) => {
+      const item = ITEMS[belt.itemId];
+      const capacity = getBeltCapacity(belt);
+      const flowRatio = capacity > 0 ? Math.min(1, belt.lastFlow / capacity) : 0;
+      const bundle = beltBundleMap.get(belt.id) ?? { index: 0, size: 1 };
+      const diagnostic = diagnoseBelt(game, belt);
+      const routeColor = game.settings.beltHeatmapEnabled ? beltHeatColor(diagnostic.utilization) : item.color;
+      const focusTone = highlightedTaskId
+        ? taskHighlight.beltIds.has(belt.id) ? "focus" : "dim"
+        : focusedBeltNetwork
+          ? focusedNetworkBeltIds.has(belt.id) ? "focus" : "dim"
+          : "normal";
+      return {
+        id: belt.id,
+        type: "factory",
+        source: belt.source,
+        target: belt.target,
+        sourceHandle: `out:${belt.itemId}`,
+        targetHandle: `in:${belt.itemId}`,
+        className: `factory-edge factory-edge--health-${diagnostic.health}${game.settings.beltHeatmapEnabled ? " factory-edge--heatmap" : ""}${belt.lastFlow > 0.001 ? " factory-edge--active" : ""}${focusTone === "focus" ? " factory-edge--task-focus" : focusTone === "dim" ? " factory-edge--task-dim" : ""}`,
+        selected: selectedBeltId === belt.id,
+        zIndex: selectedBeltId === belt.id ? 1 : 0,
+        interactionWidth: 36,
+        markerEnd: { type: MarkerType.ArrowClosed, color: routeColor },
+        data: {
+          itemId: belt.itemId,
+          itemName: item.name,
+          itemSymbol: item.symbol,
+          color: item.color,
+          tier: belt.tier,
+          flow: belt.lastFlow,
+          capacity,
+          stackSize: belt.stackSize ?? 1,
+          congestion: belt.congestion ?? 0,
+          monitored: belt.monitorEnabled ?? false,
+          durationSeconds: Math.max(0.55, 1.65 - flowRatio * 0.9),
+          detailVisible: !largeFactoryMode && viewportZoom >= 0.55,
+          motionEnabled: !game.settings.performanceMode && !game.settings.reducedMotion,
+          routeMode: belt.routeMode ?? "auto",
+          routeCenterY: routeCenterFor(belt, bundle.index, bundle.size),
+          bundleIndex: bundle.index,
+          bundleSize: bundle.size,
+          health: diagnostic.health,
+          taskTone: focusTone,
+        },
+        style: {
+          stroke: routeColor,
+          strokeWidth: selectedBeltId === belt.id ? 3.5 : game.settings.beltHeatmapEnabled ? 1.8 + diagnostic.utilization * 2.4 : 2,
+        },
+      } satisfies FactoryFlowEdge;
+    });
+  }, [beltBundleMap, focusedBeltNetwork, focusedNetworkBeltIds, game, highlightedTaskId, largeFactoryMode, nodes, selectedBeltId, taskHighlight.beltIds, viewportZoom]);
 
   const isValidConnection = useCallback((connection: Connection | Edge) => {
     const sourceItem = parseHandleItem(connection.sourceHandle);
@@ -1452,6 +1566,7 @@ function FactoryGame() {
     setPlacementCount(1);
     setSelectedEntityIds([]);
     setSelectedBeltId(null);
+    setFocusedBeltNetworkId(null);
     setNodes([]);
     setTechnologyOpen(false);
     setStatisticsOpen(false);
@@ -1480,6 +1595,7 @@ function FactoryGame() {
       data-difficulty={game.settings.difficulty}
       data-zoom-lod={largeFactoryMode || viewportZoom < 0.55 ? "compact" : viewportZoom < 0.86 ? "medium" : "full"}
       data-large-factory={largeFactoryMode ? "true" : "false"}
+      data-network-heatmap={game.settings.beltHeatmapEnabled ? "true" : "false"}
     >
       <HeaderControls
         game={game}
@@ -1577,6 +1693,12 @@ function FactoryGame() {
               setInspectorTab("inspect");
               setMobilePanel("inspector");
             }}
+            onEdgeDoubleClick={(_event, edge) => {
+              setFocusedBeltNetworkId((current) => current === edge.id ? null : edge.id);
+              setHighlightedTaskId(null);
+              const snapshot = analyzeBeltNetwork(gameRef.current, edge.id);
+              if (snapshot) focusEntityIds(snapshot.entityIds);
+            }}
             onPaneClick={onPaneClick}
             onDrop={onCanvasDrop}
             onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
@@ -1621,6 +1743,7 @@ function FactoryGame() {
           <CanvasSelectionTools
             selectionMode={selectionMode}
             blueprintCount={game.blueprints.length}
+            beltCount={game.belts.filter((belt) => belt.planetId === game.activePlanetId).length}
             canUndo={undoStackRef.current.length > 0}
             canRedo={redoStackRef.current.length > 0}
             leftSidebarCollapsed={leftSidebarCollapsed}
@@ -1636,6 +1759,20 @@ function FactoryGame() {
               if (!enabled) setSelectedEntityIds([]);
             }}
             onOpenBlueprints={() => { setBlueprintsOpen(true); setSelectionMode(false); setMobilePanel(null); }}
+            onOpenNetworks={() => {
+              setStatisticsOpen(true);
+              setStatisticsFocusTab("networks");
+              setRecipesOpen(false);
+              setTechnologyOpen(false);
+              setStarMapOpen(false);
+              setBlueprintsOpen(false);
+              setDysonPlannerOpen(false);
+              setOperationsOpen(false);
+              setCampaignOpen(false);
+              setSelectionMode(false);
+              setMobilePanel(null);
+              setNotice(null);
+            }}
           />
           <SelectionToolbar
             selectedCount={selectedEntityIds.length}
@@ -1663,6 +1800,14 @@ function FactoryGame() {
               <button type="button" onClick={() => setHighlightedTaskId(null)} aria-label="关闭任务路径高亮">×</button>
             </div>
           ) : null}
+          {focusedBeltNetwork ? (
+            <div className={`network-focus-indicator network-focus-indicator--${focusedBeltNetwork.health} nodrag nopan`}>
+              <span>连续运输网络</span>
+              <strong>{ITEMS[focusedBeltNetwork.itemId].name}</strong>
+              <em>{focusedBeltNetwork.beltIds.length} 线路 · {focusedBeltNetwork.entityIds.length} 节点 · {focusedBeltNetwork.label}</em>
+              <button type="button" onClick={() => setFocusedBeltNetworkId(null)} aria-label="关闭运输网络聚焦">×</button>
+            </div>
+          ) : null}
           <div className="canvas-status">
             <span className={game.paused ? "paused" : "running"}>{game.paused ? "模拟暂停" : "实时运行"}</span>
             <strong>{getPlanet(game.activePlanetId).name} · {getPlanet(game.activePlanetId).code}工厂区</strong>
@@ -1680,6 +1825,7 @@ function FactoryGame() {
           selectedEntities={selectedEntities}
           selectedEntity={selectedEntity}
           selectedBelt={selectedBelt}
+          focusedBeltNetworkId={focusedBeltNetworkId}
           tab={inspectorTab}
           onTabChange={setInspectorTab}
           onRecipeChange={onRecipeChange}
@@ -1704,6 +1850,24 @@ function FactoryGame() {
           onBeltPriorityChange={(beltId, priority) => commitGame((current) => setBeltPriority(current, beltId, priority))}
           onBeltStackSizeChange={(beltId, stackSize: CargoStackSize) => commitGame((current) => setBeltStackSize(current, beltId, stackSize))}
           onBeltMonitorChange={(beltId, enabled) => commitGame((current) => setBeltMonitorEnabled(current, beltId, enabled))}
+          onBeltRouteModeChange={(beltId, routeMode: BeltRouteMode) => commitGame((current) => setBeltRouteMode(current, beltId, routeMode))}
+          onBeltRouteOffsetChange={(beltId, routeOffsetY) => commitGame((current) => setBeltRouteOffsetY(current, beltId, routeOffsetY))}
+          onApplyBeltConfigurationToNetwork={(beltId) => {
+            commitGame((current) => applyBeltConfigurationToNetwork(current, beltId));
+            setNotice("当前线路设置已同步到整条连续网络");
+          }}
+          onFocusBeltNetwork={(beltId) => {
+            if (focusedBeltNetworkId === beltId) setFocusedBeltNetworkId(null);
+            else focusBeltNetwork(beltId);
+          }}
+          onRemoveBeltNetwork={(beltId) => {
+            const count = analyzeBeltNetwork(gameRef.current, beltId)?.beltIds.length ?? 0;
+            commitGame((current) => removeBeltNetwork(current, beltId));
+            setSelectedBeltId(null);
+            setFocusedBeltNetworkId(null);
+            setNotice(`已回收连续运输网络 · ${count} 条线路`);
+            playTone("remove");
+          }}
           onUpgradeBeltNetwork={(beltId) => {
             commitGame((current) => upgradeBeltNetwork(current, beltId));
             setNotice("已升级当前物品的连续运输网络");
@@ -1831,6 +1995,40 @@ function FactoryGame() {
           onGalacticExportEnabled={(projectId: GalacticExportProjectId, enabled) => commitGame((current) => setGalacticExportEnabled(current, projectId, enabled))}
           onGalacticExportPriority={(projectId: GalacticExportProjectId, priority: LogisticsPriority) => commitGame((current) => setGalacticExportPriority(current, projectId, priority))}
           onDispatchGalacticExport={(projectId: GalacticExportProjectId) => commitGame((current) => dispatchGalacticExport(current, projectId))}
+          onFocusBeltNetwork={focusBeltNetwork}
+          onBulkBeltUpgrade={(beltIds, target) => {
+            commitGame((current) => beltIds.reduce((next, beltId) => target === "belt" ? upgradeBeltNetwork(next, beltId) : upgradeSorterNetwork(next, beltId), current));
+            setNotice(`已批量升级 ${beltIds.length} 个连续网络的${target === "belt" ? "传送带" : "分拣器"}`);
+            playTone("upgrade");
+          }}
+          onBulkBeltRoute={(beltIds, routeMode) => {
+            commitGame((current) => beltIds.reduce((next, beltId) => setBeltNetworkRouteMode(next, beltId, routeMode), current));
+            setNotice(`已为 ${beltIds.length} 个连续网络批量改道`);
+          }}
+          onBulkBeltConfiguration={(beltIds) => {
+            if (beltIds.length < 2) return;
+            commitGame((current) => {
+              const sourceId = beltIds[0];
+              return beltIds.slice(1).reduce((next, originId) => getBeltNetworkIds(next, originId)
+                .reduce((configured, targetId) => applyBeltConfiguration(configured, sourceId, targetId), next), current);
+            });
+            setNotice(`已将首个网络的配置同步到其余 ${beltIds.length - 1} 个网络`);
+          }}
+          onBulkBeltRemove={(beltIds) => {
+            commitGame((current) => beltIds.reduce((next, beltId) => removeBeltNetwork(next, beltId), current));
+            setSelectedBeltId(null);
+            setFocusedBeltNetworkId(null);
+            setNotice(`已批量回收 ${beltIds.length} 个连续网络`);
+            playTone("remove");
+          }}
+          onBeltHeatmapChange={(enabled) => updateSettings({ beltHeatmapEnabled: enabled })}
+          onAddCanvasBookmark={(name) => {
+            commitGame((current) => addCanvasBookmark(current, current.activePlanetId, getViewport(), name));
+            setNotice("当前画布视角已加入书签");
+          }}
+          onRenameCanvasBookmark={(bookmarkId, name) => commitGame((current) => renameCanvasBookmark(current, bookmarkId, name))}
+          onOpenCanvasBookmark={openCanvasBookmark}
+          onRemoveCanvasBookmark={(bookmarkId) => commitGame((current) => removeCanvasBookmark(current, bookmarkId))}
         /> : null}
         {recipesOpen ? <RecipeWorkspace open game={game} focusItemId={campaignFocusItemId} onClose={() => setRecipesOpen(false)} onFocus={onRecipeFocusChange} /> : null}
         {campaignOpen ? (
