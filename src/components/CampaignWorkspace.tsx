@@ -1,6 +1,8 @@
 import {
   ArrowRight,
   Check,
+  ChevronDown,
+  ChevronRight,
   CircleAlert,
   Flag,
   FlaskConical,
@@ -12,6 +14,7 @@ import {
   Route,
   X,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { getConstructionDefinition, getItem } from "../game/content";
 import {
   getCampaignNavigationLabel,
@@ -21,17 +24,16 @@ import {
   type CampaignNavigation,
 } from "../game/campaign";
 import type { CampaignTaskId, GameState, ItemId } from "../game/types";
-import { ItemHoverCard } from "./ItemReference";
+import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
 function formatAmount(value: number): string {
   return Math.floor(value).toLocaleString("zh-CN");
 }
 
 function ItemMark({ itemId }: { itemId: ItemId }) {
-  const item = getItem(itemId);
   return (
     <ItemHoverCard itemId={itemId}>
-      <i className="item-mark" style={{ backgroundColor: item.color }}>{item.symbol}</i>
+      <ItemGlyph itemId={itemId} className="item-mark" />
     </ItemHoverCard>
   );
 }
@@ -64,8 +66,18 @@ export function CampaignWorkspace({
   onNavigate: (navigation: CampaignNavigation, taskId: CampaignTaskId) => void;
   onSelectTask: (taskId: CampaignTaskId) => void;
 }) {
-  if (!open) return null;
   const snapshot = getCampaignSnapshot(game);
+  const [collapsedChapterIds, setCollapsedChapterIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!open || !game.campaign.activeChapterId) return;
+    setCollapsedChapterIds((current) => {
+      if (!current.has(game.campaign.activeChapterId!)) return current;
+      const next = new Set(current);
+      next.delete(game.campaign.activeChapterId!);
+      return next;
+    });
+  }, [game.campaign.activeChapterId, open]);
+  if (!open) return null;
   const activeChapter = snapshot.chapters.find((chapter) => chapter.id === game.campaign.activeChapterId) ?? snapshot.chapters[0];
   const completion = snapshot.totalCount > 0 ? snapshot.completedCount / snapshot.totalCount * 100 : 0;
 
@@ -104,13 +116,19 @@ export function CampaignWorkspace({
 
       <div className="campaign-chapter-list">
         {snapshot.chapters.map((chapter, chapterIndex) => (
-          <section className={`campaign-chapter${chapter.id === game.campaign.activeChapterId ? " campaign-chapter--active" : ""}${chapter.complete ? " campaign-chapter--complete" : ""}`} key={chapter.id}>
-            <header className="campaign-chapter-header">
+          <section className={`campaign-chapter${chapter.id === game.campaign.activeChapterId ? " campaign-chapter--active" : ""}${chapter.complete ? " campaign-chapter--complete" : ""}${collapsedChapterIds.has(chapter.id) ? " campaign-chapter--collapsed" : ""}`} key={chapter.id}>
+            <button className="campaign-chapter-header" type="button" aria-expanded={!collapsedChapterIds.has(chapter.id)} onClick={() => setCollapsedChapterIds((current) => {
+              const next = new Set(current);
+              if (next.has(chapter.id)) next.delete(chapter.id);
+              else next.add(chapter.id);
+              return next;
+            })}>
               <div className="campaign-chapter-index">{chapter.complete ? <Check size={15} /> : String(chapterIndex + 1).padStart(2, "0")}</div>
               <div><strong>{chapter.name}</strong><small>{chapter.summary}</small></div>
               <em>{chapter.completedCount}/{chapter.tasks.length}</em>
-            </header>
-            <div className="campaign-task-list">
+              <i className="campaign-chapter-chevron">{collapsedChapterIds.has(chapter.id) ? <ChevronRight size={15} /> : <ChevronDown size={15} />}</i>
+            </button>
+            {!collapsedChapterIds.has(chapter.id) ? <div className="campaign-task-list">
               {chapter.tasks.map((task) => {
                 const deficits = getCampaignTaskDeficits(game, task);
                 const rewardText = (task.rewards ?? []).map(rewardLabel).join("、");
@@ -137,7 +155,7 @@ export function CampaignWorkspace({
                   </article>
                 );
               })}
-            </div>
+            </div> : null}
           </section>
         ))}
       </div>

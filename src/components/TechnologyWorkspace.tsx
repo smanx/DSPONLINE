@@ -1,10 +1,10 @@
 import { Check, FlaskConical, Gauge, ListOrdered, LockKeyhole, PackageCheck, Pickaxe, Play, Rocket, Satellite, Timer, X, Zap } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
-import { MATRIX_ITEM_IDS, PLANET_LIST, TECHNOLOGY_LIST, getItem, getTechnology } from "../game/content";
+import { MATRIX_ITEM_IDS, PLANET_LIST, TECHNOLOGY_LIST, getTechnology } from "../game/content";
 import { canQueueTechnology, getDysonSailAbsorptionMultiplier, getInterstellarCargoCapacity, getLogisticsSpeedMultiplier, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getRayReceiverCapacityKw, getRecipeSpeedMultiplier, getSolarSailLifetimeSeconds, isTechnologyCompleted } from "../game/engine";
 import type { GameState, ItemId, TechId } from "../game/types";
-import { ItemHoverCard } from "./ItemReference";
+import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
 interface TechnologyWorkspaceProps {
   open: boolean;
@@ -55,8 +55,7 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
         </div>
         <div className="technology-summary">
           {MATRIX_ITEM_IDS.map((itemId) => {
-            const item = getItem(itemId);
-            return <span className="matrix-stock" key={itemId}><ItemHoverCard itemId={itemId}><i style={{ backgroundColor: item.color }}>{item.symbol}</i></ItemHoverCard><strong>{networkMatrixStock(game, itemId)}</strong></span>;
+            return <span className="matrix-stock" key={itemId}><ItemHoverCard itemId={itemId}><ItemGlyph itemId={itemId} /></ItemHoverCard><strong>{networkMatrixStock(game, itemId)}</strong></span>;
           })}
           <span>已完成 <strong>{game.research.completedTechIds.length}/{TECHNOLOGY_LIST.length}</strong></span>
         </div>
@@ -74,8 +73,7 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
         </div>
         <div className="research-cost-list">
           {selected?.costs.map((cost) => {
-            const item = getItem(cost.itemId);
-            return <span key={cost.itemId}><ItemHoverCard itemId={cost.itemId}><i style={{ backgroundColor: item.color }}>{item.symbol}</i></ItemHoverCard>{selectedProgress[cost.itemId] ?? 0}/{cost.amount}</span>;
+            return <span key={cost.itemId}><ItemHoverCard itemId={cost.itemId}><ItemGlyph itemId={cost.itemId} /></ItemHoverCard>{selectedProgress[cost.itemId] ?? 0}/{cost.amount}</span>;
           })}
         </div>
         <p>{selected?.summary ?? "科研站处于科研模式时会按科技需求消耗蓝色、红色、黄色、紫色与绿色矩阵。"}</p>
@@ -136,8 +134,7 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
                     <p>{technology.summary}</p>
                     <div className="technology-costs">
                       {technology.costs.map((cost) => {
-                        const item = getItem(cost.itemId);
-                        return <span key={cost.itemId}><ItemHoverCard itemId={cost.itemId}><i style={{ backgroundColor: item.color }}>{item.symbol}</i></ItemHoverCard>{progress[cost.itemId] ?? 0}/{cost.amount}</span>;
+                        return <span key={cost.itemId}><ItemHoverCard itemId={cost.itemId}><ItemGlyph itemId={cost.itemId} /></ItemHoverCard>{progress[cost.itemId] ?? 0}/{cost.amount}</span>;
                       })}
                     </div>
                     <div className="technology-unlocks">

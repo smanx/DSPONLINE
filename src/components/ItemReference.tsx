@@ -17,6 +17,11 @@ const KIND_LABELS = {
   matrix: "科研矩阵",
 } as const;
 
+export function ItemGlyph({ itemId, className = "" }: { itemId: ItemId; className?: string }) {
+  const item = getItem(itemId);
+  return <i className={`item-glyph item-glyph--${item.kind}${className ? ` ${className}` : ""}`} style={{ backgroundColor: item.color }}>{item.symbol}</i>;
+}
+
 export function ItemHoverCard({ itemId, children, className = "" }: {
   itemId: ItemId;
   children: ReactNode;
@@ -67,7 +72,7 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
       {anchor ? createPortal(
         <aside className="item-hover-card" role="tooltip" style={anchor}>
           <header>
-            <i style={{ backgroundColor: item.color }}>{item.symbol}</i>
+            <ItemGlyph itemId={itemId} />
             <span><strong>{item.name}</strong><small>{KIND_LABELS[item.kind]}</small></span>
           </header>
           <p>{item.description}</p>

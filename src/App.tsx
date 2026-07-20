@@ -185,6 +185,8 @@ function FactoryGame() {
   const [placementCount, setPlacementCount] = useState<PlacementCount>(1);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("inspect");
   const [mobilePanel, setMobilePanel] = useState<"resources" | "inspector" | null>(null);
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
+  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false);
   const [technologyOpen, setTechnologyOpen] = useState(false);
   const [statisticsOpen, setStatisticsOpen] = useState(false);
   const [recipesOpen, setRecipesOpen] = useState(false);
@@ -1189,9 +1191,10 @@ function FactoryGame() {
 
   return (
     <main
-      className={`game-shell${placement || blueprintPlacementId ? " game-shell--placing" : ""}${selectionMode ? " game-shell--selecting" : ""}${mobilePanel ? ` mobile-panel--${mobilePanel}` : ""}`}
+      className={`game-shell${placement || blueprintPlacementId ? " game-shell--placing" : ""}${selectionMode ? " game-shell--selecting" : ""}${mobilePanel ? ` mobile-panel--${mobilePanel}` : ""}${leftSidebarCollapsed ? " sidebar-left-collapsed" : ""}${rightSidebarCollapsed ? " sidebar-right-collapsed" : ""}`}
       data-reduced-motion={game.settings.reducedMotion ? "true" : "false"}
       data-performance-mode={game.settings.performanceMode ? "true" : "false"}
+      data-zoom-lod={viewportZoom < 0.55 ? "compact" : viewportZoom < 0.86 ? "medium" : "full"}
     >
       <HeaderControls
         game={game}
@@ -1334,8 +1337,12 @@ function FactoryGame() {
             blueprintCount={game.blueprints.length}
             canUndo={undoStackRef.current.length > 0}
             canRedo={redoStackRef.current.length > 0}
+            leftSidebarCollapsed={leftSidebarCollapsed}
+            rightSidebarCollapsed={rightSidebarCollapsed}
             onUndo={undoGame}
             onRedo={redoGame}
+            onToggleLeftSidebar={() => setLeftSidebarCollapsed((collapsed) => !collapsed)}
+            onToggleRightSidebar={() => setRightSidebarCollapsed((collapsed) => !collapsed)}
             onModeChange={(enabled) => {
               setSelectionMode(enabled);
               setPlacement(null);

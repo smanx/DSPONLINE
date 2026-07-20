@@ -1,9 +1,9 @@
 import { ArrowRight, Check, LockKeyhole, Navigation, Orbit, Sparkles, Telescope, X } from "lucide-react";
 import type { CSSProperties } from "react";
-import { STAR_SYSTEM_LIST, getItem, getPlanet, getStarSystem, getTechnology } from "../game/content";
+import { STAR_SYSTEM_LIST, getPlanet, getStarSystem, getTechnology } from "../game/content";
 import { canExploreStarSystem, isStarSystemUnlocked, isTechnologyCompleted } from "../game/engine";
 import type { GameState, PlanetId, StarSystemId } from "../game/types";
-import { ItemHoverCard } from "./ItemReference";
+import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
 function formatDistance(distanceLy: number): string {
   return distanceLy <= 0 ? "本地" : `${distanceLy.toFixed(1)} 光年`;
@@ -99,11 +99,10 @@ export function StarMapWorkspace({
                     </div>
                     <div className="star-exploration-costs">
                       {system.explorationCost.map((cost) => {
-                        const item = getItem(cost.itemId);
                         const stock = Math.floor(game.tray[cost.itemId] ?? 0);
                         return (
                           <span className={stock >= cost.amount ? "ready" : ""} key={cost.itemId}>
-                            <ItemHoverCard itemId={cost.itemId}><i style={{ backgroundColor: item.color }}>{item.symbol}</i></ItemHoverCard>
+                            <ItemHoverCard itemId={cost.itemId}><ItemGlyph itemId={cost.itemId} /></ItemHoverCard>
                             <b>{stock}/{cost.amount}</b>
                           </span>
                         );

@@ -22,7 +22,7 @@ import {
   getVirtualRecipeResult,
 } from "../game/recipeGraph";
 import type { GameState, ItemId, RecipeDefinition } from "../game/types";
-import { ItemHoverCard } from "./ItemReference";
+import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
 type ItemFilter = "all" | "raw" | "solid" | "fluid" | "matrix";
 
@@ -38,10 +38,9 @@ function networkItemStock(game: GameState, itemId: ItemId): number {
 }
 
 function ItemMark({ itemId }: { itemId: ItemId }) {
-  const item = getItem(itemId);
   return (
     <ItemHoverCard itemId={itemId}>
-      <i className="item-mark" style={{ backgroundColor: item.color }}>{item.symbol}</i>
+      <ItemGlyph itemId={itemId} className="item-mark" />
     </ItemHoverCard>
   );
 }

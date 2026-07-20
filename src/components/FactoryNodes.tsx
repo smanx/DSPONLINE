@@ -25,7 +25,7 @@ import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } f
 import { useEffect, useRef, useState } from "react";
 import { FUEL_ENERGY_MJ, ITEMS, MATRIX_ITEM_IDS, getBuilding, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getProliferator, getRecipe, getRecipesForBuilding } from "../game/content";
 import { getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getStationDroneCapacity, getStationVesselCapacity } from "../game/engine";
-import { ItemHoverCard } from "./ItemReference";
+import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import type {
   BuildingId,
   CargoStack,
@@ -92,7 +92,7 @@ function ItemBadge({ itemId, amount, muted = false }: { itemId: ItemId; amount: 
   return (
     <ItemHoverCard itemId={itemId} className="item-reference--badge">
       <span className={`item-badge${muted ? " item-badge--muted" : ""}`}>
-        <i style={{ backgroundColor: item.color }}>{item.symbol}</i>
+        <ItemGlyph itemId={itemId} />
         <span>{item.name}</span>
         <strong>{formatAmount(amount)}</strong>
       </span>

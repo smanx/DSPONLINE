@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { getItem, getPlanet } from "../game/content";
 import { calculateFactoryStatistics, type ItemStatistics } from "../game/statistics";
 import type { GameState, ItemId } from "../game/types";
-import { ItemHoverCard } from "./ItemReference";
+import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
 type StatisticsTab = "production" | "power" | "issues";
 type ItemFilter = "all" | "producing" | "deficit" | "blocked";
@@ -16,8 +16,7 @@ interface StatisticsWorkspaceProps {
 }
 
 function ItemMark({ itemId }: { itemId: ItemId }) {
-  const item = getItem(itemId);
-  return <ItemHoverCard itemId={itemId}><i className="item-mark" style={{ backgroundColor: item.color }}>{item.symbol}</i></ItemHoverCard>;
+  return <ItemHoverCard itemId={itemId}><ItemGlyph itemId={itemId} className="item-mark" /></ItemHoverCard>;
 }
 
 function rate(value: number): string {

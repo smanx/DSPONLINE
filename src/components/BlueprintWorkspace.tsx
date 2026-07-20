@@ -1,4 +1,4 @@
-import { ArrowUp, BoxSelect, Check, Copy, Focus, Layers3, MousePointer2, PackageOpen, Redo2, Trash2, Undo2, X } from "lucide-react";
+import { ArrowUp, BoxSelect, Check, Copy, Focus, Layers3, MousePointer2, PackageOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Redo2, Trash2, Undo2, X } from "lucide-react";
 import { getConstructionDefinition, getPlanet } from "../game/content";
 import { canPlaceBlueprint, getBlueprintRequirements } from "../game/engine";
 import type { BlueprintDefinition, GameState } from "../game/types";
@@ -12,15 +12,19 @@ function blueprintBuildingSummary(blueprint: BlueprintDefinition): string[] {
   return [...counts].map(([name, amount]) => `${name} ×${amount}`);
 }
 
-export function CanvasSelectionTools({ selectionMode, blueprintCount, canUndo, canRedo, onModeChange, onOpenBlueprints, onUndo, onRedo }: {
+export function CanvasSelectionTools({ selectionMode, blueprintCount, canUndo, canRedo, leftSidebarCollapsed, rightSidebarCollapsed, onModeChange, onOpenBlueprints, onUndo, onRedo, onToggleLeftSidebar, onToggleRightSidebar }: {
   selectionMode: boolean;
   blueprintCount: number;
   canUndo: boolean;
   canRedo: boolean;
+  leftSidebarCollapsed: boolean;
+  rightSidebarCollapsed: boolean;
   onModeChange: (enabled: boolean) => void;
   onOpenBlueprints: () => void;
   onUndo: () => void;
   onRedo: () => void;
+  onToggleLeftSidebar: () => void;
+  onToggleRightSidebar: () => void;
 }) {
   return (
     <div className="canvas-selection-tools nodrag nopan" aria-label="画布选择工具">
@@ -30,6 +34,9 @@ export function CanvasSelectionTools({ selectionMode, blueprintCount, canUndo, c
       <span className="canvas-selection-tools__separator" />
       <button type="button" disabled={!canUndo} onClick={onUndo} title="撤销上一步工厂操作 (Ctrl+Z)" aria-label="撤销"><Undo2 size={16} /></button>
       <button type="button" disabled={!canRedo} onClick={onRedo} title="重做工厂操作 (Ctrl+Y)" aria-label="重做"><Redo2 size={16} /></button>
+      <span className="canvas-selection-tools__separator canvas-sidebar-toggle" />
+      <button className="canvas-sidebar-toggle" type="button" onClick={onToggleLeftSidebar} title={leftSidebarCollapsed ? "展开物资侧栏" : "折叠物资侧栏"} aria-label={leftSidebarCollapsed ? "展开物资侧栏" : "折叠物资侧栏"}>{leftSidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</button>
+      <button className="canvas-sidebar-toggle" type="button" onClick={onToggleRightSidebar} title={rightSidebarCollapsed ? "展开检查器侧栏" : "折叠检查器侧栏"} aria-label={rightSidebarCollapsed ? "展开检查器侧栏" : "折叠检查器侧栏"}>{rightSidebarCollapsed ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}</button>
     </div>
   );
 }

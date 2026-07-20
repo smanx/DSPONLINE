@@ -20,6 +20,7 @@ import {
   GitFork,
   Layers3,
   ListChecks,
+  MoreHorizontal,
   Minus,
   Orbit,
   PackageOpen,
@@ -44,7 +45,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useState } from "react";
-import { ItemHoverCard } from "./ItemReference";
+import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES_BY_BUILDING, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getSorterConstructionId, getTechnology, isConveyorBeltId } from "../game/content";
 import { canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationMinimumLoad, getStationVesselCapacity, getStationWarperCapacity, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
@@ -74,8 +75,7 @@ function formatAmount(value: number): string {
 }
 
 function ItemMark({ itemId }: { itemId: ItemId }) {
-  const item = getItem(itemId);
-  return <ItemHoverCard itemId={itemId}><i className="item-mark" style={{ backgroundColor: item.color }}>{item.symbol}</i></ItemHoverCard>;
+  return <ItemHoverCard itemId={itemId}><ItemGlyph itemId={itemId} className="item-mark" /></ItemHoverCard>;
 }
 
 interface ResourceRailProps {
@@ -1090,7 +1090,18 @@ interface ConstructionDockProps {
 
 const PLACEMENT_COUNTS: PlacementCount[] = [1, 2, 5, 10];
 
+type ConstructionCategory = "all" | "power" | "production" | "logistics" | "dyson";
+
+const CONSTRUCTION_CATEGORY_IDS: Record<Exclude<ConstructionCategory, "all">, Set<BuildingId | ConveyorBeltId>> = {
+  power: new Set(["wind_turbine", "solar_panel", "geothermal_power_station", "thermal_power_plant", "mini_fusion_power_plant", "artificial_star", "accumulator", "energy_exchanger"]),
+  production: new Set(["mining_machine", "arc_smelter", "plane_smelter", "assembling_machine_mk1", "assembling_machine_mk2", "assembling_machine_mk3", "matrix_lab", "oil_extractor", "oil_refinery", "water_pump", "chemical_plant", "quantum_chemical_plant", "fractionator", "miniature_particle_collider"]),
+  logistics: new Set(["conveyor_belt_mk1", "conveyor_belt_mk2", "conveyor_belt_mk3", "storage_mk1", "splitter_4way", "storage_tank", "planetary_logistics_station", "interstellar_logistics_station", "orbital_collector"]),
+  dyson: new Set(["em_rail_ejector", "vertical_launching_silo", "ray_receiver"]),
+};
+
 export function ConstructionDock({ game, placement, beltTier, placementCount, onPlacementChange, onBeltTierChange, onPlacementCountChange, onOpenFabricator }: ConstructionDockProps) {
+  const [category, setCategory] = useState<ConstructionCategory>("all");
+  const visibleBuildOrder = category === "all" ? BUILD_ORDER : BUILD_ORDER.filter((id) => CONSTRUCTION_CATEGORY_IDS[category].has(id));
   return (
     <footer className="construction-dock">
       <div className="dock-label">
@@ -1098,6 +1109,13 @@ export function ConstructionDock({ game, placement, beltTier, placementCount, on
           <span>施工托盘</span>
           <strong>{Object.values(game.construction).reduce((sum, amount) => sum + (amount ?? 0), 0)}</strong>
         </div>
+        <select className="dock-category-select" value={category} onChange={(event) => setCategory(event.target.value as ConstructionCategory)} aria-label="施工托盘分类">
+          <option value="all">全部设备</option>
+          <option value="power">能源</option>
+          <option value="production">生产</option>
+          <option value="logistics">物流</option>
+          <option value="dyson">戴森工程</option>
+        </select>
         <div className="placement-count" aria-label="批量部署数量">
           {PLACEMENT_COUNTS.map((count) => (
             <button className={placementCount === count ? "active" : ""} type="button" key={count} aria-pressed={placementCount === count} onClick={() => onPlacementCountChange(count)}>×{count}</button>
@@ -1105,7 +1123,7 @@ export function ConstructionDock({ game, placement, beltTier, placementCount, on
         </div>
       </div>
       <div className="construction-items">
-        {BUILD_ORDER.map((id) => {
+        {visibleBuildOrder.map((id) => {
           const count = game.construction[id] ?? 0;
           const isBelt = isConveyorBeltId(id);
           const itemBeltTier = isBelt ? getBeltTier(id) : null;
@@ -1159,7 +1177,7 @@ export function CargoCursor({ cargo, x, y }: { cargo: CargoStack | null; x: numb
   const item = getItem(cargo.itemId);
   return (
     <div className="cargo-cursor" style={{ transform: `translate3d(${x + 16}px, ${y + 16}px, 0)` }}>
-      <i style={{ backgroundColor: item.color }}>{item.symbol}</i>
+      <ItemGlyph itemId={cargo.itemId} />
       <span>{item.name}</span>
       <strong>×{formatAmount(cargo.amount)}</strong>
     </div>
@@ -1213,7 +1231,12 @@ export function HeaderControls({
   onOpenCampaign: () => void;
   alertCount: number;
 }) {
+  const [overflowOpen, setOverflowOpen] = useState(false);
   const powerTone = game.metrics.powerFactor >= 0.999 ? "positive" : game.metrics.powerFactor > 0 ? "warning" : "negative";
+  const runOverflowAction = (action: () => void) => {
+    setOverflowOpen(false);
+    action();
+  };
   return (
     <header className="game-header">
       <div className="brand-lockup">
@@ -1227,14 +1250,23 @@ export function HeaderControls({
         <div><FlaskConical size={16} /><span>蓝 / 红 / 黄 / 紫 / 绿 / 白矩阵</span><strong>{formatAmount(game.totalProduced.electromagnetic_matrix ?? 0)}<small> / {formatAmount(game.totalProduced.energy_matrix ?? 0)} / {formatAmount(game.totalProduced.structure_matrix ?? 0)} / {formatAmount(game.totalProduced.information_matrix ?? 0)} / {formatAmount(game.totalProduced.gravity_matrix ?? 0)} / {formatAmount(game.totalProduced.universe_matrix ?? 0)}</small></strong></div>
       </div>
       <div className="header-actions">
-        <button className={`header-alert-command${alertCount > 0 ? " header-alert-command--active" : ""}`} type="button" onClick={onOpenOperations} title="打开运营中心" aria-label="打开运营中心">
+        <button className={`header-action--overflowable header-alert-command${alertCount > 0 ? " header-alert-command--active" : ""}`} type="button" onClick={onOpenOperations} title="打开运营中心" aria-label="打开运营中心">
           <Bell size={17} />{alertCount > 0 ? <span>{Math.min(99, alertCount)}</span> : null}
         </button>
-        <button type="button" onClick={onOpenCampaign} title="打开主线任务中心" aria-label="打开主线任务中心"><Flag size={17} /></button>
-        <button type="button" onClick={onOpenStarMap} title="打开星图" aria-label="打开星图"><Telescope size={17} /></button>
-        <button type="button" onClick={onOpenStatistics} title="打开生产统计" aria-label="打开生产统计"><BarChart3 size={17} /></button>
-        <button type="button" onClick={onOpenRecipes} title="打开配方图鉴" aria-label="打开配方图鉴"><BookOpen size={17} /></button>
-        <button type="button" onClick={onOpenTechnology} title="打开科技树" aria-label="打开科技树"><FlaskConical size={17} /></button>
+        <button className="header-action--overflowable" type="button" onClick={onOpenCampaign} title="打开主线任务中心" aria-label="打开主线任务中心"><Flag size={17} /></button>
+        <button className="header-action--overflowable" type="button" onClick={onOpenStarMap} title="打开星图" aria-label="打开星图"><Telescope size={17} /></button>
+        <button className="header-action--overflowable" type="button" onClick={onOpenStatistics} title="打开生产统计" aria-label="打开生产统计"><BarChart3 size={17} /></button>
+        <button className="header-action--overflowable" type="button" onClick={onOpenRecipes} title="打开配方图鉴" aria-label="打开配方图鉴"><BookOpen size={17} /></button>
+        <button className="header-action--overflowable" type="button" onClick={onOpenTechnology} title="打开科技树" aria-label="打开科技树"><FlaskConical size={17} /></button>
+        <button className="header-overflow-command" type="button" onClick={() => setOverflowOpen((open) => !open)} aria-expanded={overflowOpen} title="更多工作区" aria-label="更多工作区"><MoreHorizontal size={18} /></button>
+        {overflowOpen ? <div className="header-overflow-menu" role="menu">
+          <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenOperations)}><Bell size={15} />运营中心</button>
+          <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenCampaign)}><Flag size={15} />主线任务</button>
+          <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenStarMap)}><Telescope size={15} />星图</button>
+          <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenStatistics)}><BarChart3 size={15} />生产统计</button>
+          <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenRecipes)}><BookOpen size={15} />配方图鉴</button>
+          <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenTechnology)}><FlaskConical size={15} />科技树</button>
+        </div> : null}
         <button className="mobile-toggle" type="button" onClick={onOpenResources} title="物资托盘" aria-label="打开物资托盘"><PackageOpen size={17} /></button>
         <button className="mobile-toggle" type="button" onClick={onOpenInspector} title="检查器" aria-label="打开检查器"><PanelRight size={17} /></button>
         <button type="button" onClick={onPauseToggle} title={game.paused ? "继续模拟" : "暂停模拟"} aria-label={game.paused ? "继续模拟" : "暂停模拟"}>

@@ -2416,6 +2416,51 @@ test("large workspaces load on demand with polished desktop and mobile hierarchy
   await page.screenshot({ path: "artifacts/qa/frontend-polish-390.png", fullPage: true });
 });
 
+test("workspace hierarchy filters construction, collapses rails and adapts detail level", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await freshGame(page);
+  const canvas = page.locator(".factory-canvas");
+  const canvasBefore = await canvas.boundingBox();
+
+  const category = page.getByLabel("施工托盘分类");
+  await expect(category).toHaveValue("all");
+  await category.selectOption("power");
+  await expect(page.getByTitle("部署风力涡轮机")).toBeVisible();
+  await expect(page.getByTitle("部署电弧熔炉")).toHaveCount(0);
+  await category.selectOption("all");
+
+  await page.getByLabel("折叠物资侧栏").click();
+  await expect(page.locator(".resource-rail")).toBeHidden();
+  await expect.poll(async () => (await canvas.boundingBox())!.width).toBeGreaterThan(canvasBefore!.width + 180);
+  await page.getByLabel("展开物资侧栏").click();
+  await expect(page.locator(".resource-rail")).toBeVisible();
+
+  const vein = page.locator(".vein-node").first();
+  const nodeHeight = await vein.evaluate((element) => (element as HTMLElement).offsetHeight);
+  for (let index = 0; index < 4; index += 1) await page.locator(".react-flow__controls-zoomout").click();
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-zoom-lod", "compact");
+  await expect(vein.locator(".manual-mine")).toHaveCSS("visibility", "hidden");
+  await expect.poll(async () => vein.evaluate((element) => (element as HTMLElement).offsetHeight)).toBe(nodeHeight);
+
+  await page.getByLabel("打开主线任务中心").first().click();
+  const firstChapter = page.locator(".campaign-chapter").first();
+  await firstChapter.locator(".campaign-chapter-header").click();
+  await expect(firstChapter.locator(".campaign-chapter-header")).toHaveAttribute("aria-expanded", "false");
+  await expect(firstChapter.locator(".campaign-task-list")).toHaveCount(0);
+});
+
+test("sub-360 header moves workspaces into an overflow menu", async ({ page }) => {
+  await page.setViewportSize({ width: 350, height: 760 });
+  await freshGame(page);
+  await expect(page.getByLabel("更多工作区")).toBeVisible();
+  await expect(page.getByLabel("打开科技树")).toBeHidden();
+  await page.getByLabel("更多工作区").click();
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
+  await menu.getByRole("menuitem", { name: "科技树" }).click();
+  await expect(page.getByRole("dialog", { name: "科技树" })).toBeVisible();
+});
+
 test("campaign center shows chapter progress, deficits and direct recipe navigation", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await freshGame(page);

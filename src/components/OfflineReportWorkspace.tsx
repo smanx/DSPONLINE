@@ -1,7 +1,7 @@
 import { CheckCircle2, Clock3, Factory, FlaskConical, Orbit, X } from "lucide-react";
 import { getItem, getTechnology } from "../game/content";
 import type { OfflineReport } from "../game/storage";
-import { ItemHoverCard } from "./ItemReference";
+import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
 function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
@@ -34,7 +34,7 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
                 const item = getItem(itemId);
                 return (
                   <div key={itemId}>
-                    <ItemHoverCard itemId={itemId}><i style={{ backgroundColor: item.color }}>{item.symbol}</i></ItemHoverCard>
+                    <ItemHoverCard itemId={itemId}><ItemGlyph itemId={itemId} /></ItemHoverCard>
                     <span>{item.name}</span><strong>+{amount.toLocaleString("zh-CN")}</strong>
                   </div>
                 );
