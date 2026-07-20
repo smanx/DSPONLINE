@@ -1798,15 +1798,15 @@ select:focus-visible {
 
 .factory-connection-preview__halo {
   fill: none;
-  stroke: rgba(98, 181, 174, 0.18);
-  stroke-width: 12;
+  stroke: rgba(209, 255, 246, 0.22);
+  stroke-width: 14;
   stroke-linecap: round;
 }
 
 .factory-connection-preview__path {
   fill: none;
   stroke: #79d9ca;
-  stroke-width: 3;
+  stroke-width: 4;
   stroke-linecap: round;
   stroke-dasharray: 12 8;
   animation: factory-connection-dash 560ms linear infinite;
@@ -2228,8 +2228,9 @@ select:focus-visible {
 }
 
 .factory-canvas .react-flow .react-flow__edges {
-  /* The edge wrapper is an invisible hit layer; its visible portal stays below cards. */
-  z-index: 4;
+  /* Keep the invisible belt hit paths below cards so overlapping equipment
+     always owns pointer input. Belts remain clickable everywhere else. */
+  z-index: 1;
   /* The root SVG spans the whole viewport. Let only the interaction paths
      receive pointer events so it cannot shield a building card underneath. */
   pointer-events: none;
@@ -2248,7 +2249,10 @@ select:focus-visible {
 }
 
 .factory-canvas .react-flow svg.react-flow__connectionline {
-  z-index: 2;
+  /* The temporary ghost must remain visible while aiming across dense cards,
+     but it never participates in hit testing. */
+  z-index: 6;
+  pointer-events: none;
 }
 
 .react-flow__node.selected .factory-node {

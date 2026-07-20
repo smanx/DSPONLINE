@@ -33,7 +33,6 @@ export function FactoryConnectionLine({
   fromPosition,
   toPosition,
   connectionStatus,
-  connectionLineStyle,
 }: ConnectionLineComponentProps) {
   const [path] = getBezierPath({
     sourceX: fromX,
@@ -44,11 +43,12 @@ export function FactoryConnectionLine({
     targetPosition: toPosition,
   });
   const tone = connectionStatus === "valid" ? "valid" : connectionStatus === "invalid" ? "invalid" : "pending";
+  const color = tone === "valid" ? "#8de0a9" : tone === "invalid" ? "#ef9b8f" : "#79d9ca";
   return (
     <g className={`factory-connection-preview factory-connection-preview--${tone}`} aria-hidden="true">
       <path className="factory-connection-preview__halo" d={path} />
-      <path className="factory-connection-preview__path" d={path} style={connectionLineStyle} />
-      <circle className="factory-connection-preview__target" cx={toX} cy={toY} r="6" />
+      <path className="factory-connection-preview__path" d={path} style={{ stroke: color }} />
+      <circle className="factory-connection-preview__target" cx={toX} cy={toY} r="7" style={{ fill: color }} />
     </g>
   );
 }

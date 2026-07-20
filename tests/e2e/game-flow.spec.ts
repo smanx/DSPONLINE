@@ -1142,6 +1142,32 @@ async function openMultiSlotStationRoutingGame(page: Page) {
   await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
 }
 
+async function openEdgeOverlapGame(page: Page) {
+  await page.addInitScript(() => {
+    const base = { planetId: "home", machineCount: 1, minerCount: 0, inputs: {}, outputs: {}, progress: 0, routingCursor: 0, utilization: 0, productionRate: 0 };
+    const state = {
+      version: 23,
+      nextId: 5,
+      activePlanetId: "home",
+      entities: [
+        { ...base, id: "overlap_source", kind: "machine", position: { x: 0, y: 0 }, buildingId: "arc_smelter", recipeId: "iron_ingot", outputs: { iron_ingot: 20 } },
+        { ...base, id: "overlap_blocker", kind: "machine", position: { x: 380, y: 0 }, buildingId: "arc_smelter", recipeId: "copper_ingot" },
+        { ...base, id: "overlap_target", kind: "machine", position: { x: 760, y: 0 }, buildingId: "assembling_machine_mk1", recipeId: "gear" },
+      ],
+      belts: [{ id: "overlap_belt", planetId: "home", source: "overlap_source", target: "overlap_target", itemId: "iron_ingot", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 0, stackSize: 1, monitorEnabled: false, totalTransferred: 0, congestion: 0, lastFlow: 0 }],
+      construction: {},
+      tray: {},
+      planetTrays: { home: {} },
+      totalProduced: {},
+      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["automatic_metallurgy", "basic_assembling"] },
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
 async function openOfflineStageGame(page: Page) {
   await page.addInitScript(() => {
     const base = {
@@ -2117,8 +2143,19 @@ test("multi-slot station outputs connect beyond the first slot and expose belt f
     expect(targetBox).not.toBeNull();
     await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
     await page.mouse.down();
+    if (inspectGhost) {
+      await page.mouse.move(sourceBox!.x + 70, sourceBox!.y - 55, { steps: 6 });
+      const preview = page.locator(".factory-connection-preview");
+      await expect(preview).toHaveClass(/factory-connection-preview--pending/);
+      await expect(preview.locator(".factory-connection-preview__path")).toHaveCSS("stroke", "rgb(121, 217, 202)");
+    }
     await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 12 });
-    if (inspectGhost) await expect(page.locator(".factory-connection-preview__path")).toBeVisible();
+    const expectedTone = itemText === targetItemText ? "valid" : "invalid";
+    const expectedColor = expectedTone === "valid" ? "rgb(141, 224, 169)" : "rgb(239, 155, 143)";
+    const preview = page.locator(".factory-connection-preview");
+    await expect(preview).toHaveClass(new RegExp(`factory-connection-preview--${expectedTone}`));
+    await expect(preview.locator(".factory-connection-preview__path")).toHaveCSS("stroke", expectedColor);
+    if (inspectGhost) await page.screenshot({ path: "artifacts/qa/connection-preview-valid-1440.png", fullPage: true });
     await page.mouse.up();
     await expect(page.locator(".react-flow__edge")).toHaveCount(expectedEdges);
   };
@@ -2131,6 +2168,32 @@ test("multi-slot station outputs connect beyond the first slot and expose belt f
   // discarding the drag.
   await dragConnection(station, "钛块", chemical, 2, false, "硫酸");
   await expect(page.getByRole("status")).toContainText("运输线未建立");
+});
+
+test("a building card owns clicks where a belt passes behind it", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openEdgeOverlapGame(page);
+  await page.locator(".react-flow__controls-fitview").click();
+  const sourceHandle = page.locator('.react-flow__node[data-id="overlap_source"] .factory-handle--output');
+  const targetHandle = page.locator('.react-flow__node[data-id="overlap_target"] .factory-handle--input');
+  const blocker = page.locator('.react-flow__node[data-id="overlap_blocker"]');
+  const sourceBox = await sourceHandle.boundingBox();
+  const targetBox = await targetHandle.boundingBox();
+  const blockerBox = await blocker.boundingBox();
+  expect(sourceBox).not.toBeNull();
+  expect(targetBox).not.toBeNull();
+  expect(blockerBox).not.toBeNull();
+  const point = {
+    x: blockerBox!.x + blockerBox!.width / 2,
+    y: (sourceBox!.y + sourceBox!.height / 2 + targetBox!.y + targetBox!.height / 2) / 2,
+  };
+  expect(point.y).toBeGreaterThan(blockerBox!.y);
+  expect(point.y).toBeLessThan(blockerBox!.y + blockerBox!.height);
+  await expect.poll(async () => page.evaluate(({ x, y }) =>
+    document.elementsFromPoint(x, y).some((element) => element.closest('.react-flow__node[data-id="overlap_blocker"]')), point)).toBe(true);
+  await page.mouse.click(point.x, point.y);
+  await expect(blocker).toHaveClass(/selected/);
+  await expect(page.locator(".react-flow__edge.selected")).toHaveCount(0);
 });
 
 test("Dyson planner builds independent orbital layers across unlocked star systems", async ({ page }) => {
