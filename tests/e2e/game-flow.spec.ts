@@ -2968,6 +2968,7 @@ test("construction cards craft in place and Ctrl-click chains building placement
   await page.mouse.click(secondPoint!.x, secondPoint!.y);
   await page.keyboard.up("Control");
   await expect(page.locator(".machine-node")).toHaveCount(4);
+  await expect(page.getByTitle("部署制造台 Mk.I", { exact: true })).not.toHaveClass(/construction-item--active/);
   await expect(page.locator(".game-notice")).toContainText(/连续建造|材料不足/);
 });
 

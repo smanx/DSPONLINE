@@ -338,9 +338,16 @@ function FactoryGame() {
   useEffect(() => { pointerRef.current = pointer; }, [pointer]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Control") setCtrlHeld(event.type === "keydown");
+      if (event.key === "Control") {
+        const held = event.type === "keydown";
+        setCtrlHeld(held);
+        if (!held && placement) setPlacement(null);
+      }
     };
-    const onBlur = () => setCtrlHeld(false);
+    const onBlur = () => {
+      setCtrlHeld(false);
+      if (placement) setPlacement(null);
+    };
     window.addEventListener("keydown", onKey);
     window.addEventListener("keyup", onKey);
     window.addEventListener("blur", onBlur);
@@ -349,7 +356,7 @@ function FactoryGame() {
       window.removeEventListener("keyup", onKey);
       window.removeEventListener("blur", onBlur);
     };
-  }, []);
+  }, [placement]);
   useEffect(() => {
     if (!loaded.recovery || loaded.recovery.source === "primary") return;
     setNotice(loaded.recovery.issues[0] ?? "已从备用存档恢复");
