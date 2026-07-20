@@ -28,9 +28,10 @@ import {
   ResourceRail,
 } from "./components/GamePanels";
 import { NODE_TYPES, type FactoryFlowNode, type FactoryNodeData } from "./components/FactoryNodes";
+import { EDGE_TYPES, type FactoryFlowEdge } from "./components/FactoryEdges";
 import { BlueprintPlacementCursor, BlueprintWorkspace, CanvasSelectionTools, SelectionToolbar } from "./components/BlueprintWorkspace";
 import type { OperationsTab } from "./components/OperationsWorkspace";
-import { ITEMS, RECIPES, getBeltConstructionId, getBuilding, getBuildingUpgradeTarget, getPlanet, getTechnology } from "./game/content";
+import { ITEMS, RECIPES, getBeltConstructionId, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getPlanet, getTechnology } from "./game/content";
 import { getFactoryAlerts, type FactoryAlert } from "./game/alerts";
 import {
   addBuildingToGroup,
@@ -123,6 +124,22 @@ interface ConnectionDraft {
   handleType: "source" | "target";
 }
 
+type InteractionSound = "confirm" | "complete" | "alert" | "place" | "connect" | "upgrade" | "remove" | "travel" | "launch";
+
+interface RewardFlight {
+  id: string;
+  symbol: string;
+  label: string;
+  amount: number;
+  color: string;
+}
+
+interface PlanetTransition {
+  id: number;
+  from: PlanetId;
+  to: PlanetId;
+}
+
 const FLOW_GRID = 20;
 const HISTORY_LIMIT = 40;
 
@@ -189,6 +206,8 @@ function FactoryGame() {
   const [connectionHint, setConnectionHint] = useState<{ label: string; tone: "ready" | "blocked" } | null>(null);
   const [viewportZoom, setViewportZoom] = useState(0.84);
   const [highlightedTaskId, setHighlightedTaskId] = useState<CampaignTaskId | null>(null);
+  const [rewardFlights, setRewardFlights] = useState<RewardFlight[]>([]);
+  const [planetTransition, setPlanetTransition] = useState<PlanetTransition | null>(null);
   const [, setHistoryRevision] = useState(0);
   const [nodes, setNodes, onNodesChange] = useNodesState<FactoryFlowNode>([]);
   const [notice, setNotice] = useState<string | null>(null);
@@ -197,6 +216,7 @@ function FactoryGame() {
   const completedTechCountRef = useRef(game.research.completedTechIds.length);
   const achievementCountRef = useRef(game.achievements.unlockedIds.length);
   const campaignCompletedCountRef = useRef(game.campaign.completedTaskIds.length);
+  const launchCountRef = useRef({ sails: game.dysonSwarm.totalLaunched, rockets: game.dysonSphere.totalRocketsLaunched });
   const miningTimerRef = useRef<number | null>(null);
   const nodeDragActiveRef = useRef(false);
   const factoryCanvasRef = useRef<HTMLElement | null>(null);
@@ -213,23 +233,35 @@ function FactoryGame() {
   useEffect(() => { selectedBeltIdRef.current = selectedBeltId; }, [selectedBeltId]);
   useEffect(() => { pointerRef.current = pointer; }, [pointer]);
 
-  const playTone = useCallback((kind: "confirm" | "complete" | "alert", force = false) => {
+  const playTone = useCallback((kind: InteractionSound, force = false) => {
     if (!force && !gameRef.current.settings.soundEnabled) return;
     const context = audioContextRef.current ?? new AudioContext();
     audioContextRef.current = context;
     if (context.state === "suspended") void context.resume();
     const oscillator = context.createOscillator();
     const gain = context.createGain();
-    const frequency = kind === "complete" ? 780 : kind === "alert" ? 310 : 560;
-    oscillator.type = kind === "alert" ? "triangle" : "sine";
+    const profile: Record<InteractionSound, { frequency: number; target: number; duration: number; type: OscillatorType; gain: number }> = {
+      confirm: { frequency: 560, target: 640, duration: 0.18, type: "sine", gain: 0.05 },
+      complete: { frequency: 780, target: 1040, duration: 0.22, type: "sine", gain: 0.055 },
+      alert: { frequency: 310, target: 250, duration: 0.24, type: "triangle", gain: 0.05 },
+      place: { frequency: 210, target: 360, duration: 0.12, type: "square", gain: 0.032 },
+      connect: { frequency: 420, target: 720, duration: 0.16, type: "sine", gain: 0.05 },
+      upgrade: { frequency: 480, target: 920, duration: 0.24, type: "triangle", gain: 0.045 },
+      remove: { frequency: 360, target: 150, duration: 0.16, type: "sawtooth", gain: 0.026 },
+      travel: { frequency: 180, target: 620, duration: 0.42, type: "sine", gain: 0.045 },
+      launch: { frequency: 130, target: 880, duration: 0.34, type: "sawtooth", gain: 0.035 },
+    };
+    const sound = profile[kind];
+    const frequency = sound.frequency;
+    oscillator.type = sound.type;
     oscillator.frequency.setValueAtTime(frequency, context.currentTime);
-    if (kind === "complete") oscillator.frequency.exponentialRampToValueAtTime(1040, context.currentTime + 0.12);
+    oscillator.frequency.exponentialRampToValueAtTime(sound.target, context.currentTime + sound.duration * 0.78);
     gain.gain.setValueAtTime(0.0001, context.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.055, context.currentTime + 0.012);
-    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.18);
+    gain.gain.exponentialRampToValueAtTime(sound.gain, context.currentTime + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + sound.duration);
     oscillator.connect(gain).connect(context.destination);
     oscillator.start();
-    oscillator.stop(context.currentTime + 0.2);
+    oscillator.stop(context.currentTime + sound.duration + 0.02);
   }, []);
 
   const commitGame = useCallback((updater: (current: GameState) => GameState) => {
@@ -350,11 +382,40 @@ function FactoryGame() {
       const task = getCampaignTask(completed.at(-1));
       if (task) {
         setNotice(`任务完成：${task.title}`);
+        setRewardFlights((task.rewards ?? []).map((reward, index) => {
+          const item = reward.itemId ? ITEMS[reward.itemId] : null;
+          const construction = reward.constructionId ? getConstructionDefinition(reward.constructionId) : null;
+          return {
+            id: `${task.id}_${index}_${completed.length}`,
+            symbol: item?.symbol ?? "建",
+            label: item?.name ?? construction?.name ?? "任务奖励",
+            amount: reward.amount,
+            color: item?.color ?? "#d7b85d",
+          };
+        }));
         playTone("complete");
       }
     }
     campaignCompletedCountRef.current = completed.length;
   }, [game.campaign.completedTaskIds, playTone]);
+
+  useEffect(() => {
+    if (rewardFlights.length === 0) return;
+    const timer = window.setTimeout(() => setRewardFlights([]), 1500);
+    return () => window.clearTimeout(timer);
+  }, [rewardFlights]);
+
+  useEffect(() => {
+    const current = { sails: game.dysonSwarm.totalLaunched, rockets: game.dysonSphere.totalRocketsLaunched };
+    if (current.sails > launchCountRef.current.sails || current.rockets > launchCountRef.current.rockets) playTone("launch");
+    launchCountRef.current = current;
+  }, [game.dysonSphere.totalRocketsLaunched, game.dysonSwarm.totalLaunched, playTone]);
+
+  useEffect(() => {
+    if (!planetTransition) return;
+    const timer = window.setTimeout(() => setPlanetTransition(null), 760);
+    return () => window.clearTimeout(timer);
+  }, [planetTransition]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -397,17 +458,19 @@ function FactoryGame() {
           commitGame((current) => removeEntities(current, entityIds));
           setSelectedEntityIds([]);
           setNotice(`已回收 ${entityIds.length} 个所选设备`);
+          playTone("remove");
         } else if (beltId) {
           event.preventDefault();
           commitGame((current) => removeBelt(current, beltId));
           setSelectedBeltId(null);
           setNotice("所选运输线已回收");
+          playTone("remove");
         }
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [commitGame, redoGame, undoGame]);
+  }, [commitGame, playTone, redoGame, undoGame]);
 
   const onMiningStop = useCallback(() => {
     if (miningTimerRef.current != null) window.clearInterval(miningTimerRef.current);
@@ -462,14 +525,16 @@ function FactoryGame() {
   }, []);
 
   const onInstallMiner = useCallback((entityId: string, count: PlacementCount) => {
+    if (installMiner(gameRef.current, entityId, count) !== gameRef.current) playTone("place");
     commitGame((current) => installMiner(current, entityId, count));
     setPlacement(null);
-  }, [commitGame]);
+  }, [commitGame, playTone]);
 
   const onAddBuilding = useCallback((entityId: string, buildingId: BuildingId, count: PlacementCount) => {
+    if (addBuildingToGroup(gameRef.current, entityId, buildingId, count) !== gameRef.current) playTone("place");
     commitGame((current) => addBuildingToGroup(current, entityId, buildingId, count));
     setPlacement(null);
-  }, [commitGame]);
+  }, [commitGame, playTone]);
 
   const onRecipeChange = useCallback((entityId: string, recipeId: RecipeId) => {
     commitGame((current) => setEntityRecipe(current, entityId, recipeId));
@@ -486,6 +551,11 @@ function FactoryGame() {
   const onPlanetChange = useCallback((planetId: PlanetId) => {
     onMiningStop();
     const cargo = gameRef.current.cargo;
+    const previousPlanetId = gameRef.current.activePlanetId;
+    if (previousPlanetId !== planetId) {
+      if (!gameRef.current.settings.reducedMotion) setPlanetTransition({ id: Date.now(), from: previousPlanetId, to: planetId });
+      playTone("travel");
+    }
     setGame((current) => setActivePlanet(current, planetId));
     setSelectedEntityIds([]);
     setSelectedBeltId(null);
@@ -499,7 +569,7 @@ function FactoryGame() {
     } else {
       setNotice(`已切换至${getPlanet(planetId).name}`);
     }
-  }, [onMiningStop, setNodes, setViewport]);
+  }, [onMiningStop, playTone, setNodes, setViewport]);
 
   const onExploreSystem = useCallback((systemId: StarSystemId) => {
     setGame((current) => exploreStarSystem(current, systemId));
@@ -519,6 +589,7 @@ function FactoryGame() {
     completedTechCountRef.current = state.research.completedTechIds.length;
     achievementCountRef.current = state.achievements.unlockedIds.length;
     campaignCompletedCountRef.current = state.campaign.completedTaskIds.length;
+    launchCountRef.current = { sails: state.dysonSwarm.totalLaunched, rockets: state.dysonSphere.totalRocketsLaunched };
     setGame(state);
     setOfflineReport(report);
     setSelectedEntityIds([]);
@@ -861,31 +932,35 @@ function FactoryGame() {
     });
   }, [beltNodeIndex.connectedInputsByTarget, blueprintPlacementId, commonNodeData, game.activePlanetId, game.entities, highlightedTaskId, placement, selectedEntityIds, setNodes, taskHighlight.entityIds]);
 
-  const edges = useMemo<Edge[]>(() => game.belts.filter((belt) => belt.planetId === game.activePlanetId).map((belt) => {
+  const edges = useMemo<FactoryFlowEdge[]>(() => game.belts.filter((belt) => belt.planetId === game.activePlanetId).map((belt) => {
     const item = ITEMS[belt.itemId];
     const capacity = getBeltCapacity(belt);
     const flowRatio = capacity > 0 ? Math.min(1, belt.lastFlow / capacity) : 0;
     return {
       id: belt.id,
+      type: "factory",
       source: belt.source,
       target: belt.target,
       sourceHandle: `out:${belt.itemId}`,
       targetHandle: `in:${belt.itemId}`,
       className: `factory-edge${belt.lastFlow > 0.001 ? " factory-edge--active" : ""}${highlightedTaskId ? taskHighlight.beltIds.has(belt.id) ? " factory-edge--task-focus" : " factory-edge--task-dim" : ""}`,
       selected: selectedBeltId === belt.id,
-      animated: belt.lastFlow > 0.001,
-      label: `Mk.${belt.tier === 3 ? "III" : belt.tier === 2 ? "II" : "I"} · ${belt.lastFlow.toFixed(1)} / ${capacity.toFixed(0)} s⁻¹`,
       markerEnd: { type: MarkerType.ArrowClosed, color: item.color },
+      data: {
+        itemId: belt.itemId,
+        itemName: item.name,
+        itemSymbol: item.symbol,
+        color: item.color,
+        tier: belt.tier,
+        flow: belt.lastFlow,
+        capacity,
+        durationSeconds: Math.max(0.55, 1.65 - flowRatio * 0.9),
+      },
       style: {
         stroke: item.color,
         strokeWidth: selectedBeltId === belt.id ? 3 : 2,
-        animationDuration: `${Math.max(0.36, 1.15 - flowRatio * 0.7).toFixed(2)}s`,
       },
-      labelStyle: { fill: "#d7dedb", fontSize: 10, fontWeight: 650 },
-      labelBgStyle: { fill: "#171d1b", fillOpacity: 0.94 },
-      labelBgPadding: [5, 3] as [number, number],
-      labelBgBorderRadius: 3,
-    };
+    } satisfies FactoryFlowEdge;
   }), [game.activePlanetId, game.belts, highlightedTaskId, selectedBeltId, taskHighlight.beltIds]);
 
   const isValidConnection = useCallback((connection: Connection | Edge) => {
@@ -952,7 +1027,7 @@ function FactoryGame() {
     }
     commitGame((current) => connectBelt(current, connection.source!, connection.target!, sourceItem, beltTier));
     setNotice(`${ITEMS[sourceItem].name}运输线已建立 · Mk.${tierName}`);
-    playTone("confirm");
+    playTone("connect");
   }, [beltTier, commitGame, playTone]);
 
   const onNodeDrag = useCallback((_event: MouseEvent | TouchEvent, node: FactoryFlowNode) => {
@@ -1020,6 +1095,7 @@ function FactoryGame() {
         if (next !== current && !canPlaceBlueprint(next, blueprintPlacementId)) setBlueprintPlacementId(null);
         return next;
       });
+      if (deployable) playTone("place");
       setSelectedEntityIds([]);
       setNotice(deployable ? `${blueprintName}部署完成${canContinue ? " · 可继续粘贴" : ""}` : `${blueprintName}施工库存不足或与当前行星不兼容`);
       return;
@@ -1030,13 +1106,14 @@ function FactoryGame() {
         return;
       }
       const position = snapFlowPosition(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
+      if (placeBuilding(gameRef.current, placement, position, placementCount) !== gameRef.current) playTone("place");
       commitGame((current) => placeBuilding(current, placement, position, placementCount));
       setPlacement(null);
       return;
     }
     setSelectedEntityIds([]);
     setSelectedBeltId(null);
-  }, [blueprintPlacementId, commitGame, placement, placementCount, screenToFlowPosition]);
+  }, [blueprintPlacementId, commitGame, placement, placementCount, playTone, screenToFlowPosition]);
 
   const onCanvasDrop = useCallback((event: React.DragEvent) => {
     const buildingId = event.dataTransfer.getData("application/factory-building") as BuildingId;
@@ -1047,10 +1124,11 @@ function FactoryGame() {
       return;
     }
     const position = snapFlowPosition(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
+    if (placeBuilding(gameRef.current, buildingId, position, placementCount) !== gameRef.current) playTone("place");
     commitGame((current) => placeBuilding(current, buildingId, position, placementCount));
     setPlacement(null);
     setBeltTier(1);
-  }, [commitGame, placementCount, screenToFlowPosition]);
+  }, [commitGame, placementCount, playTone, screenToFlowPosition]);
 
   const selectedEntities = game.entities.filter((entity) => selectedEntityIds.includes(entity.id) && entity.planetId === game.activePlanetId);
   const selectedEntity = selectedEntities.length === 1 ? selectedEntities[0] : null;
@@ -1187,6 +1265,7 @@ function FactoryGame() {
             nodes={nodes}
             edges={edges}
             nodeTypes={NODE_TYPES}
+            edgeTypes={EDGE_TYPES}
             onNodesChange={onNodesChange}
             onSelectionChange={onSelectionChange}
             onConnect={onConnect}
@@ -1274,11 +1353,13 @@ function FactoryGame() {
             onUpgrade={() => {
               commitGame((current) => upgradeEntities(current, selectedEntityIds));
               setNotice("已批量升级选区内可升级设备");
+              playTone("upgrade");
             }}
             onRemove={() => {
               commitGame((current) => removeEntities(current, selectedEntityIds));
               setSelectedEntityIds([]);
               setNotice("选区设备已回收至施工托盘");
+              playTone("remove");
             }}
           />
           {highlightedTaskId ? (
@@ -1317,15 +1398,20 @@ function FactoryGame() {
             const entity = gameRef.current.entities.find((candidate) => candidate.id === entityId);
             const targetId = entity?.buildingId ? getBuildingUpgradeTarget(entity.buildingId) : undefined;
             commitGame((current) => upgradeEntity(current, entityId));
-            if (targetId) setNotice(`设备已升级为${getBuilding(targetId).name}`);
+            if (targetId) {
+              setNotice(`设备已升级为${getBuilding(targetId).name}`);
+              playTone("upgrade");
+            }
           }}
           onUpgradeBelt={(beltId) => {
             commitGame((current) => upgradeBelt(current, beltId));
             setNotice("运输线升级完成");
+            playTone("upgrade");
           }}
           onUpgradeSorter={(beltId) => {
             commitGame((current) => upgradeSorter(current, beltId));
             setNotice("分拣器升级完成");
+            playTone("upgrade");
           }}
           onInstallSprayCoater={(entityId) => {
             commitGame((current) => installSprayCoater(current, entityId));
@@ -1353,10 +1439,12 @@ function FactoryGame() {
           onRemoveEntity={(entityId) => {
             commitGame((current) => removeEntity(current, entityId));
             setSelectedEntityIds((current) => current.filter((id) => id !== entityId));
+            playTone("remove");
           }}
           onRemoveBelt={(beltId) => {
             commitGame((current) => removeBelt(current, beltId));
             setSelectedBeltId(null);
+            playTone("remove");
           }}
         />
       </div>
@@ -1452,6 +1540,27 @@ function FactoryGame() {
         {offlineReport ? <OfflineReportWorkspace report={offlineReport} onClose={() => setOfflineReport(null)} /> : null}
       </Suspense>
       <button className="mobile-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setMobilePanel(null)} />
+      {planetTransition ? (
+        <div className="planet-transition" key={planetTransition.id} aria-live="polite">
+          <span>{getPlanet(planetTransition.from).name}</span>
+          <i><b /></i>
+          <strong>{getPlanet(planetTransition.to).name}</strong>
+        </div>
+      ) : null}
+      {rewardFlights.length > 0 ? (
+        <div className="campaign-reward-flight" aria-label="任务奖励已入库">
+          {rewardFlights.map((reward, index) => (
+            <div
+              className="campaign-reward-token"
+              style={{ "--reward-index": index, "--reward-color": reward.color } as React.CSSProperties}
+              title={`${reward.label} ×${reward.amount}`}
+              key={reward.id}
+            >
+              <i>{reward.symbol}</i><span>{reward.label}</span><strong>×{reward.amount}</strong>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <BuildingPlacementCursor buildingId={game.cargo ? null : placement} count={placementCount} x={pointer.x} y={pointer.y} />
       <CargoCursor cargo={game.cargo} x={pointer.x} y={pointer.y} />
       {activeBlueprint ? <BlueprintPlacementCursor blueprint={activeBlueprint} x={pointer.x} y={pointer.y + (game.cargo ? 42 : 0)} /> : null}

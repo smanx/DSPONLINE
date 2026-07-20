@@ -155,9 +155,16 @@ function connectionHandleClass(entityId: string, itemId: ItemId, handleType: "so
 
 function OutputSlot({ entityId, itemId, amount, onPick, connectionDraft }: OutputSlotProps) {
   const enabled = amount > 0.001;
+  const previousAmountRef = useRef(Math.floor(amount));
+  const [outputPulse, setOutputPulse] = useState(0);
+  useEffect(() => {
+    const current = Math.floor(amount);
+    if (current > previousAmountRef.current) setOutputPulse((pulse) => pulse + 1);
+    previousAmountRef.current = current;
+  }, [amount]);
   const pick = () => enabled && onPick(entityId, itemId);
   return (
-    <div className="node-port node-port--output">
+    <div className={`node-port node-port--output${outputPulse > 0 ? " node-port--output-pulse" : ""}`}>
       <button
         className="node-slot nodrag nopan"
         type="button"
@@ -175,6 +182,7 @@ function OutputSlot({ entityId, itemId, amount, onPick, connectionDraft }: Outpu
       >
         <ItemBadge itemId={itemId} amount={amount} muted={!enabled} />
       </button>
+      {outputPulse > 0 ? <b className="node-output-pulse" key={outputPulse} aria-hidden="true">+{ITEMS[itemId].symbol}</b> : null}
       <Handle id={`out:${itemId}`} type="source" position={Position.Right} className={`factory-handle factory-handle--output nodrag nopan${connectionHandleClass(entityId, itemId, "source", connectionDraft)}`} />
     </div>
   );
@@ -189,10 +197,18 @@ interface InputSlotProps {
   onPickInput: (entityId: string, itemId: ItemId) => void;
   onDropDraggedItem: FactoryNodeData["onDropDraggedItem"];
   connectionDraft: FactoryNodeData["connectionDraft"];
+  missing?: boolean;
 }
 
-function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, onDropDraggedItem, connectionDraft }: InputSlotProps) {
+function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, onDropDraggedItem, connectionDraft, missing = false }: InputSlotProps) {
   const compatible = cargo?.itemId === itemId;
+  const previousAmountRef = useRef(Math.floor(amount));
+  const [arrivalPulse, setArrivalPulse] = useState(0);
+  useEffect(() => {
+    const current = Math.floor(amount);
+    if (current > previousAmountRef.current) setArrivalPulse((pulse) => pulse + 1);
+    previousAmountRef.current = current;
+  }, [amount]);
   const dropCargo = (event: React.MouseEvent) => {
     event.stopPropagation();
     if (compatible) onDropCargo(entityId);
@@ -208,7 +224,7 @@ function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, 
     onDropDraggedItem(entityId, draggedItem, sourceKind, sourceId);
   };
   return (
-    <div className={`node-port node-port--input${compatible ? " node-port--compatible" : ""}`}>
+    <div className={`node-port node-port--input${compatible ? " node-port--compatible" : ""}${missing ? " node-port--missing" : ""}${arrivalPulse > 0 ? " node-port--arrival" : ""}`}>
       <Handle id={`in:${itemId}`} type="target" position={Position.Left} className={`factory-handle factory-handle--input nodrag nopan${connectionHandleClass(entityId, itemId, "target", connectionDraft)}`} />
       <button
         className="node-slot nodrag nopan"
@@ -230,6 +246,7 @@ function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, 
       >
         <ItemBadge itemId={itemId} amount={amount} muted={amount <= 0.001} />
       </button>
+      {arrivalPulse > 0 ? <b className="node-input-arrival" key={arrivalPulse} aria-hidden="true" /> : null}
     </div>
   );
 }
@@ -356,7 +373,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
-      className={`factory-node machine-node factory-node--status-${data.status.tone}${building.tier && building.tier > 1 ? ` factory-node--tier-${building.tier}` : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
+      className={`factory-node machine-node factory-node--status-${data.status.tone}${building.tier && building.tier > 1 ? ` factory-node--tier-${building.tier}` : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}${(railEjector || launchSilo) && entity.utilization > 0.001 ? " factory-node--orbital-active" : ""}`}
       onClick={add}
       onDragOver={(event) => {
         if (event.dataTransfer.types.some((type) => type === "application/factory-item" || type === "application/factory-building")) {
@@ -416,6 +433,13 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           efficiency={entity.utilization}
         />
       )}
+      {railEjector || launchSilo ? (
+        <div className={`orbital-launch-track${entity.utilization > 0.001 && !data.paused ? " orbital-launch-track--active" : ""}`} aria-hidden="true">
+          <span>{railEjector ? "电磁加速轨" : "垂直发射轨"}</span>
+          <i style={{ left: `${Math.max(4, Math.min(92, entity.progress * 92))}%` }}>{railEjector ? <Satellite size={10} /> : <Rocket size={10} />}</i>
+          <b />
+        </div>
+      ) : null}
       {!rayPowerMode ? <div className="node-io">
         <div className="node-io__column">
           <span className="node-io__label">输入</span>
@@ -430,6 +454,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
               onPickInput={data.onPickInput}
               onDropDraggedItem={data.onDropDraggedItem}
               connectionDraft={data.connectionDraft}
+              missing={(data.status.code === "missing-input" || data.status.code === "missing-proliferator") && (entity.inputs[input.itemId] ?? 0) < input.amount}
             />
           )) : rayReceiver ? (
             <div className="stellar-input"><Sun size={14} /><span>戴森系统能量</span></div>
@@ -645,7 +670,7 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       </div>
       {fuelGenerator && fuelId ? (
         <div className="thermal-fuel">
-          <InputSlot entityId={entity.id} itemId={fuelId} amount={entity.inputs[fuelId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} connectionDraft={data.connectionDraft} />
+          <InputSlot entityId={entity.id} itemId={fuelId} amount={entity.inputs[fuelId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} connectionDraft={data.connectionDraft} missing={data.status.code === "missing-fuel"} />
           <span>炉膛余热 <strong>{(entity.fuelRemainingMj ?? 0).toFixed(2)} MJ</strong></span>
         </div>
       ) : fuelGenerator ? <div className="thermal-empty">未配置燃料</div> : null}
@@ -653,7 +678,7 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         <div className="node-io energy-exchange-io">
           <div className="node-io__column">
             <span className="node-io__label">输入</span>
-            {recipe.inputs.map((input) => <InputSlot key={input.itemId} entityId={entity.id} itemId={input.itemId} amount={entity.inputs[input.itemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} connectionDraft={data.connectionDraft} />)}
+            {recipe.inputs.map((input) => <InputSlot key={input.itemId} entityId={entity.id} itemId={input.itemId} amount={entity.inputs[input.itemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} connectionDraft={data.connectionDraft} missing={data.status.code === "missing-input" && (entity.inputs[input.itemId] ?? 0) < input.amount} />)}
           </div>
           <div className="node-io__column node-io__column--output">
             <span className="node-io__label">输出</span>

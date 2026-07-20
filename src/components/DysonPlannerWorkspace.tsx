@@ -133,6 +133,16 @@ export function DysonPlannerWorkspace({
           <svg className="dyson-orbit-canvas" viewBox="0 0 600 600" role="img" aria-label={`${getStarSystem(systemId).name}戴森球轨道图`} onClick={addNodeFromCanvas}>
             <circle className="dyson-star-halo" cx={VIEW_CENTER} cy={VIEW_CENTER} r="42" />
             <circle className="dyson-star-core" cx={VIEW_CENTER} cy={VIEW_CENTER} r="24" style={{ color: getStarSystem(systemId).color }} />
+            {systemId === "helios" && game.dysonSwarm.sailsInOrbit > 0 ? Array.from({ length: Math.min(14, Math.max(3, Math.ceil(Math.log2(game.dysonSwarm.sailsInOrbit + 1)))) }, (_, index) => (
+              <circle
+                className="dyson-swarm-particle"
+                cx={VIEW_CENTER}
+                cy={VIEW_CENTER - 52 - index % 4 * 9}
+                r={index % 3 === 0 ? 2.4 : 1.7}
+                style={{ animationDelay: `${-index * 0.43}s`, animationDuration: `${5.4 + index % 5 * 0.7}s` }}
+                key={index}
+              />
+            )) : null}
             {plan.layers.map((layer) => {
               const radius = visualRadiusByLayer.get(layer.id) ?? 100;
               const scaleY = 0.45 + Math.abs(Math.cos(layer.inclination * Math.PI / 180)) * 0.55;

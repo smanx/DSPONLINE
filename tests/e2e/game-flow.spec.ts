@@ -994,6 +994,8 @@ test("manual mining feeds a powered smelter", async ({ page }) => {
   await page.mouse.down();
   await page.waitForTimeout(850);
   await page.mouse.up();
+  await expect(page.locator(".campaign-reward-token")).toContainText("传送带 Mk.I");
+  await page.screenshot({ path: "artifacts/qa/campaign-reward-flight-1560.png", fullPage: true });
 
   const ironOutput = ironVein.getByTitle("拿取铁矿石");
   await expect.poll(async () => Number(await ironOutput.locator("strong").textContent())).toBeGreaterThan(1);
@@ -1228,6 +1230,8 @@ test("yellow matrix industry exposes remote resources, chemistry and three-color
   await expect(water).toContainText("抽水站 ×1");
 
   await page.getByTitle("切换到烬原 II").click();
+  await expect(page.locator(".planet-transition")).toContainText("烬原 II");
+  await page.screenshot({ path: "artifacts/qa/planet-transition-1440.png", fullPage: true });
   await expect(page.locator(".vein-node").filter({ has: page.getByText("硅石", { exact: true }) })).toHaveCount(1);
   await expect(page.locator(".vein-node").filter({ has: page.getByText("钛石", { exact: true }) })).toHaveCount(1);
   await expect(page.locator(".vein-node").filter({ hasText: "硫酸海洋" })).toHaveCount(1);
@@ -1567,6 +1571,7 @@ test("production equipment and belt lanes upgrade in place without losing the ne
   await page.setViewportSize({ width: 1440, height: 900 });
   await openUpgradeStageGame(page);
   await page.locator(".react-flow__controls-fitview").click();
+  await expect(page.locator(".factory-cargo-packet").first()).toBeVisible();
 
   const assembler = page.locator(".machine-node").filter({ hasText: "齿轮" });
   await assembler.locator(".factory-node__header").click();
