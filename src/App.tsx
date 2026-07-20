@@ -18,7 +18,7 @@ import {
   type OnSelectionChangeParams,
 } from "@xyflow/react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, X } from "lucide-react";
+import { Activity, Check, Sparkles, X } from "lucide-react";
 import {
   BuildingPlacementCursor,
   CargoCursor,
@@ -199,6 +199,14 @@ interface PlanetTransition {
   to: PlanetId;
 }
 
+interface InteractionBurst {
+  id: number;
+  x: number;
+  y: number;
+  label: string;
+  tone: "positive" | "warning" | "neutral";
+}
+
 const FLOW_GRID = 20;
 const HISTORY_LIMIT = 40;
 
@@ -298,6 +306,8 @@ function FactoryGame() {
   const [nodes, setNodes, onNodesChange] = useNodesState<FactoryFlowNode>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [eventHistory, setEventHistory] = useState<Array<{ id: number; text: string }>>([]);
+  const [interactionBursts, setInteractionBursts] = useState<InteractionBurst[]>([]);
+  const [ctrlHeld, setCtrlHeld] = useState(false);
   const [pointer, setPointer] = useState({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const gameRef = useRef(game);
   const completedTechCountRef = useRef(game.research.completedTechIds.length);
@@ -319,12 +329,27 @@ function FactoryGame() {
   const simulationPendingSecondsRef = useRef(0);
   const simulationRequestIdRef = useRef(0);
   const eventSequenceRef = useRef(0);
+  const burstSequenceRef = useRef(0);
   const { screenToFlowPosition, setCenter, setViewport, fitView, getViewport } = useReactFlow();
 
   useEffect(() => { gameRef.current = game; }, [game]);
   useEffect(() => { selectedEntityIdsRef.current = selectedEntityIds; }, [selectedEntityIds]);
   useEffect(() => { selectedBeltIdRef.current = selectedBeltId; }, [selectedBeltId]);
   useEffect(() => { pointerRef.current = pointer; }, [pointer]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Control") setCtrlHeld(event.type === "keydown");
+    };
+    const onBlur = () => setCtrlHeld(false);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKey);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKey);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
   useEffect(() => {
     if (!loaded.recovery || loaded.recovery.source === "primary") return;
     setNotice(loaded.recovery.issues[0] ?? "已从备用存档恢复");
@@ -359,6 +384,14 @@ function FactoryGame() {
     oscillator.connect(gain).connect(context.destination);
     oscillator.start();
     oscillator.stop(context.currentTime + sound.duration + 0.02);
+  }, []);
+
+  const spawnInteractionBurst = useCallback((x: number, y: number, label: string, tone: InteractionBurst["tone"] = "positive") => {
+    const id = burstSequenceRef.current + 1;
+    burstSequenceRef.current = id;
+    setInteractionBursts((current) => [...current, { id, x, y, label, tone }].slice(-6));
+    window.setTimeout(() => setInteractionBursts((current) => current.filter((burst) => burst.id !== id)), 900);
+    if ("vibrate" in navigator && typeof navigator.vibrate === "function") navigator.vibrate(tone === "warning" ? [12, 18, 12] : 10);
   }, []);
 
   const commitGame = useCallback((updater: (current: GameState) => GameState) => {
@@ -1508,8 +1541,9 @@ function FactoryGame() {
     else if (!getAcceptedInputs(target, current).includes(fromItem)) label = `${ITEMS[fromItem].name}不是当前配方输入`;
     setNotice(`运输线未建立：${label}`);
     setConnectionHint({ label, tone: "blocked" });
+    spawnInteractionBurst(pointerRef.current.x, pointerRef.current.y, "连接失败", "warning");
     playTone("alert");
-  }, [beltTier, connectionDraft, playTone]);
+  }, [beltTier, connectionDraft, playTone, spawnInteractionBurst]);
 
   const onConnect = useCallback((connection: Connection) => {
     const sourceItem = parseHandleItem(connection.sourceHandle);
@@ -1547,13 +1581,15 @@ function FactoryGame() {
               : "施工托盘中没有可用传送带";
       setNotice(`运输线未建立：${reason}`);
       setConnectionHint({ label: `未建立 · ${reason}`, tone: "blocked" });
+      spawnInteractionBurst(pointerRef.current.x, pointerRef.current.y, "连接失败", "warning");
       playTone("alert");
       return;
     }
     commitGame(() => next);
     setNotice(`${ITEMS[sourceItem].name}运输线已建立 · Mk.${tierName}`);
+    spawnInteractionBurst(pointerRef.current.x, pointerRef.current.y, "运输线已建立", "positive");
     playTone("connect");
-  }, [beltTier, commitGame, playTone]);
+  }, [beltTier, commitGame, playTone, spawnInteractionBurst]);
 
   const onNodeDrag = useCallback((_event: MouseEvent | TouchEvent, node: FactoryFlowNode) => {
     const width = node.measured?.width ?? 256;
@@ -1672,6 +1708,7 @@ function FactoryGame() {
         return;
       }
       playTone("place");
+      spawnInteractionBurst(event.clientX, event.clientY, "建筑已放置", "positive");
       commitGame((current) => placeBuilding(current, placement, position, placementCount));
       const keepContinuous = event.ctrlKey;
       const remaining = placedState.construction[placement] ?? 0;
@@ -1685,7 +1722,7 @@ function FactoryGame() {
     }
     setSelectedEntityIds([]);
     setSelectedBeltId(null);
-  }, [blueprintPlacementId, commitGame, connectionDraft, nodes, placement, placementCount, playTone, screenToFlowPosition, selectionMode, viewportZoom]);
+  }, [blueprintPlacementId, commitGame, connectionDraft, nodes, placement, placementCount, playTone, screenToFlowPosition, selectionMode, spawnInteractionBurst, viewportZoom]);
 
   const onCanvasDrop = useCallback((event: React.DragEvent) => {
     const buildingId = event.dataTransfer.getData("application/factory-building") as BuildingId;
@@ -2145,6 +2182,7 @@ function FactoryGame() {
           }
           commitGame((current) => craftConstruction(current, buildingId));
           setNotice(`${getConstructionDefinition(buildingId)?.name ?? "建筑"}已制造`);
+          spawnInteractionBurst(pointerRef.current.x, pointerRef.current.y, "制造完成", "positive");
           playTone("confirm");
         }}
       />
@@ -2349,6 +2387,8 @@ function FactoryGame() {
       <CargoCursor cargo={game.cargo} x={pointer.x} y={pointer.y} />
       {activeBlueprint ? <BlueprintPlacementCursor blueprint={activeBlueprint} x={pointer.x} y={pointer.y + (game.cargo ? 42 : 0)} /> : null}
       {connectionHint ? <div className={`connection-hint connection-hint--${connectionHint.tone}`} style={{ transform: `translate3d(${pointer.x + 18}px, ${pointer.y + 18}px, 0)` }}>{connectionHint.label}</div> : null}
+      {placement && ctrlHeld ? <div className="continuous-placement-indicator" style={{ left: pointer.x + 18, top: pointer.y - 34 }}><span>Ctrl</span><b>连续建造</b></div> : null}
+      {interactionBursts.map((burst) => <div className={`interaction-burst interaction-burst--${burst.tone}`} style={{ left: burst.x, top: burst.y }} key={burst.id}><i>{burst.tone === "warning" ? <Sparkles size={13} /> : <Check size={13} />}</i><span>{burst.label}</span></div>)}
       {eventHistory.length > 0 ? <aside className="interaction-event-feed" role="log" aria-label="运行事件" aria-live="polite">
         <header><Activity size={13} /><span>运行记录</span><button type="button" onClick={() => setEventHistory([])} title="清空运行记录" aria-label="清空运行记录"><X size={12} /></button></header>
         <div>{eventHistory.map((event) => <p key={event.id}>{event.text}</p>)}</div>

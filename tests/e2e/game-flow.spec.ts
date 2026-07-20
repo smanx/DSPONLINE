@@ -2926,6 +2926,11 @@ test("construction cards craft in place and Ctrl-click chains building placement
   await expect(craftButton).toBeEnabled();
   await craftButton.click();
   await expect(page.locator(".construction-item-shell").filter({ hasText: "火力发电厂" })).toContainText("×1");
+  await expect(page.locator(".interaction-burst").filter({ hasText: "制造完成" })).toBeVisible();
+  await page.screenshot({ path: "artifacts/qa/construction-shortcuts-1440.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: "artifacts/qa/construction-shortcuts-390.png", fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 900 });
 
   await openBlueprintStageGame(page);
   await page.getByTitle("部署制造台 Mk.I", { exact: true }).click();
@@ -2946,6 +2951,7 @@ test("construction cards craft in place and Ctrl-click chains building placement
   await page.keyboard.down("Control");
   await page.mouse.click(emptyPanePoints[0].x, emptyPanePoints[0].y);
   await expect(page.getByTitle("部署制造台 Mk.I", { exact: true })).toHaveClass(/construction-item--active/);
+  await expect(page.locator(".continuous-placement-indicator")).toContainText("连续建造");
   const secondPoint = await page.evaluate(() => {
     const pane = document.querySelector<HTMLElement>(".react-flow__pane");
     if (!pane) return null;

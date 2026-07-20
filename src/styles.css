@@ -4064,6 +4064,7 @@ select:focus-visible {
 .construction-item-shell {
   position: relative;
   min-width: 0;
+  contain: layout paint;
 }
 
 .construction-item {
@@ -12148,6 +12149,8 @@ select {
   padding: 5px 6px;
   border: 1px solid var(--line);
   background: #131d19;
+  content-visibility: auto;
+  contain-intrinsic-size: 42px;
 }
 
 .save-snapshot-row > i {
@@ -12259,6 +12262,95 @@ select {
   color: var(--green);
   cursor: pointer;
   font-size: 9px;
+}
+
+.fabricator-row,
+.alert-row,
+.achievement-row {
+  content-visibility: auto;
+  contain-intrinsic-size: 66px;
+}
+
+.continuous-placement-indicator,
+.interaction-burst {
+  position: fixed;
+  z-index: 125;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  transform-origin: left center;
+}
+
+.continuous-placement-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 0 7px;
+  border: 1px solid #4b8975;
+  border-radius: 3px;
+  background: rgba(14, 38, 30, 0.94);
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.28);
+  color: var(--green);
+  font-size: 9px;
+  animation: continuous-indicator-pulse 1.2s ease-in-out infinite;
+}
+
+.continuous-placement-indicator > span {
+  padding: 2px 4px;
+  border: 1px solid #5aa18a;
+  border-radius: 2px;
+  color: #d5f1e4;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.continuous-placement-indicator b {
+  font-weight: 600;
+}
+
+.interaction-burst {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid #4c8b78;
+  border-radius: 4px;
+  background: rgba(16, 32, 26, 0.94);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.34);
+  color: var(--green);
+  font-size: 9px;
+  animation: interaction-burst-float 900ms cubic-bezier(.2, .8, .3, 1) both;
+}
+
+.interaction-burst > i {
+  display: grid;
+  place-items: center;
+  font-style: normal;
+}
+
+.interaction-burst--warning {
+  border-color: #8c5d51;
+  background: rgba(44, 24, 21, 0.94);
+  color: var(--coral);
+}
+
+.interaction-burst--neutral {
+  border-color: #526c76;
+  color: var(--cyan);
+}
+
+@keyframes interaction-burst-float {
+  0% { opacity: 0; transform: translateY(8px) scale(.92); }
+  16% { opacity: 1; transform: translateY(0) scale(1); }
+  78% { opacity: 1; transform: translateY(-18px) scale(1); }
+  100% { opacity: 0; transform: translateY(-28px) scale(.96); }
+}
+
+@keyframes continuous-indicator-pulse {
+  0%, 100% { box-shadow: 0 5px 16px rgba(0, 0, 0, 0.28), 0 0 0 0 rgba(103, 203, 176, 0); }
+  50% { box-shadow: 0 5px 16px rgba(0, 0, 0, 0.28), 0 0 0 4px rgba(103, 203, 176, 0.12); }
 }
 
 .offline-report {
@@ -13314,6 +13406,13 @@ input:focus-visible,
   .construction-item,
   .header-actions > button {
     min-height: 38px;
+  }
+
+  .construction-item-craft {
+    top: 6px;
+    right: 5px;
+    width: 30px;
+    height: 30px;
   }
 
   .command-palette-list > button {
