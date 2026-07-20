@@ -2178,11 +2178,13 @@ select:focus-visible {
 .factory-canvas .react-flow .react-flow__edges {
   /* The edge wrapper is an invisible hit layer; its visible portal stays below cards. */
   z-index: 4;
-  pointer-events: auto;
+  /* The root SVG spans the whole viewport. Let only the interaction paths
+     receive pointer events so it cannot shield a building card underneath. */
+  pointer-events: none;
 }
 
-.factory-canvas .react-flow .react-flow__edges svg {
-  pointer-events: auto;
+.factory-canvas .react-flow .react-flow__edges .react-flow__edge-interaction {
+  pointer-events: stroke;
 }
 
 .factory-canvas .react-flow .react-flow__edgelabel-renderer {
