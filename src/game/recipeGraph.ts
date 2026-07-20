@@ -1,4 +1,4 @@
-import { RECIPES, TECHNOLOGY_LIST } from "./content";
+import { RECIPES, TECHNOLOGY_LIST, getBuilding } from "./content";
 import type { BuildingId, ItemId, PlanetId, RecipeDefinition, TechnologyDefinition } from "./types";
 
 export interface ResourceSourceDefinition {
@@ -6,6 +6,18 @@ export interface ResourceSourceDefinition {
   planetIds: PlanetId[];
   extractorBuildingId: BuildingId;
   manual: boolean;
+}
+
+export interface RecipeRateSummary {
+  cyclesPerMinute: number;
+  inputPerMinute: Partial<Record<ItemId, number>>;
+  outputPerMinute: Partial<Record<ItemId, number>>;
+}
+
+export function getRecipeRates(recipe: RecipeDefinition, speed = getBuilding(recipe.buildingId).speed): RecipeRateSummary {
+  const cyclesPerMinute = 60 * Math.max(0, speed) / Math.max(0.001, recipe.duration);
+  const scale = (entries: RecipeDefinition["inputs"]) => Object.fromEntries(entries.map((entry) => [entry.itemId, Math.round(entry.amount * cyclesPerMinute * 100) / 100])) as Partial<Record<ItemId, number>>;
+  return { cyclesPerMinute, inputPerMinute: scale(recipe.inputs), outputPerMinute: scale(recipe.outputs) };
 }
 
 const SOLID_VEIN_SOURCE = (planetIds: PlanetId[]): ResourceSourceDefinition => ({

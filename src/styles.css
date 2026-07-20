@@ -3751,6 +3751,122 @@ select:focus-visible {
   color: var(--green);
 }
 
+.handcraft-queue {
+  margin: 5px 10px 0;
+  border: 1px solid #385f57;
+  border-radius: 5px;
+  background: #111b18;
+}
+
+.handcraft-queue > header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--cyan);
+  font-size: 9px;
+}
+
+.handcraft-queue > header strong {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.handcraft-queue > div {
+  display: grid;
+  gap: 0;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.handcraft-queue-row {
+  display: grid;
+  grid-template-columns: 27px minmax(0, 1fr) 26px;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.handcraft-queue-row:last-child {
+  border-bottom: 0;
+}
+
+.handcraft-queue-row--active {
+  background: #17251f;
+}
+
+.handcraft-queue-row > .item-reference .item-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+}
+
+.handcraft-queue-row > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.handcraft-queue-row strong {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.handcraft-queue-row small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.handcraft-queue-row > span > i {
+  display: block;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: #29352f;
+}
+
+.handcraft-queue-row > span > i > b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+}
+
+.handcraft-queue-row > button,
+.handcraft-actions button:last-child {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.handcraft-queue-row > button:hover,
+.handcraft-actions button:last-child:hover {
+  color: var(--coral);
+}
+
+.handcraft-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.handcraft-actions > button:first-child {
+  min-width: 84px;
+}
+
 .fabricator-list--items {
   padding-top: 2px;
 }
@@ -4813,6 +4929,14 @@ select:focus-visible {
   font-size: 12px;
 }
 
+.recipe-audit--valid strong {
+  color: var(--green);
+}
+
+.recipe-audit:not(.recipe-audit--valid) strong {
+  color: var(--coral);
+}
+
 .recipe-close {
   display: grid;
   width: 34px;
@@ -5130,6 +5254,13 @@ select:focus-visible {
 .recipe-item-link > strong {
   color: var(--yellow);
   font-size: 8px;
+}
+
+.recipe-item-link > small {
+  grid-column: 2 / -1;
+  color: var(--cyan);
+  font-size: 7px;
+  text-align: right;
 }
 
 .recipe-section {

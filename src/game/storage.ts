@@ -643,6 +643,22 @@ export function migrateGame(value: unknown): GameState | null {
       }];
     })
     : [];
+  const handcraftQueue: GameState["handcraftQueue"] = Array.isArray(saved.handcraftQueue)
+    ? saved.handcraftQueue.slice(0, 20).flatMap((entry: Record<string, any>, index: number) => {
+      if (!getRecipe(entry.recipeId as RecipeId) || !validPlanetId(entry.planetId)) return [];
+      const batchesTotal = Math.max(1, Math.min(100, nonNegativeInteger(entry.batchesTotal) || 1));
+      const batchesRemaining = Math.max(0, Math.min(batchesTotal, nonNegativeInteger(entry.batchesRemaining) || batchesTotal));
+      return batchesRemaining > 0 ? [{
+        id: typeof entry.id === "string" && entry.id ? entry.id : `handcraft_migrated_${index + 1}`,
+        recipeId: entry.recipeId as RecipeId,
+        planetId: entry.planetId,
+        batchesTotal,
+        batchesRemaining,
+        progress: Math.min(0.9999, nonNegativeNumber(entry.progress)),
+        queuedAt: nonNegativeNumber(entry.queuedAt),
+      }] : [];
+    })
+    : [];
   const productionPlans: GameState["productionPlans"] = Array.isArray(saved.productionPlans)
     ? saved.productionPlans.flatMap((plan: Record<string, any>, index: number) => {
       if (typeof plan.itemId !== "string" || !(plan.itemId in ITEMS)) return [];
@@ -926,6 +942,7 @@ export function migrateGame(value: unknown): GameState | null {
     canvasBookmarks,
     blueprints,
     constructionQueue,
+    handcraftQueue,
     productionPlans,
     productionHistory,
     historyRecordedAt: Math.max(

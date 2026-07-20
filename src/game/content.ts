@@ -1336,3 +1336,71 @@ export function getRecipe(id: RecipeId | undefined): RecipeDefinition | undefine
 export function getTechnology(id: TechId | null | undefined): TechnologyDefinition | undefined {
   return id ? TECHNOLOGIES[id] : undefined;
 }
+
+export interface ContentAuditIssue {
+  severity: "error" | "warning";
+  code: string;
+  id: string;
+  message: string;
+}
+
+export interface ContentAuditResult {
+  valid: boolean;
+  issues: ContentAuditIssue[];
+}
+
+/**
+ * Validate the data registry at runtime so additions to the catalog cannot
+ * silently create broken recipe cards, unreachable technologies, or save data
+ * that points at an unknown content id.
+ */
+export function validateContentCatalog(): ContentAuditResult {
+  const issues: ContentAuditIssue[] = [];
+  const itemIds = new Set(Object.keys(ITEMS));
+  const buildingIds = new Set(Object.keys(BUILDINGS));
+  const techIds = new Set(Object.keys(TECHNOLOGIES));
+  const add = (severity: ContentAuditIssue["severity"], code: string, id: string, message: string) => issues.push({ severity, code, id, message });
+
+  for (const recipe of Object.values(RECIPES)) {
+    if (!buildingIds.has(recipe.buildingId)) add("error", "recipe-building", recipe.id, `配方引用未知设备 ${recipe.buildingId}`);
+    if (recipe.duration <= 0 || !Number.isFinite(recipe.duration)) add("error", "recipe-duration", recipe.id, "配方周期必须为正数");
+    if (recipe.requiredTechId && !techIds.has(recipe.requiredTechId)) add("error", "recipe-tech", recipe.id, `配方引用未知科技 ${recipe.requiredTechId}`);
+    for (const entry of [...recipe.inputs, ...recipe.outputs]) {
+      if (!itemIds.has(entry.itemId)) add("error", "recipe-item", recipe.id, `配方引用未知物品 ${entry.itemId}`);
+      if (entry.amount <= 0 || !Number.isFinite(entry.amount)) add("error", "recipe-amount", recipe.id, "配方数量必须为正数");
+    }
+    if (recipe.outputs.length === 0 && !["solar_sail_launch", "carrier_rocket_launch", "ray_power"].includes(recipe.id)) {
+      add("warning", "recipe-no-output", recipe.id, "配方没有实体产物，将只作为流程记录");
+    }
+  }
+
+  for (const definition of CONSTRUCTION) {
+    if (!definition.buildingId.startsWith("conveyor_belt_") && !definition.buildingId.startsWith("sorter_") && !buildingIds.has(definition.buildingId)) {
+      add("error", "construction-building", definition.buildingId, "施工定义引用未知建筑");
+    }
+    if (definition.requiredTechId && !techIds.has(definition.requiredTechId)) add("error", "construction-tech", definition.buildingId, `施工定义引用未知科技 ${definition.requiredTechId}`);
+    for (const cost of definition.costs) if (!itemIds.has(cost.itemId)) add("error", "construction-item", definition.buildingId, `施工成本引用未知物品 ${cost.itemId}`);
+  }
+
+  for (const technology of Object.values(TECHNOLOGIES)) {
+    for (const prerequisite of technology.prerequisites) if (!techIds.has(prerequisite)) add("error", "tech-prerequisite", technology.id, `科技引用未知前置 ${prerequisite}`);
+    for (const cost of technology.costs) if (!itemIds.has(cost.itemId)) add("error", "tech-item", technology.id, `科技成本引用未知物品 ${cost.itemId}`);
+  }
+
+  const visiting = new Set<TechId>();
+  const visited = new Set<TechId>();
+  const walk = (techId: TechId) => {
+    if (visiting.has(techId)) {
+      add("error", "tech-cycle", techId, "科技前置关系存在循环");
+      return;
+    }
+    if (visited.has(techId)) return;
+    visiting.add(techId);
+    for (const prerequisite of TECHNOLOGIES[techId]?.prerequisites ?? []) if (TECHNOLOGIES[prerequisite]) walk(prerequisite);
+    visiting.delete(techId);
+    visited.add(techId);
+  };
+  for (const technology of Object.values(TECHNOLOGIES)) walk(technology.id);
+
+  return { valid: issues.every((issue) => issue.severity !== "error"), issues };
+}

@@ -911,6 +911,16 @@ export interface ConstructionQueueEntry {
   queuedAt: number;
 }
 
+export interface HandcraftQueueEntry {
+  id: string;
+  recipeId: RecipeId;
+  planetId: PlanetId;
+  batchesTotal: number;
+  batchesRemaining: number;
+  progress: number;
+  queuedAt: number;
+}
+
 export interface ProductionTargetPlan {
   id: string;
   name: string;
@@ -952,6 +962,7 @@ export interface GameState {
   canvasBookmarks: CanvasBookmark[];
   blueprints: BlueprintDefinition[];
   constructionQueue: ConstructionQueueEntry[];
+  handcraftQueue: HandcraftQueueEntry[];
   productionPlans: ProductionTargetPlan[];
   productionHistory: ProductionHistorySample[];
   historyRecordedAt: number;

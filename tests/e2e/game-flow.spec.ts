@@ -1805,6 +1805,26 @@ test("basic fabrication handcrafts unlocked assembler recipes in batches", async
   await expect(page.locator(".item-hover-card")).toContainText("用途");
 });
 
+test("handcraft queue exposes progress, waits on inventory and keeps recipe rates visible", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openHandcraftGame(page);
+  await page.getByRole("tab", { name: "基础制造" }).click();
+  await page.getByRole("button", { name: "物品手工" }).click();
+  await page.getByLabel("搜索手工配方").fill("齿轮");
+  const gearRow = page.locator(".handcraft-row").filter({ hasText: "齿轮" });
+  await gearRow.getByLabel("排队制造齿轮").click();
+  await expect(page.locator(".handcraft-queue")).toContainText("齿轮");
+  await expect(page.locator(".handcraft-queue").getByRole("progressbar")).toBeVisible();
+  await expect.poll(async () => Number(await page.locator(".tray-row").filter({ hasText: "齿轮" }).locator("strong").textContent()), { timeout: 6_000 }).toBeGreaterThan(0);
+  await page.getByLabel("打开配方图鉴").click();
+  const codex = page.getByRole("dialog", { name: "配方图鉴" });
+  await expect(codex).toContainText("数据");
+  await codex.getByLabel("搜索配方物品").fill("处理器");
+  await codex.locator(".recipe-index > button").filter({ hasText: "处理器" }).click();
+  await expect(codex.locator(".recipe-method").filter({ hasText: "处理器" }).first()).toContainText("/min");
+  await page.screenshot({ path: "artifacts/qa/handcraft-queue-rates-1440.png", fullPage: true });
+});
+
 test("recipe codex searches sources and traverses production chains", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openHandcraftGame(page);

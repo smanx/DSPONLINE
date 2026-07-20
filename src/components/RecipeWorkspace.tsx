@@ -22,6 +22,8 @@ import {
   getResourceSources,
   getVirtualRecipeResult,
 } from "../game/recipeGraph";
+import { getRecipeRates } from "../game/recipeGraph";
+import { validateContentCatalog } from "../game/content";
 import type { GameState, ItemId, RecipeDefinition } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
@@ -46,9 +48,10 @@ function ItemMark({ itemId }: { itemId: ItemId }) {
   );
 }
 
-function ItemLink({ itemId, amount, onSelect }: {
+function ItemLink({ itemId, amount, ratePerMinute, onSelect }: {
   itemId: ItemId;
   amount?: number;
+  ratePerMinute?: number;
   onSelect: (itemId: ItemId) => void;
 }) {
   return (
@@ -56,6 +59,7 @@ function ItemLink({ itemId, amount, onSelect }: {
       <ItemMark itemId={itemId} />
       <span>{getItem(itemId).name}</span>
       {amount != null ? <strong>×{amount}</strong> : null}
+      {ratePerMinute != null ? <small>{ratePerMinute.toFixed(1)}/min</small> : null}
     </button>
   );
 }
@@ -72,6 +76,7 @@ function RecipeFlowCard({ recipe, game, onSelect }: {
     : building.name;
   const unlocked = !recipe.requiredTechId || isTechnologyCompleted(game, recipe.requiredTechId);
   const virtualResult = getVirtualRecipeResult(recipe);
+  const rates = getRecipeRates(recipe, building.speed);
   return (
     <article className="recipe-method">
       <header>
@@ -83,19 +88,19 @@ function RecipeFlowCard({ recipe, game, onSelect }: {
         <div>
           <small>输入</small>
           {recipe.inputs.length > 0
-            ? recipe.inputs.map((input) => <ItemLink itemId={input.itemId} amount={input.amount} onSelect={onSelect} key={input.itemId} />)
+            ? recipe.inputs.map((input) => <ItemLink itemId={input.itemId} amount={input.amount} ratePerMinute={rates.inputPerMinute[input.itemId]} onSelect={onSelect} key={input.itemId} />)
             : <span className="recipe-flow-empty">{recipe.buildingId === "ray_receiver" ? "戴森系统能量" : "无需物料"}</span>}
         </div>
         <ArrowRight size={17} />
         <div>
           <small>输出</small>
           {recipe.outputs.length > 0
-            ? recipe.outputs.map((output) => <ItemLink itemId={output.itemId} amount={output.amount} onSelect={onSelect} key={output.itemId} />)
+            ? recipe.outputs.map((output) => <ItemLink itemId={output.itemId} amount={output.amount} ratePerMinute={rates.outputPerMinute[output.itemId]} onSelect={onSelect} key={output.itemId} />)
             : <span className="recipe-virtual-output">{virtualResult ?? "流程产出"}</span>}
         </div>
       </div>
       <footer>
-        <span>{building.speed.toFixed(2)}× 设备速度</span>
+        <span>{building.speed.toFixed(2)}× 设备速度 · {rates.cyclesPerMinute.toFixed(1)} 批/min</span>
         {recipe.requiredTechId ? (
           <span className={unlocked ? "recipe-unlock recipe-unlock--ready" : "recipe-unlock"}>
             {unlocked ? <Check size={11} /> : <LockKeyhole size={11} />}{getTechnology(recipe.requiredTechId)?.name}
@@ -142,6 +147,7 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus }: {
   const upstreamItems = [...new Set(producingRecipes.flatMap((recipe) => recipe.inputs.map((input) => input.itemId)))];
   const downstreamItems = [...new Set(consumingRecipes.flatMap((recipe) => recipe.outputs.map((output) => output.itemId)))];
   const stock = networkItemStock(game, selectedItemId);
+  const catalogAudit = validateContentCatalog();
 
   const selectItem = (itemId: ItemId) => {
     setSelectedItemId(itemId);
@@ -157,6 +163,7 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus }: {
         <div className="recipe-headline">
           <span>物品 <strong>{ITEM_LIST.length}</strong></span>
           <span>配方 <strong>{Object.keys(RECIPES).length}</strong></span>
+          <span className={catalogAudit.valid ? "recipe-audit recipe-audit--valid" : "recipe-audit"} title={catalogAudit.valid ? "内容数据校验通过" : catalogAudit.issues.map((issue) => issue.message).join("；")}>数据 <strong>{catalogAudit.valid ? "OK" : `${catalogAudit.issues.length} 项`}</strong></span>
         </div>
         <button className="recipe-close" type="button" onClick={onClose} title="关闭配方图鉴" aria-label="关闭配方图鉴"><X size={18} /></button>
       </header>

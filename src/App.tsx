@@ -51,6 +51,7 @@ import {
   connectBelt,
   canPlaceBlueprint,
   canQueueBlueprint,
+  cancelHandcraftQueueEntry,
   cancelConstructionQueueEntry,
   canUpgradeEntities,
   clearDysonShells,
@@ -85,6 +86,7 @@ import {
   placeBuilding,
   placeBlueprint,
   queueBlueprint,
+  queueHandcraftRecipe,
   removeBelt,
   removeBeltNetwork,
   removeCanvasBookmark,
@@ -1930,6 +1932,8 @@ function FactoryGame() {
           }}
           onCraft={(buildingId) => setGame((current) => craftConstruction(current, buildingId))}
           onCraftItem={(recipeId, batches) => setGame((current) => handcraftRecipe(current, recipeId, batches))}
+          onQueueCraftItem={(recipeId, batches) => setGame((current) => queueHandcraftRecipe(current, recipeId, batches))}
+          onCancelCraftQueue={(entryId) => setGame((current) => cancelHandcraftQueueEntry(current, entryId))}
           onRemoveEntity={(entityId) => {
             commitGame((current) => removeEntity(current, entityId));
             setSelectedEntityIds((current) => current.filter((id) => id !== entityId));

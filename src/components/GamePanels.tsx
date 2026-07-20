@@ -23,6 +23,7 @@ import {
   GitFork,
   Layers3,
   ListChecks,
+  ListPlus,
   MoreHorizontal,
   Minus,
   Orbit,
@@ -47,12 +48,13 @@ import {
   Wind,
   Wrench,
   Zap,
+  X,
 } from "lucide-react";
 import { useState } from "react";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES_BY_BUILDING, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getSorterConstructionId, getTechnology, isConveyorBeltId } from "../game/content";
-import { POWER_GRID_IDS, POWER_GRID_LABELS, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltNetworkIds, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationSlots, getStationVesselCapacity, getStationWarperCapacity, isEntityInPowerCoverage, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
+import { POWER_GRID_IDS, POWER_GRID_LABELS, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltNetworkIds, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationSlots, getStationVesselCapacity, getStationWarperCapacity, isEntityInPowerCoverage, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import { getPlanetIndustrialProfile } from "../game/galaxy";
 import { analyzeBeltNetwork } from "../game/network";
 import type {
@@ -318,6 +320,8 @@ interface InspectorPanelProps {
   hasCopiedBeltConfiguration: boolean;
   onCraft: (buildingId: ConstructionId) => void;
   onCraftItem: (recipeId: RecipeId, batches: number) => void;
+  onQueueCraftItem: (recipeId: RecipeId, batches: number) => void;
+  onCancelCraftQueue: (entryId: string) => void;
   onUpgradeEntity: (entityId: string) => void;
   onUpgradeBelt: (beltId: string) => void;
   onUpgradeSorter: (beltId: string) => void;
@@ -1106,10 +1110,12 @@ function BeltInspector({ game, belt, hasCopiedConfiguration, focused, onPriority
   );
 }
 
-function Fabricator({ game, onCraft, onCraftItem }: {
+function Fabricator({ game, onCraft, onCraftItem, onQueueCraftItem, onCancelCraftQueue }: {
   game: GameState;
   onCraft: InspectorPanelProps["onCraft"];
   onCraftItem: InspectorPanelProps["onCraftItem"];
+  onQueueCraftItem: InspectorPanelProps["onQueueCraftItem"];
+  onCancelCraftQueue: InspectorPanelProps["onCancelCraftQueue"];
 }) {
   const [mode, setMode] = useState<"construction" | "items">("construction");
   const [query, setQuery] = useState("");
@@ -1134,6 +1140,19 @@ function Fabricator({ game, onCraft, onCraftItem }: {
           </div>
         </div>
       ) : null}
+      {mode === "items" && game.handcraftQueue.length > 0 ? <section className="handcraft-queue" aria-label="手工制造队列">
+        <header><ListChecks size={14} /><span>手工制造队列</span><strong>{game.handcraftQueue.length}/20</strong></header>
+        <div>{game.handcraftQueue.map((entry, index) => {
+          const recipe = getRecipe(entry.recipeId);
+          if (!recipe) return null;
+          const output = recipe.outputs[0];
+          const waitingForPlanet = entry.planetId !== game.activePlanetId;
+          const hasInputs = recipe.inputs.every((input) => (game.tray[input.itemId] ?? 0) >= input.amount);
+          return <article className={index === 0 && !waitingForPlanet && hasInputs ? "handcraft-queue-row handcraft-queue-row--active" : "handcraft-queue-row"} key={entry.id}>
+            <ItemMark itemId={output.itemId} /><span><strong>{getItem(output.itemId).name}</strong><small>{entry.batchesRemaining}/{entry.batchesTotal} 批 · {waitingForPlanet ? "等待行星" : hasInputs ? "生产中" : "等待原料"}</small><i role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(entry.progress * 100)}><b style={{ width: `${entry.progress * 100}%` }} /></i></span><button type="button" onClick={() => onCancelCraftQueue(entry.id)} title="取消手工队列" aria-label={`取消${getItem(output.itemId).name}手工队列`}><X size={13} /></button>
+          </article>;
+        })}</div>
+      </section> : null}
       <div className={`fabricator-list${mode === "items" ? " fabricator-list--items" : ""}`}>
       {mode === "construction" ? CONSTRUCTION.map((definition) => {
         const unlocked = !definition.requiredTechId || isTechnologyCompleted(game, definition.requiredTechId);
@@ -1171,9 +1190,12 @@ function Fabricator({ game, onCraft, onCraftItem }: {
             <header>
               <ItemMark itemId={output.itemId} />
               <div><strong>{getItem(output.itemId).name}</strong><span>{recipe.duration}s 配方 · 单批 ×{output.amount}</span></div>
-              <button type="button" disabled={!available} onClick={() => onCraftItem(recipe.id, batches)} title={`手工制造${getItem(output.itemId).name}`}>
-                {unlocked ? <Hammer size={14} /> : <LockKeyhole size={14} />} {unlocked ? `制作 ×${output.amount * batches}` : "锁定"}
-              </button>
+              <div className="handcraft-actions">
+                <button type="button" disabled={!available} onClick={() => onCraftItem(recipe.id, batches)} title={`立即手工制造${getItem(output.itemId).name}`}>
+                  {unlocked ? <Hammer size={14} /> : <LockKeyhole size={14} />} {unlocked ? `制作 ×${output.amount * batches}` : "锁定"}
+                </button>
+                <button type="button" disabled={!canQueueHandcraftRecipe(game, recipe.id)} onClick={() => onQueueCraftItem(recipe.id, batches)} title={`加入${getItem(output.itemId).name}手工队列`} aria-label={`排队制造${getItem(output.itemId).name}`}><ListPlus size={14} /></button>
+              </div>
             </header>
             {!unlocked && recipe.requiredTechId ? <div className="fabricator-lock"><LockKeyhole size={11} /> {getTechnology(recipe.requiredTechId)?.name}</div> : null}
             <div className="fabricator-costs">
@@ -1203,7 +1225,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
           <Wrench size={15} /> 基础制造
         </button>
       </div>
-      {props.tab === "fabricate" ? <Fabricator game={props.game} onCraft={props.onCraft} onCraftItem={props.onCraftItem} /> : props.selectedEntities.length > 1 ? (
+      {props.tab === "fabricate" ? <Fabricator game={props.game} onCraft={props.onCraft} onCraftItem={props.onCraftItem} onQueueCraftItem={props.onQueueCraftItem} onCancelCraftQueue={props.onCancelCraftQueue} /> : props.selectedEntities.length > 1 ? (
         <MultiSelectionInspector game={props.game} entities={props.selectedEntities} onRecipeChange={props.onBatchRecipeChange} onInstallSprayCoater={props.onBatchInstallSprayCoater} onProliferatorConfiguration={props.onBatchProliferatorConfiguration} />
       ) : props.selectedEntity ? (
          <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} />

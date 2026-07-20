@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { addCanvasBookmark, addDysonSwarmOrbit, connectBelt, createBlueprint, createInitialState, createStandardDysonLayer, installMiner, placeBuilding, queueBlueprint, setActivePlanet, setBeltRouteOffsetY, setBlueprintTransform, setDysonLaunchMode, setDysonLaunchThrottle, setDysonSwarmOrbit, setFuelItem, setLogisticsItem } from "./engine";
+import { addCanvasBookmark, addDysonSwarmOrbit, connectBelt, createBlueprint, createInitialState, createStandardDysonLayer, installMiner, placeBuilding, queueBlueprint, queueHandcraftRecipe, setActivePlanet, setBeltRouteOffsetY, setBlueprintTransform, setDysonLaunchMode, setDysonLaunchThrottle, setDysonSwarmOrbit, setFuelItem, setLogisticsItem } from "./engine";
 import { createProductionPlan } from "./planning";
 import { clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot } from "./storage";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
@@ -823,6 +823,17 @@ describe("game storage", () => {
     expect(loaded.blueprints[0].belts[0].routeMode).toBe("auto");
     expect(loaded.canvasBookmarks).toEqual([]);
     expect(loaded.settings.beltHeatmapEnabled).toBe(false);
+  });
+
+  it("round-trips a paused handcraft queue without losing its planet affinity", () => {
+    let state = createInitialState();
+    state.tray.iron_ingot = 3;
+    state = queueHandcraftRecipe(state, "gear", 3);
+    saveGame(state);
+    const loaded = loadGame().state;
+    expect(loaded.handcraftQueue).toEqual([
+      expect.objectContaining({ recipeId: "gear", planetId: "home", batchesTotal: 3, batchesRemaining: 3, progress: 0 }),
+    ]);
   });
 
   it("migrates the legacy v14 Dyson sphere totals into the Helios system plan", () => {

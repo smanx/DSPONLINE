@@ -180,6 +180,7 @@ function copyState(state: GameState): GameState {
       recipeOverrides: { ...blueprint.recipeOverrides },
     })),
     constructionQueue: state.constructionQueue.map((entry) => ({ ...entry, position: { ...entry.position } })),
+    handcraftQueue: state.handcraftQueue.map((entry) => ({ ...entry })),
     productionPlans: state.productionPlans.map((plan) => ({ ...plan, recipeSelections: { ...plan.recipeSelections } })),
     productionHistory: state.productionHistory.map((sample) => ({
       ...sample,
@@ -462,6 +463,7 @@ export function createInitialState(): GameState {
     canvasBookmarks: [],
     blueprints: [],
     constructionQueue: [],
+    handcraftQueue: [],
     productionPlans: [],
     productionHistory: [],
     historyRecordedAt: 0,
@@ -2700,6 +2702,7 @@ function updateStationCongestion(state: GameState): void {
 
 function simulateStep(state: GameState, seconds: number): void {
   advanceExplorationMissions(state, seconds);
+  advanceHandcraftQueue(state, seconds);
   absorbDysonSails(state, seconds);
   decayDysonSwarm(state, seconds);
   resetStationRuntime(state);
@@ -4453,6 +4456,67 @@ export function handcraftRecipe(state: GameState, recipeId: RecipeId, batches = 
     next.totalProduced[output.itemId] = Math.floor((next.totalProduced[output.itemId] ?? 0) + produced);
   }
   return next;
+}
+
+export function canQueueHandcraftRecipe(state: GameState, recipeId: RecipeId): boolean {
+  const recipe = getRecipe(recipeId);
+  return Boolean(recipe && recipe.buildingId === "assembling_machine_mk1" && recipe.outputs.length > 0 &&
+    (!recipe.requiredTechId || isTechnologyCompleted(state, recipe.requiredTechId)) && state.handcraftQueue.length < 20);
+}
+
+export function queueHandcraftRecipe(state: GameState, recipeId: RecipeId, batches = 1): GameState {
+  const amount = Math.max(1, Math.min(100, Math.floor(batches)));
+  if (!canQueueHandcraftRecipe(state, recipeId)) return state;
+  const next = copyState(state);
+  next.handcraftQueue.push({
+    id: `handcraft_${next.nextId}`,
+    recipeId,
+    planetId: next.activePlanetId,
+    batchesTotal: amount,
+    batchesRemaining: amount,
+    progress: 0,
+    queuedAt: next.elapsedSeconds,
+  });
+  next.nextId += 1;
+  return next;
+}
+
+export function cancelHandcraftQueueEntry(state: GameState, entryId: string): GameState {
+  if (!state.handcraftQueue.some((entry) => entry.id === entryId)) return state;
+  return { ...state, handcraftQueue: state.handcraftQueue.filter((entry) => entry.id !== entryId) };
+}
+
+function advanceHandcraftQueue(state: GameState, seconds: number): void {
+  let remainingSeconds = Math.max(0, seconds);
+  while (remainingSeconds > EPSILON && state.handcraftQueue.length > 0) {
+    const entry = state.handcraftQueue[0];
+    if (entry.planetId !== state.activePlanetId) break;
+    const recipe = getRecipe(entry.recipeId);
+    if (!recipe || recipe.outputs.length === 0) {
+      state.handcraftQueue.shift();
+      continue;
+    }
+    const duration = Math.max(0.05, recipe.duration);
+    if (entry.progress <= EPSILON) {
+      const hasInputs = recipe.inputs.every((input) => (state.tray[input.itemId] ?? 0) + EPSILON >= input.amount);
+      if (!hasInputs) break;
+      for (const input of recipe.inputs) {
+        state.tray[input.itemId] = Math.max(0, Math.floor((state.tray[input.itemId] ?? 0) - input.amount));
+      }
+    }
+    const cycleRemaining = Math.max(0, (1 - entry.progress) * duration);
+    const elapsed = Math.min(remainingSeconds, cycleRemaining);
+    entry.progress = Math.min(1, entry.progress + elapsed / duration);
+    remainingSeconds -= elapsed;
+    if (entry.progress < 1 - EPSILON) break;
+    for (const output of recipe.outputs) {
+      addToTray(state, output.itemId, output.amount);
+      state.totalProduced[output.itemId] = Math.floor((state.totalProduced[output.itemId] ?? 0) + output.amount);
+    }
+    entry.batchesRemaining -= 1;
+    entry.progress = 0;
+    if (entry.batchesRemaining <= 0) state.handcraftQueue.shift();
+  }
 }
 
 export function isTechnologyCompleted(state: GameState, techId: TechId): boolean {

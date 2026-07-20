@@ -75,6 +75,8 @@ import {
   placeBlueprint,
   processConstructionQueue,
   queueBlueprint,
+  queueHandcraftRecipe,
+  cancelHandcraftQueueEntry,
   removeEntity,
   removeBeltNetwork,
   removeCanvasBookmark,
@@ -117,6 +119,7 @@ import {
   setStationSlotPriority,
   setStationWarpEnabled,
   setSplitterMode,
+  canQueueHandcraftRecipe,
   upgradeBelt,
   upgradeEntities,
   upgradeEntity,
@@ -1746,6 +1749,30 @@ describe("factory simulation", () => {
     expect(state.tray.iron_ingot).toBe(1);
     expect(state.tray.copper_ingot).toBe(1);
     expect(state.tray.circuit_board).toBe(2);
+  });
+
+  it("runs a deterministic handcraft queue and waits without consuming missing inputs", () => {
+    let state = createInitialState();
+    state.paused = false;
+    state.tray.iron_ingot = 2;
+    expect(canQueueHandcraftRecipe(state, "gear")).toBe(true);
+    state = queueHandcraftRecipe(state, "gear", 2);
+    expect(state.handcraftQueue[0]).toMatchObject({ recipeId: "gear", batchesTotal: 2, batchesRemaining: 2, progress: 0 });
+
+    state = advanceSimulation(state, 0.5);
+    expect(state.tray.iron_ingot).toBe(1);
+    expect(state.tray.gear ?? 0).toBe(0);
+    expect(state.handcraftQueue[0].progress).toBeCloseTo(0.5);
+    state = advanceSimulation(state, 1.5);
+    expect(state.tray.gear).toBe(2);
+    expect(state.handcraftQueue).toEqual([]);
+
+    state = queueHandcraftRecipe(state, "gear", 1);
+    state = advanceSimulation(state, 2);
+    expect(state.handcraftQueue[0]).toMatchObject({ batchesRemaining: 1, progress: 0 });
+    const entryId = state.handcraftQueue[0].id;
+    state = cancelHandcraftQueueEntry(state, entryId);
+    expect(state.handcraftQueue).toEqual([]);
   });
 
   it("keeps equipment recipes and locked assembler recipes out of handcrafting", () => {
