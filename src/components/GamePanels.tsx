@@ -8,6 +8,7 @@ import {
   BookOpen,
   Box,
   Check,
+  Command,
   ChevronRight,
   CircuitBoard,
   ClipboardCopy,
@@ -1436,6 +1437,7 @@ export function HeaderControls({
   onOpenStarMap,
   onOpenOperations,
   onOpenCampaign,
+  onOpenCommandPalette,
   alertCount,
 }: {
   game: GameState;
@@ -1449,6 +1451,7 @@ export function HeaderControls({
   onOpenStarMap: () => void;
   onOpenOperations: () => void;
   onOpenCampaign: () => void;
+  onOpenCommandPalette: () => void;
   alertCount: number;
 }) {
   const [overflowOpen, setOverflowOpen] = useState(false);
@@ -1478,6 +1481,7 @@ export function HeaderControls({
         <button className="header-action--overflowable" type="button" onClick={onOpenStatistics} title="打开生产统计" aria-label="打开生产统计"><BarChart3 size={17} /></button>
         <button className="header-action--overflowable" type="button" onClick={onOpenRecipes} title="打开配方图鉴" aria-label="打开配方图鉴"><BookOpen size={17} /></button>
         <button className="header-action--overflowable" type="button" onClick={onOpenTechnology} title="打开科技树" aria-label="打开科技树"><FlaskConical size={17} /></button>
+        <button className="header-action--overflowable header-command-action" type="button" onClick={onOpenCommandPalette} title="打开命令面板（Ctrl/⌘+K）" aria-label="打开命令面板" aria-keyshortcuts="Control+K Meta+K"><Command size={17} /></button>
         <button className="header-overflow-command" type="button" onClick={() => setOverflowOpen((open) => !open)} aria-expanded={overflowOpen} title="更多工作区" aria-label="更多工作区"><MoreHorizontal size={18} /></button>
         {overflowOpen ? <div className="header-overflow-menu" role="menu">
           <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenOperations)}><Bell size={15} />运营中心</button>

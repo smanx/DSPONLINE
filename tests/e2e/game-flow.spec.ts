@@ -2907,6 +2907,34 @@ test("canvas placement supports toolbar and keyboard undo redo", async ({ page }
   await expect(page.locator(".game-notice")).toContainText("已重做");
 });
 
+test("command palette navigates workspaces, focuses recipes and preserves keyboard flow", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openSeededGame(page);
+  await page.keyboard.press("Control+K");
+  const palette = page.getByRole("dialog", { name: "命令面板" });
+  await expect(palette).toBeVisible();
+  await palette.getByLabel("搜索命令").fill("暂停模拟");
+  await palette.getByLabel("搜索命令").press("Enter");
+  await expect(page.locator(".canvas-status")).toContainText("模拟暂停");
+  await expect(page.locator(".interaction-event-feed")).toContainText("模拟已暂停");
+
+  await page.keyboard.press("Control+K");
+  await palette.getByLabel("搜索命令").fill("处理器");
+  await palette.getByLabel("搜索命令").press("Enter");
+  const recipes = page.getByRole("dialog", { name: "配方图鉴" });
+  await expect(recipes).toBeVisible();
+  await expect(recipes.locator(".recipe-item-header")).toContainText("处理器");
+  await page.keyboard.press("Escape");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.keyboard.press("Control+K");
+  await expect(palette).toBeVisible();
+  await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/command-palette-390.png", fullPage: true });
+  await page.keyboard.press("Escape");
+  await expect(palette).toBeHidden();
+});
+
 test("operations center diagnoses equipment and records achievement progress", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openOperationsStageGame(page);

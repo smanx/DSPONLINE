@@ -18,6 +18,7 @@ import {
   type OnSelectionChangeParams,
 } from "@xyflow/react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, X } from "lucide-react";
 import {
   BuildingPlacementCursor,
   CargoCursor,
@@ -27,6 +28,7 @@ import {
   PlanetNavigator,
   ResourceRail,
 } from "./components/GamePanels";
+import { CommandPalette, type CommandWorkspace } from "./components/CommandPalette";
 import { NODE_TYPES, type FactoryFlowNode, type FactoryNodeData } from "./components/FactoryNodes";
 import { EDGE_TYPES, FactoryConnectionLine, type FactoryFlowEdge } from "./components/FactoryEdges";
 import { BlueprintPlacementCursor, BlueprintWorkspace, CanvasSelectionTools, SelectionToolbar } from "./components/BlueprintWorkspace";
@@ -268,6 +270,7 @@ function FactoryGame() {
   const [blueprintsOpen, setBlueprintsOpen] = useState(false);
   const [dysonPlannerOpen, setDysonPlannerOpen] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [campaignOpen, setCampaignOpen] = useState(false);
   const [campaignFocusItemId, setCampaignFocusItemId] = useState<ItemId | null>(null);
   const [campaignFocusTechId, setCampaignFocusTechId] = useState<GameState["research"]["selectedTechId"]>(null);
@@ -288,6 +291,7 @@ function FactoryGame() {
   const [, setHistoryRevision] = useState(0);
   const [nodes, setNodes, onNodesChange] = useNodesState<FactoryFlowNode>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [eventHistory, setEventHistory] = useState<Array<{ id: number; text: string }>>([]);
   const [pointer, setPointer] = useState({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const gameRef = useRef(game);
   const completedTechCountRef = useRef(game.research.completedTechIds.length);
@@ -308,6 +312,7 @@ function FactoryGame() {
   const simulationSubmissionRef = useRef<{ id: number; state: GameState; seconds: number } | null>(null);
   const simulationPendingSecondsRef = useRef(0);
   const simulationRequestIdRef = useRef(0);
+  const eventSequenceRef = useRef(0);
   const { screenToFlowPosition, setCenter, setViewport, fitView, getViewport } = useReactFlow();
 
   useEffect(() => { gameRef.current = game; }, [game]);
@@ -492,9 +497,18 @@ function FactoryGame() {
 
   useEffect(() => {
     if (!notice) return;
+    const id = eventSequenceRef.current + 1;
+    eventSequenceRef.current = id;
+    setEventHistory((current) => [...current, { id, text: notice }].slice(-4));
     const timer = window.setTimeout(() => setNotice(null), 4000);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  useEffect(() => {
+    if (eventHistory.length === 0) return;
+    const timer = window.setTimeout(() => setEventHistory((current) => current.slice(1)), 7_500);
+    return () => window.clearTimeout(timer);
+  }, [eventHistory]);
 
   useEffect(() => {
     const count = game.research.completedTechIds.length;
@@ -576,7 +590,13 @@ function FactoryGame() {
         target instanceof HTMLSelectElement || Boolean(target?.isContentEditable);
       const commandKey = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
-      if (!editing && commandKey && key === "z") {
+      if (commandPaletteOpen && event.key === "Escape") {
+        event.preventDefault();
+        setCommandPaletteOpen(false);
+      } else if (!editing && commandKey && key === "k") {
+        event.preventDefault();
+        setCommandPaletteOpen((open) => !open);
+      } else if (!editing && commandKey && key === "z") {
         event.preventDefault();
         if (event.shiftKey) redoGame();
         else undoGame();
@@ -626,7 +646,7 @@ function FactoryGame() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [commitGame, playTone, redoGame, undoGame]);
+  }, [commandPaletteOpen, commitGame, playTone, redoGame, undoGame]);
 
   // Move keyboard focus into a newly opened workspace so keyboard and screen
   // reader users do not remain behind a modal overlay.
@@ -793,12 +813,48 @@ function FactoryGame() {
 
   const alerts = useMemo(() => getFactoryAlerts(game), [game]);
   const activePlanetEntityCount = useMemo(() => game.entities.filter((entity) => entity.planetId === game.activePlanetId).length, [game.activePlanetId, game.entities]);
-  const largeFactoryMode = game.settings.performanceMode && activePlanetEntityCount >= 150;
+  const automaticPerformanceMode = activePlanetEntityCount >= 300;
+  const performanceVisualMode = game.settings.performanceMode || automaticPerformanceMode;
+  const largeFactoryMode = performanceVisualMode && activePlanetEntityCount >= 150;
 
   const updateSettings = useCallback((settings: Partial<GameSettings>) => {
     setGame((current) => ({ ...current, settings: { ...current.settings, ...settings } }));
     if (settings.soundEnabled === true) playTone("confirm", true);
   }, [playTone]);
+
+  const openCommandWorkspace = useCallback((workspace: CommandWorkspace) => {
+    setCommandPaletteOpen(false);
+    setTechnologyOpen(false);
+    setStatisticsOpen(false);
+    setStatisticsFocusTab(null);
+    setRecipesOpen(false);
+    setStarMapOpen(false);
+    setBlueprintsOpen(false);
+    setDysonPlannerOpen(false);
+    setOperationsOpen(false);
+    setCampaignOpen(false);
+    setMobilePanel(null);
+    if (workspace === "inspector" || workspace === "resources") {
+      setMobilePanel(workspace);
+    } else if (workspace === "technology") {
+      setTechnologyOpen(true);
+    } else if (workspace === "statistics") {
+      setStatisticsOpen(true);
+    } else if (workspace === "recipes") {
+      setRecipesOpen(true);
+    } else if (workspace === "star-map") {
+      setStarMapOpen(true);
+    } else if (workspace === "blueprints") {
+      setBlueprintsOpen(true);
+    } else if (workspace === "dyson") {
+      setDysonPlannerOpen(true);
+    } else if (workspace === "campaign") {
+      setCampaignOpen(true);
+    } else if (workspace === "operations") {
+      setOperationsOpen(true);
+      setOperationsTab("alerts");
+    }
+  }, []);
 
   const restoreGame = useCallback((state: GameState, report: OfflineReport | null = null) => {
     onMiningStop();
@@ -821,6 +877,8 @@ function FactoryGame() {
     setCampaignFocusItemId(null);
     setCampaignFocusTechId(null);
     setHighlightedTaskId(null);
+    setEventHistory([]);
+    setCommandPaletteOpen(false);
     clearHistory();
     setViewport({ x: 510, y: 250, zoom: 0.84 }, { duration: state.settings.reducedMotion ? 0 : 180 });
   }, [clearHistory, onMiningStop, setNodes, setViewport]);
@@ -1597,6 +1655,8 @@ function FactoryGame() {
     setBlueprintPlacementId(null);
     setSelectionMode(false);
     setHighlightedTaskId(null);
+    setEventHistory([]);
+    setCommandPaletteOpen(false);
     clearHistory();
     setNotice("当前工厂已重置");
   };
@@ -1605,7 +1665,8 @@ function FactoryGame() {
     <main
       className={`game-shell${placement || blueprintPlacementId ? " game-shell--placing" : ""}${selectionMode ? " game-shell--selecting" : ""}${mobilePanel ? ` mobile-panel--${mobilePanel}` : ""}${leftSidebarCollapsed ? " sidebar-left-collapsed" : ""}${rightSidebarCollapsed ? " sidebar-right-collapsed" : ""}`}
       data-reduced-motion={game.settings.reducedMotion ? "true" : "false"}
-      data-performance-mode={game.settings.performanceMode ? "true" : "false"}
+      data-performance-mode={performanceVisualMode ? "true" : "false"}
+      data-performance-auto={automaticPerformanceMode ? "true" : "false"}
       data-simulation-worker={simulationWorkerActive ? "active" : "fallback"}
       data-difficulty={game.settings.difficulty}
       data-zoom-lod={largeFactoryMode || viewportZoom < 0.55 ? "compact" : viewportZoom < 0.86 ? "medium" : "full"}
@@ -1616,7 +1677,11 @@ function FactoryGame() {
         game={game}
         alertCount={alerts.length}
         onOpenCampaign={openCampaign}
-        onPauseToggle={() => setGame((current) => setPaused(current, !current.paused))}
+        onPauseToggle={() => {
+          const wasPaused = gameRef.current.paused;
+          setGame((current) => setPaused(current, !current.paused));
+          setNotice(wasPaused ? "模拟已继续" : "模拟已暂停");
+        }}
         onReset={reset}
         onOpenOperations={() => {
           setOperationsOpen(true);
@@ -1631,6 +1696,7 @@ function FactoryGame() {
           setMobilePanel(null);
           setNotice(null);
         }}
+        onOpenCommandPalette={() => setCommandPaletteOpen(true)}
         onOpenResources={() => { setMobilePanel((current) => current === "resources" ? null : "resources"); setNotice(null); }}
         onOpenInspector={() => { setMobilePanel((current) => current === "inspector" ? null : "inspector"); setNotice(null); }}
         onOpenRecipes={() => { setRecipesOpen(true); setTechnologyOpen(false); setStatisticsOpen(false); setCampaignOpen(false); setCampaignFocusItemId(null); setMobilePanel(null); setNotice(null); }}
@@ -1738,7 +1804,7 @@ function FactoryGame() {
             zoomOnDoubleClick={false}
             deleteKeyCode={null}
             fitViewOptions={{ padding: 0.18 }}
-            onlyRenderVisibleElements={game.settings.performanceMode}
+            onlyRenderVisibleElements={performanceVisualMode}
             proOptions={{ hideAttribution: true }}
           >
             <Background variant={BackgroundVariant.Dots} gap={20} size={1.1} color="#3c4743" />
@@ -1983,6 +2049,21 @@ function FactoryGame() {
         onRecipeOverride={(blueprintId, sourceRecipeId, targetRecipeId) => commitGame((current) => setBlueprintRecipeOverride(current, blueprintId, sourceRecipeId, targetRecipeId))}
         onCancelQueue={(entryId) => commitGame((current) => cancelConstructionQueueEntry(current, entryId))}
       />
+      <CommandPalette
+        open={commandPaletteOpen}
+        game={game}
+        onClose={() => setCommandPaletteOpen(false)}
+        onOpenWorkspace={openCommandWorkspace}
+        onFocusRecipe={openRecipeFocus}
+        onPauseToggle={() => {
+          const wasPaused = gameRef.current.paused;
+          setGame((current) => setPaused(current, !current.paused));
+          setNotice(wasPaused ? "模拟已继续" : "模拟已暂停");
+        }}
+        onTogglePerformance={() => updateSettings({ performanceMode: !gameRef.current.settings.performanceMode })}
+        onToggleReducedMotion={() => updateSettings({ reducedMotion: !gameRef.current.settings.reducedMotion })}
+        onReset={reset}
+      />
       <Suspense fallback={<WorkspaceLoading />}>
         {technologyOpen ? (
           <TechnologyWorkspace
@@ -2144,6 +2225,10 @@ function FactoryGame() {
       <CargoCursor cargo={game.cargo} x={pointer.x} y={pointer.y} />
       {activeBlueprint ? <BlueprintPlacementCursor blueprint={activeBlueprint} x={pointer.x} y={pointer.y + (game.cargo ? 42 : 0)} /> : null}
       {connectionHint ? <div className={`connection-hint connection-hint--${connectionHint.tone}`} style={{ transform: `translate3d(${pointer.x + 18}px, ${pointer.y + 18}px, 0)` }}>{connectionHint.label}</div> : null}
+      {eventHistory.length > 0 ? <aside className="interaction-event-feed" role="log" aria-label="运行事件" aria-live="polite">
+        <header><Activity size={13} /><span>运行记录</span><button type="button" onClick={() => setEventHistory([])} title="清空运行记录" aria-label="清空运行记录"><X size={12} /></button></header>
+        <div>{eventHistory.map((event) => <p key={event.id}>{event.text}</p>)}</div>
+      </aside> : null}
       {notice ? <div className="game-notice" role="status">{notice}</div> : null}
     </main>
   );
