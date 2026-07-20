@@ -907,6 +907,59 @@ async function openBlueprintStageGame(page: Page) {
   await expect(page.locator(".machine-node")).toHaveCount(2);
 }
 
+async function openStressStageGame(page: Page) {
+  await page.addInitScript(() => {
+    const entities = Array.from({ length: 500 }, (_, index) => ({
+      id: `stress_device_${index}`,
+      kind: "storage",
+      planetId: "home",
+      position: { x: index % 25 * 280 - 700, y: Math.floor(index / 25) * 220 - 360 },
+      buildingId: "storage_mk1",
+      storedItemId: "iron_ingot",
+      machineCount: 1,
+      minerCount: 0,
+      inputs: { iron_ingot: 0 },
+      outputs: { iron_ingot: index % 2 === 0 ? 1_000 : 0 },
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+    }));
+    const belts = Array.from({ length: 1_000 }, (_, index) => ({
+      id: `stress_belt_${index}`,
+      planetId: "home",
+      source: `stress_device_${index % 500}`,
+      target: `stress_device_${(index + 1) % 500}`,
+      itemId: "iron_ingot",
+      lanes: 1,
+      tier: 1,
+      sorterTier: 1,
+      progress: 0,
+      priority: index % 2,
+      lastFlow: 0,
+    }));
+    const state = {
+      version: 18,
+      nextId: 2_000,
+      activePlanetId: "home",
+      entities,
+      belts,
+      construction: { wind_turbine: 1 },
+      tray: {},
+      planetTrays: { home: {}, ashen: {}, giant: {}, frost: {}, boreal_giant: {}, magnetar: {} },
+      totalProduced: {},
+      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: [] },
+      exploration: { unlockedSystemIds: ["helios"] },
+      blueprints: [],
+      paused: false,
+      settings: { simulationSpeed: 1, performanceMode: true, reducedMotion: true, soundEnabled: false, autosaveIntervalSeconds: 300 },
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
 async function openOperationsStageGame(page: Page) {
   await page.addInitScript(() => {
     if (window.localStorage.getItem("dsp-idle-network.save.v1")) return;
@@ -2459,6 +2512,31 @@ test("sub-360 header moves workspaces into an overflow menu", async ({ page }) =
   await expect(menu).toBeVisible();
   await menu.getByRole("menuitem", { name: "科技树" }).click();
   await expect(page.getByRole("dialog", { name: "科技树" })).toBeVisible();
+});
+
+test("performance mode keeps a 500-device 1000-line factory responsive", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openStressStageGame(page);
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-performance-mode", "true");
+  await expect.poll(async () => shell.getAttribute("data-simulation-worker")).toBe("active");
+
+  const renderedNodes = await page.locator(".react-flow__node").count();
+  expect(renderedNodes).toBeGreaterThan(0);
+  expect(renderedNodes).toBeLessThan(120);
+  const frameLatency = await page.evaluate(() => new Promise<number>((resolve) => {
+    const started = performance.now();
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now() - started)));
+  }));
+  expect(frameLatency).toBeLessThan(500);
+
+  const pane = page.locator(".react-flow__pane");
+  const paneBounds = await pane.boundingBox();
+  await placeOnCanvas(page, "部署风力涡轮机", Math.round(paneBounds!.width * 0.72), Math.round(paneBounds!.height * 0.7));
+  await expect(page.locator(".power-node")).toHaveCount(1);
+  await page.waitForTimeout(650);
+  await expect(page.locator(".power-node")).toHaveCount(1);
+  await page.screenshot({ path: "artifacts/qa/stress-factory-1440.png", fullPage: true });
 });
 
 test("campaign center shows chapter progress, deficits and direct recipe navigation", async ({ page }) => {

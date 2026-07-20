@@ -10,6 +10,8 @@ export interface FactoryEdgeData extends Record<string, unknown> {
   flow: number;
   capacity: number;
   durationSeconds: number;
+  detailVisible: boolean;
+  motionEnabled: boolean;
 }
 
 export type FactoryFlowEdge = Edge<FactoryEdgeData, "factory">;
@@ -34,7 +36,7 @@ export function FactoryEdge({
   return (
     <>
       <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} />
-      {active && data ? (
+      {active && data?.motionEnabled ? (
         <g className="factory-cargo-packets" aria-hidden="true">
           {Array.from({ length: packetCount }, (_, index) => (
             <circle className="factory-cargo-packet" cx="0" cy="0" r={selected ? 5 : 4} fill={data.color} key={index}>
@@ -43,7 +45,7 @@ export function FactoryEdge({
           ))}
         </g>
       ) : null}
-      {data ? (
+      {data?.detailVisible ? (
         <EdgeLabelRenderer>
           <div
             className={`react-flow__edge-text factory-edge-label nodrag nopan${selected ? " factory-edge-label--selected" : ""}`}

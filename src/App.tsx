@@ -110,6 +110,7 @@ import { getAchievement, getNewAchievementIds, unlockAchievements } from "./game
 import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
 import { clearGame, clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot, type OfflineReport, type SaveSlotId } from "./game/storage";
 import type { BeltTier, BuildingId, CampaignTaskId, DraggedItemSourceKind, EnergyMode, GameSettings, GameState, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad } from "./game/types";
+import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 
 type InspectorTab = "inspect" | "fabricate";
 
@@ -210,6 +211,7 @@ function FactoryGame() {
   const [highlightedTaskId, setHighlightedTaskId] = useState<CampaignTaskId | null>(null);
   const [rewardFlights, setRewardFlights] = useState<RewardFlight[]>([]);
   const [planetTransition, setPlanetTransition] = useState<PlanetTransition | null>(null);
+  const [simulationWorkerActive, setSimulationWorkerActive] = useState(false);
   const [, setHistoryRevision] = useState(0);
   const [nodes, setNodes, onNodesChange] = useNodesState<FactoryFlowNode>([]);
   const [notice, setNotice] = useState<string | null>(null);
@@ -228,6 +230,11 @@ function FactoryGame() {
   const selectedEntityIdsRef = useRef<string[]>([]);
   const selectedBeltIdRef = useRef<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const simulationWorkerRef = useRef<Worker | null>(null);
+  const simulationWorkerDisabledRef = useRef(false);
+  const simulationSubmissionRef = useRef<{ id: number; state: GameState; seconds: number } | null>(null);
+  const simulationPendingSecondsRef = useRef(0);
+  const simulationRequestIdRef = useRef(0);
   const { screenToFlowPosition, setCenter, setViewport, fitView, getViewport } = useReactFlow();
 
   useEffect(() => { gameRef.current = game; }, [game]);
@@ -307,12 +314,76 @@ function FactoryGame() {
   }, []);
 
   useEffect(() => {
+    if (typeof Worker === "undefined") {
+      simulationWorkerDisabledRef.current = true;
+      return;
+    }
+    const worker = new Worker(new URL("./game/simulation.worker.ts", import.meta.url), { type: "module", name: "factory-simulation" });
+    simulationWorkerRef.current = worker;
+    setSimulationWorkerActive(true);
+    worker.onmessage = (event: MessageEvent<SimulationWorkerResponse>) => {
+      const submission = simulationSubmissionRef.current;
+      if (!submission || event.data.id !== submission.id) return;
+      simulationSubmissionRef.current = null;
+      setGame((current) => {
+        if (current !== submission.state) {
+          simulationPendingSecondsRef.current += submission.seconds;
+          return current;
+        }
+        gameRef.current = event.data.state;
+        return event.data.state;
+      });
+    };
+    worker.onerror = () => {
+      const submission = simulationSubmissionRef.current;
+      if (submission) simulationPendingSecondsRef.current += submission.seconds;
+      simulationSubmissionRef.current = null;
+      simulationWorkerDisabledRef.current = true;
+      simulationWorkerRef.current = null;
+      setSimulationWorkerActive(false);
+      worker.terminate();
+    };
+    return () => {
+      worker.terminate();
+      simulationWorkerRef.current = null;
+      simulationSubmissionRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
     let previous = performance.now();
     const timer = window.setInterval(() => {
       const now = performance.now();
       const seconds = Math.min(1, Math.max(0, (now - previous) / 1000)) * game.settings.simulationSpeed;
       previous = now;
-      setGame((current) => advanceSimulation(current, seconds));
+      simulationPendingSecondsRef.current += seconds;
+      const worker = simulationWorkerRef.current;
+      if (worker && !simulationWorkerDisabledRef.current) {
+        if (simulationSubmissionRef.current) return;
+        const simulationSeconds = simulationPendingSecondsRef.current;
+        simulationPendingSecondsRef.current = 0;
+        const request: SimulationWorkerRequest = {
+          id: simulationRequestIdRef.current + 1,
+          state: gameRef.current,
+          seconds: simulationSeconds,
+        };
+        simulationRequestIdRef.current = request.id;
+        simulationSubmissionRef.current = request;
+        try {
+          worker.postMessage(request);
+        } catch {
+          simulationSubmissionRef.current = null;
+          simulationWorkerDisabledRef.current = true;
+          simulationWorkerRef.current = null;
+          setSimulationWorkerActive(false);
+          worker.terminate();
+          setGame((current) => advanceSimulation(current, simulationSeconds));
+        }
+        return;
+      }
+      const simulationSeconds = simulationPendingSecondsRef.current;
+      simulationPendingSecondsRef.current = 0;
+      setGame((current) => advanceSimulation(current, simulationSeconds));
     }, game.settings.performanceMode ? 250 : 100);
     return () => window.clearInterval(timer);
   }, [game.settings.performanceMode, game.settings.simulationSpeed]);
@@ -579,6 +650,8 @@ function FactoryGame() {
   }, []);
 
   const alerts = useMemo(() => getFactoryAlerts(game), [game]);
+  const activePlanetEntityCount = useMemo(() => game.entities.filter((entity) => entity.planetId === game.activePlanetId).length, [game.activePlanetId, game.entities]);
+  const largeFactoryMode = game.settings.performanceMode && activePlanetEntityCount >= 150;
 
   const updateSettings = useCallback((settings: Partial<GameSettings>) => {
     setGame((current) => ({ ...current, settings: { ...current.settings, ...settings } }));
@@ -909,29 +982,32 @@ function FactoryGame() {
 
   useEffect(() => {
     if (nodeDragActiveRef.current) return;
-    setNodes((current) => {
-      const existing = new Map(current.map((node) => [node.id, node]));
-      return game.entities.filter((entity) => entity.planetId === game.activePlanetId).map((entity) => {
-        const previous = existing.get(entity.id);
-        return {
-          id: entity.id,
-          type: entity.kind,
-          position: previous?.position ?? entity.position,
-          measured: previous?.measured,
-          data: {
-            ...commonNodeData,
-            entity,
-            connectedInputItemIds: beltNodeIndex.connectedInputsByTarget.get(entity.id) ?? [],
-            status: getEntityOperatingStatus(game, entity),
-          } as FactoryNodeData,
-          selected: selectedEntityIds.includes(entity.id),
-          className: highlightedTaskId
-            ? taskHighlight.entityIds.has(entity.id) ? "factory-flow-node--task-focus" : "factory-flow-node--task-dim"
-            : undefined,
-          draggable: !placement && !blueprintPlacementId,
-        } satisfies FactoryFlowNode;
+    const frame = window.requestAnimationFrame(() => {
+      setNodes((current) => {
+        const existing = new Map(current.map((node) => [node.id, node]));
+        return game.entities.filter((entity) => entity.planetId === game.activePlanetId).map((entity) => {
+          const previous = existing.get(entity.id);
+          return {
+            id: entity.id,
+            type: entity.kind,
+            position: previous?.position ?? entity.position,
+            measured: previous?.measured,
+            data: {
+              ...commonNodeData,
+              entity,
+              connectedInputItemIds: beltNodeIndex.connectedInputsByTarget.get(entity.id) ?? [],
+              status: getEntityOperatingStatus(game, entity),
+            } as FactoryNodeData,
+            selected: selectedEntityIds.includes(entity.id),
+            className: highlightedTaskId
+              ? taskHighlight.entityIds.has(entity.id) ? "factory-flow-node--task-focus" : "factory-flow-node--task-dim"
+              : undefined,
+            draggable: !placement && !blueprintPlacementId,
+          } satisfies FactoryFlowNode;
+        });
       });
     });
+    return () => window.cancelAnimationFrame(frame);
   }, [beltNodeIndex.connectedInputsByTarget, blueprintPlacementId, commonNodeData, game.activePlanetId, game.entities, highlightedTaskId, placement, selectedEntityIds, setNodes, taskHighlight.entityIds]);
 
   const edges = useMemo<FactoryFlowEdge[]>(() => game.belts.filter((belt) => belt.planetId === game.activePlanetId).map((belt) => {
@@ -957,13 +1033,15 @@ function FactoryGame() {
         flow: belt.lastFlow,
         capacity,
         durationSeconds: Math.max(0.55, 1.65 - flowRatio * 0.9),
+        detailVisible: !largeFactoryMode && viewportZoom >= 0.55,
+        motionEnabled: !game.settings.performanceMode && !game.settings.reducedMotion,
       },
       style: {
         stroke: item.color,
         strokeWidth: selectedBeltId === belt.id ? 3 : 2,
       },
     } satisfies FactoryFlowEdge;
-  }), [game.activePlanetId, game.belts, highlightedTaskId, selectedBeltId, taskHighlight.beltIds]);
+  }), [game.activePlanetId, game.belts, game.settings.performanceMode, game.settings.reducedMotion, highlightedTaskId, largeFactoryMode, selectedBeltId, taskHighlight.beltIds, viewportZoom]);
 
   const isValidConnection = useCallback((connection: Connection | Edge) => {
     const sourceItem = parseHandleItem(connection.sourceHandle);
@@ -1194,7 +1272,9 @@ function FactoryGame() {
       className={`game-shell${placement || blueprintPlacementId ? " game-shell--placing" : ""}${selectionMode ? " game-shell--selecting" : ""}${mobilePanel ? ` mobile-panel--${mobilePanel}` : ""}${leftSidebarCollapsed ? " sidebar-left-collapsed" : ""}${rightSidebarCollapsed ? " sidebar-right-collapsed" : ""}`}
       data-reduced-motion={game.settings.reducedMotion ? "true" : "false"}
       data-performance-mode={game.settings.performanceMode ? "true" : "false"}
-      data-zoom-lod={viewportZoom < 0.55 ? "compact" : viewportZoom < 0.86 ? "medium" : "full"}
+      data-simulation-worker={simulationWorkerActive ? "active" : "fallback"}
+      data-zoom-lod={largeFactoryMode || viewportZoom < 0.55 ? "compact" : viewportZoom < 0.86 ? "medium" : "full"}
+      data-large-factory={largeFactoryMode ? "true" : "false"}
     >
       <HeaderControls
         game={game}
