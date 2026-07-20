@@ -39,6 +39,7 @@ import {
   applyBeltConfiguration,
   addDysonLayer,
   addDysonNode,
+  addDysonSwarmOrbit,
   adjustStationDrones,
   adjustStationWarpers,
   adjustStationVessels,
@@ -83,6 +84,7 @@ import {
   removeBlueprint,
   removeDysonLayer,
   removeDysonNode,
+  removeDysonSwarmOrbit,
   removeEntity,
   removeEntities,
   removeQueuedTechnology,
@@ -96,7 +98,12 @@ import {
   setEntityRecipe,
   setEntitiesRecipe,
   setActiveDysonLayer,
+  setActiveDysonSwarmOrbit,
+  setDysonLaunchEnabled,
+  setDysonLaunchMode,
+  setDysonLaunchThrottle,
   setDysonLayerOrbit,
+  setDysonSwarmOrbit,
   setEnergyMode,
   setEntityGenerationPriority,
   setEntityPowerGrid,
@@ -125,6 +132,13 @@ import {
   upgradeSorter,
   upgradeSorterNetwork,
   getBlueprintEligibleEntityIds,
+  dispatchGalacticExport,
+  selectInfiniteResearch,
+  setGalacticDispatchAutomation,
+  setGalacticDispatchThrottle,
+  setGalacticExportEnabled,
+  setGalacticExportPriority,
+  setInfiniteResearchAutomation,
   autoConnectDysonLayer,
   planDysonShell,
   renameBlueprint,
@@ -133,7 +147,7 @@ import { getAchievement, getNewAchievementIds, unlockAchievements } from "./game
 import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
 import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
 import { clearGame, clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot, type OfflineReport, type SaveSlotId } from "./game/storage";
-import type { BeltTier, BuildingId, CampaignTaskId, CargoStackSize, DraggedItemSourceKind, EnergyMode, GameSettings, GameState, ItemId, PlacementCount, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
+import type { BeltTier, BuildingId, CampaignTaskId, CargoStackSize, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 
 type InspectorTab = "inspect" | "fabricate";
@@ -173,6 +187,14 @@ function snapFlowPosition(position: { x: number; y: number }) {
     x: Math.round(position.x / FLOW_GRID) * FLOW_GRID,
     y: Math.round(position.y / FLOW_GRID) * FLOW_GRID,
   };
+}
+
+function distanceToSegment(point: { x: number; y: number }, start: { x: number; y: number }, end: { x: number; y: number }): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) return Math.hypot(point.x - start.x, point.y - start.y);
+  const ratio = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(point.x - (start.x + ratio * dx), point.y - (start.y + ratio * dy));
 }
 
 const RecipeWorkspace = lazy(() => import("./components/RecipeWorkspace").then((module) => ({ default: module.RecipeWorkspace })));
@@ -1089,8 +1111,8 @@ function FactoryGame() {
       targetHandle: `in:${belt.itemId}`,
       className: `factory-edge${belt.lastFlow > 0.001 ? " factory-edge--active" : ""}${highlightedTaskId ? taskHighlight.beltIds.has(belt.id) ? " factory-edge--task-focus" : " factory-edge--task-dim" : ""}`,
       selected: selectedBeltId === belt.id,
-      // Keep belts below factory cards. The canvas CSS owns the layer order;
-      // selected belts are only raised within the belt layer for emphasis.
+      // The canvas CSS keeps every belt layer below factory cards. Selected
+      // belts are only raised relative to other belts for emphasis.
       zIndex: selectedBeltId === belt.id ? 1 : 0,
       interactionWidth: 36,
       markerEnd: { type: MarkerType.ArrowClosed, color: item.color },
@@ -1264,6 +1286,31 @@ function FactoryGame() {
         : compatible ? `${blueprintName}已加入施工队列，材料齐备后自动部署` : `${blueprintName}与当前行星不兼容`);
       return;
     }
+    if (!selectionMode && !connectionDraft) {
+      const flowPoint = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const nodeById = new Map(nodes.map((node) => [node.id, node]));
+      let nearest: { beltId: string; distance: number } | null = null;
+      for (const belt of gameRef.current.belts.filter((candidate) => candidate.planetId === gameRef.current.activePlanetId)) {
+        const source = nodeById.get(belt.source);
+        const target = nodeById.get(belt.target);
+        if (!source || !target) continue;
+        const sourceWidth = source.measured?.width ?? 256;
+        const sourceHeight = source.measured?.height ?? 180;
+        const targetWidth = target.measured?.width ?? 256;
+        const targetHeight = target.measured?.height ?? 180;
+        const start = { x: source.position.x + sourceWidth / 2, y: source.position.y + sourceHeight / 2 };
+        const end = { x: target.position.x + targetWidth / 2, y: target.position.y + targetHeight / 2 };
+        const distance = distanceToSegment(flowPoint, start, end);
+        if (!nearest || distance < nearest.distance) nearest = { beltId: belt.id, distance };
+      }
+      if (nearest && nearest.distance <= 42 / Math.max(0.3, viewportZoom)) {
+        setSelectedBeltId(nearest.beltId);
+        setSelectedEntityIds([]);
+        setInspectorTab("inspect");
+        setMobilePanel("inspector");
+        return;
+      }
+    }
     if (placement) {
       if (getBuilding(placement).kind === "miner") {
         setNotice(minerPlacementHint(placement));
@@ -1277,7 +1324,7 @@ function FactoryGame() {
     }
     setSelectedEntityIds([]);
     setSelectedBeltId(null);
-  }, [blueprintPlacementId, commitGame, placement, placementCount, playTone, screenToFlowPosition]);
+  }, [blueprintPlacementId, commitGame, connectionDraft, nodes, placement, placementCount, playTone, screenToFlowPosition, selectionMode, viewportZoom]);
 
   const onCanvasDrop = useCallback((event: React.DragEvent) => {
     const buildingId = event.dataTransfer.getData("application/factory-building") as BuildingId;
@@ -1689,6 +1736,8 @@ function FactoryGame() {
             onClose={() => setTechnologyOpen(false)}
             onSelect={(techId) => setGame((current) => selectTechnology(current, techId))}
             onRemoveQueued={(techId) => setGame((current) => removeQueuedTechnology(current, techId))}
+            onSelectInfiniteResearch={(researchId: InfiniteResearchId) => setGame((current) => selectInfiniteResearch(current, researchId))}
+            onInfiniteResearchAutomation={(enabled) => setGame((current) => setInfiniteResearchAutomation(current, enabled))}
           />
         ) : null}
         {statisticsOpen ? <StatisticsWorkspace
@@ -1699,6 +1748,13 @@ function FactoryGame() {
           onUpdatePlan={(planId, changes) => commitGame((current) => updateProductionPlan(current, planId, changes))}
           onSetPlanRecipe={(planId, itemId, recipeId) => commitGame((current) => setProductionPlanRecipe(current, planId, itemId, recipeId))}
           onRemovePlan={(planId) => commitGame((current) => removeProductionPlan(current, planId))}
+          onSelectInfiniteResearch={(researchId: InfiniteResearchId) => commitGame((current) => selectInfiniteResearch(current, researchId))}
+          onInfiniteResearchAutomation={(enabled) => commitGame((current) => setInfiniteResearchAutomation(current, enabled))}
+          onGalacticDispatchAutomation={(enabled) => commitGame((current) => setGalacticDispatchAutomation(current, enabled))}
+          onGalacticDispatchThrottle={(throttle: GalacticDispatchThrottle) => commitGame((current) => setGalacticDispatchThrottle(current, throttle))}
+          onGalacticExportEnabled={(projectId: GalacticExportProjectId, enabled) => commitGame((current) => setGalacticExportEnabled(current, projectId, enabled))}
+          onGalacticExportPriority={(projectId: GalacticExportProjectId, priority: LogisticsPriority) => commitGame((current) => setGalacticExportPriority(current, projectId, priority))}
+          onDispatchGalacticExport={(projectId: GalacticExportProjectId) => commitGame((current) => dispatchGalacticExport(current, projectId))}
         /> : null}
         {recipesOpen ? <RecipeWorkspace open game={game} focusItemId={campaignFocusItemId} onClose={() => setRecipesOpen(false)} onFocus={onRecipeFocusChange} /> : null}
         {campaignOpen ? (
@@ -1736,6 +1792,13 @@ function FactoryGame() {
             onAutoConnect={(systemId, layerId) => setGame((current) => autoConnectDysonLayer(current, systemId, layerId))}
             onPlanShell={(systemId, layerId) => setGame((current) => planDysonShell(current, systemId, layerId))}
             onClearShell={(systemId, layerId) => setGame((current) => clearDysonShells(current, systemId, layerId))}
+            onLaunchModeChange={(mode: DysonLaunchMode) => setGame((current) => setDysonLaunchMode(current, mode))}
+            onLaunchThrottleChange={(throttle: DysonLaunchThrottle) => setGame((current) => setDysonLaunchThrottle(current, throttle))}
+            onLaunchEnabledChange={(enabled) => setGame((current) => setDysonLaunchEnabled(current, enabled))}
+            onAddSwarmOrbit={(systemId) => setGame((current) => addDysonSwarmOrbit(current, systemId))}
+            onSelectSwarmOrbit={(systemId, orbitId) => setGame((current) => setActiveDysonSwarmOrbit(current, systemId, orbitId))}
+            onSwarmOrbitChange={(systemId, orbitId, changes) => setGame((current) => setDysonSwarmOrbit(current, systemId, orbitId, changes))}
+            onRemoveSwarmOrbit={(systemId, orbitId) => setGame((current) => removeDysonSwarmOrbit(current, systemId, orbitId))}
           />
         ) : null}
         {operationsOpen ? (

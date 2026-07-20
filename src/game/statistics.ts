@@ -1,5 +1,6 @@
 import { FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, getBuilding, getExtractorBuildingId, getFuelEfficiency, getFuelItemIdsForBuilding, getProliferator, getRecipe, getTechnology } from "./content";
 import { getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getProliferatorSprayCost, getRecipeSpeedMultiplier } from "./engine";
+import { getInfiniteResearchDefinition } from "./endgame";
 import type { EntityOperatingStatus, FactoryEntity, GameState, ItemId } from "./types";
 
 export interface ItemStatistics {
@@ -61,7 +62,7 @@ function processName(entity: FactoryEntity, state: GameState): string {
   if (entity.kind === "station") {
     return entity.storedItemId ? `${entity.stationMode === "demand" ? "需求" : "供应"}${ITEMS[entity.storedItemId].name}` : "未配置星际货物";
   }
-  if (entity.recipeId === "matrix_research") return getTechnology(state.research.selectedTechId)?.name ?? "科研模式";
+  if (entity.recipeId === "matrix_research") return getTechnology(state.research.selectedTechId)?.name ?? getInfiniteResearchDefinition(state.endgame?.activeInfiniteResearchId)?.name ?? "科研模式";
   return getRecipe(entity.recipeId)?.name ?? "未选择配方";
 }
 
@@ -221,7 +222,8 @@ export function calculateFactoryStatistics(state: GameState): FactoryStatistics 
       const technology = getTechnology(state.research.selectedTechId);
       const progress = technology ? state.research.progressByTech[technology.id] ?? {} : {};
       let unassignedRate = cyclesPerMinute;
-      for (const cost of technology?.costs ?? []) {
+      const researchCosts = technology?.costs ?? (state.endgame?.activeInfiniteResearchId ? [{ itemId: "universe_matrix" as ItemId, amount: 1 }] : []);
+      for (const cost of researchCosts) {
         const remaining = Math.max(0, cost.amount - (progress[cost.itemId] ?? 0));
         if (remaining <= 0) continue;
         const input = recordFor(cost.itemId);

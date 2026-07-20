@@ -285,6 +285,55 @@ export type RecipeFocusMode = "full" | "two-level";
 export type SimulationSpeed = 1 | 2 | 4;
 export type AutosaveIntervalSeconds = 2 | 10 | 30;
 
+/** Repeatable endgame research tracks unlocked after the universe matrix. */
+export type InfiniteResearchId =
+  | "matrix_compression"
+  | "vein_utilization"
+  | "galactic_logistics"
+  | "stellar_harnessing"
+  | "continuum_simulation";
+
+export type GalacticExportProjectId =
+  | "universe_archive"
+  | "solar_sail_array"
+  | "carrier_rocket_fleet"
+  | "antimatter_exchange";
+
+export type GalacticDispatchThrottle = 0.25 | 0.5 | 1;
+
+export interface InfiniteResearchProgress {
+  level: number;
+  /** Universe matrices invested into the next level. */
+  progress: number;
+}
+
+export interface GalacticExportProjectState {
+  id: GalacticExportProjectId;
+  enabled: boolean;
+  priority: LogisticsPriority;
+  level: number;
+  /** Items delivered toward the current project level. */
+  delivered: number;
+  totalDelivered: number;
+  /** Fractional dispatch budget retained between simulation steps. */
+  dispatchProgress: number;
+}
+
+export interface EndgameState {
+  activeInfiniteResearchId: InfiniteResearchId | null;
+  autoResearch: boolean;
+  autoDispatch: boolean;
+  dispatchThrottle: GalacticDispatchThrottle;
+  exportProjects: Record<GalacticExportProjectId, GalacticExportProjectState>;
+  galacticCredits: number;
+  galacticScore: number;
+  totalExported: number;
+  exportedLastMinute: number;
+  exportWindowAmount: number;
+  exportWindowStartedAt: number;
+  infiniteResearch: Record<InfiniteResearchId, InfiniteResearchProgress>;
+}
+
 export type AchievementId =
   | "first_manual_mine"
   | "automated_mining"
@@ -579,6 +628,62 @@ export interface DysonSphereState {
   generationKw: number;
 }
 
+export type DysonLaunchMode = "balanced" | "swarm" | "sphere";
+export type DysonLaunchThrottle = 0.25 | 0.5 | 0.75 | 1;
+
+export interface DysonSwarmOrbitState {
+  id: string;
+  name: string;
+  radius: number;
+  inclination: number;
+  longitude: number;
+  sailsInOrbit: number;
+  totalLaunched: number;
+  totalExpired: number;
+  decayProgress: number;
+  generationKw: number;
+}
+
+export interface DysonEngineeringState {
+  launchMode: DysonLaunchMode;
+  launchThrottle: DysonLaunchThrottle;
+  launchEnabled: boolean;
+  activeOrbitBySystem: Record<StarSystemId, string | null>;
+  orbitsBySystem: Record<StarSystemId, DysonSwarmOrbitState[]>;
+  absorptionProgressBySystem: Record<StarSystemId, number>;
+  launchEnergySpentMj: number;
+}
+
+export interface DysonEngineeringSnapshot {
+  systemId: StarSystemId;
+  launchMode: DysonLaunchMode;
+  launchThrottle: DysonLaunchThrottle;
+  launchEnabled: boolean;
+  orbitCount: number;
+  orbitSails: number;
+  queuedSails: number;
+  queuedRockets: number;
+  sailLaunchesPerMinute: number;
+  rocketLaunchesPerMinute: number;
+  launchEnergyPerSailMj: number;
+  launchEnergyPerRocketMj: number;
+  launchEnergyPerMinuteMj: number;
+  launchEnergySpentMj: number;
+  rayGenerationKw: number;
+  receiverCapacityKw: number;
+  receiverLoadKw: number;
+  rayEfficiency: number;
+  criticalPhotonPerMinute: number;
+  antimatterPerMinute: number;
+  feedbackGenerationKw: number;
+  plannedStructurePoints: number;
+  completedStructurePoints: number;
+  remainingStructurePoints: number;
+  shellCapacity: number;
+  shellSails: number;
+  projectedGenerationKw: number;
+}
+
 export interface DysonNodeState {
   id: string;
   angle: number;
@@ -645,6 +750,7 @@ export interface EntityOperatingStatus {
     | "waiting-load"
     | "collecting"
     | "missing-dyson-swarm"
+    | "launch-paused"
     | "unconfigured";
   label: string;
   tone: "running" | "warning" | "blocked" | "idle";
@@ -803,7 +909,7 @@ export interface ProductionHistorySample {
 }
 
 export interface GameState {
-  version: 21;
+  version: 23;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -832,7 +938,9 @@ export interface GameState {
   powerGridMetrics: Record<PlanetId, Record<PowerGridId, PowerGridMetrics>>;
   dysonSwarm: DysonSwarmState;
   dysonSphere: DysonSphereState;
+  dysonEngineering: DysonEngineeringState;
   dysonPlans: Record<StarSystemId, DysonSpherePlanState>;
+  endgame: EndgameState;
   paused: boolean;
 }
 

@@ -1,4 +1,4 @@
-import { CheckCircle2, Clock3, Factory, FlaskConical, Orbit, X } from "lucide-react";
+import { CheckCircle2, Clock3, Factory, FlaskConical, Orbit, Send, Sparkles, X } from "lucide-react";
 import { getItem, getTechnology } from "../game/content";
 import type { OfflineReport } from "../game/storage";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
@@ -14,8 +14,12 @@ function formatDuration(seconds: number): string {
 
 export function OfflineReportWorkspace({ report, onClose }: { report: OfflineReport | null; onClose: () => void }) {
   if (!report) return null;
+  const infiniteResearchLevels = report.infiniteResearchLevels ?? [];
+  const exported = report.exported ?? [];
+  const galacticCreditsAdded = report.galacticCreditsAdded ?? 0;
   const hasChanges = report.produced.length > 0 || report.completedTechIds.length > 0 ||
-    report.structurePointsAdded > 0 || report.shellSailsAdded > 0;
+    report.structurePointsAdded > 0 || report.shellSailsAdded > 0 || infiniteResearchLevels.length > 0 ||
+    exported.length > 0 || galacticCreditsAdded > 0;
   return (
     <section className="offline-report" role="dialog" aria-modal="true" aria-label="离线结算报告">
       <header>
@@ -55,6 +59,18 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
               <div><dt>永久结构点</dt><dd>+{report.structurePointsAdded}</dd></div>
               <div><dt>壳面吸附帆</dt><dd>+{report.shellSailsAdded}</dd></div>
             </dl>
+          </section>
+          <section>
+            <header><Sparkles size={15} /><span>无限科研</span><strong>{infiniteResearchLevels.length}</strong></header>
+            <div className="offline-tech-list">
+              {infiniteResearchLevels.length > 0 ? infiniteResearchLevels.map(({ id, level }) => <span key={id}><CheckCircle2 size={13} />{id} +{level} 级</span>) : <span className="offline-empty-row">没有完成无限等级</span>}
+            </div>
+          </section>
+          <section>
+            <header><Send size={15} /><span>银河出口</span><strong>{galacticCreditsAdded.toLocaleString("zh-CN")} 信用</strong></header>
+            <div className="offline-tech-list">
+              {exported.length > 0 ? exported.map(({ projectId, amount }) => <span key={projectId}><Send size={13} />{projectId} +{amount.toLocaleString("zh-CN")}</span>) : <span className="offline-empty-row">没有完成出口装运</span>}
+            </div>
           </section>
         </div>
       ) : (

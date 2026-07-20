@@ -1,14 +1,15 @@
-import { AlertTriangle, BarChart3, Box, Calculator, CircleCheckBig, Factory, Plus, Route, Search, Trash2, TrendingUp, X, Zap } from "lucide-react";
+import { AlertTriangle, BarChart3, Box, Calculator, CircleCheckBig, Factory, Gauge, Orbit, Pause, Play, Plus, Rocket, Route, Search, Send, Sparkles, Trash2, TrendingUp, X, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ITEMS, PLANET_LIST, getBuilding, getItem, getPlanet, getRecipe } from "../game/content";
 import { calculateProductionPlan, getProductionRecipeOptions } from "../game/planning";
 import { calculateFactoryStatistics, type ItemStatistics } from "../game/statistics";
-import { POWER_GRID_IDS, POWER_GRID_LABELS, getPowerGridMetrics } from "../game/engine";
+import { getGalacticIndustrySnapshot, getPowerGridMetrics, POWER_GRID_IDS, POWER_GRID_LABELS } from "../game/engine";
+import { GALACTIC_EXPORT_DEFINITIONS, INFINITE_RESEARCH_DEFINITIONS, getGalacticExportTarget, getInfiniteResearchCompletion, getInfiniteResearchCost, getInfiniteResearchLevel } from "../game/endgame";
 import { getPlanetIndustrialProfile } from "../game/galaxy";
-import type { GameState, ItemId, PlanetId, RecipeId } from "../game/types";
+import type { GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, RecipeId } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
-type StatisticsTab = "production" | "planning" | "power" | "issues";
+type StatisticsTab = "production" | "planning" | "power" | "issues" | "galaxy";
 type ItemFilter = "all" | "producing" | "deficit" | "blocked";
 type ItemSort = "production" | "consumption" | "net" | "inventory" | "name";
 
@@ -20,6 +21,13 @@ interface StatisticsWorkspaceProps {
   onUpdatePlan: (planId: string, changes: { name?: string; itemId?: ItemId; targetPerMinute?: number; planetId?: PlanetId | "all" }) => void;
   onSetPlanRecipe: (planId: string, itemId: ItemId, recipeId: RecipeId) => void;
   onRemovePlan: (planId: string) => void;
+  onSelectInfiniteResearch: (researchId: InfiniteResearchId) => void;
+  onInfiniteResearchAutomation: (enabled: boolean) => void;
+  onGalacticDispatchAutomation: (enabled: boolean) => void;
+  onGalacticDispatchThrottle: (throttle: GalacticDispatchThrottle) => void;
+  onGalacticExportEnabled: (projectId: GalacticExportProjectId, enabled: boolean) => void;
+  onGalacticExportPriority: (projectId: GalacticExportProjectId, priority: LogisticsPriority) => void;
+  onDispatchGalacticExport: (projectId: GalacticExportProjectId) => void;
 }
 
 function ItemMark({ itemId }: { itemId: ItemId }) {
@@ -47,7 +55,7 @@ function sortItems(items: ItemStatistics[], sort: ItemSort): ItemStatistics[] {
   });
 }
 
-export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan }: StatisticsWorkspaceProps) {
+export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport }: StatisticsWorkspaceProps) {
   const [tab, setTab] = useState<StatisticsTab>("production");
   const [filter, setFilter] = useState<ItemFilter>("all");
   const [sort, setSort] = useState<ItemSort>("production");
@@ -57,6 +65,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
   const [planPlanetId, setPlanPlanetId] = useState<PlanetId | "all">("all");
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const statistics = useMemo(() => calculateFactoryStatistics(game), [game]);
+  const galactic = useMemo(() => getGalacticIndustrySnapshot(game), [game]);
   const items = useMemo(() => sortItems(statistics.items.filter((item) => {
     if (query && !getItem(item.itemId).name.includes(query.trim())) return false;
     if (filter === "producing") return item.productionPerMinute > 0;
@@ -98,6 +107,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
         <button type="button" role="tab" aria-selected={tab === "planning"} className={tab === "planning" ? "active" : ""} onClick={() => setTab("planning")}><Calculator size={15} />规划 <strong>{game.productionPlans.length}</strong></button>
         <button type="button" role="tab" aria-selected={tab === "power"} className={tab === "power" ? "active" : ""} onClick={() => setTab("power")}><Zap size={15} />电力</button>
         <button type="button" role="tab" aria-selected={tab === "issues"} className={tab === "issues" ? "active" : ""} onClick={() => setTab("issues")}><AlertTriangle size={15} />瓶颈 <strong>{statistics.issues.length}</strong></button>
+        <button type="button" role="tab" aria-selected={tab === "galaxy"} className={tab === "galaxy" ? "active" : ""} onClick={() => setTab("galaxy")}><Orbit size={15} />银河 <strong>{galactic.galacticScore.toLocaleString("zh-CN")}</strong></button>
       </nav>
 
       {tab === "production" ? (
@@ -246,6 +256,63 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
               </div>
             ))}
           </div>
+        </div>
+      ) : null}
+
+      {tab === "galaxy" ? (
+        <div className="statistics-content galactic-industry">
+          {!galactic.unlocked ? (
+            <div className="galactic-lock"><Orbit size={28} /><strong>银河工业协议尚未解锁</strong><span>完成宇宙矩阵科技后，终局研究、出口项目和长期挂机会在这里接管。</span></div>
+          ) : (
+            <>
+              <section className="galactic-summary-grid">
+                <div><span>银河评分</span><strong>{galactic.galacticScore.toLocaleString("zh-CN")}</strong><small>信用 {galactic.galacticCredits.toLocaleString("zh-CN")}</small></div>
+                <div><span>全网生产</span><strong>{galactic.totalProductionPerMinute.toFixed(1)}<small>/min</small></strong><small>库存 {galactic.networkInventory.toLocaleString("zh-CN")}</small></div>
+                <div><span>出口吞吐</span><strong>{galactic.exportedPerMinute.toFixed(1)}<small>/min</small></strong><small>累计 {galactic.totalExported.toLocaleString("zh-CN")}</small></div>
+                <div><span>恒星功率</span><strong>{(galactic.dysonGenerationKw / 1000).toFixed(2)}<small> MW</small></strong><small>{galactic.activePlanets} 个殖民地</small></div>
+                <div><span>运行设备</span><strong>{galactic.operatingEntities}</strong><small>瓶颈 {galactic.blockedEntities}</small></div>
+                <div><span>物流航次</span><strong>{galactic.logisticsTrips.toLocaleString("zh-CN")}</strong><small>无限等级 {galactic.infiniteResearchLevels}</small></div>
+              </section>
+              <section className="galactic-automation-bar">
+                <header><span><Gauge size={15} />自动调度</span><strong>{game.endgame.autoDispatch ? "运行中" : "已暂停"}</strong></header>
+                <div className="galactic-automation-actions">
+                  <button type="button" className={game.endgame.autoDispatch ? "active" : ""} onClick={() => onGalacticDispatchAutomation(!game.endgame.autoDispatch)}>{game.endgame.autoDispatch ? <Pause size={14} /> : <Play size={14} />}{game.endgame.autoDispatch ? "暂停自动调度" : "恢复自动调度"}</button>
+                  <div role="group" aria-label="自动调度速率">{([0.25, 0.5, 1] as GalacticDispatchThrottle[]).map((throttle) => <button type="button" className={game.endgame.dispatchThrottle === throttle ? "active" : ""} key={throttle} onClick={() => onGalacticDispatchThrottle(throttle)}>{Math.round(throttle * 100)}%</button>)}</div>
+                  <label><input type="checkbox" checked={game.endgame.autoResearch} onChange={(event) => onInfiniteResearchAutomation(event.target.checked)} />无限科技自动续研</label>
+                </div>
+              </section>
+              <div className="galactic-panels">
+                <section className="galactic-panel infinite-research-panel">
+                  <header><Sparkles size={15} /><span>无限科研</span><strong>宇宙矩阵循环</strong></header>
+                  <div className="infinite-research-list">
+                    {INFINITE_RESEARCH_DEFINITIONS.map((definition) => {
+                      const progress = game.endgame.infiniteResearch[definition.id];
+                      const active = game.endgame.activeInfiniteResearchId === definition.id;
+                      const cost = getInfiniteResearchCost(definition.id, progress.level);
+                      return <button type="button" className={active ? "active" : ""} key={definition.id} onClick={() => onSelectInfiniteResearch(definition.id)}>
+                        <i style={{ color: definition.color }}>{definition.symbol}</i><span><strong>{definition.name}</strong><small>Lv.{getInfiniteResearchLevel(game, definition.id)} · {definition.effect}</small><b><em style={{ width: `${getInfiniteResearchCompletion(progress, definition.id) * 100}%` }} /></b></span><label>{active ? `${progress.progress}/${cost}` : "选择"}</label>
+                      </button>;
+                    })}
+                  </div>
+                </section>
+                <section className="galactic-panel export-panel">
+                  <header><Send size={15} /><span>超大型物资出口</span><strong>无限项目</strong></header>
+                  <div className="export-project-list">
+                    {GALACTIC_EXPORT_DEFINITIONS.map((definition) => {
+                      const project = game.endgame.exportProjects[definition.id];
+                      const target = getGalacticExportTarget(definition.id, project.level);
+                      const progress = Math.min(1, project.delivered / target);
+                      return <article className={project.enabled ? "active" : ""} key={definition.id}>
+                        <header><ItemMark itemId={definition.itemId} /><span><strong>{definition.name}</strong><small>Lv.{project.level} · {definition.summary}</small></span><button type="button" onClick={() => onGalacticExportEnabled(definition.id, !project.enabled)} title={project.enabled ? "暂停出口项目" : "启用出口项目"} aria-label={`${project.enabled ? "暂停" : "启用"}${definition.name}`}>{project.enabled ? <Pause size={13} /> : <Play size={13} />}</button></header>
+                        <div className="export-project-progress"><i><b style={{ width: `${progress * 100}%` }} /></i><span>{project.delivered.toLocaleString("zh-CN")} / {target.toLocaleString("zh-CN")}</span><strong>累计 {project.totalDelivered.toLocaleString("zh-CN")}</strong></div>
+                        <footer><div role="group" aria-label={`${definition.name}优先级`}>{([1, 2, 3] as LogisticsPriority[]).map((priority) => <button type="button" className={project.priority === priority ? "active" : ""} key={priority} onClick={() => onGalacticExportPriority(definition.id, priority)}>P{priority}</button>)}</div><button type="button" onClick={() => onDispatchGalacticExport(definition.id)} title="立即装运一批物资"><Send size={12} />立即装运</button></footer>
+                      </article>;
+                    })}
+                  </div>
+                </section>
+              </div>
+            </>
+          )}
         </div>
       ) : null}
     </section>

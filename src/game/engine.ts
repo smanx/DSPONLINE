@@ -38,13 +38,19 @@ import type {
   BuildingId,
   CargoStackSize,
   ConstructionId,
+  DysonEngineeringSnapshot,
+  DysonEngineeringState,
   DysonLayerState,
+  DysonLaunchMode,
+  DysonLaunchThrottle,
+  DysonSwarmOrbitState,
   DysonSpherePlanState,
   EnergyMode,
   EntityOperatingStatus,
   FactoryEntity,
   GameState,
   ItemId,
+  LogisticsPriority,
   PlanetId,
   PowerGridId,
   PowerGridMetrics,
@@ -63,6 +69,18 @@ import type {
   TechId,
 } from "./types";
 import { syncCampaignProgress } from "./campaign";
+import {
+  GALACTIC_EXPORT_DEFINITIONS,
+  INFINITE_RESEARCH_BY_ID,
+  createEndgameState,
+  getGalacticExportDefinition,
+  getGalacticExportReward,
+  getGalacticExportTarget,
+  getInfiniteResearchCost,
+  getInfiniteResearchLevel,
+  isEndgameUnlocked,
+} from "./endgame";
+import type { GalacticDispatchThrottle, GalacticExportProjectId, InfiniteResearchId } from "./types";
 
 const BELT_CAPACITY_PER_SECOND: Record<BeltTier, number> = { 1: 6, 2: 12, 3: 30 };
 const SORTER_CAPACITY_PER_SECOND: Record<SorterTier, number> = { 1: 3, 2: 6, 3: 12 };
@@ -74,6 +92,8 @@ export const DYSON_STRUCTURE_POWER_KW = 960;
 export const DYSON_SHELL_SAIL_POWER_KW = 36;
 export const DYSON_SHELL_CAPACITY_PER_STRUCTURE = 20;
 export const DYSON_SAIL_ABSORPTION_PER_STRUCTURE_PER_SECOND = 0.1;
+export const DYSON_SAIL_LAUNCH_ENERGY_MJ = 21.6;
+export const DYSON_ROCKET_LAUNCH_ENERGY_MJ = 108;
 export const INTERSTELLAR_TRIP_SECONDS = 30;
 export const WARP_TRIP_SECONDS = 12;
 export const INTERSTELLAR_CARGO_PER_VESSEL = 100;
@@ -100,6 +120,7 @@ function round(value: number, digits = 4): number {
 }
 
 function copyState(state: GameState): GameState {
+  const sourceEndgame = state.endgame ?? createEndgameState();
   const planetTrays = Object.fromEntries(Object.entries(state.planetTrays).map(([planetId, tray]) => [
     planetId,
     { ...(planetId === state.activePlanetId ? state.tray : tray) },
@@ -174,6 +195,15 @@ function copyState(state: GameState): GameState {
     ])) as GameState["powerGridMetrics"],
     dysonSwarm: { ...state.dysonSwarm },
     dysonSphere: { ...state.dysonSphere },
+    dysonEngineering: {
+      ...state.dysonEngineering,
+      activeOrbitBySystem: { ...state.dysonEngineering.activeOrbitBySystem },
+      absorptionProgressBySystem: { ...state.dysonEngineering.absorptionProgressBySystem },
+      orbitsBySystem: Object.fromEntries(Object.entries(state.dysonEngineering.orbitsBySystem).map(([systemId, orbits]) => [
+        systemId,
+        orbits.map((orbit) => ({ ...orbit })),
+      ])) as GameState["dysonEngineering"]["orbitsBySystem"],
+    },
     dysonPlans: Object.fromEntries(Object.entries(state.dysonPlans).map(([systemId, plan]) => [
       systemId,
       {
@@ -186,6 +216,17 @@ function copyState(state: GameState): GameState {
         })),
       },
     ])) as GameState["dysonPlans"],
+    endgame: {
+      ...sourceEndgame,
+      exportProjects: Object.fromEntries(Object.entries(sourceEndgame.exportProjects).map(([projectId, project]) => [
+        projectId,
+        { ...project },
+      ])) as GameState["endgame"]["exportProjects"],
+      infiniteResearch: Object.fromEntries(Object.entries(sourceEndgame.infiniteResearch).map(([researchId, progress]) => [
+        researchId,
+        { ...progress },
+      ])) as GameState["endgame"]["infiniteResearch"],
+    },
     campaign: {
       ...state.campaign,
       completedTaskIds: [...state.campaign.completedTaskIds],
@@ -206,6 +247,34 @@ function createEmptyDysonPlans(): GameState["dysonPlans"] {
     helios: createPlan("helios"),
     borealis: createPlan("borealis"),
     neutron: createPlan("neutron"),
+  };
+}
+
+function createDefaultDysonOrbit(systemId: StarSystemId, index = 0): DysonSwarmOrbitState {
+  return {
+    id: `dyson_orbit_${systemId}_${index + 1}`,
+    name: `太阳帆轨道 ${String.fromCharCode(65 + index)}`,
+    radius: 12_000 + index * 6_000,
+    inclination: index * 12,
+    longitude: index * 45,
+    sailsInOrbit: 0,
+    totalLaunched: 0,
+    totalExpired: 0,
+    decayProgress: 0,
+    generationKw: 0,
+  };
+}
+
+function createEmptyDysonEngineering(): DysonEngineeringState {
+  const systems = ["helios", "borealis", "neutron"] as StarSystemId[];
+  return {
+    launchMode: "balanced",
+    launchThrottle: 1,
+    launchEnabled: true,
+    activeOrbitBySystem: Object.fromEntries(systems.map((systemId) => [systemId, `dyson_orbit_${systemId}_1`])) as Record<StarSystemId, string | null>,
+    orbitsBySystem: Object.fromEntries(systems.map((systemId) => [systemId, [createDefaultDysonOrbit(systemId)]])) as Record<StarSystemId, DysonSwarmOrbitState[]>,
+    absorptionProgressBySystem: Object.fromEntries(systems.map((systemId) => [systemId, 0])) as Record<StarSystemId, number>,
+    launchEnergySpentMj: 0,
   };
 }
 
@@ -306,7 +375,7 @@ export function createInitialState(): GameState {
     return { ...entity, resourceRemaining: reserve, resourceCapacity: reserve };
   });
   return {
-    version: 21,
+    version: 23,
     nextId: 1,
     activePlanetId: "home",
     entities,
@@ -410,47 +479,66 @@ export function createInitialState(): GameState {
       absorptionProgress: 0,
       generationKw: 0,
     },
+    dysonEngineering: createEmptyDysonEngineering(),
     dysonPlans: createEmptyDysonPlans(),
+    endgame: createEndgameState(),
     paused: false,
   };
 }
 
 function remainingResearchCosts(state: GameState): Array<{ itemId: ItemId; amount: number }> {
   const technology = getTechnology(state.research.selectedTechId);
-  if (!technology) return [];
-  const progress = state.research.progressByTech[technology.id] ?? {};
-  return technology.costs
-    .map((cost) => ({ itemId: cost.itemId, amount: Math.max(0, cost.amount - (progress[cost.itemId] ?? 0)) }))
-    .filter((cost) => cost.amount > 0);
+  if (technology) {
+    const progress = state.research.progressByTech[technology.id] ?? {};
+    return technology.costs
+      .map((cost) => ({ itemId: cost.itemId, amount: Math.max(0, cost.amount - (progress[cost.itemId] ?? 0)) }))
+      .filter((cost) => cost.amount > 0);
+  }
+  const infiniteId = state.endgame?.activeInfiniteResearchId;
+  if (!infiniteId || !isEndgameUnlocked(state)) return [];
+  const progress = state.endgame.infiniteResearch[infiniteId] ?? { level: 0, progress: 0 };
+  const amount = Math.max(0, getInfiniteResearchCost(infiniteId, progress.level) - progress.progress);
+  return amount > 0 ? [{ itemId: "universe_matrix", amount }] : [];
+}
+
+function hasActiveResearch(state: GameState): boolean {
+  return Boolean(state.research.selectedTechId || (state.endgame?.activeInfiniteResearchId && isEndgameUnlocked(state)));
 }
 
 export function getRecipeSpeedMultiplier(state: GameState, recipeId: RecipeId | undefined): number {
-  if (recipeId !== "matrix_research") return 1;
-  return 1 + (state.research.completedTechIds.includes("research_speed_1") ? 0.25 : 0) +
+  if (recipeId !== "matrix_research") return getIndustrialEfficiencyMultiplier(state);
+  return (1 + (state.research.completedTechIds.includes("research_speed_1") ? 0.25 : 0) +
     (state.research.completedTechIds.includes("research_speed_2") ? 0.25 : 0) +
-    (state.research.completedTechIds.includes("research_speed_3") ? 0.25 : 0);
+    (state.research.completedTechIds.includes("research_speed_3") ? 0.25 : 0)) *
+    (1 + getInfiniteResearchLevel(state, "matrix_compression") * 0.1);
 }
 
 export function getMiningSpeedMultiplier(state: GameState): number {
-  if (state.research.completedTechIds.includes("mining_speed_3")) return 3;
-  if (state.research.completedTechIds.includes("mining_speed_2")) return 2;
-  return state.research.completedTechIds.includes("mining_speed_1") ? 1.5 : 1;
+  const base = state.research.completedTechIds.includes("mining_speed_3")
+    ? 3
+    : state.research.completedTechIds.includes("mining_speed_2")
+      ? 2
+      : state.research.completedTechIds.includes("mining_speed_1") ? 1.5 : 1;
+  return base * (1 + getInfiniteResearchLevel(state, "vein_utilization") * 0.1);
 }
 
 export function getLogisticsSpeedMultiplier(state: GameState): number {
-  return 1 + (state.research.completedTechIds.includes("logistics_engine_1") ? 0.5 : 0) +
-    (state.research.completedTechIds.includes("logistics_engine_2") ? 0.5 : 0);
+  return (1 + (state.research.completedTechIds.includes("logistics_engine_1") ? 0.5 : 0) +
+    (state.research.completedTechIds.includes("logistics_engine_2") ? 0.5 : 0)) *
+    (1 + getInfiniteResearchLevel(state, "galactic_logistics") * 0.05);
 }
 
 export function getPlanetaryCargoCapacity(state: GameState): number {
-  const multiplier = 1 + (state.research.completedTechIds.includes("logistics_capacity_1") ? 0.5 : 0) +
-    (state.research.completedTechIds.includes("logistics_capacity_2") ? 0.5 : 0);
+  const multiplier = (1 + (state.research.completedTechIds.includes("logistics_capacity_1") ? 0.5 : 0) +
+    (state.research.completedTechIds.includes("logistics_capacity_2") ? 0.5 : 0)) *
+    (1 + getInfiniteResearchLevel(state, "galactic_logistics") * 0.05);
   return Math.round(PLANETARY_CARGO_PER_DRONE * multiplier);
 }
 
 export function getInterstellarCargoCapacity(state: GameState): number {
-  const multiplier = 1 + (state.research.completedTechIds.includes("logistics_capacity_1") ? 0.5 : 0) +
-    (state.research.completedTechIds.includes("logistics_capacity_2") ? 0.5 : 0);
+  const multiplier = (1 + (state.research.completedTechIds.includes("logistics_capacity_1") ? 0.5 : 0) +
+    (state.research.completedTechIds.includes("logistics_capacity_2") ? 0.5 : 0)) *
+    (1 + getInfiniteResearchLevel(state, "galactic_logistics") * 0.05);
   return Math.round(INTERSTELLAR_CARGO_PER_VESSEL * multiplier);
 }
 
@@ -469,13 +557,27 @@ export function getSolarSailLifetimeSeconds(state: GameState): number {
 }
 
 export function getRayReceiverCapacityKw(state: GameState): number {
-  const multiplier = 1 + (state.research.completedTechIds.includes("ray_transmission_1") ? 0.5 : 0) +
-    (state.research.completedTechIds.includes("ray_transmission_2") ? 0.5 : 0);
+  const multiplier = (1 + (state.research.completedTechIds.includes("ray_transmission_1") ? 0.5 : 0) +
+    (state.research.completedTechIds.includes("ray_transmission_2") ? 0.5 : 0)) *
+    (1 + getInfiniteResearchLevel(state, "stellar_harnessing") * 0.05);
   return RAY_RECEIVER_CAPACITY_KW * multiplier;
 }
 
 export function getDysonSailAbsorptionMultiplier(state: GameState): number {
-  return state.research.completedTechIds.includes("dyson_absorption_1") ? 2 : 1;
+  return (state.research.completedTechIds.includes("dyson_absorption_1") ? 2 : 1) *
+    (1 + getInfiniteResearchLevel(state, "stellar_harnessing") * 0.05);
+}
+
+export function getIndustrialEfficiencyMultiplier(state: GameState): number {
+  return 1 + getInfiniteResearchLevel(state, "matrix_compression") * 0.04;
+}
+
+function getDysonPowerMultiplier(state: GameState): number {
+  return 1 + getInfiniteResearchLevel(state, "stellar_harnessing") * 0.05;
+}
+
+function getSolarSailPowerFor(state: GameState): number {
+  return SOLAR_SAIL_POWER_KW * getDysonPowerMultiplier(state);
 }
 
 function proliferatorApplies(entity: FactoryEntity, recipe: RecipeDefinition | undefined): boolean {
@@ -557,7 +659,7 @@ function availableOutputCycles(entity: FactoryEntity): number {
 }
 
 function canMachineRun(state: GameState, entity: FactoryEntity): boolean {
-  if (entity.recipeId === "matrix_research" && !state.research.selectedTechId) return false;
+  if (entity.recipeId === "matrix_research" && !hasActiveResearch(state)) return false;
   const recipe = getRecipe(entity.recipeId);
   if (recipe?.requiredTechId && !isTechnologyCompleted(state, recipe.requiredTechId)) return false;
   if (proliferatorApplies(entity, recipe)) {
@@ -881,23 +983,94 @@ interface DysonReceptionPlan {
   efficiency: number;
   receiverLoadKw: number;
   allocationByEntity: Map<string, number>;
+  efficiencyByEntity: Map<string, number>;
   rayPowerByPlanet: Map<PlanetId, number>;
 }
 
-function decayDysonSwarm(state: GameState, seconds: number): void {
-  const sails = Math.max(0, Math.floor(state.dysonSwarm.sailsInOrbit));
-  if (sails < 1 || seconds <= EPSILON) {
-    state.dysonSwarm.sailsInOrbit = sails;
-    state.dysonSwarm.generationKw = sails * SOLAR_SAIL_POWER_KW;
-    return;
+const DYSON_SYSTEM_IDS: StarSystemId[] = ["helios", "borealis", "neutron"];
+
+function ensureDysonOrbit(state: GameState, systemId: StarSystemId): DysonSwarmOrbitState {
+  state.dysonEngineering.orbitsBySystem[systemId] ??= [];
+  let orbit = state.dysonEngineering.orbitsBySystem[systemId].find((candidate) =>
+    candidate.id === state.dysonEngineering.activeOrbitBySystem[systemId]);
+  if (!orbit) {
+    orbit = state.dysonEngineering.orbitsBySystem[systemId][0];
   }
-  const accumulatedDecay = Math.max(0, state.dysonSwarm.decayProgress) +
-    sails * seconds / getSolarSailLifetimeSeconds(state);
-  const expired = Math.min(sails, Math.floor(accumulatedDecay + EPSILON));
-  state.dysonSwarm.sailsInOrbit = sails - expired;
-  state.dysonSwarm.totalExpired = Math.floor(state.dysonSwarm.totalExpired + expired);
-  state.dysonSwarm.decayProgress = round(Math.max(0, accumulatedDecay - expired), 6);
-  state.dysonSwarm.generationKw = state.dysonSwarm.sailsInOrbit * SOLAR_SAIL_POWER_KW;
+  if (!orbit) {
+    orbit = createDefaultDysonOrbit(systemId);
+    state.dysonEngineering.orbitsBySystem[systemId].push(orbit);
+  }
+  state.dysonEngineering.activeOrbitBySystem[systemId] = orbit.id;
+  return orbit;
+}
+
+function allDysonOrbits(state: GameState): DysonSwarmOrbitState[] {
+  return DYSON_SYSTEM_IDS.flatMap((systemId) => state.dysonEngineering.orbitsBySystem[systemId] ?? []);
+}
+
+function aggregateDysonSwarm(state: GameState): void {
+  const orbits = allDysonOrbits(state);
+  state.dysonSwarm.sailsInOrbit = Math.floor(orbits.reduce((sum, orbit) => sum + Math.max(0, orbit.sailsInOrbit), 0));
+  state.dysonSwarm.totalLaunched = Math.floor(orbits.reduce((sum, orbit) => sum + Math.max(0, orbit.totalLaunched), 0));
+  state.dysonSwarm.totalExpired = Math.floor(orbits.reduce((sum, orbit) => sum + Math.max(0, orbit.totalExpired), 0));
+  state.dysonSwarm.decayProgress = round(orbits.reduce((sum, orbit) => sum + Math.max(0, orbit.decayProgress), 0), 6);
+  state.dysonSwarm.generationKw = Math.floor(orbits.reduce((sum, orbit) => sum + Math.max(0, orbit.generationKw), 0));
+}
+
+function adjustOrbitAggregate(state: GameState, field: "sailsInOrbit" | "totalLaunched" | "totalExpired"): void {
+  const orbits = allDysonOrbits(state);
+  const current = orbits.reduce((sum, orbit) => sum + Math.max(0, Math.floor(orbit[field])), 0);
+  const requested = Math.max(0, Math.floor(state.dysonSwarm[field]));
+  const delta = requested - current;
+  if (delta > 0) {
+    const orbit = ensureDysonOrbit(state, "helios");
+    orbit[field] = Math.max(0, Math.floor(orbit[field] + delta));
+  } else if (delta < 0) {
+    let remaining = -delta;
+    for (const orbit of [...orbits].reverse()) {
+      const removed = Math.min(remaining, Math.max(0, Math.floor(orbit[field])));
+      orbit[field] -= removed;
+      remaining -= removed;
+      if (remaining <= 0) break;
+    }
+  }
+}
+
+function syncLegacySwarmIntoOrbits(state: GameState): void {
+  // Older saves and external test fixtures only know the aggregate swarm fields.
+  // Fold those values into the first Helios orbit before using per-orbit state.
+  ensureDysonOrbit(state, "helios");
+  adjustOrbitAggregate(state, "sailsInOrbit");
+  adjustOrbitAggregate(state, "totalLaunched");
+  adjustOrbitAggregate(state, "totalExpired");
+  for (const orbit of allDysonOrbits(state)) {
+    orbit.sailsInOrbit = Math.max(0, Math.floor(orbit.sailsInOrbit));
+    orbit.totalLaunched = Math.max(orbit.sailsInOrbit, Math.floor(orbit.totalLaunched));
+    orbit.totalExpired = Math.max(0, Math.floor(orbit.totalExpired));
+    orbit.decayProgress = Math.max(0, orbit.decayProgress) % 1;
+    orbit.generationKw = orbit.sailsInOrbit * getSolarSailPowerFor(state);
+  }
+  aggregateDysonSwarm(state);
+}
+
+function decayDysonSwarm(state: GameState, seconds: number): void {
+  syncLegacySwarmIntoOrbits(state);
+  if (seconds <= EPSILON) return;
+  for (const orbit of allDysonOrbits(state)) {
+    const sails = Math.max(0, Math.floor(orbit.sailsInOrbit));
+    if (sails < 1) {
+      orbit.generationKw = 0;
+      continue;
+    }
+    const accumulatedDecay = Math.max(0, orbit.decayProgress) +
+      sails * seconds / getSolarSailLifetimeSeconds(state);
+    const expired = Math.min(sails, Math.floor(accumulatedDecay + EPSILON));
+    orbit.sailsInOrbit = sails - expired;
+    orbit.totalExpired = Math.floor(orbit.totalExpired + expired);
+    orbit.decayProgress = round(Math.max(0, accumulatedDecay - expired), 6);
+    orbit.generationKw = orbit.sailsInOrbit * getSolarSailPowerFor(state);
+  }
+  aggregateDysonSwarm(state);
 }
 
 function dysonFrameComplete(frame: DysonLayerState["frames"][number]): boolean {
@@ -982,6 +1155,155 @@ export function getDysonPlanTotals(plan: DysonSpherePlanState) {
       ? shells.reduce((sum, entry) => sum + (dysonShellActive(entry.layer, entry.shell) ? entry.shell.sailCapacity : 0), 0)
       : plan.layers.length === 0 ? plan.structurePoints * DYSON_SHELL_CAPACITY_PER_STRUCTURE : 0,
     absorbedSails: plan.shellSails,
+  };
+}
+
+function validDysonLaunchMode(mode: DysonLaunchMode): boolean {
+  return mode === "balanced" || mode === "swarm" || mode === "sphere";
+}
+
+function validDysonLaunchThrottle(throttle: DysonLaunchThrottle): boolean {
+  return throttle === 0.25 || throttle === 0.5 || throttle === 0.75 || throttle === 1;
+}
+
+export function setDysonLaunchMode(state: GameState, mode: DysonLaunchMode): GameState {
+  if (!validDysonLaunchMode(mode) || state.dysonEngineering.launchMode === mode) return state;
+  return { ...state, dysonEngineering: { ...state.dysonEngineering, launchMode: mode } };
+}
+
+export function setDysonLaunchThrottle(state: GameState, throttle: DysonLaunchThrottle): GameState {
+  if (!validDysonLaunchThrottle(throttle) || state.dysonEngineering.launchThrottle === throttle) return state;
+  return { ...state, dysonEngineering: { ...state.dysonEngineering, launchThrottle: throttle } };
+}
+
+export function setDysonLaunchEnabled(state: GameState, enabled: boolean): GameState {
+  if (state.dysonEngineering.launchEnabled === enabled) return state;
+  return { ...state, dysonEngineering: { ...state.dysonEngineering, launchEnabled: enabled } };
+}
+
+export function addDysonSwarmOrbit(state: GameState, systemId: StarSystemId): GameState {
+  if (!isStarSystemUnlocked(state, systemId) || !isTechnologyCompleted(state, "dyson_swarm")) return state;
+  const current = state.dysonEngineering.orbitsBySystem[systemId] ?? [];
+  if (current.length >= 8) return state;
+  const next = copyState(state);
+  const orbit = createDefaultDysonOrbit(systemId, current.length);
+  orbit.id = `dyson_orbit_${next.nextId}`;
+  orbit.name = `太阳帆轨道 ${String.fromCharCode(65 + current.length)}`;
+  orbit.radius = 12_000 + current.length * 6_000;
+  next.nextId += 1;
+  next.dysonEngineering.orbitsBySystem[systemId].push(orbit);
+  next.dysonEngineering.activeOrbitBySystem[systemId] = orbit.id;
+  return next;
+}
+
+export function setActiveDysonSwarmOrbit(state: GameState, systemId: StarSystemId, orbitId: string): GameState {
+  if (!state.dysonEngineering.orbitsBySystem[systemId]?.some((orbit) => orbit.id === orbitId)) return state;
+  return {
+    ...state,
+    dysonEngineering: {
+      ...state.dysonEngineering,
+      activeOrbitBySystem: { ...state.dysonEngineering.activeOrbitBySystem, [systemId]: orbitId },
+    },
+  };
+}
+
+export function setDysonSwarmOrbit(
+  state: GameState,
+  systemId: StarSystemId,
+  orbitId: string,
+  changes: { radius?: number; inclination?: number; longitude?: number },
+): GameState {
+  const orbit = state.dysonEngineering.orbitsBySystem[systemId]?.find((candidate) => candidate.id === orbitId);
+  if (!orbit) return state;
+  const next = copyState(state);
+  const target = next.dysonEngineering.orbitsBySystem[systemId].find((candidate) => candidate.id === orbitId)!;
+  if (changes.radius != null && Number.isFinite(changes.radius)) target.radius = Math.max(5_000, Math.min(50_000, Math.round(changes.radius)));
+  if (changes.inclination != null && Number.isFinite(changes.inclination)) target.inclination = Math.max(-90, Math.min(90, Math.round(changes.inclination)));
+  if (changes.longitude != null && Number.isFinite(changes.longitude)) target.longitude = normalizeDysonAngle(changes.longitude);
+  return next;
+}
+
+export function removeDysonSwarmOrbit(state: GameState, systemId: StarSystemId, orbitId: string): GameState {
+  const current = state.dysonEngineering.orbitsBySystem[systemId] ?? [];
+  if (current.length <= 1 || !current.some((orbit) => orbit.id === orbitId)) return state;
+  const next = copyState(state);
+  const removed = next.dysonEngineering.orbitsBySystem[systemId].find((orbit) => orbit.id === orbitId)!;
+  const fallback = next.dysonEngineering.orbitsBySystem[systemId].find((orbit) => orbit.id !== orbitId)!;
+  fallback.sailsInOrbit += removed.sailsInOrbit;
+  fallback.totalLaunched += removed.totalLaunched;
+  fallback.totalExpired += removed.totalExpired;
+  fallback.generationKw = fallback.sailsInOrbit * getSolarSailPowerFor(next);
+  next.dysonEngineering.orbitsBySystem[systemId] = next.dysonEngineering.orbitsBySystem[systemId].filter((orbit) => orbit.id !== orbitId);
+  if (next.dysonEngineering.activeOrbitBySystem[systemId] === orbitId) {
+    next.dysonEngineering.activeOrbitBySystem[systemId] = fallback.id;
+  }
+  aggregateDysonSwarm(next);
+  return next;
+}
+
+export function getDysonEngineeringSnapshot(state: GameState, systemId: StarSystemId): DysonEngineeringSnapshot {
+  const plan = state.dysonPlans[systemId];
+  const orbits = state.dysonEngineering.orbitsBySystem[systemId] ?? [];
+  const entities = state.entities.filter((entity) => getPlanet(entity.planetId).systemId === systemId);
+  const launchFactorFor = (recipeId: RecipeId) => dysonLaunchFactor(state, recipeId);
+  const launchEntities = entities.filter((entity) => entity.kind === "machine" &&
+    (entity.recipeId === "solar_sail_launch" || entity.recipeId === "carrier_rocket_launch") && entity.buildingId);
+  const queuedSails = launchEntities.filter((entity) => entity.recipeId === "solar_sail_launch")
+    .reduce((sum, entity) => sum + Math.floor(entity.inputs.solar_sail ?? 0), 0);
+  const queuedRockets = launchEntities.filter((entity) => entity.recipeId === "carrier_rocket_launch")
+    .reduce((sum, entity) => sum + Math.floor(entity.inputs.small_carrier_rocket ?? 0), 0);
+  const nominalRate = (recipeId: RecipeId) => launchEntities
+    .filter((entity) => entity.recipeId === recipeId)
+    .reduce((sum, entity) => {
+      const recipe = getRecipe(recipeId)!;
+      return sum + getBuilding(entity.buildingId!).speed * entity.machineCount / recipe.duration * 60 * launchFactorFor(recipeId);
+    }, 0);
+  const sailLaunchesPerMinute = round(nominalRate("solar_sail_launch"), 2);
+  const rocketLaunchesPerMinute = round(nominalRate("carrier_rocket_launch"), 2);
+  const receiverEntities = entities.filter((entity) => entity.buildingId === "ray_receiver" &&
+    (entity.recipeId === "ray_power" || entity.recipeId === "critical_photon"));
+  const receiverCapacityKw = receiverEntities.reduce((sum, entity) => sum + getRayReceiverCapacityKw(state) * entity.machineCount, 0);
+  const receiverLoadKw = receiverEntities.reduce((sum, entity) => sum + Math.max(0, entity.powerOutputKw ?? 0), 0);
+  const criticalPhotonPerMinute = entities.filter((entity) => entity.recipeId === "critical_photon")
+    .reduce((sum, entity) => sum + Math.max(0, entity.productionRate), 0);
+  const antimatterPerMinute = entities.filter((entity) => entity.recipeId === "antimatter")
+    .reduce((sum, entity) => sum + Math.max(0, entity.productionRate) * 0.5, 0);
+  const feedbackGenerationKw = entities.filter((entity) => entity.buildingId === "artificial_star")
+    .reduce((sum, entity) => sum + Math.max(0, entity.powerOutputKw ?? 0), 0);
+  const totals = getDysonPlanTotals(plan);
+  const orbitSails = orbits.reduce((sum, orbit) => sum + orbit.sailsInOrbit, 0);
+  const launchEnergyPerMinuteMj = sailLaunchesPerMinute * DYSON_SAIL_LAUNCH_ENERGY_MJ +
+    rocketLaunchesPerMinute * DYSON_ROCKET_LAUNCH_ENERGY_MJ;
+  const currentGenerationKw = dysonGenerationForSystem(state, systemId);
+  return {
+    systemId,
+    launchMode: state.dysonEngineering.launchMode,
+    launchThrottle: state.dysonEngineering.launchThrottle,
+    launchEnabled: state.dysonEngineering.launchEnabled,
+    orbitCount: orbits.length,
+    orbitSails: Math.floor(orbitSails),
+    queuedSails,
+    queuedRockets,
+    sailLaunchesPerMinute,
+    rocketLaunchesPerMinute,
+    launchEnergyPerSailMj: DYSON_SAIL_LAUNCH_ENERGY_MJ,
+    launchEnergyPerRocketMj: DYSON_ROCKET_LAUNCH_ENERGY_MJ,
+    launchEnergyPerMinuteMj: round(launchEnergyPerMinuteMj, 2),
+    launchEnergySpentMj: round(state.dysonEngineering.launchEnergySpentMj, 3),
+    rayGenerationKw: receiverEntities.filter((entity) => entity.recipeId === "ray_power")
+      .reduce((sum, entity) => sum + Math.max(0, entity.powerOutputKw ?? 0), 0),
+    receiverCapacityKw,
+    receiverLoadKw,
+    rayEfficiency: receiverCapacityKw > EPSILON ? round(Math.min(1, receiverLoadKw / receiverCapacityKw), 4) : 0,
+    criticalPhotonPerMinute: round(criticalPhotonPerMinute, 2),
+    antimatterPerMinute: round(antimatterPerMinute, 2),
+    feedbackGenerationKw: round(feedbackGenerationKw, 2),
+    plannedStructurePoints: totals.plannedStructure,
+    completedStructurePoints: totals.completedStructure,
+    remainingStructurePoints: Math.max(0, totals.plannedStructure - totals.completedStructure),
+    shellCapacity: totals.sailCapacity,
+    shellSails: Math.floor(plan.shellSails),
+    projectedGenerationKw: Math.floor(currentGenerationKw),
   };
 }
 
@@ -1231,48 +1553,93 @@ function launchDysonStructure(state: GameState, systemId: StarSystemId, amount: 
   updateDysonSphereGeneration(state);
 }
 
+function launchDysonSails(state: GameState, systemId: StarSystemId, amount: number): void {
+  if (amount <= 0) return;
+  syncLegacySwarmIntoOrbits(state);
+  const orbit = ensureDysonOrbit(state, systemId);
+  orbit.sailsInOrbit = Math.floor(orbit.sailsInOrbit + amount);
+  orbit.totalLaunched = Math.floor(orbit.totalLaunched + amount);
+  orbit.generationKw = orbit.sailsInOrbit * getSolarSailPowerFor(state);
+  aggregateDysonSwarm(state);
+}
+
 function updateDysonSphereGeneration(state: GameState): void {
+  syncLegacySwarmIntoOrbits(state);
   syncLegacySphereIntoPlans(state);
   state.dysonSphere.structurePoints = Object.values(state.dysonPlans).reduce((sum, plan) => sum + plan.structurePoints, 0);
   state.dysonSphere.shellSails = Object.values(state.dysonPlans).reduce((sum, plan) => sum + plan.shellSails, 0);
+  const powerMultiplier = getDysonPowerMultiplier(state);
   state.dysonSphere.generationKw =
-    Math.floor(state.dysonSphere.structurePoints) * DYSON_STRUCTURE_POWER_KW +
-    Math.floor(state.dysonSphere.shellSails) * DYSON_SHELL_SAIL_POWER_KW;
+    Math.floor(state.dysonSphere.structurePoints) * DYSON_STRUCTURE_POWER_KW * powerMultiplier +
+    Math.floor(state.dysonSphere.shellSails) * DYSON_SHELL_SAIL_POWER_KW * powerMultiplier;
+}
+
+function consumeDysonOrbitSails(state: GameState, systemId: StarSystemId, amount: number): number {
+  let remaining = Math.max(0, Math.floor(amount));
+  for (const orbit of state.dysonEngineering.orbitsBySystem[systemId] ?? []) {
+    if (remaining < 1) break;
+    const removed = Math.min(remaining, Math.max(0, Math.floor(orbit.sailsInOrbit)));
+    orbit.sailsInOrbit -= removed;
+    orbit.generationKw = orbit.sailsInOrbit * getSolarSailPowerFor(state);
+    remaining -= removed;
+  }
+  aggregateDysonSwarm(state);
+  return amount - remaining;
 }
 
 function absorbDysonSails(state: GameState, seconds: number): void {
   updateDysonSphereGeneration(state);
-  const structurePoints = Math.max(0, Math.floor(state.dysonSphere.structurePoints));
-  const shellSails = Math.max(0, Math.floor(state.dysonSphere.shellSails));
-  if (!isTechnologyCompleted(state, "dyson_shell") || structurePoints < 1 || seconds <= EPSILON) return;
+  if (!isTechnologyCompleted(state, "dyson_shell") || seconds <= EPSILON) return;
+  syncLegacySwarmIntoOrbits(state);
+  const absorptionMultiplier = getDysonSailAbsorptionMultiplier(state);
+  let totalAbsorbed = 0;
+  let aggregateProgress = 0;
+  for (const systemId of DYSON_SYSTEM_IDS) {
+    const plan = state.dysonPlans[systemId];
+    const structurePoints = Math.max(0, Math.floor(plan.structurePoints));
+    const capacity = dysonPlanShellCapacity(plan);
+    const free = Math.max(0, capacity - Math.max(0, Math.floor(plan.shellSails)));
+    const sailsInOrbit = (state.dysonEngineering.orbitsBySystem[systemId] ?? [])
+      .reduce((sum, orbit) => sum + Math.max(0, Math.floor(orbit.sailsInOrbit)), 0);
+    let progress = Math.max(0, state.dysonEngineering.absorptionProgressBySystem[systemId] ?? 0);
+    if (structurePoints < 1 || free < 1 || sailsInOrbit < 1) {
+      if (free < 1) progress = 0;
+      state.dysonEngineering.absorptionProgressBySystem[systemId] = round(progress % 1, 6);
+      aggregateProgress += progress;
+      continue;
+    }
 
-  const capacity = getDysonShellCapacity(state);
-  const free = Math.max(0, capacity - shellSails);
-  const sailsInOrbit = Math.max(0, Math.floor(state.dysonSwarm.sailsInOrbit));
-  if (free < 1 || sailsInOrbit < 1) {
-    if (free < 1) state.dysonSphere.absorptionProgress = 0;
-    return;
+    const accumulated = progress +
+      structurePoints * DYSON_SAIL_ABSORPTION_PER_STRUCTURE_PER_SECOND * absorptionMultiplier * seconds;
+    const requested = Math.min(free, sailsInOrbit, Math.floor(accumulated + EPSILON));
+    const consumed = consumeDysonOrbitSails(state, systemId, requested);
+    if (consumed > 0) {
+      plan.shellSails = Math.floor(plan.shellSails + consumed);
+      reconcileDysonPlan(plan);
+      totalAbsorbed += consumed;
+    }
+    progress = Math.max(0, accumulated - consumed);
+    state.dysonEngineering.absorptionProgressBySystem[systemId] = round(Math.min(0.999999, progress), 6);
+    aggregateProgress += progress;
   }
-
-  const accumulated = Math.max(0, state.dysonSphere.absorptionProgress) +
-    structurePoints * DYSON_SAIL_ABSORPTION_PER_STRUCTURE_PER_SECOND * getDysonSailAbsorptionMultiplier(state) * seconds;
-  const absorbed = Math.min(free, sailsInOrbit, Math.floor(accumulated + EPSILON));
-  state.dysonSwarm.sailsInOrbit = sailsInOrbit - absorbed;
-  let remaining = absorbed;
-  for (const plan of Object.values(state.dysonPlans)) {
-    const planFree = Math.max(0, dysonPlanShellCapacity(plan) - plan.shellSails);
-    const assigned = Math.min(remaining, planFree);
-    plan.shellSails += assigned;
-    remaining -= assigned;
-    reconcileDysonPlan(plan);
-  }
-  state.dysonSphere.totalSailsAbsorbed = Math.floor(state.dysonSphere.totalSailsAbsorbed + absorbed);
-  state.dysonSphere.absorptionProgress = round(Math.min(0.999999, Math.max(0, accumulated - absorbed)), 6);
+  state.dysonSphere.totalSailsAbsorbed = Math.floor(state.dysonSphere.totalSailsAbsorbed + totalAbsorbed);
+  // Keep the legacy field as a compact aggregate for old UI/save readers.
+  state.dysonSphere.absorptionProgress = round(Math.min(0.999999, aggregateProgress % 1), 6);
   updateDysonSphereGeneration(state);
 }
 
 function totalDysonGenerationKw(state: GameState): number {
+  syncLegacySwarmIntoOrbits(state);
   return Math.max(0, state.dysonSwarm.generationKw) + Math.max(0, state.dysonSphere.generationKw);
+}
+
+function dysonGenerationForSystem(state: GameState, systemId: StarSystemId): number {
+  const swarm = (state.dysonEngineering.orbitsBySystem[systemId] ?? []).reduce((sum, orbit) => sum + Math.max(0, orbit.generationKw), 0);
+  const plan = state.dysonPlans[systemId];
+  const powerMultiplier = getDysonPowerMultiplier(state);
+  const sphere = (Math.max(0, Math.floor(plan.structurePoints)) * DYSON_STRUCTURE_POWER_KW +
+    Math.max(0, Math.floor(plan.shellSails)) * DYSON_SHELL_SAIL_POWER_KW) * powerMultiplier;
+  return swarm + sphere;
 }
 
 function calculateDysonReception(state: GameState): DysonReceptionPlan {
@@ -1280,26 +1647,43 @@ function calculateDysonReception(state: GameState): DysonReceptionPlan {
     entity.kind === "machine" && entity.buildingId === "ray_receiver" && entity.machineCount > 0 &&
     (entity.recipeId === "ray_power" || entity.recipeId === "critical_photon") && canMachineRun(state, entity));
   const ratedCapacityKw = getRayReceiverCapacityKw(state);
-  const receiverCapacityKw = receivers.reduce((sum, entity) =>
-    sum + ratedCapacityKw * entity.machineCount, 0);
-  const generationKw = totalDysonGenerationKw(state);
-  const efficiency = receiverCapacityKw <= EPSILON ? 0 : Math.min(1, generationKw / receiverCapacityKw);
+  const receiverCapacityKw = receivers.reduce((sum, entity) => sum + ratedCapacityKw * entity.machineCount, 0);
   const allocationByEntity = new Map<string, number>();
+  const efficiencyByEntity = new Map<string, number>();
   const rayPowerByPlanet = new Map<PlanetId, number>();
 
+  const generationBySystem = new Map<StarSystemId, number>();
+  const capacityBySystem = new Map<StarSystemId, number>();
   for (const receiver of receivers) {
+    const systemId = getPlanet(receiver.planetId).systemId;
+    generationBySystem.set(systemId, dysonGenerationForSystem(state, systemId));
+    capacityBySystem.set(systemId, (capacityBySystem.get(systemId) ?? 0) + ratedCapacityKw * receiver.machineCount);
+  }
+  const efficiencyBySystem = new Map<StarSystemId, number>();
+  for (const systemId of generationBySystem.keys()) {
+    const capacity = capacityBySystem.get(systemId) ?? 0;
+    efficiencyBySystem.set(systemId, capacity <= EPSILON ? 0 : Math.min(1, (generationBySystem.get(systemId) ?? 0) / capacity));
+  }
+  for (const receiver of receivers) {
+    const systemId = getPlanet(receiver.planetId).systemId;
+    const efficiency = efficiencyBySystem.get(systemId) ?? 0;
     const allocationKw = ratedCapacityKw * receiver.machineCount * efficiency;
     allocationByEntity.set(receiver.id, allocationKw);
+    efficiencyByEntity.set(receiver.id, efficiency);
     if (receiver.recipeId === "ray_power") {
       rayPowerByPlanet.set(receiver.planetId, (rayPowerByPlanet.get(receiver.planetId) ?? 0) + allocationKw);
     }
   }
 
-  state.dysonSwarm.receiverLoadKw = Math.min(generationKw, receiverCapacityKw);
+  const generationKw = [...generationBySystem.values()].reduce((sum, value) => sum + value, 0);
+  const receiverLoadKw = [...allocationByEntity.values()].reduce((sum, value) => sum + value, 0);
+  const efficiency = receiverCapacityKw <= EPSILON ? 0 : Math.min(1, receiverLoadKw / receiverCapacityKw);
+  state.dysonSwarm.receiverLoadKw = receiverLoadKw;
   return {
     efficiency,
-    receiverLoadKw: state.dysonSwarm.receiverLoadKw,
+    receiverLoadKw,
     allocationByEntity,
+    efficiencyByEntity,
     rayPowerByPlanet,
   };
 }
@@ -1923,12 +2307,27 @@ function consumeProliferatorPoints(entity: FactoryEntity, recipe: RecipeDefiniti
   entity.proliferatorPoints = Math.max(0, points - requiredPoints);
 }
 
+function dysonLaunchFactor(state: GameState, recipeId: RecipeId | undefined): number {
+  if (recipeId !== "solar_sail_launch" && recipeId !== "carrier_rocket_launch") return 1;
+  const schedule = state.dysonEngineering;
+  if (!schedule.launchEnabled) return 0;
+  if (schedule.launchMode === "swarm" && recipeId === "carrier_rocket_launch") return 0;
+  if (schedule.launchMode === "sphere" && recipeId === "solar_sail_launch") return 0;
+  return schedule.launchThrottle;
+}
+
+function dysonLaunchEnergyPerCycle(recipeId: RecipeId | undefined): number {
+  if (recipeId === "solar_sail_launch") return DYSON_SAIL_LAUNCH_ENERGY_MJ;
+  if (recipeId === "carrier_rocket_launch") return DYSON_ROCKET_LAUNCH_ENERGY_MJ;
+  return 0;
+}
+
 function runMachines(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId): void {
   const profile = getPlanetIndustrialProfile(state, planetId);
   for (const entity of state.entities) {
     const recipe = getRecipe(entity.recipeId);
     if (entity.planetId !== planetId || entity.kind !== "machine" || entity.buildingId === "ray_receiver" || !entity.buildingId || !recipe) continue;
-    if (recipe.id === "matrix_research" && !state.research.selectedTechId) {
+    if (recipe.id === "matrix_research" && !hasActiveResearch(state)) {
       entity.progress = 0;
       entity.utilization = 0;
       entity.productionRate = 0;
@@ -1939,7 +2338,8 @@ function runMachines(state: GameState, seconds: number, power: PowerPlan, planet
     const planetSpeed = specializationApplies(profile, building.family, entity.buildingId) ? profile.productionSpeedMultiplier : 1;
     const cyclesPerSecond = building.speed * entity.machineCount * getRecipeSpeedMultiplier(state, recipe.id) *
       getEntityProliferatorSpeedMultiplier(entity) * planetSpeed / recipe.duration;
-    const potentialCycles = cyclesPerSecond * seconds * powerFactor;
+    const launchFactor = dysonLaunchFactor(state, recipe.id);
+    const potentialCycles = cyclesPerSecond * seconds * powerFactor * launchFactor;
     if (recipe.requiredTechId && !isTechnologyCompleted(state, recipe.requiredTechId)) {
       entity.progress = 0;
       entity.utilization = 0;
@@ -1962,6 +2362,7 @@ function runMachines(state: GameState, seconds: number, power: PowerPlan, planet
     if (recipe.id === "matrix_research") {
       const techId = state.research.selectedTechId;
       const technology = getTechnology(techId);
+      const infiniteId = state.endgame?.activeInfiniteResearchId;
       if (techId && technology && cycles > 0) {
         const progress = { ...(state.research.progressByTech[techId] ?? {}) };
         let remainingCycles = cycles;
@@ -1989,18 +2390,41 @@ function runMachines(state: GameState, seconds: number, power: PowerPlan, planet
             if (researchEntity.recipeId === "matrix_research") researchEntity.progress = 0;
           }
         }
+      } else if (infiniteId && isEndgameUnlocked(state) && cycles > 0) {
+        const progress = state.endgame.infiniteResearch[infiniteId] ?? { level: 0, progress: 0 };
+        const cost = getInfiniteResearchCost(infiniteId, progress.level);
+        const consumed = Math.min(
+          cycles,
+          Math.max(0, cost - progress.progress),
+          Math.floor((entity.inputs.universe_matrix ?? 0) + EPSILON),
+        );
+        if (consumed > 0) {
+          entity.inputs.universe_matrix = Math.floor((entity.inputs.universe_matrix ?? 0) - consumed);
+          progress.progress = Math.floor(progress.progress + consumed);
+          state.endgame.infiniteResearch[infiniteId] = progress;
+          if (progress.progress >= cost) {
+            progress.level += 1;
+            progress.progress = 0;
+            state.endgame.galacticScore = Math.floor(state.endgame.galacticScore + 1_000 + progress.level * 250);
+            if (!state.endgame.autoResearch) state.endgame.activeInfiniteResearchId = null;
+          }
+          for (const researchEntity of state.entities) {
+            if (researchEntity.recipeId === "matrix_research") researchEntity.progress = 0;
+          }
+        }
       }
     } else {
       for (const input of recipe.inputs) {
         entity.inputs[input.itemId] = Math.max(0, Math.floor((entity.inputs[input.itemId] ?? 0) - input.amount * cycles));
       }
       consumeProliferatorPoints(entity, recipe, cycles);
-      if (recipe.id === "solar_sail_launch" && cycles > 0) {
-        state.dysonSwarm.sailsInOrbit = Math.floor(state.dysonSwarm.sailsInOrbit + cycles);
-        state.dysonSwarm.totalLaunched = Math.floor(state.dysonSwarm.totalLaunched + cycles);
-      }
+      if (recipe.id === "solar_sail_launch" && cycles > 0) launchDysonSails(state, getPlanet(entity.planetId).systemId, cycles);
       if (recipe.id === "carrier_rocket_launch" && cycles > 0) {
         launchDysonStructure(state, getPlanet(entity.planetId).systemId, cycles);
+      }
+      const launchEnergy = dysonLaunchEnergyPerCycle(recipe.id);
+      if (launchEnergy > EPSILON && cycles > 0) {
+        state.dysonEngineering.launchEnergySpentMj = round(state.dysonEngineering.launchEnergySpentMj + launchEnergy * cycles, 3);
       }
       const extraProductBonus = getEntityExtraProductBonus(entity);
       for (const output of recipe.outputs) {
@@ -2018,7 +2442,7 @@ function runMachines(state: GameState, seconds: number, power: PowerPlan, planet
 
     entity.progress = Math.max(0, round(entity.progress - cycles, 6));
     const activityFactor = potentialCycles > EPSILON ? Math.min(1, work / potentialCycles) : 0;
-    entity.utilization = round(powerFactor * activityFactor, 4);
+    entity.utilization = round(powerFactor * launchFactor * activityFactor, 4);
     const unitsPerCycle = recipe.id === "matrix_research" || recipe.id === "solar_sail_launch" || recipe.id === "carrier_rocket_launch"
       ? 1
       : recipe.outputs.reduce((sum, output) => sum + output.amount, 0) * (1 + getEntityExtraProductBonus(entity));
@@ -2045,14 +2469,15 @@ function runRayReceivers(
     }
     if (recipe.id === "ray_power") {
       entity.progress = 0;
-      entity.utilization = reception.efficiency;
+      entity.utilization = reception.efficiencyByEntity.get(entity.id) ?? 0;
       continue;
     }
     if (recipe.id !== "critical_photon" || allocationKw <= EPSILON) continue;
 
     const building = getBuilding("ray_receiver");
     const cyclesPerSecond = building.speed * entity.machineCount / recipe.duration;
-    const potentialCycles = cyclesPerSecond * seconds * reception.efficiency;
+    const efficiency = reception.efficiencyByEntity.get(entity.id) ?? 0;
+    const potentialCycles = cyclesPerSecond * seconds * efficiency;
     const maximumCycles = Math.floor(availableOutputCycles(entity) + EPSILON);
     if (maximumCycles < 1 || potentialCycles <= EPSILON) continue;
     const work = Math.min(potentialCycles, Math.max(0, maximumCycles - entity.progress));
@@ -2064,7 +2489,7 @@ function runRayReceivers(
       entity.progress = Math.max(0, round(entity.progress - cycles, 6));
     }
     const activityFactor = potentialCycles > EPSILON ? Math.min(1, work / potentialCycles) : 0;
-    entity.utilization = round(reception.efficiency * activityFactor, 4);
+    entity.utilization = round(efficiency * activityFactor, 4);
     entity.productionRate = round(cyclesPerSecond * 60 * entity.utilization, 2);
   }
 }
@@ -2334,10 +2759,18 @@ function simulateStep(state: GameState, seconds: number): void {
   advanceStationRoutes(state, "local", seconds, powerByPlanet);
   advanceStationRoutes(state, "remote", seconds, powerByPlanet);
   updateStationCongestion(state);
-  state.dysonSwarm.generationKw = state.dysonSwarm.sailsInOrbit * SOLAR_SAIL_POWER_KW;
+  runGalacticExports(state, seconds);
+  syncLegacySwarmIntoOrbits(state);
   updateDysonSphereGeneration(state);
   state.dysonSwarm.receiverLoadKw = round(reception.receiverLoadKw, 2);
   state.elapsedSeconds = round(state.elapsedSeconds + seconds);
+  if (state.endgame.exportWindowStartedAt <= 0) state.endgame.exportWindowStartedAt = state.elapsedSeconds;
+  const exportWindowSeconds = state.elapsedSeconds - state.endgame.exportWindowStartedAt;
+  if (exportWindowSeconds >= 10 - EPSILON) {
+    state.endgame.exportedLastMinute = round(state.endgame.exportWindowAmount * 60 / exportWindowSeconds, 2);
+    state.endgame.exportWindowAmount = 0;
+    state.endgame.exportWindowStartedAt = state.elapsedSeconds;
+  }
   state.metrics = { ...state.planetMetrics[state.activePlanetId] };
 }
 
@@ -2381,9 +2814,11 @@ function recordProductionHistory(state: GameState): void {
 export function advanceSimulation(state: GameState, seconds: number): GameState {
   if (state.paused || seconds <= 0) return state;
   const next = copyState(state);
-  let remaining = Math.min(seconds, 8 * 60 * 60);
+  let remaining = Math.min(seconds, 30 * 24 * 60 * 60);
+  // Long offline sessions use coarser deterministic slices to keep the idle loop bounded.
+  const stepSize = remaining > 24 * 60 * 60 ? 30 : remaining > 8 * 60 * 60 ? 10 : 1;
   while (remaining > EPSILON) {
-    const step = Math.min(1, remaining);
+    const step = Math.min(stepSize, remaining);
     simulateStep(next, step);
     remaining -= step;
   }
@@ -3958,6 +4393,230 @@ export function removeQueuedTechnology(state: GameState, techId: TechId): GameSt
   return next;
 }
 
+function validInfiniteResearchId(value: InfiniteResearchId): value is InfiniteResearchId {
+  return Boolean(value && INFINITE_RESEARCH_BY_ID[value]);
+}
+
+export function selectInfiniteResearch(state: GameState, researchId: InfiniteResearchId): GameState {
+  if (!validInfiniteResearchId(researchId) || !isEndgameUnlocked(state)) return state;
+  if (state.endgame.activeInfiniteResearchId === researchId) return state;
+  const next = copyState(state);
+  next.endgame.activeInfiniteResearchId = researchId;
+  for (const entity of next.entities) {
+    if (entity.recipeId === "matrix_research") entity.progress = 0;
+  }
+  return next;
+}
+
+export function setInfiniteResearchAutomation(state: GameState, enabled: boolean): GameState {
+  if (state.endgame.autoResearch === enabled) return state;
+  return { ...state, endgame: { ...state.endgame, autoResearch: enabled } };
+}
+
+export function setGalacticDispatchAutomation(state: GameState, enabled: boolean): GameState {
+  if (state.endgame.autoDispatch === enabled) return state;
+  return { ...state, endgame: { ...state.endgame, autoDispatch: enabled } };
+}
+
+export function setGalacticDispatchThrottle(state: GameState, throttle: GalacticDispatchThrottle): GameState {
+  if (![0.25, 0.5, 1].includes(throttle) || state.endgame.dispatchThrottle === throttle) return state;
+  return { ...state, endgame: { ...state.endgame, dispatchThrottle: throttle } };
+}
+
+export function setGalacticExportEnabled(state: GameState, projectId: GalacticExportProjectId, enabled: boolean): GameState {
+  if (!state.endgame.exportProjects[projectId] || state.endgame.exportProjects[projectId].enabled === enabled) return state;
+  return {
+    ...state,
+    endgame: {
+      ...state.endgame,
+      exportProjects: {
+        ...state.endgame.exportProjects,
+        [projectId]: { ...state.endgame.exportProjects[projectId], enabled },
+      },
+    },
+  };
+}
+
+export function setGalacticExportPriority(state: GameState, projectId: GalacticExportProjectId, priority: LogisticsPriority): GameState {
+  if (!state.endgame.exportProjects[projectId] || ![1, 2, 3].includes(priority)) return state;
+  return {
+    ...state,
+    endgame: {
+      ...state.endgame,
+      exportProjects: {
+        ...state.endgame.exportProjects,
+        [projectId]: { ...state.endgame.exportProjects[projectId], priority },
+      },
+    },
+  };
+}
+
+function networkItemStockForExport(state: GameState, itemId: ItemId): number {
+  let total = 0;
+  const trays = new Map<PlanetId, Partial<Record<ItemId, number>>>();
+  for (const planet of PLANET_LIST) trays.set(planet.id, planet.id === state.activePlanetId ? state.tray : state.planetTrays[planet.id]);
+  for (const tray of trays.values()) total += Math.floor(tray[itemId] ?? 0);
+  for (const entity of state.entities) total += Math.floor(entity.outputs[itemId] ?? 0);
+  return Math.max(0, total);
+}
+
+function withdrawNetworkItem(state: GameState, itemId: ItemId, amount: number): number {
+  let remaining = Math.max(0, Math.floor(amount));
+  let withdrawn = 0;
+  // Clear machine and station output buffers first so a long-running export also relieves blockages.
+  for (const entity of state.entities) {
+    if (remaining < 1) break;
+    const available = Math.max(0, Math.floor(entity.outputs[itemId] ?? 0));
+    const taken = Math.min(remaining, available);
+    if (taken < 1) continue;
+    entity.outputs[itemId] = available - taken;
+    remaining -= taken;
+    withdrawn += taken;
+  }
+  for (const planet of PLANET_LIST) {
+    if (remaining < 1) break;
+    const tray = planet.id === state.activePlanetId ? state.tray : state.planetTrays[planet.id];
+    const available = Math.max(0, Math.floor(tray[itemId] ?? 0));
+    const taken = Math.min(remaining, available);
+    if (taken < 1) continue;
+    tray[itemId] = available - taken;
+    remaining -= taken;
+    withdrawn += taken;
+  }
+  state.planetTrays[state.activePlanetId] = { ...state.tray };
+  return withdrawn;
+}
+
+function completeGalacticExportLevels(state: GameState, projectId: GalacticExportProjectId): void {
+  const project = state.endgame.exportProjects[projectId];
+  while (project.delivered >= getGalacticExportTarget(projectId, project.level)) {
+    const target = getGalacticExportTarget(projectId, project.level);
+    project.delivered -= target;
+    project.level += 1;
+    state.endgame.galacticCredits = Math.floor(state.endgame.galacticCredits + getGalacticExportReward(projectId, project.level - 1));
+    state.endgame.galacticScore = Math.floor(state.endgame.galacticScore + getGalacticExportReward(projectId, project.level - 1));
+  }
+}
+
+function dispatchGalacticExportInternal(state: GameState, projectId: GalacticExportProjectId, requested: number): number {
+  if (!isEndgameUnlocked(state) || !state.endgame.exportProjects[projectId]) return 0;
+  const project = state.endgame.exportProjects[projectId];
+  const definition = getGalacticExportDefinition(projectId);
+  const reserve = Math.floor(definition.reserve * (1 + project.level * 0.08));
+  const available = Math.max(0, networkItemStockForExport(state, definition.itemId) - reserve);
+  const shipped = withdrawNetworkItem(state, definition.itemId, Math.min(available, Math.max(0, Math.floor(requested))));
+  if (shipped > 0) {
+    project.delivered += shipped;
+    project.totalDelivered += shipped;
+    state.endgame.totalExported += shipped;
+    state.endgame.exportWindowAmount += shipped;
+    state.endgame.galacticCredits = Math.floor(state.endgame.galacticCredits + shipped * definition.creditsPerItem);
+    state.endgame.galacticScore = Math.floor(state.endgame.galacticScore + shipped * definition.creditsPerItem);
+    completeGalacticExportLevels(state, projectId);
+  }
+  return shipped;
+}
+
+export function dispatchGalacticExport(state: GameState, projectId: GalacticExportProjectId, amount?: number): GameState {
+  if (!isEndgameUnlocked(state) || !state.endgame.exportProjects[projectId]) return state;
+  const next = copyState(state);
+  const definition = getGalacticExportDefinition(projectId);
+  dispatchGalacticExportInternal(next, projectId, amount ?? definition.baseRatePerMinute);
+  return next;
+}
+
+function runGalacticExports(state: GameState, seconds: number): void {
+  if (!isEndgameUnlocked(state) || !state.endgame.autoDispatch || seconds <= EPSILON) return;
+  const projects = GALACTIC_EXPORT_DEFINITIONS
+    .map((definition) => state.endgame.exportProjects[definition.id])
+    .filter((project) => project.enabled)
+    .sort((left, right) => right.priority - left.priority || left.id.localeCompare(right.id));
+  for (const project of projects) {
+    const definition = getGalacticExportDefinition(project.id);
+    const level = state.endgame.infiniteResearch.galactic_logistics?.level ?? 0;
+    const rate = definition.baseRatePerMinute * state.endgame.dispatchThrottle * (1 + level * 0.1);
+    project.dispatchProgress = Math.min(rate * 2, Math.max(0, project.dispatchProgress) + rate * seconds / 60);
+    const requested = Math.floor(project.dispatchProgress + EPSILON);
+    if (requested < 1) continue;
+    const shipped = dispatchGalacticExportInternal(state, project.id, requested);
+    // Do not accumulate an unbounded backlog when a factory is starved.
+    project.dispatchProgress = shipped >= requested ? project.dispatchProgress - requested : 0;
+  }
+}
+
+export interface GalacticIndustrySnapshot {
+  unlocked: boolean;
+  totalProductionPerMinute: number;
+  totalConsumptionPerMinute: number;
+  netPerMinute: number;
+  activePlanets: number;
+  operatingEntities: number;
+  blockedEntities: number;
+  logisticsTrips: number;
+  networkInventory: number;
+  generationKw: number;
+  demandKw: number;
+  dysonGenerationKw: number;
+  exportedPerMinute: number;
+  totalExported: number;
+  galacticCredits: number;
+  galacticScore: number;
+  infiniteResearchLevels: number;
+}
+
+export function getGalacticIndustrySnapshot(state: GameState): GalacticIndustrySnapshot {
+  const endgame = state.endgame ?? createEndgameState();
+  let production = 0;
+  let consumption = 0;
+  let operatingEntities = 0;
+  let blockedEntities = 0;
+  let logisticsTrips = 0;
+  let networkInventory = 0;
+  for (const entity of state.entities) {
+    if (entity.productionRate > EPSILON) {
+      production += entity.productionRate;
+      operatingEntities += 1;
+    } else if (entity.machineCount > 0 || entity.minerCount > 0) {
+      blockedEntities += 1;
+    }
+    logisticsTrips += entity.stationTrips ?? 0;
+    networkInventory += Object.values(entity.inputs).reduce((sum, amount) => sum + Math.floor(amount ?? 0), 0);
+    networkInventory += Object.values(entity.outputs).reduce((sum, amount) => sum + Math.floor(amount ?? 0), 0);
+    const recipe = getRecipe(entity.recipeId);
+    if (recipe && entity.kind === "machine") {
+      const outputUnits = recipe.outputs.reduce((sum, output) => sum + output.amount, 0) || 1;
+      const cyclesPerMinute = entity.productionRate / outputUnits;
+      consumption += recipe.inputs.reduce((sum, input) => sum + cyclesPerMinute * input.amount, 0);
+    }
+  }
+  for (const planet of PLANET_LIST) {
+    const tray = planet.id === state.activePlanetId ? state.tray : state.planetTrays[planet.id];
+    networkInventory += Object.values(tray).reduce((sum, amount) => sum + Math.floor(amount ?? 0), 0);
+  }
+  const infiniteResearchLevels = Object.values(endgame.infiniteResearch).reduce((sum, progress) => sum + progress.level, 0);
+  const generationKw = Object.values(state.planetMetrics).reduce((sum, metrics) => sum + metrics.generationKw, 0);
+  const demandKw = Object.values(state.planetMetrics).reduce((sum, metrics) => sum + metrics.demandKw, 0);
+  return {
+    unlocked: isEndgameUnlocked(state),
+    totalProductionPerMinute: round(production, 2),
+    totalConsumptionPerMinute: round(consumption, 2),
+    netPerMinute: round(production - consumption, 2),
+    activePlanets: state.exploration.colonizedPlanetIds.length,
+    operatingEntities,
+    blockedEntities,
+    logisticsTrips,
+    networkInventory,
+    generationKw: round(generationKw, 2),
+    demandKw: round(demandKw, 2),
+    dysonGenerationKw: round(state.dysonSwarm.generationKw + state.dysonSphere.generationKw, 2),
+    exportedPerMinute: round(endgame.exportedLastMinute, 2),
+    totalExported: Math.floor(endgame.totalExported),
+    galacticCredits: Math.floor(endgame.galacticCredits),
+    galacticScore: Math.floor(endgame.galacticScore),
+    infiniteResearchLevels,
+  };
+}
+
 export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity): EntityOperatingStatus {
   if (state.paused) return { code: "paused", label: "模拟已暂停", tone: "idle" };
   const entityPowerFactor = getEntityPowerFactor(state, entity);
@@ -4119,8 +4778,12 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
   if (recipe.requiredTechId && !isTechnologyCompleted(state, recipe.requiredTechId)) {
     return { code: "missing-recipe", label: "配方科技未解锁", tone: "blocked" };
   }
-  if (recipe.id === "matrix_research" && !state.research.selectedTechId) {
+  if (recipe.id === "matrix_research" && !hasActiveResearch(state)) {
     return { code: "missing-research", label: "未选择研究科技", tone: "blocked" };
+  }
+  if ((recipe.id === "solar_sail_launch" || recipe.id === "carrier_rocket_launch") &&
+    dysonLaunchFactor(state, recipe.id) <= EPSILON) {
+    return { code: "launch-paused", label: "戴森发射调度已暂停", tone: "idle" };
   }
 
   if (entity.buildingId === "ray_receiver") {

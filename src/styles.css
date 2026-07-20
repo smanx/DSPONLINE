@@ -19,6 +19,280 @@
   --blue: #64a8ca;
 }
 
+/* Stage 9: endgame control surfaces. These stay dense so the factory canvas remains visible behind them. */
+.infinite-research-console {
+  margin-top: 12px;
+  border: 1px solid rgba(104, 171, 163, .22);
+  background: rgba(18, 28, 27, .72);
+  padding: 10px;
+}
+
+.infinite-research-console > header,
+.galactic-automation-bar > header,
+.galactic-panel > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.infinite-research-console > header > span,
+.galactic-automation-bar > header > span,
+.galactic-panel > header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #b7cec7;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.infinite-research-console > header > strong,
+.galactic-automation-bar > header > strong,
+.galactic-panel > header > strong {
+  margin-left: auto;
+  color: #7ed2b8;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.infinite-research-console > header label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #8ea9a2;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.infinite-research-console > div {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(130px, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.infinite-research-console > div > button,
+.infinite-research-list > button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid rgba(106, 151, 143, .2);
+  background: rgba(10, 18, 18, .54);
+  color: #a9c0ba;
+  padding: 7px;
+  text-align: left;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+
+.infinite-research-console > div > button:hover,
+.infinite-research-console > div > button.active,
+.infinite-research-list > button:hover,
+.infinite-research-list > button.active {
+  border-color: rgba(105, 211, 181, .7);
+  background: rgba(37, 76, 68, .52);
+  transform: translateY(-1px);
+}
+
+.infinite-research-console > div > button > i,
+.infinite-research-list > button > i {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.infinite-research-console > div > button > span,
+.infinite-research-list > button > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.infinite-research-console > div > button strong,
+.infinite-research-list > button strong {
+  overflow: hidden;
+  color: #d6e5df;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.infinite-research-console > div > button small,
+.infinite-research-list > button small {
+  overflow: hidden;
+  color: #78928b;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.infinite-research-console > div > button > em,
+.infinite-research-list > button > label {
+  margin-left: auto;
+  color: #78c7ad;
+  font-size: 9px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.galactic-industry {
+  overflow: auto;
+  padding: 16px;
+}
+
+.galactic-lock {
+  display: grid;
+  place-items: center;
+  gap: 9px;
+  min-height: 260px;
+  color: #78918a;
+  text-align: center;
+}
+
+.galactic-lock svg { color: #6ab5a4; }
+.galactic-lock strong { color: #c9ddd7; font-size: 15px; }
+.galactic-lock span { max-width: 420px; font-size: 11px; line-height: 1.6; }
+
+.galactic-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(110px, 1fr));
+  gap: 7px;
+}
+
+.galactic-summary-grid > div {
+  display: grid;
+  gap: 3px;
+  min-height: 70px;
+  border: 1px solid rgba(105, 151, 143, .18);
+  background: rgba(15, 26, 25, .66);
+  padding: 10px;
+}
+
+.galactic-summary-grid span { color: #78928b; font-size: 9px; }
+.galactic-summary-grid strong { color: #d8e8e1; font-size: 18px; line-height: 1; }
+.galactic-summary-grid strong small { color: #8daaa2; font-size: 9px; font-weight: 600; }
+.galactic-summary-grid > div > small { color: #6d8881; font-size: 9px; }
+
+.galactic-automation-bar {
+  display: grid;
+  gap: 9px;
+  margin-top: 10px;
+  border: 1px solid rgba(105, 151, 143, .18);
+  background: rgba(15, 26, 25, .66);
+  padding: 10px;
+}
+
+.galactic-automation-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.galactic-automation-actions button,
+.galactic-automation-actions label,
+.export-project-list footer button,
+.export-project-list footer > div button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 27px;
+  border: 1px solid rgba(106, 151, 143, .24);
+  background: rgba(8, 16, 16, .6);
+  color: #91aaa3;
+  padding: 0 8px;
+  font-size: 9px;
+}
+
+.galactic-automation-actions button.active,
+.galactic-automation-actions button:hover,
+.galactic-automation-actions label:hover,
+.export-project-list footer button.active,
+.export-project-list footer > div button.active,
+.export-project-list footer button:hover,
+.export-project-list footer > div button:hover {
+  border-color: rgba(105, 211, 181, .68);
+  background: rgba(39, 82, 72, .54);
+  color: #c4ece0;
+}
+
+.galactic-automation-actions > div { display: inline-flex; gap: 3px; }
+.galactic-automation-actions label { cursor: pointer; }
+
+.galactic-panels {
+  display: grid;
+  grid-template-columns: minmax(300px, .9fr) minmax(420px, 1.1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.galactic-panel {
+  min-width: 0;
+  border: 1px solid rgba(105, 151, 143, .18);
+  background: rgba(15, 26, 25, .66);
+  padding: 10px;
+}
+
+.infinite-research-list,
+.export-project-list { display: grid; gap: 6px; margin-top: 9px; }
+
+.infinite-research-list > button { width: 100%; }
+.infinite-research-list > button > span { flex: 1; }
+.infinite-research-list > button > span > b {
+  display: block;
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  background: rgba(103, 136, 128, .2);
+}
+.infinite-research-list > button > span > b > em { display: block; height: 100%; background: #74cbb0; }
+
+.export-project-list > article {
+  display: grid;
+  gap: 7px;
+  border: 1px solid rgba(106, 151, 143, .18);
+  background: rgba(8, 16, 16, .5);
+  padding: 8px;
+}
+
+.export-project-list > article.active { border-color: rgba(105, 211, 181, .46); }
+.export-project-list > article > header { display: flex; align-items: center; gap: 7px; }
+.export-project-list > article > header > span { display: grid; min-width: 0; gap: 2px; }
+.export-project-list > article > header strong { color: #d4e5df; font-size: 10px; }
+.export-project-list > article > header small { overflow: hidden; color: #718a84; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.export-project-list > article > header > button { margin-left: auto; width: 25px; height: 25px; padding: 0; }
+.export-project-progress { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; }
+.export-project-progress > i { display: block; height: 5px; overflow: hidden; background: rgba(103, 136, 128, .2); }
+.export-project-progress > i > b { display: block; height: 100%; background: linear-gradient(90deg, #67cbb0, #d7b75e); }
+.export-project-progress > span, .export-project-progress > strong { color: #8ba6a0; font-size: 9px; white-space: nowrap; }
+.export-project-list footer { display: flex; justify-content: space-between; gap: 7px; }
+.export-project-list footer > div { display: inline-flex; gap: 3px; }
+.export-project-list footer button { min-height: 24px; }
+
+@media (max-width: 900px) {
+  .galactic-summary-grid { grid-template-columns: repeat(3, minmax(110px, 1fr)); }
+  .galactic-panels { grid-template-columns: 1fr; }
+  .infinite-research-console > div { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
+}
+
+@media (max-width: 560px) {
+  .galactic-industry { padding: 9px; }
+  .galactic-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .infinite-research-console > div { grid-template-columns: 1fr; }
+  .export-project-progress { grid-template-columns: 1fr auto; }
+  .export-project-progress > i { grid-column: 1 / -1; }
+  .export-project-progress > strong { grid-column: 2; grid-row: 2; }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -448,6 +722,28 @@ select:focus-visible {
 
 .dyson-counts + .dyson-counts {
   margin-top: 5px;
+}
+
+.dyson-engineering-readout {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+}
+
+.dyson-engineering-readout span {
+  display: grid;
+  grid-template-columns: 13px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.dyson-engineering-readout svg,
+.dyson-engineering-readout strong {
+  color: var(--cyan);
 }
 
 .cargo-slot {
@@ -1874,17 +2170,30 @@ select:focus-visible {
   --xy-selection-border: 1px solid rgba(98, 181, 174, 0.86);
 }
 
-/* Keep logistics visually behind buildings while preserving edge hit testing. */
+/* Keep every logistics layer below buildings, including labels and drag previews. */
+.factory-canvas .react-flow .react-flow__viewport {
+  isolation: isolate;
+}
+
 .factory-canvas .react-flow .react-flow__edges {
-  /* The SVG layer is transparent visually; it only carries edge hit paths. */
-  z-index: 3;
+  /* The edge wrapper is an invisible hit layer; its visible portal stays below cards. */
+  z-index: 4;
+  pointer-events: auto;
+}
+
+.factory-canvas .react-flow .react-flow__edges svg {
+  pointer-events: auto;
 }
 
 .factory-canvas .react-flow .react-flow__edgelabel-renderer {
-  z-index: 1;
+  z-index: 2;
 }
 
 .factory-canvas .react-flow .react-flow__nodes {
+  z-index: 3;
+}
+
+.factory-canvas .react-flow svg.react-flow__connectionline {
   z-index: 2;
 }
 
@@ -5528,6 +5837,91 @@ select:focus-visible {
   cursor: default;
 }
 
+.dyson-swarm-heading {
+  border-top: 1px solid var(--line);
+}
+
+.dyson-swarm-orbit-list {
+  max-height: 168px;
+  overflow: auto;
+}
+
+.dyson-swarm-orbit-list > button {
+  display: grid;
+  width: 100%;
+  min-height: 48px;
+  grid-template-columns: 25px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.dyson-swarm-orbit-list > button.active {
+  box-shadow: inset 3px 0 0 var(--yellow);
+  background: #211f17;
+}
+
+.dyson-swarm-orbit-list > button > b {
+  display: grid;
+  width: 23px;
+  height: 23px;
+  place-items: center;
+  border: 1px solid #685d39;
+  border-radius: 50%;
+  color: var(--yellow);
+  font-size: 8px;
+}
+
+.dyson-swarm-orbit-list > button > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dyson-swarm-orbit-list strong {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dyson-swarm-orbit-list small,
+.dyson-swarm-orbit-list em {
+  color: var(--muted);
+  font-size: 7px;
+  font-style: normal;
+}
+
+.dyson-swarm-orbit-list em {
+  color: var(--yellow);
+}
+
+.dyson-add-swarm-orbit {
+  display: flex;
+  min-height: 36px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-bottom: 1px solid var(--line);
+  background: #191e18;
+  color: var(--yellow);
+  cursor: pointer;
+  font-size: 8px;
+}
+
+.dyson-add-swarm-orbit:disabled {
+  color: #515651;
+  cursor: default;
+}
+
 .dyson-orbit-stage {
   position: relative;
   display: grid;
@@ -5591,6 +5985,20 @@ select:focus-visible {
   transform-origin: 300px 300px;
   animation: dyson-swarm-orbit 6s linear infinite;
   pointer-events: none;
+}
+
+.dyson-swarm-orbit-ring {
+  fill: none;
+  stroke: #655b37;
+  stroke-dasharray: 2 7;
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.dyson-swarm-orbit-ring.active {
+  stroke: var(--yellow);
+  stroke-width: 1.8;
 }
 
 .dyson-orbit-ring {
@@ -5798,6 +6206,191 @@ select:focus-visible {
   color: #d78978;
   cursor: pointer;
   font-size: 9px;
+}
+
+.dyson-swarm-orbit-inspector,
+.dyson-launch-console {
+  border-top: 1px solid var(--line);
+}
+
+.dyson-swarm-orbit-inspector > header,
+.dyson-launch-console > header {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dyson-swarm-orbit-inspector > header > i {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  place-items: center;
+  border: 1px solid #665a35;
+  border-radius: 50%;
+  color: var(--yellow);
+  font-style: normal;
+}
+
+.dyson-swarm-orbit-inspector > header > span {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.dyson-swarm-orbit-inspector > header small,
+.dyson-swarm-orbit-inspector > header em {
+  color: var(--muted);
+  font-size: 7px;
+  font-style: normal;
+}
+
+.dyson-swarm-orbit-inspector > header strong {
+  color: var(--text-soft);
+  font-size: 9px;
+}
+
+.dyson-swarm-orbit-inspector > header em {
+  color: var(--yellow);
+}
+
+.dyson-swarm-orbit-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-bottom: 1px solid var(--line);
+}
+
+.dyson-swarm-orbit-stats span {
+  padding: 7px 4px;
+  border-right: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 7px;
+  text-align: center;
+}
+
+.dyson-swarm-orbit-stats span:last-child {
+  border-right: 0;
+  color: var(--yellow);
+}
+
+.dyson-swarm-orbit-inspector > button {
+  display: flex;
+  width: calc(100% - 24px);
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin: 8px 12px;
+  border: 1px solid #593c35;
+  border-radius: 4px;
+  background: #221715;
+  color: #ca7f71;
+  cursor: pointer;
+  font-size: 8px;
+}
+
+.dyson-swarm-orbit-inspector > button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.dyson-launch-console > header {
+  justify-content: space-between;
+  color: var(--text-soft);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.dyson-launch-console > header > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dyson-launch-console > header svg {
+  color: var(--cyan);
+}
+
+.dyson-launch-console > header > button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #151c19;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.dyson-launch-console > header > button.active {
+  border-color: #3f7866;
+  background: #182820;
+  color: var(--green);
+}
+
+.dyson-launch-mode,
+.dyson-launch-throttle {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 7px 10px 0;
+}
+
+.dyson-launch-throttle {
+  grid-template-columns: repeat(4, 1fr);
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dyson-launch-mode button,
+.dyson-launch-throttle button {
+  min-height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: #131a17;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 7px;
+}
+
+.dyson-launch-mode button.active,
+.dyson-launch-throttle button.active {
+  border-color: #3f766d;
+  background: #18302a;
+  color: var(--cyan);
+}
+
+.dyson-engineering-ledger {
+  padding: 8px 12px;
+}
+
+.dyson-launch-cost {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  padding: 7px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.dyson-launch-cost > span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dyson-launch-cost svg,
+.dyson-launch-cost strong {
+  color: var(--yellow);
 }
 
 .dyson-plan-status {
@@ -7788,6 +8381,17 @@ select:focus-visible {
     border-right: 1px solid var(--line);
   }
 
+  .dyson-swarm-orbit-list {
+    display: flex;
+    max-height: 96px;
+    overflow-x: auto;
+  }
+
+  .dyson-swarm-orbit-list > button {
+    min-width: 188px;
+    border-right: 1px solid var(--line);
+  }
+
   .dyson-layer-empty {
     width: 100%;
     min-height: 62px;
@@ -7797,6 +8401,16 @@ select:focus-visible {
     flex: 0 0 auto;
     min-height: 390px;
     grid-template-rows: 42px 348px;
+  }
+
+  .dyson-stage-summary {
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding: 0 10px;
+  }
+
+  .dyson-stage-summary span {
+    flex: 0 0 auto;
   }
 
   .dyson-orbit-canvas {

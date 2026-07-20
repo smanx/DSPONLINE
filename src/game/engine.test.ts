@@ -3,11 +3,14 @@ import {
   DYSON_SHELL_CAPACITY_PER_STRUCTURE,
   DYSON_SHELL_SAIL_POWER_KW,
   DYSON_STRUCTURE_POWER_KW,
+  DYSON_ROCKET_LAUNCH_ENERGY_MJ,
+  DYSON_SAIL_LAUNCH_ENERGY_MJ,
   RAY_RECEIVER_CAPACITY_KW,
   SOLAR_SAIL_POWER_KW,
   adjustStationDrones,
   adjustStationWarpers,
   adjustStationVessels,
+  addDysonSwarmOrbit,
   advanceSimulation,
   applyBeltConfiguration,
   canExploreStarSystem,
@@ -25,6 +28,7 @@ import {
   createBlueprint,
   createInitialState,
   createStandardDysonLayer,
+  dispatchGalacticExport,
   dropCargoToEntity,
   dropCargoToTray,
   exploreStarSystem,
@@ -35,11 +39,13 @@ import {
   getBlueprintRequirements,
   getConstructionQueueDeficits,
   getDysonPlanTotals,
+  getDysonEngineeringSnapshot,
   getDysonShellCapacity,
   getEntityExtraProductBonus,
   getEntityProliferatorPowerMultiplier,
   getEntityProliferatorSpeedMultiplier,
   getDysonSailAbsorptionMultiplier,
+  getGalacticIndustrySnapshot,
   getInterstellarCargoCapacity,
   getInterstellarTripSeconds,
   getLogisticsSpeedMultiplier,
@@ -68,9 +74,14 @@ import {
   queueBlueprint,
   removeEntity,
   removeDysonNode,
+  removeDysonSwarmOrbit,
   removeQueuedTechnology,
+  selectInfiniteResearch,
+  setGalacticDispatchAutomation,
+  setGalacticExportEnabled,
   selectTechnology,
   setActivePlanet,
+  setActiveDysonSwarmOrbit,
   setBeltPriority,
   setBlueprintRecipeOverride,
   setBlueprintTransform,
@@ -78,6 +89,10 @@ import {
   setBeltStackSize,
   setEntityRecipe,
   setEntityPowerGrid,
+  setDysonLaunchEnabled,
+  setDysonLaunchMode,
+  setDysonLaunchThrottle,
+  setDysonSwarmOrbit,
   setRecipeFocus,
   setRecipeFocusMode,
   setEntitiesRecipe,
@@ -99,6 +114,7 @@ import {
   upgradeEntity,
   upgradeSorter,
 } from "./engine";
+import { getGalacticExportTarget } from "./endgame";
 import { TECHNOLOGY_LIST } from "./content";
 
 describe("factory simulation", () => {
@@ -298,7 +314,7 @@ describe("factory simulation", () => {
 
   it("keeps item inventories integer while internal progress remains continuous", () => {
     let state = createInitialState();
-    state.construction.wind_turbine = 1;
+    state.construction.wind_turbine = 4;
     state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 });
     state = placeBuilding(state, "arc_smelter", { x: 300, y: 0 });
     const smelter = state.entities.find((entity) => entity.buildingId === "arc_smelter")!;
@@ -1216,6 +1232,81 @@ describe("factory simulation", () => {
     expect(Number.isInteger(state.dysonSwarm.totalExpired)).toBe(true);
   });
 
+  it("throttles and pauses Dyson launches while tracking per-launch energy cost", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("dyson_swarm");
+    state.construction.wind_turbine = 8;
+    state.construction.em_rail_ejector = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 8);
+    state = placeBuilding(state, "em_rail_ejector", { x: 300, y: 0 });
+    const ejector = state.entities.find((entity) => entity.buildingId === "em_rail_ejector")!;
+    state = setEntityRecipe(state, ejector.id, "solar_sail_launch");
+    state.entities.find((entity) => entity.id === ejector.id)!.inputs.solar_sail = 4;
+
+    state = setDysonLaunchMode(state, "sphere");
+    state = advanceSimulation(state, 24);
+    expect(state.dysonSwarm.sailsInOrbit).toBe(0);
+    expect(getEntityOperatingStatus(state, state.entities.find((entity) => entity.id === ejector.id)!)).toMatchObject({ code: "launch-paused" });
+
+    state = setDysonLaunchMode(state, "balanced");
+    state = setDysonLaunchThrottle(state, 0.25);
+    state = advanceSimulation(state, 48);
+    expect(state.dysonSwarm.sailsInOrbit).toBe(1);
+    expect(state.dysonEngineering.orbitsBySystem.helios[0].sailsInOrbit).toBe(1);
+    expect(state.dysonEngineering.launchEnergySpentMj).toBe(DYSON_SAIL_LAUNCH_ENERGY_MJ);
+    expect(getDysonEngineeringSnapshot(state, "helios")).toMatchObject({
+      launchThrottle: 0.25,
+      sailLaunchesPerMinute: 1.25,
+      launchEnergyPerSailMj: DYSON_SAIL_LAUNCH_ENERGY_MJ,
+      launchEnergyPerRocketMj: DYSON_ROCKET_LAUNCH_ENERGY_MJ,
+    });
+
+    state = setDysonLaunchEnabled(state, false);
+    state = advanceSimulation(state, 48);
+    expect(state.dysonSwarm.sailsInOrbit).toBe(1);
+    expect(state.entities.find((entity) => entity.id === ejector.id)?.inputs.solar_sail).toBe(3);
+  });
+
+  it("keeps solar-sail orbits and ray reception inside their star system", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("dyson_swarm", "ray_receiver");
+    state.exploration.unlockedSystemIds.push("borealis");
+    state = setActivePlanet(state, "frost");
+    state.construction.wind_turbine = 8;
+    state.construction.em_rail_ejector = 1;
+    state.construction.ray_receiver = 2;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 8);
+    state = placeBuilding(state, "em_rail_ejector", { x: 300, y: 0 });
+    state = placeBuilding(state, "ray_receiver", { x: 600, y: 0 });
+    const ejector = state.entities.find((entity) => entity.planetId === "frost" && entity.buildingId === "em_rail_ejector")!;
+    state.entities.find((entity) => entity.id === ejector.id)!.inputs.solar_sail = 2;
+
+    state = addDysonSwarmOrbit(state, "borealis");
+    const activeOrbitId = state.dysonEngineering.activeOrbitBySystem.borealis!;
+    state = setDysonSwarmOrbit(state, "borealis", activeOrbitId, { radius: 28_000, inclination: 31, longitude: 122 });
+    state = advanceSimulation(state, 24);
+    expect(state.dysonEngineering.orbitsBySystem.borealis.find((orbit) => orbit.id === activeOrbitId)).toMatchObject({
+      radius: 28_000,
+      inclination: 31,
+      longitude: 122,
+      sailsInOrbit: 2,
+    });
+    state = advanceSimulation(state, 0.1);
+    expect(state.planetMetrics.frost.rayGenerationKw).toBe(2 * SOLAR_SAIL_POWER_KW);
+
+    state = setActivePlanet(state, "home");
+    state = placeBuilding(state, "ray_receiver", { x: 300, y: 0 });
+    state = advanceSimulation(state, 0.1);
+    expect(state.planetMetrics.home.rayGenerationKw).toBe(0);
+    expect(state.planetMetrics.frost.rayGenerationKw).toBe(2 * SOLAR_SAIL_POWER_KW);
+    expect(getDysonEngineeringSnapshot(state, "borealis")).toMatchObject({ orbitCount: 2, orbitSails: 2 });
+
+    state = setActiveDysonSwarmOrbit(state, "borealis", state.dysonEngineering.orbitsBySystem.borealis[0].id);
+    state = removeDysonSwarmOrbit(state, "borealis", activeOrbitId);
+    expect(state.dysonEngineering.orbitsBySystem.borealis).toHaveLength(1);
+    expect(state.dysonEngineering.orbitsBySystem.borealis[0].sailsInOrbit).toBe(2);
+  });
+
   it("extends solar-sail lifetime through both orbital endurance upgrades", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("dyson_swarm", "solar_sail_life_1", "solar_sail_life_2");
@@ -1611,6 +1702,30 @@ describe("factory simulation", () => {
       state.dysonSphere.structurePoints * DYSON_SHELL_CAPACITY_PER_STRUCTURE,
     );
     expect(Number.isInteger(state.dysonSphere.shellSails)).toBe(true);
+  });
+
+  it("absorbs sails into the shell belonging to the same star system", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("dyson_shell");
+    state.dysonPlans.helios.structurePoints = 10;
+    state.dysonPlans.borealis.structurePoints = 20;
+    const heliosOrbit = state.dysonEngineering.orbitsBySystem.helios[0];
+    const borealisOrbit = state.dysonEngineering.orbitsBySystem.borealis[0];
+    heliosOrbit.sailsInOrbit = 8;
+    heliosOrbit.totalLaunched = 8;
+    borealisOrbit.sailsInOrbit = 12;
+    borealisOrbit.totalLaunched = 12;
+    state.dysonSwarm.sailsInOrbit = 20;
+    state.dysonSwarm.totalLaunched = 20;
+
+    state = advanceSimulation(state, 10);
+
+    expect(state.dysonPlans.helios.shellSails).toBe(8);
+    expect(state.dysonPlans.borealis.shellSails).toBe(12);
+    expect(state.dysonEngineering.orbitsBySystem.helios[0].sailsInOrbit).toBe(0);
+    expect(state.dysonEngineering.orbitsBySystem.borealis[0].sailsInOrbit).toBe(0);
+    expect(state.dysonSphere.totalSailsAbsorbed).toBe(20);
+    expect(state.dysonSphere.shellSails).toBe(20);
   });
 
   it("powers ray receivers from the permanent sphere when the Dyson cloud is empty", () => {
@@ -2368,5 +2483,47 @@ describe("factory simulation", () => {
     const infiniteBefore = state.entities.find((entity) => entity.id === vein.id)?.resourceRemaining;
     state = manualMine(state, vein.id, 3);
     expect(state.entities.find((entity) => entity.id === vein.id)?.resourceRemaining).toBe(infiniteBefore);
+  });
+
+  it("runs repeatable endgame research with universe matrices and keeps looping", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("universe_matrix");
+    state.construction.wind_turbine = 4;
+    state.construction.matrix_lab = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -180 }, 4);
+    state = placeBuilding(state, "matrix_lab", { x: 0, y: 0 });
+    state = selectInfiniteResearch(state, "matrix_compression");
+    expect(state.endgame.activeInfiniteResearchId).toBe("matrix_compression");
+    const labId = state.entities.find((entity) => entity.buildingId === "matrix_lab")!.id;
+    state = setEntityRecipe(state, labId, "matrix_research");
+    const lab = state.entities.find((entity) => entity.id === labId)!;
+    const cost = 250;
+    lab.inputs.universe_matrix = cost + 1;
+    state = advanceSimulation(state, 800);
+    expect(state.endgame.infiniteResearch.matrix_compression.level).toBeGreaterThanOrEqual(1);
+    expect(state.endgame.activeInfiniteResearchId).toBe("matrix_compression");
+    expect(state.endgame.infiniteResearch.matrix_compression.progress).toBeGreaterThanOrEqual(0);
+    expect(getRecipeSpeedMultiplier(state, "iron_ingot")).toBeGreaterThan(1);
+  });
+
+  it("dispatches a mega export from network buffers while respecting its reserve", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("universe_matrix");
+    state.tray.universe_matrix = 2_000;
+    state = setGalacticExportEnabled(state, "universe_archive", true);
+    state = setGalacticDispatchAutomation(state, false);
+    const before = state.tray.universe_matrix ?? 0;
+    state = dispatchGalacticExport(state, "universe_archive", 1_000);
+    expect(before - (state.tray.universe_matrix ?? 0)).toBe(1_000);
+    expect(state.endgame.exportProjects.universe_archive.totalDelivered).toBe(1_000);
+    expect(state.endgame.galacticCredits).toBeGreaterThan(0);
+    expect(getGalacticExportTarget("universe_archive", state.endgame.exportProjects.universe_archive.level)).toBeGreaterThan(0);
+    expect(getGalacticIndustrySnapshot(state).totalExported).toBe(1_000);
+    expect(state.tray.universe_matrix).toBeGreaterThanOrEqual(120);
+  });
+
+  it("continues beyond the legacy eight-hour offline window with bounded stepping", () => {
+    const state = advanceSimulation(createInitialState(), 9 * 60 * 60);
+    expect(state.elapsedSeconds).toBe(9 * 60 * 60);
   });
 });

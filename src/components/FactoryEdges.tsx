@@ -46,7 +46,7 @@ export function FactoryEdge({
   const taskTone = data?.taskTone ?? "normal";
   return (
     <>
-      {/* The edge wrapper stays on top only for its transparent interaction path. */}
+      {/* The hit path is intentionally invisible; the visual portal is rendered below cards. */}
       <BaseEdge id={id} path={path} interactionWidth={interactionWidth} style={{ ...style, opacity: 0 }} />
       <EdgeLabelRenderer>
         <svg

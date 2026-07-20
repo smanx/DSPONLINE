@@ -356,6 +356,45 @@ async function openDysonSphereStageGame(page: Page) {
   await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
 }
 
+async function openEndgameStageGame(page: Page) {
+  await page.addInitScript(() => {
+    const state = {
+      version: 22,
+      nextId: 1,
+      activePlanetId: "home",
+      entities: [],
+      belts: [],
+      construction: {},
+      tray: {
+        universe_matrix: 2_200,
+        solar_sail: 6_000,
+        small_carrier_rocket: 1_200,
+        antimatter_fuel_rod: 600,
+      },
+      planetTrays: {
+        home: {
+          universe_matrix: 2_200,
+          solar_sail: 6_000,
+          small_carrier_rocket: 1_200,
+          antimatter_fuel_rod: 600,
+        },
+        ashen: {},
+      },
+      totalProduced: {},
+      research: {
+        selectedTechId: null,
+        queuedTechIds: [],
+        progressByTech: {},
+        completedTechIds: ["universe_matrix"],
+      },
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
 async function openHandcraftGame(page: Page) {
   await page.addInitScript(() => {
     const state = {
@@ -590,7 +629,7 @@ async function openDysonPlannerGame(page: Page) {
         selectedTechId: null,
         queuedTechIds: [],
         progressByTech: {},
-        completedTechIds: ["dyson_sphere_program", "dyson_shell"],
+        completedTechIds: ["dyson_sphere_program", "dyson_shell", "dyson_swarm"],
       },
       exploration: { unlockedSystemIds: ["helios", "borealis"] },
       blueprints: [],
@@ -1891,6 +1930,15 @@ test("a chemical plant accepts plastic, refined oil and water transport lines to
   await connect("water_source", "水", 3);
   await expect(page.locator(".factory-edge--active")).toHaveCount(3);
   await expect.poll(async () => page.locator(".factory-edge--active .react-flow__edge-path").first().evaluate((element) => getComputedStyle(element).animationName)).toContain("factory-belt-flow");
+  const layerZIndexes = await page.evaluate(() => Object.fromEntries([
+    ["edgeHitLayer", ".react-flow__edges"],
+    ["visibleEdges", ".factory-edge-visual-layer"],
+    ["labels", ".react-flow__edgelabel-renderer"],
+    ["nodes", ".react-flow__nodes"],
+  ].map(([key, selector]) => [key, Number.parseInt(getComputedStyle(document.querySelector(selector)!).zIndex || "0", 10)])));
+  expect(layerZIndexes.edgeHitLayer).toBeGreaterThan(layerZIndexes.nodes);
+  expect(layerZIndexes.visibleEdges).toBeLessThan(layerZIndexes.nodes);
+  expect(layerZIndexes.labels).toBeLessThan(layerZIndexes.nodes);
   await expect(page.getByTitle("选择传送带 Mk.I连接节点端口", { exact: true })).toContainText("×0");
   await page.screenshot({ path: "artifacts/qa/chemical-three-input-routing-1440.png", fullPage: true });
 });
@@ -1911,9 +1959,10 @@ test("Dyson planner builds independent orbital layers across unlocked star syste
   await expect(summary.locator("span").filter({ hasText: "壳面" })).toContainText("8");
   await expect(planner.locator(".dyson-layer-list > button")).toHaveCount(1);
 
-  const radius = planner.locator(".dyson-orbit-control").filter({ hasText: "轨道半径" });
-  const inclination = planner.locator(".dyson-orbit-control").filter({ hasText: "轨道倾角" });
-  const longitude = planner.locator(".dyson-orbit-control").filter({ hasText: "升交点经度" });
+  const shellInspector = planner.locator(".dyson-layer-inspector");
+  const radius = shellInspector.locator(":scope > .dyson-orbit-control").filter({ hasText: "轨道半径" });
+  const inclination = shellInspector.locator(":scope > .dyson-orbit-control").filter({ hasText: "轨道倾角" });
+  const longitude = shellInspector.locator(":scope > .dyson-orbit-control").filter({ hasText: "升交点经度" });
   await radius.locator("input").fill("20000");
   await inclination.locator("input").fill("37");
   await longitude.locator("input").fill("124");
@@ -1932,6 +1981,29 @@ test("Dyson planner builds independent orbital layers across unlocked star syste
   await expect(inclination.locator("input")).toHaveValue("37");
   await expect(longitude.locator("input")).toHaveValue("124");
   await expect(planner.locator(".dyson-orbit-node")).toHaveCount(8);
+
+  const swarmInspector = planner.locator(".dyson-swarm-orbit-inspector");
+  await expect(planner.locator(".dyson-swarm-orbit-list > button")).toHaveCount(1);
+  await planner.getByText("新增太阳帆轨道", { exact: true }).click();
+  await expect(planner.locator(".dyson-swarm-orbit-list > button")).toHaveCount(2);
+  const swarmRadius = swarmInspector.locator(".dyson-orbit-control").filter({ hasText: "轨道半径" });
+  const swarmInclination = swarmInspector.locator(".dyson-orbit-control").filter({ hasText: "轨道倾角" });
+  const swarmLongitude = swarmInspector.locator(".dyson-orbit-control").filter({ hasText: "升交点经度" });
+  await swarmRadius.locator("input").fill("28000");
+  await swarmInclination.locator("input").fill("31");
+  await swarmLongitude.locator("input").fill("122");
+  await expect(swarmRadius).toContainText("28,000 m");
+  await expect(swarmInclination).toContainText("31°");
+  await expect(swarmLongitude).toContainText("122°");
+  await planner.getByText("太阳帆", { exact: true }).click();
+  await planner.getByText("50%", { exact: true }).click();
+  await expect(planner.locator(".dyson-launch-mode button.active")).toHaveText("太阳帆");
+  await expect(planner.locator(".dyson-launch-throttle button.active")).toHaveText("50%");
+  const launchToggle = planner.getByRole("button", { name: "暂停戴森发射" });
+  await expect(launchToggle).toHaveCount(1);
+  await launchToggle.click();
+  await expect(planner.getByRole("button", { name: "启用戴森发射" })).toHaveCount(1);
+  await expect(planner.locator(".dyson-engineering-ledger")).toContainText("发射能耗");
   await page.screenshot({ path: "artifacts/qa/dyson-planner-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -1940,6 +2012,35 @@ test("Dyson planner builds independent orbital layers across unlocked star syste
   await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await expect(planner.locator(".dyson-orbit-canvas")).toBeVisible();
   await page.screenshot({ path: "artifacts/qa/dyson-planner-390.png", fullPage: true });
+});
+
+test("galactic industry console runs infinite research and mega exports", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openEndgameStageGame(page);
+  await page.getByLabel("打开生产统计").click();
+  const statistics = page.getByRole("dialog", { name: "生产统计" });
+  await statistics.getByRole("tab", { name: /银河/ }).click();
+  await expect(statistics.locator(".galactic-summary-grid")).toContainText("银河评分");
+  await expect(statistics.locator(".galactic-industry")).toContainText("超大型物资出口");
+  await expect(statistics.locator(".infinite-research-list > button")).toHaveCount(5);
+
+  await statistics.locator(".infinite-research-list > button").filter({ hasText: "矩阵压缩" }).click();
+  await expect(statistics.locator(".infinite-research-list > button.active")).toContainText("矩阵压缩");
+  const archive = statistics.locator(".export-project-list > article").filter({ hasText: "宇宙矩阵档案" });
+  await archive.getByRole("button", { name: /启用宇宙矩阵档案/ }).click();
+  await archive.getByRole("button", { name: "P3" }).click();
+  await archive.locator('button[title="立即装运一批物资"]').click();
+  await expect(archive).toHaveClass(/active/);
+  await expect(archive.locator(".export-project-progress")).toContainText("120");
+  await page.screenshot({ path: "artifacts/qa/galactic-industry-1440.png", fullPage: true });
+
+  await statistics.getByLabel("关闭生产统计").click();
+  await page.getByLabel("打开科技树").click();
+  const technology = page.getByRole("dialog", { name: "科技树" });
+  await expect(technology.locator(".infinite-research-console")).toContainText("矩阵压缩");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(async () => technology.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/galactic-industry-390.png", fullPage: true });
 });
 
 test("technology upgrades expose balanced global effects in research and equipment views", async ({ page }) => {

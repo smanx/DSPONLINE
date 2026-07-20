@@ -1,8 +1,8 @@
-import { Check, CircleDot, GitBranch, Layers3, LockKeyhole, Orbit, Plus, Rocket, Sparkles, Trash2, X } from "lucide-react";
+import { Check, CircleDot, Gauge, GitBranch, Layers3, LockKeyhole, Orbit, Pause, Play, Plus, RadioTower, Rocket, Sparkles, Sun, Trash2, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { STAR_SYSTEM_LIST, getPlanet, getStarSystem } from "../game/content";
-import { getDysonPlanTotals, isStarSystemUnlocked, isTechnologyCompleted } from "../game/engine";
-import type { DysonLayerState, GameState, StarSystemId } from "../game/types";
+import { getDysonEngineeringSnapshot, getDysonPlanTotals, isStarSystemUnlocked, isTechnologyCompleted } from "../game/engine";
+import type { DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, GameState, StarSystemId } from "../game/types";
 
 const VIEW_CENTER = 300;
 
@@ -38,6 +38,13 @@ export function DysonPlannerWorkspace({
   onAutoConnect,
   onPlanShell,
   onClearShell,
+  onLaunchModeChange,
+  onLaunchThrottleChange,
+  onLaunchEnabledChange,
+  onAddSwarmOrbit,
+  onSelectSwarmOrbit,
+  onSwarmOrbitChange,
+  onRemoveSwarmOrbit,
 }: {
   open: boolean;
   game: GameState;
@@ -53,6 +60,13 @@ export function DysonPlannerWorkspace({
   onAutoConnect: (systemId: StarSystemId, layerId: string) => void;
   onPlanShell: (systemId: StarSystemId, layerId: string) => void;
   onClearShell: (systemId: StarSystemId, layerId: string) => void;
+  onLaunchModeChange: (mode: DysonLaunchMode) => void;
+  onLaunchThrottleChange: (throttle: DysonLaunchThrottle) => void;
+  onLaunchEnabledChange: (enabled: boolean) => void;
+  onAddSwarmOrbit: (systemId: StarSystemId) => void;
+  onSelectSwarmOrbit: (systemId: StarSystemId, orbitId: string) => void;
+  onSwarmOrbitChange: (systemId: StarSystemId, orbitId: string, changes: { radius?: number; inclination?: number; longitude?: number }) => void;
+  onRemoveSwarmOrbit: (systemId: StarSystemId, orbitId: string) => void;
 }) {
   const activePlanetSystem = getPlanet(game.activePlanetId).systemId;
   const [systemId, setSystemId] = useState<StarSystemId>(activePlanetSystem);
@@ -62,15 +76,22 @@ export function DysonPlannerWorkspace({
   }, [activePlanetSystem, open]);
   useEffect(() => setSelectedNodeId(null), [systemId]);
   const plan = game.dysonPlans[systemId];
+  const swarmOrbits = game.dysonEngineering.orbitsBySystem[systemId] ?? [];
+  const activeSwarmOrbit = swarmOrbits.find((orbit) => orbit.id === game.dysonEngineering.activeOrbitBySystem[systemId]) ?? swarmOrbits[0] ?? null;
+  const engineering = getDysonEngineeringSnapshot(game, systemId);
   const activeLayer = plan.layers.find((layer) => layer.id === plan.activeLayerId) ?? plan.layers[0] ?? null;
   const totals = getDysonPlanTotals(plan);
   const programReady = isTechnologyCompleted(game, "dyson_sphere_program");
   const shellReady = isTechnologyCompleted(game, "dyson_shell");
-  const maximumRadius = Math.max(50_000, ...plan.layers.map((layer) => layer.radius));
+  const maximumRadius = Math.max(50_000, ...plan.layers.map((layer) => layer.radius), ...swarmOrbits.map((orbit) => orbit.radius));
   const visualRadiusByLayer = useMemo(() => new Map(plan.layers.map((layer) => [
     layer.id,
     76 + layer.radius / maximumRadius * 190,
   ])), [maximumRadius, plan.layers]);
+  const visualRadiusBySwarmOrbit = useMemo(() => new Map(swarmOrbits.map((orbit) => [
+    orbit.id,
+    64 + orbit.radius / maximumRadius * 176,
+  ])), [maximumRadius, swarmOrbits]);
 
   if (!open) return null;
 
@@ -121,6 +142,17 @@ export function DysonPlannerWorkspace({
             <button type="button" disabled={!programReady || plan.layers.length >= 8} onClick={() => onAddLayer(systemId)} title="新建空白壳层"><Plus size={14} />空白层</button>
             <button type="button" disabled={!programReady || plan.layers.length >= 8} onClick={() => onAddStandardLayer(systemId)} title="新建八节点闭合标准壳层"><Layers3 size={14} />标准层</button>
           </div>
+          <div className="dyson-layer-heading dyson-swarm-heading"><span>太阳帆轨道</span><strong>{swarmOrbits.length}/8</strong></div>
+          <div className="dyson-swarm-orbit-list">
+            {swarmOrbits.map((orbit, index) => (
+              <button className={activeSwarmOrbit?.id === orbit.id ? "active" : ""} type="button" key={orbit.id} onClick={() => onSelectSwarmOrbit(systemId, orbit.id)}>
+                <b>{String(index + 1).padStart(2, "0")}</b>
+                <span><strong>{orbit.name}</strong><small>{orbit.radius.toLocaleString("zh-CN")} m · {orbit.inclination}°</small></span>
+                <em>{orbit.sailsInOrbit.toLocaleString("zh-CN")} 帆</em>
+              </button>
+            ))}
+          </div>
+          <button className="dyson-add-swarm-orbit" type="button" disabled={!isTechnologyCompleted(game, "dyson_swarm") || swarmOrbits.length >= 8} onClick={() => onAddSwarmOrbit(systemId)}><Plus size={14} />新增太阳帆轨道</button>
         </aside>
 
         <section className="dyson-orbit-stage">
@@ -129,20 +161,32 @@ export function DysonPlannerWorkspace({
             <span><GitBranch size={13} />框架 <strong>{totals.frameCount}</strong></span>
             <span><Layers3 size={13} />壳面 <strong>{totals.shellCount}</strong></span>
             <span><Rocket size={13} />施工 <strong>{totals.completedStructure}/{totals.plannedStructure}</strong></span>
+            <span><Sun size={13} />在轨 <strong>{engineering.orbitSails}</strong></span>
+            <span><Gauge size={13} />射线 <strong>{Math.round(engineering.rayEfficiency * 100)}%</strong></span>
           </div>
           <svg className="dyson-orbit-canvas" viewBox="0 0 600 600" role="img" aria-label={`${getStarSystem(systemId).name}戴森球轨道图`} onClick={addNodeFromCanvas}>
             <circle className="dyson-star-halo" cx={VIEW_CENTER} cy={VIEW_CENTER} r="42" />
             <circle className="dyson-star-core" cx={VIEW_CENTER} cy={VIEW_CENTER} r="24" style={{ color: getStarSystem(systemId).color }} />
-            {systemId === "helios" && game.dysonSwarm.sailsInOrbit > 0 ? Array.from({ length: Math.min(14, Math.max(3, Math.ceil(Math.log2(game.dysonSwarm.sailsInOrbit + 1)))) }, (_, index) => (
-              <circle
-                className="dyson-swarm-particle"
-                cx={VIEW_CENTER}
-                cy={VIEW_CENTER - 52 - index % 4 * 9}
-                r={index % 3 === 0 ? 2.4 : 1.7}
-                style={{ animationDelay: `${-index * 0.43}s`, animationDuration: `${5.4 + index % 5 * 0.7}s` }}
-                key={index}
-              />
-            )) : null}
+            {swarmOrbits.map((orbit) => {
+              const radius = visualRadiusBySwarmOrbit.get(orbit.id) ?? 90;
+              const scaleY = 0.48 + Math.abs(Math.cos(orbit.inclination * Math.PI / 180)) * 0.52;
+              return <ellipse className={`dyson-swarm-orbit-ring${activeSwarmOrbit?.id === orbit.id ? " active" : ""}`} cx={VIEW_CENTER} cy={VIEW_CENTER} rx={radius} ry={radius * scaleY} transform={`rotate(${orbit.longitude} ${VIEW_CENTER} ${VIEW_CENTER})`} key={orbit.id} />;
+            })}
+            {swarmOrbits.flatMap((orbit, orbitIndex) => {
+              if (orbit.sailsInOrbit < 1) return [];
+              const radius = visualRadiusBySwarmOrbit.get(orbit.id) ?? 90;
+              const count = Math.min(10, Math.max(2, Math.ceil(Math.log2(orbit.sailsInOrbit + 1))));
+              return Array.from({ length: count }, (_, index) => (
+                <circle
+                  className="dyson-swarm-particle"
+                  cx={VIEW_CENTER}
+                  cy={VIEW_CENTER - radius}
+                  r={index % 3 === 0 ? 2.4 : 1.7}
+                  style={{ animationDelay: `${-(orbitIndex * 0.31 + index * 0.43)}s`, animationDuration: `${5.4 + orbitIndex * 0.8 + index % 5 * 0.7}s` }}
+                  key={`${orbit.id}-${index}`}
+                />
+              ));
+            })}
             {plan.layers.map((layer) => {
               const radius = visualRadiusByLayer.get(layer.id) ?? 100;
               const scaleY = 0.45 + Math.abs(Math.cos(layer.inclination * Math.PI / 180)) * 0.55;
@@ -221,6 +265,36 @@ export function DysonPlannerWorkspace({
           ) : (
             <div className="dyson-inspector-empty"><Orbit size={24} /><strong>{getStarSystem(systemId).name}</strong><span>{programReady ? "0 个规划壳层" : "科技锁定"}</span></div>
           )}
+          {activeSwarmOrbit ? (
+            <section className="dyson-swarm-orbit-inspector" aria-label="太阳帆轨道参数">
+              <header><i><Sun size={15} /></i><span><small>太阳帆轨道</small><strong>{activeSwarmOrbit.name}</strong></span><em>{activeSwarmOrbit.sailsInOrbit} 帆</em></header>
+              <label className="dyson-orbit-control"><span>轨道半径 <strong>{activeSwarmOrbit.radius.toLocaleString("zh-CN")} m</strong></span><input type="range" min={5000} max={50000} step={500} value={activeSwarmOrbit.radius} onChange={(event) => onSwarmOrbitChange(systemId, activeSwarmOrbit.id, { radius: Number(event.target.value) })} /></label>
+              <label className="dyson-orbit-control"><span>轨道倾角 <strong>{activeSwarmOrbit.inclination}°</strong></span><input type="range" min={-90} max={90} step={1} value={activeSwarmOrbit.inclination} onChange={(event) => onSwarmOrbitChange(systemId, activeSwarmOrbit.id, { inclination: Number(event.target.value) })} /></label>
+              <label className="dyson-orbit-control"><span>升交点经度 <strong>{activeSwarmOrbit.longitude}°</strong></span><input type="range" min={0} max={359} step={1} value={activeSwarmOrbit.longitude} onChange={(event) => onSwarmOrbitChange(systemId, activeSwarmOrbit.id, { longitude: Number(event.target.value) })} /></label>
+              <div className="dyson-swarm-orbit-stats"><span>发射 {activeSwarmOrbit.totalLaunched}</span><span>衰减 {activeSwarmOrbit.totalExpired}</span><span>{(activeSwarmOrbit.generationKw / 1000).toFixed(2)} MW</span></div>
+              <button type="button" disabled={swarmOrbits.length <= 1} onClick={() => onRemoveSwarmOrbit(systemId, activeSwarmOrbit.id)} title="删除当前太阳帆轨道"><Trash2 size={13} />删除轨道</button>
+            </section>
+          ) : null}
+          <section className="dyson-launch-console" aria-label="戴森发射调度">
+            <header><span><RadioTower size={14} />发射调度</span><button type="button" className={engineering.launchEnabled ? "active" : ""} onClick={() => onLaunchEnabledChange(!engineering.launchEnabled)} aria-label={engineering.launchEnabled ? "暂停戴森发射" : "启用戴森发射"}>{engineering.launchEnabled ? <Pause size={13} /> : <Play size={13} />}</button></header>
+            <div className="dyson-launch-mode" role="group" aria-label="发射优先级">
+              {(["balanced", "swarm", "sphere"] as DysonLaunchMode[]).map((mode) => <button type="button" className={engineering.launchMode === mode ? "active" : ""} onClick={() => onLaunchModeChange(mode)} key={mode}>{{ balanced: "均衡", swarm: "太阳帆", sphere: "火箭" }[mode]}</button>)}
+            </div>
+            <div className="dyson-launch-throttle" role="group" aria-label="发射节流">
+              {([0.25, 0.5, 0.75, 1] as DysonLaunchThrottle[]).map((throttle) => <button type="button" className={engineering.launchThrottle === throttle ? "active" : ""} onClick={() => onLaunchThrottleChange(throttle)} key={throttle}>{Math.round(throttle * 100)}%</button>)}
+            </div>
+            <dl className="metric-ledger dyson-engineering-ledger">
+              <div><dt>太阳帆队列</dt><dd>{engineering.queuedSails} · {engineering.sailLaunchesPerMinute}/min</dd></div>
+              <div><dt>运载火箭队列</dt><dd>{engineering.queuedRockets} · {engineering.rocketLaunchesPerMinute}/min</dd></div>
+              <div><dt>发射能耗</dt><dd>{engineering.launchEnergyPerMinuteMj.toFixed(1)} MJ/min</dd></div>
+              <div><dt>计划功率</dt><dd>{(engineering.projectedGenerationKw / 1000).toFixed(2)} MW</dd></div>
+              <div><dt>射线效率</dt><dd>{Math.round(engineering.rayEfficiency * 100)}%</dd></div>
+              <div><dt>临界光子</dt><dd>{engineering.criticalPhotonPerMinute.toFixed(1)}/min</dd></div>
+              <div><dt>反物质</dt><dd>{engineering.antimatterPerMinute.toFixed(1)}/min</dd></div>
+              <div><dt>反物质回馈</dt><dd>{(engineering.feedbackGenerationKw / 1000).toFixed(2)} MW</dd></div>
+            </dl>
+            <div className="dyson-launch-cost"><span><Zap size={12} />单次成本</span><strong>帆 {engineering.launchEnergyPerSailMj.toFixed(1)} MJ · 火箭 {engineering.launchEnergyPerRocketMj.toFixed(0)} MJ</strong></div>
+          </section>
           <footer className="dyson-plan-status">
             <span>{totals.completedStructure >= totals.plannedStructure && totals.plannedStructure > 0 ? <Check size={12} /> : <Rocket size={12} />}结构点 {plan.structurePoints}</span>
             <span><Layers3 size={12} />壳面帆 {plan.shellSails}/{totals.sailCapacity}</span>

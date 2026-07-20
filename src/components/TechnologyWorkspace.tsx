@@ -3,7 +3,8 @@ import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
 import { MATRIX_ITEM_IDS, PLANET_LIST, TECHNOLOGY_LIST, getTechnology } from "../game/content";
 import { canQueueTechnology, getDysonSailAbsorptionMultiplier, getInterstellarCargoCapacity, getLogisticsSpeedMultiplier, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getRayReceiverCapacityKw, getRecipeSpeedMultiplier, getSolarSailLifetimeSeconds, isTechnologyCompleted } from "../game/engine";
-import type { GameState, ItemId, TechId } from "../game/types";
+import { INFINITE_RESEARCH_DEFINITIONS, getInfiniteResearchCompletion, getInfiniteResearchCost, getInfiniteResearchLevel, isEndgameUnlocked } from "../game/endgame";
+import type { GameState, InfiniteResearchId, ItemId, TechId } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
 interface TechnologyWorkspaceProps {
@@ -12,6 +13,8 @@ interface TechnologyWorkspaceProps {
   onClose: () => void;
   onSelect: (techId: TechId) => void;
   onRemoveQueued: (techId: TechId) => void;
+  onSelectInfiniteResearch: (researchId: InfiniteResearchId) => void;
+  onInfiniteResearchAutomation: (enabled: boolean) => void;
   focusTechId?: TechId | null;
 }
 
@@ -24,7 +27,7 @@ function networkMatrixStock(game: GameState, itemId: ItemId): number {
   return Math.floor(nodeStock + trayStock + (game.cargo?.itemId === itemId ? game.cargo.amount : 0));
 }
 
-export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQueued, focusTechId }: TechnologyWorkspaceProps) {
+export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQueued, onSelectInfiniteResearch, onInfiniteResearchAutomation, focusTechId }: TechnologyWorkspaceProps) {
   const [focusedTechId, setFocusedTechId] = useState<TechId | null>(null);
   useEffect(() => {
     if (!open || !focusTechId) return;
@@ -40,10 +43,15 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
   }, [focusTechId, open]);
   if (!open) return null;
   const selected = getTechnology(game.research.selectedTechId);
+  const activeInfinite = game.endgame.activeInfiniteResearchId
+    ? INFINITE_RESEARCH_DEFINITIONS.find((definition) => definition.id === game.endgame.activeInfiniteResearchId)
+    : undefined;
+  const activeInfiniteProgress = activeInfinite ? game.endgame.infiniteResearch[activeInfinite.id] : undefined;
   const selectedProgress = selected ? game.research.progressByTech[selected.id] ?? {} : {};
-  const selectedCostTotal = selected?.costs.reduce((sum, cost) => sum + cost.amount, 0) ?? 0;
+  const selectedCostTotal = selected?.costs.reduce((sum, cost) => sum + cost.amount, 0) ??
+    (activeInfinite ? getInfiniteResearchCost(activeInfinite.id, activeInfiniteProgress?.level ?? 0) : 0);
   const selectedProgressTotal = selected?.costs.reduce((sum, cost) =>
-    sum + Math.min(cost.amount, selectedProgress[cost.itemId] ?? 0), 0) ?? 0;
+    sum + Math.min(cost.amount, selectedProgress[cost.itemId] ?? 0), 0) ?? activeInfiniteProgress?.progress ?? 0;
   const maximumTier = Math.max(...TECHNOLOGY_LIST.map((technology) => technology.tier));
 
   return (
@@ -58,6 +66,7 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
             return <span className="matrix-stock" key={itemId}><ItemHoverCard itemId={itemId}><ItemGlyph itemId={itemId} /></ItemHoverCard><strong>{networkMatrixStock(game, itemId)}</strong></span>;
           })}
           <span>已完成 <strong>{game.research.completedTechIds.length}/{TECHNOLOGY_LIST.length}</strong></span>
+          <span>无限等级 <strong>{Object.values(game.endgame.infiniteResearch).reduce((sum, progress) => sum + progress.level, 0)}</strong></span>
         </div>
         <button className="technology-close" type="button" onClick={onClose} title="关闭科技树" aria-label="关闭科技树"><X size={18} /></button>
       </header>
@@ -65,18 +74,19 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
       <div className="research-focus">
         <div>
           <span>当前研究</span>
-          <strong>{selected?.name ?? "未选择科技"}</strong>
+          <strong>{selected?.name ?? activeInfinite?.name ?? "未选择科技"}</strong>
         </div>
         <div className="research-progress">
           <i><b style={{ width: `${selectedCostTotal > 0 ? selectedProgressTotal / selectedCostTotal * 100 : 0}%` }} /></i>
-          <span>{selected ? `${selectedProgressTotal} / ${selectedCostTotal} 矩阵` : "0 / 0 矩阵"}</span>
+          <span>{selected || activeInfinite ? `${selectedProgressTotal} / ${selectedCostTotal} 矩阵` : "0 / 0 矩阵"}</span>
         </div>
         <div className="research-cost-list">
           {selected?.costs.map((cost) => {
             return <span key={cost.itemId}><ItemHoverCard itemId={cost.itemId}><ItemGlyph itemId={cost.itemId} /></ItemHoverCard>{selectedProgress[cost.itemId] ?? 0}/{cost.amount}</span>;
           })}
+          {!selected && activeInfinite ? <span><ItemHoverCard itemId="universe_matrix"><ItemGlyph itemId="universe_matrix" /></ItemHoverCard>{activeInfiniteProgress?.progress ?? 0}/{selectedCostTotal}</span> : null}
         </div>
-        <p>{selected?.summary ?? "科研站处于科研模式时会按科技需求消耗蓝色、红色、黄色、紫色与绿色矩阵。"}</p>
+        <p>{selected?.summary ?? activeInfinite?.summary ?? "科研站处于科研模式时会按科技需求消耗矩阵。"}</p>
         <div className="research-queue">
           <header><ListOrdered size={14} /><span>科研队列</span><strong>{game.research.queuedTechIds.length}</strong></header>
           <div>
@@ -99,6 +109,20 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
             <span><Timer size={13} /><small>太阳帆寿命</small><strong>{Math.round(getSolarSailLifetimeSeconds(game) / 60)} min</strong></span>
             <span><Satellite size={13} /><small>单站接收</small><strong>{(getRayReceiverCapacityKw(game) / 1000).toFixed(1)} MW</strong></span>
             <span><Zap size={13} /><small>壳面吸附</small><strong>{getDysonSailAbsorptionMultiplier(game).toFixed(2)}×</strong></span>
+          </div>
+        </section>
+        <section className="infinite-research-console" aria-label="无限科技">
+          <header><span><Rocket size={13} />无限科技</span><strong>{isEndgameUnlocked(game) ? "可持续研究" : "宇宙矩阵后解锁"}</strong><label><input type="checkbox" checked={game.endgame.autoResearch} disabled={!isEndgameUnlocked(game)} onChange={(event) => onInfiniteResearchAutomation(event.target.checked)} />自动续研</label></header>
+          <div>
+            {INFINITE_RESEARCH_DEFINITIONS.map((definition) => {
+              const progress = game.endgame.infiniteResearch[definition.id];
+              const active = game.endgame.activeInfiniteResearchId === definition.id;
+              const level = getInfiniteResearchLevel(game, definition.id);
+              const cost = getInfiniteResearchCost(definition.id, level);
+              return <button type="button" key={definition.id} className={active ? "active" : ""} disabled={!isEndgameUnlocked(game)} onClick={() => onSelectInfiniteResearch(definition.id)} title={definition.summary}>
+                <i style={{ color: definition.color }}>{definition.symbol}</i><span><strong>{definition.name}</strong><small>Lv.{level} · {definition.effect}</small></span><em>{active ? `${Math.round(getInfiniteResearchCompletion(progress, definition.id) * 100)}%` : `${cost} 矩阵`}</em>
+              </button>;
+            })}
           </div>
         </section>
       </div>

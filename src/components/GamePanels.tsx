@@ -18,6 +18,7 @@ import {
   Flame,
   Flag,
   FlaskConical,
+  Gauge,
   Hammer,
   GitFork,
   Layers3,
@@ -51,7 +52,7 @@ import { useState } from "react";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES_BY_BUILDING, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getSorterConstructionId, getTechnology, isConveyorBeltId } from "../game/content";
-import { POWER_GRID_IDS, POWER_GRID_LABELS, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltNetworkIds, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationSlots, getStationVesselCapacity, getStationWarperCapacity, isEntityInPowerCoverage, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
+import { POWER_GRID_IDS, POWER_GRID_LABELS, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltNetworkIds, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationSlots, getStationVesselCapacity, getStationWarperCapacity, isEntityInPowerCoverage, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import { getPlanetIndustrialProfile } from "../game/galaxy";
 import type {
   BeltTier,
@@ -109,6 +110,7 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
     ? Math.min(100, game.dysonSwarm.receiverLoadKw / dysonGenerationKw * 100)
     : 0;
   const shellCapacity = getDysonShellCapacity(game);
+  const dysonEngineering = getDysonEngineeringSnapshot(game, getPlanet(game.activePlanetId).systemId);
 
   return (
     <aside
@@ -186,6 +188,11 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
         <div className="dyson-counts">
           <span>运载火箭 <strong>{formatAmount(game.dysonSphere.totalRocketsLaunched)}</strong></span>
           <span>永久吸附 <strong>{formatAmount(game.dysonSphere.totalSailsAbsorbed)}</strong></span>
+        </div>
+        <div className="dyson-engineering-readout">
+          <span><RadioTower size={11} />{dysonEngineering.launchEnabled ? { balanced: "均衡调度", swarm: "太阳帆优先", sphere: "火箭优先" }[dysonEngineering.launchMode] : "发射暂停"}<strong>{Math.round(dysonEngineering.launchThrottle * 100)}%</strong></span>
+          <span><Gauge size={11} />射线效率<strong>{Math.round(dysonEngineering.rayEfficiency * 100)}%</strong></span>
+          <span><Atom size={11} />反物质回馈<strong>{(dysonEngineering.feedbackGenerationKw / 1000).toFixed(2)} MW</strong></span>
         </div>
         <button className="dyson-planner-command" type="button" onClick={onOpenDysonPlanner} title="打开戴森球规划"><Orbit size={14} />戴森球规划</button>
       </section>

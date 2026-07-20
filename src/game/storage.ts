@@ -11,7 +11,8 @@ import { BUILDINGS, ITEMS, PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, get
 import { normalizeCampaignState, syncCampaignProgress } from "./campaign";
 import { isAchievementId } from "./progression";
 import { createGalaxyState, createVeinReserve, isInfiniteResource } from "./galaxy";
-import type { BeltConnection, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CargoStackSize, ConstructionId, DysonLayerState, DysonSpherePlanState, EnergyMode, FactoryEntity, GameState, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
+import { createEndgameState, getOfflineSimulationLimitSeconds } from "./endgame";
+import type { BeltConnection, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CargoStackSize, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -35,6 +36,9 @@ export interface OfflineReport {
   completedTechIds: TechId[];
   structurePointsAdded: number;
   shellSailsAdded: number;
+  infiniteResearchLevels?: Array<{ id: InfiniteResearchId; level: number }>;
+  exported?: Array<{ projectId: GalacticExportProjectId; amount: number }>;
+  galacticCreditsAdded?: number;
 }
 
 export interface SaveSlotSummary {
@@ -220,6 +224,87 @@ function validPowerPriority(value: unknown): value is PowerPriority {
   return value === 1 || value === 2 || value === 3;
 }
 
+function validDysonLaunchMode(value: unknown): value is DysonLaunchMode {
+  return value === "balanced" || value === "swarm" || value === "sphere";
+}
+
+function validDysonLaunchThrottle(value: unknown): value is DysonLaunchThrottle {
+  return value === 0.25 || value === 0.5 || value === 0.75 || value === 1;
+}
+
+function validInfiniteResearchId(value: unknown): value is InfiniteResearchId {
+  return value === "matrix_compression" || value === "vein_utilization" || value === "galactic_logistics" ||
+    value === "stellar_harnessing" || value === "continuum_simulation";
+}
+
+function validGalacticExportProjectId(value: unknown): value is GalacticExportProjectId {
+  return value === "universe_archive" || value === "solar_sail_array" || value === "carrier_rocket_fleet" || value === "antimatter_exchange";
+}
+
+function validDispatchThrottle(value: unknown): value is GalacticDispatchThrottle {
+  return value === 0.25 || value === 0.5 || value === 1;
+}
+
+function migrateEndgame(saved: Record<string, any>): EndgameState {
+  const defaults = createEndgameState();
+  const raw = saved.endgame && typeof saved.endgame === "object" ? saved.endgame : {};
+  const infiniteResearch = { ...defaults.infiniteResearch } as EndgameState["infiniteResearch"];
+  for (const researchId of Object.keys(defaults.infiniteResearch) as InfiniteResearchId[]) {
+    const source = raw.infiniteResearch?.[researchId];
+    const level = nonNegativeInteger(source?.level);
+    const progress = nonNegativeInteger(source?.progress);
+    infiniteResearch[researchId] = { level, progress };
+  }
+  const exportProjects = { ...defaults.exportProjects } as EndgameState["exportProjects"];
+  for (const projectId of Object.keys(defaults.exportProjects) as GalacticExportProjectId[]) {
+    const source = raw.exportProjects?.[projectId];
+    const priority = validPriority(source?.priority) ? source.priority : 1;
+    exportProjects[projectId] = {
+      ...defaults.exportProjects[projectId],
+      id: projectId,
+      enabled: typeof source?.enabled === "boolean" ? source.enabled : false,
+      priority,
+      level: nonNegativeInteger(source?.level),
+      delivered: nonNegativeInteger(source?.delivered),
+      totalDelivered: nonNegativeInteger(source?.totalDelivered),
+      dispatchProgress: Math.min(2_000_000_000, nonNegativeNumber(source?.dispatchProgress)),
+    };
+  }
+  return {
+    ...defaults,
+    activeInfiniteResearchId: validInfiniteResearchId(raw.activeInfiniteResearchId) &&
+      (saved.research?.completedTechIds ?? []).includes("universe_matrix")
+      ? raw.activeInfiniteResearchId
+      : null,
+    autoResearch: typeof raw.autoResearch === "boolean" ? raw.autoResearch : true,
+    autoDispatch: typeof raw.autoDispatch === "boolean" ? raw.autoDispatch : true,
+    dispatchThrottle: validDispatchThrottle(raw.dispatchThrottle) ? raw.dispatchThrottle : 1,
+    exportProjects,
+    galacticCredits: nonNegativeInteger(raw.galacticCredits),
+    galacticScore: nonNegativeInteger(raw.galacticScore),
+    totalExported: nonNegativeInteger(raw.totalExported),
+    exportedLastMinute: nonNegativeNumber(raw.exportedLastMinute),
+    exportWindowAmount: nonNegativeInteger(raw.exportWindowAmount),
+    exportWindowStartedAt: nonNegativeNumber(raw.exportWindowStartedAt),
+    infiniteResearch,
+  };
+}
+
+function defaultDysonOrbit(systemId: StarSystemId, index = 0): DysonSwarmOrbitState {
+  return {
+    id: `dyson_orbit_${systemId}_${index + 1}`,
+    name: `太阳帆轨道 ${String.fromCharCode(65 + index)}`,
+    radius: 12_000 + index * 6_000,
+    inclination: index * 12,
+    longitude: index * 45,
+    sailsInOrbit: 0,
+    totalLaunched: 0,
+    totalExpired: 0,
+    decayProgress: 0,
+    generationKw: 0,
+  };
+}
+
 function validSimulationSpeed(value: unknown): value is GameState["settings"]["simulationSpeed"] {
   return value === 1 || value === 2 || value === 4;
 }
@@ -238,7 +323,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
   const galaxy = createGalaxyState(saved.version >= 20 ? saved.galaxy?.seed : initial.galaxy.seed, saved.version < 20);
   const entities = saved.entities.map((entity: FactoryEntity) => {
@@ -686,6 +771,54 @@ export function migrateGame(value: unknown): GameState | null {
       ? Math.min(swarmGenerationKw + dysonSphere.generationKw, nonNegativeNumber(saved.dysonSwarm?.receiverLoadKw))
       : 0,
   };
+  const dysonEngineering: DysonEngineeringState = {
+    ...initial.dysonEngineering,
+    launchMode: validDysonLaunchMode(saved.dysonEngineering?.launchMode) ? saved.dysonEngineering.launchMode : initial.dysonEngineering.launchMode,
+    launchThrottle: validDysonLaunchThrottle(saved.dysonEngineering?.launchThrottle) ? saved.dysonEngineering.launchThrottle : initial.dysonEngineering.launchThrottle,
+    launchEnabled: typeof saved.dysonEngineering?.launchEnabled === "boolean" ? saved.dysonEngineering.launchEnabled : true,
+    activeOrbitBySystem: { ...initial.dysonEngineering.activeOrbitBySystem },
+    orbitsBySystem: { ...initial.dysonEngineering.orbitsBySystem },
+    absorptionProgressBySystem: { ...initial.dysonEngineering.absorptionProgressBySystem },
+    launchEnergySpentMj: saved.version >= 22 ? nonNegativeNumber(saved.dysonEngineering?.launchEnergySpentMj) : 0,
+  };
+  const persistedOrbitData = saved.version >= 22 &&
+    saved.dysonEngineering?.orbitsBySystem &&
+    Object.values(saved.dysonEngineering.orbitsBySystem).some((value) => Array.isArray(value));
+  for (const systemId of Object.keys(STAR_SYSTEMS) as StarSystemId[]) {
+    const rawOrbits = saved.version >= 22 ? saved.dysonEngineering?.orbitsBySystem?.[systemId] : undefined;
+    const parsedOrbits: DysonSwarmOrbitState[] = Array.isArray(rawOrbits) ? rawOrbits.flatMap((orbit: Record<string, any>, index: number) => {
+      if (typeof orbit.id !== "string" || !orbit.id) return [];
+      return [{
+        id: orbit.id,
+        name: typeof orbit.name === "string" && orbit.name.trim() ? orbit.name.trim().slice(0, 24) : defaultDysonOrbit(systemId, index).name,
+        radius: Math.max(5_000, Math.min(50_000, Math.round(typeof orbit.radius === "number" ? orbit.radius : defaultDysonOrbit(systemId, index).radius))),
+        inclination: Math.max(-90, Math.min(90, Math.round(typeof orbit.inclination === "number" ? orbit.inclination : 0))),
+        longitude: ((typeof orbit.longitude === "number" ? orbit.longitude : 0) % 360 + 360) % 360,
+        sailsInOrbit: nonNegativeInteger(orbit.sailsInOrbit),
+        totalLaunched: nonNegativeInteger(orbit.totalLaunched),
+        totalExpired: nonNegativeInteger(orbit.totalExpired),
+        decayProgress: nonNegativeNumber(orbit.decayProgress) % 1,
+        generationKw: nonNegativeNumber(orbit.sailsInOrbit) * SOLAR_SAIL_POWER_KW,
+      } satisfies DysonSwarmOrbitState];
+    }) : [];
+    const orbits = parsedOrbits.length > 0 ? parsedOrbits.slice(0, 8) : [defaultDysonOrbit(systemId)];
+    dysonEngineering.orbitsBySystem[systemId] = orbits;
+    const active = saved.version >= 22 ? saved.dysonEngineering?.activeOrbitBySystem?.[systemId] : undefined;
+    dysonEngineering.activeOrbitBySystem[systemId] = typeof active === "string" && orbits.some((orbit) => orbit.id === active)
+      ? active
+      : orbits[0].id;
+    dysonEngineering.absorptionProgressBySystem[systemId] = persistedOrbitData
+      ? nonNegativeNumber(saved.dysonEngineering?.absorptionProgressBySystem?.[systemId]) % 1
+      : systemId === "helios" ? dysonSphere.absorptionProgress : 0;
+  }
+  if (!persistedOrbitData) {
+    const legacyOrbit = dysonEngineering.orbitsBySystem.helios[0];
+    legacyOrbit.sailsInOrbit = sailsInOrbit;
+    legacyOrbit.totalLaunched = totalLaunched;
+    legacyOrbit.totalExpired = totalExpired;
+    legacyOrbit.decayProgress = dysonSwarm.decayProgress;
+    legacyOrbit.generationKw = swarmGenerationKw;
+  }
   const settings: GameState["settings"] = {
     simulationSpeed: validSimulationSpeed(saved.settings?.simulationSpeed)
       ? saved.settings.simulationSpeed
@@ -724,11 +857,12 @@ export function migrateGame(value: unknown): GameState | null {
   const unlockedAchievementIds = Array.isArray(saved.achievements?.unlockedIds)
     ? [...new Set(saved.achievements.unlockedIds.filter(isAchievementId))]
     : [];
+  const endgame = migrateEndgame(saved);
 
   const migrated = {
     ...initial,
     ...saved,
-    version: 21,
+    version: 23,
     activePlanetId,
     entities,
     belts,
@@ -762,7 +896,9 @@ export function migrateGame(value: unknown): GameState | null {
     powerGridMetrics,
     dysonSwarm,
     dysonSphere,
+    dysonEngineering,
     dysonPlans,
+    endgame,
   } as GameState;
   return syncCampaignProgress(migrated, { grantRewards: saved.version >= 18 });
 }
@@ -784,12 +920,25 @@ function buildOfflineReport(before: GameState, after: GameState, seconds: number
     return amount > 0 ? [{ itemId, amount }] : [];
   }).sort((left, right) => right.amount - left.amount);
   const beforeTechIds = new Set(before.research.completedTechIds);
+  const infiniteResearchLevels = (Object.keys(after.endgame.infiniteResearch) as InfiniteResearchId[]).flatMap((id) => {
+    const beforeLevel = before.endgame.infiniteResearch[id]?.level ?? 0;
+    const afterLevel = after.endgame.infiniteResearch[id]?.level ?? 0;
+    return afterLevel > beforeLevel ? [{ id, level: afterLevel - beforeLevel }] : [];
+  });
+  const exported = (Object.keys(after.endgame.exportProjects) as GalacticExportProjectId[]).flatMap((projectId) => {
+    const amount = Math.max(0, (after.endgame.exportProjects[projectId]?.totalDelivered ?? 0) -
+      (before.endgame.exportProjects[projectId]?.totalDelivered ?? 0));
+    return amount > 0 ? [{ projectId, amount }] : [];
+  });
   return {
     seconds,
     produced,
     completedTechIds: after.research.completedTechIds.filter((techId) => !beforeTechIds.has(techId)),
     structurePointsAdded: Math.max(0, after.dysonSphere.structurePoints - before.dysonSphere.structurePoints),
     shellSailsAdded: Math.max(0, after.dysonSphere.shellSails - before.dysonSphere.shellSails),
+    infiniteResearchLevels,
+    exported,
+    galacticCreditsAdded: Math.max(0, after.endgame.galacticCredits - before.endgame.galacticCredits),
   };
 }
 
@@ -804,7 +953,7 @@ function parseEnvelope(raw: string, advanceOffline: boolean): LoadedGame | null 
     ? envelope.savedAt
     : Date.now();
   const offlineSeconds = advanceOffline && !state.paused
-    ? Math.min(8 * 60 * 60, Math.max(0, (Date.now() - savedAt) / 1000))
+    ? Math.min(getOfflineSimulationLimitSeconds(state), Math.max(0, (Date.now() - savedAt) / 1000))
     : 0;
   const advanced = offlineSeconds >= 1 ? advanceSimulation(state, offlineSeconds) : state;
   return {
