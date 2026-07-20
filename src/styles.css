@@ -961,7 +961,29 @@ select:focus-visible {
   transition: stroke-width 120ms ease;
 }
 
+/* Factory edges render their visible path in the lower portal layer. */
+.react-flow__edge.factory-edge > .react-flow__edge-path {
+  opacity: 0;
+}
+
+.factory-edge-visual-layer {
+  position: absolute;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.factory-edge-visual-path {
+  fill: none;
+  pointer-events: none;
+  transition: stroke-width 120ms ease;
+}
+
 .react-flow__edge.selected .react-flow__edge-path {
+  filter: drop-shadow(0 0 4px rgba(98, 181, 174, 0.55));
+}
+
+.factory-edge-visual-path--selected {
   filter: drop-shadow(0 0 4px rgba(98, 181, 174, 0.55));
 }
 
@@ -1852,6 +1874,20 @@ select:focus-visible {
   --xy-selection-border: 1px solid rgba(98, 181, 174, 0.86);
 }
 
+/* Keep logistics visually behind buildings while preserving edge hit testing. */
+.factory-canvas .react-flow .react-flow__edges {
+  /* The SVG layer is transparent visually; it only carries edge hit paths. */
+  z-index: 3;
+}
+
+.factory-canvas .react-flow .react-flow__edgelabel-renderer {
+  z-index: 1;
+}
+
+.factory-canvas .react-flow .react-flow__nodes {
+  z-index: 2;
+}
+
 .react-flow__node.selected .factory-node {
   border-color: var(--cyan);
   box-shadow: 0 0 0 2px rgba(98, 181, 174, 0.18), 0 8px 20px rgba(0, 0, 0, 0.28);
@@ -2066,7 +2102,13 @@ select:focus-visible {
   opacity: 0.13;
 }
 
-.react-flow__edge.factory-edge--task-focus .react-flow__edge-path {
+.factory-edge-visual-layer--dim,
+.factory-edge-label--dim {
+  opacity: 0.13;
+}
+
+.react-flow__edge.factory-edge--task-focus .react-flow__edge-path,
+.factory-edge-visual-layer--focus .factory-edge-visual-path {
   filter: drop-shadow(0 0 5px rgba(240, 199, 91, 0.72));
   stroke-width: 3;
 }
@@ -2488,6 +2530,146 @@ select:focus-visible {
   padding: 10px 0;
   border-bottom: 1px solid var(--line);
 }
+
+.power-network-control {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #2b5148;
+  border-radius: 4px;
+  background: #101b18;
+}
+
+.power-network-control > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #a8d6c9;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.power-network-control > header span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.power-grid-switcher {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.power-grid-switcher button {
+  min-height: 26px;
+  border: 1px solid #31574e;
+  border-radius: 3px;
+  background: #15231f;
+  color: #7ea99d;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.power-grid-switcher button.active {
+  border-color: #74c5ae;
+  background: #245447;
+  color: #e0fff4;
+}
+
+.power-network-ledger {
+  margin: 0;
+}
+
+.power-priority-buttons { display: grid; gap: 5px; }
+.power-priority-buttons > span { color: #7ea99d; font-size: 8px; }
+.power-priority-buttons .segmented-control { display: grid; grid-template-columns: repeat(3, 1fr); }
+
+.star-planet-profile {
+  display: block;
+  margin-top: 3px;
+  color: #87bcae;
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.star-survey-progress {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 7px;
+  color: #b8d8cf;
+  font-size: 9px;
+}
+
+.star-survey-progress > i {
+  display: block;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #24342f;
+}
+
+.star-survey-progress > i > b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #5fb39d, #d5b260);
+  transition: width 180ms ease;
+}
+
+.power-grid-ledger,
+.planet-profile-ledger {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.power-grid-ledger > header,
+.power-grid-row,
+.planet-profile-ledger > header {
+  display: grid;
+  grid-template-columns: 1.1fr .8fr 1.2fr 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.power-grid-ledger > header,
+.planet-profile-ledger > header {
+  background: #151c19;
+  font-weight: 700;
+}
+
+.power-grid-row {
+  border-top: 1px solid #202a26;
+  color: #b6cbc4;
+}
+
+.power-grid-row strong { color: #d7e8e2; }
+.power-grid-row .warning { color: var(--yellow); }
+
+.planet-profile-ledger > header {
+  display: flex;
+  justify-content: space-between;
+}
+
+.planet-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding: 10px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.planet-profile-grid span { display: flex; justify-content: space-between; gap: 8px; }
+.planet-profile-grid strong { color: #b7dcd0; text-align: right; }
 
 .station-slot {
   min-width: 0;
@@ -3879,6 +4061,105 @@ select:focus-visible {
   grid-template-rows: 64px 50px minmax(0, 1fr);
   background: #0c110f;
 }
+
+.recipe-focus-panel {
+  position: absolute;
+  z-index: 24;
+  left: 24px;
+  top: 72px;
+  display: grid;
+  width: min(900px, calc(100% - 36px));
+  max-height: min(55vh, 560px);
+  overflow: hidden;
+  border: 1px solid #45645a;
+  border-radius: 6px;
+  background: rgba(12, 19, 17, .96);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .35);
+  color: #c5ddd5;
+  pointer-events: auto;
+}
+
+.recipe-focus-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #29443b;
+  background: #15231f;
+  cursor: grab;
+  touch-action: none;
+}
+.recipe-focus-header:active { cursor: grabbing; }
+
+.recipe-focus-header > div:first-child,
+.recipe-focus-actions,
+.recipe-focus-mode,
+.recipe-focus-step-head,
+.recipe-focus-source,
+.recipe-focus-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.recipe-focus-header > div:first-child { gap: 8px; min-width: 0; }
+.recipe-focus-header > div:first-child > i { display: grid; width: 27px; height: 27px; place-items: center; border-radius: 4px; background: #285649; color: #d9fff1; }
+.recipe-focus-header small { display: block; color: #7da99d; font-size: 8px; }
+.recipe-focus-header strong { display: block; color: #e3f5ee; font-size: 12px; }
+.recipe-focus-actions { gap: 5px; }
+.recipe-focus-actions > button,
+.recipe-focus-mode button {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #36584d;
+  border-radius: 3px;
+  background: #13221e;
+  color: #9bc3b7;
+  cursor: pointer;
+  font-size: 9px;
+}
+.recipe-focus-actions > button { padding: 0 7px; }
+.recipe-focus-mode button { padding: 0 6px; border-radius: 0; }
+.recipe-focus-mode button:first-child { border-radius: 3px 0 0 3px; }
+.recipe-focus-mode button:last-child { border-radius: 0 3px 3px 0; }
+.recipe-focus-mode button.active,
+.recipe-focus-actions > button:hover { border-color: #6db9a4; background: #245447; color: #edfff8; }
+.recipe-focus-summary { display: flex; justify-content: space-between; gap: 8px; padding: 7px 12px; border-bottom: 1px solid #20352e; color: #799b91; font-size: 8px; }
+.recipe-focus-summary strong { color: #d5b260; }
+.recipe-focus-strip { display: grid; grid-template-columns: minmax(0, 1fr) 126px minmax(0, 1fr); min-height: 72px; gap: 8px; align-items: stretch; padding: 7px 10px; }
+.recipe-focus-lane { min-width: 0; padding: 5px 7px; border: 1px solid #29443b; border-radius: 4px; background: #101b18; }
+.recipe-focus-lane > header { display: flex; align-items: center; gap: 4px; margin-bottom: 5px; color: #8cbbae; font-size: 8px; font-weight: 700; }
+.recipe-focus-lane > header small { margin-left: auto; color: #6d9489; }
+.recipe-focus-lane-items { display: flex; min-width: 0; align-items: center; gap: 4px; overflow: hidden; }
+.recipe-focus-lane-items .recipe-focus-item { min-width: 0; max-width: 145px; overflow: hidden; }
+.recipe-focus-lane-items .recipe-focus-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recipe-focus-source-chip { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; padding: 4px 5px; border: 1px solid #604b2b; border-radius: 3px; color: #d5b260; font-size: 8px; }
+.recipe-focus-empty { color: #637b73; font-size: 8px; }
+.recipe-focus-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; max-height: 380px; overflow: auto; padding: 0 10px 10px; border-top: 1px solid #20352e; }
+.recipe-focus-details > section { min-width: 0; padding-top: 8px; }
+.recipe-focus-details > section > header { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; color: #8cbbae; font-size: 8px; font-weight: 700; }
+.recipe-focus-columns > section { min-width: 0; }
+.recipe-focus-columns > section > header { display: flex; align-items: center; gap: 5px; margin-bottom: 7px; color: #8cbbae; font-size: 9px; font-weight: 700; }
+.recipe-focus-center { display: flex; min-height: 86px; flex-direction: column; align-items: center; justify-content: center; gap: 6px; border-right: 1px solid #29443b; border-left: 1px solid #29443b; }
+.recipe-focus-center > small { color: #76958d; font-size: 8px; }
+.recipe-focus-item { max-width: 100%; gap: 5px; padding: 4px 6px; border: 1px solid #36584d; border-radius: 3px; background: #14231f; color: #c9e6dc; cursor: pointer; font-size: 9px; text-align: left; }
+.recipe-focus-item:hover { border-color: #75c4ad; background: #1e4035; }
+.recipe-focus-item > .item-glyph { flex: 0 0 auto; }
+.recipe-focus-branch { display: grid; gap: 6px; }
+.recipe-focus-step { padding: 6px; border-left: 2px solid #315849; background: #121d19; }
+.recipe-focus-step-head { flex-wrap: wrap; gap: 4px; color: #b4d6cb; font-size: 8px; }
+.recipe-focus-step-head small { margin-left: auto; color: #6d9489; font-size: 7px; }
+.recipe-focus-step-items { display: grid; gap: 4px; margin-top: 5px; padding-left: 8px; }
+.recipe-focus-child { display: grid; gap: 3px; border-left: 1px dashed #36584d; padding-left: 5px; }
+.recipe-focus-child > .recipe-focus-branch { padding-left: 3px; }
+.recipe-focus-source { gap: 4px; color: #d5b260; font-size: 8px; }
+.recipe-focus-cycle { color: #d98778; font-size: 8px; }
+
+.recipe-item-actions { display: flex; align-items: center; justify-content: flex-end; }
+.recipe-item-actions button { display: inline-flex; min-height: 30px; align-items: center; gap: 5px; padding: 0 9px; border: 1px solid #36584d; border-radius: 3px; background: #14231f; color: #9bc3b7; cursor: pointer; font-size: 9px; font-weight: 700; }
+.recipe-item-actions button.active { border-color: #d5b260; background: #3b3420; color: #f1d58b; }
 
 .recipe-header {
   display: grid;
@@ -6292,6 +6573,10 @@ select:focus-visible {
   background: #0f1412;
 }
 
+.star-system-surveying > div { display: grid; min-width: 0; flex: 1; gap: 5px; }
+.star-system-surveying > div > i { display: block; height: 4px; overflow: hidden; border-radius: 999px; background: #293a34; }
+.star-system-surveying > div > i > b { display: block; height: 100%; border-radius: inherit; background: #d5b260; transition: width 180ms ease; }
+
 .star-exploration-requirements,
 .star-exploration-costs {
   display: flex;
@@ -8163,7 +8448,8 @@ select:focus-visible {
   animation: factory-cycle-complete 260ms ease-out both;
 }
 
-.react-flow__edge.factory-edge--active .react-flow__edge-path {
+.react-flow__edge.factory-edge--active .react-flow__edge-path,
+.factory-edge-visual-path--active {
   stroke-dasharray: 2 7;
   animation: factory-belt-flow 1.05s linear infinite;
   filter: drop-shadow(0 0 2px color-mix(in srgb, currentColor 42%, transparent));
@@ -8178,7 +8464,7 @@ select:focus-visible {
 
 .factory-edge-label {
   position: absolute;
-  z-index: 5;
+  z-index: 0;
   display: flex;
   min-width: 118px;
   height: 26px;
@@ -8230,6 +8516,7 @@ select:focus-visible {
 }
 
 .factory-edge-label--selected {
+  z-index: 1;
   border-color: var(--cyan);
   box-shadow: 0 0 0 2px rgba(98, 181, 174, 0.12), 0 5px 14px rgba(0, 0, 0, 0.32);
 }
@@ -8495,6 +8782,7 @@ select:focus-visible {
 .game-shell[data-performance-mode="true"] .status-dot,
 .game-shell[data-performance-mode="true"] .work-cycle--active > i::after,
 .game-shell[data-performance-mode="true"] .react-flow__edge.factory-edge--active .react-flow__edge-path,
+.game-shell[data-performance-mode="true"] .factory-edge-visual-path--active,
 .game-shell[data-performance-mode="true"] .factory-cargo-packets,
 .game-shell[data-performance-mode="true"] .node-input-arrival,
 .game-shell[data-performance-mode="true"] .node-output-pulse,
@@ -8638,6 +8926,27 @@ select {
 @media (max-width: 760px) {
   .workspace-loading {
     inset: 58px 0 96px;
+  }
+
+  .recipe-focus-panel {
+    left: 8px;
+    top: 62px;
+    width: calc(100% - 16px);
+    max-height: 48vh;
+  }
+
+  .recipe-focus-strip {
+    grid-template-columns: minmax(0, 1fr) 82px minmax(0, 1fr);
+    gap: 5px;
+    padding: 7px;
+  }
+
+  .recipe-focus-header {
+    padding: 8px;
+  }
+
+  .recipe-focus-summary {
+    font-size: 7px;
   }
 }
 

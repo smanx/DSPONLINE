@@ -51,7 +51,8 @@ import { useState } from "react";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES_BY_BUILDING, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getSorterConstructionId, getTechnology, isConveyorBeltId } from "../game/content";
-import { canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltNetworkIds, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationSlots, getStationVesselCapacity, getStationWarperCapacity, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
+import { POWER_GRID_IDS, POWER_GRID_LABELS, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltNetworkIds, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationSlots, getStationVesselCapacity, getStationWarperCapacity, isEntityInPowerCoverage, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
+import { getPlanetIndustrialProfile } from "../game/galaxy";
 import type {
   BeltTier,
   BeltConnection,
@@ -74,6 +75,8 @@ import type {
   StationLogisticsMode,
   StationLogisticsScope,
   StationMinimumLoad,
+  PowerGridId,
+  PowerPriority,
 } from "../game/types";
 
 function formatAmount(value: number): string {
@@ -275,6 +278,9 @@ interface InspectorPanelProps {
   onLogisticsItemChange: (entityId: string, itemId: ItemId) => void;
   onFuelChange: (entityId: string, itemId: ItemId) => void;
   onEnergyModeChange: (entityId: string, mode: EnergyMode) => void;
+  onPowerGridChange: (entityId: string, gridId: PowerGridId) => void;
+  onPowerPriorityChange: (entityId: string, priority: PowerPriority) => void;
+  onGenerationPriorityChange: (entityId: string, priority: PowerPriority) => void;
   onStationModeChange: (entityId: string, mode: "supply" | "demand") => void;
   onStationVesselAdjust: (entityId: string, delta: number) => void;
   onStationDroneAdjust: (entityId: string, delta: number) => void;
@@ -516,6 +522,37 @@ function ProliferatorControl({ game, entity, onInstall, onConfigure }: {
   );
 }
 
+function PowerNetworkControl({ game, entity, onGridChange, onPowerPriorityChange, onGenerationPriorityChange }: {
+  game: GameState;
+  entity: FactoryEntity;
+  onGridChange: (entityId: string, gridId: PowerGridId) => void;
+  onPowerPriorityChange: (entityId: string, priority: PowerPriority) => void;
+  onGenerationPriorityChange: (entityId: string, priority: PowerPriority) => void;
+}) {
+  const gridId = entity.powerGridId ?? "grid-a";
+  const grid = getPowerGridMetrics(game, entity.planetId, gridId);
+  const generator = entity.kind === "power" || entity.buildingId === "ray_receiver";
+  const covered = isEntityInPowerCoverage(game, entity);
+  const factor = getEntityPowerFactor(game, entity);
+  return (
+    <section className="power-network-control">
+      <header><span><Zap size={14} />电网域</span><strong>{POWER_GRID_LABELS[gridId]}</strong></header>
+      <div className="power-grid-switcher" role="group" aria-label="选择电网域">
+        {POWER_GRID_IDS.map((option) => <button type="button" key={option} className={gridId === option ? "active" : ""} onClick={() => onGridChange(entity.id, option)}>{POWER_GRID_LABELS[option].slice(0, 1)}</button>)}
+      </div>
+      <dl className="metric-ledger power-network-ledger">
+        <div><dt>供电状态</dt><dd className={covered && factor > 0 ? "status-text--running" : "status-text--blocked"}>{covered ? `${Math.round(factor * 100)}%` : "超出范围"}</dd></div>
+        <div><dt>覆盖半径</dt><dd>{grid.coverageRadius.toLocaleString("zh-CN")} m</dd></div>
+        <div><dt>电网负载</dt><dd>{grid.demandKw.toFixed(0)} / {grid.generationKw.toFixed(0)} kW</dd></div>
+      </dl>
+      <div className="power-priority-buttons" role="group" aria-label={generator ? "发电调度优先级" : "用电优先级"}>
+        <span>{generator ? "发电调度优先级" : "用电优先级"}</span>
+        <div className="segmented-control">{([3, 2, 1] as PowerPriority[]).map((priority) => <button type="button" className={(generator ? entity.generationPriority : entity.powerPriority) === priority ? "active" : ""} key={priority} onClick={() => generator ? onGenerationPriorityChange(entity.id, priority) : onPowerPriorityChange(entity.id, priority)}>{priority === 3 ? "高" : priority === 2 ? "中" : "低"}</button>)}</div>
+      </div>
+    </section>
+  );
+}
+
 function EntityInspector({
   game,
   entity,
@@ -523,6 +560,9 @@ function EntityInspector({
   onLogisticsItemChange,
   onFuelChange,
   onEnergyModeChange,
+  onPowerGridChange,
+  onPowerPriorityChange,
+  onGenerationPriorityChange,
   onStationModeChange,
   onStationVesselAdjust,
   onStationDroneAdjust,
@@ -546,6 +586,9 @@ function EntityInspector({
   onLogisticsItemChange: (entityId: string, itemId: ItemId) => void;
   onFuelChange: (entityId: string, itemId: ItemId) => void;
   onEnergyModeChange: (entityId: string, mode: EnergyMode) => void;
+  onPowerGridChange: (entityId: string, gridId: PowerGridId) => void;
+  onPowerPriorityChange: (entityId: string, priority: PowerPriority) => void;
+  onGenerationPriorityChange: (entityId: string, priority: PowerPriority) => void;
   onStationModeChange: (entityId: string, mode: "supply" | "demand") => void;
   onStationVesselAdjust: (entityId: string, delta: number) => void;
   onStationDroneAdjust: (entityId: string, delta: number) => void;
@@ -581,6 +624,7 @@ function EntityInspector({
           <div><dt>采矿科技</dt><dd>{getMiningSpeedMultiplier(game).toFixed(2)}×</dd></div>
           <div><dt>输出缓存</dt><dd>{formatAmount(entity.outputs[entity.resourceId!] ?? 0)}</dd></div>
         </dl>
+        <PowerNetworkControl game={game} entity={entity} onGridChange={onPowerGridChange} onPowerPriorityChange={onPowerPriorityChange} onGenerationPriorityChange={onGenerationPriorityChange} />
       </div>
     );
   }
@@ -612,6 +656,7 @@ function EntityInspector({
           <div><dt>单件热值</dt><dd>{fuelId ? `${FUEL_ENERGY_MJ[fuelId]} MJ` : "-"}</dd></div>
           <div><dt>反应余能</dt><dd>{(entity.fuelRemainingMj ?? 0).toFixed(2)} MJ</dd></div>
         </dl>
+        <PowerNetworkControl game={game} entity={entity} onGridChange={onPowerGridChange} onPowerPriorityChange={onPowerPriorityChange} onGenerationPriorityChange={onGenerationPriorityChange} />
         <p className="inspector-description">{building.description}</p>
         <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}><Trash2 size={15} /> 回收设备</button>
       </div>
@@ -638,6 +683,7 @@ function EntityInspector({
           <div><dt>放电功率</dt><dd>{(entity.powerOutputKw ?? 0).toFixed(0)} kW</dd></div>
           <div><dt>最大功率</dt><dd>{((building.powerGenerationKw ?? 0) * entity.machineCount).toFixed(0)} kW</dd></div>
         </dl>
+        <PowerNetworkControl game={game} entity={entity} onGridChange={onPowerGridChange} onPowerPriorityChange={onPowerPriorityChange} onGenerationPriorityChange={onGenerationPriorityChange} />
         <p className="inspector-description">{building.description}</p>
         <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}><Trash2 size={15} /> 回收设备</button>
       </div>
@@ -667,6 +713,7 @@ function EntityInspector({
           <div><dt>当前功率</dt><dd>{charging ? `-${(entity.powerInputKw ?? 0).toFixed(0)}` : (entity.powerOutputKw ?? 0).toFixed(0)} kW</dd></div>
           <div><dt>单元能量</dt><dd>90 MJ</dd></div>
         </dl>
+        <PowerNetworkControl game={game} entity={entity} onGridChange={onPowerGridChange} onPowerPriorityChange={onPowerPriorityChange} onGenerationPriorityChange={onGenerationPriorityChange} />
         {switchingLocked ? <p className="energy-mode-lock">当前蓄电器周期完成后可切换模式</p> : null}
         <p className="inspector-description">{building.description}</p>
         <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}><Trash2 size={15} /> 回收设备</button>
@@ -705,6 +752,7 @@ function EntityInspector({
             <div><dt>采集速率</dt><dd>{entity.productionRate.toFixed(1)}/min</dd></div>
             <div><dt>完成航次</dt><dd>{entity.stationTrips ?? 0}</dd></div>
           </dl>
+          <PowerNetworkControl game={game} entity={entity} onGridChange={onPowerGridChange} onPowerPriorityChange={onPowerPriorityChange} onGenerationPriorityChange={onGenerationPriorityChange} />
           <p className="inspector-description">{building.description}</p>
           <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}><Trash2 size={15} /> 回收设备</button>
         </div>
@@ -814,6 +862,7 @@ function EntityInspector({
           <div><dt>最近运量</dt><dd>{entity.stationLastTransfer ?? 0}</dd></div>
           <div><dt>额定耗电</dt><dd>{((building.powerDemandKw ?? 0) * entity.machineCount).toFixed(0)} kW</dd></div>
         </dl>
+        <PowerNetworkControl game={game} entity={entity} onGridChange={onPowerGridChange} onPowerPriorityChange={onPowerPriorityChange} onGenerationPriorityChange={onGenerationPriorityChange} />
         <p className="inspector-description">{building.description}</p>
         <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}><Trash2 size={15} /> 回收设备</button>
       </div>
@@ -851,6 +900,7 @@ function EntityInspector({
           <div><dt>可用库存</dt><dd>{itemId ? formatAmount(entity.outputs[itemId] ?? 0) : "-"}</dd></div>
           <div><dt>容量上限</dt><dd>{building.outputCapacity * entity.machineCount}</dd></div>
         </dl>
+        <PowerNetworkControl game={game} entity={entity} onGridChange={onPowerGridChange} onPowerPriorityChange={onPowerPriorityChange} onGenerationPriorityChange={onGenerationPriorityChange} />
         <p className="inspector-description">{building.description}</p>
         <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}><Trash2 size={15} /> 回收设备</button>
       </div>
@@ -882,7 +932,7 @@ function EntityInspector({
           <>
             <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
             <div><dt>实时发电</dt><dd>{(entity.powerOutputKw ?? 0).toFixed(0)} kW</dd></div>
-            <div><dt>额定发电</dt><dd>{((building.powerGenerationKw ?? 0) * entity.machineCount * (entity.buildingId === "solar_panel" ? getPlanet(entity.planetId).solarMultiplier : 1)).toFixed(0)} kW</dd></div>
+            <div><dt>额定发电</dt><dd>{((building.powerGenerationKw ?? 0) * entity.machineCount * (entity.buildingId === "solar_panel" ? getPlanetIndustrialProfile(game, entity.planetId).solarMultiplier : entity.buildingId === "geothermal_power_station" ? getPlanetIndustrialProfile(game, entity.planetId).geothermalMultiplier : getPlanetIndustrialProfile(game, entity.planetId).windMultiplier)).toFixed(0)} kW</dd></div>
           </>
         ) : (
           <>
@@ -903,6 +953,7 @@ function EntityInspector({
           </>
         )}
       </dl>
+      <PowerNetworkControl game={game} entity={entity} onGridChange={onPowerGridChange} onPowerPriorityChange={onPowerPriorityChange} onGenerationPriorityChange={onGenerationPriorityChange} />
       <ProliferatorControl game={game} entity={entity} onInstall={onInstallSprayCoater} onConfigure={onProliferatorConfiguration} />
       <EquipmentUpgradeControl game={game} entity={entity} onUpgrade={onUpgrade} />
       <p className="inspector-description">{building.description}</p>
@@ -1112,7 +1163,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
       {props.tab === "fabricate" ? <Fabricator game={props.game} onCraft={props.onCraft} onCraftItem={props.onCraftItem} /> : props.selectedEntities.length > 1 ? (
         <MultiSelectionInspector game={props.game} entities={props.selectedEntities} onRecipeChange={props.onBatchRecipeChange} onInstallSprayCoater={props.onBatchInstallSprayCoater} onProliferatorConfiguration={props.onBatchProliferatorConfiguration} />
       ) : props.selectedEntity ? (
-        <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} />
+         <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} />
       ) : props.selectedBelt ? (
         <BeltInspector game={props.game} belt={props.selectedBelt} hasCopiedConfiguration={props.hasCopiedBeltConfiguration} onPriorityChange={props.onBeltPriorityChange} onStackSizeChange={props.onBeltStackSizeChange} onMonitorChange={props.onBeltMonitorChange} onUpgrade={props.onUpgradeBelt} onSorterUpgrade={props.onUpgradeSorter} onUpgradeNetwork={props.onUpgradeBeltNetwork} onSorterUpgradeNetwork={props.onUpgradeSorterNetwork} onCopyConfiguration={props.onCopyBeltConfiguration} onPasteConfiguration={props.onPasteBeltConfiguration} onRemove={props.onRemoveBelt} />
       ) : <InspectorEmpty game={props.game} />}

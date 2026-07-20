@@ -11,6 +11,7 @@ import {
   advanceSimulation,
   applyBeltConfiguration,
   canExploreStarSystem,
+  canColonizePlanet,
   canPlaceBlueprint,
   cancelConstructionQueueEntry,
   canInstallSprayCoater,
@@ -27,6 +28,7 @@ import {
   dropCargoToEntity,
   dropCargoToTray,
   exploreStarSystem,
+  colonizePlanet,
   getEntityOperatingStatus,
   getBeltCapacity,
   getBeltNetworkIds,
@@ -75,6 +77,9 @@ import {
   setBeltMonitorEnabled,
   setBeltStackSize,
   setEntityRecipe,
+  setEntityPowerGrid,
+  setRecipeFocus,
+  setRecipeFocusMode,
   setEntitiesRecipe,
   setEnergyMode,
   setFuelItem,
@@ -2314,5 +2319,54 @@ describe("factory simulation", () => {
       outputs: { fire_ice: 1 },
       productionRate: 30,
     });
+  });
+
+  it("keeps a focused recipe chain in the save and supports both expansion modes", () => {
+    let state = createInitialState();
+    state = setRecipeFocus(state, "processor");
+    state = setRecipeFocusMode(state, "full");
+    expect(state.recipeFocus).toEqual({ itemId: "processor", mode: "full", position: { x: 24, y: 72 } });
+    state = setRecipeFocus(state, null);
+    expect(state.recipeFocus.itemId).toBeNull();
+  });
+
+  it("requires a colony outpost for secondary worlds and consumes its portable cost", () => {
+    let state = createInitialState();
+    state.exploration.unlockedSystemIds.push("borealis");
+    state.tray.titanium_alloy = 10;
+    state.tray.logistics_drone = 5;
+    expect(canColonizePlanet(state, "boreal_giant")).toBe(true);
+    state = colonizePlanet(state, "boreal_giant");
+    expect(state.exploration.colonizedPlanetIds).toContain("boreal_giant");
+    expect(state.tray.titanium_alloy).toBe(0);
+    expect(state.tray.logistics_drone).toBe(0);
+    expect(setActivePlanet(state, "boreal_giant").activePlanetId).toBe("boreal_giant");
+  });
+
+  it("isolates a device in a separate power grid and reports coverage loss", () => {
+    let state = createInitialState();
+    state.construction.wind_turbine = 1;
+    state.construction.assembling_machine_mk1 = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 });
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 2_000, y: 0 });
+    const machine = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    machine.inputs.iron_ore = 2;
+    state = setEntityPowerGrid(state, machine.id, "grid-b");
+    state.entities.find((entity) => entity.id === machine.id)!.inputs.iron_ingot = 2;
+    state = advanceSimulation(state, 1);
+    expect(state.metrics.powerFactor).toBe(0);
+    expect(getEntityOperatingStatus(state, state.entities.find((entity) => entity.id === machine.id)!)).toMatchObject({ code: "no-power" });
+  });
+
+  it("depletes finite solid veins while infinite mode preserves extraction", () => {
+    let state = createInitialState();
+    const vein = state.entities.find((entity) => entity.id === "vein_iron")!;
+    const before = vein.resourceRemaining!;
+    state = manualMine(state, vein.id, 3);
+    expect(state.entities.find((entity) => entity.id === vein.id)?.resourceRemaining).toBe(before - 3);
+    state.settings.resourceMode = "infinite";
+    const infiniteBefore = state.entities.find((entity) => entity.id === vein.id)?.resourceRemaining;
+    state = manualMine(state, vein.id, 3);
+    expect(state.entities.find((entity) => entity.id === vein.id)?.resourceRemaining).toBe(infiniteBefore);
   });
 });

@@ -1609,7 +1609,21 @@ test("recipe codex searches sources and traverses production chains", async ({ p
   await expect(rocketRecipe).toContainText("量子芯片");
   await expect(workspace.locator(".recipe-method").filter({ hasText: "运载火箭发射" })).toContainText("戴森球永久结构点");
 
-  await workspace.locator(".recipe-item-header .item-reference").hover();
+  await workspace.getByRole("button", { name: "固定到主界面" }).click();
+  await workspace.getByLabel("关闭配方图鉴").click();
+  const focusedChain = page.locator(".recipe-focus-panel");
+  await expect(focusedChain).toContainText("小型运载火箭");
+  await focusedChain.getByRole("button", { name: /完整/ }).click();
+  await expect(focusedChain).toContainText("完整上游链");
+  await focusedChain.getByLabel("取消聚焦材料").click();
+  await expect(focusedChain).toHaveCount(0);
+
+  await page.getByLabel("打开配方图鉴").click();
+  const reopenedWorkspace = page.getByRole("dialog", { name: "配方图鉴" });
+  await expect(reopenedWorkspace).toBeVisible();
+  await reopenedWorkspace.getByLabel("搜索配方物品").fill("小型运载火箭");
+  await reopenedWorkspace.locator(".recipe-index > button").filter({ hasText: "小型运载火箭" }).click();
+  await reopenedWorkspace.locator(".recipe-item-header .item-reference").hover();
   await expect(page.locator(".item-hover-card")).toContainText("制造台");
   await expect(page.locator(".item-hover-card")).toContainText("1 项生产配方");
   await page.screenshot({ path: "artifacts/qa/recipe-codex-1440.png", fullPage: true });

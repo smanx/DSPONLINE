@@ -134,7 +134,8 @@ function ToggleSetting({ checked, label, value, icon, onChange }: {
   );
 }
 
-function SettingsPanel({ settings, onChange }: { settings: GameSettings; onChange: (settings: Partial<GameSettings>) => void }) {
+function SettingsPanel({ game, onChange }: { game: GameState; onChange: (settings: Partial<GameSettings>) => void }) {
+  const { settings } = game;
   return (
     <div className="operations-panel operations-settings">
       <header className="operations-section-header">
@@ -160,6 +161,13 @@ function SettingsPanel({ settings, onChange }: { settings: GameSettings; onChang
           {([2, 10, 30] as AutosaveIntervalSeconds[]).map((seconds) => (
             <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => onChange({ autosaveIntervalSeconds: seconds })}>{seconds} 秒</button>
           ))}
+        </div>
+      </section>
+      <section className="settings-group">
+        <header><MapPin size={14} /><span>星区与资源</span><small>种子 #{game.galaxy.seed}</small></header>
+        <div className="settings-segmented" aria-label="资源模式">
+          <button className={settings.resourceMode === "finite" ? "active" : ""} type="button" onClick={() => onChange({ resourceMode: "finite" })}>有限矿脉</button>
+          <button className={settings.resourceMode === "infinite" ? "active" : ""} type="button" onClick={() => onChange({ resourceMode: "infinite" })}>无限矿脉</button>
         </div>
       </section>
     </div>
@@ -247,7 +255,7 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
       <div className="operations-body">
         {props.tab === "alerts" ? <AlertsPanel alerts={props.alerts} onSelect={props.onAlertSelect} /> : null}
         {props.tab === "achievements" ? <AchievementsPanel game={props.game} /> : null}
-        {props.tab === "settings" ? <SettingsPanel settings={props.game.settings} onChange={props.onSettingsChange} /> : null}
+        {props.tab === "settings" ? <SettingsPanel game={props.game} onChange={props.onSettingsChange} /> : null}
         {props.tab === "saves" ? <SavesPanel {...props} /> : null}
       </div>
     </section>

@@ -10,7 +10,8 @@ import {
 import { BUILDINGS, ITEMS, PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, getBuilding, getExtractorBuildingId, getPlanet, getRecipe, getTechnology } from "./content";
 import { normalizeCampaignState, syncCampaignProgress } from "./campaign";
 import { isAchievementId } from "./progression";
-import type { BeltConnection, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CargoStackSize, ConstructionId, DysonLayerState, DysonSpherePlanState, EnergyMode, FactoryEntity, GameState, ItemId, LogisticsPriority, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
+import { createGalaxyState, createVeinReserve, isInfiniteResource } from "./galaxy";
+import type { BeltConnection, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CargoStackSize, ConstructionId, DysonLayerState, DysonSpherePlanState, EnergyMode, FactoryEntity, GameState, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -211,6 +212,14 @@ function validEnergyMode(value: unknown): value is EnergyMode {
   return value === "auto" || value === "charge" || value === "discharge";
 }
 
+function validPowerGridId(value: unknown): value is PowerGridId {
+  return value === "grid-a" || value === "grid-b" || value === "grid-c";
+}
+
+function validPowerPriority(value: unknown): value is PowerPriority {
+  return value === 1 || value === 2 || value === 3;
+}
+
 function validSimulationSpeed(value: unknown): value is GameState["settings"]["simulationSpeed"] {
   return value === 1 || value === 2 || value === 4;
 }
@@ -229,8 +238,9 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
+  const galaxy = createGalaxyState(saved.version >= 20 ? saved.galaxy?.seed : initial.galaxy.seed, saved.version < 20);
   const entities = saved.entities.map((entity: FactoryEntity) => {
     const currentResource = saved.version < 13
       ? initial.entities.find((candidate) => candidate.kind === "vein" && candidate.id === entity.id)
@@ -250,6 +260,8 @@ export function migrateGame(value: unknown): GameState | null {
     const storedEnergyCapacity = accumulator || energyExchanger
       ? (getBuilding(entity.buildingId!).energyCapacityMj ?? 0) * Math.max(0, Math.floor(entity.machineCount ?? 0))
       : 0;
+    const resourceId = entity.kind === "vein" && entity.resourceId && ITEMS[entity.resourceId] ? entity.resourceId : undefined;
+    const generatedReserve = resourceId ? createVeinReserve(galaxy, planetId, resourceId, entity.id) : undefined;
     if (saved.version < 4 && position.x < -650 && (planetId === "ashen" || entity.resourceId === "water")) {
       position.x += 640;
     }
@@ -268,6 +280,15 @@ export function migrateGame(value: unknown): GameState | null {
       storedEnergyMj: accumulator || energyExchanger ? Math.min(storedEnergyCapacity, nonNegativeNumber(entity.storedEnergyMj)) : undefined,
       energyMode: accumulator ? "auto" : energyExchanger
         ? validEnergyMode(entity.energyMode) && entity.energyMode !== "auto" ? entity.energyMode : "charge"
+        : undefined,
+      powerGridId: validPowerGridId(entity.powerGridId) ? entity.powerGridId : "grid-a",
+      powerPriority: validPowerPriority(entity.powerPriority) ? entity.powerPriority : 2,
+      generationPriority: validPowerPriority(entity.generationPriority) ? entity.generationPriority : undefined,
+      resourceCapacity: resourceId && !isInfiniteResource(resourceId, planetId, saved.version >= 20 && saved.settings?.resourceMode === "finite" ? "finite" : "infinite")
+        ? Math.max(1, nonNegativeInteger(entity.resourceCapacity) || generatedReserve || 1)
+        : undefined,
+      resourceRemaining: resourceId && !isInfiniteResource(resourceId, planetId, saved.version >= 20 && saved.settings?.resourceMode === "finite" ? "finite" : "infinite")
+        ? Math.min(Math.max(1, nonNegativeInteger(entity.resourceCapacity) || generatedReserve || 1), nonNegativeInteger(entity.resourceRemaining) || generatedReserve || 1)
         : undefined,
       recipeId: energyExchanger
         ? entity.energyMode === "discharge" ? "accumulator_discharge" : "accumulator_charge"
@@ -395,6 +416,26 @@ export function migrateGame(value: unknown): GameState | null {
   if (saved.version < 13 && completedTechIds.includes("rare_resource_utilization")) {
     unlockedSystemIds.push(...(["borealis", "neutron"] as StarSystemId[]).filter((systemId) => !unlockedSystemIds.includes(systemId)));
   }
+  const persistedColonies = Array.isArray(saved.exploration?.colonizedPlanetIds)
+    ? (saved.exploration.colonizedPlanetIds as unknown[]).filter(validPlanetId)
+    : PLANET_LIST.filter((planet) => unlockedSystemIds.includes(planet.systemId)).map((planet) => planet.id);
+  const colonizedPlanetIds = [...new Set<PlanetId>(["home", ...persistedColonies])]
+    .filter((planetId) => unlockedSystemIds.includes(getPlanet(planetId).systemId));
+  const surveyProgressBySystem = Object.fromEntries((Object.keys(STAR_SYSTEMS) as StarSystemId[]).map((systemId) => [
+    systemId,
+    Math.min(1, nonNegativeNumber(saved.exploration?.surveyProgressBySystem?.[systemId]) || (unlockedSystemIds.includes(systemId) ? 1 : 0)),
+  ])) as GameState["exploration"]["surveyProgressBySystem"];
+  const missions: GameState["exploration"]["missions"] = Array.isArray(saved.exploration?.missions)
+    ? saved.exploration.missions.flatMap((mission: Record<string, any>) => {
+      if (!validStarSystemId(mission.systemId) || unlockedSystemIds.includes(mission.systemId)) return [];
+      const durationSeconds = Math.max(1, nonNegativeNumber(mission.durationSeconds));
+      return [{
+        systemId: mission.systemId,
+        elapsedSeconds: Math.min(durationSeconds, nonNegativeNumber(mission.elapsedSeconds)),
+        durationSeconds,
+      }];
+    })
+    : [];
   const blueprints: BlueprintDefinition[] = saved.version >= 14 && Array.isArray(saved.blueprints)
     ? saved.blueprints.flatMap((blueprint: Record<string, any>, blueprintIndex: number) => {
       if (!Array.isArray(blueprint.entities)) return [];
@@ -661,7 +702,25 @@ export function migrateGame(value: unknown): GameState | null {
     autosaveIntervalSeconds: validAutosaveInterval(saved.settings?.autosaveIntervalSeconds)
       ? saved.settings.autosaveIntervalSeconds
       : initial.settings.autosaveIntervalSeconds,
+    resourceMode: saved.version >= 20 && saved.settings?.resourceMode === "finite" ? "finite" : "infinite",
   };
+
+  const recipeFocus: GameState["recipeFocus"] = {
+    itemId: typeof saved.recipeFocus?.itemId === "string" && saved.recipeFocus.itemId in ITEMS ? saved.recipeFocus.itemId as ItemId : null,
+    mode: saved.recipeFocus?.mode === "full" ? "full" : "two-level",
+    position: {
+      x: typeof saved.recipeFocus?.position?.x === "number" && Number.isFinite(saved.recipeFocus.position.x) ? Math.max(8, Math.round(saved.recipeFocus.position.x)) : initial.recipeFocus.position.x,
+      y: typeof saved.recipeFocus?.position?.y === "number" && Number.isFinite(saved.recipeFocus.position.y) ? Math.max(8, Math.round(saved.recipeFocus.position.y)) : initial.recipeFocus.position.y,
+    },
+  };
+
+  const powerGridMetrics: GameState["powerGridMetrics"] = Object.fromEntries(PLANET_LIST.map((planet) => [
+    planet.id,
+    Object.fromEntries(Object.entries(initial.powerGridMetrics[planet.id]).map(([gridId, metrics]) => [
+      gridId,
+      { ...metrics, ...(saved.powerGridMetrics?.[planet.id]?.[gridId] ?? {}) },
+    ])),
+  ])) as GameState["powerGridMetrics"];
   const unlockedAchievementIds = Array.isArray(saved.achievements?.unlockedIds)
     ? [...new Set(saved.achievements.unlockedIds.filter(isAchievementId))]
     : [];
@@ -669,7 +728,7 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 19,
+    version: 21,
     activePlanetId,
     entities,
     belts,
@@ -684,7 +743,9 @@ export function migrateGame(value: unknown): GameState | null {
       progressByTech: researchProgress(saved.research?.progressByTech),
       completedTechIds,
     },
-    exploration: { unlockedSystemIds },
+    exploration: { unlockedSystemIds, colonizedPlanetIds, missions, surveyProgressBySystem },
+    galaxy,
+    recipeFocus,
     settings,
     achievements: { unlockedIds: unlockedAchievementIds },
     campaign: normalizeCampaignState(saved.campaign),
@@ -698,6 +759,7 @@ export function migrateGame(value: unknown): GameState | null {
     ),
     metrics: { ...planetMetrics[activePlanetId] },
     planetMetrics,
+    powerGridMetrics,
     dysonSwarm,
     dysonSphere,
     dysonPlans,

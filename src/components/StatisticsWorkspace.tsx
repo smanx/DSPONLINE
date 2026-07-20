@@ -3,6 +3,8 @@ import { useMemo, useState } from "react";
 import { ITEMS, PLANET_LIST, getBuilding, getItem, getPlanet, getRecipe } from "../game/content";
 import { calculateProductionPlan, getProductionRecipeOptions } from "../game/planning";
 import { calculateFactoryStatistics, type ItemStatistics } from "../game/statistics";
+import { POWER_GRID_IDS, POWER_GRID_LABELS, getPowerGridMetrics } from "../game/engine";
+import { getPlanetIndustrialProfile } from "../game/galaxy";
 import type { GameState, ItemId, PlanetId, RecipeId } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
@@ -204,6 +206,17 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
             <div><span>戴森球功率</span><strong>{(game.dysonSphere.generationKw / 1000).toFixed(2)} MW</strong></div>
           </div>
           <div className="grid-load"><i><b style={{ width: `${generationUtilization}%` }} /></i><span>容量利用率</span><strong>{Math.round(generationUtilization)}%</strong></div>
+          <section className="power-grid-ledger">
+            <header><span>独立电网域</span><span>供电效率</span><span>负载 / 容量</span><span>范围内设备</span></header>
+            {POWER_GRID_IDS.map((gridId) => {
+              const metrics = getPowerGridMetrics(game, game.activePlanetId, gridId);
+              return <div className="power-grid-row" key={gridId}><strong>{POWER_GRID_LABELS[gridId]}</strong><span className={metrics.powerFactor < 0.999 ? "warning" : ""}>{Math.round(metrics.powerFactor * 100)}%</span><span>{metrics.demandKw.toFixed(0)} / {metrics.generationKw.toFixed(0)} kW</span><span>{metrics.connectedEntities} · 断开 {metrics.disconnectedEntities}</span></div>;
+            })}
+          </section>
+          <section className="planet-profile-ledger">
+            <header><span>当前行星工业档案</span><strong>种子 #{game.galaxy.seed}</strong></header>
+            {(() => { const profile = getPlanetIndustrialProfile(game, game.activePlanetId); return <div className="planet-profile-grid"><span>风力 <strong>{Math.round(profile.windMultiplier * 100)}%</strong></span><span>光照 <strong>{Math.round(profile.solarMultiplier * 100)}%</strong></span><span>采矿 <strong>{Math.round(profile.miningMultiplier * 100)}%</strong></span><span>{profile.tidalLocked ? "潮汐锁定" : "自转周期"} <strong>{profile.tidalLocked ? "是" : "常规"}</strong></span><span>专属加成 <strong>{profile.specializationName}</strong></span></div>; })()}
+          </section>
           <section className="consumer-ledger">
             <header><span>耗电设备</span><span>当前需求</span><span>额定需求</span><span>状态</span></header>
             <div>

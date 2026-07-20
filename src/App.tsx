@@ -30,6 +30,7 @@ import {
 import { NODE_TYPES, type FactoryFlowNode, type FactoryNodeData } from "./components/FactoryNodes";
 import { EDGE_TYPES, type FactoryFlowEdge } from "./components/FactoryEdges";
 import { BlueprintPlacementCursor, BlueprintWorkspace, CanvasSelectionTools, SelectionToolbar } from "./components/BlueprintWorkspace";
+import { RecipeFocusPanel } from "./components/RecipeFocusPanel";
 import type { OperationsTab } from "./components/OperationsWorkspace";
 import { ITEMS, RECIPES, getBeltConstructionId, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getPlanet, getTechnology } from "./game/content";
 import { getFactoryAlerts, type FactoryAlert } from "./game/alerts";
@@ -48,6 +49,7 @@ import {
   cancelConstructionQueueEntry,
   canUpgradeEntities,
   clearDysonShells,
+  colonizePlanet,
   connectDysonNodes,
   craftConstruction,
   createBlueprint,
@@ -96,6 +98,12 @@ import {
   setActiveDysonLayer,
   setDysonLayerOrbit,
   setEnergyMode,
+  setEntityGenerationPriority,
+  setEntityPowerGrid,
+  setEntityPowerPriority,
+  setRecipeFocus,
+  setRecipeFocusMode,
+  setRecipeFocusPosition,
   setFuelItem,
   setLogisticsItem,
   setPaused,
@@ -125,7 +133,7 @@ import { getAchievement, getNewAchievementIds, unlockAchievements } from "./game
 import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
 import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
 import { clearGame, clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot, type OfflineReport, type SaveSlotId } from "./game/storage";
-import type { BeltTier, BuildingId, CampaignTaskId, CargoStackSize, DraggedItemSourceKind, EnergyMode, GameSettings, GameState, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
+import type { BeltTier, BuildingId, CampaignTaskId, CargoStackSize, DraggedItemSourceKind, EnergyMode, GameSettings, GameState, ItemId, PlacementCount, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 
 type InspectorTab = "inspect" | "fabricate";
@@ -631,12 +639,40 @@ function FactoryGame() {
     commitGame((current) => setEntityRecipe(current, entityId, recipeId));
   }, [commitGame]);
 
+  const onRecipeFocusChange = useCallback((itemId: ItemId | null) => {
+    commitGame((current) => setRecipeFocus(current, itemId));
+  }, [commitGame]);
+
+  const openRecipeFocus = useCallback((itemId?: ItemId) => {
+    const focused = itemId ?? gameRef.current.recipeFocus.itemId;
+    if (focused) setCampaignFocusItemId(focused);
+    setRecipesOpen(true);
+    setTechnologyOpen(false);
+    setStatisticsOpen(false);
+    setStarMapOpen(false);
+    setCampaignOpen(false);
+    setMobilePanel(null);
+    setNotice(null);
+  }, []);
+
   const onFuelChange = useCallback((entityId: string, itemId: ItemId) => {
     commitGame((current) => setFuelItem(current, entityId, itemId));
   }, [commitGame]);
 
   const onEnergyModeChange = useCallback((entityId: string, mode: EnergyMode) => {
     commitGame((current) => setEnergyMode(current, entityId, mode));
+  }, [commitGame]);
+
+  const onPowerGridChange = useCallback((entityId: string, gridId: PowerGridId) => {
+    commitGame((current) => setEntityPowerGrid(current, entityId, gridId));
+  }, [commitGame]);
+
+  const onPowerPriorityChange = useCallback((entityId: string, priority: PowerPriority) => {
+    commitGame((current) => setEntityPowerPriority(current, entityId, priority));
+  }, [commitGame]);
+
+  const onGenerationPriorityChange = useCallback((entityId: string, priority: PowerPriority) => {
+    commitGame((current) => setEntityGenerationPriority(current, entityId, priority));
   }, [commitGame]);
 
   const onPlanetChange = useCallback((planetId: PlanetId) => {
@@ -664,8 +700,20 @@ function FactoryGame() {
 
   const onExploreSystem = useCallback((systemId: StarSystemId) => {
     setGame((current) => exploreStarSystem(current, systemId));
-    setNotice("恒星勘探完成，永久航标已写入星图");
+    setNotice("恒星勘探任务已启动，星图会显示实时进度");
   }, []);
+
+  const onColonizePlanet = useCallback((planetId: PlanetId) => {
+    const before = gameRef.current;
+    const next = colonizePlanet(before, planetId);
+    if (next === before) {
+      setNotice("殖民补给不足，请查看行星前哨成本");
+      return;
+    }
+    commitGame(() => next);
+    setNotice(`${getPlanet(planetId).name} 前哨建立完成`);
+    playTone("place");
+  }, [commitGame, playTone]);
 
   const alerts = useMemo(() => getFactoryAlerts(game), [game]);
   const activePlanetEntityCount = useMemo(() => game.entities.filter((entity) => entity.planetId === game.activePlanetId).length, [game.activePlanetId, game.entities]);
@@ -1041,7 +1089,9 @@ function FactoryGame() {
       targetHandle: `in:${belt.itemId}`,
       className: `factory-edge${belt.lastFlow > 0.001 ? " factory-edge--active" : ""}${highlightedTaskId ? taskHighlight.beltIds.has(belt.id) ? " factory-edge--task-focus" : " factory-edge--task-dim" : ""}`,
       selected: selectedBeltId === belt.id,
-      zIndex: selectedBeltId === belt.id ? 4 : 1,
+      // Keep belts below factory cards. The canvas CSS owns the layer order;
+      // selected belts are only raised within the belt layer for emphasis.
+      zIndex: selectedBeltId === belt.id ? 1 : 0,
       interactionWidth: 36,
       markerEnd: { type: MarkerType.ArrowClosed, color: item.color },
       data: {
@@ -1058,6 +1108,9 @@ function FactoryGame() {
         durationSeconds: Math.max(0.55, 1.65 - flowRatio * 0.9),
         detailVisible: !largeFactoryMode && viewportZoom >= 0.55,
         motionEnabled: !game.settings.performanceMode && !game.settings.reducedMotion,
+        taskTone: highlightedTaskId
+          ? taskHighlight.beltIds.has(belt.id) ? "focus" : "dim"
+          : "normal",
       },
       style: {
         stroke: item.color,
@@ -1492,6 +1545,13 @@ function FactoryGame() {
             <span className={game.paused ? "paused" : "running"}>{game.paused ? "模拟暂停" : "实时运行"}</span>
             <strong>{getPlanet(game.activePlanetId).name} · {getPlanet(game.activePlanetId).code}工厂区</strong>
           </div>
+          <RecipeFocusPanel
+            game={game}
+            onClear={() => onRecipeFocusChange(null)}
+            onModeChange={(mode) => commitGame((current) => setRecipeFocusMode(current, mode))}
+            onOpen={openRecipeFocus}
+            onPositionChange={(position) => commitGame((current) => setRecipeFocusPosition(current, position))}
+          />
         </section>
         <InspectorPanel
           game={game}
@@ -1503,6 +1563,9 @@ function FactoryGame() {
           onRecipeChange={onRecipeChange}
           onFuelChange={onFuelChange}
           onEnergyModeChange={onEnergyModeChange}
+          onPowerGridChange={onPowerGridChange}
+          onPowerPriorityChange={onPowerPriorityChange}
+          onGenerationPriorityChange={onGenerationPriorityChange}
           onStationModeChange={(entityId, mode) => commitGame((current) => setStationMode(current, entityId, mode))}
           onStationVesselAdjust={(entityId, delta) => commitGame((current) => adjustStationVessels(current, entityId, delta))}
           onStationDroneAdjust={(entityId, delta) => commitGame((current) => adjustStationDrones(current, entityId, delta))}
@@ -1637,7 +1700,7 @@ function FactoryGame() {
           onSetPlanRecipe={(planId, itemId, recipeId) => commitGame((current) => setProductionPlanRecipe(current, planId, itemId, recipeId))}
           onRemovePlan={(planId) => commitGame((current) => removeProductionPlan(current, planId))}
         /> : null}
-        {recipesOpen ? <RecipeWorkspace open game={game} focusItemId={campaignFocusItemId} onClose={() => setRecipesOpen(false)} /> : null}
+        {recipesOpen ? <RecipeWorkspace open game={game} focusItemId={campaignFocusItemId} onClose={() => setRecipesOpen(false)} onFocus={onRecipeFocusChange} /> : null}
         {campaignOpen ? (
           <CampaignWorkspace
             open
@@ -1653,6 +1716,7 @@ function FactoryGame() {
             game={game}
             onClose={() => setStarMapOpen(false)}
             onExplore={onExploreSystem}
+            onColonize={onColonizePlanet}
             onTravel={(planetId) => { onPlanetChange(planetId); setStarMapOpen(false); }}
           />
         ) : null}

@@ -278,6 +278,10 @@ export type StationLogisticsScope = "local" | "remote";
 export type LogisticsPriority = 0 | 1 | 2;
 export type CargoStackSize = 1 | 2 | 4;
 export type EnergyMode = "auto" | "charge" | "discharge";
+export type PowerGridId = "grid-a" | "grid-b" | "grid-c";
+export type PowerPriority = 1 | 2 | 3;
+export type ResourceMode = "finite" | "infinite";
+export type RecipeFocusMode = "full" | "two-level";
 export type SimulationSpeed = 1 | 2 | 4;
 export type AutosaveIntervalSeconds = 2 | 10 | 30;
 
@@ -447,6 +451,11 @@ export interface FactoryEntity {
   powerInputKw?: number;
   storedEnergyMj?: number;
   energyMode?: EnergyMode;
+  powerGridId?: PowerGridId;
+  powerPriority?: PowerPriority;
+  generationPriority?: PowerPriority;
+  resourceRemaining?: number;
+  resourceCapacity?: number;
   stationMode?: "supply" | "demand";
   stationProgress?: number;
   stationTrips?: number;
@@ -544,6 +553,14 @@ export interface FactoryMetrics {
   totalItemsPerMinute: number;
 }
 
+export interface PowerGridMetrics extends FactoryMetrics {
+  gridId: PowerGridId;
+  connectedEntities: number;
+  disconnectedEntities: number;
+  generatorCount: number;
+  coverageRadius: number;
+}
+
 export interface DysonSwarmState {
   sailsInOrbit: number;
   totalLaunched: number;
@@ -617,6 +634,7 @@ export interface EntityOperatingStatus {
     | "no-power"
     | "low-power"
     | "missing-fuel"
+    | "resource-depleted"
     | "missing-proliferator"
     | "no-fuel-selected"
     | "grid-standby"
@@ -641,6 +659,47 @@ export interface ResearchState {
 
 export interface ExplorationState {
   unlockedSystemIds: StarSystemId[];
+  colonizedPlanetIds: PlanetId[];
+  missions: ExplorationMission[];
+  surveyProgressBySystem: Partial<Record<StarSystemId, number>>;
+}
+
+export interface ExplorationMission {
+  systemId: StarSystemId;
+  elapsedSeconds: number;
+  durationSeconds: number;
+}
+
+export type PlanetSpecialization = "balanced" | "smelting" | "chemical" | "logistics" | "research" | "particle";
+
+export interface PlanetIndustrialProfile {
+  planetId: PlanetId;
+  climateName: string;
+  windMultiplier: number;
+  solarMultiplier: number;
+  geothermalMultiplier: number;
+  miningMultiplier: number;
+  orbitalYieldMultiplier: number;
+  reserveScale: number;
+  travelTimeMultiplier: number;
+  tidalLocked: boolean;
+  sulfuricOcean: boolean;
+  specialization: PlanetSpecialization;
+  specializationName: string;
+  productionSpeedMultiplier: number;
+  colonyCost: ItemAmount[];
+  surveyDurationSeconds: number;
+}
+
+export interface GalaxyState {
+  seed: number;
+  profiles: Record<PlanetId, PlanetIndustrialProfile>;
+}
+
+export interface RecipeFocusState {
+  itemId: ItemId | null;
+  mode: RecipeFocusMode;
+  position: XYPosition;
 }
 
 export interface GameSettings {
@@ -649,6 +708,7 @@ export interface GameSettings {
   reducedMotion: boolean;
   soundEnabled: boolean;
   autosaveIntervalSeconds: AutosaveIntervalSeconds;
+  resourceMode: ResourceMode;
 }
 
 export interface AchievementState {
@@ -665,6 +725,9 @@ export interface BlueprintEntityTemplate {
   distributionMode?: "balanced" | "priority";
   fuelItemId?: ItemId;
   energyMode?: EnergyMode;
+  powerGridId?: PowerGridId;
+  powerPriority?: PowerPriority;
+  generationPriority?: PowerPriority;
   stationMode?: "supply" | "demand";
   stationMinimumLoad?: StationMinimumLoad;
   stationWarpEnabled?: boolean;
@@ -740,7 +803,7 @@ export interface ProductionHistorySample {
 }
 
 export interface GameState {
-  version: 19;
+  version: 21;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -753,6 +816,8 @@ export interface GameState {
   totalProduced: Partial<Record<ItemId, number>>;
   research: ResearchState;
   exploration: ExplorationState;
+  galaxy: GalaxyState;
+  recipeFocus: RecipeFocusState;
   settings: GameSettings;
   achievements: AchievementState;
   campaign: CampaignState;
@@ -764,6 +829,7 @@ export interface GameState {
   elapsedSeconds: number;
   metrics: FactoryMetrics;
   planetMetrics: Record<PlanetId, FactoryMetrics>;
+  powerGridMetrics: Record<PlanetId, Record<PowerGridId, PowerGridMetrics>>;
   dysonSwarm: DysonSwarmState;
   dysonSphere: DysonSphereState;
   dysonPlans: Record<StarSystemId, DysonSpherePlanState>;

@@ -8,6 +8,7 @@ import {
   LockKeyhole,
   MapPin,
   Pickaxe,
+  Pin,
   Search,
   X,
 } from "lucide-react";
@@ -105,15 +106,16 @@ function RecipeFlowCard({ recipe, game, onSelect }: {
   );
 }
 
-export function RecipeWorkspace({ open, game, onClose, focusItemId }: {
+export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus }: {
   open: boolean;
   game: GameState;
   onClose: () => void;
   focusItemId?: ItemId | null;
+  onFocus: (itemId: ItemId | null) => void;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ItemFilter>("all");
-  const [selectedItemId, setSelectedItemId] = useState<ItemId>(focusItemId ?? "iron_ore");
+  const [selectedItemId, setSelectedItemId] = useState<ItemId>(focusItemId ?? game.recipeFocus.itemId ?? "iron_ore");
   useEffect(() => {
     if (!focusItemId) return;
     setSelectedItemId(focusItemId);
@@ -190,6 +192,9 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId }: {
           <header className="recipe-item-header">
             <ItemMark itemId={selectedItemId} />
             <div><span>{item.kind === "matrix" ? "科研矩阵" : item.kind === "fluid" ? "流体物品" : sources.length > 0 ? "天然资源" : "工业物品"}</span><strong>{item.name}</strong><p>{item.description}</p></div>
+            <div className="recipe-item-actions">
+              <button type="button" className={game.recipeFocus.itemId === selectedItemId ? "active" : ""} onClick={() => onFocus(game.recipeFocus.itemId === selectedItemId ? null : selectedItemId)} title={game.recipeFocus.itemId === selectedItemId ? "取消主界面聚焦" : "固定生产链到主界面"}><Pin size={14} />{game.recipeFocus.itemId === selectedItemId ? "已固定" : "固定到主界面"}</button>
+            </div>
             <dl>
               <div><dt>网络库存</dt><dd>{stock.toLocaleString("zh-CN")}</dd></div>
               <div><dt>生产方式</dt><dd>{producingRecipes.length + sources.length}</dd></div>
