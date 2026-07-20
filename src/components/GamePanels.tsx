@@ -14,10 +14,12 @@ import {
   Droplets,
   Factory,
   Flame,
+  Flag,
   FlaskConical,
   Hammer,
   GitFork,
   Layers3,
+  ListChecks,
   Minus,
   Orbit,
   PackageOpen,
@@ -43,6 +45,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { ItemHoverCard } from "./ItemReference";
+import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES_BY_BUILDING, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getSorterConstructionId, getTechnology, isConveyorBeltId } from "../game/content";
 import { canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationMinimumLoad, getStationVesselCapacity, getStationWarperCapacity, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import type {
@@ -77,70 +80,21 @@ function ItemMark({ itemId }: { itemId: ItemId }) {
 
 interface ResourceRailProps {
   game: GameState;
+  onOpenCampaign: () => void;
   onOpenDysonPlanner: () => void;
   onPickTray: (itemId: ItemId) => void;
   onDropCargo: () => void;
   onDropDraggedItem: (itemId: ItemId, sourceKind: DraggedItemSourceKind, sourceId?: string) => void;
 }
 
-export function ResourceRail({ game, onOpenDysonPlanner, onPickTray, onDropCargo, onDropDraggedItem }: ResourceRailProps) {
+export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickTray, onDropCargo, onDropDraggedItem }: ResourceRailProps) {
   const [dragOver, setDragOver] = useState(false);
   const trayItems = (Object.entries(game.tray) as Array<[ItemId, number]>)
     .filter(([, amount]) => amount > 0.001)
     .sort((a, b) => b[1] - a[1]);
-  const hasMiner = game.entities.some((entity) => entity.minerCount > 0);
-  const hasBelt = game.belts.length > 0;
-  const hasStorage = game.entities.some((entity) => entity.kind === "storage");
-  const hasThermalPower = game.entities.some((entity) => entity.buildingId === "thermal_power_plant" && (entity.powerOutputKw ?? 0) > 0);
-  const hasInterstellarTrip = game.entities.some((entity) => entity.kind === "station" && (entity.stationTrips ?? 0) > 0);
-  const hasParticleCollider = game.entities.some((entity) => entity.buildingId === "miniature_particle_collider");
-  const hasEquipmentUpgrade = game.entities.some((entity) =>
-    entity.buildingId === "assembling_machine_mk2" || entity.buildingId === "assembling_machine_mk3" || entity.buildingId === "plane_smelter");
-  const hasBeltUpgrade = game.belts.some((belt) => belt.tier > 1);
-  const hasSorterUpgrade = game.belts.some((belt) => belt.sorterTier > 1);
-  const hasPlanetaryTrip = game.entities.some((entity) => entity.buildingId === "planetary_logistics_station" && (entity.stationTrips ?? 0) > 0);
-  const hasOrbitalCollector = game.entities.some((entity) => entity.buildingId === "orbital_collector");
-  const hasStationWarper = game.entities.some((entity) => entity.buildingId === "interstellar_logistics_station" && (entity.stationWarpers ?? 0) > 0);
-  const hasSprayCoater = game.entities.some((entity) => entity.sprayCoaterInstalled);
-  const hasActiveProliferation = game.entities.some((entity) => entity.sprayCoaterInstalled && entity.proliferatorMode !== "normal");
-  const objectives = [
-    { label: "完成首次采集", complete: game.manualMined >= 1 },
-    { label: "取得 4 个铁块", complete: (game.totalProduced.iron_ingot ?? 0) >= 4 },
-    { label: "部署第一台采矿机", complete: hasMiner },
-    { label: "建立自动运输线", complete: hasBelt },
-    { label: "建立物流缓存", complete: hasStorage },
-    { label: "启动火力发电", complete: hasThermalPower },
-    { label: "产出电磁矩阵", complete: (game.totalProduced.electromagnetic_matrix ?? 0) >= 1 },
-    { label: "启动原油精炼", complete: (game.totalProduced.refined_oil ?? 0) >= 1 },
-    { label: "产出能量矩阵", complete: (game.totalProduced.energy_matrix ?? 0) >= 1 },
-    { label: "完成首次设备升级", complete: hasEquipmentUpgrade },
-    { label: "建立高速运输线", complete: hasBeltUpgrade },
-    { label: "升级物流分拣器", complete: hasSorterUpgrade },
-    { label: "完成行星无人机配送", complete: hasPlanetaryTrip },
-    { label: "部署轨道采集器", complete: hasOrbitalCollector },
-    { label: "装载空间翘曲器", complete: hasStationWarper },
-    { label: "安装首台喷涂机", complete: hasSprayCoater },
-    { label: "启动增产生产线", complete: hasActiveProliferation },
-    { label: "产出结构矩阵", complete: (game.totalProduced.structure_matrix ?? 0) >= 1 },
-    { label: "产出钛合金", complete: (game.totalProduced.titanium_alloy ?? 0) >= 1 },
-    { label: "产出处理器", complete: (game.totalProduced.processor ?? 0) >= 1 },
-    { label: "制造物流运输船", complete: (game.totalProduced.logistics_vessel ?? 0) >= 1 },
-    { label: "完成首次星际运输", complete: hasInterstellarTrip },
-    { label: "产出信息矩阵", complete: (game.totalProduced.information_matrix ?? 0) >= 1 },
-    { label: "完成四色矩阵科研", complete: game.research.completedTechIds.includes("research_speed_1") },
-    { label: "部署微型粒子对撞机", complete: hasParticleCollider },
-    { label: "产出量子芯片", complete: (game.totalProduced.quantum_chip ?? 0) >= 1 },
-    { label: "产出引力矩阵", complete: (game.totalProduced.gravity_matrix ?? 0) >= 1 },
-    { label: "完成五色矩阵科研", complete: game.research.completedTechIds.includes("research_speed_2") },
-    { label: "首次发射太阳帆", complete: game.dysonSwarm.totalLaunched >= 1 },
-    { label: "产出临界光子", complete: (game.totalProduced.critical_photon ?? 0) >= 1 },
-    { label: "制造反物质燃料棒", complete: (game.totalProduced.antimatter_fuel_rod ?? 0) >= 1 },
-    { label: "产出宇宙矩阵", complete: (game.totalProduced.universe_matrix ?? 0) >= 1 },
-    { label: "完成六色矩阵科研", complete: game.research.completedTechIds.includes("research_speed_3") },
-    { label: "制造小型运载火箭", complete: (game.totalProduced.small_carrier_rocket ?? 0) >= 1 },
-    { label: "发射首枚运载火箭", complete: game.dysonSphere.totalRocketsLaunched >= 1 },
-    { label: "形成首片永久壳面", complete: game.dysonSphere.totalSailsAbsorbed >= 1 },
-  ];
+  const campaign = getCampaignSnapshot(game);
+  const activeTask = campaign.activeTask;
+  const activeDeficits = activeTask ? getCampaignTaskDeficits(game, activeTask) : [];
   const dysonGenerationKw = game.dysonSwarm.generationKw + game.dysonSphere.generationKw;
   const swarmLoad = dysonGenerationKw > 0
     ? Math.min(100, game.dysonSwarm.receiverLoadKw / dysonGenerationKw * 100)
@@ -257,19 +211,22 @@ export function ResourceRail({ game, onOpenDysonPlanner, onPickTray, onDropCargo
         </div>
       </section>
 
-      <section className="rail-block objective-block">
+      <section className="rail-block campaign-summary-block">
         <div className="rail-heading">
-          <span>当前里程碑</span>
-          <strong>{objectives.filter((item) => item.complete).length}/{objectives.length}</strong>
+          <span>当前任务</span>
+          <button type="button" className="rail-heading-command" onClick={onOpenCampaign} title="打开主线任务中心" aria-label="打开主线任务中心"><ListChecks size={14} /></button>
+          <strong>{campaign.completedCount}/{campaign.totalCount}</strong>
         </div>
-        <div className="objective-list">
-          {objectives.map((objective, index) => (
-            <div className={objective.complete ? "objective objective--complete" : "objective"} key={objective.label}>
-              <i>{objective.complete ? <Check size={12} /> : index + 1}</i>
-              <span>{objective.label}</span>
-            </div>
-          ))}
-        </div>
+        {activeTask ? (
+          <button className="campaign-summary-command" type="button" onClick={onOpenCampaign} title="打开主线任务中心">
+            <i><Flag size={15} /></i>
+            <span><strong>{activeTask.title}</strong><small>{activeTask.progress.current} / {activeTask.progress.target} · {activeTask.description}</small></span>
+            <ChevronRight size={15} />
+          </button>
+        ) : <div className="campaign-summary-complete"><Check size={14} />全部任务已完成</div>}
+        {activeTask && activeDeficits.length > 0 ? (
+          <div className="campaign-summary-deficits"><span>缺料</span>{activeDeficits.slice(0, 3).map((deficit) => <span key={deficit.itemId}>{ITEMS[deficit.itemId].name} ×{formatAmount(deficit.amount)}</span>)}</div>
+        ) : null}
       </section>
     </aside>
   );
@@ -1188,6 +1145,7 @@ export function HeaderControls({
   onOpenStatistics,
   onOpenStarMap,
   onOpenOperations,
+  onOpenCampaign,
   alertCount,
 }: {
   game: GameState;
@@ -1200,6 +1158,7 @@ export function HeaderControls({
   onOpenStatistics: () => void;
   onOpenStarMap: () => void;
   onOpenOperations: () => void;
+  onOpenCampaign: () => void;
   alertCount: number;
 }) {
   const powerTone = game.metrics.powerFactor >= 0.999 ? "positive" : game.metrics.powerFactor > 0 ? "warning" : "negative";
@@ -1219,6 +1178,7 @@ export function HeaderControls({
         <button className={`header-alert-command${alertCount > 0 ? " header-alert-command--active" : ""}`} type="button" onClick={onOpenOperations} title="打开运营中心" aria-label="打开运营中心">
           <Bell size={17} />{alertCount > 0 ? <span>{Math.min(99, alertCount)}</span> : null}
         </button>
+        <button type="button" onClick={onOpenCampaign} title="打开主线任务中心" aria-label="打开主线任务中心"><Flag size={17} /></button>
         <button type="button" onClick={onOpenStarMap} title="打开星图" aria-label="打开星图"><Telescope size={17} /></button>
         <button type="button" onClick={onOpenStatistics} title="打开生产统计" aria-label="打开生产统计"><BarChart3 size={17} /></button>
         <button type="button" onClick={onOpenRecipes} title="打开配方图鉴" aria-label="打开配方图鉴"><BookOpen size={17} /></button>

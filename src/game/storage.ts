@@ -7,6 +7,7 @@ import {
   createInitialState,
 } from "./engine";
 import { BUILDINGS, ITEMS, PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, getBuilding, getExtractorBuildingId, getPlanet, getRecipe, getTechnology } from "./content";
+import { normalizeCampaignState, syncCampaignProgress } from "./campaign";
 import { isAchievementId } from "./progression";
 import type { BeltConnection, BeltTier, BlueprintDefinition, BuildingId, ConstructionId, DysonLayerState, DysonSpherePlanState, EnergyMode, FactoryEntity, GameState, ItemId, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad, TechId } from "./types";
 
@@ -144,7 +145,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
   const entities = saved.entities.map((entity: FactoryEntity) => {
     const currentResource = saved.version < 13
@@ -486,10 +487,10 @@ export function migrateGame(value: unknown): GameState | null {
     ? [...new Set(saved.achievements.unlockedIds.filter(isAchievementId))]
     : [];
 
-  return {
+  const migrated = {
     ...initial,
     ...saved,
-    version: 17,
+    version: 18,
     activePlanetId,
     entities,
     belts,
@@ -507,6 +508,7 @@ export function migrateGame(value: unknown): GameState | null {
     exploration: { unlockedSystemIds },
     settings,
     achievements: { unlockedIds: unlockedAchievementIds },
+    campaign: normalizeCampaignState(saved.campaign),
     blueprints,
     metrics: { ...planetMetrics[activePlanetId] },
     planetMetrics,
@@ -514,6 +516,7 @@ export function migrateGame(value: unknown): GameState | null {
     dysonSphere,
     dysonPlans,
   } as GameState;
+  return syncCampaignProgress(migrated, { grantRewards: saved.version >= 18 });
 }
 
 function persistentState(state: GameState): GameState {

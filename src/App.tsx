@@ -100,8 +100,9 @@ import {
   renameBlueprint,
 } from "./game/engine";
 import { getAchievement, getNewAchievementIds, unlockAchievements } from "./game/progression";
+import { getCampaignTask, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
 import { clearGame, clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot, type OfflineReport, type SaveSlotId } from "./game/storage";
-import type { BeltTier, BuildingId, DraggedItemSourceKind, EnergyMode, GameSettings, GameState, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad } from "./game/types";
+import type { BeltTier, BuildingId, CampaignTaskId, DraggedItemSourceKind, EnergyMode, GameSettings, GameState, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad } from "./game/types";
 
 type InspectorTab = "inspect" | "fabricate";
 
@@ -112,6 +113,7 @@ const DysonPlannerWorkspace = lazy(() => import("./components/DysonPlannerWorksp
 const OfflineReportWorkspace = lazy(() => import("./components/OfflineReportWorkspace").then((module) => ({ default: module.OfflineReportWorkspace })));
 const OperationsWorkspace = lazy(() => import("./components/OperationsWorkspace").then((module) => ({ default: module.OperationsWorkspace })));
 const TechnologyWorkspace = lazy(() => import("./components/TechnologyWorkspace").then((module) => ({ default: module.TechnologyWorkspace })));
+const CampaignWorkspace = lazy(() => import("./components/CampaignWorkspace").then((module) => ({ default: module.CampaignWorkspace })));
 
 function WorkspaceLoading() {
   return <div className="workspace-loading" role="status"><i /><span>正在载入工作区</span></div>;
@@ -146,6 +148,9 @@ function FactoryGame() {
   const [blueprintsOpen, setBlueprintsOpen] = useState(false);
   const [dysonPlannerOpen, setDysonPlannerOpen] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
+  const [campaignOpen, setCampaignOpen] = useState(false);
+  const [campaignFocusItemId, setCampaignFocusItemId] = useState<ItemId | null>(null);
+  const [campaignFocusTechId, setCampaignFocusTechId] = useState<GameState["research"]["selectedTechId"]>(null);
   const [operationsTab, setOperationsTab] = useState<OperationsTab>("alerts");
   const [offlineReport, setOfflineReport] = useState<OfflineReport | null>(loaded.offlineReport);
   const [saveSlots, setSaveSlots] = useState(getSaveSlotSummaries);
@@ -158,6 +163,7 @@ function FactoryGame() {
   const gameRef = useRef(game);
   const completedTechCountRef = useRef(game.research.completedTechIds.length);
   const achievementCountRef = useRef(game.achievements.unlockedIds.length);
+  const campaignCompletedCountRef = useRef(game.campaign.completedTaskIds.length);
   const miningTimerRef = useRef<number | null>(null);
   const nodeDragActiveRef = useRef(false);
   const selectedEntityIdsRef = useRef<string[]>([]);
@@ -256,6 +262,23 @@ function FactoryGame() {
   }, [game.achievements.unlockedIds, playTone]);
 
   useEffect(() => {
+    const synced = syncCampaignProgress(game);
+    if (synced !== game) setGame(synced);
+  }, [game]);
+
+  useEffect(() => {
+    const completed = game.campaign.completedTaskIds;
+    if (completed.length > campaignCompletedCountRef.current) {
+      const task = getCampaignTask(completed.at(-1));
+      if (task) {
+        setNotice(`任务完成：${task.title}`);
+        playTone("complete");
+      }
+    }
+    campaignCompletedCountRef.current = completed.length;
+  }, [game.campaign.completedTaskIds, playTone]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const editing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
@@ -269,6 +292,9 @@ function FactoryGame() {
         setBlueprintsOpen(false);
         setDysonPlannerOpen(false);
         setOperationsOpen(false);
+        setCampaignOpen(false);
+        setCampaignFocusItemId(null);
+        setCampaignFocusTechId(null);
         setOfflineReport(null);
         setBlueprintPlacementId(null);
         setSelectionMode(false);
@@ -405,6 +431,7 @@ function FactoryGame() {
     gameRef.current = state;
     completedTechCountRef.current = state.research.completedTechIds.length;
     achievementCountRef.current = state.achievements.unlockedIds.length;
+    campaignCompletedCountRef.current = state.campaign.completedTaskIds.length;
     setGame(state);
     setOfflineReport(report);
     setSelectedEntityIds([]);
@@ -414,6 +441,9 @@ function FactoryGame() {
     setSelectionMode(false);
     setNodes([]);
     setOperationsOpen(false);
+    setCampaignOpen(false);
+    setCampaignFocusItemId(null);
+    setCampaignFocusTechId(null);
     setViewport({ x: 510, y: 250, zoom: 0.84 }, { duration: state.settings.reducedMotion ? 0 : 180 });
   }, [onMiningStop, setNodes, setViewport]);
 
@@ -438,10 +468,105 @@ function FactoryGame() {
     setInspectorTab("inspect");
     setMobilePanel("inspector");
     setOperationsOpen(false);
+    setCampaignOpen(false);
+    setCampaignFocusItemId(null);
+    setCampaignFocusTechId(null);
     focusEntityIds([alert.entityId]);
     setNotice(`已定位：${alert.title} · ${alert.reason}`);
     playTone("alert");
   }, [focusEntityIds, onPlanetChange, playTone]);
+
+  const openCampaign = useCallback(() => {
+    setCampaignOpen(true);
+    setTechnologyOpen(false);
+    setStatisticsOpen(false);
+    setRecipesOpen(false);
+    setStarMapOpen(false);
+    setBlueprintsOpen(false);
+    setDysonPlannerOpen(false);
+    setOperationsOpen(false);
+    setMobilePanel(null);
+    setPlacement(null);
+    setBlueprintPlacementId(null);
+    setSelectionMode(false);
+    setSelectedEntityIds([]);
+    setSelectedBeltId(null);
+    setNotice(null);
+  }, []);
+
+  const navigateFromCampaign = useCallback((navigation: CampaignNavigation) => {
+    setCampaignOpen(false);
+    setCampaignFocusItemId(null);
+    setCampaignFocusTechId(null);
+    setStatisticsOpen(false);
+    setRecipesOpen(false);
+    setStarMapOpen(false);
+    setBlueprintsOpen(false);
+    setDysonPlannerOpen(false);
+    setOperationsOpen(false);
+    setMobilePanel(null);
+    setPlacement(null);
+    setBlueprintPlacementId(null);
+    setSelectionMode(false);
+    setSelectedEntityIds([]);
+    setSelectedBeltId(null);
+    if (navigation.kind === "recipe") {
+      setCampaignFocusItemId(navigation.itemId);
+      setRecipesOpen(true);
+      setNotice(`已打开${ITEMS[navigation.itemId].name}配方`);
+      return;
+    }
+    if (navigation.kind === "technology") {
+      setCampaignFocusTechId(navigation.techId);
+      setTechnologyOpen(true);
+      setNotice(`已定位科技：${getTechnology(navigation.techId)?.name ?? "科研项目"}`);
+      return;
+    }
+    if (navigation.kind === "planet") {
+      if (!gameRef.current.exploration.unlockedSystemIds.includes(getPlanet(navigation.planetId).systemId)) {
+        setStarMapOpen(true);
+        setNotice(`${getPlanet(navigation.planetId).name}尚未解锁，请先完成恒星勘探`);
+        return;
+      }
+      onPlanetChange(navigation.planetId);
+      return;
+    }
+    if (navigation.kind === "system") {
+      setStarMapOpen(true);
+      setNotice(`已打开${navigation.systemId === "borealis" ? "北辰" : navigation.systemId === "neutron" ? "中子" : "赫利俄斯"}星图`);
+      return;
+    }
+    if (navigation.kind === "dyson") {
+      setDysonPlannerOpen(true);
+      setNotice("已打开戴森球规划");
+      return;
+    }
+    if (navigation.kind === "construction") {
+      setInspectorTab("fabricate");
+      setMobilePanel("inspector");
+      setNotice(`请在施工托盘中选择${navigation.constructionId.includes("conveyor") ? "传送带" : "分拣器"}`);
+      return;
+    }
+    const entity = gameRef.current.entities.find((candidate) => candidate.buildingId === navigation.buildingId);
+    if (entity) {
+      if (gameRef.current.activePlanetId !== entity.planetId) onPlanetChange(entity.planetId);
+      setSelectedEntityIds([entity.id]);
+      setSelectedBeltId(null);
+      setInspectorTab("inspect");
+      setMobilePanel("inspector");
+      window.setTimeout(() => focusEntityIds([entity.id]), 30);
+      setNotice(`已定位：${getBuilding(navigation.buildingId).name}`);
+      return;
+    }
+    setPlacement(navigation.buildingId);
+    setInspectorTab("fabricate");
+    setMobilePanel("inspector");
+    setNotice(`施工托盘已切换到${getBuilding(navigation.buildingId).name}`);
+  }, [focusEntityIds, onPlanetChange]);
+
+  const onSelectCampaignTask = useCallback((taskId: CampaignTaskId) => {
+    setGame((current) => selectCampaignTask(current, taskId));
+  }, []);
 
   const refreshSaveSlots = useCallback(() => setSaveSlots(getSaveSlotSummaries()), []);
 
@@ -738,6 +863,9 @@ function FactoryGame() {
     setBlueprintsOpen(false);
     setDysonPlannerOpen(false);
     setOperationsOpen(false);
+    setCampaignOpen(false);
+    setCampaignFocusItemId(null);
+    setCampaignFocusTechId(null);
     setOfflineReport(null);
     setBlueprintPlacementId(null);
     setSelectionMode(false);
@@ -753,6 +881,7 @@ function FactoryGame() {
       <HeaderControls
         game={game}
         alertCount={alerts.length}
+        onOpenCampaign={openCampaign}
         onPauseToggle={() => setGame((current) => setPaused(current, !current.paused))}
         onReset={reset}
         onOpenOperations={() => {
@@ -764,19 +893,21 @@ function FactoryGame() {
           setStarMapOpen(false);
           setBlueprintsOpen(false);
           setDysonPlannerOpen(false);
+          setCampaignOpen(false);
           setMobilePanel(null);
           setNotice(null);
         }}
         onOpenResources={() => { setMobilePanel((current) => current === "resources" ? null : "resources"); setNotice(null); }}
         onOpenInspector={() => { setMobilePanel((current) => current === "inspector" ? null : "inspector"); setNotice(null); }}
-        onOpenRecipes={() => { setRecipesOpen(true); setTechnologyOpen(false); setStatisticsOpen(false); setMobilePanel(null); setNotice(null); }}
-        onOpenTechnology={() => { setTechnologyOpen(true); setRecipesOpen(false); setStatisticsOpen(false); setMobilePanel(null); setNotice(null); }}
-        onOpenStatistics={() => { setStatisticsOpen(true); setRecipesOpen(false); setTechnologyOpen(false); setMobilePanel(null); setNotice(null); }}
-        onOpenStarMap={() => { setStarMapOpen(true); setStatisticsOpen(false); setRecipesOpen(false); setTechnologyOpen(false); setMobilePanel(null); setNotice(null); }}
+        onOpenRecipes={() => { setRecipesOpen(true); setTechnologyOpen(false); setStatisticsOpen(false); setCampaignOpen(false); setCampaignFocusItemId(null); setMobilePanel(null); setNotice(null); }}
+        onOpenTechnology={() => { setTechnologyOpen(true); setRecipesOpen(false); setStatisticsOpen(false); setCampaignOpen(false); setCampaignFocusTechId(null); setMobilePanel(null); setNotice(null); }}
+        onOpenStatistics={() => { setStatisticsOpen(true); setRecipesOpen(false); setTechnologyOpen(false); setCampaignOpen(false); setMobilePanel(null); setNotice(null); }}
+        onOpenStarMap={() => { setStarMapOpen(true); setStatisticsOpen(false); setRecipesOpen(false); setTechnologyOpen(false); setCampaignOpen(false); setMobilePanel(null); setNotice(null); }}
       />
       <div className="game-workspace">
         <ResourceRail
           game={game}
+          onOpenCampaign={openCampaign}
           onOpenDysonPlanner={() => {
             setDysonPlannerOpen(true);
             setBlueprintsOpen(false);
@@ -784,6 +915,7 @@ function FactoryGame() {
             setTechnologyOpen(false);
             setStatisticsOpen(false);
             setRecipesOpen(false);
+            setCampaignOpen(false);
             setMobilePanel(null);
           }}
           onPickTray={(itemId) => setGame((current) => pickFromTray(current, itemId))}
@@ -962,13 +1094,23 @@ function FactoryGame() {
           <TechnologyWorkspace
             open
             game={game}
+            focusTechId={campaignFocusTechId}
             onClose={() => setTechnologyOpen(false)}
             onSelect={(techId) => setGame((current) => selectTechnology(current, techId))}
             onRemoveQueued={(techId) => setGame((current) => removeQueuedTechnology(current, techId))}
           />
         ) : null}
         {statisticsOpen ? <StatisticsWorkspace open game={game} onClose={() => setStatisticsOpen(false)} /> : null}
-        {recipesOpen ? <RecipeWorkspace open game={game} onClose={() => setRecipesOpen(false)} /> : null}
+        {recipesOpen ? <RecipeWorkspace open game={game} focusItemId={campaignFocusItemId} onClose={() => setRecipesOpen(false)} /> : null}
+        {campaignOpen ? (
+          <CampaignWorkspace
+            open
+            game={game}
+            onClose={() => setCampaignOpen(false)}
+            onNavigate={navigateFromCampaign}
+            onSelectTask={onSelectCampaignTask}
+          />
+        ) : null}
         {starMapOpen ? (
           <StarMapWorkspace
             open

@@ -292,6 +292,52 @@ export type AchievementId =
   | "permanent_dyson_structure"
   | "multi_system_industry";
 
+export type CampaignChapterId =
+  | "foundation"
+  | "blue_matrix"
+  | "red_matrix"
+  | "planetary_logistics"
+  | "interstellar_logistics"
+  | "matrix_mastery"
+  | "dyson_program";
+
+export type CampaignTaskId =
+  | "mine_first_ore"
+  | "smelt_iron"
+  | "deploy_miner"
+  | "lay_first_belt"
+  | "deploy_matrix_lab"
+  | "produce_blue_matrix"
+  | "refine_oil"
+  | "produce_plastic"
+  | "produce_red_matrix"
+  | "deploy_planetary_station"
+  | "complete_planetary_trip"
+  | "produce_structure_matrix"
+  | "unlock_borealis"
+  | "deploy_interstellar_station"
+  | "complete_interstellar_trip"
+  | "produce_information_matrix"
+  | "produce_gravity_matrix"
+  | "produce_universe_matrix"
+  | "launch_solar_sail"
+  | "launch_carrier_rocket"
+  | "build_dyson_structure"
+  | "absorb_shell_sail"
+  | "side_storage"
+  | "side_stable_power"
+  | "side_belt_upgrade"
+  | "side_rare_resource"
+  | "side_spray_coater"
+  | "side_blueprint";
+
+export interface CampaignState {
+  activeChapterId: CampaignChapterId;
+  activeTaskId: CampaignTaskId | null;
+  completedTaskIds: CampaignTaskId[];
+  rewardedTaskIds: CampaignTaskId[];
+}
+
 export interface ItemAmount {
   itemId: ItemId;
   amount: number;
@@ -611,7 +657,7 @@ export interface BlueprintDefinition {
 }
 
 export interface GameState {
-  version: 17;
+  version: 18;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -626,6 +672,7 @@ export interface GameState {
   exploration: ExplorationState;
   settings: GameSettings;
   achievements: AchievementState;
+  campaign: CampaignState;
   blueprints: BlueprintDefinition[];
   elapsedSeconds: number;
   metrics: FactoryMetrics;

@@ -2394,3 +2394,47 @@ test("large workspaces load on demand with polished desktop and mobile hierarchy
   await expect(technology.locator(".technology-upgrade-overview")).toBeVisible();
   await page.screenshot({ path: "artifacts/qa/frontend-polish-390.png", fullPage: true });
 });
+
+test("campaign center shows chapter progress, deficits and direct recipe navigation", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await freshGame(page);
+  await page.getByLabel("打开主线任务中心").first().click();
+  const campaign = page.getByRole("dialog", { name: "主线任务中心" });
+  await expect(campaign).toBeVisible();
+  await expect(campaign).toContainText("母星点火");
+  await expect(campaign).toContainText("采集第一份矿石");
+  await expect(campaign.locator(".campaign-deficits").first()).toContainText("缺少");
+  await campaign.getByRole("button", { name: "查看铁矿石配方" }).click();
+  const recipes = page.getByRole("dialog", { name: "配方图鉴" });
+  await expect(recipes).toBeVisible();
+  await expect(recipes.locator(".recipe-item-header")).toContainText("铁矿石");
+  await recipes.getByLabel("关闭配方图鉴").click();
+  await page.getByLabel("打开主线任务中心").first().click();
+  await expect(page.getByRole("dialog", { name: "主线任务中心" })).toBeVisible();
+  await page.waitForTimeout(220);
+  await page.screenshot({ path: "artifacts/qa/campaign-center-1440.png", fullPage: true });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(async () => campaign.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/campaign-center-390.png", fullPage: true });
+});
+
+test("campaign migration preserves legacy inventory while restoring task progress", async ({ page }) => {
+  await freshGame(page);
+  await page.reload();
+  await page.evaluate(() => window.dispatchEvent(new Event("beforeunload")));
+  await page.evaluate(() => {
+    const raw = window.localStorage.getItem("dsp-idle-network.save.v1");
+    const envelope = JSON.parse(raw!);
+    envelope.state.version = 17;
+    envelope.state.paused = true;
+    envelope.state.manualMined = 1;
+    delete envelope.state.campaign;
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify(envelope));
+  });
+  await page.reload();
+  await page.getByLabel("打开主线任务中心").first().click();
+  const campaign = page.getByRole("dialog", { name: "主线任务中心" });
+  await expect(campaign).toContainText("铸造基础铁块");
+  await expect(page.locator(".construction-item").filter({ hasText: "传送带 Mk.I" }).first()).toContainText("×10");
+});

@@ -45,6 +45,7 @@ import type {
   StationMinimumLoad,
   TechId,
 } from "./types";
+import { syncCampaignProgress } from "./campaign";
 
 const BELT_CAPACITY_PER_SECOND: Record<BeltTier, number> = { 1: 6, 2: 12, 3: 30 };
 const SORTER_CAPACITY_PER_SECOND: Record<SorterTier, number> = { 1: 3, 2: 6, 3: 12 };
@@ -128,6 +129,11 @@ function copyState(state: GameState): GameState {
         })),
       },
     ])) as GameState["dysonPlans"],
+    campaign: {
+      ...state.campaign,
+      completedTaskIds: [...state.campaign.completedTaskIds],
+      rewardedTaskIds: [...state.campaign.rewardedTaskIds],
+    },
   };
 }
 
@@ -188,7 +194,7 @@ function makeVein(id: string, planetId: PlanetId, resourceId: ItemId, x: number,
 export function createInitialState(): GameState {
   const planetMetrics = Object.fromEntries(PLANET_LIST.map((planet) => [planet.id, emptyMetrics()])) as GameState["planetMetrics"];
   return {
-    version: 17,
+    version: 18,
     nextId: 1,
     activePlanetId: "home",
     entities: [
@@ -282,6 +288,12 @@ export function createInitialState(): GameState {
       autosaveIntervalSeconds: 2,
     },
     achievements: { unlockedIds: [] },
+    campaign: {
+      activeChapterId: "foundation",
+      activeTaskId: "mine_first_ore",
+      completedTaskIds: [],
+      rewardedTaskIds: [],
+    },
     blueprints: [],
     elapsedSeconds: 0,
     metrics: { ...planetMetrics.home },
@@ -1785,7 +1797,7 @@ export function advanceSimulation(state: GameState, seconds: number): GameState 
     simulateStep(next, step);
     remaining -= step;
   }
-  return next;
+  return syncCampaignProgress(next);
 }
 
 export function setPaused(state: GameState, paused: boolean): GameState {

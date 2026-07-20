@@ -1,5 +1,6 @@
 import { Check, FlaskConical, Gauge, ListOrdered, LockKeyhole, PackageCheck, Pickaxe, Play, Rocket, Satellite, Timer, X, Zap } from "lucide-react";
 import type { CSSProperties } from "react";
+import { useEffect, useState } from "react";
 import { MATRIX_ITEM_IDS, PLANET_LIST, TECHNOLOGY_LIST, getItem, getTechnology } from "../game/content";
 import { canQueueTechnology, getDysonSailAbsorptionMultiplier, getInterstellarCargoCapacity, getLogisticsSpeedMultiplier, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getRayReceiverCapacityKw, getRecipeSpeedMultiplier, getSolarSailLifetimeSeconds, isTechnologyCompleted } from "../game/engine";
 import type { GameState, ItemId, TechId } from "../game/types";
@@ -11,6 +12,7 @@ interface TechnologyWorkspaceProps {
   onClose: () => void;
   onSelect: (techId: TechId) => void;
   onRemoveQueued: (techId: TechId) => void;
+  focusTechId?: TechId | null;
 }
 
 function networkMatrixStock(game: GameState, itemId: ItemId): number {
@@ -22,7 +24,20 @@ function networkMatrixStock(game: GameState, itemId: ItemId): number {
   return Math.floor(nodeStock + trayStock + (game.cargo?.itemId === itemId ? game.cargo.amount : 0));
 }
 
-export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQueued }: TechnologyWorkspaceProps) {
+export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQueued, focusTechId }: TechnologyWorkspaceProps) {
+  const [focusedTechId, setFocusedTechId] = useState<TechId | null>(null);
+  useEffect(() => {
+    if (!open || !focusTechId) return;
+    setFocusedTechId(focusTechId);
+    const timer = window.setTimeout(() => {
+      document.querySelector(`[data-tech-id="${focusTechId}"]`)?.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    }, 40);
+    const clear = window.setTimeout(() => setFocusedTechId(null), 1800);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearTimeout(clear);
+    };
+  }, [focusTechId, open]);
   if (!open) return null;
   const selected = getTechnology(game.research.selectedTechId);
   const selectedProgress = selected ? game.research.progressByTech[selected.id] ?? {} : {};
@@ -105,9 +120,10 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
                 const prerequisiteNames = technology.prerequisites.map((id) => getTechnology(id)?.name).filter(Boolean);
                 return (
                   <button
-                    className={`technology-node${complete ? " technology-node--complete" : ""}${active ? " technology-node--active" : ""}${queued ? " technology-node--queued" : ""}`}
+                    className={`technology-node${complete ? " technology-node--complete" : ""}${active ? " technology-node--active" : ""}${queued ? " technology-node--queued" : ""}${focusedTechId === technology.id ? " technology-node--focus" : ""}`}
                     type="button"
                     key={technology.id}
+                    data-tech-id={technology.id}
                     disabled={!available || active || queued}
                     onClick={() => onSelect(technology.id)}
                     title={available ? game.research.selectedTechId ? `加入科研队列：${technology.name}` : `开始研究：${technology.name}` : undefined}

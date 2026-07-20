@@ -11,7 +11,7 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ITEMS, PLANET_LIST, RECIPES, getBuilding, getCompatibleRecipeBuildings, getItem, getPlanet, getTechnology } from "../game/content";
 import { isTechnologyCompleted } from "../game/engine";
 import {
@@ -106,14 +106,21 @@ function RecipeFlowCard({ recipe, game, onSelect }: {
   );
 }
 
-export function RecipeWorkspace({ open, game, onClose }: {
+export function RecipeWorkspace({ open, game, onClose, focusItemId }: {
   open: boolean;
   game: GameState;
   onClose: () => void;
+  focusItemId?: ItemId | null;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ItemFilter>("all");
-  const [selectedItemId, setSelectedItemId] = useState<ItemId>("iron_ore");
+  const [selectedItemId, setSelectedItemId] = useState<ItemId>(focusItemId ?? "iron_ore");
+  useEffect(() => {
+    if (!focusItemId) return;
+    setSelectedItemId(focusItemId);
+    setQuery("");
+    setFilter("all");
+  }, [focusItemId]);
   const visibleItems = useMemo(() => ITEM_LIST.filter((item) => {
     const term = query.trim().toLocaleLowerCase("zh-CN");
     const matchesSearch = !term || `${item.name} ${item.symbol} ${item.id} ${item.description}`.toLocaleLowerCase("zh-CN").includes(term);
