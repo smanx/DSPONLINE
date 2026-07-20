@@ -167,6 +167,8 @@ import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncC
 import { clearGame, clearGameSlot, clearSaveSnapshot, exportGame, getSaveSlotSummaries, getSaveSnapshotSummaries, inspectSave, loadGame, loadGameSlot, loadSaveSnapshot, saveGame, saveGameSnapshot, saveGameSlot, type OfflineReport, type SaveInspection, type SaveSlotId, type SaveSnapshotSummary } from "./game/storage";
 import { runSimulationBenchmark } from "./game/benchmark";
 import { createContentPackTemplate, parseContentPack, type ModValidationResult } from "./game/mods";
+import { baselineAccountProgress, createLocalAccount, getActiveAccount, loadAccountState, recordAccountProgress, saveAccountState, switchLocalAccount, updateAccountProfile, type AccountProfileChanges } from "./game/account";
+import { removeLeaderboardData, submitLeaderboardData } from "./game/leaderboard";
 import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CargoStackSize, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 
@@ -241,6 +243,7 @@ const OfflineReportWorkspace = lazy(() => import("./components/OfflineReportWork
 const OperationsWorkspace = lazy(() => import("./components/OperationsWorkspace").then((module) => ({ default: module.OperationsWorkspace })));
 const TechnologyWorkspace = lazy(() => import("./components/TechnologyWorkspace").then((module) => ({ default: module.TechnologyWorkspace })));
 const CampaignWorkspace = lazy(() => import("./components/CampaignWorkspace").then((module) => ({ default: module.CampaignWorkspace })));
+const GalaxyWorkspace = lazy(() => import("./components/GalaxyWorkspace").then((module) => ({ default: module.GalaxyWorkspace })));
 
 function WorkspaceLoading() {
   return <div className="workspace-loading" role="status"><i /><span>正在载入工作区</span></div>;
@@ -282,6 +285,8 @@ function FactoryGame() {
   const [operationsOpen, setOperationsOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [campaignOpen, setCampaignOpen] = useState(false);
+  const [galaxyOpen, setGalaxyOpen] = useState(false);
+  const [accountState, setAccountState] = useState(loadAccountState);
   const [campaignFocusItemId, setCampaignFocusItemId] = useState<ItemId | null>(null);
   const [campaignFocusTechId, setCampaignFocusTechId] = useState<GameState["research"]["selectedTechId"]>(null);
   const [operationsTab, setOperationsTab] = useState<OperationsTab>("alerts");
@@ -310,6 +315,7 @@ function FactoryGame() {
   const [ctrlHeld, setCtrlHeld] = useState(false);
   const [pointer, setPointer] = useState({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const gameRef = useRef(game);
+  const accountStateRef = useRef(accountState);
   const completedTechCountRef = useRef(game.research.completedTechIds.length);
   const achievementCountRef = useRef(game.achievements.unlockedIds.length);
   const campaignCompletedCountRef = useRef(game.campaign.completedTaskIds.length);
@@ -333,6 +339,7 @@ function FactoryGame() {
   const { screenToFlowPosition, setCenter, setViewport, fitView, getViewport } = useReactFlow();
 
   useEffect(() => { gameRef.current = game; }, [game]);
+  useEffect(() => { accountStateRef.current = accountState; }, [accountState]);
   useEffect(() => { selectedEntityIdsRef.current = selectedEntityIds; }, [selectedEntityIds]);
   useEffect(() => { selectedBeltIdRef.current = selectedBeltId; }, [selectedBeltId]);
   useEffect(() => { pointerRef.current = pointer; }, [pointer]);
@@ -533,6 +540,25 @@ function FactoryGame() {
     };
   }, [game.settings.autosaveIntervalSeconds]);
 
+  useEffect(() => {
+    const syncAccount = () => {
+      const current = accountStateRef.current;
+      const next = recordAccountProgress(current, gameRef.current);
+      if (next === current) return;
+      accountStateRef.current = next;
+      saveAccountState(next);
+      setAccountState(next);
+    };
+    syncAccount();
+    const timer = window.setInterval(syncAccount, 2_000);
+    window.addEventListener("beforeunload", syncAccount);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("beforeunload", syncAccount);
+      syncAccount();
+    };
+  }, []);
+
   useEffect(() => () => { if (audioContextRef.current) void audioContextRef.current.close(); }, []);
 
   useEffect(() => {
@@ -663,6 +689,7 @@ function FactoryGame() {
         setDysonPlannerOpen(false);
         setOperationsOpen(false);
         setCampaignOpen(false);
+        setGalaxyOpen(false);
         setCampaignFocusItemId(null);
         setCampaignFocusTechId(null);
         setOfflineReport(null);
@@ -702,7 +729,7 @@ function FactoryGame() {
   // reader users do not remain behind a modal overlay.
   useEffect(() => {
     if (!technologyOpen && !statisticsOpen && !recipesOpen && !starMapOpen && !blueprintsOpen &&
-      !dysonPlannerOpen && !operationsOpen && !campaignOpen && !offlineReport) return;
+      !dysonPlannerOpen && !operationsOpen && !campaignOpen && !galaxyOpen && !offlineReport) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const timer = window.setTimeout(() => {
       const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
@@ -714,7 +741,7 @@ function FactoryGame() {
       window.clearTimeout(timer);
       if (previous?.isConnected && !previous.closest('[role="dialog"]')) previous.focus({ preventScroll: true });
     };
-  }, [blueprintsOpen, campaignOpen, dysonPlannerOpen, offlineReport, operationsOpen, recipesOpen, starMapOpen, statisticsOpen, technologyOpen]);
+  }, [blueprintsOpen, campaignOpen, dysonPlannerOpen, galaxyOpen, offlineReport, operationsOpen, recipesOpen, starMapOpen, statisticsOpen, technologyOpen]);
 
   const onMiningStop = useCallback(() => {
     if (miningTimerRef.current != null) window.clearInterval(miningTimerRef.current);
@@ -796,6 +823,7 @@ function FactoryGame() {
     setStatisticsOpen(false);
     setStarMapOpen(false);
     setCampaignOpen(false);
+    setGalaxyOpen(false);
     setMobilePanel(null);
     setNotice(null);
   }, []);
@@ -872,6 +900,52 @@ function FactoryGame() {
     if (settings.soundEnabled === true) playTone("confirm", true);
   }, [playTone]);
 
+  const updateGalaxyProfile = useCallback((changes: AccountProfileChanges) => {
+    const current = accountStateRef.current;
+    const active = getActiveAccount(current);
+    if (changes.privacy === "private") removeLeaderboardData(active.profile.id);
+    const next = updateAccountProfile(current, changes);
+    accountStateRef.current = next;
+    setAccountState(next);
+  }, []);
+
+  const createGalaxyAccount = useCallback((displayName: string) => {
+    const synced = recordAccountProgress(accountStateRef.current, gameRef.current);
+    saveAccountState(synced);
+    const next = baselineAccountProgress(createLocalAccount(synced, displayName), gameRef.current);
+    accountStateRef.current = next;
+    setAccountState(next);
+    playTone("confirm");
+  }, [playTone]);
+
+  const switchGalaxyAccount = useCallback((accountId: string) => {
+    const current = accountStateRef.current;
+    if (current.activeAccountId === accountId) return;
+    const synced = recordAccountProgress(current, gameRef.current);
+    saveAccountState(synced);
+    const next = baselineAccountProgress(switchLocalAccount(synced, accountId), gameRef.current);
+    accountStateRef.current = next;
+    setAccountState(next);
+  }, []);
+
+  const uploadGalaxyData = useCallback((seasonId: string) => {
+    const current = accountStateRef.current;
+    const synced = recordAccountProgress(current, gameRef.current);
+    if (synced !== current) {
+      accountStateRef.current = synced;
+      saveAccountState(synced);
+      setAccountState(synced);
+    }
+    const active = getActiveAccount(synced);
+    const submission = submitLeaderboardData(active.profile, active.ledger, seasonId);
+    if (!submission) {
+      playTone("alert");
+      return false;
+    }
+    playTone("confirm");
+    return true;
+  }, [playTone]);
+
   const openCommandWorkspace = useCallback((workspace: CommandWorkspace) => {
     setCommandPaletteOpen(false);
     setTechnologyOpen(false);
@@ -883,6 +957,7 @@ function FactoryGame() {
     setDysonPlannerOpen(false);
     setOperationsOpen(false);
     setCampaignOpen(false);
+    setGalaxyOpen(false);
     setMobilePanel(null);
     if (workspace === "inspector" || workspace === "resources") {
       setMobilePanel(workspace);
@@ -903,6 +978,8 @@ function FactoryGame() {
     } else if (workspace === "operations") {
       setOperationsOpen(true);
       setOperationsTab("alerts");
+    } else if (workspace === "galaxy") {
+      setGalaxyOpen(true);
     }
   }, []);
 
@@ -924,6 +1001,7 @@ function FactoryGame() {
     setNodes([]);
     setOperationsOpen(false);
     setCampaignOpen(false);
+    setGalaxyOpen(false);
     setCampaignFocusItemId(null);
     setCampaignFocusTechId(null);
     setHighlightedTaskId(null);
@@ -1008,6 +1086,7 @@ function FactoryGame() {
     setBlueprintsOpen(false);
     setDysonPlannerOpen(false);
     setOperationsOpen(false);
+    setGalaxyOpen(false);
     setMobilePanel(null);
     setPlacement(null);
     setBlueprintPlacementId(null);
@@ -1032,6 +1111,7 @@ function FactoryGame() {
     setBlueprintsOpen(false);
     setDysonPlannerOpen(false);
     setOperationsOpen(false);
+    setGalaxyOpen(false);
     setMobilePanel(null);
     setPlacement(null);
     setBlueprintPlacementId(null);
@@ -1794,6 +1874,7 @@ function FactoryGame() {
     setDysonPlannerOpen(false);
     setOperationsOpen(false);
     setCampaignOpen(false);
+    setGalaxyOpen(false);
     setCampaignFocusItemId(null);
     setCampaignFocusTechId(null);
     setOfflineReport(null);
@@ -1828,8 +1909,22 @@ function FactoryGame() {
           setNotice(wasPaused ? "模拟已继续" : "模拟已暂停");
         }}
         onReset={reset}
+        onOpenGalaxy={() => {
+          setGalaxyOpen(true);
+          setTechnologyOpen(false);
+          setStatisticsOpen(false);
+          setRecipesOpen(false);
+          setStarMapOpen(false);
+          setBlueprintsOpen(false);
+          setDysonPlannerOpen(false);
+          setOperationsOpen(false);
+          setCampaignOpen(false);
+          setMobilePanel(null);
+          setNotice(null);
+        }}
         onOpenOperations={() => {
           setOperationsOpen(true);
+          setGalaxyOpen(false);
           setOperationsTab("alerts");
           setTechnologyOpen(false);
           setStatisticsOpen(false);
@@ -1844,10 +1939,10 @@ function FactoryGame() {
         onOpenCommandPalette={() => setCommandPaletteOpen(true)}
         onOpenResources={() => { setMobilePanel((current) => current === "resources" ? null : "resources"); setNotice(null); }}
         onOpenInspector={() => { setMobilePanel((current) => current === "inspector" ? null : "inspector"); setNotice(null); }}
-        onOpenRecipes={() => { setRecipesOpen(true); setTechnologyOpen(false); setStatisticsOpen(false); setCampaignOpen(false); setCampaignFocusItemId(null); setMobilePanel(null); setNotice(null); }}
-        onOpenTechnology={() => { setTechnologyOpen(true); setRecipesOpen(false); setStatisticsOpen(false); setCampaignOpen(false); setCampaignFocusTechId(null); setMobilePanel(null); setNotice(null); }}
-        onOpenStatistics={() => { setStatisticsOpen(true); setStatisticsFocusTab(null); setRecipesOpen(false); setTechnologyOpen(false); setCampaignOpen(false); setMobilePanel(null); setNotice(null); }}
-        onOpenStarMap={() => { setStarMapOpen(true); setStatisticsOpen(false); setRecipesOpen(false); setTechnologyOpen(false); setCampaignOpen(false); setMobilePanel(null); setNotice(null); }}
+        onOpenRecipes={() => { setRecipesOpen(true); setTechnologyOpen(false); setStatisticsOpen(false); setCampaignOpen(false); setGalaxyOpen(false); setCampaignFocusItemId(null); setMobilePanel(null); setNotice(null); }}
+        onOpenTechnology={() => { setTechnologyOpen(true); setRecipesOpen(false); setStatisticsOpen(false); setCampaignOpen(false); setGalaxyOpen(false); setCampaignFocusTechId(null); setMobilePanel(null); setNotice(null); }}
+        onOpenStatistics={() => { setStatisticsOpen(true); setStatisticsFocusTab(null); setRecipesOpen(false); setTechnologyOpen(false); setCampaignOpen(false); setGalaxyOpen(false); setMobilePanel(null); setNotice(null); }}
+        onOpenStarMap={() => { setStarMapOpen(true); setStatisticsOpen(false); setRecipesOpen(false); setTechnologyOpen(false); setCampaignOpen(false); setGalaxyOpen(false); setMobilePanel(null); setNotice(null); }}
       />
       <div className="game-workspace">
         <ResourceRail
@@ -2223,6 +2318,17 @@ function FactoryGame() {
         onReset={reset}
       />
       <Suspense fallback={<WorkspaceLoading />}>
+        {galaxyOpen ? (
+          <GalaxyWorkspace
+            open
+            accountState={accountState}
+            onClose={() => setGalaxyOpen(false)}
+            onUpdateProfile={updateGalaxyProfile}
+            onCreateAccount={createGalaxyAccount}
+            onSwitchAccount={switchGalaxyAccount}
+            onUpload={uploadGalaxyData}
+          />
+        ) : null}
         {technologyOpen ? (
           <TechnologyWorkspace
             open

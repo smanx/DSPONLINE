@@ -3364,3 +3364,86 @@ test("galaxy endgame campaign routes into the console and difficulty controls st
   await page.keyboard.press("Space");
   await expect(page.getByLabel("暂停模拟")).toBeVisible();
 });
+
+test("galaxy network edits local accounts and withdraws rankings when privacy is enabled", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await freshGame(page);
+  await page.getByLabel("打开银河网络").click();
+  const galaxy = page.getByRole("dialog", { name: "银河网络" });
+  await expect(galaxy).toBeVisible();
+  await expect(galaxy).toContainText("本地节点");
+  await expect(galaxy.locator(".galaxy-rank-row--local")).toContainText("实时预览");
+
+  await galaxy.getByRole("button", { name: "上传本季数据" }).click();
+  await expect(galaxy.getByRole("button", { name: "数据已写入本地节点" })).toBeVisible();
+  await expect(galaxy.locator(".galaxy-rank-row--local")).toContainText("本地节点已上传");
+
+  await galaxy.getByRole("tab", { name: "账户" }).click();
+  await galaxy.getByLabel("账户显示名称").fill("赫利俄斯试验局");
+  await galaxy.getByRole("button", { name: "保存名称" }).click();
+  await expect(galaxy).toContainText("赫利俄斯试验局");
+  await galaxy.locator(".galaxy-avatar-picker").getByRole("button", { name: "D", exact: true }).click();
+  await galaxy.locator(".galaxy-privacy-setting").click();
+  await expect(galaxy).toContainText("隐私银河档案");
+  await galaxy.getByRole("tab", { name: "银河排行" }).click();
+  await expect(galaxy.getByRole("button", { name: "隐私账户不参与排行" })).toBeDisabled();
+  await expect(galaxy.locator(".galaxy-rank-row--local")).toHaveCount(0);
+  await expect.poll(async () => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.leaderboard.v1") ?? "")).not.toContain("acct_");
+
+  await galaxy.getByRole("tab", { name: "账户" }).click();
+  await galaxy.getByLabel("新账户名称").fill("北辰备用身份");
+  await galaxy.getByLabel("创建本地账户").click();
+  await expect(galaxy.locator(".galaxy-account-list")).toContainText("北辰备用身份");
+  await page.screenshot({ path: "artifacts/qa/galaxy-account-1440.png", fullPage: true });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await galaxy.getByRole("tab", { name: "银河排行" }).click();
+  await expect.poll(async () => galaxy.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(galaxy.locator(".galaxy-category-tabs")).toBeVisible();
+  await page.screenshot({ path: "artifacts/qa/galaxy-ranking-390.png", fullPage: true });
+});
+
+test("galaxy rankings upload accumulated power and white-matrix records by category", async ({ page }) => {
+  await page.addInitScript(() => {
+    const accountId = "acct_qa_ranker";
+    window.localStorage.setItem("dsp-idle-network.account.v1", JSON.stringify({
+      version: 1,
+      activeAccountId: accountId,
+      accounts: {
+        [accountId]: {
+          profile: { id: accountId, displayName: "矩阵档案局", avatar: "F", privacy: "public", createdAt: 1, updatedAt: 1 },
+          ledger: {
+            energyGeneratedMj: 1_500_000_000,
+            uploadedWhiteMatrix: 400_000,
+            peakGenerationKw: 2_300_000,
+            peakThroughputPerMinute: 150_000,
+            peakDysonPowerKw: 1_500_000,
+            exploredSystems: 2,
+            colonizedPlanets: 4,
+            lastGameElapsedSeconds: 0,
+            lastWhiteMatrixTotal: 0,
+            lastSyncedAt: Date.now(),
+          },
+        },
+      },
+    }));
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await page.getByLabel("打开银河网络").click();
+  const galaxy = page.getByRole("dialog", { name: "银河网络" });
+  await galaxy.getByRole("tab", { name: /白矩阵上传/ }).click();
+  const localRow = galaxy.locator(".galaxy-rank-row--local");
+  await expect(localRow).toContainText("矩阵档案局");
+  await expect(localRow.locator(".galaxy-rank-value")).toContainText("400k");
+  await galaxy.getByRole("button", { name: "上传本季数据" }).click();
+  await expect(localRow).toContainText("本地节点已上传");
+
+  await galaxy.getByRole("tab", { name: /累计发电/ }).click();
+  await expect(localRow.locator(".galaxy-rank-value")).toContainText("1.5B");
+  const submission = await page.evaluate(() => JSON.parse(window.localStorage.getItem("dsp-idle-network.leaderboard.v1")!)[0]);
+  expect(submission.metrics.energyGeneratedMj).toBeGreaterThanOrEqual(1_500_000_000);
+  expect(submission.metrics.uploadedWhiteMatrix).toBe(400_000);
+  expect(submission.metrics.galaxyScore).toBeGreaterThan(0);
+  await page.screenshot({ path: "artifacts/qa/galaxy-power-1440.png", fullPage: true });
+});

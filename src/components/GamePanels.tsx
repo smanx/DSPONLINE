@@ -22,6 +22,7 @@ import {
   Gauge,
   Hammer,
   GitFork,
+  Globe2,
   Layers3,
   ListChecks,
   ListPlus,
@@ -1447,6 +1448,7 @@ export function HeaderControls({
   onOpenStatistics,
   onOpenStarMap,
   onOpenOperations,
+  onOpenGalaxy,
   onOpenCampaign,
   onOpenCommandPalette,
   alertCount,
@@ -1461,6 +1463,7 @@ export function HeaderControls({
   onOpenStatistics: () => void;
   onOpenStarMap: () => void;
   onOpenOperations: () => void;
+  onOpenGalaxy: () => void;
   onOpenCampaign: () => void;
   onOpenCommandPalette: () => void;
   alertCount: number;
@@ -1487,6 +1490,7 @@ export function HeaderControls({
         <button className={`header-action--overflowable header-alert-command${alertCount > 0 ? " header-alert-command--active" : ""}`} type="button" onClick={onOpenOperations} title="打开运营中心" aria-label="打开运营中心">
           <Bell size={17} />{alertCount > 0 ? <span>{Math.min(99, alertCount)}</span> : null}
         </button>
+        <button className="header-action--overflowable" type="button" onClick={onOpenGalaxy} title="打开银河网络" aria-label="打开银河网络"><Globe2 size={17} /></button>
         <button className="header-action--overflowable" type="button" onClick={onOpenCampaign} title="打开主线任务中心" aria-label="打开主线任务中心"><Flag size={17} /></button>
         <button className="header-action--overflowable" type="button" onClick={onOpenStarMap} title="打开星图" aria-label="打开星图"><Telescope size={17} /></button>
         <button className="header-action--overflowable" type="button" onClick={onOpenStatistics} title="打开生产统计" aria-label="打开生产统计"><BarChart3 size={17} /></button>
@@ -1496,6 +1500,7 @@ export function HeaderControls({
         <button className="header-overflow-command" type="button" onClick={() => setOverflowOpen((open) => !open)} aria-expanded={overflowOpen} title="更多工作区" aria-label="更多工作区"><MoreHorizontal size={18} /></button>
         {overflowOpen ? <div className="header-overflow-menu" role="menu">
           <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenOperations)}><Bell size={15} />运营中心</button>
+          <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenGalaxy)}><Globe2 size={15} />银河网络</button>
           <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenCampaign)}><Flag size={15} />主线任务</button>
           <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenStarMap)}><Telescope size={15} />星图</button>
           <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenStatistics)}><BarChart3 size={15} />生产统计</button>

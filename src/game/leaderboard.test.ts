@@ -1,0 +1,71 @@
+/** @vitest-environment jsdom */
+
+import { beforeEach, describe, expect, it } from "vitest";
+import { createAccountState, getActiveAccount, updateAccountProfile } from "./account";
+import {
+  LEADERBOARD_STORAGE_KEY,
+  formatLeaderboardValue,
+  getLeaderboardMetrics,
+  getLeaderboardSnapshot,
+  removeLeaderboardData,
+  submitLeaderboardData,
+} from "./leaderboard";
+
+describe("local galaxy leaderboard", () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it("calculates a stable composite score and scores seeded galaxy entries", () => {
+    const metrics = getLeaderboardMetrics({
+      energyGeneratedMj: 1_000_000,
+      uploadedWhiteMatrix: 10,
+      peakGenerationKw: 5_000,
+      peakThroughputPerMinute: 100,
+      peakDysonPowerKw: 2_000,
+      exploredSystems: 2,
+      colonizedPlanets: 3,
+      lastGameElapsedSeconds: 0,
+      lastWhiteMatrixTotal: 0,
+      lastSyncedAt: 0,
+    });
+    expect(metrics.galaxyScore).toBe(26_941);
+    expect(formatLeaderboardValue(1_500_000_000, "power")).toBe("1.5B");
+
+    const account = getActiveAccount(createAccountState(100));
+    const snapshot = getLeaderboardSnapshot(account.profile, account.ledger, "galaxy");
+    expect(snapshot.entries[0].value).toBeGreaterThan(0);
+    expect(snapshot.entries.map((entry) => entry.value)).toEqual([...snapshot.entries.map((entry) => entry.value)].sort((a, b) => b - a));
+  });
+
+  it("shows a live local projection and marks it submitted after upload", () => {
+    const account = getActiveAccount(createAccountState(100));
+    account.ledger.uploadedWhiteMatrix = 400_000;
+    let snapshot = getLeaderboardSnapshot(account.profile, account.ledger, "upload");
+    expect(snapshot.localRank).not.toBeNull();
+    expect(snapshot.localSubmitted).toBe(false);
+
+    const submission = submitLeaderboardData(account.profile, account.ledger);
+    expect(submission?.metrics.uploadedWhiteMatrix).toBe(400_000);
+    snapshot = getLeaderboardSnapshot(account.profile, account.ledger, "upload");
+    expect(snapshot.localSubmitted).toBe(true);
+    expect(window.localStorage.getItem(LEADERBOARD_STORAGE_KEY)).toContain(account.profile.id);
+  });
+
+  it("keeps private identities off the board and can withdraw prior submissions", () => {
+    let state = createAccountState(100);
+    const publicAccount = getActiveAccount(state);
+    expect(submitLeaderboardData(publicAccount.profile, publicAccount.ledger)).not.toBeNull();
+    state = updateAccountProfile(state, { privacy: "private" });
+    const privateAccount = getActiveAccount(state);
+    expect(submitLeaderboardData(privateAccount.profile, privateAccount.ledger)).toBeNull();
+    removeLeaderboardData(privateAccount.profile.id);
+    expect(getLeaderboardSnapshot(privateAccount.profile, privateAccount.ledger, "power").localRank).toBeNull();
+    expect(window.localStorage.getItem(LEADERBOARD_STORAGE_KEY)).not.toContain(privateAccount.profile.id);
+  });
+
+  it("does not inject live progress into an ended season", () => {
+    const account = getActiveAccount(createAccountState(100));
+    expect(submitLeaderboardData(account.profile, account.ledger, "season_00")).toBeNull();
+    const snapshot = getLeaderboardSnapshot(account.profile, account.ledger, "power", "season_00");
+    expect(snapshot.localRank).toBeNull();
+  });
+});

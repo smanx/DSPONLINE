@@ -1,9 +1,9 @@
-import { BarChart3, BookOpen, Check, Command, Factory, Flag, FlaskConical, Gauge, Map, PackageOpen, Pause, Play, Search, Settings2, Telescope, Wrench, X } from "lucide-react";
+import { BarChart3, BookOpen, Check, Command, Factory, Flag, FlaskConical, Gauge, Globe2, Map, PackageOpen, Pause, Play, Search, Settings2, Telescope, Wrench, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ITEMS } from "../game/content";
 import type { GameState, ItemId } from "../game/types";
 
-export type CommandWorkspace = "operations" | "campaign" | "star-map" | "statistics" | "recipes" | "technology" | "blueprints" | "dyson" | "inspector" | "resources";
+export type CommandWorkspace = "operations" | "campaign" | "galaxy" | "star-map" | "statistics" | "recipes" | "technology" | "blueprints" | "dyson" | "inspector" | "resources";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -45,6 +45,7 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
     });
     const base: PaletteCommand[] = [
       workspace("star-map", "打开星图与星际工业", "探索、航线和行星角色", <Telescope size={16} />, "star-map"),
+      workspace("galaxy", "打开银河网络", "账户、累计发电与白矩阵排行榜", <Globe2 size={16} />, "galaxy"),
       workspace("statistics", "打开生产统计", "网络、吞吐和工业规划", <BarChart3 size={16} />, "statistics"),
       workspace("recipes", "打开配方图鉴", "搜索原料、设备和生产链", <BookOpen size={16} />, "recipes"),
       workspace("technology", "打开科技树", "科研队列和解锁路径", <FlaskConical size={16} />, "technology"),

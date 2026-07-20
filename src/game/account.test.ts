@@ -1,0 +1,86 @@
+/** @vitest-environment jsdom */
+
+import { beforeEach, describe, expect, it } from "vitest";
+import { createInitialState } from "./engine";
+import {
+  ACCOUNT_STORAGE_KEY,
+  baselineAccountProgress,
+  createAccountState,
+  createLocalAccount,
+  getActiveAccount,
+  loadAccountState,
+  recordAccountProgress,
+  switchLocalAccount,
+  updateAccountProfile,
+} from "./account";
+
+describe("local account state", () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it("creates, persists, switches and edits independent local identities", () => {
+    let state = createAccountState(100);
+    const firstId = state.activeAccountId;
+    state = updateAccountProfile(state, { displayName: "  银河 工程师  ", avatar: "C", privacy: "private" });
+    expect(getActiveAccount(state).profile).toMatchObject({ displayName: "银河 工程师", avatar: "C", privacy: "private" });
+
+    state = createLocalAccount(state, "第二工厂");
+    const secondId = state.activeAccountId;
+    expect(secondId).not.toBe(firstId);
+    expect(Object.keys(state.accounts)).toHaveLength(2);
+    state = switchLocalAccount(state, firstId);
+    expect(getActiveAccount(state).profile.displayName).toBe("银河 工程师");
+    expect(loadAccountState().activeAccountId).toBe(firstId);
+    expect(window.localStorage.getItem(ACCOUNT_STORAGE_KEY)).toContain("第二工厂");
+  });
+
+  it("integrates power and accumulates white-matrix uploads across a factory reset", () => {
+    let account = createAccountState(100);
+    const game = createInitialState();
+    game.elapsedSeconds = 10;
+    game.planetMetrics.home.generationKw = 1_000;
+    game.planetMetrics.ashen.generationKw = 500;
+    game.planetMetrics.home.totalItemsPerMinute = 120;
+    game.dysonSwarm.generationKw = 250;
+    game.dysonSphere.generationKw = 750;
+    game.endgame.exportProjects.universe_archive.totalDelivered = 20;
+
+    account = recordAccountProgress(account, game, 200);
+    expect(getActiveAccount(account).ledger).toMatchObject({
+      energyGeneratedMj: 15,
+      uploadedWhiteMatrix: 20,
+      peakGenerationKw: 1_500,
+      peakThroughputPerMinute: 120,
+      peakDysonPowerKw: 1_000,
+    });
+
+    game.elapsedSeconds = 12;
+    game.endgame.exportProjects.universe_archive.totalDelivered = 25;
+    account = recordAccountProgress(account, game, 300);
+    expect(getActiveAccount(account).ledger.energyGeneratedMj).toBe(18);
+    expect(getActiveAccount(account).ledger.uploadedWhiteMatrix).toBe(25);
+
+    game.elapsedSeconds = 0;
+    game.endgame.exportProjects.universe_archive.totalDelivered = 0;
+    account = recordAccountProgress(account, game, 400);
+    game.elapsedSeconds = 1;
+    game.endgame.exportProjects.universe_archive.totalDelivered = 4;
+    account = recordAccountProgress(account, game, 500);
+    expect(getActiveAccount(account).ledger.uploadedWhiteMatrix).toBe(29);
+
+    game.elapsedSeconds = 2;
+    game.endgame.exportProjects.universe_archive.totalDelivered = 10;
+    account = recordAccountProgress(account, game, 600);
+    expect(getActiveAccount(account).ledger.uploadedWhiteMatrix).toBe(35);
+  });
+
+  it("can baseline a switched account without crediting another identity's runtime", () => {
+    const game = createInitialState();
+    game.elapsedSeconds = 50;
+    game.planetMetrics.home.generationKw = 1_000;
+    let account = createLocalAccount(createAccountState(100), "备用身份");
+    account = baselineAccountProgress(account, game, 200);
+    game.elapsedSeconds = 52;
+    account = recordAccountProgress(account, game, 300);
+    expect(getActiveAccount(account).ledger.energyGeneratedMj).toBe(2);
+  });
+});
