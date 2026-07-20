@@ -788,6 +788,16 @@ export interface ExplorationMission {
 
 export type PlanetSpecialization = "balanced" | "smelting" | "chemical" | "logistics" | "research" | "particle";
 
+export type PlanetIndustryRole =
+  | "auto"
+  | "mining"
+  | "smelting"
+  | "manufacturing"
+  | "chemical"
+  | "research"
+  | "logistics"
+  | "power";
+
 export interface PlanetIndustrialProfile {
   planetId: PlanetId;
   climateName: string;
@@ -810,6 +820,7 @@ export interface PlanetIndustrialProfile {
 export interface GalaxyState {
   seed: number;
   profiles: Record<PlanetId, PlanetIndustrialProfile>;
+  planetRoles: Record<PlanetId, PlanetIndustryRole>;
 }
 
 export interface RecipeFocusState {

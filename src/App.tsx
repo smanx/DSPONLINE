@@ -126,6 +126,7 @@ import {
   setFuelItem,
   setLogisticsItem,
   setPaused,
+  setPlanetIndustryRole,
   setProliferatorConfiguration,
   setEntitiesProliferatorConfiguration,
   setStationMode,
@@ -162,7 +163,7 @@ import { analyzeBeltNetwork, diagnoseBelt, getBeltBundleMap, getPortOccupancy } 
 import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
 import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
 import { clearGame, clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot, type OfflineReport, type SaveSlotId } from "./game/storage";
-import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CargoStackSize, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
+import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CargoStackSize, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 
 type InspectorTab = "inspect" | "fabricate";
@@ -876,6 +877,18 @@ function FactoryGame() {
     setNotice(`已定位：${alert.title} · ${alert.reason}`);
     playTone("alert");
   }, [focusEntityIds, onPlanetChange, playTone]);
+
+  const focusStellarStation = useCallback((entityId: string, planetId: PlanetId) => {
+    if (gameRef.current.activePlanetId !== planetId) onPlanetChange(planetId);
+    setSelectedEntityIds([entityId]);
+    setSelectedBeltId(null);
+    setFocusedBeltNetworkId(null);
+    setInspectorTab("inspect");
+    setMobilePanel("inspector");
+    setStarMapOpen(false);
+    window.setTimeout(() => focusEntityIds([entityId]), gameRef.current.settings.reducedMotion ? 0 : 40);
+    setNotice(`已定位星际物流问题：${getPlanet(planetId).name}`);
+  }, [focusEntityIds, onPlanetChange]);
 
   const openCampaign = useCallback(() => {
     setCampaignOpen(true);
@@ -2052,6 +2065,11 @@ function FactoryGame() {
             onExplore={onExploreSystem}
             onColonize={onColonizePlanet}
             onTravel={(planetId) => { onPlanetChange(planetId); setStarMapOpen(false); }}
+            onRoleChange={(planetId: PlanetId, role: PlanetIndustryRole) => commitGame((current) => setPlanetIndustryRole(current, planetId, role))}
+            onStationPriorityChange={(entityId: string, slotIndex: number, priority: LogisticsPriority) => commitGame((current) => setStationSlotPriority(current, entityId, slotIndex, priority))}
+            onStationMinimumLoadChange={(entityId: string, slotIndex: number, minimumLoad: StationMinimumLoad) => commitGame((current) => setStationSlotMinimumLoad(current, entityId, slotIndex, minimumLoad))}
+            onStationLimitsChange={(entityId: string, slotIndex: number, minStock: number, maxStock: number) => commitGame((current) => setStationSlotLimits(current, entityId, slotIndex, minStock, maxStock))}
+            onFocusStation={focusStellarStation}
           />
         ) : null}
         {dysonPlannerOpen ? (

@@ -2735,6 +2735,41 @@ test("stellar exploration unlocks remote planets and enables a warped logistics 
   await page.screenshot({ path: "artifacts/qa/stellar-map-390.png", fullPage: true });
 });
 
+test("star map industrial console exposes global routes, planet roles and quick diagnostics", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openStellarExplorationGame(page);
+  await page.getByLabel("打开星图").click();
+  const starMap = page.getByRole("dialog", { name: "星图" });
+  await starMap.getByRole("tab", { name: "星际工业" }).click();
+  const industry = starMap.locator(".stellar-industry");
+  await expect(industry).toBeVisible();
+  await expect(industry).toContainText("全局航线表");
+  await expect(industry.locator(".stellar-route-row")).toHaveCount(1);
+  await expect(industry.locator(".stellar-route-row")).toContainText("光栅石");
+  await expect(industry.locator(".stellar-route-row")).toContainText("翘曲");
+  await page.screenshot({ path: "artifacts/qa/stellar-industry-1440.png", fullPage: true });
+
+  await starMap.getByRole("tab", { name: "星图探索" }).click();
+  const borealis = starMap.locator(".star-system-card").filter({ has: page.getByText("北冕座", { exact: true }) });
+  await borealis.getByRole("button", { name: "勘探北冕座" }).click();
+  await starMap.getByRole("tab", { name: "星际工业" }).click();
+  await expect(industry.locator(".stellar-route-row")).toContainText("等待发船");
+
+  const frostRole = industry.getByLabel("霜原 I工业角色");
+  await frostRole.selectOption("chemical");
+  await expect(frostRole).toHaveValue("chemical");
+  await industry.getByRole("button", { name: /定位光栅石需求站/ }).click();
+  await expect(page.locator(".canvas-status")).toContainText("澄海 I");
+  await expect(page.locator(".station-inspector")).toBeVisible();
+
+  await page.getByLabel("打开星图").click();
+  await starMap.getByRole("tab", { name: "星际工业" }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(starMap.locator(".stellar-industry")).toBeVisible();
+  await expect(starMap.locator(".stellar-route-row")).toHaveCount(1);
+  await page.screenshot({ path: "artifacts/qa/stellar-industry-390.png", fullPage: true });
+});
+
 test("box selection copies, pastes, moves and upgrades a production blueprint", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openBlueprintStageGame(page);

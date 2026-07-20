@@ -50,6 +50,7 @@ import {
   getDysonSailAbsorptionMultiplier,
   getGalacticIndustrySnapshot,
   getInterstellarCargoCapacity,
+  getInterstellarRouteEconomics,
   getInterstellarTripSeconds,
   getLogisticsSpeedMultiplier,
   getMiningSpeedMultiplier,
@@ -88,6 +89,7 @@ import {
   setGalacticExportEnabled,
   selectTechnology,
   setActivePlanet,
+  setPlanetIndustryRole,
   setActiveDysonSwarmOrbit,
   setBeltPriority,
   setBeltRouteMode,
@@ -2589,6 +2591,28 @@ describe("factory simulation", () => {
     expect(state.tray.titanium_alloy).toBe(0);
     expect(state.tray.logistics_drone).toBe(0);
     expect(setActivePlanet(state, "boreal_giant").activePlanetId).toBe("boreal_giant");
+  });
+
+  it("uses star distance and planet roles in the global industry layer", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics", "space_warp", "stellar_exploration");
+    state.exploration.unlockedSystemIds.push("borealis");
+    state.exploration.colonizedPlanetIds.push("frost");
+    state.construction.interstellar_logistics_station = 2;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: -180, y: 0 });
+    state = setActivePlanet(state, "frost");
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 180, y: 0 });
+    const homeStation = state.entities.find((entity) => entity.planetId === "home" && entity.buildingId === "interstellar_logistics_station")!;
+    const frostStation = state.entities.find((entity) => entity.planetId === "frost" && entity.buildingId === "interstellar_logistics_station")!;
+    const local = getInterstellarRouteEconomics(state, homeStation, homeStation, 1);
+    const remote = getInterstellarRouteEconomics(state, frostStation, homeStation, 1);
+    expect(local.requiresWarp).toBe(false);
+    expect(remote.requiresWarp).toBe(true);
+    expect(remote.distanceLy).toBeCloseTo(4.2, 1);
+    expect(remote.warpersPerTrip).toBe(1);
+    expect(remote.durationSeconds).toBeLessThan(local.durationSeconds);
+    state = setPlanetIndustryRole(state, "frost", "chemical");
+    expect(state.galaxy.planetRoles.frost).toBe("chemical");
   });
 
   it("isolates a device in a separate power grid and reports coverage loss", () => {

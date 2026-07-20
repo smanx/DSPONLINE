@@ -53,6 +53,7 @@ import type {
   ItemId,
   LogisticsPriority,
   PlanetId,
+  PlanetIndustryRole,
   PowerGridId,
   PowerGridMetrics,
   PowerPriority,
@@ -166,6 +167,7 @@ function copyState(state: GameState): GameState {
         planetId,
         { ...profile, colonyCost: profile.colonyCost.map((cost) => ({ ...cost })) },
       ])) as GameState["galaxy"]["profiles"],
+      planetRoles: { ...(state.galaxy.planetRoles ?? {}) },
     },
     recipeFocus: { ...state.recipeFocus, position: { ...state.recipeFocus.position } },
     blueprints: state.blueprints.map((blueprint) => ({
@@ -559,6 +561,59 @@ export function getPlanetaryTripSeconds(state: GameState): number {
 
 export function getInterstellarTripSeconds(state: GameState, requiresWarp = false): number {
   return (requiresWarp ? WARP_TRIP_SECONDS : INTERSTELLAR_TRIP_SECONDS) / getLogisticsSpeedMultiplier(state);
+}
+
+export interface InterstellarRouteEconomics {
+  distanceLy: number;
+  orbitSpan: number;
+  requiresWarp: boolean;
+  durationSeconds: number;
+  cargoPerTrip: number;
+  throughputPerMinute: number;
+  warpersPerTrip: number;
+  powerKw: number;
+  energyMjPerTrip: number;
+}
+
+export function getInterstellarRouteEconomics(
+  state: GameState,
+  source: FactoryEntity,
+  target: FactoryEntity,
+  vehicleCount = 1,
+): InterstellarRouteEconomics {
+  const sourcePlanet = getPlanet(source.planetId);
+  const targetPlanet = getPlanet(target.planetId);
+  const sourceSystem = getStarSystem(sourcePlanet.systemId);
+  const targetSystem = getStarSystem(targetPlanet.systemId);
+  const requiresWarp = sourceSystem.id !== targetSystem.id;
+  const distanceLy = requiresWarp
+    ? Math.max(0.1, Math.abs(sourceSystem.distanceLy - targetSystem.distanceLy))
+    : 0;
+  const orbitSpan = Math.max(1, Math.abs(sourcePlanet.orbitIndex - targetPlanet.orbitIndex));
+  const sourceProfile = getPlanetIndustrialProfile(state, source.planetId);
+  const targetProfile = getPlanetIndustrialProfile(state, target.planetId);
+  const environmentFactor = requiresWarp ? (sourceProfile.travelTimeMultiplier + targetProfile.travelTimeMultiplier) / 2 : 1;
+  const routeFactor = requiresWarp
+    ? Math.min(1.55, 0.78 + distanceLy / 35)
+    : 1;
+  const durationSeconds = round(getInterstellarTripSeconds(state, requiresWarp) * environmentFactor * routeFactor, 2);
+  const vessels = Math.max(1, Math.floor(vehicleCount));
+  const cargoPerTrip = getInterstellarCargoCapacity(state) * vessels;
+  const sourcePower = source.buildingId ? (getBuilding(source.buildingId).powerDemandKw ?? 0) * Math.max(1, source.machineCount) : 0;
+  const targetPower = target.buildingId ? (getBuilding(target.buildingId).powerDemandKw ?? 0) * Math.max(1, target.machineCount) : 0;
+  const drivePower = (requiresWarp ? 900 : 240) * vessels;
+  const powerKw = round(sourcePower + targetPower + drivePower, 2);
+  return {
+    distanceLy: round(distanceLy, 2),
+    orbitSpan,
+    requiresWarp,
+    durationSeconds,
+    cargoPerTrip,
+    throughputPerMinute: round(cargoPerTrip * 60 / Math.max(1, durationSeconds), 2),
+    warpersPerTrip: requiresWarp ? vessels : 0,
+    powerKw,
+    energyMjPerTrip: round(powerKw * durationSeconds / 1_000, 2),
+  };
 }
 
 export function getSolarSailLifetimeSeconds(state: GameState): number {
@@ -2618,7 +2673,7 @@ function dispatchStationScope(
       const cargo = Math.min(available, free, unitCargo * dispatchable);
       const duration = scope === "local"
         ? getPlanetaryTripSeconds(state)
-        : getInterstellarTripSeconds(state, requiresWarp);
+        : getInterstellarRouteEconomics(state, supply, demand, dispatchable).durationSeconds;
       demand.stationRoutes!.push({
         id: `route_${state.nextId}`,
         slotIndex,
@@ -2940,6 +2995,29 @@ export function setActivePlanet(state: GameState, planetId: PlanetId): GameState
   next.tray = { ...next.planetTrays[planetId] };
   next.metrics = { ...getPlanetMetrics(next, planetId) };
   return next;
+}
+
+const PLANET_INDUSTRY_ROLES: PlanetIndustryRole[] = [
+  "auto",
+  "mining",
+  "smelting",
+  "manufacturing",
+  "chemical",
+  "research",
+  "logistics",
+  "power",
+];
+
+export function setPlanetIndustryRole(state: GameState, planetId: PlanetId, role: PlanetIndustryRole): GameState {
+  if (!PLANET_LIST.some((planet) => planet.id === planetId) || !PLANET_INDUSTRY_ROLES.includes(role) ||
+    state.galaxy.planetRoles?.[planetId] === role) return state;
+  return {
+    ...state,
+    galaxy: {
+      ...state.galaxy,
+      planetRoles: { ...(state.galaxy.planetRoles ?? {}), [planetId]: role },
+    },
+  };
 }
 
 export function manualMine(state: GameState, entityId: string, amount = 1): GameState {

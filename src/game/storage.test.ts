@@ -29,6 +29,19 @@ describe("game storage", () => {
     expect(loaded.planetTrays.ashen.titanium_ore).toBe(9);
   });
 
+  it("round-trips planet industry roles and defaults them for legacy saves", () => {
+    const state = createInitialState();
+    state.galaxy.planetRoles.home = "manufacturing";
+    saveGame(state);
+    expect(loadGame().state.galaxy.planetRoles.home).toBe("manufacturing");
+
+    const legacy = JSON.parse(JSON.stringify(state));
+    legacy.version = 22;
+    delete legacy.galaxy.planetRoles;
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
+    expect(loadGame().state.galaxy.planetRoles).toMatchObject({ home: "auto", frost: "auto" });
+  });
+
   it("migrates v16 saves with persistent settings and achievement defaults", () => {
     const legacy = JSON.parse(JSON.stringify(createInitialState()));
     legacy.version = 16;

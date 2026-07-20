@@ -4,11 +4,23 @@ import type {
   ItemId,
   PlanetId,
   PlanetIndustrialProfile,
+  PlanetIndustryRole,
   PlanetSpecialization,
   ResourceMode,
 } from "./types";
 
 export const DEFAULT_GALAXY_SEED = 240721;
+
+export const PLANET_INDUSTRY_ROLE_LABELS: Record<PlanetIndustryRole, string> = {
+  auto: "自动识别",
+  mining: "采矿前哨",
+  smelting: "冶炼基地",
+  manufacturing: "制造中心",
+  chemical: "化工基地",
+  research: "科研中心",
+  logistics: "物流枢纽",
+  power: "能源基地",
+};
 
 interface PlanetProfileBaseline {
   climateName: string;
@@ -168,7 +180,11 @@ export function createGalaxyState(seed = DEFAULT_GALAXY_SEED, preserveBaseline =
     };
     return [planetId, profile];
   })) as GalaxyState["profiles"];
-  return { seed: normalizedSeed, profiles };
+  const planetRoles = Object.fromEntries((Object.keys(BASELINES) as PlanetId[]).map((planetId) => [
+    planetId,
+    "auto" as PlanetIndustryRole,
+  ])) as Record<PlanetId, PlanetIndustryRole>;
+  return { seed: normalizedSeed, profiles, planetRoles };
 }
 
 export function getPlanetIndustrialProfile(state: { galaxy?: GalaxyState }, planetId: PlanetId): PlanetIndustrialProfile {
