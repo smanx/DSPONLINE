@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createInitialState, placeBuilding } from "./engine";
 import {
+  CAMPAIGN_TASKS,
   getCampaignSnapshot,
   getCampaignTaskDeficits,
   getNetworkItemStock,
@@ -71,5 +72,32 @@ describe("campaign progression", () => {
     state = syncCampaignProgress(state);
     state = selectCampaignTask(state, "side_storage");
     expect(syncCampaignProgress(state).campaign.activeTaskId).toBe("side_storage");
+  });
+
+  it("opens the galaxy endgame chapter after Dyson completion and tracks its milestones", () => {
+    const state = createInitialState();
+    const legacyTaskIds = CAMPAIGN_TASKS
+      .filter((task) => task.chapterId !== "galactic_endgame")
+      .map((task) => task.id);
+    state.campaign.completedTaskIds = [...legacyTaskIds];
+    state.campaign.rewardedTaskIds = [...legacyTaskIds];
+    state.campaign.activeTaskId = "absorb_shell_sail";
+    state.campaign.activeChapterId = "dyson_program";
+    state.endgame.infiniteResearch.matrix_compression.level = 1;
+    state.endgame.totalExported = 100;
+    state.endgame.galacticScore = 10_000;
+    for (const project of Object.values(state.endgame.exportProjects)) project.level = 1;
+
+    const advanced = syncCampaignProgress(state);
+    const snapshot = getCampaignSnapshot(advanced);
+    const chapter = snapshot.chapters.find((candidate) => candidate.id === "galactic_endgame");
+    expect(chapter?.complete).toBe(true);
+    expect(advanced.campaign.activeTaskId).toBeNull();
+    expect(advanced.campaign.completedTaskIds).toEqual(expect.arrayContaining([
+      "endgame_infinite_research",
+      "endgame_export",
+      "endgame_score",
+      "endgame_mastery",
+    ]));
   });
 });

@@ -33,7 +33,8 @@ export type CampaignNavigation =
   | { kind: "construction"; constructionId: ConstructionId }
   | { kind: "planet"; planetId: PlanetId }
   | { kind: "system"; systemId: StarSystemId }
-  | { kind: "dyson"; systemId?: StarSystemId };
+  | { kind: "dyson"; systemId?: StarSystemId }
+  | { kind: "galactic" };
 
 export interface CampaignReward {
   constructionId?: ConstructionId;
@@ -54,7 +55,11 @@ type CampaignMetric =
   | { kind: "power"; target: number }
   | { kind: "rare-resource"; target: number }
   | { kind: "spray-coater"; target: number }
-  | { kind: "blueprint"; target: number };
+  | { kind: "blueprint"; target: number }
+  | { kind: "infinite-research"; target: number }
+  | { kind: "exported"; target: number }
+  | { kind: "galactic-score"; target: number }
+  | { kind: "endgame-mastery"; target: number };
 
 export interface CampaignTaskDefinition {
   id: CampaignTaskId;
@@ -111,6 +116,7 @@ export const CAMPAIGN_CHAPTERS: CampaignChapterDefinition[] = [
   { id: "interstellar_logistics", name: "群星工业", summary: "离开母星，把生产网络扩展到新的恒星系。", taskIds: ["unlock_borealis", "deploy_interstellar_station", "complete_interstellar_trip", "side_rare_resource"] },
   { id: "matrix_mastery", name: "矩阵全谱", summary: "完成高阶矩阵生产，为终局工程提供算力。", taskIds: ["produce_information_matrix", "produce_gravity_matrix", "produce_universe_matrix", "side_spray_coater"] },
   { id: "dyson_program", name: "戴森计划", summary: "发射太阳帆与运载火箭，点亮恒星工程。", taskIds: ["launch_solar_sail", "launch_carrier_rocket", "build_dyson_structure", "absorb_shell_sail", "side_blueprint"] },
+  { id: "galactic_endgame", name: "银河终局", summary: "把戴森球的算力转化为无限科研、银河出口与长期挂机目标。", taskIds: ["endgame_infinite_research", "endgame_export", "endgame_score", "endgame_mastery"] },
 ];
 
 export const CAMPAIGN_TASKS: CampaignTaskDefinition[] = [
@@ -226,6 +232,22 @@ export const CAMPAIGN_TASKS: CampaignTaskDefinition[] = [
     id: "side_blueprint", chapterId: "dyson_program", track: "side", title: "保存第一张蓝图", description: "把一段可复用的生产布局保存下来。",
     metric: { kind: "blueprint", target: 1 },
   },
+  {
+    id: "endgame_infinite_research", chapterId: "galactic_endgame", track: "main", title: "启动无限科研", description: "完成第一轮无限科技，把宇宙矩阵变成可持续的工业增幅。",
+    metric: { kind: "infinite-research", target: 1 }, prerequisites: ["absorb_shell_sail"], navigation: { kind: "galactic" }, requirements: [{ itemId: "universe_matrix", amount: 250 }],
+  },
+  {
+    id: "endgame_export", chapterId: "galactic_endgame", track: "main", title: "完成银河出口", description: "向银河项目交付第一批终局物资，建立长期信用来源。",
+    metric: { kind: "exported", target: 100 }, prerequisites: ["endgame_infinite_research"], navigation: { kind: "galactic" },
+  },
+  {
+    id: "endgame_score", chapterId: "galactic_endgame", track: "main", title: "达到银河级评分", description: "通过无限科研与出口项目积累 10,000 点银河评分。",
+    metric: { kind: "galactic-score", target: 10_000 }, prerequisites: ["endgame_export"], navigation: { kind: "galactic" },
+  },
+  {
+    id: "endgame_mastery", chapterId: "galactic_endgame", track: "main", title: "完成银河工业协议", description: "让四类出口项目都达到第 1 级，证明生产网络可以长期自运转。",
+    metric: { kind: "endgame-mastery", target: 1 }, prerequisites: ["endgame_score"], navigation: { kind: "galactic" },
+  },
 ];
 
 const TASK_BY_ID = new Map(CAMPAIGN_TASKS.map((task) => [task.id, task]));
@@ -293,6 +315,17 @@ function metricValue(state: GameState, metric: CampaignMetric): number {
       return state.entities.some((entity) => entity.sprayCoaterInstalled) ? 1 : 0;
     case "blueprint":
       return state.blueprints.length;
+    case "infinite-research":
+      return Object.values(state.endgame?.infiniteResearch ?? {}).reduce((sum, progress) => sum + Math.max(0, Math.floor(progress.level)), 0);
+    case "exported":
+      return Math.max(0, Math.floor(state.endgame?.totalExported ?? 0));
+    case "galactic-score":
+      return Math.max(0, Math.floor(state.endgame?.galacticScore ?? 0));
+    case "endgame-mastery":
+      {
+        const projects = Object.values(state.endgame?.exportProjects ?? {});
+        return projects.length >= 4 && projects.every((project) => project.level >= 1) ? 1 : 0;
+      }
   }
 }
 
@@ -483,6 +516,7 @@ export function getCampaignNavigationLabel(navigation: CampaignNavigation | unde
   }
   if (navigation.kind === "planet") return `前往${getPlanet(navigation.planetId).name}`;
   if (navigation.kind === "system") return `打开${STAR_SYSTEMS[navigation.systemId].name}星图`;
+  if (navigation.kind === "galactic") return "打开银河工业控制台";
   return "打开戴森球规划";
 }
 

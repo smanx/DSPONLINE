@@ -9,6 +9,7 @@ import {
 } from "./engine";
 import { BUILDINGS, ITEMS, PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, getBuilding, getExtractorBuildingId, getPlanet, getRecipe, getTechnology } from "./content";
 import { normalizeCampaignState, syncCampaignProgress } from "./campaign";
+import { isDifficultyMode } from "./difficulty";
 import { isAchievementId } from "./progression";
 import { createGalaxyState, createVeinReserve, isInfiniteResource } from "./galaxy";
 import { createEndgameState, getOfflineSimulationLimitSeconds } from "./endgame";
@@ -836,6 +837,7 @@ export function migrateGame(value: unknown): GameState | null {
       ? saved.settings.autosaveIntervalSeconds
       : initial.settings.autosaveIntervalSeconds,
     resourceMode: saved.version >= 20 && saved.settings?.resourceMode === "finite" ? "finite" : "infinite",
+    difficulty: isDifficultyMode(saved.settings?.difficulty) ? saved.settings.difficulty : initial.settings.difficulty,
   };
 
   const recipeFocus: GameState["recipeFocus"] = {

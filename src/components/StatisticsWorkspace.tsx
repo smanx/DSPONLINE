@@ -1,5 +1,5 @@
 import { AlertTriangle, BarChart3, Box, Calculator, CircleCheckBig, Factory, Gauge, Orbit, Pause, Play, Plus, Rocket, Route, Search, Send, Sparkles, Trash2, TrendingUp, X, Zap } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ITEMS, PLANET_LIST, getBuilding, getItem, getPlanet, getRecipe } from "../game/content";
 import { calculateProductionPlan, getProductionRecipeOptions } from "../game/planning";
 import { calculateFactoryStatistics, type ItemStatistics } from "../game/statistics";
@@ -9,7 +9,7 @@ import { getPlanetIndustrialProfile } from "../game/galaxy";
 import type { GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, RecipeId } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
-type StatisticsTab = "production" | "planning" | "power" | "issues" | "galaxy";
+export type StatisticsTab = "production" | "planning" | "power" | "issues" | "galaxy";
 type ItemFilter = "all" | "producing" | "deficit" | "blocked";
 type ItemSort = "production" | "consumption" | "net" | "inventory" | "name";
 
@@ -28,6 +28,7 @@ interface StatisticsWorkspaceProps {
   onGalacticExportEnabled: (projectId: GalacticExportProjectId, enabled: boolean) => void;
   onGalacticExportPriority: (projectId: GalacticExportProjectId, priority: LogisticsPriority) => void;
   onDispatchGalacticExport: (projectId: GalacticExportProjectId) => void;
+  focusTab?: StatisticsTab | null;
 }
 
 function ItemMark({ itemId }: { itemId: ItemId }) {
@@ -55,7 +56,7 @@ function sortItems(items: ItemStatistics[], sort: ItemSort): ItemStatistics[] {
   });
 }
 
-export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport }: StatisticsWorkspaceProps) {
+export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, focusTab }: StatisticsWorkspaceProps) {
   const [tab, setTab] = useState<StatisticsTab>("production");
   const [filter, setFilter] = useState<ItemFilter>("all");
   const [sort, setSort] = useState<ItemSort>("production");
@@ -81,6 +82,10 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
     consumption: sample.consumptionPerMinute[selectedPlan.itemId] ?? 0,
     inventory: sample.inventory[selectedPlan.itemId] ?? 0,
   })).slice(-60) : [], [game.productionHistory, selectedPlan]);
+
+  useEffect(() => {
+    if (open && focusTab) setTab(focusTab);
+  }, [focusTab, open]);
 
   if (!open) return null;
   const generationUtilization = game.metrics.generationKw > 0

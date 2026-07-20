@@ -20,10 +20,11 @@ import {
 } from "lucide-react";
 import { useRef } from "react";
 import { getPlanet } from "../game/content";
+import { DIFFICULTY_DEFINITIONS } from "../game/difficulty";
 import { ACHIEVEMENTS, getAchievementProgress } from "../game/progression";
 import type { FactoryAlert } from "../game/alerts";
 import type { SaveSlotId, SaveSlotSummary } from "../game/storage";
-import type { AutosaveIntervalSeconds, GameSettings, GameState, SimulationSpeed } from "../game/types";
+import type { AutosaveIntervalSeconds, DifficultyMode, GameSettings, GameState, SimulationSpeed } from "../game/types";
 
 export type OperationsTab = "alerts" | "achievements" | "settings" | "saves";
 
@@ -170,6 +171,17 @@ function SettingsPanel({ game, onChange }: { game: GameState; onChange: (setting
           <button className={settings.resourceMode === "infinite" ? "active" : ""} type="button" onClick={() => onChange({ resourceMode: "infinite" })}>无限矿脉</button>
         </div>
       </section>
+      <section className="settings-group settings-difficulty-group">
+        <header><Gauge size={14} /><span>工业难度</span><small>{DIFFICULTY_DEFINITIONS.find((definition) => definition.id === settings.difficulty)?.name ?? "标准"}</small></header>
+        <div className="settings-segmented settings-difficulty-options" aria-label="工业难度">
+          {DIFFICULTY_DEFINITIONS.map((definition) => (
+            <button className={settings.difficulty === definition.id ? "active" : ""} type="button" key={definition.id} aria-pressed={settings.difficulty === definition.id} onClick={() => onChange({ difficulty: definition.id as DifficultyMode })} title={definition.summary}>
+              {definition.name}
+            </button>
+          ))}
+        </div>
+        <p className="settings-help">{DIFFICULTY_DEFINITIONS.find((definition) => definition.id === settings.difficulty)?.summary ?? "按当前原型的默认节奏运行。"}</p>
+      </section>
     </div>
   );
 }
@@ -241,12 +253,12 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
         </div>
         <button className="operations-close" type="button" onClick={props.onClose} title="关闭运营中心" aria-label="关闭运营中心"><X size={18} /></button>
       </header>
-      <nav className="operations-tabs" aria-label="运营中心视图">
+      <nav className="operations-tabs" role="tablist" aria-label="运营中心视图">
         {TABS.map((tab) => {
           const Icon = tab.icon;
           const count = tab.id === "alerts" ? props.alerts.length : tab.id === "achievements" ? unlockedCount : null;
           return (
-            <button className={props.tab === tab.id ? "active" : ""} type="button" key={tab.id} onClick={() => props.onTabChange(tab.id)}>
+            <button className={props.tab === tab.id ? "active" : ""} type="button" role="tab" aria-selected={props.tab === tab.id} key={tab.id} onClick={() => props.onTabChange(tab.id)}>
               <Icon size={15} /><span>{tab.label}</span>{count != null ? <strong>{count}</strong> : null}
             </button>
           );

@@ -69,6 +69,7 @@ import type {
   TechId,
 } from "./types";
 import { syncCampaignProgress } from "./campaign";
+import { getDifficultyDefinition } from "./difficulty";
 import {
   GALACTIC_EXPORT_DEFINITIONS,
   INFINITE_RESEARCH_BY_ID,
@@ -446,6 +447,7 @@ export function createInitialState(): GameState {
       soundEnabled: false,
       autosaveIntervalSeconds: 2,
       resourceMode: "finite",
+      difficulty: "standard",
     },
     achievements: { unlockedIds: [] },
     campaign: {
@@ -506,26 +508,29 @@ function hasActiveResearch(state: GameState): boolean {
 }
 
 export function getRecipeSpeedMultiplier(state: GameState, recipeId: RecipeId | undefined): number {
-  if (recipeId !== "matrix_research") return getIndustrialEfficiencyMultiplier(state);
+  const difficulty = getDifficultyDefinition(state.settings?.difficulty);
+  if (recipeId !== "matrix_research") return getIndustrialEfficiencyMultiplier(state) * difficulty.productionMultiplier;
   return (1 + (state.research.completedTechIds.includes("research_speed_1") ? 0.25 : 0) +
     (state.research.completedTechIds.includes("research_speed_2") ? 0.25 : 0) +
     (state.research.completedTechIds.includes("research_speed_3") ? 0.25 : 0)) *
-    (1 + getInfiniteResearchLevel(state, "matrix_compression") * 0.1);
+    (1 + getInfiniteResearchLevel(state, "matrix_compression") * 0.1) * difficulty.productionMultiplier;
 }
 
 export function getMiningSpeedMultiplier(state: GameState): number {
+  const difficulty = getDifficultyDefinition(state.settings?.difficulty);
   const base = state.research.completedTechIds.includes("mining_speed_3")
     ? 3
     : state.research.completedTechIds.includes("mining_speed_2")
       ? 2
       : state.research.completedTechIds.includes("mining_speed_1") ? 1.5 : 1;
-  return base * (1 + getInfiniteResearchLevel(state, "vein_utilization") * 0.1);
+  return base * (1 + getInfiniteResearchLevel(state, "vein_utilization") * 0.1) * difficulty.miningMultiplier;
 }
 
 export function getLogisticsSpeedMultiplier(state: GameState): number {
+  const difficulty = getDifficultyDefinition(state.settings?.difficulty);
   return (1 + (state.research.completedTechIds.includes("logistics_engine_1") ? 0.5 : 0) +
     (state.research.completedTechIds.includes("logistics_engine_2") ? 0.5 : 0)) *
-    (1 + getInfiniteResearchLevel(state, "galactic_logistics") * 0.05);
+    (1 + getInfiniteResearchLevel(state, "galactic_logistics") * 0.05) * difficulty.logisticsMultiplier;
 }
 
 export function getPlanetaryCargoCapacity(state: GameState): number {
@@ -1844,6 +1849,7 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
   let disconnectedDemandKw = 0;
   let generatorCount = 0;
   const profile = getPlanetIndustrialProfile(state, planetId);
+  const difficultyPowerMultiplier = getDifficultyDefinition(state.settings?.difficulty).powerDemandMultiplier;
   const consumers: PowerConsumer[] = [];
   const fuelCandidates: PowerCandidate[] = [];
   const accumulatorCandidates: PowerCandidate[] = [];
@@ -1896,7 +1902,7 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
         const extractor = extractorFor(entity);
         const capacity = extractor.outputCapacity * entity.minerCount;
         if ((entity.outputs[entity.resourceId!] ?? 0) < capacity - EPSILON) {
-          disconnectedDemandKw += (extractor.powerDemandKw ?? 0) * entity.minerCount;
+          disconnectedDemandKw += (extractor.powerDemandKw ?? 0) * entity.minerCount * difficultyPowerMultiplier;
         }
         continue;
       }
@@ -1904,30 +1910,30 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
       const extractor = extractorFor(entity);
       const capacity = extractor.outputCapacity * entity.minerCount;
       if ((entity.outputs[entity.resourceId!] ?? 0) < capacity - EPSILON) {
-        consumers.push({ entity, demandKw: (extractor.powerDemandKw ?? 0) * entity.minerCount });
+        consumers.push({ entity, demandKw: (extractor.powerDemandKw ?? 0) * entity.minerCount * difficultyPowerMultiplier });
       }
     } else if (canMachineRun(state, entity) && entity.buildingId) {
       if (!isEntityInPowerCoverage(state, entity)) {
         disconnectedEntities += 1;
         factorByEntity.set(entity.id, 0);
         disconnectedDemandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount *
-          getEntityProliferatorPowerMultiplier(entity);
+          getEntityProliferatorPowerMultiplier(entity) * difficultyPowerMultiplier;
         continue;
       }
       connectedEntities += 1;
       consumers.push({
         entity,
-        demandKw: (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * getEntityProliferatorPowerMultiplier(entity),
+        demandKw: (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * getEntityProliferatorPowerMultiplier(entity) * difficultyPowerMultiplier,
       });
     } else if (entity.kind === "station" && entity.buildingId && stationRouteReady(state, entity)) {
       if (!isEntityInPowerCoverage(state, entity)) {
         disconnectedEntities += 1;
         factorByEntity.set(entity.id, 0);
-        disconnectedDemandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount;
+        disconnectedDemandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier;
         continue;
       }
       connectedEntities += 1;
-      consumers.push({ entity, demandKw: (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount });
+      consumers.push({ entity, demandKw: (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier });
     }
   }
 
@@ -3735,17 +3741,31 @@ export function craftConstruction(state: GameState, buildingId: ConstructionId):
 
 function sourceProduces(entity: FactoryEntity, itemId: ItemId): boolean {
   if (entity.kind === "vein") return entity.resourceId === itemId;
+  if (entity.kind === "station" && entity.buildingId !== "orbital_collector") {
+    // A logistics station can expose up to five independent item slots. The
+    // legacy storedItemId field mirrors only the first configured slot, so
+    // using it here silently invalidates every second/third belt output.
+    return getStationSlots(entity).some((slot) => slot.itemId === itemId);
+  }
   if (entity.kind === "storage" || entity.kind === "splitter" || entity.kind === "station") return entity.storedItemId === itemId;
   return getRecipe(entity.recipeId)?.outputs.some((output) => output.itemId === itemId) ?? false;
 }
 
-export function connectBelt(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1): GameState {
+export function canConnectBelt(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1): boolean {
   const constructionId = getBeltConstructionId(tier);
-  if ((state.construction[constructionId] ?? 0) < 1 || sourceId === targetId) return state;
+  if ((state.construction[constructionId] ?? 0) < 1 || sourceId === targetId) return false;
   const source = state.entities.find((entity) => entity.id === sourceId);
   const target = state.entities.find((entity) => entity.id === targetId);
-  if (!source || !target || source.planetId !== target.planetId ||
-    !sourceProduces(source, itemId) || !targetConsumes(state, target, itemId)) return state;
+  return Boolean(source && target && source.planetId === target.planetId &&
+    sourceProduces(source, itemId) && targetConsumes(state, target, itemId));
+}
+
+export function connectBelt(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1): GameState {
+  const constructionId = getBeltConstructionId(tier);
+  if (!canConnectBelt(state, sourceId, targetId, itemId, tier)) return state;
+  const source = state.entities.find((entity) => entity.id === sourceId);
+  const target = state.entities.find((entity) => entity.id === targetId);
+  if (!source || !target) return state;
   const next = copyState(state);
   configureTargetItem(next.entities.find((entity) => entity.id === targetId)!, itemId);
   const existing = next.belts.find((belt) => belt.source === sourceId && belt.target === targetId && belt.itemId === itemId);

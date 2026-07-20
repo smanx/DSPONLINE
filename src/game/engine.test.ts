@@ -21,6 +21,7 @@ import {
   canUpgradeBelt,
   canUpgradeEntity,
   canUpgradeSorter,
+  canConnectBelt,
   canQueueTechnology,
   canSelectTechnology,
   connectBelt,
@@ -118,6 +119,19 @@ import { getGalacticExportTarget } from "./endgame";
 import { TECHNOLOGY_LIST } from "./content";
 
 describe("factory simulation", () => {
+  it("applies difficulty presets to production, mining and logistics multipliers", () => {
+    const relaxed = createInitialState();
+    relaxed.settings.difficulty = "relaxed";
+    const hard = createInitialState();
+    hard.settings.difficulty = "hard";
+    expect(getRecipeSpeedMultiplier(relaxed, "iron_ingot")).toBeCloseTo(1.15, 5);
+    expect(getMiningSpeedMultiplier(relaxed)).toBeCloseTo(1.15, 5);
+    expect(getLogisticsSpeedMultiplier(relaxed)).toBeCloseTo(1.1, 5);
+    expect(getRecipeSpeedMultiplier(hard, "iron_ingot")).toBeCloseTo(0.85, 5);
+    expect(getMiningSpeedMultiplier(hard)).toBeCloseTo(0.85, 5);
+    expect(getLogisticsSpeedMultiplier(hard)).toBeCloseTo(0.9, 5);
+  });
+
   it("keeps the complete technology graph valid, acyclic and tier ordered", () => {
     const technologies = new Map(TECHNOLOGY_LIST.map((technology) => [technology.id, technology]));
     const visiting = new Set<string>();
@@ -812,6 +826,11 @@ describe("factory simulation", () => {
     expect(state.entities.find((entity) => entity.id === smelter.id)?.inputs.iron_ore).toBe(3);
   });
 
+  it("rejects a belt whose source or target no longer matches the selected item", () => {
+    const state = createInitialState();
+    expect(canConnectBelt(state, "vein_iron", "vein_copper", "iron_ore")).toBe(false);
+  });
+
   it("connects every input line of a three-material chemical recipe", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("polymer_chemistry");
@@ -845,6 +864,39 @@ describe("factory simulation", () => {
       plastic: 3,
       refined_oil: 3,
       water: 3,
+    });
+  });
+
+  it("connects and transfers every configured output slot from a logistics station", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("automatic_metallurgy", "high_strength_crystal", "basic_chemical_engineering", "titanium_alloy");
+    state.construction.interstellar_logistics_station = 1;
+    state.construction.arc_smelter = 1;
+    state.construction.conveyor_belt_mk1 = 3;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: -300, y: 0 });
+    state = placeBuilding(state, "arc_smelter", { x: 240, y: 0 });
+    const station = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    const alloy = state.entities.find((entity) => entity.buildingId === "arc_smelter")!;
+    state = setStationSlotItem(state, station.id, 0, "steel");
+    state = setStationSlotItem(state, station.id, 1, "titanium_ingot");
+    state = setStationSlotItem(state, station.id, 2, "sulfuric_acid");
+    state = setEntityRecipe(state, alloy.id, "titanium_alloy");
+    const stationAfterConfig = state.entities.find((entity) => entity.id === station.id)!;
+    stationAfterConfig.outputs.steel = 20;
+    stationAfterConfig.outputs.titanium_ingot = 20;
+    stationAfterConfig.outputs.sulfuric_acid = 20;
+
+    state = connectBelt(state, station.id, alloy.id, "steel");
+    state = connectBelt(state, station.id, alloy.id, "titanium_ingot");
+    state = connectBelt(state, station.id, alloy.id, "sulfuric_acid");
+
+    expect(state.belts.map((belt) => belt.itemId)).toEqual(["steel", "titanium_ingot", "sulfuric_acid"]);
+    expect(state.construction.conveyor_belt_mk1).toBe(0);
+    state = advanceSimulation(state, 1);
+    expect(state.entities.find((entity) => entity.id === alloy.id)?.inputs).toMatchObject({
+      steel: 3,
+      titanium_ingot: 3,
+      sulfuric_acid: 3,
     });
   });
 

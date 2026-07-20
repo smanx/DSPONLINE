@@ -66,6 +66,7 @@ export interface FactoryNodeData extends Record<string, unknown> {
   completedTechIds: TechId[];
   networkTime: number;
   paused: boolean;
+  powerDemandMultiplier: number;
   activeLogisticsEntityIds: string[];
   connectionDraft: { nodeId: string; itemId: ItemId; handleType: "source" | "target" } | null;
   dysonSwarm: DysonSwarmState;
@@ -491,7 +492,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         </div>
       ) : null}
       <footer className="factory-node__footer">
-        <span><Zap size={11} /> {rayReceiver ? `${(entity.powerOutputKw ?? 0).toFixed(0)} kW 接收` : `${((building.powerDemandKw ?? 0) * entity.machineCount * getEntityProliferatorPowerMultiplier(entity)).toFixed(0)} kW`}</span>
+        <span><Zap size={11} /> {rayReceiver ? `${(entity.powerOutputKw ?? 0).toFixed(0)} kW 接收` : `${((building.powerDemandKw ?? 0) * entity.machineCount * getEntityProliferatorPowerMultiplier(entity) * data.powerDemandMultiplier).toFixed(0)} kW`}</span>
         <span><Gauge size={11} /> {railEjector ? `累计 ${formatAmount(data.dysonSwarm.totalLaunched)} 帆` : launchSilo ? `累计 ${formatAmount(data.dysonSphere.totalRocketsLaunched)} 枚` : `${(building.speed * speedMultiplier * getEntityProliferatorSpeedMultiplier(entity)).toFixed(2)}×`}</span>
       </footer>
     </article>

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 async function freshGame(page: Page) {
   await page.goto("/");
@@ -1037,6 +1037,111 @@ async function openOperationsStageGame(page: Page) {
   await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
 }
 
+async function openCampaignEndgameStageGame(page: Page) {
+  await page.addInitScript(() => {
+    const completedTaskIds = [
+      "mine_first_ore", "smelt_iron", "deploy_miner", "lay_first_belt", "deploy_matrix_lab", "produce_blue_matrix",
+      "refine_oil", "produce_plastic", "produce_red_matrix", "deploy_planetary_station", "complete_planetary_trip",
+      "produce_structure_matrix", "unlock_borealis", "deploy_interstellar_station", "complete_interstellar_trip",
+      "produce_information_matrix", "produce_gravity_matrix", "produce_universe_matrix", "launch_solar_sail",
+      "launch_carrier_rocket", "build_dyson_structure", "absorb_shell_sail", "side_storage", "side_stable_power",
+      "side_belt_upgrade", "side_rare_resource", "side_spray_coater", "side_blueprint",
+    ];
+    const state = {
+      version: 23,
+      nextId: 1,
+      activePlanetId: "home",
+      entities: [],
+      belts: [],
+      construction: {},
+      tray: { universe_matrix: 250 },
+      planetTrays: { home: { universe_matrix: 250 } },
+      totalProduced: { universe_matrix: 250 },
+      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["universe_matrix"] },
+      exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home", "ashen", "giant"], missions: [], surveyProgressBySystem: { helios: 1 } },
+      campaign: { activeChapterId: "dyson_program", activeTaskId: "absorb_shell_sail", completedTaskIds, rewardedTaskIds: completedTaskIds },
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
+async function openTitaniumRoutingGame(page: Page) {
+  await page.addInitScript(() => {
+    const base = { planetId: "home", machineCount: 1, minerCount: 0, inputs: {}, progress: 0, routingCursor: 0, utilization: 0, productionRate: 0 };
+    const state = {
+      version: 23,
+      nextId: 8,
+      activePlanetId: "home",
+      entities: [
+        { ...base, id: "titanium_source", kind: "machine", position: { x: 650, y: -300 }, buildingId: "arc_smelter", recipeId: "titanium_ingot", outputs: { titanium_ingot: 20 } },
+        { ...base, id: "steel_source", kind: "machine", position: { x: 650, y: 0 }, buildingId: "arc_smelter", recipeId: "steel", outputs: { steel: 20 } },
+        { ...base, id: "acid_source", kind: "machine", position: { x: 650, y: 300 }, buildingId: "chemical_plant", recipeId: "sulfuric_acid", outputs: { sulfuric_acid: 20 } },
+        { ...base, id: "alloy_target", kind: "machine", position: { x: 1100, y: 0 }, buildingId: "arc_smelter", recipeId: "titanium_alloy", outputs: {} },
+        { ...base, id: "routing_wind", kind: "power", position: { x: 900, y: -360 }, buildingId: "wind_turbine", machineCount: 8, outputs: {} },
+      ],
+      belts: [],
+      construction: { conveyor_belt_mk1: 3 },
+      tray: {},
+      planetTrays: { home: {} },
+      totalProduced: {},
+      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["automatic_metallurgy", "high_strength_crystal", "high_efficiency_plasma_control", "basic_chemical_engineering", "titanium_alloy"] },
+      exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home", "ashen", "giant"], missions: [], surveyProgressBySystem: { helios: 1 } },
+      paused: false,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
+async function openMultiSlotStationRoutingGame(page: Page) {
+  await page.addInitScript(() => {
+    const slot = (itemId: string) => ({ itemId, localMode: "storage", remoteMode: "supply", minimumLoad: 1, minStock: 0, maxStock: 0, priority: 1 });
+    const base = { planetId: "home", machineCount: 1, minerCount: 0, inputs: {}, outputs: {}, progress: 0, routingCursor: 0, utilization: 0, productionRate: 0 };
+    const state = {
+      version: 23,
+      nextId: 5,
+      activePlanetId: "home",
+      entities: [
+        {
+          ...base,
+          id: "multi_station",
+          kind: "station",
+          position: { x: 0, y: -120 },
+          buildingId: "interstellar_logistics_station",
+          storedItemId: "steel",
+          stationSlots: [slot("steel"), slot("titanium_ingot"), slot("sulfuric_acid")],
+          outputs: { steel: 20, titanium_ingot: 20, sulfuric_acid: 20 },
+          stationVessels: 0,
+          stationWarpers: 0,
+          stationProgress: 0,
+          stationTrips: 0,
+        },
+        { ...base, id: "multi_alloy", kind: "machine", position: { x: 420, y: -160 }, buildingId: "arc_smelter", recipeId: "titanium_alloy" },
+        { ...base, id: "multi_chemical", kind: "machine", position: { x: 420, y: 180 }, buildingId: "chemical_plant", recipeId: "graphene" },
+      ],
+      belts: [],
+      construction: { conveyor_belt_mk1: 3 },
+      tray: {},
+      planetTrays: { home: {} },
+      totalProduced: {},
+      research: {
+        selectedTechId: null,
+        queuedTechIds: [],
+        progressByTech: {},
+        completedTechIds: ["automatic_metallurgy", "high_strength_crystal", "basic_chemical_engineering", "energy_matrix", "nanomaterials", "titanium_alloy"],
+      },
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("行星工厂网络", { exact: true })).toBeVisible();
+}
+
 async function openOfflineStageGame(page: Page) {
   await page.addInitScript(() => {
     const base = {
@@ -1943,6 +2048,91 @@ test("a chemical plant accepts plastic, refined oil and water transport lines to
   await page.screenshot({ path: "artifacts/qa/chemical-three-input-routing-1440.png", fullPage: true });
 });
 
+test("a second titanium alloy input line transfers after the first line", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openTitaniumRoutingGame(page);
+  await page.locator(".react-flow__controls-fitview").click();
+  const target = page.locator('.react-flow__node[data-id="alloy_target"] .machine-node');
+  const connect = async (sourceId: string, itemText: string, expectedEdges: number) => {
+    const source = page.locator(`.react-flow__node[data-id="${sourceId}"]`).locator(".node-port").filter({ hasText: itemText }).locator(".factory-handle--output");
+    const input = target.locator(".node-port--input").filter({ hasText: itemText }).locator(".factory-handle--input");
+    const sourceBox = await source.boundingBox();
+    const inputBox = await input.boundingBox();
+    expect(sourceBox).not.toBeNull();
+    expect(inputBox).not.toBeNull();
+    await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(inputBox!.x + inputBox!.width / 2, inputBox!.y + inputBox!.height / 2, { steps: 12 });
+    await page.waitForTimeout(400);
+    await page.mouse.up();
+    await expect(page.locator(".react-flow__edge")).toHaveCount(expectedEdges);
+  };
+  await connect("steel_source", "钢材", 1);
+  await connect("titanium_source", "钛块", 2);
+  await connect("acid_source", "硫酸", 3);
+  await page.waitForTimeout(2_500);
+  await expect.poll(async () => Number(await target.locator(".node-port--input").filter({ hasText: "钛块" }).locator("strong").textContent()), { timeout: 8_000 }).toBeGreaterThan(0);
+  await expect.poll(async () => Number(await target.locator(".node-port--input").filter({ hasText: "钢材" }).locator("strong").textContent()), { timeout: 8_000 }).toBeGreaterThan(0);
+  await expect.poll(async () => Number(await target.locator(".node-port--input").filter({ hasText: "硫酸" }).locator("strong").textContent()), { timeout: 8_000 }).toBeGreaterThan(0);
+});
+
+test("rapid consecutive belt drags keep the second connection instead of using stale stock", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openTitaniumRoutingGame(page);
+  await page.locator(".react-flow__controls-fitview").click();
+  const target = page.locator('.react-flow__node[data-id="alloy_target"] .machine-node');
+  const dragConnection = async (sourceId: string, itemText: string) => {
+    const source = page.locator(`.react-flow__node[data-id="${sourceId}"]`).locator(".node-port").filter({ hasText: itemText }).locator(".factory-handle--output");
+    const input = target.locator(".node-port--input").filter({ hasText: itemText }).locator(".factory-handle--input");
+    const sourceBox = await source.boundingBox();
+    const inputBox = await input.boundingBox();
+    await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(inputBox!.x + inputBox!.width / 2, inputBox!.y + inputBox!.height / 2, { steps: 8 });
+    await page.mouse.up();
+  };
+  await dragConnection("steel_source", "钢材");
+  await dragConnection("titanium_source", "钛块");
+  await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+  await expect(page.getByRole("status")).not.toContainText("运输线未建立");
+});
+
+test("multi-slot station outputs connect beyond the first slot and expose belt feedback", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openMultiSlotStationRoutingGame(page);
+  await page.locator(".react-flow__controls-fitview").click();
+  const station = page.locator('.react-flow__node[data-id="multi_station"]');
+  const alloy = page.locator('.react-flow__node[data-id="multi_alloy"]');
+  const chemical = page.locator('.react-flow__node[data-id="multi_chemical"]');
+  await expect(station.locator(".factory-handle--output")).toHaveCount(3);
+  await expect(station.getByTitle("拿取钛块")).toBeVisible();
+  await expect(station.getByTitle("拿取硫酸")).toBeVisible();
+
+  const dragConnection = async (sourceNode: Locator, itemText: string, targetNode: Locator, expectedEdges: number, inspectGhost = false, targetItemText = itemText) => {
+    const source = sourceNode.locator(".node-port").filter({ hasText: itemText }).locator(".factory-handle--output");
+    const target = targetNode.locator(".node-port").filter({ hasText: targetItemText }).locator(".factory-handle--input");
+    const sourceBox = await source.boundingBox();
+    const targetBox = await target.boundingBox();
+    expect(sourceBox).not.toBeNull();
+    expect(targetBox).not.toBeNull();
+    await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 12 });
+    if (inspectGhost) await expect(page.locator(".factory-connection-preview__path")).toBeVisible();
+    await page.mouse.up();
+    await expect(page.locator(".react-flow__edge")).toHaveCount(expectedEdges);
+  };
+
+  await dragConnection(station, "钛块", alloy, 1, true);
+  await dragConnection(station, "硫酸", chemical, 2);
+  await expect(page.getByRole("status")).toContainText("硫酸运输线已建立");
+
+  // A mismatched release must leave an explicit failure instead of silently
+  // discarding the drag.
+  await dragConnection(station, "钛块", chemical, 2, false, "硫酸");
+  await expect(page.getByRole("status")).toContainText("运输线未建立");
+});
+
 test("Dyson planner builds independent orbital layers across unlocked star systems", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openDysonPlannerGame(page);
@@ -2507,7 +2697,7 @@ test("operations center diagnoses equipment and records achievement progress", a
   }).toBe(true);
 
   await page.getByLabel("打开运营中心").click();
-  await operations.locator(".operations-tabs").getByRole("button", { name: /成就/ }).click();
+  await operations.locator(".operations-tabs").getByRole("tab", { name: /成就/ }).click();
   await expect(operations.locator(".achievement-row").filter({ hasText: "第一镐" })).toHaveClass(/achievement-row--complete/);
   await expect(operations.locator(".achievement-row").filter({ hasText: "自动化开端" })).toHaveClass(/achievement-row--complete/);
   await expect(operations.locator(".achievement-row").filter({ hasText: "蓝色火花" })).toHaveClass(/achievement-row--complete/);
@@ -2518,7 +2708,7 @@ test("operations settings and local save slots persist across reload", async ({ 
   await openOperationsStageGame(page);
   await page.getByLabel("打开运营中心").click();
   let operations = page.getByRole("dialog", { name: "运营中心" });
-  await operations.locator(".operations-tabs").getByRole("button", { name: "设置" }).click();
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
   await operations.getByRole("button", { name: "4×" }).click();
   await operations.locator(".setting-row").filter({ hasText: "性能模式" }).click();
   await operations.locator(".setting-row").filter({ hasText: "减少动态效果" }).click();
@@ -2528,7 +2718,7 @@ test("operations settings and local save slots persist across reload", async ({ 
   await expect(page.locator(".game-shell")).toHaveAttribute("data-reduced-motion", "true");
 
   await page.waitForTimeout(700);
-  await operations.locator(".operations-tabs").getByRole("button", { name: "存档" }).click();
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "存档" }).click();
   await operations.getByRole("button", { name: "立即保存" }).click();
   const elapsedSeconds = await page.evaluate(() => JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1")!).state.elapsedSeconds as number);
   expect(elapsedSeconds).toBeGreaterThan(1.5);
@@ -2546,7 +2736,7 @@ test("operations settings and local save slots persist across reload", async ({ 
   await expect(page.locator(".game-shell")).toHaveAttribute("data-reduced-motion", "true");
   await page.getByLabel("打开运营中心").click();
   operations = page.getByRole("dialog", { name: "运营中心" });
-  await operations.locator(".operations-tabs").getByRole("button", { name: "设置" }).click();
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
   await expect(operations.locator(".setting-row").filter({ hasText: "性能模式" }).locator('input[type="checkbox"]')).toBeChecked();
   await expect(operations.locator(".setting-row").filter({ hasText: "减少动态效果" }).locator('input[type="checkbox"]')).toBeChecked();
   await expect(operations.locator(".setting-row").filter({ hasText: "操作音效" }).locator('input[type="checkbox"]')).toBeChecked();
@@ -2583,7 +2773,7 @@ test("running equipment uses semantic animation and reduced motion disables it",
 
   await page.getByLabel("打开运营中心").click();
   const operations = page.getByRole("dialog", { name: "运营中心" });
-  await operations.locator(".operations-tabs").getByRole("button", { name: "设置" }).click();
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
   await operations.locator(".setting-row").filter({ hasText: "减少动态效果" }).click();
   await operations.getByLabel("关闭运营中心").click();
   const durationMs = await runningNode.evaluate((element) => {
@@ -2780,4 +2970,29 @@ test("campaign migration preserves legacy inventory while restoring task progres
   const campaign = page.getByRole("dialog", { name: "主线任务中心" });
   await expect(campaign).toContainText("铸造基础铁块");
   await expect(page.locator(".construction-item").filter({ hasText: "传送带 Mk.I" }).first()).toContainText("×10");
+});
+
+test("galaxy endgame campaign routes into the console and difficulty controls stay accessible", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openCampaignEndgameStageGame(page);
+  await page.getByLabel("打开主线任务中心").first().click();
+  const campaign = page.getByRole("dialog", { name: "主线任务中心" });
+  await expect(campaign).toContainText("银河终局");
+  await expect(campaign).toContainText("启动无限科研");
+  await campaign.getByRole("button", { name: "打开银河工业控制台" }).first().click();
+  const statistics = page.getByRole("dialog", { name: "生产统计" });
+  await expect(statistics).toBeVisible();
+  await expect(statistics.getByRole("tab", { name: /银河/ })).toHaveAttribute("aria-selected", "true");
+
+  await page.keyboard.press("Escape");
+  await expect(statistics).toHaveCount(0);
+  await page.getByLabel("打开运营中心").click();
+  const operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.getByRole("tab", { name: "设置" }).click();
+  await expect(operations).toContainText("工业难度");
+  await operations.getByRole("button", { name: "高压" }).click();
+  await expect(operations.getByRole("button", { name: "高压" })).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Space");
+  await expect(page.getByLabel("暂停模拟")).toBeVisible();
 });

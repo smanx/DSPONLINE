@@ -45,6 +45,7 @@ describe("game storage", () => {
       soundEnabled: false,
       autosaveIntervalSeconds: 2,
       resourceMode: "infinite",
+      difficulty: "standard",
     });
     expect(loaded.achievements.unlockedIds).toEqual([]);
   });
@@ -58,6 +59,7 @@ describe("game storage", () => {
       soundEnabled: true,
       autosaveIntervalSeconds: 30,
       resourceMode: "infinite",
+      difficulty: "standard",
     };
     state.achievements.unlockedIds = ["first_manual_mine", "dyson_swarm_online"];
     const serialized = JSON.parse(exportGame(state));

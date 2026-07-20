@@ -281,6 +281,8 @@ export type EnergyMode = "auto" | "charge" | "discharge";
 export type PowerGridId = "grid-a" | "grid-b" | "grid-c";
 export type PowerPriority = 1 | 2 | 3;
 export type ResourceMode = "finite" | "infinite";
+/** Runtime balance preset. Missing values in legacy saves migrate to standard. */
+export type DifficultyMode = "relaxed" | "standard" | "hard";
 export type RecipeFocusMode = "full" | "two-level";
 export type SimulationSpeed = 1 | 2 | 4;
 export type AutosaveIntervalSeconds = 2 | 10 | 30;
@@ -356,7 +358,8 @@ export type CampaignChapterId =
   | "planetary_logistics"
   | "interstellar_logistics"
   | "matrix_mastery"
-  | "dyson_program";
+  | "dyson_program"
+  | "galactic_endgame";
 
 export type CampaignTaskId =
   | "mine_first_ore"
@@ -386,7 +389,11 @@ export type CampaignTaskId =
   | "side_belt_upgrade"
   | "side_rare_resource"
   | "side_spray_coater"
-  | "side_blueprint";
+  | "side_blueprint"
+  | "endgame_infinite_research"
+  | "endgame_export"
+  | "endgame_score"
+  | "endgame_mastery";
 
 export interface CampaignState {
   activeChapterId: CampaignChapterId;
@@ -815,6 +822,7 @@ export interface GameSettings {
   soundEnabled: boolean;
   autosaveIntervalSeconds: AutosaveIntervalSeconds;
   resourceMode: ResourceMode;
+  difficulty: DifficultyMode;
 }
 
 export interface AchievementState {

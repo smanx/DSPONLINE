@@ -1431,7 +1431,7 @@ export function HeaderControls({
         </div> : null}
         <button className="mobile-toggle" type="button" onClick={onOpenResources} title="物资托盘" aria-label="打开物资托盘"><PackageOpen size={17} /></button>
         <button className="mobile-toggle" type="button" onClick={onOpenInspector} title="检查器" aria-label="打开检查器"><PanelRight size={17} /></button>
-        <button type="button" onClick={onPauseToggle} title={game.paused ? "继续模拟" : "暂停模拟"} aria-label={game.paused ? "继续模拟" : "暂停模拟"}>
+        <button type="button" onClick={onPauseToggle} title={`${game.paused ? "继续模拟" : "暂停模拟"}（Space）`} aria-label={game.paused ? "继续模拟" : "暂停模拟"} aria-keyshortcuts="Space">
           {game.paused ? <Play size={17} /> : <Pause size={17} />}
         </button>
         <button type="button" onClick={onReset} title="重置当前工厂" aria-label="重置当前工厂"><Trash2 size={17} /></button>

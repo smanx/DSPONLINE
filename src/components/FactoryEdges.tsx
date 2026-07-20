@@ -1,4 +1,4 @@
-import { BaseEdge, EdgeLabelRenderer, getBezierPath, type Edge, type EdgeProps } from "@xyflow/react";
+import { BaseEdge, EdgeLabelRenderer, getBezierPath, type ConnectionLineComponentProps, type Edge, type EdgeProps } from "@xyflow/react";
 import type { ItemId } from "../game/types";
 
 export interface FactoryEdgeData extends Record<string, unknown> {
@@ -19,6 +19,39 @@ export interface FactoryEdgeData extends Record<string, unknown> {
 }
 
 export type FactoryFlowEdge = Edge<FactoryEdgeData, "factory">;
+
+/**
+ * The default React Flow preview is easy to miss against a dense factory
+ * canvas. Keep the preview in the same visual language as a belt, while
+ * exposing valid/invalid state before the pointer is released.
+ */
+export function FactoryConnectionLine({
+  fromX,
+  fromY,
+  toX,
+  toY,
+  fromPosition,
+  toPosition,
+  connectionStatus,
+  connectionLineStyle,
+}: ConnectionLineComponentProps) {
+  const [path] = getBezierPath({
+    sourceX: fromX,
+    sourceY: fromY,
+    sourcePosition: fromPosition,
+    targetX: toX,
+    targetY: toY,
+    targetPosition: toPosition,
+  });
+  const tone = connectionStatus === "valid" ? "valid" : connectionStatus === "invalid" ? "invalid" : "pending";
+  return (
+    <g className={`factory-connection-preview factory-connection-preview--${tone}`} aria-hidden="true">
+      <path className="factory-connection-preview__halo" d={path} />
+      <path className="factory-connection-preview__path" d={path} style={connectionLineStyle} />
+      <circle className="factory-connection-preview__target" cx={toX} cy={toY} r="6" />
+    </g>
+  );
+}
 
 export function FactoryEdge({
   id,

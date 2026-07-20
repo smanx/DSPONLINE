@@ -1790,6 +1790,58 @@ select:focus-visible {
   filter: drop-shadow(0 0 3px rgba(98, 181, 174, 0.4));
 }
 
+/* Animated ghost belt shown while a connection is being dragged. */
+.factory-connection-preview {
+  overflow: visible;
+  pointer-events: none;
+}
+
+.factory-connection-preview__halo {
+  fill: none;
+  stroke: rgba(98, 181, 174, 0.18);
+  stroke-width: 12;
+  stroke-linecap: round;
+}
+
+.factory-connection-preview__path {
+  fill: none;
+  stroke: #79d9ca;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 12 8;
+  animation: factory-connection-dash 560ms linear infinite;
+  filter: drop-shadow(0 0 5px rgba(98, 181, 174, 0.72));
+}
+
+.factory-connection-preview__target {
+  fill: #79d9ca;
+  stroke: #e3fff8;
+  stroke-width: 2;
+  filter: drop-shadow(0 0 5px rgba(98, 181, 174, 0.72));
+}
+
+.factory-connection-preview--valid .factory-connection-preview__path {
+  stroke: #8de0a9;
+  filter: drop-shadow(0 0 6px rgba(88, 204, 128, 0.78));
+}
+
+.factory-connection-preview--valid .factory-connection-preview__target {
+  fill: #8de0a9;
+}
+
+.factory-connection-preview--invalid .factory-connection-preview__path {
+  stroke: #ef9b8f;
+  filter: drop-shadow(0 0 6px rgba(216, 102, 91, 0.72));
+}
+
+.factory-connection-preview--invalid .factory-connection-preview__target {
+  fill: #ef9b8f;
+}
+
+@keyframes factory-connection-dash {
+  to { stroke-dashoffset: -20; }
+}
+
 .node-cargo-match {
   display: block;
   padding: 0 10px 9px;
@@ -10268,6 +10320,26 @@ select {
   color: var(--green);
 }
 
+.settings-difficulty-group {
+  align-items: start;
+}
+
+.settings-difficulty-group > header {
+  padding-top: 8px;
+}
+
+.settings-difficulty-options {
+  min-width: 0;
+}
+
+.settings-help {
+  grid-column: 2;
+  margin: -8px 0 4px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
 .settings-toggle-list {
   display: grid;
   grid-template-columns: 1fr;
@@ -10880,6 +10952,16 @@ select {
   animation: none;
 }
 
+/* Make the selected balance preset perceptible without adding another panel. */
+.game-shell[data-difficulty="relaxed"] .canvas-status span::before {
+  background: var(--cyan);
+}
+
+.game-shell[data-difficulty="hard"] .canvas-status span::before {
+  background: var(--yellow);
+  box-shadow: 0 0 0 3px rgba(215, 184, 93, 0.12);
+}
+
 @media (max-width: 760px) {
   .operations-workspace {
     inset: 58px 0 96px;
@@ -10978,6 +11060,11 @@ select {
     grid-template-columns: 1fr;
     gap: 9px;
     padding: 12px 0;
+  }
+
+  .settings-help {
+    grid-column: 1;
+    margin-top: -2px;
   }
 
   .settings-toggle-list {
