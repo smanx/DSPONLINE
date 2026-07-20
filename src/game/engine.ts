@@ -26,6 +26,8 @@ import type {
   BeltTier,
   BeltConnection,
   BlueprintDefinition,
+  BlueprintMirror,
+  BlueprintRotation,
   BuildingId,
   CargoStackSize,
   ConstructionId,
@@ -122,6 +124,16 @@ function copyState(state: GameState): GameState {
         stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
       })),
       belts: blueprint.belts.map((belt) => ({ ...belt })),
+      externalPorts: blueprint.externalPorts?.map((port) => ({ ...port, offset: { ...port.offset } })),
+      recipeOverrides: { ...blueprint.recipeOverrides },
+    })),
+    constructionQueue: state.constructionQueue.map((entry) => ({ ...entry, position: { ...entry.position } })),
+    productionPlans: state.productionPlans.map((plan) => ({ ...plan, recipeSelections: { ...plan.recipeSelections } })),
+    productionHistory: state.productionHistory.map((sample) => ({
+      ...sample,
+      productionPerMinute: { ...sample.productionPerMinute },
+      consumptionPerMinute: { ...sample.consumptionPerMinute },
+      inventory: { ...sample.inventory },
     })),
     metrics: { ...state.metrics },
     planetMetrics: Object.fromEntries(Object.entries(state.planetMetrics).map(([planetId, metrics]) => [
@@ -308,6 +320,10 @@ export function createInitialState(): GameState {
       rewardedTaskIds: [],
     },
     blueprints: [],
+    constructionQueue: [],
+    productionPlans: [],
+    productionHistory: [],
+    historyRecordedAt: 0,
     elapsedSeconds: 0,
     metrics: { ...planetMetrics.home },
     planetMetrics,
@@ -2050,6 +2066,43 @@ function simulateStep(state: GameState, seconds: number): void {
   state.metrics = { ...state.planetMetrics[state.activePlanetId] };
 }
 
+function recordProductionHistory(state: GameState): void {
+  if (state.elapsedSeconds - state.historyRecordedAt < 10 - EPSILON) return;
+  const productionPerMinute: Partial<Record<ItemId, number>> = {};
+  const consumptionPerMinute: Partial<Record<ItemId, number>> = {};
+  const inventory: Partial<Record<ItemId, number>> = {};
+  const add = (record: Partial<Record<ItemId, number>>, itemId: ItemId, amount: number) => {
+    record[itemId] = round((record[itemId] ?? 0) + amount, 2);
+  };
+  for (const entity of state.entities) {
+    if (entity.kind === "vein" && entity.resourceId) add(productionPerMinute, entity.resourceId, entity.productionRate);
+    else if (entity.buildingId === "orbital_collector" && entity.storedItemId) {
+      add(productionPerMinute, entity.storedItemId, entity.productionRate);
+    } else if (entity.kind === "machine") {
+      const recipe = getRecipe(entity.recipeId);
+      if (recipe && recipe.id !== "matrix_research") {
+        for (const input of recipe.inputs) add(consumptionPerMinute, input.itemId, entity.productionRate * input.amount);
+        for (const output of recipe.outputs) add(productionPerMinute, output.itemId, entity.productionRate * output.amount);
+      }
+    }
+    for (const [itemId, amount] of Object.entries(entity.inputs)) add(inventory, itemId as ItemId, Math.floor(amount ?? 0));
+    for (const [itemId, amount] of Object.entries(entity.outputs)) add(inventory, itemId as ItemId, Math.floor(amount ?? 0));
+  }
+  for (const tray of Object.values(state.planetTrays)) {
+    for (const [itemId, amount] of Object.entries(tray)) add(inventory, itemId as ItemId, Math.floor(amount ?? 0));
+  }
+  state.productionHistory.push({
+    elapsedSeconds: state.elapsedSeconds,
+    productionPerMinute,
+    consumptionPerMinute,
+    inventory,
+    generationKw: round(Object.values(state.planetMetrics).reduce((sum, metrics) => sum + metrics.generationKw, 0), 2),
+    demandKw: round(Object.values(state.planetMetrics).reduce((sum, metrics) => sum + metrics.demandKw, 0), 2),
+  });
+  state.productionHistory = state.productionHistory.slice(-180);
+  state.historyRecordedAt = state.elapsedSeconds;
+}
+
 export function advanceSimulation(state: GameState, seconds: number): GameState {
   if (state.paused || seconds <= 0) return state;
   const next = copyState(state);
@@ -2059,7 +2112,8 @@ export function advanceSimulation(state: GameState, seconds: number): GameState 
     simulateStep(next, step);
     remaining -= step;
   }
-  return syncCampaignProgress(next);
+  recordProductionHistory(next);
+  return processConstructionQueue(syncCampaignProgress(next));
 }
 
 export function setPaused(state: GameState, paused: boolean): GameState {
@@ -2181,6 +2235,23 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
         stackSize: belt.stackSize,
         monitorEnabled: belt.monitorEnabled,
       })),
+    externalPorts: state.belts
+      .filter((belt) => keyById.has(belt.source) !== keyById.has(belt.target))
+      .map((belt, index) => {
+        const selectedSource = keyById.has(belt.source);
+        const entityId = selectedSource ? belt.source : belt.target;
+        const portEntity = selected.find((entity) => entity.id === entityId)!;
+        return {
+          key: `port_${index + 1}`,
+          entityKey: keyById.get(entityId)!,
+          direction: selectedSource ? "output" as const : "input" as const,
+          itemId: belt.itemId,
+          offset: { x: portEntity.position.x - originX, y: portEntity.position.y - originY },
+        };
+      }),
+    rotation: 0,
+    mirror: "none",
+    recipeOverrides: {},
   };
   const next = copyState(state);
   next.blueprints.push(blueprint);
@@ -2199,7 +2270,48 @@ export function renameBlueprint(state: GameState, blueprintId: string, name: str
 
 export function removeBlueprint(state: GameState, blueprintId: string): GameState {
   if (!state.blueprints.some((blueprint) => blueprint.id === blueprintId)) return state;
-  return { ...state, blueprints: state.blueprints.filter((blueprint) => blueprint.id !== blueprintId) };
+  return {
+    ...state,
+    blueprints: state.blueprints.filter((blueprint) => blueprint.id !== blueprintId),
+    constructionQueue: state.constructionQueue.filter((entry) => entry.blueprintId !== blueprintId),
+  };
+}
+
+export function setBlueprintTransform(
+  state: GameState,
+  blueprintId: string,
+  rotation: BlueprintRotation,
+  mirror: BlueprintMirror,
+): GameState {
+  if (![0, 90, 180, 270].includes(rotation) || (mirror !== "none" && mirror !== "horizontal") ||
+    !state.blueprints.some((blueprint) => blueprint.id === blueprintId)) return state;
+  return {
+    ...state,
+    blueprints: state.blueprints.map((blueprint) => blueprint.id === blueprintId
+      ? { ...blueprint, rotation, mirror }
+      : blueprint),
+  };
+}
+
+export function setBlueprintRecipeOverride(
+  state: GameState,
+  blueprintId: string,
+  sourceRecipeId: RecipeId,
+  targetRecipeId: RecipeId,
+): GameState {
+  const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
+  const targetRecipe = getRecipe(targetRecipeId);
+  const templates = blueprint?.entities.filter((entity) => entity.recipeId === sourceRecipeId) ?? [];
+  if (!blueprint || !targetRecipe || templates.length === 0 ||
+    (targetRecipe.requiredTechId && !isTechnologyCompleted(state, targetRecipe.requiredTechId)) ||
+    templates.some((template) => !buildingSupportsRecipe(template.buildingId, targetRecipe))) return state;
+  const overrides = { ...blueprint.recipeOverrides };
+  if (sourceRecipeId === targetRecipeId) delete overrides[sourceRecipeId];
+  else overrides[sourceRecipeId] = targetRecipeId;
+  return {
+    ...state,
+    blueprints: state.blueprints.map((candidate) => candidate.id === blueprintId ? { ...candidate, recipeOverrides: overrides } : candidate),
+  };
 }
 
 export function getBlueprintRequirements(blueprint: BlueprintDefinition): Array<{ constructionId: ConstructionId; amount: number }> {
@@ -2218,17 +2330,37 @@ export function getBlueprintRequirements(blueprint: BlueprintDefinition): Array<
   return [...requirements].map(([constructionId, amount]) => ({ constructionId, amount }));
 }
 
-export function canPlaceBlueprint(state: GameState, blueprintId: string): boolean {
+export function canPlaceBlueprint(state: GameState, blueprintId: string, planetId: PlanetId = state.activePlanetId): boolean {
   const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
   if (!blueprint || blueprint.entities.length === 0 ||
-    blueprint.entities.some((entity) => !canPlaceBuildingOnPlanet(entity.buildingId, state.activePlanetId))) return false;
+    blueprint.entities.some((entity) => !canPlaceBuildingOnPlanet(entity.buildingId, planetId))) return false;
   return getBlueprintRequirements(blueprint).every((requirement) =>
     (state.construction[requirement.constructionId] ?? 0) >= requirement.amount);
 }
 
-export function placeBlueprint(state: GameState, blueprintId: string, position: { x: number; y: number }): GameState {
+function transformBlueprintOffset(
+  offset: { x: number; y: number },
+  rotation: BlueprintRotation,
+  mirror: BlueprintMirror,
+): { x: number; y: number } {
+  const mirrored = { x: mirror === "horizontal" ? -offset.x : offset.x, y: offset.y };
+  if (rotation === 90) return { x: -mirrored.y, y: mirrored.x };
+  if (rotation === 180) return { x: -mirrored.x, y: -mirrored.y };
+  if (rotation === 270) return { x: mirrored.y, y: -mirrored.x };
+  return mirrored;
+}
+
+export function placeBlueprint(
+  state: GameState,
+  blueprintId: string,
+  position: { x: number; y: number },
+  options: { planetId?: PlanetId; rotation?: BlueprintRotation; mirror?: BlueprintMirror } = {},
+): GameState {
   const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
-  if (!blueprint || !canPlaceBlueprint(state, blueprintId)) return state;
+  const planetId = options.planetId ?? state.activePlanetId;
+  const rotation = options.rotation ?? blueprint?.rotation ?? 0;
+  const mirror = options.mirror ?? blueprint?.mirror ?? "none";
+  if (!blueprint || !canPlaceBlueprint(state, blueprintId, planetId)) return state;
   const next = copyState(state);
   for (const requirement of getBlueprintRequirements(blueprint)) {
     next.construction[requirement.constructionId] = (next.construction[requirement.constructionId] ?? 0) - requirement.amount;
@@ -2236,10 +2368,12 @@ export function placeBlueprint(state: GameState, blueprintId: string, position: 
   const entityIdByKey = new Map<string, string>();
   for (const template of blueprint.entities) {
     const building = getBuilding(template.buildingId);
+    const transformedOffset = transformBlueprintOffset(template.offset, rotation, mirror);
     const entityId = `entity_${next.nextId}`;
     next.nextId += 1;
     entityIdByKey.set(template.key, entityId);
-    const recipe = getRecipe(template.recipeId);
+    const configuredRecipeId = template.recipeId ? blueprint.recipeOverrides?.[template.recipeId] ?? template.recipeId : undefined;
+    const recipe = getRecipe(configuredRecipeId);
     const recipeId = recipe && buildingSupportsRecipe(template.buildingId, recipe) &&
       (!recipe.requiredTechId || isTechnologyCompleted(next, recipe.requiredTechId))
       ? recipe.id
@@ -2248,8 +2382,8 @@ export function placeBlueprint(state: GameState, blueprintId: string, position: 
       id: entityId,
       kind: building.kind === "power" ? "power" : building.kind === "storage" ? "storage" :
         building.kind === "splitter" ? "splitter" : building.kind === "station" ? "station" : "machine",
-      planetId: next.activePlanetId,
-      position: { x: position.x + template.offset.x, y: position.y + template.offset.y },
+      planetId,
+      position: { x: position.x + transformedOffset.x, y: position.y + transformedOffset.y },
       buildingId: template.buildingId,
       recipeId,
       storedItemId: template.storedItemId,
@@ -2301,7 +2435,7 @@ export function placeBlueprint(state: GameState, blueprintId: string, position: 
     if (!source || !target) continue;
     next.belts.push({
       id: `belt_${next.nextId}`,
-      planetId: next.activePlanetId,
+      planetId,
       source,
       target,
       itemId: template.itemId,
@@ -2317,6 +2451,68 @@ export function placeBlueprint(state: GameState, blueprintId: string, position: 
       lastFlow: 0,
     });
     next.nextId += 1;
+  }
+  return next;
+}
+
+export function canQueueBlueprint(state: GameState, blueprintId: string, planetId: PlanetId = state.activePlanetId): boolean {
+  const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
+  return Boolean(blueprint?.entities.length && blueprint.entities.every((entity) =>
+    canPlaceBuildingOnPlanet(entity.buildingId, planetId)));
+}
+
+export function queueBlueprint(
+  state: GameState,
+  blueprintId: string,
+  position: { x: number; y: number },
+): GameState {
+  const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
+  if (!blueprint || !canQueueBlueprint(state, blueprintId)) return state;
+  const next = copyState(state);
+  next.constructionQueue.push({
+    id: `construction_${next.nextId}`,
+    blueprintId,
+    blueprintName: blueprint.name,
+    planetId: next.activePlanetId,
+    position: { ...position },
+    rotation: blueprint.rotation ?? 0,
+    mirror: blueprint.mirror ?? "none",
+    queuedAt: next.elapsedSeconds,
+  });
+  next.nextId += 1;
+  return next;
+}
+
+export function cancelConstructionQueueEntry(state: GameState, entryId: string): GameState {
+  if (!state.constructionQueue.some((entry) => entry.id === entryId)) return state;
+  return { ...state, constructionQueue: state.constructionQueue.filter((entry) => entry.id !== entryId) };
+}
+
+export function getConstructionQueueDeficits(state: GameState, entryId: string) {
+  const entry = state.constructionQueue.find((candidate) => candidate.id === entryId);
+  const blueprint = entry ? state.blueprints.find((candidate) => candidate.id === entry.blueprintId) : undefined;
+  if (!blueprint) return [];
+  return getBlueprintRequirements(blueprint).flatMap((requirement) => {
+    const available = Math.floor(state.construction[requirement.constructionId] ?? 0);
+    const missing = Math.max(0, requirement.amount - available);
+    return missing > 0 ? [{ ...requirement, available, missing }] : [];
+  });
+}
+
+export function processConstructionQueue(state: GameState): GameState {
+  let next = state;
+  for (const entry of state.constructionQueue) {
+    if (!canPlaceBlueprint(next, entry.blueprintId, entry.planetId)) continue;
+    const deployed = placeBlueprint(next, entry.blueprintId, entry.position, {
+      planetId: entry.planetId,
+      rotation: entry.rotation,
+      mirror: entry.mirror,
+    });
+    if (deployed === next) continue;
+    next = {
+      ...deployed,
+      constructionQueue: deployed.constructionQueue.filter((candidate) => candidate.id !== entry.id),
+    };
   }
   return next;
 }

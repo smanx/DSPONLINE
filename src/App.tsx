@@ -44,6 +44,8 @@ import {
   advanceSimulation,
   connectBelt,
   canPlaceBlueprint,
+  canQueueBlueprint,
+  cancelConstructionQueueEntry,
   canUpgradeEntities,
   clearDysonShells,
   connectDysonNodes,
@@ -74,6 +76,7 @@ import {
   pickFromTray,
   placeBuilding,
   placeBlueprint,
+  queueBlueprint,
   removeBelt,
   removeBlueprint,
   removeDysonLayer,
@@ -83,6 +86,8 @@ import {
   removeQueuedTechnology,
   selectTechnology,
   setBeltPriority,
+  setBlueprintRecipeOverride,
+  setBlueprintTransform,
   setBeltMonitorEnabled,
   setBeltStackSize,
   setActivePlanet,
@@ -117,6 +122,7 @@ import {
   renameBlueprint,
 } from "./game/engine";
 import { getAchievement, getNewAchievementIds, unlockAchievements } from "./game/progression";
+import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
 import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
 import { clearGame, clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot, type OfflineReport, type SaveSlotId } from "./game/storage";
 import type { BeltTier, BuildingId, CampaignTaskId, CargoStackSize, DraggedItemSourceKind, EnergyMode, GameSettings, GameState, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
@@ -1185,16 +1191,24 @@ function FactoryGame() {
     if (blueprintPlacementId) {
       const position = snapFlowPosition(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
       const deployable = canPlaceBlueprint(gameRef.current, blueprintPlacementId);
+      const compatible = canQueueBlueprint(gameRef.current, blueprintPlacementId);
       const canContinue = deployable && canPlaceBlueprint(placeBlueprint(gameRef.current, blueprintPlacementId, position), blueprintPlacementId);
       const blueprintName = gameRef.current.blueprints.find((blueprint) => blueprint.id === blueprintPlacementId)?.name ?? "蓝图";
       commitGame((current) => {
-        const next = placeBlueprint(current, blueprintPlacementId, position);
+        const next = canPlaceBlueprint(current, blueprintPlacementId)
+          ? placeBlueprint(current, blueprintPlacementId, position)
+          : canQueueBlueprint(current, blueprintPlacementId)
+            ? queueBlueprint(current, blueprintPlacementId, position)
+            : current;
         if (next !== current && !canPlaceBlueprint(next, blueprintPlacementId)) setBlueprintPlacementId(null);
         return next;
       });
       if (deployable) playTone("place");
+      else if (compatible) setBlueprintPlacementId(null);
       setSelectedEntityIds([]);
-      setNotice(deployable ? `${blueprintName}部署完成${canContinue ? " · 可继续粘贴" : ""}` : `${blueprintName}施工库存不足或与当前行星不兼容`);
+      setNotice(deployable
+        ? `${blueprintName}部署完成${canContinue ? " · 可继续粘贴" : ""}`
+        : compatible ? `${blueprintName}已加入施工队列，材料齐备后自动部署` : `${blueprintName}与当前行星不兼容`);
       return;
     }
     if (placement) {
@@ -1599,6 +1613,9 @@ function FactoryGame() {
           if (blueprintPlacementId === blueprintId) setBlueprintPlacementId(null);
         }}
         onRename={(blueprintId, name) => commitGame((current) => renameBlueprint(current, blueprintId, name))}
+        onTransform={(blueprintId, rotation, mirror) => commitGame((current) => setBlueprintTransform(current, blueprintId, rotation, mirror))}
+        onRecipeOverride={(blueprintId, sourceRecipeId, targetRecipeId) => commitGame((current) => setBlueprintRecipeOverride(current, blueprintId, sourceRecipeId, targetRecipeId))}
+        onCancelQueue={(entryId) => commitGame((current) => cancelConstructionQueueEntry(current, entryId))}
       />
       <Suspense fallback={<WorkspaceLoading />}>
         {technologyOpen ? (
@@ -1611,7 +1628,15 @@ function FactoryGame() {
             onRemoveQueued={(techId) => setGame((current) => removeQueuedTechnology(current, techId))}
           />
         ) : null}
-        {statisticsOpen ? <StatisticsWorkspace open game={game} onClose={() => setStatisticsOpen(false)} /> : null}
+        {statisticsOpen ? <StatisticsWorkspace
+          open
+          game={game}
+          onClose={() => setStatisticsOpen(false)}
+          onCreatePlan={(itemId, targetPerMinute, planetId) => commitGame((current) => createProductionPlan(current, itemId, targetPerMinute, planetId))}
+          onUpdatePlan={(planId, changes) => commitGame((current) => updateProductionPlan(current, planId, changes))}
+          onSetPlanRecipe={(planId, itemId, recipeId) => commitGame((current) => setProductionPlanRecipe(current, planId, itemId, recipeId))}
+          onRemovePlan={(planId) => commitGame((current) => removeProductionPlan(current, planId))}
+        /> : null}
         {recipesOpen ? <RecipeWorkspace open game={game} focusItemId={campaignFocusItemId} onClose={() => setRecipesOpen(false)} /> : null}
         {campaignOpen ? (
           <CampaignWorkspace

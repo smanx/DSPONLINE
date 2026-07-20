@@ -12,6 +12,7 @@ import {
   applyBeltConfiguration,
   canExploreStarSystem,
   canPlaceBlueprint,
+  cancelConstructionQueueEntry,
   canInstallSprayCoater,
   canUpgradeBelt,
   canUpgradeEntity,
@@ -30,6 +31,7 @@ import {
   getBeltCapacity,
   getBeltNetworkIds,
   getBlueprintRequirements,
+  getConstructionQueueDeficits,
   getDysonPlanTotals,
   getDysonShellCapacity,
   getEntityExtraProductBonus,
@@ -60,12 +62,16 @@ import {
   pickFromEntityInput,
   placeBuilding,
   placeBlueprint,
+  processConstructionQueue,
+  queueBlueprint,
   removeEntity,
   removeDysonNode,
   removeQueuedTechnology,
   selectTechnology,
   setActivePlanet,
   setBeltPriority,
+  setBlueprintRecipeOverride,
+  setBlueprintTransform,
   setBeltMonitorEnabled,
   setBeltStackSize,
   setEntityRecipe,
@@ -1967,6 +1973,48 @@ describe("factory simulation", () => {
     expect(getBeltCapacity(state.belts[0])).toBe(12);
     expect(getBeltNetworkIds(state, "stack_a")).toEqual(["stack_a", "stack_b"]);
     expect(state.belts[1]).toMatchObject({ stackSize: 4, priority: 2, monitorEnabled: true });
+  });
+
+  it("rotates, mirrors and parameterizes blueprint deployment while preserving external ports", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("basic_assembling");
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 100, y: 100 });
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 300, y: 200 });
+    const assemblers = state.entities.filter((entity) => entity.buildingId === "assembling_machine_mk1");
+    state.belts.push({ id: "external_line", planetId: "home", source: assemblers[0].id, target: "vein_iron", itemId: "gear", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 0, lastFlow: 0 });
+    state = createBlueprint(state, assemblers.map((entity) => entity.id), "旋转模板");
+    const blueprintId = state.blueprints[0].id;
+    expect(state.blueprints[0].externalPorts).toHaveLength(1);
+    state = setBlueprintTransform(state, blueprintId, 90, "horizontal");
+    state = setBlueprintRecipeOverride(state, blueprintId, "gear", "circuit_board");
+    state.construction.assembling_machine_mk1 = 2;
+    state = placeBlueprint(state, blueprintId, { x: 1000, y: 1000 });
+
+    const deployed = state.entities.filter((entity) => entity.id.startsWith("entity_") && !assemblers.some((original) => original.id === entity.id));
+    expect(deployed.map((entity) => entity.position)).toEqual(expect.arrayContaining([{ x: 1000, y: 1000 }, { x: 900, y: 800 }]));
+    expect(deployed.every((entity) => entity.recipeId === "circuit_board")).toBe(true);
+  });
+
+  it("queues a missing-material blueprint and deploys it when construction stock arrives", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("basic_assembling");
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    state = createBlueprint(state, [assembler.id], "待建制造台");
+    const blueprintId = state.blueprints[0].id;
+    state.construction.assembling_machine_mk1 = 0;
+    state = queueBlueprint(state, blueprintId, { x: 720, y: 360 });
+    const orderId = state.constructionQueue[0].id;
+    expect(getConstructionQueueDeficits(state, orderId)[0]).toMatchObject({ constructionId: "assembling_machine_mk1", missing: 1 });
+    state.construction.assembling_machine_mk1 = 1;
+    state = processConstructionQueue(state);
+    expect(state.constructionQueue).toEqual([]);
+    expect(state.entities.some((entity) => entity.position.x === 720 && entity.position.y === 360)).toBe(true);
+
+    state = queueBlueprint({ ...state, construction: { ...state.construction, assembling_machine_mk1: 0 } }, blueprintId, { x: 900, y: 360 });
+    const pendingId = state.constructionQueue[0].id;
+    state = cancelConstructionQueueEntry(state, pendingId);
+    expect(state.constructionQueue).toEqual([]);
   });
 
   it("applies logistics engine and cargo upgrades to real station dispatches", () => {

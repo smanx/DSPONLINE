@@ -1,7 +1,8 @@
 /** @vitest-environment jsdom */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { createBlueprint, createInitialState, createStandardDysonLayer, installMiner, placeBuilding, setActivePlanet, setFuelItem, setLogisticsItem } from "./engine";
+import { createBlueprint, createInitialState, createStandardDysonLayer, installMiner, placeBuilding, queueBlueprint, setActivePlanet, setBlueprintTransform, setFuelItem, setLogisticsItem } from "./engine";
+import { createProductionPlan } from "./planning";
 import { clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot } from "./storage";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
@@ -844,5 +845,34 @@ describe("game storage", () => {
     expect(migratedStation.stationSlots?.[0]).toMatchObject({ itemId: "processor", localMode: "demand", minimumLoad: 1 });
     expect(migratedStation.stationRoutes).toEqual([]);
     expect(loaded.belts[0]).toMatchObject({ stackSize: 1, monitorEnabled: false, totalTransferred: 0, congestion: 0 });
+  });
+
+  it("round-trips transformed blueprint queues, production plans and history", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 100, y: 100 });
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    state = createBlueprint(state, [assembler.id], "排队模板");
+    const blueprintId = state.blueprints[0].id;
+    state = setBlueprintTransform(state, blueprintId, 270, "horizontal");
+    state.construction.assembling_machine_mk1 = 0;
+    state = queueBlueprint(state, blueprintId, { x: 640, y: 320 });
+    state = createProductionPlan(state, "magnetic_coil", 90, "home");
+    state.productionHistory = [{
+      elapsedSeconds: 20,
+      productionPerMinute: { magnetic_coil: 30 },
+      consumptionPerMinute: { copper_ingot: 15 },
+      inventory: { magnetic_coil: 12 },
+      generationKw: 1200,
+      demandKw: 720,
+    }];
+    state.historyRecordedAt = 20;
+    saveGame(state);
+
+    const loaded = loadGame().state;
+    expect(loaded.blueprints[0]).toMatchObject({ rotation: 270, mirror: "horizontal" });
+    expect(loaded.constructionQueue[0]).toMatchObject({ blueprintId, position: { x: 640, y: 320 }, rotation: 270, mirror: "horizontal" });
+    expect(loaded.productionPlans[0]).toMatchObject({ itemId: "magnetic_coil", targetPerMinute: 90, planetId: "home" });
+    expect(loaded.productionHistory[0]).toMatchObject({ elapsedSeconds: 20, productionPerMinute: { magnetic_coil: 30 } });
+    expect(loaded.historyRecordedAt).toBe(20);
   });
 });

@@ -1,7 +1,7 @@
-import { ArrowUp, BoxSelect, Check, Copy, Focus, Layers3, MousePointer2, PackageOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Redo2, Trash2, Undo2, X } from "lucide-react";
-import { getConstructionDefinition, getPlanet } from "../game/content";
-import { canPlaceBlueprint, getBlueprintRequirements } from "../game/engine";
-import type { BlueprintDefinition, GameState } from "../game/types";
+import { ArrowUp, BoxSelect, Check, Clock3, Copy, FlipHorizontal2, Focus, Layers3, MousePointer2, PackageOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Redo2, RotateCw, Trash2, Undo2, X } from "lucide-react";
+import { getConstructionDefinition, getItem, getPlanet, getRecipe, getRecipesForBuilding } from "../game/content";
+import { canPlaceBlueprint, canQueueBlueprint, getBlueprintRequirements, getConstructionQueueDeficits, isTechnologyCompleted } from "../game/engine";
+import type { BlueprintDefinition, BlueprintMirror, BlueprintRotation, GameState, RecipeId } from "../game/types";
 
 function blueprintBuildingSummary(blueprint: BlueprintDefinition): string[] {
   const counts = new Map<string, number>();
@@ -65,25 +65,28 @@ export function SelectionToolbar({ selectedCount, eligibleCount, canUpgrade, onF
 export function BlueprintPlacementCursor({ blueprint, x, y }: { blueprint: BlueprintDefinition; x: number; y: number }) {
   return (
     <div className="blueprint-placement-cursor" style={{ left: x + 14, top: y + 14 }}>
-      <Layers3 size={15} /><span>{blueprint.name}</span><strong>×{blueprint.entities.length}</strong>
+      <Layers3 size={15} /><span>{blueprint.name}</span><strong>{blueprint.rotation ?? 0}°{blueprint.mirror === "horizontal" ? " · 镜像" : ""} · ×{blueprint.entities.length}</strong>
     </div>
   );
 }
 
-export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, onRename }: {
+export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, onRename, onTransform, onRecipeOverride, onCancelQueue }: {
   open: boolean;
   game: GameState;
   onClose: () => void;
   onDeploy: (blueprintId: string) => void;
   onRemove: (blueprintId: string) => void;
   onRename: (blueprintId: string, name: string) => void;
+  onTransform: (blueprintId: string, rotation: BlueprintRotation, mirror: BlueprintMirror) => void;
+  onRecipeOverride: (blueprintId: string, sourceRecipeId: RecipeId, targetRecipeId: RecipeId) => void;
+  onCancelQueue: (entryId: string) => void;
 }) {
   if (!open) return null;
   return (
     <section className="blueprint-workspace" role="dialog" aria-modal="true" aria-label="蓝图库">
       <header className="blueprint-header">
         <div className="blueprint-title"><i><Layers3 size={20} /></i><div><span>生产网络模板</span><strong>蓝图库</strong></div></div>
-        <div className="blueprint-headline"><span>模板 <strong>{game.blueprints.length}</strong></span><span>部署行星 <strong>{getPlanet(game.activePlanetId).name}</strong></span></div>
+        <div className="blueprint-headline"><span>模板 <strong>{game.blueprints.length}</strong></span><span>施工队列 <strong>{game.constructionQueue.length}</strong></span><span>部署行星 <strong>{getPlanet(game.activePlanetId).name}</strong></span></div>
         <button className="blueprint-close" type="button" onClick={onClose} title="关闭蓝图库" aria-label="关闭蓝图库"><X size={18} /></button>
       </header>
       <div className="blueprint-library">
@@ -92,16 +95,35 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
         ) : game.blueprints.map((blueprint) => {
           const requirements = getBlueprintRequirements(blueprint);
           const deployable = canPlaceBlueprint(game, blueprint.id);
+          const compatible = canQueueBlueprint(game, blueprint.id);
+          const recipeTemplates = blueprint.entities.filter((entity) => entity.recipeId);
+          const sourceRecipeIds = [...new Set(recipeTemplates.flatMap((entity) => entity.recipeId ? [entity.recipeId] : []))];
           return (
             <article className="blueprint-card" key={blueprint.id}>
               <header>
                 <i><Layers3 size={18} /></i>
                 <label><span>蓝图名称</span><input defaultValue={blueprint.name} aria-label={`${blueprint.name}名称`} onBlur={(event) => onRename(blueprint.id, event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
-                <em>{blueprint.entities.length} 节点 · {blueprint.belts.length} 线路</em>
+                <em>{blueprint.entities.length} 节点 · {blueprint.belts.length} 线路 · {blueprint.externalPorts?.length ?? 0} 外部端口</em>
               </header>
               <div className="blueprint-composition">
                 {blueprintBuildingSummary(blueprint).map((label) => <span key={label}>{label}</span>)}
               </div>
+              <div className="blueprint-transform-controls">
+                <span>部署方向</span>
+                <div className="segmented-control">
+                  {([0, 90, 180, 270] as BlueprintRotation[]).map((rotation) => <button className={(blueprint.rotation ?? 0) === rotation ? "active" : ""} type="button" key={rotation} onClick={() => onTransform(blueprint.id, rotation, blueprint.mirror ?? "none")}><RotateCw size={12} />{rotation}°</button>)}
+                </div>
+                <button className={blueprint.mirror === "horizontal" ? "blueprint-mirror active" : "blueprint-mirror"} type="button" onClick={() => onTransform(blueprint.id, blueprint.rotation ?? 0, blueprint.mirror === "horizontal" ? "none" : "horizontal")}><FlipHorizontal2 size={13} />水平镜像</button>
+              </div>
+              {sourceRecipeIds.length > 0 ? <div className="blueprint-parameters">
+                <strong>配方参数</strong>
+                {sourceRecipeIds.map((sourceRecipeId) => {
+                  const template = recipeTemplates.find((entity) => entity.recipeId === sourceRecipeId)!;
+                  const options = getRecipesForBuilding(template.buildingId).filter((recipe) => !recipe.requiredTechId || isTechnologyCompleted(game, recipe.requiredTechId));
+                  return <label key={sourceRecipeId}><span>{getRecipe(sourceRecipeId)?.name ?? sourceRecipeId}</span><select value={blueprint.recipeOverrides?.[sourceRecipeId] ?? sourceRecipeId} onChange={(event) => onRecipeOverride(blueprint.id, sourceRecipeId, event.target.value as RecipeId)}>{options.map((recipe) => <option value={recipe.id} key={recipe.id}>{recipe.name}</option>)}</select></label>;
+                })}
+              </div> : null}
+              {(blueprint.externalPorts?.length ?? 0) > 0 ? <div className="blueprint-external-ports"><strong>外部接口</strong><div>{blueprint.externalPorts!.map((port) => <span key={port.key}>{port.direction === "input" ? "输入" : "输出"} · {getItem(port.itemId).name}</span>)}</div></div> : null}
               <div className="blueprint-requirements">
                 <strong>施工需求</strong>
                 <div>{requirements.map((requirement) => {
@@ -110,13 +132,20 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
                 })}</div>
               </div>
               <footer>
-                <button type="button" disabled={!deployable} onClick={() => onDeploy(blueprint.id)} title={deployable ? `在${getPlanet(game.activePlanetId).name}部署${blueprint.name}` : "施工库存不足或当前行星不兼容"}><Copy size={14} />部署</button>
+                <button type="button" disabled={!compatible} onClick={() => onDeploy(blueprint.id)} title={!compatible ? "当前行星不兼容" : deployable ? `在${getPlanet(game.activePlanetId).name}部署${blueprint.name}` : "点击画布创建缺料施工订单"}>{deployable ? <Copy size={14} /> : <Clock3 size={14} />}{deployable ? "部署" : "排队部署"}</button>
                 <button className="danger" type="button" onClick={() => onRemove(blueprint.id)} title={`删除${blueprint.name}`} aria-label={`删除${blueprint.name}`}><Trash2 size={14} /></button>
               </footer>
             </article>
           );
         })}
       </div>
+      {game.constructionQueue.length > 0 ? <section className="construction-queue-panel">
+        <header><Clock3 size={16} /><div><span>自动施工协议</span><strong>待建队列</strong></div><em>{game.constructionQueue.length}</em></header>
+        <div>{game.constructionQueue.map((entry) => {
+          const deficits = getConstructionQueueDeficits(game, entry.id);
+          return <article key={entry.id}><div><strong>{entry.blueprintName}</strong><span>{getPlanet(entry.planetId).name} · {entry.rotation}°{entry.mirror === "horizontal" ? " · 镜像" : ""}</span></div><p>{deficits.length === 0 ? "材料齐备，等待下一模拟周期" : deficits.map((deficit) => `${getConstructionDefinition(deficit.constructionId)?.name ?? deficit.constructionId} -${deficit.missing}`).join(" · ")}</p><button type="button" onClick={() => onCancelQueue(entry.id)} title="取消施工订单" aria-label={`取消${entry.blueprintName}施工订单`}><X size={13} /></button></article>;
+        })}</div>
+      </section> : null}
     </section>
   );
 }

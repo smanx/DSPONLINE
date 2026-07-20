@@ -2296,6 +2296,59 @@ test("box selection copies, pastes, moves and upgrades a production blueprint", 
   await page.screenshot({ path: "artifacts/qa/blueprint-library-390.png", fullPage: true });
 });
 
+test("blueprint transforms, recipe parameters and missing-stock construction queue stay persistent", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openBlueprintStageGame(page);
+  const nodes = page.locator(".machine-node");
+  await nodes.nth(0).click();
+  await nodes.nth(1).click({ modifiers: ["Shift"] });
+  await page.getByLabel("复制所选为蓝图").click();
+  await page.locator(".react-flow__pane").click({ position: { x: 690, y: 120 } });
+  await page.getByLabel("打开蓝图库").click();
+  const library = page.getByRole("dialog", { name: "蓝图库" });
+  const card = library.locator(".blueprint-card");
+  await card.getByRole("button", { name: "90°", exact: true }).click();
+  await card.getByRole("button", { name: "水平镜像" }).click();
+  await expect(card).toContainText("配方参数");
+  await expect(card.getByRole("button", { name: "排队部署" })).toBeEnabled();
+  await card.getByRole("button", { name: "排队部署" }).click();
+  await page.locator(".react-flow__pane").click({ position: { x: 620, y: 500 }, force: true });
+  await expect(page.locator(".game-notice")).toContainText("已加入施工队列");
+  await page.getByLabel("打开蓝图库").click();
+  await expect(library.locator(".construction-queue-panel")).toContainText("待建队列");
+  await expect(library.locator(".construction-queue-panel")).toContainText("90° · 镜像");
+  await page.waitForTimeout(220);
+  await page.screenshot({ path: "artifacts/qa/blueprint-queue-1440.png", fullPage: true });
+  await library.locator(".construction-queue-panel").getByRole("button", { name: /取消.*施工订单/ }).click();
+  await expect(library.locator(".construction-queue-panel")).toHaveCount(0);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(async () => library.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/blueprint-transform-390.png", fullPage: true });
+});
+
+test("industrial planner creates a recursive target and remains usable on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openCompleteEnergyGame(page);
+  await page.getByLabel("打开生产统计").click();
+  const workspace = page.getByRole("dialog", { name: "生产统计" });
+  await workspace.getByRole("tab", { name: /规划/ }).click();
+  await workspace.getByLabel("目标物品").selectOption("magnetic_coil");
+  await workspace.getByLabel("目标产量").fill("120");
+  await workspace.getByRole("button", { name: "新建方案" }).click();
+  await expect(workspace.locator(".planning-summary-band")).toContainText("理论设备");
+  await expect(workspace.locator(".planning-requirements")).toContainText("磁线圈");
+  await expect(workspace.locator(".planning-requirements")).toContainText("磁铁");
+  await expect(workspace.locator(".planning-requirements")).toContainText("铜块");
+  await expect(workspace.locator(".planning-history")).toContainText("等待采样");
+  await page.screenshot({ path: "artifacts/qa/production-planner-1440.png", fullPage: true });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(workspace).toBeVisible();
+  await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/production-planner-390.png", fullPage: true });
+});
+
 test("canvas placement supports toolbar and keyboard undo redo", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openBlueprintStageGame(page);

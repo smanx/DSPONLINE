@@ -10,7 +10,7 @@ import {
 import { BUILDINGS, ITEMS, PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, getBuilding, getExtractorBuildingId, getPlanet, getRecipe, getTechnology } from "./content";
 import { normalizeCampaignState, syncCampaignProgress } from "./campaign";
 import { isAchievementId } from "./progression";
-import type { BeltConnection, BeltTier, BlueprintDefinition, BuildingId, CargoStackSize, ConstructionId, DysonLayerState, DysonSpherePlanState, EnergyMode, FactoryEntity, GameState, ItemId, LogisticsPriority, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
+import type { BeltConnection, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CargoStackSize, ConstructionId, DysonLayerState, DysonSpherePlanState, EnergyMode, FactoryEntity, GameState, ItemId, LogisticsPriority, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -69,6 +69,12 @@ function fractionalRecord(value: unknown): Partial<Record<ItemId, number>> {
   ])) as Partial<Record<ItemId, number>>;
 }
 
+function nonNegativeRecord(value: unknown): Partial<Record<ItemId, number>> {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([key, amount]) =>
+    key in ITEMS ? [[key, nonNegativeNumber(amount)]] : [])) as Partial<Record<ItemId, number>>;
+}
+
 const STARTER_TOTALS: Partial<Record<ConstructionId, number>> = {
   wind_turbine: 3,
   mining_machine: 2,
@@ -122,6 +128,14 @@ function validPriority(value: unknown): value is LogisticsPriority {
 
 function validCargoStackSize(value: unknown): value is CargoStackSize {
   return value === 1 || value === 2 || value === 4;
+}
+
+function validBlueprintRotation(value: unknown): value is BlueprintRotation {
+  return value === 0 || value === 90 || value === 180 || value === 270;
+}
+
+function validBlueprintMirror(value: unknown): value is BlueprintMirror {
+  return value === "none" || value === "horizontal";
 }
 
 function normalizeStationSlots(entity: FactoryEntity): StationSlot[] | undefined {
@@ -437,12 +451,87 @@ export function migrateGame(value: unknown): GameState | null {
           monitorEnabled: Boolean(belt.monitorEnabled),
         }];
       }) : [];
+      const externalPorts = Array.isArray(blueprint.externalPorts) ? blueprint.externalPorts.flatMap((port: Record<string, any>, portIndex: number) => {
+        if (!keys.has(port.entityKey) || typeof port.itemId !== "string" || !(port.itemId in ITEMS) ||
+          (port.direction !== "input" && port.direction !== "output")) return [];
+        return [{
+          key: typeof port.key === "string" && port.key ? port.key : `port_${portIndex + 1}`,
+          entityKey: port.entityKey as string,
+          direction: port.direction as "input" | "output",
+          itemId: port.itemId as ItemId,
+          offset: {
+            x: typeof port.offset?.x === "number" && Number.isFinite(port.offset.x) ? port.offset.x : 0,
+            y: typeof port.offset?.y === "number" && Number.isFinite(port.offset.y) ? port.offset.y : 0,
+          },
+        }];
+      }) : [];
+      const recipeOverrides = Object.fromEntries(Object.entries(blueprint.recipeOverrides ?? {}).flatMap(([sourceId, targetId]) =>
+        getRecipe(sourceId as RecipeId) && typeof targetId === "string" && getRecipe(targetId as RecipeId)
+          ? [[sourceId, targetId]]
+          : [])) as BlueprintDefinition["recipeOverrides"];
       return [{
         id: typeof blueprint.id === "string" && blueprint.id ? blueprint.id : `blueprint_migrated_${blueprintIndex + 1}`,
         name: typeof blueprint.name === "string" && blueprint.name.trim() ? blueprint.name.trim().slice(0, 32) : `蓝图 ${String(blueprintIndex + 1).padStart(2, "0")}`,
         entities: blueprintEntities,
         belts: blueprintBelts,
+        externalPorts,
+        rotation: validBlueprintRotation(blueprint.rotation) ? blueprint.rotation : 0,
+        mirror: validBlueprintMirror(blueprint.mirror) ? blueprint.mirror : "none",
+        recipeOverrides,
       } as BlueprintDefinition];
+    })
+    : [];
+  const constructionQueue: GameState["constructionQueue"] = Array.isArray(saved.constructionQueue)
+    ? saved.constructionQueue.flatMap((entry: Record<string, any>, index: number) => {
+      const blueprint = blueprints.find((candidate) => candidate.id === entry.blueprintId);
+      if (!blueprint || !validPlanetId(entry.planetId)) return [];
+      return [{
+        id: typeof entry.id === "string" && entry.id ? entry.id : `construction_migrated_${index + 1}`,
+        blueprintId: blueprint.id,
+        blueprintName: typeof entry.blueprintName === "string" && entry.blueprintName.trim()
+          ? entry.blueprintName.trim().slice(0, 32)
+          : blueprint.name,
+        planetId: entry.planetId,
+        position: {
+          x: typeof entry.position?.x === "number" && Number.isFinite(entry.position.x) ? entry.position.x : 0,
+          y: typeof entry.position?.y === "number" && Number.isFinite(entry.position.y) ? entry.position.y : 0,
+        },
+        rotation: validBlueprintRotation(entry.rotation) ? entry.rotation : blueprint.rotation ?? 0,
+        mirror: validBlueprintMirror(entry.mirror) ? entry.mirror : blueprint.mirror ?? "none",
+        queuedAt: nonNegativeNumber(entry.queuedAt),
+      }];
+    })
+    : [];
+  const productionPlans: GameState["productionPlans"] = Array.isArray(saved.productionPlans)
+    ? saved.productionPlans.flatMap((plan: Record<string, any>, index: number) => {
+      if (typeof plan.itemId !== "string" || !(plan.itemId in ITEMS)) return [];
+      const recipeSelections = Object.fromEntries(Object.entries(plan.recipeSelections ?? {}).flatMap(([itemId, recipeId]) =>
+        itemId in ITEMS && typeof recipeId === "string" && getRecipe(recipeId as RecipeId)
+          ? [[itemId, recipeId]]
+          : []));
+      return [{
+        id: typeof plan.id === "string" && plan.id ? plan.id : `plan_migrated_${index + 1}`,
+        name: typeof plan.name === "string" && plan.name.trim() ? plan.name.trim().slice(0, 40) : `${ITEMS[plan.itemId as ItemId].name}计划`,
+        itemId: plan.itemId as ItemId,
+        targetPerMinute: Math.max(0.01, nonNegativeNumber(plan.targetPerMinute)),
+        planetId: plan.planetId === "all" || validPlanetId(plan.planetId) ? plan.planetId : "all",
+        recipeSelections,
+        createdAt: nonNegativeNumber(plan.createdAt),
+      }];
+    })
+    : [];
+  const productionHistory: GameState["productionHistory"] = Array.isArray(saved.productionHistory)
+    ? saved.productionHistory.slice(-180).flatMap((sample: Record<string, any>) => {
+      const elapsedSeconds = nonNegativeNumber(sample.elapsedSeconds);
+      if (elapsedSeconds <= 0) return [];
+      return [{
+        elapsedSeconds,
+        productionPerMinute: nonNegativeRecord(sample.productionPerMinute),
+        consumptionPerMinute: nonNegativeRecord(sample.consumptionPerMinute),
+        inventory: integerRecord(sample.inventory),
+        generationKw: nonNegativeNumber(sample.generationKw),
+        demandKw: nonNegativeNumber(sample.demandKw),
+      }];
     })
     : [];
   const structurePoints = saved.version >= 7 ? nonNegativeInteger(saved.dysonSphere?.structurePoints) : 0;
@@ -600,6 +689,13 @@ export function migrateGame(value: unknown): GameState | null {
     achievements: { unlockedIds: unlockedAchievementIds },
     campaign: normalizeCampaignState(saved.campaign),
     blueprints,
+    constructionQueue,
+    productionPlans,
+    productionHistory,
+    historyRecordedAt: Math.max(
+      nonNegativeNumber(saved.historyRecordedAt),
+      productionHistory.at(-1)?.elapsedSeconds ?? 0,
+    ),
     metrics: { ...planetMetrics[activePlanetId] },
     planetMetrics,
     dysonSwarm,

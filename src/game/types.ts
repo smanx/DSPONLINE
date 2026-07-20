@@ -687,11 +687,56 @@ export interface BlueprintBeltTemplate {
   monitorEnabled?: boolean;
 }
 
+export type BlueprintRotation = 0 | 90 | 180 | 270;
+export type BlueprintMirror = "none" | "horizontal";
+
+export interface BlueprintExternalPort {
+  key: string;
+  entityKey: string;
+  direction: "input" | "output";
+  itemId: ItemId;
+  offset: XYPosition;
+}
+
 export interface BlueprintDefinition {
   id: string;
   name: string;
   entities: BlueprintEntityTemplate[];
   belts: BlueprintBeltTemplate[];
+  externalPorts?: BlueprintExternalPort[];
+  rotation?: BlueprintRotation;
+  mirror?: BlueprintMirror;
+  recipeOverrides?: Partial<Record<RecipeId, RecipeId>>;
+}
+
+export interface ConstructionQueueEntry {
+  id: string;
+  blueprintId: string;
+  blueprintName: string;
+  planetId: PlanetId;
+  position: XYPosition;
+  rotation: BlueprintRotation;
+  mirror: BlueprintMirror;
+  queuedAt: number;
+}
+
+export interface ProductionTargetPlan {
+  id: string;
+  name: string;
+  itemId: ItemId;
+  targetPerMinute: number;
+  planetId: PlanetId | "all";
+  recipeSelections: Partial<Record<ItemId, RecipeId>>;
+  createdAt: number;
+}
+
+export interface ProductionHistorySample {
+  elapsedSeconds: number;
+  productionPerMinute: Partial<Record<ItemId, number>>;
+  consumptionPerMinute: Partial<Record<ItemId, number>>;
+  inventory: Partial<Record<ItemId, number>>;
+  generationKw: number;
+  demandKw: number;
 }
 
 export interface GameState {
@@ -712,6 +757,10 @@ export interface GameState {
   achievements: AchievementState;
   campaign: CampaignState;
   blueprints: BlueprintDefinition[];
+  constructionQueue: ConstructionQueueEntry[];
+  productionPlans: ProductionTargetPlan[];
+  productionHistory: ProductionHistorySample[];
+  historyRecordedAt: number;
   elapsedSeconds: number;
   metrics: FactoryMetrics;
   planetMetrics: Record<PlanetId, FactoryMetrics>;

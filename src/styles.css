@@ -5548,7 +5548,7 @@ select:focus-visible {
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: 64px minmax(0, 1fr);
+  grid-template-rows: 64px minmax(0, 1fr) auto;
   background: #0c110f;
 }
 
@@ -5745,6 +5745,85 @@ select:focus-visible {
   font-size: 8px;
 }
 
+.blueprint-transform-controls,
+.blueprint-parameters,
+.blueprint-external-ports {
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.blueprint-transform-controls > span,
+.blueprint-parameters > strong,
+.blueprint-external-ports > strong {
+  color: var(--muted);
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.blueprint-transform-controls .segmented-control button {
+  min-width: 0;
+  gap: 3px;
+  padding: 0 4px;
+  font-size: 8px;
+}
+
+.blueprint-mirror {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: 8px;
+}
+
+.blueprint-mirror.active {
+  border-color: #3c6d67;
+  background: #17302b;
+  color: var(--cyan);
+}
+
+.blueprint-parameters label {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(90px, 0.8fr) minmax(120px, 1.2fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: 8px;
+}
+
+.blueprint-parameters select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  font-size: 8px;
+}
+
+.blueprint-external-ports > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.blueprint-external-ports span {
+  padding: 4px 6px;
+  border: 1px solid #3e625a;
+  border-radius: 3px;
+  color: var(--cyan);
+  font-size: 8px;
+}
+
 .blueprint-requirements {
   padding: 11px 12px;
 }
@@ -5814,6 +5893,97 @@ select:focus-visible {
 
 .blueprint-card > footer button.danger:hover {
   color: var(--coral);
+}
+
+.construction-queue-panel {
+  min-width: 0;
+  max-height: 176px;
+  border-top: 1px solid var(--line-strong);
+  background: #101613;
+}
+
+.construction-queue-panel > header {
+  display: grid;
+  min-height: 42px;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  color: var(--cyan);
+}
+
+.construction-queue-panel > header div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.construction-queue-panel > header span,
+.construction-queue-panel > header em {
+  color: var(--muted);
+  font-size: 8px;
+  font-style: normal;
+}
+
+.construction-queue-panel > header strong {
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.construction-queue-panel > div {
+  display: flex;
+  gap: 8px;
+  overflow: auto;
+  padding: 0 14px 10px;
+}
+
+.construction-queue-panel article {
+  position: relative;
+  display: grid;
+  min-width: 260px;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 4px 8px;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-raised);
+}
+
+.construction-queue-panel article > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.construction-queue-panel article strong {
+  color: var(--text-soft);
+  font-size: 9px;
+}
+
+.construction-queue-panel article span,
+.construction-queue-panel article p {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.construction-queue-panel article p {
+  overflow: hidden;
+  grid-column: 1 / -1;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.construction-queue-panel article button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
 }
 
 .star-map-workspace {
@@ -6480,6 +6650,390 @@ select:focus-visible {
   font-size: 10px;
 }
 
+.production-planning {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.planning-create-bar {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) minmax(150px, 0.7fr) minmax(160px, 0.8fr) 122px;
+  align-items: end;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #0f1512;
+}
+
+.planning-create-bar label,
+.planning-config label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.planning-create-bar label:nth-child(2) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.planning-create-bar label:nth-child(2) span {
+  grid-column: 1 / -1;
+}
+
+.planning-create-bar label:nth-child(2) em {
+  align-self: center;
+  color: var(--muted);
+  font-size: 8px;
+  font-style: normal;
+}
+
+.planning-create-bar select,
+.planning-create-bar input,
+.planning-config select,
+.planning-config input,
+.planning-requirement-item select {
+  width: 100%;
+  min-width: 0;
+  height: 31px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  outline: 0;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  font-size: 9px;
+}
+
+.planning-create-bar input,
+.planning-config input {
+  padding: 0 7px;
+}
+
+.planning-create-bar > button {
+  display: inline-flex;
+  height: 31px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #3c6d67;
+  border-radius: 4px;
+  background: #17302b;
+  color: var(--cyan);
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.planning-layout {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: 238px minmax(0, 1fr);
+}
+
+.planning-list {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  background: #101513;
+}
+
+.planning-list > header {
+  display: grid;
+  height: 38px;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.planning-list > header svg,
+.planning-list > header strong {
+  color: var(--cyan);
+}
+
+.planning-list > div {
+  display: grid;
+}
+
+.planning-list > div > button {
+  display: grid;
+  min-width: 0;
+  min-height: 54px;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  text-align: left;
+}
+
+.planning-list > div > button.active {
+  background: #17231f;
+  box-shadow: inset 3px 0 var(--cyan-deep);
+}
+
+.planning-list .item-mark {
+  width: 28px;
+  height: 28px;
+}
+
+.planning-list button > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.planning-list button strong,
+.planning-list button small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planning-list button strong {
+  font-size: 9px;
+}
+
+.planning-list button small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.planning-detail {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.planning-config {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.2fr) minmax(130px, 1fr) minmax(105px, 0.7fr) minmax(120px, 0.8fr) 34px;
+  align-items: end;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.planning-config > button {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.planning-config > button:hover {
+  border-color: #69483f;
+  color: var(--coral);
+}
+
+.planning-summary-band {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(110px, 1fr));
+  border-bottom: 1px solid var(--line);
+}
+
+.planning-summary-band > div {
+  display: flex;
+  min-height: 64px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  border-right: 1px solid var(--line);
+}
+
+.planning-summary-band span {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.planning-summary-band strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.planning-history {
+  border-bottom: 1px solid var(--line);
+}
+
+.planning-history > header {
+  display: grid;
+  min-height: 34px;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.planning-history > header svg {
+  color: var(--cyan);
+}
+
+.planning-chart {
+  padding: 0 12px 10px;
+}
+
+.planning-chart svg {
+  width: 100%;
+  height: 92px;
+  overflow: visible;
+  border: 1px solid var(--line);
+  background: #0d1310;
+}
+
+.planning-chart polyline,
+.planning-chart line {
+  vector-effect: non-scaling-stroke;
+  fill: none;
+  stroke-width: 1.5;
+}
+
+.planning-chart-production {
+  stroke: var(--green);
+}
+
+.planning-chart-consumption {
+  stroke: var(--coral);
+}
+
+.planning-chart-target {
+  stroke: var(--yellow);
+  stroke-dasharray: 3 3;
+}
+
+.planning-chart > div {
+  display: flex;
+  gap: 14px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.planning-chart > div span:first-child {
+  color: var(--green);
+}
+
+.planning-chart > div span:nth-child(2) {
+  color: var(--coral);
+}
+
+.planning-chart > div strong {
+  margin-left: auto;
+  color: var(--text-soft);
+}
+
+.planning-history-empty,
+.planning-empty {
+  display: flex;
+  min-height: 112px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.planning-empty {
+  min-height: 260px;
+}
+
+.planning-empty strong {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.planning-empty span {
+  max-width: 360px;
+  text-align: center;
+}
+
+.planning-requirements {
+  min-width: 820px;
+}
+
+.planning-requirements > header,
+.planning-requirement {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.4fr) repeat(5, minmax(90px, 0.7fr));
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.planning-requirements > header {
+  height: 32px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.planning-requirement {
+  min-height: 48px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-soft);
+  font-size: 9px;
+}
+
+.planning-requirement--deficit > span:nth-child(4) {
+  color: var(--coral);
+}
+
+.planning-requirement-item {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.planning-requirement-item .item-mark {
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+}
+
+.planning-requirement-item > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.planning-requirement-item strong,
+.planning-requirement-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planning-requirement-item small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.planning-requirement-item select {
+  height: 22px;
+  font-size: 8px;
+}
+
 .power-summary-band {
   display: grid;
   grid-template-columns: repeat(6, minmax(110px, 1fr));
@@ -6974,7 +7528,7 @@ select:focus-visible {
 
   .blueprint-workspace {
     inset: 58px 0 96px;
-    grid-template-rows: 56px minmax(0, 1fr);
+    grid-template-rows: 56px minmax(0, 1fr) auto;
   }
 
   .blueprint-header {
@@ -7136,6 +7690,81 @@ select:focus-visible {
 
   .statistics-table--empty .statistics-empty {
     width: 100%;
+  }
+
+  .production-planning {
+    overflow: auto;
+  }
+
+  .planning-create-bar {
+    grid-template-columns: minmax(0, 1fr) minmax(110px, 0.65fr);
+    align-items: end;
+    padding: 8px;
+  }
+
+  .planning-create-bar label:nth-child(3) {
+    grid-column: 1 / 2;
+  }
+
+  .planning-create-bar > button {
+    grid-column: 2 / 3;
+  }
+
+  .planning-layout {
+    display: flex;
+    min-height: 640px;
+    flex-direction: column;
+  }
+
+  .planning-list {
+    flex: 0 0 auto;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .planning-list > header {
+    display: none;
+  }
+
+  .planning-list > div {
+    display: flex;
+  }
+
+  .planning-list > div > button {
+    min-width: 190px;
+    border-right: 1px solid var(--line);
+  }
+
+  .planning-detail {
+    flex: 1;
+    overflow: visible;
+  }
+
+  .planning-config {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .planning-config > button {
+    grid-column: 2;
+    justify-self: end;
+  }
+
+  .planning-summary-band {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .planning-summary-band > div:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .planning-chart > div {
+    flex-wrap: wrap;
+  }
+
+  .planning-chart > div strong {
+    width: 100%;
+    margin-left: 0;
   }
 
   .power-summary-band {

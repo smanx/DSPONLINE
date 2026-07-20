@@ -1,11 +1,12 @@
-import { AlertTriangle, BarChart3, Box, CircleCheckBig, Factory, Search, X, Zap } from "lucide-react";
+import { AlertTriangle, BarChart3, Box, Calculator, CircleCheckBig, Factory, Plus, Route, Search, Trash2, TrendingUp, X, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
-import { getItem, getPlanet } from "../game/content";
+import { ITEMS, PLANET_LIST, getBuilding, getItem, getPlanet, getRecipe } from "../game/content";
+import { calculateProductionPlan, getProductionRecipeOptions } from "../game/planning";
 import { calculateFactoryStatistics, type ItemStatistics } from "../game/statistics";
-import type { GameState, ItemId } from "../game/types";
+import type { GameState, ItemId, PlanetId, RecipeId } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
-type StatisticsTab = "production" | "power" | "issues";
+type StatisticsTab = "production" | "planning" | "power" | "issues";
 type ItemFilter = "all" | "producing" | "deficit" | "blocked";
 type ItemSort = "production" | "consumption" | "net" | "inventory" | "name";
 
@@ -13,6 +14,10 @@ interface StatisticsWorkspaceProps {
   open: boolean;
   game: GameState;
   onClose: () => void;
+  onCreatePlan: (itemId: ItemId, targetPerMinute: number, planetId: PlanetId | "all") => void;
+  onUpdatePlan: (planId: string, changes: { name?: string; itemId?: ItemId; targetPerMinute?: number; planetId?: PlanetId | "all" }) => void;
+  onSetPlanRecipe: (planId: string, itemId: ItemId, recipeId: RecipeId) => void;
+  onRemovePlan: (planId: string) => void;
 }
 
 function ItemMark({ itemId }: { itemId: ItemId }) {
@@ -40,11 +45,15 @@ function sortItems(items: ItemStatistics[], sort: ItemSort): ItemStatistics[] {
   });
 }
 
-export function StatisticsWorkspace({ open, game, onClose }: StatisticsWorkspaceProps) {
+export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan }: StatisticsWorkspaceProps) {
   const [tab, setTab] = useState<StatisticsTab>("production");
   const [filter, setFilter] = useState<ItemFilter>("all");
   const [sort, setSort] = useState<ItemSort>("production");
   const [query, setQuery] = useState("");
+  const [planItemId, setPlanItemId] = useState<ItemId>("electromagnetic_matrix");
+  const [planTarget, setPlanTarget] = useState(60);
+  const [planPlanetId, setPlanPlanetId] = useState<PlanetId | "all">("all");
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const statistics = useMemo(() => calculateFactoryStatistics(game), [game]);
   const items = useMemo(() => sortItems(statistics.items.filter((item) => {
     if (query && !getItem(item.itemId).name.includes(query.trim())) return false;
@@ -53,6 +62,14 @@ export function StatisticsWorkspace({ open, game, onClose }: StatisticsWorkspace
     if (filter === "blocked") return item.blockedProducerCount > 0;
     return true;
   }), sort), [filter, query, sort, statistics.items]);
+  const selectedPlan = game.productionPlans.find((plan) => plan.id === selectedPlanId) ?? game.productionPlans[0] ?? null;
+  const planResult = useMemo(() => selectedPlan ? calculateProductionPlan(game, selectedPlan) : null, [game, selectedPlan]);
+  const targetHistory = useMemo(() => selectedPlan ? game.productionHistory.map((sample) => ({
+    elapsedSeconds: sample.elapsedSeconds,
+    production: sample.productionPerMinute[selectedPlan.itemId] ?? 0,
+    consumption: sample.consumptionPerMinute[selectedPlan.itemId] ?? 0,
+    inventory: sample.inventory[selectedPlan.itemId] ?? 0,
+  })).slice(-60) : [], [game.productionHistory, selectedPlan]);
 
   if (!open) return null;
   const generationUtilization = game.metrics.generationKw > 0
@@ -76,6 +93,7 @@ export function StatisticsWorkspace({ open, game, onClose }: StatisticsWorkspace
 
       <nav className="statistics-tabs" role="tablist" aria-label="统计视图">
         <button type="button" role="tab" aria-selected={tab === "production"} className={tab === "production" ? "active" : ""} onClick={() => setTab("production")}><Factory size={15} />生产</button>
+        <button type="button" role="tab" aria-selected={tab === "planning"} className={tab === "planning" ? "active" : ""} onClick={() => setTab("planning")}><Calculator size={15} />规划 <strong>{game.productionPlans.length}</strong></button>
         <button type="button" role="tab" aria-selected={tab === "power"} className={tab === "power" ? "active" : ""} onClick={() => setTab("power")}><Zap size={15} />电力</button>
         <button type="button" role="tab" aria-selected={tab === "issues"} className={tab === "issues" ? "active" : ""} onClick={() => setTab("issues")}><AlertTriangle size={15} />瓶颈 <strong>{statistics.issues.length}</strong></button>
       </nav>
@@ -108,6 +126,57 @@ export function StatisticsWorkspace({ open, game, onClose }: StatisticsWorkspace
               ))}
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {tab === "planning" ? (
+        <div className="statistics-content production-planning">
+          <div className="planning-create-bar">
+            <label><span>目标物品</span><select value={planItemId} onChange={(event) => setPlanItemId(event.target.value as ItemId)}>{Object.values(ITEMS).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+            <label><span>目标产量</span><input type="number" min={0.01} step={1} value={planTarget} onChange={(event) => setPlanTarget(Math.max(0.01, Number(event.target.value)))} /><em>/min</em></label>
+            <label><span>规划范围</span><select value={planPlanetId} onChange={(event) => setPlanPlanetId(event.target.value as PlanetId | "all")}><option value="all">全星区</option>{PLANET_LIST.map((planet) => <option value={planet.id} key={planet.id}>{planet.name}</option>)}</select></label>
+            <button type="button" onClick={() => { const id = `plan_${game.nextId}`; onCreatePlan(planItemId, planTarget, planPlanetId); setSelectedPlanId(id); }}><Plus size={14} />新建方案</button>
+          </div>
+          {selectedPlan && planResult ? <div className="planning-layout">
+            <aside className="planning-list">
+              <header><Calculator size={14} /><span>生产目标</span><strong>{game.productionPlans.length}</strong></header>
+              <div>{game.productionPlans.map((plan) => <button className={plan.id === selectedPlan.id ? "active" : ""} type="button" key={plan.id} onClick={() => setSelectedPlanId(plan.id)}><ItemMark itemId={plan.itemId} /><span><strong>{plan.name}</strong><small>{plan.targetPerMinute.toFixed(1)}/min · {plan.planetId === "all" ? "全星区" : getPlanet(plan.planetId).name}</small></span></button>)}</div>
+            </aside>
+            <main className="planning-detail">
+              <header className="planning-config">
+                <label><span>方案名称</span><input defaultValue={selectedPlan.name} key={`${selectedPlan.id}-${selectedPlan.name}`} onBlur={(event) => onUpdatePlan(selectedPlan.id, { name: event.target.value })} /></label>
+                <label><span>目标物品</span><select value={selectedPlan.itemId} onChange={(event) => onUpdatePlan(selectedPlan.id, { itemId: event.target.value as ItemId })}>{Object.values(ITEMS).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+                <label><span>产量 / min</span><input type="number" min={0.01} value={selectedPlan.targetPerMinute} onChange={(event) => onUpdatePlan(selectedPlan.id, { targetPerMinute: Number(event.target.value) })} /></label>
+                <label><span>范围</span><select value={selectedPlan.planetId} onChange={(event) => onUpdatePlan(selectedPlan.id, { planetId: event.target.value as PlanetId | "all" })}><option value="all">全星区</option>{PLANET_LIST.map((planet) => <option value={planet.id} key={planet.id}>{planet.name}</option>)}</select></label>
+                <button type="button" onClick={() => { onRemovePlan(selectedPlan.id); setSelectedPlanId(null); }} title="删除生产方案" aria-label="删除生产方案"><Trash2 size={15} /></button>
+              </header>
+              <div className="planning-summary-band">
+                <div><span>理论设备</span><strong>{planResult.totalMachines}</strong></div>
+                <div><span>待增设备</span><strong>{planResult.additionalMachines}</strong></div>
+                <div><span>新增用电</span><strong>{(planResult.totalPowerDemandKw / 1000).toFixed(2)} MW</strong></div>
+                <div><span>物流吞吐</span><strong>{planResult.totalLogisticsPerMinute.toFixed(1)}/min</strong></div>
+                <div><span>首要瓶颈</span><strong>{planResult.limitingItemId ? getItem(planResult.limitingItemId).name : "无"}</strong></div>
+              </div>
+              <section className="planning-history">
+                <header><TrendingUp size={14} /><span>{getItem(selectedPlan.itemId).name}滚动历史</span><strong>{targetHistory.length > 0 ? `${targetHistory.length * 10} 秒` : "等待采样"}</strong></header>
+                {targetHistory.length > 1 ? (() => {
+                  const max = Math.max(selectedPlan.targetPerMinute, ...targetHistory.map((point) => Math.max(point.production, point.consumption)), 1);
+                  const points = (key: "production" | "consumption") => targetHistory.map((point, index) => `${index / Math.max(1, targetHistory.length - 1) * 100},${40 - point[key] / max * 36}`).join(" ");
+                  return <div className="planning-chart"><svg viewBox="0 0 100 42" preserveAspectRatio="none" role="img" aria-label={`${getItem(selectedPlan.itemId).name}生产历史曲线`}><line x1="0" y1={40 - selectedPlan.targetPerMinute / max * 36} x2="100" y2={40 - selectedPlan.targetPerMinute / max * 36} className="planning-chart-target" /><polyline points={points("production")} className="planning-chart-production" /><polyline points={points("consumption")} className="planning-chart-consumption" /></svg><div><span>生产</span><span>消耗</span><span>目标 {selectedPlan.targetPerMinute.toFixed(1)}/min</span><strong>库存 {targetHistory.at(-1)?.inventory.toLocaleString("zh-CN")}</strong></div></div>;
+                })() : <div className="planning-history-empty"><TrendingUp size={18} /><span>模拟运行 10 秒后开始记录历史曲线</span></div>}
+              </section>
+              <section className="planning-requirements">
+                <header><span>物品 / 来源</span><span>需求</span><span>现有</span><span>缺口</span><span>设备</span><span>库存续航</span></header>
+                <div>{planResult.requirements.map((requirement) => {
+                  const recipeOptions = getProductionRecipeOptions(game, requirement.itemId);
+                  return <div className={requirement.deficitPerMinute > 0.01 ? "planning-requirement planning-requirement--deficit" : "planning-requirement"} key={requirement.itemId}>
+                    <span className="planning-requirement-item" style={{ paddingLeft: `${requirement.depth * 12}px` }}><ItemMark itemId={requirement.itemId} /><span><strong>{getItem(requirement.itemId).name}</strong>{recipeOptions.length > 1 ? <select value={selectedPlan.recipeSelections[requirement.itemId] ?? requirement.recipeId} onChange={(event) => onSetPlanRecipe(selectedPlan.id, requirement.itemId, event.target.value as RecipeId)}>{recipeOptions.map((recipe) => <option value={recipe.id} key={recipe.id}>{recipe.name}</option>)}</select> : <small>{requirement.recipeId ? getRecipe(requirement.recipeId)?.name : "直接采集"} · {getBuilding(requirement.buildingId).shortName}</small>}</span></span>
+                    <span>{requirement.requiredPerMinute.toFixed(1)}/min</span><span>{requirement.existingPerMinute.toFixed(1)}/min</span><span>{requirement.deficitPerMinute.toFixed(1)}/min</span><span>{Math.ceil(requirement.machinesRequired)} · +{requirement.additionalMachines}</span><span>{requirement.coverageMinutes === null ? "稳定" : requirement.coverageMinutes < 1 ? `${Math.round(requirement.coverageMinutes * 60)} 秒` : `${requirement.coverageMinutes.toFixed(1)} 分`}</span>
+                  </div>;
+                })}</div>
+              </section>
+            </main>
+          </div> : <div className="planning-empty"><Route size={28} /><strong>建立第一个生产目标</strong><span>选择目标物品和每分钟产量，规划器会反推完整原料、设备、电力与物流需求。</span></div>}
         </div>
       ) : null}
 
