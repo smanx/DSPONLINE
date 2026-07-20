@@ -47,6 +47,7 @@ import {
   getStationDroneCapacity,
   handcraftRecipe,
   installSprayCoater,
+  installSprayCoaters,
   installMiner,
   manualMine,
   moveEntityInputToEntity,
@@ -63,10 +64,12 @@ import {
   setActivePlanet,
   setBeltPriority,
   setEntityRecipe,
+  setEntitiesRecipe,
   setEnergyMode,
   setFuelItem,
   setLogisticsItem,
   setProliferatorConfiguration,
+  setEntitiesProliferatorConfiguration,
   setStationMode,
   setStationMinimumLoad,
   setStationWarpEnabled,
@@ -1748,6 +1751,31 @@ describe("factory simulation", () => {
 
     state = removeEntity(state, assembler.id);
     expect(state.construction.spray_coater).toBe(1);
+  });
+
+  it("applies recipe and proliferator settings to a compatible multi-selection", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("proliferator_1", "proliferator_2");
+    state.construction.assembling_machine_mk1 = 2;
+    state.construction.spray_coater = 2;
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 300, y: 0 });
+    const entityIds = state.entities
+      .filter((entity) => entity.buildingId === "assembling_machine_mk1")
+      .map((entity) => entity.id);
+
+    state = setEntitiesRecipe(state, entityIds, "circuit_board");
+    expect(state.entities.filter((entity) => entityIds.includes(entity.id)).every((entity) => entity.recipeId === "circuit_board")).toBe(true);
+
+    state = installSprayCoaters(state, entityIds);
+    expect(state.entities.filter((entity) => entityIds.includes(entity.id)).every((entity) => entity.sprayCoaterInstalled)).toBe(true);
+    expect(state.construction.spray_coater).toBe(0);
+
+    state = setEntitiesProliferatorConfiguration(state, entityIds, 2, "speed");
+    expect(state.entities.filter((entity) => entityIds.includes(entity.id))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ proliferatorTier: 2, proliferatorMode: "speed" }),
+      expect.objectContaining({ proliferatorTier: 2, proliferatorMode: "speed" }),
+    ]));
   });
 
   it("consumes spray points and accumulates only whole extra products", () => {

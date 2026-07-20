@@ -2207,6 +2207,22 @@ test("box selection copies, pastes, moves and upgrades a production blueprint", 
   await page.screenshot({ path: "artifacts/qa/blueprint-library-390.png", fullPage: true });
 });
 
+test("canvas placement supports toolbar and keyboard undo redo", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openBlueprintStageGame(page);
+  await page.getByTitle("部署制造台 Mk.I", { exact: true }).click();
+  await page.locator(".react-flow__pane").click({ position: { x: 700, y: 100 } });
+  await expect(page.locator(".machine-node")).toHaveCount(3);
+
+  await page.getByLabel("撤销").click();
+  await expect(page.locator(".machine-node")).toHaveCount(2);
+  await expect(page.getByLabel("重做")).toBeEnabled();
+
+  await page.keyboard.press("Control+Shift+Z");
+  await expect(page.locator(".machine-node")).toHaveCount(3);
+  await expect(page.locator(".game-notice")).toContainText("已重做");
+});
+
 test("operations center diagnoses equipment and records achievement progress", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openOperationsStageGame(page);

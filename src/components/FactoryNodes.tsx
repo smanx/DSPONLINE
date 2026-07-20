@@ -67,6 +67,7 @@ export interface FactoryNodeData extends Record<string, unknown> {
   networkTime: number;
   paused: boolean;
   activeLogisticsEntityIds: string[];
+  connectionDraft: { nodeId: string; itemId: ItemId; handleType: "source" | "target" } | null;
   dysonSwarm: DysonSwarmState;
   dysonSphere: DysonSphereState;
   status: EntityOperatingStatus;
@@ -142,9 +143,17 @@ interface OutputSlotProps {
   itemId: ItemId;
   amount: number;
   onPick: (entityId: string, itemId: ItemId) => void;
+  connectionDraft: FactoryNodeData["connectionDraft"];
 }
 
-function OutputSlot({ entityId, itemId, amount, onPick }: OutputSlotProps) {
+function connectionHandleClass(entityId: string, itemId: ItemId, handleType: "source" | "target", draft: FactoryNodeData["connectionDraft"]): string {
+  if (!draft) return "";
+  if (draft.nodeId === entityId && draft.itemId === itemId && draft.handleType === handleType) return " factory-handle--origin";
+  if (draft.handleType === handleType) return " factory-handle--muted";
+  return draft.itemId === itemId ? " factory-handle--compatible" : " factory-handle--incompatible";
+}
+
+function OutputSlot({ entityId, itemId, amount, onPick, connectionDraft }: OutputSlotProps) {
   const enabled = amount > 0.001;
   const pick = () => enabled && onPick(entityId, itemId);
   return (
@@ -166,7 +175,7 @@ function OutputSlot({ entityId, itemId, amount, onPick }: OutputSlotProps) {
       >
         <ItemBadge itemId={itemId} amount={amount} muted={!enabled} />
       </button>
-      <Handle id={`out:${itemId}`} type="source" position={Position.Right} className="factory-handle factory-handle--output nodrag nopan" />
+      <Handle id={`out:${itemId}`} type="source" position={Position.Right} className={`factory-handle factory-handle--output nodrag nopan${connectionHandleClass(entityId, itemId, "source", connectionDraft)}`} />
     </div>
   );
 }
@@ -179,9 +188,10 @@ interface InputSlotProps {
   onDropCargo: (entityId: string) => void;
   onPickInput: (entityId: string, itemId: ItemId) => void;
   onDropDraggedItem: FactoryNodeData["onDropDraggedItem"];
+  connectionDraft: FactoryNodeData["connectionDraft"];
 }
 
-function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, onDropDraggedItem }: InputSlotProps) {
+function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, onDropDraggedItem, connectionDraft }: InputSlotProps) {
   const compatible = cargo?.itemId === itemId;
   const dropCargo = (event: React.MouseEvent) => {
     event.stopPropagation();
@@ -199,7 +209,7 @@ function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, 
   };
   return (
     <div className={`node-port node-port--input${compatible ? " node-port--compatible" : ""}`}>
-      <Handle id={`in:${itemId}`} type="target" position={Position.Left} className="factory-handle factory-handle--input nodrag nopan" />
+      <Handle id={`in:${itemId}`} type="target" position={Position.Left} className={`factory-handle factory-handle--input nodrag nopan${connectionHandleClass(entityId, itemId, "target", connectionDraft)}`} />
       <button
         className="node-slot nodrag nopan"
         type="button"
@@ -295,7 +305,7 @@ export function VeinNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           <i />
         </button>
       )}
-      <OutputSlot entityId={entity.id} itemId={resourceId} amount={output} onPick={data.onPickOutput} />
+      <OutputSlot entityId={entity.id} itemId={resourceId} amount={output} onPick={data.onPickOutput} connectionDraft={data.connectionDraft} />
       {cargo?.itemId === resourceId ? <span className="node-cargo-match">同类物资已拿起</span> : null}
     </article>
   );
@@ -419,6 +429,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
               onDropCargo={data.onDropCargo}
               onPickInput={data.onPickInput}
               onDropDraggedItem={data.onDropDraggedItem}
+              connectionDraft={data.connectionDraft}
             />
           )) : rayReceiver ? (
             <div className="stellar-input"><Sun size={14} /><span>戴森系统能量</span></div>
@@ -438,6 +449,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
               itemId={output.itemId}
               amount={entity.outputs[output.itemId] ?? 0}
               onPick={data.onPickOutput}
+              connectionDraft={data.connectionDraft}
             />
           )) : railEjector ? (
             <div className="orbital-target"><Orbit size={14} /><span>在轨 {formatAmount(data.dysonSwarm.sailsInOrbit)} 帆</span></div>
@@ -522,11 +534,11 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         <div className={`node-io logistics-io${orbitalCollector ? " logistics-io--collector" : ""}`}>
           {!orbitalCollector ? <div className="node-io__column">
             <span className="node-io__label">输入</span>
-            <InputSlot entityId={entity.id} itemId={itemId} amount={entity.inputs[itemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} />
+            <InputSlot entityId={entity.id} itemId={itemId} amount={entity.inputs[itemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} connectionDraft={data.connectionDraft} />
           </div> : null}
           <div className="node-io__column node-io__column--output">
             <span className="node-io__label">输出</span>
-            <OutputSlot entityId={entity.id} itemId={itemId} amount={entity.outputs[itemId] ?? 0} onPick={data.onPickOutput} />
+            <OutputSlot entityId={entity.id} itemId={itemId} amount={entity.outputs[itemId] ?? 0} onPick={data.onPickOutput} connectionDraft={data.connectionDraft} />
           </div>
         </div>
       ) : (
@@ -633,7 +645,7 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       </div>
       {fuelGenerator && fuelId ? (
         <div className="thermal-fuel">
-          <InputSlot entityId={entity.id} itemId={fuelId} amount={entity.inputs[fuelId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} />
+          <InputSlot entityId={entity.id} itemId={fuelId} amount={entity.inputs[fuelId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} connectionDraft={data.connectionDraft} />
           <span>炉膛余热 <strong>{(entity.fuelRemainingMj ?? 0).toFixed(2)} MJ</strong></span>
         </div>
       ) : fuelGenerator ? <div className="thermal-empty">未配置燃料</div> : null}
@@ -641,11 +653,11 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         <div className="node-io energy-exchange-io">
           <div className="node-io__column">
             <span className="node-io__label">输入</span>
-            {recipe.inputs.map((input) => <InputSlot key={input.itemId} entityId={entity.id} itemId={input.itemId} amount={entity.inputs[input.itemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} />)}
+            {recipe.inputs.map((input) => <InputSlot key={input.itemId} entityId={entity.id} itemId={input.itemId} amount={entity.inputs[input.itemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} connectionDraft={data.connectionDraft} />)}
           </div>
           <div className="node-io__column node-io__column--output">
             <span className="node-io__label">输出</span>
-            {recipe.outputs.map((output) => <OutputSlot key={output.itemId} entityId={entity.id} itemId={output.itemId} amount={entity.outputs[output.itemId] ?? 0} onPick={data.onPickOutput} />)}
+            {recipe.outputs.map((output) => <OutputSlot key={output.itemId} entityId={entity.id} itemId={output.itemId} amount={entity.outputs[output.itemId] ?? 0} onPick={data.onPickOutput} connectionDraft={data.connectionDraft} />)}
           </div>
         </div>
       ) : null}

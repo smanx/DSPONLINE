@@ -2194,6 +2194,10 @@ export function setEntityRecipe(state: GameState, entityId: string, recipeId: Re
   return next;
 }
 
+export function setEntitiesRecipe(state: GameState, entityIds: string[], recipeId: RecipeId): GameState {
+  return [...new Set(entityIds)].reduce((current, entityId) => setEntityRecipe(current, entityId, recipeId), state);
+}
+
 export function canInstallSprayCoater(state: GameState, entityId: string): boolean {
   const entity = state.entities.find((item) => item.id === entityId);
   return Boolean(entity && !entity.sprayCoaterInstalled && isProliferatorEligible(entity) &&
@@ -2211,6 +2215,10 @@ export function installSprayCoater(state: GameState, entityId: string): GameStat
   entity.proliferatorBonusProgress = {};
   next.construction.spray_coater = (next.construction.spray_coater ?? 0) - 1;
   return next;
+}
+
+export function installSprayCoaters(state: GameState, entityIds: string[]): GameState {
+  return [...new Set(entityIds)].reduce((current, entityId) => installSprayCoater(current, entityId), state);
 }
 
 export function setProliferatorConfiguration(
@@ -2240,6 +2248,16 @@ export function setProliferatorConfiguration(
   entity.proliferatorTier = tier;
   entity.proliferatorMode = mode;
   return next;
+}
+
+export function setEntitiesProliferatorConfiguration(
+  state: GameState,
+  entityIds: string[],
+  tier: ProliferatorTier,
+  mode: ProliferatorMode,
+): GameState {
+  return [...new Set(entityIds)].reduce((current, entityId) =>
+    setProliferatorConfiguration(current, entityId, tier, mode), state);
 }
 
 export function pickFromEntity(state: GameState, entityId: string, itemId: ItemId, amount = 100): GameState {

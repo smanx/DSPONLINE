@@ -61,7 +61,7 @@ export function CampaignWorkspace({
   open: boolean;
   game: GameState;
   onClose: () => void;
-  onNavigate: (navigation: CampaignNavigation) => void;
+  onNavigate: (navigation: CampaignNavigation, taskId: CampaignTaskId) => void;
   onSelectTask: (taskId: CampaignTaskId) => void;
 }) {
   if (!open) return null;
@@ -127,7 +127,7 @@ export function CampaignWorkspace({
                         <span>{formatAmount(task.progress.current)} / {formatAmount(task.progress.target)}</span>
                       </div>
                       <div className="campaign-task-meta">
-                        {task.navigation ? <button className="campaign-route-command" type="button" onClick={() => onNavigate(task.navigation!)} title={getCampaignNavigationLabel(task.navigation)}>{navigationIcon(task.navigation)}{getCampaignNavigationLabel(task.navigation)}</button> : null}
+                        {task.navigation ? <button className="campaign-route-command" type="button" onClick={() => onNavigate(task.navigation!, task.id)} title={getCampaignNavigationLabel(task.navigation)}>{navigationIcon(task.navigation)}{getCampaignNavigationLabel(task.navigation)}</button> : null}
                         {rewardText ? <span className="campaign-reward"><PackageCheck size={13} />{rewardText}</span> : null}
                       </div>
                       {task.status !== "complete" && deficits.length > 0 ? (

@@ -284,11 +284,20 @@ interface InspectorPanelProps {
   onUpgradeSorter: (beltId: string) => void;
   onInstallSprayCoater: (entityId: string) => void;
   onProliferatorConfiguration: (entityId: string, tier: ProliferatorTier, mode: ProliferatorMode) => void;
+  onBatchRecipeChange: (entityIds: string[], recipeId: RecipeId) => void;
+  onBatchInstallSprayCoater: (entityIds: string[]) => void;
+  onBatchProliferatorConfiguration: (entityIds: string[], tier: ProliferatorTier, mode: ProliferatorMode) => void;
   onRemoveEntity: (entityId: string) => void;
   onRemoveBelt: (beltId: string) => void;
 }
 
-function MultiSelectionInspector({ game, entities }: { game: GameState; entities: FactoryEntity[] }) {
+function MultiSelectionInspector({ game, entities, onRecipeChange, onInstallSprayCoater, onProliferatorConfiguration }: {
+  game: GameState;
+  entities: FactoryEntity[];
+  onRecipeChange: (entityIds: string[], recipeId: RecipeId) => void;
+  onInstallSprayCoater: (entityIds: string[]) => void;
+  onProliferatorConfiguration: (entityIds: string[], tier: ProliferatorTier, mode: ProliferatorMode) => void;
+}) {
   const ids = new Set(entities.map((entity) => entity.id));
   const equipmentCount = entities.reduce((sum, entity) => sum + entity.machineCount + entity.minerCount, 0);
   const ratedDemand = entities.reduce((sum, entity) => {
@@ -304,6 +313,21 @@ function MultiSelectionInspector({ game, entities }: { game: GameState; entities
     const name = entity.kind === "vein" ? ITEMS[entity.resourceId!].name : getBuilding(entity.buildingId!).name;
     composition.set(name, (composition.get(name) ?? 0) + Math.max(entity.machineCount, entity.minerCount, 1));
   }
+  const machines = entities.filter((entity) => entity.kind === "machine" && entity.buildingId);
+  const commonRecipes = machines.length > 0 ? getRecipesForBuilding(machines[0].buildingId!).filter((recipe) =>
+    (!recipe.requiredTechId || isTechnologyCompleted(game, recipe.requiredTechId)) &&
+    machines.every((entity) => getRecipesForBuilding(entity.buildingId!).some((candidate) => candidate.id === recipe.id))) : [];
+  const commonRecipeId = machines.length > 0 && machines.every((entity) => entity.recipeId === machines[0].recipeId)
+    ? machines[0].recipeId
+    : "";
+  const sprayEligible = machines.filter(isProliferatorEligible);
+  const sprayInstalled = sprayEligible.filter((entity) => entity.sprayCoaterInstalled);
+  const commonTier = sprayInstalled.length > 0 && sprayInstalled.every((entity) => (entity.proliferatorTier ?? 1) === (sprayInstalled[0].proliferatorTier ?? 1))
+    ? sprayInstalled[0].proliferatorTier ?? 1
+    : 1;
+  const commonMode = sprayInstalled.length > 0 && sprayInstalled.every((entity) => (entity.proliferatorMode ?? "normal") === (sprayInstalled[0].proliferatorMode ?? "normal"))
+    ? sprayInstalled[0].proliferatorMode ?? "normal"
+    : "normal";
   return (
     <div className="inspector-content multi-selection-inspector">
       <div className="inspector-identity"><i className="building-mark"><Layers3 size={18} /></i><div><span>画布多选</span><strong>已选择 {entities.length} 个节点</strong></div></div>
@@ -313,6 +337,31 @@ function MultiSelectionInspector({ game, entities }: { game: GameState; entities
         <div><dt>内部运输线</dt><dd>{internalLines}</dd></div>
         <div><dt>额定耗电</dt><dd>{ratedDemand.toFixed(0)} kW</dd></div>
       </dl>
+      {commonRecipes.length > 0 ? (
+        <section className="batch-control">
+          <header><Factory size={14} /><span>批量配方</span><strong>{machines.length} 个设备</strong></header>
+          <select value={commonRecipeId} onChange={(event) => onRecipeChange(machines.map((entity) => entity.id), event.target.value as RecipeId)} aria-label="批量修改生产配方">
+            {!commonRecipeId ? <option value="" disabled>混合配方</option> : null}
+            {commonRecipes.map((recipe) => <option value={recipe.id} key={recipe.id}>{recipe.name}</option>)}
+          </select>
+        </section>
+      ) : null}
+      {sprayEligible.length > 0 ? (
+        <section className="batch-control batch-proliferator">
+          <header><Sparkles size={14} /><span>批量喷涂</span><strong>{sprayInstalled.length}/{sprayEligible.length}</strong></header>
+          {sprayInstalled.length < sprayEligible.length ? (
+            <button type="button" disabled={(game.construction.spray_coater ?? 0) < sprayEligible.length - sprayInstalled.length || !isTechnologyCompleted(game, "proliferator_1")} onClick={() => onInstallSprayCoater(sprayEligible.map((entity) => entity.id))}><Wrench size={13} />安装缺少的喷涂机</button>
+          ) : null}
+          {sprayInstalled.length > 0 ? <div className="batch-proliferator-options">
+            <select value={commonTier} onChange={(event) => onProliferatorConfiguration(sprayInstalled.map((entity) => entity.id), Number(event.target.value) as ProliferatorTier, commonMode)} aria-label="批量增产剂等级">
+              {([1, 2, 3] as ProliferatorTier[]).map((tier) => <option value={tier} disabled={!isTechnologyCompleted(game, getProliferator(tier).requiredTechId)} key={tier}>Mk.{tier === 3 ? "III" : tier === 2 ? "II" : "I"}</option>)}
+            </select>
+            <select value={commonMode} onChange={(event) => onProliferatorConfiguration(sprayInstalled.map((entity) => entity.id), commonTier, event.target.value as ProliferatorMode)} aria-label="批量增产模式">
+              <option value="normal">正常生产</option><option value="extra">额外产出</option><option value="speed">生产加速</option>
+            </select>
+          </div> : null}
+        </section>
+      ) : null}
       <section className="selection-composition"><span>选区构成</span><div>{[...composition].map(([name, count]) => <p key={name}><strong>{name}</strong><em>×{count}</em></p>)}</div></section>
     </div>
   );
@@ -957,7 +1006,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
         </button>
       </div>
       {props.tab === "fabricate" ? <Fabricator game={props.game} onCraft={props.onCraft} onCraftItem={props.onCraftItem} /> : props.selectedEntities.length > 1 ? (
-        <MultiSelectionInspector game={props.game} entities={props.selectedEntities} />
+        <MultiSelectionInspector game={props.game} entities={props.selectedEntities} onRecipeChange={props.onBatchRecipeChange} onInstallSprayCoater={props.onBatchInstallSprayCoater} onProliferatorConfiguration={props.onBatchProliferatorConfiguration} />
       ) : props.selectedEntity ? (
         <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} />
       ) : props.selectedBelt ? (
@@ -1125,11 +1174,14 @@ export function BuildingPlacementCursor({ buildingId, count, x, y }: {
 }) {
   if (!buildingId) return null;
   const building = getBuilding(buildingId);
+  const previewTiles = Array.from({ length: count }, (_, index) => index);
   return (
     <div className="building-placement-cursor" style={{ transform: `translate3d(${x + 16}px, ${y + 16}px, 0)` }}>
-      <i>{buildIcon(buildingId)}</i>
+      <div className="building-placement-array" aria-hidden="true">
+        {previewTiles.map((index) => <i key={index}>{buildIcon(buildingId)}</i>)}
+      </div>
       <span>{building.name}</span>
-      <strong>×{count}</strong>
+      <strong>阵列 ×{count}</strong>
     </div>
   );
 }

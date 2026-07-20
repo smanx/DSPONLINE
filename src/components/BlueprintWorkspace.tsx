@@ -1,4 +1,4 @@
-import { ArrowUp, BoxSelect, Check, Copy, Focus, Layers3, MousePointer2, PackageOpen, Trash2, X } from "lucide-react";
+import { ArrowUp, BoxSelect, Check, Copy, Focus, Layers3, MousePointer2, PackageOpen, Redo2, Trash2, Undo2, X } from "lucide-react";
 import { getConstructionDefinition, getPlanet } from "../game/content";
 import { canPlaceBlueprint, getBlueprintRequirements } from "../game/engine";
 import type { BlueprintDefinition, GameState } from "../game/types";
@@ -12,17 +12,24 @@ function blueprintBuildingSummary(blueprint: BlueprintDefinition): string[] {
   return [...counts].map(([name, amount]) => `${name} ×${amount}`);
 }
 
-export function CanvasSelectionTools({ selectionMode, blueprintCount, onModeChange, onOpenBlueprints }: {
+export function CanvasSelectionTools({ selectionMode, blueprintCount, canUndo, canRedo, onModeChange, onOpenBlueprints, onUndo, onRedo }: {
   selectionMode: boolean;
   blueprintCount: number;
+  canUndo: boolean;
+  canRedo: boolean;
   onModeChange: (enabled: boolean) => void;
   onOpenBlueprints: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
 }) {
   return (
     <div className="canvas-selection-tools nodrag nopan" aria-label="画布选择工具">
       <button className={!selectionMode ? "active" : ""} type="button" onClick={() => onModeChange(false)} title="指针与节点移动" aria-label="指针模式"><MousePointer2 size={16} /></button>
       <button className={selectionMode ? "active" : ""} type="button" onClick={() => onModeChange(true)} title="拖拽框选节点，可按 Shift 增减选择" aria-label="框选模式"><BoxSelect size={16} /></button>
       <button type="button" onClick={onOpenBlueprints} title="打开蓝图库" aria-label="打开蓝图库"><Layers3 size={16} /><em>{blueprintCount}</em></button>
+      <span className="canvas-selection-tools__separator" />
+      <button type="button" disabled={!canUndo} onClick={onUndo} title="撤销上一步工厂操作 (Ctrl+Z)" aria-label="撤销"><Undo2 size={16} /></button>
+      <button type="button" disabled={!canRedo} onClick={onRedo} title="重做工厂操作 (Ctrl+Y)" aria-label="重做"><Redo2 size={16} /></button>
     </div>
   );
 }
