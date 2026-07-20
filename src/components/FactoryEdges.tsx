@@ -9,6 +9,9 @@ export interface FactoryEdgeData extends Record<string, unknown> {
   tier: 1 | 2 | 3;
   flow: number;
   capacity: number;
+  stackSize: 1 | 2 | 4;
+  congestion: number;
+  monitored: boolean;
   durationSeconds: number;
   detailVisible: boolean;
   motionEnabled: boolean;
@@ -48,12 +51,14 @@ export function FactoryEdge({
       {data?.detailVisible ? (
         <EdgeLabelRenderer>
           <div
-            className={`react-flow__edge-text factory-edge-label nodrag nopan${selected ? " factory-edge-label--selected" : ""}`}
+            className={`react-flow__edge-text factory-edge-label nodrag nopan${selected ? " factory-edge-label--selected" : ""}${data.congestion > 0.8 ? " factory-edge-label--congested" : ""}`}
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
           >
             <i style={{ backgroundColor: data.color }}>{data.itemSymbol}</i>
             <span>Mk.{data.tier === 3 ? "III" : data.tier === 2 ? "II" : "I"}</span>
+            {data.stackSize > 1 ? <em>×{data.stackSize}</em> : null}
             <strong>{data.flow.toFixed(1)} / {data.capacity.toFixed(0)} s⁻¹</strong>
+            {data.monitored ? <b>{Math.round(data.congestion * 100)}%</b> : null}
           </div>
         </EdgeLabelRenderer>
       ) : null}

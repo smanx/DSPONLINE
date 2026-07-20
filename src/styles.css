@@ -1648,6 +1648,20 @@ select:focus-visible {
   grid-template-columns: 1fr;
 }
 
+.station-node .logistics-io:not(.logistics-io--collector) {
+  display: flex;
+  min-height: 66px;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.logistics-slot-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
 .logistics-empty {
   display: grid;
   min-height: 72px;
@@ -2449,10 +2463,188 @@ select:focus-visible {
 }
 
 .station-fleet-control,
+.station-local-fleet-control,
 .station-warper-control,
 .station-load-control {
   padding: 12px 0;
   border-bottom: 1px solid var(--line);
+}
+
+.station-fleet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(122px, 1fr));
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.station-fleet-grid .station-fleet-control,
+.station-fleet-grid .station-local-fleet-control {
+  border-bottom: 0;
+}
+
+.station-slot-list {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.station-slot {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #111715;
+}
+
+.station-slot--configured {
+  border-color: #36534b;
+  background: #121b18;
+}
+
+.station-slot > header,
+.station-slot-stock,
+.station-slot-scope,
+.station-route-progress {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.station-slot > header {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.station-slot > header strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--cyan);
+  font-size: 9px;
+}
+
+.station-slot > select,
+.station-slot-configure,
+.station-slot-options select,
+.station-slot-options input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  outline: 0;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  font-size: 9px;
+}
+
+.station-slot-configure {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.station-slot-stock {
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.station-slot-stock .item-mark {
+  width: 22px;
+  height: 22px;
+}
+
+.station-slot-stock strong {
+  color: var(--text-soft);
+}
+
+.station-slot-scope {
+  margin-top: 7px;
+}
+
+.station-slot-scope > span {
+  width: 30px;
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.station-slot-scope .segmented-control {
+  min-width: 0;
+  flex: 1;
+}
+
+.station-slot-scope .segmented-control button {
+  min-width: 0;
+  padding: 0 4px;
+  font-size: 8px;
+}
+
+.station-slot-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.station-slot-options label {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.station-slot-load {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.station-slot-load .segmented-control button {
+  min-width: 0;
+  padding: 0 2px;
+  font-size: 8px;
+}
+
+.station-slot-options input {
+  padding: 0 5px;
+}
+
+.station-route-progress {
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.station-route-progress > i {
+  overflow: hidden;
+  height: 4px;
+  flex: 1;
+  border-radius: 2px;
+  background: #222c28;
+}
+
+.station-route-progress > i b {
+  display: block;
+  height: 100%;
+  background: var(--cyan);
+}
+
+.station-route-progress strong {
+  color: var(--text-soft);
+  font-size: 8px;
 }
 
 .station-warper-control .toggle-row {
@@ -2666,6 +2858,54 @@ select:focus-visible {
 
 .equipment-upgrade--belt {
   margin-bottom: 14px;
+}
+
+.equipment-upgrade--belt > button + button,
+.equipment-upgrade--sorter > button + button {
+  margin-top: 6px;
+}
+
+.belt-routing-controls {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0;
+}
+
+.belt-routing-controls > span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.belt-routing-controls .toggle-row {
+  margin: 0;
+}
+
+.belt-clipboard-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0 0 12px;
+}
+
+.belt-clipboard-actions button {
+  display: inline-flex;
+  min-width: 0;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.belt-clipboard-actions button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .fabricator-list {
@@ -7310,10 +7550,9 @@ select:focus-visible {
 .factory-edge-label {
   position: absolute;
   z-index: 5;
-  display: grid;
+  display: flex;
   min-width: 118px;
   height: 26px;
-  grid-template-columns: 20px auto minmax(0, 1fr);
   align-items: center;
   gap: 5px;
   padding: 3px 7px 3px 3px;
@@ -7340,9 +7579,25 @@ select:focus-visible {
 }
 
 .factory-edge-label > strong {
+  margin-left: auto;
   color: var(--text-soft);
   font-size: 8px;
   text-align: right;
+}
+
+.factory-edge-label > em,
+.factory-edge-label > b {
+  color: var(--cyan);
+  font-size: 8px;
+  font-style: normal;
+}
+
+.factory-edge-label > b {
+  color: var(--yellow);
+}
+
+.factory-edge-label--congested {
+  border-color: color-mix(in srgb, var(--coral) 62%, var(--line-strong));
 }
 
 .factory-edge-label--selected {

@@ -9,6 +9,7 @@ import {
   adjustStationWarpers,
   adjustStationVessels,
   advanceSimulation,
+  applyBeltConfiguration,
   canExploreStarSystem,
   canPlaceBlueprint,
   canInstallSprayCoater,
@@ -27,6 +28,7 @@ import {
   exploreStarSystem,
   getEntityOperatingStatus,
   getBeltCapacity,
+  getBeltNetworkIds,
   getBlueprintRequirements,
   getDysonPlanTotals,
   getDysonShellCapacity,
@@ -45,6 +47,7 @@ import {
   getSolarSailLifetimeSeconds,
   getSorterCapacity,
   getStationDroneCapacity,
+  getStationSlots,
   handcraftRecipe,
   installSprayCoater,
   installSprayCoaters,
@@ -63,6 +66,8 @@ import {
   selectTechnology,
   setActivePlanet,
   setBeltPriority,
+  setBeltMonitorEnabled,
+  setBeltStackSize,
   setEntityRecipe,
   setEntitiesRecipe,
   setEnergyMode,
@@ -72,6 +77,10 @@ import {
   setEntitiesProliferatorConfiguration,
   setStationMode,
   setStationMinimumLoad,
+  setStationSlotItem,
+  setStationSlotMinimumLoad,
+  setStationSlotMode,
+  setStationSlotPriority,
   setStationWarpEnabled,
   setSplitterMode,
   upgradeBelt,
@@ -1912,6 +1921,52 @@ describe("factory simulation", () => {
     expect(state.entities.find((entity) => entity.id === demand.id)?.outputs.iron_ingot).toBe(50);
     expect(state.entities.find((entity) => entity.id === demand.id)?.stationTrips).toBe(2);
     expect(getEntityOperatingStatus(state, state.entities.find((entity) => entity.id === demand.id)!)).toMatchObject({ code: "running" });
+  });
+
+  it("dispatches five-slot station cargo independently by item and priority", () => {
+    let state = createInitialState();
+    state.construction.wind_turbine = 4;
+    state.construction.planetary_logistics_station = 2;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 4);
+    state = placeBuilding(state, "planetary_logistics_station", { x: -200, y: 0 });
+    state = placeBuilding(state, "planetary_logistics_station", { x: 300, y: 0 });
+    const [supply, demand] = state.entities.filter((entity) => entity.buildingId === "planetary_logistics_station");
+    state = setStationSlotItem(state, supply.id, 0, "iron_ingot");
+    state = setStationSlotItem(state, supply.id, 1, "copper_ingot");
+    state = setStationSlotItem(state, demand.id, 0, "iron_ingot");
+    state = setStationSlotItem(state, demand.id, 1, "copper_ingot");
+    state = setStationSlotMode(state, demand.id, 0, "local", "demand");
+    state = setStationSlotMode(state, demand.id, 1, "local", "demand");
+    state = setStationSlotMinimumLoad(state, demand.id, 0, 1);
+    state = setStationSlotMinimumLoad(state, demand.id, 1, 1);
+    state = setStationSlotPriority(state, demand.id, 1, 2);
+    state.entities.find((entity) => entity.id === supply.id)!.outputs = { iron_ingot: 25, copper_ingot: 25 };
+    state.tray.logistics_drone = 2;
+    state = adjustStationDrones(state, demand.id, 2);
+
+    state = advanceSimulation(state, 8.1);
+    const result = state.entities.find((entity) => entity.id === demand.id)!;
+    expect(getStationSlots(result)).toHaveLength(5);
+    expect(result.outputs).toMatchObject({ iron_ingot: 25, copper_ingot: 25 });
+    expect(result.stationTrips).toBe(2);
+    expect(result.stationRoutes).toHaveLength(0);
+  });
+
+  it("copies monitored stacked-belt settings across a connected network", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("high_speed_logistics", "super_magnetic_logistics");
+    state.belts = [
+      { id: "stack_a", planetId: "home", source: "a", target: "b", itemId: "iron_ingot", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 0, lastFlow: 0 },
+      { id: "stack_b", planetId: "home", source: "b", target: "c", itemId: "iron_ingot", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 0, lastFlow: 0 },
+    ];
+    state = setBeltStackSize(state, "stack_a", 4);
+    state = setBeltPriority(state, "stack_a", 2);
+    state = setBeltMonitorEnabled(state, "stack_a", true);
+    state = applyBeltConfiguration(state, "stack_a", "stack_b");
+
+    expect(getBeltCapacity(state.belts[0])).toBe(12);
+    expect(getBeltNetworkIds(state, "stack_a")).toEqual(["stack_a", "stack_b"]);
+    expect(state.belts[1]).toMatchObject({ stackSize: 4, priority: 2, monitorEnabled: true });
   });
 
   it("applies logistics engine and cargo upgrades to real station dispatches", () => {

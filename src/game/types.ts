@@ -273,6 +273,10 @@ export type RecipeId =
 export type EntityKind = "vein" | "machine" | "power" | "storage" | "splitter" | "station";
 export type PlacementCount = 1 | 2 | 5 | 10;
 export type StationMinimumLoad = 0.1 | 0.25 | 0.5 | 1;
+export type StationLogisticsMode = "supply" | "demand" | "storage";
+export type StationLogisticsScope = "local" | "remote";
+export type LogisticsPriority = 0 | 1 | 2;
+export type CargoStackSize = 1 | 2 | 4;
 export type EnergyMode = "auto" | "charge" | "discharge";
 export type SimulationSpeed = 1 | 2 | 4;
 export type AutosaveIntervalSeconds = 2 | 10 | 30;
@@ -453,6 +457,10 @@ export interface FactoryEntity {
   stationWarpers?: number;
   stationWarpEnabled?: boolean;
   stationMinimumLoad?: StationMinimumLoad;
+  stationSlots?: StationSlot[];
+  stationRoutes?: StationRoute[];
+  stationDispatchCursor?: number;
+  stationCongestion?: number;
   sprayCoaterInstalled?: boolean;
   proliferatorTier?: ProliferatorTier;
   proliferatorMode?: ProliferatorMode;
@@ -478,8 +486,35 @@ export interface BeltConnection {
   tier: BeltTier;
   sorterTier: SorterTier;
   progress: number;
-  priority: 0 | 1;
+  priority: LogisticsPriority;
+  stackSize?: CargoStackSize;
+  monitorEnabled?: boolean;
+  totalTransferred?: number;
+  congestion?: number;
   lastFlow: number;
+}
+
+export interface StationSlot {
+  itemId?: ItemId;
+  localMode: StationLogisticsMode;
+  remoteMode: StationLogisticsMode;
+  minimumLoad: StationMinimumLoad;
+  minStock: number;
+  maxStock: number;
+  priority: LogisticsPriority;
+}
+
+export interface StationRoute {
+  id: string;
+  slotIndex: number;
+  peerId: string;
+  itemId: ItemId;
+  scope: StationLogisticsScope;
+  cargo: number;
+  vehicleCount: number;
+  progress: number;
+  duration: number;
+  requiresWarp: boolean;
 }
 
 export type DraggedItemSourceKind = "node" | "node-input" | "tray";
@@ -633,6 +668,7 @@ export interface BlueprintEntityTemplate {
   stationMode?: "supply" | "demand";
   stationMinimumLoad?: StationMinimumLoad;
   stationWarpEnabled?: boolean;
+  stationSlots?: StationSlot[];
   sprayCoaterInstalled?: boolean;
   proliferatorTier?: ProliferatorTier;
   proliferatorMode?: ProliferatorMode;
@@ -646,7 +682,9 @@ export interface BlueprintBeltTemplate {
   lanes: number;
   tier: BeltTier;
   sorterTier: SorterTier;
-  priority: 0 | 1;
+  priority: LogisticsPriority;
+  stackSize?: CargoStackSize;
+  monitorEnabled?: boolean;
 }
 
 export interface BlueprintDefinition {
@@ -657,7 +695,7 @@ export interface BlueprintDefinition {
 }
 
 export interface GameState {
-  version: 18;
+  version: 19;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];

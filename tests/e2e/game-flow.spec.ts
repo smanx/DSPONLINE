@@ -2002,6 +2002,37 @@ test("planetary drones, orbital collection, station warpers and sorter upgrades 
   await page.screenshot({ path: "artifacts/qa/orbital-collector-390.png", fullPage: true });
 });
 
+test("multi-slot stations and monitored stacked lines stay operable on desktop and mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openCompleteLogisticsGame(page);
+  await page.locator(".react-flow__controls-fitview").click();
+  const demand = page.locator(".station-node").filter({ hasText: "行星物流站" }).filter({ hasText: "需求" });
+  await demand.click();
+  const inspector = page.locator(".station-inspector");
+  const slots = inspector.locator(".station-slot");
+  await expect(slots).toHaveCount(5);
+  await slots.nth(1).getByRole("button", { name: "配置货物" }).click();
+  await slots.nth(1).getByLabel("物流槽位 2 物品").selectOption("copper_ingot");
+  await slots.nth(1).getByRole("button", { name: "需求", exact: true }).click();
+  await slots.nth(1).getByRole("button", { name: "25%", exact: true }).click();
+  await expect(inspector).toContainText("已配置槽位2 / 5");
+  await page.screenshot({ path: "artifacts/qa/logistics-slots-1440.png", fullPage: true });
+
+  await page.locator(".react-flow__edge").evaluate((element: SVGGElement) => element.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  const beltInspector = page.locator(".inspector-panel");
+  await beltInspector.getByRole("button", { name: "×2", exact: true }).click();
+  await beltInspector.getByRole("button", { name: "高", exact: true }).click();
+  await beltInspector.getByLabel("启用线路流量监测").check();
+  await expect(beltInspector).toContainText("货物堆叠×2");
+  await expect(beltInspector).toContainText("累计运输");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await demand.evaluate((element: HTMLElement) => element.click());
+  await expect(inspector).toBeVisible();
+  await expect.poll(async () => inspector.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/logistics-slots-390.png", fullPage: true });
+});
+
 test("renewables, storage, fusion and artificial stars form a complete energy layer", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openCompleteEnergyGame(page);

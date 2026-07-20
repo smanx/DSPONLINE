@@ -3,13 +3,14 @@ import {
   DYSON_SHELL_SAIL_POWER_KW,
   DYSON_STRUCTURE_POWER_KW,
   SOLAR_SAIL_POWER_KW,
+  STATION_SLOT_COUNT,
   advanceSimulation,
   createInitialState,
 } from "./engine";
 import { BUILDINGS, ITEMS, PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, getBuilding, getExtractorBuildingId, getPlanet, getRecipe, getTechnology } from "./content";
 import { normalizeCampaignState, syncCampaignProgress } from "./campaign";
 import { isAchievementId } from "./progression";
-import type { BeltConnection, BeltTier, BlueprintDefinition, BuildingId, ConstructionId, DysonLayerState, DysonSpherePlanState, EnergyMode, FactoryEntity, GameState, ItemId, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad, TechId } from "./types";
+import type { BeltConnection, BeltTier, BlueprintDefinition, BuildingId, CargoStackSize, ConstructionId, DysonLayerState, DysonSpherePlanState, EnergyMode, FactoryEntity, GameState, ItemId, LogisticsPriority, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -111,6 +112,75 @@ function validStationMinimumLoad(value: unknown): value is StationMinimumLoad {
   return value === 0.1 || value === 0.25 || value === 0.5 || value === 1;
 }
 
+function validStationMode(value: unknown): value is StationLogisticsMode {
+  return value === "supply" || value === "demand" || value === "storage";
+}
+
+function validPriority(value: unknown): value is LogisticsPriority {
+  return value === 0 || value === 1 || value === 2;
+}
+
+function validCargoStackSize(value: unknown): value is CargoStackSize {
+  return value === 1 || value === 2 || value === 4;
+}
+
+function normalizeStationSlots(entity: FactoryEntity): StationSlot[] | undefined {
+  if (entity.kind !== "station" || entity.buildingId === "orbital_collector") return undefined;
+  const slots: StationSlot[] = Array.isArray(entity.stationSlots)
+    ? entity.stationSlots.slice(0, STATION_SLOT_COUNT).map((slot) => ({
+      itemId: slot?.itemId && ITEMS[slot.itemId] ? slot.itemId : undefined,
+      localMode: validStationMode(slot?.localMode) ? slot.localMode : "storage",
+      remoteMode: validStationMode(slot?.remoteMode) ? slot.remoteMode : "storage",
+      minimumLoad: validStationMinimumLoad(slot?.minimumLoad) ? slot.minimumLoad : 1,
+      minStock: nonNegativeInteger(slot?.minStock),
+      maxStock: nonNegativeInteger(slot?.maxStock),
+      priority: validPriority(slot?.priority) ? slot.priority : 1,
+    }))
+    : [];
+  if (slots.length === 0 && entity.storedItemId && ITEMS[entity.storedItemId]) {
+    const legacyMode: StationLogisticsMode = entity.stationMode === "demand" ? "demand" : "supply";
+    slots.push({
+      itemId: entity.storedItemId,
+      localMode: entity.buildingId === "planetary_logistics_station" ? legacyMode : "storage",
+      remoteMode: entity.buildingId === "interstellar_logistics_station" ? legacyMode : "storage",
+      minimumLoad: validStationMinimumLoad(entity.stationMinimumLoad) ? entity.stationMinimumLoad : 1,
+      minStock: 0,
+      maxStock: 0,
+      priority: 1,
+    });
+  }
+  while (slots.length < STATION_SLOT_COUNT) {
+    slots.push({ localMode: "storage", remoteMode: "storage", minimumLoad: 1, minStock: 0, maxStock: 0, priority: 1 });
+  }
+  const seen = new Set<ItemId>();
+  return slots.map((slot) => {
+    if (!slot.itemId || seen.has(slot.itemId)) return { ...slot, itemId: undefined };
+    seen.add(slot.itemId);
+    return slot;
+  });
+}
+
+function normalizeStationRoutes(entity: FactoryEntity): StationRoute[] | undefined {
+  if (entity.kind !== "station" || entity.buildingId === "orbital_collector") return undefined;
+  if (!Array.isArray(entity.stationRoutes)) return [];
+  return entity.stationRoutes.flatMap((route) => {
+    if (!route || typeof route.id !== "string" || !ITEMS[route.itemId] ||
+      (route.scope !== "local" && route.scope !== "remote") || typeof route.peerId !== "string") return [];
+    return [{
+      id: route.id,
+      slotIndex: Math.min(STATION_SLOT_COUNT - 1, nonNegativeInteger(route.slotIndex)),
+      peerId: route.peerId,
+      itemId: route.itemId,
+      scope: route.scope,
+      cargo: nonNegativeInteger(route.cargo),
+      vehicleCount: Math.max(1, nonNegativeInteger(route.vehicleCount)),
+      progress: Math.min(1, nonNegativeNumber(route.progress)),
+      duration: Math.max(1, nonNegativeNumber(route.duration)),
+      requiresWarp: Boolean(route.requiresWarp),
+    } satisfies StationRoute];
+  });
+}
+
 function validBeltTier(value: unknown): value is BeltTier {
   return value === 1 || value === 2 || value === 3;
 }
@@ -145,7 +215,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
   const entities = saved.entities.map((entity: FactoryEntity) => {
     const currentResource = saved.version < 13
@@ -197,7 +267,7 @@ export function migrateGame(value: unknown): GameState | null {
       stationProgress: entity.kind === "station" ? Math.max(0, entity.stationProgress ?? 0) : entity.stationProgress,
       stationTrips: entity.kind === "station" ? Math.max(0, Math.floor(entity.stationTrips ?? 0)) : entity.stationTrips,
       stationLastTransfer: entity.kind === "station" ? Math.max(0, Math.floor(entity.stationLastTransfer ?? 0)) : entity.stationLastTransfer,
-      stationDrones: planetaryStation ? nonNegativeInteger(entity.stationDrones) : undefined,
+      stationDrones: planetaryStation || interstellarStation ? nonNegativeInteger(entity.stationDrones) : undefined,
       stationVessels: interstellarStation
         ? saved.version < 5 ? 1 : Math.max(0, Math.floor(entity.stationVessels ?? 0))
         : undefined,
@@ -206,6 +276,10 @@ export function migrateGame(value: unknown): GameState | null {
       stationMinimumLoad: entity.kind === "station"
         ? validStationMinimumLoad(entity.stationMinimumLoad) ? entity.stationMinimumLoad : 1
         : entity.stationMinimumLoad,
+      stationSlots: normalizeStationSlots(entity),
+      stationRoutes: normalizeStationRoutes(entity),
+      stationDispatchCursor: entity.kind === "station" ? nonNegativeInteger(entity.stationDispatchCursor) : undefined,
+      stationCongestion: entity.kind === "station" ? Math.min(1, nonNegativeNumber(entity.stationCongestion)) : undefined,
       sprayCoaterInstalled,
       proliferatorTier: sprayCoaterInstalled
         ? validProliferatorTier(entity.proliferatorTier) ? entity.proliferatorTier : 1
@@ -240,7 +314,11 @@ export function migrateGame(value: unknown): GameState | null {
       tier: saved.version >= 8 && validBeltTier(belt.tier) ? belt.tier : 1,
       sorterTier: saved.version >= 10 && validBeltTier(belt.sorterTier) ? belt.sorterTier : 1,
       progress: typeof belt.progress === "number" ? Math.max(0, belt.progress) : 0,
-      priority: belt.priority === 1 ? 1 as const : 0 as const,
+      priority: validPriority(belt.priority) ? belt.priority : 0,
+      stackSize: validCargoStackSize(belt.stackSize) ? belt.stackSize : 1,
+      monitorEnabled: Boolean(belt.monitorEnabled),
+      totalTransferred: nonNegativeInteger(belt.totalTransferred),
+      congestion: Math.min(1, nonNegativeNumber(belt.congestion)),
       lastFlow: typeof belt.lastFlow === "number" ? belt.lastFlow : 0,
     } as BeltConnection;
   }) : [];
@@ -327,6 +405,16 @@ export function migrateGame(value: unknown): GameState | null {
           stationMode: entity.stationMode === "demand" ? "demand" as const : entity.stationMode === "supply" ? "supply" as const : undefined,
           stationMinimumLoad: validStationMinimumLoad(entity.stationMinimumLoad) ? entity.stationMinimumLoad : undefined,
           stationWarpEnabled: typeof entity.stationWarpEnabled === "boolean" ? entity.stationWarpEnabled : undefined,
+          stationSlots: getBuilding(entity.buildingId as BuildingId).kind === "station" && entity.buildingId !== "orbital_collector"
+            ? normalizeStationSlots({
+              kind: "station",
+              buildingId: entity.buildingId,
+              storedItemId,
+              stationMode: entity.stationMode,
+              stationMinimumLoad: entity.stationMinimumLoad,
+              stationSlots: entity.stationSlots,
+            } as FactoryEntity)
+            : undefined,
           sprayCoaterInstalled: Boolean(entity.sprayCoaterInstalled),
           proliferatorTier: validProliferatorTier(entity.proliferatorTier) ? entity.proliferatorTier : undefined,
           proliferatorMode: validProliferatorMode(entity.proliferatorMode) ? entity.proliferatorMode : undefined,
@@ -344,7 +432,9 @@ export function migrateGame(value: unknown): GameState | null {
           lanes: Math.max(1, nonNegativeInteger(belt.lanes)),
           tier: validBeltTier(belt.tier) ? belt.tier : 1,
           sorterTier: validBeltTier(belt.sorterTier) ? belt.sorterTier : 1,
-          priority: belt.priority === 1 ? 1 as const : 0 as const,
+          priority: validPriority(belt.priority) ? belt.priority : 0,
+          stackSize: validCargoStackSize(belt.stackSize) ? belt.stackSize : 1,
+          monitorEnabled: Boolean(belt.monitorEnabled),
         }];
       }) : [];
       return [{
@@ -490,7 +580,7 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 18,
+    version: 19,
     activePlanetId,
     entities,
     belts,

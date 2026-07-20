@@ -35,6 +35,7 @@ import { ITEMS, RECIPES, getBeltConstructionId, getBuilding, getBuildingUpgradeT
 import { getFactoryAlerts, type FactoryAlert } from "./game/alerts";
 import {
   addBuildingToGroup,
+  applyBeltConfiguration,
   addDysonLayer,
   addDysonNode,
   adjustStationDrones,
@@ -82,6 +83,8 @@ import {
   removeQueuedTechnology,
   selectTechnology,
   setBeltPriority,
+  setBeltMonitorEnabled,
+  setBeltStackSize,
   setActivePlanet,
   setEntityRecipe,
   setEntitiesRecipe,
@@ -95,12 +98,19 @@ import {
   setEntitiesProliferatorConfiguration,
   setStationMode,
   setStationMinimumLoad,
+  setStationSlotItem,
+  setStationSlotLimits,
+  setStationSlotMinimumLoad,
+  setStationSlotMode,
+  setStationSlotPriority,
   setStationWarpEnabled,
   setSplitterMode,
   upgradeBelt,
+  upgradeBeltNetwork,
   upgradeEntities,
   upgradeEntity,
   upgradeSorter,
+  upgradeSorterNetwork,
   getBlueprintEligibleEntityIds,
   autoConnectDysonLayer,
   planDysonShell,
@@ -109,7 +119,7 @@ import {
 import { getAchievement, getNewAchievementIds, unlockAchievements } from "./game/progression";
 import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
 import { clearGame, clearGameSlot, exportGame, getSaveSlotSummaries, importGame, loadGame, loadGameSlot, saveGame, saveGameSlot, type OfflineReport, type SaveSlotId } from "./game/storage";
-import type { BeltTier, BuildingId, CampaignTaskId, DraggedItemSourceKind, EnergyMode, GameSettings, GameState, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationMinimumLoad } from "./game/types";
+import type { BeltTier, BuildingId, CampaignTaskId, CargoStackSize, DraggedItemSourceKind, EnergyMode, GameSettings, GameState, ItemId, PlacementCount, PlanetId, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 
 type InspectorTab = "inspect" | "fabricate";
@@ -181,6 +191,7 @@ function FactoryGame() {
   const [game, setGame] = useState(loaded.state);
   const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([]);
   const [selectedBeltId, setSelectedBeltId] = useState<string | null>(null);
+  const [copiedBeltConfigurationId, setCopiedBeltConfigurationId] = useState<string | null>(null);
   const [placement, setPlacement] = useState<BuildingId | null>(null);
   const [beltTier, setBeltTier] = useState<BeltTier>(1);
   const [placementCount, setPlacementCount] = useState<PlacementCount>(1);
@@ -1024,6 +1035,8 @@ function FactoryGame() {
       targetHandle: `in:${belt.itemId}`,
       className: `factory-edge${belt.lastFlow > 0.001 ? " factory-edge--active" : ""}${highlightedTaskId ? taskHighlight.beltIds.has(belt.id) ? " factory-edge--task-focus" : " factory-edge--task-dim" : ""}`,
       selected: selectedBeltId === belt.id,
+      zIndex: selectedBeltId === belt.id ? 4 : 1,
+      interactionWidth: 36,
       markerEnd: { type: MarkerType.ArrowClosed, color: item.color },
       data: {
         itemId: belt.itemId,
@@ -1033,6 +1046,9 @@ function FactoryGame() {
         tier: belt.tier,
         flow: belt.lastFlow,
         capacity,
+        stackSize: belt.stackSize ?? 1,
+        congestion: belt.congestion ?? 0,
+        monitored: belt.monitorEnabled ?? false,
         durationSeconds: Math.max(0.55, 1.65 - flowRatio * 0.9),
         detailVisible: !largeFactoryMode && viewportZoom >= 0.55,
         motionEnabled: !game.settings.performanceMode && !game.settings.reducedMotion,
@@ -1479,9 +1495,36 @@ function FactoryGame() {
           onStationWarperAdjust={(entityId, delta) => commitGame((current) => adjustStationWarpers(current, entityId, delta))}
           onStationWarpEnabled={(entityId, enabled) => commitGame((current) => setStationWarpEnabled(current, entityId, enabled))}
           onStationMinimumLoadChange={(entityId, minimumLoad: StationMinimumLoad) => commitGame((current) => setStationMinimumLoad(current, entityId, minimumLoad))}
+          onStationSlotItemChange={(entityId, slotIndex, itemId) => commitGame((current) => setStationSlotItem(current, entityId, slotIndex, itemId))}
+          onStationSlotModeChange={(entityId, slotIndex, scope: StationLogisticsScope, mode: StationLogisticsMode) => commitGame((current) => setStationSlotMode(current, entityId, slotIndex, scope, mode))}
+          onStationSlotMinimumLoadChange={(entityId, slotIndex, minimumLoad: StationMinimumLoad) => commitGame((current) => setStationSlotMinimumLoad(current, entityId, slotIndex, minimumLoad))}
+          onStationSlotLimitsChange={(entityId, slotIndex, minStock, maxStock) => commitGame((current) => setStationSlotLimits(current, entityId, slotIndex, minStock, maxStock))}
+          onStationSlotPriorityChange={(entityId, slotIndex, priority) => commitGame((current) => setStationSlotPriority(current, entityId, slotIndex, priority))}
           onLogisticsItemChange={(entityId, itemId) => commitGame((current) => setLogisticsItem(current, entityId, itemId))}
           onSplitterModeChange={(entityId, mode) => commitGame((current) => setSplitterMode(current, entityId, mode))}
           onBeltPriorityChange={(beltId, priority) => commitGame((current) => setBeltPriority(current, beltId, priority))}
+          onBeltStackSizeChange={(beltId, stackSize: CargoStackSize) => commitGame((current) => setBeltStackSize(current, beltId, stackSize))}
+          onBeltMonitorChange={(beltId, enabled) => commitGame((current) => setBeltMonitorEnabled(current, beltId, enabled))}
+          onUpgradeBeltNetwork={(beltId) => {
+            commitGame((current) => upgradeBeltNetwork(current, beltId));
+            setNotice("已升级当前物品的连续运输网络");
+            playTone("upgrade");
+          }}
+          onUpgradeSorterNetwork={(beltId) => {
+            commitGame((current) => upgradeSorterNetwork(current, beltId));
+            setNotice("已升级连续网络中的可升级分拣器");
+            playTone("upgrade");
+          }}
+          onCopyBeltConfiguration={(beltId) => {
+            setCopiedBeltConfigurationId(beltId);
+            setNotice("线路优先级、堆叠和监测设置已复制");
+          }}
+          onPasteBeltConfiguration={(beltId) => {
+            if (!copiedBeltConfigurationId) return;
+            commitGame((current) => applyBeltConfiguration(current, copiedBeltConfigurationId, beltId));
+            setNotice("线路设置已应用");
+          }}
+          hasCopiedBeltConfiguration={Boolean(copiedBeltConfigurationId && game.belts.some((belt) => belt.id === copiedBeltConfigurationId))}
           onUpgradeEntity={(entityId) => {
             const entity = gameRef.current.entities.find((candidate) => candidate.id === entityId);
             const targetId = entity?.buildingId ? getBuildingUpgradeTarget(entity.buildingId) : undefined;
