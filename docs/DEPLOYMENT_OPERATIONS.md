@@ -199,6 +199,8 @@ chmod 0600 backup-private.pem
 - `dsp-idle-offsite-backup.timer` 与 `dsp-idle-restore-drill.timer`：检查最后成功时间、timer 上次结果和报告文件。
 - 玩家指标：检查 `players.total`、`players.today`、`players.online` 和 `players.onlineWindowSeconds`；两个节点分别统计，不能直接相加当作严格独立用户数。
 
+这些 oneshot 服务从 `/opt/dsp-idle-cloud/current/deploy` 软链接执行脚本。CLI 入口判断必须比较真实路径；若 unit 显示 `success` 却没有生成对应状态文件，应按空运行故障处理，不能视为监控或备份成功。
+
 匿名在线窗口默认 120 秒，可通过 `DSP_PLAYER_ONLINE_WINDOW_MS` 调整；运营日历默认 `Asia/Shanghai`，可通过 `DSP_METRIC_TIME_ZONE` 调整。修改在线窗口只影响在线口径，不影响累计玩家。部署 schema v5 后端前仍必须先使用 SQLite backup API 创建并验证备份，并用真实备份副本验证 v3→v5 归一化：旧账号保持已验证，账号、会话、存档、历史、榜单、玩家和匿名统计数量不减少，旧云修订获得摘要。
 
 ## 10. 当前性能事项

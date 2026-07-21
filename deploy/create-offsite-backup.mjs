@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
@@ -172,7 +173,13 @@ async function startFromCli() {
   console.log(JSON.stringify(result));
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try { return realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+
+if (isMainModule()) {
   startFromCli().catch((error) => {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;

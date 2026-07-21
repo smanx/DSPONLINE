@@ -1,5 +1,5 @@
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -181,7 +181,13 @@ async function startFromCli() {
   console.log(JSON.stringify(result));
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try { return realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+
+if (isMainModule()) {
   startFromCli().catch((error) => {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
