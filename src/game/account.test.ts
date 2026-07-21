@@ -10,6 +10,7 @@ import {
   getActiveAccount,
   loadAccountState,
   recordAccountProgress,
+  setActiveCloudBinding,
   switchLocalAccount,
   updateAccountProfile,
 } from "./account";
@@ -82,5 +83,23 @@ describe("local account state", () => {
     game.elapsedSeconds = 52;
     account = recordAccountProgress(account, game, 300);
     expect(getActiveAccount(account).ledger.energyGeneratedMj).toBe(2);
+  });
+
+  it("migrates local identities and moves one cloud binding without touching ledgers", () => {
+    let state = createAccountState(100);
+    const firstId = state.activeAccountId;
+    state = setActiveCloudBinding(state, { id: "user_cloud1", email: "pilot@example.com" }, 200);
+    expect(getActiveAccount(state).profile).toMatchObject({ cloudUserId: "user_cloud1", cloudEmail: "pilot@example.com", cloudBoundAt: 200 });
+
+    state = createLocalAccount(state, "第二身份");
+    const secondId = state.activeAccountId;
+    state = setActiveCloudBinding(state, { id: "user_cloud1", email: "pilot@example.com" }, 300);
+    expect(state.accounts[firstId].profile.cloudUserId).toBeNull();
+    expect(state.accounts[secondId].profile.cloudUserId).toBe("user_cloud1");
+    expect(state.accounts[firstId].ledger.energyGeneratedMj).toBe(0);
+
+    state = setActiveCloudBinding(state, null, 400);
+    expect(getActiveAccount(state).profile.cloudUserId).toBeNull();
+    expect(loadAccountState().version).toBe(2);
   });
 });

@@ -24,7 +24,7 @@
 | `/var/lib/dsp-idle-cloud/cloud.json` | 旧 JSON 数据，仅用于兼容迁移 |
 | `/var/lib/dsp-idle-cloud/backups` | SQLite/JSON 备份 |
 | `/etc/nginx/snippets/dsp-idle-app.conf` | 公共静态与 API 规则 |
-| `/etc/dsp-idle-cloud/admin.env` | 仅 root/服务账号可读的管理员 token，不进入发布目录 |
+| `/etc/dsp-idle-cloud/admin.env` | 仅 root/服务账号可读的管理员 token 与可选邮件 webhook 凭据，不进入发布目录 |
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
@@ -126,6 +126,12 @@ sudo systemctl restart dsp-idle-cloud.service
 
 公开 `/api/public-status` 只提供玩家累计、今日和 120 秒在线口径；`/api/admin/metrics` 与兼容路径 `/api/metrics` 必须携带管理员 bearer token。后台入口为 `https://dsponline.cn/admin`。
 
+### 账号邮件
+
+schema v5 的新注册、邮箱验证和密码重置通过出站 HTTPS webhook 发送邮件。香港 unit 必须设置 `DSP_PUBLIC_BASE_URL=https://dsponline.cn`；私有环境文件可设置 `DSP_MAIL_WEBHOOK_URL` 和 `DSP_MAIL_WEBHOOK_TOKEN`。真实 URL/token 不得写入仓库、发布目录或前端变量。
+
+未同时配置 webhook URL 和公开基址时，服务端会让新注册与邮件恢复返回 `503 EMAIL_SERVICE_UNAVAILABLE`；旧账号登录、云存档读取和已有已验证账号的正常功能不受影响。上线前必须用专用测试邮箱验证注册、验证链接、过期链接、忘记密码和重置密码完整链路。上海公开入口是 HTTP，不应开放账号邮件入口。
+
 ### 上海旧节点
 
 - Nginx 使用本机静态目录与本机 `127.0.0.1:4320`。
@@ -178,7 +184,7 @@ curl http://111.229.128.211/api/health
 - `/api/admin/metrics`：验证管理员 token 后检查访问漏斗、错误、P95 延迟、限流、云冲突和备份状态。
 - 玩家指标：检查 `players.total`、`players.today`、`players.online` 和 `players.onlineWindowSeconds`；两个节点分别统计，不能直接相加当作严格独立用户数。
 
-匿名在线窗口默认 120 秒，可通过 `DSP_PLAYER_ONLINE_WINDOW_MS` 调整；运营日历默认 `Asia/Shanghai`，可通过 `DSP_METRIC_TIME_ZONE` 调整。修改在线窗口只影响在线口径，不影响累计玩家。部署 schema v4 后端前仍必须先使用 SQLite backup API 创建并验证备份，并用真实备份副本验证 v3→v4 迁移。
+匿名在线窗口默认 120 秒，可通过 `DSP_PLAYER_ONLINE_WINDOW_MS` 调整；运营日历默认 `Asia/Shanghai`，可通过 `DSP_METRIC_TIME_ZONE` 调整。修改在线窗口只影响在线口径，不影响累计玩家。部署 schema v5 后端前仍必须先使用 SQLite backup API 创建并验证备份，并用真实备份副本验证 v3→v5 归一化：旧账号保持已验证，账号、会话、存档、历史、榜单、玩家和匿名统计数量不减少，旧云修订获得摘要。
 
 ## 10. 当前性能事项
 

@@ -170,6 +170,141 @@ test("anonymous analytics batches an allowlisted page view without save data", a
   expect(JSON.stringify(batch)).not.toContain("inventory");
 });
 
+test("cloud account security exposes verification, password and device controls", async ({ page }) => {
+  const requests: string[] = [];
+  const user = {
+    id: "user_e2e",
+    email: "pilot@example.com",
+    displayName: "测试工程师",
+    createdAt: Date.now() - 1000,
+    emailVerified: false,
+    emailVerifiedAt: null,
+    passwordChangedAt: Date.now() - 1000,
+  };
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    requests.push(`${request.method()} ${pathname}`);
+    const fulfill = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (pathname === "/api/health") return fulfill({ ok: true });
+    if (pathname === "/api/auth/login") return fulfill({ token: "e2e-cloud-token", user });
+    if (pathname === "/api/account" && request.method() === "GET") return fulfill({ user, cloudSave: null });
+    if (pathname === "/api/account/sessions") return fulfill({ sessions: [
+      { id: "session_current", deviceName: "Chrome 桌面浏览器", clientType: "desktop-web", createdAt: Date.now() - 1000, lastSeenAt: Date.now(), expiresAt: Date.now() + 100000, current: true },
+      { id: "session_mobile", deviceName: "测试手机", clientType: "mobile-web", createdAt: Date.now() - 2000, lastSeenAt: Date.now() - 500, expiresAt: Date.now() + 100000, current: false },
+    ] });
+    if (pathname === "/api/auth/resend-verification") return fulfill({ sent: true }, 202);
+    if (pathname === "/api/account/password") return fulfill({ changed: true, user: { ...user, passwordChangedAt: Date.now() } });
+    if (pathname === "/api/account/sessions/revoke") return fulfill({ revoked: true, currentSessionRevoked: false });
+    return fulfill({ error: `unmocked ${pathname}` }, 404);
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: "登录与云存档" }).click();
+  await page.getByLabel("邮箱").fill("pilot@example.com");
+  await page.getByLabel("密码", { exact: true }).fill("strong-pass-123");
+  await page.getByRole("button", { name: "登录云账户" }).click();
+
+  const security = page.getByRole("region", { name: "云账号安全" });
+  await expect(security).toBeVisible();
+  await expect(security).toContainText("邮箱等待验证");
+  await security.getByRole("button", { name: "重发" }).click();
+  await expect(security).toContainText("验证邮件已发送");
+  await expect(security).toContainText("Chrome 桌面浏览器");
+  await expect(security).toContainText("测试手机");
+
+  await security.getByText("修改密码", { exact: true }).click();
+  await security.getByLabel("当前密码").fill("strong-pass-123");
+  await security.getByLabel("新密码", { exact: true }).fill("changed-pass-456");
+  await security.getByLabel("确认新密码").fill("changed-pass-456");
+  await security.getByRole("button", { name: "确认修改" }).click();
+  await expect(security).toContainText("密码已修改");
+  expect(requests).toContain("POST /api/auth/resend-verification");
+  expect(requests).toContain("POST /api/account/password");
+
+  await page.screenshot({ path: "artifacts/qa/cloud-account-security-1440.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await security.scrollIntoViewIfNeeded();
+  await expect.poll(async () => security.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/cloud-account-security-390.png", fullPage: true });
+});
+
+test("cloud save divergence requires an explicit keep-local or use-cloud choice", async ({ page }) => {
+  const user = {
+    id: "user_conflict",
+    email: "conflict@example.com",
+    displayName: "冲突测试工程师",
+    createdAt: Date.now() - 1000,
+    emailVerified: true,
+    emailVerifiedAt: Date.now() - 900,
+    passwordChangedAt: Date.now() - 1000,
+  };
+  const remoteSummary = {
+    stateVersion: 24,
+    savedAt: Date.now() - 5000,
+    elapsedSeconds: 7200,
+    activePlanetId: "ashen",
+    entityCount: 42,
+    completedTechCount: 12,
+    structurePoints: 0,
+    uploadedWhiteMatrix: 0,
+    stateChecksum: "remote-state",
+  };
+  let cloudSave = { revision: 2, updatedAt: Date.now() - 5000, size: 2048, checksum: "remote-cloud", summary: remoteSummary };
+  let overwriteExpectedRevision: number | null = null;
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    const fulfill = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (pathname === "/api/health") return fulfill({ ok: true });
+    if (pathname === "/api/auth/login") return fulfill({ token: "conflict-cloud-token", user });
+    if (pathname === "/api/account" && request.method() === "GET") return fulfill({ user, cloudSave });
+    if (pathname === "/api/account/sessions") return fulfill({ sessions: [] });
+    if (pathname === "/api/cloud-save" && request.method() === "PUT") {
+      const body = request.postDataJSON() as { payload: string; expectedRevision: number };
+      overwriteExpectedRevision = body.expectedRevision;
+      const envelope = JSON.parse(body.payload) as { checksum?: string; savedAt?: number; state?: { elapsedSeconds?: number; entities?: unknown[]; research?: { completedTechIds?: unknown[] } } };
+      cloudSave = {
+        revision: 3,
+        updatedAt: Date.now(),
+        size: body.payload.length,
+        checksum: "local-cloud",
+        summary: {
+          ...remoteSummary,
+          savedAt: envelope.savedAt ?? Date.now(),
+          elapsedSeconds: envelope.state?.elapsedSeconds ?? 0,
+          entityCount: envelope.state?.entities?.length ?? 0,
+          completedTechCount: envelope.state?.research?.completedTechIds?.length ?? 0,
+          stateChecksum: envelope.checksum ?? null,
+        },
+      };
+      return fulfill({ cloudSave });
+    }
+    return fulfill({ accepted: true });
+  });
+
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: /开始游戏/ }).click();
+  await page.getByTitle("保存并返回主菜单").click();
+  await page.getByRole("button", { name: "登录与云存档" }).click();
+  await page.getByLabel("邮箱").fill("conflict@example.com");
+  await page.getByLabel("密码", { exact: true }).fill("strong-pass-123");
+  await page.getByRole("button", { name: "登录云账户" }).click();
+  await expect(page.getByText("需要选择保留版本", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "上传本地存档" }).click();
+  const dialog = page.getByRole("alertdialog", { name: "云存档冲突" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("当前本地工厂");
+  await expect(dialog).toContainText("云端工厂");
+  await expect(dialog).toContainText("42");
+  await dialog.getByRole("button", { name: "保留本地并新建云修订" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(overwriteExpectedRevision).toBe(2);
+  await expect(page.locator(".start-menu-message")).toContainText("修订 3");
+});
+
 async function freshGame(page: Page) {
   await page.goto("/");
   await page.getByTitle("重置当前工厂").evaluate((element: HTMLButtonElement) => element.click());

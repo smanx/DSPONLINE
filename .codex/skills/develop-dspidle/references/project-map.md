@@ -7,7 +7,8 @@ Use this map after reading `docs/PROJECT_STATUS.md`. Open only the files relevan
 | Area | Primary files | Notes |
 | --- | --- | --- |
 | Boot and PWA | `src/main.tsx`, `src/pwa.ts`, `public/sw.js` | Monitoring installs before React; PWA registers only in production. |
-| Main menu | `src/components/StartMenu.tsx` | Continue, slots, import, cloud session, menu settings. |
+| Main menu | `src/components/StartMenu.tsx` | Continue, slots, import, cloud session/recovery, menu settings. |
+| Account security and cloud conflicts | `src/components/CloudAccountSecurity.tsx`, `CloudSaveConflictDialog.tsx` | Shared by main menu and Galaxy workspace; server contracts live in `game/cloud.ts`. |
 | Factory orchestration | `src/App.tsx` | Simulation Worker, canvas events, workspaces, saves, command wiring. High-conflict file. |
 | Global styling | `src/styles.css` | Desktop/mobile/font scale/reduced motion. Very large; patch narrowly. |
 

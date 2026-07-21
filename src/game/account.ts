@@ -1,7 +1,7 @@
 import type { GameState } from "./types";
 
 export const ACCOUNT_STORAGE_KEY = "dsp-idle-network.account.v1";
-export const ACCOUNT_SCHEMA_VERSION = 1;
+export const ACCOUNT_SCHEMA_VERSION = 2;
 
 export type AccountPrivacy = "public" | "private";
 
@@ -12,6 +12,9 @@ export interface AccountProfile {
   privacy: AccountPrivacy;
   createdAt: number;
   updatedAt: number;
+  cloudUserId: string | null;
+  cloudEmail: string | null;
+  cloudBoundAt: number | null;
 }
 
 export interface AccountLedger {
@@ -42,6 +45,9 @@ export interface AccountProfileChanges {
   displayName?: string;
   avatar?: string;
   privacy?: AccountPrivacy;
+  cloudUserId?: string | null;
+  cloudEmail?: string | null;
+  cloudBoundAt?: number | null;
 }
 
 const AVATARS = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
@@ -100,6 +106,9 @@ function createRecord(displayName: string, avatar: string, timestamp = now()): A
       privacy: "public",
       createdAt: timestamp,
       updatedAt: timestamp,
+      cloudUserId: null,
+      cloudEmail: null,
+      cloudBoundAt: null,
     },
     ledger: createLedger(),
   };
@@ -130,6 +139,9 @@ function normalizeRecord(value: unknown, fallbackName: string, fallbackAvatar: s
     privacy: profileSource.privacy === "private" ? "private" : "public",
     createdAt,
     updatedAt: nonNegative(profileSource.updatedAt) || createdAt,
+    cloudUserId: typeof profileSource.cloudUserId === "string" && /^user_[A-Za-z0-9]+$/.test(profileSource.cloudUserId) ? profileSource.cloudUserId : null,
+    cloudEmail: typeof profileSource.cloudEmail === "string" && profileSource.cloudEmail.length <= 254 ? profileSource.cloudEmail : null,
+    cloudBoundAt: nonNegative(profileSource.cloudBoundAt) || null,
   };
   const ledger: AccountLedger = {
     energyGeneratedMj: nonNegative(ledgerSource.energyGeneratedMj),
@@ -188,11 +200,15 @@ export function getActiveAccount(state: AccountState): AccountRecord {
 
 export function updateAccountProfile(state: AccountState, changes: AccountProfileChanges): AccountState {
   const active = getActiveAccount(state);
+  const cloudUserId = changes.cloudUserId === undefined ? active.profile.cloudUserId : changes.cloudUserId;
   const profile: AccountProfile = {
     ...active.profile,
     displayName: changes.displayName === undefined ? active.profile.displayName : normalizeName(changes.displayName, active.profile.displayName),
     avatar: changes.avatar === undefined ? active.profile.avatar : normalizeAvatar(changes.avatar, active.profile.avatar),
     privacy: changes.privacy === undefined ? active.profile.privacy : changes.privacy,
+    cloudUserId,
+    cloudEmail: cloudUserId === null ? null : changes.cloudEmail === undefined ? active.profile.cloudEmail : changes.cloudEmail,
+    cloudBoundAt: cloudUserId === null ? null : changes.cloudBoundAt === undefined ? active.profile.cloudBoundAt : changes.cloudBoundAt,
     updatedAt: now(),
   };
   const next = { ...state, accounts: { ...state.accounts, [active.profile.id]: { ...active, profile } } };
@@ -212,6 +228,21 @@ export function createLocalAccount(state: AccountState, displayName = "新星际
 export function switchLocalAccount(state: AccountState, accountId: string): AccountState {
   if (!state.accounts[accountId] || state.activeAccountId === accountId) return state;
   const next = { ...state, activeAccountId: accountId };
+  saveAccountState(next);
+  return next;
+}
+
+export function setActiveCloudBinding(state: AccountState, cloud: { id: string; email: string } | null, timestamp = now()): AccountState {
+  const active = getActiveAccount(state);
+  const accounts = Object.fromEntries(Object.entries(state.accounts).map(([accountId, record]) => {
+    const ownsIncomingBinding = cloud && record.profile.cloudUserId === cloud.id && accountId !== active.profile.id;
+    if (accountId !== active.profile.id && !ownsIncomingBinding) return [accountId, record];
+    const binding = accountId === active.profile.id && cloud
+      ? { cloudUserId: cloud.id, cloudEmail: cloud.email, cloudBoundAt: timestamp }
+      : { cloudUserId: null, cloudEmail: null, cloudBoundAt: null };
+    return [accountId, { ...record, profile: { ...record.profile, ...binding, updatedAt: timestamp } }];
+  }));
+  const next = { ...state, accounts };
   saveAccountState(next);
   return next;
 }

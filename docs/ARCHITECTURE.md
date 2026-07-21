@@ -24,7 +24,8 @@ flowchart LR
 - `src/hooks/usePlayerPresence.ts`、`src/game/presence.ts`：进入工厂后的匿名心跳、可见性节流与本机稳定 ID；不读取游戏存档。
 - `src/game/analytics.ts`：页面访问、活跃时长和白名单关键事件的会话级批处理；失败静默重试，不读取或上传游戏存档。
 - `src/components/AdminDashboard.tsx`：独立 `/admin` 路由，只使用浏览器会话中的管理员 token 读取聚合运营数据。
-- `src/components/StartMenu.tsx`：开始/继续、槽位、导入、云账号和主菜单设置。
+- `src/components/StartMenu.tsx`：开始/继续、槽位、导入、云账号、邮箱验证/密码重置链接和主菜单设置。
+- `src/components/CloudAccountSecurity.tsx`、`CloudSaveConflictDialog.tsx`：主菜单与银河工作区共用的账号安全、设备会话、数据导出、注销和云冲突选择界面。
 - `src/components/ReleaseNotesDialog.tsx`：版本公告单一数据源、首次展示偏好和主菜单/游戏内设置共用弹窗。
 - `src/App.tsx`：顶层会话和工厂编排。它管理工作区、画布交互、连接、选中状态、存档定时器和模拟 Worker。
 
@@ -99,8 +100,9 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 | 快照 | 主键后缀 `.snapshot.*` | 最多 5 份，至少每 30 模拟秒生成 |
 | 手动槽位 | `dsp-idle-network.slot.1..3` | 3 个独立槽位 |
 | 云 token | `dsp-idle-network.cloud-token.v1` | 仅安全入口调用云 API |
+| 云同步标记 | `dsp-idle-network.cloud-sync.v1` | 按云用户记录最后同步修订、云 SHA-256 和游戏状态校验值，不包含存档 payload |
 | 匿名玩家 ID | `dsp-idle-network.player-id.v1` | 仅在进入工厂后生成；服务器只保存其 SHA-256 哈希 |
-| 本地账号原型 | `dsp-idle-network.account.v1` | 与正式云账号是两套数据模型 |
+| 本地身份与榜单账本 | `dsp-idle-network.account.v1` | schema v2；可显式绑定一个云用户，绑定不改写 `GameState` 或工厂存档 |
 | 已读版本公告 | `dsp-idle-network.release-notes.seen.v1` | 仅保存最近已确认的公告 ID，不属于游戏存档 |
 | 内容包注册表 | 见 `contentPacks.ts` | 必须先于存档迁移加载 |
 
@@ -115,11 +117,11 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 ### 云端
 
-云端保存的是完整导出 payload 和元数据。上传必须携带 `expectedRevision`，版本冲突返回 409；恢复历史版本会生成一个新的修订，不会原地覆盖历史。每个用户最多保留最近 20 个修订。
+云端保存的是完整导出 payload 和元数据。元数据包含 SHA-256、状态校验值、保存时间、状态版本、运行时长、设备/科技数量等安全摘要。上传必须携带 `expectedRevision`，版本冲突返回 409；前端通过本地同步标记区分本地更新、云端更新和双向分叉，只有玩家明确选择后才推进修订。恢复历史版本会生成一个新的修订，不会原地覆盖历史。每个用户最多保留最近 20 个修订。
 
 ## 7. 云服务
 
-`server/index.mjs` 是无框架 Node HTTP 服务，生产使用 `better-sqlite3`。SQLite 当前只有一行 `app_state` JSON payload，启用 WAL 和 `synchronous=NORMAL`。云服务 schema v4 在 v3 玩家统计之外增加匿名访问、会话和白名单事件聚合；迁移会保留全部账号、云存档、榜单和玩家记录。
+`server/index.mjs` 是无框架 Node HTTP 服务，生产使用 `better-sqlite3`。SQLite 当前只有一行 `app_state` JSON payload，启用 WAL 和 `synchronous=NORMAL`。云服务 schema v5 在 v4 运营统计之外增加邮箱验证、密码重置、带设备信息的会话和云存档摘要；v3/v4 旧账号迁移后按已验证处理，避免锁死现有玩家，账号、云存档、榜单、玩家记录和匿名统计都会保留。
 
 API 表面：
 
@@ -127,12 +129,13 @@ API 表面：
 - `GET /api/admin/metrics`：至少 32 字符的管理员 bearer token
 - `POST /api/analytics`：匿名批次、客户端序列去重和严格事件白名单
 - `POST /api/presence`
-- `POST /api/auth/register|login|logout`、`GET /api/account`
+- `POST /api/auth/register|login|logout|verify-email|resend-verification|forgot-password|reset-password`
+- `GET /api/account`、`GET /api/account/sessions|export`、`POST /api/account/password|sessions/revoke|delete`
 - `GET|PUT /api/cloud-save`、`GET /api/cloud-save/history`、`POST /api/cloud-save/restore`
 - `GET|POST /api/leaderboard`
 - `POST /api/feedback`、`POST /api/errors`
 
-密码使用 scrypt 派生并采用 timing-safe 比较；会话 token 只保存哈希，默认有效期 30 天。请求体上限为 8 MiB，认证接口每 IP/路径每分钟 12 次，其余接口 120 次。Origin 白名单、Nginx `client_max_body_size` 和前端 HTTPS 限制共同形成入口边界。
+密码使用 scrypt 派生并采用 timing-safe 比较；会话 token 和邮箱动作 token 只保存 SHA-256，登录会话默认有效期 30 天，邮箱动作链接有效期 30 分钟。新账号验证前可以登录和读取自己的数据，但不能写入云存档、恢复云修订或提交排行榜。邮件通过可选 webhook 发送；未配置 webhook 时新注册与邮件恢复明确返回不可用。请求体上限为 8 MiB，认证接口每 IP/路径每分钟 12 次，其余接口 120 次。Origin 白名单、Nginx `client_max_body_size` 和前端 HTTPS 限制共同形成入口边界。
 
 匿名心跳默认每 45 秒发送一次，服务端接口限流为每 IP 每分钟 10 次；同一浏览器 ID 去重，最近 120 秒有心跳视为在线。访问统计按 `Asia/Shanghai` 自然日聚合 PV、UV、会话、进入工厂、活跃秒数和允许的关键事件。服务端只保存带命名空间的 SHA-256 标识，不保存原始匿名 ID、鼠标坐标、按钮文案或存档内容。香港与上海数据库相互独立，因此统计也是节点级数据，不做跨节点合并。
 

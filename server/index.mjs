@@ -12,11 +12,13 @@ import {
   normalizeAnalyticsState,
   recordAnalyticsBatch,
 } from "./analytics.mjs";
+import { createWebhookMailer } from "./mail.mjs";
 
 const scrypt = promisify(scryptCallback);
 const BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CLOUD_HISTORY_LIMIT = 20;
+const EMAIL_ACTION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_PLAYER_ONLINE_WINDOW_MS = 120_000;
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{16,96}$/;
 const VALID_CATEGORIES = new Set(["power", "upload", "dyson", "throughput", "galaxy"]);
@@ -31,9 +33,11 @@ const METRIC_KEYS = [
   "colonizedPlanets",
 ];
 const DEFAULT_DATA = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   users: {},
   sessions: {},
+  emailVerifications: {},
+  passwordResets: {},
   cloudSaves: {},
   cloudSaveHistory: {},
   submissions: {},
@@ -61,16 +65,103 @@ function normalizePlayerRecords(value) {
   }));
 }
 
+function normalizeUserRecords(value, sourceSchemaVersion) {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([key, record]) => {
+    if (!record || typeof record !== "object") return [];
+    const id = typeof record.id === "string" && record.id ? record.id : key;
+    if (!id) return [];
+    const createdAt = Number.isFinite(record.createdAt) ? Math.max(0, Math.floor(record.createdAt)) : 0;
+    const emailVerifiedAt = sourceSchemaVersion < 5
+      ? createdAt
+      : Number.isFinite(record.emailVerifiedAt) ? Math.max(0, Math.floor(record.emailVerifiedAt)) : null;
+    return [[id, {
+      ...record,
+      id,
+      email: typeof record.email === "string" ? record.email.trim().toLowerCase() : "",
+      displayName: typeof record.displayName === "string" ? record.displayName : "星际工程师",
+      createdAt,
+      emailVerifiedAt,
+      passwordChangedAt: Number.isFinite(record.passwordChangedAt) ? Math.max(createdAt, Math.floor(record.passwordChangedAt)) : createdAt,
+    }]];
+  }));
+}
+
+function normalizeSessionRecords(value, users) {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([tokenHash, record]) => {
+    if (!/^[a-f0-9]{64}$/.test(tokenHash) || !record || typeof record !== "object" || !users[record.userId]) return [];
+    const createdAt = Number.isFinite(record.createdAt) ? Math.max(0, Math.floor(record.createdAt)) : 0;
+    const expiresAt = Number.isFinite(record.expiresAt) ? Math.max(createdAt, Math.floor(record.expiresAt)) : createdAt;
+    return [[tokenHash, {
+      id: typeof record.id === "string" && /^session_[A-Za-z0-9_-]{16,80}$/.test(record.id)
+        ? record.id
+        : `session_${tokenHash.slice(0, 24)}`,
+      userId: record.userId,
+      createdAt,
+      lastSeenAt: Number.isFinite(record.lastSeenAt) ? Math.max(createdAt, Math.floor(record.lastSeenAt)) : createdAt,
+      expiresAt,
+      deviceName: typeof record.deviceName === "string" ? record.deviceName.slice(0, 80) : "未知设备",
+      clientType: typeof record.clientType === "string" ? record.clientType.slice(0, 32) : "unknown",
+      ipHash: typeof record.ipHash === "string" && /^[a-f0-9]{16}$/.test(record.ipHash) ? record.ipHash : null,
+    }]];
+  }));
+}
+
+function normalizeActionTokens(value, users) {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([tokenHash, record]) => (
+    /^[a-f0-9]{64}$/.test(tokenHash) && record && typeof record === "object" && users[record.userId] && Number.isFinite(record.expiresAt)
+      ? [[tokenHash, { userId: record.userId, createdAt: Math.max(0, Math.floor(record.createdAt ?? 0)), expiresAt: Math.max(0, Math.floor(record.expiresAt)) }]]
+      : []
+  )));
+}
+
+function summarizeSavePayload(payload) {
+  if (typeof payload !== "string") return null;
+  try {
+    const parsed = JSON.parse(payload);
+    const state = parsed?.state ?? parsed;
+    if (!state || typeof state !== "object" || !Array.isArray(state.entities)) return null;
+    return {
+      stateVersion: Number.isFinite(state.version) ? Math.max(0, Math.floor(state.version)) : 0,
+      savedAt: Number.isFinite(parsed?.savedAt) ? Math.max(0, Math.floor(parsed.savedAt)) : 0,
+      elapsedSeconds: Number.isFinite(state.elapsedSeconds) ? Math.max(0, Math.floor(state.elapsedSeconds)) : 0,
+      activePlanetId: typeof state.activePlanetId === "string" ? state.activePlanetId.slice(0, 80) : "home",
+      entityCount: state.entities.length,
+      completedTechCount: Array.isArray(state.research?.completedTechIds) ? state.research.completedTechIds.length : 0,
+      structurePoints: Number.isFinite(state.dysonSphere?.structurePoints) ? Math.max(0, Math.floor(state.dysonSphere.structurePoints)) : 0,
+      uploadedWhiteMatrix: Number.isFinite(state.totalProduced?.universe_matrix) ? Math.max(0, Math.floor(state.totalProduced.universe_matrix)) : 0,
+      stateChecksum: typeof parsed?.checksum === "string" ? parsed.checksum.slice(0, 128) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSaveRecord(save) {
+  if (!save || typeof save !== "object") return save;
+  return { ...save, summary: summarizeSavePayload(save.payload) };
+}
+
 function normalizeStoredData(parsed) {
   const source = parsed && typeof parsed === "object" ? parsed : {};
+  const sourceSchemaVersion = Number.isInteger(source.schemaVersion) ? source.schemaVersion : 1;
+  const users = normalizeUserRecords(source.users, sourceSchemaVersion);
   const data = {
     ...cloneDefaultData(),
     ...source,
     schemaVersion: DEFAULT_DATA.schemaVersion,
-    users: source.users && typeof source.users === "object" ? source.users : {},
-    sessions: source.sessions && typeof source.sessions === "object" ? source.sessions : {},
-    cloudSaves: source.cloudSaves && typeof source.cloudSaves === "object" ? source.cloudSaves : {},
-    cloudSaveHistory: source.cloudSaveHistory && typeof source.cloudSaveHistory === "object" ? source.cloudSaveHistory : {},
+    users,
+    sessions: normalizeSessionRecords(source.sessions, users),
+    emailVerifications: normalizeActionTokens(source.emailVerifications, users),
+    passwordResets: normalizeActionTokens(source.passwordResets, users),
+    cloudSaves: source.cloudSaves && typeof source.cloudSaves === "object"
+      ? Object.fromEntries(Object.entries(source.cloudSaves).map(([userId, save]) => [userId, normalizeSaveRecord(save)]))
+      : {},
+    cloudSaveHistory: source.cloudSaveHistory && typeof source.cloudSaveHistory === "object"
+      ? Object.fromEntries(Object.entries(source.cloudSaveHistory).map(([userId, history]) => [userId, Array.isArray(history) ? history.map(normalizeSaveRecord) : []]))
+      : {},
     submissions: source.submissions && typeof source.submissions === "object" ? source.submissions : {},
     players: normalizePlayerRecords(source.players),
     feedback: Array.isArray(source.feedback) ? source.feedback.slice(-1000) : [],
@@ -103,7 +194,35 @@ function normalizedName(value) {
 }
 
 function publicUser(user) {
-  return { id: user.id, email: user.email, displayName: user.displayName, createdAt: user.createdAt };
+  return {
+    id: user.id,
+    email: user.email,
+    displayName: user.displayName,
+    createdAt: user.createdAt,
+    emailVerified: Number.isFinite(user.emailVerifiedAt),
+    emailVerifiedAt: Number.isFinite(user.emailVerifiedAt) ? user.emailVerifiedAt : null,
+    passwordChangedAt: user.passwordChangedAt,
+  };
+}
+
+function normalizedDeviceName(value, request) {
+  if (typeof value === "string") {
+    const name = value.trim().replace(/\s+/g, " ").slice(0, 80);
+    if (name) return name;
+  }
+  const userAgent = typeof request?.headers?.["user-agent"] === "string" ? request.headers["user-agent"] : "";
+  if (/Electron/i.test(userAgent)) return "DSP极简网络桌面版";
+  if (/Android/i.test(userAgent)) return "Android 浏览器";
+  if (/iPhone|iPad|iPod/i.test(userAgent)) return "iOS 浏览器";
+  if (/Mobile/i.test(userAgent)) return "移动浏览器";
+  return "网页浏览器";
+}
+
+function clientTypeForRequest(request) {
+  const userAgent = typeof request?.headers?.["user-agent"] === "string" ? request.headers["user-agent"] : "";
+  if (/Electron/i.test(userAgent)) return "desktop";
+  if (/Mobile|Android|iPhone|iPad|iPod/i.test(userAgent)) return "mobile-web";
+  return "desktop-web";
 }
 
 function normalizeMetric(value, integer = false, maximum = 1e15) {
@@ -281,10 +400,20 @@ async function passwordMatches(password, user) {
   return expected.length === derived.length && timingSafeEqual(expected, derived);
 }
 
-function issueSession(store, userId) {
+function issueSession(store, userId, request, deviceName) {
   const token = randomBytes(32).toString("base64url");
   const tokenHash = sha256(token);
-  store.data.sessions[tokenHash] = { userId, createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL_MS };
+  const now = Date.now();
+  store.data.sessions[tokenHash] = {
+    id: `session_${randomUUID().replaceAll("-", "")}`,
+    userId,
+    createdAt: now,
+    lastSeenAt: now,
+    expiresAt: now + SESSION_TTL_MS,
+    deviceName: normalizedDeviceName(deviceName, request),
+    clientType: clientTypeForRequest(request),
+    ipHash: sha256(`session-ip:${requestIp(request)}`).slice(0, 16),
+  };
   return token;
 }
 
@@ -299,7 +428,61 @@ function authenticatedUser(request, store) {
     return null;
   }
   const user = store.data.users[session.userId];
-  return user ? { user, tokenHash } : null;
+  if (!user) return null;
+  session.lastSeenAt = Date.now();
+  return { user, tokenHash, session };
+}
+
+function issueActionToken(collection, userId) {
+  for (const [tokenHash, record] of Object.entries(collection)) {
+    if (record.userId === userId || record.expiresAt <= Date.now()) delete collection[tokenHash];
+  }
+  const token = randomBytes(32).toString("base64url");
+  collection[sha256(token)] = { userId, createdAt: Date.now(), expiresAt: Date.now() + EMAIL_ACTION_TTL_MS };
+  return token;
+}
+
+function validActionToken(collection, token) {
+  if (typeof token !== "string" || token.length < 32 || token.length > 256) return null;
+  const tokenHash = sha256(token);
+  const record = collection[tokenHash];
+  if (!record || record.expiresAt <= Date.now()) {
+    if (record) delete collection[tokenHash];
+    return null;
+  }
+  return { tokenHash, record };
+}
+
+function revokeUserSessions(store, userId, exceptTokenHash = null) {
+  for (const [tokenHash, session] of Object.entries(store.data.sessions)) {
+    if (session.userId === userId && tokenHash !== exceptTokenHash) delete store.data.sessions[tokenHash];
+  }
+}
+
+function removeUserActionTokens(store, userId) {
+  for (const collection of [store.data.emailVerifications, store.data.passwordResets]) {
+    for (const [tokenHash, record] of Object.entries(collection)) {
+      if (record.userId === userId) delete collection[tokenHash];
+    }
+  }
+}
+
+function requireVerifiedUser(response, auth) {
+  if (Number.isFinite(auth.user.emailVerifiedAt)) return true;
+  send(response, 403, { error: "请先验证邮箱后再写入云端数据", code: "EMAIL_VERIFICATION_REQUIRED" });
+  return false;
+}
+
+function publicSession(session, currentTokenHash, tokenHash) {
+  return {
+    id: session.id,
+    deviceName: session.deviceName,
+    clientType: session.clientType,
+    createdAt: session.createdAt,
+    lastSeenAt: session.lastSeenAt,
+    expiresAt: session.expiresAt,
+    current: tokenHash === currentTokenHash,
+  };
 }
 
 function cloudSaveMetadata(save) {
@@ -308,6 +491,7 @@ function cloudSaveMetadata(save) {
     updatedAt: save.updatedAt,
     size: save.size,
     checksum: save.checksum,
+    summary: save.summary ?? summarizeSavePayload(save.payload),
     ...(Number.isInteger(save.restoredFromRevision) ? { restoredFromRevision: save.restoredFromRevision } : {}),
   } : null;
 }
@@ -422,6 +606,10 @@ export async function createCloudServer({
   playerOnlineWindowMs = Number(process.env.DSP_PLAYER_ONLINE_WINDOW_MS || DEFAULT_PLAYER_ONLINE_WINDOW_MS),
   metricTimeZone = process.env.DSP_METRIC_TIME_ZONE || DEFAULT_METRIC_TIME_ZONE,
   adminToken = process.env.DSP_ADMIN_TOKEN || "",
+  mailer,
+  mailWebhookUrl = process.env.DSP_MAIL_WEBHOOK_URL || "",
+  mailWebhookToken = process.env.DSP_MAIL_WEBHOOK_TOKEN || "",
+  publicBaseUrl = process.env.DSP_PUBLIC_BASE_URL || "",
   logger = console,
 } = {}) {
   const store = databaseFile ? new SqliteStore(databaseFile) : new JsonStore(dataFile || path.join(path.dirname(fileURLToPath(import.meta.url)), "data", "cloud.json"));
@@ -461,6 +649,9 @@ export async function createCloudServer({
   const secureAdminToken = typeof adminToken === "string" && adminToken.length >= 32 ? adminToken : "";
   if (adminToken && !secureAdminToken) logger.error?.("DSP_ADMIN_TOKEN must contain at least 32 characters; admin metrics remain disabled");
   const allowedOrigins = new Set(allowedOrigin.split(",").map((origin) => origin.trim()).filter(Boolean));
+  const accountMailer = mailer === undefined
+    ? createWebhookMailer({ url: mailWebhookUrl, token: mailWebhookToken, publicBaseUrl, logger })
+    : typeof mailer === "function" ? mailer : null;
 
   const flushMetrics = setInterval(() => void store.persist().catch((error) => logger.error?.("cloud metrics persistence failed", error)), 60_000);
   flushMetrics.unref?.();
@@ -609,6 +800,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/register") {
+        if (!accountMailer) return send(response, 503, { error: "邮件验证服务尚未配置，暂时无法创建新账号", code: "EMAIL_SERVICE_UNAVAILABLE" });
         const body = await readJson(request);
         const email = normalizedEmail(body.email);
         const displayName = normalizedName(body.displayName);
@@ -617,11 +809,23 @@ export async function createCloudServer({
         if (Object.values(store.data.users).some((user) => user.email === email)) return send(response, 409, { error: "该邮箱已注册" });
         const credentials = await passwordRecord(password);
         if (Object.values(store.data.users).some((user) => user.email === email)) return send(response, 409, { error: "该邮箱已注册" });
-        const user = { id: `user_${randomUUID().replaceAll("-", "")}`, email, displayName, createdAt: Date.now(), ...credentials };
+        const now = Date.now();
+        const user = {
+          id: `user_${randomUUID().replaceAll("-", "")}`,
+          email,
+          displayName,
+          createdAt: now,
+          emailVerifiedAt: null,
+          passwordChangedAt: now,
+          ...credentials,
+        };
         store.data.users[user.id] = user;
-        const token = issueSession(store, user.id);
+        const verificationToken = issueActionToken(store.data.emailVerifications, user.id);
+        const token = issueSession(store, user.id, request, body.deviceName);
         await store.persist();
-        return send(response, 201, { token, user: publicUser(user) });
+        const delivered = await accountMailer({ kind: "verify", email: user.email, actionToken: verificationToken });
+        if (!delivered) return send(response, 502, { error: "账号已创建，但验证邮件发送失败；请登录后重试发送", code: "EMAIL_DELIVERY_FAILED", accountCreated: true });
+        return send(response, 201, { token, user: publicUser(user), verificationRequired: true });
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/login") {
@@ -630,7 +834,62 @@ export async function createCloudServer({
         const password = typeof body.password === "string" ? body.password : "";
         const user = email ? Object.values(store.data.users).find((candidate) => candidate.email === email) : null;
         if (!user || !(await passwordMatches(password, user))) return send(response, 401, { error: "邮箱或密码错误" });
-        const token = issueSession(store, user.id);
+        const token = issueSession(store, user.id, request, body.deviceName);
+        await store.persist();
+        return send(response, 200, { token, user: publicUser(user) });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/auth/verify-email") {
+        const body = await readJson(request);
+        const action = validActionToken(store.data.emailVerifications, body.token);
+        if (!action) return send(response, 400, { error: "验证链接无效或已过期", code: "EMAIL_TOKEN_INVALID" });
+        const user = store.data.users[action.record.userId];
+        if (!user) return send(response, 400, { error: "验证链接无效或已过期", code: "EMAIL_TOKEN_INVALID" });
+        user.emailVerifiedAt = Date.now();
+        removeUserActionTokens(store, user.id);
+        await store.persist();
+        return send(response, 200, { verified: true, user: publicUser(user) });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/auth/resend-verification") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        if (Number.isFinite(auth.user.emailVerifiedAt)) return send(response, 200, { verified: true, user: publicUser(auth.user) });
+        if (!accountMailer) return send(response, 503, { error: "邮件验证服务尚未配置", code: "EMAIL_SERVICE_UNAVAILABLE" });
+        const verificationToken = issueActionToken(store.data.emailVerifications, auth.user.id);
+        await store.persist();
+        const delivered = await accountMailer({ kind: "verify", email: auth.user.email, actionToken: verificationToken });
+        if (!delivered) return send(response, 502, { error: "验证邮件发送失败，请稍后重试", code: "EMAIL_DELIVERY_FAILED" });
+        return send(response, 202, { sent: true });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/auth/forgot-password") {
+        if (!accountMailer) return send(response, 503, { error: "密码重置邮件服务尚未配置", code: "EMAIL_SERVICE_UNAVAILABLE" });
+        const body = await readJson(request);
+        const email = normalizedEmail(body.email);
+        if (!email) return send(response, 400, { error: "邮箱格式无效" });
+        const user = Object.values(store.data.users).find((candidate) => candidate.email === email);
+        if (user) {
+          const resetToken = issueActionToken(store.data.passwordResets, user.id);
+          await store.persist();
+          const delivered = await accountMailer({ kind: "reset", email: user.email, actionToken: resetToken });
+          if (!delivered) return send(response, 503, { error: "密码重置邮件暂时无法发送，请稍后重试", code: "EMAIL_DELIVERY_FAILED" });
+        }
+        return send(response, 202, { accepted: true, message: "如果该邮箱已注册，重置链接会发送到邮箱" });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/auth/reset-password") {
+        const body = await readJson(request);
+        const password = typeof body.password === "string" ? body.password : "";
+        if (password.length < 8 || password.length > 128) return send(response, 400, { error: "新密码必须为 8 至 128 位" });
+        const action = validActionToken(store.data.passwordResets, body.token);
+        if (!action) return send(response, 400, { error: "重置链接无效或已过期", code: "PASSWORD_TOKEN_INVALID" });
+        const user = store.data.users[action.record.userId];
+        if (!user) return send(response, 400, { error: "重置链接无效或已过期", code: "PASSWORD_TOKEN_INVALID" });
+        Object.assign(user, await passwordRecord(password), { passwordChangedAt: Date.now(), emailVerifiedAt: user.emailVerifiedAt ?? Date.now() });
+        revokeUserSessions(store, user.id);
+        removeUserActionTokens(store, user.id);
+        const token = issueSession(store, user.id, request, body.deviceName);
         await store.persist();
         return send(response, 200, { token, user: publicUser(user) });
       }
@@ -647,6 +906,82 @@ export async function createCloudServer({
           await store.persist();
         }
         return send(response, 200, { ok: true });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/account/sessions") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        const sessions = Object.entries(store.data.sessions)
+          .filter(([, session]) => session.userId === auth.user.id && session.expiresAt > Date.now())
+          .sort(([, left], [, right]) => right.lastSeenAt - left.lastSeenAt)
+          .map(([tokenHash, session]) => publicSession(session, auth.tokenHash, tokenHash));
+        return send(response, 200, { sessions });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/account/sessions/revoke") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        const body = await readJson(request);
+        const target = Object.entries(store.data.sessions).find(([, session]) => session.userId === auth.user.id && session.id === body.sessionId);
+        if (!target) return send(response, 404, { error: "会话不存在或已结束" });
+        delete store.data.sessions[target[0]];
+        await store.persist();
+        return send(response, 200, { revoked: true, currentSessionRevoked: target[0] === auth.tokenHash });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/account/password") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        const body = await readJson(request);
+        const currentPassword = typeof body.currentPassword === "string" ? body.currentPassword : "";
+        const newPassword = typeof body.newPassword === "string" ? body.newPassword : "";
+        if (!(await passwordMatches(currentPassword, auth.user))) return send(response, 401, { error: "当前密码错误" });
+        if (newPassword.length < 8 || newPassword.length > 128) return send(response, 400, { error: "新密码必须为 8 至 128 位" });
+        Object.assign(auth.user, await passwordRecord(newPassword), { passwordChangedAt: Date.now() });
+        revokeUserSessions(store, auth.user.id, auth.tokenHash);
+        await store.persist();
+        return send(response, 200, { changed: true, user: publicUser(auth.user) });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/account/export") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        const userId = auth.user.id;
+        const submissions = Object.values(store.data.submissions).filter((entry) => entry.userId === userId);
+        const feedback = store.data.feedback.filter((entry) => entry.userId === userId).map(({ ipHash: _ipHash, ...entry }) => entry);
+        const errors = store.data.errors.filter((entry) => entry.userId === userId).map(({ ipHash: _ipHash, ...entry }) => entry);
+        return send(response, 200, {
+          exportedAt: Date.now(),
+          schemaVersion: DEFAULT_DATA.schemaVersion,
+          user: publicUser(auth.user),
+          cloudSave: store.data.cloudSaves[userId] ?? null,
+          cloudSaveHistory: [...saveHistory(store, userId)].reverse().map(cloudSaveMetadata),
+          submissions,
+          feedback,
+          errors,
+        }, { "content-disposition": `attachment; filename="dsp-account-${userId}.json"` });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/account/delete") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        const body = await readJson(request);
+        if (body.confirmation !== "DELETE" || !(await passwordMatches(typeof body.password === "string" ? body.password : "", auth.user))) {
+          return send(response, 400, { error: "密码或注销确认文字不正确" });
+        }
+        const userId = auth.user.id;
+        revokeUserSessions(store, userId);
+        removeUserActionTokens(store, userId);
+        delete store.data.cloudSaves[userId];
+        delete store.data.cloudSaveHistory[userId];
+        for (const [key, submission] of Object.entries(store.data.submissions)) {
+          if (submission.userId === userId) delete store.data.submissions[key];
+        }
+        store.data.feedback = store.data.feedback.filter((entry) => entry.userId !== userId);
+        store.data.errors = store.data.errors.filter((entry) => entry.userId !== userId);
+        delete store.data.users[userId];
+        await store.persist();
+        return send(response, 200, { deleted: true });
       }
 
       if (request.method === "GET" && url.pathname === "/api/cloud-save/history") {
@@ -669,6 +1004,7 @@ export async function createCloudServer({
       if (request.method === "PUT" && url.pathname === "/api/cloud-save") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
+        if (!requireVerifiedUser(response, auth)) return;
         const body = await readJson(request);
         if (!validateSavePayload(body.payload)) return send(response, 400, { error: "云存档格式无效或体积过大" });
         const current = store.data.cloudSaves[auth.user.id];
@@ -683,6 +1019,7 @@ export async function createCloudServer({
           checksum: sha256(body.payload),
           size: Buffer.byteLength(body.payload),
           updatedAt: Date.now(),
+          summary: summarizeSavePayload(body.payload),
         };
         appendSaveRevision(store, auth.user.id, next);
         dayMetric.cloudUploads += 1;
@@ -693,6 +1030,7 @@ export async function createCloudServer({
       if (request.method === "POST" && url.pathname === "/api/cloud-save/restore") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
+        if (!requireVerifiedUser(response, auth)) return;
         const body = await readJson(request);
         const current = store.data.cloudSaves[auth.user.id];
         const expectedRevision = Number.isInteger(body.expectedRevision) ? body.expectedRevision : 0;
@@ -730,6 +1068,7 @@ export async function createCloudServer({
       if (request.method === "POST" && url.pathname === "/api/leaderboard") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
+        if (!requireVerifiedUser(response, auth)) return;
         const body = await readJson(request);
         const seasonId = VALID_SEASONS.has(body.seasonId) ? body.seasonId : "season_01";
         if (seasonId !== "season_01") return send(response, 409, { error: "历史赛季已封存" });

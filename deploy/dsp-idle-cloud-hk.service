@@ -19,6 +19,7 @@ Environment=DSP_CLOUD_BACKUP_DIRECTORY=/var/lib/dsp-idle-cloud/backups
 Environment=DSP_CLOUD_BACKUP_INTERVAL_MS=21600000
 Environment=DSP_PLAYER_ONLINE_WINDOW_MS=120000
 Environment=DSP_METRIC_TIME_ZONE=Asia/Shanghai
+Environment=DSP_PUBLIC_BASE_URL=https://dsponline.cn
 EnvironmentFile=-/etc/dsp-idle-cloud/admin.env
 Environment=DSP_ALLOWED_ORIGIN=https://dsponline.cn,https://www.dsponline.cn,http://dsponline.cn,http://www.dsponline.cn,http://43.129.249.102,http://111.229.128.211,http://111.229.128.211.nip.io
 NoNewPrivileges=true

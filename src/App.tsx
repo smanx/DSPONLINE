@@ -184,7 +184,7 @@ import {
   setContentPackEnabled,
   type ContentPackRegistry,
 } from "./game/contentPacks";
-import { baselineAccountProgress, createLocalAccount, getActiveAccount, loadAccountState, recordAccountProgress, saveAccountState, switchLocalAccount, updateAccountProfile, type AccountProfileChanges } from "./game/account";
+import { baselineAccountProgress, createLocalAccount, getActiveAccount, loadAccountState, recordAccountProgress, saveAccountState, setActiveCloudBinding, switchLocalAccount, updateAccountProfile, type AccountProfileChanges } from "./game/account";
 import { removeLeaderboardData, submitLeaderboardData } from "./game/leaderboard";
 import { trackAnalyticsEvent } from "./game/analytics";
 import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CargoStackSize, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
@@ -1146,6 +1146,13 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
     const next = updateAccountProfile(current, changes);
     accountStateRef.current = next;
     setAccountState(next);
+  }, []);
+
+  const updateGalaxyCloudBinding = useCallback((cloud: { id: string; email: string } | null) => {
+    const next = setActiveCloudBinding(accountStateRef.current, cloud);
+    accountStateRef.current = next;
+    setAccountState(next);
+    setNotice(cloud ? "当前本地身份已绑定云账号" : "当前本地身份已解除云账号绑定");
   }, []);
 
   const createGalaxyAccount = useCallback((displayName: string) => {
@@ -3018,6 +3025,7 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
             game={game}
             onClose={() => setGalaxyOpen(false)}
             onUpdateProfile={updateGalaxyProfile}
+            onUpdateCloudBinding={updateGalaxyCloudBinding}
             onCreateAccount={createGalaxyAccount}
             onSwitchAccount={switchGalaxyAccount}
             onUpload={uploadGalaxyData}

@@ -13,7 +13,7 @@ npm run test:e2e
 npm run desktop:pack
 ```
 
-Current baseline: 208 Vitest tests, 74 Playwright Chrome tests, and 5 Node server tests.
+Current baseline: 212 Vitest tests, 78 Playwright Chrome tests, and 16 Node server tests.
 
 ## Choose By Change
 

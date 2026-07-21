@@ -10,9 +10,12 @@ let directory;
 let server;
 let baseUrl;
 let token;
+let mailbox;
 const adminToken = "test-admin-secret-1234567890-abcdef";
 const cloudPayload = JSON.stringify({
   formatVersion: 1,
+  savedAt: 123456,
+  checksum: "client-state-checksum",
   state: {
     version: 24,
     elapsedSeconds: 1_000_000,
@@ -25,7 +28,13 @@ const cloudPayload = JSON.stringify({
 
 before(async () => {
   directory = await mkdtemp(path.join(tmpdir(), "dsp-cloud-"));
-  server = await createCloudServer({ databaseFile: path.join(directory, "cloud.sqlite"), adminToken, logger: { error() {} } });
+  mailbox = [];
+  server = await createCloudServer({
+    databaseFile: path.join(directory, "cloud.sqlite"),
+    adminToken,
+    mailer: async (message) => { mailbox.push(message); return true; },
+    logger: { error() {} },
+  });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
@@ -43,13 +52,101 @@ async function request(route, options = {}) {
   return { response, body: await response.json() };
 }
 
-test("registers, authenticates and rejects duplicate accounts", async () => {
+test("registers, verifies email and rejects duplicate accounts", async () => {
   const registered = await request("/api/auth/register", { method: "POST", body: JSON.stringify({ email: "pilot@example.com", password: "strong-pass-123", displayName: "测试工程师" }) });
   assert.equal(registered.response.status, 201);
   assert.ok(registered.body.token);
+  assert.equal(registered.body.user.emailVerified, false);
   token = registered.body.token;
+
+  const blockedUpload = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
+  assert.equal(blockedUpload.response.status, 403);
+  assert.equal(blockedUpload.body.code, "EMAIL_VERIFICATION_REQUIRED");
+
   const duplicate = await request("/api/auth/register", { method: "POST", body: JSON.stringify({ email: "pilot@example.com", password: "strong-pass-123", displayName: "另一位工程师" }) });
   assert.equal(duplicate.response.status, 409);
+
+  const verification = mailbox.find((message) => message.kind === "verify" && message.email === "pilot@example.com");
+  assert.ok(verification?.actionToken);
+  const verified = await request("/api/auth/verify-email", { method: "POST", body: JSON.stringify({ token: verification.actionToken }) });
+  assert.equal(verified.response.status, 200);
+  assert.equal(verified.body.user.emailVerified, true);
+  const reused = await request("/api/auth/verify-email", { method: "POST", body: JSON.stringify({ token: verification.actionToken }) });
+  assert.equal(reused.response.status, 400);
+});
+
+test("keeps registration explicitly disabled when no mail transport is configured", async () => {
+  const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-no-mail-"));
+  let isolatedServer;
+  try {
+    isolatedServer = await createCloudServer({ databaseFile: path.join(isolatedDirectory, "cloud.sqlite"), mailer: null, logger: { error() {} } });
+    await new Promise((resolve) => isolatedServer.listen(0, "127.0.0.1", resolve));
+    const response = await fetch(`http://127.0.0.1:${isolatedServer.address().port}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "disabled@example.com", password: "strong-pass-123", displayName: "邮件未配置" }),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 503);
+    assert.equal(body.code, "EMAIL_SERVICE_UNAVAILABLE");
+    assert.equal(Object.keys(isolatedServer.store.data.users).length, 0);
+  } finally {
+    if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
+    await rm(isolatedDirectory, { recursive: true, force: true });
+  }
+});
+
+test("manages sessions and supports password change and reset", async () => {
+  const secondLogin = await request("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email: "pilot@example.com", password: "strong-pass-123", deviceName: "测试手机" }),
+  });
+  assert.equal(secondLogin.response.status, 200);
+  const secondToken = secondLogin.body.token;
+  const sessions = await request("/api/account/sessions", { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(sessions.response.status, 200);
+  assert.equal(sessions.body.sessions.length, 2);
+  assert.equal(sessions.body.sessions.some((session) => session.deviceName === "测试手机" && !session.current), true);
+
+  const secondSession = sessions.body.sessions.find((session) => session.deviceName === "测试手机");
+  const revoked = await request("/api/account/sessions/revoke", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ sessionId: secondSession.id }),
+  });
+  assert.equal(revoked.response.status, 200);
+  const revokedAccount = await request("/api/account", { headers: { authorization: `Bearer ${secondToken}` } });
+  assert.equal(revokedAccount.response.status, 401);
+
+  const wrongPassword = await request("/api/account/password", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ currentPassword: "wrong-password", newPassword: "changed-pass-456" }),
+  });
+  assert.equal(wrongPassword.response.status, 401);
+  const changed = await request("/api/account/password", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ currentPassword: "strong-pass-123", newPassword: "changed-pass-456" }),
+  });
+  assert.equal(changed.response.status, 200);
+  const oldLogin = await request("/api/auth/login", { method: "POST", body: JSON.stringify({ email: "pilot@example.com", password: "strong-pass-123" }) });
+  assert.equal(oldLogin.response.status, 401);
+
+  const forgot = await request("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ email: "pilot@example.com" }) });
+  assert.equal(forgot.response.status, 202);
+  const resetMessage = [...mailbox].reverse().find((message) => message.kind === "reset" && message.email === "pilot@example.com");
+  assert.ok(resetMessage?.actionToken);
+  const previousToken = token;
+  const reset = await request("/api/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ token: resetMessage.actionToken, password: "reset-pass-789", deviceName: "重置后的设备" }),
+  });
+  assert.equal(reset.response.status, 200);
+  assert.ok(reset.body.token);
+  token = reset.body.token;
+  const previousSession = await request("/api/account", { headers: { authorization: `Bearer ${previousToken}` } });
+  assert.equal(previousSession.response.status, 401);
 });
 
 test("deduplicates anonymous players and reports total, daily and online counts", async () => {
@@ -158,7 +255,7 @@ test("protects detailed metrics and aggregates privacy-safe visits and events", 
   assert.equal(JSON.stringify(server.store.data.analytics).includes(sessionId), false);
 });
 
-test("migrates schema v3 data to v4 without losing accounts, saves or players", async () => {
+test("migrates schema v3 data to v5 without losing accounts, saves or players", async () => {
   const migrationDirectory = await mkdtemp(path.join(tmpdir(), "dsp-schema-v3-"));
   const dataFile = path.join(migrationDirectory, "cloud.json");
   const playerHash = "a".repeat(64);
@@ -179,8 +276,10 @@ test("migrates schema v3 data to v4 without losing accounts, saves or players", 
   try {
     migrationServer = await createCloudServer({ dataFile, databaseFile: "", adminToken, logger: { error() {} } });
     await new Promise((resolve) => migrationServer.listen(0, "127.0.0.1", resolve));
-    assert.equal(migrationServer.store.data.schemaVersion, 4);
+    assert.equal(migrationServer.store.data.schemaVersion, 5);
     assert.equal(migrationServer.store.data.users.user_legacy.email, "legacy@example.com");
+    assert.equal(migrationServer.store.data.users.user_legacy.emailVerifiedAt, 1);
+    assert.equal(migrationServer.store.data.users.user_legacy.passwordChangedAt, 1);
     assert.equal(migrationServer.store.data.cloudSaves.user_legacy.revision, 1);
     assert.equal(migrationServer.store.data.players[playerHash].lastActiveDay, "2026-07-21");
     assert.deepEqual(migrationServer.store.data.analytics, { visitors: {}, sessions: {}, daily: {} });
@@ -189,7 +288,7 @@ test("migrates schema v3 data to v4 without losing accounts, saves or players", 
 
     migrationServer = await createCloudServer({ dataFile, databaseFile: "", adminToken, logger: { error() {} } });
     await new Promise((resolve) => migrationServer.listen(0, "127.0.0.1", resolve));
-    assert.equal(migrationServer.store.data.schemaVersion, 4);
+    assert.equal(migrationServer.store.data.schemaVersion, 5);
     assert.equal(migrationServer.store.data.cloudSaveHistory.user_legacy.length, 1);
   } finally {
     if (migrationServer?.listening) await new Promise((resolve) => migrationServer.close(resolve));
@@ -201,6 +300,10 @@ test("stores revisioned cloud saves and detects conflicts", async () => {
   const saved = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
   assert.equal(saved.response.status, 200);
   assert.equal(saved.body.cloudSave.revision, 1);
+  assert.equal(saved.body.cloudSave.summary.stateVersion, 24);
+  assert.equal(saved.body.cloudSave.summary.savedAt, 123456);
+  assert.equal(saved.body.cloudSave.summary.completedTechCount, 0);
+  assert.equal(saved.body.cloudSave.summary.stateChecksum, "client-state-checksum");
   const conflict = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
   assert.equal(conflict.response.status, 409);
 
@@ -214,6 +317,12 @@ test("stores revisioned cloud saves and detects conflicts", async () => {
   assert.equal(restored.body.cloudSave.restoredFromRevision, 1);
   const loaded = await request("/api/cloud-save", { headers: { authorization: `Bearer ${token}` } });
   assert.equal(loaded.body.cloudSave.payload, cloudPayload);
+
+  const exported = await request("/api/account/export", { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(exported.response.status, 200);
+  assert.equal(exported.body.user.email, "pilot@example.com");
+  assert.equal(exported.body.cloudSave.revision, 3);
+  assert.deepEqual(exported.body.cloudSaveHistory.map((entry) => entry.revision), [3, 2, 1]);
 });
 
 test("recalculates leaderboard score on the server", async () => {
@@ -232,4 +341,31 @@ test("recalculates leaderboard score on the server", async () => {
   assert.equal(submitted.body.submission.metrics.galaxyScore, 121);
   const ranking = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
   assert.equal(ranking.body.entries[0].verified, true);
+});
+
+test("deletes an account and all directly owned cloud data", async () => {
+  const created = await request("/api/auth/register", { method: "POST", body: JSON.stringify({ email: "delete@example.com", password: "delete-pass-123", displayName: "待注销工程师" }) });
+  assert.equal(created.response.status, 201);
+  const deleteToken = created.body.token;
+  const verification = [...mailbox].reverse().find((message) => message.kind === "verify" && message.email === "delete@example.com");
+  await request("/api/auth/verify-email", { method: "POST", body: JSON.stringify({ token: verification.actionToken }) });
+  const saved = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${deleteToken}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
+  assert.equal(saved.response.status, 200);
+
+  const rejected = await request("/api/account/delete", {
+    method: "POST",
+    headers: { authorization: `Bearer ${deleteToken}` },
+    body: JSON.stringify({ password: "delete-pass-123", confirmation: "wrong" }),
+  });
+  assert.equal(rejected.response.status, 400);
+  const deleted = await request("/api/account/delete", {
+    method: "POST",
+    headers: { authorization: `Bearer ${deleteToken}` },
+    body: JSON.stringify({ password: "delete-pass-123", confirmation: "DELETE" }),
+  });
+  assert.equal(deleted.response.status, 200);
+  assert.equal(Object.values(server.store.data.users).some((user) => user.email === "delete@example.com"), false);
+  assert.equal(server.store.data.cloudSaves[created.body.user.id], undefined);
+  const expired = await request("/api/account", { headers: { authorization: `Bearer ${deleteToken}` } });
+  assert.equal(expired.response.status, 401);
 });

@@ -32,13 +32,20 @@ import {
 } from "lucide-react";
 import {
   CloudApiError,
+  compareCloudSave,
   downloadCloudSave,
   loginCloudAccount,
   logoutCloudAccount,
+  markCloudSaveSynchronized,
   registerCloudAccount,
+  requestCloudPasswordReset,
+  resetCloudPassword,
   resumeCloudSession,
+  summarizeCloudPayload,
   uploadCloudSave,
+  verifyCloudEmail,
   type CloudSaveMetadata,
+  type CloudSyncState,
   type CloudSession,
 } from "../game/cloud";
 import { trackAnalyticsEvent } from "../game/analytics";
@@ -63,8 +70,11 @@ import {
 import type { AutosaveIntervalSeconds, FontScale, GameSettings, SimulationSpeed } from "../game/types";
 import { getDesktopBridge } from "../desktop";
 import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
+import { CloudAccountSecurity } from "./CloudAccountSecurity";
+import { CloudSaveConflictDialog } from "./CloudSaveConflictDialog";
 
 type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "new";
+type CloudAuthMode = "login" | "register" | "forgot" | "reset";
 type MenuMessage = { tone: "ready" | "warning" | "error"; text: string } | null;
 
 const MENU_SETTINGS_KEY = "dsp-idle-network.menu-settings.v1";
@@ -87,6 +97,14 @@ function formatRuntime(seconds: number): string {
 function formatSavedAt(savedAt: number | null | undefined): string {
   if (!savedAt) return "尚未保存";
   return new Date(savedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function cloudSyncLabel(state: CloudSyncState): string {
+  if (state === "synced") return "本地与云端一致";
+  if (state === "local-newer" || state === "local-only") return "本地有待上传进度";
+  if (state === "cloud-newer" || state === "cloud-only") return "其他设备有云端更新";
+  if (state === "conflict" || state === "unbound") return "需要选择保留版本";
+  return "尚未建立云存档";
 }
 
 function readMenuSettings(fallback: GameSettings): GameSettings {
@@ -143,10 +161,19 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [snapshots, setSnapshots] = useState(getSaveSnapshotSummaries);
   const [settings, setSettings] = useState<GameSettings>(() => readMenuSettings(defaultSettings));
   const [cloudSession, setCloudSession] = useState<CloudSession>({ status: "checking", user: null, cloudSave: null, message: null });
-  const [cloudMode, setCloudMode] = useState<"login" | "register">("login");
+  const initialCloudAction = useMemo(() => {
+    const parameters = new URLSearchParams(window.location.search);
+    const verificationToken = parameters.get("verify");
+    if (verificationToken) return { kind: "verify" as const, token: verificationToken };
+    const resetToken = parameters.get("reset");
+    return resetToken ? { kind: "reset" as const, token: resetToken } : null;
+  }, []);
+  const [cloudMode, setCloudMode] = useState<CloudAuthMode>(initialCloudAction?.kind === "reset" ? "reset" : "login");
   const [cloudEmail, setCloudEmail] = useState("");
   const [cloudPassword, setCloudPassword] = useState("");
+  const [cloudPasswordConfirmation, setCloudPasswordConfirmation] = useState("");
   const [cloudDisplayName, setCloudDisplayName] = useState("");
+  const [cloudConflict, setCloudConflict] = useState<{ localPayload: string; remote: CloudSaveMetadata } | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<MenuMessage>(null);
   const [importInspection, setImportInspection] = useState<SaveInspection | null>(null);
@@ -179,9 +206,39 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       return;
     }
     let active = true;
+    const clearActionQuery = () => {
+      const next = new URL(window.location.href);
+      next.searchParams.delete("verify");
+      next.searchParams.delete("reset");
+      window.history.replaceState(null, "", `${next.pathname}${next.search}${next.hash}`);
+    };
+    if (initialCloudAction?.kind === "reset") {
+      setView("cloud");
+      setCloudSession({ status: "anonymous", user: null, cloudSave: null, message: null });
+      return () => { active = false; };
+    }
+    if (initialCloudAction?.kind === "verify") {
+      setView("cloud");
+      setBusy(true);
+      void verifyCloudEmail(initialCloudAction.token)
+        .then(async () => {
+          const session = await resumeCloudSession();
+          if (!active) return;
+          setCloudSession(session);
+          setMessage({ tone: "ready", text: "邮箱验证完成，云存档写入已开放" });
+          clearActionQuery();
+        })
+        .catch((error) => {
+          if (!active) return;
+          setCloudSession({ status: "anonymous", user: null, cloudSave: null, message: null });
+          setMessage({ tone: "error", text: error instanceof Error ? error.message : "邮箱验证失败" });
+        })
+        .finally(() => { if (active) setBusy(false); });
+      return () => { active = false; };
+    }
     void resumeCloudSession().then((session) => { if (active) setCloudSession(session); });
     return () => { active = false; };
-  }, [cloudAuthAllowed]);
+  }, [cloudAuthAllowed, initialCloudAction]);
 
   const updateMenuSettings = (changes: Partial<GameSettings>) => {
     const next = { ...settings, ...changes };
@@ -274,7 +331,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       setCloudSession(session);
       trackAnalyticsEvent(cloudMode === "register" ? "cloud_register" : "cloud_login");
       setCloudPassword("");
-      setMessage({ tone: "ready", text: cloudMode === "register" ? "云账户已创建并登录" : "云账户登录成功" });
+      setMessage({ tone: "ready", text: cloudMode === "register" ? "云账户已创建，请查收验证邮件" : "云账户登录成功" });
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "云账户登录失败" });
     } finally {
@@ -282,22 +339,73 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     }
   };
 
+  const requestPasswordReset = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await requestCloudPasswordReset(cloudEmail);
+      setMessage({ tone: "ready", text: result });
+      setCloudMode("login");
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "重置邮件发送失败" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitPasswordReset = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!initialCloudAction || initialCloudAction.kind !== "reset") return;
+    if (cloudPassword !== cloudPasswordConfirmation) {
+      setMessage({ tone: "error", text: "两次输入的新密码不一致" });
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const session = await resetCloudPassword(initialCloudAction.token, cloudPassword);
+      setCloudSession(session);
+      setCloudPassword("");
+      setCloudPasswordConfirmation("");
+      const next = new URL(window.location.href);
+      next.searchParams.delete("reset");
+      window.history.replaceState(null, "", `${next.pathname}${next.search}${next.hash}`);
+      setMessage({ tone: "ready", text: "密码已重置，其他设备会话已退出" });
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "密码重置失败" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const uploadLocalSave = async () => {
-    if (cloudSession.status !== "authenticated" || !continueSave) return;
+    if (cloudSession.status !== "authenticated" || !cloudSession.user || !continueSave) return;
+    const userId = cloudSession.user.id;
+    let attemptedPayload: string | null = null;
     setBusy(true);
     setMessage(null);
     try {
       const loaded = loadGame();
       const state = { ...loaded.state, settings: { ...loaded.state.settings, ...settings } };
       saveGame(state);
-      const cloudSave = await uploadCloudSave(exportGame(state), cloudSession.cloudSave?.revision ?? 0);
+      const localPayload = exportGame(state);
+      attemptedPayload = localPayload;
+      const comparison = compareCloudSave(userId, localPayload, cloudSession.cloudSave);
+      if (cloudSession.cloudSave && ["cloud-newer", "conflict", "unbound"].includes(comparison.state)) {
+        setCloudConflict({ localPayload, remote: cloudSession.cloudSave });
+        setMessage({ tone: "warning", text: "检测到本地与云端进度分叉，请先选择保留版本" });
+        return;
+      }
+      const cloudSave = await uploadCloudSave(localPayload, cloudSession.cloudSave?.revision ?? 0);
+      markCloudSaveSynchronized(userId, cloudSave, localPayload);
       trackAnalyticsEvent("cloud_upload");
       setCloudSession((current) => ({ ...current, cloudSave }));
       refreshLocalSaves();
       setMessage({ tone: "ready", text: `云存档已更新到修订 ${cloudSave.revision}` });
     } catch (error) {
       if (error instanceof CloudApiError && error.status === 409 && error.payload.cloudSave) {
-        setCloudSession((current) => ({ ...current, cloudSave: error.payload.cloudSave as CloudSaveMetadata }));
+        if (attemptedPayload) setCloudConflict({ localPayload: attemptedPayload, remote: error.payload.cloudSave as CloudSaveMetadata });
       }
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "云存档上传失败" });
     } finally {
@@ -306,7 +414,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   };
 
   const downloadAndEnterCloudSave = async () => {
-    if (cloudSession.status !== "authenticated") return;
+    if (cloudSession.status !== "authenticated" || !cloudSession.user) return;
+    const userId = cloudSession.user.id;
     setBusy(true);
     setMessage(null);
     try {
@@ -320,6 +429,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         setMessage({ tone: "error", text: inspection.issues[0] ?? "云存档格式无效" });
         return;
       }
+      markCloudSaveSynchronized(userId, cloudSave, cloudSave.payload);
       trackAnalyticsEvent("cloud_download");
       enterLoadedGame({ state: inspection.state, offlineSeconds: 0, offlineReport: null }, "下载云存档前");
     } catch (error) {
@@ -329,9 +439,53 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     }
   };
 
+  const useCloudConflictVersion = async () => {
+    if (!cloudConflict || cloudSession.status !== "authenticated" || !cloudSession.user) return;
+    const userId = cloudSession.user.id;
+    setBusy(true);
+    try {
+      const cloudSave = await downloadCloudSave(cloudConflict.remote.revision);
+      if (!cloudSave) throw new Error("云端修订已不可用，请重新连接后再试");
+      const inspection = inspectSave(cloudSave.payload);
+      if (!inspection.valid || !inspection.state) throw new Error(inspection.issues[0] ?? "云存档格式无效");
+      markCloudSaveSynchronized(userId, cloudSave, cloudSave.payload);
+      setCloudConflict(null);
+      trackAnalyticsEvent("cloud_download");
+      enterLoadedGame({ state: inspection.state, offlineSeconds: 0, offlineReport: null }, "解决云存档冲突前");
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "云端版本读取失败" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const keepLocalConflictVersion = async () => {
+    if (!cloudConflict || cloudSession.status !== "authenticated" || !cloudSession.user) return;
+    const userId = cloudSession.user.id;
+    setBusy(true);
+    try {
+      const cloudSave = await uploadCloudSave(cloudConflict.localPayload, cloudConflict.remote.revision);
+      markCloudSaveSynchronized(userId, cloudSave, cloudConflict.localPayload);
+      setCloudSession((current) => ({ ...current, cloudSave }));
+      setCloudConflict(null);
+      setMessage({ tone: "ready", text: `本地进度已保存为云端修订 ${cloudSave.revision}` });
+    } catch (error) {
+      if (error instanceof CloudApiError && error.status === 409 && error.payload.cloudSave) {
+        setCloudConflict((current) => current ? { ...current, remote: error.payload.cloudSave as CloudSaveMetadata } : current);
+      }
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "本地版本上传失败" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const summary = continueSave?.inspection.summary;
   const summaryPlanet = summary ? getPlanet(summary.activePlanetId) : null;
   const cloudStateLabel = cloudSession.status === "authenticated" ? "云端已登录" : cloudSession.status === "offline" ? "云端离线" : cloudSession.status === "checking" ? "连接云节点" : "云端未登录";
+  const comparisonPayload = continueSave?.inspection.state ? exportGame(continueSave.inspection.state) : null;
+  const cloudComparison = cloudSession.status === "authenticated" && cloudSession.user
+    ? compareCloudSave(cloudSession.user.id, comparisonPayload, cloudSession.cloudSave)
+    : null;
 
   return (
     <main className="start-menu" data-reduced-motion={settings.reducedMotion ? "true" : "false"}>
@@ -434,17 +588,31 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             {!cloudAuthAllowed ? <div className="start-menu-cloud-offline"><ShieldCheck size={24} /><span><strong>需要 HTTPS 安全入口</strong><small>https://dsponline.cn</small></span></div> : null}
             {cloudAuthAllowed && cloudSession.status === "checking" ? <div className="start-menu-cloud-offline"><Activity size={24} /><span><strong>正在连接云节点</strong><small>验证服务状态与登录令牌</small></span></div> : null}
             {cloudAuthAllowed && cloudSession.status === "offline" ? <div className="start-menu-cloud-offline"><CloudOff size={24} /><span><strong>云节点暂时不可用</strong><small>{cloudSession.message}</small></span><button type="button" onClick={() => { setCloudSession({ status: "checking", user: null, cloudSave: null, message: null }); void resumeCloudSession().then(setCloudSession); }}><RefreshCw size={14} />重试</button></div> : null}
-            {cloudSession.status === "anonymous" ? <form className="start-menu-auth" onSubmit={authenticateCloud}>
+            {cloudSession.status === "anonymous" && (cloudMode === "login" || cloudMode === "register") ? <form className="start-menu-auth" onSubmit={authenticateCloud}>
               <div className="start-menu-auth-mode"><button className={cloudMode === "login" ? "active" : ""} type="button" onClick={() => setCloudMode("login")}><LogIn size={14} />登录</button><button className={cloudMode === "register" ? "active" : ""} type="button" onClick={() => setCloudMode("register")}><UserPlus size={14} />注册</button></div>
               {cloudMode === "register" ? <label><span>显示名称</span><input value={cloudDisplayName} onChange={(event) => setCloudDisplayName(event.target.value)} minLength={2} maxLength={24} required autoComplete="nickname" /></label> : null}
               <label><span>邮箱</span><input type="email" value={cloudEmail} onChange={(event) => setCloudEmail(event.target.value)} required maxLength={254} autoComplete="email" /></label>
               <label><span>密码</span><input type="password" value={cloudPassword} onChange={(event) => setCloudPassword(event.target.value)} required minLength={8} maxLength={128} autoComplete={cloudMode === "register" ? "new-password" : "current-password"} /></label>
+              {cloudMode === "login" ? <button className="start-menu-auth-link" type="button" onClick={() => setCloudMode("forgot")}>忘记密码</button> : null}
               <button className="primary" type="submit" disabled={busy}>{busy ? <Activity size={15} /> : cloudMode === "register" ? <UserPlus size={15} /> : <LogIn size={15} />}{cloudMode === "register" ? "创建云账户" : "登录云账户"}</button>
+            </form> : null}
+            {cloudSession.status === "anonymous" && cloudMode === "forgot" ? <form className="start-menu-auth" onSubmit={requestPasswordReset}>
+              <header><span><small>账号恢复</small><strong>找回密码</strong></span></header>
+              <label><span>注册邮箱</span><input type="email" value={cloudEmail} onChange={(event) => setCloudEmail(event.target.value)} required maxLength={254} autoComplete="email" /></label>
+              <div className="start-menu-auth-actions"><button type="button" onClick={() => setCloudMode("login")}>返回登录</button><button className="primary" type="submit" disabled={busy}>{busy ? <Activity size={15} /> : <RefreshCw size={15} />}发送重置邮件</button></div>
+            </form> : null}
+            {cloudSession.status === "anonymous" && cloudMode === "reset" ? <form className="start-menu-auth" onSubmit={submitPasswordReset}>
+              <header><span><small>账号恢复</small><strong>设置新密码</strong></span></header>
+              <label><span>新密码</span><input type="password" value={cloudPassword} onChange={(event) => setCloudPassword(event.target.value)} required minLength={8} maxLength={128} autoComplete="new-password" /></label>
+              <label><span>确认新密码</span><input type="password" value={cloudPasswordConfirmation} onChange={(event) => setCloudPasswordConfirmation(event.target.value)} required minLength={8} maxLength={128} autoComplete="new-password" /></label>
+              <button className="primary" type="submit" disabled={busy}>{busy ? <Activity size={15} /> : <RefreshCw size={15} />}确认重置</button>
             </form> : null}
             {cloudSession.status === "authenticated" && cloudSession.user ? <div className="start-menu-cloud-account">
               <section className="start-menu-cloud-user"><i>{cloudSession.user.displayName.slice(0, 1).toUpperCase()}</i><span><strong>{cloudSession.user.displayName}</strong><small>{cloudSession.user.email}</small></span><button type="button" title="退出云账户" aria-label="退出云账户" onClick={() => { setBusy(true); void logoutCloudAccount().then(() => setCloudSession({ status: "anonymous", user: null, cloudSave: null, message: null })).finally(() => setBusy(false)); }}><LogOut size={15} /></button></section>
-              <section className="start-menu-cloud-save"><header><Cloud size={18} /><span><small>云存档</small><strong>{cloudSession.cloudSave ? `修订 ${cloudSession.cloudSave.revision}` : "尚未上传"}</strong></span><em>{cloudSession.cloudSave ? formatSavedAt(cloudSession.cloudSave.updatedAt) : "--"}</em></header><div><button type="button" disabled={busy || !continueSave} onClick={() => void uploadLocalSave()}><Upload size={14} />上传本地存档</button><button className="primary" type="button" disabled={busy || !cloudSession.cloudSave} onClick={() => void downloadAndEnterCloudSave()}><Download size={14} />下载并进入</button></div></section>
+              <section className="start-menu-cloud-save"><header><Cloud size={18} /><span><small>云存档</small><strong>{cloudSession.cloudSave ? `修订 ${cloudSession.cloudSave.revision}` : "尚未上传"}</strong></span><em>{cloudSession.cloudSave ? formatSavedAt(cloudSession.cloudSave.updatedAt) : "--"}</em></header>{cloudComparison ? <p className={`cloud-sync-state cloud-sync-state--${cloudComparison.state}`}>{cloudSyncLabel(cloudComparison.state)}</p> : null}<dl className="cloud-sync-summary"><div><dt>本地进度</dt><dd>{comparisonPayload ? `${formatRuntime(cloudComparison?.local?.elapsedSeconds ?? 0)} · 科技 ${cloudComparison?.local?.completedTechCount ?? 0}` : "无本地存档"}</dd></div><div><dt>云端进度</dt><dd>{cloudSession.cloudSave?.summary ? `${formatRuntime(cloudSession.cloudSave.summary.elapsedSeconds)} · 科技 ${cloudSession.cloudSave.summary.completedTechCount}` : cloudSession.cloudSave ? "旧版摘要待更新" : "无云存档"}</dd></div></dl><div><button type="button" title={!cloudSession.user.emailVerified ? "验证邮箱后可上传" : undefined} disabled={busy || !continueSave || !cloudSession.user.emailVerified} onClick={() => void uploadLocalSave()}><Upload size={14} />上传本地存档</button><button className="primary" type="button" disabled={busy || !cloudSession.cloudSave} onClick={() => void downloadAndEnterCloudSave()}><Download size={14} />下载并进入</button></div></section>
+              <CloudAccountSecurity user={cloudSession.user} onUserChange={(user) => setCloudSession((current) => ({ ...current, user }))} onLoggedOut={() => setCloudSession({ status: "anonymous", user: null, cloudSave: null, message: null })} />
             </div> : null}
+            {cloudConflict ? <CloudSaveConflictDialog local={summarizeCloudPayload(cloudConflict.localPayload)} cloud={cloudConflict.remote} busy={busy} onUseCloud={() => void useCloudConflictVersion()} onKeepLocal={() => void keepLocalConflictVersion()} onCancel={() => setCloudConflict(null)} /> : null}
           </div> : null}
 
           {view === "import" ? <div className="start-menu-import">
