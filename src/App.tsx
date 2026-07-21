@@ -2694,6 +2694,7 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
             selectionMode={SelectionMode.Full}
             selectionKeyCode={null}
             multiSelectionKeyCode="Shift"
+            elementsSelectable={!(coarsePointer && selectionMode)}
             zoomOnDoubleClick={false}
             deleteKeyCode={null}
             fitViewOptions={{ padding: 0.18 }}
