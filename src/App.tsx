@@ -44,6 +44,7 @@ import { getFactoryAlerts, type FactoryAlert } from "./game/alerts";
 import {
   addUnitToEntityGroup,
   addCanvasBookmark,
+  applyStationSlotTemplateToEntities,
   applyBeltConfiguration,
   addDysonLayer,
   addDysonNode,
@@ -188,7 +189,7 @@ import {
 import { baselineAccountProgress, createLocalAccount, getActiveAccount, loadAccountState, recordAccountProgress, saveAccountState, setActiveCloudBinding, switchLocalAccount, updateAccountProfile, type AccountProfileChanges } from "./game/account";
 import { removeLeaderboardData, submitLeaderboardData } from "./game/leaderboard";
 import { trackAnalyticsEvent } from "./game/analytics";
-import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CargoStackSize, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
+import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CargoStackSize, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad, StationSlotTemplate } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 import { getOnboardingFocusTarget, getOnboardingStep, type OnboardingStepId } from "./game/onboarding";
 import { useCoarsePointer } from "./hooks/useCoarsePointer";
@@ -3271,7 +3272,21 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
           onGalacticExportEnabled={(projectId: GalacticExportProjectId, enabled) => commitGame((current) => setGalacticExportEnabled(current, projectId, enabled))}
           onGalacticExportPriority={(projectId: GalacticExportProjectId, priority: LogisticsPriority) => commitGame((current) => setGalacticExportPriority(current, projectId, priority))}
           onDispatchGalacticExport={(projectId: GalacticExportProjectId) => commitGame((current) => dispatchGalacticExport(current, projectId))}
+          onFocusEntity={(entityId) => {
+            setStatisticsOpen(false);
+            setStatisticsFocusTab(null);
+            focusPlacedEntity(entityId);
+          }}
           onFocusBeltNetwork={focusBeltNetwork}
+          onBulkRecipeChange={(entityIds, recipeId) => {
+            commitGame((current) => setEntitiesRecipe(current, entityIds, recipeId));
+            setNotice(`已为 ${entityIds.length} 个兼容设备批量切换配方`);
+            playTone("upgrade");
+          }}
+          onBulkStationSlotApply={(entityIds, slotIndex, template: StationSlotTemplate) => {
+            commitGame((current) => applyStationSlotTemplateToEntities(current, entityIds, slotIndex, template));
+            setNotice(`已为 ${entityIds.length} 个物流站同步槽位 ${slotIndex + 1}`);
+          }}
           onBulkBeltUpgrade={(beltIds, target) => {
             commitGame((current) => beltIds.reduce((next, beltId) => target === "belt" ? upgradeBeltNetwork(next, beltId) : upgradeSorterNetwork(next, beltId), current));
             setNotice(`已批量升级 ${beltIds.length} 个连续网络的${target === "belt" ? "传送带" : "分拣器"}`);

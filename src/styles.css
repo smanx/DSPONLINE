@@ -9765,6 +9765,517 @@ select:focus-visible {
   font-size: 10px;
 }
 
+.production-management {
+  display: grid;
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  background: #0c110f;
+}
+
+.production-management-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+  background: #101613;
+}
+
+.production-management-summary > div {
+  display: grid;
+  min-width: 0;
+  min-height: 58px;
+  align-content: center;
+  gap: 2px;
+  padding: 8px 16px;
+  border-right: 1px solid var(--line);
+}
+
+.production-management-summary span,
+.production-management-summary small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.production-management-summary strong {
+  color: var(--text);
+  font-size: 16px;
+}
+
+.production-management-summary .warning strong {
+  color: var(--coral);
+}
+
+.planet-production-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  scrollbar-width: thin;
+}
+
+.planet-production-strip > button {
+  display: grid;
+  min-width: 150px;
+  flex: 1 0 150px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #101613;
+  color: var(--text-soft);
+  cursor: pointer;
+  text-align: left;
+}
+
+.planet-production-strip > button.active {
+  border-color: #4a8178;
+  background: #15241f;
+  box-shadow: inset 2px 0 0 var(--cyan);
+}
+
+.planet-production-strip span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planet-production-strip strong {
+  color: var(--cyan);
+  font-size: 9px;
+}
+
+.planet-production-strip small {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.production-management-toolbar {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.6fr) repeat(3, minmax(118px, 0.7fr));
+  align-items: end;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.production-management-toolbar > label:not(.statistics-search),
+.production-batch-station label {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.production-management-toolbar select,
+.production-batch-station select,
+.production-batch-station input,
+.production-target-planner select,
+.production-target-planner input {
+  min-width: 0;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  outline: 0;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  font-size: 8px;
+}
+
+.production-management-batch {
+  display: grid;
+  grid-template-columns: auto minmax(360px, 1fr) minmax(210px, 0.7fr);
+  align-items: stretch;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #0f1512;
+}
+
+.production-management-batch--active {
+  background: #111c18;
+}
+
+.production-batch-selection,
+.production-batch-recipe {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.production-batch-selection > strong,
+.production-batch-recipe > header strong,
+.production-batch-station > summary strong {
+  color: var(--cyan);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.production-batch-recipe {
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+}
+
+.production-batch-recipe > header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-soft);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.production-batch-recipe > header strong {
+  margin-left: 2px;
+}
+
+.production-management-batch button,
+.production-target-planner > button,
+.production-management-actions button,
+.production-management-diagnosis p > button {
+  display: inline-flex;
+  min-width: 0;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.production-management-batch button:disabled {
+  color: #53605b;
+  cursor: default;
+  opacity: 0.55;
+}
+
+.production-batch-recipe .catalog-picker-trigger {
+  min-width: 150px;
+  flex: 1;
+}
+
+.production-batch-empty {
+  flex: 1;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.production-batch-station {
+  position: relative;
+  min-width: 0;
+}
+
+.production-batch-station > summary {
+  display: flex;
+  height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: 8px;
+  list-style: none;
+}
+
+.production-batch-station > summary strong {
+  margin-left: auto;
+}
+
+.production-batch-station[open] > summary svg:last-child {
+  transform: rotate(90deg);
+}
+
+.production-batch-station > div {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(90px, 1fr));
+  gap: 6px;
+  grid-column: 1 / -1;
+  padding: 8px 0 2px;
+}
+
+.production-batch-station .catalog-picker-trigger {
+  align-self: end;
+  height: 30px;
+}
+
+.production-batch-station > div > button:last-child {
+  height: 30px;
+  align-self: end;
+}
+
+.production-target-planner {
+  display: grid;
+  grid-template-columns: auto minmax(170px, 1fr) minmax(120px, 0.4fr) minmax(120px, 0.45fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #0e1411;
+}
+
+.production-target-planner > header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--cyan);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.production-target-planner .catalog-picker-trigger {
+  height: 30px;
+}
+
+.production-target-planner > label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.production-management-ledger {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.production-management-ledger > header,
+.production-management-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.1fr) minmax(160px, 0.85fr) minmax(150px, 0.75fr) minmax(250px, 1.5fr) 72px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+}
+
+.production-management-ledger > header {
+  height: 30px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.production-management-ledger > div {
+  height: calc(100% - 30px);
+  overflow: auto;
+}
+
+.production-management-row {
+  min-height: 58px;
+  border-bottom: 1px solid var(--line);
+  background: #0d1310;
+}
+
+.production-management-row:hover,
+.production-management-row--selected {
+  background: #121c18;
+}
+
+.production-management-row--selected {
+  box-shadow: inset 2px 0 0 var(--cyan);
+}
+
+.production-management-row--missing,
+.production-management-row--blocked,
+.production-management-row--power {
+  box-shadow: inset 2px 0 0 #835347;
+}
+
+.production-management-row > label {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+.production-management-row > label input {
+  accent-color: var(--cyan);
+}
+
+.production-management-row > label > span,
+.production-management-row > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.production-management-row strong,
+.production-management-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.production-management-row > label strong,
+.production-management-row > span > strong {
+  color: var(--text-soft);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.production-management-row > label small,
+.production-management-row > span > small {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.production-management-rate > i {
+  overflow: hidden;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: #25312d;
+}
+
+.production-management-rate > i > b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #397f69, #72bd88);
+}
+
+.production-management-diagnosis {
+  min-width: 0;
+}
+
+.production-management-diagnosis > strong {
+  display: block;
+  color: var(--text-soft);
+  font-size: 8px;
+  white-space: normal;
+}
+
+.production-management-row--missing .production-management-diagnosis > strong,
+.production-management-row--blocked .production-management-diagnosis > strong,
+.production-management-row--power .production-management-diagnosis > strong {
+  color: var(--coral);
+}
+
+.production-management-diagnosis > details > summary {
+  margin-top: 3px;
+  color: var(--cyan);
+  cursor: pointer;
+  font-size: 7px;
+  list-style-position: inside;
+}
+
+.production-management-diagnosis > details[open] {
+  padding: 5px 0;
+}
+
+.production-management-diagnosis > details > div {
+  display: grid;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.production-management-diagnosis p {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: #101613;
+}
+
+.production-management-diagnosis p.warning {
+  border-color: #71473f;
+}
+
+.production-management-diagnosis p .item-mark {
+  width: 23px;
+  height: 23px;
+}
+
+.production-management-diagnosis p > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.production-management-diagnosis p strong {
+  font-size: 8px;
+}
+
+.production-management-diagnosis p small,
+.production-management-diagnosis p em {
+  color: var(--muted);
+  font-size: 7px;
+  font-style: normal;
+  white-space: normal;
+}
+
+.production-management-diagnosis p > button {
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  color: var(--cyan);
+}
+
+.production-management-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.production-management-actions button {
+  width: 30px;
+  padding: 0;
+  color: var(--cyan);
+}
+
+.production-management-footer {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-top: 1px solid var(--line);
+  color: var(--yellow);
+  font-size: 7px;
+}
+
+.production-management-footer--ready {
+  color: var(--green);
+}
+
 .network-overview {
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
@@ -11694,6 +12205,18 @@ select:focus-visible {
 }
 
 @media (max-width: 1100px) {
+  .production-management-batch {
+    grid-template-columns: auto minmax(320px, 1fr);
+  }
+
+  .production-batch-station {
+    grid-column: 1 / -1;
+  }
+
+  .production-batch-station > div {
+    grid-template-columns: repeat(5, minmax(90px, 1fr));
+  }
+
   .network-batch-bar {
     display: flex;
     overflow-x: auto;
@@ -11709,6 +12232,167 @@ select:focus-visible {
 
   .network-workspace-layout {
     grid-template-columns: minmax(0, 1fr) 230px;
+  }
+}
+
+@media (max-width: 760px), (orientation: landscape) and (max-height: 560px) and (max-width: 1100px) {
+  .statistics-workspace {
+    width: 100vw;
+    max-width: 100vw;
+  }
+
+  .statistics-header {
+    grid-template-columns: minmax(150px, 1fr) auto 44px;
+  }
+
+  .statistics-title {
+    gap: 8px;
+    padding: 0 10px;
+  }
+
+  .statistics-title > i {
+    width: 32px;
+    height: 32px;
+  }
+
+  .statistics-title span,
+  .statistics-headline span:not(.has-issues) {
+    display: none;
+  }
+
+  .statistics-headline {
+    padding: 0 4px;
+  }
+
+  .statistics-tabs {
+    width: 100%;
+    overflow-x: auto;
+    padding: 0 7px;
+    scrollbar-width: none;
+  }
+
+  .statistics-tabs button {
+    min-width: 78px;
+    flex: 0 0 78px;
+  }
+
+  .production-management {
+    display: block;
+    overflow: auto;
+  }
+
+  .production-management-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .production-management-summary > div {
+    min-height: 52px;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .planet-production-strip {
+    padding: 6px 8px;
+  }
+
+  .planet-production-strip > button {
+    min-width: 142px;
+    flex-basis: 142px;
+  }
+
+  .production-management-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 7px 8px;
+  }
+
+  .production-management-toolbar > .statistics-search {
+    grid-column: 1 / -1;
+  }
+
+  .production-management-batch {
+    display: block;
+    padding: 7px 8px;
+  }
+
+  .production-batch-selection,
+  .production-batch-recipe {
+    flex-wrap: wrap;
+    padding: 5px 0;
+    border-left: 0;
+  }
+
+  .production-batch-recipe {
+    border-top: 1px solid var(--line);
+  }
+
+  .production-batch-recipe .catalog-picker-trigger {
+    min-width: 130px;
+  }
+
+  .production-batch-station {
+    margin-top: 3px;
+  }
+
+  .production-batch-station > div {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .production-target-planner {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 7px 8px;
+  }
+
+  .production-target-planner > header {
+    grid-column: 1 / -1;
+  }
+
+  .production-target-planner > button {
+    grid-column: 1 / -1;
+  }
+
+  .production-management-ledger {
+    overflow: visible;
+  }
+
+  .production-management-ledger > header {
+    display: none;
+  }
+
+  .production-management-ledger > div {
+    height: auto;
+    overflow: visible;
+    padding: 7px;
+  }
+
+  .production-management-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 7px;
+    min-height: 0;
+    margin-bottom: 7px;
+    padding: 9px;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+  }
+
+  .production-management-row > label,
+  .production-management-row > span,
+  .production-management-diagnosis {
+    grid-column: 1;
+  }
+
+  .production-management-row > span:nth-of-type(1) {
+    padding-top: 5px;
+    border-top: 1px solid var(--line);
+  }
+
+  .production-management-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .production-management-footer {
+    min-height: 34px;
+    padding: 5px 9px;
   }
 }
 

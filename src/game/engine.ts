@@ -69,6 +69,7 @@ import type {
   StationMinimumLoad,
   StationRoute,
   StationSlot,
+  StationSlotTemplate,
   TechId,
 } from "./types";
 import { syncCampaignProgress } from "./campaign";
@@ -3628,6 +3629,7 @@ export function setEntityRecipe(state: GameState, entityId: string, recipeId: Re
   const recipe = getRecipe(recipeId);
   if (!entity?.buildingId || !recipe || !buildingSupportsRecipe(entity.buildingId, recipe) ||
     (recipe.requiredTechId && !isTechnologyCompleted(state, recipe.requiredTechId))) return state;
+  if (entity.recipeId === recipeId) return state;
 
   for (const [itemId, amount] of Object.entries(entity.inputs)) addToTray(next, itemId as ItemId, amount ?? 0);
   for (const [itemId, amount] of Object.entries(entity.outputs)) addToTray(next, itemId as ItemId, amount ?? 0);
@@ -3695,8 +3697,48 @@ export function removeCanvasBookmark(state: GameState, bookmarkId: string): Game
   return { ...state, canvasBookmarks: state.canvasBookmarks.filter((bookmark) => bookmark.id !== bookmarkId) };
 }
 
+function applyAcrossEntityPlanets(
+  state: GameState,
+  entityIds: string[],
+  apply: (current: GameState, planetEntityIds: string[]) => GameState,
+): GameState {
+  const uniqueIds = [...new Set(entityIds)];
+  const groups = new Map<PlanetId, string[]>();
+  for (const entityId of uniqueIds) {
+    const entity = state.entities.find((candidate) => candidate.id === entityId);
+    if (!entity) continue;
+    const group = groups.get(entity.planetId) ?? [];
+    group.push(entityId);
+    groups.set(entity.planetId, group);
+  }
+  if (groups.size === 0) return state;
+
+  const originalPlanetId = state.activePlanetId;
+  let next = state;
+  for (const [planetId, planetEntityIds] of groups) {
+    if (next.activePlanetId !== planetId) next = setActivePlanet(next, planetId);
+    if (next.activePlanetId !== planetId) continue;
+    next = apply(next, planetEntityIds);
+  }
+  if (next.activePlanetId !== originalPlanetId) next = setActivePlanet(next, originalPlanetId);
+  return next;
+}
+
+export function getRecipeCompatibleEntityIds(state: GameState, entityIds: string[], recipeId: RecipeId): string[] {
+  const recipe = getRecipe(recipeId);
+  if (!recipe || (recipe.requiredTechId && !isTechnologyCompleted(state, recipe.requiredTechId))) return [];
+  const requested = new Set(entityIds);
+  return state.entities
+    .filter((entity) => requested.has(entity.id) && entity.buildingId && buildingSupportsRecipe(entity.buildingId, recipe))
+    .map((entity) => entity.id);
+}
+
 export function setEntitiesRecipe(state: GameState, entityIds: string[], recipeId: RecipeId): GameState {
-  return [...new Set(entityIds)].reduce((current, entityId) => setEntityRecipe(current, entityId, recipeId), state);
+  const compatibleIds = getRecipeCompatibleEntityIds(state, entityIds, recipeId)
+    .filter((entityId) => state.entities.find((entity) => entity.id === entityId)?.recipeId !== recipeId);
+  if (compatibleIds.length === 0) return state;
+  return applyAcrossEntityPlanets(state, compatibleIds, (current, planetEntityIds) =>
+    planetEntityIds.reduce((next, entityId) => setEntityRecipe(next, entityId, recipeId), current));
 }
 
 export function canInstallSprayCoater(state: GameState, entityId: string): boolean {
@@ -4145,6 +4187,44 @@ export function setStationSlotPriority(
   ensureStationSlots(station)[slotIndex].priority = priority;
   ensureStationSlots(station);
   return next;
+}
+
+export function getStationTemplateCompatibleEntityIds(
+  state: GameState,
+  entityIds: string[],
+  slotIndex: number,
+  template: StationSlotTemplate,
+): string[] {
+  if (slotIndex < 0 || slotIndex >= STATION_SLOT_COUNT || !ITEMS[template.itemId]) return [];
+  const requested = new Set(entityIds);
+  return state.entities
+    .filter((entity) => {
+      if (!requested.has(entity.id) || entity.kind !== "station" || entity.buildingId === "orbital_collector") return false;
+      return !getStationSlots(entity).some((slot, index) => index !== slotIndex && slot.itemId === template.itemId);
+    })
+    .map((entity) => entity.id);
+}
+
+export function applyStationSlotTemplateToEntities(
+  state: GameState,
+  entityIds: string[],
+  slotIndex: number,
+  template: StationSlotTemplate,
+): GameState {
+  const compatibleIds = getStationTemplateCompatibleEntityIds(state, entityIds, slotIndex, template);
+  return applyAcrossEntityPlanets(state, compatibleIds, (current, planetEntityIds) =>
+    planetEntityIds.reduce((next, entityId) => {
+      const station = next.entities.find((entity) => entity.id === entityId);
+      if (!station) return next;
+      let configured = setStationSlotItem(next, entityId, slotIndex, template.itemId);
+      configured = setStationSlotMode(configured, entityId, slotIndex, "local", template.localMode);
+      if (station.buildingId === "interstellar_logistics_station") {
+        configured = setStationSlotMode(configured, entityId, slotIndex, "remote", template.remoteMode);
+      }
+      configured = setStationSlotMinimumLoad(configured, entityId, slotIndex, template.minimumLoad);
+      configured = setStationSlotLimits(configured, entityId, slotIndex, template.minStock, template.maxStock);
+      return setStationSlotPriority(configured, entityId, slotIndex, template.priority);
+    }, current));
 }
 
 export function setStationMode(state: GameState, entityId: string, mode: "supply" | "demand"): GameState {

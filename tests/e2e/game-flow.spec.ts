@@ -2664,6 +2664,55 @@ test("production statistics remains usable on mobile", async ({ page }) => {
   await expect(workspace.locator(".statistics-empty")).toContainText("生产网络运行正常");
 });
 
+test("production management traces devices and supports cross-surface batch controls", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await freshGame(page);
+  const canvas = page.locator(".react-flow__pane");
+  const box = await canvas.boundingBox();
+  await placeOnCanvas(page, "部署电弧熔炉", Math.round(box!.width * 0.82), 90);
+  await page.getByLabel("打开生产统计").click();
+  const workspace = page.getByRole("dialog", { name: "生产统计" });
+  await workspace.getByRole("tab", { name: "管理" }).click();
+  await expect(workspace.locator(".production-management-summary")).toContainText("全星球设备");
+  const smelter = workspace.locator(".production-management-row").filter({ hasText: "电弧熔炉" });
+  await expect(smelter).toContainText("未连接输入线路");
+  await smelter.locator('input[type="checkbox"]').check();
+  await workspace.getByLabel("选择当前配方").click();
+  const picker = page.getByRole("dialog", { name: "配方选择面板" });
+  await picker.locator(".recipe-catalog-grid > button").filter({ hasText: "铜块" }).click();
+  await workspace.getByRole("button", { name: "应用兼容设备" }).click();
+  await expect(smelter).toContainText("铜块");
+  await smelter.getByText("展开物料路径").click();
+  await expect(smelter).toContainText("原料源");
+  await page.waitForTimeout(220);
+  await page.screenshot({ path: "artifacts/qa/production-management-1440.png", fullPage: true });
+
+  await workspace.getByLabel("定位电弧熔炉").click();
+  await expect(workspace).toHaveCount(0);
+  await expect(page.locator(".inspector-panel")).toContainText("电弧熔炉");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByLabel("更多工作区").click();
+  await page.getByRole("menuitem", { name: "生产统计" }).click();
+  const mobileWorkspace = page.getByRole("dialog", { name: "生产统计" });
+  await mobileWorkspace.getByRole("tab", { name: "管理" }).click();
+  await expect(mobileWorkspace.locator(".production-management-row")).toBeVisible();
+  for (const scale of [0.8, 1, 1.25, 1.5]) {
+    await page.evaluate((value) => document.documentElement.style.setProperty("--ui-font-scale", String(value)), scale);
+    await expect.poll(async () => mobileWorkspace.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  }
+  await page.evaluate(() => document.documentElement.style.setProperty("--ui-font-scale", "1"));
+  await expect.poll(async () => mobileWorkspace.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.waitForTimeout(220);
+  await page.screenshot({ path: "artifacts/qa/production-management-390.png", fullPage: true });
+
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(mobileWorkspace.locator(".production-management-row")).toBeVisible();
+  await expect.poll(async () => mobileWorkspace.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.waitForTimeout(220);
+  await page.screenshot({ path: "artifacts/qa/production-management-844x390.png", fullPage: true });
+});
+
 test("the production workspace fits a medium desktop", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await freshGame(page);

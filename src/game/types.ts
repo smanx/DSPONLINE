@@ -573,6 +573,16 @@ export interface StationSlot {
   priority: LogisticsPriority;
 }
 
+export interface StationSlotTemplate {
+  itemId: ItemId;
+  localMode: StationLogisticsMode;
+  remoteMode: StationLogisticsMode;
+  minimumLoad: StationMinimumLoad;
+  minStock: number;
+  maxStock: number;
+  priority: LogisticsPriority;
+}
+
 export interface StationRoute {
   id: string;
   slotIndex: number;

@@ -51,7 +51,7 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 - `src/game/galaxy.ts`：由持久化种子生成并归一化行星工业档案、有限矿储、环境推荐角色和设备专长适用范围；加载时优先保留已保存档案，缺字段才回退生成值。
 - `src/game/engine.ts`：确定性生产、电网、运输、科研、手搓、戴森与状态变更命令。
 - `src/game/network.ts`：线路占用、吞吐预测、连续网络与瓶颈诊断。
-- `src/game/statistics.ts`、`planning.ts`、`alerts.ts`：统计、目标产能反推和故障聚合。
+- `src/game/statistics.ts`、`productionManagement.ts`、`planning.ts`、`alerts.ts`：统计、全星球设备诊断、目标产能反推和故障聚合。生产管理快照完全由 `GameState` 派生，不写回存档。
 - `src/game/campaign.ts`、`progression.ts`、`endgame.ts`：任务、成就和终局 progression。
 - `src/game/storage.ts`：迁移、校验和、离线结算、槽位、备份与快照。
 - `src/game/cloud.ts`：同源 `/api` 客户端、会话和 8 秒请求超时。
@@ -88,6 +88,8 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 ## 5. 画布与物流
 
 React Flow 只负责可视节点、边、视口和交互；真实生产库存与运输状态都在 `GameState` 中。显示层通过实体和线路派生 Node/Edge，不应把 React Flow 的临时对象当作存档真相。
+
+全星球批量命令按实体所属行星分组，临时切换到对应行星执行既有配方或物流槽命令，再恢复玩家原先所在行星。这样配方切换和槽位替换产生的物资返还会进入正确的行星托盘；批量物流模板只修改指定槽位，物品已占用其他槽位的站点会被跳过。
 
 线路模型包含源、汇、物品、等级、分拣等级、优先级、堆叠、路由、流量和拥堵。端口能够根据已有配方、物流槽或默认状态自动接受物品。多条同端点线路由 bundle 信息进行视觉错位。
 

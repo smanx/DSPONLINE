@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowUp, BarChart3, Bookmark, BookmarkPlus, Box, Calculator, CheckSquare, CircleCheckBig, ClipboardCopy, Factory, Focus, Gauge, Layers3, MapPin, Orbit, Pause, Play, Plus, Rocket, Route, Search, Send, Sparkles, Trash2, TrendingUp, X, Zap } from "lucide-react";
+import { AlertTriangle, ArrowUp, BarChart3, Bookmark, BookmarkPlus, Box, Calculator, CheckSquare, CircleCheckBig, ClipboardCopy, Factory, Focus, Gauge, Layers3, MapPin, Orbit, Pause, Play, Plus, Rocket, Route, Search, Send, Settings2, Sparkles, Trash2, TrendingUp, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ITEMS, PLANET_LIST, getBuilding, getItem, getPlanet, getRecipe } from "../game/content";
 import { calculateProductionPlan, getProductionRecipeOptions } from "../game/planning";
@@ -7,10 +7,11 @@ import { getGalacticIndustrySnapshot, getPowerGridMetrics, POWER_GRID_IDS, POWER
 import { GALACTIC_EXPORT_DEFINITIONS, INFINITE_RESEARCH_DEFINITIONS, getGalacticExportTarget, getInfiniteResearchCompletion, getInfiniteResearchCost, getInfiniteResearchLevel } from "../game/endgame";
 import { getPlanetIndustrialProfile } from "../game/galaxy";
 import { listBeltNetworks, type BeltHealth } from "../game/network";
-import type { BeltRouteMode, CanvasBookmark, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, RecipeId } from "../game/types";
+import type { BeltRouteMode, CanvasBookmark, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, RecipeId, StationSlotTemplate } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
+import { ProductionManagement } from "./ProductionManagement";
 
-export type StatisticsTab = "production" | "efficiency" | "networks" | "planning" | "power" | "issues" | "galaxy";
+export type StatisticsTab = "management" | "production" | "efficiency" | "networks" | "planning" | "power" | "issues" | "galaxy";
 type ItemFilter = "all" | "producing" | "deficit" | "blocked";
 type ItemSort = "production" | "consumption" | "net" | "inventory" | "name";
 
@@ -29,7 +30,10 @@ interface StatisticsWorkspaceProps {
   onGalacticExportEnabled: (projectId: GalacticExportProjectId, enabled: boolean) => void;
   onGalacticExportPriority: (projectId: GalacticExportProjectId, priority: LogisticsPriority) => void;
   onDispatchGalacticExport: (projectId: GalacticExportProjectId) => void;
+  onFocusEntity: (entityId: string, planetId: PlanetId) => void;
   onFocusBeltNetwork: (beltId: string, planetId: PlanetId) => void;
+  onBulkRecipeChange: (entityIds: string[], recipeId: RecipeId) => void;
+  onBulkStationSlotApply: (entityIds: string[], slotIndex: number, template: StationSlotTemplate) => void;
   onBulkBeltUpgrade: (beltIds: string[], target: "belt" | "sorter") => void;
   onBulkBeltRoute: (beltIds: string[], routeMode: BeltRouteMode) => void;
   onBulkBeltConfiguration: (beltIds: string[]) => void;
@@ -155,7 +159,7 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
   );
 }
 
-export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark, focusTab }: StatisticsWorkspaceProps) {
+export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, onFocusEntity, onFocusBeltNetwork, onBulkRecipeChange, onBulkStationSlotApply, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark, focusTab }: StatisticsWorkspaceProps) {
   const [tab, setTab] = useState<StatisticsTab>("production");
   const [filter, setFilter] = useState<ItemFilter>("all");
   const [sort, setSort] = useState<ItemSort>("production");
@@ -216,6 +220,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
       </header>
 
       <nav className="statistics-tabs" role="tablist" aria-label="统计视图">
+        <button type="button" role="tab" aria-selected={tab === "management"} className={tab === "management" ? "active" : ""} onClick={() => setTab("management")}><Settings2 size={15} />管理</button>
         <button type="button" role="tab" aria-selected={tab === "production"} className={tab === "production" ? "active" : ""} onClick={() => setTab("production")}><Factory size={15} />生产</button>
         <button type="button" role="tab" aria-selected={tab === "efficiency"} className={tab === "efficiency" ? "active" : ""} onClick={() => setTab("efficiency")}><Gauge size={15} />效率</button>
         <button type="button" role="tab" aria-selected={tab === "networks"} className={tab === "networks" ? "active" : ""} onClick={() => setTab("networks")}><Route size={15} />网络 <strong>{listBeltNetworks(game).length}</strong></button>
@@ -224,6 +229,20 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
         <button type="button" role="tab" aria-selected={tab === "issues"} className={tab === "issues" ? "active" : ""} onClick={() => setTab("issues")}><AlertTriangle size={15} />瓶颈 <strong>{statistics.issues.length}</strong></button>
         <button type="button" role="tab" aria-selected={tab === "galaxy"} className={tab === "galaxy" ? "active" : ""} onClick={() => setTab("galaxy")}><Orbit size={15} />银河 <strong>{galactic.galacticScore.toLocaleString("zh-CN")}</strong></button>
       </nav>
+
+      {tab === "management" ? <ProductionManagement
+        game={game}
+        onFocusEntity={onFocusEntity}
+        onFocusBelt={onFocusBeltNetwork}
+        onBulkRecipeChange={onBulkRecipeChange}
+        onBulkStationSlotApply={onBulkStationSlotApply}
+        onCreatePlan={(itemId, targetPerMinute, planetId) => {
+          const id = `plan_${game.nextId}`;
+          onCreatePlan(itemId, targetPerMinute, planetId);
+          setSelectedPlanId(id);
+          setTab("planning");
+        }}
+      /> : null}
 
       {tab === "production" ? (
         <div className="statistics-content statistics-production">
