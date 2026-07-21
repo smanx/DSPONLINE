@@ -186,6 +186,7 @@ import {
 } from "./game/contentPacks";
 import { baselineAccountProgress, createLocalAccount, getActiveAccount, loadAccountState, recordAccountProgress, saveAccountState, switchLocalAccount, updateAccountProfile, type AccountProfileChanges } from "./game/account";
 import { removeLeaderboardData, submitLeaderboardData } from "./game/leaderboard";
+import { trackAnalyticsEvent } from "./game/analytics";
 import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CargoStackSize, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 import type { OnboardingStepId } from "./game/onboarding";
@@ -490,6 +491,11 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
   useEffect(() => { selectedEntityIdsRef.current = selectedEntityIds; }, [selectedEntityIds]);
   useEffect(() => { selectedBeltIdRef.current = selectedBeltId; }, [selectedBeltId]);
   useEffect(() => { pointerRef.current = pointer; }, [pointer]);
+  useEffect(() => { if (technologyOpen) trackAnalyticsEvent("open_technology"); }, [technologyOpen]);
+  useEffect(() => { if (recipesOpen) trackAnalyticsEvent("open_recipes"); }, [recipesOpen]);
+  useEffect(() => { if (statisticsOpen) trackAnalyticsEvent("open_statistics"); }, [statisticsOpen]);
+  useEffect(() => { if (starMapOpen) trackAnalyticsEvent("open_star_map"); }, [starMapOpen]);
+  useEffect(() => { if (campaignOpen) trackAnalyticsEvent("open_campaign"); }, [campaignOpen]);
   useEffect(() => {
     const bridge = getDesktopBridge();
     if (!bridge) return;
@@ -2254,6 +2260,7 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
     }
     if (clickConnectionPreviewRef.current) clickConnectionSucceededRef.current = true;
     commitGame(() => next);
+    trackAnalyticsEvent("belt_connect");
     setNotice(`${ITEMS[sourceItem].name}运输线已建立 · Mk.${tierName}`);
     spawnInteractionBurst(pointerRef.current.x, pointerRef.current.y, "运输线已建立", "positive");
     playTone("connect");
@@ -2432,6 +2439,7 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
         return;
       }
       playTone("place");
+      trackAnalyticsEvent("building_place", placementCount);
       spawnInteractionBurst(event.clientX, event.clientY, "建筑已放置", "positive");
       const placedEntityId = `entity_${gameRef.current.nextId}`;
       commitGame((current) => placeBuilding(current, placement, position, placementCount));
@@ -2461,7 +2469,10 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
       return;
     }
     const position = snapFlowPosition(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
-    if (placeBuilding(gameRef.current, buildingId, position, placementCount) !== gameRef.current) playTone("place");
+    if (placeBuilding(gameRef.current, buildingId, position, placementCount) !== gameRef.current) {
+      playTone("place");
+      trackAnalyticsEvent("building_place", placementCount);
+    }
     commitGame((current) => placeBuilding(current, buildingId, position, placementCount));
     setPlacement(null);
     setBeltTier(1);
@@ -3019,7 +3030,10 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
             game={game}
             focusTechId={campaignFocusTechId}
             onClose={() => setTechnologyOpen(false)}
-            onSelect={(techId) => setGame((current) => selectTechnology(current, techId))}
+            onSelect={(techId) => {
+              trackAnalyticsEvent("research_queue");
+              setGame((current) => selectTechnology(current, techId));
+            }}
             onRemoveQueued={(techId) => setGame((current) => removeQueuedTechnology(current, techId))}
             onSelectInfiniteResearch={(researchId: InfiniteResearchId) => setGame((current) => selectInfiniteResearch(current, researchId))}
             onInfiniteResearchAutomation={(enabled) => setGame((current) => setInfiniteResearchAutomation(current, enabled))}

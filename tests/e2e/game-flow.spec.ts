@@ -101,6 +101,75 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(operations).toBeVisible();
 });
 
+test("protected operations dashboard renders visit, event and service metrics", async ({ page }) => {
+  const generatedAt = Date.now();
+  await page.route("**/api/admin/metrics?*", async (route) => {
+    expect(route.request().headers().authorization).toBe("Bearer admin-test-token");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        generatedAt,
+        timeZone: "Asia/Shanghai",
+        schemaVersion: 4,
+        uptimeSeconds: 7200,
+        storage: "sqlite",
+        runtime: { requests: 320, errors: 0, rateLimited: 2, cloudConflicts: 1, p50LatencyMs: 4.2, p95LatencyMs: 18.6 },
+        accounts: { users: 12, activeSessions: 4, cloudSaves: 9, submissions: 3 },
+        players: { total: 48, today: 7, online: 2, onlineWindowSeconds: 120 },
+        analytics: {
+          today: "2026-07-22",
+          totalVisitors: 56,
+          retainedSessions: 20,
+          range: { days: 7, uniqueVisitors: 20, sessions: 28, pageViews: 44, gameStarts: 19, activeSeconds: 14400 },
+          lifetime: { uniqueVisitors: 56, sessions: 81, pageViews: 130, gameStarts: 48, activeSeconds: 58000 },
+          events: [{ name: "page_view", count: 44 }, { name: "game_enter", count: 19 }, { name: "open_technology", count: 8 }],
+          daily: [
+            { day: "2026-07-21", uniqueVisitors: 9, sessions: 12, pageViews: 20, gameStarts: 8, activeSeconds: 6000, events: {}, clients: { "desktop-web": 8 }, sources: { direct: 12 } },
+            { day: "2026-07-22", uniqueVisitors: 11, sessions: 16, pageViews: 24, gameStarts: 11, activeSeconds: 8400, events: {}, clients: { "mobile-web": 9 }, sources: { community: 7 } },
+          ],
+        },
+        reports: { feedback: 4, clientErrors: 1 },
+        backups: { configured: true, lastSuccessAt: generatedAt - 1000, lastErrorAt: null },
+        daily: [],
+      }),
+    });
+  });
+  await page.setViewportSize({ width: 1366, height: 820 });
+  await page.goto("/admin");
+  await expect(page.getByText("运营数据后台", { exact: true })).toBeVisible();
+  await page.getByLabel("管理员凭据").fill("admin-test-token");
+  await page.getByRole("button", { name: "进入后台" }).click();
+  await expect(page.getByText("今日访客 UV")).toBeVisible();
+  await expect(page.locator(".admin-kpi-grid")).toContainText("11");
+  await expect(page.locator(".admin-kpi-grid")).toContainText("24");
+  await expect(page.locator(".admin-events-panel")).toContainText("打开科技树");
+  await expect(page.locator(".admin-service-panel")).toContainText("12");
+  await page.screenshot({ path: "artifacts/qa/admin-dashboard-1366.png", fullPage: true });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".admin-kpi-grid")).toBeVisible();
+  const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+  expect(hasOverflow).toBe(false);
+  await page.screenshot({ path: "artifacts/qa/admin-dashboard-390.png", fullPage: true });
+});
+
+test("anonymous analytics batches an allowlisted page view without save data", async ({ page }) => {
+  const batches: Array<Record<string, unknown>> = [];
+  await page.route("**/api/analytics", async (route) => {
+    batches.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ accepted: true, duplicate: false, day: "2026-07-22" }) });
+  });
+  await page.goto("/");
+  await expect.poll(() => batches.length).toBeGreaterThan(0);
+  const batch = batches[0] as { playerId: string; sessionId: string; events: Array<{ name: string; count: number }> };
+  expect(batch.playerId).toMatch(/^player_[A-Za-z0-9_-]+$/);
+  expect(batch.sessionId).toMatch(/^session_[a-z0-9]+$/);
+  expect(batch.events).toContainEqual({ name: "page_view", count: 1 });
+  expect(JSON.stringify(batch)).not.toContain("entities");
+  expect(JSON.stringify(batch)).not.toContain("inventory");
+});
+
 async function freshGame(page: Page) {
   await page.goto("/");
   await page.getByTitle("重置当前工厂").evaluate((element: HTMLButtonElement) => element.click());
@@ -3428,21 +3497,16 @@ test("command palette navigates workspaces, focuses recipes and preserves keyboa
 
 test("operations center diagnoses equipment and records achievement progress", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const today = new Date().toISOString().slice(0, 10);
   await page.route("**/api/health", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }));
-  await page.route("**/api/metrics", (route) => route.fulfill({
+  await page.route("**/api/public-status", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
     body: JSON.stringify({
+      ok: true,
+      timeZone: "Asia/Shanghai",
+      today: "2026-07-22",
       uptimeSeconds: 3600,
-      requests: 500,
-      errors: 0,
-      users: 12,
-      cloudSaves: 8,
-      submissions: 4,
       players: { total: 128, today: 23, online: 7, onlineWindowSeconds: 120 },
-      daily: { [today]: { requests: 321, errors: 0, feedback: 1, leaderboardSubmissions: 2, cloudUploads: 3, players: 23 } },
-      storage: "sqlite",
     }),
   }));
   await openOperationsStageGame(page);
@@ -3478,9 +3542,10 @@ test("operations center diagnoses equipment and records achievement progress", a
 
   await operations.locator(".operations-tabs").getByRole("tab", { name: "诊断反馈" }).click();
   const playerMetrics = operations.locator(".support-status-grid");
+  await expect(playerMetrics).toContainText("今日进入工厂");
+  await expect(playerMetrics).toContainText("23");
   await expect(playerMetrics).toContainText("累计游玩玩家");
   await expect(playerMetrics).toContainText("128");
-  await expect(playerMetrics).toContainText("今日 23");
   await expect(playerMetrics).toContainText("当前在线游玩");
   await expect(playerMetrics).toContainText("7");
   await expect(playerMetrics).toContainText("120 秒内活跃");

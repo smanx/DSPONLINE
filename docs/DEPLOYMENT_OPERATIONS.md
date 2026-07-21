@@ -24,6 +24,7 @@
 | `/var/lib/dsp-idle-cloud/cloud.json` | 旧 JSON 数据，仅用于兼容迁移 |
 | `/var/lib/dsp-idle-cloud/backups` | SQLite/JSON 备份 |
 | `/etc/nginx/snippets/dsp-idle-app.conf` | 公共静态与 API 规则 |
+| `/etc/dsp-idle-cloud/admin.env` | 仅 root/服务账号可读的管理员 token，不进入发布目录 |
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
@@ -112,6 +113,19 @@ sudo bash deploy/switch-release.sh --rollback-last
 - TLS：Let’s Encrypt，`www` 和 HTTP 均跳到 `https://dsponline.cn`。
 - SSH：仅密钥，禁止 root 与密码登录。
 
+### 管理员后台
+
+复制 `deploy/dsp-idle-admin.env.example` 到 `/etc/dsp-idle-cloud/admin.env`，使用 `openssl rand -hex 32` 为每套正式环境生成独立 token，并将文件权限设置为 `0640 root:ubuntu`。真实 token 不得写入仓库或前端环境变量。
+
+```bash
+sudo install -d -m 0750 -o root -g ubuntu /etc/dsp-idle-cloud
+sudo install -m 0640 -o root -g ubuntu /path/to/admin.env /etc/dsp-idle-cloud/admin.env
+sudo systemctl daemon-reload
+sudo systemctl restart dsp-idle-cloud.service
+```
+
+公开 `/api/public-status` 只提供玩家累计、今日和 120 秒在线口径；`/api/admin/metrics` 与兼容路径 `/api/metrics` 必须携带管理员 bearer token。后台入口为 `https://dsponline.cn/admin`。
+
 ### 上海旧节点
 
 - Nginx 使用本机静态目录与本机 `127.0.0.1:4320`。
@@ -161,10 +175,10 @@ curl http://111.229.128.211/api/health
 - Nginx access/error log：关注 5xx、429、超时和异常大请求。
 - systemd journal：关注数据库写入、备份、Origin 拒绝和崩溃。
 - 磁盘：关注发布目录、日志、SQLite WAL 和备份增长。
-- `/api/metrics`：当前包含运行指标，但应尽快改为受保护监控端点。
+- `/api/admin/metrics`：验证管理员 token 后检查访问漏斗、错误、P95 延迟、限流、云冲突和备份状态。
 - 玩家指标：检查 `players.total`、`players.today`、`players.online` 和 `players.onlineWindowSeconds`；两个节点分别统计，不能直接相加当作严格独立用户数。
 
-匿名在线窗口默认 120 秒，可通过 `DSP_PLAYER_ONLINE_WINDOW_MS` 调整。修改该值只影响在线口径，不影响累计玩家；部署 schema v3 后端前仍必须先使用 SQLite backup API 创建并验证备份。
+匿名在线窗口默认 120 秒，可通过 `DSP_PLAYER_ONLINE_WINDOW_MS` 调整；运营日历默认 `Asia/Shanghai`，可通过 `DSP_METRIC_TIME_ZONE` 调整。修改在线窗口只影响在线口径，不影响累计玩家。部署 schema v4 后端前仍必须先使用 SQLite backup API 创建并验证备份，并用真实备份副本验证 v3→v4 迁移。
 
 ## 10. 当前性能事项
 

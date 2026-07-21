@@ -5,6 +5,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
+import {
+  DEFAULT_METRIC_TIME_ZONE,
+  analyticsSummary,
+  metricDay,
+  normalizeAnalyticsState,
+  recordAnalyticsBatch,
+} from "./analytics.mjs";
 
 const scrypt = promisify(scryptCallback);
 const BODY_LIMIT_BYTES = 8 * 1024 * 1024;
@@ -24,7 +31,7 @@ const METRIC_KEYS = [
   "colonizedPlanets",
 ];
 const DEFAULT_DATA = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   users: {},
   sessions: {},
   cloudSaves: {},
@@ -34,6 +41,7 @@ const DEFAULT_DATA = {
   feedback: [],
   errors: [],
   dailyMetrics: {},
+  analytics: { visitors: {}, sessions: {}, daily: {} },
 };
 
 function cloneDefaultData() {
@@ -68,6 +76,7 @@ function normalizeStoredData(parsed) {
     feedback: Array.isArray(source.feedback) ? source.feedback.slice(-1000) : [],
     errors: Array.isArray(source.errors) ? source.errors.slice(-1000) : [],
     dailyMetrics: source.dailyMetrics && typeof source.dailyMetrics === "object" ? source.dailyMetrics : {},
+    analytics: normalizeAnalyticsState(source.analytics),
   };
   for (const [userId, save] of Object.entries(data.cloudSaves)) {
     const history = Array.isArray(data.cloudSaveHistory[userId]) ? data.cloudSaveHistory[userId] : [];
@@ -372,24 +381,36 @@ function appendSaveRevision(store, userId, save) {
   store.data.cloudSaves[userId] = save;
 }
 
-function metricDay(now = Date.now()) {
-  return new Date(now).toISOString().slice(0, 10);
-}
-
 function normalizedPlayerId(value) {
   return typeof value === "string" && PLAYER_ID_PATTERN.test(value) ? value : null;
 }
 
-function playerMetrics(data, onlineWindowMs, now = Date.now()) {
+function playerMetrics(data, onlineWindowMs, now = Date.now(), timeZone = DEFAULT_METRIC_TIME_ZONE) {
   const records = Object.values(data.players);
   const onlineSince = now - onlineWindowMs;
-  const today = metricDay(now);
+  const today = metricDay(now, timeZone);
   return {
     total: records.length,
     today: records.filter((record) => record.lastActiveDay === today).length,
     online: records.filter((record) => Number.isFinite(record.lastSeenAt) && record.lastSeenAt >= onlineSince).length,
     onlineWindowSeconds: Math.floor(onlineWindowMs / 1000),
   };
+}
+
+function adminAuthorized(request, adminToken) {
+  if (!adminToken) return false;
+  const authorization = request.headers.authorization;
+  const provided = typeof authorization === "string" && authorization.startsWith("Bearer ")
+    ? authorization.slice(7).trim()
+    : "";
+  if (!provided) return false;
+  return timingSafeEqual(Buffer.from(sha256(provided), "hex"), Buffer.from(sha256(adminToken), "hex"));
+}
+
+function percentile(values, fraction) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  return Math.round(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))] * 100) / 100;
 }
 
 export async function createCloudServer({
@@ -399,6 +420,8 @@ export async function createCloudServer({
   backupIntervalMs = Number(process.env.DSP_CLOUD_BACKUP_INTERVAL_MS || 6 * 60 * 60 * 1000),
   allowedOrigin = process.env.DSP_ALLOWED_ORIGIN || "",
   playerOnlineWindowMs = Number(process.env.DSP_PLAYER_ONLINE_WINDOW_MS || DEFAULT_PLAYER_ONLINE_WINDOW_MS),
+  metricTimeZone = process.env.DSP_METRIC_TIME_ZONE || DEFAULT_METRIC_TIME_ZONE,
+  adminToken = process.env.DSP_ADMIN_TOKEN || "",
   logger = console,
 } = {}) {
   const store = databaseFile ? new SqliteStore(databaseFile) : new JsonStore(dataFile || path.join(path.dirname(fileURLToPath(import.meta.url)), "data", "cloud.json"));
@@ -416,20 +439,43 @@ export async function createCloudServer({
   }
   const startedAt = Date.now();
   const rateLimit = createRateLimiter();
-  const runtime = { requests: 0, errors: 0 };
+  const runtime = {
+    requests: 0,
+    errors: 0,
+    rateLimited: 0,
+    cloudConflicts: 0,
+    latencies: [],
+    lastBackupAt: null,
+    lastBackupErrorAt: null,
+  };
   const onlineWindowMs = Number.isFinite(playerOnlineWindowMs)
     ? Math.max(50, Math.floor(playerOnlineWindowMs))
     : DEFAULT_PLAYER_ONLINE_WINDOW_MS;
+  let metricsTimeZone = DEFAULT_METRIC_TIME_ZONE;
+  try {
+    metricDay(Date.now(), metricTimeZone);
+    metricsTimeZone = metricTimeZone;
+  } catch {
+    logger.error?.(`invalid metric time zone ${metricTimeZone}; using ${DEFAULT_METRIC_TIME_ZONE}`);
+  }
+  const secureAdminToken = typeof adminToken === "string" && adminToken.length >= 32 ? adminToken : "";
+  if (adminToken && !secureAdminToken) logger.error?.("DSP_ADMIN_TOKEN must contain at least 32 characters; admin metrics remain disabled");
   const allowedOrigins = new Set(allowedOrigin.split(",").map((origin) => origin.trim()).filter(Boolean));
 
   const flushMetrics = setInterval(() => void store.persist().catch((error) => logger.error?.("cloud metrics persistence failed", error)), 60_000);
   flushMetrics.unref?.();
   const createBackup = async () => {
-    const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
-    const extension = databaseFile ? ".sqlite" : ".json";
-    await store.backup(path.join(backupDirectory, `cloud-${stamp}${extension}`));
-    const files = (await fs.readdir(backupDirectory)).filter((file) => file.startsWith("cloud-") && file.endsWith(extension)).sort().reverse();
-    await Promise.all(files.slice(30).map((file) => fs.unlink(path.join(backupDirectory, file))));
+    try {
+      const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
+      const extension = databaseFile ? ".sqlite" : ".json";
+      await store.backup(path.join(backupDirectory, `cloud-${stamp}${extension}`));
+      const files = (await fs.readdir(backupDirectory)).filter((file) => file.startsWith("cloud-") && file.endsWith(extension)).sort().reverse();
+      await Promise.all(files.slice(30).map((file) => fs.unlink(path.join(backupDirectory, file))));
+      runtime.lastBackupAt = Date.now();
+    } catch (error) {
+      runtime.lastBackupErrorAt = Date.now();
+      throw error;
+    }
   };
   const backupTimer = backupDirectory && Number.isFinite(backupIntervalMs) && backupIntervalMs >= 60_000
     ? setInterval(() => void createBackup().catch((error) => logger.error?.("cloud backup failed", error)), backupIntervalMs)
@@ -438,10 +484,19 @@ export async function createCloudServer({
   if (backupDirectory) void createBackup().catch((error) => logger.error?.("initial cloud backup failed", error));
 
   const server = http.createServer(async (request, response) => {
+    const requestStartedAt = performance.now();
+    response.once("finish", () => {
+      const durationMs = Math.max(0, performance.now() - requestStartedAt);
+      runtime.latencies.push(durationMs);
+      if (runtime.latencies.length > 2000) runtime.latencies.splice(0, runtime.latencies.length - 2000);
+      if (response.statusCode === 429) runtime.rateLimited += 1;
+    });
     runtime.requests += 1;
-    const day = metricDay();
+    const day = metricDay(Date.now(), metricsTimeZone);
     const dayMetric = store.data.dailyMetrics[day] ?? { requests: 0, errors: 0, feedback: 0, leaderboardSubmissions: 0, cloudUploads: 0, players: 0 };
-    if (!Number.isFinite(dayMetric.players)) dayMetric.players = 0;
+    for (const key of ["requests", "errors", "feedback", "leaderboardSubmissions", "cloudUploads", "players"]) {
+      if (!Number.isFinite(dayMetric[key])) dayMetric[key] = 0;
+    }
     dayMetric.requests += 1;
     store.data.dailyMetrics[day] = dayMetric;
     const origin = request.headers.origin;
@@ -454,7 +509,13 @@ export async function createCloudServer({
     const url = new URL(request.url || "/", "http://localhost");
     const ip = requestIp(request);
     const routeKey = `${ip}:${request.method}:${url.pathname}`;
-    const routeLimit = url.pathname.startsWith("/api/auth/") ? 12 : url.pathname === "/api/presence" ? 10 : 120;
+    const routeLimit = url.pathname.startsWith("/api/auth/")
+      ? 12
+      : url.pathname === "/api/presence"
+        ? 10
+        : url.pathname === "/api/analytics"
+          ? 30
+          : 120;
     if (!rateLimit(routeKey, routeLimit, 60_000)) {
       return send(response, 429, { error: "请求过于频繁，请稍后再试" }, { "retry-after": "60" });
     }
@@ -463,18 +524,62 @@ export async function createCloudServer({
       if (request.method === "GET" && url.pathname === "/api/health") {
         return send(response, 200, { ok: true, service: "dsp-idle-cloud", schemaVersion: DEFAULT_DATA.schemaVersion, storage: databaseFile ? "sqlite" : "json", uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), time: Date.now() });
       }
-      if (request.method === "GET" && url.pathname === "/api/metrics") {
+      if (request.method === "GET" && url.pathname === "/api/public-status") {
         return send(response, 200, {
+          ok: true,
+          timeZone: metricsTimeZone,
+          today: metricDay(Date.now(), metricsTimeZone),
           uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
-          requests: runtime.requests,
-          errors: runtime.errors,
-          users: Object.keys(store.data.users).length,
-          cloudSaves: Object.keys(store.data.cloudSaves).length,
-          submissions: Object.keys(store.data.submissions).length,
-          players: playerMetrics(store.data, onlineWindowMs),
-          daily: store.data.dailyMetrics,
+          players: playerMetrics(store.data, onlineWindowMs, Date.now(), metricsTimeZone),
+        });
+      }
+      if (request.method === "GET" && (url.pathname === "/api/metrics" || url.pathname === "/api/admin/metrics")) {
+        if (!secureAdminToken) return send(response, 503, { error: "管理员监控尚未配置" });
+        if (!adminAuthorized(request, secureAdminToken)) return send(response, 401, { error: "管理员凭据无效" });
+        const requestedDays = Number(url.searchParams.get("days"));
+        const days = Number.isInteger(requestedDays) ? Math.max(1, Math.min(365, requestedDays)) : 30;
+        const now = Date.now();
+        const activeSessions = Object.values(store.data.sessions).filter((session) => session.expiresAt > now).length;
+        const serviceDaily = Object.entries(store.data.dailyMetrics)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .slice(-days)
+          .map(([metricDayId, metrics]) => ({ day: metricDayId, ...metrics }));
+        return send(response, 200, {
+          generatedAt: now,
+          timeZone: metricsTimeZone,
+          schemaVersion: DEFAULT_DATA.schemaVersion,
+          uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+          runtime: {
+            requests: runtime.requests,
+            errors: runtime.errors,
+            rateLimited: runtime.rateLimited,
+            cloudConflicts: runtime.cloudConflicts,
+            p50LatencyMs: percentile(runtime.latencies, 0.5),
+            p95LatencyMs: percentile(runtime.latencies, 0.95),
+          },
+          accounts: {
+            users: Object.keys(store.data.users).length,
+            activeSessions,
+            cloudSaves: Object.keys(store.data.cloudSaves).length,
+            submissions: Object.keys(store.data.submissions).length,
+          },
+          players: playerMetrics(store.data, onlineWindowMs, now, metricsTimeZone),
+          analytics: analyticsSummary(store.data.analytics, { now, timeZone: metricsTimeZone, days }),
+          reports: { feedback: store.data.feedback.length, clientErrors: store.data.errors.length },
+          backups: {
+            configured: Boolean(backupDirectory),
+            lastSuccessAt: runtime.lastBackupAt,
+            lastErrorAt: runtime.lastBackupErrorAt,
+          },
+          daily: serviceDaily,
           storage: databaseFile ? "sqlite" : "json",
         });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/analytics") {
+        const result = recordAnalyticsBatch(store.data.analytics, await readJson(request), { timeZone: metricsTimeZone });
+        if (!result.ok) return send(response, 400, { error: result.error });
+        return send(response, 202, { accepted: true, duplicate: result.duplicate, day: result.day });
       }
 
       if (request.method === "POST" && url.pathname === "/api/presence") {
@@ -482,7 +587,7 @@ export async function createCloudServer({
         const playerId = normalizedPlayerId(body.playerId);
         if (!playerId) return send(response, 400, { error: "匿名玩家标识格式无效" });
         const now = Date.now();
-        const activeDay = metricDay(now);
+        const activeDay = metricDay(now, metricsTimeZone);
         const playerHash = sha256(`player:${playerId}`);
         let player = store.data.players[playerHash];
         let persistRequired = false;
@@ -500,7 +605,7 @@ export async function createCloudServer({
           }
         }
         if (persistRequired) await store.persist();
-        return send(response, 202, { accepted: true, players: playerMetrics(store.data, onlineWindowMs, now) });
+        return send(response, 202, { accepted: true, players: playerMetrics(store.data, onlineWindowMs, now, metricsTimeZone) });
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/register") {
@@ -568,7 +673,10 @@ export async function createCloudServer({
         if (!validateSavePayload(body.payload)) return send(response, 400, { error: "云存档格式无效或体积过大" });
         const current = store.data.cloudSaves[auth.user.id];
         const expectedRevision = Number.isInteger(body.expectedRevision) ? body.expectedRevision : 0;
-        if ((current?.revision ?? 0) !== expectedRevision) return send(response, 409, { error: "云端已有更新版本，请先下载或确认覆盖", cloudSave: cloudSaveMetadata(current) });
+        if ((current?.revision ?? 0) !== expectedRevision) {
+          runtime.cloudConflicts += 1;
+          return send(response, 409, { error: "云端已有更新版本，请先下载或确认覆盖", cloudSave: cloudSaveMetadata(current) });
+        }
         const next = {
           revision: (current?.revision ?? 0) + 1,
           payload: body.payload,
@@ -588,7 +696,10 @@ export async function createCloudServer({
         const body = await readJson(request);
         const current = store.data.cloudSaves[auth.user.id];
         const expectedRevision = Number.isInteger(body.expectedRevision) ? body.expectedRevision : 0;
-        if ((current?.revision ?? 0) !== expectedRevision) return send(response, 409, { error: "云端已有更新版本，请刷新历史记录", cloudSave: cloudSaveMetadata(current) });
+        if ((current?.revision ?? 0) !== expectedRevision) {
+          runtime.cloudConflicts += 1;
+          return send(response, 409, { error: "云端已有更新版本，请刷新历史记录", cloudSave: cloudSaveMetadata(current) });
+        }
         const sourceRevision = Number(body.revision);
         const source = saveHistory(store, auth.user.id).find((entry) => entry.revision === sourceRevision);
         if (!source) return send(response, 404, { error: "历史修订不存在或已过期" });

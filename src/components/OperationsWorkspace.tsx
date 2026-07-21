@@ -46,7 +46,7 @@ import type { AutomaticPerformanceReport } from "../game/benchmark";
 import type { DesktopReleaseInfo } from "../desktop";
 import type { AutosaveIntervalSeconds, DifficultyMode, FontScale, GameSettings, GameState, SimulationSpeed } from "../game/types";
 import { clearClientErrors, collectClientDiagnostics, downloadDiagnostics, getClientErrors } from "../game/diagnostics";
-import { fetchCloudServiceMetrics, resumeCloudSession, sendCloudFeedback, type CloudServiceMetrics } from "../game/cloud";
+import { fetchCloudPublicStatus, resumeCloudSession, sendCloudFeedback, type CloudPublicStatus } from "../game/cloud";
 import { resetOnboarding } from "../game/onboarding";
 import { applyPwaUpdate, getPwaRuntimeState, requestPwaInstall, subscribePwaRuntime, type PwaRuntimeState } from "../pwa";
 import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
@@ -453,7 +453,7 @@ function ContentPacksPanel({
 function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerformanceReport | null }) {
   const [pwa, setPwa] = useState<PwaRuntimeState>(getPwaRuntimeState);
   const [cloudState, setCloudState] = useState<"checking" | "online" | "offline">("checking");
-  const [cloudMetrics, setCloudMetrics] = useState<CloudServiceMetrics | null>(null);
+  const [cloudStatus, setCloudStatus] = useState<CloudPublicStatus | null>(null);
   const [feedbackKind, setFeedbackKind] = useState("experience");
   const [feedback, setFeedback] = useState("");
   const [feedbackState, setFeedbackState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
@@ -470,8 +470,8 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
       setCloudState(session.status === "offline" ? "offline" : "online");
     });
     const refreshMetrics = async () => {
-      const metrics = await fetchCloudServiceMetrics().catch(() => null);
-      if (active && metrics) setCloudMetrics(metrics);
+      const status = await fetchCloudPublicStatus().catch(() => null);
+      if (active && status) setCloudStatus(status);
     };
     void refreshMetrics();
     const timer = window.setInterval(() => void refreshMetrics(), 30_000);
@@ -482,7 +482,6 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
   }, []);
 
   const diagnostics = () => collectClientDiagnostics(game, report);
-  const todayMetrics = cloudMetrics?.daily[new Date().toISOString().slice(0, 10)];
   const submitFeedback = async () => {
     if (!feedback.trim()) return;
     setFeedbackState("sending");
@@ -506,9 +505,9 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
       </header>
       <section className="support-status-grid">
         <article><Bug size={18} /><span><small>本机错误记录</small><strong>{errors.length}</strong></span><button type="button" disabled={errors.length === 0} onClick={() => { clearClientErrors(); setErrorRevision((value) => value + 1); }}>清空</button></article>
-        <article><Cloud size={18} /><span><small>今日服务请求</small><strong>{todayMetrics?.requests.toLocaleString("zh-CN") ?? "--"}</strong></span><em>{cloudMetrics ? `${cloudMetrics.storage.toUpperCase()} · ${cloudMetrics.errors} 错误` : "等待云节点"}</em></article>
-        <article><Users size={18} /><span><small>累计游玩玩家</small><strong>{cloudMetrics?.players?.total.toLocaleString("zh-CN") ?? "--"}</strong></span><em>{cloudMetrics?.players ? `今日 ${cloudMetrics.players.today.toLocaleString("zh-CN")}` : "匿名标识去重"}</em></article>
-        <article className="support-player-online"><Radio size={18} /><span><small>当前在线游玩</small><strong>{cloudMetrics?.players?.online.toLocaleString("zh-CN") ?? "--"}</strong></span><em>{cloudMetrics?.players ? `${cloudMetrics.players.onlineWindowSeconds} 秒内活跃` : "等待云节点"}</em></article>
+        <article><Cloud size={18} /><span><small>今日进入工厂</small><strong>{cloudStatus?.players.today.toLocaleString("zh-CN") ?? "--"}</strong></span><em>{cloudStatus ? `${cloudStatus.timeZone} 日历` : "等待云节点"}</em></article>
+        <article><Users size={18} /><span><small>累计游玩玩家</small><strong>{cloudStatus?.players.total.toLocaleString("zh-CN") ?? "--"}</strong></span><em>匿名标识去重</em></article>
+        <article className="support-player-online"><Radio size={18} /><span><small>当前在线游玩</small><strong>{cloudStatus?.players.online.toLocaleString("zh-CN") ?? "--"}</strong></span><em>{cloudStatus ? `${cloudStatus.players.onlineWindowSeconds} 秒内活跃` : "等待云节点"}</em></article>
         <article><Smartphone size={18} /><span><small>PWA 状态</small><strong>{pwa.installed ? "已安装" : pwa.supported ? "浏览器运行" : "不可用"}</strong></span>{pwa.installAvailable ? <button type="button" onClick={() => void requestPwaInstall()}>安装</button> : null}</article>
         <article><RotateCcw size={18} /><span><small>网页版本</small><strong>v{__APP_VERSION__}</strong></span>{pwa.updateAvailable ? <button className="ready" type="button" onClick={applyPwaUpdate}>立即更新</button> : <em>已是最新</em>}</article>
       </section>

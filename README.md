@@ -108,6 +108,18 @@ npm run desktop:pack
 
 端到端测试默认使用本机安装的 Google Chrome。
 
+## 本地运营后台
+
+详细运营数据位于 `/admin`，服务端必须配置至少 32 字符的管理员 token。token 只保存在当前浏览器会话，不会打进前端产物：
+
+```powershell
+$env:DSP_ADMIN_TOKEN = "仅用于本机开发的至少32字符随机值"
+npm run server:dev
+npm run dev
+```
+
+访问 `http://127.0.0.1:4318/admin` 后输入同一 token。正式环境使用 `/etc/dsp-idle-cloud/admin.env`，不得把真实值写入仓库、发布包或聊天记录。
+
 ## 结构
 
 - `src/game/content.ts`：物品、配方、建筑和制造成本数据。
@@ -119,6 +131,7 @@ npm run desktop:pack
 - `src/game/progression.ts`：工业成就定义、进度计算与幂等解锁。
 - `src/game/storage.ts`：主存档、校验和、自动快照、回滚与版本迁移。
 - `src/game/benchmark.ts`：确定性哈希检查与模拟性能基准。
+- `src/game/analytics.ts`：匿名访问会话、白名单事件批处理与重试去重客户端。
 - `src/game/mods.ts`：外部内容包格式与引用/冲突校验。
 - `src/game/contentPacks.ts`：内容包注册表、依赖解析、运行时目录注入与存档使用保护。
 - `src/game/blueprintExchange.ts`：蓝图 JSON 交换、校验与本地 ID 重映射。
@@ -129,6 +142,7 @@ npm run desktop:pack
 - `src/components/BlueprintWorkspace.tsx`：框选工具、选区命令、蓝图库与部署反馈。
 - `src/components/DysonPlannerWorkspace.tsx`：多恒星壳层、轨道、节点、框架与壳面规划。
 - `src/components/OperationsWorkspace.tsx`：警报、成就、设置与存档运营中心。
+- `src/components/AdminDashboard.tsx`：受保护的访问、漏斗、服务与备份状态后台。
 - `desktop/`：Electron 主进程、更新桥接、发布渠道和桌面打包脚本。
 - `src/components/OfflineReportWorkspace.tsx`：离线生产增量结算报告。
 - `src/App.tsx`：无限画布、存档与实时推进。

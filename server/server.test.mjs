@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { createCloudServer } from "./index.mjs";
+import { metricDay } from "./analytics.mjs";
 
 let directory;
 let server;
 let baseUrl;
 let token;
+const adminToken = "test-admin-secret-1234567890-abcdef";
 const cloudPayload = JSON.stringify({
   formatVersion: 1,
   state: {
@@ -23,7 +25,7 @@ const cloudPayload = JSON.stringify({
 
 before(async () => {
   directory = await mkdtemp(path.join(tmpdir(), "dsp-cloud-"));
-  server = await createCloudServer({ databaseFile: path.join(directory, "cloud.sqlite"), logger: { error() {} } });
+  server = await createCloudServer({ databaseFile: path.join(directory, "cloud.sqlite"), adminToken, logger: { error() {} } });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
@@ -63,10 +65,11 @@ test("deduplicates anonymous players and reports total, daily and online counts"
   assert.equal(repeated.body.players.total, 1);
   assert.equal(second.body.players.total, 2);
 
-  const metrics = await request("/api/metrics");
-  const today = new Date().toISOString().slice(0, 10);
-  assert.deepEqual(metrics.body.players, { total: 2, today: 2, online: 2, onlineWindowSeconds: 120 });
-  assert.equal(metrics.body.daily[today].players, 2);
+  const status = await request("/api/public-status");
+  const metrics = await request("/api/admin/metrics", { headers: { authorization: `Bearer ${adminToken}` } });
+  const today = metricDay();
+  assert.deepEqual(status.body.players, { total: 2, today: 2, online: 2, onlineWindowSeconds: 120 });
+  assert.equal(metrics.body.daily.find((entry) => entry.day === today).players, 2);
   assert.equal(Object.keys(server.store.data.players).every((key) => /^[a-f0-9]{64}$/.test(key)), true);
   assert.equal(JSON.stringify(server.store.data.players).includes(firstId), false);
 
@@ -89,7 +92,7 @@ test("persists player totals across a restart and expires stale online players",
   const databaseFile = path.join(restartDirectory, "cloud.sqlite");
   let restartServer;
   try {
-    restartServer = await createCloudServer({ databaseFile, playerOnlineWindowMs: 500, logger: { error() {} } });
+    restartServer = await createCloudServer({ databaseFile, playerOnlineWindowMs: 500, adminToken, logger: { error() {} } });
     await new Promise((resolve) => restartServer.listen(0, "127.0.0.1", resolve));
     let restartBaseUrl = `http://127.0.0.1:${restartServer.address().port}`;
     await fetch(`${restartBaseUrl}/api/presence`, {
@@ -99,19 +102,98 @@ test("persists player totals across a restart and expires stale online players",
     });
     await new Promise((resolve) => restartServer.close(resolve));
 
-    restartServer = await createCloudServer({ databaseFile, playerOnlineWindowMs: 500, logger: { error() {} } });
+    restartServer = await createCloudServer({ databaseFile, playerOnlineWindowMs: 500, adminToken, logger: { error() {} } });
     await new Promise((resolve) => restartServer.listen(0, "127.0.0.1", resolve));
     restartBaseUrl = `http://127.0.0.1:${restartServer.address().port}`;
-    const restored = await fetch(`${restartBaseUrl}/api/metrics`).then((response) => response.json());
+    const restored = await fetch(`${restartBaseUrl}/api/public-status`).then((response) => response.json());
     assert.equal(restored.players.total, 1);
     assert.equal(restored.players.online, 1);
     await new Promise((resolve) => setTimeout(resolve, 550));
-    const expired = await fetch(`${restartBaseUrl}/api/metrics`).then((response) => response.json());
+    const expired = await fetch(`${restartBaseUrl}/api/public-status`).then((response) => response.json());
     assert.equal(expired.players.total, 1);
     assert.equal(expired.players.online, 0);
   } finally {
     if (restartServer?.listening) await new Promise((resolve) => restartServer.close(resolve));
     await rm(restartDirectory, { recursive: true, force: true });
+  }
+});
+
+test("protects detailed metrics and aggregates privacy-safe visits and events", async () => {
+  const publicStatus = await request("/api/public-status");
+  assert.equal(publicStatus.response.status, 200);
+  assert.equal("accounts" in publicStatus.body, false);
+  const unauthorized = await request("/api/metrics");
+  assert.equal(unauthorized.response.status, 401);
+
+  const playerId = "player_dddddddddddddddddddddddddddddddd";
+  const sessionId = "session_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+  const batch = {
+    playerId,
+    sessionId,
+    sequence: 1,
+    activeSeconds: 24,
+    client: "desktop-web",
+    source: "direct",
+    events: [
+      { name: "page_view", count: 1 },
+      { name: "game_enter", count: 1 },
+      { name: "open_recipes", count: 2 },
+    ],
+  };
+  const accepted = await request("/api/analytics", { method: "POST", body: JSON.stringify(batch) });
+  const duplicate = await request("/api/analytics", { method: "POST", body: JSON.stringify(batch) });
+  assert.equal(accepted.response.status, 202);
+  assert.equal(duplicate.body.duplicate, true);
+  const rejected = await request("/api/analytics", { method: "POST", body: JSON.stringify({ ...batch, sequence: 2, events: [{ name: "raw_click_text", count: 1 }] }) });
+  assert.equal(rejected.response.status, 400);
+
+  const metrics = await request("/api/admin/metrics?days=7", { headers: { authorization: `Bearer ${adminToken}` } });
+  assert.equal(metrics.response.status, 200);
+  assert.equal(metrics.body.timeZone, "Asia/Shanghai");
+  assert.equal(metrics.body.analytics.range.pageViews, 1);
+  assert.equal(metrics.body.analytics.range.gameStarts, 1);
+  assert.equal(metrics.body.analytics.range.activeSeconds, 24);
+  assert.equal(metrics.body.analytics.events.find((event) => event.name === "open_recipes").count, 2);
+  assert.equal(JSON.stringify(server.store.data.analytics).includes(playerId), false);
+  assert.equal(JSON.stringify(server.store.data.analytics).includes(sessionId), false);
+});
+
+test("migrates schema v3 data to v4 without losing accounts, saves or players", async () => {
+  const migrationDirectory = await mkdtemp(path.join(tmpdir(), "dsp-schema-v3-"));
+  const dataFile = path.join(migrationDirectory, "cloud.json");
+  const playerHash = "a".repeat(64);
+  const legacy = {
+    schemaVersion: 3,
+    users: { user_legacy: { id: "user_legacy", email: "legacy@example.com", displayName: "旧工程师", createdAt: 1, passwordSalt: "00", passwordHash: "00" } },
+    sessions: {},
+    cloudSaves: { user_legacy: { revision: 1, payload: cloudPayload, checksum: "checksum", size: cloudPayload.length, updatedAt: 2 } },
+    cloudSaveHistory: {},
+    submissions: {},
+    players: { [playerHash]: { firstSeenAt: 1, lastSeenAt: 2, lastActiveDay: "2026-07-21" } },
+    feedback: [],
+    errors: [],
+    dailyMetrics: { "2026-07-21": { requests: 3, errors: 0, feedback: 0, leaderboardSubmissions: 0, cloudUploads: 1, players: 1 } },
+  };
+  await writeFile(dataFile, JSON.stringify(legacy));
+  let migrationServer;
+  try {
+    migrationServer = await createCloudServer({ dataFile, databaseFile: "", adminToken, logger: { error() {} } });
+    await new Promise((resolve) => migrationServer.listen(0, "127.0.0.1", resolve));
+    assert.equal(migrationServer.store.data.schemaVersion, 4);
+    assert.equal(migrationServer.store.data.users.user_legacy.email, "legacy@example.com");
+    assert.equal(migrationServer.store.data.cloudSaves.user_legacy.revision, 1);
+    assert.equal(migrationServer.store.data.players[playerHash].lastActiveDay, "2026-07-21");
+    assert.deepEqual(migrationServer.store.data.analytics, { visitors: {}, sessions: {}, daily: {} });
+    await migrationServer.store.persist();
+    await new Promise((resolve) => migrationServer.close(resolve));
+
+    migrationServer = await createCloudServer({ dataFile, databaseFile: "", adminToken, logger: { error() {} } });
+    await new Promise((resolve) => migrationServer.listen(0, "127.0.0.1", resolve));
+    assert.equal(migrationServer.store.data.schemaVersion, 4);
+    assert.equal(migrationServer.store.data.cloudSaveHistory.user_legacy.length, 1);
+  } finally {
+    if (migrationServer?.listening) await new Promise((resolve) => migrationServer.close(resolve));
+    await rm(migrationDirectory, { recursive: true, force: true });
   }
 });
 

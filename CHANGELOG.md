@@ -7,6 +7,8 @@ All notable player-facing changes are recorded here. Game-state migration versio
 - Fixed coarse-pointer multi-select mode so tapping another node does not clear the existing selection.
 - Added deterministic build identity and release manifest tooling.
 - Added atomic code release switching with a last-release rollback command that never restores the database.
+- Added privacy-safe PV, UV, sessions, active-time and allowlisted event aggregation on the Asia/Shanghai calendar.
+- Added a protected `/admin` operations dashboard and reduced the public status endpoint to anonymous player counts.
 
 ## [0.1.0] - 2026-07-21
 

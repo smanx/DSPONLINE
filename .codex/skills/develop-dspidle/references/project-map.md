@@ -51,7 +51,9 @@ Use this map after reading `docs/PROJECT_STATUS.md`. Open only the files relevan
 | Area | Files |
 | --- | --- |
 | Browser cloud client | `src/game/cloud.ts` |
+| Anonymous analytics | `src/game/analytics.ts`, `server/analytics.mjs` |
 | Node API and SQLite | `server/index.mjs` |
+| Protected operations dashboard | `src/components/AdminDashboard.tsx`, `src/admin.css` |
 | API tests | `server/server.test.mjs` |
 | Nginx/systemd/backup templates | `deploy/` |
 | Electron | `desktop/main.cjs`, `preload.cjs`, `pack.cjs`, `release-channels.cjs` |

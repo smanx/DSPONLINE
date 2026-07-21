@@ -41,21 +41,17 @@ export interface CloudLeaderboardEntry {
   rank: number;
 }
 
-export interface CloudServiceMetrics {
+export interface CloudPublicStatus {
+  ok: boolean;
+  timeZone: string;
+  today: string;
   uptimeSeconds: number;
-  requests: number;
-  errors: number;
-  users: number;
-  cloudSaves: number;
-  submissions: number;
-  players?: {
+  players: {
     total: number;
     today: number;
     online: number;
     onlineWindowSeconds: number;
   };
-  storage: "sqlite" | "json";
-  daily: Record<string, { requests: number; errors: number; feedback: number; leaderboardSubmissions: number; cloudUploads: number; players?: number }>;
 }
 
 export class CloudApiError extends Error {
@@ -178,8 +174,8 @@ export async function fetchCloudLeaderboard(category: LeaderboardCategoryId, sea
   return result.entries;
 }
 
-export async function fetchCloudServiceMetrics(): Promise<CloudServiceMetrics> {
-  return cloudRequest<CloudServiceMetrics>("/metrics");
+export async function fetchCloudPublicStatus(): Promise<CloudPublicStatus> {
+  return cloudRequest<CloudPublicStatus>("/public-status");
 }
 
 export async function submitCloudLeaderboard(metrics: LeaderboardMetrics, seasonId: string): Promise<void> {

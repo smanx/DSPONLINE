@@ -41,6 +41,7 @@ import {
   type CloudSaveMetadata,
   type CloudSession,
 } from "../game/cloud";
+import { trackAnalyticsEvent } from "../game/analytics";
 import { getPlanet } from "../game/content";
 import { createInitialState } from "../game/engine";
 import {
@@ -197,12 +198,14 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     if (preserveReason) preserveCurrentSave(preserveReason);
     const state = { ...loaded.state, settings: { ...loaded.state.settings, ...settings } };
     saveGame(state);
+    trackAnalyticsEvent("game_enter");
     onEnterGame({ ...loaded, state });
   };
 
   const continueGame = () => {
     setBusy(true);
     try {
+      trackAnalyticsEvent("continue_game");
       enterLoadedGame(loadGame());
     } finally {
       setBusy(false);
@@ -214,6 +217,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     const state = createInitialState();
     state.settings = { ...state.settings, ...settings };
     saveGame(state);
+    trackAnalyticsEvent("new_game");
+    trackAnalyticsEvent("game_enter");
     onEnterGame({ state, offlineSeconds: 0, offlineReport: null, recovery: { source: "fresh", issues: [] } });
   };
 
@@ -228,6 +233,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       setMessage({ tone: "error", text: `本地槽位 ${slotId} 无法载入` });
       return;
     }
+    trackAnalyticsEvent("load_save");
     enterLoadedGame(loaded, `载入槽位 ${slotId} 前`);
   };
 
@@ -237,6 +243,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       setMessage({ tone: "error", text: "自动快照无法载入" });
       return;
     }
+    trackAnalyticsEvent("load_save");
     enterLoadedGame({ state, offlineSeconds: 0, offlineReport: null }, "回滚自动快照前");
   };
 
@@ -251,6 +258,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
 
   const confirmImport = () => {
     if (!importInspection?.valid || !importInspection.state) return;
+    trackAnalyticsEvent("import_save");
     enterLoadedGame({ state: importInspection.state, offlineSeconds: 0, offlineReport: null }, "导入外部存档前");
   };
 
@@ -264,6 +272,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         ? await registerCloudAccount(cloudEmail, cloudPassword, cloudDisplayName)
         : await loginCloudAccount(cloudEmail, cloudPassword);
       setCloudSession(session);
+      trackAnalyticsEvent(cloudMode === "register" ? "cloud_register" : "cloud_login");
       setCloudPassword("");
       setMessage({ tone: "ready", text: cloudMode === "register" ? "云账户已创建并登录" : "云账户登录成功" });
     } catch (error) {
@@ -282,6 +291,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       const state = { ...loaded.state, settings: { ...loaded.state.settings, ...settings } };
       saveGame(state);
       const cloudSave = await uploadCloudSave(exportGame(state), cloudSession.cloudSave?.revision ?? 0);
+      trackAnalyticsEvent("cloud_upload");
       setCloudSession((current) => ({ ...current, cloudSave }));
       refreshLocalSaves();
       setMessage({ tone: "ready", text: `云存档已更新到修订 ${cloudSave.revision}` });
@@ -310,6 +320,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         setMessage({ tone: "error", text: inspection.issues[0] ?? "云存档格式无效" });
         return;
       }
+      trackAnalyticsEvent("cloud_download");
       enterLoadedGame({ state: inspection.state, offlineSeconds: 0, offlineReport: null }, "下载云存档前");
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "云存档下载失败" });

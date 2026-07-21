@@ -22,6 +22,8 @@ flowchart LR
 
 - `src/main.tsx`：安装客户端监控，挂载 React，生产环境注册 PWA。
 - `src/hooks/usePlayerPresence.ts`、`src/game/presence.ts`：进入工厂后的匿名心跳、可见性节流与本机稳定 ID；不读取游戏存档。
+- `src/game/analytics.ts`：页面访问、活跃时长和白名单关键事件的会话级批处理；失败静默重试，不读取或上传游戏存档。
+- `src/components/AdminDashboard.tsx`：独立 `/admin` 路由，只使用浏览器会话中的管理员 token 读取聚合运营数据。
 - `src/components/StartMenu.tsx`：开始/继续、槽位、导入、云账号和主菜单设置。
 - `src/components/ReleaseNotesDialog.tsx`：版本公告单一数据源、首次展示偏好和主菜单/游戏内设置共用弹窗。
 - `src/App.tsx`：顶层会话和工厂编排。它管理工作区、画布交互、连接、选中状态、存档定时器和模拟 Worker。
@@ -117,11 +119,13 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 ## 7. 云服务
 
-`server/index.mjs` 是无框架 Node HTTP 服务，生产使用 `better-sqlite3`。SQLite 当前只有一行 `app_state` JSON payload，启用 WAL 和 `synchronous=NORMAL`。这便于从 JSON 版本迁移，但并不是面向大规模查询的规范化数据模型。
+`server/index.mjs` 是无框架 Node HTTP 服务，生产使用 `better-sqlite3`。SQLite 当前只有一行 `app_state` JSON payload，启用 WAL 和 `synchronous=NORMAL`。云服务 schema v4 在 v3 玩家统计之外增加匿名访问、会话和白名单事件聚合；迁移会保留全部账号、云存档、榜单和玩家记录。
 
 API 表面：
 
-- `GET /api/health`、`GET /api/metrics`
+- `GET /api/health`、`GET /api/public-status`
+- `GET /api/admin/metrics`：至少 32 字符的管理员 bearer token
+- `POST /api/analytics`：匿名批次、客户端序列去重和严格事件白名单
 - `POST /api/presence`
 - `POST /api/auth/register|login|logout`、`GET /api/account`
 - `GET|PUT /api/cloud-save`、`GET /api/cloud-save/history`、`POST /api/cloud-save/restore`
@@ -130,7 +134,7 @@ API 表面：
 
 密码使用 scrypt 派生并采用 timing-safe 比较；会话 token 只保存哈希，默认有效期 30 天。请求体上限为 8 MiB，认证接口每 IP/路径每分钟 12 次，其余接口 120 次。Origin 白名单、Nginx `client_max_body_size` 和前端 HTTPS 限制共同形成入口边界。
 
-匿名心跳默认每 45 秒发送一次，服务端接口限流为每 IP 每分钟 10 次；同一浏览器 ID 去重，最近 120 秒有心跳视为在线。累计和每日人数持久化在 schema v3 的 `players` / `dailyMetrics` 中，在线人数由最近活跃时间实时计算。香港与上海数据库相互独立，因此统计也是节点级数据，不做跨节点合并。
+匿名心跳默认每 45 秒发送一次，服务端接口限流为每 IP 每分钟 10 次；同一浏览器 ID 去重，最近 120 秒有心跳视为在线。访问统计按 `Asia/Shanghai` 自然日聚合 PV、UV、会话、进入工厂、活跃秒数和允许的关键事件。服务端只保存带命名空间的 SHA-256 标识，不保存原始匿名 ID、鼠标坐标、按钮文案或存档内容。香港与上海数据库相互独立，因此统计也是节点级数据，不做跨节点合并。
 
 ## 8. 部署架构
 

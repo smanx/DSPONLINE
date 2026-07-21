@@ -1,0 +1,201 @@
+import { getOrCreatePlayerId } from "./presence";
+
+export type AnalyticsEventName =
+  | "page_view"
+  | "game_enter"
+  | "new_game"
+  | "continue_game"
+  | "load_save"
+  | "import_save"
+  | "cloud_register"
+  | "cloud_login"
+  | "cloud_upload"
+  | "cloud_download"
+  | "open_technology"
+  | "open_recipes"
+  | "open_statistics"
+  | "open_star_map"
+  | "open_campaign"
+  | "building_place"
+  | "belt_connect"
+  | "research_queue"
+  | "milestone_red_matrix"
+  | "milestone_oil_chain"
+  | "milestone_yellow_matrix"
+  | "milestone_interstellar"
+  | "milestone_dyson_swarm"
+  | "milestone_universe_matrix";
+
+type AnalyticsClient = "desktop-web" | "mobile-web" | "tablet-web" | "pwa" | "desktop-app" | "unknown";
+type AnalyticsSource = "direct" | "search" | "social" | "community" | "referral" | "unknown";
+
+interface PendingAnalyticsBatch {
+  playerId: string;
+  sessionId: string;
+  sequence: number;
+  activeSeconds: number;
+  client: AnalyticsClient;
+  source: AnalyticsSource;
+  events: Array<{ name: AnalyticsEventName; count: number }>;
+}
+
+const SESSION_ID_KEY = "dsp-idle-network.analytics-session.v1";
+const SEQUENCE_KEY = "dsp-idle-network.analytics-sequence.v1";
+const PENDING_KEY = "dsp-idle-network.analytics-pending.v1";
+const SESSION_ID_PATTERN = /^session_[a-z0-9]{24,64}$/;
+const FLUSH_INTERVAL_MS = 20_000;
+const queue = new Map<AnalyticsEventName, number>();
+let installed = false;
+let flushing = false;
+let pending: PendingAnalyticsBatch | null = null;
+let sequence = 0;
+let unreportedActiveSeconds = 0;
+let lastActiveAt: number | null = null;
+
+function createSessionId(): string {
+  if (typeof window.crypto?.randomUUID === "function") return `session_${window.crypto.randomUUID().replaceAll("-", "")}`;
+  const bytes = window.crypto?.getRandomValues?.(new Uint8Array(16));
+  return `session_${bytes ? Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("") : `${Date.now()}${Math.random().toString(36).slice(2)}`}`;
+}
+
+function readSessionValue(key: string): string | null {
+  try { return window.sessionStorage.getItem(key); } catch { return null; }
+}
+
+function writeSessionValue(key: string, value: string | null): void {
+  try {
+    if (value == null) window.sessionStorage.removeItem(key);
+    else window.sessionStorage.setItem(key, value);
+  } catch {
+    // Analytics remains best-effort in private or storage-restricted sessions.
+  }
+}
+
+function sessionId(): string {
+  const stored = readSessionValue(SESSION_ID_KEY);
+  if (stored && SESSION_ID_PATTERN.test(stored)) return stored;
+  const created = createSessionId();
+  writeSessionValue(SESSION_ID_KEY, created);
+  return created;
+}
+
+function analyticsApiBase(): string | null {
+  const configured = import.meta.env.VITE_API_BASE_URL?.trim();
+  if (configured) return configured.replace(/\/$/, "");
+  if (typeof window === "undefined" || window.location.protocol === "file:") return null;
+  return "/api";
+}
+
+function clientKind(): AnalyticsClient {
+  if ((window as Window & { dspDesktop?: unknown }).dspDesktop) return "desktop-app";
+  if (window.matchMedia("(display-mode: standalone)").matches) return "pwa";
+  const coarse = window.matchMedia("(pointer: coarse)").matches;
+  if (!coarse) return "desktop-web";
+  return Math.min(window.screen.width, window.screen.height) >= 600 ? "tablet-web" : "mobile-web";
+}
+
+function sourceKind(): AnalyticsSource {
+  if (!document.referrer) return "direct";
+  try {
+    const host = new URL(document.referrer).hostname.toLowerCase();
+    if (!host || host === window.location.hostname) return "direct";
+    if (/baidu|bing|google|sogou|so\.com/.test(host)) return "search";
+    if (/weibo|bilibili|douyin|zhihu|xiaohongshu/.test(host)) return "social";
+    if (/qq\.com|qun\.qq/.test(host)) return "community";
+    return "referral";
+  } catch {
+    return "unknown";
+  }
+}
+
+function captureActiveTime(): void {
+  const now = Date.now();
+  if (lastActiveAt != null) unreportedActiveSeconds += Math.min(60, Math.max(0, (now - lastActiveAt) / 1000));
+  lastActiveAt = document.visibilityState === "hidden" ? null : now;
+}
+
+function persistPending(): void {
+  writeSessionValue(PENDING_KEY, pending ? JSON.stringify(pending) : null);
+}
+
+function restorePending(): void {
+  sequence = Math.max(0, Number(readSessionValue(SEQUENCE_KEY)) || 0);
+  const raw = readSessionValue(PENDING_KEY);
+  if (!raw) return;
+  try {
+    const value = JSON.parse(raw) as PendingAnalyticsBatch;
+    if (value && Number.isInteger(value.sequence) && value.sequence > sequence && Array.isArray(value.events)) pending = value;
+  } catch {
+    writeSessionValue(PENDING_KEY, null);
+  }
+}
+
+function createPendingBatch(): PendingAnalyticsBatch | null {
+  captureActiveTime();
+  const activeSeconds = Math.min(300, Math.floor(unreportedActiveSeconds));
+  const events = Array.from(queue, ([name, count]) => ({ name, count: Math.min(100, count) }));
+  if (events.length === 0 && activeSeconds === 0) return null;
+  queue.clear();
+  unreportedActiveSeconds = Math.max(0, unreportedActiveSeconds - activeSeconds);
+  return {
+    playerId: getOrCreatePlayerId(),
+    sessionId: sessionId(),
+    sequence: sequence + 1,
+    activeSeconds,
+    client: clientKind(),
+    source: sourceKind(),
+    events,
+  };
+}
+
+export async function flushAnalytics(keepalive = false): Promise<void> {
+  const base = analyticsApiBase();
+  if (!base || flushing) return;
+  if (!pending) {
+    pending = createPendingBatch();
+    if (!pending) return;
+    persistPending();
+  }
+  flushing = true;
+  try {
+    const response = await fetch(`${base}/analytics`, {
+      method: "POST",
+      body: JSON.stringify(pending),
+      headers: { "content-type": "application/json" },
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      keepalive,
+    });
+    if (!response.ok) return;
+    sequence = pending.sequence;
+    writeSessionValue(SEQUENCE_KEY, String(sequence));
+    pending = null;
+    persistPending();
+  } catch {
+    // Telemetry is optional and must never affect game or save behavior.
+  } finally {
+    flushing = false;
+  }
+}
+
+export function trackAnalyticsEvent(name: AnalyticsEventName, count = 1): void {
+  if (!Number.isFinite(count) || count <= 0) return;
+  queue.set(name, (queue.get(name) ?? 0) + Math.min(100, Math.floor(count)));
+}
+
+export function installAnalytics(): void {
+  if (installed || typeof window === "undefined") return;
+  installed = true;
+  restorePending();
+  lastActiveAt = document.visibilityState === "hidden" ? null : Date.now();
+  trackAnalyticsEvent("page_view");
+  window.setTimeout(() => void flushAnalytics(), 800);
+  const timer = window.setInterval(() => void flushAnalytics(), FLUSH_INTERVAL_MS);
+  document.addEventListener("visibilitychange", () => {
+    captureActiveTime();
+    if (document.visibilityState === "hidden") void flushAnalytics(true);
+  });
+  window.addEventListener("pagehide", () => void flushAnalytics(true));
+  window.addEventListener("pageshow", () => { lastActiveAt = Date.now(); });
+  window.addEventListener("beforeunload", () => window.clearInterval(timer), { once: true });
+}
