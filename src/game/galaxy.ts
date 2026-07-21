@@ -11,6 +11,17 @@ import type {
 
 export const DEFAULT_GALAXY_SEED = 240721;
 
+export const PLANET_INDUSTRY_ROLES: PlanetIndustryRole[] = [
+  "auto",
+  "mining",
+  "smelting",
+  "manufacturing",
+  "chemical",
+  "research",
+  "logistics",
+  "power",
+];
+
 export const PLANET_INDUSTRY_ROLE_LABELS: Record<PlanetIndustryRole, string> = {
   auto: "自动识别",
   mining: "采矿前哨",
@@ -187,8 +198,78 @@ export function createGalaxyState(seed = DEFAULT_GALAXY_SEED, preserveBaseline =
   return { seed: normalizedSeed, profiles, planetRoles };
 }
 
+function profileNumber(value: unknown, fallback: number, minimum: number, maximum: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(minimum, Math.min(maximum, Math.round(value * 100) / 100))
+    : fallback;
+}
+
+function isPlanetSpecialization(value: unknown): value is PlanetSpecialization {
+  return value === "balanced" || value === "smelting" || value === "chemical" || value === "logistics" ||
+    value === "research" || value === "particle";
+}
+
+export function normalizeGalaxyState(value: unknown, preserveBaseline = false): GalaxyState {
+  const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const seed = typeof source.seed === "number" && Number.isFinite(source.seed) ? source.seed : DEFAULT_GALAXY_SEED;
+  const normalized = createGalaxyState(seed, preserveBaseline);
+  const sourceProfiles = source.profiles && typeof source.profiles === "object"
+    ? source.profiles as Record<string, unknown>
+    : {};
+
+  for (const planetId of Object.keys(normalized.profiles) as PlanetId[]) {
+    const fallback = normalized.profiles[planetId];
+    const raw = sourceProfiles[planetId];
+    if (!raw || typeof raw !== "object") continue;
+    const profile = raw as Record<string, unknown>;
+    normalized.profiles[planetId] = {
+      ...fallback,
+      climateName: typeof profile.climateName === "string" && profile.climateName.trim()
+        ? profile.climateName.trim().slice(0, 40)
+        : fallback.climateName,
+      windMultiplier: profileNumber(profile.windMultiplier, fallback.windMultiplier, 0, 5),
+      solarMultiplier: profileNumber(profile.solarMultiplier, fallback.solarMultiplier, 0, 5),
+      geothermalMultiplier: profileNumber(profile.geothermalMultiplier, fallback.geothermalMultiplier, 0, 5),
+      miningMultiplier: profileNumber(profile.miningMultiplier, fallback.miningMultiplier, 0.05, 5),
+      orbitalYieldMultiplier: profileNumber(profile.orbitalYieldMultiplier, fallback.orbitalYieldMultiplier, 0.05, 5),
+      reserveScale: profileNumber(profile.reserveScale, fallback.reserveScale, 0.05, 10),
+      travelTimeMultiplier: profileNumber(profile.travelTimeMultiplier, fallback.travelTimeMultiplier, 0.1, 5),
+      tidalLocked: typeof profile.tidalLocked === "boolean" ? profile.tidalLocked : fallback.tidalLocked,
+      sulfuricOcean: typeof profile.sulfuricOcean === "boolean" ? profile.sulfuricOcean : fallback.sulfuricOcean,
+      specialization: isPlanetSpecialization(profile.specialization) ? profile.specialization : fallback.specialization,
+      specializationName: typeof profile.specializationName === "string" && profile.specializationName.trim()
+        ? profile.specializationName.trim().slice(0, 48)
+        : fallback.specializationName,
+      productionSpeedMultiplier: profileNumber(profile.productionSpeedMultiplier, fallback.productionSpeedMultiplier, 0.1, 5),
+      surveyDurationSeconds: profileNumber(profile.surveyDurationSeconds, fallback.surveyDurationSeconds, 0, 86_400),
+    };
+  }
+
+  const sourceRoles = source.planetRoles && typeof source.planetRoles === "object"
+    ? source.planetRoles as Record<string, unknown>
+    : {};
+  for (const planetId of Object.keys(normalized.planetRoles) as PlanetId[]) {
+    const role = sourceRoles[planetId];
+    if (PLANET_INDUSTRY_ROLES.includes(role as PlanetIndustryRole)) normalized.planetRoles[planetId] = role as PlanetIndustryRole;
+  }
+  return normalized;
+}
+
 export function getPlanetIndustrialProfile(state: { galaxy?: GalaxyState }, planetId: PlanetId): PlanetIndustrialProfile {
   return state.galaxy?.profiles?.[planetId] ?? createGalaxyState(DEFAULT_GALAXY_SEED, true).profiles[planetId];
+}
+
+export function getRecommendedPlanetRole(
+  state: { galaxy?: GalaxyState },
+  planetId: PlanetId,
+): Exclude<PlanetIndustryRole, "auto"> {
+  const specialization = getPlanetIndustrialProfile(state, planetId).specialization;
+  if (specialization === "smelting") return "smelting";
+  if (specialization === "chemical") return "chemical";
+  if (specialization === "logistics") return "logistics";
+  if (specialization === "research") return "research";
+  if (specialization === "particle") return "manufacturing";
+  return "manufacturing";
 }
 
 export function isInfiniteResource(itemId: ItemId, planetId: PlanetId, mode: ResourceMode): boolean {

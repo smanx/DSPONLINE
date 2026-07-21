@@ -38,5 +38,6 @@ describe("stellar industry selectors", () => {
     const summary = getPlanetIndustrySummaries(state).find((planet) => planet.planetId === "frost")!;
     expect(summary.configuredImports).toBeGreaterThan(0);
     expect(summary.roleLabel).toContain("物流");
+    expect(summary.recommendedRole).toBe("chemical");
   });
 });

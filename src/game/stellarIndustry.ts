@@ -13,7 +13,7 @@ import {
   isTechnologyCompleted,
   stationRouteRequiresWarp,
 } from "./engine";
-import { PLANET_INDUSTRY_ROLE_LABELS, isInfiniteResource } from "./galaxy";
+import { PLANET_INDUSTRY_ROLE_LABELS, getRecommendedPlanetRole, isInfiniteResource } from "./galaxy";
 import type {
   FactoryEntity,
   GameState,
@@ -92,6 +92,7 @@ export interface PlanetIndustrySummary {
   role: PlanetIndustryRole;
   roleLabel: string;
   detectedRole: Exclude<PlanetIndustryRole, "auto">;
+  recommendedRole: Exclude<PlanetIndustryRole, "auto">;
   tags: string[];
   deviceCount: number;
   activeDeviceCount: number;
@@ -307,8 +308,9 @@ function detectedPlanetRole(game: GameState, planetId: PlanetId): Exclude<Planet
     if (building.family === "chemical") scores.chemical += count;
     if (entity.buildingId === "matrix_lab") scores.research += count * 1.5;
   }
-  return (Object.entries(scores) as Array<[Exclude<PlanetIndustryRole, "auto">, number]>)
-    .sort((a, b) => b[1] - a[1])[0]?.[0] ?? "mining";
+  const detected = (Object.entries(scores) as Array<[Exclude<PlanetIndustryRole, "auto">, number]>)
+    .sort((a, b) => b[1] - a[1])[0];
+  return detected && detected[1] > 0 ? detected[0] : getRecommendedPlanetRole(game, planetId);
 }
 
 export function getPlanetIndustrySummaries(game: GameState, routes = getStellarRouteSnapshots(game)): PlanetIndustrySummary[] {
@@ -320,6 +322,7 @@ export function getPlanetIndustrySummaries(game: GameState, routes = getStellarR
     const miningPerMinute = veins.reduce((sum, vein) => sum + Math.max(0, vein.productionRate), 0);
     const depletedVeins = veins.filter((vein) => (vein.resourceRemaining ?? 0) <= 0).length;
     const detectedRole = detectedPlanetRole(game, planet.id);
+    const recommendedRole = getRecommendedPlanetRole(game, planet.id);
     const role = game.galaxy.planetRoles?.[planet.id] ?? "auto";
     const metrics = getPlanetMetrics(game, planet.id);
     const planetRoutes = routes.filter((route) => route.targetPlanetId === planet.id || route.sourcePlanetId === planet.id);
@@ -344,6 +347,7 @@ export function getPlanetIndustrySummaries(game: GameState, routes = getStellarR
       role,
       roleLabel: role === "auto" ? `${PLANET_INDUSTRY_ROLE_LABELS.auto} · ${PLANET_INDUSTRY_ROLE_LABELS[detectedRole]}` : PLANET_INDUSTRY_ROLE_LABELS[role],
       detectedRole,
+      recommendedRole,
       tags: [...categoryTags],
       deviceCount: entities.reduce((sum, entity) => sum + entity.machineCount + entity.minerCount, 0),
       activeDeviceCount,

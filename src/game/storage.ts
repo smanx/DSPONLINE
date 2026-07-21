@@ -11,9 +11,9 @@ import { BUILDINGS, ITEMS, PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, get
 import { normalizeCampaignState, syncCampaignProgress } from "./campaign";
 import { isDifficultyMode } from "./difficulty";
 import { isAchievementId } from "./progression";
-import { createGalaxyState, createVeinReserve, isInfiniteResource } from "./galaxy";
+import { createVeinReserve, isInfiniteResource, normalizeGalaxyState } from "./galaxy";
 import { createEndgameState, getOfflineSimulationLimitSeconds } from "./endgame";
-import type { BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CargoStackSize, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
+import type { BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CargoStackSize, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -220,11 +220,6 @@ function deployedCount(entities: FactoryEntity[], buildingId: BuildingId): numbe
 
 function validPlanetId(value: unknown): value is PlanetId {
   return typeof value === "string" && PLANET_LIST.some((planet) => planet.id === value);
-}
-
-function validPlanetIndustryRole(value: unknown): value is PlanetIndustryRole {
-  return value === "auto" || value === "mining" || value === "smelting" || value === "manufacturing" ||
-    value === "chemical" || value === "research" || value === "logistics" || value === "power";
 }
 
 function validStarSystemId(value: unknown): value is StarSystemId {
@@ -451,11 +446,7 @@ export function migrateGame(value: unknown): GameState | null {
   const saved = value as Record<string, any>;
   if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
-  const galaxy = createGalaxyState(saved.version >= 20 ? saved.galaxy?.seed : initial.galaxy.seed, saved.version < 20);
-  for (const planet of PLANET_LIST) {
-    const savedRole = saved.galaxy?.planetRoles?.[planet.id];
-    if (validPlanetIndustryRole(savedRole)) galaxy.planetRoles[planet.id] = savedRole;
-  }
+  const galaxy = normalizeGalaxyState(saved.version >= 20 ? saved.galaxy : { seed: initial.galaxy.seed }, saved.version < 20);
   const entities = saved.entities.map((entity: FactoryEntity) => {
     const currentResource = saved.version < 13
       ? initial.entities.find((candidate) => candidate.kind === "vein" && candidate.id === entity.id)

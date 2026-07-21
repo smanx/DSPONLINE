@@ -600,10 +600,10 @@ export function getInterstellarRouteEconomics(
   const orbitSpan = Math.max(1, Math.abs(sourcePlanet.orbitIndex - targetPlanet.orbitIndex));
   const sourceProfile = getPlanetIndustrialProfile(state, source.planetId);
   const targetProfile = getPlanetIndustrialProfile(state, target.planetId);
-  const environmentFactor = requiresWarp ? (sourceProfile.travelTimeMultiplier + targetProfile.travelTimeMultiplier) / 2 : 1;
+  const environmentFactor = (sourceProfile.travelTimeMultiplier + targetProfile.travelTimeMultiplier) / 2;
   const routeFactor = requiresWarp
     ? Math.min(1.55, 0.78 + distanceLy / 35)
-    : 1;
+    : 0.9 + orbitSpan * 0.1;
   const durationSeconds = round(getInterstellarTripSeconds(state, requiresWarp) * environmentFactor * routeFactor, 2);
   const vessels = Math.max(1, Math.floor(vehicleCount));
   const cargoPerTrip = getInterstellarCargoCapacity(state) * vessels;

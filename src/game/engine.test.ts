@@ -1236,12 +1236,18 @@ describe("factory simulation", () => {
     expect(getEntityOperatingStatus(state, state.entities.find((entity) => entity.id === demandId)!).code).toBe("missing-vessel");
     state.portableFleet.logistics_vessel = 1;
     state = adjustStationVessels(state, demandId, 1);
+    const expectedTripSeconds = getInterstellarRouteEconomics(
+      state,
+      state.entities.find((entity) => entity.id === supplyId)!,
+      state.entities.find((entity) => entity.id === demandId)!,
+      1,
+    ).durationSeconds;
     state = advanceSimulation(state, 15);
 
     expect(state.entities.find((entity) => entity.id === demandId)?.outputs.titanium_ingot ?? 0).toBe(0);
-    expect(state.entities.find((entity) => entity.id === demandId)?.stationProgress).toBeCloseTo(0.5, 3);
+    expect(state.entities.find((entity) => entity.id === demandId)?.stationProgress).toBeCloseTo(15 / expectedTripSeconds, 3);
 
-    state = advanceSimulation(state, 16);
+    state = advanceSimulation(state, Math.ceil(expectedTripSeconds - 15) + 1);
     const supply = state.entities.find((entity) => entity.id === supplyId)!;
     const demand = state.entities.find((entity) => entity.id === demandId)!;
     expect(supply.outputs.titanium_ingot).toBe(40);
@@ -2384,11 +2390,17 @@ describe("factory simulation", () => {
     state = setStationMinimumLoad(state, stationId, 0.1);
     state.portableFleet.logistics_vessel = 1;
     state = adjustStationVessels(state, stationId, 1);
-    state = advanceSimulation(state, 40);
+    const expectedTripSeconds = getInterstellarRouteEconomics(
+      state,
+      state.entities.find((entity) => entity.id === collectorId)!,
+      state.entities.find((entity) => entity.id === stationId)!,
+      1,
+    ).durationSeconds;
+    state = advanceSimulation(state, Math.ceil(expectedTripSeconds) + 12);
 
     const collector = state.entities.find((entity) => entity.id === collectorId)!;
     const station = state.entities.find((entity) => entity.id === stationId)!;
-    expect(state.totalProduced.hydrogen).toBe(40);
+    expect(state.totalProduced.hydrogen).toBeGreaterThan(40);
     expect(station.outputs.hydrogen).toBeGreaterThanOrEqual(10);
     expect(collector.outputs.hydrogen).toBeLessThan(40);
     expect(station.stationTrips).toBe(1);
@@ -2671,8 +2683,38 @@ describe("factory simulation", () => {
     expect(remote.distanceLy).toBeCloseTo(4.2, 1);
     expect(remote.warpersPerTrip).toBe(1);
     expect(remote.durationSeconds).toBeLessThan(local.durationSeconds);
+    const homeProbe = state.entities.find((entity) => entity.id === "vein_iron")!;
+    const ashenProbe = state.entities.find((entity) => entity.id === "ashen_iron")!;
+    const giantProbe = { ...ashenProbe, id: "giant_probe", planetId: "giant" as const };
+    const neighboringOrbit = getInterstellarRouteEconomics(state, homeProbe, ashenProbe, 1);
+    const distantOrbit = getInterstellarRouteEconomics(state, homeProbe, giantProbe, 1);
+    expect(neighboringOrbit.orbitSpan).toBe(1);
+    expect(distantOrbit.orbitSpan).toBe(2);
+    expect(distantOrbit.durationSeconds).toBeGreaterThan(neighboringOrbit.durationSeconds);
     state = setPlanetIndustryRole(state, "frost", "chemical");
     expect(state.galaxy.planetRoles.frost).toBe("chemical");
+  });
+
+  it("applies a planet specialization to real machine cycle speed", () => {
+    let state = createInitialState();
+    state.construction.wind_turbine = 12;
+    state.construction.arc_smelter = 2;
+    state = placeBuilding(state, "wind_turbine", { x: -200, y: -200 }, 6);
+    state = placeBuilding(state, "arc_smelter", { x: 100, y: 0 });
+    const homeSmelter = state.entities.find((entity) => entity.planetId === "home" && entity.buildingId === "arc_smelter")!;
+    state = setEntityRecipe(state, homeSmelter.id, "iron_ingot");
+    state.entities.find((entity) => entity.id === homeSmelter.id)!.inputs.iron_ore = 30;
+
+    state = setActivePlanet(state, "ashen");
+    state = placeBuilding(state, "wind_turbine", { x: -200, y: -200 }, 6);
+    state = placeBuilding(state, "arc_smelter", { x: 100, y: 0 });
+    const ashenSmelter = state.entities.find((entity) => entity.planetId === "ashen" && entity.buildingId === "arc_smelter")!;
+    state = setEntityRecipe(state, ashenSmelter.id, "iron_ingot");
+    state.entities.find((entity) => entity.id === ashenSmelter.id)!.inputs.iron_ore = 30;
+
+    state = advanceSimulation(state, 10);
+    expect(state.entities.find((entity) => entity.id === homeSmelter.id)?.outputs.iron_ingot).toBe(10);
+    expect(state.entities.find((entity) => entity.id === ashenSmelter.id)?.outputs.iron_ingot).toBe(11);
   });
 
   it("isolates a device in a separate power grid and reports coverage loss", () => {

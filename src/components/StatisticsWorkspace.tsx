@@ -368,7 +368,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
           </section>
           <section className="planet-profile-ledger">
             <header><span>当前行星工业档案</span><strong>种子 #{game.galaxy.seed}</strong></header>
-            {(() => { const profile = getPlanetIndustrialProfile(game, game.activePlanetId); return <div className="planet-profile-grid"><span>风力 <strong>{Math.round(profile.windMultiplier * 100)}%</strong></span><span>光照 <strong>{Math.round(profile.solarMultiplier * 100)}%</strong></span><span>采矿 <strong>{Math.round(profile.miningMultiplier * 100)}%</strong></span><span>{profile.tidalLocked ? "潮汐锁定" : "自转周期"} <strong>{profile.tidalLocked ? "是" : "常规"}</strong></span><span>专属加成 <strong>{profile.specializationName}</strong></span></div>; })()}
+            {(() => { const profile = getPlanetIndustrialProfile(game, game.activePlanetId); return <div className="planet-profile-grid"><span>矿脉储量 <strong>{Math.round(profile.reserveScale * 100)}%</strong></span><span>采矿速度 <strong>{Math.round(profile.miningMultiplier * 100)}%</strong></span><span>风力 <strong>{Math.round(profile.windMultiplier * 100)}%</strong></span><span>光照 <strong>{Math.round(profile.solarMultiplier * 100)}%</strong></span><span>地热 <strong>{Math.round(profile.geothermalMultiplier * 100)}%</strong></span><span>航程时间 <strong>{Math.round(profile.travelTimeMultiplier * 100)}%</strong></span><span>{profile.tidalLocked ? "潮汐锁定" : "自转周期"} <strong>{profile.tidalLocked ? "是" : "常规"}</strong></span><span>专属加成 <strong>{profile.specializationName}</strong></span></div>; })()}
           </section>
           <section className="consumer-ledger">
             <header><span>耗电设备</span><span>当前需求</span><span>额定需求</span><span>状态</span></header>

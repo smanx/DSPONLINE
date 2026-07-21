@@ -8768,9 +8768,9 @@ select:focus-visible {
 .star-planet-list > button {
   display: grid;
   width: 100%;
-  min-height: 72px;
+  min-height: 108px;
   grid-template-columns: 28px minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
+  grid-template-rows: auto auto auto auto;
   align-items: center;
   gap: 2px 8px;
   padding: 9px 10px;
@@ -8838,6 +8838,50 @@ select:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.star-planet-list > button > .star-planet-profile {
+  min-width: 0;
+  grid-column: 2 / -1;
+  grid-row: 3;
+  margin-top: 2px;
+  overflow: hidden;
+  color: #87bcae;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.star-planet-list > button > .star-planet-traits {
+  display: grid;
+  min-width: 0;
+  grid-column: 2 / -1;
+  grid-row: 4;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.star-planet-traits b {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 3px 2px;
+  border: 1px solid #2c3c36;
+  border-radius: 3px;
+  background: #101613;
+  color: #769087;
+  font-size: 7px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.star-planet-list > button .star-planet-traits strong {
+  overflow: visible;
+  color: #b7d9cf;
+  font-size: 7px;
+  text-overflow: clip;
 }
 
 .star-exploration,
@@ -12477,7 +12521,7 @@ select {
   }
 
   .star-planet-list > button {
-    min-height: 68px;
+    min-height: 104px;
   }
 
   .recipe-header {

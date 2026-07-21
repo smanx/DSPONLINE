@@ -32,8 +32,12 @@ describe("game storage", () => {
   it("round-trips planet industry roles and defaults them for legacy saves", () => {
     const state = createInitialState();
     state.galaxy.planetRoles.home = "manufacturing";
+    state.galaxy.profiles.home.windMultiplier = 1.37;
+    state.galaxy.profiles.home.reserveScale = 0.83;
     saveGame(state);
-    expect(loadGame().state.galaxy.planetRoles.home).toBe("manufacturing");
+    const restored = loadGame().state.galaxy;
+    expect(restored.planetRoles.home).toBe("manufacturing");
+    expect(restored.profiles).toEqual(state.galaxy.profiles);
 
     const legacy = JSON.parse(JSON.stringify(state));
     legacy.version = 22;

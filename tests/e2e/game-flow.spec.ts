@@ -3477,6 +3477,12 @@ test("star map industrial console exposes global routes, planet roles and quick 
   await openStellarExplorationGame(page);
   await page.getByLabel("打开星图").click();
   const starMap = page.getByRole("dialog", { name: "星图" });
+  const ashenProfile = starMap.getByRole("button", { name: /烬原 II/ });
+  await expect(ashenProfile).toContainText("高热冶金");
+  await expect(ashenProfile.locator(".star-planet-traits")).toContainText("矿储 115%");
+  await expect(ashenProfile.locator(".star-planet-traits")).toContainText("光 150%");
+  await expect(ashenProfile.locator(".star-planet-traits")).toContainText("地热 100%");
+  await expect(ashenProfile.locator(".star-planet-traits")).toContainText("航程 105%");
   await starMap.getByRole("tab", { name: "星际工业" }).click();
   const industry = starMap.locator(".stellar-industry");
   await expect(industry).toBeVisible();
@@ -3484,6 +3490,8 @@ test("star map industrial console exposes global routes, planet roles and quick 
   await expect(industry.locator(".stellar-route-row")).toHaveCount(1);
   await expect(industry.locator(".stellar-route-row")).toContainText("光栅石");
   await expect(industry.locator(".stellar-route-row")).toContainText("翘曲");
+  const frostIndustry = industry.locator(".stellar-planet-row").filter({ has: page.getByText("霜原 I", { exact: true }) });
+  await expect(frostIndustry.locator(".stellar-planet-metrics")).toContainText("宜 化工基地");
   await page.screenshot({ path: "artifacts/qa/stellar-industry-1440.png", fullPage: true });
 
   await starMap.getByRole("tab", { name: "星图探索" }).click();

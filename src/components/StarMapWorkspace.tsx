@@ -2,7 +2,7 @@ import { AlertTriangle, ArrowRight, Check, Factory, Gauge, LocateFixed, LockKeyh
 import { useMemo, useState, type CSSProperties } from "react";
 import { STAR_SYSTEM_LIST, getItem, getPlanet, getStarSystem, getTechnology } from "../game/content";
 import { canColonizePlanet, canExploreStarSystem, getStationSlots, isPlanetColonized, isStarSystemUnlocked, isTechnologyCompleted } from "../game/engine";
-import { getPlanetIndustrialProfile, PLANET_INDUSTRY_ROLE_LABELS } from "../game/galaxy";
+import { getPlanetIndustrialProfile, getRecommendedPlanetRole, PLANET_INDUSTRY_ROLE_LABELS } from "../game/galaxy";
 import { getInterplanetaryLogisticsDiagnostics, getPlanetIndustrySummaries, getRouteDistanceLabel, getRouteEndpointLabel, getStarSystemIndustrySummaries, getStellarRouteSnapshots } from "../game/stellarIndustry";
 import type { GameState, LogisticsPriority, PlanetId, PlanetIndustryRole, StarSystemId, StationMinimumLoad } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
@@ -92,7 +92,7 @@ function IndustryConsole({ game, onTravel, onRoleChange, onStationPriorityChange
                       <span><strong>{planet.name}</strong><small>{summary.tags.length > 0 ? summary.tags.join(" · ") : planet.environment}</small></span>
                     </button>
                     <label><span>工业角色</span><select aria-label={`${planet.name}工业角色`} value={summary.role} onChange={(event) => onRoleChange(planetId, event.target.value as PlanetIndustryRole)}>{PLANET_ROLES.map((role) => <option value={role} key={role}>{PLANET_INDUSTRY_ROLE_LABELS[role]}{role === "auto" ? ` · ${PLANET_INDUSTRY_ROLE_LABELS[summary.detectedRole]}` : ""}</option>)}</select></label>
-                    <div className="stellar-planet-metrics"><span><Zap size={11} />{Math.round(summary.powerFactor * 100)}%</span><span>进 {summary.configuredImports}</span><span>出 {summary.configuredExports}</span><span>储 {compactNumber(summary.reserveRemaining)}</span></div>
+                    <div className="stellar-planet-metrics"><span><Zap size={11} />{Math.round(summary.powerFactor * 100)}%</span><span>宜 {PLANET_INDUSTRY_ROLE_LABELS[summary.recommendedRole]}</span><span>进 {summary.configuredImports}</span><span>出 {summary.configuredExports}</span><span>储 {compactNumber(summary.reserveRemaining)}</span></div>
                     {summary.issues.length > 0 ? <button className="stellar-problem-jump" type="button" onClick={() => summary.issues[0].entityId ? onFocusStation(summary.issues[0].entityId, planetId) : onTravel(planetId)}><LocateFixed size={12} />{summary.issues[0].label}</button> : <small className="stellar-depletion"><Timer size={11} />枯竭预测 {formatDepletion(summary.depletionSeconds)}</small>}
                   </div>
                 );
@@ -229,6 +229,8 @@ export function StarMapWorkspace({
                 <div className="star-planet-list">
                   {system.planetIds.map((planetId) => {
                     const planet = getPlanet(planetId);
+                    const profile = getPlanetIndustrialProfile(game, planet.id);
+                    const recommendedRole = getRecommendedPlanetRole(game, planet.id);
                     const current = game.activePlanetId === planetId;
                     const deviceCount = game.entities.reduce((sum, entity) => entity.planetId === planetId
                       ? sum + entity.machineCount + entity.minerCount
@@ -246,7 +248,14 @@ export function StarMapWorkspace({
                         <span><strong>{planet.name}</strong><small>{planet.environment}</small></span>
                          <em>{isPlanetColonized(game, planet.id) ? planet.kind === "gas-giant" ? "轨道" : `${deviceCount} 设备` : "未殖民"}</em>
                          <p>{planet.resources}</p>
-                         <small className="star-planet-profile">{getPlanetIndustrialProfile(game, planet.id).specializationName} · 风 {Math.round(getPlanetIndustrialProfile(game, planet.id).windMultiplier * 100)}%</small>
+                         <small className="star-planet-profile">{profile.specializationName} · 宜 {PLANET_INDUSTRY_ROLE_LABELS[recommendedRole]}</small>
+                         <span className="star-planet-traits" aria-label={`${planet.name}工业环境`}>
+                           <b title={planet.kind === "gas-giant" ? "轨道采集产率" : "有限矿脉总储量"}>{planet.kind === "gas-giant" ? "轨采" : "矿储"} <strong>{Math.round((planet.kind === "gas-giant" ? profile.orbitalYieldMultiplier : profile.reserveScale) * 100)}%</strong></b>
+                           <b title="风力发电倍率">风 <strong>{Math.round(profile.windMultiplier * 100)}%</strong></b>
+                           <b title="太阳能发电倍率">光 <strong>{Math.round(profile.solarMultiplier * 100)}%</strong></b>
+                           <b title="地热发电倍率">地热 <strong>{Math.round(profile.geothermalMultiplier * 100)}%</strong></b>
+                           <b title="跨行星航程时间倍率">航程 <strong>{Math.round(profile.travelTimeMultiplier * 100)}%</strong></b>
+                         </span>
                       </button>
                     );
                   })}

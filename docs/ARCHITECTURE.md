@@ -47,6 +47,7 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 
 - `src/game/types.ts`：领域 ID、实体、线路、科研、银河、蓝图和 `GameState` 类型。
 - `src/game/content.ts`：物品、建筑、配方、施工成本、科技和内容闭合审计。
+- `src/game/galaxy.ts`：由持久化种子生成并归一化行星工业档案、有限矿储、环境推荐角色和设备专长适用范围；加载时优先保留已保存档案，缺字段才回退生成值。
 - `src/game/engine.ts`：确定性生产、电网、运输、科研、手搓、戴森与状态变更命令。
 - `src/game/network.ts`：线路占用、吞吐预测、连续网络与瓶颈诊断。
 - `src/game/statistics.ts`、`planning.ts`、`alerts.ts`：统计、目标产能反推和故障聚合。
@@ -66,6 +67,8 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 7. 按设置中的 2/10/30 秒间隔自动保存，并在卸载前再保存一次。
 
 模拟器应保持纯状态输入和确定性输出。新增随机机制必须从持久化 seed 派生，不能直接依赖 `Math.random()` 或墙上时钟，否则基准哈希、离线结算和云存档会分叉。
+
+行星矿储、能源、航程和专长倍率保存在 `GameState.galaxy.profiles`。`migrateGame()` 会验证并恢复已有倍率，而不是只用 seed 重抽；因此首次保存、云端往返和跨设备加载不会改变同一工厂的环境数值。
 
 ## 4. 内容模型
 
