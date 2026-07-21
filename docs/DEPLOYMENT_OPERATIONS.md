@@ -28,6 +28,8 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
+当前正式基线为 `0.2.0-e6e7daf113dc`，香港与上海的 Web/API `current` 均指向该发布目录。两个节点的 `previous-release` 均指向 schema v5 兼容的 `0.2.0-e983476809bc`；上海的该目标已经用生产备份副本在隔离端口验证。完整哈希与验收记录见 [releases/0.2.0.md](./releases/0.2.0.md)。
+
 ## 3. 绝对数据保护规则
 
 1. 不得删除、清空、重新初始化或用测试数据覆盖 `/var/lib/dsp-idle-cloud`。
@@ -85,14 +87,16 @@ node /path/to/backup-sqlite.mjs \
 
 前端回滚只需把 `current` 切回上一发布目录，不触碰数据库。
 
-仓库提供 `deploy/switch-release.sh` 原子切换前端与后端代码，并保存上一次代码指向。发布或回滚后都会验证 Nginx、云服务和本机健康接口：
+仓库提供 `deploy/switch-release.sh` 原子切换前端与后端代码，并保存上一次代码指向。两台正式节点已将同一脚本安装为 `/usr/local/sbin/dsp-idle-switch-release`；发布或回滚后都会验证 Nginx、云服务和本机健康接口：
 
 ```bash
-sudo bash deploy/switch-release.sh --web-release <web-id> --api-release <api-id>
-sudo bash deploy/switch-release.sh --rollback-last
+sudo dsp-idle-switch-release --web-release <web-id> --api-release <api-id>
+sudo dsp-idle-switch-release --rollback-last
 ```
 
 `--rollback-last` 只切换 `/var/www/dsp-idle/current` 与 `/opt/dsp-idle-cloud/current`，绝不恢复、替换或初始化数据库。
+
+执行 `--rollback-last` 前必须读取 `/var/lib/dsp-idle-cloud/release-state/previous-release`，确认两个目录存在且后端能读取当前 schema。数据库升级后不能把旧 schema 后端继续留作“一键回滚”目标；应先在当前数据库的一致性备份副本上用隔离端口完成兼容验证。
 
 云服务重启后，切换脚本默认在 10 秒窗口内短轮询本机健康接口，避免把 Node 尚未绑定端口的正常启动窗口误判为发布失败。可通过 `DSP_HEALTH_ATTEMPTS` 和 `DSP_HEALTH_DELAY_SECONDS` 调整，但不得以此掩盖持续启动错误。
 
@@ -186,6 +190,8 @@ chmod 0600 backup-private.pem
 
 恢复演练不得占用生产端口、不得修改生产 symlink，也不得让恢复实例接收正式域名流量。成功报告只记录 schema、数量、校验和和耗时，不包含邮箱、token 或存档 payload。安装到生产前先运行 `npm run test:ops`，再用真实生产备份副本执行一次人工演练。
 
+`0.2.0` 发布窗口已经完成首轮生产闭环：香港每日创建认证加密备份并通过固定主机指纹和受限 SFTP 账号传到上海；上海私钥未离开恢复节点，隔离恢复验证 schema v5、账号、会话、云存档、修订和玩家计数一致，结束后明文 SQLite 数量为 0。香港每日 timer 与上海每月 timer 均为 active，上海密文接收目录保留 30 天。
+
 ## 9. 监控与日常检查
 
 - `dsp-idle-cloud.service`：active，重启次数无异常。
@@ -196,7 +202,7 @@ chmod 0600 backup-private.pem
 - 磁盘：关注发布目录、日志、SQLite WAL 和备份增长。
 - `/api/admin/metrics`：验证管理员 token 后检查访问漏斗、错误、P95 延迟、限流、云冲突和备份状态。
 - `dsp-idle-node-health.timer`：每五分钟检查正式入口/API 延迟、磁盘可用比例和 TLS 剩余天数；状态写入受保护后台，可选 webhook 仅发送失败检查名称。
-- `dsp-idle-offsite-backup.timer` 与 `dsp-idle-restore-drill.timer`：检查最后成功时间、timer 上次结果和报告文件。
+- 香港 `dsp-idle-offsite-backup.timer` 与上海 `dsp-idle-restore-drill.timer`：检查最后成功时间、timer 上次结果和报告文件。
 - 玩家指标：检查 `players.total`、`players.today`、`players.online` 和 `players.onlineWindowSeconds`；两个节点分别统计，不能直接相加当作严格独立用户数。
 
 这些 oneshot 服务从 `/opt/dsp-idle-cloud/current/deploy` 软链接执行脚本。CLI 入口判断必须比较真实路径；若 unit 显示 `success` 却没有生成对应状态文件，应按空运行故障处理，不能视为监控或备份成功。
@@ -205,6 +211,6 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港优选流量已显著降低大陆访问延迟，但 2026-07-21 抽样仍发现静态 JS/CSS 未压缩。公共 Nginx snippet 中应明确配置 `gzip_types`，或引入 Brotli，并验证响应头和真实传输体积。改动前后都要检查缓存策略，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。
+`0.2.0` 已在香港与上海为 JS/CSS 启用 gzip，并验证 `Content-Encoding: gzip`；hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不再 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
-不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够，首屏主要受网络与资源体积影响。
+Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。上海节点本次验收约剩 11 GB（约 17.6%），发布目录、日志与备份增长应纳入日常磁盘检查。

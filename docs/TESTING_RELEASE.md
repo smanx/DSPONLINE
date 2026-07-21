@@ -148,7 +148,24 @@ Web 发布应至少记录：构建 ID、入口 HTML、主 JS/CSS 体积、压缩
 9. 发布后观察错误、延迟、备份、磁盘和云冲突。
 10. 只有验收完成后才创建正式标签和发布说明。
 
-## 6. 测试结构改进
+## 6. `0.2.0` 正式验收记录
+
+以下结果针对最终发布提交 `e6e7daf113dc` 和 release ID `0.2.0-e6e7daf113dc`，不是沿用旧构建的历史结论：
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm ci` | 通过 |
+| `npm run typecheck` | 通过 |
+| `npm test` | 228/228 通过 |
+| `npm run test:server` | 16/16 通过 |
+| `npm run test:ops` | 5/5 通过 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 83/83 通过 |
+| Release manifest | 75 个文件验证通过 |
+
+生产烟测覆盖 80%、100%、125%、150% 字体，390×844 手机竖屏、844×390 手机横屏、主菜单与工厂加载、上海 HTTP 云功能禁用、管理端点 `401` 保护、两地 schema v5 健康检查以及 JS/CSS gzip。发布证据与产物哈希见 [releases/0.2.0.md](./releases/0.2.0.md)。
+
+## 7. 测试结构改进
 
 - 将 3000 多行 E2E 文件按 `menu-save`、`core-loop`、`logistics`、`mobile`、`endgame`、`operations` 分拆。
 - 为云服务增加独立 API 测试文件和临时 SQLite 重启测试。

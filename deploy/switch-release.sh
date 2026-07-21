@@ -4,8 +4,11 @@ set -Eeuo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  sudo bash deploy/switch-release.sh --web-release <id> --api-release <id>
-  sudo bash deploy/switch-release.sh --rollback-last
+  sudo dsp-idle-switch-release --web-release <id> --api-release <id>
+  sudo dsp-idle-switch-release --rollback-last
+
+From a repository checkout, replace dsp-idle-switch-release with
+"bash deploy/switch-release.sh".
 
 Only frontend/backend code symlinks are switched. The production database is never restored or replaced.
 EOF
