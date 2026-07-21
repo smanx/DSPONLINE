@@ -1,5 +1,21 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+import { execFileSync } from "node:child_process";
+
+function gitText(args: string[]): string | null {
+  try {
+    return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return null;
+  }
+}
+
+const appVersion = process.env.npm_package_version ?? "0.1.0";
+const gitSha = process.env.DSP_GIT_SHA?.trim() || gitText(["rev-parse", "--short=12", "HEAD"]) || "nogit";
+const gitDirty = process.env.DSP_GIT_DIRTY == null
+  ? Boolean(gitText(["status", "--porcelain"]))
+  : process.env.DSP_GIT_DIRTY === "1";
+const buildId = process.env.DSP_BUILD_ID?.trim() || `${appVersion}+${gitSha}${gitDirty ? ".dirty" : ""}`;
 
 function scaleUiFontSizes(): Plugin {
   return {
@@ -27,8 +43,8 @@ export default defineConfig({
   base: "./",
   plugins: [scaleUiFontSizes(), react()],
   define: {
-    __APP_VERSION__: JSON.stringify(process.env.npm_package_version ?? "0.1.0"),
-    __BUILD_ID__: JSON.stringify(process.env.DSP_BUILD_ID ?? new Date().toISOString()),
+    __APP_VERSION__: JSON.stringify(appVersion),
+    __BUILD_ID__: JSON.stringify(buildId),
   },
   build: {
     rolldownOptions: {

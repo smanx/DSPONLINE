@@ -83,6 +83,15 @@ node /path/to/backup-sqlite.mjs \
 
 前端回滚只需把 `current` 切回上一发布目录，不触碰数据库。
 
+仓库提供 `deploy/switch-release.sh` 原子切换前端与后端代码，并保存上一次代码指向。发布或回滚后都会验证 Nginx、云服务和本机健康接口：
+
+```bash
+sudo bash deploy/switch-release.sh --web-release <web-id> --api-release <api-id>
+sudo bash deploy/switch-release.sh --rollback-last
+```
+
+`--rollback-last` 只切换 `/var/www/dsp-idle/current` 与 `/opt/dsp-idle-cloud/current`，绝不恢复、替换或初始化数据库。
+
 ### 5.3 后端
 
 1. 上传到 `/opt/dsp-idle-cloud/releases/<build-id>`。

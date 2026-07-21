@@ -13,6 +13,7 @@
 - [测试与发布](docs/TESTING_RELEASE.md)：按改动风险选择测试及正式发布清单。
 - [后续路线图](docs/ROADMAP.md)：公开测试版之后的阶段顺序与完成标准。
 - [项目级 Skill](.codex/skills/develop-dspidle/SKILL.md)：供后续 Codex 开发自动读取项目约束。
+- [版本记录](CHANGELOG.md)：产品版本更新摘要；首个公网基线见 [0.1.0 发布记录](docs/releases/0.1.0.md)。
 
 正式入口：[https://dsponline.cn](https://dsponline.cn)。上海旧节点 `http://111.229.128.211` 保持独立服务；由于是 HTTP，云账号功能默认禁用。
 
