@@ -1,12 +1,16 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
 
-test.beforeEach(async ({ page }) => {
+async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
       window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-21");
     }
   });
+}
+
+test.beforeEach(async ({ page }) => {
+  await installTestBootstrap(page);
 });
 
 test("start menu gates simulation and exposes saves, cloud, import and settings", async ({ page }) => {
@@ -348,6 +352,19 @@ async function enableCoarsePointer(page: Page) {
       : nativeMatchMedia(query)) as typeof window.matchMedia;
     Object.defineProperty(navigator, "maxTouchPoints", { configurable: true, value: 5 });
   });
+}
+
+async function createTouchPage(browser: Browser, viewport: { width: number; height: number }) {
+  const context = await browser.newContext({
+    baseURL: "http://127.0.0.1:4318",
+    hasTouch: true,
+    isMobile: true,
+    viewport,
+  });
+  const page = await context.newPage();
+  await installTestBootstrap(page);
+  await enableCoarsePointer(page);
+  return { context, page };
 }
 
 async function placeOnCanvas(page: Page, title: string, x: number, y: number) {
@@ -1882,13 +1899,24 @@ test("mobile selection, long press and staged drawers survive orientation change
   const fullHeight = (await page.locator(".resource-rail").boundingBox())!.height;
   expect(fullHeight).toBeGreaterThan(halfHeight + 100);
 
-  const transformBefore = await page.locator(".react-flow__viewport").getAttribute("style");
+  const readViewportCenter = () => page.evaluate(() => {
+    const viewport = document.querySelector<HTMLElement>(".react-flow__viewport");
+    const flow = document.querySelector<HTMLElement>(".factory-canvas .react-flow");
+    if (!viewport || !flow) return null;
+    const matrix = new DOMMatrix(getComputedStyle(viewport).transform);
+    const bounds = flow.getBoundingClientRect();
+    return { x: (bounds.width / 2 - matrix.e) / matrix.a, y: (bounds.height / 2 - matrix.f) / matrix.d, zoom: matrix.a };
+  });
+  const viewportBefore = await readViewportCenter();
   await page.setViewportSize({ width: 844, height: 390 });
   await page.waitForTimeout(180);
   await expect(page.locator(".react-flow__node.selected")).toHaveCount(2);
   await expect(page.locator(".game-shell")).toHaveClass(/mobile-panel--resources/);
   await expect(page.locator(".game-shell")).toHaveClass(/mobile-panel-stage--full/);
-  await expect(page.locator(".react-flow__viewport")).toHaveAttribute("style", transformBefore!);
+  const viewportAfter = await readViewportCenter();
+  expect(viewportAfter!.zoom).toBeCloseTo(viewportBefore!.zoom, 2);
+  expect(viewportAfter!.x).toBeCloseTo(viewportBefore!.x, 0);
+  expect(viewportAfter!.y).toBeCloseTo(viewportBefore!.y, 0);
 
   await page.setViewportSize({ width: 390, height: 844 });
   const swipeHandle = page.getByLabel("收起为半屏面板");
@@ -1905,6 +1933,84 @@ test("mobile selection, long press and staged drawers survive orientation change
   await page.mouse.move(handleBounds!.x + handleBounds!.width / 2, handleBounds!.y + 100, { steps: 4 });
   await page.mouse.up();
   await expect(page.locator(".game-shell")).not.toHaveClass(/mobile-panel--resources/);
+});
+
+test("mobile pinch zoom stays responsive and does not trigger the long-press menu", async ({ browser }) => {
+  const { context, page } = await createTouchPage(browser, { width: 390, height: 844 });
+  try {
+    await freshGame(page);
+    await page.getByLabel("关闭启动引导").click();
+    const readZoom = () => page.locator(".react-flow__viewport").evaluate((element) => new DOMMatrix(getComputedStyle(element).transform).a);
+    const before = await readZoom();
+    const center = await page.evaluate(() => {
+      const pane = document.querySelector<HTMLElement>(".react-flow__pane");
+      if (!pane) return null;
+      const bounds = pane.getBoundingClientRect();
+      for (let y = bounds.top + 80; y <= bounds.bottom - 80; y += 24) {
+        for (let x = bounds.left + 90; x <= bounds.right - 90; x += 20) {
+          const clear = [-76, -32, 32, 76].every((offset) => document.elementFromPoint(x + offset, y) === pane);
+          if (clear) return { x: Math.round(x), y: Math.round(y) };
+        }
+      }
+      return null;
+    });
+    expect(center).not.toBeNull();
+    const session = await context.newCDPSession(page);
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [
+      { x: center!.x - 32, y: center!.y, id: 1, radiusX: 4, radiusY: 4, force: 1 },
+      { x: center!.x + 32, y: center!.y, id: 2, radiusX: 4, radiusY: 4, force: 1 },
+    ] });
+    await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [
+      { x: center!.x - 54, y: center!.y, id: 1, radiusX: 4, radiusY: 4, force: 1 },
+      { x: center!.x + 54, y: center!.y, id: 2, radiusX: 4, radiusY: 4, force: 1 },
+    ] });
+    await page.waitForTimeout(40);
+    await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [
+      { x: center!.x - 76, y: center!.y, id: 1, radiusX: 4, radiusY: 4, force: 1 },
+      { x: center!.x + 76, y: center!.y, id: 2, radiusX: 4, radiusY: 4, force: 1 },
+    ] });
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect.poll(readZoom).toBeGreaterThan(before * 1.15);
+    await expect(page.getByRole("dialog", { name: "设备快捷操作" })).toHaveCount(0);
+  } finally {
+    await context.close();
+  }
+});
+
+test("coarse-pointer connection preview snaps to a nearby target port", async ({ browser }) => {
+  const { context, page } = await createTouchPage(browser, { width: 844, height: 390 });
+  try {
+    await openMultiSlotStationRoutingGame(page);
+    await page.locator(".react-flow__controls-fitview").click();
+    const source = page.locator('.react-flow__node[data-id="multi_station"] .node-port').filter({ hasText: "钛块" }).locator(".factory-handle--output");
+    const target = page.locator('.react-flow__node[data-id="multi_alloy"] .node-port--input').filter({ hasText: "钛块" }).locator(".factory-handle--input");
+    await source.tap();
+    const targetBox = await target.boundingBox();
+    const targetCenter = { x: targetBox!.x + targetBox!.width / 2, y: targetBox!.y + targetBox!.height / 2 };
+    const nearPoint = { x: targetBox!.x - 40, y: targetCenter.y };
+    await page.mouse.move(nearPoint.x, nearPoint.y, { steps: 6 });
+    const preview = page.locator(".factory-click-connection-preview");
+    await expect(preview.locator(".factory-connection-preview")).toHaveClass(/factory-connection-preview--valid/);
+    await expect.poll(async () => Number(await preview.locator(".factory-connection-preview__target").getAttribute("cx"))).toBeCloseTo(targetCenter.x, 0);
+    await page.touchscreen.tap(nearPoint.x, nearPoint.y);
+    await expect(page.locator(".react-flow__edge")).toHaveCount(1);
+  } finally {
+    await context.close();
+  }
+});
+
+test("low-end phones automatically use the lightweight renderer", async ({ page }) => {
+  await enableCoarsePointer(page);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "deviceMemory", { configurable: true, value: 2 });
+    Object.defineProperty(navigator, "hardwareConcurrency", { configurable: true, value: 2 });
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await freshGame(page);
+  const shell = page.locator(".game-shell");
+  await expect(shell).toHaveAttribute("data-mobile-performance", "true");
+  await expect(shell).toHaveAttribute("data-performance-mode", "true");
+  await expect(shell).toHaveAttribute("data-performance-auto", "true");
 });
 
 test("dragging matching ports creates a belt connection", async ({ page }) => {
@@ -2818,6 +2924,25 @@ test("a single port click arms a live connection preview and reveals automatic t
   await expect(clickPreview).toBeVisible();
   await expect(clickPreview.locator(".factory-connection-preview")).toHaveClass(/factory-connection-preview--pending/);
   await expect(page.getByText("自动选择配方", { exact: true })).toHaveCount(2);
+
+  const blankPoint = await page.evaluate(() => {
+    const pane = document.querySelector<HTMLElement>(".react-flow__pane");
+    if (!pane) return null;
+    const bounds = pane.getBoundingClientRect();
+    for (let y = bounds.top + 30; y < bounds.bottom - 30; y += 24) {
+      for (let x = bounds.left + 30; x < bounds.right - 30; x += 24) {
+        if (document.elementFromPoint(x, y) === pane) return { x, y };
+      }
+    }
+    return null;
+  });
+  expect(blankPoint).not.toBeNull();
+  await page.mouse.click(blankPoint!.x, blankPoint!.y);
+  await expect(clickPreview).toHaveCount(0);
+  await expect(page.getByRole("status")).toContainText("已取消运输线连接");
+
+  await source.click();
+  await expect(clickPreview).toBeVisible();
 
   const invalidBox = await invalidTarget.boundingBox();
   expect(invalidBox).not.toBeNull();

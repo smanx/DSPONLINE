@@ -3171,6 +3171,8 @@ select:focus-visible {
   color: var(--coral);
 }
 
+.selection-toolbar button.confirm { background: #193129; color: var(--green); }
+
 .selection-toolbar button:disabled {
   color: #505b56;
   cursor: default;
@@ -12203,6 +12205,9 @@ select:focus-visible {
   animation: none !important;
 }
 
+.game-shell[data-mobile-performance="true"] .react-flow__background { opacity: .42; }
+.game-shell[data-mobile-performance="true"] .react-flow__node:not(.selected) .factory-node { box-shadow: none; }
+
 .game-shell[data-performance-mode="true"] .factory-cargo-packets,
 .game-shell[data-reduced-motion="true"] .factory-cargo-packets {
   display: none;
@@ -16141,6 +16146,21 @@ input:focus-visible,
     width: 32px;
     height: 32px;
   }
+
+  .selection-toolbar {
+    max-width: calc(100% - 12px);
+    height: 42px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .selection-toolbar > span,
+  .selection-toolbar button {
+    height: 42px;
+    flex: 0 0 auto;
+  }
+
+  .selection-toolbar button { width: 40px; }
 
   .task-path-indicator,
   .network-focus-indicator {

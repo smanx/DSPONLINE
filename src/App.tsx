@@ -10,6 +10,7 @@ import {
   ViewportPortal,
   useNodesState,
   useReactFlow,
+  useStoreApi,
   type Connection,
   type Edge,
   type FinalConnectionState,
@@ -192,6 +193,7 @@ import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/s
 import type { OnboardingStepId } from "./game/onboarding";
 import { useCoarsePointer } from "./hooks/useCoarsePointer";
 import { useLongPress } from "./hooks/useLongPress";
+import { useLowEndMobile } from "./hooks/useLowEndMobile";
 import { usePlayerPresence } from "./hooks/usePlayerPresence";
 import { useSwipeDismiss } from "./hooks/useSwipeDismiss";
 
@@ -321,10 +323,11 @@ function getConnectionHandleTarget(target: EventTarget | null): ConnectionHandle
   return element && nodeId && handleId && handleType ? { element, nodeId, handleId, handleType } : null;
 }
 
-function findConnectionHandleAtPoint(x: number, y: number): ConnectionHandleTarget | null {
+function findConnectionHandleAtPoint(x: number, y: number, maximumDistance = 24, preferred?: (target: ConnectionHandleTarget) => boolean): ConnectionHandleTarget | null {
   const direct = getConnectionHandleTarget(document.elementFromPoint(x, y));
   if (direct) return direct;
   let nearest: { target: ConnectionHandleTarget; distance: number } | null = null;
+  let nearestPreferred: { target: ConnectionHandleTarget; distance: number } | null = null;
   for (const element of document.querySelectorAll<HTMLElement>(".factory-canvas .react-flow__handle")) {
     const target = getConnectionHandleTarget(element);
     if (!target) continue;
@@ -332,9 +335,10 @@ function findConnectionHandleAtPoint(x: number, y: number): ConnectionHandleTarg
     const dx = Math.max(bounds.left - x, 0, x - bounds.right);
     const dy = Math.max(bounds.top - y, 0, y - bounds.bottom);
     const distance = Math.hypot(dx, dy);
-    if (distance <= 24 && (!nearest || distance < nearest.distance)) nearest = { target, distance };
+    if (distance <= maximumDistance && (!nearest || distance < nearest.distance)) nearest = { target, distance };
+    if (distance <= maximumDistance && preferred?.(target) && (!nearestPreferred || distance < nearestPreferred.distance)) nearestPreferred = { target, distance };
   }
-  return nearest?.target ?? null;
+  return nearestPreferred?.target ?? nearest?.target ?? null;
 }
 
 function connectionFromDraft(draft: ConnectionDraft, target: ConnectionHandleTarget): Connection {
@@ -419,6 +423,7 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
   const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null);
   const [clickConnectionPreview, setClickConnectionPreview] = useState<ClickConnectionPreviewState | null>(null);
   const [clickConnectionTone, setClickConnectionTone] = useState<ConnectionPreviewTone>("pending");
+  const [clickConnectionSnapPoint, setClickConnectionSnapPoint] = useState<{ x: number; y: number } | null>(null);
   const [connectionHint, setConnectionHint] = useState<{ label: string; tone: "ready" | "blocked" | "warning" } | null>(null);
   const [viewportZoom, setViewportZoom] = useState(0.84);
   const [highlightedTaskId, setHighlightedTaskId] = useState<CampaignTaskId | null>(null);
@@ -445,6 +450,11 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
   const clickConnectionPreviewRef = useRef<ClickConnectionPreviewState | null>(null);
   const clickConnectionSucceededRef = useRef(false);
   const dragConnectionStartRef = useRef<{ x: number; y: number } | null>(null);
+  const connectRequestRef = useRef<(connection: Connection) => void>(() => undefined);
+  const suppressConnectionClickRef = useRef(false);
+  const suppressConnectionClickTimerRef = useRef(0);
+  const viewportRef = useRef({ x: 510, y: 250, zoom: 0.84 });
+  const canvasSizeRef = useRef<{ width: number; height: number } | null>(null);
   const continuousPlacementRef = useRef<{ entityId: string; buildingId: BuildingId; planetId: PlanetId } | null>(null);
   const ctrlHeldRef = useRef(false);
   const undoStackRef = useRef<GameState[]>([]);
@@ -460,7 +470,10 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
   const eventSequenceRef = useRef(0);
   const burstSequenceRef = useRef(0);
   const { screenToFlowPosition, setCenter, setViewport, fitView, getViewport } = useReactFlow();
+  const flowStore = useStoreApi<FactoryFlowNode, FactoryFlowEdge>();
   const coarsePointer = useCoarsePointer();
+  const lowEndMobile = useLowEndMobile();
+  const mobilePerformanceMode = coarsePointer && lowEndMobile;
   const mobilePanelSwipe = useSwipeDismiss<HTMLButtonElement>({
     axis: "y",
     direction: 1,
@@ -482,6 +495,44 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
       setMobilePanel(null);
     },
   });
+
+  useEffect(() => {
+    const canvas = factoryCanvasRef.current;
+    const flow = canvas?.querySelector<HTMLElement>(".react-flow") ?? canvas;
+    if (!flow || typeof ResizeObserver === "undefined") return;
+    let frame = 0;
+    const observer = new ResizeObserver(([entry]) => {
+      const nextSize = { width: entry.contentRect.width, height: entry.contentRect.height };
+      const previousSize = canvasSizeRef.current;
+      canvasSizeRef.current = nextSize;
+      if (!coarsePointer || !previousSize || nextSize.width <= 0 || nextSize.height <= 0 ||
+        (Math.abs(previousSize.width - nextSize.width) < 1 && Math.abs(previousSize.height - nextSize.height) < 1)) return;
+      const viewport = viewportRef.current;
+      const worldCenter = {
+        x: (previousSize.width / 2 - viewport.x) / viewport.zoom,
+        y: (previousSize.height / 2 - viewport.y) / viewport.zoom,
+      };
+      const preserved = {
+        x: nextSize.width / 2 - worldCenter.x * viewport.zoom,
+        y: nextSize.height / 2 - worldCenter.y * viewport.zoom,
+        zoom: viewport.zoom,
+      };
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        viewportRef.current = preserved;
+        void setViewport(preserved, { duration: 0 });
+      });
+    });
+    observer.observe(flow);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [coarsePointer, setViewport]);
+
+  useEffect(() => {
+    if (mobilePerformanceMode) setMinimapCollapsed(true);
+  }, [mobilePerformanceMode]);
 
   useEffect(() => { gameRef.current = game; }, [game]);
   useEffect(() => {
@@ -710,9 +761,9 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
       const simulationSeconds = simulationPendingSecondsRef.current;
       simulationPendingSecondsRef.current = 0;
       setGame((current) => advanceSimulation(current, simulationSeconds));
-    }, game.settings.performanceMode ? 250 : 100);
+    }, game.settings.performanceMode || mobilePerformanceMode ? 250 : 100);
     return () => window.clearInterval(timer);
-  }, [game.settings.performanceMode, game.settings.simulationSpeed]);
+  }, [game.settings.performanceMode, game.settings.simulationSpeed, mobilePerformanceMode]);
 
   useEffect(() => {
     const timer = window.setInterval(() => saveGame(gameRef.current), game.settings.autosaveIntervalSeconds * 1000);
@@ -865,10 +916,13 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
         event.preventDefault();
         redoGame();
       } else if (event.key === "Escape") {
+        flowStore.getState().cancelConnection();
+        flowStore.setState({ connectionClickStartHandle: null });
         clickConnectionPreviewRef.current = null;
         clickConnectionSucceededRef.current = false;
         setClickConnectionPreview(null);
         setClickConnectionTone("pending");
+        setClickConnectionSnapPoint(null);
         setConnectionDraft(null);
         setConnectionHint(null);
         setPlacement(null);
@@ -915,7 +969,7 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [commandPaletteOpen, commitGame, playTone, redoGame, undoGame]);
+  }, [commandPaletteOpen, commitGame, flowStore, playTone, redoGame, undoGame]);
 
   // Move keyboard focus into a newly opened workspace so keyboard and screen
   // reader users do not remain behind a modal overlay.
@@ -1130,9 +1184,9 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
 
   const alerts = useMemo(() => getFactoryAlerts(game), [game]);
   const activePlanetEntityCount = useMemo(() => game.entities.filter((entity) => entity.planetId === game.activePlanetId).length, [game.activePlanetId, game.entities]);
-  const automaticPerformanceMode = activePlanetEntityCount >= 300;
+  const automaticPerformanceMode = activePlanetEntityCount >= 300 || mobilePerformanceMode;
   const performanceVisualMode = game.settings.performanceMode || automaticPerformanceMode;
-  const largeFactoryMode = performanceVisualMode && activePlanetEntityCount >= 150;
+  const largeFactoryMode = performanceVisualMode && (activePlanetEntityCount >= 150 || mobilePerformanceMode);
 
   const updateSettings = useCallback((settings: Partial<GameSettings>) => {
     setGame((current) => ({ ...current, settings: { ...current.settings, ...settings } }));
@@ -2050,7 +2104,7 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
           monitored: belt.monitorEnabled ?? false,
           durationSeconds: Math.max(0.55, 1.65 - flowRatio * 0.9),
           detailVisible: !largeFactoryMode && viewportZoom >= 0.55,
-          motionEnabled: !game.settings.performanceMode && !game.settings.reducedMotion,
+          motionEnabled: !performanceVisualMode && !game.settings.reducedMotion,
           routeMode: belt.routeMode ?? "auto",
           routeCenterY: routeCenterFor(belt, bundle.index, bundle.size),
           bundleIndex: bundle.index,
@@ -2064,7 +2118,7 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
         },
       } satisfies FactoryFlowEdge;
     });
-  }, [beltBundleMap, focusedBeltNetwork, focusedNetworkBeltIds, game, highlightedTaskId, largeFactoryMode, nodes, selectedBeltId, taskHighlight.beltIds, viewportZoom]);
+  }, [beltBundleMap, focusedBeltNetwork, focusedNetworkBeltIds, game, highlightedTaskId, largeFactoryMode, nodes, performanceVisualMode, selectedBeltId, taskHighlight.beltIds, viewportZoom]);
 
   const isValidConnection = useCallback((connection: Connection | Edge) => {
     const sourceItem = parseHandleItem(connection.sourceHandle);
@@ -2113,13 +2167,19 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
     clickConnectionPreviewRef.current = preview;
     clickConnectionSucceededRef.current = false;
     setClickConnectionTone("pending");
+    setClickConnectionSnapPoint(null);
     setClickConnectionPreview(preview);
   }, [beginConnectionDraft]);
 
   useEffect(() => {
     const preview = clickConnectionPreview;
     if (!preview) return;
-    const handle = findConnectionHandleAtPoint(pointer.x, pointer.y);
+    const handle = findConnectionHandleAtPoint(
+      pointer.x,
+      pointer.y,
+      coarsePointer ? 56 : 24,
+      (candidate) => isValidConnection(connectionFromDraft(preview.draft, candidate)),
+    );
     const overOrigin = handle?.nodeId === preview.draft.nodeId && handle.handleType === preview.draft.handleType &&
       parseHandleItem(handle.handleId) === preview.draft.itemId;
     const tone = !handle || overOrigin
@@ -2127,9 +2187,13 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
       : isValidConnection(connectionFromDraft(preview.draft, handle)) ? "valid" : "invalid";
     setClickConnectionTone((current) => current === tone ? current : tone);
     if (!handle || overOrigin) {
+      setClickConnectionSnapPoint(null);
       setConnectionHint({ label: `${ITEMS[preview.draft.itemId].name} · 选择高亮输入端口`, tone: "ready" });
       return;
     }
+    const bounds = handle.element.getBoundingClientRect();
+    const snapPoint = { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
+    setClickConnectionSnapPoint((current) => current && Math.abs(current.x - snapPoint.x) < 0.5 && Math.abs(current.y - snapPoint.y) < 0.5 ? current : snapPoint);
     const connection = connectionFromDraft(preview.draft, handle);
     if (tone !== "valid" || !connection.source || !connection.target) {
       setConnectionHint({ label: "当前端口不可连接", tone: "blocked" });
@@ -2140,19 +2204,35 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
       label: forecast ? `${ITEMS[preview.draft.itemId].name} · ${forecast.label}` : `${ITEMS[preview.draft.itemId].name} · 可以连接`,
       tone: forecast?.tone === "capacity" || forecast?.tone === "starved" ? "blocked" : "ready",
     });
-  }, [beltTier, clickConnectionPreview, isValidConnection, pointer]);
+  }, [beltTier, clickConnectionPreview, coarsePointer, isValidConnection, pointer]);
 
   const onConnectEnd = useCallback((event: MouseEvent | TouchEvent, state: FinalConnectionState) => {
-    const releaseHandle = getConnectionHandleTarget(event.target);
     const endPoint = getEventPoint(event);
+    const draft = connectionDraft;
+    const releaseHandle = getConnectionHandleTarget(event.target) ?? (endPoint ? findConnectionHandleAtPoint(
+      endPoint.x,
+      endPoint.y,
+      coarsePointer ? 56 : 24,
+      draft ? (candidate) => isValidConnection(connectionFromDraft(draft, candidate)) : undefined,
+    ) : null);
     const startPoint = dragConnectionStartRef.current;
     dragConnectionStartRef.current = null;
     const releasedOnFromHandle = Boolean(releaseHandle && state.fromNode && state.fromHandle &&
       releaseHandle.nodeId === state.fromNode.id && releaseHandle.handleId === state.fromHandle.id && releaseHandle.handleType === state.fromHandle.type);
     const stationaryClick = Boolean(startPoint && endPoint && Math.hypot(endPoint.x - startPoint.x, endPoint.y - startPoint.y) <= 8);
     if (!state.isValid && releasedOnFromHandle && (stationaryClick || clickConnectionPreviewRef.current)) return;
-    const draft = connectionDraft;
+    if (!state.isValid && draft && releaseHandle) {
+      const snappedConnection = connectionFromDraft(draft, releaseHandle);
+      if (isValidConnection(snappedConnection)) {
+        setConnectionDraft(null);
+        setClickConnectionSnapPoint(null);
+        connectRequestRef.current(snappedConnection);
+        setConnectionHint({ label: `${ITEMS[draft.itemId].name}运输线已建立`, tone: "ready" });
+        return;
+      }
+    }
     setConnectionDraft(null);
+    setClickConnectionSnapPoint(null);
     if (state.isValid) {
       const itemId = parseHandleItem(state.fromHandle?.id) ?? draft?.itemId ?? null;
       setConnectionHint(itemId ? { label: `${ITEMS[itemId].name}运输线已建立`, tone: "ready" } : null);
@@ -2181,17 +2261,29 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
     setConnectionHint({ label, tone: "blocked" });
     spawnInteractionBurst(pointerRef.current.x, pointerRef.current.y, "连接失败", "warning");
     playTone("alert");
-  }, [beltTier, connectionDraft, playTone, spawnInteractionBurst]);
+  }, [beltTier, coarsePointer, connectionDraft, isValidConnection, playTone, spawnInteractionBurst]);
 
   const onClickConnectEnd = useCallback((event: MouseEvent | TouchEvent) => {
     const preview = clickConnectionPreviewRef.current;
     if (!preview) return;
-    const targetHandle = getConnectionHandleTarget(event.target);
-    const succeeded = clickConnectionSucceededRef.current;
+    const point = getEventPoint(event);
+    const targetHandle = getConnectionHandleTarget(event.target) ?? (point ? findConnectionHandleAtPoint(
+      point.x,
+      point.y,
+      coarsePointer ? 56 : 24,
+      (candidate) => isValidConnection(connectionFromDraft(preview.draft, candidate)),
+    ) : null);
+    const connection = targetHandle ? connectionFromDraft(preview.draft, targetHandle) : null;
+    let succeeded = clickConnectionSucceededRef.current;
+    if (!succeeded && connection && isValidConnection(connection)) {
+      connectRequestRef.current(connection);
+      succeeded = true;
+    }
     clickConnectionPreviewRef.current = null;
     clickConnectionSucceededRef.current = false;
     setClickConnectionPreview(null);
     setClickConnectionTone("pending");
+    setClickConnectionSnapPoint(null);
     setConnectionDraft(null);
     const releasedOnPane = !targetHandle && event.target instanceof Element && Boolean(event.target.closest(".react-flow__pane"));
     if (releasedOnPane) {
@@ -2204,7 +2296,6 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
       return;
     }
 
-    const connection = targetHandle ? connectionFromDraft(preview.draft, targetHandle) : null;
     const current = gameRef.current;
     const sourceItem = parseHandleItem(connection?.sourceHandle) ?? preview.draft.itemId;
     const source = connection?.source ? current.entities.find((entity) => entity.id === connection.source) : undefined;
@@ -2222,7 +2313,7 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
     setConnectionHint({ label, tone: "blocked" });
     spawnInteractionBurst(pointerRef.current.x, pointerRef.current.y, "连接失败", "warning");
     playTone("alert");
-  }, [beltTier, playTone, spawnInteractionBurst]);
+  }, [beltTier, coarsePointer, isValidConnection, playTone, spawnInteractionBurst]);
 
   const onConnect = useCallback((connection: Connection) => {
     const sourceItem = parseHandleItem(connection.sourceHandle);
@@ -2273,6 +2364,73 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
     playTone("connect");
   }, [beltTier, commitGame, playTone, spawnInteractionBurst]);
 
+  useEffect(() => { connectRequestRef.current = onConnect; }, [onConnect]);
+
+  const completeClickConnectionAtPoint = useCallback((x: number, y: number) => {
+    const preview = clickConnectionPreviewRef.current;
+    if (!preview) return false;
+    const targetHandle = findConnectionHandleAtPoint(
+      x,
+      y,
+      coarsePointer ? 56 : 24,
+      (candidate) => isValidConnection(connectionFromDraft(preview.draft, candidate)),
+    );
+    const connection = targetHandle ? connectionFromDraft(preview.draft, targetHandle) : null;
+    if (!connection || !isValidConnection(connection)) return false;
+    connectRequestRef.current(connection);
+    flowStore.getState().cancelConnection();
+    flowStore.setState({ connectionClickStartHandle: null });
+    clickConnectionPreviewRef.current = null;
+    clickConnectionSucceededRef.current = false;
+    setClickConnectionPreview(null);
+    setClickConnectionTone("pending");
+    setClickConnectionSnapPoint(null);
+    setConnectionDraft(null);
+    return true;
+  }, [coarsePointer, flowStore, isValidConnection]);
+
+  useEffect(() => {
+    const completeSnappedConnection = (event: PointerEvent) => {
+      if (placement || blueprintPlacementId || !clickConnectionPreviewRef.current) return;
+      if (completeClickConnectionAtPoint(event.clientX, event.clientY)) {
+        suppressConnectionClickRef.current = true;
+        window.clearTimeout(suppressConnectionClickTimerRef.current);
+        suppressConnectionClickTimerRef.current = window.setTimeout(() => {
+          suppressConnectionClickRef.current = false;
+        }, 250);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target?.closest(".factory-canvas") || target.closest(".react-flow__handle")) return;
+      flowStore.getState().cancelConnection();
+      flowStore.setState({ connectionClickStartHandle: null });
+      clickConnectionPreviewRef.current = null;
+      clickConnectionSucceededRef.current = false;
+      setClickConnectionPreview(null);
+      setClickConnectionTone("pending");
+      setClickConnectionSnapPoint(null);
+      setConnectionDraft(null);
+      setConnectionHint(null);
+      setNotice("已取消运输线连接");
+    };
+    const suppressCompletedConnectionClick = (event: MouseEvent) => {
+      if (!suppressConnectionClickRef.current) return;
+      suppressConnectionClickRef.current = false;
+      window.clearTimeout(suppressConnectionClickTimerRef.current);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    document.addEventListener("pointerdown", completeSnappedConnection, { capture: true });
+    document.addEventListener("click", suppressCompletedConnectionClick, { capture: true });
+    return () => {
+      document.removeEventListener("pointerdown", completeSnappedConnection, { capture: true });
+      document.removeEventListener("click", suppressCompletedConnectionClick, { capture: true });
+      window.clearTimeout(suppressConnectionClickTimerRef.current);
+    };
+  }, [blueprintPlacementId, completeClickConnectionAtPoint, flowStore, placement]);
+
   const onNodeDrag = useCallback((_event: MouseEvent | TouchEvent, node: FactoryFlowNode) => {
     const width = node.measured?.width ?? 256;
     const height = node.measured?.height ?? 180;
@@ -2312,6 +2470,7 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
 
   const onNodeClick: NodeMouseHandler<FactoryFlowNode> = useCallback((event, node) => {
     if (blueprintPlacementId) return;
+    if (!placement && completeClickConnectionAtPoint(event.clientX, event.clientY)) return;
     if (placement) {
       const entity = gameRef.current.entities.find((candidate) => candidate.id === node.id);
       const constructionId = entity?.kind === "vein" && entity.resourceId
@@ -2345,7 +2504,7 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
     setSelectedBeltId(null);
     setInspectorTab("inspect");
     if (!selectionMode) setMobilePanel("inspector");
-  }, [blueprintPlacementId, expandEntityGroup, placement, placementCount, selectionMode]);
+  }, [blueprintPlacementId, completeClickConnectionAtPoint, expandEntityGroup, placement, placementCount, selectionMode]);
 
   const onNodeDoubleClick: NodeMouseHandler<FactoryFlowNode> = useCallback((_event, node) => {
     if (placement || blueprintPlacementId) return;
@@ -2355,11 +2514,16 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
   }, [blueprintPlacementId, focusEntityIds, placement]);
 
   const onPaneClick = useCallback((event: React.MouseEvent) => {
-    if (!placement && !blueprintPlacementId && (clickConnectionPreviewRef.current || connectionDraft)) {
+    const preview = clickConnectionPreviewRef.current;
+    if (!placement && !blueprintPlacementId && completeClickConnectionAtPoint(event.clientX, event.clientY)) return;
+    if (!placement && !blueprintPlacementId && (preview || connectionDraft)) {
+      flowStore.getState().cancelConnection();
+      flowStore.setState({ connectionClickStartHandle: null });
       clickConnectionPreviewRef.current = null;
       clickConnectionSucceededRef.current = false;
       setClickConnectionPreview(null);
       setClickConnectionTone("pending");
+      setClickConnectionSnapPoint(null);
       setConnectionDraft(null);
       setConnectionHint(null);
       setNotice("已取消运输线连接");
@@ -2465,7 +2629,7 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
     }
     setSelectedEntityIds([]);
     setSelectedBeltId(null);
-  }, [blueprintPlacementId, commitGame, connectionDraft, expandEntityGroup, nodes, placement, placementCount, playTone, screenToFlowPosition, selectionMode, spawnInteractionBurst, viewportZoom]);
+  }, [blueprintPlacementId, commitGame, completeClickConnectionAtPoint, connectionDraft, expandEntityGroup, flowStore, nodes, placement, placementCount, playTone, screenToFlowPosition, selectionMode, spawnInteractionBurst, viewportZoom]);
 
   const onCanvasDrop = useCallback((event: React.DragEvent) => {
     const buildingId = event.dataTransfer.getData("application/factory-building") as BuildingId;
@@ -2556,6 +2720,7 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
       data-reduced-motion={game.settings.reducedMotion ? "true" : "false"}
       data-performance-mode={performanceVisualMode ? "true" : "false"}
       data-performance-auto={automaticPerformanceMode ? "true" : "false"}
+      data-mobile-performance={mobilePerformanceMode ? "true" : "false"}
       data-simulation-worker={simulationWorkerActive ? "active" : "fallback"}
       data-difficulty={game.settings.difficulty}
       data-zoom-lod={largeFactoryMode || viewportZoom < 0.55 ? "compact" : viewportZoom < 0.86 ? "medium" : "full"}
@@ -2642,6 +2807,12 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
           ref={factoryCanvasRef}
           {...longPressBindings}
           onClickCapture={(event) => {
+            if (!placement && !blueprintPlacementId && clickConnectionPreviewRef.current &&
+              completeClickConnectionAtPoint(event.clientX, event.clientY)) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
             if (!placement && !blueprintPlacementId) return;
             const target = event.target instanceof Element ? event.target : null;
             if (!target?.closest(".react-flow") || target.closest(".react-flow__node, .react-flow__controls, .react-flow__minimap, .canvas-selection-tools, .planet-navigator")) return;
@@ -2694,9 +2865,9 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
             onPaneClick={onPaneClick}
             onDrop={onCanvasDrop}
             onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
-            minZoom={0.3}
-            maxZoom={1.6}
-            connectionRadius={coarsePointer ? 48 : 30}
+            minZoom={0.25}
+            maxZoom={1.8}
+            connectionRadius={coarsePointer ? 56 : 30}
             snapToGrid
             snapGrid={[FLOW_GRID, FLOW_GRID]}
             autoPanOnConnect
@@ -2705,14 +2876,19 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
             connectionLineComponent={FactoryConnectionLine}
             connectOnClick
             defaultViewport={{ x: 510, y: 250, zoom: 0.84 }}
-            onMove={(_event, viewport) => setViewportZoom(viewport.zoom)}
+            onMove={(_event, viewport) => {
+              viewportRef.current = viewport;
+              setViewportZoom(viewport.zoom);
+            }}
             panOnScroll
-            panOnDrag={[1, 2]}
-            selectionOnDrag={selectionMode}
+            panOnDrag={coarsePointer ? true : [1, 2]}
+            zoomOnPinch
+            selectionOnDrag={selectionMode && !coarsePointer}
             selectionMode={SelectionMode.Full}
             selectionKeyCode={null}
             multiSelectionKeyCode="Shift"
             elementsSelectable={!(coarsePointer && selectionMode)}
+            nodesDraggable={!(coarsePointer && selectionMode)}
             zoomOnDoubleClick={false}
             deleteKeyCode={null}
             fitViewOptions={{ padding: 0.18 }}
@@ -2732,7 +2908,7 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
             /> : null}
             <Controls position="bottom-left" showInteractive={false} />
           </ReactFlow>
-          {clickConnectionPreview ? <ClickConnectionPreview preview={clickConnectionPreview} pointer={pointer} tone={clickConnectionTone} /> : null}
+          {clickConnectionPreview ? <ClickConnectionPreview preview={clickConnectionPreview} pointer={clickConnectionSnapPoint ?? pointer} tone={clickConnectionTone} /> : null}
           <button className={`canvas-minimap-toggle nodrag nopan${minimapCollapsed ? " canvas-minimap-toggle--collapsed" : ""}`} type="button" onClick={() => setMinimapCollapsed((collapsed) => !collapsed)} title={minimapCollapsed ? "展开小地图" : "折叠小地图"} aria-label={minimapCollapsed ? "展开小地图" : "折叠小地图"} aria-expanded={!minimapCollapsed}>
             {minimapCollapsed ? <MapIcon size={16} /> : <PanelRightClose size={16} />}
           </button>
@@ -2791,6 +2967,11 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
               setSelectedEntityIds([]);
               setNotice("选区设备已回收至施工托盘");
               playTone("remove");
+            }}
+            onClear={() => setSelectedEntityIds([])}
+            onDone={() => {
+              setSelectionMode(false);
+              setSelectedEntityIds([]);
             }}
           />
           {highlightedTaskId ? (

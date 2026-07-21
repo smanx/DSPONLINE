@@ -56,7 +56,7 @@ export function CanvasSelectionTools({ selectionMode, blueprintCount, beltCount,
   );
 }
 
-export function SelectionToolbar({ selectedCount, eligibleCount, canUpgrade, onFocus, onAutoLayout, onCopy, onUpgrade, onRemove }: {
+export function SelectionToolbar({ selectedCount, eligibleCount, canUpgrade, onFocus, onAutoLayout, onCopy, onUpgrade, onRemove, onClear, onDone }: {
   selectedCount: number;
   eligibleCount: number;
   canUpgrade: boolean;
@@ -65,6 +65,8 @@ export function SelectionToolbar({ selectedCount, eligibleCount, canUpgrade, onF
   onCopy: () => void;
   onUpgrade: () => void;
   onRemove: () => void;
+  onClear: () => void;
+  onDone: () => void;
 }) {
   if (selectedCount === 0) return null;
   return (
@@ -75,6 +77,8 @@ export function SelectionToolbar({ selectedCount, eligibleCount, canUpgrade, onF
       <button type="button" disabled={eligibleCount === 0} onClick={onCopy} title="复制所选设备为蓝图并进入粘贴" aria-label="复制所选为蓝图"><Copy size={16} /></button>
       <button type="button" disabled={!canUpgrade} onClick={onUpgrade} title="批量升级所有可升级设备" aria-label="批量升级所选设备"><ArrowUp size={16} /></button>
       <button className="danger" type="button" onClick={onRemove} title="批量回收所选设备" aria-label="批量回收所选设备"><Trash2 size={16} /></button>
+      <button type="button" onClick={onClear} title="清空当前选择" aria-label="清空选择"><X size={16} /></button>
+      <button className="confirm" type="button" onClick={onDone} title="完成多选并返回指针模式" aria-label="完成多选"><Check size={16} /></button>
     </div>
   );
 }

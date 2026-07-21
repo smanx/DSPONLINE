@@ -16,6 +16,7 @@ export function useLongPress<T extends HTMLElement>({
   getTarget,
   onLongPress,
 }: LongPressOptions<T>): LongPressBindings<T> {
+  const activePointersRef = useRef(new Set<number>());
   const gestureRef = useRef<{
     pointerId: number;
     targetId: string;
@@ -35,6 +36,11 @@ export function useLongPress<T extends HTMLElement>({
     onPointerDownCapture: (event) => {
       const pointerEvent = event as ReactPointerEvent<T>;
       if (pointerEvent.pointerType === "mouse" || pointerEvent.button !== 0) return;
+      activePointersRef.current.add(pointerEvent.pointerId);
+      if (activePointersRef.current.size > 1) {
+        cancel();
+        return;
+      }
       const targetId = getTarget(pointerEvent);
       if (!targetId) return;
       cancel();
@@ -61,7 +67,15 @@ export function useLongPress<T extends HTMLElement>({
         cancel(pointerEvent.pointerId);
       }
     },
-    onPointerUpCapture: (event) => cancel((event as ReactPointerEvent<T>).pointerId),
-    onPointerCancelCapture: (event) => cancel((event as ReactPointerEvent<T>).pointerId),
+    onPointerUpCapture: (event) => {
+      const pointerId = (event as ReactPointerEvent<T>).pointerId;
+      activePointersRef.current.delete(pointerId);
+      cancel(pointerId);
+    },
+    onPointerCancelCapture: (event) => {
+      const pointerId = (event as ReactPointerEvent<T>).pointerId;
+      activePointersRef.current.delete(pointerId);
+      cancel(pointerId);
+    },
   };
 }
