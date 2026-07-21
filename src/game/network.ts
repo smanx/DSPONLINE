@@ -1,6 +1,6 @@
-import { getBuilding } from "./content";
-import { getBeltCapacity, getBeltNetworkIds } from "./engine";
-import type { BeltConnection, FactoryEntity, GameState, ItemId, PlanetId } from "./types";
+import { getBuilding, getRecipe } from "./content";
+import { getBeltCapacity, getBeltNetworkIds, getEntityProliferatorSpeedMultiplier, getMiningSpeedMultiplier, getRecipeSpeedMultiplier } from "./engine";
+import type { BeltConnection, BeltTier, FactoryEntity, GameState, ItemId, PlanetId } from "./types";
 
 export type BeltHealth = "healthy" | "underused" | "starved" | "congested" | "idle";
 
@@ -46,6 +46,70 @@ export interface PortOccupancy {
 export interface BeltBundleInfo {
   index: number;
   size: number;
+}
+
+export type ConnectionForecastTone = "balanced" | "starved" | "capacity" | "unknown";
+
+export interface ConnectionThroughputForecast {
+  itemId: ItemId;
+  capacityPerSecond: number;
+  sourcePerSecond: number | null;
+  demandPerSecond: number | null;
+  expectedPerSecond: number;
+  utilization: number;
+  tone: ConnectionForecastTone;
+  label: string;
+}
+
+function entityItemRatePerSecond(state: GameState, entity: FactoryEntity, itemId: ItemId, direction: "output" | "input"): number | null {
+  if (entity.kind === "vein") {
+    return direction === "output" && entity.resourceId === itemId && entity.minerCount > 0
+      ? Math.max(0, entity.productionRate * getMiningSpeedMultiplier(state) / 60)
+      : null;
+  }
+  const recipe = getRecipe(entity.recipeId);
+  if (entity.buildingId && recipe) {
+    const amounts = direction === "output" ? recipe.outputs : recipe.inputs;
+    const amount = amounts.find((entry) => entry.itemId === itemId)?.amount;
+    if (!amount) return null;
+    return getBuilding(entity.buildingId).speed * Math.max(1, entity.machineCount) * getRecipeSpeedMultiplier(state, recipe.id) *
+      getEntityProliferatorSpeedMultiplier(entity) / Math.max(0.05, recipe.duration) * amount;
+  }
+  const stock = direction === "output" ? entity.outputs[itemId] : entity.inputs[itemId];
+  return (stock ?? 0) > 0 ? Number.POSITIVE_INFINITY : null;
+}
+
+/** Estimates the useful rate before a belt is committed to the save. */
+export function predictBeltConnection(
+  state: GameState,
+  sourceId: string,
+  targetId: string,
+  itemId: ItemId,
+  tier: BeltTier,
+): ConnectionThroughputForecast | null {
+  const source = state.entities.find((entity) => entity.id === sourceId);
+  const target = state.entities.find((entity) => entity.id === targetId);
+  if (!source || !target) return null;
+  const capacityPerSecond = getBeltCapacity({ tier, lanes: 1, stackSize: 1 } as BeltConnection);
+  const rawSource = entityItemRatePerSecond(state, source, itemId, "output");
+  const rawDemand = entityItemRatePerSecond(state, target, itemId, "input");
+  const sourcePerSecond = rawSource === Number.POSITIVE_INFINITY ? capacityPerSecond : rawSource;
+  const demandPerSecond = rawDemand === Number.POSITIVE_INFINITY ? capacityPerSecond : rawDemand;
+  const expectedPerSecond = Math.max(0, Math.min(capacityPerSecond, sourcePerSecond ?? capacityPerSecond, demandPerSecond ?? capacityPerSecond));
+  const utilization = capacityPerSecond > 0 ? Math.min(1, expectedPerSecond / capacityPerSecond) : 0;
+  let tone: ConnectionForecastTone = "balanced";
+  let label = `预计 ${expectedPerSecond.toFixed(2)}/s · 线路 ${Math.round(utilization * 100)}%`;
+  if (sourcePerSecond == null || demandPerSecond == null) {
+    tone = "unknown";
+    label = `预计上限 ${capacityPerSecond.toFixed(2)}/s · 配方确定后复算`;
+  } else if (sourcePerSecond > capacityPerSecond * 1.05 || demandPerSecond > capacityPerSecond * 1.05) {
+    tone = "capacity";
+    label = `线路上限 ${capacityPerSecond.toFixed(2)}/s · 建议升级或并联`;
+  } else if (sourcePerSecond < demandPerSecond * 0.8) {
+    tone = "starved";
+    label = `上游仅 ${sourcePerSecond.toFixed(2)}/s · 下游可能缺料`;
+  }
+  return { itemId, capacityPerSecond, sourcePerSecond, demandPerSecond, expectedPerSecond, utilization, tone, label };
 }
 
 function targetFreeCapacity(entity: FactoryEntity | undefined, itemId: ItemId): number {

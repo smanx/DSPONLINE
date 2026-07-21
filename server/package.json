@@ -1,0 +1,16 @@
+{
+  "name": "dsp-idle-cloud-service",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs",
+    "test": "node --test server.test.mjs"
+  },
+  "engines": {
+    "node": ">=20.20"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1"
+  }
+}

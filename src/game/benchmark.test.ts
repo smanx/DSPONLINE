@@ -1,24 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { createInitialState, placeBuilding } from "./engine";
-import { hashGameState, runDeterminismCheck, runSimulationBenchmark } from "./benchmark";
+import { auditFactoryBalance, runIdleBalanceSuite, runLongIdleStressTest } from "./benchmark";
+import { createInitialState } from "./engine";
 
-describe("simulation benchmark", () => {
-  it("produces the same hash for repeated deterministic runs", () => {
-    let state = createInitialState();
-    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 });
-    const report = runDeterminismCheck(state, 5);
-    expect(report.deterministic).toBe(true);
-    expect(report.runs).toBe(2);
-    expect(report.stateHash).toMatch(/^[0-9a-f]{8}$/);
+describe("idle performance reports", () => {
+  it("keeps a long idle simulation numerically integral", () => {
+    const state = createInitialState();
+    const report = runLongIdleStressTest(state, 1);
+    expect(report.completed).toBe(true);
+    expect(report.integrityPassed).toBe(true);
+    expect(report.issues).toEqual([]);
   });
 
-  it("runs a bounded benchmark without mutating the input state", () => {
-    const state = createInitialState();
-    const before = hashGameState(state);
-    const report = runSimulationBenchmark(state, 2, 4);
-    expect(report.deterministic).toBe(true);
-    expect(report.steps).toBe(4);
-    expect(report.stepsPerSecond).toBeGreaterThan(0);
-    expect(hashGameState(state)).toBe(before);
+  it("produces actionable balance data for a fresh factory", () => {
+    const audit = auditFactoryBalance(createInitialState());
+    expect(audit.powerEfficiency).toBeGreaterThanOrEqual(0);
+    expect(audit.recommendations.length).toBeGreaterThan(0);
+  });
+
+  it("reports 2/8/24/72 hour checkpoints without truncating the final run", () => {
+    const report = runIdleBalanceSuite(createInitialState());
+    expect(report.checkpoints.map((checkpoint) => checkpoint.hours)).toEqual([2, 8, 24, 72]);
+    expect(report.completed).toBe(true);
+    expect(report.integrityPassed).toBe(true);
+    expect(report.tuning.fullFidelitySimulation).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
-import { BarChart3, BookOpen, Check, Command, Factory, Flag, FlaskConical, Gauge, Globe2, Map, PackageOpen, Pause, Play, Search, Settings2, Telescope, Wrench, X } from "lucide-react";
+import { BarChart3, BookOpen, Check, Command, Factory, Flag, FlaskConical, Focus, Gauge, Globe2, Map, PackageOpen, Pause, Play, Search, Settings2, Telescope, WandSparkles, Wrench, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ITEMS } from "../game/content";
+import { ITEMS, getBuilding, getPlanet } from "../game/content";
 import type { GameState, ItemId } from "../game/types";
 
 export type CommandWorkspace = "operations" | "campaign" | "galaxy" | "star-map" | "statistics" | "recipes" | "technology" | "blueprints" | "dyson" | "inspector" | "resources";
@@ -11,6 +11,8 @@ interface CommandPaletteProps {
   onClose: () => void;
   onOpenWorkspace: (workspace: CommandWorkspace) => void;
   onFocusRecipe: (itemId: ItemId) => void;
+  onFocusEntity: (entityId: string) => void;
+  onAutoLayout: () => void;
   onPauseToggle: () => void;
   onTogglePerformance: () => void;
   onToggleReducedMotion: () => void;
@@ -25,7 +27,7 @@ interface PaletteCommand {
   run: () => void;
 }
 
-export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRecipe, onPauseToggle, onTogglePerformance, onToggleReducedMotion, onReset }: CommandPaletteProps) {
+export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRecipe, onFocusEntity, onAutoLayout, onPauseToggle, onTogglePerformance, onToggleReducedMotion, onReset }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -58,6 +60,7 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
       { id: "pause", label: game.paused ? "继续模拟" : "暂停模拟", detail: "Space", icon: game.paused ? <Play size={16} /> : <Pause size={16} />, run: () => run(onPauseToggle) },
       { id: "performance", label: game.settings.performanceMode ? "关闭性能模式" : "开启性能模式", detail: "降低大规模工厂视觉负载", icon: <Gauge size={16} />, run: () => run(onTogglePerformance) },
       { id: "motion", label: game.settings.reducedMotion ? "开启动态效果" : "减少动态效果", detail: "尊重动效偏好", icon: <Settings2 size={16} />, run: () => run(onToggleReducedMotion) },
+      { id: "auto-layout", label: "整理当前行星生产网络", detail: "按物流上下游自动排列全部设备", icon: <WandSparkles size={16} />, run: () => run(onAutoLayout) },
       { id: "reset", label: "重置当前工厂", detail: "清空当前存档并重新开始", icon: <X size={16} />, run: () => run(onReset) },
     ];
     const itemCommands: PaletteCommand[] = Object.values(ITEMS).map((item) => ({
@@ -67,8 +70,19 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
       icon: <span className="command-item-swatch" style={{ backgroundColor: item.color }}>{item.symbol.slice(0, 3)}</span>,
       run: () => run(() => onFocusRecipe(item.id)),
     }));
-    return [...base, ...itemCommands];
-  }, [game.paused, game.settings.performanceMode, game.settings.reducedMotion, onFocusRecipe, onOpenWorkspace, onPauseToggle, onReset, onTogglePerformance, onToggleReducedMotion]);
+    const entityCommands: PaletteCommand[] = game.entities.map((entity) => {
+      const name = entity.buildingId ? getBuilding(entity.buildingId).name : entity.resourceId ? ITEMS[entity.resourceId].name : "生产节点";
+      const recipe = entity.recipeId ? ` · ${entity.recipeId}` : "";
+      return {
+        id: `entity:${entity.id}`,
+        label: `定位：${name}`,
+        detail: `${getPlanet(entity.planetId).name} · ${entity.id}${recipe}`,
+        icon: <Focus size={16} />,
+        run: () => run(() => onFocusEntity(entity.id)),
+      };
+    });
+    return [...base, ...itemCommands, ...entityCommands];
+  }, [game.entities, game.paused, game.settings.performanceMode, game.settings.reducedMotion, onAutoLayout, onFocusEntity, onFocusRecipe, onOpenWorkspace, onPauseToggle, onReset, onTogglePerformance, onToggleReducedMotion]);
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("zh-CN");
     if (!normalized) return commands.slice(0, 12);
@@ -106,7 +120,7 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
         focusable[next].focus();
       }}>
         <header>
-          <div className="command-palette-title"><i><Command size={17} /></i><span><strong>命令面板</strong><small>搜索工作区、设置或物品</small></span></div>
+          <div className="command-palette-title"><i><Command size={17} /></i><span><strong>命令面板</strong><small>搜索设备、工作区、设置或物品</small></span></div>
           <button type="button" onClick={onClose} title="关闭命令面板" aria-label="关闭命令面板"><X size={16} /></button>
         </header>
         <label className="command-palette-search"><Search size={16} /><input ref={inputRef} value={query} onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }} onKeyDown={(event) => {
@@ -114,7 +128,7 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
           else if (event.key === "ArrowUp") { event.preventDefault(); setActiveIndex((index) => Math.max(0, index - 1)); }
           else if (event.key === "Enter") { event.preventDefault(); filtered[activeIndex]?.run(); }
           else if (event.key === "Escape") { event.preventDefault(); onClose(); }
-        }} placeholder="输入物品、工作区或动作" aria-label="搜索命令" autoComplete="off" /><kbd>Esc</kbd></label>
+        }} placeholder="输入设备、物品、工作区或动作" aria-label="搜索命令" autoComplete="off" /><kbd>Esc</kbd></label>
         <div className="command-palette-list" role="listbox" aria-label="命令结果">
           {filtered.map((command, index) => <button type="button" role="option" aria-selected={index === activeIndex} className={index === activeIndex ? "active" : ""} key={command.id} onMouseEnter={() => setActiveIndex(index)} onClick={command.run}><i>{command.icon}</i><span><strong>{command.label}</strong><small>{command.detail}</small></span>{index === activeIndex ? <Check size={14} /> : null}</button>)}
           {filtered.length === 0 ? <div className="command-palette-empty">没有匹配的命令或物品</div> : null}

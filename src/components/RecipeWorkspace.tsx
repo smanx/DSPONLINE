@@ -29,8 +29,6 @@ import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
 type ItemFilter = "all" | "raw" | "solid" | "fluid" | "matrix";
 
-const ITEM_LIST = Object.values(ITEMS);
-
 function networkItemStock(game: GameState, itemId: ItemId): number {
   const nodeStock = game.entities.reduce((sum, entity) =>
     sum + (entity.inputs[itemId] ?? 0) + (entity.outputs[itemId] ?? 0), 0);
@@ -121,13 +119,14 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus }: {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ItemFilter>("all");
   const [selectedItemId, setSelectedItemId] = useState<ItemId>(focusItemId ?? game.recipeFocus.itemId ?? "iron_ore");
+  const itemList = Object.values(ITEMS);
   useEffect(() => {
     if (!focusItemId) return;
     setSelectedItemId(focusItemId);
     setQuery("");
     setFilter("all");
   }, [focusItemId]);
-  const visibleItems = useMemo(() => ITEM_LIST.filter((item) => {
+  const visibleItems = useMemo(() => itemList.filter((item) => {
     const term = query.trim().toLocaleLowerCase("zh-CN");
     const matchesSearch = !term || `${item.name} ${item.symbol} ${item.id} ${item.description}`.toLocaleLowerCase("zh-CN").includes(term);
     if (!matchesSearch) return false;
@@ -136,7 +135,7 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus }: {
     if (filter === "fluid") return item.kind === "fluid";
     if (filter === "matrix") return item.kind === "matrix";
     return true;
-  }), [filter, query]);
+  }), [filter, itemList, query]);
 
   if (!open) return null;
   const item = getItem(selectedItemId);
@@ -161,7 +160,7 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus }: {
           <div><span>星系生产资料库</span><strong>配方图鉴</strong></div>
         </div>
         <div className="recipe-headline">
-          <span>物品 <strong>{ITEM_LIST.length}</strong></span>
+          <span>物品 <strong>{itemList.length}</strong></span>
           <span>配方 <strong>{Object.keys(RECIPES).length}</strong></span>
           <span className={catalogAudit.valid ? "recipe-audit recipe-audit--valid" : "recipe-audit"} title={catalogAudit.valid ? "内容数据校验通过" : catalogAudit.issues.map((issue) => issue.message).join("；")}>数据 <strong>{catalogAudit.valid ? "OK" : `${catalogAudit.issues.length} 项`}</strong></span>
         </div>

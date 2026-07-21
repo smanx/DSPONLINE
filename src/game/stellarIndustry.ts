@@ -67,6 +67,20 @@ export interface StellarRouteSnapshot {
   statusLabel: string;
 }
 
+export interface InterplanetaryLogisticsDiagnostic {
+  id: string;
+  severity: "critical" | "warning" | "info";
+  itemId: ItemId;
+  routeId: string;
+  title: string;
+  detail: string;
+  recommendation: string;
+  sourceStationId?: string;
+  sourcePlanetId?: PlanetId;
+  targetStationId: string;
+  targetPlanetId: PlanetId;
+}
+
 export interface PlanetIndustryIssue {
   code: "power" | "depleted" | "route" | "congestion";
   label: string;
@@ -222,6 +236,52 @@ export function getStellarRouteSnapshots(game: GameState): StellarRouteSnapshot[
     const statusOrder = Number(a.status === "active") - Number(b.status === "active");
     return statusOrder !== 0 ? -statusOrder : b.priority - a.priority || a.id.localeCompare(b.id);
   });
+}
+
+/**
+ * Turns raw station-route state into actions a player can resolve without
+ * inspecting every source and destination slot manually.
+ */
+export function getInterplanetaryLogisticsDiagnostics(
+  game: GameState,
+  routes = getStellarRouteSnapshots(game),
+): InterplanetaryLogisticsDiagnostic[] {
+  const diagnostics: InterplanetaryLogisticsDiagnostic[] = [];
+  for (const route of routes.filter((candidate) => candidate.scope === "remote")) {
+    const sourceLabel = route.sourcePlanetId ? getPlanet(route.sourcePlanetId).name : "未匹配供应端";
+    const targetLabel = getPlanet(route.targetPlanetId).name;
+    const base = {
+      id: `diagnostic:${route.id}`,
+      itemId: route.itemId,
+      routeId: route.id,
+      sourceStationId: route.sourceStationId,
+      sourcePlanetId: route.sourcePlanetId,
+      targetStationId: route.targetStationId,
+      targetPlanetId: route.targetPlanetId,
+    };
+    if (route.status === "active") {
+      const target = game.entities.find((entity) => entity.id === route.targetStationId);
+      if ((target?.stationCongestion ?? 0) >= 0.8) {
+        diagnostics.push({ ...base, severity: "warning", title: `${getPlanet(route.targetPlanetId).name}物流站拥堵`, detail: `${route.itemId} 航线正在运输，但需求站拥堵 ${Math.round((target?.stationCongestion ?? 0) * 100)}%。`, recommendation: "提高目标槽位上限、分流下游库存，或增加独立需求站。" });
+      }
+      continue;
+    }
+    if (route.status === "ready") continue;
+    const definition = route.status === "missing-source"
+      ? { severity: "critical" as const, title: `${targetLabel}缺少${route.itemId}供应站`, detail: "需求槽位找不到具有远程供应权限的同物品槽位。", recommendation: "在来源物流塔配置该物品为远程供应，或检查来源站是否已停用。" }
+      : route.status === "missing-vehicle"
+        ? { severity: "critical" as const, title: `${targetLabel}没有可用运输船`, detail: `${route.itemId} 已建立供需匹配，但需求站没有星际运输船。`, recommendation: "向需求星际物流站装入物流运输船。" }
+        : route.status === "missing-warper"
+          ? { severity: "critical" as const, title: `${targetLabel}缺少翘曲条件`, detail: `${sourceLabel} 到 ${targetLabel} 的航线需要空间翘曲器。`, recommendation: "完成空间翘曲科技、启用需求站翘曲，并向站内补充空间翘曲器。" }
+          : route.status === "no-power"
+            ? { severity: "critical" as const, title: `${route.itemId}航线断电`, detail: `${sourceLabel} 或 ${targetLabel} 的物流站未获得电力。`, recommendation: "恢复两端行星电网供电后，物流会自动重新调度。" }
+            : route.status === "missing-stock"
+              ? { severity: "warning" as const, title: `${sourceLabel}${route.itemId}库存不足`, detail: `可出口库存 ${route.sourceStock}，最低发船量 ${route.minimumCargo}。`, recommendation: "提升上游产量、降低出口保底库存，或降低最低装载率。" }
+              : { severity: "info" as const, title: `${targetLabel}${route.itemId}库存已满`, detail: `需求槽库存 ${route.targetStock}/${route.targetLimit}，当前不再派船。`, recommendation: "这是正常回压；需要继续进口时可提高目标槽位上限或消耗下游库存。" };
+    diagnostics.push({ ...base, ...definition });
+  }
+  const severity = (value: InterplanetaryLogisticsDiagnostic["severity"]) => value === "critical" ? 3 : value === "warning" ? 2 : 1;
+  return diagnostics.sort((left, right) => severity(right.severity) - severity(left.severity) || left.title.localeCompare(right.title, "zh-CN"));
 }
 
 function detectedPlanetRole(game: GameState, planetId: PlanetId): Exclude<PlanetIndustryRole, "auto"> {

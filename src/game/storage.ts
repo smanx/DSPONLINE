@@ -22,6 +22,8 @@ const SAVE_SNAPSHOT_KEY_PREFIX = `${SAVE_KEY}.snapshot`;
 const SAVE_SNAPSHOT_LIMIT = 5;
 const SAVE_FORMAT_VERSION = 2;
 const AUTO_SNAPSHOT_MIN_SECONDS = 30;
+const RETURNING_REWARD_KEY_PREFIX = "dsp-idle-network.returning-reward";
+const RETURNING_REWARD_MIN_SECONDS = 72 * 60 * 60;
 
 export type SaveSlotId = 1 | 2 | 3;
 
@@ -57,6 +59,7 @@ export interface OfflineReport {
   infiniteResearchLevels?: Array<{ id: InfiniteResearchId; level: number }>;
   exported?: Array<{ projectId: GalacticExportProjectId; amount: number }>;
   galacticCreditsAdded?: number;
+  returningReward?: Array<{ itemId: ItemId; amount: number }>;
 }
 
 export interface SaveSlotSummary {
@@ -95,6 +98,11 @@ export interface SaveInspection {
   issues: string[];
   state: GameState | null;
   summary: Omit<SaveSlotSummary, "slotId" | "integrity" | "valid" | "issues"> | null;
+}
+
+export interface ContinueSaveInspection {
+  source: SaveRecovery["source"];
+  inspection: SaveInspection;
 }
 
 function integerRecord(value: unknown): Partial<Record<ItemId, number>> {
@@ -423,6 +431,10 @@ function validSimulationSpeed(value: unknown): value is GameState["settings"]["s
   return value === 1 || value === 2 || value === 4;
 }
 
+function validFontScale(value: unknown): value is GameState["settings"]["fontScale"] {
+  return value === 0.8 || value === 1 || value === 1.25 || value === 1.5;
+}
+
 function validAutosaveInterval(value: unknown): value is GameState["settings"]["autosaveIntervalSeconds"] {
   return value === 2 || value === 10 || value === 30;
 }
@@ -437,7 +449,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const initial = createInitialState();
   const galaxy = createGalaxyState(saved.version >= 20 ? saved.galaxy?.seed : initial.galaxy.seed, saved.version < 20);
   for (const planet of PLANET_LIST) {
@@ -607,6 +619,18 @@ export function migrateGame(value: unknown): GameState | null {
     planet.id === "home" && saved.version < 4 ? savedActiveTray : integerRecord(saved.planetTrays?.[planet.id]),
   ])) as GameState["planetTrays"];
   if (saved.version >= 4 && saved.tray && typeof saved.tray === "object") planetTrays[activePlanetId] = savedActiveTray;
+  const portableFleet: GameState["portableFleet"] = {
+    logistics_drone: saved.version >= 24 ? nonNegativeInteger(saved.portableFleet?.logistics_drone) : 0,
+    logistics_vessel: saved.version >= 24 ? nonNegativeInteger(saved.portableFleet?.logistics_vessel) : 0,
+  };
+  if (saved.version < 24) {
+    for (const tray of Object.values(planetTrays)) {
+      portableFleet.logistics_drone += nonNegativeInteger(tray.logistics_drone);
+      portableFleet.logistics_vessel += nonNegativeInteger(tray.logistics_vessel);
+      delete tray.logistics_drone;
+      delete tray.logistics_vessel;
+    }
+  }
   const planetMetrics = Object.fromEntries(PLANET_LIST.map((planet) => [
     planet.id,
     {
@@ -795,6 +819,11 @@ export function migrateGame(value: unknown): GameState | null {
         inventory: integerRecord(sample.inventory),
         generationKw: nonNegativeNumber(sample.generationKw),
         demandKw: nonNegativeNumber(sample.demandKw),
+        machineEfficiency: Math.min(1, nonNegativeNumber(sample.machineEfficiency)),
+        logisticsEfficiency: Math.min(1, nonNegativeNumber(sample.logisticsEfficiency)),
+        powerEfficiency: Math.min(1, nonNegativeNumber(sample.powerEfficiency) || (nonNegativeNumber(sample.demandKw) > 0 ? 0 : 1)),
+        activeMachines: nonNegativeInteger(sample.activeMachines),
+        blockedMachines: nonNegativeInteger(sample.blockedMachines),
       }];
     })
     : [];
@@ -961,6 +990,11 @@ export function migrateGame(value: unknown): GameState | null {
     simulationSpeed: validSimulationSpeed(saved.settings?.simulationSpeed)
       ? saved.settings.simulationSpeed
       : initial.settings.simulationSpeed,
+    fontScale: saved.settings?.fontScale === 2
+      ? 1.5
+      : validFontScale(saved.settings?.fontScale)
+        ? saved.settings.fontScale
+        : initial.settings.fontScale,
     performanceMode: typeof saved.settings?.performanceMode === "boolean"
       ? saved.settings.performanceMode
       : initial.settings.performanceMode,
@@ -1025,7 +1059,7 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 23,
+    version: 24,
     activePlanetId,
     entities,
     belts,
@@ -1033,6 +1067,7 @@ export function migrateGame(value: unknown): GameState | null {
     tray: { ...planetTrays[activePlanetId] },
     planetTrays,
     construction,
+    portableFleet,
     totalProduced: integerRecord(saved.totalProduced),
     research: {
       selectedTechId,
@@ -1101,6 +1136,27 @@ function buildOfflineReport(before: GameState, after: GameState, seconds: number
     exported,
     galacticCreditsAdded: Math.max(0, after.endgame.galacticCredits - before.endgame.galacticCredits),
   };
+}
+
+function applyReturningReward(state: GameState, savedAt: number, seconds: number): { state: GameState; reward: Array<{ itemId: ItemId; amount: number }> } {
+  if (seconds < RETURNING_REWARD_MIN_SECONDS) return { state, reward: [] };
+  const claimKey = `${RETURNING_REWARD_KEY_PREFIX}.${Math.floor(savedAt)}`;
+  try {
+    if (window.localStorage.getItem(claimKey)) return { state, reward: [] };
+  } catch {
+    return { state, reward: [] };
+  }
+  const amount = Math.min(2_000, Math.max(240, Math.floor(seconds / 3600) * 4));
+  const reward = (["iron_ore", "copper_ore", "stone", "coal"] as ItemId[]).map((itemId) => ({ itemId, amount }));
+  const tray = { ...state.tray };
+  for (const entry of reward) tray[entry.itemId] = Math.floor((tray[entry.itemId] ?? 0) + entry.amount);
+  const next = {
+    ...state,
+    tray,
+    planetTrays: { ...state.planetTrays, [state.activePlanetId]: { ...tray } },
+  };
+  try { window.localStorage.setItem(claimKey, String(Date.now())); } catch { /* optional reward receipt */ }
+  return { state: next, reward };
 }
 
 /** Inspect an imported or locally stored envelope without advancing time. */
@@ -1209,10 +1265,13 @@ function parseEnvelope(raw: string, advanceOffline: boolean): LoadedGame | null 
     ? Math.min(getOfflineSimulationLimitSeconds(state), Math.max(0, (Date.now() - savedAt) / 1000))
     : 0;
   const advanced = offlineSeconds >= 1 ? advanceSimulation(state, offlineSeconds) : state;
+  const returning = applyReturningReward(advanced, savedAt, offlineSeconds);
+  const report = offlineSeconds >= 1 ? buildOfflineReport(state, returning.state, offlineSeconds) : null;
+  if (report && returning.reward.length > 0) report.returningReward = returning.reward;
   return {
-    state: advanced,
+    state: returning.state,
     offlineSeconds,
-    offlineReport: offlineSeconds >= 1 ? buildOfflineReport(state, advanced, offlineSeconds) : null,
+    offlineReport: report,
   };
 }
 
@@ -1240,6 +1299,25 @@ export function loadGame(): LoadedGame {
     };
   } catch {
     return { state: createInitialState(), offlineSeconds: 0, offlineReport: null, recovery: { source: "fresh", issues: ["本地存储不可用，已创建临时工厂"] } };
+  }
+}
+
+/** Inspect the save that Continue will load without advancing offline time. */
+export function inspectContinueSave(): ContinueSaveInspection | null {
+  try {
+    const candidates: Array<{ source: SaveRecovery["source"]; raw: string | null }> = [
+      { source: "primary", raw: window.localStorage.getItem(SAVE_KEY) },
+      { source: "backup", raw: window.localStorage.getItem(SAVE_BACKUP_KEY) },
+      ...listSnapshotKeys().map((key) => ({ source: "snapshot" as const, raw: window.localStorage.getItem(key) })),
+    ];
+    for (const candidate of candidates) {
+      if (!candidate.raw) continue;
+      const inspection = inspectSave(candidate.raw);
+      if (inspection.valid && inspection.state) return { source: candidate.source, inspection };
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 

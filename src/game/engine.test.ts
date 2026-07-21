@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  addUnitToEntityGroup,
   DYSON_SHELL_CAPACITY_PER_STRUCTURE,
   DYSON_SHELL_SAIL_POWER_KW,
   DYSON_STRUCTURE_POWER_KW,
@@ -24,6 +25,7 @@ import {
   canUpgradeEntity,
   canUpgradeSorter,
   canConnectBelt,
+  canHandcraftRecipe,
   canQueueTechnology,
   canSelectTechnology,
   connectBelt,
@@ -69,6 +71,7 @@ import {
   manualMine,
   moveEntityInputToEntity,
   moveEntityInputToTray,
+  moveEntityOutputToTray,
   moveEntities,
   pickFromEntity,
   pickFromEntityInput,
@@ -226,7 +229,6 @@ describe("factory simulation", () => {
     state.research.completedTechIds.push("high_speed_logistics");
     state.construction.storage_mk1 = 4;
     state.construction.conveyor_belt_mk2 = 2;
-    state.construction.sorter_mk2 = 1;
     state = placeBuilding(state, "storage_mk1", { x: 100, y: 80 });
     state = placeBuilding(state, "storage_mk1", { x: 460, y: 220 });
     const [source, target] = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
@@ -241,14 +243,12 @@ describe("factory simulation", () => {
     expect(blueprint).toMatchObject({ name: "铁块缓存链" });
     expect(blueprint.entities).toHaveLength(2);
     expect(blueprint.entities.map((entity) => entity.offset)).toEqual([{ x: 0, y: 0 }, { x: 360, y: 140 }]);
-    expect(blueprint.belts).toEqual([expect.objectContaining({ itemId: "iron_ingot", tier: 2, sorterTier: 2, lanes: 1 })]);
+    expect(blueprint.belts).toEqual([expect.objectContaining({ itemId: "iron_ingot", tier: 2, sorterTier: 1, lanes: 1 })]);
     expect(getBlueprintRequirements(blueprint)).toEqual(expect.arrayContaining([
       { constructionId: "storage_mk1", amount: 2 },
       { constructionId: "conveyor_belt_mk2", amount: 1 },
-      { constructionId: "sorter_mk2", amount: 1 },
     ]));
 
-    state.construction.sorter_mk2 = 1;
     state = setActivePlanet(state, "ashen");
     expect(canPlaceBlueprint(state, blueprint.id)).toBe(true);
     state = placeBlueprint(state, blueprint.id, { x: -200, y: -100 });
@@ -257,9 +257,9 @@ describe("factory simulation", () => {
     expect(copies.map((entity) => entity.position)).toEqual([{ x: -200, y: -100 }, { x: 160, y: 40 }]);
     expect(copies.every((entity) => entity.storedItemId === "iron_ingot" && (entity.outputs.iron_ingot ?? 0) === 0)).toBe(true);
     expect(state.belts.filter((belt) => belt.planetId === "ashen")).toEqual([
-      expect.objectContaining({ itemId: "iron_ingot", tier: 2, sorterTier: 2 }),
+      expect.objectContaining({ itemId: "iron_ingot", tier: 2, sorterTier: 1 }),
     ]);
-    expect(state.construction).toMatchObject({ storage_mk1: 0, conveyor_belt_mk2: 0, sorter_mk2: 0 });
+    expect(state.construction).toMatchObject({ storage_mk1: 0, conveyor_belt_mk2: 0 });
   });
 
   it("moves and upgrades a multi-node selection in one command", () => {
@@ -320,8 +320,8 @@ describe("factory simulation", () => {
     state = connectBelt(state, "vein_iron", smelter.id, "iron_ore");
     state = advanceSimulation(state, 1);
 
-    expect(state.entities.find((entity) => entity.id === smelter.id)?.inputs.iron_ore).toBe(3);
-    expect(state.belts[0].lastFlow).toBe(3);
+    expect(state.entities.find((entity) => entity.id === smelter.id)?.inputs.iron_ore).toBe(6);
+    expect(state.belts[0].lastFlow).toBe(6);
   });
 
   it("returns buffered items and belts when a recipe changes", () => {
@@ -590,7 +590,7 @@ describe("factory simulation", () => {
 
   it("runs the electromagnetic drive, deuterium and fuel rod chain", () => {
     let state = createInitialState();
-    state.research.completedTechIds.push("miniature_particle_collider");
+    state.research.completedTechIds.push("basic_logistics", "high_speed_logistics", "miniature_particle_collider");
     state.construction.wind_turbine = 50;
     state.construction.miniature_particle_collider = 1;
     state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 50);
@@ -835,7 +835,7 @@ describe("factory simulation", () => {
     state = connectBelt(state, storage.id, smelter.id, "iron_ore");
     state = advanceSimulation(state, 2);
 
-    expect(state.entities.find((entity) => entity.id === smelter.id)?.inputs.iron_ore).toBe(3);
+    expect(state.entities.find((entity) => entity.id === smelter.id)?.inputs.iron_ore).toBe(6);
   });
 
   it("rejects a belt whose source or target no longer matches the selected item", () => {
@@ -873,15 +873,15 @@ describe("factory simulation", () => {
     expect(state.belts.every((belt) => belt.sorterTier === 1)).toBe(true);
     state = advanceSimulation(state, 1);
     expect(state.entities.find((entity) => entity.id === chemical.id)?.inputs).toMatchObject({
-      plastic: 3,
-      refined_oil: 3,
-      water: 3,
+      plastic: 6,
+      refined_oil: 6,
+      water: 6,
     });
   });
 
   it("connects and transfers every configured output slot from a logistics station", () => {
     let state = createInitialState();
-    state.research.completedTechIds.push("automatic_metallurgy", "high_strength_crystal", "basic_chemical_engineering", "titanium_alloy");
+    state.research.completedTechIds.push("high_strength_crystal", "basic_chemical_engineering", "titanium_alloy");
     state.construction.interstellar_logistics_station = 1;
     state.construction.arc_smelter = 1;
     state.construction.conveyor_belt_mk1 = 3;
@@ -906,9 +906,9 @@ describe("factory simulation", () => {
     expect(state.construction.conveyor_belt_mk1).toBe(0);
     state = advanceSimulation(state, 1);
     expect(state.entities.find((entity) => entity.id === alloy.id)?.inputs).toMatchObject({
-      steel: 3,
-      titanium_ingot: 3,
-      sulfuric_acid: 3,
+      steel: 6,
+      titanium_ingot: 6,
+      sulfuric_acid: 6,
     });
   });
 
@@ -983,11 +983,11 @@ describe("factory simulation", () => {
     };
 
     const balanced = makeNetwork(false);
-    expect(balanced.state.entities.find((entity) => entity.id === balanced.smelters[0].id)?.inputs.iron_ore).toBe(2);
-    expect(balanced.state.entities.find((entity) => entity.id === balanced.smelters[1].id)?.inputs.iron_ore).toBe(1);
+    expect(balanced.state.entities.find((entity) => entity.id === balanced.smelters[0].id)?.inputs.iron_ore).toBe(3);
+    expect(balanced.state.entities.find((entity) => entity.id === balanced.smelters[1].id)?.inputs.iron_ore).toBe(3);
 
     const prioritized = makeNetwork(true);
-    expect(prioritized.state.entities.find((entity) => entity.id === prioritized.smelters[0].id)?.inputs.iron_ore).toBe(3);
+    expect(prioritized.state.entities.find((entity) => entity.id === prioritized.smelters[0].id)?.inputs.iron_ore).toBe(6);
     expect(prioritized.state.entities.find((entity) => entity.id === prioritized.smelters[1].id)?.inputs.iron_ore ?? 0).toBe(0);
   });
 
@@ -1115,6 +1115,28 @@ describe("factory simulation", () => {
     expect(state.construction.mining_machine).toBe(0);
   });
 
+  it("adds one unit to existing machine and miner groups from construction stock", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    expect(assembler.machineCount).toBe(1);
+    expect(state.construction.assembling_machine_mk1).toBe(2);
+
+    state = addUnitToEntityGroup(state, assembler.id);
+    expect(state.entities.find((entity) => entity.id === assembler.id)?.machineCount).toBe(2);
+    expect(state.construction.assembling_machine_mk1).toBe(1);
+
+    state = addUnitToEntityGroup(state, "vein_iron");
+    expect(state.entities.find((entity) => entity.id === "vein_iron")?.minerCount).toBe(1);
+    expect(state.construction.mining_machine).toBe(1);
+
+    const withoutStock = {
+      ...state,
+      construction: { ...state.construction, assembling_machine_mk1: 0 },
+    };
+    expect(addUnitToEntityGroup(withoutStock, assembler.id)).toBe(withoutStock);
+  });
+
   it("queues a prerequisite chain and automatically advances research", () => {
     let state = createInitialState();
     state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 });
@@ -1212,7 +1234,7 @@ describe("factory simulation", () => {
     state = setLogisticsItem(state, demandId, "titanium_ingot");
     state = setStationMode(state, demandId, "demand");
     expect(getEntityOperatingStatus(state, state.entities.find((entity) => entity.id === demandId)!).code).toBe("missing-vessel");
-    state.tray.logistics_vessel = 1;
+    state.portableFleet.logistics_vessel = 1;
     state = adjustStationVessels(state, demandId, 1);
     state = advanceSimulation(state, 15);
 
@@ -1247,7 +1269,7 @@ describe("factory simulation", () => {
     const demandId = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station" && entity.id !== supplyId)!.id;
     state = setLogisticsItem(state, demandId, "optical_grating_crystal");
     state = setStationMode(state, demandId, "demand");
-    state.tray.logistics_vessel = 1;
+    state.portableFleet.logistics_vessel = 1;
     state.tray.space_warper = 1;
     state = adjustStationVessels(state, demandId, 1);
     state = adjustStationWarpers(state, demandId, 1);
@@ -1277,7 +1299,7 @@ describe("factory simulation", () => {
     const demandId = state.entities.find((entity) => entity.kind === "station" && entity.id !== supplyId)!.id;
     state = setLogisticsItem(state, demandId, "processor");
     state = setStationMode(state, demandId, "demand");
-    state.tray.logistics_vessel = 3;
+    state.portableFleet.logistics_vessel = 3;
     state = adjustStationVessels(state, demandId, 10);
     expect(state.entities.find((entity) => entity.id === demandId)?.stationVessels).toBe(3);
     expect(getEntityOperatingStatus(state, state.entities.find((entity) => entity.id === demandId)!).code).toBe("waiting-load");
@@ -1291,7 +1313,7 @@ describe("factory simulation", () => {
     expect(demand.stationLastTransfer).toBe(250);
 
     state = removeEntity(state, demandId);
-    expect(state.tray.logistics_vessel).toBe(3);
+    expect(state.portableFleet.logistics_vessel).toBe(3);
   });
 
   it("manufactures an interstellar station only after its advanced logistics technology", () => {
@@ -1777,10 +1799,13 @@ describe("factory simulation", () => {
     expect(state.handcraftQueue).toEqual([]);
   });
 
-  it("keeps equipment recipes and locked assembler recipes out of handcrafting", () => {
+  it("handcrafts basic smelting while keeping facility-only and locked recipes out", () => {
     let state = createInitialState();
     state.tray.iron_ore = 3;
-    expect(handcraftRecipe(state, "iron_ingot", 1)).toBe(state);
+    state = handcraftRecipe(state, "iron_ingot", 2);
+    expect(state.tray.iron_ore).toBe(1);
+    expect(state.tray.iron_ingot).toBe(2);
+    expect(handcraftRecipe(state, "critical_photon", 1)).toBe(state);
 
     state.tray.carbon_nanotube = 4;
     state.tray.titanium_alloy = 1;
@@ -1790,6 +1815,24 @@ describe("factory simulation", () => {
     state = handcraftRecipe(state, "frame_material", 1);
     expect(state.tray.frame_material).toBe(1);
     expect(state.tray.carbon_nanotube).toBe(0);
+  });
+
+  it("unlocks electric motors and turbines before particle collider technology", () => {
+    let state = createInitialState();
+    state.tray.iron_ingot = 2;
+    state.tray.gear = 1;
+    state.tray.magnetic_coil = 3;
+
+    expect(canHandcraftRecipe(state, "electric_motor")).toBe(false);
+    state.research.completedTechIds.push("basic_logistics");
+    expect(canHandcraftRecipe(state, "electric_motor")).toBe(true);
+    state = handcraftRecipe(state, "electric_motor", 1);
+    state.tray.electric_motor = 2;
+
+    expect(canHandcraftRecipe(state, "electromagnetic_turbine")).toBe(false);
+    state.research.completedTechIds.push("high_speed_logistics");
+    expect(canHandcraftRecipe(state, "electromagnetic_turbine")).toBe(true);
+    expect(state.research.completedTechIds).not.toContain("miniature_particle_collider");
   });
 
   it("handcrafts unlocked logistics vehicles and space warpers", () => {
@@ -1807,9 +1850,8 @@ describe("factory simulation", () => {
     state = handcraftRecipe(state, "logistics_vessel", 1);
     state = handcraftRecipe(state, "space_warper", 2);
 
+    expect(state.portableFleet).toEqual({ logistics_drone: 1, logistics_vessel: 1 });
     expect(state.tray).toMatchObject({
-      logistics_drone: 1,
-      logistics_vessel: 1,
       space_warper: 2,
       steel: 0,
       processor: 0,
@@ -1818,6 +1860,26 @@ describe("factory simulation", () => {
       plasma_exciter: 0,
       graviton_lens: 0,
     });
+  });
+
+  it("stores manufactured and cursor-carried logistics vehicles in the portable fleet across planets", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 100, y: 0 });
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    assembler.outputs.logistics_vessel = 2;
+
+    state = moveEntityOutputToTray(state, assembler.id, "logistics_vessel");
+    expect(state.entities.find((entity) => entity.id === assembler.id)?.outputs.logistics_vessel).toBe(0);
+    expect(state.portableFleet.logistics_vessel).toBe(2);
+    expect(state.tray.logistics_vessel).toBeUndefined();
+
+    state.cargo = { itemId: "logistics_drone", amount: 3, origin: { kind: "node-output", id: assembler.id } };
+    state = dropCargoToTray(state);
+    expect(state.portableFleet.logistics_drone).toBe(3);
+    expect(state.cargo).toBeNull();
+
+    state = setActivePlanet(state, "ashen");
+    expect(state.portableFleet).toEqual({ logistics_drone: 3, logistics_vessel: 2 });
   });
 
   it("absorbs orbiting sails into a capped permanent shell before they decay", () => {
@@ -1953,11 +2015,11 @@ describe("factory simulation", () => {
     belt.progress = 0.75;
     state = setBeltPriority(state, belt.id, 1);
 
-    expect(getBeltCapacity(state.belts[0])).toBe(6);
+    expect(getBeltCapacity(state.belts[0])).toBe(12);
     expect(canUpgradeBelt(state, belt.id)).toBe(true);
     const upgraded = upgradeBelt(state, belt.id);
     expect(upgraded.belts[0]).toMatchObject({ id: belt.id, tier: 2, lanes: 2, progress: 0.75, priority: 1 });
-    expect(getBeltCapacity(upgraded.belts[0])).toBe(6);
+    expect(getBeltCapacity(upgraded.belts[0])).toBe(24);
     expect(upgraded.construction.conveyor_belt_mk2).toBe(0);
     expect(upgraded.construction.conveyor_belt_mk1).toBe(2);
   });
@@ -2171,11 +2233,11 @@ describe("factory simulation", () => {
     state = setStationMode(state, demand.id, "demand");
     state = setStationMinimumLoad(state, demand.id, 0.5);
     state.entities.find((entity) => entity.id === supply.id)!.outputs.iron_ingot = 100;
-    state.tray.logistics_drone = 2;
+    state.portableFleet.logistics_drone = 2;
     state = adjustStationDrones(state, demand.id, 2);
 
     expect(getStationDroneCapacity(state.entities.find((entity) => entity.id === demand.id)!)).toBe(50);
-    expect(state.tray.logistics_drone).toBe(0);
+    expect(state.portableFleet.logistics_drone).toBe(0);
     state = advanceSimulation(state, 8.1);
 
     expect(state.entities.find((entity) => entity.id === supply.id)?.outputs.iron_ingot).toBe(50);
@@ -2202,7 +2264,7 @@ describe("factory simulation", () => {
     state = setStationSlotMinimumLoad(state, demand.id, 1, 1);
     state = setStationSlotPriority(state, demand.id, 1, 2);
     state.entities.find((entity) => entity.id === supply.id)!.outputs = { iron_ingot: 25, copper_ingot: 25 };
-    state.tray.logistics_drone = 2;
+    state.portableFleet.logistics_drone = 2;
     state = adjustStationDrones(state, demand.id, 2);
 
     state = advanceSimulation(state, 8.1);
@@ -2225,14 +2287,13 @@ describe("factory simulation", () => {
     state = setBeltMonitorEnabled(state, "stack_a", true);
     state = applyBeltConfiguration(state, "stack_a", "stack_b");
 
-    expect(getBeltCapacity(state.belts[0])).toBe(12);
+    expect(getBeltCapacity(state.belts[0])).toBe(24);
     expect(getBeltNetworkIds(state, "stack_a")).toEqual(["stack_a", "stack_b"]);
     expect(state.belts[1]).toMatchObject({ stackSize: 4, priority: 2, monitorEnabled: true });
   });
 
   it("rotates, mirrors and parameterizes blueprint deployment while preserving external ports", () => {
     let state = createInitialState();
-    state.research.completedTechIds.push("basic_assembling");
     state = placeBuilding(state, "assembling_machine_mk1", { x: 100, y: 100 });
     state = placeBuilding(state, "assembling_machine_mk1", { x: 300, y: 200 });
     const assemblers = state.entities.filter((entity) => entity.buildingId === "assembling_machine_mk1");
@@ -2252,7 +2313,6 @@ describe("factory simulation", () => {
 
   it("queues a missing-material blueprint and deploys it when construction stock arrives", () => {
     let state = createInitialState();
-    state.research.completedTechIds.push("basic_assembling");
     state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
     const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
     state = createBlueprint(state, [assembler.id], "待建制造台");
@@ -2291,7 +2351,7 @@ describe("factory simulation", () => {
     state = setStationMode(state, demand.id, "demand");
     state = setStationMinimumLoad(state, demand.id, 1);
     state.entities.find((entity) => entity.id === supply.id)!.outputs.processor = 100;
-    state.tray.logistics_drone = 1;
+    state.portableFleet.logistics_drone = 1;
     state = adjustStationDrones(state, demand.id, 1);
 
     expect(getLogisticsSpeedMultiplier(state)).toBe(2);
@@ -2322,7 +2382,7 @@ describe("factory simulation", () => {
     state = setLogisticsItem(state, stationId, "hydrogen");
     state = setStationMode(state, stationId, "demand");
     state = setStationMinimumLoad(state, stationId, 0.1);
-    state.tray.logistics_vessel = 1;
+    state.portableFleet.logistics_vessel = 1;
     state = adjustStationVessels(state, stationId, 1);
     state = advanceSimulation(state, 40);
 
@@ -2351,7 +2411,7 @@ describe("factory simulation", () => {
     expect(state.tray.space_warper).toBe(3);
   });
 
-  it("upgrades integrated sorters independently from their conveyor belt", () => {
+  it("treats legacy sorter upgrades as no-ops because belts now transfer directly", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("high_speed_logistics");
     state.construction.conveyor_belt_mk1 = 2;
@@ -2361,13 +2421,13 @@ describe("factory simulation", () => {
     state = connectBelt(state, "vein_iron", smelter.id, "iron_ore");
     state = connectBelt(state, "vein_iron", smelter.id, "iron_ore");
     const beltId = state.belts[0].id;
-    expect(getBeltCapacity(state.belts[0])).toBe(6);
-    expect(getSorterCapacity(state.belts[0])).toBe(6);
-    expect(canUpgradeSorter(state, beltId)).toBe(true);
-    state = upgradeSorter(state, beltId);
-    expect(state.belts[0]).toMatchObject({ tier: 1, sorterTier: 2, lanes: 2 });
     expect(getBeltCapacity(state.belts[0])).toBe(12);
-    expect(state.construction.sorter_mk2).toBe(0);
+    expect(getSorterCapacity(state.belts[0])).toBe(12);
+    expect(canUpgradeSorter(state, beltId)).toBe(false);
+    state = upgradeSorter(state, beltId);
+    expect(state.belts[0]).toMatchObject({ tier: 1, sorterTier: 1, lanes: 2 });
+    expect(getBeltCapacity(state.belts[0])).toBe(12);
+    expect(state.construction.sorter_mk2).toBe(2);
   });
 
   it("restricts gas-giant construction to orbital collectors", () => {
@@ -2584,12 +2644,12 @@ describe("factory simulation", () => {
     let state = createInitialState();
     state.exploration.unlockedSystemIds.push("borealis");
     state.tray.titanium_alloy = 10;
-    state.tray.logistics_drone = 5;
+    state.portableFleet.logistics_drone = 5;
     expect(canColonizePlanet(state, "boreal_giant")).toBe(true);
     state = colonizePlanet(state, "boreal_giant");
     expect(state.exploration.colonizedPlanetIds).toContain("boreal_giant");
     expect(state.tray.titanium_alloy).toBe(0);
-    expect(state.tray.logistics_drone).toBe(0);
+    expect(state.portableFleet.logistics_drone).toBe(0);
     expect(setActivePlanet(state, "boreal_giant").activePlanetId).toBe("boreal_giant");
   });
 

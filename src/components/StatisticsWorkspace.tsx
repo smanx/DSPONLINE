@@ -10,7 +10,7 @@ import { listBeltNetworks, type BeltHealth } from "../game/network";
 import type { BeltRouteMode, CanvasBookmark, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, RecipeId } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
-export type StatisticsTab = "production" | "networks" | "planning" | "power" | "issues" | "galaxy";
+export type StatisticsTab = "production" | "efficiency" | "networks" | "planning" | "power" | "issues" | "galaxy";
 type ItemFilter = "all" | "producing" | "deficit" | "blocked";
 type ItemSort = "production" | "consumption" | "net" | "inventory" | "name";
 
@@ -55,6 +55,14 @@ function reserveTime(seconds: number): string {
   if (seconds <= 0) return "-";
   if (seconds < 60) return `${Math.floor(seconds)} s`;
   return `${Math.floor(seconds / 60)} min ${Math.floor(seconds % 60)} s`;
+}
+
+function efficiencyPoints(values: number[]): string {
+  if (values.length === 0) return "";
+  return values.map((value, index) => {
+    const x = values.length === 1 ? 50 : index / (values.length - 1) * 100;
+    return `${x},${42 - Math.max(0, Math.min(1, value)) * 38}`;
+  }).join(" ");
 }
 
 function sortItems(items: ItemStatistics[], sort: ItemSort): ItemStatistics[] {
@@ -173,6 +181,15 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
     consumption: sample.consumptionPerMinute[selectedPlan.itemId] ?? 0,
     inventory: sample.inventory[selectedPlan.itemId] ?? 0,
   })).slice(-60) : [], [game.productionHistory, selectedPlan]);
+  const efficiencyHistory = useMemo(() => game.productionHistory.slice(-90).map((sample) => ({
+    elapsedSeconds: sample.elapsedSeconds,
+    machine: sample.machineEfficiency ?? 0,
+    logistics: sample.logisticsEfficiency ?? 0,
+    power: sample.powerEfficiency ?? (sample.demandKw > 0 ? 0 : 1),
+    activeMachines: sample.activeMachines ?? 0,
+    blockedMachines: sample.blockedMachines ?? 0,
+  })), [game.productionHistory]);
+  const latestEfficiency = efficiencyHistory.at(-1);
 
   useEffect(() => {
     if (open && focusTab) setTab(focusTab);
@@ -200,6 +217,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
 
       <nav className="statistics-tabs" role="tablist" aria-label="统计视图">
         <button type="button" role="tab" aria-selected={tab === "production"} className={tab === "production" ? "active" : ""} onClick={() => setTab("production")}><Factory size={15} />生产</button>
+        <button type="button" role="tab" aria-selected={tab === "efficiency"} className={tab === "efficiency" ? "active" : ""} onClick={() => setTab("efficiency")}><Gauge size={15} />效率</button>
         <button type="button" role="tab" aria-selected={tab === "networks"} className={tab === "networks" ? "active" : ""} onClick={() => setTab("networks")}><Route size={15} />网络 <strong>{listBeltNetworks(game).length}</strong></button>
         <button type="button" role="tab" aria-selected={tab === "planning"} className={tab === "planning" ? "active" : ""} onClick={() => setTab("planning")}><Calculator size={15} />规划 <strong>{game.productionPlans.length}</strong></button>
         <button type="button" role="tab" aria-selected={tab === "power"} className={tab === "power" ? "active" : ""} onClick={() => setTab("power")}><Zap size={15} />电力</button>
@@ -235,6 +253,32 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
               ))}
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {tab === "efficiency" ? (
+        <div className="statistics-content statistics-efficiency">
+          <section className="efficiency-summary-band">
+            <div><span>设备效率</span><strong>{Math.round((latestEfficiency?.machine ?? 0) * 100)}%</strong><small>运行设备 {latestEfficiency?.activeMachines ?? 0}</small></div>
+            <div><span>传送带利用率</span><strong>{Math.round((latestEfficiency?.logistics ?? 0) * 100)}%</strong><small>连续网络实时流量</small></div>
+            <div><span>供电效率</span><strong>{Math.round((latestEfficiency?.power ?? 1) * 100)}%</strong><small>受电负载占比</small></div>
+            <div className={(latestEfficiency?.blockedMachines ?? 0) > 0 ? "warning" : ""}><span>停机设备</span><strong>{latestEfficiency?.blockedMachines ?? 0}</strong><small>缺料、堵塞或断电</small></div>
+          </section>
+          <section className="efficiency-curve">
+            <header><div><TrendingUp size={15} /><span>生产效率曲线</span></div><small>{efficiencyHistory.length > 0 ? `最近 ${efficiencyHistory.length * 10} 秒 · 每 10 秒采样` : "等待生产采样"}</small></header>
+            {efficiencyHistory.length > 1 ? <><svg viewBox="0 0 100 44" preserveAspectRatio="none" role="img" aria-label="设备、物流和供电效率曲线">
+              <line x1="0" x2="100" y1="42" y2="42" className="efficiency-curve-grid" />
+              <line x1="0" x2="100" y1="23" y2="23" className="efficiency-curve-grid" />
+              <line x1="0" x2="100" y1="4" y2="4" className="efficiency-curve-grid" />
+              <polyline className="efficiency-curve-machine" points={efficiencyPoints(efficiencyHistory.map((sample) => sample.machine))} />
+              <polyline className="efficiency-curve-logistics" points={efficiencyPoints(efficiencyHistory.map((sample) => sample.logistics))} />
+              <polyline className="efficiency-curve-power" points={efficiencyPoints(efficiencyHistory.map((sample) => sample.power))} />
+            </svg><footer><span><i className="machine" />设备效率</span><span><i className="logistics" />传送带利用率</span><span><i className="power" />供电效率</span><strong>{efficiencyHistory.at(-1)?.elapsedSeconds.toFixed(0)} s</strong></footer></> : <div className="efficiency-curve-empty"><Gauge size={22} /><span>模拟运行 20 秒后会显示效率趋势</span></div>}
+          </section>
+          <section className="efficiency-reading-guide">
+            <header><Gauge size={14} /><span>当前判断</span></header>
+            <div>{(latestEfficiency?.machine ?? 0) < 0.4 ? <span className="warning">设备效率偏低：优先检查缺料、输出堵塞和电力。</span> : <span className="ready">设备生产稳定。</span>}{(latestEfficiency?.logistics ?? 0) > 0.9 ? <span className="warning">传送带接近满载：可升级线路或并行铺设。</span> : <span>物流仍有可用吞吐。</span>}{(latestEfficiency?.power ?? 1) < 0.99 ? <span className="warning">供电不足会压低所有生产周期。</span> : <span>电网供给充足。</span>}</div>
+          </section>
         </div>
       ) : null}
 

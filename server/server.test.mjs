@@ -1,0 +1,153 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { after, before, test } from "node:test";
+import { createCloudServer } from "./index.mjs";
+
+let directory;
+let server;
+let baseUrl;
+let token;
+const cloudPayload = JSON.stringify({
+  formatVersion: 1,
+  state: {
+    version: 24,
+    elapsedSeconds: 1_000_000,
+    entities: [],
+    totalProduced: { universe_matrix: 10 },
+    metrics: { generationKw: 1_000, totalItemsPerMinute: 0, rayGenerationKw: 0 },
+    exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
+  },
+});
+
+before(async () => {
+  directory = await mkdtemp(path.join(tmpdir(), "dsp-cloud-"));
+  server = await createCloudServer({ databaseFile: path.join(directory, "cloud.sqlite"), logger: { error() {} } });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  baseUrl = `http://127.0.0.1:${server.address().port}`;
+});
+
+after(async () => {
+  await new Promise((resolve) => server.close(resolve));
+  await rm(directory, { recursive: true, force: true });
+});
+
+async function request(route, options = {}) {
+  const response = await fetch(`${baseUrl}${route}`, {
+    ...options,
+    headers: { "content-type": "application/json", ...(options.headers || {}) },
+  });
+  return { response, body: await response.json() };
+}
+
+test("registers, authenticates and rejects duplicate accounts", async () => {
+  const registered = await request("/api/auth/register", { method: "POST", body: JSON.stringify({ email: "pilot@example.com", password: "strong-pass-123", displayName: "测试工程师" }) });
+  assert.equal(registered.response.status, 201);
+  assert.ok(registered.body.token);
+  token = registered.body.token;
+  const duplicate = await request("/api/auth/register", { method: "POST", body: JSON.stringify({ email: "pilot@example.com", password: "strong-pass-123", displayName: "另一位工程师" }) });
+  assert.equal(duplicate.response.status, 409);
+});
+
+test("deduplicates anonymous players and reports total, daily and online counts", async () => {
+  const invalid = await request("/api/presence", { method: "POST", body: JSON.stringify({ playerId: "short" }) });
+  assert.equal(invalid.response.status, 400);
+
+  const firstId = "player_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const secondId = "player_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const first = await request("/api/presence", { method: "POST", body: JSON.stringify({ playerId: firstId }) });
+  const repeated = await request("/api/presence", { method: "POST", body: JSON.stringify({ playerId: firstId }) });
+  const second = await request("/api/presence", { method: "POST", body: JSON.stringify({ playerId: secondId }) });
+  assert.equal(first.response.status, 202);
+  assert.equal(repeated.body.players.total, 1);
+  assert.equal(second.body.players.total, 2);
+
+  const metrics = await request("/api/metrics");
+  const today = new Date().toISOString().slice(0, 10);
+  assert.deepEqual(metrics.body.players, { total: 2, today: 2, online: 2, onlineWindowSeconds: 120 });
+  assert.equal(metrics.body.daily[today].players, 2);
+  assert.equal(Object.keys(server.store.data.players).every((key) => /^[a-f0-9]{64}$/.test(key)), true);
+  assert.equal(JSON.stringify(server.store.data.players).includes(firstId), false);
+
+  const oversized = await request("/api/presence", {
+    method: "POST",
+    body: JSON.stringify({ playerId: firstId, padding: "x".repeat(8 * 1024 * 1024) }),
+  });
+  assert.equal(oversized.response.status, 413);
+  for (let index = 0; index < 5; index += 1) {
+    const accepted = await request("/api/presence", { method: "POST", body: JSON.stringify({ playerId: firstId }) });
+    assert.equal(accepted.response.status, 202);
+  }
+  const limited = await request("/api/presence", { method: "POST", body: JSON.stringify({ playerId: firstId }) });
+  assert.equal(limited.response.status, 429);
+  assert.equal(limited.response.headers.get("retry-after"), "60");
+});
+
+test("persists player totals across a restart and expires stale online players", async () => {
+  const restartDirectory = await mkdtemp(path.join(tmpdir(), "dsp-presence-"));
+  const databaseFile = path.join(restartDirectory, "cloud.sqlite");
+  let restartServer;
+  try {
+    restartServer = await createCloudServer({ databaseFile, playerOnlineWindowMs: 500, logger: { error() {} } });
+    await new Promise((resolve) => restartServer.listen(0, "127.0.0.1", resolve));
+    let restartBaseUrl = `http://127.0.0.1:${restartServer.address().port}`;
+    await fetch(`${restartBaseUrl}/api/presence`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ playerId: "player_cccccccccccccccccccccccccccccccc" }),
+    });
+    await new Promise((resolve) => restartServer.close(resolve));
+
+    restartServer = await createCloudServer({ databaseFile, playerOnlineWindowMs: 500, logger: { error() {} } });
+    await new Promise((resolve) => restartServer.listen(0, "127.0.0.1", resolve));
+    restartBaseUrl = `http://127.0.0.1:${restartServer.address().port}`;
+    const restored = await fetch(`${restartBaseUrl}/api/metrics`).then((response) => response.json());
+    assert.equal(restored.players.total, 1);
+    assert.equal(restored.players.online, 1);
+    await new Promise((resolve) => setTimeout(resolve, 550));
+    const expired = await fetch(`${restartBaseUrl}/api/metrics`).then((response) => response.json());
+    assert.equal(expired.players.total, 1);
+    assert.equal(expired.players.online, 0);
+  } finally {
+    if (restartServer?.listening) await new Promise((resolve) => restartServer.close(resolve));
+    await rm(restartDirectory, { recursive: true, force: true });
+  }
+});
+
+test("stores revisioned cloud saves and detects conflicts", async () => {
+  const saved = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
+  assert.equal(saved.response.status, 200);
+  assert.equal(saved.body.cloudSave.revision, 1);
+  const conflict = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
+  assert.equal(conflict.response.status, 409);
+
+  const secondPayload = cloudPayload.replace('"universe_matrix":10', '"universe_matrix":12');
+  const second = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: secondPayload, expectedRevision: 1 }) });
+  assert.equal(second.body.cloudSave.revision, 2);
+  const history = await request("/api/cloud-save/history", { headers: { authorization: `Bearer ${token}` } });
+  assert.deepEqual(history.body.history.map((entry) => entry.revision), [2, 1]);
+  const restored = await request("/api/cloud-save/restore", { method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ revision: 1, expectedRevision: 2 }) });
+  assert.equal(restored.body.cloudSave.revision, 3);
+  assert.equal(restored.body.cloudSave.restoredFromRevision, 1);
+  const loaded = await request("/api/cloud-save", { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(loaded.body.cloudSave.payload, cloudPayload);
+});
+
+test("recalculates leaderboard score on the server", async () => {
+  const rejected = await request("/api/leaderboard", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ seasonId: "season_01", metrics: { energyGeneratedMj: 1_000_000, uploadedWhiteMatrix: 1_000_000 } }),
+  });
+  assert.equal(rejected.response.status, 422);
+  const submitted = await request("/api/leaderboard", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ seasonId: "season_01", metrics: { energyGeneratedMj: 1_000_000, uploadedWhiteMatrix: 10, galaxyScore: 999_999_999 } }),
+  });
+  assert.equal(submitted.response.status, 200);
+  assert.equal(submitted.body.submission.metrics.galaxyScore, 121);
+  const ranking = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
+  assert.equal(ranking.body.entries[0].verified, true);
+});

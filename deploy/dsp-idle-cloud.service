@@ -1,0 +1,29 @@
+[Unit]
+Description=DSP Idle cloud account, save and leaderboard service
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/dsp-idle-cloud/current
+ExecStart=/usr/bin/node /opt/dsp-idle-cloud/current/index.mjs
+Restart=on-failure
+RestartSec=3
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=4320
+Environment=DSP_CLOUD_DATA_FILE=/var/lib/dsp-idle-cloud/cloud.json
+Environment=DSP_CLOUD_DATABASE_FILE=/var/lib/dsp-idle-cloud/cloud.sqlite
+Environment=DSP_CLOUD_BACKUP_DIRECTORY=/var/lib/dsp-idle-cloud/backups
+Environment=DSP_CLOUD_BACKUP_INTERVAL_MS=21600000
+Environment=DSP_PLAYER_ONLINE_WINDOW_MS=120000
+Environment=DSP_ALLOWED_ORIGIN=https://111.229.128.211.nip.io,http://111.229.128.211.nip.io,http://111.229.128.211
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dsp-idle-cloud
+
+[Install]
+WantedBy=multi-user.target

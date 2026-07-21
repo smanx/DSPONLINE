@@ -3,7 +3,7 @@ import { useMemo, useState, type CSSProperties } from "react";
 import { STAR_SYSTEM_LIST, getItem, getPlanet, getStarSystem, getTechnology } from "../game/content";
 import { canColonizePlanet, canExploreStarSystem, getStationSlots, isPlanetColonized, isStarSystemUnlocked, isTechnologyCompleted } from "../game/engine";
 import { getPlanetIndustrialProfile, PLANET_INDUSTRY_ROLE_LABELS } from "../game/galaxy";
-import { getPlanetIndustrySummaries, getRouteDistanceLabel, getRouteEndpointLabel, getStarSystemIndustrySummaries, getStellarRouteSnapshots } from "../game/stellarIndustry";
+import { getInterplanetaryLogisticsDiagnostics, getPlanetIndustrySummaries, getRouteDistanceLabel, getRouteEndpointLabel, getStarSystemIndustrySummaries, getStellarRouteSnapshots } from "../game/stellarIndustry";
 import type { GameState, LogisticsPriority, PlanetId, PlanetIndustryRole, StarSystemId, StationMinimumLoad } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
@@ -47,6 +47,7 @@ function IndustryConsole({ game, onTravel, onRoleChange, onStationPriorityChange
   const [query, setQuery] = useState("");
   const [routeFilter, setRouteFilter] = useState<"all" | "remote" | "issues">("all");
   const routes = useMemo(() => getStellarRouteSnapshots(game), [game]);
+  const logisticsDiagnostics = useMemo(() => getInterplanetaryLogisticsDiagnostics(game, routes), [game, routes]);
   const planets = useMemo(() => getPlanetIndustrySummaries(game, routes), [game, routes]);
   const systems = useMemo(() => getStarSystemIndustrySummaries(game, routes, planets), [game, planets, routes]);
   const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
@@ -100,6 +101,20 @@ function IndustryConsole({ game, onTravel, onRoleChange, onStationPriorityChange
             <footer><span><Gauge size={12} />发电 {compactNumber(system.generationKw)} kW</span><span>负载 {compactNumber(system.demandKw)} kW</span><span>最近枯竭 {formatDepletion(system.soonestDepletionSeconds)}</span></footer>
           </article>
         ))}
+      </section>
+
+      <section className="interplanetary-diagnostics" aria-label="跨星物流诊断">
+        <header><div><AlertTriangle size={15} /><span>跨星物流诊断</span><strong>{logisticsDiagnostics.length}</strong></div><small>按可处理优先级汇总远程物流塔、运输船、翘曲和电网问题</small></header>
+        {logisticsDiagnostics.length === 0 ? <div className="interplanetary-diagnostics-empty"><Check size={16} /><span>当前没有需要处理的跨星物流问题</span></div> : <div>{logisticsDiagnostics.slice(0, 12).map((diagnostic) => {
+          const focusSource = diagnostic.severity === "warning" && diagnostic.sourceStationId && diagnostic.sourcePlanetId;
+          const focusId = focusSource ? diagnostic.sourceStationId! : diagnostic.targetStationId;
+          const focusPlanet = focusSource ? diagnostic.sourcePlanetId! : diagnostic.targetPlanetId;
+          return <article className={`interplanetary-diagnostic interplanetary-diagnostic--${diagnostic.severity}`} key={diagnostic.id}>
+            <ItemHoverCard itemId={diagnostic.itemId}><ItemGlyph itemId={diagnostic.itemId} /></ItemHoverCard>
+            <div><strong>{diagnostic.title.replace(diagnostic.itemId, getItem(diagnostic.itemId).name)}</strong><span>{diagnostic.detail.replace(diagnostic.itemId, getItem(diagnostic.itemId).name)}</span><small>{diagnostic.recommendation}</small></div>
+            <button type="button" onClick={() => onFocusStation(focusId, focusPlanet)} title="定位相关物流站"><LocateFixed size={13} />定位</button>
+          </article>;
+        })}</div>}
       </section>
 
       <section className="stellar-route-console" aria-label="全局物流航线表">

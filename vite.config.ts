@@ -1,8 +1,35 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
+function scaleUiFontSizes(): Plugin {
+  return {
+    name: "scale-ui-font-sizes",
+    enforce: "pre",
+    transform(source, id) {
+      const normalizedId = id.split("?", 1)[0].replace(/\\/g, "/");
+      if (!normalizedId.endsWith("/src/styles.css")) return null;
+      const fontSizes = source.replace(
+        /(\bfont-size\s*:\s*)(\d*\.?\d+)px\b/g,
+        "$1calc($2px * var(--ui-font-scale, 1))",
+      );
+      const fontShorthands = fontSizes.replace(
+        /(\bfont\s*:\s*)(\d*\.?\d+)px(?=\/)/g,
+        "$1calc($2px * var(--ui-font-scale, 1))",
+      );
+      return fontShorthands === source ? null : { code: fontShorthands, map: null };
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  // Relative assets are required by the packaged file:// Electron shell and
+  // remain valid for the root-served web/PWA build.
+  base: "./",
+  plugins: [scaleUiFontSizes(), react()],
+  define: {
+    __APP_VERSION__: JSON.stringify(process.env.npm_package_version ?? "0.1.0"),
+    __BUILD_ID__: JSON.stringify(process.env.DSP_BUILD_ID ?? new Date().toISOString()),
+  },
   build: {
     rolldownOptions: {
       output: {
@@ -34,5 +61,7 @@ export default defineConfig({
   server: {
     host: "127.0.0.1",
     port: 4318,
+    proxy: { "/api": "http://127.0.0.1:4320" },
   },
+  preview: { proxy: { "/api": "http://127.0.0.1:4320" } },
 });

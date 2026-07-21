@@ -1,8 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { connectBelt, createInitialState, placeBuilding, setEntityRecipe, setLogisticsItem } from "./engine";
-import { analyzeBeltNetwork, diagnoseBelt, getBeltBundleMap, getPortOccupancy, listBeltNetworks } from "./network";
+import { analyzeBeltNetwork, diagnoseBelt, getBeltBundleMap, getPortOccupancy, listBeltNetworks, predictBeltConnection } from "./network";
 
 describe("production network diagnostics", () => {
+  it("forecasts a connection before the belt is built", () => {
+    let state = createInitialState();
+    state.construction.arc_smelter = 1;
+    state = placeBuilding(state, "arc_smelter", { x: 400, y: 0 });
+    const smelter = state.entities.find((entity) => entity.buildingId === "arc_smelter")!;
+    state = setEntityRecipe(state, smelter.id, "iron_ingot");
+    const forecast = predictBeltConnection(state, "vein_iron", smelter.id, "iron_ore", 1);
+    expect(forecast?.capacityPerSecond).toBeGreaterThan(0);
+    expect(forecast?.label).toContain("/s");
+  });
   it("traces directional branches and diagnoses starvation", () => {
     let state = createInitialState();
     state.construction.storage_mk1 = 1;

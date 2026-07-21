@@ -1,4 +1,4 @@
-import { CheckCircle2, Clock3, Factory, FlaskConical, Orbit, Send, Sparkles, X } from "lucide-react";
+import { CheckCircle2, Clock3, Factory, FlaskConical, Gift, Orbit, Send, Sparkles, X } from "lucide-react";
 import { getItem, getTechnology } from "../game/content";
 import type { OfflineReport } from "../game/storage";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
@@ -17,9 +17,10 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
   const infiniteResearchLevels = report.infiniteResearchLevels ?? [];
   const exported = report.exported ?? [];
   const galacticCreditsAdded = report.galacticCreditsAdded ?? 0;
+  const returningReward = report.returningReward ?? [];
   const hasChanges = report.produced.length > 0 || report.completedTechIds.length > 0 ||
     report.structurePointsAdded > 0 || report.shellSailsAdded > 0 || infiniteResearchLevels.length > 0 ||
-    exported.length > 0 || galacticCreditsAdded > 0;
+    exported.length > 0 || galacticCreditsAdded > 0 || returningReward.length > 0;
   return (
     <section className="offline-report" role="dialog" aria-modal="true" aria-label="离线结算报告">
       <header>
@@ -72,6 +73,10 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
               {exported.length > 0 ? exported.map(({ projectId, amount }) => <span key={projectId}><Send size={13} />{projectId} +{amount.toLocaleString("zh-CN")}</span>) : <span className="offline-empty-row">没有完成出口装运</span>}
             </div>
           </section>
+          {returningReward.length > 0 ? <section className="offline-returning-reward">
+            <header><Gift size={15} /><span>回归补给</span><strong>72h+</strong></header>
+            <div className="offline-production-list">{returningReward.map(({ itemId, amount }) => <div key={itemId}><ItemHoverCard itemId={itemId}><ItemGlyph itemId={itemId} /></ItemHoverCard><span>{getItem(itemId).name}</span><strong>+{amount.toLocaleString("zh-CN")}</strong></div>)}</div>
+          </section> : null}
         </div>
       ) : (
         <div className="offline-report-empty"><CheckCircle2 size={26} /><strong>离线期间网络保持稳定</strong><span>没有新增物资、科技或戴森结构</span></div>

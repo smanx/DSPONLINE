@@ -11,7 +11,7 @@ import {
 describe("industrial production planning", () => {
   it("expands a matrix target into equipment, power, logistics and raw requirements", () => {
     let state = createInitialState();
-    state.research.completedTechIds.push("electromagnetic_matrix", "electromagnetism", "automatic_metallurgy", "basic_assembling");
+    state.research.completedTechIds.push("electromagnetic_matrix", "electromagnetism");
     state = createProductionPlan(state, "electromagnetic_matrix", 60, "all");
     const result = calculateProductionPlan(state, state.productionPlans[0]);
 

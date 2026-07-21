@@ -81,14 +81,12 @@ export const RESOURCE_SOURCES: Partial<Record<ItemId, ResourceSourceDefinition[]
   ],
 };
 
-const RECIPE_LIST = Object.values(RECIPES);
-
 export function getProducingRecipes(itemId: ItemId): RecipeDefinition[] {
-  return RECIPE_LIST.filter((recipe) => recipe.outputs.some((output) => output.itemId === itemId));
+  return Object.values(RECIPES).filter((recipe) => recipe.outputs.some((output) => output.itemId === itemId));
 }
 
 export function getConsumingRecipes(itemId: ItemId): RecipeDefinition[] {
-  return RECIPE_LIST.filter((recipe) => recipe.inputs.some((input) => input.itemId === itemId));
+  return Object.values(RECIPES).filter((recipe) => recipe.inputs.some((input) => input.itemId === itemId));
 }
 
 export function getResearchUses(itemId: ItemId): TechnologyDefinition[] {

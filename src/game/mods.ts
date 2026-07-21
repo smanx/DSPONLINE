@@ -1,4 +1,5 @@
 import { BUILDINGS, ITEMS, RECIPES, TECHNOLOGIES, validateContentCatalog } from "./content";
+import type { BuildingDefinition, ItemDefinition } from "./types";
 
 export const MOD_FORMAT_VERSION = 1;
 
@@ -7,6 +8,8 @@ export interface ModItemDefinition {
   name: string;
   symbol?: string;
   color?: string;
+  kind?: ItemDefinition["kind"];
+  description?: string;
 }
 
 export interface ModRecipeAmount {
@@ -27,12 +30,28 @@ export interface ModRecipeDefinition {
 export interface ModBuildingDefinition {
   id: string;
   name: string;
+  shortName?: string;
+  kind?: BuildingDefinition["kind"];
+  speed?: number;
+  inputCapacity?: number;
+  outputCapacity?: number;
+  accepts?: BuildingDefinition["accepts"];
+  powerDemandKw?: number;
+  powerGenerationKw?: number;
+  description?: string;
+  requiredTechId?: string;
+  costs?: ModRecipeAmount[];
+  outputAmount?: number;
 }
 
 export interface ModTechnologyDefinition {
   id: string;
   name: string;
   prerequisites?: string[];
+  tier?: number;
+  summary?: string;
+  costs?: ModRecipeAmount[];
+  unlocks?: string[];
 }
 
 export interface ContentPackManifest {
@@ -49,6 +68,11 @@ export interface ContentPackManifest {
   technologies?: ModTechnologyDefinition[];
 }
 
+export interface ParsedContentPackDependency {
+  id: string;
+  range?: string;
+}
+
 export interface ModValidationIssue {
   severity: "error" | "warning";
   code: string;
@@ -61,6 +85,12 @@ export interface ModValidationResult {
   manifest: ContentPackManifest | null;
   issues: ModValidationIssue[];
   counts: { items: number; buildings: number; recipes: number; technologies: number };
+}
+
+export interface ContentPackValidationContext {
+  itemIds?: Iterable<string>;
+  buildingIds?: Iterable<string>;
+  technologyIds?: Iterable<string>;
 }
 
 function isRecord(value: unknown): value is Record<string, any> {
@@ -81,6 +111,59 @@ function amountList(value: unknown): value is ModRecipeAmount[] {
   );
 }
 
+const SEMVER_PATTERN = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
+const VERSION_RANGE_PATTERN = /^(?:\^|~|>=|<=|>|<|=)?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+export function parseContentPackDependency(value: string): ParsedContentPackDependency | null {
+  const match = /^([a-z][a-z0-9_]{1,63})(?:@((?:\^|~|>=|<=|>|<|=)?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?))?$/.exec(value.trim());
+  return match ? { id: match[1], ...(match[2] ? { range: match[2] } : {}) } : null;
+}
+
+interface ParsedVersion {
+  major: number;
+  minor: number;
+  patch: number;
+  prerelease?: string;
+}
+
+function parseVersion(value: string): ParsedVersion | null {
+  const match = SEMVER_PATTERN.exec(value.trim());
+  return match ? {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    ...(match[4] ? { prerelease: match[4] } : {}),
+  } : null;
+}
+
+function compareVersions(left: ParsedVersion, right: ParsedVersion): number {
+  for (const key of ["major", "minor", "patch"] as const) {
+    if (left[key] !== right[key]) return left[key] > right[key] ? 1 : -1;
+  }
+  if (!left.prerelease && right.prerelease) return 1;
+  if (left.prerelease && !right.prerelease) return -1;
+  return (left.prerelease ?? "").localeCompare(right.prerelease ?? "");
+}
+
+/** Supports exact, ^, ~, and single comparator ranges used by content-pack manifests. */
+export function satisfiesContentPackVersion(version: string, range?: string): boolean {
+  if (!range) return Boolean(parseVersion(version));
+  const actual = parseVersion(version);
+  const match = /^(\^|~|>=|<=|>|<|=)?(.+)$/.exec(range.trim());
+  const expected = match ? parseVersion(match[2]) : null;
+  if (!actual || !expected || !match) return false;
+  const comparison = compareVersions(actual, expected);
+  switch (match[1] ?? "=") {
+    case "^": return actual.major === expected.major && comparison >= 0;
+    case "~": return actual.major === expected.major && actual.minor === expected.minor && comparison >= 0;
+    case ">=": return comparison >= 0;
+    case "<=": return comparison <= 0;
+    case ">": return comparison > 0;
+    case "<": return comparison < 0;
+    default: return comparison === 0;
+  }
+}
+
 function uniqueIds<T extends { id: string }>(entries: T[], path: string, issues: ModValidationIssue[]): Set<string> {
   const ids = new Set<string>();
   entries.forEach((entry, index) => {
@@ -90,7 +173,7 @@ function uniqueIds<T extends { id: string }>(entries: T[], path: string, issues:
   return ids;
 }
 
-function parseManifest(value: unknown, issues: ModValidationIssue[]): ContentPackManifest | null {
+function parseManifest(value: unknown, issues: ModValidationIssue[], context?: ContentPackValidationContext): ContentPackManifest | null {
   if (!isRecord(value)) {
     issues.push({ severity: "error", code: "root", path: "$", message: "内容包根节点必须是对象" });
     return null;
@@ -103,9 +186,10 @@ function parseManifest(value: unknown, issues: ModValidationIssue[]): ContentPac
     if (!nonEmpty(value[key])) issues.push({ severity: "error", code: "metadata", path: `$.${key}`, message: `${label}不能为空` });
   }
   if (value.id !== undefined && !validId(value.id)) issues.push({ severity: "error", code: "id-format", path: "$.id", message: "内容包 ID 只能使用小写字母、数字和下划线" });
+  if (typeof value.version === "string" && !parseVersion(value.version)) issues.push({ severity: "error", code: "version-format", path: "$.version", message: "内容包版本必须使用语义版本号，例如 1.2.0" });
   const dependencies = value.dependencies === undefined ? [] : value.dependencies;
-  if (!Array.isArray(dependencies) || dependencies.length > 32 || !dependencies.every(validId)) {
-    issues.push({ severity: "error", code: "dependencies", path: "$.dependencies", message: "依赖必须是最多 32 个合法内容包 ID" });
+  if (!Array.isArray(dependencies) || dependencies.length > 32 || !dependencies.every((entry) => typeof entry === "string" && parseContentPackDependency(entry))) {
+    issues.push({ severity: "error", code: "dependencies", path: "$.dependencies", message: "依赖必须是内容包 ID 或 ID@版本范围，例如 core_pack@^1.2.0" });
   }
   const items = Array.isArray(value.items) ? value.items : [];
   const buildings = Array.isArray(value.buildings) ? value.buildings : [];
@@ -120,14 +204,42 @@ function parseManifest(value: unknown, issues: ModValidationIssue[]): ContentPac
       issues.push({ severity: "error", code: "item-shape", path: `$.items[${index}]`, message: "物品需要合法 id 和 name" });
       return [];
     }
-    return [{ id: entry.id, name: entry.name.trim().slice(0, 80), ...(typeof entry.symbol === "string" ? { symbol: entry.symbol.slice(0, 8) } : {}), ...(typeof entry.color === "string" ? { color: entry.color.slice(0, 16) } : {}) }];
+    const kind = entry.kind;
+    if (kind !== undefined && kind !== "solid" && kind !== "fluid" && kind !== "matrix") {
+      issues.push({ severity: "error", code: "item-kind", path: `$.items[${index}].kind`, message: "物品类型必须是 solid、fluid 或 matrix" });
+    }
+    return [{ id: entry.id, name: entry.name.trim().slice(0, 80), ...(typeof entry.symbol === "string" ? { symbol: entry.symbol.slice(0, 8) } : {}), ...(typeof entry.color === "string" ? { color: entry.color.slice(0, 16) } : {}), ...(kind === "solid" || kind === "fluid" || kind === "matrix" ? { kind } : {}), ...(typeof entry.description === "string" ? { description: entry.description.trim().slice(0, 240) } : {}) }];
   });
   const validBuildings = buildings.filter(isRecord).flatMap((entry, index) => {
     if (!validId(entry.id) || !nonEmpty(entry.name)) {
       issues.push({ severity: "error", code: "building-shape", path: `$.buildings[${index}]`, message: "建筑需要合法 id 和 name" });
       return [];
     }
-    return [{ id: entry.id, name: entry.name.trim().slice(0, 80) }];
+    const kind = entry.kind;
+    if (kind !== undefined && !["machine", "miner", "power", "storage", "splitter", "station"].includes(kind)) {
+      issues.push({ severity: "error", code: "building-kind", path: `$.buildings[${index}].kind`, message: "建筑类型无效" });
+    }
+    const accepts = entry.accepts;
+    if (accepts !== undefined && !["solid", "fluid", "any"].includes(accepts)) {
+      issues.push({ severity: "error", code: "building-accepts", path: `$.buildings[${index}].accepts`, message: "建筑物品类型限制无效" });
+    }
+    const numericKeys = ["speed", "inputCapacity", "outputCapacity", "powerDemandKw", "powerGenerationKw", "outputAmount"] as const;
+    for (const key of numericKeys) if (entry[key] !== undefined && (typeof entry[key] !== "number" || !Number.isFinite(entry[key]) || entry[key] < 0 || entry[key] > 1_000_000)) {
+      issues.push({ severity: "error", code: "building-number", path: `$.buildings[${index}].${key}`, message: "建筑数值必须是有限的非负数" });
+    }
+    if (entry.requiredTechId !== undefined && !validId(entry.requiredTechId)) issues.push({ severity: "error", code: "building-tech", path: `$.buildings[${index}].requiredTechId`, message: "建筑解锁科技 ID 无效" });
+    if (entry.costs !== undefined && !amountList(entry.costs)) issues.push({ severity: "error", code: "building-costs", path: `$.buildings[${index}].costs`, message: "建筑成本必须是合法物品数量数组" });
+    return [{
+      id: entry.id,
+      name: entry.name.trim().slice(0, 80),
+      ...(typeof entry.shortName === "string" ? { shortName: entry.shortName.trim().slice(0, 24) } : {}),
+      ...(kind ? { kind } : {}),
+      ...numericKeys.reduce((result, key) => typeof entry[key] === "number" && Number.isFinite(entry[key]) ? { ...result, [key]: entry[key] } : result, {} as Record<string, number>),
+      ...(accepts === "solid" || accepts === "fluid" || accepts === "any" ? { accepts } : {}),
+      ...(typeof entry.description === "string" ? { description: entry.description.trim().slice(0, 240) } : {}),
+      ...(typeof entry.requiredTechId === "string" ? { requiredTechId: entry.requiredTechId } : {}),
+      ...(Array.isArray(entry.costs) ? { costs: entry.costs } : {}),
+    }];
   });
   const validTechnologies = technologies.filter(isRecord).flatMap((entry, index) => {
     if (!validId(entry.id) || !nonEmpty(entry.name)) {
@@ -138,7 +250,12 @@ function parseManifest(value: unknown, issues: ModValidationIssue[]): ContentPac
     if (!Array.isArray(prerequisites) || !prerequisites.every(validId)) {
       issues.push({ severity: "error", code: "technology-prerequisites", path: `$.technologies[${index}].prerequisites`, message: "科技前置必须是合法 ID 数组" });
     }
-    return [{ id: entry.id, name: entry.name.trim().slice(0, 80), prerequisites: Array.isArray(prerequisites) ? prerequisites : [] }];
+    if (entry.tier !== undefined && (typeof entry.tier !== "number" || !Number.isFinite(entry.tier) || entry.tier < 0 || entry.tier > 99)) {
+      issues.push({ severity: "error", code: "technology-tier", path: `$.technologies[${index}].tier`, message: "科技层级必须是 0 到 99 之间的数值" });
+    }
+    if (entry.costs !== undefined && !amountList(entry.costs)) issues.push({ severity: "error", code: "technology-costs", path: `$.technologies[${index}].costs`, message: "科技成本必须是合法物品数量数组" });
+    if (entry.unlocks !== undefined && (!Array.isArray(entry.unlocks) || !entry.unlocks.every(nonEmpty))) issues.push({ severity: "error", code: "technology-unlocks", path: `$.technologies[${index}].unlocks`, message: "科技解锁说明必须是文本数组" });
+    return [{ id: entry.id, name: entry.name.trim().slice(0, 80), prerequisites: Array.isArray(prerequisites) ? prerequisites : [], ...(typeof entry.tier === "number" ? { tier: Math.floor(entry.tier) } : {}), ...(typeof entry.summary === "string" ? { summary: entry.summary.trim().slice(0, 240) } : {}), ...(Array.isArray(entry.costs) ? { costs: entry.costs } : {}), ...(Array.isArray(entry.unlocks) ? { unlocks: entry.unlocks.map((unlock) => String(unlock).trim().slice(0, 80)) } : {}) }];
   });
   const validRecipes = recipes.filter(isRecord).flatMap((entry, index) => {
     if (!validId(entry.id) || !nonEmpty(entry.name) || !validId(entry.buildingId) || typeof entry.duration !== "number" || !Number.isFinite(entry.duration) || entry.duration <= 0 || entry.duration > 86_400 || !amountList(entry.inputs) || !amountList(entry.outputs)) {
@@ -161,9 +278,9 @@ function parseManifest(value: unknown, issues: ModValidationIssue[]): ContentPac
   for (const id of buildingIds) if (coreBuildings.has(id)) issues.push({ severity: "error", code: "override-building", path: "$.buildings", message: `不能覆盖核心建筑 ${id}` });
   for (const id of recipeIds) if (coreRecipes.has(id)) issues.push({ severity: "error", code: "override-recipe", path: "$.recipes", message: `不能覆盖核心配方 ${id}` });
   for (const id of technologyIds) if (coreTechnologies.has(id)) issues.push({ severity: "error", code: "override-technology", path: "$.technologies", message: `不能覆盖核心科技 ${id}` });
-  const allItems = new Set([...coreItems, ...itemIds]);
-  const allBuildings = new Set([...coreBuildings, ...buildingIds]);
-  const allTechnologies = new Set([...coreTechnologies, ...technologyIds]);
+  const allItems = new Set([...coreItems, ...(context?.itemIds ?? []), ...itemIds]);
+  const allBuildings = new Set([...coreBuildings, ...(context?.buildingIds ?? []), ...buildingIds]);
+  const allTechnologies = new Set([...coreTechnologies, ...(context?.technologyIds ?? []), ...technologyIds]);
   for (const recipe of validRecipes) {
     if (!allBuildings.has(recipe.buildingId)) issues.push({ severity: "error", code: "recipe-building", path: `$.recipes.${recipe.id}`, message: `配方引用未知建筑 ${recipe.buildingId}` });
     if (recipe.requiredTechId && !allTechnologies.has(recipe.requiredTechId)) issues.push({ severity: "error", code: "recipe-tech", path: `$.recipes.${recipe.id}`, message: `配方引用未知科技 ${recipe.requiredTechId}` });
@@ -178,7 +295,7 @@ function parseManifest(value: unknown, issues: ModValidationIssue[]): ContentPac
     version: typeof value.version === "string" ? value.version.trim().slice(0, 40) : "",
     ...(typeof value.author === "string" ? { author: value.author.trim().slice(0, 80) } : {}),
     ...(typeof value.description === "string" ? { description: value.description.trim().slice(0, 240) } : {}),
-    dependencies: Array.isArray(dependencies) ? [...new Set(dependencies.filter(validId))] : [],
+    dependencies: Array.isArray(dependencies) ? [...new Set(dependencies.filter((entry): entry is string => typeof entry === "string" && Boolean(parseContentPackDependency(entry))).map((entry) => entry.trim()))] : [],
     items: validItems,
     buildings: validBuildings,
     recipes: validRecipes,
@@ -186,13 +303,13 @@ function parseManifest(value: unknown, issues: ModValidationIssue[]): ContentPac
   };
 }
 
-export function validateContentPack(value: unknown): ModValidationResult {
+export function validateContentPack(value: unknown, context?: ContentPackValidationContext): ModValidationResult {
   const issues: ModValidationIssue[] = [];
   const coreAudit = validateContentCatalog();
   for (const issue of coreAudit.issues.filter((candidate) => candidate.severity === "error")) {
     issues.push({ severity: "error", code: `core-${issue.code}`, path: issue.id, message: `核心目录异常：${issue.message}` });
   }
-  const manifest = parseManifest(value, issues);
+  const manifest = parseManifest(value, issues, context);
   return {
     valid: Boolean(manifest) && issues.every((issue) => issue.severity !== "error"),
     manifest,
@@ -206,9 +323,9 @@ export function validateContentPack(value: unknown): ModValidationResult {
   };
 }
 
-export function parseContentPack(raw: string): ModValidationResult {
+export function parseContentPack(raw: string, context?: ContentPackValidationContext): ModValidationResult {
   try {
-    return validateContentPack(JSON.parse(raw));
+    return validateContentPack(JSON.parse(raw), context);
   } catch {
     return {
       valid: false,
@@ -234,4 +351,3 @@ export function createContentPackTemplate(): ContentPackManifest {
     technologies: [],
   };
 }
-

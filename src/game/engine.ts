@@ -57,6 +57,7 @@ import type {
   PowerGridId,
   PowerGridMetrics,
   PowerPriority,
+  PortableFleetItemId,
   ProliferatorMode,
   ProliferatorTier,
   RecipeDefinition,
@@ -86,7 +87,6 @@ import {
 import type { GalacticDispatchThrottle, GalacticExportProjectId, InfiniteResearchId } from "./types";
 
 const BELT_CAPACITY_PER_SECOND: Record<BeltTier, number> = { 1: 6, 2: 12, 3: 30 };
-const SORTER_CAPACITY_PER_SECOND: Record<SorterTier, number> = { 1: 3, 2: 6, 3: 12 };
 export const ACCUMULATOR_ENERGY_MJ = 90;
 export const SOLAR_SAIL_POWER_KW = 36;
 export const SOLAR_SAIL_LIFETIME_SECONDS = 1200;
@@ -107,6 +107,7 @@ export const STATION_DRONES_PER_BUILDING = 50;
 export const STATION_WARPER_CAPACITY_PER_BUILDING = 50;
 export const STATION_MINIMUM_LOAD_OPTIONS: StationMinimumLoad[] = [0.1, 0.25, 0.5, 1];
 export const STATION_SLOT_COUNT = 5;
+export const PORTABLE_FLEET_ITEM_IDS: PortableFleetItemId[] = ["logistics_drone", "logistics_vessel"];
 export const CARGO_STACK_OPTIONS: CargoStackSize[] = [1, 2, 4];
 export const POWER_GRID_IDS: PowerGridId[] = ["grid-a", "grid-b", "grid-c"];
 export const POWER_GRID_LABELS: Record<PowerGridId, string> = {
@@ -120,6 +121,10 @@ const EPSILON = 0.0001;
 function round(value: number, digits = 4): number {
   const scale = 10 ** digits;
   return Math.round(value * scale) / scale;
+}
+
+export function isPortableFleetItem(itemId: ItemId): itemId is PortableFleetItemId {
+  return PORTABLE_FLEET_ITEM_IDS.includes(itemId as PortableFleetItemId);
 }
 
 function copyState(state: GameState): GameState {
@@ -145,6 +150,7 @@ function copyState(state: GameState): GameState {
     tray: { ...state.tray },
     planetTrays,
     construction: { ...state.construction },
+    portableFleet: state.portableFleet ? { ...state.portableFleet } : { logistics_drone: 0, logistics_vessel: 0 },
     totalProduced: { ...state.totalProduced },
     research: {
       ...state.research,
@@ -381,7 +387,7 @@ export function createInitialState(): GameState {
     return { ...entity, resourceRemaining: reserve, resourceCapacity: reserve };
   });
   return {
-    version: 23,
+    version: 24,
     nextId: 1,
     activePlanetId: "home",
     entities,
@@ -429,6 +435,7 @@ export function createInitialState(): GameState {
       storage_tank: 0,
       splitter_4way: 0,
     },
+    portableFleet: { logistics_drone: 0, logistics_vessel: 0 },
     manualMined: 0,
     totalProduced: {},
     research: {
@@ -447,6 +454,7 @@ export function createInitialState(): GameState {
     recipeFocus: { itemId: null, mode: "two-level", position: { x: 24, y: 72 } },
     settings: {
       simulationSpeed: 1,
+      fontScale: 1,
       performanceMode: false,
       reducedMotion: false,
       soundEnabled: false,
@@ -2867,6 +2875,15 @@ function recordProductionHistory(state: GameState): void {
   for (const tray of Object.values(state.planetTrays)) {
     for (const [itemId, amount] of Object.entries(tray)) add(inventory, itemId as ItemId, Math.floor(amount ?? 0));
   }
+  const productiveEntities = state.entities.filter((entity) => entity.kind === "machine" || (entity.kind === "vein" && entity.minerCount > 0));
+  const productiveUnits = productiveEntities.reduce((sum, entity) => sum + (entity.kind === "vein" ? entity.minerCount : entity.machineCount), 0);
+  const utilizedUnits = productiveEntities.reduce((sum, entity) => sum + entity.utilization * (entity.kind === "vein" ? entity.minerCount : entity.machineCount), 0);
+  const activeMachines = productiveEntities.reduce((sum, entity) => sum + (entity.utilization > EPSILON ? (entity.kind === "vein" ? entity.minerCount : entity.machineCount) : 0), 0);
+  const blockedMachines = productiveEntities.reduce((sum, entity) => sum + (getEntityOperatingStatus(state, entity).tone === "blocked" ? (entity.kind === "vein" ? entity.minerCount : entity.machineCount) : 0), 0);
+  const beltCapacity = state.belts.reduce((sum, belt) => sum + getBeltCapacity(belt), 0);
+  const beltFlow = state.belts.reduce((sum, belt) => sum + Math.max(0, belt.lastFlow ?? 0), 0);
+  const totalPowerDemand = Object.values(state.planetMetrics).reduce((sum, metrics) => sum + metrics.demandKw, 0);
+  const deliveredPower = Object.values(state.planetMetrics).reduce((sum, metrics) => sum + metrics.demandKw * metrics.powerFactor, 0);
   state.productionHistory.push({
     elapsedSeconds: state.elapsedSeconds,
     productionPerMinute,
@@ -2874,6 +2891,11 @@ function recordProductionHistory(state: GameState): void {
     inventory,
     generationKw: round(Object.values(state.planetMetrics).reduce((sum, metrics) => sum + metrics.generationKw, 0), 2),
     demandKw: round(Object.values(state.planetMetrics).reduce((sum, metrics) => sum + metrics.demandKw, 0), 2),
+    machineEfficiency: round(productiveUnits > 0 ? utilizedUnits / productiveUnits : 0, 4),
+    logisticsEfficiency: round(beltCapacity > 0 ? Math.min(1, beltFlow / beltCapacity) : 0, 4),
+    powerEfficiency: round(totalPowerDemand > 0 ? Math.min(1, deliveredPower / totalPowerDemand) : 1, 4),
+    activeMachines: Math.max(0, Math.floor(activeMachines)),
+    blockedMachines: Math.max(0, Math.floor(blockedMachines)),
   });
   state.productionHistory = state.productionHistory.slice(-180);
   state.historyRecordedAt = state.elapsedSeconds;
@@ -2884,7 +2906,7 @@ export function advanceSimulation(state: GameState, seconds: number): GameState 
   const next = copyState(state);
   let remaining = Math.min(seconds, 30 * 24 * 60 * 60);
   // Long offline sessions use coarser deterministic slices to keep the idle loop bounded.
-  const stepSize = remaining > 24 * 60 * 60 ? 30 : remaining > 8 * 60 * 60 ? 10 : 1;
+  const stepSize = remaining >= 24 * 60 * 60 ? 30 : remaining > 8 * 60 * 60 ? 10 : 1;
   while (remaining > EPSILON) {
     const step = Math.min(stepSize, remaining);
     simulateStep(next, step);
@@ -2959,7 +2981,8 @@ export function isPlanetColonized(state: GameState, planetId: PlanetId): boolean
 }
 
 function portableItemAmount(state: GameState, itemId: ItemId): number {
-  return Math.floor(state.tray[itemId] ?? 0) + (state.cargo?.itemId === itemId ? Math.floor(state.cargo.amount) : 0);
+  const fleet = isPortableFleetItem(itemId) ? Math.floor(state.portableFleet?.[itemId] ?? 0) : 0;
+  return fleet + Math.floor(state.tray[itemId] ?? 0) + (state.cargo?.itemId === itemId ? Math.floor(state.cargo.amount) : 0);
 }
 
 export function canColonizePlanet(state: GameState, planetId: PlanetId): boolean {
@@ -2973,6 +2996,11 @@ export function colonizePlanet(state: GameState, planetId: PlanetId): GameState 
   const next = copyState(state);
   for (const cost of getPlanetIndustrialProfile(next, planetId).colonyCost) {
     let remaining = cost.amount;
+    if (isPortableFleetItem(cost.itemId)) {
+      const fromFleet = Math.min(remaining, Math.floor(next.portableFleet[cost.itemId] ?? 0));
+      next.portableFleet[cost.itemId] = Math.max(0, next.portableFleet[cost.itemId] - fromFleet);
+      remaining -= fromFleet;
+    }
     const fromTray = Math.min(remaining, Math.floor(next.tray[cost.itemId] ?? 0));
     next.tray[cost.itemId] = Math.max(0, Math.floor((next.tray[cost.itemId] ?? 0) - fromTray));
     remaining -= fromTray;
@@ -3199,7 +3227,6 @@ export function getBlueprintRequirements(blueprint: BlueprintDefinition): Array<
   }
   for (const belt of blueprint.belts) {
     add(getBeltConstructionId(belt.tier), belt.lanes);
-    if (belt.sorterTier > 1) add(getSorterConstructionId(belt.sorterTier), belt.lanes);
   }
   return [...requirements].map(([constructionId, amount]) => ({ constructionId, amount }));
 }
@@ -3470,6 +3497,14 @@ export function addBuildingToGroup(state: GameState, entityId: string, buildingI
   return next;
 }
 
+export function addUnitToEntityGroup(state: GameState, entityId: string, count = 1): GameState {
+  const entity = state.entities.find((candidate) => candidate.id === entityId);
+  if (!entity) return state;
+  if (entity.kind === "vein") return installMiner(state, entityId, count);
+  if (!entity.buildingId) return state;
+  return addBuildingToGroup(state, entityId, entity.buildingId, count);
+}
+
 export function installMiner(state: GameState, entityId: string, count = 1): GameState {
   const source = state.entities.find((item) => item.id === entityId && item.kind === "vein");
   if (!source?.resourceId) return state;
@@ -3486,6 +3521,11 @@ export function installMiner(state: GameState, entityId: string, count = 1): Gam
 }
 
 function addToTray(state: GameState, itemId: ItemId, amount: number): void {
+  if (isPortableFleetItem(itemId)) {
+    state.portableFleet ??= { logistics_drone: 0, logistics_vessel: 0 };
+    state.portableFleet[itemId] = Math.floor((state.portableFleet[itemId] ?? 0) + amount + EPSILON);
+    return;
+  }
   state.tray[itemId] = Math.floor((state.tray[itemId] ?? 0) + amount + EPSILON);
 }
 
@@ -3493,10 +3533,6 @@ function refundBelts(state: GameState, belts: BeltConnection[]): void {
   for (const belt of belts) {
     const constructionId = getBeltConstructionId(belt.tier);
     state.construction[constructionId] = (state.construction[constructionId] ?? 0) + belt.lanes;
-    if (belt.sorterTier > 1) {
-      const sorterId = getSorterConstructionId(belt.sorterTier);
-      state.construction[sorterId] = (state.construction[sorterId] ?? 0) + belt.lanes;
-    }
   }
 }
 
@@ -3530,6 +3566,40 @@ function targetConsumes(state: GameState, entity: FactoryEntity, itemId: ItemId)
     return remainingResearchCosts(state).some((cost) => cost.itemId === itemId);
   }
   return recipe?.inputs.some((input) => input.itemId === itemId) ?? false;
+}
+
+function hasBufferedItems(entity: FactoryEntity): boolean {
+  return Object.values(entity.inputs).some((amount) => amount > EPSILON) ||
+    Object.values(entity.outputs).some((amount) => amount > EPSILON);
+}
+
+/**
+ * A newly placed machine starts on its first available recipe. Letting a belt
+ * select an alternative only while that default is empty keeps explicit player
+ * choices intact while removing the extra configuration step for first use.
+ */
+function getAutoRecipeForInput(state: GameState, entity: FactoryEntity, itemId: ItemId): RecipeDefinition | undefined {
+  if (entity.kind !== "machine" || !entity.buildingId || hasBufferedItems(entity)) return undefined;
+  const recipes = getRecipesForBuilding(entity.buildingId)
+    .filter((recipe) => !recipe.requiredTechId || isTechnologyCompleted(state, recipe.requiredTechId));
+  const defaultRecipe = recipes[0];
+  if (!defaultRecipe || entity.recipeId !== defaultRecipe.id) return undefined;
+  return recipes.find((recipe) => recipe.inputs.some((input) => input.itemId === itemId));
+}
+
+function targetCanAcceptBeltItem(state: GameState, entity: FactoryEntity, itemId: ItemId): boolean {
+  return targetConsumes(state, entity, itemId) || Boolean(getAutoRecipeForInput(state, entity, itemId));
+}
+
+function configureAutoTargetRecipe(state: GameState, entity: FactoryEntity, itemId: ItemId): void {
+  const recipe = getAutoRecipeForInput(state, entity, itemId);
+  if (!recipe || entity.recipeId === recipe.id) return;
+  entity.recipeId = recipe.id;
+  entity.progress = 0;
+  entity.routingCursor = 0;
+  entity.utilization = 0;
+  entity.productionRate = 0;
+  entity.proliferatorBonusProgress = {};
 }
 
 function configureTargetItem(entity: FactoryEntity, itemId: ItemId): void {
@@ -3879,7 +3949,7 @@ export function canConnectBelt(state: GameState, sourceId: string, targetId: str
   const source = state.entities.find((entity) => entity.id === sourceId);
   const target = state.entities.find((entity) => entity.id === targetId);
   return Boolean(source && target && source.planetId === target.planetId &&
-    sourceProduces(source, itemId) && targetConsumes(state, target, itemId));
+    sourceProduces(source, itemId) && targetCanAcceptBeltItem(state, target, itemId));
 }
 
 export function connectBelt(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1): GameState {
@@ -3889,7 +3959,9 @@ export function connectBelt(state: GameState, sourceId: string, targetId: string
   const target = state.entities.find((entity) => entity.id === targetId);
   if (!source || !target) return state;
   const next = copyState(state);
-  configureTargetItem(next.entities.find((entity) => entity.id === targetId)!, itemId);
+  const configuredTarget = next.entities.find((entity) => entity.id === targetId)!;
+  configureAutoTargetRecipe(next, configuredTarget, itemId);
+  configureTargetItem(configuredTarget, itemId);
   const existing = next.belts.find((belt) => belt.source === sourceId && belt.target === targetId && belt.itemId === itemId);
   if (existing) {
     if (existing.tier !== tier) return state;
@@ -3926,10 +3998,6 @@ export function removeBelt(state: GameState, beltId: string): GameState {
   next.belts = next.belts.filter((item) => item.id !== beltId);
   const constructionId = getBeltConstructionId(belt.tier);
   next.construction[constructionId] = (next.construction[constructionId] ?? 0) + belt.lanes;
-  if (belt.sorterTier > 1) {
-    const sorterId = getSorterConstructionId(belt.sorterTier);
-    next.construction[sorterId] = (next.construction[sorterId] ?? 0) + belt.lanes;
-  }
   return next;
 }
 
@@ -4094,7 +4162,7 @@ export function adjustStationVessels(state: GameState, entityId: string, delta: 
   const loaded = Math.max(0, Math.floor(current.stationVessels ?? 0));
   const busy = stationBusyVehicles(current, "remote");
   const capacity = getStationVesselCapacity(current);
-  const available = Math.max(0, Math.floor(state.tray.logistics_vessel ?? 0));
+  const available = Math.max(0, Math.floor(state.portableFleet?.logistics_vessel ?? 0));
   const change = requested > 0
     ? Math.min(requested, capacity - loaded, available)
     : -Math.min(-requested, Math.max(0, loaded - busy));
@@ -4105,7 +4173,7 @@ export function adjustStationVessels(state: GameState, entityId: string, delta: 
   station.stationVessels = loaded + change;
   station.stationProgress = 0;
   if (change > 0) {
-    next.tray.logistics_vessel = available - change;
+    next.portableFleet.logistics_vessel = available - change;
   } else {
     addToTray(next, "logistics_vessel", -change);
   }
@@ -4124,7 +4192,7 @@ export function adjustStationDrones(state: GameState, entityId: string, delta: n
   const loaded = Math.max(0, Math.floor(current.stationDrones ?? 0));
   const busy = stationBusyVehicles(current, "local");
   const capacity = getStationDroneCapacity(current);
-  const available = Math.max(0, Math.floor(state.tray.logistics_drone ?? 0));
+  const available = Math.max(0, Math.floor(state.portableFleet?.logistics_drone ?? 0));
   const change = requested > 0
     ? Math.min(requested, capacity - loaded, available)
     : -Math.min(-requested, Math.max(0, loaded - busy));
@@ -4134,7 +4202,7 @@ export function adjustStationDrones(state: GameState, entityId: string, delta: n
   const station = next.entities.find((entity) => entity.id === entityId)!;
   station.stationDrones = loaded + change;
   station.stationProgress = 0;
-  if (change > 0) next.tray.logistics_drone = available - change;
+  if (change > 0) next.portableFleet.logistics_drone = available - change;
   else addToTray(next, "logistics_drone", -change);
   if (station.stationPeerId) {
     const peer = next.entities.find((entity) => entity.id === station.stationPeerId);
@@ -4348,37 +4416,24 @@ export function upgradeBelt(state: GameState, beltId: string): GameState {
 }
 
 export function canUpgradeSorter(state: GameState, beltId: string): boolean {
-  const belt = state.belts.find((item) => item.id === beltId);
-  if (!belt || belt.sorterTier >= 3) return false;
-  const targetId = getSorterConstructionId((belt.sorterTier + 1) as SorterTier);
-  const definition = getConstructionDefinition(targetId);
-  return Boolean(definition && (!definition.requiredTechId || isTechnologyCompleted(state, definition.requiredTechId)) &&
-    (state.construction[targetId] ?? 0) >= belt.lanes);
+  void state;
+  void beltId;
+  // Transport is now driven directly by belt capacity. This legacy API remains
+  // for migrated saves and integrations, but no longer consumes a sorter item.
+  return false;
 }
 
 export function upgradeSorter(state: GameState, beltId: string): GameState {
-  if (!canUpgradeSorter(state, beltId)) return state;
-  const current = state.belts.find((belt) => belt.id === beltId)!;
-  const targetTier = (current.sorterTier + 1) as SorterTier;
-  const targetId = getSorterConstructionId(targetTier);
-  const next = copyState(state);
-  const belt = next.belts.find((candidate) => candidate.id === beltId)!;
-  next.construction[targetId] = (next.construction[targetId] ?? 0) - belt.lanes;
-  if (belt.sorterTier > 1) {
-    const sourceId = getSorterConstructionId(belt.sorterTier);
-    next.construction[sourceId] = (next.construction[sourceId] ?? 0) + belt.lanes;
-  }
-  belt.sorterTier = targetTier;
-  return next;
+  void beltId;
+  return state;
 }
 
 export function getSorterCapacity(belt: BeltConnection): number {
-  return SORTER_CAPACITY_PER_SECOND[belt.sorterTier] * belt.lanes;
+  return BELT_CAPACITY_PER_SECOND[belt.tier] * belt.lanes * (belt.stackSize ?? 1);
 }
 
 export function getBeltCapacity(belt: BeltConnection): number {
-  return Math.min(BELT_CAPACITY_PER_SECOND[belt.tier], SORTER_CAPACITY_PER_SECOND[belt.sorterTier]) *
-    belt.lanes * (belt.stackSize ?? 1);
+  return BELT_CAPACITY_PER_SECOND[belt.tier] * belt.lanes * (belt.stackSize ?? 1);
 }
 
 export function canSetBeltStackSize(state: GameState, stackSize: CargoStackSize): boolean {
@@ -4506,16 +4561,50 @@ export function applyBeltConfiguration(state: GameState, sourceBeltId: string, t
   };
 }
 
+export function getConstructionCraftDeficits(state: GameState, buildingId: ConstructionId): {
+  missingTechnology: string | null;
+  missingItems: Array<{ itemId: ItemId; current: number; required: number; missing: number }>;
+} {
+  const definition = CONSTRUCTION.find((item) => item.buildingId === buildingId);
+  if (!definition) return { missingTechnology: null, missingItems: [] };
+  return {
+    missingTechnology: definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)
+      ? getTechnology(definition.requiredTechId)?.name ?? definition.requiredTechId
+      : null,
+    missingItems: definition.costs.flatMap((cost) => {
+      const current = Math.max(0, Math.floor(state.tray[cost.itemId] ?? 0));
+      return current + EPSILON < cost.amount ? [{ itemId: cost.itemId, current, required: cost.amount, missing: cost.amount - current }] : [];
+    }),
+  };
+}
+
 export function canCraftConstruction(state: GameState, buildingId: ConstructionId): boolean {
   const definition = CONSTRUCTION.find((item) => item.buildingId === buildingId);
-  return Boolean(definition && (!definition.requiredTechId || isTechnologyCompleted(state, definition.requiredTechId)) &&
-    definition.costs.every((cost) => (state.tray[cost.itemId] ?? 0) + EPSILON >= cost.amount));
+  if (!definition) return false;
+  const deficits = getConstructionCraftDeficits(state, buildingId);
+  return !deficits.missingTechnology && deficits.missingItems.length === 0;
+}
+
+const NON_HANDCRAFTABLE_RECIPE_IDS = new Set<RecipeId>([
+  "ray_power",
+  "critical_photon",
+  "matrix_research",
+  "solar_sail_launch",
+  "carrier_rocket_launch",
+  "accumulator_charge",
+  "accumulator_discharge",
+]);
+
+/** Material recipes can be replicated by hand; facility-only state transitions cannot. */
+export function isHandcraftableRecipe(recipeId: RecipeId): boolean {
+  const recipe = getRecipe(recipeId);
+  return Boolean(recipe && recipe.inputs.length > 0 && recipe.outputs.length > 0 && !NON_HANDCRAFTABLE_RECIPE_IDS.has(recipe.id));
 }
 
 export function canHandcraftRecipe(state: GameState, recipeId: RecipeId, batches = 1): boolean {
   const recipe = getRecipe(recipeId);
   const amount = Math.max(1, Math.floor(batches));
-  return Boolean(recipe && recipe.buildingId === "assembling_machine_mk1" && recipe.outputs.length > 0 &&
+  return Boolean(recipe && isHandcraftableRecipe(recipeId) &&
     (!recipe.requiredTechId || isTechnologyCompleted(state, recipe.requiredTechId)) &&
     recipe.inputs.every((input) => (state.tray[input.itemId] ?? 0) + EPSILON >= input.amount * amount));
 }
@@ -4538,7 +4627,7 @@ export function handcraftRecipe(state: GameState, recipeId: RecipeId, batches = 
 
 export function canQueueHandcraftRecipe(state: GameState, recipeId: RecipeId): boolean {
   const recipe = getRecipe(recipeId);
-  return Boolean(recipe && recipe.buildingId === "assembling_machine_mk1" && recipe.outputs.length > 0 &&
+  return Boolean(recipe && isHandcraftableRecipe(recipeId) &&
     (!recipe.requiredTechId || isTechnologyCompleted(state, recipe.requiredTechId)) && state.handcraftQueue.length < 20);
 }
 

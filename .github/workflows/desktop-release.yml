@@ -1,0 +1,34 @@
+name: Desktop Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        required: true
+        default: stable
+        type: choice
+        options: [stable, beta, nightly]
+  push:
+    tags: ["desktop-v*"]
+
+jobs:
+  package:
+    runs-on: windows-latest
+    env:
+      DSP_RELEASE_CHANNEL: ${{ inputs.channel || 'stable' }}
+      DSP_UPDATE_URL: ${{ secrets.DSP_UPDATE_URL }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run desktop:dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsp-idle-${{ env.DSP_RELEASE_CHANNEL }}
+          path: release/**

@@ -2,17 +2,27 @@
   "name": "dsp-idle-network",
   "private": true,
   "version": "0.1.0",
+  "description": "戴森球计划风格的 2D 生产网络挂机游戏",
+  "author": "DSP Idle Network Contributors",
   "type": "module",
+  "main": "desktop/main.cjs",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 4318",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4318",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "typecheck": "tsc -b --pretty false"
+    "test:server": "npm --prefix server test",
+    "server:dev": "node server/index.mjs",
+    "typecheck": "tsc -b --pretty false",
+    "desktop:dev": "cross-env DSP_DESKTOP_DEV_URL=http://127.0.0.1:4318 electron .",
+    "desktop:pack": "npm run build && node desktop/pack.cjs",
+    "desktop:dist": "npm run build && electron-builder",
+    "desktop:publish": "npm run build && electron-builder --publish always"
   },
   "dependencies": {
     "@xyflow/react": "^12.9.3",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^0.468.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
@@ -23,9 +33,59 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.1",
+    "cross-env": "^10.1.0",
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3",
     "jsdom": "^27.0.0",
     "typescript": "~6.0.0",
     "vite": "^8.0.0",
     "vitest": "^4.0.0"
+  },
+  "build": {
+    "appId": "com.dspidle.network",
+    "productName": "DSP极简网络",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "desktop/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "dsp-idle-${version}-${arch}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.games"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Game"
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://updates.example.invalid/dsp-idle/stable"
+      }
+    ]
   }
 }

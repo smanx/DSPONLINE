@@ -1,0 +1,71 @@
+# Project Map
+
+Use this map after reading `docs/PROJECT_STATUS.md`. Open only the files relevant to the current task.
+
+## Runtime Entry And Orchestration
+
+| Area | Primary files | Notes |
+| --- | --- | --- |
+| Boot and PWA | `src/main.tsx`, `src/pwa.ts`, `public/sw.js` | Monitoring installs before React; PWA registers only in production. |
+| Main menu | `src/components/StartMenu.tsx` | Continue, slots, import, cloud session, menu settings. |
+| Factory orchestration | `src/App.tsx` | Simulation Worker, canvas events, workspaces, saves, command wiring. High-conflict file. |
+| Global styling | `src/styles.css` | Desktop/mobile/font scale/reduced motion. Very large; patch narrowly. |
+
+## Gameplay Domain
+
+| Task | Primary files | Required companions |
+| --- | --- | --- |
+| IDs and state | `src/game/types.ts` | `storage.ts`, affected tests |
+| Items/buildings/recipes/tech | `src/game/content.ts` | `content.test.ts`, `progressionAudit.ts`, recipe graph |
+| Simulation | `src/game/engine.ts` | `engine.test.ts`, `benchmark.ts`, Worker |
+| Save/migration/offline | `src/game/storage.ts` | `storage.test.ts`, `endgame.ts` |
+| Belts and network diagnosis | `src/game/network.ts` | `FactoryEdges.tsx`, engine belt commands, E2E |
+| Power and operating status | `src/game/engine.ts`, `statistics.ts` | factory nodes, inspector, engine tests |
+| Research and progression | `content.ts`, `campaign.ts`, `progression.ts`, `endgame.ts` | technology/campaign/galaxy workspaces |
+| Recipe lookup and planning | `recipeGraph.ts`, `planning.ts` | recipe/statistics workspaces |
+| Galaxy and stellar industry | `galaxy.ts`, `stellarIndustry.ts` | star map and galaxy workspaces |
+| Blueprints | `blueprintExchange.ts`, engine blueprint commands | blueprint workspace and tests |
+| Content packs | `mods.ts`, `contentPacks.ts` | operations workspace, storage migration |
+
+## UI Ownership
+
+| Surface | File |
+| --- | --- |
+| Nodes and ports | `src/components/FactoryNodes.tsx` |
+| Lines, labels, preview | `src/components/FactoryEdges.tsx` |
+| Resource rail, inspector, construction | `src/components/GamePanels.tsx` |
+| Item/recipe modal picker | `src/components/CatalogPicker.tsx` |
+| Recipe codex | `src/components/RecipeWorkspace.tsx` |
+| Focus recipe overlay | `src/components/RecipeFocusPanel.tsx` |
+| Technology | `src/components/TechnologyWorkspace.tsx` |
+| Statistics/network/planning | `src/components/StatisticsWorkspace.tsx` |
+| Star map/logistics diagnosis | `src/components/StarMapWorkspace.tsx` |
+| Dyson planning | `src/components/DysonPlannerWorkspace.tsx` |
+| Operations/settings/saves/packs | `src/components/OperationsWorkspace.tsx` |
+| Campaign | `src/components/CampaignWorkspace.tsx` |
+| Accounts/ranking/endgame | `src/components/GalaxyWorkspace.tsx` |
+| Mobile behavior | `src/hooks/`, responsive sections of `src/styles.css` |
+
+## Online And Packaging
+
+| Area | Files |
+| --- | --- |
+| Browser cloud client | `src/game/cloud.ts` |
+| Node API and SQLite | `server/index.mjs` |
+| API tests | `server/server.test.mjs` |
+| Nginx/systemd/backup templates | `deploy/` |
+| Electron | `desktop/main.cjs`, `preload.cjs`, `pack.cjs`, `release-channels.cjs` |
+| Desktop CI | `.github/workflows/desktop-release.yml` |
+| Build splitting/font transform | `vite.config.ts` |
+
+## Hotspots
+
+The current largest files are `src/styles.css`, `src/game/engine.ts`, `tests/e2e/game-flow.spec.ts`, and `src/App.tsx`. Avoid broad formatting or opportunistic refactors in these files. Extract code only when the requested change benefits and tests cover the new boundary.
+
+## Source-Of-Truth Rules
+
+- Code beats stale docs for current behavior; repair the doc after verification.
+- `GameState` beats React component state for persisted gameplay.
+- Core catalog definitions beat duplicated display lists.
+- Live server configuration beats repository templates for current operations; compare before applying.
+- Production data directories are never source-controlled artifacts.

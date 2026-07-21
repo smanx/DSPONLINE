@@ -1,4 +1,4 @@
-import { Check, FlaskConical, Gauge, ListOrdered, LockKeyhole, PackageCheck, Pickaxe, Play, Rocket, Satellite, Timer, X, Zap } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, FlaskConical, Gauge, ListOrdered, LockKeyhole, PackageCheck, Pickaxe, Play, Rocket, Satellite, Timer, X, Zap } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
 import { MATRIX_ITEM_IDS, PLANET_LIST, TECHNOLOGY_LIST, getTechnology } from "../game/content";
@@ -6,6 +6,7 @@ import { canQueueTechnology, getDysonSailAbsorptionMultiplier, getInterstellarCa
 import { INFINITE_RESEARCH_DEFINITIONS, getInfiniteResearchCompletion, getInfiniteResearchCost, getInfiniteResearchLevel, isEndgameUnlocked } from "../game/endgame";
 import type { GameState, InfiniteResearchId, ItemId, TechId } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
+import { useHorizontalPan } from "../hooks/useHorizontalPan";
 
 interface TechnologyWorkspaceProps {
   open: boolean;
@@ -29,6 +30,8 @@ function networkMatrixStock(game: GameState, itemId: ItemId): number {
 
 export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQueued, onSelectInfiniteResearch, onInfiniteResearchAutomation, focusTechId }: TechnologyWorkspaceProps) {
   const [focusedTechId, setFocusedTechId] = useState<TechId | null>(null);
+  const [advancedExpanded, setAdvancedExpanded] = useState(false);
+  const horizontalPan = useHorizontalPan<HTMLDivElement>();
   useEffect(() => {
     if (!open || !focusTechId) return;
     setFocusedTechId(focusTechId);
@@ -86,7 +89,9 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
           })}
           {!selected && activeInfinite ? <span><ItemHoverCard itemId="universe_matrix"><ItemGlyph itemId="universe_matrix" /></ItemHoverCard>{activeInfiniteProgress?.progress ?? 0}/{selectedCostTotal}</span> : null}
         </div>
-        <p>{selected?.summary ?? activeInfinite?.summary ?? "科研站处于科研模式时会按科技需求消耗矩阵。"}</p>
+        <button className="research-advanced-toggle" type="button" onClick={() => setAdvancedExpanded((expanded) => !expanded)} title={advancedExpanded ? "收起升级与无限科研" : "展开升级与无限科研"} aria-label={advancedExpanded ? "收起科研详情" : "展开科研详情"} aria-expanded={advancedExpanded}>
+          <Gauge size={14} /><span>科研详情</span>{advancedExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
         <div className="research-queue">
           <header><ListOrdered size={14} /><span>科研队列</span><strong>{game.research.queuedTechIds.length}</strong></header>
           <div>
@@ -99,7 +104,8 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
             ))}
           </div>
         </div>
-        <section className="technology-upgrade-overview" aria-label="全局科技升级效果">
+        {advancedExpanded ? <div className="research-advanced">
+          <section className="technology-upgrade-overview" aria-label="全局科技升级效果">
           <header><Gauge size={13} /><span>全局升级效果</span></header>
           <div>
             <span><Pickaxe size={13} /><small>固体采矿</small><strong>{getMiningSpeedMultiplier(game).toFixed(2)}×</strong></span>
@@ -110,8 +116,8 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
             <span><Satellite size={13} /><small>单站接收</small><strong>{(getRayReceiverCapacityKw(game) / 1000).toFixed(1)} MW</strong></span>
             <span><Zap size={13} /><small>壳面吸附</small><strong>{getDysonSailAbsorptionMultiplier(game).toFixed(2)}×</strong></span>
           </div>
-        </section>
-        <section className="infinite-research-console" aria-label="无限科技">
+          </section>
+          <section className="infinite-research-console" aria-label="无限科技">
           <header><span><Rocket size={13} />无限科技</span><strong>{isEndgameUnlocked(game) ? "可持续研究" : "宇宙矩阵后解锁"}</strong><label><input type="checkbox" checked={game.endgame.autoResearch} disabled={!isEndgameUnlocked(game)} onChange={(event) => onInfiniteResearchAutomation(event.target.checked)} />自动续研</label></header>
           <div>
             {INFINITE_RESEARCH_DEFINITIONS.map((definition) => {
@@ -124,10 +130,11 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
               </button>;
             })}
           </div>
-        </section>
+          </section>
+        </div> : null}
       </div>
 
-      <div className="technology-tree" style={{ "--technology-tier-count": maximumTier + 1 } as CSSProperties}>
+      <div className={`technology-tree${horizontalPan.isPanning ? " horizontal-pan--active" : ""}`} style={{ "--technology-tier-count": maximumTier + 1 } as CSSProperties} {...horizontalPan.bindings}>
         {Array.from({ length: maximumTier + 1 }, (_, tier) => (
           <section className="technology-tier" key={tier}>
             <header><span>层级 {String(tier + 1).padStart(2, "0")}</span></header>

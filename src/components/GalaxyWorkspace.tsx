@@ -2,18 +2,26 @@ import {
   Activity,
   BarChart3,
   Check,
+  Cloud,
+  CloudOff,
   Crown,
   Database,
+  Download,
   Eye,
   EyeOff,
   Factory,
   Gauge,
   Globe2,
+  History,
   LockKeyhole,
+  LogIn,
+  LogOut,
   Orbit,
   Plus,
   RadioTower,
+  RotateCcw,
   Send,
+  Save,
   ShieldCheck,
   Trophy,
   UserRound,
@@ -23,25 +31,31 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { ACCOUNT_AVATARS, getActiveAccount, type AccountProfileChanges, type AccountState } from "../game/account";
+import { CloudApiError, downloadCloudSave, fetchCloudLeaderboard, fetchCloudSaveHistory, loginCloudAccount, logoutCloudAccount, registerCloudAccount, restoreCloudSaveRevision, resumeCloudSession, submitCloudLeaderboard, uploadCloudSave, type CloudLeaderboardEntry, type CloudSaveMetadata, type CloudSession } from "../game/cloud";
+import { exportGame } from "../game/storage";
 import {
   LEADERBOARD_CATEGORIES,
   LEADERBOARD_SEASONS,
   formatLeaderboardValue,
   getLeaderboardMetrics,
   getLeaderboardSnapshot,
+  type LeaderboardEntry,
   type LeaderboardCategoryId,
 } from "../game/leaderboard";
+import type { GameState } from "../game/types";
 
-type GalaxyTab = "ranking" | "account";
+type GalaxyTab = "ranking" | "cloud" | "account";
 
 interface GalaxyWorkspaceProps {
   open: boolean;
   accountState: AccountState;
+  game: GameState;
   onClose: () => void;
   onUpdateProfile: (changes: AccountProfileChanges) => void;
   onCreateAccount: (displayName: string) => void;
   onSwitchAccount: (accountId: string) => void;
   onUpload: (seasonId: string) => boolean;
+  onRestoreCloudSave: (payload: string) => { success: boolean; message: string };
 }
 
 const CATEGORY_ICONS: Record<LeaderboardCategoryId, ReactNode> = {
@@ -72,11 +86,13 @@ function formatTimestamp(timestamp: number): string {
 export function GalaxyWorkspace({
   open,
   accountState,
+  game,
   onClose,
   onUpdateProfile,
   onCreateAccount,
   onSwitchAccount,
   onUpload,
+  onRestoreCloudSave,
 }: GalaxyWorkspaceProps) {
   const [tab, setTab] = useState<GalaxyTab>("ranking");
   const [category, setCategory] = useState<LeaderboardCategoryId>("galaxy");
@@ -85,6 +101,16 @@ export function GalaxyWorkspace({
   const [uploadState, setUploadState] = useState<"idle" | "success" | "blocked">("idle");
   const [nameDraft, setNameDraft] = useState("");
   const [newAccountName, setNewAccountName] = useState("");
+  const [cloudSession, setCloudSession] = useState<CloudSession>({ status: "checking", user: null, cloudSave: null, message: null });
+  const [cloudMode, setCloudMode] = useState<"login" | "register">("login");
+  const [cloudEmail, setCloudEmail] = useState("");
+  const [cloudPassword, setCloudPassword] = useState("");
+  const [cloudDisplayName, setCloudDisplayName] = useState("");
+  const [cloudBusy, setCloudBusy] = useState(false);
+  const [cloudMessage, setCloudMessage] = useState<string | null>(null);
+  const [cloudEntries, setCloudEntries] = useState<CloudLeaderboardEntry[]>([]);
+  const [cloudHistory, setCloudHistory] = useState<CloudSaveMetadata[]>([]);
+  const [pendingCloudSave, setPendingCloudSave] = useState<{ payload: string; revision: number; updatedAt: number } | null>(null);
   const account = getActiveAccount(accountState);
   const metrics = useMemo(() => getLeaderboardMetrics(account.ledger), [account.ledger]);
   const snapshot = useMemo(
@@ -92,6 +118,31 @@ export function GalaxyWorkspace({
     [account.ledger, account.profile, category, seasonId, uploadRevision],
   );
   const localEntry = snapshot.entries.find((entry) => entry.isLocal);
+  const displayEntries = useMemo<LeaderboardEntry[]>(() => {
+    if (cloudSession.status !== "authenticated" || !cloudSession.user) return snapshot.entries;
+    const remote = cloudEntries.map((entry) => ({
+      ...entry,
+      isLocal: entry.userId === cloudSession.user!.id,
+      submitted: true,
+    } satisfies LeaderboardEntry));
+    const ownRemote = remote.find((entry) => entry.isLocal);
+    const own = ownRemote ?? (localEntry ? {
+      ...localEntry,
+      accountId: cloudSession.user.id,
+      displayName: cloudSession.user.displayName,
+      avatar: cloudSession.user.displayName.slice(0, 1).toUpperCase(),
+      submitted: false,
+      verified: false,
+    } : null);
+    const candidates = [
+      ...snapshot.entries.filter((entry) => !entry.isLocal),
+      ...remote.filter((entry) => !entry.isLocal),
+      ...(own ? [own] : []),
+    ];
+    const unique = [...new Map(candidates.map((entry) => [entry.accountId, entry])).values()];
+    return unique.sort((left, right) => right.value - left.value || left.accountId.localeCompare(right.accountId)).map((entry, index) => ({ ...entry, rank: index + 1 }));
+  }, [cloudEntries, cloudSession.status, cloudSession.user, localEntry, snapshot.entries]);
+  const displayedLocalEntry = displayEntries.find((entry) => entry.isLocal);
 
   useEffect(() => setNameDraft(account.profile.displayName), [account.profile.displayName, account.profile.id]);
   useEffect(() => {
@@ -99,13 +150,134 @@ export function GalaxyWorkspace({
     const timer = window.setTimeout(() => setUploadState("idle"), 2200);
     return () => window.clearTimeout(timer);
   }, [uploadState]);
+  useEffect(() => {
+    let active = true;
+    void resumeCloudSession().then((session) => { if (active) setCloudSession(session); });
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
+    if (!open || cloudSession.status === "offline" || cloudSession.status === "checking") return;
+    let active = true;
+    void fetchCloudLeaderboard(category, seasonId)
+      .then((entries) => { if (active) setCloudEntries(entries); })
+      .catch(() => { if (active) setCloudEntries([]); });
+    return () => { active = false; };
+  }, [category, cloudSession.status, open, seasonId, uploadRevision]);
+  useEffect(() => {
+    if (!open || cloudSession.status !== "authenticated") {
+      setCloudHistory([]);
+      return;
+    }
+    let active = true;
+    void fetchCloudSaveHistory().then((history) => { if (active) setCloudHistory(history); }).catch(() => { if (active) setCloudHistory([]); });
+    return () => { active = false; };
+  }, [cloudSession.cloudSave?.revision, cloudSession.status, open]);
 
   if (!open) return null;
 
-  const upload = () => {
+  const upload = async () => {
     const submitted = onUpload(seasonId);
-    setUploadState(submitted ? "success" : "blocked");
-    if (submitted) setUploadRevision((revision) => revision + 1);
+    if (!submitted) {
+      setUploadState("blocked");
+      return;
+    }
+    if (cloudSession.status === "authenticated") {
+      try {
+        await submitCloudLeaderboard(metrics, seasonId);
+      } catch (error) {
+        setCloudMessage(error instanceof Error ? error.message : "云端排行榜上传失败");
+        setUploadState("blocked");
+        return;
+      }
+    }
+    setUploadState("success");
+    setUploadRevision((revision) => revision + 1);
+  };
+
+  const authenticateCloud = async () => {
+    setCloudBusy(true);
+    setCloudMessage(null);
+    try {
+      const session = cloudMode === "register"
+        ? await registerCloudAccount(cloudEmail, cloudPassword, cloudDisplayName || account.profile.displayName)
+        : await loginCloudAccount(cloudEmail, cloudPassword);
+      setCloudSession(session);
+      setCloudPassword("");
+      setCloudMessage(cloudMode === "register" ? "云账户已创建" : "云账户已登录");
+    } catch (error) {
+      setCloudMessage(error instanceof Error ? error.message : "云账户操作失败");
+    } finally {
+      setCloudBusy(false);
+    }
+  };
+
+  const saveCurrentFactoryToCloud = async () => {
+    setCloudBusy(true);
+    setCloudMessage(null);
+    try {
+      const metadata = await uploadCloudSave(exportGame(game), cloudSession.cloudSave?.revision ?? 0);
+      setCloudSession((current) => ({ ...current, cloudSave: metadata }));
+      setCloudMessage(`云存档已更新到修订 ${metadata.revision}`);
+    } catch (error) {
+      if (error instanceof CloudApiError && error.status === 409 && error.payload.cloudSave) {
+        setCloudSession((current) => ({ ...current, cloudSave: error.payload.cloudSave as CloudSession["cloudSave"] }));
+      }
+      setCloudMessage(error instanceof Error ? error.message : "云存档上传失败");
+    } finally {
+      setCloudBusy(false);
+    }
+  };
+
+  const prepareCloudRestore = async () => {
+    setCloudBusy(true);
+    setCloudMessage(null);
+    try {
+      const save = await downloadCloudSave();
+      if (!save) setCloudMessage("云端还没有存档");
+      else setPendingCloudSave({ payload: save.payload, revision: save.revision, updatedAt: save.updatedAt });
+    } catch (error) {
+      setCloudMessage(error instanceof Error ? error.message : "云存档下载失败");
+    } finally {
+      setCloudBusy(false);
+    }
+  };
+
+  const prepareHistoricalRestore = async (revision: number) => {
+    setCloudBusy(true);
+    setCloudMessage(null);
+    try {
+      const save = await downloadCloudSave(revision);
+      if (!save) setCloudMessage(`云端修订 ${revision} 已不可用`);
+      else setPendingCloudSave({ payload: save.payload, revision: save.revision, updatedAt: save.updatedAt });
+    } catch (error) {
+      setCloudMessage(error instanceof Error ? error.message : "历史修订下载失败");
+    } finally {
+      setCloudBusy(false);
+    }
+  };
+
+  const makeHistoricalRevisionCurrent = async (revision: number) => {
+    setCloudBusy(true);
+    setCloudMessage(null);
+    try {
+      const metadata = await restoreCloudSaveRevision(revision, cloudSession.cloudSave?.revision ?? 0);
+      setCloudSession((current) => ({ ...current, cloudSave: metadata }));
+      setCloudMessage(`修订 ${revision} 已恢复为新的修订 ${metadata.revision}`);
+    } catch (error) {
+      if (error instanceof CloudApiError && error.status === 409 && error.payload.cloudSave) {
+        setCloudSession((current) => ({ ...current, cloudSave: error.payload.cloudSave as CloudSession["cloudSave"] }));
+      }
+      setCloudMessage(error instanceof Error ? error.message : "云端历史恢复失败");
+    } finally {
+      setCloudBusy(false);
+    }
+  };
+
+  const restorePendingCloudSave = () => {
+    if (!pendingCloudSave) return;
+    const result = onRestoreCloudSave(pendingCloudSave.payload);
+    setCloudMessage(result.message);
+    if (result.success) setPendingCloudSave(null);
   };
 
   return (
@@ -115,8 +287,8 @@ export function GalaxyWorkspace({
           <i><Globe2 size={20} /></i>
           <div><span>本地星际档案协议</span><strong>银河网络</strong></div>
         </div>
-        <div className="galaxy-node-state" title="当前版本仅连接浏览器本地排行榜节点">
-          <i /><span><strong>本地节点</strong><small>模拟基准 · 可替换服务端</small></span>
+        <div className="galaxy-node-state" title={cloudSession.message ?? "银河节点连接状态"}>
+          <i /><span><strong>{cloudSession.status === "offline" ? "离线节点" : cloudSession.status === "authenticated" ? "云端已登录" : cloudSession.status === "checking" ? "节点校验中" : "公共云节点"}</strong><small>{cloudSession.status === "authenticated" ? cloudSession.user?.email : cloudSession.status === "offline" ? "本地节点可继续使用" : "排行榜可读取 · 本地节点回退"}</small></span>
         </div>
         <div className="galaxy-active-account"><span className="galaxy-avatar galaxy-avatar--small">{account.profile.avatar}</span><span><small>当前账户</small><strong>{account.profile.displayName}</strong></span></div>
         <button className="galaxy-close" type="button" onClick={onClose} title="关闭银河网络" aria-label="关闭银河网络"><X size={18} /></button>
@@ -124,8 +296,9 @@ export function GalaxyWorkspace({
 
       <nav className="galaxy-tabs" aria-label="银河网络页面">
         <button type="button" role="tab" aria-selected={tab === "ranking"} className={tab === "ranking" ? "active" : ""} onClick={() => setTab("ranking")}><Trophy size={15} />银河排行</button>
+        <button type="button" role="tab" aria-selected={tab === "cloud"} className={tab === "cloud" ? "active" : ""} onClick={() => setTab("cloud")}>{cloudSession.status === "offline" ? <CloudOff size={15} /> : <Cloud size={15} />}云存档</button>
         <button type="button" role="tab" aria-selected={tab === "account"} className={tab === "account" ? "active" : ""} onClick={() => setTab("account")}><UserRound size={15} />账户</button>
-        <span><RadioTower size={13} />排名数据保存在当前浏览器</span>
+        <span><RadioTower size={13} />{cloudSession.status === "offline" ? "云端离线 · 本地模式" : "服务端排行榜 · 本地自动回退"}</span>
       </nav>
 
       {tab === "ranking" ? (
@@ -150,23 +323,23 @@ export function GalaxyWorkspace({
           </section>
 
           <section className="galaxy-summary-band">
-            <div><span>我的排名</span><strong>{snapshot.localRank ? `#${snapshot.localRank}` : account.profile.privacy === "private" ? "隐私" : "未上榜"}</strong><small>{snapshot.localSubmitted ? "本季数据已上传" : "当前为实时投影"}</small></div>
-            <div><span>{snapshot.category.label}</span><strong>{formatLeaderboardValue(localEntry?.value ?? metrics[category === "power" ? "energyGeneratedMj" : category === "upload" ? "uploadedWhiteMatrix" : category === "dyson" ? "peakDysonPowerKw" : category === "throughput" ? "peakThroughputPerMinute" : "galaxyScore"], category)}<small>{snapshot.category.unit}</small></strong><small>{snapshot.category.description}</small></div>
+            <div><span>我的排名</span><strong>{displayedLocalEntry?.rank ? `#${displayedLocalEntry.rank}` : account.profile.privacy === "private" ? "隐私" : "未上榜"}</strong><small>{displayedLocalEntry?.submitted ? "本季数据已上传" : "当前为实时投影"}</small></div>
+            <div><span>{snapshot.category.label}</span><strong>{formatLeaderboardValue(displayedLocalEntry?.value ?? metrics[category === "power" ? "energyGeneratedMj" : category === "upload" ? "uploadedWhiteMatrix" : category === "dyson" ? "peakDysonPowerKw" : category === "throughput" ? "peakThroughputPerMinute" : "galaxyScore"], category)}<small>{snapshot.category.unit}</small></strong><small>{snapshot.category.description}</small></div>
             <div><span>银河规模</span><strong>{metrics.exploredSystems}<small>星系</small></strong><small>{metrics.colonizedPlanets} 颗殖民行星</small></div>
-            <div><span>节点状态</span><strong className={snapshot.localSubmitted ? "positive" : "preview"}>{snapshot.localSubmitted ? "已记录" : "待上传"}</strong><small>{formatTimestamp(account.ledger.lastSyncedAt)}</small></div>
+            <div><span>节点状态</span><strong className={displayedLocalEntry?.submitted ? "positive" : "preview"}>{displayedLocalEntry?.submitted ? cloudSession.status === "authenticated" ? "云端记录" : "本地记录" : "待上传"}</strong><small>{formatTimestamp(account.ledger.lastSyncedAt)}</small></div>
           </section>
 
           <div className="galaxy-ranking-layout">
             <section className="galaxy-leaderboard" aria-label={`${snapshot.category.label}排行榜`}>
               <header><span>排名</span><span>工程组织</span><span>工业规模</span><span>{snapshot.category.label}</span><span>节点记录</span></header>
               <div className="galaxy-leaderboard-rows">
-                {snapshot.entries.map((entry) => (
+                {displayEntries.map((entry) => (
                   <article className={`${entry.isLocal ? "galaxy-rank-row--local" : ""}${entry.rank <= 3 ? ` galaxy-rank-row--top-${entry.rank}` : ""}`} key={`${entry.seasonId}:${entry.accountId}`}>
                     <strong className="galaxy-rank-number">{entry.rank <= 3 ? <Crown size={15} /> : null}{String(entry.rank).padStart(2, "0")}</strong>
                     <div className="galaxy-rank-identity"><span className="galaxy-avatar">{entry.avatar}</span><span><strong>{entry.displayName}</strong><small>{entry.isLocal ? "当前账户" : "银河模拟样本"}</small></span></div>
                     <span className="galaxy-rank-footprint"><strong>{entry.metrics.exploredSystems} 星系 · {entry.metrics.colonizedPlanets} 行星</strong><small>峰值发电 {formatMetric(entry.metrics.peakGenerationKw)} kW</small></span>
                     <strong className="galaxy-rank-value">{formatLeaderboardValue(entry.value, category)}<small>{snapshot.category.unit}</small></strong>
-                    <span className={`galaxy-rank-status${entry.isLocal && !entry.submitted ? " galaxy-rank-status--preview" : ""}`}>{entry.verified ? <ShieldCheck size={13} /> : <Activity size={13} />}{entry.isLocal ? entry.submitted ? "本地节点已上传" : "实时预览" : "模拟基准"}</span>
+                    <span className={`galaxy-rank-status${entry.isLocal && !entry.submitted ? " galaxy-rank-status--preview" : ""}`}>{entry.verified ? <ShieldCheck size={13} /> : <Activity size={13} />}{entry.isLocal ? entry.submitted ? cloudSession.status === "authenticated" ? entry.verified ? "云存档校验" : "云节点已上传" : "本地节点已上传" : "实时预览" : entry.accountId.startsWith("npc_") ? "模拟基准" : entry.verified ? "云存档校验" : "服务端记录"}</span>
                   </article>
                 ))}
               </div>
@@ -184,14 +357,52 @@ export function GalaxyWorkspace({
                 className={`galaxy-upload-command galaxy-upload-command--${uploadState}`}
                 type="button"
                 disabled={account.profile.privacy === "private" || snapshot.season.status === "ended"}
-                onClick={upload}
+                onClick={() => void upload()}
               >
                 {uploadState === "success" ? <Check size={15} /> : account.profile.privacy === "private" ? <LockKeyhole size={15} /> : <Send size={15} />}
-                {uploadState === "success" ? "数据已写入本地节点" : account.profile.privacy === "private" ? "隐私账户不参与排行" : snapshot.season.status === "ended" ? "历史赛季已封存" : snapshot.localSubmitted ? "更新本季数据" : "上传本季数据"}
+                {uploadState === "success" ? cloudSession.status === "authenticated" ? "数据已写入云端节点" : "数据已写入本地节点" : account.profile.privacy === "private" ? "隐私账户不参与排行" : snapshot.season.status === "ended" ? "历史赛季已封存" : displayedLocalEntry?.submitted ? "更新本季数据" : "上传本季数据"}
               </button>
-              <p><RadioTower size={13} /><span>当前节点只在本机运行。模拟组织用于校准排行量级，不代表真实在线玩家。</span></p>
+              <p><RadioTower size={13} /><span>{cloudSession.status === "authenticated" ? "排名提交到服务端；存在云存档时会显示校验标记。" : "登录云账户后可参与真实排行；模拟组织仍用于校准量级。"}</span></p>
             </aside>
           </div>
+        </div>
+      ) : tab === "cloud" ? (
+        <div className="galaxy-cloud-view">
+          <section className="galaxy-cloud-status">
+            <header>
+              <i>{cloudSession.status === "offline" ? <CloudOff size={22} /> : <Cloud size={22} />}</i>
+              <span><small>DSP 极简网络云节点</small><strong>{cloudSession.status === "authenticated" ? cloudSession.user?.displayName : cloudSession.status === "offline" ? "当前离线" : cloudSession.status === "checking" ? "正在连接" : "登录云账户"}</strong></span>
+              <em className={`cloud-state cloud-state--${cloudSession.status}`}>{cloudSession.status === "authenticated" ? "已登录" : cloudSession.status === "anonymous" ? "访客" : cloudSession.status === "checking" ? "连接中" : "离线"}</em>
+            </header>
+            {cloudSession.status === "offline" ? <div className="galaxy-cloud-offline"><CloudOff size={24} /><span><strong>云服务暂时不可达</strong><small>{cloudSession.message ?? "本地存档和本地排行榜仍可继续使用。"}</small></span><button type="button" onClick={() => { setCloudSession({ status: "checking", user: null, cloudSave: null, message: null }); void resumeCloudSession().then(setCloudSession); }}>重新连接</button></div> : null}
+            {cloudSession.status === "anonymous" ? <form className="galaxy-cloud-auth" onSubmit={(event) => { event.preventDefault(); void authenticateCloud(); }}>
+              <div className="galaxy-cloud-auth-mode"><button className={cloudMode === "login" ? "active" : ""} type="button" onClick={() => setCloudMode("login")}>登录</button><button className={cloudMode === "register" ? "active" : ""} type="button" onClick={() => setCloudMode("register")}>注册</button></div>
+              {cloudMode === "register" ? <label><span>显示名称</span><input value={cloudDisplayName} onChange={(event) => setCloudDisplayName(event.target.value)} maxLength={24} placeholder={account.profile.displayName} autoComplete="nickname" /></label> : null}
+              <label><span>邮箱</span><input type="email" value={cloudEmail} onChange={(event) => setCloudEmail(event.target.value)} maxLength={254} required autoComplete="email" placeholder="pilot@example.com" /></label>
+              <label><span>密码</span><input type="password" value={cloudPassword} onChange={(event) => setCloudPassword(event.target.value)} minLength={8} maxLength={128} required autoComplete={cloudMode === "register" ? "new-password" : "current-password"} placeholder="至少 8 位" /></label>
+              <button className="primary" type="submit" disabled={cloudBusy}>{cloudBusy ? <Activity size={15} /> : <LogIn size={15} />}{cloudMode === "register" ? "创建并登录" : "登录云账户"}</button>
+            </form> : null}
+            {cloudSession.status === "authenticated" && cloudSession.user ? <div className="galaxy-cloud-account">
+              <div className="galaxy-cloud-identity"><span className="galaxy-avatar galaxy-avatar--large">{cloudSession.user.displayName.slice(0, 1).toUpperCase()}</span><span><strong>{cloudSession.user.displayName}</strong><small>{cloudSession.user.email}</small></span><button type="button" onClick={() => { setCloudBusy(true); void logoutCloudAccount().then(() => { setCloudSession({ status: "anonymous", user: null, cloudSave: null, message: null }); setCloudEntries([]); }).finally(() => setCloudBusy(false)); }}><LogOut size={14} />退出</button></div>
+              <div className="galaxy-cloud-save-card">
+                <header><Save size={18} /><span><small>云存档</small><strong>{cloudSession.cloudSave ? `修订 ${cloudSession.cloudSave.revision}` : "尚未上传"}</strong></span><em>{cloudSession.cloudSave ? `${(cloudSession.cloudSave.size / 1024).toFixed(1)} KB` : "--"}</em></header>
+                <dl><div><dt>更新时间</dt><dd>{cloudSession.cloudSave ? new Date(cloudSession.cloudSave.updatedAt).toLocaleString("zh-CN") : "--"}</dd></div><div><dt>校验摘要</dt><dd>{cloudSession.cloudSave?.checksum.slice(0, 12) ?? "--"}</dd></div></dl>
+                <div><button type="button" disabled={cloudBusy} onClick={() => void prepareCloudRestore()}><Download size={14} />下载到本机</button><button className="primary" type="button" disabled={cloudBusy} onClick={() => void saveCurrentFactoryToCloud()}><Save size={14} />上传当前存档</button></div>
+              </div>
+              {cloudHistory.length > 0 ? <section className="galaxy-cloud-history" aria-label="云存档历史修订">
+                <header><History size={15} /><span>历史修订</span><strong>{cloudHistory.length}/{20}</strong></header>
+                <div>{cloudHistory.map((entry) => <article className={entry.revision === cloudSession.cloudSave?.revision ? "active" : ""} key={entry.revision}>
+                  <span><strong>修订 {entry.revision}</strong><small>{new Date(entry.updatedAt).toLocaleString("zh-CN")}{entry.restoredFromRevision ? ` · 来自修订 ${entry.restoredFromRevision}` : ""}</small></span>
+                  <em>{(entry.size / 1024).toFixed(1)} KB</em>
+                  <button type="button" disabled={cloudBusy} onClick={() => void prepareHistoricalRestore(entry.revision)} title={`下载修订 ${entry.revision}`} aria-label={`下载云存档修订 ${entry.revision}`}><Download size={13} /></button>
+                  <button type="button" disabled={cloudBusy || entry.revision === cloudSession.cloudSave?.revision} onClick={() => void makeHistoricalRevisionCurrent(entry.revision)} title={`把修订 ${entry.revision} 恢复为当前版本`} aria-label={`恢复云存档修订 ${entry.revision}`}><RotateCcw size={13} /></button>
+                </article>)}</div>
+              </section> : null}
+            </div> : null}
+            {cloudMessage ? <p className="galaxy-cloud-message" role="status">{cloudMessage}</p> : null}
+          </section>
+          <aside className="galaxy-cloud-policy"><ShieldCheck size={20} /><span><strong>冲突与校验</strong><small>每次上传都携带云端修订号；另一台设备先更新后，本机不会静默覆盖。恢复云存档前会保留当前工厂快照。</small></span></aside>
+          {pendingCloudSave ? <div className="galaxy-cloud-confirm"><section role="alertdialog" aria-modal="true" aria-label="确认恢复云存档"><header><Download size={18} /><span><strong>恢复云存档修订 {pendingCloudSave.revision}</strong><small>{new Date(pendingCloudSave.updatedAt).toLocaleString("zh-CN")}</small></span></header><p>当前工厂会被云端版本替换，并先创建本地回滚快照。</p><footer><button type="button" onClick={() => setPendingCloudSave(null)}>取消</button><button className="primary" type="button" onClick={restorePendingCloudSave}>确认恢复</button></footer></section></div> : null}
         </div>
       ) : (
         <div className="galaxy-account-view">

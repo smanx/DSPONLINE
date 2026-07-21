@@ -467,8 +467,8 @@ export const RECIPES: Record<RecipeId, RecipeDefinition> = {
   crystal_silicon: { id: "crystal_silicon", name: "晶格硅", buildingId: "arc_smelter", duration: 2, requiredTechId: "nanomaterials", inputs: [{ itemId: "high_purity_silicon", amount: 1 }], outputs: [{ itemId: "crystal_silicon", amount: 1 }] },
   crystal_silicon_from_fractal: { id: "crystal_silicon_from_fractal", name: "分形硅晶格化", buildingId: "arc_smelter", duration: 1.5, requiredTechId: "rare_resource_utilization", inputs: [{ itemId: "fractal_silicon", amount: 1 }], outputs: [{ itemId: "crystal_silicon", amount: 2 }] },
   particle_broadband: { id: "particle_broadband", name: "粒子宽带", buildingId: "assembling_machine_mk1", duration: 8, requiredTechId: "information_matrix", inputs: [{ itemId: "carbon_nanotube", amount: 2 }, { itemId: "crystal_silicon", amount: 2 }, { itemId: "plastic", amount: 1 }], outputs: [{ itemId: "particle_broadband", amount: 1 }] },
-  electric_motor: { id: "electric_motor", name: "电动机", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "iron_ingot", amount: 2 }, { itemId: "gear", amount: 1 }, { itemId: "magnetic_coil", amount: 1 }], outputs: [{ itemId: "electric_motor", amount: 1 }] },
-  electromagnetic_turbine: { id: "electromagnetic_turbine", name: "电磁涡轮", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "electric_motor", amount: 2 }, { itemId: "magnetic_coil", amount: 2 }], outputs: [{ itemId: "electromagnetic_turbine", amount: 1 }] },
+  electric_motor: { id: "electric_motor", name: "电动机", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "basic_logistics", inputs: [{ itemId: "iron_ingot", amount: 2 }, { itemId: "gear", amount: 1 }, { itemId: "magnetic_coil", amount: 1 }], outputs: [{ itemId: "electric_motor", amount: 1 }] },
+  electromagnetic_turbine: { id: "electromagnetic_turbine", name: "电磁涡轮", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "high_speed_logistics", inputs: [{ itemId: "electric_motor", amount: 2 }, { itemId: "magnetic_coil", amount: 2 }], outputs: [{ itemId: "electromagnetic_turbine", amount: 1 }] },
   super_magnetic_ring: { id: "super_magnetic_ring", name: "超级磁场环", buildingId: "assembling_machine_mk1", duration: 3, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "electromagnetic_turbine", amount: 2 }, { itemId: "magnet", amount: 3 }, { itemId: "energetic_graphite", amount: 1 }], outputs: [{ itemId: "super_magnetic_ring", amount: 1 }] },
   particle_container: { id: "particle_container", name: "粒子容器", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "electromagnetic_turbine", amount: 2 }, { itemId: "copper_ingot", amount: 2 }, { itemId: "graphene", amount: 2 }], outputs: [{ itemId: "particle_container", amount: 1 }] },
   particle_container_from_unipolar: { id: "particle_container_from_unipolar", name: "单极磁石粒子容器", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "rare_resource_utilization", inputs: [{ itemId: "unipolar_magnet", amount: 10 }, { itemId: "copper_ingot", amount: 2 }], outputs: [{ itemId: "particle_container", amount: 1 }] },
@@ -543,7 +543,10 @@ export const SORTER_CONSTRUCTION_BY_TIER: Record<SorterTier, SorterId> = {
 };
 
 export function getRecipesForBuilding(buildingId: BuildingId): RecipeDefinition[] {
-  return RECIPES_BY_BUILDING[RECIPE_BUILDING_BASE[buildingId] ?? buildingId] ?? [];
+  const baseBuildingId = RECIPE_BUILDING_BASE[buildingId] ?? buildingId;
+  // Content packs can add recipes at runtime. Keep the exported static index for
+  // core-data consumers, but resolve this lookup from the live registry.
+  return Object.values(RECIPES).filter((recipe) => recipe.buildingId === baseBuildingId);
 }
 
 export function buildingSupportsRecipe(buildingId: BuildingId, recipe: RecipeDefinition): boolean {
@@ -587,10 +590,10 @@ export const CONSTRUCTION: ConstructionDefinition[] = [
   { buildingId: "artificial_star", name: "人造恒星", outputAmount: 1, requiredTechId: "artificial_star", costs: [{ itemId: "titanium_alloy", amount: 20 }, { itemId: "frame_material", amount: 20 }, { itemId: "annihilation_constraint_sphere", amount: 10 }, { itemId: "quantum_chip", amount: 10 }] },
   { buildingId: "accumulator", name: "蓄电器", outputAmount: 1, requiredTechId: "energy_storage", costs: [{ itemId: "iron_ingot", amount: 6 }, { itemId: "magnetic_coil", amount: 6 }, { itemId: "circuit_board", amount: 4 }] },
   { buildingId: "energy_exchanger", name: "能量枢纽", outputAmount: 1, requiredTechId: "energy_storage", costs: [{ itemId: "steel", amount: 40 }, { itemId: "titanium_alloy", amount: 40 }, { itemId: "processor", amount: 40 }, { itemId: "particle_container", amount: 8 }] },
-  { buildingId: "mining_machine", name: "采矿机", outputAmount: 1, requiredTechId: "automatic_metallurgy", costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "circuit_board", amount: 2 }, { itemId: "magnetic_coil", amount: 2 }, { itemId: "gear", amount: 2 }] },
-  { buildingId: "arc_smelter", name: "电弧熔炉", outputAmount: 1, requiredTechId: "automatic_metallurgy", costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "stone_brick", amount: 2 }, { itemId: "circuit_board", amount: 4 }, { itemId: "magnetic_coil", amount: 2 }] },
+  { buildingId: "mining_machine", name: "采矿机", outputAmount: 1, costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "circuit_board", amount: 2 }, { itemId: "magnetic_coil", amount: 2 }, { itemId: "gear", amount: 2 }] },
+  { buildingId: "arc_smelter", name: "电弧熔炉", outputAmount: 1, costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "stone_brick", amount: 2 }, { itemId: "circuit_board", amount: 4 }, { itemId: "magnetic_coil", amount: 2 }] },
   { buildingId: "plane_smelter", name: "位面熔炉", outputAmount: 1, requiredTechId: "plane_smelting", costs: [{ itemId: "titanium_alloy", amount: 15 }, { itemId: "processor", amount: 8 }, { itemId: "super_magnetic_ring", amount: 4 }, { itemId: "plane_filter", amount: 4 }] },
-  { buildingId: "assembling_machine_mk1", name: "制造台 Mk.I", outputAmount: 1, requiredTechId: "basic_assembling", costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "gear", amount: 8 }, { itemId: "circuit_board", amount: 4 }] },
+  { buildingId: "assembling_machine_mk1", name: "制造台 Mk.I", outputAmount: 1, costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "gear", amount: 8 }, { itemId: "circuit_board", amount: 4 }] },
   { buildingId: "assembling_machine_mk2", name: "制造台 Mk.II", outputAmount: 1, requiredTechId: "high_speed_assembling", costs: [{ itemId: "steel", amount: 8 }, { itemId: "gear", amount: 8 }, { itemId: "circuit_board", amount: 8 }, { itemId: "magnetic_coil", amount: 4 }] },
   { buildingId: "assembling_machine_mk3", name: "制造台 Mk.III", outputAmount: 1, requiredTechId: "quantum_printing", costs: [{ itemId: "titanium_alloy", amount: 8 }, { itemId: "particle_broadband", amount: 8 }, { itemId: "quantum_chip", amount: 4 }] },
   { buildingId: "spray_coater", name: "喷涂机", outputAmount: 1, requiredTechId: "proliferator_1", costs: [{ itemId: "steel", amount: 4 }, { itemId: "circuit_board", amount: 4 }, { itemId: "plasma_exciter", amount: 2 }] },
@@ -636,30 +639,20 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     summary: "将高纯硅光伏阵列接入行星电网，建立无需燃料的日照发电能力。",
     unlocks: ["太阳能板", "行星日照系数"],
   },
-  automatic_metallurgy: {
-    id: "automatic_metallurgy", name: "自动化冶金", tier: 1, costs: [{ itemId: "electromagnetic_matrix", amount: 5 }], prerequisites: ["electromagnetic_matrix"],
-    summary: "把矿物开采和高温冶炼纳入自动生产体系。",
-    unlocks: ["采矿机制造", "电弧熔炉制造"],
-  },
-  basic_assembling: {
-    id: "basic_assembling", name: "基础制造工艺", tier: 2, costs: [{ itemId: "electromagnetic_matrix", amount: 8 }], prerequisites: ["automatic_metallurgy"],
-    summary: "标准化零件定位、装配和质量检测流程。",
-    unlocks: ["制造台 Mk.I 制造"],
-  },
   basic_logistics: {
     id: "basic_logistics", name: "基础物流系统", tier: 2, costs: [{ itemId: "electromagnetic_matrix", amount: 8 }], prerequisites: ["electromagnetism"],
     summary: "建立可持续扩建的标准化物料运输线路。",
-    unlocks: ["传送带 Mk.I 制造", "小型储物仓", "四向分流器"],
+    unlocks: ["传送带 Mk.I 制造", "小型储物仓", "四向分流器", "电动机"],
   },
   thermal_power: {
     id: "thermal_power", name: "火力发电", tier: 2, costs: [{ itemId: "electromagnetic_matrix", amount: 8 }],
-    prerequisites: ["electromagnetism", "automatic_metallurgy"],
+    prerequisites: ["electromagnetism"],
     summary: "把煤与化工燃料转换为可调度电力，为高耗能工业提供稳定能源。",
     unlocks: ["火力发电厂", "多燃料发电", "按需燃烧"],
   },
   high_efficiency_plasma_control: {
     id: "high_efficiency_plasma_control", name: "高效电浆控制", tier: 3, costs: [{ itemId: "electromagnetic_matrix", amount: 12 }],
-    prerequisites: ["basic_assembling", "basic_logistics", "thermal_power"],
+    prerequisites: ["basic_logistics", "thermal_power"],
     summary: "为原油萃取、等离子精炼与能源矩阵研究建立控制基础。",
     unlocks: ["原油萃取站", "原油精炼厂", "储液罐", "钢材与电浆部件"],
   },
@@ -693,7 +686,7 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
   high_speed_assembling: {
     id: "high_speed_assembling", name: "高速装配工艺", tier: 5,
     costs: [{ itemId: "electromagnetic_matrix", amount: 15 }, { itemId: "energy_matrix", amount: 15 }],
-    prerequisites: ["energy_matrix", "basic_assembling"],
+    prerequisites: ["energy_matrix"],
     summary: "改进装配设备的定位与驱动机构，让生产节点在原有配方上获得更高吞吐。",
     unlocks: ["制造台 Mk.II", "制造台原地升级"],
   },
@@ -702,12 +695,12 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     costs: [{ itemId: "electromagnetic_matrix", amount: 15 }, { itemId: "energy_matrix", amount: 15 }],
     prerequisites: ["energy_matrix", "basic_logistics"],
     summary: "以电磁涡轮提高运输线路驱动频率，在相同线路数量下提升物流上限。",
-    unlocks: ["传送带 Mk.II", "运输线原地升级"],
+    unlocks: ["传送带 Mk.II", "运输线原地升级", "电磁涡轮"],
   },
   mining_speed_1: {
     id: "mining_speed_1", name: "高效采矿 I", tier: 5,
     costs: [{ itemId: "electromagnetic_matrix", amount: 15 }, { itemId: "energy_matrix", amount: 15 }],
-    prerequisites: ["energy_matrix", "automatic_metallurgy"],
+    prerequisites: ["energy_matrix"],
     summary: "优化采矿机切削轨迹和矿脉覆盖，使全部固体采矿节点持续增产。",
     unlocks: ["固体矿物开采速度 +50%"],
   },
@@ -888,7 +881,7 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     ],
     prerequisites: ["information_matrix"],
     summary: "以强磁场约束高能粒子，实现氘富集并为奇异物质生产建立设备基础。",
-    unlocks: ["微型粒子对撞机", "电磁动力组件", "氘", "氘核燃料棒", "粒子容器"],
+    unlocks: ["微型粒子对撞机", "超级磁场环", "氘", "氘核燃料棒", "粒子容器"],
   },
   fusion_power: {
     id: "fusion_power", name: "可控核聚变", tier: 14,

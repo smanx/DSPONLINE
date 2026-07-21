@@ -83,11 +83,11 @@ export type ItemId =
   | "gravity_matrix"
   | "universe_matrix";
 
+export type PortableFleetItemId = "logistics_drone" | "logistics_vessel";
+
 export type TechId =
   | "electromagnetic_matrix"
   | "electromagnetism"
-  | "automatic_metallurgy"
-  | "basic_assembling"
   | "basic_logistics"
   | "thermal_power"
   | "solar_energy"
@@ -287,6 +287,7 @@ export type DifficultyMode = "relaxed" | "standard" | "hard";
 export type RecipeFocusMode = "full" | "two-level";
 export type SimulationSpeed = 1 | 2 | 4;
 export type AutosaveIntervalSeconds = 2 | 10 | 30;
+export type FontScale = 0.8 | 1 | 1.25 | 1.5;
 
 /** Repeatable endgame research tracks unlocked after the universe matrix. */
 export type InfiniteResearchId =
@@ -831,6 +832,7 @@ export interface RecipeFocusState {
 
 export interface GameSettings {
   simulationSpeed: SimulationSpeed;
+  fontScale: FontScale;
   performanceMode: boolean;
   reducedMotion: boolean;
   soundEnabled: boolean;
@@ -949,10 +951,15 @@ export interface ProductionHistorySample {
   inventory: Partial<Record<ItemId, number>>;
   generationKw: number;
   demandKw: number;
+  machineEfficiency?: number;
+  logisticsEfficiency?: number;
+  powerEfficiency?: number;
+  activeMachines?: number;
+  blockedMachines?: number;
 }
 
 export interface GameState {
-  version: 23;
+  version: 24;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -961,6 +968,7 @@ export interface GameState {
   tray: Partial<Record<ItemId, number>>;
   planetTrays: Record<PlanetId, Partial<Record<ItemId, number>>>;
   construction: Partial<Record<ConstructionId, number>>;
+  portableFleet: Record<PortableFleetItemId, number>;
   manualMined: number;
   totalProduced: Partial<Record<ItemId, number>>;
   research: ResearchState;
