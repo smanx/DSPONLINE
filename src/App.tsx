@@ -190,7 +190,7 @@ import { removeLeaderboardData, submitLeaderboardData } from "./game/leaderboard
 import { trackAnalyticsEvent } from "./game/analytics";
 import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CargoStackSize, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
-import type { OnboardingStepId } from "./game/onboarding";
+import { getOnboardingFocusTarget, getOnboardingStep, type OnboardingStepId } from "./game/onboarding";
 import { useCoarsePointer } from "./hooks/useCoarsePointer";
 import { useLongPress } from "./hooks/useLongPress";
 import { useLowEndMobile } from "./hooks/useLowEndMobile";
@@ -1540,6 +1540,11 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
 
   const runOnboardingAction = useCallback((stepId: OnboardingStepId) => {
     setTechnologyOpen(false);
+    setStatisticsOpen(false);
+    setRecipesOpen(false);
+    setStarMapOpen(false);
+    setBlueprintsOpen(false);
+    setDysonPlannerOpen(false);
     setOperationsOpen(false);
     setCampaignOpen(false);
     setGalaxyOpen(false);
@@ -1571,11 +1576,33 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
       }
       return;
     }
-    setPlacement(null);
-    setBeltTier(1);
-    window.setTimeout(() => focusEntityIds(["vein_iron"]), 40);
-    setNotice("点击物品输出端口，再点击绿色高亮输入端口建立传送带");
-  }, [focusEntityIds, focusPlacedEntity, onPlanetChange]);
+    if (stepId === "belt") {
+      setPlacement(null);
+      setBeltTier(1);
+      window.setTimeout(() => focusEntityIds(["vein_iron"]), 40);
+      setNotice("点击物品输出端口，再点击绿色高亮输入端口建立传送带");
+      return;
+    }
+    const step = getOnboardingStep(stepId);
+    if (!step) return;
+    const focusTarget = getOnboardingFocusTarget(gameRef.current, step);
+    if (focusTarget?.kind === "belt") {
+      focusBeltNetwork(focusTarget.id, focusTarget.planetId);
+      setNotice(`教学卡点：${focusTarget.reason}`);
+      return;
+    }
+    if (focusTarget?.kind === "entity") {
+      if (step.campaignTaskId) setHighlightedTaskId(step.campaignTaskId);
+      focusPlacedEntity(focusTarget.id);
+      setNotice(`教学卡点：${focusTarget.reason}`);
+      return;
+    }
+    if (step.navigation) {
+      navigateFromCampaign(step.navigation, step.campaignTaskId);
+      return;
+    }
+    openCampaign();
+  }, [focusBeltNetwork, focusEntityIds, focusPlacedEntity, navigateFromCampaign, onPlanetChange, openCampaign]);
 
   const onSelectCampaignTask = useCallback((taskId: CampaignTaskId) => {
     setGame((current) => selectCampaignTask(current, taskId));

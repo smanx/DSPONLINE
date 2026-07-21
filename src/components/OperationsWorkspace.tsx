@@ -521,7 +521,7 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
         <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} maxLength={4000} placeholder="描述出现的问题或建议" aria-label="反馈内容" />
         <footer><span className={feedbackState === "failed" ? "warning" : feedbackState === "sent" ? "ready" : ""}>{feedbackMessage ?? `${feedback.length}/4000`}</span><button className="primary" type="button" disabled={!feedback.trim() || feedbackState === "sending" || cloudState === "offline"} onClick={() => void submitFeedback()}>{feedbackState === "sending" ? <Activity size={14} /> : <Upload size={14} />}{feedbackState === "sending" ? "提交中" : "提交反馈"}</button></footer>
       </section>
-      <section className="support-onboarding-reset"><GraduationCap size={16} /><span><strong>启动引导</strong><small>重新打开采集、加工、物流与科研的五步引导。</small></span><button type="button" onClick={() => { resetOnboarding(); window.location.reload(); }}>重新开始引导</button></section>
+      <section className="support-onboarding-reset"><GraduationCap size={16} /><span><strong>渐进教学</strong><small>重新打开从手动采矿到白糖、跨星物流与戴森云的 13 步教学。</small></span><button type="button" onClick={() => { resetOnboarding(); window.location.reload(); }}>重新开始教学</button></section>
     </div>
   );
 }

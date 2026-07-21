@@ -15987,6 +15987,7 @@ input:focus-visible,
 .onboarding-coach > header strong { overflow: hidden; color: var(--text); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .onboarding-coach > header button { display: grid; width: 27px; height: 27px; place-items: center; border: 0; background: transparent; color: var(--muted); }
 .onboarding-coach > p { margin: 0; padding: 0 10px 8px 45px; color: #92a69f; font-size: 8px; line-height: 1.45; }
+.onboarding-coach > p > span { display: block; margin-top: 4px; color: var(--yellow); font-size: 7px; }
 .onboarding-coach > footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 7px 9px; border-top: 1px solid var(--line); }
 .onboarding-coach > footer > i { height: 3px; overflow: hidden; border-radius: 2px; background: #293530; }
 .onboarding-coach > footer > i b { display: block; height: 100%; background: var(--green); transition: width 220ms ease; }

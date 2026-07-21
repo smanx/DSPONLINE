@@ -27,6 +27,7 @@ flowchart LR
 - `src/components/StartMenu.tsx`：开始/继续、槽位、导入、云账号、邮箱验证/密码重置链接和主菜单设置。
 - `src/components/CloudAccountSecurity.tsx`、`CloudSaveConflictDialog.tsx`：主菜单与银河工作区共用的账号安全、设备会话、数据导出、注销和云冲突选择界面。
 - `src/components/ReleaseNotesDialog.tsx`：版本公告单一数据源、首次展示偏好和主菜单/游戏内设置共用弹窗。
+- `src/game/onboarding.ts`、`src/components/OnboardingCoach.tsx`：独立于 `GameState` 的 13 步渐进教学偏好、里程碑判定和设备/线路卡点诊断；教学关闭状态不会随存档或云同步改写。
 - `src/App.tsx`：顶层会话和工厂编排。它管理工作区、画布交互、连接、选中状态、存档定时器和模拟 Worker。
 
 ### 展示与交互层

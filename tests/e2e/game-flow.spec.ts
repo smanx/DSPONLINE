@@ -1244,8 +1244,8 @@ async function openRareResourceStageGame(page: Page) {
   await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible();
 }
 
-async function openStellarExplorationGame(page: Page) {
-  await page.addInitScript(() => {
+async function openStellarExplorationGame(page: Page, advancedOnboarding = false) {
+  await page.addInitScript((withAdvancedOnboarding) => {
     const entityBase = {
       machineCount: 1,
       minerCount: 0,
@@ -1265,14 +1265,19 @@ async function openStellarExplorationGame(page: Page) {
         { ...entityBase, id: "stellar_demand", kind: "station", planetId: "home", position: { x: 160, y: -100 }, buildingId: "interstellar_logistics_station", storedItemId: "optical_grating_crystal", stationMode: "demand", stationProgress: 0.96, stationTrips: 0, stationLastTransfer: 0, stationVessels: 1, stationWarpers: 1, stationWarpEnabled: true, stationMinimumLoad: 0.1 },
         { ...entityBase, id: "stellar_frost_wind", kind: "power", planetId: "frost", position: { x: -300, y: -220 }, buildingId: "wind_turbine", machineCount: 4 },
         { ...entityBase, id: "stellar_supply", kind: "station", planetId: "frost", position: { x: 160, y: -100 }, buildingId: "interstellar_logistics_station", storedItemId: "optical_grating_crystal", stationMode: "supply", stationProgress: 0.96, stationTrips: 0, stationLastTransfer: 0, stationVessels: 0, stationWarpers: 0, stationWarpEnabled: true, stationMinimumLoad: 0.1, outputs: { optical_grating_crystal: 20 } },
+        ...(withAdvancedOnboarding ? [
+          { ...entityBase, id: "onboarding_iron", kind: "vein", planetId: "home", position: { x: -520, y: 220 }, resourceId: "iron_ore", minerCount: 1, outputs: { iron_ore: 0 } },
+          { ...entityBase, id: "onboarding_smelter", kind: "machine", planetId: "home", position: { x: -160, y: 220 }, buildingId: "arc_smelter", recipeId: "iron_ingot" },
+        ] : []),
       ],
-      belts: [],
+      belts: withAdvancedOnboarding ? [{ id: "onboarding_belt", planetId: "home", source: "onboarding_iron", target: "onboarding_smelter", itemId: "iron_ore", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 0, lastFlow: 0 }] : [],
       construction: {},
       tray: { space_warper: 7, information_matrix: 10, gravity_matrix: 20, titanium_ingot: 12 },
       planetTrays: { home: { space_warper: 7, information_matrix: 10, gravity_matrix: 20, titanium_ingot: 12 }, ashen: {}, giant: {}, frost: {}, boreal_giant: {}, magnetar: {} },
-      totalProduced: {},
+      totalProduced: withAdvancedOnboarding ? { electromagnetic_matrix: 1, refined_oil: 1, plastic: 1, energy_matrix: 1, structure_matrix: 1 } : {},
+      manualMined: withAdvancedOnboarding ? 1 : 0,
       research: {
-        selectedTechId: null,
+        selectedTechId: withAdvancedOnboarding ? "electromagnetic_matrix" : null,
         queuedTechIds: [],
         progressByTech: {},
         completedTechIds: ["space_warp", "rare_resource_utilization", "stellar_exploration"],
@@ -1281,7 +1286,7 @@ async function openStellarExplorationGame(page: Page) {
       paused: true,
     };
     window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
-  });
+  }, advancedOnboarding);
   await page.goto("/");
   await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible();
 }
@@ -1633,9 +1638,25 @@ async function openOfflineStageGame(page: Page) {
   await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible();
 }
 
+test("progressive onboarding reaches interstellar logistics and locates its blocker", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openStellarExplorationGame(page, true);
+
+  const coach = page.locator(".onboarding-coach");
+  await expect(coach).toContainText("星际物流 · 渐进教学 9/13");
+  await expect(coach).toContainText("完成首次星际运输");
+  await expect(coach).toContainText("当前卡点");
+  await coach.getByRole("button", { name: "定位卡点" }).click();
+  await expect(page.locator(".station-inspector")).toBeVisible();
+  await expect(page.locator(".game-notice")).toContainText("教学卡点");
+  await expect(page.locator(".react-flow__node.selected .station-node")).toHaveCount(1);
+  await page.screenshot({ path: "artifacts/qa/onboarding-interstellar-blocker-1280.png", fullPage: true });
+});
+
 test("manual mining feeds a powered smelter", async ({ page }) => {
   await page.setViewportSize({ width: 1560, height: 960 });
   await freshGame(page);
+  await expect(page.locator(".onboarding-coach")).toContainText("基础 · 渐进教学 0/13");
   const canvas = page.locator(".react-flow__pane");
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
