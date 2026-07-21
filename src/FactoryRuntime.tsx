@@ -1,5 +1,4 @@
 import { ReactFlowProvider } from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
 import { FactoryGame } from "./App";
 import type { LoadedGame } from "./game/storage";
 
