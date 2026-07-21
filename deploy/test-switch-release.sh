@@ -27,4 +27,31 @@ run_switch --rollback-last >/dev/null
 [[ "$(readlink -f "$web_root/current")" == "$web_root/releases/a" ]]
 [[ "$(readlink -f "$api_root/current")" == "$api_root/releases/a" ]]
 
+mock_bin="$fixture/bin"
+curl_count="$fixture/curl-count"
+mkdir -p "$mock_bin"
+for command in nginx systemctl sleep; do
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$mock_bin/$command"
+  chmod +x "$mock_bin/$command"
+done
+cat >"$mock_bin/curl" <<EOF
+#!/usr/bin/env bash
+count=\$((\$(cat "$curl_count" 2>/dev/null || printf 0) + 1))
+printf '%s\n' "\$count" >"$curl_count"
+((count >= 3))
+EOF
+chmod +x "$mock_bin/curl"
+
+PATH="$mock_bin:$PATH" \
+DSP_WEB_ROOT="$web_root" \
+DSP_API_ROOT="$api_root" \
+DSP_RELEASE_STATE_ROOT="$state_root" \
+DSP_SKIP_SERVICE_ACTIONS=0 \
+DSP_HEALTH_ATTEMPTS=3 \
+DSP_HEALTH_DELAY_SECONDS=0 \
+bash "$script_path" --web-release b --api-release b >/dev/null
+[[ "$(cat "$curl_count")" == "3" ]]
+[[ "$(readlink -f "$web_root/current")" == "$web_root/releases/b" ]]
+[[ "$(readlink -f "$api_root/current")" == "$api_root/releases/b" ]]
+
 printf 'switch-release smoke test passed: %s\n' "$fixture"

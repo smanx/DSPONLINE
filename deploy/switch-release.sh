@@ -17,6 +17,8 @@ state_root="${DSP_RELEASE_STATE_ROOT:-/var/lib/dsp-idle-cloud/release-state}"
 service_name="${DSP_SERVICE_NAME:-dsp-idle-cloud.service}"
 health_url="${DSP_HEALTH_URL:-http://127.0.0.1:4320/api/health}"
 skip_service_actions="${DSP_SKIP_SERVICE_ACTIONS:-0}"
+health_attempts="${DSP_HEALTH_ATTEMPTS:-40}"
+health_delay_seconds="${DSP_HEALTH_DELAY_SECONDS:-0.25}"
 web_release=""
 api_release=""
 rollback_last=0
@@ -68,6 +70,11 @@ run_service_checks() {
   nginx -t
   systemctl reload nginx
   systemctl restart "$service_name"
+  local attempt
+  for ((attempt = 1; attempt <= health_attempts; attempt += 1)); do
+    if curl --fail --silent --max-time 2 "$health_url" >/dev/null 2>&1; then return; fi
+    sleep "$health_delay_seconds"
+  done
   curl --fail --silent --show-error --max-time 10 "$health_url" >/dev/null
 }
 

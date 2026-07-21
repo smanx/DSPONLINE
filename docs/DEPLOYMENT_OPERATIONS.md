@@ -94,6 +94,8 @@ sudo bash deploy/switch-release.sh --rollback-last
 
 `--rollback-last` 只切换 `/var/www/dsp-idle/current` 与 `/opt/dsp-idle-cloud/current`，绝不恢复、替换或初始化数据库。
 
+云服务重启后，切换脚本默认在 10 秒窗口内短轮询本机健康接口，避免把 Node 尚未绑定端口的正常启动窗口误判为发布失败。可通过 `DSP_HEALTH_ATTEMPTS` 和 `DSP_HEALTH_DELAY_SECONDS` 调整，但不得以此掩盖持续启动错误。
+
 ### 5.3 后端
 
 1. 上传到 `/opt/dsp-idle-cloud/releases/<build-id>`。
