@@ -66,11 +66,22 @@ test("rejects arbitrary event names and reports range summaries", () => {
     playerId,
     sessionId,
     sequence: 1,
-    events: [{ name: "page_view", count: 1 }, { name: "new_game", count: 1 }],
+    events: [
+      { name: "page_view", count: 1 },
+      { name: "new_game", count: 1 },
+      { name: "perf_load_1500_3000", count: 3 },
+      { name: "perf_load_3000_8000", count: 1 },
+      { name: "perf_lcp_lt_2500", count: 3 },
+      { name: "perf_lcp_gte_4000", count: 1 },
+      { name: "perf_transfer_lt_1mb", count: 4 },
+    ],
   }, { now: shanghaiMidnight });
   const summary = analyticsSummary(analytics, { now: shanghaiMidnight, days: 7 });
   assert.equal(summary.today, "2026-07-22");
   assert.equal(summary.totalVisitors, 1);
   assert.equal(summary.range.pageViews, 1);
   assert.deepEqual(summary.events.find((event) => event.name === "new_game"), { name: "new_game", count: 1 });
+  assert.deepEqual(summary.performance.pageLoad, { fast: 0, acceptable: 3, slow: 1, verySlow: 0, samples: 4, p75Band: "1.5-3 秒" });
+  assert.equal(summary.performance.lcp.p75Band, "<2.5 秒");
+  assert.equal(summary.performance.transfer.p75Band, "<1 MB");
 });

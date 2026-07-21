@@ -1,4 +1,5 @@
-const CACHE_NAME = "dsp-idle-shell-v2";
+const BUILD_ID = new URL(self.location.href).searchParams.get("v")?.replace(/[^A-Za-z0-9._-]/g, "_") || "development";
+const CACHE_NAME = `dsp-idle-shell-${BUILD_ID}`;
 const APP_SHELL = ["/", "/index.html", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {

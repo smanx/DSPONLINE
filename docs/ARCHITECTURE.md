@@ -20,9 +20,12 @@ flowchart LR
 
 ### 启动层
 
-- `src/main.tsx`：安装客户端监控，挂载 React，生产环境注册 PWA。
+- `src/main.tsx`：安装客户端监控，挂载 React，生产环境注册 PWA；普通入口按需加载 `GameLauncher`，管理员入口独立加载后台。
+- `src/GameLauncher.tsx`：主菜单、版本公告和工厂启动边界；只有玩家进入工厂或执行存档操作时才继续加载存档迁移器与工厂运行时。
+- `src/FactoryRuntime.tsx`：按需加载 React Flow 样式、Provider 与 `FactoryGame`，避免主菜单提前下载画布和模拟器。
 - `src/hooks/usePlayerPresence.ts`、`src/game/presence.ts`：进入工厂后的匿名心跳、可见性节流与本机稳定 ID；不读取游戏存档。
-- `src/game/analytics.ts`：页面访问、活跃时长和白名单关键事件的会话级批处理；失败静默重试，不读取或上传游戏存档。
+- `src/game/analytics.ts`：页面访问、活跃时长和白名单关键事件的会话级批处理；页面加载、LCP 和静态传输量只上传隐私分桶，不上传原始时序、URL 参数或游戏存档。
+- `src/game/savePreview.ts`：主菜单只读存档索引，只解析摘要、设置和原始 payload；不迁移、不推进模拟、不写入存档，正式校验仍由 `storage.ts` 在载入时执行。
 - `src/components/AdminDashboard.tsx`：独立 `/admin` 路由，只使用浏览器会话中的管理员 token 读取聚合运营数据。
 - `src/components/StartMenu.tsx`：开始/继续、槽位、导入、云账号、邮箱验证/密码重置链接和主菜单设置。
 - `src/components/CloudAccountSecurity.tsx`、`CloudSaveConflictDialog.tsx`：主菜单与银河工作区共用的账号安全、设备会话、数据导出、注销和云冲突选择界面。
@@ -42,7 +45,7 @@ flowchart LR
 
 React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新计算视口平移以保持原世界中心；触摸端的扩大吸附、连接虚影和低性能 LOD 都是瞬时展示状态，不写入存档。点击式连线同时清理 React Flow 的内部起点与应用预览，避免取消或吸附后遗留幽灵连接。
 
-大型工作区由 `React.lazy` 按需加载，避免初始界面一次装入全部功能。
+工厂运行时和大型工作区都由 `React.lazy` 按需加载。主菜单首屏不再静态依赖 React Flow、`engine.ts`、`storage.ts` 或工厂工作区；生产构建必须检查入口 HTML 没有提前 preload 这些 chunk。
 
 ### 领域层
 
@@ -156,6 +159,8 @@ API 表面：
 - 云进程：绑定 `127.0.0.1:4320`，只能经 Nginx 暴露
 - systemd：云服务自动重启；健康检查每两分钟访问本机 `/api/health`。
 - 运维工具链：每日异地备份使用公钥认证加密，恢复节点每月在隔离目录启动临时 API 演练；五分钟节点探针检查公网端点、磁盘和 TLS，结果通过管理员指标读取。
+- Nginx 模板对 JS、CSS、JSON、manifest、XML 和 SVG 启用 gzip，并保留 hashed asset immutable 与 `index.html`/`sw.js` no-cache 边界。
+- Service worker 注册 URL 携带确定性 build ID，缓存命名也使用该 ID，避免版本切换后新旧应用壳混用。
 
 正式香港节点与上海旧节点各自运行本机 API 和数据库。上海不能反代或重定向到香港，否则会破坏当前备用入口边界。具体运行手册见 [DEPLOYMENT_OPERATIONS.md](./DEPLOYMENT_OPERATIONS.md)。
 

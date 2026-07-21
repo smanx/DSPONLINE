@@ -35,6 +35,16 @@ export const ANALYTICS_EVENT_NAMES = [
   "milestone_interstellar",
   "milestone_dyson_swarm",
   "milestone_universe_matrix",
+  "perf_load_lt_1500",
+  "perf_load_1500_3000",
+  "perf_load_3000_8000",
+  "perf_load_gte_8000",
+  "perf_lcp_lt_2500",
+  "perf_lcp_2500_4000",
+  "perf_lcp_gte_4000",
+  "perf_transfer_lt_1mb",
+  "perf_transfer_1_3mb",
+  "perf_transfer_gte_3mb",
 ];
 
 const VALID_EVENTS = new Set(ANALYTICS_EVENT_NAMES);
@@ -210,6 +220,53 @@ function sumDaily(records) {
   return summary;
 }
 
+function performanceSummary(events) {
+  const pageLoad = {
+    fast: events.perf_load_lt_1500 ?? 0,
+    acceptable: events.perf_load_1500_3000 ?? 0,
+    slow: events.perf_load_3000_8000 ?? 0,
+    verySlow: events.perf_load_gte_8000 ?? 0,
+  };
+  const lcp = {
+    good: events.perf_lcp_lt_2500 ?? 0,
+    needsImprovement: events.perf_lcp_2500_4000 ?? 0,
+    poor: events.perf_lcp_gte_4000 ?? 0,
+  };
+  const transfer = {
+    light: events.perf_transfer_lt_1mb ?? 0,
+    medium: events.perf_transfer_1_3mb ?? 0,
+    heavy: events.perf_transfer_gte_3mb ?? 0,
+  };
+  const percentileBand = (buckets, labels, percentile = 0.75) => {
+    const total = buckets.reduce((sum, count) => sum + count, 0);
+    if (total === 0) return "暂无样本";
+    const target = total * percentile;
+    let cumulative = 0;
+    for (let index = 0; index < buckets.length; index += 1) {
+      cumulative += buckets[index];
+      if (cumulative >= target) return labels[index];
+    }
+    return labels.at(-1);
+  };
+  return {
+    pageLoad: {
+      ...pageLoad,
+      samples: Object.values(pageLoad).reduce((sum, count) => sum + count, 0),
+      p75Band: percentileBand(Object.values(pageLoad), ["<1.5 秒", "1.5-3 秒", "3-8 秒", ">=8 秒"]),
+    },
+    lcp: {
+      ...lcp,
+      samples: Object.values(lcp).reduce((sum, count) => sum + count, 0),
+      p75Band: percentileBand(Object.values(lcp), ["<2.5 秒", "2.5-4 秒", ">=4 秒"]),
+    },
+    transfer: {
+      ...transfer,
+      samples: Object.values(transfer).reduce((sum, count) => sum + count, 0),
+      p75Band: percentileBand(Object.values(transfer), ["<1 MB", "1-3 MB", ">=3 MB"]),
+    },
+  };
+}
+
 export function analyticsSummary(analytics, {
   now = Date.now(),
   timeZone = DEFAULT_METRIC_TIME_ZONE,
@@ -231,6 +288,7 @@ export function analyticsSummary(analytics, {
     range: { days: Math.max(1, Math.min(365, Math.floor(days))), ...sumDaily(daily) },
     lifetime: sumDaily(dayEntries.map(([, record]) => normalizeDailyRecord(record))),
     events: Object.entries(events).map(([name, count]) => ({ name, count })).sort((left, right) => right.count - left.count || left.name.localeCompare(right.name)),
+    performance: performanceSummary(events),
     daily,
   };
 }

@@ -247,6 +247,9 @@ test("protects detailed metrics and aggregates privacy-safe visits and events", 
       { name: "page_view", count: 1 },
       { name: "game_enter", count: 1 },
       { name: "open_recipes", count: 2 },
+      { name: "perf_load_lt_1500", count: 1 },
+      { name: "perf_lcp_lt_2500", count: 1 },
+      { name: "perf_transfer_lt_1mb", count: 1 },
     ],
   };
   const accepted = await request("/api/analytics", { method: "POST", body: JSON.stringify(batch) });
@@ -263,6 +266,9 @@ test("protects detailed metrics and aggregates privacy-safe visits and events", 
   assert.equal(metrics.body.analytics.range.gameStarts, 1);
   assert.equal(metrics.body.analytics.range.activeSeconds, 24);
   assert.equal(metrics.body.analytics.events.find((event) => event.name === "open_recipes").count, 2);
+  assert.equal(metrics.body.analytics.performance.pageLoad.p75Band, "<1.5 秒");
+  assert.equal(metrics.body.analytics.performance.lcp.samples, 1);
+  assert.equal(metrics.body.analytics.performance.transfer.light, 1);
   assert.equal(metrics.body.backups.offsite.transported, true);
   assert.equal(metrics.body.backups.offsite.completedAt, 100);
   assert.equal(metrics.body.backups.restoreDrill.ok, true);

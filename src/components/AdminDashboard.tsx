@@ -60,6 +60,11 @@ interface AdminMetrics {
     range: { days: number; uniqueVisitors: number; sessions: number; pageViews: number; gameStarts: number; activeSeconds: number };
     lifetime: { uniqueVisitors: number; sessions: number; pageViews: number; gameStarts: number; activeSeconds: number };
     events: Array<{ name: string; count: number }>;
+    performance?: {
+      pageLoad: { samples: number; fast: number; acceptable: number; slow: number; verySlow: number; p75Band: string };
+      lcp: { samples: number; good: number; needsImprovement: number; poor: number; p75Band: string };
+      transfer: { samples: number; light: number; medium: number; heavy: number; p75Band: string };
+    };
     daily: AnalyticsDay[];
   };
   reports: { feedback: number; clientErrors: number };
@@ -214,6 +219,7 @@ export function AdminDashboard() {
 
   const today = metrics?.analytics.daily.find((record) => record.day === metrics.analytics.today);
   const maximumPageViews = useMemo(() => Math.max(1, ...(metrics?.analytics.daily.map((record) => record.pageViews) ?? [1])), [metrics]);
+  const productEvents = useMemo(() => metrics?.analytics.events.filter((event) => !event.name.startsWith("perf_")) ?? [], [metrics]);
 
   if (!metrics) {
     return (
@@ -228,6 +234,11 @@ export function AdminDashboard() {
       </main>
     );
   }
+  const performance = metrics.analytics.performance ?? {
+    pageLoad: { samples: 0, fast: 0, acceptable: 0, slow: 0, verySlow: 0, p75Band: "暂无样本" },
+    lcp: { samples: 0, good: 0, needsImprovement: 0, poor: 0, p75Band: "暂无样本" },
+    transfer: { samples: 0, light: 0, medium: 0, heavy: 0, p75Band: "暂无样本" },
+  };
 
   return (
     <main className="admin-shell">
@@ -278,10 +289,22 @@ export function AdminDashboard() {
         </article>
 
         <article className="admin-events-panel">
-          <header><div><small>关键事件</small><strong>玩家操作与流程漏斗</strong></div><em>{metrics.analytics.events.length} 类</em></header>
-          <div>{metrics.analytics.events.length === 0 ? <p>尚无事件数据</p> : metrics.analytics.events.map((event) => (
-            <span key={event.name}><strong>{EVENT_LABELS[event.name] ?? event.name}</strong><i><b style={{ width: `${Math.max(3, event.count / Math.max(1, metrics.analytics.events[0]?.count ?? 1) * 100)}%` }} /></i><em>{formatNumber(event.count)}</em></span>
+          <header><div><small>关键事件</small><strong>玩家操作与流程漏斗</strong></div><em>{productEvents.length} 类</em></header>
+          <div>{productEvents.length === 0 ? <p>尚无事件数据</p> : productEvents.map((event) => (
+            <span key={event.name}><strong>{EVENT_LABELS[event.name] ?? event.name}</strong><i><b style={{ width: `${Math.max(3, event.count / Math.max(1, productEvents[0]?.count ?? 1) * 100)}%` }} /></i><em>{formatNumber(event.count)}</em></span>
           ))}</div>
+        </article>
+
+        <article className="admin-meta-panel admin-performance-panel">
+          <header><div><small>真实浏览器样本</small><strong>页面加载与资源体积</strong></div><em>隐私分桶</em></header>
+          <dl>
+            <div><dt>页面加载 P75</dt><dd>{performance.pageLoad.p75Band} · {performance.pageLoad.samples} 份</dd></div>
+            <div><dt>加载分布</dt><dd>&lt;1.5s {performance.pageLoad.fast} / 1.5-3s {performance.pageLoad.acceptable} / 慢 {performance.pageLoad.slow + performance.pageLoad.verySlow}</dd></div>
+            <div><dt>LCP P75</dt><dd>{performance.lcp.p75Band} · {performance.lcp.samples} 份</dd></div>
+            <div><dt>LCP 健康</dt><dd>良好 {performance.lcp.good} / 待改善 {performance.lcp.needsImprovement} / 差 {performance.lcp.poor}</dd></div>
+            <div><dt>传输体积 P75</dt><dd>{performance.transfer.p75Band} · {performance.transfer.samples} 份</dd></div>
+            <div><dt>传输分布</dt><dd>&lt;1MB {performance.transfer.light} / 1-3MB {performance.transfer.medium} / 重 {performance.transfer.heavy}</dd></div>
+          </dl>
         </article>
 
         <article className="admin-meta-panel">

@@ -49,24 +49,8 @@ import {
   type CloudSession,
 } from "../game/cloud";
 import { trackAnalyticsEvent } from "../game/analytics";
-import { getPlanet } from "../game/content";
-import { createInitialState } from "../game/engine";
-import {
-  exportGame,
-  getSaveSlotSummaries,
-  getSaveSnapshotSummaries,
-  inspectContinueSave,
-  inspectSave,
-  loadGame,
-  loadGameSlot,
-  loadSaveSnapshot,
-  saveGame,
-  saveGameSnapshot,
-  type ContinueSaveInspection,
-  type LoadedGame,
-  type SaveInspection,
-  type SaveSlotId,
-} from "../game/storage";
+import { getMenuContinueSave, getMenuPlanetName, getMenuSlotSummaries, getMenuSnapshotSummaries, type MenuContinueSave, type MenuSaveSource } from "../game/savePreview";
+import type { LoadedGame, SaveInspection, SaveSlotId } from "../game/storage";
 import type { AutosaveIntervalSeconds, FontScale, GameSettings, SimulationSpeed } from "../game/types";
 import { getDesktopBridge } from "../desktop";
 import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
@@ -81,6 +65,19 @@ const MENU_SETTINGS_KEY = "dsp-idle-network.menu-settings.v1";
 const FONT_SCALES: FontScale[] = [0.8, 1, 1.25, 1.5];
 const SIMULATION_SPEEDS: SimulationSpeed[] = [1, 2, 4];
 const AUTOSAVE_INTERVALS: AutosaveIntervalSeconds[] = [2, 10, 30];
+const DEFAULT_MENU_SETTINGS: GameSettings = {
+  simulationSpeed: 1,
+  fontScale: 1,
+  performanceMode: false,
+  reducedMotion: false,
+  soundEnabled: false,
+  beltHeatmapEnabled: false,
+  autosaveIntervalSeconds: 2,
+  resourceMode: "finite",
+  difficulty: "standard",
+};
+const loadStorageModule = () => import("../game/storage");
+type StorageModule = Awaited<ReturnType<typeof loadStorageModule>>;
 
 interface StartMenuProps {
   onEnterGame: (loaded: LoadedGame) => void;
@@ -129,7 +126,7 @@ function saveMenuSettings(settings: GameSettings): void {
   try { window.localStorage.setItem(MENU_SETTINGS_KEY, JSON.stringify(settings)); } catch { /* optional preference */ }
 }
 
-function sourceLabel(source: ContinueSaveInspection["source"]): string {
+function sourceLabel(source: MenuSaveSource): string {
   if (source === "backup") return "备用存档";
   if (source === "snapshot") return "自动快照";
   return "主存档";
@@ -153,12 +150,12 @@ function ToggleRow({ checked, label, value, icon, onChange }: {
 }
 
 export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
-  const initialContinueSave = useMemo(() => inspectContinueSave(), []);
-  const defaultSettings = initialContinueSave?.inspection.state?.settings ?? createInitialState().settings;
+  const initialContinueSave = useMemo(() => getMenuContinueSave(), []);
+  const defaultSettings = { ...DEFAULT_MENU_SETTINGS, ...initialContinueSave?.settings };
   const [view, setView] = useState<StartMenuView>("overview");
-  const [continueSave, setContinueSave] = useState<ContinueSaveInspection | null>(initialContinueSave);
-  const [slots, setSlots] = useState(getSaveSlotSummaries);
-  const [snapshots, setSnapshots] = useState(getSaveSnapshotSummaries);
+  const [continueSave, setContinueSave] = useState<MenuContinueSave | null>(initialContinueSave);
+  const [slots, setSlots] = useState(getMenuSlotSummaries);
+  const [snapshots, setSnapshots] = useState(getMenuSnapshotSummaries);
   const [settings, setSettings] = useState<GameSettings>(() => readMenuSettings(defaultSettings));
   const [cloudSession, setCloudSession] = useState<CloudSession>({ status: "checking", user: null, cloudSave: null, message: null });
   const initialCloudAction = useMemo(() => {
@@ -182,9 +179,9 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const brandIconUrl = `${import.meta.env.BASE_URL}icon.svg`;
 
   const refreshLocalSaves = () => {
-    setContinueSave(inspectContinueSave());
-    setSlots(getSaveSlotSummaries());
-    setSnapshots(getSaveSnapshotSummaries());
+    setContinueSave(getMenuContinueSave());
+    setSlots(getMenuSlotSummaries());
+    setSnapshots(getMenuSnapshotSummaries());
   };
 
   useEffect(() => {
@@ -246,66 +243,96 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     saveMenuSettings(next);
   };
 
-  const preserveCurrentSave = (reason: string) => {
-    const state = continueSave?.inspection.state;
-    if (state) saveGameSnapshot(state, reason);
+  const preserveCurrentSave = async (reason: string, storage?: StorageModule) => {
+    const activeStorage = storage ?? await loadStorageModule();
+    const state = activeStorage.inspectContinueSave()?.inspection.state;
+    if (state) activeStorage.saveGameSnapshot(state, reason);
   };
 
-  const enterLoadedGame = (loaded: LoadedGame, preserveReason?: string) => {
-    if (preserveReason) preserveCurrentSave(preserveReason);
+  const enterLoadedGame = async (loaded: LoadedGame, preserveReason?: string, storage?: StorageModule) => {
+    const activeStorage = storage ?? await loadStorageModule();
+    if (preserveReason) await preserveCurrentSave(preserveReason, activeStorage);
     const state = { ...loaded.state, settings: { ...loaded.state.settings, ...settings } };
-    saveGame(state);
+    activeStorage.saveGame(state);
     trackAnalyticsEvent("game_enter");
     onEnterGame({ ...loaded, state });
   };
 
-  const continueGame = () => {
+  const continueGame = async () => {
     setBusy(true);
     try {
+      const storage = await loadStorageModule();
       trackAnalyticsEvent("continue_game");
-      enterLoadedGame(loadGame());
+      await enterLoadedGame(storage.loadGame(), undefined, storage);
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "本地存档无法载入" });
     } finally {
       setBusy(false);
     }
   };
 
-  const startNewGame = () => {
-    preserveCurrentSave("开始新工厂前");
-    const state = createInitialState();
-    state.settings = { ...state.settings, ...settings };
-    saveGame(state);
-    trackAnalyticsEvent("new_game");
-    trackAnalyticsEvent("game_enter");
-    onEnterGame({ state, offlineSeconds: 0, offlineReport: null, recovery: { source: "fresh", issues: [] } });
+  const startNewGame = async () => {
+    setBusy(true);
+    try {
+      const [storage, { createInitialState }] = await Promise.all([loadStorageModule(), import("../game/engine")]);
+      await preserveCurrentSave("开始新工厂前", storage);
+      const state = createInitialState();
+      state.settings = { ...state.settings, ...settings };
+      storage.saveGame(state);
+      trackAnalyticsEvent("new_game");
+      trackAnalyticsEvent("game_enter");
+      onEnterGame({ state, offlineSeconds: 0, offlineReport: null, recovery: { source: "fresh", issues: [] } });
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "新工厂初始化失败" });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const requestNewGame = () => {
     if (continueSave) setView("new");
-    else startNewGame();
+    else void startNewGame();
   };
 
-  const loadSlot = (slotId: SaveSlotId) => {
-    const loaded = loadGameSlot(slotId);
-    if (!loaded) {
-      setMessage({ tone: "error", text: `本地槽位 ${slotId} 无法载入` });
-      return;
+  const loadSlot = async (slotId: SaveSlotId) => {
+    setBusy(true);
+    try {
+      const storage = await loadStorageModule();
+      const loaded = storage.loadGameSlot(slotId);
+      if (!loaded) {
+        setMessage({ tone: "error", text: `本地槽位 ${slotId} 无法载入` });
+        return;
+      }
+      trackAnalyticsEvent("load_save");
+      await enterLoadedGame(loaded, `载入槽位 ${slotId} 前`, storage);
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : `本地槽位 ${slotId} 无法载入` });
+    } finally {
+      setBusy(false);
     }
-    trackAnalyticsEvent("load_save");
-    enterLoadedGame(loaded, `载入槽位 ${slotId} 前`);
   };
 
-  const loadSnapshot = (snapshotId: string) => {
-    const state = loadSaveSnapshot(snapshotId);
-    if (!state) {
-      setMessage({ tone: "error", text: "自动快照无法载入" });
-      return;
+  const loadSnapshot = async (snapshotId: string) => {
+    setBusy(true);
+    try {
+      const storage = await loadStorageModule();
+      const state = storage.loadSaveSnapshot(snapshotId);
+      if (!state) {
+        setMessage({ tone: "error", text: "自动快照无法载入" });
+        return;
+      }
+      trackAnalyticsEvent("load_save");
+      await enterLoadedGame({ state, offlineSeconds: 0, offlineReport: null }, "回滚自动快照前", storage);
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "自动快照无法载入" });
+    } finally {
+      setBusy(false);
     }
-    trackAnalyticsEvent("load_save");
-    enterLoadedGame({ state, offlineSeconds: 0, offlineReport: null }, "回滚自动快照前");
   };
 
   const readImportFile = async (file: File) => {
-    const inspection = inspectSave(await file.text());
+    const storage = await loadStorageModule();
+    const inspection = storage.inspectSave(await file.text());
     setImportInspection(inspection);
     setView("import");
     setMessage(inspection.valid
@@ -313,10 +340,11 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       : { tone: "error", text: inspection.issues[0] ?? "存档格式无效" });
   };
 
-  const confirmImport = () => {
+  const confirmImport = async () => {
     if (!importInspection?.valid || !importInspection.state) return;
+    const storage = await loadStorageModule();
     trackAnalyticsEvent("import_save");
-    enterLoadedGame({ state: importInspection.state, offlineSeconds: 0, offlineReport: null }, "导入外部存档前");
+    await enterLoadedGame({ state: importInspection.state, offlineSeconds: 0, offlineReport: null }, "导入外部存档前", storage);
   };
 
   const authenticateCloud = async (event: FormEvent<HTMLFormElement>) => {
@@ -386,10 +414,11 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     setBusy(true);
     setMessage(null);
     try {
-      const loaded = loadGame();
+      const storage = await loadStorageModule();
+      const loaded = storage.loadGame();
       const state = { ...loaded.state, settings: { ...loaded.state.settings, ...settings } };
-      saveGame(state);
-      const localPayload = exportGame(state);
+      storage.saveGame(state);
+      const localPayload = storage.exportGame(state);
       attemptedPayload = localPayload;
       const comparison = compareCloudSave(userId, localPayload, cloudSession.cloudSave);
       if (cloudSession.cloudSave && ["cloud-newer", "conflict", "unbound"].includes(comparison.state)) {
@@ -424,14 +453,15 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         setMessage({ tone: "warning", text: "该账户还没有云存档" });
         return;
       }
-      const inspection = inspectSave(cloudSave.payload);
+      const storage = await loadStorageModule();
+      const inspection = storage.inspectSave(cloudSave.payload);
       if (!inspection.valid || !inspection.state) {
         setMessage({ tone: "error", text: inspection.issues[0] ?? "云存档格式无效" });
         return;
       }
       markCloudSaveSynchronized(userId, cloudSave, cloudSave.payload);
       trackAnalyticsEvent("cloud_download");
-      enterLoadedGame({ state: inspection.state, offlineSeconds: 0, offlineReport: null }, "下载云存档前");
+      await enterLoadedGame({ state: inspection.state, offlineSeconds: 0, offlineReport: null }, "下载云存档前", storage);
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "云存档下载失败" });
     } finally {
@@ -446,12 +476,13 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     try {
       const cloudSave = await downloadCloudSave(cloudConflict.remote.revision);
       if (!cloudSave) throw new Error("云端修订已不可用，请重新连接后再试");
-      const inspection = inspectSave(cloudSave.payload);
+      const storage = await loadStorageModule();
+      const inspection = storage.inspectSave(cloudSave.payload);
       if (!inspection.valid || !inspection.state) throw new Error(inspection.issues[0] ?? "云存档格式无效");
       markCloudSaveSynchronized(userId, cloudSave, cloudSave.payload);
       setCloudConflict(null);
       trackAnalyticsEvent("cloud_download");
-      enterLoadedGame({ state: inspection.state, offlineSeconds: 0, offlineReport: null }, "解决云存档冲突前");
+      await enterLoadedGame({ state: inspection.state, offlineSeconds: 0, offlineReport: null }, "解决云存档冲突前", storage);
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "云端版本读取失败" });
     } finally {
@@ -479,10 +510,10 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     }
   };
 
-  const summary = continueSave?.inspection.summary;
-  const summaryPlanet = summary ? getPlanet(summary.activePlanetId) : null;
+  const summary = continueSave?.summary;
+  const summaryPlanet = summary ? getMenuPlanetName(summary.activePlanetId) : null;
   const cloudStateLabel = cloudSession.status === "authenticated" ? "云端已登录" : cloudSession.status === "offline" ? "云端离线" : cloudSession.status === "checking" ? "连接云节点" : "云端未登录";
-  const comparisonPayload = continueSave?.inspection.state ? exportGame(continueSave.inspection.state) : null;
+  const comparisonPayload = continueSave?.raw ?? null;
   const cloudComparison = cloudSession.status === "authenticated" && cloudSession.user
     ? compareCloudSave(cloudSession.user.id, comparisonPayload, cloudSession.cloudSave)
     : null;
@@ -520,7 +551,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
           <div className="start-menu-resume">
             <span>{continueSave ? sourceLabel(continueSave.source) : "新工厂协议"}</span>
             <strong>{continueSave ? formatSavedAt(summary?.savedAt) : "等待启动"}</strong>
-            <small>{summary ? `${summaryPlanet?.name ?? "未知行星"} · ${formatRuntime(summary.elapsedSeconds)} · 科技 ${summary.completedTechCount}` : "初始建设物资已装载"}</small>
+            <small>{summary ? `${summaryPlanet ?? "未知行星"} · ${formatRuntime(summary.elapsedSeconds)} · 科技 ${summary.completedTechCount}` : "初始建设物资已装载"}</small>
           </div>
 
           <button className="start-menu-primary" type="button" disabled={busy} onClick={continueSave ? continueGame : requestNewGame}>
@@ -549,7 +580,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
               <span><i><Database size={16} /></i><small>本地槽位</small><strong>{slots.length}/3</strong></span>
             </div>
             <div className="start-menu-flow-status">
-              <span><i className="ready" /><strong>本地存档</strong><small>{continueSave ? "校验通过" : "空"}</small></span>
+              <span><i className="ready" /><strong>本地存档</strong><small>{continueSave ? "已检测" : "空"}</small></span>
               <b />
               <span><i className={cloudSession.status === "authenticated" ? "ready" : "idle"} /><strong>云端节点</strong><small>{cloudStateLabel}</small></span>
               <b />
@@ -561,26 +592,26 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
               <p>强烈推荐您在体验本项目之前，购买并游玩《戴森球计划》，相信它会为您带来更加丰富而精彩的游戏体验。</p>
               <p>进入工厂后会使用本机生成的匿名标识统计游玩与在线人数，不采集完整存档或设备指纹。</p>
             </section>
-            <footer><button type="button" onClick={() => setView("saves")}><History size={15} />查看存档记录</button><button className="primary" type="button" onClick={continueSave ? continueGame : requestNewGame}><Play size={15} />{continueSave ? "进入工厂" : "建立工厂"}</button></footer>
+            <footer><button type="button" onClick={() => setView("saves")}><History size={15} />查看存档记录</button><button className="primary" type="button" disabled={busy} onClick={continueSave ? () => void continueGame() : requestNewGame}><Play size={15} />{continueSave ? "进入工厂" : "建立工厂"}</button></footer>
           </div> : null}
 
           {view === "new" ? <div className="start-menu-new">
             <header><Plus size={22} /><span><small>新工厂协议</small><strong>建立新的母星生产网络</strong></span></header>
             <div className="start-menu-new-loadout"><span><small>风力涡轮机</small><strong>3</strong></span><span><small>采矿机</small><strong>2</strong></span><span><small>熔炉</small><strong>3</strong></span><span><small>制造台</small><strong>3</strong></span><span><small>研究站</small><strong>2</strong></span><span><small>传送带</small><strong>10</strong></span></div>
             {continueSave ? <p className="start-menu-warning"><ShieldCheck size={16} />当前工厂会先保存为自动快照。</p> : null}
-            <footer><button type="button" onClick={() => setView("overview")}>取消</button><button className="primary" type="button" onClick={startNewGame}><Plus size={15} />开始新游戏</button></footer>
+            <footer><button type="button" onClick={() => setView("overview")}>取消</button><button className="primary" type="button" disabled={busy} onClick={() => void startNewGame()}><Plus size={15} />{busy ? "正在建立" : "开始新游戏"}</button></footer>
           </div> : null}
 
           {view === "saves" ? <div className="start-menu-saves">
             <header><span><small>本地数据</small><strong>加载存档</strong></span><em>{slots.length + snapshots.length + (continueSave ? 1 : 0)} 个恢复点</em></header>
             <div className="start-menu-save-list">
-              {continueSave ? <article className="primary"><i><Save size={16} /></i><span><strong>{sourceLabel(continueSave.source)}</strong><small>{formatSavedAt(summary?.savedAt)} · {summaryPlanet?.name} · 科技 {summary?.completedTechCount}</small></span><em>{formatRuntime(summary?.elapsedSeconds ?? 0)}</em><button type="button" onClick={continueGame}><Play size={14} />载入</button></article> : null}
+              {continueSave ? <article className="primary"><i><Save size={16} /></i><span><strong>{sourceLabel(continueSave.source)}</strong><small>{formatSavedAt(summary?.savedAt)} · {summaryPlanet} · 科技 {summary?.completedTechCount}</small></span><em>{formatRuntime(summary?.elapsedSeconds ?? 0)}</em><button type="button" disabled={busy} onClick={() => void continueGame()}><Play size={14} />载入</button></article> : null}
               {([1, 2, 3] as SaveSlotId[]).map((slotId) => {
                 const slot = slots.find((candidate) => candidate.slotId === slotId);
-                return <article className={slot ? "" : "empty"} key={slotId}><i><HardDrive size={16} /></i><span><strong>本地槽位 {slotId}</strong><small>{slot ? `${formatSavedAt(slot.savedAt)} · ${getPlanet(slot.activePlanetId).name} · 科技 ${slot.completedTechCount}` : "空槽位"}</small></span><em>{slot ? formatRuntime(slot.elapsedSeconds) : "--"}</em><button type="button" disabled={!slot?.valid} onClick={() => loadSlot(slotId)}><Upload size={14} />载入</button></article>;
+                return <article className={slot ? "" : "empty"} key={slotId}><i><HardDrive size={16} /></i><span><strong>本地槽位 {slotId}</strong><small>{slot ? `${formatSavedAt(slot.savedAt)} · ${getMenuPlanetName(slot.activePlanetId)} · 科技 ${slot.completedTechCount}` : "空槽位"}</small></span><em>{slot ? formatRuntime(slot.elapsedSeconds) : "--"}</em><button type="button" disabled={busy || !slot?.valid} onClick={() => void loadSlot(slotId)}><Upload size={14} />载入</button></article>;
               })}
             </div>
-            {snapshots.length > 0 ? <section className="start-menu-snapshots"><header><History size={14} /><strong>最近快照</strong><small>{snapshots.length}/5</small></header>{snapshots.slice(0, 3).map((snapshot) => <button type="button" disabled={!snapshot.valid} onClick={() => loadSnapshot(snapshot.id)} key={snapshot.id}><span><strong>{snapshot.reason}</strong><small>{formatSavedAt(snapshot.savedAt)} · 科技 {snapshot.completedTechCount}</small></span><em>{formatRuntime(snapshot.elapsedSeconds)}</em><RefreshCw size={13} /></button>)}</section> : null}
+            {snapshots.length > 0 ? <section className="start-menu-snapshots"><header><History size={14} /><strong>最近快照</strong><small>{snapshots.length}/5</small></header>{snapshots.slice(0, 3).map((snapshot) => <button type="button" disabled={busy || !snapshot.valid} onClick={() => void loadSnapshot(snapshot.id)} key={snapshot.id}><span><strong>{snapshot.reason}</strong><small>{formatSavedAt(snapshot.savedAt)} · 科技 {snapshot.completedTechCount}</small></span><em>{formatRuntime(snapshot.elapsedSeconds)}</em><RefreshCw size={13} /></button>)}</section> : null}
           </div> : null}
 
           {view === "cloud" ? <div className="start-menu-cloud">
@@ -617,7 +648,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
 
           {view === "import" ? <div className="start-menu-import">
             <header><FileUp size={22} /><span><small>外部数据</small><strong>导入存档</strong></span></header>
-            {!importInspection ? <button className="start-menu-import-drop" type="button" onClick={() => fileInputRef.current?.click()}><FileUp size={25} /><strong>选择 JSON 存档</strong><small>支持当前格式与可迁移的旧版本</small></button> : <div className={`start-menu-import-result start-menu-import-result--${importInspection.valid ? importInspection.integrity : "corrupt"}`}><header><i>{importInspection.valid ? <Check size={18} /> : <CloudOff size={18} />}</i><span><strong>{importInspection.valid ? "存档可导入" : "存档不可用"}</strong><small>格式 v{importInspection.formatVersion ?? "?"} · 状态 v{importInspection.stateVersion ?? "?"}</small></span></header><div><span><small>运行时间</small><strong>{formatRuntime(importInspection.summary?.elapsedSeconds ?? 0)}</strong></span><span><small>实体数量</small><strong>{importInspection.state?.entities.length ?? 0}</strong></span><span><small>完成科技</small><strong>{importInspection.summary?.completedTechCount ?? 0}</strong></span></div>{importInspection.issues.length > 0 ? <ul>{importInspection.issues.slice(0, 4).map((issue) => <li key={issue}>{issue}</li>)}</ul> : null}<footer><button type="button" onClick={() => fileInputRef.current?.click()}>重新选择</button><button className="primary" type="button" disabled={!importInspection.valid} onClick={confirmImport}><FileUp size={14} />确认导入并进入</button></footer></div>}
+            {!importInspection ? <button className="start-menu-import-drop" type="button" onClick={() => fileInputRef.current?.click()}><FileUp size={25} /><strong>选择 JSON 存档</strong><small>支持当前格式与可迁移的旧版本</small></button> : <div className={`start-menu-import-result start-menu-import-result--${importInspection.valid ? importInspection.integrity : "corrupt"}`}><header><i>{importInspection.valid ? <Check size={18} /> : <CloudOff size={18} />}</i><span><strong>{importInspection.valid ? "存档可导入" : "存档不可用"}</strong><small>格式 v{importInspection.formatVersion ?? "?"} · 状态 v{importInspection.stateVersion ?? "?"}</small></span></header><div><span><small>运行时间</small><strong>{formatRuntime(importInspection.summary?.elapsedSeconds ?? 0)}</strong></span><span><small>实体数量</small><strong>{importInspection.state?.entities.length ?? 0}</strong></span><span><small>完成科技</small><strong>{importInspection.summary?.completedTechCount ?? 0}</strong></span></div>{importInspection.issues.length > 0 ? <ul>{importInspection.issues.slice(0, 4).map((issue) => <li key={issue}>{issue}</li>)}</ul> : null}<footer><button type="button" onClick={() => fileInputRef.current?.click()}>重新选择</button><button className="primary" type="button" disabled={busy || !importInspection.valid} onClick={() => void confirmImport()}><FileUp size={14} />确认导入并进入</button></footer></div>}
           </div> : null}
 
           {view === "settings" ? <div className="start-menu-settings">
@@ -634,7 +665,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         </section>
       </section>
 
-      <footer className="start-menu-footer"><span><i className="ready" />模拟核心就绪</span><span><ShieldCheck size={12} />本地校验存档</span><span>{window.isSecureContext ? "HTTPS" : "HTTP"} · {window.location.hostname || "Desktop"}</span></footer>
+      <footer className="start-menu-footer"><span><i className="ready" />模拟核心按需载入</span><span><ShieldCheck size={12} />载入时校验存档</span><span>{window.isSecureContext ? "HTTPS" : "HTTP"} · {window.location.hostname || "Desktop"}</span></footer>
     </main>
   );
 }

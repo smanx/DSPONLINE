@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-21");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-22");
     }
   });
 }
@@ -68,27 +68,27 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "建造与操作体验更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "公开测试版系统强化更新" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(7);
-  await expect(releaseNotes).toContainText("现有游戏存档不会被重置");
-  await expect(releaseNotes).toContainText("自动整理可撤销");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-21-1440.png", fullPage: true });
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(9);
+  await expect(releaseNotes).toContainText("现有本地与云端工厂存档不会被重置");
+  await expect(releaseNotes).toContainText("可复现发布与数据保护");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-22-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-21-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-22-390.png", fullPage: true });
   await page.setViewportSize({ width: 1440, height: 900 });
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-21");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-22");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
   await page.getByRole("button", { name: "游戏设置" }).click();
-  await page.getByRole("button", { name: "查看2026年7月21日版本更新记录" }).click();
+  await page.getByRole("button", { name: "查看2026年7月22日版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
   await releaseNotes.getByLabel("关闭版本更新记录").click();
 
@@ -100,7 +100,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-21-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-22-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -128,6 +128,11 @@ test("protected operations dashboard renders visit, event and service metrics", 
           range: { days: 7, uniqueVisitors: 20, sessions: 28, pageViews: 44, gameStarts: 19, activeSeconds: 14400 },
           lifetime: { uniqueVisitors: 56, sessions: 81, pageViews: 130, gameStarts: 48, activeSeconds: 58000 },
           events: [{ name: "page_view", count: 44 }, { name: "game_enter", count: 19 }, { name: "open_technology", count: 8 }],
+          performance: {
+            pageLoad: { samples: 20, fast: 11, acceptable: 6, slow: 2, verySlow: 1, p75Band: "1.5-3 秒" },
+            lcp: { samples: 18, good: 12, needsImprovement: 4, poor: 2, p75Band: "2.5-4 秒" },
+            transfer: { samples: 20, light: 14, medium: 5, heavy: 1, p75Band: "1-3 MB" },
+          },
           daily: [
             { day: "2026-07-21", uniqueVisitors: 9, sessions: 12, pageViews: 20, gameStarts: 8, activeSeconds: 6000, events: {}, clients: { "desktop-web": 8 }, sources: { direct: 12 } },
             { day: "2026-07-22", uniqueVisitors: 11, sessions: 16, pageViews: 24, gameStarts: 11, activeSeconds: 8400, events: {}, clients: { "mobile-web": 9 }, sources: { community: 7 } },
@@ -167,6 +172,8 @@ test("protected operations dashboard renders visit, event and service metrics", 
   await expect(page.locator(".admin-service-panel")).toContainText("12");
   await expect(page.locator(".admin-service-panel")).toContainText("异地加密备份");
   await expect(page.locator(".admin-service-panel")).toContainText("20.0 GB · 50%");
+  await expect(page.locator(".admin-performance-panel")).toContainText("页面加载 P75");
+  await expect(page.locator(".admin-performance-panel")).toContainText("1.5-3 秒");
   await expect(page.locator(".admin-audit-panel")).toContainText("修改密码");
   await page.screenshot({ path: "artifacts/qa/admin-dashboard-1366.png", fullPage: true });
 

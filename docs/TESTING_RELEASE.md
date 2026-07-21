@@ -5,10 +5,10 @@
 | 层级 | 命令 | 当前规模 | 覆盖重点 |
 | --- | --- | ---: | --- |
 | 类型检查 | `npm run typecheck` | 全部前端 TS | 严格类型、Vite 配置 |
-| 单元/领域 | `npm test` | 226 项 | 引擎、存档、行星档案、渐进教学、内容、规划、全星球生产管理、网络、性能、战役、云同步与本地账号绑定等 |
+| 单元/领域 | `npm test` | 228 项 | 引擎、存档、主菜单只读存档索引、行星档案、渐进教学、内容、规划、全星球生产管理、网络、性能、战役、云同步与本地账号绑定等 |
 | 浏览器 E2E | `npm run test:e2e` | 83 项 | 从开局到银河终局、桌面/移动交互、生产管理、渐进教学卡点定位、运营后台、账号安全、云冲突和真触摸手势 |
 | 云服务 | `npm run test:server` | 16 项 | 账号验证/恢复/注销、设备会话、匿名统计、v3→v5 迁移、云存档、排行榜、邮件和管理员保护 |
-| 运维工具 | `npm run test:ops` | 4 项 | SQLite 一致性快照、认证加密、异地复制、隔离恢复、篡改拒绝、端点/磁盘探针和告警载荷 |
+| 运维工具 | `npm run test:ops` | 5 项 | SQLite 一致性快照、认证加密、异地复制、隔离恢复、篡改拒绝、Nginx 压缩与缓存边界、端点/磁盘探针和告警载荷 |
 | 生产构建 | `npm run build` | 1 次构建 | `tsc -b`、Vite chunk 和 PWA 资源 |
 | 桌面目录包 | `npm run desktop:pack` | 按需 | Electron 启动与 Windows 解包 |
 
@@ -132,6 +132,8 @@ npm run desktop:dist
 - 检查 Worker 是否 active；回退到主线程时界面仍正确但应记录诊断。
 
 Web 发布应至少记录：构建 ID、入口 HTML、主 JS/CSS 体积、压缩后体积、首屏请求数和目标网络的加载时间。
+
+入口拆分还应直接检查 `dist/index.html`：主菜单不得 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`；React Flow CSS 只能在进入工厂后加载。
 
 ## 5. 版本发布清单
 

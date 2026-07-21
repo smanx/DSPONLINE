@@ -24,7 +24,17 @@ export type AnalyticsEventName =
   | "milestone_yellow_matrix"
   | "milestone_interstellar"
   | "milestone_dyson_swarm"
-  | "milestone_universe_matrix";
+  | "milestone_universe_matrix"
+  | "perf_load_lt_1500"
+  | "perf_load_1500_3000"
+  | "perf_load_3000_8000"
+  | "perf_load_gte_8000"
+  | "perf_lcp_lt_2500"
+  | "perf_lcp_2500_4000"
+  | "perf_lcp_gte_4000"
+  | "perf_transfer_lt_1mb"
+  | "perf_transfer_1_3mb"
+  | "perf_transfer_gte_3mb";
 
 type AnalyticsClient = "desktop-web" | "mobile-web" | "tablet-web" | "pwa" | "desktop-app" | "unknown";
 type AnalyticsSource = "direct" | "search" | "social" | "community" | "referral" | "unknown";
@@ -51,6 +61,60 @@ let pending: PendingAnalyticsBatch | null = null;
 let sequence = 0;
 let unreportedActiveSeconds = 0;
 let lastActiveAt: number | null = null;
+
+function loadEventName(durationMs: number): AnalyticsEventName {
+  if (durationMs < 1_500) return "perf_load_lt_1500";
+  if (durationMs < 3_000) return "perf_load_1500_3000";
+  if (durationMs < 8_000) return "perf_load_3000_8000";
+  return "perf_load_gte_8000";
+}
+
+function lcpEventName(durationMs: number): AnalyticsEventName {
+  if (durationMs < 2_500) return "perf_lcp_lt_2500";
+  if (durationMs < 4_000) return "perf_lcp_2500_4000";
+  return "perf_lcp_gte_4000";
+}
+
+function transferEventName(bytes: number): AnalyticsEventName {
+  if (bytes < 1024 ** 2) return "perf_transfer_lt_1mb";
+  if (bytes < 3 * 1024 ** 2) return "perf_transfer_1_3mb";
+  return "perf_transfer_gte_3mb";
+}
+
+function installPagePerformanceTracking(): void {
+  const captureLoad = () => window.setTimeout(() => {
+    const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+    const durationMs = navigation && navigation.loadEventEnd > navigation.startTime
+      ? navigation.loadEventEnd - navigation.startTime
+      : performance.now();
+    const transferBytes = performance.getEntriesByType("resource")
+      .reduce((sum, entry) => sum + Math.max(0, (entry as PerformanceResourceTiming).transferSize || 0), 0);
+    trackAnalyticsEvent(loadEventName(durationMs));
+    trackAnalyticsEvent(transferEventName(transferBytes));
+  }, 0);
+  if (document.readyState === "complete") captureLoad();
+  else window.addEventListener("load", captureLoad, { once: true });
+
+  if (!("PerformanceObserver" in window)) return;
+  try {
+    let largestContentfulPaintMs = 0;
+    let finalized = false;
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) largestContentfulPaintMs = Math.max(largestContentfulPaintMs, entry.startTime);
+    });
+    const finalize = () => {
+      if (finalized) return;
+      finalized = true;
+      observer.disconnect();
+      if (largestContentfulPaintMs > 0) trackAnalyticsEvent(lcpEventName(largestContentfulPaintMs));
+    };
+    observer.observe({ type: "largest-contentful-paint", buffered: true });
+    window.setTimeout(finalize, 5_000);
+    window.addEventListener("pagehide", finalize, { once: true });
+  } catch {
+    // Web-vital observation is optional on older browser engines.
+  }
+}
 
 function createSessionId(): string {
   if (typeof window.crypto?.randomUUID === "function") return `session_${window.crypto.randomUUID().replaceAll("-", "")}`;
@@ -187,6 +251,7 @@ export function installAnalytics(): void {
   if (installed || typeof window === "undefined") return;
   installed = true;
   restorePending();
+  installPagePerformanceTracking();
   lastActiveAt = document.visibilityState === "hidden" ? null : Date.now();
   trackAnalyticsEvent("page_view");
   window.setTimeout(() => void flushAnalytics(), 800);

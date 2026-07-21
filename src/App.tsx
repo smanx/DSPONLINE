@@ -5,7 +5,6 @@ import {
   MarkerType,
   MiniMap,
   ReactFlow,
-  ReactFlowProvider,
   SelectionMode,
   ViewportPortal,
   useNodesState,
@@ -35,8 +34,6 @@ import { EDGE_TYPES, FactoryConnectionLine, type FactoryFlowEdge } from "./compo
 import { BlueprintPlacementCursor, BlueprintWorkspace, CanvasSelectionTools, SelectionToolbar } from "./components/BlueprintWorkspace";
 import { RecipeFocusPanel } from "./components/RecipeFocusPanel";
 import { OnboardingCoach } from "./components/OnboardingCoach";
-import { ReleaseNotesDialog, hasSeenCurrentReleaseNotes, markCurrentReleaseNotesSeen } from "./components/ReleaseNotesDialog";
-import { StartMenu } from "./components/StartMenu";
 import type { OperationsTab } from "./components/OperationsWorkspace";
 import type { StatisticsTab } from "./components/StatisticsWorkspace";
 import { ITEMS, RECIPES, getBeltConstructionId, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getPlanet, getTechnology } from "./game/content";
@@ -170,7 +167,7 @@ import { analyzeBeltNetwork, diagnoseBelt, getBeltBundleMap, getPortOccupancy, p
 import { planFactoryAutoLayout } from "./game/layout";
 import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
 import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
-import { clearGame, clearGameSlot, clearSaveSnapshot, exportGame, getSaveSlotSummaries, getSaveSnapshotSummaries, inspectSave, loadGame, loadGameSlot, loadSaveSnapshot, saveGame, saveGameSnapshot, saveGameSlot, type LoadedGame, type OfflineReport, type SaveInspection, type SaveSlotId, type SaveSnapshotSummary } from "./game/storage";
+import { clearGame, clearGameSlot, clearSaveSnapshot, exportGame, getSaveSlotSummaries, getSaveSnapshotSummaries, inspectSave, loadGameSlot, loadSaveSnapshot, saveGame, saveGameSnapshot, saveGameSlot, type LoadedGame, type OfflineReport, type SaveInspection, type SaveSlotId, type SaveSnapshotSummary } from "./game/storage";
 import { runAutomaticPerformanceReport, type AutomaticPerformanceReport } from "./game/benchmark";
 import { importBlueprintExchange, parseBlueprintExchange, serializeBlueprintExchange } from "./game/blueprintExchange";
 import { getDesktopBridge, type DesktopReleaseInfo } from "./desktop";
@@ -374,7 +371,7 @@ function minerPlacementHint(buildingId: BuildingId): string {
   return "采矿机需要部署在固体资源矿脉上";
 }
 
-function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { initialLoad: LoadedGame; onReturnToMenu: () => void; onOpenReleaseNotes: () => void }) {
+export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { initialLoad: LoadedGame; onReturnToMenu: () => void; onOpenReleaseNotes: () => void }) {
   usePlayerPresence();
   const [loaded] = useState(initialLoad);
   const [game, setGame] = useState(loaded.state);
@@ -3475,34 +3472,5 @@ function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { init
       </aside> : null}
       {notice ? <div className="game-notice" role="status">{notice}</div> : null}
     </main>
-  );
-}
-
-export function App() {
-  const [launch, setLaunch] = useState<{ id: number; loaded: LoadedGame } | null>(() => {
-    const params = new URLSearchParams(window.location.search);
-    const forceMenu = params.get("menu") === "1";
-    let bypassMenu = params.get("factory") === "1";
-    try { bypassMenu ||= window.sessionStorage.getItem("dsp-idle-network.test-bypass-menu") === "1"; } catch { /* optional test flag */ }
-    return !forceMenu && bypassMenu ? { id: Date.now(), loaded: loadGame() } : null;
-  });
-  const [releaseNotesOpen, setReleaseNotesOpen] = useState(() => !hasSeenCurrentReleaseNotes());
-  const closeReleaseNotes = useCallback(() => {
-    markCurrentReleaseNotesSeen();
-    setReleaseNotesOpen(false);
-  }, []);
-  const openReleaseNotes = useCallback(() => setReleaseNotesOpen(true), []);
-
-  return (
-    <>
-      {!launch ? (
-        <StartMenu onEnterGame={(loaded) => setLaunch({ id: Date.now(), loaded })} onOpenReleaseNotes={openReleaseNotes} />
-      ) : (
-        <ReactFlowProvider key={launch.id}>
-          <FactoryGame initialLoad={launch.loaded} onReturnToMenu={() => setLaunch(null)} onOpenReleaseNotes={openReleaseNotes} />
-        </ReactFlowProvider>
-      )}
-      <ReleaseNotesDialog open={releaseNotesOpen} onClose={closeReleaseNotes} />
-    </>
   );
 }

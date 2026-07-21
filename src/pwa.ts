@@ -48,7 +48,7 @@ export async function registerPwa(): Promise<void> {
     publish({ installed: true, installAvailable: false });
   });
   try {
-    const registration = await navigator.serviceWorker.register("/sw.js");
+    const registration = await navigator.serviceWorker.register(`/sw.js?v=${encodeURIComponent(__BUILD_ID__)}`);
     publish({ registration, updateAvailable: Boolean(registration.waiting) });
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
