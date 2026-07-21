@@ -11,6 +11,9 @@ let server;
 let baseUrl;
 let token;
 let mailbox;
+let offsiteBackupStatusFile;
+let restoreDrillStatusFile;
+let nodeHealthStatusFile;
 const adminToken = "test-admin-secret-1234567890-abcdef";
 const cloudPayload = JSON.stringify({
   formatVersion: 1,
@@ -28,10 +31,19 @@ const cloudPayload = JSON.stringify({
 
 before(async () => {
   directory = await mkdtemp(path.join(tmpdir(), "dsp-cloud-"));
+  offsiteBackupStatusFile = path.join(directory, "offsite-status.json");
+  restoreDrillStatusFile = path.join(directory, "restore-status.json");
+  nodeHealthStatusFile = path.join(directory, "node-health-status.json");
+  await writeFile(offsiteBackupStatusFile, JSON.stringify({ ok: true, completedAt: 100, durationMs: 20, transported: true, transport: "local", schemaVersion: 5, artifact: "cloud-test.sqlite.dspbak" }));
+  await writeFile(restoreDrillStatusFile, JSON.stringify({ ok: true, completedAt: 200, durationMs: 30, restoredSchemaVersion: 5, artifact: "cloud-test.sqlite.dspbak" }));
+  await writeFile(nodeHealthStatusFile, JSON.stringify({ ok: true, checkedAt: 300, failedChecks: [], endpoints: [{ url: "https://dsponline.cn/api/health", ok: true, status: 200, latencyMs: 12.5, contentEncoding: "gzip" }], disk: { ok: true, freeBytes: 80, totalBytes: 100, freeRatio: 0.8 }, tls: { configured: true, ok: true, expiresAt: 1000, daysRemaining: 60 } }));
   mailbox = [];
   server = await createCloudServer({
     databaseFile: path.join(directory, "cloud.sqlite"),
     adminToken,
+    offsiteBackupStatusFile,
+    restoreDrillStatusFile,
+    nodeHealthStatusFile,
     mailer: async (message) => { mailbox.push(message); return true; },
     logger: { error() {} },
   });
@@ -251,6 +263,14 @@ test("protects detailed metrics and aggregates privacy-safe visits and events", 
   assert.equal(metrics.body.analytics.range.gameStarts, 1);
   assert.equal(metrics.body.analytics.range.activeSeconds, 24);
   assert.equal(metrics.body.analytics.events.find((event) => event.name === "open_recipes").count, 2);
+  assert.equal(metrics.body.backups.offsite.transported, true);
+  assert.equal(metrics.body.backups.offsite.completedAt, 100);
+  assert.equal(metrics.body.backups.restoreDrill.ok, true);
+  assert.equal(metrics.body.infrastructure.endpoints[0].latencyMs, 12.5);
+  assert.equal(metrics.body.infrastructure.disk.freeRatio, 0.8);
+  assert.equal(metrics.body.audit.entries > 0, true);
+  assert.equal(metrics.body.audit.recent.some((entry) => entry.action === "account.password_reset"), true);
+  assert.equal(JSON.stringify(metrics.body.audit).includes("pilot@example.com"), false);
   assert.equal(JSON.stringify(server.store.data.analytics).includes(playerId), false);
   assert.equal(JSON.stringify(server.store.data.analytics).includes(sessionId), false);
 });

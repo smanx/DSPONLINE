@@ -20,6 +20,9 @@ Environment=DSP_CLOUD_BACKUP_INTERVAL_MS=21600000
 Environment=DSP_PLAYER_ONLINE_WINDOW_MS=120000
 Environment=DSP_METRIC_TIME_ZONE=Asia/Shanghai
 Environment=DSP_PUBLIC_BASE_URL=https://dsponline.cn
+Environment=DSP_OFFSITE_BACKUP_STATUS_FILE=/var/lib/dsp-idle-cloud/offsite-backup-status.json
+Environment=DSP_RESTORE_DRILL_STATUS_FILE=/var/lib/dsp-idle-cloud/restore-drill-status.json
+Environment=DSP_NODE_HEALTH_STATUS_FILE=/var/lib/dsp-idle-cloud/node-health-status.json
 EnvironmentFile=-/etc/dsp-idle-cloud/admin.env
 Environment=DSP_ALLOWED_ORIGIN=https://dsponline.cn,https://www.dsponline.cn,http://dsponline.cn,http://www.dsponline.cn,http://43.129.249.102,http://111.229.128.211,http://111.229.128.211.nip.io
 NoNewPrivileges=true

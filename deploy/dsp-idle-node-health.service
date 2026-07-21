@@ -1,0 +1,18 @@
+[Unit]
+Description=Probe DSP Idle public endpoints, TLS and disk health
+After=network-online.target dsp-idle-cloud.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/dsp-idle-cloud/current
+EnvironmentFile=/etc/dsp-idle-cloud/monitor.env
+ExecStart=/usr/bin/node /opt/dsp-idle-cloud/current/deploy/probe-node-health.mjs
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dsp-idle-cloud
+

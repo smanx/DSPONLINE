@@ -1,0 +1,13 @@
+[Unit]
+Description=Probe DSP Idle node health every five minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=dsp-idle-node-health.service
+
+[Install]
+WantedBy=timers.target
+

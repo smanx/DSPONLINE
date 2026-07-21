@@ -8,6 +8,7 @@ Canonical details live in `docs/TESTING_RELEASE.md`.
 npm run typecheck
 npm test
 npm run test:server
+npm run test:ops
 npm run build
 npm run test:e2e
 npm run desktop:pack
@@ -25,7 +26,7 @@ Current baseline: 212 Vitest tests, 78 Playwright Chrome tests, and 16 Node serv
 | Content/recipe/technology | typecheck, unit suite, build, content/progression audits, focused E2E |
 | Engine/logistics/power | typecheck, full unit suite, build, relevant E2E; full E2E for shared rules |
 | Save/migration/offline | full unit suite, old-save migration fixtures, full E2E, build |
-| Server/API/SQLite | server tests plus new failure-path tests, typecheck, build |
+| Server/API/SQLite | server tests plus new failure-path tests, `test:ops`, typecheck, build |
 | Production release | `npm ci`, typecheck, all unit tests, server tests, build, full E2E, deployment smoke tests |
 | Desktop release | production matrix plus `desktop:pack` or `desktop:dist` and launch smoke test |
 

@@ -101,6 +101,8 @@ npm run dev
 ```powershell
 npm run typecheck
 npm test
+npm run test:server
+npm run test:ops
 npm run build
 npm run test:e2e
 npm run desktop:pack

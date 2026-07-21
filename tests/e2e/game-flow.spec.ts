@@ -130,7 +130,23 @@ test("protected operations dashboard renders visit, event and service metrics", 
           ],
         },
         reports: { feedback: 4, clientErrors: 1 },
-        backups: { configured: true, lastSuccessAt: generatedAt - 1000, lastErrorAt: null },
+        audit: { entries: 2, recent: [{ action: "account.password_changed", occurredAt: generatedAt - 500, clientType: "desktop-web" }] },
+        backups: {
+          configured: true,
+          lastSuccessAt: generatedAt - 1000,
+          lastErrorAt: null,
+          offsite: { configured: true, ok: true, state: "ready", completedAt: generatedAt - 2000, transported: true, transport: "scp" },
+          restoreDrill: { configured: true, ok: true, state: "ready", completedAt: generatedAt - 3000 },
+        },
+        infrastructure: {
+          configured: true,
+          ok: true,
+          state: "ready",
+          checkedAt: generatedAt - 500,
+          endpoints: [{ url: "https://dsponline.cn/api/health", ok: true, status: 200, latencyMs: 18, contentEncoding: "gzip" }],
+          disk: { ok: true, freeBytes: 20 * 1024 ** 3, totalBytes: 40 * 1024 ** 3, freeRatio: 0.5 },
+          tls: { configured: true, ok: true, expiresAt: generatedAt + 60 * 86400000, daysRemaining: 60 },
+        },
         daily: [],
       }),
     });
@@ -145,6 +161,9 @@ test("protected operations dashboard renders visit, event and service metrics", 
   await expect(page.locator(".admin-kpi-grid")).toContainText("24");
   await expect(page.locator(".admin-events-panel")).toContainText("打开科技树");
   await expect(page.locator(".admin-service-panel")).toContainText("12");
+  await expect(page.locator(".admin-service-panel")).toContainText("异地加密备份");
+  await expect(page.locator(".admin-service-panel")).toContainText("20.0 GB · 50%");
+  await expect(page.locator(".admin-audit-panel")).toContainText("修改密码");
   await page.screenshot({ path: "artifacts/qa/admin-dashboard-1366.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });

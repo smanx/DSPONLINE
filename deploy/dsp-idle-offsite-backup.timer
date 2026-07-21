@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the encrypted DSP Idle offsite backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:17:00 Asia/Shanghai
+RandomizedDelaySec=20min
+Persistent=true
+Unit=dsp-idle-offsite-backup.service
+
+[Install]
+WantedBy=timers.target
+

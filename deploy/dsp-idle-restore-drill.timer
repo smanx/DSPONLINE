@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the DSP Idle encrypted-backup restore drill monthly
+
+[Timer]
+OnCalendar=monthly
+RandomizedDelaySec=6h
+Persistent=true
+Unit=dsp-idle-restore-drill.service
+
+[Install]
+WantedBy=timers.target
+

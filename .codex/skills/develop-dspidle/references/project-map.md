@@ -56,7 +56,7 @@ Use this map after reading `docs/PROJECT_STATUS.md`. Open only the files relevan
 | Node API and SQLite | `server/index.mjs` |
 | Protected operations dashboard | `src/components/AdminDashboard.tsx`, `src/admin.css` |
 | API tests | `server/server.test.mjs` |
-| Nginx/systemd/backup templates | `deploy/` |
+| Nginx/systemd/backup/restore/monitoring | `deploy/` |
 | Electron | `desktop/main.cjs`, `preload.cjs`, `pack.cjs`, `release-channels.cjs` |
 | Desktop CI | `.github/workflows/desktop-release.yml` |
 | Build splitting/font transform | `vite.config.ts` |

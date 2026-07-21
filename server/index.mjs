@@ -38,6 +38,7 @@ const DEFAULT_DATA = {
   sessions: {},
   emailVerifications: {},
   passwordResets: {},
+  auditLog: [],
   cloudSaves: {},
   cloudSaveHistory: {},
   submissions: {},
@@ -156,6 +157,17 @@ function normalizeStoredData(parsed) {
     sessions: normalizeSessionRecords(source.sessions, users),
     emailVerifications: normalizeActionTokens(source.emailVerifications, users),
     passwordResets: normalizeActionTokens(source.passwordResets, users),
+    auditLog: Array.isArray(source.auditLog) ? source.auditLog.slice(-2000).flatMap((entry) => (
+      entry && typeof entry === "object" && typeof entry.action === "string" && Number.isFinite(entry.occurredAt)
+        ? [{
+            action: entry.action.slice(0, 80),
+            occurredAt: Math.max(0, Math.floor(entry.occurredAt)),
+            actorHash: typeof entry.actorHash === "string" ? entry.actorHash.slice(0, 16) : null,
+            ipHash: typeof entry.ipHash === "string" ? entry.ipHash.slice(0, 16) : null,
+            clientType: typeof entry.clientType === "string" ? entry.clientType.slice(0, 32) : "unknown",
+          }]
+        : []
+    )) : [],
     cloudSaves: source.cloudSaves && typeof source.cloudSaves === "object"
       ? Object.fromEntries(Object.entries(source.cloudSaves).map(([userId, save]) => [userId, normalizeSaveRecord(save)]))
       : {},
@@ -350,6 +362,17 @@ function createRateLimiter() {
 function requestIp(request) {
   const forwarded = request.headers["x-forwarded-for"];
   return (typeof forwarded === "string" ? forwarded.split(",")[0].trim() : request.socket.remoteAddress) || "unknown";
+}
+
+function appendAudit(store, request, action, userId = null) {
+  store.data.auditLog.push({
+    action: String(action).slice(0, 80),
+    occurredAt: Date.now(),
+    actorHash: userId ? sha256(`audit-user:${userId}`).slice(0, 16) : null,
+    ipHash: sha256(`audit-ip:${requestIp(request)}`).slice(0, 16),
+    clientType: clientTypeForRequest(request),
+  });
+  if (store.data.auditLog.length > 2000) store.data.auditLog.splice(0, store.data.auditLog.length - 2000);
 }
 
 function send(response, status, payload, extraHeaders = {}) {
@@ -597,6 +620,71 @@ function percentile(values, fraction) {
   return Math.round(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))] * 100) / 100;
 }
 
+async function operationalStatus(file) {
+  if (!file) return { configured: false, ok: false, state: "disabled" };
+  try {
+    const source = JSON.parse(await fs.readFile(file, "utf8"));
+    return {
+      configured: true,
+      ok: source.ok === true,
+      state: source.ok === true ? "ready" : "failed",
+      completedAt: Number.isFinite(source.completedAt) ? source.completedAt : null,
+      failedAt: Number.isFinite(source.failedAt) ? source.failedAt : null,
+      durationMs: Number.isFinite(source.durationMs) ? source.durationMs : null,
+      transported: source.transported === true,
+      transport: typeof source.transport === "string" ? source.transport.slice(0, 20) : null,
+      schemaVersion: Number.isInteger(source.schemaVersion ?? source.restoredSchemaVersion) ? (source.schemaVersion ?? source.restoredSchemaVersion) : null,
+      artifact: typeof source.artifact === "string" ? path.basename(source.artifact).slice(0, 160) : null,
+      error: typeof source.error === "string" ? source.error.slice(0, 300) : null,
+    };
+  } catch (error) {
+    return {
+      configured: true,
+      ok: false,
+      state: error?.code === "ENOENT" ? "pending" : "unreadable",
+      completedAt: null,
+      failedAt: null,
+      error: error?.code === "ENOENT" ? null : "状态文件无法读取",
+    };
+  }
+}
+
+async function nodeHealthStatus(file) {
+  if (!file) return { configured: false, ok: false, state: "disabled" };
+  try {
+    const source = JSON.parse(await fs.readFile(file, "utf8"));
+    return {
+      configured: true,
+      ok: source.ok === true,
+      state: source.ok === true ? "ready" : "failed",
+      checkedAt: Number.isFinite(source.checkedAt) ? source.checkedAt : null,
+      failedChecks: Array.isArray(source.failedChecks) ? source.failedChecks.slice(0, 20).map((value) => String(value).slice(0, 160)) : [],
+      endpoints: Array.isArray(source.endpoints) ? source.endpoints.slice(0, 10).map((entry) => ({
+        url: typeof entry.url === "string" ? entry.url.slice(0, 240) : "",
+        ok: entry.ok === true,
+        status: Number.isInteger(entry.status) ? entry.status : 0,
+        latencyMs: Number.isFinite(entry.latencyMs) ? entry.latencyMs : null,
+        contentEncoding: typeof entry.contentEncoding === "string" ? entry.contentEncoding.slice(0, 30) : null,
+      })) : [],
+      disk: source.disk && typeof source.disk === "object" ? {
+        ok: source.disk.ok === true,
+        freeBytes: Number.isFinite(source.disk.freeBytes) ? source.disk.freeBytes : null,
+        totalBytes: Number.isFinite(source.disk.totalBytes) ? source.disk.totalBytes : null,
+        freeRatio: Number.isFinite(source.disk.freeRatio) ? source.disk.freeRatio : null,
+      } : null,
+      tls: source.tls && typeof source.tls === "object" ? {
+        configured: source.tls.configured === true,
+        ok: source.tls.ok === true,
+        expiresAt: Number.isFinite(source.tls.expiresAt) ? source.tls.expiresAt : null,
+        daysRemaining: Number.isFinite(source.tls.daysRemaining) ? source.tls.daysRemaining : null,
+      } : null,
+      alertSent: source.alertSent === true,
+    };
+  } catch (error) {
+    return { configured: true, ok: false, state: error?.code === "ENOENT" ? "pending" : "unreadable", checkedAt: null, failedChecks: [] };
+  }
+}
+
 export async function createCloudServer({
   dataFile = process.env.DSP_CLOUD_DATA_FILE || "",
   databaseFile = process.env.DSP_CLOUD_DATABASE_FILE || (dataFile ? "" : path.join(path.dirname(fileURLToPath(import.meta.url)), "data", "cloud.sqlite")),
@@ -610,6 +698,9 @@ export async function createCloudServer({
   mailWebhookUrl = process.env.DSP_MAIL_WEBHOOK_URL || "",
   mailWebhookToken = process.env.DSP_MAIL_WEBHOOK_TOKEN || "",
   publicBaseUrl = process.env.DSP_PUBLIC_BASE_URL || "",
+  offsiteBackupStatusFile = process.env.DSP_OFFSITE_BACKUP_STATUS_FILE || "",
+  restoreDrillStatusFile = process.env.DSP_RESTORE_DRILL_STATUS_FILE || "",
+  nodeHealthStatusFile = process.env.DSP_NODE_HEALTH_STATUS_FILE || "",
   logger = console,
 } = {}) {
   const store = databaseFile ? new SqliteStore(databaseFile) : new JsonStore(dataFile || path.join(path.dirname(fileURLToPath(import.meta.url)), "data", "cloud.json"));
@@ -735,6 +826,11 @@ export async function createCloudServer({
           .sort(([left], [right]) => left.localeCompare(right))
           .slice(-days)
           .map(([metricDayId, metrics]) => ({ day: metricDayId, ...metrics }));
+        const [offsiteBackup, restoreDrill, infrastructure] = await Promise.all([
+          operationalStatus(offsiteBackupStatusFile),
+          operationalStatus(restoreDrillStatusFile),
+          nodeHealthStatus(nodeHealthStatusFile),
+        ]);
         return send(response, 200, {
           generatedAt: now,
           timeZone: metricsTimeZone,
@@ -757,11 +853,18 @@ export async function createCloudServer({
           players: playerMetrics(store.data, onlineWindowMs, now, metricsTimeZone),
           analytics: analyticsSummary(store.data.analytics, { now, timeZone: metricsTimeZone, days }),
           reports: { feedback: store.data.feedback.length, clientErrors: store.data.errors.length },
+          audit: {
+            entries: store.data.auditLog.length,
+            recent: [...store.data.auditLog].reverse().slice(0, 20),
+          },
           backups: {
             configured: Boolean(backupDirectory),
             lastSuccessAt: runtime.lastBackupAt,
             lastErrorAt: runtime.lastBackupErrorAt,
+            offsite: offsiteBackup,
+            restoreDrill,
           },
+          infrastructure,
           daily: serviceDaily,
           storage: databaseFile ? "sqlite" : "json",
         });
@@ -822,6 +925,7 @@ export async function createCloudServer({
         store.data.users[user.id] = user;
         const verificationToken = issueActionToken(store.data.emailVerifications, user.id);
         const token = issueSession(store, user.id, request, body.deviceName);
+        appendAudit(store, request, "account.register", user.id);
         await store.persist();
         const delivered = await accountMailer({ kind: "verify", email: user.email, actionToken: verificationToken });
         if (!delivered) return send(response, 502, { error: "账号已创建，但验证邮件发送失败；请登录后重试发送", code: "EMAIL_DELIVERY_FAILED", accountCreated: true });
@@ -835,6 +939,7 @@ export async function createCloudServer({
         const user = email ? Object.values(store.data.users).find((candidate) => candidate.email === email) : null;
         if (!user || !(await passwordMatches(password, user))) return send(response, 401, { error: "邮箱或密码错误" });
         const token = issueSession(store, user.id, request, body.deviceName);
+        appendAudit(store, request, "account.login", user.id);
         await store.persist();
         return send(response, 200, { token, user: publicUser(user) });
       }
@@ -847,6 +952,7 @@ export async function createCloudServer({
         if (!user) return send(response, 400, { error: "验证链接无效或已过期", code: "EMAIL_TOKEN_INVALID" });
         user.emailVerifiedAt = Date.now();
         removeUserActionTokens(store, user.id);
+        appendAudit(store, request, "account.email_verified", user.id);
         await store.persist();
         return send(response, 200, { verified: true, user: publicUser(user) });
       }
@@ -857,6 +963,7 @@ export async function createCloudServer({
         if (Number.isFinite(auth.user.emailVerifiedAt)) return send(response, 200, { verified: true, user: publicUser(auth.user) });
         if (!accountMailer) return send(response, 503, { error: "邮件验证服务尚未配置", code: "EMAIL_SERVICE_UNAVAILABLE" });
         const verificationToken = issueActionToken(store.data.emailVerifications, auth.user.id);
+        appendAudit(store, request, "account.verification_requested", auth.user.id);
         await store.persist();
         const delivered = await accountMailer({ kind: "verify", email: auth.user.email, actionToken: verificationToken });
         if (!delivered) return send(response, 502, { error: "验证邮件发送失败，请稍后重试", code: "EMAIL_DELIVERY_FAILED" });
@@ -871,6 +978,7 @@ export async function createCloudServer({
         const user = Object.values(store.data.users).find((candidate) => candidate.email === email);
         if (user) {
           const resetToken = issueActionToken(store.data.passwordResets, user.id);
+          appendAudit(store, request, "account.password_reset_requested", user.id);
           await store.persist();
           const delivered = await accountMailer({ kind: "reset", email: user.email, actionToken: resetToken });
           if (!delivered) return send(response, 503, { error: "密码重置邮件暂时无法发送，请稍后重试", code: "EMAIL_DELIVERY_FAILED" });
@@ -890,6 +998,7 @@ export async function createCloudServer({
         revokeUserSessions(store, user.id);
         removeUserActionTokens(store, user.id);
         const token = issueSession(store, user.id, request, body.deviceName);
+        appendAudit(store, request, "account.password_reset", user.id);
         await store.persist();
         return send(response, 200, { token, user: publicUser(user) });
       }
@@ -903,6 +1012,7 @@ export async function createCloudServer({
         const auth = authenticatedUser(request, store);
         if (auth) {
           delete store.data.sessions[auth.tokenHash];
+          appendAudit(store, request, "account.logout", auth.user.id);
           await store.persist();
         }
         return send(response, 200, { ok: true });
@@ -925,6 +1035,7 @@ export async function createCloudServer({
         const target = Object.entries(store.data.sessions).find(([, session]) => session.userId === auth.user.id && session.id === body.sessionId);
         if (!target) return send(response, 404, { error: "会话不存在或已结束" });
         delete store.data.sessions[target[0]];
+        appendAudit(store, request, "account.session_revoked", auth.user.id);
         await store.persist();
         return send(response, 200, { revoked: true, currentSessionRevoked: target[0] === auth.tokenHash });
       }
@@ -939,6 +1050,7 @@ export async function createCloudServer({
         if (newPassword.length < 8 || newPassword.length > 128) return send(response, 400, { error: "新密码必须为 8 至 128 位" });
         Object.assign(auth.user, await passwordRecord(newPassword), { passwordChangedAt: Date.now() });
         revokeUserSessions(store, auth.user.id, auth.tokenHash);
+        appendAudit(store, request, "account.password_changed", auth.user.id);
         await store.persist();
         return send(response, 200, { changed: true, user: publicUser(auth.user) });
       }
@@ -950,6 +1062,8 @@ export async function createCloudServer({
         const submissions = Object.values(store.data.submissions).filter((entry) => entry.userId === userId);
         const feedback = store.data.feedback.filter((entry) => entry.userId === userId).map(({ ipHash: _ipHash, ...entry }) => entry);
         const errors = store.data.errors.filter((entry) => entry.userId === userId).map(({ ipHash: _ipHash, ...entry }) => entry);
+        appendAudit(store, request, "account.data_exported", userId);
+        await store.persist();
         return send(response, 200, {
           exportedAt: Date.now(),
           schemaVersion: DEFAULT_DATA.schemaVersion,
@@ -979,6 +1093,7 @@ export async function createCloudServer({
         }
         store.data.feedback = store.data.feedback.filter((entry) => entry.userId !== userId);
         store.data.errors = store.data.errors.filter((entry) => entry.userId !== userId);
+        appendAudit(store, request, "account.deleted", userId);
         delete store.data.users[userId];
         await store.persist();
         return send(response, 200, { deleted: true });
@@ -1049,6 +1164,7 @@ export async function createCloudServer({
         };
         appendSaveRevision(store, auth.user.id, restored);
         dayMetric.cloudUploads += 1;
+        appendAudit(store, request, "cloud.revision_restored", auth.user.id);
         await store.persist();
         return send(response, 200, { cloudSave: cloudSaveMetadata(restored) });
       }

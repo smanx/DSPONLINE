@@ -13,6 +13,8 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:server": "npm --prefix server test",
+    "test:backup": "node --test deploy/backup-tools.test.mjs",
+    "test:ops": "node --test deploy/backup-tools.test.mjs deploy/probe-node-health.test.mjs",
     "server:dev": "node server/index.mjs",
     "typecheck": "tsc -b --pretty false",
     "release:manifest": "node deploy/create-release-manifest.mjs",

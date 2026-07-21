@@ -47,6 +47,7 @@ npm ci
 npm run typecheck
 npm test
 npm run test:server
+npm run test:ops
 npm run build
 npm run test:e2e
 ```
@@ -164,14 +165,24 @@ curl http://111.229.128.211/api/health
 
 ## 8. 备份与恢复
 
-生产配置每 6 小时备份一次并保留最多 30 份。还需要补充：
+生产配置每 6 小时通过 SQLite Backup API 保存本机快照并保留最多 30 份。仓库另提供以下数据保护工具：
 
-- 每日至另一主机或对象存储的加密异地备份。
-- 每月至少一次在隔离目录恢复并启动临时服务的演练。
-- 记录恢复点、校验和、恢复耗时和验证结果。
-- 为磁盘空间、备份失败和最后成功备份时间建立告警。
+- `deploy/create-offsite-backup.mjs`：创建一致性 SQLite 快照、执行 `quick_check`、使用 RSA-OAEP + AES-256-GCM 加密并通过 `scp`、`rclone` 或已挂载目录传输。
+- `deploy/restore-drill.mjs`：核对密文 SHA-256、认证解密、检查记录数量，并在随机本机端口启动临时云服务验证健康接口；明文副本在结束后删除。
+- `deploy/dsp-idle-offsite-backup.*`：每日异地备份 service/timer。
+- `deploy/dsp-idle-restore-drill.*`：恢复节点每月演练 service/timer。
 
-恢复演练不得占用生产端口、不得修改生产 symlink，也不得让恢复实例接收正式域名流量。
+推荐让恢复节点生成独立 RSA 3072 位密钥；私钥只留在恢复节点，香港生产节点只安装公钥：
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out backup-private.pem
+openssl pkey -in backup-private.pem -pubout -out backup-public.pem
+chmod 0600 backup-private.pem
+```
+
+香港到恢复节点的 `scp` 传输使用独立 SSH key、固定 `known_hosts` 和接收目录受限账号，不使用交互密码。对象存储可改用 `rclone`，生命周期策略负责远端保留期。分别从 `dsp-idle-backup.env.example` 与 `dsp-idle-restore.env.example` 创建权限为 `0600` 的真实配置；私钥、SSH key、对象存储 token 和目标地址不进入 Git。
+
+恢复演练不得占用生产端口、不得修改生产 symlink，也不得让恢复实例接收正式域名流量。成功报告只记录 schema、数量、校验和和耗时，不包含邮箱、token 或存档 payload。安装到生产前先运行 `npm run test:ops`，再用真实生产备份副本执行一次人工演练。
 
 ## 9. 监控与日常检查
 
@@ -182,6 +193,8 @@ curl http://111.229.128.211/api/health
 - systemd journal：关注数据库写入、备份、Origin 拒绝和崩溃。
 - 磁盘：关注发布目录、日志、SQLite WAL 和备份增长。
 - `/api/admin/metrics`：验证管理员 token 后检查访问漏斗、错误、P95 延迟、限流、云冲突和备份状态。
+- `dsp-idle-node-health.timer`：每五分钟检查正式入口/API 延迟、磁盘可用比例和 TLS 剩余天数；状态写入受保护后台，可选 webhook 仅发送失败检查名称。
+- `dsp-idle-offsite-backup.timer` 与 `dsp-idle-restore-drill.timer`：检查最后成功时间、timer 上次结果和报告文件。
 - 玩家指标：检查 `players.total`、`players.today`、`players.online` 和 `players.onlineWindowSeconds`；两个节点分别统计，不能直接相加当作严格独立用户数。
 
 匿名在线窗口默认 120 秒，可通过 `DSP_PLAYER_ONLINE_WINDOW_MS` 调整；运营日历默认 `Asia/Shanghai`，可通过 `DSP_METRIC_TIME_ZONE` 调整。修改在线窗口只影响在线口径，不影响累计玩家。部署 schema v5 后端前仍必须先使用 SQLite backup API 创建并验证备份，并用真实备份副本验证 v3→v5 归一化：旧账号保持已验证，账号、会话、存档、历史、榜单、玩家和匿名统计数量不减少，旧云修订获得摘要。

@@ -8,6 +8,7 @@
 | 单元/领域 | `npm test` | 212 项 | 引擎、存档、内容、规划、网络、性能、战役、云同步与本地账号绑定等 |
 | 浏览器 E2E | `npm run test:e2e` | 78 项 | 从开局到银河终局、桌面/移动交互、运营后台、账号安全和云冲突 |
 | 云服务 | `npm run test:server` | 16 项 | 账号验证/恢复/注销、设备会话、匿名统计、v3→v5 迁移、云存档、排行榜、邮件和管理员保护 |
+| 运维工具 | `npm run test:ops` | 4 项 | SQLite 一致性快照、认证加密、异地复制、隔离恢复、篡改拒绝、端点/磁盘探针和告警载荷 |
 | 生产构建 | `npm run build` | 1 次构建 | `tsc -b`、Vite chunk 和 PWA 资源 |
 | 桌面目录包 | `npm run desktop:pack` | 按需 | Electron 启动与 Windows 解包 |
 
@@ -59,6 +60,7 @@ npm run test:e2e
 
 ```powershell
 npm run test:server
+npm run test:ops
 npm run typecheck
 npm run build
 ```
@@ -72,6 +74,7 @@ npm ci
 npm run typecheck
 npm test
 npm run test:server
+npm run test:ops
 npm run build
 npm run test:e2e
 ```

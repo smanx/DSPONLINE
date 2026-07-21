@@ -27,6 +27,16 @@ interface AnalyticsDay {
   sources: Record<string, number>;
 }
 
+interface OperationalStatus {
+  configured: boolean;
+  ok: boolean;
+  state: "disabled" | "pending" | "ready" | "failed" | "unreadable";
+  completedAt?: number | null;
+  failedAt?: number | null;
+  transported?: boolean;
+  transport?: string | null;
+}
+
 interface AdminMetrics {
   generatedAt: number;
   timeZone: string;
@@ -53,7 +63,23 @@ interface AdminMetrics {
     daily: AnalyticsDay[];
   };
   reports: { feedback: number; clientErrors: number };
-  backups: { configured: boolean; lastSuccessAt: number | null; lastErrorAt: number | null };
+  audit?: { entries: number; recent: Array<{ action: string; occurredAt: number; clientType: string }> };
+  backups: {
+    configured: boolean;
+    lastSuccessAt: number | null;
+    lastErrorAt: number | null;
+    offsite?: OperationalStatus;
+    restoreDrill?: OperationalStatus;
+  };
+  infrastructure?: {
+    configured: boolean;
+    ok: boolean;
+    state: string;
+    checkedAt: number | null;
+    endpoints: Array<{ url: string; ok: boolean; status: number; latencyMs: number | null; contentEncoding: string | null }>;
+    disk: { ok: boolean; freeBytes: number | null; totalBytes: number | null; freeRatio: number | null } | null;
+    tls: { configured: boolean; ok: boolean; expiresAt: number | null; daysRemaining: number | null } | null;
+  };
 }
 
 const ADMIN_TOKEN_KEY = "dsp-idle-network.admin-token.v1";
@@ -83,6 +109,20 @@ const EVENT_LABELS: Record<string, string> = {
   milestone_dyson_swarm: "建立戴森云",
   milestone_universe_matrix: "达成白糖",
 };
+const AUDIT_LABELS: Record<string, string> = {
+  "account.register": "账号注册",
+  "account.login": "账号登录",
+  "account.logout": "账号退出",
+  "account.email_verified": "邮箱验证",
+  "account.verification_requested": "重发验证邮件",
+  "account.password_reset_requested": "请求密码重置",
+  "account.password_reset": "完成密码重置",
+  "account.password_changed": "修改密码",
+  "account.session_revoked": "撤销设备会话",
+  "account.data_exported": "导出账号数据",
+  "account.deleted": "注销账号",
+  "cloud.revision_restored": "恢复云修订",
+};
 
 function readToken(): string {
   try { return window.sessionStorage.getItem(ADMIN_TOKEN_KEY) ?? ""; } catch { return ""; }
@@ -107,8 +147,21 @@ function formatDuration(seconds: number): string {
   return `${(seconds / 3600).toFixed(1)} 小时`;
 }
 
+function formatBytes(value: number | null | undefined): string {
+  if (!Number.isFinite(value)) return "--";
+  return `${((value ?? 0) / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
 function formatTime(timestamp: number | null): string {
   return timestamp ? new Date(timestamp).toLocaleString("zh-CN", { hour12: false }) : "暂无记录";
+}
+
+function operationalStatusLabel(status: OperationalStatus | undefined): string {
+  if (!status?.configured) return "未配置";
+  if (status.ok && status.completedAt) return formatTime(status.completedAt);
+  if (status.state === "pending") return "等待首次运行";
+  if (status.state === "unreadable") return "状态不可读";
+  return status.failedAt ? `失败 ${formatTime(status.failedAt)}` : "最近运行失败";
 }
 
 async function fetchAdminMetrics(token: string, days: number): Promise<AdminMetrics> {
@@ -215,7 +268,12 @@ export function AdminDashboard() {
             <div><dt><Activity size={15} />有效会话</dt><dd>{formatNumber(metrics.accounts.activeSessions)}</dd></div>
             <div><dt><Cloud size={15} />云存档</dt><dd>{formatNumber(metrics.accounts.cloudSaves)}</dd></div>
             <div><dt><Gauge size={15} />限流 / 冲突</dt><dd>{metrics.runtime.rateLimited} / {metrics.runtime.cloudConflicts}</dd></div>
-            <div><dt><ShieldCheck size={15} />最近备份</dt><dd className={metrics.backups.configured && metrics.backups.lastSuccessAt ? "ready" : "warning"}>{metrics.backups.configured ? formatTime(metrics.backups.lastSuccessAt) : "未配置"}</dd></div>
+            <div><dt><ShieldCheck size={15} />本机快照</dt><dd className={metrics.backups.configured && metrics.backups.lastSuccessAt ? "ready" : "warning"}>{metrics.backups.configured ? formatTime(metrics.backups.lastSuccessAt) : "未配置"}</dd></div>
+            <div><dt><Cloud size={15} />异地加密备份</dt><dd className={metrics.backups.offsite?.ok && metrics.backups.offsite.transported ? "ready" : "warning"}>{operationalStatusLabel(metrics.backups.offsite)}</dd></div>
+            <div><dt><ShieldCheck size={15} />隔离恢复演练</dt><dd className={metrics.backups.restoreDrill?.ok ? "ready" : "warning"}>{operationalStatusLabel(metrics.backups.restoreDrill)}</dd></div>
+            <div><dt><Gauge size={15} />公网探测</dt><dd className={metrics.infrastructure?.ok ? "ready" : "warning"}>{metrics.infrastructure?.checkedAt ? formatTime(metrics.infrastructure.checkedAt) : "等待探测"}</dd></div>
+            <div><dt><Database size={15} />磁盘可用</dt><dd className={metrics.infrastructure?.disk?.ok ? "ready" : "warning"}>{formatBytes(metrics.infrastructure?.disk?.freeBytes)} · {metrics.infrastructure?.disk?.freeRatio != null ? `${Math.round(metrics.infrastructure.disk.freeRatio * 100)}%` : "--"}</dd></div>
+            <div><dt><ShieldCheck size={15} />TLS 证书</dt><dd className={metrics.infrastructure?.tls?.ok ? "ready" : "warning"}>{metrics.infrastructure?.tls?.daysRemaining != null ? `${metrics.infrastructure.tls.daysRemaining} 天` : "未配置"}</dd></div>
           </dl>
         </article>
 
@@ -236,6 +294,11 @@ export function AdminDashboard() {
             <div><dt>反馈 / 客户端错误</dt><dd>{metrics.reports.feedback} / {metrics.reports.clientErrors}</dd></div>
             <div><dt>服务运行时间</dt><dd>{formatDuration(metrics.uptimeSeconds)}</dd></div>
           </dl>
+        </article>
+
+        <article className="admin-audit-panel">
+          <header><div><small>安全审计</small><strong>账号与云端敏感操作</strong></div><em>{formatNumber(metrics.audit?.entries ?? 0)} 条</em></header>
+          <div>{metrics.audit?.recent.length ? metrics.audit.recent.slice(0, 8).map((entry, index) => <span key={`${entry.occurredAt}-${entry.action}-${index}`}><KeyRound size={14} /><strong>{AUDIT_LABELS[entry.action] ?? entry.action}</strong><small>{entry.clientType}</small><em>{formatTime(entry.occurredAt)}</em></span>) : <p>尚无安全审计记录</p>}</div>
         </article>
       </section>
     </main>

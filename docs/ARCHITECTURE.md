@@ -146,7 +146,8 @@ API 表面：
 - 云数据库：`/var/lib/dsp-idle-cloud/cloud.sqlite`
 - 云备份：`/var/lib/dsp-idle-cloud/backups`
 - 云进程：绑定 `127.0.0.1:4320`，只能经 Nginx 暴露
-- systemd：云服务自动重启；健康检查每两分钟访问本机 `/api/health`
+- systemd：云服务自动重启；健康检查每两分钟访问本机 `/api/health`。
+- 运维工具链：每日异地备份使用公钥认证加密，恢复节点每月在隔离目录启动临时 API 演练；五分钟节点探针检查公网端点、磁盘和 TLS，结果通过管理员指标读取。
 
 正式香港节点与上海旧节点各自运行本机 API 和数据库。上海不能反代或重定向到香港，否则会破坏当前备用入口边界。具体运行手册见 [DEPLOYMENT_OPERATIONS.md](./DEPLOYMENT_OPERATIONS.md)。
 
