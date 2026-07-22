@@ -114,7 +114,7 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 | 数据 | 键或位置 | 说明 |
 | --- | --- | --- |
-| 主存档 | `dsp-idle-network.save.v1` | 工作区 v2 envelope 内含 v28 state；线上 `0.3.0` 仍写 v26 |
+| 主存档 | `dsp-idle-network.save.v1` | v2 envelope 内含 v28 state；工作区与线上 `0.4.0` 一致 |
 | 主备份 | 主键后缀 `.backup` | 每次写主存档前保存上一份有效版本 |
 | 快照 | 主键后缀 `.snapshot.*` | 最多 5 份，至少每 30 模拟秒生成 |
 | 手动槽位 | `dsp-idle-network.slot.1..3` | 3 个独立槽位 |
@@ -143,7 +143,7 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 ## 7. 云服务
 
-`server/index.mjs` 是无框架 Node HTTP 服务，生产使用 `better-sqlite3`。SQLite 当前只有一行 `app_state` JSON payload，启用 WAL 和 `synchronous=NORMAL`。本地候选云服务 schema v6 在 v5 账号安全之上增加旧账号邮箱绑定和三个独立手动云槽；v5 的主云存档原位保留为 `main`，迁移不会复制或覆盖它。线上 `0.3.0` 仍运行 schema v5。
+`server/index.mjs` 是无框架 Node HTTP 服务，生产使用 `better-sqlite3`。SQLite 当前只有一行 `app_state` JSON payload，启用 WAL 和 `synchronous=NORMAL`。工作区与线上云服务均为 schema v6，在 v5 账号安全之上增加旧账号邮箱绑定和三个独立手动云槽；v5 的主云存档原位保留为 `main`，迁移不会复制或覆盖它。
 
 API 表面：
 

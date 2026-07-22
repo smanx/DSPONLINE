@@ -48,8 +48,8 @@ For backend rollback, switch code back and preserve the current database. For fr
 - Main menu loads without clearing site storage.
 - Existing local save can continue.
 - Cloud metadata can be read using a dedicated test account when write validation is required.
-- Mobile portrait/landscape and all four font scales remain usable.
+- Mobile portrait/landscape and all five font scales remain usable.
 
 ## Current Known Optimization
 
-Static JS and CSS did not return compressed content in the 2026-07-21 check. Configure gzip/Brotli in the shared Nginx snippet, then compare response headers and transferred bytes while retaining immutable hashed-asset caching and no-cache HTML/service-worker behavior.
+The `0.4.0` production check confirmed gzip for hashed JS/CSS on both nodes, immutable asset caching, and no-cache HTML/service-worker behavior. Brotli remains optional and should be enabled only after comparing CPU cost and transfer savings with real traffic.

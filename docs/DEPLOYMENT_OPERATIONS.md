@@ -28,7 +28,7 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-当前正式基线为 `0.3.0-78881c908d70`，香港与上海的 Web/API `current` 均指向该发布目录。两个节点的 `previous-release` 均指向 schema v5 兼容的 `0.2.0-e6e7daf113dc`。完整哈希、生产备份和验收记录见 [releases/0.3.0.md](./releases/0.3.0.md)。
+当前正式基线为 `0.4.0-c77d76223f67`，香港与上海的 Web/API `current` 均指向该发布目录。schema v6 生效后，两个节点的 `previous-release` 均有意指向 Web `0.3.0-78881c908d70` 与 API `0.4.0-c77d76223f67`，避免一键回滚加载 schema v5 后端。完整哈希、生产备份和验收记录见 [releases/0.4.0.md](./releases/0.4.0.md)。
 
 ## 3. 绝对数据保护规则
 
@@ -219,10 +219,10 @@ chmod 0600 backup-private.pem
 
 这些 oneshot 服务从 `/opt/dsp-idle-cloud/current/deploy` 软链接执行脚本。CLI 入口判断必须比较真实路径；若 unit 显示 `success` 却没有生成对应状态文件，应按空运行故障处理，不能视为监控或备份成功。
 
-匿名在线窗口默认 120 秒，可通过 `DSP_PLAYER_ONLINE_WINDOW_MS` 调整；运营日历默认 `Asia/Shanghai`，可通过 `DSP_METRIC_TIME_ZONE` 调整。修改在线窗口只影响在线口径，不影响累计玩家。部署 schema v5 后端前仍必须先使用 SQLite backup API 创建并验证备份，并用真实备份副本验证 v3→v5 归一化：旧账号保持已验证，账号、会话、存档、历史、榜单、玩家和匿名统计数量不减少，旧云修订获得摘要。
+匿名在线窗口默认 120 秒，可通过 `DSP_PLAYER_ONLINE_WINDOW_MS` 调整；运营日历默认 `Asia/Shanghai`，可通过 `DSP_METRIC_TIME_ZONE` 调整。修改在线窗口只影响在线口径，不影响累计玩家。部署 schema v6 后端前仍必须先使用 SQLite backup API 创建并验证备份，并用真实备份副本验证 v3→v6 归一化：旧账号保持已验证，账号、会话、主存档、历史、榜单、玩家和匿名统计数量不减少，三个手动云槽结构可用。
 
 ## 10. 当前性能事项
 
-`0.3.0` 在香港与上海继续为 JS/CSS 启用 gzip，并验证 `Content-Encoding: gzip`；hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+`0.4.0` 在香港与上海继续为 JS/CSS 启用 gzip，并验证 `Content-Encoding: gzip`；hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。上海节点本次验收约剩 7.3 GB（文件系统使用率约 88%），发布目录、日志与备份增长应纳入日常磁盘检查。

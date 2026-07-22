@@ -14,7 +14,7 @@ npm run test:e2e
 npm run desktop:pack
 ```
 
-Current workspace baseline: 254 Vitest tests, 93 Playwright Chrome tests, and 22 Node server tests. The deployed `0.3.0` release remains at its recorded 241/86/16 baseline until the local state v28 / cloud schema v6 candidate is explicitly released.
+Current workspace and deployed `0.4.0` baseline: 254 Vitest tests, 93 Playwright Chrome tests, and 22 Node server tests, with game state v28 and cloud schema v6.
 
 ## Choose By Change
 
