@@ -3,6 +3,21 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { createTencentSesMailer, createWebhookMailer } from "./mail.mjs";
 
+async function readMailTemplate(filename) {
+  const candidates = [
+    new URL(`../deploy/mail-templates/${filename}`, import.meta.url),
+    new URL(`./deploy/mail-templates/${filename}`, import.meta.url),
+  ];
+  for (const candidate of candidates) {
+    try {
+      return await readFile(candidate, "utf8");
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  throw new Error(`Missing mail template: ${filename}`);
+}
+
 test("keeps account email disabled without an endpoint and public base URL", () => {
   assert.equal(createWebhookMailer({ url: "", publicBaseUrl: "https://dsponline.cn" }), null);
   assert.equal(createWebhookMailer({ url: "https://mail.example.test", publicBaseUrl: "" }), null);
@@ -110,7 +125,7 @@ test("redacts Tencent SES recipients and action tokens from delivery errors", as
 
 test("keeps uploaded Tencent SES templates to the single approved actionUrl variable", async () => {
   for (const filename of ["account-verification.html", "password-reset.html"]) {
-    const content = await readFile(new URL(`../deploy/mail-templates/${filename}`, import.meta.url), "utf8");
+    const content = await readMailTemplate(filename);
     const variables = [...content.matchAll(/{{\s*([^}]+?)\s*}}/g)].map((match) => match[1]);
     assert.deepEqual(variables, ["actionUrl"], filename);
     assert.match(content, /href="{{actionUrl}}"/);

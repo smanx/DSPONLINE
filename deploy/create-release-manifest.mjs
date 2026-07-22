@@ -43,6 +43,7 @@ async function describeFile(relativePath) {
 async function describeReleaseFiles() {
   const paths = [
     ...await collectFiles("dist"),
+    ...await collectFiles("deploy/mail-templates"),
     "deploy/backup-crypto.mjs",
     "deploy/backup-sqlite.mjs",
     "deploy/create-offsite-backup.mjs",
