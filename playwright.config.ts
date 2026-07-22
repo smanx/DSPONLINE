@@ -6,7 +6,7 @@ export default defineConfig({
   fullyParallel: false,
   reporter: "list",
   use: {
-    baseURL: "http://127.0.0.1:4318",
+    baseURL: "http://127.0.0.1:4319",
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
   },
@@ -14,9 +14,9 @@ export default defineConfig({
     { name: "chromium", use: { ...devices["Desktop Chrome"], channel: "chrome" } },
   ],
   webServer: {
-    command: "npm run dev",
-    url: "http://127.0.0.1:4318",
-    reuseExistingServer: true,
+    command: "npm run dev -- --port 4319",
+    url: "http://127.0.0.1:4319",
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });

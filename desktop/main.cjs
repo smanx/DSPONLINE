@@ -107,7 +107,7 @@ ipcMain.handle("desktop:release-info", () => ({
 }));
 
 ipcMain.handle("desktop:set-font-scale", (_event, requestedScale) => {
-  fontScale = [0.8, 1, 1.25, 1.5].includes(requestedScale) ? requestedScale : 1;
+  fontScale = [0.8, 1, 1.25, 1.5, 2].includes(requestedScale) ? requestedScale : 1;
   return { scale: fontScale, zoomFactor: applyReadableDesktopZoom() };
 });
 

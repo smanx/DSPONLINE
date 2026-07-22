@@ -5,6 +5,8 @@ import { calculateFactoryStatistics } from "./statistics";
 describe("factory statistics", () => {
   it("derives recipe production, consumption, inventory and power demand", () => {
     let state = createInitialState();
+    state.tray.iron_ore = 0;
+    state.planetTrays.home.iron_ore = 0;
     state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 2);
     state = placeBuilding(state, "arc_smelter", { x: 300, y: 0 });
     const smelter = state.entities.find((entity) => entity.buildingId === "arc_smelter")!;

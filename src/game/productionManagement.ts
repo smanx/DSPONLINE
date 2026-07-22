@@ -150,7 +150,7 @@ function managementGroup(entity: FactoryEntity): ProductionManagementGroup {
 function managementState(status: EntityOperatingStatus): ProductionManagementState {
   if (status.code === "running" || status.code === "collecting") return "running";
   if (status.code === "output-blocked") return "blocked";
-  if (["missing-input", "missing-fuel", "missing-proliferator", "waiting-load", "missing-route", "missing-vessel", "missing-drone", "missing-warper"].includes(status.code)) return "missing";
+  if (["missing-input", "missing-fuel", "missing-proliferator", "waiting-load", "missing-route", "missing-vessel", "missing-drone", "missing-warper", "missing-hub"].includes(status.code)) return "missing";
   if (status.code === "no-power" || status.code === "low-power") return "power";
   if (["missing-recipe", "missing-research", "no-fuel-selected", "unconfigured"].includes(status.code)) return "unconfigured";
   return "idle";

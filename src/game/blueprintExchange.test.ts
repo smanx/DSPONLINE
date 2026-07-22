@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createBlueprint, createInitialState, placeBuilding } from "./engine";
+import { createBlueprint, createInitialState, placeBuilding, setLogisticsItem, setStationHubConfiguration, setStationSlotRoutePolicy, setStationSlotWarperBudget } from "./engine";
 import { importBlueprintExchange, parseBlueprintExchange, serializeBlueprintExchange } from "./blueprintExchange";
 
 describe("blueprint exchange", () => {
@@ -30,5 +30,26 @@ describe("blueprint exchange", () => {
     }));
     expect(result.valid).toBe(false);
     expect(result.issues[0]).toContain("设备");
+  });
+
+  it("preserves relay hub and per-slot routing configuration", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics");
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 120, y: 80 });
+    const station = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    state = setLogisticsItem(state, station.id, "processor");
+    state = setStationHubConfiguration(state, station.id, true, 2);
+    state = setStationSlotRoutePolicy(state, station.id, 0, "relay-required");
+    state = setStationSlotWarperBudget(state, station.id, 0, 3);
+    state = createBlueprint(state, [station.id], "中转枢纽");
+
+    const parsed = parseBlueprintExchange(serializeBlueprintExchange(state.blueprints[0]));
+    expect(parsed.valid).toBe(true);
+    expect(parsed.blueprint?.entities[0]).toMatchObject({
+      stationHubEnabled: true,
+      stationHubPriority: 2,
+      stationSlots: expect.arrayContaining([expect.objectContaining({ itemId: "processor", routePolicy: "relay-required", warperBudget: 3 })]),
+    });
   });
 });

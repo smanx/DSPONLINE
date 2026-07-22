@@ -2,9 +2,9 @@ import { AlertTriangle, ArrowRight, Check, Factory, Gauge, LocateFixed, LockKeyh
 import { useMemo, useState, type CSSProperties } from "react";
 import { STAR_SYSTEM_LIST, getItem, getPlanet, getStarSystem, getTechnology } from "../game/content";
 import { canColonizePlanet, canExploreStarSystem, getStationSlots, isPlanetColonized, isStarSystemUnlocked, isTechnologyCompleted } from "../game/engine";
-import { getPlanetIndustrialProfile, getRecommendedPlanetRole, PLANET_INDUSTRY_ROLE_LABELS } from "../game/galaxy";
-import { getInterplanetaryLogisticsDiagnostics, getPlanetIndustrySummaries, getRouteDistanceLabel, getRouteEndpointLabel, getStarSystemIndustrySummaries, getStellarRouteSnapshots } from "../game/stellarIndustry";
-import type { GameState, LogisticsPriority, PlanetId, PlanetIndustryRole, StarSystemId, StationMinimumLoad } from "../game/types";
+import { getPlanetIndustrialProfile, getPlanetSolarPowerMultiplier, getRecommendedPlanetRole, getStarSystemProfile, PLANET_INDUSTRY_ROLE_LABELS } from "../game/galaxy";
+import { getInterplanetaryLogisticsDiagnostics, getPlanetIndustrySummaries, getRouteDistanceLabel, getRouteEndpointLabel, getRoutePathLabel, getStarSystemIndustrySummaries, getStellarRouteSnapshots } from "../game/stellarIndustry";
+import type { GameState, ItemId, LogisticsPriority, PlanetId, PlanetIndustryRole, StarSystemId, StationMinimumLoad } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 
 function formatDistance(distanceLy: number): string {
@@ -27,6 +27,14 @@ function formatDepletion(seconds: number | null): string {
 }
 
 const PLANET_ROLES = Object.keys(PLANET_INDUSTRY_ROLE_LABELS) as PlanetIndustryRole[];
+
+const OCEAN_LABELS = {
+  water: "水海洋",
+  "sulfuric-acid": "硫酸海洋",
+  lava: "熔岩海",
+  ice: "冻结海洋",
+  none: "无海洋",
+} as const;
 
 function getStellarStationSlot(game: GameState, entityId: string, slotIndex: number) {
   const station = game.entities.find((entity) => entity.id === entityId && entity.kind === "station");
@@ -75,7 +83,7 @@ function IndustryConsole({ game, onTravel, onRoleChange, onStationPriorityChange
         {systems.map((system) => (
           <article className="stellar-system-row" key={system.systemId}>
             <header>
-              <span>{getStarSystem(system.systemId).starType}</span>
+              <span>{getStarSystemProfile(game, system.systemId).starTypeName} · 光度 {getStarSystemProfile(game, system.systemId).luminosity.toFixed(2)} L☉</span>
               <strong>{getStarSystem(system.systemId).name}</strong>
               <small>{system.deviceCount} 设备 · {system.routeCount} 航线 · 储量 {compactNumber(system.reserveRemaining)}</small>
               <em className={system.blockedRouteCount > 0 ? "warning" : ""}>{system.blockedRouteCount > 0 ? `${system.blockedRouteCount} 问题` : "运行正常"}</em>
@@ -133,11 +141,12 @@ function IndustryConsole({ game, onTravel, onRoleChange, onStationPriorityChange
               ? getStellarStationSlot(game, route.sourceStationId, route.sourceSlotIndex)
               : null;
             const targetSlot = getStellarStationSlot(game, route.targetStationId, route.targetSlotIndex);
+            const routePath = getRoutePathLabel(route, game);
             return (
               <article className={`stellar-route-row stellar-route-row--${route.status}`} key={route.id}>
                 <div className="stellar-route-item"><ItemHoverCard itemId={route.itemId}><ItemGlyph itemId={route.itemId} /></ItemHoverCard><span><strong>{getItem(route.itemId).name}</strong><small>{route.scope === "remote" ? "星际运输" : "行星运输"} · {route.statusLabel}</small></span></div>
                 <div className="stellar-route-endpoints"><button type="button" disabled={!route.sourceStationId || !route.sourcePlanetId} onClick={() => route.sourceStationId && route.sourcePlanetId && onFocusStation(route.sourceStationId, route.sourcePlanetId)}>{getRouteEndpointLabel(route.sourceStationId, game)}</button><ArrowRight size={14} /><button type="button" onClick={() => onFocusStation(route.targetStationId, route.targetPlanetId)}>{getRouteEndpointLabel(route.targetStationId, game)}</button></div>
-                <div className="stellar-route-metrics"><span>航程 <strong>{getRouteDistanceLabel(route)}</strong></span><span>周期 <strong>{route.durationSeconds.toFixed(1)}s</strong></span><span>吞吐 <strong>{compactNumber(route.throughputPerMinute)}/min</strong></span><span>能耗 <strong>{route.energyMjPerTrip.toFixed(1)} MJ</strong></span><span>翘曲 <strong>{route.warpersPerTrip > 0 ? `${route.warpersPerTrip}/航次` : "无需"}</strong></span></div>
+                <div className="stellar-route-metrics"><span>航程 <strong>{getRouteDistanceLabel(route)}</strong></span><span>路径 <strong title={routePath}>{routePath}</strong></span><span>最长段 <strong>{route.maxLegDistanceLy > 0 ? `${route.maxLegDistanceLy.toFixed(1)} ly` : "-"}</strong></span><span>周期 <strong>{route.durationSeconds.toFixed(1)}s</strong></span><span>吞吐 <strong>{compactNumber(route.throughputPerMinute)}/min</strong></span><span>能耗 <strong>{route.energyMjPerTrip.toFixed(1)} MJ</strong></span><span>翘曲 <strong>{route.warpersPerTrip > 0 ? `${route.warpersPerTrip}/航次` : "无需"}</strong></span><span>策略 <strong>{{ direct: "直达", "relay-preferred": "优先中转", "relay-required": "强制中转" }[route.routePolicy]} · {route.warperBudget}</strong></span></div>
                 <div className="stellar-route-policy">
                   <label><span>优先</span><select aria-label={`${getItem(route.itemId).name}航线优先级`} value={route.priority} onChange={(event) => onStationPriorityChange(route.targetStationId, route.targetSlotIndex, Number(event.target.value) as LogisticsPriority)}><option value={2}>高</option><option value={1}>中</option><option value={0}>低</option></select></label>
                   <label><span>装载</span><select aria-label={`${getItem(route.itemId).name}最低装载率`} value={route.minimumLoad} onChange={(event) => onStationMinimumLoadChange(route.targetStationId, route.targetSlotIndex, Number(event.target.value) as StationMinimumLoad)}><option value={0.1}>10%</option><option value={0.25}>25%</option><option value={0.5}>50%</option><option value={1}>100%</option></select></label>
@@ -195,7 +204,7 @@ export function StarMapWorkspace({
         <div className="star-map-headline">
           <span>已勘探 <strong>{unlockedCount}/{STAR_SYSTEM_LIST.length}</strong></span>
           <span>当前坐标 <strong>{getStarSystem(activeSystemId).name}</strong></span>
-          <span>最远航标 <strong>{Math.max(...STAR_SYSTEM_LIST.filter((system) => isStarSystemUnlocked(game, system.id)).map((system) => system.distanceLy)).toFixed(1)} ly</strong></span>
+          <span>最远航标 <strong>{Math.max(...STAR_SYSTEM_LIST.filter((system) => isStarSystemUnlocked(game, system.id)).map((system) => getStarSystemProfile(game, system.id).distanceFromOriginLy)).toFixed(1)} ly</strong></span>
           <span>星区种子 <strong>#{game.galaxy.seed}</strong></span>
         </div>
         <button className="star-map-close" type="button" onClick={onClose} title="关闭星图" aria-label="关闭星图"><X size={18} /></button>
@@ -208,6 +217,7 @@ export function StarMapWorkspace({
 
       {view === "map" ? <div className="star-map-route" aria-label="恒星系航线">
         {STAR_SYSTEM_LIST.map((system, index) => {
+          const systemProfile = getStarSystemProfile(game, system.id);
           const unlocked = isStarSystemUnlocked(game, system.id);
           const mission = game.exploration.missions.find((candidate) => candidate.systemId === system.id);
           const surveyProgress = game.exploration.surveyProgressBySystem[system.id] ?? (unlocked ? 1 : 0);
@@ -218,11 +228,11 @@ export function StarMapWorkspace({
           const style = { "--system-color": system.color } as CSSProperties;
           return (
             <div className="star-map-route__segment" key={system.id}>
-              {index > 0 ? <div className={`star-route-link${unlocked ? " star-route-link--open" : ""}`}><i /><ArrowRight size={16} /><span>{formatDistance(system.distanceLy)}</span></div> : null}
+              {index > 0 ? <div className={`star-route-link${unlocked ? " star-route-link--open" : ""}`}><i /><ArrowRight size={16} /><span>{formatDistance(systemProfile.distanceFromOriginLy)}</span></div> : null}
               <article className={`star-system-card${unlocked ? " star-system-card--unlocked" : " star-system-card--locked"}${active ? " star-system-card--active" : ""}`} style={style}>
                 <header>
                   <i className="star-system-orb"><Sparkles size={20} /></i>
-                  <div><span>{system.code}</span><strong>{system.name}</strong><small>{system.starType} · {formatDistance(system.distanceLy)}</small></div>
+                  <div><span>{system.code}</span><strong>{system.name}</strong><small>{systemProfile.starTypeName} · {systemProfile.luminosity.toFixed(2)} L☉ · {formatDistance(systemProfile.distanceFromOriginLy)}</small></div>
                   <em>{active ? <><Navigation size={12} /> 当前</> : unlocked ? <><Check size={12} /> 已发现{mission ? " · 勘探中" : ""}</> : <><LockKeyhole size={12} /> 未勘探</>}</em>
                 </header>
                 <p>{system.description}</p>
@@ -235,6 +245,10 @@ export function StarMapWorkspace({
                     const deviceCount = game.entities.reduce((sum, entity) => entity.planetId === planetId
                       ? sum + entity.machineCount + entity.minerCount
                       : sum, 0);
+                    const resources = planet.kind === "gas-giant"
+                      ? Object.keys(profile.orbitalYields).map((itemId) => getItem(itemId as ItemId).name)
+                      : profile.resourceIds.map((itemId) => getItem(itemId).name);
+                    const colonyCost = profile.colonyCost.map((cost) => `${getItem(cost.itemId).name}×${cost.amount}`).join(" · ");
                     return (
                       <button
                         type="button"
@@ -245,14 +259,14 @@ export function StarMapWorkspace({
                          title={!unlocked ? `${system.name}尚未勘探` : isPlanetColonized(game, planet.id) ? `进入${planet.name}` : `殖民${planet.name}`}
                       >
                         <i style={{ color: planet.color }}><Orbit size={17} /></i>
-                        <span><strong>{planet.name}</strong><small>{planet.environment}</small></span>
+                        <span><strong>{planet.name}</strong><small>{profile.climateName} · {OCEAN_LABELS[profile.oceanType]}{profile.tidalLocked ? " · 潮汐锁定" : ""}</small></span>
                          <em>{isPlanetColonized(game, planet.id) ? planet.kind === "gas-giant" ? "轨道" : `${deviceCount} 设备` : "未殖民"}</em>
-                         <p>{planet.resources}</p>
-                         <small className="star-planet-profile">{profile.specializationName} · 宜 {PLANET_INDUSTRY_ROLE_LABELS[recommendedRole]}</small>
+                         <p>{resources.join("、") || "无地表矿脉"}{profile.rareResourceIds.length > 0 ? ` · 稀有 ${profile.rareResourceIds.map((itemId) => getItem(itemId).name).join("、")}` : ""}</p>
+                         <small className="star-planet-profile">{profile.specializationName} · 宜 {PLANET_INDUSTRY_ROLE_LABELS[recommendedRole]}{!isPlanetColonized(game, planet.id) && colonyCost ? ` · 殖民 ${colonyCost}` : ""}</small>
                          <span className="star-planet-traits" aria-label={`${planet.name}工业环境`}>
                            <b title={planet.kind === "gas-giant" ? "轨道采集产率" : "有限矿脉总储量"}>{planet.kind === "gas-giant" ? "轨采" : "矿储"} <strong>{Math.round((planet.kind === "gas-giant" ? profile.orbitalYieldMultiplier : profile.reserveScale) * 100)}%</strong></b>
                            <b title="风力发电倍率">风 <strong>{Math.round(profile.windMultiplier * 100)}%</strong></b>
-                           <b title="太阳能发电倍率">光 <strong>{Math.round(profile.solarMultiplier * 100)}%</strong></b>
+                           <b title={`太阳能综合倍率：行星 ${profile.solarMultiplier.toFixed(2)} × 恒星 ${systemProfile.luminosity.toFixed(2)}${profile.tidalLocked ? " × 潮汐锁定 1.25" : ""}`}>光 <strong>{Math.round(getPlanetSolarPowerMultiplier(game, planet.id) * 100)}%</strong></b>
                            <b title="地热发电倍率">地热 <strong>{Math.round(profile.geothermalMultiplier * 100)}%</strong></b>
                            <b title="跨行星航程时间倍率">航程 <strong>{Math.round(profile.travelTimeMultiplier * 100)}%</strong></b>
                          </span>

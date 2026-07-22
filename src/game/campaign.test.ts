@@ -49,6 +49,8 @@ describe("campaign progression", () => {
 
   it("reports network stock deficits without double-counting the active tray", () => {
     const state = createInitialState();
+    state.tray.iron_ore = 0;
+    state.planetTrays.home.iron_ore = 0;
     state.tray.iron_ingot = 2;
     state.planetTrays.home = { iron_ingot: 2 };
     state.entities[0].outputs.iron_ingot = 3;

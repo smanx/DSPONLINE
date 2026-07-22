@@ -24,7 +24,7 @@ import {
 import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
 import { useEffect, useRef, useState } from "react";
 import { FUEL_ENERGY_MJ, ITEMS, MATRIX_ITEM_IDS, getBuilding, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getProliferator, getRecipe, getRecipesForBuilding } from "../game/content";
-import { getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getStationDroneCapacity, getStationSlots, getStationVesselCapacity } from "../game/engine";
+import { MATERIAL_DELIVERY_SLOT_COUNT, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMaterialDeliveryItems, getStationDroneCapacity, getStationSlots, getStationVesselCapacity } from "../game/engine";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { RecipeCatalogPicker } from "./CatalogPicker";
 import type {
@@ -70,6 +70,9 @@ export interface FactoryNodeData extends Record<string, unknown> {
   networkTime: number;
   paused: boolean;
   powerDemandMultiplier: number;
+  solarGenerationMultiplier: number;
+  windGenerationMultiplier: number;
+  geothermalGenerationMultiplier: number;
   activeLogisticsEntityIds: string[];
   connectionDraft: { nodeId: string; itemId: ItemId; handleType: "source" | "target" } | null;
   dysonSwarm: DysonSwarmState;
@@ -375,6 +378,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const railEjector = entity.buildingId === "em_rail_ejector";
   const rayReceiver = entity.buildingId === "ray_receiver";
   const launchSilo = entity.buildingId === "vertical_launching_silo";
+  const constructionCenter = entity.buildingId === "construction_center";
   const rayPowerMode = recipe?.id === "ray_power";
   const speedMultiplier = recipe?.id === "matrix_research"
     ? 1 + (data.completedTechIds.includes("research_speed_1") ? 0.25 : 0) +
@@ -423,12 +427,12 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           {entity.buildingId === "miniature_particle_collider" ? <Atom size={18} /> : railEjector ? <Satellite size={18} /> : launchSilo ? <Rocket size={18} /> : rayReceiver ? <RadioTower size={18} /> : <Factory size={18} />}
         </div>
         <div>
-          <span>{railEjector ? "恒星轨道设施" : launchSilo ? "戴森球建造设施" : rayReceiver ? "戴森系统接收设施" : building.shortName}</span>
-          <strong>{recipe?.name ?? "未指定配方"}</strong>
+          <span>{constructionCenter ? "巨构自动补给" : railEjector ? "恒星轨道设施" : launchSilo ? "戴森球建造设施" : rayReceiver ? "戴森系统接收设施" : building.shortName}</span>
+          <strong>{constructionCenter ? building.name : recipe?.name ?? "未指定配方"}</strong>
         </div>
         <small>×{entity.machineCount}</small>
       </header>
-      {selected ? (
+      {selected && !constructionCenter ? (
         <div className="node-inline-select nodrag nopan" onPointerDown={(event) => event.stopPropagation()}>
           <span>生产配方</span>
           <RecipeCatalogPicker value={entity.recipeId} recipes={recipeOptions} onChange={(recipeId) => data.onRecipeChange(entity.id, recipeId)} compact />
@@ -447,7 +451,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         </div>
       ) : (
         <WorkCycle
-          label={recipe?.id === "matrix_research" ? "科研周期" : railEjector ? "太阳帆发射" : launchSilo ? "火箭发射" : rayReceiver ? "光子周期" : entity.buildingId === "miniature_particle_collider" ? "对撞周期" : entity.buildingId === "oil_refinery" || entity.buildingId === "chemical_plant" ? "加工周期" : "生产周期"}
+          label={constructionCenter ? "建筑制造周期" : recipe?.id === "matrix_research" ? "科研周期" : railEjector ? "太阳帆发射" : launchSilo ? "火箭发射" : rayReceiver ? "光子周期" : entity.buildingId === "miniature_particle_collider" ? "对撞周期" : entity.buildingId === "oil_refinery" || entity.buildingId === "chemical_plant" ? "加工周期" : "生产周期"}
           progress={entity.progress}
           active={!data.paused && entity.utilization > 0.001}
           efficiency={entity.utilization}
@@ -460,7 +464,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           <b />
         </div>
       ) : null}
-      {!rayPowerMode ? <div className="node-io">
+      {!rayPowerMode && !constructionCenter ? <div className="node-io">
         <div className="node-io__column">
           <span className="node-io__label">输入</span>
           {inputs.length > 0 ? inputs.map((input) => (
@@ -527,12 +531,15 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const itemId = entity.storedItemId;
   const isStation = entity.kind === "station";
   const orbitalCollector = entity.buildingId === "orbital_collector";
-  const configuredItems = isStation && !orbitalCollector
+  const deliveryHub = entity.buildingId === "material_delivery_hub";
+  const configuredItems = deliveryHub
+    ? getMaterialDeliveryItems(entity)
+    : isStation && !orbitalCollector
     ? getStationSlots(entity).flatMap((slot) => slot.itemId ? [slot.itemId] : [])
     : itemId ? [itemId] : [];
   useDynamicHandles(entity.id, `${configuredItems.join(":") || "unconfigured"}:auto`);
   const cargoKind = cargo ? getItem(cargo.itemId).kind : null;
-  const acceptsCargo = Boolean(cargo && (configuredItems.length === 0 || configuredItems.includes(cargo.itemId)) && (
+  const acceptsCargo = Boolean(cargo && (configuredItems.length === 0 || configuredItems.includes(cargo.itemId) || (deliveryHub && configuredItems.length < MATERIAL_DELIVERY_SLOT_COUNT)) && (
     building.accepts === "any" || building.accepts === cargoKind || (building.accepts === "solid" && cargoKind === "matrix")
   ));
   const adding = placement === entity.buildingId;
@@ -576,11 +583,11 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
     >
       <header className="factory-node__header">
         <div className="node-icon">{isStation ? <Orbit size={18} /> : isSplitter ? <GitFork size={18} /> : <Database size={18} />}</div>
-        <div><span>{orbitalCollector ? "气态巨星采集" : planetaryStation ? "行星无线运输" : isStation ? "跨行星运输" : isSplitter ? "物流分配" : "物流缓存"}</span><strong>{building.name}</strong></div>
+        <div><span>{deliveryHub ? "物资托盘直送" : orbitalCollector ? "气态巨星采集" : planetaryStation ? "行星无线运输" : isStation ? "跨行星运输" : isSplitter ? "物流分配" : "物流缓存"}</span><strong>{building.name}</strong></div>
         <small>×{entity.machineCount}</small>
       </header>
       <WorkCycle
-        label={orbitalCollector ? "采集周期" : planetaryStation ? "运输机航程" : isStation ? "运输船航程" : "物流周期"}
+        label={deliveryHub ? "直送周期" : orbitalCollector ? "采集周期" : planetaryStation ? "运输机航程" : isStation ? "运输船航程" : "物流周期"}
         progress={orbitalCollector ? entity.progress : isStation ? entity.stationProgress ?? 0 : data.networkTime % 1}
         active={!data.paused && (isStation ? entity.utilization > 0.001 : data.activeLogisticsEntityIds.includes(entity.id))}
         efficiency={isStation ? entity.utilization : data.activeLogisticsEntityIds.includes(entity.id) ? 1 : 0}
@@ -592,19 +599,19 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
               {index === 0 ? <span className="node-io__label">输入</span> : null}
               <InputSlot entityId={entity.id} itemId={configuredItemId} amount={entity.inputs[configuredItemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} connectionDraft={data.connectionDraft} connectionCount={data.inputBeltCounts[configuredItemId] ?? 0} />
             </div> : null}
-            <div className="node-io__column node-io__column--output">
+            {!deliveryHub ? <div className="node-io__column node-io__column--output">
               {index === 0 ? <span className="node-io__label">输出</span> : null}
               <OutputSlot entityId={entity.id} itemId={configuredItemId} amount={entity.outputs[configuredItemId] ?? 0} onPick={data.onPickOutput} connectionDraft={data.connectionDraft} connectionCount={data.outputBeltCounts[configuredItemId] ?? 0} />
-            </div>
+            </div> : <div className="delivery-hub-target"><Database size={14} /><span>进入物资托盘</span></div>}
           </div>)}
         </div>
       ) : (
-        <div className="logistics-empty">{planetaryStation ? "在检查器中选择行星货物" : isStation ? "在检查器中选择星际货物" : "拖入物品或在检查器中选择缓存类型"}</div>
+        <div className="logistics-empty">{deliveryHub ? "连接任意输出端口，自动占用 3 个直送接口" : planetaryStation ? "在检查器中选择行星货物" : isStation ? "在检查器中选择星际货物" : "拖入物品或在检查器中选择缓存类型"}</div>
       )}
-      {!orbitalCollector && data.connectionDraft ? <div className="logistics-auto-input"><AutoInputPort connectionDraft={data.connectionDraft} label={isStation ? "连接时自动占用空槽" : "连接时自动设置物品"} /></div> : null}
+      {!orbitalCollector && data.connectionDraft && (!deliveryHub || configuredItems.length < MATERIAL_DELIVERY_SLOT_COUNT) ? <div className="logistics-auto-input"><AutoInputPort connectionDraft={data.connectionDraft} label={deliveryHub ? "自动占用直送接口" : isStation ? "连接时自动占用空槽" : "连接时自动设置物品"} /></div> : null}
       <footer className="factory-node__footer">
         <span title={data.status.label}>{data.status.label}</span>
-        <span title={isStation ? `累计 ${entity.stationTrips ?? 0} 航次` : undefined}>{orbitalCollector ? `${itemId ? ITEMS[itemId].name : "资源"} · ${entity.productionRate.toFixed(1)}/min` : isStation ? `${primaryStationMode === "demand" ? "需求" : primaryStationMode === "supply" ? "供应" : "仓储"} · ${configuredItems.length}/5 槽 · ${stationVehicles}/${stationVehicleCapacity} ${planetaryStation ? "机队" : "舰队"}` : isSplitter ? entity.distributionMode === "priority" ? "优先分流" : "均衡分流" : `${building.outputCapacity * entity.machineCount} 容量`}</span>
+        <span title={isStation ? `累计 ${entity.stationTrips ?? 0} 航次` : undefined}>{deliveryHub ? `${configuredItems.length}/${MATERIAL_DELIVERY_SLOT_COUNT} 接口 · ${entity.productionRate.toFixed(1)}/min` : orbitalCollector ? `${itemId ? ITEMS[itemId].name : "资源"} · ${entity.productionRate.toFixed(1)}/min` : isStation ? `${primaryStationMode === "demand" ? "需求" : primaryStationMode === "supply" ? "供应" : "仓储"} · ${configuredItems.length}/5 槽 · ${stationVehicles}/${stationVehicleCapacity} ${planetaryStation ? "机队" : "舰队"}` : isSplitter ? entity.distributionMode === "priority" ? "优先分流" : "均衡分流" : `${building.outputCapacity * entity.machineCount} 容量`}</span>
       </footer>
     </article>
   );
@@ -623,7 +630,7 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   useDynamicHandles(entity.id, `${entity.fuelItemId ?? "no-fuel-port"}:${recipe?.id ?? "no-energy-recipe"}`);
   const adding = placement === entity.buildingId;
   const fuelId = entity.fuelItemId;
-  const environmentMultiplier = solar && entity.planetId === "ashen" ? 1.5 : 1;
+  const environmentMultiplier = solar ? data.solarGenerationMultiplier : geothermal ? data.geothermalGenerationMultiplier : data.windGenerationMultiplier;
   const ratedPower = (building.powerGenerationKw ?? 0) * entity.machineCount * environmentMultiplier;
   const energyCapacity = (building.energyCapacityMj ?? 0) * entity.machineCount;
   const energyPercent = energyCapacity > 0 ? (entity.storedEnergyMj ?? 0) / energyCapacity : 0;

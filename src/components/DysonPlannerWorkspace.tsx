@@ -2,6 +2,7 @@ import { Check, CircleDot, Gauge, GitBranch, Layers3, LockKeyhole, Orbit, Pause,
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { STAR_SYSTEM_LIST, getPlanet, getStarSystem } from "../game/content";
 import { getDysonEngineeringSnapshot, getDysonPlanTotals, isStarSystemUnlocked, isTechnologyCompleted } from "../game/engine";
+import { getStarSystemProfile } from "../game/galaxy";
 import type { DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, GameState, StarSystemId } from "../game/types";
 
 const VIEW_CENTER = 300;
@@ -79,6 +80,7 @@ export function DysonPlannerWorkspace({
   const swarmOrbits = game.dysonEngineering.orbitsBySystem[systemId] ?? [];
   const activeSwarmOrbit = swarmOrbits.find((orbit) => orbit.id === game.dysonEngineering.activeOrbitBySystem[systemId]) ?? swarmOrbits[0] ?? null;
   const engineering = getDysonEngineeringSnapshot(game, systemId);
+  const starProfile = getStarSystemProfile(game, systemId);
   const activeLayer = plan.layers.find((layer) => layer.id === plan.activeLayerId) ?? plan.layers[0] ?? null;
   const totals = getDysonPlanTotals(plan);
   const programReady = isTechnologyCompleted(game, "dyson_sphere_program");
@@ -109,9 +111,10 @@ export function DysonPlannerWorkspace({
       <header className="dyson-planner-header">
         <div className="dyson-planner-title"><i><Orbit size={20} /></i><div><span>恒星巨构设计协议</span><strong>戴森球规划</strong></div></div>
         <div className="dyson-planner-headline">
-          <span>结构 <strong>{game.dysonSphere.structurePoints}</strong></span>
-          <span>壳面帆 <strong>{game.dysonSphere.shellSails}</strong></span>
-          <span>功率 <strong>{(game.dysonSphere.generationKw / 1000).toFixed(2)} MW</strong></span>
+          <span>恒星 <strong>{starProfile.starTypeName} · {starProfile.luminosity.toFixed(2)} L☉</strong></span>
+          <span>结构 <strong>{plan.structurePoints}</strong></span>
+          <span>壳面帆 <strong>{plan.shellSails}</strong></span>
+          <span>本系功率 <strong>{(engineering.projectedGenerationKw / 1000).toFixed(2)} MW</strong></span>
         </div>
         <button className="dyson-planner-close" type="button" onClick={onClose} title="关闭戴森球规划" aria-label="关闭戴森球规划"><X size={18} /></button>
       </header>
@@ -121,7 +124,7 @@ export function DysonPlannerWorkspace({
           <div className="dyson-system-tabs" aria-label="戴森球恒星系">
             {STAR_SYSTEM_LIST.filter((system) => isStarSystemUnlocked(game, system.id)).map((system) => (
               <button className={systemId === system.id ? "active" : ""} type="button" key={system.id} onClick={() => setSystemId(system.id)} title={`规划${system.name}戴森球`}>
-                <i style={{ color: system.color }}><Sparkles size={14} /></i><span><strong>{system.name}</strong><small>{system.starType}</small></span>
+                <i style={{ color: system.color }}><Sparkles size={14} /></i><span><strong>{system.name}</strong><small>{getStarSystemProfile(game, system.id).starTypeName} · {getStarSystemProfile(game, system.id).luminosity.toFixed(2)} L☉</small></span>
               </button>
             ))}
           </div>
@@ -165,8 +168,8 @@ export function DysonPlannerWorkspace({
             <span><Gauge size={13} />射线 <strong>{Math.round(engineering.rayEfficiency * 100)}%</strong></span>
           </div>
           <svg className="dyson-orbit-canvas" viewBox="0 0 600 600" role="img" aria-label={`${getStarSystem(systemId).name}戴森球轨道图`} onClick={addNodeFromCanvas}>
-            <circle className="dyson-star-halo" cx={VIEW_CENTER} cy={VIEW_CENTER} r="42" />
-            <circle className="dyson-star-core" cx={VIEW_CENTER} cy={VIEW_CENTER} r="24" style={{ color: getStarSystem(systemId).color }} />
+            <circle className="dyson-star-halo" cx={VIEW_CENTER} cy={VIEW_CENTER} r={Math.max(34, Math.min(58, 38 + Math.log2(Math.max(0.1, starProfile.luminosity)) * 5))} />
+            <circle className="dyson-star-core" cx={VIEW_CENTER} cy={VIEW_CENTER} r={Math.max(14, Math.min(34, 22 + Math.log2(Math.max(0.1, starProfile.radiusMultiplier)) * 4))} style={{ color: getStarSystem(systemId).color }} />
             {swarmOrbits.map((orbit) => {
               const radius = visualRadiusBySwarmOrbit.get(orbit.id) ?? 90;
               const scaleY = 0.48 + Math.abs(Math.cos(orbit.inclination * Math.PI / 180)) * 0.52;

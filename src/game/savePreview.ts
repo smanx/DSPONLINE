@@ -40,6 +40,22 @@ const PLANET_NAMES: Record<PlanetId, string> = {
   frost: "霜原 I",
   boreal_giant: "青冥 II",
   magnetar: "极夜 I",
+  verdant: "翠环 I",
+  pelagic: "澜渊 II",
+  aurora_giant: "天穹 III",
+  dune: "赤砂 I",
+  cinder: "灰烬 II",
+  ember_giant: "红飓 III",
+  crystal: "晶穹 I",
+  prairie: "牧云 II",
+  sirius_giant: "银冠 III",
+  salt: "白盐 I",
+  obsidian: "黑曜 II",
+  white_giant: "苍白 III",
+  tempest: "风暴 I",
+  inferno: "炽核 II",
+  abyss: "幽冥 III",
+  azure_giant: "蓝穹 IV",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {

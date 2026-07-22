@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-22");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-22-v0.3.0");
     }
   });
 }
@@ -68,22 +68,41 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "公开测试版系统强化更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "星区生态与自动建造更新" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(9);
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(10);
   await expect(releaseNotes).toContainText("现有本地与云端工厂存档不会被重置");
-  await expect(releaseNotes).toContainText("可复现发布与数据保护");
+  await expect(releaseNotes).toContainText("巨构建筑制造中心");
   await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-22-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-22-390.png", fullPage: true });
+
+  await page.setViewportSize({ width: 360, height: 480 });
+  await page.evaluate(() => {
+    document.documentElement.dataset.uiFontScale = "200";
+    document.documentElement.style.setProperty("--ui-font-scale", "2");
+  });
+  const controlsFitViewport = async () => releaseNotes.evaluate((dialog) => {
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const close = dialog.querySelector<HTMLButtonElement>(".release-notes-header > button")?.getBoundingClientRect();
+    const confirm = dialog.querySelector<HTMLButtonElement>(".release-notes-footer > button")?.getBoundingClientRect();
+    return Boolean(close && confirm && close.top >= 0 && close.bottom <= viewportHeight && confirm.top >= 0 && confirm.bottom <= viewportHeight);
+  });
+  await expect.poll(controlsFitViewport).toBe(true);
+  await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-22-360x480-font200.png", fullPage: true });
+  await page.evaluate(() => {
+    document.documentElement.dataset.uiFontScale = "100";
+    document.documentElement.style.setProperty("--ui-font-scale", "1");
+  });
   await page.setViewportSize({ width: 1440, height: 900 });
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-22");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-22-v0.3.0");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -337,7 +356,7 @@ test("cloud save divergence requires an explicit keep-local or use-cloud choice"
 
 async function freshGame(page: Page) {
   await page.goto("/");
-  await page.getByTitle("重置当前工厂").evaluate((element: HTMLButtonElement) => element.click());
+  await expect(page.getByTitle("重置当前工厂")).toHaveCount(0);
   await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible();
   await expect(page.locator(".vein-node").filter({ hasText: "铁矿石" })).toBeVisible();
 }
@@ -363,7 +382,7 @@ async function enableCoarsePointer(page: Page) {
 
 async function createTouchPage(browser: Browser, viewport: { width: number; height: number }) {
   const context = await browser.newContext({
-    baseURL: "http://127.0.0.1:4318",
+    baseURL: "http://127.0.0.1:4319",
     hasTouch: true,
     isMobile: true,
     viewport,
@@ -470,6 +489,7 @@ async function openYellowStageGame(page: Page) {
           "automatic_metallurgy",
           "basic_assembling",
           "basic_logistics",
+          "high_speed_logistics",
           "thermal_power",
           "high_efficiency_plasma_control",
           "energy_matrix",
@@ -1320,11 +1340,11 @@ async function openBlueprintStageGame(page: Page) {
         { ...entityBase, id: "blueprint_target", kind: "machine", position: { x: 80, y: -120 }, buildingId: "assembling_machine_mk1", recipeId: "processor" },
       ],
       belts: [{ id: "blueprint_line", planetId: "home", source: "blueprint_source", target: "blueprint_target", itemId: "circuit_board", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 0, lastFlow: 0 }],
-      construction: { assembling_machine_mk1: 2, assembling_machine_mk2: 2, conveyor_belt_mk1: 1 },
+      construction: { assembling_machine_mk1: 2, assembling_machine_mk2: 2, conveyor_belt_mk1: 1, conveyor_belt_mk2: 2 },
       tray: {},
       planetTrays: { home: {}, ashen: {}, giant: {}, frost: {}, boreal_giant: {}, magnetar: {} },
       totalProduced: {},
-      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["processor", "high_speed_assembling"] },
+      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["processor", "high_speed_assembling", "high_speed_logistics"] },
       exploration: { unlockedSystemIds: ["helios"] },
       blueprints: [],
       paused: true,
@@ -1420,6 +1440,59 @@ async function openOperationsStageGame(page: Page) {
       research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: [] },
       exploration: { unlockedSystemIds: ["helios"] },
       paused: false,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await page.goto("/");
+  await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible();
+}
+
+async function openConstructionAutomationGame(page: Page) {
+  await page.addInitScript(() => {
+    const base = {
+      planetId: "home",
+      machineCount: 1,
+      minerCount: 0,
+      inputs: {},
+      outputs: {},
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+      powerGridId: "grid-a",
+    };
+    const state = {
+      version: 26,
+      nextId: 4,
+      activePlanetId: "home",
+      entities: [
+        { ...base, id: "automation_wind", kind: "power", position: { x: -420, y: -220 }, buildingId: "wind_turbine", machineCount: 60 },
+        { ...base, id: "automation_center", kind: "machine", position: { x: 0, y: -120 }, buildingId: "construction_center" },
+        {
+          ...base,
+          id: "delivery_hub",
+          kind: "storage",
+          position: { x: 420, y: 100 },
+          buildingId: "material_delivery_hub",
+          deliveryItemIds: ["iron_ingot", "copper_ingot", "stone_brick"],
+          inputs: { iron_ingot: 5, copper_ingot: 5, stone_brick: 5 },
+        },
+      ],
+      belts: [],
+      construction: { wind_turbine: 0, construction_center: 0, material_delivery_hub: 0, arc_smelter: 0 },
+      tray: { iron_ingot: 8, stone_brick: 4, circuit_board: 8, magnetic_coil: 4 },
+      planetTrays: { home: { iron_ingot: 8, stone_brick: 4, circuit_board: 8, magnetic_coil: 4 } },
+      totalProduced: {},
+      research: {
+        selectedTechId: null,
+        queuedTechIds: [],
+        progressByTech: {},
+        completedTechIds: ["electromagnetic_matrix", "energy_matrix", "structure_matrix", "information_matrix", "construction_automation", "material_delivery_logistics"],
+      },
+      constructionAutomation: { enabled: true, targetStock: {}, cursor: 0, totalCrafted: 0, lastCraftedId: null },
+      exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
+      paused: false,
+      settings: { simulationSpeed: 1, performanceMode: false, reducedMotion: false, soundEnabled: false, autosaveIntervalSeconds: 300, fontScale: 1 },
     };
     window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
   });
@@ -1807,7 +1880,7 @@ test("responsive drawers keep all tools reachable", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await freshGame(page);
   await expect(page.getByTitle("切换到澄海 I")).toBeVisible();
-  await expect(page.getByTitle("切换到烬原 II")).toBeVisible();
+  await expect(page.getByTitle("完成星际物流系统科技后开放")).toHaveCount(2);
   await expect.poll(async () => page.locator(".planet-navigator").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/qa/mobile-planets-390.png", fullPage: true });
   await page.getByLabel("打开物资托盘").click();
@@ -1917,7 +1990,7 @@ test("mobile selection, long press and staged drawers survive orientation change
   await page.getByLabel("框选模式").click();
   await ironVein.click();
   await expect(page.locator(".react-flow__node.selected")).toHaveCount(2);
-  await expect(page.getByRole("toolbar", { name: "选区操作" })).toContainText("2 已选");
+  await expect(page.getByRole("toolbar", { name: "选区操作" })).toContainText("2 节点 · 0 线路");
 
   await page.getByLabel("打开物资托盘").click();
   await expect(page.locator(".game-shell")).toHaveClass(/mobile-panel-stage--half/);
@@ -2146,10 +2219,10 @@ test("yellow matrix industry exposes remote resources, chemistry and three-color
 
   await page.getByLabel("打开科技树").click();
   await expect(page.locator(".matrix-stock")).toHaveCount(6);
-  const interstellar = page.locator(".technology-node").filter({ has: page.getByText("星际物流理论", { exact: true }) });
+  const interstellar = page.locator(".technology-node").filter({ has: page.getByText("星际物流系统", { exact: true }) });
   await interstellar.click();
-  await expect(page.locator(".research-focus")).toContainText("星际物流理论");
-  await expect(page.locator(".research-cost-list")).toContainText("0/12");
+  await expect(page.locator(".research-focus")).toContainText("星际物流系统");
+  await expect(page.locator(".research-cost-list")).toContainText("0/20");
   await page.screenshot({ path: "artifacts/qa/yellow-technology-1440.png", fullPage: true });
 });
 
@@ -2189,11 +2262,15 @@ test("cursor cargo hand-carries a titanium stack between planets", async ({ page
   await expect(page.locator(".cargo-block")).toContainText("手提星际载荷");
   await expect(page.locator(".cargo-slot")).toContainText("钛块");
   await expect(page.locator(".cargo-slot")).toContainText("×40");
+  await expect(page.locator(".cargo-block")).toHaveClass(/rail-block--cargo-drop/);
+  await expect(page.locator(".tray-block")).toHaveClass(/rail-block--cargo-drop/);
+  await expect(page.locator(".mobile-toggle--cargo")).toHaveCount(1);
 
   await page.getByTitle("切换到烬原 II").click();
   await expect(page.locator(".cargo-slot")).toContainText("钛块");
   await expect(page.getByRole("status")).toContainText("托钛天王：钛块 ×40 已抵达烬原 II");
   await page.screenshot({ path: "artifacts/qa/hand-carry-titanium-1280.png", fullPage: true });
+  await expect(page.locator(".planet-transition")).toBeHidden({ timeout: 3_000 });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByLabel("打开物资托盘").click();
@@ -2659,6 +2736,7 @@ test("production statistics remains usable on mobile", async ({ page }) => {
   const workspace = page.getByRole("dialog", { name: "生产统计" });
   await expect(workspace.getByRole("tab", { name: "生产" })).toBeVisible();
   await expect(workspace.locator(".statistics-filter")).toBeVisible();
+  await workspace.getByLabel("筛选统计物品").fill("不存在的物品");
   const emptyState = workspace.locator(".statistics-empty");
   await expect(emptyState).toContainText("没有符合条件的物品");
   await expect.poll(async () => workspace.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
@@ -2704,7 +2782,7 @@ test("production management traces devices and supports cross-surface batch cont
   const mobileWorkspace = page.getByRole("dialog", { name: "生产统计" });
   await mobileWorkspace.getByRole("tab", { name: "管理" }).click();
   await expect(mobileWorkspace.locator(".production-management-row")).toBeVisible();
-  for (const scale of [0.8, 1, 1.25, 1.5]) {
+  for (const scale of [0.8, 1, 1.25, 1.5, 2]) {
     await page.evaluate((value) => document.documentElement.style.setProperty("--ui-font-scale", String(value)), scale);
     await expect.poll(async () => mobileWorkspace.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   }
@@ -2724,9 +2802,51 @@ test("the production workspace fits a medium desktop", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await freshGame(page);
   await expect(page.locator(".factory-canvas")).toBeVisible();
+  await expect(page.locator(".tray-row").filter({ hasText: "铁矿石" })).toContainText("100");
+  await expect(page.locator(".tray-row").filter({ hasText: "铜矿石" })).toContainText("100");
+  await expect(page.locator(".tray-row").filter({ hasText: "石矿" })).toContainText("100");
+  await expect(page.getByTitle("完成星际物流系统科技后开放")).toHaveCount(2);
   await expect(page.getByTitle("部署风力涡轮机")).toBeVisible();
   await expect(page.getByRole("tab", { name: "基础制造" })).toBeVisible();
+  const smelter = page.locator(".construction-item-shell").filter({ hasText: "电弧熔炉" });
+  await expect(smelter.getByLabel("制造电弧熔炉")).toHaveClass(/construction-item-craft--upstream/);
+  await smelter.getByLabel("制造电弧熔炉").click();
+  await expect(smelter.locator(".construction-item > strong")).toHaveText("×4");
+  await expect(page.locator(".interaction-burst")).toContainText("已消耗");
   await page.screenshot({ path: "artifacts/qa/factory-network-1280.png", fullPage: true });
+});
+
+test("construction automation and three-input delivery stay usable across desktop and mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openConstructionAutomationGame(page);
+  await page.locator(".react-flow__controls-fitview").click();
+
+  const hub = page.locator(".logistics-node").filter({ hasText: "物资配送枢纽" });
+  await expect(hub.locator(".delivery-hub-target")).toHaveCount(3);
+  await expect(hub).toContainText("3/3 接口");
+  await expect(page.locator(".tray-row").filter({ hasText: "铜块" })).toContainText("5");
+
+  const center = page.locator(".machine-node").filter({ hasText: "建筑制造中心" });
+  await center.click();
+  await page.locator(".construction-center-open").click();
+  const workspace = page.getByRole("dialog", { name: "建筑制造中心" });
+  await expect(workspace).toBeVisible();
+  const smelterTarget = workspace.getByRole("spinbutton", { name: "电弧熔炉目标库存", exact: true });
+  await smelterTarget.fill("2");
+  await expect(smelterTarget).toHaveValue("2");
+  await expect(workspace.locator(".construction-center-status")).toContainText("澄海 I");
+  await expect.poll(async () => workspace.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/construction-center-1440.png", fullPage: true });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(workspace.getByLabel("关闭建筑制造中心")).toBeVisible();
+  await expect.poll(async () => workspace.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/construction-center-390.png", fullPage: true });
+
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(workspace.getByLabel("关闭建筑制造中心")).toBeVisible();
+  await expect.poll(async () => workspace.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/construction-center-844x390.png", fullPage: true });
 });
 
 test("starter kit and logistics controls are available on the production canvas", async ({ page }) => {
@@ -3514,7 +3634,9 @@ test("stellar exploration unlocks remote planets and enables a warped logistics 
 
   await page.getByLabel("打开星图").click();
   const starMap = page.getByRole("dialog", { name: "星图" });
-  await expect(starMap.locator(".star-system-card")).toHaveCount(3);
+  await expect(starMap.locator(".star-system-card")).toHaveCount(8);
+  await expect(starMap.locator(".star-planet-list > button")).toHaveCount(22);
+  await expect(starMap.locator(".star-system-card").filter({ has: page.getByText("蔚蓝王座", { exact: true }) })).toContainText("L☉");
   const borealis = starMap.locator(".star-system-card").filter({ has: page.getByText("北冕座", { exact: true }) });
   const neutron = starMap.locator(".star-system-card").filter({ has: page.getByText("赫卡忒", { exact: true }) });
   await expect(borealis).toContainText("未勘探");
@@ -3545,7 +3667,8 @@ test("stellar exploration unlocks remote planets and enables a warped logistics 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(starMap).toBeVisible();
   await expect(starMap.locator(".star-map-route").evaluate((element) => element.scrollWidth <= element.clientWidth)).resolves.toBe(true);
-  await expect(starMap.locator(".star-system-card")).toHaveCount(3);
+  await expect(starMap.locator(".star-system-card")).toHaveCount(8);
+  await expect(starMap.locator(".star-planet-list > button")).toHaveCount(22);
   await page.screenshot({ path: "artifacts/qa/stellar-map-390.png", fullPage: true });
 });
 
@@ -3567,6 +3690,8 @@ test("star map industrial console exposes global routes, planet roles and quick 
   await expect(industry.locator(".stellar-route-row")).toHaveCount(1);
   await expect(industry.locator(".stellar-route-row")).toContainText("光栅石");
   await expect(industry.locator(".stellar-route-row")).toContainText("翘曲");
+  await expect(industry.locator(".stellar-route-row")).toContainText("路径");
+  await expect(industry.locator(".stellar-route-row")).toContainText("策略");
   const frostIndustry = industry.locator(".stellar-planet-row").filter({ has: page.getByText("霜原 I", { exact: true }) });
   await expect(frostIndustry.locator(".stellar-planet-metrics")).toContainText("宜 化工基地");
   await page.screenshot({ path: "artifacts/qa/stellar-industry-1440.png", fullPage: true });
@@ -3592,6 +3717,79 @@ test("star map industrial console exposes global routes, planet roles and quick 
   await page.screenshot({ path: "artifacts/qa/stellar-industry-390.png", fullPage: true });
 });
 
+test("stellar workspaces stay usable at 150 percent font scale on desktop and mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openStellarExplorationGame(page);
+  await page.getByLabel("打开设置").click();
+  const operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await operations.getByLabel("字体大小").getByRole("button", { name: "150%" }).click();
+  await operations.getByLabel("关闭运营中心").click();
+
+  await page.getByLabel("打开星图").click();
+  const starMap = page.getByRole("dialog", { name: "星图" });
+  await expect(starMap.getByLabel("关闭星图")).toBeVisible();
+  await expect(starMap.locator(".star-system-card")).toHaveCount(8);
+  await expect(starMap.locator(".star-system-card").evaluateAll((cards) => cards.every((card) => card.scrollHeight <= card.clientHeight + 1))).resolves.toBe(true);
+  await page.waitForTimeout(220);
+  await page.screenshot({ path: "artifacts/qa/stellar-map-150-1440.png", fullPage: true });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(async () => {
+    const box = await starMap.boundingBox();
+    return box ? Math.ceil(box.x + box.width) : Number.POSITIVE_INFINITY;
+  }).toBeLessThanOrEqual(390);
+  await expect(starMap.getByLabel("关闭星图")).toBeVisible();
+  await starMap.getByRole("tab", { name: "星际工业" }).click();
+  await expect(starMap.locator(".stellar-route-row")).toHaveCount(1);
+  await page.screenshot({ path: "artifacts/qa/stellar-industry-150-390.png", fullPage: true });
+
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(starMap.getByLabel("关闭星图")).toBeVisible();
+  await page.screenshot({ path: "artifacts/qa/stellar-industry-150-844x390.png", fullPage: true });
+  await starMap.getByLabel("关闭星图").click();
+
+  await page.getByLabel("打开物资托盘").click();
+  await page.getByTitle("打开戴森球规划").click();
+  const planner = page.getByRole("dialog", { name: "戴森球规划" });
+  await expect(planner.getByLabel("关闭戴森球规划")).toBeVisible();
+  await expect(planner.locator(".dyson-system-tabs button")).toHaveCount(1);
+  await page.waitForTimeout(220);
+  await page.screenshot({ path: "artifacts/qa/dyson-planner-150-844x390.png", fullPage: true });
+});
+
+test("interstellar station exposes relay hub and per-slot route controls on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openStellarExplorationGame(page);
+  const station = page.locator(".station-node").filter({ hasText: "星际物流站" });
+  await station.click();
+  const inspector = page.locator(".station-inspector");
+  await inspector.getByLabel("中转物流枢纽").check();
+  await inspector.getByLabel("枢纽优先级").selectOption("2");
+  await inspector.getByLabel("航路").selectOption("relay-required");
+  await inspector.getByLabel("翘曲预算").selectOption("3");
+  await expect(inspector.getByLabel("中转物流枢纽")).toBeChecked();
+  await expect(inspector.getByLabel("枢纽优先级")).toHaveValue("2");
+  await expect(inspector.getByLabel("航路")).toHaveValue("relay-required");
+  await expect(inspector.getByLabel("翘曲预算")).toHaveValue("3");
+
+  await page.getByLabel("打开设置").click();
+  const operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await operations.getByLabel("字体大小").getByRole("button", { name: "150%" }).click();
+  await operations.getByLabel("关闭运营中心").click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  if (!await page.locator(".game-shell").evaluate((element) => element.classList.contains("mobile-panel--inspector"))) {
+    await page.getByLabel("打开检查器").click();
+  }
+  await expect(inspector.getByLabel("中转物流枢纽")).toBeVisible();
+  await expect.poll(async () => inspector.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await inspector.getByLabel("航路").scrollIntoViewIfNeeded();
+  await expect(inspector.getByLabel("航路")).toBeVisible();
+  await expect(inspector.getByLabel("翘曲预算")).toBeVisible();
+  await page.screenshot({ path: "artifacts/qa/interstellar-relay-controls-150-390.png", fullPage: true });
+});
+
 test("box selection copies, pastes, moves and upgrades a production blueprint", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openBlueprintStageGame(page);
@@ -3613,7 +3811,8 @@ test("box selection copies, pastes, moves and upgrades a production blueprint", 
     await page.mouse.move(left, top, { steps: 14 });
     await page.mouse.up();
     await expect(page.locator(".react-flow__node.selected")).toHaveCount(2);
-    await expect(page.getByRole("toolbar", { name: "选区操作" })).toContainText("2");
+    await expect(page.locator(".react-flow__edge.selected")).toHaveCount(1);
+    await expect(page.getByRole("toolbar", { name: "选区操作" })).toContainText("2 节点 · 1 线路");
   };
 
   await boxSelect();
@@ -3650,6 +3849,8 @@ test("box selection copies, pastes, moves and upgrades a production blueprint", 
 
   await page.getByLabel("批量升级所选设备").click();
   await expect(page.locator(".machine-node").filter({ hasText: "制造台 Mk.II" })).toHaveCount(2);
+  await page.getByLabel("一键升级所选传送带").click();
+  await expect(page.locator(".factory-edge-label--selected")).toContainText("Mk.II");
   await page.screenshot({ path: "artifacts/qa/blueprint-batch-upgrade-1440.png", fullPage: true });
 
   await page.getByLabel("打开蓝图库").click();
@@ -3748,7 +3949,7 @@ test("construction cards craft in place and Ctrl-click chains building placement
   await expect(craftButton).toBeEnabled();
   await craftButton.click();
   await expect(page.locator(".construction-item-shell").filter({ hasText: "火力发电厂" })).toContainText("×1");
-  await expect(page.locator(".interaction-burst").filter({ hasText: "制造完成" })).toBeVisible();
+  await expect(page.locator(".interaction-burst").filter({ hasText: "已消耗" })).toBeVisible();
   await craftButton.click();
   await expect(craftButton).toBeDisabled();
   await expect(craftButton).toHaveAttribute("title", /铁块 0\/10（缺 10）/);
@@ -3927,7 +4128,7 @@ test("operations settings and local save slots persist across reload", async ({ 
   await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
   await expect(operations.locator(".settings-community")).toContainText("1076757280");
   const fontScale = operations.getByLabel("字体大小");
-  await expect(fontScale.getByRole("button")).toHaveText(["80%", "100%", "125%", "150%"]);
+  await expect(fontScale.getByRole("button")).toHaveText(["80%", "100%", "125%", "150%", "200%"]);
   await expect(fontScale.getByRole("button", { name: "100%" })).toHaveAttribute("aria-pressed", "true");
   const fillsViewport = () => page.evaluate(() => {
     const root = document.querySelector("#root")?.getBoundingClientRect();
@@ -3939,6 +4140,9 @@ test("operations settings and local save slots persist across reload", async ({ 
   await expect.poll(fillsViewport).toBe(true);
   await fontScale.getByRole("button", { name: "150%" }).click();
   await expect.poll(fillsViewport).toBe(true);
+  await fontScale.getByRole("button", { name: "200%" }).click();
+  await expect.poll(fillsViewport).toBe(true);
+  await expect.poll(async () => operations.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await fontScale.getByRole("button", { name: "125%" }).click();
   await operations.getByRole("button", { name: "4×" }).click();
   await operations.locator(".setting-row").filter({ hasText: "性能模式" }).click();
@@ -3961,6 +4165,15 @@ test("operations settings and local save slots persist across reload", async ({ 
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/^dsp-idle-save-.*\.json$/);
   await page.screenshot({ path: "artifacts/qa/operations-saves-1440.png", fullPage: true });
+  await operations.getByLabel("删除槽位 1").click();
+  const deleteDialog = page.getByRole("dialog", { name: "删除本地槽位 1" });
+  await expect(deleteDialog).toContainText("第一次确认");
+  await deleteDialog.getByRole("button", { name: /继续确认/ }).click();
+  await expect(deleteDialog).toContainText("第二次确认");
+  await expect(operations.locator(".save-slot").filter({ hasText: "本地槽位 1" })).toHaveClass(/save-slot--occupied/);
+  await deleteDialog.getByRole("button", { name: /确认永久删除/ }).click();
+  await expect(deleteDialog).toHaveCount(0);
+  await expect(operations.locator(".save-slot").filter({ hasText: "本地槽位 1" })).not.toHaveClass(/save-slot--occupied/);
 
   await page.reload();
   await expect(page.locator(".game-shell")).toHaveAttribute("data-performance-mode", "true");
@@ -4000,7 +4213,7 @@ test("font scaling keeps rendered belt endpoints attached to their handles", asy
     return [Math.hypot(start.x - sourceCenter.x, start.y - sourceCenter.y), Math.hypot(end.x - targetCenter.x, end.y - targetCenter.y)];
   });
 
-  for (const scale of ["125%", "150%"] as const) {
+  for (const scale of ["125%", "150%", "200%"] as const) {
     await fontScale.getByRole("button", { name: scale }).click();
     await expect.poll(async () => Math.max(...await endpointDistances())).toBeLessThan(10);
   }
@@ -4156,7 +4369,7 @@ test("placement preview, selection focus and keyboard recycle keep canvas work d
   await page.keyboard.press("Delete");
   await expect(turbine).not.toBeVisible();
   await expect(page.getByTitle("部署风力涡轮机")).toContainText("×3");
-  await expect(page.locator(".game-notice")).toContainText("已回收 1 个所选设备");
+  await expect(page.locator(".game-notice")).toContainText("已回收 1 个设备与 0 条运输线");
 });
 
 test("large workspaces load on demand with polished desktop and mobile hierarchy", async ({ page }) => {
@@ -4296,9 +4509,10 @@ test("canvas overlays fold and horizontal surfaces support direct panning", asyn
   await expect(technology.getByLabel("展开科研详情")).toBeVisible();
   await expect(technology.locator(".technology-upgrade-overview")).toHaveCount(0);
   const technologyTree = technology.locator(".technology-tree");
-  await technologyTree.evaluate((element) => { element.scrollLeft = 0; });
+  await technologyTree.evaluate((element) => { element.scrollLeft = 0; element.scrollTop = 0; });
   await technologyTree.dispatchEvent("wheel", { deltaY: 760, deltaX: 0 });
-  await expect.poll(() => technologyTree.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+  await expect.poll(() => technologyTree.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(technologyTree.evaluate((element) => element.scrollLeft)).resolves.toBe(0);
   await technologyTree.evaluate((element) => { element.scrollLeft = 0; });
   const treeBox = await technologyTree.boundingBox();
   await page.mouse.move(treeBox!.x + treeBox!.width - 40, treeBox!.y + 70);

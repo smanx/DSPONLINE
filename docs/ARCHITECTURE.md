@@ -51,8 +51,10 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 
 - `src/game/types.ts`：领域 ID、实体、线路、科研、银河、蓝图和 `GameState` 类型。
 - `src/game/content.ts`：物品、建筑、配方、施工成本、科技和内容闭合审计。
-- `src/game/galaxy.ts`：由持久化种子生成并归一化行星工业档案、有限矿储、环境推荐角色和设备专长适用范围；加载时优先保留已保存档案，缺字段才回退生成值。
+- `src/game/galaxyCatalog.ts`：16 种生态模板、8 种恒星类型、各行星模板池和星区基础坐标；只保存稳定内容定义，不读取运行时时钟。
+- `src/game/galaxy.ts`：由持久化种子确定性生成 8 系 22 星的恒星参数、二维坐标、生态、矿物、海洋、能源、殖民成本和工业档案；加载时优先保留已保存档案，缺字段才回退生成值。
 - `src/game/engine.ts`：确定性生产、电网、运输、科研、手搓、戴森与状态变更命令。
+- `src/game/stellarIndustry.ts`：全星区物流快照、真实中转路径、枢纽供电诊断、行星分工与星系汇总。
 - `src/game/network.ts`：线路占用、吞吐预测、连续网络与瓶颈诊断。
 - `src/game/statistics.ts`、`productionManagement.ts`、`planning.ts`、`alerts.ts`：统计、全星球设备诊断、目标产能反推和故障聚合。生产管理快照完全由 `GameState` 派生，不写回存档。
 - `src/game/campaign.ts`、`progression.ts`、`endgame.ts`：任务、成就和终局 progression。
@@ -63,7 +65,7 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 ## 3. 状态与模拟流
 
 1. 主菜单调用 `loadGame()` 或加载指定槽位，得到 `LoadedGame`。
-2. `FactoryGame` 以 `GameState` v24 作为唯一持久游戏状态。
+2. `FactoryGame` 以 `GameState` v26 作为唯一持久游戏状态。
 3. 正常模式每 100 ms、性能模式每 250 ms 累积真实时间，并乘以 `1x/2x/4x` 模拟倍率。
 4. 浏览器支持 Worker 时，状态和时间提交给 `src/game/simulation.worker.ts`；Worker 调用 `advanceSimulation()`。
 5. Worker 不可用或报错时，主线程使用同一个 `advanceSimulation()` 回退，保持规则一致。
@@ -72,7 +74,7 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 
 模拟器应保持纯状态输入和确定性输出。新增随机机制必须从持久化 seed 派生，不能直接依赖 `Math.random()` 或墙上时钟，否则基准哈希、离线结算和云存档会分叉。
 
-行星矿储、能源、航程和专长倍率保存在 `GameState.galaxy.profiles`。`migrateGame()` 会验证并恢复已有倍率，而不是只用 seed 重抽；因此首次保存、云端往返和跨设备加载不会改变同一工厂的环境数值。
+行星矿储、能源、航程和专长倍率保存在 `GameState.galaxy.profiles`，恒星类型、亮度和二维坐标保存在 `GameState.galaxy.systemProfiles`。普通“开始新游戏”只生成一次随机 seed；之后所有生态与路线计算都从该 seed 和持久状态派生。`migrateGame()` 会验证并恢复已有倍率，而不是只用 seed 重抽，因此首次保存、云端往返和跨设备加载不会改变同一工厂。
 
 ## 4. 内容模型
 
@@ -92,9 +94,13 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 
 React Flow 只负责可视节点、边、视口和交互；真实生产库存与运输状态都在 `GameState` 中。显示层通过实体和线路派生 Node/Edge，不应把 React Flow 的临时对象当作存档真相。
 
+`GameState.constructionAutomation` 持久化建筑制造中心的启停、目标库存、轮询游标和累计制造量。施工托盘的递归快速建造只生成临时规划，必须先证明完整手工链可完成，再一次性提交托盘、生产统计与建筑库存；失败规划不得写入任何中间状态。
+
 全星球批量命令按实体所属行星分组，临时切换到对应行星执行既有配方或物流槽命令，再恢复玩家原先所在行星。这样配方切换和槽位替换产生的物资返还会进入正确的行星托盘；批量物流模板只修改指定槽位，物品已占用其他槽位的站点会被跳过。
 
 线路模型包含源、汇、物品、等级、分拣等级、优先级、堆叠、路由、流量和拥堵。端口能够根据已有配方、物流槽或默认状态自动接受物品。多条同端点线路由 bundle 信息进行视觉错位。
+
+星际物流槽持久化 `direct`、`relay-preferred` 或 `relay-required` 策略及 1-4 个/船翘曲预算。中转物流站持久化启用状态与优先级；在途 `StationRoute` 保存 waypoint 站点、总距离和实际每船翘曲消耗。多跳耗时、能耗、诊断和模拟使用同一经济函数；取消航线或移除枢纽会退还翘曲器，站内容量不足时溢出到对应行星托盘。
 
 闲置物流运输机和运输船保存在 `GameState.portableFleet`，不属于任何行星托盘；装入物流站后仍由对应实体的 `stationDrones` / `stationVessels` 持有。切换行星不复制普通库存，只保留这一明确的随身载具库存和光标单组载荷。
 
@@ -106,7 +112,7 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 | 数据 | 键或位置 | 说明 |
 | --- | --- | --- |
-| 主存档 | `dsp-idle-network.save.v1` | v2 envelope 内含 v24 state |
+| 主存档 | `dsp-idle-network.save.v1` | v2 envelope 内含 v26 state；线上正式版目前仍写 v24 |
 | 主备份 | 主键后缀 `.backup` | 每次写主存档前保存上一份有效版本 |
 | 快照 | 主键后缀 `.snapshot.*` | 最多 5 份，至少每 30 模拟秒生成 |
 | 手动槽位 | `dsp-idle-network.slot.1..3` | 3 个独立槽位 |

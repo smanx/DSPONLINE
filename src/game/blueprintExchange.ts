@@ -64,7 +64,9 @@ function parseStationSlots(value: unknown, entityIndex: number, issues: string[]
     if (!isRecord(entry) || (entry.itemId !== undefined && (typeof entry.itemId !== "string" || !(entry.itemId in ITEMS))) ||
       !["supply", "demand", "storage"].includes(String(entry.localMode)) || !["supply", "demand", "storage"].includes(String(entry.remoteMode)) ||
       ![0.1, 0.25, 0.5, 1].includes(Number(entry.minimumLoad)) || !validNumber(entry.minStock, 0, 1_000_000) ||
-      !validNumber(entry.maxStock, 0, 1_000_000) || Number(entry.maxStock) < Number(entry.minStock) || ![0, 1, 2].includes(Number(entry.priority))) {
+      !validNumber(entry.maxStock, 0, 1_000_000) || Number(entry.maxStock) < Number(entry.minStock) || ![0, 1, 2].includes(Number(entry.priority)) ||
+      (entry.routePolicy !== undefined && !["direct", "relay-preferred", "relay-required"].includes(String(entry.routePolicy))) ||
+      (entry.warperBudget !== undefined && !validNumber(entry.warperBudget, 1, 4))) {
       issues.push(`设备 ${entityIndex + 1} 的物流槽位 ${slotIndex + 1} 无效`);
       return;
     }
@@ -76,6 +78,8 @@ function parseStationSlots(value: unknown, entityIndex: number, issues: string[]
       minStock: Math.floor(entry.minStock),
       maxStock: Math.floor(entry.maxStock),
       priority: entry.priority as StationSlot["priority"],
+      routePolicy: entry.routePolicy === "direct" || entry.routePolicy === "relay-required" ? entry.routePolicy : "relay-preferred",
+      warperBudget: Math.max(1, Math.min(4, Math.floor(typeof entry.warperBudget === "number" ? entry.warperBudget : 2))),
     });
   });
   return slots;
@@ -116,6 +120,8 @@ function parseEntity(value: unknown, index: number, issues: string[]): Blueprint
     ...(value.stationMode === "supply" || value.stationMode === "demand" ? { stationMode: value.stationMode } : {}),
     ...(value.stationMinimumLoad === 0.1 || value.stationMinimumLoad === 0.25 || value.stationMinimumLoad === 0.5 || value.stationMinimumLoad === 1 ? { stationMinimumLoad: value.stationMinimumLoad } : {}),
     ...(typeof value.stationWarpEnabled === "boolean" ? { stationWarpEnabled: value.stationWarpEnabled } : {}),
+    ...(typeof value.stationHubEnabled === "boolean" ? { stationHubEnabled: value.stationHubEnabled } : {}),
+    ...([0, 1, 2].includes(Number(value.stationHubPriority)) ? { stationHubPriority: Number(value.stationHubPriority) as 0 | 1 | 2 } : {}),
     ...(stationSlots ? { stationSlots } : {}),
     ...(typeof value.sprayCoaterInstalled === "boolean" ? { sprayCoaterInstalled: value.sprayCoaterInstalled } : {}),
     ...(value.proliferatorTier === 1 || value.proliferatorTier === 2 || value.proliferatorTier === 3 ? { proliferatorTier: value.proliferatorTier } : {}),

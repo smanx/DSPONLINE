@@ -24,6 +24,7 @@ import {
   Settings,
   ShieldCheck,
   Type,
+  Trash2,
   Upload,
   UserPlus,
   Volume2,
@@ -56,13 +57,14 @@ import { getDesktopBridge } from "../desktop";
 import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
 import { CloudAccountSecurity } from "./CloudAccountSecurity";
 import { CloudSaveConflictDialog } from "./CloudSaveConflictDialog";
+import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 
 type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "new";
 type CloudAuthMode = "login" | "register" | "forgot" | "reset";
 type MenuMessage = { tone: "ready" | "warning" | "error"; text: string } | null;
 
 const MENU_SETTINGS_KEY = "dsp-idle-network.menu-settings.v1";
-const FONT_SCALES: FontScale[] = [0.8, 1, 1.25, 1.5];
+const FONT_SCALES: FontScale[] = [0.8, 1, 1.25, 1.5, 2];
 const SIMULATION_SPEEDS: SimulationSpeed[] = [1, 2, 4];
 const AUTOSAVE_INTERVALS: AutosaveIntervalSeconds[] = [2, 10, 30];
 const DEFAULT_MENU_SETTINGS: GameSettings = {
@@ -174,6 +176,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<MenuMessage>(null);
   const [importInspection, setImportInspection] = useState<SaveInspection | null>(null);
+  const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & { slotId: SaveSlotId }) | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cloudAuthAllowed = window.isSecureContext || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
   const brandIconUrl = `${import.meta.env.BASE_URL}icon.svg`;
@@ -187,6 +190,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   useEffect(() => {
     const bridge = getDesktopBridge();
     const root = document.documentElement;
+    root.dataset.uiFontScale = String(Math.round(settings.fontScale * 100));
     if (bridge && typeof bridge.setFontScale === "function") {
       root.dataset.nativeUiScale = "true";
       root.style.removeProperty("--ui-font-scale");
@@ -274,9 +278,9 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const startNewGame = async () => {
     setBusy(true);
     try {
-      const [storage, { createInitialState }] = await Promise.all([loadStorageModule(), import("../game/engine")]);
+      const [storage, { createPlayerInitialState }] = await Promise.all([loadStorageModule(), import("../game/engine")]);
       await preserveCurrentSave("开始新工厂前", storage);
-      const state = createInitialState();
+      const state = createPlayerInitialState();
       state.settings = { ...state.settings, ...settings };
       storage.saveGame(state);
       trackAnalyticsEvent("new_game");
@@ -608,7 +612,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
               {continueSave ? <article className="primary"><i><Save size={16} /></i><span><strong>{sourceLabel(continueSave.source)}</strong><small>{formatSavedAt(summary?.savedAt)} · {summaryPlanet} · 科技 {summary?.completedTechCount}</small></span><em>{formatRuntime(summary?.elapsedSeconds ?? 0)}</em><button type="button" disabled={busy} onClick={() => void continueGame()}><Play size={14} />载入</button></article> : null}
               {([1, 2, 3] as SaveSlotId[]).map((slotId) => {
                 const slot = slots.find((candidate) => candidate.slotId === slotId);
-                return <article className={slot ? "" : "empty"} key={slotId}><i><HardDrive size={16} /></i><span><strong>本地槽位 {slotId}</strong><small>{slot ? `${formatSavedAt(slot.savedAt)} · ${getMenuPlanetName(slot.activePlanetId)} · 科技 ${slot.completedTechCount}` : "空槽位"}</small></span><em>{slot ? formatRuntime(slot.elapsedSeconds) : "--"}</em><button type="button" disabled={busy || !slot?.valid} onClick={() => void loadSlot(slotId)}><Upload size={14} />载入</button></article>;
+                return <article className={slot ? "" : "empty"} key={slotId}><i><HardDrive size={16} /></i><span><strong>本地槽位 {slotId}</strong><small>{slot ? `${formatSavedAt(slot.savedAt)} · ${getMenuPlanetName(slot.activePlanetId)} · 科技 ${slot.completedTechCount}` : "空槽位"}</small></span><em>{slot ? formatRuntime(slot.elapsedSeconds) : "--"}</em><div className="start-menu-save-actions"><button type="button" disabled={busy || !slot?.valid} onClick={() => void loadSlot(slotId)}><Upload size={14} />载入</button><button className="danger" type="button" disabled={busy || !slot} onClick={() => slot && setDeleteRequest({ slotId, label: `本地槽位 ${slotId}`, details: `${formatSavedAt(slot.savedAt)} · ${getMenuPlanetName(slot.activePlanetId)} · 运行 ${formatRuntime(slot.elapsedSeconds)} · 科技 ${slot.completedTechCount}` })} title={`删除本地槽位 ${slotId}`} aria-label={`删除本地槽位 ${slotId}`}><Trash2 size={14} /></button></div></article>;
               })}
             </div>
             {snapshots.length > 0 ? <section className="start-menu-snapshots"><header><History size={14} /><strong>最近快照</strong><small>{snapshots.length}/5</small></header>{snapshots.slice(0, 3).map((snapshot) => <button type="button" disabled={busy || !snapshot.valid} onClick={() => void loadSnapshot(snapshot.id)} key={snapshot.id}><span><strong>{snapshot.reason}</strong><small>{formatSavedAt(snapshot.savedAt)} · 科技 {snapshot.completedTechCount}</small></span><em>{formatRuntime(snapshot.elapsedSeconds)}</em><RefreshCw size={13} /></button>)}</section> : null}
@@ -666,6 +670,16 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       </section>
 
       <footer className="start-menu-footer"><span><i className="ready" />模拟核心按需载入</span><span><ShieldCheck size={12} />载入时校验存档</span><span>{window.isSecureContext ? "HTTPS" : "HTTP"} · {window.location.hostname || "Desktop"}</span></footer>
+      <SaveDeleteDialog target={deleteRequest} onCancel={() => setDeleteRequest(null)} onDelete={() => {
+        if (!deleteRequest) return;
+        setBusy(true);
+        void loadStorageModule().then(({ clearGameSlot }) => {
+          clearGameSlot(deleteRequest.slotId);
+          refreshLocalSaves();
+          setMessage({ tone: "ready", text: `${deleteRequest.label}已删除，其他存档未受影响` });
+          setDeleteRequest(null);
+        }).finally(() => setBusy(false));
+      }} />
     </main>
   );
 }

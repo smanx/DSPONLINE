@@ -56,27 +56,31 @@ export function CanvasSelectionTools({ selectionMode, blueprintCount, beltCount,
   );
 }
 
-export function SelectionToolbar({ selectedCount, eligibleCount, canUpgrade, onFocus, onAutoLayout, onCopy, onUpgrade, onRemove, onClear, onDone }: {
+export function SelectionToolbar({ selectedCount, selectedBeltCount, eligibleCount, canUpgrade, canUpgradeBelts, onFocus, onAutoLayout, onCopy, onUpgrade, onUpgradeBelts, onRemove, onClear, onDone }: {
   selectedCount: number;
+  selectedBeltCount: number;
   eligibleCount: number;
   canUpgrade: boolean;
+  canUpgradeBelts: boolean;
   onFocus: () => void;
   onAutoLayout: () => void;
   onCopy: () => void;
   onUpgrade: () => void;
+  onUpgradeBelts: () => void;
   onRemove: () => void;
   onClear: () => void;
   onDone: () => void;
 }) {
-  if (selectedCount === 0) return null;
+  if (selectedCount + selectedBeltCount === 0) return null;
   return (
     <div className="selection-toolbar nodrag nopan" role="toolbar" aria-label="选区操作">
-      <span><BoxSelect size={14} /><strong>{selectedCount}</strong> 已选</span>
-      <button type="button" onClick={onFocus} title="定位到所选设备" aria-label="定位到所选设备"><Focus size={16} /></button>
-      <button type="button" onClick={onAutoLayout} title="按物流上下游整理所选设备" aria-label="自动整理所选设备"><WandSparkles size={16} /></button>
+      <span><BoxSelect size={14} /><strong>{selectedCount}</strong> 节点 · <strong>{selectedBeltCount}</strong> 线路</span>
+      <button type="button" disabled={selectedCount === 0} onClick={onFocus} title="定位到所选设备" aria-label="定位到所选设备"><Focus size={16} /></button>
+      <button type="button" disabled={selectedCount === 0} onClick={onAutoLayout} title="按物流上下游整理所选设备" aria-label="自动整理所选设备"><WandSparkles size={16} /></button>
       <button type="button" disabled={eligibleCount === 0} onClick={onCopy} title="复制所选设备为蓝图并进入粘贴" aria-label="复制所选为蓝图"><Copy size={16} /></button>
       <button type="button" disabled={!canUpgrade} onClick={onUpgrade} title="批量升级所有可升级设备" aria-label="批量升级所选设备"><ArrowUp size={16} /></button>
-      <button className="danger" type="button" onClick={onRemove} title="批量回收所选设备" aria-label="批量回收所选设备"><Trash2 size={16} /></button>
+      <button type="button" disabled={!canUpgradeBelts} onClick={onUpgradeBelts} title="一键升级所有选中传送带并保持连接" aria-label="一键升级所选传送带"><Route size={16} /><ArrowUp size={12} /></button>
+      <button className="danger" type="button" onClick={onRemove} title="批量回收所选设备与线路" aria-label="批量回收所选设备与线路"><Trash2 size={16} /></button>
       <button type="button" onClick={onClear} title="清空当前选择" aria-label="清空选择"><X size={16} /></button>
       <button className="confirm" type="button" onClick={onDone} title="完成多选并返回指针模式" aria-label="完成多选"><Check size={16} /></button>
     </div>

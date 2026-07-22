@@ -29,6 +29,7 @@ export const PLANETS: Record<PlanetId, PlanetDefinition> = {
     environment: "海洋型行星",
     resources: "铁、铜、石、煤、原油、水",
     kind: "terrestrial",
+    defaultTemplateId: "oceanic",
     systemId: "helios",
     orbitIndex: 1,
     solarMultiplier: 1,
@@ -41,6 +42,7 @@ export const PLANETS: Record<PlanetId, PlanetDefinition> = {
     environment: "熔岩型行星",
     resources: "钛、硅、铁、铜、石、煤、硫酸、金伯利矿、分形硅、有机晶体",
     kind: "terrestrial",
+    defaultTemplateId: "lava",
     systemId: "helios",
     orbitIndex: 2,
     solarMultiplier: 1.5,
@@ -53,6 +55,7 @@ export const PLANETS: Record<PlanetId, PlanetDefinition> = {
     environment: "冰气态巨星",
     resources: "氢、氘、可燃冰",
     kind: "gas-giant",
+    defaultTemplateId: "ice_giant",
     systemId: "helios",
     orbitIndex: 3,
     solarMultiplier: 0,
@@ -66,6 +69,7 @@ export const PLANETS: Record<PlanetId, PlanetDefinition> = {
     environment: "永冻冰原行星",
     resources: "铁、铜、钛、硅、可燃冰、光栅石、刺笋结晶",
     kind: "terrestrial",
+    defaultTemplateId: "ice_field",
     systemId: "borealis",
     orbitIndex: 1,
     solarMultiplier: 0.8,
@@ -78,6 +82,7 @@ export const PLANETS: Record<PlanetId, PlanetDefinition> = {
     environment: "富可燃冰气态巨星",
     resources: "氢、氘、高丰度可燃冰",
     kind: "gas-giant",
+    defaultTemplateId: "fire_ice_giant",
     systemId: "borealis",
     orbitIndex: 2,
     solarMultiplier: 0,
@@ -91,9 +96,79 @@ export const PLANETS: Record<PlanetId, PlanetDefinition> = {
     environment: "中子星潮汐锁定行星",
     resources: "铁、铜、钛、硅、单极磁石",
     kind: "terrestrial",
+    defaultTemplateId: "tidal_locked",
     systemId: "neutron",
     orbitIndex: 1,
     solarMultiplier: 0.45,
+  },
+  verdant: {
+    id: "verdant", name: "翠环 I", code: "绿洲星", color: "#72aa78", environment: "草原与浅海行星",
+    resources: "由星区种子生成", kind: "terrestrial", defaultTemplateId: "prairie", systemId: "aurora", orbitIndex: 1, solarMultiplier: 1.2,
+  },
+  pelagic: {
+    id: "pelagic", name: "澜渊 II", code: "深海星", color: "#4d9fb4", environment: "深海群岛行星",
+    resources: "由星区种子生成", kind: "terrestrial", defaultTemplateId: "mediterranean", systemId: "aurora", orbitIndex: 2, solarMultiplier: 1.05,
+  },
+  aurora_giant: {
+    id: "aurora_giant", name: "天穹 III", code: "氢巨星", color: "#8fa9cf", environment: "高氢气态巨星",
+    resources: "氢、氘", kind: "gas-giant", defaultTemplateId: "hydrogen_giant", systemId: "aurora", orbitIndex: 3, solarMultiplier: 0,
+    orbitalYields: { hydrogen: 1.35, deuterium: 0.28 },
+  },
+  dune: {
+    id: "dune", name: "赤砂 I", code: "荒漠星", color: "#c7965d", environment: "干旱沙漠行星",
+    resources: "由星区种子生成", kind: "terrestrial", defaultTemplateId: "desert", systemId: "ember", orbitIndex: 1, solarMultiplier: 1.35,
+  },
+  cinder: {
+    id: "cinder", name: "灰烬 II", code: "火山灰星", color: "#a9634f", environment: "火山灰与熔岩行星",
+    resources: "由星区种子生成", kind: "terrestrial", defaultTemplateId: "volcanic_ash", systemId: "ember", orbitIndex: 2, solarMultiplier: 1.1,
+  },
+  ember_giant: {
+    id: "ember_giant", name: "红飓 III", code: "气态巨星", color: "#b87964", environment: "高温气态巨星",
+    resources: "氢、氘", kind: "gas-giant", defaultTemplateId: "gas_giant", systemId: "ember", orbitIndex: 3, solarMultiplier: 0,
+    orbitalYields: { hydrogen: 1.1, deuterium: 0.18 },
+  },
+  crystal: {
+    id: "crystal", name: "晶穹 I", code: "晶漠星", color: "#9ac4c6", environment: "硅晶荒漠行星",
+    resources: "由星区种子生成", kind: "terrestrial", defaultTemplateId: "crystal_desert", systemId: "sirius", orbitIndex: 1, solarMultiplier: 1.55,
+  },
+  prairie: {
+    id: "prairie", name: "牧云 II", code: "草原星", color: "#89aa67", environment: "风暴草原行星",
+    resources: "由星区种子生成", kind: "terrestrial", defaultTemplateId: "savanna", systemId: "sirius", orbitIndex: 2, solarMultiplier: 1.2,
+  },
+  sirius_giant: {
+    id: "sirius_giant", name: "银冠 III", code: "冰巨星", color: "#7ba8c5", environment: "明亮冰巨星",
+    resources: "氢、氘、可燃冰", kind: "gas-giant", defaultTemplateId: "ice_giant", systemId: "sirius", orbitIndex: 3, solarMultiplier: 0,
+    orbitalYields: { hydrogen: 0.9, deuterium: 0.2, fire_ice: 0.7 },
+  },
+  salt: {
+    id: "salt", name: "白盐 I", code: "盐湖星", color: "#c5bf9a", environment: "盐湖与干海盆行星",
+    resources: "由星区种子生成", kind: "terrestrial", defaultTemplateId: "salt_lake", systemId: "white_dwarf", orbitIndex: 1, solarMultiplier: 0.9,
+  },
+  obsidian: {
+    id: "obsidian", name: "黑曜 II", code: "黑曜星", color: "#746b75", environment: "黑曜火山行星",
+    resources: "由星区种子生成", kind: "terrestrial", defaultTemplateId: "volcanic_ash", systemId: "white_dwarf", orbitIndex: 2, solarMultiplier: 0.65,
+  },
+  white_giant: {
+    id: "white_giant", name: "苍白 III", code: "冰巨星", color: "#a7bfd0", environment: "低温冰巨星",
+    resources: "氢、氘、可燃冰", kind: "gas-giant", defaultTemplateId: "fire_ice_giant", systemId: "white_dwarf", orbitIndex: 3, solarMultiplier: 0,
+    orbitalYields: { hydrogen: 0.75, deuterium: 0.14, fire_ice: 1.15 },
+  },
+  tempest: {
+    id: "tempest", name: "风暴 I", code: "飓风星", color: "#5f9d91", environment: "高风速海陆行星",
+    resources: "由星区种子生成", kind: "terrestrial", defaultTemplateId: "savanna", systemId: "blue_giant", orbitIndex: 1, solarMultiplier: 1.7,
+  },
+  inferno: {
+    id: "inferno", name: "炽核 II", code: "熔岩星", color: "#d65f43", environment: "超高热熔岩行星",
+    resources: "由星区种子生成", kind: "terrestrial", defaultTemplateId: "lava", systemId: "blue_giant", orbitIndex: 2, solarMultiplier: 1.45,
+  },
+  abyss: {
+    id: "abyss", name: "幽冥 III", code: "永夜星", color: "#66778f", environment: "潮汐锁定永夜行星",
+    resources: "由星区种子生成", kind: "terrestrial", defaultTemplateId: "tidal_locked", systemId: "blue_giant", orbitIndex: 3, solarMultiplier: 0.75,
+  },
+  azure_giant: {
+    id: "azure_giant", name: "蓝穹 IV", code: "蓝巨星行星", color: "#5e83bd", environment: "高能气态巨星",
+    resources: "氢、氘、可燃冰", kind: "gas-giant", defaultTemplateId: "hydrogen_giant", systemId: "blue_giant", orbitIndex: 4, solarMultiplier: 0,
+    orbitalYields: { hydrogen: 1.5, deuterium: 0.35, fire_ice: 0.25 },
   },
 };
 
@@ -105,6 +180,7 @@ export const STAR_SYSTEMS: Record<StarSystemId, StarSystemDefinition> = {
     name: "赫利俄斯",
     code: "母恒星系",
     starType: "G 型主序星",
+    defaultStarClassId: "g_main",
     color: "#e1b452",
     distanceLy: 0,
     description: "工业网络的起点，拥有海洋、熔岩与气态巨星三种基础生态。",
@@ -116,6 +192,7 @@ export const STAR_SYSTEMS: Record<StarSystemId, StarSystemDefinition> = {
     name: "北冕座",
     code: "冰晶恒星系",
     starType: "K 型橙矮星",
+    defaultStarClassId: "k_dwarf",
     color: "#79aeb9",
     distanceLy: 4.2,
     description: "低温行星保存了天然微观结构，是可燃冰与高阶晶体的主要产区。",
@@ -126,11 +203,32 @@ export const STAR_SYSTEMS: Record<StarSystemId, StarSystemDefinition> = {
     ],
     requiredTechId: "stellar_exploration",
   },
+  aurora: {
+    id: "aurora", name: "曙光庭", code: "F 型星系", starType: "F 型主序星", defaultStarClassId: "f_main", color: "#e8d99b", distanceLy: 9.4,
+    description: "高光照星区，海洋与草原生态适合建立太阳能和综合制造基地。", planetIds: ["verdant", "pelagic", "aurora_giant"],
+    explorationCost: [{ itemId: "space_warper", amount: 3 }, { itemId: "information_matrix", amount: 20 }], requiredTechId: "stellar_exploration", prerequisiteSystemId: "borealis",
+  },
+  ember: {
+    id: "ember", name: "余烬座", code: "红矮星系", starType: "M 型红矮星", defaultStarClassId: "m_dwarf", color: "#c76c56", distanceLy: 15.7,
+    description: "低亮度红矮星周围聚集着矿物丰厚的荒漠与火山世界。", planetIds: ["dune", "cinder", "ember_giant"],
+    explorationCost: [{ itemId: "space_warper", amount: 4 }, { itemId: "gravity_matrix", amount: 10 }], requiredTechId: "stellar_exploration", prerequisiteSystemId: "aurora",
+  },
+  sirius: {
+    id: "sirius", name: "天狼工域", code: "A 型星系", starType: "A 型主序星", defaultStarClassId: "a_main", color: "#dbe8ff", distanceLy: 20.4,
+    description: "强光恒星与富硅晶体行星组成的高能工业区，戴森工程收益显著。", planetIds: ["crystal", "prairie", "sirius_giant"],
+    explorationCost: [{ itemId: "space_warper", amount: 6 }, { itemId: "gravity_matrix", amount: 20 }], requiredTechId: "stellar_exploration", prerequisiteSystemId: "ember",
+  },
+  white_dwarf: {
+    id: "white_dwarf", name: "苍白余烬", code: "白矮星系", starType: "白矮星", defaultStarClassId: "white_dwarf", color: "#d9e4ef", distanceLy: 18.7,
+    description: "致密恒星周围保留盐湖、黑曜火山和冰巨星，适合作为星际中转节点。", planetIds: ["salt", "obsidian", "white_giant"],
+    explorationCost: [{ itemId: "space_warper", amount: 8 }, { itemId: "universe_matrix", amount: 5 }], requiredTechId: "stellar_exploration", prerequisiteSystemId: "sirius",
+  },
   neutron: {
     id: "neutron",
     name: "赫卡忒",
     code: "中子星系",
     starType: "中子星",
+    defaultStarClassId: "neutron_star",
     color: "#a88ec5",
     distanceLy: 11.8,
     description: "极端磁场重塑了行星矿层，可持续开采极为稀有的单极磁石。",
@@ -141,6 +239,11 @@ export const STAR_SYSTEMS: Record<StarSystemId, StarSystemDefinition> = {
     ],
     requiredTechId: "stellar_exploration",
     prerequisiteSystemId: "borealis",
+  },
+  blue_giant: {
+    id: "blue_giant", name: "蔚蓝王座", code: "蓝巨星系", starType: "O 型蓝巨星", defaultStarClassId: "o_blue_giant", color: "#6fa8ff", distanceLy: 30,
+    description: "遥远而极亮的终局星区，戴森结构回报极高，但殖民与长航线成本同样惊人。", planetIds: ["tempest", "inferno", "abyss", "azure_giant"],
+    explorationCost: [{ itemId: "space_warper", amount: 12 }, { itemId: "universe_matrix", amount: 20 }], requiredTechId: "stellar_exploration", prerequisiteSystemId: "white_dwarf",
   },
 };
 
@@ -415,6 +518,11 @@ export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
     speed: 1, inputCapacity: 600, outputCapacity: 600, accepts: "solid",
     description: "缓存一种固体物品，并向后续物流线路持续供货。",
   },
+  material_delivery_hub: {
+    id: "material_delivery_hub", name: "物资配送枢纽", shortName: "配送枢纽", kind: "storage",
+    speed: 1, inputCapacity: 900, outputCapacity: 0, accepts: "any",
+    description: "提供 3 个独立输入接口，送达的物品会立即进入所在行星的物资托盘。",
+  },
   storage_tank: {
     id: "storage_tank", name: "储液罐", shortName: "储液罐", kind: "storage",
     speed: 1, inputCapacity: 1200, outputCapacity: 1200, accepts: "fluid",
@@ -424,6 +532,11 @@ export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
     id: "splitter_4way", name: "四向分流器", shortName: "分流器", kind: "splitter",
     speed: 1, inputCapacity: 24, outputCapacity: 24, accepts: "any",
     description: "在多条输出运输线之间均分物资，并支持优先线路。",
+  },
+  construction_center: {
+    id: "construction_center", name: "建筑制造中心", shortName: "制造中心", kind: "machine",
+    powerDemandKw: 12000, speed: 1, inputCapacity: 0, outputCapacity: 0,
+    description: "巨构级建筑补给设施，从所在行星物资托盘取料并按目标库存持续补足施工设备。",
   },
 };
 
@@ -605,6 +718,7 @@ export const CONSTRUCTION: ConstructionDefinition[] = [
   { buildingId: "sorter_mk2", name: "分拣器 Mk.II", outputAmount: 1, requiredTechId: "high_speed_logistics", costs: [{ itemId: "electric_motor", amount: 1 }, { itemId: "circuit_board", amount: 2 }] },
   { buildingId: "sorter_mk3", name: "分拣器 Mk.III", outputAmount: 1, requiredTechId: "super_magnetic_logistics", costs: [{ itemId: "electromagnetic_turbine", amount: 1 }, { itemId: "super_magnetic_ring", amount: 1 }] },
   { buildingId: "storage_mk1", name: "小型储物仓", outputAmount: 1, requiredTechId: "basic_logistics", costs: [{ itemId: "iron_ingot", amount: 4 }, { itemId: "stone_brick", amount: 4 }] },
+  { buildingId: "material_delivery_hub", name: "物资配送枢纽", outputAmount: 1, requiredTechId: "material_delivery_logistics", costs: [{ itemId: "steel", amount: 40 }, { itemId: "titanium_ingot", amount: 20 }, { itemId: "processor", amount: 10 }, { itemId: "electric_motor", amount: 10 }] },
   { buildingId: "splitter_4way", name: "四向分流器", outputAmount: 1, requiredTechId: "basic_logistics", costs: [{ itemId: "iron_ingot", amount: 3 }, { itemId: "gear", amount: 2 }, { itemId: "circuit_board", amount: 1 }] },
   { buildingId: "storage_tank", name: "储液罐", outputAmount: 1, requiredTechId: "high_efficiency_plasma_control", costs: [{ itemId: "iron_ingot", amount: 8 }, { itemId: "stone_brick", amount: 4 }, { itemId: "glass", amount: 4 }] },
   { buildingId: "oil_extractor", name: "原油萃取站", outputAmount: 1, requiredTechId: "high_efficiency_plasma_control", costs: [{ itemId: "steel", amount: 12 }, { itemId: "stone_brick", amount: 12 }, { itemId: "circuit_board", amount: 6 }, { itemId: "plasma_exciter", amount: 4 }] },
@@ -620,6 +734,7 @@ export const CONSTRUCTION: ConstructionDefinition[] = [
   { buildingId: "planetary_logistics_station", name: "行星物流站", outputAmount: 1, requiredTechId: "planetary_logistics", costs: [{ itemId: "steel", amount: 20 }, { itemId: "titanium_ingot", amount: 20 }, { itemId: "processor", amount: 10 }] },
   { buildingId: "interstellar_logistics_station", name: "星际物流站", outputAmount: 1, requiredTechId: "interstellar_logistics", costs: [{ itemId: "steel", amount: 30 }, { itemId: "titanium_alloy", amount: 40 }, { itemId: "processor", amount: 20 }] },
   { buildingId: "orbital_collector", name: "轨道采集器", outputAmount: 1, requiredTechId: "orbital_collection", costs: [{ itemId: "titanium_alloy", amount: 40 }, { itemId: "super_magnetic_ring", amount: 20 }, { itemId: "graphene", amount: 20 }] },
+  { buildingId: "construction_center", name: "建筑制造中心", outputAmount: 1, requiredTechId: "construction_automation", costs: [{ itemId: "steel", amount: 5000 }, { itemId: "titanium_alloy", amount: 5000 }, { itemId: "processor", amount: 5000 }, { itemId: "particle_broadband", amount: 5000 }] },
 ];
 
 export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
@@ -746,6 +861,17 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     summary: "以钛晶石和金刚石编码物质结构，建立第三阶段科研矩阵。",
     unlocks: ["钛晶石", "结构矩阵生产", "黄色矩阵科研"],
   },
+  material_delivery_logistics: {
+    id: "material_delivery_logistics", name: "物资直送物流", tier: 9,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 30 },
+      { itemId: "energy_matrix", amount: 30 },
+      { itemId: "structure_matrix", amount: 30 },
+    ],
+    prerequisites: ["structure_matrix", "basic_logistics"],
+    summary: "将三路传送带输入直接写入所在行星的物资托盘，减少重复搬运与仓储操作。",
+    unlocks: ["物资配送枢纽", "3 个自动匹配输入接口", "物资托盘直送"],
+  },
   proliferator_2: {
     id: "proliferator_2", name: "增产剂 Mk.II", tier: 8,
     costs: [{ itemId: "electromagnetic_matrix", amount: 25 }, { itemId: "energy_matrix", amount: 25 }, { itemId: "structure_matrix", amount: 20 }],
@@ -779,15 +905,14 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     unlocks: ["行星物流站", "物流运输机", "同星球无线运输"],
   },
   interstellar_logistics: {
-    id: "interstellar_logistics", name: "星际物流理论", tier: 9,
+    id: "interstellar_logistics", name: "星际物流系统", tier: 6,
     costs: [
-      { itemId: "electromagnetic_matrix", amount: 12 },
-      { itemId: "energy_matrix", amount: 12 },
-      { itemId: "structure_matrix", amount: 12 },
+      { itemId: "electromagnetic_matrix", amount: 20 },
+      { itemId: "energy_matrix", amount: 20 },
     ],
-    prerequisites: ["planetary_logistics", "titanium_alloy", "processor"],
-    summary: "整合高级结构材料与处理器，建立可调度的跨行星运输船航线。",
-    unlocks: ["星际物流站", "物流运输船", "跨行星运输调度"],
+    prerequisites: ["energy_matrix", "high_speed_logistics"],
+    summary: "建立恒星系内导航与运输协议，开放母恒星系后两颗行星并解锁跨行星物流设施。",
+    unlocks: ["烬原 II 与苍穹 III", "星际物流站", "物流运输船", "跨行星跳转与运输调度"],
   },
   nanomaterials: {
     id: "nanomaterials", name: "纳米材料", tier: 10,
@@ -846,6 +971,18 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     prerequisites: ["interstellar_logistics", "nanomaterials"],
     summary: "将粒子宽带与处理器编码为高密度信息模型，建立第四阶段科研矩阵。",
     unlocks: ["粒子宽带", "信息矩阵生产", "紫色矩阵科研"],
+  },
+  construction_automation: {
+    id: "construction_automation", name: "巨构建筑制造", tier: 13,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 100 },
+      { itemId: "energy_matrix", amount: 100 },
+      { itemId: "structure_matrix", amount: 100 },
+      { itemId: "information_matrix", amount: 100 },
+    ],
+    prerequisites: ["information_matrix", "high_speed_assembling"],
+    summary: "建立巨构级建筑制造中心，按玩家设定的施工库存目标自动取料并持续补足。",
+    unlocks: ["建筑制造中心", "目标库存 100", "5 秒自动制造周期"],
   },
   proliferator_3: {
     id: "proliferator_3", name: "增产剂 Mk.III", tier: 12,
@@ -930,6 +1067,19 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     prerequisites: ["miniature_particle_collider", "quantum_chip"],
     summary: "将奇异物质、引力透镜与量子芯片组合为第五阶段科研矩阵。",
     unlocks: ["奇异物质", "引力透镜", "引力矩阵生产", "绿色矩阵科研"],
+  },
+  construction_capacity_1: {
+    id: "construction_capacity_1", name: "建筑仓储扩容 I", tier: 16,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 150 },
+      { itemId: "energy_matrix", amount: 150 },
+      { itemId: "structure_matrix", amount: 150 },
+      { itemId: "information_matrix", amount: 150 },
+      { itemId: "gravity_matrix", amount: 150 },
+    ],
+    prerequisites: ["construction_automation", "gravity_matrix"],
+    summary: "以引力矩阵压缩施工仓储与调度队列，提高自动补货上限和制造速度。",
+    unlocks: ["目标库存上限 500", "自动制造周期 2.5 秒"],
   },
   space_warp: {
     id: "space_warp", name: "空间翘曲", tier: 15,
@@ -1060,6 +1210,20 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     prerequisites: ["antimatter"],
     summary: "把五色矩阵的研究数据与反物质统一编码，形成最终阶段的白色科研矩阵。",
     unlocks: ["宇宙矩阵生产", "六色矩阵科研"],
+  },
+  construction_capacity_2: {
+    id: "construction_capacity_2", name: "建筑仓储扩容 II", tier: 20,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 300 },
+      { itemId: "energy_matrix", amount: 300 },
+      { itemId: "structure_matrix", amount: 300 },
+      { itemId: "information_matrix", amount: 300 },
+      { itemId: "gravity_matrix", amount: 300 },
+      { itemId: "universe_matrix", amount: 300 },
+    ],
+    prerequisites: ["construction_capacity_1", "universe_matrix"],
+    summary: "使用宇宙矩阵统一建筑制造协议，将库存与制造吞吐提升到终局规模。",
+    unlocks: ["目标库存上限 2000", "自动制造周期 1 秒"],
   },
   research_speed_3: {
     id: "research_speed_3", name: "科研速度 III", tier: 20,

@@ -11,9 +11,9 @@ import { BUILDINGS, ITEMS, PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, get
 import { normalizeCampaignState, syncCampaignProgress } from "./campaign";
 import { isDifficultyMode } from "./difficulty";
 import { isAchievementId } from "./progression";
-import { createVeinReserve, isInfiniteResource, normalizeGalaxyState } from "./galaxy";
+import { DEFAULT_GALAXY_SEED, createVeinReserve, getPlanetOrbitalYields, getStarLuminosity, isInfiniteResource, normalizeGalaxyState } from "./galaxy";
 import { createEndgameState, getOfflineSimulationLimitSeconds } from "./endgame";
-import type { BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CargoStackSize, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
+import type { BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CargoStackSize, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -238,6 +238,10 @@ function validPriority(value: unknown): value is LogisticsPriority {
   return value === 0 || value === 1 || value === 2;
 }
 
+function validRoutePolicy(value: unknown): value is InterstellarRoutePolicy {
+  return value === "direct" || value === "relay-preferred" || value === "relay-required";
+}
+
 function validCargoStackSize(value: unknown): value is CargoStackSize {
   return value === 1 || value === 2 || value === 4;
 }
@@ -271,6 +275,8 @@ function normalizeStationSlots(entity: FactoryEntity): StationSlot[] | undefined
       minStock: nonNegativeInteger(slot?.minStock),
       maxStock: nonNegativeInteger(slot?.maxStock),
       priority: validPriority(slot?.priority) ? slot.priority : 1,
+      routePolicy: validRoutePolicy(slot?.routePolicy) ? slot.routePolicy : "relay-preferred",
+      warperBudget: Math.max(1, Math.min(4, nonNegativeInteger(slot?.warperBudget) || 2)),
     }))
     : [];
   if (slots.length === 0 && entity.storedItemId && ITEMS[entity.storedItemId]) {
@@ -283,10 +289,12 @@ function normalizeStationSlots(entity: FactoryEntity): StationSlot[] | undefined
       minStock: 0,
       maxStock: 0,
       priority: 1,
+      routePolicy: "relay-preferred",
+      warperBudget: 2,
     });
   }
   while (slots.length < STATION_SLOT_COUNT) {
-    slots.push({ localMode: "storage", remoteMode: "storage", minimumLoad: 1, minStock: 0, maxStock: 0, priority: 1 });
+    slots.push({ localMode: "storage", remoteMode: "storage", minimumLoad: 1, minStock: 0, maxStock: 0, priority: 1, routePolicy: "relay-preferred", warperBudget: 2 });
   }
   const seen = new Set<ItemId>();
   return slots.map((slot) => {
@@ -313,6 +321,11 @@ function normalizeStationRoutes(entity: FactoryEntity): StationRoute[] | undefin
       progress: Math.min(1, nonNegativeNumber(route.progress)),
       duration: Math.max(1, nonNegativeNumber(route.duration)),
       requiresWarp: Boolean(route.requiresWarp),
+      waypointStationIds: Array.isArray(route.waypointStationIds)
+        ? route.waypointStationIds.filter((id): id is string => typeof id === "string" && id.length > 0).slice(0, 3)
+        : [],
+      distanceLy: nonNegativeNumber(route.distanceLy),
+      warpersPerVessel: Math.max(route.requiresWarp ? 1 : 0, nonNegativeInteger(route.warpersPerVessel)),
     } satisfies StationRoute];
   });
 }
@@ -427,7 +440,7 @@ function validSimulationSpeed(value: unknown): value is GameState["settings"]["s
 }
 
 function validFontScale(value: unknown): value is GameState["settings"]["fontScale"] {
-  return value === 0.8 || value === 1 || value === 1.25 || value === 1.5;
+  return value === 0.8 || value === 1 || value === 1.25 || value === 1.5 || value === 2;
 }
 
 function validAutosaveInterval(value: unknown): value is GameState["settings"]["autosaveIntervalSeconds"] {
@@ -444,8 +457,11 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24].includes(saved.version) || !Array.isArray(saved.entities)) return null;
-  const initial = createInitialState();
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  const savedSeed = saved.version >= 20 && typeof saved.galaxy?.seed === "number" && Number.isFinite(saved.galaxy.seed)
+    ? saved.galaxy.seed
+    : DEFAULT_GALAXY_SEED;
+  const initial = createInitialState(savedSeed, saved.version < 20);
   const galaxy = normalizeGalaxyState(saved.version >= 20 ? saved.galaxy : { seed: initial.galaxy.seed }, saved.version < 20);
   const entities = saved.entities.map((entity: FactoryEntity) => {
     const currentResource = saved.version < 13
@@ -463,6 +479,7 @@ export function migrateGame(value: unknown): GameState | null {
     const orbitalCollector = entity.buildingId === "orbital_collector";
     const accumulator = entity.buildingId === "accumulator";
     const energyExchanger = entity.buildingId === "energy_exchanger";
+    const materialDeliveryHub = entity.buildingId === "material_delivery_hub";
     const storedEnergyCapacity = accumulator || energyExchanger
       ? (getBuilding(entity.buildingId!).energyCapacityMj ?? 0) * Math.max(0, Math.floor(entity.machineCount ?? 0))
       : 0;
@@ -490,10 +507,10 @@ export function migrateGame(value: unknown): GameState | null {
       powerGridId: validPowerGridId(entity.powerGridId) ? entity.powerGridId : "grid-a",
       powerPriority: validPowerPriority(entity.powerPriority) ? entity.powerPriority : 2,
       generationPriority: validPowerPriority(entity.generationPriority) ? entity.generationPriority : undefined,
-      resourceCapacity: resourceId && !isInfiniteResource(resourceId, planetId, saved.version >= 20 && saved.settings?.resourceMode === "finite" ? "finite" : "infinite")
+      resourceCapacity: resourceId && !isInfiniteResource(resourceId, planetId, saved.version >= 20 && saved.settings?.resourceMode === "finite" ? "finite" : "infinite", galaxy)
         ? Math.max(1, nonNegativeInteger(entity.resourceCapacity) || generatedReserve || 1)
         : undefined,
-      resourceRemaining: resourceId && !isInfiniteResource(resourceId, planetId, saved.version >= 20 && saved.settings?.resourceMode === "finite" ? "finite" : "infinite")
+      resourceRemaining: resourceId && !isInfiniteResource(resourceId, planetId, saved.version >= 20 && saved.settings?.resourceMode === "finite" ? "finite" : "infinite", galaxy)
         ? Math.min(Math.max(1, nonNegativeInteger(entity.resourceCapacity) || generatedReserve || 1), nonNegativeInteger(entity.resourceRemaining) || generatedReserve || 1)
         : undefined,
       recipeId: energyExchanger
@@ -502,8 +519,11 @@ export function migrateGame(value: unknown): GameState | null {
       routingCursor: Math.max(0, Math.floor(entity.routingCursor ?? 0)),
       distributionMode: entity.kind === "splitter" ? entity.distributionMode ?? "balanced" : entity.distributionMode,
       storedItemId: orbitalCollector
-        ? entity.storedItemId && (getPlanet(planetId).orbitalYields?.[entity.storedItemId] ?? 0) > 0 ? entity.storedItemId : "hydrogen"
+        ? entity.storedItemId && (getPlanetOrbitalYields({ galaxy }, planetId)[entity.storedItemId] ?? 0) > 0 ? entity.storedItemId : "hydrogen"
         : entity.storedItemId,
+      deliveryItemIds: materialDeliveryHub
+        ? [...new Set((Array.isArray(entity.deliveryItemIds) ? entity.deliveryItemIds : []).filter((itemId): itemId is ItemId => typeof itemId === "string" && itemId in ITEMS))].slice(0, 3)
+        : undefined,
       stationMode: entity.kind === "station" ? orbitalCollector ? "supply" : entity.stationMode ?? "supply" : entity.stationMode,
       stationProgress: entity.kind === "station" ? Math.max(0, entity.stationProgress ?? 0) : entity.stationProgress,
       stationTrips: entity.kind === "station" ? Math.max(0, Math.floor(entity.stationTrips ?? 0)) : entity.stationTrips,
@@ -514,6 +534,8 @@ export function migrateGame(value: unknown): GameState | null {
         : undefined,
       stationWarpers: interstellarStation ? nonNegativeInteger(entity.stationWarpers) : undefined,
       stationWarpEnabled: interstellarStation ? entity.stationWarpEnabled !== false : undefined,
+      stationHubEnabled: interstellarStation ? Boolean(entity.stationHubEnabled) : undefined,
+      stationHubPriority: interstellarStation && validPriority(entity.stationHubPriority) ? entity.stationHubPriority : interstellarStation ? 1 : undefined,
       stationMinimumLoad: entity.kind === "station"
         ? validStationMinimumLoad(entity.stationMinimumLoad) ? entity.stationMinimumLoad : 1
         : entity.stationMinimumLoad,
@@ -587,6 +609,21 @@ export function migrateGame(value: unknown): GameState | null {
   const completedTechIds = Array.isArray(saved.research?.completedTechIds)
     ? [...new Set((saved.research.completedTechIds as TechId[]).filter((techId) => Boolean(getTechnology(techId))))]
     : [];
+  const constructionAutomationLimit = completedTechIds.includes("construction_capacity_2")
+    ? 2000
+    : completedTechIds.includes("construction_capacity_1") ? 500 : 100;
+  const constructionAutomation: GameState["constructionAutomation"] = {
+    enabled: saved.version >= 26 ? saved.constructionAutomation?.enabled !== false : true,
+    targetStock: Object.fromEntries(Object.entries(saved.version >= 26 ? saved.constructionAutomation?.targetStock ?? {} : {}).flatMap(([constructionId, amount]) =>
+      constructionId in initial.construction
+        ? [[constructionId, Math.min(constructionAutomationLimit, nonNegativeInteger(amount))]]
+        : [])) as GameState["constructionAutomation"]["targetStock"],
+    cursor: saved.version >= 26 ? nonNegativeInteger(saved.constructionAutomation?.cursor) % Math.max(1, Object.keys(initial.construction).length) : 0,
+    totalCrafted: saved.version >= 26 ? nonNegativeInteger(saved.constructionAutomation?.totalCrafted) : 0,
+    lastCraftedId: saved.version >= 26 && typeof saved.constructionAutomation?.lastCraftedId === "string" && saved.constructionAutomation.lastCraftedId in initial.construction
+      ? saved.constructionAutomation.lastCraftedId as ConstructionId
+      : null,
+  };
   let selectedTechId = getTechnology(saved.research?.selectedTechId) && !completedTechIds.includes(saved.research.selectedTechId)
     ? saved.research.selectedTechId as TechId
     : null;
@@ -641,6 +678,11 @@ export function migrateGame(value: unknown): GameState | null {
     : PLANET_LIST.filter((planet) => unlockedSystemIds.includes(planet.systemId)).map((planet) => planet.id);
   const colonizedPlanetIds = [...new Set<PlanetId>(["home", ...persistedColonies])]
     .filter((planetId) => unlockedSystemIds.includes(getPlanet(planetId).systemId));
+  if (completedTechIds.includes("interstellar_logistics")) {
+    for (const planetId of ["ashen", "giant"] as PlanetId[]) {
+      if (!colonizedPlanetIds.includes(planetId)) colonizedPlanetIds.push(planetId);
+    }
+  }
   const surveyProgressBySystem = Object.fromEntries((Object.keys(STAR_SYSTEMS) as StarSystemId[]).map((systemId) => [
     systemId,
     Math.min(1, nonNegativeNumber(saved.exploration?.surveyProgressBySystem?.[systemId]) || (unlockedSystemIds.includes(systemId) ? 1 : 0)),
@@ -674,12 +716,17 @@ export function migrateGame(value: unknown): GameState | null {
           machineCount: Math.max(1, nonNegativeInteger(entity.machineCount)),
           recipeId,
           storedItemId,
+          deliveryItemIds: entity.buildingId === "material_delivery_hub"
+            ? [...new Set((Array.isArray(entity.deliveryItemIds) ? entity.deliveryItemIds : []).filter((itemId): itemId is ItemId => typeof itemId === "string" && itemId in ITEMS))].slice(0, 3)
+            : undefined,
           distributionMode: entity.distributionMode === "priority" ? "priority" as const : entity.distributionMode === "balanced" ? "balanced" as const : undefined,
           fuelItemId,
           energyMode: validEnergyMode(entity.energyMode) ? entity.energyMode : undefined,
           stationMode: entity.stationMode === "demand" ? "demand" as const : entity.stationMode === "supply" ? "supply" as const : undefined,
           stationMinimumLoad: validStationMinimumLoad(entity.stationMinimumLoad) ? entity.stationMinimumLoad : undefined,
           stationWarpEnabled: typeof entity.stationWarpEnabled === "boolean" ? entity.stationWarpEnabled : undefined,
+          stationHubEnabled: Boolean(entity.stationHubEnabled),
+          stationHubPriority: validPriority(entity.stationHubPriority) ? entity.stationHubPriority : 1,
           stationSlots: getBuilding(entity.buildingId as BuildingId).kind === "station" && entity.buildingId !== "orbital_collector"
             ? normalizeStationSlots({
               kind: "station",
@@ -906,19 +953,29 @@ export function migrateGame(value: unknown): GameState | null {
       layers,
     } satisfies DysonSpherePlanState];
   })) as GameState["dysonPlans"];
-  const plannedStructurePoints = Object.values(dysonPlans).reduce((sum, plan) => sum + plan.structurePoints, 0);
-  const plannedShellSails = Object.values(dysonPlans).reduce((sum, plan) => sum + plan.shellSails, 0);
+  let plannedStructurePoints = Object.values(dysonPlans).reduce((sum, plan) => sum + plan.structurePoints, 0);
+  let plannedShellSails = Object.values(dysonPlans).reduce((sum, plan) => sum + plan.shellSails, 0);
+  if (structurePoints > plannedStructurePoints) {
+    dysonPlans.helios.structurePoints += structurePoints - plannedStructurePoints;
+    plannedStructurePoints = structurePoints;
+  }
+  if (shellSails > plannedShellSails) {
+    dysonPlans.helios.shellSails += shellSails - plannedShellSails;
+    plannedShellSails = shellSails;
+  }
   dysonSphere.structurePoints = Math.max(dysonSphere.structurePoints, plannedStructurePoints);
   dysonSphere.shellSails = Math.max(dysonSphere.shellSails, plannedShellSails);
   dysonSphere.totalRocketsLaunched = Math.max(dysonSphere.totalRocketsLaunched, dysonSphere.structurePoints);
   dysonSphere.totalSailsAbsorbed = Math.max(dysonSphere.totalSailsAbsorbed, dysonSphere.shellSails);
-  dysonSphere.generationKw = dysonSphere.structurePoints * DYSON_STRUCTURE_POWER_KW + dysonSphere.shellSails * DYSON_SHELL_SAIL_POWER_KW;
+  dysonSphere.generationKw = Math.floor(Object.values(dysonPlans).reduce((sum, plan) => sum +
+    (plan.structurePoints * DYSON_STRUCTURE_POWER_KW + plan.shellSails * DYSON_SHELL_SAIL_POWER_KW) *
+    getStarLuminosity({ galaxy }, plan.systemId), 0));
   const sailsInOrbit = saved.version >= 6 ? nonNegativeInteger(saved.dysonSwarm?.sailsInOrbit) : 0;
   const totalExpired = saved.version >= 6 ? nonNegativeInteger(saved.dysonSwarm?.totalExpired) : 0;
   const totalLaunched = saved.version >= 6
     ? Math.max(sailsInOrbit + totalExpired + dysonSphere.totalSailsAbsorbed, nonNegativeInteger(saved.dysonSwarm?.totalLaunched))
     : 0;
-  const swarmGenerationKw = sailsInOrbit * SOLAR_SAIL_POWER_KW;
+  const swarmGenerationKw = sailsInOrbit * SOLAR_SAIL_POWER_KW * getStarLuminosity({ galaxy }, "helios");
   const dysonSwarm: GameState["dysonSwarm"] = {
     sailsInOrbit,
     totalLaunched,
@@ -956,7 +1013,7 @@ export function migrateGame(value: unknown): GameState | null {
         totalLaunched: nonNegativeInteger(orbit.totalLaunched),
         totalExpired: nonNegativeInteger(orbit.totalExpired),
         decayProgress: nonNegativeNumber(orbit.decayProgress) % 1,
-        generationKw: nonNegativeNumber(orbit.sailsInOrbit) * SOLAR_SAIL_POWER_KW,
+        generationKw: nonNegativeNumber(orbit.sailsInOrbit) * SOLAR_SAIL_POWER_KW * getStarLuminosity({ galaxy }, systemId),
       } satisfies DysonSwarmOrbitState];
     }) : [];
     const orbits = parsedOrbits.length > 0 ? parsedOrbits.slice(0, 8) : [defaultDysonOrbit(systemId)];
@@ -977,15 +1034,19 @@ export function migrateGame(value: unknown): GameState | null {
     legacyOrbit.decayProgress = dysonSwarm.decayProgress;
     legacyOrbit.generationKw = swarmGenerationKw;
   }
+  const migratedOrbits = Object.values(dysonEngineering.orbitsBySystem).flat();
+  dysonSwarm.sailsInOrbit = migratedOrbits.reduce((sum, orbit) => sum + orbit.sailsInOrbit, 0);
+  dysonSwarm.totalLaunched = migratedOrbits.reduce((sum, orbit) => sum + orbit.totalLaunched, 0);
+  dysonSwarm.totalExpired = migratedOrbits.reduce((sum, orbit) => sum + orbit.totalExpired, 0);
+  dysonSwarm.generationKw = Math.floor(migratedOrbits.reduce((sum, orbit) => sum + orbit.generationKw, 0));
+  dysonSwarm.receiverLoadKw = Math.min(dysonSwarm.generationKw + dysonSphere.generationKw, dysonSwarm.receiverLoadKw);
   const settings: GameState["settings"] = {
     simulationSpeed: validSimulationSpeed(saved.settings?.simulationSpeed)
       ? saved.settings.simulationSpeed
       : initial.settings.simulationSpeed,
-    fontScale: saved.settings?.fontScale === 2
-      ? 1.5
-      : validFontScale(saved.settings?.fontScale)
-        ? saved.settings.fontScale
-        : initial.settings.fontScale,
+    fontScale: validFontScale(saved.settings?.fontScale)
+      ? saved.settings.fontScale
+      : initial.settings.fontScale,
     performanceMode: typeof saved.settings?.performanceMode === "boolean"
       ? saved.settings.performanceMode
       : initial.settings.performanceMode,
@@ -1050,7 +1111,7 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 24,
+    version: 26,
     activePlanetId,
     entities,
     belts,
@@ -1058,6 +1119,7 @@ export function migrateGame(value: unknown): GameState | null {
     tray: { ...planetTrays[activePlanetId] },
     planetTrays,
     construction,
+    constructionAutomation,
     portableFleet,
     totalProduced: integerRecord(saved.totalProduced),
     research: {

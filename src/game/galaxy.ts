@@ -1,15 +1,23 @@
-import { PLANETS } from "./content";
+import { ITEMS, PLANET_LIST, PLANETS, STAR_SYSTEM_LIST, STAR_SYSTEMS } from "./content";
+import { PLANET_TEMPLATE_POOLS, PLANET_TEMPLATES, STAR_CLASS_TEMPLATES, SYSTEM_POSITIONS } from "./galaxyCatalog";
 import type {
   GalaxyState,
+  ItemAmount,
   ItemId,
   PlanetId,
   PlanetIndustrialProfile,
   PlanetIndustryRole,
+  PlanetOceanType,
   PlanetSpecialization,
+  PlanetTemplateId,
   ResourceMode,
+  StarClassId,
+  StarSystemId,
+  StarSystemProfile,
 } from "./types";
 
 export const DEFAULT_GALAXY_SEED = 240721;
+export const TIDAL_LOCKED_SOLAR_BONUS = 1.25;
 
 export const PLANET_INDUSTRY_ROLES: PlanetIndustryRole[] = [
   "auto",
@@ -33,109 +41,30 @@ export const PLANET_INDUSTRY_ROLE_LABELS: Record<PlanetIndustryRole, string> = {
   power: "能源基地",
 };
 
-interface PlanetProfileBaseline {
-  climateName: string;
-  windMultiplier: number;
-  geothermalMultiplier: number;
-  miningMultiplier: number;
-  orbitalYieldMultiplier: number;
-  reserveScale: number;
-  travelTimeMultiplier: number;
-  tidalLocked?: boolean;
-  sulfuricOcean?: boolean;
-  specialization: PlanetSpecialization;
-  specializationName: string;
-  productionSpeedMultiplier: number;
-  colonyCost: PlanetIndustrialProfile["colonyCost"];
-  surveyDurationSeconds: number;
-}
+const LEGACY_COLONY_COSTS: Partial<Record<PlanetId, ItemAmount[]>> = {
+  home: [],
+  ashen: [],
+  giant: [],
+  frost: [{ itemId: "titanium_ingot", amount: 2 }],
+  boreal_giant: [{ itemId: "titanium_alloy", amount: 10 }, { itemId: "logistics_drone", amount: 5 }],
+  magnetar: [{ itemId: "space_warper", amount: 4 }, { itemId: "processor", amount: 20 }],
+};
 
-const BASELINES: Record<PlanetId, PlanetProfileBaseline> = {
-  home: {
-    climateName: "温带海洋群岛",
-    windMultiplier: 1,
-    geothermalMultiplier: 0,
-    miningMultiplier: 1,
-    orbitalYieldMultiplier: 1,
-    reserveScale: 1,
-    travelTimeMultiplier: 1,
-    specialization: "balanced",
-    specializationName: "综合工业 · 无偏置",
-    productionSpeedMultiplier: 1,
-    colonyCost: [],
-    surveyDurationSeconds: 0,
-  },
-  ashen: {
-    climateName: "高热熔岩裂谷",
-    windMultiplier: 1,
-    geothermalMultiplier: 1,
-    miningMultiplier: 1.08,
-    orbitalYieldMultiplier: 1,
-    reserveScale: 1.15,
-    travelTimeMultiplier: 1.05,
-    sulfuricOcean: true,
-    specialization: "smelting",
-    specializationName: "高热冶金 · 熔炉 +12%",
-    productionSpeedMultiplier: 1.12,
-    colonyCost: [],
-    surveyDurationSeconds: 0,
-  },
+const LEGACY_PROFILE_OVERRIDES: Partial<Record<PlanetId, {
+  orbitalYields?: Partial<Record<ItemId, number>>;
+  orbitalYieldMultiplier?: number;
+  specializationName?: string;
+  productionSpeedMultiplier?: number;
+  surveyDurationSeconds?: number;
+}>> = {
+  home: { surveyDurationSeconds: 0 },
+  ashen: { surveyDurationSeconds: 0 },
   giant: {
-    climateName: "冰态氢氦巨行星",
-    windMultiplier: 0,
-    geothermalMultiplier: 0,
-    miningMultiplier: 1,
+    orbitalYields: { hydrogen: 1, deuterium: 0.2, fire_ice: 0.5 },
     orbitalYieldMultiplier: 1,
-    reserveScale: 1,
-    travelTimeMultiplier: 1.12,
-    specialization: "logistics",
     specializationName: "轨道窗口 · 采集器 +15%",
     productionSpeedMultiplier: 1.15,
-    colonyCost: [],
     surveyDurationSeconds: 0,
-  },
-  frost: {
-    climateName: "永冻冰川荒漠",
-    windMultiplier: 1.32,
-    geothermalMultiplier: 0.08,
-    miningMultiplier: 0.92,
-    orbitalYieldMultiplier: 1,
-    reserveScale: 1.28,
-    travelTimeMultiplier: 1.18,
-    specialization: "chemical",
-    specializationName: "低温化工 · 化工设备 +12%",
-    productionSpeedMultiplier: 1.12,
-    colonyCost: [{ itemId: "titanium_ingot", amount: 2 }],
-    surveyDurationSeconds: 24,
-  },
-  boreal_giant: {
-    climateName: "可燃冰富集冰巨星",
-    windMultiplier: 0,
-    geothermalMultiplier: 0,
-    miningMultiplier: 1,
-    orbitalYieldMultiplier: 1.25,
-    reserveScale: 1,
-    travelTimeMultiplier: 1.24,
-    specialization: "logistics",
-    specializationName: "冰晶环流 · 轨道采集 +25%",
-    productionSpeedMultiplier: 1.25,
-    colonyCost: [{ itemId: "titanium_alloy", amount: 10 }, { itemId: "logistics_drone", amount: 5 }],
-    surveyDurationSeconds: 24,
-  },
-  magnetar: {
-    climateName: "潮汐锁定磁暴荒原",
-    windMultiplier: 0.28,
-    geothermalMultiplier: 0.18,
-    miningMultiplier: 1.35,
-    orbitalYieldMultiplier: 1,
-    reserveScale: 0.62,
-    travelTimeMultiplier: 1.48,
-    tidalLocked: true,
-    specialization: "particle",
-    specializationName: "强磁约束 · 粒子设备 +18%",
-    productionSpeedMultiplier: 1.18,
-    colonyCost: [{ itemId: "space_warper", amount: 4 }, { itemId: "processor", amount: 20 }],
-    surveyDurationSeconds: 42,
   },
 };
 
@@ -164,38 +93,108 @@ function rounded(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-export function createGalaxyState(seed = DEFAULT_GALAXY_SEED, preserveBaseline = false): GalaxyState {
-  const normalizedSeed = Math.max(1, Math.abs(Math.floor(seed)) || DEFAULT_GALAXY_SEED);
-  const profiles = Object.fromEntries((Object.keys(BASELINES) as PlanetId[]).map((planetId) => {
-    const baseline = BASELINES[planetId];
-    const variation = preserveBaseline ? 1 : jitter(normalizedSeed, `${planetId}:climate`, 0.12);
-    const resourceVariation = preserveBaseline ? 1 : jitter(normalizedSeed, `${planetId}:resources`, 0.2);
-    const planet = PLANETS[planetId];
-    const profile: PlanetIndustrialProfile = {
-      planetId,
-      climateName: baseline.climateName,
-      windMultiplier: rounded(baseline.windMultiplier * variation),
-      solarMultiplier: rounded(planet.solarMultiplier * (preserveBaseline ? 1 : jitter(normalizedSeed, `${planetId}:solar`, 0.1))),
-      geothermalMultiplier: rounded(baseline.geothermalMultiplier * variation),
-      miningMultiplier: rounded(baseline.miningMultiplier * resourceVariation),
-      orbitalYieldMultiplier: rounded(baseline.orbitalYieldMultiplier * resourceVariation),
-      reserveScale: rounded(baseline.reserveScale * resourceVariation),
-      travelTimeMultiplier: rounded(baseline.travelTimeMultiplier * (preserveBaseline ? 1 : jitter(normalizedSeed, `${planetId}:travel`, 0.08))),
-      tidalLocked: Boolean(baseline.tidalLocked),
-      sulfuricOcean: Boolean(baseline.sulfuricOcean),
-      specialization: baseline.specialization,
-      specializationName: baseline.specializationName,
-      productionSpeedMultiplier: baseline.productionSpeedMultiplier,
-      colonyCost: baseline.colonyCost.map((cost) => ({ ...cost })),
-      surveyDurationSeconds: baseline.surveyDurationSeconds,
+function normalizedSeed(seed: number): number {
+  return Math.max(1, Math.abs(Math.floor(seed)) || DEFAULT_GALAXY_SEED);
+}
+
+export function createPlayerGalaxySeed(): number {
+  try {
+    const values = new Uint32Array(1);
+    globalThis.crypto?.getRandomValues(values);
+    if (values[0] > 0) return values[0];
+  } catch {
+    // The persisted seed is chosen once; simulation never reads wall-clock randomness.
+  }
+  return normalizedSeed(Date.now() ^ Math.floor(performance.now() * 1_000));
+}
+
+function chooseTemplate(seed: number, planetId: PlanetId, preserveBaseline: boolean): PlanetTemplateId {
+  const planet = PLANETS[planetId];
+  const pool = PLANET_TEMPLATE_POOLS[planetId];
+  if (preserveBaseline || pool.length < 2) return planet.defaultTemplateId;
+  return pool[Math.floor(seededUnit(seed, `${planetId}:template`) * pool.length) % pool.length];
+}
+
+function chooseRareResources(seed: number, planetId: PlanetId, templateId: PlanetTemplateId): ItemId[] {
+  const template = PLANET_TEMPLATES[templateId];
+  return [...template.rareResourcePool]
+    .sort((left, right) => seededUnit(seed, `${planetId}:rare:${left}`) - seededUnit(seed, `${planetId}:rare:${right}`))
+    .slice(0, template.rareResourceCount);
+}
+
+function profileColonyCost(seed: number, planetId: PlanetId, templateId: PlanetTemplateId, preserveBaseline: boolean): ItemAmount[] {
+  const legacy = LEGACY_COLONY_COSTS[planetId];
+  const source = legacy ?? PLANET_TEMPLATES[templateId].colonyCost;
+  return source.map((cost) => ({
+    ...cost,
+    amount: legacy || preserveBaseline ? cost.amount : Math.max(1, Math.round(cost.amount * jitter(seed, `${planetId}:colony:${cost.itemId}`, 0.12))),
+  }));
+}
+
+function createStarSystemProfiles(seed: number, preserveBaseline: boolean): GalaxyState["systemProfiles"] {
+  return Object.fromEntries(STAR_SYSTEM_LIST.map((system) => {
+    const star = STAR_CLASS_TEMPLATES[system.defaultStarClassId];
+    const basePosition = SYSTEM_POSITIONS[system.id];
+    const positionX = system.id === "helios" ? 0 : rounded(basePosition.x + (preserveBaseline ? 0 : (seededUnit(seed, `${system.id}:x`) * 2 - 1) * 0.7));
+    const positionY = system.id === "helios" ? 0 : rounded(basePosition.y + (preserveBaseline ? 0 : (seededUnit(seed, `${system.id}:y`) * 2 - 1) * 0.7));
+    const profile: StarSystemProfile = {
+      systemId: system.id,
+      starClassId: star.id,
+      starTypeName: star.name,
+      luminosity: rounded(star.luminosity * (preserveBaseline ? 1 : jitter(seed, `${system.id}:luminosity`, 0.06))),
+      massMultiplier: rounded(star.massMultiplier * (preserveBaseline ? 1 : jitter(seed, `${system.id}:mass`, 0.04))),
+      radiusMultiplier: rounded(star.radiusMultiplier * (preserveBaseline ? 1 : jitter(seed, `${system.id}:radius`, 0.04))),
+      positionX,
+      positionY,
+      distanceFromOriginLy: rounded(Math.hypot(positionX, positionY)),
     };
-    return [planetId, profile];
+    return [system.id, profile];
+  })) as GalaxyState["systemProfiles"];
+}
+
+export function createGalaxyState(seed = DEFAULT_GALAXY_SEED, preserveBaseline = false): GalaxyState {
+  const normalized = normalizedSeed(seed);
+  const systemProfiles = createStarSystemProfiles(normalized, preserveBaseline);
+  const profiles = Object.fromEntries(PLANET_LIST.map((planet) => {
+    const templateId = chooseTemplate(normalized, planet.id, preserveBaseline);
+    const template = PLANET_TEMPLATES[templateId];
+    const variation = preserveBaseline ? 1 : jitter(normalized, `${planet.id}:climate`, 0.12);
+    const resourceVariation = preserveBaseline ? 1 : jitter(normalized, `${planet.id}:resources`, 0.2);
+    const rareResourceIds = chooseRareResources(normalized, planet.id, templateId);
+    const legacyOverride = LEGACY_PROFILE_OVERRIDES[planet.id];
+    const orbitalYields = Object.fromEntries(Object.entries(legacyOverride?.orbitalYields ?? template.orbitalYields).map(([itemId, rate]) => [
+      itemId,
+      rounded((rate ?? 0) * (preserveBaseline ? 1 : jitter(normalized, `${planet.id}:orbit:${itemId}`, 0.14))),
+    ])) as Partial<Record<ItemId, number>>;
+    const profile: PlanetIndustrialProfile = {
+      planetId: planet.id,
+      templateId,
+      climateName: template.name,
+      resourceIds: [...template.resourceIds, ...rareResourceIds],
+      rareResourceIds,
+      oceanType: template.oceanType,
+      orbitalYields,
+      windMultiplier: rounded(template.windMultiplier * variation),
+      solarMultiplier: rounded(template.solarMultiplier * (preserveBaseline ? 1 : jitter(normalized, `${planet.id}:solar`, 0.1))),
+      geothermalMultiplier: rounded(template.geothermalMultiplier * variation),
+      miningMultiplier: rounded(template.miningMultiplier * resourceVariation),
+      orbitalYieldMultiplier: rounded((legacyOverride?.orbitalYieldMultiplier ?? template.orbitalYieldMultiplier) * resourceVariation),
+      reserveScale: rounded(template.reserveScale * resourceVariation),
+      travelTimeMultiplier: rounded(template.travelTimeMultiplier * (preserveBaseline ? 1 : jitter(normalized, `${planet.id}:travel`, 0.08))),
+      tidalLocked: Boolean(template.tidalLocked),
+      sulfuricOcean: template.oceanType === "sulfuric-acid",
+      specialization: template.specialization,
+      specializationName: legacyOverride?.specializationName ?? template.specializationName,
+      productionSpeedMultiplier: legacyOverride?.productionSpeedMultiplier ?? template.productionSpeedMultiplier,
+      colonyCost: profileColonyCost(normalized, planet.id, templateId, preserveBaseline),
+      surveyDurationSeconds: preserveBaseline
+        ? legacyOverride?.surveyDurationSeconds ?? template.surveyDurationSeconds
+        : Math.max(0, Math.round((legacyOverride?.surveyDurationSeconds ?? template.surveyDurationSeconds) * jitter(normalized, `${planet.id}:survey`, 0.1))),
+    };
+    return [planet.id, profile];
   })) as GalaxyState["profiles"];
-  const planetRoles = Object.fromEntries((Object.keys(BASELINES) as PlanetId[]).map((planetId) => [
-    planetId,
-    "auto" as PlanetIndustryRole,
-  ])) as Record<PlanetId, PlanetIndustryRole>;
-  return { seed: normalizedSeed, profiles, planetRoles };
+  const planetRoles = Object.fromEntries(PLANET_LIST.map((planet) => [planet.id, "auto" as PlanetIndustryRole])) as Record<PlanetId, PlanetIndustryRole>;
+  return { seed: normalized, profiles, systemProfiles, planetRoles };
 }
 
 function profileNumber(value: unknown, fallback: number, minimum: number, maximum: number): number {
@@ -209,24 +208,68 @@ function isPlanetSpecialization(value: unknown): value is PlanetSpecialization {
     value === "research" || value === "particle";
 }
 
+function isPlanetTemplateId(value: unknown): value is PlanetTemplateId {
+  return typeof value === "string" && value in PLANET_TEMPLATES;
+}
+
+function isStarClassId(value: unknown): value is StarClassId {
+  return typeof value === "string" && value in STAR_CLASS_TEMPLATES;
+}
+
+function isOceanType(value: unknown): value is PlanetOceanType {
+  return value === "water" || value === "sulfuric-acid" || value === "lava" || value === "ice" || value === "none";
+}
+
+function itemIds(value: unknown, fallback: ItemId[]): ItemId[] {
+  if (!Array.isArray(value)) return [...fallback];
+  const valid = [...new Set(value.filter((itemId): itemId is ItemId => typeof itemId === "string" && itemId in ITEMS))];
+  return valid.length > 0 ? valid : [...fallback];
+}
+
+function itemAmounts(value: unknown, fallback: ItemAmount[]): ItemAmount[] {
+  if (!Array.isArray(value)) return fallback.map((cost) => ({ ...cost }));
+  const valid = value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const cost = entry as Record<string, unknown>;
+    if (typeof cost.itemId !== "string" || !(cost.itemId in ITEMS)) return [];
+    const amount = profileNumber(cost.amount, 0, 0, 1_000_000);
+    return amount > 0 ? [{ itemId: cost.itemId as ItemId, amount: Math.floor(amount) }] : [];
+  });
+  return valid.length > 0 || value.length === 0 ? valid : fallback.map((cost) => ({ ...cost }));
+}
+
+function orbitalYields(value: unknown, fallback: Partial<Record<ItemId, number>>): Partial<Record<ItemId, number>> {
+  if (!value || typeof value !== "object") return { ...fallback };
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).flatMap(([itemId, rate]) =>
+    itemId in ITEMS ? [[itemId, profileNumber(rate, 0, 0, 10)]] : [])) as Partial<Record<ItemId, number>>;
+}
+
 export function normalizeGalaxyState(value: unknown, preserveBaseline = false): GalaxyState {
   const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const seed = typeof source.seed === "number" && Number.isFinite(source.seed) ? source.seed : DEFAULT_GALAXY_SEED;
   const normalized = createGalaxyState(seed, preserveBaseline);
-  const sourceProfiles = source.profiles && typeof source.profiles === "object"
-    ? source.profiles as Record<string, unknown>
-    : {};
+  const sourceProfiles = source.profiles && typeof source.profiles === "object" ? source.profiles as Record<string, unknown> : {};
 
   for (const planetId of Object.keys(normalized.profiles) as PlanetId[]) {
     const fallback = normalized.profiles[planetId];
     const raw = sourceProfiles[planetId];
     if (!raw || typeof raw !== "object") continue;
     const profile = raw as Record<string, unknown>;
+    const templateId = isPlanetTemplateId(profile.templateId) && PLANET_TEMPLATES[profile.templateId].kind === PLANETS[planetId].kind
+      ? profile.templateId
+      : fallback.templateId;
+    const template = PLANET_TEMPLATES[templateId];
+    const resources = itemIds(profile.resourceIds, fallback.resourceIds);
+    const rareResources = itemIds(profile.rareResourceIds, fallback.rareResourceIds).filter((itemId) => resources.includes(itemId));
+    const oceanType = isOceanType(profile.oceanType) ? profile.oceanType : typeof profile.sulfuricOcean === "boolean" && profile.sulfuricOcean ? "sulfuric-acid" : fallback.oceanType;
     normalized.profiles[planetId] = {
       ...fallback,
-      climateName: typeof profile.climateName === "string" && profile.climateName.trim()
-        ? profile.climateName.trim().slice(0, 40)
-        : fallback.climateName,
+      templateId,
+      climateName: typeof profile.climateName === "string" && profile.climateName.trim() ? profile.climateName.trim().slice(0, 40) : template.name,
+      resourceIds: resources,
+      rareResourceIds: rareResources,
+      oceanType,
+      orbitalYields: orbitalYields(profile.orbitalYields, fallback.orbitalYields),
       windMultiplier: profileNumber(profile.windMultiplier, fallback.windMultiplier, 0, 5),
       solarMultiplier: profileNumber(profile.solarMultiplier, fallback.solarMultiplier, 0, 5),
       geothermalMultiplier: profileNumber(profile.geothermalMultiplier, fallback.geothermalMultiplier, 0, 5),
@@ -235,19 +278,39 @@ export function normalizeGalaxyState(value: unknown, preserveBaseline = false): 
       reserveScale: profileNumber(profile.reserveScale, fallback.reserveScale, 0.05, 10),
       travelTimeMultiplier: profileNumber(profile.travelTimeMultiplier, fallback.travelTimeMultiplier, 0.1, 5),
       tidalLocked: typeof profile.tidalLocked === "boolean" ? profile.tidalLocked : fallback.tidalLocked,
-      sulfuricOcean: typeof profile.sulfuricOcean === "boolean" ? profile.sulfuricOcean : fallback.sulfuricOcean,
+      sulfuricOcean: oceanType === "sulfuric-acid",
       specialization: isPlanetSpecialization(profile.specialization) ? profile.specialization : fallback.specialization,
-      specializationName: typeof profile.specializationName === "string" && profile.specializationName.trim()
-        ? profile.specializationName.trim().slice(0, 48)
-        : fallback.specializationName,
+      specializationName: typeof profile.specializationName === "string" && profile.specializationName.trim() ? profile.specializationName.trim().slice(0, 48) : fallback.specializationName,
       productionSpeedMultiplier: profileNumber(profile.productionSpeedMultiplier, fallback.productionSpeedMultiplier, 0.1, 5),
+      colonyCost: itemAmounts(profile.colonyCost, fallback.colonyCost),
       surveyDurationSeconds: profileNumber(profile.surveyDurationSeconds, fallback.surveyDurationSeconds, 0, 86_400),
     };
   }
 
-  const sourceRoles = source.planetRoles && typeof source.planetRoles === "object"
-    ? source.planetRoles as Record<string, unknown>
-    : {};
+  const sourceSystems = source.systemProfiles && typeof source.systemProfiles === "object" ? source.systemProfiles as Record<string, unknown> : {};
+  for (const systemId of Object.keys(normalized.systemProfiles) as StarSystemId[]) {
+    const fallback = normalized.systemProfiles[systemId];
+    const raw = sourceSystems[systemId];
+    if (!raw || typeof raw !== "object") continue;
+    const profile = raw as Record<string, unknown>;
+    const starClassId = isStarClassId(profile.starClassId) ? profile.starClassId : fallback.starClassId;
+    const star = STAR_CLASS_TEMPLATES[starClassId];
+    const positionX = profileNumber(profile.positionX, fallback.positionX, -100, 100);
+    const positionY = profileNumber(profile.positionY, fallback.positionY, -100, 100);
+    normalized.systemProfiles[systemId] = {
+      systemId,
+      starClassId,
+      starTypeName: typeof profile.starTypeName === "string" && profile.starTypeName.trim() ? profile.starTypeName.trim().slice(0, 36) : star.name,
+      luminosity: profileNumber(profile.luminosity, fallback.luminosity, 0.01, 20),
+      massMultiplier: profileNumber(profile.massMultiplier, fallback.massMultiplier, 0.01, 20),
+      radiusMultiplier: profileNumber(profile.radiusMultiplier, fallback.radiusMultiplier, 0.01, 20),
+      positionX,
+      positionY,
+      distanceFromOriginLy: rounded(Math.hypot(positionX, positionY)),
+    };
+  }
+
+  const sourceRoles = source.planetRoles && typeof source.planetRoles === "object" ? source.planetRoles as Record<string, unknown> : {};
   for (const planetId of Object.keys(normalized.planetRoles) as PlanetId[]) {
     const role = sourceRoles[planetId];
     if (PLANET_INDUSTRY_ROLES.includes(role as PlanetIndustryRole)) normalized.planetRoles[planetId] = role as PlanetIndustryRole;
@@ -255,14 +318,43 @@ export function normalizeGalaxyState(value: unknown, preserveBaseline = false): 
   return normalized;
 }
 
-export function getPlanetIndustrialProfile(state: { galaxy?: GalaxyState }, planetId: PlanetId): PlanetIndustrialProfile {
-  return state.galaxy?.profiles?.[planetId] ?? createGalaxyState(DEFAULT_GALAXY_SEED, true).profiles[planetId];
+let baselineGalaxy: GalaxyState | undefined;
+
+function fallbackGalaxy(): GalaxyState {
+  baselineGalaxy ??= createGalaxyState(DEFAULT_GALAXY_SEED, true);
+  return baselineGalaxy;
 }
 
-export function getRecommendedPlanetRole(
-  state: { galaxy?: GalaxyState },
-  planetId: PlanetId,
-): Exclude<PlanetIndustryRole, "auto"> {
+export function getPlanetIndustrialProfile(state: { galaxy?: GalaxyState }, planetId: PlanetId): PlanetIndustrialProfile {
+  return state.galaxy?.profiles?.[planetId] ?? fallbackGalaxy().profiles[planetId];
+}
+
+export function getStarSystemProfile(state: { galaxy?: GalaxyState }, systemId: StarSystemId): StarSystemProfile {
+  return state.galaxy?.systemProfiles?.[systemId] ?? fallbackGalaxy().systemProfiles[systemId];
+}
+
+export function getStarLuminosity(state: { galaxy?: GalaxyState }, systemId: StarSystemId): number {
+  return getStarSystemProfile(state, systemId).luminosity;
+}
+
+export function getPlanetSolarPowerMultiplier(state: { galaxy?: GalaxyState }, planetId: PlanetId): number {
+  const profile = getPlanetIndustrialProfile(state, planetId);
+  const luminosity = getStarLuminosity(state, PLANETS[planetId].systemId);
+  return rounded(profile.solarMultiplier * luminosity * (profile.tidalLocked ? TIDAL_LOCKED_SOLAR_BONUS : 1));
+}
+
+export function getSystemDistanceLy(state: { galaxy?: GalaxyState }, sourceSystemId: StarSystemId, targetSystemId: StarSystemId): number {
+  if (sourceSystemId === targetSystemId) return 0;
+  const source = getStarSystemProfile(state, sourceSystemId);
+  const target = getStarSystemProfile(state, targetSystemId);
+  return rounded(Math.max(0.1, Math.hypot(source.positionX - target.positionX, source.positionY - target.positionY)));
+}
+
+export function getPlanetOrbitalYields(state: { galaxy?: GalaxyState }, planetId: PlanetId): Partial<Record<ItemId, number>> {
+  return getPlanetIndustrialProfile(state, planetId).orbitalYields;
+}
+
+export function getRecommendedPlanetRole(state: { galaxy?: GalaxyState }, planetId: PlanetId): Exclude<PlanetIndustryRole, "auto"> {
   const specialization = getPlanetIndustrialProfile(state, planetId).specialization;
   if (specialization === "smelting") return "smelting";
   if (specialization === "chemical") return "chemical";
@@ -272,9 +364,10 @@ export function getRecommendedPlanetRole(
   return "manufacturing";
 }
 
-export function isInfiniteResource(itemId: ItemId, planetId: PlanetId, mode: ResourceMode): boolean {
+export function isInfiniteResource(itemId: ItemId, planetId: PlanetId, mode: ResourceMode, galaxy?: GalaxyState): boolean {
   if (mode === "infinite") return true;
-  return itemId === "water" || (itemId === "sulfuric_acid" && BASELINES[planetId].sulfuricOcean === true);
+  const oceanType = getPlanetIndustrialProfile({ galaxy }, planetId).oceanType;
+  return (itemId === "water" && oceanType === "water") || (itemId === "sulfuric_acid" && oceanType === "sulfuric-acid");
 }
 
 export function createVeinReserve(galaxy: GalaxyState, planetId: PlanetId, itemId: ItemId, veinId: string): number {
@@ -298,4 +391,8 @@ export function specializationApplies(profile: PlanetIndustrialProfile, building
   if (profile.specialization === "research") return buildingId === "matrix_lab";
   if (profile.specialization === "particle") return buildingId === "miniature_particle_collider" || buildingId === "fractionator";
   return buildingId === "orbital_collector" || buildingId?.includes("logistics_station") === true;
+}
+
+export function getSystemStarTypeName(state: { galaxy?: GalaxyState }, systemId: StarSystemId): string {
+  return getStarSystemProfile(state, systemId).starTypeName || STAR_SYSTEMS[systemId].starType;
 }

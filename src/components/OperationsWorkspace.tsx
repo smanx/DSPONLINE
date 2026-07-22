@@ -50,6 +50,7 @@ import { fetchCloudPublicStatus, resumeCloudSession, sendCloudFeedback, type Clo
 import { resetOnboarding } from "../game/onboarding";
 import { applyPwaUpdate, getPwaRuntimeState, requestPwaInstall, subscribePwaRuntime, type PwaRuntimeState } from "../pwa";
 import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
+import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 
 export type OperationsTab = "alerts" | "achievements" | "settings" | "saves" | "packs" | "support";
 
@@ -201,7 +202,7 @@ function SettingsPanel({ game, report, desktopRelease, onChange, onRunBenchmark,
       <section className="settings-group">
         <header><Type size={14} /><span>字体大小</span><small>{Math.round(settings.fontScale * 100)}%</small></header>
         <div className="settings-segmented" aria-label="字体大小">
-          {([0.8, 1, 1.25, 1.5] as FontScale[]).map((scale) => (
+          {([0.8, 1, 1.25, 1.5, 2] as FontScale[]).map((scale) => (
             <button className={settings.fontScale === scale ? "active" : ""} type="button" key={scale} aria-pressed={settings.fontScale === scale} onClick={() => onChange({ fontScale: scale })}>{Math.round(scale * 100)}%</button>
           ))}
         </div>
@@ -301,6 +302,7 @@ function SavesPanel({
   "game" | "slots" | "snapshots" | "importPreview" | "modValidation" | "onManualSave" | "onExport" | "onImport" | "onConfirmImport" | "onCancelImport" | "onSaveSlot" | "onLoadSlot" | "onDeleteSlot" | "onCreateSnapshot" | "onLoadSnapshot" | "onDeleteSnapshot" | "onValidateMod" | "onExportModTemplate">) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modInputRef = useRef<HTMLInputElement>(null);
+  const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & ({ kind: "slot"; slotId: SaveSlotId } | { kind: "snapshot"; snapshotId: string })) | null>(null);
   const summaryBySlot = new Map(slots.map((slot) => [slot.slotId, slot]));
   return (
     <div className="operations-panel operations-saves">
@@ -351,7 +353,7 @@ function SavesPanel({
               <div className="save-slot-actions">
                 <button type="button" onClick={() => onSaveSlot(slotId)} title={`保存到槽位 ${slotId}`} aria-label={`保存到槽位 ${slotId}`}><Save size={14} /></button>
                 <button type="button" disabled={!summary?.valid} onClick={() => onLoadSlot(slotId)} title={`载入槽位 ${slotId}`} aria-label={`载入槽位 ${slotId}`}><Upload size={14} /></button>
-                <button type="button" disabled={!summary} onClick={() => onDeleteSlot(slotId)} title={`删除槽位 ${slotId}`} aria-label={`删除槽位 ${slotId}`}><Trash2 size={14} /></button>
+                <button type="button" disabled={!summary} onClick={() => summary && setDeleteRequest({ kind: "slot", slotId, label: `本地槽位 ${slotId}`, details: `${new Date(summary.savedAt).toLocaleString("zh-CN")} · 运行 ${formatRuntime(summary.elapsedSeconds)} · 科技 ${summary.completedTechCount}` })} title={`删除槽位 ${slotId}`} aria-label={`删除槽位 ${slotId}`}><Trash2 size={14} /></button>
               </div>
             </article>
           );
@@ -364,7 +366,7 @@ function SavesPanel({
             <i>{snapshot.valid ? <ShieldCheck size={14} /> : <FileCheck2 size={14} />}</i>
             <div><strong>{snapshot.reason}</strong><span>{new Date(snapshot.savedAt).toLocaleTimeString("zh-CN")} · {formatRuntime(snapshot.elapsedSeconds)} · 科技 {snapshot.completedTechCount}</span></div>
             <button type="button" disabled={!snapshot.valid} onClick={() => onLoadSnapshot(snapshot.id)} title="回滚到此快照" aria-label={`回滚到快照 ${snapshot.id}`}><RotateCcw size={13} /></button>
-            <button type="button" onClick={() => onDeleteSnapshot(snapshot.id)} title="删除快照" aria-label={`删除快照 ${snapshot.id}`}><Trash2 size={13} /></button>
+            <button type="button" onClick={() => setDeleteRequest({ kind: "snapshot", snapshotId: snapshot.id, label: `快照：${snapshot.reason}`, details: `${new Date(snapshot.savedAt).toLocaleString("zh-CN")} · 运行 ${formatRuntime(snapshot.elapsedSeconds)} · 科技 ${snapshot.completedTechCount}` })} title="删除快照" aria-label={`删除快照 ${snapshot.id}`}><Trash2 size={13} /></button>
           </article>)}
         </div>}
       </section>
@@ -374,6 +376,12 @@ function SavesPanel({
         <input ref={modInputRef} type="file" accept="application/json,.json" aria-label="选择内容包文件" onChange={async (event) => { const file = event.target.files?.[0]; if (file) onValidateMod(await file.text()); event.target.value = ""; }} />
         {modValidation ? <div className={`content-pack-result${modValidation.valid ? " content-pack-result--valid" : " content-pack-result--invalid"}`}><strong>{modValidation.valid ? "内容包校验通过" : "内容包存在问题"}</strong><span>{modValidation.manifest?.name ?? "未识别内容包"} · 物品 {modValidation.counts.items} · 配方 {modValidation.counts.recipes} · 科技 {modValidation.counts.technologies}</span>{modValidation.issues.slice(0, 3).map((issue) => <small key={`${issue.code}-${issue.path}`}>{issue.severity === "error" ? "错误" : "提示"}：{issue.message}</small>)}</div> : null}
       </section>
+      <SaveDeleteDialog target={deleteRequest} onCancel={() => setDeleteRequest(null)} onDelete={() => {
+        if (!deleteRequest) return;
+        if (deleteRequest.kind === "slot") onDeleteSlot(deleteRequest.slotId);
+        else onDeleteSnapshot(deleteRequest.snapshotId);
+        setDeleteRequest(null);
+      }} />
     </div>
   );
 }

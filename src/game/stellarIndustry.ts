@@ -1,6 +1,7 @@
 import { getBuilding, getPlanet, getStarSystem, PLANET_LIST, STAR_SYSTEM_LIST } from "./content";
 import {
   findStationSlotPeer,
+  getEntityPowerFactor,
   getEntityOperatingStatus,
   getInterstellarCargoCapacity,
   getInterstellarRouteEconomics,
@@ -17,6 +18,7 @@ import { PLANET_INDUSTRY_ROLE_LABELS, getRecommendedPlanetRole, isInfiniteResour
 import type {
   FactoryEntity,
   GameState,
+  InterstellarRoutePolicy,
   ItemId,
   LogisticsPriority,
   PlanetId,
@@ -31,6 +33,7 @@ export type StellarRouteStatus =
   | "ready"
   | "missing-source"
   | "missing-vehicle"
+  | "missing-hub"
   | "missing-warper"
   | "missing-stock"
   | "target-full"
@@ -62,7 +65,14 @@ export interface StellarRouteSnapshot {
   powerKw: number;
   energyMjPerTrip: number;
   warpersPerTrip: number;
+  warpersPerVessel: number;
   availableWarpers: number;
+  routeKind: "local" | "direct" | "relay";
+  waypointStationIds: string[];
+  hopCount: number;
+  maxLegDistanceLy: number;
+  routePolicy: InterstellarRoutePolicy;
+  warperBudget: number;
   status: StellarRouteStatus;
   statusLabel: string;
 }
@@ -126,6 +136,7 @@ const STATUS_LABELS: Record<StellarRouteStatus, string> = {
   ready: "等待发船",
   "missing-source": "缺少供应站",
   "missing-vehicle": "缺少运输载具",
+  "missing-hub": "缺少中转枢纽",
   "missing-warper": "缺少翘曲器",
   "missing-stock": "供应库存不足",
   "target-full": "需求库存已满",
@@ -144,17 +155,25 @@ function getRouteStatus(
   activeVehicles: number,
   installedVehicles: number,
   requiresWarp: boolean,
+  routeAvailable: boolean,
+  warpersPerVessel: number,
   sourceStock: number,
   minimumCargo: number,
   targetFree: number,
+  waypointStationIds: string[],
 ): StellarRouteStatus {
   if (!source) return "missing-source";
   if (activeVehicles > 0) return "active";
   if (installedVehicles < 1) return "missing-vehicle";
-  if (requiresWarp && (!target.stationWarpEnabled || !isTechnologyCompleted(game, "space_warp") || (target.stationWarpers ?? 0) < 1)) {
+  if (requiresWarp && !routeAvailable) return "missing-hub";
+  if (requiresWarp && (!target.stationWarpEnabled || !isTechnologyCompleted(game, "space_warp") || (target.stationWarpers ?? 0) < warpersPerVessel)) {
     return "missing-warper";
   }
-  if (getPlanetMetrics(game, target.planetId).powerFactor <= 0 || getPlanetMetrics(game, source.planetId).powerFactor <= 0) return "no-power";
+  const routeStations = [source, target, ...waypointStationIds.flatMap((stationId) => {
+    const station = game.entities.find((entity) => entity.id === stationId);
+    return station ? [station] : [];
+  })];
+  if (routeStations.some((station) => getEntityPowerFactor(game, station) <= 0)) return "no-power";
   if (sourceStock < minimumCargo) return "missing-stock";
   if (targetFree < minimumCargo) return "target-full";
   return "ready";
@@ -191,7 +210,10 @@ export function getStellarRouteSnapshots(game: GameState): StellarRouteSnapshot[
         const targetFree = Math.max(0, targetLimit - targetStock - active.reduce((sum, route) => sum + route.cargo, 0));
         const requiresWarp = scope === "remote" && stationRouteRequiresWarp(target, source);
         const economics = source && scope === "remote"
-          ? getInterstellarRouteEconomics(game, source, target, Math.max(1, installedVehicles))
+          ? getInterstellarRouteEconomics(game, source, target, Math.max(1, installedVehicles), {
+            routePolicy: targetSlot.routePolicy,
+            warperBudget: targetSlot.warperBudget,
+          })
           : null;
         const durationSeconds = economics?.durationSeconds ?? getPlanetaryTripSeconds(game);
         const cargoPerVehicle = scope === "remote" ? getInterstellarCargoCapacity(game) : getPlanetaryCargoCapacity(game);
@@ -199,7 +221,8 @@ export function getStellarRouteSnapshots(game: GameState): StellarRouteSnapshot[
           ? cargoPerVehicle * installedVehicles * 60 / Math.max(1, durationSeconds)
           : 0;
         const status = getRouteStatus(game, source, target, scope, activeVehicles, installedVehicles, requiresWarp,
-          sourceStock, minimumCargo, targetFree);
+          economics?.routeAvailable ?? true, economics?.warpersPerVessel ?? 0,
+          sourceStock, minimumCargo, targetFree, economics?.waypointStationIds ?? []);
         snapshots.push({
           id: `${scope}:${target.id}:${targetSlotIndex}:${source?.id ?? "unbound"}`,
           scope,
@@ -226,7 +249,14 @@ export function getStellarRouteSnapshots(game: GameState): StellarRouteSnapshot[
           powerKw: economics?.powerKw ?? ((getBuilding(target.buildingId!).powerDemandKw ?? 0) + 120 * installedVehicles),
           energyMjPerTrip: economics?.energyMjPerTrip ?? ((getBuilding(target.buildingId!).powerDemandKw ?? 0) + 120 * installedVehicles) * durationSeconds / 1_000,
           warpersPerTrip: economics?.warpersPerTrip ?? 0,
+          warpersPerVessel: economics?.warpersPerVessel ?? 0,
           availableWarpers: Math.max(0, Math.floor(target.stationWarpers ?? 0)),
+          routeKind: economics?.routeKind ?? "local",
+          waypointStationIds: economics?.waypointStationIds ?? [],
+          hopCount: economics?.hopCount ?? 0,
+          maxLegDistanceLy: economics?.maxLegDistanceLy ?? 0,
+          routePolicy: targetSlot.routePolicy,
+          warperBudget: targetSlot.warperBudget,
           status,
           statusLabel: STATUS_LABELS[status],
         });
@@ -270,8 +300,10 @@ export function getInterplanetaryLogisticsDiagnostics(
     if (route.status === "ready") continue;
     const definition = route.status === "missing-source"
       ? { severity: "critical" as const, title: `${targetLabel}缺少${route.itemId}供应站`, detail: "需求槽位找不到具有远程供应权限的同物品槽位。", recommendation: "在来源物流塔配置该物品为远程供应，或检查来源站是否已停用。" }
-      : route.status === "missing-vehicle"
+        : route.status === "missing-vehicle"
         ? { severity: "critical" as const, title: `${targetLabel}没有可用运输船`, detail: `${route.itemId} 已建立供需匹配，但需求站没有星际运输船。`, recommendation: "向需求星际物流站装入物流运输船。" }
+        : route.status === "missing-hub"
+          ? { severity: "critical" as const, title: `${targetLabel}缺少中转物流枢纽`, detail: `${sourceLabel} 到 ${targetLabel} 采用强制中转策略，但 ${route.warperBudget} 跳预算内没有已启用枢纽。`, recommendation: "在中间恒星系的星际物流站启用中转枢纽，或把需求槽改为优先中转/直达。" }
         : route.status === "missing-warper"
           ? { severity: "critical" as const, title: `${targetLabel}缺少翘曲条件`, detail: `${sourceLabel} 到 ${targetLabel} 的航线需要空间翘曲器。`, recommendation: "完成空间翘曲科技、启用需求站翘曲，并向站内补充空间翘曲器。" }
           : route.status === "no-power"
@@ -317,7 +349,7 @@ export function getPlanetIndustrySummaries(game: GameState, routes = getStellarR
   return PLANET_LIST.map((planet) => {
     const entities = game.entities.filter((entity) => entity.planetId === planet.id);
     const veins = entities.filter((entity) => entity.kind === "vein" && entity.resourceId &&
-      !isInfiniteResource(entity.resourceId, planet.id, game.settings.resourceMode));
+      !isInfiniteResource(entity.resourceId, planet.id, game.settings.resourceMode, game.galaxy));
     const reserveRemaining = veins.reduce((sum, vein) => sum + Math.max(0, Math.floor(vein.resourceRemaining ?? 0)), 0);
     const miningPerMinute = veins.reduce((sum, vein) => sum + Math.max(0, vein.productionRate), 0);
     const depletedVeins = veins.filter((vein) => (vein.resourceRemaining ?? 0) <= 0).length;
@@ -405,8 +437,23 @@ export function getRouteEndpointLabel(stationId: string | undefined, game: GameS
 
 export function getRouteDistanceLabel(route: StellarRouteSnapshot): string {
   if (route.scope === "local") return "行星内";
-  if (route.distanceLy > 0) return `${route.distanceLy.toFixed(1)} ly`;
+  if (route.distanceLy > 0) return `${route.distanceLy.toFixed(1)} ly${route.routeKind === "relay" ? ` · ${route.hopCount} 跳` : ""}`;
   return `${route.orbitSpan} 轨道跨度`;
+}
+
+export function getRoutePathLabel(route: StellarRouteSnapshot, game: GameState): string {
+  const stationPlanetId = (stationId: string | undefined): PlanetId | undefined =>
+    stationId ? game.entities.find((entity) => entity.id === stationId)?.planetId : undefined;
+  const planetIds = [
+    route.sourcePlanetId,
+    ...route.waypointStationIds.map(stationPlanetId),
+    route.targetPlanetId,
+  ].filter((planetId): planetId is PlanetId => Boolean(planetId));
+  if (planetIds.length === 0) return "待匹配";
+  const labels = route.distanceLy > 0
+    ? planetIds.map((planetId) => getStarSystem(getPlanet(planetId).systemId).name)
+    : planetIds.map((planetId) => getPlanet(planetId).name);
+  return labels.filter((label, index) => index === 0 || label !== labels[index - 1]).join(" → ");
 }
 
 export function getSystemName(systemId: StarSystemId): string {

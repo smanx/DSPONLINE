@@ -22,6 +22,7 @@ const CRITICAL_CODES = new Set<EntityOperatingStatus["code"]>([
   "missing-vessel",
   "missing-drone",
   "missing-warper",
+  "missing-hub",
   "missing-route",
   "missing-research",
   "missing-recipe",

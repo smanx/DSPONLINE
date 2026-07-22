@@ -3,8 +3,11 @@ import {
   CONSTRUCTION,
   FUEL_ENERGY_MJ,
   ITEMS,
+  MATRIX_ITEM_IDS,
   PLANET_LIST,
   PROLIFERATOR_ITEM_IDS,
+  RECIPES,
+  STAR_SYSTEM_LIST,
   STAR_SYSTEMS,
   buildingSupportsRecipe,
   getBeltConstructionId,
@@ -23,9 +26,15 @@ import {
   getTechnology,
 } from "./content";
 import {
+  DEFAULT_GALAXY_SEED,
   createGalaxyState,
+  createPlayerGalaxySeed,
   createVeinReserve,
   getPlanetIndustrialProfile,
+  getPlanetOrbitalYields,
+  getPlanetSolarPowerMultiplier,
+  getStarLuminosity,
+  getSystemDistanceLy,
   isInfiniteResource,
   specializationApplies,
 } from "./galaxy";
@@ -51,6 +60,7 @@ import type {
   FactoryEntity,
   GameState,
   ItemId,
+  InterstellarRoutePolicy,
   LogisticsPriority,
   PlanetId,
   PlanetIndustryRole,
@@ -116,7 +126,9 @@ export const POWER_GRID_LABELS: Record<PowerGridId, string> = {
   "grid-b": "B 工业网",
   "grid-c": "C 备用网",
 };
-export const POWER_SUPPLY_RADIUS = 1_200;
+/** Zero represents an unlimited, planet-wide grid domain. */
+export const POWER_SUPPLY_RADIUS = 0;
+export const MATERIAL_DELIVERY_SLOT_COUNT = 3;
 const EPSILON = 0.0001;
 
 function round(value: number, digits = 4): number {
@@ -142,7 +154,11 @@ function copyState(state: GameState): GameState {
       inputs: { ...entity.inputs },
       outputs: { ...entity.outputs },
       stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
-      stationRoutes: entity.stationRoutes?.map((route) => ({ ...route })),
+      deliveryItemIds: entity.deliveryItemIds ? [...entity.deliveryItemIds] : undefined,
+      stationRoutes: entity.stationRoutes?.map((route) => ({
+        ...route,
+        waypointStationIds: route.waypointStationIds ? [...route.waypointStationIds] : [],
+      })),
       proliferatorBonusProgress: { ...entity.proliferatorBonusProgress },
     })),
     belts: state.belts.map((belt) => ({ ...belt })),
@@ -151,6 +167,10 @@ function copyState(state: GameState): GameState {
     tray: { ...state.tray },
     planetTrays,
     construction: { ...state.construction },
+    constructionAutomation: {
+      ...state.constructionAutomation,
+      targetStock: { ...state.constructionAutomation.targetStock },
+    },
     portableFleet: state.portableFleet ? { ...state.portableFleet } : { logistics_drone: 0, logistics_vessel: 0 },
     totalProduced: { ...state.totalProduced },
     research: {
@@ -172,8 +192,18 @@ function copyState(state: GameState): GameState {
       ...state.galaxy,
       profiles: Object.fromEntries(Object.entries(state.galaxy.profiles).map(([planetId, profile]) => [
         planetId,
-        { ...profile, colonyCost: profile.colonyCost.map((cost) => ({ ...cost })) },
+        {
+          ...profile,
+          resourceIds: [...profile.resourceIds],
+          rareResourceIds: [...profile.rareResourceIds],
+          orbitalYields: { ...profile.orbitalYields },
+          colonyCost: profile.colonyCost.map((cost) => ({ ...cost })),
+        },
       ])) as GameState["galaxy"]["profiles"],
+      systemProfiles: Object.fromEntries(Object.entries(state.galaxy.systemProfiles).map(([systemId, profile]) => [
+        systemId,
+        { ...profile },
+      ])) as GameState["galaxy"]["systemProfiles"],
       planetRoles: { ...(state.galaxy.planetRoles ?? {}) },
     },
     recipeFocus: { ...state.recipeFocus, position: { ...state.recipeFocus.position } },
@@ -256,11 +286,7 @@ function createEmptyDysonPlans(): GameState["dysonPlans"] {
     shellSails: 0,
     layers: [],
   });
-  return {
-    helios: createPlan("helios"),
-    borealis: createPlan("borealis"),
-    neutron: createPlan("neutron"),
-  };
+  return Object.fromEntries(STAR_SYSTEM_LIST.map((system) => [system.id, createPlan(system.id)])) as GameState["dysonPlans"];
 }
 
 function createDefaultDysonOrbit(systemId: StarSystemId, index = 0): DysonSwarmOrbitState {
@@ -279,7 +305,7 @@ function createDefaultDysonOrbit(systemId: StarSystemId, index = 0): DysonSwarmO
 }
 
 function createEmptyDysonEngineering(): DysonEngineeringState {
-  const systems = ["helios", "borealis", "neutron"] as StarSystemId[];
+  const systems = STAR_SYSTEM_LIST.map((system) => system.id);
   return {
     launchMode: "balanced",
     launchThrottle: 1,
@@ -350,10 +376,10 @@ function makeVein(id: string, planetId: PlanetId, resourceId: ItemId, x: number,
   };
 }
 
-export function createInitialState(): GameState {
-  const galaxy = createGalaxyState(undefined, true);
+export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline = seed === DEFAULT_GALAXY_SEED): GameState {
+  const galaxy = createGalaxyState(seed, preserveBaseline);
   const planetMetrics = Object.fromEntries(PLANET_LIST.map((planet) => [planet.id, emptyMetrics()])) as GameState["planetMetrics"];
-  const entities = [
+  const legacyVeins = [
     makeVein("vein_iron", "home", "iron_ore", -470, -250),
     makeVein("vein_copper", "home", "copper_ore", -470, 35),
     makeVein("vein_stone", "home", "stone", -470, 320),
@@ -382,20 +408,35 @@ export function createInitialState(): GameState {
     makeVein("magnetar_titanium", "magnetar", "titanium_ore", -150, -250),
     makeVein("magnetar_silicon", "magnetar", "silicon_ore", -150, 35),
     makeVein("ashen_unipolar", "magnetar", "unipolar_magnet", 170, -250),
-  ].map((entity) => {
-    if (!entity.resourceId || isInfiniteResource(entity.resourceId, entity.planetId, "finite")) return entity;
+  ];
+  const legacyPlanetIds = new Set<PlanetId>(["home", "ashen", "giant", "frost", "boreal_giant", "magnetar"]);
+  const generatedVeins = PLANET_LIST.flatMap((planet) => {
+    if (legacyPlanetIds.has(planet.id) || planet.kind === "gas-giant") return [];
+    return galaxy.profiles[planet.id].resourceIds.map((resourceId, index) => makeVein(
+      `vein_${planet.id}_${resourceId}`,
+      planet.id,
+      resourceId,
+      -470 + (index % 4) * 320,
+      -250 + Math.floor(index / 4) * 285,
+    ));
+  });
+  const entities = [...legacyVeins, ...generatedVeins].map((entity) => {
+    if (!entity.resourceId || isInfiniteResource(entity.resourceId, entity.planetId, "finite", galaxy)) return entity;
     const reserve = createVeinReserve(galaxy, entity.planetId, entity.resourceId, entity.id);
     return { ...entity, resourceRemaining: reserve, resourceCapacity: reserve };
   });
   return {
-    version: 24,
+    version: 26,
     nextId: 1,
     activePlanetId: "home",
     entities,
     belts: [],
     cargo: null,
-    tray: {},
-    planetTrays: Object.fromEntries(PLANET_LIST.map((planet) => [planet.id, {}])) as GameState["planetTrays"],
+    tray: { iron_ore: 100, copper_ore: 100, stone: 100 },
+    planetTrays: Object.fromEntries(PLANET_LIST.map((planet) => [
+      planet.id,
+      planet.id === "home" ? { iron_ore: 100, copper_ore: 100, stone: 100 } : {},
+    ])) as GameState["planetTrays"],
     construction: {
       wind_turbine: 3,
       solar_panel: 0,
@@ -433,8 +474,17 @@ export function createInitialState(): GameState {
       interstellar_logistics_station: 0,
       orbital_collector: 0,
       storage_mk1: 0,
+      material_delivery_hub: 0,
       storage_tank: 0,
       splitter_4way: 0,
+      construction_center: 0,
+    },
+    constructionAutomation: {
+      enabled: true,
+      targetStock: {},
+      cursor: 0,
+      totalCrafted: 0,
+      lastCraftedId: null,
     },
     portableFleet: { logistics_drone: 0, logistics_vessel: 0 },
     manualMined: 0,
@@ -447,7 +497,7 @@ export function createInitialState(): GameState {
     },
     exploration: {
       unlockedSystemIds: ["helios"],
-      colonizedPlanetIds: ["home", "ashen", "giant"],
+      colonizedPlanetIds: ["home"],
       missions: [],
       surveyProgressBySystem: { helios: 1 },
     },
@@ -503,6 +553,10 @@ export function createInitialState(): GameState {
     endgame: createEndgameState(),
     paused: false,
   };
+}
+
+export function createPlayerInitialState(): GameState {
+  return createInitialState(createPlayerGalaxySeed(), false);
 }
 
 function remainingResearchCosts(state: GameState): Array<{ itemId: ItemId; amount: number }> {
@@ -582,6 +636,96 @@ export interface InterstellarRouteEconomics {
   warpersPerTrip: number;
   powerKw: number;
   energyMjPerTrip: number;
+  routeAvailable: boolean;
+  routeKind: "local" | "direct" | "relay";
+  waypointStationIds: string[];
+  hopCount: number;
+  maxLegDistanceLy: number;
+  warpersPerVessel: number;
+}
+
+interface InterstellarRouteOptions {
+  routePolicy?: InterstellarRoutePolicy;
+  warperBudget?: number;
+}
+
+interface PlannedInterstellarPath {
+  stations: FactoryEntity[];
+  distanceLy: number;
+  durationSeconds: number;
+  maxLegDistanceLy: number;
+  score: number;
+}
+
+const LONG_WARP_LEG_LY = 12;
+
+function interstellarLegDuration(state: GameState, source: FactoryEntity, target: FactoryEntity): { distanceLy: number; durationSeconds: number } {
+  const sourceSystemId = getPlanet(source.planetId).systemId;
+  const targetSystemId = getPlanet(target.planetId).systemId;
+  const distanceLy = getSystemDistanceLy(state, sourceSystemId, targetSystemId);
+  const sourceProfile = getPlanetIndustrialProfile(state, source.planetId);
+  const targetProfile = getPlanetIndustrialProfile(state, target.planetId);
+  const environmentFactor = (sourceProfile.travelTimeMultiplier + targetProfile.travelTimeMultiplier) / 2;
+  const distanceFactor = 0.75 + distanceLy / 24;
+  const longLegPenalty = distanceLy > LONG_WARP_LEG_LY ? 1 + (distanceLy - LONG_WARP_LEG_LY) / 14 : 1;
+  return {
+    distanceLy,
+    durationSeconds: getInterstellarTripSeconds(state, true) * environmentFactor * distanceFactor * longLegPenalty,
+  };
+}
+
+function planInterstellarPath(
+  state: GameState,
+  source: FactoryEntity,
+  target: FactoryEntity,
+  routePolicy: InterstellarRoutePolicy,
+  warperBudget: number,
+): PlannedInterstellarPath | null {
+  const sourceSystemId = getPlanet(source.planetId).systemId;
+  const targetSystemId = getPlanet(target.planetId).systemId;
+  if (sourceSystemId === targetSystemId) return null;
+  const maximumHops = Math.max(1, Math.min(4, Math.floor(warperBudget)));
+  const hubBySystem = new Map<StarSystemId, FactoryEntity>();
+  for (const station of state.entities) {
+    if (station.id === source.id || station.id === target.id || station.buildingId !== "interstellar_logistics_station" || !station.stationHubEnabled) continue;
+    const systemId = getPlanet(station.planetId).systemId;
+    if (systemId === sourceSystemId || systemId === targetSystemId || !isStarSystemUnlocked(state, systemId)) continue;
+    const previous = hubBySystem.get(systemId);
+    if (!previous || (station.stationHubPriority ?? 1) > (previous.stationHubPriority ?? 1) ||
+      ((station.stationHubPriority ?? 1) === (previous.stationHubPriority ?? 1) && station.id.localeCompare(previous.id) < 0)) {
+      hubBySystem.set(systemId, station);
+    }
+  }
+  const hubs = [...hubBySystem.values()];
+  const candidates: PlannedInterstellarPath[] = [];
+  const visit = (stations: FactoryEntity[], remainingHubs: FactoryEntity[]) => {
+    const hopsUsed = stations.length - 1;
+    if (hopsUsed >= maximumHops) return;
+    const current = stations.at(-1)!;
+    const directStations = [...stations, target];
+    const hasRelay = directStations.length > 2;
+    if (routePolicy !== "relay-required" || hasRelay) {
+      const legs = directStations.slice(1).map((station, index) => interstellarLegDuration(state, directStations[index], station));
+      const durationSeconds = legs.reduce((sum, leg) => sum + leg.durationSeconds, 0);
+      const priorityBonus = directStations.slice(1, -1).reduce((sum, station) => sum + (station.stationHubPriority ?? 1) * 0.025, 0);
+      candidates.push({
+        stations: directStations,
+        distanceLy: legs.reduce((sum, leg) => sum + leg.distanceLy, 0),
+        durationSeconds,
+        maxLegDistanceLy: Math.max(...legs.map((leg) => leg.distanceLy)),
+        score: durationSeconds * Math.max(0.85, 1 - priorityBonus),
+      });
+    }
+    if (routePolicy === "direct" || hopsUsed + 1 >= maximumHops) return;
+    for (const hub of remainingHubs) {
+      const leg = interstellarLegDuration(state, current, hub);
+      if (leg.distanceLy > LONG_WARP_LEG_LY * 1.5) continue;
+      visit([...stations, hub], remainingHubs.filter((candidate) => candidate.id !== hub.id));
+    }
+  };
+  visit([source], hubs);
+  return candidates.sort((left, right) => left.score - right.score || left.stations.length - right.stations.length ||
+    left.stations.map((station) => station.id).join(":").localeCompare(right.stations.map((station) => station.id).join(":")))[0] ?? null;
 }
 
 export function getInterstellarRouteEconomics(
@@ -589,29 +733,35 @@ export function getInterstellarRouteEconomics(
   source: FactoryEntity,
   target: FactoryEntity,
   vehicleCount = 1,
+  options: InterstellarRouteOptions = {},
 ): InterstellarRouteEconomics {
   const sourcePlanet = getPlanet(source.planetId);
   const targetPlanet = getPlanet(target.planetId);
-  const sourceSystem = getStarSystem(sourcePlanet.systemId);
-  const targetSystem = getStarSystem(targetPlanet.systemId);
-  const requiresWarp = sourceSystem.id !== targetSystem.id;
-  const distanceLy = requiresWarp
-    ? Math.max(0.1, Math.abs(sourceSystem.distanceLy - targetSystem.distanceLy))
-    : 0;
+  const requiresWarp = sourcePlanet.systemId !== targetPlanet.systemId;
+  const routePolicy = options.routePolicy ?? "relay-preferred";
+  const warperBudget = Math.max(1, Math.min(4, Math.floor(options.warperBudget ?? 2)));
+  const path = requiresWarp ? planInterstellarPath(state, source, target, routePolicy, warperBudget) : null;
+  const routeAvailable = !requiresWarp || Boolean(path);
+  const distanceLy = path?.distanceLy ?? (requiresWarp ? getSystemDistanceLy(state, sourcePlanet.systemId, targetPlanet.systemId) : 0);
   const orbitSpan = Math.max(1, Math.abs(sourcePlanet.orbitIndex - targetPlanet.orbitIndex));
   const sourceProfile = getPlanetIndustrialProfile(state, source.planetId);
   const targetProfile = getPlanetIndustrialProfile(state, target.planetId);
   const environmentFactor = (sourceProfile.travelTimeMultiplier + targetProfile.travelTimeMultiplier) / 2;
-  const routeFactor = requiresWarp
-    ? Math.min(1.55, 0.78 + distanceLy / 35)
-    : 0.9 + orbitSpan * 0.1;
-  const durationSeconds = round(getInterstellarTripSeconds(state, requiresWarp) * environmentFactor * routeFactor, 2);
+  const durationSeconds = round(requiresWarp
+    ? path?.durationSeconds ?? getInterstellarTripSeconds(state, true) * environmentFactor * 4
+    : getInterstellarTripSeconds(state, false) * environmentFactor * (0.9 + orbitSpan * 0.1), 2);
   const vessels = Math.max(1, Math.floor(vehicleCount));
   const cargoPerTrip = getInterstellarCargoCapacity(state) * vessels;
   const sourcePower = source.buildingId ? (getBuilding(source.buildingId).powerDemandKw ?? 0) * Math.max(1, source.machineCount) : 0;
   const targetPower = target.buildingId ? (getBuilding(target.buildingId).powerDemandKw ?? 0) * Math.max(1, target.machineCount) : 0;
-  const drivePower = (requiresWarp ? 900 : 240) * vessels;
-  const powerKw = round(sourcePower + targetPower + drivePower, 2);
+  const waypointStationIds = path?.stations.slice(1, -1).map((station) => station.id) ?? [];
+  const hubPower = waypointStationIds.reduce((sum, stationId) => {
+    const station = state.entities.find((entity) => entity.id === stationId);
+    return sum + (station?.buildingId ? (getBuilding(station.buildingId).powerDemandKw ?? 0) * Math.max(1, station.machineCount) : 0);
+  }, 0);
+  const hopCount = requiresWarp ? Math.max(1, path ? path.stations.length - 1 : warperBudget) : 0;
+  const drivePower = (requiresWarp ? 900 * hopCount : 240) * vessels;
+  const powerKw = round(sourcePower + targetPower + hubPower + drivePower, 2);
   return {
     distanceLy: round(distanceLy, 2),
     orbitSpan,
@@ -619,9 +769,15 @@ export function getInterstellarRouteEconomics(
     durationSeconds,
     cargoPerTrip,
     throughputPerMinute: round(cargoPerTrip * 60 / Math.max(1, durationSeconds), 2),
-    warpersPerTrip: requiresWarp ? vessels : 0,
+    warpersPerTrip: requiresWarp ? vessels * hopCount : 0,
     powerKw,
     energyMjPerTrip: round(powerKw * durationSeconds / 1_000, 2),
+    routeAvailable,
+    routeKind: !requiresWarp ? "local" : waypointStationIds.length > 0 ? "relay" : "direct",
+    waypointStationIds,
+    hopCount,
+    maxLegDistanceLy: round(path?.maxLegDistanceLy ?? distanceLy, 2),
+    warpersPerVessel: requiresWarp ? hopCount : 0,
   };
 }
 
@@ -651,8 +807,8 @@ function getDysonPowerMultiplier(state: GameState): number {
   return 1 + getInfiniteResearchLevel(state, "stellar_harnessing") * 0.05;
 }
 
-function getSolarSailPowerFor(state: GameState): number {
-  return SOLAR_SAIL_POWER_KW * getDysonPowerMultiplier(state);
+function getSolarSailPowerFor(state: GameState, systemId: StarSystemId): number {
+  return SOLAR_SAIL_POWER_KW * getDysonPowerMultiplier(state) * getStarLuminosity(state, systemId);
 }
 
 function proliferatorApplies(entity: FactoryEntity, recipe: RecipeDefinition | undefined): boolean {
@@ -773,6 +929,8 @@ function emptyStationSlot(): StationSlot {
     minStock: 0,
     maxStock: 0,
     priority: 1,
+    routePolicy: "relay-preferred",
+    warperBudget: 2,
   };
 }
 
@@ -792,6 +950,8 @@ function stationSlotsForPlacement(
       minStock: 0,
       maxStock: 0,
       priority: 1,
+      routePolicy: "relay-preferred",
+      warperBudget: 2,
     };
   }
   return slots;
@@ -810,6 +970,8 @@ function normalizeStationSlot(slot: Partial<StationSlot> | undefined): StationSl
     minStock: Math.max(0, Math.floor(slot?.minStock ?? 0)),
     maxStock: Math.max(0, Math.floor(slot?.maxStock ?? 0)),
     priority: slot?.priority === 0 || slot?.priority === 2 ? slot.priority : 1,
+    routePolicy: slot?.routePolicy === "direct" || slot?.routePolicy === "relay-required" ? slot.routePolicy : "relay-preferred",
+    warperBudget: Math.max(1, Math.min(4, Math.floor(slot?.warperBudget ?? 2))),
   };
 }
 
@@ -826,6 +988,8 @@ export function getStationSlots(station: FactoryEntity): StationSlot[] {
       minStock: 0,
       maxStock: 0,
       priority: 1,
+      routePolicy: "relay-preferred" as InterstellarRoutePolicy,
+      warperBudget: 2,
     });
   }
   while (slots.length < STATION_SLOT_COUNT) slots.push(emptyStationSlot());
@@ -874,7 +1038,7 @@ export function findStationSlotPeer(
   if (scope === "local" && station.buildingId === "orbital_collector") return undefined;
   if (scope === "remote" && station.buildingId !== "interstellar_logistics_station" && station.buildingId !== "orbital_collector") return undefined;
   const opposite: StationLogisticsMode = mode === "supply" ? "demand" : "supply";
-  const candidates: Array<StationPeerMatch & { priority: number }> = [];
+  const candidates: Array<StationPeerMatch & { priority: number; routeAvailable: boolean; routeDuration: number }> = [];
   for (const peer of state.entities) {
     if (peer.id === station.id || peer.kind !== "station") continue;
     if (scope === "local") {
@@ -893,15 +1057,31 @@ export function findStationSlotPeer(
         minStock: 0,
         maxStock: 0,
         priority: 1 as const,
+        routePolicy: "direct" as const,
+        warperBudget: 1,
       }]
       : getStationSlots(peer);
     peerSlots.forEach((peerSlot, peerSlotIndex) => {
       if (peerSlot.itemId === slot.itemId && stationSlotMode(peer, peerSlot, scope) === opposite) {
-        candidates.push({ peer, peerSlotIndex, priority: peerSlot.priority });
+        const demand = mode === "demand" ? station : peer;
+        const supply = mode === "demand" ? peer : station;
+        const demandSlot = mode === "demand" ? slot : peerSlot;
+        const economics = scope === "remote" ? getInterstellarRouteEconomics(state, supply, demand, 1, {
+          routePolicy: demandSlot.routePolicy,
+          warperBudget: demandSlot.warperBudget,
+        }) : null;
+        candidates.push({
+          peer,
+          peerSlotIndex,
+          priority: peerSlot.priority,
+          routeAvailable: economics?.routeAvailable ?? true,
+          routeDuration: economics?.durationSeconds ?? 0,
+        });
       }
     });
   }
-  return candidates.sort((a, b) => b.priority - a.priority || a.peer.id.localeCompare(b.peer.id))[0];
+  return candidates.sort((a, b) => Number(b.routeAvailable) - Number(a.routeAvailable) || b.priority - a.priority ||
+    a.routeDuration - b.routeDuration || a.peer.id.localeCompare(b.peer.id))[0];
 }
 
 export function findInterstellarPeer(state: GameState, station: FactoryEntity): FactoryEntity | undefined {
@@ -987,9 +1167,14 @@ function stationDispatchableVessels(state: GameState, station: FactoryEntity): n
     getStationVesselCapacity(demand),
     Math.max(0, Math.floor(demand.stationVessels ?? 0)),
   );
+  const demandSlot = getStationSlots(demand).find((slot) => slot.itemId === itemId && slot.remoteMode === "demand") ?? getStationSlots(demand)[0];
+  const economics = getInterstellarRouteEconomics(state, supply, demand, 1, {
+    routePolicy: demandSlot?.routePolicy,
+    warperBudget: demandSlot?.warperBudget,
+  });
   const warpLimit = stationRouteRequiresWarp(demand, supply)
-    ? demand.stationWarpEnabled && isTechnologyCompleted(state, "space_warp")
-      ? Math.max(0, Math.floor(demand.stationWarpers ?? 0))
+    ? demand.stationWarpEnabled && isTechnologyCompleted(state, "space_warp") && economics.routeAvailable
+      ? Math.floor(Math.max(0, Math.floor(demand.stationWarpers ?? 0)) / Math.max(1, economics.warpersPerVessel))
       : 0
     : Number.POSITIVE_INFINITY;
   return Math.max(0, Math.min(vessels, warpLimit, Math.floor(available / minimumCargo), Math.floor(free / minimumCargo)));
@@ -1024,8 +1209,12 @@ function stationRouteReady(state: GameState, station: FactoryEntity): boolean {
         (demand.outputs[itemId] ?? 0) - stationInFlightCargo(demand, itemId)));
       const vehicles = stationInstalledVehicles(demand, scope) - stationBusyVehicles(demand, scope);
       const requiresWarp = scope === "remote" && stationRouteRequiresWarp(demand, supply);
-      const warpReady = !requiresWarp || (demand.stationWarpEnabled && isTechnologyCompleted(state, "space_warp") &&
-        (demand.stationWarpers ?? 0) > 0);
+      const economics = requiresWarp ? getInterstellarRouteEconomics(state, supply, demand, 1, {
+        routePolicy: demandSlot.routePolicy,
+        warperBudget: demandSlot.warperBudget,
+      }) : null;
+      const warpReady = !requiresWarp || (Boolean(economics?.routeAvailable) && demand.stationWarpEnabled && isTechnologyCompleted(state, "space_warp") &&
+        (demand.stationWarpers ?? 0) >= (economics?.warpersPerVessel ?? 1));
       if (vehicles > 0 && warpReady && available >= minimumCargo && free >= minimumCargo) return true;
     }
   }
@@ -1062,7 +1251,7 @@ interface DysonReceptionPlan {
   rayPowerByPlanet: Map<PlanetId, number>;
 }
 
-const DYSON_SYSTEM_IDS: StarSystemId[] = ["helios", "borealis", "neutron"];
+const DYSON_SYSTEM_IDS: StarSystemId[] = STAR_SYSTEM_LIST.map((system) => system.id);
 
 function ensureDysonOrbit(state: GameState, systemId: StarSystemId): DysonSwarmOrbitState {
   state.dysonEngineering.orbitsBySystem[systemId] ??= [];
@@ -1118,12 +1307,14 @@ function syncLegacySwarmIntoOrbits(state: GameState): void {
   adjustOrbitAggregate(state, "sailsInOrbit");
   adjustOrbitAggregate(state, "totalLaunched");
   adjustOrbitAggregate(state, "totalExpired");
-  for (const orbit of allDysonOrbits(state)) {
-    orbit.sailsInOrbit = Math.max(0, Math.floor(orbit.sailsInOrbit));
-    orbit.totalLaunched = Math.max(orbit.sailsInOrbit, Math.floor(orbit.totalLaunched));
-    orbit.totalExpired = Math.max(0, Math.floor(orbit.totalExpired));
-    orbit.decayProgress = Math.max(0, orbit.decayProgress) % 1;
-    orbit.generationKw = orbit.sailsInOrbit * getSolarSailPowerFor(state);
+  for (const systemId of DYSON_SYSTEM_IDS) {
+    for (const orbit of state.dysonEngineering.orbitsBySystem[systemId] ?? []) {
+      orbit.sailsInOrbit = Math.max(0, Math.floor(orbit.sailsInOrbit));
+      orbit.totalLaunched = Math.max(orbit.sailsInOrbit, Math.floor(orbit.totalLaunched));
+      orbit.totalExpired = Math.max(0, Math.floor(orbit.totalExpired));
+      orbit.decayProgress = Math.max(0, orbit.decayProgress) % 1;
+      orbit.generationKw = orbit.sailsInOrbit * getSolarSailPowerFor(state, systemId);
+    }
   }
   aggregateDysonSwarm(state);
 }
@@ -1131,19 +1322,20 @@ function syncLegacySwarmIntoOrbits(state: GameState): void {
 function decayDysonSwarm(state: GameState, seconds: number): void {
   syncLegacySwarmIntoOrbits(state);
   if (seconds <= EPSILON) return;
-  for (const orbit of allDysonOrbits(state)) {
-    const sails = Math.max(0, Math.floor(orbit.sailsInOrbit));
-    if (sails < 1) {
-      orbit.generationKw = 0;
-      continue;
+  for (const systemId of DYSON_SYSTEM_IDS) {
+    for (const orbit of state.dysonEngineering.orbitsBySystem[systemId] ?? []) {
+      const sails = Math.max(0, Math.floor(orbit.sailsInOrbit));
+      if (sails < 1) {
+        orbit.generationKw = 0;
+        continue;
+      }
+      const accumulatedDecay = Math.max(0, orbit.decayProgress) + sails * seconds / getSolarSailLifetimeSeconds(state);
+      const expired = Math.min(sails, Math.floor(accumulatedDecay + EPSILON));
+      orbit.sailsInOrbit = sails - expired;
+      orbit.totalExpired = Math.floor(orbit.totalExpired + expired);
+      orbit.decayProgress = round(Math.max(0, accumulatedDecay - expired), 6);
+      orbit.generationKw = orbit.sailsInOrbit * getSolarSailPowerFor(state, systemId);
     }
-    const accumulatedDecay = Math.max(0, orbit.decayProgress) +
-      sails * seconds / getSolarSailLifetimeSeconds(state);
-    const expired = Math.min(sails, Math.floor(accumulatedDecay + EPSILON));
-    orbit.sailsInOrbit = sails - expired;
-    orbit.totalExpired = Math.floor(orbit.totalExpired + expired);
-    orbit.decayProgress = round(Math.max(0, accumulatedDecay - expired), 6);
-    orbit.generationKw = orbit.sailsInOrbit * getSolarSailPowerFor(state);
   }
   aggregateDysonSwarm(state);
 }
@@ -1307,7 +1499,7 @@ export function removeDysonSwarmOrbit(state: GameState, systemId: StarSystemId, 
   fallback.sailsInOrbit += removed.sailsInOrbit;
   fallback.totalLaunched += removed.totalLaunched;
   fallback.totalExpired += removed.totalExpired;
-  fallback.generationKw = fallback.sailsInOrbit * getSolarSailPowerFor(next);
+  fallback.generationKw = fallback.sailsInOrbit * getSolarSailPowerFor(next, systemId);
   next.dysonEngineering.orbitsBySystem[systemId] = next.dysonEngineering.orbitsBySystem[systemId].filter((orbit) => orbit.id !== orbitId);
   if (next.dysonEngineering.activeOrbitBySystem[systemId] === orbitId) {
     next.dysonEngineering.activeOrbitBySystem[systemId] = fallback.id;
@@ -1634,7 +1826,7 @@ function launchDysonSails(state: GameState, systemId: StarSystemId, amount: numb
   const orbit = ensureDysonOrbit(state, systemId);
   orbit.sailsInOrbit = Math.floor(orbit.sailsInOrbit + amount);
   orbit.totalLaunched = Math.floor(orbit.totalLaunched + amount);
-  orbit.generationKw = orbit.sailsInOrbit * getSolarSailPowerFor(state);
+  orbit.generationKw = orbit.sailsInOrbit * getSolarSailPowerFor(state, systemId);
   aggregateDysonSwarm(state);
 }
 
@@ -1644,9 +1836,11 @@ function updateDysonSphereGeneration(state: GameState): void {
   state.dysonSphere.structurePoints = Object.values(state.dysonPlans).reduce((sum, plan) => sum + plan.structurePoints, 0);
   state.dysonSphere.shellSails = Object.values(state.dysonPlans).reduce((sum, plan) => sum + plan.shellSails, 0);
   const powerMultiplier = getDysonPowerMultiplier(state);
-  state.dysonSphere.generationKw =
-    Math.floor(state.dysonSphere.structurePoints) * DYSON_STRUCTURE_POWER_KW * powerMultiplier +
-    Math.floor(state.dysonSphere.shellSails) * DYSON_SHELL_SAIL_POWER_KW * powerMultiplier;
+  state.dysonSphere.generationKw = Math.floor(Object.values(state.dysonPlans).reduce((sum, plan) => {
+    const luminosity = getStarLuminosity(state, plan.systemId);
+    return sum + (Math.floor(plan.structurePoints) * DYSON_STRUCTURE_POWER_KW +
+      Math.floor(plan.shellSails) * DYSON_SHELL_SAIL_POWER_KW) * powerMultiplier * luminosity;
+  }, 0));
 }
 
 function consumeDysonOrbitSails(state: GameState, systemId: StarSystemId, amount: number): number {
@@ -1655,7 +1849,7 @@ function consumeDysonOrbitSails(state: GameState, systemId: StarSystemId, amount
     if (remaining < 1) break;
     const removed = Math.min(remaining, Math.max(0, Math.floor(orbit.sailsInOrbit)));
     orbit.sailsInOrbit -= removed;
-    orbit.generationKw = orbit.sailsInOrbit * getSolarSailPowerFor(state);
+    orbit.generationKw = orbit.sailsInOrbit * getSolarSailPowerFor(state, systemId);
     remaining -= removed;
   }
   aggregateDysonSwarm(state);
@@ -1713,7 +1907,7 @@ function dysonGenerationForSystem(state: GameState, systemId: StarSystemId): num
   const plan = state.dysonPlans[systemId];
   const powerMultiplier = getDysonPowerMultiplier(state);
   const sphere = (Math.max(0, Math.floor(plan.structurePoints)) * DYSON_STRUCTURE_POWER_KW +
-    Math.max(0, Math.floor(plan.shellSails)) * DYSON_SHELL_SAIL_POWER_KW) * powerMultiplier;
+    Math.max(0, Math.floor(plan.shellSails)) * DYSON_SHELL_SAIL_POWER_KW) * powerMultiplier * getStarLuminosity(state, systemId);
   return swarm + sphere;
 }
 
@@ -1881,14 +2075,13 @@ function gridPowerSources(state: GameState, planetId: PlanetId, gridId: PowerGri
 
 function powerCoverageLabel(state: GameState, entity: FactoryEntity): string {
   return gridPowerSources(state, entity.planetId, getEntityPowerGridId(entity)).length > 0
-    ? "超出供电范围"
+    ? "电网供电不足"
     : "电网断电";
 }
 
 export function isEntityInPowerCoverage(state: GameState, entity: FactoryEntity): boolean {
   if (entity.kind === "power" || (entity.buildingId === "ray_receiver" && entity.recipeId === "ray_power")) return true;
-  const sources = gridPowerSources(state, entity.planetId, getEntityPowerGridId(entity));
-  return sources.some((source) => Math.hypot(source.position.x - entity.position.x, source.position.y - entity.position.y) <= POWER_SUPPLY_RADIUS);
+  return gridPowerSources(state, entity.planetId, getEntityPowerGridId(entity)).length > 0;
 }
 
 interface PowerConsumer {
@@ -1950,7 +2143,7 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
       } else {
         const rated = (getBuilding(entity.buildingId).powerGenerationKw ?? 0) * entity.machineCount;
         const output = entity.buildingId === "solar_panel"
-          ? rated * profile.solarMultiplier
+          ? rated * getPlanetSolarPowerMultiplier(state, planetId)
           : entity.buildingId === "geothermal_power_station"
             ? rated * profile.geothermalMultiplier
             : rated * profile.windMultiplier;
@@ -1982,6 +2175,15 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
       if ((entity.outputs[entity.resourceId!] ?? 0) < capacity - EPSILON) {
         consumers.push({ entity, demandKw: (extractor.powerDemandKw ?? 0) * entity.minerCount * difficultyPowerMultiplier });
       }
+    } else if (entity.buildingId === "construction_center" && constructionAutomationHasDeficit(state)) {
+      if (!isEntityInPowerCoverage(state, entity)) {
+        disconnectedEntities += 1;
+        factorByEntity.set(entity.id, 0);
+        disconnectedDemandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier;
+        continue;
+      }
+      connectedEntities += 1;
+      consumers.push({ entity, demandKw: (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier });
     } else if (canMachineRun(state, entity) && entity.buildingId) {
       if (!isEntityInPowerCoverage(state, entity)) {
         disconnectedEntities += 1;
@@ -2215,6 +2417,7 @@ function gridStoredEnergy(state: GameState, planetId: PlanetId, gridId?: PowerGr
 function transferLogisticsBuffers(state: GameState): void {
   for (const entity of state.entities) {
     if ((entity.kind !== "storage" && entity.kind !== "splitter" && entity.kind !== "station") || !entity.buildingId) continue;
+    if (entity.buildingId === "material_delivery_hub") continue;
     const slots = entity.kind === "station" && entity.buildingId !== "orbital_collector"
       ? ensureStationSlots(entity).filter((slot): slot is StationSlot & { itemId: ItemId } => Boolean(slot.itemId))
       : entity.storedItemId ? [{ ...emptyStationSlot(), itemId: entity.storedItemId }] : [];
@@ -2228,6 +2431,23 @@ function transferLogisticsBuffers(state: GameState): void {
       entity.inputs[slot.itemId] = incoming - moved;
       entity.outputs[slot.itemId] = stored + moved;
     }
+  }
+}
+
+function drainMaterialDeliveryHubs(state: GameState, seconds: number): void {
+  for (const entity of state.entities) {
+    if (entity.buildingId !== "material_delivery_hub") continue;
+    let delivered = 0;
+    for (const itemId of getMaterialDeliveryItems(entity)) {
+      const amount = Math.max(0, Math.floor((entity.inputs[itemId] ?? 0) + EPSILON));
+      if (amount < 1) continue;
+      entity.inputs[itemId] = 0;
+      addToPlanetTray(state, entity.planetId, itemId, amount);
+      delivered += amount;
+    }
+    entity.utilization = delivered > 0 ? 1 : 0;
+    entity.productionRate = seconds > EPSILON ? round(delivered * 60 / seconds, 2) : 0;
+    entity.progress = delivered > 0 ? 1 : 0;
   }
 }
 
@@ -2349,7 +2569,7 @@ function runMiners(state: GameState, seconds: number, power: PowerPlan, planetId
     const capacity = miner.outputCapacity * entity.minerCount;
     const current = Math.floor((entity.outputs[entity.resourceId] ?? 0) + EPSILON);
     const free = Math.max(0, capacity - current);
-    const finite = !isInfiniteResource(entity.resourceId, planetId, state.settings.resourceMode);
+    const finite = !isInfiniteResource(entity.resourceId, planetId, state.settings.resourceMode, state.galaxy);
     const remaining = finite ? Math.max(0, Math.floor(entity.resourceRemaining ?? 0)) : Number.POSITIVE_INFINITY;
     if (free < 1 || powerFactor <= EPSILON || remaining < 1) {
       entity.progress = 0;
@@ -2458,7 +2678,7 @@ function runMachines(state: GameState, seconds: number, power: PowerPlan, planet
         state.research.progressByTech[techId] = progress;
         const completed = technology.costs.every((cost) => (progress[cost.itemId] ?? 0) >= cost.amount);
         if (completed) {
-          state.research.completedTechIds.push(techId);
+          completeTechnology(state, techId);
           const [nextTechId, ...remainingQueue] = state.research.queuedTechIds;
           state.research.selectedTechId = nextTechId ?? null;
           state.research.queuedTechIds = remainingQueue;
@@ -2580,7 +2800,7 @@ function resetStationRuntime(state: GameState): void {
 
 function runOrbitalCollectors(state: GameState, seconds: number): void {
   for (const collector of state.entities.filter((entity) => entity.buildingId === "orbital_collector")) {
-    const yields = getPlanet(collector.planetId).orbitalYields ?? {};
+    const yields = getPlanetOrbitalYields(state, collector.planetId);
     const itemId = collector.storedItemId && (yields[collector.storedItemId] ?? 0) > 0
       ? collector.storedItemId
       : (Object.keys(yields)[0] as ItemId | undefined) ?? "hydrogen";
@@ -2659,12 +2879,21 @@ function dispatchStationScope(
       const targetPlan = powerByPlanet.get(demand.planetId);
       const sourcePower = sourcePlan?.factorByEntity.get(supply.id) ?? sourcePlan?.factor ?? 0;
       const targetPower = targetPlan?.factorByEntity.get(demand.id) ?? targetPlan?.factor ?? 0;
-      const powerFactor = scope === "local" ? targetPower : Math.min(sourcePower, targetPower);
-      if (powerFactor <= EPSILON) continue;
       const requiresWarp = scope === "remote" && stationRouteRequiresWarp(demand, supply);
       if (requiresWarp && (!demand.stationWarpEnabled || !isTechnologyCompleted(state, "space_warp"))) continue;
       const warpAvailable = Math.max(0, Math.floor(demand.stationWarpers ?? 0));
-      if (requiresWarp && warpAvailable < 1) continue;
+      const economics = scope === "remote" ? getInterstellarRouteEconomics(state, supply, demand, 1, {
+        routePolicy: slot.routePolicy,
+        warperBudget: slot.warperBudget,
+      }) : null;
+      if (requiresWarp && (!economics?.routeAvailable || warpAvailable < economics.warpersPerVessel)) continue;
+      const hubPower = economics?.waypointStationIds.reduce((factor, stationId) => {
+        const station = state.entities.find((entity) => entity.id === stationId);
+        const plan = station ? powerByPlanet.get(station.planetId) : undefined;
+        return Math.min(factor, station ? plan?.factorByEntity.get(station.id) ?? plan?.factor ?? 0 : 0);
+      }, 1) ?? 1;
+      const powerFactor = scope === "local" ? targetPower : Math.min(sourcePower, targetPower, hubPower);
+      if (powerFactor <= EPSILON) continue;
       const itemId = slot.itemId;
       const available = Math.max(0, Math.floor((supply.outputs[itemId] ?? 0) - supplySlot.minStock -
         stationReservedOutgoing(state, supply.id, itemId) + EPSILON));
@@ -2676,13 +2905,17 @@ function dispatchStationScope(
         freeVehicles,
         Math.floor(available / minimumCargo),
         Math.floor(free / minimumCargo),
-        requiresWarp ? warpAvailable : Number.POSITIVE_INFINITY,
+        requiresWarp ? Math.floor(warpAvailable / Math.max(1, economics?.warpersPerVessel ?? 1)) : Number.POSITIVE_INFINITY,
       );
       if (dispatchable < 1) continue;
       const cargo = Math.min(available, free, unitCargo * dispatchable);
+      const dispatchedEconomics = scope === "remote" ? getInterstellarRouteEconomics(state, supply, demand, dispatchable, {
+        routePolicy: slot.routePolicy,
+        warperBudget: slot.warperBudget,
+      }) : null;
       const duration = scope === "local"
         ? getPlanetaryTripSeconds(state)
-        : getInterstellarRouteEconomics(state, supply, demand, dispatchable).durationSeconds;
+        : dispatchedEconomics!.durationSeconds;
       demand.stationRoutes!.push({
         id: `route_${state.nextId}`,
         slotIndex,
@@ -2694,10 +2927,13 @@ function dispatchStationScope(
         progress: Math.min(0.999999, Math.max(0, demand.stationProgress ?? 0)),
         duration,
         requiresWarp,
+        waypointStationIds: dispatchedEconomics?.waypointStationIds ?? [],
+        distanceLy: dispatchedEconomics?.distanceLy ?? 0,
+        warpersPerVessel: dispatchedEconomics?.warpersPerVessel ?? 0,
       });
       state.nextId += 1;
       demand.stationProgress = 0;
-      if (requiresWarp) demand.stationWarpers = warpAvailable - dispatchable;
+      if (requiresWarp) demand.stationWarpers = warpAvailable - dispatchable * (dispatchedEconomics?.warpersPerVessel ?? 1);
       demand.stationPeerId = supply.id;
       supply.stationPeerId = demand.id;
       freeVehicles -= dispatchable;
@@ -2725,7 +2961,12 @@ function advanceStationRoutes(
       const targetPlan = powerByPlanet.get(demand.planetId);
       const sourcePower = peer ? sourcePlan?.factorByEntity.get(peer.id) ?? sourcePlan?.factor ?? 0 : 1;
       const targetPower = targetPlan?.factorByEntity.get(demand.id) ?? targetPlan?.factor ?? 0;
-      const powerFactor = scope === "local" ? targetPower : Math.min(sourcePower, targetPower);
+      const hubPower = (route.waypointStationIds ?? []).reduce((factor, stationId) => {
+        const station = state.entities.find((entity) => entity.id === stationId);
+        const plan = station ? powerByPlanet.get(station.planetId) : undefined;
+        return Math.min(factor, station ? plan?.factorByEntity.get(station.id) ?? plan?.factor ?? 0 : 0);
+      }, 1);
+      const powerFactor = scope === "local" ? targetPower : Math.min(sourcePower, targetPower, hubPower);
       route.progress = round(route.progress + seconds * powerFactor / Math.max(1, route.duration), 6);
       demand.utilization = Math.max(demand.utilization, powerFactor);
       if (peer) peer.utilization = Math.max(peer.utilization, powerFactor);
@@ -2773,6 +3014,7 @@ function simulateStep(state: GameState, seconds: number): void {
   runOrbitalCollectors(state, seconds);
   transferLogisticsBuffers(state);
   transferBelts(state, seconds);
+  drainMaterialDeliveryHubs(state, seconds);
   const reception = calculateDysonReception(state);
   const powerByPlanet = new Map<PlanetId, PowerPlan>();
   for (const planet of PLANET_LIST) {
@@ -2809,6 +3051,7 @@ function simulateStep(state: GameState, seconds: number): void {
     runPowerFacilities(state, seconds, power, planet.id);
     runMiners(state, seconds, power, planet.id);
     runMachines(state, seconds, power, planet.id);
+    runConstructionCenters(state, seconds, power, planet.id);
     runRayReceivers(state, seconds, reception, planet.id);
     const storage = gridStoredEnergy(state, planet.id);
     state.planetMetrics[planet.id] = {
@@ -2976,6 +3219,9 @@ function advanceExplorationMissions(state: GameState, seconds: number): void {
 export function isPlanetColonized(state: GameState, planetId: PlanetId): boolean {
   if (state.exploration.colonizedPlanetIds.includes(planetId)) return true;
   const planet = getPlanet(planetId);
+  if (planet.systemId === "helios" && planetId !== "home") {
+    return isTechnologyCompleted(state, "interstellar_logistics");
+  }
   const system = getStarSystem(planet.systemId);
   // A surveyed system always receives a pioneer landing on its first world.
   return system.planetIds[0] === planetId && isStarSystemUnlocked(state, planet.systemId);
@@ -3055,7 +3301,7 @@ export function manualMine(state: GameState, entityId: string, amount = 1): Game
   if (!entity || entity.kind !== "vein" || !entity.resourceId || ITEMS[entity.resourceId].kind === "fluid") return state;
   const capacity = Math.max(60, extractorFor(entity).outputCapacity * Math.max(1, entity.minerCount));
   const current = Math.floor((entity.outputs[entity.resourceId] ?? 0) + EPSILON);
-  const finite = !isInfiniteResource(entity.resourceId, entity.planetId, next.settings.resourceMode);
+  const finite = !isInfiniteResource(entity.resourceId, entity.planetId, next.settings.resourceMode, next.galaxy);
   const remaining = finite ? Math.max(0, Math.floor(entity.resourceRemaining ?? 0)) : Number.POSITIVE_INFINITY;
   const mined = Math.max(0, Math.floor(Math.min(amount, capacity - current, remaining)));
   entity.outputs[entity.resourceId] = current + mined;
@@ -3108,6 +3354,7 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
       machineCount: Math.max(1, Math.floor(entity.machineCount)),
       recipeId: entity.recipeId,
       storedItemId: entity.storedItemId,
+      deliveryItemIds: entity.deliveryItemIds ? [...entity.deliveryItemIds] : undefined,
       distributionMode: entity.distributionMode,
       fuelItemId: entity.fuelItemId,
       energyMode: entity.energyMode,
@@ -3117,6 +3364,8 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
       stationMode: entity.stationMode,
       stationMinimumLoad: entity.stationMinimumLoad,
       stationWarpEnabled: entity.stationWarpEnabled,
+      stationHubEnabled: entity.stationHubEnabled,
+      stationHubPriority: entity.stationHubPriority,
       stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
       sprayCoaterInstalled: entity.sprayCoaterInstalled,
       proliferatorTier: entity.proliferatorTier,
@@ -3235,7 +3484,7 @@ export function getBlueprintRequirements(blueprint: BlueprintDefinition): Array<
 export function canPlaceBlueprint(state: GameState, blueprintId: string, planetId: PlanetId = state.activePlanetId): boolean {
   const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
   if (!blueprint || blueprint.entities.length === 0 ||
-    blueprint.entities.some((entity) => !canPlaceBuildingOnPlanet(entity.buildingId, planetId))) return false;
+    blueprint.entities.some((entity) => !canPlaceBuildingOnPlanet(entity.buildingId, planetId, state))) return false;
   return getBlueprintRequirements(blueprint).every((requirement) =>
     (state.construction[requirement.constructionId] ?? 0) >= requirement.amount);
 }
@@ -3289,6 +3538,7 @@ export function placeBlueprint(
       buildingId: template.buildingId,
       recipeId,
       storedItemId: template.storedItemId,
+      deliveryItemIds: template.deliveryItemIds ? [...template.deliveryItemIds] : undefined,
       distributionMode: building.kind === "splitter" ? template.distributionMode ?? "balanced" : undefined,
       fuelItemId: template.fuelItemId,
       fuelRemainingMj: getFuelItemIdsForBuilding(template.buildingId).length > 0 ? 0 : undefined,
@@ -3307,6 +3557,8 @@ export function placeBlueprint(
       stationVessels: building.kind === "station" ? 0 : undefined,
       stationWarpers: template.buildingId === "interstellar_logistics_station" ? 0 : undefined,
       stationWarpEnabled: template.buildingId === "interstellar_logistics_station" ? template.stationWarpEnabled !== false : undefined,
+      stationHubEnabled: template.buildingId === "interstellar_logistics_station" ? Boolean(template.stationHubEnabled) : undefined,
+      stationHubPriority: template.buildingId === "interstellar_logistics_station" ? template.stationHubPriority ?? 1 : undefined,
       stationMinimumLoad: building.kind === "station" ? template.stationMinimumLoad ?? 1 : undefined,
       stationSlots: building.kind === "station" && template.buildingId !== "orbital_collector"
         ? template.stationSlots?.map((slot) => ({ ...slot })) ?? stationSlotsForPlacement(
@@ -3365,7 +3617,7 @@ export function placeBlueprint(
 export function canQueueBlueprint(state: GameState, blueprintId: string, planetId: PlanetId = state.activePlanetId): boolean {
   const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
   return Boolean(blueprint?.entities.length && blueprint.entities.every((entity) =>
-    canPlaceBuildingOnPlanet(entity.buildingId, planetId)));
+    canPlaceBuildingOnPlanet(entity.buildingId, planetId, state)));
 }
 
 export function queueBlueprint(
@@ -3424,16 +3676,16 @@ export function processConstructionQueue(state: GameState): GameState {
   return next;
 }
 
-export function canPlaceBuildingOnPlanet(buildingId: BuildingId, planetId: PlanetId): boolean {
+export function canPlaceBuildingOnPlanet(buildingId: BuildingId, planetId: PlanetId, state?: { galaxy?: GameState["galaxy"] }): boolean {
   if (getPlanet(planetId).kind === "gas-giant") return buildingId === "orbital_collector";
   if (buildingId === "orbital_collector") return false;
-  return buildingId !== "geothermal_power_station" || getPlanetIndustrialProfile({ galaxy: createGalaxyState() }, planetId).geothermalMultiplier > 0;
+  return buildingId !== "geothermal_power_station" || getPlanetIndustrialProfile(state ?? { galaxy: createGalaxyState() }, planetId).geothermalMultiplier > 0;
 }
 
 export function placeBuilding(state: GameState, buildingId: BuildingId, position: { x: number; y: number }, count = 1): GameState {
   const building = getBuilding(buildingId);
   const amount = Math.max(1, Math.floor(count));
-  if (building.kind === "miner" || !canPlaceBuildingOnPlanet(buildingId, state.activePlanetId) ||
+  if (building.kind === "miner" || !canPlaceBuildingOnPlanet(buildingId, state.activePlanetId, state) ||
     (state.construction[buildingId] ?? 0) < amount) return state;
   const next = copyState(state);
   const recipe = getRecipesForBuilding(buildingId).find((candidate) =>
@@ -3458,8 +3710,9 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
     routingCursor: 0,
     distributionMode: building.kind === "splitter" ? "balanced" : undefined,
     storedItemId: buildingId === "orbital_collector"
-      ? (Object.keys(getPlanet(state.activePlanetId).orbitalYields ?? {})[0] as ItemId | undefined) ?? "hydrogen"
+      ? (Object.keys(getPlanetOrbitalYields(state, state.activePlanetId))[0] as ItemId | undefined) ?? "hydrogen"
       : undefined,
+    deliveryItemIds: buildingId === "material_delivery_hub" ? [] : undefined,
     stationMode: building.kind === "station" ? "supply" : undefined,
     stationProgress: building.kind === "station" ? 0 : undefined,
     stationTrips: building.kind === "station" ? 0 : undefined,
@@ -3468,6 +3721,8 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
     stationVessels: building.kind === "station" ? 0 : undefined,
     stationWarpers: buildingId === "interstellar_logistics_station" ? 0 : undefined,
     stationWarpEnabled: buildingId === "interstellar_logistics_station" ? true : undefined,
+    stationHubEnabled: buildingId === "interstellar_logistics_station" ? false : undefined,
+    stationHubPriority: buildingId === "interstellar_logistics_station" ? 1 : undefined,
     stationMinimumLoad: building.kind === "station" ? 1 : undefined,
     stationSlots: building.kind === "station" && buildingId !== "orbital_collector"
       ? stationSlotsForPlacement(buildingId)
@@ -3530,6 +3785,21 @@ function addToTray(state: GameState, itemId: ItemId, amount: number): void {
   state.tray[itemId] = Math.floor((state.tray[itemId] ?? 0) + amount + EPSILON);
 }
 
+function addToPlanetTray(state: GameState, planetId: PlanetId, itemId: ItemId, amount: number): void {
+  if (amount <= EPSILON || planetId === state.activePlanetId || isPortableFleetItem(itemId)) {
+    if (amount > EPSILON) addToTray(state, itemId, amount);
+    return;
+  }
+  const tray = state.planetTrays[planetId] ?? {};
+  tray[itemId] = Math.floor((tray[itemId] ?? 0) + amount + EPSILON);
+  state.planetTrays[planetId] = tray;
+}
+
+export function getMaterialDeliveryItems(entity: FactoryEntity): ItemId[] {
+  if (entity.buildingId !== "material_delivery_hub") return [];
+  return [...new Set((entity.deliveryItemIds ?? []).filter((itemId) => Boolean(ITEMS[itemId])))].slice(0, MATERIAL_DELIVERY_SLOT_COUNT);
+}
+
 function refundBelts(state: GameState, belts: BeltConnection[]): void {
   for (const belt of belts) {
     const constructionId = getBeltConstructionId(belt.tier);
@@ -3537,15 +3807,19 @@ function refundBelts(state: GameState, belts: BeltConnection[]): void {
   }
 }
 
-function logisticsAccepts(entity: FactoryEntity, itemId: ItemId): boolean {
+function logisticsAccepts(state: GameState, entity: FactoryEntity, itemId: ItemId): boolean {
   if ((entity.kind !== "storage" && entity.kind !== "splitter" && entity.kind !== "station") || !entity.buildingId) return false;
   if (entity.buildingId === "orbital_collector") {
-    return (getPlanet(entity.planetId).orbitalYields?.[itemId] ?? 0) > 0 && (!entity.storedItemId || entity.storedItemId === itemId);
+    return (getPlanetOrbitalYields(state, entity.planetId)[itemId] ?? 0) > 0 && (!entity.storedItemId || entity.storedItemId === itemId);
   }
   const accepts = getBuilding(entity.buildingId).accepts ?? "any";
   const itemKind = ITEMS[itemId].kind;
   const compatibleKind = accepts === "any" || accepts === itemKind || (accepts === "solid" && itemKind === "matrix");
   if (!compatibleKind) return false;
+  if (entity.buildingId === "material_delivery_hub") {
+    const configured = getMaterialDeliveryItems(entity);
+    return configured.includes(itemId) || configured.length < MATERIAL_DELIVERY_SLOT_COUNT;
+  }
   if (entity.kind === "station") {
     const configured = getStationSlots(entity).filter((slot) => slot.itemId);
     return configured.length === 0 || configured.some((slot) => slot.itemId === itemId);
@@ -3559,12 +3833,12 @@ function fuelGeneratorAccepts(entity: FactoryEntity, itemId: ItemId): boolean {
 }
 
 function targetConsumes(state: GameState, entity: FactoryEntity, itemId: ItemId): boolean {
-  if (logisticsAccepts(entity, itemId)) return true;
+  if (logisticsAccepts(state, entity, itemId)) return true;
   if (fuelGeneratorAccepts(entity, itemId)) return true;
   if (entity.sprayCoaterInstalled && getEntityProliferatorItemId(entity) === itemId) return true;
   const recipe = getRecipe(entity.recipeId);
   if (recipe?.id === "matrix_research") {
-    return remainingResearchCosts(state).some((cost) => cost.itemId === itemId);
+    return MATRIX_ITEM_IDS.includes(itemId);
   }
   return recipe?.inputs.some((input) => input.itemId === itemId) ?? false;
 }
@@ -3604,7 +3878,12 @@ function configureAutoTargetRecipe(state: GameState, entity: FactoryEntity, item
 }
 
 function configureTargetItem(entity: FactoryEntity, itemId: ItemId): void {
-  if (entity.kind === "station" && entity.buildingId !== "orbital_collector") {
+  if (entity.buildingId === "material_delivery_hub") {
+    const configured = getMaterialDeliveryItems(entity);
+    if (!configured.includes(itemId) && configured.length < MATERIAL_DELIVERY_SLOT_COUNT) {
+      entity.deliveryItemIds = [...configured, itemId];
+    }
+  } else if (entity.kind === "station" && entity.buildingId !== "orbital_collector") {
     const slots = ensureStationSlots(entity);
     if (!slots.some((slot) => slot.itemId === itemId)) {
       const empty = slots.find((slot) => !slot.itemId);
@@ -3973,6 +4252,239 @@ export function craftConstruction(state: GameState, buildingId: ConstructionId):
   return next;
 }
 
+export interface ConstructionQuickCraftPlan {
+  possible: boolean;
+  usesUpstream: boolean;
+  missingTechnology: string | null;
+  missingItems: Array<{ itemId: ItemId; current: number; required: number; missing: number }>;
+  consumedItems: Array<{ itemId: ItemId; amount: number }>;
+  producedItems: Array<{ itemId: ItemId; amount: number }>;
+}
+
+interface ConstructionQuickCraftWork {
+  inventory: Partial<Record<ItemId, number>>;
+  produced: Partial<Record<ItemId, number>>;
+}
+
+interface InternalConstructionQuickCraftPlan extends ConstructionQuickCraftPlan {
+  inventory?: Partial<Record<ItemId, number>>;
+}
+
+const QUICK_CRAFT_OPTION_LIMIT = 24;
+
+function copyQuickCraftWork(work: ConstructionQuickCraftWork): ConstructionQuickCraftWork {
+  return { inventory: { ...work.inventory }, produced: { ...work.produced } };
+}
+
+function ensureQuickCraftItemOptions(
+  state: GameState,
+  work: ConstructionQuickCraftWork,
+  itemId: ItemId,
+  requiredAmount: number,
+  resolving: ReadonlySet<ItemId>,
+): ConstructionQuickCraftWork[] {
+  const available = Math.max(0, Math.floor(work.inventory[itemId] ?? 0));
+  if (available >= requiredAmount) return [work];
+  if (resolving.has(itemId)) return [];
+
+  const nextResolving = new Set(resolving);
+  nextResolving.add(itemId);
+  const options: ConstructionQuickCraftWork[] = [];
+  const recipes = Object.values(RECIPES).filter((recipe) =>
+    isHandcraftableRecipe(recipe.id) &&
+    (!recipe.requiredTechId || isTechnologyCompleted(state, recipe.requiredTechId)) &&
+    recipe.outputs.some((output) => output.itemId === itemId && output.amount > 0));
+
+  for (const recipe of recipes) {
+    const requestedOutput = recipe.outputs.find((output) => output.itemId === itemId)!;
+    const batches = Math.ceil((requiredAmount - available) / requestedOutput.amount);
+    let candidates = [copyQuickCraftWork(work)];
+    for (const input of recipe.inputs) {
+      const requiredInput = input.amount * batches;
+      const reserved: ConstructionQuickCraftWork[] = [];
+      for (const candidate of candidates) {
+        for (const supplied of ensureQuickCraftItemOptions(state, candidate, input.itemId, requiredInput, nextResolving)) {
+          const next = copyQuickCraftWork(supplied);
+          next.inventory[input.itemId] = Math.max(0, Math.floor((next.inventory[input.itemId] ?? 0) - requiredInput));
+          reserved.push(next);
+          if (reserved.length >= QUICK_CRAFT_OPTION_LIMIT) break;
+        }
+        if (reserved.length >= QUICK_CRAFT_OPTION_LIMIT) break;
+      }
+      candidates = reserved;
+      if (candidates.length === 0) break;
+    }
+
+    for (const candidate of candidates) {
+      for (const output of recipe.outputs) {
+        const amount = output.amount * batches;
+        candidate.inventory[output.itemId] = Math.floor((candidate.inventory[output.itemId] ?? 0) + amount);
+        candidate.produced[output.itemId] = Math.floor((candidate.produced[output.itemId] ?? 0) + amount);
+      }
+      if ((candidate.inventory[itemId] ?? 0) >= requiredAmount) options.push(candidate);
+      if (options.length >= QUICK_CRAFT_OPTION_LIMIT) return options;
+    }
+  }
+  return options;
+}
+
+function buildConstructionQuickCraftPlan(state: GameState, buildingId: ConstructionId): InternalConstructionQuickCraftPlan {
+  const definition = getConstructionDefinition(buildingId);
+  const directDeficits = getConstructionCraftDeficits(state, buildingId);
+  const impossible = {
+    possible: false,
+    usesUpstream: false,
+    missingTechnology: directDeficits.missingTechnology,
+    missingItems: directDeficits.missingItems,
+    consumedItems: [],
+    producedItems: [],
+  } satisfies ConstructionQuickCraftPlan;
+  if (!definition || directDeficits.missingTechnology) return impossible;
+
+  const initialInventory = Object.fromEntries((Object.entries(state.tray) as Array<[ItemId, number]>).map(([itemId, amount]) => [
+    itemId,
+    Math.max(0, Math.floor(amount ?? 0)),
+  ])) as Partial<Record<ItemId, number>>;
+  let candidates: ConstructionQuickCraftWork[] = [{ inventory: { ...initialInventory }, produced: {} }];
+  for (const cost of definition.costs) {
+    const paid: ConstructionQuickCraftWork[] = [];
+    for (const candidate of candidates) {
+      for (const supplied of ensureQuickCraftItemOptions(state, candidate, cost.itemId, cost.amount, new Set())) {
+        const next = copyQuickCraftWork(supplied);
+        next.inventory[cost.itemId] = Math.max(0, Math.floor((next.inventory[cost.itemId] ?? 0) - cost.amount));
+        paid.push(next);
+        if (paid.length >= QUICK_CRAFT_OPTION_LIMIT) break;
+      }
+      if (paid.length >= QUICK_CRAFT_OPTION_LIMIT) break;
+    }
+    candidates = paid;
+    if (candidates.length === 0) return impossible;
+  }
+
+  const selected = candidates[0];
+  const consumedItems = (Object.keys(ITEMS) as ItemId[]).flatMap((itemId) => {
+    const consumed = Math.max(0, Math.floor((initialInventory[itemId] ?? 0) - (selected.inventory[itemId] ?? 0)));
+    return consumed > 0 ? [{ itemId, amount: consumed }] : [];
+  });
+  const producedItems = (Object.entries(selected.produced) as Array<[ItemId, number]>).flatMap(([itemId, amount]) =>
+    amount > 0 ? [{ itemId, amount: Math.floor(amount) }] : []);
+  return {
+    possible: true,
+    usesUpstream: producedItems.length > 0,
+    missingTechnology: null,
+    missingItems: directDeficits.missingItems,
+    consumedItems,
+    producedItems,
+    inventory: selected.inventory,
+  };
+}
+
+export function getConstructionQuickCraftPlan(state: GameState, buildingId: ConstructionId): ConstructionQuickCraftPlan {
+  const { inventory: _inventory, ...plan } = buildConstructionQuickCraftPlan(state, buildingId);
+  return plan;
+}
+
+export function craftConstructionWithUpstream(state: GameState, buildingId: ConstructionId): GameState {
+  const definition = getConstructionDefinition(buildingId);
+  const plan = buildConstructionQuickCraftPlan(state, buildingId);
+  if (!definition || !plan.possible || !plan.inventory) return state;
+  const next = copyState(state);
+  next.tray = { ...plan.inventory };
+  for (const item of plan.producedItems) {
+    next.totalProduced[item.itemId] = Math.floor((next.totalProduced[item.itemId] ?? 0) + item.amount);
+  }
+  next.construction[buildingId] = Math.floor((next.construction[buildingId] ?? 0) + definition.outputAmount);
+  return next;
+}
+
+export function getConstructionAutomationStockLimit(state: GameState): number {
+  if (isTechnologyCompleted(state, "construction_capacity_2")) return 2000;
+  if (isTechnologyCompleted(state, "construction_capacity_1")) return 500;
+  return 100;
+}
+
+export function getConstructionAutomationCycleSeconds(state: GameState): number {
+  if (isTechnologyCompleted(state, "construction_capacity_2")) return 1;
+  if (isTechnologyCompleted(state, "construction_capacity_1")) return 2.5;
+  return 5;
+}
+
+export function setConstructionAutomationEnabled(state: GameState, enabled: boolean): GameState {
+  if (state.constructionAutomation.enabled === enabled) return state;
+  return { ...state, constructionAutomation: { ...state.constructionAutomation, enabled } };
+}
+
+export function setConstructionAutomationTarget(state: GameState, constructionId: ConstructionId, target: number): GameState {
+  if (!getConstructionDefinition(constructionId)) return state;
+  const normalized = Math.max(0, Math.min(getConstructionAutomationStockLimit(state), Math.floor(target)));
+  if ((state.constructionAutomation.targetStock[constructionId] ?? 0) === normalized) return state;
+  const targetStock = { ...state.constructionAutomation.targetStock };
+  if (normalized < 1) delete targetStock[constructionId];
+  else targetStock[constructionId] = normalized;
+  return { ...state, constructionAutomation: { ...state.constructionAutomation, targetStock } };
+}
+
+function constructionAutomationHasDeficit(state: GameState): boolean {
+  if (!state.constructionAutomation.enabled) return false;
+  return CONSTRUCTION.some((definition) => {
+    const target = state.constructionAutomation.targetStock[definition.buildingId] ?? 0;
+    return target > (state.construction[definition.buildingId] ?? 0) &&
+      (!definition.requiredTechId || isTechnologyCompleted(state, definition.requiredTechId));
+  });
+}
+
+function constructionTrayForPlanet(state: GameState, planetId: PlanetId): Partial<Record<ItemId, number>> {
+  return planetId === state.activePlanetId ? state.tray : (state.planetTrays[planetId] ??= {});
+}
+
+function runConstructionCenters(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId): void {
+  const definitions = CONSTRUCTION;
+  const cycleSeconds = getConstructionAutomationCycleSeconds(state);
+  for (const entity of state.entities) {
+    if (entity.planetId !== planetId || entity.buildingId !== "construction_center") continue;
+    const powerFactor = powerFactorForEntity(power, entity);
+    if (!state.constructionAutomation.enabled || !constructionAutomationHasDeficit(state) || powerFactor <= EPSILON) {
+      entity.utilization = 0;
+      entity.productionRate = 0;
+      if (!constructionAutomationHasDeficit(state)) entity.progress = 0;
+      continue;
+    }
+    const potentialCycles = seconds * Math.max(1, entity.machineCount) * powerFactor / cycleSeconds;
+    const maximumUsefulCycles = CONSTRUCTION.length * getConstructionAutomationStockLimit(state);
+    entity.progress = round(Math.min(maximumUsefulCycles + 0.999999, (entity.progress ?? 0) + potentialCycles), 6);
+    let completed = 0;
+    let availableCycles = Math.floor(entity.progress + EPSILON);
+    const tray = constructionTrayForPlanet(state, entity.planetId);
+    while (availableCycles > 0) {
+      let selectedIndex = -1;
+      for (let offset = 0; offset < definitions.length; offset += 1) {
+        const index = (state.constructionAutomation.cursor + offset) % definitions.length;
+        const definition = definitions[index];
+        const target = state.constructionAutomation.targetStock[definition.buildingId] ?? 0;
+        const current = state.construction[definition.buildingId] ?? 0;
+        if (target <= current || current + definition.outputAmount > target) continue;
+        if (definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)) continue;
+        if (definition.costs.some((cost) => (tray[cost.itemId] ?? 0) + EPSILON < cost.amount)) continue;
+        selectedIndex = index;
+        break;
+      }
+      if (selectedIndex < 0) break;
+      const definition = definitions[selectedIndex];
+      for (const cost of definition.costs) tray[cost.itemId] = Math.max(0, Math.floor((tray[cost.itemId] ?? 0) - cost.amount));
+      state.construction[definition.buildingId] = Math.floor((state.construction[definition.buildingId] ?? 0) + definition.outputAmount);
+      state.constructionAutomation.cursor = (selectedIndex + 1) % definitions.length;
+      state.constructionAutomation.totalCrafted += definition.outputAmount;
+      state.constructionAutomation.lastCraftedId = definition.buildingId;
+      completed += definition.outputAmount;
+      availableCycles -= 1;
+      entity.progress = round(Math.max(0, entity.progress - 1), 6);
+    }
+    if (availableCycles > 0 && completed === 0) entity.progress = Math.min(0.999999, entity.progress);
+    entity.utilization = completed > 0 ? powerFactor : 0;
+    entity.productionRate = seconds > EPSILON ? round(completed * 60 / seconds, 2) : 0;
+  }
+}
+
 function sourceProduces(entity: FactoryEntity, itemId: ItemId): boolean {
   if (entity.kind === "vein") return entity.resourceId === itemId;
   if (entity.kind === "station" && entity.buildingId !== "orbital_collector") {
@@ -4054,10 +4566,19 @@ export function setBeltPriority(state: GameState, beltId: string, priority: 0 | 
 export function setLogisticsItem(state: GameState, entityId: string, itemId: ItemId): GameState {
   const current = state.entities.find((entity) => entity.id === entityId);
   if (!current) return state;
+  if (current.buildingId === "material_delivery_hub") {
+    const next = copyState(state);
+    const entity = next.entities.find((candidate) => candidate.id === entityId)!;
+    for (const [bufferedItemId, amount] of Object.entries(entity.inputs)) addToPlanetTray(next, entity.planetId, bufferedItemId as ItemId, amount ?? 0);
+    entity.inputs = {};
+    entity.outputs = {};
+    entity.deliveryItemIds = [itemId];
+    return next;
+  }
   if (current.kind === "station" && current.buildingId !== "orbital_collector") {
     return setStationSlotItem(state, entityId, 0, itemId);
   }
-  if (!logisticsAccepts({ ...current, storedItemId: undefined }, itemId)) return state;
+  if (!logisticsAccepts(state, { ...current, storedItemId: undefined }, itemId)) return state;
   if (current.storedItemId === itemId) return state;
   const next = copyState(state);
   const entity = next.entities.find((candidate) => candidate.id === entityId)!;
@@ -4189,6 +4710,51 @@ export function setStationSlotPriority(
   return next;
 }
 
+export function setStationSlotRoutePolicy(
+  state: GameState,
+  entityId: string,
+  slotIndex: number,
+  routePolicy: InterstellarRoutePolicy,
+): GameState {
+  const current = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
+  if (!current || !getStationSlots(current)[slotIndex]?.itemId ||
+    (routePolicy !== "direct" && routePolicy !== "relay-preferred" && routePolicy !== "relay-required")) return state;
+  const next = copyState(state);
+  const station = next.entities.find((entity) => entity.id === entityId)!;
+  ensureStationSlots(station)[slotIndex].routePolicy = routePolicy;
+  return next;
+}
+
+export function setStationSlotWarperBudget(
+  state: GameState,
+  entityId: string,
+  slotIndex: number,
+  warperBudget: number,
+): GameState {
+  const current = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
+  const budget = Math.max(1, Math.min(4, Math.floor(warperBudget)));
+  if (!current || !getStationSlots(current)[slotIndex]?.itemId || !Number.isFinite(warperBudget)) return state;
+  const next = copyState(state);
+  const station = next.entities.find((entity) => entity.id === entityId)!;
+  ensureStationSlots(station)[slotIndex].warperBudget = budget;
+  return next;
+}
+
+export function setStationHubConfiguration(
+  state: GameState,
+  entityId: string,
+  enabled: boolean,
+  priority: LogisticsPriority = 1,
+): GameState {
+  if (!state.entities.some((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station")) return state;
+  return {
+    ...state,
+    entities: state.entities.map((entity) => entity.id === entityId
+      ? { ...entity, stationHubEnabled: enabled, stationHubPriority: priority === 0 || priority === 2 ? priority : 1 }
+      : entity),
+  };
+}
+
 export function getStationTemplateCompatibleEntityIds(
   state: GameState,
   entityIds: string[],
@@ -4223,7 +4789,14 @@ export function applyStationSlotTemplateToEntities(
       }
       configured = setStationSlotMinimumLoad(configured, entityId, slotIndex, template.minimumLoad);
       configured = setStationSlotLimits(configured, entityId, slotIndex, template.minStock, template.maxStock);
-      return setStationSlotPriority(configured, entityId, slotIndex, template.priority);
+      configured = setStationSlotPriority(configured, entityId, slotIndex, template.priority);
+      if (station.buildingId === "interstellar_logistics_station" && template.routePolicy) {
+        configured = setStationSlotRoutePolicy(configured, entityId, slotIndex, template.routePolicy);
+      }
+      if (station.buildingId === "interstellar_logistics_station" && template.warperBudget) {
+        configured = setStationSlotWarperBudget(configured, entityId, slotIndex, template.warperBudget);
+      }
+      return configured;
     }, current));
 }
 
@@ -4409,8 +4982,10 @@ export function removeEntity(state: GameState, entityId: string): GameState {
   if (target.kind === "station" && (target.stationDrones ?? 0) > 0) {
     addToTray(next, "logistics_drone", Math.floor(target.stationDrones ?? 0));
   }
-  if (target.kind === "station" && (target.stationWarpers ?? 0) > 0) {
-    addToTray(next, "space_warper", Math.floor(target.stationWarpers ?? 0));
+  if (target.kind === "station") {
+    const inFlightWarpers = (target.stationRoutes ?? []).reduce((sum, route) =>
+      sum + route.vehicleCount * Math.max(route.requiresWarp ? 1 : 0, route.warpersPerVessel ?? 0), 0);
+    addToPlanetTray(next, target.planetId, "space_warper", Math.floor(target.stationWarpers ?? 0) + inFlightWarpers);
   }
   if (target.sprayCoaterInstalled) {
     next.construction.spray_coater = (next.construction.spray_coater ?? 0) + 1;
@@ -4422,7 +4997,18 @@ export function removeEntity(state: GameState, entityId: string): GameState {
   refundBelts(next, removedBelts);
   for (const station of next.entities) {
     if (station.id !== entityId && station.stationRoutes) {
-      station.stationRoutes = station.stationRoutes.filter((route) => route.peerId !== entityId);
+      const cancelled = station.stationRoutes.filter((route) =>
+        route.peerId === entityId || (route.waypointStationIds ?? []).includes(entityId));
+      if (station.buildingId === "interstellar_logistics_station") {
+        const currentWarpers = Math.floor(station.stationWarpers ?? 0);
+        const refund = cancelled.reduce((sum, route) =>
+          sum + route.vehicleCount * Math.max(route.requiresWarp ? 1 : 0, route.warpersPerVessel ?? 0), 0);
+        const storedRefund = Math.min(refund, Math.max(0, getStationWarperCapacity(station) - currentWarpers));
+        station.stationWarpers = currentWarpers + storedRefund;
+        addToPlanetTray(next, station.planetId, "space_warper", refund - storedRefund);
+      }
+      station.stationRoutes = station.stationRoutes.filter((route) =>
+        route.peerId !== entityId && !(route.waypointStationIds ?? []).includes(entityId));
     }
   }
   next.entities = next.entities.filter((item) => item.id !== entityId);
@@ -4770,6 +5356,24 @@ export function isTechnologyCompleted(state: GameState, techId: TechId): boolean
   return state.research.completedTechIds.includes(techId);
 }
 
+export function getTechnologyConstructionRewards(techId: TechId): ConstructionId[] {
+  return CONSTRUCTION.filter((definition) => definition.requiredTechId === techId)
+    .map((definition) => definition.buildingId);
+}
+
+function completeTechnology(state: GameState, techId: TechId): void {
+  if (state.research.completedTechIds.includes(techId)) return;
+  state.research.completedTechIds.push(techId);
+  for (const constructionId of getTechnologyConstructionRewards(techId)) {
+    state.construction[constructionId] = Math.floor((state.construction[constructionId] ?? 0) + 2);
+  }
+  if (techId === "interstellar_logistics") {
+    for (const planetId of ["ashen", "giant"] as PlanetId[]) {
+      if (!state.exploration.colonizedPlanetIds.includes(planetId)) state.exploration.colonizedPlanetIds.push(planetId);
+    }
+  }
+}
+
 export function canSelectTechnology(state: GameState, techId: TechId): boolean {
   const technology = getTechnology(techId);
   return Boolean(technology && !isTechnologyCompleted(state, techId) && state.research.selectedTechId !== techId &&
@@ -5058,7 +5662,7 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
       tone: "idle",
     };
     const extractor = extractorFor(entity);
-    if (entity.resourceId && !isInfiniteResource(entity.resourceId, entity.planetId, state.settings.resourceMode) &&
+    if (entity.resourceId && !isInfiniteResource(entity.resourceId, entity.planetId, state.settings.resourceMode, state.galaxy) &&
       (entity.resourceRemaining ?? 0) < 1) {
       return { code: "resource-depleted", label: "矿脉已枯竭", tone: "blocked" };
     }
@@ -5110,7 +5714,7 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
 
   if (entity.kind === "station") {
     if (entity.buildingId === "orbital_collector") {
-      const yields = getPlanet(entity.planetId).orbitalYields ?? {};
+      const yields = getPlanetOrbitalYields(state, entity.planetId);
       const itemId = entity.storedItemId && (yields[entity.storedItemId] ?? 0) > 0
         ? entity.storedItemId
         : (Object.keys(yields)[0] as ItemId | undefined) ?? "hydrogen";
@@ -5166,9 +5770,17 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
             ? { code: "missing-drone", label: "缺少可用物流运输机", tone: "blocked" }
             : { code: "missing-vessel", label: "缺少可用物流运输船", tone: "blocked" };
         }
-        if (scope === "remote" && stationRouteRequiresWarp(demand, supply) &&
-          (!demand.stationWarpEnabled || !isTechnologyCompleted(state, "space_warp") || (demand.stationWarpers ?? 0) < 1)) {
-          return { code: "missing-warper", label: "跨恒星航线缺少空间翘曲器", tone: "blocked" };
+        const requiresWarp = scope === "remote" && stationRouteRequiresWarp(demand, supply);
+        const economics = requiresWarp ? getInterstellarRouteEconomics(state, supply, demand, 1, {
+          routePolicy: demandSlot.routePolicy,
+          warperBudget: demandSlot.warperBudget,
+        }) : null;
+        if (requiresWarp && !economics?.routeAvailable) {
+          return { code: "missing-hub", label: "中转策略没有可用物流枢纽", tone: "blocked" };
+        }
+        if (requiresWarp && (!demand.stationWarpEnabled || !isTechnologyCompleted(state, "space_warp") ||
+          (demand.stationWarpers ?? 0) < (economics?.warpersPerVessel ?? 1))) {
+          return { code: "missing-warper", label: `跨恒星航线需要 ${economics?.warpersPerVessel ?? 1} 个翘曲器/船`, tone: "blocked" };
         }
         if (free < minimumCargo) {
           outputBlocked = true;
@@ -5178,9 +5790,13 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
           waitingLoad = true;
           continue;
         }
+        const hubPower = economics?.waypointStationIds.reduce((factor, stationId) => {
+          const station = state.entities.find((candidate) => candidate.id === stationId);
+          return Math.min(factor, station ? getEntityPowerFactor(state, station) : 0);
+        }, 1) ?? 1;
         const routePower = scope === "local"
           ? entityPowerFactor
-          : Math.min(entityPowerFactor, getEntityPowerFactor(state, match.peer));
+          : Math.min(entityPowerFactor, getEntityPowerFactor(state, match.peer), hubPower);
         if (routePower <= EPSILON) return { code: "no-power", label: "航线一侧电网断电", tone: "blocked" };
         if (routePower < 0.999) {
           return { code: "low-power", label: `航线供电不足 · ${Math.round(routePower * 100)}%`, tone: "warning" };
@@ -5194,6 +5810,14 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
   }
 
   if (entity.kind === "storage" || entity.kind === "splitter") {
+    if (entity.buildingId === "material_delivery_hub") {
+      const configured = getMaterialDeliveryItems(entity);
+      if (configured.length === 0) return { code: "unconfigured", label: "等待连接输入线路", tone: "idle" };
+      const flowing = state.belts.some((belt) => belt.target === entity.id && belt.lastFlow > 0.001);
+      return flowing
+        ? { code: "running", label: "物资直送托盘中", tone: "running" }
+        : { code: "missing-input", label: `等待物料 · ${configured.length}/${MATERIAL_DELIVERY_SLOT_COUNT} 接口`, tone: "idle" };
+    }
     if (!entity.storedItemId) return { code: "unconfigured", label: "未选择物流物品", tone: "blocked" };
     const flowing = state.belts.some((belt) => (belt.source === entity.id || belt.target === entity.id) && belt.lastFlow > 0.001);
     if (flowing) return { code: "running", label: "物流运行中", tone: "running" };
@@ -5201,6 +5825,22 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
     return buffered > 0
       ? { code: "idle", label: "等待下游取货", tone: "idle" }
       : { code: "missing-input", label: "等待物料", tone: "idle" };
+  }
+
+  if (entity.buildingId === "construction_center") {
+    if (!state.constructionAutomation.enabled) return { code: "paused", label: "自动制造已关闭", tone: "idle" };
+    if (!constructionAutomationHasDeficit(state)) return { code: "grid-standby", label: "目标库存已满足", tone: "idle" };
+    if (entityPowerFactor <= EPSILON) return { code: "no-power", label: powerCoverageLabel(state, entity), tone: "blocked" };
+    const tray = entity.planetId === state.activePlanetId ? state.tray : state.planetTrays[entity.planetId];
+    const hasCraftableTarget = CONSTRUCTION.some((definition) => {
+      const target = state.constructionAutomation.targetStock[definition.buildingId] ?? 0;
+      return target > (state.construction[definition.buildingId] ?? 0) &&
+        (!definition.requiredTechId || isTechnologyCompleted(state, definition.requiredTechId)) &&
+        definition.costs.every((cost) => (tray[cost.itemId] ?? 0) + EPSILON >= cost.amount);
+    });
+    if (!hasCraftableTarget) return { code: "missing-input", label: "等待目标建筑材料", tone: "blocked" };
+    if (entityPowerFactor < 0.999) return { code: "low-power", label: `供电不足 · ${Math.round(entityPowerFactor * 100)}%`, tone: "warning" };
+    return { code: "running", label: "自动补足施工库存", tone: "running" };
   }
 
   const recipe = getRecipe(entity.recipeId);
@@ -5270,18 +5910,20 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
 }
 
 export function getAcceptedInputs(entity: FactoryEntity, state?: GameState): ItemId[] {
+  if (entity.buildingId === "material_delivery_hub") return getMaterialDeliveryItems(entity);
   if (entity.kind === "station" && entity.buildingId !== "orbital_collector") {
     return getStationSlots(entity).flatMap((slot) => slot.itemId ? [slot.itemId] : []);
   }
   if ((entity.kind === "storage" || entity.kind === "splitter" || entity.kind === "station") && entity.storedItemId) return [entity.storedItemId];
   if (entity.buildingId === "thermal_power_plant" && entity.fuelItemId) return [entity.fuelItemId];
-  if (entity.recipeId === "matrix_research" && state) return remainingResearchCosts(state).map((cost) => cost.itemId);
+  if (entity.recipeId === "matrix_research" && state) return [...MATRIX_ITEM_IDS];
   const recipeInputs = getRecipe(entity.recipeId)?.inputs.map((input) => input.itemId) ?? [];
   const proliferatorItemId = entity.sprayCoaterInstalled ? getEntityProliferatorItemId(entity) : undefined;
   return proliferatorItemId ? [...recipeInputs, proliferatorItemId] : recipeInputs;
 }
 
 export function getProducedOutputs(entity: FactoryEntity): ItemId[] {
+  if (entity.buildingId === "material_delivery_hub" || entity.buildingId === "construction_center") return [];
   if (entity.kind === "vein" && entity.resourceId) return [entity.resourceId];
   if (entity.kind === "station" && entity.buildingId !== "orbital_collector") {
     return getStationSlots(entity).flatMap((slot) => slot.itemId ? [slot.itemId] : []);

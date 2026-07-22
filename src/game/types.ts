@@ -1,7 +1,68 @@
 import type { XYPosition } from "@xyflow/react";
 
-export type StarSystemId = "helios" | "borealis" | "neutron";
-export type PlanetId = "home" | "ashen" | "giant" | "frost" | "boreal_giant" | "magnetar";
+export type StarSystemId =
+  | "helios"
+  | "borealis"
+  | "aurora"
+  | "ember"
+  | "sirius"
+  | "white_dwarf"
+  | "neutron"
+  | "blue_giant";
+
+export type PlanetId =
+  | "home"
+  | "ashen"
+  | "giant"
+  | "frost"
+  | "boreal_giant"
+  | "magnetar"
+  | "verdant"
+  | "pelagic"
+  | "aurora_giant"
+  | "dune"
+  | "cinder"
+  | "ember_giant"
+  | "crystal"
+  | "prairie"
+  | "sirius_giant"
+  | "salt"
+  | "obsidian"
+  | "white_giant"
+  | "tempest"
+  | "inferno"
+  | "abyss"
+  | "azure_giant";
+
+export type PlanetTemplateId =
+  | "oceanic"
+  | "lava"
+  | "ice_field"
+  | "tidal_locked"
+  | "mediterranean"
+  | "prairie"
+  | "savanna"
+  | "desert"
+  | "arid_canyon"
+  | "salt_lake"
+  | "volcanic_ash"
+  | "crystal_desert"
+  | "gas_giant"
+  | "ice_giant"
+  | "hydrogen_giant"
+  | "fire_ice_giant";
+
+export type PlanetOceanType = "water" | "sulfuric-acid" | "lava" | "ice" | "none";
+
+export type StarClassId =
+  | "g_main"
+  | "k_dwarf"
+  | "f_main"
+  | "m_dwarf"
+  | "a_main"
+  | "white_dwarf"
+  | "neutron_star"
+  | "o_blue_giant";
 
 export type ItemId =
   | "iron_ore"
@@ -144,6 +205,10 @@ export type TechId =
   | "proliferator_1"
   | "proliferator_2"
   | "proliferator_3"
+  | "material_delivery_logistics"
+  | "construction_automation"
+  | "construction_capacity_1"
+  | "construction_capacity_2"
   | "dyson_sphere_program"
   | "vertical_launching_silo"
   | "dyson_shell";
@@ -179,8 +244,10 @@ export type BuildingId =
   | "interstellar_logistics_station"
   | "orbital_collector"
   | "storage_mk1"
+  | "material_delivery_hub"
   | "storage_tank"
-  | "splitter_4way";
+  | "splitter_4way"
+  | "construction_center";
 
 export type BeltTier = 1 | 2 | 3;
 export type SorterTier = 1 | 2 | 3;
@@ -287,7 +354,7 @@ export type DifficultyMode = "relaxed" | "standard" | "hard";
 export type RecipeFocusMode = "full" | "two-level";
 export type SimulationSpeed = 1 | 2 | 4;
 export type AutosaveIntervalSeconds = 2 | 10 | 30;
-export type FontScale = 0.8 | 1 | 1.25 | 1.5;
+export type FontScale = 0.8 | 1 | 1.25 | 1.5 | 2;
 
 /** Repeatable endgame research tracks unlocked after the universe matrix. */
 export type InfiniteResearchId =
@@ -426,6 +493,7 @@ export interface PlanetDefinition {
   environment: string;
   resources: string;
   kind: "terrestrial" | "gas-giant";
+  defaultTemplateId: PlanetTemplateId;
   systemId: StarSystemId;
   orbitIndex: number;
   solarMultiplier: number;
@@ -437,6 +505,7 @@ export interface StarSystemDefinition {
   name: string;
   code: string;
   starType: string;
+  defaultStarClassId: StarClassId;
   color: string;
   distanceLy: number;
   description: string;
@@ -502,6 +571,8 @@ export interface FactoryEntity {
   extractorBuildingId?: BuildingId;
   recipeId?: RecipeId;
   storedItemId?: ItemId;
+  /** Up to three item types routed directly into this planet's material tray. */
+  deliveryItemIds?: ItemId[];
   distributionMode?: "balanced" | "priority";
   fuelItemId?: ItemId;
   fuelRemainingMj?: number;
@@ -523,6 +594,8 @@ export interface FactoryEntity {
   stationVessels?: number;
   stationWarpers?: number;
   stationWarpEnabled?: boolean;
+  stationHubEnabled?: boolean;
+  stationHubPriority?: LogisticsPriority;
   stationMinimumLoad?: StationMinimumLoad;
   stationSlots?: StationSlot[];
   stationRoutes?: StationRoute[];
@@ -571,6 +644,8 @@ export interface StationSlot {
   minStock: number;
   maxStock: number;
   priority: LogisticsPriority;
+  routePolicy: InterstellarRoutePolicy;
+  warperBudget: number;
 }
 
 export interface StationSlotTemplate {
@@ -581,7 +656,11 @@ export interface StationSlotTemplate {
   minStock: number;
   maxStock: number;
   priority: LogisticsPriority;
+  routePolicy?: InterstellarRoutePolicy;
+  warperBudget?: number;
 }
+
+export type InterstellarRoutePolicy = "direct" | "relay-preferred" | "relay-required";
 
 export interface StationRoute {
   id: string;
@@ -594,6 +673,9 @@ export interface StationRoute {
   progress: number;
   duration: number;
   requiresWarp: boolean;
+  waypointStationIds?: string[];
+  distanceLy?: number;
+  warpersPerVessel?: number;
 }
 
 export type DraggedItemSourceKind = "node" | "node-input" | "tray";
@@ -767,7 +849,8 @@ export interface EntityOperatingStatus {
     | "missing-route"
     | "missing-vessel"
     | "missing-drone"
-    | "missing-warper"
+     | "missing-warper"
+     | "missing-hub"
     | "waiting-load"
     | "collecting"
     | "missing-dyson-swarm"
@@ -811,7 +894,12 @@ export type PlanetIndustryRole =
 
 export interface PlanetIndustrialProfile {
   planetId: PlanetId;
+  templateId: PlanetTemplateId;
   climateName: string;
+  resourceIds: ItemId[];
+  rareResourceIds: ItemId[];
+  oceanType: PlanetOceanType;
+  orbitalYields: Partial<Record<ItemId, number>>;
   windMultiplier: number;
   solarMultiplier: number;
   geothermalMultiplier: number;
@@ -828,9 +916,22 @@ export interface PlanetIndustrialProfile {
   surveyDurationSeconds: number;
 }
 
+export interface StarSystemProfile {
+  systemId: StarSystemId;
+  starClassId: StarClassId;
+  starTypeName: string;
+  luminosity: number;
+  massMultiplier: number;
+  radiusMultiplier: number;
+  positionX: number;
+  positionY: number;
+  distanceFromOriginLy: number;
+}
+
 export interface GalaxyState {
   seed: number;
   profiles: Record<PlanetId, PlanetIndustrialProfile>;
+  systemProfiles: Record<StarSystemId, StarSystemProfile>;
   planetRoles: Record<PlanetId, PlanetIndustryRole>;
 }
 
@@ -871,6 +972,7 @@ export interface BlueprintEntityTemplate {
   machineCount: number;
   recipeId?: RecipeId;
   storedItemId?: ItemId;
+  deliveryItemIds?: ItemId[];
   distributionMode?: "balanced" | "priority";
   fuelItemId?: ItemId;
   energyMode?: EnergyMode;
@@ -880,6 +982,8 @@ export interface BlueprintEntityTemplate {
   stationMode?: "supply" | "demand";
   stationMinimumLoad?: StationMinimumLoad;
   stationWarpEnabled?: boolean;
+  stationHubEnabled?: boolean;
+  stationHubPriority?: LogisticsPriority;
   stationSlots?: StationSlot[];
   sprayCoaterInstalled?: boolean;
   proliferatorTier?: ProliferatorTier;
@@ -968,8 +1072,16 @@ export interface ProductionHistorySample {
   blockedMachines?: number;
 }
 
+export interface ConstructionAutomationState {
+  enabled: boolean;
+  targetStock: Partial<Record<ConstructionId, number>>;
+  cursor: number;
+  totalCrafted: number;
+  lastCraftedId: ConstructionId | null;
+}
+
 export interface GameState {
-  version: 24;
+  version: 26;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -978,6 +1090,7 @@ export interface GameState {
   tray: Partial<Record<ItemId, number>>;
   planetTrays: Record<PlanetId, Partial<Record<ItemId, number>>>;
   construction: Partial<Record<ConstructionId, number>>;
+  constructionAutomation: ConstructionAutomationState;
   portableFleet: Record<PortableFleetItemId, number>;
   manualMined: number;
   totalProduced: Partial<Record<ItemId, number>>;

@@ -3,8 +3,9 @@ import { useRef, useState, type HTMLAttributes, type PointerEvent as ReactPointe
 type HorizontalPanBindings<T extends HTMLElement> = Pick<HTMLAttributes<T>,
   "onWheel" | "onPointerDown" | "onPointerMove" | "onPointerUp" | "onPointerCancel" | "onContextMenu">;
 
-export function useHorizontalPan<T extends HTMLElement>(): { bindings: HorizontalPanBindings<T>; isPanning: boolean } {
+export function useHorizontalPan<T extends HTMLElement>(options: { wheelMode?: "horizontal" | "axis-lock" } = {}): { bindings: HorizontalPanBindings<T>; isPanning: boolean } {
   const dragRef = useRef<{ pointerId: number; startX: number; startScrollLeft: number } | null>(null);
+  const wheelLockRef = useRef<{ axis: "x" | "y"; expiresAt: number } | null>(null);
   const [isPanning, setIsPanning] = useState(false);
 
   const finishPan = (event: ReactPointerEvent<T>) => {
@@ -21,6 +22,25 @@ export function useHorizontalPan<T extends HTMLElement>(): { bindings: Horizonta
       onWheel: (event) => {
         const wheelEvent = event as ReactWheelEvent<T>;
         const surface = wheelEvent.currentTarget;
+        if (options.wheelMode === "axis-lock") {
+          const now = performance.now();
+          const currentLock = wheelLockRef.current;
+          let axis = currentLock && currentLock.expiresAt > now
+            ? currentLock.axis
+            : Math.abs(wheelEvent.deltaX) > Math.abs(wheelEvent.deltaY) ? "x" as const : "y" as const;
+          if (axis === "x" && surface.scrollWidth <= surface.clientWidth && surface.scrollHeight > surface.clientHeight) axis = "y";
+          if (axis === "y" && surface.scrollHeight <= surface.clientHeight && surface.scrollWidth > surface.clientWidth) axis = "x";
+          const delta = axis === "x"
+            ? Math.abs(wheelEvent.deltaX) > 0.01 ? wheelEvent.deltaX : wheelEvent.deltaY
+            : wheelEvent.deltaY;
+          if (Math.abs(delta) <= 0.01) return;
+          wheelLockRef.current = { axis, expiresAt: now + 180 };
+          if (axis === "x") surface.scrollLeft += delta;
+          else surface.scrollTop += delta;
+          wheelEvent.preventDefault();
+          wheelEvent.stopPropagation();
+          return;
+        }
         if (surface.scrollWidth <= surface.clientWidth) return;
         const delta = Math.abs(wheelEvent.deltaY) >= Math.abs(wheelEvent.deltaX) ? wheelEvent.deltaY : wheelEvent.deltaX;
         if (delta === 0) return;

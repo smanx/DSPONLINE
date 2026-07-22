@@ -14,7 +14,7 @@ npm run test:e2e
 npm run desktop:pack
 ```
 
-Current baseline: 226 Vitest tests, 83 Playwright Chrome tests, and 16 Node server tests.
+Current workspace baseline: 241 Vitest tests, 86 Playwright Chrome tests, and 16 Node server tests. The deployed `0.2.0` release remains at its recorded 228/83 baseline until the local `0.3.0` / state v26 candidate is explicitly released.
 
 ## Choose By Change
 
@@ -22,7 +22,7 @@ Current baseline: 226 Vitest tests, 83 Playwright Chrome tests, and 16 Node serv
 | --- | --- |
 | Docs or this Skill | Markdown/link checks, Skill validator, `git diff --check` |
 | Local UI/style | typecheck, build, focused E2E, desktop + portrait + landscape screenshots |
-| Font/zoom/React Flow geometry | above plus 80/100/125/150 percent handle alignment |
+| Font/zoom/React Flow geometry | above plus 80/100/125/150/200 percent handle alignment |
 | Content/recipe/technology | typecheck, unit suite, build, content/progression audits, focused E2E |
 | Engine/logistics/power | typecheck, full unit suite, build, relevant E2E; full E2E for shared rules |
 | Save/migration/offline | full unit suite, old-save migration fixtures, full E2E, build |

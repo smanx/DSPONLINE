@@ -31,7 +31,7 @@ function networkMatrixStock(game: GameState, itemId: ItemId): number {
 export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQueued, onSelectInfiniteResearch, onInfiniteResearchAutomation, focusTechId }: TechnologyWorkspaceProps) {
   const [focusedTechId, setFocusedTechId] = useState<TechId | null>(null);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
-  const horizontalPan = useHorizontalPan<HTMLDivElement>();
+  const horizontalPan = useHorizontalPan<HTMLDivElement>({ wheelMode: "axis-lock" });
   useEffect(() => {
     if (!open || !focusTechId) return;
     setFocusedTechId(focusTechId);

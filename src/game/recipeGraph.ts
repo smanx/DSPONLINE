@@ -1,4 +1,5 @@
-import { RECIPES, TECHNOLOGY_LIST, getBuilding } from "./content";
+import { PLANET_LIST, RECIPES, TECHNOLOGY_LIST, getBuilding } from "./content";
+import { PLANET_TEMPLATE_POOLS, PLANET_TEMPLATES } from "./galaxyCatalog";
 import type { BuildingId, ItemId, PlanetId, RecipeDefinition, TechnologyDefinition } from "./types";
 
 export interface ResourceSourceDefinition {
@@ -27,57 +28,68 @@ const SOLID_VEIN_SOURCE = (planetIds: PlanetId[]): ResourceSourceDefinition => (
   manual: true,
 });
 
+const POTENTIAL_VEIN_PLANETS = (itemId: ItemId): PlanetId[] => PLANET_LIST.flatMap((planet) =>
+  PLANET_TEMPLATE_POOLS[planet.id].some((templateId) => {
+    const template = PLANET_TEMPLATES[templateId];
+    return template.resourceIds.includes(itemId) || template.rareResourcePool.includes(itemId);
+  }) ? [planet.id] : []);
+
+const POTENTIAL_ORBIT_PLANETS = (itemId: ItemId): PlanetId[] => PLANET_LIST.flatMap((planet) =>
+  PLANET_TEMPLATE_POOLS[planet.id].some((templateId) => (PLANET_TEMPLATES[templateId].orbitalYields[itemId] ?? 0) > 0)
+    ? [planet.id]
+    : []);
+
 export const RESOURCE_SOURCES: Partial<Record<ItemId, ResourceSourceDefinition[]>> = {
-  iron_ore: [SOLID_VEIN_SOURCE(["home", "ashen", "frost", "magnetar"])],
-  copper_ore: [SOLID_VEIN_SOURCE(["home", "ashen", "frost", "magnetar"])],
-  coal: [SOLID_VEIN_SOURCE(["home", "ashen"])],
-  stone: [SOLID_VEIN_SOURCE(["home", "ashen"])],
-  silicon_ore: [SOLID_VEIN_SOURCE(["ashen", "frost", "magnetar"])],
-  titanium_ore: [SOLID_VEIN_SOURCE(["ashen", "frost", "magnetar"])],
-  kimberlite_ore: [SOLID_VEIN_SOURCE(["ashen"])],
-  fractal_silicon: [SOLID_VEIN_SOURCE(["ashen"])],
-  optical_grating_crystal: [SOLID_VEIN_SOURCE(["frost"])],
-  spiniform_stalagmite_crystal: [SOLID_VEIN_SOURCE(["frost"])],
-  unipolar_magnet: [SOLID_VEIN_SOURCE(["magnetar"])],
-  organic_crystal: [SOLID_VEIN_SOURCE(["ashen"])],
+  iron_ore: [SOLID_VEIN_SOURCE(POTENTIAL_VEIN_PLANETS("iron_ore"))],
+  copper_ore: [SOLID_VEIN_SOURCE(POTENTIAL_VEIN_PLANETS("copper_ore"))],
+  coal: [SOLID_VEIN_SOURCE(POTENTIAL_VEIN_PLANETS("coal"))],
+  stone: [SOLID_VEIN_SOURCE(POTENTIAL_VEIN_PLANETS("stone"))],
+  silicon_ore: [SOLID_VEIN_SOURCE(POTENTIAL_VEIN_PLANETS("silicon_ore"))],
+  titanium_ore: [SOLID_VEIN_SOURCE(POTENTIAL_VEIN_PLANETS("titanium_ore"))],
+  kimberlite_ore: [SOLID_VEIN_SOURCE(POTENTIAL_VEIN_PLANETS("kimberlite_ore"))],
+  fractal_silicon: [SOLID_VEIN_SOURCE(POTENTIAL_VEIN_PLANETS("fractal_silicon"))],
+  optical_grating_crystal: [SOLID_VEIN_SOURCE(POTENTIAL_VEIN_PLANETS("optical_grating_crystal"))],
+  spiniform_stalagmite_crystal: [SOLID_VEIN_SOURCE(POTENTIAL_VEIN_PLANETS("spiniform_stalagmite_crystal"))],
+  unipolar_magnet: [SOLID_VEIN_SOURCE(POTENTIAL_VEIN_PLANETS("unipolar_magnet"))],
+  organic_crystal: [SOLID_VEIN_SOURCE(POTENTIAL_VEIN_PLANETS("organic_crystal"))],
   crude_oil: [{
     label: "原油涌泉萃取",
-    planetIds: ["home"],
+    planetIds: POTENTIAL_VEIN_PLANETS("crude_oil"),
     extractorBuildingId: "oil_extractor",
     manual: false,
   }],
   water: [{
     label: "海洋抽取",
-    planetIds: ["home"],
+    planetIds: POTENTIAL_VEIN_PLANETS("water"),
     extractorBuildingId: "water_pump",
     manual: false,
   }],
   sulfuric_acid: [{
     label: "硫酸海洋抽取",
-    planetIds: ["ashen"],
+    planetIds: POTENTIAL_VEIN_PLANETS("sulfuric_acid"),
     extractorBuildingId: "water_pump",
     manual: false,
   }],
   hydrogen: [{
     label: "气态巨星轨道采集",
-    planetIds: ["giant", "boreal_giant"],
+    planetIds: POTENTIAL_ORBIT_PLANETS("hydrogen"),
     extractorBuildingId: "orbital_collector",
     manual: false,
   }],
   deuterium: [{
     label: "气态巨星轨道采集",
-    planetIds: ["giant", "boreal_giant"],
+    planetIds: POTENTIAL_ORBIT_PLANETS("deuterium"),
     extractorBuildingId: "orbital_collector",
     manual: false,
   }],
   fire_ice: [
     {
       label: "气态巨星轨道采集",
-      planetIds: ["giant", "boreal_giant"],
+      planetIds: POTENTIAL_ORBIT_PLANETS("fire_ice"),
       extractorBuildingId: "orbital_collector",
       manual: false,
     },
-    SOLID_VEIN_SOURCE(["frost"]),
+    SOLID_VEIN_SOURCE(POTENTIAL_VEIN_PLANETS("fire_ice")),
   ],
 };
 

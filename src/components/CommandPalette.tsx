@@ -16,7 +16,6 @@ interface CommandPaletteProps {
   onPauseToggle: () => void;
   onTogglePerformance: () => void;
   onToggleReducedMotion: () => void;
-  onReset: () => void;
 }
 
 interface PaletteCommand {
@@ -27,7 +26,7 @@ interface PaletteCommand {
   run: () => void;
 }
 
-export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRecipe, onFocusEntity, onAutoLayout, onPauseToggle, onTogglePerformance, onToggleReducedMotion, onReset }: CommandPaletteProps) {
+export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRecipe, onFocusEntity, onAutoLayout, onPauseToggle, onTogglePerformance, onToggleReducedMotion }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -61,7 +60,6 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
       { id: "performance", label: game.settings.performanceMode ? "关闭性能模式" : "开启性能模式", detail: "降低大规模工厂视觉负载", icon: <Gauge size={16} />, run: () => run(onTogglePerformance) },
       { id: "motion", label: game.settings.reducedMotion ? "开启动态效果" : "减少动态效果", detail: "尊重动效偏好", icon: <Settings2 size={16} />, run: () => run(onToggleReducedMotion) },
       { id: "auto-layout", label: "整理当前行星生产网络", detail: "按物流上下游自动排列全部设备", icon: <WandSparkles size={16} />, run: () => run(onAutoLayout) },
-      { id: "reset", label: "重置当前工厂", detail: "清空当前存档并重新开始", icon: <X size={16} />, run: () => run(onReset) },
     ];
     const itemCommands: PaletteCommand[] = Object.values(ITEMS).map((item) => ({
       id: `recipe:${item.id}`,
@@ -82,7 +80,7 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
       };
     });
     return [...base, ...itemCommands, ...entityCommands];
-  }, [game.entities, game.paused, game.settings.performanceMode, game.settings.reducedMotion, onAutoLayout, onFocusEntity, onFocusRecipe, onOpenWorkspace, onPauseToggle, onReset, onTogglePerformance, onToggleReducedMotion]);
+  }, [game.entities, game.paused, game.settings.performanceMode, game.settings.reducedMotion, onAutoLayout, onFocusEntity, onFocusRecipe, onOpenWorkspace, onPauseToggle, onTogglePerformance, onToggleReducedMotion]);
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("zh-CN");
     if (!normalized) return commands.slice(0, 12);

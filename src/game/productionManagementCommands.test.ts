@@ -35,6 +35,8 @@ describe("cross-planet production management commands", () => {
 
   it("changes only compatible recipes and refunds buffers to each local planet tray", () => {
     let state = unlockAshen(createInitialState());
+    state.tray.iron_ore = 0;
+    state.planetTrays.home.iron_ore = 0;
     state.construction.arc_smelter = 2;
     state = placeBuilding(state, "arc_smelter", { x: 260, y: 0 });
     const homeSmelter = state.entities.find((entity) => entity.buildingId === "arc_smelter" && entity.planetId === "home")!;
@@ -78,6 +80,8 @@ describe("cross-planet production management commands", () => {
       minStock: 20,
       maxStock: 200,
       priority: 2,
+      routePolicy: "relay-preferred",
+      warperBudget: 2,
     };
 
     state = applyStationSlotTemplateToEntities(state, [homeStation.id, ashenStation.id], 0, template);

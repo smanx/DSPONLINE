@@ -24,7 +24,7 @@ Use this map after reading `docs/PROJECT_STATUS.md`. Open only the files relevan
 | Power and operating status | `src/game/engine.ts`, `statistics.ts` | factory nodes, inspector, engine tests |
 | Research and progression | `content.ts`, `campaign.ts`, `progression.ts`, `endgame.ts` | technology/campaign/galaxy workspaces |
 | Recipe lookup, planning, and production management | `recipeGraph.ts`, `planning.ts`, `productionManagement.ts` | recipe/statistics workspaces, `ProductionManagement.tsx` |
-| Galaxy and stellar industry | `galaxy.ts`, `stellarIndustry.ts` | star map and galaxy workspaces |
+| Galaxy and stellar industry | `galaxyCatalog.ts`, `galaxy.ts`, `stellarIndustry.ts` | star map, logistics diagnostics and Dyson workspaces |
 | Blueprints | `blueprintExchange.ts`, engine blueprint commands | blueprint workspace and tests |
 | Content packs | `mods.ts`, `contentPacks.ts` | operations workspace, storage migration |
 
