@@ -52,4 +52,4 @@ For backend rollback, switch code back and preserve the current database. For fr
 
 ## Current Known Optimization
 
-The `0.4.0` production check confirmed gzip for hashed JS/CSS on both nodes, immutable asset caching, and no-cache HTML/service-worker behavior. Brotli remains optional and should be enabled only after comparing CPU cost and transfer savings with real traffic.
+The `0.5.0` production check confirmed gzip for hashed JS/CSS on both nodes, immutable asset caching, and no-cache HTML/service-worker behavior. Brotli remains optional and should be enabled only after comparing CPU cost and transfer savings with real traffic. Shanghai was about 89% full after this release, so release directories, logs, and backup retention need close monitoring.
