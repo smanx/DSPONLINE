@@ -1,7 +1,7 @@
 import { AlertTriangle, ArrowRight, Check, Factory, Gauge, LocateFixed, LockKeyhole, Navigation, Orbit, Route, Search, Sparkles, Telescope, Timer, Zap, X } from "lucide-react";
 import { useMemo, useState, type CSSProperties } from "react";
 import { STAR_SYSTEM_LIST, getItem, getPlanet, getStarSystem, getTechnology } from "../game/content";
-import { canColonizePlanet, canExploreStarSystem, getStationSlots, isPlanetColonized, isStarSystemUnlocked, isTechnologyCompleted } from "../game/engine";
+import { canColonizePlanet, canExploreStarSystem, getColonizationRequirements, getStationSlots, isPlanetColonized, isStarSystemUnlocked, isTechnologyCompleted } from "../game/engine";
 import { getPlanetIndustrialProfile, getPlanetSolarPowerMultiplier, getRecommendedPlanetRole, getStarSystemProfile, PLANET_INDUSTRY_ROLE_LABELS } from "../game/galaxy";
 import { getInterplanetaryLogisticsDiagnostics, getPlanetIndustrySummaries, getRouteDistanceLabel, getRouteEndpointLabel, getRoutePathLabel, getStarSystemIndustrySummaries, getStellarRouteSnapshots } from "../game/stellarIndustry";
 import type { GameState, ItemId, LogisticsPriority, PlanetId, PlanetIndustryRole, StarSystemId, StationMinimumLoad } from "../game/types";
@@ -248,21 +248,22 @@ export function StarMapWorkspace({
                     const resources = planet.kind === "gas-giant"
                       ? Object.keys(profile.orbitalYields).map((itemId) => getItem(itemId as ItemId).name)
                       : profile.resourceIds.map((itemId) => getItem(itemId).name);
-                    const colonyCost = profile.colonyCost.map((cost) => `${getItem(cost.itemId).name}×${cost.amount}`).join(" · ");
+                    const colonized = isPlanetColonized(game, planet.id);
+                    const colonyRequirements = getColonizationRequirements(game, planet.id);
                     return (
                       <button
                         type="button"
                         key={planet.id}
-                         disabled={!unlocked || (!isPlanetColonized(game, planet.id) && !canColonizePlanet(game, planet.id))}
-                         className={`${current ? "active" : ""}${isPlanetColonized(game, planet.id) ? "" : " planet-uncolonized"}`}
-                         onClick={() => isPlanetColonized(game, planet.id) ? onTravel(planet.id) : onColonize(planet.id)}
-                         title={!unlocked ? `${system.name}尚未勘探` : isPlanetColonized(game, planet.id) ? `进入${planet.name}` : `殖民${planet.name}`}
+                         disabled={!unlocked || (!colonized && !canColonizePlanet(game, planet.id))}
+                         className={`${current ? "active" : ""}${colonized ? "" : " planet-uncolonized"}${colonyRequirements.status === "ready" ? " planet-colony-ready" : ""}`}
+                         onClick={() => colonized ? onTravel(planet.id) : onColonize(planet.id)}
+                         title={colonized ? `进入${planet.name}` : colonyRequirements.reason}
                       >
                         <i style={{ color: planet.color }}><Orbit size={17} /></i>
                         <span><strong>{planet.name}</strong><small>{profile.climateName} · {OCEAN_LABELS[profile.oceanType]}{profile.tidalLocked ? " · 潮汐锁定" : ""}</small></span>
-                         <em>{isPlanetColonized(game, planet.id) ? planet.kind === "gas-giant" ? "轨道" : `${deviceCount} 设备` : "未殖民"}</em>
+                         <em>{colonized ? planet.kind === "gas-giant" ? "轨道" : `${deviceCount} 设备` : "未殖民"}</em>
                          <p>{resources.join("、") || "无地表矿脉"}{profile.rareResourceIds.length > 0 ? ` · 稀有 ${profile.rareResourceIds.map((itemId) => getItem(itemId).name).join("、")}` : ""}</p>
-                         <small className="star-planet-profile">{profile.specializationName} · 宜 {PLANET_INDUSTRY_ROLE_LABELS[recommendedRole]}{!isPlanetColonized(game, planet.id) && colonyCost ? ` · 殖民 ${colonyCost}` : ""}</small>
+                         <small className="star-planet-profile">{profile.specializationName} · 宜 {PLANET_INDUSTRY_ROLE_LABELS[recommendedRole]}</small>
                          <span className="star-planet-traits" aria-label={`${planet.name}工业环境`}>
                            <b title={planet.kind === "gas-giant" ? "轨道采集产率" : "有限矿脉总储量"}>{planet.kind === "gas-giant" ? "轨采" : "矿储"} <strong>{Math.round((planet.kind === "gas-giant" ? profile.orbitalYieldMultiplier : profile.reserveScale) * 100)}%</strong></b>
                            <b title="风力发电倍率">风 <strong>{Math.round(profile.windMultiplier * 100)}%</strong></b>
@@ -270,6 +271,13 @@ export function StarMapWorkspace({
                            <b title="地热发电倍率">地热 <strong>{Math.round(profile.geothermalMultiplier * 100)}%</strong></b>
                            <b title="跨行星航程时间倍率">航程 <strong>{Math.round(profile.travelTimeMultiplier * 100)}%</strong></b>
                          </span>
+                         {!colonized ? <div className={`planet-colony-requirements planet-colony-requirements--${colonyRequirements.status}`}>
+                           <header><strong>殖民前哨需求</strong><small>从当前所在星球“{getPlanet(colonyRequirements.sourcePlanetId).name}”物资托盘扣除</small></header>
+                           <p>{colonyRequirements.reason}</p>
+                           {colonyRequirements.costs.length > 0 ? <div>{colonyRequirements.costs.map((cost) => <span className={cost.missing === 0 ? "ready" : "missing"} key={cost.itemId}>
+                             <ItemHoverCard itemId={cost.itemId}><ItemGlyph itemId={cost.itemId} /></ItemHoverCard><b>{getItem(cost.itemId).name}</b><strong>{cost.current.toLocaleString("zh-CN")}/{cost.required.toLocaleString("zh-CN")}</strong>
+                           </span>)}</div> : null}
+                         </div> : null}
                       </button>
                     );
                   })}

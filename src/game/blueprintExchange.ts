@@ -120,6 +120,8 @@ function parseEntity(value: unknown, index: number, issues: string[]): Blueprint
     ...(value.stationMode === "supply" || value.stationMode === "demand" ? { stationMode: value.stationMode } : {}),
     ...(value.stationMinimumLoad === 0.1 || value.stationMinimumLoad === 0.25 || value.stationMinimumLoad === 0.5 || value.stationMinimumLoad === 1 ? { stationMinimumLoad: value.stationMinimumLoad } : {}),
     ...(typeof value.stationWarpEnabled === "boolean" ? { stationWarpEnabled: value.stationWarpEnabled } : {}),
+    ...(typeof value.stationWarperAutoRefill === "boolean" ? { stationWarperAutoRefill: value.stationWarperAutoRefill } : {}),
+    ...(validNumber(value.stationWarperTarget, 1, 500_000) ? { stationWarperTarget: Math.floor(value.stationWarperTarget) } : {}),
     ...(typeof value.stationHubEnabled === "boolean" ? { stationHubEnabled: value.stationHubEnabled } : {}),
     ...([0, 1, 2].includes(Number(value.stationHubPriority)) ? { stationHubPriority: Number(value.stationHubPriority) as 0 | 1 | 2 } : {}),
     ...(stationSlots ? { stationSlots } : {}),

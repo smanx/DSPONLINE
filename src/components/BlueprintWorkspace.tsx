@@ -2,7 +2,7 @@ import { ArrowUp, BoxSelect, Check, ChevronLeft, ChevronRight, Clock3, Copy, Dow
 import { getConstructionDefinition, getItem, getPlanet, getRecipe, getRecipesForBuilding } from "../game/content";
 import { canPlaceBlueprint, canQueueBlueprint, getBlueprintRequirements, getConstructionQueueDeficits, isTechnologyCompleted } from "../game/engine";
 import type { BlueprintDefinition, BlueprintMirror, BlueprintRotation, CanvasRegion, GameState, RecipeId } from "../game/types";
-import { useRef, useState, type CSSProperties } from "react";
+import { Fragment, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 
 function blueprintBuildingSummary(blueprint: BlueprintDefinition): string[] {
   const counts = new Map<string, number>();
@@ -67,30 +67,73 @@ export interface CanvasRegionRectangle {
   height: number;
 }
 
-export function CanvasRegionLayer({ regions, draft, selectedRegionId, onSelect }: {
+export type CanvasRegionResizeHandle = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
+
+const CANVAS_REGION_RESIZE_HANDLES: CanvasRegionResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+const CANVAS_REGION_RESIZE_LABELS: Record<CanvasRegionResizeHandle, string> = {
+  n: "调整上边界",
+  ne: "调整右上角",
+  e: "调整右边界",
+  se: "调整右下角",
+  s: "调整下边界",
+  sw: "调整左下角",
+  w: "调整左边界",
+  nw: "调整左上角",
+};
+
+export function CanvasRegionLayer({ regions, draft, selectedRegionId, resizePreview, resizeHandleSize = 16, onSelect, onResizeStart }: {
   regions: CanvasRegion[];
   draft: CanvasRegionRectangle | null;
   selectedRegionId: string | null;
+  resizePreview?: { regionId: string; rectangle: CanvasRegionRectangle } | null;
+  resizeHandleSize?: number;
   onSelect: (regionId: string) => void;
+  onResizeStart?: (event: ReactPointerEvent<HTMLButtonElement>, region: CanvasRegion, handle: CanvasRegionResizeHandle) => void;
 }) {
   return <>
-    {regions.map((region) => (
-      <div
-        className={`canvas-region${selectedRegionId === region.id ? " canvas-region--selected" : ""}`}
-        key={region.id}
-        style={{
-          left: region.x,
-          top: region.y,
-          width: region.width,
-          height: region.height,
-          borderColor: region.borderColor,
-          backgroundColor: `${region.fillColor}24`,
-          color: region.borderColor,
-        } as CSSProperties}
-      >
-        <button className="canvas-region__label nodrag nopan" type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onSelect(region.id); }} title={`编辑${region.name}`}><Palette size={12} /><span>{region.name}</span></button>
-      </div>
-    ))}
+    {regions.map((region) => {
+      const rectangle = resizePreview?.regionId === region.id ? resizePreview.rectangle : region;
+      const selected = selectedRegionId === region.id;
+      const handleX = (handle: CanvasRegionResizeHandle) => handle.includes("w") ? rectangle.x : handle.includes("e") ? rectangle.x + rectangle.width : rectangle.x + rectangle.width / 2;
+      const handleY = (handle: CanvasRegionResizeHandle) => handle.includes("n") ? rectangle.y : handle.includes("s") ? rectangle.y + rectangle.height : rectangle.y + rectangle.height / 2;
+      return <Fragment key={region.id}>
+        <div
+          className={`canvas-region${selected ? " canvas-region--selected canvas-region--resizable" : ""}`}
+          style={{
+            left: rectangle.x,
+            top: rectangle.y,
+            width: rectangle.width,
+            height: rectangle.height,
+            borderColor: region.borderColor,
+            backgroundColor: `${region.fillColor}24`,
+            color: region.borderColor,
+          } as CSSProperties}
+        >
+          <button className="canvas-region__label nodrag nopan" type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onSelect(region.id); }} title={`编辑${region.name}`}><Palette size={12} /><span>{region.name}</span></button>
+        </div>
+        {selected ? CANVAS_REGION_RESIZE_HANDLES.map((handle) => <button
+            className={`canvas-region__resize-handle canvas-region__resize-handle--${handle} nodrag nopan`}
+            type="button"
+            key={handle}
+            style={{
+              left: handleX(handle),
+              top: handleY(handle),
+              color: region.borderColor,
+              "--canvas-region-handle-size": `${resizeHandleSize}px`,
+            } as CSSProperties}
+            aria-label={`${CANVAS_REGION_RESIZE_LABELS[handle]}：${region.name}`}
+            title={CANVAS_REGION_RESIZE_LABELS[handle]}
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              event.stopPropagation();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              onResizeStart?.(event, region, handle);
+            }}
+            onClick={(event) => { event.preventDefault(); event.stopPropagation(); }}
+          />) : null}
+      </Fragment>;
+    })}
     {draft ? <div className="canvas-region canvas-region--draft" style={{ left: draft.x, top: draft.y, width: draft.width, height: draft.height } as CSSProperties}><span>新生产区域</span></div> : null}
   </>;
 }

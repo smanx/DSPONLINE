@@ -41,11 +41,13 @@ export function useHorizontalPan<T extends HTMLElement>(options: { wheelMode?: "
           wheelEvent.stopPropagation();
           return;
         }
-        if (surface.scrollWidth <= surface.clientWidth) return;
+        const scrollTop = surface.scrollTop;
         const delta = Math.abs(wheelEvent.deltaY) >= Math.abs(wheelEvent.deltaX) ? wheelEvent.deltaY : wheelEvent.deltaX;
-        if (delta === 0) return;
-        surface.scrollLeft += delta;
         wheelEvent.preventDefault();
+        wheelEvent.stopPropagation();
+        if (Math.abs(delta) > 0.01) surface.scrollLeft += delta;
+        // Horizontal-only surfaces must not leak diagonal or boundary gestures.
+        if (surface.scrollTop !== scrollTop) surface.scrollTop = scrollTop;
       },
       onPointerDown: (event) => {
         const pointerEvent = event as ReactPointerEvent<T>;

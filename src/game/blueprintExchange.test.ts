@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createBlueprint, createInitialState, placeBuilding, setLogisticsItem, setStationHubConfiguration, setStationSlotRoutePolicy, setStationSlotWarperBudget } from "./engine";
+import { createBlueprint, createInitialState, placeBuilding, setLogisticsItem, setStationHubConfiguration, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
 import { importBlueprintExchange, parseBlueprintExchange, serializeBlueprintExchange } from "./blueprintExchange";
 
 describe("blueprint exchange", () => {
@@ -34,7 +34,7 @@ describe("blueprint exchange", () => {
 
   it("preserves relay hub and per-slot routing configuration", () => {
     let state = createInitialState();
-    state.research.completedTechIds.push("interstellar_logistics");
+    state.research.completedTechIds.push("interstellar_logistics", "space_warp");
     state.construction.interstellar_logistics_station = 1;
     state = placeBuilding(state, "interstellar_logistics_station", { x: 120, y: 80 });
     const station = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
@@ -42,6 +42,8 @@ describe("blueprint exchange", () => {
     state = setStationHubConfiguration(state, station.id, true, 2);
     state = setStationSlotRoutePolicy(state, station.id, 0, "relay-required");
     state = setStationSlotWarperBudget(state, station.id, 0, 3);
+    state = setStationWarperTarget(state, station.id, 35);
+    state = setStationWarperAutoRefill(state, station.id, true);
     state = createBlueprint(state, [station.id], "中转枢纽");
 
     const parsed = parseBlueprintExchange(serializeBlueprintExchange(state.blueprints[0]));
@@ -49,6 +51,8 @@ describe("blueprint exchange", () => {
     expect(parsed.blueprint?.entities[0]).toMatchObject({
       stationHubEnabled: true,
       stationHubPriority: 2,
+      stationWarperAutoRefill: true,
+      stationWarperTarget: 35,
       stationSlots: expect.arrayContaining([expect.objectContaining({ itemId: "processor", routePolicy: "relay-required", warperBudget: 3 })]),
     });
   });

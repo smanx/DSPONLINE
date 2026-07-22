@@ -70,7 +70,7 @@ type MenuMessage = { tone: "ready" | "warning" | "error"; text: string } | null;
 const MENU_SETTINGS_KEY = "dsp-idle-network.menu-settings.v1";
 const FONT_SCALES: FontScale[] = [0.8, 1, 1.25, 1.5, 2];
 const SIMULATION_SPEEDS: SimulationSpeed[] = [1, 2, 4];
-const AUTOSAVE_INTERVALS: AutosaveIntervalSeconds[] = [2, 10, 30];
+const AUTOSAVE_INTERVALS: AutosaveIntervalSeconds[] = [30, 60, 120];
 const DEFAULT_MENU_SETTINGS: GameSettings = {
   simulationSpeed: 1,
   fontScale: 1,
@@ -79,7 +79,7 @@ const DEFAULT_MENU_SETTINGS: GameSettings = {
   soundEnabled: false,
   allowDoubleClickZoom: false,
   beltHeatmapEnabled: false,
-  autosaveIntervalSeconds: 2,
+  autosaveIntervalSeconds: 30,
   resourceMode: "finite",
   difficulty: "standard",
 };
@@ -187,6 +187,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const cloudAuthAllowed = window.isSecureContext || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
   const cloudMailAvailable = cloudSession.mailAvailable;
   const brandIconUrl = `${import.meta.env.BASE_URL}icon.svg`;
+  const automaticSnapshotCount = snapshots.filter((snapshot) => snapshot.reason === "自动快照").length;
+  const manualSnapshotCount = snapshots.length - automaticSnapshotCount;
 
   const refreshLocalSaves = () => {
     setContinueSave(getMenuContinueSave());
@@ -707,7 +709,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
                 return <article className={slot ? "" : "empty"} key={slotId}><i><HardDrive size={16} /></i><span><strong>本地槽位 {slotId}</strong><small>{slot ? `${formatSavedAt(slot.savedAt)} · ${getMenuPlanetName(slot.activePlanetId)} · 科技 ${slot.completedTechCount}` : "空槽位"}</small></span><em>{slot ? formatRuntime(slot.elapsedSeconds) : "--"}</em><div className="start-menu-save-actions"><button type="button" disabled={busy || !slot?.valid} onClick={() => void loadSlot(slotId)}><Upload size={14} />载入</button><button className="danger" type="button" disabled={busy || !slot} onClick={() => slot && setDeleteRequest({ slotId, label: `本地槽位 ${slotId}`, details: `${formatSavedAt(slot.savedAt)} · ${getMenuPlanetName(slot.activePlanetId)} · 运行 ${formatRuntime(slot.elapsedSeconds)} · 科技 ${slot.completedTechCount}` })} title={`删除本地槽位 ${slotId}`} aria-label={`删除本地槽位 ${slotId}`}><Trash2 size={14} /></button></div></article>;
               })}
             </div>
-            {snapshots.length > 0 ? <section className="start-menu-snapshots"><header><History size={14} /><strong>最近快照</strong><small>{snapshots.length}/5</small></header>{snapshots.slice(0, 3).map((snapshot) => <button type="button" disabled={busy || !snapshot.valid} onClick={() => void loadSnapshot(snapshot.id)} key={snapshot.id}><span><strong>{snapshot.reason}</strong><small>{formatSavedAt(snapshot.savedAt)} · 科技 {snapshot.completedTechCount}</small></span><em>{formatRuntime(snapshot.elapsedSeconds)}</em><RefreshCw size={13} /></button>)}</section> : null}
+            {snapshots.length > 0 ? <section className="start-menu-snapshots"><header><History size={14} /><strong>最近快照</strong><small>自动 {automaticSnapshotCount}/2 · 手动 {manualSnapshotCount}</small></header>{snapshots.slice(0, 3).map((snapshot) => <button type="button" disabled={busy || !snapshot.valid} onClick={() => void loadSnapshot(snapshot.id)} key={snapshot.id}><span><strong>{snapshot.reason}</strong><small>{formatSavedAt(snapshot.savedAt)} · 科技 {snapshot.completedTechCount}</small></span><em>{formatRuntime(snapshot.elapsedSeconds)}</em><RefreshCw size={13} /></button>)}</section> : null}
           </div> : null}
 
           {view === "cloud" ? <div className="start-menu-cloud">

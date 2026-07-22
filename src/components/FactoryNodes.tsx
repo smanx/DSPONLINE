@@ -380,6 +380,9 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const rayReceiver = entity.buildingId === "ray_receiver";
   const launchSilo = entity.buildingId === "vertical_launching_silo";
   const constructionCenter = entity.buildingId === "construction_center";
+  const constructionCenterTier = data.completedTechIds.includes("construction_capacity_2")
+    ? "III"
+    : data.completedTechIds.includes("construction_capacity_1") ? "II" : "I";
   const rayPowerMode = recipe?.id === "ray_power";
   const speedMultiplier = recipe?.id === "matrix_research"
     ? 1 + (data.completedTechIds.includes("research_speed_1") ? 0.25 : 0) +
@@ -400,7 +403,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
-      className={`factory-node machine-node factory-node--status-${data.status.tone}${building.tier && building.tier > 1 ? ` factory-node--tier-${building.tier}` : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}${(railEjector || launchSilo) && entity.utilization > 0.001 ? " factory-node--orbital-active" : ""}`}
+      className={`factory-node machine-node factory-node--status-${data.status.tone}${constructionCenter ? " factory-node--megastructure" : ""}${building.tier && building.tier > 1 ? ` factory-node--tier-${building.tier}` : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}${(railEjector || launchSilo) && entity.utilization > 0.001 ? " factory-node--orbital-active" : ""}`}
       onClick={add}
       onDragOver={(event) => {
         if (event.dataTransfer.types.some((type) => type === "application/factory-item" || type === "application/factory-building")) {
@@ -433,6 +436,20 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         </div>
         <small>×{entity.machineCount}</small>
       </header>
+      {constructionCenter ? <section className={`construction-center-core construction-center-core--${data.status.tone}`} aria-label={`建筑制造中心 Mk.${constructionCenterTier} ${data.status.label}`}>
+        <div className="construction-center-core__reactor" aria-hidden="true"><i /><b><Factory size={34} /></b><span /></div>
+        <div className="construction-center-core__identity">
+          <span>MEGASTRUCTURE · BUILD ARRAY</span>
+          <strong>行星建筑制造阵列 Mk.{constructionCenterTier}</strong>
+          <small>从当前行星物资托盘取料，按目标库存持续补足施工设备</small>
+        </div>
+        <dl>
+          <div><dt>运行状态</dt><dd>{data.status.label}</dd></div>
+          <div><dt>制造负载</dt><dd>{Math.round(entity.utilization * 100)}%</dd></div>
+          <div><dt>当前周期</dt><dd>{Math.round(entity.progress * 100)}%</dd></div>
+          <div><dt>阵列等级</dt><dd>Mk.{constructionCenterTier}</dd></div>
+        </dl>
+      </section> : null}
       {selected && !constructionCenter ? (
         <div className="node-inline-select nodrag nopan" onPointerDown={(event) => event.stopPropagation()}>
           <span>生产配方</span>

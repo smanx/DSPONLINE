@@ -2,11 +2,13 @@ import {
   DYSON_SHELL_CAPACITY_PER_STRUCTURE,
   DYSON_SHELL_SAIL_POWER_KW,
   DYSON_STRUCTURE_POWER_KW,
+  DEFAULT_STATION_WARPER_TARGET,
   DEFAULT_PLANET_TRAY_ITEM_LIMIT,
   MAX_PLANET_TRAY_ITEM_LIMIT,
   MIN_PLANET_TRAY_ITEM_LIMIT,
   SOLAR_SAIL_POWER_KW,
   STATION_SLOT_COUNT,
+  STATION_WARPER_CAPACITY_PER_BUILDING,
   advanceSimulation,
   createInitialState,
 } from "./engine";
@@ -14,7 +16,7 @@ import { BUILDINGS, ITEMS, PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, get
 import { normalizeCampaignState, syncCampaignProgress } from "./campaign";
 import { isDifficultyMode } from "./difficulty";
 import { isAchievementId } from "./progression";
-import { DEFAULT_GALAXY_SEED, createVeinReserve, getPlanetOrbitalYields, getStarLuminosity, isInfiniteResource, normalizeGalaxyState } from "./galaxy";
+import { DEFAULT_GALAXY_SEED, GUARANTEED_CRUDE_OIL_PLANETS, createVeinReserve, getPlanetOrbitalYields, getStarLuminosity, isInfiniteResource, normalizeGalaxyState } from "./galaxy";
 import { createEndgameState, getOfflineSimulationLimitSeconds } from "./endgame";
 import type { BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
 
@@ -22,9 +24,9 @@ export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
 const SAVE_BACKUP_KEY = `${SAVE_KEY}.backup`;
 const SAVE_SNAPSHOT_KEY_PREFIX = `${SAVE_KEY}.snapshot`;
-const SAVE_SNAPSHOT_LIMIT = 5;
+export const AUTOMATIC_SAVE_SNAPSHOT_LIMIT = 2;
 const SAVE_FORMAT_VERSION = 2;
-const AUTO_SNAPSHOT_MIN_SECONDS = 30;
+const AUTO_SNAPSHOT_MIN_SECONDS = 5 * 60;
 const RETURNING_REWARD_KEY_PREFIX = "dsp-idle-network.returning-reward";
 const RETURNING_REWARD_MIN_SECONDS = 72 * 60 * 60;
 
@@ -88,6 +90,18 @@ export interface SaveSnapshotSummary {
   integrity: SaveIntegrityStatus;
   valid: boolean;
   issues: string[];
+}
+
+export type SaveGameFailureCode = "quota" | "verification" | "unavailable";
+
+export interface SaveGameResult {
+  success: boolean;
+  message: string;
+  code?: SaveGameFailureCode;
+  savedAt?: number;
+  bytes?: number;
+  removedAutomaticSnapshots?: number;
+  backupSaved?: boolean;
 }
 
 export interface SaveInspection {
@@ -447,7 +461,7 @@ function validFontScale(value: unknown): value is GameState["settings"]["fontSca
 }
 
 function validAutosaveInterval(value: unknown): value is GameState["settings"]["autosaveIntervalSeconds"] {
-  return value === 2 || value === 10 || value === 30;
+  return value === 30 || value === 60 || value === 120;
 }
 
 function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
@@ -460,7 +474,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const savedSeed = saved.version >= 20 && typeof saved.galaxy?.seed === "number" && Number.isFinite(saved.galaxy.seed)
     ? saved.galaxy.seed
     : DEFAULT_GALAXY_SEED;
@@ -540,6 +554,13 @@ export function migrateGame(value: unknown): GameState | null {
         : undefined,
       stationWarpers: interstellarStation ? nonNegativeInteger(entity.stationWarpers) : undefined,
       stationWarpEnabled: interstellarStation ? entity.stationWarpEnabled !== false : undefined,
+      stationWarperAutoRefill: interstellarStation ? saved.version >= 30 && Boolean(entity.stationWarperAutoRefill) : undefined,
+      stationWarperTarget: interstellarStation
+        ? Math.max(1, Math.min(
+          STATION_WARPER_CAPACITY_PER_BUILDING * Math.max(1, nonNegativeInteger(entity.machineCount)),
+          saved.version >= 30 ? nonNegativeInteger(entity.stationWarperTarget) || DEFAULT_STATION_WARPER_TARGET : DEFAULT_STATION_WARPER_TARGET,
+        ))
+        : undefined,
       stationHubEnabled: interstellarStation ? Boolean(entity.stationHubEnabled) : undefined,
       stationHubPriority: interstellarStation && validPriority(entity.stationHubPriority) ? entity.stationHubPriority : interstellarStation ? 1 : undefined,
       stationMinimumLoad: entity.kind === "station"
@@ -565,7 +586,10 @@ export function migrateGame(value: unknown): GameState | null {
   }) as FactoryEntity[];
 
   for (const resource of initial.entities.filter((entity) => entity.kind === "vein")) {
-    if (!entities.some((entity) => entity.id === resource.id)) {
+    const equivalentGuaranteedOil = resource.resourceId === "crude_oil" &&
+      GUARANTEED_CRUDE_OIL_PLANETS.includes(resource.planetId as typeof GUARANTEED_CRUDE_OIL_PLANETS[number]) &&
+      entities.some((entity) => entity.kind === "vein" && entity.planetId === resource.planetId && entity.resourceId === "crude_oil");
+    if (!equivalentGuaranteedOil && !entities.some((entity) => entity.id === resource.id)) {
       entities.push({ ...resource, position: { ...resource.position }, inputs: {}, outputs: { ...resource.outputs } });
     }
   }
@@ -741,6 +765,13 @@ export function migrateGame(value: unknown): GameState | null {
           stationMode: entity.stationMode === "demand" ? "demand" as const : entity.stationMode === "supply" ? "supply" as const : undefined,
           stationMinimumLoad: validStationMinimumLoad(entity.stationMinimumLoad) ? entity.stationMinimumLoad : undefined,
           stationWarpEnabled: typeof entity.stationWarpEnabled === "boolean" ? entity.stationWarpEnabled : undefined,
+          stationWarperAutoRefill: entity.buildingId === "interstellar_logistics_station" ? Boolean(entity.stationWarperAutoRefill) : undefined,
+          stationWarperTarget: entity.buildingId === "interstellar_logistics_station"
+            ? Math.max(1, Math.min(
+              STATION_WARPER_CAPACITY_PER_BUILDING * Math.max(1, nonNegativeInteger(entity.machineCount)),
+              nonNegativeInteger(entity.stationWarperTarget) || DEFAULT_STATION_WARPER_TARGET,
+            ))
+            : undefined,
           stationHubEnabled: Boolean(entity.stationHubEnabled),
           stationHubPriority: validPriority(entity.stationHubPriority) ? entity.stationHubPriority : 1,
           stationSlots: getBuilding(entity.buildingId as BuildingId).kind === "station" && entity.buildingId !== "orbital_collector"
@@ -1152,7 +1183,7 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 28,
+    version: 30,
     activePlanetId,
     entities,
     belts,
@@ -1203,6 +1234,9 @@ export function migrateGame(value: unknown): GameState | null {
 function persistentState(state: GameState): GameState {
   return {
     ...state,
+    // Production curves are runtime diagnostics. Keeping them in every local
+    // recovery point multiplies save size without affecting factory progress.
+    productionHistory: [],
     planetTrays: { ...state.planetTrays, [state.activePlanetId]: { ...state.tray } },
   };
 }
@@ -1425,19 +1459,105 @@ export function inspectContinueSave(): ContinueSaveInspection | null {
   }
 }
 
-export function saveGame(state: GameState): void {
+function utf8ByteLength(value: string): number {
   try {
-    const previous = window.localStorage.getItem(SAVE_KEY);
-    if (previous && inspectSave(previous).valid) window.localStorage.setItem(SAVE_BACKUP_KEY, previous);
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify(envelopeFor(state)));
-    maybeSaveAutomaticSnapshot(state);
+    return new TextEncoder().encode(value).byteLength;
   } catch {
-    // Quota errors should not stop the simulation loop; the next save can retry.
+    return value.length;
   }
 }
 
+function isQuotaExceededError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { name?: unknown; code?: unknown };
+  return candidate.name === "QuotaExceededError" || candidate.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+    candidate.code === 22 || candidate.code === 1014;
+}
+
+function failedSave(
+  code: SaveGameFailureCode,
+  message: string,
+  bytes?: number,
+  removedAutomaticSnapshots = 0,
+): SaveGameResult {
+  return { success: false, code, message, bytes, removedAutomaticSnapshots };
+}
+
+export function saveGame(state: GameState): SaveGameResult {
+  const savedAt = Date.now();
+  let raw: string;
+  try {
+    raw = JSON.stringify(envelopeFor(state, savedAt));
+  } catch {
+    return failedSave("unavailable", "无法生成本地主存档，请立即导出当前进度");
+  }
+
+  const bytes = utf8ByteLength(raw);
+  let previous: string | null = null;
+  let removedAutomaticSnapshots = 0;
+  try {
+    previous = window.localStorage.getItem(SAVE_KEY);
+    removedAutomaticSnapshots += prepareAutomaticSnapshotsForPrimarySave();
+  } catch {
+    return failedSave("unavailable", "本地存储当前不可用，请立即导出当前进度", bytes, removedAutomaticSnapshots);
+  }
+
+  const writeAndVerify = (): boolean => {
+    window.localStorage.setItem(SAVE_KEY, raw);
+    const stored = window.localStorage.getItem(SAVE_KEY);
+    if (stored !== raw) return false;
+    const inspection = inspectSave(stored);
+    return inspection.valid && inspection.checksum === "valid";
+  };
+
+  let verified = false;
+  try {
+    verified = writeAndVerify();
+  } catch (error) {
+    if (!isQuotaExceededError(error)) {
+      return failedSave("unavailable", "本地主存档写入失败，请立即导出当前进度", bytes, removedAutomaticSnapshots);
+    }
+    try {
+      removedAutomaticSnapshots += removeAutomaticSnapshotsForQuotaRetry();
+      verified = writeAndVerify();
+    } catch (retryError) {
+      const code: SaveGameFailureCode = isQuotaExceededError(retryError) ? "quota" : "unavailable";
+      const message = code === "quota"
+        ? "本地存储空间不足，当前进度尚未保存。请立即导出存档。"
+        : "本地主存档重试写入失败，请立即导出当前进度";
+      return failedSave(code, message, bytes, removedAutomaticSnapshots);
+    }
+  }
+
+  if (!verified) {
+    return failedSave("verification", "本地主存档写入校验失败，当前进度尚未保存。请立即导出存档。", bytes, removedAutomaticSnapshots);
+  }
+
+  let backupSaved = false;
+  if (previous && inspectSave(previous).valid) {
+    try {
+      window.localStorage.setItem(SAVE_BACKUP_KEY, previous);
+      backupSaved = window.localStorage.getItem(SAVE_BACKUP_KEY) === previous;
+    } catch {
+      // The verified primary save has priority over its optional previous-version backup.
+    }
+  }
+
+  // Recovery points are best effort and must never turn a verified primary
+  // write into a reported failure.
+  maybeSaveAutomaticSnapshot(state);
+  return {
+    success: true,
+    message: "主存档已保存",
+    savedAt,
+    bytes,
+    removedAutomaticSnapshots,
+    backupSaved,
+  };
+}
+
 export function exportGame(state: GameState): string {
-  return JSON.stringify(envelopeFor(state), null, 2);
+  return JSON.stringify(envelopeFor(state));
 }
 
 export function importGame(raw: string): GameState | null {
@@ -1515,6 +1635,76 @@ function listSnapshotKeys(): string[] {
     .sort((left, right) => right.localeCompare(left));
 }
 
+interface StoredSnapshotEntry {
+  key: string;
+  savedAt: number;
+  automatic: boolean;
+  hasPersistedProductionHistory: boolean;
+}
+
+function storedSnapshotEntries(): StoredSnapshotEntry[] {
+  return listSnapshotKeys().flatMap((key) => {
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw) as unknown;
+      if (!isRecord(parsed)) return [];
+      const reason = typeof parsed.reason === "string" ? parsed.reason : "";
+      const state = isRecord(parsed.state) ? parsed.state : parsed;
+      const history = isRecord(state) && Array.isArray(state.productionHistory) ? state.productionHistory : [];
+      const idTimestamp = Number(key.slice(`${SAVE_SNAPSHOT_KEY_PREFIX}.`.length).split("-")[0]);
+      return [{
+        key,
+        savedAt: typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt)
+          ? parsed.savedAt
+          : Number.isFinite(idTimestamp) ? idTimestamp : 0,
+        automatic: reason.length === 0 || reason === "自动快照",
+        hasPersistedProductionHistory: history.length > 0,
+      }];
+    } catch {
+      // Unknown or corrupt snapshots are left untouched. They may be a manual
+      // recovery point whose reason can no longer be read safely.
+      return [];
+    }
+  }).sort((left, right) => right.savedAt - left.savedAt || right.key.localeCompare(left.key));
+}
+
+function removeStoredSnapshots(entries: StoredSnapshotEntry[]): number {
+  let removed = 0;
+  for (const entry of entries) {
+    window.localStorage.removeItem(entry.key);
+    removed += 1;
+  }
+  return removed;
+}
+
+function trimAutomaticSnapshots(limit: number): number {
+  const automatic = storedSnapshotEntries().filter((entry) => entry.automatic);
+  return removeStoredSnapshots(automatic.slice(Math.max(0, limit)).reverse());
+}
+
+function prepareAutomaticSnapshotsForPrimarySave(): number {
+  let automatic = storedSnapshotEntries().filter((entry) => entry.automatic);
+  let removed = 0;
+  if (automatic.some((entry) => entry.hasPersistedProductionHistory) && automatic.length > 1) {
+    // On the first emergency save retain only the newest automatic recovery
+    // point. Manual snapshots and slots are never part of this cleanup.
+    removed += removeStoredSnapshots(automatic.slice(1).reverse());
+    automatic = storedSnapshotEntries().filter((entry) => entry.automatic);
+  }
+  if (automatic.length > AUTOMATIC_SAVE_SNAPSHOT_LIMIT) {
+    removed += removeStoredSnapshots(automatic.slice(AUTOMATIC_SAVE_SNAPSHOT_LIMIT).reverse());
+  }
+  return removed;
+}
+
+function removeAutomaticSnapshotsForQuotaRetry(): number {
+  const oldestFirst = storedSnapshotEntries()
+    .filter((entry) => entry.automatic)
+    .sort((left, right) => left.savedAt - right.savedAt || left.key.localeCompare(right.key));
+  return removeStoredSnapshots(oldestFirst);
+}
+
 function nextSnapshotSequence(): number {
   const sequenceKey = `${SAVE_SNAPSHOT_KEY_PREFIX}.sequence`;
   const previous = Number(window.localStorage.getItem(sequenceKey) ?? 0);
@@ -1524,7 +1714,7 @@ function nextSnapshotSequence(): number {
 }
 
 function maybeSaveAutomaticSnapshot(state: GameState): void {
-  const latest = getSaveSnapshotSummaries().find((snapshot) => snapshot.valid);
+  const latest = getSaveSnapshotSummaries().find((snapshot) => snapshot.valid && snapshot.reason === "自动快照");
   if (!latest || state.elapsedSeconds < latest.elapsedSeconds || state.elapsedSeconds - latest.elapsedSeconds >= AUTO_SNAPSHOT_MIN_SECONDS) {
     saveGameSnapshot(state, "自动快照");
   }
@@ -1537,8 +1727,7 @@ export function saveGameSnapshot(state: GameState, reason = "自动快照"): Sav
     const id = `${savedAt}-${sequence}`;
     const key = `${SAVE_SNAPSHOT_KEY_PREFIX}.${id}`;
     window.localStorage.setItem(key, JSON.stringify(envelopeFor(state, savedAt, "snapshot", reason)));
-    const keys = listSnapshotKeys();
-    for (const staleKey of keys.slice(SAVE_SNAPSHOT_LIMIT)) window.localStorage.removeItem(staleKey);
+    if (reason === "自动快照") trimAutomaticSnapshots(AUTOMATIC_SAVE_SNAPSHOT_LIMIT);
     return getSaveSnapshotSummaries().find((snapshot) => snapshot.id === id) ?? null;
   } catch {
     return null;

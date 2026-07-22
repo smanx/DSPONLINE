@@ -16,6 +16,15 @@ import type {
   StarSystemProfile,
 } from "./types";
 
+export const GUARANTEED_CRUDE_OIL_PLANETS = ["pelagic", "dune", "prairie"] as const satisfies readonly PlanetId[];
+
+function guaranteePlanetResources(planetId: PlanetId, resourceIds: ItemId[]): ItemId[] {
+  if (!GUARANTEED_CRUDE_OIL_PLANETS.includes(planetId as typeof GUARANTEED_CRUDE_OIL_PLANETS[number]) || resourceIds.includes("crude_oil")) {
+    return [...resourceIds];
+  }
+  return [...resourceIds, "crude_oil"];
+}
+
 export const DEFAULT_GALAXY_SEED = 240721;
 export const TIDAL_LOCKED_SOLAR_BONUS = 1.25;
 
@@ -170,7 +179,7 @@ export function createGalaxyState(seed = DEFAULT_GALAXY_SEED, preserveBaseline =
       planetId: planet.id,
       templateId,
       climateName: template.name,
-      resourceIds: [...template.resourceIds, ...rareResourceIds],
+      resourceIds: guaranteePlanetResources(planet.id, [...template.resourceIds, ...rareResourceIds]),
       rareResourceIds,
       oceanType: template.oceanType,
       orbitalYields,
@@ -259,7 +268,7 @@ export function normalizeGalaxyState(value: unknown, preserveBaseline = false): 
       ? profile.templateId
       : fallback.templateId;
     const template = PLANET_TEMPLATES[templateId];
-    const resources = itemIds(profile.resourceIds, fallback.resourceIds);
+    const resources = guaranteePlanetResources(planetId, itemIds(profile.resourceIds, fallback.resourceIds));
     const rareResources = itemIds(profile.rareResourceIds, fallback.rareResourceIds).filter((itemId) => resources.includes(itemId));
     const oceanType = isOceanType(profile.oceanType) ? profile.oceanType : typeof profile.sulfuricOcean === "boolean" && profile.sulfuricOcean ? "sulfuric-acid" : fallback.oceanType;
     normalized.profiles[planetId] = {
@@ -379,7 +388,8 @@ export function createVeinReserve(galaxy: GalaxyState, planetId: PlanetId, itemI
     "unipolar_magnet",
     "organic_crystal",
   ]);
-  const base = itemId === "crude_oil" ? 420_000 : rare.has(itemId) ? 36_000 : 240_000;
+  const oilMultiplier = itemId !== "crude_oil" ? 1 : planetId === "dune" ? 2.4 : planetId === "prairie" ? 1.5 : planetId === "pelagic" ? 1.15 : 1;
+  const base = itemId === "crude_oil" ? 420_000 * oilMultiplier : rare.has(itemId) ? 36_000 : 240_000;
   const profile = galaxy.profiles[planetId];
   return Math.max(1, Math.floor(base * profile.reserveScale * jitter(galaxy.seed, `${veinId}:${itemId}`, 0.16)));
 }

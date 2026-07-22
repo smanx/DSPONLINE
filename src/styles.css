@@ -1031,12 +1031,18 @@ select:focus-visible {
 }
 
 .game-shell {
+  -webkit-touch-callout: none;
   display: grid;
   grid-template-rows: 68px minmax(0, 1fr) 108px;
   width: 100%;
   height: 100%;
   min-width: 320px;
   background: var(--bg);
+}
+
+.game-shell :is(input, textarea, select, [contenteditable="true"]) {
+  -webkit-touch-callout: default;
+  user-select: text;
 }
 
 .game-shell--placing .factory-canvas,
@@ -1873,6 +1879,7 @@ select:focus-visible {
 }
 
 .factory-canvas {
+  touch-action: none;
   position: relative;
   display: grid;
   min-width: 0;
@@ -2131,6 +2138,140 @@ select:focus-visible {
 
 .factory-node--tier-3 .factory-node__header {
   box-shadow: inset 0 2px 0 #d8794d;
+}
+
+.factory-node--megastructure {
+  width: 512px;
+  min-height: 300px;
+  border-color: #7c6e3d;
+  background: #111815;
+  box-shadow: 0 0 0 1px rgba(225, 180, 82, 0.16), 0 16px 42px rgba(0, 0, 0, 0.38);
+}
+
+.factory-node--megastructure.factory-node--selected {
+  border-color: #e1b452;
+  box-shadow: 0 0 0 2px rgba(225, 180, 82, 0.24), 0 18px 48px rgba(0, 0, 0, 0.44);
+}
+
+.factory-node--megastructure .factory-node__header {
+  min-height: 68px;
+  border-bottom-color: #50482e;
+  background: #1b1c16;
+  box-shadow: inset 0 3px 0 #b99948;
+}
+
+.factory-node--megastructure .node-icon {
+  border-color: #8c783d;
+  color: #e1b452;
+}
+
+.construction-center-core {
+  position: relative;
+  display: grid;
+  min-height: 154px;
+  grid-template-columns: 108px minmax(0, 1fr);
+  grid-template-rows: minmax(76px, auto) auto;
+  align-items: center;
+  gap: 10px 18px;
+  overflow: hidden;
+  padding: 18px 20px;
+  border-bottom: 1px solid #3e3a28;
+  background: linear-gradient(120deg, #121a16 0 62%, #1a1d16 100%);
+}
+
+.construction-center-core::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -25%;
+  width: 18%;
+  background: linear-gradient(90deg, transparent, rgba(225, 180, 82, 0.09), transparent);
+  content: "";
+  pointer-events: none;
+}
+
+.construction-center-core--running::after {
+  animation: construction-center-scan 3.2s linear infinite;
+}
+
+.construction-center-core__reactor {
+  position: relative;
+  display: grid;
+  width: 96px;
+  height: 96px;
+  place-items: center;
+}
+
+.construction-center-core__reactor > i,
+.construction-center-core__reactor > span {
+  position: absolute;
+  inset: 4px;
+  border: 1px solid #766636;
+  border-radius: 50%;
+}
+
+.construction-center-core__reactor > span {
+  inset: 14px;
+  border-style: dashed;
+  border-color: #4a735f;
+}
+
+.construction-center-core__reactor > b {
+  z-index: 1;
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  border: 1px solid #8d783b;
+  border-radius: 8px;
+  background: #171b16;
+  color: #e1b452;
+}
+
+.construction-center-core--running .construction-center-core__reactor > i { animation: construction-center-orbit 7s linear infinite; }
+.construction-center-core--running .construction-center-core__reactor > span { animation: construction-center-orbit 4s linear infinite reverse; }
+
+.construction-center-core__identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.construction-center-core__identity > span { color: #9c894d; font-size: 8px; font-weight: 800; }
+.construction-center-core__identity > strong { color: #eee4c5; font-size: 16px; }
+.construction-center-core__identity > small { color: var(--muted); font-size: 9px; line-height: 1.5; }
+
+.construction-center-core > dl {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.construction-center-core > dl > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid #343d35;
+  border-radius: 4px;
+  background: #101613;
+}
+
+.construction-center-core dt { color: var(--muted); font-size: 8px; }
+.construction-center-core dd { margin: 0; color: var(--green); font-size: 9px; font-weight: 750; }
+
+@keyframes construction-center-scan {
+  from { transform: translateX(0); }
+  to { transform: translateX(700%); }
+}
+
+@keyframes construction-center-orbit {
+  to { transform: rotate(360deg); }
 }
 
 .factory-node__header {
@@ -3107,6 +3248,37 @@ select:focus-visible {
   border-width: 3px;
   box-shadow: 0 0 0 2px rgba(255, 255, 255, .1), inset 0 0 28px rgba(255, 255, 255, .035);
 }
+
+.canvas-region--resizable {
+  z-index: -1;
+}
+
+.canvas-region__resize-handle {
+  position: absolute;
+  z-index: 3;
+  display: block;
+  width: var(--canvas-region-handle-size, 16px);
+  height: var(--canvas-region-handle-size, 16px);
+  min-width: 0;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  border: max(1px, calc(var(--canvas-region-handle-size, 16px) * .1)) solid currentColor;
+  border-radius: 2px;
+  background: #101815;
+  box-shadow: 0 0 0 2px rgba(8, 13, 11, .78);
+  color: inherit;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.canvas-region__resize-handle--nw { top: 0; left: 0; cursor: nwse-resize; }
+.canvas-region__resize-handle--n { top: 0; left: 50%; cursor: ns-resize; }
+.canvas-region__resize-handle--ne { top: 0; left: 100%; cursor: nesw-resize; }
+.canvas-region__resize-handle--e { top: 50%; left: 100%; cursor: ew-resize; }
+.canvas-region__resize-handle--se { top: 100%; left: 100%; cursor: nwse-resize; }
+.canvas-region__resize-handle--s { top: 100%; left: 50%; cursor: ns-resize; }
+.canvas-region__resize-handle--sw { top: 100%; left: 0; cursor: nesw-resize; }
+.canvas-region__resize-handle--w { top: 50%; left: 0; cursor: ew-resize; }
 
 .canvas-region__label {
   position: absolute;
@@ -4298,6 +4470,53 @@ select:focus-visible {
   margin: 0 0 10px;
 }
 
+.station-warper-auto {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(112px, .7fr);
+  align-items: center;
+  gap: 7px 9px;
+  margin-top: 10px;
+  padding: 9px;
+  border: 1px solid #344a42;
+  border-radius: 4px;
+  background: #101915;
+}
+
+.station-warper-auto .toggle-row {
+  margin: 0;
+}
+
+.station-warper-target {
+  display: grid;
+  grid-template-columns: auto minmax(52px, 1fr);
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.station-warper-target input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: #0b1210;
+  color: var(--text);
+}
+
+.station-warper-auto__status {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.station-warper-auto__status--ready { color: var(--green); }
+.station-warper-auto__status--pending { color: var(--yellow); }
+.station-warper-auto__status--blocked { color: var(--coral); }
+
 .station-hub-control {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(112px, 0.7fr);
@@ -4441,8 +4660,51 @@ select:focus-visible {
   gap: 6px;
 }
 
+.entity-management-actions:not(.entity-management-actions--extractor) > .danger-command:last-child {
+  grid-column: 1 / -1;
+}
+
 .entity-management-actions:has(.entity-add-command:only-child) {
   grid-template-columns: 1fr;
+}
+
+.entity-management-actions--extractor {
+  grid-template-columns: 1fr;
+}
+
+.extractor-recovery-controls {
+  display: grid;
+  grid-template-columns: minmax(82px, 0.8fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+}
+
+.extractor-recovery-controls label {
+  display: grid;
+  grid-template-columns: 1fr 44px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #111715;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.extractor-recovery-controls input {
+  width: 44px;
+  min-width: 0;
+  height: 24px;
+  border: 1px solid #3d4b46;
+  border-radius: 3px;
+  background: #0c1110;
+  color: var(--text);
+  text-align: center;
+}
+
+.extractor-recovery-controls .danger-command:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .entity-add-command {
@@ -4463,6 +4725,33 @@ select:focus-visible {
 .entity-add-command strong { margin-left: auto; padding-right: 8px; color: var(--yellow); font-size: 9px; }
 .entity-add-command:hover:not(:disabled) { border-color: var(--green); background: #1f3c30; }
 .entity-add-command:disabled { border-color: var(--line); background: #111715; color: #56615c; cursor: not-allowed; }
+
+.entity-stack-remove-command {
+  display: flex;
+  min-width: 0;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #6f6039;
+  border-radius: 4px;
+  background: #282315;
+  color: #d9bd68;
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.entity-stack-remove-command strong {
+  margin-left: auto;
+  padding-right: 8px;
+  color: #f0d98d;
+  font-size: 9px;
+}
+
+.entity-stack-remove-command:hover {
+  border-color: #b99c4f;
+  background: #352d18;
+}
 
 .capacity-bar {
   height: 5px;
@@ -5446,6 +5735,14 @@ select:focus-visible {
   cursor: not-allowed;
 }
 
+.construction-item-craft--disabled,
+.construction-item-craft--disabled:hover {
+  border-color: #3a4541;
+  background: #111715;
+  color: #65706b;
+  cursor: pointer;
+}
+
 .construction-item > i {
   display: grid;
   grid-row: 1 / span 2;
@@ -5723,6 +6020,83 @@ select:focus-visible {
   color: var(--text-soft);
   font-size: 11px;
   transform: translateX(-50%);
+}
+
+.save-emergency-warning {
+  position: fixed;
+  z-index: 145;
+  bottom: 118px;
+  left: 50%;
+  display: grid;
+  width: min(760px, calc(100vw - 28px));
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #c95050;
+  border-radius: 5px;
+  background: #2a1517;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+  color: #ffd9d4;
+  transform: translateX(-50%);
+}
+
+.save-emergency-warning > svg {
+  color: #ff7770;
+}
+
+.save-emergency-warning > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.save-emergency-warning strong,
+.save-emergency-warning small {
+  overflow-wrap: anywhere;
+}
+
+.save-emergency-warning strong {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.save-emergency-warning small {
+  color: #d9aaa7;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.save-emergency-warning button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid #e06a62;
+  border-radius: 4px;
+  background: #8e2f32;
+  color: #fff2ef;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.save-emergency-warning button:hover {
+  background: #a93b3d;
+}
+
+@media (max-width: 680px) {
+  .save-emergency-warning {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .save-emergency-warning button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
 }
 
 .campaign-workspace {
@@ -9104,7 +9478,7 @@ select:focus-visible {
   width: 100%;
   min-height: 108px;
   grid-template-columns: 28px minmax(0, 1fr) auto;
-  grid-template-rows: auto auto auto auto;
+  grid-template-rows: auto auto auto auto auto;
   align-items: center;
   gap: 2px 8px;
   padding: 9px 10px;
@@ -9125,6 +9499,10 @@ select:focus-visible {
 .star-planet-list > button:disabled {
   cursor: default;
   opacity: 0.46;
+}
+
+.star-planet-list > button.planet-uncolonized:disabled {
+  opacity: 0.92;
 }
 
 .star-planet-list > button > i {
@@ -9216,6 +9594,101 @@ select:focus-visible {
   color: #b7d9cf;
   font-size: 7px;
   text-overflow: clip;
+}
+
+.planet-colony-requirements {
+  display: grid;
+  min-width: 0;
+  grid-column: 1 / -1;
+  grid-row: 5;
+  gap: 7px;
+  margin-top: 7px;
+  padding: 9px 10px;
+  border: 1px solid #75433b;
+  border-radius: 4px;
+  background: #251714;
+  color: #f1afa2;
+}
+
+.planet-colony-requirements > header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.planet-colony-requirements > header > strong {
+  flex: 0 0 auto;
+  color: #ffb0a0;
+  font-size: 11px;
+  white-space: normal;
+}
+
+.planet-colony-requirements > header > small {
+  color: #c48d82;
+  font-size: 8px;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.planet-colony-requirements > p {
+  margin: 0;
+  color: #f29a89 !important;
+  font-size: 10px !important;
+  font-weight: 750;
+  line-height: 1.45;
+  white-space: normal !important;
+}
+
+.planet-colony-requirements > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.planet-colony-requirements > div > span {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  padding: 5px;
+  border: 1px solid #603b35;
+  border-radius: 3px;
+  background: #191311;
+}
+
+.planet-colony-requirements > div > span > b {
+  overflow: hidden;
+  color: #d9b0a8;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planet-colony-requirements > div > span > strong {
+  color: #ff9b89;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.planet-colony-requirements > div > span.ready {
+  border-color: #375847;
+}
+
+.planet-colony-requirements > div > span.ready > strong {
+  color: var(--green);
+}
+
+.planet-colony-requirements--ready {
+  border-color: #4e8068;
+  background: #14241c;
+}
+
+.planet-colony-requirements--ready > p,
+.planet-colony-requirements--ready > header > strong {
+  color: var(--green) !important;
 }
 
 .star-exploration,
@@ -13267,8 +13740,37 @@ select:focus-visible {
   animation: none !important;
 }
 
-.game-shell[data-mobile-performance="true"] .react-flow__background { opacity: .42; }
+.game-shell[data-performance-mode="true"] .construction-center-core::after,
+.game-shell[data-performance-mode="true"] .construction-center-core__reactor > i,
+.game-shell[data-performance-mode="true"] .construction-center-core__reactor > span,
+.game-shell[data-reduced-motion="true"] .construction-center-core::after,
+.game-shell[data-reduced-motion="true"] .construction-center-core__reactor > i,
+.game-shell[data-reduced-motion="true"] .construction-center-core__reactor > span {
+  animation: none !important;
+}
+
+.game-shell[data-mobile-performance="true"] .react-flow__background { opacity: .34; }
 .game-shell[data-mobile-performance="true"] .react-flow__node:not(.selected) .factory-node { box-shadow: none; }
+.game-shell[data-mobile-performance="true"] .react-flow__node > .factory-node,
+.game-shell[data-mobile-performance="true"] .factory-node--status-running::after,
+.game-shell[data-mobile-performance="true"] .factory-node--status-running .node-icon,
+.game-shell[data-mobile-performance="true"] .status-dot,
+.game-shell[data-mobile-performance="true"] .work-cycle--active > i::after,
+.game-shell[data-mobile-performance="true"] .react-flow__edge.factory-edge--active .react-flow__edge-path,
+.game-shell[data-mobile-performance="true"] .factory-edge-visual-path--active,
+.game-shell[data-mobile-performance="true"] .node-input-arrival,
+.game-shell[data-mobile-performance="true"] .node-output-pulse,
+.game-shell[data-mobile-performance="true"] .node-port--missing .node-slot,
+.game-shell[data-mobile-performance="true"] .construction-center-core::after,
+.game-shell[data-mobile-performance="true"] .construction-center-core__reactor > i,
+.game-shell[data-mobile-performance="true"] .construction-center-core__reactor > span {
+  animation: none !important;
+}
+
+.game-shell[data-mobile-performance="true"] .factory-cargo-packets,
+.game-shell[data-mobile-performance="true"] .dyson-swarm-particle {
+  display: none;
+}
 
 .game-shell[data-performance-mode="true"] .factory-cargo-packets,
 .game-shell[data-reduced-motion="true"] .factory-cargo-packets {
@@ -15901,6 +16403,39 @@ input:focus-visible,
   }
 }
 
+@media (pointer: coarse) {
+  .construction-item-shell .construction-item {
+    padding-right: 42px;
+  }
+
+  .extractor-recovery-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .extractor-recovery-controls > label {
+    min-height: 36px;
+    grid-column: 1 / -1;
+  }
+
+  .extractor-recovery-controls .danger-command {
+    min-height: 40px;
+    height: auto;
+  }
+
+  .planet-colony-requirements > header {
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .planet-colony-requirements > header > small {
+    text-align: left;
+  }
+
+  .planet-colony-requirements > div {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Galaxy network: local account identity and server-replaceable ranking surface. */
 .galaxy-workspace {
   position: fixed;
@@ -17393,6 +17928,11 @@ input:focus-visible,
 
   .game-notice {
     top: calc(var(--mobile-header-height) + 58px);
+  }
+
+  .save-emergency-warning {
+    bottom: calc(var(--mobile-dock-height) + 8px);
+    width: min(520px, calc(100vw - 16px));
   }
 
   .interaction-event-feed {
@@ -18982,6 +19522,16 @@ html:not([data-native-ui-scale])[data-ui-font-scale="200"] .factory-node {
   width: 372px;
 }
 
+html:not([data-native-ui-scale])[data-ui-font-scale="150"] .factory-node--megastructure {
+  width: 632px;
+  min-height: 380px;
+}
+
+html:not([data-native-ui-scale])[data-ui-font-scale="200"] .factory-node--megastructure {
+  width: 744px;
+  min-height: 460px;
+}
+
 html:not([data-native-ui-scale])[data-ui-font-scale="125"] .storage-buffer-node {
   width: 316px;
 }
@@ -19121,5 +19671,21 @@ html:not([data-native-ui-scale])[data-ui-font-scale="200"] .construction-item {
 
   html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell:has(.construction-dock--compact) {
     --mobile-dock-height: calc(148px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+@media (pointer: coarse) {
+  html .construction-item-craft,
+  html .construction-dock--compact .construction-item-craft,
+  html:not([data-native-ui-scale])[data-ui-font-scale="150"] .construction-item-craft,
+  html:not([data-native-ui-scale])[data-ui-font-scale="200"] .construction-item-craft {
+    width: 36px;
+    height: 36px;
+  }
+
+  html .construction-item-shell .construction-item,
+  html:not([data-native-ui-scale])[data-ui-font-scale="150"] .construction-item-shell .construction-item,
+  html:not([data-native-ui-scale])[data-ui-font-scale="200"] .construction-item-shell .construction-item {
+    padding-right: 42px;
   }
 }

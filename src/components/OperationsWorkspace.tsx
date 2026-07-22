@@ -217,7 +217,7 @@ function SettingsPanel({ game, report, desktopRelease, onChange, onRunBenchmark,
       <section className="settings-group">
         <header><Clock3 size={14} /><span>自动保存间隔</span></header>
         <div className="settings-segmented" aria-label="自动保存间隔">
-          {([2, 10, 30] as AutosaveIntervalSeconds[]).map((seconds) => (
+          {([30, 60, 120] as AutosaveIntervalSeconds[]).map((seconds) => (
             <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => onChange({ autosaveIntervalSeconds: seconds })}>{seconds} 秒</button>
           ))}
         </div>
@@ -306,6 +306,8 @@ function SavesPanel({
   const modInputRef = useRef<HTMLInputElement>(null);
   const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & ({ kind: "slot"; slotId: SaveSlotId } | { kind: "snapshot"; snapshotId: string })) | null>(null);
   const summaryBySlot = new Map(slots.map((slot) => [slot.slotId, slot]));
+  const automaticSnapshotCount = snapshots.filter((snapshot) => snapshot.reason === "自动快照").length;
+  const manualSnapshotCount = snapshots.length - automaticSnapshotCount;
   return (
     <div className="operations-panel operations-saves">
       <header className="operations-section-header">
@@ -362,7 +364,7 @@ function SavesPanel({
         })}
       </div>
       <section className="save-snapshot-section">
-        <header><div><History size={14} /><strong>自动快照</strong><small>最近 {snapshots.length}/5</small></div><span>可回滚</span></header>
+        <header><div><History size={14} /><strong>恢复快照</strong><small>自动 {automaticSnapshotCount}/2 · 手动 {manualSnapshotCount}</small></div><span>可回滚</span></header>
         {snapshots.length === 0 ? <p className="save-empty-note">模拟运行后会自动保留最近快照</p> : <div className="save-snapshot-list">
           {snapshots.map((snapshot) => <article className={`save-snapshot-row${snapshot.valid ? "" : " save-snapshot-row--invalid"}`} key={snapshot.id}>
             <i>{snapshot.valid ? <ShieldCheck size={14} /> : <FileCheck2 size={14} />}</i>

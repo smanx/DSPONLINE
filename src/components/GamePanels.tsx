@@ -63,7 +63,7 @@ import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { ItemCatalogPicker, RecipeCatalogPicker } from "./CatalogPicker";
 import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getSorterConstructionId, getTechnology, isConveyorBeltId } from "../game/content";
-import { MATERIAL_DELIVERY_SLOT_COUNT, MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltNetworkIds, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPlanetTrayItemLimit, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationSlots, getStationVesselCapacity, getStationWarperCapacity, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
+import { MATERIAL_DELIVERY_SLOT_COUNT, MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltNetworkIds, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPlanetTrayItemLimit, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationSlots, getStationVesselCapacity, getStationWarperAutoRefillTarget, getStationWarperCapacity, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import { getPlanetIndustrialProfile, getPlanetOrbitalYields } from "../game/galaxy";
 import { analyzeBeltNetwork } from "../game/network";
 import type {
@@ -358,6 +358,8 @@ interface InspectorPanelProps {
   onStationDroneAdjust: (entityId: string, delta: number) => void;
   onStationWarperAdjust: (entityId: string, delta: number) => void;
   onStationWarpEnabled: (entityId: string, enabled: boolean) => void;
+  onStationWarperAutoRefillChange: (entityId: string, enabled: boolean) => void;
+  onStationWarperTargetChange: (entityId: string, target: number) => void;
   onStationHubChange: (entityId: string, enabled: boolean, priority: 0 | 1 | 2) => void;
   onStationMinimumLoadChange: (entityId: string, minimumLoad: StationMinimumLoad) => void;
   onStationSlotItemChange: (entityId: string, slotIndex: number, itemId: ItemId | null) => void;
@@ -395,7 +397,7 @@ interface InspectorPanelProps {
   onBatchRecipeChange: (entityIds: string[], recipeId: RecipeId) => void;
   onBatchInstallSprayCoater: (entityIds: string[]) => void;
   onBatchProliferatorConfiguration: (entityIds: string[], tier: ProliferatorTier, mode: ProliferatorMode) => void;
-  onRemoveEntity: (entityId: string) => void;
+  onRemoveEntity: (entityId: string, count?: number) => void;
   onRemoveBelt: (beltId: string) => void;
   onOpenConstructionCenter: () => void;
   fabricatorFocusItemId?: ItemId | null;
@@ -643,8 +645,12 @@ function EntityManagementActions({ game, entity, onAdd, onRemove }: {
   game: GameState;
   entity: FactoryEntity;
   onAdd: (entityId: string) => void;
-  onRemove: (entityId: string) => void;
+  onRemove: (entityId: string, count?: number) => void;
 }) {
+  const [recoveryCount, setRecoveryCount] = useState(1);
+  useEffect(() => {
+    setRecoveryCount((current) => Math.max(1, Math.min(Math.max(1, entity.minerCount), current)));
+  }, [entity.id, entity.minerCount]);
   const constructionId = entity.kind === "vein" && entity.resourceId
     ? getExtractorBuildingId(entity.resourceId)
     : entity.buildingId;
@@ -652,11 +658,18 @@ function EntityManagementActions({ game, entity, onAdd, onRemove }: {
   const name = getBuilding(constructionId).name;
   const available = Math.floor(game.construction[constructionId] ?? 0);
   return (
-    <div className="entity-management-actions">
+    <div className={`entity-management-actions${entity.kind === "vein" ? " entity-management-actions--extractor" : ""}`}>
       <button className="entity-add-command" type="button" disabled={available < 1} onClick={() => onAdd(entity.id)} title={available > 0 ? `消耗施工托盘中的 1 台${name}` : `施工托盘中没有可用的${name}`} aria-label={entity.kind === "vein" ? `快速增加采矿机，剩余 ${available}` : `快速增加建筑，剩余 ${available}`}>
         <Plus size={15} /> {entity.kind === "vein" ? "快速增加采矿机" : "快速增加建筑"}<strong>+1</strong>
       </button>
-      {entity.kind !== "vein" ? <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}><Trash2 size={15} /> 回收设备</button> : null}
+      {entity.kind !== "vein" ? <button className="entity-stack-remove-command" type="button" onClick={() => onRemove(entity.id, 1)} title={entity.machineCount > 1 ? `减少 1 台${name}并返还施工托盘，设备缓存、进度与线路保持不变` : `拆除最后一台${name}，进入完整回收流程`} aria-label={`${entity.machineCount > 1 ? "减少建筑堆叠" : "拆除最后一台建筑"}，当前 ${entity.machineCount}`}>
+        <Minus size={15} /> {entity.machineCount > 1 ? "减少堆叠" : "拆除最后一台"}<strong>-1</strong>
+      </button> : null}
+      {entity.kind === "vein" ? <div className="extractor-recovery-controls">
+        <label><span>回收数量</span><input type="number" min={1} max={Math.max(1, entity.minerCount)} value={recoveryCount} disabled={entity.minerCount < 1} onChange={(event) => setRecoveryCount(Math.max(1, Math.min(Math.max(1, entity.minerCount), Math.floor(Number(event.target.value) || 1))))} /></label>
+        <button className="danger-command" type="button" disabled={entity.minerCount < 1} onClick={() => onRemove(entity.id, recoveryCount)}><Minus size={15} /> 回收 {Math.min(recoveryCount, entity.minerCount)} 台</button>
+        <button className="danger-command extractor-recovery-all" type="button" disabled={entity.minerCount < 1} onClick={() => onRemove(entity.id, entity.minerCount)}><Trash2 size={15} /> 全部 ×{entity.minerCount}</button>
+      </div> : <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}><Trash2 size={15} /> 回收设备</button>}
     </div>
   );
 }
@@ -676,6 +689,8 @@ function EntityInspector({
   onStationDroneAdjust,
   onStationWarperAdjust,
   onStationWarpEnabled,
+  onStationWarperAutoRefillChange,
+  onStationWarperTargetChange,
   onStationHubChange,
   onStationMinimumLoadChange,
   onStationSlotItemChange,
@@ -707,6 +722,8 @@ function EntityInspector({
   onStationDroneAdjust: (entityId: string, delta: number) => void;
   onStationWarperAdjust: (entityId: string, delta: number) => void;
   onStationWarpEnabled: (entityId: string, enabled: boolean) => void;
+  onStationWarperAutoRefillChange: (entityId: string, enabled: boolean) => void;
+  onStationWarperTargetChange: (entityId: string, target: number) => void;
   onStationHubChange: (entityId: string, enabled: boolean, priority: 0 | 1 | 2) => void;
   onStationMinimumLoadChange: (entityId: string, minimumLoad: StationMinimumLoad) => void;
   onStationSlotItemChange: (entityId: string, slotIndex: number, itemId: ItemId | null) => void;
@@ -721,7 +738,7 @@ function EntityInspector({
   onProliferatorConfiguration: (entityId: string, tier: ProliferatorTier, mode: ProliferatorMode) => void;
   onAdd: (entityId: string) => void;
   onUpgrade: (entityId: string) => void;
-  onRemove: (entityId: string) => void;
+  onRemove: (entityId: string, count?: number) => void;
   onOpenConstructionCenter: () => void;
 }) {
   const [editingStationSlot, setEditingStationSlot] = useState<number | null>(null);
@@ -905,9 +922,21 @@ function EntityInspector({
     const vesselCount = Math.min(vesselCapacity, Math.max(0, Math.floor(entity.stationVessels ?? 0)));
     const availableVessels = Math.max(0, Math.floor(game.portableFleet?.logistics_vessel ?? 0));
     const warperCapacity = getStationWarperCapacity(entity);
-    const warperCount = Math.min(warperCapacity, Math.max(0, Math.floor(entity.stationWarpers ?? 0)));
-    const availableWarpers = Math.max(0, Math.floor(game.tray.space_warper ?? 0));
+    const warperCount = Math.max(0, Math.floor(entity.stationWarpers ?? 0));
+    const stationPlanetTray = entity.planetId === game.activePlanetId ? game.tray : game.planetTrays[entity.planetId] ?? {};
+    const availableWarpers = Math.max(0, Math.floor(stationPlanetTray.space_warper ?? 0));
     const warpUnlocked = isTechnologyCompleted(game, "space_warp");
+    const warperAutoRefill = Boolean(entity.stationWarperAutoRefill);
+    const warperTarget = getStationWarperAutoRefillTarget(entity);
+    const warperAutoStatus = !warpUnlocked
+      ? { tone: "blocked", label: "空间翘曲科技未解锁" }
+      : !warperAutoRefill
+        ? { tone: "idle", label: "自动补充已关闭" }
+        : warperCount >= warperTarget
+          ? { tone: "ready", label: `目标库存已满足 · ${warperCount}/${warperTarget}` }
+          : availableWarpers < 1
+            ? { tone: "blocked", label: `${getPlanet(entity.planetId).name}物资托盘缺少空间翘曲器` }
+            : { tone: "pending", label: `等待从本星球托盘补充 ${Math.min(warperTarget - warperCount, availableWarpers)} 个` };
     const activeRoutes = entity.stationRoutes ?? [];
     const primarySlotIndex = Math.max(0, slots.findIndex((slot) => slot.itemId));
     const primarySlot = slots[primarySlotIndex];
@@ -951,6 +980,14 @@ function EntityInspector({
             <button type="button" aria-label="卸载 1 个空间翘曲器" disabled={warperCount < 1} onClick={() => onStationWarperAdjust(entity.id, -1)}><Minus size={15} /></button>
             <strong><Sparkles size={15} /> {warperCount} / {warperCapacity}</strong>
             <button type="button" aria-label="装载 1 个空间翘曲器" disabled={!warpUnlocked || availableWarpers < 1 || warperCount >= warperCapacity} onClick={() => onStationWarperAdjust(entity.id, 1)}><Plus size={15} /></button>
+          </div>
+          <div className="station-warper-auto">
+            <label className="toggle-row">
+              <input type="checkbox" checked={warperAutoRefill} disabled={!warpUnlocked} onChange={(event) => onStationWarperAutoRefillChange(entity.id, event.target.checked)} />
+              <span>从所在行星物资托盘自动补充</span>
+            </label>
+            <label className="station-warper-target"><span>目标库存</span><input type="number" min={1} max={warperCapacity} disabled={!warpUnlocked} defaultValue={warperTarget} key={`${entity.id}-${warperTarget}-${warperCapacity}`} onBlur={(event) => onStationWarperTargetChange(entity.id, Number(event.target.value))} /></label>
+            <p className={`station-warper-auto__status station-warper-auto__status--${warperAutoStatus.tone}`}>{warperAutoStatus.label}</p>
           </div>
           <div className="station-hub-control">
             <label className="toggle-row">
@@ -1480,7 +1517,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
       {props.tab === "fabricate" ? <Fabricator game={props.game} focusItemId={props.fabricatorFocusItemId} onCraft={props.onCraft} onCraftItem={props.onCraftItem} onQueueCraftItem={props.onQueueCraftItem} onCancelCraftQueue={props.onCancelCraftQueue} /> : props.selectedEntities.length > 1 ? (
         <MultiSelectionInspector game={props.game} entities={props.selectedEntities} onRecipeChange={props.onBatchRecipeChange} onInstallSprayCoater={props.onBatchInstallSprayCoater} onProliferatorConfiguration={props.onBatchProliferatorConfiguration} />
       ) : props.selectedEntity ? (
-         <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationHubChange={props.onStationHubChange} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onStationSlotRoutePolicyChange={props.onStationSlotRoutePolicyChange} onStationSlotWarperBudgetChange={props.onStationSlotWarperBudgetChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onAdd={props.onAddEntity} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} onOpenConstructionCenter={props.onOpenConstructionCenter} />
+         <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationWarperAutoRefillChange={props.onStationWarperAutoRefillChange} onStationWarperTargetChange={props.onStationWarperTargetChange} onStationHubChange={props.onStationHubChange} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onStationSlotRoutePolicyChange={props.onStationSlotRoutePolicyChange} onStationSlotWarperBudgetChange={props.onStationSlotWarperBudgetChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onAdd={props.onAddEntity} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} onOpenConstructionCenter={props.onOpenConstructionCenter} />
       ) : props.selectedBelt ? (
         <BeltInspector game={props.game} belt={props.selectedBelt} hasCopiedConfiguration={props.hasCopiedBeltConfiguration} focused={props.focusedBeltNetworkId === props.selectedBelt.id} onPriorityChange={props.onBeltPriorityChange} onStackSizeChange={props.onBeltStackSizeChange} onMonitorChange={props.onBeltMonitorChange} onRouteModeChange={props.onBeltRouteModeChange} onRouteOffsetChange={props.onBeltRouteOffsetChange} onApplyConfigurationToNetwork={props.onApplyBeltConfigurationToNetwork} onFocusNetwork={props.onFocusBeltNetwork} onUpgrade={props.onUpgradeBelt} onSorterUpgrade={props.onUpgradeSorter} onUpgradeNetwork={props.onUpgradeBeltNetwork} onSorterUpgradeNetwork={props.onUpgradeSorterNetwork} onCopyConfiguration={props.onCopyBeltConfiguration} onPasteConfiguration={props.onPasteBeltConfiguration} onRemove={props.onRemoveBelt} onRemoveNetwork={props.onRemoveBeltNetwork} />
       ) : <InspectorEmpty game={props.game} />}
@@ -1676,6 +1713,7 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
           const compatiblePlanet = isBelt ? activePlanet.kind !== "gas-giant" : canPlaceBuildingOnPlanet(id, game.activePlanetId, game);
           const quickCraftPlan = getConstructionQuickCraftPlan(game, id);
           const craftable = quickCraftPlan.possible;
+          const quickCraftState = quickCraftPlan.status;
           const consumptionHint = quickCraftPlan.consumedItems.map((item) => `${getItem(item.itemId).name}×${item.amount}`).join("、");
           const craftDeficits = craftable ? null : quickCraftPlan;
           const craftHint = craftable
@@ -1718,13 +1756,12 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
                 <strong>×{count}</strong>
               </button>
               <button
-                className={`construction-item-craft${craftable ? "" : " construction-item-craft--disabled"}${quickCraftPlan.usesUpstream ? " construction-item-craft--upstream" : ""}`}
+                className={`construction-item-craft construction-item-craft--${quickCraftState}${craftable ? "" : " construction-item-craft--disabled"}`}
                 type="button"
-                aria-disabled={!craftable}
-                onClick={() => { if (craftable) onCraft(id); }}
-                onDoubleClick={() => { if (!craftable) onMissingCraftNavigate(id); }}
+                onClick={() => craftable ? onCraft(id) : onMissingCraftNavigate(id)}
                 title={craftHint}
                 aria-label={`制造${label}`}
+                data-craft-state={quickCraftState}
               ><Hammer size={12} /></button>
             </div>
           );

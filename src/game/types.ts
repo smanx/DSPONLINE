@@ -353,7 +353,7 @@ export type ResourceMode = "finite" | "infinite";
 export type DifficultyMode = "relaxed" | "standard" | "hard";
 export type RecipeFocusMode = "full" | "two-level";
 export type SimulationSpeed = 1 | 2 | 4;
-export type AutosaveIntervalSeconds = 2 | 10 | 30;
+export type AutosaveIntervalSeconds = 30 | 60 | 120;
 export type FontScale = 0.8 | 1 | 1.25 | 1.5 | 2;
 
 /** Repeatable endgame research tracks unlocked after the universe matrix. */
@@ -597,6 +597,8 @@ export interface FactoryEntity {
   stationVessels?: number;
   stationWarpers?: number;
   stationWarpEnabled?: boolean;
+  stationWarperAutoRefill?: boolean;
+  stationWarperTarget?: number;
   stationHubEnabled?: boolean;
   stationHubPriority?: LogisticsPriority;
   stationMinimumLoad?: StationMinimumLoad;
@@ -999,6 +1001,8 @@ export interface BlueprintEntityTemplate {
   stationMode?: "supply" | "demand";
   stationMinimumLoad?: StationMinimumLoad;
   stationWarpEnabled?: boolean;
+  stationWarperAutoRefill?: boolean;
+  stationWarperTarget?: number;
   stationHubEnabled?: boolean;
   stationHubPriority?: LogisticsPriority;
   stationSlots?: StationSlot[];
@@ -1098,7 +1102,7 @@ export interface ConstructionAutomationState {
 }
 
 export interface GameState {
-  version: 28;
+  version: 30;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
