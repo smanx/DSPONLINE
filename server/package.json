@@ -1,7 +1,7 @@
 {
   "name": "dsp-idle-cloud-service",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "start": "node index.mjs",
@@ -11,6 +11,10 @@
     "node": ">=20.20"
   },
   "dependencies": {
-    "better-sqlite3": "^12.11.1"
+    "better-sqlite3": "^12.11.1",
+    "tencentcloud-sdk-nodejs-ses": "4.1.271"
+  },
+  "overrides": {
+    "uuid": "11.1.1"
   }
 }

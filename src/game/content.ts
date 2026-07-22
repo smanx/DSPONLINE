@@ -535,7 +535,7 @@ export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
   },
   construction_center: {
     id: "construction_center", name: "建筑制造中心", shortName: "制造中心", kind: "machine",
-    powerDemandKw: 12000, speed: 1, inputCapacity: 0, outputCapacity: 0,
+    powerDemandKw: 12000, speed: 1, inputCapacity: 0, outputCapacity: 0, megastructure: true,
     description: "巨构级建筑补给设施，从所在行星物资托盘取料并按目标库存持续补足施工设备。",
   },
 };

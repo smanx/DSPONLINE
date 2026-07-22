@@ -2,6 +2,10 @@ import type { LeaderboardCategoryId, LeaderboardMetrics } from "./leaderboard";
 
 export const CLOUD_TOKEN_STORAGE_KEY = "dsp-idle-network.cloud-token.v1";
 export const CLOUD_SYNC_STORAGE_KEY = "dsp-idle-network.cloud-sync.v1";
+export const CLOUD_AUTO_SYNC_STORAGE_KEY = "dsp-idle-network.cloud-auto-sync.v1";
+export const CLOUD_AUTO_SYNC_INTERVAL_MS = 10 * 60 * 1000;
+export const CLOUD_SAVE_SLOTS = ["main", "1", "2", "3"] as const;
+export type CloudSaveSlot = typeof CLOUD_SAVE_SLOTS[number];
 
 export interface CloudUser {
   id: string;
@@ -29,12 +33,15 @@ export interface CloudAccountExport {
   user: CloudUser;
   cloudSave: CloudSave | null;
   cloudSaveHistory: CloudSaveMetadata[];
+  cloudSaveSlots?: Partial<Record<Exclude<CloudSaveSlot, "main">, CloudSave>>;
+  cloudSaveSlotHistory?: Partial<Record<Exclude<CloudSaveSlot, "main">, CloudSaveMetadata[]>>;
   submissions: unknown[];
   feedback: unknown[];
   errors: unknown[];
 }
 
 export interface CloudSaveMetadata {
+  slot?: CloudSaveSlot;
   revision: number;
   updatedAt: number;
   size: number;
@@ -57,6 +64,7 @@ export interface CloudSaveSummary {
 
 export interface CloudSyncMarker {
   userId: string;
+  slot?: CloudSaveSlot;
   revision: number;
   cloudChecksum: string;
   stateChecksum: string | null;
@@ -82,7 +90,18 @@ export interface CloudSession {
   status: "checking" | "offline" | "anonymous" | "authenticated";
   user: CloudUser | null;
   cloudSave: CloudSaveMetadata | null;
+  cloudSaves?: Record<CloudSaveSlot, CloudSaveMetadata | null>;
+  mailAvailable: boolean;
   message: string | null;
+}
+
+export interface CloudAutoSyncStatus {
+  userId: string;
+  state: "success" | "error" | "conflict" | "skipped";
+  attemptedAt: number;
+  uploadedAt: number | null;
+  revision: number | null;
+  message: string;
 }
 
 export interface CloudLeaderboardEntry {
@@ -152,6 +171,24 @@ function writeCloudSyncMarkers(markers: Record<string, CloudSyncMarker>): void {
   try { window.localStorage.setItem(CLOUD_SYNC_STORAGE_KEY, JSON.stringify(markers)); } catch { /* optional sync metadata */ }
 }
 
+function cloudMarkerKey(userId: string, slot: CloudSaveSlot): string {
+  return `${userId}:${slot}`;
+}
+
+export function emptyCloudSaveSlots(main: CloudSaveMetadata | null = null): Record<CloudSaveSlot, CloudSaveMetadata | null> {
+  return { main, "1": null, "2": null, "3": null };
+}
+
+function normalizedCloudSaveSlots(
+  main: CloudSaveMetadata | null,
+  slots?: Partial<Record<CloudSaveSlot, CloudSaveMetadata | null>>,
+): Record<CloudSaveSlot, CloudSaveMetadata | null> {
+  return Object.fromEntries(CLOUD_SAVE_SLOTS.map((slot) => {
+    const save = slots?.[slot] ?? (slot === "main" ? main : null);
+    return [slot, save ? { ...save, slot } : null];
+  })) as Record<CloudSaveSlot, CloudSaveMetadata | null>;
+}
+
 export function summarizeCloudPayload(payload: string): CloudSaveSummary | null {
   try {
     const parsed = JSON.parse(payload) as Record<string, any>;
@@ -173,15 +210,18 @@ export function summarizeCloudPayload(payload: string): CloudSaveSummary | null 
   }
 }
 
-export function getCloudSyncMarker(userId: string): CloudSyncMarker | null {
-  const marker = readCloudSyncMarkers()[userId];
-  return marker && marker.userId === userId ? marker : null;
+export function getCloudSyncMarker(userId: string, slot: CloudSaveSlot = "main"): CloudSyncMarker | null {
+  const markers = readCloudSyncMarkers();
+  const marker = markers[cloudMarkerKey(userId, slot)] ?? (slot === "main" ? markers[userId] : undefined);
+  return marker && marker.userId === userId && (!marker.slot || marker.slot === slot) ? { ...marker, slot } : null;
 }
 
-export function markCloudSaveSynchronized(userId: string, cloudSave: CloudSaveMetadata, payload?: string): void {
+export function markCloudSaveSynchronized(userId: string, cloudSave: CloudSaveMetadata, payload?: string, requestedSlot?: CloudSaveSlot): void {
+  const slot = requestedSlot ?? cloudSave.slot ?? "main";
   const markers = readCloudSyncMarkers();
-  markers[userId] = {
+  markers[cloudMarkerKey(userId, slot)] = {
     userId,
+    slot,
     revision: cloudSave.revision,
     cloudChecksum: cloudSave.checksum,
     stateChecksum: cloudSave.summary?.stateChecksum ?? (payload ? summarizeCloudPayload(payload)?.stateChecksum ?? null : null),
@@ -190,14 +230,20 @@ export function markCloudSaveSynchronized(userId: string, cloudSave: CloudSaveMe
   writeCloudSyncMarkers(markers);
 }
 
-export function clearCloudSyncMarker(userId: string): void {
+export function clearCloudSyncMarker(userId: string, slot?: CloudSaveSlot): void {
   const markers = readCloudSyncMarkers();
-  delete markers[userId];
+  if (slot) {
+    delete markers[cloudMarkerKey(userId, slot)];
+    if (slot === "main") delete markers[userId];
+  } else {
+    delete markers[userId];
+    for (const candidate of CLOUD_SAVE_SLOTS) delete markers[cloudMarkerKey(userId, candidate)];
+  }
   writeCloudSyncMarkers(markers);
 }
 
-export function compareCloudSave(userId: string, localPayload: string | null, cloudSave: CloudSaveMetadata | null): CloudSyncComparison {
-  const marker = getCloudSyncMarker(userId);
+export function compareCloudSave(userId: string, localPayload: string | null, cloudSave: CloudSaveMetadata | null, slot: CloudSaveSlot = "main"): CloudSyncComparison {
+  const marker = getCloudSyncMarker(userId, slot);
   const local = localPayload ? summarizeCloudPayload(localPayload) : null;
   if (!local && !cloudSave) return { state: "empty", marker, local, cloud: cloudSave, localChanged: false, cloudChanged: false };
   if (local && !cloudSave) return { state: "local-only", marker, local, cloud: cloudSave, localChanged: true, cloudChanged: false };
@@ -215,6 +261,19 @@ export function compareCloudSave(userId: string, localPayload: string | null, cl
       : cloudChanged ? "cloud-newer"
         : "synced";
   return { state, marker, local, cloud: cloudSave, localChanged, cloudChanged };
+}
+
+export function readCloudAutoSyncStatus(userId?: string): CloudAutoSyncStatus | null {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(CLOUD_AUTO_SYNC_STORAGE_KEY) ?? "null") as CloudAutoSyncStatus | null;
+    return parsed && (!userId || parsed.userId === userId) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeCloudAutoSyncStatus(status: CloudAutoSyncStatus): void {
+  try { window.localStorage.setItem(CLOUD_AUTO_SYNC_STORAGE_KEY, JSON.stringify(status)); } catch { /* optional status */ }
 }
 
 async function cloudRequest<T>(path: string, options: RequestInit = {}, authenticated = false): Promise<T> {
@@ -251,32 +310,34 @@ async function cloudRequest<T>(path: string, options: RequestInit = {}, authenti
 
 export async function resumeCloudSession(): Promise<CloudSession> {
   try {
-    await cloudRequest<{ ok: boolean }>("/health");
+    const health = await cloudRequest<{ ok: boolean; mailProvider?: string }>("/health");
+    const mailAvailable = Boolean(health.mailProvider && health.mailProvider !== "disabled");
     const token = getCloudToken();
-    if (!token) return { status: "anonymous", user: null, cloudSave: null, message: null };
+    if (!token) return { status: "anonymous", user: null, cloudSave: null, mailAvailable, message: null };
     try {
-      const account = await cloudRequest<{ user: CloudUser; cloudSave: CloudSaveMetadata | null }>("/account", {}, true);
-      return { status: "authenticated", user: account.user, cloudSave: account.cloudSave, message: null };
+      const account = await cloudRequest<{ user: CloudUser; cloudSave: CloudSaveMetadata | null; cloudSaves?: Partial<Record<CloudSaveSlot, CloudSaveMetadata | null>> }>("/account", {}, true);
+      const cloudSaves = normalizedCloudSaveSlots(account.cloudSave, account.cloudSaves);
+      return { status: "authenticated", user: account.user, cloudSave: cloudSaves.main, cloudSaves, mailAvailable, message: null };
     } catch (error) {
       if (error instanceof CloudApiError && error.status === 401) setCloudToken(null);
-      return { status: "anonymous", user: null, cloudSave: null, message: error instanceof Error ? error.message : null };
+      return { status: "anonymous", user: null, cloudSave: null, mailAvailable, message: error instanceof Error ? error.message : null };
     }
   } catch (error) {
-    return { status: "offline", user: null, cloudSave: null, message: error instanceof Error ? error.message : "云服务离线" };
+    return { status: "offline", user: null, cloudSave: null, mailAvailable: false, message: error instanceof Error ? error.message : "云服务离线" };
   }
 }
 
 export async function registerCloudAccount(email: string, password: string, displayName: string): Promise<CloudSession> {
   const result = await cloudRequest<{ token: string; user: CloudUser }>("/auth/register", { method: "POST", body: JSON.stringify({ email, password, displayName }) });
   setCloudToken(result.token);
-  return { status: "authenticated", user: result.user, cloudSave: null, message: null };
+  return { status: "authenticated", user: result.user, cloudSave: null, cloudSaves: emptyCloudSaveSlots(), mailAvailable: true, message: null };
 }
 
 export async function loginCloudAccount(email: string, password: string): Promise<CloudSession> {
   const result = await cloudRequest<{ token: string; user: CloudUser }>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
   setCloudToken(result.token);
   const resumed = await resumeCloudSession();
-  return resumed.status === "authenticated" ? resumed : { status: "authenticated", user: result.user, cloudSave: null, message: null };
+  return resumed.status === "authenticated" ? resumed : { status: "authenticated", user: result.user, cloudSave: null, cloudSaves: emptyCloudSaveSlots(), mailAvailable: resumed.mailAvailable, message: null };
 }
 
 export async function logoutCloudAccount(): Promise<void> {
@@ -292,6 +353,14 @@ export async function resendCloudVerification(): Promise<void> {
   await cloudRequest("/auth/resend-verification", { method: "POST" }, true);
 }
 
+export async function bindCloudEmail(email: string): Promise<CloudUser> {
+  const result = await cloudRequest<{ user: CloudUser }>("/account/email", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  }, true);
+  return result.user;
+}
+
 export async function requestCloudPasswordReset(email: string): Promise<string> {
   const result = await cloudRequest<{ message: string }>("/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
   return result.message;
@@ -301,7 +370,7 @@ export async function resetCloudPassword(token: string, password: string): Promi
   const result = await cloudRequest<{ token: string; user: CloudUser }>("/auth/reset-password", { method: "POST", body: JSON.stringify({ token, password }) });
   setCloudToken(result.token);
   const resumed = await resumeCloudSession();
-  return resumed.status === "authenticated" ? resumed : { status: "authenticated", user: result.user, cloudSave: null, message: null };
+  return resumed.status === "authenticated" ? resumed : { status: "authenticated", user: result.user, cloudSave: null, cloudSaves: emptyCloudSaveSlots(), mailAvailable: resumed.mailAvailable, message: null };
 }
 
 export async function changeCloudPassword(currentPassword: string, newPassword: string): Promise<CloudUser> {
@@ -338,25 +407,32 @@ export async function deleteCloudAccount(password: string): Promise<void> {
   setCloudToken(null);
 }
 
-export async function uploadCloudSave(payload: string, expectedRevision: number): Promise<CloudSaveMetadata> {
-  const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>("/cloud-save", { method: "PUT", body: JSON.stringify({ payload, expectedRevision }) }, true);
-  return result.cloudSave;
+function cloudSaveQuery(slot: CloudSaveSlot, revision?: number): string {
+  const parameters = new URLSearchParams();
+  if (slot !== "main") parameters.set("slot", slot);
+  if (revision) parameters.set("revision", String(revision));
+  const query = parameters.toString();
+  return query ? `?${query}` : "";
 }
 
-export async function downloadCloudSave(revision?: number): Promise<CloudSave | null> {
-  const suffix = revision ? `?revision=${encodeURIComponent(revision)}` : "";
-  const result = await cloudRequest<{ cloudSave: CloudSave | null }>(`/cloud-save${suffix}`, {}, true);
-  return result.cloudSave;
+export async function uploadCloudSave(payload: string, expectedRevision: number, slot: CloudSaveSlot = "main"): Promise<CloudSaveMetadata> {
+  const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save${cloudSaveQuery(slot)}`, { method: "PUT", body: JSON.stringify({ payload, expectedRevision }) }, true);
+  return { ...result.cloudSave, slot };
 }
 
-export async function fetchCloudSaveHistory(): Promise<CloudSaveMetadata[]> {
-  const result = await cloudRequest<{ history: CloudSaveMetadata[] }>("/cloud-save/history", {}, true);
-  return result.history;
+export async function downloadCloudSave(revision?: number, slot: CloudSaveSlot = "main"): Promise<CloudSave | null> {
+  const result = await cloudRequest<{ cloudSave: CloudSave | null }>(`/cloud-save${cloudSaveQuery(slot, revision)}`, {}, true);
+  return result.cloudSave ? { ...result.cloudSave, slot } : null;
 }
 
-export async function restoreCloudSaveRevision(revision: number, expectedRevision: number): Promise<CloudSaveMetadata> {
-  const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>("/cloud-save/restore", { method: "POST", body: JSON.stringify({ revision, expectedRevision }) }, true);
-  return result.cloudSave;
+export async function fetchCloudSaveHistory(slot: CloudSaveSlot = "main"): Promise<CloudSaveMetadata[]> {
+  const result = await cloudRequest<{ history: CloudSaveMetadata[] }>(`/cloud-save/history${cloudSaveQuery(slot)}`, {}, true);
+  return result.history.map((save) => ({ ...save, slot }));
+}
+
+export async function restoreCloudSaveRevision(revision: number, expectedRevision: number, slot: CloudSaveSlot = "main"): Promise<CloudSaveMetadata> {
+  const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save/restore${cloudSaveQuery(slot)}`, { method: "POST", body: JSON.stringify({ revision, expectedRevision }) }, true);
+  return { ...result.cloudSave, slot };
 }
 
 export async function fetchCloudLeaderboard(category: LeaderboardCategoryId, seasonId: string): Promise<CloudLeaderboardEntry[]> {

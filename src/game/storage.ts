@@ -2,6 +2,9 @@ import {
   DYSON_SHELL_CAPACITY_PER_STRUCTURE,
   DYSON_SHELL_SAIL_POWER_KW,
   DYSON_STRUCTURE_POWER_KW,
+  DEFAULT_PLANET_TRAY_ITEM_LIMIT,
+  MAX_PLANET_TRAY_ITEM_LIMIT,
+  MIN_PLANET_TRAY_ITEM_LIMIT,
   SOLAR_SAIL_POWER_KW,
   STATION_SLOT_COUNT,
   advanceSimulation,
@@ -13,7 +16,7 @@ import { isDifficultyMode } from "./difficulty";
 import { isAchievementId } from "./progression";
 import { DEFAULT_GALAXY_SEED, createVeinReserve, getPlanetOrbitalYields, getStarLuminosity, isInfiniteResource, normalizeGalaxyState } from "./galaxy";
 import { createEndgameState, getOfflineSimulationLimitSeconds } from "./endgame";
-import type { BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CargoStackSize, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
+import type { BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -457,7 +460,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const savedSeed = saved.version >= 20 && typeof saved.galaxy?.seed === "number" && Number.isFinite(saved.galaxy.seed)
     ? saved.galaxy.seed
     : DEFAULT_GALAXY_SEED;
@@ -500,6 +503,9 @@ export function migrateGame(value: unknown): GameState | null {
       fuelRemainingMj: typeof entity.fuelRemainingMj === "number" ? Math.max(0, entity.fuelRemainingMj) : 0,
       powerOutputKw: typeof entity.powerOutputKw === "number" ? Math.max(0, entity.powerOutputKw) : 0,
       powerInputKw: typeof entity.powerInputKw === "number" ? Math.max(0, entity.powerInputKw) : 0,
+      powerFactor: typeof entity.powerFactor === "number" && Number.isFinite(entity.powerFactor)
+        ? Math.max(0, Math.min(1, entity.powerFactor))
+        : undefined,
       storedEnergyMj: accumulator || energyExchanger ? Math.min(storedEnergyCapacity, nonNegativeNumber(entity.storedEnergyMj)) : undefined,
       energyMode: accumulator ? "auto" : energyExchanger
         ? validEnergyMode(entity.energyMode) && entity.energyMode !== "auto" ? entity.energyMode : "charge"
@@ -627,7 +633,10 @@ export function migrateGame(value: unknown): GameState | null {
   let selectedTechId = getTechnology(saved.research?.selectedTechId) && !completedTechIds.includes(saved.research.selectedTechId)
     ? saved.research.selectedTechId as TechId
     : null;
-  const plannedTechIds = new Set<TechId>([...completedTechIds, ...(selectedTechId ? [selectedTechId] : [])]);
+  let pausedTechId = saved.version >= 27 && getTechnology(saved.research?.pausedTechId) && !completedTechIds.includes(saved.research.pausedTechId) && saved.research.pausedTechId !== selectedTechId
+    ? saved.research.pausedTechId as TechId
+    : null;
+  const plannedTechIds = new Set<TechId>([...completedTechIds, ...(pausedTechId ? [pausedTechId] : []), ...(selectedTechId ? [selectedTechId] : [])]);
   const queuedTechIds: TechId[] = [];
   if (Array.isArray(saved.research?.queuedTechIds)) {
     for (const techId of saved.research.queuedTechIds as TechId[]) {
@@ -638,7 +647,7 @@ export function migrateGame(value: unknown): GameState | null {
       plannedTechIds.add(techId);
     }
   }
-  if (!selectedTechId && queuedTechIds.length > 0) selectedTechId = queuedTechIds.shift()!;
+  if (!selectedTechId && !pausedTechId && queuedTechIds.length > 0) selectedTechId = queuedTechIds.shift()!;
 
   const activePlanetId = validPlanetId(saved.activePlanetId) ? saved.activePlanetId : "home";
   const savedActiveTray = integerRecord(saved.tray);
@@ -647,6 +656,13 @@ export function migrateGame(value: unknown): GameState | null {
     planet.id === "home" && saved.version < 4 ? savedActiveTray : integerRecord(saved.planetTrays?.[planet.id]),
   ])) as GameState["planetTrays"];
   if (saved.version >= 4 && saved.tray && typeof saved.tray === "object") planetTrays[activePlanetId] = savedActiveTray;
+  const planetTrayItemLimits = Object.fromEntries(PLANET_LIST.map((planet) => {
+    const value = saved.version >= 28 ? saved.planetTrayItemLimits?.[planet.id] : DEFAULT_PLANET_TRAY_ITEM_LIMIT;
+    const limit = Number.isFinite(value)
+      ? Math.max(MIN_PLANET_TRAY_ITEM_LIMIT, Math.min(MAX_PLANET_TRAY_ITEM_LIMIT, Math.floor(value)))
+      : DEFAULT_PLANET_TRAY_ITEM_LIMIT;
+    return [planet.id, limit];
+  })) as GameState["planetTrayItemLimits"];
   const portableFleet: GameState["portableFleet"] = {
     logistics_drone: saved.version >= 24 ? nonNegativeInteger(saved.portableFleet?.logistics_drone) : 0,
     logistics_vessel: saved.version >= 24 ? nonNegativeInteger(saved.portableFleet?.logistics_vessel) : 0,
@@ -1056,6 +1072,9 @@ export function migrateGame(value: unknown): GameState | null {
     soundEnabled: typeof saved.settings?.soundEnabled === "boolean"
       ? saved.settings.soundEnabled
       : initial.settings.soundEnabled,
+    allowDoubleClickZoom: typeof saved.settings?.allowDoubleClickZoom === "boolean"
+      ? saved.settings.allowDoubleClickZoom
+      : initial.settings.allowDoubleClickZoom,
     beltHeatmapEnabled: typeof saved.settings?.beltHeatmapEnabled === "boolean"
       ? saved.settings.beltHeatmapEnabled
       : initial.settings.beltHeatmapEnabled,
@@ -1096,6 +1115,28 @@ export function migrateGame(value: unknown): GameState | null {
     })
     : [];
 
+  const validCanvasColor = (value: unknown, fallback: string): string =>
+    typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value) ? value.toUpperCase() : fallback;
+  const canvasRegions: CanvasRegion[] = saved.version >= 27 && Array.isArray(saved.canvasRegions)
+    ? saved.canvasRegions.slice(-48).flatMap((region: Record<string, any>, index: number) => {
+      if (!validPlanetId(region.planetId) || !Number.isFinite(region.x) || !Number.isFinite(region.y) ||
+        !Number.isFinite(region.width) || !Number.isFinite(region.height)) return [];
+      const width = Math.max(40, Math.min(20_000, Math.round(region.width)));
+      const height = Math.max(40, Math.min(20_000, Math.round(region.height)));
+      return [{
+        id: typeof region.id === "string" && region.id ? region.id : `region_migrated_${index + 1}`,
+        name: typeof region.name === "string" && region.name.trim() ? region.name.trim().slice(0, 28) : `生产区域 ${index + 1}`,
+        planetId: region.planetId,
+        x: Math.round(region.x),
+        y: Math.round(region.y),
+        width,
+        height,
+        fillColor: validCanvasColor(region.fillColor, "#2C6B66"),
+        borderColor: validCanvasColor(region.borderColor, "#67C7B5"),
+      } satisfies CanvasRegion];
+    })
+    : [];
+
   const powerGridMetrics: GameState["powerGridMetrics"] = Object.fromEntries(PLANET_LIST.map((planet) => [
     planet.id,
     Object.fromEntries(Object.entries(initial.powerGridMetrics[planet.id]).map(([gridId, metrics]) => [
@@ -1111,19 +1152,21 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 26,
+    version: 28,
     activePlanetId,
     entities,
     belts,
     cargo: saved.cargo ? { ...saved.cargo, amount: Math.max(1, Math.floor(saved.cargo.amount ?? 1)) } : null,
     tray: { ...planetTrays[activePlanetId] },
     planetTrays,
+    planetTrayItemLimits,
     construction,
     constructionAutomation,
     portableFleet,
     totalProduced: integerRecord(saved.totalProduced),
     research: {
       selectedTechId,
+      pausedTechId,
       queuedTechIds,
       progressByTech: researchProgress(saved.research?.progressByTech),
       completedTechIds,
@@ -1135,6 +1178,7 @@ export function migrateGame(value: unknown): GameState | null {
     achievements: { unlockedIds: unlockedAchievementIds },
     campaign: normalizeCampaignState(saved.campaign),
     canvasBookmarks,
+    canvasRegions,
     blueprints,
     constructionQueue,
     handcraftQueue,
@@ -1201,6 +1245,13 @@ function applyReturningReward(state: GameState, savedAt: number, seconds: number
   }
   const amount = Math.min(2_000, Math.max(240, Math.floor(seconds / 3600) * 4));
   const reward = (["iron_ore", "copper_ore", "stone", "coal"] as ItemId[]).map((itemId) => ({ itemId, amount }));
+  const rawLimit = state.planetTrayItemLimits?.[state.activePlanetId];
+  const limit = Number.isFinite(rawLimit)
+    ? Math.max(MIN_PLANET_TRAY_ITEM_LIMIT, Math.min(MAX_PLANET_TRAY_ITEM_LIMIT, Math.floor(rawLimit)))
+    : DEFAULT_PLANET_TRAY_ITEM_LIMIT;
+  if (reward.some((entry) => Math.floor(state.tray[entry.itemId] ?? 0) + entry.amount > limit)) {
+    return { state, reward: [] };
+  }
   const tray = { ...state.tray };
   for (const entry of reward) tray[entry.itemId] = Math.floor((tray[entry.itemId] ?? 0) + entry.amount);
   const next = {
@@ -1409,6 +1460,18 @@ export function loadGameSlot(slotId: SaveSlotId): LoadedGame | null {
   try {
     const raw = window.localStorage.getItem(saveSlotKey(slotId));
     return raw ? parseEnvelope(raw, true) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Export a validated manual slot without applying offline simulation. */
+export function exportGameSlot(slotId: SaveSlotId): string | null {
+  try {
+    const raw = window.localStorage.getItem(saveSlotKey(slotId));
+    if (!raw) return null;
+    const inspection = inspectSave(raw);
+    return inspection.valid && inspection.state ? raw : null;
   } catch {
     return null;
   }

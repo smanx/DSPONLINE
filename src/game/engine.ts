@@ -46,6 +46,7 @@ import type {
   BlueprintMirror,
   BlueprintRotation,
   BuildingId,
+  CanvasRegion,
   CargoStackSize,
   ConstructionId,
   DysonEngineeringSnapshot,
@@ -129,6 +130,9 @@ export const POWER_GRID_LABELS: Record<PowerGridId, string> = {
 /** Zero represents an unlimited, planet-wide grid domain. */
 export const POWER_SUPPLY_RADIUS = 0;
 export const MATERIAL_DELIVERY_SLOT_COUNT = 3;
+export const MIN_PLANET_TRAY_ITEM_LIMIT = 1_000;
+export const MAX_PLANET_TRAY_ITEM_LIMIT = 1_000_000;
+export const DEFAULT_PLANET_TRAY_ITEM_LIMIT = MAX_PLANET_TRAY_ITEM_LIMIT;
 const EPSILON = 0.0001;
 
 function round(value: number, digits = 4): number {
@@ -163,9 +167,11 @@ function copyState(state: GameState): GameState {
     })),
     belts: state.belts.map((belt) => ({ ...belt })),
     canvasBookmarks: state.canvasBookmarks.map((bookmark) => ({ ...bookmark, viewport: { ...bookmark.viewport } })),
+    canvasRegions: state.canvasRegions.map((region) => ({ ...region })),
     cargo: state.cargo ? { ...state.cargo, origin: state.cargo.origin ? { ...state.cargo.origin } : undefined } : null,
     tray: { ...state.tray },
     planetTrays,
+    planetTrayItemLimits: { ...state.planetTrayItemLimits },
     construction: { ...state.construction },
     constructionAutomation: {
       ...state.constructionAutomation,
@@ -175,6 +181,7 @@ function copyState(state: GameState): GameState {
     totalProduced: { ...state.totalProduced },
     research: {
       ...state.research,
+      pausedTechId: state.research.pausedTechId,
       queuedTechIds: [...state.research.queuedTechIds],
       progressByTech: Object.fromEntries(Object.entries(state.research.progressByTech).map(([techId, progress]) => [
         techId,
@@ -426,7 +433,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
     return { ...entity, resourceRemaining: reserve, resourceCapacity: reserve };
   });
   return {
-    version: 26,
+    version: 28,
     nextId: 1,
     activePlanetId: "home",
     entities,
@@ -437,6 +444,10 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
       planet.id,
       planet.id === "home" ? { iron_ore: 100, copper_ore: 100, stone: 100 } : {},
     ])) as GameState["planetTrays"],
+    planetTrayItemLimits: Object.fromEntries(PLANET_LIST.map((planet) => [
+      planet.id,
+      DEFAULT_PLANET_TRAY_ITEM_LIMIT,
+    ])) as GameState["planetTrayItemLimits"],
     construction: {
       wind_turbine: 3,
       solar_panel: 0,
@@ -491,6 +502,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
     totalProduced: {},
     research: {
       selectedTechId: null,
+      pausedTechId: null,
       queuedTechIds: [],
       progressByTech: {},
       completedTechIds: [],
@@ -509,6 +521,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
       performanceMode: false,
       reducedMotion: false,
       soundEnabled: false,
+      allowDoubleClickZoom: false,
       beltHeatmapEnabled: false,
       autosaveIntervalSeconds: 2,
       resourceMode: "finite",
@@ -522,6 +535,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
       rewardedTaskIds: [],
     },
     canvasBookmarks: [],
+    canvasRegions: [],
     blueprints: [],
     constructionQueue: [],
     handcraftQueue: [],
@@ -918,6 +932,9 @@ export function getPowerGridMetrics(state: GameState, planetId: PlanetId, gridId
 
 export function getEntityPowerFactor(state: GameState, entity: FactoryEntity): number {
   if (!isEntityInPowerCoverage(state, entity)) return 0;
+  if (typeof entity.powerFactor === "number" && Number.isFinite(entity.powerFactor)) {
+    return Math.max(0, Math.min(1, entity.powerFactor));
+  }
   return getPowerGridMetrics(state, entity.planetId, getEntityPowerGridId(entity)).powerFactor;
 }
 
@@ -2441,9 +2458,9 @@ function drainMaterialDeliveryHubs(state: GameState, seconds: number): void {
     for (const itemId of getMaterialDeliveryItems(entity)) {
       const amount = Math.max(0, Math.floor((entity.inputs[itemId] ?? 0) + EPSILON));
       if (amount < 1) continue;
-      entity.inputs[itemId] = 0;
-      addToPlanetTray(state, entity.planetId, itemId, amount);
-      delivered += amount;
+      const moved = storeInPlanetTray(state, entity.planetId, itemId, amount);
+      entity.inputs[itemId] = amount - moved;
+      delivered += moved;
     }
     entity.utilization = delivered > 0 ? 1 : 0;
     entity.productionRate = seconds > EPSILON ? round(delivered * 60 / seconds, 2) : 0;
@@ -2523,9 +2540,10 @@ function transferBelts(state: GameState, seconds: number): void {
         group.source.routingCursor = cursor;
       };
       if (group.source.distributionMode === "priority") {
-        const priority = group.candidates.filter((candidate) => candidate.belt.priority === 1 && usable(candidate));
-        if (priority.length > 0) distribute(priority);
-        distribute(group.candidates.filter((candidate) => candidate.belt.priority === 0 && usable(candidate)));
+        for (const priority of [2, 1, 0] as const) {
+          distribute(group.candidates.filter((candidate) => candidate.belt.priority === priority && usable(candidate)));
+          if (available <= 0) break;
+        }
       } else {
         distribute(group.candidates.filter(usable));
       }
@@ -2564,6 +2582,7 @@ function runMiners(state: GameState, seconds: number, power: PowerPlan, planetId
   for (const entity of state.entities) {
     if (entity.planetId !== planetId || entity.kind !== "vein" || entity.minerCount <= 0 || !entity.resourceId) continue;
     const powerFactor = powerFactorForEntity(power, entity);
+    entity.powerFactor = round(powerFactor, 4);
     const miner = extractorFor(entity);
     const miningSpeed = (ITEMS[entity.resourceId].kind === "solid" ? researchedMiningSpeed : 1) * profile.miningMultiplier;
     const capacity = miner.outputCapacity * entity.minerCount;
@@ -2623,6 +2642,9 @@ function runMachines(state: GameState, seconds: number, power: PowerPlan, planet
   for (const entity of state.entities) {
     const recipe = getRecipe(entity.recipeId);
     if (entity.planetId !== planetId || entity.kind !== "machine" || entity.buildingId === "ray_receiver" || !entity.buildingId || !recipe) continue;
+    entity.powerFactor = power.factorByEntity.has(entity.id)
+      ? round(power.factorByEntity.get(entity.id)!, 4)
+      : undefined;
     if (recipe.id === "matrix_research" && !hasActiveResearch(state)) {
       entity.progress = 0;
       entity.utilization = 0;
@@ -2679,9 +2701,7 @@ function runMachines(state: GameState, seconds: number, power: PowerPlan, planet
         const completed = technology.costs.every((cost) => (progress[cost.itemId] ?? 0) >= cost.amount);
         if (completed) {
           completeTechnology(state, techId);
-          const [nextTechId, ...remainingQueue] = state.research.queuedTechIds;
-          state.research.selectedTechId = nextTechId ?? null;
-          state.research.queuedTechIds = remainingQueue;
+          activateNextQueuedTechnology(state);
           for (const researchEntity of state.entities) {
             if (researchEntity.recipeId === "matrix_research") researchEntity.progress = 0;
           }
@@ -3785,6 +3805,41 @@ function addToTray(state: GameState, itemId: ItemId, amount: number): void {
   state.tray[itemId] = Math.floor((state.tray[itemId] ?? 0) + amount + EPSILON);
 }
 
+export function getPlanetTrayItemLimit(state: GameState, planetId: PlanetId = state.activePlanetId): number {
+  const value = state.planetTrayItemLimits?.[planetId];
+  return Number.isFinite(value)
+    ? Math.max(MIN_PLANET_TRAY_ITEM_LIMIT, Math.min(MAX_PLANET_TRAY_ITEM_LIMIT, Math.floor(value)))
+    : DEFAULT_PLANET_TRAY_ITEM_LIMIT;
+}
+
+export function getPlanetTrayItemFreeCapacity(state: GameState, planetId: PlanetId, itemId: ItemId): number {
+  if (isPortableFleetItem(itemId)) return Number.POSITIVE_INFINITY;
+  const tray = planetId === state.activePlanetId ? state.tray : state.planetTrays[planetId] ?? {};
+  return Math.max(0, getPlanetTrayItemLimit(state, planetId) - Math.floor(tray[itemId] ?? 0));
+}
+
+export function setPlanetTrayItemLimit(state: GameState, planetId: PlanetId, value: number): GameState {
+  if (!Number.isFinite(value) || !PLANET_LIST.some((planet) => planet.id === planetId)) return state;
+  const limit = Math.max(MIN_PLANET_TRAY_ITEM_LIMIT, Math.min(MAX_PLANET_TRAY_ITEM_LIMIT, Math.floor(value)));
+  if (getPlanetTrayItemLimit(state, planetId) === limit) return state;
+  return {
+    ...state,
+    planetTrayItemLimits: { ...state.planetTrayItemLimits, [planetId]: limit },
+  };
+}
+
+function storeInTray(state: GameState, itemId: ItemId, amount: number): number {
+  const requested = Math.max(0, Math.floor(amount + EPSILON));
+  if (requested < 1) return 0;
+  if (isPortableFleetItem(itemId)) {
+    addToTray(state, itemId, requested);
+    return requested;
+  }
+  const moved = Math.min(requested, getPlanetTrayItemFreeCapacity(state, state.activePlanetId, itemId));
+  if (moved > 0) addToTray(state, itemId, moved);
+  return moved;
+}
+
 function addToPlanetTray(state: GameState, planetId: PlanetId, itemId: ItemId, amount: number): void {
   if (amount <= EPSILON || planetId === state.activePlanetId || isPortableFleetItem(itemId)) {
     if (amount > EPSILON) addToTray(state, itemId, amount);
@@ -3793,6 +3848,18 @@ function addToPlanetTray(state: GameState, planetId: PlanetId, itemId: ItemId, a
   const tray = state.planetTrays[planetId] ?? {};
   tray[itemId] = Math.floor((tray[itemId] ?? 0) + amount + EPSILON);
   state.planetTrays[planetId] = tray;
+}
+
+function storeInPlanetTray(state: GameState, planetId: PlanetId, itemId: ItemId, amount: number): number {
+  const requested = Math.max(0, Math.floor(amount + EPSILON));
+  if (requested < 1) return 0;
+  if (isPortableFleetItem(itemId)) {
+    addToPlanetTray(state, planetId, itemId, requested);
+    return requested;
+  }
+  const moved = Math.min(requested, getPlanetTrayItemFreeCapacity(state, planetId, itemId));
+  if (moved > 0) addToPlanetTray(state, planetId, itemId, moved);
+  return moved;
 }
 
 export function getMaterialDeliveryItems(entity: FactoryEntity): ItemId[] {
@@ -3976,6 +4043,51 @@ export function removeCanvasBookmark(state: GameState, bookmarkId: string): Game
   return { ...state, canvasBookmarks: state.canvasBookmarks.filter((bookmark) => bookmark.id !== bookmarkId) };
 }
 
+function validCanvasColor(value: string): boolean {
+  return /^#[0-9a-fA-F]{6}$/.test(value);
+}
+
+export function addCanvasRegion(
+  state: GameState,
+  planetId: PlanetId,
+  rectangle: { x: number; y: number; width: number; height: number },
+  name?: string,
+  fillColor = "#2C6B66",
+  borderColor = "#67C7B5",
+): GameState {
+  if (!PLANET_LIST.some((planet) => planet.id === planetId) ||
+    !Number.isFinite(rectangle.x) || !Number.isFinite(rectangle.y) ||
+    !Number.isFinite(rectangle.width) || !Number.isFinite(rectangle.height) ||
+    rectangle.width < 40 || rectangle.height < 40 || !validCanvasColor(fillColor) || !validCanvasColor(borderColor)) return state;
+  const region: CanvasRegion = {
+    id: `region_${state.nextId}`,
+    name: name?.trim().slice(0, 28) || `生产区域 ${state.canvasRegions.length + 1}`,
+    planetId,
+    x: Math.round(rectangle.x),
+    y: Math.round(rectangle.y),
+    width: Math.min(20_000, Math.round(rectangle.width)),
+    height: Math.min(20_000, Math.round(rectangle.height)),
+    fillColor: fillColor.toUpperCase(),
+    borderColor: borderColor.toUpperCase(),
+  };
+  return { ...state, nextId: state.nextId + 1, canvasRegions: [...state.canvasRegions, region].slice(-48) };
+}
+
+export function updateCanvasRegion(state: GameState, regionId: string, changes: Partial<Pick<CanvasRegion, "name" | "fillColor" | "borderColor">>): GameState {
+  const region = state.canvasRegions.find((candidate) => candidate.id === regionId);
+  if (!region) return state;
+  const name = typeof changes.name === "string" && changes.name.trim() ? changes.name.trim().slice(0, 28) : region.name;
+  const fillColor = typeof changes.fillColor === "string" && validCanvasColor(changes.fillColor) ? changes.fillColor.toUpperCase() : region.fillColor;
+  const borderColor = typeof changes.borderColor === "string" && validCanvasColor(changes.borderColor) ? changes.borderColor.toUpperCase() : region.borderColor;
+  if (name === region.name && fillColor === region.fillColor && borderColor === region.borderColor) return state;
+  return { ...state, canvasRegions: state.canvasRegions.map((candidate) => candidate.id === regionId ? { ...candidate, name, fillColor, borderColor } : candidate) };
+}
+
+export function removeCanvasRegion(state: GameState, regionId: string): GameState {
+  if (!state.canvasRegions.some((region) => region.id === regionId)) return state;
+  return { ...state, canvasRegions: state.canvasRegions.filter((region) => region.id !== regionId) };
+}
+
 function applyAcrossEntityPlanets(
   state: GameState,
   entityIds: string[],
@@ -4123,10 +4235,12 @@ export function moveEntityOutputToTray(state: GameState, entityId: string, itemI
   const total = Math.floor((entity?.outputs[itemId] ?? 0) + EPSILON);
   const available = Math.max(0, total - stationReservedOutgoing(state, entityId, itemId));
   if (!entity || available < 1) return state;
+  const moved = Math.min(available, getPlanetTrayItemFreeCapacity(state, state.activePlanetId, itemId));
+  if (moved < 1) return state;
   const next = copyState(state);
   const source = next.entities.find((item) => item.id === entityId)!;
-  source.outputs[itemId] = total - available;
-  addToTray(next, itemId, available);
+  source.outputs[itemId] = total - moved;
+  storeInTray(next, itemId, moved);
   return next;
 }
 
@@ -4134,10 +4248,12 @@ export function moveEntityInputToTray(state: GameState, entityId: string, itemId
   const entity = state.entities.find((item) => item.id === entityId);
   const available = Math.floor((entity?.inputs[itemId] ?? 0) + EPSILON);
   if (!entity || available < 1) return state;
+  const moved = Math.min(available, getPlanetTrayItemFreeCapacity(state, state.activePlanetId, itemId));
+  if (moved < 1) return state;
   const next = copyState(state);
   const source = next.entities.find((item) => item.id === entityId)!;
-  source.inputs[itemId] = 0;
-  addToTray(next, itemId, available);
+  source.inputs[itemId] = available - moved;
+  storeInTray(next, itemId, moved);
   return next;
 }
 
@@ -4224,8 +4340,11 @@ export function dropCargoToEntity(state: GameState, entityId: string): GameState
 export function dropCargoToTray(state: GameState): GameState {
   if (!state.cargo) return state;
   const next = copyState(state);
-  addToTray(next, next.cargo!.itemId, next.cargo!.amount);
-  next.cargo = null;
+  const cargo = next.cargo;
+  if (!cargo) return state;
+  const moved = storeInTray(next, cargo.itemId, cargo.amount);
+  cargo.amount -= moved;
+  if (cargo.amount < 1) next.cargo = null;
   return next;
 }
 
@@ -4443,6 +4562,7 @@ function runConstructionCenters(state: GameState, seconds: number, power: PowerP
   for (const entity of state.entities) {
     if (entity.planetId !== planetId || entity.buildingId !== "construction_center") continue;
     const powerFactor = powerFactorForEntity(power, entity);
+    entity.powerFactor = power.factorByEntity.has(entity.id) ? round(powerFactor, 4) : undefined;
     if (!state.constructionAutomation.enabled || !constructionAutomationHasDeficit(state) || powerFactor <= EPSILON) {
       entity.utilization = 0;
       entity.productionRate = 0;
@@ -5267,12 +5387,22 @@ export function isHandcraftableRecipe(recipeId: RecipeId): boolean {
   return Boolean(recipe && recipe.inputs.length > 0 && recipe.outputs.length > 0 && !NON_HANDCRAFTABLE_RECIPE_IDS.has(recipe.id));
 }
 
+function canStoreRecipeOutputsInTray(state: GameState, recipe: RecipeDefinition, batches = 1): boolean {
+  const requiredByItem = new Map<ItemId, number>();
+  for (const output of recipe.outputs) {
+    requiredByItem.set(output.itemId, (requiredByItem.get(output.itemId) ?? 0) + output.amount * batches);
+  }
+  return [...requiredByItem].every(([itemId, amount]) =>
+    getPlanetTrayItemFreeCapacity(state, state.activePlanetId, itemId) + EPSILON >= amount);
+}
+
 export function canHandcraftRecipe(state: GameState, recipeId: RecipeId, batches = 1): boolean {
   const recipe = getRecipe(recipeId);
   const amount = Math.max(1, Math.floor(batches));
   return Boolean(recipe && isHandcraftableRecipe(recipeId) &&
     (!recipe.requiredTechId || isTechnologyCompleted(state, recipe.requiredTechId)) &&
-    recipe.inputs.every((input) => (state.tray[input.itemId] ?? 0) + EPSILON >= input.amount * amount));
+    recipe.inputs.every((input) => (state.tray[input.itemId] ?? 0) + EPSILON >= input.amount * amount) &&
+    canStoreRecipeOutputsInTray(state, recipe, amount));
 }
 
 export function handcraftRecipe(state: GameState, recipeId: RecipeId, batches = 1): GameState {
@@ -5331,6 +5461,7 @@ function advanceHandcraftQueue(state: GameState, seconds: number): void {
     }
     const duration = Math.max(0.05, recipe.duration);
     if (entry.progress <= EPSILON) {
+      if (!canStoreRecipeOutputsInTray(state, recipe)) break;
       const hasInputs = recipe.inputs.every((input) => (state.tray[input.itemId] ?? 0) + EPSILON >= input.amount);
       if (!hasInputs) break;
       for (const input of recipe.inputs) {
@@ -5342,6 +5473,7 @@ function advanceHandcraftQueue(state: GameState, seconds: number): void {
     entry.progress = Math.min(1, entry.progress + elapsed / duration);
     remainingSeconds -= elapsed;
     if (entry.progress < 1 - EPSILON) break;
+    if (!canStoreRecipeOutputsInTray(state, recipe)) break;
     for (const output of recipe.outputs) {
       addToTray(state, output.itemId, output.amount);
       state.totalProduced[output.itemId] = Math.floor((state.totalProduced[output.itemId] ?? 0) + output.amount);
@@ -5358,6 +5490,8 @@ export function isTechnologyCompleted(state: GameState, techId: TechId): boolean
 
 export function getTechnologyConstructionRewards(techId: TechId): ConstructionId[] {
   return CONSTRUCTION.filter((definition) => definition.requiredTechId === techId)
+    .filter((definition) => !(definition.buildingId in BUILDINGS) ||
+      !getBuilding(definition.buildingId as BuildingId).megastructure)
     .map((definition) => definition.buildingId);
 }
 
@@ -5387,10 +5521,25 @@ export function canQueueTechnology(state: GameState, techId: TechId): boolean {
     state.research.queuedTechIds.includes(techId)) return false;
   const planned = new Set<TechId>([
     ...state.research.completedTechIds,
+    ...(state.research.pausedTechId ? [state.research.pausedTechId] : []),
     ...(state.research.selectedTechId ? [state.research.selectedTechId] : []),
     ...state.research.queuedTechIds,
   ]);
   return technology.prerequisites.every((prerequisite) => planned.has(prerequisite));
+}
+
+function activateNextQueuedTechnology(state: GameState): void {
+  const completed = new Set(state.research.completedTechIds);
+  const nextIndex = state.research.queuedTechIds.findIndex((techId) => {
+    const technology = getTechnology(techId);
+    return Boolean(technology?.prerequisites.every((prerequisite) => completed.has(prerequisite)));
+  });
+  if (nextIndex < 0) {
+    state.research.selectedTechId = null;
+    return;
+  }
+  const [nextTechId] = state.research.queuedTechIds.splice(nextIndex, 1);
+  state.research.selectedTechId = nextTechId ?? null;
 }
 
 export function selectTechnology(state: GameState, techId: TechId): GameState {
@@ -5403,6 +5552,44 @@ export function selectTechnology(state: GameState, techId: TechId): GameState {
   if (!canSelectTechnology(state, techId)) return state;
   const next = copyState(state);
   next.research.selectedTechId = techId;
+  if (next.research.pausedTechId === techId) next.research.pausedTechId = null;
+  for (const entity of next.entities) {
+    if (entity.recipeId === "matrix_research") entity.progress = 0;
+  }
+  return next;
+}
+
+export function pauseCurrentResearch(state: GameState): GameState {
+  if (!state.research.selectedTechId && !state.endgame?.activeInfiniteResearchId) return state;
+  const next = copyState(state);
+  if (next.research.selectedTechId) {
+    next.research.pausedTechId = next.research.selectedTechId;
+    next.research.selectedTechId = null;
+  }
+  if (next.endgame?.activeInfiniteResearchId) next.endgame.activeInfiniteResearchId = null;
+  for (const entity of next.entities) {
+    if (entity.recipeId === "matrix_research") entity.progress = 0;
+  }
+  return next;
+}
+
+export function resumePausedResearch(state: GameState): GameState {
+  const techId = state.research.pausedTechId;
+  if (!techId || state.research.selectedTechId || !canSelectTechnology(state, techId)) return state;
+  const next = copyState(state);
+  next.research.selectedTechId = techId;
+  next.research.pausedTechId = null;
+  for (const entity of next.entities) {
+    if (entity.recipeId === "matrix_research") entity.progress = 0;
+  }
+  return next;
+}
+
+export function cancelCurrentResearch(state: GameState): GameState {
+  if (!state.research.selectedTechId && !state.endgame?.activeInfiniteResearchId) return state;
+  const next = copyState(state);
+  next.research.selectedTechId = null;
+  if (next.endgame?.activeInfiniteResearchId) next.endgame.activeInfiniteResearchId = null;
   for (const entity of next.entities) {
     if (entity.recipeId === "matrix_research") entity.progress = 0;
   }
@@ -5414,6 +5601,7 @@ export function removeQueuedTechnology(state: GameState, techId: TechId): GameSt
   const next = copyState(state);
   const planned = new Set<TechId>([
     ...next.research.completedTechIds,
+    ...(next.research.pausedTechId ? [next.research.pausedTechId] : []),
     ...(next.research.selectedTechId ? [next.research.selectedTechId] : []),
   ]);
   const validQueue: TechId[] = [];

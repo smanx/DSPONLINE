@@ -76,6 +76,23 @@ describe("campaign progression", () => {
     expect(syncCampaignProgress(state).campaign.activeTaskId).toBe("side_storage");
   });
 
+  it("keeps an item reward pending until the active planet tray has capacity", () => {
+    const state = createInitialState();
+    state.campaign.completedTaskIds = ["unlock_borealis"];
+    state.campaign.rewardedTaskIds = [];
+    state.planetTrayItemLimits.home = 1_000;
+    state.tray.space_warper = 1_000;
+
+    const blocked = syncCampaignProgress(state);
+    expect(blocked.campaign.rewardedTaskIds).not.toContain("unlock_borealis");
+    expect(blocked.tray.space_warper).toBe(1_000);
+
+    blocked.tray.space_warper = 999;
+    const granted = syncCampaignProgress(blocked);
+    expect(granted.campaign.rewardedTaskIds).toContain("unlock_borealis");
+    expect(granted.tray.space_warper).toBe(1_000);
+  });
+
   it("opens the galaxy endgame chapter after Dyson completion and tracks its milestones", () => {
     const state = createInitialState();
     const legacyTaskIds = CAMPAIGN_TASKS

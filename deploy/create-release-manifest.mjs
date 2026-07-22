@@ -43,9 +43,20 @@ async function describeFile(relativePath) {
 async function describeReleaseFiles() {
   const paths = [
     ...await collectFiles("dist"),
+    "deploy/backup-crypto.mjs",
+    "deploy/backup-sqlite.mjs",
+    "deploy/create-offsite-backup.mjs",
+    "deploy/probe-node-health.mjs",
+    "deploy/restore-drill.mjs",
+    "deploy/sqlite-snapshot.mjs",
+    "server/analytics.mjs",
+    "server/analytics.test.mjs",
     "server/index.mjs",
+    "server/mail.mjs",
+    "server/mail.test.mjs",
     "server/package.json",
     "server/package-lock.json",
+    "server/server.test.mjs",
   ];
   return Promise.all(paths.sort().map(describeFile));
 }

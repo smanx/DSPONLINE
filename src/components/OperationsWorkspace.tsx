@@ -26,6 +26,7 @@ import {
   RotateCcw,
   Radio,
   MessageSquare,
+  MousePointer2,
   Smartphone,
   ShieldCheck,
   Users,
@@ -211,6 +212,7 @@ function SettingsPanel({ game, report, desktopRelease, onChange, onRunBenchmark,
         <ToggleSetting checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "低频渲染" : "完整渲染"} icon={<Cpu size={16} />} onChange={(performanceMode) => onChange({ performanceMode })} />
         <ToggleSetting checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态效果关闭" : "动态效果开启"} icon={<Gauge size={16} />} onChange={(reducedMotion) => onChange({ reducedMotion })} />
         <ToggleSetting checked={settings.soundEnabled} label="操作音效" value={settings.soundEnabled ? "声音开启" : "声音关闭"} icon={settings.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />} onChange={(soundEnabled) => onChange({ soundEnabled })} />
+        <ToggleSetting checked={settings.allowDoubleClickZoom} label="允许双击缩放" value={settings.allowDoubleClickZoom ? "双击聚焦画布" : "连续点击不缩放"} icon={<MousePointer2 size={16} />} onChange={(allowDoubleClickZoom) => onChange({ allowDoubleClickZoom })} />
       </section>
       <section className="settings-group">
         <header><Clock3 size={14} /><span>自动保存间隔</span></header>

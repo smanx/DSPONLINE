@@ -69,6 +69,7 @@ export interface FactoryNodeData extends Record<string, unknown> {
   completedTechIds: TechId[];
   networkTime: number;
   paused: boolean;
+  powerFactor: number;
   powerDemandMultiplier: number;
   solarGenerationMultiplier: number;
   windGenerationMultiplier: number;
@@ -325,7 +326,7 @@ export function VeinNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         <span title={data.status.label}>{entity.minerCount > 0 ? `${data.status.label} · ${entity.productionRate.toFixed(1)}/min` : data.status.label}</span>
       </div>
       {entity.minerCount > 0 ? (
-        <WorkCycle label="采矿周期" progress={entity.progress} active={!data.paused && entity.utilization > 0.001} efficiency={entity.utilization} />
+        <WorkCycle label="采矿周期" progress={entity.progress} active={!data.paused && entity.utilization > 0.001} efficiency={data.powerFactor} />
       ) : null}
       {fluid ? (
         <div className="manual-mine manual-mine--locked"><Droplets size={16} /><span>{entity.minerCount > 0 ? `由${extractor.shortName}自动抽取` : `需要${extractor.name}`}</span></div>
@@ -532,6 +533,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const isStation = entity.kind === "station";
   const orbitalCollector = entity.buildingId === "orbital_collector";
   const deliveryHub = entity.buildingId === "material_delivery_hub";
+  const compactStorage = entity.buildingId === "storage_mk1";
   const configuredItems = deliveryHub
     ? getMaterialDeliveryItems(entity)
     : isStation && !orbitalCollector
@@ -556,7 +558,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
-      className={`factory-node logistics-node factory-node--status-${data.status.tone}${isStation ? " station-node" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
+      className={`factory-node logistics-node factory-node--status-${data.status.tone}${isStation ? " station-node" : ""}${compactStorage ? " storage-buffer-node" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
       onClick={(event) => {
         if (!adding) return;
         event.preventDefault();

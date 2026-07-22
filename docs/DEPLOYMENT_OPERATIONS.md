@@ -24,7 +24,7 @@
 | `/var/lib/dsp-idle-cloud/cloud.json` | 旧 JSON 数据，仅用于兼容迁移 |
 | `/var/lib/dsp-idle-cloud/backups` | SQLite/JSON 备份 |
 | `/etc/nginx/snippets/dsp-idle-app.conf` | 公共静态与 API 规则 |
-| `/etc/dsp-idle-cloud/admin.env` | 仅 root/服务账号可读的管理员 token 与可选邮件 webhook 凭据，不进入发布目录 |
+| `/etc/dsp-idle-cloud/admin.env` | 仅 root/服务账号可读的管理员 token 与邮件 API 凭据，不进入发布目录 |
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
@@ -135,9 +135,21 @@ sudo systemctl restart dsp-idle-cloud.service
 
 ### 账号邮件
 
-schema v5 的新注册、邮箱验证和密码重置通过出站 HTTPS webhook 发送邮件。香港 unit 必须设置 `DSP_PUBLIC_BASE_URL=https://dsponline.cn`；私有环境文件可设置 `DSP_MAIL_WEBHOOK_URL` 和 `DSP_MAIL_WEBHOOK_TOKEN`。真实 URL/token 不得写入仓库、发布目录或前端变量。
+个人实名认证账号自 2026-03-02 起不能使用腾讯云 SES SMTP，因此正式节点使用 `SendEmail` API。香港 unit 必须设置 `DSP_PUBLIC_BASE_URL=https://dsponline.cn`；`/etc/dsp-idle-cloud/admin.env` 配置以下私密参数：
 
-未同时配置 webhook URL 和公开基址时，服务端会让新注册与邮件恢复返回 `503 EMAIL_SERVICE_UNAVAILABLE`；旧账号登录、云存档读取和已有已验证账号的正常功能不受影响。上线前必须用专用测试邮箱验证注册、验证链接、过期链接、忘记密码和重置密码完整链路。上海公开入口是 HTTP，不应开放账号邮件入口。
+```dotenv
+DSP_MAIL_TENCENT_SECRET_ID=
+DSP_MAIL_TENCENT_SECRET_KEY=
+DSP_MAIL_TENCENT_REGION=ap-hongkong
+DSP_MAIL_TENCENT_FROM="DSP极简网络 <no-reply@mail.dsponline.cn>"
+DSP_MAIL_TENCENT_VERIFY_TEMPLATE_ID=
+DSP_MAIL_TENCENT_RESET_TEMPLATE_ID=
+DSP_MAIL_REPLY_TO=
+```
+
+验证与重置模板分别使用 [deploy/mail-templates/account-verification.html](../deploy/mail-templates/account-verification.html) 和 [deploy/mail-templates/password-reset.html](../deploy/mail-templates/password-reset.html)，模板中只包含腾讯普通发送允许的单一变量 `{{actionUrl}}`。两个模板必须审核通过后再填写数值 ID。CAM 应使用独立子账号并只授予 `name/ses:SendEmail`；SecretId/SecretKey 不得使用主账号长期密钥，也不得写入仓库、发布目录、命令历史或聊天。
+
+腾讯配置完整时优先使用 SES API；原有 `DSP_MAIL_WEBHOOK_URL` / `DSP_MAIL_WEBHOOK_TOKEN` 仅作为兼容回退。两种发送器都未配置时，服务端会让新注册与邮件恢复返回 `503 EMAIL_SERVICE_UNAVAILABLE`。上线前必须用专用测试邮箱验证注册、验证链接、过期链接、忘记密码和重置密码完整链路，并在 `/api/health` 确认 `mailProvider` 为 `tencent-ses`。上海公开入口是 HTTP，不开放账号邮件入口。
 
 ### 上海旧节点
 

@@ -12,6 +12,7 @@ import {
   adjustStationWarpers,
   adjustStationVessels,
   addCanvasBookmark,
+  addCanvasRegion,
   addDysonSwarmOrbit,
   advanceSimulation,
   applyBeltConfiguration,
@@ -20,6 +21,7 @@ import {
   canColonizePlanet,
   canPlaceBlueprint,
   cancelConstructionQueueEntry,
+  cancelCurrentResearch,
   canInstallSprayCoater,
   canUpgradeBelt,
   canUpgradeEntity,
@@ -40,6 +42,7 @@ import {
   exploreStarSystem,
   colonizePlanet,
   getEntityOperatingStatus,
+  getEntityPowerFactor,
   getAcceptedInputs,
   getBeltCapacity,
   getBeltNetworkIds,
@@ -62,12 +65,14 @@ import {
   getMiningSpeedMultiplier,
   getPlanetaryCargoCapacity,
   getPlanetaryTripSeconds,
+  getPlanetTrayItemLimit,
   getRayReceiverCapacityKw,
   getRecipeSpeedMultiplier,
   getSolarSailLifetimeSeconds,
   getSorterCapacity,
   getStationDroneCapacity,
   getStationSlots,
+  getTechnologyConstructionRewards,
   handcraftRecipe,
   installSprayCoater,
   installSprayCoaters,
@@ -81,6 +86,7 @@ import {
   pickFromEntityInput,
   placeBuilding,
   placeBlueprint,
+  pauseCurrentResearch,
   processConstructionQueue,
   queueBlueprint,
   queueHandcraftRecipe,
@@ -88,15 +94,18 @@ import {
   removeEntity,
   removeBeltNetwork,
   removeCanvasBookmark,
+  removeCanvasRegion,
   removeDysonNode,
   removeDysonSwarmOrbit,
   removeQueuedTechnology,
+  resumePausedResearch,
   selectInfiniteResearch,
   setGalacticDispatchAutomation,
   setGalacticExportEnabled,
   selectTechnology,
   setActivePlanet,
   setPlanetIndustryRole,
+  setPlanetTrayItemLimit,
   setActiveDysonSwarmOrbit,
   setBeltPriority,
   setBeltRouteMode,
@@ -113,6 +122,7 @@ import {
   setDysonLaunchThrottle,
   setDysonSwarmOrbit,
   setRecipeFocus,
+  updateCanvasRegion,
   setRecipeFocusMode,
   renameCanvasBookmark,
   setEntitiesRecipe,
@@ -1030,27 +1040,54 @@ describe("factory simulation", () => {
     expect(state.canvasBookmarks).toEqual([]);
   });
 
-  it("splits output fairly and can reserve flow for a priority line", () => {
+  it("creates, edits and removes visual production regions without affecting factory entities", () => {
+    let state = createInitialState();
+    const entitySnapshot = structuredClone(state.entities);
+    state = addCanvasRegion(state, "home", { x: -120, y: 80, width: 640, height: 360 }, "冶炼区");
+    expect(state.canvasRegions).toEqual([expect.objectContaining({
+      name: "冶炼区",
+      planetId: "home",
+      x: -120,
+      y: 80,
+      width: 640,
+      height: 360,
+      fillColor: "#2C6B66",
+      borderColor: "#67C7B5",
+    })]);
+    const regionId = state.canvasRegions[0].id;
+    state = updateCanvasRegion(state, regionId, { name: "基础冶炼", fillColor: "#123456", borderColor: "#ABCDEF" });
+    expect(state.canvasRegions[0]).toMatchObject({ name: "基础冶炼", fillColor: "#123456", borderColor: "#ABCDEF" });
+    expect(addCanvasRegion(state, "home", { x: 0, y: 0, width: 20, height: 20 })).toBe(state);
+    expect(state.entities).toEqual(entitySnapshot);
+    state = removeCanvasRegion(state, regionId);
+    expect(state.canvasRegions).toEqual([]);
+  });
+
+  const makeSplitterNetwork = (priorities: Array<0 | 1 | 2>, output: number, mode: "balanced" | "priority") => {
+    let state = createInitialState();
+    state.construction.splitter_4way = 1;
+    state.construction.conveyor_belt_mk1 = priorities.length;
+    state = placeBuilding(state, "splitter_4way", { x: -100, y: 0 });
+    for (let index = 0; index < priorities.length; index += 1) {
+      state = placeBuilding(state, "arc_smelter", { x: 200, y: (index - 1) * 100 });
+    }
+    const splitter = state.entities.find((entity) => entity.buildingId === "splitter_4way")!;
+    const smelters = state.entities.filter((entity) => entity.buildingId === "arc_smelter");
+    state = setLogisticsItem(state, splitter.id, "iron_ore");
+    state.entities.find((entity) => entity.id === splitter.id)!.outputs.iron_ore = output;
+    state = setSplitterMode(state, splitter.id, mode);
+    for (const [index, smelter] of smelters.entries()) {
+      state = connectBelt(state, splitter.id, smelter.id, "iron_ore");
+      const belt = state.belts.find((candidate) => candidate.source === splitter.id && candidate.target === smelter.id)!;
+      state = setBeltPriority(state, belt.id, priorities[index]);
+    }
+    return { state, splitter, smelters };
+  };
+
+  it("splits balanced output fairly and sends priority output to high lines first", () => {
     const makeNetwork = (priority: boolean) => {
-      let state = createInitialState();
-      state.construction.splitter_4way = 1;
-      state.construction.conveyor_belt_mk1 = 3;
-      state = placeBuilding(state, "splitter_4way", { x: -100, y: 0 });
-      state = placeBuilding(state, "arc_smelter", { x: 200, y: -100 });
-      state = placeBuilding(state, "arc_smelter", { x: 200, y: 100 });
-      const splitter = state.entities.find((entity) => entity.buildingId === "splitter_4way")!;
-      const smelters = state.entities.filter((entity) => entity.buildingId === "arc_smelter");
-      state = setLogisticsItem(state, splitter.id, "iron_ore");
-      state.entities.find((entity) => entity.id === "vein_iron")!.outputs.iron_ore = 12;
-      state = connectBelt(state, "vein_iron", splitter.id, "iron_ore");
-      state = connectBelt(state, splitter.id, smelters[0].id, "iron_ore");
-      state = connectBelt(state, splitter.id, smelters[1].id, "iron_ore");
-      if (priority) {
-        state = setSplitterMode(state, splitter.id, "priority");
-        const preferred = state.belts.find((belt) => belt.target === smelters[0].id)!;
-        state = setBeltPriority(state, preferred.id, 1);
-      }
-      return { state: advanceSimulation(state, 2), smelters };
+      const network = makeSplitterNetwork(priority ? [2, 0] : [0, 0], 6, priority ? "priority" : "balanced");
+      return { ...network, state: advanceSimulation(network.state, 1) };
     };
 
     const balanced = makeNetwork(false);
@@ -1060,6 +1097,34 @@ describe("factory simulation", () => {
     const prioritized = makeNetwork(true);
     expect(prioritized.state.entities.find((entity) => entity.id === prioritized.smelters[0].id)?.inputs.iron_ore).toBe(6);
     expect(prioritized.state.entities.find((entity) => entity.id === prioritized.smelters[1].id)?.inputs.iron_ore ?? 0).toBe(0);
+    expect(prioritized.state.belts.find((belt) => belt.target === prioritized.smelters[0].id)?.totalTransferred).toBe(6);
+  });
+
+  it("orders splitter priority output from high to standard to low", () => {
+    const network = makeSplitterNetwork([2, 1, 0], 0, "priority");
+    const lineCapacity = Math.floor(getBeltCapacity(network.state.belts[0]));
+    network.state.entities.find((entity) => entity.id === network.splitter.id)!.outputs.iron_ore = lineCapacity + 1;
+    const advanced = advanceSimulation(network.state, 1);
+    const received = network.smelters.map((smelter) => advanced.entities.find((entity) => entity.id === smelter.id)?.inputs.iron_ore ?? 0);
+
+    expect(received).toEqual([lineCapacity, 1, 0]);
+  });
+
+  it("round robins equal priority outputs and falls back after a high line blocks", () => {
+    const equal = makeSplitterNetwork([2, 2, 2], 5, "priority");
+    const balancedHigh = advanceSimulation(equal.state, 1);
+    const equalReceived = equal.smelters.map((smelter) => balancedHigh.entities.find((entity) => entity.id === smelter.id)?.inputs.iron_ore ?? 0);
+    expect(equalReceived).toEqual([2, 2, 1]);
+
+    const fallback = makeSplitterNetwork([2, 1, 0], 0, "priority");
+    const lineCapacity = Math.floor(getBeltCapacity(fallback.state.belts[0]));
+    fallback.state.entities.find((entity) => entity.id === fallback.splitter.id)!.outputs.iron_ore = lineCapacity + 1;
+    const highTarget = fallback.state.entities.find((entity) => entity.id === fallback.smelters[0].id)!;
+    highTarget.inputs.iron_ore = getBuilding("arc_smelter").inputCapacity;
+    const advanced = advanceSimulation(fallback.state, 1);
+    const fallbackReceived = fallback.smelters.map((smelter) => advanced.entities.find((entity) => entity.id === smelter.id)?.inputs.iron_ore ?? 0);
+
+    expect(fallbackReceived).toEqual([getBuilding("arc_smelter").inputCapacity, lineCapacity, 1]);
   });
 
   it("consumes both blue and red matrices for mixed research", () => {
@@ -1236,6 +1301,40 @@ describe("factory simulation", () => {
     expect(state.research.selectedTechId).toBeNull();
   });
 
+  it("pauses or cancels active research without losing invested matrices", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 2);
+    state = placeBuilding(state, "matrix_lab", { x: 300, y: 0 });
+    const labId = state.entities.find((entity) => entity.buildingId === "matrix_lab")!.id;
+    state = setEntityRecipe(state, labId, "matrix_research");
+    state = selectTechnology(state, "electromagnetic_matrix");
+    state = selectTechnology(state, "electromagnetism");
+    state.entities.find((entity) => entity.id === labId)!.inputs.electromagnetic_matrix = 8;
+    state = advanceSimulation(state, 5);
+    const invested = state.research.progressByTech.electromagnetic_matrix?.electromagnetic_matrix ?? 0;
+    const remainingInput = state.entities.find((entity) => entity.id === labId)!.inputs.electromagnetic_matrix ?? 0;
+    expect(invested).toBeGreaterThan(0);
+
+    state = pauseCurrentResearch(state);
+    expect(state.research).toMatchObject({ selectedTechId: null, pausedTechId: "electromagnetic_matrix", queuedTechIds: ["electromagnetism"] });
+    state = advanceSimulation(state, 30);
+    expect(state.research.progressByTech.electromagnetic_matrix?.electromagnetic_matrix).toBe(invested);
+    expect(state.entities.find((entity) => entity.id === labId)!.inputs.electromagnetic_matrix).toBe(remainingInput);
+    expect(state.research.selectedTechId).toBeNull();
+
+    state = resumePausedResearch(state);
+    expect(state.research).toMatchObject({ selectedTechId: "electromagnetic_matrix", pausedTechId: null });
+    state = cancelCurrentResearch(state);
+    expect(state.research).toMatchObject({ selectedTechId: null, pausedTechId: null, queuedTechIds: ["electromagnetism"] });
+    expect(state.research.progressByTech.electromagnetic_matrix?.electromagnetic_matrix).toBe(invested);
+    state = advanceSimulation(state, 30);
+    expect(state.research.selectedTechId).toBeNull();
+    expect(state.research.queuedTechIds).toEqual(["electromagnetism"]);
+    state = selectTechnology(state, "electromagnetic_matrix");
+    expect(state.research.selectedTechId).toBe("electromagnetic_matrix");
+    expect(state.research.progressByTech.electromagnetic_matrix?.electromagnetic_matrix).toBe(invested);
+  });
+
   it("removes queued technologies that lose a queued prerequisite", () => {
     let state = createInitialState();
     state = selectTechnology(state, "electromagnetic_matrix");
@@ -1267,6 +1366,25 @@ describe("factory simulation", () => {
     state = advanceSimulation(state, 1.1);
     expect(state.entities.find((entity) => entity.id === smelter.id)?.outputs.iron_ingot).toBe(1);
     expect(state.planetMetrics.ashen.generationKw).toBe(600);
+  });
+
+  it("keeps a fully supplied miner's device power factor synchronized with its grid", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 2);
+    state = installMiner(state, "vein_iron", 1);
+    state = advanceSimulation(state, 1);
+    let miner = state.entities.find((entity) => entity.id === "vein_iron")!;
+    expect(state.powerGridMetrics.home[miner.powerGridId ?? "grid-a"].powerFactor).toBe(1);
+    expect(miner.powerFactor).toBe(1);
+    expect(getEntityPowerFactor(state, miner)).toBe(1);
+    expect(miner.utilization).toBe(1);
+
+    miner.outputs.iron_ore = 10_000;
+    state = advanceSimulation(state, 1);
+    miner = state.entities.find((entity) => entity.id === "vein_iron")!;
+    expect(state.powerGridMetrics.home[miner.powerGridId ?? "grid-a"].powerFactor).toBe(1);
+    expect(getEntityPowerFactor(state, miner)).toBe(1);
+    expect(miner.utilization).toBe(0);
   });
 
   it("keeps trays local while hand-carrying one stack between planets", () => {
@@ -2843,6 +2961,67 @@ describe("factory simulation", () => {
     expect(state.construction.arc_smelter).toBe(2);
     expect(state.constructionAutomation).toMatchObject({ totalCrafted: 2, lastCraftedId: "arc_smelter" });
     expect(state.tray).toMatchObject({ iron_ingot: 0, stone_brick: 0, circuit_board: 0, magnetic_coil: 0 });
+  });
+
+  it("keeps per-planet tray limits independent and preserves stock when a limit is lowered", () => {
+    let state = createInitialState();
+    state.tray.iron_ore = 1_500;
+    state = setPlanetTrayItemLimit(state, "home", 1_000);
+    state = setPlanetTrayItemLimit(state, "ashen", 12_000);
+
+    expect(getPlanetTrayItemLimit(state, "home")).toBe(1_000);
+    expect(getPlanetTrayItemLimit(state, "ashen")).toBe(12_000);
+    expect(state.tray.iron_ore).toBe(1_500);
+    expect(state.planetTrayItemLimits.giant).toBe(1_000_000);
+  });
+
+  it("leaves cursor, node and delivery-hub overflow at the source when the tray is full", () => {
+    let state = createInitialState();
+    state = setPlanetTrayItemLimit(state, "home", 1_000);
+    state.tray.iron_ore = 995;
+    state.cargo = { itemId: "iron_ore", amount: 20, origin: { kind: "tray" } };
+    state = dropCargoToTray(state);
+    expect(state.tray.iron_ore).toBe(1_000);
+    expect(state.cargo).toMatchObject({ itemId: "iron_ore", amount: 15 });
+
+    state.cargo = null;
+    state.construction.storage_mk1 = 1;
+    state = placeBuilding(state, "storage_mk1", { x: 0, y: 0 });
+    const storage = state.entities.find((entity) => entity.buildingId === "storage_mk1")!;
+    storage.storedItemId = "iron_ingot";
+    storage.outputs.iron_ingot = 12;
+    state.tray.iron_ingot = 997;
+    state = moveEntityOutputToTray(state, storage.id, "iron_ingot");
+    expect(state.tray.iron_ingot).toBe(1_000);
+    expect(state.entities.find((entity) => entity.id === storage.id)?.outputs.iron_ingot).toBe(9);
+
+    state.research.completedTechIds.push("material_delivery_logistics");
+    state.construction.material_delivery_hub = 1;
+    state = placeBuilding(state, "material_delivery_hub", { x: 320, y: 0 });
+    const hub = state.entities.find((entity) => entity.buildingId === "material_delivery_hub")!;
+    hub.deliveryItemIds = ["copper_ingot"];
+    hub.inputs.copper_ingot = 8;
+    state.tray.copper_ingot = 999;
+    state = advanceSimulation(state, 1);
+    expect(state.tray.copper_ingot).toBe(1_000);
+    expect(state.entities.find((entity) => entity.id === hub.id)?.inputs.copper_ingot).toBe(7);
+  });
+
+  it("does not consume handcraft inputs when the produced stack has reached its tray limit", () => {
+    let state = createInitialState();
+    state = setPlanetTrayItemLimit(state, "home", 1_000);
+    state.tray.iron_ingot = 10;
+    state.tray.gear = 1_000;
+
+    const blocked = handcraftRecipe(state, "gear", 1);
+    expect(blocked).toBe(state);
+    expect(blocked.tray.iron_ingot).toBe(10);
+    expect(blocked.tray.gear).toBe(1_000);
+  });
+
+  it("excludes megastructures while retaining ordinary technology construction rewards", () => {
+    expect(getTechnologyConstructionRewards("construction_automation")).not.toContain("construction_center");
+    expect(getTechnologyConstructionRewards("material_delivery_logistics")).toContain("material_delivery_hub");
   });
 
   it("keeps a focused recipe chain in the save and supports both expansion modes", () => {

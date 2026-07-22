@@ -377,6 +377,17 @@ function cloneCampaignState(state: GameState): GameState {
   };
 }
 
+function canApplyRewards(state: GameState, rewards: CampaignReward[]): boolean {
+  const itemTotals = new Map<ItemId, number>();
+  for (const reward of rewards) {
+    if (!reward.itemId || !(reward.itemId in ITEMS)) continue;
+    itemTotals.set(reward.itemId, (itemTotals.get(reward.itemId) ?? 0) + Math.max(0, Math.floor(reward.amount)));
+  }
+  const rawLimit = state.planetTrayItemLimits?.[state.activePlanetId];
+  const limit = Number.isFinite(rawLimit) ? Math.max(1_000, Math.min(1_000_000, Math.floor(rawLimit))) : 1_000_000;
+  return [...itemTotals].every(([itemId, amount]) => Math.floor(state.tray[itemId] ?? 0) + amount <= limit);
+}
+
 function applyReward(state: GameState, reward: CampaignReward): void {
   if (reward.constructionId) {
     if (!getConstructionDefinition(reward.constructionId)) return;
@@ -412,9 +423,12 @@ export function syncCampaignProgress(state: GameState, options: { grantRewards?:
       if (completed.has(task.id)) {
         if (!rewarded.has(task.id)) {
           next ??= cloneCampaignState(state);
-          if (grantRewards) for (const reward of task.rewards ?? []) applyReward(next, reward);
-          rewarded.add(task.id);
-          changed = true;
+          const rewards = task.rewards ?? [];
+          if (!grantRewards || canApplyRewards(next, rewards)) {
+            if (grantRewards) for (const reward of rewards) applyReward(next, reward);
+            rewarded.add(task.id);
+            changed = true;
+          }
         }
         continue;
       }
@@ -423,8 +437,11 @@ export function syncCampaignProgress(state: GameState, options: { grantRewards?:
       progressed = true;
       changed = true;
       next ??= cloneCampaignState(state);
-      if (grantRewards) for (const reward of task.rewards ?? []) applyReward(next, reward);
-      rewarded.add(task.id);
+      const rewards = task.rewards ?? [];
+      if (!grantRewards || canApplyRewards(next, rewards)) {
+        if (grantRewards) for (const reward of rewards) applyReward(next, reward);
+        rewarded.add(task.id);
+      }
     }
   }
   const selectedTask = campaign.activeTaskId ? TASK_BY_ID.get(campaign.activeTaskId) : undefined;

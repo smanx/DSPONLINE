@@ -540,6 +540,7 @@ export interface BuildingDefinition {
   accepts?: "solid" | "fluid" | "any";
   tier?: BeltTier;
   family?: "smelter" | "assembler" | "chemical";
+  megastructure?: boolean;
   description: string;
 }
 
@@ -578,6 +579,8 @@ export interface FactoryEntity {
   fuelRemainingMj?: number;
   powerOutputKw?: number;
   powerInputKw?: number;
+  /** Last simulated power allocation for this entity, separate from work utilization. */
+  powerFactor?: number;
   storedEnergyMj?: number;
   energyMode?: EnergyMode;
   powerGridId?: PowerGridId;
@@ -862,6 +865,7 @@ export interface EntityOperatingStatus {
 
 export interface ResearchState {
   selectedTechId: TechId | null;
+  pausedTechId: TechId | null;
   queuedTechIds: TechId[];
   progressByTech: Partial<Record<TechId, Partial<Record<ItemId, number>>>>;
   completedTechIds: TechId[];
@@ -947,6 +951,7 @@ export interface GameSettings {
   performanceMode: boolean;
   reducedMotion: boolean;
   soundEnabled: boolean;
+  allowDoubleClickZoom: boolean;
   beltHeatmapEnabled: boolean;
   autosaveIntervalSeconds: AutosaveIntervalSeconds;
   resourceMode: ResourceMode;
@@ -959,6 +964,18 @@ export interface CanvasBookmark {
   planetId: PlanetId;
   viewport: { x: number; y: number; zoom: number };
   createdAtSeconds: number;
+}
+
+export interface CanvasRegion {
+  id: string;
+  name: string;
+  planetId: PlanetId;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fillColor: string;
+  borderColor: string;
 }
 
 export interface AchievementState {
@@ -1081,7 +1098,7 @@ export interface ConstructionAutomationState {
 }
 
 export interface GameState {
-  version: 26;
+  version: 28;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -1089,6 +1106,7 @@ export interface GameState {
   cargo: CargoStack | null;
   tray: Partial<Record<ItemId, number>>;
   planetTrays: Record<PlanetId, Partial<Record<ItemId, number>>>;
+  planetTrayItemLimits: Record<PlanetId, number>;
   construction: Partial<Record<ConstructionId, number>>;
   constructionAutomation: ConstructionAutomationState;
   portableFleet: Record<PortableFleetItemId, number>;
@@ -1102,6 +1120,7 @@ export interface GameState {
   achievements: AchievementState;
   campaign: CampaignState;
   canvasBookmarks: CanvasBookmark[];
+  canvasRegions: CanvasRegion[];
   blueprints: BlueprintDefinition[];
   constructionQueue: ConstructionQueueEntry[];
   handcraftQueue: HandcraftQueueEntry[];

@@ -12,12 +12,14 @@ import {
   normalizeAnalyticsState,
   recordAnalyticsBatch,
 } from "./analytics.mjs";
-import { createWebhookMailer } from "./mail.mjs";
+import { createTencentSesMailer, createWebhookMailer } from "./mail.mjs";
 
 const scrypt = promisify(scryptCallback);
 const BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CLOUD_HISTORY_LIMIT = 20;
+const CLOUD_SAVE_SLOTS = ["main", "1", "2", "3"];
+const MANUAL_CLOUD_SAVE_SLOTS = CLOUD_SAVE_SLOTS.slice(1);
 const EMAIL_ACTION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_PLAYER_ONLINE_WINDOW_MS = 120_000;
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{16,96}$/;
@@ -33,7 +35,7 @@ const METRIC_KEYS = [
   "colonizedPlanets",
 ];
 const DEFAULT_DATA = {
-  schemaVersion: 5,
+  schemaVersion: 6,
   users: {},
   sessions: {},
   emailVerifications: {},
@@ -41,6 +43,8 @@ const DEFAULT_DATA = {
   auditLog: [],
   cloudSaves: {},
   cloudSaveHistory: {},
+  cloudSaveSlots: {},
+  cloudSaveSlotHistory: {},
   submissions: {},
   players: {},
   feedback: [],
@@ -73,13 +77,16 @@ function normalizeUserRecords(value, sourceSchemaVersion) {
     const id = typeof record.id === "string" && record.id ? record.id : key;
     if (!id) return [];
     const createdAt = Number.isFinite(record.createdAt) ? Math.max(0, Math.floor(record.createdAt)) : 0;
-    const emailVerifiedAt = sourceSchemaVersion < 5
-      ? createdAt
-      : Number.isFinite(record.emailVerifiedAt) ? Math.max(0, Math.floor(record.emailVerifiedAt)) : null;
+    const email = typeof record.email === "string" ? record.email.trim().toLowerCase() : "";
+    const emailVerifiedAt = !email
+      ? null
+      : sourceSchemaVersion < 5
+        ? createdAt
+        : Number.isFinite(record.emailVerifiedAt) ? Math.max(0, Math.floor(record.emailVerifiedAt)) : null;
     return [[id, {
       ...record,
       id,
-      email: typeof record.email === "string" ? record.email.trim().toLowerCase() : "",
+      email,
       displayName: typeof record.displayName === "string" ? record.displayName : "星际工程师",
       createdAt,
       emailVerifiedAt,
@@ -145,6 +152,26 @@ function normalizeSaveRecord(save) {
   return { ...save, summary: summarizeSavePayload(save.payload) };
 }
 
+function normalizeManualSaveSlots(value) {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([userId, slots]) => {
+    if (!slots || typeof slots !== "object") return [];
+    const normalized = Object.fromEntries(MANUAL_CLOUD_SAVE_SLOTS.flatMap((slot) =>
+      slots[slot] && typeof slots[slot] === "object" ? [[slot, normalizeSaveRecord(slots[slot])]] : []));
+    return Object.keys(normalized).length > 0 ? [[userId, normalized]] : [];
+  }));
+}
+
+function normalizeManualSaveSlotHistory(value) {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([userId, slots]) => {
+    if (!slots || typeof slots !== "object") return [];
+    const normalized = Object.fromEntries(MANUAL_CLOUD_SAVE_SLOTS.flatMap((slot) =>
+      Array.isArray(slots[slot]) ? [[slot, slots[slot].map(normalizeSaveRecord)]] : []));
+    return Object.keys(normalized).length > 0 ? [[userId, normalized]] : [];
+  }));
+}
+
 function normalizeStoredData(parsed) {
   const source = parsed && typeof parsed === "object" ? parsed : {};
   const sourceSchemaVersion = Number.isInteger(source.schemaVersion) ? source.schemaVersion : 1;
@@ -174,6 +201,8 @@ function normalizeStoredData(parsed) {
     cloudSaveHistory: source.cloudSaveHistory && typeof source.cloudSaveHistory === "object"
       ? Object.fromEntries(Object.entries(source.cloudSaveHistory).map(([userId, history]) => [userId, Array.isArray(history) ? history.map(normalizeSaveRecord) : []]))
       : {},
+    cloudSaveSlots: normalizeManualSaveSlots(source.cloudSaveSlots),
+    cloudSaveSlotHistory: normalizeManualSaveSlotHistory(source.cloudSaveSlotHistory),
     submissions: source.submissions && typeof source.submissions === "object" ? source.submissions : {},
     players: normalizePlayerRecords(source.players),
     feedback: Array.isArray(source.feedback) ? source.feedback.slice(-1000) : [],
@@ -185,6 +214,18 @@ function normalizeStoredData(parsed) {
     const history = Array.isArray(data.cloudSaveHistory[userId]) ? data.cloudSaveHistory[userId] : [];
     if (save && !history.some((entry) => entry.revision === save.revision)) history.push(save);
     data.cloudSaveHistory[userId] = history.sort((left, right) => left.revision - right.revision).slice(-CLOUD_HISTORY_LIMIT);
+  }
+  for (const [userId, slots] of Object.entries(data.cloudSaveSlots)) {
+    data.cloudSaveSlotHistory[userId] ??= {};
+    for (const slot of MANUAL_CLOUD_SAVE_SLOTS) {
+      const save = slots?.[slot];
+      if (!save) continue;
+      const history = Array.isArray(data.cloudSaveSlotHistory[userId][slot]) ? data.cloudSaveSlotHistory[userId][slot] : [];
+      if (!history.some((entry) => entry.revision === save.revision)) history.push(save);
+      data.cloudSaveSlotHistory[userId][slot] = history
+        .sort((left, right) => left.revision - right.revision)
+        .slice(-CLOUD_HISTORY_LIMIT);
+    }
   }
   return data;
 }
@@ -508,8 +549,9 @@ function publicSession(session, currentTokenHash, tokenHash) {
   };
 }
 
-function cloudSaveMetadata(save) {
+function cloudSaveMetadata(save, slot = "main") {
   return save ? {
+    slot,
     revision: save.revision,
     updatedAt: save.updatedAt,
     size: save.size,
@@ -576,16 +618,36 @@ function verifyLeaderboardMetrics(submitted, save, previous) {
   return { ok: true, metrics: submitted, supported };
 }
 
-function saveHistory(store, userId) {
-  return Array.isArray(store.data.cloudSaveHistory[userId]) ? store.data.cloudSaveHistory[userId] : [];
+function normalizedCloudSaveSlot(value) {
+  return typeof value === "string" && CLOUD_SAVE_SLOTS.includes(value) ? value : null;
 }
 
-function appendSaveRevision(store, userId, save) {
-  const history = [...saveHistory(store, userId).filter((entry) => entry.revision !== save.revision), save]
+function currentCloudSave(store, userId, slot = "main") {
+  return slot === "main" ? store.data.cloudSaves[userId] : store.data.cloudSaveSlots[userId]?.[slot];
+}
+
+function saveHistory(store, userId, slot = "main") {
+  if (slot === "main") return Array.isArray(store.data.cloudSaveHistory[userId]) ? store.data.cloudSaveHistory[userId] : [];
+  return Array.isArray(store.data.cloudSaveSlotHistory[userId]?.[slot]) ? store.data.cloudSaveSlotHistory[userId][slot] : [];
+}
+
+function appendSaveRevision(store, userId, save, slot = "main") {
+  const history = [...saveHistory(store, userId, slot).filter((entry) => entry.revision !== save.revision), save]
     .sort((left, right) => left.revision - right.revision)
     .slice(-CLOUD_HISTORY_LIMIT);
-  store.data.cloudSaveHistory[userId] = history;
-  store.data.cloudSaves[userId] = save;
+  if (slot === "main") {
+    store.data.cloudSaveHistory[userId] = history;
+    store.data.cloudSaves[userId] = save;
+    return;
+  }
+  store.data.cloudSaveSlots[userId] ??= {};
+  store.data.cloudSaveSlotHistory[userId] ??= {};
+  store.data.cloudSaveSlots[userId][slot] = save;
+  store.data.cloudSaveSlotHistory[userId][slot] = history;
+}
+
+function cloudSaveSlotMetadata(store, userId) {
+  return Object.fromEntries(CLOUD_SAVE_SLOTS.map((slot) => [slot, cloudSaveMetadata(currentCloudSave(store, userId, slot), slot)]));
 }
 
 function normalizedPlayerId(value) {
@@ -697,6 +759,13 @@ export async function createCloudServer({
   mailer,
   mailWebhookUrl = process.env.DSP_MAIL_WEBHOOK_URL || "",
   mailWebhookToken = process.env.DSP_MAIL_WEBHOOK_TOKEN || "",
+  mailTencentSecretId = process.env.DSP_MAIL_TENCENT_SECRET_ID || "",
+  mailTencentSecretKey = process.env.DSP_MAIL_TENCENT_SECRET_KEY || "",
+  mailTencentRegion = process.env.DSP_MAIL_TENCENT_REGION || "ap-hongkong",
+  mailTencentFrom = process.env.DSP_MAIL_TENCENT_FROM || "",
+  mailTencentVerificationTemplateId = process.env.DSP_MAIL_TENCENT_VERIFY_TEMPLATE_ID || "",
+  mailTencentResetTemplateId = process.env.DSP_MAIL_TENCENT_RESET_TEMPLATE_ID || "",
+  mailReplyTo = process.env.DSP_MAIL_REPLY_TO || "",
   publicBaseUrl = process.env.DSP_PUBLIC_BASE_URL || "",
   offsiteBackupStatusFile = process.env.DSP_OFFSITE_BACKUP_STATUS_FILE || "",
   restoreDrillStatusFile = process.env.DSP_RESTORE_DRILL_STATUS_FILE || "",
@@ -740,9 +809,26 @@ export async function createCloudServer({
   const secureAdminToken = typeof adminToken === "string" && adminToken.length >= 32 ? adminToken : "";
   if (adminToken && !secureAdminToken) logger.error?.("DSP_ADMIN_TOKEN must contain at least 32 characters; admin metrics remain disabled");
   const allowedOrigins = new Set(allowedOrigin.split(",").map((origin) => origin.trim()).filter(Boolean));
-  const accountMailer = mailer === undefined
+  const tencentSesMailer = mailer === undefined ? createTencentSesMailer({
+    secretId: mailTencentSecretId,
+    secretKey: mailTencentSecretKey,
+    region: mailTencentRegion,
+    fromEmailAddress: mailTencentFrom,
+    verificationTemplateId: mailTencentVerificationTemplateId,
+    resetTemplateId: mailTencentResetTemplateId,
+    replyToAddresses: mailReplyTo,
+    publicBaseUrl,
+    logger,
+  }) : null;
+  const webhookMailer = mailer === undefined && !tencentSesMailer
     ? createWebhookMailer({ url: mailWebhookUrl, token: mailWebhookToken, publicBaseUrl, logger })
+    : null;
+  const accountMailer = mailer === undefined
+    ? tencentSesMailer ?? webhookMailer
     : typeof mailer === "function" ? mailer : null;
+  const accountMailProvider = typeof mailer === "function"
+    ? "custom"
+    : tencentSesMailer ? "tencent-ses" : webhookMailer ? "webhook" : "disabled";
 
   const flushMetrics = setInterval(() => void store.persist().catch((error) => logger.error?.("cloud metrics persistence failed", error)), 60_000);
   flushMetrics.unref?.();
@@ -804,7 +890,7 @@ export async function createCloudServer({
 
     try {
       if (request.method === "GET" && url.pathname === "/api/health") {
-        return send(response, 200, { ok: true, service: "dsp-idle-cloud", schemaVersion: DEFAULT_DATA.schemaVersion, storage: databaseFile ? "sqlite" : "json", uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), time: Date.now() });
+        return send(response, 200, { ok: true, service: "dsp-idle-cloud", schemaVersion: DEFAULT_DATA.schemaVersion, storage: databaseFile ? "sqlite" : "json", mailProvider: accountMailProvider, uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), time: Date.now() });
       }
       if (request.method === "GET" && url.pathname === "/api/public-status") {
         return send(response, 200, {
@@ -961,6 +1047,7 @@ export async function createCloudServer({
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
         if (Number.isFinite(auth.user.emailVerifiedAt)) return send(response, 200, { verified: true, user: publicUser(auth.user) });
+        if (!normalizedEmail(auth.user.email)) return send(response, 400, { error: "请先绑定邮箱", code: "EMAIL_NOT_BOUND" });
         if (!accountMailer) return send(response, 503, { error: "邮件验证服务尚未配置", code: "EMAIL_SERVICE_UNAVAILABLE" });
         const verificationToken = issueActionToken(store.data.emailVerifications, auth.user.id);
         appendAudit(store, request, "account.verification_requested", auth.user.id);
@@ -976,7 +1063,7 @@ export async function createCloudServer({
         const email = normalizedEmail(body.email);
         if (!email) return send(response, 400, { error: "邮箱格式无效" });
         const user = Object.values(store.data.users).find((candidate) => candidate.email === email);
-        if (user) {
+        if (user && Number.isFinite(user.emailVerifiedAt)) {
           const resetToken = issueActionToken(store.data.passwordResets, user.id);
           appendAudit(store, request, "account.password_reset_requested", user.id);
           await store.persist();
@@ -994,7 +1081,7 @@ export async function createCloudServer({
         if (!action) return send(response, 400, { error: "重置链接无效或已过期", code: "PASSWORD_TOKEN_INVALID" });
         const user = store.data.users[action.record.userId];
         if (!user) return send(response, 400, { error: "重置链接无效或已过期", code: "PASSWORD_TOKEN_INVALID" });
-        Object.assign(user, await passwordRecord(password), { passwordChangedAt: Date.now(), emailVerifiedAt: user.emailVerifiedAt ?? Date.now() });
+        Object.assign(user, await passwordRecord(password), { passwordChangedAt: Date.now() });
         revokeUserSessions(store, user.id);
         removeUserActionTokens(store, user.id);
         const token = issueSession(store, user.id, request, body.deviceName);
@@ -1005,7 +1092,11 @@ export async function createCloudServer({
 
       if (request.method === "GET" && url.pathname === "/api/account") {
         const auth = authenticatedUser(request, store);
-        return auth ? send(response, 200, { user: publicUser(auth.user), cloudSave: cloudSaveMetadata(store.data.cloudSaves[auth.user.id]) }) : send(response, 401, { error: "登录已过期" });
+        return auth ? send(response, 200, {
+          user: publicUser(auth.user),
+          cloudSave: cloudSaveMetadata(store.data.cloudSaves[auth.user.id], "main"),
+          cloudSaves: cloudSaveSlotMetadata(store, auth.user.id),
+        }) : send(response, 401, { error: "登录已过期" });
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/logout") {
@@ -1055,6 +1146,28 @@ export async function createCloudServer({
         return send(response, 200, { changed: true, user: publicUser(auth.user) });
       }
 
+      if (request.method === "POST" && url.pathname === "/api/account/email") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        if (!accountMailer) return send(response, 503, { error: "邮件验证服务尚未配置", code: "EMAIL_SERVICE_UNAVAILABLE" });
+        if (Number.isFinite(auth.user.emailVerifiedAt)) return send(response, 409, { error: "当前账号已经绑定并验证邮箱" });
+        const body = await readJson(request);
+        const email = normalizedEmail(body.email);
+        if (!email) return send(response, 400, { error: "邮箱格式无效" });
+        if (Object.values(store.data.users).some((user) => user.id !== auth.user.id && user.email === email)) {
+          return send(response, 409, { error: "该邮箱已绑定其他账号" });
+        }
+        auth.user.email = email;
+        auth.user.emailVerifiedAt = null;
+        removeUserActionTokens(store, auth.user.id);
+        const verificationToken = issueActionToken(store.data.emailVerifications, auth.user.id);
+        appendAudit(store, request, "account.email_bound", auth.user.id);
+        await store.persist();
+        const delivered = await accountMailer({ kind: "verify", email, actionToken: verificationToken });
+        if (!delivered) return send(response, 502, { error: "邮箱已绑定，但验证邮件发送失败；请稍后重发", code: "EMAIL_DELIVERY_FAILED", user: publicUser(auth.user) });
+        return send(response, 202, { sent: true, user: publicUser(auth.user) });
+      }
+
       if (request.method === "GET" && url.pathname === "/api/account/export") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
@@ -1069,7 +1182,9 @@ export async function createCloudServer({
           schemaVersion: DEFAULT_DATA.schemaVersion,
           user: publicUser(auth.user),
           cloudSave: store.data.cloudSaves[userId] ?? null,
-          cloudSaveHistory: [...saveHistory(store, userId)].reverse().map(cloudSaveMetadata),
+          cloudSaveHistory: [...saveHistory(store, userId)].reverse().map((save) => cloudSaveMetadata(save, "main")),
+          cloudSaveSlots: store.data.cloudSaveSlots[userId] ?? {},
+          cloudSaveSlotHistory: store.data.cloudSaveSlotHistory[userId] ?? {},
           submissions,
           feedback,
           errors,
@@ -1088,6 +1203,8 @@ export async function createCloudServer({
         removeUserActionTokens(store, userId);
         delete store.data.cloudSaves[userId];
         delete store.data.cloudSaveHistory[userId];
+        delete store.data.cloudSaveSlots[userId];
+        delete store.data.cloudSaveSlotHistory[userId];
         for (const [key, submission] of Object.entries(store.data.submissions)) {
           if (submission.userId === userId) delete store.data.submissions[key];
         }
@@ -1102,31 +1219,37 @@ export async function createCloudServer({
       if (request.method === "GET" && url.pathname === "/api/cloud-save/history") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
-        const history = [...saveHistory(store, auth.user.id)].reverse().map(cloudSaveMetadata);
+        const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
+        if (!slot) return send(response, 400, { error: "云存档槽位无效" });
+        const history = [...saveHistory(store, auth.user.id, slot)].reverse().map((save) => cloudSaveMetadata(save, slot));
         return send(response, 200, { history });
       }
 
       if (request.method === "GET" && url.pathname === "/api/cloud-save") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
+        const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
+        if (!slot) return send(response, 400, { error: "云存档槽位无效" });
         const requestedRevision = Number(url.searchParams.get("revision"));
         const save = Number.isInteger(requestedRevision) && requestedRevision > 0
-          ? saveHistory(store, auth.user.id).find((entry) => entry.revision === requestedRevision)
-          : store.data.cloudSaves[auth.user.id];
-        return send(response, 200, { cloudSave: save ? { ...cloudSaveMetadata(save), payload: save.payload } : null });
+          ? saveHistory(store, auth.user.id, slot).find((entry) => entry.revision === requestedRevision)
+          : currentCloudSave(store, auth.user.id, slot);
+        return send(response, 200, { cloudSave: save ? { ...cloudSaveMetadata(save, slot), payload: save.payload } : null });
       }
 
       if (request.method === "PUT" && url.pathname === "/api/cloud-save") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
         if (!requireVerifiedUser(response, auth)) return;
+        const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
+        if (!slot) return send(response, 400, { error: "云存档槽位无效" });
         const body = await readJson(request);
         if (!validateSavePayload(body.payload)) return send(response, 400, { error: "云存档格式无效或体积过大" });
-        const current = store.data.cloudSaves[auth.user.id];
+        const current = currentCloudSave(store, auth.user.id, slot);
         const expectedRevision = Number.isInteger(body.expectedRevision) ? body.expectedRevision : 0;
         if ((current?.revision ?? 0) !== expectedRevision) {
           runtime.cloudConflicts += 1;
-          return send(response, 409, { error: "云端已有更新版本，请先下载或确认覆盖", cloudSave: cloudSaveMetadata(current) });
+          return send(response, 409, { error: "云端已有更新版本，请先下载或确认覆盖", cloudSave: cloudSaveMetadata(current, slot) });
         }
         const next = {
           revision: (current?.revision ?? 0) + 1,
@@ -1136,25 +1259,27 @@ export async function createCloudServer({
           updatedAt: Date.now(),
           summary: summarizeSavePayload(body.payload),
         };
-        appendSaveRevision(store, auth.user.id, next);
+        appendSaveRevision(store, auth.user.id, next, slot);
         dayMetric.cloudUploads += 1;
         await store.persist();
-        return send(response, 200, { cloudSave: cloudSaveMetadata(next) });
+        return send(response, 200, { cloudSave: cloudSaveMetadata(next, slot) });
       }
 
       if (request.method === "POST" && url.pathname === "/api/cloud-save/restore") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
         if (!requireVerifiedUser(response, auth)) return;
+        const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
+        if (!slot) return send(response, 400, { error: "云存档槽位无效" });
         const body = await readJson(request);
-        const current = store.data.cloudSaves[auth.user.id];
+        const current = currentCloudSave(store, auth.user.id, slot);
         const expectedRevision = Number.isInteger(body.expectedRevision) ? body.expectedRevision : 0;
         if ((current?.revision ?? 0) !== expectedRevision) {
           runtime.cloudConflicts += 1;
-          return send(response, 409, { error: "云端已有更新版本，请刷新历史记录", cloudSave: cloudSaveMetadata(current) });
+          return send(response, 409, { error: "云端已有更新版本，请刷新历史记录", cloudSave: cloudSaveMetadata(current, slot) });
         }
         const sourceRevision = Number(body.revision);
-        const source = saveHistory(store, auth.user.id).find((entry) => entry.revision === sourceRevision);
+        const source = saveHistory(store, auth.user.id, slot).find((entry) => entry.revision === sourceRevision);
         if (!source) return send(response, 404, { error: "历史修订不存在或已过期" });
         const restored = {
           ...source,
@@ -1162,11 +1287,11 @@ export async function createCloudServer({
           updatedAt: Date.now(),
           restoredFromRevision: sourceRevision,
         };
-        appendSaveRevision(store, auth.user.id, restored);
+        appendSaveRevision(store, auth.user.id, restored, slot);
         dayMetric.cloudUploads += 1;
         appendAudit(store, request, "cloud.revision_restored", auth.user.id);
         await store.persist();
-        return send(response, 200, { cloudSave: cloudSaveMetadata(restored) });
+        return send(response, 200, { cloudSave: cloudSaveMetadata(restored, slot) });
       }
 
       if (request.method === "GET" && url.pathname === "/api/leaderboard") {

@@ -28,7 +28,7 @@ flowchart LR
 - `src/game/savePreview.ts`：主菜单只读存档索引，只解析摘要、设置和原始 payload；不迁移、不推进模拟、不写入存档，正式校验仍由 `storage.ts` 在载入时执行。
 - `src/components/AdminDashboard.tsx`：独立 `/admin` 路由，只使用浏览器会话中的管理员 token 读取聚合运营数据。
 - `src/components/StartMenu.tsx`：开始/继续、槽位、导入、云账号、邮箱验证/密码重置链接和主菜单设置。
-- `src/components/CloudAccountSecurity.tsx`、`CloudSaveConflictDialog.tsx`：主菜单与银河工作区共用的账号安全、设备会话、数据导出、注销和云冲突选择界面。
+- `src/components/CloudAccountSecurity.tsx`、`CloudSaveConflictDialog.tsx`、`CloudSaveSlotsPanel.tsx`：主菜单与银河工作区共用的账号安全、邮箱绑定、设备会话、数据导出、四槽云存档和云冲突选择界面。
 - `src/components/ReleaseNotesDialog.tsx`：版本公告单一数据源、首次展示偏好和主菜单/游戏内设置共用弹窗。
 - `src/game/onboarding.ts`、`src/components/OnboardingCoach.tsx`：独立于 `GameState` 的 13 步渐进教学偏好、里程碑判定和设备/线路卡点诊断；教学关闭状态不会随存档或云同步改写。
 - `src/App.tsx`：顶层会话和工厂编排。它管理工作区、画布交互、连接、选中状态、存档定时器和模拟 Worker。
@@ -43,7 +43,7 @@ flowchart LR
 - `src/hooks/`：粗指针、低性能手机识别、横向滚动、长按和抽屉滑动等跨组件交互；第二根触点会取消待触发的长按。
 - `src/styles.css`：当前统一样式入口，包含桌面、手机横竖屏、字体倍率和动效降级规则。
 
-React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新计算视口平移以保持原世界中心；触摸端的扩大吸附、连接虚影和低性能 LOD 都是瞬时展示状态，不写入存档。点击式连线同时清理 React Flow 的内部起点与应用预览，避免取消或吸附后遗留幽灵连接。
+React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新计算视口平移以保持原世界中心；触摸端的扩大吸附、连接虚影和低性能 LOD 都是瞬时展示状态，不写入存档。生产区域的矩形、名称与颜色保存在 `GameState.canvasRegions`，但区域草稿和编辑器选择仍是瞬时 UI 状态。点击式连线同时清理 React Flow 的内部起点与应用预览，避免取消或吸附后遗留幽灵连接。
 
 工厂运行时和大型工作区都由 `React.lazy` 按需加载。主菜单首屏不再静态依赖 React Flow、`engine.ts`、`storage.ts` 或工厂工作区；生产构建必须检查入口 HTML 没有提前 preload 这些 chunk。
 
@@ -65,7 +65,7 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 ## 3. 状态与模拟流
 
 1. 主菜单调用 `loadGame()` 或加载指定槽位，得到 `LoadedGame`。
-2. `FactoryGame` 以 `GameState` v26 作为唯一持久游戏状态。
+2. `FactoryGame` 以 `GameState` v28 作为唯一持久游戏状态。
 3. 正常模式每 100 ms、性能模式每 250 ms 累积真实时间，并乘以 `1x/2x/4x` 模拟倍率。
 4. 浏览器支持 Worker 时，状态和时间提交给 `src/game/simulation.worker.ts`；Worker 调用 `advanceSimulation()`。
 5. Worker 不可用或报错时，主线程使用同一个 `advanceSimulation()` 回退，保持规则一致。
@@ -98,11 +98,13 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 全星球批量命令按实体所属行星分组，临时切换到对应行星执行既有配方或物流槽命令，再恢复玩家原先所在行星。这样配方切换和槽位替换产生的物资返还会进入正确的行星托盘；批量物流模板只修改指定槽位，物品已占用其他槽位的站点会被跳过。
 
-线路模型包含源、汇、物品、等级、分拣等级、优先级、堆叠、路由、流量和拥堵。端口能够根据已有配方、物流槽或默认状态自动接受物品。多条同端点线路由 bundle 信息进行视觉错位。
+线路模型包含源、汇、物品、等级、分拣等级、优先级、堆叠、路由、流量和拥堵。端口能够根据已有配方、物流槽或默认状态自动接受物品。连接草稿在开始拉线时锁定传送带等级；自动模式按 Mk.III→Mk.II→Mk.I 选择已解锁且有库存的最高等级，并优先复用已有并行线等级，手动模式保留显式选择。多条同端点线路由 bundle 信息进行视觉错位。
 
 星际物流槽持久化 `direct`、`relay-preferred` 或 `relay-required` 策略及 1-4 个/船翘曲预算。中转物流站持久化启用状态与优先级；在途 `StationRoute` 保存 waypoint 站点、总距离和实际每船翘曲消耗。多跳耗时、能耗、诊断和模拟使用同一经济函数；取消航线或移除枢纽会退还翘曲器，站内容量不足时溢出到对应行星托盘。
 
 闲置物流运输机和运输船保存在 `GameState.portableFleet`，不属于任何行星托盘；装入物流站后仍由对应实体的 `stationDrones` / `stationVessels` 持有。切换行星不复制普通库存，只保留这一明确的随身载具库存和光标单组载荷。
+
+`GameState.planetTrayItemLimits` 按行星保存单种物资上限。普通入库命令先计算剩余容量，只移动可容纳的整数数量；设备回收、配方切换和线路取消等保护性返还不受上限截断，避免因为玩家降低上限而销毁既有物资。
 
 节点卡片必须高于线路并拦截指针事件；连接虚影和成功/失败反馈属于临时 UI 状态，不写入存档。
 
@@ -112,12 +114,13 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 | 数据 | 键或位置 | 说明 |
 | --- | --- | --- |
-| 主存档 | `dsp-idle-network.save.v1` | v2 envelope 内含 v26 state；线上正式版目前仍写 v24 |
+| 主存档 | `dsp-idle-network.save.v1` | 工作区 v2 envelope 内含 v28 state；线上 `0.3.0` 仍写 v26 |
 | 主备份 | 主键后缀 `.backup` | 每次写主存档前保存上一份有效版本 |
 | 快照 | 主键后缀 `.snapshot.*` | 最多 5 份，至少每 30 模拟秒生成 |
 | 手动槽位 | `dsp-idle-network.slot.1..3` | 3 个独立槽位 |
 | 云 token | `dsp-idle-network.cloud-token.v1` | 仅安全入口调用云 API |
-| 云同步标记 | `dsp-idle-network.cloud-sync.v1` | 按云用户记录最后同步修订、云 SHA-256 和游戏状态校验值，不包含存档 payload |
+| 云同步标记 | `dsp-idle-network.cloud-sync.v1` | 按云用户和 `main/1/2/3` 槽位分别记录最后同步修订、云 SHA-256 和游戏状态校验值，不包含存档 payload |
+| 自动云同步状态 | `dsp-idle-network.cloud-auto-sync.v1` | 只记录最近一次主存档同步的时间、结果和修订，不包含存档 payload |
 | 匿名玩家 ID | `dsp-idle-network.player-id.v1` | 仅在进入工厂后生成；服务器只保存其 SHA-256 哈希 |
 | 本地身份与榜单账本 | `dsp-idle-network.account.v1` | schema v2；可显式绑定一个云用户，绑定不改写 `GameState` 或工厂存档 |
 | 已读版本公告 | `dsp-idle-network.release-notes.seen.v1` | 仅保存最近已确认的公告 ID，不属于游戏存档 |
@@ -134,11 +137,13 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 ### 云端
 
-云端保存的是完整导出 payload 和元数据。元数据包含 SHA-256、状态校验值、保存时间、状态版本、运行时长、设备/科技数量等安全摘要。上传必须携带 `expectedRevision`，版本冲突返回 409；前端通过本地同步标记区分本地更新、云端更新和双向分叉，只有玩家明确选择后才推进修订。恢复历史版本会生成一个新的修订，不会原地覆盖历史。每个用户最多保留最近 20 个修订。
+云端为每名用户保存 `main`、`1`、`2`、`3` 四个独立槽位，每个槽位分别维护完整导出 payload、元数据、修订号和最多 20 条历史。元数据包含 SHA-256、状态校验值、保存时间、状态版本、运行时长、设备/科技数量等安全摘要。上传必须携带该槽位的 `expectedRevision`，版本冲突返回 409；前端通过按槽位同步标记区分本地更新、云端更新和双向分叉，只有玩家明确选择后才推进修订。恢复历史版本会在同一槽位生成一个新修订，不会原地覆盖历史。排行榜只读取 `main`。
+
+已验证邮箱的工厂运行时每 10 分钟比较并上传一次 `main`。相同状态不重复创建修订；云端更新或双向分叉会停止自动覆盖并留下可见冲突状态。网络、邮件或服务端错误不会改变本地存档。手动槽位只接受玩家显式上传，不参与自动同步。
 
 ## 7. 云服务
 
-`server/index.mjs` 是无框架 Node HTTP 服务，生产使用 `better-sqlite3`。SQLite 当前只有一行 `app_state` JSON payload，启用 WAL 和 `synchronous=NORMAL`。云服务 schema v5 在 v4 运营统计之外增加邮箱验证、密码重置、带设备信息的会话和云存档摘要；v3/v4 旧账号迁移后按已验证处理，避免锁死现有玩家，账号、云存档、榜单、玩家记录和匿名统计都会保留。
+`server/index.mjs` 是无框架 Node HTTP 服务，生产使用 `better-sqlite3`。SQLite 当前只有一行 `app_state` JSON payload，启用 WAL 和 `synchronous=NORMAL`。本地候选云服务 schema v6 在 v5 账号安全之上增加旧账号邮箱绑定和三个独立手动云槽；v5 的主云存档原位保留为 `main`，迁移不会复制或覆盖它。线上 `0.3.0` 仍运行 schema v5。
 
 API 表面：
 
@@ -147,12 +152,12 @@ API 表面：
 - `POST /api/analytics`：匿名批次、客户端序列去重和严格事件白名单
 - `POST /api/presence`
 - `POST /api/auth/register|login|logout|verify-email|resend-verification|forgot-password|reset-password`
-- `GET /api/account`、`GET /api/account/sessions|export`、`POST /api/account/password|sessions/revoke|delete`
-- `GET|PUT /api/cloud-save`、`GET /api/cloud-save/history`、`POST /api/cloud-save/restore`
+- `GET /api/account`、`GET /api/account/sessions|export`、`POST /api/account/email|password|sessions/revoke|delete`
+- `GET|PUT /api/cloud-save?slot=main|1|2|3`、`GET /api/cloud-save/history?slot=...`、`POST /api/cloud-save/restore?slot=...`
 - `GET|POST /api/leaderboard`
 - `POST /api/feedback`、`POST /api/errors`
 
-密码使用 scrypt 派生并采用 timing-safe 比较；会话 token 和邮箱动作 token 只保存 SHA-256，登录会话默认有效期 30 天，邮箱动作链接有效期 30 分钟。新账号验证前可以登录和读取自己的数据，但不能写入云存档、恢复云修订或提交排行榜。邮件通过可选 webhook 发送；未配置 webhook 时新注册与邮件恢复明确返回不可用。请求体上限为 8 MiB，认证接口每 IP/路径每分钟 12 次，其余接口 120 次。Origin 白名单、Nginx `client_max_body_size` 和前端 HTTPS 限制共同形成入口边界。
+密码使用 scrypt 派生并采用 timing-safe 比较；会话 token 和邮箱动作 token 只保存 SHA-256，登录会话默认有效期 30 天，邮箱动作链接有效期 30 分钟。新账号验证前可以登录和读取自己的数据，但不能写入云存档、恢复云修订或提交排行榜。`server/mail.mjs` 优先使用腾讯云 SES `SendEmail` 审核模板 API，分别传入验证或重置模板 ID 及单一 `actionUrl` 变量；凭据不完整时可以回退到原有 HTTPS webhook，二者都不可用时新注册与邮件恢复明确返回不可用。`/api/health.mailProvider` 只控制注册、绑定、验证重发和找回入口；它不会关闭已有账号登录或四槽云存档。邮件失败日志只记录供应商错误码和 RequestId，不记录收件地址或动作 token。请求体上限为 8 MiB，认证接口每 IP/路径每分钟 12 次，其余接口 120 次。Origin 白名单、Nginx `client_max_body_size` 和前端 HTTPS 限制共同形成入口边界。
 
 匿名心跳默认每 45 秒发送一次，服务端接口限流为每 IP 每分钟 10 次；同一浏览器 ID 去重，最近 120 秒有心跳视为在线。访问统计按 `Asia/Shanghai` 自然日聚合 PV、UV、会话、进入工厂、活跃秒数和允许的关键事件。服务端只保存带命名空间的 SHA-256 标识，不保存原始匿名 ID、鼠标坐标、按钮文案或存档内容。香港与上海数据库相互独立，因此统计也是节点级数据，不做跨节点合并。
 

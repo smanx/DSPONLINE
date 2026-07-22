@@ -1,8 +1,8 @@
-import { ArrowUp, BoxSelect, Check, ChevronLeft, ChevronRight, Clock3, Copy, Download, FlipHorizontal2, Focus, Layers3, MousePointer2, PackageOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Redo2, RotateCw, Route, Trash2, Undo2, Upload, WandSparkles, X } from "lucide-react";
+import { ArrowUp, BoxSelect, Check, ChevronLeft, ChevronRight, Clock3, Copy, Download, FlipHorizontal2, Focus, Layers3, MousePointer2, PackageOpen, Palette, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Redo2, RotateCw, Route, Trash2, Undo2, Upload, WandSparkles, X } from "lucide-react";
 import { getConstructionDefinition, getItem, getPlanet, getRecipe, getRecipesForBuilding } from "../game/content";
 import { canPlaceBlueprint, canQueueBlueprint, getBlueprintRequirements, getConstructionQueueDeficits, isTechnologyCompleted } from "../game/engine";
-import type { BlueprintDefinition, BlueprintMirror, BlueprintRotation, GameState, RecipeId } from "../game/types";
-import { useRef, useState } from "react";
+import type { BlueprintDefinition, BlueprintMirror, BlueprintRotation, CanvasRegion, GameState, RecipeId } from "../game/types";
+import { useRef, useState, type CSSProperties } from "react";
 
 function blueprintBuildingSummary(blueprint: BlueprintDefinition): string[] {
   const counts = new Map<string, number>();
@@ -13,16 +13,19 @@ function blueprintBuildingSummary(blueprint: BlueprintDefinition): string[] {
   return [...counts].map(([name, amount]) => `${name} ×${amount}`);
 }
 
-export function CanvasSelectionTools({ selectionMode, blueprintCount, beltCount, canUndo, canRedo, canUndoAutoLayout, leftSidebarCollapsed, rightSidebarCollapsed, onModeChange, onOpenBlueprints, onOpenNetworks, onAutoLayout, onUndoAutoLayout, onUndo, onRedo, onToggleLeftSidebar, onToggleRightSidebar }: {
+export function CanvasSelectionTools({ selectionMode, regionMode, blueprintCount, beltCount, regionCount, canUndo, canRedo, canUndoAutoLayout, leftSidebarCollapsed, rightSidebarCollapsed, onModeChange, onRegionModeChange, onOpenBlueprints, onOpenNetworks, onAutoLayout, onUndoAutoLayout, onUndo, onRedo, onToggleLeftSidebar, onToggleRightSidebar }: {
   selectionMode: boolean;
+  regionMode: boolean;
   blueprintCount: number;
   beltCount: number;
+  regionCount: number;
   canUndo: boolean;
   canRedo: boolean;
   canUndoAutoLayout: boolean;
   leftSidebarCollapsed: boolean;
   rightSidebarCollapsed: boolean;
   onModeChange: (enabled: boolean) => void;
+  onRegionModeChange: (enabled: boolean) => void;
   onOpenBlueprints: () => void;
   onOpenNetworks: () => void;
   onAutoLayout: () => void;
@@ -36,8 +39,9 @@ export function CanvasSelectionTools({ selectionMode, blueprintCount, beltCount,
   return (
     <div className={`canvas-selection-tools nodrag nopan${collapsed ? " canvas-selection-tools--collapsed" : ""}`} aria-label="画布选择工具">
       {!collapsed ? <>
-        <button className={!selectionMode ? "active" : ""} type="button" onClick={() => onModeChange(false)} title="指针与节点移动" aria-label="指针模式"><MousePointer2 size={16} /></button>
+        <button className={!selectionMode && !regionMode ? "active" : ""} type="button" onClick={() => onModeChange(false)} title="指针与节点移动" aria-label="指针模式"><MousePointer2 size={16} /></button>
         <button className={selectionMode ? "active" : ""} type="button" onClick={() => onModeChange(true)} title="拖拽框选节点，可按 Shift 增减选择" aria-label="框选模式"><BoxSelect size={16} /></button>
+        <button className={regionMode ? "active" : ""} type="button" onClick={() => onRegionModeChange(!regionMode)} title="在空白画布拖拽创建生产区域" aria-label="生产区域模式"><Palette size={16} /><em>{regionCount}</em></button>
         <button type="button" onClick={onOpenBlueprints} title="打开蓝图库" aria-label="打开蓝图库"><Layers3 size={16} /><em>{blueprintCount}</em></button>
         <button type="button" onClick={onOpenNetworks} title="打开生产网络总览" aria-label="打开生产网络总览"><Route size={16} /><em>{beltCount}</em></button>
         <button type="button" onClick={onAutoLayout} title="按物流上下游自动整理当前行星" aria-label="自动整理当前行星布局"><WandSparkles size={16} /></button>
@@ -53,6 +57,59 @@ export function CanvasSelectionTools({ selectionMode, blueprintCount, beltCount,
         {collapsed ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
       </button>
     </div>
+  );
+}
+
+export interface CanvasRegionRectangle {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export function CanvasRegionLayer({ regions, draft, selectedRegionId, onSelect }: {
+  regions: CanvasRegion[];
+  draft: CanvasRegionRectangle | null;
+  selectedRegionId: string | null;
+  onSelect: (regionId: string) => void;
+}) {
+  return <>
+    {regions.map((region) => (
+      <div
+        className={`canvas-region${selectedRegionId === region.id ? " canvas-region--selected" : ""}`}
+        key={region.id}
+        style={{
+          left: region.x,
+          top: region.y,
+          width: region.width,
+          height: region.height,
+          borderColor: region.borderColor,
+          backgroundColor: `${region.fillColor}24`,
+          color: region.borderColor,
+        } as CSSProperties}
+      >
+        <button className="canvas-region__label nodrag nopan" type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onSelect(region.id); }} title={`编辑${region.name}`}><Palette size={12} /><span>{region.name}</span></button>
+      </div>
+    ))}
+    {draft ? <div className="canvas-region canvas-region--draft" style={{ left: draft.x, top: draft.y, width: draft.width, height: draft.height } as CSSProperties}><span>新生产区域</span></div> : null}
+  </>;
+}
+
+export function CanvasRegionEditor({ region, onChange, onRemove, onClose }: {
+  region: CanvasRegion;
+  onChange: (changes: Partial<Pick<CanvasRegion, "name" | "fillColor" | "borderColor">>) => void;
+  onRemove: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <section className="canvas-region-editor nodrag nopan" aria-label="生产区域设置">
+      <Palette size={15} />
+      <label><span>区域名称</span><input key={region.id} defaultValue={region.name} maxLength={28} onBlur={(event) => onChange({ name: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
+      <label className="canvas-region-editor__color"><span>背景</span><input type="color" value={region.fillColor} onChange={(event) => onChange({ fillColor: event.target.value })} /></label>
+      <label className="canvas-region-editor__color"><span>边框</span><input type="color" value={region.borderColor} onChange={(event) => onChange({ borderColor: event.target.value })} /></label>
+      <button className="danger" type="button" onClick={onRemove} title="删除生产区域" aria-label="删除生产区域"><Trash2 size={14} /></button>
+      <button type="button" onClick={onClose} title="关闭区域设置" aria-label="关闭区域设置"><X size={14} /></button>
+    </section>
   );
 }
 

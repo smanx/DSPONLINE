@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronUp, FlaskConical, Gauge, ListOrdered, LockKeyhole, PackageCheck, Pickaxe, Play, Rocket, Satellite, Timer, X, Zap } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, FlaskConical, Gauge, ListOrdered, LockKeyhole, PackageCheck, Pause, Pickaxe, Play, Rocket, Satellite, Timer, X, Zap } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
 import { MATRIX_ITEM_IDS, PLANET_LIST, TECHNOLOGY_LIST, getTechnology } from "../game/content";
@@ -13,6 +13,9 @@ interface TechnologyWorkspaceProps {
   game: GameState;
   onClose: () => void;
   onSelect: (techId: TechId) => void;
+  onPauseResearch: () => void;
+  onCancelResearch: () => void;
+  onResumeResearch: () => void;
   onRemoveQueued: (techId: TechId) => void;
   onSelectInfiniteResearch: (researchId: InfiniteResearchId) => void;
   onInfiniteResearchAutomation: (enabled: boolean) => void;
@@ -28,10 +31,10 @@ function networkMatrixStock(game: GameState, itemId: ItemId): number {
   return Math.floor(nodeStock + trayStock + (game.cargo?.itemId === itemId ? game.cargo.amount : 0));
 }
 
-export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQueued, onSelectInfiniteResearch, onInfiniteResearchAutomation, focusTechId }: TechnologyWorkspaceProps) {
+export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseResearch, onCancelResearch, onResumeResearch, onRemoveQueued, onSelectInfiniteResearch, onInfiniteResearchAutomation, focusTechId }: TechnologyWorkspaceProps) {
   const [focusedTechId, setFocusedTechId] = useState<TechId | null>(null);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
-  const horizontalPan = useHorizontalPan<HTMLDivElement>({ wheelMode: "axis-lock" });
+  const horizontalPan = useHorizontalPan<HTMLDivElement>({ wheelMode: "horizontal" });
   useEffect(() => {
     if (!open || !focusTechId) return;
     setFocusedTechId(focusTechId);
@@ -46,14 +49,16 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
   }, [focusTechId, open]);
   if (!open) return null;
   const selected = getTechnology(game.research.selectedTechId);
+  const paused = getTechnology(game.research.pausedTechId);
   const activeInfinite = game.endgame.activeInfiniteResearchId
     ? INFINITE_RESEARCH_DEFINITIONS.find((definition) => definition.id === game.endgame.activeInfiniteResearchId)
     : undefined;
   const activeInfiniteProgress = activeInfinite ? game.endgame.infiniteResearch[activeInfinite.id] : undefined;
-  const selectedProgress = selected ? game.research.progressByTech[selected.id] ?? {} : {};
-  const selectedCostTotal = selected?.costs.reduce((sum, cost) => sum + cost.amount, 0) ??
+  const displayedTechnology = selected ?? (!activeInfinite ? paused : undefined);
+  const selectedProgress = displayedTechnology ? game.research.progressByTech[displayedTechnology.id] ?? {} : {};
+  const selectedCostTotal = displayedTechnology?.costs.reduce((sum, cost) => sum + cost.amount, 0) ??
     (activeInfinite ? getInfiniteResearchCost(activeInfinite.id, activeInfiniteProgress?.level ?? 0) : 0);
-  const selectedProgressTotal = selected?.costs.reduce((sum, cost) =>
+  const selectedProgressTotal = displayedTechnology?.costs.reduce((sum, cost) =>
     sum + Math.min(cost.amount, selectedProgress[cost.itemId] ?? 0), 0) ?? activeInfiniteProgress?.progress ?? 0;
   const maximumTier = Math.max(...TECHNOLOGY_LIST.map((technology) => technology.tier));
 
@@ -76,19 +81,25 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
 
       <div className="research-focus">
         <div>
-          <span>当前研究</span>
-          <strong>{selected?.name ?? activeInfinite?.name ?? "未选择科技"}</strong>
+          <span>{selected || activeInfinite ? "当前研究" : paused ? "研究已暂停" : "当前研究"}</span>
+          <strong>{displayedTechnology?.name ?? activeInfinite?.name ?? "未选择科技"}</strong>
         </div>
         <div className="research-progress">
           <i><b style={{ width: `${selectedCostTotal > 0 ? selectedProgressTotal / selectedCostTotal * 100 : 0}%` }} /></i>
-          <span>{selected || activeInfinite ? `${selectedProgressTotal} / ${selectedCostTotal} 矩阵` : "0 / 0 矩阵"}</span>
+          <span>{displayedTechnology || activeInfinite ? `${selectedProgressTotal} / ${selectedCostTotal} 矩阵` : "0 / 0 矩阵"}</span>
         </div>
         <div className="research-cost-list">
-          {selected?.costs.map((cost) => {
+          {displayedTechnology?.costs.map((cost) => {
             return <span key={cost.itemId}><ItemHoverCard itemId={cost.itemId}><ItemGlyph itemId={cost.itemId} /></ItemHoverCard>{selectedProgress[cost.itemId] ?? 0}/{cost.amount}</span>;
           })}
-          {!selected && activeInfinite ? <span><ItemHoverCard itemId="universe_matrix"><ItemGlyph itemId="universe_matrix" /></ItemHoverCard>{activeInfiniteProgress?.progress ?? 0}/{selectedCostTotal}</span> : null}
+          {!displayedTechnology && activeInfinite ? <span><ItemHoverCard itemId="universe_matrix"><ItemGlyph itemId="universe_matrix" /></ItemHoverCard>{activeInfiniteProgress?.progress ?? 0}/{selectedCostTotal}</span> : null}
         </div>
+        <div className="research-current-actions">
+          {selected || activeInfinite ? <button type="button" onClick={onPauseResearch} title="停止消耗矩阵并保留研究进度"><Pause size={13} />暂停</button> : null}
+          {selected || activeInfinite ? <button type="button" onClick={onCancelResearch} title="取消当前项目，已投入矩阵仍会保留"><X size={13} />取消</button> : null}
+          {!selected && !activeInfinite && paused ? <button className="confirm" type="button" onClick={onResumeResearch} title={`从现有进度继续研究${paused.name}`}><Play size={13} />继续研究</button> : null}
+        </div>
+        {paused && (selected || activeInfinite) ? <div className="research-paused-summary"><Pause size={12} /><span>已暂停：<strong>{paused.name}</strong></span><button type="button" disabled title="先暂停或取消当前项目后再继续">等待当前项目</button></div> : null}
         <button className="research-advanced-toggle" type="button" onClick={() => setAdvancedExpanded((expanded) => !expanded)} title={advancedExpanded ? "收起升级与无限科研" : "展开升级与无限科研"} aria-label={advancedExpanded ? "收起科研详情" : "展开科研详情"} aria-expanded={advancedExpanded}>
           <Gauge size={14} /><span>科研详情</span>{advancedExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
@@ -142,6 +153,7 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
               {TECHNOLOGY_LIST.filter((technology) => technology.tier === tier).map((technology) => {
                 const complete = isTechnologyCompleted(game, technology.id);
                 const active = game.research.selectedTechId === technology.id;
+                const isPaused = game.research.pausedTechId === technology.id;
                 const queuedIndex = game.research.queuedTechIds.indexOf(technology.id);
                 const queued = queuedIndex >= 0;
                 const available = canQueueTechnology(game, technology.id);
@@ -149,18 +161,18 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
                 const prerequisiteNames = technology.prerequisites.map((id) => getTechnology(id)?.name).filter(Boolean);
                 return (
                   <button
-                    className={`technology-node${complete ? " technology-node--complete" : ""}${active ? " technology-node--active" : ""}${queued ? " technology-node--queued" : ""}${focusedTechId === technology.id ? " technology-node--focus" : ""}`}
+                    className={`technology-node${complete ? " technology-node--complete" : ""}${active ? " technology-node--active" : ""}${isPaused ? " technology-node--paused" : ""}${queued ? " technology-node--queued" : ""}${focusedTechId === technology.id ? " technology-node--focus" : ""}`}
                     type="button"
                     key={technology.id}
                     data-tech-id={technology.id}
-                    disabled={!available || active || queued}
-                    onClick={() => onSelect(technology.id)}
-                    title={available ? game.research.selectedTechId ? `加入科研队列：${technology.name}` : `开始研究：${technology.name}` : undefined}
+                    disabled={isPaused ? Boolean(selected || activeInfinite) : !available || active || queued}
+                    onClick={() => isPaused ? onResumeResearch() : onSelect(technology.id)}
+                    title={isPaused ? selected || activeInfinite ? "先暂停或取消当前研究" : `继续研究：${technology.name}` : available ? game.research.selectedTechId ? `加入科研队列：${technology.name}` : `开始研究：${technology.name}` : undefined}
                   >
                     <header>
-                      <i>{complete ? <Check size={15} /> : active ? <Play size={15} /> : queued ? <ListOrdered size={15} /> : available ? <FlaskConical size={15} /> : <LockKeyhole size={15} />}</i>
+                      <i>{complete ? <Check size={15} /> : active ? <Play size={15} /> : isPaused ? <Pause size={15} /> : queued ? <ListOrdered size={15} /> : available ? <FlaskConical size={15} /> : <LockKeyhole size={15} />}</i>
                       <strong>{technology.name}</strong>
-                      <span>{queued ? `#${queuedIndex + 1}` : `${technology.costs.reduce((sum, cost) => sum + Math.min(cost.amount, progress[cost.itemId] ?? 0), 0)}/${technology.costs.reduce((sum, cost) => sum + cost.amount, 0)}`}</span>
+                      <span>{isPaused ? "已暂停" : queued ? `#${queuedIndex + 1}` : `${technology.costs.reduce((sum, cost) => sum + Math.min(cost.amount, progress[cost.itemId] ?? 0), 0)}/${technology.costs.reduce((sum, cost) => sum + cost.amount, 0)}`}</span>
                     </header>
                     <p>{technology.summary}</p>
                     <div className="technology-costs">
@@ -171,7 +183,7 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onRemoveQue
                     <div className="technology-unlocks">
                       {technology.unlocks.map((unlock) => <span key={unlock}>{unlock}</span>)}
                     </div>
-                    {prerequisiteNames.length > 0 && !available && !complete && !active && !queued ? (
+                    {prerequisiteNames.length > 0 && !available && !complete && !active && !isPaused && !queued ? (
                       <small>前置：{prerequisiteNames.join("、")}</small>
                     ) : null}
                   </button>

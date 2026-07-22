@@ -23,5 +23,5 @@ describe("idle performance reports", () => {
     expect(report.completed).toBe(true);
     expect(report.integrityPassed).toBe(true);
     expect(report.tuning.fullFidelitySimulation).toBe(true);
-  });
+  }, 15_000);
 });

@@ -63,7 +63,7 @@ import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { ItemCatalogPicker, RecipeCatalogPicker } from "./CatalogPicker";
 import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getSorterConstructionId, getTechnology, isConveyorBeltId } from "../game/content";
-import { MATERIAL_DELIVERY_SLOT_COUNT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltNetworkIds, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationSlots, getStationVesselCapacity, getStationWarperCapacity, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
+import { MATERIAL_DELIVERY_SLOT_COUNT, MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltNetworkIds, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPlanetTrayItemLimit, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationSlots, getStationVesselCapacity, getStationWarperCapacity, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import { getPlanetIndustrialProfile, getPlanetOrbitalYields } from "../game/galaxy";
 import { analyzeBeltNetwork } from "../game/network";
 import type {
@@ -110,10 +110,24 @@ interface ResourceRailProps {
   onPickTray: (itemId: ItemId) => void;
   onDropCargo: () => void;
   onDropDraggedItem: (itemId: ItemId, sourceKind: DraggedItemSourceKind, sourceId?: string) => void;
+  onSetTrayItemLimit: (value: number) => void;
 }
 
-export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickTray, onDropCargo, onDropDraggedItem }: ResourceRailProps) {
+export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickTray, onDropCargo, onDropDraggedItem, onSetTrayItemLimit }: ResourceRailProps) {
   const [dragOver, setDragOver] = useState(false);
+  const trayItemLimit = getPlanetTrayItemLimit(game);
+  const [trayLimitDraft, setTrayLimitDraft] = useState(String(trayItemLimit));
+  useEffect(() => setTrayLimitDraft(String(trayItemLimit)), [game.activePlanetId, trayItemLimit]);
+  const commitTrayItemLimit = () => {
+    const parsed = Number(trayLimitDraft.replaceAll(",", ""));
+    if (!Number.isFinite(parsed)) {
+      setTrayLimitDraft(String(trayItemLimit));
+      return;
+    }
+    const next = Math.max(MIN_PLANET_TRAY_ITEM_LIMIT, Math.min(MAX_PLANET_TRAY_ITEM_LIMIT, Math.floor(parsed)));
+    setTrayLimitDraft(String(next));
+    onSetTrayItemLimit(next);
+  };
   const trayItems = (Object.entries(game.tray) as Array<[ItemId, number]>)
     .filter(([, amount]) => amount > 0.001)
     .sort((a, b) => b[1] - a[1]);
@@ -217,7 +231,7 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
       </section>
 
       <section className={`rail-block tray-block${game.cargo ? " rail-block--cargo-drop" : ""}`} onClickCapture={(event) => {
-        if (!game.cargo) return;
+        if (!game.cargo || (event.target instanceof Element && event.target.closest(".tray-limit-control"))) return;
         event.preventDefault();
         event.stopPropagation();
         onDropCargo();
@@ -226,6 +240,28 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
           <span>{getPlanet(game.activePlanetId).code}物资托盘</span>
           <strong>{trayItems.length}</strong>
         </div>
+        <label className="tray-limit-control" onClick={(event) => event.stopPropagation()}>
+          <span>单种物资上限</span>
+          <input
+            type="number"
+            min={MIN_PLANET_TRAY_ITEM_LIMIT}
+            max={MAX_PLANET_TRAY_ITEM_LIMIT}
+            step={1000}
+            inputMode="numeric"
+            value={trayLimitDraft}
+            aria-label={`${getPlanet(game.activePlanetId).name}单种物资上限`}
+            onChange={(event) => setTrayLimitDraft(event.target.value)}
+            onBlur={commitTrayItemLimit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.currentTarget.blur();
+              if (event.key === "Escape") {
+                setTrayLimitDraft(String(trayItemLimit));
+                event.currentTarget.blur();
+              }
+            }}
+          />
+          <small>1K–1M</small>
+        </label>
         <div className="tray-list">
           {trayItems.length === 0 ? (
             <div className="tray-empty"><Box size={18} /><span>暂无库存</span></div>
@@ -1521,9 +1557,11 @@ interface ConstructionDockProps {
   game: GameState;
   placement: BuildingId | null;
   beltTier: BeltTier;
+  beltTierMode: "auto" | "manual";
   placementCount: PlacementCount;
   onPlacementChange: (buildingId: BuildingId | null) => void;
   onBeltTierChange: (tier: BeltTier) => void;
+  onBeltTierModeChange: (mode: "auto" | "manual") => void;
   onPlacementCountChange: (count: PlacementCount) => void;
   onOpenFabricator: () => void;
   onCraft: (buildingId: ConstructionId) => void;
@@ -1563,7 +1601,7 @@ const CONSTRUCTION_CATEGORY_IDS: Record<Exclude<ConstructionCategory, "all" | "r
   dyson: new Set(["em_rail_ejector", "vertical_launching_silo", "ray_receiver"]),
 };
 
-export function ConstructionDock({ game, placement, beltTier, placementCount, onPlacementChange, onBeltTierChange, onPlacementCountChange, onOpenFabricator, onCraft, onCraftItem, onStowCargo, onMissingCraftNavigate }: ConstructionDockProps) {
+export function ConstructionDock({ game, placement, beltTier, beltTierMode, placementCount, onPlacementChange, onBeltTierChange, onBeltTierModeChange, onPlacementCountChange, onOpenFabricator, onCraft, onCraftItem, onStowCargo, onMissingCraftNavigate }: ConstructionDockProps) {
   const [category, setCategory] = useState<ConstructionCategory>("all");
   const [recent, setRecent] = useState<Array<BuildingId | ConveyorBeltId>>(loadRecentConstruction);
   const [compact, setCompact] = useState(loadCompactConstruction);
@@ -1616,7 +1654,10 @@ export function ConstructionDock({ game, placement, beltTier, placementCount, on
           <option value="logistics">物流</option>
           <option value="dyson">戴森工程</option>
         </select>
-        <button className="dock-compact-toggle" type="button" aria-pressed={compact} onClick={toggleCompact} title={compact ? "恢复标准施工托盘" : "使用两行精简施工托盘"} aria-label={compact ? "关闭施工托盘精简模式" : "开启施工托盘精简模式"}>{compact ? <Rows3 size={12} /> : <LayoutGrid size={12} />}<span>{compact ? "标准" : "精简"}</span></button>
+        <div className="dock-mode-buttons">
+          <button className="dock-compact-toggle" type="button" aria-pressed={compact} onClick={toggleCompact} title={compact ? "恢复标准施工托盘" : "使用两行精简施工托盘"} aria-label={compact ? "关闭施工托盘精简模式" : "开启施工托盘精简模式"}>{compact ? <Rows3 size={12} /> : <LayoutGrid size={12} />}<span>{compact ? "标准" : "精简"}</span></button>
+          <button className={`dock-belt-auto${beltTierMode === "auto" ? " active" : ""}`} type="button" aria-pressed={beltTierMode === "auto"} onClick={() => onBeltTierModeChange("auto")} title={`自动使用现有库存中的最高等级传送带，当前 Mk.${beltTierRoman(beltTier)}`}><Route size={12} /><span>自动 Mk.{beltTierRoman(beltTier)}</span></button>
+        </div>
         <div className="placement-count" aria-label="批量部署数量">
           {PLACEMENT_COUNTS.map((count) => (
             <button className={placementCount === count ? "active" : ""} type="button" key={count} aria-pressed={placementCount === count} onClick={() => onPlacementCountChange(count)}>×{count}</button>
@@ -1628,7 +1669,7 @@ export function ConstructionDock({ game, placement, beltTier, placementCount, on
           const count = game.construction[id] ?? 0;
           const isBelt = isConveyorBeltId(id);
           const itemBeltTier = isBelt ? getBeltTier(id) : null;
-          const active = isBelt ? beltTier === itemBeltTier : placement === id;
+          const active = isBelt ? beltTierMode === "manual" && beltTier === itemBeltTier : placement === id;
           const label = isBelt ? `传送带 Mk.${beltTierRoman(itemBeltTier!)}` : getBuilding(id).name;
           const requiredCount = isBelt ? 1 : placementCount;
           const activePlanet = getPlanet(game.activePlanetId);
@@ -1656,6 +1697,7 @@ export function ConstructionDock({ game, placement, beltTier, placementCount, on
                   if (count < requiredCount || !compatiblePlanet) return;
                   remember(id);
                   if (isBelt) {
+                    onBeltTierModeChange("manual");
                     onBeltTierChange(itemBeltTier!);
                     onPlacementChange(null);
                   } else {
