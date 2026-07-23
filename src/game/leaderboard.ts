@@ -1,4 +1,5 @@
 import type { AccountLedger, AccountProfile } from "./account";
+import { formatQuantityCompact } from "./quantityFormat";
 
 export const LEADERBOARD_STORAGE_KEY = "dsp-idle-network.leaderboard.v1";
 
@@ -145,15 +146,8 @@ export function getLeaderboardValue(metrics: LeaderboardMetrics, category: Leade
 }
 
 export function formatLeaderboardValue(value: number, category: LeaderboardCategoryId): string {
-  const compact = (divisor: number, suffix: string) => {
-    const scaled = value / divisor;
-    const digits = category === "throughput" || scaled < 10 ? 1 : 0;
-    return `${scaled.toFixed(digits)}${suffix}`;
-  };
-  if (value >= 1_000_000_000) return compact(1_000_000_000, "B");
-  if (value >= 1_000_000) return compact(1_000_000, "M");
-  if (value >= 1_000) return compact(1_000, "k");
-  return value.toFixed(category === "throughput" ? 1 : 0);
+  if (category === "throughput" && Math.abs(value) < 10_000) return value.toFixed(1);
+  return formatQuantityCompact(Math.floor(value));
 }
 
 function loadSubmissions(): LeaderboardSubmission[] {

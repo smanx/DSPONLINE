@@ -73,6 +73,7 @@ import {
   craftConstructionWithUpstream,
   createBlueprint,
   createStandardDysonLayer,
+  discardPlanetTrayItems,
   dropCargoToEntity,
   dropCargoToTray,
   exploreStarSystem,
@@ -106,6 +107,7 @@ import {
   placeBuilding,
   placeBlueprint,
   pauseCurrentResearch,
+  pasteDysonLayerTemplate,
   queueBlueprint,
   queueHandcraftRecipe,
   removeBelt,
@@ -182,6 +184,7 @@ import {
   setGalacticDispatchThrottle,
   setGalacticExportEnabled,
   setGalacticExportPriority,
+  setGalacticMaterialExporterPaused,
   setInfiniteResearchAutomation,
   autoConnectDysonLayer,
   planDysonShell,
@@ -213,7 +216,7 @@ import {
 import { baselineAccountProgress, createLocalAccount, getActiveAccount, loadAccountState, recordAccountProgress, saveAccountState, setActiveCloudBinding, switchLocalAccount, updateAccountProfile, type AccountProfileChanges } from "./game/account";
 import { removeLeaderboardData, submitLeaderboardData } from "./game/leaderboard";
 import { trackAnalyticsEvent } from "./game/analytics";
-import { CLOUD_AUTO_SYNC_INTERVAL_MS, CloudApiError, compareCloudSave, getCloudToken, markCloudSaveSynchronized, readCloudAutoSyncStatus, resumeCloudSession, uploadCloudSave, writeCloudAutoSyncStatus } from "./game/cloud";
+import { CLOUD_AUTO_SYNC_INTERVAL_MS, CloudApiError, compareCloudSave, fetchCloudPublicStatus, getCloudToken, markCloudSaveSynchronized, readCloudAutoSyncStatus, resumeCloudSession, uploadCloudSave, writeCloudAutoSyncStatus } from "./game/cloud";
 import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CanvasRegion, CanvasViewport, CargoStackSize, ConstructionId, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad, StationSlotTemplate } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 import { getOnboardingFocusTarget, getOnboardingStep, recordBasicOnboardingEvent, type OnboardingActionId } from "./game/onboarding";
@@ -224,8 +227,19 @@ import { useLowEndMobile } from "./hooks/useLowEndMobile";
 import { useResolvedTheme } from "./hooks/useResolvedTheme";
 import { useMobileNavigation, type MobileWorkspaceId } from "./hooks/useMobileNavigation";
 import { useMobileUiPreference } from "./hooks/useMobileUiPreference";
+import { useProductionRefreshPreference } from "./hooks/useProductionRefreshPreference";
 import { usePlayerPresence } from "./hooks/usePlayerPresence";
 import { useSwipeDismiss } from "./hooks/useSwipeDismiss";
+import { createAutomaticRefreshState, resolveProductionRefreshInterval, updateAutomaticRefreshState } from "./game/productionRefresh";
+import { synchronizeGalacticActivity, type GalacticActivityPublicStatus } from "./game/galacticActivity";
+import {
+  beginCanvasPointerMotion,
+  canvasPointerMotionFrameIsActive,
+  createCanvasPointerMotionSession,
+  moveCanvasPointerMotion,
+  setCanvasPointerEdgeVelocity,
+  stopCanvasPointerMotion as stopCanvasPointerMotionSession,
+} from "./hooks/canvasPointerMotion";
 
 type InspectorTab = "inspect" | "fabricate";
 
@@ -468,7 +482,9 @@ function minerPlacementHint(buildingId: BuildingId): string {
 export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { initialLoad: LoadedGame; onReturnToMenu: () => void; onOpenReleaseNotes: () => void }) {
   usePlayerPresence();
   const compactLayout = useCompactLayout();
+  const coarsePointer = useCoarsePointer();
   const [mobileUiPreference, setMobileUiPreference] = useMobileUiPreference();
+  const [productionRefreshPreference, setProductionRefreshPreference] = useProductionRefreshPreference();
   const [loaded] = useState(initialLoad);
   const [game, setGame] = useState(loaded.state);
   const resolvedTheme = useResolvedTheme(game.settings.theme);
@@ -540,6 +556,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [simulationWorkerActive, setSimulationWorkerActive] = useState(false);
   const [pageHidden, setPageHidden] = useState(document.visibilityState === "hidden");
   const [lowFrameRateMode, setLowFrameRateMode] = useState(false);
+  const [automaticRefreshState, setAutomaticRefreshState] = useState(() => createAutomaticRefreshState(coarsePointer));
+  const [galacticActivityStatus, setGalacticActivityStatus] = useState<GalacticActivityPublicStatus | null>(null);
   const [, setHistoryRevision] = useState(0);
   const [nodes, setNodes, onNodesChange] = useNodesState<FactoryFlowNode>([]);
   const [notice, setNotice] = useState<string | null>(null);
@@ -584,6 +602,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const suppressConnectionClickTimerRef = useRef(0);
   const viewportRef = useRef<CanvasViewport>({ ...initialViewport });
   const canvasSizeRef = useRef<{ width: number; height: number } | null>(null);
+  const canvasPointerMotionRef = useRef(createCanvasPointerMotionSession());
+  const canvasPointerMotionFrameRef = useRef<number | null>(null);
+  const canvasPointerCaptureRef = useRef<{ element: HTMLElement; pointerId: number } | null>(null);
   const continuousPlacementRef = useRef<{ entityId: string; buildingId: BuildingId; planetId: PlanetId } | null>(null);
   const ctrlHeldRef = useRef(false);
   const undoStackRef = useRef<GameState[]>([]);
@@ -594,17 +615,18 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const audioContextRef = useRef<AudioContext | null>(null);
   const simulationWorkerRef = useRef<Worker | null>(null);
   const simulationWorkerDisabledRef = useRef(false);
-  const simulationSubmissionRef = useRef<{ id: number; state: GameState; seconds: number } | null>(null);
+  const simulationSubmissionRef = useRef<{ id: number; state: GameState; seconds: number; submittedAt: number } | null>(null);
   const lastSimulationResultRef = useRef<GameState | null>(null);
   const simulationPendingSecondsRef = useRef(0);
   const simulationRequestIdRef = useRef(0);
+  const workerLatencyMsRef = useRef(0);
   const eventSequenceRef = useRef(0);
   const burstSequenceRef = useRef(0);
   const { screenToFlowPosition, setCenter, setViewport, fitView, getViewport, zoomIn, zoomOut } = useReactFlow();
   const flowStore = useStoreApi<FactoryFlowNode, FactoryFlowEdge>();
-  const coarsePointer = useCoarsePointer();
   const lowEndMobile = useLowEndMobile();
-  const nextMobileShell = compactLayout.isMobileShell && mobileUiPreference === "next";
+  const nextMobileShell = mobileUiPreference === "next";
+  const productionRefreshIntervalMs = resolveProductionRefreshInterval(productionRefreshPreference, automaticRefreshState);
   const activeMobileCanvasMode: MobileCanvasMode = placement
     ? "place"
     : connectionDraft || clickConnectionPreview
@@ -668,7 +690,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
                       : null;
   const mobilePerformanceMode = coarsePointer;
   const constrainedMobile = coarsePointer && lowEndMobile;
-  const mobileSimulationConstrained = constrainedMobile || lowFrameRateMode;
   const canvasWorkspacePaused = pageHidden || technologyOpen || statisticsOpen || recipesOpen || starMapOpen ||
     blueprintsOpen || dysonPlannerOpen || operationsOpen || campaignOpen || galaxyOpen || constructionCenterOpen ||
     (nextMobileShell && mobileNavigation.route.kind === "hub");
@@ -782,23 +803,79 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [coarsePointer]);
 
   useEffect(() => {
+    if (productionRefreshPreference !== "auto") return;
+    setAutomaticRefreshState(createAutomaticRefreshState(coarsePointer));
+  }, [coarsePointer, productionRefreshPreference]);
+
+  useEffect(() => {
+    if (productionRefreshPreference !== "auto") return;
+    let frame = 0;
+    let frames = 0;
+    let sampledAt = performance.now();
+    const sample = (now: number) => {
+      if (document.visibilityState === "hidden") {
+        frames = 0;
+        sampledAt = now;
+        frame = window.requestAnimationFrame(sample);
+        return;
+      }
+      frames += 1;
+      const elapsed = now - sampledAt;
+      if (elapsed >= 3_000) {
+        const fps = frames * 1_000 / elapsed;
+        setAutomaticRefreshState((current) => updateAutomaticRefreshState(current, {
+          fps,
+          workerLatencyMs: workerLatencyMsRef.current,
+          pendingTaskMs: simulationPendingSecondsRef.current * 1_000,
+        }));
+        frames = 0;
+        sampledAt = now;
+      }
+      frame = window.requestAnimationFrame(sample);
+    };
+    frame = window.requestAnimationFrame(sample);
+    return () => window.cancelAnimationFrame(frame);
+  }, [productionRefreshPreference]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      const response = await fetchCloudPublicStatus().catch(() => null);
+      if (cancelled || !response?.activity) return;
+      setGalacticActivityStatus(response.activity);
+      if (!response.activity.enabled) return;
+      setGame((current) => {
+        const existing = current.endgame.constructionActivity.participantId;
+        const participantId = existing ?? (typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16).padStart(8, "0")).join(""));
+        return synchronizeGalacticActivity(current, response.activity!, participantId);
+      });
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
     gameRef.current = game;
     latestCanvasGameRef.current = game;
     if (!canvasWorkspacePaused && game !== lastSimulationResultRef.current) setCanvasGame(game);
-  }, [canvasWorkspacePaused, coarsePointer, game]);
-  const highSimulationComplexity = game.entities.length + game.belts.length >= 180;
+  }, [canvasWorkspacePaused, game]);
   useEffect(() => {
     if (canvasWorkspacePaused) return;
-    const interval = highSimulationComplexity
-      ? 3_000
-      : coarsePointer
-      ? mobileSimulationConstrained ? 1_500 : 1_000
-      : 1_000;
     const timer = window.setInterval(() => {
       setCanvasGame((current) => current === latestCanvasGameRef.current ? current : latestCanvasGameRef.current);
-    }, interval);
+    }, productionRefreshIntervalMs);
     return () => window.clearInterval(timer);
-  }, [canvasWorkspacePaused, coarsePointer, highSimulationComplexity, mobileSimulationConstrained]);
+  }, [canvasWorkspacePaused, productionRefreshIntervalMs]);
+  useEffect(() => {
+    if (canvasWorkspacePaused || (selectedEntityIds.length === 0 && !selectedBeltId && selectedBeltIds.length === 0)) return;
+    setCanvasGame(game);
+  }, [canvasWorkspacePaused, game, selectedBeltId, selectedBeltIds.length, selectedEntityIds.length]);
   useEffect(() => {
     if (mobilePanel) setMobilePanelStage("half");
   }, [mobilePanel]);
@@ -1029,6 +1106,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     worker.onmessage = (event: MessageEvent<SimulationWorkerResponse>) => {
       const submission = simulationSubmissionRef.current;
       if (!submission || event.data.id !== submission.id) return;
+      const latency = Math.max(0, performance.now() - submission.submittedAt);
+      workerLatencyMsRef.current = workerLatencyMsRef.current > 0 ? workerLatencyMsRef.current * 0.75 + latency * 0.25 : latency;
       simulationSubmissionRef.current = null;
       setGame((current) => {
         if (current !== submission.state) {
@@ -1075,7 +1154,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           seconds: simulationSeconds,
         };
         simulationRequestIdRef.current = request.id;
-        simulationSubmissionRef.current = request;
+        simulationSubmissionRef.current = { ...request, submittedAt: performance.now() };
         try {
           worker.postMessage(request);
         } catch {
@@ -1099,9 +1178,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         lastSimulationResultRef.current = next;
         return next;
       });
-    }, highSimulationComplexity ? 3_000 : game.settings.performanceMode || mobileSimulationConstrained ? 1_500 : 1_000);
+    }, 1_000);
     return () => window.clearInterval(timer);
-  }, [coarsePointer, game.settings.performanceMode, game.settings.simulationSpeed, highSimulationComplexity, mobileSimulationConstrained]);
+  }, [game.settings.simulationSpeed]);
 
   useEffect(() => {
     const timer = window.setInterval(() => persistPrimarySave(), game.settings.autosaveIntervalSeconds * 1000);
@@ -2386,35 +2465,118 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     return () => window.clearTimeout(timer);
   }, [connectionDraft, connectionHint]);
 
-  useEffect(() => {
-    if (!placement && !blueprintPlacementId) return;
-    let frame = 0;
+  const stopCanvasPointerMotion = useCallback(() => {
+    canvasPointerMotionRef.current = stopCanvasPointerMotionSession(canvasPointerMotionRef.current);
+    if (canvasPointerMotionFrameRef.current != null) {
+      window.cancelAnimationFrame(canvasPointerMotionFrameRef.current);
+      canvasPointerMotionFrameRef.current = null;
+    }
+    const capture = canvasPointerCaptureRef.current;
+    canvasPointerCaptureRef.current = null;
+    if (!capture) return;
+    try {
+      if (capture.element.hasPointerCapture(capture.pointerId)) capture.element.releasePointerCapture(capture.pointerId);
+    } catch {
+      // Browsers can release pointer capture before cancellation reaches React.
+    }
+  }, []);
+
+  const scheduleCanvasEdgePan = useCallback((generation: number) => {
+    if (canvasPointerMotionFrameRef.current != null) return;
     const edgePan = () => {
-      const canvas = factoryCanvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const point = pointerRef.current;
-      const margin = Math.min(72, rect.width * 0.16, rect.height * 0.16);
-      const inside = point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom;
-      const hovered = document.elementFromPoint(point.x, point.y);
-      const overCanvasUi = hovered instanceof Element && Boolean(hovered.closest(".canvas-selection-tools, .selection-toolbar, .planet-navigator, .react-flow__controls, .react-flow__minimap, .canvas-minimap-toggle, .task-path-indicator"));
-      let dx = 0;
-      let dy = 0;
-      if (inside && !overCanvasUi) {
-        if (point.x < rect.left + margin) dx = 4;
-        else if (point.x > rect.right - margin) dx = -4;
-        if (point.y < rect.top + margin) dy = 4;
-        else if (point.y > rect.bottom - margin) dy = -4;
-      }
-      if (dx || dy) {
-        const viewport = getViewport();
-        void setViewport({ ...viewport, x: viewport.x + dx, y: viewport.y + dy });
-      }
-      frame = window.requestAnimationFrame(edgePan);
+      canvasPointerMotionFrameRef.current = null;
+      const motion = canvasPointerMotionRef.current;
+      if (!canvasPointerMotionFrameIsActive(motion, generation)) return;
+      const viewport = getViewport();
+      const nextViewport = {
+        ...viewport,
+        x: viewport.x + motion.edgeVelocityX,
+        y: viewport.y + motion.edgeVelocityY,
+      };
+      viewportRef.current = nextViewport;
+      void setViewport(nextViewport, { duration: 0 });
+      canvasPointerMotionFrameRef.current = window.requestAnimationFrame(edgePan);
     };
-    frame = window.requestAnimationFrame(edgePan);
-    return () => window.cancelAnimationFrame(frame);
-  }, [blueprintPlacementId, getViewport, placement, setViewport]);
+    canvasPointerMotionFrameRef.current = window.requestAnimationFrame(edgePan);
+  }, [getViewport, setViewport]);
+
+  const beginPlacementPointerMotion = useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if ((!placement && !blueprintPlacementId) || event.button !== 0 || !event.isPrimary) return;
+    canvasPointerMotionRef.current = beginCanvasPointerMotion(
+      canvasPointerMotionRef.current,
+      event.pointerId,
+      event.clientX,
+      event.clientY,
+    );
+  }, [blueprintPlacementId, placement]);
+
+  const movePlacementPointerMotion = useCallback((event: React.PointerEvent<HTMLElement>) => {
+    const previousMotion = canvasPointerMotionRef.current;
+    let motion = moveCanvasPointerMotion(
+      previousMotion,
+      event.pointerId,
+      event.clientX,
+      event.clientY,
+      event.pointerType === "touch" ? 12 : 8,
+    );
+    if (motion === previousMotion || !motion.pointerDown) return;
+    if (motion.dragging && !previousMotion.dragging && !canvasPointerCaptureRef.current) {
+      canvasPointerCaptureRef.current = { element: event.currentTarget, pointerId: event.pointerId };
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* Safari may reject capture during gesture transfer. */ }
+    }
+    const canvas = factoryCanvasRef.current;
+    if (!canvas) {
+      canvasPointerMotionRef.current = setCanvasPointerEdgeVelocity(motion, 0, 0);
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const margin = Math.min(72, rect.width * 0.16, rect.height * 0.16);
+    const inside = event.clientX >= rect.left && event.clientX <= rect.right &&
+      event.clientY >= rect.top && event.clientY <= rect.bottom;
+    const hovered = document.elementFromPoint(event.clientX, event.clientY);
+    const overCanvasUi = hovered instanceof Element && Boolean(hovered.closest(
+      ".canvas-selection-tools, .selection-toolbar, .planet-navigator, .react-flow__controls, .react-flow__minimap, .canvas-minimap-toggle, .task-path-indicator",
+    ));
+    let x = 0;
+    let y = 0;
+    if (inside && !overCanvasUi) {
+      if (event.clientX < rect.left + margin) x = 4;
+      else if (event.clientX > rect.right - margin) x = -4;
+      if (event.clientY < rect.top + margin) y = 4;
+      else if (event.clientY > rect.bottom - margin) y = -4;
+    }
+    motion = setCanvasPointerEdgeVelocity(motion, x, y);
+    canvasPointerMotionRef.current = motion;
+    if (canvasPointerMotionFrameIsActive(motion, motion.generation)) scheduleCanvasEdgePan(motion.generation);
+  }, [scheduleCanvasEdgePan]);
+
+  useEffect(() => {
+    stopCanvasPointerMotion();
+  }, [blueprintPlacementId, placement, stopCanvasPointerMotion]);
+
+  useEffect(() => {
+    const stopWhenHidden = () => {
+      if (document.visibilityState === "hidden") stopCanvasPointerMotion();
+    };
+    const stop = () => stopCanvasPointerMotion();
+    window.addEventListener("blur", stop);
+    window.addEventListener("orientationchange", stop);
+    window.addEventListener("touchend", stop);
+    document.addEventListener("visibilitychange", stopWhenHidden);
+    document.addEventListener("fullscreenchange", stop);
+    return () => {
+      window.removeEventListener("blur", stop);
+      window.removeEventListener("orientationchange", stop);
+      window.removeEventListener("touchend", stop);
+      document.removeEventListener("visibilitychange", stopWhenHidden);
+      document.removeEventListener("fullscreenchange", stop);
+      stopCanvasPointerMotion();
+    };
+  }, [stopCanvasPointerMotion]);
+
+  useEffect(() => {
+    if (canvasWorkspacePaused) stopCanvasPointerMotion();
+  }, [canvasWorkspacePaused, game.activePlanetId, stopCanvasPointerMotion]);
 
   const beltNodeIndex = useMemo(() => {
     const connectedInputsByTarget = new Map<string, ItemId[]>();
@@ -2551,7 +2713,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame.activePlanetId, canvasGame.entities, canvasGame.galaxy, canvasGame.settings.logisticsBufferLimit, canvasGame.settings.productionBufferLimit, canvasGame.settings.resourceMode, commonNodeData, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, placement, selectedEntityIds, setNodes, taskHighlight.entityIds]);
+  }, [beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame.activePlanetId, canvasGame.entities, canvasGame.galaxy, canvasGame.settings.logisticsBufferLimit, canvasGame.settings.productionBufferLimit, canvasGame.settings.proliferatorBufferLimit, canvasGame.settings.resourceMode, commonNodeData, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, placement, selectedEntityIds, setNodes, taskHighlight.entityIds]);
 
   const edges = useMemo<FactoryFlowEdge[]>(() => {
     const rects = nodes.map((node) => ({
@@ -3161,6 +3323,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [setNodes]);
 
   const cancelPendingTouchAction = useCallback(() => {
+    stopCanvasPointerMotion();
     blockCanvasTouchRef.current = true;
     nodeDragActiveRef.current = false;
     onMiningStop();
@@ -3188,7 +3351,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setMobileActionEntityId(null);
     setAlignmentGuides({ x: null, y: null });
     restoreCanvasEntityPositions();
-  }, [flowStore, onMiningStop, restoreCanvasEntityPositions, updateConnectionDraft]);
+  }, [flowStore, onMiningStop, restoreCanvasEntityPositions, stopCanvasPointerMotion, updateConnectionDraft]);
 
   const beginCanvasMultiTouch = useCallback((event: React.PointerEvent<HTMLElement>): boolean => {
     if (!coarsePointer || event.pointerType !== "touch") return false;
@@ -3461,7 +3624,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const plan = getConstructionQuickCraftPlan(before, buildingId, batches);
     const after = craftConstructionWithUpstream(before, buildingId, batches);
     if (after === before) {
-      setNotice("制造失败：材料或科技不足");
+      setNotice(plan.blocker
+        ? `制造暂停：${ITEMS[plan.blocker.itemId].name}预计 ${plan.blocker.expected}，超过安全上限 ${plan.blocker.limit}`
+        : "制造失败：材料或科技不足");
       playTone("alert");
       return;
     }
@@ -3607,6 +3772,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       data-performance-auto={automaticPerformanceMode ? "true" : "false"}
       data-mobile-performance={mobilePerformanceMode ? "true" : "false"}
       data-simulation-worker={simulationWorkerActive ? "active" : "fallback"}
+      data-production-refresh={productionRefreshPreference}
+      data-production-refresh-ms={productionRefreshIntervalMs}
       data-difficulty={game.settings.difficulty}
       data-zoom-lod={largeFactoryMode || viewportZoom < 0.55 ? "compact" : viewportZoom < 0.86 ? "medium" : "full"}
       data-large-factory={largeFactoryMode ? "true" : "false"}
@@ -3775,6 +3942,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onMissingCraft: handleMissingConstructionCraft,
           onPickTray: (itemId) => setGame((current) => pickFromTray(current, itemId)),
           onDropCargo: handleStowCargo,
+          onDiscardTrayItems: (requests) => commitGame((current) => discardPlanetTrayItems(current, current.activePlanetId, requests)),
           onFocusSelection: () => {
             if (selectedEntityIds.length > 0) focusEntityIds(selectedEntityIds);
             else if (selectedBeltId) focusBeltNetwork(selectedBeltId);
@@ -3889,6 +4057,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onPickTray={(itemId) => setGame((current) => pickFromTray(current, itemId))}
           onDropCargo={handleStowCargo}
           onSetTrayItemLimit={(value) => setGame((current) => setPlanetTrayItemLimit(current, current.activePlanetId, value))}
+          onDiscardTrayItems={(requests) => commitGame((current) => discardPlanetTrayItems(current, current.activePlanetId, requests))}
           onDropDraggedItem={handleDraggedItemToTray}
         />
         <section
@@ -3898,24 +4067,29 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onPointerDownCapture={(event) => {
               longPressBindings.onPointerDownCapture?.(event);
               if (beginCanvasMultiTouch(event)) return;
+              beginPlacementPointerMotion(event);
               onRegionPointerDown(event);
             }}
             onPointerMoveCapture={(event) => {
               if (moveCanvasMultiTouch(event)) return;
+              movePlacementPointerMotion(event);
               longPressBindings.onPointerMoveCapture?.(event);
               onRegionPointerMove(event);
             }}
             onPointerUpCapture={(event) => {
               longPressBindings.onPointerUpCapture?.(event);
+              stopCanvasPointerMotion();
               if (endCanvasMultiTouch(event)) return;
               finishRegionPointer(event);
             }}
             onPointerCancelCapture={(event) => {
               if (syntheticTouchCancelRef.current) return;
               longPressBindings.onPointerCancelCapture?.(event);
+              stopCanvasPointerMotion();
               if (endCanvasMultiTouch(event)) return;
               finishRegionPointer(event, true);
             }}
+            onLostPointerCaptureCapture={() => stopCanvasPointerMotion()}
           onClickCapture={(event) => {
             if (!placement && !blueprintPlacementId && clickConnectionPreviewRef.current &&
               completeClickConnectionAtPoint(event.clientX, event.clientY)) {
@@ -4225,6 +4399,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onStationSlotRoutePolicyChange={(entityId, slotIndex, routePolicy) => commitGame((current) => setStationSlotRoutePolicy(current, entityId, slotIndex, routePolicy))}
           onStationSlotWarperBudgetChange={(entityId, slotIndex, warperBudget) => commitGame((current) => setStationSlotWarperBudget(current, entityId, slotIndex, warperBudget))}
           onLogisticsItemChange={(entityId, itemId) => commitGame((current) => setLogisticsItem(current, entityId, itemId))}
+          onGalacticExporterPausedChange={(entityId, paused) => commitGame((current) => setGalacticMaterialExporterPaused(current, entityId, paused))}
+          galacticActivityStatus={galacticActivityStatus}
           onSplitterModeChange={(entityId, mode) => commitGame((current) => setSplitterMode(current, entityId, mode))}
           onBeltPriorityChange={(beltId, priority) => commitGame((current) => setBeltPriority(current, beltId, priority))}
           onBeltStackSizeChange={(beltId, stackSize: CargoStackSize) => commitGame((current) => setBeltStackSize(current, beltId, stackSize))}
@@ -4461,6 +4637,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           open
           game={game}
           mobile={nextMobileShell}
+          galacticActivityStatus={galacticActivityStatus}
           focusTab={statisticsFocusTab}
           onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setStatisticsOpen(false)}
           onCreatePlan={(itemId, targetPerMinute, planetId) => commitGame((current) => createProductionPlan(current, itemId, targetPerMinute, planetId))}
@@ -4561,6 +4738,17 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onSelectLayer={(systemId, layerId) => setGame((current) => setActiveDysonLayer(current, systemId, layerId))}
             onOrbitChange={(systemId, layerId, orbit) => setGame((current) => setDysonLayerOrbit(current, systemId, layerId, orbit))}
             onRemoveLayer={(systemId, layerId) => setGame((current) => removeDysonLayer(current, systemId, layerId))}
+            onPasteLayer={(systemId, template) => {
+              const result = pasteDysonLayerTemplate(gameRef.current, systemId, template);
+              if (result.error) {
+                setNotice(result.error);
+                playTone("alert");
+                return;
+              }
+              commitGame(() => result.state);
+              setNotice("壳层设计已作为新副本添加，施工进度从 0 开始");
+              playTone("confirm");
+            }}
             onAddNode={(systemId, layerId, angle) => setGame((current) => addDysonNode(current, systemId, layerId, angle))}
             onRemoveNode={(systemId, layerId, nodeId) => setGame((current) => removeDysonNode(current, systemId, layerId, nodeId))}
             onConnectNodes={(systemId, layerId, sourceNodeId, targetNodeId) => setGame((current) => connectDysonNodes(current, systemId, layerId, sourceNodeId, targetNodeId))}
@@ -4589,6 +4777,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             contentPackRegistry={contentPackRegistry}
             performanceReport={performanceReport}
             desktopRelease={desktopRelease}
+            productionRefreshPreference={productionRefreshPreference}
+            productionRefreshIntervalMs={productionRefreshIntervalMs}
+            onProductionRefreshPreferenceChange={setProductionRefreshPreference}
             onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setOperationsOpen(false)}
             onTabChange={setOperationsTab}
             onAlertSelect={selectAlert}

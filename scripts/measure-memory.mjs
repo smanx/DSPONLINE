@@ -103,7 +103,7 @@ try {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.addInitScript(({ save, withoutWorker }) => {
     window.localStorage.setItem("dsp-idle-network.save.v1", save);
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-23-v0.8.0");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v0.9.0");
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (withoutWorker) Object.defineProperty(window, "Worker", { configurable: true, value: undefined });
   }, { save: isolatedSave, withoutWorker: disableWorker });

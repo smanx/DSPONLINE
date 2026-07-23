@@ -13,6 +13,7 @@ import {
   recordAnalyticsBatch,
 } from "./analytics.mjs";
 import { createTencentSesMailer, createWebhookMailer } from "./mail.mjs";
+import { getActivityPublicStatus, loadActivityConfig, normalizeActivityConfig } from "./activity.mjs";
 
 const scrypt = promisify(scryptCallback);
 const BODY_LIMIT_BYTES = 8 * 1024 * 1024;
@@ -603,6 +604,26 @@ function validateSavePayload(payload) {
     if (state.version >= 32 && (!validBufferLimit(productionLimit) || !validBufferLimit(logisticsLimit))) return false;
     if (productionLimit !== undefined && !validBufferLimit(productionLimit)) return false;
     if (logisticsLimit !== undefined && !validBufferLimit(logisticsLimit)) return false;
+    if (state.version >= 33) {
+      const proliferatorLimit = state.settings?.proliferatorBufferLimit;
+      if (!Number.isInteger(proliferatorLimit) || proliferatorLimit < 1 || proliferatorLimit > 100_000) return false;
+      const infiniteResearch = state.endgame?.infiniteResearch;
+      if (!infiniteResearch || typeof infiniteResearch !== "object") return false;
+      const maximumLevels = {
+        matrix_compression: 1_000,
+        vein_utilization: 1_000,
+        galactic_logistics: 1_000,
+        stellar_harnessing: 1_000,
+        continuum_simulation: 23,
+      };
+      for (const [researchId, maximumLevel] of Object.entries(maximumLevels)) {
+        const progress = infiniteResearch[researchId];
+        if (!progress || typeof progress !== "object" || !Number.isInteger(progress.level) || progress.level < 0 || progress.level > maximumLevel) return false;
+        if (progress.historicalLevel !== undefined &&
+          (!Number.isInteger(progress.historicalLevel) || progress.historicalLevel < progress.level)) return false;
+        if (typeof progress.progress !== "string" || !/^(0|[1-9][0-9]{0,63})$/.test(progress.progress)) return false;
+      }
+    }
     return true;
   } catch {
     return false;
@@ -808,6 +829,8 @@ export async function createCloudServer({
   restoreDrillStatusFile = process.env.DSP_RESTORE_DRILL_STATUS_FILE || "",
   nodeHealthStatusFile = process.env.DSP_NODE_HEALTH_STATUS_FILE || "",
   registrationLimit = Number(process.env.DSP_REGISTRATION_LIMIT_PER_HOUR || 3),
+  activityConfigFile = process.env.DSP_ACTIVITY_CONFIG_FILE || "",
+  activityConfig = null,
   logger = console,
 } = {}) {
   const store = databaseFile ? new SqliteStore(databaseFile) : new JsonStore(dataFile || path.join(path.dirname(fileURLToPath(import.meta.url)), "data", "cloud.json"));
@@ -824,6 +847,7 @@ export async function createCloudServer({
     }
   }
   const startedAt = Date.now();
+  const galacticActivityConfig = activityConfig ? normalizeActivityConfig(activityConfig) : await loadActivityConfig(activityConfigFile);
   const rateLimit = createRateLimiter();
   const registrationRateLimit = createRateLimiter();
   const runtime = {
@@ -929,7 +953,7 @@ export async function createCloudServer({
 
     try {
       if (request.method === "GET" && url.pathname === "/api/health") {
-        return send(response, 200, { ok: true, service: "dsp-idle-cloud", schemaVersion: DEFAULT_DATA.schemaVersion, storage: databaseFile ? "sqlite" : "json", mailProvider: accountMailProvider, uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), time: Date.now() });
+        return send(response, 200, { ok: true, service: "dsp-idle-cloud", schemaVersion: DEFAULT_DATA.schemaVersion, storage: databaseFile ? "sqlite" : "json", mailProvider: accountMailProvider, activity: { enabled: galacticActivityConfig.enabled, valid: galacticActivityConfig.valid, reason: galacticActivityConfig.reason }, uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), time: Date.now() });
       }
       if (request.method === "GET" && url.pathname === "/api/public-status") {
         return send(response, 200, {
@@ -938,6 +962,7 @@ export async function createCloudServer({
           today: metricDay(Date.now(), metricsTimeZone),
           uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
           players: playerMetrics(store.data, onlineWindowMs, Date.now(), metricsTimeZone),
+          activity: getActivityPublicStatus(galacticActivityConfig, Date.now()),
         });
       }
       if (request.method === "GET" && (url.pathname === "/api/metrics" || url.pathname === "/api/admin/metrics")) {

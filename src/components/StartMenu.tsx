@@ -34,6 +34,7 @@ import {
   VolumeX,
   Zap,
 } from "lucide-react";
+import { QuantityValue } from "./QuantityValue";
 import {
   CloudApiError,
   compareCloudSave,
@@ -88,6 +89,7 @@ const DEFAULT_MENU_SETTINGS: GameSettings = {
   defaultBeltRouteMode: "auto",
   productionBufferLimit: 1_000_000,
   logisticsBufferLimit: 1_000_000,
+  proliferatorBufferLimit: 600,
   autosaveIntervalSeconds: 30,
   resourceMode: "finite",
   difficulty: "standard",
@@ -756,7 +758,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             <div className="start-menu-overview-metrics">
               <span><i><Clock3 size={16} /></i><small>累计运行</small><strong>{summary ? formatRuntime(summary.elapsedSeconds) : "0 分钟"}</strong></span>
               <span><i><Gauge size={16} /></i><small>已完成科技</small><strong>{summary?.completedTechCount ?? 0}</strong></span>
-              <span><i><Factory size={16} /></i><small>结构点数</small><strong>{summary?.structurePoints.toLocaleString("zh-CN") ?? 0}</strong></span>
+              <span><i><Factory size={16} /></i><small>结构点数</small><strong><QuantityValue value={summary?.structurePoints ?? 0} /></strong></span>
               <span><i><Database size={16} /></i><small>本地槽位</small><strong>{slots.length}/3</strong></span>
             </div>
             <div className="start-menu-flow-status">

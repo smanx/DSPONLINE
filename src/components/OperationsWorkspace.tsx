@@ -48,7 +48,8 @@ import type { AutomaticPerformanceReport } from "../game/benchmark";
 import type { DesktopReleaseInfo } from "../desktop";
 import type { AutosaveIntervalSeconds, CargoStackSize, DefaultBeltRouteMode, DifficultyMode, FontScale, GameSettings, GameState, SimulationSpeed } from "../game/types";
 import { canSetBeltStackSize } from "../game/engine";
-import { validateBuildingBufferLimitInput } from "../game/settings";
+import { validateBuildingBufferLimitInput, validateProliferatorBufferLimitInput, type BuildingBufferLimitValidation } from "../game/settings";
+import { PRODUCTION_REFRESH_PROFILES, type ProductionRefreshPreference } from "../game/productionRefresh";
 import { clearClientErrors, collectClientDiagnostics, downloadDiagnostics, getClientErrors } from "../game/diagnostics";
 import { fetchCloudPublicStatus, resumeCloudSession, sendCloudFeedback, type CloudPublicStatus } from "../game/cloud";
 import { resetOnboarding } from "../game/onboarding";
@@ -70,6 +71,9 @@ interface OperationsWorkspaceProps {
   contentPackRegistry: ContentPackRegistry;
   performanceReport: AutomaticPerformanceReport | null;
   desktopRelease: DesktopReleaseInfo | null;
+  productionRefreshPreference: ProductionRefreshPreference;
+  productionRefreshIntervalMs: number;
+  onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void;
   onClose: () => void;
   onTabChange: (tab: OperationsTab) => void;
   onAlertSelect: (alert: FactoryAlert) => void;
@@ -194,18 +198,27 @@ const BUFFER_LIMIT_LABELS: Record<(typeof BUFFER_LIMIT_PRESETS)[number], string>
   1_000_000: "100万",
 };
 
-function BufferLimitSetting({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
-  const preset = BUFFER_LIMIT_PRESETS.includes(value as (typeof BUFFER_LIMIT_PRESETS)[number]);
+function BufferLimitSetting({ label, value, onChange, presets = BUFFER_LIMIT_PRESETS, labels = BUFFER_LIMIT_LABELS, rangeLabel = "1,000～100,000,000", validate = validateBuildingBufferLimitInput, help = "按每一种输入、输出或物流槽独立限制；调低不会删除已有库存。" }: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  presets?: readonly number[];
+  labels?: Record<number, string>;
+  rangeLabel?: string;
+  validate?: (raw: string) => BuildingBufferLimitValidation;
+  help?: string;
+}) {
+  const preset = presets.includes(value);
   const [customEditing, setCustomEditing] = useState(!preset);
   const [draft, setDraft] = useState(String(value));
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setDraft(String(value));
-    setCustomEditing(!BUFFER_LIMIT_PRESETS.includes(value as (typeof BUFFER_LIMIT_PRESETS)[number]));
+    setCustomEditing(!presets.includes(value));
     setError(null);
   }, [value]);
   const submit = () => {
-    const result = validateBuildingBufferLimitInput(draft);
+    const result = validate(draft);
     if (!result.ok) {
       setError(result.reason);
       return;
@@ -216,18 +229,18 @@ function BufferLimitSetting({ label, value, onChange }: { label: string; value: 
   return <section className="settings-group settings-buffer-limit">
     <header><HardDrive size={14} /><span>{label}</span><small>{value.toLocaleString("zh-CN")}/种</small></header>
     <div className="settings-segmented settings-buffer-presets" aria-label={`${label}预设`}>
-      {BUFFER_LIMIT_PRESETS.map((option) => <button className={!customEditing && value === option ? "active" : ""} type="button" key={option} aria-pressed={!customEditing && value === option} onClick={() => { setCustomEditing(false); setError(null); onChange(option); }}>{BUFFER_LIMIT_LABELS[option]}</button>)}
+      {presets.map((option) => <button className={!customEditing && value === option ? "active" : ""} type="button" key={option} aria-pressed={!customEditing && value === option} onClick={() => { setCustomEditing(false); setError(null); onChange(option); }}>{labels[option] ?? option.toLocaleString("zh-CN")}</button>)}
       <button className={customEditing || !preset ? "active" : ""} type="button" aria-pressed={customEditing || !preset} onClick={() => { setCustomEditing(true); setDraft(String(value)); setError(null); }}>自定义</button>
     </div>
     {customEditing || !preset ? <div className="settings-buffer-custom">
-      <label><span>1,000～100,000,000</span><input type="text" inputMode="numeric" pattern="[0-9]*" value={draft} onChange={(event) => { setDraft(event.target.value); setError(null); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); submit(); } }} aria-invalid={Boolean(error)} aria-label={`${label}自定义值`} /></label>
+      <label><span>{rangeLabel}</span><input type="text" inputMode="numeric" pattern="[0-9]*" value={draft} onChange={(event) => { setDraft(event.target.value); setError(null); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); submit(); } }} aria-invalid={Boolean(error)} aria-label={`${label}自定义值`} /></label>
       <button type="button" onClick={submit}>应用</button>
     </div> : null}
-    {error ? <p className="settings-buffer-error" role="alert">{error}</p> : <p className="settings-help">按每一种输入、输出或物流槽独立限制；调低不会删除已有库存。</p>}
+    {error ? <p className="settings-buffer-error" role="alert">{error}</p> : <p className="settings-help">{help}</p>}
   </section>;
 }
 
-function SettingsPanel({ game, report, desktopRelease, onChange, onRunBenchmark, onCheckDesktopUpdate, onInstallDesktopUpdate, onOpenReleaseNotes }: { game: GameState; report: AutomaticPerformanceReport | null; desktopRelease: DesktopReleaseInfo | null; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onCheckDesktopUpdate: () => void; onInstallDesktopUpdate: () => void; onOpenReleaseNotes: () => void }) {
+function SettingsPanel({ game, report, desktopRelease, productionRefreshPreference, productionRefreshIntervalMs, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onCheckDesktopUpdate, onInstallDesktopUpdate, onOpenReleaseNotes }: { game: GameState; report: AutomaticPerformanceReport | null; desktopRelease: DesktopReleaseInfo | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onCheckDesktopUpdate: () => void; onInstallDesktopUpdate: () => void; onOpenReleaseNotes: () => void }) {
   const { settings } = game;
   return (
     <div className="operations-panel operations-settings">
@@ -272,8 +285,27 @@ function SettingsPanel({ game, report, desktopRelease, onChange, onRunBenchmark,
       </section>
       <BufferLimitSetting label="生产建筑缓存上限" value={settings.productionBufferLimit} onChange={(productionBufferLimit) => onChange({ productionBufferLimit })} />
       <BufferLimitSetting label="仓储与物流建筑缓存上限" value={settings.logisticsBufferLimit} onChange={(logisticsBufferLimit) => onChange({ logisticsBufferLimit })} />
+      <BufferLimitSetting
+        label="增产剂缓存上限"
+        value={settings.proliferatorBufferLimit}
+        onChange={(proliferatorBufferLimit) => onChange({ proliferatorBufferLimit })}
+        presets={[120, 600, 3_000]}
+        labels={{ 120: "120", 600: "600", 3_000: "3,000" }}
+        rangeLabel="1～100,000"
+        validate={validateProliferatorBufferLimitInput}
+        help="只限制已安装喷涂机当前等级的增产剂物品；内部喷涂点和既有超额库存不会被删除。"
+      />
+      <section className="settings-group settings-production-refresh">
+        <header><Gauge size={14} /><span>生产画面刷新频率</span><small>{productionRefreshIntervalMs < 1_000 ? `${productionRefreshIntervalMs} ms` : `${productionRefreshIntervalMs / 1_000} 秒`}</small></header>
+        <div className="production-refresh-options" role="radiogroup" aria-label="生产画面刷新频率">
+          {PRODUCTION_REFRESH_PROFILES.map((profile) => <button className={productionRefreshPreference === profile.id ? "active" : ""} type="button" role="radio" aria-checked={productionRefreshPreference === profile.id} key={profile.id} onClick={() => onProductionRefreshPreferenceChange(profile.id)}>
+            <span>{profile.label}{profile.id === "auto" ? <em>推荐</em> : null}</span><small>{profile.summary}</small>
+          </button>)}
+        </div>
+        <p className="settings-help">只调整生产画面与状态发布节奏，不改变模拟时间、产量、物流、科研或戴森工程。固定档位不会被自动调节覆盖。</p>
+      </section>
       <section className="settings-group settings-toggle-list">
-        <ToggleSetting checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "低频渲染" : "完整渲染"} icon={<Cpu size={16} />} onChange={(performanceMode) => onChange({ performanceMode })} />
+        <ToggleSetting checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "精简粒子、阴影与线路动画" : "完整视觉特效"} icon={<Cpu size={16} />} onChange={(performanceMode) => onChange({ performanceMode })} />
         <ToggleSetting checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态效果关闭" : "动态效果开启"} icon={<Gauge size={16} />} onChange={(reducedMotion) => onChange({ reducedMotion })} />
         <ToggleSetting checked={settings.soundEnabled} label="操作音效" value={settings.soundEnabled ? "声音开启" : "声音关闭"} icon={settings.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />} onChange={(soundEnabled) => onChange({ soundEnabled })} />
         <ToggleSetting checked={settings.allowDoubleClickZoom} label="允许双击缩放" value={settings.allowDoubleClickZoom ? "双击聚焦画布" : "连续点击不缩放"} icon={<MousePointer2 size={16} />} onChange={(allowDoubleClickZoom) => onChange({ allowDoubleClickZoom })} />
@@ -632,7 +664,7 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
       <div className="operations-body">
         {props.tab === "alerts" ? <AlertsPanel alerts={props.alerts} onSelect={props.onAlertSelect} /> : null}
         {props.tab === "achievements" ? <AchievementsPanel game={props.game} /> : null}
-        {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} desktopRelease={props.desktopRelease} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onCheckDesktopUpdate={props.onCheckDesktopUpdate} onInstallDesktopUpdate={props.onInstallDesktopUpdate} onOpenReleaseNotes={props.onOpenReleaseNotes} /> : null}
+        {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} desktopRelease={props.desktopRelease} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onCheckDesktopUpdate={props.onCheckDesktopUpdate} onInstallDesktopUpdate={props.onInstallDesktopUpdate} onOpenReleaseNotes={props.onOpenReleaseNotes} /> : null}
         {props.tab === "saves" ? <SavesPanel {...props} /> : null}
         {props.tab === "packs" ? <ContentPacksPanel game={props.game} registry={props.contentPackRegistry} validation={props.modValidation} onValidate={props.onValidateMod} onExportTemplate={props.onExportModTemplate} onRegister={props.onRegisterContentPack} onSetEnabled={props.onSetContentPackEnabled} onRemove={props.onRemoveContentPack} /> : null}
         {props.tab === "support" ? <SupportPanel game={props.game} report={props.performanceReport} /> : null}

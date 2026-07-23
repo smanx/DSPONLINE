@@ -4,13 +4,18 @@ import { ITEMS, PLANET_LIST, getBuilding, getItem, getPlanet, getRecipe } from "
 import { calculateProductionPlan, getProductionRecipeOptions } from "../game/planning";
 import { calculateFactoryStatistics, type ItemStatistics } from "../game/statistics";
 import { getGalacticIndustrySnapshot, getPowerGridMetrics, getResourceReserveSnapshot, POWER_GRID_IDS, POWER_GRID_LABELS } from "../game/engine";
-import { GALACTIC_EXPORT_DEFINITIONS, INFINITE_RESEARCH_DEFINITIONS, getGalacticExportTarget, getInfiniteResearchCompletion, getInfiniteResearchCost, getInfiniteResearchLevel } from "../game/endgame";
+import { GALACTIC_EXPORT_DEFINITIONS, INFINITE_RESEARCH_DEFINITIONS, getGalacticExportTarget, getInfiniteResearchCompletion, getInfiniteResearchLevel } from "../game/endgame";
+import { getInfiniteResearchCostString, isInfiniteResearchComplete } from "../game/infiniteResearch";
+import type { GalacticActivityPublicStatus } from "../game/galacticActivity";
 import { getPlanetIndustrialProfile } from "../game/galaxy";
 import { listBeltNetworks, type BeltHealth } from "../game/network";
 import { formatKilowatts } from "../game/units";
 import type { BeltRouteMode, CanvasBookmark, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, RecipeId, StationSlotTemplate } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { ProductionManagement } from "./ProductionManagement";
+import { GalacticActivityPanel } from "./GalacticActivityPanel";
+import { QuantityValue } from "./QuantityValue";
+import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 
 export type StatisticsTab = "management" | "production" | "efficiency" | "networks" | "planning" | "power" | "issues" | "galaxy";
 type ItemFilter = "all" | "producing" | "deficit" | "blocked";
@@ -46,6 +51,7 @@ interface StatisticsWorkspaceProps {
   onRemoveCanvasBookmark: (bookmarkId: string) => void;
   focusTab?: StatisticsTab | null;
   mobile?: boolean;
+  galacticActivityStatus: GalacticActivityPublicStatus | null;
 }
 
 function ItemMark({ itemId }: { itemId: ItemId }) {
@@ -160,7 +166,7 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
   );
 }
 
-export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, onFocusEntity, onFocusBeltNetwork, onBulkRecipeChange, onBulkStationSlotApply, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark, focusTab, mobile = false }: StatisticsWorkspaceProps) {
+export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, onFocusEntity, onFocusBeltNetwork, onBulkRecipeChange, onBulkStationSlotApply, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark, focusTab, mobile = false, galacticActivityStatus }: StatisticsWorkspaceProps) {
   const [tab, setTab] = useState<StatisticsTab>("production");
   const [filter, setFilter] = useState<ItemFilter>("all");
   const [sort, setSort] = useState<ItemSort>("production");
@@ -231,7 +237,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
         <button type="button" role="tab" aria-selected={tab === "planning"} className={tab === "planning" ? "active" : ""} onClick={() => setTab("planning")}><Calculator size={15} />规划 <strong>{game.productionPlans.length}</strong></button>
         <button type="button" role="tab" aria-selected={tab === "power"} className={tab === "power" ? "active" : ""} onClick={() => setTab("power")}><Zap size={15} />电力</button>
         <button type="button" role="tab" aria-selected={tab === "issues"} className={tab === "issues" ? "active" : ""} onClick={() => setTab("issues")}><AlertTriangle size={15} />瓶颈 <strong>{statistics.issues.length}</strong></button>
-        <button type="button" role="tab" aria-selected={tab === "galaxy"} className={tab === "galaxy" ? "active" : ""} onClick={() => setTab("galaxy")}><Orbit size={15} />银河 <strong>{galactic.galacticScore.toLocaleString("zh-CN")}</strong></button>
+        <button type="button" role="tab" aria-selected={tab === "galaxy"} className={tab === "galaxy" ? "active" : ""} onClick={() => setTab("galaxy")}><Orbit size={15} />银河 <strong title={formatQuantityExact(galactic.galacticScore)}>{formatQuantityCompact(galactic.galacticScore)}</strong></button>
       </nav>
 
       {tab === "management" ? <ProductionManagement
@@ -270,7 +276,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
                   <span className="rate-positive">+{rate(item.productionPerMinute)}</span>
                   <span className="rate-negative">-{rate(item.consumptionPerMinute)}</span>
                   <span className={item.netPerMinute > 0.005 ? "rate-positive" : item.netPerMinute < -0.005 ? "rate-negative" : "rate-neutral"}>{item.netPerMinute > 0 ? "+" : ""}{rate(item.netPerMinute)}</span>
-                  <span>{item.inventory.toLocaleString("zh-CN")}</span>
+                  <span><QuantityValue value={item.inventory} /></span>
                   <span className={item.blockedProducerCount > 0 ? "node-count node-count--blocked" : "node-count"}>{item.producerCount} / {item.consumerCount}{item.blockedProducerCount > 0 ? ` · ${item.blockedProducerCount} 堵塞` : ""}</span>
                   {mobile && expandedItemId === item.itemId ? <small className="statistics-row-detail">生产 {rate(item.productionPerMinute)}/min · 消耗 {rate(item.consumptionPerMinute)}/min · {item.producerCount} 个生产节点 / {item.consumerCount} 个消费节点</small> : null}
                 </div>
@@ -341,7 +347,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
                 {targetHistory.length > 1 ? (() => {
                   const max = Math.max(selectedPlan.targetPerMinute, ...targetHistory.map((point) => Math.max(point.production, point.consumption)), 1);
                   const points = (key: "production" | "consumption") => targetHistory.map((point, index) => `${index / Math.max(1, targetHistory.length - 1) * 100},${40 - point[key] / max * 36}`).join(" ");
-                  return <div className="planning-chart"><svg viewBox="0 0 100 42" preserveAspectRatio="none" role="img" aria-label={`${getItem(selectedPlan.itemId).name}生产历史曲线`}><line x1="0" y1={40 - selectedPlan.targetPerMinute / max * 36} x2="100" y2={40 - selectedPlan.targetPerMinute / max * 36} className="planning-chart-target" /><polyline points={points("production")} className="planning-chart-production" /><polyline points={points("consumption")} className="planning-chart-consumption" /></svg><div><span>生产</span><span>消耗</span><span>目标 {selectedPlan.targetPerMinute.toFixed(1)}/min</span><strong>库存 {targetHistory.at(-1)?.inventory.toLocaleString("zh-CN")}</strong></div></div>;
+                  return <div className="planning-chart"><svg viewBox="0 0 100 42" preserveAspectRatio="none" role="img" aria-label={`${getItem(selectedPlan.itemId).name}生产历史曲线`}><line x1="0" y1={40 - selectedPlan.targetPerMinute / max * 36} x2="100" y2={40 - selectedPlan.targetPerMinute / max * 36} className="planning-chart-target" /><polyline points={points("production")} className="planning-chart-production" /><polyline points={points("consumption")} className="planning-chart-consumption" /></svg><div><span>生产</span><span>消耗</span><span>目标 {selectedPlan.targetPerMinute.toFixed(1)}/min</span><strong>库存 <QuantityValue value={targetHistory.at(-1)?.inventory ?? 0} /></strong></div></div>;
                 })() : <div className="planning-history-empty"><TrendingUp size={18} /><span>模拟运行 10 秒后开始记录历史曲线</span></div>}
               </section>
               <section className="planning-requirements">
@@ -376,10 +382,10 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
             <div><span>储能水平</span><strong>{game.metrics.storedEnergyMj.toFixed(1)} / {game.metrics.storageCapacityMj.toFixed(0)} MJ</strong></div>
             <div><span>储能充电</span><strong>{game.metrics.storageChargeKw.toFixed(0)} kW</strong></div>
             <div><span>储能放电</span><strong>{game.metrics.storageDischargeKw.toFixed(0)} kW</strong></div>
-            <div><span>在轨太阳帆</span><strong>{game.dysonSwarm.sailsInOrbit.toLocaleString("zh-CN")}</strong></div>
+            <div><span>在轨太阳帆</span><strong><QuantityValue value={game.dysonSwarm.sailsInOrbit} /></strong></div>
             <div><span>戴森云功率</span><strong>{formatKilowatts(game.dysonSwarm.generationKw)}</strong></div>
-            <div><span>永久结构点</span><strong>{game.dysonSphere.structurePoints.toLocaleString("zh-CN")}</strong></div>
-            <div><span>壳面太阳帆</span><strong>{game.dysonSphere.shellSails.toLocaleString("zh-CN")}</strong></div>
+            <div><span>永久结构点</span><strong><QuantityValue value={game.dysonSphere.structurePoints} /></strong></div>
+            <div><span>壳面太阳帆</span><strong><QuantityValue value={game.dysonSphere.shellSails} /></strong></div>
             <div><span>戴森球功率</span><strong>{formatKilowatts(game.dysonSphere.generationKw)}</strong></div>
           </div>
           <div className="grid-load"><i><b style={{ width: `${generationUtilization}%` }} /></i><span>容量利用率</span><strong>{Math.round(generationUtilization)}%</strong></div>
@@ -398,7 +404,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
             <header><span>资源储量统计</span><span>资源状态</span><span>剩余 / 初始</span><span>剩余比例</span></header>
             {game.entities.filter((entity) => entity.planetId === game.activePlanetId && entity.kind === "vein" && entity.resourceId).map((entity) => {
               const reserve = getResourceReserveSnapshot(game, entity)!;
-              return <div className="power-grid-row" key={entity.id}><strong>{getItem(entity.resourceId!).name}</strong><span className={reserve.exhausted ? "warning" : ""}>{reserve.infinite ? "无限" : reserve.exhausted ? "资源已枯竭" : "有限资源"}</span><span>{reserve.infinite ? "无限" : `${reserve.remaining?.toLocaleString("zh-CN")} / ${reserve.capacity?.toLocaleString("zh-CN")}`}</span><span>{reserve.infinite ? "无限" : `${reserve.remainingPercent}%`}</span></div>;
+              return <div className="power-grid-row" key={entity.id}><strong>{getItem(entity.resourceId!).name}</strong><span className={reserve.exhausted ? "warning" : ""}>{reserve.infinite ? "无限" : reserve.exhausted ? "资源已枯竭" : "有限资源"}</span><span>{reserve.infinite ? "无限" : <><QuantityValue value={reserve.remaining ?? 0} /> / <QuantityValue value={reserve.capacity ?? 0} /></>}</span><span>{reserve.infinite ? "无限" : `${reserve.remainingPercent}%`}</span></div>;
             })}
           </section>
           <section className="consumer-ledger">
@@ -440,46 +446,52 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
           ) : (
             <>
               <section className="galactic-summary-grid">
-                <div><span>银河评分</span><strong>{galactic.galacticScore.toLocaleString("zh-CN")}</strong><small>信用 {galactic.galacticCredits.toLocaleString("zh-CN")}</small></div>
-                <div><span>全网生产</span><strong>{galactic.totalProductionPerMinute.toFixed(1)}<small>/min</small></strong><small>库存 {galactic.networkInventory.toLocaleString("zh-CN")}</small></div>
-                <div><span>出口吞吐</span><strong>{galactic.exportedPerMinute.toFixed(1)}<small>/min</small></strong><small>累计 {galactic.totalExported.toLocaleString("zh-CN")}</small></div>
+                <div><span>银河评分</span><strong><QuantityValue value={galactic.galacticScore} /></strong><small>信用 <QuantityValue value={galactic.galacticCredits} /></small></div>
+                <div><span>全网生产</span><strong>{galactic.totalProductionPerMinute.toFixed(1)}<small>/min</small></strong><small>库存 <QuantityValue value={galactic.networkInventory} /></small></div>
+                <div><span>出口吞吐</span><strong>{galactic.exportedPerMinute.toFixed(1)}<small>/min</small></strong><small>累计 <QuantityValue value={galactic.totalExported} /></small></div>
                 <div><span>恒星功率</span><strong>{formatKilowatts(galactic.dysonGenerationKw)}</strong><small>{galactic.activePlanets} 个殖民地</small></div>
                 <div><span>运行设备</span><strong>{galactic.operatingEntities}</strong><small>瓶颈 {galactic.blockedEntities}</small></div>
-                <div><span>物流航次</span><strong>{galactic.logisticsTrips.toLocaleString("zh-CN")}</strong><small>无限等级 {galactic.infiniteResearchLevels}</small></div>
+                <div><span>物流航次</span><strong><QuantityValue value={galactic.logisticsTrips} /></strong><small>无限等级 {galactic.infiniteResearchLevels}</small></div>
               </section>
-              <section className="galactic-automation-bar">
-                <header><span><Gauge size={15} />自动调度</span><strong>{game.endgame.autoDispatch ? "运行中" : "已暂停"}</strong></header>
+              <GalacticActivityPanel game={game} status={galacticActivityStatus} />
+              {game.endgame.exportInputMode === "legacy-network" ? <section className="galactic-automation-bar">
+                <header><span><Gauge size={15} />旧档网络调度</span><strong>{game.endgame.autoDispatch ? "运行中" : "已暂停"}</strong></header>
                 <div className="galactic-automation-actions">
                   <button type="button" className={game.endgame.autoDispatch ? "active" : ""} onClick={() => onGalacticDispatchAutomation(!game.endgame.autoDispatch)}>{game.endgame.autoDispatch ? <Pause size={14} /> : <Play size={14} />}{game.endgame.autoDispatch ? "暂停自动调度" : "恢复自动调度"}</button>
                   <div role="group" aria-label="自动调度速率">{([0.25, 0.5, 1] as GalacticDispatchThrottle[]).map((throttle) => <button type="button" className={game.endgame.dispatchThrottle === throttle ? "active" : ""} key={throttle} onClick={() => onGalacticDispatchThrottle(throttle)}>{Math.round(throttle * 100)}%</button>)}</div>
                   <label><input type="checkbox" checked={game.endgame.autoResearch} onChange={(event) => onInfiniteResearchAutomation(event.target.checked)} />无限科技自动续研</label>
                 </div>
-              </section>
+              </section> : <section className="galactic-automation-bar">
+                <header><span><Gauge size={15} />实体出口模式</span><strong>永久启用</strong></header>
+                <div className="galactic-automation-actions"><span>物资只由超大型物资出口的四个专用端口交付；暂停和恢复请在建筑检查器中操作。</span><label><input type="checkbox" checked={game.endgame.autoResearch} onChange={(event) => onInfiniteResearchAutomation(event.target.checked)} />无限科技自动续研</label></div>
+              </section>}
               <div className="galactic-panels">
                 <section className="galactic-panel infinite-research-panel">
-                  <header><Sparkles size={15} /><span>无限科研</span><strong>宇宙矩阵循环</strong></header>
+                  <header><Sparkles size={15} /><span>无限科研</span><strong>长期循环项目</strong></header>
                   <div className="infinite-research-list">
                     {INFINITE_RESEARCH_DEFINITIONS.map((definition) => {
                       const progress = game.endgame.infiniteResearch[definition.id];
                       const active = game.endgame.activeInfiniteResearchId === definition.id;
-                      const cost = getInfiniteResearchCost(definition.id, progress.level);
-                      return <button type="button" className={active ? "active" : ""} key={definition.id} onClick={() => onSelectInfiniteResearch(definition.id)}>
-                        <i style={{ color: definition.color }}>{definition.symbol}</i><span><strong>{definition.name}</strong><small>Lv.{getInfiniteResearchLevel(game, definition.id)} · {definition.effect}</small><b><em style={{ width: `${getInfiniteResearchCompletion(progress, definition.id) * 100}%` }} /></b></span><label>{active ? `${progress.progress}/${cost}` : "选择"}</label>
+                      const level = getInfiniteResearchLevel(game, definition.id);
+                      const cost = getInfiniteResearchCostString(definition.id, level);
+                      const capped = isInfiniteResearchComplete(definition.id, level);
+                      return <button type="button" className={active ? "active" : ""} disabled={capped} key={definition.id} onClick={() => onSelectInfiniteResearch(definition.id)} title={`${progress.progress} / ${cost} 宇宙矩阵`}>
+                        <i style={{ color: definition.color }}>{definition.symbol}</i><span><strong>{definition.name}</strong><small>Lv.{level}{progress.historicalLevel && progress.historicalLevel > level ? `（历史 Lv.${progress.historicalLevel}）` : ""} · {definition.effect}</small><b><em style={{ width: `${getInfiniteResearchCompletion(progress, definition.id) * 100}%` }} /></b></span><label>{capped ? "已达上限" : active ? <><QuantityValue value={progress.progress} />/<QuantityValue value={cost} /></> : "选择"}</label>
                       </button>;
                     })}
                   </div>
                 </section>
                 <section className="galactic-panel export-panel">
-                  <header><Send size={15} /><span>超大型物资出口</span><strong>无限项目</strong></header>
+                  <header><Send size={15} /><span>银河物资出口</span><strong>{game.endgame.exportInputMode === "building" ? "实体端口" : "旧档网络"}</strong></header>
                   <div className="export-project-list">
                     {GALACTIC_EXPORT_DEFINITIONS.map((definition) => {
                       const project = game.endgame.exportProjects[definition.id];
                       const target = getGalacticExportTarget(definition.id, project.level);
                       const progress = Math.min(1, project.delivered / target);
-                      return <article className={project.enabled ? "active" : ""} key={definition.id}>
-                        <header><ItemMark itemId={definition.itemId} /><span><strong>{definition.name}</strong><small>Lv.{project.level} · {definition.summary}</small></span><button type="button" onClick={() => onGalacticExportEnabled(definition.id, !project.enabled)} title={project.enabled ? "暂停出口项目" : "启用出口项目"} aria-label={`${project.enabled ? "暂停" : "启用"}${definition.name}`}>{project.enabled ? <Pause size={13} /> : <Play size={13} />}</button></header>
-                        <div className="export-project-progress"><i><b style={{ width: `${progress * 100}%` }} /></i><span>{project.delivered.toLocaleString("zh-CN")} / {target.toLocaleString("zh-CN")}</span><strong>累计 {project.totalDelivered.toLocaleString("zh-CN")}</strong></div>
-                        <footer><div role="group" aria-label={`${definition.name}优先级`}>{([1, 2, 3] as LogisticsPriority[]).map((priority) => <button type="button" className={project.priority === priority ? "active" : ""} key={priority} onClick={() => onGalacticExportPriority(definition.id, priority)}>P{priority}</button>)}</div><button type="button" onClick={() => onDispatchGalacticExport(definition.id)} title="立即装运一批物资"><Send size={12} />立即装运</button></footer>
+                      return <article className={game.endgame.exportInputMode === "building" || project.enabled ? "active" : ""} key={definition.id}>
+                        <header><ItemMark itemId={definition.itemId} /><span><strong>{definition.name}</strong><small>Lv.{project.level} · {definition.summary}</small></span>{game.endgame.exportInputMode === "legacy-network" ? <button type="button" onClick={() => onGalacticExportEnabled(definition.id, !project.enabled)} title={project.enabled ? "暂停出口项目" : "启用出口项目"} aria-label={`${project.enabled ? "暂停" : "启用"}${definition.name}`}>{project.enabled ? <Pause size={13} /> : <Play size={13} />}</button> : <em>专用端口</em>}</header>
+                        <div className="export-project-progress"><i><b style={{ width: `${progress * 100}%` }} /></i><span><QuantityValue value={project.delivered} /> / <QuantityValue value={target} /></span><strong>累计 <QuantityValue value={project.totalDelivered} /></strong></div>
+                        <footer><div role="group" aria-label={`${definition.name}优先级`}>{([1, 2, 3] as LogisticsPriority[]).map((priority) => <button type="button" className={project.priority === priority ? "active" : ""} key={priority} onClick={() => onGalacticExportPriority(definition.id, priority)}>P{priority}</button>)}</div>{game.endgame.exportInputMode === "legacy-network" ? <button type="button" onClick={() => onDispatchGalacticExport(definition.id)} title="立即装运一批物资"><Send size={12} />立即装运</button> : <span>由实体建筑交付</span>}</footer>
                       </article>;
                     })}
                   </div>

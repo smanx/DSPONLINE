@@ -24,9 +24,10 @@ import {
 import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
 import { useEffect, useRef, useState } from "react";
 import { FUEL_ENERGY_MJ, ITEMS, MATRIX_ITEM_IDS, getBuilding, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getProliferator, getRecipe, getRecipesForBuilding } from "../game/content";
-import { MATERIAL_DELIVERY_SLOT_COUNT, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMaterialDeliveryItems, getStationDroneCapacity, getStationSlots, getStationVesselCapacity, type ResourceReserveSnapshot } from "../game/engine";
+import { MATERIAL_DELIVERY_SLOT_COUNT, getEntityExtraProductBonus, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMaterialDeliveryItems, getStationDroneCapacity, getStationSlots, getStationVesselCapacity, type ResourceReserveSnapshot } from "../game/engine";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { RecipeCatalogPicker } from "./CatalogPicker";
+import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 import type {
   BuildingId,
   CargoStack,
@@ -85,10 +86,6 @@ export interface FactoryNodeData extends Record<string, unknown> {
 
 export type FactoryFlowNode = Node<FactoryNodeData, EntityKind>;
 
-function formatAmount(value: number): string {
-  return Math.floor(value).toLocaleString("zh-CN");
-}
-
 function useDynamicHandles(entityId: string, signature: string): void {
   const updateNodeInternals = useUpdateNodeInternals();
   useEffect(() => {
@@ -101,10 +98,10 @@ function ItemBadge({ itemId, amount, muted = false }: { itemId: ItemId; amount: 
   const item = getItem(itemId);
   return (
     <ItemHoverCard itemId={itemId} className="item-reference--badge">
-      <span className={`item-badge${muted ? " item-badge--muted" : ""}`}>
+      <span className={`item-badge${muted ? " item-badge--muted" : ""}`} title={formatQuantityExact(amount)} aria-label={`${item.name} ${formatQuantityExact(amount)}`}>
         <ItemGlyph itemId={itemId} />
         <span>{item.name}</span>
-        <strong>{formatAmount(amount)}</strong>
+        <strong>{formatQuantityCompact(amount)}</strong>
       </span>
     </ItemHoverCard>
   );
@@ -115,11 +112,13 @@ function WorkCycle({
   progress,
   active,
   efficiency,
+  cyclesPerSecond = 0,
 }: {
   label: string;
   progress: number;
   active: boolean;
   efficiency: number;
+  cyclesPerSecond?: number;
 }) {
   const normalized = Math.max(0, Math.min(1, progress));
   const percent = Math.round(normalized * 100);
@@ -133,14 +132,18 @@ function WorkCycle({
   }, [active, normalized]);
   return (
     <div
-      className={`work-cycle${active ? " work-cycle--active" : ""}`}
+      className={`work-cycle${active ? " work-cycle--active" : ""}${active && cyclesPerSecond > 0 ? " work-cycle--interpolated" : ""}`}
       role="progressbar"
       aria-label={label}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={percent}
     >
-      <i style={{ width: `${percent}%` }} />
+      <i style={active && cyclesPerSecond > 0 ? {
+        width: `${percent}%`,
+        animationDuration: `${Math.max(0.08, 1 / cyclesPerSecond)}s`,
+        animationDelay: `${-normalized / cyclesPerSecond}s`,
+      } : { width: `${percent}%` }} />
       {completionPulse > 0 ? <b className="work-cycle__completion" key={completionPulse} aria-hidden="true" /> : null}
       <span>{label}</span>
       <strong>{active ? `${percent}% · 效率 ${Math.round(efficiency * 100)}%` : percent > 0 ? `${percent}% · 暂停` : "待机"}</strong>
@@ -327,7 +330,7 @@ export function VeinNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       <div className="vein-readout">
         <span>{extractor.shortName} <strong>×{entity.minerCount}</strong></span>
         <span title={data.status.label}>{entity.minerCount > 0 ? `${data.status.label} · ${entity.productionRate.toFixed(1)}/min` : data.status.label}</span>
-        <span className={reserve?.exhausted ? "vein-reserve vein-reserve--depleted" : "vein-reserve"}>{reserve?.infinite ? "无限储量" : `储量 ${formatAmount(reserve?.remaining ?? 0)} / ${formatAmount(reserve?.capacity ?? 0)} · ${reserve?.remainingPercent ?? 0}%`}</span>
+        <span className={reserve?.exhausted ? "vein-reserve vein-reserve--depleted" : "vein-reserve"}>{reserve?.infinite ? "无限储量" : `储量 ${formatQuantityCompact(reserve?.remaining ?? 0)} / ${formatQuantityCompact(reserve?.capacity ?? 0)} · ${reserve?.remainingPercent ?? 0}%`}</span>
       </div>
       {entity.minerCount > 0 ? (
         <WorkCycle label="采矿周期" progress={entity.progress} active={!data.paused && entity.utilization > 0.001} efficiency={data.powerFactor} />
@@ -362,13 +365,16 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const { entity, cargo, placement } = data;
   const building = getBuilding(entity.buildingId!);
   const recipe = getRecipe(entity.recipeId);
+  const galacticExporter = entity.buildingId === "galactic_material_exporter";
   const researchInputs = MATRIX_ITEM_IDS.filter((itemId) =>
     data.researchCosts.some((cost) => cost.itemId === itemId) ||
     data.connectedInputItemIds.includes(itemId) ||
     (entity.inputs[itemId] ?? 0) > 0 ||
     data.completedTechIds.includes(itemId as TechId))
     .map((itemId) => ({ itemId, amount: 1 }));
-  const recipeInputs = recipe?.id === "matrix_research" ? researchInputs : recipe?.inputs ?? [];
+  const recipeInputs = galacticExporter
+    ? (["universe_matrix", "solar_sail", "small_carrier_rocket", "antimatter_fuel_rod"] as ItemId[]).map((itemId) => ({ itemId, amount: 1 }))
+    : recipe?.id === "matrix_research" ? researchInputs : recipe?.inputs ?? [];
   const proliferatorItemId = entity.sprayCoaterInstalled ? getEntityProliferatorItemId(entity) : undefined;
   const inputs = proliferatorItemId && !recipeInputs.some((input) => input.itemId === proliferatorItemId)
     ? [...recipeInputs, { itemId: proliferatorItemId, amount: 1 }]
@@ -397,6 +403,10 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const proliferatorPoints = proliferator
     ? Math.floor((entity.proliferatorPoints ?? 0) + (entity.inputs[proliferator.itemId] ?? 0) * proliferator.sprayPoints)
     : 0;
+  const unitsPerCycle = recipe?.id === "matrix_research" || recipe?.id === "solar_sail_launch" || recipe?.id === "carrier_rocket_launch"
+    ? 1
+    : Math.max(1, (recipe?.outputs.reduce((sum, output) => sum + output.amount, 0) ?? 1) * (1 + getEntityExtraProductBonus(entity)));
+  const visualCyclesPerSecond = Math.max(0, entity.productionRate / unitsPerCycle / 60);
 
   const add = (event: React.MouseEvent) => {
     if (!adding) return;
@@ -407,7 +417,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
-      className={`factory-node machine-node factory-node--status-${data.status.tone}${constructionCenter ? " factory-node--megastructure" : ""}${building.tier && building.tier > 1 ? ` factory-node--tier-${building.tier}` : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}${(railEjector || launchSilo) && entity.utilization > 0.001 ? " factory-node--orbital-active" : ""}`}
+      className={`factory-node machine-node factory-node--status-${data.status.tone}${constructionCenter || galacticExporter ? " factory-node--megastructure" : ""}${galacticExporter ? " factory-node--galactic-exporter" : ""}${building.tier && building.tier > 1 ? ` factory-node--tier-${building.tier}` : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}${(railEjector || launchSilo) && entity.utilization > 0.001 ? " factory-node--orbital-active" : ""}`}
       onClick={add}
       onDragOver={(event) => {
         if (event.dataTransfer.types.some((type) => type === "application/factory-item" || type === "application/factory-building")) {
@@ -432,11 +442,11 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
     >
       <header className="factory-node__header">
         <div className={`node-icon${rayReceiver ? " node-icon--ray" : railEjector || launchSilo ? " node-icon--orbit" : ""}`}>
-          {entity.buildingId === "miniature_particle_collider" ? <Atom size={18} /> : railEjector ? <Satellite size={18} /> : launchSilo ? <Rocket size={18} /> : rayReceiver ? <RadioTower size={18} /> : <Factory size={18} />}
+          {galacticExporter ? <Rocket size={18} /> : entity.buildingId === "miniature_particle_collider" ? <Atom size={18} /> : railEjector ? <Satellite size={18} /> : launchSilo ? <Rocket size={18} /> : rayReceiver ? <RadioTower size={18} /> : <Factory size={18} />}
         </div>
         <div>
-          <span>{constructionCenter ? "巨构自动补给" : railEjector ? "恒星轨道设施" : launchSilo ? "戴森球建造设施" : rayReceiver ? "戴森系统接收设施" : building.shortName}</span>
-          <strong>{constructionCenter ? building.name : recipe?.name ?? "未指定配方"}</strong>
+          <span>{constructionCenter ? "巨构自动补给" : galacticExporter ? "银河终局工程" : railEjector ? "恒星轨道设施" : launchSilo ? "戴森球建造设施" : rayReceiver ? "戴森系统接收设施" : building.shortName}</span>
+          <strong>{constructionCenter || galacticExporter ? building.name : recipe?.name ?? "未指定配方"}</strong>
         </div>
         <small>×{entity.machineCount}</small>
       </header>
@@ -454,7 +464,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           <div><dt>阵列等级</dt><dd>Mk.{constructionCenterTier}</dd></div>
         </dl>
       </section> : null}
-      {selected && !constructionCenter ? (
+      {selected && !constructionCenter && !galacticExporter ? (
         <div className="node-inline-select nodrag nopan" onPointerDown={(event) => event.stopPropagation()}>
           <span>生产配方</span>
           <RecipeCatalogPicker value={entity.recipeId} recipes={recipeOptions} onChange={(recipeId) => data.onRecipeChange(entity.id, recipeId)} compact />
@@ -473,10 +483,11 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         </div>
       ) : (
         <WorkCycle
-          label={constructionCenter ? "建筑制造周期" : recipe?.id === "matrix_research" ? "科研周期" : railEjector ? "太阳帆发射" : launchSilo ? "火箭发射" : rayReceiver ? "光子周期" : entity.buildingId === "miniature_particle_collider" ? "对撞周期" : entity.buildingId === "oil_refinery" || entity.buildingId === "chemical_plant" ? "加工周期" : "生产周期"}
+          label={constructionCenter ? "建筑制造周期" : galacticExporter ? "银河物资交付" : recipe?.id === "matrix_research" ? "科研周期" : railEjector ? "太阳帆发射" : launchSilo ? "火箭发射" : rayReceiver ? "光子周期" : entity.buildingId === "miniature_particle_collider" ? "对撞周期" : entity.buildingId === "oil_refinery" || entity.buildingId === "chemical_plant" ? "加工周期" : "生产周期"}
           progress={entity.progress}
           active={!data.paused && entity.utilization > 0.001}
           efficiency={entity.utilization}
+          cyclesPerSecond={visualCyclesPerSecond}
         />
       )}
       {railEjector || launchSilo ? (
@@ -506,11 +517,13 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           )) : rayReceiver ? (
             <div className="stellar-input"><Sun size={14} /><span>戴森系统能量</span></div>
           ) : null}
-          {!rayReceiver && data.connectionDraft ? <AutoInputPort connectionDraft={data.connectionDraft} label="自动选择配方" /> : null}
+          {!rayReceiver && !galacticExporter && data.connectionDraft ? <AutoInputPort connectionDraft={data.connectionDraft} label="自动选择配方" /> : null}
         </div>
         <div className="node-io__column node-io__column--output">
-          <span className="node-io__label">{recipe?.id === "matrix_research" ? "科研" : "输出"}</span>
-          {recipe?.id === "matrix_research" ? (
+          <span className="node-io__label">{galacticExporter ? "去向" : recipe?.id === "matrix_research" ? "科研" : "输出"}</span>
+          {galacticExporter ? (
+            <div className="galactic-exporter-target"><Rocket size={14} /><span>银河物资出口</span></div>
+          ) : recipe?.id === "matrix_research" ? (
             <div className="research-target">
               <FlaskConical size={14} />
               <span>{data.researchLabel ?? "未选择科技"}</span>
@@ -526,9 +539,9 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
               connectionCount={data.outputBeltCounts[output.itemId] ?? 0}
             />
           )) : railEjector ? (
-            <div className="orbital-target"><Orbit size={14} /><span>在轨 {formatAmount(data.dysonSwarm.sailsInOrbit)} 帆</span></div>
+            <div className="orbital-target"><Orbit size={14} /><span>在轨 {formatQuantityCompact(data.dysonSwarm.sailsInOrbit)} 帆</span></div>
           ) : launchSilo ? (
-            <div className="orbital-target"><Rocket size={14} /><span>结构 {formatAmount(data.dysonSphere.structurePoints)} 点</span></div>
+            <div className="orbital-target"><Rocket size={14} /><span>结构 {formatQuantityCompact(data.dysonSphere.structurePoints)} 点</span></div>
           ) : null}
         </div>
       </div> : null}
@@ -541,7 +554,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       ) : null}
       <footer className="factory-node__footer">
         <span><Zap size={11} /> {rayReceiver ? `${(entity.powerOutputKw ?? 0).toFixed(0)} kW 接收` : `${((building.powerDemandKw ?? 0) * entity.machineCount * getEntityProliferatorPowerMultiplier(entity) * data.powerDemandMultiplier).toFixed(0)} kW`}</span>
-        <span><Gauge size={11} /> {railEjector ? `累计 ${formatAmount(data.dysonSwarm.totalLaunched)} 帆` : launchSilo ? `累计 ${formatAmount(data.dysonSphere.totalRocketsLaunched)} 枚` : `${(building.speed * speedMultiplier * getEntityProliferatorSpeedMultiplier(entity)).toFixed(2)}×`}</span>
+        <span><Gauge size={11} /> {railEjector ? `累计 ${formatQuantityCompact(data.dysonSwarm.totalLaunched)} 帆` : launchSilo ? `累计 ${formatQuantityCompact(data.dysonSphere.totalRocketsLaunched)} 枚` : `${(building.speed * speedMultiplier * getEntityProliferatorSpeedMultiplier(entity)).toFixed(2)}×`}</span>
       </footer>
     </article>
   );
@@ -618,7 +631,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       {configuredItems.length > 0 ? (
         <div className={`node-io logistics-io${orbitalCollector ? " logistics-io--collector" : ""}`}>
           {configuredItems.map((configuredItemId, index) => <div className={`logistics-slot-row${warehouseStorage ? " logistics-slot-row--warehouse" : ""}`} key={configuredItemId}>
-            {warehouseStorage ? <div className="storage-slot-summary"><strong>{ITEMS[configuredItemId].name}</strong><span>输入 {formatAmount(entity.inputs[configuredItemId] ?? 0)} · 输出 {formatAmount(entity.outputs[configuredItemId] ?? 0)}</span></div> : null}
+            {warehouseStorage ? <div className="storage-slot-summary"><strong>{ITEMS[configuredItemId].name}</strong><span>输入 {formatQuantityCompact(entity.inputs[configuredItemId] ?? 0)} · 输出 {formatQuantityCompact(entity.outputs[configuredItemId] ?? 0)}</span></div> : null}
             {!orbitalCollector ? <div className="node-io__column">
               {index === 0 ? <span className="node-io__label">输入</span> : null}
               <InputSlot entityId={entity.id} itemId={configuredItemId} amount={entity.inputs[configuredItemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} connectionDraft={data.connectionDraft} connectionCount={data.inputBeltCounts[configuredItemId] ?? 0} />

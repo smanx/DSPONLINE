@@ -538,6 +538,11 @@ export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
     powerDemandKw: 12000, speed: 1, inputCapacity: 0, outputCapacity: 0, megastructure: true,
     description: "巨构级建筑补给设施，从所在行星物资托盘取料并按目标库存持续补足施工设备。",
   },
+  galactic_material_exporter: {
+    id: "galactic_material_exporter", name: "超大型物资出口", shortName: "银河出口", kind: "machine",
+    powerDemandKw: 24000, speed: 1, inputCapacity: 1_000_000, outputCapacity: 0, accepts: "any", megastructure: true,
+    description: "银河终局工程的实体交付设施，通过四个专用输入端口接收宇宙矩阵、太阳帆、小型运载火箭和反物质燃料棒。",
+  },
 };
 
 export const RECIPES: Record<RecipeId, RecipeDefinition> = {
@@ -732,6 +737,7 @@ export const CONSTRUCTION: ConstructionDefinition[] = [
   { buildingId: "interstellar_logistics_station", name: "星际物流站", outputAmount: 1, requiredTechId: "interstellar_logistics", costs: [{ itemId: "steel", amount: 30 }, { itemId: "titanium_alloy", amount: 40 }, { itemId: "processor", amount: 20 }] },
   { buildingId: "orbital_collector", name: "轨道采集器", outputAmount: 1, requiredTechId: "orbital_collection", costs: [{ itemId: "titanium_alloy", amount: 40 }, { itemId: "super_magnetic_ring", amount: 20 }, { itemId: "graphene", amount: 20 }] },
   { buildingId: "construction_center", name: "建筑制造中心", outputAmount: 1, requiredTechId: "construction_automation", costs: [{ itemId: "steel", amount: 5000 }, { itemId: "titanium_alloy", amount: 5000 }, { itemId: "processor", amount: 5000 }, { itemId: "particle_broadband", amount: 5000 }] },
+  { buildingId: "galactic_material_exporter", name: "超大型物资出口", outputAmount: 1, requiredTechId: "universe_matrix", costs: [{ itemId: "universe_matrix", amount: 1000 }, { itemId: "small_carrier_rocket", amount: 500 }, { itemId: "frame_material", amount: 1000 }, { itemId: "quantum_chip", amount: 1000 }] },
 ];
 
 export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {

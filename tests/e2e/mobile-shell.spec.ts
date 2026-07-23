@@ -5,7 +5,7 @@ const MOBILE_UI_KEY = "dsp-idle-network.mobile-ui.v1";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v0.8.1");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v0.9.0");
   });
 });
 
@@ -79,7 +79,7 @@ async function getClickableCanvasNode(page: Page) {
   return nodes.nth(index);
 }
 
-test("next mobile shell is opt-in, persists independently and keeps desktop plus legacy fallbacks", async ({ page }) => {
+test("next mobile shell is opt-in, persists across desktop width and keeps the legacy fallback", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await expect(page.locator('.game-shell[data-mobile-ui="legacy"]')).toBeVisible();
@@ -100,9 +100,10 @@ test("next mobile shell is opt-in, persists independently and keeps desktop plus
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?mobileUi=next");
-  await expect(page.locator('.game-shell[data-mobile-ui="next"][data-mobile-shell="false"]')).toBeVisible();
-  await expect(page.locator(".game-header")).toBeVisible();
-  await expect(page.locator(".mobile-next-topbar")).toHaveCount(0);
+  await expect(page.locator('.game-shell[data-mobile-ui="next"][data-mobile-shell="true"][data-compact-layout="desktop"]')).toBeVisible();
+  await expect(page.locator(".game-header")).toBeHidden();
+  await expect(page.locator(".mobile-next-topbar")).toBeVisible();
+  await expect(page.locator(".construction-dock")).toBeHidden();
   await page.screenshot({ path: "artifacts/qa/mobile-next-desktop-1440.png", fullPage: true });
 });
 

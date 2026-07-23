@@ -1,4 +1,5 @@
 import type {
+  ActivityMaterialId,
   EndgameState,
   GalacticExportProjectId,
   InfiniteResearchId,
@@ -7,6 +8,11 @@ import type {
   LogisticsPriority,
   GameState,
 } from "./types";
+import {
+  getInfiniteResearchCompletionBasisPoints,
+  getInfiniteResearchCostBigInt,
+  getInfiniteResearchMaximumLevel,
+} from "./infiniteResearch";
 
 export interface InfiniteResearchDefinition {
   id: InfiniteResearchId;
@@ -40,7 +46,7 @@ export const INFINITE_RESEARCH_DEFINITIONS: readonly InfiniteResearchDefinition[
     symbol: "MC",
     color: "#63c8d2",
     summary: "将科研矩阵折叠为更高密度的演算单元。",
-    effect: "每级科研速度 +10%",
+    effect: "每级科研速度 +10%，全部普通生产速度 +4%",
     baseCost: 250,
     growth: 1.55,
   },
@@ -60,7 +66,7 @@ export const INFINITE_RESEARCH_DEFINITIONS: readonly InfiniteResearchDefinition[
     symbol: "GL",
     color: "#72b9a2",
     summary: "统一星区航路的调度与装载策略。",
-    effect: "每级物流航速与载荷 +5%",
+    effect: "每级物流航速与载荷 +5%，银河出口速度 +10%",
     baseCost: 350,
     growth: 1.6,
   },
@@ -70,7 +76,7 @@ export const INFINITE_RESEARCH_DEFINITIONS: readonly InfiniteResearchDefinition[
     symbol: "SH",
     color: "#e7bd58",
     summary: "让戴森结构与射线接收阵列逐级逼近理论上限。",
-    effect: "每级戴森与射线功率 +5%",
+    effect: "每级戴森功率、射线接收与壳面吸附 +5%",
     baseCost: 400,
     growth: 1.62,
   },
@@ -154,16 +160,12 @@ export function getInfiniteResearchDefinition(id: InfiniteResearchId | null | un
 }
 
 export function getInfiniteResearchCost(id: InfiniteResearchId, level: number): number {
-  const definition = INFINITE_RESEARCH_BY_ID[id];
-  const safeLevel = Math.max(0, Math.floor(level));
-  const raw = definition.baseCost * definition.growth ** safeLevel;
-  // Keep costs readable and integer-only while avoiding unsafe JSON numbers.
-  return Math.min(2_000_000_000, Math.max(1, Math.round(raw / 10) * 10));
+  const cost = getInfiniteResearchCostBigInt(id, level);
+  return Number(cost > BigInt(Number.MAX_SAFE_INTEGER) ? BigInt(Number.MAX_SAFE_INTEGER) : cost);
 }
 
 export function getInfiniteResearchCompletion(progress: InfiniteResearchProgress, id: InfiniteResearchId): number {
-  const cost = getInfiniteResearchCost(id, progress.level);
-  return Math.min(1, Math.max(0, progress.progress / cost));
+  return getInfiniteResearchCompletionBasisPoints(progress.progress, id, progress.level) / 10_000;
 }
 
 export function getGalacticExportDefinition(id: GalacticExportProjectId): GalacticExportDefinition {
@@ -183,7 +185,7 @@ export function getGalacticExportReward(id: GalacticExportProjectId, level: numb
 export function createEndgameState(): EndgameState {
   const infiniteResearch = Object.fromEntries(INFINITE_RESEARCH_DEFINITIONS.map((definition) => [
     definition.id,
-    { level: 0, progress: 0 } satisfies InfiniteResearchProgress,
+    { level: 0, progress: "0" } satisfies InfiniteResearchProgress,
   ])) as Record<InfiniteResearchId, InfiniteResearchProgress>;
   const exportProjects = Object.fromEntries(GALACTIC_EXPORT_DEFINITIONS.map((definition) => [
     definition.id,
@@ -197,6 +199,12 @@ export function createEndgameState(): EndgameState {
       dispatchProgress: 0,
     } satisfies EndgameState["exportProjects"][GalacticExportProjectId],
   ])) as EndgameState["exportProjects"];
+  const emptyActivityAmounts = () => ({
+    universe_matrix: 0,
+    solar_sail: 0,
+    small_carrier_rocket: 0,
+    antimatter_fuel_rod: 0,
+  }) satisfies Record<ActivityMaterialId, number>;
   return {
     activeInfiniteResearchId: null,
     autoResearch: true,
@@ -210,6 +218,21 @@ export function createEndgameState(): EndgameState {
     exportWindowAmount: 0,
     exportWindowStartedAt: 0,
     infiniteResearch,
+    exportInputMode: "building",
+    constructionActivity: {
+      activityId: null,
+      participantId: null,
+      configRevision: null,
+      startsAtMs: 0,
+      endsAtMs: 0,
+      serverTimeAnchorMs: 0,
+      activityClockMs: 0,
+      personalTargets: emptyActivityAmounts(),
+      globalTargets: emptyActivityAmounts(),
+      personalDelivered: emptyActivityAmounts(),
+      pendingBatches: {},
+      nextBatchSequence: 0,
+    },
   };
 }
 
@@ -226,5 +249,5 @@ export function getOfflineSimulationLimitSeconds(state: Pick<GameState, "endgame
 }
 
 export function getInfiniteResearchLevel(state: Pick<GameState, "endgame">, id: InfiniteResearchId): number {
-  return Math.max(0, Math.floor(state.endgame?.infiniteResearch?.[id]?.level ?? 0));
+  return Math.min(getInfiniteResearchMaximumLevel(id), Math.max(0, Math.floor(state.endgame?.infiniteResearch?.[id]?.level ?? 0)));
 }

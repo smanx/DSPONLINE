@@ -28,7 +28,7 @@ describe("local galaxy leaderboard", () => {
       lastSyncedAt: 0,
     });
     expect(metrics.galaxyScore).toBe(26_941);
-    expect(formatLeaderboardValue(1_500_000_000, "power")).toBe("1.5B");
+    expect(formatLeaderboardValue(1_500_000_000, "power")).toBe("15亿");
 
     const account = getActiveAccount(createAccountState(100));
     const snapshot = getLeaderboardSnapshot(account.profile, account.ledger, "galaxy");

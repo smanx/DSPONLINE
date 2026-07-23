@@ -328,8 +328,13 @@
 .mobile-cargo-slot > button:disabled { opacity: .45; }
 
 .mobile-inventory-tabs { margin: 0 10px 8px; }
-.mobile-inventory-toolbar { position: sticky; z-index: 2; top: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; padding: 7px 10px; border-block: 1px solid #2e4039; background: #0e1613; }
+.mobile-inventory-toolbar { position: sticky; z-index: 2; top: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; padding: 7px 10px; border-block: 1px solid #2e4039; background: #0e1613; }
 .mobile-inventory-toolbar > button { min-width: 78px; min-height: 44px; border: 1px solid #354d44; border-radius: 6px; background: #121c18; color: #9db1aa; font-size: calc(12px * var(--ui-font-scale, 1)); }
+
+@media (max-width: 430px) {
+  .mobile-inventory-toolbar > label { grid-column: 1 / -1; }
+  .mobile-inventory-toolbar > button { min-width: 0; }
+}
 .mobile-inventory-list { padding: 0 10px 18px; }
 .mobile-inventory-list > button,
 .mobile-inventory-row {

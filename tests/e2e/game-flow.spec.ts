@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v0.8.1");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v0.9.0");
     }
   });
 }
@@ -119,18 +119,18 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "云账号与存档开放更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "长期生产与银河工程更新" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(5);
-  await expect(releaseNotes).toContainText("账号操作不会自动下载、覆盖或清除本地存档");
-  await expect(releaseNotes).toContainText("全部云存档功能开放");
-  await expect(releaseNotes).toContainText("排行榜保留邮箱门槛");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v081-1440.png", fullPage: true });
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(7);
+  await expect(releaseNotes).toContainText("生产画面刷新频率");
+  await expect(releaseNotes).toContainText("大规模物流性能");
+  await expect(releaseNotes).toContainText("当前活动开关保持关闭");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v090-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v081-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v090-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -145,7 +145,7 @@ test("dated release notes appear once and remain available from both settings sc
   });
   await expect.poll(controlsFitViewport).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v081-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v090-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -154,7 +154,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-24-v0.8.1");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-24-v0.9.0");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -171,7 +171,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v081-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v090-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -2706,7 +2706,7 @@ test("carrier rockets turn the Dyson cloud into a permanent sphere", async ({ pa
   await expect(dyson).toContainText("永久结构运行");
   await expect(dyson).toContainText("30 点");
   await expect(dyson).toContainText("300 / 600");
-  await expect(dyson).toContainText("39,600 kW 总功率");
+  await expect(dyson).toContainText("5.52万 kW 总功率");
   await expect(dyson).toContainText("运载火箭 30");
   await expect(dyson).toContainText("永久吸附 300");
   await expect(page.locator(".construction-item").filter({ hasText: "垂直发射井" })).toHaveCount(1);
@@ -3801,7 +3801,7 @@ test("galactic industry console runs infinite research and mega exports", async 
   const statistics = page.getByRole("dialog", { name: "生产统计" });
   await statistics.getByRole("tab", { name: /银河/ }).click();
   await expect(statistics.locator(".galactic-summary-grid")).toContainText("银河评分");
-  await expect(statistics.locator(".galactic-industry")).toContainText("超大型物资出口");
+  await expect(statistics.locator(".galactic-industry")).toContainText("银河物资出口");
   await expect(statistics.locator(".infinite-research-list > button")).toHaveCount(5);
 
   await statistics.locator(".infinite-research-list > button").filter({ hasText: "矩阵压缩" }).click();
@@ -3836,7 +3836,7 @@ test("technology upgrades expose balanced global effects in research and equipme
   await expect(upgrades).toContainText("物流航速2.00×");
   await expect(upgrades).toContainText("机 / 船载荷50 / 200");
   await expect(upgrades).toContainText("太阳帆寿命40 min");
-  await expect(upgrades).toContainText("单站接收12,000 kW");
+  await expect(upgrades).toContainText("单站接收1.2万 kW");
   await expect(upgrades).toContainText("壳面吸附2.00×");
   await expect(technology.locator(".technology-node").filter({ hasText: "壳面吸附效率" })).toHaveClass(/technology-node--complete/);
   await page.screenshot({ path: "artifacts/qa/technology-upgrades-1440.png", fullPage: true });
@@ -5421,12 +5421,12 @@ test("galaxy rankings upload accumulated power and white-matrix records by categ
   await galaxy.getByRole("tab", { name: /白矩阵上传/ }).click();
   const localRow = galaxy.locator(".galaxy-rank-row--local");
   await expect(localRow).toContainText("矩阵档案局");
-  await expect(localRow.locator(".galaxy-rank-value")).toContainText("400k");
+  await expect(localRow.locator(".galaxy-rank-value")).toContainText("40万");
   await galaxy.getByRole("button", { name: "上传本季数据" }).click();
   await expect(localRow).toContainText("本地节点已上传");
 
   await galaxy.getByRole("tab", { name: /累计发电/ }).click();
-  await expect(localRow.locator(".galaxy-rank-value")).toContainText("1.5B");
+  await expect(localRow.locator(".galaxy-rank-value")).toContainText("15亿");
   const submission = await page.evaluate(() => JSON.parse(window.localStorage.getItem("dsp-idle-network.leaderboard.v1")!)[0]);
   expect(submission.metrics.energyGeneratedMj).toBeGreaterThanOrEqual(1_500_000_000);
   expect(submission.metrics.uploadedWhiteMatrix).toBe(400_000);

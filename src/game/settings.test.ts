@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateBuildingBufferLimitInput } from "./settings";
+import { validateBuildingBufferLimitInput, validateProliferatorBufferLimitInput } from "./settings";
 
 describe("building buffer limit input", () => {
   it.each([
@@ -24,5 +24,16 @@ describe("building buffer limit input", () => {
     const result = validateBuildingBufferLimitInput(raw);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toContain(reason);
+  });
+});
+
+describe("proliferator buffer limit input", () => {
+  it.each([["1", 1], ["120", 120], ["600", 600], ["3000", 3_000], ["100000", 100_000]])(
+    "accepts %s",
+    (raw, expected) => expect(validateProliferatorBufferLimitInput(raw)).toEqual({ ok: true, value: expected }),
+  );
+
+  it.each(["", "0", "100001", "-1", "1.5", "1e3", "abc"])("rejects %s", (raw) => {
+    expect(validateProliferatorBufferLimitInput(raw).ok).toBe(false);
   });
 });

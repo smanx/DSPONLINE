@@ -19,7 +19,9 @@ import { isDifficultyMode } from "./difficulty";
 import { isAchievementId } from "./progression";
 import { DEFAULT_GALAXY_SEED, GUARANTEED_CRUDE_OIL_PLANETS, createVeinReserve, getPlanetOrbitalYields, getStarLuminosity, isInfiniteResource, normalizeGalaxyState } from "./galaxy";
 import { createEndgameState, getOfflineSimulationLimitSeconds } from "./endgame";
-import type { BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
+import { getInfiniteResearchCostBigInt, getInfiniteResearchMaximumLevel } from "./infiniteResearch";
+import { normalizeDecimalIntegerString } from "./quantityFormat";
+import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -414,11 +416,33 @@ function migrateEndgame(saved: Record<string, any>): EndgameState {
   const defaults = createEndgameState();
   const raw = saved.endgame && typeof saved.endgame === "object" ? saved.endgame : {};
   const infiniteResearch = { ...defaults.infiniteResearch } as EndgameState["infiniteResearch"];
+  let migrationScore = 0;
   for (const researchId of Object.keys(defaults.infiniteResearch) as InfiniteResearchId[]) {
     const source = raw.infiniteResearch?.[researchId];
-    const level = nonNegativeInteger(source?.level);
-    const progress = nonNegativeInteger(source?.progress);
-    infiniteResearch[researchId] = { level, progress };
+    const originalLevel = nonNegativeInteger(source?.level);
+    const originalHistoricalLevel = nonNegativeInteger(source?.historicalLevel);
+    const maximumLevel = getInfiniteResearchMaximumLevel(researchId);
+    let level = Math.min(maximumLevel, originalLevel);
+    let progress = normalizeDecimalIntegerString(source?.progress, "0", 64);
+    if (saved.version < 33) {
+      let remaining = BigInt(progress);
+      let guard = 0;
+      while (level < maximumLevel && guard++ < maximumLevel) {
+        const cost = getInfiniteResearchCostBigInt(researchId, level);
+        if (remaining < cost) break;
+        remaining -= cost;
+        level += 1;
+        migrationScore += 1_000 + level * 250;
+      }
+      progress = remaining.toString();
+    }
+    infiniteResearch[researchId] = {
+      level,
+      progress,
+      ...(Math.max(originalLevel, originalHistoricalLevel) > level
+        ? { historicalLevel: Math.max(originalLevel, originalHistoricalLevel) }
+        : {}),
+    };
   }
   const exportProjects = { ...defaults.exportProjects } as EndgameState["exportProjects"];
   for (const projectId of Object.keys(defaults.exportProjects) as GalacticExportProjectId[]) {
@@ -435,23 +459,66 @@ function migrateEndgame(saved: Record<string, any>): EndgameState {
       dispatchProgress: Math.min(2_000_000_000, nonNegativeNumber(source?.dispatchProgress)),
     };
   }
+  const activityMaterialIds: ActivityMaterialId[] = ["universe_matrix", "solar_sail", "small_carrier_rocket", "antimatter_fuel_rod"];
+  const normalizeActivityAmounts = (value: unknown) => Object.fromEntries(activityMaterialIds.map((itemId) => [
+    itemId,
+    nonNegativeInteger(value && typeof value === "object" ? (value as Record<string, unknown>)[itemId] : 0),
+  ])) as Record<ActivityMaterialId, number>;
+  const rawActivity = raw.constructionActivity && typeof raw.constructionActivity === "object" ? raw.constructionActivity : {};
+  const pendingBatches: EndgameState["constructionActivity"]["pendingBatches"] = {};
+  for (const itemId of activityMaterialIds) {
+    const batch = rawActivity.pendingBatches?.[itemId];
+    if (!batch || typeof batch !== "object" || typeof batch.id !== "string") continue;
+    pendingBatches[itemId] = {
+      id: batch.id.slice(0, 180),
+      itemId,
+      amount: nonNegativeInteger(batch.amount),
+      sequence: nonNegativeInteger(batch.sequence),
+      firstDeliveredAtMs: nonNegativeNumber(batch.firstDeliveredAtMs),
+      lastDeliveredAtMs: nonNegativeNumber(batch.lastDeliveredAtMs),
+    };
+  }
+  const activity = {
+    ...defaults.constructionActivity,
+    activityId: typeof rawActivity.activityId === "string" ? rawActivity.activityId.slice(0, 120) : null,
+    participantId: typeof rawActivity.participantId === "string" ? rawActivity.participantId.slice(0, 120) : null,
+    configRevision: typeof rawActivity.configRevision === "string" ? rawActivity.configRevision.slice(0, 120) : null,
+    startsAtMs: nonNegativeNumber(rawActivity.startsAtMs),
+    endsAtMs: nonNegativeNumber(rawActivity.endsAtMs),
+    serverTimeAnchorMs: nonNegativeNumber(rawActivity.serverTimeAnchorMs),
+    activityClockMs: nonNegativeNumber(rawActivity.activityClockMs),
+    personalTargets: normalizeActivityAmounts(rawActivity.personalTargets),
+    globalTargets: normalizeActivityAmounts(rawActivity.globalTargets),
+    personalDelivered: normalizeActivityAmounts(rawActivity.personalDelivered),
+    pendingBatches,
+    nextBatchSequence: nonNegativeInteger(rawActivity.nextBatchSequence),
+  } satisfies EndgameState["constructionActivity"];
+  const requestedInfiniteResearchId: InfiniteResearchId | null = validInfiniteResearchId(raw.activeInfiniteResearchId)
+    ? raw.activeInfiniteResearchId as InfiniteResearchId
+    : null;
+  const activeInfiniteResearchId = requestedInfiniteResearchId &&
+      (saved.research?.completedTechIds ?? []).includes("universe_matrix") &&
+      infiniteResearch[requestedInfiniteResearchId].level < getInfiniteResearchMaximumLevel(requestedInfiniteResearchId)
+      ? requestedInfiniteResearchId
+      : null;
   return {
     ...defaults,
-    activeInfiniteResearchId: validInfiniteResearchId(raw.activeInfiniteResearchId) &&
-      (saved.research?.completedTechIds ?? []).includes("universe_matrix")
-      ? raw.activeInfiniteResearchId
-      : null,
+    activeInfiniteResearchId,
     autoResearch: typeof raw.autoResearch === "boolean" ? raw.autoResearch : true,
     autoDispatch: typeof raw.autoDispatch === "boolean" ? raw.autoDispatch : true,
     dispatchThrottle: validDispatchThrottle(raw.dispatchThrottle) ? raw.dispatchThrottle : 1,
     exportProjects,
     galacticCredits: nonNegativeInteger(raw.galacticCredits),
-    galacticScore: nonNegativeInteger(raw.galacticScore),
+    galacticScore: nonNegativeInteger(raw.galacticScore) + migrationScore,
     totalExported: nonNegativeInteger(raw.totalExported),
     exportedLastMinute: nonNegativeNumber(raw.exportedLastMinute),
     exportWindowAmount: nonNegativeInteger(raw.exportWindowAmount),
     exportWindowStartedAt: nonNegativeNumber(raw.exportWindowStartedAt),
     infiniteResearch,
+    exportInputMode: raw.exportInputMode === "legacy-network"
+      ? "legacy-network"
+      : raw.exportInputMode === "building" || saved.version >= 33 ? "building" : "legacy-network",
+    constructionActivity: activity,
   };
 }
 
@@ -491,6 +558,11 @@ function normalizedBuildingBufferLimit(value: unknown): number {
   return Math.max(1_000, Math.min(100_000_000, Math.floor(value)));
 }
 
+function normalizedProliferatorBufferLimit(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 600;
+  return Math.max(1, Math.min(100_000, Math.floor(value)));
+}
+
 function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
   if (entity.id.startsWith("ashen_")) return "ashen";
   if (entity.resourceId === "silicon_ore" || entity.resourceId === "titanium_ore") return "ashen";
@@ -501,7 +573,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const savedSeed = saved.version >= 20 && typeof saved.galaxy?.seed === "number" && Number.isFinite(saved.galaxy.seed)
     ? saved.galaxy.seed
     : DEFAULT_GALAXY_SEED;
@@ -606,6 +678,7 @@ export function migrateGame(value: unknown): GameState | null {
         : undefined,
       proliferatorPoints: sprayCoaterInstalled ? nonNegativeInteger(entity.proliferatorPoints) : 0,
       proliferatorBonusProgress: sprayCoaterInstalled ? fractionalRecord(entity.proliferatorBonusProgress) : {},
+      galacticExporterPaused: entity.buildingId === "galactic_material_exporter" ? entity.galacticExporterPaused !== false : undefined,
       extractorBuildingId: entity.kind === "vein" && entity.minerCount > 0
         ? entity.extractorBuildingId ?? getExtractorBuildingId(entity.resourceId!)
         : entity.extractorBuildingId,
@@ -715,6 +788,7 @@ export function migrateGame(value: unknown): GameState | null {
         steps,
         stepIndex: Math.min(steps.length - 1, nonNegativeInteger(rawJob.stepIndex)),
         elapsedSeconds: nonNegativeNumber(rawJob.elapsedSeconds),
+        inventory: saved.version >= 33 ? buildingBufferRecord(rawJob.inventory) : {},
       };
     }
   }
@@ -1196,6 +1270,7 @@ export function migrateGame(value: unknown): GameState | null {
       : initial.settings.defaultBeltRouteMode,
     productionBufferLimit: normalizedBuildingBufferLimit(saved.settings?.productionBufferLimit),
     logisticsBufferLimit: normalizedBuildingBufferLimit(saved.settings?.logisticsBufferLimit),
+    proliferatorBufferLimit: normalizedProliferatorBufferLimit(saved.settings?.proliferatorBufferLimit),
     autosaveIntervalSeconds: validAutosaveInterval(saved.settings?.autosaveIntervalSeconds)
       ? saved.settings.autosaveIntervalSeconds
       : initial.settings.autosaveIntervalSeconds,
@@ -1266,11 +1341,17 @@ export function migrateGame(value: unknown): GameState | null {
     ? [...new Set(saved.achievements.unlockedIds.filter(isAchievementId))]
     : [];
   const endgame = migrateEndgame(saved);
+  const hasPlacedGalacticExporter = entities.some((entity) => entity.buildingId === "galactic_material_exporter");
+  if (hasPlacedGalacticExporter) endgame.exportInputMode = "building";
+  if (saved.version < 33 && completedTechIds.includes("universe_matrix") && !hasPlacedGalacticExporter &&
+    Math.floor(construction.galactic_material_exporter ?? 0) < 1) {
+    construction.galactic_material_exporter = 1;
+  }
 
   const migrated = {
     ...initial,
     ...saved,
-    version: 32,
+    version: 33,
     activePlanetId,
     entities,
     belts,

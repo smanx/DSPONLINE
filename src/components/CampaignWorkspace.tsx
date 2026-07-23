@@ -25,10 +25,7 @@ import {
 } from "../game/campaign";
 import type { CampaignTaskId, GameState, ItemId } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
-
-function formatAmount(value: number): string {
-  return Math.floor(value).toLocaleString("zh-CN");
-}
+import { formatQuantityCompact } from "../game/quantityFormat";
 
 function ItemMark({ itemId }: { itemId: ItemId }) {
   return (
@@ -39,8 +36,8 @@ function ItemMark({ itemId }: { itemId: ItemId }) {
 }
 
 function rewardLabel(reward: CampaignReward): string {
-  if (reward.constructionId) return `${getConstructionDefinition(reward.constructionId)?.name ?? reward.constructionId} ×${formatAmount(reward.amount)}`;
-  if (reward.itemId) return `${getItem(reward.itemId).name} ×${formatAmount(reward.amount)}`;
+  if (reward.constructionId) return `${getConstructionDefinition(reward.constructionId)?.name ?? reward.constructionId} ×${formatQuantityCompact(reward.amount)}`;
+  if (reward.itemId) return `${getItem(reward.itemId).name} ×${formatQuantityCompact(reward.amount)}`;
   return "奖励";
 }
 
@@ -142,14 +139,14 @@ export function CampaignWorkspace({
                     <div className="campaign-task-detail">
                       <div className="campaign-task-progress">
                         <i><b style={{ width: `${task.progress.target > 0 ? task.progress.current / task.progress.target * 100 : 0}%` }} /></i>
-                        <span>{formatAmount(task.progress.current)} / {formatAmount(task.progress.target)}</span>
+                        <span>{formatQuantityCompact(task.progress.current)} / {formatQuantityCompact(task.progress.target)}</span>
                       </div>
                       <div className="campaign-task-meta">
                         {task.navigation ? <button className="campaign-route-command" type="button" onClick={() => onNavigate(task.navigation!, task.id)} title={getCampaignNavigationLabel(task.navigation)}>{navigationIcon(task.navigation)}{getCampaignNavigationLabel(task.navigation)}</button> : null}
                         {rewardText ? <span className="campaign-reward"><PackageCheck size={13} />{rewardText}</span> : null}
                       </div>
                       {task.status !== "complete" && deficits.length > 0 ? (
-                        <div className="campaign-deficits"><CircleAlert size={12} /><span>缺少</span>{deficits.slice(0, 4).map((deficit) => <span className="campaign-deficit" key={deficit.itemId}><ItemMark itemId={deficit.itemId} />×{formatAmount(deficit.amount)}</span>)}{deficits.length > 4 ? <small>+{deficits.length - 4}</small> : null}</div>
+                        <div className="campaign-deficits"><CircleAlert size={12} /><span>缺少</span>{deficits.slice(0, 4).map((deficit) => <span className="campaign-deficit" key={deficit.itemId}><ItemMark itemId={deficit.itemId} />×{formatQuantityCompact(deficit.amount)}</span>)}{deficits.length > 4 ? <small>+{deficits.length - 4}</small> : null}</div>
                       ) : task.status === "complete" ? <div className="campaign-complete-label"><Check size={12} />已完成</div> : null}
                     </div>
                   </article>

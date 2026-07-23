@@ -96,10 +96,12 @@ import type {
   PowerGridId,
   PowerPriority,
 } from "../game/types";
-
-function formatAmount(value: number): string {
-  return Math.floor(value).toLocaleString("zh-CN");
-}
+import type { PlanetTrayDiscardRequest } from "../game/engine";
+import { formatQuantityCompact } from "../game/quantityFormat";
+import { TrayManagementDialog } from "./TrayManagementDialog";
+import { GalacticActivityPanel } from "./GalacticActivityPanel";
+import { QuantityValue } from "./QuantityValue";
+import type { GalacticActivityPublicStatus } from "../game/galacticActivity";
 
 function ItemMark({ itemId }: { itemId: ItemId }) {
   return <ItemHoverCard itemId={itemId}><ItemGlyph itemId={itemId} className="item-mark" /></ItemHoverCard>;
@@ -113,10 +115,12 @@ interface ResourceRailProps {
   onDropCargo: () => void;
   onDropDraggedItem: (itemId: ItemId, sourceKind: DraggedItemSourceKind, sourceId?: string) => void;
   onSetTrayItemLimit: (value: number) => void;
+  onDiscardTrayItems: (requests: PlanetTrayDiscardRequest[]) => void;
 }
 
-export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickTray, onDropCargo, onDropDraggedItem, onSetTrayItemLimit }: ResourceRailProps) {
+export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickTray, onDropCargo, onDropDraggedItem, onSetTrayItemLimit, onDiscardTrayItems }: ResourceRailProps) {
   const [dragOver, setDragOver] = useState(false);
+  const [trayManagementOpen, setTrayManagementOpen] = useState(false);
   const trayItemLimit = getPlanetTrayItemLimit(game);
   const [trayLimitDraft, setTrayLimitDraft] = useState(String(trayItemLimit));
   useEffect(() => setTrayLimitDraft(String(trayItemLimit)), [game.activePlanetId, trayItemLimit]);
@@ -188,7 +192,7 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
             <>
               <ItemMark itemId={game.cargo.itemId} />
               <span>{ITEMS[game.cargo.itemId].name}</span>
-              <strong>×{formatAmount(game.cargo.amount)}</strong>
+              <strong>×<QuantityValue value={game.cargo.amount} /></strong>
               <ChevronRight size={14} />
             </>
           ) : <><PackageOpen size={18} /><span>空载</span></>}
@@ -202,12 +206,12 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
         </div>
         <div className="dyson-orbit-readout">
           <i><Sun size={18} /></i>
-          <span><small>在轨太阳帆</small><strong>{formatAmount(game.dysonSwarm.sailsInOrbit)}</strong></span>
+          <span><small>在轨太阳帆</small><strong><QuantityValue value={game.dysonSwarm.sailsInOrbit} /></strong></span>
           <Orbit size={20} />
         </div>
         <div className="dyson-sphere-readout">
-          <span><Rocket size={14} /><small>永久结构</small><strong>{formatAmount(game.dysonSphere.structurePoints)} 点</strong></span>
-          <span><Orbit size={14} /><small>壳面太阳帆</small><strong>{formatAmount(game.dysonSphere.shellSails)} / {formatAmount(shellCapacity)}</strong></span>
+          <span><Rocket size={14} /><small>永久结构</small><strong><QuantityValue value={game.dysonSphere.structurePoints} unit="点" /></strong></span>
+          <span><Orbit size={14} /><small>壳面太阳帆</small><strong><QuantityValue value={game.dysonSphere.shellSails} /> / <QuantityValue value={shellCapacity} /></strong></span>
         </div>
         <div className="dyson-load" role="progressbar" aria-label="戴森系统接收负载" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(swarmLoad)}>
           <i><b style={{ width: `${swarmLoad}%` }} /></i>
@@ -215,12 +219,12 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
           <strong>{formatKilowatts(game.dysonSwarm.receiverLoadKw)} 接收</strong>
         </div>
         <div className="dyson-counts">
-          <span>累计发射 <strong>{formatAmount(game.dysonSwarm.totalLaunched)}</strong></span>
-          <span>已衰减 <strong>{formatAmount(game.dysonSwarm.totalExpired)}</strong></span>
+          <span>累计发射 <strong><QuantityValue value={game.dysonSwarm.totalLaunched} /></strong></span>
+          <span>已衰减 <strong><QuantityValue value={game.dysonSwarm.totalExpired} /></strong></span>
         </div>
         <div className="dyson-counts">
-          <span>运载火箭 <strong>{formatAmount(game.dysonSphere.totalRocketsLaunched)}</strong></span>
-          <span>永久吸附 <strong>{formatAmount(game.dysonSphere.totalSailsAbsorbed)}</strong></span>
+          <span>运载火箭 <strong><QuantityValue value={game.dysonSphere.totalRocketsLaunched} /></strong></span>
+          <span>永久吸附 <strong><QuantityValue value={game.dysonSphere.totalSailsAbsorbed} /></strong></span>
         </div>
         <div className="dyson-engineering-readout">
           <span><RadioTower size={11} />{dysonEngineering.launchEnabled ? { balanced: "均衡调度", swarm: "太阳帆优先", sphere: "火箭优先" }[dysonEngineering.launchMode] : "发射暂停"}<strong>{Math.round(dysonEngineering.launchThrottle * 100)}%</strong></span>
@@ -234,14 +238,14 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
       </section>
 
       <section className={`rail-block tray-block${game.cargo ? " rail-block--cargo-drop" : ""}`} onClickCapture={(event) => {
-        if (!game.cargo || (event.target instanceof Element && event.target.closest(".tray-limit-control"))) return;
+        if (!game.cargo || (event.target instanceof Element && event.target.closest(".tray-limit-control, .tray-management-trigger, .tray-management"))) return;
         event.preventDefault();
         event.stopPropagation();
         onDropCargo();
       }}>
         <div className="rail-heading">
           <span>{getPlanet(game.activePlanetId).code}物资托盘</span>
-          <strong>{trayItems.length}</strong>
+          <button className="rail-heading-command tray-management-trigger" type="button" onClick={() => setTrayManagementOpen(true)} title="管理当前行星物资" aria-label="管理当前行星物资"><Settings size={14} /></button>
         </div>
         <label className="tray-limit-control" onClick={(event) => event.stopPropagation()}>
           <span>单种物资上限</span>
@@ -284,11 +288,12 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
             >
               <ItemMark itemId={itemId} />
               <span>{ITEMS[itemId].name}</span>
-              <strong>{formatAmount(amount)}</strong>
+              <strong><QuantityValue value={amount} /></strong>
             </button>
           ))}
         </div>
       </section>
+      {trayManagementOpen ? <TrayManagementDialog game={game} onDiscard={onDiscardTrayItems} onClose={() => setTrayManagementOpen(false)} /> : null}
 
       <section className="rail-block campaign-summary-block">
         <div className="rail-heading">
@@ -304,7 +309,7 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
           </button>
         ) : <div className="campaign-summary-complete"><Check size={14} />全部任务已完成</div>}
         {activeTask && activeDeficits.length > 0 ? (
-          <div className="campaign-summary-deficits"><span>缺料</span>{activeDeficits.slice(0, 3).map((deficit) => <span key={deficit.itemId}>{ITEMS[deficit.itemId].name} ×{formatAmount(deficit.amount)}</span>)}</div>
+          <div className="campaign-summary-deficits"><span>缺料</span>{activeDeficits.slice(0, 3).map((deficit) => <span key={deficit.itemId}>{ITEMS[deficit.itemId].name} ×{formatQuantityCompact(deficit.amount)}</span>)}</div>
         ) : null}
       </section>
     </aside>
@@ -402,6 +407,8 @@ interface InspectorPanelProps {
   onRemoveEntity: (entityId: string, count?: number) => void;
   onRemoveBelt: (beltId: string) => void;
   onOpenConstructionCenter: () => void;
+  onGalacticExporterPausedChange: (entityId: string, paused: boolean) => void;
+  galacticActivityStatus: GalacticActivityPublicStatus | null;
   fabricatorFocusItemId?: ItemId | null;
 }
 
@@ -718,6 +725,8 @@ function EntityInspector({
   onUpgrade,
   onRemove,
   onOpenConstructionCenter,
+  onGalacticExporterPausedChange,
+  galacticActivityStatus,
 }: {
   game: GameState;
   entity: FactoryEntity;
@@ -752,6 +761,8 @@ function EntityInspector({
   onUpgrade: (entityId: string) => void;
   onRemove: (entityId: string, count?: number) => void;
   onOpenConstructionCenter: () => void;
+  onGalacticExporterPausedChange: (entityId: string, paused: boolean) => void;
+  galacticActivityStatus: GalacticActivityPublicStatus | null;
 }) {
   const [editingStationSlot, setEditingStationSlot] = useState<number | null>(null);
   const status = getEntityOperatingStatus(game, entity);
@@ -771,12 +782,12 @@ function EntityInspector({
         <dl className="metric-ledger">
           <div><dt>{extractor.shortName}</dt><dd>×{entity.minerCount}</dd></div>
           <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
-          <div><dt>剩余储量</dt><dd>{reserve.infinite ? "无限" : formatAmount(reserve.remaining ?? 0)}</dd></div>
-          <div><dt>初始总量</dt><dd>{reserve.infinite ? "无限" : formatAmount(reserve.capacity ?? 0)}</dd></div>
+          <div><dt>剩余储量</dt><dd>{reserve.infinite ? "无限" : formatQuantityCompact(reserve.remaining ?? 0)}</dd></div>
+          <div><dt>初始总量</dt><dd>{reserve.infinite ? "无限" : formatQuantityCompact(reserve.capacity ?? 0)}</dd></div>
           <div><dt>剩余比例</dt><dd className={reserve.exhausted ? "status-text status-text--blocked" : undefined}>{reserve.infinite ? "无限" : `${reserve.remainingPercent}%`}</dd></div>
           <div><dt>自动产出</dt><dd>{entity.productionRate.toFixed(1)}/min</dd></div>
           <div><dt>采矿科技</dt><dd>{getMiningSpeedMultiplier(game).toFixed(2)}×</dd></div>
-          <div><dt>输出缓存</dt><dd>{formatAmount(entity.outputs[entity.resourceId!] ?? 0)}</dd></div>
+          <div><dt>输出缓存</dt><dd>{formatQuantityCompact(entity.outputs[entity.resourceId!] ?? 0)}</dd></div>
         </dl>
         <PowerNetworkControl game={game} entity={entity} onGridChange={onPowerGridChange} onPowerPriorityChange={onPowerPriorityChange} onGenerationPriorityChange={onGenerationPriorityChange} />
         <EntityManagementActions game={game} entity={entity} onAdd={onAdd} onRemove={onRemove} />
@@ -810,6 +821,25 @@ function EntityInspector({
     );
   }
 
+  if (entity.buildingId === "galactic_material_exporter") {
+    const activityItems: ItemId[] = ["universe_matrix", "solar_sail", "small_carrier_rocket", "antimatter_fuel_rod"];
+    return <div className="inspector-content galactic-exporter-inspector">
+      <div className="inspector-identity"><i className="building-mark"><Rocket size={18} /></i><div><span>银河终局工程</span><strong>{building.name}</strong></div></div>
+      <dl className="metric-ledger">
+        <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
+        <div><dt>运行开关</dt><dd>{entity.galacticExporterPaused !== false ? "已暂停" : "交付中"}</dd></div>
+        <div><dt>额定耗电</dt><dd>{formatQuantityCompact((building.powerDemandKw ?? 0) * entity.machineCount)} kW</dd></div>
+        <div><dt>累计出口</dt><dd>{formatQuantityCompact(game.endgame.totalExported)}</dd></div>
+      </dl>
+      <button className="construction-center-open" type="button" onClick={() => onGalacticExporterPausedChange(entity.id, entity.galacticExporterPaused === false)}>{entity.galacticExporterPaused !== false ? <Play size={15} /> : <Pause size={15} />}{entity.galacticExporterPaused !== false ? "恢复物资交付" : "暂停物资交付"}</button>
+      <div className="galactic-exporter-inputs">{activityItems.map((itemId) => <div key={itemId}><ItemMark itemId={itemId} /><span>{ITEMS[itemId].name}</span><strong>{formatQuantityCompact(entity.inputs[itemId] ?? 0)}</strong></div>)}</div>
+      <GalacticActivityPanel game={game} status={galacticActivityStatus} compact />
+      <PowerNetworkControl game={game} entity={entity} onGridChange={onPowerGridChange} onPowerPriorityChange={onPowerPriorityChange} onGenerationPriorityChange={onGenerationPriorityChange} />
+      <p className="inspector-description">{building.description}</p>
+      <EntityManagementActions game={game} entity={entity} onAdd={onAdd} onRemove={onRemove} />
+    </div>;
+  }
+
   const fuelOptions = getFuelItemIdsForBuilding(entity.buildingId!);
   if (fuelOptions.length > 0) {
     const fuelId = entity.fuelItemId;
@@ -831,7 +861,7 @@ function EntityInspector({
           <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
           <div><dt>实时出力</dt><dd>{(entity.powerOutputKw ?? 0).toFixed(0)} kW</dd></div>
           <div><dt>额定出力</dt><dd>{ratedPower.toFixed(0)} kW</dd></div>
-          <div><dt>燃料库存</dt><dd>{fuelId ? formatAmount(entity.inputs[fuelId] ?? 0) : "-"}</dd></div>
+          <div><dt>燃料库存</dt><dd>{fuelId ? formatQuantityCompact(entity.inputs[fuelId] ?? 0) : "-"}</dd></div>
           <div><dt>单件热值</dt><dd>{fuelId ? `${FUEL_ENERGY_MJ[fuelId]} MJ` : "-"}</dd></div>
           <div><dt>反应余能</dt><dd>{(entity.fuelRemainingMj ?? 0).toFixed(2)} MJ</dd></div>
         </dl>
@@ -887,8 +917,8 @@ function EntityInspector({
         <dl className="metric-ledger">
           <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
           <div><dt>转换方向</dt><dd>{ITEMS[inputId].name} → {ITEMS[outputId].name}</dd></div>
-          <div><dt>输入库存</dt><dd>{formatAmount(entity.inputs[inputId] ?? 0)}</dd></div>
-          <div><dt>输出库存</dt><dd>{formatAmount(entity.outputs[outputId] ?? 0)}</dd></div>
+          <div><dt>输入库存</dt><dd>{formatQuantityCompact(entity.inputs[inputId] ?? 0)}</dd></div>
+          <div><dt>输出库存</dt><dd>{formatQuantityCompact(entity.outputs[outputId] ?? 0)}</dd></div>
           <div><dt>当前功率</dt><dd>{charging ? `-${(entity.powerInputKw ?? 0).toFixed(0)}` : (entity.powerOutputKw ?? 0).toFixed(0)} kW</dd></div>
           <div><dt>单元能量</dt><dd>90 MJ</dd></div>
         </dl>
@@ -924,7 +954,7 @@ function EntityInspector({
           <dl className="metric-ledger">
             <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
             <div><dt>需求目标</dt><dd>{peer ? `${getPlanet(peer.planetId).name} · ${peer.id}` : "等待星际需求"}</dd></div>
-            <div><dt>可用库存</dt><dd>{itemId ? formatAmount(entity.outputs[itemId] ?? 0) : "-"}</dd></div>
+            <div><dt>可用库存</dt><dd>{itemId ? formatQuantityCompact(entity.outputs[itemId] ?? 0) : "-"}</dd></div>
             <div><dt>采集周期</dt><dd>{Math.floor(entity.progress * 100)}%</dd></div>
             <div><dt>采集速率</dt><dd>{entity.productionRate.toFixed(1)}/min</dd></div>
             <div><dt>完成航次</dt><dd>{entity.stationTrips ?? 0}</dd></div>
@@ -1032,7 +1062,7 @@ function EntityInspector({
                 <header><span>槽位 {slotIndex + 1}</span>{routes.length ? <strong><Route size={12} />{routes.length} 条在途</strong> : <small>空闲</small>}</header>
                 {slot.itemId || editingStationSlot === slotIndex ? <ItemCatalogPicker value={slot.itemId} items={acceptedItems} disabledIds={configuredItems} allowClear label={`物流槽位 ${slotIndex + 1} 物品`} onChange={(nextItemId) => { onStationSlotItemChange(entity.id, slotIndex, nextItemId); setEditingStationSlot(null); }} /> : <button className="station-slot-configure" type="button" onClick={() => setEditingStationSlot(slotIndex)}><Plus size={13} />配置货物</button>}
                 {slot.itemId ? <>
-                  <div className="station-slot-stock"><ItemMark itemId={slot.itemId} /><span>输入 {formatAmount(entity.inputs[slot.itemId] ?? 0)}</span><strong>库存 {formatAmount(entity.outputs[slot.itemId] ?? 0)} / {formatAmount(getStationSlotCapacity(game, entity, slot))}</strong></div>
+                  <div className="station-slot-stock"><ItemMark itemId={slot.itemId} /><span>输入 {formatQuantityCompact(entity.inputs[slot.itemId] ?? 0)}</span><strong>库存 {formatQuantityCompact(entity.outputs[slot.itemId] ?? 0)} / {formatQuantityCompact(getStationSlotCapacity(game, entity, slot))}</strong></div>
                   <div className="station-slot-scope"><span>本地</span><div className="segmented-control">
                     {(["supply", "demand", "storage"] as StationLogisticsMode[]).map((mode) => <button className={slot.localMode === mode ? "active" : ""} type="button" key={mode} onClick={() => onStationSlotModeChange(entity.id, slotIndex, "local", mode)}>{{ supply: "供应", demand: "需求", storage: "仓储" }[mode]}</button>)}
                   </div></div>
@@ -1122,8 +1152,8 @@ function EntityInspector({
         ) : null}
         <dl className="metric-ledger">
           <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
-          <div><dt>输入缓存</dt><dd>{itemId ? formatAmount(entity.inputs[itemId] ?? 0) : "-"}</dd></div>
-          <div><dt>可用库存</dt><dd>{itemId ? formatAmount(entity.outputs[itemId] ?? 0) : "-"}</dd></div>
+          <div><dt>输入缓存</dt><dd>{itemId ? formatQuantityCompact(entity.inputs[itemId] ?? 0) : "-"}</dd></div>
+          <div><dt>可用库存</dt><dd>{itemId ? formatQuantityCompact(entity.outputs[itemId] ?? 0) : "-"}</dd></div>
           <div><dt>容量上限</dt><dd>{getEntityOutputCapacity(game, entity)}</dd></div>
         </dl>
         <PowerNetworkControl game={game} entity={entity} onGridChange={onPowerGridChange} onPowerPriorityChange={onPowerPriorityChange} onGenerationPriorityChange={onGenerationPriorityChange} />
@@ -1172,8 +1202,8 @@ function EntityInspector({
               </>
             ) : null}
             <div><dt>配方周期</dt><dd>{recipe?.id === "ray_power" ? "连续" : recipe ? `${recipe.duration.toFixed(1)} s` : "-"}</dd></div>
-            {railEjector ? <div><dt>戴森云轨道帆</dt><dd>{formatAmount(game.dysonSwarm.sailsInOrbit)}</dd></div> : null}
-            {launchSilo ? <div><dt>永久结构点</dt><dd>{formatAmount(game.dysonSphere.structurePoints)}</dd></div> : null}
+            {railEjector ? <div><dt>戴森云轨道帆</dt><dd>{formatQuantityCompact(game.dysonSwarm.sailsInOrbit)}</dd></div> : null}
+            {launchSilo ? <div><dt>永久结构点</dt><dd>{formatQuantityCompact(game.dysonSphere.structurePoints)}</dd></div> : null}
           </>
         )}
       </dl>
@@ -1492,11 +1522,11 @@ function Fabricator({ game, focusItemId, onCraft, onCraftItem, onQueueCraftItem,
               {definition.costs.map((cost) => {
                 const current = game.tray[cost.itemId] ?? 0;
                 const required = cost.amount * batches;
-                if (current >= required) return <span className="cost cost--ready" key={cost.itemId}><ItemMark itemId={cost.itemId} /> {formatAmount(current)}/{required}</span>;
-                return <button className="cost cost--missing-link" type="button" key={cost.itemId} onClick={() => focusHandcraftItem(cost.itemId)} title={`转到${getItem(cost.itemId).name}手工制造`} aria-label={`手工制造${getItem(cost.itemId).name}`}><ItemMark itemId={cost.itemId} /> {formatAmount(current)}/{required}</button>;
+                if (current >= required) return <span className="cost cost--ready" key={cost.itemId}><ItemMark itemId={cost.itemId} /> {formatQuantityCompact(current)}/{formatQuantityCompact(required)}</span>;
+                return <button className="cost cost--missing-link" type="button" key={cost.itemId} onClick={() => focusHandcraftItem(cost.itemId)} title={`转到${getItem(cost.itemId).name}手工制造`} aria-label={`手工制造${getItem(cost.itemId).name}`}><ItemMark itemId={cost.itemId} /> {formatQuantityCompact(current)}/{formatQuantityCompact(required)}</button>;
               })}
             </div>
-            {plan.possible && plan.usesUpstream ? <small className="fabricator-plan-summary">递归合成 · 实际消耗 {plan.consumedItems.map((item) => `${getItem(item.itemId).name}×${item.amount}`).join("、")}</small> : !plan.possible && plan.missingItems.length > 0 ? <small className="fabricator-plan-summary warning">缺口 {plan.missingItems.map((item) => `${getItem(item.itemId).name}×${item.missing}`).join("、")}</small> : null}
+            {plan.possible && plan.usesUpstream ? <small className="fabricator-plan-summary">递归合成 · 实际消耗 {plan.consumedItems.map((item) => `${getItem(item.itemId).name}×${formatQuantityCompact(item.amount)}`).join("、")}</small> : plan.blocker ? <small className="fabricator-plan-summary warning">安全上限：{getItem(plan.blocker.itemId).name} {formatQuantityCompact(plan.blocker.expected)}/{formatQuantityCompact(plan.blocker.limit)}</small> : !plan.possible && plan.missingItems.length > 0 ? <small className="fabricator-plan-summary warning">缺口 {plan.missingItems.map((item) => `${getItem(item.itemId).name}×${formatQuantityCompact(item.missing)}`).join("、")}</small> : null}
           </article>
         );
       }) : handcraftRecipes.map((recipe) => {
@@ -1510,7 +1540,7 @@ function Fabricator({ game, focusItemId, onCraft, onCraftItem, onQueueCraftItem,
               <div><strong>{getItem(output.itemId).name}</strong><span>{getBuilding(recipe.buildingId).shortName} · {recipe.duration}s · 单批 ×{output.amount}</span></div>
               <div className="handcraft-actions">
                 <button type="button" disabled={!available} onClick={() => onCraftItem(recipe.id, batches)} title={`立即手工制造${getItem(output.itemId).name}`}>
-                  {unlocked ? <Hammer size={14} /> : <LockKeyhole size={14} />} {unlocked ? `制作 ×${output.amount * batches}` : "锁定"}
+                  {unlocked ? <Hammer size={14} /> : <LockKeyhole size={14} />} {unlocked ? `制作 ×${formatQuantityCompact(output.amount * batches)}` : "锁定"}
                 </button>
                 <button type="button" disabled={!canQueueHandcraftRecipe(game, recipe.id)} onClick={() => onQueueCraftItem(recipe.id, batches)} title={`加入${getItem(output.itemId).name}手工队列`} aria-label={`排队制造${getItem(output.itemId).name}`}><ListPlus size={14} /></button>
               </div>
@@ -1521,9 +1551,9 @@ function Fabricator({ game, focusItemId, onCraft, onCraftItem, onQueueCraftItem,
                 const current = Math.floor(game.tray[input.itemId] ?? 0);
                 const required = input.amount * batches;
                 if (current < required && handcraftOutputItemIds.has(input.itemId)) {
-                  return <button className="cost cost--missing-link" type="button" key={input.itemId} onClick={() => focusHandcraftItem(input.itemId)} title={`转到${getItem(input.itemId).name}手工制造`} aria-label={`手工制造${getItem(input.itemId).name}`}><ItemMark itemId={input.itemId} /> {formatAmount(current)}/{required}</button>;
+                  return <button className="cost cost--missing-link" type="button" key={input.itemId} onClick={() => focusHandcraftItem(input.itemId)} title={`转到${getItem(input.itemId).name}手工制造`} aria-label={`手工制造${getItem(input.itemId).name}`}><ItemMark itemId={input.itemId} /> {formatQuantityCompact(current)}/{formatQuantityCompact(required)}</button>;
                 }
-                return <span className={current >= required ? "cost cost--ready" : "cost"} key={input.itemId}><ItemMark itemId={input.itemId} /> {formatAmount(current)}/{required}</span>;
+                return <span className={current >= required ? "cost cost--ready" : "cost"} key={input.itemId}><ItemMark itemId={input.itemId} /> {formatQuantityCompact(current)}/{formatQuantityCompact(required)}</span>;
               })}
             </div>
           </article>
@@ -1550,7 +1580,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
       {props.tab === "fabricate" ? <Fabricator game={props.game} focusItemId={props.fabricatorFocusItemId} onCraft={props.onCraft} onCraftItem={props.onCraftItem} onQueueCraftItem={props.onQueueCraftItem} onCancelCraftQueue={props.onCancelCraftQueue} /> : props.selectedEntities.length > 1 ? (
         <MultiSelectionInspector game={props.game} entities={props.selectedEntities} onRecipeChange={props.onBatchRecipeChange} onInstallSprayCoater={props.onBatchInstallSprayCoater} onProliferatorConfiguration={props.onBatchProliferatorConfiguration} />
       ) : props.selectedEntity ? (
-         <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationFleetFill={props.onStationFleetFill} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationWarperAutoRefillChange={props.onStationWarperAutoRefillChange} onStationWarperTargetChange={props.onStationWarperTargetChange} onStationHubChange={props.onStationHubChange} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onStationSlotRoutePolicyChange={props.onStationSlotRoutePolicyChange} onStationSlotWarperBudgetChange={props.onStationSlotWarperBudgetChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onAdd={props.onAddEntity} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} onOpenConstructionCenter={props.onOpenConstructionCenter} />
+         <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationFleetFill={props.onStationFleetFill} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationWarperAutoRefillChange={props.onStationWarperAutoRefillChange} onStationWarperTargetChange={props.onStationWarperTargetChange} onStationHubChange={props.onStationHubChange} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onStationSlotRoutePolicyChange={props.onStationSlotRoutePolicyChange} onStationSlotWarperBudgetChange={props.onStationSlotWarperBudgetChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onProliferatorConfiguration={props.onProliferatorConfiguration} onAdd={props.onAddEntity} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} onOpenConstructionCenter={props.onOpenConstructionCenter} onGalacticExporterPausedChange={props.onGalacticExporterPausedChange} galacticActivityStatus={props.galacticActivityStatus} />
       ) : props.selectedBelt ? (
         <BeltInspector game={props.game} belt={props.selectedBelt} hasCopiedConfiguration={props.hasCopiedBeltConfiguration} focused={props.focusedBeltNetworkId === props.selectedBelt.id} onPriorityChange={props.onBeltPriorityChange} onStackSizeChange={props.onBeltStackSizeChange} onMonitorChange={props.onBeltMonitorChange} onRouteModeChange={props.onBeltRouteModeChange} onRouteOffsetChange={props.onBeltRouteOffsetChange} onApplyConfigurationToNetwork={props.onApplyBeltConfigurationToNetwork} onFocusNetwork={props.onFocusBeltNetwork} onUpgrade={props.onUpgradeBelt} onUpgradeNetwork={props.onUpgradeBeltNetwork} onCopyConfiguration={props.onCopyBeltConfiguration} onPasteConfiguration={props.onPasteBeltConfiguration} onRemove={props.onRemoveBelt} onRemoveNetwork={props.onRemoveBeltNetwork} />
       ) : <InspectorEmpty game={props.game} />}
@@ -1714,7 +1744,7 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
       <div className="dock-label">
         <div className="dock-summary">
           <span>施工托盘</span>
-          <strong>{Object.values(game.construction).reduce((sum, amount) => sum + (amount ?? 0), 0) + Object.values(game.portableFleet ?? {}).reduce((sum, amount) => sum + (amount ?? 0), 0)}</strong>
+          <strong>{formatQuantityCompact(Object.values(game.construction).reduce((sum, amount) => sum + (amount ?? 0), 0) + Object.values(game.portableFleet ?? {}).reduce((sum, amount) => sum + (amount ?? 0), 0))}</strong>
         </div>
         <select className="dock-category-select" value={category} onChange={(event) => setCategory(event.target.value as ConstructionCategory)} aria-label="施工托盘分类">
           <option value="all">全部设备</option>
@@ -1747,15 +1777,16 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
           const quickCraftPlan = getConstructionQuickCraftPlan(game, id);
           const craftable = quickCraftPlan.possible;
           const quickCraftState = quickCraftPlan.status;
-          const consumptionHint = quickCraftPlan.consumedItems.map((item) => `${getItem(item.itemId).name}×${item.amount}`).join("、");
+          const consumptionHint = quickCraftPlan.consumedItems.map((item) => `${getItem(item.itemId).name}×${formatQuantityCompact(item.amount)}`).join("、");
           const craftDeficits = craftable ? null : quickCraftPlan;
           const craftHint = craftable
             ? quickCraftPlan.usesUpstream
               ? `一键合成上游材料并制造${label}${consumptionHint ? ` · 消耗${consumptionHint}` : ""}`
               : `制造${label}${consumptionHint ? ` · 消耗${consumptionHint}` : ""}`
             : [
+                quickCraftPlan.blocker ? `缓存安全上限：${getItem(quickCraftPlan.blocker.itemId).name} ${quickCraftPlan.blocker.expected}/${quickCraftPlan.blocker.limit}` : null,
                 craftDeficits?.missingTechnology ? `科技：${craftDeficits.missingTechnology}` : null,
-                ...(craftDeficits?.missingItems.map((item) => `${getItem(item.itemId).name} ${item.current}/${item.required}（缺 ${item.missing}）`) ?? []),
+                ...(craftDeficits?.missingItems.map((item) => `${getItem(item.itemId).name} ${formatQuantityCompact(item.current)}/${formatQuantityCompact(item.required)}（缺 ${formatQuantityCompact(item.missing)}）`) ?? []),
               ].filter(Boolean).join(" · ") || `无法制造${label}`;
           return (
             <div className={`construction-item-shell${active ? " construction-item-shell--active" : ""}`} key={id}>
@@ -1810,7 +1841,7 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
             : null;
           const missingItems = recipe.inputs.flatMap((input) => {
             const current = Math.floor(game.tray[input.itemId] ?? 0);
-            return current < input.amount ? [`${getItem(input.itemId).name} ${current}/${input.amount}（缺 ${input.amount - current}）`] : [];
+            return current < input.amount ? [`${getItem(input.itemId).name} ${formatQuantityCompact(current)}/${formatQuantityCompact(input.amount)}（缺 ${formatQuantityCompact(input.amount - current)}）`] : [];
           });
           const craftHint = craftable ? `制造${item.name}` : [missingTechnology ? `科技：${missingTechnology}` : null, ...missingItems].filter(Boolean).join(" · ") || `无法制造${item.name}`;
           return <div className={`construction-item-shell construction-item-shell--fleet${cargoReady ? " construction-item-shell--fleet-ready" : ""}`} key={itemId}>
@@ -1838,7 +1869,7 @@ export function CargoCursor({ cargo, x, y }: { cargo: CargoStack | null; x: numb
     <div className="cargo-cursor" style={{ transform: `translate3d(${x + 16}px, ${y + 16}px, 0)` }}>
       <ItemGlyph itemId={cargo.itemId} />
       <span>{item.name}</span>
-      <strong>×{formatAmount(cargo.amount)}</strong>
+      <strong>×{formatQuantityCompact(cargo.amount)}</strong>
     </div>
   );
 }
@@ -1916,7 +1947,7 @@ export function HeaderControls({
         <div><Zap size={16} /><span>电网负载</span><strong>{game.metrics.demandKw.toFixed(0)}<small>/{game.metrics.generationKw.toFixed(0)} kW</small></strong></div>
         <div className={`metric-tone metric-tone--${powerTone}`}><Power size={16} /><span>供电效率</span><strong>{Math.round(game.metrics.powerFactor * 100)}<small>%</small></strong></div>
         <div><Factory size={16} /><span>生产通量</span><strong>{game.metrics.totalItemsPerMinute.toFixed(1)}<small>/min</small></strong></div>
-        <div><FlaskConical size={16} /><span>蓝 / 红 / 黄 / 紫 / 绿 / 白矩阵</span><strong>{formatAmount(game.totalProduced.electromagnetic_matrix ?? 0)}<small> / {formatAmount(game.totalProduced.energy_matrix ?? 0)} / {formatAmount(game.totalProduced.structure_matrix ?? 0)} / {formatAmount(game.totalProduced.information_matrix ?? 0)} / {formatAmount(game.totalProduced.gravity_matrix ?? 0)} / {formatAmount(game.totalProduced.universe_matrix ?? 0)}</small></strong></div>
+        <div><FlaskConical size={16} /><span>蓝 / 红 / 黄 / 紫 / 绿 / 白矩阵</span><strong><QuantityValue value={game.totalProduced.electromagnetic_matrix ?? 0} /><small> / <QuantityValue value={game.totalProduced.energy_matrix ?? 0} /> / <QuantityValue value={game.totalProduced.structure_matrix ?? 0} /> / <QuantityValue value={game.totalProduced.information_matrix ?? 0} /> / <QuantityValue value={game.totalProduced.gravity_matrix ?? 0} /> / <QuantityValue value={game.totalProduced.universe_matrix ?? 0} /></small></strong></div>
       </div>
       <div className="header-actions">
         <button className="header-action--overflowable" type="button" onClick={onReturnToMenu} title="保存并返回主菜单" aria-label="保存并返回主菜单"><House size={17} /></button>

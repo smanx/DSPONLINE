@@ -1,49 +1,61 @@
-import { Check, Database, Info, MessageCircle, Orbit, X, type LucideIcon } from "lucide-react";
+import { Activity, Check, FlaskConical, Gauge, Info, MessageCircle, Orbit, Route, Trash2, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-24-v0.8.1",
+  id: "2026-07-24-v0.9.0",
   date: "2026年7月24日",
-  version: "0.8.1",
-  title: "云账号与存档开放更新",
-  summary: "本次更新开放用户名密码注册，以及主云存档、三个手动云槽、历史恢复和每 10 分钟自动同步。排行榜继续要求验证邮箱，邮件系统开放前暂时无法绑定邮箱或找回密码。账号操作不会自动下载、覆盖或清除本地存档。",
+  version: "0.9.0",
+  title: "长期生产与银河工程更新",
+  summary: "本次更新让生产画面流畅度可按设备选择，并完成物流、增产剂、戴森工程、无限科研和银河出口的长期运行升级。旧存档会无损迁移到 GameState v33；活动服务保持关闭，不会自动上传贡献或发放奖励。",
   items: [
     {
-      id: "username-registration",
-      title: "用户名密码直接注册",
-      description: "新账号使用 4 至 24 位字母、数字或下划线用户名注册，无需等待邮件服务。旧账号仍可继续使用原邮箱登录，并会自动获得唯一用户名。",
+      id: "production-refresh",
+      title: "生产画面刷新频率",
+      description: "新增自动调节、经典流畅、高流畅、均衡、省电、低配置和极限省电七档。固定档不会被自动系统覆盖，绿色生产进度在真实库存快照之间继续平滑推进。",
     },
     {
-      id: "cloud-saves-open",
-      title: "全部云存档功能开放",
-      description: "登录后即可使用主云存档、手动槽位 1/2/3、修订历史、历史恢复和十分钟自动同步，不再要求邮箱验证。版本冲突仍必须由玩家明确选择。",
+      id: "production-correctness",
+      title: "生产与物流正确性",
+      description: "增产剂耗尽后自动回到基础倍率，供应塔与需求塔分别使用自身起送比例；增产剂缓存上限可独立设置，手机边缘拖动与普通点击放置不再互相干扰。",
     },
     {
-      id: "local-save-safety",
-      title: "本地存档保持独立",
-      description: "注册、登录、退出和自动上传不会清除或覆盖本地主存档、三个本地槽与自动快照。下载和恢复云存档仍需手动确认，并在替换前保留本地回滚快照。",
+      id: "dyson-upgrade",
+      title: "戴森工程升级",
+      description: "在轨太阳帆与壳面太阳帆统一为每帆 88 kW，结构点保持 960 kW；球壳设计可复制到其他恒星系，几何参数保留但施工进度不会复制。",
     },
     {
-      id: "leaderboard-verification",
-      title: "排行榜保留邮箱门槛",
-      description: "云存档与排行榜权限已经拆分。未验证邮箱的账号可以正常保存工厂，但提交银河排行榜仍需已验证邮箱和可校验的主云存档。",
+      id: "tray-and-quantity",
+      title: "托盘管理与超大数量",
+      description: "当前行星物资托盘支持筛选、全选、删除一半和二次确认。大数量统一使用万、亿和科学计数显示，悬停、键盘聚焦或手机点击可查看完整精确值。",
     },
     {
-      id: "mail-pending",
-      title: "邮件系统等待开放",
-      description: "邮件服务当前尚未启用。未绑定邮箱的账号暂时无法找回忘记的密码，也暂时不能完成排行榜验证；邮件开放后可在账号设置中绑定。",
+      id: "logistics-performance",
+      title: "大规模物流性能",
+      description: "物流塔匹配改用会话级索引和路线经济缓存。10、50、100、500 塔对比保持状态哈希一致，500 塔测量中位耗时下降约 80%。",
+    },
+    {
+      id: "infinite-research",
+      title: "无限科研长期曲线",
+      description: "四项长期科技扩展到 Lv.1000，连续体演算封顶 Lv.23。超大宇宙矩阵成本使用精确整数结算，旧投入会守恒结转并保留历史等级。",
+    },
+    {
+      id: "galactic-project",
+      title: "银河终局工程预览",
+      description: "新增四输入银河物资出口建筑、本地个人交付记录和宇宙联合空间站活动界面。服务器贡献确认、奖励与空间站本体仍在后续版本，当前活动开关保持关闭。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "username-registration": Info,
-  "cloud-saves-open": Database,
-  "local-save-safety": Check,
-  "leaderboard-verification": Orbit,
-  "mail-pending": MessageCircle,
+  "production-refresh": Gauge,
+  "production-correctness": Check,
+  "dyson-upgrade": Orbit,
+  "tray-and-quantity": Trash2,
+  "logistics-performance": Route,
+  "infinite-research": FlaskConical,
+  "galactic-project": Activity,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

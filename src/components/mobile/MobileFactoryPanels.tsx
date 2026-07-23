@@ -14,6 +14,7 @@ import {
   Plus,
   Route,
   Search,
+  Settings,
   Sparkles,
   Trash2,
   Wrench,
@@ -47,6 +48,8 @@ import {
   getResourceReserveSnapshot,
   isTechnologyCompleted,
 } from "../../game/engine";
+import type { PlanetTrayDiscardRequest } from "../../game/engine";
+import { TrayManagementDialog } from "../TrayManagementDialog";
 import type {
   BeltConnection,
   BeltTier,
@@ -65,6 +68,8 @@ import { formatKilowatts } from "../../game/units";
 import { CONSTRUCTION_BUILD_ORDER, constructionBuildIcon } from "../GamePanels";
 import { ItemGlyph } from "../ItemReference";
 import { QuantityStepper } from "../QuantityStepper";
+import { QuantityValue } from "../QuantityValue";
+import { formatQuantityCompact } from "../../game/quantityFormat";
 import { MobileSheetFrame } from "./MobileSheetFrame";
 
 export type MobileCanvasMode = "browse" | "place" | "connect" | "select" | "layout" | "region";
@@ -175,7 +180,7 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
           const compatible = isBelt || canPlaceBuildingOnPlanet(id as BuildingId, game.activePlanetId, game);
           const plan = getConstructionQuickCraftPlan(game, id);
           const active = isBelt ? beltTierMode === "manual" && beltTier === getBeltTier(id) : placement === id;
-          const consumption = plan.consumedItems.slice(0, 2).map((entry) => `${getItem(entry.itemId).name}×${entry.amount}`).join("、");
+          const consumption = plan.consumedItems.slice(0, 2).map((entry) => `${getItem(entry.itemId).name}×${formatQuantityCompact(entry.amount)}`).join("、");
           const disabled = mode === "deploy" && (count < 1 || !compatible);
           return <button className={`mobile-build-card${active ? " active" : ""}${plan.usesUpstream ? " upstream" : ""}${mode === "craft" && !plan.possible ? " unavailable" : ""}`} type="button" disabled={disabled} key={id} onClick={() => {
             if (mode === "deploy") {
@@ -189,7 +194,7 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
             else onMissingCraft(id);
           }} title={mode === "deploy" ? compatible ? `部署${label}` : "当前行星无法部署" : plan.possible ? `制造${label}` : "查看缺失材料"}>
             <i>{constructionBuildIcon(id as BuildingId | ConveyorBeltId)}</i>
-            <span><strong>{label}</strong><small>{mode === "deploy" ? `库存 ×${count}` : plan.possible ? consumption || "材料齐备" : plan.missingTechnology ? `缺科技：${plan.missingTechnology}` : `缺 ${plan.missingItems[0] ? getItem(plan.missingItems[0].itemId).name : "材料"}`}</small></span>
+            <span><strong>{label}</strong><small>{mode === "deploy" ? `库存 ×${count}` : plan.possible ? consumption || "材料齐备" : plan.blocker ? `安全上限：${getItem(plan.blocker.itemId).name}` : plan.missingTechnology ? `缺科技：${plan.missingTechnology}` : `缺 ${plan.missingItems[0] ? getItem(plan.missingItems[0].itemId).name : "材料"}`}</small></span>
             <em>{active ? "已选择" : mode === "deploy" ? `×${count}` : plan.usesUpstream ? "可合成" : plan.possible ? "可制造" : "不可制造"}</em>
             <b>{mode === "deploy" ? <><Pin size={15} />部署</> : <><Hammer size={15} />制造</>}</b>
           </button>;
@@ -203,17 +208,19 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
 type InventoryTab = "tray" | "fleet" | "dyson";
 type InventorySort = "amount" | "name" | "kind";
 
-export function MobileInventorySheet({ game, snap, onSnap, onClose, onPickTray, onDropCargo }: {
+export function MobileInventorySheet({ game, snap, onSnap, onClose, onPickTray, onDropCargo, onDiscardTrayItems }: {
   game: GameState;
   snap: MobileSheetSnap;
   onSnap: (snap: MobileSheetSnap) => void;
   onClose: () => void;
   onPickTray: (itemId: ItemId) => void;
   onDropCargo: () => void;
+  onDiscardTrayItems: (requests: PlanetTrayDiscardRequest[]) => void;
 }) {
   const [tab, setTab] = useState<InventoryTab>("tray");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<InventorySort>("amount");
+  const [managementOpen, setManagementOpen] = useState(false);
   const dyson = getDysonEngineeringSnapshot(game, getPlanet(game.activePlanetId).systemId);
   const trayItems = useMemo(() => (Object.entries(game.tray) as Array<[ItemId, number]>).filter(([, amount]) => amount > 0.001).filter(([itemId]) => {
     const term = query.trim().toLocaleLowerCase("zh-CN");
@@ -224,7 +231,7 @@ export function MobileInventorySheet({ game, snap, onSnap, onClose, onPickTray, 
       <section className={`mobile-cargo-slot${game.cargo ? " loaded" : ""}`}>
         <i>{game.cargo ? <ItemGlyph itemId={game.cargo.itemId} /> : <PackageOpen size={24} />}</i>
         <span><small>{game.cargo ? "手提星际载荷" : "光标载荷"}</small><strong>{game.cargo ? getItem(game.cargo.itemId).name : "当前空载"}</strong></span>
-        {game.cargo ? <b>×{Math.floor(game.cargo.amount).toLocaleString("zh-CN")}</b> : null}
+        {game.cargo ? <b>×<QuantityValue value={game.cargo.amount} /></b> : null}
         <button type="button" disabled={!game.cargo} onClick={onDropCargo}>{game.cargo ? "全部放回" : "无物资"}</button>
       </section>
       <div className="mobile-inventory-tabs mobile-segmented" role="tablist" aria-label="物资分类">
@@ -233,9 +240,10 @@ export function MobileInventorySheet({ game, snap, onSnap, onClose, onPickTray, 
         <button className={tab === "dyson" ? "active" : ""} type="button" role="tab" aria-selected={tab === "dyson"} onClick={() => setTab("dyson")}>戴森摘要</button>
       </div>
       {tab === "tray" ? <>
-        <div className="mobile-inventory-toolbar"><label><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索当前行星物资" aria-label="搜索物资" /></label><button type="button" onClick={() => setSort((current) => current === "amount" ? "name" : current === "name" ? "kind" : "amount")}><ArrowDownUp size={17} />{{ amount: "数量", name: "名称", kind: "类别" }[sort]}</button></div>
-        <div className="mobile-inventory-list">{trayItems.map(([itemId, amount]) => <button type="button" key={itemId} onClick={() => onPickTray(itemId)} disabled={Boolean(game.cargo && game.cargo.itemId !== itemId)}><ItemGlyph itemId={itemId} /><span><strong>{getItem(itemId).name}</strong><small>{getItem(itemId).kind === "fluid" ? "流体" : getItem(itemId).kind === "matrix" ? "矩阵" : "物品"}</small></span><b>{Math.floor(amount).toLocaleString("zh-CN")}</b><ChevronRight size={18} /></button>)}{trayItems.length === 0 ? <div className="mobile-sheet-empty"><Box size={24} /><span>没有符合条件的库存</span></div> : null}</div>
-      </> : tab === "fleet" ? <div className="mobile-inventory-list">{PORTABLE_FLEET_ITEM_IDS.map((itemId) => <div className="mobile-inventory-row" key={itemId}><ItemGlyph itemId={itemId} /><span><strong>{getItem(itemId).name}</strong><small>跨星球随身携带</small></span><b>{Math.floor(game.portableFleet?.[itemId] ?? 0).toLocaleString("zh-CN")}</b></div>)}</div> : <div className="mobile-dyson-summary"><div><span>在轨太阳帆</span><strong>{Math.floor(game.dysonSwarm.sailsInOrbit).toLocaleString("zh-CN")}</strong></div><div><span>永久结构点</span><strong>{Math.floor(game.dysonSphere.structurePoints).toLocaleString("zh-CN")}</strong></div><div><span>戴森云功率</span><strong>{formatKilowatts(game.dysonSwarm.generationKw)}</strong></div><div><span>戴森球功率</span><strong>{formatKilowatts(game.dysonSphere.generationKw)}</strong></div><div><span>理论接收率</span><strong>{Math.round(dyson.theoreticalReceptionRate * 100)}%</strong></div><div><span>接收站实际利用率</span><strong>{Math.round(dyson.receiverUtilization * 100)}%</strong></div><div><span>戴森功率利用率</span><strong>{Math.round(dyson.dysonPowerUtilization * 100)}%</strong></div>{dyson.blockedReceiverCount > 0 ? <div className="warning"><span>受阻接收站</span><strong>{dyson.blockedReceiverCount}/{dyson.configuredReceiverCount}</strong></div> : null}</div>}
+        <div className="mobile-inventory-toolbar"><label><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索当前行星物资" aria-label="搜索物资" /></label><button type="button" onClick={() => setSort((current) => current === "amount" ? "name" : current === "name" ? "kind" : "amount")}><ArrowDownUp size={17} />{{ amount: "数量", name: "名称", kind: "类别" }[sort]}</button><button type="button" onClick={() => setManagementOpen(true)}><Settings size={17} />管理</button></div>
+        <div className="mobile-inventory-list">{trayItems.map(([itemId, amount]) => <button type="button" key={itemId} onClick={() => onPickTray(itemId)} disabled={Boolean(game.cargo && game.cargo.itemId !== itemId)}><ItemGlyph itemId={itemId} /><span><strong>{getItem(itemId).name}</strong><small>{getItem(itemId).kind === "fluid" ? "流体" : getItem(itemId).kind === "matrix" ? "矩阵" : "物品"}</small></span><b><QuantityValue value={amount} /></b><ChevronRight size={18} /></button>)}{trayItems.length === 0 ? <div className="mobile-sheet-empty"><Box size={24} /><span>没有符合条件的库存</span></div> : null}</div>
+        {managementOpen ? <TrayManagementDialog game={game} onDiscard={onDiscardTrayItems} onClose={() => setManagementOpen(false)} /> : null}
+      </> : tab === "fleet" ? <div className="mobile-inventory-list">{PORTABLE_FLEET_ITEM_IDS.map((itemId) => <div className="mobile-inventory-row" key={itemId}><ItemGlyph itemId={itemId} /><span><strong>{getItem(itemId).name}</strong><small>跨星球随身携带</small></span><b><QuantityValue value={game.portableFleet?.[itemId] ?? 0} /></b></div>)}</div> : <div className="mobile-dyson-summary"><div><span>在轨太阳帆</span><strong><QuantityValue value={game.dysonSwarm.sailsInOrbit} /></strong></div><div><span>永久结构点</span><strong><QuantityValue value={game.dysonSphere.structurePoints} /></strong></div><div><span>戴森云功率</span><strong>{formatKilowatts(game.dysonSwarm.generationKw)}</strong></div><div><span>戴森球功率</span><strong>{formatKilowatts(game.dysonSphere.generationKw)}</strong></div><div><span>理论接收率</span><strong>{Math.round(dyson.theoreticalReceptionRate * 100)}%</strong></div><div><span>接收站实际利用率</span><strong>{Math.round(dyson.receiverUtilization * 100)}%</strong></div><div><span>戴森功率利用率</span><strong>{Math.round(dyson.dysonPowerUtilization * 100)}%</strong></div>{dyson.blockedReceiverCount > 0 ? <div className="warning"><span>受阻接收站</span><strong>{dyson.blockedReceiverCount}/{dyson.configuredReceiverCount}</strong></div> : null}</div>}
     </MobileSheetFrame>
   );
 }
@@ -281,7 +289,7 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
         </section>
         {entity ? <div className="mobile-inspector-progress"><span>{recipe?.name ?? (entity.kind === "vein" ? "资源采集" : "设备周期")}</span><strong>{Math.round(entity.progress * 100)}%</strong><i><b style={{ width: `${Math.max(0, Math.min(100, entity.progress * 100))}%` }} /></i><small>{entity.productionRate.toFixed(1)}/min · 利用率 {Math.round(entity.utilization * 100)}%{resourceReserve ? ` · ${resourceReserve.infinite ? "无限储量" : resourceReserve.exhausted ? "资源已枯竭" : `储量 ${resourceReserve.remaining?.toLocaleString("zh-CN")}/${resourceReserve.capacity?.toLocaleString("zh-CN")} (${resourceReserve.remainingPercent}%)`}` : ""}</small></div> : null}
         {snap !== "peek" ? <>
-          {entity ? <section className={`mobile-inspector-io${entity.buildingId === "storage_mk1" ? " mobile-inspector-io--storage" : ""}`}><div><header>输入</header>{inputRows.length ? inputRows.map(([itemId, amount]) => <span key={itemId}><ItemGlyph itemId={itemId} /><em>{getItem(itemId).name}</em><strong>{Math.floor(amount)}</strong></span>) : <small>暂无输入缓存</small>}</div><div><header>输出</header>{outputRows.length ? outputRows.map(([itemId, amount]) => <span key={itemId}><ItemGlyph itemId={itemId} /><em>{getItem(itemId).name}</em><strong>{Math.floor(amount)}</strong></span>) : <small>暂无输出缓存</small>}</div></section> : null}
+          {entity ? <section className={`mobile-inspector-io${entity.buildingId === "storage_mk1" || entity.buildingId === "storage_tank" ? " mobile-inspector-io--storage" : ""}`}><div><header>输入</header>{inputRows.length ? inputRows.map(([itemId, amount]) => <span key={itemId}><ItemGlyph itemId={itemId} /><em>{getItem(itemId).name}</em><strong><QuantityValue value={amount} /></strong></span>) : <small>暂无输入缓存</small>}</div><div><header>输出</header>{outputRows.length ? outputRows.map(([itemId, amount]) => <span key={itemId}><ItemGlyph itemId={itemId} /><em>{getItem(itemId).name}</em><strong><QuantityValue value={amount} /></strong></span>) : <small>暂无输出缓存</small>}</div></section> : null}
           {belt ? <section className="mobile-belt-summary"><div><span>物品</span><strong>{getItem(belt.itemId).name}</strong></div><div><span>吞吐</span><strong>{belt.lastFlow.toFixed(1)}/min</strong></div><div><span>堆叠</span><strong>×{belt.stackSize ?? 1}</strong></div><div><span>优先级</span><strong>{belt.priority === 2 ? "高" : belt.priority === 1 ? "标准" : "低"}</strong></div></section> : null}
           {entity ? <QuantityStepper value={addCount} max={addAvailable} disabled={addAvailable < 1} onChange={setAddCount} label="移动端增加设备" /> : null}
           <div className="mobile-inspector-actions">
@@ -314,7 +322,7 @@ export function MobilePlacementBar({ mode, buildingId, inventory, placementCount
   if (mode === "browse") return null;
   if (mode === "place" && buildingId) {
     const index = PLACEMENT_COUNTS.indexOf(placementCount);
-    return <div className="mobile-placement-bar" role="toolbar" aria-label="建筑放置状态"><span><i>{constructionBuildIcon(buildingId)}</i><em><small>正在放置</small><strong>{getBuilding(buildingId).name}</strong></em><b>库存 {inventory}</b></span><div className="mobile-placement-stepper"><button type="button" disabled={index <= 0} onClick={() => onCountChange(PLACEMENT_COUNTS[Math.max(0, index - 1)])} aria-label="减少放置数量"><Minus size={18} /></button><strong>{placementCount}</strong><button type="button" disabled={index >= PLACEMENT_COUNTS.length - 1} onClick={() => onCountChange(PLACEMENT_COUNTS[Math.min(PLACEMENT_COUNTS.length - 1, index + 1)])} aria-label="增加放置数量"><Plus size={18} /></button></div><label><input type="checkbox" checked={continuous} onChange={(event) => onContinuousChange(event.target.checked)} /><span>连续</span></label><button type="button" onClick={onCancel}><X size={19} /><span>取消</span></button></div>;
+    return <div className="mobile-placement-bar" role="toolbar" aria-label="建筑放置状态"><span><i>{constructionBuildIcon(buildingId)}</i><em><small>正在放置</small><strong>{getBuilding(buildingId).name}</strong></em><b>库存 <QuantityValue value={inventory} /></b></span><div className="mobile-placement-stepper"><button type="button" disabled={index <= 0} onClick={() => onCountChange(PLACEMENT_COUNTS[Math.max(0, index - 1)])} aria-label="减少放置数量"><Minus size={18} /></button><strong>{placementCount}</strong><button type="button" disabled={index >= PLACEMENT_COUNTS.length - 1} onClick={() => onCountChange(PLACEMENT_COUNTS[Math.min(PLACEMENT_COUNTS.length - 1, index + 1)])} aria-label="增加放置数量"><Plus size={18} /></button></div><label><input type="checkbox" checked={continuous} onChange={(event) => onContinuousChange(event.target.checked)} /><span>连续</span></label><button type="button" onClick={onCancel}><X size={19} /><span>取消</span></button></div>;
   }
   if (mode === "connect") return <div className="mobile-mode-status mobile-mode-status--connect"><Route size={20} /><span><small>连接模式</small><strong>{connectionLabel ?? "请选择目标端口"}</strong></span><button type="button" onClick={onCancel}><X size={19} />取消</button></div>;
   if (mode === "select") return <div className="mobile-mode-status mobile-mode-status--select"><Check size={20} /><span><small>多选模式</small><strong>{selectionCount} 节点 · {beltCount} 线路</strong></span>{selectionCount + beltCount > 0 ? <button type="button" onClick={onOpenInspector}><Wrench size={18} />批量操作</button> : null}<button type="button" onClick={onDone}>完成</button></div>;

@@ -530,6 +530,40 @@ test("validates v32 gameplay buffer limits before accepting cloud saves", async 
   assert.equal(accepted.response.status, 200);
 });
 
+test("validates v33 proliferator and exact infinite research fields while accepting v32", async () => {
+  const research = (overrides = {}) => Object.fromEntries([
+    ["matrix_compression", 1_000],
+    ["vein_utilization", 1_000],
+    ["galactic_logistics", 1_000],
+    ["stellar_harnessing", 1_000],
+    ["continuum_simulation", 23],
+  ].map(([id]) => [id, { level: 0, progress: "0", ...(overrides[id] ?? {}) }]));
+  const payloadFor = ({ proliferatorBufferLimit = 600, infiniteResearch = research() } = {}) => JSON.stringify({
+    state: {
+      version: 33,
+      entities: [],
+      settings: { productionBufferLimit: 1_000_000, logisticsBufferLimit: 1_000_000, proliferatorBufferLimit },
+      endgame: { infiniteResearch },
+    },
+  });
+  const invalidPayloads = [
+    payloadFor({ proliferatorBufferLimit: 0 }),
+    payloadFor({ proliferatorBufferLimit: 100_001 }),
+    payloadFor({ infiniteResearch: research({ matrix_compression: { level: 1_001 } }) }),
+    payloadFor({ infiniteResearch: research({ continuum_simulation: { level: 24 } }) }),
+    payloadFor({ infiniteResearch: research({ matrix_compression: { progress: "01" } }) }),
+    payloadFor({ infiniteResearch: research({ matrix_compression: { progress: `1${"0".repeat(64)}` } }) }),
+    payloadFor({ infiniteResearch: research({ matrix_compression: { level: 5, historicalLevel: 4 } }) }),
+  ];
+  for (const payload of invalidPayloads) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload, expectedRevision: 1 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+  const valid = payloadFor({ infiniteResearch: research({ matrix_compression: { level: 1_000, historicalLevel: 1_125, progress: "31441647386989570364354250" } }) });
+  const accepted = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: valid, expectedRevision: 1 }) });
+  assert.equal(accepted.response.status, 200);
+});
+
 test("recalculates leaderboard score on the server", async () => {
   const rejected = await request("/api/leaderboard", {
     method: "POST",

@@ -1,10 +1,10 @@
-import { MAX_BUILDING_BUFFER_LIMIT, MIN_BUILDING_BUFFER_LIMIT } from "./engine";
+import { MAX_BUILDING_BUFFER_LIMIT, MAX_PROLIFERATOR_BUFFER_LIMIT, MIN_BUILDING_BUFFER_LIMIT, MIN_PROLIFERATOR_BUFFER_LIMIT } from "./engine";
 
 export type BuildingBufferLimitValidation =
   | { ok: true; value: number }
   | { ok: false; reason: string };
 
-export function validateBuildingBufferLimitInput(raw: string): BuildingBufferLimitValidation {
+function validateIntegerLimitInput(raw: string, minimum: number, maximum: number): BuildingBufferLimitValidation {
   const value = raw.trim();
   if (!value) return { ok: false, reason: "请输入缓存上限" };
   if (!/^\d+$/.test(value)) {
@@ -15,7 +15,15 @@ export function validateBuildingBufferLimitInput(raw: string): BuildingBufferLim
   }
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) return { ok: false, reason: "缓存上限超出安全整数范围" };
-  if (parsed < MIN_BUILDING_BUFFER_LIMIT) return { ok: false, reason: `缓存上限不能低于 ${MIN_BUILDING_BUFFER_LIMIT.toLocaleString("zh-CN")}` };
-  if (parsed > MAX_BUILDING_BUFFER_LIMIT) return { ok: false, reason: `缓存上限不能高于 ${MAX_BUILDING_BUFFER_LIMIT.toLocaleString("zh-CN")}` };
+  if (parsed < minimum) return { ok: false, reason: `缓存上限不能低于 ${minimum.toLocaleString("zh-CN")}` };
+  if (parsed > maximum) return { ok: false, reason: `缓存上限不能高于 ${maximum.toLocaleString("zh-CN")}` };
   return { ok: true, value: parsed };
+}
+
+export function validateBuildingBufferLimitInput(raw: string): BuildingBufferLimitValidation {
+  return validateIntegerLimitInput(raw, MIN_BUILDING_BUFFER_LIMIT, MAX_BUILDING_BUFFER_LIMIT);
+}
+
+export function validateProliferatorBufferLimitInput(raw: string): BuildingBufferLimitValidation {
+  return validateIntegerLimitInput(raw, MIN_PROLIFERATOR_BUFFER_LIMIT, MAX_PROLIFERATOR_BUFFER_LIMIT);
 }

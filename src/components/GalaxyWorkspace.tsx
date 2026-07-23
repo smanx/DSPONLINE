@@ -48,6 +48,7 @@ import type { GameState } from "../game/types";
 import { CloudAccountSecurity } from "./CloudAccountSecurity";
 import { CloudSaveConflictDialog } from "./CloudSaveConflictDialog";
 import { CloudSaveSlotsPanel } from "./CloudSaveSlotsPanel";
+import { formatQuantityCompact } from "../game/quantityFormat";
 
 type GalaxyTab = "ranking" | "cloud" | "account";
 
@@ -74,10 +75,7 @@ const CATEGORY_ICONS: Record<LeaderboardCategoryId, ReactNode> = {
 };
 
 function formatMetric(value: number, digits = 0): string {
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(digits)}B`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(digits)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(digits)}k`;
-  return value.toFixed(digits);
+  return digits > 0 && Math.abs(value) < 10_000 ? value.toFixed(digits) : formatQuantityCompact(Math.floor(value));
 }
 
 function formatTimestamp(timestamp: number): string {

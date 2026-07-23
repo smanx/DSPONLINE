@@ -1,7 +1,7 @@
 {
   "name": "dsp-idle-network",
   "private": true,
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "戴森球计划风格的 2D 生产网络挂机游戏",
   "author": "DSP Idle Network Contributors",
   "type": "module",
@@ -15,6 +15,8 @@
     "test:server": "npm --prefix server test",
     "test:backup": "node --test deploy/backup-tools.test.mjs",
     "test:ops": "node --test deploy/backup-tools.test.mjs deploy/nginx-config.test.mjs deploy/probe-node-health.test.mjs",
+    "benchmark:logistics": "cross-env DSP_RUN_LOGISTICS_BENCHMARK=1 vitest run src/game/logisticsBenchmark.test.ts --reporter=verbose",
+    "benchmark:refresh": "node scripts/measure-refresh-profiles.mjs",
     "server:dev": "node server/index.mjs",
     "typecheck": "tsc -b --pretty false",
     "release:manifest": "node deploy/create-release-manifest.mjs",

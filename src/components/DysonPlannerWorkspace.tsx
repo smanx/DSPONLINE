@@ -1,10 +1,12 @@
-import { Check, CircleDot, Gauge, GitBranch, Layers3, LockKeyhole, Orbit, Pause, Play, Plus, RadioTower, Rocket, Sparkles, Sun, Trash2, X, Zap } from "lucide-react";
+import { Check, CircleDot, ClipboardCopy, ClipboardPaste, Gauge, GitBranch, Layers3, LockKeyhole, Orbit, Pause, Play, Plus, RadioTower, Rocket, Sparkles, Sun, Trash2, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { STAR_SYSTEM_LIST, getPlanet, getStarSystem } from "../game/content";
-import { getDysonEngineeringSnapshot, getDysonPlanTotals, isStarSystemUnlocked, isTechnologyCompleted } from "../game/engine";
+import { createDysonLayerTemplate, getDysonEngineeringSnapshot, getDysonPlanTotals, isStarSystemUnlocked, isTechnologyCompleted, type DysonLayerTemplate } from "../game/engine";
 import { getStarSystemProfile } from "../game/galaxy";
 import { formatKilowatts } from "../game/units";
 import type { DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, GameState, StarSystemId } from "../game/types";
+import { QuantityValue } from "./QuantityValue";
+import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 
 const VIEW_CENTER = 300;
 
@@ -34,6 +36,7 @@ export function DysonPlannerWorkspace({
   onSelectLayer,
   onOrbitChange,
   onRemoveLayer,
+  onPasteLayer,
   onAddNode,
   onRemoveNode,
   onConnectNodes,
@@ -56,6 +59,7 @@ export function DysonPlannerWorkspace({
   onSelectLayer: (systemId: StarSystemId, layerId: string) => void;
   onOrbitChange: (systemId: StarSystemId, layerId: string, orbit: { radius?: number; inclination?: number; longitude?: number }) => void;
   onRemoveLayer: (systemId: StarSystemId, layerId: string) => void;
+  onPasteLayer: (systemId: StarSystemId, template: DysonLayerTemplate) => void;
   onAddNode: (systemId: StarSystemId, layerId: string, angle: number) => void;
   onRemoveNode: (systemId: StarSystemId, layerId: string, nodeId: string) => void;
   onConnectNodes: (systemId: StarSystemId, layerId: string, sourceNodeId: string, targetNodeId: string) => void;
@@ -73,6 +77,7 @@ export function DysonPlannerWorkspace({
   const activePlanetSystem = getPlanet(game.activePlanetId).systemId;
   const [systemId, setSystemId] = useState<StarSystemId>(activePlanetSystem);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [layerClipboard, setLayerClipboard] = useState<DysonLayerTemplate | null>(null);
   useEffect(() => {
     if (open) setSystemId(activePlanetSystem);
   }, [activePlanetSystem, open]);
@@ -113,8 +118,8 @@ export function DysonPlannerWorkspace({
         <div className="dyson-planner-title"><i><Orbit size={20} /></i><div><span>恒星巨构设计协议</span><strong>戴森球规划</strong></div></div>
         <div className="dyson-planner-headline">
           <span>恒星 <strong>{starProfile.starTypeName} · {starProfile.luminosity.toFixed(2)} L☉</strong></span>
-          <span>结构 <strong>{plan.structurePoints}</strong></span>
-          <span>壳面帆 <strong>{plan.shellSails}</strong></span>
+          <span>结构 <strong><QuantityValue value={plan.structurePoints} /></strong></span>
+          <span>壳面帆 <strong><QuantityValue value={plan.shellSails} /></strong></span>
           <span>本系功率 <strong>{formatKilowatts(engineering.projectedGenerationKw)}</strong></span>
         </div>
         <button className="dyson-planner-close" type="button" onClick={onClose} title="关闭戴森球规划" aria-label="关闭戴森球规划"><X size={18} /></button>
@@ -136,7 +141,7 @@ export function DysonPlannerWorkspace({
               const completed = layer.nodes.reduce((sum, node) => sum + node.completedStructurePoints, 0) + layer.frames.reduce((sum, frame) => sum + frame.completedStructurePoints, 0);
               return (
                 <button className={activeLayer?.id === layer.id ? "active" : ""} type="button" key={layer.id} onClick={() => { onSelectLayer(systemId, layer.id); setSelectedNodeId(null); }}>
-                  <b>{String(index + 1).padStart(2, "0")}</b><span><strong>{layer.name}</strong><small>{layer.radius.toLocaleString("zh-CN")} m · {layer.nodes.length} 节点</small></span><em>{completed}/{layerStructure}</em>
+                  <b>{String(index + 1).padStart(2, "0")}</b><span><strong>{layer.name}</strong><small>{layer.radius.toLocaleString("zh-CN")} m · {layer.nodes.length} 节点</small></span><em title={`${formatQuantityExact(completed)} / ${formatQuantityExact(layerStructure)}`}>{formatQuantityCompact(completed)}/{formatQuantityCompact(layerStructure)}</em>
                 </button>
               );
             })}
@@ -145,6 +150,8 @@ export function DysonPlannerWorkspace({
           <div className="dyson-layer-commands">
             <button type="button" disabled={!programReady || plan.layers.length >= 8} onClick={() => onAddLayer(systemId)} title="新建空白壳层"><Plus size={14} />空白层</button>
             <button type="button" disabled={!programReady || plan.layers.length >= 8} onClick={() => onAddStandardLayer(systemId)} title="新建八节点闭合标准壳层"><Layers3 size={14} />标准层</button>
+            <button type="button" disabled={!activeLayer} onClick={() => activeLayer && setLayerClipboard(createDysonLayerTemplate(activeLayer))} title="复制当前壳层设计，不复制施工进度"><ClipboardCopy size={14} />复制</button>
+            <button type="button" disabled={!layerClipboard || !programReady || plan.layers.length >= 8} onClick={() => layerClipboard && onPasteLayer(systemId, layerClipboard)} title={layerClipboard ? `在${getStarSystem(systemId).name}新增“${layerClipboard.name} 副本”` : "请先复制壳层"}><ClipboardPaste size={14} />粘贴{layerClipboard ? "副本" : ""}</button>
           </div>
           <div className="dyson-layer-heading dyson-swarm-heading"><span>太阳帆轨道</span><strong>{swarmOrbits.length}/8</strong></div>
           <div className="dyson-swarm-orbit-list">
@@ -152,7 +159,7 @@ export function DysonPlannerWorkspace({
               <button className={activeSwarmOrbit?.id === orbit.id ? "active" : ""} type="button" key={orbit.id} onClick={() => onSelectSwarmOrbit(systemId, orbit.id)}>
                 <b>{String(index + 1).padStart(2, "0")}</b>
                 <span><strong>{orbit.name}</strong><small>{orbit.radius.toLocaleString("zh-CN")} m · {orbit.inclination}°</small></span>
-                <em>{orbit.sailsInOrbit.toLocaleString("zh-CN")} 帆</em>
+                <em title={`${formatQuantityExact(orbit.sailsInOrbit)} 帆`}>{formatQuantityCompact(orbit.sailsInOrbit)} 帆</em>
               </button>
             ))}
           </div>
@@ -164,8 +171,8 @@ export function DysonPlannerWorkspace({
             <span><CircleDot size={13} />节点 <strong>{totals.nodeCount}</strong></span>
             <span><GitBranch size={13} />框架 <strong>{totals.frameCount}</strong></span>
             <span><Layers3 size={13} />壳面 <strong>{totals.shellCount}</strong></span>
-            <span><Rocket size={13} />施工 <strong>{totals.completedStructure}/{totals.plannedStructure}</strong></span>
-            <span><Sun size={13} />在轨 <strong>{engineering.orbitSails}</strong></span>
+            <span><Rocket size={13} />施工 <strong><QuantityValue value={totals.completedStructure} />/<QuantityValue value={totals.plannedStructure} /></strong></span>
+            <span><Sun size={13} />在轨 <strong><QuantityValue value={engineering.orbitSails} /></strong></span>
             <span><Gauge size={13} />理论接收 <strong>{Math.round(engineering.theoreticalReceptionRate * 100)}%</strong></span>
             <span><RadioTower size={13} />接收站 <strong>{Math.round(engineering.receiverUtilization * 100)}%</strong></span>
           </div>
@@ -254,8 +261,8 @@ export function DysonPlannerWorkspace({
               <dl className="metric-ledger dyson-layer-ledger">
                 <div><dt>节点</dt><dd>{activeLayer.nodes.filter((node) => node.completedStructurePoints >= node.requiredStructurePoints).length}/{activeLayer.nodes.length}</dd></div>
                 <div><dt>框架</dt><dd>{activeLayer.frames.filter((frame) => frame.completedStructurePoints >= frame.requiredStructurePoints).length}/{activeLayer.frames.length}</dd></div>
-                <div><dt>壳面容量</dt><dd>{activeLayer.shells.reduce((sum, shell) => sum + shell.sailCapacity, 0)}</dd></div>
-                <div><dt>已吸附太阳帆</dt><dd>{activeLayer.shells.reduce((sum, shell) => sum + shell.absorbedSails, 0)}</dd></div>
+                <div><dt>壳面容量</dt><dd><QuantityValue value={activeLayer.shells.reduce((sum, shell) => sum + shell.sailCapacity, 0)} /></dd></div>
+                <div><dt>已吸附太阳帆</dt><dd><QuantityValue value={activeLayer.shells.reduce((sum, shell) => sum + shell.absorbedSails, 0)} /></dd></div>
               </dl>
               <div className="dyson-layer-actions">
                 <button type="button" disabled={activeLayer.nodes.length < 3} onClick={() => onAutoConnect(systemId, activeLayer.id)}><GitBranch size={14} />闭合框架</button>
@@ -272,11 +279,11 @@ export function DysonPlannerWorkspace({
           )}
           {activeSwarmOrbit ? (
             <section className="dyson-swarm-orbit-inspector" aria-label="太阳帆轨道参数">
-              <header><i><Sun size={15} /></i><span><small>太阳帆轨道</small><strong>{activeSwarmOrbit.name}</strong></span><em>{activeSwarmOrbit.sailsInOrbit} 帆</em></header>
+              <header><i><Sun size={15} /></i><span><small>太阳帆轨道</small><strong>{activeSwarmOrbit.name}</strong></span><em><QuantityValue value={activeSwarmOrbit.sailsInOrbit} unit="帆" /></em></header>
               <label className="dyson-orbit-control"><span>轨道半径 <strong>{activeSwarmOrbit.radius.toLocaleString("zh-CN")} m</strong></span><input type="range" min={5000} max={50000} step={500} value={activeSwarmOrbit.radius} onChange={(event) => onSwarmOrbitChange(systemId, activeSwarmOrbit.id, { radius: Number(event.target.value) })} /></label>
               <label className="dyson-orbit-control"><span>轨道倾角 <strong>{activeSwarmOrbit.inclination}°</strong></span><input type="range" min={-90} max={90} step={1} value={activeSwarmOrbit.inclination} onChange={(event) => onSwarmOrbitChange(systemId, activeSwarmOrbit.id, { inclination: Number(event.target.value) })} /></label>
               <label className="dyson-orbit-control"><span>升交点经度 <strong>{activeSwarmOrbit.longitude}°</strong></span><input type="range" min={0} max={359} step={1} value={activeSwarmOrbit.longitude} onChange={(event) => onSwarmOrbitChange(systemId, activeSwarmOrbit.id, { longitude: Number(event.target.value) })} /></label>
-              <div className="dyson-swarm-orbit-stats"><span>发射 {activeSwarmOrbit.totalLaunched}</span><span>衰减 {activeSwarmOrbit.totalExpired}</span><span>{formatKilowatts(activeSwarmOrbit.generationKw)}</span></div>
+              <div className="dyson-swarm-orbit-stats"><span>发射 <QuantityValue value={activeSwarmOrbit.totalLaunched} /></span><span>衰减 <QuantityValue value={activeSwarmOrbit.totalExpired} /></span><span>{formatKilowatts(activeSwarmOrbit.generationKw)}</span></div>
               <button type="button" disabled={swarmOrbits.length <= 1} onClick={() => onRemoveSwarmOrbit(systemId, activeSwarmOrbit.id)} title="删除当前太阳帆轨道"><Trash2 size={13} />删除轨道</button>
             </section>
           ) : null}
@@ -304,8 +311,8 @@ export function DysonPlannerWorkspace({
             <div className="dyson-launch-cost"><span><Zap size={12} />单次成本</span><strong>帆 {engineering.launchEnergyPerSailMj.toFixed(1)} MJ · 火箭 {engineering.launchEnergyPerRocketMj.toFixed(0)} MJ</strong></div>
           </section>
           <footer className="dyson-plan-status">
-            <span>{totals.completedStructure >= totals.plannedStructure && totals.plannedStructure > 0 ? <Check size={12} /> : <Rocket size={12} />}结构点 {plan.structurePoints}</span>
-            <span><Layers3 size={12} />壳面帆 {plan.shellSails}/{totals.sailCapacity}</span>
+            <span>{totals.completedStructure >= totals.plannedStructure && totals.plannedStructure > 0 ? <Check size={12} /> : <Rocket size={12} />}结构点 <QuantityValue value={plan.structurePoints} /></span>
+            <span><Layers3 size={12} />壳面帆 <QuantityValue value={plan.shellSails} />/<QuantityValue value={totals.sailCapacity} /></span>
           </footer>
         </aside>
       </div>

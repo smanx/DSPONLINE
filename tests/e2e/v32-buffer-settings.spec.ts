@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v0.8.1");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v0.9.0");
   });
 });
 
@@ -68,7 +68,7 @@ test("buffer controls fit desktop and both mobile settings from 80 to 200 percen
     const operations = await openSettings(page, mode);
     const fontScale = operations.getByLabel("字体大小");
     const sections = operations.locator(".settings-buffer-limit");
-    await expect(sections).toHaveCount(2);
+    await expect(sections).toHaveCount(3);
     for (const scale of [80, 100, 125, 150, 200] as const) {
       await fontScale.getByRole("button", { name: `${scale}%` }).click();
       await expect(sections.first().getByRole("button", { name: "1万", exact: true })).toBeVisible();

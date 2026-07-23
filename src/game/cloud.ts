@@ -129,6 +129,19 @@ export interface CloudPublicStatus {
     online: number;
     onlineWindowSeconds: number;
   };
+  activity?: {
+    enabled: boolean;
+    status: "disabled" | "scheduled" | "active" | "ended";
+    serverNow: number;
+    reason?: string | null;
+    id?: string;
+    revision?: string | null;
+    startsAtMs?: number;
+    endsAtMs?: number;
+    personalTargets?: Record<"universe_matrix" | "solar_sail" | "small_carrier_rocket" | "antimatter_fuel_rod", number>;
+    globalTargets?: Record<"universe_matrix" | "solar_sail" | "small_carrier_rocket" | "antimatter_fuel_rod", number>;
+    globalDelivered?: Record<"universe_matrix" | "solar_sail" | "small_carrier_rocket" | "antimatter_fuel_rod", number>;
+  };
 }
 
 export class CloudApiError extends Error {

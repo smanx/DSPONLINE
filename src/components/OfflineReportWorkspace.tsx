@@ -2,6 +2,7 @@ import { CheckCircle2, Clock3, Factory, FlaskConical, Gift, Orbit, Send, Sparkle
 import { getItem, getTechnology } from "../game/content";
 import type { OfflineReport } from "../game/storage";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
+import { QuantityValue } from "./QuantityValue";
 
 function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
@@ -33,14 +34,14 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
       {hasChanges ? (
         <div className="offline-report-body">
           {report.produced.length > 0 ? <section>
-            <header><Factory size={15} /><span>生产入库</span><strong>{report.produced.reduce((sum, item) => sum + item.amount, 0).toLocaleString("zh-CN")}</strong></header>
+            <header><Factory size={15} /><span>生产入库</span><strong><QuantityValue value={report.produced.reduce((sum, item) => sum + item.amount, 0)} /></strong></header>
             <div className="offline-production-list">
               {report.produced.map(({ itemId, amount }) => {
                 const item = getItem(itemId);
                 return (
                   <div key={itemId}>
                     <ItemHoverCard itemId={itemId}><ItemGlyph itemId={itemId} /></ItemHoverCard>
-                    <span>{item.name}</span><strong>+{amount.toLocaleString("zh-CN")}</strong>
+                    <span>{item.name}</span><strong>+<QuantityValue value={amount} /></strong>
                   </div>
                 );
               })}
@@ -57,8 +58,8 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
           {report.structurePointsAdded > 0 || report.shellSailsAdded > 0 ? <section>
             <header><Orbit size={15} /><span>戴森工程</span></header>
             <dl>
-              <div><dt>永久结构点</dt><dd>+{report.structurePointsAdded}</dd></div>
-              <div><dt>壳面吸附帆</dt><dd>+{report.shellSailsAdded}</dd></div>
+              <div><dt>永久结构点</dt><dd>+<QuantityValue value={report.structurePointsAdded} /></dd></div>
+              <div><dt>壳面吸附帆</dt><dd>+<QuantityValue value={report.shellSailsAdded} /></dd></div>
             </dl>
           </section> : null}
           {infiniteResearchLevels.length > 0 ? <section>
@@ -68,14 +69,14 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
             </div>
           </section> : null}
           {exported.length > 0 || galacticCreditsAdded > 0 ? <section>
-            <header><Send size={15} /><span>银河出口</span><strong>{galacticCreditsAdded.toLocaleString("zh-CN")} 信用</strong></header>
+            <header><Send size={15} /><span>银河出口</span><strong><QuantityValue value={galacticCreditsAdded} unit="信用" /></strong></header>
             <div className="offline-tech-list">
-              {exported.map(({ projectId, amount }) => <span key={projectId}><Send size={13} />{projectId} +{amount.toLocaleString("zh-CN")}</span>)}
+              {exported.map(({ projectId, amount }) => <span key={projectId}><Send size={13} />{projectId} +<QuantityValue value={amount} /></span>)}
             </div>
           </section> : null}
           {returningReward.length > 0 ? <section className="offline-returning-reward">
             <header><Gift size={15} /><span>回归补给</span><strong>72h+</strong></header>
-            <div className="offline-production-list">{returningReward.map(({ itemId, amount }) => <div key={itemId}><ItemHoverCard itemId={itemId}><ItemGlyph itemId={itemId} /></ItemHoverCard><span>{getItem(itemId).name}</span><strong>+{amount.toLocaleString("zh-CN")}</strong></div>)}</div>
+            <div className="offline-production-list">{returningReward.map(({ itemId, amount }) => <div key={itemId}><ItemHoverCard itemId={itemId}><ItemGlyph itemId={itemId} /></ItemHoverCard><span>{getItem(itemId).name}</span><strong>+<QuantityValue value={amount} /></strong></div>)}</div>
           </section> : null}
         </div>
       ) : (

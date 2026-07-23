@@ -34,6 +34,7 @@ import {
   craftConstruction,
   craftConstructionWithUpstream,
   createBlueprint,
+  createDysonLayerTemplate,
   createInitialState,
   createStandardDysonLayer,
   dispatchGalacticExport,
@@ -103,6 +104,7 @@ import {
   placeBuilding,
   placeBlueprint,
   pauseCurrentResearch,
+  pasteDysonLayerTemplate,
   processConstructionQueue,
   queueBlueprint,
   queueHandcraftRecipe,
@@ -119,6 +121,7 @@ import {
   selectInfiniteResearch,
   setGalacticDispatchAutomation,
   setGalacticExportEnabled,
+  setGalacticMaterialExporterPaused,
   selectTechnology,
   setActivePlanet,
   setPlanetIndustryRole,
@@ -2184,12 +2187,12 @@ describe("factory simulation", () => {
     state.dysonSwarm.totalLaunched = 100;
     state = advanceSimulation(state, 1);
 
-    expect(state.dysonSwarm.generationKw).toBe(3600);
-    expect(state.dysonSwarm.receiverLoadKw).toBe(3600);
-    expect(state.planetMetrics.home.rayGenerationKw).toBe(1800);
-    expect(state.planetMetrics.ashen.rayGenerationKw).toBe(1800);
-    expect(state.entities.find((entity) => entity.id === homeReceiver.id)?.powerOutputKw).toBe(1800);
-    expect(state.entities.find((entity) => entity.id === ashenReceiver.id)?.powerOutputKw).toBe(1800);
+    expect(state.dysonSwarm.generationKw).toBe(8800);
+    expect(state.dysonSwarm.receiverLoadKw).toBe(8800);
+    expect(state.planetMetrics.home.rayGenerationKw).toBe(4400);
+    expect(state.planetMetrics.ashen.rayGenerationKw).toBe(4400);
+    expect(state.entities.find((entity) => entity.id === homeReceiver.id)?.powerOutputKw).toBe(4400);
+    expect(state.entities.find((entity) => entity.id === ashenReceiver.id)?.powerOutputKw).toBe(4400);
     expect(state.dysonSwarm.receiverLoadKw).toBeLessThanOrEqual(RAY_RECEIVER_CAPACITY_KW * 2);
   });
 
@@ -2395,6 +2398,43 @@ describe("factory simulation", () => {
       completedStructure: 0,
       sailCapacity: 0,
     });
+  });
+
+  it("copies a Dyson shell design into another system without copying progress or IDs", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("dyson_sphere_program", "dyson_shell");
+    state.exploration.unlockedSystemIds.push("borealis");
+    state = createStandardDysonLayer(state, "helios");
+    const source = state.dysonPlans.helios.layers[0];
+    const template = createDysonLayerTemplate(source);
+    const result = pasteDysonLayerTemplate(state, "borealis", template);
+
+    expect(result.error).toBeUndefined();
+    expect(result.state).not.toBe(state);
+    const pasted = result.state.dysonPlans.borealis.layers[0];
+    expect(pasted.name).toBe(`${source.name} 副本`);
+    expect(pasted.nodes).toHaveLength(source.nodes.length);
+    expect(pasted.frames).toHaveLength(source.frames.length);
+    expect(pasted.shells).toHaveLength(source.shells.length);
+    expect(pasted.nodes.every((node) => node.completedStructurePoints === 0)).toBe(true);
+    expect(pasted.frames.every((frame) => frame.completedStructurePoints === 0)).toBe(true);
+    expect(pasted.shells.every((shell) => shell.absorbedSails === 0)).toBe(true);
+    expect(new Set([...source.nodes, ...source.frames, ...source.shells].map((entry) => entry.id)).size +
+      new Set([...pasted.nodes, ...pasted.frames, ...pasted.shells].map((entry) => entry.id)).size).toBe(
+      new Set([...source.nodes, ...source.frames, ...source.shells, ...pasted.nodes, ...pasted.frames, ...pasted.shells].map((entry) => entry.id)).size,
+    );
+    expect(state.dysonPlans.borealis.layers).toHaveLength(0);
+  });
+
+  it("rejects Dyson shell paste when target progress is still unassigned", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("dyson_sphere_program", "dyson_shell");
+    state.exploration.unlockedSystemIds.push("borealis");
+    state = createStandardDysonLayer(state, "helios");
+    state.dysonPlans.borealis.structurePoints = 1;
+    const result = pasteDysonLayerTemplate(state, "borealis", createDysonLayerTemplate(state.dysonPlans.helios.layers[0]));
+    expect(result.state).toBe(state);
+    expect(result.error).toContain("尚未分配");
   });
 
   it("allocates legacy structure into the first planned layer and activates only completed frames", () => {
@@ -2915,7 +2955,53 @@ describe("factory simulation", () => {
     expect(result.proliferatorBonusProgress?.gear).toBe(0.5);
     expect(Number.isInteger(result.outputs.gear ?? 0)).toBe(true);
     result.inputs.iron_ingot = 1;
-    expect(getEntityOperatingStatus(state, result)).toMatchObject({ code: "missing-proliferator", tone: "blocked" });
+    expect(getEntityOperatingStatus(state, result)).toMatchObject({ code: "missing-proliferator", tone: "warning" });
+  });
+
+  it("continues at the base rate after proliferator points are exhausted and resumes automatically", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("proliferator_1");
+    state.construction.spray_coater = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 2);
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 240, y: 0 });
+    const assemblerId = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!.id;
+    state = installSprayCoater(state, assemblerId);
+    state = setProliferatorConfiguration(state, assemblerId, 1, "speed");
+    let assembler = state.entities.find((entity) => entity.id === assemblerId)!;
+    assembler.inputs.iron_ingot = 20;
+
+    state = advanceSimulation(state, 2.1);
+    assembler = state.entities.find((entity) => entity.id === assemblerId)!;
+    expect(assembler.outputs.gear).toBeGreaterThan(0);
+    expect(getEntityOperatingStatus(state, assembler)).toMatchObject({ code: "missing-proliferator", tone: "warning" });
+    const baseOutput = assembler.outputs.gear ?? 0;
+    const baseProductionRate = assembler.productionRate;
+
+    assembler.inputs.proliferator_mk1 = 1;
+    state = advanceSimulation(state, 2.1);
+    assembler = state.entities.find((entity) => entity.id === assemblerId)!;
+    expect((assembler.outputs.gear ?? 0) - baseOutput).toBeGreaterThanOrEqual(2);
+    expect(assembler.productionRate).toBeGreaterThan(baseProductionRate);
+    expect(assembler.inputs.proliferator_mk1).toBe(0);
+  });
+
+  it("limits only the selected proliferator item with the dedicated per-entity setting", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("proliferator_1");
+    state.construction.spray_coater = 1;
+    state.construction.assembling_machine_mk1 = 100;
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 }, 100);
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    state = installSprayCoater(state, assembler.id);
+    state.settings.proliferatorBufferLimit = 120;
+    const installed = state.entities.find((entity) => entity.id === assembler.id)!;
+
+    expect(getEntityItemInputCapacity(state, installed, "proliferator_mk1")).toBe(120);
+    expect(getEntityItemInputCapacity(state, installed, "iron_ingot")).toBeGreaterThan(120);
+    installed.inputs.proliferator_mk1 = 200;
+    state.settings.proliferatorBufferLimit = 3_000;
+    expect(getEntityItemInputCapacity(state, installed, "proliferator_mk1")).toBe(3_000);
+    expect(installed.inputs.proliferator_mk1).toBe(200);
   });
 
   it("applies Mk.III speed and power multipliers to an active production node", () => {
@@ -3053,6 +3139,32 @@ describe("factory simulation", () => {
     expect(getStationBusyVehicleCount(state, supply.id, "local")).toBe(0);
     state = adjustStationDrones(state, supply.id, -1);
     expect(state.portableFleet.logistics_drone).toBe(1);
+  });
+
+  it("uses the vehicle owner's slot minimum load for supply-side and demand-side dispatch", () => {
+    let state = createInitialState();
+    state.construction.wind_turbine = 4;
+    state.construction.planetary_logistics_station = 2;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 4);
+    state = placeBuilding(state, "planetary_logistics_station", { x: -200, y: 0 });
+    state = placeBuilding(state, "planetary_logistics_station", { x: 300, y: 0 });
+    const [supply, demand] = state.entities.filter((entity) => entity.buildingId === "planetary_logistics_station");
+    state = setLogisticsItem(state, supply.id, "iron_ingot");
+    state = setLogisticsItem(state, demand.id, "iron_ingot");
+    state = setStationMode(state, demand.id, "demand");
+    state = setStationMinimumLoad(state, supply.id, 0.1);
+    state = setStationMinimumLoad(state, demand.id, 1);
+    state.entities.find((entity) => entity.id === supply.id)!.outputs.iron_ingot = 12;
+    state.portableFleet.logistics_drone = 2;
+    state = adjustStationDrones(state, supply.id, 1);
+    state = adjustStationDrones(state, demand.id, 1);
+
+    state = advanceSimulation(state, 0.1);
+    const routes = state.entities.find((entity) => entity.id === demand.id)?.stationRoutes ?? [];
+    expect(routes).toHaveLength(1);
+    expect(routes[0]).toMatchObject({ vehicleStationId: supply.id, cargo: 12 });
+    expect(getStationBusyVehicleCount(state, supply.id, "local")).toBe(1);
+    expect(getStationBusyVehicleCount(state, demand.id, "local")).toBe(0);
   });
 
   it("fills station drone and vessel berths atomically from the portable fleet", () => {
@@ -3733,6 +3845,43 @@ describe("factory simulation", () => {
     expect(status.missingItemId).toBeDefined();
   });
 
+  it("reports recursive manufacturing safety limits and refunds WIP when the target is cancelled", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("construction_automation");
+    state.construction.wind_turbine = 80;
+    state.construction.construction_center = 1;
+    state.construction.arc_smelter = 0;
+    state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 80);
+    state = placeBuilding(state, "construction_center", { x: 120, y: 0 });
+    const center = state.entities.find((entity) => entity.buildingId === "construction_center")!;
+    state.tray.iron_ore = 1;
+    state.constructionAutomation.targetStock.arc_smelter = 1;
+    state.constructionAutomation.jobs[center.id] = {
+      constructionId: "arc_smelter",
+      steps: [{ kind: "material", recipeId: "iron_ingot", batches: 1, outputItemId: "iron_ingot", outputAmount: 1 }, { kind: "building", constructionId: "arc_smelter" }],
+      stepIndex: 0,
+      elapsedSeconds: 0.1,
+      inventory: { stone: 1_000_000 },
+    };
+
+    const status = getConstructionAutomationStatus(state, center.id);
+    expect(status).toMatchObject({
+      stage: "缓存安全上限保护",
+      blockerReason: "safety-limit",
+      missingItemId: "iron_ingot",
+      safetyCurrent: 1_000_000,
+      safetyExpected: 1_000_001,
+      safetyLimit: 1_000_000,
+    });
+    const blocked = advanceSimulation(state, 1);
+    expect(blocked.tray.iron_ore).toBe(1);
+    expect(blocked.constructionAutomation.jobs[center.id].inventory.stone).toBe(1_000_000);
+
+    const cancelled = setConstructionAutomationTarget(blocked, "arc_smelter", 0);
+    expect(cancelled.constructionAutomation.jobs[center.id]).toBeUndefined();
+    expect(cancelled.tray.stone).toBe(1_000_100);
+  });
+
   it("applies construction-center speed upgrades to material and final stages", () => {
     const base = createInitialState();
     expect(getConstructionAutomationMaterialSeconds(base)).toBeCloseTo(0.1, 6);
@@ -4002,13 +4151,14 @@ describe("factory simulation", () => {
     state = advanceSimulation(state, 800);
     expect(state.endgame.infiniteResearch.matrix_compression.level).toBeGreaterThanOrEqual(1);
     expect(state.endgame.activeInfiniteResearchId).toBe("matrix_compression");
-    expect(state.endgame.infiniteResearch.matrix_compression.progress).toBeGreaterThanOrEqual(0);
+    expect(BigInt(state.endgame.infiniteResearch.matrix_compression.progress)).toBeGreaterThanOrEqual(0n);
     expect(getRecipeSpeedMultiplier(state, "iron_ingot")).toBeGreaterThan(1);
   });
 
   it("dispatches a mega export from network buffers while respecting its reserve", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("universe_matrix");
+    state.endgame.exportInputMode = "legacy-network";
     state.tray.universe_matrix = 2_000;
     state = setGalacticExportEnabled(state, "universe_archive", true);
     state = setGalacticDispatchAutomation(state, false);
@@ -4020,6 +4170,55 @@ describe("factory simulation", () => {
     expect(getGalacticExportTarget("universe_archive", state.endgame.exportProjects.universe_archive.level)).toBeGreaterThan(0);
     expect(getGalacticIndustrySnapshot(state).totalExported).toBe(1_000);
     expect(state.tray.universe_matrix).toBeGreaterThanOrEqual(120);
+  });
+
+  it("uses four dedicated exporter inputs and records one atomic local activity batch", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("universe_matrix");
+    state.construction.wind_turbine = 100;
+    state.construction.galactic_material_exporter = 1;
+    state = placeBuilding(state, "wind_turbine", { x: -300, y: 0 }, 100);
+    state = placeBuilding(state, "galactic_material_exporter", { x: 0, y: 0 });
+    const exporter = state.entities.find((entity) => entity.buildingId === "galactic_material_exporter")!;
+    expect(getAcceptedInputs(exporter)).toEqual(["universe_matrix", "solar_sail", "small_carrier_rocket", "antimatter_fuel_rod"]);
+    expect(exporter.galacticExporterPaused).toBe(true);
+    expect(state.endgame.exportInputMode).toBe("building");
+    exporter.inputs.universe_matrix = 25;
+    state.endgame.constructionActivity = {
+      activityId: "activity-test",
+      participantId: "participant-test",
+      configRevision: "r1",
+      startsAtMs: 1_000,
+      endsAtMs: 10_000,
+      serverTimeAnchorMs: 2_000,
+      activityClockMs: 2_000,
+      personalTargets: { universe_matrix: 1_000_000, solar_sail: 1_000_000, small_carrier_rocket: 1_000_000, antimatter_fuel_rod: 1_000_000 },
+      globalTargets: { universe_matrix: 10_000_000, solar_sail: 10_000_000, small_carrier_rocket: 10_000_000, antimatter_fuel_rod: 10_000_000 },
+      personalDelivered: { universe_matrix: 0, solar_sail: 0, small_carrier_rocket: 0, antimatter_fuel_rod: 0 },
+      pendingBatches: {},
+      nextBatchSequence: 0,
+    };
+    state = advanceSimulation(state, 1);
+    expect(state.entities.find((entity) => entity.id === exporter.id)?.inputs.universe_matrix).toBe(25);
+    state = setGalacticMaterialExporterPaused(state, exporter.id, false);
+    state = advanceSimulation(state, 1);
+    expect(state.entities.find((entity) => entity.id === exporter.id)?.inputs.universe_matrix).toBe(0);
+    expect(state.endgame.exportProjects.universe_archive.totalDelivered).toBe(25);
+    expect(state.endgame.constructionActivity.personalDelivered.universe_matrix).toBe(25);
+    expect(state.endgame.constructionActivity.pendingBatches.universe_matrix).toMatchObject({
+      itemId: "universe_matrix",
+      amount: 25,
+      sequence: 0,
+    });
+  });
+
+  it("does not select an infinite research project after its effective level cap", () => {
+    const state = createInitialState();
+    state.research.completedTechIds.push("universe_matrix");
+    state.endgame.infiniteResearch.matrix_compression.level = 1_000;
+    state.endgame.infiniteResearch.continuum_simulation.level = 23;
+    expect(selectInfiniteResearch(state, "matrix_compression")).toBe(state);
+    expect(selectInfiniteResearch(state, "continuum_simulation")).toBe(state);
   });
 
   it("continues beyond the legacy eight-hour offline window with bounded stepping", () => {

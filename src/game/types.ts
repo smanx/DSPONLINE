@@ -247,7 +247,8 @@ export type BuildingId =
   | "material_delivery_hub"
   | "storage_tank"
   | "splitter_4way"
-  | "construction_center";
+  | "construction_center"
+  | "galactic_material_exporter";
 
 export type BeltTier = 1 | 2 | 3;
 export type SorterTier = 1 | 2 | 3;
@@ -372,11 +373,40 @@ export type GalacticExportProjectId =
   | "antimatter_exchange";
 
 export type GalacticDispatchThrottle = 0.25 | 0.5 | 1;
+export type DecimalIntegerString = string;
+export type GalacticExportInputMode = "legacy-network" | "building";
+export type ActivityMaterialId = "universe_matrix" | "solar_sail" | "small_carrier_rocket" | "antimatter_fuel_rod";
 
 export interface InfiniteResearchProgress {
   level: number;
+  /** Original legacy level when it exceeded the current effective cap. */
+  historicalLevel?: number;
   /** Universe matrices invested into the next level. */
-  progress: number;
+  progress: DecimalIntegerString;
+}
+
+export interface ActivityPendingBatch {
+  id: string;
+  itemId: ActivityMaterialId;
+  amount: number;
+  sequence: number;
+  firstDeliveredAtMs: number;
+  lastDeliveredAtMs: number;
+}
+
+export interface GalacticConstructionActivityState {
+  activityId: string | null;
+  participantId: string | null;
+  configRevision: string | null;
+  startsAtMs: number;
+  endsAtMs: number;
+  serverTimeAnchorMs: number;
+  activityClockMs: number;
+  personalTargets: Record<ActivityMaterialId, number>;
+  globalTargets: Record<ActivityMaterialId, number>;
+  personalDelivered: Record<ActivityMaterialId, number>;
+  pendingBatches: Partial<Record<ActivityMaterialId, ActivityPendingBatch>>;
+  nextBatchSequence: number;
 }
 
 export interface GalacticExportProjectState {
@@ -404,6 +434,8 @@ export interface EndgameState {
   exportWindowAmount: number;
   exportWindowStartedAt: number;
   infiniteResearch: Record<InfiniteResearchId, InfiniteResearchProgress>;
+  exportInputMode: GalacticExportInputMode;
+  constructionActivity: GalacticConstructionActivityState;
 }
 
 export type AchievementId =
@@ -612,6 +644,7 @@ export interface FactoryEntity {
   proliferatorMode?: ProliferatorMode;
   proliferatorPoints?: number;
   proliferatorBonusProgress?: Partial<Record<ItemId, number>>;
+  galacticExporterPaused?: boolean;
   routingCursor: number;
   machineCount: number;
   minerCount: number;
@@ -971,6 +1004,7 @@ export interface GameSettings {
   defaultBeltRouteMode: DefaultBeltRouteMode;
   productionBufferLimit: number;
   logisticsBufferLimit: number;
+  proliferatorBufferLimit: number;
   autosaveIntervalSeconds: AutosaveIntervalSeconds;
   resourceMode: ResourceMode;
   difficulty: DifficultyMode;
@@ -1147,10 +1181,11 @@ export interface ConstructionAutomationJob {
   steps: ConstructionAutomationStep[];
   stepIndex: number;
   elapsedSeconds: number;
+  inventory: Partial<Record<ItemId, number>>;
 }
 
 export interface GameState {
-  version: 32;
+  version: 33;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];

@@ -3,11 +3,14 @@ import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import { ITEMS, MATRIX_ITEM_IDS, PLANET_LIST, TECHNOLOGY_LIST, getTechnology } from "../game/content";
 import { canQueueTechnology, getDysonSailAbsorptionMultiplier, getInterstellarCargoCapacity, getLogisticsSpeedMultiplier, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getRayReceiverCapacityKw, getRecipeSpeedMultiplier, getSolarSailLifetimeSeconds, isTechnologyCompleted } from "../game/engine";
-import { INFINITE_RESEARCH_DEFINITIONS, getInfiniteResearchCompletion, getInfiniteResearchCost, getInfiniteResearchLevel, isEndgameUnlocked } from "../game/endgame";
+import { INFINITE_RESEARCH_DEFINITIONS, getInfiniteResearchCompletion, getInfiniteResearchLevel, isEndgameUnlocked } from "../game/endgame";
+import { getInfiniteResearchCostString, isInfiniteResearchComplete } from "../game/infiniteResearch";
 import type { GameState, InfiniteResearchId, ItemId, TechnologyLayoutMode, TechId } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { useHorizontalPan } from "../hooks/useHorizontalPan";
 import { formatKilowatts } from "../game/units";
+import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
+import { QuantityValue } from "./QuantityValue";
 
 interface TechnologyWorkspaceProps {
   open: boolean;
@@ -79,10 +82,15 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
   const activeInfiniteProgress = activeInfinite ? game.endgame.infiniteResearch[activeInfinite.id] : undefined;
   const displayedTechnology = selected ?? (!activeInfinite ? paused : undefined);
   const selectedProgress = displayedTechnology ? game.research.progressByTech[displayedTechnology.id] ?? {} : {};
-  const selectedCostTotal = displayedTechnology?.costs.reduce((sum, cost) => sum + cost.amount, 0) ??
-    (activeInfinite ? getInfiniteResearchCost(activeInfinite.id, activeInfiniteProgress?.level ?? 0) : 0);
-  const selectedProgressTotal = displayedTechnology?.costs.reduce((sum, cost) =>
-    sum + Math.min(cost.amount, selectedProgress[cost.itemId] ?? 0), 0) ?? activeInfiniteProgress?.progress ?? 0;
+  const finiteCostTotal = displayedTechnology?.costs.reduce((sum, cost) => sum + cost.amount, 0);
+  const finiteProgressTotal = displayedTechnology?.costs.reduce((sum, cost) =>
+    sum + Math.min(cost.amount, selectedProgress[cost.itemId] ?? 0), 0);
+  const selectedCostTotal = finiteCostTotal ??
+    (activeInfinite ? getInfiniteResearchCostString(activeInfinite.id, activeInfiniteProgress?.level ?? 0) : "0");
+  const selectedProgressTotal = finiteProgressTotal ?? activeInfiniteProgress?.progress ?? "0";
+  const selectedProgressPercent = displayedTechnology && typeof selectedCostTotal === "number" && typeof selectedProgressTotal === "number"
+    ? (selectedCostTotal > 0 ? Math.min(100, selectedProgressTotal / selectedCostTotal * 100) : 0)
+    : activeInfinite && activeInfiniteProgress ? getInfiniteResearchCompletion(activeInfiniteProgress, activeInfinite.id) * 100 : 0;
   const maximumTier = Math.max(...TECHNOLOGY_LIST.map((technology) => technology.tier));
 
   if (mobile) {
@@ -95,7 +103,7 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
       if (mobileFilter === "available") return !complete && (active || canQueueTechnology(game, technology.id));
       return true;
     });
-    const mobileProgressPercent = selectedCostTotal > 0 ? Math.min(100, selectedProgressTotal / selectedCostTotal * 100) : 0;
+    const mobileProgressPercent = selectedProgressPercent;
     return (
       <section className={`technology-workspace mobile-workspace mobile-technology${detailTechnology ? " mobile-workspace--detail" : ""}`} role="dialog" aria-modal="true" aria-label="科技树">
         {detailTechnology ? <div className="mobile-workspace-scroll mobile-technology-detail">
@@ -170,14 +178,14 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
           <strong>{displayedTechnology?.name ?? activeInfinite?.name ?? "未选择科技"}</strong>
         </div>
         <div className="research-progress">
-          <i><b style={{ width: `${selectedCostTotal > 0 ? selectedProgressTotal / selectedCostTotal * 100 : 0}%` }} /></i>
-          <span>{displayedTechnology || activeInfinite ? `${selectedProgressTotal} / ${selectedCostTotal} 矩阵` : "0 / 0 矩阵"}</span>
+          <i><b style={{ width: `${selectedProgressPercent}%` }} /></i>
+          <span>{displayedTechnology || activeInfinite ? <><QuantityValue value={selectedProgressTotal} /> / <QuantityValue value={selectedCostTotal} /> 矩阵</> : "0 / 0 矩阵"}</span>
         </div>
         <div className="research-cost-list">
           {displayedTechnology?.costs.map((cost) => {
             return <span key={cost.itemId}><ItemHoverCard itemId={cost.itemId}><ItemGlyph itemId={cost.itemId} /></ItemHoverCard>{selectedProgress[cost.itemId] ?? 0}/{cost.amount}</span>;
           })}
-          {!displayedTechnology && activeInfinite ? <span><ItemHoverCard itemId="universe_matrix"><ItemGlyph itemId="universe_matrix" /></ItemHoverCard>{activeInfiniteProgress?.progress ?? 0}/{selectedCostTotal}</span> : null}
+          {!displayedTechnology && activeInfinite ? <span><ItemHoverCard itemId="universe_matrix"><ItemGlyph itemId="universe_matrix" /></ItemHoverCard><QuantityValue value={activeInfiniteProgress?.progress ?? "0"} />/<QuantityValue value={selectedCostTotal} /></span> : null}
         </div>
         <div className="research-current-actions">
           {selected || activeInfinite ? <button type="button" onClick={onPauseResearch} title="停止消耗矩阵并保留研究进度"><Pause size={13} />暂停</button> : null}
@@ -220,9 +228,10 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
               const progress = game.endgame.infiniteResearch[definition.id];
               const active = game.endgame.activeInfiniteResearchId === definition.id;
               const level = getInfiniteResearchLevel(game, definition.id);
-              const cost = getInfiniteResearchCost(definition.id, level);
-              return <button type="button" key={definition.id} className={active ? "active" : ""} disabled={!isEndgameUnlocked(game)} onClick={() => onSelectInfiniteResearch(definition.id)} title={definition.summary}>
-                <i style={{ color: definition.color }}>{definition.symbol}</i><span><strong>{definition.name}</strong><small>Lv.{level} · {definition.effect}</small></span><em>{active ? `${Math.round(getInfiniteResearchCompletion(progress, definition.id) * 100)}%` : `${cost} 矩阵`}</em>
+              const cost = getInfiniteResearchCostString(definition.id, level);
+              const capped = isInfiniteResearchComplete(definition.id, level);
+              return <button type="button" key={definition.id} className={active ? "active" : ""} disabled={!isEndgameUnlocked(game) || capped} onClick={() => onSelectInfiniteResearch(definition.id)} title={active ? definition.summary : `${definition.summary} · ${formatQuantityExact(cost)} 矩阵`}>
+                <i style={{ color: definition.color }}>{definition.symbol}</i><span><strong>{definition.name}</strong><small>Lv.{level}{progress.historicalLevel && progress.historicalLevel > level ? `（历史 Lv.${progress.historicalLevel}）` : ""} · {definition.effect}</small></span><em>{capped ? "已达上限" : active ? `${Math.round(getInfiniteResearchCompletion(progress, definition.id) * 100)}%` : `${formatQuantityCompact(cost)} 矩阵`}</em>
               </button>;
             })}
           </div>

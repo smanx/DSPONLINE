@@ -50,6 +50,8 @@ async function describeReleaseFiles() {
     "deploy/probe-node-health.mjs",
     "deploy/restore-drill.mjs",
     "deploy/sqlite-snapshot.mjs",
+    "server/activity.mjs",
+    "server/activity.test.mjs",
     "server/analytics.mjs",
     "server/analytics.test.mjs",
     "server/index.mjs",

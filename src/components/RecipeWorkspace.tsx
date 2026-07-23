@@ -27,6 +27,7 @@ import { validateContentCatalog } from "../game/content";
 import type { BuildingId, GameState, ItemId, PlanetId, RecipeDefinition, TechId } from "../game/types";
 import { CODEX_SECTION_LABELS, CodexSections, type CodexSection } from "./CodexSections";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
+import { QuantityValue } from "./QuantityValue";
 
 type ItemFilter = "all" | "raw" | "solid" | "fluid" | "matrix";
 
@@ -57,7 +58,7 @@ function ItemLink({ itemId, amount, ratePerMinute, onSelect }: {
     <button className="recipe-item-link" type="button" onClick={() => onSelect(itemId)} title={`查看${getItem(itemId).name}`}>
       <ItemMark itemId={itemId} />
       <span>{getItem(itemId).name}</span>
-      {amount != null ? <strong>×{amount}</strong> : null}
+      {amount != null ? <strong>×<QuantityValue value={amount} /></strong> : null}
       {ratePerMinute != null ? <small>{ratePerMinute.toFixed(1)}/min</small> : null}
     </button>
   );
@@ -254,7 +255,7 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, mob
               <button className={selectedItemId === candidate.id ? "active" : ""} type="button" key={candidate.id} onClick={() => selectItem(candidate.id)}>
                 <ItemMark itemId={candidate.id} />
                 <span><strong>{candidate.name}</strong><small>{natural ? "天然资源" : producerCount > 0 ? `${producerCount} 种生产方式` : "特殊来源"}</small></span>
-                <em>{networkItemStock(game, candidate.id)}</em>
+                <em><QuantityValue value={networkItemStock(game, candidate.id)} /></em>
               </button>
             );
           })}
@@ -268,7 +269,7 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, mob
               <button type="button" className={game.recipeFocus.itemId === selectedItemId ? "active" : ""} onClick={() => onFocus(game.recipeFocus.itemId === selectedItemId ? null : selectedItemId)} title={game.recipeFocus.itemId === selectedItemId ? "取消主界面聚焦" : "固定生产链到主界面"}><Pin size={14} />{game.recipeFocus.itemId === selectedItemId ? "已固定" : "固定到主界面"}</button>
             </div>
             <dl>
-              <div><dt>网络库存</dt><dd>{stock.toLocaleString("zh-CN")}</dd></div>
+              <div><dt>网络库存</dt><dd><QuantityValue value={stock} /></dd></div>
               <div><dt>生产方式</dt><dd>{producingRecipes.length + sources.length}</dd></div>
               <div><dt>下游流程</dt><dd>{consumingRecipes.length}</dd></div>
             </dl>
@@ -311,7 +312,7 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, mob
             <section className="recipe-section recipe-research-uses">
               <header><FlaskConical size={16} /><span>科研用途</span><strong>{researchUses.length}</strong></header>
               <div>{researchUses.map((technology) => (
-                <button type="button" key={technology.id} onClick={() => selectTechnology(technology.id)}><i>{isTechnologyCompleted(game, technology.id) ? <Check size={12} /> : <FlaskConical size={12} />}</i><strong>{technology.name}</strong><small>消耗 {technology.costs.find((cost) => cost.itemId === selectedItemId)?.amount ?? 0}</small></button>
+                <button type="button" key={technology.id} onClick={() => selectTechnology(technology.id)}><i>{isTechnologyCompleted(game, technology.id) ? <Check size={12} /> : <FlaskConical size={12} />}</i><strong>{technology.name}</strong><small>消耗 <QuantityValue value={technology.costs.find((cost) => cost.itemId === selectedItemId)?.amount ?? 0} /></small></button>
               ))}</div>
             </section>
           ) : null}
