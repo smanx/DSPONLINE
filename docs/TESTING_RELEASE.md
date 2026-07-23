@@ -5,9 +5,9 @@
 | 层级 | 命令 | 当前规模 | 覆盖重点 |
 | --- | --- | ---: | --- |
 | 类型检查 | `npm run typecheck` | 全部前端 TS | 严格类型、Vite 配置 |
-| 单元/领域 | `npm test` | 本地 v32 320 项；香港 `0.7.0` 基线 282 项；上海 `0.5.0` 基线 268 项 | 引擎、v1-v32 存档、双向物流载具归属、制造中心递归任务、可配置缓存、离线 Worker 等价性、存档配额急救、四向分流、科研、电力、蓝图、规划、网络与云同步等 |
-| 浏览器 E2E | `npm run test:e2e` | 本地 v32 118 项；香港 `0.7.0` 基线 113 项；上海 `0.5.0` 基线 97 项 | 从开局到银河终局、主题、逐行星视角、工作区再次关闭、生产资料库、新旧手机壳、缓存设置、保存失败和桌面/手机横竖屏回归 |
-| 云服务 | `npm run test:server` | 本地 23 项；香港 `0.7.0` 基线 22 项 | 账号验证/绑定/恢复/注销、设备会话、匿名统计、v3→v6 迁移、四槽云存档隔离、v32 缓存值验证、腾讯 SES 模板 API、邮件隐私日志、排行榜和管理员保护 |
+| 单元/领域 | `npm test` | `0.8.0` / v32 320 项 | 引擎、v1-v32 存档、双向物流载具归属、制造中心递归任务、可配置缓存、离线 Worker 等价性、存档配额急救、四向分流、科研、电力、蓝图、规划、网络与云同步等 |
+| 浏览器 E2E | `npm run test:e2e` | `0.8.0` / v32 118 项 | 从开局到银河终局、主题、逐行星视角、工作区再次关闭、生产资料库、新旧手机壳、缓存设置、保存失败和桌面/手机横竖屏回归 |
+| 云服务 | `npm run test:server` | 本地、香港和上海新 release 均 23 项 | 账号验证/绑定/恢复/注销、设备会话、匿名统计、v3→v6 迁移、四槽云存档隔离、v32 缓存值验证、腾讯 SES 模板 API、邮件隐私日志、排行榜和管理员保护 |
 | 运维工具 | `npm run test:ops` | 5 项 | SQLite 一致性快照、认证加密、异地复制、隔离恢复、篡改拒绝、Nginx 压缩与缓存边界、端点/磁盘探针和告警载荷 |
 | 生产构建 | `npm run build` | 1 次构建 | `tsc -b`、Vite chunk 和 PWA 资源 |
 | 桌面目录包 | `npm run desktop:pack` | 按需 | Electron 启动与 Windows 解包 |
@@ -350,9 +350,9 @@ Android Chrome 与 iPhone Safari 的 30 分钟真机温度、耗电、FPS、软�
 
 完整 E2E 的 Vite 测试服务器在两个页面卸载时报告过非阻断的 `ResizeObserver loop completed with undelivered notifications`，全部 113 项断言和进程退出码仍为成功。生产浏览器烟测使用全新隔离上下文并拦截匿名 presence/analytics 写入，不使用生产账号、不上传云存档，也不清理玩家浏览器存档。完整制品、备份、回滚和截图证据见 [releases/0.7.0.md](./releases/0.7.0.md)。
 
-## 15. 未发布 v32 模拟、离线与缓存治理验收
+## 15. `0.8.0` / v32 模拟、离线与缓存治理正式验收
 
-以下结果针对 2026-07-23 的 `0.8.0` 发布候选工作树。GameState 本地升至 v32，存档 envelope 仍为 v2、云 schema 仍为 v6；此处记录的测试发生在提交、发布清单和服务器切换之前。
+以下结果针对源码提交 `2af7dc15eebbd5aa240213d7c40ab36ce8430844` 和 release ID `0.8.0-2af7dc15eebb`。GameState 升至 v32，存档 envelope 仍为 v2、云 schema 仍为 v6；同一制品已发布到香港与上海独立节点。
 
 | 检查 | 结果 |
 | --- | --- |
@@ -386,3 +386,9 @@ Chrome 147 的强制 GC 活跃堆从 14.06 MiB 到 16.23 MiB（+2.17 MiB），Re
 - `artifacts/qa/v32-buffer-settings-next-custom-font-200.png`
 
 完整 E2E 的 Vite 测试服务器仍可能在页面卸载时报非阻断 `ResizeObserver loop completed with undelivered notifications`；118 项断言和最终进程退出码均成功。Android Chrome 与 iPhone Safari 真机温度、耗电和 30 分钟交互门禁仍未完成。
+
+正式发布清单包含 100 个文件，聚合 SHA-256 为 `0557dfb7ba5a7cf08e7a95dec73dca560a409e8fa4398d94a7a2ba760341e273`。香港与上海收到的 Web/API 归档哈希均与本地一致，解包后均通过逐文件复验；新 API release 在两地分别再次通过 23/23 服务测试。
+
+两地切换前均使用 SQLite Backup API 创建一致性备份并通过 `quick_check`。切换后备份与当前库的 schema、账号、会话、云存档和修订记录没有减少；上海匿名玩家与错误记录保持一致，香港只出现发布窗口内正常新增匿名玩家。两地均由固定工具原子切换，香港回滚点为 `0.7.0-8bf16d91d82d`，上海回滚点为 `0.5.0-5b3a468c94d0`，数据库未恢复、替换或初始化。
+
+公网验收中，两地根页面、manifest 与健康接口均为 200，SQLite schema v6；香港 `www` 为 301，管理员端点无凭据为 401。两地 JS 返回 gzip 与 immutable 缓存，HTML 和 `sw.js` 保持 no-cache；云服务均为 active、`NRestarts=0`、近期 journal 无 warning，DSP 专用 access log 最近 500 条均无 5xx。上海仍由本机独立提供 Web/API，公开 HTTP 页面继续禁用云账号凭据传输。完整证据见 [releases/0.8.0.md](./releases/0.8.0.md)。
