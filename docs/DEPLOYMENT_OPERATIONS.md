@@ -28,7 +28,7 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-当前香港与上海 Web/API 均为 `0.8.1-db8beebf9ef4`，两地 `previous-release` 均指向 `0.8.1-3ca6ae3876d5`；代码回滚继续使用各自的 schema v7 数据库，不执行数据回滚。完整哈希、生产备份和验收记录见 [releases/0.8.1.md](./releases/0.8.1.md)。
+当前香港与上海 Web/API 均为 `0.9.0-47a97f2c565e`，两地 `previous-release` 均指向 `0.8.1-db8beebf9ef4`；代码回滚继续使用各自的 schema v7 数据库，不执行数据回滚。完整哈希、生产备份和验收记录见 [releases/0.9.0.md](./releases/0.9.0.md)。
 
 ## 3. 绝对数据保护规则
 
@@ -223,6 +223,6 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港与上海 `0.8.1` 均为 JS/CSS 启用 gzip，并验证 `Content-Encoding: gzip`；hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港与上海 `0.9.0` 均为 JS/CSS 启用 gzip，并验证 `Content-Encoding: gzip`；hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
-Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。上海节点 `0.8.1` 发布后约剩 6.5 GiB（文件系统使用率约 89%），发布目录、日志与备份增长应纳入日常磁盘检查。
+Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。上海节点 `0.9.0` 发布后约剩 6.24 GiB（文件系统使用率约 89%），发布目录、日志与备份增长应纳入日常磁盘检查。
