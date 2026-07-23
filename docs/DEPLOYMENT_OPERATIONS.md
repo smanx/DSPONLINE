@@ -149,7 +149,7 @@ DSP_MAIL_REPLY_TO=
 
 验证与重置模板分别使用 [deploy/mail-templates/account-verification.html](../deploy/mail-templates/account-verification.html) 和 [deploy/mail-templates/password-reset.html](../deploy/mail-templates/password-reset.html)。模板链接必须固定保留 `https://dsponline.cn` 域名，分别使用 `https://dsponline.cn/?verify={{actionToken}}` 和 `https://dsponline.cn/?reset={{actionToken}}`，只让腾讯替换 URL-safe 的单一 `{{actionToken}}` 变量；不得把整个 `href` 写成变量。两个模板必须审核通过后再填写数值 ID。CAM 应使用独立子账号并只授予 `name/ses:SendEmail`；SecretId/SecretKey 不得使用主账号长期密钥，也不得写入仓库、发布目录、命令历史或聊天。
 
-腾讯配置完整时优先使用 SES API；原有 `DSP_MAIL_WEBHOOK_URL` / `DSP_MAIL_WEBHOOK_TOKEN` 仅作为兼容回退。两种发送器都未配置时，服务端会让新注册与邮件恢复返回 `503 EMAIL_SERVICE_UNAVAILABLE`。上线前必须用专用测试邮箱验证注册、验证链接、过期链接、忘记密码和重置密码完整链路，并在 `/api/health` 确认 `mailProvider` 为 `tencent-ses`。上海公开入口是 HTTP，不开放账号邮件入口。
+腾讯配置完整时优先使用 SES API；原有 `DSP_MAIL_WEBHOOK_URL` / `DSP_MAIL_WEBHOOK_TOKEN` 仅作为兼容回退。两种发送器都未配置时，用户名密码注册、登录、四槽云存档和自动同步继续开放；邮箱绑定、验证重发和找回密码返回 `503 EMAIL_SERVICE_UNAVAILABLE`，排行榜仍拒绝未验证邮箱账号。邮件上线前必须用专用测试邮箱验证绑定、验证链接、过期链接、忘记密码和重置密码完整链路，并在 `/api/health` 确认 `mailProvider` 为 `tencent-ses`。上海公开入口是 HTTP，前端继续拒绝任何账号密码传输。
 
 ### 上海旧节点
 
@@ -219,7 +219,7 @@ chmod 0600 backup-private.pem
 
 这些 oneshot 服务从 `/opt/dsp-idle-cloud/current/deploy` 软链接执行脚本。CLI 入口判断必须比较真实路径；若 unit 显示 `success` 却没有生成对应状态文件，应按空运行故障处理，不能视为监控或备份成功。
 
-匿名在线窗口默认 120 秒，可通过 `DSP_PLAYER_ONLINE_WINDOW_MS` 调整；运营日历默认 `Asia/Shanghai`，可通过 `DSP_METRIC_TIME_ZONE` 调整。修改在线窗口只影响在线口径，不影响累计玩家。部署 schema v6 后端前仍必须先使用 SQLite backup API 创建并验证备份，并用真实备份副本验证 v3→v6 归一化：旧账号保持已验证，账号、会话、主存档、历史、榜单、玩家和匿名统计数量不减少，三个手动云槽结构可用。
+匿名在线窗口默认 120 秒，可通过 `DSP_PLAYER_ONLINE_WINDOW_MS` 调整；运营日历默认 `Asia/Shanghai`，可通过 `DSP_METRIC_TIME_ZONE` 调整。修改在线窗口只影响在线口径，不影响累计玩家。部署 schema v7 后端前必须先使用 SQLite Backup API 创建并验证备份，并在隔离副本验证 v6→v7 归一化：每个旧账号获得稳定唯一用户名，原邮箱与验证状态不变，账号、会话、主存档、三个手动槽、各槽历史、榜单、玩家和匿名统计数量不得减少。切换后不得用测试账号或测试存档对生产数据库执行写验证。
 
 ## 10. 当前性能事项
 

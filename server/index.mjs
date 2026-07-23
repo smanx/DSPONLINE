@@ -23,6 +23,7 @@ const MANUAL_CLOUD_SAVE_SLOTS = CLOUD_SAVE_SLOTS.slice(1);
 const EMAIL_ACTION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_PLAYER_ONLINE_WINDOW_MS = 120_000;
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{16,96}$/;
+const USERNAME_PATTERN = /^[A-Za-z0-9_]{4,24}$/;
 const VALID_CATEGORIES = new Set(["power", "upload", "dyson", "throughput", "galaxy"]);
 const VALID_SEASONS = new Set(["season_01", "season_00"]);
 const METRIC_KEYS = [
@@ -35,7 +36,7 @@ const METRIC_KEYS = [
   "colonizedPlanets",
 ];
 const DEFAULT_DATA = {
-  schemaVersion: 6,
+  schemaVersion: 7,
   users: {},
   sessions: {},
   emailVerifications: {},
@@ -70,12 +71,32 @@ function normalizePlayerRecords(value) {
   }));
 }
 
+function normalizedUsername(value) {
+  if (typeof value !== "string") return null;
+  const username = value.trim().toLowerCase();
+  return USERNAME_PATTERN.test(username) ? username : null;
+}
+
+function migratedUsername(id, occupied) {
+  const digest = createHash("sha256").update(`cloud-username:${id}`).digest("hex");
+  const base = `pilot_${digest.slice(0, 12)}`;
+  let candidate = base;
+  let suffix = 0;
+  while (occupied.has(candidate)) {
+    suffix += 1;
+    candidate = `${base.slice(0, 21)}_${suffix.toString(36)}`;
+  }
+  return candidate;
+}
+
 function normalizeUserRecords(value, sourceSchemaVersion) {
   if (!value || typeof value !== "object") return {};
-  return Object.fromEntries(Object.entries(value).flatMap(([key, record]) => {
-    if (!record || typeof record !== "object") return [];
+  const users = {};
+  const occupied = new Set();
+  for (const [key, record] of Object.entries(value)) {
+    if (!record || typeof record !== "object") continue;
     const id = typeof record.id === "string" && record.id ? record.id : key;
-    if (!id) return [];
+    if (!id) continue;
     const createdAt = Number.isFinite(record.createdAt) ? Math.max(0, Math.floor(record.createdAt)) : 0;
     const email = typeof record.email === "string" ? record.email.trim().toLowerCase() : "";
     const emailVerifiedAt = !email
@@ -83,16 +104,23 @@ function normalizeUserRecords(value, sourceSchemaVersion) {
       : sourceSchemaVersion < 5
         ? createdAt
         : Number.isFinite(record.emailVerifiedAt) ? Math.max(0, Math.floor(record.emailVerifiedAt)) : null;
-    return [[id, {
+    const requestedUsername = normalizedUsername(record.username);
+    const username = requestedUsername && !occupied.has(requestedUsername)
+      ? requestedUsername
+      : migratedUsername(id, occupied);
+    occupied.add(username);
+    users[id] = {
       ...record,
       id,
+      username,
       email,
       displayName: typeof record.displayName === "string" ? record.displayName : "星际工程师",
       createdAt,
       emailVerifiedAt,
       passwordChangedAt: Number.isFinite(record.passwordChangedAt) ? Math.max(createdAt, Math.floor(record.passwordChangedAt)) : createdAt,
-    }]];
-  }));
+    };
+  }
+  return users;
 }
 
 function normalizeSessionRecords(value, users) {
@@ -249,6 +277,7 @@ function normalizedName(value) {
 function publicUser(user) {
   return {
     id: user.id,
+    username: user.username,
     email: user.email,
     displayName: user.displayName,
     createdAt: user.createdAt,
@@ -402,7 +431,8 @@ function createRateLimiter() {
 
 function requestIp(request) {
   const forwarded = request.headers["x-forwarded-for"];
-  return (typeof forwarded === "string" ? forwarded.split(",")[0].trim() : request.socket.remoteAddress) || "unknown";
+  const chain = typeof forwarded === "string" ? forwarded.split(",").map((value) => value.trim()).filter(Boolean) : [];
+  return chain.at(-1) || request.socket.remoteAddress || "unknown";
 }
 
 function appendAudit(store, request, action, userId = null) {
@@ -531,9 +561,9 @@ function removeUserActionTokens(store, userId) {
   }
 }
 
-function requireVerifiedUser(response, auth) {
+function requireLeaderboardVerifiedUser(response, auth) {
   if (Number.isFinite(auth.user.emailVerifiedAt)) return true;
-  send(response, 403, { error: "请先验证邮箱后再写入云端数据", code: "EMAIL_VERIFICATION_REQUIRED" });
+  send(response, 403, { error: "排行榜提交需要已验证邮箱；邮件系统开放后可在账号设置中绑定并验证", code: "EMAIL_VERIFICATION_REQUIRED" });
   return false;
 }
 
@@ -777,6 +807,7 @@ export async function createCloudServer({
   offsiteBackupStatusFile = process.env.DSP_OFFSITE_BACKUP_STATUS_FILE || "",
   restoreDrillStatusFile = process.env.DSP_RESTORE_DRILL_STATUS_FILE || "",
   nodeHealthStatusFile = process.env.DSP_NODE_HEALTH_STATUS_FILE || "",
+  registrationLimit = Number(process.env.DSP_REGISTRATION_LIMIT_PER_HOUR || 3),
   logger = console,
 } = {}) {
   const store = databaseFile ? new SqliteStore(databaseFile) : new JsonStore(dataFile || path.join(path.dirname(fileURLToPath(import.meta.url)), "data", "cloud.json"));
@@ -794,6 +825,7 @@ export async function createCloudServer({
   }
   const startedAt = Date.now();
   const rateLimit = createRateLimiter();
+  const registrationRateLimit = createRateLimiter();
   const runtime = {
     requests: 0,
     errors: 0,
@@ -996,19 +1028,23 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/register") {
-        if (!accountMailer) return send(response, 503, { error: "邮件验证服务尚未配置，暂时无法创建新账号", code: "EMAIL_SERVICE_UNAVAILABLE" });
         const body = await readJson(request);
-        const email = normalizedEmail(body.email);
+        const username = normalizedUsername(body.username);
         const displayName = normalizedName(body.displayName);
         const password = typeof body.password === "string" ? body.password : "";
-        if (!email || !displayName || password.length < 8 || password.length > 128) return send(response, 400, { error: "邮箱、名称或密码格式无效（密码至少 8 位）" });
-        if (Object.values(store.data.users).some((user) => user.email === email)) return send(response, 409, { error: "该邮箱已注册" });
+        if (!username || !displayName || password.length < 8 || password.length > 128) return send(response, 400, { error: "用户名、名称或密码格式无效（用户名 4 至 24 位字母/数字/下划线，密码至少 8 位）" });
+        if (Object.values(store.data.users).some((user) => user.username === username)) return send(response, 409, { error: "该用户名已注册" });
+        const maximumRegistrations = Number.isFinite(registrationLimit) ? Math.max(1, Math.floor(registrationLimit)) : 3;
+        if (!registrationRateLimit(`register:${ip}`, maximumRegistrations, 60 * 60 * 1000)) {
+          return send(response, 429, { error: "该网络注册账号过于频繁，请一小时后再试", code: "REGISTRATION_RATE_LIMITED" }, { "retry-after": "3600" });
+        }
         const credentials = await passwordRecord(password);
-        if (Object.values(store.data.users).some((user) => user.email === email)) return send(response, 409, { error: "该邮箱已注册" });
+        if (Object.values(store.data.users).some((user) => user.username === username)) return send(response, 409, { error: "该用户名已注册" });
         const now = Date.now();
         const user = {
           id: `user_${randomUUID().replaceAll("-", "")}`,
-          email,
+          username,
+          email: "",
           displayName,
           createdAt: now,
           emailVerifiedAt: null,
@@ -1016,21 +1052,20 @@ export async function createCloudServer({
           ...credentials,
         };
         store.data.users[user.id] = user;
-        const verificationToken = issueActionToken(store.data.emailVerifications, user.id);
         const token = issueSession(store, user.id, request, body.deviceName);
         appendAudit(store, request, "account.register", user.id);
         await store.persist();
-        const delivered = await accountMailer({ kind: "verify", email: user.email, actionToken: verificationToken });
-        if (!delivered) return send(response, 502, { error: "账号已创建，但验证邮件发送失败；请登录后重试发送", code: "EMAIL_DELIVERY_FAILED", accountCreated: true });
-        return send(response, 201, { token, user: publicUser(user), verificationRequired: true });
+        return send(response, 201, { token, user: publicUser(user), verificationRequired: false, mailAvailable: Boolean(accountMailer) });
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/login") {
         const body = await readJson(request);
-        const email = normalizedEmail(body.email);
+        const identifier = typeof body.identifier === "string" ? body.identifier : body.email;
+        const email = normalizedEmail(identifier);
+        const username = normalizedUsername(identifier);
         const password = typeof body.password === "string" ? body.password : "";
-        const user = email ? Object.values(store.data.users).find((candidate) => candidate.email === email) : null;
-        if (!user || !(await passwordMatches(password, user))) return send(response, 401, { error: "邮箱或密码错误" });
+        const user = Object.values(store.data.users).find((candidate) => (email && candidate.email === email) || (username && candidate.username === username));
+        if (!user || !(await passwordMatches(password, user))) return send(response, 401, { error: "用户名、邮箱或密码错误" });
         const token = issueSession(store, user.id, request, body.deviceName);
         appendAudit(store, request, "account.login", user.id);
         await store.persist();
@@ -1247,7 +1282,6 @@ export async function createCloudServer({
       if (request.method === "PUT" && url.pathname === "/api/cloud-save") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
-        if (!requireVerifiedUser(response, auth)) return;
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
         if (!slot) return send(response, 400, { error: "云存档槽位无效" });
         const body = await readJson(request);
@@ -1275,7 +1309,6 @@ export async function createCloudServer({
       if (request.method === "POST" && url.pathname === "/api/cloud-save/restore") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
-        if (!requireVerifiedUser(response, auth)) return;
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
         if (!slot) return send(response, 400, { error: "云存档槽位无效" });
         const body = await readJson(request);
@@ -1316,7 +1349,7 @@ export async function createCloudServer({
       if (request.method === "POST" && url.pathname === "/api/leaderboard") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
-        if (!requireVerifiedUser(response, auth)) return;
+        if (!requireLeaderboardVerifiedUser(response, auth)) return;
         const body = await readJson(request);
         const seasonId = VALID_SEASONS.has(body.seasonId) ? body.seasonId : "season_01";
         if (seasonId !== "season_01") return send(response, 409, { error: "历史赛季已封存" });

@@ -120,7 +120,7 @@ export function GalaxyWorkspace({
   const [newAccountName, setNewAccountName] = useState("");
   const [cloudSession, setCloudSession] = useState<CloudSession>({ status: "checking", user: null, cloudSave: null, mailAvailable: false, message: null });
   const [cloudMode, setCloudMode] = useState<"login" | "register">("login");
-  const [cloudEmail, setCloudEmail] = useState("");
+  const [cloudIdentifier, setCloudIdentifier] = useState("");
   const [cloudPassword, setCloudPassword] = useState("");
   const [cloudDisplayName, setCloudDisplayName] = useState("");
   const [cloudBusy, setCloudBusy] = useState(false);
@@ -167,6 +167,7 @@ export function GalaxyWorkspace({
     return unique.sort((left, right) => right.value - left.value || left.accountId.localeCompare(right.accountId)).map((entry, index) => ({ ...entry, rank: index + 1 }));
   }, [cloudEntries, cloudSession.status, cloudSession.user, localEntry, snapshot.entries]);
   const displayedLocalEntry = displayEntries.find((entry) => entry.isLocal);
+  const cloudLeaderboardEligible = cloudSession.status === "authenticated" && cloudSession.user?.emailVerified === true;
 
   useEffect(() => {
     if (open && focusTab) setTab(focusTab);
@@ -207,6 +208,11 @@ export function GalaxyWorkspace({
   if (!open) return null;
 
   const upload = async () => {
+    if (cloudSession.status === "authenticated" && !cloudSession.user?.emailVerified) {
+      setCloudMessage("排行榜提交需要已验证邮箱；邮件系统开放后可在账号设置中绑定");
+      setUploadState("blocked");
+      return;
+    }
     const submitted = onUpload(seasonId);
     if (!submitted) {
       setUploadState("blocked");
@@ -226,19 +232,15 @@ export function GalaxyWorkspace({
   };
 
   const authenticateCloud = async () => {
-    if (cloudMode === "register" && !cloudMailAvailable) {
-      setCloudMessage("邮箱注册正在开发中，现有账号仍可登录并使用云存档");
-      return;
-    }
     setCloudBusy(true);
     setCloudMessage(null);
     try {
       const session = cloudMode === "register"
-        ? await registerCloudAccount(cloudEmail, cloudPassword, cloudDisplayName || account.profile.displayName)
-        : await loginCloudAccount(cloudEmail, cloudPassword);
+        ? await registerCloudAccount(cloudIdentifier, cloudPassword, cloudDisplayName || account.profile.displayName)
+        : await loginCloudAccount(cloudIdentifier, cloudPassword);
       setCloudSession(session);
       setCloudPassword("");
-      setCloudMessage(cloudMode === "register" ? "云账户已创建，请查收验证邮件" : "云账户已登录");
+      setCloudMessage(cloudMode === "register" ? "云账户已创建，云存档与自动同步已开放" : "云账户已登录，本地存档保持不变");
     } catch (error) {
       setCloudMessage(error instanceof Error ? error.message : "云账户操作失败");
     } finally {
@@ -454,7 +456,7 @@ export function GalaxyWorkspace({
           <div><span>本地星际档案协议</span><strong>银河网络</strong></div>
         </div>
         <div className="galaxy-node-state" title={cloudSession.message ?? "银河节点连接状态"}>
-          <i /><span><strong>{cloudSession.status === "offline" ? "离线节点" : cloudSession.status === "authenticated" ? "云端已登录" : cloudSession.status === "checking" ? "节点校验中" : "公共云节点"}</strong><small>{cloudSession.status === "authenticated" ? cloudSession.user?.email : cloudSession.status === "offline" ? "本地节点可继续使用" : "排行榜可读取 · 本地节点回退"}</small></span>
+          <i /><span><strong>{cloudSession.status === "offline" ? "离线节点" : cloudSession.status === "authenticated" ? "云端已登录" : cloudSession.status === "checking" ? "节点校验中" : "公共云节点"}</strong><small>{cloudSession.status === "authenticated" ? `@${cloudSession.user?.username}` : cloudSession.status === "offline" ? "本地节点可继续使用" : "排行榜可读取 · 本地节点回退"}</small></span>
         </div>
         <div className="galaxy-active-account"><span className="galaxy-avatar galaxy-avatar--small">{account.profile.avatar}</span><span><small>当前账户</small><strong>{account.profile.displayName}</strong></span></div>
         <button className="galaxy-close" type="button" onClick={onClose} title="关闭银河网络" aria-label="关闭银河网络"><X size={18} /></button>
@@ -522,13 +524,13 @@ export function GalaxyWorkspace({
               <button
                 className={`galaxy-upload-command galaxy-upload-command--${uploadState}`}
                 type="button"
-                disabled={account.profile.privacy === "private" || snapshot.season.status === "ended"}
+                disabled={account.profile.privacy === "private" || snapshot.season.status === "ended" || (cloudSession.status === "authenticated" && !cloudLeaderboardEligible)}
                 onClick={() => void upload()}
               >
                 {uploadState === "success" ? <Check size={15} /> : account.profile.privacy === "private" ? <LockKeyhole size={15} /> : <Send size={15} />}
-                {uploadState === "success" ? cloudSession.status === "authenticated" ? "数据已写入云端节点" : "数据已写入本地节点" : account.profile.privacy === "private" ? "隐私账户不参与排行" : snapshot.season.status === "ended" ? "历史赛季已封存" : displayedLocalEntry?.submitted ? "更新本季数据" : "上传本季数据"}
+                {uploadState === "success" ? cloudSession.status === "authenticated" ? "数据已写入云端节点" : "数据已写入本地节点" : account.profile.privacy === "private" ? "隐私账户不参与排行" : snapshot.season.status === "ended" ? "历史赛季已封存" : cloudSession.status === "authenticated" && !cloudLeaderboardEligible ? "验证邮箱后提交排行榜" : displayedLocalEntry?.submitted ? "更新本季数据" : "上传本季数据"}
               </button>
-              <p><RadioTower size={13} /><span>{cloudSession.status === "authenticated" ? "排名提交到服务端；存在云存档时会显示校验标记。" : "登录云账户后可参与真实排行；模拟组织仍用于校准量级。"}</span></p>
+              <p><RadioTower size={13} /><span>{cloudSession.status === "authenticated" ? cloudLeaderboardEligible ? "排名会连同主云存档接受服务端校验。" : "云存档已开放；排行榜继续要求验证邮箱，邮件系统当前尚未开放。" : "登录并验证邮箱后可参与真实排行；本地实时预览不受影响。"}</span></p>
             </aside>
           </div>
         </div>
@@ -542,22 +544,22 @@ export function GalaxyWorkspace({
             </header>
             {cloudSession.status === "offline" ? <div className="galaxy-cloud-offline"><CloudOff size={24} /><span><strong>云服务暂时不可达</strong><small>{cloudSession.message ?? "本地存档和本地排行榜仍可继续使用。"}</small></span><button type="button" onClick={() => { setCloudSession({ status: "checking", user: null, cloudSave: null, mailAvailable: false, message: null }); void resumeCloudSession().then(setCloudSession); }}>重新连接</button></div> : null}
             {cloudSession.status === "anonymous" ? <form className="galaxy-cloud-auth" onSubmit={(event) => { event.preventDefault(); void authenticateCloud(); }}>
-              <div className="galaxy-cloud-auth-mode"><button className={cloudMode === "login" ? "active" : ""} type="button" onClick={() => setCloudMode("login")}>登录</button><button className={cloudMode === "register" ? "active" : ""} type="button" disabled={!cloudMailAvailable} title={!cloudMailAvailable ? "邮箱注册正在开发中" : undefined} onClick={() => setCloudMode("register")}>{cloudMailAvailable ? "注册" : "注册 · 开发中"}</button></div>
-              {!cloudMailAvailable ? <p className="galaxy-cloud-development"><CloudOff size={14} /><span>邮件功能正在开发中，现有账号登录和云存档不受影响。</span></p> : null}
+              <div className="galaxy-cloud-auth-mode"><button className={cloudMode === "login" ? "active" : ""} type="button" onClick={() => setCloudMode("login")}>登录</button><button className={cloudMode === "register" ? "active" : ""} type="button" onClick={() => setCloudMode("register")}>注册</button></div>
+              {!cloudMailAvailable ? <p className="galaxy-cloud-development"><CloudOff size={14} /><span>邮件系统尚未开放。用户名注册、全部云存档和自动同步可用；找回密码暂不可用，排行榜仍需邮箱验证。</span></p> : null}
               {cloudMode === "register" ? <label><span>显示名称</span><input value={cloudDisplayName} onChange={(event) => setCloudDisplayName(event.target.value)} maxLength={24} placeholder={account.profile.displayName} autoComplete="nickname" /></label> : null}
-              <label><span>邮箱</span><input type="email" value={cloudEmail} onChange={(event) => setCloudEmail(event.target.value)} maxLength={254} required autoComplete="email" placeholder="pilot@example.com" /></label>
+              <label><span>{cloudMode === "register" ? "用户名" : "用户名或邮箱"}</span><input type="text" value={cloudIdentifier} onChange={(event) => setCloudIdentifier(event.target.value)} minLength={cloudMode === "register" ? 4 : undefined} maxLength={cloudMode === "register" ? 24 : 254} pattern={cloudMode === "register" ? "[A-Za-z0-9_]{4,24}" : undefined} title={cloudMode === "register" ? "4 至 24 位英文字母、数字或下划线" : undefined} required autoComplete="username" placeholder={cloudMode === "register" ? "4-24 位字母、数字或下划线" : "用户名或已绑定邮箱"} /></label>
               <label><span>密码</span><input type="password" value={cloudPassword} onChange={(event) => setCloudPassword(event.target.value)} minLength={8} maxLength={128} required autoComplete={cloudMode === "register" ? "new-password" : "current-password"} placeholder="至少 8 位" /></label>
               <button className="primary" type="submit" disabled={cloudBusy}>{cloudBusy ? <Activity size={15} /> : <LogIn size={15} />}{cloudMode === "register" ? "创建并登录" : "登录云账户"}</button>
             </form> : null}
             {cloudSession.status === "authenticated" && cloudSession.user ? <div className="galaxy-cloud-account">
-              <div className="galaxy-cloud-identity"><span className="galaxy-avatar galaxy-avatar--large">{cloudSession.user.displayName.slice(0, 1).toUpperCase()}</span><span><strong>{cloudSession.user.displayName}</strong><small>{cloudSession.user.email} · {account.profile.cloudUserId === cloudSession.user.id ? "已绑定当前本地身份" : "尚未绑定当前本地身份"}</small></span><div className="galaxy-cloud-identity-actions"><button type="button" onClick={() => onUpdateCloudBinding(account.profile.cloudUserId === cloudSession.user!.id ? null : { id: cloudSession.user!.id, email: cloudSession.user!.email })}>{account.profile.cloudUserId === cloudSession.user.id ? <Unlink size={14} /> : <Link2 size={14} />}{account.profile.cloudUserId === cloudSession.user.id ? "解除绑定" : "绑定本地身份"}</button><button type="button" onClick={() => { setCloudBusy(true); void logoutCloudAccount().then(() => { setCloudSession((current) => ({ status: "anonymous", user: null, cloudSave: null, mailAvailable: current.mailAvailable, message: null })); setCloudEntries([]); }).finally(() => setCloudBusy(false)); }}><LogOut size={14} />退出</button></div></div>
+              <div className="galaxy-cloud-identity"><span className="galaxy-avatar galaxy-avatar--large">{cloudSession.user.displayName.slice(0, 1).toUpperCase()}</span><span><strong>{cloudSession.user.displayName}</strong><small>@{cloudSession.user.username}{cloudSession.user.email ? ` · ${cloudSession.user.email}` : ""} · {account.profile.cloudUserId === cloudSession.user.id ? "已绑定当前本地身份" : "尚未绑定当前本地身份"}</small></span><div className="galaxy-cloud-identity-actions"><button type="button" onClick={() => onUpdateCloudBinding(account.profile.cloudUserId === cloudSession.user!.id ? null : { id: cloudSession.user!.id, email: cloudSession.user!.email || `@${cloudSession.user!.username}` })}>{account.profile.cloudUserId === cloudSession.user.id ? <Unlink size={14} /> : <Link2 size={14} />}{account.profile.cloudUserId === cloudSession.user.id ? "解除绑定" : "绑定本地身份"}</button><button type="button" onClick={() => { setCloudBusy(true); void logoutCloudAccount().then(() => { setCloudSession((current) => ({ status: "anonymous", user: null, cloudSave: null, mailAvailable: current.mailAvailable, message: null })); setCloudEntries([]); }).finally(() => setCloudBusy(false)); }}><LogOut size={14} />退出</button></div></div>
               <div className="galaxy-cloud-save-card">
                 <header><Save size={18} /><span><small>当前主存档</small><strong>{cloudSession.cloudSave ? `修订 ${cloudSession.cloudSave.revision}` : "尚未上传"}</strong></span><em>{cloudSession.cloudSave ? `${(cloudSession.cloudSave.size / 1024).toFixed(1)} KB` : "--"}</em></header>
                 {cloudComparison ? <p className={`cloud-sync-state cloud-sync-state--${cloudComparison.state}`}>{cloudSyncLabel(cloudComparison.state)}</p> : null}
                 <dl><div><dt>更新时间</dt><dd>{cloudSession.cloudSave ? new Date(cloudSession.cloudSave.updatedAt).toLocaleString("zh-CN") : "--"}</dd></div><div><dt>校验摘要</dt><dd>{cloudSession.cloudSave?.checksum.slice(0, 12) ?? "--"}</dd></div><div><dt>本地进度</dt><dd>{cloudComparison?.local ? `${Math.floor(cloudComparison.local.elapsedSeconds / 3600)}h · 科技 ${cloudComparison.local.completedTechCount}` : "--"}</dd></div><div><dt>云端进度</dt><dd>{cloudSession.cloudSave?.summary ? `${Math.floor(cloudSession.cloudSave.summary.elapsedSeconds / 3600)}h · 科技 ${cloudSession.cloudSave.summary.completedTechCount}` : "--"}</dd></div></dl>
-                <div><button type="button" disabled={cloudBusy} onClick={() => void prepareCloudRestore()}><Download size={14} />下载到本机</button><button className="primary" type="button" title={!cloudSession.user.emailVerified ? "验证邮箱后可上传" : undefined} disabled={cloudBusy || !cloudSession.user.emailVerified} onClick={() => void saveCurrentFactoryToCloud()}><Save size={14} />上传当前存档</button></div>
+                <div><button type="button" disabled={cloudBusy} onClick={() => void prepareCloudRestore()}><Download size={14} />下载到本机</button><button className="primary" type="button" disabled={cloudBusy} onClick={() => void saveCurrentFactoryToCloud()}><Save size={14} />上传当前存档</button></div>
               </div>
-              <CloudSaveSlotsPanel cloudSaves={cloudSession.cloudSaves} localSlots={localSaveSlots} busySlot={cloudBusy ? "main" : null} uploadDisabled={!cloudSession.user.emailVerified} onUpload={(slot) => void uploadManualCloudSlot(slot)} onDownload={(slot) => void downloadManualCloudSlot(slot)} />
+              <CloudSaveSlotsPanel cloudSaves={cloudSession.cloudSaves} localSlots={localSaveSlots} busySlot={cloudBusy ? "main" : null} uploadDisabled={false} onUpload={(slot) => void uploadManualCloudSlot(slot)} onDownload={(slot) => void downloadManualCloudSlot(slot)} />
               {cloudHistory.length > 0 ? <section className="galaxy-cloud-history" aria-label="云存档历史修订">
                 <header><History size={15} /><span>历史修订</span><strong>{cloudHistory.length}/{20}</strong></header>
                 <div>{cloudHistory.map((entry) => <article className={entry.revision === cloudSession.cloudSave?.revision ? "active" : ""} key={entry.revision}>

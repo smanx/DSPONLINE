@@ -1134,10 +1134,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         if (session.status !== "authenticated" || !session.user) return;
         syncUserId = session.user.id;
         syncRevision = session.cloudSave?.revision ?? null;
-        if (!session.user.emailVerified) {
-          writeCloudAutoSyncStatus({ userId: session.user.id, state: "skipped", attemptedAt, uploadedAt: null, revision: session.cloudSave?.revision ?? null, message: "邮箱尚未验证，未上传" });
-          return;
-        }
         const payload = exportGame(gameRef.current);
         const comparison = compareCloudSave(session.user.id, payload, session.cloudSave, "main");
         if (session.cloudSave && ["cloud-newer", "conflict", "unbound"].includes(comparison.state)) {

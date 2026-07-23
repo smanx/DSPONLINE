@@ -9,6 +9,7 @@ export type CloudSaveSlot = typeof CLOUD_SAVE_SLOTS[number];
 
 export interface CloudUser {
   id: string;
+  username: string;
   email: string;
   displayName: string;
   createdAt: number;
@@ -327,14 +328,14 @@ export async function resumeCloudSession(): Promise<CloudSession> {
   }
 }
 
-export async function registerCloudAccount(email: string, password: string, displayName: string): Promise<CloudSession> {
-  const result = await cloudRequest<{ token: string; user: CloudUser }>("/auth/register", { method: "POST", body: JSON.stringify({ email, password, displayName }) });
+export async function registerCloudAccount(username: string, password: string, displayName: string): Promise<CloudSession> {
+  const result = await cloudRequest<{ token: string; user: CloudUser; mailAvailable?: boolean }>("/auth/register", { method: "POST", body: JSON.stringify({ username, password, displayName }) });
   setCloudToken(result.token);
-  return { status: "authenticated", user: result.user, cloudSave: null, cloudSaves: emptyCloudSaveSlots(), mailAvailable: true, message: null };
+  return { status: "authenticated", user: result.user, cloudSave: null, cloudSaves: emptyCloudSaveSlots(), mailAvailable: result.mailAvailable === true, message: null };
 }
 
-export async function loginCloudAccount(email: string, password: string): Promise<CloudSession> {
-  const result = await cloudRequest<{ token: string; user: CloudUser }>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+export async function loginCloudAccount(identifier: string, password: string): Promise<CloudSession> {
+  const result = await cloudRequest<{ token: string; user: CloudUser }>("/auth/login", { method: "POST", body: JSON.stringify({ identifier, password }) });
   setCloudToken(result.token);
   const resumed = await resumeCloudSession();
   return resumed.status === "authenticated" ? resumed : { status: "authenticated", user: result.user, cloudSave: null, cloudSaves: emptyCloudSaveSlots(), mailAvailable: resumed.mailAvailable, message: null };

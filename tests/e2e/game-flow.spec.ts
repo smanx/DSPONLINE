@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-23-v0.8.0");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v0.8.1");
     }
   });
 }
@@ -119,17 +119,18 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "模拟性能与缓存治理更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "云账号与存档开放更新" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(9);
-  await expect(releaseNotes).toContainText("现有存档会自动迁移到 v32");
-  await expect(releaseNotes).toContainText("两类建筑缓存安全上限");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v080-1440.png", fullPage: true });
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(5);
+  await expect(releaseNotes).toContainText("账号操作不会自动下载、覆盖或清除本地存档");
+  await expect(releaseNotes).toContainText("全部云存档功能开放");
+  await expect(releaseNotes).toContainText("排行榜保留邮箱门槛");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v081-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v080-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v081-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -144,7 +145,7 @@ test("dated release notes appear once and remain available from both settings sc
   });
   await expect.poll(controlsFitViewport).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v080-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v081-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -153,12 +154,12 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-23-v0.8.0");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-24-v0.8.1");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
   await page.getByRole("button", { name: "游戏设置" }).click();
-  await page.getByRole("button", { name: "查看2026年7月23日版本更新记录" }).click();
+  await page.getByRole("button", { name: "查看2026年7月24日版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
   await releaseNotes.getByLabel("关闭版本更新记录").click();
 
@@ -170,7 +171,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v080-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v081-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -274,6 +275,7 @@ test("cloud account security exposes verification, password and device controls"
   const requests: string[] = [];
   let user = {
     id: "user_e2e",
+    username: "pilot_e2e",
     email: "pilot@example.com",
     displayName: "测试工程师",
     createdAt: Date.now() - 1000,
@@ -307,7 +309,7 @@ test("cloud account security exposes verification, password and device controls"
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1");
   await page.getByRole("button", { name: "登录与云存档" }).click();
-  await page.getByLabel("邮箱").fill("pilot@example.com");
+  await page.getByLabel("用户名或邮箱").fill("pilot@example.com");
   await page.getByLabel("密码", { exact: true }).fill("strong-pass-123");
   await page.getByRole("button", { name: "登录云账户" }).click();
 
@@ -345,6 +347,7 @@ test("cloud account security exposes verification, password and device controls"
 test("cloud save divergence requires an explicit keep-local or use-cloud choice", async ({ page }) => {
   const user = {
     id: "user_conflict",
+    username: "conflict_pilot",
     email: "conflict@example.com",
     displayName: "冲突测试工程师",
     createdAt: Date.now() - 1000,
@@ -400,9 +403,8 @@ test("cloud save divergence requires an explicit keep-local or use-cloud choice"
   await page.getByRole("button", { name: /开始游戏/ }).click();
   await page.getByTitle("保存并返回主菜单").click();
   await page.getByRole("button", { name: "登录与云存档" }).click();
-  await expect(page.getByRole("button", { name: "注册 · 开发中" })).toBeDisabled();
-  await expect(page.locator(".start-menu-auth-development")).toContainText("现有账号可继续登录");
-  await page.getByLabel("邮箱").fill("conflict@example.com");
+  await expect(page.getByRole("button", { name: "注册", exact: true })).toBeEnabled();
+  await page.getByLabel("用户名或邮箱").fill("conflict@example.com");
   await page.getByLabel("密码", { exact: true }).fill("strong-pass-123");
   await page.getByRole("button", { name: "登录云账户" }).click();
   await expect(page.getByText("需要选择保留版本", { exact: true })).toBeVisible();
@@ -417,6 +419,70 @@ test("cloud save divergence requires an explicit keep-local or use-cloud choice"
   await expect(dialog).toHaveCount(0);
   expect(overwriteExpectedRevision).toBe(2);
   await expect(page.locator(".start-menu-message")).toContainText("修订 3");
+});
+
+test("username registration and login preserve every local save without automatic cloud restore", async ({ page }) => {
+  const user = {
+    id: "user_local_save_guard",
+    username: "local_save_guard",
+    email: "",
+    displayName: "本地存档守护测试",
+    createdAt: Date.now(),
+    emailVerified: false,
+    emailVerifiedAt: null,
+    passwordChangedAt: Date.now(),
+  };
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    const fulfill = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (pathname === "/api/health") return fulfill({ ok: true, schemaVersion: 7, mailProvider: "disabled" });
+    if (pathname === "/api/auth/register") return fulfill({ token: "local-save-register-token", user, mailAvailable: false }, 201);
+    if (pathname === "/api/auth/login") return fulfill({ token: "local-save-login-token", user });
+    if (pathname === "/api/auth/logout") return fulfill({ ok: true });
+    if (pathname === "/api/account") return fulfill({ user, cloudSave: null, cloudSaves: { main: null, "1": null, "2": null, "3": null } });
+    if (pathname === "/api/account/sessions") return fulfill({ sessions: [] });
+    return fulfill({ error: `unmocked ${pathname}` }, 404);
+  });
+
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: /开始游戏/ }).click();
+  await page.getByTitle("保存并返回主菜单").click();
+  const before = await page.evaluate(() => {
+    const main = window.localStorage.getItem("dsp-idle-network.save.v1");
+    if (!main) throw new Error("missing local main save");
+    window.localStorage.setItem("dsp-idle-network.slot.1", main);
+    window.localStorage.setItem("dsp-idle-network.slot.2", main);
+    window.localStorage.setItem("dsp-idle-network.slot.3", main);
+    return [
+      window.localStorage.getItem("dsp-idle-network.save.v1"),
+      window.localStorage.getItem("dsp-idle-network.slot.1"),
+      window.localStorage.getItem("dsp-idle-network.slot.2"),
+      window.localStorage.getItem("dsp-idle-network.slot.3"),
+    ];
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "登录与云存档" }).click();
+  await page.getByRole("button", { name: "注册", exact: true }).click();
+  await page.getByLabel("显示名称").fill("本地存档守护测试");
+  await page.getByLabel("用户名", { exact: true }).fill("local_save_guard");
+  await page.getByLabel("密码", { exact: true }).fill("strong-pass-123");
+  await page.getByRole("button", { name: "创建云账户" }).click();
+  await expect(page.locator(".start-menu-message")).toContainText("云存档与自动同步已开放");
+  await expect(page.getByRole("button", { name: "上传本地存档" })).toBeEnabled();
+  await page.getByLabel("退出云账户").click();
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await page.getByLabel("用户名或邮箱").fill("local_save_guard");
+  await page.getByLabel("密码", { exact: true }).fill("strong-pass-123");
+  await page.getByRole("button", { name: "登录云账户" }).click();
+  await expect(page.locator(".start-menu-message")).toContainText("本地存档保持不变");
+  const after = await page.evaluate(() => [
+    window.localStorage.getItem("dsp-idle-network.save.v1"),
+    window.localStorage.getItem("dsp-idle-network.slot.1"),
+    window.localStorage.getItem("dsp-idle-network.slot.2"),
+    window.localStorage.getItem("dsp-idle-network.slot.3"),
+  ]);
+  expect(after).toEqual(before);
 });
 
 async function freshGame(page: Page) {

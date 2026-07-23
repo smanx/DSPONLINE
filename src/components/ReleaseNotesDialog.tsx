@@ -1,86 +1,49 @@
-import {
-  BookOpen,
-  Check,
-  Database,
-  Factory,
-  Gauge,
-  Info,
-  MessageCircle,
-  Orbit,
-  Route,
-  Smartphone,
-  X,
-  type LucideIcon,
-} from "lucide-react";
+import { Check, Database, Info, MessageCircle, Orbit, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-23-v0.8.0",
-  date: "2026年7月23日",
-  version: "0.8.0",
-  title: "模拟性能与缓存治理更新",
-  summary: "本次更新将长时间离线运算移入 Worker，加入两类可配置建筑缓存上限、批量制造和物流操作优化，并补强移动端交互与运行稳定性。现有存档会自动迁移到 v32，库存、线路、科研、物流和戴森进度保持不变。",
+  id: "2026-07-24-v0.8.1",
+  date: "2026年7月24日",
+  version: "0.8.1",
+  title: "云账号与存档开放更新",
+  summary: "本次更新开放用户名密码注册，以及主云存档、三个手动云槽、历史恢复和每 10 分钟自动同步。排行榜继续要求验证邮箱，邮件系统开放前暂时无法绑定邮箱或找回密码。账号操作不会自动下载、覆盖或清除本地存档。",
   items: [
     {
-      id: "offline-worker",
-      title: "长时间离线运算移入 Worker",
-      description: "加载长时间未游玩的存档时会显示可取消进度，完整计算成功后才一次性提交。取消、刷新或失败不会保存半成品，也不会重复结算离线收益。",
+      id: "username-registration",
+      title: "用户名密码直接注册",
+      description: "新账号使用 4 至 24 位字母、数字或下划线用户名注册，无需等待邮件服务。旧账号仍可继续使用原邮箱登录，并会自动获得唯一用户名。",
     },
     {
-      id: "buffer-limits",
-      title: "两类建筑缓存安全上限",
-      description: "设置新增生产建筑与仓储物流建筑两项独立缓存上限，提供 1万、10万、100万及自定义值。调低或减少堆叠不会删除已有和在途物品。",
+      id: "cloud-saves-open",
+      title: "全部云存档功能开放",
+      description: "登录后即可使用主云存档、手动槽位 1/2/3、修订历史、历史恢复和十分钟自动同步，不再要求邮箱验证。版本冲突仍必须由玩家明确选择。",
     },
     {
-      id: "belt-defaults",
-      title: "新建传送带默认参数",
-      description: "可设置新线路默认货物堆叠和线路形状。蓝图保留自身参数，已有线路与并行线路不会被覆盖，未解锁的堆叠等级不可选择。",
+      id: "local-save-safety",
+      title: "本地存档保持独立",
+      description: "注册、登录、退出和自动上传不会清除或覆盖本地主存档、三个本地槽与自动快照。下载和恢复云存档仍需手动确认，并在替换前保留本地回滚快照。",
     },
     {
-      id: "quantity-crafting",
-      title: "制造和堆叠支持输入数量",
-      description: "建筑制造、手工制造和建筑堆叠统一提供减号、数字、加号与最大值。递归制造会先完整规划并原子扣料，不会加工到一半才失败。",
+      id: "leaderboard-verification",
+      title: "排行榜保留邮箱门槛",
+      description: "云存档与排行榜权限已经拆分。未验证邮箱的账号可以正常保存工厂，但提交银河排行榜仍需已验证邮箱和可校验的主云存档。",
     },
     {
-      id: "logistics-refill",
-      title: "物流塔一键补满载具",
-      description: "行星物流站可一键补满运输机，星际物流站可分别补满运输机和运输船。只移动随身载具栏中的空闲载具，不影响在途航线。",
-    },
-    {
-      id: "basic-onboarding",
-      title: "新增五步基础操作导览",
-      description: "新玩家会先学习拿取与存放物品、制造建筑、放置与堆叠、连接传送带以及选择科研。只有真实成功操作才会推进，可跳过并在设置中重播。",
-    },
-    {
-      id: "mobile-polish",
-      title: "移动端制造与离线面板优化",
-      description: "手机制造目录可以搜索喷涂模块，离线收益面板不会被新版顶栏或底栏遮挡；储物仓和储液罐在横竖屏与放大字体下保持完整可操作。",
-    },
-    {
-      id: "layout-safety",
-      title: "自动整理避开资源节点",
-      description: "全星球和框选自动整理会把矿脉、原油、海洋采集点及安装空间作为障碍，避免设备覆盖固定资源；原有一步撤销继续可用。",
-    },
-    {
-      id: "dyson-metrics",
-      title: "戴森功率与射线统计统一",
-      description: "戴森相关界面统一按 kW 显示，并分别说明理论接收率、接收站实际利用率和戴森功率利用率。堵塞、断电和模式变化不再伪装成效率跳变。",
+      id: "mail-pending",
+      title: "邮件系统等待开放",
+      description: "邮件服务当前尚未启用。未绑定邮箱的账号暂时无法找回忘记的密码，也暂时不能完成排行榜验证；邮件开放后可在账号设置中绑定。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "offline-worker": Gauge,
-  "buffer-limits": Database,
-  "belt-defaults": Route,
-  "quantity-crafting": Factory,
-  "logistics-refill": Orbit,
-  "basic-onboarding": BookOpen,
-  "mobile-polish": Smartphone,
-  "layout-safety": Check,
-  "dyson-metrics": Gauge,
+  "username-registration": Info,
+  "cloud-saves-open": Database,
+  "local-save-safety": Check,
+  "leaderboard-verification": Orbit,
+  "mail-pending": MessageCircle,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

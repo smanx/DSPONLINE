@@ -203,6 +203,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     return resetToken ? { kind: "reset" as const, token: resetToken } : null;
   }, []);
   const [cloudMode, setCloudMode] = useState<CloudAuthMode>(initialCloudAction?.kind === "reset" ? "reset" : "login");
+  const [cloudIdentifier, setCloudIdentifier] = useState("");
   const [cloudEmail, setCloudEmail] = useState("");
   const [cloudPassword, setCloudPassword] = useState("");
   const [cloudPasswordConfirmation, setCloudPasswordConfirmation] = useState("");
@@ -266,7 +267,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
           const session = await resumeCloudSession();
           if (!active) return;
           setCloudSession(session);
-          setMessage({ tone: "ready", text: "邮箱验证完成，云存档写入已开放" });
+          setMessage({ tone: "ready", text: "邮箱验证完成，找回密码与排行榜提交已开放" });
           clearActionQuery();
         })
         .catch((error) => {
@@ -435,20 +436,16 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const authenticateCloud = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!cloudAuthAllowed) return;
-    if (cloudMode === "register" && !cloudMailAvailable) {
-      setMessage({ tone: "warning", text: "邮箱注册正在开发中，现有账号仍可正常登录并使用云存档" });
-      return;
-    }
     setBusy(true);
     setMessage(null);
     try {
       const session = cloudMode === "register"
-        ? await registerCloudAccount(cloudEmail, cloudPassword, cloudDisplayName)
-        : await loginCloudAccount(cloudEmail, cloudPassword);
+        ? await registerCloudAccount(cloudIdentifier, cloudPassword, cloudDisplayName)
+        : await loginCloudAccount(cloudIdentifier, cloudPassword);
       setCloudSession(session);
       trackAnalyticsEvent(cloudMode === "register" ? "cloud_register" : "cloud_login");
       setCloudPassword("");
-      setMessage({ tone: "ready", text: cloudMode === "register" ? "云账户已创建，请查收验证邮件" : "云账户登录成功" });
+      setMessage({ tone: "ready", text: cloudMode === "register" ? "云账户已创建，云存档与自动同步已开放" : "云账户登录成功，本地存档保持不变" });
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "云账户登录失败" });
     } finally {
@@ -803,10 +800,10 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             {cloudAuthAllowed && cloudSession.status === "checking" ? <div className="start-menu-cloud-offline"><Activity size={24} /><span><strong>正在连接云节点</strong><small>验证服务状态与登录令牌</small></span></div> : null}
             {cloudAuthAllowed && cloudSession.status === "offline" ? <div className="start-menu-cloud-offline"><CloudOff size={24} /><span><strong>云节点暂时不可用</strong><small>{cloudSession.message}</small></span><button type="button" onClick={() => { setCloudSession({ status: "checking", user: null, cloudSave: null, mailAvailable: false, message: null }); void resumeCloudSession().then(setCloudSession); }}><RefreshCw size={14} />重试</button></div> : null}
             {cloudSession.status === "anonymous" && (cloudMode === "login" || cloudMode === "register") ? <form className="start-menu-auth" onSubmit={authenticateCloud}>
-              <div className="start-menu-auth-mode"><button className={cloudMode === "login" ? "active" : ""} type="button" onClick={() => setCloudMode("login")}><LogIn size={14} />登录</button><button className={cloudMode === "register" ? "active" : ""} type="button" disabled={!cloudMailAvailable} title={!cloudMailAvailable ? "邮箱注册正在开发中" : undefined} onClick={() => setCloudMode("register")}><UserPlus size={14} />{cloudMailAvailable ? "注册" : "注册 · 开发中"}</button></div>
-              {!cloudMailAvailable ? <p className="start-menu-auth-development"><MailWarning size={14} /><span><strong>邮件功能正在开发中</strong><small>现有账号可继续登录，并使用主存档与三个手动云存档槽位。</small></span></p> : null}
+              <div className="start-menu-auth-mode"><button className={cloudMode === "login" ? "active" : ""} type="button" onClick={() => setCloudMode("login")}><LogIn size={14} />登录</button><button className={cloudMode === "register" ? "active" : ""} type="button" onClick={() => setCloudMode("register")}><UserPlus size={14} />注册</button></div>
+              {!cloudMailAvailable ? <p className="start-menu-auth-development"><MailWarning size={14} /><span><strong>邮件系统尚未开放</strong><small>用户名密码注册、主云存档、三个手动槽和自动同步均可使用；未绑定邮箱暂时无法找回密码，排行榜仍需邮箱验证。</small></span></p> : null}
               {cloudMode === "register" ? <label><span>显示名称</span><input value={cloudDisplayName} onChange={(event) => setCloudDisplayName(event.target.value)} minLength={2} maxLength={24} required autoComplete="nickname" /></label> : null}
-              <label><span>邮箱</span><input type="email" value={cloudEmail} onChange={(event) => setCloudEmail(event.target.value)} required maxLength={254} autoComplete="email" /></label>
+              <label><span>{cloudMode === "register" ? "用户名" : "用户名或邮箱"}</span><input type="text" value={cloudIdentifier} onChange={(event) => setCloudIdentifier(event.target.value)} required minLength={cloudMode === "register" ? 4 : undefined} maxLength={cloudMode === "register" ? 24 : 254} pattern={cloudMode === "register" ? "[A-Za-z0-9_]{4,24}" : undefined} title={cloudMode === "register" ? "4 至 24 位英文字母、数字或下划线" : undefined} autoComplete="username" placeholder={cloudMode === "register" ? "4-24 位字母、数字或下划线" : "用户名或已绑定邮箱"} /></label>
               <label><span>密码</span><input type="password" value={cloudPassword} onChange={(event) => setCloudPassword(event.target.value)} required minLength={8} maxLength={128} autoComplete={cloudMode === "register" ? "new-password" : "current-password"} /></label>
               {cloudMode === "login" ? <button className="start-menu-auth-link" type="button" disabled={!cloudMailAvailable} title={!cloudMailAvailable ? "邮箱找回密码正在开发中" : undefined} onClick={() => setCloudMode("forgot")}>{cloudMailAvailable ? "忘记密码" : "忘记密码 · 开发中"}</button> : null}
               <button className="primary" type="submit" disabled={busy}>{busy ? <Activity size={15} /> : cloudMode === "register" ? <UserPlus size={15} /> : <LogIn size={15} />}{cloudMode === "register" ? "创建云账户" : "登录云账户"}</button>
@@ -823,9 +820,9 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
               <button className="primary" type="submit" disabled={busy}>{busy ? <Activity size={15} /> : <RefreshCw size={15} />}确认重置</button>
             </form> : null}
             {cloudSession.status === "authenticated" && cloudSession.user ? <div className="start-menu-cloud-account">
-              <section className="start-menu-cloud-user"><i>{cloudSession.user.displayName.slice(0, 1).toUpperCase()}</i><span><strong>{cloudSession.user.displayName}</strong><small>{cloudSession.user.email}</small></span><button type="button" title="退出云账户" aria-label="退出云账户" onClick={() => { setBusy(true); void logoutCloudAccount().then(() => setCloudSession((current) => ({ status: "anonymous", user: null, cloudSave: null, mailAvailable: current.mailAvailable, message: null }))).finally(() => setBusy(false)); }}><LogOut size={15} /></button></section>
-              <section className="start-menu-cloud-save"><header><Cloud size={18} /><span><small>当前主存档</small><strong>{cloudSession.cloudSave ? `修订 ${cloudSession.cloudSave.revision}` : "尚未上传"}</strong></span><em>{cloudSession.cloudSave ? formatSavedAt(cloudSession.cloudSave.updatedAt) : "--"}</em></header>{cloudComparison ? <p className={`cloud-sync-state cloud-sync-state--${cloudComparison.state}`}>{cloudSyncLabel(cloudComparison.state)}</p> : null}<dl className="cloud-sync-summary"><div><dt>本地进度</dt><dd>{comparisonPayload ? `${formatRuntime(cloudComparison?.local?.elapsedSeconds ?? 0)} · 科技 ${cloudComparison?.local?.completedTechCount ?? 0}` : "无本地存档"}</dd></div><div><dt>云端进度</dt><dd>{cloudSession.cloudSave?.summary ? `${formatRuntime(cloudSession.cloudSave.summary.elapsedSeconds)} · 科技 ${cloudSession.cloudSave.summary.completedTechCount}` : cloudSession.cloudSave ? "旧版摘要待更新" : "无云存档"}</dd></div></dl><div><button type="button" title={!cloudSession.user.emailVerified ? "验证邮箱后可上传" : undefined} disabled={busy || !continueSave || !cloudSession.user.emailVerified} onClick={() => void uploadLocalSave()}><Upload size={14} />上传本地存档</button><button className="primary" type="button" disabled={busy || !cloudSession.cloudSave} onClick={() => void downloadAndEnterCloudSave()}><Download size={14} />下载并进入</button></div></section>
-              <CloudSaveSlotsPanel cloudSaves={cloudSession.cloudSaves} localSlots={slots} busySlot={busy ? "main" : null} uploadDisabled={!cloudSession.user.emailVerified} onUpload={(slot) => void uploadManualCloudSlot(slot)} onDownload={(slot) => void downloadManualCloudSlot(slot)} />
+              <section className="start-menu-cloud-user"><i>{cloudSession.user.displayName.slice(0, 1).toUpperCase()}</i><span><strong>{cloudSession.user.displayName}</strong><small>@{cloudSession.user.username}{cloudSession.user.email ? ` · ${cloudSession.user.email}` : ""}</small></span><button type="button" title="退出云账户" aria-label="退出云账户" onClick={() => { setBusy(true); void logoutCloudAccount().then(() => setCloudSession((current) => ({ status: "anonymous", user: null, cloudSave: null, mailAvailable: current.mailAvailable, message: null }))).finally(() => setBusy(false)); }}><LogOut size={15} /></button></section>
+              <section className="start-menu-cloud-save"><header><Cloud size={18} /><span><small>当前主存档</small><strong>{cloudSession.cloudSave ? `修订 ${cloudSession.cloudSave.revision}` : "尚未上传"}</strong></span><em>{cloudSession.cloudSave ? formatSavedAt(cloudSession.cloudSave.updatedAt) : "--"}</em></header>{cloudComparison ? <p className={`cloud-sync-state cloud-sync-state--${cloudComparison.state}`}>{cloudSyncLabel(cloudComparison.state)}</p> : null}<dl className="cloud-sync-summary"><div><dt>本地进度</dt><dd>{comparisonPayload ? `${formatRuntime(cloudComparison?.local?.elapsedSeconds ?? 0)} · 科技 ${cloudComparison?.local?.completedTechCount ?? 0}` : "无本地存档"}</dd></div><div><dt>云端进度</dt><dd>{cloudSession.cloudSave?.summary ? `${formatRuntime(cloudSession.cloudSave.summary.elapsedSeconds)} · 科技 ${cloudSession.cloudSave.summary.completedTechCount}` : cloudSession.cloudSave ? "旧版摘要待更新" : "无云存档"}</dd></div></dl><div><button type="button" disabled={busy || !continueSave} onClick={() => void uploadLocalSave()}><Upload size={14} />上传本地存档</button><button className="primary" type="button" disabled={busy || !cloudSession.cloudSave} onClick={() => void downloadAndEnterCloudSave()}><Download size={14} />下载并进入</button></div></section>
+              <CloudSaveSlotsPanel cloudSaves={cloudSession.cloudSaves} localSlots={slots} busySlot={busy ? "main" : null} uploadDisabled={false} onUpload={(slot) => void uploadManualCloudSlot(slot)} onDownload={(slot) => void downloadManualCloudSlot(slot)} />
               <CloudAccountSecurity user={cloudSession.user} mailAvailable={cloudMailAvailable} onUserChange={(user) => setCloudSession((current) => ({ ...current, user }))} onLoggedOut={() => setCloudSession((current) => ({ status: "anonymous", user: null, cloudSave: null, mailAvailable: current.mailAvailable, message: null }))} />
             </div> : null}
             {cloudConflict ? <CloudSaveConflictDialog local={summarizeCloudPayload(cloudConflict.localPayload)} cloud={cloudConflict.remote} busy={busy} onUseCloud={() => void useCloudConflictVersion()} onKeepLocal={() => void keepLocalConflictVersion()} onCancel={() => setCloudConflict(null)} /> : null}
