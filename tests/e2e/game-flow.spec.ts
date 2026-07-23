@@ -4,9 +4,14 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-23-v0.6.0");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-23-v0.8.0");
     }
   });
+}
+
+async function dismissOnboarding(page: Page) {
+  const control = page.getByRole("button", { name: /^(?:关闭|跳过)启动引导$/ });
+  if (await control.count()) await control.first().click();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -64,21 +69,67 @@ test("start menu gates simulation and exposes saves, cloud, import and settings"
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.player-id.v1"))).toBe(presenceIds[0]);
 });
 
+test("start menu runs long offline advancement in a cancellable worker without saving partial state", async ({ page }) => {
+  await page.addInitScript(() => {
+    const entities = Array.from({ length: 500 }, (_, index) => ({
+      id: `offline_storage_${index}`,
+      kind: "storage",
+      planetId: "home",
+      position: { x: index % 25 * 260, y: Math.floor(index / 25) * 190 },
+      buildingId: "storage_mk1",
+      storedItemId: "iron_ingot",
+      machineCount: 1,
+      minerCount: 0,
+      inputs: {},
+      outputs: { iron_ingot: index % 3 },
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+    }));
+    const state = {
+      version: 31,
+      nextId: 501,
+      activePlanetId: "home",
+      entities,
+      belts: [],
+      construction: {},
+      tray: {},
+      planetTrays: { home: {} },
+      totalProduced: {},
+      research: { selectedTechId: null, pausedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: [] },
+      paused: false,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now() - 7 * 24 * 60 * 60 * 1_000, state }));
+  });
+  await page.goto("/?menu=1");
+  const original = await page.evaluate(() => window.localStorage.getItem("dsp-idle-network.save.v1"));
+  await page.getByRole("button", { name: /继续游戏/ }).click();
+  const progress = page.getByRole("dialog", { name: "正在进行离线运算" });
+  await expect(progress).toBeVisible();
+  await expect(progress).toContainText("完成后才会一次性保存");
+  await progress.getByRole("button", { name: "取消离线运算" }).click();
+  await expect(progress).toHaveCount(0);
+  await expect(page.locator(".start-menu-message--warning")).toContainText("存档未发生修改");
+  await expect(page.locator(".game-shell")).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.save.v1"))).toBe(original);
+});
+
 test("dated release notes appear once and remain available from both settings screens", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "新版手机界面与生产资料库更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "模拟性能与缓存治理更新" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(8);
-  await expect(releaseNotes).toContainText("存档格式与玩法进度保持不变");
-  await expect(releaseNotes).toContainText("生产资料库与建筑图鉴");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v060-1440.png", fullPage: true });
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(9);
+  await expect(releaseNotes).toContainText("现有存档会自动迁移到 v32");
+  await expect(releaseNotes).toContainText("两类建筑缓存安全上限");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v080-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v060-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v080-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -93,7 +144,7 @@ test("dated release notes appear once and remain available from both settings sc
   });
   await expect.poll(controlsFitViewport).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v060-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v080-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -102,7 +153,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-23-v0.6.0");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-23-v0.8.0");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -119,7 +170,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v060-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v080-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -1357,6 +1408,13 @@ async function openStellarExplorationGame(page: Page, advancedOnboarding = false
       paused: true,
     };
     window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+    if (withAdvancedOnboarding) {
+      window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({
+        version: 1,
+        completedEvents: ["cargo-stowed", "construction-crafted", "building-placed", "building-stacked", "belt-connected", "research-selected"],
+        skipped: false,
+      }));
+    }
   }, advancedOnboarding);
   await page.goto("/");
   await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible();
@@ -1767,7 +1825,7 @@ test("progressive onboarding reaches interstellar logistics and locates its bloc
   await openStellarExplorationGame(page, true);
 
   const coach = page.locator(".onboarding-coach");
-  await expect(coach).toContainText("星际物流 · 渐进教学 9/13");
+  await expect(coach).toContainText("星际物流 · 渐进教学 14/18");
   await expect(coach).toContainText("完成首次星际运输");
   await expect(coach).toContainText("当前卡点");
   await coach.getByRole("button", { name: "定位卡点" }).click();
@@ -1777,10 +1835,61 @@ test("progressive onboarding reaches interstellar logistics and locates its bloc
   await page.screenshot({ path: "artifacts/qa/onboarding-interstellar-blocker-1280.png", fullPage: true });
 });
 
+test("five-step basic onboarding advances only after successful factory commands", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await freshGame(page);
+  const coach = page.locator(".onboarding-coach");
+  await expect(coach).toContainText("收纳第一组物品");
+  await expect(coach).toContainText("0/18");
+
+  await page.locator('.tray-row[title="拿取铁矿石"]').click();
+  await page.getByTitle("放入物资托盘").click();
+  await expect(coach).toContainText("制造一批建筑");
+  await expect(coach).toContainText("1/18");
+
+  await page.getByLabel("制造电弧熔炉").click();
+  await expect(coach).toContainText("放置并堆叠建筑");
+  await expect(coach).toContainText("2/18");
+
+  const canvas = page.locator(".react-flow__pane");
+  const canvasBox = await canvas.boundingBox();
+  await placeOnCanvas(page, "部署风力涡轮机", Math.round(canvasBox!.width * 0.72), 180);
+  const turbine = page.locator(".power-node").filter({ hasText: "风力涡轮机" }).first();
+  await turbine.locator(".factory-node__header").click();
+  await page.getByLabel(/快速增加 1 台建筑/).click();
+  await expect(coach).toContainText("连接第一条传送带");
+  await expect(coach).toContainText("3/18");
+
+  await placeOnCanvas(page, "部署电弧熔炉", Math.round(canvasBox!.width * 0.84), 80);
+  const source = page.locator(".vein-node").filter({ hasText: "铁矿石" }).locator(".factory-handle--output");
+  const target = page.locator(".machine-node").filter({ hasText: "铁块" }).locator(".factory-handle--input:not(.factory-handle--auto)");
+  const sourceBox = await source.boundingBox();
+  const targetBox = await target.boundingBox();
+  await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 12 });
+  await page.mouse.up();
+  await expect(coach).toContainText("选择第一项科技");
+  await expect(coach).toContainText("6/18");
+
+  await page.getByLabel("打开科技树").click();
+  await page.locator(".technology-node").filter({ hasText: "电磁矩阵" }).first().click();
+  await expect(coach).toContainText("取得第一份矿石");
+  await expect(coach).toContainText("8/18");
+
+  const progress = await page.evaluate(() => JSON.parse(window.localStorage.getItem("dsp-idle-network.basic-onboarding.v1") ?? "null"));
+  expect(progress).toMatchObject({ version: 1, skipped: false });
+  expect(progress.completedEvents).toEqual(expect.arrayContaining([
+    "cargo-stowed", "construction-crafted", "building-placed", "building-stacked", "belt-connected", "research-selected",
+  ]));
+  await page.reload();
+  await expect(page.locator(".onboarding-coach")).toContainText("8/18");
+});
+
 test("manual mining feeds a powered smelter", async ({ page }) => {
   await page.setViewportSize({ width: 1560, height: 960 });
   await freshGame(page);
-  await expect(page.locator(".onboarding-coach")).toContainText("基础 · 渐进教学 0/13");
+  await expect(page.locator(".onboarding-coach")).toContainText("基础操作 · 渐进教学 0/18");
   const canvas = page.locator(".react-flow__pane");
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
@@ -1797,8 +1906,13 @@ test("manual mining feeds a powered smelter", async ({ page }) => {
   await expect(page.locator(".campaign-reward-token")).toContainText("传送带 Mk.I");
   await page.screenshot({ path: "artifacts/qa/campaign-reward-flight-1560.png", fullPage: true });
 
+  await mineButton.hover();
+  await page.mouse.down();
+  await page.waitForTimeout(850);
+  await page.mouse.up();
+
   const ironOutput = ironVein.getByTitle("拿取铁矿石");
-  await expect.poll(async () => Number(await ironOutput.locator("strong").textContent())).toBeGreaterThan(1);
+  await expect.poll(async () => Number(await ironOutput.locator("strong").textContent())).toBeGreaterThanOrEqual(5);
   await ironOutput.click();
   const smelter = page.locator(".machine-node").filter({ hasText: "铁块" });
   await smelter.getByTitle("投入铁矿石").click();
@@ -1929,7 +2043,7 @@ test("responsive drawers keep all tools reachable", async ({ page }) => {
   await expect.poll(async () => page.locator(".planet-navigator").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/qa/mobile-planets-390.png", fullPage: true });
   await page.getByLabel("打开物资托盘").click();
-  await expect(page.getByText(/物资托盘$/)).toBeVisible();
+  await expect(page.locator(".resource-rail").getByText("母星物资托盘", { exact: true })).toBeVisible();
   await page.waitForTimeout(250);
   await page.screenshot({ path: "artifacts/qa/mobile-resources-390.png", fullPage: true });
   await page.mouse.click(370, 300);
@@ -2015,7 +2129,7 @@ test("mobile selection, long press and staged drawers survive orientation change
   await enableCoarsePointer(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await freshGame(page);
-  await page.getByLabel("关闭启动引导").click();
+  await dismissOnboarding(page);
   await placeOnCanvas(page, "部署风力涡轮机", 120, 250);
 
   const turbine = page.locator(".power-node").filter({ hasText: "风力涡轮机" });
@@ -2085,7 +2199,7 @@ test("mobile pinch zoom stays responsive and does not trigger the long-press men
   const { context, page } = await createTouchPage(browser, { width: 390, height: 844 });
   try {
     await freshGame(page);
-    await page.getByLabel("关闭启动引导").click();
+    await dismissOnboarding(page);
     const readZoom = () => page.locator(".react-flow__viewport").evaluate((element) => new DOMMatrix(getComputedStyle(element).transform).a);
     const before = await readZoom();
     const center = await page.evaluate(() => {
@@ -2127,8 +2241,7 @@ test("a second finger takes over a pending node drag and pans or zooms the mobil
   const { context, page } = await createTouchPage(browser, { width: 390, height: 844 });
   try {
     await freshGame(page);
-    const coachClose = page.getByLabel("关闭启动引导");
-    if (await coachClose.count()) await coachClose.click();
+    await dismissOnboarding(page);
     await page.locator(".react-flow__controls-fitview").click();
     const nodeWrapper = page.locator(".react-flow__node").filter({ has: page.locator(".vein-node").filter({ hasText: "铁矿石" }) });
     const nodeBox = await nodeWrapper.boundingBox();
@@ -2473,7 +2586,10 @@ test("Dyson swarm closes the critical photon, antimatter and universe matrix loo
   await page.locator(".react-flow__controls-fitview").click();
 
   await expect(page.locator(".dyson-block")).toContainText("在轨太阳帆");
-  await expect(page.locator(".dyson-block")).toContainText("6.00 MW 接收");
+  await expect(page.locator(".dyson-block")).toContainText("6,000 kW 接收");
+  await expect(page.locator(".dyson-block")).toContainText("理论接收");
+  await expect(page.locator(".dyson-block")).toContainText("接收站利用");
+  await expect(page.locator(".dyson-block")).toContainText("功率利用");
   await expect(page.locator(".construction-item").filter({ hasText: "电磁轨道弹射器" })).toHaveCount(1);
   await expect(page.locator(".construction-item").filter({ hasText: "射线接收站" })).toHaveCount(1);
 
@@ -2524,7 +2640,7 @@ test("carrier rockets turn the Dyson cloud into a permanent sphere", async ({ pa
   await expect(dyson).toContainText("永久结构运行");
   await expect(dyson).toContainText("30 点");
   await expect(dyson).toContainText("300 / 600");
-  await expect(dyson).toContainText("39.60 MW 总功率");
+  await expect(dyson).toContainText("39,600 kW 总功率");
   await expect(dyson).toContainText("运载火箭 30");
   await expect(dyson).toContainText("永久吸附 300");
   await expect(page.locator(".construction-item").filter({ hasText: "垂直发射井" })).toHaveCount(1);
@@ -2607,13 +2723,15 @@ test("basic fabrication handcrafts unlocked material recipes in a compact grid",
 
   const coilRow = page.locator(".handcraft-row").filter({ hasText: "磁线圈" });
   await expect(coilRow).toHaveCount(1);
-  await page.getByLabel("手工制造批量").getByRole("button", { name: "×5" }).click();
+  await page.getByLabel("手工制造批次数量").fill("5");
+  await page.getByLabel("手工制造批次数量").press("Enter");
   await expect(coilRow).toContainText("20/10");
   await expect(coilRow).toContainText("10/5");
   await coilRow.getByTitle("手工制造磁线圈").click();
   await expect(page.locator(".tray-row").filter({ hasText: "磁线圈" })).toContainText("10");
 
-  await page.getByLabel("手工制造批量").getByRole("button", { name: "×1", exact: true }).click();
+  await page.getByLabel("手工制造批次数量").fill("1");
+  await page.getByLabel("手工制造批次数量").press("Enter");
   await page.getByLabel("搜索手工配方").fill("框架材料");
   const frameRow = page.locator(".handcraft-row").filter({ hasText: "框架材料" });
   await expect(frameRow.getByTitle("手工制造框架材料")).toBeEnabled();
@@ -3068,6 +3186,27 @@ test("starter kit and logistics controls are available on the production canvas"
     return Boolean(name && name.textContent === "小型储物仓" && name.scrollHeight <= name.clientHeight + 1 && columns.length === 2 && columns[0].right <= columns[1].left + 1);
   })).toBe(true);
   await page.screenshot({ path: "artifacts/qa/storage-mk1-font-200-1440.png", fullPage: true });
+  await page.evaluate(() => {
+    document.documentElement.dataset.uiFontScale = "100";
+    document.documentElement.style.setProperty("--ui-font-scale", "1");
+  });
+
+  await placeOnCanvas(page, "部署储液罐", Math.round(box!.width * 0.42), 450);
+  const tank = page.locator(".logistics-node").filter({ hasText: "储液罐" });
+  await tank.locator(".factory-node__header").click();
+  await chooseItem(page, page.locator(".inspector-panel .inspector-content").locator(".recipe-select"), "水");
+  await expect(tank.locator(".factory-node__header strong")).toHaveText("储液罐");
+  await expect(tank.locator(".node-io__label")).toHaveText(["输入", "输出"]);
+  await expect(tank).toContainText("水");
+  await page.evaluate(() => {
+    document.documentElement.dataset.uiFontScale = "200";
+    document.documentElement.style.setProperty("--ui-font-scale", "2");
+  });
+  await expect.poll(() => tank.evaluate((element) => {
+    const name = element.querySelector<HTMLElement>(".factory-node__header strong");
+    const columns = [...element.querySelectorAll<HTMLElement>(".node-io__column")].map((column) => column.getBoundingClientRect());
+    return Boolean(name && name.textContent === "储液罐" && name.scrollHeight <= name.clientHeight + 1 && columns.length === 2 && columns[0].right <= columns[1].left + 1);
+  })).toBe(true);
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -3631,7 +3770,7 @@ test("technology upgrades expose balanced global effects in research and equipme
   await expect(upgrades).toContainText("物流航速2.00×");
   await expect(upgrades).toContainText("机 / 船载荷50 / 200");
   await expect(upgrades).toContainText("太阳帆寿命40 min");
-  await expect(upgrades).toContainText("单站接收12.0 MW");
+  await expect(upgrades).toContainText("单站接收12,000 kW");
   await expect(upgrades).toContainText("壳面吸附2.00×");
   await expect(technology.locator(".technology-node").filter({ hasText: "壳面吸附效率" })).toHaveClass(/technology-node--complete/);
   await page.screenshot({ path: "artifacts/qa/technology-upgrades-1440.png", fullPage: true });
@@ -4218,8 +4357,7 @@ test("mobile production regions expose touch-sized handles and resize without pa
   const { context, page } = await createTouchPage(browser, { width: 390, height: 844 });
   try {
     await freshGame(page);
-    const coachClose = page.getByLabel("关闭启动引导");
-    if (await coachClose.count()) await coachClose.click();
+    await dismissOnboarding(page);
     await page.getByLabel("生产区域模式").tap();
     const drag = await page.evaluate(() => {
       const pane = document.querySelector<HTMLElement>(".react-flow__pane");
@@ -4447,7 +4585,7 @@ test("construction cards craft in place and Ctrl-click chains building placement
   await expect(page.getByTitle("部署制造台 Mk.I", { exact: true })).not.toHaveClass(/construction-item--active/);
 
   await sourceAssembler.locator(".factory-node__header").click();
-  const quickAdd = page.getByRole("button", { name: /快速增加建筑，剩余 1/ });
+  const quickAdd = page.getByRole("button", { name: /快速增加 1 台建筑，剩余 1/ });
   await expect(quickAdd).toBeEnabled();
   await quickAdd.click();
   await expect(sourceAssembler).toContainText("×3");
@@ -4598,7 +4736,7 @@ test("operations settings and local save slots persist across reload", async ({ 
   await expect(page.locator(".game-shell")).toHaveAttribute("data-performance-mode", "true");
   await expect(page.locator(".game-shell")).toHaveAttribute("data-reduced-motion", "true");
 
-  await page.waitForTimeout(700);
+  await page.waitForTimeout(2_000);
   await operations.locator(".operations-tabs").getByRole("tab", { name: "存档" }).click();
   await operations.getByRole("button", { name: "立即保存" }).click();
   const elapsedSeconds = await page.evaluate(() => JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1")!).state.elapsedSeconds as number);
@@ -5261,8 +5399,7 @@ test("all font scales keep the header and both construction-dock modes inside de
   test.setTimeout(60_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   await freshGame(page);
-  const coachClose = page.getByLabel("关闭启动引导");
-  if (await coachClose.count()) await coachClose.click();
+  await dismissOnboarding(page);
 
   const scales = [80, 100, 125, 150, 200] as const;
   const viewports = [
@@ -5338,8 +5475,7 @@ test("coarse-pointer edge dragging stops moving the canvas immediately after rel
   const { context, page } = await createTouchPage(browser, { width: 390, height: 844 });
   try {
     await freshGame(page);
-    const coachClose = page.getByLabel("关闭启动引导");
-    if (await coachClose.count()) await coachClose.click();
+    await dismissOnboarding(page);
     await page.locator(".react-flow__controls-fitview").click();
     const node = page.locator(".vein-node").filter({ hasText: "铁矿石" });
     const nodeBox = await node.boundingBox();

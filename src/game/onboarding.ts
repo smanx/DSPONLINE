@@ -4,6 +4,82 @@ import { getEntityOperatingStatus } from "./engine";
 import type { BuildingId, CampaignTaskId, GameState, ItemId, PlanetId } from "./types";
 
 export const ONBOARDING_STORAGE_KEY = "dsp-idle-network.onboarding.v1";
+export const BASIC_ONBOARDING_STORAGE_KEY = "dsp-idle-network.basic-onboarding.v1";
+export const BASIC_ONBOARDING_EVENT = "dsp-idle-network:basic-onboarding";
+
+export type BasicOnboardingEventId = "cargo-stowed" | "construction-crafted" | "building-placed" | "building-stacked" | "belt-connected" | "research-selected";
+export type BasicOnboardingStepId = "basic-cargo" | "basic-craft" | "basic-place-stack" | "basic-belt" | "basic-research";
+export type OnboardingActionId = BasicOnboardingStepId | OnboardingStepId;
+
+export interface BasicOnboardingProgress {
+  version: 1;
+  completedEvents: BasicOnboardingEventId[];
+  skipped: boolean;
+}
+
+export interface BasicOnboardingStep {
+  id: BasicOnboardingStepId;
+  phase: "基础操作";
+  title: string;
+  desktopDetail: string;
+  mobileDetail: string;
+  action: string;
+  requiredEvents: BasicOnboardingEventId[];
+}
+
+export const BASIC_ONBOARDING_STEPS: readonly BasicOnboardingStep[] = [
+  { id: "basic-cargo", phase: "基础操作", title: "收纳第一组物品", desktopDetail: "从节点或物资区拿起物品，再点击左侧物资托盘放下。", mobileDetail: "拿起一组物品，打开底部“物资”抽屉并点击全部放回。", action: "查看物资托盘", requiredEvents: ["cargo-stowed"] },
+  { id: "basic-craft", phase: "基础操作", title: "制造一批建筑", desktopDetail: "打开右侧基础制造，选择建筑批次并完成一次制造。", mobileDetail: "打开底部“建造”，切换到制造并完成一次建筑制造。", action: "打开建筑制造", requiredEvents: ["construction-crafted"] },
+  { id: "basic-place-stack", phase: "基础操作", title: "放置并堆叠建筑", desktopDetail: "在画布放置一座建筑，再用数量控件或 Ctrl 连续扩建增加堆叠。", mobileDetail: "在画布放置一座建筑，再从检查器增加至少一台设备。", action: "选择建筑", requiredEvents: ["building-placed", "building-stacked"] },
+  { id: "basic-belt", phase: "基础操作", title: "连接第一条传送带", desktopDetail: "单击输出端口，再单击绿色目标端口完成连接。", mobileDetail: "依次点击输出端口与绿色吸附目标，完成连接。", action: "开始连接", requiredEvents: ["belt-connected"] },
+  { id: "basic-research", phase: "基础操作", title: "选择第一项科技", desktopDetail: "打开科技树并选择一项可研究科技。", mobileDetail: "点击底部“科研”，打开科技详情并选择研究。", action: "打开科技", requiredEvents: ["research-selected"] },
+] as const;
+
+const BASIC_EVENT_IDS = new Set<BasicOnboardingEventId>([
+  "cargo-stowed", "construction-crafted", "building-placed", "building-stacked", "belt-connected", "research-selected",
+]);
+
+export function loadBasicOnboardingProgress(): BasicOnboardingProgress {
+  const fallback: BasicOnboardingProgress = { version: 1, completedEvents: [], skipped: false };
+  try {
+    const raw = window.localStorage.getItem(BASIC_ONBOARDING_STORAGE_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<BasicOnboardingProgress>;
+    if (parsed.version !== 1) return fallback;
+    return {
+      version: 1,
+      completedEvents: [...new Set((parsed.completedEvents ?? []).filter((event): event is BasicOnboardingEventId => BASIC_EVENT_IDS.has(event as BasicOnboardingEventId)))],
+      skipped: parsed.skipped === true,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveBasicOnboardingProgress(progress: BasicOnboardingProgress): void {
+  try { window.localStorage.setItem(BASIC_ONBOARDING_STORAGE_KEY, JSON.stringify(progress)); } catch { /* optional UI state */ }
+  window.dispatchEvent(new CustomEvent(BASIC_ONBOARDING_EVENT, { detail: progress }));
+}
+
+export function recordBasicOnboardingEvent(event: BasicOnboardingEventId): void {
+  const current = loadBasicOnboardingProgress();
+  if (current.skipped || current.completedEvents.includes(event)) return;
+  saveBasicOnboardingProgress({ ...current, completedEvents: [...current.completedEvents, event] });
+}
+
+export function skipBasicOnboarding(): void {
+  const current = loadBasicOnboardingProgress();
+  if (!current.skipped) saveBasicOnboardingProgress({ ...current, skipped: true });
+}
+
+export function isBasicOnboardingStepComplete(progress: BasicOnboardingProgress, step: BasicOnboardingStep): boolean {
+  return step.requiredEvents.every((event) => progress.completedEvents.includes(event));
+}
+
+export function getCurrentBasicOnboardingStep(progress: BasicOnboardingProgress): BasicOnboardingStep | null {
+  if (progress.skipped) return null;
+  return BASIC_ONBOARDING_STEPS.find((step) => !isBasicOnboardingStepComplete(progress, step)) ?? null;
+}
 
 export type OnboardingStepId =
   | "mine"
@@ -64,10 +140,12 @@ export function loadOnboardingDismissed(): boolean {
 
 export function dismissOnboarding(): void {
   try { window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "dismissed"); } catch { /* optional UI state */ }
+  skipBasicOnboarding();
 }
 
 export function resetOnboarding(): void {
   try { window.localStorage.removeItem(ONBOARDING_STORAGE_KEY); } catch { /* optional UI state */ }
+  try { window.localStorage.removeItem(BASIC_ONBOARDING_STORAGE_KEY); } catch { /* optional UI state */ }
 }
 
 export function getOnboardingStep(stepId: OnboardingStepId): OnboardingStep | undefined {

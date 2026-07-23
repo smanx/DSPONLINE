@@ -27,6 +27,7 @@ import {
   Radio,
   MessageSquare,
   MousePointer2,
+  Palette,
   Smartphone,
   ShieldCheck,
   Users,
@@ -45,7 +46,9 @@ import type { ModValidationResult } from "../game/mods";
 import { getContentPackDependencyStatuses, getContentPackUsage, type ContentPackRegistry } from "../game/contentPacks";
 import type { AutomaticPerformanceReport } from "../game/benchmark";
 import type { DesktopReleaseInfo } from "../desktop";
-import type { AutosaveIntervalSeconds, DifficultyMode, FontScale, GameSettings, GameState, SimulationSpeed } from "../game/types";
+import type { AutosaveIntervalSeconds, CargoStackSize, DefaultBeltRouteMode, DifficultyMode, FontScale, GameSettings, GameState, SimulationSpeed } from "../game/types";
+import { canSetBeltStackSize } from "../game/engine";
+import { validateBuildingBufferLimitInput } from "../game/settings";
 import { clearClientErrors, collectClientDiagnostics, downloadDiagnostics, getClientErrors } from "../game/diagnostics";
 import { fetchCloudPublicStatus, resumeCloudSession, sendCloudFeedback, type CloudPublicStatus } from "../game/cloud";
 import { resetOnboarding } from "../game/onboarding";
@@ -184,6 +187,46 @@ function ToggleSetting({ checked, label, value, icon, onChange }: {
   );
 }
 
+const BUFFER_LIMIT_PRESETS = [10_000, 100_000, 1_000_000] as const;
+const BUFFER_LIMIT_LABELS: Record<(typeof BUFFER_LIMIT_PRESETS)[number], string> = {
+  10_000: "1万",
+  100_000: "10万",
+  1_000_000: "100万",
+};
+
+function BufferLimitSetting({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  const preset = BUFFER_LIMIT_PRESETS.includes(value as (typeof BUFFER_LIMIT_PRESETS)[number]);
+  const [customEditing, setCustomEditing] = useState(!preset);
+  const [draft, setDraft] = useState(String(value));
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setDraft(String(value));
+    setCustomEditing(!BUFFER_LIMIT_PRESETS.includes(value as (typeof BUFFER_LIMIT_PRESETS)[number]));
+    setError(null);
+  }, [value]);
+  const submit = () => {
+    const result = validateBuildingBufferLimitInput(draft);
+    if (!result.ok) {
+      setError(result.reason);
+      return;
+    }
+    setError(null);
+    onChange(result.value);
+  };
+  return <section className="settings-group settings-buffer-limit">
+    <header><HardDrive size={14} /><span>{label}</span><small>{value.toLocaleString("zh-CN")}/种</small></header>
+    <div className="settings-segmented settings-buffer-presets" aria-label={`${label}预设`}>
+      {BUFFER_LIMIT_PRESETS.map((option) => <button className={!customEditing && value === option ? "active" : ""} type="button" key={option} aria-pressed={!customEditing && value === option} onClick={() => { setCustomEditing(false); setError(null); onChange(option); }}>{BUFFER_LIMIT_LABELS[option]}</button>)}
+      <button className={customEditing || !preset ? "active" : ""} type="button" aria-pressed={customEditing || !preset} onClick={() => { setCustomEditing(true); setDraft(String(value)); setError(null); }}>自定义</button>
+    </div>
+    {customEditing || !preset ? <div className="settings-buffer-custom">
+      <label><span>1,000～100,000,000</span><input type="text" inputMode="numeric" pattern="[0-9]*" value={draft} onChange={(event) => { setDraft(event.target.value); setError(null); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); submit(); } }} aria-invalid={Boolean(error)} aria-label={`${label}自定义值`} /></label>
+      <button type="button" onClick={submit}>应用</button>
+    </div> : null}
+    {error ? <p className="settings-buffer-error" role="alert">{error}</p> : <p className="settings-help">按每一种输入、输出或物流槽独立限制；调低不会删除已有库存。</p>}
+  </section>;
+}
+
 function SettingsPanel({ game, report, desktopRelease, onChange, onRunBenchmark, onCheckDesktopUpdate, onInstallDesktopUpdate, onOpenReleaseNotes }: { game: GameState; report: AutomaticPerformanceReport | null; desktopRelease: DesktopReleaseInfo | null; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onCheckDesktopUpdate: () => void; onInstallDesktopUpdate: () => void; onOpenReleaseNotes: () => void }) {
   const { settings } = game;
   return (
@@ -208,6 +251,27 @@ function SettingsPanel({ game, report, desktopRelease, onChange, onRunBenchmark,
           ))}
         </div>
       </section>
+      <section className="settings-group">
+        <header><Palette size={14} /><span>界面主题</span><small>{{ dark: "深色", light: "亮色", system: "跟随系统" }[settings.theme]}</small></header>
+        <div className="settings-segmented" aria-label="界面主题">
+          {(["dark", "light", "system"] as const).map((theme) => <button className={settings.theme === theme ? "active" : ""} type="button" key={theme} onClick={() => onChange({ theme })}>{{ dark: "深色", light: "亮色", system: "跟随系统" }[theme]}</button>)}
+        </div>
+      </section>
+      <section className="settings-group">
+        <header><Settings2 size={14} /><span>科技树布局</span><small>{settings.technologyLayout === "compact" ? "精简" : "标准"}</small></header>
+        <div className="settings-segmented" aria-label="科技树布局">
+          <button className={settings.technologyLayout === "standard" ? "active" : ""} type="button" onClick={() => onChange({ technologyLayout: "standard" })}>标准模式</button>
+          <button className={settings.technologyLayout === "compact" ? "active" : ""} type="button" onClick={() => onChange({ technologyLayout: "compact" })}>精简模式</button>
+        </div>
+      </section>
+      <section className="settings-group settings-belt-defaults">
+        <header><Settings2 size={14} /><span>新建传送带默认参数</span><small>仅影响新线路</small></header>
+        <label><span>货物堆叠</span><div className="settings-segmented" aria-label="新建传送带默认货物堆叠">{([1, 2, 4] as CargoStackSize[]).map((stackSize) => <button className={settings.defaultBeltStackSize === stackSize ? "active" : ""} type="button" disabled={!canSetBeltStackSize(game, stackSize)} key={stackSize} onClick={() => onChange({ defaultBeltStackSize: stackSize })}>×{stackSize}</button>)}</div></label>
+        <label><span>线路形状</span><div className="settings-segmented" aria-label="新建传送带默认线路形状">{(["auto", "bezier", "upper", "lower"] as DefaultBeltRouteMode[]).map((mode) => <button className={settings.defaultBeltRouteMode === mode ? "active" : ""} type="button" key={mode} onClick={() => onChange({ defaultBeltRouteMode: mode })}>{{ auto: "自动避让", bezier: "曲线", upper: "上绕", lower: "下绕" }[mode]}</button>)}</div></label>
+        <p className="settings-help">蓝图保留自身参数，并行线沿用原线路；未解锁的堆叠等级不可选择。</p>
+      </section>
+      <BufferLimitSetting label="生产建筑缓存上限" value={settings.productionBufferLimit} onChange={(productionBufferLimit) => onChange({ productionBufferLimit })} />
+      <BufferLimitSetting label="仓储与物流建筑缓存上限" value={settings.logisticsBufferLimit} onChange={(logisticsBufferLimit) => onChange({ logisticsBufferLimit })} />
       <section className="settings-group settings-toggle-list">
         <ToggleSetting checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "低频渲染" : "完整渲染"} icon={<Cpu size={16} />} onChange={(performanceMode) => onChange({ performanceMode })} />
         <ToggleSetting checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态效果关闭" : "动态效果开启"} icon={<Gauge size={16} />} onChange={(reducedMotion) => onChange({ reducedMotion })} />
@@ -533,7 +597,7 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
         <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} maxLength={4000} placeholder="描述出现的问题或建议" aria-label="反馈内容" />
         <footer><span className={feedbackState === "failed" ? "warning" : feedbackState === "sent" ? "ready" : ""}>{feedbackMessage ?? `${feedback.length}/4000`}</span><button className="primary" type="button" disabled={!feedback.trim() || feedbackState === "sending" || cloudState === "offline"} onClick={() => void submitFeedback()}>{feedbackState === "sending" ? <Activity size={14} /> : <Upload size={14} />}{feedbackState === "sending" ? "提交中" : "提交反馈"}</button></footer>
       </section>
-      <section className="support-onboarding-reset"><GraduationCap size={16} /><span><strong>渐进教学</strong><small>重新打开从手动采矿到白糖、跨星物流与戴森云的 13 步教学。</small></span><button type="button" onClick={() => { resetOnboarding(); window.location.reload(); }}>重新开始教学</button></section>
+      <section className="support-onboarding-reset"><GraduationCap size={16} /><span><strong>渐进教学</strong><small>重新打开 5 步基础操作和从手动采矿到白糖、跨星物流与戴森云的 13 步进阶教学。</small></span><button type="button" onClick={() => { resetOnboarding(); window.location.reload(); }}>重新开始教学</button></section>
     </div>
   );
 }

@@ -5,9 +5,9 @@
 | 层级 | 命令 | 当前规模 | 覆盖重点 |
 | --- | --- | ---: | --- |
 | 类型检查 | `npm run typecheck` | 全部前端 TS | 严格类型、Vite 配置 |
-| 单元/领域 | `npm test` | 香港 `0.6.0` 基线 272 项；上海 `0.5.0` 基线 268 项 | 引擎、v1-v30 存档、存档配额急救、殖民载具原子扣料、玩家满仓放下、统一资源储量、四向分流、托盘上限、科研、电力、蓝图、规划、网络、性能与分槽云同步等 |
-| 浏览器 E2E | `npm run test:e2e` | 香港 `0.6.0` 基线 108 项；上海 `0.5.0` 基线 97 项 | 从开局到银河终局、生产资料库、移动目录焦点、有限资源、殖民来源、储物仓 200% 字体、新旧手机壳、保存失败和桌面/手机横竖屏回归 |
-| 云服务 | `npm run test:server` | 22 项 | 账号验证/绑定/恢复/注销、设备会话、匿名统计、v3→v6 迁移、四槽云存档隔离、腾讯 SES 模板 API、模板变量约束、邮件隐私日志、排行榜和管理员保护 |
+| 单元/领域 | `npm test` | 本地 v32 320 项；香港 `0.7.0` 基线 282 项；上海 `0.5.0` 基线 268 项 | 引擎、v1-v32 存档、双向物流载具归属、制造中心递归任务、可配置缓存、离线 Worker 等价性、存档配额急救、四向分流、科研、电力、蓝图、规划、网络与云同步等 |
+| 浏览器 E2E | `npm run test:e2e` | 本地 v32 118 项；香港 `0.7.0` 基线 113 项；上海 `0.5.0` 基线 97 项 | 从开局到银河终局、主题、逐行星视角、工作区再次关闭、生产资料库、新旧手机壳、缓存设置、保存失败和桌面/手机横竖屏回归 |
+| 云服务 | `npm run test:server` | 本地 23 项；香港 `0.7.0` 基线 22 项 | 账号验证/绑定/恢复/注销、设备会话、匿名统计、v3→v6 迁移、四槽云存档隔离、v32 缓存值验证、腾讯 SES 模板 API、邮件隐私日志、排行榜和管理员保护 |
 | 运维工具 | `npm run test:ops` | 5 项 | SQLite 一致性快照、认证加密、异地复制、隔离恢复、篡改拒绝、Nginx 压缩与缓存边界、端点/磁盘探针和告警载荷 |
 | 生产构建 | `npm run build` | 1 次构建 | `tsc -b`、Vite chunk 和 PWA 资源 |
 | 桌面目录包 | `npm run desktop:pack` | 按需 | Electron 启动与 Windows 解包 |
@@ -102,6 +102,9 @@ npm run desktop:dist
 
 - 相同 state + seconds 得到相同哈希。
 - 库存、托盘、节点输入输出最终为非负整数。
+- v32 两项建筑缓存设置默认均为 1,000,000；预设、自定义边界和非法输入必须覆盖。
+- 熔炉/采集器使用生产上限，仓储/分流/物流站使用仓储物流上限；多输入、多输出和每个物流槽分别计算。
+- 降低上限或减少堆叠不裁剪已有与在途库存；超额时停止新输入和派遣，调高后恢复。
 - 配方切换、设备回收和升级会返还或保留所有物资。
 - 无电、低电、缺料、堵塞、缺燃料状态与真实行为一致。
 - 离线推进与前台推进使用同一规则。
@@ -127,6 +130,8 @@ npm run desktop:dist
 
 - 运行 500 设备、1000 线路 E2E 场景。
 - 运行 60 秒确定性基准和 2/8/24/72 小时挂机套件。
+- 离线 Worker 覆盖 1 小时、8 小时、9 小时、24 小时、7 天与 30 天，并与同步路径逐字段或状态哈希等价。
+- 后期样本存档至少运行 Chrome 与目标兼容浏览器各 30 分钟；记录强制 GC 后活跃堆、DOM、监听器、Worker、Renderer 和 GPU 趋势，不能用开发构建结果代替生产构建。
 - 对比构建 chunk 大小，不接受无解释的显著增长。
 - 测量正式入口冷加载、缓存加载、TLS 成功率和静态资源压缩。
 - 检查 Worker 是否 active；回退到主线程时界面仍正确但应记录诊断。
@@ -207,9 +212,9 @@ Web 发布应至少记录：构建 ID、入口 HTML、主 JS/CSS 体积、压缩
 
 - 将 3000 多行 E2E 文件按 `menu-save`、`core-loop`、`logistics`、`mobile`、`endgame`、`operations` 分拆。
 - 为云服务增加独立 API 测试文件和临时 SQLite 重启测试。
-- 对存档 v1-v30 建立不可变 fixture 集，而不是只依赖测试内构造对象。
+- 对存档 v1-v31 建立不可变 fixture 集，而不是只依赖测试内构造对象。
 - 对关键视觉状态建立少量稳定截图基线，避免只检查元素存在。
-- CI 同时运行前端单元、服务端测试和浏览器关键路径；当前完整 108 项可作为合并或夜间门禁。
+- CI 同时运行前端单元、服务端测试和浏览器关键路径；当前完整 113 项可作为合并或夜间门禁。
 
 ## 10. 第五批 / v29 本地验收（未发布）
 
@@ -313,3 +318,71 @@ Chrome 桌面触摸仿真通过不等于 Android Chrome 或 iPhone Safari 真机
 正式构建在独立干净 worktree 中完成，没有结束或复用玩家当前的 `4318/4320` 进程。香港切换前通过 SQLite Backup API 创建 59,940,864 字节的 schema v6 一致性备份，并以全新 Web/API release 目录原子切换；当前回滚点为 `0.5.0-5b3a468c94d0`。公网根域名、健康接口、`www` 跳转、管理员 `401`、gzip、immutable/no-cache 边界以及桌面、新旧手机横竖屏均通过。上海公开 manifest 仍为 `0.5.0-5b3a468c94d0`，没有执行上传或切换。
 
 Android Chrome 与 iPhone Safari 的 30 分钟真机温度、耗电、FPS、软键盘和 PWA standalone 仍未完成，因此新版继续 opt-in，不切为默认。完整制品、备份、回滚和生产截图证据见 [releases/0.6.0.md](./releases/0.6.0.md)。
+
+## 14. `0.7.0` / v31 物流与工作区体验正式验收
+
+以下结果针对已部署源码提交 `8bf16d91d82d` 和 release ID `0.7.0-8bf16d91d82d`。应用 SemVer 为 `0.7.0`，香港 GameState 升至 v31，存档 envelope 仍为 v2、云 schema 仍为 v6。香港已发布，上海保持 `0.5.0` / v30。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 27/27 文件、282/282 通过 |
+| `npm ci` | 根项目与服务端通过，0 个已知漏洞 |
+| `npm run test:server` | 本地与香港新 release 均为 22/22 通过 |
+| `npm run test:ops` | 5/5 通过 |
+| `npm run build` | 通过 |
+| 先前失败的物流/经典手机 focused Playwright | 7/7 通过 |
+| `tests/e2e/v31-workspaces.spec.ts` | 5/5 通过 |
+| `npm run test:e2e` | 113/113 通过，3 workers 约 5.3 分钟 |
+| `git diff --check` | 通过 |
+| 正式制品清单 | `0.7.0-8bf16d91d82d`，干净来源，98 个文件本地与香港复验通过 |
+
+专项覆盖供需两端载具调度和归属、旧 `stationProgress` 首航迁移、逐行星视口、三种主题、建筑制造中心递归任务、分拣器退款迁移、科技树精简布局、所有主工作区再次点击关闭、堆叠容量以及物流站五槽顺序自动配置。完整 E2E 同时回归经典/新版手机、80%-200% 字体、线路端点、星图互斥、旧存档迁移、有限资源、云存档和大型工作区。
+
+视觉检查产物：
+
+- `artifacts/qa/v31-light-theme-1440.png`
+- `artifacts/qa/v31-light-factory-1440.png`
+- `artifacts/qa/v31-technology-compact-light-1440.png`
+- `artifacts/qa/v31-light-mobile-390.png`
+
+香港切换前通过 SQLite Backup API 创建 59,940,864 字节的 schema v6 一致性备份，并验证 SHA-256、权限和可读性。Web/API 上传到全新 release 目录，服务器逐项复验 98 个 manifest 文件和 5 个入口资源后由固定工具原子切换；当前回滚点为 `0.6.0-ae779d297011`。公网根域名、`www` 跳转、健康接口、管理员 `401`、gzip、immutable/no-cache 边界以及桌面、新版手机横竖屏均通过，最近两个 access log 各 500 条没有 5xx，云服务 `NRestarts=0`。上海公开 manifest 仍为 `0.5.0-5b3a468c94d0`，没有执行上传、切换或数据库操作。
+
+完整 E2E 的 Vite 测试服务器在两个页面卸载时报告过非阻断的 `ResizeObserver loop completed with undelivered notifications`，全部 113 项断言和进程退出码仍为成功。生产浏览器烟测使用全新隔离上下文并拦截匿名 presence/analytics 写入，不使用生产账号、不上传云存档，也不清理玩家浏览器存档。完整制品、备份、回滚和截图证据见 [releases/0.7.0.md](./releases/0.7.0.md)。
+
+## 15. 未发布 v32 模拟、离线与缓存治理验收
+
+以下结果针对 2026-07-23 的 `0.8.0` 发布候选工作树。GameState 本地升至 v32，存档 envelope 仍为 v2、云 schema 仍为 v6；此处记录的测试发生在提交、发布清单和服务器切换之前。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 31/31 文件、320/320 通过 |
+| `npm run test:server` | 23/23 通过，包含 v32 两项缓存值云端范围验证 |
+| `npm run test:ops` | 5/5 通过 |
+| `npm run build` | 通过；独立离线 Worker 与实时模拟 Worker 均生成生产 chunk |
+| `npx playwright test --workers=1 --reporter=line` | 118/118 通过，约 6.3 分钟 |
+| v32 缓存设置 focused Playwright | 2/2 通过；桌面、经典手机、新版手机和 80%-200% 字体 |
+
+缓存专项覆盖默认 100 万、1万/10万/100万预设、自定义最小/最大值、空值、小数、负数、指数、非数字与越界错误；生产/仓储物流分类、多输入/多输出逐项容量、物流槽手动上限、降限超额、升限恢复、减堆、采矿/原油/抽水、在途物流、v31→v32 迁移、主存档、手动槽和导入导出。服务端拒绝缺字段、非整数和超范围 v32 云存档。
+
+离线 Worker 对 1 小时、8 小时、9 小时、24 小时、7 天和 30 天与同步路径逐字段等价；取消用例确认不会保存半成品。后期样本存档仅在隔离本地浏览器中只读加载，报告位于：
+
+- `artifacts/performance/memory-chrome-production-30m.json`
+- `artifacts/performance/memory-360-production-30m.json`
+
+Chrome 147 的强制 GC 活跃堆从 14.06 MiB 到 16.23 MiB（+2.17 MiB），Renderer 工作集从 323.40 MiB 到 321.99 MiB；360/Chromium 132 从 17.31 MiB 到 19.18 MiB（+1.87 MiB），Renderer 工作集从 541.11 MiB 到 574.29 MiB且中途峰值约 685 MiB后回落。两者 DOM、监听器增量均为 0，Worker 始终为 1。现有 30 分钟证据未显示持续 JS/DOM 泄漏，但 360 原生/GPU 占用仍需更长时间和真实玩家环境继续观察，不能宣称所有内存风险已经消失。
+
+缓存设置截图：
+
+- `artifacts/qa/v32-buffer-settings-desktop-font-80.png`
+- `artifacts/qa/v32-buffer-settings-desktop-font-200.png`
+- `artifacts/qa/v32-buffer-settings-desktop-custom-font-200.png`
+- `artifacts/qa/v32-buffer-settings-legacy-font-80.png`
+- `artifacts/qa/v32-buffer-settings-legacy-font-200.png`
+- `artifacts/qa/v32-buffer-settings-legacy-custom-font-200.png`
+- `artifacts/qa/v32-buffer-settings-next-font-80.png`
+- `artifacts/qa/v32-buffer-settings-next-font-200.png`
+- `artifacts/qa/v32-buffer-settings-next-custom-font-200.png`
+
+完整 E2E 的 Vite 测试服务器仍可能在页面卸载时报非阻断 `ResizeObserver loop completed with undelivered notifications`；118 项断言和最终进程退出码均成功。Android Chrome 与 iPhone Safari 真机温度、耗电和 30 分钟交互门禁仍未完成。

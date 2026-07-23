@@ -11,14 +11,19 @@ export interface SimulationWorkerRequest {
 
 export interface SimulationWorkerResponse {
   id: number;
-  state: GameState;
   changed: boolean;
+  state?: GameState;
 }
 
 self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
   const { id, state, seconds } = event.data;
   const next = advanceSimulation(state, seconds);
-  const response: SimulationWorkerResponse = { id, state: next, changed: next !== state };
+  const changed = next !== state;
+  const response: SimulationWorkerResponse = {
+    id,
+    changed,
+    ...(changed ? { state: next } : {}),
+  };
   self.postMessage(response);
 };
 

@@ -69,7 +69,7 @@ export function createTencentSesMailer({
   });
 
   return async function sendAccountEmail({ kind, email, actionToken }) {
-    const { actionUrl, subject } = accountEmailDetails(kind, baseUrl, actionToken);
+    const { subject } = accountEmailDetails(kind, baseUrl, actionToken);
     try {
       await sesClient.SendEmail({
         FromEmailAddress: sender,
@@ -77,7 +77,7 @@ export function createTencentSesMailer({
         Subject: subject,
         Template: {
           TemplateID: kind === "verify" ? templateIds.verify : templateIds.reset,
-          TemplateData: JSON.stringify({ actionUrl }),
+          TemplateData: JSON.stringify({ actionToken }),
         },
         TriggerType: 1,
         Unsubscribe: "0",

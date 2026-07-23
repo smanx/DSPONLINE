@@ -80,6 +80,7 @@ export interface FactoryNodeData extends Record<string, unknown> {
   dysonSwarm: DysonSwarmState;
   dysonSphere: DysonSphereState;
   status: EntityOperatingStatus;
+  outputCapacity: number;
 }
 
 export type FactoryFlowNode = Node<FactoryNodeData, EntityKind>;
@@ -553,7 +554,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const isStation = entity.kind === "station";
   const orbitalCollector = entity.buildingId === "orbital_collector";
   const deliveryHub = entity.buildingId === "material_delivery_hub";
-  const compactStorage = entity.buildingId === "storage_mk1";
+  const warehouseStorage = entity.buildingId === "storage_mk1" || entity.buildingId === "storage_tank";
   const configuredItems = deliveryHub
     ? getMaterialDeliveryItems(entity)
     : isStation && !orbitalCollector
@@ -578,7 +579,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
-      className={`factory-node logistics-node factory-node--status-${data.status.tone}${isStation ? " station-node" : ""}${compactStorage ? " storage-buffer-node" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
+      className={`factory-node logistics-node factory-node--status-${data.status.tone}${isStation ? " station-node" : ""}${warehouseStorage ? " storage-buffer-node" : ""}${entity.buildingId === "storage_tank" ? " storage-buffer-node--fluid" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
       onClick={(event) => {
         if (!adding) return;
         event.preventDefault();
@@ -616,7 +617,8 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       />
       {configuredItems.length > 0 ? (
         <div className={`node-io logistics-io${orbitalCollector ? " logistics-io--collector" : ""}`}>
-          {configuredItems.map((configuredItemId, index) => <div className="logistics-slot-row" key={configuredItemId}>
+          {configuredItems.map((configuredItemId, index) => <div className={`logistics-slot-row${warehouseStorage ? " logistics-slot-row--warehouse" : ""}`} key={configuredItemId}>
+            {warehouseStorage ? <div className="storage-slot-summary"><strong>{ITEMS[configuredItemId].name}</strong><span>输入 {formatAmount(entity.inputs[configuredItemId] ?? 0)} · 输出 {formatAmount(entity.outputs[configuredItemId] ?? 0)}</span></div> : null}
             {!orbitalCollector ? <div className="node-io__column">
               {index === 0 ? <span className="node-io__label">输入</span> : null}
               <InputSlot entityId={entity.id} itemId={configuredItemId} amount={entity.inputs[configuredItemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} connectionDraft={data.connectionDraft} connectionCount={data.inputBeltCounts[configuredItemId] ?? 0} />
@@ -633,7 +635,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       {!orbitalCollector && data.connectionDraft && (!deliveryHub || configuredItems.length < MATERIAL_DELIVERY_SLOT_COUNT) ? <div className="logistics-auto-input"><AutoInputPort connectionDraft={data.connectionDraft} label={deliveryHub ? "自动占用直送接口" : isStation ? "连接时自动占用空槽" : "连接时自动设置物品"} /></div> : null}
       <footer className="factory-node__footer">
         <span title={data.status.label}>{data.status.label}</span>
-        <span title={isStation ? `累计 ${entity.stationTrips ?? 0} 航次` : undefined}>{deliveryHub ? `${configuredItems.length}/${MATERIAL_DELIVERY_SLOT_COUNT} 接口 · ${entity.productionRate.toFixed(1)}/min` : orbitalCollector ? `${itemId ? ITEMS[itemId].name : "资源"} · ${entity.productionRate.toFixed(1)}/min` : isStation ? `${primaryStationMode === "demand" ? "需求" : primaryStationMode === "supply" ? "供应" : "仓储"} · ${configuredItems.length}/5 槽 · ${stationVehicles}/${stationVehicleCapacity} ${planetaryStation ? "机队" : "舰队"}` : isSplitter ? entity.distributionMode === "priority" ? "优先分流" : "均衡分流" : `${building.outputCapacity * entity.machineCount} 容量`}</span>
+        <span title={isStation ? `累计 ${entity.stationTrips ?? 0} 航次` : undefined}>{deliveryHub ? `${configuredItems.length}/${MATERIAL_DELIVERY_SLOT_COUNT} 接口 · ${entity.productionRate.toFixed(1)}/min` : orbitalCollector ? `${itemId ? ITEMS[itemId].name : "资源"} · ${entity.productionRate.toFixed(1)}/min` : isStation ? `${primaryStationMode === "demand" ? "需求" : primaryStationMode === "supply" ? "供应" : "仓储"} · ${configuredItems.length}/5 槽 · ${stationVehicles}/${stationVehicleCapacity} ${planetaryStation ? "机队" : "舰队"}` : isSplitter ? entity.distributionMode === "priority" ? "优先分流" : "均衡分流" : `${data.outputCapacity} 容量`}</span>
       </footer>
     </article>
   );

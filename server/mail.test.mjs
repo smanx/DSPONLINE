@@ -88,19 +88,19 @@ test("sends verification and reset links through approved Tencent SES templates"
     logger: { error() {} },
   });
 
-  assert.equal(await mailer({ kind: "verify", email: "pilot@example.com", actionToken: "verify token" }), true);
+  assert.equal(await mailer({ kind: "verify", email: "pilot@example.com", actionToken: "verify-token" }), true);
   assert.equal(await mailer({ kind: "reset", email: "pilot@example.com", actionToken: "reset-token" }), true);
   assert.deepEqual(requests[0], {
     FromEmailAddress: "DSP极简网络 <no-reply@mail.dsponline.cn>",
     Destination: ["pilot@example.com"],
     Subject: "验证 DSP极简网络云账户",
-    Template: { TemplateID: 1001, TemplateData: JSON.stringify({ actionUrl: "https://dsponline.cn/?verify=verify%20token" }) },
+    Template: { TemplateID: 1001, TemplateData: JSON.stringify({ actionToken: "verify-token" }) },
     TriggerType: 1,
     Unsubscribe: "0",
     ReplyToAddresses: "support@example.com",
   });
   assert.equal(requests[1].Template.TemplateID, 1002);
-  assert.equal(JSON.parse(requests[1].Template.TemplateData).actionUrl, "https://dsponline.cn/?reset=reset-token");
+  assert.deepEqual(JSON.parse(requests[1].Template.TemplateData), { actionToken: "reset-token" });
 });
 
 test("redacts Tencent SES recipients and action tokens from delivery errors", async () => {
@@ -123,11 +123,16 @@ test("redacts Tencent SES recipients and action tokens from delivery errors", as
   assert.match(serialized, /FailedOperation\.SendEmailErr/);
 });
 
-test("keeps uploaded Tencent SES templates to the single approved actionUrl variable", async () => {
-  for (const filename of ["account-verification.html", "password-reset.html"]) {
+test("keeps Tencent SES link domains fixed and varies only the action token", async () => {
+  const templates = {
+    "account-verification.html": "https://dsponline.cn/?verify={{actionToken}}",
+    "password-reset.html": "https://dsponline.cn/?reset={{actionToken}}",
+  };
+  for (const [filename, actionUrl] of Object.entries(templates)) {
     const content = await readMailTemplate(filename);
     const variables = [...content.matchAll(/{{\s*([^}]+?)\s*}}/g)].map((match) => match[1]);
-    assert.deepEqual(variables, ["actionUrl"], filename);
-    assert.match(content, /href="{{actionUrl}}"/);
+    assert.deepEqual(variables, ["actionToken"], filename);
+    assert.equal(content.includes(`href="${actionUrl}"`), true, filename);
+    assert.doesNotMatch(content, /href="{{/);
   }
 });

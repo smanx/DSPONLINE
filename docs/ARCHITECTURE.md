@@ -44,6 +44,7 @@ flowchart LR
 - `src/components/CatalogPicker.tsx`：配方和物品的面板式选择器。新增长列表选择应优先复用它；打开时按 compact 视口决定焦点，桌面自动聚焦，手机等待玩家主动点击以免弹出软键盘。
 - `src/hooks/`：`useCompactLayout` 只按视口判定 compact/medium/desktop，`useMobileUiPreference` 保存独立的手机壳偏好，`useMobileNavigation` 管理移动路由、覆盖层和浏览器返回；粗指针仍只负责手势、吸附和命中区。
 - `src/styles.css`：桌面与经典手机基线，包含字体倍率和动效降级规则。
+- `src/hooks/useResolvedTheme.ts` 与 `src/theme.css`：把 `dark / light / system` 解析为根节点主题并集中覆盖桌面、React Flow、工作区和新版手机壳；主题模式属于 `GameSettings`，不复制玩法规则。
 - `src/styles/mobile-shell.css`：新版手机壳、顶栏、底栏和路由边界；`mobile-factory.css`：阶段 2 的三档抽屉、建造/物资/检查器和画布模式；`mobile-workspaces.css`：阶段 3 的单滚动工作区、移动列表/详情和大字适配；`codex.css`：生产资料库桌面主从布局及限定在新版壳层下的移动列表/详情规则。
 
 React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新计算视口平移以保持原世界中心；触摸端的扩大吸附、连接虚影和低性能 LOD 都是瞬时展示状态，不写入存档。第二根触摸指针由画布捕获层接管，先取消第一指未提交的节点拖动、连线、采矿、放置、区域草稿和长按，再以双指中心与距离直接更新 React Flow 视口。生产区域的矩形、名称与颜色保存在 `GameState.canvasRegions`，但区域草稿和编辑器选择仍是瞬时 UI 状态。
@@ -76,9 +77,9 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 ## 3. 状态与模拟流
 
 1. 主菜单调用 `loadGame()` 或加载指定槽位，得到 `LoadedGame`。
-2. `FactoryGame` 以 `GameState` v30 作为唯一持久游戏状态；工作区、香港 `0.6.0` 与上海 `0.5.0` 使用同一状态版本。
-3. 桌面正常模式每 100 ms、手机正常模式每 500 ms、性能或受限手机模式每 750 ms 累积真实经过时间，并乘以 `1x/2x/4x` 模拟倍率。提交频率只影响 UI 发布，不改变传入模拟器的总秒数。
-4. 浏览器支持 Worker 时，状态和时间提交给 `src/game/simulation.worker.ts`；Worker 调用 `advanceSimulation()`。
+2. 当前未发布工作区的 `FactoryGame` 以 `GameState` v32 作为唯一持久游戏状态；香港 `0.7.0` 仍使用 v31，上海 `0.5.0` 仍使用 v30。
+3. 正常工厂每 1 秒累积并提交真实经过时间，性能/受限手机为 1.5 秒；实体与线路合计达到 180 时为 3 秒。经过时间仍完整乘以 `1x/2x/4x`，发布节流不改变模拟总秒数或内部确定性顺序。
+4. 浏览器支持 Worker 时，状态和累计时间提交给 `src/game/simulation.worker.ts`；Worker 调用 `advanceSimulation()`。暂停时停止重复回传完整状态，复杂工厂的画布快照同样降至 3 秒一次。
 5. Worker 不可用或报错时，主线程使用同一个 `advanceSimulation()` 回退，保持规则一致。
 6. 返回的新状态驱动节点、线路、面板和统计重新渲染。
 7. 按设置中的 30/60/120 秒间隔自动保存；切后台、`pagehide`、卸载和返回主菜单立即保存。旧 2/10 秒偏好在 v29 迁移为 30 秒。
@@ -105,15 +106,23 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 
 React Flow 只负责可视节点、边、视口和交互；真实生产库存与运输状态都在 `GameState` 中。显示层通过实体和线路派生 Node/Edge，不应把 React Flow 的临时对象当作存档真相。
 
-`GameState.constructionAutomation` 持久化建筑制造中心的启停、目标库存、轮询游标和累计制造量。施工托盘的递归快速建造只生成临时规划，必须先证明完整手工链可完成，再一次性提交托盘、生产统计与建筑库存；失败规划不得写入任何中间状态。
+`GameState.constructionAutomation` 持久化建筑制造中心的启停、目标库存、轮询游标、累计制造量和按中心 ID 隔离的递归任务。任务将缺少的可手工加工中间材料展开为确定性步骤，基础耗时为材料 0.1 秒/件、成品 5 秒/个；两级升级同时缩短两类步骤。每一步只从中心所在行星托盘原子扣料，原矿缺失时停机，不会凭空生成。施工托盘的递归快速建造仍只生成临时规划，必须先证明完整链可完成再一次性提交。
 
 全星球批量命令按实体所属行星分组，临时切换到对应行星执行既有配方或物流槽命令，再恢复玩家原先所在行星。这样配方切换和槽位替换产生的物资返还会进入正确的行星托盘；批量物流模板只修改指定槽位，物品已占用其他槽位的站点会被跳过。
 
 线路模型包含源、汇、物品、等级、分拣等级、优先级、堆叠、路由、流量和拥堵。端口能够根据已有配方、物流槽或默认状态自动接受物品。连接草稿在开始拉线时锁定传送带等级；自动模式按 Mk.III→Mk.II→Mk.I 选择已解锁且有库存的最高等级，并优先复用已有并行线等级，手动模式保留显式选择。多条同端点线路由 bundle 信息进行视觉错位。
 
-星际物流槽持久化 `direct`、`relay-preferred` 或 `relay-required` 策略及 1-4 个/船翘曲预算。中转物流站持久化启用状态与优先级；在途 `StationRoute` 保存 waypoint 站点、总距离和实际每船翘曲消耗。多跳耗时、能耗、诊断和模拟使用同一经济函数；取消航线或移除枢纽会退还翘曲器，站内容量不足时溢出到对应行星托盘。
+星际物流槽持久化 `direct`、`relay-preferred` 或 `relay-required` 策略及 1-4 个/船翘曲预算。中转物流站持久化启用状态与优先级；在途 `StationRoute` 保存 waypoint、总距离、实际每船翘曲消耗和 `vehicleStationId`。航线仍挂在需求站上，但载具可属于供给站或需求站；占用、卸载限制、返航、翘曲扣除/退款和诊断必须按所属站计算。多跳耗时、能耗、诊断和模拟使用同一经济函数。
+
+物流站连接自动配置只修改未配置状态：已有同物品槽优先复用，否则占用第一个空槽；五槽已满、物品冲突或方向非法时返回结构化失败原因。旧 `sorterTier` 只作为兼容字段保留并始终归一到传送带等级，运行时吞吐只读取线路等级、并行数和堆叠层数。
+
+`getEntityInputCapacity()`、`getEntityOutputCapacity()`、`getEntityItemInputCapacity()` 与 `getStationSlotCapacity()` 是堆叠缓存的统一入口。v32 将原固定安全上限拆成存档级 `productionBufferLimit` 与 `logisticsBufferLimit`：生产/采集类实体使用前者，`storage`、`splitter`、`station` 使用后者，内容包实体沿用相同 `kind` 分类。每一种输入、输出分别按 `min(基础容量 × 堆叠数量, 对应上限)` 计算；物流槽还需与非零 `maxStock` 取最小值，零值表示额定容量。函数显式接收 `GameState`，不得通过可变全局设置影响模拟。
+
+调低上限或减少堆叠不会裁剪已有缓存。普通传送带、生产、托盘转入和新物流派遣在库存回落前得到零剩余容量；已经在传送带或航线中的货物继续安全到达并可形成临时超额，之后才阻止新写入。v32 加载器同时把非法上限限制到 1,000～100,000,000，并将建筑缓存、在途货物和堆叠数量归一为非负整数。
 
 闲置物流运输机和运输船保存在 `GameState.portableFleet`，不属于任何行星托盘；装入物流站后仍由对应实体的 `stationDrones` / `stationVessels` 持有。切换行星不复制普通库存，只保留这一明确的随身载具库存和光标单组载荷。
+
+`GameState.planetViewports` 按 `PlanetId` 保存 React Flow 的 `x/y/zoom`。离开行星和 `onMoveEnd` 更新当前记录，返回时恢复目标记录；书签、设备定位和网络定位属于显式视角命令，可以覆盖恢复结果。瞬时 React Flow 对象仍不进入存档。
 
 殖民费用沿用行星档案中的 `colonyCost`，但 `getColonizationRequirements()` 为每项成本派生 `planet-tray` 或 `portable-fleet` 来源。`colonizePlanet()` 只在全部成本一次性验证成功后复制状态并统一扣料，因此不会在缺船或缺运输机时先扣普通材料。
 
@@ -129,7 +138,7 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 | 数据 | 键或位置 | 说明 |
 | --- | --- | --- |
-| 主存档 | `dsp-idle-network.save.v1` | v2 envelope 与 v30 state；工作区、香港 `0.6.0` 和上海 `0.5.0` 一致；`productionHistory` 始终以空数组写入 |
+| 主存档 | `dsp-idle-network.save.v1` | v2 envelope；当前未发布工作区写 v32，香港写 v31，上海写 v30；`productionHistory` 始终以空数组写入 |
 | 主备份 | 主键后缀 `.backup` | 主存档写入并读回校验成功后，尽力保存上一份有效版本 |
 | 快照 | 主键后缀 `.snapshot.*` | 自动快照最多 2 份、至少每 5 分钟生成；手动快照独立保留，不参与自动清理 |
 | 手动槽位 | `dsp-idle-network.slot.1..3` | 3 个独立槽位 |
@@ -145,7 +154,9 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 ### 离线结算
 
-- 未暂停存档按离线秒数调用同一模拟器。
+- 未暂停存档按离线秒数调用同一模拟器；长时间离线由 `offlineSimulation.worker.ts` 分批推进并回传进度。
+- 主菜单只在 Worker 完整结束后一次性提交并保存结果；取消、刷新或失败不会写入半成品，也不会重复结算。
+- Worker 与同步路径对 1 小时、8 小时、9 小时、24 小时、7 天和 30 天状态执行等价性校验，不能通过扩大时间步长改变物流、电力、缓存或科研顺序。
 - 基础上限为 7 天，终局连续体研究每级增加 1 天，最高 30 天。
 - 离线报告汇总新增物品、完成科技、戴森结构、终局研究和银河出口。
 - 离开 72 小时以上会发放一次带领取凭据的基础回归物资。
@@ -172,7 +183,7 @@ API 表面：
 - `GET|POST /api/leaderboard`
 - `POST /api/feedback`、`POST /api/errors`
 
-密码使用 scrypt 派生并采用 timing-safe 比较；会话 token 和邮箱动作 token 只保存 SHA-256，登录会话默认有效期 30 天，邮箱动作链接有效期 30 分钟。新账号验证前可以登录和读取自己的数据，但不能写入云存档、恢复云修订或提交排行榜。`server/mail.mjs` 优先使用腾讯云 SES `SendEmail` 审核模板 API，分别传入验证或重置模板 ID 及单一 `actionUrl` 变量；凭据不完整时可以回退到原有 HTTPS webhook，二者都不可用时新注册与邮件恢复明确返回不可用。`/api/health.mailProvider` 只控制注册、绑定、验证重发和找回入口；它不会关闭已有账号登录或四槽云存档。邮件失败日志只记录供应商错误码和 RequestId，不记录收件地址或动作 token。请求体上限为 8 MiB，认证接口每 IP/路径每分钟 12 次，其余接口 120 次。Origin 白名单、Nginx `client_max_body_size` 和前端 HTTPS 限制共同形成入口边界。
+密码使用 scrypt 派生并采用 timing-safe 比较；会话 token 和邮箱动作 token 只保存 SHA-256，登录会话默认有效期 30 天，邮箱动作链接有效期 30 分钟。新账号验证前可以登录和读取自己的数据，但不能写入云存档、恢复云修订或提交排行榜。`server/mail.mjs` 优先使用腾讯云 SES `SendEmail` 审核模板 API，分别传入验证或重置模板 ID 及单一 `actionToken` 变量；审核模板固定保留 `https://dsponline.cn` 域名和对应的 `verify` / `reset` 查询参数，不使用变量填充整个链接。凭据不完整时可以回退到原有 HTTPS webhook，二者都不可用时新注册与邮件恢复明确返回不可用。`/api/health.mailProvider` 只控制注册、绑定、验证重发和找回入口；它不会关闭已有账号登录或四槽云存档。邮件失败日志只记录供应商错误码和 RequestId，不记录收件地址或动作 token。请求体上限为 8 MiB，认证接口每 IP/路径每分钟 12 次，其余接口 120 次。Origin 白名单、Nginx `client_max_body_size` 和前端 HTTPS 限制共同形成入口边界。
 
 匿名心跳默认每 45 秒发送一次，服务端接口限流为每 IP 每分钟 10 次；同一浏览器 ID 去重，最近 120 秒有心跳视为在线。访问统计按 `Asia/Shanghai` 自然日聚合 PV、UV、会话、进入工厂、活跃秒数和允许的关键事件。服务端只保存带命名空间的 SHA-256 标识，不保存原始匿名 ID、鼠标坐标、按钮文案或存档内容。香港与上海数据库相互独立，因此统计也是节点级数据，不做跨节点合并。
 

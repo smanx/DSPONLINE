@@ -566,7 +566,14 @@ function validateSavePayload(payload) {
   try {
     const parsed = JSON.parse(payload);
     const state = parsed?.state ?? parsed;
-    return Boolean(state && typeof state === "object" && Array.isArray(state.entities) && typeof state.version === "number");
+    if (!state || typeof state !== "object" || !Array.isArray(state.entities) || typeof state.version !== "number") return false;
+    const validBufferLimit = (value) => Number.isInteger(value) && value >= 1_000 && value <= 100_000_000;
+    const productionLimit = state.settings?.productionBufferLimit;
+    const logisticsLimit = state.settings?.logisticsBufferLimit;
+    if (state.version >= 32 && (!validBufferLimit(productionLimit) || !validBufferLimit(logisticsLimit))) return false;
+    if (productionLimit !== undefined && !validBufferLimit(productionLimit)) return false;
+    if (logisticsLimit !== undefined && !validBufferLimit(logisticsLimit)) return false;
+    return true;
   } catch {
     return false;
   }

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from
 import { STAR_SYSTEM_LIST, getPlanet, getStarSystem } from "../game/content";
 import { getDysonEngineeringSnapshot, getDysonPlanTotals, isStarSystemUnlocked, isTechnologyCompleted } from "../game/engine";
 import { getStarSystemProfile } from "../game/galaxy";
+import { formatKilowatts } from "../game/units";
 import type { DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, GameState, StarSystemId } from "../game/types";
 
 const VIEW_CENTER = 300;
@@ -114,7 +115,7 @@ export function DysonPlannerWorkspace({
           <span>恒星 <strong>{starProfile.starTypeName} · {starProfile.luminosity.toFixed(2)} L☉</strong></span>
           <span>结构 <strong>{plan.structurePoints}</strong></span>
           <span>壳面帆 <strong>{plan.shellSails}</strong></span>
-          <span>本系功率 <strong>{(engineering.projectedGenerationKw / 1000).toFixed(2)} MW</strong></span>
+          <span>本系功率 <strong>{formatKilowatts(engineering.projectedGenerationKw)}</strong></span>
         </div>
         <button className="dyson-planner-close" type="button" onClick={onClose} title="关闭戴森球规划" aria-label="关闭戴森球规划"><X size={18} /></button>
       </header>
@@ -165,7 +166,8 @@ export function DysonPlannerWorkspace({
             <span><Layers3 size={13} />壳面 <strong>{totals.shellCount}</strong></span>
             <span><Rocket size={13} />施工 <strong>{totals.completedStructure}/{totals.plannedStructure}</strong></span>
             <span><Sun size={13} />在轨 <strong>{engineering.orbitSails}</strong></span>
-            <span><Gauge size={13} />射线 <strong>{Math.round(engineering.rayEfficiency * 100)}%</strong></span>
+            <span><Gauge size={13} />理论接收 <strong>{Math.round(engineering.theoreticalReceptionRate * 100)}%</strong></span>
+            <span><RadioTower size={13} />接收站 <strong>{Math.round(engineering.receiverUtilization * 100)}%</strong></span>
           </div>
           <svg className="dyson-orbit-canvas" viewBox="0 0 600 600" role="img" aria-label={`${getStarSystem(systemId).name}戴森球轨道图`} onClick={addNodeFromCanvas}>
             <circle className="dyson-star-halo" cx={VIEW_CENTER} cy={VIEW_CENTER} r={Math.max(34, Math.min(58, 38 + Math.log2(Math.max(0.1, starProfile.luminosity)) * 5))} />
@@ -274,7 +276,7 @@ export function DysonPlannerWorkspace({
               <label className="dyson-orbit-control"><span>轨道半径 <strong>{activeSwarmOrbit.radius.toLocaleString("zh-CN")} m</strong></span><input type="range" min={5000} max={50000} step={500} value={activeSwarmOrbit.radius} onChange={(event) => onSwarmOrbitChange(systemId, activeSwarmOrbit.id, { radius: Number(event.target.value) })} /></label>
               <label className="dyson-orbit-control"><span>轨道倾角 <strong>{activeSwarmOrbit.inclination}°</strong></span><input type="range" min={-90} max={90} step={1} value={activeSwarmOrbit.inclination} onChange={(event) => onSwarmOrbitChange(systemId, activeSwarmOrbit.id, { inclination: Number(event.target.value) })} /></label>
               <label className="dyson-orbit-control"><span>升交点经度 <strong>{activeSwarmOrbit.longitude}°</strong></span><input type="range" min={0} max={359} step={1} value={activeSwarmOrbit.longitude} onChange={(event) => onSwarmOrbitChange(systemId, activeSwarmOrbit.id, { longitude: Number(event.target.value) })} /></label>
-              <div className="dyson-swarm-orbit-stats"><span>发射 {activeSwarmOrbit.totalLaunched}</span><span>衰减 {activeSwarmOrbit.totalExpired}</span><span>{(activeSwarmOrbit.generationKw / 1000).toFixed(2)} MW</span></div>
+              <div className="dyson-swarm-orbit-stats"><span>发射 {activeSwarmOrbit.totalLaunched}</span><span>衰减 {activeSwarmOrbit.totalExpired}</span><span>{formatKilowatts(activeSwarmOrbit.generationKw)}</span></div>
               <button type="button" disabled={swarmOrbits.length <= 1} onClick={() => onRemoveSwarmOrbit(systemId, activeSwarmOrbit.id)} title="删除当前太阳帆轨道"><Trash2 size={13} />删除轨道</button>
             </section>
           ) : null}
@@ -290,11 +292,14 @@ export function DysonPlannerWorkspace({
               <div><dt>太阳帆队列</dt><dd>{engineering.queuedSails} · {engineering.sailLaunchesPerMinute}/min</dd></div>
               <div><dt>运载火箭队列</dt><dd>{engineering.queuedRockets} · {engineering.rocketLaunchesPerMinute}/min</dd></div>
               <div><dt>发射能耗</dt><dd>{engineering.launchEnergyPerMinuteMj.toFixed(1)} MJ/min</dd></div>
-              <div><dt>计划功率</dt><dd>{(engineering.projectedGenerationKw / 1000).toFixed(2)} MW</dd></div>
-              <div><dt>射线效率</dt><dd>{Math.round(engineering.rayEfficiency * 100)}%</dd></div>
+              <div><dt>计划功率</dt><dd>{formatKilowatts(engineering.projectedGenerationKw)}</dd></div>
+              <div><dt>理论接收率</dt><dd>{Math.round(engineering.theoreticalReceptionRate * 100)}%</dd></div>
+              <div><dt>接收站实际利用率</dt><dd>{Math.round(engineering.receiverUtilization * 100)}%</dd></div>
+              <div><dt>戴森功率利用率</dt><dd>{Math.round(engineering.dysonPowerUtilization * 100)}%</dd></div>
+              <div><dt>接收站状态</dt><dd>{engineering.blockedReceiverCount > 0 ? `${engineering.blockedReceiverCount}/${engineering.configuredReceiverCount} 受阻` : `${engineering.configuredReceiverCount} 台可用`}</dd></div>
               <div><dt>临界光子</dt><dd>{engineering.criticalPhotonPerMinute.toFixed(1)}/min</dd></div>
               <div><dt>反物质</dt><dd>{engineering.antimatterPerMinute.toFixed(1)}/min</dd></div>
-              <div><dt>反物质回馈</dt><dd>{(engineering.feedbackGenerationKw / 1000).toFixed(2)} MW</dd></div>
+              <div><dt>反物质回馈</dt><dd>{formatKilowatts(engineering.feedbackGenerationKw)}</dd></div>
             </dl>
             <div className="dyson-launch-cost"><span><Zap size={12} />单次成本</span><strong>帆 {engineering.launchEnergyPerSailMj.toFixed(1)} MJ · 火箭 {engineering.launchEnergyPerRocketMj.toFixed(0)} MJ</strong></div>
           </section>

@@ -32,10 +32,10 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
       </div>
       {hasChanges ? (
         <div className="offline-report-body">
-          <section>
+          {report.produced.length > 0 ? <section>
             <header><Factory size={15} /><span>生产入库</span><strong>{report.produced.reduce((sum, item) => sum + item.amount, 0).toLocaleString("zh-CN")}</strong></header>
             <div className="offline-production-list">
-              {report.produced.length > 0 ? report.produced.map(({ itemId, amount }) => {
+              {report.produced.map(({ itemId, amount }) => {
                 const item = getItem(itemId);
                 return (
                   <div key={itemId}>
@@ -43,36 +43,36 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
                     <span>{item.name}</span><strong>+{amount.toLocaleString("zh-CN")}</strong>
                   </div>
                 );
-              }) : <span className="offline-empty-row">没有新增物资</span>}
+              })}
             </div>
-          </section>
-          <section>
+          </section> : null}
+          {report.completedTechIds.length > 0 ? <section>
             <header><FlaskConical size={15} /><span>科研完成</span><strong>{report.completedTechIds.length}</strong></header>
             <div className="offline-tech-list">
-              {report.completedTechIds.length > 0 ? report.completedTechIds.map((techId) => (
+              {report.completedTechIds.map((techId) => (
                 <span key={techId}><CheckCircle2 size={13} />{getTechnology(techId)?.name ?? techId}</span>
-              )) : <span className="offline-empty-row">没有完成新科技</span>}
+              ))}
             </div>
-          </section>
-          <section>
+          </section> : null}
+          {report.structurePointsAdded > 0 || report.shellSailsAdded > 0 ? <section>
             <header><Orbit size={15} /><span>戴森工程</span></header>
             <dl>
               <div><dt>永久结构点</dt><dd>+{report.structurePointsAdded}</dd></div>
               <div><dt>壳面吸附帆</dt><dd>+{report.shellSailsAdded}</dd></div>
             </dl>
-          </section>
-          <section>
+          </section> : null}
+          {infiniteResearchLevels.length > 0 ? <section>
             <header><Sparkles size={15} /><span>无限科研</span><strong>{infiniteResearchLevels.length}</strong></header>
             <div className="offline-tech-list">
-              {infiniteResearchLevels.length > 0 ? infiniteResearchLevels.map(({ id, level }) => <span key={id}><CheckCircle2 size={13} />{id} +{level} 级</span>) : <span className="offline-empty-row">没有完成无限等级</span>}
+              {infiniteResearchLevels.map(({ id, level }) => <span key={id}><CheckCircle2 size={13} />{id} +{level} 级</span>)}
             </div>
-          </section>
-          <section>
+          </section> : null}
+          {exported.length > 0 || galacticCreditsAdded > 0 ? <section>
             <header><Send size={15} /><span>银河出口</span><strong>{galacticCreditsAdded.toLocaleString("zh-CN")} 信用</strong></header>
             <div className="offline-tech-list">
-              {exported.length > 0 ? exported.map(({ projectId, amount }) => <span key={projectId}><Send size={13} />{projectId} +{amount.toLocaleString("zh-CN")}</span>) : <span className="offline-empty-row">没有完成出口装运</span>}
+              {exported.map(({ projectId, amount }) => <span key={projectId}><Send size={13} />{projectId} +{amount.toLocaleString("zh-CN")}</span>)}
             </div>
-          </section>
+          </section> : null}
           {returningReward.length > 0 ? <section className="offline-returning-reward">
             <header><Gift size={15} /><span>回归补给</span><strong>72h+</strong></header>
             <div className="offline-production-list">{returningReward.map(({ itemId, amount }) => <div key={itemId}><ItemHoverCard itemId={itemId}><ItemGlyph itemId={itemId} /></ItemHoverCard><span>{getItem(itemId).name}</span><strong>+{amount.toLocaleString("zh-CN")}</strong></div>)}</div>

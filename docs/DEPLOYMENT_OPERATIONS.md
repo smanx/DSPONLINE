@@ -28,7 +28,7 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-当前香港正式基线为 `0.6.0-ae779d297011`，Web/API 的 `previous-release` 均指向 `0.5.0-5b3a468c94d0`。上海保持 `0.5.0-5b3a468c94d0`，其 `previous-release` 仍指向 `0.4.0-c77d76223f67`。两地代码回滚继续使用各自的 schema v6 数据库；香港本次完整哈希、生产备份和验收记录见 [releases/0.6.0.md](./releases/0.6.0.md)。
+当前香港正式基线为 `0.7.0-8bf16d91d82d`，Web/API 的 `previous-release` 均指向 `0.6.0-ae779d297011`。上海保持 `0.5.0-5b3a468c94d0`，其 `previous-release` 仍指向 `0.4.0-c77d76223f67`。两地代码回滚继续使用各自的 schema v6 数据库；香港本次完整哈希、生产备份和验收记录见 [releases/0.7.0.md](./releases/0.7.0.md)。
 
 ## 3. 绝对数据保护规则
 
@@ -147,7 +147,7 @@ DSP_MAIL_TENCENT_RESET_TEMPLATE_ID=
 DSP_MAIL_REPLY_TO=
 ```
 
-验证与重置模板分别使用 [deploy/mail-templates/account-verification.html](../deploy/mail-templates/account-verification.html) 和 [deploy/mail-templates/password-reset.html](../deploy/mail-templates/password-reset.html)，模板中只包含腾讯普通发送允许的单一变量 `{{actionUrl}}`。两个模板必须审核通过后再填写数值 ID。CAM 应使用独立子账号并只授予 `name/ses:SendEmail`；SecretId/SecretKey 不得使用主账号长期密钥，也不得写入仓库、发布目录、命令历史或聊天。
+验证与重置模板分别使用 [deploy/mail-templates/account-verification.html](../deploy/mail-templates/account-verification.html) 和 [deploy/mail-templates/password-reset.html](../deploy/mail-templates/password-reset.html)。模板链接必须固定保留 `https://dsponline.cn` 域名，分别使用 `https://dsponline.cn/?verify={{actionToken}}` 和 `https://dsponline.cn/?reset={{actionToken}}`，只让腾讯替换 URL-safe 的单一 `{{actionToken}}` 变量；不得把整个 `href` 写成变量。两个模板必须审核通过后再填写数值 ID。CAM 应使用独立子账号并只授予 `name/ses:SendEmail`；SecretId/SecretKey 不得使用主账号长期密钥，也不得写入仓库、发布目录、命令历史或聊天。
 
 腾讯配置完整时优先使用 SES API；原有 `DSP_MAIL_WEBHOOK_URL` / `DSP_MAIL_WEBHOOK_TOKEN` 仅作为兼容回退。两种发送器都未配置时，服务端会让新注册与邮件恢复返回 `503 EMAIL_SERVICE_UNAVAILABLE`。上线前必须用专用测试邮箱验证注册、验证链接、过期链接、忘记密码和重置密码完整链路，并在 `/api/health` 确认 `mailProvider` 为 `tencent-ses`。上海公开入口是 HTTP，不开放账号邮件入口。
 
@@ -223,6 +223,6 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港 `0.6.0` 与上海 `0.5.0` 均为 JS/CSS 启用 gzip，并验证 `Content-Encoding: gzip`；hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港 `0.7.0` 与上海 `0.5.0` 均为 JS/CSS 启用 gzip，并验证 `Content-Encoding: gzip`；hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。上海节点 `0.5.0` 发布后约剩 6.7 GiB（文件系统使用率约 89%），发布目录、日志与备份增长应纳入日常磁盘检查。

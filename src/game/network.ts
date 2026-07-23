@@ -1,5 +1,5 @@
 import { getBuilding, getRecipe } from "./content";
-import { getBeltCapacity, getBeltNetworkIds, getEntityProliferatorSpeedMultiplier, getMiningSpeedMultiplier, getRecipeSpeedMultiplier } from "./engine";
+import { getBeltCapacity, getBeltNetworkIds, getEntityItemInputCapacity, getEntityProliferatorSpeedMultiplier, getMiningSpeedMultiplier, getRecipeSpeedMultiplier } from "./engine";
 import type { BeltConnection, BeltTier, FactoryEntity, GameState, ItemId, PlanetId } from "./types";
 
 export type BeltHealth = "healthy" | "underused" | "starved" | "congested" | "idle";
@@ -112,9 +112,9 @@ export function predictBeltConnection(
   return { itemId, capacityPerSecond, sourcePerSecond, demandPerSecond, expectedPerSecond, utilization, tone, label };
 }
 
-function targetFreeCapacity(entity: FactoryEntity | undefined, itemId: ItemId): number {
+function targetFreeCapacity(state: GameState, entity: FactoryEntity | undefined, itemId: ItemId): number {
   if (!entity?.buildingId) return 0;
-  const capacity = getBuilding(entity.buildingId).inputCapacity * Math.max(1, entity.machineCount);
+  const capacity = getEntityItemInputCapacity(state, entity, itemId);
   return Math.max(0, Math.floor(capacity - (entity.inputs[itemId] ?? 0)));
 }
 
@@ -126,7 +126,7 @@ export function diagnoseBelt(state: GameState, belt: BeltConnection): BeltDiagno
   const utilization = capacity > 0 ? Math.min(1, flow / capacity) : 0;
   const congestion = Math.max(0, Math.min(1, belt.congestion ?? 0));
   const sourceStock = Math.max(0, Math.floor(source?.outputs[belt.itemId] ?? 0));
-  const targetFree = targetFreeCapacity(target, belt.itemId);
+  const targetFree = targetFreeCapacity(state, target, belt.itemId);
   const estimatedDemand = flow > 0 && congestion > 0
     ? Math.min(capacity * 4, flow / Math.max(0.05, 1 - congestion))
     : congestion >= 0.8 && sourceStock > 0 ? capacity * 1.25 : flow;

@@ -53,7 +53,7 @@ export interface MobileFactorySheetActions {
   onPickTray: (itemId: ItemId) => void;
   onDropCargo: () => void;
   onFocusSelection: () => void;
-  onAddEntity: (entityId: string) => void;
+  onAddEntity: (entityId: string, count: number) => void;
   onUpgradeEntity: (entityId: string) => void;
   onUpgradeBelt: (beltId: string) => void;
 }

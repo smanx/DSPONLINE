@@ -23,7 +23,7 @@ export type MobileRoute =
 
 export type MobileOverlay =
   | { kind: "sheet"; id: MobileSheetId; snap: MobileSheetSnap }
-  | { kind: "modal"; id: "exit" | "command" }
+  | { kind: "modal"; id: "exit" | "command" | "offline" }
   | null;
 
 const SHEET_SNAP_ORDER: Record<MobileSheetSnap, number> = { peek: 0, half: 1, full: 2 };
@@ -155,7 +155,7 @@ export function useMobileNavigation({ enabled, onFactoryRequested }: {
     writeHistory("replace", "route");
   }, [writeHistory]);
 
-  const openModal = useCallback((id: "command") => {
+  const openModal = useCallback((id: "command" | "offline") => {
     onFactoryRequestedRef.current();
     navigate({ kind: "factory" }, { kind: "modal", id });
   }, [navigate]);

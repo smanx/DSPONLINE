@@ -40,21 +40,28 @@ import {
   dropCargoToEntity,
   dropCargoToTray,
   exploreStarSystem,
+  fillStationFleet,
   colonizePlanet,
   getEntityOperatingStatus,
   getEntityPowerFactor,
   getAcceptedInputs,
   getBeltCapacity,
+  getBeltConnectionCheck,
   getBeltNetworkIds,
   getBlueprintRequirements,
   getConstructionQueueDeficits,
   getConstructionCraftNavigation,
+  getConstructionAutomationMaterialSeconds,
+  getConstructionAutomationStatus,
   getConstructionQuickCraftPlan,
   getColonizationRequirements,
   getDysonPlanTotals,
   getDysonEngineeringSnapshot,
   getDysonShellCapacity,
   getEntityExtraProductBonus,
+  getEntityInputCapacity,
+  getEntityItemInputCapacity,
+  getEntityOutputCapacity,
   getEntityProliferatorPowerMultiplier,
   getEntityProliferatorSpeedMultiplier,
   getDysonSailAbsorptionMultiplier,
@@ -64,6 +71,8 @@ import {
   getInterstellarTripSeconds,
   getLogisticsSpeedMultiplier,
   getMaterialDeliveryItems,
+  getMaxConstructionQuickCraftBatches,
+  getMaxHandcraftBatches,
   getMiningSpeedMultiplier,
   getPlanetaryCargoCapacity,
   getPlanetaryTripSeconds,
@@ -71,9 +80,12 @@ import {
   getRayReceiverCapacityKw,
   getRecipeSpeedMultiplier,
   getResourceReserveSnapshot,
+  getSprayCoaterInstallCheck,
   getSolarSailLifetimeSeconds,
   getSorterCapacity,
   getStationDroneCapacity,
+  getStationBusyVehicleCount,
+  getStationSlotCapacity,
   getStationSlots,
   getTechnologyConstructionRewards,
   handcraftRecipe,
@@ -84,6 +96,7 @@ import {
   moveEntityInputToEntity,
   moveEntityInputToTray,
   moveEntityOutputToTray,
+  moveTrayItemToEntity,
   moveEntities,
   pickFromEntity,
   pickFromEntityInput,
@@ -139,6 +152,7 @@ import {
   setStationHubConfiguration,
   setStationMinimumLoad,
   setStationSlotItem,
+  setStationSlotLimits,
   setStationSlotMinimumLoad,
   setStationSlotMode,
   setStationSlotPriority,
@@ -262,6 +276,52 @@ describe("factory simulation", () => {
     expect(craftConstructionWithUpstream(blocked, "wind_turbine")).toBe(blocked);
   });
 
+  it("plans and commits multi-batch construction atomically with actual output amounts", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("electromagnetism", "basic_logistics");
+    const initialWind = state.construction.wind_turbine ?? 0;
+    const plan = getConstructionQuickCraftPlan(state, "wind_turbine", 3);
+    expect(plan).toMatchObject({ possible: true, batches: 3, outputAmount: 3 });
+    const crafted = craftConstructionWithUpstream(state, "wind_turbine", 3);
+    expect(crafted.construction.wind_turbine).toBe(initialWind + 3);
+    expect(crafted.tray).toEqual(expect.objectContaining(Object.fromEntries(
+      plan.consumedItems.map(({ itemId, amount }) => [itemId, (state.tray[itemId] ?? 0) - amount]),
+    )));
+
+    state.tray.iron_ingot = 20;
+    state.tray.gear = 10;
+    const beltsBefore = state.construction.conveyor_belt_mk1 ?? 0;
+    const fourBatches = craftConstruction(state, "conveyor_belt_mk1", 4);
+    expect(fourBatches.construction.conveyor_belt_mk1).toBe(beltsBefore + 12);
+    expect(fourBatches.tray).toMatchObject({ iron_ingot: 12, gear: 6 });
+
+    const insufficient = createInitialState();
+    insufficient.research.completedTechIds.push("basic_logistics");
+    insufficient.tray.iron_ingot = 3;
+    insufficient.tray.gear = 1;
+    const snapshot = structuredClone(insufficient);
+    expect(craftConstruction(insufficient, "conveyor_belt_mk1", 2)).toBe(insufficient);
+    expect(insufficient).toEqual(snapshot);
+  });
+
+  it("calculates maximum construction and handcraft batches without partial crafting", () => {
+    const construction = createInitialState();
+    construction.research.completedTechIds.push("electromagnetism");
+    const maximum = getMaxConstructionQuickCraftBatches(construction, "wind_turbine");
+    expect(maximum).toBeGreaterThan(0);
+    expect(getConstructionQuickCraftPlan(construction, "wind_turbine", maximum).possible).toBe(true);
+    if (maximum < 100_000) {
+      expect(getConstructionQuickCraftPlan(construction, "wind_turbine", maximum + 1).possible).toBe(false);
+    }
+
+    const handcraft = createInitialState();
+    handcraft.tray.iron_ingot = 17;
+    expect(getMaxHandcraftBatches(handcraft, "gear")).toBe(17);
+    const crafted = handcraftRecipe(handcraft, "gear", 17);
+    expect(crafted.tray.iron_ingot).toBe(0);
+    expect(crafted.tray.gear).toBe(17);
+  });
+
   it("classifies the quick-build hammer from only the active planet tray", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("electromagnetism");
@@ -376,6 +436,224 @@ describe("factory simulation", () => {
     expect(state.tray).toMatchObject({ iron_ore: 107, iron_ingot: 5 });
   });
 
+  it("scales every stacked buffer and preserves over-capacity stock after reducing a group", () => {
+    let state = createInitialState();
+    state.construction.arc_smelter = 3;
+    state.construction.thermal_power_plant = 2;
+    state.construction.interstellar_logistics_station = 3;
+    state = placeBuilding(state, "arc_smelter", { x: 0, y: 0 }, 3);
+    state = placeBuilding(state, "thermal_power_plant", { x: 260, y: 0 }, 2);
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 520, y: 0 }, 3);
+    const smelter = state.entities.find((entity) => entity.buildingId === "arc_smelter")!;
+    const generator = state.entities.find((entity) => entity.buildingId === "thermal_power_plant")!;
+    const station = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+
+    expect(getEntityInputCapacity(state, smelter)).toBe(getBuilding("arc_smelter").inputCapacity * 3);
+    expect(getEntityOutputCapacity(state, smelter)).toBe(getBuilding("arc_smelter").outputCapacity * 3);
+    expect(getEntityInputCapacity(state, generator)).toBe(getBuilding("thermal_power_plant").inputCapacity * 2);
+    expect(getStationSlotCapacity(state, station, getStationSlots(station)[0])).toBe(getBuilding("interstellar_logistics_station").outputCapacity * 3);
+
+    smelter.inputs.iron_ore = getEntityInputCapacity(state, smelter);
+    const trayBefore = state.tray.iron_ore;
+    state = removeEntity(state, smelter.id, 1);
+    const reduced = state.entities.find((entity) => entity.id === smelter.id)!;
+    expect(reduced.machineCount).toBe(2);
+    expect(reduced.inputs.iron_ore).toBe(getBuilding("arc_smelter").inputCapacity * 3);
+    expect(getEntityInputCapacity(state, reduced)).toBe(getBuilding("arc_smelter").inputCapacity * 2);
+    state = moveTrayItemToEntity(state, reduced.id, "iron_ore");
+    expect(state.tray.iron_ore).toBe(trayBefore);
+    expect(state.entities.find((entity) => entity.id === reduced.id)?.inputs.iron_ore).toBe(getBuilding("arc_smelter").inputCapacity * 3);
+  });
+
+  it("applies independent production and logistics buffer limits per item and per station slot", () => {
+    let state = createInitialState();
+    state.construction.arc_smelter = 1;
+    state.construction.storage_mk1 = 1;
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "arc_smelter", { x: 0, y: 0 });
+    state = placeBuilding(state, "storage_mk1", { x: 260, y: 0 });
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 520, y: 0 });
+    const smelter = state.entities.find((entity) => entity.buildingId === "arc_smelter")!;
+    const storage = state.entities.find((entity) => entity.buildingId === "storage_mk1")!;
+    const station = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    smelter.machineCount = 10_000;
+    storage.machineCount = 10_000;
+    station.machineCount = 10_000;
+    state.settings.productionBufferLimit = 10_000;
+    state.settings.logisticsBufferLimit = 100_000;
+
+    expect(getEntityInputCapacity(state, smelter)).toBe(10_000);
+    expect(getEntityOutputCapacity(state, smelter)).toBe(10_000);
+    expect(getEntityInputCapacity(state, storage)).toBe(100_000);
+    expect(getEntityOutputCapacity(state, storage)).toBe(100_000);
+
+    const slots = getStationSlots(station);
+    slots[0].maxStock = 25_000;
+    slots[1].maxStock = 0;
+    slots[2].maxStock = 200_000;
+    expect(getStationSlotCapacity(state, station, slots[0])).toBe(25_000);
+    expect(getStationSlotCapacity(state, station, slots[1])).toBe(100_000);
+    expect(getStationSlotCapacity(state, station, slots[2])).toBe(100_000);
+
+    state.settings.productionBufferLimit = 1_000_000;
+    expect(getEntityOutputCapacity(state, storage)).toBe(100_000);
+    state.settings.logisticsBufferLimit = 10_000;
+    expect(getEntityOutputCapacity(state, smelter)).toBe(1_000_000);
+  });
+
+  it("treats every recipe input and output as an independent capped buffer", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("titanium_alloy");
+    state.construction.chemical_plant = 1;
+    state = placeBuilding(state, "chemical_plant", { x: 0, y: 0 });
+    const chemical = state.entities.find((entity) => entity.buildingId === "chemical_plant")!;
+    chemical.machineCount = 10_000;
+    state = setEntityRecipe(state, chemical.id, "sulfuric_acid");
+    state.settings.productionBufferLimit = 1_000;
+    state.tray.refined_oil = 1_000;
+    state.tray.stone = 1_000;
+    state.tray.water = 1_000;
+
+    for (const itemId of ["refined_oil", "stone", "water"] as const) {
+      state = moveTrayItemToEntity(state, chemical.id, itemId);
+    }
+    expect(state.entities.find((entity) => entity.id === chemical.id)?.inputs).toMatchObject({
+      refined_oil: 1_000,
+      stone: 1_000,
+      water: 1_000,
+    });
+    expect(Object.values(state.entities.find((entity) => entity.id === chemical.id)!.inputs)
+      .reduce((sum, amount) => sum + (amount ?? 0), 0)).toBe(3_000);
+
+    const current = state.entities.find((entity) => entity.id === chemical.id)!;
+    current.outputs.sulfuric_acid = 1_000;
+    current.outputs.hydrogen = 1_000;
+    expect(current.outputs.sulfuric_acid).toBe(getEntityOutputCapacity(state, current));
+    expect(current.outputs.hydrogen).toBe(getEntityOutputCapacity(state, current));
+  });
+
+  it("combines station manual limits with the logistics limit and treats zero as rated capacity", () => {
+    let state = createInitialState();
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 });
+    const station = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    station.machineCount = 200_000;
+    state.settings.logisticsBufferLimit = 100_000;
+    state = setStationSlotItem(state, station.id, 0, "iron_ingot");
+    state = setStationSlotLimits(state, station.id, 0, 0, 25_000);
+    let current = state.entities.find((entity) => entity.id === station.id)!;
+    expect(getStationSlotCapacity(state, current, getStationSlots(current)[0])).toBe(25_000);
+    expect(getEntityItemInputCapacity(state, current, "iron_ingot")).toBe(25_000);
+    state.tray.iron_ingot = 100_000;
+    state = moveTrayItemToEntity(state, station.id, "iron_ingot");
+    current = state.entities.find((entity) => entity.id === station.id)!;
+    expect(current.inputs.iron_ingot).toBe(25_000);
+    expect(state.tray.iron_ingot).toBe(75_000);
+
+    state = setStationSlotLimits(state, station.id, 0, 0, 0);
+    current = state.entities.find((entity) => entity.id === station.id)!;
+    expect(getStationSlotCapacity(state, current, getStationSlots(current)[0])).toBe(100_000);
+    state = moveTrayItemToEntity(state, station.id, "iron_ingot");
+    expect(state.entities.find((entity) => entity.id === station.id)?.inputs.iron_ingot).toBe(100_000);
+    expect(state.tray.iron_ingot).toBe(0);
+
+    state = setStationSlotLimits(state, station.id, 0, 0, 50_000_000);
+    current = state.entities.find((entity) => entity.id === station.id)!;
+    expect(getStationSlotCapacity(state, current, getStationSlots(current)[0])).toBe(100_000);
+  });
+
+  it("preserves excess stock after lowering a limit and resumes input after raising it", () => {
+    let state = createInitialState();
+    state.construction.storage_mk1 = 2;
+    state.construction.conveyor_belt_mk1 = 1;
+    state = placeBuilding(state, "storage_mk1", { x: 0, y: 0 });
+    state = placeBuilding(state, "storage_mk1", { x: 300, y: 0 });
+    const [source, target] = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+    source.storedItemId = "iron_ingot";
+    target.storedItemId = "iron_ingot";
+    source.machineCount = 20;
+    target.machineCount = 20;
+    source.outputs.iron_ingot = 2_000;
+    target.inputs.iron_ingot = 1_200;
+    target.outputs.iron_ingot = 1_200;
+    state.settings.logisticsBufferLimit = 1_000;
+    state = connectBelt(state, source.id, target.id, "iron_ingot");
+
+    const lowered = advanceSimulation(state, 2);
+    expect(lowered.entities.find((entity) => entity.id === target.id)?.inputs.iron_ingot).toBe(1_200);
+    expect(lowered.entities.find((entity) => entity.id === target.id)?.outputs.iron_ingot).toBe(1_200);
+    expect(lowered.entities.find((entity) => entity.id === source.id)?.outputs.iron_ingot).toBe(2_000);
+
+    lowered.settings.logisticsBufferLimit = 10_000;
+    const raised = advanceSimulation(lowered, 2);
+    const raisedTarget = raised.entities.find((entity) => entity.id === target.id)!;
+    expect((raisedTarget.inputs.iron_ingot ?? 0) + (raisedTarget.outputs.iron_ingot ?? 0)).toBeGreaterThan(2_400);
+    expect(raised.entities.find((entity) => entity.id === source.id)?.outputs.iron_ingot).toBeLessThan(2_000);
+  });
+
+  it("lets already dispatched station cargo arrive above a newly lowered slot limit", () => {
+    let state = createInitialState();
+    state.construction.wind_turbine = 1;
+    state.construction.interstellar_logistics_station = 2;
+    state = placeBuilding(state, "wind_turbine", { x: -300, y: 0 });
+    state.entities.find((entity) => entity.buildingId === "wind_turbine")!.machineCount = 100;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 });
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 300, y: 0 });
+    const [source, demand] = state.entities.filter((entity) => entity.buildingId === "interstellar_logistics_station");
+    demand.outputs.iron_ingot = 1_000;
+    demand.stationRoutes = [{ id: "buffer_in_flight", slotIndex: 0, peerId: source.id, itemId: "iron_ingot", scope: "local", cargo: 100, vehicleCount: 1, progress: 0.99, duration: 1, requiresWarp: false, vehicleStationId: demand.id }];
+    source.outputs.iron_ingot = 100;
+    state.settings.logisticsBufferLimit = 1_000;
+
+    const arrived = advanceSimulation(state, 1);
+    expect(arrived.entities.find((entity) => entity.id === demand.id)?.outputs.iron_ingot).toBe(1_100);
+    expect(arrived.entities.find((entity) => entity.id === source.id)?.outputs.iron_ingot).toBe(0);
+    expect(arrived.entities.find((entity) => entity.id === demand.id)?.stationRoutes).toEqual([]);
+  });
+
+  it("uses the production limit for solid miners, oil extractors and water pumps", () => {
+    const state = createInitialState();
+    state.settings.productionBufferLimit = 1_000;
+    for (const entity of state.entities.filter((candidate) => candidate.planetId === "home" && ["iron_ore", "crude_oil", "water"].includes(candidate.resourceId ?? ""))) {
+      entity.minerCount = 10_000;
+      entity.extractorBuildingId = entity.resourceId === "crude_oil" ? "oil_extractor" : entity.resourceId === "water" ? "water_pump" : "mining_machine";
+      expect(getEntityOutputCapacity(state, entity)).toBe(1_000);
+    }
+  });
+
+  it("uses unlocked defaults only for newly created belts and preserves parallel line parameters", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("high_speed_logistics", "super_magnetic_logistics");
+    state.construction.storage_mk1 = 2;
+    state.construction.conveyor_belt_mk1 = 2;
+    state = placeBuilding(state, "storage_mk1", { x: 0, y: 0 });
+    state = placeBuilding(state, "storage_mk1", { x: 300, y: 0 });
+    const [source, target] = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+    source.storedItemId = "iron_ingot";
+    target.storedItemId = "iron_ingot";
+    state.settings.defaultBeltStackSize = 4;
+    state.settings.defaultBeltRouteMode = "upper";
+    state = connectBelt(state, source.id, target.id, "iron_ingot");
+    expect(state.belts[0]).toMatchObject({ lanes: 1, stackSize: 4, routeMode: "upper" });
+
+    state.settings.defaultBeltStackSize = 1;
+    state.settings.defaultBeltRouteMode = "lower";
+    state = connectBelt(state, source.id, target.id, "iron_ingot");
+    expect(state.belts[0]).toMatchObject({ lanes: 2, stackSize: 4, routeMode: "upper" });
+
+    const locked = createInitialState();
+    locked.settings.defaultBeltStackSize = 4;
+    locked.construction.storage_mk1 = 2;
+    locked.construction.conveyor_belt_mk1 = 1;
+    const withSource = placeBuilding(locked, "storage_mk1", { x: 0, y: 0 });
+    const withTarget = placeBuilding(withSource, "storage_mk1", { x: 300, y: 0 });
+    const [lockedSource, lockedTarget] = withTarget.entities.filter((entity) => entity.buildingId === "storage_mk1");
+    lockedSource.storedItemId = "iron_ingot";
+    lockedTarget.storedItemId = "iron_ingot";
+    const connected = connectBelt(withTarget, lockedSource.id, lockedTarget.id, "iron_ingot");
+    expect(connected.belts[0].stackSize).toBe(1);
+  });
+
   it("unlocks the two local destination planets and grants buildings when interstellar logistics completes", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("energy_matrix", "high_speed_logistics");
@@ -444,7 +722,7 @@ describe("factory simulation", () => {
     expect(blueprint).toMatchObject({ name: "铁块缓存链" });
     expect(blueprint.entities).toHaveLength(2);
     expect(blueprint.entities.map((entity) => entity.offset)).toEqual([{ x: 0, y: 0 }, { x: 360, y: 140 }]);
-    expect(blueprint.belts).toEqual([expect.objectContaining({ itemId: "iron_ingot", tier: 2, sorterTier: 1, lanes: 1 })]);
+    expect(blueprint.belts).toEqual([expect.objectContaining({ itemId: "iron_ingot", tier: 2, sorterTier: 2, lanes: 1 })]);
     expect(getBlueprintRequirements(blueprint)).toEqual(expect.arrayContaining([
       { constructionId: "storage_mk1", amount: 2 },
       { constructionId: "conveyor_belt_mk2", amount: 1 },
@@ -458,7 +736,7 @@ describe("factory simulation", () => {
     expect(copies.map((entity) => entity.position)).toEqual([{ x: -200, y: -100 }, { x: 160, y: 40 }]);
     expect(copies.every((entity) => entity.storedItemId === "iron_ingot" && (entity.outputs.iron_ingot ?? 0) === 0)).toBe(true);
     expect(state.belts.filter((belt) => belt.planetId === "ashen")).toEqual([
-      expect.objectContaining({ itemId: "iron_ingot", tier: 2, sorterTier: 1 }),
+      expect.objectContaining({ itemId: "iron_ingot", tier: 2, sorterTier: 2 }),
     ]);
     expect(state.construction).toMatchObject({ storage_mk1: 0, conveyor_belt_mk2: 0 });
   });
@@ -1582,6 +1860,35 @@ describe("factory simulation", () => {
     expect(Number.isInteger(demand.outputs.titanium_ingot)).toBe(true);
   });
 
+  it("preserves legacy station progress when dispatching the first migrated route", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics");
+    state.construction.wind_turbine = 8;
+    state.construction.interstellar_logistics_station = 2;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 4);
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 300, y: 0 });
+    const supplyId = state.entities.find((entity) => entity.kind === "station")!.id;
+    state = setLogisticsItem(state, supplyId, "titanium_ingot");
+    state.entities.find((entity) => entity.id === supplyId)!.outputs.titanium_ingot = 100;
+
+    state = setActivePlanet(state, "ashen");
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 4);
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 300, y: 0 });
+    const demandId = state.entities.find((entity) => entity.kind === "station" && entity.id !== supplyId)!.id;
+    state = setLogisticsItem(state, demandId, "titanium_ingot");
+    state = setStationMode(state, demandId, "demand");
+    state.portableFleet.logistics_vessel = 1;
+    state = adjustStationVessels(state, demandId, 1);
+    state.entities.find((entity) => entity.id === demandId)!.stationProgress = 0.99;
+
+    state = advanceSimulation(state, 1);
+
+    const demand = state.entities.find((entity) => entity.id === demandId)!;
+    expect(demand.outputs.titanium_ingot).toBe(100);
+    expect(demand.stationTrips).toBe(1);
+    expect(demand.stationRoutes).toEqual([]);
+  });
+
   it("uses a warper and the warp flight time for cargo sent between star systems", () => {
     let state = createInitialState();
     state.exploration.unlockedSystemIds.push("borealis");
@@ -2354,6 +2661,37 @@ describe("factory simulation", () => {
     });
   });
 
+  it("separates theoretical reception, receiver utilization and Dyson power utilization", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("ray_receiver");
+    state.construction.ray_receiver = 2;
+    state = placeBuilding(state, "ray_receiver", { x: 0, y: 0 });
+    state = placeBuilding(state, "ray_receiver", { x: 280, y: 0 });
+    const [powerReceiver, photonReceiver] = state.entities.filter((entity) => entity.buildingId === "ray_receiver");
+    state = setEntityRecipe(state, photonReceiver.id, "critical_photon");
+    state.entities.find((entity) => entity.id === photonReceiver.id)!.outputs.critical_photon = getEntityOutputCapacity(state, photonReceiver);
+    state.dysonSphere.structurePoints = 7;
+    state = advanceSimulation(state, 0.1);
+
+    const blocked = getDysonEngineeringSnapshot(state, "helios");
+    expect(blocked.configuredReceiverCount).toBe(2);
+    expect(blocked.blockedReceiverCount).toBe(1);
+    expect(blocked.theoreticalReceptionRate).toBeGreaterThan(0);
+    expect(blocked.theoreticalReceptionRate).toBeLessThan(1);
+    expect(blocked.receiverUtilization).toBe(1);
+    expect(blocked.dysonPowerUtilization).toBeLessThan(1);
+    expect(getEntityOperatingStatus(state, state.entities.find((entity) => entity.id === photonReceiver.id)!)).toMatchObject({ code: "output-blocked" });
+
+    state.entities.find((entity) => entity.id === photonReceiver.id)!.outputs.critical_photon = 0;
+    state = advanceSimulation(state, 0.1);
+    const flowing = getDysonEngineeringSnapshot(state, "helios");
+    expect(flowing.blockedReceiverCount).toBe(0);
+    expect(flowing.theoreticalReceptionRate).toBe(blocked.theoreticalReceptionRate);
+    expect(flowing.receiverUtilization).toBeCloseTo(flowing.theoreticalReceptionRate, 3);
+    expect(flowing.dysonPowerUtilization).toBe(1);
+    expect(state.entities.find((entity) => entity.id === powerReceiver.id)?.powerOutputKw).toBeGreaterThan(0);
+  });
+
   it("upgrades an assembler group in place without losing its recipe, buffers or identity", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("high_speed_assembling");
@@ -2493,6 +2831,36 @@ describe("factory simulation", () => {
 
     state = removeEntity(state, assembler.id);
     expect(state.construction.spray_coater).toBe(1);
+  });
+
+  it("diagnoses spray-coater installation and installs two smelters in sequence", () => {
+    let state = createInitialState();
+    state.construction.arc_smelter = 2;
+    state.construction.spray_coater = 2;
+    state = placeBuilding(state, "arc_smelter", { x: 0, y: 0 });
+    state = placeBuilding(state, "arc_smelter", { x: 280, y: 0 });
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 560, y: 0 });
+    const [graphiteSmelter, diamondSmelter] = state.entities.filter((entity) => entity.buildingId === "arc_smelter");
+
+    expect(getSprayCoaterInstallCheck(state, graphiteSmelter.id)).toMatchObject({ code: "technology-locked", ready: false });
+    state.research.completedTechIds.push("proliferator_1", "energy_matrix", "high_strength_crystal");
+    graphiteSmelter.recipeId = undefined;
+    expect(getSprayCoaterInstallCheck(state, graphiteSmelter.id)).toMatchObject({ code: "recipe-missing", ready: false });
+    state = setEntityRecipe(state, graphiteSmelter.id, "energetic_graphite");
+    state = setEntityRecipe(state, diamondSmelter.id, "diamond");
+
+    expect(getSprayCoaterInstallCheck(state, graphiteSmelter.id)).toMatchObject({ code: "ready", ready: true });
+    state = installSprayCoater(state, graphiteSmelter.id);
+    expect(getSprayCoaterInstallCheck(state, graphiteSmelter.id)).toMatchObject({ code: "already-installed", ready: false });
+    expect(getSprayCoaterInstallCheck(state, diamondSmelter.id)).toMatchObject({ code: "ready", ready: true });
+    state = installSprayCoater(state, diamondSmelter.id);
+
+    expect(state.entities.filter((entity) => [graphiteSmelter.id, diamondSmelter.id].includes(entity.id))
+      .every((entity) => entity.sprayCoaterInstalled)).toBe(true);
+    expect(state.construction.spray_coater).toBe(0);
+
+    const third = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    expect(getSprayCoaterInstallCheck(state, third.id)).toMatchObject({ code: "stock-empty", ready: false });
   });
 
   it("applies recipe and proliferator settings to a compatible multi-selection", () => {
@@ -2654,6 +3022,92 @@ describe("factory simulation", () => {
     expect(state.entities.find((entity) => entity.id === demand.id)?.outputs.iron_ingot).toBe(50);
     expect(state.entities.find((entity) => entity.id === demand.id)?.stationTrips).toBe(2);
     expect(getEntityOperatingStatus(state, state.entities.find((entity) => entity.id === demand.id)!)).toMatchObject({ code: "running" });
+  });
+
+  it("dispatches supply-side drones and returns them to their owning station", () => {
+    let state = createInitialState();
+    state.construction.wind_turbine = 4;
+    state.construction.planetary_logistics_station = 2;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 4);
+    state = placeBuilding(state, "planetary_logistics_station", { x: -200, y: 0 });
+    state = placeBuilding(state, "planetary_logistics_station", { x: 300, y: 0 });
+    const [supply, demand] = state.entities.filter((entity) => entity.buildingId === "planetary_logistics_station");
+    state = setLogisticsItem(state, supply.id, "iron_ingot");
+    state = setLogisticsItem(state, demand.id, "iron_ingot");
+    state = setStationMode(state, demand.id, "demand");
+    state = setStationMinimumLoad(state, demand.id, 1);
+    state.entities.find((entity) => entity.id === supply.id)!.outputs.iron_ingot = 25;
+    state.portableFleet.logistics_drone = 1;
+    state = adjustStationDrones(state, supply.id, 1);
+
+    state = advanceSimulation(state, 0.1);
+    const activeDemand = state.entities.find((entity) => entity.id === demand.id)!;
+    expect(activeDemand.stationRoutes).toEqual([
+      expect.objectContaining({ peerId: supply.id, vehicleStationId: supply.id, vehicleCount: 1 }),
+    ]);
+    expect(getStationBusyVehicleCount(state, supply.id, "local")).toBe(1);
+    expect(getStationBusyVehicleCount(state, demand.id, "local")).toBe(0);
+
+    state = advanceSimulation(state, getPlanetaryTripSeconds(state));
+    expect(state.entities.find((entity) => entity.id === demand.id)?.outputs.iron_ingot).toBe(25);
+    expect(getStationBusyVehicleCount(state, supply.id, "local")).toBe(0);
+    state = adjustStationDrones(state, supply.id, -1);
+    expect(state.portableFleet.logistics_drone).toBe(1);
+  });
+
+  it("fills station drone and vessel berths atomically from the portable fleet", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics");
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 });
+    const station = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    station.machineCount = 2;
+    state.portableFleet = { logistics_drone: 200, logistics_vessel: 7 };
+
+    const drones = fillStationFleet(state, station.id, "drone");
+    expect(drones.loaded).toBe(drones.capacity);
+    expect(drones.shortfall).toBe(0);
+    expect(state.entities.find((entity) => entity.id === station.id)?.stationDrones).toBe(0);
+    expect(drones.state.entities.find((entity) => entity.id === station.id)?.stationDrones).toBe(drones.capacity);
+    expect(drones.state.portableFleet.logistics_drone).toBe(200 - drones.capacity);
+
+    const vessels = fillStationFleet(drones.state, station.id, "vessel");
+    expect(vessels.loaded).toBe(7);
+    expect(vessels.shortfall).toBe(vessels.capacity - 7);
+    expect(vessels.state.entities.find((entity) => entity.id === station.id)?.stationVessels).toBe(7);
+    expect(vessels.state.portableFleet.logistics_vessel).toBe(0);
+  });
+
+  it("uses both station fleets without reserving a vehicle or cargo twice", () => {
+    let state = createInitialState();
+    state.construction.wind_turbine = 4;
+    state.construction.planetary_logistics_station = 2;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 4);
+    state = placeBuilding(state, "planetary_logistics_station", { x: -200, y: 0 });
+    state = placeBuilding(state, "planetary_logistics_station", { x: 300, y: 0 });
+    const [supply, demand] = state.entities.filter((entity) => entity.buildingId === "planetary_logistics_station");
+    state = setLogisticsItem(state, supply.id, "copper_ingot");
+    state = setLogisticsItem(state, demand.id, "copper_ingot");
+    state = setStationMode(state, demand.id, "demand");
+    state = setStationMinimumLoad(state, demand.id, 1);
+    state.entities.find((entity) => entity.id === supply.id)!.outputs.copper_ingot = 50;
+    state.portableFleet.logistics_drone = 2;
+    state = adjustStationDrones(state, demand.id, 1);
+    state = adjustStationDrones(state, supply.id, 1);
+
+    state = advanceSimulation(state, 0.1);
+    const routes = state.entities.find((entity) => entity.id === demand.id)!.stationRoutes ?? [];
+    expect(routes).toHaveLength(2);
+    expect(routes.map((route) => route.vehicleStationId)).toEqual([demand.id, supply.id]);
+    expect(routes.reduce((sum, route) => sum + route.cargo, 0)).toBe(50);
+    expect(getStationBusyVehicleCount(state, demand.id, "local")).toBe(1);
+    expect(getStationBusyVehicleCount(state, supply.id, "local")).toBe(1);
+
+    state = advanceSimulation(state, getPlanetaryTripSeconds(state));
+    expect(state.entities.find((entity) => entity.id === demand.id)?.outputs.copper_ingot).toBe(50);
+    expect(state.entities.find((entity) => entity.id === supply.id)?.outputs.copper_ingot).toBe(0);
+    expect(getStationBusyVehicleCount(state, demand.id, "local")).toBe(0);
+    expect(getStationBusyVehicleCount(state, supply.id, "local")).toBe(0);
   });
 
   it("dispatches five-slot station cargo independently by item and priority", () => {
@@ -2862,6 +3316,76 @@ describe("factory simulation", () => {
     expect(state.entities.find((entity) => entity.id === homeStations[1].id)?.stationWarpers).toBe(2);
     expect(state.entities.find((entity) => entity.id === remoteStation.id)?.stationWarpers).toBe(3);
     expect(state.planetTrays.ashen.space_warper).toBe(4);
+  });
+
+  it("deducts and refunds warp fuel from a supply-owned interstellar vessel", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics", "space_warp");
+    state.exploration.unlockedSystemIds.push("borealis");
+    state.exploration.colonizedPlanetIds.push("frost");
+    state.construction.wind_turbine = 8;
+    state.construction.interstellar_logistics_station = 2;
+    state = placeBuilding(state, "wind_turbine", { x: -160, y: -180 }, 4);
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 });
+    const supply = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    state = setLogisticsItem(state, supply.id, "processor");
+    state.entities.find((entity) => entity.id === supply.id)!.outputs.processor = 100;
+    state.portableFleet.logistics_vessel = 1;
+    state.tray.space_warper = 4;
+    state = adjustStationVessels(state, supply.id, 1);
+    state = adjustStationWarpers(state, supply.id, 4);
+
+    state = setActivePlanet(state, "frost");
+    state = placeBuilding(state, "wind_turbine", { x: -160, y: -180 }, 4);
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 });
+    const demand = state.entities.find((entity) => entity.planetId === "frost" && entity.buildingId === "interstellar_logistics_station")!;
+    state = setLogisticsItem(state, demand.id, "processor");
+    state = setStationSlotMode(state, demand.id, 0, "remote", "demand");
+    state = setStationSlotMinimumLoad(state, demand.id, 0, 1);
+
+    state = advanceSimulation(state, 0.1);
+    const route = state.entities.find((entity) => entity.id === demand.id)!.stationRoutes?.[0]!;
+    const warpersPerVessel = route.warpersPerVessel ?? 0;
+    expect(route).toMatchObject({ vehicleStationId: supply.id, requiresWarp: true, vehicleCount: 1 });
+    expect(state.entities.find((entity) => entity.id === supply.id)?.stationWarpers).toBe(4 - warpersPerVessel);
+
+    state = setStationSlotMode(state, demand.id, 0, "remote", "storage");
+    expect(state.entities.find((entity) => entity.id === demand.id)?.stationRoutes).toEqual([]);
+    expect(state.entities.find((entity) => entity.id === supply.id)?.stationWarpers).toBe(4);
+  });
+
+  it("auto-configures each remaining logistics slot and reports a full station precisely", () => {
+    let state = createInitialState();
+    state.construction.planetary_logistics_station = 1;
+    state.construction.storage_mk1 = 6;
+    state.construction.conveyor_belt_mk1 = 6;
+    state = placeBuilding(state, "planetary_logistics_station", { x: 0, y: 0 });
+    const station = state.entities.find((entity) => entity.buildingId === "planetary_logistics_station")!;
+    const itemIds = ["iron_ingot", "copper_ingot", "stone_brick", "steel", "gear", "circuit_board"] as const;
+    const sources = itemIds.map((itemId, index) => {
+      state = placeBuilding(state, "storage_mk1", { x: -320, y: -240 + index * 96 });
+      const source = state.entities.filter((entity) => entity.buildingId === "storage_mk1").at(-1)!;
+      state = setLogisticsItem(state, source.id, itemId);
+      state.entities.find((entity) => entity.id === source.id)!.outputs[itemId] = 1;
+      return source.id;
+    });
+
+    for (let index = 0; index < 5; index += 1) {
+      expect(getBeltConnectionCheck(state, sources[index], station.id, itemIds[index])).toMatchObject({ ok: true, code: "ready" });
+      state = connectBelt(state, sources[index], station.id, itemIds[index]);
+    }
+    expect(getStationSlots(state.entities.find((entity) => entity.id === station.id)!)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ itemId: "iron_ingot" }),
+      expect.objectContaining({ itemId: "copper_ingot" }),
+      expect.objectContaining({ itemId: "stone_brick" }),
+      expect.objectContaining({ itemId: "steel" }),
+      expect.objectContaining({ itemId: "gear" }),
+    ]));
+    expect(getBeltConnectionCheck(state, sources[5], station.id, itemIds[5])).toEqual({
+      ok: false,
+      code: "station-slots-full",
+      label: "物流站没有可用空槽",
+    });
   });
 
   it("treats legacy sorter upgrades as no-ops because belts now transfer directly", () => {
@@ -3170,6 +3694,52 @@ describe("factory simulation", () => {
     expect(state.construction.arc_smelter).toBe(2);
     expect(state.constructionAutomation).toMatchObject({ totalCrafted: 2, lastCraftedId: "arc_smelter" });
     expect(state.tray).toMatchObject({ iron_ingot: 0, stone_brick: 0, circuit_board: 0, magnetic_coil: 0 });
+  });
+
+  it("recursively processes construction intermediates but never creates missing raw resources", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("construction_automation");
+    state.construction.wind_turbine = 80;
+    state.construction.construction_center = 1;
+    state.construction.arc_smelter = 0;
+    state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 80);
+    state = placeBuilding(state, "construction_center", { x: 120, y: 0 });
+    const center = state.entities.find((entity) => entity.buildingId === "construction_center")!;
+    state.tray = { iron_ore: 100, copper_ore: 100, stone: 100 };
+    state.planetTrays.home = state.tray;
+    state = setConstructionAutomationTarget(state, "arc_smelter", 1);
+
+    state = advanceSimulation(state, 8);
+    expect(state.construction.arc_smelter).toBe(1);
+    expect(state.constructionAutomation.totalCrafted).toBe(1);
+    expect((state.totalProduced.iron_ingot ?? 0) + (state.totalProduced.circuit_board ?? 0)).toBeGreaterThan(0);
+    expect(getConstructionAutomationStatus(state, center.id).stage).toBe("目标库存已满足");
+
+    let blocked = createInitialState();
+    blocked.research.completedTechIds.push("construction_automation");
+    blocked.construction.wind_turbine = 80;
+    blocked.construction.construction_center = 1;
+    blocked.construction.arc_smelter = 0;
+    blocked = placeBuilding(blocked, "wind_turbine", { x: -200, y: -180 }, 80);
+    blocked = placeBuilding(blocked, "construction_center", { x: 120, y: 0 });
+    const blockedCenter = blocked.entities.find((entity) => entity.buildingId === "construction_center")!;
+    blocked.tray = {};
+    blocked.planetTrays.home = blocked.tray;
+    blocked = setConstructionAutomationTarget(blocked, "arc_smelter", 1);
+    blocked = advanceSimulation(blocked, 20);
+    const status = getConstructionAutomationStatus(blocked, blockedCenter.id);
+    expect(blocked.construction.arc_smelter).toBe(0);
+    expect(status).toMatchObject({ stage: "等待材料", blockerReason: "raw-shortage" });
+    expect(status.missingItemId).toBeDefined();
+  });
+
+  it("applies construction-center speed upgrades to material and final stages", () => {
+    const base = createInitialState();
+    expect(getConstructionAutomationMaterialSeconds(base)).toBeCloseTo(0.1, 6);
+    base.research.completedTechIds.push("construction_capacity_1");
+    expect(getConstructionAutomationMaterialSeconds(base)).toBeCloseTo(0.05, 6);
+    base.research.completedTechIds.push("construction_capacity_2");
+    expect(getConstructionAutomationMaterialSeconds(base)).toBeCloseTo(0.02, 6);
   });
 
   it("keeps per-planet tray limits independent and preserves stock when a limit is lowered", () => {

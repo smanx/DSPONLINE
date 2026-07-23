@@ -419,6 +419,27 @@ test("keeps main and three manual cloud slots revisioned independently", async (
   assert.equal(invalid.response.status, 400);
 });
 
+test("validates v32 gameplay buffer limits before accepting cloud saves", async () => {
+  const payloadFor = (productionBufferLimit, logisticsBufferLimit) => JSON.stringify({
+    state: {
+      version: 32,
+      entities: [],
+      settings: { productionBufferLimit, logisticsBufferLimit },
+    },
+  });
+  for (const payload of [
+    payloadFor(999, 1_000_000),
+    payloadFor(1_000_000.5, 1_000_000),
+    payloadFor(1_000_000, 100_000_001),
+    JSON.stringify({ state: { version: 32, entities: [], settings: {} } }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload, expectedRevision: 0 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+  const accepted = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: payloadFor(1_000, 100_000_000), expectedRevision: 0 }) });
+  assert.equal(accepted.response.status, 200);
+});
+
 test("recalculates leaderboard score on the server", async () => {
   const rejected = await request("/api/leaderboard", {
     method: "POST",

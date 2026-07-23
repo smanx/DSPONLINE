@@ -19,6 +19,7 @@ import {
   MailWarning,
   MessageCircle,
   MousePointer2,
+  Palette,
   Play,
   Plus,
   RefreshCw,
@@ -54,7 +55,7 @@ import {
 } from "../game/cloud";
 import { trackAnalyticsEvent } from "../game/analytics";
 import { getMenuContinueSave, getMenuPlanetName, getMenuSlotSummaries, getMenuSnapshotSummaries, type MenuContinueSave, type MenuSaveSource } from "../game/savePreview";
-import type { LoadedGame, SaveInspection, SaveSlotId } from "../game/storage";
+import type { DeferredLoadedGame, LoadedGame, SaveInspection, SaveSlotId } from "../game/storage";
 import type { AutosaveIntervalSeconds, FontScale, GameSettings, SimulationSpeed } from "../game/types";
 import { getDesktopBridge } from "../desktop";
 import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
@@ -62,10 +63,12 @@ import { CloudAccountSecurity } from "./CloudAccountSecurity";
 import { CloudSaveConflictDialog } from "./CloudSaveConflictDialog";
 import { CloudSaveSlotsPanel } from "./CloudSaveSlotsPanel";
 import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
+import { useResolvedTheme } from "../hooks/useResolvedTheme";
 
 type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "new";
 type CloudAuthMode = "login" | "register" | "forgot" | "reset";
 type MenuMessage = { tone: "ready" | "warning" | "error"; text: string } | null;
+type OfflineLoadProgress = { label: string; completedSeconds: number; totalSeconds: number; progress: number };
 
 const MENU_SETTINGS_KEY = "dsp-idle-network.menu-settings.v1";
 const FONT_SCALES: FontScale[] = [0.8, 1, 1.25, 1.5, 2];
@@ -74,11 +77,17 @@ const AUTOSAVE_INTERVALS: AutosaveIntervalSeconds[] = [30, 60, 120];
 const DEFAULT_MENU_SETTINGS: GameSettings = {
   simulationSpeed: 1,
   fontScale: 1,
+  theme: "dark",
+  technologyLayout: "standard",
   performanceMode: false,
   reducedMotion: false,
   soundEnabled: false,
   allowDoubleClickZoom: false,
   beltHeatmapEnabled: false,
+  defaultBeltStackSize: 1,
+  defaultBeltRouteMode: "auto",
+  productionBufferLimit: 1_000_000,
+  logisticsBufferLimit: 1_000_000,
   autosaveIntervalSeconds: 30,
   resourceMode: "finite",
   difficulty: "standard",
@@ -119,11 +128,17 @@ function readMenuSettings(fallback: GameSettings): GameSettings {
       ...fallback,
       simulationSpeed: SIMULATION_SPEEDS.includes(parsed.simulationSpeed as SimulationSpeed) ? parsed.simulationSpeed as SimulationSpeed : fallback.simulationSpeed,
       fontScale: FONT_SCALES.includes(parsed.fontScale as FontScale) ? parsed.fontScale as FontScale : fallback.fontScale,
+      theme: parsed.theme === "light" || parsed.theme === "system" ? parsed.theme : "dark",
+      technologyLayout: parsed.technologyLayout === "compact" ? "compact" : "standard",
       autosaveIntervalSeconds: AUTOSAVE_INTERVALS.includes(parsed.autosaveIntervalSeconds as AutosaveIntervalSeconds) ? parsed.autosaveIntervalSeconds as AutosaveIntervalSeconds : fallback.autosaveIntervalSeconds,
       performanceMode: typeof parsed.performanceMode === "boolean" ? parsed.performanceMode : fallback.performanceMode,
       reducedMotion: typeof parsed.reducedMotion === "boolean" ? parsed.reducedMotion : fallback.reducedMotion,
       soundEnabled: typeof parsed.soundEnabled === "boolean" ? parsed.soundEnabled : fallback.soundEnabled,
       allowDoubleClickZoom: typeof parsed.allowDoubleClickZoom === "boolean" ? parsed.allowDoubleClickZoom : fallback.allowDoubleClickZoom,
+      defaultBeltStackSize: parsed.defaultBeltStackSize === 2 || parsed.defaultBeltStackSize === 4 ? parsed.defaultBeltStackSize : 1,
+      defaultBeltRouteMode: parsed.defaultBeltRouteMode === "bezier" || parsed.defaultBeltRouteMode === "upper" || parsed.defaultBeltRouteMode === "lower" ? parsed.defaultBeltRouteMode : "auto",
+      productionBufferLimit: Number.isInteger(parsed.productionBufferLimit) && parsed.productionBufferLimit! >= 1_000 && parsed.productionBufferLimit! <= 100_000_000 ? parsed.productionBufferLimit! : fallback.productionBufferLimit,
+      logisticsBufferLimit: Number.isInteger(parsed.logisticsBufferLimit) && parsed.logisticsBufferLimit! >= 1_000 && parsed.logisticsBufferLimit! <= 100_000_000 ? parsed.logisticsBufferLimit! : fallback.logisticsBufferLimit,
     };
   } catch {
     return fallback;
@@ -132,6 +147,19 @@ function readMenuSettings(fallback: GameSettings): GameSettings {
 
 function saveMenuSettings(settings: GameSettings): void {
   try { window.localStorage.setItem(MENU_SETTINGS_KEY, JSON.stringify(settings)); } catch { /* optional preference */ }
+}
+
+function mergeMenuRuntimeSettings(saved: GameSettings, menu: GameSettings): GameSettings {
+  return {
+    ...saved,
+    ...menu,
+    // These settings alter deterministic gameplay and follow the selected
+    // save instead of the machine-local start-menu preference.
+    defaultBeltStackSize: saved.defaultBeltStackSize,
+    defaultBeltRouteMode: saved.defaultBeltRouteMode,
+    productionBufferLimit: saved.productionBufferLimit,
+    logisticsBufferLimit: saved.logisticsBufferLimit,
+  };
 }
 
 function sourceLabel(source: MenuSaveSource): string {
@@ -165,6 +193,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [slots, setSlots] = useState(getMenuSlotSummaries);
   const [snapshots, setSnapshots] = useState(getMenuSnapshotSummaries);
   const [settings, setSettings] = useState<GameSettings>(() => readMenuSettings(defaultSettings));
+  useResolvedTheme(settings.theme);
   const [cloudSession, setCloudSession] = useState<CloudSession>({ status: "checking", user: null, cloudSave: null, mailAvailable: false, message: null });
   const initialCloudAction = useMemo(() => {
     const parameters = new URLSearchParams(window.location.search);
@@ -180,10 +209,12 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [cloudDisplayName, setCloudDisplayName] = useState("");
   const [cloudConflict, setCloudConflict] = useState<{ slot: CloudSaveSlot; localPayload: string; remote: CloudSaveMetadata } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [offlineProgress, setOfflineProgress] = useState<OfflineLoadProgress | null>(null);
   const [message, setMessage] = useState<MenuMessage>(null);
   const [importInspection, setImportInspection] = useState<SaveInspection | null>(null);
   const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & { slotId: SaveSlotId }) | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const offlineAbortRef = useRef<AbortController | null>(null);
   const cloudAuthAllowed = window.isSecureContext || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
   const cloudMailAvailable = cloudSession.mailAvailable;
   const brandIconUrl = `${import.meta.env.BASE_URL}icon.svg`;
@@ -250,6 +281,10 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     return () => { active = false; };
   }, [cloudAuthAllowed, initialCloudAction]);
 
+  useEffect(() => () => {
+    offlineAbortRef.current?.abort();
+  }, []);
+
   const updateMenuSettings = (changes: Partial<GameSettings>) => {
     const next = { ...settings, ...changes };
     setSettings(next);
@@ -265,21 +300,54 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const enterLoadedGame = async (loaded: LoadedGame, preserveReason?: string, storage?: StorageModule) => {
     const activeStorage = storage ?? await loadStorageModule();
     if (preserveReason) await preserveCurrentSave(preserveReason, activeStorage);
-    const state = { ...loaded.state, settings: { ...loaded.state.settings, ...settings } };
-    activeStorage.saveGame(state);
+    const state = { ...loaded.state, settings: mergeMenuRuntimeSettings(loaded.state.settings, settings) };
+    const saveResult = activeStorage.saveGame(state);
+    if (!saveResult.success) throw new Error(saveResult.message);
     trackAnalyticsEvent("game_enter");
     onEnterGame({ ...loaded, state });
   };
 
+  const completeDeferredLoad = async (
+    loaded: DeferredLoadedGame,
+    label: string,
+    preserveReason: string | undefined,
+    storage: StorageModule,
+  ) => {
+    let completed = loaded.state;
+    if (loaded.offlineSeconds >= 1) {
+      const controller = new AbortController();
+      offlineAbortRef.current = controller;
+      setOfflineProgress({ label, completedSeconds: 0, totalSeconds: loaded.offlineSeconds, progress: 0 });
+      const { runOfflineSimulationInWorker } = await import("../game/offlineSimulation");
+      completed = await runOfflineSimulationInWorker(loaded.state, loaded.offlineSeconds, {
+        signal: controller.signal,
+        onProgress: (progress) => setOfflineProgress({ label, ...progress }),
+      });
+    }
+    const finalized = storage.finalizeDeferredOfflineGame(loaded, completed);
+    await enterLoadedGame(finalized, preserveReason, storage);
+  };
+
+  const handleLoadError = (error: unknown, fallback: string) => {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      setMessage({ tone: "warning", text: "离线计算已取消，本地存档未发生修改" });
+      return;
+    }
+    setMessage({ tone: "error", text: error instanceof Error ? error.message : fallback });
+  };
+
   const continueGame = async () => {
     setBusy(true);
+    setMessage(null);
     try {
       const storage = await loadStorageModule();
       trackAnalyticsEvent("continue_game");
-      await enterLoadedGame(storage.loadGame(), undefined, storage);
+      await completeDeferredLoad(storage.loadGameDeferredOffline(), "恢复最近工厂", undefined, storage);
     } catch (error) {
-      setMessage({ tone: "error", text: error instanceof Error ? error.message : "本地存档无法载入" });
+      handleLoadError(error, "本地存档无法载入");
     } finally {
+      offlineAbortRef.current = null;
+      setOfflineProgress(null);
       setBusy(false);
     }
   };
@@ -290,8 +358,9 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       const [storage, { createPlayerInitialState }] = await Promise.all([loadStorageModule(), import("../game/engine")]);
       await preserveCurrentSave("开始新工厂前", storage);
       const state = createPlayerInitialState();
-      state.settings = { ...state.settings, ...settings };
-      storage.saveGame(state);
+      state.settings = mergeMenuRuntimeSettings(state.settings, settings);
+      const saveResult = storage.saveGame(state);
+      if (!saveResult.success) throw new Error(saveResult.message);
       trackAnalyticsEvent("new_game");
       trackAnalyticsEvent("game_enter");
       onEnterGame({ state, offlineSeconds: 0, offlineReport: null, recovery: { source: "fresh", issues: [] } });
@@ -309,18 +378,21 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
 
   const loadSlot = async (slotId: SaveSlotId) => {
     setBusy(true);
+    setMessage(null);
     try {
       const storage = await loadStorageModule();
-      const loaded = storage.loadGameSlot(slotId);
+      const loaded = storage.loadGameSlotDeferredOffline(slotId);
       if (!loaded) {
         setMessage({ tone: "error", text: `本地槽位 ${slotId} 无法载入` });
         return;
       }
       trackAnalyticsEvent("load_save");
-      await enterLoadedGame(loaded, `载入槽位 ${slotId} 前`, storage);
+      await completeDeferredLoad(loaded, `载入槽位 ${slotId}`, `载入槽位 ${slotId} 前`, storage);
     } catch (error) {
-      setMessage({ tone: "error", text: error instanceof Error ? error.message : `本地槽位 ${slotId} 无法载入` });
+      handleLoadError(error, `本地槽位 ${slotId} 无法载入`);
     } finally {
+      offlineAbortRef.current = null;
+      setOfflineProgress(null);
       setBusy(false);
     }
   };
@@ -438,7 +510,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     try {
       const storage = await loadStorageModule();
       const loaded = storage.loadGame();
-      const state = { ...loaded.state, settings: { ...loaded.state.settings, ...settings } };
+      const state = { ...loaded.state, settings: mergeMenuRuntimeSettings(loaded.state.settings, settings) };
       storage.saveGame(state);
       const localPayload = storage.exportGame(state);
       attemptedPayload = localPayload;
@@ -639,6 +711,19 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         </div>
       </header>
 
+      {offlineProgress ? <section className="start-menu-offline-progress" role="dialog" aria-modal="true" aria-labelledby="offline-progress-title">
+        <div>
+          <Activity size={22} />
+          <span>
+            <strong id="offline-progress-title">正在进行离线运算</strong>
+            <small>{offlineProgress.label} · {Math.floor(offlineProgress.completedSeconds).toLocaleString("zh-CN")} / {Math.floor(offlineProgress.totalSeconds).toLocaleString("zh-CN")} 秒</small>
+          </span>
+        </div>
+        <progress max={1} value={Math.max(0, Math.min(1, offlineProgress.progress))} />
+        <p>完成后才会一次性保存并进入工厂；取消不会改写当前存档。</p>
+        <button type="button" onClick={() => offlineAbortRef.current?.abort()}>取消离线运算</button>
+      </section> : null}
+
       <section className="start-menu-layout">
         <aside className="start-menu-command">
           <div className="start-menu-title">
@@ -754,6 +839,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
           {view === "settings" ? <div className="start-menu-settings">
             <header><span><small>本机运行参数</small><strong>游戏设置</strong></span><em>即时生效</em></header>
             <section><header><Type size={15} /><strong>字体大小</strong><small>{Math.round(settings.fontScale * 100)}%</small></header><div className="start-menu-segments">{FONT_SCALES.map((scale) => <button className={settings.fontScale === scale ? "active" : ""} type="button" key={scale} onClick={() => updateMenuSettings({ fontScale: scale })}>{Math.round(scale * 100)}%</button>)}</div></section>
+            <section><header><Palette size={15} /><strong>界面主题</strong><small>{{ dark: "深色", light: "亮色", system: "跟随系统" }[settings.theme]}</small></header><div className="start-menu-segments">{(["dark", "light", "system"] as const).map((theme) => <button className={settings.theme === theme ? "active" : ""} type="button" key={theme} onClick={() => updateMenuSettings({ theme })}>{{ dark: "深色", light: "亮色", system: "跟随系统" }[theme]}</button>)}</div></section>
+            <section><header><Factory size={15} /><strong>科技树布局</strong><small>{settings.technologyLayout === "compact" ? "精简" : "标准"}</small></header><div className="start-menu-segments">{(["standard", "compact"] as const).map((technologyLayout) => <button className={settings.technologyLayout === technologyLayout ? "active" : ""} type="button" key={technologyLayout} onClick={() => updateMenuSettings({ technologyLayout })}>{technologyLayout === "compact" ? "精简模式" : "标准模式"}</button>)}</div></section>
             <section><header><Zap size={15} /><strong>模拟速度</strong><small>{settings.simulationSpeed}×</small></header><div className="start-menu-segments">{SIMULATION_SPEEDS.map((speed) => <button className={settings.simulationSpeed === speed ? "active" : ""} type="button" key={speed} onClick={() => updateMenuSettings({ simulationSpeed: speed })}>{speed}×</button>)}</div></section>
             <section><header><Clock3 size={15} /><strong>自动保存</strong><small>{settings.autosaveIntervalSeconds} 秒</small></header><div className="start-menu-segments">{AUTOSAVE_INTERVALS.map((seconds) => <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => updateMenuSettings({ autosaveIntervalSeconds: seconds })}>{seconds} 秒</button>)}</div></section>
             <section className="start-menu-setting-toggles"><ToggleRow checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "低频渲染" : "完整渲染"} icon={<Cpu size={16} />} onChange={(performanceMode) => updateMenuSettings({ performanceMode })} /><ToggleRow checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态已精简" : "完整动态"} icon={<Gauge size={16} />} onChange={(reducedMotion) => updateMenuSettings({ reducedMotion })} /><ToggleRow checked={settings.soundEnabled} label="操作音效" value={settings.soundEnabled ? "已开启" : "已关闭"} icon={settings.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />} onChange={(soundEnabled) => updateMenuSettings({ soundEnabled })} /><ToggleRow checked={settings.allowDoubleClickZoom} label="允许双击缩放" value={settings.allowDoubleClickZoom ? "双击聚焦画布" : "连续点击不缩放"} icon={<MousePointer2 size={16} />} onChange={(allowDoubleClickZoom) => updateMenuSettings({ allowDoubleClickZoom })} /></section>

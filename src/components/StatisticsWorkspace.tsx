@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowUp, BarChart3, Bookmark, BookmarkPlus, Box, Calculator, CheckSquare, CircleCheckBig, ClipboardCopy, Factory, Focus, Gauge, Layers3, MapPin, Orbit, Pause, Play, Plus, Rocket, Route, Search, Send, Settings2, Sparkles, Trash2, TrendingUp, X, Zap } from "lucide-react";
+import { AlertTriangle, ArrowUp, BarChart3, Bookmark, BookmarkPlus, Box, Calculator, CheckSquare, CircleCheckBig, ClipboardCopy, Factory, Focus, Gauge, MapPin, Orbit, Pause, Play, Plus, Rocket, Route, Search, Send, Settings2, Sparkles, Trash2, TrendingUp, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ITEMS, PLANET_LIST, getBuilding, getItem, getPlanet, getRecipe } from "../game/content";
 import { calculateProductionPlan, getProductionRecipeOptions } from "../game/planning";
@@ -7,6 +7,7 @@ import { getGalacticIndustrySnapshot, getPowerGridMetrics, getResourceReserveSna
 import { GALACTIC_EXPORT_DEFINITIONS, INFINITE_RESEARCH_DEFINITIONS, getGalacticExportTarget, getInfiniteResearchCompletion, getInfiniteResearchCost, getInfiniteResearchLevel } from "../game/endgame";
 import { getPlanetIndustrialProfile } from "../game/galaxy";
 import { listBeltNetworks, type BeltHealth } from "../game/network";
+import { formatKilowatts } from "../game/units";
 import type { BeltRouteMode, CanvasBookmark, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, RecipeId, StationSlotTemplate } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { ProductionManagement } from "./ProductionManagement";
@@ -34,7 +35,7 @@ interface StatisticsWorkspaceProps {
   onFocusBeltNetwork: (beltId: string, planetId: PlanetId) => void;
   onBulkRecipeChange: (entityIds: string[], recipeId: RecipeId) => void;
   onBulkStationSlotApply: (entityIds: string[], slotIndex: number, template: StationSlotTemplate) => void;
-  onBulkBeltUpgrade: (beltIds: string[], target: "belt" | "sorter") => void;
+  onBulkBeltUpgrade: (beltIds: string[]) => void;
   onBulkBeltRoute: (beltIds: string[], routeMode: BeltRouteMode) => void;
   onBulkBeltConfiguration: (beltIds: string[]) => void;
   onBulkBeltRemove: (beltIds: string[]) => void;
@@ -130,8 +131,7 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
       <section className={`network-batch-bar${selectedCount > 0 ? " network-batch-bar--active" : ""}`} aria-label="批量线路操作">
         <button type="button" className="network-select-all" onClick={() => setSelectedIds(selectedCount === visibleIds.length ? [] : visibleIds)}><CheckSquare size={14} />{selectedCount === visibleIds.length && visibleIds.length > 0 ? "取消全选" : "选择当前结果"}</button>
         <strong>{selectedCount} 个网络</strong>
-        <button type="button" disabled={selectedCount === 0} onClick={() => onBulkBeltUpgrade(selectedVisible, "belt")}><ArrowUp size={14} />升级传送带</button>
-        <button type="button" disabled={selectedCount === 0} onClick={() => onBulkBeltUpgrade(selectedVisible, "sorter")}><Layers3 size={14} />升级分拣器</button>
+        <button type="button" disabled={selectedCount === 0} onClick={() => onBulkBeltUpgrade(selectedVisible)}><ArrowUp size={14} />升级传送带</button>
         <label><select value={routeMode} onChange={(event) => setRouteMode(event.target.value as BeltRouteMode)} aria-label="批量线路路由"><option value="auto">自动避让</option><option value="bezier">曲线</option><option value="upper">上绕</option><option value="lower">下绕</option><option value="manual">手动控制点</option></select><button type="button" disabled={selectedCount === 0} onClick={() => onBulkBeltRoute(selectedVisible, routeMode)}><Route size={14} />批量改道</button></label>
         <button type="button" disabled={selectedCount < 2} onClick={() => onBulkBeltConfiguration(selectedVisible)} title="使用首个所选网络的设置覆盖其余网络"><ClipboardCopy size={14} />同步首条设置</button>
         <button className="danger" type="button" disabled={selectedCount === 0} onClick={() => { onBulkBeltRemove(selectedVisible); setSelectedIds([]); }}><Trash2 size={14} />批量回收</button>
@@ -377,10 +377,10 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
             <div><span>储能充电</span><strong>{game.metrics.storageChargeKw.toFixed(0)} kW</strong></div>
             <div><span>储能放电</span><strong>{game.metrics.storageDischargeKw.toFixed(0)} kW</strong></div>
             <div><span>在轨太阳帆</span><strong>{game.dysonSwarm.sailsInOrbit.toLocaleString("zh-CN")}</strong></div>
-            <div><span>戴森云功率</span><strong>{(game.dysonSwarm.generationKw / 1000).toFixed(2)} MW</strong></div>
+            <div><span>戴森云功率</span><strong>{formatKilowatts(game.dysonSwarm.generationKw)}</strong></div>
             <div><span>永久结构点</span><strong>{game.dysonSphere.structurePoints.toLocaleString("zh-CN")}</strong></div>
             <div><span>壳面太阳帆</span><strong>{game.dysonSphere.shellSails.toLocaleString("zh-CN")}</strong></div>
-            <div><span>戴森球功率</span><strong>{(game.dysonSphere.generationKw / 1000).toFixed(2)} MW</strong></div>
+            <div><span>戴森球功率</span><strong>{formatKilowatts(game.dysonSphere.generationKw)}</strong></div>
           </div>
           <div className="grid-load"><i><b style={{ width: `${generationUtilization}%` }} /></i><span>容量利用率</span><strong>{Math.round(generationUtilization)}%</strong></div>
           <section className="power-grid-ledger">
@@ -443,7 +443,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
                 <div><span>银河评分</span><strong>{galactic.galacticScore.toLocaleString("zh-CN")}</strong><small>信用 {galactic.galacticCredits.toLocaleString("zh-CN")}</small></div>
                 <div><span>全网生产</span><strong>{galactic.totalProductionPerMinute.toFixed(1)}<small>/min</small></strong><small>库存 {galactic.networkInventory.toLocaleString("zh-CN")}</small></div>
                 <div><span>出口吞吐</span><strong>{galactic.exportedPerMinute.toFixed(1)}<small>/min</small></strong><small>累计 {galactic.totalExported.toLocaleString("zh-CN")}</small></div>
-                <div><span>恒星功率</span><strong>{(galactic.dysonGenerationKw / 1000).toFixed(2)}<small> MW</small></strong><small>{galactic.activePlanets} 个殖民地</small></div>
+                <div><span>恒星功率</span><strong>{formatKilowatts(galactic.dysonGenerationKw)}</strong><small>{galactic.activePlanets} 个殖民地</small></div>
                 <div><span>运行设备</span><strong>{galactic.operatingEntities}</strong><small>瓶颈 {galactic.blockedEntities}</small></div>
                 <div><span>物流航次</span><strong>{galactic.logisticsTrips.toLocaleString("zh-CN")}</strong><small>无限等级 {galactic.infiniteResearchLevels}</small></div>
               </section>

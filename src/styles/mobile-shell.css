@@ -619,3 +619,54 @@ html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobi
   .mobile-next-workspace-hub,
   .mobile-next-confirm { animation: none; }
 }
+
+/* Top-level settlement modal. It intentionally sits above every next-mobile
+   shell layer; only its middle section scrolls. */
+.game-shell[data-mobile-shell="true"] .offline-report {
+  z-index: 420;
+  top: max(8px, env(safe-area-inset-top, 0px));
+  right: 8px;
+  bottom: max(8px, env(safe-area-inset-bottom, 0px));
+  left: 8px;
+  width: auto;
+  max-height: none;
+  grid-template-rows: minmax(56px, auto) minmax(50px, auto) minmax(0, 1fr) minmax(58px, auto);
+  border-radius: 8px;
+  transform: none;
+}
+
+.game-shell[data-mobile-shell="true"] .offline-report > header {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  min-height: 56px;
+  padding-top: env(safe-area-inset-top, 0px);
+  background: #111714;
+}
+
+.game-shell[data-mobile-shell="true"] .offline-report > header button,
+.game-shell[data-mobile-shell="true"] .offline-report > footer button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.game-shell[data-mobile-shell="true"] .offline-report-body {
+  min-height: 0;
+  grid-template-columns: 1fr;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+
+.game-shell[data-mobile-shell="true"] .offline-report-body > section { grid-column: 1; }
+.game-shell[data-mobile-shell="true"] .offline-report > footer {
+  position: sticky;
+  z-index: 2;
+  bottom: 0;
+  min-height: 58px;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: #111714;
+}
+
+html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobile-shell="true"] .offline-report {
+  grid-template-rows: minmax(72px, auto) minmax(66px, auto) minmax(0, 1fr) minmax(72px, auto);
+}

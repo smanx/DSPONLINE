@@ -5,6 +5,7 @@ import {
   DEFAULT_STATION_WARPER_TARGET,
   DEFAULT_PLANET_TRAY_ITEM_LIMIT,
   MAX_PLANET_TRAY_ITEM_LIMIT,
+  MAX_BUILDING_BUFFER_LIMIT,
   MIN_PLANET_TRAY_ITEM_LIMIT,
   SOLAR_SAIL_POWER_KW,
   STATION_SLOT_COUNT,
@@ -48,6 +49,10 @@ export interface LoadedGame {
   offlineSeconds: number;
   offlineReport: OfflineReport | null;
   recovery?: SaveRecovery;
+}
+
+export interface DeferredLoadedGame extends LoadedGame {
+  savedAt: number;
 }
 
 export interface SaveRecovery {
@@ -132,6 +137,16 @@ function integerRecord(value: unknown): Partial<Record<ItemId, number>> {
 
 function nonNegativeInteger(value: unknown): number {
   return Math.max(0, Math.floor(typeof value === "number" && Number.isFinite(value) ? value : 0));
+}
+
+function boundedBuildingQuantity(value: unknown): number {
+  return Math.min(MAX_BUILDING_BUFFER_LIMIT, nonNegativeInteger(value));
+}
+
+function buildingBufferRecord(value: unknown): Partial<Record<ItemId, number>> {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([key, amount]) =>
+    key in ITEMS ? [[key, boundedBuildingQuantity(amount)]] : [])) as Partial<Record<ItemId, number>>;
 }
 
 function nonNegativeNumber(value: unknown): number {
@@ -289,8 +304,8 @@ function normalizeStationSlots(entity: FactoryEntity): StationSlot[] | undefined
       localMode: validStationMode(slot?.localMode) ? slot.localMode : "storage",
       remoteMode: validStationMode(slot?.remoteMode) ? slot.remoteMode : "storage",
       minimumLoad: validStationMinimumLoad(slot?.minimumLoad) ? slot.minimumLoad : 1,
-      minStock: nonNegativeInteger(slot?.minStock),
-      maxStock: nonNegativeInteger(slot?.maxStock),
+      minStock: Math.min(100_000_000, nonNegativeInteger(slot?.minStock)),
+      maxStock: Math.min(100_000_000, nonNegativeInteger(slot?.maxStock)),
       priority: validPriority(slot?.priority) ? slot.priority : 1,
       routePolicy: validRoutePolicy(slot?.routePolicy) ? slot.routePolicy : "relay-preferred",
       warperBudget: Math.max(1, Math.min(4, nonNegativeInteger(slot?.warperBudget) || 2)),
@@ -333,7 +348,7 @@ function normalizeStationRoutes(entity: FactoryEntity): StationRoute[] | undefin
       peerId: route.peerId,
       itemId: route.itemId,
       scope: route.scope,
-      cargo: nonNegativeInteger(route.cargo),
+      cargo: boundedBuildingQuantity(route.cargo),
       vehicleCount: Math.max(1, nonNegativeInteger(route.vehicleCount)),
       progress: Math.min(1, nonNegativeNumber(route.progress)),
       duration: Math.max(1, nonNegativeNumber(route.duration)),
@@ -343,6 +358,9 @@ function normalizeStationRoutes(entity: FactoryEntity): StationRoute[] | undefin
         : [],
       distanceLy: nonNegativeNumber(route.distanceLy),
       warpersPerVessel: Math.max(route.requiresWarp ? 1 : 0, nonNegativeInteger(route.warpersPerVessel)),
+      vehicleStationId: typeof route.vehicleStationId === "string" && route.vehicleStationId.length > 0
+        ? route.vehicleStationId
+        : undefined,
     } satisfies StationRoute];
   });
 }
@@ -464,6 +482,15 @@ function validAutosaveInterval(value: unknown): value is GameState["settings"]["
   return value === 30 || value === 60 || value === 120;
 }
 
+function validDefaultBeltRouteMode(value: unknown): value is GameState["settings"]["defaultBeltRouteMode"] {
+  return value === "auto" || value === "bezier" || value === "upper" || value === "lower";
+}
+
+function normalizedBuildingBufferLimit(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 1_000_000;
+  return Math.max(1_000, Math.min(100_000_000, Math.floor(value)));
+}
+
 function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
   if (entity.id.startsWith("ashen_")) return "ashen";
   if (entity.resourceId === "silicon_ore" || entity.resourceId === "titanium_ore") return "ashen";
@@ -474,7 +501,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const savedSeed = saved.version >= 20 && typeof saved.galaxy?.seed === "number" && Number.isFinite(saved.galaxy.seed)
     ? saved.galaxy.seed
     : DEFAULT_GALAXY_SEED;
@@ -509,10 +536,10 @@ export function migrateGame(value: unknown): GameState | null {
       ...entity,
       planetId,
       position,
-      inputs: integerRecord(entity.inputs),
-      outputs: integerRecord(entity.outputs),
-      machineCount: Math.max(0, Math.floor(entity.machineCount ?? 0)),
-      minerCount: Math.max(0, Math.floor(entity.minerCount ?? 0)),
+      inputs: buildingBufferRecord(entity.inputs),
+      outputs: buildingBufferRecord(entity.outputs),
+      machineCount: boundedBuildingQuantity(entity.machineCount),
+      minerCount: boundedBuildingQuantity(entity.minerCount),
       progress: typeof entity.progress === "number" ? Math.max(0, entity.progress) : 0,
       fuelRemainingMj: typeof entity.fuelRemainingMj === "number" ? Math.max(0, entity.fuelRemainingMj) : 0,
       powerOutputKw: typeof entity.powerOutputKw === "number" ? Math.max(0, entity.powerOutputKw) : 0,
@@ -598,14 +625,26 @@ export function migrateGame(value: unknown): GameState | null {
     const amount = saved.construction?.[buildingId];
     return [buildingId, Math.max(0, Math.floor(typeof amount === "number" ? amount : 0))];
   })) as GameState["construction"];
+  if (saved.version < 31) {
+    const legacySorterRefunds = [
+      ["sorter_mk1", "conveyor_belt_mk1"],
+      ["sorter_mk2", "conveyor_belt_mk2"],
+      ["sorter_mk3", "conveyor_belt_mk3"],
+    ] as const;
+    for (const [sorterId, beltId] of legacySorterRefunds) {
+      construction[beltId] = nonNegativeInteger(construction[beltId]) + nonNegativeInteger(saved.construction?.[sorterId]);
+      construction[sorterId] = 0;
+    }
+  }
   const migratedBelts: BeltConnection[] = Array.isArray(saved.belts) ? saved.belts.map((belt: Record<string, any>) => {
     const source = entities.find((entity) => entity.id === belt.source);
+    const tier = saved.version >= 8 && validBeltTier(belt.tier) ? belt.tier : 1;
     return {
       ...belt,
       planetId: validPlanetId(belt.planetId) ? belt.planetId : source?.planetId ?? "home",
       lanes: Math.max(1, Math.floor(belt.lanes ?? 1)),
-      tier: saved.version >= 8 && validBeltTier(belt.tier) ? belt.tier : 1,
-      sorterTier: saved.version >= 10 && validBeltTier(belt.sorterTier) ? belt.sorterTier : 1,
+      tier,
+      sorterTier: tier,
       progress: typeof belt.progress === "number" ? Math.max(0, belt.progress) : 0,
       priority: validPriority(belt.priority) ? belt.priority : 0,
       stackSize: validCargoStackSize(belt.stackSize) ? belt.stackSize : 1,
@@ -653,7 +692,32 @@ export function migrateGame(value: unknown): GameState | null {
     lastCraftedId: saved.version >= 26 && typeof saved.constructionAutomation?.lastCraftedId === "string" && saved.constructionAutomation.lastCraftedId in initial.construction
       ? saved.constructionAutomation.lastCraftedId as ConstructionId
       : null,
+    jobs: {},
   };
+  if (saved.version >= 31 && saved.constructionAutomation?.jobs && typeof saved.constructionAutomation.jobs === "object") {
+    const centerIds = new Set(entities.filter((entity) => entity.buildingId === "construction_center").map((entity) => entity.id));
+    for (const [entityId, rawJob] of Object.entries(saved.constructionAutomation.jobs as Record<string, any>)) {
+      if (!centerIds.has(entityId) || !rawJob || typeof rawJob !== "object" ||
+        typeof rawJob.constructionId !== "string" || !(rawJob.constructionId in initial.construction) || !Array.isArray(rawJob.steps)) continue;
+      const steps = rawJob.steps.flatMap((step: Record<string, any>) => {
+        if (step?.kind === "material" && typeof step.recipeId === "string" && getRecipe(step.recipeId as RecipeId) &&
+          typeof step.outputItemId === "string" && step.outputItemId in ITEMS) {
+          return [{ kind: "material" as const, recipeId: step.recipeId as RecipeId, batches: Math.max(1, nonNegativeInteger(step.batches)), outputItemId: step.outputItemId as ItemId, outputAmount: Math.max(1, nonNegativeInteger(step.outputAmount)) }];
+        }
+        if (step?.kind === "building" && typeof step.constructionId === "string" && step.constructionId in initial.construction) {
+          return [{ kind: "building" as const, constructionId: step.constructionId as ConstructionId }];
+        }
+        return [];
+      });
+      if (steps.length === 0) continue;
+      constructionAutomation.jobs[entityId] = {
+        constructionId: rawJob.constructionId as ConstructionId,
+        steps,
+        stepIndex: Math.min(steps.length - 1, nonNegativeInteger(rawJob.stepIndex)),
+        elapsedSeconds: nonNegativeNumber(rawJob.elapsedSeconds),
+      };
+    }
+  }
   let selectedTechId = getTechnology(saved.research?.selectedTechId) && !completedTechIds.includes(saved.research.selectedTechId)
     ? saved.research.selectedTechId as TechId
     : null;
@@ -674,6 +738,16 @@ export function migrateGame(value: unknown): GameState | null {
   if (!selectedTechId && !pausedTechId && queuedTechIds.length > 0) selectedTechId = queuedTechIds.shift()!;
 
   const activePlanetId = validPlanetId(saved.activePlanetId) ? saved.activePlanetId : "home";
+  const planetViewports = Object.fromEntries(PLANET_LIST.map((planet) => {
+    const viewport = saved.version >= 31 ? saved.planetViewports?.[planet.id] : undefined;
+    return [planet.id, {
+      x: Number.isFinite(viewport?.x) ? Math.round(viewport.x * 100) / 100 : initial.planetViewports[planet.id].x,
+      y: Number.isFinite(viewport?.y) ? Math.round(viewport.y * 100) / 100 : initial.planetViewports[planet.id].y,
+      zoom: Number.isFinite(viewport?.zoom)
+        ? Math.max(0.25, Math.min(1.8, Math.round(viewport.zoom * 1000) / 1000))
+        : initial.planetViewports[planet.id].zoom,
+    }];
+  })) as GameState["planetViewports"];
   const savedActiveTray = integerRecord(saved.tray);
   const planetTrays = Object.fromEntries(PLANET_LIST.map((planet) => [
     planet.id,
@@ -793,14 +867,15 @@ export function migrateGame(value: unknown): GameState | null {
       const keys = new Set(blueprintEntities.map((entity) => entity.key));
       const blueprintBelts = Array.isArray(blueprint.belts) ? blueprint.belts.flatMap((belt: Record<string, any>, beltIndex: number) => {
         if (!keys.has(belt.sourceKey) || !keys.has(belt.targetKey) || typeof belt.itemId !== "string" || !(belt.itemId in ITEMS)) return [];
+        const tier = validBeltTier(belt.tier) ? belt.tier : 1;
         return [{
           key: typeof belt.key === "string" && belt.key ? belt.key : `line_${beltIndex + 1}`,
           sourceKey: belt.sourceKey as string,
           targetKey: belt.targetKey as string,
           itemId: belt.itemId as ItemId,
           lanes: Math.max(1, nonNegativeInteger(belt.lanes)),
-          tier: validBeltTier(belt.tier) ? belt.tier : 1,
-          sorterTier: validBeltTier(belt.sorterTier) ? belt.sorterTier : 1,
+          tier,
+          sorterTier: tier,
           priority: validPriority(belt.priority) ? belt.priority : 0,
           stackSize: validCargoStackSize(belt.stackSize) ? belt.stackSize : 1,
           monitorEnabled: Boolean(belt.monitorEnabled),
@@ -862,7 +937,7 @@ export function migrateGame(value: unknown): GameState | null {
   const handcraftQueue: GameState["handcraftQueue"] = Array.isArray(saved.handcraftQueue)
     ? saved.handcraftQueue.slice(0, 20).flatMap((entry: Record<string, any>, index: number) => {
       if (!getRecipe(entry.recipeId as RecipeId) || !validPlanetId(entry.planetId)) return [];
-      const batchesTotal = Math.max(1, Math.min(100, nonNegativeInteger(entry.batchesTotal) || 1));
+      const batchesTotal = Math.max(1, Math.min(100_000, nonNegativeInteger(entry.batchesTotal) || 1));
       const batchesRemaining = Math.max(0, Math.min(batchesTotal, nonNegativeInteger(entry.batchesRemaining) || batchesTotal));
       return batchesRemaining > 0 ? [{
         id: typeof entry.id === "string" && entry.id ? entry.id : `handcraft_migrated_${index + 1}`,
@@ -1094,6 +1169,10 @@ export function migrateGame(value: unknown): GameState | null {
     fontScale: validFontScale(saved.settings?.fontScale)
       ? saved.settings.fontScale
       : initial.settings.fontScale,
+    theme: saved.settings?.theme === "light" || saved.settings?.theme === "system"
+      ? saved.settings.theme
+      : "dark",
+    technologyLayout: saved.settings?.technologyLayout === "compact" ? "compact" : "standard",
     performanceMode: typeof saved.settings?.performanceMode === "boolean"
       ? saved.settings.performanceMode
       : initial.settings.performanceMode,
@@ -1109,6 +1188,14 @@ export function migrateGame(value: unknown): GameState | null {
     beltHeatmapEnabled: typeof saved.settings?.beltHeatmapEnabled === "boolean"
       ? saved.settings.beltHeatmapEnabled
       : initial.settings.beltHeatmapEnabled,
+    defaultBeltStackSize: validCargoStackSize(saved.settings?.defaultBeltStackSize)
+      ? saved.settings.defaultBeltStackSize
+      : initial.settings.defaultBeltStackSize,
+    defaultBeltRouteMode: validDefaultBeltRouteMode(saved.settings?.defaultBeltRouteMode)
+      ? saved.settings.defaultBeltRouteMode
+      : initial.settings.defaultBeltRouteMode,
+    productionBufferLimit: normalizedBuildingBufferLimit(saved.settings?.productionBufferLimit),
+    logisticsBufferLimit: normalizedBuildingBufferLimit(saved.settings?.logisticsBufferLimit),
     autosaveIntervalSeconds: validAutosaveInterval(saved.settings?.autosaveIntervalSeconds)
       ? saved.settings.autosaveIntervalSeconds
       : initial.settings.autosaveIntervalSeconds,
@@ -1183,7 +1270,7 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 30,
+    version: 32,
     activePlanetId,
     entities,
     belts,
@@ -1208,6 +1295,7 @@ export function migrateGame(value: unknown): GameState | null {
     settings,
     achievements: { unlockedIds: unlockedAchievementIds },
     campaign: normalizeCampaignState(saved.campaign),
+    planetViewports,
     canvasBookmarks,
     canvasRegions,
     blueprints,
@@ -1413,6 +1501,27 @@ function parseEnvelope(raw: string, advanceOffline: boolean): LoadedGame | null 
   };
 }
 
+function parseDeferredEnvelope(raw: string): DeferredLoadedGame | null {
+  const inspection = inspectSave(raw);
+  if (!inspection.valid || !inspection.state) return null;
+  const state = inspection.state;
+  const savedAt = inspection.savedAt ?? Date.now();
+  const offlineSeconds = !state.paused
+    ? Math.min(getOfflineSimulationLimitSeconds(state), Math.max(0, (Date.now() - savedAt) / 1000))
+    : 0;
+  return { state, savedAt, offlineSeconds, offlineReport: null };
+}
+
+export function finalizeDeferredOfflineGame(loaded: DeferredLoadedGame, advancedState: GameState): LoadedGame {
+  if (loaded.offlineSeconds < 1) {
+    return { state: loaded.state, offlineSeconds: 0, offlineReport: null, recovery: loaded.recovery };
+  }
+  const returning = applyReturningReward(advancedState, loaded.savedAt, loaded.offlineSeconds);
+  const report = buildOfflineReport(loaded.state, returning.state, loaded.offlineSeconds);
+  if (returning.reward.length > 0) report.returningReward = returning.reward;
+  return { state: returning.state, offlineSeconds: loaded.offlineSeconds, offlineReport: report, recovery: loaded.recovery };
+}
+
 export function loadGame(): LoadedGame {
   try {
     const candidates: Array<{ source: SaveRecovery["source"]; raw: string | null; issues?: string[] }> = [
@@ -1438,6 +1547,34 @@ export function loadGame(): LoadedGame {
   } catch {
     return { state: createInitialState(), offlineSeconds: 0, offlineReport: null, recovery: { source: "fresh", issues: ["本地存储不可用，已创建临时工厂"] } };
   }
+}
+
+export function loadGameDeferredOffline(): DeferredLoadedGame {
+  try {
+    const candidates: Array<{ source: SaveRecovery["source"]; raw: string | null; issues?: string[] }> = [
+      { source: "primary", raw: window.localStorage.getItem(SAVE_KEY) },
+      { source: "backup", raw: window.localStorage.getItem(SAVE_BACKUP_KEY), issues: ["主存档校验失败，已回退到最近一次有效备份"] },
+    ];
+    for (const key of listSnapshotKeys()) {
+      candidates.push({ source: "snapshot", raw: window.localStorage.getItem(key), issues: ["主存档不可用，已回退到自动快照"] });
+    }
+    for (const candidate of candidates) {
+      if (!candidate.raw) continue;
+      const loaded = parseDeferredEnvelope(candidate.raw);
+      if (!loaded) continue;
+      if (candidate.source !== "primary") loaded.recovery = { source: candidate.source, issues: candidate.issues ?? [] };
+      return loaded;
+    }
+  } catch {
+    // Fall through to a temporary fresh state without mutating local storage.
+  }
+  return {
+    state: createInitialState(),
+    savedAt: Date.now(),
+    offlineSeconds: 0,
+    offlineReport: null,
+    recovery: { source: "fresh", issues: ["本地存储不可用，已创建临时工厂"] },
+  };
 }
 
 /** Inspect the save that Continue will load without advancing offline time. */
@@ -1580,6 +1717,15 @@ export function loadGameSlot(slotId: SaveSlotId): LoadedGame | null {
   try {
     const raw = window.localStorage.getItem(saveSlotKey(slotId));
     return raw ? parseEnvelope(raw, true) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function loadGameSlotDeferredOffline(slotId: SaveSlotId): DeferredLoadedGame | null {
+  try {
+    const raw = window.localStorage.getItem(saveSlotKey(slotId));
+    return raw ? parseDeferredEnvelope(raw) : null;
   } catch {
     return null;
   }

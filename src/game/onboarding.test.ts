@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { connectBelt, createInitialState, placeBuilding, setEntityRecipe } from "./engine";
-import { getCurrentOnboardingStep, getOnboardingFocusTarget, getOnboardingStep, ONBOARDING_STEPS } from "./onboarding";
+import { BASIC_ONBOARDING_STEPS, getCurrentBasicOnboardingStep, getCurrentOnboardingStep, getOnboardingFocusTarget, getOnboardingStep, isBasicOnboardingStepComplete, ONBOARDING_STEPS, type BasicOnboardingProgress } from "./onboarding";
 
 describe("progressive onboarding", () => {
+  it("requires five successful UI command milestones before the existing progression", () => {
+    const progress: BasicOnboardingProgress = { version: 1, completedEvents: [], skipped: false };
+    expect(BASIC_ONBOARDING_STEPS).toHaveLength(5);
+    expect(getCurrentBasicOnboardingStep(progress)?.id).toBe("basic-cargo");
+    progress.completedEvents.push("cargo-stowed", "construction-crafted", "building-placed");
+    expect(getCurrentBasicOnboardingStep(progress)?.id).toBe("basic-place-stack");
+    expect(isBasicOnboardingStepComplete(progress, BASIC_ONBOARDING_STEPS[2])).toBe(false);
+    progress.completedEvents.push("building-stacked", "belt-connected", "research-selected");
+    expect(getCurrentBasicOnboardingStep(progress)).toBeNull();
+  });
+
   it("advances from first mining through the white-matrix loop", () => {
     let state = createInitialState();
     expect(ONBOARDING_STEPS).toHaveLength(13);

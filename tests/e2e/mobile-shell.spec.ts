@@ -5,7 +5,7 @@ const MOBILE_UI_KEY = "dsp-idle-network.mobile-ui.v1";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-23-v0.6.0");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-23-v0.8.0");
   });
 });
 
@@ -296,6 +296,34 @@ test("mobile build selection exposes 44px stepper, explicit continuous placement
   await page.getByRole("button", { name: "完成", exact: true }).click();
   await expect(page.locator('.game-shell[data-mobile-canvas-mode="browse"]')).toBeVisible();
   await page.screenshot({ path: "artifacts/qa/mobile-stage2-factory-390.png", fullPage: true });
+});
+
+test("next mobile manufacturing finds the install-only spray module by player aliases", async ({ page }) => {
+  await page.addInitScript(() => {
+    const state = {
+      version: 31,
+      nextId: 1,
+      activePlanetId: "home",
+      entities: [],
+      belts: [],
+      construction: {},
+      tray: {},
+      planetTrays: { home: {} },
+      totalProduced: {},
+      research: { selectedTechId: null, pausedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["proliferator_1"] },
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+  await openNextMobile(page);
+  await page.getByRole("button", { name: "建造", exact: true }).click();
+  const build = page.getByRole("dialog", { name: "建造" });
+  await build.getByRole("tab", { name: "制造" }).click();
+  const search = build.getByLabel("搜索建造项目");
+  for (const term of ["喷涂机", "喷涂模块", "喷涂", "增产"]) {
+    await search.fill(term);
+    await expect(build.locator(".mobile-build-card").filter({ hasText: "喷涂机" })).toHaveCount(1);
+  }
 });
 
 test("technology, recipes and star map use route-backed mobile list and detail views", async ({ page }) => {

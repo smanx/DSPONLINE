@@ -5,6 +5,46 @@ export interface FactoryLayoutMove {
   position: { x: number; y: number };
 }
 
+export interface FactoryLayoutBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+const COLUMN_GAP = 340;
+const ROW_GAP = 240;
+const GRID_SIZE = 20;
+
+export function getFactoryLayoutCollisionBounds(entity: FactoryEntity, position = entity.position): FactoryLayoutBounds {
+  const fixedResource = entity.kind === "vein";
+  const megastructure = entity.buildingId === "construction_center";
+  const width = fixedResource ? 360 : megastructure ? 620 : 300;
+  const height = fixedResource ? 300 : megastructure ? 420 : 220;
+  const clearance = fixedResource ? 80 : 24;
+  return {
+    left: position.x - clearance,
+    top: position.y - clearance,
+    right: position.x + width + clearance,
+    bottom: position.y + height + clearance,
+  };
+}
+
+function collides(left: FactoryLayoutBounds, right: FactoryLayoutBounds): boolean {
+  return left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
+}
+
+function findFreePosition(entity: FactoryEntity, desired: { x: number; y: number }, obstacles: FactoryLayoutBounds[]): { x: number; y: number } {
+  for (let rowOffset = 0; rowOffset < 512; rowOffset += 1) {
+    const position = { x: desired.x, y: desired.y + rowOffset * ROW_GAP };
+    const bounds = getFactoryLayoutCollisionBounds(entity, position);
+    if (!obstacles.some((obstacle) => collides(bounds, obstacle))) return position;
+  }
+  // The bounded scan above is deliberately deterministic. This fallback is
+  // only reachable on deliberately pathological imported layouts.
+  return { x: desired.x + COLUMN_GAP, y: desired.y + 512 * ROW_GAP };
+}
+
 function entityOrder(left: FactoryEntity, right: FactoryEntity): number {
   const kindRank = (entity: FactoryEntity) => entity.kind === "vein" ? 0 : entity.kind === "storage" || entity.kind === "station" ? 1 : 2;
   return kindRank(left) - kindRank(right) || (left.buildingId ?? left.resourceId ?? "").localeCompare(right.buildingId ?? right.resourceId ?? "") || left.id.localeCompare(right.id);
@@ -48,8 +88,8 @@ export function planFactoryAutoLayout(state: GameState, planetId: PlanetId, enti
   const resolvedMax = Math.max(0, ...layer.values());
   unresolved.forEach((entity, index) => layer.set(entity.id, resolvedMax + 1 + Math.floor(index / 4)));
 
-  const originX = Math.round(Math.min(...movable.map((entity) => entity.position.x)) / 20) * 20;
-  const originY = Math.round(Math.min(...movable.map((entity) => entity.position.y)) / 20) * 20;
+  const originX = Math.round(Math.min(...movable.map((entity) => entity.position.x)) / GRID_SIZE) * GRID_SIZE;
+  const originY = Math.round(Math.min(...movable.map((entity) => entity.position.y)) / GRID_SIZE) * GRID_SIZE;
   const columns = new Map<number, FactoryEntity[]>();
   for (const entity of movable) {
     const column = layer.get(entity.id) ?? 0;
@@ -58,13 +98,17 @@ export function planFactoryAutoLayout(state: GameState, planetId: PlanetId, enti
     columns.set(column, entries);
   }
 
+  const obstacles = state.entities
+    .filter((entity) => entity.planetId === planetId && !movableIds.has(entity.id))
+    .map((entity) => getFactoryLayoutCollisionBounds(entity));
   const moves: FactoryLayoutMove[] = [];
   for (const [column, entries] of [...columns].sort(([left], [right]) => left - right)) {
     entries.sort(entityOrder);
-    entries.forEach((entity, row) => moves.push({
-      id: entity.id,
-      position: { x: originX + column * 340, y: originY + row * 240 },
-    }));
+    entries.forEach((entity, row) => {
+      const position = findFreePosition(entity, { x: originX + column * COLUMN_GAP, y: originY + row * ROW_GAP }, obstacles);
+      moves.push({ id: entity.id, position });
+      obstacles.push(getFactoryLayoutCollisionBounds(entity, position));
+    });
   }
   return moves;
 }

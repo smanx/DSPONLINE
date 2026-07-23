@@ -252,6 +252,7 @@ export type BuildingId =
 export type BeltTier = 1 | 2 | 3;
 export type SorterTier = 1 | 2 | 3;
 export type BeltRouteMode = "bezier" | "auto" | "upper" | "lower" | "manual";
+export type DefaultBeltRouteMode = Exclude<BeltRouteMode, "manual">;
 export type ProliferatorTier = 1 | 2 | 3;
 export type ProliferatorMode = "normal" | "extra" | "speed";
 export type ConveyorBeltId = "conveyor_belt_mk1" | "conveyor_belt_mk2" | "conveyor_belt_mk3";
@@ -681,6 +682,8 @@ export interface StationRoute {
   waypointStationIds?: string[];
   distanceLy?: number;
   warpersPerVessel?: number;
+  /** Station whose installed fleet is occupied by this route. Legacy routes use the demand station. */
+  vehicleStationId?: string;
 }
 
 export type DraggedItemSourceKind = "node" | "node-input" | "tray";
@@ -779,7 +782,14 @@ export interface DysonEngineeringSnapshot {
   launchEnergySpentMj: number;
   rayGenerationKw: number;
   receiverCapacityKw: number;
+  operationalReceiverCapacityKw: number;
   receiverLoadKw: number;
+  theoreticalReceptionRate: number;
+  receiverUtilization: number;
+  dysonPowerUtilization: number;
+  configuredReceiverCount: number;
+  blockedReceiverCount: number;
+  /** @deprecated Use one of the explicit reception/utilization metrics. */
   rayEfficiency: number;
   criticalPhotonPerMinute: number;
   antimatterPerMinute: number;
@@ -950,14 +960,29 @@ export interface RecipeFocusState {
 export interface GameSettings {
   simulationSpeed: SimulationSpeed;
   fontScale: FontScale;
+  theme: ThemeMode;
+  technologyLayout: TechnologyLayoutMode;
   performanceMode: boolean;
   reducedMotion: boolean;
   soundEnabled: boolean;
   allowDoubleClickZoom: boolean;
   beltHeatmapEnabled: boolean;
+  defaultBeltStackSize: CargoStackSize;
+  defaultBeltRouteMode: DefaultBeltRouteMode;
+  productionBufferLimit: number;
+  logisticsBufferLimit: number;
   autosaveIntervalSeconds: AutosaveIntervalSeconds;
   resourceMode: ResourceMode;
   difficulty: DifficultyMode;
+}
+
+export type ThemeMode = "dark" | "light" | "system";
+export type TechnologyLayoutMode = "standard" | "compact";
+
+export interface CanvasViewport {
+  x: number;
+  y: number;
+  zoom: number;
 }
 
 export interface CanvasBookmark {
@@ -1099,10 +1124,33 @@ export interface ConstructionAutomationState {
   cursor: number;
   totalCrafted: number;
   lastCraftedId: ConstructionId | null;
+  jobs: Record<string, ConstructionAutomationJob>;
+}
+
+export interface ConstructionAutomationRecipeStep {
+  kind: "material";
+  recipeId: RecipeId;
+  batches: number;
+  outputItemId: ItemId;
+  outputAmount: number;
+}
+
+export interface ConstructionAutomationBuildingStep {
+  kind: "building";
+  constructionId: ConstructionId;
+}
+
+export type ConstructionAutomationStep = ConstructionAutomationRecipeStep | ConstructionAutomationBuildingStep;
+
+export interface ConstructionAutomationJob {
+  constructionId: ConstructionId;
+  steps: ConstructionAutomationStep[];
+  stepIndex: number;
+  elapsedSeconds: number;
 }
 
 export interface GameState {
-  version: 30;
+  version: 32;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -1123,6 +1171,7 @@ export interface GameState {
   settings: GameSettings;
   achievements: AchievementState;
   campaign: CampaignState;
+  planetViewports: Record<PlanetId, CanvasViewport>;
   canvasBookmarks: CanvasBookmark[];
   canvasRegions: CanvasRegion[];
   blueprints: BlueprintDefinition[];

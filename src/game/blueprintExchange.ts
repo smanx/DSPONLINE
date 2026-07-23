@@ -63,8 +63,8 @@ function parseStationSlots(value: unknown, entityIndex: number, issues: string[]
   value.forEach((entry, slotIndex) => {
     if (!isRecord(entry) || (entry.itemId !== undefined && (typeof entry.itemId !== "string" || !(entry.itemId in ITEMS))) ||
       !["supply", "demand", "storage"].includes(String(entry.localMode)) || !["supply", "demand", "storage"].includes(String(entry.remoteMode)) ||
-      ![0.1, 0.25, 0.5, 1].includes(Number(entry.minimumLoad)) || !validNumber(entry.minStock, 0, 1_000_000) ||
-      !validNumber(entry.maxStock, 0, 1_000_000) || Number(entry.maxStock) < Number(entry.minStock) || ![0, 1, 2].includes(Number(entry.priority)) ||
+      ![0.1, 0.25, 0.5, 1].includes(Number(entry.minimumLoad)) || !validNumber(entry.minStock, 0, 100_000_000) ||
+      !validNumber(entry.maxStock, 0, 100_000_000) || Number(entry.maxStock) < Number(entry.minStock) || ![0, 1, 2].includes(Number(entry.priority)) ||
       (entry.routePolicy !== undefined && !["direct", "relay-preferred", "relay-required"].includes(String(entry.routePolicy))) ||
       (entry.warperBudget !== undefined && !validNumber(entry.warperBudget, 1, 4))) {
       issues.push(`设备 ${entityIndex + 1} 的物流槽位 ${slotIndex + 1} 无效`);
@@ -135,7 +135,7 @@ function parseBelt(value: unknown, index: number, entityKeys: Set<string>, issue
   if (!isRecord(value) || !validId(value.key) || typeof value.sourceKey !== "string" || typeof value.targetKey !== "string" ||
     !entityKeys.has(value.sourceKey) || !entityKeys.has(value.targetKey) || value.sourceKey === value.targetKey ||
     typeof value.itemId !== "string" || !(value.itemId in ITEMS) || !validNumber(value.lanes, 1, 64) ||
-    (value.tier !== 1 && value.tier !== 2 && value.tier !== 3) || (value.sorterTier !== 1 && value.sorterTier !== 2 && value.sorterTier !== 3) ||
+    (value.tier !== 1 && value.tier !== 2 && value.tier !== 3) ||
     (value.priority !== 0 && value.priority !== 1 && value.priority !== 2)) {
     issues.push(`线路 ${index + 1} 包含未知端点、物品或等级`);
     return null;
@@ -147,7 +147,7 @@ function parseBelt(value: unknown, index: number, entityKeys: Set<string>, issue
     itemId: value.itemId as ItemId,
     lanes: Math.floor(value.lanes),
     tier: value.tier,
-    sorterTier: value.sorterTier,
+    sorterTier: value.tier,
     priority: value.priority,
     ...(value.stackSize === 1 || value.stackSize === 2 || value.stackSize === 4 ? { stackSize: value.stackSize } : {}),
     ...(typeof value.monitorEnabled === "boolean" ? { monitorEnabled: value.monitorEnabled } : {}),
