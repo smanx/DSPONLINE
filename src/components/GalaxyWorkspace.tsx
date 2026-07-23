@@ -53,6 +53,7 @@ type GalaxyTab = "ranking" | "cloud" | "account";
 
 interface GalaxyWorkspaceProps {
   open: boolean;
+  focusTab?: GalaxyTab | null;
   accountState: AccountState;
   game: GameState;
   onClose: () => void;
@@ -99,6 +100,7 @@ function cloudSyncLabel(state: CloudSyncState): string {
 
 export function GalaxyWorkspace({
   open,
+  focusTab,
   accountState,
   game,
   onClose,
@@ -166,6 +168,9 @@ export function GalaxyWorkspace({
   }, [cloudEntries, cloudSession.status, cloudSession.user, localEntry, snapshot.entries]);
   const displayedLocalEntry = displayEntries.find((entry) => entry.isLocal);
 
+  useEffect(() => {
+    if (open && focusTab) setTab(focusTab);
+  }, [focusTab, open]);
   useEffect(() => setNameDraft(account.profile.displayName), [account.profile.displayName, account.profile.id]);
   useEffect(() => {
     setLocalCloudPayload(open && tab === "cloud" ? exportGame(game) : null);

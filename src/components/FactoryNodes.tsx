@@ -24,7 +24,7 @@ import {
 import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
 import { useEffect, useRef, useState } from "react";
 import { FUEL_ENERGY_MJ, ITEMS, MATRIX_ITEM_IDS, getBuilding, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getProliferator, getRecipe, getRecipesForBuilding } from "../game/content";
-import { MATERIAL_DELIVERY_SLOT_COUNT, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMaterialDeliveryItems, getStationDroneCapacity, getStationSlots, getStationVesselCapacity } from "../game/engine";
+import { MATERIAL_DELIVERY_SLOT_COUNT, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMaterialDeliveryItems, getStationDroneCapacity, getStationSlots, getStationVesselCapacity, type ResourceReserveSnapshot } from "../game/engine";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { RecipeCatalogPicker } from "./CatalogPicker";
 import type {
@@ -70,6 +70,7 @@ export interface FactoryNodeData extends Record<string, unknown> {
   networkTime: number;
   paused: boolean;
   powerFactor: number;
+  resourceReserve: ResourceReserveSnapshot | null;
   powerDemandMultiplier: number;
   solarGenerationMultiplier: number;
   windGenerationMultiplier: number;
@@ -290,6 +291,7 @@ export function VeinNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const sulfuricOcean = resourceId === "sulfuric_acid";
   const remote = resourceId === "silicon_ore" || resourceId === "titanium_ore";
   const installing = placement === extractorId;
+  const reserve = data.resourceReserve;
 
   const install = (event: React.MouseEvent) => {
     if (!installing) return;
@@ -319,11 +321,12 @@ export function VeinNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           <span>{water ? "海洋水源" : sulfuricOcean ? "硫酸海洋" : fluid ? "原油涌泉" : remote ? "远端矿区" : "资源矿脉"}</span>
           <strong>{resource.name}</strong>
         </div>
-        <small>∞</small>
+        <small className={reserve?.exhausted ? "resource-reserve--depleted" : ""}>{reserve?.infinite ? "∞" : reserve?.exhausted ? "枯竭" : `${reserve?.remainingPercent ?? 0}%`}</small>
       </header>
       <div className="vein-readout">
         <span>{extractor.shortName} <strong>×{entity.minerCount}</strong></span>
         <span title={data.status.label}>{entity.minerCount > 0 ? `${data.status.label} · ${entity.productionRate.toFixed(1)}/min` : data.status.label}</span>
+        <span className={reserve?.exhausted ? "vein-reserve vein-reserve--depleted" : "vein-reserve"}>{reserve?.infinite ? "无限储量" : `储量 ${formatAmount(reserve?.remaining ?? 0)} / ${formatAmount(reserve?.capacity ?? 0)} · ${reserve?.remainingPercent ?? 0}%`}</span>
       </div>
       {entity.minerCount > 0 ? (
         <WorkCycle label="采矿周期" progress={entity.progress} active={!data.paused && entity.utilization > 0.001} efficiency={data.powerFactor} />

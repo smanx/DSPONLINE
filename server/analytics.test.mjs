@@ -25,7 +25,7 @@ test("aggregates allowlisted analytics without retaining raw visitor identifiers
     activeSeconds: 18,
     client: "mobile-web",
     source: "community",
-    events: [{ name: "page_view", count: 1 }, { name: "game_enter", count: 1 }, { name: "open_technology", count: 2 }],
+    events: [{ name: "page_view", count: 1 }, { name: "game_enter", count: 1 }, { name: "open_technology", count: 2 }, { name: "mobile_nav_open", count: 3 }],
   }, { now: shanghaiMidnight });
   assert.deepEqual(accepted, { ok: true, duplicate: false, day: "2026-07-22" });
   const serialized = JSON.stringify(analytics);
@@ -38,6 +38,7 @@ test("aggregates allowlisted analytics without retaining raw visitor identifiers
   assert.equal(daily.gameStarts, 1);
   assert.equal(daily.activeSeconds, 18);
   assert.equal(daily.events.open_technology, 2);
+  assert.equal(daily.events.mobile_nav_open, 3);
   assert.equal(daily.clients["mobile-web"], 1);
   assert.equal(daily.sources.community, 1);
 

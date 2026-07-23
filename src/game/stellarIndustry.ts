@@ -8,13 +8,14 @@ import {
   getPlanetMetrics,
   getPlanetaryCargoCapacity,
   getPlanetaryTripSeconds,
+  getResourceReserveSnapshot,
   getStationMinimumCargo,
   getStationSlotCapacity,
   getStationSlots,
   isTechnologyCompleted,
   stationRouteRequiresWarp,
 } from "./engine";
-import { PLANET_INDUSTRY_ROLE_LABELS, getRecommendedPlanetRole, isInfiniteResource } from "./galaxy";
+import { PLANET_INDUSTRY_ROLE_LABELS, getRecommendedPlanetRole } from "./galaxy";
 import type {
   FactoryEntity,
   GameState,
@@ -348,11 +349,10 @@ function detectedPlanetRole(game: GameState, planetId: PlanetId): Exclude<Planet
 export function getPlanetIndustrySummaries(game: GameState, routes = getStellarRouteSnapshots(game)): PlanetIndustrySummary[] {
   return PLANET_LIST.map((planet) => {
     const entities = game.entities.filter((entity) => entity.planetId === planet.id);
-    const veins = entities.filter((entity) => entity.kind === "vein" && entity.resourceId &&
-      !isInfiniteResource(entity.resourceId, planet.id, game.settings.resourceMode, game.galaxy));
-    const reserveRemaining = veins.reduce((sum, vein) => sum + Math.max(0, Math.floor(vein.resourceRemaining ?? 0)), 0);
+    const veins = entities.filter((entity) => getResourceReserveSnapshot(game, entity)?.infinite === false);
+    const reserveRemaining = veins.reduce((sum, vein) => sum + (getResourceReserveSnapshot(game, vein)?.remaining ?? 0), 0);
     const miningPerMinute = veins.reduce((sum, vein) => sum + Math.max(0, vein.productionRate), 0);
-    const depletedVeins = veins.filter((vein) => (vein.resourceRemaining ?? 0) <= 0).length;
+    const depletedVeins = veins.filter((vein) => getResourceReserveSnapshot(game, vein)?.exhausted).length;
     const detectedRole = detectedPlanetRole(game, planet.id);
     const recommendedRole = getRecommendedPlanetRole(game, planet.id);
     const role = game.galaxy.planetRoles?.[planet.id] ?? "auto";
@@ -360,7 +360,7 @@ export function getPlanetIndustrySummaries(game: GameState, routes = getStellarR
     const planetRoutes = routes.filter((route) => route.targetPlanetId === planet.id || route.sourcePlanetId === planet.id);
     const issues: PlanetIndustryIssue[] = [];
     if (metrics.demandKw > 0 && metrics.powerFactor < 0.85) issues.push({ code: "power", label: `电力仅 ${Math.round(metrics.powerFactor * 100)}%` });
-    const depleted = veins.find((vein) => (vein.resourceRemaining ?? 0) <= 0);
+    const depleted = veins.find((vein) => getResourceReserveSnapshot(game, vein)?.exhausted);
     if (depleted) issues.push({ code: "depleted", label: "存在枯竭矿脉", entityId: depleted.id });
     const blockedRoute = planetRoutes.find((route) => route.status !== "active" && route.status !== "ready" && route.status !== "missing-stock" && route.status !== "target-full");
     if (blockedRoute) issues.push({ code: "route", label: blockedRoute.statusLabel, entityId: blockedRoute.targetStationId });

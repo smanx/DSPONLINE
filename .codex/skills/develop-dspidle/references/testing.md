@@ -14,7 +14,7 @@ npm run test:e2e
 npm run desktop:pack
 ```
 
-Current workspace and deployed `0.5.0` baseline: 268 Vitest tests, 97 Playwright Chrome tests, game state v30 and cloud schema v6.
+Current local `0.6.0` candidate: 272 Vitest tests and 108 Playwright Chrome tests. Deployed `0.5.0` baseline: 268 Vitest and 97 Playwright tests. Both remain game state v30 and cloud schema v6.
 
 ## Choose By Change
 

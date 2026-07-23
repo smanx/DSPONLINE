@@ -1,7 +1,7 @@
 import { Check, ChevronDown, ChevronUp, FlaskConical, Gauge, ListOrdered, LockKeyhole, PackageCheck, Pause, Pickaxe, Play, Rocket, Satellite, Timer, X, Zap } from "lucide-react";
 import type { CSSProperties } from "react";
-import { useEffect, useState } from "react";
-import { MATRIX_ITEM_IDS, PLANET_LIST, TECHNOLOGY_LIST, getTechnology } from "../game/content";
+import { useEffect, useRef, useState } from "react";
+import { ITEMS, MATRIX_ITEM_IDS, PLANET_LIST, TECHNOLOGY_LIST, getTechnology } from "../game/content";
 import { canQueueTechnology, getDysonSailAbsorptionMultiplier, getInterstellarCargoCapacity, getLogisticsSpeedMultiplier, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getRayReceiverCapacityKw, getRecipeSpeedMultiplier, getSolarSailLifetimeSeconds, isTechnologyCompleted } from "../game/engine";
 import { INFINITE_RESEARCH_DEFINITIONS, getInfiniteResearchCompletion, getInfiniteResearchCost, getInfiniteResearchLevel, isEndgameUnlocked } from "../game/endgame";
 import type { GameState, InfiniteResearchId, ItemId, TechId } from "../game/types";
@@ -20,6 +20,9 @@ interface TechnologyWorkspaceProps {
   onSelectInfiniteResearch: (researchId: InfiniteResearchId) => void;
   onInfiniteResearchAutomation: (enabled: boolean) => void;
   focusTechId?: TechId | null;
+  mobile?: boolean;
+  mobileSubview?: string | null;
+  onMobileOpenDetail?: (subview: string) => void;
 }
 
 function networkMatrixStock(game: GameState, itemId: ItemId): number {
@@ -31,9 +34,13 @@ function networkMatrixStock(game: GameState, itemId: ItemId): number {
   return Math.floor(nodeStock + trayStock + (game.cargo?.itemId === itemId ? game.cargo.amount : 0));
 }
 
-export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseResearch, onCancelResearch, onResumeResearch, onRemoveQueued, onSelectInfiniteResearch, onInfiniteResearchAutomation, focusTechId }: TechnologyWorkspaceProps) {
+export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseResearch, onCancelResearch, onResumeResearch, onRemoveQueued, onSelectInfiniteResearch, onInfiniteResearchAutomation, focusTechId, mobile = false, mobileSubview, onMobileOpenDetail }: TechnologyWorkspaceProps) {
   const [focusedTechId, setFocusedTechId] = useState<TechId | null>(null);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
+  const [mobileFilter, setMobileFilter] = useState<"available" | "active" | "all">("available");
+  const mobileListRef = useRef<HTMLDivElement | null>(null);
+  const mobileListScrollRef = useRef(0);
+  const previousMobileSubviewRef = useRef<string | null>(null);
   const horizontalPan = useHorizontalPan<HTMLDivElement>({ wheelMode: "horizontal" });
   useEffect(() => {
     if (!open || !focusTechId) return;
@@ -47,6 +54,20 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
       window.clearTimeout(clear);
     };
   }, [focusTechId, open]);
+  useEffect(() => {
+    if (!mobile || !open) return;
+    if (previousMobileSubviewRef.current && !mobileSubview) {
+      window.requestAnimationFrame(() => {
+        if (mobileListRef.current) mobileListRef.current.scrollTop = mobileListScrollRef.current;
+      });
+    }
+    previousMobileSubviewRef.current = mobileSubview ?? null;
+  }, [mobile, mobileSubview, open]);
+  useEffect(() => {
+    if (!mobile || !open || !focusTechId || !onMobileOpenDetail) return;
+    if (mobileListRef.current) mobileListRef.current.scrollTop = 0;
+    onMobileOpenDetail(`tech:${focusTechId}`);
+  }, [focusTechId, mobile, onMobileOpenDetail, open]);
   if (!open) return null;
   const selected = getTechnology(game.research.selectedTechId);
   const paused = getTechnology(game.research.pausedTechId);
@@ -61,6 +82,64 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
   const selectedProgressTotal = displayedTechnology?.costs.reduce((sum, cost) =>
     sum + Math.min(cost.amount, selectedProgress[cost.itemId] ?? 0), 0) ?? activeInfiniteProgress?.progress ?? 0;
   const maximumTier = Math.max(...TECHNOLOGY_LIST.map((technology) => technology.tier));
+
+  if (mobile) {
+    const detailTechId = mobileSubview?.startsWith("tech:") ? mobileSubview.slice(5) as TechId : null;
+    const detailTechnology = getTechnology(detailTechId);
+    const visibleTechnologies = TECHNOLOGY_LIST.filter((technology) => {
+      const complete = isTechnologyCompleted(game, technology.id);
+      const active = game.research.selectedTechId === technology.id || game.research.pausedTechId === technology.id || game.research.queuedTechIds.includes(technology.id);
+      if (mobileFilter === "active") return active;
+      if (mobileFilter === "available") return !complete && (active || canQueueTechnology(game, technology.id));
+      return true;
+    });
+    const mobileProgressPercent = selectedCostTotal > 0 ? Math.min(100, selectedProgressTotal / selectedCostTotal * 100) : 0;
+    return (
+      <section className={`technology-workspace mobile-workspace mobile-technology${detailTechnology ? " mobile-workspace--detail" : ""}`} role="dialog" aria-modal="true" aria-label="科技树">
+        {detailTechnology ? <div className="mobile-workspace-scroll mobile-technology-detail">
+          <header className="mobile-detail-heading"><i>{isTechnologyCompleted(game, detailTechnology.id) ? <Check size={20} /> : <FlaskConical size={20} />}</i><span><small>科技层级 {String(detailTechnology.tier + 1).padStart(2, "0")}</small><strong>{detailTechnology.name}</strong></span></header>
+          <p className="mobile-detail-summary">{detailTechnology.summary}</p>
+          <section className="mobile-detail-section"><header>研究矩阵</header><div className="mobile-tech-cost-list">{detailTechnology.costs.map((cost) => { const progress = game.research.progressByTech[detailTechnology.id]?.[cost.itemId] ?? 0; return <span key={cost.itemId}><ItemGlyph itemId={cost.itemId} /><em>{ITEMS[cost.itemId].name}</em><strong>{progress}/{cost.amount}</strong></span>; })}</div></section>
+          <section className="mobile-detail-section"><header>前置科技</header><div className="mobile-tech-prerequisites">{detailTechnology.prerequisites.length ? detailTechnology.prerequisites.map((id) => <span className={isTechnologyCompleted(game, id) ? "complete" : ""} key={id}>{isTechnologyCompleted(game, id) ? <Check size={15} /> : <LockKeyhole size={15} />}<strong>{getTechnology(id)?.name}</strong></span>) : <p>基础科技，无前置要求</p>}</div></section>
+          <section className="mobile-detail-section"><header>解锁内容</header><div className="mobile-tech-unlocks">{detailTechnology.unlocks.map((unlock) => <span key={unlock}><PackageCheck size={15} />{unlock}</span>)}</div></section>
+          <div className="mobile-detail-spacer" />
+          <footer className="mobile-detail-actionbar">
+            {isTechnologyCompleted(game, detailTechnology.id) ? <button type="button" disabled><Check size={18} />科技已完成</button>
+              : game.research.selectedTechId === detailTechnology.id ? <><button type="button" onClick={onPauseResearch}><Pause size={18} />暂停研究</button><button className="warning" type="button" onClick={onCancelResearch}><X size={18} />取消并保留进度</button></>
+                : game.research.pausedTechId === detailTechnology.id ? <button className="primary" type="button" disabled={Boolean(selected || activeInfinite)} onClick={onResumeResearch}><Play size={18} />继续研究</button>
+                  : game.research.queuedTechIds.includes(detailTechnology.id) ? <button className="warning" type="button" onClick={() => onRemoveQueued(detailTechnology.id)}><X size={18} />移出科研队列</button>
+                    : <button className="primary" type="button" disabled={!canQueueTechnology(game, detailTechnology.id)} onClick={() => onSelect(detailTechnology.id)}><FlaskConical size={18} />{game.research.selectedTechId || activeInfinite ? "加入科研队列" : "开始研究"}</button>}
+          </footer>
+        </div> : <div className="mobile-workspace-scroll" ref={mobileListRef}>
+          <section className="mobile-research-status">
+            <div><span>{selected || activeInfinite ? "当前研究" : paused ? "研究已暂停" : "科研空闲"}</span><strong>{displayedTechnology?.name ?? activeInfinite?.name ?? "选择一个可研究科技"}</strong><em>{Math.round(mobileProgressPercent)}%</em></div>
+            <i><b style={{ width: `${mobileProgressPercent}%` }} /></i>
+            <footer><span>{selectedProgressTotal} / {selectedCostTotal} 矩阵</span><strong>队列 {game.research.queuedTechIds.length}</strong></footer>
+          </section>
+          <nav className="mobile-workspace-sticky mobile-tech-filter" aria-label="科技筛选">{(["available", "active", "all"] as const).map((filter) => <button className={mobileFilter === filter ? "active" : ""} type="button" key={filter} onClick={() => setMobileFilter(filter)}>{{ available: "可研究", active: "进行中", all: "全部" }[filter]}</button>)}</nav>
+          <div className="mobile-tech-list">{Array.from({ length: maximumTier + 1 }, (_, tier) => {
+            const tierTechnologies = visibleTechnologies.filter((technology) => technology.tier === tier);
+            if (!tierTechnologies.length) return null;
+            return <section key={tier}><header>层级 {String(tier + 1).padStart(2, "0")}</header><div>{tierTechnologies.map((technology) => {
+              const complete = isTechnologyCompleted(game, technology.id);
+              const active = game.research.selectedTechId === technology.id;
+              const pausedTech = game.research.pausedTechId === technology.id;
+              const queueIndex = game.research.queuedTechIds.indexOf(technology.id);
+              const available = canQueueTechnology(game, technology.id);
+              const progress = game.research.progressByTech[technology.id] ?? {};
+              const done = technology.costs.reduce((sum, cost) => sum + Math.min(cost.amount, progress[cost.itemId] ?? 0), 0);
+              const total = technology.costs.reduce((sum, cost) => sum + cost.amount, 0);
+              return <button className={`${complete ? "complete" : ""}${active ? " active" : ""}${pausedTech ? " paused" : ""}`} type="button" key={technology.id} onClick={() => { mobileListScrollRef.current = mobileListRef.current?.scrollTop ?? 0; if (mobileListRef.current) mobileListRef.current.scrollTop = 0; onMobileOpenDetail?.(`tech:${technology.id}`); }}>
+                <i>{complete ? <Check size={18} /> : active ? <Play size={18} /> : pausedTech ? <Pause size={18} /> : queueIndex >= 0 ? <ListOrdered size={18} /> : available ? <FlaskConical size={18} /> : <LockKeyhole size={18} />}</i>
+                <span><strong>{technology.name}</strong><small>{technology.summary}</small>{!available && !complete && queueIndex < 0 && !pausedTech ? <em>前置：{technology.prerequisites.map((id) => getTechnology(id)?.name).join("、")}</em> : null}</span>
+                <b>{pausedTech ? "暂停" : queueIndex >= 0 ? `队列 #${queueIndex + 1}` : complete ? "完成" : `${done}/${total}`}</b><ChevronDown size={17} />
+              </button>;
+            })}</div></section>;
+          })}{visibleTechnologies.length === 0 ? <div className="mobile-workspace-empty"><FlaskConical size={24} /><span>当前筛选下没有科技</span></div> : null}</div>
+        </div>}
+      </section>
+    );
+  }
 
   return (
     <section className="technology-workspace" role="dialog" aria-modal="true" aria-label="科技树">

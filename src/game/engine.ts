@@ -3276,15 +3276,30 @@ export interface ColonizationRequirements {
   status: "colonized" | "technology" | "prerequisite-system" | "system-locked" | "materials" | "ready";
   reason: string;
   sourcePlanetId: PlanetId;
-  costs: Array<{ itemId: ItemId; current: number; required: number; missing: number }>;
+  costs: Array<{
+    itemId: ItemId;
+    current: number;
+    required: number;
+    missing: number;
+    source: "planet-tray" | "portable-fleet";
+  }>;
 }
 
 export function getColonizationRequirements(state: GameState, planetId: PlanetId): ColonizationRequirements {
   const planet = getPlanet(planetId);
   const system = getStarSystem(planet.systemId);
   const costs = getPlanetIndustrialProfile(state, planetId).colonyCost.map((cost) => {
-    const current = Math.max(0, Math.floor(state.tray[cost.itemId] ?? 0));
-    return { itemId: cost.itemId, current, required: cost.amount, missing: Math.max(0, cost.amount - current) };
+    const portableFleetCost = isPortableFleetItem(cost.itemId);
+    const current = Math.max(0, Math.floor(portableFleetCost
+      ? state.portableFleet?.[cost.itemId as PortableFleetItemId] ?? 0
+      : state.tray[cost.itemId] ?? 0));
+    return {
+      itemId: cost.itemId,
+      current,
+      required: cost.amount,
+      missing: Math.max(0, cost.amount - current),
+      source: portableFleetCost ? "portable-fleet" as const : "planet-tray" as const,
+    };
   });
   const base = { sourcePlanetId: state.activePlanetId, costs };
   if (isPlanetColonized(state, planetId)) return { ...base, status: "colonized", reason: "已建立殖民前哨" };
@@ -3298,9 +3313,15 @@ export function getColonizationRequirements(state: GameState, planetId: PlanetId
     return { ...base, status: "system-locked", reason: `需要先完成${system.name}勘探` };
   }
   if (costs.some((cost) => cost.missing > 0)) {
-    return { ...base, status: "materials", reason: "当前所在行星的物资托盘材料不足" };
+    const missingFleet = costs.filter((cost) => cost.source === "portable-fleet" && cost.missing > 0);
+    const missingMaterials = costs.filter((cost) => cost.source === "planet-tray" && cost.missing > 0);
+    const reasons = [
+      missingMaterials.length > 0 ? "当前所在行星的物资托盘材料不足" : null,
+      missingFleet.length > 0 ? `随身载具不足：${missingFleet.map((cost) => `${ITEMS[cost.itemId].name}缺 ${cost.missing}`).join("、")}` : null,
+    ].filter(Boolean);
+    return { ...base, status: "materials", reason: reasons.join("；") };
   }
-  return { ...base, status: "ready", reason: "材料满足，可建立殖民前哨" };
+  return { ...base, status: "ready", reason: "物资与闲置载具均满足，可建立殖民前哨" };
 }
 
 export function canColonizePlanet(state: GameState, planetId: PlanetId): boolean {
@@ -3308,10 +3329,15 @@ export function canColonizePlanet(state: GameState, planetId: PlanetId): boolean
 }
 
 export function colonizePlanet(state: GameState, planetId: PlanetId): GameState {
-  if (!canColonizePlanet(state, planetId)) return state;
+  const requirements = getColonizationRequirements(state, planetId);
+  if (requirements.status !== "ready") return state;
   const next = copyState(state);
-  for (const cost of getPlanetIndustrialProfile(next, planetId).colonyCost) {
-    next.tray[cost.itemId] = Math.max(0, Math.floor((next.tray[cost.itemId] ?? 0) - cost.amount));
+  for (const cost of requirements.costs) {
+    if (cost.source === "portable-fleet" && isPortableFleetItem(cost.itemId)) {
+      next.portableFleet[cost.itemId] = Math.max(0, Math.floor((next.portableFleet[cost.itemId] ?? 0) - cost.required));
+    } else {
+      next.tray[cost.itemId] = Math.max(0, Math.floor((next.tray[cost.itemId] ?? 0) - cost.required));
+    }
   }
   next.planetTrays[next.activePlanetId] = { ...next.tray };
   next.exploration.colonizedPlanetIds.push(planetId);
@@ -4413,9 +4439,11 @@ export function dropCargoToTray(state: GameState): GameState {
   const next = copyState(state);
   const cargo = next.cargo;
   if (!cargo) return state;
-  const moved = storeInTray(next, cargo.itemId, cargo.amount);
-  cargo.amount -= moved;
-  if (cargo.amount < 1) next.cargo = null;
+  // A player-controlled cursor must never become trapped by an automatic tray
+  // limit. Protective/manual returns are lossless; automated writers continue
+  // to use storeInTray() and remain capacity-limited.
+  addToTray(next, cargo.itemId, Math.max(0, Math.floor(cargo.amount)));
+  next.cargo = null;
   return next;
 }
 
@@ -6032,21 +6060,48 @@ export function getGalacticIndustrySnapshot(state: GameState): GalacticIndustryS
   };
 }
 
+export interface ResourceReserveSnapshot {
+  infinite: boolean;
+  exhausted: boolean;
+  remaining: number | null;
+  capacity: number | null;
+  remainingRatio: number;
+  remainingPercent: number;
+}
+
+export function getResourceReserveSnapshot(state: GameState, entity: FactoryEntity): ResourceReserveSnapshot | null {
+  if (entity.kind !== "vein" || !entity.resourceId) return null;
+  const infinite = isInfiniteResource(entity.resourceId, entity.planetId, state.settings.resourceMode, state.galaxy);
+  if (infinite) {
+    return { infinite: true, exhausted: false, remaining: null, capacity: null, remainingRatio: 1, remainingPercent: 100 };
+  }
+  const remaining = Math.max(0, Math.floor(entity.resourceRemaining ?? 0));
+  const capacity = Math.max(remaining, Math.floor(entity.resourceCapacity ?? remaining));
+  const remainingRatio = capacity > 0 ? Math.max(0, Math.min(1, remaining / capacity)) : 0;
+  return {
+    infinite: false,
+    exhausted: remaining < 1,
+    remaining,
+    capacity,
+    remainingRatio,
+    remainingPercent: Math.round(remainingRatio * 100),
+  };
+}
+
 export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity): EntityOperatingStatus {
   if (state.paused) return { code: "paused", label: "模拟已暂停", tone: "idle" };
   const entityPowerFactor = getEntityPowerFactor(state, entity);
 
   if (entity.kind === "vein") {
+    if (getResourceReserveSnapshot(state, entity)?.exhausted) {
+      return { code: "resource-depleted", label: "资源已枯竭", tone: "blocked" };
+    }
     if (entity.minerCount < 1) return {
       code: "idle",
       label: ITEMS[entity.resourceId!].kind === "fluid" ? `等待${extractorFor(entity).shortName}` : "可手动采集",
       tone: "idle",
     };
     const extractor = extractorFor(entity);
-    if (entity.resourceId && !isInfiniteResource(entity.resourceId, entity.planetId, state.settings.resourceMode, state.galaxy) &&
-      (entity.resourceRemaining ?? 0) < 1) {
-      return { code: "resource-depleted", label: "矿脉已枯竭", tone: "blocked" };
-    }
     const capacity = extractor.outputCapacity * entity.minerCount;
     if ((entity.outputs[entity.resourceId!] ?? 0) >= capacity - EPSILON) {
       return { code: "output-blocked", label: "输出缓存已满", tone: "blocked" };

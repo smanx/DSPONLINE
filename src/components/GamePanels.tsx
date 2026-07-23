@@ -63,7 +63,7 @@ import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { ItemCatalogPicker, RecipeCatalogPicker } from "./CatalogPicker";
 import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getSorterConstructionId, getTechnology, isConveyorBeltId } from "../game/content";
-import { MATERIAL_DELIVERY_SLOT_COUNT, MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltNetworkIds, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPlanetTrayItemLimit, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationSlots, getStationVesselCapacity, getStationWarperAutoRefillTarget, getStationWarperCapacity, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
+import { MATERIAL_DELIVERY_SLOT_COUNT, MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canCraftConstruction, canHandcraftRecipe, canInstallSprayCoater, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, canUpgradeSorter, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltNetworkIds, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPlanetTrayItemLimit, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getResourceReserveSnapshot, getSorterCapacity, getStationDroneCapacity, getStationMinimumCargo, getStationSlots, getStationVesselCapacity, getStationWarperAutoRefillTarget, getStationWarperCapacity, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import { getPlanetIndustrialProfile, getPlanetOrbitalYields } from "../game/galaxy";
 import { analyzeBeltNetwork } from "../game/network";
 import type {
@@ -746,15 +746,22 @@ function EntityInspector({
   if (entity.kind === "vein") {
     const item = getItem(entity.resourceId!);
     const extractor = getBuilding(getExtractorBuildingId(entity.resourceId!));
+    const reserve = getResourceReserveSnapshot(game, entity)!;
+    const sourceLabel = reserve.infinite
+      ? entity.resourceId === "water" ? "无限海洋水源" : entity.resourceId === "sulfuric_acid" ? "无限硫酸海洋" : item.kind === "fluid" ? "无限资源涌泉" : "无限资源矿脉"
+      : reserve.exhausted ? "资源已枯竭" : item.kind === "fluid" ? "有限资源涌泉" : "有限资源矿脉";
     return (
       <div className="inspector-content">
         <div className="inspector-identity">
           <ItemMark itemId={entity.resourceId!} />
-          <div><span>{entity.resourceId === "water" ? "无限海洋水源" : entity.resourceId === "sulfuric_acid" ? "无限硫酸海洋" : item.kind === "fluid" ? "无限原油涌泉" : "无限资源矿脉"}</span><strong>{item.name}</strong></div>
+          <div><span>{sourceLabel}</span><strong>{item.name}</strong></div>
         </div>
         <dl className="metric-ledger">
           <div><dt>{extractor.shortName}</dt><dd>×{entity.minerCount}</dd></div>
           <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
+          <div><dt>剩余储量</dt><dd>{reserve.infinite ? "无限" : formatAmount(reserve.remaining ?? 0)}</dd></div>
+          <div><dt>初始总量</dt><dd>{reserve.infinite ? "无限" : formatAmount(reserve.capacity ?? 0)}</dd></div>
+          <div><dt>剩余比例</dt><dd className={reserve.exhausted ? "status-text status-text--blocked" : undefined}>{reserve.infinite ? "无限" : `${reserve.remainingPercent}%`}</dd></div>
           <div><dt>自动产出</dt><dd>{entity.productionRate.toFixed(1)}/min</dd></div>
           <div><dt>采矿科技</dt><dd>{getMiningSpeedMultiplier(game).toFixed(2)}×</dd></div>
           <div><dt>输出缓存</dt><dd>{formatAmount(entity.outputs[entity.resourceId!] ?? 0)}</dd></div>
@@ -1525,7 +1532,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
   );
 }
 
-const BUILD_ORDER: Array<BuildingId | ConveyorBeltId> = [
+export const CONSTRUCTION_BUILD_ORDER: Array<BuildingId | ConveyorBeltId> = [
   "wind_turbine",
   "solar_panel",
   "geothermal_power_station",
@@ -1564,7 +1571,7 @@ const BUILD_ORDER: Array<BuildingId | ConveyorBeltId> = [
   "construction_center",
 ];
 
-function buildIcon(id: BuildingId | ConveyorBeltId) {
+export function constructionBuildIcon(id: BuildingId | ConveyorBeltId) {
   if (id === "wind_turbine") return <Wind size={18} />;
   if (id === "solar_panel") return <Sun size={18} />;
   if (id === "geothermal_power_station") return <ThermometerSun size={18} />;
@@ -1617,7 +1624,7 @@ const COMPACT_CONSTRUCTION_KEY = "dsp-idle-network.construction-compact.v1";
 function loadRecentConstruction(): Array<BuildingId | ConveyorBeltId> {
   try {
     const value = JSON.parse(window.localStorage.getItem(RECENT_CONSTRUCTION_KEY) ?? "[]") as unknown;
-    return Array.isArray(value) ? value.filter((id): id is BuildingId | ConveyorBeltId => typeof id === "string" && BUILD_ORDER.includes(id as BuildingId | ConveyorBeltId)).slice(0, 8) : [];
+    return Array.isArray(value) ? value.filter((id): id is BuildingId | ConveyorBeltId => typeof id === "string" && CONSTRUCTION_BUILD_ORDER.includes(id as BuildingId | ConveyorBeltId)).slice(0, 8) : [];
   } catch {
     return [];
   }
@@ -1643,7 +1650,7 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
   const [recent, setRecent] = useState<Array<BuildingId | ConveyorBeltId>>(loadRecentConstruction);
   const [compact, setCompact] = useState(loadCompactConstruction);
   const horizontalPan = useHorizontalPan<HTMLDivElement>();
-  const unlockedBuildOrder = BUILD_ORDER.filter((id) => {
+  const unlockedBuildOrder = CONSTRUCTION_BUILD_ORDER.filter((id) => {
     if ((game.construction[id] ?? 0) > 0) return true;
     if (isConveyorBeltId(id) && game.belts.some((belt) => belt.tier === getBeltTier(id))) return true;
     if (id === "mining_machine" && game.entities.some((entity) => entity.minerCount > 0)) return true;
@@ -1751,7 +1758,7 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
                 onDragEnd={() => onPlacementChange(null)}
                 title={!compatiblePlanet ? id === "geothermal_power_station" ? `${label}只能部署在烬原 II` : activePlanet.kind === "gas-giant" ? `${label}不能部署在气态巨星` : `${label}只能部署在气态巨星` : isBelt ? `选择${label}连接节点端口` : `部署${label}${placementCount > 1 ? ` ×${placementCount}` : ""}`}
               >
-                <i>{buildIcon(id)}</i>
+                <i>{constructionBuildIcon(id)}</i>
                 <span>{label}</span>
                 <strong>×{count}</strong>
               </button>
@@ -1822,7 +1829,7 @@ export function BuildingPlacementCursor({ buildingId, count, x, y }: {
   return (
     <div className="building-placement-cursor" style={{ transform: `translate3d(${x + 16}px, ${y + 16}px, 0)` }}>
       <div className="building-placement-array" aria-hidden="true">
-        {previewTiles.map((index) => <i key={index}>{buildIcon(buildingId)}</i>)}
+        {previewTiles.map((index) => <i key={index}>{constructionBuildIcon(buildingId)}</i>)}
       </div>
       <span>{building.name}</span>
       <strong>阵列 ×{count}</strong>
@@ -1845,6 +1852,8 @@ export function HeaderControls({
   onOpenCampaign,
   onOpenConstructionCenter,
   onOpenCommandPalette,
+  showMobileUiSwitch = false,
+  onMobileUiSwitch,
 }: {
   game: GameState;
   onReturnToMenu: () => void;
@@ -1860,6 +1869,8 @@ export function HeaderControls({
   onOpenCampaign: () => void;
   onOpenConstructionCenter: () => void;
   onOpenCommandPalette: () => void;
+  showMobileUiSwitch?: boolean;
+  onMobileUiSwitch?: () => void;
 }) {
   const [overflowOpen, setOverflowOpen] = useState(false);
   const powerTone = game.metrics.powerFactor >= 0.999 ? "positive" : game.metrics.powerFactor > 0 ? "warning" : "negative";
@@ -1889,9 +1900,10 @@ export function HeaderControls({
         {game.entities.some((entity) => entity.buildingId === "construction_center") ? <button className="header-action--overflowable" type="button" onClick={onOpenConstructionCenter} title="打开建筑制造中心" aria-label="打开建筑制造中心"><Factory size={17} /></button> : null}
         <button className="header-action--overflowable" type="button" onClick={onOpenStarMap} title="打开星图" aria-label="打开星图"><Telescope size={17} /></button>
         <button className="header-action--overflowable" type="button" onClick={onOpenStatistics} title="打开生产统计" aria-label="打开生产统计"><BarChart3 size={17} /></button>
-        <button className="header-action--overflowable" type="button" onClick={onOpenRecipes} title="打开配方图鉴" aria-label="打开配方图鉴"><BookOpen size={17} /></button>
+        <button className="header-action--overflowable" type="button" onClick={onOpenRecipes} title="打开生产资料库" aria-label="打开生产资料库"><BookOpen size={17} /></button>
         <button className="header-action--overflowable" type="button" onClick={onOpenTechnology} title="打开科技树" aria-label="打开科技树"><FlaskConical size={17} /></button>
         <button className="header-action--overflowable header-command-action" type="button" onClick={onOpenCommandPalette} title="打开命令面板（Ctrl/⌘+K）" aria-label="打开命令面板" aria-keyshortcuts="Control+K Meta+K"><Command size={17} /></button>
+        {showMobileUiSwitch && onMobileUiSwitch ? <button className="header-mobile-ui-command" type="button" onClick={onMobileUiSwitch} title="体验新版手机界面" aria-label="体验新版手机界面"><Sparkles size={17} /></button> : null}
         <button className="header-overflow-command" type="button" onClick={() => setOverflowOpen((open) => !open)} aria-expanded={overflowOpen} title="更多工作区" aria-label="更多工作区"><MoreHorizontal size={18} /></button>
         {overflowOpen ? <div className="header-overflow-menu" role="menu">
           <button type="button" role="menuitem" onClick={() => runOverflowAction(onReturnToMenu)}><House size={15} />主菜单</button>
@@ -1901,8 +1913,9 @@ export function HeaderControls({
           {game.entities.some((entity) => entity.buildingId === "construction_center") ? <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenConstructionCenter)}><Factory size={15} />建筑制造中心</button> : null}
           <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenStarMap)}><Telescope size={15} />星图</button>
           <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenStatistics)}><BarChart3 size={15} />生产统计</button>
-          <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenRecipes)}><BookOpen size={15} />配方图鉴</button>
+          <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenRecipes)}><BookOpen size={15} />生产资料库</button>
           <button type="button" role="menuitem" onClick={() => runOverflowAction(onOpenTechnology)}><FlaskConical size={15} />科技树</button>
+          {showMobileUiSwitch && onMobileUiSwitch ? <button type="button" role="menuitem" onClick={() => runOverflowAction(onMobileUiSwitch)}><Sparkles size={15} />新版手机界面</button> : null}
         </div> : null}
         <button className={`mobile-toggle${game.cargo ? " mobile-toggle--cargo" : ""}`} type="button" onClick={onOpenResources} title={game.cargo ? "物资已拿起，打开物资托盘放下" : "物资托盘"} aria-label={game.cargo ? "物资已拿起，打开物资托盘" : "打开物资托盘"}><PackageOpen size={17} /></button>
         <button className="mobile-toggle" type="button" onClick={onOpenInspector} title="检查器" aria-label="打开检查器"><PanelRight size={17} /></button>

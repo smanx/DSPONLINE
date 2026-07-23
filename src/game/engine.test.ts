@@ -70,6 +70,7 @@ import {
   getPlanetTrayItemLimit,
   getRayReceiverCapacityKw,
   getRecipeSpeedMultiplier,
+  getResourceReserveSnapshot,
   getSolarSailLifetimeSeconds,
   getSorterCapacity,
   getStationDroneCapacity,
@@ -3183,16 +3184,15 @@ describe("factory simulation", () => {
     expect(state.planetTrayItemLimits.giant).toBe(1_000_000);
   });
 
-  it("leaves cursor, node and delivery-hub overflow at the source when the tray is full", () => {
+  it("lets a manual cursor return overflow while node and delivery-hub automation respect the tray limit", () => {
     let state = createInitialState();
     state = setPlanetTrayItemLimit(state, "home", 1_000);
     state.tray.iron_ore = 995;
     state.cargo = { itemId: "iron_ore", amount: 20, origin: { kind: "tray" } };
     state = dropCargoToTray(state);
-    expect(state.tray.iron_ore).toBe(1_000);
-    expect(state.cargo).toMatchObject({ itemId: "iron_ore", amount: 15 });
+    expect(state.tray.iron_ore).toBe(1_015);
+    expect(state.cargo).toBeNull();
 
-    state.cargo = null;
     state.construction.storage_mk1 = 1;
     state = placeBuilding(state, "storage_mk1", { x: 0, y: 0 });
     const storage = state.entities.find((entity) => entity.buildingId === "storage_mk1")!;
@@ -3245,20 +3245,63 @@ describe("factory simulation", () => {
     let state = createInitialState();
     state.exploration.unlockedSystemIds.push("borealis");
     state.tray.titanium_alloy = 10;
-    state.tray.logistics_drone = 5;
+    state.portableFleet.logistics_drone = 5;
     expect(getColonizationRequirements(state, "boreal_giant")).toMatchObject({
       status: "ready",
       sourcePlanetId: "home",
       costs: expect.arrayContaining([
-        expect.objectContaining({ itemId: "logistics_drone", current: 5, required: 5, missing: 0 }),
+        expect.objectContaining({ itemId: "logistics_drone", current: 5, required: 5, missing: 0, source: "portable-fleet" }),
       ]),
     });
     expect(canColonizePlanet(state, "boreal_giant")).toBe(true);
     state = colonizePlanet(state, "boreal_giant");
     expect(state.exploration.colonizedPlanetIds).toContain("boreal_giant");
     expect(state.tray.titanium_alloy).toBe(0);
-    expect(state.tray.logistics_drone).toBe(0);
+    expect(state.portableFleet.logistics_drone).toBe(0);
     expect(setActivePlanet(state, "boreal_giant").activePlanetId).toBe("boreal_giant");
+  });
+
+  it("validates all colony materials before deducting tray stock or portable vehicles", () => {
+    const state = createInitialState();
+    state.exploration.unlockedSystemIds.push("borealis");
+    state.tray.titanium_alloy = 10;
+    state.portableFleet.logistics_drone = 4;
+
+    const requirements = getColonizationRequirements(state, "boreal_giant");
+    expect(requirements).toMatchObject({ status: "materials" });
+    expect(requirements.reason).toContain("物流运输机缺 1");
+    const blocked = colonizePlanet(state, "boreal_giant");
+    expect(blocked).toBe(state);
+    expect(blocked.tray.titanium_alloy).toBe(10);
+    expect(blocked.portableFleet.logistics_drone).toBe(4);
+  });
+
+  it("counts and consumes idle logistics vessels from the portable fleet for colonization", () => {
+    let state = createInitialState();
+    state.exploration.unlockedSystemIds.push("aurora");
+    const requirements = getColonizationRequirements(state, "aurora_giant");
+    const vesselCost = requirements.costs.find((cost) => cost.itemId === "logistics_vessel");
+    expect(vesselCost).toMatchObject({ source: "portable-fleet", current: 0, required: 2, missing: 2 });
+    state.tray.titanium_alloy = 16;
+    state.portableFleet.logistics_vessel = 2;
+
+    state = colonizePlanet(state, "aurora_giant");
+
+    expect(state.exploration.colonizedPlanetIds).toContain("aurora_giant");
+    expect(state.tray.titanium_alloy).toBe(0);
+    expect(state.portableFleet.logistics_vessel).toBe(0);
+  });
+
+  it("lets the player return a complete cursor stack above the tray limit", () => {
+    let state = createInitialState();
+    state = setPlanetTrayItemLimit(state, "home", 1_000);
+    state.tray.iron_ingot = 1_000;
+    state.cargo = { itemId: "iron_ingot", amount: 100, origin: { kind: "node-output", id: "machine-1" } };
+
+    state = dropCargoToTray(state);
+
+    expect(state.tray.iron_ingot).toBe(1_100);
+    expect(state.cargo).toBeNull();
   });
 
   it("reports technology, prerequisite-system and material colonization blockers separately", () => {
@@ -3351,6 +3394,25 @@ describe("factory simulation", () => {
     const infiniteBefore = state.entities.find((entity) => entity.id === vein.id)?.resourceRemaining;
     state = manualMine(state, vein.id, 3);
     expect(state.entities.find((entity) => entity.id === vein.id)?.resourceRemaining).toBe(infiniteBefore);
+  });
+
+  it("reports one reserve snapshot for finite, depleted and genuinely infinite resources", () => {
+    const state = createInitialState();
+    const iron = state.entities.find((entity) => entity.id === "vein_iron")!;
+    iron.resourceRemaining = Math.floor((iron.resourceCapacity ?? 0) / 2);
+    expect(getResourceReserveSnapshot(state, iron)).toMatchObject({
+      infinite: false,
+      exhausted: false,
+      remaining: iron.resourceRemaining,
+      capacity: iron.resourceCapacity,
+      remainingPercent: 50,
+    });
+
+    iron.resourceRemaining = 0;
+    expect(getResourceReserveSnapshot(state, iron)).toMatchObject({ infinite: false, exhausted: true, remainingPercent: 0 });
+    expect(getEntityOperatingStatus(state, iron)).toMatchObject({ code: "resource-depleted", label: "资源已枯竭" });
+    const ocean = state.entities.find((entity) => entity.id === "vein_water")!;
+    expect(getResourceReserveSnapshot(state, ocean)).toMatchObject({ infinite: true, exhausted: false });
   });
 
   it("runs repeatable endgame research with universe matrices and keeps looping", () => {

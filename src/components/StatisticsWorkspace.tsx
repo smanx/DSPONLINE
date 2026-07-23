@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ITEMS, PLANET_LIST, getBuilding, getItem, getPlanet, getRecipe } from "../game/content";
 import { calculateProductionPlan, getProductionRecipeOptions } from "../game/planning";
 import { calculateFactoryStatistics, type ItemStatistics } from "../game/statistics";
-import { getGalacticIndustrySnapshot, getPowerGridMetrics, POWER_GRID_IDS, POWER_GRID_LABELS } from "../game/engine";
+import { getGalacticIndustrySnapshot, getPowerGridMetrics, getResourceReserveSnapshot, POWER_GRID_IDS, POWER_GRID_LABELS } from "../game/engine";
 import { GALACTIC_EXPORT_DEFINITIONS, INFINITE_RESEARCH_DEFINITIONS, getGalacticExportTarget, getInfiniteResearchCompletion, getInfiniteResearchCost, getInfiniteResearchLevel } from "../game/endgame";
 import { getPlanetIndustrialProfile } from "../game/galaxy";
 import { listBeltNetworks, type BeltHealth } from "../game/network";
@@ -44,6 +44,7 @@ interface StatisticsWorkspaceProps {
   onOpenCanvasBookmark: (bookmark: CanvasBookmark) => void;
   onRemoveCanvasBookmark: (bookmarkId: string) => void;
   focusTab?: StatisticsTab | null;
+  mobile?: boolean;
 }
 
 function ItemMark({ itemId }: { itemId: ItemId }) {
@@ -159,7 +160,7 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
   );
 }
 
-export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, onFocusEntity, onFocusBeltNetwork, onBulkRecipeChange, onBulkStationSlotApply, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark, focusTab }: StatisticsWorkspaceProps) {
+export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, onFocusEntity, onFocusBeltNetwork, onBulkRecipeChange, onBulkStationSlotApply, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark, focusTab, mobile = false }: StatisticsWorkspaceProps) {
   const [tab, setTab] = useState<StatisticsTab>("production");
   const [filter, setFilter] = useState<ItemFilter>("all");
   const [sort, setSort] = useState<ItemSort>("production");
@@ -168,6 +169,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
   const [planTarget, setPlanTarget] = useState(60);
   const [planPlanetId, setPlanPlanetId] = useState<PlanetId | "all">("all");
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
+  const [expandedItemId, setExpandedItemId] = useState<ItemId | null>(null);
   const statistics = useMemo(() => calculateFactoryStatistics(game), [game]);
   const galactic = useMemo(() => getGalacticIndustrySnapshot(game), [game]);
   const items = useMemo(() => sortItems(statistics.items.filter((item) => {
@@ -205,7 +207,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
     : game.metrics.demandKw > 0 ? 100 : 0;
 
   return (
-    <section className="statistics-workspace" role="dialog" aria-modal="true" aria-label="生产统计">
+    <section className={`statistics-workspace${mobile ? " mobile-workspace mobile-statistics" : ""}`} role="dialog" aria-modal="true" aria-label="生产统计">
       <header className="statistics-header">
         <div className="statistics-title">
           <i><BarChart3 size={20} /></i>
@@ -218,6 +220,8 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
         </div>
         <button className="statistics-close" type="button" onClick={onClose} title="关闭生产统计" aria-label="关闭生产统计"><X size={18} /></button>
       </header>
+
+      {mobile ? <section className="mobile-statistics-overview" aria-label="生产概览"><div><span>生产</span><strong>{rate(statistics.totalProductionPerMinute)}/min</strong></div><div><span>消耗</span><strong>{rate(statistics.totalConsumptionPerMinute)}/min</strong></div><div className={statistics.issues.length > 0 ? "warning" : ""}><span>异常</span><strong>{statistics.issues.length}</strong></div><div><span>供电</span><strong>{Math.round(game.metrics.powerFactor * 100)}%</strong></div></section> : null}
 
       <nav className="statistics-tabs" role="tablist" aria-label="统计视图">
         <button type="button" role="tab" aria-selected={tab === "management"} className={tab === "management" ? "active" : ""} onClick={() => setTab("management")}><Settings2 size={15} />管理</button>
@@ -261,13 +265,14 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
             <header><span>物品</span><span>生产 / min</span><span>消耗 / min</span><span>净增量 / min</span><span>网络库存</span><span>节点</span></header>
             <div>
               {items.length === 0 ? <div className="statistics-empty"><Box size={20} /><span>没有符合条件的物品</span></div> : items.map((item) => (
-                <div className="statistics-row" key={item.itemId}>
+                <div className={`statistics-row${mobile && expandedItemId === item.itemId ? " statistics-row--expanded" : ""}`} key={item.itemId} role={mobile ? "button" : undefined} tabIndex={mobile ? 0 : undefined} onClick={mobile ? () => setExpandedItemId((current) => current === item.itemId ? null : item.itemId) : undefined} onKeyDown={mobile ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setExpandedItemId((current) => current === item.itemId ? null : item.itemId); } } : undefined}>
                   <span className="statistics-item"><ItemMark itemId={item.itemId} /><strong>{getItem(item.itemId).name}</strong></span>
                   <span className="rate-positive">+{rate(item.productionPerMinute)}</span>
                   <span className="rate-negative">-{rate(item.consumptionPerMinute)}</span>
                   <span className={item.netPerMinute > 0.005 ? "rate-positive" : item.netPerMinute < -0.005 ? "rate-negative" : "rate-neutral"}>{item.netPerMinute > 0 ? "+" : ""}{rate(item.netPerMinute)}</span>
                   <span>{item.inventory.toLocaleString("zh-CN")}</span>
                   <span className={item.blockedProducerCount > 0 ? "node-count node-count--blocked" : "node-count"}>{item.producerCount} / {item.consumerCount}{item.blockedProducerCount > 0 ? ` · ${item.blockedProducerCount} 堵塞` : ""}</span>
+                  {mobile && expandedItemId === item.itemId ? <small className="statistics-row-detail">生产 {rate(item.productionPerMinute)}/min · 消耗 {rate(item.consumptionPerMinute)}/min · {item.producerCount} 个生产节点 / {item.consumerCount} 个消费节点</small> : null}
                 </div>
               ))}
             </div>
@@ -388,6 +393,13 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
           <section className="planet-profile-ledger">
             <header><span>当前行星工业档案</span><strong>种子 #{game.galaxy.seed}</strong></header>
             {(() => { const profile = getPlanetIndustrialProfile(game, game.activePlanetId); return <div className="planet-profile-grid"><span>矿脉储量 <strong>{Math.round(profile.reserveScale * 100)}%</strong></span><span>采矿速度 <strong>{Math.round(profile.miningMultiplier * 100)}%</strong></span><span>风力 <strong>{Math.round(profile.windMultiplier * 100)}%</strong></span><span>光照 <strong>{Math.round(profile.solarMultiplier * 100)}%</strong></span><span>地热 <strong>{Math.round(profile.geothermalMultiplier * 100)}%</strong></span><span>航程时间 <strong>{Math.round(profile.travelTimeMultiplier * 100)}%</strong></span><span>{profile.tidalLocked ? "潮汐锁定" : "自转周期"} <strong>{profile.tidalLocked ? "是" : "常规"}</strong></span><span>专属加成 <strong>{profile.specializationName}</strong></span></div>; })()}
+          </section>
+          <section className="power-grid-ledger resource-reserve-ledger">
+            <header><span>资源储量统计</span><span>资源状态</span><span>剩余 / 初始</span><span>剩余比例</span></header>
+            {game.entities.filter((entity) => entity.planetId === game.activePlanetId && entity.kind === "vein" && entity.resourceId).map((entity) => {
+              const reserve = getResourceReserveSnapshot(game, entity)!;
+              return <div className="power-grid-row" key={entity.id}><strong>{getItem(entity.resourceId!).name}</strong><span className={reserve.exhausted ? "warning" : ""}>{reserve.infinite ? "无限" : reserve.exhausted ? "资源已枯竭" : "有限资源"}</span><span>{reserve.infinite ? "无限" : `${reserve.remaining?.toLocaleString("zh-CN")} / ${reserve.capacity?.toLocaleString("zh-CN")}`}</span><span>{reserve.infinite ? "无限" : `${reserve.remainingPercent}%`}</span></div>;
+            })}
           </section>
           <section className="consumer-ledger">
             <header><span>耗电设备</span><span>当前需求</span><span>额定需求</span><span>状态</span></header>

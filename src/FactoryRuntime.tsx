@@ -1,6 +1,9 @@
 import { ReactFlowProvider } from "@xyflow/react";
 import { FactoryGame } from "./App";
 import type { LoadedGame } from "./game/storage";
+import "./styles/mobile-shell.css";
+import "./styles/mobile-factory.css";
+import "./styles/mobile-workspaces.css";
 
 interface FactoryRuntimeProps {
   launchId: number;

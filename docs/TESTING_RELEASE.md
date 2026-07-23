@@ -5,8 +5,8 @@
 | 层级 | 命令 | 当前规模 | 覆盖重点 |
 | --- | --- | ---: | --- |
 | 类型检查 | `npm run typecheck` | 全部前端 TS | 严格类型、Vite 配置 |
-| 单元/领域 | `npm test` | 工作区与线上 `0.5.0` 基线 268 项 | 引擎、v1-v30 存档、存档配额急救、外星系原油幂等迁移、采集设备回收、递归灰锤、殖民条件、四向分流、托盘上限、科研、电力、蓝图、规划、网络、性能与分槽云同步等 |
-| 浏览器 E2E | `npm run test:e2e` | 工作区与线上 `0.5.0` 基线 97 项 | 从开局到银河终局、保存失败急救、区域触摸缩放、灰锤单击、巨构真实尺寸、科技树滚轮隔离、右键菜单策略、双指从节点接管、星图条件、200% 字体和桌面/手机横竖屏回归 |
+| 单元/领域 | `npm test` | 本地 `0.6.0` 候选 272 项；线上 `0.5.0` 基线 268 项 | 引擎、v1-v30 存档、存档配额急救、殖民载具原子扣料、玩家满仓放下、统一资源储量、四向分流、托盘上限、科研、电力、蓝图、规划、网络、性能与分槽云同步等 |
+| 浏览器 E2E | `npm run test:e2e` | 本地 `0.6.0` 候选 108 项；线上 `0.5.0` 基线 97 项 | 从开局到银河终局、生产资料库、移动目录焦点、有限资源、殖民来源、储物仓 200% 字体、新旧手机壳、保存失败和桌面/手机横竖屏回归 |
 | 云服务 | `npm run test:server` | 22 项 | 账号验证/绑定/恢复/注销、设备会话、匿名统计、v3→v6 迁移、四槽云存档隔离、腾讯 SES 模板 API、模板变量约束、邮件隐私日志、排行榜和管理员保护 |
 | 运维工具 | `npm run test:ops` | 5 项 | SQLite 一致性快照、认证加密、异地复制、隔离恢复、篡改拒绝、Nginx 压缩与缓存边界、端点/磁盘探针和告警载荷 |
 | 生产构建 | `npm run build` | 1 次构建 | `tsc -b`、Vite chunk 和 PWA 资源 |
@@ -209,7 +209,7 @@ Web 发布应至少记录：构建 ID、入口 HTML、主 JS/CSS 体积、压缩
 - 为云服务增加独立 API 测试文件和临时 SQLite 重启测试。
 - 对存档 v1-v30 建立不可变 fixture 集，而不是只依赖测试内构造对象。
 - 对关键视觉状态建立少量稳定截图基线，避免只检查元素存在。
-- CI 同时运行前端单元、服务端测试和浏览器关键路径；完整 97 项可作为合并或夜间门禁。
+- CI 同时运行前端单元、服务端测试和浏览器关键路径；当前完整 108 项可作为合并或夜间门禁。
 
 ## 10. 第五批 / v29 本地验收（未发布）
 
@@ -250,3 +250,63 @@ Web 发布应至少记录：构建 ID、入口 HTML、主 JS/CSS 体积、压缩
 正式入口浏览器烟测覆盖 1440x900 桌面、390x844 手机竖屏和 844x390 手机横屏。香港 HTTPS 登录表单可用且邮件能力继续明确标注“正在开发中”；上海 HTTP 页面不渲染密码输入框。真实 v26 附件还在隔离浏览器上下文中通过正式域名完成导入与保存，得到 211,891 字节的 v30 存档、191 个实体和 119 条传送带；该检查只写入隔离浏览器本地存储，没有使用生产账号或上传云存档。
 
 尚未完成的质量记录仍是 Android Chrome 与 iPhone Safari 各连续 30 分钟的温度、耗电和真机帧率测试；本次已有玩家本地验收、Chrome 触摸仿真和正式域名横竖屏烟测，但不能把这些结果冒充真机长时间测试。完整制品、备份和回滚证据见 [releases/0.5.0.md](./releases/0.5.0.md)。
+
+## 12. 手机新版壳层阶段 0-3 本地验收（未发布）
+
+本节记录 2026-07-23 工作区中的 opt-in 移动壳层，不代表香港或上海已更新，也不改变 `GameState` v30 或存档格式。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm run build` | 通过 |
+| `npm test` | 27/27 文件、268/268 通过 |
+| `node --test server/analytics.test.mjs` | 3/3 通过 |
+| 新版 focused Playwright | 9/9 通过 |
+| 既有触摸/字体/工作区重点回归 | 8/8 通过 |
+| `git diff --check` | 通过 |
+
+新版用例覆盖 320×568、360×640、390×844、430×932、844×390、768×1024，80/100/125/150/200% 字体，经典/新版切换、五项导航、三档抽屉、移动建造/物资/检查器、44px 放置步进器、显式连续放置与布局模式、命令面板返回、详情层级与滚动恢复、全屏工作区首帧不透明、横竖屏世界中心与选中状态。既有回归另外覆盖单指平移、双指缩放、第二指从节点接管、56px 端口吸附、生产区域手柄、移动统计、星际工作区和大型工作区按需加载。截图输出包括：
+
+- `artifacts/qa/mobile-next-desktop-1440.png`
+- `artifacts/qa/mobile-next-portrait-390.png`
+- `artifacts/qa/mobile-next-landscape-844x390.png`
+- `artifacts/qa/mobile-next-font-200-390.png`
+- `artifacts/qa/mobile-next-font-200-hub-390.png`
+- `artifacts/qa/mobile-next-font-200-build-390.png`
+- `artifacts/qa/mobile-stage2-build-390.png`
+- `artifacts/qa/mobile-stage2-factory-390.png`
+- `artifacts/qa/mobile-stage2-inspector-full-390.png`
+- `artifacts/qa/mobile-stage3-technology-detail-390.png`
+- `artifacts/qa/mobile-stage3-recipe-detail-390.png`
+- `artifacts/qa/mobile-stage3-statistics-390.png`
+- `artifacts/qa/mobile-stage3-star-system-390.png`
+
+Chrome 桌面触摸仿真通过不等于 Android Chrome 或 iPhone Safari 真机门禁；阶段 4 的真机连续游玩、温度/耗电比较、低端设备长期性能和默认切换仍未完成。
+
+## 13. `0.6.0` 第七批与手机候选本地验收（未发布）
+
+以下结果针对 2026-07-23 当前脏工作区候选，不是正式 release manifest，也不表示香港或上海已经更新。应用 SemVer 为 `0.6.0`，GameState 仍为 v30、存档 envelope 仍为 v2、云 schema 仍为 v6。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 27/27 文件、272/272 通过 |
+| 服务端测试 | 隔离锁文件环境 22/22 通过，0 个依赖漏洞 |
+| 运维工具 | 隔离依赖环境 5/5 通过 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 108/108 通过，2 workers 约 5.1 分钟 |
+| 新版手机 focused Playwright | 9/9 通过 |
+| 候选制品清单 | `0.6.0-bd52c1c0e796-dirty`，98 个文件复验通过；仅用于本地诊断 |
+
+专项覆盖殖民费用从当前行星托盘与全局随身载具分源读取、缺载具零扣料、运输机与运输船消费、玩家主动满仓放下整组载荷、自动入库继续限容、有限/枯竭/真实无限资源统一判定、节点/检查器/统计一致显示、手机配方与物流目录不自动聚焦、桌面继续聚焦、小型储物仓 200% 字体输入输出分栏，以及七分区生产资料库、建筑实际配方速率、Mk.I/Mk.II/Mk.III 传送带 1/2/4 层吞吐和跨详情返回。
+
+视觉检查包括：
+
+- `artifacts/qa/production-library-building-1440.png`
+- `artifacts/qa/mobile-stage7-building-codex-390.png`
+- `artifacts/qa/mobile-stage7-library-844x390.png`
+- `artifacts/qa/finite-resource-reserve-1440.png`
+- `artifacts/qa/storage-mk1-font-200-1440.png`
+- `artifacts/qa/release-notes-2026-07-23-v060-390.png`
+
+本机 4320 API 正在被玩家试玩进程占用，Windows 锁定其 `better_sqlite3.node`，因此服务端与运维测试在 `artifacts/server-test-v060` 和 `artifacts/ops-test-v060` 中按同一源文件与锁文件隔离运行，没有结束试玩进程，也没有访问生产数据。正式部署前仍必须从干净提交重新执行依赖安装、生成 release manifest、创建并验证香港 SQLite 备份，再进行原子切换。Android Chrome 与 iPhone Safari 的 30 分钟真机温度、耗电、FPS 和 PWA standalone 仍未完成。

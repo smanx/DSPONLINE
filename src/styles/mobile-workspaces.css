@@ -1,0 +1,387 @@
+/* Phase 3 mobile workspaces. This file deliberately owns the next-shell
+   workspace overrides instead of extending the legacy media-query stack. */
+.game-shell[data-mobile-shell="true"] :is(
+  .technology-workspace,
+  .statistics-workspace,
+  .recipe-workspace,
+  .star-map-workspace,
+  .blueprint-workspace,
+  .dyson-planner-workspace,
+  .campaign-workspace,
+  .operations-workspace,
+  .galaxy-workspace,
+  .construction-center-workspace
+) {
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  background: #080f0c !important;
+  color: #c1d0cb;
+  isolation: isolate;
+  opacity: 1 !important;
+  animation: none !important;
+}
+
+.game-shell[data-mobile-shell="true"] :is(
+  .technology-workspace,
+  .statistics-workspace,
+  .recipe-workspace,
+  .star-map-workspace,
+  .blueprint-workspace,
+  .dyson-planner-workspace,
+  .campaign-workspace,
+  .operations-workspace,
+  .galaxy-workspace,
+  .construction-center-workspace
+) * { min-width: 0; }
+
+.game-shell[data-mobile-shell="true"] :is(
+  .technology-workspace,
+  .statistics-workspace,
+  .recipe-workspace,
+  .star-map-workspace,
+  .blueprint-workspace,
+  .dyson-planner-workspace,
+  .campaign-workspace,
+  .operations-workspace,
+  .galaxy-workspace,
+  .construction-center-workspace
+) :is(span, small, em, b, label, p, dt, dd, button, input, select) {
+  font-size: calc(12px * var(--ui-font-scale, 1)) !important;
+  letter-spacing: 0;
+}
+
+.game-shell[data-mobile-shell="true"] :is(
+  .technology-workspace,
+  .statistics-workspace,
+  .recipe-workspace,
+  .star-map-workspace,
+  .blueprint-workspace,
+  .dyson-planner-workspace,
+  .campaign-workspace,
+  .operations-workspace,
+  .galaxy-workspace,
+  .construction-center-workspace
+) strong { font-size: calc(13px * var(--ui-font-scale, 1)) !important; }
+
+.game-shell[data-mobile-shell="true"] :is(
+  .technology-header,
+  .statistics-header,
+  .recipe-header,
+  .star-map-header,
+  .blueprint-header,
+  .dyson-planner-header,
+  .campaign-header,
+  .operations-header,
+  .galaxy-header,
+  .construction-center-header
+) { display: none !important; }
+
+.game-shell[data-mobile-shell="true"] :is(
+  .technology-workspace,
+  .star-map-workspace,
+  .dyson-planner-workspace,
+  .campaign-workspace,
+  .operations-workspace,
+  .galaxy-workspace,
+  .construction-center-workspace
+) { overflow: hidden auto; }
+
+.game-shell[data-mobile-shell="true"] .mobile-workspace :is(small, label, p, em) {
+  letter-spacing: 0;
+}
+
+.game-shell[data-mobile-shell="true"] .mobile-workspace small {
+  font-size: calc(12px * var(--ui-font-scale, 1)) !important;
+}
+.game-shell[data-mobile-shell="true"] .mobile-workspace :is(button, input, select, label, p, small, em, dt, dd) {
+  font-size: max(calc(12px * var(--ui-font-scale, 1)), 1em) !important;
+}
+
+.mobile-workspace-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.mobile-workspace--detail > .mobile-workspace-scroll { display: flex; flex-direction: column; }
+.mobile-workspace--detail > .mobile-workspace-scroll > .mobile-detail-spacer { flex: 1 0 76px; }
+
+.mobile-workspace-sticky {
+  position: sticky !important;
+  z-index: 8;
+  top: 0;
+  background: #0c1310;
+}
+
+.mobile-detail-heading {
+  display: grid;
+  min-height: 76px;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #34463f;
+  background: #111916;
+}
+
+.mobile-detail-heading > i {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border: 1px solid #416057;
+  border-radius: 7px;
+  color: #72bdaf;
+}
+
+.mobile-detail-heading > span { display: grid; gap: 3px; }
+.mobile-detail-heading small { color: #82968f; }
+.mobile-detail-heading strong { font-size: calc(18px * var(--ui-font-scale, 1)) !important; }
+.mobile-detail-heading > b { color: #d4b767; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-detail-summary { margin: 0; padding: 12px; color: #a5b6b0; font-size: calc(13px * var(--ui-font-scale, 1)); line-height: 1.6; }
+
+.mobile-detail-section { margin: 0 10px 10px; border-top: 1px solid #34453f; }
+.mobile-detail-section > header { min-height: 40px; padding: 11px 4px 7px; color: #81978f; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-detail-section > p { margin: 0; padding: 10px; border: 1px solid #2f413a; border-radius: 6px; background: #101714; color: #a9bab4; font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.55; }
+.mobile-detail-spacer { min-height: 76px; }
+.mobile-detail-actionbar { position: sticky; z-index: 10; bottom: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; min-height: 64px; padding: 8px 10px; border-top: 1px solid #42594f; background: rgba(12, 19, 16, .98); }
+.mobile-detail-actionbar > button { display: flex; min-height: 48px; align-items: center; justify-content: center; gap: 7px; border: 1px solid #415d53; border-radius: 7px; background: #17231f; color: #aec4bd; font-size: calc(13px * var(--ui-font-scale, 1)); }
+.mobile-detail-actionbar > button:only-child { grid-column: 1 / -1; }
+.mobile-detail-actionbar > button.primary { border-color: #56897c; background: #19342a; color: #bde2d7; }
+.mobile-detail-actionbar > button.warning { border-color: #806049; color: #e0ad82; }
+.mobile-detail-actionbar > button:disabled { opacity: .48; }
+
+/* Technology list -> detail. */
+.game-shell[data-mobile-shell="true"] .mobile-technology { display: block !important; overflow: hidden; }
+.mobile-research-status { display: grid; gap: 6px; margin: 10px; padding: 10px; border: 1px solid #3b5148; border-radius: 7px; background: #111916; }
+.mobile-research-status > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; }
+.mobile-research-status > div span { grid-column: 1; color: #82968f; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-research-status > div strong { grid-column: 1; font-size: calc(15px * var(--ui-font-scale, 1)); }
+.mobile-research-status > div em { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: #73c0b2; font-size: calc(18px * var(--ui-font-scale, 1)); font-style: normal; }
+.mobile-research-status > i { height: 6px; overflow: hidden; border-radius: 3px; background: #283731; }
+.mobile-research-status > i b { display: block; height: 100%; background: #68bd8e; }
+.mobile-research-status > footer { display: flex; min-height: 24px; align-items: center; justify-content: space-between; color: #869b93; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-research-status > footer strong { color: #d2b765; }
+
+.mobile-tech-filter { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; min-height: 54px; padding: 5px 10px; border-block: 1px solid #30413a; }
+.mobile-tech-filter button { min-height: 44px; border: 1px solid #33483f; border-radius: 6px; background: #111a16; color: #8ba098; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-tech-filter button.active { border-color: #558b7e; background: #183027; color: #82ccbd; }
+.mobile-tech-list { padding: 5px 10px 22px; }
+.mobile-tech-list > section > header { min-height: 38px; padding: 12px 4px 6px; color: #758b83; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-tech-list > section > div { border-top: 1px solid #33463f; }
+.mobile-tech-list button { display: grid; width: 100%; min-height: 78px; grid-template-columns: 42px minmax(0, 1fr) auto 24px; align-items: center; gap: 8px; padding: 8px 7px; border-bottom: 1px solid #293832; background: #101714; color: #b8c9c3; text-align: left; }
+.mobile-tech-list button > i { display: grid; width: 40px; height: 40px; place-items: center; border: 1px solid #3b5149; border-radius: 6px; color: #738a82; }
+.mobile-tech-list button > span { display: grid; gap: 3px; }
+.mobile-tech-list button > span strong { font-size: calc(14px * var(--ui-font-scale, 1)); }
+.mobile-tech-list button > span small { overflow: hidden; color: #879b94; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-tech-list button > span em { color: #c39a62; font-size: calc(12px * var(--ui-font-scale, 1)); font-style: normal; line-height: 1.35; }
+.mobile-tech-list button > b { color: #d3b866; font-size: calc(12px * var(--ui-font-scale, 1)); white-space: nowrap; }
+.mobile-tech-list button.complete > i { border-color: #47795b; color: #75c48b; }
+.mobile-tech-list button.active { background: #172a22; box-shadow: inset 3px 0 0 #63b5a5; }
+.mobile-tech-list button.paused > i { color: #d5ae62; }
+.mobile-tech-cost-list,
+.mobile-tech-prerequisites,
+.mobile-tech-unlocks { display: grid; gap: 6px; }
+.mobile-tech-cost-list > span,
+.mobile-tech-prerequisites > span,
+.mobile-tech-unlocks > span { display: grid; min-height: 48px; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 6px 8px; border: 1px solid #30423b; border-radius: 6px; background: #101714; }
+.mobile-tech-cost-list .item-glyph { width: 28px; height: 28px; }
+.mobile-tech-cost-list em { font-size: calc(12px * var(--ui-font-scale, 1)); font-style: normal; }
+.mobile-tech-cost-list strong { color: #d6b865; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-tech-prerequisites > span { grid-template-columns: 24px minmax(0, 1fr); color: #cf9a6c; }
+.mobile-tech-prerequisites > span.complete { color: #78c38d; }
+.mobile-tech-prerequisites > p { margin: 0; padding: 10px; color: #81968e; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-tech-unlocks > span { grid-template-columns: 24px minmax(0, 1fr); color: #9eb4ad; font-size: calc(12px * var(--ui-font-scale, 1)); }
+
+/* Recipe index -> item detail. */
+.game-shell[data-mobile-shell="true"] .mobile-recipe { display: block !important; overflow: hidden auto !important; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; min-height: 0; padding: 7px 10px; border-bottom: 1px solid #33453e; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-search { min-height: 44px; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-search input { min-height: 42px; font-size: calc(13px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-filters { display: flex; grid-column: 1 / -1; gap: 5px; overflow: auto hidden; scrollbar-width: none; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-filters button { min-width: 70px; min-height: 44px; flex: 1 0 auto; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-result-count { align-self: center; color: #82968f; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-layout { display: block; min-height: 0; overflow: visible; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-index { display: block; width: auto; max-height: none; padding: 0 10px 22px; overflow: visible; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-index > button { display: grid; min-height: 58px; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 8px; padding: 6px 7px; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-index > button strong { font-size: calc(14px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-detail { display: block; min-width: 0; padding: 0 10px 28px; overflow: visible; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-item-header { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 8px; padding: 10px 2px; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-item-header > .item-mark { width: 42px; height: 42px; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-item-header > div p { white-space: normal; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-item-actions,
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-item-header > dl { grid-column: 1 / -1; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-item-actions button { min-height: 44px; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-relations { display: grid; grid-template-columns: 1fr; gap: 6px; padding: 8px 0; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-relations > svg { transform: rotate(90deg); justify-self: center; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-relations > div { min-width: 0; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-method-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-method { min-width: 0; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-flow { display: grid; grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr); gap: 4px; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-item-link { min-height: 44px; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe :is(span, strong) { font-size: calc(12px * var(--ui-font-scale, 1)) !important; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-item-header > div > strong { font-size: calc(18px * var(--ui-font-scale, 1)) !important; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-section > header > span { font-size: calc(14px * var(--ui-font-scale, 1)) !important; }
+.game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-method > header strong { font-size: calc(13px * var(--ui-font-scale, 1)) !important; }
+
+/* Statistics and production management use one outer scroll container. */
+.game-shell[data-mobile-shell="true"] .mobile-statistics { display: block !important; overflow: hidden auto !important; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics-overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; padding: 8px; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics-overview > div { display: grid; min-height: 58px; align-content: center; gap: 3px; padding: 6px; border: 1px solid #31443d; border-radius: 6px; background: #101714; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics-overview span { color: #82968f; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-statistics-overview strong { font-size: calc(13px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-statistics-overview .warning strong { color: #e18476; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs button strong { font-size: calc(12px * var(--ui-font-scale, 1)) !important; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs { position: sticky; z-index: 12; top: 0; display: grid; min-height: 92px; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 4px 6px; overflow: hidden; border-bottom: 1px solid #35473f; background: #0c1310; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs button { display: flex; min-width: 0; min-height: 40px; align-items: center; justify-content: center; gap: 3px; padding: 2px 3px; overflow: hidden; font-size: calc(12px * var(--ui-font-scale, 1)); text-overflow: ellipsis; white-space: nowrap; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs button > svg { display: none; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics :is(.statistics-content, .production-management, .network-overview) { height: auto; min-height: 0; overflow: visible !important; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-toolbar { position: sticky; z-index: 10; top: 92px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; padding: 7px 8px; background: #0e1613; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-filter { display: flex; grid-column: 1 / -1; gap: 4px; overflow: auto hidden; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-filter button { min-width: 72px; min-height: 44px; flex: 1 0 auto; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-search,
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-sort { min-height: 44px; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-table { display: block; overflow: visible; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-table > header { display: none; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-table > div { display: grid; gap: 7px; padding: 8px; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row { display: grid; min-height: 78px; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; padding: 9px; border: 1px solid #31443c; border-radius: 7px; background: #101714; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row > span { display: block; font-size: calc(12px * var(--ui-font-scale, 1)); text-align: right; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row > span:nth-child(2)::before { content: "生产 "; color: #7f948c; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row > span:nth-child(3)::before { content: "消耗 "; color: #7f948c; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row > span:nth-child(4)::before { content: "净增 "; color: #7f948c; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row > span:nth-child(5)::before { content: "库存 "; color: #7f948c; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row > .statistics-item { grid-row: 1 / span 3; align-self: center; text-align: left; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row > .statistics-item strong { font-size: calc(14px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row > .node-count { grid-column: 1 / -1; text-align: left; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row > .node-count::before { content: "节点 "; color: #7f948c; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row-detail { grid-column: 1 / -1; padding-top: 7px; border-top: 1px solid #2e4039; color: #8ea39b; line-height: 1.5; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics :is(.efficiency-summary-band, .power-summary-band, .planning-summary-band, .network-summary-band, .production-management-summary, .galactic-summary-grid) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics :is(.efficiency-summary-band, .power-summary-band, .planning-summary-band, .network-summary-band, .production-management-summary, .galactic-summary-grid) > * { min-height: 74px; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics :is(.production-management-toolbar, .planning-create-bar, .planning-layout, .network-workspace-layout, .galactic-panels) { display: grid; grid-template-columns: 1fr; height: auto; overflow: visible; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics :is(.production-management-ledger, .network-ledger, .planning-detail, .consumer-ledger, .power-grid-ledger) { overflow: visible; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics :is(.production-management-ledger, .network-ledger, .consumer-ledger, .power-grid-ledger) > header { display: none; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics :is(.production-management-row, .network-row, .consumer-row, .power-grid-row) { display: grid; grid-template-columns: 1fr; gap: 7px; min-height: 72px; padding: 9px; border: 1px solid #31443d; border-radius: 7px; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .planning-requirements > header { display: none; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .planning-requirement { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 9px; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .planning-requirement-item { grid-column: 1 / -1; padding-left: 0 !important; }
+
+/* Star systems and planets use a route-backed two-level detail flow. */
+.game-shell[data-mobile-shell="true"] .mobile-star-map { display: grid !important; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map.mobile-workspace--detail { grid-template-rows: minmax(0, 1fr); }
+.game-shell[data-mobile-shell="true"] .mobile-star-map > .star-map-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); min-height: 52px; padding: 4px 8px; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map > .star-map-tabs button { min-height: 44px; }
+.mobile-star-system-list { padding: 8px 10px 22px; }
+.mobile-star-system-list > header { display: flex; min-height: 40px; align-items: center; justify-content: space-between; color: #82968f; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-star-system-list > button,
+.mobile-system-planets > button { display: grid; width: 100%; min-height: 76px; grid-template-columns: 44px minmax(0, 1fr) auto 24px; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid #2c3c36; background: #101714; color: #b8c8c3; text-align: left; }
+.mobile-star-system-list > button > i,
+.mobile-system-planets > button > i { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid #40574f; border-radius: 50%; }
+.mobile-star-system-list > button > span,
+.mobile-system-planets > button > span { display: grid; gap: 2px; }
+.mobile-star-system-list > button small,
+.mobile-system-planets > button small { color: #81968e; }
+.mobile-star-system-list > button strong,
+.mobile-system-planets > button strong { font-size: calc(14px * var(--ui-font-scale, 1)); }
+.mobile-star-system-list > button em { color: #92a59e; font-size: calc(12px * var(--ui-font-scale, 1)); font-style: normal; }
+.mobile-star-system-list > button > b,
+.mobile-system-planets > button > b { color: #d0b464; font-size: calc(12px * var(--ui-font-scale, 1)); white-space: nowrap; }
+.mobile-star-system-detail,
+.mobile-planet-detail { padding-bottom: 10px; }
+.mobile-system-planets { border-top: 1px solid #30423b; }
+.mobile-planet-environment { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 10px; }
+.mobile-planet-environment > div { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 5px; padding: 7px 9px; border: 1px solid #30423b; border-radius: 6px; background: #101714; }
+.mobile-planet-environment span { color: #82968f; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-planet-environment strong { font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-colony-requirements { margin: 10px; padding: 10px; border: 1px solid #6e4a44; border-radius: 7px; background: #201512; }
+.mobile-colony-requirements > header { display: grid; gap: 3px; }
+.mobile-colony-requirements > header strong { color: #eb8e7e; font-size: calc(14px * var(--ui-font-scale, 1)); }
+.mobile-colony-requirements > header small { color: #aa8d84; }
+.mobile-colony-requirements > p { color: #d59b8d; font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.5; }
+.mobile-colony-requirements > div { display: grid; gap: 5px; }
+.mobile-colony-requirements > div > span { display: grid; min-height: 46px; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid #5c3f39; border-radius: 6px; }
+.mobile-colony-requirements > div > span.ready { border-color: #3f684f; color: #75c18b; }
+.mobile-colony-requirements .item-glyph { width: 27px; height: 27px; }
+.mobile-colony-requirements em { display: grid; min-width: 0; font-size: calc(12px * var(--ui-font-scale, 1)); font-style: normal; }
+.mobile-colony-requirements em small { overflow: hidden; color: #aa8d84; font-size: calc(11px * var(--ui-font-scale, 1)); text-overflow: ellipsis; white-space: nowrap; }
+.mobile-colony-requirements > button { width: 100%; min-height: 48px; margin-top: 8px; border: 1px solid #527d70; border-radius: 6px; background: #183127; color: #b9ddd2; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .stellar-industry { height: auto; overflow: visible; padding: 8px; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map :is(.stellar-system-overview, .interplanetary-diagnostics, .stellar-route-console) { overflow: visible; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map :is(.stellar-system-row, .stellar-route-row, .interplanetary-diagnostic) { min-width: 0; }
+
+/* Blueprint list -> editor. */
+.game-shell[data-mobile-shell="true"] .mobile-blueprints { display: block !important; overflow: hidden auto !important; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-import-file { display: none; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-import-panel { position: static; width: auto; margin: 8px; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-library { display: grid; grid-template-columns: 1fr; gap: 8px; padding: 9px; overflow: visible; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-card { min-width: 0; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints:not(.mobile-workspace--detail) .blueprint-card > :not(header):not(.blueprint-composition):not(.mobile-blueprint-open) { display: none; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints:not(.mobile-workspace--detail) .blueprint-card { display: grid; min-height: 116px; grid-template-rows: auto auto 48px; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-card > header { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 7px; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-card > header > em { grid-column: 1 / -1; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .mobile-blueprint-open { display: flex; min-height: 48px; align-items: center; justify-content: space-between; padding: 0 10px; border: 0; border-top: 1px solid #30413a; background: #15231e; color: #7bc1b4; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints.mobile-workspace--detail .blueprint-card :is(button, input, select) { min-height: 44px; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-transform-controls .segmented-control { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .construction-queue-panel { height: auto; margin: 8px; overflow: visible; }
+
+/* Remaining stage-3 workspaces share a single vertical page without exposing
+   the frozen canvas or preserving desktop multi-column scroll regions. */
+.game-shell[data-mobile-shell="true"] :is(.operations-tabs, .galaxy-tabs) { position: sticky; z-index: 12; top: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; min-height: 52px; padding: 4px 6px; overflow: visible; background: #0c1310; }
+.game-shell[data-mobile-shell="true"] :is(.operations-tabs, .galaxy-tabs) button { min-height: 44px; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] :is(.operations-panel, .galaxy-panel, .campaign-chapter-list, .construction-center-list) { height: auto; max-height: none; overflow: visible !important; }
+.game-shell[data-mobile-shell="true"] :is(.operations-body, .galaxy-ranking-view, .galaxy-cloud-view, .galaxy-account-view) { height: auto; min-height: 0; overflow: visible !important; }
+.game-shell[data-mobile-shell="true"] :is(.operations-workspace, .galaxy-workspace, .campaign-workspace, .construction-center-workspace) { display: block !important; padding-bottom: 18px; }
+.game-shell[data-mobile-shell="true"] .construction-center-toolbar { position: sticky; z-index: 10; top: 0; display: grid; grid-template-columns: 1fr; gap: 7px; padding: 8px; background: #0c1310; }
+.game-shell[data-mobile-shell="true"] .construction-center-toolbar :is(input, button, .construction-center-toggle) { min-height: 44px; }
+.game-shell[data-mobile-shell="true"] .construction-center-categories { display: flex; gap: 4px; overflow: auto hidden; }
+.game-shell[data-mobile-shell="true"] .construction-center-categories button { min-width: 68px; flex: 1 0 auto; }
+.game-shell[data-mobile-shell="true"] .construction-center-status { display: grid; grid-template-columns: 1fr; gap: 5px; margin: 8px; }
+.game-shell[data-mobile-shell="true"] .construction-center-list { padding: 0 8px; }
+.game-shell[data-mobile-shell="true"] .construction-center-row { display: grid; min-height: 116px; grid-template-columns: 40px minmax(0, 1fr); gap: 7px; padding: 9px; }
+.game-shell[data-mobile-shell="true"] .construction-center-row > :is(.construction-center-materials, .construction-center-stock, .construction-center-target) { grid-column: 1 / -1; }
+.game-shell[data-mobile-shell="true"] .construction-center-target > div { grid-template-columns: 48px minmax(64px, 1fr) 48px; }
+.game-shell[data-mobile-shell="true"] .construction-center-target :is(button, input) { min-height: 48px; }
+.game-shell[data-mobile-shell="true"] .campaign-chapter-list { padding: 8px; }
+.game-shell[data-mobile-shell="true"] .campaign-chapter-index { font-size: calc(12px * var(--ui-font-scale, 1)) !important; }
+.game-shell[data-mobile-shell="true"] .campaign-chapter-header { min-height: 52px; }
+.game-shell[data-mobile-shell="true"] .campaign-task-list { display: grid; grid-template-columns: 1fr; }
+.game-shell[data-mobile-shell="true"] .campaign-task-card { min-height: 88px; }
+.game-shell[data-mobile-shell="true"] .dyson-planner-workspace { display: block !important; padding: 8px; }
+.game-shell[data-mobile-shell="true"] .dyson-planner-layout { display: grid; grid-template-columns: 1fr; height: auto; overflow: visible; }
+.game-shell[data-mobile-shell="true"] .dyson-planner-layout > * { width: auto; height: auto; max-height: none; overflow: visible; }
+.game-shell[data-mobile-shell="true"] .dyson-system-tabs { position: sticky; z-index: 8; top: 0; display: flex; min-height: 48px; overflow: auto hidden; background: #0c1310; }
+.game-shell[data-mobile-shell="true"] .dyson-system-tabs button { min-width: 110px; min-height: 44px; }
+.game-shell[data-mobile-shell="true"] .galaxy-ranking-layout,
+.game-shell[data-mobile-shell="true"] .galaxy-account-layout { display: grid; grid-template-columns: 1fr; height: auto; overflow: visible; }
+.game-shell[data-mobile-shell="true"] .galaxy-ranking-toolbar { display: grid; grid-template-columns: 1fr; height: auto; padding: 8px; }
+.game-shell[data-mobile-shell="true"] .galaxy-category-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.game-shell[data-mobile-shell="true"] .galaxy-category-tabs button { min-height: 56px; }
+.game-shell[data-mobile-shell="true"] .galaxy-summary-band { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 8px; }
+.game-shell[data-mobile-shell="true"] .galaxy-leaderboard { overflow: visible; }
+.game-shell[data-mobile-shell="true"] .galaxy-leaderboard > header { display: none; }
+.game-shell[data-mobile-shell="true"] .galaxy-leaderboard-rows { display: grid; gap: 7px; padding: 8px; }
+.game-shell[data-mobile-shell="true"] .galaxy-leaderboard-rows > article { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 7px; min-height: 92px; padding: 8px; border: 1px solid #31443d; border-radius: 7px; }
+.game-shell[data-mobile-shell="true"] .galaxy-leaderboard-rows > article > :not(.galaxy-rank-number):not(.galaxy-rank-identity) { grid-column: 1 / -1; }
+.game-shell[data-mobile-shell="true"] .galaxy-upload-panel { width: auto; margin: 8px; }
+.game-shell[data-mobile-shell="true"] .galaxy-account-list { width: auto; max-height: none; overflow: visible; }
+
+html:not([data-native-ui-scale])[data-ui-font-scale="150"] .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs,
+html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); min-height: 180px; }
+html:not([data-native-ui-scale])[data-ui-font-scale="150"] .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-toolbar,
+html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-toolbar { top: 180px; }
+html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobile-shell="true"] :is(.mobile-planet-environment, .mobile-statistics .efficiency-summary-band, .mobile-statistics .power-summary-band, .mobile-statistics .planning-summary-band) { grid-template-columns: 1fr; }
+html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobile-shell="true"] :is(.operations-tabs, .galaxy-tabs) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+@media (max-width: 350px) {
+  .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); min-height: 180px; }
+  .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-toolbar { top: 180px; }
+  .game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-toolbar { grid-template-columns: 1fr; }
+  .game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-result-count { display: none; }
+}
+
+.game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"] .mobile-workspace-scroll,
+.game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"] .mobile-recipe,
+.game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"] .mobile-statistics { scrollbar-gutter: stable; }
+.game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"] .mobile-build-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }

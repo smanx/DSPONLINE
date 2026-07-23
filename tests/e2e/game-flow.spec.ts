@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-23-v0.5.0");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-23-v0.6.0");
     }
   });
 }
@@ -68,17 +68,17 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "移动操作、物流与存档急救更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "新版手机界面与生产资料库更新" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(10);
-  await expect(releaseNotes).toContainText("现有工厂会无损迁移，不会被重置");
-  await expect(releaseNotes).toContainText("本地存档急救");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-22-1440.png", fullPage: true });
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(8);
+  await expect(releaseNotes).toContainText("存档格式与玩法进度保持不变");
+  await expect(releaseNotes).toContainText("生产资料库与建筑图鉴");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v060-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-22-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v060-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -93,7 +93,7 @@ test("dated release notes appear once and remain available from both settings sc
   });
   await expect.poll(controlsFitViewport).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-22-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v060-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -102,7 +102,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-23-v0.5.0");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-23-v0.6.0");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -119,7 +119,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-22-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-23-v060-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -417,6 +417,10 @@ async function chooseRecipe(page: Page, scope: Locator, recipeName: string) {
   await scope.locator(".catalog-picker-trigger").click();
   const dialog = page.getByRole("dialog", { name: "配方选择面板" });
   await expect(dialog).toBeVisible();
+  const viewport = page.viewportSize();
+  if (viewport && viewport.width >= 900 && !(viewport.height < 560 && viewport.width < 1100)) {
+    await expect(dialog.getByLabel("搜索配方")).toBeFocused();
+  }
   await dialog.locator(".recipe-catalog-grid > button").filter({ hasText: recipeName }).first().click();
 }
 
@@ -424,6 +428,10 @@ async function chooseItem(page: Page, scope: Locator, itemName: string) {
   await scope.locator(".catalog-picker-trigger").click();
   const dialog = page.getByRole("dialog", { name: "物品选择面板" });
   await expect(dialog).toBeVisible();
+  const viewport = page.viewportSize();
+  if (viewport && viewport.width >= 900 && !(viewport.height < 560 && viewport.width < 1100)) {
+    await expect(dialog.getByLabel("搜索物品")).toBeFocused();
+  }
   await dialog.locator(".item-catalog-grid > button").filter({ hasText: itemName }).first().click();
 }
 
@@ -2668,8 +2676,8 @@ test("handcraft queue exposes progress, waits on inventory and keeps recipe rate
   await expect(page.locator(".handcraft-queue")).toContainText("齿轮");
   await expect(page.locator(".handcraft-queue").getByRole("progressbar")).toBeVisible();
   await expect.poll(async () => Number(await page.locator(".tray-row").filter({ hasText: "齿轮" }).locator("strong").textContent()), { timeout: 6_000 }).toBeGreaterThan(0);
-  await page.getByLabel("打开配方图鉴").click();
-  const codex = page.getByRole("dialog", { name: "配方图鉴" });
+  await page.getByLabel("打开生产资料库").click();
+  const codex = page.getByRole("dialog", { name: "生产资料库" });
   await expect(codex).toContainText("数据");
   await codex.getByLabel("搜索配方物品").fill("处理器");
   await codex.locator(".recipe-index > button").filter({ hasText: "处理器" }).click();
@@ -2680,8 +2688,8 @@ test("handcraft queue exposes progress, waits on inventory and keeps recipe rate
 test("recipe codex searches sources and traverses production chains", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openHandcraftGame(page);
-  await page.getByLabel("打开配方图鉴").click();
-  const workspace = page.getByRole("dialog", { name: "配方图鉴" });
+  await page.getByLabel("打开生产资料库").click();
+  const workspace = page.getByRole("dialog", { name: "生产资料库" });
   await expect(workspace).toBeVisible();
 
   await workspace.getByLabel("搜索配方物品").fill("硫酸");
@@ -2706,7 +2714,7 @@ test("recipe codex searches sources and traverses production chains", async ({ p
   await expect(workspace.locator(".recipe-method").filter({ hasText: "运载火箭发射" })).toContainText("戴森球永久结构点");
 
   await workspace.getByRole("button", { name: "固定到主界面" }).click();
-  await workspace.getByLabel("关闭配方图鉴").click();
+  await workspace.getByLabel("关闭生产资料库").click();
   const focusedChain = page.locator(".recipe-focus-panel");
   await expect(focusedChain).toContainText("小型运载火箭");
   await focusedChain.getByRole("button", { name: /完整/ }).click();
@@ -2714,8 +2722,8 @@ test("recipe codex searches sources and traverses production chains", async ({ p
   await focusedChain.getByLabel("取消聚焦材料").click();
   await expect(focusedChain).toHaveCount(0);
 
-  await page.getByLabel("打开配方图鉴").click();
-  const reopenedWorkspace = page.getByRole("dialog", { name: "配方图鉴" });
+  await page.getByLabel("打开生产资料库").click();
+  const reopenedWorkspace = page.getByRole("dialog", { name: "生产资料库" });
   await expect(reopenedWorkspace).toBeVisible();
   await reopenedWorkspace.getByLabel("搜索配方物品").fill("小型运载火箭");
   await reopenedWorkspace.locator(".recipe-index > button").filter({ hasText: "小型运载火箭" }).click();
@@ -2728,6 +2736,36 @@ test("recipe codex searches sources and traverses production chains", async ({ p
   await expect(workspace.locator(".recipe-item-header")).toBeVisible();
   await expect.poll(async () => workspace.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/qa/recipe-codex-390.png", fullPage: true });
+});
+
+test("production library links buildings, recipes, technologies and authoritative logistics rates", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openHandcraftGame(page);
+  await page.getByLabel("打开生产资料库").click();
+  const library = page.getByRole("dialog", { name: "生产资料库" });
+  await library.getByRole("button", { name: "建筑设施", exact: true }).click();
+  await library.locator(".codex-search input").fill("制造台 Mk.I");
+  await library.getByRole("button", { name: /^制造台 Mk\.I / }).click();
+  const building = library.locator(".codex-building-detail");
+  await expect(building).toContainText("基础速度");
+  await expect(building).toContainText("输入缓存");
+  await expect(building).toContainText("额定耗电");
+  await expect(building).toContainText("制造材料");
+  await expect(building.locator(".codex-recipe-row").first()).toContainText("单次产出 / 每分钟");
+  await expect(building.locator(".codex-recipe-row").first()).toContainText("/min");
+  await page.screenshot({ path: "artifacts/qa/production-library-building-1440.png", fullPage: true });
+
+  await library.getByRole("button", { name: "物流运输", exact: true }).click();
+  const belts = library.locator(".codex-belt-grid");
+  await expect(belts).toContainText("6 件/秒");
+  await expect(belts).toContainText("12 件/秒");
+  await expect(belts).toContainText("30 件/秒");
+  await expect(belts).toContainText("4 层");
+  for (const section of ["电力与能源", "星球与资源", "戴森工程", "科研与机制"]) {
+    await library.getByRole("button", { name: section, exact: true }).click();
+    await expect(library.locator(".codex-overview, .codex-master-detail").first()).toBeVisible();
+  }
+  await expect.poll(() => library.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
 });
 
 test("production equipment and belt lanes upgrade in place without losing the network", async ({ page }) => {
@@ -2873,6 +2911,12 @@ test("production management traces devices and supports cross-surface batch cont
   const mobileWorkspace = page.getByRole("dialog", { name: "生产统计" });
   await mobileWorkspace.getByRole("tab", { name: "管理" }).click();
   await expect(mobileWorkspace.locator(".production-management-row")).toBeVisible();
+  await mobileWorkspace.locator(".production-management-row").filter({ hasText: "电弧熔炉" }).locator('input[type="checkbox"]').check();
+  await mobileWorkspace.getByLabel("选择当前配方").click();
+  const mobileRecipePicker = page.getByRole("dialog", { name: "配方选择面板" });
+  await expect(mobileRecipePicker).toBeVisible();
+  await expect(mobileRecipePicker.getByLabel("搜索配方")).not.toBeFocused();
+  await mobileRecipePicker.getByRole("button", { name: "关闭配方选择" }).click();
   for (const scale of [0.8, 1, 1.25, 1.5, 2]) {
     await page.evaluate((value) => document.documentElement.style.setProperty("--ui-font-scale", String(value)), scale);
     await expect.poll(async () => mobileWorkspace.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
@@ -3012,6 +3056,22 @@ test("starter kit and logistics controls are available on the production canvas"
   await expect(storage.locator('[data-handleid="in:iron_ore"]')).toHaveCount(1);
   await expect(storage.locator(".factory-handle--input.factory-handle--auto")).toHaveCount(0);
   await expect(storage.locator(".factory-handle--output")).toHaveCount(1);
+  await expect(storage.locator(".factory-node__header strong")).toHaveText("小型储物仓");
+  await expect(storage.locator(".node-io__label")).toHaveText(["输入", "输出"]);
+  await page.evaluate(() => {
+    document.documentElement.dataset.uiFontScale = "200";
+    document.documentElement.style.setProperty("--ui-font-scale", "2");
+  });
+  await expect.poll(() => storage.evaluate((element) => {
+    const name = element.querySelector<HTMLElement>(".factory-node__header strong");
+    const columns = [...element.querySelectorAll<HTMLElement>(".node-io__column")].map((column) => column.getBoundingClientRect());
+    return Boolean(name && name.textContent === "小型储物仓" && name.scrollHeight <= name.clientHeight + 1 && columns.length === 2 && columns[0].right <= columns[1].left + 1);
+  })).toBe(true);
+  await page.screenshot({ path: "artifacts/qa/storage-mk1-font-200-1440.png", fullPage: true });
+  await page.evaluate(() => {
+    document.documentElement.dataset.uiFontScale = "100";
+    document.documentElement.style.setProperty("--ui-font-scale", "1");
+  });
 
   await placeOnCanvas(page, "部署四向分流器", Math.round(box!.width * 0.7), 450);
   const splitter = page.locator(".logistics-node").filter({ hasText: "四向分流器" });
@@ -3032,6 +3092,27 @@ test("starter kit and logistics controls are available on the production canvas"
   await expect(oilVein).toContainText("×0");
   await expect(page.getByTitle("部署原油萃取站")).toContainText("×1");
   await page.screenshot({ path: "artifacts/qa/logistics-oil-1440.png", fullPage: true });
+});
+
+test("finite resource nodes, inspector and reserve statistics use the same depletion model", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await freshGame(page);
+  await page.locator(".react-flow__controls-fitview").click();
+  const iron = page.locator(".vein-node").filter({ hasText: "铁矿石" }).first();
+  await expect(iron.locator(".factory-node__header > small")).not.toHaveText("∞");
+  await expect(iron.locator(".vein-reserve")).toContainText("储量");
+  await iron.click();
+  const inspector = page.locator(".inspector-panel");
+  await expect(inspector).toContainText("有限资源矿脉");
+  await expect(inspector).toContainText("剩余储量");
+  await expect(inspector).toContainText("初始总量");
+  await expect(inspector).toContainText("剩余比例");
+  await page.getByLabel("打开生产统计").click();
+  const statistics = page.getByRole("dialog", { name: "生产统计" });
+  await statistics.getByRole("tab", { name: "电力" }).click();
+  await expect(statistics).toContainText("资源储量统计");
+  await expect(statistics.locator(".resource-reserve-ledger")).toContainText("有限资源");
+  await page.screenshot({ path: "artifacts/qa/finite-resource-reserve-1440.png", fullPage: true });
 });
 
 test("thermal power accepts fuel and responds to mining demand", async ({ page }) => {
@@ -3661,6 +3742,10 @@ test("multi-slot stations and monitored stacked lines stay operable on desktop a
   await demand.evaluate((element: HTMLElement) => element.click());
   await expect(inspector).toBeVisible();
   await expect.poll(async () => inspector.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await slots.nth(1).locator(".catalog-picker-trigger").click();
+  const mobileItemPicker = page.getByRole("dialog", { name: "物品选择面板" });
+  await expect(mobileItemPicker.getByLabel("搜索物品")).not.toBeFocused();
+  await mobileItemPicker.getByRole("button", { name: "关闭物品选择" }).click();
   await page.screenshot({ path: "artifacts/qa/logistics-slots-390.png", fullPage: true });
 });
 
@@ -3762,8 +3847,8 @@ test("rare resources, fractionation and quantum chemistry expose every alternati
   await expect(page.locator(".inspector-content select option").filter({ hasText: "氢燃料棒" })).toHaveCount(1);
   await page.screenshot({ path: "artifacts/qa/rare-alternatives-home-1440.png", fullPage: true });
 
-  await page.getByLabel("打开配方图鉴").click();
-  const codex = page.getByRole("dialog", { name: "配方图鉴" });
+  await page.getByLabel("打开生产资料库").click();
+  const codex = page.getByRole("dialog", { name: "生产资料库" });
   await codex.getByLabel("搜索配方物品").fill("石墨烯");
   await codex.locator(".recipe-index > button").filter({ hasText: "石墨烯" }).click();
   await expect(codex.locator(".recipe-method").filter({ hasText: "可燃冰裂解" })).toContainText("可燃冰");
@@ -3773,7 +3858,7 @@ test("rare resources, fractionation and quantum chemistry expose every alternati
   await expect(codex.locator(".recipe-method--source")).toContainText("烬原 II");
   await expect(codex.locator(".recipe-section").first().locator(".recipe-method:not(.recipe-method--source)").filter({ hasText: "有机晶体" })).toContainText("塑料");
   await page.screenshot({ path: "artifacts/qa/rare-recipe-codex-1440.png", fullPage: true });
-  await page.getByLabel("关闭配方图鉴").click();
+  await page.getByLabel("关闭生产资料库").click();
 
   await page.getByLabel("打开科技树").click();
   for (const technology of ["流体分馏", "稀有资源利用", "量子化工"]) {
@@ -3833,7 +3918,10 @@ test("stellar exploration unlocks remote planets and enables a warped logistics 
   await expect(borealis).toContainText("未勘探");
   const borealGiant = borealis.getByRole("button", { name: /青冥 II/ });
   await expect(borealGiant.locator(".planet-colony-requirements")).toContainText("殖民前哨需求");
-  await expect(borealGiant.locator(".planet-colony-requirements")).toContainText("当前所在星球“澄海 I”物资托盘扣除");
+  await expect(borealGiant.locator(".planet-colony-requirements")).toContainText("材料取自“澄海 I”物资托盘");
+  await expect(borealGiant.locator(".planet-colony-requirements")).toContainText("运输载具取自随身载具栏");
+  await expect(borealGiant.locator(".planet-colony-requirements")).toContainText("当前行星托盘");
+  await expect(borealGiant.locator(".planet-colony-requirements")).toContainText("随身载具");
   await expect(borealGiant.locator(".planet-colony-requirements")).toContainText("北冕座");
   await expect(neutron.getByRole("button", { name: "勘探赫卡忒" })).toBeDisabled();
 
@@ -4403,7 +4491,7 @@ test("command palette navigates workspaces, focuses recipes and preserves keyboa
   await page.keyboard.press("Control+K");
   await palette.getByLabel("搜索命令").fill("处理器");
   await palette.getByLabel("搜索命令").press("Enter");
-  const recipes = page.getByRole("dialog", { name: "配方图鉴" });
+  const recipes = page.getByRole("dialog", { name: "生产资料库" });
   await expect(recipes).toBeVisible();
   await expect(recipes.locator(".recipe-item-header")).toContainText("处理器");
   await page.keyboard.press("Escape");
@@ -5000,10 +5088,10 @@ test("campaign center shows chapter progress, deficits and direct recipe navigat
   await expect(campaign).toContainText("采集第一份矿石");
   await expect(campaign.locator(".campaign-deficits").first()).toContainText("缺少");
   await campaign.getByRole("button", { name: "查看铁矿石配方" }).click();
-  const recipes = page.getByRole("dialog", { name: "配方图鉴" });
+  const recipes = page.getByRole("dialog", { name: "生产资料库" });
   await expect(recipes).toBeVisible();
   await expect(recipes.locator(".recipe-item-header")).toContainText("铁矿石");
-  await recipes.getByLabel("关闭配方图鉴").click();
+  await recipes.getByLabel("关闭生产资料库").click();
   await page.getByLabel("打开主线任务中心").first().click();
   await expect(page.getByRole("dialog", { name: "主线任务中心" })).toBeVisible();
   await page.waitForTimeout(220);
@@ -5149,7 +5237,7 @@ test("star map yields immediately to every primary workspace on desktop and mobi
 
   for (const target of [
     { opener: "打开生产统计", dialog: "生产统计" },
-    { opener: "打开配方图鉴", dialog: "配方图鉴" },
+    { opener: "打开生产资料库", dialog: "生产资料库" },
     { opener: "打开科技树", dialog: "科技树" },
   ] as const) {
     await page.getByLabel("打开星图").click();
@@ -5164,9 +5252,9 @@ test("star map yields immediately to every primary workspace on desktop and mobi
   await page.getByRole("menuitem", { name: "星图" }).click();
   await expect(starMap).toBeVisible();
   await page.getByLabel("更多工作区").click();
-  await page.getByRole("menuitem", { name: "配方图鉴" }).click();
+  await page.getByRole("menuitem", { name: "生产资料库" }).click();
   await expect(starMap).toHaveCount(0);
-  await expect(page.getByRole("dialog", { name: "配方图鉴" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "生产资料库" })).toBeVisible();
 });
 
 test("all font scales keep the header and both construction-dock modes inside desktop and phone viewports", async ({ page }) => {

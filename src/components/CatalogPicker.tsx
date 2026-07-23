@@ -9,7 +9,10 @@ function usePicker(open: boolean, onClose: () => void) {
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!open) return;
-    const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
+    const width = Math.max(1, Math.round(window.visualViewport?.width ?? window.innerWidth));
+    const height = Math.max(1, Math.round(window.visualViewport?.height ?? window.innerHeight));
+    const compactLayout = width < 900 || (height < 560 && width < 1100);
+    const timer = compactLayout ? 0 : window.setTimeout(() => inputRef.current?.focus(), 0);
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
@@ -18,7 +21,7 @@ function usePicker(open: boolean, onClose: () => void) {
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
-      window.clearTimeout(timer);
+      if (timer) window.clearTimeout(timer);
       window.removeEventListener("keydown", onKeyDown, true);
     };
   }, [onClose, open]);

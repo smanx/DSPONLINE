@@ -48,7 +48,7 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
       workspace("star-map", "打开星图与星际工业", "探索、航线和行星角色", <Telescope size={16} />, "star-map"),
       workspace("galaxy", "打开银河网络", "账户、累计发电与白矩阵排行榜", <Globe2 size={16} />, "galaxy"),
       workspace("statistics", "打开生产统计", "网络、吞吐和工业规划", <BarChart3 size={16} />, "statistics"),
-      workspace("recipes", "打开配方图鉴", "搜索原料、设备和生产链", <BookOpen size={16} />, "recipes"),
+      workspace("recipes", "打开生产资料库", "物品、建筑、物流、能源、星球、戴森与科研", <BookOpen size={16} />, "recipes"),
       workspace("technology", "打开科技树", "科研队列和解锁路径", <FlaskConical size={16} />, "technology"),
       workspace("operations", "打开运营中心", "警报、设置和存档", <Gauge size={16} />, "operations"),
       workspace("campaign", "打开主线任务", "查看章节目标和奖励", <Flag size={16} />, "campaign"),

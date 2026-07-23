@@ -195,7 +195,7 @@ export function BlueprintPlacementCursor({ blueprint, x, y }: { blueprint: Bluep
   );
 }
 
-export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, onRename, onTransform, onRecipeOverride, onCancelQueue, onExport, onImport }: {
+export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, onRename, onTransform, onRecipeOverride, onCancelQueue, onExport, onImport, mobile = false, mobileSubview, onMobileOpenDetail }: {
   open: boolean;
   game: GameState;
   onClose: () => void;
@@ -207,6 +207,9 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
   onCancelQueue: (entryId: string) => void;
   onExport: (blueprintId: string) => void;
   onImport: (raw: string) => { success: boolean; message: string };
+  mobile?: boolean;
+  mobileSubview?: string | null;
+  onMobileOpenDetail?: (subview: string) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importOpen, setImportOpen] = useState(false);
@@ -224,8 +227,10 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
     }
   };
   if (!open) return null;
+  const detailBlueprintId = mobile && mobileSubview?.startsWith("blueprint:") ? mobileSubview.slice(10) : null;
+  const visibleBlueprints = detailBlueprintId ? game.blueprints.filter((blueprint) => blueprint.id === detailBlueprintId) : game.blueprints;
   return (
-    <section className="blueprint-workspace" role="dialog" aria-modal="true" aria-label="蓝图库">
+    <section className={`blueprint-workspace${mobile ? ` mobile-workspace mobile-blueprints${detailBlueprintId ? " mobile-workspace--detail" : ""}` : ""}`} role="dialog" aria-modal="true" aria-label="蓝图库">
       <header className="blueprint-header">
         <div className="blueprint-title"><i><Layers3 size={20} /></i><div><span>生产网络模板</span><strong>蓝图库</strong></div></div>
         <div className="blueprint-headline"><span>模板 <strong>{game.blueprints.length}</strong></span><span>施工队列 <strong>{game.constructionQueue.length}</strong></span><span>部署行星 <strong>{getPlanet(game.activePlanetId).name}</strong></span></div>
@@ -240,7 +245,7 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
       <div className="blueprint-library">
         {game.blueprints.length === 0 ? (
           <div className="blueprint-empty"><BoxSelect size={26} /><strong>蓝图库为空</strong><span>在画布中框选设备，再使用选区复制命令建立模板。</span></div>
-        ) : game.blueprints.map((blueprint) => {
+        ) : visibleBlueprints.map((blueprint) => {
           const requirements = getBlueprintRequirements(blueprint);
           const deployable = canPlaceBlueprint(game, blueprint.id);
           const compatible = canQueueBlueprint(game, blueprint.id);
@@ -256,6 +261,7 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
               <div className="blueprint-composition">
                 {blueprintBuildingSummary(blueprint).map((label) => <span key={label}>{label}</span>)}
               </div>
+              {mobile && !detailBlueprintId ? <button className="mobile-blueprint-open" type="button" onClick={() => onMobileOpenDetail?.(`blueprint:${blueprint.id}`)}>查看与部署<ChevronRight size={18} /></button> : null}
               <div className="blueprint-transform-controls">
                 <span>部署方向</span>
                 <div className="segmented-control">

@@ -1,0 +1,322 @@
+import {
+  ArrowDownUp,
+  Box,
+  Check,
+  ChevronRight,
+  CircleAlert,
+  Factory,
+  Focus,
+  Hammer,
+  LayoutTemplate,
+  Minus,
+  PackageOpen,
+  Pin,
+  Plus,
+  Route,
+  Search,
+  Sparkles,
+  Trash2,
+  Wrench,
+  X,
+  Zap,
+} from "lucide-react";
+import { useMemo, useState } from "react";
+import {
+  ITEMS,
+  getBeltTier,
+  getBuilding,
+  getConstructionDefinition,
+  getExtractorBuildingId,
+  getItem,
+  getPlanet,
+  getRecipe,
+  getTechnology,
+  isConveyorBeltId,
+} from "../../game/content";
+import {
+  PORTABLE_FLEET_ITEM_IDS,
+  canHandcraftRecipe,
+  canPlaceBuildingOnPlanet,
+  canUpgradeBelt,
+  canUpgradeEntity,
+  getConstructionQuickCraftPlan,
+  getEntityOperatingStatus,
+  getEntityPowerFactor,
+  getResourceReserveSnapshot,
+  isTechnologyCompleted,
+} from "../../game/engine";
+import type {
+  BeltConnection,
+  BeltTier,
+  BuildingId,
+  ConstructionId,
+  ConveyorBeltId,
+  FactoryEntity,
+  GameState,
+  ItemId,
+  PlacementCount,
+  PortableFleetItemId,
+  RecipeId,
+} from "../../game/types";
+import type { MobileSheetSnap } from "../../hooks/useMobileNavigation";
+import { CONSTRUCTION_BUILD_ORDER, constructionBuildIcon } from "../GamePanels";
+import { ItemGlyph } from "../ItemReference";
+import { MobileSheetFrame } from "./MobileSheetFrame";
+
+export type MobileCanvasMode = "browse" | "place" | "connect" | "select" | "layout" | "region";
+
+type BuildMode = "deploy" | "craft" | "fleet";
+type BuildCategory = "all" | "recent" | "power" | "production" | "logistics" | "dyson";
+
+const BUILD_CATEGORIES: Record<Exclude<BuildCategory, "all" | "recent">, Set<BuildingId | ConveyorBeltId>> = {
+  power: new Set(["wind_turbine", "solar_panel", "geothermal_power_station", "thermal_power_plant", "mini_fusion_power_plant", "artificial_star", "accumulator", "energy_exchanger"]),
+  production: new Set(["mining_machine", "arc_smelter", "plane_smelter", "assembling_machine_mk1", "assembling_machine_mk2", "assembling_machine_mk3", "matrix_lab", "oil_extractor", "oil_refinery", "water_pump", "chemical_plant", "quantum_chemical_plant", "fractionator", "miniature_particle_collider", "construction_center"]),
+  logistics: new Set(["conveyor_belt_mk1", "conveyor_belt_mk2", "conveyor_belt_mk3", "storage_mk1", "material_delivery_hub", "splitter_4way", "storage_tank", "planetary_logistics_station", "interstellar_logistics_station", "orbital_collector"]),
+  dyson: new Set(["em_rail_ejector", "vertical_launching_silo", "ray_receiver"]),
+};
+
+const BUILD_MODE_LABELS: Record<BuildMode, string> = { deploy: "部署", craft: "制造", fleet: "载具" };
+const BUILD_CATEGORY_LABELS: Record<BuildCategory, string> = { all: "全部", recent: "最近", power: "能源", production: "生产", logistics: "物流", dyson: "戴森" };
+const PLACEMENT_COUNTS: PlacementCount[] = [1, 2, 5, 10];
+const MOBILE_RECENT_BUILD_KEY = "dsp-idle-network.mobile-recent-construction.v1";
+
+function loadMobileRecentBuilds(): Array<BuildingId | ConveyorBeltId> {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(MOBILE_RECENT_BUILD_KEY) ?? "[]") as unknown;
+    return Array.isArray(value) ? value.filter((id): id is BuildingId | ConveyorBeltId => typeof id === "string" && CONSTRUCTION_BUILD_ORDER.includes(id as BuildingId | ConveyorBeltId)).slice(0, 12) : [];
+  } catch {
+    return [];
+  }
+}
+
+function constructionLabel(id: BuildingId | ConveyorBeltId): string {
+  return isConveyorBeltId(id) ? `传送带 Mk.${getBeltTier(id) === 3 ? "III" : getBeltTier(id) === 2 ? "II" : "I"}` : getBuilding(id).name;
+}
+
+function isConstructionVisible(game: GameState, id: BuildingId | ConveyorBeltId): boolean {
+  if ((game.construction[id] ?? 0) > 0) return true;
+  if (isConveyorBeltId(id) && game.belts.some((belt) => belt.tier === getBeltTier(id))) return true;
+  if (id === "mining_machine" && game.entities.some((entity) => entity.minerCount > 0)) return true;
+  if (!isConveyorBeltId(id) && game.entities.some((entity) => entity.buildingId === id)) return true;
+  const requiredTechId = getConstructionDefinition(id)?.requiredTechId;
+  return !requiredTechId || isTechnologyCompleted(game, requiredTechId);
+}
+
+export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode, onSnap, onClose, onPlacement, onBelt, onCraft, onCraftFleet, onMissingCraft }: {
+  game: GameState;
+  snap: MobileSheetSnap;
+  placement: BuildingId | null;
+  beltTier: BeltTier;
+  beltTierMode: "auto" | "manual";
+  onSnap: (snap: MobileSheetSnap) => void;
+  onClose: () => void;
+  onPlacement: (buildingId: BuildingId) => void;
+  onBelt: (tier: BeltTier) => void;
+  onCraft: (constructionId: ConstructionId) => void;
+  onCraftFleet: (recipeId: RecipeId) => void;
+  onMissingCraft: (constructionId: ConstructionId) => void;
+}) {
+  const [mode, setMode] = useState<BuildMode>("deploy");
+  const [category, setCategory] = useState<BuildCategory>("all");
+  const [query, setQuery] = useState("");
+  const [recent, setRecent] = useState<Array<BuildingId | ConveyorBeltId>>(loadMobileRecentBuilds);
+  const remember = (id: BuildingId | ConveyorBeltId) => {
+    const next = [id, ...recent.filter((candidate) => candidate !== id)].slice(0, 12);
+    setRecent(next);
+    try { window.localStorage.setItem(MOBILE_RECENT_BUILD_KEY, JSON.stringify(next)); } catch { /* Recent build history is optional UI state. */ }
+  };
+  const visible = useMemo(() => CONSTRUCTION_BUILD_ORDER.filter((id) => {
+    if (!isConstructionVisible(game, id)) return false;
+    if (category === "recent" && !recent.includes(id)) return false;
+    if (category !== "all" && category !== "recent" && !BUILD_CATEGORIES[category].has(id)) return false;
+    const term = query.trim().toLocaleLowerCase("zh-CN");
+    return !term || `${constructionLabel(id)} ${id}`.toLocaleLowerCase("zh-CN").includes(term);
+  }), [category, game, query, recent]);
+
+  return (
+    <MobileSheetFrame title="建造" detail={`${getPlanet(game.activePlanetId).name}施工库存`} snap={snap} onSnap={onSnap} onClose={onClose} className="mobile-build-sheet">
+      <div className="mobile-build-controls">
+        <div className="mobile-segmented" role="tablist" aria-label="建造模式">
+          {(Object.keys(BUILD_MODE_LABELS) as BuildMode[]).map((id) => <button className={mode === id ? "active" : ""} type="button" role="tab" aria-selected={mode === id} key={id} onClick={() => setMode(id)}>{BUILD_MODE_LABELS[id]}</button>)}
+        </div>
+        <label><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={mode === "fleet" ? "搜索载具" : "搜索建筑或设备"} aria-label="搜索建造项目" /></label>
+        {mode !== "fleet" ? <nav aria-label="建造分类">{(Object.keys(BUILD_CATEGORY_LABELS) as BuildCategory[]).map((id) => <button className={category === id ? "active" : ""} type="button" key={id} onClick={() => setCategory(id)}>{BUILD_CATEGORY_LABELS[id]}</button>)}</nav> : null}
+      </div>
+      {mode === "fleet" ? <div className="mobile-build-grid mobile-build-grid--fleet">
+        {PORTABLE_FLEET_ITEM_IDS.filter((itemId) => !query.trim() || `${getItem(itemId).name} ${itemId}`.toLocaleLowerCase("zh-CN").includes(query.trim().toLocaleLowerCase("zh-CN"))).map((itemId: PortableFleetItemId) => {
+          const recipe = getRecipe(itemId)!;
+          const count = Math.floor(game.portableFleet?.[itemId] ?? 0);
+          const craftable = canHandcraftRecipe(game, recipe.id, 1);
+          const missingTech = recipe.requiredTechId && !isTechnologyCompleted(game, recipe.requiredTechId) ? getTechnology(recipe.requiredTechId)?.name : null;
+          return <button className="mobile-build-card" type="button" disabled={!craftable} key={itemId} onClick={() => onCraftFleet(recipe.id)} title={craftable ? `制造${getItem(itemId).name}` : missingTech ? `缺少科技：${missingTech}` : "材料不足"}>
+            <i><ItemGlyph itemId={itemId} /></i><span><strong>{getItem(itemId).name}</strong><small>随玩家跨星球携带</small></span><em>已有 ×{count}</em><b><Hammer size={15} />制造</b>
+          </button>;
+        })}
+      </div> : <div className="mobile-build-grid">
+        {visible.map((id) => {
+          const count = Math.floor(game.construction[id] ?? 0);
+          const isBelt = isConveyorBeltId(id);
+          const label = constructionLabel(id);
+          const compatible = isBelt || canPlaceBuildingOnPlanet(id, game.activePlanetId, game);
+          const plan = getConstructionQuickCraftPlan(game, id);
+          const active = isBelt ? beltTierMode === "manual" && beltTier === getBeltTier(id) : placement === id;
+          const consumption = plan.consumedItems.slice(0, 2).map((entry) => `${getItem(entry.itemId).name}×${entry.amount}`).join("、");
+          const disabled = mode === "deploy" && (count < 1 || !compatible);
+          return <button className={`mobile-build-card${active ? " active" : ""}${plan.usesUpstream ? " upstream" : ""}${mode === "craft" && !plan.possible ? " unavailable" : ""}`} type="button" disabled={disabled} key={id} onClick={() => {
+            if (mode === "deploy") {
+              remember(id);
+              if (isBelt) onBelt(getBeltTier(id));
+              else onPlacement(id);
+              return;
+            }
+            if (plan.possible) onCraft(id);
+            else onMissingCraft(id);
+          }} title={mode === "deploy" ? compatible ? `部署${label}` : "当前行星无法部署" : plan.possible ? `制造${label}` : "查看缺失材料"}>
+            <i>{constructionBuildIcon(id)}</i>
+            <span><strong>{label}</strong><small>{mode === "deploy" ? `库存 ×${count}` : plan.possible ? consumption || "材料齐备" : plan.missingTechnology ? `缺科技：${plan.missingTechnology}` : `缺 ${plan.missingItems[0] ? getItem(plan.missingItems[0].itemId).name : "材料"}`}</small></span>
+            <em>{active ? "已选择" : mode === "deploy" ? `×${count}` : plan.usesUpstream ? "可合成" : plan.possible ? "可制造" : "不可制造"}</em>
+            <b>{mode === "deploy" ? <><Pin size={15} />部署</> : <><Hammer size={15} />制造</>}</b>
+          </button>;
+        })}
+        {visible.length === 0 ? <div className="mobile-sheet-empty"><Box size={24} /><span>没有符合条件的项目</span></div> : null}
+      </div>}
+    </MobileSheetFrame>
+  );
+}
+
+type InventoryTab = "tray" | "fleet" | "dyson";
+type InventorySort = "amount" | "name" | "kind";
+
+export function MobileInventorySheet({ game, snap, onSnap, onClose, onPickTray, onDropCargo }: {
+  game: GameState;
+  snap: MobileSheetSnap;
+  onSnap: (snap: MobileSheetSnap) => void;
+  onClose: () => void;
+  onPickTray: (itemId: ItemId) => void;
+  onDropCargo: () => void;
+}) {
+  const [tab, setTab] = useState<InventoryTab>("tray");
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<InventorySort>("amount");
+  const trayItems = useMemo(() => (Object.entries(game.tray) as Array<[ItemId, number]>).filter(([, amount]) => amount > 0.001).filter(([itemId]) => {
+    const term = query.trim().toLocaleLowerCase("zh-CN");
+    return !term || `${getItem(itemId).name} ${itemId}`.toLocaleLowerCase("zh-CN").includes(term);
+  }).sort((a, b) => sort === "amount" ? b[1] - a[1] : sort === "name" ? getItem(a[0]).name.localeCompare(getItem(b[0]).name, "zh-CN") : getItem(a[0]).kind.localeCompare(getItem(b[0]).kind)), [game.tray, query, sort]);
+  return (
+    <MobileSheetFrame title="物资" detail={`${getPlanet(game.activePlanetId).code}物资托盘`} snap={snap} onSnap={onSnap} onClose={onClose} className="mobile-inventory-sheet">
+      <section className={`mobile-cargo-slot${game.cargo ? " loaded" : ""}`}>
+        <i>{game.cargo ? <ItemGlyph itemId={game.cargo.itemId} /> : <PackageOpen size={24} />}</i>
+        <span><small>{game.cargo ? "手提星际载荷" : "光标载荷"}</small><strong>{game.cargo ? getItem(game.cargo.itemId).name : "当前空载"}</strong></span>
+        {game.cargo ? <b>×{Math.floor(game.cargo.amount).toLocaleString("zh-CN")}</b> : null}
+        <button type="button" disabled={!game.cargo} onClick={onDropCargo}>{game.cargo ? "全部放回" : "无物资"}</button>
+      </section>
+      <div className="mobile-inventory-tabs mobile-segmented" role="tablist" aria-label="物资分类">
+        <button className={tab === "tray" ? "active" : ""} type="button" role="tab" aria-selected={tab === "tray"} onClick={() => setTab("tray")}>托盘</button>
+        <button className={tab === "fleet" ? "active" : ""} type="button" role="tab" aria-selected={tab === "fleet"} onClick={() => setTab("fleet")}>随身载具</button>
+        <button className={tab === "dyson" ? "active" : ""} type="button" role="tab" aria-selected={tab === "dyson"} onClick={() => setTab("dyson")}>戴森摘要</button>
+      </div>
+      {tab === "tray" ? <>
+        <div className="mobile-inventory-toolbar"><label><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索当前行星物资" aria-label="搜索物资" /></label><button type="button" onClick={() => setSort((current) => current === "amount" ? "name" : current === "name" ? "kind" : "amount")}><ArrowDownUp size={17} />{{ amount: "数量", name: "名称", kind: "类别" }[sort]}</button></div>
+        <div className="mobile-inventory-list">{trayItems.map(([itemId, amount]) => <button type="button" key={itemId} onClick={() => onPickTray(itemId)} disabled={Boolean(game.cargo && game.cargo.itemId !== itemId)}><ItemGlyph itemId={itemId} /><span><strong>{getItem(itemId).name}</strong><small>{getItem(itemId).kind === "fluid" ? "流体" : getItem(itemId).kind === "matrix" ? "矩阵" : "物品"}</small></span><b>{Math.floor(amount).toLocaleString("zh-CN")}</b><ChevronRight size={18} /></button>)}{trayItems.length === 0 ? <div className="mobile-sheet-empty"><Box size={24} /><span>没有符合条件的库存</span></div> : null}</div>
+      </> : tab === "fleet" ? <div className="mobile-inventory-list">{PORTABLE_FLEET_ITEM_IDS.map((itemId) => <div className="mobile-inventory-row" key={itemId}><ItemGlyph itemId={itemId} /><span><strong>{getItem(itemId).name}</strong><small>跨星球随身携带</small></span><b>{Math.floor(game.portableFleet?.[itemId] ?? 0).toLocaleString("zh-CN")}</b></div>)}</div> : <div className="mobile-dyson-summary"><div><span>在轨太阳帆</span><strong>{Math.floor(game.dysonSwarm.sailsInOrbit).toLocaleString("zh-CN")}</strong></div><div><span>永久结构点</span><strong>{Math.floor(game.dysonSphere.structurePoints).toLocaleString("zh-CN")}</strong></div><div><span>戴森云功率</span><strong>{(game.dysonSwarm.generationKw / 1000).toFixed(2)} MW</strong></div><div><span>戴森球功率</span><strong>{(game.dysonSphere.generationKw / 1000).toFixed(2)} MW</strong></div></div>}
+    </MobileSheetFrame>
+  );
+}
+
+function amountRows(values: Partial<Record<ItemId, number>>): Array<[ItemId, number]> {
+  return (Object.entries(values) as Array<[ItemId, number]>).filter(([, amount]) => amount > 0.001).sort((a, b) => b[1] - a[1]);
+}
+
+export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onUpgradeEntity, onUpgradeBelt }: {
+  game: GameState;
+  snap: MobileSheetSnap;
+  entity: FactoryEntity | null;
+  belt: BeltConnection | null;
+  selectedCount: number;
+  onSnap: (snap: MobileSheetSnap) => void;
+  onClose: () => void;
+  onOpenAdvanced: () => void;
+  onFocus: () => void;
+  onAddEntity: (entityId: string) => void;
+  onUpgradeEntity: (entityId: string) => void;
+  onUpgradeBelt: (beltId: string) => void;
+}) {
+  const isMulti = selectedCount > 1;
+  const title = isMulti ? `已选择 ${selectedCount} 个节点` : entity ? entity.kind === "vein" ? getItem(entity.resourceId!).name : getBuilding(entity.buildingId!).name : belt ? `${getItem(belt.itemId).name}运输线` : "设备检查器";
+  const status = entity ? getEntityOperatingStatus(game, entity) : null;
+  const detail = status?.label ?? (belt ? `${belt.lastFlow.toFixed(1)}/min · Mk.${belt.tier}` : isMulti ? "批量操作与生产设置" : "点击画布节点或线路查看状态");
+  const inputRows = entity ? amountRows(entity.inputs).slice(0, 4) : [];
+  const outputRows = entity ? amountRows(entity.outputs).slice(0, 4) : [];
+  const recipe = entity?.recipeId ? getRecipe(entity.recipeId) : undefined;
+  const resourceReserve = entity ? getResourceReserveSnapshot(game, entity) : null;
+  const addAvailable = entity ? Math.floor(game.construction[entity.kind === "vein" ? getExtractorBuildingId(entity.resourceId!) : entity.buildingId!] ?? 0) : 0;
+  return (
+    <MobileSheetFrame title={title} detail={detail} snap={snap} allowPeek onSnap={onSnap} onClose={onClose} className={`mobile-inspector-sheet mobile-inspector-sheet--${snap}`}>
+      {!entity && !belt && !isMulti ? <div className="mobile-sheet-empty"><Factory size={24} /><span>选择设备或线路后显示运行摘要</span></div> : <>
+        <section className="mobile-inspector-status">
+          <i className={status?.tone ?? "idle"}>{entity ? entity.kind === "vein" ? <ItemGlyph itemId={entity.resourceId!} /> : constructionBuildIcon(entity.buildingId!) : belt ? <Route size={22} /> : <LayoutTemplate size={22} />}</i>
+          <span><small>{status ? "运行状态" : belt ? "线路状态" : "多选摘要"}</small><strong>{status?.label ?? detail}</strong></span>
+          {entity ? <b>{Math.round(getEntityPowerFactor(game, entity) * 100)}% 供电</b> : belt ? <b>{Math.round((belt.congestion ?? 0) * 100)}% 拥堵</b> : null}
+        </section>
+        {entity ? <div className="mobile-inspector-progress"><span>{recipe?.name ?? (entity.kind === "vein" ? "资源采集" : "设备周期")}</span><strong>{Math.round(entity.progress * 100)}%</strong><i><b style={{ width: `${Math.max(0, Math.min(100, entity.progress * 100))}%` }} /></i><small>{entity.productionRate.toFixed(1)}/min · 利用率 {Math.round(entity.utilization * 100)}%{resourceReserve ? ` · ${resourceReserve.infinite ? "无限储量" : resourceReserve.exhausted ? "资源已枯竭" : `储量 ${resourceReserve.remaining?.toLocaleString("zh-CN")}/${resourceReserve.capacity?.toLocaleString("zh-CN")} (${resourceReserve.remainingPercent}%)`}` : ""}</small></div> : null}
+        {snap !== "peek" ? <>
+          {entity ? <section className={`mobile-inspector-io${entity.buildingId === "storage_mk1" ? " mobile-inspector-io--storage" : ""}`}><div><header>输入</header>{inputRows.length ? inputRows.map(([itemId, amount]) => <span key={itemId}><ItemGlyph itemId={itemId} /><em>{getItem(itemId).name}</em><strong>{Math.floor(amount)}</strong></span>) : <small>暂无输入缓存</small>}</div><div><header>输出</header>{outputRows.length ? outputRows.map(([itemId, amount]) => <span key={itemId}><ItemGlyph itemId={itemId} /><em>{getItem(itemId).name}</em><strong>{Math.floor(amount)}</strong></span>) : <small>暂无输出缓存</small>}</div></section> : null}
+          {belt ? <section className="mobile-belt-summary"><div><span>物品</span><strong>{getItem(belt.itemId).name}</strong></div><div><span>吞吐</span><strong>{belt.lastFlow.toFixed(1)}/min</strong></div><div><span>堆叠</span><strong>×{belt.stackSize ?? 1}</strong></div><div><span>优先级</span><strong>{belt.priority === 2 ? "高" : belt.priority === 1 ? "标准" : "低"}</strong></div></section> : null}
+          <div className="mobile-inspector-actions">
+            <button type="button" onClick={onFocus}><Focus size={18} /><span>定位</span></button>
+            {entity ? <button type="button" disabled={addAvailable < 1} onClick={() => onAddEntity(entity.id)}><Plus size={18} /><span>增加设备</span><b>{addAvailable}</b></button> : null}
+            {entity ? <button type="button" disabled={!canUpgradeEntity(game, entity.id)} onClick={() => onUpgradeEntity(entity.id)}><Sparkles size={18} /><span>升级</span></button> : belt ? <button type="button" disabled={!canUpgradeBelt(game, belt.id)} onClick={() => onUpgradeBelt(belt.id)}><Sparkles size={18} /><span>升级线路</span></button> : null}
+            <button type="button" onClick={onOpenAdvanced}><Wrench size={18} /><span>{isMulti ? "批量设置" : "完整设置"}</span></button>
+          </div>
+        </> : <button className="mobile-inspector-peek-open" type="button" onClick={() => onSnap("half")}><span>查看输入、输出与快捷操作</span><ChevronRight size={20} /></button>}
+      </>}
+    </MobileSheetFrame>
+  );
+}
+
+export function MobilePlacementBar({ mode, buildingId, inventory, placementCount, continuous, connectionLabel, selectionCount, beltCount, onCountChange, onContinuousChange, onCancel, onDone, onOpenInspector }: {
+  mode: MobileCanvasMode;
+  buildingId: BuildingId | null;
+  inventory: number;
+  placementCount: PlacementCount;
+  continuous: boolean;
+  connectionLabel?: string | null;
+  selectionCount: number;
+  beltCount: number;
+  onCountChange: (count: PlacementCount) => void;
+  onContinuousChange: (enabled: boolean) => void;
+  onCancel: () => void;
+  onDone: () => void;
+  onOpenInspector: () => void;
+}) {
+  if (mode === "browse") return null;
+  if (mode === "place" && buildingId) {
+    const index = PLACEMENT_COUNTS.indexOf(placementCount);
+    return <div className="mobile-placement-bar" role="toolbar" aria-label="建筑放置状态"><span><i>{constructionBuildIcon(buildingId)}</i><em><small>正在放置</small><strong>{getBuilding(buildingId).name}</strong></em><b>库存 {inventory}</b></span><div className="mobile-placement-stepper"><button type="button" disabled={index <= 0} onClick={() => onCountChange(PLACEMENT_COUNTS[Math.max(0, index - 1)])} aria-label="减少放置数量"><Minus size={18} /></button><strong>{placementCount}</strong><button type="button" disabled={index >= PLACEMENT_COUNTS.length - 1} onClick={() => onCountChange(PLACEMENT_COUNTS[Math.min(PLACEMENT_COUNTS.length - 1, index + 1)])} aria-label="增加放置数量"><Plus size={18} /></button></div><label><input type="checkbox" checked={continuous} onChange={(event) => onContinuousChange(event.target.checked)} /><span>连续</span></label><button type="button" onClick={onCancel}><X size={19} /><span>取消</span></button></div>;
+  }
+  if (mode === "connect") return <div className="mobile-mode-status mobile-mode-status--connect"><Route size={20} /><span><small>连接模式</small><strong>{connectionLabel ?? "请选择目标端口"}</strong></span><button type="button" onClick={onCancel}><X size={19} />取消</button></div>;
+  if (mode === "select") return <div className="mobile-mode-status mobile-mode-status--select"><Check size={20} /><span><small>多选模式</small><strong>{selectionCount} 节点 · {beltCount} 线路</strong></span>{selectionCount + beltCount > 0 ? <button type="button" onClick={onOpenInspector}><Wrench size={18} />批量操作</button> : null}<button type="button" onClick={onDone}>完成</button></div>;
+  if (mode === "place") return null;
+  const labels: Record<Exclude<MobileCanvasMode, "browse" | "place" | "connect" | "select">, string> = { layout: "拖动节点调整布局，空白区域仍可平移", region: "在空白画布拖拽创建生产区域" };
+  return <div className={`mobile-mode-status mobile-mode-status--${mode}`}>{mode === "layout" ? <LayoutTemplate size={20} /> : <Zap size={20} />}<span><small>{mode === "layout" ? "布局模式" : "生产区域"}</small><strong>{labels[mode]}</strong></span><button type="button" onClick={onDone}>完成</button></div>;
+}
+
+export function MobileSelectionContextBar({ selectedCount, beltCount, canUpgrade, canUpgradeBelts, onFocus, onCopy, onUpgrade, onUpgradeBelts, onRemove, onClear }: {
+  selectedCount: number;
+  beltCount: number;
+  canUpgrade: boolean;
+  canUpgradeBelts: boolean;
+  onFocus: () => void;
+  onCopy: () => void;
+  onUpgrade: () => void;
+  onUpgradeBelts: () => void;
+  onRemove: () => void;
+  onClear: () => void;
+}) {
+  if (selectedCount + beltCount === 0) return null;
+  return <div className="mobile-selection-context" role="toolbar" aria-label="选区快捷操作"><span><Check size={18} /><strong>{selectedCount}</strong> 节点 · <strong>{beltCount}</strong> 线路</span><nav><button type="button" onClick={onFocus} disabled={selectedCount === 0}><Focus size={18} /><small>定位</small></button><button type="button" onClick={onCopy} disabled={selectedCount === 0}><LayoutTemplate size={18} /><small>蓝图</small></button><button type="button" onClick={selectedCount > 0 ? onUpgrade : onUpgradeBelts} disabled={selectedCount > 0 ? !canUpgrade : !canUpgradeBelts}><Sparkles size={18} /><small>升级</small></button><button className="danger" type="button" onClick={onRemove}><Trash2 size={18} /><small>回收</small></button><button type="button" onClick={onClear}><X size={18} /><small>清除</small></button></nav></div>;
+}
+
+export function MobileConnectionNotice({ label, tone }: { label: string; tone: "ready" | "blocked" | "warning" }) {
+  return <div className={`mobile-connection-notice mobile-connection-notice--${tone}`}>{tone === "ready" ? <Check size={17} /> : <CircleAlert size={17} />}<span>{label}</span></div>;
+}

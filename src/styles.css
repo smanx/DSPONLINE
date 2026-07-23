@@ -2359,6 +2359,47 @@ select:focus-visible {
   color: var(--text);
 }
 
+.vein-readout {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.vein-readout > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vein-readout .vein-reserve {
+  grid-column: 1 / -1;
+  overflow: visible;
+  color: #91aaa1;
+  font-size: 9px;
+  text-align: left;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.vein-readout .vein-reserve--depleted,
+.factory-node__header .resource-reserve--depleted {
+  color: var(--coral);
+}
+
+.storage-buffer-node .factory-node__header {
+  min-height: 62px;
+  grid-template-columns: 34px minmax(150px, 1fr) auto;
+}
+
+.storage-buffer-node .factory-node__header strong {
+  overflow: visible;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
 .machine-status {
   justify-content: flex-start;
 }
@@ -9660,11 +9701,21 @@ select:focus-visible {
 }
 
 .planet-colony-requirements > div > span > b {
+  display: grid;
+  min-width: 0;
   overflow: hidden;
   color: #d9b0a8;
   font-size: 8px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.planet-colony-requirements > div > span > b > small {
+  overflow: hidden;
+  color: #a77f76;
+  font-size: 7px;
+  font-weight: 500;
+  text-overflow: ellipsis;
 }
 
 .planet-colony-requirements > div > span > strong {

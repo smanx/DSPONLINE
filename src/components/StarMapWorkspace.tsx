@@ -176,6 +176,9 @@ export function StarMapWorkspace({
   onStationMinimumLoadChange,
   onStationLimitsChange,
   onFocusStation,
+  mobile = false,
+  mobileSubview,
+  onMobileOpenDetail,
 }: {
   open: boolean;
   game: GameState;
@@ -188,11 +191,44 @@ export function StarMapWorkspace({
   onStationMinimumLoadChange: (entityId: string, slotIndex: number, minimumLoad: StationMinimumLoad) => void;
   onStationLimitsChange: (entityId: string, slotIndex: number, minStock: number, maxStock: number) => void;
   onFocusStation: (entityId: string, planetId: PlanetId) => void;
+  mobile?: boolean;
+  mobileSubview?: string | null;
+  onMobileOpenDetail?: (subview: string) => void;
 }) {
   const [view, setView] = useState<"map" | "industry">("map");
   if (!open) return null;
   const activeSystemId = getPlanet(game.activePlanetId).systemId;
   const unlockedCount = STAR_SYSTEM_LIST.filter((system) => isStarSystemUnlocked(game, system.id)).length;
+
+  if (mobile) {
+    const detailSystemId = mobileSubview?.startsWith("system:") ? mobileSubview.slice(7) as StarSystemId : null;
+    const detailPlanetId = mobileSubview?.startsWith("planet:") ? mobileSubview.slice(7) as PlanetId : null;
+    const detailPlanet = detailPlanetId ? getPlanet(detailPlanetId) : null;
+    const systemForPlanet = detailPlanet ? getStarSystem(detailPlanet.systemId) : null;
+    const detailSystem = detailSystemId ? getStarSystem(detailSystemId) : systemForPlanet;
+    const systemProfile = detailSystem ? getStarSystemProfile(game, detailSystem.id) : null;
+    const planetProfile = detailPlanet ? getPlanetIndustrialProfile(game, detailPlanet.id) : null;
+    const colonized = detailPlanet ? isPlanetColonized(game, detailPlanet.id) : false;
+    const colonyRequirements = detailPlanet ? getColonizationRequirements(game, detailPlanet.id) : null;
+    return <section className={`star-map-workspace mobile-workspace mobile-star-map${mobileSubview ? " mobile-workspace--detail" : ""}`} role="dialog" aria-modal="true" aria-label="星图">
+      {!mobileSubview ? <><nav className="star-map-tabs mobile-workspace-sticky" role="tablist" aria-label="星图视图"><button type="button" role="tab" aria-selected={view === "map"} className={view === "map" ? "active" : ""} onClick={() => setView("map")}><Telescope size={14} />星图探索</button><button type="button" role="tab" aria-selected={view === "industry"} className={view === "industry" ? "active" : ""} onClick={() => setView("industry")}><Factory size={14} />星际工业</button></nav>{view === "industry" ? <div className="mobile-workspace-scroll"><IndustryConsole game={game} onTravel={onTravel} onRoleChange={onRoleChange} onStationPriorityChange={onStationPriorityChange} onStationMinimumLoadChange={onStationMinimumLoadChange} onStationLimitsChange={onStationLimitsChange} onFocusStation={onFocusStation} /></div> : <div className="mobile-workspace-scroll mobile-star-system-list"><header><span>已勘探 {unlockedCount}/{STAR_SYSTEM_LIST.length}</span><strong>星区种子 #{game.galaxy.seed}</strong></header>{STAR_SYSTEM_LIST.map((system) => {
+        const profile = getStarSystemProfile(game, system.id);
+        const unlocked = isStarSystemUnlocked(game, system.id);
+        const mission = game.exploration.missions.find((candidate) => candidate.systemId === system.id);
+        return <button type="button" key={system.id} onClick={() => onMobileOpenDetail?.(`system:${system.id}`)}><i style={{ color: system.color }}><Sparkles size={21} /></i><span><small>{system.code} · {profile.starTypeName}</small><strong>{system.name}</strong><em>{system.planetIds.length} 颗行星 · {profile.luminosity.toFixed(2)} L☉ · {formatDistance(profile.distanceFromOriginLy)}</em></span><b>{unlocked ? mission ? "勘探中" : "已发现" : "未勘探"}</b><ArrowRight size={18} /></button>;
+      })}</div>}</> : detailPlanet && planetProfile && colonyRequirements ? <div className="mobile-workspace-scroll mobile-planet-detail">
+        <header className="mobile-detail-heading"><i style={{ color: detailPlanet.color }}><Orbit size={22} /></i><span><small>{systemForPlanet?.name} · {detailPlanet.code}</small><strong>{detailPlanet.name}</strong></span><b>{colonized ? "已殖民" : "殖民候选"}</b></header>
+        <section className="mobile-planet-environment"><div><span>生态模板</span><strong>{planetProfile.climateName}</strong></div><div><span>海洋</span><strong>{OCEAN_LABELS[planetProfile.oceanType]}</strong></div><div><span>矿储倍率</span><strong>{Math.round(planetProfile.reserveScale * 100)}%</strong></div><div><span>采矿效率</span><strong>{Math.round(planetProfile.miningMultiplier * 100)}%</strong></div><div><span>风力</span><strong>{Math.round(planetProfile.windMultiplier * 100)}%</strong></div><div><span>太阳能</span><strong>{Math.round(getPlanetSolarPowerMultiplier(game, detailPlanet.id) * 100)}%</strong></div><div><span>地热</span><strong>{Math.round(planetProfile.geothermalMultiplier * 100)}%</strong></div><div><span>航程</span><strong>{Math.round(planetProfile.travelTimeMultiplier * 100)}%</strong></div></section>
+        <section className="mobile-detail-section"><header>资源与工业定位</header><p>{detailPlanet.kind === "gas-giant" ? Object.keys(planetProfile.orbitalYields).map((id) => getItem(id as ItemId).name).join("、") : planetProfile.resourceIds.map((id) => getItem(id).name).join("、") || "无地表矿脉"}</p><div className="mobile-tech-unlocks"><span><Factory size={15} />{planetProfile.specializationName}</span><span><Gauge size={15} />推荐：{PLANET_INDUSTRY_ROLE_LABELS[getRecommendedPlanetRole(game, detailPlanet.id)]}</span>{planetProfile.tidalLocked ? <span><Timer size={15} />潮汐锁定</span> : null}</div></section>
+        {!colonized ? <section className={`mobile-colony-requirements mobile-colony-requirements--${colonyRequirements.status}`}><header><strong>殖民前哨需求</strong><small>材料取自{getPlanet(colonyRequirements.sourcePlanetId).name}，运输载具取自随身载具栏</small></header><p>{colonyRequirements.reason}</p><div>{colonyRequirements.costs.map((cost) => <span className={cost.missing === 0 ? "ready" : "missing"} key={cost.itemId}><ItemGlyph itemId={cost.itemId} /><em>{getItem(cost.itemId).name}<small>{cost.source === "portable-fleet" ? "随身载具" : "当前行星托盘"}</small></em><strong>{cost.current.toLocaleString("zh-CN")}/{cost.required.toLocaleString("zh-CN")}</strong></span>)}</div></section> : null}
+        <div className="mobile-detail-spacer" /><footer className="mobile-detail-actionbar"><button className="primary" type="button" disabled={!colonized && !canColonizePlanet(game, detailPlanet.id)} onClick={() => colonized ? onTravel(detailPlanet.id) : onColonize(detailPlanet.id)}>{colonized ? <Navigation size={18} /> : <Factory size={18} />}{colonized ? "进入行星工厂" : "建立殖民前哨"}</button></footer>
+      </div> : detailSystem && systemProfile ? <div className="mobile-workspace-scroll mobile-star-system-detail">
+        <header className="mobile-detail-heading"><i style={{ color: detailSystem.color }}><Sparkles size={22} /></i><span><small>{detailSystem.code} · {systemProfile.starTypeName}</small><strong>{detailSystem.name}</strong></span><b>{systemProfile.luminosity.toFixed(2)} L☉</b></header><p className="mobile-detail-summary">{detailSystem.description}</p>
+        <section className="mobile-detail-section"><header>行星</header><div className="mobile-system-planets">{detailSystem.planetIds.map((planetId) => { const planet = getPlanet(planetId); const profile = getPlanetIndustrialProfile(game, planetId); const ready = isPlanetColonized(game, planetId); return <button type="button" key={planetId} onClick={() => onMobileOpenDetail?.(`planet:${planetId}`)}><i style={{ color: planet.color }}><Orbit size={20} /></i><span><strong>{planet.name}</strong><small>{profile.climateName} · {OCEAN_LABELS[profile.oceanType]}</small></span><b>{ready ? "已殖民" : "查看需求"}</b><ArrowRight size={18} /></button>; })}</div></section>
+        {!isStarSystemUnlocked(game, detailSystem.id) ? <section className="mobile-colony-requirements"><header><strong>恒星系勘探</strong><small>{formatDistance(systemProfile.distanceFromOriginLy)}</small></header><div>{detailSystem.explorationCost.map((cost) => <span className={(game.tray[cost.itemId] ?? 0) >= cost.amount ? "ready" : "missing"} key={cost.itemId}><ItemGlyph itemId={cost.itemId} /><em>{getItem(cost.itemId).name}</em><strong>{Math.floor(game.tray[cost.itemId] ?? 0)}/{cost.amount}</strong></span>)}</div><button type="button" disabled={!canExploreStarSystem(game, detailSystem.id)} onClick={() => onExplore(detailSystem.id)}><Telescope size={18} />开始勘探</button></section> : null}
+      </div> : null}
+    </section>;
+  }
 
   return (
     <section className="star-map-workspace" role="dialog" aria-modal="true" aria-label="星图">
@@ -272,10 +308,10 @@ export function StarMapWorkspace({
                            <b title="跨行星航程时间倍率">航程 <strong>{Math.round(profile.travelTimeMultiplier * 100)}%</strong></b>
                          </span>
                          {!colonized ? <div className={`planet-colony-requirements planet-colony-requirements--${colonyRequirements.status}`}>
-                           <header><strong>殖民前哨需求</strong><small>从当前所在星球“{getPlanet(colonyRequirements.sourcePlanetId).name}”物资托盘扣除</small></header>
+                           <header><strong>殖民前哨需求</strong><small>材料取自“{getPlanet(colonyRequirements.sourcePlanetId).name}”物资托盘；运输载具取自随身载具栏</small></header>
                            <p>{colonyRequirements.reason}</p>
                            {colonyRequirements.costs.length > 0 ? <div>{colonyRequirements.costs.map((cost) => <span className={cost.missing === 0 ? "ready" : "missing"} key={cost.itemId}>
-                             <ItemHoverCard itemId={cost.itemId}><ItemGlyph itemId={cost.itemId} /></ItemHoverCard><b>{getItem(cost.itemId).name}</b><strong>{cost.current.toLocaleString("zh-CN")}/{cost.required.toLocaleString("zh-CN")}</strong>
+                             <ItemHoverCard itemId={cost.itemId}><ItemGlyph itemId={cost.itemId} /></ItemHoverCard><b>{getItem(cost.itemId).name}<small>{cost.source === "portable-fleet" ? "随身载具" : "当前行星托盘"}</small></b><strong>{cost.current.toLocaleString("zh-CN")}/{cost.required.toLocaleString("zh-CN")}</strong>
                            </span>)}</div> : null}
                          </div> : null}
                       </button>

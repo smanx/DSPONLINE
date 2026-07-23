@@ -36,7 +36,7 @@ Use this map after reading `docs/PROJECT_STATUS.md`. Open only the files relevan
 | Lines, labels, preview | `src/components/FactoryEdges.tsx` |
 | Resource rail, inspector, construction | `src/components/GamePanels.tsx` |
 | Item/recipe modal picker | `src/components/CatalogPicker.tsx` |
-| Recipe codex | `src/components/RecipeWorkspace.tsx` |
+| Production library / game codex | `src/components/RecipeWorkspace.tsx`, `src/components/CodexSections.tsx`, `src/styles/codex.css` |
 | Focus recipe overlay | `src/components/RecipeFocusPanel.tsx` |
 | Technology | `src/components/TechnologyWorkspace.tsx` |
 | Statistics/network/planning | `src/components/StatisticsWorkspace.tsx` |
