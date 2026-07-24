@@ -131,7 +131,15 @@ sudo systemctl daemon-reload
 sudo systemctl restart dsp-idle-cloud.service
 ```
 
-公开 `/api/public-status` 只提供玩家累计、今日和 120 秒在线口径；`/api/admin/metrics` 与兼容路径 `/api/metrics` 必须携带管理员 bearer token。后台入口为 `https://dsponline.cn/admin`。
+公开 `/api/public-status` 只提供玩家累计、今日、120 秒在线口径和匿名活动时钟/模拟进度；`/api/admin/metrics` 与兼容路径 `/api/metrics` 必须携带管理员 bearer token。后台入口为 `https://dsponline.cn/admin`。
+
+### 银河活动配置
+
+活动配置保存在发布目录之外的 `/etc/dsp-idle-cloud/activity.json`，由 `/etc/dsp-idle-cloud/admin.env` 中的 `DSP_ACTIVITY_CONFIG_FILE` 指向。建议权限为 `0640 root:ubuntu`，配置文件不得放入 Web 静态目录。代码发布与活动启用必须分开：先在活动关闭状态完成备份、制品验证、原子切换和公网烟测，再安装经过 `server/activity.mjs` 规则校验的配置并重启服务。
+
+香港与上海参加同一轮模拟活动时必须使用完全相同的活动 ID、UTC 开始/结束时间、个人目标和全服目标。`endsAt - startsAt` 必须精确为 259,200,000 ms。启用后分别核对 `/api/health` 的活动有效状态，以及 `/api/public-status` 的 revision、时间和目标。活动配置只提供服务器时钟与模拟全服曲线；`0.9.1` 没有贡献提交 API，不能把本地记录描述成服务器已接收。
+
+活动结束后保留配置以展示冻结结果，不能通过重启或修改结束时间延长同一个活动 ID。新一轮活动必须使用新的 ID。
 
 ### 账号邮件
 

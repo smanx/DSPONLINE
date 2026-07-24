@@ -21,7 +21,7 @@ export function GalacticActivityPanel({ game, status, compact = false }: { game:
   if (!status?.enabled || !status.personalTargets || !status.globalTargets || !status.globalDelivered) {
     return <section className={`galactic-activity galactic-activity--disabled${compact ? " galactic-activity--compact" : ""}`}>
       <header><span><RadioTower size={16} />宇宙联合空间站巨构建设任务</span><strong>活动未开放</strong></header>
-      <p>{status?.reason ?? "等待服务器活动配置。当前版本不会上传贡献，也不会发放活动奖励。"}</p>
+      <p>{status?.reason ?? "等待服务器活动配置。活动贡献只保存在本地存档，不会上传或发放奖励。"}</p>
     </section>;
   }
   const serverNow = status.serverNow + (Date.now() - anchorRef.current.clientAt);
@@ -32,9 +32,9 @@ export function GalacticActivityPanel({ game, status, compact = false }: { game:
     <header><span><RadioTower size={16} />宇宙联合空间站巨构建设任务</span><strong><Clock3 size={14} />{activityCountdownLabel(status, serverNow)}</strong></header>
     <div className="galactic-activity__summary">
       <span>个人任务<strong>{Math.floor(personalOverall * 100)}%</strong></span>
-      <span>全服工程<strong>{Math.floor(globalOverall * 100)}%</strong></span>
-      <span>本地待确认<strong><QuantityValue value={pending} /></strong></span>
-      <span>奖励核验<strong>未开放</strong></span>
+      <span>全服模拟<strong>{Math.floor(globalOverall * 100)}%</strong></span>
+      <span>本地已记录<strong><QuantityValue value={pending} /></strong></span>
+      <span>活动奖励<strong>后续开放</strong></span>
     </div>
     <div className="galactic-activity__materials">
       {MATERIAL_IDS.map((itemId) => {
@@ -49,6 +49,6 @@ export function GalacticActivityPanel({ game, status, compact = false }: { game:
         </div>;
       })}
     </div>
-    <p>{personalOverall >= 1 ? "个人任务已完成，继续交付可推进银河工程记录。" : "四项物资全部达到目标后，个人任务才算完成。"} 本批仅在本地记录，服务器确认与免费空间站资格尚未开放。</p>
+    <p>{personalOverall >= 1 ? "个人任务已完成，继续交付仍会保留在本地记录中。" : "四项物资全部达到目标后，个人任务才算完成。"} 本版无需登录且不会上传贡献；全服进度按服务器时间模拟，活动奖励将在后续版本开放。</p>
   </section>;
 }

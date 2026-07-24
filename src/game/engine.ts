@@ -7122,7 +7122,7 @@ function runGalacticMaterialExporters(state: GameState, powerByPlanet: Map<Plane
     entity.powerFactor = plan?.factorByEntity.has(entity.id) ? round(powerFactor, 4) : undefined;
     entity.productionRate = 0;
     entity.utilization = 0;
-    if (entity.galacticExporterPaused !== false || powerFactor <= EPSILON) continue;
+    if (!state.endgame.constructionActivity.activityId || entity.galacticExporterPaused !== false || powerFactor <= EPSILON) continue;
     let delivered = 0;
     const ordered = (Object.keys(ACTIVITY_PROJECT_BY_ITEM) as import("./types").ActivityMaterialId[])
       .sort((left, right) => state.endgame.exportProjects[ACTIVITY_PROJECT_BY_ITEM[right]].priority -

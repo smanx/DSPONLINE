@@ -4184,6 +4184,9 @@ describe("factory simulation", () => {
     expect(exporter.galacticExporterPaused).toBe(true);
     expect(state.endgame.exportInputMode).toBe("building");
     exporter.inputs.universe_matrix = 25;
+    state = setGalacticMaterialExporterPaused(state, exporter.id, false);
+    state = advanceSimulation(state, 1);
+    expect(state.entities.find((entity) => entity.id === exporter.id)?.inputs.universe_matrix).toBe(25);
     state.endgame.constructionActivity = {
       activityId: "activity-test",
       participantId: "participant-test",
@@ -4199,9 +4202,6 @@ describe("factory simulation", () => {
       nextBatchSequence: 0,
     };
     state = advanceSimulation(state, 1);
-    expect(state.entities.find((entity) => entity.id === exporter.id)?.inputs.universe_matrix).toBe(25);
-    state = setGalacticMaterialExporterPaused(state, exporter.id, false);
-    state = advanceSimulation(state, 1);
     expect(state.entities.find((entity) => entity.id === exporter.id)?.inputs.universe_matrix).toBe(0);
     expect(state.endgame.exportProjects.universe_archive.totalDelivered).toBe(25);
     expect(state.endgame.constructionActivity.personalDelivered.universe_matrix).toBe(25);
@@ -4209,6 +4209,28 @@ describe("factory simulation", () => {
       itemId: "universe_matrix",
       amount: 25,
       sequence: 0,
+    });
+  });
+
+  it("manufactures and deploys the galactic material exporter after universe matrix research", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("universe_matrix");
+    state.construction.galactic_material_exporter = 0;
+    state.tray.universe_matrix = 1_000;
+    state.tray.small_carrier_rocket = 500;
+    state.tray.frame_material = 1_000;
+    state.tray.quantum_chip = 1_000;
+
+    const plan = getConstructionQuickCraftPlan(state, "galactic_material_exporter");
+    expect(plan).toMatchObject({ possible: true, outputAmount: 1, status: "direct" });
+    state = craftConstructionWithUpstream(state, "galactic_material_exporter");
+    expect(state.construction.galactic_material_exporter).toBe(1);
+    expect(state.tray.universe_matrix).toBe(0);
+    state = placeBuilding(state, "galactic_material_exporter", { x: 120, y: 80 });
+    expect(state.construction.galactic_material_exporter).toBe(0);
+    expect(state.entities.find((entity) => entity.buildingId === "galactic_material_exporter")).toMatchObject({
+      position: { x: 120, y: 80 },
+      galacticExporterPaused: true,
     });
   });
 

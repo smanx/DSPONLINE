@@ -5,7 +5,7 @@ const REFRESH_PREFERENCE_KEY = "dsp-idle-network.production-refresh.v1";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v0.9.0");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v0.9.1");
   });
 });
 
@@ -155,6 +155,99 @@ test("explicit next mobile shell survives tablet layout and fullscreen resize ev
   }
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
   await page.screenshot({ path: "artifacts/qa/v090-next-shell-tablet-landscape.png", fullPage: true });
+});
+
+test("galactic exporter is deployable and opens the active local construction task", async ({ page }) => {
+  const now = Date.now();
+  await page.route("**/api/public-status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        timeZone: "Asia/Shanghai",
+        today: "2026-07-24",
+        uptimeSeconds: 1,
+        players: { total: 1, today: 1, online: 1, onlineWindowSeconds: 120 },
+        activity: {
+          enabled: true,
+          status: "active",
+          serverNow: now,
+          id: "union-station-v091-test",
+          revision: "v091-test",
+          startsAtMs: now - 60_000,
+          endsAtMs: now + 72 * 60 * 60 * 1_000 - 60_000,
+          personalTargets: { universe_matrix: 1_000_000, solar_sail: 1_000_000, small_carrier_rocket: 1_000_000, antimatter_fuel_rod: 1_000_000 },
+          globalTargets: { universe_matrix: 1_000_000_000, solar_sail: 1_000_000_000, small_carrier_rocket: 1_000_000_000, antimatter_fuel_rod: 1_000_000_000 },
+          globalDelivered: { universe_matrix: 10_000, solar_sail: 20_000, small_carrier_rocket: 30_000, antimatter_fuel_rod: 40_000 },
+        },
+      }),
+    });
+  });
+  await page.addInitScript(() => {
+    const state = {
+      version: 31,
+      nextId: 10,
+      activePlanetId: "home",
+      entities: [],
+      belts: [],
+      construction: { galactic_material_exporter: 1 },
+      tray: {},
+      planetTrays: { home: {} },
+      totalProduced: {},
+      research: { selectedTechId: null, pausedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["universe_matrix"] },
+      paused: true,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await dismissOnboarding(page);
+  const exporterDock = page.locator(".construction-item-shell").filter({ hasText: "超大型物资出口" });
+  await expect(exporterDock).toBeVisible();
+  await expect(exporterDock.locator(".construction-item")).toContainText("×1");
+  await exporterDock.locator(".construction-item").click();
+  await page.locator(".react-flow__pane").click({ position: { x: 700, y: 330 } });
+
+  const exporter = page.locator('.react-flow__node').filter({ hasText: "超大型物资出口" });
+  await expect(exporter).toBeVisible();
+  await exporter.locator(".factory-node__header").click();
+  const task = page.getByRole("dialog", { name: "生产统计" });
+  await expect(task).toBeVisible();
+  await expect(task.getByRole("tab", { name: /银河/ })).toHaveAttribute("aria-selected", "true");
+  await expect(task.locator(".galactic-activity")).toContainText("本地已记录");
+  await expect(task.locator(".galactic-activity")).toContainText("全服模拟");
+  await expect(task.locator(".galactic-activity")).toContainText("10亿");
+  await expect(task.getByRole("button", { name: "开始提交任务 1" })).toBeVisible();
+  await task.screenshot({ path: "artifacts/qa/v091-galactic-activity-desktop.png" });
+
+  await task.getByRole("button", { name: "开始提交任务 1" }).click();
+  await expect(task.getByRole("button", { name: "暂停提交 1" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?mobileUi=next");
+  await dismissOnboarding(page);
+  await page.getByRole("button", { name: "建造", exact: true }).click();
+  const buildSheet = page.getByRole("dialog", { name: "建造" });
+  await buildSheet.getByLabel("搜索建造项目").fill("超大型物资出口");
+  const mobileExporterCard = buildSheet.locator(".mobile-build-card").filter({ hasText: "超大型物资出口" });
+  await expect(mobileExporterCard).toBeVisible();
+  await expect.poll(() => buildSheet.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  await buildSheet.screenshot({ path: "artifacts/qa/v091-galactic-exporter-mobile.png" });
+  await mobileExporterCard.click();
+  await expect(buildSheet).toHaveCount(0);
+  await page.locator(".react-flow__pane").click({ position: { x: 34, y: 220 } });
+  const mobileExporter = page.locator('.react-flow__node').filter({ hasText: "超大型物资出口" });
+  await expect(mobileExporter).toBeVisible();
+  await mobileExporter.locator(".factory-node__header").click();
+  const mobileTask = page.getByRole("dialog", { name: "生产统计" });
+  await expect(mobileTask).toContainText("宇宙联合空间站巨构建设任务");
+  const activityControls = mobileTask.locator(".galactic-exporter-command button");
+  await expect(activityControls).toHaveCount(2);
+  expect((await activityControls.evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height))).every((height) => height >= 44)).toBe(true);
+  await expect.poll(() => mobileTask.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  await mobileTask.screenshot({ path: "artifacts/qa/v091-galactic-activity-mobile.png" });
 });
 
 test("large quantities expose exact values on desktop and mobile without triggering the parent action", async ({ page }) => {

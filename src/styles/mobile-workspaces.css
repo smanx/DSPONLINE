@@ -242,6 +242,8 @@
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-toolbar { position: sticky; z-index: 10; top: 92px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; padding: 7px 8px; background: #0e1613; }
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-filter { display: flex; grid-column: 1 / -1; gap: 4px; overflow: auto hidden; }
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-filter button { min-width: 72px; min-height: 44px; flex: 1 0 auto; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .galactic-exporter-command { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .galactic-exporter-command button { min-height: 44px; }
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-search,
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-sort { min-height: 44px; }
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-table { display: block; overflow: visible; }

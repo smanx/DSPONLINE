@@ -33,6 +33,7 @@ interface StatisticsWorkspaceProps {
   onInfiniteResearchAutomation: (enabled: boolean) => void;
   onGalacticDispatchAutomation: (enabled: boolean) => void;
   onGalacticDispatchThrottle: (throttle: GalacticDispatchThrottle) => void;
+  onGalacticExporterPausedChange: (entityId: string, paused: boolean) => void;
   onGalacticExportEnabled: (projectId: GalacticExportProjectId, enabled: boolean) => void;
   onGalacticExportPriority: (projectId: GalacticExportProjectId, priority: LogisticsPriority) => void;
   onDispatchGalacticExport: (projectId: GalacticExportProjectId) => void;
@@ -166,7 +167,7 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
   );
 }
 
-export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, onFocusEntity, onFocusBeltNetwork, onBulkRecipeChange, onBulkStationSlotApply, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark, focusTab, mobile = false, galacticActivityStatus }: StatisticsWorkspaceProps) {
+export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExporterPausedChange, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, onFocusEntity, onFocusBeltNetwork, onBulkRecipeChange, onBulkStationSlotApply, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark, focusTab, mobile = false, galacticActivityStatus }: StatisticsWorkspaceProps) {
   const [tab, setTab] = useState<StatisticsTab>("production");
   const [filter, setFilter] = useState<ItemFilter>("all");
   const [sort, setSort] = useState<ItemSort>("production");
@@ -462,8 +463,16 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
                   <label><input type="checkbox" checked={game.endgame.autoResearch} onChange={(event) => onInfiniteResearchAutomation(event.target.checked)} />无限科技自动续研</label>
                 </div>
               </section> : <section className="galactic-automation-bar">
-                <header><span><Gauge size={15} />实体出口模式</span><strong>永久启用</strong></header>
-                <div className="galactic-automation-actions"><span>物资只由超大型物资出口的四个专用端口交付；暂停和恢复请在建筑检查器中操作。</span><label><input type="checkbox" checked={game.endgame.autoResearch} onChange={(event) => onInfiniteResearchAutomation(event.target.checked)} />无限科技自动续研</label></div>
+                <header><span><Gauge size={15} />活动物资出口</span><strong>{game.entities.filter((entity) => entity.buildingId === "galactic_material_exporter" && entity.galacticExporterPaused === false).length} 座提交中</strong></header>
+                <div className="galactic-automation-actions">
+                  <span>四个专用端口的真实交付会写入当前本地存档；本版不会上传服务器。</span>
+                  {game.entities.filter((entity) => entity.buildingId === "galactic_material_exporter").map((entity, index) => <div className="galactic-exporter-command" key={entity.id}>
+                    <button type="button" className={entity.galacticExporterPaused === false ? "active" : ""} onClick={() => onGalacticExporterPausedChange(entity.id, entity.galacticExporterPaused === false)}>{entity.galacticExporterPaused === false ? <Pause size={14} /> : <Play size={14} />}{entity.galacticExporterPaused === false ? `暂停提交 ${index + 1}` : `开始提交任务 ${index + 1}`}</button>
+                    <button type="button" onClick={() => onFocusEntity(entity.id, entity.planetId)}><Focus size={14} />定位设备</button>
+                  </div>)}
+                  {game.entities.every((entity) => entity.buildingId !== "galactic_material_exporter") ? <span>尚未放置超大型物资出口，请先从施工托盘制造并部署。</span> : null}
+                  <label><input type="checkbox" checked={game.endgame.autoResearch} onChange={(event) => onInfiniteResearchAutomation(event.target.checked)} />无限科技自动续研</label>
+                </div>
               </section>}
               <div className="galactic-panels">
                 <section className="galactic-panel infinite-research-panel">

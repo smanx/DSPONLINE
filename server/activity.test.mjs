@@ -8,7 +8,7 @@ const fixture = {
   startsAt: "2026-08-01T00:00:00.000Z",
   endsAt: "2026-08-04T00:00:00.000Z",
   personalTargets: Object.fromEntries(ACTIVITY_MATERIAL_IDS.map((id) => [id, 1_000_000])),
-  globalTargets: Object.fromEntries(ACTIVITY_MATERIAL_IDS.map((id) => [id, 10_000_000])),
+  globalTargets: Object.fromEntries(ACTIVITY_MATERIAL_IDS.map((id) => [id, 1_000_000_000])),
 };
 
 test("activity stays disabled without an explicit valid configuration", () => {
@@ -43,4 +43,10 @@ test("completion checkpoints reach every target before the activity ends", () =>
     const status = getActivityPublicStatus(config, config.startsAtMs + ACTIVITY_DURATION_MS * checkpoints[itemId]);
     assert.ok(status.globalDelivered[itemId] >= fixture.globalTargets[itemId]);
   }
+});
+
+test("the first public event accepts one-billion targets for all four materials", () => {
+  const config = normalizeActivityConfig(fixture);
+  assert.equal(config.enabled, true);
+  assert.deepEqual(config.globalTargets, Object.fromEntries(ACTIVITY_MATERIAL_IDS.map((id) => [id, 1_000_000_000])));
 });

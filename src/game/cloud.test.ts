@@ -1,11 +1,14 @@
 /** @vitest-environment jsdom */
+/** @vitest-environment-options {"url":"http://public.example.test"} */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CLOUD_SYNC_STORAGE_KEY,
   compareCloudSave,
+  fetchCloudPublicStatus,
   getCloudSyncMarker,
   markCloudSaveSynchronized,
+  resumeCloudSession,
   summarizeCloudPayload,
   type CloudSaveMetadata,
 } from "./cloud";
@@ -38,7 +41,23 @@ function metadata(revision: number, cloudChecksum: string, source: string): Clou
 }
 
 describe("cloud save synchronization markers", () => {
-  beforeEach(() => window.localStorage.clear());
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  it("allows anonymous public activity status on HTTP without opening account transport", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      ok: true,
+      activity: { enabled: false, status: "disabled", serverNow: 1 },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    await expect(fetchCloudPublicStatus()).resolves.toMatchObject({ ok: true });
+    expect(fetchMock).toHaveBeenCalledWith("/api/public-status", expect.any(Object));
+    fetchMock.mockClear();
+    await expect(resumeCloudSession()).resolves.toMatchObject({ status: "offline", message: "云账户仅在 HTTPS 安全入口开放" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
   it("compares unbound, synchronized and one-sided changes", () => {
     const local = payload("state-a", 100);

@@ -1,61 +1,43 @@
-import { Activity, Check, FlaskConical, Gauge, Info, MessageCircle, Orbit, Route, Trash2, X, type LucideIcon } from "lucide-react";
+import { Activity, Check, Info, MessageCircle, Orbit, Route, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-24-v0.9.0",
+  id: "2026-07-24-v0.9.1",
   date: "2026年7月24日",
-  version: "0.9.0",
-  title: "长期生产与银河工程更新",
-  summary: "本次更新让生产画面流畅度可按设备选择，并完成物流、增产剂、戴森工程、无限科研和银河出口的长期运行升级。旧存档会无损迁移到 GameState v33；活动服务保持关闭，不会自动上传贡献或发放奖励。",
+  version: "0.9.1",
+  title: "联合空间站建设活动",
+  summary: "宇宙联合空间站巨构建设任务正式开放 72 小时。所有玩家都可通过超大型物资出口参与，个人贡献只保存在本地存档；全服进度为服务器时间驱动的模拟数据，本版不上传贡献或发放奖励。",
   items: [
     {
-      id: "production-refresh",
-      title: "生产画面刷新频率",
-      description: "新增自动调节、经典流畅、高流畅、均衡、省电、低配置和极限省电七档。固定档不会被自动系统覆盖，绿色生产进度在真实库存快照之间继续平滑推进。",
+      id: "activity-open",
+      title: "三日联合建设任务",
+      description: "活动启用后精确持续 72 小时。个人四项物资目标各 100 万，全服四项模拟目标各 10 亿，四项全部达标才算完成。",
     },
     {
-      id: "production-correctness",
-      title: "生产与物流正确性",
-      description: "增产剂耗尽后自动回到基础倍率，供应塔与需求塔分别使用自身起送比例；增产剂缓存上限可独立设置，手机边缘拖动与普通点击放置不再互相干扰。",
+      id: "exporter-deployment",
+      title: "超大型物资出口可建造",
+      description: "修复巨构遗漏在施工托盘之外的问题。完成宇宙矩阵科技后可制造、部署并连接四种专用物资输入端口。",
     },
     {
-      id: "dyson-upgrade",
-      title: "戴森工程升级",
-      description: "在轨太阳帆与壳面太阳帆统一为每帆 88 kW，结构点保持 960 kW；球壳设计可复制到其他恒星系，几何参数保留但施工进度不会复制。",
+      id: "activity-navigation",
+      title: "点击巨构直达任务",
+      description: "点击已放置的超大型物资出口会直接打开活动任务页，可查看倒计时、个人记录和全服模拟进度，并暂停、恢复或定位出口设施。",
     },
     {
-      id: "tray-and-quantity",
-      title: "托盘管理与超大数量",
-      description: "当前行星物资托盘支持筛选、全选、删除一半和二次确认。大数量统一使用万、亿和科学计数显示，悬停、键盘聚焦或手机点击可查看完整精确值。",
-    },
-    {
-      id: "logistics-performance",
-      title: "大规模物流性能",
-      description: "物流塔匹配改用会话级索引和路线经济缓存。10、50、100、500 塔对比保持状态哈希一致，500 塔测量中位耗时下降约 80%。",
-    },
-    {
-      id: "infinite-research",
-      title: "无限科研长期曲线",
-      description: "四项长期科技扩展到 Lv.1000，连续体演算封顶 Lv.23。超大宇宙矩阵成本使用精确整数结算，旧投入会守恒结转并保留历史等级。",
-    },
-    {
-      id: "galactic-project",
-      title: "银河终局工程预览",
-      description: "新增四输入银河物资出口建筑、本地个人交付记录和宇宙联合空间站活动界面。服务器贡献确认、奖励与空间站本体仍在后续版本，当前活动开关保持关闭。",
+      id: "local-participation",
+      title: "无需账号即可参与",
+      description: "真实投入与个人进度随本地存档、手动槽和云存档一起保存，不要求登录或邮箱验证。服务器提交、真实全服累计和活动奖励留待后续版本。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "production-refresh": Gauge,
-  "production-correctness": Check,
-  "dyson-upgrade": Orbit,
-  "tray-and-quantity": Trash2,
-  "logistics-performance": Route,
-  "infinite-research": FlaskConical,
-  "galactic-project": Activity,
+  "activity-open": Activity,
+  "exporter-deployment": Orbit,
+  "activity-navigation": Route,
+  "local-participation": Check,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

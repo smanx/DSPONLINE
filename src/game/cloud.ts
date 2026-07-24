@@ -150,12 +150,12 @@ export class CloudApiError extends Error {
   }
 }
 
-function apiBase(): string | null {
+function apiBase(allowInsecurePublicRead = false): string | null {
   const configured = import.meta.env.VITE_API_BASE_URL?.trim();
   if (configured) return configured.replace(/\/$/, "");
   if (typeof window === "undefined" || window.location.protocol === "file:") return null;
   const localDevelopment = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-  if (window.location.protocol !== "https:" && !localDevelopment) return null;
+  if (window.location.protocol !== "https:" && !localDevelopment && !allowInsecurePublicRead) return null;
   return "/api";
 }
 
@@ -290,8 +290,8 @@ export function writeCloudAutoSyncStatus(status: CloudAutoSyncStatus): void {
   try { window.localStorage.setItem(CLOUD_AUTO_SYNC_STORAGE_KEY, JSON.stringify(status)); } catch { /* optional status */ }
 }
 
-async function cloudRequest<T>(path: string, options: RequestInit = {}, authenticated = false): Promise<T> {
-  const base = apiBase();
+async function cloudRequest<T>(path: string, options: RequestInit = {}, authenticated = false, allowInsecurePublicRead = false): Promise<T> {
+  const base = apiBase(allowInsecurePublicRead);
   if (!base) throw new CloudApiError(
     typeof window !== "undefined" && window.location.protocol === "http:"
       ? "云账户仅在 HTTPS 安全入口开放"
@@ -455,7 +455,8 @@ export async function fetchCloudLeaderboard(category: LeaderboardCategoryId, sea
 }
 
 export async function fetchCloudPublicStatus(): Promise<CloudPublicStatus> {
-  return cloudRequest<CloudPublicStatus>("/public-status");
+  // This endpoint is anonymous and read-only. Account credentials remain blocked on public HTTP origins.
+  return cloudRequest<CloudPublicStatus>("/public-status", {}, false, true);
 }
 
 export async function submitCloudLeaderboard(metrics: LeaderboardMetrics, seasonId: string): Promise<void> {

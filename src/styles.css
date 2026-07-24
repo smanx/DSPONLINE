@@ -1058,6 +1058,13 @@
 
 .galactic-automation-actions > div { display: inline-flex; gap: 3px; }
 .galactic-automation-actions label { cursor: pointer; }
+.galactic-exporter-command { display: inline-flex; gap: 5px; }
+.galactic-exporter-command button { min-height: 36px; }
+
+@media (max-width: 720px) {
+  .galactic-exporter-command { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .galactic-exporter-command button { min-height: 44px; }
+}
 
 .galactic-panels {
   display: grid;

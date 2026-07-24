@@ -81,7 +81,7 @@ const BUILD_CATEGORIES: Record<Exclude<BuildCategory, "all" | "recent">, Set<Con
   power: new Set(["wind_turbine", "solar_panel", "geothermal_power_station", "thermal_power_plant", "mini_fusion_power_plant", "artificial_star", "accumulator", "energy_exchanger"]),
   production: new Set(["mining_machine", "arc_smelter", "plane_smelter", "assembling_machine_mk1", "assembling_machine_mk2", "assembling_machine_mk3", "matrix_lab", "oil_extractor", "oil_refinery", "water_pump", "chemical_plant", "quantum_chemical_plant", "fractionator", "miniature_particle_collider", "spray_coater", "construction_center"]),
   logistics: new Set(["conveyor_belt_mk1", "conveyor_belt_mk2", "conveyor_belt_mk3", "storage_mk1", "material_delivery_hub", "splitter_4way", "storage_tank", "planetary_logistics_station", "interstellar_logistics_station", "orbital_collector"]),
-  dyson: new Set(["em_rail_ejector", "vertical_launching_silo", "ray_receiver"]),
+  dyson: new Set(["em_rail_ejector", "vertical_launching_silo", "ray_receiver", "galactic_material_exporter"]),
 };
 
 const BUILD_MODE_LABELS: Record<BuildMode, string> = { deploy: "部署", craft: "制造", fleet: "载具" };
@@ -172,7 +172,7 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
             <i><ItemGlyph itemId={itemId} /></i><span><strong>{getItem(itemId).name}</strong><small>随玩家跨星球携带</small></span><em>已有 ×{count}</em><b><Hammer size={15} />制造</b>
           </button>;
         })}
-      </div> : <div className="mobile-build-grid">
+      </div> : <div className={`mobile-build-grid${query.trim() && visible.length <= 2 ? " mobile-build-grid--focused" : ""}`}>
         {visible.map((id) => {
           const count = Math.floor(game.construction[id] ?? 0);
           const isBelt = isConveyorBeltId(id);

@@ -3217,6 +3217,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       return;
     }
     const mobileSelecting = nextMobileShell && mobileCanvasMode === "select";
+    const clickedEntity = gameRef.current.entities.find((entity) => entity.id === node.id);
     setSelectedEntityIds((current) => event.shiftKey || selectionMode || mobileSelecting
       ? current.includes(node.id) ? current.filter((id) => id !== node.id) : [...current, node.id]
       : [node.id]);
@@ -3224,10 +3225,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setSelectedBeltIds([]);
     setInspectorTab("inspect");
     if (!selectionMode && !mobileSelecting) {
-      if (nextMobileShell) mobileNavigation.openSheet("inspector", "peek");
+      if (clickedEntity?.buildingId === "galactic_material_exporter") {
+        openCommandWorkspace("statistics");
+        setStatisticsFocusTab("galaxy");
+        setNotice("已打开宇宙联合空间站建设任务");
+      } else if (nextMobileShell) mobileNavigation.openSheet("inspector", "peek");
       else setMobilePanel("inspector");
     }
-  }, [blueprintPlacementId, completeClickConnectionAtPoint, expandEntityGroup, mobileCanvasMode, mobileContinuousPlacement, mobileNavigation.openSheet, nextMobileShell, placement, placementCount, selectionMode]);
+  }, [blueprintPlacementId, completeClickConnectionAtPoint, expandEntityGroup, mobileCanvasMode, mobileContinuousPlacement, mobileNavigation.openSheet, nextMobileShell, openCommandWorkspace, placement, placementCount, selectionMode]);
 
   const onNodeDoubleClick: NodeMouseHandler<FactoryFlowNode> = useCallback((_event, node) => {
     if (placement || blueprintPlacementId || !gameRef.current.settings.allowDoubleClickZoom) return;
@@ -4648,6 +4653,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onInfiniteResearchAutomation={(enabled) => commitGame((current) => setInfiniteResearchAutomation(current, enabled))}
           onGalacticDispatchAutomation={(enabled) => commitGame((current) => setGalacticDispatchAutomation(current, enabled))}
           onGalacticDispatchThrottle={(throttle: GalacticDispatchThrottle) => commitGame((current) => setGalacticDispatchThrottle(current, throttle))}
+          onGalacticExporterPausedChange={(entityId, paused) => commitGame((current) => setGalacticMaterialExporterPaused(current, entityId, paused))}
           onGalacticExportEnabled={(projectId: GalacticExportProjectId, enabled) => commitGame((current) => setGalacticExportEnabled(current, projectId, enabled))}
           onGalacticExportPriority={(projectId: GalacticExportProjectId, priority: LogisticsPriority) => commitGame((current) => setGalacticExportPriority(current, projectId, priority))}
           onDispatchGalacticExport={(projectId: GalacticExportProjectId) => commitGame((current) => dispatchGalacticExport(current, projectId))}
