@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
+import Database from "better-sqlite3";
 import { createCloudServer } from "./index.mjs";
 import { metricDay } from "./analytics.mjs";
 
@@ -70,6 +71,7 @@ test("registers by username, preserves the leaderboard email gate and verifies a
   const health = await request("/api/health");
   assert.equal(health.body.mailProvider, "custom");
   assert.equal(health.body.schemaVersion, 7);
+  assert.equal(health.body.storageLayoutVersion, 2);
   const registered = await request("/api/auth/register", { method: "POST", body: JSON.stringify({ username: "Pilot_One", password: "strong-pass-123", displayName: "测试工程师" }) });
   assert.equal(registered.response.status, 201);
   assert.ok(registered.body.token);
@@ -453,6 +455,93 @@ test("migrates schema v3 data to v7 without losing accounts, saves or players", 
   }
 });
 
+test("splits legacy SQLite cloud payloads from app metadata without losing revisions", async () => {
+  const migrationDirectory = await mkdtemp(path.join(tmpdir(), "dsp-sqlite-payload-layout-"));
+  const databaseFile = path.join(migrationDirectory, "cloud.sqlite");
+  const largePayload = JSON.stringify({
+    ...JSON.parse(cloudPayload),
+    diagnosticsPadding: "x".repeat(2 * 1024 * 1024),
+  });
+  const save = { revision: 1, payload: largePayload, checksum: "legacy-checksum", size: Buffer.byteLength(largePayload), updatedAt: 2 };
+  const legacy = {
+    schemaVersion: 7,
+    users: {},
+    sessions: {},
+    cloudSaves: { user_legacy: save },
+    cloudSaveHistory: { user_legacy: [save] },
+    cloudSaveSlots: {},
+    cloudSaveSlotHistory: {},
+    submissions: {},
+    players: {},
+    feedback: [],
+    errors: [],
+    dailyMetrics: {},
+    analytics: { visitors: {}, sessions: {}, daily: {} },
+  };
+  const legacyDatabase = new Database(databaseFile);
+  legacyDatabase.exec("CREATE TABLE app_state (id INTEGER PRIMARY KEY CHECK (id = 1), payload TEXT NOT NULL, updated_at INTEGER NOT NULL)");
+  legacyDatabase.prepare("INSERT INTO app_state (id, payload, updated_at) VALUES (1, ?, 1)").run(JSON.stringify(legacy));
+  legacyDatabase.close();
+
+  let migrationServer;
+  try {
+    migrationServer = await createCloudServer({ databaseFile, logger: { error() {} } });
+    await new Promise((resolve) => migrationServer.listen(0, "127.0.0.1", resolve));
+    assert.equal(migrationServer.store.data.storageLayoutVersion, 2);
+    assert.equal(migrationServer.store.data.cloudSaves.user_legacy.payload, undefined);
+    assert.equal(migrationServer.store.data.cloudSaves.user_legacy.summary.stateVersion, 24);
+    assert.equal(migrationServer.store.readCloudSavePayload("user_legacy", "main", 1), largePayload);
+    assert.equal(migrationServer.store.database.prepare("SELECT count(*) AS count FROM cloud_save_payloads").get().count, 1);
+    const compactState = JSON.parse(migrationServer.store.database.prepare("SELECT payload FROM app_state WHERE id = 1").get().payload);
+    assert.equal(compactState.cloudSaves.user_legacy.payload, undefined);
+    assert.ok(Buffer.byteLength(JSON.stringify(compactState)) < Buffer.byteLength(largePayload) / 100);
+    migrationServer.store.data.dailyMetrics["2026-07-24"] = { requests: 1 };
+    await migrationServer.store.persist();
+    assert.equal(migrationServer.store.database.prepare("SELECT length(payload) AS size FROM cloud_save_payloads WHERE user_id = ? AND slot = ? AND revision = ?").get("user_legacy", "main", 1).size, largePayload.length);
+    await new Promise((resolve) => migrationServer.close(resolve));
+
+    migrationServer = await createCloudServer({ databaseFile, logger: { error() {} } });
+    await new Promise((resolve) => migrationServer.listen(0, "127.0.0.1", resolve));
+    assert.equal(migrationServer.store.data.cloudSaveHistory.user_legacy.length, 1);
+    assert.equal(migrationServer.store.readCloudSavePayload("user_legacy", "main", 1), largePayload);
+  } finally {
+    if (migrationServer?.listening) await new Promise((resolve) => migrationServer.close(resolve));
+    await rm(migrationDirectory, { recursive: true, force: true });
+  }
+});
+
+test("prunes detached SQLite payload rows with the twenty-revision history window", async () => {
+  const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-cloud-history-prune-"));
+  let isolatedServer;
+  try {
+    isolatedServer = await createCloudServer({ databaseFile: path.join(isolatedDirectory, "cloud.sqlite"), registrationLimit: 100, mailer: null, logger: { error() {} } });
+    await new Promise((resolve) => isolatedServer.listen(0, "127.0.0.1", resolve));
+    const isolatedBaseUrl = `http://127.0.0.1:${isolatedServer.address().port}`;
+    const registerResponse = await fetch(`${isolatedBaseUrl}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "history_pilot", password: "strong-pass-123", displayName: "历史清理测试" }),
+    });
+    const registered = await registerResponse.json();
+    assert.equal(registerResponse.status, 201);
+    for (let revision = 1; revision <= 21; revision += 1) {
+      const payload = cloudPayload.replace('"universe_matrix":10', `"universe_matrix":${revision}`);
+      const response = await fetch(`${isolatedBaseUrl}/api/cloud-save`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", authorization: `Bearer ${registered.token}` },
+        body: JSON.stringify({ payload, expectedRevision: revision - 1 }),
+      });
+      assert.equal(response.status, 200);
+    }
+    assert.deepEqual(isolatedServer.store.data.cloudSaveHistory[registered.user.id].map((save) => save.revision), Array.from({ length: 20 }, (_, index) => index + 2));
+    const rows = isolatedServer.store.database.prepare("SELECT revision FROM cloud_save_payloads WHERE user_id = ? AND slot = 'main' ORDER BY revision").all(registered.user.id);
+    assert.deepEqual(rows.map((row) => row.revision), Array.from({ length: 20 }, (_, index) => index + 2));
+  } finally {
+    if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
+    await rm(isolatedDirectory, { recursive: true, force: true });
+  }
+});
+
 test("stores revisioned cloud saves and detects conflicts", async () => {
   const saved = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
   assert.equal(saved.response.status, 200);
@@ -650,6 +739,7 @@ test("deletes an account and all directly owned cloud data", async () => {
   assert.equal(Object.values(server.store.data.users).some((user) => user.username === "delete_pilot"), false);
   assert.equal(server.store.data.cloudSaves[created.body.user.id], undefined);
   assert.equal(server.store.data.cloudSaveSlots[created.body.user.id], undefined);
+  assert.equal(server.store.database.prepare("SELECT count(*) AS count FROM cloud_save_payloads WHERE user_id = ?").get(created.body.user.id).count, 0);
   const expired = await request("/api/account", { headers: { authorization: `Bearer ${deleteToken}` } });
   assert.equal(expired.response.status, 401);
 });

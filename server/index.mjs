@@ -21,6 +21,7 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CLOUD_HISTORY_LIMIT = 20;
 const CLOUD_SAVE_SLOTS = ["main", "1", "2", "3"];
 const MANUAL_CLOUD_SAVE_SLOTS = CLOUD_SAVE_SLOTS.slice(1);
+const SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION = 2;
 const EMAIL_ACTION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_PLAYER_ONLINE_WINDOW_MS = 120_000;
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{16,96}$/;
@@ -178,7 +179,8 @@ function summarizeSavePayload(payload) {
 
 function normalizeSaveRecord(save) {
   if (!save || typeof save !== "object") return save;
-  return { ...save, summary: summarizeSavePayload(save.payload) };
+  // Persisted summaries avoid reparsing every historical save during server startup.
+  return { ...save, summary: save.summary ?? summarizeSavePayload(save.payload) };
 }
 
 function normalizeManualSaveSlots(value) {
@@ -378,12 +380,48 @@ class JsonStore {
   }
 }
 
+function forEachCloudSaveRecord(source, visit) {
+  if (!source || typeof source !== "object") return;
+  if (source.cloudSaves && typeof source.cloudSaves === "object") {
+    for (const [userId, save] of Object.entries(source.cloudSaves)) visit(userId, "main", save);
+  }
+  if (source.cloudSaveHistory && typeof source.cloudSaveHistory === "object") {
+    for (const [userId, history] of Object.entries(source.cloudSaveHistory)) {
+      if (Array.isArray(history)) for (const save of history) visit(userId, "main", save);
+    }
+  }
+  if (source.cloudSaveSlots && typeof source.cloudSaveSlots === "object") {
+    for (const [userId, slots] of Object.entries(source.cloudSaveSlots)) {
+      if (!slots || typeof slots !== "object") continue;
+      for (const slot of MANUAL_CLOUD_SAVE_SLOTS) visit(userId, slot, slots[slot]);
+    }
+  }
+  if (source.cloudSaveSlotHistory && typeof source.cloudSaveSlotHistory === "object") {
+    for (const [userId, slots] of Object.entries(source.cloudSaveSlotHistory)) {
+      if (!slots || typeof slots !== "object") continue;
+      for (const slot of MANUAL_CLOUD_SAVE_SLOTS) {
+        if (Array.isArray(slots[slot])) for (const save of slots[slot]) visit(userId, slot, save);
+      }
+    }
+  }
+}
+
+function metadataOnlySaveRecord(save) {
+  if (!save || typeof save !== "object") return save;
+  const { payload: _payload, ...metadata } = save;
+  return metadata;
+}
+
 class SqliteStore {
   constructor(file) {
     this.file = file;
     this.data = cloneDefaultData();
     this.database = null;
     this.writeQueue = Promise.resolve();
+    this.pendingCloudSaveWrites = new Map();
+    this.queuedCloudSaveWrites = new Map();
+    this.pendingCloudSaveDeletes = new Map();
+    this.pendingCloudSaveUserDeletes = new Set();
   }
 
   async load() {
@@ -392,17 +430,140 @@ class SqliteStore {
     this.database.pragma("journal_mode = WAL");
     this.database.pragma("synchronous = NORMAL");
     this.database.exec("CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY CHECK (id = 1), payload TEXT NOT NULL, updated_at INTEGER NOT NULL)");
+    this.database.exec("CREATE TABLE IF NOT EXISTS cloud_save_payloads (user_id TEXT NOT NULL, slot TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (user_id, slot, revision)) WITHOUT ROWID");
     const row = this.database.prepare("SELECT payload FROM app_state WHERE id = 1").get();
-    if (row?.payload) this.data = normalizeStoredData(JSON.parse(row.payload));
-    else await this.persist();
+    if (!row?.payload) {
+      this.data.storageLayoutVersion = SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION;
+      await this.persist();
+      return;
+    }
+    const parsed = JSON.parse(row.payload);
+    row.payload = null;
+    if (parsed?.storageLayoutVersion === SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION) {
+      this.data = normalizeStoredData(parsed);
+      return;
+    }
+    await this.migrateLegacyPayloadLayout(parsed);
   }
 
   persist() {
+    this.data.storageLayoutVersion = SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION;
+    const payload = JSON.stringify(this.data);
+    const writes = this.pendingCloudSaveWrites;
+    const deletes = this.pendingCloudSaveDeletes;
+    const userDeletes = this.pendingCloudSaveUserDeletes;
+    this.pendingCloudSaveWrites = new Map();
+    this.pendingCloudSaveDeletes = new Map();
+    this.pendingCloudSaveUserDeletes = new Set();
+    for (const [key, write] of writes) this.queuedCloudSaveWrites.set(key, write);
+    this.enqueuePersist(payload, writes, deletes, userDeletes);
+    return this.writeQueue;
+  }
+
+  async importLegacyData(source) {
+    await this.migrateLegacyPayloadLayout(source);
+  }
+
+  stageCloudSavePayload(userId, slot, save) {
+    const metadata = metadataOnlySaveRecord(save);
+    if (typeof save?.payload !== "string") return metadata;
+    const revision = Number.isInteger(save.revision) && save.revision > 0 ? save.revision : null;
+    if (!revision) return metadata;
+    const key = `${userId}\u0000${slot}\u0000${revision}`;
+    this.pendingCloudSaveWrites.set(key, { userId, slot, revision, payload: save.payload });
+    this.pendingCloudSaveDeletes.delete(key);
+    return metadata;
+  }
+
+  discardCloudSavePayload(userId, slot, revision) {
+    if (!Number.isInteger(revision) || revision <= 0) return;
+    const key = `${userId}\u0000${slot}\u0000${revision}`;
+    this.pendingCloudSaveWrites.delete(key);
+    this.pendingCloudSaveDeletes.set(key, { userId, slot, revision });
+  }
+
+  discardUserCloudSavePayloads(userId) {
+    this.pendingCloudSaveUserDeletes.add(userId);
+    for (const [key, write] of this.pendingCloudSaveWrites) {
+      if (write.userId === userId) this.pendingCloudSaveWrites.delete(key);
+    }
+    for (const [key, deletion] of this.pendingCloudSaveDeletes) {
+      if (deletion.userId === userId) this.pendingCloudSaveDeletes.delete(key);
+    }
+  }
+
+  readCloudSavePayload(userId, slot, revision) {
+    if (!Number.isInteger(revision) || revision <= 0) return null;
+    const pending = this.pendingCloudSaveWrites.get(`${userId}\u0000${slot}\u0000${revision}`);
+    if (pending) return pending.payload;
+    const queued = this.queuedCloudSaveWrites.get(`${userId}\u0000${slot}\u0000${revision}`);
+    if (queued) return queued.payload;
+    const row = this.database.prepare("SELECT payload FROM cloud_save_payloads WHERE user_id = ? AND slot = ? AND revision = ?").get(userId, slot, revision);
+    return typeof row?.payload === "string" ? row.payload : null;
+  }
+
+  enqueuePersist(payload, writes, deletes, userDeletes) {
+    this.writeQueue = this.writeQueue.catch(() => undefined).then(() => {
+      const writeState = this.database.prepare("INSERT INTO app_state (id, payload, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at");
+      const writeCloudPayload = this.database.prepare("INSERT INTO cloud_save_payloads (user_id, slot, revision, payload) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, slot, revision) DO UPDATE SET payload = excluded.payload");
+      const deleteCloudPayload = this.database.prepare("DELETE FROM cloud_save_payloads WHERE user_id = ? AND slot = ? AND revision = ?");
+      const deleteUserCloudPayloads = this.database.prepare("DELETE FROM cloud_save_payloads WHERE user_id = ?");
+      try {
+        this.database.transaction(() => {
+          for (const userId of userDeletes) deleteUserCloudPayloads.run(userId);
+          for (const deletion of deletes.values()) deleteCloudPayload.run(deletion.userId, deletion.slot, deletion.revision);
+          for (const write of writes.values()) writeCloudPayload.run(write.userId, write.slot, write.revision, write.payload);
+          writeState.run(payload, Date.now());
+        })();
+        for (const [key, write] of writes) {
+          if (this.queuedCloudSaveWrites.get(key) === write) this.queuedCloudSaveWrites.delete(key);
+        }
+      } catch (error) {
+        for (const [key, write] of writes) {
+          if (!this.pendingCloudSaveWrites.has(key)) this.pendingCloudSaveWrites.set(key, write);
+          if (this.queuedCloudSaveWrites.get(key) === write) this.queuedCloudSaveWrites.delete(key);
+        }
+        for (const [key, deletion] of deletes) {
+          if (!this.pendingCloudSaveDeletes.has(key)) this.pendingCloudSaveDeletes.set(key, deletion);
+        }
+        for (const userId of userDeletes) this.pendingCloudSaveUserDeletes.add(userId);
+        throw error;
+      }
+    });
+  }
+
+  async migrateLegacyPayloadLayout(source) {
+    source = source && typeof source === "object" ? source : cloneDefaultData();
+    const writes = new Map();
+    forEachCloudSaveRecord(source, (userId, slot, save) => {
+      if (!save || typeof save !== "object") return;
+      const revision = Number.isInteger(save.revision) && save.revision > 0 ? save.revision : null;
+      if (revision && typeof save.payload === "string") {
+        const key = `${userId}\u0000${slot}\u0000${revision}`;
+        if (!writes.has(key)) writes.set(key, { userId, slot, revision, payload: save.payload });
+      }
+      if (save.summary === undefined) save.summary = summarizeSavePayload(save.payload);
+      delete save.payload;
+    });
+    source.storageLayoutVersion = SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION;
+    this.data = normalizeStoredData(source);
+    const retainedKeys = new Set();
+    forEachCloudSaveRecord(this.data, (userId, slot, save) => {
+      if (Number.isInteger(save?.revision) && save.revision > 0) retainedKeys.add(`${userId}\u0000${slot}\u0000${save.revision}`);
+    });
     const payload = JSON.stringify(this.data);
     this.writeQueue = this.writeQueue.then(() => {
-      this.database.prepare("INSERT INTO app_state (id, payload, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at").run(payload, Date.now());
+      const writeState = this.database.prepare("INSERT INTO app_state (id, payload, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at");
+      const writeCloudPayload = this.database.prepare("INSERT INTO cloud_save_payloads (user_id, slot, revision, payload) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, slot, revision) DO UPDATE SET payload = excluded.payload");
+      this.database.transaction(() => {
+        this.database.prepare("DELETE FROM cloud_save_payloads").run();
+        for (const [key, write] of writes) {
+          if (retainedKeys.has(key)) writeCloudPayload.run(write.userId, write.slot, write.revision, write.payload);
+        }
+        writeState.run(payload, Date.now());
+      })();
     });
-    return this.writeQueue;
+    await this.writeQueue;
   }
 
   async backup(destination) {
@@ -734,23 +895,61 @@ function saveHistory(store, userId, slot = "main") {
   return Array.isArray(store.data.cloudSaveSlotHistory[userId]?.[slot]) ? store.data.cloudSaveSlotHistory[userId][slot] : [];
 }
 
+function cloudSavePayload(store, userId, slot, revision, save = null) {
+  if (typeof store.readCloudSavePayload === "function") return store.readCloudSavePayload(userId, slot, revision);
+  const candidate = save ?? saveHistory(store, userId, slot).find((entry) => entry.revision === revision) ?? currentCloudSave(store, userId, slot);
+  return typeof candidate?.payload === "string" ? candidate.payload : null;
+}
+
+function materializeCloudSave(store, userId, slot, save) {
+  if (!save) return null;
+  const payload = cloudSavePayload(store, userId, slot, save.revision, save);
+  return typeof payload === "string" ? { ...save, payload } : null;
+}
+
 function appendSaveRevision(store, userId, save, slot = "main") {
-  const history = [...saveHistory(store, userId, slot).filter((entry) => entry.revision !== save.revision), save]
+  const previousHistory = saveHistory(store, userId, slot);
+  const storedSave = typeof store.stageCloudSavePayload === "function"
+    ? store.stageCloudSavePayload(userId, slot, save)
+    : save;
+  const history = [...previousHistory.filter((entry) => entry.revision !== save.revision), storedSave]
     .sort((left, right) => left.revision - right.revision)
     .slice(-CLOUD_HISTORY_LIMIT);
+  if (typeof store.discardCloudSavePayload === "function") {
+    const retainedRevisions = new Set(history.map((entry) => entry.revision));
+    for (const entry of previousHistory) {
+      if (!retainedRevisions.has(entry.revision)) store.discardCloudSavePayload(userId, slot, entry.revision);
+    }
+  }
   if (slot === "main") {
     store.data.cloudSaveHistory[userId] = history;
-    store.data.cloudSaves[userId] = save;
+    store.data.cloudSaves[userId] = storedSave;
     return;
   }
   store.data.cloudSaveSlots[userId] ??= {};
   store.data.cloudSaveSlotHistory[userId] ??= {};
-  store.data.cloudSaveSlots[userId][slot] = save;
+  store.data.cloudSaveSlots[userId][slot] = storedSave;
   store.data.cloudSaveSlotHistory[userId][slot] = history;
 }
 
 function cloudSaveSlotMetadata(store, userId) {
   return Object.fromEntries(CLOUD_SAVE_SLOTS.map((slot) => [slot, cloudSaveMetadata(currentCloudSave(store, userId, slot), slot)]));
+}
+
+function materializeManualCloudSaveSlots(store, userId) {
+  return Object.fromEntries(MANUAL_CLOUD_SAVE_SLOTS.flatMap((slot) => {
+    const save = currentCloudSave(store, userId, slot);
+    return save ? [[slot, materializeCloudSave(store, userId, slot, save)]] : [];
+  }));
+}
+
+function materializeManualCloudSaveHistory(store, userId) {
+  return Object.fromEntries(MANUAL_CLOUD_SAVE_SLOTS.flatMap((slot) => {
+    const history = saveHistory(store, userId, slot);
+    return history.length > 0
+      ? [[slot, history.map((save) => materializeCloudSave(store, userId, slot, save))]]
+      : [];
+  }));
 }
 
 function normalizedPlayerId(value) {
@@ -882,10 +1081,9 @@ export async function createCloudServer({
   await store.load();
   if (databaseFile && dataFile && Object.keys(store.data.users).length === 0) {
     try {
-      const legacy = normalizeStoredData(JSON.parse(await fs.readFile(dataFile, "utf8")));
-      if (Object.keys(legacy.users).length > 0 || Object.keys(legacy.cloudSaves).length > 0 || legacy.feedback.length > 0 || legacy.errors.length > 0) {
-        store.data = legacy;
-        await store.persist();
+      const legacy = JSON.parse(await fs.readFile(dataFile, "utf8"));
+      if (Object.keys(legacy?.users ?? {}).length > 0 || Object.keys(legacy?.cloudSaves ?? {}).length > 0 || legacy?.feedback?.length > 0 || legacy?.errors?.length > 0) {
+        await store.importLegacyData(legacy);
       }
     } catch (error) {
       if (error?.code !== "ENOENT") logger.error?.("legacy cloud data migration failed", error);
@@ -998,7 +1196,7 @@ export async function createCloudServer({
 
     try {
       if (request.method === "GET" && url.pathname === "/api/health") {
-        return send(response, 200, { ok: true, service: "dsp-idle-cloud", schemaVersion: DEFAULT_DATA.schemaVersion, storage: databaseFile ? "sqlite" : "json", mailProvider: accountMailProvider, activity: { enabled: galacticActivityConfig.enabled, valid: galacticActivityConfig.valid, reason: galacticActivityConfig.reason }, uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), time: Date.now() });
+        return send(response, 200, { ok: true, service: "dsp-idle-cloud", schemaVersion: DEFAULT_DATA.schemaVersion, storage: databaseFile ? "sqlite" : "json", storageLayoutVersion: databaseFile ? store.data.storageLayoutVersion ?? 1 : 1, mailProvider: accountMailProvider, activity: { enabled: galacticActivityConfig.enabled, valid: galacticActivityConfig.valid, reason: galacticActivityConfig.reason }, uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), time: Date.now() });
       }
       if (request.method === "GET" && url.pathname === "/api/public-status") {
         return send(response, 200, {
@@ -1284,6 +1482,15 @@ export async function createCloudServer({
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const userId = auth.user.id;
+        const currentMainSave = currentCloudSave(store, userId, "main");
+        const materializedMainSave = materializeCloudSave(store, userId, "main", currentMainSave);
+        const manualSlots = materializeManualCloudSaveSlots(store, userId);
+        const manualHistory = materializeManualCloudSaveHistory(store, userId);
+        if ((currentMainSave && !materializedMainSave)
+          || Object.values(manualSlots).some((save) => !save)
+          || Object.values(manualHistory).some((history) => history.some((save) => !save))) {
+          return send(response, 500, { error: "云存档正文缺失，账号数据导出已停止", code: "CLOUD_SAVE_PAYLOAD_MISSING" });
+        }
         const submissions = Object.values(store.data.submissions).filter((entry) => entry.userId === userId);
         const feedback = store.data.feedback.filter((entry) => entry.userId === userId).map(({ ipHash: _ipHash, ...entry }) => entry);
         const errors = store.data.errors.filter((entry) => entry.userId === userId).map(({ ipHash: _ipHash, ...entry }) => entry);
@@ -1293,10 +1500,10 @@ export async function createCloudServer({
           exportedAt: Date.now(),
           schemaVersion: DEFAULT_DATA.schemaVersion,
           user: publicUser(auth.user),
-          cloudSave: store.data.cloudSaves[userId] ?? null,
+          cloudSave: materializedMainSave,
           cloudSaveHistory: [...saveHistory(store, userId)].reverse().map((save) => cloudSaveMetadata(save, "main")),
-          cloudSaveSlots: store.data.cloudSaveSlots[userId] ?? {},
-          cloudSaveSlotHistory: store.data.cloudSaveSlotHistory[userId] ?? {},
+          cloudSaveSlots: manualSlots,
+          cloudSaveSlotHistory: manualHistory,
           submissions,
           feedback,
           errors,
@@ -1317,6 +1524,7 @@ export async function createCloudServer({
         delete store.data.cloudSaveHistory[userId];
         delete store.data.cloudSaveSlots[userId];
         delete store.data.cloudSaveSlotHistory[userId];
+        store.discardUserCloudSavePayloads?.(userId);
         for (const [key, submission] of Object.entries(store.data.submissions)) {
           if (submission.userId === userId) delete store.data.submissions[key];
         }
@@ -1346,7 +1554,9 @@ export async function createCloudServer({
         const save = Number.isInteger(requestedRevision) && requestedRevision > 0
           ? saveHistory(store, auth.user.id, slot).find((entry) => entry.revision === requestedRevision)
           : currentCloudSave(store, auth.user.id, slot);
-        return send(response, 200, { cloudSave: save ? { ...cloudSaveMetadata(save, slot), payload: save.payload } : null });
+        const materialized = materializeCloudSave(store, auth.user.id, slot, save);
+        if (save && !materialized) return send(response, 500, { error: "云存档正文缺失，请联系管理员恢复备份", code: "CLOUD_SAVE_PAYLOAD_MISSING" });
+        return send(response, 200, { cloudSave: materialized ? { ...cloudSaveMetadata(materialized, slot), payload: materialized.payload } : null });
       }
 
       if (request.method === "PUT" && url.pathname === "/api/cloud-save") {
@@ -1391,8 +1601,10 @@ export async function createCloudServer({
         const sourceRevision = Number(body.revision);
         const source = saveHistory(store, auth.user.id, slot).find((entry) => entry.revision === sourceRevision);
         if (!source) return send(response, 404, { error: "历史修订不存在或已过期" });
+        const materializedSource = materializeCloudSave(store, auth.user.id, slot, source);
+        if (!materializedSource) return send(response, 500, { error: "历史云存档正文缺失，无法恢复", code: "CLOUD_SAVE_PAYLOAD_MISSING" });
         const restored = {
-          ...source,
+          ...materializedSource,
           revision: (current?.revision ?? 0) + 1,
           updatedAt: Date.now(),
           restoredFromRevision: sourceRevision,
@@ -1427,8 +1639,10 @@ export async function createCloudServer({
         if (!METRIC_KEYS.some((key) => metrics[key] > 0)) return send(response, 400, { error: "没有可上传的工业数据" });
         const key = `${seasonId}:${auth.user.id}`;
         const previous = store.data.submissions[key];
-        const cloudSave = store.data.cloudSaves[auth.user.id];
-        if (!cloudSave) return send(response, 409, { error: "请先上传当前云存档，再提交排行榜成绩" });
+        const cloudSaveMetadataRecord = store.data.cloudSaves[auth.user.id];
+        if (!cloudSaveMetadataRecord) return send(response, 409, { error: "请先上传当前云存档，再提交排行榜成绩" });
+        const cloudSave = materializeCloudSave(store, auth.user.id, "main", cloudSaveMetadataRecord);
+        if (!cloudSave) return send(response, 500, { error: "云存档正文缺失，暂时无法校验排行榜成绩", code: "CLOUD_SAVE_PAYLOAD_MISSING" });
         const verification = verifyLeaderboardMetrics(metrics, cloudSave, previous);
         if (!verification.ok) return send(response, 422, { error: verification.error });
         const merged = previous ? normalizeMetrics(Object.fromEntries(METRIC_KEYS.map((metric) => [metric, Math.max(previous.metrics[metric] ?? 0, metrics[metric] ?? 0)]))) : metrics;
