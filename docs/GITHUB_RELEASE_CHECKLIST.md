@@ -16,12 +16,12 @@
 
 ## 创建仓库后
 
-- [ ] 设置准确的仓库描述和 topics，不勾选与实际许可证冲突的开源声明。
+- [x] 设置准确的仓库描述和 topics，不勾选与实际许可证冲突的开源声明。
 - [x] 在 `package.json` 增加真实 `repository`、`homepage` 和 `bugs` URL，并在应用内提供源码地址。
-- [ ] 启用 branch protection，要求 `CI` 通过后才能合并到 `main`。
-- [ ] 启用 Dependabot alerts、security updates、secret scanning 和 push protection。
-- [ ] 启用 GitHub Private vulnerability reporting。
-- [ ] 限制 GitHub Actions 默认 token 为只读，只向确实需要的发布 job 授予额外权限。
+- [ ] 启用 branch protection，要求 `verify` 通过后才能合并到 `main`。
+- [x] 启用 Dependabot alerts、security updates、secret scanning 和 push protection。
+- [x] 启用 GitHub Private vulnerability reporting。
+- [x] 限制 GitHub Actions 默认 token 为只读，只向确实需要的发布 job 授予额外权限。
 - [ ] 检查 Actions secrets 中只存在签名和发布所必需的值，并设置 environment protection。
 - [ ] 创建首个源码公开标签和 release，附构建 SHA、测试结果和许可证说明。
 

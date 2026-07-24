@@ -14,7 +14,7 @@
 
 项目已经从单页挂机原型发展为一套可持续游玩的 2D 无限画布工厂游戏，具备本地存档、云账号与云存档、排行榜、PWA、Electron 桌面壳和双节点部署。现在最重要的工作不再是继续堆玩法，而是建立可复现发布、生产数据保护、安全加固、性能优化和原创化边界。
 
-当前工作区已经补齐 PolyForm Noncommercial 1.0.0、商业使用说明、贡献规则、安全政策、隐私政策、服务条款、商标规则、128 个 npm 运行时包的第三方许可证清单、Pull Request CI 和 Dependabot 配置。该许可禁止未经书面授权的商业使用，因此准确定位是 `source-available`，不是 OSI 意义上的开源软件。GitHub 仓库、包元数据和应用内源码入口均指向 `snowsnow0926/DSPONLINE`；私密漏洞报告、secret scanning、push protection 和 branch protection 仍需在远端仓库设置中启用。
+当前工作区已经补齐 PolyForm Noncommercial 1.0.0、商业使用说明、贡献规则、安全政策、隐私政策、服务条款、商标规则、128 个 npm 运行时包的第三方许可证清单、Pull Request CI 和 Dependabot 配置。该许可禁止未经书面授权的商业使用，因此准确定位是 `source-available`，不是 OSI 意义上的开源软件。GitHub 仓库、包元数据和应用内源码入口均指向 `snowsnow0926/DSPONLINE`；远端已启用 Dependabot alerts、安全更新、私密漏洞报告、secret scanning 和 push protection，GitHub Actions 默认 token 为只读。`main` branch protection 等本轮 CI 全绿后再绑定 `verify` 状态检查。
 
 ## 2. 当前发布面
 

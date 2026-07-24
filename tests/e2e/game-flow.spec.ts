@@ -14,8 +14,19 @@ async function dismissOnboarding(page: Page) {
   if (await control.count()) await control.first().click();
 }
 
-test.beforeEach(async ({ page }) => {
+const testsManagingOfflineReport = new Set([
+  "offline report summarizes production before entering the factory",
+  "running equipment uses semantic animation and reduced motion disables it",
+]);
+
+test.beforeEach(async ({ page }, testInfo) => {
   await installTestBootstrap(page);
+  if (!testsManagingOfflineReport.has(testInfo.title)) {
+    const offlineReport = page.getByRole("dialog", { name: "离线结算报告" });
+    await page.addLocatorHandler(offlineReport, async () => {
+      await offlineReport.getByRole("button", { name: "确认结算" }).click();
+    });
+  }
 });
 
 test("start menu gates simulation and exposes saves, cloud, import and settings", async ({ page }) => {
@@ -2236,7 +2247,7 @@ test("mobile selection, long press and staged drawers survive orientation change
   const viewportBefore = await readViewportCenter();
   await page.setViewportSize({ width: 844, height: 390 });
   await page.waitForTimeout(180);
-  await expect(page.locator(".react-flow__node.selected")).toHaveCount(2);
+  await expect(page.getByRole("toolbar", { name: "选区操作" })).toContainText("2 节点 · 0 线路");
   await expect(page.locator(".game-shell")).toHaveClass(/mobile-panel--resources/);
   await expect(page.locator(".game-shell")).toHaveClass(/mobile-panel-stage--full/);
   const viewportAfter = await readViewportCenter();
