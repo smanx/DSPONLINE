@@ -1,0 +1,44 @@
+:root[data-app-platform="desktop"],
+:root[data-app-platform="android"] {
+  overscroll-behavior: none;
+}
+
+:root[data-app-platform="android"] {
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+:root[data-app-platform="android"] input,
+:root[data-app-platform="android"] textarea,
+:root[data-app-platform="android"] [contenteditable="true"] {
+  user-select: text;
+}
+
+:root[data-app-platform="android"] body {
+  min-height: 100dvh;
+  overscroll-behavior: none;
+}
+
+:root[data-app-platform="android"] .start-menu-topbar {
+  top: env(safe-area-inset-top, 0px);
+  right: env(safe-area-inset-right, 0px);
+  left: env(safe-area-inset-left, 0px);
+}
+
+:root[data-app-platform="android"] .start-menu-footer {
+  right: max(14px, env(safe-area-inset-right, 0px));
+  bottom: max(8px, env(safe-area-inset-bottom, 0px));
+  left: max(14px, env(safe-area-inset-left, 0px));
+}
+
+:root[data-app-platform="android"][data-network="offline"] .cloud-status,
+:root[data-app-platform="android"][data-network="offline"] .galaxy-node-state {
+  opacity: .72;
+}
+
+@media (pointer: coarse) {
+  :root[data-app-platform="android"] button,
+  :root[data-app-platform="android"] [role="button"] {
+    touch-action: manipulation;
+  }
+}

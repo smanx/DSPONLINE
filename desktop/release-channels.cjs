@@ -1,4 +1,4 @@
-const DEFAULT_UPDATE_HOST = "https://updates.example.invalid/dsp-idle";
+const DEFAULT_UPDATE_HOST = "https://dsponline.cn/downloads/desktop";
 
 const channels = {
   stable: {

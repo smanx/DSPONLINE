@@ -9,12 +9,12 @@ import { getInfiniteResearchCostString, isInfiniteResearchComplete } from "../ga
 import type { GalacticActivityPublicStatus } from "../game/galacticActivity";
 import { getPlanetIndustrialProfile } from "../game/galaxy";
 import { listBeltNetworks, type BeltHealth } from "../game/network";
-import { formatKilowatts } from "../game/units";
 import type { BeltRouteMode, CanvasBookmark, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, RecipeId, StationSlotTemplate } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { ProductionManagement } from "./ProductionManagement";
 import { GalacticActivityPanel } from "./GalacticActivityPanel";
 import { QuantityValue } from "./QuantityValue";
+import { PowerValue } from "./PowerValue";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 
 export type StatisticsTab = "management" | "production" | "efficiency" | "networks" | "planning" | "power" | "issues" | "galaxy";
@@ -339,7 +339,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
               <div className="planning-summary-band">
                 <div><span>理论设备</span><strong>{planResult.totalMachines}</strong></div>
                 <div><span>待增设备</span><strong>{planResult.additionalMachines}</strong></div>
-                <div><span>新增用电</span><strong>{(planResult.totalPowerDemandKw / 1000).toFixed(2)} MW</strong></div>
+                <div><span>新增用电</span><strong><PowerValue valueKw={planResult.totalPowerDemandKw} /></strong></div>
                 <div><span>物流吞吐</span><strong>{planResult.totalLogisticsPerMinute.toFixed(1)}/min</strong></div>
                 <div><span>首要瓶颈</span><strong>{planResult.limitingItemId ? getItem(planResult.limitingItemId).name : "无"}</strong></div>
               </div>
@@ -369,32 +369,32 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
       {tab === "power" ? (
         <div className="statistics-content statistics-power">
           <div className="power-summary-band">
-            <div><span>电力需求</span><strong>{game.metrics.demandKw.toFixed(0)} kW</strong></div>
-            <div><span>可用容量</span><strong>{game.metrics.generationKw.toFixed(0)} kW</strong></div>
-            <div><span>风力容量</span><strong>{game.metrics.windGenerationKw.toFixed(0)} kW</strong></div>
-            <div><span>太阳能容量</span><strong>{game.metrics.solarGenerationKw.toFixed(0)} kW</strong></div>
-            <div><span>地热容量</span><strong>{game.metrics.geothermalGenerationKw.toFixed(0)} kW</strong></div>
-            <div><span>射线电力</span><strong>{game.metrics.rayGenerationKw.toFixed(0)} kW</strong></div>
-            <div><span>火电出力</span><strong>{game.metrics.thermalGenerationKw.toFixed(0)} kW</strong></div>
-            <div><span>聚变出力</span><strong>{game.metrics.fusionGenerationKw.toFixed(0)} kW</strong></div>
-            <div><span>人造恒星</span><strong>{game.metrics.artificialStarGenerationKw.toFixed(0)} kW</strong></div>
+            <div><span>电力需求</span><strong><PowerValue valueKw={game.metrics.demandKw} /></strong></div>
+            <div><span>可用容量</span><strong><PowerValue valueKw={game.metrics.generationKw} /></strong></div>
+            <div><span>风力容量</span><strong><PowerValue valueKw={game.metrics.windGenerationKw} /></strong></div>
+            <div><span>太阳能容量</span><strong><PowerValue valueKw={game.metrics.solarGenerationKw} /></strong></div>
+            <div><span>地热容量</span><strong><PowerValue valueKw={game.metrics.geothermalGenerationKw} /></strong></div>
+            <div><span>射线电力</span><strong><PowerValue valueKw={game.metrics.rayGenerationKw} /></strong></div>
+            <div><span>火电出力</span><strong><PowerValue valueKw={game.metrics.thermalGenerationKw} /></strong></div>
+            <div><span>聚变出力</span><strong><PowerValue valueKw={game.metrics.fusionGenerationKw} /></strong></div>
+            <div><span>人造恒星</span><strong><PowerValue valueKw={game.metrics.artificialStarGenerationKw} /></strong></div>
             <div><span>供电效率</span><strong>{Math.round(game.metrics.powerFactor * 100)}%</strong></div>
             <div><span>燃料续航</span><strong>{reserveTime(game.metrics.fuelReserveSeconds)}</strong></div>
             <div><span>储能水平</span><strong>{game.metrics.storedEnergyMj.toFixed(1)} / {game.metrics.storageCapacityMj.toFixed(0)} MJ</strong></div>
-            <div><span>储能充电</span><strong>{game.metrics.storageChargeKw.toFixed(0)} kW</strong></div>
-            <div><span>储能放电</span><strong>{game.metrics.storageDischargeKw.toFixed(0)} kW</strong></div>
+            <div><span>储能充电</span><strong><PowerValue valueKw={game.metrics.storageChargeKw} /></strong></div>
+            <div><span>储能放电</span><strong><PowerValue valueKw={game.metrics.storageDischargeKw} /></strong></div>
             <div><span>在轨太阳帆</span><strong><QuantityValue value={game.dysonSwarm.sailsInOrbit} /></strong></div>
-            <div><span>戴森云功率</span><strong>{formatKilowatts(game.dysonSwarm.generationKw)}</strong></div>
+            <div><span>戴森云功率</span><strong><PowerValue valueKw={game.dysonSwarm.generationKw} /></strong></div>
             <div><span>永久结构点</span><strong><QuantityValue value={game.dysonSphere.structurePoints} /></strong></div>
             <div><span>壳面太阳帆</span><strong><QuantityValue value={game.dysonSphere.shellSails} /></strong></div>
-            <div><span>戴森球功率</span><strong>{formatKilowatts(game.dysonSphere.generationKw)}</strong></div>
+            <div><span>戴森球功率</span><strong><PowerValue valueKw={game.dysonSphere.generationKw} /></strong></div>
           </div>
           <div className="grid-load"><i><b style={{ width: `${generationUtilization}%` }} /></i><span>容量利用率</span><strong>{Math.round(generationUtilization)}%</strong></div>
           <section className="power-grid-ledger">
             <header><span>独立电网域</span><span>供电效率</span><span>负载 / 容量</span><span>范围内设备</span></header>
             {POWER_GRID_IDS.map((gridId) => {
               const metrics = getPowerGridMetrics(game, game.activePlanetId, gridId);
-              return <div className="power-grid-row" key={gridId}><strong>{POWER_GRID_LABELS[gridId]}</strong><span className={metrics.powerFactor < 0.999 ? "warning" : ""}>{Math.round(metrics.powerFactor * 100)}%</span><span>{metrics.demandKw.toFixed(0)} / {metrics.generationKw.toFixed(0)} kW</span><span>{metrics.connectedEntities} · 断开 {metrics.disconnectedEntities}</span></div>;
+              return <div className="power-grid-row" key={gridId}><strong>{POWER_GRID_LABELS[gridId]}</strong><span className={metrics.powerFactor < 0.999 ? "warning" : ""}>{Math.round(metrics.powerFactor * 100)}%</span><span><PowerValue valueKw={metrics.demandKw} /> / <PowerValue valueKw={metrics.generationKw} /></span><span>{metrics.connectedEntities} · 断开 {metrics.disconnectedEntities}</span></div>;
             })}
           </section>
           <section className="planet-profile-ledger">
@@ -414,8 +414,8 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
               {statistics.powerConsumers.length === 0 ? <div className="statistics-empty"><Zap size={20} /><span>暂无耗电设备</span></div> : statistics.powerConsumers.map((consumer) => (
                 <div className="consumer-row" key={consumer.entityId}>
                   <span><strong>{consumer.equipmentName}</strong><small>{consumer.entityId}</small></span>
-                  <span>{consumer.activeDemandKw.toFixed(0)} kW</span>
-                  <span>{consumer.ratedDemandKw.toFixed(0)} kW</span>
+                  <span><PowerValue valueKw={consumer.activeDemandKw} /></span>
+                  <span><PowerValue valueKw={consumer.ratedDemandKw} /></span>
                   <span className={`status-text status-text--${consumer.status.tone}`}>{consumer.status.label}</span>
                 </div>
               ))}
@@ -450,7 +450,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
                 <div><span>银河评分</span><strong><QuantityValue value={galactic.galacticScore} /></strong><small>信用 <QuantityValue value={galactic.galacticCredits} /></small></div>
                 <div><span>全网生产</span><strong>{galactic.totalProductionPerMinute.toFixed(1)}<small>/min</small></strong><small>库存 <QuantityValue value={galactic.networkInventory} /></small></div>
                 <div><span>出口吞吐</span><strong>{galactic.exportedPerMinute.toFixed(1)}<small>/min</small></strong><small>累计 <QuantityValue value={galactic.totalExported} /></small></div>
-                <div><span>恒星功率</span><strong>{formatKilowatts(galactic.dysonGenerationKw)}</strong><small>{galactic.activePlanets} 个殖民地</small></div>
+                <div><span>恒星功率</span><strong><PowerValue valueKw={galactic.dysonGenerationKw} /></strong><small>{galactic.activePlanets} 个殖民地</small></div>
                 <div><span>运行设备</span><strong>{galactic.operatingEntities}</strong><small>瓶颈 {galactic.blockedEntities}</small></div>
                 <div><span>物流航次</span><strong><QuantityValue value={galactic.logisticsTrips} /></strong><small>无限等级 {galactic.infiniteResearchLevels}</small></div>
               </section>

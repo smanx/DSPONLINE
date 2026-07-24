@@ -5,7 +5,7 @@ const REFRESH_PREFERENCE_KEY = "dsp-idle-network.production-refresh.v1";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v0.9.1");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v1.0.0");
   });
 });
 
@@ -24,6 +24,53 @@ async function openDesktopSettings(page: Page) {
   await operations.getByRole("tab", { name: "设置" }).click();
   return operations;
 }
+
+test("native application settings expose the desktop update lifecycle", async ({ page }) => {
+  await page.addInitScript(() => {
+    let update = { state: "idle", message: "尚未检查", channel: "stable" };
+    const listeners = new Set<(status: typeof update) => void>();
+    (window as typeof window & { dspDesktop: unknown }).dspDesktop = {
+      isDesktop: true,
+      setFontScale: async (scale: number) => ({ scale, zoomFactor: scale }),
+      getReleaseInfo: async () => ({ isDesktop: true, platform: "win32", channel: "stable", channelLabel: "稳定版", version: "1.0.0", update }),
+      requestApi: async () => ({ ok: true, status: 200, body: "{}", headers: { "content-type": "application/json" } }),
+      checkForUpdates: async () => {
+        update = { state: "available", message: "发现版本 1.0.1", channel: "stable" };
+        listeners.forEach((listener) => listener(update));
+        return update;
+      },
+      downloadUpdate: async () => {
+        update = { state: "downloaded", message: "更新已下载，重启后安装", channel: "stable" };
+        listeners.forEach((listener) => listener(update));
+        return update;
+      },
+      installUpdate: async () => {
+        (window as typeof window & { __nativeInstallAccepted?: boolean }).__nativeInstallAccepted = true;
+        return { accepted: true };
+      },
+      onUpdateStatus: (listener: (status: typeof update) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: "游戏设置" }).click();
+  const menuRelease = page.locator(".start-menu-native-update");
+  await expect(menuRelease).toContainText("桌面应用 · 稳定版 · v1.0.0");
+  await expect(menuRelease.getByRole("button", { name: "检查更新" })).toBeVisible();
+
+  const operations = await openDesktopSettings(page);
+  const release = operations.locator(".desktop-release-status");
+  await expect(release).toContainText("桌面应用 · 稳定版 · v1.0.0");
+  await release.getByRole("button", { name: "检查更新" }).click();
+  await expect(release).toContainText("发现版本 1.0.1");
+  await release.getByRole("button", { name: "下载更新" }).click();
+  await expect(release).toContainText("更新已下载，重启后安装");
+  await release.getByRole("button", { name: "重启安装" }).click();
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __nativeInstallAccepted?: boolean }).__nativeInstallAccepted)).toBe(true);
+});
 
 test("production refresh profiles stay device-local and fixed choices are never overridden", async ({ page }) => {
   const operations = await openDesktopSettings(page);
@@ -387,10 +434,10 @@ test("Dyson layer copy and paste uses UI clipboard without copying construction 
   await planner.getByTitle("新建八节点闭合标准壳层").click();
   const sourceInspector = planner.locator(".dyson-layer-inspector");
   await sourceInspector.locator(":scope > .dyson-orbit-control").filter({ hasText: "轨道半径" }).locator("input").fill("20000");
-  await planner.getByRole("button", { name: "复制", exact: true }).click();
+  await planner.getByRole("button", { name: "复制当前壳层设计", exact: true }).click();
 
   await planner.getByTitle("规划北冕座戴森球").click();
-  await planner.getByRole("button", { name: "粘贴副本" }).click();
+  await planner.getByRole("button", { name: "粘贴壳层副本", exact: true }).click();
   await expect(planner.locator(".dyson-layer-list > button")).toHaveCount(1);
   await expect(planner.locator(".dyson-layer-inspector > header")).toContainText("副本");
   await expect(planner.locator(".dyson-layer-inspector > .dyson-orbit-control").filter({ hasText: "轨道半径" })).toContainText("20,000 m");

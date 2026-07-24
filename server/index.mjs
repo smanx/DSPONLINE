@@ -597,7 +597,8 @@ function validateSavePayload(payload) {
   try {
     const parsed = JSON.parse(payload);
     const state = parsed?.state ?? parsed;
-    if (!state || typeof state !== "object" || !Array.isArray(state.entities) || typeof state.version !== "number") return false;
+    if (!state || typeof state !== "object" || !Array.isArray(state.entities) ||
+      !Number.isInteger(state.version) || state.version < 1 || state.version > 34) return false;
     const validBufferLimit = (value) => Number.isInteger(value) && value >= 1_000 && value <= 100_000_000;
     const productionLimit = state.settings?.productionBufferLimit;
     const logisticsLimit = state.settings?.logisticsBufferLimit;
@@ -622,6 +623,50 @@ function validateSavePayload(payload) {
         if (progress.historicalLevel !== undefined &&
           (!Number.isInteger(progress.historicalLevel) || progress.historicalLevel < progress.level)) return false;
         if (typeof progress.progress !== "string" || !/^(0|[1-9][0-9]{0,63})$/.test(progress.progress)) return false;
+      }
+    }
+    if (state.version >= 34) {
+      const timeWarp = state.timeWarp;
+      if (!timeWarp || typeof timeWarp !== "object" ||
+        !(timeWarp.controllerEntityId === null || typeof timeWarp.controllerEntityId === "string") ||
+        typeof timeWarp.enabled !== "boolean" || !Number.isSafeInteger(timeWarp.requestedMultiplier) ||
+        timeWarp.requestedMultiplier < 5 || !Number.isFinite(timeWarp.pendingSimulationSeconds) ||
+        timeWarp.pendingSimulationSeconds < 0 || timeWarp.pendingSimulationSeconds > 30 * 24 * 60 * 60 ||
+        !Number.isFinite(timeWarp.pendingWallSeconds) || timeWarp.pendingWallSeconds < 0 ||
+        timeWarp.pendingWallSeconds > 30 * 24 * 60 * 60 ||
+        !Number.isSafeInteger(timeWarp.effectiveMultiplier) || timeWarp.effectiveMultiplier < 1 ||
+        !Number.isFinite(timeWarp.requiredPowerKw) || timeWarp.requiredPowerKw < 0 ||
+        !Number.isFinite(timeWarp.allocatedPowerKw) || timeWarp.allocatedPowerKw < 0) return false;
+      const entityById = new Map(state.entities.map((entity) => [entity?.id, entity]));
+      const controller = timeWarp.controllerEntityId === null ? null : entityById.get(timeWarp.controllerEntityId);
+      if ((timeWarp.controllerEntityId !== null && controller?.buildingId !== "time_warp_device") ||
+        (timeWarp.enabled && timeWarp.controllerEntityId === null)) return false;
+      for (const plan of Object.values(state.dysonPlans ?? {})) {
+        for (const layer of plan?.layers ?? []) {
+          if (!Number.isInteger(layer.structureAllocationFloor) || layer.structureAllocationFloor < 0 ||
+            !Number.isInteger(layer.shellAllocationFloor) || layer.shellAllocationFloor < 0) return false;
+        }
+      }
+      for (const entity of state.entities) {
+        if (entity?.buildingId === "time_warp_device" && (!Number.isInteger(entity.machineCount) || entity.machineCount !== 1)) return false;
+        if (entity?.buildingId !== "micro_black_hole_connector") continue;
+        if (!Number.isInteger(entity.machineCount) || entity.machineCount !== 1 ||
+          typeof entity.blackHolePaused !== "boolean" || typeof entity.blackHoleActivationConfirmed !== "boolean" ||
+          !Array.isArray(entity.blackHolePorts) || entity.blackHolePorts.length !== 3 ||
+          entity.blackHolePorts.some((port, index) => port?.index !== index ||
+            typeof port.totalDestroyed !== "string" || !/^(0|[1-9][0-9]{0,255})$/.test(port.totalDestroyed))) return false;
+      }
+      const occupiedBlackHolePorts = new Set();
+      for (const belt of state.belts ?? []) {
+        const target = entityById.get(belt?.target);
+        if (target?.buildingId === "micro_black_hole_connector") {
+          if (![0, 1, 2].includes(belt.targetPortIndex)) return false;
+          const key = `${belt.target}:${belt.targetPortIndex}`;
+          if (occupiedBlackHolePorts.has(key)) return false;
+          occupiedBlackHolePorts.add(key);
+        } else if (belt?.targetPortIndex !== undefined) {
+          return false;
+        }
       }
     }
     return true;

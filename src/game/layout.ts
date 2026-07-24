@@ -1,4 +1,5 @@
 import type { FactoryEntity, GameState, PlanetId } from "./types";
+import { getBuilding } from "./content";
 
 export interface FactoryLayoutMove {
   id: string;
@@ -18,7 +19,7 @@ const GRID_SIZE = 20;
 
 export function getFactoryLayoutCollisionBounds(entity: FactoryEntity, position = entity.position): FactoryLayoutBounds {
   const fixedResource = entity.kind === "vein";
-  const megastructure = entity.buildingId === "construction_center";
+  const megastructure = Boolean(entity.buildingId && getBuilding(entity.buildingId).megastructure);
   const width = fixedResource ? 360 : megastructure ? 620 : 300;
   const height = fixedResource ? 300 : megastructure ? 420 : 220;
   const clearance = fixedResource ? 80 : 24;

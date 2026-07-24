@@ -16,6 +16,10 @@ const gitDirty = process.env.DSP_GIT_DIRTY == null
   ? Boolean(gitText(["status", "--porcelain"]))
   : process.env.DSP_GIT_DIRTY === "1";
 const buildId = process.env.DSP_BUILD_ID?.trim() || `${appVersion}+${gitSha}${gitDirty ? ".dirty" : ""}`;
+const requestedPlatform = process.env.VITE_APP_PLATFORM?.trim().toLowerCase();
+const appPlatform = requestedPlatform === "desktop" || requestedPlatform === "android" ? requestedPlatform : "web";
+const requestedReleaseChannel = process.env.VITE_RELEASE_CHANNEL?.trim().toLowerCase();
+const releaseChannel = requestedReleaseChannel === "beta" || requestedReleaseChannel === "nightly" ? requestedReleaseChannel : "stable";
 
 function scaleUiFontSizes(): Plugin {
   return {
@@ -45,6 +49,8 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
     __BUILD_ID__: JSON.stringify(buildId),
+    __APP_PLATFORM__: JSON.stringify(appPlatform),
+    __RELEASE_CHANNEL__: JSON.stringify(releaseChannel),
   },
   build: {
     rolldownOptions: {

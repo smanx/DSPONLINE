@@ -471,3 +471,28 @@ Chrome 147 的强制 GC 活跃堆从 14.06 MiB 到 16.23 MiB（+2.17 MiB），Re
 活动 ID 为 `union-station-2026-07-v1`，revision 为 `e227b03a6fbd4d148b3f07ad`，两地 UTC 起止时间一致且相差精确 259,200,000 ms。公网状态已从 `scheduled` 自动切换为 `active`，全服模拟曲线开始单调增长。
 
 公网验收覆盖正式根域名、`www` 跳转、上海独立入口、manifest、健康接口、管理员 `401`、gzip、immutable/no-cache、服务 active、`NRestarts=0` 和最近 500 条访问日志 5xx。隔离 Chrome 使用香港 1440×900 桌面和上海 390×844 新版手机实际完成“放置巨构 → 点击巨构 → 打开任务页 → 开始提交”，没有发出生产写 API；手机触控目标不小于 44px且无横向溢出。截图位于 `artifacts/qa/production-0.9.1/`，完整证据见 [releases/0.9.1.md](./releases/0.9.1.md)。
+
+## 19. `1.0.0` / v34 发布候选验收
+
+本节记录 2026-07-24 最终发布提交之前的完整工作树门禁；源码 SHA、release ID、清单哈希、两地备份和公网结果只在正式发布记录中补充。应用 SemVer 为 `1.0.0`，GameState 从 v33 升至 v34，存档 envelope 保持 v2，云 schema 保持 v7。
+
+| 检查 | 结果 |
+| --- | --- |
+| 根目录 `npm ci` | 457 个包，0 个已知漏洞 |
+| `npm run typecheck` | 通过 |
+| `npm test` | 42/42 文件、431/431 通过，1 项可选物流基准跳过 |
+| `npm run test:server` | 29/29 通过，包含 v34 云存档范围验证 |
+| `npm run test:ops` | 5/5 通过 |
+| `npm run test:native` | 2/2 通过 |
+| `npm run build` | 通过；最终 `dist/` 为普通 Web 构建 |
+| `npm run test:e2e` | 131/131 通过，约 5.8 分钟 |
+| v34 focused Playwright | 3/3 通过 |
+| `npm run benchmark:logistics` | 5/5 通过，10/50/100/500 塔状态哈希一致 |
+
+500 塔三秒模拟中，旧全扫描路径中位 7825.22 ms、P95 7844.72 ms；索引路径中位 2533.66 ms、P95 2589.05 ms，中位改善 67.62%。候选检查从 20,000,000 降至 562,560，路线经济计算从 500,482 降至 78,375。该结果是本机确定性基准，不等同于所有设备的帧率或耗电改善。
+
+视觉门禁覆盖 1920×1080、1536×864、1280×720、1024×768、960×540、390×844、430×932、844×390、768×1024 和 100%～200% 字体；重点确认两座终局巨构、戴森规划固定命令条、1.0 公告、横屏建造搜索结果、触控尺寸和无横向溢出。截图位于 `artifacts/qa/v100-*.png` 与 `artifacts/qa/release-notes-2026-07-24-v100-*.png`。
+
+Windows `release/win-unpacked` 已生成，EXE 产品版本为 `1.0.0.0`，但 Authenticode 为 `NotSigned`。Android unsigned Release APK 为 4,103,392 字节，AAB 为 3,917,492 字节；包名 `cn.dsponline.network`、versionName `1.0.0`、versionCode `1000000`、minSdk 24，`apksigner` 正确拒绝 APK。两类制品只用于本地编译门禁，不得进入 VPS 公共更新源。
+
+完整 E2E 仍出现已知非阻断 Vite `ResizeObserver loop completed with undelivered notifications` 卸载提示，但 131 项断言和最终退出码成功。Windows 正式证书、Android 长期 keystore、物理 Android/iPhone 各 30 分钟温度耗电和 PWA standalone 仍是明确缺口。

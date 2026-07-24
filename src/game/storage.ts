@@ -21,6 +21,7 @@ import { DEFAULT_GALAXY_SEED, GUARANTEED_CRUDE_OIL_PLANETS, createVeinReserve, g
 import { createEndgameState, getOfflineSimulationLimitSeconds } from "./endgame";
 import { getInfiniteResearchCostBigInt, getInfiniteResearchMaximumLevel } from "./infiniteResearch";
 import { normalizeDecimalIntegerString } from "./quantityFormat";
+import { ACTIVITY_MATERIAL_IDS } from "./activity";
 import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
@@ -459,7 +460,7 @@ function migrateEndgame(saved: Record<string, any>): EndgameState {
       dispatchProgress: Math.min(2_000_000_000, nonNegativeNumber(source?.dispatchProgress)),
     };
   }
-  const activityMaterialIds: ActivityMaterialId[] = ["universe_matrix", "solar_sail", "small_carrier_rocket", "antimatter_fuel_rod"];
+  const activityMaterialIds: readonly ActivityMaterialId[] = ACTIVITY_MATERIAL_IDS;
   const normalizeActivityAmounts = (value: unknown) => Object.fromEntries(activityMaterialIds.map((itemId) => [
     itemId,
     nonNegativeInteger(value && typeof value === "object" ? (value as Record<string, unknown>)[itemId] : 0),
@@ -478,6 +479,8 @@ function migrateEndgame(saved: Record<string, any>): EndgameState {
       lastDeliveredAtMs: nonNegativeNumber(batch.lastDeliveredAtMs),
     };
   }
+  const serverTimeAnchorMs = nonNegativeNumber(rawActivity.serverTimeAnchorMs);
+  const savedActivityClockMs = nonNegativeNumber(rawActivity.activityClockMs);
   const activity = {
     ...defaults.constructionActivity,
     activityId: typeof rawActivity.activityId === "string" ? rawActivity.activityId.slice(0, 120) : null,
@@ -485,8 +488,10 @@ function migrateEndgame(saved: Record<string, any>): EndgameState {
     configRevision: typeof rawActivity.configRevision === "string" ? rawActivity.configRevision.slice(0, 120) : null,
     startsAtMs: nonNegativeNumber(rawActivity.startsAtMs),
     endsAtMs: nonNegativeNumber(rawActivity.endsAtMs),
-    serverTimeAnchorMs: nonNegativeNumber(rawActivity.serverTimeAnchorMs),
-    activityClockMs: nonNegativeNumber(rawActivity.activityClockMs),
+    serverTimeAnchorMs,
+    activityClockMs: saved.version < 34 && serverTimeAnchorMs > 0
+      ? serverTimeAnchorMs
+      : Math.max(serverTimeAnchorMs, savedActivityClockMs),
     personalTargets: normalizeActivityAmounts(rawActivity.personalTargets),
     globalTargets: normalizeActivityAmounts(rawActivity.globalTargets),
     personalDelivered: normalizeActivityAmounts(rawActivity.personalDelivered),
@@ -573,7 +578,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const savedSeed = saved.version >= 20 && typeof saved.galaxy?.seed === "number" && Number.isFinite(saved.galaxy.seed)
     ? saved.galaxy.seed
     : DEFAULT_GALAXY_SEED;
@@ -596,6 +601,7 @@ export function migrateGame(value: unknown): GameState | null {
     const accumulator = entity.buildingId === "accumulator";
     const energyExchanger = entity.buildingId === "energy_exchanger";
     const materialDeliveryHub = entity.buildingId === "material_delivery_hub";
+    const blackHoleConnector = entity.buildingId === "micro_black_hole_connector";
     const storedEnergyCapacity = accumulator || energyExchanger
       ? (getBuilding(entity.buildingId!).energyCapacityMj ?? 0) * Math.max(0, Math.floor(entity.machineCount ?? 0))
       : 0;
@@ -668,6 +674,10 @@ export function migrateGame(value: unknown): GameState | null {
       stationSlots: normalizeStationSlots(entity),
       stationRoutes: normalizeStationRoutes(entity),
       stationDispatchCursor: entity.kind === "station" ? nonNegativeInteger(entity.stationDispatchCursor) : undefined,
+      stationLastSupplyPeerBySlot: entity.kind === "station" && entity.stationLastSupplyPeerBySlot && typeof entity.stationLastSupplyPeerBySlot === "object"
+        ? Object.fromEntries(Object.entries(entity.stationLastSupplyPeerBySlot).flatMap(([key, peerId]) =>
+          /^(local|remote):[0-4]$/.test(key) && typeof peerId === "string" && peerId.length <= 160 ? [[key, peerId]] : []))
+        : undefined,
       stationCongestion: entity.kind === "station" ? Math.min(1, nonNegativeNumber(entity.stationCongestion)) : undefined,
       sprayCoaterInstalled,
       proliferatorTier: sprayCoaterInstalled
@@ -679,6 +689,18 @@ export function migrateGame(value: unknown): GameState | null {
       proliferatorPoints: sprayCoaterInstalled ? nonNegativeInteger(entity.proliferatorPoints) : 0,
       proliferatorBonusProgress: sprayCoaterInstalled ? fractionalRecord(entity.proliferatorBonusProgress) : {},
       galacticExporterPaused: entity.buildingId === "galactic_material_exporter" ? entity.galacticExporterPaused !== false : undefined,
+      blackHolePaused: blackHoleConnector ? entity.blackHolePaused !== false : undefined,
+      blackHoleActivationConfirmed: blackHoleConnector ? Boolean(entity.blackHoleActivationConfirmed) : undefined,
+      blackHolePorts: blackHoleConnector ? ([0, 1, 2] as const).map((index) => {
+        const rawPort = Array.isArray(entity.blackHolePorts)
+          ? entity.blackHolePorts.find((port) => port && port.index === index)
+          : undefined;
+        return {
+          index,
+          ...(rawPort?.currentItemId && rawPort.currentItemId in ITEMS ? { currentItemId: rawPort.currentItemId } : {}),
+          totalDestroyed: normalizeDecimalIntegerString(rawPort?.totalDestroyed, "0", 256),
+        };
+      }) : undefined,
       extractorBuildingId: entity.kind === "vein" && entity.minerCount > 0
         ? entity.extractorBuildingId ?? getExtractorBuildingId(entity.resourceId!)
         : entity.extractorBuildingId,
@@ -727,12 +749,24 @@ export function migrateGame(value: unknown): GameState | null {
       totalTransferred: nonNegativeInteger(belt.totalTransferred),
       congestion: Math.min(1, nonNegativeNumber(belt.congestion)),
       lastFlow: typeof belt.lastFlow === "number" ? belt.lastFlow : 0,
+      targetPortIndex: saved.version >= 34 &&
+        (belt.targetPortIndex === 0 || belt.targetPortIndex === 1 || belt.targetPortIndex === 2) &&
+        entities.find((entity) => entity.id === belt.target)?.buildingId === "micro_black_hole_connector"
+        ? belt.targetPortIndex
+        : undefined,
     } as BeltConnection;
   }) : [];
+  const occupiedBlackHolePorts = new Set<string>();
   const belts = migratedBelts.filter((belt) => {
     const source = entities.find((entity) => entity.id === belt.source);
     const target = entities.find((entity) => entity.id === belt.target);
-    return source && target && source.planetId === target.planetId && belt.planetId === source.planetId;
+    if (!source || !target || source.planetId !== target.planetId || belt.planetId !== source.planetId) return false;
+    if (target.buildingId !== "micro_black_hole_connector") return belt.targetPortIndex === undefined;
+    if (belt.targetPortIndex === undefined) return false;
+    const key = `${target.id}:${belt.targetPortIndex}`;
+    if (occupiedBlackHolePorts.has(key)) return false;
+    occupiedBlackHolePorts.add(key);
+    return true;
   });
   for (const belt of migratedBelts.filter((candidate) => !belts.includes(candidate))) {
     const constructionId = getBeltConstructionId(belt.tier);
@@ -1132,6 +1166,8 @@ export function migrateGame(value: unknown): GameState | null {
         nodes,
         frames,
         shells,
+        structureAllocationFloor: saved.version >= 34 ? nonNegativeInteger(layer.structureAllocationFloor) : 0,
+        shellAllocationFloor: saved.version >= 34 ? nonNegativeInteger(layer.shellAllocationFloor) : 0,
       }];
     }) : [];
     const activeLayerId = typeof savedPlan?.activeLayerId === "string" && layers.some((layer) => layer.id === savedPlan.activeLayerId)
@@ -1341,6 +1377,23 @@ export function migrateGame(value: unknown): GameState | null {
     ? [...new Set(saved.achievements.unlockedIds.filter(isAchievementId))]
     : [];
   const endgame = migrateEndgame(saved);
+  const requestedTimeWarpMultiplier = Number.isSafeInteger(saved.timeWarp?.requestedMultiplier)
+    ? Math.max(5, saved.timeWarp.requestedMultiplier)
+    : 5;
+  const controllerEntityId = typeof saved.timeWarp?.controllerEntityId === "string" &&
+    entities.some((entity) => entity.id === saved.timeWarp.controllerEntityId && entity.buildingId === "time_warp_device")
+    ? saved.timeWarp.controllerEntityId as string
+    : null;
+  const timeWarp: GameState["timeWarp"] = {
+    controllerEntityId,
+    enabled: Boolean(controllerEntityId && saved.timeWarp?.enabled),
+    requestedMultiplier: requestedTimeWarpMultiplier,
+    effectiveMultiplier: validSimulationSpeed(saved.settings?.simulationSpeed) ? saved.settings.simulationSpeed : 1,
+    pendingSimulationSeconds: Math.min(30 * 24 * 60 * 60, nonNegativeNumber(saved.timeWarp?.pendingSimulationSeconds)),
+    pendingWallSeconds: Math.min(30 * 24 * 60 * 60, nonNegativeNumber(saved.timeWarp?.pendingWallSeconds)),
+    requiredPowerKw: 0,
+    allocatedPowerKw: 0,
+  };
   const hasPlacedGalacticExporter = entities.some((entity) => entity.buildingId === "galactic_material_exporter");
   if (hasPlacedGalacticExporter) endgame.exportInputMode = "building";
   if (saved.version < 33 && completedTechIds.includes("universe_matrix") && !hasPlacedGalacticExporter &&
@@ -1351,7 +1404,7 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 33,
+    version: 34,
     activePlanetId,
     entities,
     belts,
@@ -1395,6 +1448,7 @@ export function migrateGame(value: unknown): GameState | null {
     dysonSphere,
     dysonEngineering,
     dysonPlans,
+    timeWarp,
     endgame,
   } as GameState;
   return syncCampaignProgress(migrated, { grantRewards: saved.version >= 18 });

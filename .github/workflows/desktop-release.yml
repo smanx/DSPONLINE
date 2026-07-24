@@ -17,8 +17,8 @@ jobs:
     runs-on: windows-latest
     env:
       DSP_RELEASE_CHANNEL: ${{ inputs.channel || 'stable' }}
-      DSP_UPDATE_URL: ${{ secrets.DSP_UPDATE_URL }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,8 +27,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm run desktop:dist
+      - run: npm run test:native
+      - run: npm run desktop:release
       - uses: actions/upload-artifact@v4
         with:
           name: dsp-idle-${{ env.DSP_RELEASE_CHANNEL }}
-          path: release/**
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
+            release/update-feed/**

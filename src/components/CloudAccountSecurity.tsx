@@ -25,6 +25,7 @@ import {
   type CloudAccountSession,
   type CloudUser,
 } from "../game/cloud";
+import { exportTextFile } from "../game/fileExport";
 
 interface CloudAccountSecurityProps {
   user: CloudUser;
@@ -161,12 +162,7 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
     setNotice(null);
     try {
       const data = await exportCloudAccountData();
-      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `dsp-account-${user.id}.json`;
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      await exportTextFile({ contents: JSON.stringify(data, null, 2), fileName: `dsp-account-${user.id}.json`, title: "导出云账号数据" });
       setNotice({ tone: "ready", text: "账号数据已导出" });
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "账号数据导出失败" });

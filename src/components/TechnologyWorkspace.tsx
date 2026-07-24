@@ -8,9 +8,9 @@ import { getInfiniteResearchCostString, isInfiniteResearchComplete } from "../ga
 import type { GameState, InfiniteResearchId, ItemId, TechnologyLayoutMode, TechId } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { useHorizontalPan } from "../hooks/useHorizontalPan";
-import { formatKilowatts } from "../game/units";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 import { QuantityValue } from "./QuantityValue";
+import { PowerValue } from "./PowerValue";
 
 interface TechnologyWorkspaceProps {
   open: boolean;
@@ -217,7 +217,7 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
             <span><Rocket size={13} /><small>物流航速</small><strong>{getLogisticsSpeedMultiplier(game).toFixed(2)}×</strong></span>
             <span><PackageCheck size={13} /><small>机 / 船载荷</small><strong>{getPlanetaryCargoCapacity(game)} / {getInterstellarCargoCapacity(game)}</strong></span>
             <span><Timer size={13} /><small>太阳帆寿命</small><strong>{Math.round(getSolarSailLifetimeSeconds(game) / 60)} min</strong></span>
-            <span><Satellite size={13} /><small>单站接收</small><strong>{formatKilowatts(getRayReceiverCapacityKw(game))}</strong></span>
+            <span><Satellite size={13} /><small>单站接收</small><strong><PowerValue valueKw={getRayReceiverCapacityKw(game)} /></strong></span>
             <span><Zap size={13} /><small>壳面吸附</small><strong>{getDysonSailAbsorptionMultiplier(game).toFixed(2)}×</strong></span>
           </div>
           </section>

@@ -28,6 +28,8 @@ import { MATERIAL_DELIVERY_SLOT_COUNT, getEntityExtraProductBonus, getEntityProl
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { RecipeCatalogPicker } from "./CatalogPicker";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
+import { PowerValue } from "./PowerValue";
+import { ACTIVITY_MATERIAL_IDS } from "../game/activity";
 import type {
   BuildingId,
   CargoStack,
@@ -67,6 +69,7 @@ export interface FactoryNodeData extends Record<string, unknown> {
   connectedInputItemIds: ItemId[];
   inputBeltCounts: Partial<Record<ItemId, number>>;
   outputBeltCounts: Partial<Record<ItemId, number>>;
+  blackHolePortConnections: Partial<Record<0 | 1 | 2, ItemId>>;
   completedTechIds: TechId[];
   networkTime: number;
   paused: boolean;
@@ -77,9 +80,10 @@ export interface FactoryNodeData extends Record<string, unknown> {
   windGenerationMultiplier: number;
   geothermalGenerationMultiplier: number;
   activeLogisticsEntityIds: string[];
-  connectionDraft: { nodeId: string; itemId: ItemId; handleType: "source" | "target" } | null;
+  connectionDraft: { nodeId: string; handleId: string; itemId: ItemId | null; handleType: "source" | "target" } | null;
   dysonSwarm: DysonSwarmState;
   dysonSphere: DysonSphereState;
+  timeWarp: import("../game/types").TimeWarpState;
   status: EntityOperatingStatus;
   outputCapacity: number;
 }
@@ -164,7 +168,7 @@ function connectionHandleClass(entityId: string, itemId: ItemId, handleType: "so
   if (!draft) return "";
   if (draft.nodeId === entityId && draft.itemId === itemId && draft.handleType === handleType) return " factory-handle--origin";
   if (draft.handleType === handleType) return " factory-handle--muted";
-  return draft.itemId === itemId ? " factory-handle--compatible" : " factory-handle--incompatible";
+  return draft.itemId === null || draft.itemId === itemId ? " factory-handle--compatible" : " factory-handle--incompatible";
 }
 
 function OutputSlot({ entityId, itemId, amount, onPick, connectionDraft, connectionCount = 0 }: OutputSlotProps) {
@@ -366,6 +370,8 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const building = getBuilding(entity.buildingId!);
   const recipe = getRecipe(entity.recipeId);
   const galacticExporter = entity.buildingId === "galactic_material_exporter";
+  const blackHoleConnector = entity.buildingId === "micro_black_hole_connector";
+  const timeWarpDevice = entity.buildingId === "time_warp_device";
   const researchInputs = MATRIX_ITEM_IDS.filter((itemId) =>
     data.researchCosts.some((cost) => cost.itemId === itemId) ||
     data.connectedInputItemIds.includes(itemId) ||
@@ -373,14 +379,16 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
     data.completedTechIds.includes(itemId as TechId))
     .map((itemId) => ({ itemId, amount: 1 }));
   const recipeInputs = galacticExporter
-    ? (["universe_matrix", "solar_sail", "small_carrier_rocket", "antimatter_fuel_rod"] as ItemId[]).map((itemId) => ({ itemId, amount: 1 }))
+    ? ACTIVITY_MATERIAL_IDS.map((itemId) => ({ itemId, amount: 1 }))
     : recipe?.id === "matrix_research" ? researchInputs : recipe?.inputs ?? [];
   const proliferatorItemId = entity.sprayCoaterInstalled ? getEntityProliferatorItemId(entity) : undefined;
   const inputs = proliferatorItemId && !recipeInputs.some((input) => input.itemId === proliferatorItemId)
     ? [...recipeInputs, { itemId: proliferatorItemId, amount: 1 }]
     : recipeInputs;
   const outputIds = recipe?.outputs.map((output) => output.itemId) ?? [];
-  useDynamicHandles(entity.id, `${inputs.map((input) => input.itemId).join(",")}:auto>${outputIds.join(",")}`);
+  useDynamicHandles(entity.id, blackHoleConnector
+    ? `black-hole:${([0, 1, 2] as const).map((index) => data.blackHolePortConnections[index] ?? "empty").join(",")}`
+    : `${inputs.map((input) => input.itemId).join(",")}:auto>${outputIds.join(",")}`);
   const acceptsCargo = cargo && inputs.some((input) => input.itemId === cargo.itemId);
   const adding = placement === entity.buildingId;
   const utilizationTone = data.status.tone === "running" ? "good" : data.status.tone === "warning" ? "partial" : data.status.tone === "blocked" ? "blocked" : "idle";
@@ -417,7 +425,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
-      className={`factory-node machine-node factory-node--status-${data.status.tone}${constructionCenter || galacticExporter ? " factory-node--megastructure" : ""}${galacticExporter ? " factory-node--galactic-exporter" : ""}${building.tier && building.tier > 1 ? ` factory-node--tier-${building.tier}` : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}${(railEjector || launchSilo) && entity.utilization > 0.001 ? " factory-node--orbital-active" : ""}`}
+      className={`factory-node machine-node factory-node--status-${data.status.tone}${constructionCenter || galacticExporter || blackHoleConnector || timeWarpDevice ? " factory-node--megastructure" : ""}${galacticExporter ? " factory-node--galactic-exporter" : ""}${blackHoleConnector ? " factory-node--black-hole" : ""}${timeWarpDevice ? " factory-node--time-warp" : ""}${building.tier && building.tier > 1 ? ` factory-node--tier-${building.tier}` : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}${(railEjector || launchSilo) && entity.utilization > 0.001 ? " factory-node--orbital-active" : ""}`}
       onClick={add}
       onDragOver={(event) => {
         if (event.dataTransfer.types.some((type) => type === "application/factory-item" || type === "application/factory-building")) {
@@ -442,11 +450,11 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
     >
       <header className="factory-node__header">
         <div className={`node-icon${rayReceiver ? " node-icon--ray" : railEjector || launchSilo ? " node-icon--orbit" : ""}`}>
-          {galacticExporter ? <Rocket size={18} /> : entity.buildingId === "miniature_particle_collider" ? <Atom size={18} /> : railEjector ? <Satellite size={18} /> : launchSilo ? <Rocket size={18} /> : rayReceiver ? <RadioTower size={18} /> : <Factory size={18} />}
+          {blackHoleConnector ? <Atom size={18} /> : timeWarpDevice ? <Gauge size={18} /> : galacticExporter ? <Rocket size={18} /> : entity.buildingId === "miniature_particle_collider" ? <Atom size={18} /> : railEjector ? <Satellite size={18} /> : launchSilo ? <Rocket size={18} /> : rayReceiver ? <RadioTower size={18} /> : <Factory size={18} />}
         </div>
         <div>
-          <span>{constructionCenter ? "巨构自动补给" : galacticExporter ? "银河终局工程" : railEjector ? "恒星轨道设施" : launchSilo ? "戴森球建造设施" : rayReceiver ? "戴森系统接收设施" : building.shortName}</span>
-          <strong>{constructionCenter || galacticExporter ? building.name : recipe?.name ?? "未指定配方"}</strong>
+          <span>{blackHoleConnector ? "永久物资销毁" : timeWarpDevice ? "全局模拟主控" : constructionCenter ? "巨构自动补给" : galacticExporter ? "银河终局工程" : railEjector ? "恒星轨道设施" : launchSilo ? "戴森球建造设施" : rayReceiver ? "戴森系统接收设施" : building.shortName}</span>
+          <strong>{constructionCenter || galacticExporter || blackHoleConnector || timeWarpDevice ? building.name : recipe?.name ?? "未指定配方"}</strong>
         </div>
         <small>×{entity.machineCount}</small>
       </header>
@@ -464,7 +472,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           <div><dt>阵列等级</dt><dd>Mk.{constructionCenterTier}</dd></div>
         </dl>
       </section> : null}
-      {selected && !constructionCenter && !galacticExporter ? (
+      {selected && !constructionCenter && !galacticExporter && !blackHoleConnector && !timeWarpDevice ? (
         <div className="node-inline-select nodrag nopan" onPointerDown={(event) => event.stopPropagation()}>
           <span>生产配方</span>
           <RecipeCatalogPicker value={entity.recipeId} recipes={recipeOptions} onChange={(recipeId) => data.onRecipeChange(entity.id, recipeId)} compact />
@@ -475,11 +483,32 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         <span title={data.status.label}>{data.status.label}</span>
         <strong>{entity.productionRate.toFixed(1)}/min</strong>
       </div>
-      {rayPowerMode ? (
+      {blackHoleConnector ? (
+        <section className="black-hole-core" aria-label="微型黑洞物资销毁接口">
+          <div className="black-hole-core__warning"><Atom size={16} /><span>输入物资将被永久销毁且无法找回</span></div>
+          {([0, 1, 2] as const).map((index) => {
+            const port = entity.blackHolePorts?.find((entry) => entry.index === index);
+            const itemId = data.blackHolePortConnections[index] ?? port?.currentItemId;
+            return <div className="black-hole-port" key={index}>
+              <Handle id={`in:black-hole:${index}`} type="target" position={Position.Left} style={{ top: `${47 + index * 15}%` }} className="factory-handle factory-handle--input factory-handle--universal nodrag nopan" />
+              <span>接口 {index + 1}</span>
+              <strong>{itemId ? getItem(itemId).name : "等待连接"}</strong>
+              <small>累计 {formatQuantityCompact(port?.totalDestroyed ?? "0")}</small>
+            </div>;
+          })}
+        </section>
+      ) : timeWarpDevice ? (
+        <section className="time-warp-core">
+          <div><span>{data.timeWarp.controllerEntityId === entity.id ? "主控" : "非主控"}</span><strong>{data.timeWarp.enabled && data.timeWarp.controllerEntityId === entity.id ? `${data.timeWarp.effectiveMultiplier}x` : "已暂停"}</strong></div>
+          <div><span>请求倍率</span><strong>{data.timeWarp.requestedMultiplier}x</strong></div>
+          <div><span>需求功率</span><strong><PowerValue valueKw={data.timeWarp.requiredPowerKw} /></strong></div>
+          <div><span>实际分配</span><strong><PowerValue valueKw={data.timeWarp.allocatedPowerKw} /></strong></div>
+        </section>
+      ) : rayPowerMode ? (
         <div className="ray-reception">
           <RadioTower size={14} />
           <span>连续接收</span>
-          <strong>{(entity.powerOutputKw ?? 0).toFixed(0)} kW · {Math.round(entity.utilization * 100)}%</strong>
+          <strong><PowerValue valueKw={entity.powerOutputKw ?? 0} /> · {Math.round(entity.utilization * 100)}%</strong>
         </div>
       ) : (
         <WorkCycle
@@ -497,7 +526,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           <b />
         </div>
       ) : null}
-      {!rayPowerMode && !constructionCenter ? <div className="node-io">
+      {!rayPowerMode && !constructionCenter && !blackHoleConnector && !timeWarpDevice ? <div className="node-io">
         <div className="node-io__column">
           <span className="node-io__label">输入</span>
           {inputs.length > 0 ? inputs.map((input) => (
@@ -553,7 +582,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         </div>
       ) : null}
       <footer className="factory-node__footer">
-        <span><Zap size={11} /> {rayReceiver ? `${(entity.powerOutputKw ?? 0).toFixed(0)} kW 接收` : `${((building.powerDemandKw ?? 0) * entity.machineCount * getEntityProliferatorPowerMultiplier(entity) * data.powerDemandMultiplier).toFixed(0)} kW`}</span>
+        <span><Zap size={11} /> {blackHoleConnector ? "无需供电" : <><PowerValue valueKw={timeWarpDevice ? entity.powerInputKw ?? 0 : rayReceiver ? entity.powerOutputKw ?? 0 : (building.powerDemandKw ?? 0) * entity.machineCount * getEntityProliferatorPowerMultiplier(entity) * data.powerDemandMultiplier} />{rayReceiver ? " 接收" : null}</>}</span>
         <span><Gauge size={11} /> {railEjector ? `累计 ${formatQuantityCompact(data.dysonSwarm.totalLaunched)} 帆` : launchSilo ? `累计 ${formatQuantityCompact(data.dysonSphere.totalRocketsLaunched)} 枚` : `${(building.speed * speedMultiplier * getEntityProliferatorSpeedMultiplier(entity)).toFixed(2)}×`}</span>
       </footer>
     </article>
@@ -743,7 +772,11 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       <div className="power-output">
         {accumulator || exchanger ? <BatteryCharging size={17} /> : fuelGenerator ? <Flame size={17} /> : <Zap size={17} />}
         <span>{fuelGenerator || accumulator || exchanger ? data.status.label : "额定发电"}</span>
-        <strong>{(entity.powerInputKw ?? 0) > 0.001 ? `-${(entity.powerInputKw ?? 0).toFixed(0)} kW` : fuelGenerator || accumulator || exchanger ? `${(entity.powerOutputKw ?? 0).toFixed(0)} / ${ratedPower.toFixed(0)} kW` : `${ratedPower.toFixed(0)} kW`}</strong>
+        <strong>{(entity.powerInputKw ?? 0) > 0.001
+          ? <PowerValue valueKw={-(entity.powerInputKw ?? 0)} />
+          : fuelGenerator || accumulator || exchanger
+            ? <><PowerValue valueKw={entity.powerOutputKw ?? 0} /> / <PowerValue valueKw={ratedPower} /></>
+            : <PowerValue valueKw={ratedPower} />}</strong>
       </div>
       {fuelGenerator && fuelId ? (
         <div className="thermal-fuel">

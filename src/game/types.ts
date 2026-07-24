@@ -211,7 +211,9 @@ export type TechId =
   | "construction_capacity_2"
   | "dyson_sphere_program"
   | "vertical_launching_silo"
-  | "dyson_shell";
+  | "dyson_shell"
+  | "micro_black_hole_containment"
+  | "time_warp_engineering";
 
 export type BuildingId =
   | "wind_turbine"
@@ -248,7 +250,9 @@ export type BuildingId =
   | "storage_tank"
   | "splitter_4way"
   | "construction_center"
-  | "galactic_material_exporter";
+  | "galactic_material_exporter"
+  | "micro_black_hole_connector"
+  | "time_warp_device";
 
 export type BeltTier = 1 | 2 | 3;
 export type SorterTier = 1 | 2 | 3;
@@ -376,6 +380,23 @@ export type GalacticDispatchThrottle = 0.25 | 0.5 | 1;
 export type DecimalIntegerString = string;
 export type GalacticExportInputMode = "legacy-network" | "building";
 export type ActivityMaterialId = "universe_matrix" | "solar_sail" | "small_carrier_rocket" | "antimatter_fuel_rod";
+
+export interface BlackHolePortState {
+  index: 0 | 1 | 2;
+  currentItemId?: ItemId;
+  totalDestroyed: DecimalIntegerString;
+}
+
+export interface TimeWarpState {
+  controllerEntityId: string | null;
+  enabled: boolean;
+  requestedMultiplier: number;
+  effectiveMultiplier: number;
+  pendingSimulationSeconds: number;
+  pendingWallSeconds: number;
+  requiredPowerKw: number;
+  allocatedPowerKw: number;
+}
 
 export interface InfiniteResearchProgress {
   level: number;
@@ -638,6 +659,7 @@ export interface FactoryEntity {
   stationSlots?: StationSlot[];
   stationRoutes?: StationRoute[];
   stationDispatchCursor?: number;
+  stationLastSupplyPeerBySlot?: Partial<Record<string, string>>;
   stationCongestion?: number;
   sprayCoaterInstalled?: boolean;
   proliferatorTier?: ProliferatorTier;
@@ -645,6 +667,9 @@ export interface FactoryEntity {
   proliferatorPoints?: number;
   proliferatorBonusProgress?: Partial<Record<ItemId, number>>;
   galacticExporterPaused?: boolean;
+  blackHolePaused?: boolean;
+  blackHoleActivationConfirmed?: boolean;
+  blackHolePorts?: BlackHolePortState[];
   routingCursor: number;
   machineCount: number;
   minerCount: number;
@@ -673,6 +698,7 @@ export interface BeltConnection {
   lastFlow: number;
   routeMode?: BeltRouteMode;
   routeOffsetY?: number;
+  targetPortIndex?: 0 | 1 | 2;
 }
 
 export interface StationSlot {
@@ -868,6 +894,8 @@ export interface DysonLayerState {
   nodes: DysonNodeState[];
   frames: DysonFrameState[];
   shells: DysonShellState[];
+  structureAllocationFloor: number;
+  shellAllocationFloor: number;
 }
 
 export interface DysonSpherePlanState {
@@ -1083,6 +1111,7 @@ export interface BlueprintBeltTemplate {
   monitorEnabled?: boolean;
   routeMode?: BeltRouteMode;
   routeOffsetY?: number;
+  targetPortIndex?: 0 | 1 | 2;
 }
 
 export type BlueprintRotation = 0 | 90 | 180 | 270;
@@ -1185,7 +1214,7 @@ export interface ConstructionAutomationJob {
 }
 
 export interface GameState {
-  version: 33;
+  version: 34;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -1223,6 +1252,7 @@ export interface GameState {
   dysonSphere: DysonSphereState;
   dysonEngineering: DysonEngineeringState;
   dysonPlans: Record<StarSystemId, DysonSpherePlanState>;
+  timeWarp: TimeWarpState;
   endgame: EndgameState;
   paused: boolean;
 }

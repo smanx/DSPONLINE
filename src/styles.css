@@ -1177,9 +1177,11 @@ select:focus-visible {
 }
 
 .game-shell {
+  --shell-header-height: 68px;
+  --shell-dock-height: 108px;
   -webkit-touch-callout: none;
   display: grid;
-  grid-template-rows: 68px minmax(0, 1fr) 108px;
+  grid-template-rows: var(--shell-header-height) minmax(0, 1fr) var(--shell-dock-height);
   width: 100%;
   height: 100%;
   min-width: 320px;
@@ -2327,6 +2329,88 @@ select:focus-visible {
   color: var(--cyan);
 }
 
+.factory-node--black-hole {
+  border-color: #886b98;
+  background: #141219;
+}
+
+.factory-node--black-hole .factory-node__header {
+  border-bottom-color: #4d3d59;
+  background: #1a1520;
+  box-shadow: inset 0 3px 0 #9a79aa;
+}
+
+.factory-node--black-hole .node-icon {
+  border-color: #89669b;
+  color: #d6ace5;
+}
+
+.factory-node--time-warp {
+  border-color: #407f8d;
+  background: #10191b;
+}
+
+.factory-node--time-warp .factory-node__header {
+  border-bottom-color: #315e68;
+  background: #122024;
+  box-shadow: inset 0 3px 0 #57a5b6;
+}
+
+.black-hole-core,
+.time-warp-core {
+  display: grid;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.black-hole-core__warning {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid #7b4050;
+  background: #29151b;
+  color: #ffaaa8;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.black-hole-port {
+  display: grid;
+  min-height: 42px;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid #493d50;
+  background: #100e14;
+}
+
+.black-hole-port span,
+.black-hole-port small { color: var(--muted); font-size: 9px; }
+.black-hole-port strong { overflow: hidden; color: #dfc3e9; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.factory-handle--universal { border-color: #d6ace5 !important; background: #6d4d7b !important; }
+
+.time-warp-core {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.time-warp-core > div {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #31505a;
+  background: #0d1719;
+}
+
+.time-warp-core span { color: var(--muted); font-size: 9px; }
+.time-warp-core strong { color: #8bd4df; font-size: 12px; font-variant-numeric: tabular-nums; }
+
 .galactic-exporter-target {
   display: flex;
   min-height: 78px;
@@ -2748,6 +2832,10 @@ select:focus-visible {
   cursor: help;
 }
 
+.power-value {
+  min-inline-size: 6ch;
+}
+
 .quantity-value > span:first-child {
   display: inline-flex;
   align-items: baseline;
@@ -2765,6 +2853,8 @@ select:focus-visible {
   inset-inline-end: 0;
   inset-block-end: calc(100% + 7px);
   display: none;
+  inline-size: max-content;
+  min-inline-size: min(8ch, 82vw);
   max-inline-size: min(82vw, 30rem);
   padding: 6px 8px;
   border: 1px solid var(--line-strong);
@@ -4636,6 +4726,74 @@ select:focus-visible {
 .station-fleet-grid .station-fleet-control,
 .station-fleet-grid .station-local-fleet-control {
   border-bottom: 0;
+}
+
+.station-fleet-diagnostic {
+  display: grid;
+  gap: 7px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.station-fleet-diagnostic > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(62px, 1fr) repeat(4, auto);
+  gap: 6px 9px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid #294941;
+  background: #0f1916;
+}
+
+.station-fleet-diagnostic span { color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }
+.station-fleet-diagnostic .warning { color: #ffae88; }
+.station-fleet-diagnostic small { grid-column: 1 / -1; color: var(--text-soft); font-size: 9px; line-height: 1.45; }
+
+.black-hole-warning {
+  padding: 9px;
+  border: 1px solid #7b4050;
+  background: #29151b;
+  color: #ffaaa8;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.black-hole-port-list {
+  display: grid;
+  gap: 7px;
+  padding: 10px 0;
+}
+
+.black-hole-port-list > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 4px 8px;
+  padding: 8px;
+  border: 1px solid #493d50;
+  background: #100e14;
+}
+
+.black-hole-port-list small { grid-column: 1 / -1; color: var(--muted); }
+
+.time-warp-stepper {
+  display: grid;
+  grid-template-columns: 44px minmax(80px, 1fr) 44px;
+  gap: 6px;
+  padding: 10px 0;
+}
+
+.time-warp-stepper button,
+.time-warp-stepper input {
+  min-width: 0;
+  height: 44px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .station-slot-list {
@@ -8533,17 +8691,18 @@ select:focus-visible {
 .dyson-planner-workspace {
   position: fixed;
   z-index: 92;
-  inset: 68px 0 108px;
+  inset: var(--shell-header-height) 0 var(--shell-dock-height);
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: 64px minmax(0, 1fr);
+  grid-template-rows: minmax(64px, auto) minmax(0, 1fr);
   background: #0a0f0d;
 }
 
 .dyson-planner-header {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(230px, 1fr) auto 48px;
+  grid-template-columns: minmax(230px, 1fr) auto minmax(184px, auto);
   align-items: center;
   border-bottom: 1px solid var(--line);
   background: #111714;
@@ -8598,17 +8757,56 @@ select:focus-visible {
   font-size: 12px;
 }
 
-.dyson-planner-close {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-self: center;
-  place-items: center;
+.dyson-planner-commandbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 6px 10px 6px 4px;
+}
+
+.dyson-planner-commandbar button {
+  display: inline-flex;
+  min-width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 9px;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--surface-raised);
   color: var(--text-soft);
   cursor: pointer;
+}
+
+.dyson-planner-commandbar button:disabled {
+  opacity: .42;
+  cursor: default;
+}
+
+.dyson-planner-commandbar button span {
+  font-size: 10px;
+}
+
+.dyson-planner-save-feedback {
+  position: absolute;
+  z-index: 4;
+  top: 100%;
+  right: 12px;
+  max-width: min(420px, calc(100% - 24px));
+  padding: 7px 10px;
+  border: 1px solid var(--green);
+  background: #102019;
+  color: var(--green);
+  font-size: 10px;
+}
+
+.dyson-planner-save-feedback.error {
+  border-color: var(--red);
+  background: #281313;
+  color: #ff9d96;
 }
 
 .dyson-planner-layout {
@@ -8912,6 +9110,7 @@ select:focus-visible {
   grid-template-rows: 42px minmax(0, 1fr);
   place-items: center;
   overflow: hidden;
+  container-type: size;
   background: #0a0f0d;
 }
 
@@ -8940,7 +9139,7 @@ select:focus-visible {
 }
 
 .dyson-orbit-canvas {
-  width: min(100%, calc(100vh - 240px));
+  width: min(100cqw, calc(100cqh - 42px));
   max-width: 720px;
   height: auto;
   aspect-ratio: 1;
@@ -12777,7 +12976,9 @@ select:focus-visible {
 
 @media (max-width: 760px) {
   .game-shell {
-    grid-template-rows: 58px minmax(0, 1fr) 96px;
+    --shell-header-height: 58px;
+    --shell-dock-height: 96px;
+    grid-template-rows: var(--shell-header-height) minmax(0, 1fr) var(--shell-dock-height);
   }
 
   .game-header {
@@ -12925,7 +13126,22 @@ select:focus-visible {
   }
 
   .dyson-planner-header {
-    grid-template-columns: minmax(150px, 1fr) auto 42px;
+    grid-template-columns: minmax(150px, 1fr) auto;
+  }
+
+  .dyson-planner-commandbar {
+    gap: 2px;
+    padding: 4px 6px 4px 2px;
+  }
+
+  .dyson-planner-commandbar button {
+    width: 44px;
+    padding: 0;
+  }
+
+  .dyson-planner-commandbar button span,
+  .dyson-planner-headline {
+    display: none;
   }
 
   .dyson-planner-title {
@@ -14614,7 +14830,7 @@ select {
   }
 
   .dyson-planner-header {
-    grid-template-columns: minmax(145px, 1fr) auto 38px;
+    grid-template-columns: minmax(116px, 1fr) auto;
   }
 
   .dyson-planner-headline span {
@@ -18317,6 +18533,11 @@ input:focus-visible,
 .desktop-update-actions { display: flex; gap: 6px; }
 .desktop-update-actions > button { display: inline-flex; min-height: 27px; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--surface-raised); color: var(--text-soft); cursor: pointer; font-size: 8px; }
 .desktop-update-actions > button.primary { border-color: #437967; background: #153127; color: var(--green); }
+.start-menu-native-update .desktop-update-state { font-size: 9px; }
+.start-menu-native-update .desktop-update-actions > button { min-height: 36px; }
+@media (pointer: coarse) {
+  .start-menu-native-update .desktop-update-actions > button { min-width: 44px; min-height: 44px; }
+}
 
 @media (max-width: 760px) {
   .content-pack-importer { grid-template-columns: minmax(0, 1fr); }
@@ -20189,15 +20410,18 @@ html[data-ui-font-scale="200"] .release-notes-footer {
 /* Web font scaling changes type metrics without zooming layout boxes. Keep the
    shell and dense factory controls proportional at every supported scale. */
 html:not([data-native-ui-scale])[data-ui-font-scale="125"] .game-shell {
-  grid-template-rows: 76px minmax(0, 1fr) 120px;
+  --shell-header-height: 76px;
+  --shell-dock-height: 120px;
 }
 
 html:not([data-native-ui-scale])[data-ui-font-scale="150"] .game-shell {
-  grid-template-rows: 84px minmax(0, 1fr) 136px;
+  --shell-header-height: 84px;
+  --shell-dock-height: 136px;
 }
 
 html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell {
-  grid-template-rows: 100px minmax(0, 1fr) 168px;
+  --shell-header-height: 100px;
+  --shell-dock-height: 168px;
 }
 
 html:not([data-native-ui-scale])[data-ui-font-scale="150"] .game-workspace {
@@ -20245,15 +20469,15 @@ html:not([data-native-ui-scale])[data-ui-font-scale="200"] .construction-items {
 }
 
 html:not([data-native-ui-scale])[data-ui-font-scale="125"] .game-shell:has(.construction-dock--compact) {
-  grid-template-rows: 76px minmax(0, 1fr) 132px;
+  --shell-dock-height: 132px;
 }
 
 html:not([data-native-ui-scale])[data-ui-font-scale="150"] .game-shell:has(.construction-dock--compact) {
-  grid-template-rows: 84px minmax(0, 1fr) 150px;
+  --shell-dock-height: 150px;
 }
 
 html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell:has(.construction-dock--compact) {
-  grid-template-rows: 100px minmax(0, 1fr) 178px;
+  --shell-dock-height: 178px;
 }
 
 html:not([data-native-ui-scale])[data-ui-font-scale="125"] .construction-dock--compact .construction-items {

@@ -21,7 +21,7 @@ function storedPreference(): MobileUiPreference | null {
 }
 
 function initialPreference(): MobileUiPreference {
-  return queryPreference() ?? storedPreference() ?? "legacy";
+  return queryPreference() ?? storedPreference() ?? (__APP_PLATFORM__ === "android" ? "next" : "legacy");
 }
 
 export function useMobileUiPreference(): [MobileUiPreference, (preference: MobileUiPreference) => void] {

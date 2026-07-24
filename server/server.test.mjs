@@ -564,6 +564,50 @@ test("validates v33 proliferator and exact infinite research fields while accept
   assert.equal(accepted.response.status, 200);
 });
 
+test("validates v34 time warp, Dyson allocation floors and black-hole ports", async () => {
+  const research = Object.fromEntries([
+    ["matrix_compression", 1_000],
+    ["vein_utilization", 1_000],
+    ["galactic_logistics", 1_000],
+    ["stellar_harnessing", 1_000],
+    ["continuum_simulation", 23],
+  ].map(([id]) => [id, { level: 0, progress: "0" }]));
+  const baseState = {
+    version: 34,
+    settings: { productionBufferLimit: 1_000_000, logisticsBufferLimit: 1_000_000, proliferatorBufferLimit: 600 },
+    entities: [
+      { id: "black-hole", buildingId: "micro_black_hole_connector", machineCount: 1, blackHolePaused: true, blackHoleActivationConfirmed: false, blackHolePorts: [0, 1, 2].map((index) => ({ index, totalDestroyed: "0" })) },
+      { id: "time-warp", buildingId: "time_warp_device", machineCount: 1 },
+      { id: "source", buildingId: "storage_mk1", machineCount: 1 },
+    ],
+    belts: [{ id: "belt-1", source: "source", target: "black-hole", targetPortIndex: 0 }],
+    dysonPlans: { helios: { layers: [{ structureAllocationFloor: 0, shellAllocationFloor: 0 }] } },
+    timeWarp: { controllerEntityId: "time-warp", enabled: true, requestedMultiplier: 5, effectiveMultiplier: 4, pendingSimulationSeconds: 0, pendingWallSeconds: 0, requiredPowerKw: 100_000, allocatedPowerKw: 100_000 },
+    endgame: { infiniteResearch: research },
+  };
+  const payloadFor = (mutate = () => {}) => {
+    const state = structuredClone(baseState);
+    mutate(state);
+    return JSON.stringify({ state });
+  };
+  const invalidPayloads = [
+    payloadFor((state) => { state.timeWarp.requestedMultiplier = 4; }),
+    payloadFor((state) => { state.timeWarp.pendingSimulationSeconds = 30 * 24 * 60 * 60 + 1; }),
+    payloadFor((state) => { state.timeWarp.controllerEntityId = "missing"; }),
+    payloadFor((state) => { state.dysonPlans.helios.layers[0].structureAllocationFloor = -1; }),
+    payloadFor((state) => { state.entities[0].blackHolePorts[0].totalDestroyed = "01"; }),
+    payloadFor((state) => { state.entities[0].machineCount = 2; }),
+    payloadFor((state) => { state.belts.push({ id: "belt-2", source: "source", target: "black-hole", targetPortIndex: 0 }); }),
+    payloadFor((state) => { state.belts[0].targetPortIndex = 3; }),
+  ];
+  for (const payload of invalidPayloads) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload, expectedRevision: 2 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+  const accepted = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: payloadFor(), expectedRevision: 2 }) });
+  assert.equal(accepted.response.status, 200);
+});
+
 test("recalculates leaderboard score on the server", async () => {
   const rejected = await request("/api/leaderboard", {
     method: "POST",

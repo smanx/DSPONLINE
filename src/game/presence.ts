@@ -1,3 +1,5 @@
+import { apiFetch } from "./apiTransport";
+
 export const PLAYER_ID_STORAGE_KEY = "dsp-idle-network.player-id.v1";
 
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{16,96}$/;
@@ -43,7 +45,7 @@ export async function sendPlayerPresenceHeartbeat(): Promise<void> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 5_000);
   try {
-    await fetch(`${base}/presence`, {
+    await apiFetch(`${base}/presence`, {
       method: "POST",
       body: JSON.stringify({ playerId: getOrCreatePlayerId() }),
       headers: { "content-type": "application/json" },

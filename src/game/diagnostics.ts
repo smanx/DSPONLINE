@@ -1,5 +1,6 @@
 import type { AutomaticPerformanceReport } from "./benchmark";
 import type { GameState } from "./types";
+import { exportTextFile } from "./fileExport";
 
 export const CLIENT_ERROR_STORAGE_KEY = "dsp-idle-network.client-errors.v1";
 
@@ -81,12 +82,10 @@ export function collectClientDiagnostics(game?: GameState, performanceReport?: A
   };
 }
 
-export function downloadDiagnostics(diagnostics: Record<string, unknown>): void {
-  const blob = new Blob([JSON.stringify(diagnostics, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `dsp-diagnostics-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+export async function downloadDiagnostics(diagnostics: Record<string, unknown>): Promise<void> {
+  await exportTextFile({
+    contents: JSON.stringify(diagnostics, null, 2),
+    fileName: `dsp-diagnostics-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+    title: "导出客户端诊断",
+  });
 }

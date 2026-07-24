@@ -1,4 +1,5 @@
 import type { LeaderboardCategoryId, LeaderboardMetrics } from "./leaderboard";
+import { apiFetch } from "./apiTransport";
 
 export const CLOUD_TOKEN_STORAGE_KEY = "dsp-idle-network.cloud-token.v1";
 export const CLOUD_SYNC_STORAGE_KEY = "dsp-idle-network.cloud-sync.v1";
@@ -302,7 +303,7 @@ async function cloudRequest<T>(path: string, options: RequestInit = {}, authenti
   const timer = window.setTimeout(() => controller.abort(), 8_000);
   const token = authenticated ? getCloudToken() : null;
   try {
-    const response = await fetch(`${base}${path}`, {
+    const response = await apiFetch(`${base}${path}`, {
       ...options,
       signal: controller.signal,
       headers: {

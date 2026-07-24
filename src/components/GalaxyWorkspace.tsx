@@ -49,6 +49,7 @@ import { CloudAccountSecurity } from "./CloudAccountSecurity";
 import { CloudSaveConflictDialog } from "./CloudSaveConflictDialog";
 import { CloudSaveSlotsPanel } from "./CloudSaveSlotsPanel";
 import { formatQuantityCompact } from "../game/quantityFormat";
+import { PowerValue } from "./PowerValue";
 
 type GalaxyTab = "ranking" | "cloud" | "account";
 
@@ -503,7 +504,7 @@ export function GalaxyWorkspace({
                   <article className={`${entry.isLocal ? "galaxy-rank-row--local" : ""}${entry.rank <= 3 ? ` galaxy-rank-row--top-${entry.rank}` : ""}`} key={`${entry.seasonId}:${entry.accountId}`}>
                     <strong className="galaxy-rank-number">{entry.rank <= 3 ? <Crown size={15} /> : null}{String(entry.rank).padStart(2, "0")}</strong>
                     <div className="galaxy-rank-identity"><span className="galaxy-avatar">{entry.avatar}</span><span><strong>{entry.displayName}</strong><small>{entry.isLocal ? "当前账户" : "银河模拟样本"}</small></span></div>
-                    <span className="galaxy-rank-footprint"><strong>{entry.metrics.exploredSystems} 星系 · {entry.metrics.colonizedPlanets} 行星</strong><small>峰值发电 {formatMetric(entry.metrics.peakGenerationKw)} kW</small></span>
+                    <span className="galaxy-rank-footprint"><strong>{entry.metrics.exploredSystems} 星系 · {entry.metrics.colonizedPlanets} 行星</strong><small>峰值发电 <PowerValue valueKw={entry.metrics.peakGenerationKw} /></small></span>
                     <strong className="galaxy-rank-value">{formatLeaderboardValue(entry.value, category)}<small>{snapshot.category.unit}</small></strong>
                     <span className={`galaxy-rank-status${entry.isLocal && !entry.submitted ? " galaxy-rank-status--preview" : ""}`}>{entry.verified ? <ShieldCheck size={13} /> : <Activity size={13} />}{entry.isLocal ? entry.submitted ? cloudSession.status === "authenticated" ? entry.verified ? "云存档校验" : "云节点已上传" : "本地节点已上传" : "实时预览" : entry.accountId.startsWith("npc_") ? "模拟基准" : entry.verified ? "云存档校验" : "服务端记录"}</span>
                   </article>
@@ -516,7 +517,7 @@ export function GalaxyWorkspace({
               <dl>
                 <div><dt>累计发电</dt><dd>{formatMetric(metrics.energyGeneratedMj, 1)} <small>MJ</small></dd></div>
                 <div><dt>白矩阵上传</dt><dd>{formatMetric(metrics.uploadedWhiteMatrix)} <small>份</small></dd></div>
-                <div><dt>戴森峰值</dt><dd>{formatMetric(metrics.peakDysonPowerKw, 1)} <small>kW</small></dd></div>
+                <div><dt>戴森峰值</dt><dd><PowerValue valueKw={metrics.peakDysonPowerKw} /></dd></div>
                 <div><dt>吞吐峰值</dt><dd>{formatMetric(metrics.peakThroughputPerMinute, 1)} <small>/min</small></dd></div>
               </dl>
               <button
@@ -599,7 +600,7 @@ export function GalaxyWorkspace({
               <div>
                 <article><Zap size={18} /><span>累计发电<strong>{formatMetric(metrics.energyGeneratedMj, 1)} <small>MJ</small></strong></span></article>
                 <article><Database size={18} /><span>白矩阵上传<strong>{formatMetric(metrics.uploadedWhiteMatrix)} <small>份</small></strong></span></article>
-                <article><Orbit size={18} /><span>戴森峰值<strong>{formatMetric(metrics.peakDysonPowerKw, 1)} <small>kW</small></strong></span></article>
+                <article><Orbit size={18} /><span>戴森峰值<strong><PowerValue valueKw={metrics.peakDysonPowerKw} /></strong></span></article>
                 <article><Gauge size={18} /><span>吞吐峰值<strong>{formatMetric(metrics.peakThroughputPerMinute, 1)} <small>/min</small></strong></span></article>
                 <article><Globe2 size={18} /><span>星际版图<strong>{metrics.exploredSystems} <small>星系</small> · {metrics.colonizedPlanets} <small>行星</small></strong></span></article>
                 <article><Trophy size={18} /><span>银河综合<strong>{formatMetric(metrics.galaxyScore)} <small>分</small></strong></span></article>

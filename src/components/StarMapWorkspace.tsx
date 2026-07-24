@@ -6,6 +6,7 @@ import { getPlanetIndustrialProfile, getPlanetSolarPowerMultiplier, getRecommend
 import { getInterplanetaryLogisticsDiagnostics, getPlanetIndustrySummaries, getRouteDistanceLabel, getRouteEndpointLabel, getRoutePathLabel, getStarSystemIndustrySummaries, getStellarRouteSnapshots } from "../game/stellarIndustry";
 import type { GameState, ItemId, LogisticsPriority, PlanetId, PlanetIndustryRole, StarSystemId, StationMinimumLoad } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
+import { PowerValue } from "./PowerValue";
 
 function formatDistance(distanceLy: number): string {
   return distanceLy <= 0 ? "本地" : `${distanceLy.toFixed(1)} 光年`;
@@ -106,7 +107,7 @@ function IndustryConsole({ game, onTravel, onRoleChange, onStationPriorityChange
                 );
               })}
             </div>
-            <footer><span><Gauge size={12} />发电 {compactNumber(system.generationKw)} kW</span><span>负载 {compactNumber(system.demandKw)} kW</span><span>最近枯竭 {formatDepletion(system.soonestDepletionSeconds)}</span></footer>
+            <footer><span><Gauge size={12} />发电 <PowerValue valueKw={system.generationKw} /></span><span>负载 <PowerValue valueKw={system.demandKw} /></span><span>最近枯竭 {formatDepletion(system.soonestDepletionSeconds)}</span></footer>
           </article>
         ))}
       </section>

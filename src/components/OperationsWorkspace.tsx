@@ -36,6 +36,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import { PowerValue } from "./PowerValue";
 import { useEffect, useRef, useState } from "react";
 import { getPlanet } from "../game/content";
 import { DIFFICULTY_DEFINITIONS } from "../game/difficulty";
@@ -45,7 +46,7 @@ import type { SaveInspection, SaveIntegrityStatus, SaveSlotId, SaveSlotSummary, 
 import type { ModValidationResult } from "../game/mods";
 import { getContentPackDependencyStatuses, getContentPackUsage, type ContentPackRegistry } from "../game/contentPacks";
 import type { AutomaticPerformanceReport } from "../game/benchmark";
-import type { DesktopReleaseInfo } from "../desktop";
+import { NativeUpdateCard } from "./NativeUpdateCard";
 import type { AutosaveIntervalSeconds, CargoStackSize, DefaultBeltRouteMode, DifficultyMode, FontScale, GameSettings, GameState, SimulationSpeed } from "../game/types";
 import { canSetBeltStackSize } from "../game/engine";
 import { validateBuildingBufferLimitInput, validateProliferatorBufferLimitInput, type BuildingBufferLimitValidation } from "../game/settings";
@@ -70,7 +71,6 @@ interface OperationsWorkspaceProps {
   modValidation: ModValidationResult | null;
   contentPackRegistry: ContentPackRegistry;
   performanceReport: AutomaticPerformanceReport | null;
-  desktopRelease: DesktopReleaseInfo | null;
   productionRefreshPreference: ProductionRefreshPreference;
   productionRefreshIntervalMs: number;
   onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void;
@@ -90,8 +90,6 @@ interface OperationsWorkspaceProps {
   onLoadSnapshot: (snapshotId: string) => void;
   onDeleteSnapshot: (snapshotId: string) => void;
   onRunBenchmark: () => void;
-  onCheckDesktopUpdate: () => void;
-  onInstallDesktopUpdate: () => void;
   onOpenReleaseNotes: () => void;
   onValidateMod: (raw: string) => void;
   onExportModTemplate: () => void;
@@ -240,7 +238,7 @@ function BufferLimitSetting({ label, value, onChange, presets = BUFFER_LIMIT_PRE
   </section>;
 }
 
-function SettingsPanel({ game, report, desktopRelease, productionRefreshPreference, productionRefreshIntervalMs, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onCheckDesktopUpdate, onInstallDesktopUpdate, onOpenReleaseNotes }: { game: GameState; report: AutomaticPerformanceReport | null; desktopRelease: DesktopReleaseInfo | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onCheckDesktopUpdate: () => void; onInstallDesktopUpdate: () => void; onOpenReleaseNotes: () => void }) {
+function SettingsPanel({ game, report, productionRefreshPreference, productionRefreshIntervalMs, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onOpenReleaseNotes }: { game: GameState; report: AutomaticPerformanceReport | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onOpenReleaseNotes: () => void }) {
   const { settings } = game;
   return (
     <div className="operations-panel operations-settings">
@@ -342,7 +340,7 @@ function SettingsPanel({ game, report, desktopRelease, productionRefreshPreferen
         {report ? <div className={`automatic-performance-report${report.benchmark.deterministic && report.idleStress.completed && report.idleStress.integrityPassed ? " automatic-performance-report--passed" : " automatic-performance-report--warning"}`}>
           <header><span>自动性能报告</span><small>{new Date(report.generatedAt).toLocaleTimeString("zh-CN")}</small></header>
           <div className="automatic-performance-metrics"><span>确定性 <strong>{report.benchmark.deterministic ? "通过" : "失败"}</strong></span><span>60 秒 <strong>{report.benchmark.durationMs} ms</strong></span><span>压力 <strong>{report.idleStress.simulatedHours} h / {report.idleStress.durationMs} ms</strong></span><span>整数校验 <strong>{report.idleStress.integrityPassed ? "通过" : "异常"}</strong></span></div>
-          <div className="automatic-balance-metrics"><span>设备 {Math.round(report.balance.machineEfficiency * 100)}%</span><span>物流 {Math.round(report.balance.logisticsEfficiency * 100)}%</span><span>供电 {Math.round(report.balance.powerEfficiency * 100)}%</span><span>电力余量 {report.balance.powerMarginKw.toFixed(0)} kW</span></div>
+          <div className="automatic-balance-metrics"><span>设备 {Math.round(report.balance.machineEfficiency * 100)}%</span><span>物流 {Math.round(report.balance.logisticsEfficiency * 100)}%</span><span>供电 {Math.round(report.balance.powerEfficiency * 100)}%</span><span>电力余量 <PowerValue valueKw={report.balance.powerMarginKw} /></span></div>
           <div className="automatic-idle-checkpoints">{report.idleSuite.checkpoints.map((checkpoint) => <span className={checkpoint.integrityPassed ? "ready" : "warning"} key={checkpoint.hours}><small>{checkpoint.hours}h</small><strong>{checkpoint.integrityPassed ? "通过" : "异常"}</strong><em>{Math.round(checkpoint.producedPerHour).toLocaleString("zh-CN")}/h</em></span>)}</div>
           <div className="automatic-progression-audit">
             <header><span>新档至白糖</span><strong>{report.progression.observedWhiteMatrixHours != null ? `${report.progression.observedWhiteMatrixHours.toFixed(1)}h 实测` : `${report.progression.estimatedWhiteMatrixHours.toFixed(1)}h 预计`}</strong></header>
@@ -354,10 +352,7 @@ function SettingsPanel({ game, report, desktopRelease, productionRefreshPreferen
           {report.recommendedPerformanceMode ? <small className="automatic-performance-recommendation"><Cpu size={12} />当前工厂规模建议开启性能模式。</small> : null}
         </div> : null}
       </section>
-      <section className="settings-group desktop-release-status">
-        <header><Download size={14} /><span>桌面发布渠道</span><small>{desktopRelease ? `${desktopRelease.channelLabel} · v${desktopRelease.version}` : "Web / PWA"}</small></header>
-        {desktopRelease ? <><div className={`desktop-update-state desktop-update-state--${desktopRelease.update.state}`}><span>{desktopRelease.update.message}</span>{desktopRelease.update.progress != null ? <strong>{desktopRelease.update.progress}%</strong> : null}</div><div className="desktop-update-actions"><button type="button" onClick={onCheckDesktopUpdate}><RotateCcw size={13} />检查更新</button>{desktopRelease.update.state === "downloaded" ? <button className="primary" type="button" onClick={onInstallDesktopUpdate}><Download size={13} />重启安装</button> : null}</div></> : <p className="settings-help">当前使用网页版本。桌面包支持稳定版、Beta 和 Nightly 渠道，以及应用内更新检查。</p>}
-      </section>
+      <NativeUpdateCard showWebFallback />
       <section className="settings-group settings-release-notes">
         <header><History size={14} /><span>版本更新记录</span><small>{CURRENT_RELEASE_NOTES.date}</small></header>
         <button type="button" onClick={onOpenReleaseNotes} aria-label="查看版本更新记录"><History size={15} /><span><strong>{CURRENT_RELEASE_NOTES.title}</strong><small>{CURRENT_RELEASE_NOTES.items.length} 项体验更新</small></span></button>
@@ -621,7 +616,7 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
       </section>
       <section className="support-diagnostics-export">
         <div><ShieldCheck size={16} /><span><strong>匿名诊断包</strong><small>环境、工厂规模、性能结果和最近错误，不包含密码与完整存档。</small></span></div>
-        <button type="button" onClick={() => downloadDiagnostics(diagnostics())}><Download size={14} />导出 JSON</button>
+        <button type="button" onClick={() => void downloadDiagnostics(diagnostics())}><Download size={14} />导出 JSON</button>
       </section>
       <section className="support-feedback-form">
         <header><MessageSquare size={15} /><span><strong>提交反馈</strong><small>会附带同一份匿名诊断摘要</small></span></header>
@@ -664,7 +659,7 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
       <div className="operations-body">
         {props.tab === "alerts" ? <AlertsPanel alerts={props.alerts} onSelect={props.onAlertSelect} /> : null}
         {props.tab === "achievements" ? <AchievementsPanel game={props.game} /> : null}
-        {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} desktopRelease={props.desktopRelease} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onCheckDesktopUpdate={props.onCheckDesktopUpdate} onInstallDesktopUpdate={props.onInstallDesktopUpdate} onOpenReleaseNotes={props.onOpenReleaseNotes} /> : null}
+        {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onOpenReleaseNotes={props.onOpenReleaseNotes} /> : null}
         {props.tab === "saves" ? <SavesPanel {...props} /> : null}
         {props.tab === "packs" ? <ContentPacksPanel game={props.game} registry={props.contentPackRegistry} validation={props.modValidation} onValidate={props.onValidateMod} onExportTemplate={props.onExportModTemplate} onRegister={props.onRegisterContentPack} onSetEnabled={props.onSetContentPackEnabled} onRemove={props.onRemoveContentPack} /> : null}
         {props.tab === "support" ? <SupportPanel game={props.game} report={props.performanceReport} /> : null}

@@ -1,12 +1,11 @@
 import type { CloudPublicStatus } from "./cloud";
 import type { ActivityMaterialId, GameState } from "./types";
+import { ACTIVITY_MATERIAL_IDS } from "./activity";
 
 export type GalacticActivityPublicStatus = NonNullable<CloudPublicStatus["activity"]>;
 
-const MATERIAL_IDS: ActivityMaterialId[] = ["universe_matrix", "solar_sail", "small_carrier_rocket", "antimatter_fuel_rod"];
-
 function amountRecord(value?: Partial<Record<ActivityMaterialId, number>>): Record<ActivityMaterialId, number> {
-  return Object.fromEntries(MATERIAL_IDS.map((itemId) => [
+  return Object.fromEntries(ACTIVITY_MATERIAL_IDS.map((itemId) => [
     itemId,
     Math.max(0, Math.floor(value?.[itemId] ?? 0)),
   ])) as Record<ActivityMaterialId, number>;
@@ -50,7 +49,7 @@ export function synchronizeGalacticActivity(
 }
 
 export function activityOverallProgress(values: Record<ActivityMaterialId, number>, targets: Record<ActivityMaterialId, number>): number {
-  return MATERIAL_IDS.reduce((sum, itemId) => sum + Math.min(1, values[itemId] / Math.max(1, targets[itemId])), 0) / MATERIAL_IDS.length;
+  return ACTIVITY_MATERIAL_IDS.reduce((sum, itemId) => sum + Math.min(1, values[itemId] / Math.max(1, targets[itemId])), 0) / ACTIVITY_MATERIAL_IDS.length;
 }
 
 export function activityCountdownLabel(status: GalacticActivityPublicStatus, now: number): string {

@@ -2426,15 +2426,23 @@ describe("factory simulation", () => {
     expect(state.dysonPlans.borealis.layers).toHaveLength(0);
   });
 
-  it("rejects Dyson shell paste when target progress is still unassigned", () => {
+  it("pastes over historical target surplus without assigning that surplus to the copy", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("dyson_sphere_program", "dyson_shell");
     state.exploration.unlockedSystemIds.push("borealis");
     state = createStandardDysonLayer(state, "helios");
     state.dysonPlans.borealis.structurePoints = 1;
     const result = pasteDysonLayerTemplate(state, "borealis", createDysonLayerTemplate(state.dysonPlans.helios.layers[0]));
-    expect(result.state).toBe(state);
-    expect(result.error).toContain("尚未分配");
+    expect(result.error).toBeUndefined();
+    const pasted = result.state.dysonPlans.borealis.layers[0];
+    expect(pasted.structureAllocationFloor).toBe(1);
+    expect(pasted.shellAllocationFloor).toBe(0);
+    expect(pasted.nodes.every((node) => node.completedStructurePoints === 0)).toBe(true);
+    expect(pasted.frames.every((frame) => frame.completedStructurePoints === 0)).toBe(true);
+
+    result.state.dysonPlans.borealis.structurePoints = 2;
+    const advanced = advanceSimulation(result.state, 0.1);
+    expect(getDysonPlanTotals(advanced.dysonPlans.borealis).completedStructure).toBe(1);
   });
 
   it("allocates legacy structure into the first planned layer and activates only completed frames", () => {

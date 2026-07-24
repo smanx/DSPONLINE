@@ -60,11 +60,14 @@ import type { DeferredLoadedGame, LoadedGame, SaveInspection, SaveSlotId } from 
 import type { AutosaveIntervalSeconds, FontScale, GameSettings, SimulationSpeed } from "../game/types";
 import { getDesktopBridge } from "../desktop";
 import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
+import { NativeUpdateCard } from "./NativeUpdateCard";
+import { NATIVE_BACK_EVENT } from "../nativeApp";
 import { CloudAccountSecurity } from "./CloudAccountSecurity";
 import { CloudSaveConflictDialog } from "./CloudSaveConflictDialog";
 import { CloudSaveSlotsPanel } from "./CloudSaveSlotsPanel";
 import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 import { useResolvedTheme } from "../hooks/useResolvedTheme";
+import { isSecureCloudClient } from "../nativeApp";
 
 type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "new";
 type CloudAuthMode = "login" | "register" | "forgot" | "reset";
@@ -218,11 +221,33 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & { slotId: SaveSlotId }) | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const offlineAbortRef = useRef<AbortController | null>(null);
-  const cloudAuthAllowed = window.isSecureContext || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+  const cloudAuthAllowed = isSecureCloudClient();
   const cloudMailAvailable = cloudSession.mailAvailable;
   const brandIconUrl = `${import.meta.env.BASE_URL}icon.svg`;
   const automaticSnapshotCount = snapshots.filter((snapshot) => snapshot.reason === "自动快照").length;
   const manualSnapshotCount = snapshots.length - automaticSnapshotCount;
+
+  useEffect(() => {
+    const onNativeBack = (event: Event) => {
+      if (deleteRequest) {
+        event.preventDefault();
+        setDeleteRequest(null);
+        return;
+      }
+      if (cloudConflict) {
+        event.preventDefault();
+        setCloudConflict(null);
+        return;
+      }
+      if (view !== "overview") {
+        event.preventDefault();
+        setView("overview");
+        setMessage(null);
+      }
+    };
+    window.addEventListener(NATIVE_BACK_EVENT, onNativeBack);
+    return () => window.removeEventListener(NATIVE_BACK_EVENT, onNativeBack);
+  }, [cloudConflict, deleteRequest, view]);
 
   const refreshLocalSaves = () => {
     setContinueSave(getMenuContinueSave());
@@ -843,6 +868,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             <section><header><Zap size={15} /><strong>模拟速度</strong><small>{settings.simulationSpeed}×</small></header><div className="start-menu-segments">{SIMULATION_SPEEDS.map((speed) => <button className={settings.simulationSpeed === speed ? "active" : ""} type="button" key={speed} onClick={() => updateMenuSettings({ simulationSpeed: speed })}>{speed}×</button>)}</div></section>
             <section><header><Clock3 size={15} /><strong>自动保存</strong><small>{settings.autosaveIntervalSeconds} 秒</small></header><div className="start-menu-segments">{AUTOSAVE_INTERVALS.map((seconds) => <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => updateMenuSettings({ autosaveIntervalSeconds: seconds })}>{seconds} 秒</button>)}</div></section>
             <section className="start-menu-setting-toggles"><ToggleRow checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "低频渲染" : "完整渲染"} icon={<Cpu size={16} />} onChange={(performanceMode) => updateMenuSettings({ performanceMode })} /><ToggleRow checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态已精简" : "完整动态"} icon={<Gauge size={16} />} onChange={(reducedMotion) => updateMenuSettings({ reducedMotion })} /><ToggleRow checked={settings.soundEnabled} label="操作音效" value={settings.soundEnabled ? "已开启" : "已关闭"} icon={settings.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />} onChange={(soundEnabled) => updateMenuSettings({ soundEnabled })} /><ToggleRow checked={settings.allowDoubleClickZoom} label="允许双击缩放" value={settings.allowDoubleClickZoom ? "双击聚焦画布" : "连续点击不缩放"} icon={<MousePointer2 size={16} />} onChange={(allowDoubleClickZoom) => updateMenuSettings({ allowDoubleClickZoom })} /></section>
+            <NativeUpdateCard className="start-menu-native-update" />
             <section className="start-menu-release-notes"><header><History size={15} /><strong>版本更新记录</strong><small>{CURRENT_RELEASE_NOTES.date}</small></header><button type="button" onClick={onOpenReleaseNotes} aria-label={`查看${CURRENT_RELEASE_NOTES.date}版本更新记录`}><span><strong>{CURRENT_RELEASE_NOTES.title}</strong><small>{CURRENT_RELEASE_NOTES.items.length} 项体验更新</small></span><ArrowRight size={15} /></button></section>
             <section className="start-menu-community"><header><MessageCircle size={15} /><strong>QQ 交流群</strong><small>意见、建议与问题反馈</small></header><p>群号 <strong>1076757280</strong></p></section>
           </div> : null}

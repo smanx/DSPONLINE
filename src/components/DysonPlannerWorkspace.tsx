@@ -1,11 +1,11 @@
-import { Check, CircleDot, ClipboardCopy, ClipboardPaste, Gauge, GitBranch, Layers3, LockKeyhole, Orbit, Pause, Play, Plus, RadioTower, Rocket, Sparkles, Sun, Trash2, X, Zap } from "lucide-react";
+import { Check, CircleDot, ClipboardCopy, ClipboardPaste, Gauge, GitBranch, Layers3, LockKeyhole, Orbit, Pause, Play, Plus, RadioTower, Rocket, Save, Sparkles, Sun, Trash2, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { STAR_SYSTEM_LIST, getPlanet, getStarSystem } from "../game/content";
 import { createDysonLayerTemplate, getDysonEngineeringSnapshot, getDysonPlanTotals, isStarSystemUnlocked, isTechnologyCompleted, type DysonLayerTemplate } from "../game/engine";
 import { getStarSystemProfile } from "../game/galaxy";
-import { formatKilowatts } from "../game/units";
 import type { DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, GameState, StarSystemId } from "../game/types";
 import { QuantityValue } from "./QuantityValue";
+import { PowerValue } from "./PowerValue";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 
 const VIEW_CENTER = 300;
@@ -31,6 +31,7 @@ export function DysonPlannerWorkspace({
   open,
   game,
   onClose,
+  onSave,
   onAddLayer,
   onAddStandardLayer,
   onSelectLayer,
@@ -54,6 +55,7 @@ export function DysonPlannerWorkspace({
   open: boolean;
   game: GameState;
   onClose: () => void;
+  onSave: () => { success: boolean; message: string };
   onAddLayer: (systemId: StarSystemId) => void;
   onAddStandardLayer: (systemId: StarSystemId) => void;
   onSelectLayer: (systemId: StarSystemId, layerId: string) => void;
@@ -78,6 +80,7 @@ export function DysonPlannerWorkspace({
   const [systemId, setSystemId] = useState<StarSystemId>(activePlanetSystem);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [layerClipboard, setLayerClipboard] = useState<DysonLayerTemplate | null>(null);
+  const [saveFeedback, setSaveFeedback] = useState<{ message: string; error: boolean } | null>(null);
   useEffect(() => {
     if (open) setSystemId(activePlanetSystem);
   }, [activePlanetSystem, open]);
@@ -120,9 +123,18 @@ export function DysonPlannerWorkspace({
           <span>恒星 <strong>{starProfile.starTypeName} · {starProfile.luminosity.toFixed(2)} L☉</strong></span>
           <span>结构 <strong><QuantityValue value={plan.structurePoints} /></strong></span>
           <span>壳面帆 <strong><QuantityValue value={plan.shellSails} /></strong></span>
-          <span>本系功率 <strong>{formatKilowatts(engineering.projectedGenerationKw)}</strong></span>
+          <span>本系功率 <strong><PowerValue valueKw={engineering.projectedGenerationKw} /></strong></span>
         </div>
-        <button className="dyson-planner-close" type="button" onClick={onClose} title="关闭戴森球规划" aria-label="关闭戴森球规划"><X size={18} /></button>
+        <div className="dyson-planner-commandbar" role="toolbar" aria-label="戴森球规划命令">
+          <button type="button" disabled={!activeLayer} onClick={() => activeLayer && setLayerClipboard(createDysonLayerTemplate(activeLayer))} title="复制当前壳层设计" aria-label="复制当前壳层设计"><ClipboardCopy size={17} /><span>复制</span></button>
+          <button type="button" disabled={!layerClipboard || !programReady || plan.layers.length >= 8} onClick={() => layerClipboard && onPasteLayer(systemId, layerClipboard)} title="粘贴壳层副本" aria-label="粘贴壳层副本"><ClipboardPaste size={17} /><span>粘贴</span></button>
+          <button type="button" onClick={() => {
+            const result = onSave();
+            setSaveFeedback({ message: result.message, error: !result.success });
+          }} title="保存主存档" aria-label="保存主存档"><Save size={17} /><span>保存</span></button>
+          <button type="button" onClick={onClose} title="关闭戴森球规划" aria-label="关闭戴森球规划"><X size={18} /><span>关闭</span></button>
+        </div>
+        {saveFeedback ? <div className={`dyson-planner-save-feedback${saveFeedback.error ? " error" : ""}`} role={saveFeedback.error ? "alert" : "status"}>{saveFeedback.message}</div> : null}
       </header>
 
       <div className="dyson-planner-layout">
@@ -150,8 +162,6 @@ export function DysonPlannerWorkspace({
           <div className="dyson-layer-commands">
             <button type="button" disabled={!programReady || plan.layers.length >= 8} onClick={() => onAddLayer(systemId)} title="新建空白壳层"><Plus size={14} />空白层</button>
             <button type="button" disabled={!programReady || plan.layers.length >= 8} onClick={() => onAddStandardLayer(systemId)} title="新建八节点闭合标准壳层"><Layers3 size={14} />标准层</button>
-            <button type="button" disabled={!activeLayer} onClick={() => activeLayer && setLayerClipboard(createDysonLayerTemplate(activeLayer))} title="复制当前壳层设计，不复制施工进度"><ClipboardCopy size={14} />复制</button>
-            <button type="button" disabled={!layerClipboard || !programReady || plan.layers.length >= 8} onClick={() => layerClipboard && onPasteLayer(systemId, layerClipboard)} title={layerClipboard ? `在${getStarSystem(systemId).name}新增“${layerClipboard.name} 副本”` : "请先复制壳层"}><ClipboardPaste size={14} />粘贴{layerClipboard ? "副本" : ""}</button>
           </div>
           <div className="dyson-layer-heading dyson-swarm-heading"><span>太阳帆轨道</span><strong>{swarmOrbits.length}/8</strong></div>
           <div className="dyson-swarm-orbit-list">
@@ -283,7 +293,7 @@ export function DysonPlannerWorkspace({
               <label className="dyson-orbit-control"><span>轨道半径 <strong>{activeSwarmOrbit.radius.toLocaleString("zh-CN")} m</strong></span><input type="range" min={5000} max={50000} step={500} value={activeSwarmOrbit.radius} onChange={(event) => onSwarmOrbitChange(systemId, activeSwarmOrbit.id, { radius: Number(event.target.value) })} /></label>
               <label className="dyson-orbit-control"><span>轨道倾角 <strong>{activeSwarmOrbit.inclination}°</strong></span><input type="range" min={-90} max={90} step={1} value={activeSwarmOrbit.inclination} onChange={(event) => onSwarmOrbitChange(systemId, activeSwarmOrbit.id, { inclination: Number(event.target.value) })} /></label>
               <label className="dyson-orbit-control"><span>升交点经度 <strong>{activeSwarmOrbit.longitude}°</strong></span><input type="range" min={0} max={359} step={1} value={activeSwarmOrbit.longitude} onChange={(event) => onSwarmOrbitChange(systemId, activeSwarmOrbit.id, { longitude: Number(event.target.value) })} /></label>
-              <div className="dyson-swarm-orbit-stats"><span>发射 <QuantityValue value={activeSwarmOrbit.totalLaunched} /></span><span>衰减 <QuantityValue value={activeSwarmOrbit.totalExpired} /></span><span>{formatKilowatts(activeSwarmOrbit.generationKw)}</span></div>
+              <div className="dyson-swarm-orbit-stats"><span>发射 <QuantityValue value={activeSwarmOrbit.totalLaunched} /></span><span>衰减 <QuantityValue value={activeSwarmOrbit.totalExpired} /></span><span><PowerValue valueKw={activeSwarmOrbit.generationKw} /></span></div>
               <button type="button" disabled={swarmOrbits.length <= 1} onClick={() => onRemoveSwarmOrbit(systemId, activeSwarmOrbit.id)} title="删除当前太阳帆轨道"><Trash2 size={13} />删除轨道</button>
             </section>
           ) : null}
@@ -299,14 +309,14 @@ export function DysonPlannerWorkspace({
               <div><dt>太阳帆队列</dt><dd>{engineering.queuedSails} · {engineering.sailLaunchesPerMinute}/min</dd></div>
               <div><dt>运载火箭队列</dt><dd>{engineering.queuedRockets} · {engineering.rocketLaunchesPerMinute}/min</dd></div>
               <div><dt>发射能耗</dt><dd>{engineering.launchEnergyPerMinuteMj.toFixed(1)} MJ/min</dd></div>
-              <div><dt>计划功率</dt><dd>{formatKilowatts(engineering.projectedGenerationKw)}</dd></div>
+              <div><dt>计划功率</dt><dd><PowerValue valueKw={engineering.projectedGenerationKw} /></dd></div>
               <div><dt>理论接收率</dt><dd>{Math.round(engineering.theoreticalReceptionRate * 100)}%</dd></div>
               <div><dt>接收站实际利用率</dt><dd>{Math.round(engineering.receiverUtilization * 100)}%</dd></div>
               <div><dt>戴森功率利用率</dt><dd>{Math.round(engineering.dysonPowerUtilization * 100)}%</dd></div>
               <div><dt>接收站状态</dt><dd>{engineering.blockedReceiverCount > 0 ? `${engineering.blockedReceiverCount}/${engineering.configuredReceiverCount} 受阻` : `${engineering.configuredReceiverCount} 台可用`}</dd></div>
               <div><dt>临界光子</dt><dd>{engineering.criticalPhotonPerMinute.toFixed(1)}/min</dd></div>
               <div><dt>反物质</dt><dd>{engineering.antimatterPerMinute.toFixed(1)}/min</dd></div>
-              <div><dt>反物质回馈</dt><dd>{formatKilowatts(engineering.feedbackGenerationKw)}</dd></div>
+              <div><dt>反物质回馈</dt><dd><PowerValue valueKw={engineering.feedbackGenerationKw} /></dd></div>
             </dl>
             <div className="dyson-launch-cost"><span><Zap size={12} />单次成本</span><strong>帆 {engineering.launchEnergyPerSailMj.toFixed(1)} MJ · 火箭 {engineering.launchEnergyPerRocketMj.toFixed(0)} MJ</strong></div>
           </section>

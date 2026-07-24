@@ -1,4 +1,5 @@
 import { getOrCreatePlayerId } from "./presence";
+import { apiFetch } from "./apiTransport";
 
 export type AnalyticsEventName =
   | "page_view"
@@ -233,7 +234,7 @@ export async function flushAnalytics(keepalive = false): Promise<void> {
   }
   flushing = true;
   try {
-    const response = await fetch(`${base}/analytics`, {
+    const response = await apiFetch(`${base}/analytics`, {
       method: "POST",
       body: JSON.stringify(pending),
       headers: { "content-type": "application/json" },

@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v0.9.1");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v1.0.0");
     }
   });
 }
@@ -119,18 +119,18 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "联合空间站建设活动" });
+  const releaseNotes = page.getByRole("dialog", { name: "恒星巨构与物流调度" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(4);
-  await expect(releaseNotes).toContainText("三日联合建设任务");
-  await expect(releaseNotes).toContainText("超大型物资出口可建造");
-  await expect(releaseNotes).toContainText("本版不上传贡献或发放奖励");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v091-1440.png", fullPage: true });
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(7);
+  await expect(releaseNotes).toContainText("戴森球壳层复制");
+  await expect(releaseNotes).toContainText("微型黑洞连接装置");
+  await expect(releaseNotes).toContainText("多供应源物流调度");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v100-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v091-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v100-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -145,7 +145,7 @@ test("dated release notes appear once and remain available from both settings sc
   });
   await expect.poll(controlsFitViewport).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v091-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v100-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -154,7 +154,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-24-v0.9.1");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-24-v1.0.0");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -171,7 +171,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v091-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-24-v100-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -2652,7 +2652,7 @@ test("Dyson swarm closes the critical photon, antimatter and universe matrix loo
   await page.locator(".react-flow__controls-fitview").click();
 
   await expect(page.locator(".dyson-block")).toContainText("在轨太阳帆");
-  await expect(page.locator(".dyson-block")).toContainText("6,000 kW 接收");
+  await expect(page.locator(".dyson-block .dyson-load > strong .power-value > span:first-child")).toHaveText("6 MW");
   await expect(page.locator(".dyson-block")).toContainText("理论接收");
   await expect(page.locator(".dyson-block")).toContainText("接收站利用");
   await expect(page.locator(".dyson-block")).toContainText("功率利用");
@@ -2668,7 +2668,8 @@ test("Dyson swarm closes the critical photon, antimatter and universe matrix loo
   await receiver.click();
   await chooseRecipe(page, receiver, "电力接收");
   await expect(receiver.locator(".ray-reception")).toContainText("连续接收");
-  await expect(receiver).toContainText("6000 kW 接收");
+  await expect(receiver.locator(".ray-reception .power-value > span:first-child")).toHaveText("6 MW");
+  await expect(receiver).toContainText("接收");
   await expect(receiver).not.toContainText("NaN");
 
   const collider = page.locator(".machine-node").filter({ hasText: "质能转换" });
@@ -2706,7 +2707,8 @@ test("carrier rockets turn the Dyson cloud into a permanent sphere", async ({ pa
   await expect(dyson).toContainText("永久结构运行");
   await expect(dyson).toContainText("30 点");
   await expect(dyson).toContainText("300 / 600");
-  await expect(dyson).toContainText("5.52万 kW 总功率");
+  await expect(dyson.locator(".dyson-load > span .power-value > span:first-child")).toHaveText("55.2 MW");
+  await expect(dyson).toContainText("总功率");
   await expect(dyson).toContainText("运载火箭 30");
   await expect(dyson).toContainText("永久吸附 300");
   await expect(page.locator(".construction-item").filter({ hasText: "垂直发射井" })).toHaveCount(1);
@@ -2731,7 +2733,7 @@ test("carrier rockets turn the Dyson cloud into a permanent sphere", async ({ pa
   await expect(silo).toContainText("累计 30 枚");
   await silo.locator(".factory-node__header").click({ force: true });
   await expect(page.locator(".inspector-content")).toContainText("永久结构点");
-  await expect(page.locator(".inspector-content")).toContainText("18000 kW");
+  await expect(page.locator(".inspector-content")).toContainText("18 MW");
   await page.screenshot({ path: "artifacts/qa/dyson-sphere-industry-1440.png", fullPage: true });
 
   await page.getByLabel("打开科技树").click();
@@ -3337,7 +3339,7 @@ test("thermal power accepts fuel and responds to mining demand", async ({ page }
   await ironVein.click();
 
   await expect.poll(async () => plant.textContent()).toContain("燃烧发电中");
-  await expect.poll(async () => Number((await plant.locator(".power-output strong").textContent())?.split("/")[0].trim())).toBeGreaterThan(0);
+  await expect.poll(async () => Number((await plant.locator(".power-output .power-value").first().getAttribute("aria-label"))?.replace(/[^\d.-]/g, ""))).toBeGreaterThan(0);
   await page.screenshot({ path: "artifacts/qa/thermal-power-1440.png", fullPage: true });
 });
 
@@ -3836,7 +3838,7 @@ test("technology upgrades expose balanced global effects in research and equipme
   await expect(upgrades).toContainText("物流航速2.00×");
   await expect(upgrades).toContainText("机 / 船载荷50 / 200");
   await expect(upgrades).toContainText("太阳帆寿命40 min");
-  await expect(upgrades).toContainText("单站接收1.2万 kW");
+  await expect(upgrades).toContainText("单站接收12 MW");
   await expect(upgrades).toContainText("壳面吸附2.00×");
   await expect(technology.locator(".technology-node").filter({ hasText: "壳面吸附效率" })).toHaveClass(/technology-node--complete/);
   await page.screenshot({ path: "artifacts/qa/technology-upgrades-1440.png", fullPage: true });
@@ -3848,7 +3850,7 @@ test("technology upgrades expose balanced global effects in research and equipme
   await expect(inspector).toContainText("最低启航货量25 件/架");
   await expect(inspector).toContainText("额定航程4.0 秒");
   await page.locator('.react-flow__node[data-id="upgrade_receiver"] .machine-node').evaluate((element: HTMLElement) => element.click());
-  await expect(inspector).toContainText("额定接收12000 kW");
+  await expect(inspector).toContainText("额定接收12 MW");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByLabel("更多工作区").click();
@@ -3998,7 +4000,7 @@ test("renewables, storage, fusion and artificial stars form a complete energy la
 
   await page.getByLabel("打开科技树").click();
   for (const technology of ["太阳能收集", "能量储存", "地热发电", "可控核聚变", "人造恒星"]) {
-    await expect(page.locator(".technology-node").filter({ hasText: technology })).toHaveCount(1);
+    await expect(page.locator(".technology-node").filter({ has: page.getByText(technology, { exact: true }) })).toHaveCount(1);
   }
   await page.getByLabel("关闭科技树").click();
 

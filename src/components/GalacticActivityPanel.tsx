@@ -2,11 +2,10 @@ import { Clock3, RadioTower } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ITEMS } from "../game/content";
 import { activityCountdownLabel, activityOverallProgress, type GalacticActivityPublicStatus } from "../game/galacticActivity";
-import type { ActivityMaterialId, GameState } from "../game/types";
+import type { GameState } from "../game/types";
+import { ACTIVITY_MATERIAL_IDS } from "../game/activity";
 import { ItemGlyph } from "./ItemReference";
 import { QuantityValue } from "./QuantityValue";
-
-const MATERIAL_IDS: ActivityMaterialId[] = ["universe_matrix", "solar_sail", "small_carrier_rocket", "antimatter_fuel_rod"];
 
 export function GalacticActivityPanel({ game, status, compact = false }: { game: GameState; status: GalacticActivityPublicStatus | null; compact?: boolean }) {
   const [tick, setTick] = useState(0);
@@ -37,7 +36,7 @@ export function GalacticActivityPanel({ game, status, compact = false }: { game:
       <span>活动奖励<strong>后续开放</strong></span>
     </div>
     <div className="galactic-activity__materials">
-      {MATERIAL_IDS.map((itemId) => {
+      {ACTIVITY_MATERIAL_IDS.map((itemId) => {
         const personal = activity.personalDelivered[itemId] ?? 0;
         const personalTarget = activity.personalTargets[itemId] || status.personalTargets![itemId];
         const global = status.globalDelivered![itemId];

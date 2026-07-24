@@ -510,7 +510,9 @@ html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobi
 .game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"] .mobile-next-sheet--half { width: min(560px, 72vw); }
 .game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"] .mobile-next-sheet--full { width: min(760px, 92vw); }
 .game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"] .mobile-next-sheet { height: auto; }
+.game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"] .mobile-build-controls { position: static; }
 .game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"] .mobile-build-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"] .mobile-build-grid--focused { grid-template-columns: minmax(0, min(320px, 100%)); }
 .game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"] .mobile-build-grid--fleet .mobile-build-card { grid-column: span 4; }
 .game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"][data-mobile-overlay="inspector"][data-mobile-sheet-snap="full"] .inspector-panel { top: var(--mobile-next-topbar-height); right: 0; left: auto; width: min(760px, 92vw); padding-top: var(--mobile-next-sheet-header-height); }
 .game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"] .mobile-placement-bar,

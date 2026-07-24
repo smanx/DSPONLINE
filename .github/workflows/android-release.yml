@@ -1,0 +1,60 @@
+name: Android Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        required: true
+        default: stable
+        type: choice
+        options: [stable, beta, nightly]
+      version_code:
+        description: Required for beta/nightly; optional for stable SemVer builds
+        required: false
+        type: string
+  push:
+    tags: ["android-v*"]
+
+jobs:
+  package:
+    runs-on: windows-latest
+    env:
+      DSP_RELEASE_CHANNEL: ${{ inputs.channel || 'stable' }}
+      DSP_ANDROID_VERSION_CODE: ${{ inputs.version_code }}
+      DSP_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      DSP_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      DSP_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      ANDROID_CERTIFICATE_SHA256: ${{ secrets.ANDROID_CERTIFICATE_SHA256 }}
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Restore Android signing key
+        shell: pwsh
+        run: |
+          if (-not $env:ANDROID_KEYSTORE_BASE64) { throw "ANDROID_KEYSTORE_BASE64 is not configured" }
+          $path = Join-Path $env:RUNNER_TEMP "dsp-idle-release.p12"
+          [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:ANDROID_KEYSTORE_BASE64))
+          "DSP_ANDROID_KEYSTORE=$path" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:native
+      - run: npm run android:release
+      - name: Create Android update manifest
+        shell: pwsh
+        run: node scripts/create-native-update-manifests.mjs --channel $env:DSP_RELEASE_CHANNEL --android-apk android/app/build/outputs/apk/release/app-release.apk --android-certificate-sha256 $env:ANDROID_CERTIFICATE_SHA256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsp-idle-android-${{ env.DSP_RELEASE_CHANNEL }}
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/bundle/release/*.aab
+            release/update-feed/android/**

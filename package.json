@@ -1,7 +1,8 @@
 {
   "name": "dsp-idle-network",
   "private": true,
-  "version": "0.9.1",
+  "version": "1.0.0",
+  "releaseChannel": "stable",
   "description": "戴森球计划风格的 2D 生产网络挂机游戏",
   "author": "DSP Idle Network Contributors",
   "type": "module",
@@ -13,6 +14,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:server": "npm --prefix server test",
+    "test:native": "node --test scripts/native-release-tools.test.mjs",
     "test:backup": "node --test deploy/backup-tools.test.mjs",
     "test:ops": "node --test deploy/backup-tools.test.mjs deploy/nginx-config.test.mjs deploy/probe-node-health.test.mjs",
     "benchmark:logistics": "cross-env DSP_RUN_LOGISTICS_BENCHMARK=1 vitest run src/game/logisticsBenchmark.test.ts --reporter=verbose",
@@ -22,12 +24,28 @@
     "release:manifest": "node deploy/create-release-manifest.mjs",
     "release:verify": "node deploy/create-release-manifest.mjs --verify",
     "release:test-switch": "bash deploy/test-switch-release.sh",
+    "build:desktop": "node scripts/build-platform.mjs desktop",
+    "build:android": "node scripts/build-platform.mjs android",
     "desktop:dev": "cross-env DSP_DESKTOP_DEV_URL=http://127.0.0.1:4318 electron .",
-    "desktop:pack": "npm run build && node desktop/pack.cjs",
-    "desktop:dist": "npm run build && electron-builder",
-    "desktop:publish": "npm run build && electron-builder --publish always"
+    "desktop:pack": "npm run build:desktop && node desktop/pack.cjs pack",
+    "desktop:dist": "npm run build:desktop && node desktop/pack.cjs dist",
+    "desktop:release": "node scripts/verify-desktop-signing-env.mjs && npm run desktop:dist && node scripts/create-native-update-manifests.mjs --desktop-source release",
+    "android:sync": "npm run build:android && cap sync android && node scripts/sync-native-versions.mjs",
+    "android:debug": "cross-env DSP_ANDROID_DEBUG=1 npm run android:sync && android\\gradlew.bat -p android assembleDebug",
+    "android:release:unsigned": "npm run android:sync && android\\gradlew.bat -p android bundleRelease assembleRelease",
+    "android:release": "node scripts/verify-android-signing-env.mjs && npm run android:release:unsigned",
+    "native:assets": "node scripts/generate-native-assets.mjs",
+    "native:manifests": "node scripts/create-native-update-manifests.mjs"
   },
   "dependencies": {
+    "@capacitor/app": "8.1.1",
+    "@capacitor/browser": "8.0.4",
+    "@capacitor/core": "8.4.2",
+    "@capacitor/filesystem": "8.1.2",
+    "@capacitor/network": "8.0.1",
+    "@capacitor/share": "8.0.1",
+    "@capacitor/splash-screen": "8.0.2",
+    "@capacitor/status-bar": "8.0.3",
     "@xyflow/react": "^12.9.3",
     "electron-updater": "^6.8.9",
     "lucide-react": "^0.468.0",
@@ -35,6 +53,8 @@
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@capacitor/android": "8.4.2",
+    "@capacitor/cli": "8.4.2",
     "@playwright/test": "^1.61.1",
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.0",
@@ -58,6 +78,7 @@
     "files": [
       "dist/**",
       "desktop/**",
+      "build/icon.png",
       "package.json"
     ],
     "win": {
@@ -91,7 +112,7 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "https://updates.example.invalid/dsp-idle/stable"
+        "url": "https://dsponline.cn/downloads/desktop/stable"
       }
     ]
   }

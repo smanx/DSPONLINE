@@ -543,6 +543,16 @@ export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
     powerDemandKw: 24000, speed: 1, inputCapacity: 1_000_000, outputCapacity: 0, accepts: "any", megastructure: true,
     description: "银河终局工程的实体交付设施，通过四个专用输入端口接收宇宙矩阵、太阳帆、小型运载火箭和反物质燃料棒。",
   },
+  micro_black_hole_connector: {
+    id: "micro_black_hole_connector", name: "微型黑洞连接装置", shortName: "黑洞连接器", kind: "machine",
+    speed: 1, inputCapacity: 0, outputCapacity: 0, accepts: "any", megastructure: true,
+    description: "通过三个独立通用输入口永久销毁传送带送达的物资，并以十进制精确记录累计销毁量。",
+  },
+  time_warp_device: {
+    id: "time_warp_device", name: "时间扭曲装置", shortName: "时间扭曲", kind: "machine",
+    speed: 1, inputCapacity: 0, outputCapacity: 0, megastructure: true,
+    description: "消耗所在电网的剩余功率加速全存档实时模拟；离线收益和活动墙钟不受影响。",
+  },
 };
 
 export const RECIPES: Record<RecipeId, RecipeDefinition> = {
@@ -738,6 +748,8 @@ export const CONSTRUCTION: ConstructionDefinition[] = [
   { buildingId: "orbital_collector", name: "轨道采集器", outputAmount: 1, requiredTechId: "orbital_collection", costs: [{ itemId: "titanium_alloy", amount: 40 }, { itemId: "super_magnetic_ring", amount: 20 }, { itemId: "graphene", amount: 20 }] },
   { buildingId: "construction_center", name: "建筑制造中心", outputAmount: 1, requiredTechId: "construction_automation", costs: [{ itemId: "steel", amount: 5000 }, { itemId: "titanium_alloy", amount: 5000 }, { itemId: "processor", amount: 5000 }, { itemId: "particle_broadband", amount: 5000 }] },
   { buildingId: "galactic_material_exporter", name: "超大型物资出口", outputAmount: 1, requiredTechId: "universe_matrix", costs: [{ itemId: "universe_matrix", amount: 1000 }, { itemId: "small_carrier_rocket", amount: 500 }, { itemId: "frame_material", amount: 1000 }, { itemId: "quantum_chip", amount: 1000 }] },
+  { buildingId: "micro_black_hole_connector", name: "微型黑洞连接装置", outputAmount: 1, requiredTechId: "micro_black_hole_containment", costs: [{ itemId: "universe_matrix", amount: 12000 }, { itemId: "frame_material", amount: 7500 }, { itemId: "quantum_chip", amount: 6000 }, { itemId: "antimatter_fuel_rod", amount: 4500 }] },
+  { buildingId: "time_warp_device", name: "时间扭曲装置", outputAmount: 1, requiredTechId: "time_warp_engineering", costs: [{ itemId: "universe_matrix", amount: 60000 }, { itemId: "frame_material", amount: 36000 }, { itemId: "quantum_chip", amount: 30000 }, { itemId: "antimatter_fuel_rod", amount: 24000 }] },
 ];
 
 export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
@@ -1214,6 +1226,34 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     summary: "把五色矩阵的研究数据与反物质统一编码，形成最终阶段的白色科研矩阵。",
     unlocks: ["宇宙矩阵生产", "六色矩阵科研"],
   },
+  micro_black_hole_containment: {
+    id: "micro_black_hole_containment", name: "微型黑洞约束工程", tier: 20,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 500 },
+      { itemId: "energy_matrix", amount: 500 },
+      { itemId: "structure_matrix", amount: 500 },
+      { itemId: "information_matrix", amount: 500 },
+      { itemId: "gravity_matrix", amount: 500 },
+      { itemId: "universe_matrix", amount: 500 },
+    ],
+    prerequisites: ["universe_matrix"],
+    summary: "建立可控微型事件视界，以三个独立接口永久处理任意传送带物资。",
+    unlocks: ["微型黑洞连接装置"],
+  },
+  time_warp_engineering: {
+    id: "time_warp_engineering", name: "时间扭曲工程", tier: 20,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 1000 },
+      { itemId: "energy_matrix", amount: 1000 },
+      { itemId: "structure_matrix", amount: 1000 },
+      { itemId: "information_matrix", amount: 1000 },
+      { itemId: "gravity_matrix", amount: 1000 },
+      { itemId: "universe_matrix", amount: 1000 },
+    ],
+    prerequisites: ["universe_matrix", "artificial_star"],
+    summary: "以指数级电力维持全局时间加速，同时保持离线收益和活动时钟使用真实时间。",
+    unlocks: ["时间扭曲装置", "5x 及更高实时模拟倍率"],
+  },
   construction_capacity_2: {
     id: "construction_capacity_2", name: "建筑仓储扩容 II", tier: 20,
     costs: [
@@ -1394,8 +1434,8 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
       { itemId: "gravity_matrix", amount: 60 },
     ],
     prerequisites: ["ray_receiver", "solar_sail_life_1"],
-    summary: "校准恒星射线相位与接收阵列，使每台射线接收站额定功率提升至 9,000 kW。",
-    unlocks: ["射线接收上限 9,000 kW/台"],
+    summary: "校准恒星射线相位与接收阵列，使每台射线接收站额定功率提升至 9 MW。",
+    unlocks: ["射线接收上限 9 MW/台"],
   },
   ray_transmission_2: {
     id: "ray_transmission_2", name: "射线传输效率 II", tier: 20,
@@ -1408,8 +1448,8 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
       { itemId: "universe_matrix", amount: 80 },
     ],
     prerequisites: ["universe_matrix", "ray_transmission_1"],
-    summary: "用宇宙矩阵统一发射与接收模型，使每台接收站额定功率累计提升至 12,000 kW。",
-    unlocks: ["射线接收上限累计 12,000 kW/台"],
+    summary: "用宇宙矩阵统一发射与接收模型，使每台接收站额定功率累计提升至 12 MW。",
+    unlocks: ["射线接收上限累计 12 MW/台"],
   },
   dyson_absorption_1: {
     id: "dyson_absorption_1", name: "壳面吸附效率", tier: 24,

@@ -1,5 +1,6 @@
 import type { AccountLedger, AccountProfile } from "./account";
 import { formatQuantityCompact } from "./quantityFormat";
+import { formatPowerKw } from "./units";
 
 export const LEADERBOARD_STORAGE_KEY = "dsp-idle-network.leaderboard.v1";
 
@@ -60,7 +61,7 @@ export interface LeaderboardSnapshot {
 export const LEADERBOARD_CATEGORIES: readonly LeaderboardCategoryDefinition[] = [
   { id: "power", label: "累计发电", unit: "MJ", description: "工业电网累计输出的能量", color: "#e4b955" },
   { id: "upload", label: "白矩阵上传", unit: "份", description: "提交至银河档案的白矩阵", color: "#d9dedb" },
-  { id: "dyson", label: "戴森功率", unit: "kW", description: "戴森云与戴森球当前功率", color: "#e7bd58" },
+  { id: "dyson", label: "戴森功率", unit: "", description: "戴森云与戴森球当前功率", color: "#e7bd58" },
   { id: "throughput", label: "生产吞吐", unit: "/min", description: "历史峰值生产通量", color: "#69cbb0" },
   { id: "galaxy", label: "银河综合", unit: "分", description: "发电、上传、戴森与工业规模综合评分", color: "#b8a0e4" },
 ] as const;
@@ -146,6 +147,7 @@ export function getLeaderboardValue(metrics: LeaderboardMetrics, category: Leade
 }
 
 export function formatLeaderboardValue(value: number, category: LeaderboardCategoryId): string {
+  if (category === "dyson") return formatPowerKw(value);
   if (category === "throughput" && Math.abs(value) < 10_000) return value.toFixed(1);
   return formatQuantityCompact(Math.floor(value));
 }

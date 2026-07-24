@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart LR
-  U["浏览器 / PWA / Electron"] --> F["React 19 + React Flow 前端"]
+  U["浏览器 / PWA / Electron / Android"] --> F["React 19 + React Flow 前端"]
   F --> W["Web Worker 确定性模拟"]
   W --> E["game/engine.ts"]
   F --> L["localStorage 本地存档"]
@@ -20,7 +20,10 @@ flowchart LR
 
 ### 启动层
 
-- `src/main.tsx`：安装客户端监控，挂载 React，生产环境注册 PWA；普通入口按需加载 `GameLauncher`，管理员入口独立加载后台。
+- `src/main.tsx`：安装客户端监控，初始化原生运行时并挂载 React；仅 Web 生产环境注册 PWA，普通入口按需加载 `GameLauncher`，管理员入口独立加载后台。
+- `src/nativeApp.ts`、`src/components/NativeUpdateCard.tsx`：统一 Electron/Android 平台识别、生命周期、系统返回、网络状态、应用版本和更新状态；这些信息属于设备 UI，不进入 `GameState`。
+- `src/game/apiTransport.ts`：Web/Android 沿用 Fetch 语义；Electron 的绝对 HTTPS API 请求改走受限主进程桥，渲染进程不关闭 Web 安全策略。
+- `src/game/fileExport.ts`：Web/Electron 使用下载链接，Android 使用 Capacitor Filesystem 与系统 Share sheet 导出 JSON。
 - `src/GameLauncher.tsx`：主菜单、版本公告和工厂启动边界；只有玩家进入工厂或执行存档操作时才继续加载存档迁移器与工厂运行时。
 - `src/FactoryRuntime.tsx`：按需加载 React Flow Provider 与 `FactoryGame`，避免主菜单提前下载画布 JavaScript 和模拟器。React Flow 基础 CSS 在 `styles.css` 最前合并，以保留自定义端口覆盖的稳定级联顺序。
 - `src/hooks/usePlayerPresence.ts`、`src/game/presence.ts`：进入工厂后的匿名心跳、可见性节流与本机稳定 ID；不读取游戏存档。
@@ -78,9 +81,9 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 ## 3. 状态与模拟流
 
 1. 主菜单调用 `loadGame()` 或加载指定槽位，得到 `LoadedGame`。
-2. `0.9.0` 候选的 `FactoryGame` 以 `GameState` v33 作为唯一持久游戏状态；v1-v32 由连续迁移链归一到 v33，存档 envelope 仍为 v2。
+2. `1.0.0` 的 `FactoryGame` 以 `GameState` v34 作为唯一持久游戏状态；v1-v33 由连续迁移链归一到 v34，存档 envelope 仍为 v2。
 3. 工厂每 1 秒累计并向模拟 Worker 提交真实经过时间。模拟步长、状态发布和视觉动画彼此独立；画面档位绝不能改变 `1x/2x/4x` 累计秒数、生产、物流、科研、戴森或确定性顺序。
-4. 浏览器支持 Worker 时，状态和累计时间提交给 `src/game/simulation.worker.ts`；Worker 调用 `advanceSimulation()`。暂停时停止重复回传完整状态，Worker 不可用或报错时使用同一个函数回退到主线程。
+4. 浏览器支持 Worker 时，状态、模拟秒数和可信墙钟秒数分别提交给 `src/game/simulation.worker.ts`；Worker 调用 `advanceSimulation()`。普通倍率与时间扭曲只放大模拟预算，活动资格和倒计时只消费墙钟预算。暂停时停止重复回传完整状态，Worker 不可用或报错时使用同一个函数回退到主线程。
 5. `canvasGame` 是只读展示快照。设备级 UI 偏好 `dsp-idle-network.production-refresh.v1` 提供自动、100/200/500/1000/1500/3000 ms 档位；自动档桌面从 200 ms、粗指针设备从 500 ms 开始，并依据 FPS、Worker 延迟和积压以迟滞窗口逐档调整。固定档不会被自动策略覆盖。
 6. 选中实体、选中线路和检查器需要在真实 Worker 状态到达时优先刷新；普通屏幕内容按全局档发布。生产进度条只在两个真实快照之间使用 CSS 周期动画，库存数字永远来自最近真实状态。
 7. 返回的新状态驱动 React UI；全屏工作区或页面后台期间冻结底层画布快照，关闭后追上最新状态。
@@ -116,7 +119,7 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 星际物流槽持久化 `direct`、`relay-preferred` 或 `relay-required` 策略及 1-4 个/船翘曲预算。中转物流站持久化启用状态与优先级；在途 `StationRoute` 保存 waypoint、总距离、实际每船翘曲消耗和 `vehicleStationId`。航线仍挂在需求站上，但载具可属于供给站或需求站；占用、卸载限制、返航、翘曲扣除/退款和诊断必须按所属站计算。多跳耗时、能耗、诊断和模拟使用同一经济函数。
 
-`SimulationAdvanceSession` 持有不进入存档的物流查询上下文：实体 ID、站点槽、忙碌载具、供给预留、在途货物、活动航线和路线经济缓存。动态航线计数每个模拟步重建，派遣后立即更新；`findStationSlotPeer()` 只从同物品/模式/作用域候选中保持原稳定排序。测试保留旧全扫描模式，用于 10/50/100/500 塔逐字段和状态哈希对比。
+`SimulationAdvanceSession` 持有不进入存档的物流查询上下文：实体 ID、站点槽、忙碌载具、供给预留、在途货物、活动航线和路线经济缓存。动态航线计数每个模拟步重建，派遣后立即更新；需求槽会按距离、优先级和持久化公平游标遍历全部合法供应源，单一来源不足时继续部分补足，直到需求、载具或容量耗尽。同一调度会话共享候选索引和动态路线缓存，但不改变稳定排序与状态哈希。测试保留旧全扫描模式，用于 10/50/100/500 塔逐字段和状态哈希对比。
 
 物流站连接自动配置只修改未配置状态：已有同物品槽优先复用，否则占用第一个空槽；五槽已满、物品冲突或方向非法时返回结构化失败原因。旧 `sorterTier` 只作为兼容字段保留并始终归一到传送带等级，运行时吞吐只读取线路等级、并行数和堆叠层数。
 
@@ -142,7 +145,7 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 | 数据 | 键或位置 | 说明 |
 | --- | --- | --- |
-| 主存档 | `dsp-idle-network.save.v1` | v2 envelope；`0.9.0` 候选写 v33并可迁移 v1-v32；`productionHistory` 始终以空数组写入 |
+| 主存档 | `dsp-idle-network.save.v1` | v2 envelope；`1.0.0` 写 v34并可迁移 v1-v33；`productionHistory` 始终以空数组写入 |
 | 生产画面刷新偏好 | `dsp-idle-network.production-refresh.v1` | 只按设备保存，不进入 `GameState`、本地/云存档或迁移版本 |
 | 主备份 | 主键后缀 `.backup` | 主存档写入并读回校验成功后，尽力保存上一份有效版本 |
 | 快照 | 主键后缀 `.snapshot.*` | 自动快照最多 2 份、至少每 5 分钟生成；手动快照独立保留，不参与自动清理 |
@@ -155,7 +158,7 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 | 已读版本公告 | `dsp-idle-network.release-notes.seen.v1` | 仅保存最近已确认的公告 ID，不属于游戏存档 |
 | 内容包注册表 | 见 `contentPacks.ts` | 必须先于存档迁移加载 |
 
-v32→v33 只新增并归一化玩法状态：增产剂缓存上限、建筑制造中心 WIP、五项无限科研的规范十进制投入/历史等级，以及银河活动个人记录、可信活动时钟和待确认批次。迁移先保留旧银河网络出口模式，再对已经完成终局科技且未领取过的旧档幂等补发一个物资出口施工件；重复加载不得再次补发、结转科研或增加评分。
+v33→v34 集中增加戴森壳层分配起点、微型黑洞三端口统计、传送带目标端口、时间扭曲主控与待处理时间预算，以及物流需求槽公平游标。旧壳层分配起点为 0；旧线路不重排；时间扭曲默认关闭且不改变原 1x/2x/4x 设置；新巨构不补发。迁移逐字段保留活动贡献、库存、实体、线路、载具、在途航线、科研、递归制造和戴森建设进度，并保持重复加载幂等。
 
 `saveGame()` 先生成轻量 envelope、清理过期自动快照、写主存档并立即读回校验；只有校验成功才返回成功。配额错误只会从最旧自动快照开始清理并重试一次，绝不自动删除手动槽位或手动快照。最终失败不会中止模拟，但运行时必须持续显示导出提示，不能把“界面继续运行”误报成“已保存”。
 
@@ -205,6 +208,7 @@ API 表面：
 - 运维工具链：每日异地备份使用公钥认证加密，恢复节点每月在隔离目录启动临时 API 演练；五分钟节点探针检查公网端点、磁盘和 TLS，结果通过管理员指标读取。
 - Nginx 模板对 JS、CSS、JSON、manifest、XML 和 SVG 启用 gzip，并保留 hashed asset immutable 与 `index.html`/`sw.js` no-cache 边界。
 - Service worker 注册 URL 携带确定性 build ID，缓存命名也使用该 ID，避免版本切换后新旧应用壳混用。
+- Electron 更新目录位于 `/downloads/desktop/<channel>/`；Android 更新清单位于 `/downloads/android/<channel>.json`。两端都只接受 HTTPS，正式制品必须保持平台签名连续性。构建、签名与更新目录规范见 [NATIVE_APPLICATIONS.md](./NATIVE_APPLICATIONS.md)。
 
 正式香港节点与上海旧节点各自运行本机 API 和数据库。上海不能反代或重定向到香港，否则会破坏当前备用入口边界。具体运行手册见 [DEPLOYMENT_OPERATIONS.md](./DEPLOYMENT_OPERATIONS.md)。
 
