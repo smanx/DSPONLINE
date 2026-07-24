@@ -120,11 +120,24 @@ export function parseAndroidUpdateManifest(raw: unknown, manifestUrl: string, ex
   };
 }
 
-function androidManifestUrl(): string {
-  const configured = import.meta.env.VITE_ANDROID_UPDATE_MANIFEST_URL?.trim();
-  const target = new URL(configured || `https://dsponline.cn/downloads/android/${__RELEASE_CHANNEL__}.json`);
+export function resolveAndroidUpdateManifestUrl(configured: string | undefined): string {
+  if (!configured?.trim()) throw new Error("此构建未配置更新源");
+  const target = new URL(configured.trim());
   if (target.protocol !== "https:") throw new Error("Android 更新源必须使用 HTTPS");
   return target.toString();
+}
+
+function androidManifestUrl(): string {
+  return resolveAndroidUpdateManifestUrl(import.meta.env.VITE_ANDROID_UPDATE_MANIFEST_URL);
+}
+
+export function resolveNativePublicOrigin(configured: string | undefined): string | null {
+  if (!configured?.trim()) return null;
+  const target = new URL(configured.trim());
+  if (target.protocol !== "https:" || target.pathname !== "/" || target.search || target.hash) {
+    throw new Error("原生应用公开入口必须是 HTTPS origin");
+  }
+  return target.origin;
 }
 
 async function readAndroidAppInfo(): Promise<NativeReleaseInfo> {
@@ -291,7 +304,8 @@ export function initializeNativeRuntime(): Promise<void> {
     await App.addListener("appUrlOpen", ({ url }) => {
       try {
         const incoming = new URL(url);
-        if (incoming.origin !== "https://dsponline.cn" || (!incoming.searchParams.has("verify") && !incoming.searchParams.has("reset"))) return;
+        const publicOrigin = resolveNativePublicOrigin(import.meta.env.VITE_PUBLIC_APP_ORIGIN);
+        if (!publicOrigin || incoming.origin !== publicOrigin || (!incoming.searchParams.has("verify") && !incoming.searchParams.has("reset"))) return;
         const current = new URL(window.location.href);
         current.search = incoming.search;
         window.history.replaceState(window.history.state, "", current);

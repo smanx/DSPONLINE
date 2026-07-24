@@ -1,13 +1,23 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
-const { channels, resolveReleaseChannel } = require("./release-channels.cjs");
+const { createReleaseChannels, optionalHttpsUrl, resolveReleaseChannel } = require("./release-channels.cjs");
 const packageMetadata = require("../package.json");
 
 const isDevelopment = Boolean(process.env.DSP_DESKTOP_DEV_URL);
+const channels = createReleaseChannels({
+  updateBaseUrl: process.env.DSP_UPDATE_BASE_URL || packageMetadata.updateBaseUrl,
+  stableUrl: process.env.DSP_UPDATE_STABLE_URL,
+  betaUrl: process.env.DSP_UPDATE_BETA_URL,
+  nightlyUrl: process.env.DSP_UPDATE_NIGHTLY_URL,
+});
 const channelId = resolveReleaseChannel(process.env.DSP_RELEASE_CHANNEL || packageMetadata.releaseChannel);
 const channel = channels[channelId];
-const apiBaseUrl = new URL(process.env.DSP_DESKTOP_API_BASE_URL || "https://dsponline.cn/api/");
+const configuredApiBaseUrl = optionalHttpsUrl(
+  process.env.DSP_DESKTOP_API_BASE_URL || packageMetadata.cloudApiBaseUrl,
+  "Desktop cloud API base URL",
+);
+const apiBaseUrl = configuredApiBaseUrl ? new URL(`${configuredApiBaseUrl}/`) : null;
 const allowedApiMethods = new Set(["GET", "POST", "PUT", "DELETE"]);
 const maximumRequestBytes = 8 * 1024 * 1024;
 const maximumResponseBytes = 32 * 1024 * 1024;
@@ -22,7 +32,7 @@ let updateTimer = null;
 let fontScale = 1;
 let updateState = {
   state: isDevelopment ? "development" : "idle",
-  message: isDevelopment ? "开发环境不检查更新" : "尚未检查",
+  message: isDevelopment ? "开发环境不检查更新" : channel.url ? "尚未检查" : "此构建未配置更新源",
   channel: channelId,
 };
 
@@ -103,6 +113,7 @@ function trustedSender(event) {
 }
 
 function resolveApiRequestUrl(requestPath) {
+  if (!apiBaseUrl) throw new Error("此构建未配置云服务地址");
   if (typeof requestPath !== "string" || !requestPath.startsWith("/") || requestPath.includes("\\")) throw new Error("API 路径无效");
   const basePath = apiBaseUrl.pathname.endsWith("/") ? apiBaseUrl.pathname : `${apiBaseUrl.pathname}/`;
   const target = new URL(requestPath.replace(/^\/+/, ""), new URL(basePath, apiBaseUrl.origin));
@@ -222,6 +233,7 @@ function configureAutoUpdater() {
   if (isDevelopment || !app.isPackaged || process.env.DSP_DISABLE_UPDATES === "1") return;
   try {
     const updateUrl = process.env.DSP_UPDATE_URL || channel.url;
+    if (!updateUrl) return;
     const parsedUpdateUrl = new URL(updateUrl);
     if (parsedUpdateUrl.protocol !== "https:") {
       publishUpdateState({ state: "error", message: "更新源必须使用 HTTPS" });

@@ -54,9 +54,26 @@ test("native feed generator refuses a debug APK by default", async () => {
     await writeFile(apk, Buffer.from("debug apk fixture"));
     await assert.rejects(execFileAsync(process.execPath, [
       path.join(root, "scripts", "create-native-update-manifests.mjs"),
+      "--base-url", "https://updates.example.test/downloads/",
       "--android-apk", apk,
       "--output", path.join(temporary, "feed"),
     ], { cwd: root }), /Refusing to publish a debug-signed or unsigned APK/);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("native feed generator requires an explicit update base URL", async () => {
+  const temporary = await mkdtemp(path.join(tmpdir(), "dsp-native-feed-base-url-"));
+  try {
+    const apk = path.join(temporary, "app-debug.apk");
+    await writeFile(apk, Buffer.from("debug apk fixture"));
+    await assert.rejects(execFileAsync(process.execPath, [
+      path.join(root, "scripts", "create-native-update-manifests.mjs"),
+      "--android-apk", apk,
+      "--allow-debug", "true",
+      "--output", path.join(temporary, "feed"),
+    ], { cwd: root, env: { ...process.env, DSP_NATIVE_UPDATE_BASE_URL: "" } }), /base-url.*required/i);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

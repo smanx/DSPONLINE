@@ -12,11 +12,16 @@ on:
   push:
     tags: ["desktop-v*"]
 
+permissions:
+  contents: read
+
 jobs:
   package:
     runs-on: windows-latest
     env:
       DSP_RELEASE_CHANNEL: ${{ inputs.channel || 'stable' }}
+      DSP_DESKTOP_API_BASE_URL: https://dsponline.cn/api
+      DSP_UPDATE_BASE_URL: https://dsponline.cn/downloads/desktop
       CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
       CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
     steps:
@@ -26,6 +31,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run licenses:check
       - run: npm run typecheck
       - run: npm run test:native
       - run: npm run desktop:release

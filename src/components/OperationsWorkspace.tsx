@@ -9,8 +9,10 @@ import {
   Cloud,
   CloudOff,
   Download,
+  ExternalLink,
   FileCheck2,
   Gauge,
+  Github,
   GraduationCap,
   HardDrive,
   History,
@@ -106,6 +108,8 @@ const TABS: Array<{ id: OperationsTab; label: string; icon: typeof Bell }> = [
   { id: "packs", label: "内容包", icon: PackagePlus },
   { id: "support", label: "诊断反馈", icon: MessageSquare },
 ];
+
+const PROJECT_SOURCE_URL = "https://github.com/snowsnow0926/DSPONLINE";
 
 function formatRuntime(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
@@ -617,6 +621,11 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
       <section className="support-diagnostics-export">
         <div><ShieldCheck size={16} /><span><strong>匿名诊断包</strong><small>环境、工厂规模、性能结果和最近错误，不包含密码与完整存档。</small></span></div>
         <button type="button" onClick={() => void downloadDiagnostics(diagnostics())}><Download size={14} />导出 JSON</button>
+      </section>
+      <section className="support-source-link">
+        <Github size={16} />
+        <span><strong>源码仓库</strong><small>PolyForm Noncommercial 1.0.0 · 仅限非商业用途</small></span>
+        <a href={PROJECT_SOURCE_URL} target="_blank" rel="noreferrer"><ExternalLink size={14} />GitHub</a>
       </section>
       <section className="support-feedback-form">
         <header><MessageSquare size={15} /><span><strong>提交反馈</strong><small>会附带同一份匿名诊断摘要</small></span></header>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAndroidUpdateManifest } from "./nativeApp";
+import { parseAndroidUpdateManifest, resolveAndroidUpdateManifestUrl, resolveNativePublicOrigin } from "./nativeApp";
 
 const VALID_MANIFEST = {
   schemaVersion: 1,
@@ -18,6 +18,18 @@ const VALID_MANIFEST = {
 };
 
 describe("Android native update manifests", () => {
+  it("requires an explicitly configured HTTPS update source", () => {
+    expect(() => resolveAndroidUpdateManifestUrl(undefined)).toThrow("未配置更新源");
+    expect(() => resolveAndroidUpdateManifestUrl("http://updates.example.test/stable.json")).toThrow("HTTPS");
+    expect(resolveAndroidUpdateManifestUrl("https://updates.example.test/stable.json")).toBe("https://updates.example.test/stable.json");
+  });
+
+  it("accepts only a configured HTTPS origin for account deep links", () => {
+    expect(resolveNativePublicOrigin(undefined)).toBeNull();
+    expect(resolveNativePublicOrigin("https://game.example.test")).toBe("https://game.example.test");
+    expect(() => resolveNativePublicOrigin("https://game.example.test/account")).toThrow("HTTPS origin");
+  });
+
   it("normalizes a same-origin HTTPS artifact", () => {
     const manifest = parseAndroidUpdateManifest(VALID_MANIFEST, "https://dsponline.cn/downloads/android/stable.json", "stable");
     expect(manifest.apk.url).toBe("https://dsponline.cn/downloads/android/dsp-idle-1.0.0-1000000.apk");

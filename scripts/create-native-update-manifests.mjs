@@ -19,7 +19,9 @@ for (let index = 2; index < process.argv.length; index += 1) {
 
 const channel = (args.get("channel") || process.env.DSP_RELEASE_CHANNEL || "stable").toLowerCase();
 if (!["stable", "beta", "nightly"].includes(channel)) throw new Error(`Unsupported release channel: ${channel}`);
-const baseUrl = new URL(args.get("base-url") || "https://dsponline.cn/downloads/");
+const configuredBaseUrl = args.get("base-url") || process.env.DSP_NATIVE_UPDATE_BASE_URL;
+if (!configuredBaseUrl) throw new Error("--base-url or DSP_NATIVE_UPDATE_BASE_URL is required");
+const baseUrl = new URL(configuredBaseUrl);
 if (baseUrl.protocol !== "https:") throw new Error("Native update base URL must use HTTPS");
 
 const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));

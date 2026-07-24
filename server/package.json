@@ -2,6 +2,16 @@
   "name": "dsp-idle-cloud-service",
   "private": true,
   "version": "0.4.0",
+  "homepage": "https://dsponline.cn",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/snowsnow0926/DSPONLINE.git",
+    "directory": "server"
+  },
+  "bugs": {
+    "url": "https://github.com/snowsnow0926/DSPONLINE/issues"
+  },
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "scripts": {
     "start": "node index.mjs",

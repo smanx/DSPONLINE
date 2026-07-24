@@ -1609,7 +1609,7 @@ async function openOperationsStageGame(page: Page) {
       exploration: { unlockedSystemIds: ["helios"] },
       paused: false,
     };
-    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now() + 60_000, state }));
   });
   await page.goto("/");
   await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible();
@@ -4765,6 +4765,7 @@ test("operations center diagnoses equipment and records achievement progress", a
   await expect(playerMetrics).toContainText("当前在线游玩");
   await expect(playerMetrics).toContainText("7");
   await expect(playerMetrics).toContainText("120 秒内活跃");
+  await expect(operations.getByRole("link", { name: "GitHub" })).toHaveAttribute("href", "https://github.com/snowsnow0926/DSPONLINE");
   await page.screenshot({ path: "artifacts/qa/player-metrics-1440.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect.poll(async () => operations.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);

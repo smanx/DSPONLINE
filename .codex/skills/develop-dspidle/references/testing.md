@@ -14,7 +14,7 @@ npm run test:e2e
 npm run desktop:pack
 ```
 
-Hong Kong and Shanghai `1.0.0` baseline: 431 passing Vitest tests plus 1 optional benchmark skip, 131 Playwright Chrome tests, 31 cloud-service tests, 5 operations tests and 2 native release-tool tests on GameState v34. Both use save envelope v2, cloud schema v7 and SQLite storage layout v2.
+Current source-available working tree: 433 passing Vitest tests plus 1 optional benchmark skip, 31 cloud-service tests, 5 operations tests and 6 native configuration/release-tool tests on GameState v34. The deployed Hong Kong and Shanghai `1.0.0` baseline remains 431 Vitest, 131 Playwright, 31 cloud-service, 5 operations and 2 native-tool tests; both use save envelope v2, cloud schema v7 and SQLite storage layout v2.
 
 ## Choose By Change
 

@@ -3,8 +3,19 @@
   "private": true,
   "version": "1.0.0",
   "releaseChannel": "stable",
+  "updateBaseUrl": "",
+  "cloudApiBaseUrl": "",
   "description": "戴森球计划风格的 2D 生产网络挂机游戏",
+  "homepage": "https://dsponline.cn",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/snowsnow0926/DSPONLINE.git"
+  },
+  "bugs": {
+    "url": "https://github.com/snowsnow0926/DSPONLINE/issues"
+  },
   "author": "DSP Idle Network Contributors",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "main": "desktop/main.cjs",
   "scripts": {
@@ -14,7 +25,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:server": "npm --prefix server test",
-    "test:native": "node --test scripts/native-release-tools.test.mjs",
+    "test:native": "node --test scripts/native-release-tools.test.mjs desktop/release-channels.test.cjs",
     "test:backup": "node --test deploy/backup-tools.test.mjs",
     "test:ops": "node --test deploy/backup-tools.test.mjs deploy/nginx-config.test.mjs deploy/probe-node-health.test.mjs",
     "benchmark:logistics": "cross-env DSP_RUN_LOGISTICS_BENCHMARK=1 vitest run src/game/logisticsBenchmark.test.ts --reporter=verbose",
@@ -35,7 +46,9 @@
     "android:release:unsigned": "npm run android:sync && android\\gradlew.bat -p android bundleRelease assembleRelease",
     "android:release": "node scripts/verify-android-signing-env.mjs && npm run android:release:unsigned",
     "native:assets": "node scripts/generate-native-assets.mjs",
-    "native:manifests": "node scripts/create-native-update-manifests.mjs"
+    "native:manifests": "node scripts/create-native-update-manifests.mjs",
+    "licenses:generate": "node scripts/generate-third-party-notices.mjs",
+    "licenses:check": "node scripts/generate-third-party-notices.mjs --check"
   },
   "dependencies": {
     "@capacitor/app": "8.1.1",
@@ -79,6 +92,10 @@
       "dist/**",
       "desktop/**",
       "build/icon.png",
+      "LICENSE",
+      "NOTICE",
+      "COMMERCIAL_USE.md",
+      "THIRD_PARTY_NOTICES.md",
       "package.json"
     ],
     "win": {
@@ -112,7 +129,7 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "https://dsponline.cn/downloads/desktop/stable"
+        "url": "${env.DSP_DESKTOP_PUBLISH_URL}"
       }
     ]
   }

@@ -13,6 +13,7 @@
 - 原生生命周期只触发既有保存流程，不修改模拟步长、GameState 或云存档格式。
 - Android 与 Windows 各自保留本机应用数据。覆盖安装和同签名升级不会清除本地存档；卸载应用仍会删除系统应用数据，因此正式发布前必须继续提供导出和云存档。
 - Android JSON 导出通过应用缓存目录与系统分享面板完成；Web/Electron 继续使用浏览器下载。
+- 社区构建默认不连接官方云 API、账号深链或更新源。官方地址只由受保护的发布 CI 显式注入；Electron 会把允许的 API 和更新基址写入包元数据，运行时不依赖玩家机器环境变量。
 
 ## 2. 开发环境
 
@@ -45,6 +46,7 @@ npm run android:debug
 - Android 稳定版默认把 `major.minor.patch` 映射为 `major * 1,000,000 + minor * 1,000 + patch`；`1.0.0` 对应 `1000000`。
 - Beta、Nightly 或 SemVer prerelease 必须显式设置新的 `DSP_ANDROID_VERSION_CODE`，避免 Android 认为新包不是升级。
 - `DSP_RELEASE_CHANNEL` 只允许 `stable / beta / nightly`。平台构建脚本把同一通道写入 Vite 常量、Android 版本属性和 Electron 打包元数据；安装后不会回落到 Stable。
+- `DSP_DESKTOP_API_BASE_URL`、`DSP_UPDATE_BASE_URL`、`DSP_ANDROID_API_BASE_URL`、`DSP_ANDROID_UPDATE_BASE_URL` 和 `DSP_ANDROID_PUBLIC_ORIGIN` 都是可选的显式 HTTPS 配置。缺省表示社区离线构建，不使用官方回退值。完整说明见 [COMMUNITY_BUILDS.md](./COMMUNITY_BUILDS.md)。
 
 ## 4. 正式签名
 
@@ -76,7 +78,7 @@ npm run android:release
 
 ## 5. 更新源
 
-Windows 应用读取：
+官方 Windows CI 显式配置 `DSP_UPDATE_BASE_URL=https://dsponline.cn/downloads/desktop`，签名应用读取：
 
 ```text
 https://dsponline.cn/downloads/desktop/stable
@@ -84,7 +86,7 @@ https://dsponline.cn/downloads/desktop/beta
 https://dsponline.cn/downloads/desktop/nightly
 ```
 
-Android 应用读取：
+官方 Android CI 显式配置 `DSP_ANDROID_UPDATE_BASE_URL=https://dsponline.cn/downloads/android`，签名应用读取：
 
 ```text
 https://dsponline.cn/downloads/android/stable.json
@@ -98,18 +100,20 @@ Android 清单只接受 schema v1、`cn.dsponline.network`、当前通道、同�
 
 ```powershell
 node scripts/create-native-update-manifests.mjs `
+  --base-url https://dsponline.cn/downloads/ `
   --channel stable `
   --android-apk android/app/build/outputs/apk/release/app-release.apk `
   --android-certificate-sha256 <公开证书指纹>
 ```
 
-Windows 的 `latest.yml`、安装程序和 blockmap 由 `npm run desktop:release` 整理到 `release/update-feed/desktop/<channel>/`。Android JSON 与 APK 整理到 `release/update-feed/android/`。这些命令只生成待发布目录，不上传服务器。
+生成器没有默认发布域名，必须传入 `--base-url` 或设置 `DSP_NATIVE_UPDATE_BASE_URL`。Windows 的 `latest.yml`、安装程序和 blockmap 由 `npm run desktop:release` 整理到 `release/update-feed/desktop/<channel>/`。Android JSON 与 APK 整理到 `release/update-feed/android/`。这些命令只生成待发布目录，不上传服务器。
 
 ## 6. CI 与发布门禁
 
 - `.github/workflows/desktop-release.yml` 使用 Windows 代码签名机密生成安装包和桌面更新目录。
 - `.github/workflows/android-release.yml` 从 GitHub Secret 临时恢复 keystore，生成签名 APK/AAB，并校验批准证书后生成更新清单。
 - CI 只上传 GitHub Actions 制品，不自动部署 VPS。
+- 两个发布 workflow 的 token 权限为只读，并显式注入官方 API、公开 origin 和更新基址；普通 Pull Request CI 不接收这些配置或签名 secrets。
 - 向正式更新目录发布前仍需核对版本、通道、SHA-256、证书、安装覆盖、本地存档、云登录、回滚版本和 HTTPS 缓存头。
 
 ## 7. 当前发布门槛

@@ -35,6 +35,7 @@ export function getOrCreatePlayerId(): string {
 function presenceApiBase(): string | null {
   const configured = import.meta.env.VITE_API_BASE_URL?.trim();
   if (configured) return configured.replace(/\/$/, "");
+  if (typeof __APP_PLATFORM__ !== "undefined" && __APP_PLATFORM__ !== "web") return null;
   if (typeof window === "undefined" || window.location.protocol === "file:") return null;
   return "/api";
 }

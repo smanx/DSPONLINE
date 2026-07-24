@@ -5,10 +5,12 @@
 | 层级 | 命令 | 当前规模 | 覆盖重点 |
 | --- | --- | ---: | --- |
 | 类型检查 | `npm run typecheck` | 全部前端 TS | 严格类型、Vite 配置 |
-| 单元/领域 | `npm test` | `1.0.0` / v34 431 项，1 项可选基准跳过 | 引擎、v1-v34 存档、物流索引等价、增产剂、无限科研、戴森复制、银河活动、生产刷新偏好、可配置缓存、离线 Worker 等价性、存档配额急救、科研、电力、蓝图、规划、网络与云同步等 |
+| 单元/领域 | `npm test` | 当前工作区 433 项，1 项可选基准跳过 | 引擎、v1-v34 存档、物流索引等价、增产剂、无限科研、戴森复制、银河活动、生产刷新偏好、可配置缓存、离线 Worker 等价性、存档配额急救、科研、电力、蓝图、规划、网络、云同步和原生更新配置等 |
 | 浏览器 E2E | `npm run test:e2e` | `1.0.0` / v34 131 项 | 从开局到银河终局、终局巨构、戴森复制、时间扭曲、七档生产刷新、新旧手机壳、本地存档保护和桌面/手机横竖屏回归 |
 | 云服务 | `npm run test:server` | `1.0.0` 31 项 | 用户名注册、四槽云存档、schema v3→v7、SQLite layout v1→v2、历史正文裁剪、设备会话、匿名统计、v34 校验、活动、腾讯 SES、排行榜邮箱门槛和管理员保护 |
 | 运维工具 | `npm run test:ops` | 5 项 | SQLite 一致性快照、认证加密、异地复制、隔离恢复、篡改拒绝、Nginx 压缩与缓存边界、端点/磁盘探针和告警载荷 |
+| 原生配置与发布工具 | `npm run test:native` | 6 项 | 社区更新源默认关闭、HTTPS 通道、Android/桌面更新清单、调试 APK 拒绝和显式发布基址 |
+| 第三方许可证 | `npm run licenses:check` | 128 个运行时包 | 根项目/云服务 lockfile、直接依赖通知、完整许可证文本和 public 法律文件一致性 |
 | 生产构建 | `npm run build` | 1 次构建 | `tsc -b`、Vite chunk 和 PWA 资源 |
 | 桌面目录包 | `npm run desktop:pack` | 按需 | Electron 启动与 Windows 解包 |
 
@@ -22,7 +24,7 @@ Playwright 使用本机 Google Chrome，串行执行，并在隔离的 `127.0.0.
 git diff --check
 ```
 
-再检查 Markdown 链接和 Skill validator。无需因文档改动重跑 86 项浏览器测试。
+再检查 Markdown 链接和 Skill validator。修改许可证、依赖或公开政策时还要运行 `npm run licenses:check`。无需因纯文档改动重跑浏览器测试。
 
 ### 样式或单个面板
 
@@ -71,9 +73,12 @@ npm run build
 
 ```powershell
 npm ci
+npm --prefix server ci
+npm run licenses:check
 npm run typecheck
 npm test
 npm run test:server
+npm run test:native
 npm run test:ops
 npm run build
 npm run test:e2e
@@ -152,6 +157,7 @@ Web 发布应至少记录：构建 ID、入口 HTML、主 JS/CSS 体积、压缩
 8. 保留上一前端、后端发布目录和回滚命令。
 9. 发布后观察错误、延迟、备份、磁盘和云冲突。
 10. 只有验收完成后才创建正式标签和发布说明。
+11. 源码公开制品包含项目许可证、Required Notice、隐私/条款和第三方许可证文本；社区原生构建在空配置下不连接官方 API 或更新源。
 
 ## 6. `0.2.0` 正式验收记录
 

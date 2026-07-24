@@ -154,6 +154,7 @@ export class CloudApiError extends Error {
 function apiBase(allowInsecurePublicRead = false): string | null {
   const configured = import.meta.env.VITE_API_BASE_URL?.trim();
   if (configured) return configured.replace(/\/$/, "");
+  if (typeof __APP_PLATFORM__ !== "undefined" && __APP_PLATFORM__ !== "web") return null;
   if (typeof window === "undefined" || window.location.protocol === "file:") return null;
   const localDevelopment = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
   if (window.location.protocol !== "https:" && !localDevelopment && !allowInsecurePublicRead) return null;
@@ -296,7 +297,7 @@ async function cloudRequest<T>(path: string, options: RequestInit = {}, authenti
   if (!base) throw new CloudApiError(
     typeof window !== "undefined" && window.location.protocol === "http:"
       ? "云账户仅在 HTTPS 安全入口开放"
-      : "桌面离线版本未配置云服务地址",
+      : "原生应用未配置云服务地址",
     0,
   );
   const controller = new AbortController();
