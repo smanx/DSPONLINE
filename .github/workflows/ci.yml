@@ -28,7 +28,7 @@ jobs:
       - run: npm --prefix server ci
       - run: npm run licenses:check
       - run: npm run typecheck
-      - run: npm test
+      - run: npm test -- --maxWorkers=1
       - run: npm run test:server
       - run: npm run test:native
       - run: npm run test:ops
