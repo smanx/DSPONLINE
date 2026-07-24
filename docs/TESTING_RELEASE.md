@@ -5,9 +5,9 @@
 | 层级 | 命令 | 当前规模 | 覆盖重点 |
 | --- | --- | ---: | --- |
 | 类型检查 | `npm run typecheck` | 全部前端 TS | 严格类型、Vite 配置 |
-| 单元/领域 | `npm test` | `0.9.1` / v33 410 项，1 项可选基准跳过 | 引擎、v1-v33 存档、物流索引等价、增产剂、无限科研、戴森复制、银河活动、生产刷新偏好、可配置缓存、离线 Worker 等价性、存档配额急救、科研、电力、蓝图、规划、网络与云同步等 |
-| 浏览器 E2E | `npm run test:e2e` | `0.9.1` / v33 127 项 | 从开局到银河终局、巨构制造/放置/任务跳转、七档生产刷新、托盘管理、球壳复制、无限科研、新旧手机壳、本地存档保护和桌面/手机横竖屏回归 |
-| 云服务 | `npm run test:server` | `0.9.1` 28 项 | 用户名注册、旧邮箱登录、无邮件四槽云存档、schema v3→v7 迁移、设备会话、匿名统计、v33 校验、活动配置关闭/非法拒绝/10 亿目标/确定性曲线、腾讯 SES 模板 API、排行榜邮箱门槛和管理员保护 |
+| 单元/领域 | `npm test` | `1.0.0` / v34 431 项，1 项可选基准跳过 | 引擎、v1-v34 存档、物流索引等价、增产剂、无限科研、戴森复制、银河活动、生产刷新偏好、可配置缓存、离线 Worker 等价性、存档配额急救、科研、电力、蓝图、规划、网络与云同步等 |
+| 浏览器 E2E | `npm run test:e2e` | `1.0.0` / v34 131 项 | 从开局到银河终局、终局巨构、戴森复制、时间扭曲、七档生产刷新、新旧手机壳、本地存档保护和桌面/手机横竖屏回归 |
+| 云服务 | `npm run test:server` | `1.0.0` 31 项 | 用户名注册、四槽云存档、schema v3→v7、SQLite layout v1→v2、历史正文裁剪、设备会话、匿名统计、v34 校验、活动、腾讯 SES、排行榜邮箱门槛和管理员保护 |
 | 运维工具 | `npm run test:ops` | 5 项 | SQLite 一致性快照、认证加密、异地复制、隔离恢复、篡改拒绝、Nginx 压缩与缓存边界、端点/磁盘探针和告警载荷 |
 | 生产构建 | `npm run build` | 1 次构建 | `tsc -b`、Vite chunk 和 PWA 资源 |
 | 桌面目录包 | `npm run desktop:pack` | 按需 | Electron 启动与 Windows 解包 |
@@ -472,16 +472,16 @@ Chrome 147 的强制 GC 活跃堆从 14.06 MiB 到 16.23 MiB（+2.17 MiB），Re
 
 公网验收覆盖正式根域名、`www` 跳转、上海独立入口、manifest、健康接口、管理员 `401`、gzip、immutable/no-cache、服务 active、`NRestarts=0` 和最近 500 条访问日志 5xx。隔离 Chrome 使用香港 1440×900 桌面和上海 390×844 新版手机实际完成“放置巨构 → 点击巨构 → 打开任务页 → 开始提交”，没有发出生产写 API；手机触控目标不小于 44px且无横向溢出。截图位于 `artifacts/qa/production-0.9.1/`，完整证据见 [releases/0.9.1.md](./releases/0.9.1.md)。
 
-## 19. `1.0.0` / v34 发布候选验收
+## 19. `1.0.0` / v34 正式验收
 
-本节记录 2026-07-24 最终发布提交之前的完整工作树门禁；源码 SHA、release ID、清单哈希、两地备份和公网结果只在正式发布记录中补充。应用 SemVer 为 `1.0.0`，GameState 从 v33 升至 v34，存档 envelope 保持 v2，云 schema 保持 v7。
+正式源码提交为 `01492dea3c513392fb3336daae24c742aac320ce`，release ID 为 `1.0.0-01492dea3c51`。应用 SemVer 为 `1.0.0`，GameState 从 v33 升至 v34，存档 envelope 保持 v2，云 API schema 保持 v7；SQLite 内部存储从单行 layout v1 升至元数据/正文分离的 layout v2。
 
 | 检查 | 结果 |
 | --- | --- |
 | 根目录 `npm ci` | 457 个包，0 个已知漏洞 |
 | `npm run typecheck` | 通过 |
 | `npm test` | 42/42 文件、431/431 通过，1 项可选物流基准跳过 |
-| `npm run test:server` | 29/29 通过，包含 v34 云存档范围验证 |
+| `npm run test:server` | 31/31 通过，包含 v34 云存档范围、layout v1→v2 和历史正文裁剪 |
 | `npm run test:ops` | 5/5 通过 |
 | `npm run test:native` | 2/2 通过 |
 | `npm run build` | 通过；最终 `dist/` 为普通 Web 构建 |
@@ -496,3 +496,9 @@ Chrome 147 的强制 GC 活跃堆从 14.06 MiB 到 16.23 MiB（+2.17 MiB），Re
 Windows `release/win-unpacked` 已生成，EXE 产品版本为 `1.0.0.0`，但 Authenticode 为 `NotSigned`。Android unsigned Release APK 为 4,103,392 字节，AAB 为 3,917,492 字节；包名 `cn.dsponline.network`、versionName `1.0.0`、versionCode `1000000`、minSdk 24，`apksigner` 正确拒绝 APK。两类制品只用于本地编译门禁，不得进入 VPS 公共更新源。
 
 完整 E2E 仍出现已知非阻断 Vite `ResizeObserver loop completed with undelivered notifications` 卸载提示，但 131 项断言和最终退出码成功。Windows 正式证书、Android 长期 keystore、物理 Android/iPhone 各 30 分钟温度耗电和 PWA standalone 仍是明确缺口。
+
+发布清单包含 115 个文件，聚合 SHA-256 为 `fcf72ad88bc6a8d610715f496931d359ade4aa4b32be4f8c74bd533d6485cc97`。Web/API 归档哈希分别为 `82fe7d3da12e20b56264978d31662bcee3696bb0a411bc7f0fe568757b1af721` 和 `2ccf439bad6bc662b9713298fde8d45c3317e621e201e811d6f7783644a00c92`；两地未激活目录分别通过 31/31 服务测试和 115 文件逐项复验。
+
+香港真实备份副本迁移后，551 个修订正文与元数据逐键、大小和 SHA-256 一致，`app_state` 从 136.8 MB 降至约 2.55 MB。正式观察 240 秒内 24/24 健康请求成功，最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB；上海 140 秒内 14/14 成功，最大 1.506 ms、`NRestarts=0`、RSS 约 65～66 MB。两地上线后备份均为 layout v2 且元数据修订数与正文行数一致。
+
+公网验收覆盖香港根域名、`www` 301、上海独立入口、两地健康接口 layout v2、管理员 401、gzip、immutable/no-cache、活动 revision、服务/timer active、journal warning 和最近 500 条访问日志 5xx。旧 API 不能读取 layout v2 正文，因此两地回滚目标只回退 Web，API 固定保留当前实现。完整证据见 [releases/1.0.0.md](./releases/1.0.0.md)。
