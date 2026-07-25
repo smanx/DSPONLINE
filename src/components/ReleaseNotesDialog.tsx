@@ -1,62 +1,56 @@
-import { Check, ClipboardCopy, Gauge, Info, MessageCircle, MonitorDown, Orbit, RadioTower, Route, X, Zap, type LucideIcon } from "lucide-react";
+import { Check, ClipboardCopy, Gauge, Info, MessageCircle, MonitorDown, Orbit, RadioTower, Route, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-24-v1.0.0",
-  date: "2026年7月24日",
-  version: "1.0.0",
-  title: "恒星巨构与物流调度",
-  summary: "1.0.0 完成戴森工程、终局巨构、活动物资输入和星际物流调度升级。旧存档会自动迁移，现有建筑、线路、库存、科研、物流航线和戴森建设进度保持不变。",
+  id: "2026-07-25-v1.0.2",
+  date: "2026年7月25日",
+  version: "1.0.2",
+  title: "完整英文版与亮色模式补全",
+  summary: "1.0.2 增加可随时切换的英文界面，并补齐开始菜单、账号、云存档、排行榜、全屏工作区和两套手机界面的亮色主题。语言只保存在当前设备，本次不升级 GameState，现有存档与云存档保持兼容。",
   items: [
     {
-      id: "dyson-copy",
-      title: "戴森球壳层复制",
-      description: "建设中或已完成的壳层都可复制到本恒星系或其他已解锁恒星系。副本保留设计拓扑但从零建设，不继承目标系统已有火箭、结构点或壳面帆。",
+      id: "language-switch",
+      title: "中英文即时切换",
+      description: "开始菜单和游戏内设置都可切换简体中文与 English，也可使用 ?lang=en 直接进入英文版。偏好仅保存在当前设备，不写入本地或云端游戏存档。",
     },
     {
-      id: "activity-input",
-      title: "活动出口传送带输入",
-      description: "超大型物资出口的四个专用接口现可正确接收宇宙矩阵、太阳帆、小型运载火箭和反物质燃料棒。活动倒计时改用真实墙钟，不再受暂停或模拟倍率影响。",
+      id: "catalog-english",
+      title: "生产目录完整英文化",
+      description: "78 项物品、78 条配方、37 类建筑、67 项科技、22 颗行星、8 个恒星系，以及生态、科研效果和主线任务均提供英文名称与说明。",
     },
     {
-      id: "dyson-layout",
-      title: "戴森规划界面重整",
-      description: "复制、粘贴、保存和关闭命令始终保持可见；在 1080p、紧凑桌面、手机横竖屏和 80% 至 200% 字体下，规划区拥有独立滚动边界。",
+      id: "workspace-english",
+      title: "核心工作区英文覆盖",
+      description: "开始菜单、工厂画布、制造、检查器、科技、统计、星图、资料库、排行榜、云存档、主线、戴森规划、蓝图和运营设置均可用英文完成主要操作。",
     },
     {
-      id: "black-hole",
-      title: "微型黑洞连接装置",
-      description: "新增三输入终局巨构，可永久销毁传送带送达的任意物资并精确记录每个接口的累计数量。放置后默认暂停，首次启动和回收均有明确安全确认。",
+      id: "light-theme",
+      title: "亮色模式全面补齐",
+      description: "修复开始菜单、账号与云存档、更新公告、统计、科技树、星图、资料库、排行榜、模态层和手机抽屉仍使用深色背景的问题。",
     },
     {
-      id: "time-warp",
-      title: "时间扭曲装置",
-      description: "新增以十倍功耗逐档提升实时模拟倍率的终局巨构。主控只使用所在电网剩余功率，供电不足时自动降档，离线收益和活动时钟保持真实时间。",
+      id: "mobile-parity",
+      title: "桌面与手机保持一致",
+      description: "经典手机界面和新版手机壳都可切换语言与主题，建造、物资、科研、更多工作区及横竖屏继续保留完整入口和安全区。",
     },
     {
-      id: "power-units",
-      title: "功率单位自动换算",
-      description: "功率统一按 kW、MW、GW、TW、PW 自动换算。桌面悬停或聚焦、手机点击功率数值时可查看精确 kW，不再出现手工除以 1000 的显示差异。",
-    },
-    {
-      id: "logistics-dispatch",
-      title: "多供应源物流调度",
-      description: "需求站会跳过缺货、断电或不可达的供应塔，并在同一步从多个来源补足。相同优先级按公平游标轮换，舰队诊断会明确显示载具、翘曲器和路线限制。",
+      id: "native-update",
+      title: "原生应用同步更新",
+      description: "Windows 与 Android 应用同步升级至 1.0.2，继续使用现有更新通道、应用数据目录和 Android 发布签名，覆盖安装不会清除本地存档。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "dyson-copy": ClipboardCopy,
-  "activity-input": Route,
-  "dyson-layout": MonitorDown,
-  "black-hole": Orbit,
-  "time-warp": Gauge,
-  "power-units": Zap,
-  "logistics-dispatch": RadioTower,
+  "language-switch": RadioTower,
+  "catalog-english": ClipboardCopy,
+  "workspace-english": Orbit,
+  "light-theme": MonitorDown,
+  "mobile-parity": Gauge,
+  "native-update": Route,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

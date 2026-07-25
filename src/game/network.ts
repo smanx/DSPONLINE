@@ -1,5 +1,5 @@
-import { getBuilding, getRecipe } from "./content";
-import { getBeltCapacity, getBeltNetworkIds, getEntityItemInputCapacity, getEntityProliferatorSpeedMultiplier, getMiningSpeedMultiplier, getRecipeSpeedMultiplier } from "./engine";
+import { getRecipe } from "./content";
+import { getBeltCapacity, getBeltNetworkIds, getEntityItemInputCapacity, getEntityRecipeCycleCapacityPerSimulationSecond } from "./engine";
 import type { BeltConnection, BeltTier, FactoryEntity, GameState, ItemId, PlanetId } from "./types";
 
 export type BeltHealth = "healthy" | "underused" | "starved" | "congested" | "idle";
@@ -9,12 +9,18 @@ export interface BeltDiagnostic {
   health: BeltHealth;
   label: string;
   flow: number;
+  sampleSeconds: number;
+  sampleTransferred: number;
+  sampling: boolean;
   capacity: number;
   utilization: number;
   congestion: number;
   sourceStock: number;
   targetFree: number;
   capacityDeficit: number;
+  sourceRatePerSecond: number | null;
+  demandRatePerSecond: number | null;
+  limitingFactor: "capacity" | "upstream" | "downstream" | "source-empty" | "target-full" | "none";
 }
 
 export interface BeltNetworkSnapshot {
@@ -64,7 +70,7 @@ export interface ConnectionThroughputForecast {
 function entityItemRatePerSecond(state: GameState, entity: FactoryEntity, itemId: ItemId, direction: "output" | "input"): number | null {
   if (entity.kind === "vein") {
     return direction === "output" && entity.resourceId === itemId && entity.minerCount > 0
-      ? Math.max(0, entity.productionRate * getMiningSpeedMultiplier(state) / 60)
+      ? Math.max(0, entity.productionRate / 60)
       : null;
   }
   const recipe = getRecipe(entity.recipeId);
@@ -72,8 +78,7 @@ function entityItemRatePerSecond(state: GameState, entity: FactoryEntity, itemId
     const amounts = direction === "output" ? recipe.outputs : recipe.inputs;
     const amount = amounts.find((entry) => entry.itemId === itemId)?.amount;
     if (!amount) return null;
-    return getBuilding(entity.buildingId).speed * Math.max(1, entity.machineCount) * getRecipeSpeedMultiplier(state, recipe.id) *
-      getEntityProliferatorSpeedMultiplier(entity) / Math.max(0.05, recipe.duration) * amount;
+    return getEntityRecipeCycleCapacityPerSimulationSecond(state, entity) * amount;
   }
   const stock = direction === "output" ? entity.outputs[itemId] : entity.inputs[itemId];
   return (stock ?? 0) > 0 ? Number.POSITIVE_INFINITY : null;
@@ -123,25 +128,34 @@ export function diagnoseBelt(state: GameState, belt: BeltConnection): BeltDiagno
   const target = state.entities.find((entity) => entity.id === belt.target);
   const capacity = getBeltCapacity(belt);
   const flow = Math.max(0, belt.lastFlow ?? 0);
+  const sampleSeconds = Math.max(0, belt.recentFlowSampleSeconds ?? 0);
+  const sampleTransferred = Math.max(0, belt.recentFlowTransferred ?? 0);
+  const sampling = belt.recentFlowSampling ?? sampleSeconds < 5;
   const utilization = capacity > 0 ? Math.min(1, flow / capacity) : 0;
   const congestion = Math.max(0, Math.min(1, belt.congestion ?? 0));
   const sourceStock = Math.max(0, Math.floor(source?.outputs[belt.itemId] ?? 0));
   const targetFree = targetFreeCapacity(state, target, belt.itemId);
-  const estimatedDemand = flow > 0 && congestion > 0
-    ? Math.min(capacity * 4, flow / Math.max(0.05, 1 - congestion))
-    : congestion >= 0.8 && sourceStock > 0 ? capacity * 1.25 : flow;
+  const rawSourceRate = source ? entityItemRatePerSecond(state, source, belt.itemId, "output") : null;
+  const rawDemandRate = target ? entityItemRatePerSecond(state, target, belt.itemId, "input") : null;
+  const sourceRatePerSecond = rawSourceRate === Number.POSITIVE_INFINITY ? capacity : rawSourceRate;
+  const demandRatePerSecond = rawDemandRate === Number.POSITIVE_INFINITY ? capacity : rawDemandRate;
+  const targetBlocked = targetFree < 1;
+  const estimatedDemand = targetBlocked && sourceStock > 0 ? capacity * 1.25 : flow;
   const capacityDeficit = Math.max(0, estimatedDemand - capacity);
   let health: BeltHealth;
   let label: string;
+  let limitingFactor: BeltDiagnostic["limitingFactor"] = "none";
   if (!source || !target) {
     health = "idle";
     label = "端点不存在";
-  } else if (targetFree < 1 || congestion >= 0.8) {
+  } else if (targetBlocked) {
     health = "congested";
-    label = targetFree < 1 ? "下游缓存已满" : "线路持续拥堵";
+    label = "下游缓存已满";
+    limitingFactor = "target-full";
   } else if (sourceStock < 1 && flow < 0.001) {
     health = "starved";
     label = "上游暂无可运输库存";
+    limitingFactor = "source-empty";
   } else if (flow < 0.001) {
     health = "idle";
     label = "等待生产或运输周期";
@@ -150,9 +164,22 @@ export function diagnoseBelt(state: GameState, belt: BeltConnection): BeltDiagno
     label = "线路容量利用率偏低";
   } else {
     health = "healthy";
-    label = "运输稳定";
+    const closeTo = (actual: number, expected: number) => Math.abs(actual - expected) <= Math.max(0.05, expected * 0.01);
+    if (flow >= capacity * 0.98) {
+      label = `线路容量限制 ${capacity.toFixed(1)}/s`;
+      limitingFactor = "capacity";
+    } else if (demandRatePerSecond !== null && demandRatePerSecond + 0.05 < capacity && closeTo(flow, demandRatePerSecond)) {
+      label = `下游需求限制 ${demandRatePerSecond.toFixed(1)}/s`;
+      limitingFactor = "downstream";
+    } else if (sourceRatePerSecond !== null && sourceRatePerSecond + 0.05 < Math.min(capacity, demandRatePerSecond ?? capacity) &&
+      closeTo(flow, sourceRatePerSecond)) {
+      label = `上游长期供给限制 ${sourceRatePerSecond.toFixed(1)}/s`;
+      limitingFactor = "upstream";
+    } else {
+      label = "运输稳定";
+    }
   }
-  return { beltId: belt.id, health, label, flow, capacity, utilization, congestion, sourceStock, targetFree, capacityDeficit };
+  return { beltId: belt.id, health, label, flow, sampleSeconds, sampleTransferred, sampling, capacity, utilization, congestion, sourceStock, targetFree, capacityDeficit, sourceRatePerSecond, demandRatePerSecond, limitingFactor };
 }
 
 function directionalBelts(

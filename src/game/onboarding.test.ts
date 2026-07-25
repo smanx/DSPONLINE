@@ -42,6 +42,7 @@ describe("progressive onboarding", () => {
       kind: "station",
       planetId: "home",
       position: { x: 400, y: 0 },
+      interactionLocked: false,
       buildingId: "interstellar_logistics_station",
       machineCount: 1,
       minerCount: 0,

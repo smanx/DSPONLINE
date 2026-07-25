@@ -54,6 +54,7 @@ import {
   getConstructionCraftNavigation,
   getConstructionAutomationMaterialSeconds,
   getConstructionAutomationStatus,
+  getConstructionCenterTraceSample,
   getConstructionQuickCraftPlan,
   getColonizationRequirements,
   getDysonPlanTotals,
@@ -85,9 +86,11 @@ import {
   getSolarSailLifetimeSeconds,
   getSorterCapacity,
   getStationDroneCapacity,
+  getStationFleetDiagnostic,
   getStationBusyVehicleCount,
   getStationSlotCapacity,
   getStationSlots,
+  getStationWarperRefillSnapshot,
   getTechnologyConstructionRewards,
   handcraftRecipe,
   installSprayCoater,
@@ -117,6 +120,7 @@ import {
   removeDysonNode,
   removeDysonSwarmOrbit,
   removeQueuedTechnology,
+  refillStationWarpers,
   resumePausedResearch,
   selectInfiniteResearch,
   setGalacticDispatchAutomation,
@@ -147,6 +151,7 @@ import {
   renameCanvasBookmark,
   setEntitiesRecipe,
   setEnergyMode,
+  setEntitiesInteractionLocked,
   setFuelItem,
   setLogisticsItem,
   setProliferatorConfiguration,
@@ -4254,5 +4259,183 @@ describe("factory simulation", () => {
   it("continues beyond the legacy eight-hour offline window with bounded stepping", () => {
     const state = advanceSimulation(createInitialState(), 9 * 60 * 60);
     expect(state.elapsedSeconds).toBe(9 * 60 * 60);
+  });
+
+  it("locks only player interaction while preserving simulation state and unlocks explicitly", () => {
+    let state = createInitialState();
+    state.construction.arc_smelter = 2;
+    state = placeBuilding(state, "arc_smelter", { x: 0, y: 0 });
+    const entity = state.entities.find((candidate) => candidate.buildingId === "arc_smelter")!;
+    entity.inputs.iron_ore = 20;
+    state = setEntitiesInteractionLocked(state, [entity.id, entity.id, "missing"], true);
+    const locked = state.entities.find((candidate) => candidate.id === entity.id)!;
+    expect(locked.interactionLocked).toBe(true);
+    expect(moveEntities(state, [{ id: entity.id, position: { x: 500, y: 500 } }])).toBe(state);
+    expect(removeEntity(state, entity.id)).toBe(state);
+    expect(upgradeEntity(state, entity.id)).toBe(state);
+    const simulated = advanceSimulation(state, 1);
+    expect(simulated.entities.find((candidate) => candidate.id === entity.id)?.inputs.iron_ore).toBeLessThanOrEqual(20);
+    state = setEntitiesInteractionLocked(simulated, [entity.id], false);
+    expect(state.entities.find((candidate) => candidate.id === entity.id)?.interactionLocked).toBe(false);
+  });
+
+  it("refills a station warper bay from input, unreserved output, then its planet tray", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics", "space_warp");
+    state.construction.interstellar_logistics_station = 2;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 });
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 300, y: 0 });
+    const [source, demand] = state.entities.filter((entity) => entity.buildingId === "interstellar_logistics_station");
+    source.stationWarperAutoRefill = true;
+    source.stationWarperTarget = 6;
+    source.inputs.space_warper = 3;
+    source.outputs.space_warper = 5;
+    demand.stationRoutes = [{ id: "reserved-warper-route", slotIndex: 0, peerId: source.id, itemId: "space_warper", scope: "remote", cargo: 4, vehicleCount: 1, progress: 0.5, duration: 10, requiresWarp: false, vehicleStationId: demand.id }];
+    state.tray.space_warper = 10;
+
+    expect(getStationWarperRefillSnapshot(state, source.id)).toMatchObject({ inputAvailable: 3, outputStored: 5, outputReserved: 4, outputAvailable: 1, trayAvailable: 10 });
+    refillStationWarpers(state);
+    expect(source.stationWarpers).toBe(6);
+    expect(source.inputs.space_warper).toBe(0);
+    expect(source.outputs.space_warper).toBe(4);
+    expect(state.tray.space_warper).toBe(8);
+  });
+
+  it("dispatches every available vessel without a hidden twenty-vessel ceiling", () => {
+    const createFleetScenario = (warpers: number) => {
+      let state = createInitialState();
+      state.research.completedTechIds.push("interstellar_logistics", "space_warp");
+      state.exploration.unlockedSystemIds.push("aurora", "sirius");
+      state.exploration.colonizedPlanetIds.push("verdant", "crystal");
+      state.construction.wind_turbine = 60;
+      state.construction.interstellar_logistics_station = 15;
+      state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 20);
+      state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 }, 5);
+      const supply = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+      state = setStationSlotItem(state, supply.id, 0, "processor");
+      state.entities.find((entity) => entity.id === supply.id)!.outputs.processor = 5_000;
+      state.entities.find((entity) => entity.id === supply.id)!.stationVessels = 50;
+      state.entities.find((entity) => entity.id === supply.id)!.stationWarpers = warpers;
+
+      state = setActivePlanet(state, "verdant");
+      state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 20);
+      state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 }, 5);
+      const hub = state.entities.find((entity) => entity.planetId === "verdant" && entity.buildingId === "interstellar_logistics_station")!;
+      state = setStationHubConfiguration(state, hub.id, true, 2);
+
+      state = setActivePlanet(state, "crystal");
+      state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 20);
+      state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 }, 5);
+      const demand = state.entities.find((entity) => entity.planetId === "crystal" && entity.buildingId === "interstellar_logistics_station")!;
+      state = setStationSlotItem(state, demand.id, 0, "processor");
+      state = setStationSlotMode(state, demand.id, 0, "remote", "demand");
+      state = setStationSlotMinimumLoad(state, demand.id, 0, 0.1);
+      state = setStationSlotRoutePolicy(state, demand.id, 0, "relay-required");
+      state = setStationSlotWarperBudget(state, demand.id, 0, 2);
+      return { state, supplyId: supply.id, demandId: demand.id };
+    };
+
+    const full = createFleetScenario(200);
+    let state = advanceSimulation(full.state, 0.1);
+    const routes = state.entities.find((entity) => entity.id === full.demandId)?.stationRoutes ?? [];
+    expect(routes.reduce((sum, route) => sum + route.vehicleCount, 0)).toBe(50);
+    expect(routes.every((route) => route.warpersPerVessel === 2 && route.waypointStationIds?.length === 1)).toBe(true);
+    expect(getStationBusyVehicleCount(state, full.supplyId, "remote")).toBe(50);
+    expect(state.entities.find((entity) => entity.id === full.supplyId)?.stationWarpers).toBe(100);
+
+    const limited = createFleetScenario(40);
+    state = advanceSimulation(limited.state, 0.1);
+    const limitedRoutes = state.entities.find((entity) => entity.id === limited.demandId)?.stationRoutes ?? [];
+    expect(limitedRoutes.reduce((sum, route) => sum + route.vehicleCount, 0)).toBe(20);
+    expect(limitedRoutes.every((route) => route.warpersPerVessel === 2 && route.waypointStationIds?.length === 1)).toBe(true);
+    expect(getStationBusyVehicleCount(state, limited.supplyId, "remote")).toBe(20);
+    expect(state.entities.find((entity) => entity.id === limited.supplyId)?.stationWarpers).toBe(0);
+    expect(getStationFleetDiagnostic(state, limited.supplyId)?.vessels).toMatchObject({
+      installed: 50,
+      busy: 20,
+      available: 0,
+      blocked: 30,
+      blockerCode: "missing-warper",
+    });
+  });
+
+  it("settles long construction-center work without the former 128-iteration truncation", () => {
+    const createFactory = () => {
+      let state = createInitialState(55_001);
+      state.research.completedTechIds.push("construction_automation", "construction_capacity_1");
+      state.construction.wind_turbine = 80;
+      state.construction.construction_center = 1;
+      state.construction.arc_smelter = 0;
+      state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 80);
+      state = placeBuilding(state, "construction_center", { x: 120, y: 0 });
+      state.tray.iron_ingot = 2_000;
+      state.tray.stone_brick = 1_000;
+      state.tray.circuit_board = 2_000;
+      state.tray.magnetic_coil = 1_000;
+      return setConstructionAutomationTarget(state, "arc_smelter", 500);
+    };
+    const singleChunk = advanceSimulation(createFactory(), 600);
+    let oneSecondChunks = createFactory();
+    const centerId = oneSecondChunks.entities.find((entity) => entity.buildingId === "construction_center")!.id;
+    const trace = [];
+    for (let second = 1; second <= 600; second += 1) {
+      oneSecondChunks = advanceSimulation(oneSecondChunks, 1);
+      trace.push(getConstructionCenterTraceSample(oneSecondChunks, centerId, second, 0, 0)!);
+    }
+    expect(singleChunk.construction.arc_smelter).toBeGreaterThan(128);
+    expect(singleChunk.construction.arc_smelter).toBe(oneSecondChunks.construction.arc_smelter);
+    expect(singleChunk.tray).toMatchObject(oneSecondChunks.tray);
+    expect(singleChunk.constructionAutomation.totalCrafted).toBe(oneSecondChunks.constructionAutomation.totalCrafted);
+    expect(trace).toHaveLength(600);
+    expect(trace.every((sample) => sample.guardHitCount === 0 && sample.simulationSecond === sample.wallSecond)).toBe(true);
+    for (let end = 30; end < trace.length; end += 30) {
+      expect(trace[end].completedBuildings - trace[end - 30].completedBuildings).toBeGreaterThanOrEqual(5);
+    }
+
+    const fourXBudget = advanceSimulation(createFactory(), 2_400);
+    let backgroundChunks = createFactory();
+    for (let elapsed = 0; elapsed < 2_400;) {
+      const chunk = Math.min(2_400 - elapsed, elapsed % 90 === 0 ? 30 : 60);
+      backgroundChunks = advanceSimulation(backgroundChunks, chunk);
+      elapsed += chunk;
+    }
+    expect(backgroundChunks.construction.arc_smelter).toBe(fourXBudget.construction.arc_smelter);
+    expect(backgroundChunks.tray).toEqual(fourXBudget.tray);
+    expect(backgroundChunks.constructionAutomation).toEqual(fourXBudget.constructionAutomation);
+
+    let saveLoadSplit = advanceSimulation(createFactory(), 300);
+    saveLoadSplit = JSON.parse(JSON.stringify(saveLoadSplit)) as typeof saveLoadSplit;
+    saveLoadSplit = advanceSimulation(saveLoadSplit, 300);
+    expect(saveLoadSplit.construction.arc_smelter).toBe(singleChunk.construction.arc_smelter);
+    expect(saveLoadSplit.tray).toEqual(singleChunk.tray);
+    expect(saveLoadSplit.constructionAutomation).toEqual(singleChunk.constructionAutomation);
+  });
+
+  it("keeps Mk.II transport equivalent across non-integer worker request tails", () => {
+    const createLine = () => {
+      let state = createInitialState();
+      state.construction.storage_mk1 = 2;
+      state.construction.conveyor_belt_mk2 = 1;
+      state = placeBuilding(state, "storage_mk1", { x: 0, y: 0 });
+      state = placeBuilding(state, "storage_mk1", { x: 300, y: 0 });
+      const [source, target] = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+      source.storedItemId = "silicon_ore";
+      target.storedItemId = "silicon_ore";
+      source.machineCount = 100;
+      target.machineCount = 100;
+      source.outputs.silicon_ore = 10_000;
+      return connectBelt(state, source.id, target.id, "silicon_ore", 2);
+    };
+    let integer = createLine();
+    for (let second = 0; second < 60; second += 1) integer = advanceSimulation(integer, 1);
+    let tailed = createLine();
+    for (let pair = 0; pair < 30; pair += 1) {
+      tailed = advanceSimulation(tailed, 1.02);
+      tailed = advanceSimulation(tailed, 0.98);
+    }
+    expect(integer.belts[0].totalTransferred).toBe(720);
+    expect(tailed.belts[0].totalTransferred).toBe(integer.belts[0].totalTransferred);
+    expect(tailed.belts[0].progress).toBeCloseTo(integer.belts[0].progress, 5);
+    expect(tailed.belts[0].lastFlow).not.toBe(9.6);
   });
 });

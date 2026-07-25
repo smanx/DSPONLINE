@@ -220,7 +220,7 @@ describe("v34 gameplay release", () => {
     expect(diagnostic.vessels.blockerLabel).toContain("10 艘可出发");
   });
 
-  it("migrates a v33 state to v34 without changing activity, routes, inventory or Dyson progress", () => {
+  it("migrates a v33 state through v34 to current v35 without changing activity, routes, inventory or Dyson progress", () => {
     const current = createInitialState();
     current.tray.processor = 321;
     configureActivity(current, 5_000, 1_000, 10_000);
@@ -241,7 +241,7 @@ describe("v34 gameplay release", () => {
     }
 
     const migrated = migrateGame(legacy)!;
-    expect(migrated.version).toBe(34);
+    expect(migrated.version).toBe(35);
     expect(migrated.tray.processor).toBe(321);
     expect(migrated.dysonPlans.helios).toMatchObject({ structurePoints: 17, shellSails: 9 });
     expect(migrated.endgame.constructionActivity.personalDelivered.universe_matrix).toBe(12);

@@ -1,4 +1,4 @@
-import { ArrowUp, BoxSelect, Check, ChevronLeft, ChevronRight, Clock3, Copy, Download, FlipHorizontal2, Focus, Layers3, MousePointer2, PackageOpen, Palette, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Redo2, RotateCw, Route, Trash2, Undo2, Upload, WandSparkles, X } from "lucide-react";
+import { ArrowUp, BoxSelect, Check, ChevronLeft, ChevronRight, Clock3, Copy, Download, FlipHorizontal2, Focus, Layers3, Lock, MousePointer2, PackageOpen, Palette, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Redo2, RotateCw, Route, Trash2, Undo2, Unlock, Upload, WandSparkles, X } from "lucide-react";
 import { getConstructionDefinition, getItem, getPlanet, getRecipe, getRecipesForBuilding } from "../game/content";
 import { canPlaceBlueprint, canQueueBlueprint, getBlueprintRequirements, getConstructionQueueDeficits, isTechnologyCompleted } from "../game/engine";
 import type { BlueprintDefinition, BlueprintMirror, BlueprintRotation, CanvasRegion, GameState, RecipeId } from "../game/types";
@@ -156,17 +156,21 @@ export function CanvasRegionEditor({ region, onChange, onRemove, onClose }: {
   );
 }
 
-export function SelectionToolbar({ selectedCount, selectedBeltCount, eligibleCount, canUpgrade, canUpgradeBelts, onFocus, onAutoLayout, onCopy, onUpgrade, onUpgradeBelts, onRemove, onClear, onDone }: {
+export function SelectionToolbar({ selectedCount, selectedBeltCount, eligibleCount, canUpgrade, canUpgradeBelts, canLock, canUnlock, onFocus, onAutoLayout, onCopy, onUpgrade, onUpgradeBelts, onLock, onUnlock, onRemove, onClear, onDone }: {
   selectedCount: number;
   selectedBeltCount: number;
   eligibleCount: number;
   canUpgrade: boolean;
   canUpgradeBelts: boolean;
+  canLock: boolean;
+  canUnlock: boolean;
   onFocus: () => void;
   onAutoLayout: () => void;
   onCopy: () => void;
   onUpgrade: () => void;
   onUpgradeBelts: () => void;
+  onLock: () => void;
+  onUnlock: () => void;
   onRemove: () => void;
   onClear: () => void;
   onDone: () => void;
@@ -180,6 +184,8 @@ export function SelectionToolbar({ selectedCount, selectedBeltCount, eligibleCou
       <button type="button" disabled={eligibleCount === 0} onClick={onCopy} title="复制所选设备为蓝图并进入粘贴" aria-label="复制所选为蓝图"><Copy size={16} /></button>
       <button type="button" disabled={!canUpgrade} onClick={onUpgrade} title="批量升级所有可升级设备" aria-label="批量升级所选设备"><ArrowUp size={16} /></button>
       <button type="button" disabled={!canUpgradeBelts} onClick={onUpgradeBelts} title="一键升级所有选中传送带并保持连接" aria-label="一键升级所选传送带"><Route size={16} /><ArrowUp size={12} /></button>
+      <button type="button" disabled={!canLock} onClick={onLock} title="锁定所选建筑" aria-label="锁定所选建筑"><Lock size={16} /></button>
+      <button type="button" disabled={!canUnlock} onClick={onUnlock} title="解锁所选建筑" aria-label="解锁所选建筑"><Unlock size={16} /></button>
       <button className="danger" type="button" onClick={onRemove} title="批量回收所选设备与线路" aria-label="批量回收所选设备与线路"><Trash2 size={16} /></button>
       <button type="button" onClick={onClear} title="清空当前选择" aria-label="清空选择"><X size={16} /></button>
       <button className="confirm" type="button" onClick={onDone} title="完成多选并返回指针模式" aria-label="完成多选"><Check size={16} /></button>

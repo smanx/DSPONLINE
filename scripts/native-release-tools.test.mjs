@@ -18,8 +18,8 @@ test("native feed generator creates bounded Android and desktop update feeds", a
     const output = path.join(temporary, "feed");
     await writeFile(apk, Buffer.from("debug apk fixture"));
     await mkdir(desktopSource);
-    await writeFile(path.join(desktopSource, "dsp-idle-1.0.0-x64-setup.exe"), Buffer.from("desktop fixture"));
-    await writeFile(path.join(desktopSource, "latest.yml"), "version: 1.0.0\npath: dsp-idle-1.0.0-x64-setup.exe\nsha512: fixture\n");
+    await writeFile(path.join(desktopSource, "dsp-idle-1.0.1-x64-setup.exe"), Buffer.from("desktop fixture"));
+    await writeFile(path.join(desktopSource, "latest.yml"), "version: 1.0.1\npath: dsp-idle-1.0.1-x64-setup.exe\nsha512: fixture\n");
     await execFileAsync(process.execPath, [
       path.join(root, "scripts", "create-native-update-manifests.mjs"),
       "--channel", "stable",
@@ -33,15 +33,15 @@ test("native feed generator creates bounded Android and desktop update feeds", a
 
     const android = JSON.parse(await readFile(path.join(output, "android", "stable.json"), "utf8"));
     assert.equal(android.packageId, "cn.dsponline.network");
-    assert.equal(android.versionName, "1.0.0");
-    assert.match(android.apk.url, /^https:\/\/dsponline\.cn\/downloads\/android\/dsp-idle-1\.0\.0-1000000\.apk$/);
+    assert.equal(android.versionName, "1.0.2");
+    assert.match(android.apk.url, /^https:\/\/dsponline\.cn\/downloads\/android\/dsp-idle-1\.0\.2-1000002\.apk$/);
     assert.match(android.apk.sha256, /^[a-f0-9]{64}$/);
     assert.deepEqual(android.notes, ["原生测试", "更新机制"]);
 
     const desktop = JSON.parse(await readFile(path.join(output, "desktop", "stable", "release.json"), "utf8"));
     assert.equal(desktop.channel, "stable");
-    assert.equal(desktop.version, "1.0.0");
-    assert.deepEqual(desktop.files.map((file) => file.name), ["latest.yml", "dsp-idle-1.0.0-x64-setup.exe"]);
+    assert.equal(desktop.version, "1.0.2");
+    assert.deepEqual(desktop.files.map((file) => file.name), ["latest.yml", "dsp-idle-1.0.1-x64-setup.exe"]);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

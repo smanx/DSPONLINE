@@ -111,6 +111,33 @@ export interface InterpolatedProgressInput {
   active: boolean;
 }
 
+export type WorkProgressMode = "cycle" | "step" | "level" | "route" | "indeterminate";
+
+export interface WorkProgressSnapshot {
+  mode: WorkProgressMode;
+  semanticKey: string;
+  snapshotProgress: number;
+  publishedAtMs: number;
+  cyclesPerSecond: number;
+  effectiveSimulationMultiplier: number;
+  active: boolean;
+}
+
+export function getWorkDisplayProgress(snapshot: WorkProgressSnapshot, monotonicTimeMs: number): number {
+  const progress = Math.max(0, Math.min(1, Number.isFinite(snapshot.snapshotProgress) ? snapshot.snapshotProgress : 0));
+  if (snapshot.mode === "indeterminate" || snapshot.mode === "level" || !snapshot.active) return progress;
+  const rate = Number.isFinite(snapshot.cyclesPerSecond) ? Math.max(0, snapshot.cyclesPerSecond) : 0;
+  const multiplier = Number.isFinite(snapshot.effectiveSimulationMultiplier)
+    ? Math.max(0, snapshot.effectiveSimulationMultiplier)
+    : 0;
+  const elapsedMs = Number.isFinite(monotonicTimeMs)
+    ? Math.max(0, monotonicTimeMs - snapshot.publishedAtMs)
+    : 0;
+  if (rate <= 0 || multiplier <= 0) return progress;
+  const advanced = progress + elapsedMs / 1_000 * rate * multiplier;
+  return ((advanced % 1) + 1) % 1;
+}
+
 export function interpolateProductionProgress(input: InterpolatedProgressInput): number {
   const snapshot = Math.max(0, Math.min(0.999999, Number.isFinite(input.snapshotProgress) ? input.snapshotProgress : 0));
   if (!input.active || !Number.isFinite(input.cyclesPerSecond) || input.cyclesPerSecond <= 0 || !Number.isFinite(input.elapsedMs)) return snapshot;

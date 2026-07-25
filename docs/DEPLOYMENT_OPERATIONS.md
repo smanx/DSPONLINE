@@ -7,6 +7,7 @@
 | 香港正式 | `https://dsponline.cn` | `43.129.249.102` | 正式 Web、云账号、云存档、排行榜 |
 | 香港别名 | `https://www.dsponline.cn` | 同上 | 301 到根域名 |
 | 上海旧节点 | `http://111.229.128.211` | `111.229.128.211` | 独立旧入口和备用试玩 |
+| 上海下载节点 | `https://download.dsponline.cn` | `111.229.128.211` | Windows/Android 安装包与稳定更新清单 |
 | 本地前端 | `http://127.0.0.1:4318` | 开发机 | Vite |
 | 本地 API | `http://127.0.0.1:4320` | 开发机 | Node 云服务 |
 
@@ -23,12 +24,15 @@
 | `/var/lib/dsp-idle-cloud/cloud.sqlite` | 生产 SQLite 数据库 |
 | `/var/lib/dsp-idle-cloud/cloud.json` | 旧 JSON 数据，仅用于兼容迁移 |
 | `/var/lib/dsp-idle-cloud/backups` | SQLite/JSON 备份 |
+| `/var/www/dsp-idle-downloads/current` | 上海客户端下载站当前发布目录或软链接 |
 | `/etc/nginx/snippets/dsp-idle-app.conf` | 公共静态与 API 规则 |
 | `/etc/dsp-idle-cloud/admin.env` | 仅 root/服务账号可读的管理员 token 与邮件 API 凭据，不进入发布目录 |
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-当前香港与上海 Web/API 均为 `1.0.0-01492dea3c51`，使用云 schema v7 和 SQLite layout v2。香港 `previous-release` 为 Web `1.0.0-87f482ae18c6` + 当前 API，上海为 Web `0.9.1-d3a90c389ed4` + 当前 API；旧 API 不理解独立正文表，禁止把 API 回滚到 layout v1 实现。完整哈希、生产备份、活动 revision 和验收记录见 [releases/1.0.0.md](./releases/1.0.0.md)。
+当前香港与上海 Web/API 均为 `1.0.1-f4e2a5501435-dirty`，使用 GameState v35、云 schema v7 和 SQLite layout v2。两地 Web/API 回滚目标均为 `1.0.0-ranking-auto-b61ce8f2c54f`；代码回滚不得恢复数据库。上海下载站当前为 `1.0.1-f4e2a5501435-dirty`，回滚目标为 `1.0.0-01492dea3c51`。完整 Web/API 哈希、生产备份和验收记录见 [releases/1.0.1.md](./releases/1.0.1.md)。
+
+该版本会在服务启动时按已有主存档幂等回填排行榜。首次香港回填处理 88 份主存档，重复启动备份副本时变更为 0；上海没有主云存档，因此保持空榜。后续主槽上传、自动同步或历史恢复都会自动更新排名，手动槽不会触发。任何后续排行榜规则变更仍应在切换前使用 SQLite Backup API 创建并验证备份，并在切换后核对账号、主云存档和修订数量不减少。
 
 ## 3. 绝对数据保护规则
 
@@ -160,7 +164,7 @@ DSP_MAIL_REPLY_TO=
 
 验证与重置模板分别使用 [deploy/mail-templates/account-verification.html](../deploy/mail-templates/account-verification.html) 和 [deploy/mail-templates/password-reset.html](../deploy/mail-templates/password-reset.html)。模板链接必须固定保留 `https://dsponline.cn` 域名，分别使用 `https://dsponline.cn/?verify={{actionToken}}` 和 `https://dsponline.cn/?reset={{actionToken}}`，只让腾讯替换 URL-safe 的单一 `{{actionToken}}` 变量；不得把整个 `href` 写成变量。两个模板必须审核通过后再填写数值 ID。CAM 应使用独立子账号并只授予 `name/ses:SendEmail`；SecretId/SecretKey 不得使用主账号长期密钥，也不得写入仓库、发布目录、命令历史或聊天。
 
-腾讯配置完整时优先使用 SES API；原有 `DSP_MAIL_WEBHOOK_URL` / `DSP_MAIL_WEBHOOK_TOKEN` 仅作为兼容回退。两种发送器都未配置时，用户名密码注册、登录、四槽云存档和自动同步继续开放；邮箱绑定、验证重发和找回密码返回 `503 EMAIL_SERVICE_UNAVAILABLE`，排行榜仍拒绝未验证邮箱账号。邮件上线前必须用专用测试邮箱验证绑定、验证链接、过期链接、忘记密码和重置密码完整链路，并在 `/api/health` 确认 `mailProvider` 为 `tencent-ses`。上海公开入口是 HTTP，前端继续拒绝任何账号密码传输。
+腾讯配置完整时优先使用 SES API；原有 `DSP_MAIL_WEBHOOK_URL` / `DSP_MAIL_WEBHOOK_TOKEN` 仅作为兼容回退。两种发送器都未配置时，用户名密码注册、登录、四槽云存档、自动同步和排行榜继续开放；邮箱绑定、验证重发和找回密码返回 `503 EMAIL_SERVICE_UNAVAILABLE`。排行榜提交只要求有效登录会话和可校验的主云存档，不要求邮箱验证。邮件上线前必须用专用测试邮箱验证绑定、验证链接、过期链接、忘记密码和重置密码完整链路，并在 `/api/health` 确认 `mailProvider` 为 `tencent-ses`。上海公开入口是 HTTP，前端继续拒绝任何账号密码传输。
 
 ### 上海旧节点
 
@@ -234,8 +238,8 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港与上海 `1.0.0` 均为 JS/CSS 启用 gzip，并验证 `Content-Encoding: gzip`；hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港与上海 `1.0.1-f4e2a5501435-dirty` 均为 JS/CSS 启用 gzip，并验证 `Content-Encoding: gzip`；hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 香港 layout v1 的 136.8 MB `app_state` 曾使每分钟持久化把 Node 推到约 1.6 GB并阻塞健康接口。layout v2 上线后 `app_state` 约 2.55 MB，云存档正文按修订独立写入；240 秒生产观察中健康接口最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB。监控若再次出现内存或延迟上升，应分别检查 `app_state` 大小、`cloud_save_payloads` 行数与历史元数据唯一键数，不能只调大健康超时。
 
-Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。上海节点 `1.0.0` 发布后约剩 6.2 GiB（文件系统使用率约 90%），发布目录、日志与备份增长应纳入日常磁盘检查。
+Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。上海节点 `1.0.1` 发布后约剩 5.6 GiB（文件系统使用率约 91%），发布目录、日志与备份增长应纳入日常磁盘检查。

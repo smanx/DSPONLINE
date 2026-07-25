@@ -621,6 +621,7 @@ export interface FactoryEntity {
   kind: EntityKind;
   planetId: PlanetId;
   position: XYPosition;
+  interactionLocked: boolean;
   resourceId?: ItemId;
   buildingId?: BuildingId;
   extractorBuildingId?: BuildingId;
@@ -696,6 +697,10 @@ export interface BeltConnection {
   totalTransferred?: number;
   congestion?: number;
   lastFlow: number;
+  /** UI-only recent observation fields. Storage migration intentionally drops them. */
+  recentFlowSampleSeconds?: number;
+  recentFlowTransferred?: number;
+  recentFlowSampling?: boolean;
   routeMode?: BeltRouteMode;
   routeOffsetY?: number;
   targetPortIndex?: 0 | 1 | 2;
@@ -1214,7 +1219,7 @@ export interface ConstructionAutomationJob {
 }
 
 export interface GameState {
-  version: 34;
+  version: 35;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];

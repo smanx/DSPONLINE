@@ -86,6 +86,7 @@ import {
   getEntityOutputCapacity,
   getEffectiveSimulationMultiplier,
   getEntityOperatingStatus,
+  getEntityCycleRatePerSimulationSecond,
   getEntityPowerFactor,
   getResourceReserveSnapshot,
   getSprayCoaterInstallCheck,
@@ -145,6 +146,7 @@ import {
   setDysonLayerOrbit,
   setDysonSwarmOrbit,
   setEnergyMode,
+  setEntitiesInteractionLocked,
   setEntityGenerationPriority,
   setEntityPowerGrid,
   setEntityPowerPriority,
@@ -221,7 +223,7 @@ import {
   type ContentPackRegistry,
 } from "./game/contentPacks";
 import { baselineAccountProgress, createLocalAccount, getActiveAccount, loadAccountState, recordAccountProgress, saveAccountState, setActiveCloudBinding, switchLocalAccount, updateAccountProfile, type AccountProfileChanges } from "./game/account";
-import { removeLeaderboardData, submitLeaderboardData } from "./game/leaderboard";
+import { removeLeaderboardData } from "./game/leaderboard";
 import { trackAnalyticsEvent } from "./game/analytics";
 import { CLOUD_AUTO_SYNC_INTERVAL_MS, CloudApiError, compareCloudSave, fetchCloudPublicStatus, getCloudToken, markCloudSaveSynchronized, readCloudAutoSyncStatus, resumeCloudSession, uploadCloudSave, writeCloudAutoSyncStatus } from "./game/cloud";
 import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CanvasRegion, CanvasViewport, CargoStackSize, ConstructionId, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad, StationSlotTemplate } from "./game/types";
@@ -232,6 +234,7 @@ import { useCompactLayout } from "./hooks/useCompactLayout";
 import { useLongPress } from "./hooks/useLongPress";
 import { useLowEndMobile } from "./hooks/useLowEndMobile";
 import { useResolvedTheme } from "./hooks/useResolvedTheme";
+import { useObservedBeltFlowGame } from "./hooks/useObservedBeltFlowGame";
 import { useMobileNavigation, type MobileWorkspaceId } from "./hooks/useMobileNavigation";
 import { useMobileUiPreference } from "./hooks/useMobileUiPreference";
 import { useProductionRefreshPreference } from "./hooks/useProductionRefreshPreference";
@@ -504,8 +507,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [productionRefreshPreference, setProductionRefreshPreference] = useProductionRefreshPreference();
   const [loaded] = useState(initialLoad);
   const [game, setGame] = useState(loaded.state);
+  const observedGame = useObservedBeltFlowGame(game);
   const resolvedTheme = useResolvedTheme(game.settings.theme);
-  const [canvasGame, setCanvasGame] = useState(loaded.state);
+  const [canvasGameSnapshot, setCanvasGame] = useState(loaded.state);
+  const canvasGame = useObservedBeltFlowGame(canvasGameSnapshot);
   const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([]);
   const [selectedBeltId, setSelectedBeltId] = useState<string | null>(null);
   const [selectedBeltIds, setSelectedBeltIds] = useState<string[]>([]);
@@ -1783,24 +1788,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setAccountState(next);
   }, []);
 
-  const uploadGalaxyData = useCallback((seasonId: string) => {
-    const current = accountStateRef.current;
-    const synced = recordAccountProgress(current, gameRef.current);
-    if (synced !== current) {
-      accountStateRef.current = synced;
-      saveAccountState(synced);
-      setAccountState(synced);
-    }
-    const active = getActiveAccount(synced);
-    const submission = submitLeaderboardData(active.profile, active.ledger, seasonId);
-    if (!submission) {
-      playTone("alert");
-      return false;
-    }
-    playTone("confirm");
-    return true;
-  }, [playTone]);
-
   const openCommandWorkspace = useCallback((workspace: CommandWorkspace) => {
     setCommandPaletteOpen(false);
     closeAllWorkspaces();
@@ -2653,7 +2640,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     return { entityIds, beltIds, itemIds };
   }, [canvasGame, highlightedTaskId]);
 
-  const commonNodeData = useMemo<Omit<FactoryNodeData, "entity" | "status" | "powerFactor" | "resourceReserve" | "connectedInputItemIds" | "inputBeltCounts" | "outputBeltCounts" | "blackHolePortConnections">>(() => {
+  const commonNodeData = useMemo<Omit<FactoryNodeData, "entity" | "status" | "powerFactor" | "resourceReserve" | "connectedInputItemIds" | "inputBeltCounts" | "outputBeltCounts" | "blackHolePortConnections" | "cycleRatePerSecond">>(() => {
     const technology = getTechnology(canvasGame.research.selectedTechId);
     const progress = technology ? canvasGame.research.progressByTech[technology.id] ?? {} : {};
     const planetProfile = getPlanetIndustrialProfile(canvasGame, canvasGame.activePlanetId);
@@ -2673,6 +2660,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       onRecipeChange,
       onFuelChange,
       onEnergyModeChange,
+      onInteractionLockChange: (entityId: string, locked: boolean) => {
+        commitGame((current) => setEntitiesInteractionLocked(current, [entityId], locked));
+        setNotice(locked ? "建筑已锁定" : "建筑已解锁");
+      },
       researchLabel: technology?.name ?? null,
       researchCosts: technology?.costs.filter((cost) => (progress[cost.itemId] ?? 0) < cost.amount) ?? [],
       completedTechIds: canvasGame.research.completedTechIds,
@@ -2687,8 +2678,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       dysonSwarm: canvasGame.dysonSwarm,
       dysonSphere: canvasGame.dysonSphere,
       timeWarp: canvasGame.timeWarp,
+      simulationMultiplier: getEffectiveSimulationMultiplier(canvasGame),
     };
-  }, [beltNodeIndex.activeEntityIds, canvasGame.activePlanetId, canvasGame.cargo, canvasGame.dysonSphere, canvasGame.dysonSwarm, canvasGame.elapsedSeconds, canvasGame.galaxy, canvasGame.paused, canvasGame.research.completedTechIds, canvasGame.research.progressByTech, canvasGame.research.selectedTechId, canvasGame.settings.difficulty, connectionDraft, miningEntityId, onAddBuilding, onDropCargo, onDropDraggedItem, onEnergyModeChange, onFuelChange, onInstallMiner, onMiningStart, onMiningStop, onPickInput, onPickOutput, onRecipeChange, placement, placementCount]);
+  }, [beltNodeIndex.activeEntityIds, canvasGame.activePlanetId, canvasGame.cargo, canvasGame.dysonSphere, canvasGame.dysonSwarm, canvasGame.elapsedSeconds, canvasGame.galaxy, canvasGame.paused, canvasGame.research.completedTechIds, canvasGame.research.progressByTech, canvasGame.research.selectedTechId, canvasGame.settings.difficulty, canvasGame.settings.simulationSpeed, canvasGame.timeWarp, commitGame, connectionDraft, miningEntityId, onAddBuilding, onDropCargo, onDropDraggedItem, onEnergyModeChange, onFuelChange, onInstallMiner, onMiningStart, onMiningStop, onPickInput, onPickOutput, onRecipeChange, placement, placementCount]);
 
   useEffect(() => {
     if (nodeDragActiveRef.current) return;
@@ -2714,6 +2706,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               resourceReserve: getResourceReserveSnapshot(canvasGame, entity),
               status: getEntityOperatingStatus(canvasGame, entity),
               outputCapacity: getEntityOutputCapacity(canvasGame, entity),
+              cycleRatePerSecond: getEntityCycleRatePerSimulationSecond(canvasGame, entity),
             } as FactoryNodeData,
             selected: selectedEntityIds.includes(entity.id),
             className: highlightedTaskId
@@ -2721,7 +2714,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               : focusedBeltNetwork
                 ? focusedNetworkEntityIds.has(entity.id) ? "factory-flow-node--network-focus" : "factory-flow-node--network-dim"
                 : undefined,
-            draggable: !placement && !blueprintPlacementId,
+            draggable: !placement && !blueprintPlacementId && !entity.interactionLocked,
           } satisfies FactoryFlowNode;
         });
       });
@@ -2785,7 +2778,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         target: belt.target,
         sourceHandle: `out:${belt.itemId}`,
         targetHandle: belt.targetPortIndex === undefined ? `in:${belt.itemId}` : `in:black-hole:${belt.targetPortIndex}`,
-        className: `factory-edge factory-edge--health-${diagnostic.health}${canvasGame.settings.beltHeatmapEnabled ? " factory-edge--heatmap" : ""}${belt.lastFlow > 0.001 ? " factory-edge--active" : ""}${focusTone === "focus" ? " factory-edge--task-focus" : focusTone === "dim" ? " factory-edge--task-dim" : ""}`,
+        className: `factory-edge factory-edge--health-${diagnostic.health}${canvasGame.settings.beltHeatmapEnabled ? " factory-edge--heatmap" : ""}${diagnostic.flow > 0.001 ? " factory-edge--active" : ""}${focusTone === "focus" ? " factory-edge--task-focus" : focusTone === "dim" ? " factory-edge--task-dim" : ""}`,
         selected: selectedBeltId === belt.id || selectedBeltIdSet.has(belt.id),
         zIndex: selectedBeltId === belt.id || selectedBeltIdSet.has(belt.id) ? 1 : 0,
         interactionWidth: 36,
@@ -2796,7 +2789,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           itemSymbol: item.symbol,
           color: item.color,
           tier: belt.tier,
-          flow: belt.lastFlow,
+          flow: diagnostic.flow,
           capacity,
           stackSize: belt.stackSize ?? 1,
           congestion: belt.congestion ?? 0,
@@ -3611,7 +3604,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const selectedEntities = game.entities.filter((entity) => selectedEntityIds.includes(entity.id) && entity.planetId === game.activePlanetId);
   const selectedEntity = selectedEntities.length === 1 ? selectedEntities[0] : null;
-  const selectedBelt = game.belts.find((belt) => belt.id === selectedBeltId && belt.planetId === game.activePlanetId) ?? null;
+  const selectedBelt = observedGame.belts.find((belt) => belt.id === selectedBeltId && belt.planetId === observedGame.activePlanetId) ?? null;
   const selectedBelts = game.belts.filter((belt) => selectedBeltIds.includes(belt.id) && belt.planetId === game.activePlanetId);
   const dockBeltTier = resolveConnectionBeltTier(game, beltTierMode, beltTier);
   const blueprintEligibleIds = getBlueprintEligibleEntityIds(game, selectedEntityIds);
@@ -3819,7 +3812,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       style={{ "--mobile-panel-drag": `${mobilePanelSwipe.offset}px` } as CSSProperties}
     >
       <HeaderControls
-        game={game}
+        game={observedGame}
         activeWorkspace={headerActiveWorkspace}
         onReturnToMenu={returnToMenuSafely}
         onOpenCampaign={() => {
@@ -3879,7 +3872,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       <MobileGameShell
         enabled={nextMobileShell}
         layout={compactLayout}
-        game={game}
+        game={observedGame}
         alerts={alerts}
         route={mobileNavigation.route}
         overlay={mobileNavigation.overlay}
@@ -3976,6 +3969,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onPickTray: (itemId) => setGame((current) => pickFromTray(current, itemId)),
           onDropCargo: handleStowCargo,
           onDiscardTrayItems: (requests) => commitGame((current) => discardPlanetTrayItems(current, current.activePlanetId, requests)),
+          onSetTrayItemLimit: (value) => commitGame((current) => setPlanetTrayItemLimit(current, current.activePlanetId, value)),
           onFocusSelection: () => {
             if (selectedEntityIds.length > 0) focusEntityIds(selectedEntityIds);
             else if (selectedBeltId) focusBeltNetwork(selectedBeltId);
@@ -3990,6 +3984,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             commitGame((current) => upgradeBelt(current, beltId));
             setNotice("运输线升级完成");
             playTone("upgrade");
+          },
+          onEntityLockChange: (entityId, locked) => {
+            commitGame((current) => setEntitiesInteractionLocked(current, [entityId], locked));
+            setNotice(locked ? "建筑已锁定" : "建筑已解锁");
           },
         }}
         onFactory={() => {
@@ -4056,6 +4054,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         beltCount={selectedBeltIds.length}
         canUpgrade={canUpgradeEntities(game, selectedEntityIds)}
         canUpgradeBelts={selectedBelts.some((belt) => canUpgradeBelt(game, belt.id))}
+        canLock={selectedEntities.some((entity) => !entity.interactionLocked)}
+        canUnlock={selectedEntities.some((entity) => entity.interactionLocked)}
         onFocus={() => focusEntityIds(selectedEntityIds)}
         onCopy={copySelectionAsBlueprint}
         onUpgrade={() => {
@@ -4067,6 +4067,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           commitGame((current) => selectedBeltIds.reduce((next, beltId) => upgradeBelt(next, beltId), current));
           setNotice(`已升级选区内 ${selectedBeltIds.length} 条传送带`);
           playTone("upgrade");
+        }}
+        onLock={() => {
+          const ids = selectedEntities.filter((entity) => !entity.interactionLocked).map((entity) => entity.id);
+          commitGame((current) => setEntitiesInteractionLocked(current, ids, true));
+          setNotice(`已锁定 ${ids.length} 个建筑`);
+        }}
+        onUnlock={() => {
+          const ids = selectedEntities.filter((entity) => entity.interactionLocked).map((entity) => entity.id);
+          commitGame((current) => setEntitiesInteractionLocked(current, ids, false));
+          setNotice(`已解锁 ${ids.length} 个建筑`);
         }}
         onRemove={() => {
           if (!window.confirm(`确认回收 ${selectedEntityIds.length} 个节点和 ${selectedBeltIds.length} 条线路？`)) return;
@@ -4081,7 +4091,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       /> : null}
       <div className="game-workspace">
         <ResourceRail
-          game={game}
+          game={observedGame}
           onOpenCampaign={openCampaign}
           onOpenDysonPlanner={() => {
             if (dysonPlannerOpen) closeAllWorkspaces();
@@ -4210,7 +4220,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             }}
             onMoveEnd={(_event, viewport) => persistPlanetViewport(gameRef.current.activePlanetId, viewport)}
             panOnScroll
-            panOnDrag={regionMode ? false : coarsePointer ? true : [1, 2]}
+            panOnDrag={regionMode ? false : coarsePointer ? true : selectionMode ? [1, 2] : [0, 1, 2]}
             zoomOnPinch={!coarsePointer}
             selectionOnDrag={selectionMode && !coarsePointer}
             selectionMode={SelectionMode.Full}
@@ -4250,7 +4260,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           <button className={`canvas-minimap-toggle nodrag nopan${minimapCollapsed ? " canvas-minimap-toggle--collapsed" : ""}`} type="button" onClick={() => setMinimapCollapsed((collapsed) => !collapsed)} title={minimapCollapsed ? "展开小地图" : "折叠小地图"} aria-label={minimapCollapsed ? "展开小地图" : "折叠小地图"} aria-expanded={!minimapCollapsed}>
             {minimapCollapsed ? <MapIcon size={16} /> : <PanelRightClose size={16} />}
           </button>
-          <PlanetNavigator game={game} onPlanetChange={onPlanetChange} />
+          <PlanetNavigator game={observedGame} onPlanetChange={onPlanetChange} />
           <CanvasSelectionTools
             selectionMode={selectionMode}
             regionMode={regionMode}
@@ -4327,6 +4337,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             eligibleCount={blueprintEligibleIds.length}
             canUpgrade={canUpgradeEntities(game, selectedEntityIds)}
             canUpgradeBelts={selectedBelts.some((belt) => canUpgradeBelt(game, belt.id))}
+            canLock={selectedEntities.some((entity) => !entity.interactionLocked)}
+            canUnlock={selectedEntities.some((entity) => entity.interactionLocked)}
             onFocus={() => focusEntityIds(selectedEntityIds)}
             onAutoLayout={() => autoLayoutEntities(selectedEntityIds)}
             onCopy={copySelectionAsBlueprint}
@@ -4339,6 +4351,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               commitGame((current) => selectedBeltIds.reduce((next, beltId) => upgradeBelt(next, beltId), current));
               setNotice(`已升级选区内 ${selectedBeltIds.length} 条可升级传送带，原连接保持不变`);
               playTone("upgrade");
+            }}
+            onLock={() => {
+              const ids = selectedEntities.filter((entity) => !entity.interactionLocked).map((entity) => entity.id);
+              commitGame((current) => setEntitiesInteractionLocked(current, ids, true));
+              setNotice(`已锁定 ${ids.length} 个建筑`);
+            }}
+            onUnlock={() => {
+              const ids = selectedEntities.filter((entity) => entity.interactionLocked).map((entity) => entity.id);
+              commitGame((current) => setEntitiesInteractionLocked(current, ids, false));
+              setNotice(`已解锁 ${ids.length} 个建筑`);
             }}
             onRemove={() => {
               commitGame((current) => selectedBeltIds.reduce((next, beltId) => removeBelt(next, beltId), removeEntities(current, selectedEntityIds)));
@@ -4377,7 +4399,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             <strong>{getPlanet(game.activePlanetId).name} · {getPlanet(game.activePlanetId).code}工厂区</strong>
           </div>
           <RecipeFocusPanel
-            game={game}
+            game={observedGame}
             onClear={() => onRecipeFocusChange(null)}
             onModeChange={(mode) => commitGame((current) => setRecipeFocusMode(current, mode))}
             onOpen={openRecipeFocus}
@@ -4385,11 +4407,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           />
         </section>
         <InspectorPanel
-          game={game}
+          game={observedGame}
           fabricatorFocusItemId={fabricatorFocusItemId}
           selectedEntities={selectedEntities}
           selectedEntity={selectedEntity}
           selectedBelt={selectedBelt}
+          onEntityLockChange={(entityId, locked) => {
+            commitGame((current) => setEntitiesInteractionLocked(current, [entityId], locked));
+            setNotice(locked ? "建筑已锁定" : "建筑已解锁");
+          }}
           focusedBeltNetworkId={focusedBeltNetworkId}
           tab={inspectorTab}
           onTabChange={setInspectorTab}
@@ -4548,7 +4574,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         />
       </div>
       <ConstructionDock
-        game={game}
+        game={observedGame}
         placement={placement}
         beltTier={dockBeltTier}
         beltTierMode={beltTierMode}
@@ -4576,10 +4602,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         onStowCargo={handleStowCargo}
         onMissingCraftNavigate={handleMissingConstructionCraft}
       />
-      <OnboardingCoach game={game} onAction={runOnboardingAction} compact={nextMobileShell} />
+      <OnboardingCoach game={observedGame} onAction={runOnboardingAction} compact={nextMobileShell} />
       <BlueprintWorkspace
         open={blueprintsOpen}
-        game={game}
+        game={observedGame}
         mobile={nextMobileShell}
         mobileSubview={mobileWorkspaceSubview}
         onMobileOpenDetail={mobileNavigation.openWorkspaceSubview}
@@ -4598,7 +4624,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       />
       <CommandPalette
         open={commandPaletteOpen}
-        game={game}
+        game={observedGame}
         onClose={closeCommandPalette}
         onOpenWorkspace={openCommandWorkspace}
         onFocusRecipe={openRecipeFocus}
@@ -4616,7 +4642,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         {constructionCenterOpen ? (
           <ConstructionCenterWorkspace
             open
-            game={game}
+            game={observedGame}
             onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setConstructionCenterOpen(false)}
             onEnabledChange={(enabled) => commitGame((current) => setConstructionAutomationEnabled(current, enabled))}
             onTargetChange={(constructionId: ConstructionId, target: number) => commitGame((current) => setConstructionAutomationTarget(current, constructionId, target))}
@@ -4626,21 +4652,20 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           <GalaxyWorkspace
             open
             accountState={accountState}
-            game={game}
+            game={observedGame}
             focusTab={galaxyFocusTab}
             onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setGalaxyOpen(false)}
             onUpdateProfile={updateGalaxyProfile}
             onUpdateCloudBinding={updateGalaxyCloudBinding}
             onCreateAccount={createGalaxyAccount}
             onSwitchAccount={switchGalaxyAccount}
-            onUpload={uploadGalaxyData}
             onRestoreCloudSave={restoreCloudSave}
           />
         ) : null}
         {technologyOpen ? (
           <TechnologyWorkspace
             open
-            game={game}
+            game={observedGame}
             mobile={nextMobileShell}
             mobileSubview={mobileWorkspaceSubview}
             onMobileOpenDetail={mobileNavigation.openWorkspaceSubview}
@@ -4674,7 +4699,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         ) : null}
         {statisticsOpen ? <StatisticsWorkspace
           open
-          game={game}
+          game={observedGame}
           mobile={nextMobileShell}
           galacticActivityStatus={galacticActivityStatus}
           focusTab={statisticsFocusTab}
@@ -4740,11 +4765,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onOpenCanvasBookmark={openCanvasBookmark}
           onRemoveCanvasBookmark={(bookmarkId) => commitGame((current) => removeCanvasBookmark(current, bookmarkId))}
         /> : null}
-        {recipesOpen ? <RecipeWorkspace open game={game} mobile={nextMobileShell} mobileSubview={mobileWorkspaceSubview} onMobileOpenDetail={mobileNavigation.openWorkspaceSubview} onMobileReplaceDetail={(subview) => mobileNavigation.replaceWorkspaceSubview(subview)} focusItemId={campaignFocusItemId} onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setRecipesOpen(false)} onFocus={onRecipeFocusChange} /> : null}
+        {recipesOpen ? <RecipeWorkspace open game={observedGame} mobile={nextMobileShell} mobileSubview={mobileWorkspaceSubview} onMobileOpenDetail={mobileNavigation.openWorkspaceSubview} onMobileReplaceDetail={(subview) => mobileNavigation.replaceWorkspaceSubview(subview)} focusItemId={campaignFocusItemId} onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setRecipesOpen(false)} onFocus={onRecipeFocusChange} /> : null}
         {campaignOpen ? (
           <CampaignWorkspace
             open
-            game={game}
+            game={observedGame}
             onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setCampaignOpen(false)}
             onNavigate={navigateFromCampaign}
             onSelectTask={onSelectCampaignTask}
@@ -4753,7 +4778,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         {starMapOpen ? (
           <StarMapWorkspace
             open
-            game={game}
+            game={observedGame}
             mobile={nextMobileShell}
             mobileSubview={mobileWorkspaceSubview}
             onMobileOpenDetail={mobileNavigation.openWorkspaceSubview}
@@ -4771,7 +4796,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         {dysonPlannerOpen ? (
           <DysonPlannerWorkspace
             open
-            game={game}
+            game={observedGame}
             onSave={() => persistPrimarySave()}
             onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setDysonPlannerOpen(false)}
             onAddLayer={(systemId) => setGame((current) => addDysonLayer(current, systemId))}
@@ -4809,7 +4834,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           <OperationsWorkspace
             open
             tab={operationsTab}
-            game={game}
+            game={observedGame}
             alerts={alerts}
             slots={saveSlots}
             snapshots={saveSnapshots}

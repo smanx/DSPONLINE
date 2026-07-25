@@ -141,8 +141,8 @@ export const POWER_GRID_LABELS: Record<PowerGridId, string> = {
 export const POWER_SUPPLY_RADIUS = 0;
 export const MATERIAL_DELIVERY_SLOT_COUNT = 3;
 export const MIN_PLANET_TRAY_ITEM_LIMIT = 1_000;
-export const MAX_PLANET_TRAY_ITEM_LIMIT = 1_000_000;
-export const DEFAULT_PLANET_TRAY_ITEM_LIMIT = MAX_PLANET_TRAY_ITEM_LIMIT;
+export const MAX_PLANET_TRAY_ITEM_LIMIT = 100_000_000;
+export const DEFAULT_PLANET_TRAY_ITEM_LIMIT = 1_000_000;
 export const MIN_CANVAS_REGION_SIZE = 40;
 const EPSILON = 0.0001;
 const TIME_WARP_MINIMUM_MULTIPLIER = 4;
@@ -418,6 +418,7 @@ function makeVein(id: string, planetId: PlanetId, resourceId: ItemId, x: number,
     kind: "vein",
     planetId,
     position: { x, y },
+    interactionLocked: false,
     resourceId,
     powerGridId: "grid-a",
     powerPriority: 2,
@@ -482,7 +483,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
     return { ...entity, resourceRemaining: reserve, resourceCapacity: reserve };
   });
   return {
-    version: 34,
+    version: 35,
     nextId: 1,
     activePlanetId: "home",
     entities,
@@ -2994,8 +2995,10 @@ function transferBelts(state: GameState, seconds: number): void {
   const groups = new Map<string, { source: FactoryEntity; itemId: ItemId; candidates: BeltTransferCandidate[] }>();
 
   for (const belt of state.belts) {
-    belt.lastFlow = round(belt.lastFlow * 0.8, 3);
-    belt.congestion = round((belt.congestion ?? 0) * 0.85, 3);
+    const flowDecay = Math.pow(0.8, Math.max(0, seconds));
+    const congestionDecay = Math.pow(0.85, Math.max(0, seconds));
+    belt.lastFlow = round(belt.lastFlow * flowDecay, 3);
+    belt.congestion = round((belt.congestion ?? 0) * congestionDecay, 3);
     const source = state.entities.find((entity) => entity.id === belt.source);
     const target = state.entities.find((entity) => entity.id === belt.target);
     if (!source || !target || source.planetId !== target.planetId || belt.planetId !== source.planetId ||
@@ -3856,19 +3859,67 @@ function updateStationCongestion(state: GameState, lookup?: SimulationLookupCont
   }
 }
 
-function refillStationWarpersFromPlanetTrays(state: GameState): void {
+export interface StationWarperRefillSnapshot {
+  loaded: number;
+  target: number;
+  capacity: number;
+  inputAvailable: number;
+  outputStored: number;
+  outputReserved: number;
+  outputAvailable: number;
+  trayAvailable: number;
+  blocker: "technology-locked" | "disabled" | "target-met" | "capacity-full" | "stock-empty" | "ready";
+}
+
+export function getStationWarperRefillSnapshot(state: GameState, stationId: string): StationWarperRefillSnapshot | null {
+  const station = state.entities.find((entity) => entity.id === stationId && entity.buildingId === "interstellar_logistics_station");
+  if (!station) return null;
+  const loaded = Math.max(0, Math.floor(station.stationWarpers ?? 0));
+  const target = getStationWarperAutoRefillTarget(station);
+  const capacity = getStationWarperCapacity(station);
+  const inputAvailable = Math.max(0, Math.floor(station.inputs.space_warper ?? 0));
+  const outputStored = Math.max(0, Math.floor(station.outputs.space_warper ?? 0));
+  const outputReserved = Math.min(outputStored, Math.max(0, Math.floor(stationReservedOutgoing(state, station.id, "space_warper"))));
+  const outputAvailable = Math.max(0, outputStored - outputReserved);
+  const trayAvailable = Math.max(0, Math.floor(trayForPlanet(state, station.planetId).space_warper ?? 0));
+  const blocker = !isTechnologyCompleted(state, "space_warp")
+    ? "technology-locked"
+    : !station.stationWarperAutoRefill
+      ? "disabled"
+      : loaded >= capacity
+        ? "capacity-full"
+        : loaded >= target
+          ? "target-met"
+          : inputAvailable + outputAvailable + trayAvailable < 1 ? "stock-empty" : "ready";
+  return { loaded, target, capacity, inputAvailable, outputStored, outputReserved, outputAvailable, trayAvailable, blocker };
+}
+
+export function refillStationWarpers(state: GameState): void {
   if (!isTechnologyCompleted(state, "space_warp")) return;
   for (const station of state.entities) {
     if (station.buildingId !== "interstellar_logistics_station" || !station.stationWarperAutoRefill) continue;
-    const loaded = Math.max(0, Math.floor(station.stationWarpers ?? 0));
-    const target = getStationWarperAutoRefillTarget(station);
-    if (loaded >= target) continue;
+    const snapshot = getStationWarperRefillSnapshot(state, station.id)!;
+    let needed = Math.max(0, Math.min(snapshot.target, snapshot.capacity) - snapshot.loaded);
+    if (needed < 1) continue;
+    const fromInput = Math.min(needed, snapshot.inputAvailable);
+    if (fromInput > 0) {
+      station.inputs.space_warper = snapshot.inputAvailable - fromInput;
+      station.stationWarpers = snapshot.loaded + fromInput;
+      needed -= fromInput;
+    }
+    const fromOutput = Math.min(needed, snapshot.outputAvailable);
+    if (fromOutput > 0) {
+      station.outputs.space_warper = snapshot.outputStored - fromOutput;
+      station.stationWarpers = Math.max(0, Math.floor(station.stationWarpers ?? 0)) + fromOutput;
+      needed -= fromOutput;
+    }
+    if (needed < 1) continue;
     const tray = trayForPlanet(state, station.planetId);
-    const available = Math.max(0, Math.floor(tray.space_warper ?? 0));
-    const moved = Math.min(target - loaded, available);
-    if (moved < 1) continue;
-    station.stationWarpers = loaded + moved;
-    tray.space_warper = available - moved;
+    const fromTray = Math.min(needed, snapshot.trayAvailable);
+    if (fromTray > 0) {
+      tray.space_warper = snapshot.trayAvailable - fromTray;
+      station.stationWarpers = Math.max(0, Math.floor(station.stationWarpers ?? 0)) + fromTray;
+    }
   }
 }
 
@@ -3961,7 +4012,7 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
         entity.planetId === planet.id ? sum + entity.productionRate : sum, 0), 2),
     };
   }
-  refillStationWarpersFromPlanetTrays(state);
+  refillStationWarpers(state);
   let phaseStartedAt = profileNow();
   dispatchStationScope(state, "local", powerByPlanet, lookup, profiler);
   dispatchStationScope(state, "remote", powerByPlanet, lookup, profiler);
@@ -3969,6 +4020,7 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
   phaseStartedAt = profileNow();
   advanceStationRoutes(state, "local", seconds, powerByPlanet, lookup);
   advanceStationRoutes(state, "remote", seconds, powerByPlanet, lookup);
+  refillStationWarpers(state);
   if (profiler) profiler.routeAdvanceMs += profileNow() - phaseStartedAt;
   if (lookup) rebuildDynamicRouteLookup(state, lookup);
   phaseStartedAt = profileNow();
@@ -4177,9 +4229,26 @@ export function setPaused(state: GameState, paused: boolean): GameState {
   return { ...state, paused };
 }
 
+export function isEntityInteractionLocked(state: GameState, entityId: string): boolean {
+  return state.entities.some((entity) => entity.id === entityId && entity.interactionLocked);
+}
+
+export function setEntitiesInteractionLocked(
+  state: GameState,
+  entityIds: readonly string[],
+  locked: boolean,
+): GameState {
+  const requested = new Set(entityIds);
+  if (requested.size === 0 || !state.entities.some((entity) => requested.has(entity.id) && entity.interactionLocked !== locked)) return state;
+  return {
+    ...state,
+    entities: state.entities.map((entity) => requested.has(entity.id) ? { ...entity, interactionLocked: locked } : entity),
+  };
+}
+
 export function setBlackHolePaused(state: GameState, entityId: string, paused: boolean, confirmActivation = false): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "micro_black_hole_connector");
-  if (!current || (!paused && !current.blackHoleActivationConfirmed && !confirmActivation)) return state;
+  if (!current || current.interactionLocked || (!paused && !current.blackHoleActivationConfirmed && !confirmActivation)) return state;
   if (current.blackHolePaused === paused && (paused || current.blackHoleActivationConfirmed)) return state;
   return {
     ...state,
@@ -4192,7 +4261,7 @@ export function setBlackHolePaused(state: GameState, entityId: string, paused: b
 }
 
 export function setTimeWarpController(state: GameState, entityId: string): GameState {
-  if (!state.entities.some((entity) => entity.id === entityId && entity.buildingId === "time_warp_device") ||
+  if (!state.entities.some((entity) => entity.id === entityId && entity.buildingId === "time_warp_device" && !entity.interactionLocked) ||
     state.timeWarp.controllerEntityId === entityId) return state;
   return {
     ...state,
@@ -4209,7 +4278,7 @@ export function setTimeWarpController(state: GameState, entityId: string): GameS
 
 export function setTimeWarpEnabled(state: GameState, enabled: boolean): GameState {
   if (!state.timeWarp.controllerEntityId || !state.entities.some((entity) =>
-    entity.id === state.timeWarp.controllerEntityId && entity.buildingId === "time_warp_device") || state.timeWarp.enabled === enabled) return state;
+    entity.id === state.timeWarp.controllerEntityId && entity.buildingId === "time_warp_device" && !entity.interactionLocked) || state.timeWarp.enabled === enabled) return state;
   return {
     ...state,
     timeWarp: {
@@ -4223,7 +4292,8 @@ export function setTimeWarpEnabled(state: GameState, enabled: boolean): GameStat
 }
 
 export function setTimeWarpRequestedMultiplier(state: GameState, multiplier: number): GameState {
-  if (!Number.isSafeInteger(multiplier) || multiplier < 5 || multiplier === state.timeWarp.requestedMultiplier) return state;
+  if (!Number.isSafeInteger(multiplier) || multiplier < 5 || multiplier === state.timeWarp.requestedMultiplier ||
+    (state.timeWarp.controllerEntityId ? isEntityInteractionLocked(state, state.timeWarp.controllerEntityId) : false)) return state;
   return { ...state, timeWarp: { ...state.timeWarp, requestedMultiplier: multiplier } };
 }
 
@@ -4413,6 +4483,7 @@ export function manualMine(state: GameState, entityId: string, amount = 1): Game
 }
 
 export function moveEntity(state: GameState, entityId: string, position: { x: number; y: number }): GameState {
+  if (isEntityInteractionLocked(state, entityId)) return state;
   return {
     ...state,
     entities: state.entities.map((entity) => entity.id === entityId ? { ...entity, position } : entity),
@@ -4420,7 +4491,7 @@ export function moveEntity(state: GameState, entityId: string, position: { x: nu
 }
 
 export function moveEntities(state: GameState, positions: Array<{ id: string; position: { x: number; y: number } }>): GameState {
-  const positionById = new Map(positions.map((entry) => [entry.id, entry.position]));
+  const positionById = new Map(positions.flatMap((entry) => isEntityInteractionLocked(state, entry.id) ? [] : [[entry.id, entry.position]]));
   if (positionById.size === 0) return state;
   return {
     ...state,
@@ -4639,6 +4710,7 @@ export function placeBlueprint(
         building.kind === "splitter" ? "splitter" : building.kind === "station" ? "station" : "machine",
       planetId,
       position: { x: position.x + transformedOffset.x, y: position.y + transformedOffset.y },
+      interactionLocked: false,
       buildingId: template.buildingId,
       recipeId,
       storedItemId: template.storedItemId,
@@ -4811,6 +4883,7 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
       building.kind === "splitter" ? "splitter" : building.kind === "station" ? "station" : "machine",
     planetId: state.activePlanetId,
     position,
+    interactionLocked: false,
     buildingId,
     powerGridId: "grid-a",
     powerPriority: 2,
@@ -4869,7 +4942,7 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
 }
 
 export function addBuildingToGroup(state: GameState, entityId: string, buildingId: BuildingId, count = 1): GameState {
-  if (buildingId === "micro_black_hole_connector" || buildingId === "time_warp_device") return state;
+  if (buildingId === "micro_black_hole_connector" || buildingId === "time_warp_device" || isEntityInteractionLocked(state, entityId)) return state;
   const amount = Math.max(1, Math.floor(count));
   if (getBuilding(buildingId).kind === "miner" || (state.construction[buildingId] ?? 0) < amount) return state;
   const next = copyState(state);
@@ -4890,7 +4963,7 @@ export function addUnitToEntityGroup(state: GameState, entityId: string, count =
 
 export function installMiner(state: GameState, entityId: string, count = 1): GameState {
   const source = state.entities.find((item) => item.id === entityId && item.kind === "vein");
-  if (!source?.resourceId) return state;
+  if (!source?.resourceId || source.interactionLocked) return state;
   const extractorId = getExtractorBuildingId(source.resourceId);
   const amount = Math.max(1, Math.floor(count));
   if ((state.construction[extractorId] ?? 0) < amount) return state;
@@ -5116,6 +5189,7 @@ function configureTargetItem(entity: FactoryEntity, itemId: ItemId): void {
 }
 
 export function setEntityRecipe(state: GameState, entityId: string, recipeId: RecipeId): GameState {
+  if (isEntityInteractionLocked(state, entityId)) return state;
   const next = copyState(state);
   const entity = next.entities.find((item) => item.id === entityId);
   const recipe = getRecipe(recipeId);
@@ -5288,7 +5362,7 @@ export function getRecipeCompatibleEntityIds(state: GameState, entityIds: string
   if (!recipe || (recipe.requiredTechId && !isTechnologyCompleted(state, recipe.requiredTechId))) return [];
   const requested = new Set(entityIds);
   return state.entities
-    .filter((entity) => requested.has(entity.id) && entity.buildingId && buildingSupportsRecipe(entity.buildingId, recipe))
+    .filter((entity) => requested.has(entity.id) && !entity.interactionLocked && entity.buildingId && buildingSupportsRecipe(entity.buildingId, recipe))
     .map((entity) => entity.id);
 }
 
@@ -5302,13 +5376,14 @@ export function setEntitiesRecipe(state: GameState, entityIds: string[], recipeI
 
 export type SprayCoaterInstallCheck = {
   ready: boolean;
-  code: "ready" | "entity-missing" | "already-installed" | "technology-locked" | "stock-empty" | "recipe-missing" | "recipe-incompatible";
+  code: "ready" | "entity-missing" | "entity-locked" | "already-installed" | "technology-locked" | "stock-empty" | "recipe-missing" | "recipe-incompatible";
   reason: string;
 };
 
 export function getSprayCoaterInstallCheck(state: GameState, entityId: string): SprayCoaterInstallCheck {
   const entity = state.entities.find((item) => item.id === entityId);
   if (!entity) return { ready: false, code: "entity-missing", reason: "设备不存在或已被回收" };
+  if (entity.interactionLocked) return { ready: false, code: "entity-locked", reason: "建筑已锁定，请先解锁" };
   if (entity.sprayCoaterInstalled) return { ready: false, code: "already-installed", reason: "该设备已经安装喷涂机" };
   if (!isTechnologyCompleted(state, "proliferator_1")) return { ready: false, code: "technology-locked", reason: "需要科技：增产剂 Mk.I" };
   if ((state.construction.spray_coater ?? 0) < 1) return { ready: false, code: "stock-empty", reason: "施工托盘中没有可用喷涂机" };
@@ -5350,7 +5425,7 @@ export function setProliferatorConfiguration(
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId);
   const definition = getProliferator(tier);
-  if (!current?.sprayCoaterInstalled || !isProliferatorEligible(current) ||
+  if (!current?.sprayCoaterInstalled || current.interactionLocked || !isProliferatorEligible(current) ||
     !isTechnologyCompleted(state, definition.requiredTechId)) return state;
   if (current.proliferatorTier === tier && current.proliferatorMode === mode) return state;
   const next = copyState(state);
@@ -5849,7 +5924,7 @@ export function setConstructionAutomationEnabled(state: GameState, enabled: bool
 
 export function setGalacticMaterialExporterPaused(state: GameState, entityId: string, paused: boolean): GameState {
   const entity = state.entities.find((candidate) => candidate.id === entityId && candidate.buildingId === "galactic_material_exporter");
-  if (!entity || (entity.galacticExporterPaused !== false) === paused) return state;
+  if (!entity || entity.interactionLocked || (entity.galacticExporterPaused !== false) === paused) return state;
   return {
     ...state,
     entities: state.entities.map((candidate) => candidate.id === entityId ? { ...candidate, galacticExporterPaused: paused } : candidate),
@@ -6024,9 +6099,61 @@ export interface ConstructionAutomationStatus {
   safetyLimit?: number;
 }
 
+export interface ConstructionCenterTraceSample {
+  wallSecond: number;
+  simulationSecond: number;
+  workerLatencyMs: number;
+  pendingSimulationSeconds: number;
+  entityId: string;
+  constructionId: ConstructionId | null;
+  stepIndex: number;
+  stepKind: ConstructionAutomationStep["kind"] | null;
+  stepItemId: ItemId | null;
+  stepElapsedSeconds: number;
+  stepDurationSeconds: number;
+  wipCount: number;
+  powerFactor: number;
+  statusCode: string;
+  completedBuildings: number;
+  guardHitCount: number;
+}
+
 function constructionAutomationStepDuration(state: GameState, step: ConstructionAutomationStep): number {
   if (step.kind === "building") return getConstructionAutomationCycleSeconds(state);
   return Math.max(0.01, getConstructionAutomationMaterialSeconds(state) * step.outputAmount);
+}
+
+export function getEntityRecipeCycleCapacityPerSimulationSecond(state: GameState, entity: FactoryEntity): number {
+  if (state.paused) return 0;
+  if (entity.kind === "vein") return Math.max(0, entity.productionRate / 60);
+  if (entity.buildingId === "construction_center") {
+    const job = state.constructionAutomation.jobs[entity.id];
+    const step = job?.steps[job.stepIndex];
+    return step ? Math.max(0, entity.machineCount * getEntityPowerFactor(state, entity) / constructionAutomationStepDuration(state, step)) : 0;
+  }
+  const recipe = getRecipe(entity.recipeId);
+  if (!entity.buildingId || !recipe) return 0;
+  if (entity.buildingId === "ray_receiver") {
+    return recipe.id === "critical_photon"
+      ? getBuilding(entity.buildingId).speed * entity.machineCount / recipe.duration * entity.utilization
+      : 0;
+  }
+  if (entity.kind === "machine") {
+    const building = getBuilding(entity.buildingId);
+    const profile = getPlanetIndustrialProfile(state, entity.planetId);
+    const planetSpeed = specializationApplies(profile, building.family, entity.buildingId) ? profile.productionSpeedMultiplier : 1;
+    const spraySpeed = entity.proliferatorMode === "speed" && availableFullProliferatorCycles(entity, recipe) > 0
+      ? getEntityProliferatorSpeedMultiplier(entity)
+      : 1;
+    return Math.max(0, building.speed * entity.machineCount * getRecipeSpeedMultiplier(state, recipe.id) * planetSpeed /
+      recipe.duration * getEntityPowerFactor(state, entity) * dysonLaunchFactor(state, recipe.id) * spraySpeed);
+  }
+  return Math.max(0, entity.productionRate / Math.max(1, recipe.outputs.reduce((sum, output) => sum + output.amount, 0)) / 60);
+}
+
+export function getEntityCycleRatePerSimulationSecond(state: GameState, entity: FactoryEntity): number {
+  if (entity.utilization <= EPSILON) return 0;
+  return getEntityRecipeCycleCapacityPerSimulationSecond(state, entity);
 }
 
 export function getConstructionAutomationStatus(state: GameState, entityId: string): ConstructionAutomationStatus {
@@ -6072,6 +6199,37 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
     };
   }
   return { stage: `准备 ${target.definition.name}`, progress: 0, etaSeconds: plan.steps.reduce((sum, step) => sum + constructionAutomationStepDuration(state, step), 0) / Math.max(1, entity.machineCount) };
+}
+
+export function getConstructionCenterTraceSample(
+  state: GameState,
+  entityId: string,
+  wallSecond: number,
+  workerLatencyMs = 0,
+  pendingSimulationSeconds = 0,
+): ConstructionCenterTraceSample | null {
+  const entity = state.entities.find((candidate) => candidate.id === entityId && candidate.buildingId === "construction_center");
+  if (!entity) return null;
+  const job = state.constructionAutomation.jobs[entityId];
+  const step = job?.steps[job.stepIndex];
+  return {
+    wallSecond: Math.max(0, wallSecond),
+    simulationSecond: Math.max(0, state.elapsedSeconds),
+    workerLatencyMs: Math.max(0, workerLatencyMs),
+    pendingSimulationSeconds: Math.max(0, pendingSimulationSeconds),
+    entityId,
+    constructionId: job?.constructionId ?? null,
+    stepIndex: job?.stepIndex ?? -1,
+    stepKind: step?.kind ?? null,
+    stepItemId: step?.kind === "material" ? step.outputItemId : null,
+    stepElapsedSeconds: Math.max(0, job?.elapsedSeconds ?? 0),
+    stepDurationSeconds: step ? constructionAutomationStepDuration(state, step) : 0,
+    wipCount: Object.values(job?.inventory ?? {}).reduce((sum, amount) => sum + Math.max(0, Math.floor(amount ?? 0)), 0),
+    powerFactor: getEntityPowerFactor(state, entity),
+    statusCode: getEntityOperatingStatus(state, entity).code,
+    completedBuildings: Math.max(0, Math.floor(state.constructionAutomation.totalCrafted)),
+    guardHitCount: 0,
+  };
 }
 
 function constructionAutomationRequirements(step: ConstructionAutomationStep): Array<{ itemId: ItemId; amount: number }> {
@@ -6191,8 +6349,10 @@ function runConstructionCenters(state: GameState, seconds: number, power: PowerP
     let remainingWork = Math.max(0, seconds) * Math.max(1, entity.machineCount) * powerFactor;
     let completed = 0;
     let worked = false;
-    let guard = 0;
-    while (remainingWork > EPSILON && guard++ < 128) {
+    while (remainingWork > EPSILON) {
+      const remainingBeforeIteration = remainingWork;
+      const jobBeforeIteration = job;
+      const stepBeforeIteration = job?.stepIndex;
       if (!job) {
         const target = constructionAutomationTarget(state);
         if (!target) break;
@@ -6226,6 +6386,7 @@ function runConstructionCenters(state: GameState, seconds: number, power: PowerP
         delete state.constructionAutomation.jobs[entity.id];
         job = undefined;
       }
+      if (remainingWork + EPSILON >= remainingBeforeIteration && job === jobBeforeIteration && job?.stepIndex === stepBeforeIteration) break;
     }
     entity.utilization = worked || completed > 0 ? powerFactor : 0;
     entity.productionRate = seconds > EPSILON ? round(completed * 60 / seconds, 2) : 0;
@@ -6361,7 +6522,7 @@ export function setBeltPriority(state: GameState, beltId: string, priority: 0 | 
 
 export function setLogisticsItem(state: GameState, entityId: string, itemId: ItemId): GameState {
   const current = state.entities.find((entity) => entity.id === entityId);
-  if (!current) return state;
+  if (!current || current.interactionLocked) return state;
   if (current.buildingId === "material_delivery_hub") {
     const next = copyState(state);
     const entity = next.entities.find((candidate) => candidate.id === entityId)!;
@@ -6400,7 +6561,7 @@ export function setStationSlotItem(
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.kind === "station" &&
     entity.buildingId !== "orbital_collector");
-  if (!current || current.planetId !== state.activePlanetId || slotIndex < 0 || slotIndex >= STATION_SLOT_COUNT ||
+  if (!current || current.interactionLocked || current.planetId !== state.activePlanetId || slotIndex < 0 || slotIndex >= STATION_SLOT_COUNT ||
     (itemId && !ITEMS[itemId])) return state;
   const currentSlots = getStationSlots(current);
   const previousItemId = currentSlots[slotIndex]?.itemId;
@@ -6442,7 +6603,7 @@ export function setStationSlotMode(
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.kind === "station" &&
     entity.buildingId !== "orbital_collector");
-  if (!current || !getStationSlots(current)[slotIndex]?.itemId ||
+  if (!current || current.interactionLocked || !getStationSlots(current)[slotIndex]?.itemId ||
     (scope === "remote" && current.buildingId !== "interstellar_logistics_station")) return state;
   const next = copyState(state);
   const station = next.entities.find((entity) => entity.id === entityId)!;
@@ -6466,7 +6627,7 @@ export function setStationSlotMinimumLoad(
   minimumLoad: StationMinimumLoad,
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.kind === "station");
-  if (!current || !STATION_MINIMUM_LOAD_OPTIONS.includes(minimumLoad) || !getStationSlots(current)[slotIndex]?.itemId) return state;
+  if (!current || current.interactionLocked || !STATION_MINIMUM_LOAD_OPTIONS.includes(minimumLoad) || !getStationSlots(current)[slotIndex]?.itemId) return state;
   const next = copyState(state);
   const station = next.entities.find((entity) => entity.id === entityId)!;
   ensureStationSlots(station)[slotIndex].minimumLoad = minimumLoad;
@@ -6482,7 +6643,7 @@ export function setStationSlotLimits(
   maxStock: number,
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.kind === "station");
-  if (!current || !getStationSlots(current)[slotIndex]?.itemId) return state;
+  if (!current || current.interactionLocked || !getStationSlots(current)[slotIndex]?.itemId) return state;
   const next = copyState(state);
   const station = next.entities.find((entity) => entity.id === entityId)!;
   const slot = ensureStationSlots(station)[slotIndex];
@@ -6500,7 +6661,7 @@ export function setStationSlotPriority(
   priority: 0 | 1 | 2,
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.kind === "station");
-  if (!current || !getStationSlots(current)[slotIndex]?.itemId) return state;
+  if (!current || current.interactionLocked || !getStationSlots(current)[slotIndex]?.itemId) return state;
   const next = copyState(state);
   const station = next.entities.find((entity) => entity.id === entityId)!;
   ensureStationSlots(station)[slotIndex].priority = priority;
@@ -6515,7 +6676,7 @@ export function setStationSlotRoutePolicy(
   routePolicy: InterstellarRoutePolicy,
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
-  if (!current || !getStationSlots(current)[slotIndex]?.itemId ||
+  if (!current || current.interactionLocked || !getStationSlots(current)[slotIndex]?.itemId ||
     (routePolicy !== "direct" && routePolicy !== "relay-preferred" && routePolicy !== "relay-required")) return state;
   const next = copyState(state);
   const station = next.entities.find((entity) => entity.id === entityId)!;
@@ -6531,7 +6692,7 @@ export function setStationSlotWarperBudget(
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
   const budget = Math.max(1, Math.min(4, Math.floor(warperBudget)));
-  if (!current || !getStationSlots(current)[slotIndex]?.itemId || !Number.isFinite(warperBudget)) return state;
+  if (!current || current.interactionLocked || !getStationSlots(current)[slotIndex]?.itemId || !Number.isFinite(warperBudget)) return state;
   const next = copyState(state);
   const station = next.entities.find((entity) => entity.id === entityId)!;
   ensureStationSlots(station)[slotIndex].warperBudget = budget;
@@ -6544,7 +6705,7 @@ export function setStationHubConfiguration(
   enabled: boolean,
   priority: LogisticsPriority = 1,
 ): GameState {
-  if (!state.entities.some((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station")) return state;
+  if (!state.entities.some((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station" && !entity.interactionLocked)) return state;
   return {
     ...state,
     entities: state.entities.map((entity) => entity.id === entityId
@@ -6563,7 +6724,7 @@ export function getStationTemplateCompatibleEntityIds(
   const requested = new Set(entityIds);
   return state.entities
     .filter((entity) => {
-      if (!requested.has(entity.id) || entity.kind !== "station" || entity.buildingId === "orbital_collector") return false;
+      if (!requested.has(entity.id) || entity.interactionLocked || entity.kind !== "station" || entity.buildingId === "orbital_collector") return false;
       return !getStationSlots(entity).some((slot, index) => index !== slotIndex && slot.itemId === template.itemId);
     })
     .map((entity) => entity.id);
@@ -6601,7 +6762,7 @@ export function applyStationSlotTemplateToEntities(
 export function setStationMode(state: GameState, entityId: string, mode: "supply" | "demand"): GameState {
   const station = state.entities.find((entity) => entity.id === entityId && entity.kind === "station" &&
     entity.buildingId !== "orbital_collector");
-  if (!station) return state;
+  if (!station || station.interactionLocked) return state;
   const scope: StationLogisticsScope = station.buildingId === "planetary_logistics_station" ? "local" : "remote";
   return setStationSlotMode(state, entityId, 0, scope, mode);
 }
@@ -6609,7 +6770,7 @@ export function setStationMode(state: GameState, entityId: string, mode: "supply
 export function adjustStationVessels(state: GameState, entityId: string, delta: number): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
   const requested = Math.trunc(delta);
-  if (!current || current.planetId !== state.activePlanetId || requested === 0) return state;
+  if (!current || current.interactionLocked || current.planetId !== state.activePlanetId || requested === 0) return state;
   const loaded = Math.max(0, Math.floor(current.stationVessels ?? 0));
   const busy = stationBusyVehicles(state, current, "remote");
   const capacity = getStationVesselCapacity(current);
@@ -6639,7 +6800,7 @@ export function adjustStationDrones(state: GameState, entityId: string, delta: n
   const current = state.entities.find((entity) => entity.id === entityId &&
     (entity.buildingId === "planetary_logistics_station" || entity.buildingId === "interstellar_logistics_station"));
   const requested = Math.trunc(delta);
-  if (!current || current.planetId !== state.activePlanetId || requested === 0) return state;
+  if (!current || current.interactionLocked || current.planetId !== state.activePlanetId || requested === 0) return state;
   const loaded = Math.max(0, Math.floor(current.stationDrones ?? 0));
   const busy = stationBusyVehicles(state, current, "local");
   const capacity = getStationDroneCapacity(current);
@@ -6676,7 +6837,7 @@ export function fillStationFleet(state: GameState, entityId: string, kind: Stati
   const compatible = kind === "drone"
     ? entity?.buildingId === "planetary_logistics_station" || entity?.buildingId === "interstellar_logistics_station"
     : entity?.buildingId === "interstellar_logistics_station";
-  if (!entity || !compatible || entity.planetId !== state.activePlanetId) {
+  if (!entity || entity.interactionLocked || !compatible || entity.planetId !== state.activePlanetId) {
     return { state, loaded: 0, shortfall: 0, capacity: 0 };
   }
   const capacity = kind === "drone" ? getStationDroneCapacity(entity) : getStationVesselCapacity(entity);
@@ -6694,7 +6855,7 @@ export function fillStationFleet(state: GameState, entityId: string, kind: Stati
 export function adjustStationWarpers(state: GameState, entityId: string, delta: number): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
   const requested = Math.trunc(delta);
-  if (!current || current.planetId !== state.activePlanetId || requested === 0 ||
+  if (!current || current.interactionLocked || current.planetId !== state.activePlanetId || requested === 0 ||
     !isTechnologyCompleted(state, "space_warp")) return state;
   const loaded = Math.max(0, Math.floor(current.stationWarpers ?? 0));
   const capacity = getStationWarperCapacity(current);
@@ -6712,7 +6873,7 @@ export function adjustStationWarpers(state: GameState, entityId: string, delta: 
 }
 
 export function setStationWarpEnabled(state: GameState, entityId: string, enabled: boolean): GameState {
-  if (!state.entities.some((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station") ||
+  if (!state.entities.some((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station" && !entity.interactionLocked) ||
     (enabled && !isTechnologyCompleted(state, "space_warp"))) return state;
   return {
     ...state,
@@ -6722,7 +6883,7 @@ export function setStationWarpEnabled(state: GameState, entityId: string, enable
 
 export function setStationWarperAutoRefill(state: GameState, entityId: string, enabled: boolean): GameState {
   const station = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
-  if (!station || (enabled && !isTechnologyCompleted(state, "space_warp")) || Boolean(station.stationWarperAutoRefill) === enabled) return state;
+  if (!station || station.interactionLocked || (enabled && !isTechnologyCompleted(state, "space_warp")) || Boolean(station.stationWarperAutoRefill) === enabled) return state;
   return {
     ...state,
     entities: state.entities.map((entity) => entity.id === entityId ? { ...entity, stationWarperAutoRefill: enabled } : entity),
@@ -6731,7 +6892,7 @@ export function setStationWarperAutoRefill(state: GameState, entityId: string, e
 
 export function setStationWarperTarget(state: GameState, entityId: string, target: number): GameState {
   const station = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
-  if (!station || !Number.isFinite(target)) return state;
+  if (!station || station.interactionLocked || !Number.isFinite(target)) return state;
   const normalized = Math.max(1, Math.min(getStationWarperCapacity(station), Math.floor(target)));
   if (getStationWarperAutoRefillTarget(station) === normalized) return state;
   return {
@@ -6742,13 +6903,13 @@ export function setStationWarperTarget(state: GameState, entityId: string, targe
 
 export function setStationMinimumLoad(state: GameState, entityId: string, minimumLoad: StationMinimumLoad): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.kind === "station");
-  if (!current || !STATION_MINIMUM_LOAD_OPTIONS.includes(minimumLoad) || getStationMinimumLoad(current) === minimumLoad) return state;
+  if (!current || current.interactionLocked || !STATION_MINIMUM_LOAD_OPTIONS.includes(minimumLoad) || getStationMinimumLoad(current) === minimumLoad) return state;
   return setStationSlotMinimumLoad(state, entityId, 0, minimumLoad);
 }
 
 export function setFuelItem(state: GameState, entityId: string, itemId: ItemId): GameState {
   const current = state.entities.find((entity) => entity.id === entityId);
-  if (!current?.buildingId || !getFuelItemIdsForBuilding(current.buildingId).includes(itemId)) return state;
+  if (!current?.buildingId || current.interactionLocked || !getFuelItemIdsForBuilding(current.buildingId).includes(itemId)) return state;
   if (current.fuelItemId === itemId) return state;
   const next = copyState(state);
   const entity = next.entities.find((candidate) => candidate.id === entityId)!;
@@ -6764,7 +6925,7 @@ export function setFuelItem(state: GameState, entityId: string, itemId: ItemId):
 
 export function setEnergyMode(state: GameState, entityId: string, mode: EnergyMode): GameState {
   const current = state.entities.find((entity) => entity.id === entityId);
-  if (!current || current.buildingId !== "energy_exchanger" || mode === "auto" ||
+  if (!current || current.interactionLocked || current.buildingId !== "energy_exchanger" || mode === "auto" ||
     current.energyMode === mode || storedEnergy(current) > EPSILON) return state;
   const next = copyState(state);
   const entity = next.entities.find((candidate) => candidate.id === entityId)!;
@@ -6784,7 +6945,7 @@ export function setEnergyMode(state: GameState, entityId: string, mode: EnergyMo
 }
 
 export function setEntityPowerGrid(state: GameState, entityId: string, gridId: PowerGridId): GameState {
-  if (!POWER_GRID_IDS.includes(gridId) || !state.entities.some((entity) => entity.id === entityId)) return state;
+  if (!POWER_GRID_IDS.includes(gridId) || !state.entities.some((entity) => entity.id === entityId && !entity.interactionLocked)) return state;
   return {
     ...state,
     entities: state.entities.map((entity) => entity.id === entityId ? { ...entity, powerGridId: gridId } : entity),
@@ -6792,7 +6953,7 @@ export function setEntityPowerGrid(state: GameState, entityId: string, gridId: P
 }
 
 export function setEntityPowerPriority(state: GameState, entityId: string, priority: PowerPriority): GameState {
-  if (![1, 2, 3].includes(priority) || !state.entities.some((entity) => entity.id === entityId)) return state;
+  if (![1, 2, 3].includes(priority) || !state.entities.some((entity) => entity.id === entityId && !entity.interactionLocked)) return state;
   return {
     ...state,
     entities: state.entities.map((entity) => entity.id === entityId ? { ...entity, powerPriority: priority } : entity),
@@ -6801,7 +6962,7 @@ export function setEntityPowerPriority(state: GameState, entityId: string, prior
 
 export function setEntityGenerationPriority(state: GameState, entityId: string, priority: PowerPriority): GameState {
   const target = state.entities.find((entity) => entity.id === entityId);
-  if (![1, 2, 3].includes(priority) || !target || (target.kind !== "power" && target.buildingId !== "ray_receiver")) return state;
+  if (![1, 2, 3].includes(priority) || !target || target.interactionLocked || (target.kind !== "power" && target.buildingId !== "ray_receiver")) return state;
   return {
     ...state,
     entities: state.entities.map((entity) => entity.id === entityId ? { ...entity, generationPriority: priority } : entity),
@@ -6809,7 +6970,7 @@ export function setEntityGenerationPriority(state: GameState, entityId: string, 
 }
 
 export function setSplitterMode(state: GameState, entityId: string, mode: "balanced" | "priority"): GameState {
-  if (!state.entities.some((entity) => entity.id === entityId && entity.kind === "splitter")) return state;
+  if (!state.entities.some((entity) => entity.id === entityId && entity.kind === "splitter" && !entity.interactionLocked)) return state;
   return {
     ...state,
     entities: state.entities.map((entity) => entity.id === entityId ? { ...entity, distributionMode: mode } : entity),
@@ -6818,7 +6979,7 @@ export function setSplitterMode(state: GameState, entityId: string, mode: "balan
 
 export function removeEntity(state: GameState, entityId: string, count?: number): GameState {
   const entity = state.entities.find((item) => item.id === entityId);
-  if (!entity) return state;
+  if (!entity || entity.interactionLocked) return state;
   if (entity.kind === "vein") {
     if (!entity.resourceId || entity.minerCount < 1) return state;
     const requested = count === undefined ? entity.minerCount : Math.max(1, Math.floor(count));
@@ -6892,7 +7053,7 @@ export function removeEntities(state: GameState, entityIds: string[]): GameState
 
 export function canUpgradeEntity(state: GameState, entityId: string): boolean {
   const entity = state.entities.find((item) => item.id === entityId);
-  if (!entity?.buildingId || entity.kind === "vein") return false;
+  if (!entity?.buildingId || entity.interactionLocked || entity.kind === "vein") return false;
   const targetId = getBuildingUpgradeTarget(entity.buildingId);
   const definition = targetId ? getConstructionDefinition(targetId) : undefined;
   return Boolean(targetId && definition &&

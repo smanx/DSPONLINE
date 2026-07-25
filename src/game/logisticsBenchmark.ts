@@ -31,6 +31,7 @@ function baseEntity(id: string, planetId: PlanetId, index: number): Omit<Factory
     id,
     planetId,
     position: { x: index % 20 * 280, y: Math.floor(index / 20) * 180 },
+    interactionLocked: false,
     routingCursor: 0,
     machineCount: 10,
     minerCount: 0,

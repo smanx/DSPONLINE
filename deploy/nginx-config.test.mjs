@@ -24,4 +24,10 @@ test("active Nginx templates compress static assets while preserving cache bound
   }
   const domain = await readFile(path.join(deployDirectory, "nginx-dsp-idle-domain.conf"), "utf8");
   assert.match(domain, /include \/etc\/nginx\/snippets\/dsp-idle-app\.conf;/);
+  assert.match(domain, /location \/downloads\/[^}]*return 302 https:\/\/download\.dsponline\.cn\$request_uri;/s);
+
+  const download = await readFile(path.join(deployDirectory, "nginx-dsp-idle-download-shanghai.conf"), "utf8");
+  assert.match(download, /server_name download\.dsponline\.cn;/);
+  assert.match(download, /location \/downloads\/[^}]*try_files \$uri =404;[^}]*immutable/s);
+  assert.match(download, /location = \/downloads\/android\/stable\.json[^}]*no-cache, no-store/s);
 });

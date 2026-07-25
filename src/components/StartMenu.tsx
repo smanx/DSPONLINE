@@ -14,6 +14,7 @@ import {
   Gauge,
   HardDrive,
   History,
+  Languages,
   LogIn,
   LogOut,
   MailWarning,
@@ -68,6 +69,7 @@ import { CloudSaveSlotsPanel } from "./CloudSaveSlotsPanel";
 import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 import { useResolvedTheme } from "../hooks/useResolvedTheme";
 import { isSecureCloudClient } from "../nativeApp";
+import { useAppLocale } from "../i18n/locale";
 
 type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "new";
 type CloudAuthMode = "login" | "register" | "forgot" | "reset";
@@ -75,6 +77,7 @@ type MenuMessage = { tone: "ready" | "warning" | "error"; text: string } | null;
 type OfflineLoadProgress = { label: string; completedSeconds: number; totalSeconds: number; progress: number };
 
 const MENU_SETTINGS_KEY = "dsp-idle-network.menu-settings.v1";
+const NATIVE_DOWNLOAD_URL = "https://download.dsponline.cn/";
 const FONT_SCALES: FontScale[] = [0.8, 1, 1.25, 1.5, 2];
 const SIMULATION_SPEEDS: SimulationSpeed[] = [1, 2, 4];
 const AUTOSAVE_INTERVALS: AutosaveIntervalSeconds[] = [30, 60, 120];
@@ -191,6 +194,7 @@ function ToggleRow({ checked, label, value, icon, onChange }: {
 }
 
 export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
+  const { locale, setLocale } = useAppLocale();
   const initialContinueSave = useMemo(() => getMenuContinueSave(), []);
   const defaultSettings = { ...DEFAULT_MENU_SETTINGS, ...initialContinueSave?.settings };
   const [view, setView] = useState<StartMenuView>("overview");
@@ -294,7 +298,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
           const session = await resumeCloudSession();
           if (!active) return;
           setCloudSession(session);
-          setMessage({ tone: "ready", text: "邮箱验证完成，找回密码与排行榜提交已开放" });
+          setMessage({ tone: "ready", text: "邮箱验证完成，邮箱找回密码已开放" });
           clearActionQuery();
         })
         .catch((error) => {
@@ -773,6 +777,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             <button className={view === "cloud" ? "active" : ""} type="button" onClick={() => { setView("cloud"); setMessage(null); }}><Cloud size={17} /><span>登录与云存档</span></button>
             <button className={view === "import" ? "active" : ""} type="button" onClick={() => fileInputRef.current?.click()}><FileUp size={17} /><span>导入存档</span></button>
             <button className={view === "settings" ? "active" : ""} type="button" onClick={() => { setView("settings"); setMessage(null); }}><Settings size={17} /><span>游戏设置</span></button>
+            {__APP_PLATFORM__ === "web" ? <a className="start-menu-download-link" href={NATIVE_DOWNLOAD_URL} target="_blank" rel="noreferrer" title="下载 Windows 或 Android 客户端"><Download size={17} /><span>客户端下载</span><em>测试版</em></a> : null}
           </nav>
           <input ref={fileInputRef} className="start-menu-file-input" type="file" accept="application/json,.json" aria-label="选择存档文件" onChange={async (event) => { const file = event.target.files?.[0]; if (file) await readImportFile(file); event.target.value = ""; }} />
         </aside>
@@ -828,7 +833,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             {cloudAuthAllowed && cloudSession.status === "offline" ? <div className="start-menu-cloud-offline"><CloudOff size={24} /><span><strong>云节点暂时不可用</strong><small>{cloudSession.message}</small></span><button type="button" onClick={() => { setCloudSession({ status: "checking", user: null, cloudSave: null, mailAvailable: false, message: null }); void resumeCloudSession().then(setCloudSession); }}><RefreshCw size={14} />重试</button></div> : null}
             {cloudSession.status === "anonymous" && (cloudMode === "login" || cloudMode === "register") ? <form className="start-menu-auth" onSubmit={authenticateCloud}>
               <div className="start-menu-auth-mode"><button className={cloudMode === "login" ? "active" : ""} type="button" onClick={() => setCloudMode("login")}><LogIn size={14} />登录</button><button className={cloudMode === "register" ? "active" : ""} type="button" onClick={() => setCloudMode("register")}><UserPlus size={14} />注册</button></div>
-              {!cloudMailAvailable ? <p className="start-menu-auth-development"><MailWarning size={14} /><span><strong>邮件系统尚未开放</strong><small>用户名密码注册、主云存档、三个手动槽和自动同步均可使用；未绑定邮箱暂时无法找回密码，排行榜仍需邮箱验证。</small></span></p> : null}
+              {!cloudMailAvailable ? <p className="start-menu-auth-development"><MailWarning size={14} /><span><strong>邮件系统尚未开放</strong><small>用户名密码注册、主云存档、三个手动槽、自动同步和排行榜均可使用；未绑定邮箱暂时无法找回密码。</small></span></p> : null}
               {cloudMode === "register" ? <label><span>显示名称</span><input value={cloudDisplayName} onChange={(event) => setCloudDisplayName(event.target.value)} minLength={2} maxLength={24} required autoComplete="nickname" /></label> : null}
               <label><span>{cloudMode === "register" ? "用户名" : "用户名或邮箱"}</span><input type="text" value={cloudIdentifier} onChange={(event) => setCloudIdentifier(event.target.value)} required minLength={cloudMode === "register" ? 4 : undefined} maxLength={cloudMode === "register" ? 24 : 254} pattern={cloudMode === "register" ? "[A-Za-z0-9_]{4,24}" : undefined} title={cloudMode === "register" ? "4 至 24 位英文字母、数字或下划线" : undefined} autoComplete="username" placeholder={cloudMode === "register" ? "4-24 位字母、数字或下划线" : "用户名或已绑定邮箱"} /></label>
               <label><span>密码</span><input type="password" value={cloudPassword} onChange={(event) => setCloudPassword(event.target.value)} required minLength={8} maxLength={128} autoComplete={cloudMode === "register" ? "new-password" : "current-password"} /></label>
@@ -864,6 +869,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             <header><span><small>本机运行参数</small><strong>游戏设置</strong></span><em>即时生效</em></header>
             <section><header><Type size={15} /><strong>字体大小</strong><small>{Math.round(settings.fontScale * 100)}%</small></header><div className="start-menu-segments">{FONT_SCALES.map((scale) => <button className={settings.fontScale === scale ? "active" : ""} type="button" key={scale} onClick={() => updateMenuSettings({ fontScale: scale })}>{Math.round(scale * 100)}%</button>)}</div></section>
             <section><header><Palette size={15} /><strong>界面主题</strong><small>{{ dark: "深色", light: "亮色", system: "跟随系统" }[settings.theme]}</small></header><div className="start-menu-segments">{(["dark", "light", "system"] as const).map((theme) => <button className={settings.theme === theme ? "active" : ""} type="button" key={theme} onClick={() => updateMenuSettings({ theme })}>{{ dark: "深色", light: "亮色", system: "跟随系统" }[theme]}</button>)}</div></section>
+            <section><header><Languages size={15} /><strong>语言</strong><small>{locale === "en" ? "English" : "简体中文"}</small></header><div className="start-menu-segments" aria-label="语言"><button className={locale === "zh-CN" ? "active" : ""} type="button" aria-pressed={locale === "zh-CN"} onClick={() => setLocale("zh-CN")}>简体中文</button><button className={locale === "en" ? "active" : ""} type="button" aria-pressed={locale === "en"} onClick={() => setLocale("en")}>English</button></div></section>
             <section><header><Factory size={15} /><strong>科技树布局</strong><small>{settings.technologyLayout === "compact" ? "精简" : "标准"}</small></header><div className="start-menu-segments">{(["standard", "compact"] as const).map((technologyLayout) => <button className={settings.technologyLayout === technologyLayout ? "active" : ""} type="button" key={technologyLayout} onClick={() => updateMenuSettings({ technologyLayout })}>{technologyLayout === "compact" ? "精简模式" : "标准模式"}</button>)}</div></section>
             <section><header><Zap size={15} /><strong>模拟速度</strong><small>{settings.simulationSpeed}×</small></header><div className="start-menu-segments">{SIMULATION_SPEEDS.map((speed) => <button className={settings.simulationSpeed === speed ? "active" : ""} type="button" key={speed} onClick={() => updateMenuSettings({ simulationSpeed: speed })}>{speed}×</button>)}</div></section>
             <section><header><Clock3 size={15} /><strong>自动保存</strong><small>{settings.autosaveIntervalSeconds} 秒</small></header><div className="start-menu-segments">{AUTOSAVE_INTERVALS.map((seconds) => <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => updateMenuSettings({ autosaveIntervalSeconds: seconds })}>{seconds} 秒</button>)}</div></section>

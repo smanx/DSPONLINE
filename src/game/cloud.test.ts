@@ -46,7 +46,7 @@ describe("cloud save synchronization markers", () => {
     vi.restoreAllMocks();
   });
 
-  it("allows anonymous public activity status on HTTP without opening account transport", async () => {
+  it("allows anonymous public status discovery on HTTP without opening account transport", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       ok: true,
       activity: { enabled: false, status: "disabled", serverNow: 1 },
@@ -55,8 +55,8 @@ describe("cloud save synchronization markers", () => {
     await expect(fetchCloudPublicStatus()).resolves.toMatchObject({ ok: true });
     expect(fetchMock).toHaveBeenCalledWith("/api/public-status", expect.any(Object));
     fetchMock.mockClear();
-    await expect(resumeCloudSession()).resolves.toMatchObject({ status: "offline", message: "云账户仅在 HTTPS 安全入口开放" });
-    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(resumeCloudSession()).resolves.toMatchObject({ status: "anonymous", message: null });
+    expect(fetchMock).toHaveBeenCalledWith("/api/health", expect.any(Object));
   });
 
   it("compares unbound, synchronized and one-sided changes", () => {

@@ -2,20 +2,39 @@ import { CheckSquare, Search, Square, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ITEMS, getPlanet } from "../game/content";
 import type { GameState, ItemId } from "../game/types";
-import type { PlanetTrayDiscardRequest } from "../game/engine";
+import { MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, getPlanetTrayItemLimit, type PlanetTrayDiscardRequest } from "../game/engine";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 import { ItemGlyph } from "./ItemReference";
 
 type DiscardMode = "half" | "all";
 
-export function TrayManagementDialog({ game, onDiscard, onClose }: {
+export function TrayManagementDialog({ game, onDiscard, onSetItemLimit, onClose }: {
   game: GameState;
   onDiscard: (requests: PlanetTrayDiscardRequest[]) => void;
+  onSetItemLimit?: (value: number) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<ItemId>>(() => new Set());
   const [confirmation, setConfirmation] = useState<{ mode: DiscardMode; requests: PlanetTrayDiscardRequest[]; skipped: number } | null>(null);
+  const itemLimit = getPlanetTrayItemLimit(game);
+  const [limitDraft, setLimitDraft] = useState(String(itemLimit));
+  const [limitError, setLimitError] = useState<string | null>(null);
+  const commitLimit = () => {
+    const raw = limitDraft.trim().replaceAll(",", "");
+    if (!/^[0-9]+$/.test(raw)) {
+      setLimitError("请输入十进制正整数，不支持小数、负数或指数格式");
+      return;
+    }
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value) || value < MIN_PLANET_TRAY_ITEM_LIMIT || value > MAX_PLANET_TRAY_ITEM_LIMIT) {
+      setLimitError("允许范围为 1,000 至 100,000,000");
+      return;
+    }
+    setLimitError(null);
+    setLimitDraft(String(value));
+    onSetItemLimit?.(value);
+  };
   const allItems = useMemo(() => (Object.entries(game.tray) as Array<[ItemId, number]>)
     .filter(([, amount]) => Math.floor(amount) > 0)
     .sort((a, b) => b[1] - a[1]), [game.tray]);
@@ -45,6 +64,7 @@ export function TrayManagementDialog({ game, onDiscard, onClose }: {
         <div><span>{getPlanet(game.activePlanetId).name}</span><strong>物资托盘管理</strong></div>
         <button type="button" onClick={onClose} title="关闭物资管理" aria-label="关闭物资管理"><X size={19} /></button>
       </header>
+      {onSetItemLimit ? <div className="tray-management__limit"><span>每种物资库存上限</span><div>{([10_000, 100_000, 1_000_000, 100_000_000] as const).map((value) => <button type="button" className={itemLimit === value ? "active" : ""} key={value} onClick={() => { setLimitDraft(String(value)); setLimitError(null); onSetItemLimit(value); }}>{value === 10_000 ? "1万" : value === 100_000 ? "10万" : value === 1_000_000 ? "100万" : "1亿"}</button>)}</div><label><input inputMode="numeric" value={limitDraft} onChange={(event) => setLimitDraft(event.target.value)} onBlur={commitLimit} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} aria-label="自定义每种物资库存上限" /><button type="button" onClick={commitLimit}>应用</button></label>{limitError ? <p role="alert">{limitError}</p> : null}</div> : null}
       <div className="tray-management__toolbar">
         <label><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索物资" aria-label="搜索托盘物资" /></label>
         <button type="button" onClick={() => setSelected(selected.size === allItems.length ? new Set() : new Set(allItems.map(([itemId]) => itemId)))}>

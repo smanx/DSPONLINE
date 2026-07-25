@@ -578,7 +578,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const savedSeed = saved.version >= 20 && typeof saved.galaxy?.seed === "number" && Number.isFinite(saved.galaxy.seed)
     ? saved.galaxy.seed
     : DEFAULT_GALAXY_SEED;
@@ -614,6 +614,7 @@ export function migrateGame(value: unknown): GameState | null {
       ...entity,
       planetId,
       position,
+      interactionLocked: saved.version >= 35 && entity.interactionLocked === true,
       inputs: buildingBufferRecord(entity.inputs),
       outputs: buildingBufferRecord(entity.outputs),
       machineCount: boundedBuildingQuantity(entity.machineCount),
@@ -1404,7 +1405,7 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 34,
+    version: 35,
     activePlanetId,
     entities,
     belts,

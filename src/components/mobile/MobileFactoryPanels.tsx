@@ -8,6 +8,7 @@ import {
   Focus,
   Hammer,
   LayoutTemplate,
+  Lock,
   Minus,
   PackageOpen,
   Pin,
@@ -17,6 +18,7 @@ import {
   Settings,
   Sparkles,
   Trash2,
+  Unlock,
   Wrench,
   X,
   Zap,
@@ -43,6 +45,8 @@ import {
   canUpgradeEntity,
   getConstructionQuickCraftPlan,
   getDysonEngineeringSnapshot,
+  getEffectiveSimulationMultiplier,
+  getEntityCycleRatePerSimulationSecond,
   getEntityOperatingStatus,
   getEntityPowerFactor,
   getResourceReserveSnapshot,
@@ -71,6 +75,8 @@ import { QuantityStepper } from "../QuantityStepper";
 import { QuantityValue } from "../QuantityValue";
 import { formatQuantityCompact } from "../../game/quantityFormat";
 import { MobileSheetFrame } from "./MobileSheetFrame";
+import { useWorkDisplayProgress } from "../../hooks/useProductionVisualClock";
+import type { WorkProgressMode } from "../../game/productionRefresh";
 
 export type MobileCanvasMode = "browse" | "place" | "connect" | "select" | "layout" | "region";
 
@@ -208,7 +214,7 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
 type InventoryTab = "tray" | "fleet" | "dyson";
 type InventorySort = "amount" | "name" | "kind";
 
-export function MobileInventorySheet({ game, snap, onSnap, onClose, onPickTray, onDropCargo, onDiscardTrayItems }: {
+export function MobileInventorySheet({ game, snap, onSnap, onClose, onPickTray, onDropCargo, onDiscardTrayItems, onSetTrayItemLimit }: {
   game: GameState;
   snap: MobileSheetSnap;
   onSnap: (snap: MobileSheetSnap) => void;
@@ -216,6 +222,7 @@ export function MobileInventorySheet({ game, snap, onSnap, onClose, onPickTray, 
   onPickTray: (itemId: ItemId) => void;
   onDropCargo: () => void;
   onDiscardTrayItems: (requests: PlanetTrayDiscardRequest[]) => void;
+  onSetTrayItemLimit: (value: number) => void;
 }) {
   const [tab, setTab] = useState<InventoryTab>("tray");
   const [query, setQuery] = useState("");
@@ -242,7 +249,7 @@ export function MobileInventorySheet({ game, snap, onSnap, onClose, onPickTray, 
       {tab === "tray" ? <>
         <div className="mobile-inventory-toolbar"><label><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索当前行星物资" aria-label="搜索物资" /></label><button type="button" onClick={() => setSort((current) => current === "amount" ? "name" : current === "name" ? "kind" : "amount")}><ArrowDownUp size={17} />{{ amount: "数量", name: "名称", kind: "类别" }[sort]}</button><button type="button" onClick={() => setManagementOpen(true)}><Settings size={17} />管理</button></div>
         <div className="mobile-inventory-list">{trayItems.map(([itemId, amount]) => <button type="button" key={itemId} onClick={() => onPickTray(itemId)} disabled={Boolean(game.cargo && game.cargo.itemId !== itemId)}><ItemGlyph itemId={itemId} /><span><strong>{getItem(itemId).name}</strong><small>{getItem(itemId).kind === "fluid" ? "流体" : getItem(itemId).kind === "matrix" ? "矩阵" : "物品"}</small></span><b><QuantityValue value={amount} /></b><ChevronRight size={18} /></button>)}{trayItems.length === 0 ? <div className="mobile-sheet-empty"><Box size={24} /><span>没有符合条件的库存</span></div> : null}</div>
-        {managementOpen ? <TrayManagementDialog game={game} onDiscard={onDiscardTrayItems} onClose={() => setManagementOpen(false)} /> : null}
+        {managementOpen ? <TrayManagementDialog game={game} onDiscard={onDiscardTrayItems} onSetItemLimit={onSetTrayItemLimit} onClose={() => setManagementOpen(false)} /> : null}
       </> : tab === "fleet" ? <div className="mobile-inventory-list">{PORTABLE_FLEET_ITEM_IDS.map((itemId) => <div className="mobile-inventory-row" key={itemId}><ItemGlyph itemId={itemId} /><span><strong>{getItem(itemId).name}</strong><small>跨星球随身携带</small></span><b><QuantityValue value={game.portableFleet?.[itemId] ?? 0} /></b></div>)}</div> : <div className="mobile-dyson-summary"><div><span>在轨太阳帆</span><strong><QuantityValue value={game.dysonSwarm.sailsInOrbit} /></strong></div><div><span>永久结构点</span><strong><QuantityValue value={game.dysonSphere.structurePoints} /></strong></div><div><span>戴森云功率</span><strong><PowerValue valueKw={game.dysonSwarm.generationKw} /></strong></div><div><span>戴森球功率</span><strong><PowerValue valueKw={game.dysonSphere.generationKw} /></strong></div><div><span>理论接收率</span><strong>{Math.round(dyson.theoreticalReceptionRate * 100)}%</strong></div><div><span>接收站实际利用率</span><strong>{Math.round(dyson.receiverUtilization * 100)}%</strong></div><div><span>戴森功率利用率</span><strong>{Math.round(dyson.dysonPowerUtilization * 100)}%</strong></div>{dyson.blockedReceiverCount > 0 ? <div className="warning"><span>受阻接收站</span><strong>{dyson.blockedReceiverCount}/{dyson.configuredReceiverCount}</strong></div> : null}</div>}
     </MobileSheetFrame>
   );
@@ -252,7 +259,28 @@ function amountRows(values: Partial<Record<ItemId, number>>): Array<[ItemId, num
   return (Object.entries(values) as Array<[ItemId, number]>).filter(([, amount]) => amount > 0.001).sort((a, b) => b[1] - a[1]);
 }
 
-export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onUpgradeEntity, onUpgradeBelt }: {
+function MobileEntityProgress({ game, entity, label, reserveLabel }: { game: GameState; entity: FactoryEntity; label: string; reserveLabel: string }) {
+  const storageFlow = entity.kind === "storage" || entity.kind === "splitter" || entity.buildingId === "material_delivery_hub";
+  const accumulator = entity.buildingId === "accumulator";
+  const stationRoute = entity.kind === "station" && entity.buildingId !== "orbital_collector";
+  const mode: WorkProgressMode = storageFlow ? "indeterminate" : accumulator ? "level" : stationRoute ? "route" : entity.buildingId === "construction_center" ? "step" : "cycle";
+  const active = !game.paused && entity.utilization > 0.001;
+  const semanticKey = stationRoute
+    ? `${entity.id}:${(entity.stationRoutes ?? []).map((route) => route.id).join(",") || "idle"}`
+    : `${entity.id}:${entity.recipeId ?? entity.resourceId ?? entity.energyMode ?? "idle"}`;
+  const displayProgress = useWorkDisplayProgress({
+    mode,
+    semanticKey,
+    snapshotProgress: mode === "indeterminate" ? 0 : stationRoute ? entity.stationProgress ?? 0 : entity.progress,
+    cyclesPerSecond: mode === "cycle" || mode === "step" ? getEntityCycleRatePerSimulationSecond(game, entity) : 0,
+    effectiveSimulationMultiplier: getEffectiveSimulationMultiplier(game),
+    active,
+  });
+  const percent = Math.round(displayProgress * 100);
+  return <div className={`mobile-inspector-progress mobile-inspector-progress--${mode}${active ? " active" : ""}`}><span>{label}</span><strong>{mode === "indeterminate" ? active ? "运行中" : "待机" : `${percent}%`}</strong><i aria-hidden="true"><b style={mode === "indeterminate" ? undefined : { transform: `scaleX(${displayProgress})` }} /></i><small>{entity.productionRate.toFixed(1)}/min · 利用率 {Math.round(entity.utilization * 100)}%{reserveLabel}</small></div>;
+}
+
+export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onUpgradeEntity, onUpgradeBelt, onEntityLockChange }: {
   game: GameState;
   snap: MobileSheetSnap;
   entity: FactoryEntity | null;
@@ -265,12 +293,13 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
   onAddEntity: (entityId: string, count: number) => void;
   onUpgradeEntity: (entityId: string) => void;
   onUpgradeBelt: (beltId: string) => void;
+  onEntityLockChange: (entityId: string, locked: boolean) => void;
 }) {
   const [addCount, setAddCount] = useState(1);
   const isMulti = selectedCount > 1;
   const title = isMulti ? `已选择 ${selectedCount} 个节点` : entity ? entity.kind === "vein" ? getItem(entity.resourceId!).name : getBuilding(entity.buildingId!).name : belt ? `${getItem(belt.itemId).name}运输线` : "设备检查器";
   const status = entity ? getEntityOperatingStatus(game, entity) : null;
-  const detail = status?.label ?? (belt ? `${belt.lastFlow.toFixed(1)}/min · Mk.${belt.tier}` : isMulti ? "批量操作与生产设置" : "点击画布节点或线路查看状态");
+  const detail = status?.label ?? (belt ? `${belt.lastFlow.toFixed(1)}/s · Mk.${belt.tier}` : isMulti ? "批量操作与生产设置" : "点击画布节点或线路查看状态");
   const inputRows = entity ? amountRows(entity.inputs).slice(0, 4) : [];
   const outputRows = entity ? amountRows(entity.outputs).slice(0, 4) : [];
   const recipe = entity?.recipeId ? getRecipe(entity.recipeId) : undefined;
@@ -287,15 +316,16 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
           <span><small>{status ? "运行状态" : belt ? "线路状态" : "多选摘要"}</small><strong>{status?.label ?? detail}</strong></span>
           {entity ? <b>{Math.round(getEntityPowerFactor(game, entity) * 100)}% 供电</b> : belt ? <b>{Math.round((belt.congestion ?? 0) * 100)}% 拥堵</b> : null}
         </section>
-        {entity ? <div className="mobile-inspector-progress"><span>{recipe?.name ?? (entity.kind === "vein" ? "资源采集" : "设备周期")}</span><strong>{Math.round(entity.progress * 100)}%</strong><i><b style={{ width: `${Math.max(0, Math.min(100, entity.progress * 100))}%` }} /></i><small>{entity.productionRate.toFixed(1)}/min · 利用率 {Math.round(entity.utilization * 100)}%{resourceReserve ? ` · ${resourceReserve.infinite ? "无限储量" : resourceReserve.exhausted ? "资源已枯竭" : `储量 ${resourceReserve.remaining?.toLocaleString("zh-CN")}/${resourceReserve.capacity?.toLocaleString("zh-CN")} (${resourceReserve.remainingPercent}%)`}` : ""}</small></div> : null}
+        {entity ? <MobileEntityProgress game={game} entity={entity} label={recipe?.name ?? (entity.kind === "vein" ? "资源采集" : "设备周期")} reserveLabel={resourceReserve ? ` · ${resourceReserve.infinite ? "无限储量" : resourceReserve.exhausted ? "资源已枯竭" : `储量 ${resourceReserve.remaining?.toLocaleString("zh-CN")}/${resourceReserve.capacity?.toLocaleString("zh-CN")} (${resourceReserve.remainingPercent}%)`}` : ""} /> : null}
         {snap !== "peek" ? <>
           {entity ? <section className={`mobile-inspector-io${entity.buildingId === "storage_mk1" || entity.buildingId === "storage_tank" ? " mobile-inspector-io--storage" : ""}`}><div><header>输入</header>{inputRows.length ? inputRows.map(([itemId, amount]) => <span key={itemId}><ItemGlyph itemId={itemId} /><em>{getItem(itemId).name}</em><strong><QuantityValue value={amount} /></strong></span>) : <small>暂无输入缓存</small>}</div><div><header>输出</header>{outputRows.length ? outputRows.map(([itemId, amount]) => <span key={itemId}><ItemGlyph itemId={itemId} /><em>{getItem(itemId).name}</em><strong><QuantityValue value={amount} /></strong></span>) : <small>暂无输出缓存</small>}</div></section> : null}
-          {belt ? <section className="mobile-belt-summary"><div><span>物品</span><strong>{getItem(belt.itemId).name}</strong></div><div><span>吞吐</span><strong>{belt.lastFlow.toFixed(1)}/min</strong></div><div><span>堆叠</span><strong>×{belt.stackSize ?? 1}</strong></div><div><span>优先级</span><strong>{belt.priority === 2 ? "高" : belt.priority === 1 ? "标准" : "低"}</strong></div></section> : null}
+          {belt ? <section className="mobile-belt-summary"><div><span>物品</span><strong>{getItem(belt.itemId).name}</strong></div><div><span>近期吞吐</span><strong>{belt.lastFlow.toFixed(1)}/s</strong></div><div><span>堆叠</span><strong>×{belt.stackSize ?? 1}</strong></div><div><span>优先级</span><strong>{belt.priority === 2 ? "高" : belt.priority === 1 ? "标准" : "低"}</strong></div></section> : null}
           {entity ? <QuantityStepper value={addCount} max={addAvailable} disabled={addAvailable < 1} onChange={setAddCount} label="移动端增加设备" /> : null}
           <div className="mobile-inspector-actions">
             <button type="button" onClick={onFocus}><Focus size={18} /><span>定位</span></button>
-            {entity ? <button type="button" disabled={addAvailable < 1} onClick={() => onAddEntity(entity.id, addCount)}><Plus size={18} /><span>增加 ×{Math.min(addCount, addAvailable)}</span><b>余 {addAvailable}</b></button> : null}
-            {entity ? <button type="button" disabled={!canUpgradeEntity(game, entity.id)} onClick={() => onUpgradeEntity(entity.id)}><Sparkles size={18} /><span>升级</span></button> : belt ? <button type="button" disabled={!canUpgradeBelt(game, belt.id)} onClick={() => onUpgradeBelt(belt.id)}><Sparkles size={18} /><span>升级线路</span></button> : null}
+            {entity ? <button type="button" disabled={entity.interactionLocked || addAvailable < 1} onClick={() => onAddEntity(entity.id, addCount)}><Plus size={18} /><span>增加 ×{Math.min(addCount, addAvailable)}</span><b>余 {addAvailable}</b></button> : null}
+            {entity ? <button type="button" disabled={entity.interactionLocked || !canUpgradeEntity(game, entity.id)} onClick={() => onUpgradeEntity(entity.id)}><Sparkles size={18} /><span>升级</span></button> : belt ? <button type="button" disabled={!canUpgradeBelt(game, belt.id)} onClick={() => onUpgradeBelt(belt.id)}><Sparkles size={18} /><span>升级线路</span></button> : null}
+            {entity ? <button type="button" onClick={() => onEntityLockChange(entity.id, !entity.interactionLocked)}>{entity.interactionLocked ? <Unlock size={18} /> : <Lock size={18} />}<span>{entity.interactionLocked ? "解锁" : "锁定"}</span></button> : null}
             <button type="button" onClick={onOpenAdvanced}><Wrench size={18} /><span>{isMulti ? "批量设置" : "完整设置"}</span></button>
           </div>
         </> : <button className="mobile-inspector-peek-open" type="button" onClick={() => onSnap("half")}><span>查看输入、输出与快捷操作</span><ChevronRight size={20} /></button>}
@@ -331,20 +361,24 @@ export function MobilePlacementBar({ mode, buildingId, inventory, placementCount
   return <div className={`mobile-mode-status mobile-mode-status--${mode}`}>{mode === "layout" ? <LayoutTemplate size={20} /> : <Zap size={20} />}<span><small>{mode === "layout" ? "布局模式" : "生产区域"}</small><strong>{labels[mode]}</strong></span><button type="button" onClick={onDone}>完成</button></div>;
 }
 
-export function MobileSelectionContextBar({ selectedCount, beltCount, canUpgrade, canUpgradeBelts, onFocus, onCopy, onUpgrade, onUpgradeBelts, onRemove, onClear }: {
+export function MobileSelectionContextBar({ selectedCount, beltCount, canUpgrade, canUpgradeBelts, canLock, canUnlock, onFocus, onCopy, onUpgrade, onUpgradeBelts, onLock, onUnlock, onRemove, onClear }: {
   selectedCount: number;
   beltCount: number;
   canUpgrade: boolean;
   canUpgradeBelts: boolean;
+  canLock: boolean;
+  canUnlock: boolean;
   onFocus: () => void;
   onCopy: () => void;
   onUpgrade: () => void;
   onUpgradeBelts: () => void;
+  onLock: () => void;
+  onUnlock: () => void;
   onRemove: () => void;
   onClear: () => void;
 }) {
   if (selectedCount + beltCount === 0) return null;
-  return <div className="mobile-selection-context" role="toolbar" aria-label="选区快捷操作"><span><Check size={18} /><strong>{selectedCount}</strong> 节点 · <strong>{beltCount}</strong> 线路</span><nav><button type="button" onClick={onFocus} disabled={selectedCount === 0}><Focus size={18} /><small>定位</small></button><button type="button" onClick={onCopy} disabled={selectedCount === 0}><LayoutTemplate size={18} /><small>蓝图</small></button><button type="button" onClick={selectedCount > 0 ? onUpgrade : onUpgradeBelts} disabled={selectedCount > 0 ? !canUpgrade : !canUpgradeBelts}><Sparkles size={18} /><small>升级</small></button><button className="danger" type="button" onClick={onRemove}><Trash2 size={18} /><small>回收</small></button><button type="button" onClick={onClear}><X size={18} /><small>清除</small></button></nav></div>;
+  return <div className="mobile-selection-context" role="toolbar" aria-label="选区快捷操作"><span><Check size={18} /><strong>{selectedCount}</strong> 节点 · <strong>{beltCount}</strong> 线路</span><nav><button type="button" onClick={onFocus} disabled={selectedCount === 0}><Focus size={18} /><small>定位</small></button><button type="button" onClick={onCopy} disabled={selectedCount === 0}><LayoutTemplate size={18} /><small>蓝图</small></button><button type="button" onClick={selectedCount > 0 ? onUpgrade : onUpgradeBelts} disabled={selectedCount > 0 ? !canUpgrade : !canUpgradeBelts}><Sparkles size={18} /><small>升级</small></button><button type="button" onClick={onLock} disabled={!canLock}><Lock size={18} /><small>锁定</small></button><button type="button" onClick={onUnlock} disabled={!canUnlock}><Unlock size={18} /><small>解锁</small></button><button className="danger" type="button" onClick={onRemove}><Trash2 size={18} /><small>回收</small></button><button type="button" onClick={onClear}><X size={18} /><small>清除</small></button></nav></div>;
 }
 
 export function MobileConnectionNotice({ label, tone }: { label: string; tone: "ready" | "blocked" | "warning" }) {

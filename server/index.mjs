@@ -28,6 +28,7 @@ const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{16,96}$/;
 const USERNAME_PATTERN = /^[A-Za-z0-9_]{4,24}$/;
 const VALID_CATEGORIES = new Set(["power", "upload", "dyson", "throughput", "galaxy"]);
 const VALID_SEASONS = new Set(["season_01", "season_00"]);
+const ACTIVE_LEADERBOARD_SEASON_ID = "season_01";
 const METRIC_KEYS = [
   "energyGeneratedMj",
   "uploadedWhiteMatrix",
@@ -120,6 +121,7 @@ function normalizeUserRecords(value, sourceSchemaVersion) {
       createdAt,
       emailVerifiedAt,
       passwordChangedAt: Number.isFinite(record.passwordChangedAt) ? Math.max(createdAt, Math.floor(record.passwordChangedAt)) : createdAt,
+      leaderboardVisible: record.leaderboardVisible !== false,
     };
   }
   return users;
@@ -287,6 +289,7 @@ function publicUser(user) {
     emailVerified: Number.isFinite(user.emailVerifiedAt),
     emailVerifiedAt: Number.isFinite(user.emailVerifiedAt) ? user.emailVerifiedAt : null,
     passwordChangedAt: user.passwordChangedAt,
+    leaderboardVisible: user.leaderboardVisible !== false,
   };
 }
 
@@ -723,12 +726,6 @@ function removeUserActionTokens(store, userId) {
   }
 }
 
-function requireLeaderboardVerifiedUser(response, auth) {
-  if (Number.isFinite(auth.user.emailVerifiedAt)) return true;
-  send(response, 403, { error: "排行榜提交需要已验证邮箱；邮件系统开放后可在账号设置中绑定并验证", code: "EMAIL_VERIFICATION_REQUIRED" });
-  return false;
-}
-
 function publicSession(session, currentTokenHash, tokenHash) {
   return {
     id: session.id,
@@ -759,13 +756,17 @@ function validateSavePayload(payload) {
     const parsed = JSON.parse(payload);
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities) ||
-      !Number.isInteger(state.version) || state.version < 1 || state.version > 34) return false;
+      !Number.isInteger(state.version) || state.version < 1 || state.version > 35) return false;
     const validBufferLimit = (value) => Number.isInteger(value) && value >= 1_000 && value <= 100_000_000;
     const productionLimit = state.settings?.productionBufferLimit;
     const logisticsLimit = state.settings?.logisticsBufferLimit;
     if (state.version >= 32 && (!validBufferLimit(productionLimit) || !validBufferLimit(logisticsLimit))) return false;
     if (productionLimit !== undefined && !validBufferLimit(productionLimit)) return false;
     if (logisticsLimit !== undefined && !validBufferLimit(logisticsLimit)) return false;
+    if (state.planetTrayItemLimits !== undefined) {
+      if (!state.planetTrayItemLimits || typeof state.planetTrayItemLimits !== "object" || Array.isArray(state.planetTrayItemLimits) ||
+        Object.values(state.planetTrayItemLimits).some((value) => !validBufferLimit(value))) return false;
+    }
     if (state.version >= 33) {
       const proliferatorLimit = state.settings?.proliferatorBufferLimit;
       if (!Number.isInteger(proliferatorLimit) || proliferatorLimit < 1 || proliferatorLimit > 100_000) return false;
@@ -830,6 +831,7 @@ function validateSavePayload(payload) {
         }
       }
     }
+    if (state.version >= 35 && state.entities.some((entity) => typeof entity?.interactionLocked !== "boolean")) return false;
     return true;
   } catch {
     return false;
@@ -849,7 +851,7 @@ function numberAt(value, fallback = 0) {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }
 
-function metricsSupportedBySave(save) {
+function leaderboardMetricsFromSave(save) {
   const state = parseSaveState(save?.payload);
   if (!state || typeof state !== "object") return null;
   const generationKw = numberAt(state.metrics?.generationKw);
@@ -857,29 +859,88 @@ function metricsSupportedBySave(save) {
   const producedWhiteMatrix = Math.floor(numberAt(state.totalProduced?.universe_matrix));
   const exploredSystems = Array.isArray(state.exploration?.unlockedSystemIds) ? new Set(state.exploration.unlockedSystemIds).size : 1;
   const colonizedPlanets = Array.isArray(state.exploration?.colonizedPlanetIds) ? new Set(state.exploration.colonizedPlanetIds).size : 1;
-  const dysonPowerKw = Math.max(numberAt(state.dysonSphere?.generationKw), numberAt(state.metrics?.rayGenerationKw));
+  const dysonPowerKw = numberAt(state.dysonSwarm?.generationKw) + numberAt(state.dysonSphere?.generationKw);
   const throughput = numberAt(state.metrics?.totalItemsPerMinute);
-  return {
-    energyGeneratedMj: generationKw * elapsedSeconds / 1000 * 1.25 + 1000,
+  return normalizeMetrics({
+    energyGeneratedMj: generationKw * elapsedSeconds / 1000,
     uploadedWhiteMatrix: producedWhiteMatrix,
-    peakGenerationKw: generationKw * 1.25 + 1,
-    peakThroughputPerMinute: throughput * 1.25 + 1,
-    peakDysonPowerKw: dysonPowerKw * 1.25 + 1,
+    peakGenerationKw: generationKw,
+    peakThroughputPerMinute: throughput,
+    peakDysonPowerKw: dysonPowerKw,
     exploredSystems,
     colonizedPlanets,
-  };
+  });
 }
 
-function verifyLeaderboardMetrics(submitted, save, previous) {
-  const supported = metricsSupportedBySave(save);
-  if (!supported) return { ok: false, error: "云存档无法用于成绩校验" };
-  const previousMetrics = previous?.metrics ?? {};
-  const violations = METRIC_KEYS.filter((key) => {
-    const prior = numberAt(previousMetrics[key]);
-    return submitted[key] > Math.max(prior, numberAt(supported[key]));
-  });
-  if (violations.length > 0) return { ok: false, error: `成绩超过云存档可验证范围：${violations.join(", ")}` };
-  return { ok: true, metrics: submitted, supported };
+function mergeLeaderboardMetrics(previous, current) {
+  if (!previous) return current;
+  return normalizeMetrics(Object.fromEntries(METRIC_KEYS.map((key) => [key, Math.max(numberAt(previous[key]), numberAt(current[key]))])));
+}
+
+function removeUserLeaderboardSubmissions(store, userId) {
+  let removed = 0;
+  for (const [key, submission] of Object.entries(store.data.submissions)) {
+    if (submission.userId !== userId && submission.accountId !== userId) continue;
+    delete store.data.submissions[key];
+    removed += 1;
+  }
+  return removed;
+}
+
+function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.now(), force = false } = {}) {
+  const user = store.data.users[userId];
+  if (!user) return { changed: false, submission: null, reason: "missing-user" };
+  if (user.leaderboardVisible === false) {
+    return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "hidden" };
+  }
+  const metadata = save ?? store.data.cloudSaves[userId];
+  if (!metadata) return { changed: false, submission: null, reason: "missing-save" };
+  const materialized = typeof metadata.payload === "string" ? metadata : materializeCloudSave(store, userId, "main", metadata);
+  if (!materialized) return { changed: false, submission: null, reason: "missing-payload" };
+  const observed = leaderboardMetricsFromSave(materialized);
+  if (!observed) return { changed: false, submission: null, reason: "invalid-save" };
+  const key = `${ACTIVE_LEADERBOARD_SEASON_ID}:${userId}`;
+  const previous = store.data.submissions[key];
+  if (!force
+    && previous?.verification?.strategy === "main-cloud-save-v1"
+    && previous.verification.cloudRevision === materialized.revision
+    && previous.displayName === user.displayName
+    && previous.visible !== false) {
+    return { changed: false, submission: previous, reason: "current" };
+  }
+  const previousServerMetrics = previous?.verification?.strategy === "main-cloud-save-v1" ? previous.metrics : null;
+  const metrics = mergeLeaderboardMetrics(previousServerMetrics, observed);
+  const submission = {
+    userId,
+    accountId: userId,
+    displayName: user.displayName,
+    avatar: user.displayName.trim().slice(0, 1).toUpperCase() || "A",
+    seasonId: ACTIVE_LEADERBOARD_SEASON_ID,
+    metrics,
+    submittedAt: Number.isFinite(materialized.updatedAt) ? materialized.updatedAt : now,
+    visible: true,
+    verification: {
+      strategy: "main-cloud-save-v1",
+      cloudRevision: materialized.revision,
+      checksum: materialized.checksum,
+      checkedAt: now,
+    },
+  };
+  store.data.submissions[key] = submission;
+  return { changed: true, submission, reason: previous ? "updated" : "created" };
+}
+
+function backfillLeaderboardFromMainSaves(store) {
+  const summary = { changed: 0, created: 0, updated: 0, hidden: 0, skipped: 0 };
+  for (const userId of Object.keys(store.data.users).sort()) {
+    const result = updateLeaderboardFromMainSave(store, userId);
+    if (result.changed) summary.changed += 1;
+    if (result.reason === "created") summary.created += 1;
+    else if (result.reason === "updated") summary.updated += 1;
+    else if (result.reason === "hidden") summary.hidden += 1;
+    else summary.skipped += 1;
+  }
+  return summary;
 }
 
 function normalizedCloudSaveSlot(value) {
@@ -1089,6 +1150,8 @@ export async function createCloudServer({
       if (error?.code !== "ENOENT") logger.error?.("legacy cloud data migration failed", error);
     }
   }
+  const leaderboardBackfill = backfillLeaderboardFromMainSaves(store);
+  if (leaderboardBackfill.changed > 0) await store.persist();
   const startedAt = Date.now();
   const galacticActivityConfig = activityConfig ? normalizeActivityConfig(activityConfig) : await loadActivityConfig(activityConfigFile);
   const rateLimit = createRateLimiter();
@@ -1317,6 +1380,7 @@ export async function createCloudServer({
           createdAt: now,
           emailVerifiedAt: null,
           passwordChangedAt: now,
+          leaderboardVisible: true,
           ...credentials,
         };
         store.data.users[user.id] = user;
@@ -1581,6 +1645,7 @@ export async function createCloudServer({
           summary: summarizeSavePayload(body.payload),
         };
         appendSaveRevision(store, auth.user.id, next, slot);
+        if (slot === "main") updateLeaderboardFromMainSave(store, auth.user.id, { save: next });
         dayMetric.cloudUploads += 1;
         await store.persist();
         return send(response, 200, { cloudSave: cloudSaveMetadata(next, slot) });
@@ -1610,17 +1675,37 @@ export async function createCloudServer({
           restoredFromRevision: sourceRevision,
         };
         appendSaveRevision(store, auth.user.id, restored, slot);
+        if (slot === "main") updateLeaderboardFromMainSave(store, auth.user.id, { save: restored });
         dayMetric.cloudUploads += 1;
         appendAudit(store, request, "cloud.revision_restored", auth.user.id);
         await store.persist();
         return send(response, 200, { cloudSave: cloudSaveMetadata(restored, slot) });
       }
 
+      if (request.method === "POST" && url.pathname === "/api/leaderboard/visibility") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        const body = await readJson(request);
+        if (typeof body.visible !== "boolean") return send(response, 400, { error: "排行榜可见性设置无效" });
+        auth.user.leaderboardVisible = body.visible;
+        const result = body.visible
+          ? updateLeaderboardFromMainSave(store, auth.user.id, { force: true })
+          : { changed: removeUserLeaderboardSubmissions(store, auth.user.id) > 0, submission: null, reason: "hidden" };
+        appendAudit(store, request, body.visible ? "leaderboard.visibility_enabled" : "leaderboard.visibility_disabled", auth.user.id);
+        await store.persist();
+        return send(response, 200, {
+          visible: body.visible,
+          user: publicUser(auth.user),
+          submission: result.submission,
+          autoJoined: Boolean(result.submission),
+        });
+      }
+
       if (request.method === "GET" && url.pathname === "/api/leaderboard") {
         const category = VALID_CATEGORIES.has(url.searchParams.get("category")) ? url.searchParams.get("category") : "galaxy";
-        const seasonId = VALID_SEASONS.has(url.searchParams.get("seasonId")) ? url.searchParams.get("seasonId") : "season_01";
+        const seasonId = VALID_SEASONS.has(url.searchParams.get("seasonId")) ? url.searchParams.get("seasonId") : ACTIVE_LEADERBOARD_SEASON_ID;
         const entries = Object.values(store.data.submissions)
-          .filter((entry) => entry.seasonId === seasonId)
+          .filter((entry) => entry.seasonId === seasonId && entry.visible !== false && store.data.users[entry.userId]?.leaderboardVisible !== false)
           .map((entry) => ({ ...entry, value: categoryValue(entry.metrics, category), verified: Boolean(entry.verification?.cloudRevision) }))
           .sort((left, right) => right.value - left.value || left.userId.localeCompare(right.userId))
           .slice(0, 100)
@@ -1631,34 +1716,17 @@ export async function createCloudServer({
       if (request.method === "POST" && url.pathname === "/api/leaderboard") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
-        if (!requireLeaderboardVerifiedUser(response, auth)) return;
         const body = await readJson(request);
-        const seasonId = VALID_SEASONS.has(body.seasonId) ? body.seasonId : "season_01";
-        if (seasonId !== "season_01") return send(response, 409, { error: "历史赛季已封存" });
-        const metrics = normalizeMetrics(body.metrics);
-        if (!METRIC_KEYS.some((key) => metrics[key] > 0)) return send(response, 400, { error: "没有可上传的工业数据" });
-        const key = `${seasonId}:${auth.user.id}`;
-        const previous = store.data.submissions[key];
-        const cloudSaveMetadataRecord = store.data.cloudSaves[auth.user.id];
-        if (!cloudSaveMetadataRecord) return send(response, 409, { error: "请先上传当前云存档，再提交排行榜成绩" });
-        const cloudSave = materializeCloudSave(store, auth.user.id, "main", cloudSaveMetadataRecord);
-        if (!cloudSave) return send(response, 500, { error: "云存档正文缺失，暂时无法校验排行榜成绩", code: "CLOUD_SAVE_PAYLOAD_MISSING" });
-        const verification = verifyLeaderboardMetrics(metrics, cloudSave, previous);
-        if (!verification.ok) return send(response, 422, { error: verification.error });
-        const merged = previous ? normalizeMetrics(Object.fromEntries(METRIC_KEYS.map((metric) => [metric, Math.max(previous.metrics[metric] ?? 0, metrics[metric] ?? 0)]))) : metrics;
-        store.data.submissions[key] = {
-          userId: auth.user.id,
-          accountId: auth.user.id,
-          displayName: auth.user.displayName,
-          avatar: auth.user.displayName.slice(0, 1).toUpperCase(),
-          seasonId,
-          metrics: merged,
-          submittedAt: Date.now(),
-          verification: { cloudRevision: cloudSave.revision, checksum: cloudSave.checksum, checkedAt: Date.now() },
-        };
+        const seasonId = VALID_SEASONS.has(body.seasonId) ? body.seasonId : ACTIVE_LEADERBOARD_SEASON_ID;
+        if (seasonId !== ACTIVE_LEADERBOARD_SEASON_ID) return send(response, 409, { error: "历史赛季已封存" });
+        if (auth.user.leaderboardVisible === false) return send(response, 409, { error: "当前账号已退出公开排行榜" });
+        const result = updateLeaderboardFromMainSave(store, auth.user.id, { force: true });
+        if (result.reason === "missing-save") return send(response, 409, { error: "请先上传当前主云存档，再刷新排行榜" });
+        if (result.reason === "missing-payload") return send(response, 500, { error: "云存档正文缺失，暂时无法刷新排行榜", code: "CLOUD_SAVE_PAYLOAD_MISSING" });
+        if (result.reason === "invalid-save" || !result.submission) return send(response, 422, { error: "主云存档无法用于排行榜计算" });
         dayMetric.leaderboardSubmissions += 1;
         await store.persist();
-        return send(response, 200, { submission: store.data.submissions[key], verified: true });
+        return send(response, 200, { submission: result.submission, verified: true, source: "main-cloud-save" });
       }
 
       if (request.method === "POST" && (url.pathname === "/api/feedback" || url.pathname === "/api/errors")) {
@@ -1691,6 +1759,7 @@ export async function createCloudServer({
   });
 
   server.store = store;
+  server.leaderboardBackfill = leaderboardBackfill;
   server.on("close", () => {
     clearInterval(flushMetrics);
     if (backupTimer) clearInterval(backupTimer);

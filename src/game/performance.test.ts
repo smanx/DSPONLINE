@@ -9,6 +9,7 @@ function createStressFactory() {
     kind: "storage",
     planetId: "home",
     position: { x: index % 25 * 280, y: Math.floor(index / 25) * 220 },
+    interactionLocked: false,
     buildingId: "storage_mk1",
     machineCount: 1,
     minerCount: 0,

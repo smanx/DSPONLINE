@@ -17,6 +17,7 @@ export interface CloudUser {
   emailVerified: boolean;
   emailVerifiedAt: number | null;
   passwordChangedAt: number;
+  leaderboardVisible: boolean;
 }
 
 export interface CloudAccountSession {
@@ -326,7 +327,7 @@ async function cloudRequest<T>(path: string, options: RequestInit = {}, authenti
 
 export async function resumeCloudSession(): Promise<CloudSession> {
   try {
-    const health = await cloudRequest<{ ok: boolean; mailProvider?: string }>("/health");
+    const health = await cloudRequest<{ ok: boolean; mailProvider?: string }>("/health", {}, false, true);
     const mailAvailable = Boolean(health.mailProvider && health.mailProvider !== "disabled");
     const token = getCloudToken();
     if (!token) return { status: "anonymous", user: null, cloudSave: null, mailAvailable, message: null };
@@ -452,7 +453,7 @@ export async function restoreCloudSaveRevision(revision: number, expectedRevisio
 }
 
 export async function fetchCloudLeaderboard(category: LeaderboardCategoryId, seasonId: string): Promise<CloudLeaderboardEntry[]> {
-  const result = await cloudRequest<{ entries: CloudLeaderboardEntry[] }>(`/leaderboard?category=${encodeURIComponent(category)}&seasonId=${encodeURIComponent(seasonId)}`);
+  const result = await cloudRequest<{ entries: CloudLeaderboardEntry[] }>(`/leaderboard?category=${encodeURIComponent(category)}&seasonId=${encodeURIComponent(seasonId)}`, {}, false, true);
   return result.entries;
 }
 
@@ -461,8 +462,16 @@ export async function fetchCloudPublicStatus(): Promise<CloudPublicStatus> {
   return cloudRequest<CloudPublicStatus>("/public-status", {}, false, true);
 }
 
-export async function submitCloudLeaderboard(metrics: LeaderboardMetrics, seasonId: string): Promise<void> {
-  await cloudRequest("/leaderboard", { method: "POST", body: JSON.stringify({ metrics, seasonId }) }, true);
+export async function submitCloudLeaderboard(seasonId: string): Promise<void> {
+  await cloudRequest("/leaderboard", { method: "POST", body: JSON.stringify({ seasonId }) }, true);
+}
+
+export async function setCloudLeaderboardVisibility(visible: boolean): Promise<CloudUser> {
+  const result = await cloudRequest<{ user: CloudUser }>("/leaderboard/visibility", {
+    method: "POST",
+    body: JSON.stringify({ visible }),
+  }, true);
+  return result.user;
 }
 
 export async function sendCloudFeedback(kind: string, message: string, diagnostics: Record<string, unknown>): Promise<string> {

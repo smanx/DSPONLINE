@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v1.0.0");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-25-v1.0.2");
   });
 });
 
@@ -76,10 +76,11 @@ test("desktop construction closes the micro-black-hole and time-warp interaction
   const exactPower = inspector.locator(".power-value").first();
   await expect(exactPower).toHaveAttribute("aria-label", / kW$/);
   await exactPower.click();
-  await expect(exactPower.getByRole("tooltip")).toBeVisible();
+  const exactPowerTooltip = page.getByRole("tooltip").filter({ hasText: "kW" });
+  await expect(exactPowerTooltip).toBeVisible();
   await inspector.getByRole("button", { name: "倍率加一" }).click();
   await expect(inspector.getByLabel("时间扭曲请求倍率").locator("input")).toHaveValue("6");
-  await expect(exactPower.getByRole("tooltip")).toBeHidden();
+  await expect(exactPowerTooltip).toBeHidden();
   await expect(inspector).toContainText("离线收益与活动倒计时始终使用真实时间");
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.locator(".react-flow__pane").hover({ position: { x: 24, y: 24 } });

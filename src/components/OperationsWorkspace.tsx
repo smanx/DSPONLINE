@@ -16,6 +16,7 @@ import {
   GraduationCap,
   HardDrive,
   History,
+  Languages,
   MapPin,
   PackagePlus,
   Power,
@@ -59,6 +60,7 @@ import { resetOnboarding } from "../game/onboarding";
 import { applyPwaUpdate, getPwaRuntimeState, requestPwaInstall, subscribePwaRuntime, type PwaRuntimeState } from "../pwa";
 import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
 import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
+import { useAppLocale } from "../i18n/locale";
 
 export type OperationsTab = "alerts" | "achievements" | "settings" | "saves" | "packs" | "support";
 
@@ -244,6 +246,7 @@ function BufferLimitSetting({ label, value, onChange, presets = BUFFER_LIMIT_PRE
 
 function SettingsPanel({ game, report, productionRefreshPreference, productionRefreshIntervalMs, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onOpenReleaseNotes }: { game: GameState; report: AutomaticPerformanceReport | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onOpenReleaseNotes: () => void }) {
   const { settings } = game;
+  const { locale, setLocale } = useAppLocale();
   return (
     <div className="operations-panel operations-settings">
       <header className="operations-section-header">
@@ -271,6 +274,14 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         <div className="settings-segmented" aria-label="界面主题">
           {(["dark", "light", "system"] as const).map((theme) => <button className={settings.theme === theme ? "active" : ""} type="button" key={theme} onClick={() => onChange({ theme })}>{{ dark: "深色", light: "亮色", system: "跟随系统" }[theme]}</button>)}
         </div>
+      </section>
+      <section className="settings-group">
+        <header><Languages size={14} /><span>语言</span><small>{locale === "en" ? "English" : "简体中文"}</small></header>
+        <div className="settings-segmented" aria-label="语言">
+          <button className={locale === "zh-CN" ? "active" : ""} type="button" aria-pressed={locale === "zh-CN"} onClick={() => setLocale("zh-CN")}>简体中文</button>
+          <button className={locale === "en" ? "active" : ""} type="button" aria-pressed={locale === "en"} onClick={() => setLocale("en")}>English</button>
+        </div>
+        <p className="settings-help">语言仅保存在当前设备，不会写入游戏存档或云存档。</p>
       </section>
       <section className="settings-group">
         <header><Settings2 size={14} /><span>科技树布局</span><small>{settings.technologyLayout === "compact" ? "精简" : "标准"}</small></header>

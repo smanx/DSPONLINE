@@ -67,7 +67,7 @@ async function request(route, options = {}) {
   return { response, body: await response.json() };
 }
 
-test("registers by username, preserves the leaderboard email gate and verifies a bound email", async () => {
+test("registers by username, requires a main cloud save for ranking and verifies a bound email", async () => {
   const health = await request("/api/health");
   assert.equal(health.body.mailProvider, "custom");
   assert.equal(health.body.schemaVersion, 7);
@@ -78,15 +78,22 @@ test("registers by username, preserves the leaderboard email gate and verifies a
   assert.equal(registered.body.user.username, "pilot_one");
   assert.equal(registered.body.user.email, "");
   assert.equal(registered.body.user.emailVerified, false);
+  assert.equal(registered.body.user.leaderboardVisible, true);
   token = registered.body.token;
+
+  const anonymousLeaderboard = await request("/api/leaderboard", {
+    method: "POST",
+    body: JSON.stringify({ seasonId: "season_01", metrics: { energyGeneratedMj: 1 } }),
+  });
+  assert.equal(anonymousLeaderboard.response.status, 401);
 
   const blockedLeaderboard = await request("/api/leaderboard", {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
     body: JSON.stringify({ seasonId: "season_01", metrics: { energyGeneratedMj: 1 } }),
   });
-  assert.equal(blockedLeaderboard.response.status, 403);
-  assert.equal(blockedLeaderboard.body.code, "EMAIL_VERIFICATION_REQUIRED");
+  assert.equal(blockedLeaderboard.response.status, 409);
+  assert.match(blockedLeaderboard.body.error, /主云存档/);
 
   const duplicate = await request("/api/auth/register", { method: "POST", body: JSON.stringify({ username: "PILOT_ONE", password: "strong-pass-123", displayName: "另一位工程师" }) });
   assert.equal(duplicate.response.status, 409);
@@ -106,7 +113,7 @@ test("registers by username, preserves the leaderboard email gate and verifies a
   assert.equal(reused.response.status, 400);
 });
 
-test("opens all cloud save functions without mail while keeping leaderboard verification required", async () => {
+test("opens cloud saves and verified leaderboard submissions without a mail provider", async () => {
   const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-no-mail-"));
   let isolatedServer;
   try {
@@ -153,6 +160,10 @@ test("opens all cloud save functions without mail while keeping leaderboard veri
       assert.equal(saved.body.cloudSave.revision, 1);
       assert.equal(saved.body.cloudSave.slot, slot);
     }
+    const autoRanked = await isolatedRequest("/api/leaderboard?category=galaxy&seasonId=season_01");
+    assert.equal(autoRanked.body.entries.length, 1);
+    assert.equal(autoRanked.body.entries[0].metrics.uploadedWhiteMatrix, 10);
+    assert.equal(autoRanked.body.entries[0].verified, true);
     const second = await isolatedRequest("/api/cloud-save", {
       method: "PUT",
       headers,
@@ -174,13 +185,15 @@ test("opens all cloud save functions without mail while keeping leaderboard veri
     assert.equal(account.body.cloudSaves["2"].revision, 1);
     assert.equal(account.body.cloudSaves["3"].revision, 1);
 
-    const blockedLeaderboard = await isolatedRequest("/api/leaderboard", {
+    const submittedLeaderboard = await isolatedRequest("/api/leaderboard", {
       method: "POST",
       headers,
       body: JSON.stringify({ seasonId: "season_01", metrics: { energyGeneratedMj: 1 } }),
     });
-    assert.equal(blockedLeaderboard.response.status, 403);
-    assert.equal(blockedLeaderboard.body.code, "EMAIL_VERIFICATION_REQUIRED");
+    assert.equal(submittedLeaderboard.response.status, 200);
+    assert.equal(submittedLeaderboard.body.verified, true);
+    assert.equal(submittedLeaderboard.body.submission.verification.cloudRevision, 3);
+    assert.equal(submittedLeaderboard.body.submission.metrics.uploadedWhiteMatrix, 12);
 
     const loggedIn = await isolatedRequest("/api/auth/login", {
       method: "POST",
@@ -188,6 +201,44 @@ test("opens all cloud save functions without mail while keeping leaderboard veri
     });
     assert.equal(loggedIn.response.status, 200);
     assert.equal(loggedIn.body.user.username, "no_mail_pilot");
+  } finally {
+    if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
+    await rm(isolatedDirectory, { recursive: true, force: true });
+  }
+});
+
+test("backfills existing main cloud saves when the service starts", async () => {
+  const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-leaderboard-backfill-"));
+  const databaseFile = path.join(isolatedDirectory, "cloud.sqlite");
+  let isolatedServer;
+  try {
+    isolatedServer = await createCloudServer({ databaseFile, registrationLimit: 10, mailer: null, logger: { error() {} } });
+    await new Promise((resolve) => isolatedServer.listen(0, "127.0.0.1", resolve));
+    let isolatedBaseUrl = `http://127.0.0.1:${isolatedServer.address().port}`;
+    const registeredResponse = await fetch(`${isolatedBaseUrl}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "backfill_pilot", password: "strong-pass-123", displayName: "回填工程师" }),
+    });
+    const registered = await registeredResponse.json();
+    const savedResponse = await fetch(`${isolatedBaseUrl}/api/cloud-save`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", authorization: `Bearer ${registered.token}` },
+      body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }),
+    });
+    assert.equal(savedResponse.status, 200);
+    delete isolatedServer.store.data.submissions[`season_01:${registered.user.id}`];
+    await isolatedServer.store.persist();
+    await new Promise((resolve) => isolatedServer.close(resolve));
+
+    isolatedServer = await createCloudServer({ databaseFile, registrationLimit: 10, mailer: null, logger: { error() {} } });
+    assert.equal(isolatedServer.leaderboardBackfill.created, 1);
+    await new Promise((resolve) => isolatedServer.listen(0, "127.0.0.1", resolve));
+    isolatedBaseUrl = `http://127.0.0.1:${isolatedServer.address().port}`;
+    const rankingResponse = await fetch(`${isolatedBaseUrl}/api/leaderboard?category=galaxy&seasonId=season_01`);
+    const ranking = await rankingResponse.json();
+    assert.equal(ranking.entries.length, 1);
+    assert.equal(ranking.entries[0].displayName, "回填工程师");
   } finally {
     if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
     await rm(isolatedDirectory, { recursive: true, force: true });
@@ -695,23 +746,64 @@ test("validates v34 time warp, Dyson allocation floors and black-hole ports", as
   }
   const accepted = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: payloadFor(), expectedRevision: 2 }) });
   assert.equal(accepted.response.status, 200);
+
+  const v35Payload = payloadFor((state) => {
+    state.version = 35;
+    state.planetTrayItemLimits = { home: 100_000_000, extension_planet: 1_000 };
+    for (const entity of state.entities) entity.interactionLocked = false;
+    state.entities[2].interactionLocked = true;
+  });
+  const acceptedV35 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v35Payload, expectedRevision: 3 }) });
+  assert.equal(acceptedV35.response.status, 200);
+  for (const invalid of [
+    payloadFor((state) => { state.version = 35; state.entities.forEach((entity) => { entity.interactionLocked = false; }); state.entities[0].interactionLocked = "false"; }),
+    payloadFor((state) => { state.planetTrayItemLimits = { home: 100_000_001 }; }),
+    payloadFor((state) => { state.planetTrayItemLimits = { home: 1_000.5 }; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 4 }) });
+    assert.equal(rejected.response.status, 400);
+  }
 });
 
 test("recalculates leaderboard score on the server", async () => {
-  const rejected = await request("/api/leaderboard", {
+  const refreshed = await request("/api/leaderboard", {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
     body: JSON.stringify({ seasonId: "season_01", metrics: { energyGeneratedMj: 1_000_000, uploadedWhiteMatrix: 1_000_000 } }),
   });
-  assert.equal(rejected.response.status, 422);
-  const submitted = await request("/api/leaderboard", {
+  assert.equal(refreshed.response.status, 200);
+  assert.equal(refreshed.body.submission.metrics.uploadedWhiteMatrix, 12);
+  assert.equal(refreshed.body.submission.metrics.galaxyScore, 12_145);
+
+  const hidden = await request("/api/leaderboard/visibility", {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
-    body: JSON.stringify({ seasonId: "season_01", metrics: { energyGeneratedMj: 1_000_000, uploadedWhiteMatrix: 10, galaxyScore: 999_999_999 } }),
+    body: JSON.stringify({ visible: false }),
   });
-  assert.equal(submitted.response.status, 200);
-  assert.equal(submitted.body.submission.metrics.galaxyScore, 121);
-  const ranking = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
+  assert.equal(hidden.response.status, 200);
+  assert.equal(hidden.body.user.leaderboardVisible, false);
+  let ranking = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
+  assert.equal(ranking.body.entries.some((entry) => entry.userId === hidden.body.user.id), false);
+
+  const fourthPayload = cloudPayload.replace('"universe_matrix":10', '"universe_matrix":20');
+  const uploadedWhileHidden = await request("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ payload: fourthPayload, expectedRevision: 3 }),
+  });
+  assert.equal(uploadedWhileHidden.response.status, 200);
+  ranking = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
+  assert.equal(ranking.body.entries.some((entry) => entry.userId === hidden.body.user.id), false);
+
+  const visible = await request("/api/leaderboard/visibility", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ visible: true }),
+  });
+  assert.equal(visible.response.status, 200);
+  assert.equal(visible.body.autoJoined, true);
+  assert.equal(visible.body.submission.metrics.uploadedWhiteMatrix, 20);
+  ranking = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
   assert.equal(ranking.body.entries[0].verified, true);
 });
 

@@ -5,7 +5,7 @@ const REFRESH_PREFERENCE_KEY = "dsp-idle-network.production-refresh.v1";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v1.0.0");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-25-v1.0.2");
   });
 });
 
@@ -320,10 +320,16 @@ test("large quantities expose exact values on desktop and mobile without trigger
   const desktopValue = page.locator(".tray-row").filter({ hasText: "铁矿石" }).locator(".quantity-value");
   await expect(desktopValue.locator(":scope > span").first()).toHaveText("12.3亿");
   await expect(desktopValue).toHaveAttribute("aria-label", "1,234,567,890");
-  await desktopValue.click();
-  await expect(desktopValue.locator(".quantity-value__tooltip")).toBeVisible();
+  await desktopValue.hover();
+  await expect(page.getByRole("tooltip").filter({ hasText: "1,234,567,890" })).toBeVisible();
   await expect(page.locator(".cargo-slot")).toContainText("空载");
 
+  await page.addInitScript(() => {
+    const nativeMatchMedia = window.matchMedia.bind(window);
+    window.matchMedia = (query: string) => query === "(pointer: coarse)"
+      ? { matches: true, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => true } as MediaQueryList
+      : nativeMatchMedia(query);
+  });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/?mobileUi=next");
   await dismissOnboarding(page);
@@ -331,7 +337,7 @@ test("large quantities expose exact values on desktop and mobile without trigger
   const mobileValue = page.locator(".mobile-inventory-list > button").filter({ hasText: "铁矿石" }).locator(".quantity-value");
   await expect(mobileValue.locator(":scope > span").first()).toHaveText("12.3亿");
   await mobileValue.click();
-  await expect(mobileValue.locator(".quantity-value__tooltip")).toBeVisible();
+  await expect(page.getByRole("tooltip").filter({ hasText: "1,234,567,890" })).toBeVisible();
   await expect(page.locator(".mobile-cargo-slot")).toContainText("当前空载");
 });
 
@@ -391,15 +397,24 @@ test("extreme refresh keeps true inventory snapshots while the production bar in
   await dismissOnboarding(page);
   await expect(page.locator(".game-shell")).toHaveAttribute("data-production-refresh-ms", "3000");
   const node = page.locator('.react-flow__node[data-id="refresh_smelter"]');
-  const progress = node.locator(".work-cycle--interpolated > i");
-  await expect(progress).toHaveCSS("animation-name", "work-cycle-progress");
+  const cycle = node.locator(".work-cycle--interpolated");
+  const progress = cycle.locator(":scope > i");
+  await expect(progress).toHaveCSS("animation-name", "none");
   const inputValue = node.locator(".node-io__column").filter({ hasText: "输入" }).locator(".item-badge strong");
   const beforeInventory = await inputValue.textContent();
-  const beforeWidth = await progress.evaluate((element) => element.getBoundingClientRect().width);
+  const readProgress = () => cycle.evaluate((element) => {
+    const aria = Number(element.getAttribute("aria-valuenow"));
+    const text = Number(element.querySelector("strong")?.textContent?.match(/\d+/)?.[0] ?? Number.NaN);
+    const transform = (element.querySelector("i") as HTMLElement | null)?.style.transform ?? "scaleX(0)";
+    return { aria, text, fill: Number(transform.match(/scaleX\(([^)]+)\)/)?.[1] ?? 0) * 100 };
+  });
+  const beforeProgress = await readProgress();
   await page.waitForTimeout(350);
-  const afterWidth = await progress.evaluate((element) => element.getBoundingClientRect().width);
+  const afterProgress = await readProgress();
   await expect(inputValue).toHaveText(beforeInventory ?? "");
-  expect(Math.abs(afterWidth - beforeWidth)).toBeGreaterThan(2);
+  expect(afterProgress.text).toBe(afterProgress.aria);
+  expect(Math.abs(afterProgress.fill - afterProgress.aria)).toBeLessThanOrEqual(1.1);
+  expect(afterProgress.aria).not.toBe(beforeProgress.aria);
   await node.locator(".factory-node__header").click();
   await expect(node).toHaveClass(/selected/);
   await expect.poll(async () => inputValue.textContent(), { timeout: 2_500 }).not.toBe(beforeInventory);

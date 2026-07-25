@@ -266,7 +266,7 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, mob
             <ItemMark itemId={selectedItemId} />
             <div><span>{item.kind === "matrix" ? "科研矩阵" : item.kind === "fluid" ? "流体物品" : sources.length > 0 ? "天然资源" : "工业物品"}</span><strong>{item.name}</strong><p>{item.description}</p></div>
             <div className="recipe-item-actions">
-              <button type="button" className={game.recipeFocus.itemId === selectedItemId ? "active" : ""} onClick={() => onFocus(game.recipeFocus.itemId === selectedItemId ? null : selectedItemId)} title={game.recipeFocus.itemId === selectedItemId ? "取消主界面聚焦" : "固定生产链到主界面"}><Pin size={14} />{game.recipeFocus.itemId === selectedItemId ? "已固定" : "固定到主界面"}</button>
+              <button type="button" className={game.recipeFocus.itemId === selectedItemId ? "active" : ""} onClick={() => onFocus(game.recipeFocus.itemId === selectedItemId ? null : selectedItemId)} title={game.recipeFocus.itemId === selectedItemId ? "取消主界面聚焦" : "固定生产链到主界面"}><Pin size={14} /><span>{game.recipeFocus.itemId === selectedItemId ? "已固定" : "固定到主界面"}</span></button>
             </div>
             <dl>
               <div><dt>网络库存</dt><dd><QuantityValue value={stock} /></dd></div>
