@@ -30,7 +30,7 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-当前香港与上海 Web/API 均为 `1.0.2-df7bee45e60a`，使用 GameState v35、云 schema v7 和 SQLite layout v2。两地 Web/API 回滚目标均为 `1.0.1-f4e2a5501435-dirty`；代码回滚不得恢复数据库。上海下载站当前为 `1.0.2-df7bee45e60a`，回滚目标为 `1.0.1-f4e2a5501435-dirty`。完整 Web/API 哈希、生产备份和验收记录见 [releases/1.0.2.md](./releases/1.0.2.md)。
+当前香港与上海 Web/API 均为 `1.0.3-6d59252f4f15`，使用 GameState v36、云 schema v7 和 SQLite layout v2。两地 Web/API 回滚目标均为 `1.0.2-df7bee45e60a`；代码回滚不得恢复数据库。上海下载站当前为 `1.0.2-df7bee45e60a`，回滚目标为 `1.0.1-f4e2a5501435-dirty`。完整 Web/API 哈希、生产备份和验收记录见 [releases/1.0.3.md](./releases/1.0.3.md)。
 
 该版本会在服务启动时按已有主存档幂等回填排行榜。首次香港回填处理 88 份主存档，重复启动备份副本时变更为 0；上海没有主云存档，因此保持空榜。后续主槽上传、自动同步或历史恢复都会自动更新排名，手动槽不会触发。任何后续排行榜规则变更仍应在切换前使用 SQLite Backup API 创建并验证备份，并在切换后核对账号、主云存档和修订数量不减少。
 
@@ -238,7 +238,7 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港与上海 `1.0.2-df7bee45e60a` 均为 JS/CSS 启用 gzip，并验证 `Content-Encoding: gzip`；hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港与上海 `1.0.3-6d59252f4f15` 均为 JS/CSS 启用 gzip，并验证 `Content-Encoding: gzip`；hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 香港 layout v1 的 136.8 MB `app_state` 曾使每分钟持久化把 Node 推到约 1.6 GB并阻塞健康接口。layout v2 上线后 `app_state` 约 2.55 MB，云存档正文按修订独立写入；240 秒生产观察中健康接口最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB。监控若再次出现内存或延迟上升，应分别检查 `app_state` 大小、`cloud_save_payloads` 行数与历史元数据唯一键数，不能只调大健康超时。
 
