@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-25-v1.0.2");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-26-v1.0.3");
     }
   });
 }
@@ -139,18 +139,18 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "完整英文版与亮色模式补全" });
+  const releaseNotes = page.getByRole("dialog", { name: "递归制造与生产定位" });
   await expect(releaseNotes).toBeVisible();
   await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(6);
-  await expect(releaseNotes).toContainText("中英文即时切换");
-  await expect(releaseNotes).toContainText("亮色模式全面补齐");
-  await expect(releaseNotes).toContainText("原生应用同步更新");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-25-v102-1440.png", fullPage: true });
+  await expect(releaseNotes).toContainText("递归制造完整打通");
+  await expect(releaseNotes).toContainText("物品图鉴定位产线");
+  await expect(releaseNotes).toContainText("喷涂拆卸与侧栏修复");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-26-v103-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-25-v102-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-26-v103-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -165,7 +165,7 @@ test("dated release notes appear once and remain available from both settings sc
   });
   await expect.poll(controlsFitViewport).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-25-v102-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-26-v103-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -174,12 +174,12 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-25-v1.0.2");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-26-v1.0.3");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
   await page.getByRole("button", { name: "游戏设置" }).click();
-  await page.getByRole("button", { name: "查看2026年7月25日版本更新记录" }).click();
+  await page.getByRole("button", { name: "查看2026年7月26日版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
   await releaseNotes.getByLabel("关闭版本更新记录").click();
 
@@ -191,7 +191,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-25-v102-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-26-v103-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -2809,7 +2809,7 @@ test("basic fabrication handcrafts unlocked material recipes in a compact grid",
   await expect(page.locator(".tray-row").filter({ hasText: "铁块" })).toContainText("21");
   await page.getByLabel("搜索手工配方").fill("磁线圈");
 
-  const coilRow = page.locator(".handcraft-row").filter({ hasText: "磁线圈" });
+  const coilRow = page.locator('[data-output-item="magnetic_coil"]');
   await expect(coilRow).toHaveCount(1);
   await page.getByLabel("手工制造批次数量").fill("5");
   await page.getByLabel("手工制造批次数量").press("Enter");
@@ -4618,7 +4618,7 @@ test("construction cards craft in place and Ctrl-click chains building placement
   await expect(craftButton).toBeEnabled();
   await expect(craftButton).toHaveClass(/construction-item-craft--disabled/);
   await expect(craftButton).toHaveAttribute("data-craft-state", "blocked");
-  await expect(craftButton).toHaveAttribute("title", /铁块 0\/10（缺 10）/);
+  await expect(craftButton).toHaveAttribute("title", /铁矿石 0\/10（缺 10）/);
   await page.screenshot({ path: "artifacts/qa/construction-shortcuts-1440.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: "artifacts/qa/construction-shortcuts-390.png", fullPage: true });

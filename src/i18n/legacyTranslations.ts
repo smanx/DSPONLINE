@@ -40,6 +40,20 @@ const UI_EN: TranslationMap = {
   "建筑": "Buildings",
   "数据": "Data",
   "生产方式": "Production Method",
+  "物品产线定位": "Production Line Locator",
+  "定位产线": "Locate Production Line",
+  "定位产线 ·": "Locate Production Line ·",
+  "上一个生产节点": "Previous Production Node",
+  "下一个生产节点": "Next Production Node",
+  "显示全部生产节点": "Show All Production Nodes",
+  "清除产线高亮": "Clear Production Highlight",
+  "当前行星没有生产该物品的设备": "No facility on the current planet produces this item",
+  "个生产节点 ·": "production nodes ·",
+  "条上游线路": "upstream belts",
+  "条产线": "production lines",
+  "其他行星": "Other Planets",
+  "其他行星生产位置": "Production Locations on Other Planets",
+  "当前存档尚未部署该物品的生产设备。": "This save has no deployed facility producing this item.",
   "作为原料": "Used As Material",
   "上游材料": "Upstream Materials",
   "当前物品": "Current Item",
@@ -91,6 +105,11 @@ const UI_EN: TranslationMap = {
   "戴森工程": "Dyson Engineering",
   "科研与机制": "Research & Systems",
   "全部": "All",
+  "删除一半": "Delete Half",
+  "全部删除": "Delete All",
+  "物资托盘管理": "Material Tray Management",
+  "再次确认删除": "Confirm Deletion Again",
+  "不可撤销操作": "Irreversible Action",
   "天然资源": "Natural Resources",
   "固体": "Solid",
   "流体": "Fluid",
@@ -136,6 +155,16 @@ const UI_EN: TranslationMap = {
   "English": "English",
   "字体大小": "Text Size",
   "模拟速度": "Simulation Speed",
+  "请求倍率": "Requested Multiplier",
+  "实际倍率": "Effective Multiplier",
+  "请求所需功率": "Power Required for Request",
+  "当前档位需电": "Current Tier Power Demand",
+  "获得功率": "Allocated Power",
+  "自动降档原因": "Automatic Downgrade Reason",
+  "待处理模拟": "Pending Simulation",
+  "装置未启动": "Device is not active",
+  "无，当前供电满足请求倍率": "None; available power satisfies the requested multiplier",
+  "请求倍率超出数值安全范围": "Requested multiplier exceeds the numeric safety range",
   "科技树布局": "Technology Tree Layout",
   "标准模式": "Standard",
   "精简模式": "Compact",
@@ -228,6 +257,9 @@ const UI_EN: TranslationMap = {
   "可制造": "Craftable",
   "立即制造": "Craft now",
   "制造": "Craft",
+  "拆卸喷涂": "Remove Spray Module",
+  "拆卸喷涂模块": "Remove Spray Module",
+  "拆卸后返还喷涂模块和未消耗的增产剂": "Returns the spray module and all unused proliferator after removal",
   "批量制造": "Batch Craft",
   "快速增加建筑": "Quick Add Building",
   "回收": "Recycle",
@@ -302,12 +334,15 @@ const UI_EN: TranslationMap = {
   "有限资源": "Finite resources",
   "无限资源": "Infinite resources",
   "资源已枯竭": "Resource depleted",
+  "矿脉已枯竭": "Resource Vein Depleted",
+  "前往设置 → 资源模式切换无限矿": "Open Settings → Resource Mode to enable infinite resources",
   "资源剩余": "Resource remaining",
   "无限": "Infinite",
   "行星物流站": "Planetary Logistics Station",
   "星际物流站": "Interstellar Logistics Station",
   "运输机": "Logistics Drone",
   "运输船": "Logistics Vessel",
+  "舰队容量瓶颈": "Fleet Capacity Bottleneck",
   "翘曲器": "Space Warper",
   "发送": "Send",
   "接收": "Receive",
@@ -1033,6 +1068,21 @@ const UI_EN: TranslationMap = {
   "经典手机界面和新版手机壳都可切换语言与主题，建造、物资、科研、更多工作区及横竖屏继续保留完整入口和安全区。": "Both classic and next-generation mobile interfaces support language and theme switching, while Build, Materials, Research, More, portrait, landscape, and safe-area access remain complete.",
   "原生应用同步更新": "Native Apps Updated",
   "Windows 与 Android 应用同步升级至 1.0.2，继续使用现有更新通道、应用数据目录和 Android 发布签名，覆盖安装不会清除本地存档。": "Windows and Android apps are updated to 1.0.2 while retaining the existing update channels, app data locations, and Android release signing identity. Installing over an existing version does not clear local saves.",
+  "2026年7月26日": "July 26, 2026",
+  "递归制造与生产定位": "Recursive Manufacturing & Production Location",
+  "1.0.3 打通物流运输船与建筑制造中心的多级递归制造，增加物品产线定位，并修复高运输量诊断、枯竭矿脉、喷涂拆卸及手机输入和弹窗适配问题。GameState 升级至 v36，旧存档会无损迁移。": "Version 1.0.3 completes multi-stage recursive manufacturing for logistics vessels and Construction Centers, adds item production-line location, and fixes high-volume logistics diagnostics, depleted veins, spray-module removal, mobile input, and modal layout. GameState advances to v36 with lossless migration for existing saves.",
+  "递归制造完整打通": "Complete Recursive Manufacturing",
+  "物流运输船现在支持一键递归制造；建筑制造中心会先规划完整材料链，优先尝试已解锁的高级精简配方，无法完成时再回退基础配方。铁矿石可继续加工为铁块和钢材，不再误报缺少中间材料。": "Logistics vessels now support one-click recursive manufacturing. Construction Centers plan the complete material chain first, prefer unlocked advanced recipes, and fall back to base recipes only when necessary. Iron ore can continue through iron ingots and steel without false intermediate-material errors.",
+  "物品图鉴定位产线": "Locate Production Lines from the Item Codex",
+  "物品详情可定位当前行星的全部生产设备并高亮完整上游网络；多个目标可逐个切换，其他行星的结果可直接跳转，定位高亮可随时清除。": "Item details can locate every producer on the current planet and highlight the complete upstream network. Multiple targets can be cycled individually, results on other planets can be opened directly, and the highlight can be cleared at any time.",
+  "物流与时间倍率诊断": "Logistics & Time Multiplier Diagnostics",
+  "轨道采集器不再被误判为航线断电；运输船全部执行任务时明确显示舰队容量瓶颈。时间扭曲界面新增请求倍率、实际倍率、供电需求、获得功率和自动降档原因。": "Orbital Collectors are no longer misreported as unpowered route endpoints. When every vessel is active, the station now reports a fleet-capacity bottleneck. Time Warp now shows requested and effective multipliers, required and allocated power, and the reason for automatic downgrading.",
+  "手机输入与弹窗适配": "Mobile Input & Modal Layout",
+  "修复鸿蒙 App 搜索文字被状态刷新清空的问题，并兼容中文输入法组合过程。储物仓与储液罐端口在 80% 至 200% 字号下保持可连接，托盘删除操作在手机横竖屏始终固定可见。": "Fixes search text being cleared by state refreshes in the HarmonyOS app and preserves Chinese IME composition. Storage and tank ports remain connectable from 80% to 200% text size, and tray deletion actions stay fixed and visible in mobile portrait and landscape.",
+  "枯竭资源提醒与恢复": "Depleted Resource Alerts & Recovery",
+  "有限矿脉枯竭后会显示醒目的节点提示和设置快捷入口；切换有限或无限资源前需要主动确认，矿机、线路和已有缓存均会保留。枯竭状态在保存重载后不再错误恢复储量。": "Depleted finite veins now show a prominent node alert and a shortcut to resource settings. Switching between finite and infinite resources requires confirmation and preserves miners, belts, and existing buffers. Saving and reloading no longer restores reserves to depleted nodes.",
+  "喷涂拆卸与侧栏修复": "Spray Removal & Sidebar Fixes",
+  "建筑检查器新增喷涂模块拆卸，返还模块、缓存中的增产剂和尚未用完的喷涂点折算物；物资侧栏折叠后会完整退出，不再残留黑色容器。": "The building inspector can now remove spray modules and return the module, buffered proliferator, and items recovered from unused spray points. Collapsing the materials sidebar now removes the entire container without leaving a dark block.",
   "物品手工": "Item Handcrafting",
   "搜索建筑制造": "Search Building Manufacturing",
   "搜索建筑或材料": "Search buildings or materials",
@@ -1248,8 +1298,40 @@ function translateDynamicSystemText(body: string): string {
   if (match) return `View ${translateCatalogName(match[1])} recipe`;
   match = body.match(/^查看(.+)$/);
   if (match) return `View ${translateCatalogName(match[1])}`;
+  match = body.match(/^定位当前行星\s+(\d+)\s+条产线$/);
+  if (match) return `Locate ${match[1]} production line${match[1] === "1" ? "" : "s"} on this planet`;
+  match = body.match(/^已定位(.+)的(.+)产线\s+·\s+(\d+)\s+个生产节点$/);
+  if (match) return `Located ${translateCatalogName(match[2])} production on ${translateCatalogName(match[1])} · ${match[3]} node${match[3] === "1" ? "" : "s"}`;
+  match = body.match(/^定位产线\s+·\s+(\d+)$/);
+  if (match) return `Locate Production Line · ${match[1]}`;
   match = body.match(/^定位(.+)$/);
   if (match) return `Locate ${translateCatalogName(match[1])}`;
+  match = body.match(/^(\d+)\s+个生产节点\s+·\s+(\d+)\s+条上游线路$/);
+  if (match) return `${match[1]} production node${match[1] === "1" ? "" : "s"} · ${match[2]} upstream belt${match[2] === "1" ? "" : "s"}`;
+  match = body.match(/^其他行星\s+(\d+)$/);
+  if (match) return `${match[1]} other planet${match[1] === "1" ? "" : "s"}`;
+  match = body.match(/^(\d+)\s+条产线$/);
+  if (match) return `${match[1]} production line${match[1] === "1" ? "" : "s"}`;
+  match = body.match(/^递归加工\s+(\d+)\s+段$/);
+  if (match) return `${match[1]} recursive stage${match[1] === "1" ? "" : "s"}`;
+  match = body.match(/^返还模块\s+×(\d+)(?:\s+·\s+(.+)\s+×(\d+))?$/);
+  if (match) return `Returns module ×${match[1]}${match[2] ? ` · ${translateCatalogName(match[2])} ×${match[3]}` : ""}`;
+  match = body.match(/^(.+)全部执行中\s+·\s+舰队容量瓶颈\s+(\d+)\/(\d+)$/);
+  if (match) return `All ${translateCatalogName(match[1])} are active · Fleet bottleneck ${match[2]}/${match[3]}`;
+  match = body.match(/^当前获得功率仅支持\s+(\d+)x，(\d+)x\s+需要\s+(.+)$/);
+  if (match) return `Allocated power supports only ${match[1]}x; ${match[2]}x requires ${match[3]}`;
+  match = body.match(/^自动降档至\s+(\d+)x$/);
+  if (match) return `Automatically reduced to ${match[1]}x`;
+  match = body.match(/^全局模拟\s+(\d+)x$/);
+  if (match) return `Global simulation ${match[1]}x`;
+  match = body.match(/^入库\s+(.+)$/);
+  if (match) return `Store ${translateCatalogName(match[1])}`;
+  match = body.match(/^加工\s+(.+)$/);
+  if (match) return `Process ${translateCatalogName(match[1])}`;
+  match = body.match(/^递归检查\s+(.+)$/);
+  if (match) return `Checking recursive chain for ${translateCatalogName(match[1])}`;
+  match = body.match(/^已回退：(.+)$/);
+  if (match) return `Fallback: ${match[1]}`;
   match = body.match(/^打开(.+)星图$/);
   if (match) return `Open ${translateCatalogName(match[1])} on the star map`;
   match = body.match(/^前往(.+)$/);

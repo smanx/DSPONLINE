@@ -10,6 +10,16 @@ All notable player-facing changes are recorded here. Game-state migration versio
 - Added privacy-safe PV, UV, sessions, active-time and allowlisted event aggregation on the Asia/Shanghai calendar.
 - Added a protected `/admin` operations dashboard and reduced the public status endpoint to anonymous player counts.
 
+## [1.0.3] - 2026-07-26
+
+- Added a shared atomic recursive-manufacturing planner that prefers unlocked advanced recipes, falls back to complete base chains, and reports the true raw-resource, technology, or capacity blocker.
+- Added recursive quick-crafting and Construction Center stock targets for logistics vessels, with completed craft output stored in the portable fleet.
+- Added item-codex production-line location, upstream network highlighting, multi-target cycling, cross-planet jumps, and explicit highlight clearing.
+- Corrected orbital-collector power diagnostics, saturated-fleet reporting, time-warp multiplier evidence, and finite-resource depletion persistence.
+- Added spray-module removal with protected refunds and depleted-resource recovery shortcuts.
+- Fixed HarmonyOS composition input persistence, storage/tank port geometry, mobile tray deletion controls, and collapsed materials-sidebar residue.
+- Migrated GameState v35 to v36 without changing save envelope v2, cloud schema v7, or SQLite layout v2.
+
 ## [1.0.2] - 2026-07-25
 
 - Added a device-local Simplified Chinese / English switch to the start menu and in-game settings, plus the direct `?lang=en` entry point.
@@ -36,6 +46,7 @@ All notable player-facing changes are recorded here. Game-state migration versio
 - Deployed independent Hong Kong production and Shanghai fallback nodes.
 
 [Unreleased]: ./docs/ROADMAP.md
+[1.0.3]: ./docs/releases/1.0.3.md
 [1.0.2]: ./docs/releases/1.0.2.md
 [0.4.0]: ./docs/releases/0.4.0.md
 [0.1.0]: ./docs/releases/0.1.0.md

@@ -22,7 +22,7 @@ import { createEndgameState, getOfflineSimulationLimitSeconds } from "./endgame"
 import { getInfiniteResearchCostBigInt, getInfiniteResearchMaximumLevel } from "./infiniteResearch";
 import { normalizeDecimalIntegerString } from "./quantityFormat";
 import { ACTIVITY_MATERIAL_IDS } from "./activity";
-import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, PlanetId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
+import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -578,7 +578,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const savedSeed = saved.version >= 20 && typeof saved.galaxy?.seed === "number" && Number.isFinite(saved.galaxy.seed)
     ? saved.galaxy.seed
     : DEFAULT_GALAXY_SEED;
@@ -637,7 +637,12 @@ export function migrateGame(value: unknown): GameState | null {
         ? Math.max(1, nonNegativeInteger(entity.resourceCapacity) || generatedReserve || 1)
         : undefined,
       resourceRemaining: resourceId && !isInfiniteResource(resourceId, planetId, saved.version >= 20 && saved.settings?.resourceMode === "finite" ? "finite" : "infinite", galaxy)
-        ? Math.min(Math.max(1, nonNegativeInteger(entity.resourceCapacity) || generatedReserve || 1), nonNegativeInteger(entity.resourceRemaining) || generatedReserve || 1)
+        ? Math.min(
+          Math.max(1, nonNegativeInteger(entity.resourceCapacity) || generatedReserve || 1),
+          typeof entity.resourceRemaining === "number" && Number.isFinite(entity.resourceRemaining) && entity.resourceRemaining >= 0
+            ? nonNegativeInteger(entity.resourceRemaining)
+            : generatedReserve || 1,
+        )
         : undefined,
       recipeId: energyExchanger
         ? entity.energyMode === "discharge" ? "accumulator_discharge" : "accumulator_charge"
@@ -789,16 +794,18 @@ export function migrateGame(value: unknown): GameState | null {
   const constructionAutomationLimit = completedTechIds.includes("construction_capacity_2")
     ? 2000
     : completedTechIds.includes("construction_capacity_1") ? 500 : 100;
+  const validConstructionAutomationTargetId = (value: string): value is ConstructionAutomationTargetId =>
+    value in initial.construction || value === "logistics_drone" || value === "logistics_vessel";
   const constructionAutomation: GameState["constructionAutomation"] = {
     enabled: saved.version >= 26 ? saved.constructionAutomation?.enabled !== false : true,
     targetStock: Object.fromEntries(Object.entries(saved.version >= 26 ? saved.constructionAutomation?.targetStock ?? {} : {}).flatMap(([constructionId, amount]) =>
-      constructionId in initial.construction
+      validConstructionAutomationTargetId(constructionId)
         ? [[constructionId, Math.min(constructionAutomationLimit, nonNegativeInteger(amount))]]
         : [])) as GameState["constructionAutomation"]["targetStock"],
-    cursor: saved.version >= 26 ? nonNegativeInteger(saved.constructionAutomation?.cursor) % Math.max(1, Object.keys(initial.construction).length) : 0,
+    cursor: saved.version >= 26 ? nonNegativeInteger(saved.constructionAutomation?.cursor) % Math.max(1, Object.keys(initial.construction).length + 2) : 0,
     totalCrafted: saved.version >= 26 ? nonNegativeInteger(saved.constructionAutomation?.totalCrafted) : 0,
-    lastCraftedId: saved.version >= 26 && typeof saved.constructionAutomation?.lastCraftedId === "string" && saved.constructionAutomation.lastCraftedId in initial.construction
-      ? saved.constructionAutomation.lastCraftedId as ConstructionId
+    lastCraftedId: saved.version >= 26 && typeof saved.constructionAutomation?.lastCraftedId === "string" && validConstructionAutomationTargetId(saved.constructionAutomation.lastCraftedId)
+      ? saved.constructionAutomation.lastCraftedId
       : null,
     jobs: {},
   };
@@ -806,7 +813,7 @@ export function migrateGame(value: unknown): GameState | null {
     const centerIds = new Set(entities.filter((entity) => entity.buildingId === "construction_center").map((entity) => entity.id));
     for (const [entityId, rawJob] of Object.entries(saved.constructionAutomation.jobs as Record<string, any>)) {
       if (!centerIds.has(entityId) || !rawJob || typeof rawJob !== "object" ||
-        typeof rawJob.constructionId !== "string" || !(rawJob.constructionId in initial.construction) || !Array.isArray(rawJob.steps)) continue;
+        typeof rawJob.constructionId !== "string" || !validConstructionAutomationTargetId(rawJob.constructionId) || !Array.isArray(rawJob.steps)) continue;
       const steps = rawJob.steps.flatMap((step: Record<string, any>) => {
         if (step?.kind === "material" && typeof step.recipeId === "string" && getRecipe(step.recipeId as RecipeId) &&
           typeof step.outputItemId === "string" && step.outputItemId in ITEMS) {
@@ -815,15 +822,29 @@ export function migrateGame(value: unknown): GameState | null {
         if (step?.kind === "building" && typeof step.constructionId === "string" && step.constructionId in initial.construction) {
           return [{ kind: "building" as const, constructionId: step.constructionId as ConstructionId }];
         }
+        if (saved.version >= 36 && step?.kind === "fleet" &&
+          (step.itemId === "logistics_drone" || step.itemId === "logistics_vessel")) {
+          return [{ kind: "fleet" as const, itemId: step.itemId as PortableFleetItemId, amount: Math.max(1, nonNegativeInteger(step.amount)) }];
+        }
         return [];
       });
       if (steps.length === 0) continue;
       constructionAutomation.jobs[entityId] = {
-        constructionId: rawJob.constructionId as ConstructionId,
+        constructionId: rawJob.constructionId as ConstructionAutomationTargetId,
         steps,
         stepIndex: Math.min(steps.length - 1, nonNegativeInteger(rawJob.stepIndex)),
         elapsedSeconds: nonNegativeNumber(rawJob.elapsedSeconds),
         inventory: saved.version >= 33 ? buildingBufferRecord(rawJob.inventory) : {},
+        recipeDecisions: saved.version >= 36 && Array.isArray(rawJob.recipeDecisions)
+          ? rawJob.recipeDecisions.flatMap((decision: Record<string, any>) =>
+            typeof decision?.itemId === "string" && decision.itemId in ITEMS && typeof decision.recipeId === "string" && getRecipe(decision.recipeId as RecipeId)
+              ? [{
+                itemId: decision.itemId as ItemId,
+                recipeId: decision.recipeId as RecipeId,
+                fallbackReason: typeof decision.fallbackReason === "string" ? decision.fallbackReason.slice(0, 240) : undefined,
+              }]
+              : [])
+          : undefined,
       };
     }
   }
@@ -1405,7 +1426,7 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 35,
+    version: 36,
     activePlanetId,
     entities,
     belts,

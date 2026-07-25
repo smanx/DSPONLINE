@@ -18,7 +18,7 @@ import {
   type OnSelectionChangeParams,
 } from "@xyflow/react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Activity, AlertTriangle, ArrowUp, BookOpen, Check, Copy, Download, Focus, Map as MapIcon, PanelRightClose, Route, Sparkles, Trash2, WandSparkles, X } from "lucide-react";
+import { Activity, AlertTriangle, ArrowUp, BookOpen, Check, ChevronLeft, ChevronRight, Copy, Download, Focus, Map as MapIcon, PanelRightClose, Route, Sparkles, Trash2, WandSparkles, X } from "lucide-react";
 import {
   BuildingPlacementCursor,
   CargoCursor,
@@ -82,6 +82,7 @@ import {
   getBeltNetworkIds,
   getConstructionCraftNavigation,
   getConstructionQuickCraftPlan,
+  getRecursiveHandcraftPlan,
   MIN_CANVAS_REGION_SIZE,
   getEntityOutputCapacity,
   getEffectiveSimulationMultiplier,
@@ -89,10 +90,11 @@ import {
   getEntityCycleRatePerSimulationSecond,
   getEntityPowerFactor,
   getResourceReserveSnapshot,
+  getSprayCoaterRemovalRefund,
   getSprayCoaterInstallCheck,
   getProducedOutputs,
   getTechnologyConstructionRewards,
-  handcraftRecipe,
+  handcraftRecipeWithUpstream,
   installSprayCoater,
   installSprayCoaters,
   installMiner,
@@ -122,6 +124,7 @@ import {
   removeDysonSwarmOrbit,
   removeEntity,
   removeEntities,
+  removeSprayCoater,
   removeQueuedTechnology,
   resumePausedResearch,
   selectTechnology,
@@ -203,6 +206,7 @@ import { getDifficultyDefinition } from "./game/difficulty";
 import { analyzeBeltNetwork, diagnoseBelt, getBeltBundleMap, getPortOccupancy, predictBeltConnection } from "./game/network";
 import { planFactoryAutoLayout } from "./game/layout";
 import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
+import { getProductionLineLocations, type ProductionLineLocation } from "./game/productionLocator";
 import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
 import { clearGameSlot, clearSaveSnapshot, exportGame, getSaveSlotSummaries, getSaveSnapshotSummaries, inspectSave, loadGameSlot, loadSaveSnapshot, saveGame, saveGameSnapshot, saveGameSlot, type LoadedGame, type OfflineReport, type SaveGameResult, type SaveInspection, type SaveSlotId, type SaveSnapshotSummary } from "./game/storage";
 import { runAutomaticPerformanceReport, type AutomaticPerformanceReport } from "./game/benchmark";
@@ -226,7 +230,7 @@ import { baselineAccountProgress, createLocalAccount, getActiveAccount, loadAcco
 import { removeLeaderboardData } from "./game/leaderboard";
 import { trackAnalyticsEvent } from "./game/analytics";
 import { CLOUD_AUTO_SYNC_INTERVAL_MS, CloudApiError, compareCloudSave, fetchCloudPublicStatus, getCloudToken, markCloudSaveSynchronized, readCloudAutoSyncStatus, resumeCloudSession, uploadCloudSave, writeCloudAutoSyncStatus } from "./game/cloud";
-import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CanvasRegion, CanvasViewport, CargoStackSize, ConstructionId, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad, StationSlotTemplate } from "./game/types";
+import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CanvasRegion, CanvasViewport, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad, StationSlotTemplate } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 import { getOnboardingFocusTarget, getOnboardingStep, recordBasicOnboardingEvent, type OnboardingActionId } from "./game/onboarding";
 import { useCoarsePointer } from "./hooks/useCoarsePointer";
@@ -240,6 +244,7 @@ import { useMobileUiPreference } from "./hooks/useMobileUiPreference";
 import { useProductionRefreshPreference } from "./hooks/useProductionRefreshPreference";
 import { usePlayerPresence } from "./hooks/usePlayerPresence";
 import { useSwipeDismiss } from "./hooks/useSwipeDismiss";
+import { useAppLocale } from "./i18n/locale";
 import { createAutomaticRefreshState, resolveProductionRefreshInterval, updateAutomaticRefreshState } from "./game/productionRefresh";
 import { synchronizeGalacticActivity, type GalacticActivityPublicStatus } from "./game/galacticActivity";
 import {
@@ -501,6 +506,7 @@ function minerPlacementHint(buildingId: BuildingId): string {
 
 export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { initialLoad: LoadedGame; onReturnToMenu: () => void; onOpenReleaseNotes: () => void }) {
   usePlayerPresence();
+  const { isEnglish } = useAppLocale();
   const compactLayout = useCompactLayout();
   const coarsePointer = useCoarsePointer();
   const [mobileUiPreference, setMobileUiPreference] = useMobileUiPreference();
@@ -515,6 +521,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [selectedBeltId, setSelectedBeltId] = useState<string | null>(null);
   const [selectedBeltIds, setSelectedBeltIds] = useState<string[]>([]);
   const [focusedBeltNetworkId, setFocusedBeltNetworkId] = useState<string | null>(null);
+  const [productionLineFocus, setProductionLineFocus] = useState<(ProductionLineLocation & { itemId: ItemId; activeIndex: number }) | null>(null);
   const [copiedBeltConfigurationId, setCopiedBeltConfigurationId] = useState<string | null>(null);
   const [placement, setPlacement] = useState<BuildingId | null>(null);
   const [beltTier, setBeltTier] = useState<BeltTier>(1);
@@ -1894,6 +1901,34 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setNotice(`已定位：${entity.buildingId ? getBuilding(entity.buildingId).name : entity.resourceId ? ITEMS[entity.resourceId].name : entity.id}`);
   }, [focusEntityIds, onPlanetChange]);
 
+  const locateProductionLine = useCallback((itemId: ItemId, planetId: PlanetId) => {
+    const location = getProductionLineLocations(gameRef.current, itemId).find((candidate) => candidate.planetId === planetId);
+    if (!location) {
+      setNotice(`${ITEMS[itemId].name}在${getPlanet(planetId).name}没有可定位的生产设备`);
+      return;
+    }
+    closeAllWorkspaces();
+    setCommandPaletteOpen(false);
+    setMobilePanel(null);
+    setHighlightedTaskId(null);
+    setFocusedBeltNetworkId(null);
+    setProductionLineFocus({ ...location, itemId, activeIndex: 0 });
+    if (gameRef.current.activePlanetId !== planetId) onPlanetChange(planetId);
+    if (nextMobileShell) mobileNavigation.goFactory();
+    window.setTimeout(() => focusEntityIds(location.producerEntityIds), gameRef.current.settings.reducedMotion ? 0 : 50);
+    setNotice(`已定位${getPlanet(planetId).name}的${ITEMS[itemId].name}产线 · ${location.producerEntityIds.length} 个生产节点`);
+  }, [closeAllWorkspaces, focusEntityIds, mobileNavigation.goFactory, nextMobileShell, onPlanetChange]);
+
+  const cycleProductionLineTarget = useCallback((direction: -1 | 1) => {
+    setProductionLineFocus((current) => {
+      if (!current || current.producerEntityIds.length === 0) return current;
+      const activeIndex = (current.activeIndex + direction + current.producerEntityIds.length) % current.producerEntityIds.length;
+      const entityId = current.producerEntityIds[activeIndex];
+      window.requestAnimationFrame(() => focusEntityIds([entityId]));
+      return { ...current, activeIndex };
+    });
+  }, [focusEntityIds]);
+
   const quickAddEntity = useCallback((entityId: string, requestedCount = 1) => {
     const result = expandEntityGroup(entityId, requestedCount);
     if (result) setNotice(`${result.name}已增加 ${result.added} 台 · 当前 ×${result.count}`);
@@ -2597,6 +2632,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     : null, [focusedBeltNetworkId, canvasGame]);
   const focusedNetworkBeltIds = useMemo(() => new Set(focusedBeltNetwork?.beltIds ?? []), [focusedBeltNetwork]);
   const focusedNetworkEntityIds = useMemo(() => new Set(focusedBeltNetwork?.entityIds ?? []), [focusedBeltNetwork]);
+  const locatedProductionEntityIds = useMemo(() => new Set(productionLineFocus?.relatedEntityIds ?? []), [productionLineFocus]);
+  const locatedProductionBeltIds = useMemo(() => new Set(productionLineFocus?.relatedBeltIds ?? []), [productionLineFocus]);
   const selectedBeltIdSet = useMemo(() => new Set(selectedBeltIds), [selectedBeltIds]);
 
   useEffect(() => {
@@ -2711,6 +2748,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             selected: selectedEntityIds.includes(entity.id),
             className: highlightedTaskId
               ? taskHighlight.entityIds.has(entity.id) ? "factory-flow-node--task-focus" : "factory-flow-node--task-dim"
+              : productionLineFocus?.planetId === canvasGame.activePlanetId
+                ? locatedProductionEntityIds.has(entity.id) ? "factory-flow-node--network-focus" : "factory-flow-node--network-dim"
               : focusedBeltNetwork
                 ? focusedNetworkEntityIds.has(entity.id) ? "factory-flow-node--network-focus" : "factory-flow-node--network-dim"
                 : undefined,
@@ -2720,7 +2759,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame.activePlanetId, canvasGame.entities, canvasGame.galaxy, canvasGame.settings.logisticsBufferLimit, canvasGame.settings.productionBufferLimit, canvasGame.settings.proliferatorBufferLimit, canvasGame.settings.resourceMode, commonNodeData, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, placement, selectedEntityIds, setNodes, taskHighlight.entityIds]);
+  }, [beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame.activePlanetId, canvasGame.entities, canvasGame.galaxy, canvasGame.settings.logisticsBufferLimit, canvasGame.settings.productionBufferLimit, canvasGame.settings.proliferatorBufferLimit, canvasGame.settings.resourceMode, commonNodeData, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, locatedProductionEntityIds, placement, productionLineFocus, selectedEntityIds, setNodes, taskHighlight.entityIds]);
 
   const edges = useMemo<FactoryFlowEdge[]>(() => {
     const rects = nodes.map((node) => ({
@@ -2768,6 +2807,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const routeColor = canvasGame.settings.beltHeatmapEnabled ? beltHeatColor(diagnostic.utilization) : item.color;
       const focusTone = highlightedTaskId
         ? taskHighlight.beltIds.has(belt.id) ? "focus" : "dim"
+        : productionLineFocus?.planetId === canvasGame.activePlanetId
+          ? locatedProductionBeltIds.has(belt.id) ? "focus" : "dim"
         : focusedBeltNetwork
           ? focusedNetworkBeltIds.has(belt.id) ? "focus" : "dim"
           : "normal";
@@ -2810,7 +2851,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         },
       } satisfies FactoryFlowEdge;
     });
-  }, [beltBundleMap, canvasGame, coarsePointer, focusedBeltNetwork, focusedNetworkBeltIds, highlightedTaskId, largeFactoryMode, nodes, performanceVisualMode, selectedBeltId, selectedBeltIdSet, taskHighlight.beltIds, viewportZoom]);
+  }, [beltBundleMap, canvasGame, coarsePointer, focusedBeltNetwork, focusedNetworkBeltIds, highlightedTaskId, largeFactoryMode, locatedProductionBeltIds, nodes, performanceVisualMode, productionLineFocus, selectedBeltId, selectedBeltIdSet, taskHighlight.beltIds, viewportZoom]);
 
   const isValidConnection = useCallback((connection: Connection | Edge) => {
     const sourceItem = parseHandleItem(connection.sourceHandle);
@@ -3661,17 +3702,36 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const handleQuickCraftFleet = (recipeId: RecipeId, batches = 1) => {
     const before = gameRef.current;
-    const after = handcraftRecipe(before, recipeId, batches);
+    const plan = getRecursiveHandcraftPlan(before, recipeId, batches);
+    const after = handcraftRecipeWithUpstream(before, recipeId, batches);
     if (after === before) {
-      setNotice("制造失败：材料或科技不足");
+      const blocker = plan.blocker;
+      const blockerLabel = blocker?.reason === "technology"
+        ? `缺少科技：${blocker.technologyId ? getTechnology(blocker.technologyId)?.name ?? blocker.technologyId : "未解锁"}`
+        : blocker?.reason === "capacity"
+          ? `${ITEMS[blocker.itemId].name}缓存已满（${blocker.current}/${blocker.limit}）`
+          : blocker ? `缺少${ITEMS[blocker.itemId].name} ${Math.max(0, blocker.required - blocker.current)}` : "材料或科技不足";
+      setNotice(`制造失败：${blockerLabel}`);
       playTone("alert");
       return;
     }
-    commitGame((current) => handcraftRecipe(current, recipeId, batches));
-    const produced = RECIPES[recipeId]?.outputs.reduce((sum, output) => sum + output.amount * Math.max(1, Math.floor(batches)), 0) ?? 0;
-    setNotice(`${RECIPES[recipeId]?.name ?? "物品"}已制造 ×${produced}（${Math.max(1, Math.floor(batches))} 批）`);
+    commitGame((current) => handcraftRecipeWithUpstream(current, recipeId, batches));
+    const produced = plan.outputAmount;
+    const recursiveLabel = plan.decisions.length > 1 ? ` · 递归加工 ${plan.decisions.length - 1} 段` : "";
+    setNotice(`${RECIPES[recipeId]?.name ?? "物品"}已制造 ×${produced}（${plan.batches} 批）${recursiveLabel}`);
     spawnInteractionBurst(pointerRef.current.x, pointerRef.current.y, `制造 ×${produced}`, "positive");
     playTone("confirm");
+  };
+
+  const handleRemoveSprayCoater = (entityId: string) => {
+    const refund = getSprayCoaterRemovalRefund(gameRef.current, entityId);
+    const confirmation = isEnglish
+      ? `Remove the spray module? The module and ${refund?.proliferatorItems ?? 0} remaining proliferator item(s) will be returned.`
+      : `确认拆卸喷涂模块？将返还喷涂模块 ×${refund?.sprayCoaters ?? 1}${refund?.proliferatorItemId && refund.proliferatorItems > 0 ? `、${ITEMS[refund.proliferatorItemId].name} ×${refund.proliferatorItems}` : ""}。`;
+    if (!refund || !window.confirm(confirmation)) return;
+    commitGame((current) => removeSprayCoater(current, entityId));
+    setNotice(`喷涂模块已拆卸并返还${refund.proliferatorItems > 0 ? ` · 未消耗增产剂 ×${refund.proliferatorItems}` : ""}`);
+    playTone("remove");
   };
 
   const handleMissingConstructionCraft = (buildingId: ConstructionId) => {
@@ -3989,6 +4049,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             commitGame((current) => setEntitiesInteractionLocked(current, [entityId], locked));
             setNotice(locked ? "建筑已锁定" : "建筑已解锁");
           },
+          onRemoveSprayCoater: handleRemoveSprayCoater,
+          onOpenResourceSettings: () => openMobileOperations("settings"),
         }}
         onFactory={() => {
           if (mobileNavigation.route.kind === "factory" && !mobileNavigation.overlay) {
@@ -4394,6 +4456,20 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               <button type="button" onClick={() => setFocusedBeltNetworkId(null)} aria-label="关闭运输网络聚焦">×</button>
             </div>
           ) : null}
+          {productionLineFocus?.planetId === game.activePlanetId ? (
+            <div className="production-line-focus-indicator nodrag nopan">
+              <span>物品产线定位</span>
+              <strong>{ITEMS[productionLineFocus.itemId].name}</strong>
+              <em>{productionLineFocus.producerEntityIds.length} 个生产节点 · {productionLineFocus.relatedBeltIds.length} 条上游线路</em>
+              <div>
+                <button type="button" disabled={productionLineFocus.producerEntityIds.length < 2} onClick={() => cycleProductionLineTarget(-1)} title="上一个生产节点" aria-label="上一个生产节点"><ChevronLeft size={15} /></button>
+                <b>{productionLineFocus.activeIndex + 1}/{productionLineFocus.producerEntityIds.length}</b>
+                <button type="button" disabled={productionLineFocus.producerEntityIds.length < 2} onClick={() => cycleProductionLineTarget(1)} title="下一个生产节点" aria-label="下一个生产节点"><ChevronRight size={15} /></button>
+                <button type="button" onClick={() => focusEntityIds(productionLineFocus.producerEntityIds)} title="显示全部生产节点" aria-label="显示全部生产节点"><Focus size={15} /></button>
+                <button type="button" onClick={() => setProductionLineFocus(null)} title="清除产线高亮" aria-label="清除产线高亮"><X size={15} /></button>
+              </div>
+            </div>
+          ) : null}
           <div className="canvas-status">
             <span className={game.paused ? "paused" : "running"}>{game.paused ? "模拟暂停" : "实时运行"}</span>
             <strong>{getPlanet(game.activePlanetId).name} · {getPlanet(game.activePlanetId).code}工厂区</strong>
@@ -4527,6 +4603,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             setNotice("喷涂模块安装完成，可接入增产剂并选择生产模式");
             playTone("confirm");
           }}
+          onOpenResourceSettings={() => openMobileOperations("settings")}
+          onRemoveSprayCoater={handleRemoveSprayCoater}
           onProliferatorConfiguration={(entityId, tier: ProliferatorTier, mode: ProliferatorMode) => {
             commitGame((current) => setProliferatorConfiguration(current, entityId, tier, mode));
             const modeName = mode === "extra" ? "额外产出" : mode === "speed" ? "生产加速" : "正常生产";
@@ -4645,7 +4723,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             game={observedGame}
             onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setConstructionCenterOpen(false)}
             onEnabledChange={(enabled) => commitGame((current) => setConstructionAutomationEnabled(current, enabled))}
-            onTargetChange={(constructionId: ConstructionId, target: number) => commitGame((current) => setConstructionAutomationTarget(current, constructionId, target))}
+            onTargetChange={(constructionId: ConstructionAutomationTargetId, target: number) => commitGame((current) => setConstructionAutomationTarget(current, constructionId, target))}
           />
         ) : null}
         {galaxyOpen ? (
@@ -4765,7 +4843,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onOpenCanvasBookmark={openCanvasBookmark}
           onRemoveCanvasBookmark={(bookmarkId) => commitGame((current) => removeCanvasBookmark(current, bookmarkId))}
         /> : null}
-        {recipesOpen ? <RecipeWorkspace open game={observedGame} mobile={nextMobileShell} mobileSubview={mobileWorkspaceSubview} onMobileOpenDetail={mobileNavigation.openWorkspaceSubview} onMobileReplaceDetail={(subview) => mobileNavigation.replaceWorkspaceSubview(subview)} focusItemId={campaignFocusItemId} onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setRecipesOpen(false)} onFocus={onRecipeFocusChange} /> : null}
+        {recipesOpen ? <RecipeWorkspace open game={observedGame} mobile={nextMobileShell} mobileSubview={mobileWorkspaceSubview} onMobileOpenDetail={mobileNavigation.openWorkspaceSubview} onMobileReplaceDetail={(subview) => mobileNavigation.replaceWorkspaceSubview(subview)} focusItemId={campaignFocusItemId} onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setRecipesOpen(false)} onFocus={onRecipeFocusChange} onLocateProductionLine={locateProductionLine} /> : null}
         {campaignOpen ? (
           <CampaignWorkspace
             open

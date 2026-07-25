@@ -2,7 +2,7 @@
 
 English | [Simplified Chinese README](./README.md)
 
-A 2D infinite-canvas idle factory game inspired by the production flow of Dyson Sphere Program. The current product version is `1.0.2`, using GameState v35, save envelope v2, cloud schema v7, and SQLite layout v2. It ships as Web/PWA, an Electron desktop app, and a Capacitor Android app, with cloud accounts, four cloud-save slots, and a live leaderboard.
+A 2D infinite-canvas idle factory game inspired by the production flow of Dyson Sphere Program. The current Web product version is `1.0.3`, using GameState v36, save envelope v2, cloud schema v7, and SQLite layout v2. It ships as Web/PWA, an Electron desktop app, and a Capacitor Android app, with cloud accounts, four cloud-save slots, and a live leaderboard. Public Windows and Android installers remain at `1.0.2`; this release does not publish new native binaries.
 
 Official site: [https://dsponline.cn](https://dsponline.cn)
 
@@ -18,6 +18,7 @@ Source repository: [https://github.com/snowsnow0926/DSPONLINE](https://github.co
 - Local saves, verified backups, automatic snapshots, three manual slots, blueprints, and content packs.
 - Username accounts, optional email, four cloud-save slots, revision history, conflict protection, and leaderboard participation.
 - Switchable Simplified Chinese and English stored as a device-only preference, plus Dark, Light, and System themes across desktop and both mobile interfaces.
+- Multi-stage recursive manufacturing with advanced-recipe fallback, logistics-vessel and Construction Center support, plus cross-planet production-line location from the codex.
 - Electron desktop packaging, a Capacitor Android project, and Stable/Beta/Nightly update channels.
 - SQLite cloud service, backup and recovery tooling, Nginx/systemd templates, and independent Hong Kong and Shanghai deployments.
 

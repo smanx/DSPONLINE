@@ -1,8 +1,8 @@
 import { Check, Factory, Layers3, Minus, PackageOpen, Plus, Power, Search, Truck, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import { CONSTRUCTION, ITEMS, getConstructionDefinition, getPlanet, getTechnology, isConveyorBeltId } from "../game/content";
-import { getConstructionAutomationCycleSeconds, getConstructionAutomationMaterialSeconds, getConstructionAutomationStatus, getConstructionAutomationStockLimit, isTechnologyCompleted } from "../game/engine";
-import type { ConstructionId, GameState, ItemId } from "../game/types";
+import { CONSTRUCTION, ITEMS, getConstructionDefinition, getPlanet, getRecipe, getTechnology, isConveyorBeltId } from "../game/content";
+import { PORTABLE_FLEET_ITEM_IDS, getConstructionAutomationCycleSeconds, getConstructionAutomationMaterialSeconds, getConstructionAutomationStatus, getConstructionAutomationStockLimit, isPortableFleetItem, isTechnologyCompleted } from "../game/engine";
+import type { ConstructionAutomationTargetId, ConstructionId, GameState, ItemId, PortableFleetItemId, TechId } from "../game/types";
 import { formatQuantityCompact } from "../game/quantityFormat";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { QuantityValue } from "./QuantityValue";
@@ -13,14 +13,41 @@ const POWER_IDS = new Set<ConstructionId>(["wind_turbine", "solar_panel", "geoth
 const LOGISTICS_IDS = new Set<ConstructionId>(["conveyor_belt_mk1", "conveyor_belt_mk2", "conveyor_belt_mk3", "storage_mk1", "material_delivery_hub", "storage_tank", "splitter_4way", "planetary_logistics_station", "interstellar_logistics_station", "orbital_collector"]);
 const DYSON_IDS = new Set<ConstructionId>(["em_rail_ejector", "ray_receiver", "vertical_launching_silo"]);
 
-function categoryFor(id: ConstructionId): Exclude<CenterCategory, "all"> {
+interface AutomationDisplayDefinition {
+  id: ConstructionAutomationTargetId;
+  name: string;
+  outputAmount: number;
+  requiredTechId?: TechId;
+  costs: Array<{ itemId: ItemId; amount: number }>;
+}
+
+function automationDefinitions(): AutomationDisplayDefinition[] {
+  return [
+    ...CONSTRUCTION.map((definition) => ({ ...definition, id: definition.buildingId })),
+    ...PORTABLE_FLEET_ITEM_IDS.flatMap((itemId) => {
+      const recipe = getRecipe(itemId);
+      const output = recipe?.outputs.find((candidate) => candidate.itemId === itemId);
+      return recipe && output ? [{
+        id: itemId,
+        name: ITEMS[itemId].name,
+        outputAmount: output.amount,
+        requiredTechId: recipe.requiredTechId,
+        costs: recipe.inputs,
+      }] : [];
+    }),
+  ];
+}
+
+function categoryFor(id: ConstructionAutomationTargetId): Exclude<CenterCategory, "all"> {
+  if (isPortableFleetItem(id)) return "logistics";
   if (POWER_IDS.has(id)) return "power";
   if (LOGISTICS_IDS.has(id)) return "logistics";
   if (DYSON_IDS.has(id)) return "dyson";
   return "production";
 }
 
-function DefinitionIcon({ id }: { id: ConstructionId }) {
+function DefinitionIcon({ id }: { id: ConstructionAutomationTargetId }) {
+  if (isPortableFleetItem(id)) return <Truck size={16} />;
   if (POWER_IDS.has(id)) return <Power size={16} />;
   if (isConveyorBeltId(id)) return <Layers3 size={16} />;
   if (LOGISTICS_IDS.has(id)) return <Truck size={16} />;
@@ -32,7 +59,7 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
   game: GameState;
   onClose: () => void;
   onEnabledChange: (enabled: boolean) => void;
-  onTargetChange: (constructionId: ConstructionId, target: number) => void;
+  onTargetChange: (constructionId: ConstructionAutomationTargetId, target: number) => void;
 }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<CenterCategory>("all");
@@ -43,16 +70,17 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
   const cycleSeconds = getConstructionAutomationCycleSeconds(game);
   const materialSeconds = getConstructionAutomationMaterialSeconds(game);
   const term = query.trim().toLocaleLowerCase("zh-CN");
-  const definitions = useMemo(() => CONSTRUCTION.filter((definition) => {
-    if (category !== "all" && categoryFor(definition.buildingId) !== category) return false;
+  const definitions = useMemo(() => automationDefinitions().filter((definition) => {
+    if (category !== "all" && categoryFor(definition.id) !== category) return false;
     if (!term) return true;
     const materials = definition.costs.map((cost) => ITEMS[cost.itemId].name).join(" ");
     return `${definition.name} ${materials}`.toLocaleLowerCase("zh-CN").includes(term);
   }), [category, term]);
   const activeTargets = Object.values(game.constructionAutomation.targetStock).filter((target) => (target ?? 0) > 0).length;
-  const completedTargets = CONSTRUCTION.filter((definition) => {
-    const target = game.constructionAutomation.targetStock[definition.buildingId] ?? 0;
-    return target > 0 && (game.construction[definition.buildingId] ?? 0) >= target;
+  const completedTargets = automationDefinitions().filter((definition) => {
+    const target = game.constructionAutomation.targetStock[definition.id] ?? 0;
+    const current = isPortableFleetItem(definition.id) ? game.portableFleet[definition.id] ?? 0 : game.construction[definition.id] ?? 0;
+    return target > 0 && current >= target;
   }).length;
 
   if (!open) return null;
@@ -81,33 +109,33 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
       <div className="construction-center-status">
         <span><PackageOpen size={14} />取料行星 <strong>{getPlanet(sourcePlanetId).name}</strong></span>
         <span>累计制造 <strong><QuantityValue value={game.constructionAutomation.totalCrafted} /></strong></span>
-        <span>最近完成 <strong>{game.constructionAutomation.lastCraftedId ? getConstructionDefinition(game.constructionAutomation.lastCraftedId)?.name ?? "未知" : "尚无"}</strong></span>
+        <span>最近完成 <strong>{game.constructionAutomation.lastCraftedId ? isPortableFleetItem(game.constructionAutomation.lastCraftedId) ? ITEMS[game.constructionAutomation.lastCraftedId].name : getConstructionDefinition(game.constructionAutomation.lastCraftedId)?.name ?? "未知" : "尚无"}</strong></span>
         {centers.map((center) => {
           const status = getConstructionAutomationStatus(game, center.id);
           return <span key={center.id}>{getPlanet(center.planetId).name} <strong>{status.stage}</strong>{status.blockerReason === "safety-limit" && status.missingItemId
             ? ` · ${ITEMS[status.missingItemId].name} ${formatQuantityCompact(status.safetyExpected ?? 0)}/${formatQuantityCompact(status.safetyLimit ?? 0)}`
-            : status.missingItemId ? ` · 缺${ITEMS[status.missingItemId].name} ${formatQuantityCompact(status.missingAmount ?? 1)}` : status.etaSeconds > 0 ? ` · ${status.etaSeconds.toFixed(1)}s` : ""}</span>;
+            : status.missingItemId ? ` · 缺${ITEMS[status.missingItemId].name} ${formatQuantityCompact(status.missingAmount ?? 1)}` : status.etaSeconds > 0 ? ` · ${status.etaSeconds.toFixed(1)}s` : ""}{status.recipeFallbackReason ? ` · 已回退：${status.recipeFallbackReason}` : ""}</span>;
         })}
         {centers.length === 0 ? <em>需要先在画布放置建筑制造中心</em> : null}
       </div>
 
       <div className="construction-center-list">
         {definitions.map((definition) => {
-          const current = Math.floor(game.construction[definition.buildingId] ?? 0);
-          const target = Math.floor(game.constructionAutomation.targetStock[definition.buildingId] ?? 0);
+          const current = Math.floor(isPortableFleetItem(definition.id) ? game.portableFleet[definition.id] ?? 0 : game.construction[definition.id] ?? 0);
+          const target = Math.floor(game.constructionAutomation.targetStock[definition.id] ?? 0);
           const unlocked = !definition.requiredTechId || isTechnologyCompleted(game, definition.requiredTechId);
           const complete = target > 0 && current >= target;
           const missing = definition.costs.filter((cost) => (sourceTray[cost.itemId] ?? 0) < cost.amount);
-          return <article className={`${target > 0 ? "construction-center-row construction-center-row--targeted" : "construction-center-row"}${complete ? " construction-center-row--complete" : ""}`} key={definition.buildingId}>
-            <i><DefinitionIcon id={definition.buildingId} /></i>
+          return <article className={`${target > 0 ? "construction-center-row construction-center-row--targeted" : "construction-center-row"}${complete ? " construction-center-row--complete" : ""}`} key={definition.id}>
+            <i><DefinitionIcon id={definition.id} /></i>
             <div className="construction-center-identity"><strong>{definition.name}</strong><small>{unlocked ? <>每批 ×<QuantityValue value={definition.outputAmount} /></> : `需要科技：${getTechnology(definition.requiredTechId)?.name ?? "未解锁"}`}</small></div>
             <div className="construction-center-materials">
               {definition.costs.map((cost) => <ItemHoverCard itemId={cost.itemId} key={cost.itemId}><span className={(sourceTray[cost.itemId] ?? 0) >= cost.amount ? "ready" : "missing"}><ItemGlyph itemId={cost.itemId} /><b><QuantityValue value={cost.amount} /></b></span></ItemHoverCard>)}
             </div>
-            <div className="construction-center-stock"><small>施工库存</small><strong><QuantityValue value={current} /></strong>{target > 0 ? <span className={complete ? "ready" : missing.length > 0 ? "missing" : "working"}>{complete ? <Check size={12} /> : null}{complete ? "已补足" : missing.length > 0 ? `缺 ${ITEMS[missing[0].itemId].name}` : "补货中"}</span> : <span>未设目标</span>}</div>
+            <div className="construction-center-stock"><small>{isPortableFleetItem(definition.id) ? "随身载具" : "施工库存"}</small><strong><QuantityValue value={current} /></strong>{target > 0 ? <span className={complete ? "ready" : missing.length > 0 ? "missing" : "working"}>{complete ? <Check size={12} /> : null}{complete ? "已补足" : missing.length > 0 ? `递归检查 ${ITEMS[missing[0].itemId].name}` : "补货中"}</span> : <span>未设目标</span>}</div>
             <div className="construction-center-target">
               <small>目标库存</small>
-              <div><button type="button" disabled={!unlocked || target <= 0} onClick={() => onTargetChange(definition.buildingId, Math.max(0, target - Math.max(1, definition.outputAmount)))} aria-label={`减少${definition.name}目标库存`}><Minus size={13} /></button><input type="number" min={0} max={stockLimit} step={definition.outputAmount} value={target} disabled={!unlocked} onChange={(event) => onTargetChange(definition.buildingId, Number(event.target.value))} aria-label={`${definition.name}目标库存`} /><button type="button" disabled={!unlocked || target >= stockLimit} onClick={() => onTargetChange(definition.buildingId, Math.min(stockLimit, target + Math.max(1, definition.outputAmount)))} aria-label={`增加${definition.name}目标库存`}><Plus size={13} /></button></div>
+              <div><button type="button" disabled={!unlocked || target <= 0} onClick={() => onTargetChange(definition.id, Math.max(0, target - Math.max(1, definition.outputAmount)))} aria-label={`减少${definition.name}目标库存`}><Minus size={13} /></button><input type="number" min={0} max={stockLimit} step={definition.outputAmount} value={target} disabled={!unlocked} onChange={(event) => onTargetChange(definition.id, Number(event.target.value))} aria-label={`${definition.name}目标库存`} /><button type="button" disabled={!unlocked || target >= stockLimit} onClick={() => onTargetChange(definition.id, Math.min(stockLimit, target + Math.max(1, definition.outputAmount)))} aria-label={`增加${definition.name}目标库存`}><Plus size={13} /></button></div>
             </div>
           </article>;
         })}

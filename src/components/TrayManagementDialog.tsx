@@ -1,5 +1,6 @@
 import { CheckSquare, Search, Square, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { ITEMS, getPlanet } from "../game/content";
 import type { GameState, ItemId } from "../game/types";
 import { MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, getPlanetTrayItemLimit, type PlanetTrayDiscardRequest } from "../game/engine";
@@ -58,7 +59,7 @@ export function TrayManagementDialog({ game, onDiscard, onSetItemLimit, onClose 
     else next.add(itemId);
     return next;
   });
-  return <div className="tray-management" role="dialog" aria-modal="true" aria-label="管理当前行星物资托盘" onClick={(event) => event.stopPropagation()}>
+  return createPortal(<div className="tray-management" role="dialog" aria-modal="true" aria-label="管理当前行星物资托盘" onClick={(event) => event.stopPropagation()}>
     <section>
       <header>
         <div><span>{getPlanet(game.activePlanetId).name}</span><strong>物资托盘管理</strong></div>
@@ -81,6 +82,7 @@ export function TrayManagementDialog({ game, onDiscard, onSetItemLimit, onClose 
         {visibleItems.length === 0 ? <div className="tray-management__empty">没有符合条件的库存</div> : null}
       </div>
       <footer>
+        <button type="button" onClick={onClose}>取消</button>
         <button type="button" disabled={!selectedItems.some(([, amount]) => amount >= 2)} onClick={() => buildConfirmation("half")}>删除一半</button>
         <button className="danger" type="button" disabled={selected.size === 0} onClick={() => buildConfirmation("all")}><Trash2 size={17} />全部删除</button>
       </footer>
@@ -95,5 +97,5 @@ export function TrayManagementDialog({ game, onDiscard, onSetItemLimit, onClose 
         <footer><button type="button" onClick={() => setConfirmation(null)}>返回</button><button className="danger" type="button" onClick={() => { onDiscard(confirmation.requests); setConfirmation(null); setSelected(new Set()); }}>确认删除</button></footer>
       </section>
     </div> : null}
-  </div>;
+  </div>, document.body);
 }

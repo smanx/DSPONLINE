@@ -763,6 +763,21 @@ test("validates v34 time warp, Dyson allocation floors and black-hole ports", as
     const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 4 }) });
     assert.equal(rejected.response.status, 400);
   }
+  const v36Payload = payloadFor((state) => {
+    state.version = 36;
+    state.planetTrayItemLimits = { home: 100_000_000 };
+    for (const entity of state.entities) entity.interactionLocked = false;
+    state.constructionAutomation = {
+      enabled: true,
+      targetStock: { logistics_vessel: 4 },
+      cursor: 0,
+      totalCrafted: 0,
+      lastCraftedId: null,
+      jobs: {},
+    };
+  });
+  const acceptedV36 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v36Payload, expectedRevision: 4 }) });
+  assert.equal(acceptedV36.response.status, 200);
 });
 
 test("recalculates leaderboard score on the server", async () => {

@@ -80,9 +80,11 @@ import {
   getPlanetaryTripSeconds,
   getPlanetTrayItemLimit,
   getRayReceiverCapacityKw,
+  getRecursiveHandcraftPlan,
   getRecipeSpeedMultiplier,
   getResourceReserveSnapshot,
   getSprayCoaterInstallCheck,
+  getSprayCoaterRemovalRefund,
   getSolarSailLifetimeSeconds,
   getSorterCapacity,
   getStationDroneCapacity,
@@ -93,6 +95,7 @@ import {
   getStationWarperRefillSnapshot,
   getTechnologyConstructionRewards,
   handcraftRecipe,
+  handcraftRecipeWithUpstream,
   installSprayCoater,
   installSprayCoaters,
   installMiner,
@@ -113,6 +116,7 @@ import {
   queueHandcraftRecipe,
   cancelHandcraftQueueEntry,
   removeEntity,
+  removeSprayCoater,
   removeBeltNetwork,
   removeCanvasBookmark,
   removeCanvasRegion,
@@ -2631,6 +2635,32 @@ describe("factory simulation", () => {
     });
   });
 
+  it("recursively manufactures a logistics vessel atomically and stores it in the portable fleet", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("high_efficiency_plasma_control", "titanium_alloy", "interstellar_logistics");
+    state.tray = {
+      iron_ore: 36,
+      titanium_ingot: 12,
+      sulfuric_acid: 24,
+      processor: 10,
+      plasma_exciter: 4,
+    };
+    state.planetTrays.home = state.tray;
+
+    const plan = getRecursiveHandcraftPlan(state, "logistics_vessel", 1);
+    expect(plan.possible).toBe(true);
+    expect(plan.decisions.map((decision) => decision.recipeId)).toEqual(expect.arrayContaining(["iron_ingot", "steel", "titanium_alloy", "logistics_vessel"]));
+    const crafted = handcraftRecipeWithUpstream(state, "logistics_vessel", 1);
+    expect(crafted.portableFleet.logistics_vessel).toBe(1);
+    expect(crafted.tray.logistics_vessel).toBeUndefined();
+    expect(crafted.tray.iron_ore).toBe(0);
+
+    state.tray.iron_ore = 35;
+    const before = JSON.stringify(state);
+    expect(handcraftRecipeWithUpstream(state, "logistics_vessel", 1)).toBe(state);
+    expect(JSON.stringify(state)).toBe(before);
+  });
+
   it("stores manufactured and cursor-carried logistics vehicles in the portable fleet across planets", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("interstellar_logistics");
@@ -2862,7 +2892,7 @@ describe("factory simulation", () => {
     expect(fluid.entities.find((entity) => entity.id === "vein_water")?.productionRate).toBe(60);
   });
 
-  it("locks spray-coater installation behind technology and returns the module on removal", () => {
+  it("locks spray-coater installation and losslessly removes the module from an existing building", () => {
     let state = createInitialState();
     state.construction.spray_coater = 1;
     state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
@@ -2881,9 +2911,23 @@ describe("factory simulation", () => {
       proliferatorPoints: 0,
     });
     expect(state.construction.spray_coater).toBe(0);
-
-    state = removeEntity(state, assembler.id);
+    const installed = state.entities.find((entity) => entity.id === assembler.id)!;
+    installed.inputs.proliferator_mk1 = 3;
+    installed.proliferatorPoints = 2;
+    state.belts.push({ id: "spray_line", planetId: "home", source: "vein_coal", target: assembler.id, itemId: "proliferator_mk1", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 1, lastFlow: 0 });
+    expect(getSprayCoaterRemovalRefund(state, assembler.id)).toMatchObject({
+      sprayCoaters: 1,
+      proliferatorItemId: "proliferator_mk1",
+      proliferatorItems: 4,
+      bufferedProliferatorItems: 3,
+      recoveredPointItems: 1,
+      remainingSprayPoints: 2,
+    });
+    state = removeSprayCoater(state, assembler.id);
     expect(state.construction.spray_coater).toBe(1);
+    expect(state.tray.proliferator_mk1).toBe(4);
+    expect(state.belts.some((belt) => belt.id === "spray_line")).toBe(false);
+    expect(state.entities.find((entity) => entity.id === assembler.id)).toMatchObject({ sprayCoaterInstalled: false, proliferatorPoints: 0 });
   });
 
   it("diagnoses spray-coater installation and installs two smelters in sequence", () => {
@@ -3391,6 +3435,37 @@ describe("factory simulation", () => {
     expect(Number.isInteger(station.outputs.hydrogen ?? 0)).toBe(true);
   });
 
+  it("treats orbital collectors as self-powered and reports a saturated vessel fleet without false power alarms", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics");
+    state.construction.orbital_collector = 1;
+    state.construction.interstellar_logistics_station = 1;
+    state.construction.wind_turbine = 80;
+    state = setActivePlanet(state, "giant");
+    state = placeBuilding(state, "orbital_collector", { x: 0, y: 0 });
+    const collectorId = state.entities.find((entity) => entity.buildingId === "orbital_collector")!.id;
+    state.entities.find((entity) => entity.id === collectorId)!.outputs.hydrogen = 10_000;
+    state = setActivePlanet(state, "home");
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 80);
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 300, y: 0 });
+    const stationId = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!.id;
+    state = setLogisticsItem(state, stationId, "hydrogen");
+    state = setStationMode(state, stationId, "demand");
+    state = setStationMinimumLoad(state, stationId, 0.1);
+    state.portableFleet.logistics_vessel = 10;
+    state = adjustStationVessels(state, stationId, 10);
+    expect(getEntityPowerFactor(state, state.entities.find((entity) => entity.id === collectorId)!)).toBe(1);
+
+    state = advanceSimulation(state, 0.1);
+    expect(getStationFleetDiagnostic(state, stationId)?.vessels).toMatchObject({ installed: 10, busy: 10, available: 0, blockerCode: "all-busy" });
+    for (let second = 0; second < 45; second += 1) {
+      const status = getEntityOperatingStatus(state, state.entities.find((entity) => entity.id === stationId)!);
+      expect(["no-power", "low-power"]).not.toContain(status.code);
+      state = advanceSimulation(state, 1);
+    }
+    expect(state.entities.find((entity) => entity.id === stationId)?.stationTrips).toBe(10);
+  });
+
   it("loads, toggles and refunds a station warper reserve", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("space_warp");
@@ -3821,6 +3896,23 @@ describe("factory simulation", () => {
     expect(state.tray).toMatchObject({ iron_ingot: 0, stone_brick: 0, circuit_board: 0, magnetic_coil: 0 });
   });
 
+  it("lets the construction center maintain logistics-vessel stock", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("construction_automation", "interstellar_logistics");
+    state.construction.wind_turbine = 80;
+    state.construction.construction_center = 1;
+    state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 80);
+    state = placeBuilding(state, "construction_center", { x: 120, y: 0 });
+    state.tray = { titanium_alloy: 10, processor: 10, plasma_exciter: 4 };
+    state.planetTrays.home = state.tray;
+    state = setConstructionAutomationTarget(state, "logistics_vessel", 1);
+    state = advanceSimulation(state, 2);
+
+    expect(state.portableFleet.logistics_vessel).toBe(1);
+    expect(state.constructionAutomation).toMatchObject({ totalCrafted: 1, lastCraftedId: "logistics_vessel" });
+    expect(state.constructionAutomation.jobs).toEqual({});
+  });
+
   it("recursively processes construction intermediates but never creates missing raw resources", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("construction_automation");
@@ -3856,6 +3948,24 @@ describe("factory simulation", () => {
     expect(blocked.construction.arc_smelter).toBe(0);
     expect(status).toMatchObject({ stage: "等待材料", blockerReason: "raw-shortage" });
     expect(status.missingItemId).toBeDefined();
+  });
+
+  it("continues from iron ore through iron ingots and steel for construction-center targets", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("construction_automation", "high_efficiency_plasma_control");
+    state.construction.wind_turbine = 80;
+    state.construction.construction_center = 1;
+    state.construction.oil_extractor = 0;
+    state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 80);
+    state = placeBuilding(state, "construction_center", { x: 120, y: 0 });
+    state.tray = { iron_ore: 36, stone_brick: 12, circuit_board: 6, plasma_exciter: 4 };
+    state.planetTrays.home = state.tray;
+    state = setConstructionAutomationTarget(state, "oil_extractor", 1);
+    state = advanceSimulation(state, 12);
+
+    expect(state.construction.oil_extractor).toBe(1);
+    expect(state.tray.iron_ore).toBe(0);
+    expect(state.totalProduced.steel).toBe(12);
   });
 
   it("reports recursive manufacturing safety limits and refunds WIP when the target is cancelled", () => {

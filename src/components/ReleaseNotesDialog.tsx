@@ -5,52 +5,52 @@ import { NATIVE_BACK_EVENT } from "../nativeApp";
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-25-v1.0.2",
-  date: "2026年7月25日",
-  version: "1.0.2",
-  title: "完整英文版与亮色模式补全",
-  summary: "1.0.2 增加可随时切换的英文界面，并补齐开始菜单、账号、云存档、排行榜、全屏工作区和两套手机界面的亮色主题。语言只保存在当前设备，本次不升级 GameState，现有存档与云存档保持兼容。",
+  id: "2026-07-26-v1.0.3",
+  date: "2026年7月26日",
+  version: "1.0.3",
+  title: "递归制造与生产定位",
+  summary: "1.0.3 打通物流运输船与建筑制造中心的多级递归制造，增加物品产线定位，并修复高运输量诊断、枯竭矿脉、喷涂拆卸及手机输入和弹窗适配问题。GameState 升级至 v36，旧存档会无损迁移。",
   items: [
     {
-      id: "language-switch",
-      title: "中英文即时切换",
-      description: "开始菜单和游戏内设置都可切换简体中文与 English，也可使用 ?lang=en 直接进入英文版。偏好仅保存在当前设备，不写入本地或云端游戏存档。",
+      id: "recursive-crafting",
+      title: "递归制造完整打通",
+      description: "物流运输船现在支持一键递归制造；建筑制造中心会先规划完整材料链，优先尝试已解锁的高级精简配方，无法完成时再回退基础配方。铁矿石可继续加工为铁块和钢材，不再误报缺少中间材料。",
     },
     {
-      id: "catalog-english",
-      title: "生产目录完整英文化",
-      description: "78 项物品、78 条配方、37 类建筑、67 项科技、22 颗行星、8 个恒星系，以及生态、科研效果和主线任务均提供英文名称与说明。",
+      id: "production-locator",
+      title: "物品图鉴定位产线",
+      description: "物品详情可定位当前行星的全部生产设备并高亮完整上游网络；多个目标可逐个切换，其他行星的结果可直接跳转，定位高亮可随时清除。",
     },
     {
-      id: "workspace-english",
-      title: "核心工作区英文覆盖",
-      description: "开始菜单、工厂画布、制造、检查器、科技、统计、星图、资料库、排行榜、云存档、主线、戴森规划、蓝图和运营设置均可用英文完成主要操作。",
+      id: "logistics-diagnostics",
+      title: "物流与时间倍率诊断",
+      description: "轨道采集器不再被误判为航线断电；运输船全部执行任务时明确显示舰队容量瓶颈。时间扭曲界面新增请求倍率、实际倍率、供电需求、获得功率和自动降档原因。",
     },
     {
-      id: "light-theme",
-      title: "亮色模式全面补齐",
-      description: "修复开始菜单、账号与云存档、更新公告、统计、科技树、星图、资料库、排行榜、模态层和手机抽屉仍使用深色背景的问题。",
+      id: "mobile-input-layout",
+      title: "手机输入与弹窗适配",
+      description: "修复鸿蒙 App 搜索文字被状态刷新清空的问题，并兼容中文输入法组合过程。储物仓与储液罐端口在 80% 至 200% 字号下保持可连接，托盘删除操作在手机横竖屏始终固定可见。",
     },
     {
-      id: "mobile-parity",
-      title: "桌面与手机保持一致",
-      description: "经典手机界面和新版手机壳都可切换语言与主题，建造、物资、科研、更多工作区及横竖屏继续保留完整入口和安全区。",
+      id: "resource-recovery",
+      title: "枯竭资源提醒与恢复",
+      description: "有限矿脉枯竭后会显示醒目的节点提示和设置快捷入口；切换有限或无限资源前需要主动确认，矿机、线路和已有缓存均会保留。枯竭状态在保存重载后不再错误恢复储量。",
     },
     {
-      id: "native-update",
-      title: "原生应用同步更新",
-      description: "Windows 与 Android 应用同步升级至 1.0.2，继续使用现有更新通道、应用数据目录和 Android 发布签名，覆盖安装不会清除本地存档。",
+      id: "spray-sidebar",
+      title: "喷涂拆卸与侧栏修复",
+      description: "建筑检查器新增喷涂模块拆卸，返还模块、缓存中的增产剂和尚未用完的喷涂点折算物；物资侧栏折叠后会完整退出，不再残留黑色容器。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "language-switch": RadioTower,
-  "catalog-english": ClipboardCopy,
-  "workspace-english": Orbit,
-  "light-theme": MonitorDown,
-  "mobile-parity": Gauge,
-  "native-update": Route,
+  "recursive-crafting": Route,
+  "production-locator": Orbit,
+  "logistics-diagnostics": RadioTower,
+  "mobile-input-layout": MonitorDown,
+  "resource-recovery": Gauge,
+  "spray-sidebar": ClipboardCopy,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

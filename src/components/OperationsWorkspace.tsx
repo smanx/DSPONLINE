@@ -334,8 +334,22 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
       <section className="settings-group">
         <header><MapPin size={14} /><span>星区与资源</span><small>种子 #{game.galaxy.seed}</small></header>
         <div className="settings-segmented" aria-label="资源模式">
-          <button className={settings.resourceMode === "finite" ? "active" : ""} type="button" onClick={() => onChange({ resourceMode: "finite" })}>有限矿脉</button>
-          <button className={settings.resourceMode === "infinite" ? "active" : ""} type="button" onClick={() => onChange({ resourceMode: "infinite" })}>无限矿脉</button>
+          <button className={settings.resourceMode === "finite" ? "active" : ""} type="button" onClick={() => {
+            if (settings.resourceMode === "finite") return;
+            const confirmed = window.confirm(locale === "en"
+              ? "Switch to finite resources? Existing miners, belts, and buffers will be preserved, and veins will resume consuming their remaining reserves."
+              : "确认切换为有限矿脉？现有矿机、线路与缓存会保留，矿脉将继续消耗剩余储量。");
+            if (!confirmed) return;
+            onChange({ resourceMode: "finite" });
+          }}>有限矿脉</button>
+          <button className={settings.resourceMode === "infinite" ? "active" : ""} type="button" onClick={() => {
+            if (settings.resourceMode === "infinite") return;
+            const confirmed = window.confirm(locale === "en"
+              ? "Switch to infinite resources? Existing miners, belts, and buffers will be preserved, and depleted veins will resume production."
+              : "确认切换为无限矿脉？现有矿机、线路与缓存会保留，已枯竭矿脉将恢复生产。");
+            if (!confirmed) return;
+            onChange({ resourceMode: "infinite" });
+          }}>无限矿脉</button>
         </div>
       </section>
       <section className="settings-group settings-difficulty-group">

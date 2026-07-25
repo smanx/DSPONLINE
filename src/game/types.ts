@@ -577,6 +577,8 @@ export interface RecipeDefinition {
   inputs: ItemAmount[];
   outputs: ItemAmount[];
   requiredTechId?: TechId;
+  /** Higher values are preferred by automatic recursive manufacturing. */
+  recursivePriority?: number;
 }
 
 export interface BuildingDefinition {
@@ -928,6 +930,7 @@ export interface EntityOperatingStatus {
     | "no-fuel-selected"
     | "grid-standby"
     | "missing-route"
+    | "fleet-busy"
     | "missing-vessel"
     | "missing-drone"
      | "missing-warper"
@@ -1186,13 +1189,21 @@ export interface ProductionHistorySample {
   blockedMachines?: number;
 }
 
+export type ConstructionAutomationTargetId = ConstructionId | PortableFleetItemId;
+
 export interface ConstructionAutomationState {
   enabled: boolean;
-  targetStock: Partial<Record<ConstructionId, number>>;
+  targetStock: Partial<Record<ConstructionAutomationTargetId, number>>;
   cursor: number;
   totalCrafted: number;
-  lastCraftedId: ConstructionId | null;
+  lastCraftedId: ConstructionAutomationTargetId | null;
   jobs: Record<string, ConstructionAutomationJob>;
+}
+
+export interface ConstructionAutomationRecipeDecision {
+  itemId: ItemId;
+  recipeId: RecipeId;
+  fallbackReason?: string;
 }
 
 export interface ConstructionAutomationRecipeStep {
@@ -1208,18 +1219,25 @@ export interface ConstructionAutomationBuildingStep {
   constructionId: ConstructionId;
 }
 
-export type ConstructionAutomationStep = ConstructionAutomationRecipeStep | ConstructionAutomationBuildingStep;
+export interface ConstructionAutomationFleetStep {
+  kind: "fleet";
+  itemId: PortableFleetItemId;
+  amount: number;
+}
+
+export type ConstructionAutomationStep = ConstructionAutomationRecipeStep | ConstructionAutomationBuildingStep | ConstructionAutomationFleetStep;
 
 export interface ConstructionAutomationJob {
-  constructionId: ConstructionId;
+  constructionId: ConstructionAutomationTargetId;
   steps: ConstructionAutomationStep[];
   stepIndex: number;
   elapsedSeconds: number;
   inventory: Partial<Record<ItemId, number>>;
+  recipeDecisions?: ConstructionAutomationRecipeDecision[];
 }
 
 export interface GameState {
-  version: 35;
+  version: 36;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];

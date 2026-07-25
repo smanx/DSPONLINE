@@ -23,7 +23,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CONSTRUCTION,
   ITEMS,
@@ -39,7 +39,6 @@ import {
 } from "../../game/content";
 import {
   PORTABLE_FLEET_ITEM_IDS,
-  canHandcraftRecipe,
   canPlaceBuildingOnPlanet,
   canUpgradeBelt,
   canUpgradeEntity,
@@ -49,6 +48,7 @@ import {
   getEntityCycleRatePerSimulationSecond,
   getEntityOperatingStatus,
   getEntityPowerFactor,
+  getRecursiveHandcraftPlan,
   getResourceReserveSnapshot,
   isTechnologyCompleted,
 } from "../../game/engine";
@@ -123,12 +123,14 @@ export function mobileConstructionSearchText(id: ConstructionId): string {
   return `${constructionLabel(id)} ${definition?.name ?? ""} ${id} ${aliases}`.toLocaleLowerCase("zh-CN");
 }
 
-export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode, onSnap, onClose, onPlacement, onBelt, onCraft, onCraftFleet, onMissingCraft }: {
+export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode, query, onQueryChange, onSnap, onClose, onPlacement, onBelt, onCraft, onCraftFleet, onMissingCraft }: {
   game: GameState;
   snap: MobileSheetSnap;
   placement: BuildingId | null;
   beltTier: BeltTier;
   beltTierMode: "auto" | "manual";
+  query: string;
+  onQueryChange: (query: string) => void;
   onSnap: (snap: MobileSheetSnap) => void;
   onClose: () => void;
   onPlacement: (buildingId: BuildingId) => void;
@@ -139,7 +141,8 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
 }) {
   const [mode, setMode] = useState<BuildMode>("deploy");
   const [category, setCategory] = useState<BuildCategory>("all");
-  const [query, setQuery] = useState("");
+  const composingQueryRef = useRef(false);
+  const compositionValueRef = useRef("");
   const [recent, setRecent] = useState<Array<BuildingId | ConveyorBeltId>>(loadMobileRecentBuilds);
   const remember = (id: BuildingId | ConveyorBeltId) => {
     const next = [id, ...recent.filter((candidate) => candidate !== id)].slice(0, 12);
@@ -165,17 +168,40 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
         <div className="mobile-segmented" role="tablist" aria-label="建造模式">
           {(Object.keys(BUILD_MODE_LABELS) as BuildMode[]).map((id) => <button className={mode === id ? "active" : ""} type="button" role="tab" aria-selected={mode === id} key={id} onClick={() => setMode(id)}>{BUILD_MODE_LABELS[id]}</button>)}
         </div>
-        <label><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={mode === "fleet" ? "搜索载具" : "搜索建筑或设备"} aria-label="搜索建造项目" /></label>
+        <label><Search size={18} /><input
+          value={query}
+          onCompositionStart={(event) => {
+            composingQueryRef.current = true;
+            compositionValueRef.current = event.currentTarget.value;
+          }}
+          onCompositionUpdate={(event) => { compositionValueRef.current = event.currentTarget.value; }}
+          onCompositionEnd={(event) => {
+            composingQueryRef.current = false;
+            compositionValueRef.current = event.currentTarget.value;
+            onQueryChange(event.currentTarget.value);
+          }}
+          onChange={(event) => {
+            const value = event.target.value;
+            if (composingQueryRef.current && value === "" && compositionValueRef.current !== "") return;
+            compositionValueRef.current = value;
+            onQueryChange(value);
+          }}
+          placeholder={mode === "fleet" ? "搜索载具" : "搜索建筑或设备"}
+          aria-label="搜索建造项目"
+        /></label>
         {mode !== "fleet" ? <nav aria-label="建造分类">{(Object.keys(BUILD_CATEGORY_LABELS) as BuildCategory[]).map((id) => <button className={category === id ? "active" : ""} type="button" key={id} onClick={() => setCategory(id)}>{BUILD_CATEGORY_LABELS[id]}</button>)}</nav> : null}
       </div>
       {mode === "fleet" ? <div className="mobile-build-grid mobile-build-grid--fleet">
         {PORTABLE_FLEET_ITEM_IDS.filter((itemId) => !query.trim() || `${getItem(itemId).name} ${itemId}`.toLocaleLowerCase("zh-CN").includes(query.trim().toLocaleLowerCase("zh-CN"))).map((itemId: PortableFleetItemId) => {
           const recipe = getRecipe(itemId)!;
           const count = Math.floor(game.portableFleet?.[itemId] ?? 0);
-          const craftable = canHandcraftRecipe(game, recipe.id, 1);
+          const plan = getRecursiveHandcraftPlan(game, recipe.id, 1);
+          const craftable = plan.possible;
           const missingTech = recipe.requiredTechId && !isTechnologyCompleted(game, recipe.requiredTechId) ? getTechnology(recipe.requiredTechId)?.name : null;
-          return <button className="mobile-build-card" type="button" disabled={!craftable} key={itemId} onClick={() => onCraftFleet(recipe.id)} title={craftable ? `制造${getItem(itemId).name}` : missingTech ? `缺少科技：${missingTech}` : "材料不足"}>
-            <i><ItemGlyph itemId={itemId} /></i><span><strong>{getItem(itemId).name}</strong><small>随玩家跨星球携带</small></span><em>已有 ×{count}</em><b><Hammer size={15} />制造</b>
+          const blocker = plan.blocker;
+          const blockedLabel = missingTech ? `缺少科技：${missingTech}` : blocker?.reason === "capacity" ? "物资托盘已满" : blocker ? `缺少${getItem(blocker.itemId).name}` : "材料不足";
+          return <button className={`mobile-build-card${plan.decisions.length > 1 ? " upstream" : ""}`} type="button" disabled={!craftable} key={itemId} onClick={() => onCraftFleet(recipe.id)} title={craftable ? `制造${getItem(itemId).name}` : blockedLabel}>
+            <i><ItemGlyph itemId={itemId} /></i><span><strong>{getItem(itemId).name}</strong><small>{plan.decisions.length > 1 ? `递归加工 ${plan.decisions.length - 1} 段` : "随玩家跨星球携带"}</small></span><em>已有 ×{count}</em><b><Hammer size={15} />制造</b>
           </button>;
         })}
       </div> : <div className={`mobile-build-grid${query.trim() && visible.length <= 2 ? " mobile-build-grid--focused" : ""}`}>
@@ -280,7 +306,7 @@ function MobileEntityProgress({ game, entity, label, reserveLabel }: { game: Gam
   return <div className={`mobile-inspector-progress mobile-inspector-progress--${mode}${active ? " active" : ""}`}><span>{label}</span><strong>{mode === "indeterminate" ? active ? "运行中" : "待机" : `${percent}%`}</strong><i aria-hidden="true"><b style={mode === "indeterminate" ? undefined : { transform: `scaleX(${displayProgress})` }} /></i><small>{entity.productionRate.toFixed(1)}/min · 利用率 {Math.round(entity.utilization * 100)}%{reserveLabel}</small></div>;
 }
 
-export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onUpgradeEntity, onUpgradeBelt, onEntityLockChange }: {
+export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onUpgradeEntity, onUpgradeBelt, onEntityLockChange, onRemoveSprayCoater, onOpenResourceSettings }: {
   game: GameState;
   snap: MobileSheetSnap;
   entity: FactoryEntity | null;
@@ -294,6 +320,8 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
   onUpgradeEntity: (entityId: string) => void;
   onUpgradeBelt: (beltId: string) => void;
   onEntityLockChange: (entityId: string, locked: boolean) => void;
+  onRemoveSprayCoater: (entityId: string) => void;
+  onOpenResourceSettings: () => void;
 }) {
   const [addCount, setAddCount] = useState(1);
   const isMulti = selectedCount > 1;
@@ -326,6 +354,8 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
             {entity ? <button type="button" disabled={entity.interactionLocked || addAvailable < 1} onClick={() => onAddEntity(entity.id, addCount)}><Plus size={18} /><span>增加 ×{Math.min(addCount, addAvailable)}</span><b>余 {addAvailable}</b></button> : null}
             {entity ? <button type="button" disabled={entity.interactionLocked || !canUpgradeEntity(game, entity.id)} onClick={() => onUpgradeEntity(entity.id)}><Sparkles size={18} /><span>升级</span></button> : belt ? <button type="button" disabled={!canUpgradeBelt(game, belt.id)} onClick={() => onUpgradeBelt(belt.id)}><Sparkles size={18} /><span>升级线路</span></button> : null}
             {entity ? <button type="button" onClick={() => onEntityLockChange(entity.id, !entity.interactionLocked)}>{entity.interactionLocked ? <Unlock size={18} /> : <Lock size={18} />}<span>{entity.interactionLocked ? "解锁" : "锁定"}</span></button> : null}
+            {entity?.sprayCoaterInstalled ? <button type="button" disabled={entity.interactionLocked} onClick={() => onRemoveSprayCoater(entity.id)}><Trash2 size={18} /><span>拆卸喷涂</span></button> : null}
+            {resourceReserve?.exhausted ? <button type="button" onClick={onOpenResourceSettings}><Settings size={18} /><span>资源模式</span></button> : null}
             <button type="button" onClick={onOpenAdvanced}><Wrench size={18} /><span>{isMulti ? "批量设置" : "完整设置"}</span></button>
           </div>
         </> : <button className="mobile-inspector-peek-open" type="button" onClick={() => onSnap("half")}><span>查看输入、输出与快捷操作</span><ChevronRight size={20} /></button>}

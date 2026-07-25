@@ -350,7 +350,7 @@ export function VeinNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
-      className={`factory-node vein-node factory-node--status-${data.status.tone}${entity.interactionLocked ? " factory-node--locked" : ""}${selected ? " factory-node--selected" : ""}${installing ? " factory-node--placement" : ""}`}
+      className={`factory-node vein-node factory-node--status-${data.status.tone}${reserve?.exhausted ? " vein-node--depleted" : ""}${entity.interactionLocked ? " factory-node--locked" : ""}${selected ? " factory-node--selected" : ""}${installing ? " factory-node--placement" : ""}`}
       onClick={install}
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes("application/factory-building")) event.preventDefault();

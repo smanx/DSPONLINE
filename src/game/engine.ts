@@ -74,6 +74,7 @@ import type {
   RecipeId,
   ConstructionAutomationStep,
   ConstructionAutomationJob,
+  ConstructionAutomationTargetId,
   SorterTier,
   StationLogisticsMode,
   StationLogisticsScope,
@@ -106,6 +107,13 @@ import {
 } from "./infiniteResearch";
 import { ACTIVITY_MATERIAL_IDS, ACTIVITY_PROJECT_BY_ITEM } from "./activity";
 import { formatPowerKw } from "./units";
+import {
+  planRecursiveRequirements,
+  planSelectedRecipe,
+  type RecursiveCraftBlocker,
+  type RecursiveCraftDecision,
+  type RecursiveCraftPlan,
+} from "./recursiveCrafting";
 
 const BELT_CAPACITY_PER_SECOND: Record<BeltTier, number> = { 1: 6, 2: 12, 3: 30 };
 export const ACCUMULATOR_ENERGY_MJ = 90;
@@ -168,7 +176,7 @@ export function getMaximumStableTimeWarpMultiplier(availablePowerKw: number, req
   return Math.min(requestedMultiplier, supported);
 }
 
-export function isPortableFleetItem(itemId: ItemId): itemId is PortableFleetItemId {
+export function isPortableFleetItem(itemId: ItemId | ConstructionId): itemId is PortableFleetItemId {
   return PORTABLE_FLEET_ITEM_IDS.includes(itemId as PortableFleetItemId);
 }
 
@@ -208,7 +216,12 @@ function copyState(state: GameState): GameState {
       targetStock: { ...state.constructionAutomation.targetStock },
       jobs: Object.fromEntries(Object.entries(state.constructionAutomation.jobs).map(([entityId, job]) => [
         entityId,
-        { ...job, steps: job.steps.map((step) => ({ ...step })), inventory: { ...job.inventory } },
+        {
+          ...job,
+          steps: job.steps.map((step) => ({ ...step })),
+          inventory: { ...job.inventory },
+          recipeDecisions: job.recipeDecisions?.map((decision) => ({ ...decision })),
+        },
       ])),
     },
     portableFleet: state.portableFleet ? { ...state.portableFleet } : { logistics_drone: 0, logistics_vessel: 0 },
@@ -483,7 +496,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
     return { ...entity, resourceRemaining: reserve, resourceCapacity: reserve };
   });
   return {
-    version: 35,
+    version: 36,
     nextId: 1,
     activePlanetId: "home",
     entities,
@@ -1064,6 +1077,11 @@ export function getPowerGridMetrics(state: GameState, planetId: PlanetId, gridId
 }
 
 export function getEntityPowerFactor(state: GameState, entity: FactoryEntity): number {
+  // Orbital collectors are self-powered infrastructure. Treating their gas
+  // giant grid (which intentionally has no generators) as a route endpoint
+  // made otherwise healthy interstellar routes alternate between no-power
+  // and all-vessels-busy diagnostics.
+  if (entity.buildingId === "orbital_collector") return 1;
   if (!isEntityInPowerCoverage(state, entity)) return 0;
   if (typeof entity.powerFactor === "number" && Number.isFinite(entity.powerFactor)) {
     return Math.max(0, Math.min(1, entity.powerFactor));
@@ -3706,7 +3724,9 @@ function dispatchStationScope(
           : ensureStationSlots(supply)[peerSlotIndex];
         const sourcePlan = powerByPlanet.get(supply.planetId);
         const targetPlan = powerByPlanet.get(demand.planetId);
-        const sourcePower = sourcePlan?.factorByEntity.get(supply.id) ?? sourcePlan?.factor ?? 0;
+        const sourcePower = supply.buildingId === "orbital_collector"
+          ? 1
+          : sourcePlan?.factorByEntity.get(supply.id) ?? sourcePlan?.factor ?? 0;
         const targetPower = targetPlan?.factorByEntity.get(demand.id) ?? targetPlan?.factor ?? 0;
         const requiresWarp = scope === "remote" && stationRouteRequiresWarp(demand, supply);
         const economics = scope === "remote" ? getCachedInterstellarRouteEconomics(state, supply, demand, 1, {
@@ -3810,7 +3830,9 @@ function advanceStationRoutes(
       const sourcePlan = peer ? powerByPlanet.get(peer.planetId) : undefined;
       const targetPlan = powerByPlanet.get(demand.planetId);
       const ownerPlan = powerByPlanet.get(vehicleOwner.planetId);
-      const sourcePower = peer ? sourcePlan?.factorByEntity.get(peer.id) ?? sourcePlan?.factor ?? 0 : 1;
+      const sourcePower = peer?.buildingId === "orbital_collector"
+        ? 1
+        : peer ? sourcePlan?.factorByEntity.get(peer.id) ?? sourcePlan?.factor ?? 0 : 1;
       const targetPower = targetPlan?.factorByEntity.get(demand.id) ?? targetPlan?.factor ?? 0;
       const ownerPower = ownerPlan?.factorByEntity.get(vehicleOwner.id) ?? ownerPlan?.factor ?? 0;
       const hubPower = (route.waypointStationIds ?? []).reduce((factor, stationId) => {
@@ -5417,6 +5439,58 @@ export function installSprayCoaters(state: GameState, entityIds: string[]): Game
   return [...new Set(entityIds)].reduce((current, entityId) => installSprayCoater(current, entityId), state);
 }
 
+export interface SprayCoaterRemovalRefund {
+  sprayCoaters: number;
+  proliferatorItemId?: ItemId;
+  proliferatorItems: number;
+  bufferedProliferatorItems: number;
+  recoveredPointItems: number;
+  remainingSprayPoints: number;
+}
+
+export function getSprayCoaterRemovalRefund(state: GameState, entityId: string): SprayCoaterRemovalRefund | null {
+  const entity = state.entities.find((candidate) => candidate.id === entityId);
+  if (!entity?.sprayCoaterInstalled) return null;
+  const itemId = getEntityProliferatorItemId(entity);
+  const bufferedProliferatorItems = itemId ? Math.max(0, Math.floor(entity.inputs[itemId] ?? 0)) : 0;
+  const remainingSprayPoints = Math.max(0, Math.floor(entity.proliferatorPoints ?? 0));
+  const pointsPerItem = entity.proliferatorTier ? getProliferator(entity.proliferatorTier).sprayPoints : 0;
+  const recoveredPointItems = itemId && remainingSprayPoints > 0 && pointsPerItem > 0
+    ? Math.ceil(remainingSprayPoints / pointsPerItem)
+    : 0;
+  return {
+    sprayCoaters: 1,
+    proliferatorItemId: itemId,
+    proliferatorItems: bufferedProliferatorItems + recoveredPointItems,
+    bufferedProliferatorItems,
+    recoveredPointItems,
+    remainingSprayPoints,
+  };
+}
+
+export function removeSprayCoater(state: GameState, entityId: string): GameState {
+  const current = state.entities.find((candidate) => candidate.id === entityId);
+  if (!current?.sprayCoaterInstalled || current.interactionLocked) return state;
+  const refund = getSprayCoaterRemovalRefund(state, entityId);
+  if (!refund) return state;
+  const next = copyState(state);
+  const entity = next.entities.find((candidate) => candidate.id === entityId)!;
+  if (refund.proliferatorItemId && refund.proliferatorItems > 0) {
+    addToPlanetTray(next, entity.planetId, refund.proliferatorItemId, refund.proliferatorItems);
+    entity.inputs[refund.proliferatorItemId] = 0;
+  }
+  const removedBelts = next.belts.filter((belt) => belt.target === entityId && PROLIFERATOR_ITEM_IDS.includes(belt.itemId));
+  refundBelts(next, removedBelts);
+  next.belts = next.belts.filter((belt) => !removedBelts.includes(belt));
+  next.construction.spray_coater = Math.floor((next.construction.spray_coater ?? 0) + 1);
+  entity.sprayCoaterInstalled = false;
+  entity.proliferatorTier = undefined;
+  entity.proliferatorMode = undefined;
+  entity.proliferatorPoints = 0;
+  entity.proliferatorBonusProgress = {};
+  return next;
+}
+
 export function setProliferatorConfiguration(
   state: GameState,
   entityId: string,
@@ -5653,73 +5727,54 @@ export interface ConstructionQuickCraftPlan {
   batches: number;
   outputAmount: number;
   blocker?: { reason: "safety-limit"; itemId: ItemId; current: number; expected: number; limit: number };
-}
-
-interface ConstructionQuickCraftWork {
-  inventory: Partial<Record<ItemId, number>>;
-  produced: Partial<Record<ItemId, number>>;
+  recipeDecisions?: RecursiveCraftDecision[];
 }
 
 interface InternalConstructionQuickCraftPlan extends ConstructionQuickCraftPlan {
   inventory?: Partial<Record<ItemId, number>>;
 }
 
-const QUICK_CRAFT_OPTION_LIMIT = 24;
+const recursiveManufacturingRecipes = (): RecipeDefinition[] =>
+  Object.values(RECIPES).filter((recipe) => isHandcraftableRecipe(recipe.id));
 
-function copyQuickCraftWork(work: ConstructionQuickCraftWork): ConstructionQuickCraftWork {
-  return { inventory: { ...work.inventory }, produced: { ...work.produced } };
+function recursiveManufacturingInventory(state: GameState): Partial<Record<ItemId, number>> {
+  return {
+    ...state.tray,
+    logistics_drone: Math.max(0, Math.floor(state.portableFleet?.logistics_drone ?? 0)),
+    logistics_vessel: Math.max(0, Math.floor(state.portableFleet?.logistics_vessel ?? 0)),
+  };
 }
 
-function ensureQuickCraftItemOptions(
-  state: GameState,
-  work: ConstructionQuickCraftWork,
-  itemId: ItemId,
-  requiredAmount: number,
-  resolving: ReadonlySet<ItemId>,
-): ConstructionQuickCraftWork[] {
-  const available = Math.max(0, Math.floor(work.inventory[itemId] ?? 0));
-  if (available >= requiredAmount) return [work];
-  if (resolving.has(itemId)) return [];
-
-  const nextResolving = new Set(resolving);
-  nextResolving.add(itemId);
-  const options: ConstructionQuickCraftWork[] = [];
-  const recipes = Object.values(RECIPES).filter((recipe) =>
-    isHandcraftableRecipe(recipe.id) &&
-    (!recipe.requiredTechId || isTechnologyCompleted(state, recipe.requiredTechId)) &&
-    recipe.outputs.some((output) => output.itemId === itemId && output.amount > 0));
-
-  for (const recipe of recipes) {
-    const requestedOutput = recipe.outputs.find((output) => output.itemId === itemId)!;
-    const batches = Math.ceil((requiredAmount - available) / requestedOutput.amount);
-    let candidates = [copyQuickCraftWork(work)];
-    for (const input of recipe.inputs) {
-      const requiredInput = input.amount * batches;
-      const reserved: ConstructionQuickCraftWork[] = [];
-      for (const candidate of candidates) {
-        for (const supplied of ensureQuickCraftItemOptions(state, candidate, input.itemId, requiredInput, nextResolving)) {
-          const next = copyQuickCraftWork(supplied);
-          next.inventory[input.itemId] = Math.max(0, Math.floor((next.inventory[input.itemId] ?? 0) - requiredInput));
-          reserved.push(next);
-          if (reserved.length >= QUICK_CRAFT_OPTION_LIMIT) break;
-        }
-        if (reserved.length >= QUICK_CRAFT_OPTION_LIMIT) break;
-      }
-      candidates = reserved;
-      if (candidates.length === 0) break;
-    }
-
-    for (const candidate of candidates) {
-      for (const output of recipe.outputs) {
-        const amount = output.amount * batches;
-        candidate.inventory[output.itemId] = Math.floor((candidate.inventory[output.itemId] ?? 0) + amount);
-        candidate.produced[output.itemId] = Math.floor((candidate.produced[output.itemId] ?? 0) + amount);
-      }
-      if ((candidate.inventory[itemId] ?? 0) >= requiredAmount) options.push(candidate);
-      if (options.length >= QUICK_CRAFT_OPTION_LIMIT) return options;
+function recursiveProducedItems(plan: RecursiveCraftPlan): Array<{ itemId: ItemId; amount: number }> {
+  const totals = new Map<ItemId, number>();
+  for (const step of plan.steps) {
+    const recipe = getRecipe(step.recipeId);
+    if (!recipe) continue;
+    for (const output of recipe.outputs) {
+      totals.set(output.itemId, (totals.get(output.itemId) ?? 0) + output.amount * step.batches);
     }
   }
-  return options;
+  return [...totals].map(([itemId, amount]) => ({ itemId, amount: Math.max(0, Math.floor(amount)) }));
+}
+
+function applyRecursiveManufacturingInventory(state: GameState, inventory: Partial<Record<ItemId, number>>): void {
+  const tray = { ...inventory };
+  state.portableFleet.logistics_drone = Math.max(0, Math.floor(tray.logistics_drone ?? 0));
+  state.portableFleet.logistics_vessel = Math.max(0, Math.floor(tray.logistics_vessel ?? 0));
+  delete tray.logistics_drone;
+  delete tray.logistics_vessel;
+  state.tray = tray;
+  state.planetTrays[state.activePlanetId] = { ...tray };
+}
+
+function recursiveMissingItem(blocker: RecursiveCraftBlocker | undefined): ConstructionQuickCraftPlan["missingItems"] {
+  if (!blocker) return [];
+  return [{
+    itemId: blocker.itemId,
+    current: blocker.current,
+    required: blocker.required,
+    missing: Math.max(0, blocker.required - blocker.current),
+  }];
 }
 
 function buildConstructionQuickCraftPlan(state: GameState, buildingId: ConstructionId, batches = 1): InternalConstructionQuickCraftPlan {
@@ -5739,34 +5794,30 @@ function buildConstructionQuickCraftPlan(state: GameState, buildingId: Construct
   } satisfies ConstructionQuickCraftPlan;
   if (!definition || directDeficits.missingTechnology) return impossible;
 
-  const initialInventory = Object.fromEntries((Object.entries(state.tray) as Array<[ItemId, number]>).map(([itemId, amount]) => [
-    itemId,
-    Math.max(0, Math.floor(amount ?? 0)),
-  ])) as Partial<Record<ItemId, number>>;
-  let candidates: ConstructionQuickCraftWork[] = [{ inventory: { ...initialInventory }, produced: {} }];
-  for (const cost of definition.costs) {
-    const requiredCost = cost.amount * amount;
-    const paid: ConstructionQuickCraftWork[] = [];
-    for (const candidate of candidates) {
-      for (const supplied of ensureQuickCraftItemOptions(state, candidate, cost.itemId, requiredCost, new Set())) {
-        const next = copyQuickCraftWork(supplied);
-        next.inventory[cost.itemId] = Math.max(0, Math.floor((next.inventory[cost.itemId] ?? 0) - requiredCost));
-        paid.push(next);
-        if (paid.length >= QUICK_CRAFT_OPTION_LIMIT) break;
-      }
-      if (paid.length >= QUICK_CRAFT_OPTION_LIMIT) break;
-    }
-    candidates = paid;
-    if (candidates.length === 0) return impossible;
+  const initialInventory = recursiveManufacturingInventory(state);
+  const recursivePlan = planRecursiveRequirements({
+    inventory: initialInventory,
+    requirements: definition.costs.map((cost) => ({ itemId: cost.itemId, amount: cost.amount * amount })),
+    recipes: recursiveManufacturingRecipes(),
+    completedTechnologyIds: state.research.completedTechIds,
+  });
+  if (!recursivePlan.possible) {
+    return {
+      ...impossible,
+      missingTechnology: recursivePlan.blocker?.reason === "technology" && recursivePlan.blocker.technologyId
+        ? getTechnology(recursivePlan.blocker.technologyId)?.name ?? recursivePlan.blocker.technologyId
+        : null,
+      missingItems: recursiveMissingItem(recursivePlan.blocker),
+    };
   }
 
-  const selected = candidates[0];
+  const selected = recursivePlan;
   const protectionLimit = getPlanetTrayItemLimit(state, state.activePlanetId) + CONSTRUCTION_AUTOMATION_TRAY_OVERFLOW_ALLOWANCE;
   const unsafe = (Object.keys(ITEMS) as ItemId[]).map((itemId) => ({
     itemId,
     current: Math.max(0, Math.floor(initialInventory[itemId] ?? 0)),
     expected: Math.max(0, Math.floor(selected.inventory[itemId] ?? 0)),
-  })).find(({ current, expected }) => expected > current && expected > protectionLimit);
+  })).find(({ itemId, current, expected }) => !isPortableFleetItem(itemId) && expected > current && expected > protectionLimit);
   if (unsafe) return {
     ...impossible,
     blocker: { reason: "safety-limit", ...unsafe, limit: protectionLimit },
@@ -5775,8 +5826,7 @@ function buildConstructionQuickCraftPlan(state: GameState, buildingId: Construct
     const consumed = Math.max(0, Math.floor((initialInventory[itemId] ?? 0) - (selected.inventory[itemId] ?? 0)));
     return consumed > 0 ? [{ itemId, amount: consumed }] : [];
   });
-  const producedItems = (Object.entries(selected.produced) as Array<[ItemId, number]>).flatMap(([itemId, amount]) =>
-    amount > 0 ? [{ itemId, amount: Math.floor(amount) }] : []);
+  const producedItems = recursiveProducedItems(recursivePlan);
   return {
     status: producedItems.length > 0 ? "upstream" : "direct",
     possible: true,
@@ -5788,6 +5838,7 @@ function buildConstructionQuickCraftPlan(state: GameState, buildingId: Construct
     batches: amount,
     outputAmount: definition.outputAmount * amount,
     inventory: selected.inventory,
+    recipeDecisions: selected.decisions,
   };
 }
 
@@ -5897,7 +5948,7 @@ export function craftConstructionWithUpstream(state: GameState, buildingId: Cons
   const plan = buildConstructionQuickCraftPlan(state, buildingId, batches);
   if (!definition || !plan.possible || !plan.inventory) return state;
   const next = copyState(state);
-  next.tray = { ...plan.inventory };
+  applyRecursiveManufacturingInventory(next, plan.inventory);
   for (const item of plan.producedItems) {
     next.totalProduced[item.itemId] = Math.floor((next.totalProduced[item.itemId] ?? 0) + item.amount);
   }
@@ -5936,18 +5987,65 @@ function refundConstructionAutomationJob(state: GameState, entityId: string, job
   const tray = trayForPlanet(state, planetId);
   for (const [itemId, amount] of Object.entries(job.inventory) as Array<[ItemId, number]>) {
     const refund = Math.max(0, Math.floor(amount ?? 0));
-    if (refund > 0) tray[itemId] = Math.floor((tray[itemId] ?? 0) + refund);
+    if (refund < 1) continue;
+    if (isPortableFleetItem(itemId)) state.portableFleet[itemId] = Math.floor((state.portableFleet[itemId] ?? 0) + refund);
+    else tray[itemId] = Math.floor((tray[itemId] ?? 0) + refund);
   }
 }
 
-export function setConstructionAutomationTarget(state: GameState, constructionId: ConstructionId, target: number): GameState {
-  if (!getConstructionDefinition(constructionId)) return state;
+interface ConstructionAutomationTargetDefinition {
+  id: ConstructionAutomationTargetId;
+  name: string;
+  outputAmount: number;
+  costs: Array<{ itemId: ItemId; amount: number }>;
+  requiredTechId?: TechId;
+  kind: "building" | "fleet";
+  recipeId?: RecipeId;
+}
+
+function getConstructionAutomationTargets(): ConstructionAutomationTargetDefinition[] {
+  const buildings = CONSTRUCTION.map((definition) => ({
+    id: definition.buildingId,
+    name: definition.name,
+    outputAmount: definition.outputAmount,
+    costs: definition.costs,
+    requiredTechId: definition.requiredTechId,
+    kind: "building" as const,
+  }));
+  const fleet = PORTABLE_FLEET_ITEM_IDS.flatMap((itemId) => {
+    const recipe = getRecipe(itemId);
+    const output = recipe?.outputs.find((candidate) => candidate.itemId === itemId);
+    return recipe && output ? [{
+      id: itemId,
+      name: ITEMS[itemId].name,
+      outputAmount: output.amount,
+      costs: recipe.inputs,
+      requiredTechId: recipe.requiredTechId,
+      kind: "fleet" as const,
+      recipeId: recipe.id,
+    }] : [];
+  });
+  return [...buildings, ...fleet];
+}
+
+function getConstructionAutomationTargetDefinition(id: ConstructionAutomationTargetId): ConstructionAutomationTargetDefinition | undefined {
+  return getConstructionAutomationTargets().find((definition) => definition.id === id);
+}
+
+function constructionAutomationCurrentStock(state: GameState, id: ConstructionAutomationTargetId): number {
+  return isPortableFleetItem(id)
+    ? Math.max(0, Math.floor(state.portableFleet[id] ?? 0))
+    : Math.max(0, Math.floor(state.construction[id] ?? 0));
+}
+
+export function setConstructionAutomationTarget(state: GameState, constructionId: ConstructionAutomationTargetId, target: number): GameState {
+  if (!getConstructionAutomationTargetDefinition(constructionId)) return state;
   const normalized = Math.max(0, Math.min(getConstructionAutomationStockLimit(state), Math.floor(target)));
   if ((state.constructionAutomation.targetStock[constructionId] ?? 0) === normalized) return state;
   const targetStock = { ...state.constructionAutomation.targetStock };
   if (normalized < 1) delete targetStock[constructionId];
   else targetStock[constructionId] = normalized;
-  if (normalized <= (state.construction[constructionId] ?? 0)) {
+  if (normalized <= constructionAutomationCurrentStock(state, constructionId)) {
     const next = copyState(state);
     next.constructionAutomation.targetStock = targetStock;
     for (const [entityId, job] of Object.entries(next.constructionAutomation.jobs)) {
@@ -5971,110 +6069,100 @@ interface ConstructionAutomationBlocker {
 interface ConstructionAutomationPlan {
   steps: ConstructionAutomationStep[];
   blocker?: ConstructionAutomationBlocker;
+  recipeDecisions?: ConstructionAutomationJob["recipeDecisions"];
 }
 
 const CONSTRUCTION_AUTOMATION_WIP_LIMIT = 1_000_000;
 const CONSTRUCTION_AUTOMATION_TRAY_OVERFLOW_ALLOWANCE = 1_000_000;
 
-interface ConstructionAutomationPlanWork {
-  inventory: Partial<Record<ItemId, number>>;
-  steps: ConstructionAutomationStep[];
+function constructionAutomationPending(state: GameState, constructionId: ConstructionAutomationTargetId): number {
+  return Object.values(state.constructionAutomation.jobs).reduce((sum, job) => {
+    if (job.constructionId !== constructionId) return sum;
+    const definition = getConstructionAutomationTargetDefinition(constructionId);
+    return sum + (definition?.outputAmount ?? 0);
+  }, 0);
 }
 
-function constructionAutomationPending(state: GameState, constructionId: ConstructionId): number {
-  return Object.values(state.constructionAutomation.jobs).reduce((sum, job) => sum + job.steps
-    .filter((step) => step.kind === "building" && step.constructionId === constructionId).length, 0);
-}
-
-function constructionAutomationTarget(state: GameState, cursor = state.constructionAutomation.cursor): { index: number; definition: typeof CONSTRUCTION[number] } | null {
-  if (CONSTRUCTION.length === 0) return null;
-  for (let offset = 0; offset < CONSTRUCTION.length; offset += 1) {
-    const index = (cursor + offset) % CONSTRUCTION.length;
-    const definition = CONSTRUCTION[index];
-    const target = state.constructionAutomation.targetStock[definition.buildingId] ?? 0;
-    const current = (state.construction[definition.buildingId] ?? 0) + constructionAutomationPending(state, definition.buildingId);
+function constructionAutomationTarget(state: GameState, cursor = state.constructionAutomation.cursor): { index: number; definition: ConstructionAutomationTargetDefinition } | null {
+  const definitions = getConstructionAutomationTargets();
+  if (definitions.length === 0) return null;
+  for (let offset = 0; offset < definitions.length; offset += 1) {
+    const index = (cursor + offset) % definitions.length;
+    const definition = definitions[index];
+    const target = state.constructionAutomation.targetStock[definition.id] ?? 0;
+    const current = constructionAutomationCurrentStock(state, definition.id) + constructionAutomationPending(state, definition.id);
     if (target <= current || definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)) continue;
     return { index, definition };
   }
   return null;
 }
 
-function automationRecipesForOutput(state: GameState, itemId: ItemId): RecipeDefinition[] {
-  void state;
-  return Object.values(RECIPES).filter((recipe) =>
-    isHandcraftableRecipe(recipe.id) &&
-    recipe.outputs.some((output) => output.itemId === itemId && output.amount > 0));
-}
-
-function planAutomationItem(
-  state: GameState,
-  work: ConstructionAutomationPlanWork,
-  itemId: ItemId,
-  requiredAmount: number,
-  resolving: ReadonlySet<ItemId>,
-): { work?: ConstructionAutomationPlanWork; blocker?: ConstructionAutomationBlocker } {
-  const current = Math.max(0, Math.floor(work.inventory[itemId] ?? 0));
-  if (current >= requiredAmount) return { work };
-  if (resolving.has(itemId)) return { blocker: { itemId, current, required: requiredAmount, reason: "no-handcraft" } };
-  const recipes = automationRecipesForOutput(state, itemId);
-  if (recipes.length === 0) return { blocker: { itemId, current, required: requiredAmount, reason: "raw-shortage" } };
-  const nextResolving = new Set(resolving);
-  nextResolving.add(itemId);
-  let lastBlocker: ConstructionAutomationBlocker | undefined;
-  for (const recipe of recipes) {
-    if (recipe.requiredTechId && !isTechnologyCompleted(state, recipe.requiredTechId)) {
-      lastBlocker = { itemId, current, required: requiredAmount, reason: "technology", technologyName: getTechnology(recipe.requiredTechId)?.name ?? recipe.requiredTechId };
-      continue;
-    }
-    const primary = recipe.outputs.find((output) => output.itemId === itemId && output.amount > 0)!;
-    const batches = Math.max(1, Math.ceil((requiredAmount - current) / primary.amount));
-    let candidate: ConstructionAutomationPlanWork = {
-      inventory: { ...work.inventory },
-      steps: work.steps.map((step) => ({ ...step })),
-    };
-    let failed: ConstructionAutomationBlocker | undefined;
-    for (const input of recipe.inputs) {
-      const result = planAutomationItem(state, candidate, input.itemId, input.amount * batches, nextResolving);
-      if (!result.work) {
-        failed = result.blocker;
-        break;
-      }
-      candidate = result.work;
-      candidate.inventory[input.itemId] = Math.max(0, Math.floor((candidate.inventory[input.itemId] ?? 0) - input.amount * batches));
-    }
-    if (failed) {
-      lastBlocker = failed;
-      continue;
-    }
-    for (const output of recipe.outputs) {
-      candidate.inventory[output.itemId] = Math.floor((candidate.inventory[output.itemId] ?? 0) + output.amount * batches);
-    }
-    candidate.steps.push({
-      kind: "material",
-      recipeId: recipe.id,
-      batches,
-      outputItemId: itemId,
-      outputAmount: primary.amount * batches,
-    });
-    return { work: candidate };
-  }
-  return { blocker: lastBlocker ?? { itemId, current, required: requiredAmount, reason: "no-handcraft" } };
-}
-
-function buildConstructionAutomationPlan(state: GameState, definition: typeof CONSTRUCTION[number], planetId: PlanetId): ConstructionAutomationPlan {
-  const tray = trayForPlanet(state, planetId);
-  let work: ConstructionAutomationPlanWork = {
-    inventory: Object.fromEntries((Object.entries(tray) as Array<[ItemId, number]>).map(([itemId, amount]) => [itemId, Math.max(0, Math.floor(amount ?? 0))])),
-    steps: [],
+function constructionAutomationBlocker(blocker: RecursiveCraftBlocker | undefined): ConstructionAutomationBlocker | undefined {
+  if (!blocker) return undefined;
+  return {
+    itemId: blocker.itemId,
+    current: blocker.current,
+    required: blocker.required,
+    reason: blocker.reason === "raw-shortage" ? "raw-shortage"
+      : blocker.reason === "technology" ? "technology" : "no-handcraft",
+    technologyName: blocker.technologyId
+      ? getTechnology(blocker.technologyId)?.name ?? blocker.technologyId
+      : undefined,
   };
-  for (const cost of definition.costs) {
-    const result = planAutomationItem(state, work, cost.itemId, cost.amount, new Set());
-    if (!result.work) return { steps: [], blocker: result.blocker };
-    work = result.work;
-    work.inventory[cost.itemId] = Math.max(0, Math.floor((work.inventory[cost.itemId] ?? 0) - cost.amount));
+}
+
+function constructionAutomationRecipeDecisions(decisions: RecursiveCraftDecision[]): ConstructionAutomationJob["recipeDecisions"] {
+  return decisions.map((decision) => ({
+    itemId: decision.itemId,
+    recipeId: decision.recipeId,
+    fallbackReason: decision.fallbacks.length > 0
+      ? decision.fallbacks.map((fallback) => {
+        const recipeName = getRecipe(fallback.recipeId)?.name ?? fallback.recipeId;
+        if (fallback.reason === "technology") return `${recipeName}科技未解锁`;
+        const blockerName = fallback.blocker ? ITEMS[fallback.blocker.itemId]?.name : null;
+        return blockerName ? `${recipeName}缺少${blockerName}` : `${recipeName}材料链不可完成`;
+      }).join("；")
+      : undefined,
+  }));
+}
+
+function buildConstructionAutomationPlan(state: GameState, definition: ConstructionAutomationTargetDefinition, planetId: PlanetId): ConstructionAutomationPlan {
+  const tray = trayForPlanet(state, planetId);
+  const inventory = Object.fromEntries((Object.entries(tray) as Array<[ItemId, number]>).map(([itemId, amount]) => [
+    itemId,
+    Math.max(0, Math.floor(amount ?? 0)),
+  ])) as Partial<Record<ItemId, number>>;
+  const recipes = recursiveManufacturingRecipes();
+  const plan = definition.kind === "fleet" && definition.recipeId
+    ? planSelectedRecipe({
+      inventory,
+      recipe: RECIPES[definition.recipeId],
+      batches: 1,
+      recipes,
+      completedTechnologyIds: state.research.completedTechIds,
+      allowRecipe: (recipe) => isHandcraftableRecipe(recipe.id),
+    })
+    : planRecursiveRequirements({
+      inventory,
+      requirements: definition.costs,
+      recipes,
+      completedTechnologyIds: state.research.completedTechIds,
+      allowRecipe: (recipe) => isHandcraftableRecipe(recipe.id),
+    });
+  if (!plan.possible) return { steps: [], blocker: constructionAutomationBlocker(plan.blocker) };
+  const steps: ConstructionAutomationStep[] = plan.steps.map((step) => ({
+    kind: "material",
+    recipeId: step.recipeId,
+    batches: step.batches,
+    outputItemId: step.outputItemId,
+    outputAmount: step.outputAmount,
+  }));
+  if (definition.kind === "fleet" && isPortableFleetItem(definition.id)) {
+    steps.push({ kind: "fleet", itemId: definition.id, amount: definition.outputAmount });
+  } else if (!isPortableFleetItem(definition.id)) {
+    steps.push({ kind: "building", constructionId: definition.id });
   }
-  work.steps.push({ kind: "building", constructionId: definition.buildingId });
-  return { steps: work.steps };
+  return { steps, recipeDecisions: constructionAutomationRecipeDecisions(plan.decisions) };
 }
 
 function constructionAutomationHasDeficit(state: GameState): boolean {
@@ -6097,6 +6185,8 @@ export interface ConstructionAutomationStatus {
   safetyCurrent?: number;
   safetyExpected?: number;
   safetyLimit?: number;
+  recipeName?: string;
+  recipeFallbackReason?: string;
 }
 
 export interface ConstructionCenterTraceSample {
@@ -6120,6 +6210,7 @@ export interface ConstructionCenterTraceSample {
 
 function constructionAutomationStepDuration(state: GameState, step: ConstructionAutomationStep): number {
   if (step.kind === "building") return getConstructionAutomationCycleSeconds(state);
+  if (step.kind === "fleet") return 0.01;
   return Math.max(0.01, getConstructionAutomationMaterialSeconds(state) * step.outputAmount);
 }
 
@@ -6169,10 +6260,13 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
     const missing = requirements.find((requirement) =>
       (tray[requirement.itemId] ?? 0) + (job.inventory[requirement.itemId] ?? 0) + EPSILON < requirement.amount);
     const safetyBlocker = missing ? undefined : constructionAutomationStepSafetyBlocker(state, entity.planetId, job, step);
+    const recipeDecision = step.kind === "material"
+      ? job.recipeDecisions?.find((decision) => decision.itemId === step.outputItemId && decision.recipeId === step.recipeId)
+      : undefined;
     return {
       stage: safetyBlocker ? "缓存安全上限保护" : step.kind === "building"
         ? `制造 ${getConstructionDefinition(step.constructionId)?.name ?? step.constructionId}`
-        : `加工 ${ITEMS[step.outputItemId].name}`,
+        : step.kind === "fleet" ? `入库 ${ITEMS[step.itemId].name}` : `加工 ${ITEMS[step.outputItemId].name}`,
       progress: Math.max(0, Math.min(1, job.elapsedSeconds / duration)),
       etaSeconds: Math.max(0, (duration - job.elapsedSeconds) + job.steps.slice(job.stepIndex + 1).reduce((sum, pending) => sum + constructionAutomationStepDuration(state, pending), 0)) /
         Math.max(1, entity.machineCount),
@@ -6182,6 +6276,8 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
       safetyCurrent: safetyBlocker?.current,
       safetyExpected: safetyBlocker?.expected,
       safetyLimit: safetyBlocker?.limit,
+      recipeName: step.kind === "material" ? getRecipe(step.recipeId)?.name : undefined,
+      recipeFallbackReason: recipeDecision?.fallbackReason,
     };
   }
   const target = constructionAutomationTarget(state);
@@ -6198,7 +6294,15 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
       technologyName: plan.blocker.technologyName,
     };
   }
-  return { stage: `准备 ${target.definition.name}`, progress: 0, etaSeconds: plan.steps.reduce((sum, step) => sum + constructionAutomationStepDuration(state, step), 0) / Math.max(1, entity.machineCount) };
+  const lastDecision = plan.recipeDecisions?.at(-1);
+  const recipeName = lastDecision ? getRecipe(lastDecision.recipeId)?.name : null;
+  return {
+    stage: `准备 ${target.definition.name}${recipeName ? ` · ${recipeName}` : ""}`,
+    progress: 0,
+    etaSeconds: plan.steps.reduce((sum, step) => sum + constructionAutomationStepDuration(state, step), 0) / Math.max(1, entity.machineCount),
+    recipeName: recipeName ?? undefined,
+    recipeFallbackReason: lastDecision?.fallbackReason,
+  };
 }
 
 export function getConstructionCenterTraceSample(
@@ -6218,10 +6322,10 @@ export function getConstructionCenterTraceSample(
     workerLatencyMs: Math.max(0, workerLatencyMs),
     pendingSimulationSeconds: Math.max(0, pendingSimulationSeconds),
     entityId,
-    constructionId: job?.constructionId ?? null,
+    constructionId: job && !isPortableFleetItem(job.constructionId) ? job.constructionId : null,
     stepIndex: job?.stepIndex ?? -1,
     stepKind: step?.kind ?? null,
-    stepItemId: step?.kind === "material" ? step.outputItemId : null,
+    stepItemId: step?.kind === "material" ? step.outputItemId : step?.kind === "fleet" ? step.itemId : null,
     stepElapsedSeconds: Math.max(0, job?.elapsedSeconds ?? 0),
     stepDurationSeconds: step ? constructionAutomationStepDuration(state, step) : 0,
     wipCount: Object.values(job?.inventory ?? {}).reduce((sum, amount) => sum + Math.max(0, Math.floor(amount ?? 0)), 0),
@@ -6235,7 +6339,8 @@ export function getConstructionCenterTraceSample(
 function constructionAutomationRequirements(step: ConstructionAutomationStep): Array<{ itemId: ItemId; amount: number }> {
   return step.kind === "building"
     ? getConstructionDefinition(step.constructionId)?.costs ?? []
-    : getRecipe(step.recipeId)?.inputs.map((input) => ({ itemId: input.itemId, amount: input.amount * step.batches })) ?? [];
+    : step.kind === "fleet" ? [{ itemId: step.itemId, amount: step.amount }]
+      : getRecipe(step.recipeId)?.inputs.map((input) => ({ itemId: input.itemId, amount: input.amount * step.batches })) ?? [];
 }
 
 function planConstructionAutomationConsumption(
@@ -6285,6 +6390,7 @@ function constructionAutomationStepSafetyBlocker(
     }
     return undefined;
   }
+  if (step.kind === "fleet") return undefined;
   const producedInventory = { ...consumed.inventory };
   for (const output of getRecipe(step.recipeId)?.outputs ?? []) {
     producedInventory[output.itemId] = Math.floor((producedInventory[output.itemId] ?? 0) + output.amount * step.batches);
@@ -6318,6 +6424,14 @@ function finishConstructionAutomationStep(state: GameState, planetId: PlanetId, 
     state.construction[step.constructionId] = Math.floor((state.construction[step.constructionId] ?? 0) + definition.outputAmount);
     state.constructionAutomation.totalCrafted += definition.outputAmount;
     state.constructionAutomation.lastCraftedId = step.constructionId;
+    return true;
+  }
+  if (step.kind === "fleet") {
+    Object.assign(tray, consumed.tray);
+    job.inventory = consumed.inventory;
+    state.portableFleet[step.itemId] = Math.floor((state.portableFleet[step.itemId] ?? 0) + step.amount);
+    state.constructionAutomation.totalCrafted += step.amount;
+    state.constructionAutomation.lastCraftedId = step.itemId;
     return true;
   }
   const recipe = getRecipe(step.recipeId);
@@ -6358,9 +6472,16 @@ function runConstructionCenters(state: GameState, seconds: number, power: PowerP
         if (!target) break;
         const plan = buildConstructionAutomationPlan(state, target.definition, entity.planetId);
         if (plan.blocker) break;
-        job = { constructionId: target.definition.buildingId, steps: plan.steps, stepIndex: 0, elapsedSeconds: 0, inventory: {} };
+        job = {
+          constructionId: target.definition.id,
+          steps: plan.steps,
+          stepIndex: 0,
+          elapsedSeconds: 0,
+          inventory: {},
+          recipeDecisions: plan.recipeDecisions,
+        };
         state.constructionAutomation.jobs[entity.id] = job;
-        state.constructionAutomation.cursor = (target.index + 1) % Math.max(1, CONSTRUCTION.length);
+        state.constructionAutomation.cursor = (target.index + 1) % Math.max(1, getConstructionAutomationTargets().length);
       }
       const step = job.steps[job.stepIndex];
       if (!step) {
@@ -6379,6 +6500,7 @@ function runConstructionCenters(state: GameState, seconds: number, power: PowerP
       if (job.elapsedSeconds + EPSILON < duration) break;
       if (!finishConstructionAutomationStep(state, entity.planetId, job, step)) break;
       if (step.kind === "building") completed += getConstructionDefinition(step.constructionId)?.outputAmount ?? 0;
+      else if (step.kind === "fleet") completed += step.amount;
       job.stepIndex += 1;
       job.elapsedSeconds = 0;
       entity.progress = 0;
@@ -7317,6 +7439,113 @@ export function canHandcraftRecipe(state: GameState, recipeId: RecipeId, batches
     canStoreRecipeOutputsInTray(state, recipe, amount));
 }
 
+export interface RecursiveHandcraftPlan {
+  possible: boolean;
+  recipeId: RecipeId;
+  batches: number;
+  outputAmount: number;
+  consumedItems: Array<{ itemId: ItemId; amount: number }>;
+  producedItems: Array<{ itemId: ItemId; amount: number }>;
+  decisions: RecursiveCraftDecision[];
+  blocker?: RecursiveCraftBlocker | {
+    reason: "capacity";
+    itemId: ItemId;
+    current: number;
+    required: number;
+    limit: number;
+  };
+}
+
+interface InternalRecursiveHandcraftPlan extends RecursiveHandcraftPlan {
+  inventory?: Partial<Record<ItemId, number>>;
+}
+
+function buildRecursiveHandcraftPlan(state: GameState, recipeId: RecipeId, batches = 1): InternalRecursiveHandcraftPlan {
+  const amount = normalizeManualCraftBatches(batches);
+  const recipe = getRecipe(recipeId);
+  const outputAmount = recipe?.outputs.reduce((sum, output) => sum + output.amount * amount, 0) ?? 0;
+  const blocked = (blocker?: InternalRecursiveHandcraftPlan["blocker"]): InternalRecursiveHandcraftPlan => ({
+    possible: false,
+    recipeId,
+    batches: amount,
+    outputAmount,
+    consumedItems: [],
+    producedItems: [],
+    decisions: [],
+    blocker,
+  });
+  if (!recipe || !isHandcraftableRecipe(recipeId)) {
+    return blocked({ itemId: recipe?.outputs[0]?.itemId ?? "iron_ore", current: 0, required: 1, reason: "no-recipe" });
+  }
+
+  const initialInventory = recursiveManufacturingInventory(state);
+  const plan = planSelectedRecipe({
+    inventory: initialInventory,
+    recipe,
+    batches: amount,
+    recipes: recursiveManufacturingRecipes(),
+    completedTechnologyIds: state.research.completedTechIds,
+    allowRecipe: (candidate) => isHandcraftableRecipe(candidate.id),
+  });
+  if (!plan.possible) return blocked(plan.blocker);
+
+  const trayLimit = getPlanetTrayItemLimit(state, state.activePlanetId);
+  const capacityBlocker = (Object.keys(ITEMS) as ItemId[]).map((itemId) => ({
+    itemId,
+    current: Math.max(0, Math.floor(initialInventory[itemId] ?? 0)),
+    required: Math.max(0, Math.floor(plan.inventory[itemId] ?? 0)),
+  })).find(({ itemId, current, required }) => !isPortableFleetItem(itemId) && required > current && required > trayLimit);
+  if (capacityBlocker) return blocked({ ...capacityBlocker, reason: "capacity", limit: trayLimit });
+
+  const consumedItems = (Object.keys(ITEMS) as ItemId[]).flatMap((itemId) => {
+    const consumed = Math.max(0, Math.floor((initialInventory[itemId] ?? 0) - (plan.inventory[itemId] ?? 0)));
+    return consumed > 0 ? [{ itemId, amount: consumed }] : [];
+  });
+  return {
+    possible: true,
+    recipeId,
+    batches: amount,
+    outputAmount,
+    consumedItems,
+    producedItems: recursiveProducedItems(plan),
+    decisions: plan.decisions,
+    inventory: plan.inventory,
+  };
+}
+
+export function getRecursiveHandcraftPlan(state: GameState, recipeId: RecipeId, batches = 1): RecursiveHandcraftPlan {
+  const { inventory: _inventory, ...plan } = buildRecursiveHandcraftPlan(state, recipeId, batches);
+  return plan;
+}
+
+export function getMaxRecursiveHandcraftBatches(state: GameState, recipeId: RecipeId): number {
+  if (!buildRecursiveHandcraftPlan(state, recipeId, 1).possible) return 0;
+  let low = 1;
+  let high = 2;
+  while (high < MAX_MANUAL_CRAFT_BATCHES && buildRecursiveHandcraftPlan(state, recipeId, high).possible) {
+    low = high;
+    high = Math.min(MAX_MANUAL_CRAFT_BATCHES, high * 2);
+  }
+  if (high === MAX_MANUAL_CRAFT_BATCHES && buildRecursiveHandcraftPlan(state, recipeId, high).possible) return high;
+  while (low + 1 < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (buildRecursiveHandcraftPlan(state, recipeId, middle).possible) low = middle;
+    else high = middle;
+  }
+  return low;
+}
+
+export function handcraftRecipeWithUpstream(state: GameState, recipeId: RecipeId, batches = 1): GameState {
+  const plan = buildRecursiveHandcraftPlan(state, recipeId, batches);
+  if (!plan.possible || !plan.inventory) return state;
+  const next = copyState(state);
+  applyRecursiveManufacturingInventory(next, plan.inventory);
+  for (const item of plan.producedItems) {
+    next.totalProduced[item.itemId] = Math.floor((next.totalProduced[item.itemId] ?? 0) + item.amount);
+  }
+  return next;
+}
+
 export function handcraftRecipe(state: GameState, recipeId: RecipeId, batches = 1): GameState {
   const amount = normalizeManualCraftBatches(batches);
   const recipe = getRecipe(recipeId);
@@ -7972,6 +8201,15 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
           candidate.buildingId !== "orbital_collector" && all.findIndex((entry) => entry.id === candidate.id) === index);
         const availableOwners = vehicleOwners.filter((owner) => stationInstalledVehicles(owner, scope) - stationBusyVehicles(state, owner, scope) > 0);
         if (availableOwners.length === 0) {
+          const installedVehicles = vehicleOwners.reduce((sum, owner) => sum + stationInstalledVehicles(owner, scope), 0);
+          const busyVehicles = vehicleOwners.reduce((sum, owner) => sum + stationBusyVehicles(state, owner, scope), 0);
+          if (installedVehicles > 0 && busyVehicles >= installedVehicles) {
+            return {
+              code: "fleet-busy",
+              label: `${scope === "local" ? "运输机" : "运输船"}全部执行中 · 舰队容量瓶颈 ${busyVehicles}/${installedVehicles}`,
+              tone: "warning",
+            };
+          }
           return scope === "local"
             ? { code: "missing-drone", label: "缺少可用物流运输机", tone: "blocked" }
             : { code: "missing-vessel", label: "缺少可用物流运输船", tone: "blocked" };

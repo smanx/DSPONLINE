@@ -2,7 +2,7 @@
 
 [English README](./README.en.md) | 简体中文
 
-《戴森球计划》生产流程的 2D 无限画布挂机工厂游戏。当前产品版本为 `1.0.2`，使用 `GameState` v35、存档 envelope v2、云 schema v7 和 SQLite layout v2，提供 Web/PWA、Electron 桌面壳、Capacitor Android 应用、云账号、四槽云存档和排行榜。
+《戴森球计划》生产流程的 2D 无限画布挂机工厂游戏。当前 Web 产品版本为 `1.0.3`，使用 `GameState` v36、存档 envelope v2、云 schema v7 和 SQLite layout v2，提供 Web/PWA、Electron 桌面壳、Capacitor Android 应用、云账号、四槽云存档和排行榜。公开 Windows/Android 安装包暂时保持 `1.0.2`，本轮未发布新的原生二进制。
 
 正式入口：[https://dsponline.cn](https://dsponline.cn)
 源码仓库：[https://github.com/snowsnow0926/DSPONLINE](https://github.com/snowsnow0926/DSPONLINE)
@@ -17,6 +17,7 @@
 - 本地存档、备份、快照、三个手动槽位、蓝图和内容包。
 - 用户名账号、可选邮箱、四槽云存档、修订历史、冲突保护和排行榜。
 - 简体中文与 English 可随时切换，语言偏好仅保存在当前设备；深色、亮色和跟随系统主题覆盖桌面及两套手机界面。
+- 多级递归制造支持高级配方回退、物流运输船和建筑制造中心；生产资料库可跨行星定位并高亮真实上游产线。
 - Electron 桌面打包、Capacitor Android 工程及 Stable/Beta/Nightly 更新通道。
 - SQLite 云服务、备份/恢复、Nginx/systemd 模板和双节点发布工具。
 
