@@ -5,9 +5,9 @@
 | 层级 | 命令 | 当前规模 | 覆盖重点 |
 | --- | --- | ---: | --- |
 | 类型检查 | `npm run typecheck` | 全部前端 TS | 严格类型、Vite 配置 |
-| 单元/领域 | `npm test` | `1.0.3` 工作区 472 项，1 项可选基准跳过 | 引擎、v1-v36 存档、递归制造、产线定位、建筑锁、物流索引与 50 艘调度、翘曲补仓、近期线路流量、生产进度、增产剂、无限科研、戴森复制、银河活动、可配置缓存、离线 Worker 等价性、存档配额、科研、电力、蓝图、规划、云同步、英文目录和原生更新配置等 |
-| 浏览器 E2E | `npm run test:e2e` | `1.0.3` / v36 149 项 | 从开局到银河终局、鸿蒙组合输入、产线定位、递归运输船、枯竭恢复、喷涂拆卸、中英文切换、亮/暗主题、七档生产刷新、新旧手机壳、本地存档保护和桌面/手机横竖屏回归 |
-| 云服务 | `npm run test:server` | `1.0.3` 35 项 | 用户名注册、四槽云存档、schema v3→v7、SQLite layout v1→v2、历史正文裁剪、设备会话、匿名统计、Android WebView origin、v34-v36 校验、活动、腾讯 SES、主云存档自动排名、隐私退出和管理员保护 |
+| 单元/领域 | `npm test` | `1.0.4` 工作区 477 项，1 项可选基准跳过 | 引擎、v1-v36 存档、已建线路并联数量、无限科技目录、制造中心大目标、递归制造、产线定位、物流索引、翘曲补仓、生产进度、无限科研、戴森复制、离线 Worker 等价性、存档配额、云同步和原生更新配置等 |
+| 浏览器 E2E | `npm run test:e2e` | `1.0.4` / v36 152 项 | 从开局到银河终局、线路并联数量、手机无限科技、10 万制造目标、鸿蒙组合输入、产线定位、递归运输船、中英文切换、亮/暗主题、新旧手机壳、本地存档保护和横竖屏回归 |
+| 云服务 | `npm run test:server` | `1.0.4` 35 项 | 用户名注册、四槽云存档、schema v3→v7、SQLite layout v1→v2、历史正文裁剪、设备会话、匿名统计、Android WebView origin、v34-v36 校验、过期身份回收、活动、腾讯 SES、主云存档自动排名、隐私退出和管理员保护 |
 | 运维工具 | `npm run test:ops` | 6 项 | SQLite 一致性快照、认证加密、异地复制、隔离恢复、篡改拒绝、Nginx 压缩与缓存边界、Android origin 模板、端点/磁盘探针和告警载荷 |
 | 原生配置与发布工具 | `npm run test:native` | 6 项 | 社区更新源默认关闭、HTTPS 通道、Android/桌面更新清单、调试 APK 拒绝和显式发布基址 |
 | 第三方许可证 | `npm run licenses:check` | 128 个运行时包 | 根项目/云服务 lockfile、直接依赖通知、完整许可证文本和 public 法律文件一致性 |
@@ -622,7 +622,7 @@ Windows 与 Android 源码版本元数据同步到 `1.0.3 / 1000003` 以保持�
 
 ## 26. Android `1.0.3` 云存档兼容发布
 
-本次不升级 GameState v36、存档 envelope v2、云 schema v7 或 SQLite layout v2。服务端专项明确接受 Android 1.0.2 的 v35 和 1.0.3 的 v36 存档；Android WebView `https://localhost` 的 GET/PUT 预检通过，未知 origin 保持 403。香港生产 unit 因当前开发机缺少有效 SSH 授权尚未安装新 origin 模板，不能把本地测试等同于生产已生效。
+本次不升级 GameState v36、存档 envelope v2、云 schema v7 或 SQLite layout v2。服务端专项明确接受 Android 1.0.2 的 v35 和 1.0.3 的 v36 存档；Android WebView `https://localhost` 的 GET/PUT 预检通过，未知 origin 保持 403。1.0.3 Android 独立发布时香港生产 unit 尚未安装新 origin 模板；该模板已随 1.0.4 部署并完成生产预检。
 
 | 检查 | 结果 |
 | --- | --- |
@@ -638,3 +638,27 @@ Windows 与 Android 源码版本元数据同步到 `1.0.3 / 1000003` 以保持�
 | 覆盖升级 | API 36.1 模拟器从正式 1.0.2 `adb install -r` 成功，`firstInstallTime` 不变 |
 
 APK 为 4,255,736 字节，SHA-256 `b8d43072b17de16079f12e458bd2dc264e20273dde41b176fcbc7da80622f32f`。上海下载站最终原子切换到 `1.0.3-android-b8d43072-r2`，上一 1.0.3 目录和 1.0.2 目录均保留；稳定清单 no-cache、新旧 APK 200、新 APK Range 206/immutable 和公网完整下载哈希均通过。完整记录见 [releases/1.0.3-android.md](./releases/1.0.3-android.md)。
+
+## 27. `1.0.4` 物流并联与终局管理发布
+
+`1.0.4` 保持 GameState v36、存档 envelope v2、云 schema v7 和 SQLite layout v2，不增加迁移或修改游戏状态结构。传送带并联数量调整、手机无限科技目录和制造中心 100,000 目标上限均有单元与浏览器回归。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 50 个文件，477 项通过，1 项可选基准跳过 |
+| `npm run test:server` | 35/35 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | 通过；为 Web、Windows 和 Android 分别重建 |
+| `npm run test:e2e` | 152/152 通过 |
+| 双节点未激活目录 | 香港和上海均通过服务端 35/35、运维 6/6、127/127 文件复验和各自备份副本隔离启动 |
+
+正式清单包含 127 个文件，聚合 SHA-256 为 `e0fb648523352f42ed555e5f09183fa54f889a084348c72297db1f4d237841bb`。香港和上海切换前后均使用 SQLite Backup API 生成备份并通过 `quick_check`；两个生产库均没有被替换、恢复或写入测试存档。两地 Web/API 均指向 `1.0.4-9ca10b44507a`，回滚目标均为 `1.0.3-6d59252f4f15`；服务 active、`NRestarts=0`，最近 500 条 DSP 访问日志无 5xx。
+
+Windows 1.0.4 安装程序为 103,129,814 字节，SHA-256 `1cc01e21522afa48ab49f69f033d46faab3b98d1dfee3c285ec1919d12fcd4a8`，Authenticode 为 `NotSigned`。Android 1.0.4/1000004 APK 为 4,261,343 字节，SHA-256 `7ad998fdcd620562421f482e39dd14a8e65854c24408143baa7be9f1e55553d4`，v2/v3 和长期证书均通过。API 36.1 模拟器从正式 1.0.3 覆盖升级后 `firstInstallTime` 不变，启动无致命异常。
+
+上海下载站已原子切换到 `1.0.4-9ca10b44507a`，上一目录为 `1.0.3-android-b8d43072-r2`。公网完整下载哈希与本地制品一致，清单 no-cache、二进制 immutable、Range 206 和香港 302 跳转均通过。下载页桌面与 390×844 截图无横向溢出，证据位于 `artifacts/qa/v104-download-*.png`。
+
+香港发布前后备份分别为 366,043,136 与 366,149,632 字节。账号 179、云存档 148、排行数据 148、反馈 7 和错误聚合 1000 没有减少，云修订 1610→1611、匿名玩家 2584→2585 是发布窗口内的正常新增。Android `https://localhost` GET/PUT 预检为 200/204，未知 origin 为 403；活动 revision 保持 `e227b03a6fbd4d148b3f07ad`。完整证据见 [releases/1.0.4.md](./releases/1.0.4.md)。

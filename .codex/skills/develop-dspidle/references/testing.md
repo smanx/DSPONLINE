@@ -14,7 +14,7 @@ npm run test:e2e
 npm run desktop:pack
 ```
 
-Current `1.0.3` working baseline: 472 passing Vitest tests plus 1 optional benchmark skip, 149 Playwright scenarios, 35 cloud-service tests, 6 operations tests and 6 native configuration/release-tool tests on GameState v36. Hong Kong and Shanghai Web/API run `1.0.3-6d59252f4f15`; both use save envelope v2, cloud schema v7 and SQLite storage layout v2. Public Windows remains `1.0.2`; Android stable is `1.0.3 / 1000003` from the Shanghai download node.
+Current `1.0.4` working baseline: 477 passing Vitest tests plus 1 optional benchmark skip, 152 Playwright scenarios, 35 cloud-service tests, 6 operations tests and 6 native configuration/release-tool tests on GameState v36. Hong Kong and Shanghai Web/API both run `1.0.4-9ca10b44507a` with save envelope v2, cloud schema v7 and SQLite storage layout v2. Public Windows and Android stable packages are `1.0.4`, with Android versionCode `1000004`, from the Shanghai download node.
 
 ## Choose By Change
 
