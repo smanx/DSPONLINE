@@ -1,56 +1,44 @@
-import { Check, ClipboardCopy, Gauge, Info, MessageCircle, MonitorDown, Orbit, RadioTower, Route, X, type LucideIcon } from "lucide-react";
+import { Check, Factory, FlaskConical, Info, MessageCircle, MonitorDown, Route, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-26-v1.0.3",
+  id: "2026-07-26-v1.0.4",
   date: "2026年7月26日",
-  version: "1.0.3",
-  title: "递归制造与生产定位",
-  summary: "1.0.3 打通物流运输船与建筑制造中心的多级递归制造，增加物品产线定位，并修复高运输量诊断、枯竭矿脉、喷涂拆卸及手机输入和弹窗适配问题。GameState 升级至 v36，旧存档会无损迁移。",
+  version: "1.0.4",
+  title: "物流并联与终局管理",
+  summary: "1.0.4 增加已建传送带并联数量调整，修复手机无限科技入口，并将建筑制造中心的终局目标上限提升至 10 万。Windows 与 Android 安装包同步升级；GameState 继续保持 v36，覆盖安装和旧存档加载不会清除本地进度。",
   items: [
     {
-      id: "recursive-crafting",
-      title: "递归制造完整打通",
-      description: "物流运输船现在支持一键递归制造；建筑制造中心会先规划完整材料链，优先尝试已解锁的高级精简配方，无法完成时再回退基础配方。铁矿石可继续加工为铁块和钢材，不再误报缺少中间材料。",
+      id: "belt-bundles",
+      title: "已建线路调整并联数量",
+      description: "选中传送带后可用减号、直接输入或加号调整并联线路数量。增加会消耗同级传送带，减少会返还施工托盘；吞吐同步变化，线路等级、形状、堆叠、优先级、端口和在途物资保持不变。",
     },
     {
-      id: "production-locator",
-      title: "物品图鉴定位产线",
-      description: "物品详情可定位当前行星的全部生产设备并高亮完整上游网络；多个目标可逐个切换，其他行星的结果可直接跳转，定位高亮可随时清除。",
+      id: "infinite-tech-mobile",
+      title: "手机无限科技恢复可见",
+      description: "新版手机科技目录现在包含全部无限科技。完成宇宙矩阵后可直接查看和研究；未解锁时显示真实前置条件，筛选为空时可一键清除筛选。经典手机、网页、PWA 和 App 共用相同规则。",
     },
     {
-      id: "logistics-diagnostics",
-      title: "物流与时间倍率诊断",
-      description: "轨道采集器不再被误判为航线断电；运输船全部执行任务时明确显示舰队容量瓶颈。时间扭曲界面新增请求倍率、实际倍率、供电需求、获得功率和自动降档原因。",
+      id: "construction-center-100k",
+      title: "制造中心目标提升至 10 万",
+      description: "完成建筑仓储扩容 II 后，单种建筑或随身载具的自动补足目标最高可设为 100,000。目标支持直接输入和常用预设；调低目标只暂停后续制造，不会删除已有超额施工库存。",
     },
     {
-      id: "mobile-input-layout",
-      title: "手机输入与弹窗适配",
-      description: "修复鸿蒙 App 搜索文字被状态刷新清空的问题，并兼容中文输入法组合过程。储物仓与储液罐端口在 80% 至 200% 字号下保持可连接，托盘删除操作在手机横竖屏始终固定可见。",
-    },
-    {
-      id: "resource-recovery",
-      title: "枯竭资源提醒与恢复",
-      description: "有限矿脉枯竭后会显示醒目的节点提示和设置快捷入口；切换有限或无限资源前需要主动确认，矿机、线路和已有缓存均会保留。枯竭状态在保存重载后不再错误恢复储量。",
-    },
-    {
-      id: "spray-sidebar",
-      title: "喷涂拆卸与侧栏修复",
-      description: "建筑检查器新增喷涂模块拆卸，返还模块、缓存中的增产剂和尚未用完的喷涂点折算物；物资侧栏折叠后会完整退出，不再残留黑色容器。",
+      id: "native-downloads",
+      title: "Windows 与 Android 同步更新",
+      description: "下载页在新安装包完成签名、校验和上传后再切换至 1.0.4，并公开平台、日期、大小和 SHA-256。Android 保持原包名和长期签名，Windows 保持原应用标识，覆盖升级不会主动删除应用数据或浏览器存档。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "recursive-crafting": Route,
-  "production-locator": Orbit,
-  "logistics-diagnostics": RadioTower,
-  "mobile-input-layout": MonitorDown,
-  "resource-recovery": Gauge,
-  "spray-sidebar": ClipboardCopy,
+  "belt-bundles": Route,
+  "infinite-tech-mobile": FlaskConical,
+  "construction-center-100k": Factory,
+  "native-downloads": MonitorDown,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

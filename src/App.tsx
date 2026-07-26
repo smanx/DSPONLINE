@@ -79,6 +79,7 @@ import {
   exploreStarSystem,
   getAcceptedInputs,
   getBeltCapacity,
+  getBeltLaneAdjustmentCheck,
   getBeltNetworkIds,
   getConstructionCraftNavigation,
   getConstructionQuickCraftPlan,
@@ -129,6 +130,7 @@ import {
   resumePausedResearch,
   selectTechnology,
   setBeltPriority,
+  setBeltLaneCount,
   setBeltRouteMode,
   setBeltRouteOffsetY,
   setBeltNetworkRouteMode,
@@ -1933,6 +1935,22 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const result = expandEntityGroup(entityId, requestedCount);
     if (result) setNotice(`${result.name}已增加 ${result.added} 台 · 当前 ×${result.count}`);
   }, [expandEntityGroup]);
+
+  const updateBeltLaneCount = useCallback((beltId: string, targetLanes: number) => {
+    const check = getBeltLaneAdjustmentCheck(gameRef.current, beltId, targetLanes);
+    if (!check.ok) {
+      setNotice(`并联数量调整失败：${check.label}`);
+      playTone("alert");
+      return;
+    }
+    if (check.delta === 0) {
+      setNotice(check.label);
+      return;
+    }
+    commitGame((current) => setBeltLaneCount(current, beltId, targetLanes));
+    setNotice(`并联线路已调整为 ×${targetLanes} · ${check.label}`);
+    playTone(check.delta > 0 ? "confirm" : "remove");
+  }, [commitGame, playTone]);
 
   const autoLayoutEntities = useCallback((entityIds?: readonly string[]) => {
     const current = gameRef.current;
@@ -4045,6 +4063,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             setNotice("运输线升级完成");
             playTone("upgrade");
           },
+          onBeltLaneCountChange: updateBeltLaneCount,
           onEntityLockChange: (entityId, locked) => {
             commitGame((current) => setEntitiesInteractionLocked(current, [entityId], locked));
             setNotice(locked ? "建筑已锁定" : "建筑已解锁");
@@ -4542,6 +4561,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           galacticActivityStatus={galacticActivityStatus}
           onSplitterModeChange={(entityId, mode) => commitGame((current) => setSplitterMode(current, entityId, mode))}
           onBeltPriorityChange={(beltId, priority) => commitGame((current) => setBeltPriority(current, beltId, priority))}
+          onBeltLaneCountChange={updateBeltLaneCount}
           onBeltStackSizeChange={(beltId, stackSize: CargoStackSize) => commitGame((current) => setBeltStackSize(current, beltId, stackSize))}
           onBeltMonitorChange={(beltId, enabled) => commitGame((current) => setBeltMonitorEnabled(current, beltId, enabled))}
           onBeltRouteModeChange={(beltId, routeMode: BeltRouteMode) => commitGame((current) => setBeltRouteMode(current, beltId, routeMode))}

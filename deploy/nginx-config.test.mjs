@@ -31,3 +31,13 @@ test("active Nginx templates compress static assets while preserving cache bound
   assert.match(download, /location \/downloads\/[^}]*try_files \$uri =404;[^}]*immutable/s);
   assert.match(download, /location = \/downloads\/android\/stable\.json[^}]*no-cache, no-store/s);
 });
+
+test("Hong Kong cloud service authorizes the packaged Android WebView origin", async () => {
+  const service = await readFile(path.join(deployDirectory, "dsp-idle-cloud-hk.service"), "utf8");
+  const allowedOriginLine = service.split(/\r?\n/).find((line) => line.startsWith("Environment=DSP_ALLOWED_ORIGIN="));
+  assert.ok(allowedOriginLine);
+  const allowedOrigins = new Set(allowedOriginLine.slice("Environment=DSP_ALLOWED_ORIGIN=".length).split(","));
+  assert.equal(allowedOrigins.has("https://dsponline.cn"), true);
+  assert.equal(allowedOrigins.has("https://localhost"), true);
+  assert.equal(allowedOrigins.has("https://attacker.invalid"), false);
+});

@@ -332,7 +332,7 @@ const TECHNOLOGY_UNLOCKS_EN: Record<string, string> = {
   "宇宙矩阵生产": "Universe Matrix Production",
   "六色矩阵科研": "Six-color Matrix Research",
   "5x 及更高实时模拟倍率": "5× and Higher Real-time Simulation",
-  "目标库存上限 2000": "Target Inventory Limit 2000",
+  "目标库存上限 10万": "Target Inventory Limit 100,000",
   "自动制造周期 1 秒": "1-second Automatic Manufacturing Cycle",
   "矩阵研究速度累计 +75%": "Cumulative Matrix Research Speed +75%",
   "戴森球结构规划": "Dyson Sphere Structure Planning",

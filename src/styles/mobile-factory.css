@@ -410,6 +410,19 @@
 .mobile-belt-summary span { color: var(--theme-text-muted); font-size: calc(11px * var(--ui-font-scale, 1)); }
 .mobile-belt-summary strong { font-size: calc(12px * var(--ui-font-scale, 1)); }
 
+.mobile-belt-lane-control { display: grid; gap: 6px; margin: 0 10px 7px; padding: 8px; border: 1px solid var(--theme-border); border-radius: 6px; background: var(--theme-surface); }
+.mobile-belt-lane-control > header { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; }
+.mobile-belt-lane-control > header span { color: var(--theme-text-soft); font-size: calc(13px * var(--ui-font-scale, 1)); font-weight: 700; }
+.mobile-belt-lane-control > header strong { color: var(--yellow); font-size: calc(12px * var(--ui-font-scale, 1)); text-align: right; overflow-wrap: anywhere; }
+.mobile-belt-lane-control > div { display: grid; grid-template-columns: 48px minmax(0, 1fr) 48px; }
+.mobile-belt-lane-control > div button,
+.mobile-belt-lane-control > div input { min-width: 0; min-height: 48px; border: 1px solid var(--theme-border-strong); background: var(--theme-control); color: var(--theme-text-soft); }
+.mobile-belt-lane-control > div button { display: grid; place-items: center; }
+.mobile-belt-lane-control > div button:disabled { opacity: .4; }
+.mobile-belt-lane-control > div input { border-right: 0; border-left: 0; outline: 0; font: inherit; font-size: calc(16px * var(--ui-font-scale, 1)); text-align: center; }
+.mobile-belt-lane-control > small { color: var(--theme-text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.4; }
+.mobile-belt-lane-control > p { margin: 0; color: var(--coral); font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.4; }
+
 .mobile-inspector-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding: 5px 10px 14px; }
 .mobile-inspector-actions > button { position: relative; display: grid; min-width: 0; min-height: 56px; place-items: center; align-content: center; gap: 3px; border: 1px solid var(--theme-border); border-radius: 6px; background: var(--theme-control); color: var(--theme-text-soft); }
 .mobile-inspector-actions > button span { overflow: hidden; max-width: 100%; font-size: calc(12px * var(--ui-font-scale, 1)); text-overflow: ellipsis; white-space: nowrap; }

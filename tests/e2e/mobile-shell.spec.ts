@@ -5,7 +5,7 @@ const MOBILE_UI_KEY = "dsp-idle-network.mobile-ui.v1";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-26-v1.0.3");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-26-v1.0.4");
   });
 });
 
@@ -335,7 +335,7 @@ test("technology, recipes and star map use route-backed mobile list and detail v
   await technology.getByRole("button", { name: "全部", exact: true }).click();
   await technology.locator(".mobile-workspace-scroll").evaluate((element) => { element.scrollTop = element.scrollHeight; });
   await technology.locator(".mobile-tech-list button").last().click();
-  await expect(page.locator('.game-shell[data-mobile-subview^="tech:"]')).toBeVisible();
+  await expect(page.locator('.game-shell[data-mobile-subview^="infinite:"]')).toBeVisible();
   await expect(technology.locator(".mobile-technology-detail")).toBeVisible();
   await page.screenshot({ path: "artifacts/qa/mobile-stage3-technology-detail-390.png", fullPage: true });
   await page.locator(".mobile-next-topbar").getByRole("button", { name: /返回科技树列表/ }).click();

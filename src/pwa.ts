@@ -20,6 +20,7 @@ let state: PwaRuntimeState = {
   registration: null,
 };
 const listeners = new Set<(value: PwaRuntimeState) => void>();
+let updateReloadPending = false;
 
 function publish(changes: Partial<PwaRuntimeState>): void {
   state = { ...state, ...changes };
@@ -74,15 +75,22 @@ export async function requestPwaInstall(): Promise<boolean> {
   return false;
 }
 
-export function applyPwaUpdate(): boolean {
-  const worker = state.registration?.waiting;
-  if (!worker) return false;
-  let reloaded = false;
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (reloaded) return;
-    reloaded = true;
-    window.location.reload();
-  });
+export function activateWaitingPwaWorker(
+  worker: Pick<ServiceWorker, "postMessage">,
+  serviceWorker: Pick<ServiceWorkerContainer, "addEventListener"> = navigator.serviceWorker,
+): boolean {
+  if (!updateReloadPending) {
+    updateReloadPending = true;
+    serviceWorker.addEventListener("controllerchange", () => {
+      updateReloadPending = false;
+      window.location.reload();
+    }, { once: true });
+  }
   worker.postMessage({ type: "SKIP_WAITING" });
   return true;
+}
+
+export function applyPwaUpdate(): boolean {
+  const worker = state.registration?.waiting;
+  return worker ? activateWaitingPwaWorker(worker) : false;
 }

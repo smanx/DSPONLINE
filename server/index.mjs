@@ -580,10 +580,22 @@ class SqliteStore {
   }
 }
 
-function createRateLimiter() {
+export function createRateLimiter(nowProvider = Date.now) {
   const buckets = new Map();
-  return (key, maximum, windowMs) => {
-    const now = Date.now();
+  let nextCleanupAt = 0;
+  const cleanup = (now = nowProvider()) => {
+    let removed = 0;
+    for (const [key, bucket] of buckets) {
+      if (bucket.resetAt > now) continue;
+      buckets.delete(key);
+      removed += 1;
+    }
+    nextCleanupAt = now + 60_000;
+    return removed;
+  };
+  const rateLimit = (key, maximum, windowMs) => {
+    const now = nowProvider();
+    if (now >= nextCleanupAt) cleanup(now);
     const bucket = buckets.get(key);
     if (!bucket || bucket.resetAt <= now) {
       buckets.set(key, { count: 1, resetAt: now + windowMs });
@@ -592,6 +604,29 @@ function createRateLimiter() {
     bucket.count += 1;
     return bucket.count <= maximum;
   };
+  rateLimit.cleanup = cleanup;
+  return rateLimit;
+}
+
+export function cleanupExpiredAuthRecords(data, now = Date.now()) {
+  const users = data?.users && typeof data.users === "object" ? data.users : {};
+  const removed = { sessions: 0, emailVerifications: 0, passwordResets: 0, total: 0 };
+  for (const collectionName of ["sessions", "emailVerifications", "passwordResets"]) {
+    const collection = data?.[collectionName];
+    if (!collection || typeof collection !== "object") continue;
+    for (const [tokenHash, record] of Object.entries(collection)) {
+      const invalid = !record
+        || typeof record !== "object"
+        || !users[record.userId]
+        || !Number.isFinite(record.expiresAt)
+        || record.expiresAt <= now;
+      if (!invalid) continue;
+      delete collection[tokenHash];
+      removed[collectionName] += 1;
+      removed.total += 1;
+    }
+  }
+  return removed;
 }
 
 function requestIp(request) {
@@ -1150,8 +1185,9 @@ export async function createCloudServer({
       if (error?.code !== "ENOENT") logger.error?.("legacy cloud data migration failed", error);
     }
   }
+  const startupAuthCleanup = cleanupExpiredAuthRecords(store.data);
   const leaderboardBackfill = backfillLeaderboardFromMainSaves(store);
-  if (leaderboardBackfill.changed > 0) await store.persist();
+  if (leaderboardBackfill.changed > 0 || startupAuthCleanup.total > 0) await store.persist();
   const startedAt = Date.now();
   const galacticActivityConfig = activityConfig ? normalizeActivityConfig(activityConfig) : await loadActivityConfig(activityConfigFile);
   const rateLimit = createRateLimiter();
@@ -1199,7 +1235,12 @@ export async function createCloudServer({
     ? "custom"
     : tencentSesMailer ? "tencent-ses" : webhookMailer ? "webhook" : "disabled";
 
-  const flushMetrics = setInterval(() => void store.persist().catch((error) => logger.error?.("cloud metrics persistence failed", error)), 60_000);
+  const flushMetrics = setInterval(() => {
+    cleanupExpiredAuthRecords(store.data);
+    rateLimit.cleanup();
+    registrationRateLimit.cleanup();
+    void store.persist().catch((error) => logger.error?.("cloud metrics persistence failed", error));
+  }, 60_000);
   flushMetrics.unref?.();
   const createBackup = async () => {
     try {

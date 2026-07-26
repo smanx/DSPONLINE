@@ -1,9 +1,9 @@
 # 原生应用构建与更新
 
-> 当前公开稳定测试版本：`1.0.2`
+> 当前公开稳定测试版本：Windows `1.0.2`；Android `1.0.3 / 1000003`
 > Windows 包名：`com.dspidle.network`
 > Android applicationId：`cn.dsponline.network`
-> 原生应用与 Web 共用 `GameState` v35、存档 envelope v2 和云 schema v7。
+> Android 1.0.3 与 Web 共用 `GameState` v36；Windows 1.0.2 仍为 v35。两端存档 envelope v2 和云 schema v7 不变。
 > 公开下载入口：`https://download.dsponline.cn/`，文件由上海节点提供，不消耗香港游戏节点流量。
 
 ## 1. 架构边界
@@ -79,7 +79,7 @@ npm run android:release
 
 没有这些变量时可用 `npm run android:release:unsigned` 验证 Release 编译，但未签名 APK/AAB 不得交付玩家。密钥、密码和证书私钥不能提交到 Git、文档、日志或 VPS Web 目录。
 
-Android `1.0.2` APK 已使用与 `1.0.0/1.0.1` 相同的长期发布密钥签名，证书 SHA-256 为 `ede2aa09ed143a3fbeb283aad0e7801d192c851f240cd39278c399918a0216ce`。APK Signature Scheme v2/v3 均通过；发布密钥路径和密码只保存在受保护环境中。
+Android `1.0.3` APK 已使用与 `1.0.0` 至 `1.0.2` 相同的长期发布密钥签名，证书 SHA-256 为 `ede2aa09ed143a3fbeb283aad0e7801d192c851f240cd39278c399918a0216ce`。APK Signature Scheme v2/v3 均通过；发布密钥路径和密码只保存在受保护环境中。
 
 ## 5. 更新源
 
@@ -101,6 +101,8 @@ https://dsponline.cn/downloads/android/nightly.json
 
 Android 清单只接受 schema v1、`cn.dsponline.network`、当前通道、同源 HTTPS 且位于 `/downloads/android/` 的 APK。发布工具默认拒绝文件名包含 `debug` 或 `unsigned` 的 APK，并要求用 `apksigner` 验证 APK Signature Scheme v2+ 和批准的证书 SHA-256 指纹。
 
+Android 1.0.3 的稳定清单将 `minimumSupportedVersionCode` 设为 `1000002`：1.0.2/v35 存档继续允许上传，1.0.2 遇到 v36 存档时必须覆盖升级，禁止把 v36 有损降级为 v35。1.0.2 需要在应用版本卡手动检查；1.0.3 进入该卡片时会自动检查一次并保留手动重试。
+
 示例：
 
 ```powershell
@@ -121,13 +123,14 @@ node scripts/create-native-update-manifests.mjs `
 - 两个发布 workflow 的 token 权限为只读，并显式注入官方 API、公开 origin 和更新基址；普通 Pull Request CI 不接收这些配置或签名 secrets。
 - 向正式更新目录发布前仍需核对版本、通道、SHA-256、证书、安装覆盖、本地存档、云登录、回滚版本和 HTTPS 缓存头。
 
-## 7. 当前 `1.0.2` 发布状态
+## 7. 当前原生发布状态
 
 - 已验证 Windows 解包版启动、`file://` 加载、FileVersion/ProductVersion 1.0.2、Stable 通道、受限 HTTPS API 和更新基址。
-- 已验证 Android API 36.1 模拟器从已安装的签名 `1.0.1` 使用 `adb install -r` 原地升级到 `1.0.2`；`firstInstallTime` 保持不变且应用正常成为前台 Activity。卸载应用仍会删除本机应用数据。
-- Android 稳定 APK 为 `1.0.2` / `1000002`，大小 4,241,978 字节，SHA-256 为 `9f94c11ad06c85d8d6403002fd62d859666a6999b68343f58f8ec873df1ece3a`。APK v2/v3 和批准证书均通过；AAB 已本地构建但未进入下载站或应用商店。
+- 已验证 Android API 36.1 模拟器从已安装的正式签名 `1.0.2` 使用 `adb install -r` 原地升级到 `1.0.3`；`firstInstallTime` 保持不变，应用正常成为前台 Activity，最近日志无应用致命异常。卸载应用仍会删除本机应用数据。
+- Android 稳定 APK 为 `1.0.3` / `1000003`，大小 4,255,736 字节，SHA-256 为 `b8d43072b17de16079f12e458bd2dc264e20273dde41b176fcbc7da80622f32f`。APK v2/v3 和批准证书均通过；AAB 已本地构建但未进入下载站或应用商店。
 - Windows x64 安装程序版本为 `1.0.2`，大小 103,027,376 字节，SHA-256 为 `bc856efe849160f87877f0a01232e9ccde89916e57c1eaed130ed4b4895bad59`。Authenticode 状态为 `NotSigned`，下载页会持续显示未知发布者警告。
-- 上海下载站当前目录为 `/var/www/dsp-idle-downloads/releases/1.0.2-df7bee45e60a`，回滚目录为 `/var/www/dsp-idle-downloads/releases/1.0.1-f4e2a5501435-dirty`。二进制使用 immutable 缓存，更新清单使用 no-cache，Range 请求返回 `206`；香港 `/downloads/*` 重定向至上海下载域名。
+- 上海下载站当前目录为 `/var/www/dsp-idle-downloads/releases/1.0.3-android-b8d43072-r2`，上一目录为 `1.0.3-android-b8d43072`，1.0.2 目录继续保留。Windows 文件保持 1.0.2，Android 清单和主按钮为 1.0.3；二进制使用 immutable 缓存，更新清单使用 no-cache，Range 请求返回 `206`，香港 `/downloads/*` 重定向至上海下载域名。
+- 1.0.3 APK 来自 Git `ea1504eb3be11aa9be1ef078f79f905ddb1abc16` 加构建时工作树 diff blob `7889c8cf1057a28ee36bba9a084836fa283068e7`；制品哈希可追溯，但下一次正式发布仍应先整理为干净提交。
 - GitHub Android Release 工作流已具备签名门禁，但仓库尚未配置 keystore Secrets；本次使用受保护的本机长期密钥构建。配置 CI Secrets 前，工作流会在恢复签名密钥步骤按设计失败，不会产出错误签名包。
 - Android 系统浏览器安装 APK 时，玩家设备可能要求允许该来源安装应用；正式商店分发可作为后续渠道，但不改变包名和签名连续性要求。
 - Windows 可信代码签名、iOS 壳层、App Store/Google Play 发布、崩溃收集和物理 Android/iPhone 30 分钟温度耗电测试仍在后续范围。

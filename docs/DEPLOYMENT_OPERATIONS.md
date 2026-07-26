@@ -30,7 +30,7 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-当前香港与上海 Web/API 均为 `1.0.3-6d59252f4f15`，使用 GameState v36、云 schema v7 和 SQLite layout v2。两地 Web/API 回滚目标均为 `1.0.2-df7bee45e60a`；代码回滚不得恢复数据库。上海下载站当前为 `1.0.2-df7bee45e60a`，回滚目标为 `1.0.1-f4e2a5501435-dirty`。完整 Web/API 哈希、生产备份和验收记录见 [releases/1.0.3.md](./releases/1.0.3.md)。
+当前香港与上海 Web/API 均为 `1.0.3-6d59252f4f15`，使用 GameState v36、云 schema v7 和 SQLite layout v2。两地 Web/API 回滚目标均为 `1.0.2-df7bee45e60a`；代码回滚不得恢复数据库。上海下载站当前为 `1.0.3-android-b8d43072-r2`，上一目录为 `1.0.3-android-b8d43072`，1.0.2 目录继续保留；Windows 安装包仍为 1.0.2，Android 稳定清单为 1.0.3。完整 Web/API 证据见 [releases/1.0.3.md](./releases/1.0.3.md)，Android 证据见 [releases/1.0.3-android.md](./releases/1.0.3-android.md)。
 
 该版本会在服务启动时按已有主存档幂等回填排行榜。首次香港回填处理 88 份主存档，重复启动备份副本时变更为 0；上海没有主云存档，因此保持空榜。后续主槽上传、自动同步或历史恢复都会自动更新排名，手动槽不会触发。任何后续排行榜规则变更仍应在切换前使用 SQLite Backup API 创建并验证备份，并在切换后核对账号、主云存档和修订数量不减少。
 
@@ -123,7 +123,7 @@ SQLite layout v2 将云存档正文从 `app_state` 拆到 `cloud_save_payloads`�
 
 - Nginx 模板：`deploy/nginx-dsp-idle-domain.conf` 与公共 snippet。
 - systemd 环境模板：`deploy/dsp-idle-cloud-hk.service`。
-- 允许 Origin：正式根域名、`www` 和明确保留的兼容入口。
+- 允许 Origin：正式根域名、`www`、Capacitor Android WebView 的精确 `https://localhost` 和明确保留的兼容入口。不得用 `*` 代替；仓库模板完成不代表生产 unit 已同步，部署后必须用带 Origin 的 GET 与 PUT 预检分别验证。
 - TLS：Let’s Encrypt，`www` 和 HTTP 均跳到 `https://dsponline.cn`。
 - SSH：仅密钥，禁止 root 与密码登录。
 

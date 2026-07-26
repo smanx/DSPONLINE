@@ -96,6 +96,9 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
   if (mobile) {
     const detailTechId = mobileSubview?.startsWith("tech:") ? mobileSubview.slice(5) as TechId : null;
     const detailTechnology = getTechnology(detailTechId);
+    const detailInfiniteId = mobileSubview?.startsWith("infinite:") ? mobileSubview.slice(9) as InfiniteResearchId : null;
+    const detailInfinite = INFINITE_RESEARCH_DEFINITIONS.find((definition) => definition.id === detailInfiniteId);
+    const endgameUnlocked = isEndgameUnlocked(game);
     const visibleTechnologies = TECHNOLOGY_LIST.filter((technology) => {
       const complete = isTechnologyCompleted(game, technology.id);
       const active = game.research.selectedTechId === technology.id || game.research.pausedTechId === technology.id || game.research.queuedTechIds.includes(technology.id);
@@ -103,10 +106,25 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
       if (mobileFilter === "available") return !complete && (active || canQueueTechnology(game, technology.id));
       return true;
     });
+    const visibleInfiniteResearch = INFINITE_RESEARCH_DEFINITIONS.filter((definition) => {
+      const active = game.endgame.activeInfiniteResearchId === definition.id;
+      const capped = isInfiniteResearchComplete(definition.id, getInfiniteResearchLevel(game, definition.id));
+      if (mobileFilter === "active") return active;
+      if (mobileFilter === "available") return endgameUnlocked && !capped;
+      return true;
+    });
     const mobileProgressPercent = selectedProgressPercent;
     return (
-      <section className={`technology-workspace mobile-workspace mobile-technology${detailTechnology ? " mobile-workspace--detail" : ""}`} role="dialog" aria-modal="true" aria-label="科技树">
-        {detailTechnology ? <div className="mobile-workspace-scroll mobile-technology-detail">
+      <section className={`technology-workspace mobile-workspace mobile-technology${detailTechnology || detailInfinite ? " mobile-workspace--detail" : ""}`} role="dialog" aria-modal="true" aria-label="科技树">
+        {detailInfinite ? <div className="mobile-workspace-scroll mobile-technology-detail mobile-infinite-research-detail">
+          <header className="mobile-detail-heading"><i style={{ color: detailInfinite.color }}><Rocket size={20} /></i><span><small>白糖阶段 · 无限科技</small><strong>{detailInfinite.name}</strong></span></header>
+          <p className="mobile-detail-summary">{detailInfinite.summary}</p>
+          <section className="mobile-detail-section"><header>当前效果</header><div className="mobile-tech-unlocks"><span><Gauge size={15} /><strong>{detailInfinite.effect}</strong></span></div></section>
+          <section className="mobile-detail-section"><header>研究状态</header><div className="mobile-tech-cost-list"><span><ItemGlyph itemId="universe_matrix" /><em>{ITEMS.universe_matrix.name}</em><strong><QuantityValue value={game.endgame.infiniteResearch[detailInfinite.id].progress} /> / <QuantityValue value={getInfiniteResearchCostString(detailInfinite.id, getInfiniteResearchLevel(game, detailInfinite.id))} /></strong></span></div></section>
+          <section className="mobile-detail-section"><header>前置科技</header><div className="mobile-tech-prerequisites"><span className={endgameUnlocked ? "complete" : ""}>{endgameUnlocked ? <Check size={15} /> : <LockKeyhole size={15} />}<strong>完成宇宙矩阵科技</strong></span></div></section>
+          <div className="mobile-detail-spacer" />
+          <footer className="mobile-detail-actionbar"><button className="primary" type="button" disabled={!endgameUnlocked || isInfiniteResearchComplete(detailInfinite.id, getInfiniteResearchLevel(game, detailInfinite.id)) || game.endgame.activeInfiniteResearchId === detailInfinite.id} onClick={() => onSelectInfiniteResearch(detailInfinite.id)}><Rocket size={18} />{!endgameUnlocked ? "需要宇宙矩阵科技" : isInfiniteResearchComplete(detailInfinite.id, getInfiniteResearchLevel(game, detailInfinite.id)) ? "已达等级上限" : game.endgame.activeInfiniteResearchId === detailInfinite.id ? "正在研究" : "开始无限研究"}</button></footer>
+        </div> : detailTechnology ? <div className="mobile-workspace-scroll mobile-technology-detail">
           <header className="mobile-detail-heading"><i>{isTechnologyCompleted(game, detailTechnology.id) ? <Check size={20} /> : <FlaskConical size={20} />}</i><span><small>科技层级 {String(detailTechnology.tier + 1).padStart(2, "0")}</small><strong>{detailTechnology.name}</strong></span></header>
           <p className="mobile-detail-summary">{detailTechnology.summary}</p>
           <section className="mobile-detail-section"><header>研究矩阵</header><div className="mobile-tech-cost-list">{detailTechnology.costs.map((cost) => { const progress = game.research.progressByTech[detailTechnology.id]?.[cost.itemId] ?? 0; return <span key={cost.itemId}><ItemGlyph itemId={cost.itemId} /><em>{ITEMS[cost.itemId].name}</em><strong>{progress}/{cost.amount}</strong></span>; })}</div></section>
@@ -145,7 +163,17 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
                 <b>{pausedTech ? "暂停" : queueIndex >= 0 ? `队列 #${queueIndex + 1}` : complete ? "完成" : `${done}/${total}`}</b><ChevronDown size={17} />
               </button>;
             })}</div></section>;
-          })}{visibleTechnologies.length === 0 ? <div className="mobile-workspace-empty"><FlaskConical size={24} /><span>当前筛选下没有科技</span></div> : null}</div>
+          })}
+          {visibleInfiniteResearch.length > 0 ? <section className="mobile-infinite-research-list"><header>白糖阶段 · 无限科技</header><div>{visibleInfiniteResearch.map((definition) => {
+            const progress = game.endgame.infiniteResearch[definition.id];
+            const level = getInfiniteResearchLevel(game, definition.id);
+            const active = game.endgame.activeInfiniteResearchId === definition.id;
+            const capped = isInfiniteResearchComplete(definition.id, level);
+            return <button className={`${active ? "active" : ""}${capped ? " complete" : ""}`} type="button" key={definition.id} onClick={() => { mobileListScrollRef.current = mobileListRef.current?.scrollTop ?? 0; onMobileOpenDetail?.(`infinite:${definition.id}`); }}>
+              <i style={{ color: definition.color }}>{definition.symbol}</i><span><strong>{definition.name}</strong><small>{definition.summary}</small>{!endgameUnlocked ? <em>前置：完成宇宙矩阵科技</em> : null}</span><b>{capped ? "已达上限" : active ? `${Math.round(getInfiniteResearchCompletion(progress, definition.id) * 100)}%` : `Lv.${level}`}</b><ChevronDown size={17} />
+            </button>;
+          })}</div></section> : null}
+          {visibleTechnologies.length === 0 && visibleInfiniteResearch.length === 0 ? <div className="mobile-workspace-empty"><FlaskConical size={24} /><span>当前筛选下没有科技</span><small>{mobileFilter === "available" && !endgameUnlocked ? "无限科技前置：完成宇宙矩阵科技" : "可清除筛选查看全部普通与无限科技"}</small><button type="button" onClick={() => setMobileFilter("all")}>清除筛选</button></div> : null}</div>
         </div>}
       </section>
     );

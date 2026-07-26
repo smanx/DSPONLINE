@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import Database from "better-sqlite3";
-import { createCloudServer } from "./index.mjs";
+import { cleanupExpiredAuthRecords, createCloudServer, createRateLimiter } from "./index.mjs";
 import { metricDay } from "./analytics.mjs";
 
 let directory;
@@ -47,6 +47,7 @@ before(async () => {
     restoreDrillStatusFile,
     nodeHealthStatusFile,
     registrationLimit: 100,
+    allowedOrigin: "https://dsponline.cn,https://localhost",
     mailer: async (message) => { mailbox.push(message); return true; },
     logger: { error() {} },
   });
@@ -66,6 +67,73 @@ async function request(route, options = {}) {
   });
   return { response, body: await response.json() };
 }
+
+test("cleans only expired and orphaned authentication records", () => {
+  const now = 10_000;
+  const data = {
+    users: { active_user: { id: "active_user" } },
+    sessions: {
+      active_session: { userId: "active_user", expiresAt: now + 1 },
+      expired_session: { userId: "active_user", expiresAt: now },
+      orphaned_session: { userId: "missing_user", expiresAt: now + 1_000 },
+    },
+    emailVerifications: {
+      active_verification: { userId: "active_user", expiresAt: now + 1 },
+      expired_verification: { userId: "active_user", expiresAt: now - 1 },
+    },
+    passwordResets: {
+      active_reset: { userId: "active_user", expiresAt: now + 1 },
+      invalid_reset: { userId: "active_user", expiresAt: Number.NaN },
+    },
+  };
+
+  assert.deepEqual(cleanupExpiredAuthRecords(data, now), {
+    sessions: 2,
+    emailVerifications: 1,
+    passwordResets: 1,
+    total: 4,
+  });
+  assert.deepEqual(Object.keys(data.sessions), ["active_session"]);
+  assert.deepEqual(Object.keys(data.emailVerifications), ["active_verification"]);
+  assert.deepEqual(Object.keys(data.passwordResets), ["active_reset"]);
+});
+
+test("rate limiter reclaims expired buckets without resetting active keys", () => {
+  let now = 1_000;
+  const rateLimit = createRateLimiter(() => now);
+  assert.equal(rateLimit("short", 1, 100), true);
+  assert.equal(rateLimit("short", 1, 100), false);
+  assert.equal(rateLimit("long", 1, 1_000), true);
+  now = 1_101;
+  assert.equal(rateLimit.cleanup(), 1);
+  assert.equal(rateLimit("short", 1, 100), true);
+  assert.equal(rateLimit("long", 1, 1_000), false);
+  now = 2_001;
+  assert.equal(rateLimit.cleanup(), 2);
+  assert.equal(rateLimit("long", 1, 1_000), true);
+});
+
+test("authorizes the Android WebView origin and rejects unknown origins", async () => {
+  const android = await request("/api/health", { headers: { origin: "https://localhost" } });
+  assert.equal(android.response.status, 200);
+  assert.equal(android.response.headers.get("access-control-allow-origin"), "https://localhost");
+
+  const preflight = await fetch(`${baseUrl}/api/cloud-save`, {
+    method: "OPTIONS",
+    headers: {
+      origin: "https://localhost",
+      "access-control-request-method": "PUT",
+      "access-control-request-headers": "authorization,content-type",
+    },
+  });
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get("access-control-allow-origin"), "https://localhost");
+  assert.match(preflight.headers.get("access-control-allow-methods") ?? "", /PUT/);
+
+  const unknown = await request("/api/health", { headers: { origin: "https://attacker.invalid" } });
+  assert.equal(unknown.response.status, 403);
+  assert.equal(unknown.response.headers.get("access-control-allow-origin"), null);
+});
 
 test("registers by username, requires a main cloud save for ranking and verifies a bound email", async () => {
   const health = await request("/api/health");
@@ -704,7 +772,7 @@ test("validates v33 proliferator and exact infinite research fields while accept
   assert.equal(accepted.response.status, 200);
 });
 
-test("validates v34 time warp, Dyson allocation floors and black-hole ports", async () => {
+test("validates v34 time warp and accepts Android 1.0.2 v35 plus 1.0.3 v36 saves", async () => {
   const research = Object.fromEntries([
     ["matrix_compression", 1_000],
     ["vein_utilization", 1_000],

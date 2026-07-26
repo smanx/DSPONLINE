@@ -68,7 +68,7 @@ import { ItemCatalogPicker, RecipeCatalogPicker } from "./CatalogPicker";
 import { QuantityStepper } from "./QuantityStepper";
 import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getTechnology, isConveyorBeltId } from "../game/content";
-import { MATERIAL_DELIVERY_SLOT_COUNT, MAX_MANUAL_CRAFT_BATCHES, MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltNetworkIds, getConstructionAutomationStatus, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityOutputCapacity, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMaxConstructionQuickCraftBatches, getMaxRecursiveHandcraftBatches, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPlanetTrayItemLimit, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getRecursiveHandcraftPlan, getResourceReserveSnapshot, getSprayCoaterInstallCheck, getSprayCoaterRemovalRefund, getStationActiveRoutes, getStationBusyVehicleCount, getStationDroneCapacity, getStationFleetDiagnostic, getStationMinimumCargo, getStationSlotCapacity, getStationSlots, getStationVesselCapacity, getStationWarperAutoRefillTarget, getStationWarperCapacity, getStationWarperRefillSnapshot, getTimeWarpRequiredPowerKw, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
+import { MATERIAL_DELIVERY_SLOT_COUNT, MAX_BELT_LANES, MAX_MANUAL_CRAFT_BATCHES, MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltLaneAdjustmentCheck, getBeltNetworkIds, getConstructionAutomationStatus, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityOutputCapacity, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMaxConstructionQuickCraftBatches, getMaxRecursiveHandcraftBatches, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPlanetTrayItemLimit, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getRecursiveHandcraftPlan, getResourceReserveSnapshot, getSprayCoaterInstallCheck, getSprayCoaterRemovalRefund, getStationActiveRoutes, getStationBusyVehicleCount, getStationDroneCapacity, getStationFleetDiagnostic, getStationMinimumCargo, getStationSlotCapacity, getStationSlots, getStationVesselCapacity, getStationWarperAutoRefillTarget, getStationWarperCapacity, getStationWarperRefillSnapshot, getTimeWarpRequiredPowerKw, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import { getPlanetIndustrialProfile, getPlanetOrbitalYields } from "../game/galaxy";
 import { analyzeBeltNetwork } from "../game/network";
 import { ACTIVITY_MATERIAL_IDS } from "../game/activity";
@@ -397,6 +397,7 @@ interface InspectorPanelProps {
   onStationSlotWarperBudgetChange: (entityId: string, slotIndex: number, warperBudget: number) => void;
   onSplitterModeChange: (entityId: string, mode: "balanced" | "priority") => void;
   onBeltPriorityChange: (beltId: string, priority: 0 | 1 | 2) => void;
+  onBeltLaneCountChange: (beltId: string, targetLanes: number) => void;
   onBeltStackSizeChange: (beltId: string, stackSize: CargoStackSize) => void;
   onBeltMonitorChange: (beltId: string, enabled: boolean) => void;
   onBeltRouteModeChange: (beltId: string, routeMode: BeltRouteMode) => void;
@@ -1345,12 +1346,13 @@ function beltTierRoman(tier: BeltTier): string {
   return tier === 3 ? "III" : tier === 2 ? "II" : "I";
 }
 
-function BeltInspector({ game, belt, hasCopiedConfiguration, focused, onPriorityChange, onStackSizeChange, onMonitorChange, onRouteModeChange, onRouteOffsetChange, onApplyConfigurationToNetwork, onFocusNetwork, onUpgrade, onUpgradeNetwork, onCopyConfiguration, onPasteConfiguration, onRemove, onRemoveNetwork }: {
+function BeltInspector({ game, belt, hasCopiedConfiguration, focused, onPriorityChange, onLaneCountChange, onStackSizeChange, onMonitorChange, onRouteModeChange, onRouteOffsetChange, onApplyConfigurationToNetwork, onFocusNetwork, onUpgrade, onUpgradeNetwork, onCopyConfiguration, onPasteConfiguration, onRemove, onRemoveNetwork }: {
   game: GameState;
   belt: BeltConnection;
   hasCopiedConfiguration: boolean;
   focused: boolean;
   onPriorityChange: (beltId: string, priority: 0 | 1 | 2) => void;
+  onLaneCountChange: (beltId: string, targetLanes: number) => void;
   onStackSizeChange: (beltId: string, stackSize: CargoStackSize) => void;
   onMonitorChange: (beltId: string, enabled: boolean) => void;
   onRouteModeChange: (beltId: string, routeMode: BeltRouteMode) => void;
@@ -1364,6 +1366,8 @@ function BeltInspector({ game, belt, hasCopiedConfiguration, focused, onPriority
   onRemove: (beltId: string) => void;
   onRemoveNetwork: (beltId: string) => void;
 }) {
+  const [laneDraft, setLaneDraft] = useState(String(belt.lanes));
+  const [laneError, setLaneError] = useState<string | null>(null);
   const item = getItem(belt.itemId);
   const capacity = getBeltCapacity(belt);
   const targetTier = belt.tier < 3 ? (belt.tier + 1) as BeltTier : null;
@@ -1377,6 +1381,29 @@ function BeltInspector({ game, belt, hasCopiedConfiguration, focused, onPriority
   const network = analyzeBeltNetwork(game, belt.id);
   const diagnostic = network?.diagnostics.find((entry) => entry.beltId === belt.id);
   const routeMode = belt.routeMode ?? "auto";
+  const beltConstructionId = getBeltConstructionId(belt.tier);
+  const beltStock = Math.max(0, Math.floor(game.construction[beltConstructionId] ?? 0));
+  const decreaseCheck = getBeltLaneAdjustmentCheck(game, belt.id, belt.lanes - 1);
+  const increaseCheck = getBeltLaneAdjustmentCheck(game, belt.id, belt.lanes + 1);
+  useEffect(() => {
+    setLaneDraft(String(belt.lanes));
+    setLaneError(null);
+  }, [belt.id, belt.lanes]);
+  const commitLaneDraft = () => {
+    if (!/^\d+$/.test(laneDraft.trim())) {
+      setLaneError("并联数量必须为整数");
+      return;
+    }
+    const target = Number(laneDraft.trim());
+    const check = getBeltLaneAdjustmentCheck(game, belt.id, target);
+    if (!check.ok) {
+      setLaneError(check.label);
+      return;
+    }
+    setLaneError(null);
+    setLaneDraft(String(target));
+    onLaneCountChange(belt.id, target);
+  };
   return (
     <div className="inspector-content">
       <div className="inspector-identity">
@@ -1399,6 +1426,16 @@ function BeltInspector({ game, belt, hasCopiedConfiguration, focused, onPriority
       </dl>
       {diagnostic ? <p className={`belt-diagnostic belt-diagnostic--${diagnostic.health}`}>近期模拟趋势 · {diagnostic.label}</p> : null}
       <div className="capacity-bar"><i style={{ width: `${Math.min(100, (diagnostic?.flow ?? belt.lastFlow) / capacity * 100)}%`, backgroundColor: item.color }} /></div>
+      <section className="belt-lane-control" aria-label="传送带并联数量">
+        <header><span><Layers3 size={14} />并联线路数量</span><strong>{getConstructionDefinition(beltConstructionId)?.name ?? "同级传送带"}库存 {beltStock}</strong></header>
+        <div>
+          <button type="button" disabled={!decreaseCheck.ok} title={decreaseCheck.label} onClick={() => onLaneCountChange(belt.id, belt.lanes - 1)} aria-label="减少一条并联线路"><Minus size={15} /></button>
+          <input inputMode="numeric" pattern="[0-9]*" min={1} max={Math.max(MAX_BELT_LANES, belt.lanes)} value={laneDraft} onChange={(event) => { setLaneDraft(event.target.value); setLaneError(null); }} onBlur={commitLaneDraft} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); commitLaneDraft(); } else if (event.key === "Escape") { setLaneDraft(String(belt.lanes)); setLaneError(null); } }} aria-label="并联线路目标数量" aria-invalid={Boolean(laneError)} />
+          <button type="button" disabled={!increaseCheck.ok} title={increaseCheck.label} onClick={() => onLaneCountChange(belt.id, belt.lanes + 1)} aria-label="增加一条并联线路"><Plus size={15} /></button>
+        </div>
+        <small>数量影响吞吐；调整不会改变等级、堆叠、路由、优先级或在途物资。上限 {MAX_BELT_LANES}。</small>
+        {laneError ? <p role="alert">{laneError}</p> : null}
+      </section>
       {network ? <section className={`belt-network-diagnostic belt-network-diagnostic--${network.health}`}>
         <header><span><Route size={14} />连续网络诊断</span><strong>{network.label}</strong></header>
         <div>
@@ -1793,7 +1830,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
           </fieldset>
         </div>
       ) : props.selectedBelt ? (
-        <BeltInspector game={props.game} belt={props.selectedBelt} hasCopiedConfiguration={props.hasCopiedBeltConfiguration} focused={props.focusedBeltNetworkId === props.selectedBelt.id} onPriorityChange={props.onBeltPriorityChange} onStackSizeChange={props.onBeltStackSizeChange} onMonitorChange={props.onBeltMonitorChange} onRouteModeChange={props.onBeltRouteModeChange} onRouteOffsetChange={props.onBeltRouteOffsetChange} onApplyConfigurationToNetwork={props.onApplyBeltConfigurationToNetwork} onFocusNetwork={props.onFocusBeltNetwork} onUpgrade={props.onUpgradeBelt} onUpgradeNetwork={props.onUpgradeBeltNetwork} onCopyConfiguration={props.onCopyBeltConfiguration} onPasteConfiguration={props.onPasteBeltConfiguration} onRemove={props.onRemoveBelt} onRemoveNetwork={props.onRemoveBeltNetwork} />
+        <BeltInspector game={props.game} belt={props.selectedBelt} hasCopiedConfiguration={props.hasCopiedBeltConfiguration} focused={props.focusedBeltNetworkId === props.selectedBelt.id} onPriorityChange={props.onBeltPriorityChange} onLaneCountChange={props.onBeltLaneCountChange} onStackSizeChange={props.onBeltStackSizeChange} onMonitorChange={props.onBeltMonitorChange} onRouteModeChange={props.onBeltRouteModeChange} onRouteOffsetChange={props.onBeltRouteOffsetChange} onApplyConfigurationToNetwork={props.onApplyBeltConfigurationToNetwork} onFocusNetwork={props.onFocusBeltNetwork} onUpgrade={props.onUpgradeBelt} onUpgradeNetwork={props.onUpgradeBeltNetwork} onCopyConfiguration={props.onCopyBeltConfiguration} onPasteConfiguration={props.onPasteBeltConfiguration} onRemove={props.onRemoveBelt} onRemoveNetwork={props.onRemoveBeltNetwork} />
       ) : <InspectorEmpty game={props.game} />}
     </aside>
   );

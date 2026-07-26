@@ -6,6 +6,7 @@ import {
   DEFAULT_PLANET_TRAY_ITEM_LIMIT,
   MAX_PLANET_TRAY_ITEM_LIMIT,
   MAX_BUILDING_BUFFER_LIMIT,
+  MAX_CONSTRUCTION_AUTOMATION_TARGET,
   MIN_PLANET_TRAY_ITEM_LIMIT,
   SOLAR_SAIL_POWER_KW,
   STATION_SLOT_COUNT,
@@ -792,7 +793,7 @@ export function migrateGame(value: unknown): GameState | null {
     ? [...new Set((saved.research.completedTechIds as TechId[]).filter((techId) => Boolean(getTechnology(techId))))]
     : [];
   const constructionAutomationLimit = completedTechIds.includes("construction_capacity_2")
-    ? 2000
+    ? MAX_CONSTRUCTION_AUTOMATION_TARGET
     : completedTechIds.includes("construction_capacity_1") ? 500 : 100;
   const validConstructionAutomationTargetId = (value: string): value is ConstructionAutomationTargetId =>
     value in initial.construction || value === "logistics_drone" || value === "logistics_vessel";

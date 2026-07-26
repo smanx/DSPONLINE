@@ -1266,7 +1266,7 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     ],
     prerequisites: ["construction_capacity_1", "universe_matrix"],
     summary: "使用宇宙矩阵统一建筑制造协议，将库存与制造吞吐提升到终局规模。",
-    unlocks: ["目标库存上限 2000", "自动制造周期 1 秒"],
+    unlocks: ["目标库存上限 10万", "自动制造周期 1 秒"],
   },
   research_speed_3: {
     id: "research_speed_3", name: "科研速度 III", tier: 20,

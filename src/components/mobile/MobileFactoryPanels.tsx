@@ -27,6 +27,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CONSTRUCTION,
   ITEMS,
+  getBeltConstructionId,
   getBeltTier,
   getBuilding,
   getConstructionDefinition,
@@ -38,10 +39,13 @@ import {
   isConveyorBeltId,
 } from "../../game/content";
 import {
+  MAX_BELT_LANES,
   PORTABLE_FLEET_ITEM_IDS,
   canPlaceBuildingOnPlanet,
   canUpgradeBelt,
   canUpgradeEntity,
+  getBeltCapacity,
+  getBeltLaneAdjustmentCheck,
   getConstructionQuickCraftPlan,
   getDysonEngineeringSnapshot,
   getEffectiveSimulationMultiplier,
@@ -306,7 +310,43 @@ function MobileEntityProgress({ game, entity, label, reserveLabel }: { game: Gam
   return <div className={`mobile-inspector-progress mobile-inspector-progress--${mode}${active ? " active" : ""}`}><span>{label}</span><strong>{mode === "indeterminate" ? active ? "运行中" : "待机" : `${percent}%`}</strong><i aria-hidden="true"><b style={mode === "indeterminate" ? undefined : { transform: `scaleX(${displayProgress})` }} /></i><small>{entity.productionRate.toFixed(1)}/min · 利用率 {Math.round(entity.utilization * 100)}%{reserveLabel}</small></div>;
 }
 
-export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onUpgradeEntity, onUpgradeBelt, onEntityLockChange, onRemoveSprayCoater, onOpenResourceSettings }: {
+function MobileBeltLaneControl({ game, belt, onChange }: { game: GameState; belt: BeltConnection; onChange: (beltId: string, targetLanes: number) => void }) {
+  const [draft, setDraft] = useState(String(belt.lanes));
+  const [error, setError] = useState<string | null>(null);
+  const constructionId = getBeltConstructionId(belt.tier);
+  const stock = Math.max(0, Math.floor(game.construction[constructionId] ?? 0));
+  const decreaseCheck = getBeltLaneAdjustmentCheck(game, belt.id, belt.lanes - 1);
+  const increaseCheck = getBeltLaneAdjustmentCheck(game, belt.id, belt.lanes + 1);
+
+  useEffect(() => {
+    setDraft(String(belt.lanes));
+    setError(null);
+  }, [belt.id, belt.lanes]);
+
+  const commit = () => {
+    if (!/^\d+$/.test(draft.trim())) {
+      setError("并联数量必须为整数");
+      return;
+    }
+    const target = Number(draft.trim());
+    const check = getBeltLaneAdjustmentCheck(game, belt.id, target);
+    if (!check.ok) {
+      setError(check.label);
+      return;
+    }
+    setError(null);
+    onChange(belt.id, target);
+  };
+
+  return <section className="mobile-belt-lane-control" aria-label="传送带并联数量">
+    <header><span>并联线路</span><strong>库存 {stock} · 上限 {MAX_BELT_LANES}</strong></header>
+    <div><button type="button" disabled={!decreaseCheck.ok} title={decreaseCheck.label} onClick={() => onChange(belt.id, belt.lanes - 1)} aria-label="减少一条并联线路"><Minus size={18} /></button><input inputMode="numeric" pattern="[0-9]*" min={1} max={Math.max(MAX_BELT_LANES, belt.lanes)} value={draft} onChange={(event) => { setDraft(event.target.value); setError(null); }} onBlur={commit} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); commit(); } else if (event.key === "Escape") { setDraft(String(belt.lanes)); setError(null); } }} aria-label="并联线路目标数量" aria-invalid={Boolean(error)} /><button type="button" disabled={!increaseCheck.ok} title={increaseCheck.label} onClick={() => onChange(belt.id, belt.lanes + 1)} aria-label="增加一条并联线路"><Plus size={18} /></button></div>
+    <small>当前吞吐 {getBeltCapacity(belt).toFixed(0)}/s；调整保留线路设置和在途物资。</small>
+    {error ? <p role="alert">{error}</p> : null}
+  </section>;
+}
+
+export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onUpgradeEntity, onUpgradeBelt, onBeltLaneCountChange, onEntityLockChange, onRemoveSprayCoater, onOpenResourceSettings }: {
   game: GameState;
   snap: MobileSheetSnap;
   entity: FactoryEntity | null;
@@ -319,6 +359,7 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
   onAddEntity: (entityId: string, count: number) => void;
   onUpgradeEntity: (entityId: string) => void;
   onUpgradeBelt: (beltId: string) => void;
+  onBeltLaneCountChange: (beltId: string, targetLanes: number) => void;
   onEntityLockChange: (entityId: string, locked: boolean) => void;
   onRemoveSprayCoater: (entityId: string) => void;
   onOpenResourceSettings: () => void;
@@ -348,6 +389,7 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
         {snap !== "peek" ? <>
           {entity ? <section className={`mobile-inspector-io${entity.buildingId === "storage_mk1" || entity.buildingId === "storage_tank" ? " mobile-inspector-io--storage" : ""}`}><div><header>输入</header>{inputRows.length ? inputRows.map(([itemId, amount]) => <span key={itemId}><ItemGlyph itemId={itemId} /><em>{getItem(itemId).name}</em><strong><QuantityValue value={amount} /></strong></span>) : <small>暂无输入缓存</small>}</div><div><header>输出</header>{outputRows.length ? outputRows.map(([itemId, amount]) => <span key={itemId}><ItemGlyph itemId={itemId} /><em>{getItem(itemId).name}</em><strong><QuantityValue value={amount} /></strong></span>) : <small>暂无输出缓存</small>}</div></section> : null}
           {belt ? <section className="mobile-belt-summary"><div><span>物品</span><strong>{getItem(belt.itemId).name}</strong></div><div><span>近期吞吐</span><strong>{belt.lastFlow.toFixed(1)}/s</strong></div><div><span>堆叠</span><strong>×{belt.stackSize ?? 1}</strong></div><div><span>优先级</span><strong>{belt.priority === 2 ? "高" : belt.priority === 1 ? "标准" : "低"}</strong></div></section> : null}
+          {belt ? <MobileBeltLaneControl game={game} belt={belt} onChange={onBeltLaneCountChange} /> : null}
           {entity ? <QuantityStepper value={addCount} max={addAvailable} disabled={addAvailable < 1} onChange={setAddCount} label="移动端增加设备" /> : null}
           <div className="mobile-inspector-actions">
             <button type="button" onClick={onFocus}><Focus size={18} /><span>定位</span></button>

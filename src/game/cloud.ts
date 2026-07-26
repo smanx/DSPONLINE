@@ -8,6 +8,9 @@ export const CLOUD_AUTO_SYNC_INTERVAL_MS = 10 * 60 * 1000;
 export const CLOUD_SAVE_SLOTS = ["main", "1", "2", "3"] as const;
 export type CloudSaveSlot = typeof CLOUD_SAVE_SLOTS[number];
 
+let inMemoryCloudToken: string | null = null;
+let preferInMemoryCloudToken = false;
+
 export interface CloudUser {
   id: string;
   username: string;
@@ -163,15 +166,29 @@ function apiBase(allowInsecurePublicRead = false): string | null {
 }
 
 export function getCloudToken(): string | null {
-  try { return window.localStorage.getItem(CLOUD_TOKEN_STORAGE_KEY); } catch { return null; }
+  try {
+    const storedToken = window.localStorage.getItem(CLOUD_TOKEN_STORAGE_KEY);
+    if (preferInMemoryCloudToken) {
+      if (storedToken === inMemoryCloudToken) preferInMemoryCloudToken = false;
+      return inMemoryCloudToken;
+    }
+    inMemoryCloudToken = storedToken;
+    return storedToken;
+  } catch {
+    return inMemoryCloudToken;
+  }
 }
 
 function setCloudToken(token: string | null): void {
+  inMemoryCloudToken = token;
   try {
     if (token) window.localStorage.setItem(CLOUD_TOKEN_STORAGE_KEY, token);
     else window.localStorage.removeItem(CLOUD_TOKEN_STORAGE_KEY);
+    preferInMemoryCloudToken = false;
   } catch {
-    // A non-persistent session can still be used until the page is closed.
+    // Keep the current session usable without allowing a stale persisted token
+    // to override an explicit login or logout while storage is unavailable.
+    preferInMemoryCloudToken = true;
   }
 }
 

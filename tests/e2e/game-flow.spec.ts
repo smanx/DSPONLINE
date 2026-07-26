@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-26-v1.0.3");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-26-v1.0.4");
     }
   });
 }
@@ -139,18 +139,18 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "递归制造与生产定位" });
+  const releaseNotes = page.getByRole("dialog", { name: "物流并联与终局管理" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(6);
-  await expect(releaseNotes).toContainText("递归制造完整打通");
-  await expect(releaseNotes).toContainText("物品图鉴定位产线");
-  await expect(releaseNotes).toContainText("喷涂拆卸与侧栏修复");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-26-v103-1440.png", fullPage: true });
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(4);
+  await expect(releaseNotes).toContainText("已建线路调整并联数量");
+  await expect(releaseNotes).toContainText("手机无限科技恢复可见");
+  await expect(releaseNotes).toContainText("Windows 与 Android 同步更新");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-26-v104-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-26-v103-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-26-v104-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -165,7 +165,7 @@ test("dated release notes appear once and remain available from both settings sc
   });
   await expect.poll(controlsFitViewport).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-26-v103-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-26-v104-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -174,7 +174,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-26-v1.0.3");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-26-v1.0.4");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -191,7 +191,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-26-v103-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-26-v104-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -3219,7 +3219,7 @@ test("construction automation and three-input delivery stay usable across deskto
   await page.locator(".construction-center-open").click();
   const workspace = page.getByRole("dialog", { name: "建筑制造中心" });
   await expect(workspace).toBeVisible();
-  const smelterTarget = workspace.getByRole("spinbutton", { name: "电弧熔炉目标库存", exact: true });
+  const smelterTarget = workspace.getByRole("textbox", { name: "电弧熔炉目标库存", exact: true });
   await smelterTarget.fill("2");
   await expect(smelterTarget).toHaveValue("2");
   await expect(workspace.locator(".construction-center-status")).toContainText("澄海 I");

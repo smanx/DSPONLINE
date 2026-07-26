@@ -182,6 +182,14 @@
 .mobile-tech-list button.complete > i { border-color: var(--theme-border-strong); color: var(--green); }
 .mobile-tech-list button.active { background: var(--theme-accent-soft); box-shadow: inset 3px 0 0 var(--cyan); }
 .mobile-tech-list button.paused > i { color: var(--yellow); }
+.mobile-infinite-research-list button > i { font-size: calc(12px * var(--ui-font-scale, 1)); font-style: normal; font-weight: 800; }
+.mobile-infinite-research-list button > span em { color: var(--coral); white-space: normal; }
+.mobile-infinite-research-detail .mobile-tech-unlocks > span { grid-template-columns: 24px minmax(0, 1fr); }
+.mobile-infinite-research-detail .mobile-tech-unlocks strong { font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.45; overflow-wrap: anywhere; }
+.mobile-workspace-empty { display: grid; min-height: 180px; place-items: center; align-content: center; gap: 9px; padding: 18px; color: var(--theme-text-muted); text-align: center; }
+.mobile-workspace-empty > span { color: var(--theme-text-soft); font-size: calc(14px * var(--ui-font-scale, 1)); font-weight: 700; }
+.mobile-workspace-empty > small { max-width: 320px; font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.45; overflow-wrap: anywhere; }
+.mobile-workspace-empty > button { min-width: 132px; min-height: 48px; padding: 0 14px; border: 1px solid var(--theme-accent-border); border-radius: 6px; background: var(--theme-accent-soft); color: var(--cyan); font-size: calc(12px * var(--ui-font-scale, 1)); }
 .mobile-tech-cost-list,
 .mobile-tech-prerequisites,
 .mobile-tech-unlocks { display: grid; gap: 6px; }

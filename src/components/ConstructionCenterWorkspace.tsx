@@ -1,5 +1,5 @@
 import { Check, Factory, Layers3, Minus, PackageOpen, Plus, Power, Search, Truck, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CONSTRUCTION, ITEMS, getConstructionDefinition, getPlanet, getRecipe, getTechnology, isConveyorBeltId } from "../game/content";
 import { PORTABLE_FLEET_ITEM_IDS, getConstructionAutomationCycleSeconds, getConstructionAutomationMaterialSeconds, getConstructionAutomationStatus, getConstructionAutomationStockLimit, isPortableFleetItem, isTechnologyCompleted } from "../game/engine";
 import type { ConstructionAutomationTargetId, ConstructionId, GameState, ItemId, PortableFleetItemId, TechId } from "../game/types";
@@ -52,6 +52,63 @@ function DefinitionIcon({ id }: { id: ConstructionAutomationTargetId }) {
   if (isConveyorBeltId(id)) return <Layers3 size={16} />;
   if (LOGISTICS_IDS.has(id)) return <Truck size={16} />;
   return <Factory size={16} />;
+}
+
+const TARGET_PRESETS = [0, 100, 500, 2_000, 10_000, 100_000] as const;
+
+function ConstructionTargetControl({ definition, target, stockLimit, unlocked, onChange }: {
+  definition: AutomationDisplayDefinition;
+  target: number;
+  stockLimit: number;
+  unlocked: boolean;
+  onChange: (constructionId: ConstructionAutomationTargetId, target: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(target));
+  const [error, setError] = useState<string | null>(null);
+  const step = Math.max(1, definition.outputAmount);
+  const presets = [...new Set([...TARGET_PRESETS.filter((value) => value <= stockLimit), stockLimit])];
+
+  useEffect(() => {
+    setDraft(String(target));
+    setError(null);
+  }, [definition.id, target]);
+
+  const apply = (value: number) => {
+    setDraft(String(value));
+    setError(null);
+    onChange(definition.id, value);
+  };
+  const commitDraft = () => {
+    const normalized = draft.trim();
+    if (!/^\d+$/.test(normalized)) {
+      setError("请输入 0 至当前上限的整数");
+      return;
+    }
+    const value = Number(normalized);
+    if (!Number.isSafeInteger(value)) {
+      setError("目标数量超出安全整数范围");
+      return;
+    }
+    if (value > stockLimit) {
+      setError(`当前科技上限为 ${stockLimit.toLocaleString("zh-CN")}`);
+      return;
+    }
+    apply(value);
+  };
+
+  return <div className="construction-center-target">
+    <small>目标库存</small>
+    <div className="construction-center-target__stepper">
+      <button type="button" disabled={!unlocked || target <= 0} onClick={() => apply(Math.max(0, target - step))} aria-label={`减少${definition.name}目标库存`}><Minus size={13} /></button>
+      <input inputMode="numeric" pattern="[0-9]*" min={0} max={stockLimit} step={1} value={draft} disabled={!unlocked} onChange={(event) => { setDraft(event.target.value); setError(null); }} onBlur={commitDraft} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); commitDraft(); } else if (event.key === "Escape") { setDraft(String(target)); setError(null); } }} aria-label={`${definition.name}目标库存`} aria-invalid={Boolean(error)} />
+      <button type="button" disabled={!unlocked || target >= stockLimit} onClick={() => apply(Math.min(stockLimit, target + step))} aria-label={`增加${definition.name}目标库存`}><Plus size={13} /></button>
+    </div>
+    <select value={presets.includes(target) ? String(target) : ""} disabled={!unlocked} onChange={(event) => { if (event.target.value !== "") apply(Number(event.target.value)); }} aria-label={`${definition.name}常用目标库存`}>
+      {!presets.includes(target) ? <option value="">自定义 {target.toLocaleString("zh-CN")}</option> : null}
+      {presets.map((value) => <option value={value} key={value}>{value === 0 ? "关闭自动补足" : value === stockLimit ? `最大 ${formatQuantityCompact(value)}` : formatQuantityCompact(value)}</option>)}
+    </select>
+    {error ? <em role="alert">{error}</em> : null}
+  </div>;
 }
 
 export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChange, onTargetChange }: {
@@ -133,10 +190,7 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
               {definition.costs.map((cost) => <ItemHoverCard itemId={cost.itemId} key={cost.itemId}><span className={(sourceTray[cost.itemId] ?? 0) >= cost.amount ? "ready" : "missing"}><ItemGlyph itemId={cost.itemId} /><b><QuantityValue value={cost.amount} /></b></span></ItemHoverCard>)}
             </div>
             <div className="construction-center-stock"><small>{isPortableFleetItem(definition.id) ? "随身载具" : "施工库存"}</small><strong><QuantityValue value={current} /></strong>{target > 0 ? <span className={complete ? "ready" : missing.length > 0 ? "missing" : "working"}>{complete ? <Check size={12} /> : null}{complete ? "已补足" : missing.length > 0 ? `递归检查 ${ITEMS[missing[0].itemId].name}` : "补货中"}</span> : <span>未设目标</span>}</div>
-            <div className="construction-center-target">
-              <small>目标库存</small>
-              <div><button type="button" disabled={!unlocked || target <= 0} onClick={() => onTargetChange(definition.id, Math.max(0, target - Math.max(1, definition.outputAmount)))} aria-label={`减少${definition.name}目标库存`}><Minus size={13} /></button><input type="number" min={0} max={stockLimit} step={definition.outputAmount} value={target} disabled={!unlocked} onChange={(event) => onTargetChange(definition.id, Number(event.target.value))} aria-label={`${definition.name}目标库存`} /><button type="button" disabled={!unlocked || target >= stockLimit} onClick={() => onTargetChange(definition.id, Math.min(stockLimit, target + Math.max(1, definition.outputAmount)))} aria-label={`增加${definition.name}目标库存`}><Plus size={13} /></button></div>
-            </div>
+            <ConstructionTargetControl definition={definition} target={target} stockLimit={stockLimit} unlocked={unlocked} onChange={onTargetChange} />
           </article>;
         })}
         {definitions.length === 0 ? <div className="construction-center-empty"><Search size={22} /><strong>没有符合条件的建筑</strong></div> : null}

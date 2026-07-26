@@ -1,6 +1,6 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 
-const packageVersion = process.env.npm_package_version || "1.0.2";
+const packageVersion = process.env.npm_package_version || "1.0.4";
 const androidDebug = process.env.DSP_ANDROID_DEBUG === "1";
 
 const config: CapacitorConfig = {

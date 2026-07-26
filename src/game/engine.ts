@@ -139,6 +139,7 @@ export const STATION_MINIMUM_LOAD_OPTIONS: StationMinimumLoad[] = [0.1, 0.25, 0.
 export const STATION_SLOT_COUNT = 5;
 export const PORTABLE_FLEET_ITEM_IDS: PortableFleetItemId[] = ["logistics_drone", "logistics_vessel"];
 export const CARGO_STACK_OPTIONS: CargoStackSize[] = [1, 2, 4];
+export const MAX_BELT_LANES = 64;
 export const POWER_GRID_IDS: PowerGridId[] = ["grid-a", "grid-b", "grid-c"];
 export const POWER_GRID_LABELS: Record<PowerGridId, string> = {
   "grid-a": "A 主网",
@@ -1183,6 +1184,7 @@ export const MAX_BUILDING_BUFFER_LIMIT = 100_000_000;
 export const MIN_PROLIFERATOR_BUFFER_LIMIT = 1;
 export const DEFAULT_PROLIFERATOR_BUFFER_LIMIT = 600;
 export const MAX_PROLIFERATOR_BUFFER_LIMIT = 100_000;
+export const MAX_CONSTRUCTION_AUTOMATION_TARGET = 100_000;
 
 export function normalizeBuildingBufferLimit(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_BUILDING_BUFFER_LIMIT;
@@ -5957,7 +5959,7 @@ export function craftConstructionWithUpstream(state: GameState, buildingId: Cons
 }
 
 export function getConstructionAutomationStockLimit(state: GameState): number {
-  if (isTechnologyCompleted(state, "construction_capacity_2")) return 2000;
+  if (isTechnologyCompleted(state, "construction_capacity_2")) return MAX_CONSTRUCTION_AUTOMATION_TARGET;
   if (isTechnologyCompleted(state, "construction_capacity_1")) return 500;
   return 100;
 }
@@ -6039,7 +6041,7 @@ function constructionAutomationCurrentStock(state: GameState, id: ConstructionAu
 }
 
 export function setConstructionAutomationTarget(state: GameState, constructionId: ConstructionAutomationTargetId, target: number): GameState {
-  if (!getConstructionAutomationTargetDefinition(constructionId)) return state;
+  if (!getConstructionAutomationTargetDefinition(constructionId) || !Number.isSafeInteger(target)) return state;
   const normalized = Math.max(0, Math.min(getConstructionAutomationStockLimit(state), Math.floor(target)));
   if ((state.constructionAutomation.targetStock[constructionId] ?? 0) === normalized) return state;
   const targetStock = { ...state.constructionAutomation.targetStock };
@@ -6540,7 +6542,7 @@ function resolveBlackHolePortIndex(
 
 export type BeltConnectionCheck =
   | { ok: true; code: "ready"; label: string }
-  | { ok: false; code: "missing-belt" | "same-node" | "missing-node" | "different-planet" | "invalid-source" | "station-slots-full" | "item-conflict" | "invalid-target" | "target-port-occupied"; label: string };
+  | { ok: false; code: "missing-belt" | "same-node" | "missing-node" | "different-planet" | "invalid-source" | "station-slots-full" | "item-conflict" | "invalid-target" | "target-port-occupied" | "line-limit"; label: string };
 
 export function getBeltConnectionCheck(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1, targetPortIndex?: 0 | 1 | 2): BeltConnectionCheck {
   const constructionId = getBeltConstructionId(tier);
@@ -6550,6 +6552,12 @@ export function getBeltConnectionCheck(state: GameState, sourceId: string, targe
   const target = state.entities.find((entity) => entity.id === targetId);
   if (!source || !target) return { ok: false, code: "missing-node", label: "连接端点不存在" };
   if (source.planetId !== target.planetId) return { ok: false, code: "different-planet", label: "传送带不能跨越行星" };
+  const requestedPortIndex = target.buildingId === "micro_black_hole_connector" ? targetPortIndex : undefined;
+  const existing = state.belts.find((belt) => belt.source === sourceId && belt.target === targetId && belt.itemId === itemId &&
+    belt.targetPortIndex === requestedPortIndex);
+  if (existing && existing.lanes >= MAX_BELT_LANES) {
+    return { ok: false, code: "line-limit", label: `并联线路已达到上限 ${MAX_BELT_LANES}` };
+  }
   if (!sourceProduces(source, itemId)) return { ok: false, code: "invalid-source", label: "来源设备不能输出该物品" };
   if (target.buildingId === "micro_black_hole_connector" && resolveBlackHolePortIndex(state, target.id, targetPortIndex) === undefined) {
     return { ok: false, code: "target-port-occupied", label: targetPortIndex === undefined
@@ -6631,6 +6639,49 @@ export function removeBelt(state: GameState, beltId: string): GameState {
   next.belts = next.belts.filter((item) => item.id !== beltId);
   const constructionId = getBeltConstructionId(belt.tier);
   next.construction[constructionId] = (next.construction[constructionId] ?? 0) + belt.lanes;
+  return next;
+}
+
+export type BeltLaneAdjustmentCheck =
+  | { ok: true; code: "ready" | "unchanged"; label: string; targetLanes: number; delta: number; constructionId: ConstructionId; available: number }
+  | { ok: false; code: "missing-line" | "invalid-count" | "minimum" | "maximum" | "missing-construction"; label: string };
+
+export function getBeltLaneAdjustmentCheck(state: GameState, beltId: string, targetLanes: number): BeltLaneAdjustmentCheck {
+  const belt = state.belts.find((candidate) => candidate.id === beltId);
+  if (!belt) return { ok: false, code: "missing-line", label: "运输线不存在" };
+  if (!Number.isSafeInteger(targetLanes)) return { ok: false, code: "invalid-count", label: "并联数量必须为整数" };
+  if (targetLanes < 1) return { ok: false, code: "minimum", label: "至少保留 1 条并联线路；如需拆除请使用回收" };
+  // Grandfathered saves may contain more than the current limit. They can be
+  // reduced without losing cargo, but cannot add lanes above their current count.
+  if (targetLanes > MAX_BELT_LANES && targetLanes >= belt.lanes) {
+    return { ok: false, code: "maximum", label: `并联数量不能超过 ${MAX_BELT_LANES}` };
+  }
+  const constructionId = getBeltConstructionId(belt.tier);
+  const available = Math.max(0, Math.floor(state.construction[constructionId] ?? 0));
+  const delta = targetLanes - belt.lanes;
+  if (delta > available) {
+    const name = getConstructionDefinition(constructionId)?.name ?? "同级传送带";
+    return { ok: false, code: "missing-construction", label: `缺少${name} ×${delta - available}（需要 ${delta}，现有 ${available}）` };
+  }
+  return {
+    ok: true,
+    code: delta === 0 ? "unchanged" : "ready",
+    label: delta === 0 ? "并联数量未变化" : delta > 0 ? `将消耗同级传送带 ×${delta}` : `将返还同级传送带 ×${Math.abs(delta)}`,
+    targetLanes,
+    delta,
+    constructionId,
+    available,
+  };
+}
+
+export function setBeltLaneCount(state: GameState, beltId: string, targetLanes: number): GameState {
+  const check = getBeltLaneAdjustmentCheck(state, beltId, targetLanes);
+  if (!check.ok || check.delta === 0) return state;
+  const next = copyState(state);
+  const belt = next.belts.find((candidate) => candidate.id === beltId);
+  if (!belt) return state;
+  belt.lanes = check.targetLanes;
+  next.construction[check.constructionId] = check.available - check.delta;
   return next;
 }
 
