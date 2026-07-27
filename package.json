@@ -1,7 +1,7 @@
 {
   "name": "dsp-idle-network",
   "private": true,
-  "version": "1.0.5",
+  "version": "1.0.6",
   "releaseChannel": "stable",
   "updateBaseUrl": "",
   "cloudApiBaseUrl": "",
@@ -30,6 +30,7 @@
     "test:ops": "node --test deploy/backup-tools.test.mjs deploy/nginx-config.test.mjs deploy/probe-node-health.test.mjs",
     "benchmark:logistics": "cross-env DSP_RUN_LOGISTICS_BENCHMARK=1 vitest run src/game/logisticsBenchmark.test.ts --reporter=verbose",
     "benchmark:refresh": "node scripts/measure-refresh-profiles.mjs",
+    "benchmark:v106-belts": "cross-env DSP_RUN_V106_BELT_BENCHMARK=1 vitest run src/game/v106BeltBenchmark.test.ts --reporter=verbose",
     "server:dev": "node server/index.mjs",
     "typecheck": "tsc -b --pretty false",
     "release:manifest": "node deploy/create-release-manifest.mjs",

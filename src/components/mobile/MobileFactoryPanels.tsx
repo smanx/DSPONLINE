@@ -346,7 +346,7 @@ function MobileBeltLaneControl({ game, belt, onChange }: { game: GameState; belt
   </section>;
 }
 
-export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onUpgradeEntity, onUpgradeBelt, onBeltLaneCountChange, onEntityLockChange, onRemoveSprayCoater, onOpenResourceSettings }: {
+export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onRemoveEntity, onUpgradeEntity, onUpgradeBelt, onBeltLaneCountChange, onEntityLockChange, onRemoveSprayCoater, onOpenResourceSettings }: {
   game: GameState;
   snap: MobileSheetSnap;
   entity: FactoryEntity | null;
@@ -357,6 +357,7 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
   onOpenAdvanced: () => void;
   onFocus: () => void;
   onAddEntity: (entityId: string, count: number) => void;
+  onRemoveEntity: (entityId: string, count?: number) => void;
   onUpgradeEntity: (entityId: string) => void;
   onUpgradeBelt: (beltId: string) => void;
   onBeltLaneCountChange: (beltId: string, targetLanes: number) => void;
@@ -365,6 +366,8 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
   onOpenResourceSettings: () => void;
 }) {
   const [addCount, setAddCount] = useState(1);
+  const [stackTargetDraft, setStackTargetDraft] = useState(entity && entity.kind !== "vein" ? String(entity.machineCount) : "1");
+  const [stackTargetError, setStackTargetError] = useState<string | null>(null);
   const isMulti = selectedCount > 1;
   const title = isMulti ? `已选择 ${selectedCount} 个节点` : entity ? entity.kind === "vein" ? getItem(entity.resourceId!).name : getBuilding(entity.buildingId!).name : belt ? `${getItem(belt.itemId).name}运输线` : "设备检查器";
   const status = entity ? getEntityOperatingStatus(game, entity) : null;
@@ -377,6 +380,30 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
   useEffect(() => {
     setAddCount((current) => Math.max(1, Math.min(Math.max(1, addAvailable), current)));
   }, [addAvailable, entity?.id]);
+  useEffect(() => {
+    setStackTargetDraft(entity && entity.kind !== "vein" ? String(entity.machineCount) : "1");
+    setStackTargetError(null);
+  }, [entity?.id, entity?.machineCount]);
+  const reduceEntityTo = (target: number) => {
+    if (!entity || entity.kind === "vein") return;
+    const normalized = Math.max(1, Math.min(entity.machineCount, Math.floor(target)));
+    setStackTargetDraft(String(normalized));
+    setStackTargetError(null);
+    if (normalized < entity.machineCount) onRemoveEntity(entity.id, entity.machineCount - normalized);
+  };
+  const commitStackTarget = () => {
+    if (!entity || entity.kind === "vein") return;
+    if (!/^\d+$/.test(stackTargetDraft.trim())) {
+      setStackTargetError("目标数量必须为正整数");
+      return;
+    }
+    const target = Number(stackTargetDraft.trim());
+    if (!Number.isSafeInteger(target) || target < 1 || target > entity.machineCount) {
+      setStackTargetError(`请输入 1 至 ${entity.machineCount}`);
+      return;
+    }
+    reduceEntityTo(target);
+  };
   return (
     <MobileSheetFrame title={title} detail={detail} snap={snap} allowPeek onSnap={onSnap} onClose={onClose} className={`mobile-inspector-sheet mobile-inspector-sheet--${snap}`}>
       {!entity && !belt && !isMulti ? <div className="mobile-sheet-empty"><Factory size={24} /><span>选择设备或线路后显示运行摘要</span></div> : <>
@@ -391,12 +418,14 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
           {belt ? <section className="mobile-belt-summary"><div><span>物品</span><strong>{getItem(belt.itemId).name}</strong></div><div><span>近期吞吐</span><strong>{belt.lastFlow.toFixed(1)}/s</strong></div><div><span>堆叠</span><strong>×{belt.stackSize ?? 1}</strong></div><div><span>优先级</span><strong>{belt.priority === 2 ? "高" : belt.priority === 1 ? "标准" : "低"}</strong></div></section> : null}
           {belt ? <MobileBeltLaneControl game={game} belt={belt} onChange={onBeltLaneCountChange} /> : null}
           {entity ? <QuantityStepper value={addCount} max={addAvailable} disabled={addAvailable < 1} onChange={setAddCount} label="移动端增加设备" /> : null}
+          {entity && entity.kind !== "vein" && entity.buildingId !== "micro_black_hole_connector" && entity.buildingId !== "time_warp_device" ? <section className="mobile-stack-batch-remove" aria-label="批量减少建筑堆叠"><header><span>保留数量</span><strong>当前 ×{entity.machineCount}</strong></header><div><input inputMode="numeric" pattern="[0-9]*" min={1} max={entity.machineCount} value={stackTargetDraft} onChange={(event) => { setStackTargetDraft(event.target.value); setStackTargetError(null); }} onBlur={commitStackTarget} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); commitStackTarget(); } }} aria-label="移动端建筑堆叠目标数量" aria-invalid={Boolean(stackTargetError)} /><button type="button" disabled={entity.machineCount <= 1} onClick={() => reduceEntityTo(entity.machineCount - 1)}>-1</button><button type="button" disabled={entity.machineCount <= 1} onClick={() => reduceEntityTo(entity.machineCount - 10)}>-10</button><button type="button" disabled={entity.machineCount <= 1} onClick={() => reduceEntityTo(entity.machineCount - 100)}>-100</button><button type="button" disabled={entity.machineCount <= 1} onClick={() => reduceEntityTo(1)}>减至1</button></div>{stackTargetError ? <p role="alert">{stackTargetError}</p> : <small>只减少堆叠，最低保留 1 台；完整拆除使用独立回收操作。</small>}</section> : null}
           <div className="mobile-inspector-actions">
             <button type="button" onClick={onFocus}><Focus size={18} /><span>定位</span></button>
             {entity ? <button type="button" disabled={entity.interactionLocked || addAvailable < 1} onClick={() => onAddEntity(entity.id, addCount)}><Plus size={18} /><span>增加 ×{Math.min(addCount, addAvailable)}</span><b>余 {addAvailable}</b></button> : null}
             {entity ? <button type="button" disabled={entity.interactionLocked || !canUpgradeEntity(game, entity.id)} onClick={() => onUpgradeEntity(entity.id)}><Sparkles size={18} /><span>升级</span></button> : belt ? <button type="button" disabled={!canUpgradeBelt(game, belt.id)} onClick={() => onUpgradeBelt(belt.id)}><Sparkles size={18} /><span>升级线路</span></button> : null}
             {entity ? <button type="button" onClick={() => onEntityLockChange(entity.id, !entity.interactionLocked)}>{entity.interactionLocked ? <Unlock size={18} /> : <Lock size={18} />}<span>{entity.interactionLocked ? "解锁" : "锁定"}</span></button> : null}
             {entity?.sprayCoaterInstalled ? <button type="button" disabled={entity.interactionLocked} onClick={() => onRemoveSprayCoater(entity.id)}><Trash2 size={18} /><span>拆卸喷涂</span></button> : null}
+            {entity ? <button className="danger" type="button" disabled={entity.interactionLocked || entity.kind === "vein" && entity.minerCount < 1} onClick={() => onRemoveEntity(entity.id)}><Trash2 size={18} /><span>{entity.kind === "vein" ? "回收全部采集设备" : "完整回收建筑"}</span></button> : null}
             {resourceReserve?.exhausted ? <button type="button" onClick={onOpenResourceSettings}><Settings size={18} /><span>资源模式</span></button> : null}
             <button type="button" onClick={onOpenAdvanced}><Wrench size={18} /><span>{isMulti ? "批量设置" : "完整设置"}</span></button>
           </div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createBlueprint, createInitialState, placeBuilding, setLogisticsItem, setStationHubConfiguration, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
+import { MAX_BELT_LANES, createBlueprint, createInitialState, installMiner, placeBuilding, setLogisticsItem, setStationHubConfiguration, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
 import { importBlueprintExchange, parseBlueprintExchange, serializeBlueprintExchange } from "./blueprintExchange";
 
 describe("blueprint exchange", () => {
@@ -55,5 +55,46 @@ describe("blueprint exchange", () => {
       stationWarperTarget: 35,
       stationSlots: expect.arrayContaining([expect.objectContaining({ itemId: "processor", routePolicy: "relay-required", warperBudget: 3 })]),
     });
+  });
+
+  it("round-trips v2 mining anchors and the raised belt-lane limit", () => {
+    let state = createInitialState(10_607);
+    state.construction.mining_machine = 2;
+    state.construction.storage_mk1 = 1;
+    const vein = state.entities.find((entity) => entity.id === "vein_iron")!;
+    state = installMiner(state, vein.id, 2);
+    state = placeBuilding(state, "storage_mk1", { x: vein.position.x + 280, y: vein.position.y });
+    const storage = state.entities.find((entity) => entity.buildingId === "storage_mk1")!;
+    state = createBlueprint(state, [vein.id, storage.id], "采矿锚点交换");
+    state.blueprints[0].belts.push({
+      key: "line_high_capacity",
+      sourceKey: state.blueprints[0].resourceAnchors![0].key,
+      targetKey: state.blueprints[0].entities[0].key,
+      itemId: "iron_ore",
+      lanes: MAX_BELT_LANES,
+      tier: 3,
+      sorterTier: 3,
+      priority: 0,
+    });
+
+    const raw = serializeBlueprintExchange(state.blueprints[0]);
+    expect(JSON.parse(raw).formatVersion).toBe(2);
+    const parsed = parseBlueprintExchange(raw);
+    expect(parsed.valid).toBe(true);
+    expect(parsed.blueprint?.resourceAnchors).toEqual([expect.objectContaining({ resourceId: "iron_ore", minerCount: 2 })]);
+    expect(parsed.blueprint?.belts[0].lanes).toBe(MAX_BELT_LANES);
+  });
+
+  it("keeps accepting legacy v1 exchange files without resource anchors", () => {
+    let state = createInitialState(10_608);
+    state = placeBuilding(state, "arc_smelter", { x: 120, y: 80 });
+    const smelter = state.entities.find((entity) => entity.buildingId === "arc_smelter")!;
+    state = createBlueprint(state, [smelter.id], "旧版交换");
+    const legacy = JSON.parse(serializeBlueprintExchange(state.blueprints[0]));
+    legacy.formatVersion = 1;
+    delete legacy.blueprint.resourceAnchors;
+    const parsed = parseBlueprintExchange(JSON.stringify(legacy));
+    expect(parsed.valid).toBe(true);
+    expect(parsed.blueprint?.entities[0].buildingId).toBe("arc_smelter");
   });
 });

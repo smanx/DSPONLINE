@@ -60,7 +60,7 @@ describe("vein utilization finite-resource budget", () => {
     }
 
     expect(totalMatrices).toBe(49_620);
-    expect(consumed.coal).toBe(571_824);
+    expect(consumed.coal).toBe(428_868);
     expect(available.coal).toBe(2_611_769);
     for (const [itemId, amount] of Object.entries(consumed) as Array<[ItemId, number]>) {
       expect(available[itemId], `${ITEMS[itemId].name} should retain at least 300% surplus`).toBeGreaterThanOrEqual(amount * 4);

@@ -10,6 +10,10 @@ function blueprintBuildingSummary(blueprint: BlueprintDefinition): string[] {
     const name = getConstructionDefinition(entity.buildingId)?.name ?? entity.buildingId;
     counts.set(name, (counts.get(name) ?? 0) + entity.machineCount);
   }
+  for (const anchor of blueprint.resourceAnchors ?? []) {
+    const name = getConstructionDefinition(anchor.extractorBuildingId)?.name ?? anchor.extractorBuildingId;
+    counts.set(`${name}（资源锚点）`, (counts.get(`${name}（资源锚点）`) ?? 0) + anchor.minerCount);
+  }
   return [...counts].map(([name, amount]) => `${name} ×${amount}`);
 }
 
@@ -196,7 +200,7 @@ export function SelectionToolbar({ selectedCount, selectedBeltCount, eligibleCou
 export function BlueprintPlacementCursor({ blueprint, x, y }: { blueprint: BlueprintDefinition; x: number; y: number }) {
   return (
     <div className="blueprint-placement-cursor" style={{ left: x + 14, top: y + 14 }}>
-      <Layers3 size={15} /><span>{blueprint.name}</span><strong>{blueprint.rotation ?? 0}°{blueprint.mirror === "horizontal" ? " · 镜像" : ""} · ×{blueprint.entities.length}</strong>
+      <Layers3 size={15} /><span>{blueprint.name}</span><strong>{blueprint.rotation ?? 0}°{blueprint.mirror === "horizontal" ? " · 镜像" : ""} · ×{blueprint.entities.length + (blueprint.resourceAnchors?.length ?? 0)}</strong>
     </div>
   );
 }
@@ -263,11 +267,12 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
               <header>
                 <i><Layers3 size={18} /></i>
                 <label><span>蓝图名称</span><input defaultValue={blueprint.name} aria-label={`${blueprint.name}名称`} onBlur={(event) => onRename(blueprint.id, event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
-                <em>{blueprint.entities.length} 节点 · {blueprint.belts.length} 线路 · {blueprint.externalPorts?.length ?? 0} 外部端口</em>
+                <em>{blueprint.entities.length} 设备 · {blueprint.resourceAnchors?.length ?? 0} 资源锚点 · {blueprint.belts.length} 线路 · {blueprint.externalPorts?.length ?? 0} 外部端口</em>
               </header>
               <div className="blueprint-composition">
                 {blueprintBuildingSummary(blueprint).map((label) => <span key={label}>{label}</span>)}
               </div>
+              {(blueprint.resourceAnchors?.length ?? 0) > 0 ? <div className="blueprint-resource-note"><strong>矿脉保持唯一</strong><span>部署时只匹配附近同类型资源点，并补齐采集设备；不会复制、移动或补充矿脉储量。</span></div> : null}
               {mobile && !detailBlueprintId ? <button className="mobile-blueprint-open" type="button" onClick={() => onMobileOpenDetail?.(`blueprint:${blueprint.id}`)}>查看与部署<ChevronRight size={18} /></button> : null}
               <div className="blueprint-transform-controls">
                 <span>部署方向</span>

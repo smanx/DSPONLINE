@@ -1127,6 +1127,19 @@ export interface BlueprintBeltTemplate {
   targetPortIndex?: 0 | 1 | 2;
 }
 
+/**
+ * A resource anchor describes an installed extractor layout without making the
+ * underlying resource node buildable. Reserve and depletion data deliberately
+ * stay on the destination planet's existing vein.
+ */
+export interface BlueprintResourceAnchor {
+  key: string;
+  resourceId: ItemId;
+  offset: XYPosition;
+  extractorBuildingId: BuildingId;
+  minerCount: number;
+}
+
 export type BlueprintRotation = 0 | 90 | 180 | 270;
 export type BlueprintMirror = "none" | "horizontal";
 
@@ -1142,6 +1155,7 @@ export interface BlueprintDefinition {
   id: string;
   name: string;
   entities: BlueprintEntityTemplate[];
+  resourceAnchors?: BlueprintResourceAnchor[];
   belts: BlueprintBeltTemplate[];
   externalPorts?: BlueprintExternalPort[];
   rotation?: BlueprintRotation;
@@ -1202,6 +1216,7 @@ export interface ConstructionAutomationState {
   cursor: number;
   totalCrafted: number;
   lastCraftedId: ConstructionAutomationTargetId | null;
+  destroyedByproducts: Partial<Record<ItemId, number>>;
   jobs: Record<string, ConstructionAutomationJob>;
 }
 
@@ -1242,7 +1257,7 @@ export interface ConstructionAutomationJob {
 }
 
 export interface GameState {
-  version: 37;
+  version: 38;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];

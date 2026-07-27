@@ -676,3 +676,26 @@ Windows 1.0.4 安装程序为 103,129,814 字节，SHA-256 `1cc01e21522afa48ab49
 Android `1.0.5 / 1000005` APK 为 4,267,825 字节，SHA-256 `1d9b918e621b187e9f97d6f01c822d4b35943a112fda9ff420985d70cfd9fb7c`，v2/v3 与长期证书通过；从正式 1.0.4 覆盖升级后 `firstInstallTime` 不变。Windows 1.0.5 安装程序为 112,039,520 字节，SHA-256 `12ca09de705a72830c7a224bcc8a756ae43f5ba6532cfc8eec4a85e615dc3220`，隔离启动通过，Authenticode 仍为 `NotSigned`。上海下载站已原子切换，公网清单 no-cache、二进制 immutable/Range 206、香港 302 和完整下载 SHA-256 均通过。
 
 公网烟测确认两地根页和健康接口为 200、香港 `www` 为 301、schema v7/layout v2、服务 active、`NRestarts=0`、近期 journal 无错误匹配且最近 500 条 DSP 日志无 5xx；正式桌面、390×844 手机和下载页截图无页面错误。完整记录见 [releases/1.0.5.md](./releases/1.0.5.md)。
+
+## 29. `1.0.6` / v38 高容量产线与采矿蓝图回归
+
+`1.0.6` 将 GameState 从 v37 升至 v38，存档 envelope v2、云 schema v7 和 SQLite layout v2 不变。v37→v38 为建筑制造中心补充非负安全整数的 `destroyedByproducts`，并让旧蓝图默认没有资源锚点；旧实体、线路、库存、物流载具、科研、WIP、活动和戴森工程不重建。
+
+专项单元测试覆盖紫色矩阵仅 1 个粒子宽带的单周期生产、1～4,096 并联边界与恶意存档退款、制造中心产氢副产物在满托盘时不阻塞、取消和重载守恒、101→1 批量减堆、物流塔忙碌载具保持，以及矿脉锚点匹配、缺失跳过和重复部署幂等。可选 `npm run benchmark:v106-belts` 在同一条线路 2,000 步下测得 64/256/1,024/4,096 并联分别约 690/600/591/591 ms；并联只改变容量，不扩成多个线路对象。
+
+本地候选最终结果：
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm ci` | 根目录与服务端通过；服务端 0 个已知漏洞 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run typecheck` | 通过 |
+| `npm test` | 52 个文件、503 项通过，2 项显式可选基准跳过 |
+| `npm run test:server` | 35/35 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 157/157 通过，单 worker 517 秒 |
+| `git diff --check` | 通过 |
+
+重点截图为 `artifacts/qa/v106-desktop-1440x900.png`、`artifacts/qa/v106-mobile-next-font200-390x844.png` 和 `artifacts/qa/v106-mobile-classic-font200-390x844.png`。根项目依赖审计仍报告 16 个集中在 Electron 开发/打包链的既有高危告警；服务端生产依赖为 0，本轮没有新增依赖或执行破坏 lockfile 的强制升级。

@@ -1,4 +1,5 @@
-import { BUILDINGS, ITEMS, RECIPES } from "./content";
+import { BUILDINGS, ITEMS, RECIPES, getExtractorBuildingId } from "./content";
+import { MAX_BELT_LANES } from "./engine";
 import type {
   BlueprintDefinition,
   BlueprintExternalPort,
@@ -6,17 +7,18 @@ import type {
   BlueprintEntityTemplate,
   BlueprintMirror,
   BlueprintRotation,
+  BlueprintResourceAnchor,
   GameState,
   ItemId,
   RecipeId,
   StationSlot,
 } from "./types";
 
-export const BLUEPRINT_EXCHANGE_FORMAT_VERSION = 1;
+export const BLUEPRINT_EXCHANGE_FORMAT_VERSION = 2;
 
 export interface BlueprintExchangeEnvelope {
   type: "dsp-idle-blueprint";
-  formatVersion: typeof BLUEPRINT_EXCHANGE_FORMAT_VERSION;
+  formatVersion: 1 | typeof BLUEPRINT_EXCHANGE_FORMAT_VERSION;
   exportedAt: string;
   blueprint: BlueprintDefinition;
 }
@@ -47,10 +49,43 @@ function cloneBlueprint(blueprint: BlueprintDefinition): BlueprintDefinition {
   return {
     ...blueprint,
     entities: blueprint.entities.map((entity) => ({ ...entity, offset: { ...entity.offset }, stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })) })),
+    resourceAnchors: blueprint.resourceAnchors?.map((anchor) => ({ ...anchor, offset: { ...anchor.offset } })),
     belts: blueprint.belts.map((belt) => ({ ...belt })),
     externalPorts: blueprint.externalPorts?.map((port) => ({ ...port, offset: { ...port.offset } })),
     recipeOverrides: { ...blueprint.recipeOverrides },
   };
+}
+
+function parseResourceAnchors(value: unknown, issues: string[]): BlueprintResourceAnchor[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 256) {
+    issues.push("资源锚点必须是最多 256 项的数组");
+    return [];
+  }
+  const anchors: BlueprintResourceAnchor[] = [];
+  const keys = new Set<string>();
+  value.forEach((entry, index) => {
+    if (!isRecord(entry) || !validId(entry.key) || keys.has(entry.key) || typeof entry.resourceId !== "string" || !(entry.resourceId in ITEMS) ||
+      !validPosition(entry.offset) || !validNumber(entry.minerCount, 1, 10_000) || !Number.isInteger(entry.minerCount)) {
+      issues.push(`资源锚点 ${index + 1} 缺少合法的 key、资源、位置或采集设备数量`);
+      return;
+    }
+    const resourceId = entry.resourceId as ItemId;
+    const extractorBuildingId = getExtractorBuildingId(resourceId);
+    if (entry.extractorBuildingId !== extractorBuildingId) {
+      issues.push(`资源锚点 ${index + 1} 的采集设备与资源类型不兼容`);
+      return;
+    }
+    keys.add(entry.key);
+    anchors.push({
+      key: entry.key,
+      resourceId,
+      offset: { x: Math.round(entry.offset.x), y: Math.round(entry.offset.y) },
+      extractorBuildingId,
+      minerCount: Math.floor(entry.minerCount),
+    });
+  });
+  return anchors;
 }
 
 function parseStationSlots(value: unknown, entityIndex: number, issues: string[]): StationSlot[] | undefined {
@@ -136,7 +171,7 @@ function parseEntity(value: unknown, index: number, issues: string[]): Blueprint
 function parseBelt(value: unknown, index: number, entityKeys: Set<string>, issues: string[]): BlueprintBeltTemplate | null {
   if (!isRecord(value) || !validId(value.key) || typeof value.sourceKey !== "string" || typeof value.targetKey !== "string" ||
     !entityKeys.has(value.sourceKey) || !entityKeys.has(value.targetKey) || value.sourceKey === value.targetKey ||
-    typeof value.itemId !== "string" || !(value.itemId in ITEMS) || !validNumber(value.lanes, 1, 64) ||
+    typeof value.itemId !== "string" || !(value.itemId in ITEMS) || !validNumber(value.lanes, 1, MAX_BELT_LANES) || !Number.isInteger(value.lanes) ||
     (value.tier !== 1 && value.tier !== 2 && value.tier !== 3) ||
     (value.priority !== 0 && value.priority !== 1 && value.priority !== 2)) {
     issues.push(`线路 ${index + 1} 包含未知端点、物品或等级`);
@@ -180,11 +215,11 @@ function parseExternalPorts(value: unknown, entityKeys: Set<string>, issues: str
 
 export function validateBlueprintExchange(value: unknown): BlueprintExchangeResult {
   const issues: string[] = [];
-  if (!isRecord(value) || value.type !== "dsp-idle-blueprint" || value.formatVersion !== BLUEPRINT_EXCHANGE_FORMAT_VERSION || !isRecord(value.blueprint)) {
+  if (!isRecord(value) || value.type !== "dsp-idle-blueprint" || (value.formatVersion !== 1 && value.formatVersion !== BLUEPRINT_EXCHANGE_FORMAT_VERSION) || !isRecord(value.blueprint)) {
     return { valid: false, blueprint: null, issues: ["不是支持的蓝图交换文件"] };
   }
   const source = value.blueprint;
-  if (typeof source.name !== "string" || !source.name.trim() || source.name.trim().length > 48 || !Array.isArray(source.entities) || source.entities.length < 1 || source.entities.length > 256 || !Array.isArray(source.belts) || source.belts.length > 512) {
+  if (typeof source.name !== "string" || !source.name.trim() || source.name.trim().length > 48 || !Array.isArray(source.entities) || source.entities.length > 256 || !Array.isArray(source.belts) || source.belts.length > 512) {
     return { valid: false, blueprint: null, issues: ["蓝图名称、设备数量或线路数量不合法"] };
   }
   const entities = source.entities.flatMap((entry, index) => {
@@ -196,6 +231,12 @@ export function validateBlueprintExchange(value: unknown): BlueprintExchangeResu
     if (entityKeys.has(entity.key)) issues.push(`设备 key 重复：${entity.key}`);
     entityKeys.add(entity.key);
   }
+  const resourceAnchors = value.formatVersion === 2 ? parseResourceAnchors(source.resourceAnchors, issues) : [];
+  for (const anchor of resourceAnchors) {
+    if (entityKeys.has(anchor.key)) issues.push(`资源锚点 key 重复：${anchor.key}`);
+    entityKeys.add(anchor.key);
+  }
+  if (entities.length === 0 && resourceAnchors.length === 0) issues.push("蓝图至少需要一个设备或资源锚点");
   const belts = source.belts.flatMap((entry, index) => {
     const belt = parseBelt(entry, index, entityKeys, issues);
     return belt ? [belt] : [];
@@ -219,6 +260,7 @@ export function validateBlueprintExchange(value: unknown): BlueprintExchangeResu
       id: typeof source.id === "string" ? source.id : "imported_blueprint",
       name: source.name.trim().slice(0, 48),
       entities,
+      ...(resourceAnchors.length > 0 ? { resourceAnchors } : {}),
       belts,
       ...(externalPorts ? { externalPorts } : {}),
       rotation,

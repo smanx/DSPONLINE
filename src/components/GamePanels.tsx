@@ -693,9 +693,15 @@ function EntityManagementActions({ game, entity, onAdd, onRemove }: {
 }) {
   const [addCount, setAddCount] = useState(1);
   const [recoveryCount, setRecoveryCount] = useState(1);
+  const [targetCountDraft, setTargetCountDraft] = useState(String(Math.max(1, entity.machineCount)));
+  const [targetCountError, setTargetCountError] = useState<string | null>(null);
   useEffect(() => {
     setRecoveryCount((current) => Math.max(1, Math.min(Math.max(1, entity.minerCount), current)));
   }, [entity.id, entity.minerCount]);
+  useEffect(() => {
+    setTargetCountDraft(String(Math.max(1, entity.machineCount)));
+    setTargetCountError(null);
+  }, [entity.id, entity.machineCount]);
   const constructionId = entity.kind === "vein" && entity.resourceId
     ? getExtractorBuildingId(entity.resourceId)
     : entity.buildingId;
@@ -706,15 +712,36 @@ function EntityManagementActions({ game, entity, onAdd, onRemove }: {
   if (!constructionId) return null;
   const name = getBuilding(constructionId).name;
   const singleEntity = entity.buildingId === "micro_black_hole_connector" || entity.buildingId === "time_warp_device";
+  const reduceTo = (target: number) => {
+    const normalized = Math.max(1, Math.min(entity.machineCount, Math.floor(target)));
+    setTargetCountDraft(String(normalized));
+    setTargetCountError(null);
+    if (normalized < entity.machineCount) onRemove(entity.id, entity.machineCount - normalized);
+  };
+  const commitTargetCount = () => {
+    const normalized = targetCountDraft.trim();
+    if (!/^\d+$/.test(normalized)) {
+      setTargetCountError("目标数量必须为正整数");
+      return;
+    }
+    const target = Number(normalized);
+    if (!Number.isSafeInteger(target) || target < 1 || target > entity.machineCount) {
+      setTargetCountError(`请输入 1 至 ${entity.machineCount} 的整数`);
+      return;
+    }
+    reduceTo(target);
+  };
   return (
     <div className={`entity-management-actions${entity.kind === "vein" ? " entity-management-actions--extractor" : ""}`} data-inspector-section="stack" data-inspector-section-label="堆叠与回收" aria-label="堆叠与回收">
       {!singleEntity ? <><QuantityStepper value={addCount} max={available} disabled={available < 1} onChange={setAddCount} label={entity.kind === "vein" ? "增加采矿机" : "增加建筑堆叠"} />
       <button className="entity-add-command" type="button" disabled={available < 1} onClick={() => onAdd(entity.id, addCount)} title={available > 0 ? `消耗施工托盘中的 ${addCount} 台${name}` : `施工托盘中没有可用的${name}`} aria-label={entity.kind === "vein" ? `快速增加 ${addCount} 台采矿机，剩余 ${available}` : `快速增加 ${addCount} 台建筑，剩余 ${available}`}>
         <Plus size={15} /> {entity.kind === "vein" ? "增加采矿机" : "增加建筑"}<strong>+{Math.min(addCount, available)}</strong>
       </button></> : null}
-      {entity.kind !== "vein" && !singleEntity ? <button className="entity-stack-remove-command" type="button" onClick={() => onRemove(entity.id, 1)} title={entity.machineCount > 1 ? `减少 1 台${name}并返还施工托盘，设备缓存、进度与线路保持不变` : `拆除最后一台${name}，进入完整回收流程`} aria-label={`${entity.machineCount > 1 ? "减少建筑堆叠" : "拆除最后一台建筑"}，当前 ${entity.machineCount}`}>
-        <Minus size={15} /> {entity.machineCount > 1 ? "减少堆叠" : "拆除最后一台"}<strong>-1</strong>
-      </button> : null}
+      {entity.kind !== "vein" && !singleEntity ? <div className="entity-stack-batch-remove">
+        <label><span>保留数量</span><input inputMode="numeric" pattern="[0-9]*" min={1} max={entity.machineCount} value={targetCountDraft} onChange={(event) => { setTargetCountDraft(event.target.value); setTargetCountError(null); }} onBlur={commitTargetCount} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); commitTargetCount(); } else if (event.key === "Escape") { setTargetCountDraft(String(entity.machineCount)); setTargetCountError(null); } }} aria-label="建筑堆叠目标数量" aria-invalid={Boolean(targetCountError)} /></label>
+        <div><button type="button" disabled={entity.machineCount <= 1} onClick={() => reduceTo(entity.machineCount - 1)}>-1</button><button type="button" disabled={entity.machineCount <= 1} onClick={() => reduceTo(entity.machineCount - 10)}>-10</button><button type="button" disabled={entity.machineCount <= 1} onClick={() => reduceTo(entity.machineCount - 100)}>-100</button><button type="button" disabled={entity.machineCount <= 1} onClick={() => reduceTo(1)}>减至 1</button></div>
+        {targetCountError ? <em role="alert">{targetCountError}</em> : <small>减少的建筑返还施工托盘；缓存、进度、线路和在途物资保持不变。</small>}
+      </div> : null}
       {entity.kind === "vein" ? <div className="extractor-recovery-controls">
         <label><span>回收数量</span><input type="number" min={1} max={Math.max(1, entity.minerCount)} value={recoveryCount} disabled={entity.minerCount < 1} onChange={(event) => setRecoveryCount(Math.max(1, Math.min(Math.max(1, entity.minerCount), Math.floor(Number(event.target.value) || 1))))} /></label>
         <button className="danger-command" type="button" disabled={entity.minerCount < 1} onClick={() => onRemove(entity.id, recoveryCount)}><Minus size={15} /> 回收 {Math.min(recoveryCount, entity.minerCount)} 台</button>
@@ -859,6 +886,8 @@ function EntityInspector({
           <div><dt>当前负载</dt><dd>{Math.round(entity.utilization * 100)}%</dd></div>
           <div><dt>目标项目</dt><dd>{activeTargets}</dd></div>
           <div><dt>累计制造</dt><dd>{game.constructionAutomation.totalCrafted.toLocaleString("zh-CN")}</dd></div>
+          <div><dt>任务 WIP</dt><dd>{formatQuantityCompact(automation.wipCount ?? 0)}</dd></div>
+          <div><dt>销毁副产物</dt><dd>{formatQuantityCompact(automation.destroyedByproductCount ?? 0)}</dd></div>
           <div><dt>额定耗电</dt><dd><PowerValue valueKw={(building.powerDemandKw ?? 0) * entity.machineCount} /></dd></div>
         </dl>
         <button className="construction-center-open" type="button" onClick={onOpenConstructionCenter}><Factory size={15} />打开建筑制造中心</button>

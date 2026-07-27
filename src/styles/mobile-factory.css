@@ -423,6 +423,21 @@
 .mobile-belt-lane-control > small { color: var(--theme-text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.4; }
 .mobile-belt-lane-control > p { margin: 0; color: var(--coral); font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.4; }
 
+.mobile-stack-batch-remove { display: grid; gap: 7px; margin: 0 10px 7px; padding: 8px; border: 1px solid var(--theme-border); border-radius: 6px; background: var(--theme-surface); }
+.mobile-stack-batch-remove > header { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; }
+.mobile-stack-batch-remove > header span { color: var(--theme-text-soft); font-size: calc(13px * var(--ui-font-scale, 1)); font-weight: 700; }
+.mobile-stack-batch-remove > header strong { color: var(--yellow); font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-stack-batch-remove > div { display: grid; grid-template-columns: repeat(4, minmax(44px, 1fr)); gap: 4px; }
+.mobile-stack-batch-remove input,
+.mobile-stack-batch-remove button { min-width: 0; min-height: 48px; border: 1px solid var(--theme-border-strong); border-radius: 4px; background: var(--theme-control); color: var(--theme-text-soft); font: inherit; font-size: calc(12px * var(--ui-font-scale, 1)); text-align: center; }
+.mobile-stack-batch-remove input { font-size: calc(16px * var(--ui-font-scale, 1)); }
+.mobile-stack-batch-remove input { grid-column: 1 / -1; }
+.mobile-stack-batch-remove button:disabled { opacity: .4; }
+.mobile-stack-batch-remove > small,
+.mobile-stack-batch-remove > p { margin: 0; color: var(--theme-text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.45; overflow-wrap: anywhere; }
+.mobile-stack-batch-remove > p { color: var(--coral); }
+
+
 .mobile-inspector-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding: 5px 10px 14px; }
 .mobile-inspector-actions > button { position: relative; display: grid; min-width: 0; min-height: 56px; place-items: center; align-content: center; gap: 3px; border: 1px solid var(--theme-border); border-radius: 6px; background: var(--theme-control); color: var(--theme-text-soft); }
 .mobile-inspector-actions > button span { overflow: hidden; max-width: 100%; font-size: calc(12px * var(--ui-font-scale, 1)); text-overflow: ellipsis; white-space: nowrap; }

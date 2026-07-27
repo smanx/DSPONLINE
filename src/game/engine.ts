@@ -42,6 +42,7 @@ import type {
   BeltRouteMode,
   BeltConnection,
   BlueprintDefinition,
+  BlueprintResourceAnchor,
   BlueprintMirror,
   BlueprintRotation,
   BuildingId,
@@ -139,7 +140,7 @@ export const STATION_MINIMUM_LOAD_OPTIONS: StationMinimumLoad[] = [0.1, 0.25, 0.
 export const STATION_SLOT_COUNT = 5;
 export const PORTABLE_FLEET_ITEM_IDS: PortableFleetItemId[] = ["logistics_drone", "logistics_vessel"];
 export const CARGO_STACK_OPTIONS: CargoStackSize[] = [1, 2, 4];
-export const MAX_BELT_LANES = 64;
+export const MAX_BELT_LANES = 4096;
 export const POWER_GRID_IDS: PowerGridId[] = ["grid-a", "grid-b", "grid-c"];
 export const POWER_GRID_LABELS: Record<PowerGridId, string> = {
   "grid-a": "A 主网",
@@ -216,6 +217,7 @@ function copyState(state: GameState): GameState {
     constructionAutomation: {
       ...state.constructionAutomation,
       targetStock: { ...state.constructionAutomation.targetStock },
+      destroyedByproducts: { ...state.constructionAutomation.destroyedByproducts },
       jobs: Object.fromEntries(Object.entries(state.constructionAutomation.jobs).map(([entityId, job]) => [
         entityId,
         {
@@ -274,6 +276,7 @@ function copyState(state: GameState): GameState {
         offset: { ...entity.offset },
         stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
       })),
+      resourceAnchors: blueprint.resourceAnchors?.map((anchor) => ({ ...anchor, offset: { ...anchor.offset } })),
       belts: blueprint.belts.map((belt) => ({ ...belt })),
       externalPorts: blueprint.externalPorts?.map((port) => ({ ...port, offset: { ...port.offset } })),
       recipeOverrides: { ...blueprint.recipeOverrides },
@@ -499,7 +502,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
     return { ...entity, resourceRemaining: reserve, resourceCapacity: reserve };
   });
   return {
-    version: 37,
+    version: 38,
     nextId: 1,
     activePlanetId: "home",
     entities,
@@ -565,6 +568,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
       cursor: 0,
       totalCrafted: 0,
       lastCraftedId: null,
+      destroyedByproducts: {},
       jobs: {},
     },
     portableFleet: { logistics_drone: 0, logistics_vessel: 0 },
@@ -4575,7 +4579,8 @@ export function moveEntities(state: GameState, positions: Array<{ id: string; po
 export function getBlueprintEligibleEntityIds(state: GameState, entityIds: string[]): string[] {
   const selectedIds = new Set(entityIds);
   return state.entities
-    .filter((entity) => entity.planetId === state.activePlanetId && entity.kind !== "vein" && entity.buildingId && selectedIds.has(entity.id))
+    .filter((entity) => entity.planetId === state.activePlanetId && selectedIds.has(entity.id) &&
+      (entity.kind === "vein" ? Boolean(entity.resourceId && entity.minerCount > 0) : Boolean(entity.buildingId)))
     .map((entity) => entity.id);
 }
 
@@ -4586,10 +4591,12 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
   const originX = Math.min(...selected.map((entity) => entity.position.x));
   const originY = Math.min(...selected.map((entity) => entity.position.y));
   const keyById = new Map(selected.map((entity, index) => [entity.id, `node_${index + 1}`]));
+  const selectedBuildings = selected.filter((entity) => entity.kind !== "vein" && entity.buildingId);
+  const selectedResources = selected.filter((entity) => entity.kind === "vein" && entity.resourceId && entity.minerCount > 0);
   const blueprint: BlueprintDefinition = {
     id: `blueprint_${state.nextId}`,
     name: name?.trim().slice(0, 32) || `蓝图 ${String(state.blueprints.length + 1).padStart(2, "0")}`,
-    entities: selected.map((entity) => ({
+    entities: selectedBuildings.map((entity) => ({
       key: keyById.get(entity.id)!,
       buildingId: entity.buildingId!,
       offset: { x: entity.position.x - originX, y: entity.position.y - originY },
@@ -4620,6 +4627,13 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
       sprayCoaterInstalled: entity.sprayCoaterInstalled,
       proliferatorTier: entity.proliferatorTier,
       proliferatorMode: entity.proliferatorMode,
+    })),
+    resourceAnchors: selectedResources.map((entity): BlueprintResourceAnchor => ({
+      key: keyById.get(entity.id)!,
+      resourceId: entity.resourceId!,
+      offset: { x: entity.position.x - originX, y: entity.position.y - originY },
+      extractorBuildingId: entity.extractorBuildingId ?? getExtractorBuildingId(entity.resourceId!),
+      minerCount: Math.max(1, Math.floor(entity.minerCount)),
     })),
     belts: state.belts
       .filter((belt) => keyById.has(belt.source) && keyById.has(belt.target))
@@ -4717,19 +4731,111 @@ export function setBlueprintRecipeOverride(
   };
 }
 
-export function getBlueprintRequirements(blueprint: BlueprintDefinition): Array<{ constructionId: ConstructionId; amount: number }> {
+interface ResolvedBlueprintResourceAnchor {
+  anchor: BlueprintResourceAnchor;
+  entity: FactoryEntity;
+  installCount: number;
+}
+
+export interface BlueprintPlacementPreview {
+  matchedResourceAnchors: number;
+  skippedResourceAnchors: Array<{ key: string; resourceId: ItemId }>;
+  extractorInstallCount: number;
+  requirements: Array<{ constructionId: ConstructionId; amount: number }>;
+  canPlace: boolean;
+}
+
+const BLUEPRINT_RESOURCE_ANCHOR_RADIUS = 180;
+
+function resolveBlueprintResourceAnchors(
+  state: GameState,
+  blueprint: BlueprintDefinition,
+  position: { x: number; y: number },
+  planetId: PlanetId,
+  rotation: BlueprintRotation,
+  mirror: BlueprintMirror,
+): { resolved: ResolvedBlueprintResourceAnchor[]; skipped: BlueprintResourceAnchor[] } {
+  const usedEntityIds = new Set<string>();
+  const resolved: ResolvedBlueprintResourceAnchor[] = [];
+  const skipped: BlueprintResourceAnchor[] = [];
+  for (const anchor of blueprint.resourceAnchors ?? []) {
+    const offset = transformBlueprintOffset(anchor.offset, rotation, mirror);
+    const expected = { x: position.x + offset.x, y: position.y + offset.y };
+    const candidate = state.entities
+      .filter((entity) => entity.kind === "vein" && entity.planetId === planetId && entity.resourceId === anchor.resourceId && !usedEntityIds.has(entity.id))
+      .map((entity) => ({ entity, distance: Math.hypot(entity.position.x - expected.x, entity.position.y - expected.y) }))
+      .filter(({ distance }) => distance <= BLUEPRINT_RESOURCE_ANCHOR_RADIUS)
+      .sort((a, b) => a.distance - b.distance || a.entity.id.localeCompare(b.entity.id))[0]?.entity;
+    if (!candidate) {
+      skipped.push(anchor);
+      continue;
+    }
+    usedEntityIds.add(candidate.id);
+    resolved.push({
+      anchor,
+      entity: candidate,
+      installCount: Math.max(0, Math.floor(anchor.minerCount) - Math.max(0, Math.floor(candidate.minerCount))),
+    });
+  }
+  return { resolved, skipped };
+}
+
+function blueprintRequirements(
+  blueprint: BlueprintDefinition,
+  resourceInstalls = new Map((blueprint.resourceAnchors ?? []).map((anchor) => [anchor.key, Math.max(1, Math.floor(anchor.minerCount))])),
+  activeKeys = new Set([...blueprint.entities.map((entity) => entity.key), ...(blueprint.resourceAnchors ?? []).map((anchor) => anchor.key)]),
+): Array<{ constructionId: ConstructionId; amount: number }> {
   const requirements = new Map<ConstructionId, number>();
   const add = (constructionId: ConstructionId, amount: number) => {
+    if (amount < 1) return;
     requirements.set(constructionId, (requirements.get(constructionId) ?? 0) + amount);
   };
   for (const entity of blueprint.entities) {
     add(entity.buildingId, entity.machineCount);
     if (entity.sprayCoaterInstalled) add("spray_coater", 1);
   }
+  for (const anchor of blueprint.resourceAnchors ?? []) add(anchor.extractorBuildingId, resourceInstalls.get(anchor.key) ?? 0);
   for (const belt of blueprint.belts) {
+    if (!activeKeys.has(belt.sourceKey) || !activeKeys.has(belt.targetKey)) continue;
     add(getBeltConstructionId(belt.tier), belt.lanes);
   }
   return [...requirements].map(([constructionId, amount]) => ({ constructionId, amount }));
+}
+
+export function getBlueprintRequirements(blueprint: BlueprintDefinition): Array<{ constructionId: ConstructionId; amount: number }> {
+  return blueprintRequirements(blueprint);
+}
+
+export function getBlueprintPlacementPreview(
+  state: GameState,
+  blueprintId: string,
+  position: { x: number; y: number },
+  options: { planetId?: PlanetId; rotation?: BlueprintRotation; mirror?: BlueprintMirror } = {},
+): BlueprintPlacementPreview {
+  const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
+  const planetId = options.planetId ?? state.activePlanetId;
+  const rotation = options.rotation ?? blueprint?.rotation ?? 0;
+  const mirror = options.mirror ?? blueprint?.mirror ?? "none";
+  if (!blueprint) return { matchedResourceAnchors: 0, skippedResourceAnchors: [], extractorInstallCount: 0, requirements: [], canPlace: false };
+  const matches = resolveBlueprintResourceAnchors(state, blueprint, position, planetId, rotation, mirror);
+  const activeKeys = new Set([
+    ...blueprint.entities.map((entity) => entity.key),
+    ...matches.resolved.map(({ anchor }) => anchor.key),
+  ]);
+  const requirements = blueprintRequirements(
+    blueprint,
+    new Map(matches.resolved.map(({ anchor, installCount }) => [anchor.key, installCount])),
+    activeKeys,
+  );
+  const compatible = (blueprint.entities.length > 0 || matches.resolved.length > 0) &&
+    blueprint.entities.every((entity) => canPlaceBuildingOnPlanet(entity.buildingId, planetId, state));
+  return {
+    matchedResourceAnchors: matches.resolved.length,
+    skippedResourceAnchors: matches.skipped.map((anchor) => ({ key: anchor.key, resourceId: anchor.resourceId })),
+    extractorInstallCount: matches.resolved.reduce((sum, match) => sum + match.installCount, 0),
+    requirements,
+    canPlace: compatible && requirements.every((requirement) => (state.construction[requirement.constructionId] ?? 0) >= requirement.amount),
+  };
 }
 
 export interface BlueprintFleetLoadPreview {
@@ -4760,9 +4866,15 @@ export function getBlueprintFleetLoadPreview(state: GameState, blueprintId: stri
   return result;
 }
 
-export function canPlaceBlueprint(state: GameState, blueprintId: string, planetId: PlanetId = state.activePlanetId): boolean {
+export function canPlaceBlueprint(
+  state: GameState,
+  blueprintId: string,
+  planetId: PlanetId = state.activePlanetId,
+  position?: { x: number; y: number },
+): boolean {
   const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
-  if (!blueprint || blueprint.entities.length === 0 ||
+  if (position) return getBlueprintPlacementPreview(state, blueprintId, position, { planetId }).canPlace;
+  if (!blueprint || (blueprint.entities.length === 0 && (blueprint.resourceAnchors?.length ?? 0) === 0) ||
     blueprint.entities.some((entity) => !canPlaceBuildingOnPlanet(entity.buildingId, planetId, state))) return false;
   return getBlueprintRequirements(blueprint).every((requirement) =>
     (state.construction[requirement.constructionId] ?? 0) >= requirement.amount);
@@ -4790,12 +4902,20 @@ export function placeBlueprint(
   const planetId = options.planetId ?? state.activePlanetId;
   const rotation = options.rotation ?? blueprint?.rotation ?? 0;
   const mirror = options.mirror ?? blueprint?.mirror ?? "none";
-  if (!blueprint || !canPlaceBlueprint(state, blueprintId, planetId)) return state;
+  const preview = getBlueprintPlacementPreview(state, blueprintId, position, { planetId, rotation, mirror });
+  if (!blueprint || !preview.canPlace) return state;
+  const matches = resolveBlueprintResourceAnchors(state, blueprint, position, planetId, rotation, mirror);
   const next = copyState(state);
-  for (const requirement of getBlueprintRequirements(blueprint)) {
+  for (const requirement of preview.requirements) {
     next.construction[requirement.constructionId] = (next.construction[requirement.constructionId] ?? 0) - requirement.amount;
   }
-  const entityIdByKey = new Map<string, string>();
+  const entityIdByKey = new Map<string, string>(matches.resolved.map(({ anchor, entity }) => [anchor.key, entity.id]));
+  for (const match of matches.resolved) {
+    if (match.installCount < 1) continue;
+    const target = next.entities.find((entity) => entity.id === match.entity.id)!;
+    target.minerCount = Math.floor(target.minerCount + match.installCount);
+    target.extractorBuildingId = match.anchor.extractorBuildingId;
+  }
   for (const template of blueprint.entities) {
     const building = getBuilding(template.buildingId);
     const transformedOffset = transformBlueprintOffset(template.offset, rotation, mirror);
@@ -4918,7 +5038,7 @@ export function placeBlueprint(
 
 export function canQueueBlueprint(state: GameState, blueprintId: string, planetId: PlanetId = state.activePlanetId): boolean {
   const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
-  return Boolean(blueprint?.entities.length && blueprint.entities.every((entity) =>
+  return Boolean(blueprint && (blueprint.entities.length > 0 || (blueprint.resourceAnchors?.length ?? 0) > 0) && blueprint.entities.every((entity) =>
     canPlaceBuildingOnPlanet(entity.buildingId, planetId, state)));
 }
 
@@ -4953,7 +5073,12 @@ export function getConstructionQueueDeficits(state: GameState, entryId: string) 
   const entry = state.constructionQueue.find((candidate) => candidate.id === entryId);
   const blueprint = entry ? state.blueprints.find((candidate) => candidate.id === entry.blueprintId) : undefined;
   if (!blueprint) return [];
-  return getBlueprintRequirements(blueprint).flatMap((requirement) => {
+  const preview = getBlueprintPlacementPreview(state, blueprint.id, entry!.position, {
+    planetId: entry!.planetId,
+    rotation: entry!.rotation,
+    mirror: entry!.mirror,
+  });
+  return preview.requirements.flatMap((requirement) => {
     const available = Math.floor(state.construction[requirement.constructionId] ?? 0);
     const missing = Math.max(0, requirement.amount - available);
     return missing > 0 ? [{ ...requirement, available, missing }] : [];
@@ -4963,7 +5088,11 @@ export function getConstructionQueueDeficits(state: GameState, entryId: string) 
 export function processConstructionQueue(state: GameState): GameState {
   let next = state;
   for (const entry of state.constructionQueue) {
-    if (!canPlaceBlueprint(next, entry.blueprintId, entry.planetId)) continue;
+    if (!getBlueprintPlacementPreview(next, entry.blueprintId, entry.position, {
+      planetId: entry.planetId,
+      rotation: entry.rotation,
+      mirror: entry.mirror,
+    }).canPlace) continue;
     const deployed = placeBlueprint(next, entry.blueprintId, entry.position, {
       planetId: entry.planetId,
       rotation: entry.rotation,
@@ -6245,6 +6374,8 @@ export interface ConstructionAutomationStatus {
   safetyLimit?: number;
   recipeName?: string;
   recipeFallbackReason?: string;
+  wipCount?: number;
+  destroyedByproductCount?: number;
 }
 
 export interface ConstructionCenterTraceSample {
@@ -6308,6 +6439,8 @@ export function getEntityCycleRatePerSimulationSecond(state: GameState, entity: 
 export function getConstructionAutomationStatus(state: GameState, entityId: string): ConstructionAutomationStatus {
   const entity = state.entities.find((candidate) => candidate.id === entityId);
   if (!entity || entity.buildingId !== "construction_center") return { stage: "无制造任务", progress: 0, etaSeconds: 0 };
+  const destroyedByproductCount = Object.values(state.constructionAutomation.destroyedByproducts)
+    .reduce((sum, amount) => sum + Math.max(0, Math.floor(amount ?? 0)), 0);
   const job = state.constructionAutomation.jobs[entityId];
   if (job) {
     const step = job.steps[job.stepIndex];
@@ -6336,10 +6469,12 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
       safetyLimit: safetyBlocker?.limit,
       recipeName: step.kind === "material" ? getRecipe(step.recipeId)?.name : undefined,
       recipeFallbackReason: recipeDecision?.fallbackReason,
+      wipCount: Object.values(job.inventory).reduce((sum, amount) => sum + Math.max(0, Math.floor(amount ?? 0)), 0),
+      destroyedByproductCount,
     };
   }
   const target = constructionAutomationTarget(state);
-  if (!target) return { stage: state.constructionAutomation.enabled ? "目标库存已满足" : "自动制造已关闭", progress: 0, etaSeconds: 0 };
+  if (!target) return { stage: state.constructionAutomation.enabled ? "目标库存已满足" : "自动制造已关闭", progress: 0, etaSeconds: 0, wipCount: 0, destroyedByproductCount };
   const plan = buildConstructionAutomationPlan(state, target.definition, entity.planetId);
   if (plan.blocker) {
     return {
@@ -6350,6 +6485,8 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
       missingAmount: Math.max(0, plan.blocker.required - plan.blocker.current),
       blockerReason: plan.blocker.reason,
       technologyName: plan.blocker.technologyName,
+      wipCount: 0,
+      destroyedByproductCount,
     };
   }
   const lastDecision = plan.recipeDecisions?.at(-1);
@@ -6360,6 +6497,8 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
     etaSeconds: plan.steps.reduce((sum, step) => sum + constructionAutomationStepDuration(state, step), 0) / Math.max(1, entity.machineCount),
     recipeName: recipeName ?? undefined,
     recipeFallbackReason: lastDecision?.fallbackReason,
+    wipCount: 0,
+    destroyedByproductCount,
   };
 }
 
@@ -6437,27 +6576,69 @@ function constructionAutomationStepSafetyBlocker(
   const tray = trayForPlanet(state, planetId);
   const consumed = planConstructionAutomationConsumption(job.inventory, tray, constructionAutomationRequirements(step));
   if (!consumed) return undefined;
-  if (step.kind === "building") {
-    const protectionLimit = getPlanetTrayItemLimit(state, planetId) + CONSTRUCTION_AUTOMATION_TRAY_OVERFLOW_ALLOWANCE;
-    for (const [itemId, amount] of Object.entries(consumed.inventory) as Array<[ItemId, number]>) {
-      const refund = Math.max(0, Math.floor(amount ?? 0));
-      if (refund < 1) continue;
-      const current = Math.max(0, Math.floor(consumed.tray[itemId] ?? 0));
-      const expected = current + refund;
-      if (expected > protectionLimit && expected > current) return { itemId, current, expected, limit: protectionLimit };
-    }
-    return undefined;
-  }
-  if (step.kind === "fleet") return undefined;
+  if (step.kind === "building" || step.kind === "fleet") return undefined;
   const producedInventory = { ...consumed.inventory };
   for (const output of getRecipe(step.recipeId)?.outputs ?? []) {
     producedInventory[output.itemId] = Math.floor((producedInventory[output.itemId] ?? 0) + output.amount * step.batches);
   }
   const current = Object.values(job.inventory).reduce((sum, amount) => sum + Math.max(0, Math.floor(amount ?? 0)), 0);
-  const expected = Object.values(producedInventory).reduce((sum, amount) => sum + Math.max(0, Math.floor(amount ?? 0)), 0);
+  const needed = constructionAutomationRemainingInventoryNeed(job, job.stepIndex + 1);
+  const expected = (Object.entries(producedInventory) as Array<[ItemId, number]>).reduce((sum, [itemId, amount]) =>
+    sum + Math.min(Math.max(0, Math.floor(amount ?? 0)), needed[itemId] ?? 0), 0);
   return expected > CONSTRUCTION_AUTOMATION_WIP_LIMIT && expected > current
     ? { itemId: step.outputItemId, current, expected, limit: CONSTRUCTION_AUTOMATION_WIP_LIMIT }
     : undefined;
+}
+
+function constructionAutomationRemainingInventoryNeed(
+  job: ConstructionAutomationJob,
+  startIndex: number,
+): Partial<Record<ItemId, number>> {
+  const needed: Partial<Record<ItemId, number>> = {};
+  for (let index = job.steps.length - 1; index >= startIndex; index -= 1) {
+    const step = job.steps[index];
+    for (const requirement of constructionAutomationRequirements(step)) {
+      needed[requirement.itemId] = Math.max(0, Math.floor((needed[requirement.itemId] ?? 0) + requirement.amount));
+    }
+    if (step.kind !== "material") continue;
+    for (const output of getRecipe(step.recipeId)?.outputs ?? []) {
+      needed[output.itemId] = Math.max(0, Math.floor((needed[output.itemId] ?? 0) - output.amount * step.batches));
+    }
+  }
+  return needed;
+}
+
+function settleConstructionAutomationExcess(
+  state: GameState,
+  planetId: PlanetId,
+  job: ConstructionAutomationJob,
+  nextStepIndex: number,
+): void {
+  const tray = trayForPlanet(state, planetId);
+  const needed = constructionAutomationRemainingInventoryNeed(job, nextStepIndex);
+  const retained: Partial<Record<ItemId, number>> = {};
+  for (const [itemId, rawAmount] of Object.entries(job.inventory) as Array<[ItemId, number]>) {
+    const amount = Math.max(0, Math.floor(rawAmount ?? 0));
+    const keep = Math.min(amount, Math.max(0, Math.floor(needed[itemId] ?? 0)));
+    if (keep > 0) retained[itemId] = keep;
+    let excess = amount - keep;
+    if (excess < 1) continue;
+    if (isPortableFleetItem(itemId)) {
+      state.portableFleet[itemId] = Math.floor((state.portableFleet[itemId] ?? 0) + excess);
+      continue;
+    }
+    const current = Math.max(0, Math.floor(tray[itemId] ?? 0));
+    const free = Math.max(0, getPlanetTrayItemLimit(state, planetId) - current);
+    const stored = Math.min(excess, free);
+    if (stored > 0) tray[itemId] = current + stored;
+    excess -= stored;
+    if (excess > 0) {
+      state.constructionAutomation.destroyedByproducts[itemId] = Math.min(Number.MAX_SAFE_INTEGER, Math.floor(
+        (state.constructionAutomation.destroyedByproducts[itemId] ?? 0) + excess,
+      ));
+    }
+  }
+  job.inventory = retained;
 }
 
 function constructionAutomationInputsAvailable(state: GameState, planetId: PlanetId, job: ConstructionAutomationJob, step: ConstructionAutomationStep): boolean {
@@ -6474,11 +6655,8 @@ function finishConstructionAutomationStep(state: GameState, planetId: PlanetId, 
     const definition = getConstructionDefinition(step.constructionId);
     if (!definition) return false;
     Object.assign(tray, consumed.tray);
-    for (const [itemId, amount] of Object.entries(consumed.inventory) as Array<[ItemId, number]>) {
-      const refund = Math.max(0, Math.floor(amount ?? 0));
-      if (refund > 0) tray[itemId] = Math.floor((tray[itemId] ?? 0) + refund);
-    }
-    job.inventory = {};
+    job.inventory = consumed.inventory;
+    settleConstructionAutomationExcess(state, planetId, job, job.steps.length);
     state.construction[step.constructionId] = Math.floor((state.construction[step.constructionId] ?? 0) + definition.outputAmount);
     state.constructionAutomation.totalCrafted += definition.outputAmount;
     state.constructionAutomation.lastCraftedId = step.constructionId;
@@ -6500,6 +6678,7 @@ function finishConstructionAutomationStep(state: GameState, planetId: PlanetId, 
   }
   Object.assign(tray, consumed.tray);
   job.inventory = producedInventory;
+  settleConstructionAutomationExcess(state, planetId, job, job.stepIndex + 1);
   for (const output of recipe.outputs) {
     state.totalProduced[output.itemId] = Math.floor((state.totalProduced[output.itemId] ?? 0) + output.amount * step.batches);
   }

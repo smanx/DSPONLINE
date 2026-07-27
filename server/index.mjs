@@ -791,7 +791,12 @@ function validateSavePayload(payload) {
     const parsed = JSON.parse(payload);
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities) ||
-      !Number.isInteger(state.version) || state.version < 1 || state.version > 37) return false;
+      !Number.isInteger(state.version) || state.version < 1 || state.version > 38) return false;
+    if (state.version >= 38 && !Array.isArray(state.belts)) return false;
+    if (state.belts !== undefined && (!Array.isArray(state.belts) || state.belts.some((belt) =>
+      state.version >= 38
+        ? !Number.isInteger(belt?.lanes) || belt.lanes < 1 || belt.lanes > 4_096
+        : belt?.lanes !== undefined && (!Number.isInteger(belt.lanes) || belt.lanes < 1 || belt.lanes > 4_096)))) return false;
     const validBufferLimit = (value) => Number.isInteger(value) && value >= 1_000 && value <= 100_000_000;
     const productionLimit = state.settings?.productionBufferLimit;
     const logisticsLimit = state.settings?.logisticsBufferLimit;
@@ -824,6 +829,29 @@ function validateSavePayload(payload) {
     }
     if (state.version >= 37 && state.entities.some((entity) => entity?.resourceDepletionRemainder !== undefined &&
       (!Number.isInteger(entity.resourceDepletionRemainder) || entity.resourceDepletionRemainder < 0 || entity.resourceDepletionRemainder > 9))) return false;
+    if (state.version >= 38) {
+      const destroyed = state.constructionAutomation?.destroyedByproducts;
+      if (!destroyed || typeof destroyed !== "object" || Array.isArray(destroyed) ||
+        Object.entries(destroyed).some(([itemId, amount]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !Number.isSafeInteger(amount) || amount < 0)) return false;
+      if (!Array.isArray(state.blueprints) || state.blueprints.some((blueprint) => {
+        if (!blueprint || typeof blueprint !== "object" || !Array.isArray(blueprint.entities) || !Array.isArray(blueprint.belts) ||
+          (blueprint.resourceAnchors !== undefined && !Array.isArray(blueprint.resourceAnchors))) return true;
+        const keys = new Set();
+        for (const entity of blueprint.entities) {
+          if (typeof entity?.key !== "string" || keys.has(entity.key)) return true;
+          keys.add(entity.key);
+        }
+        for (const anchor of blueprint.resourceAnchors ?? []) {
+          if (!anchor || typeof anchor.key !== "string" || keys.has(anchor.key) || typeof anchor.resourceId !== "string" ||
+            typeof anchor.extractorBuildingId !== "string" || !Number.isInteger(anchor.minerCount) || anchor.minerCount < 1 || anchor.minerCount > 10_000 ||
+            !Number.isFinite(anchor.offset?.x) || !Number.isFinite(anchor.offset?.y)) return true;
+          keys.add(anchor.key);
+        }
+        if (keys.size < 1) return true;
+        return blueprint.belts.some((belt) => !keys.has(belt?.sourceKey) || !keys.has(belt?.targetKey) ||
+          !Number.isInteger(belt?.lanes) || belt.lanes < 1 || belt.lanes > 4_096);
+      })) return false;
+    }
     if (state.version >= 34) {
       const timeWarp = state.timeWarp;
       if (!timeWarp || typeof timeWarp !== "object" ||

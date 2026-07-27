@@ -81,6 +81,7 @@ import {
   getBeltCapacity,
   getBeltLaneAdjustmentCheck,
   getBeltNetworkIds,
+  getBlueprintPlacementPreview,
   getConstructionCraftNavigation,
   getConstructionQuickCraftPlan,
   getRecursiveHandcraftPlan,
@@ -1646,6 +1647,31 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setPlacement(null);
     setNotice(`${result.name}已扩建至 ×${result.count}${keepContinuous ? " · 施工库存已用完" : ""}`);
   }, [expandEntityGroup]);
+
+  const handleRemoveEntity = useCallback((entityId: string, count?: number) => {
+    const entity = gameRef.current.entities.find((candidate) => candidate.id === entityId);
+    if (!entity) return;
+    const availableCount = entity.kind === "vein" ? entity.minerCount : entity.machineCount;
+    const removedCount = Math.min(availableCount, count ?? availableCount);
+    const removesNode = entity.kind !== "vein" && removedCount >= entity.machineCount;
+    if (removesNode) {
+      const warning = entity.buildingId === "micro_black_hole_connector"
+        ? "回收微型黑洞连接装置会移除该实体的累计销毁统计。已经销毁的物资无法恢复，确认继续吗？"
+        : `确认完整回收${getBuilding(entity.buildingId!).name} ×${entity.machineCount}？输入、输出、燃料和线路物资会按现有回收规则返还。`;
+      if (!window.confirm(warning)) return;
+    }
+    commitGame((current) => removeEntity(current, entityId, count));
+    if (removesNode) setSelectedEntityIds((current) => current.filter((id) => id !== entityId));
+    if (entity.kind === "vein" && entity.resourceId) {
+      const recovered = Math.min(entity.minerCount, count ?? entity.minerCount);
+      setNotice(`已回收${getBuilding(getExtractorBuildingId(entity.resourceId)).name} ×${recovered}，矿脉与运输线保持不变`);
+    } else if (entity.buildingId && !removesNode) {
+      setNotice(`${getBuilding(entity.buildingId).name}堆叠已减少至 ×${entity.machineCount - removedCount}，缓存、进度与线路保持不变`);
+    } else if (entity.buildingId) {
+      setNotice(`已完整回收${getBuilding(entity.buildingId).name} ×${entity.machineCount}`);
+    }
+    playTone("remove");
+  }, [commitGame, playTone]);
 
   const onInstallMiner = useCallback((entityId: string, count: PlacementCount) => {
     expandPlacedEntity(entityId, count);
@@ -3538,18 +3564,23 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }
     if (blueprintPlacementId) {
       const position = snapFlowPosition(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
-      const deployable = canPlaceBlueprint(gameRef.current, blueprintPlacementId);
-      const compatible = canQueueBlueprint(gameRef.current, blueprintPlacementId);
-      const canContinue = deployable && canPlaceBlueprint(placeBlueprint(gameRef.current, blueprintPlacementId, position), blueprintPlacementId);
+      const blueprint = gameRef.current.blueprints.find((candidate) => candidate.id === blueprintPlacementId);
+      const preview = getBlueprintPlacementPreview(gameRef.current, blueprintPlacementId, position);
+      const deployable = preview.canPlace;
+      const compatible = canQueueBlueprint(gameRef.current, blueprintPlacementId) &&
+        Boolean(blueprint?.entities.length || preview.matchedResourceAnchors > 0);
+      const placedPreview = deployable ? placeBlueprint(gameRef.current, blueprintPlacementId, position) : gameRef.current;
+      const canContinue = deployable && getBlueprintPlacementPreview(placedPreview, blueprintPlacementId, position).canPlace;
       const fleetPreview = deployable ? getBlueprintFleetLoadPreview(gameRef.current, blueprintPlacementId) : null;
-      const blueprintName = gameRef.current.blueprints.find((blueprint) => blueprint.id === blueprintPlacementId)?.name ?? "蓝图";
+      const blueprintName = blueprint?.name ?? "蓝图";
       commitGame((current) => {
-        const next = canPlaceBlueprint(current, blueprintPlacementId)
+        const currentPreview = getBlueprintPlacementPreview(current, blueprintPlacementId, position);
+        const next = currentPreview.canPlace
           ? placeBlueprint(current, blueprintPlacementId, position)
-          : canQueueBlueprint(current, blueprintPlacementId)
+          : canQueueBlueprint(current, blueprintPlacementId) && Boolean(current.blueprints.find((candidate) => candidate.id === blueprintPlacementId)?.entities.length || currentPreview.matchedResourceAnchors > 0)
             ? queueBlueprint(current, blueprintPlacementId, position)
             : current;
-        if (next !== current && !canPlaceBlueprint(next, blueprintPlacementId)) setBlueprintPlacementId(null);
+        if (next !== current && !getBlueprintPlacementPreview(next, blueprintPlacementId, position).canPlace) setBlueprintPlacementId(null);
         return next;
       });
       if (deployable) playTone("place");
@@ -3558,9 +3589,17 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const fleetShortfall = fleetPreview
         ? [fleetPreview.drones.shortfall > 0 ? `运输机缺 ${fleetPreview.drones.shortfall}` : "", fleetPreview.vessels.shortfall > 0 ? `运输船缺 ${fleetPreview.vessels.shortfall}` : ""].filter(Boolean).join("、")
         : "";
+      const resourceSummary = preview.skippedResourceAnchors.length > 0
+        ? ` · 跳过 ${preview.skippedResourceAnchors.length} 个无兼容矿脉的采矿锚点`
+        : preview.matchedResourceAnchors > 0
+          ? ` · 匹配 ${preview.matchedResourceAnchors} 个矿脉并安装 ${preview.extractorInstallCount} 台采集设备`
+          : "";
       setNotice(deployable
-        ? `${blueprintName}部署完成${fleetShortfall ? ` · 载具已部分装载（${fleetShortfall}）` : ""}${canContinue ? " · 可继续粘贴" : ""}`
-        : compatible ? `${blueprintName}已加入施工队列，材料齐备后自动部署` : `${blueprintName}与当前行星不兼容`);
+        ? `${blueprintName}部署完成${resourceSummary}${fleetShortfall ? ` · 载具已部分装载（${fleetShortfall}）` : ""}${canContinue ? " · 可继续粘贴" : ""}`
+        : compatible ? `${blueprintName}已加入施工队列，材料齐备后自动部署${resourceSummary}`
+          : preview.skippedResourceAnchors.length > 0
+            ? `${blueprintName}未部署：附近没有对应类型的资源点，矿脉和采集设备均未改动`
+            : `${blueprintName}与当前行星不兼容`);
       return;
     }
     if (!selectionMode && !connectionDraft && !placement) {
@@ -4067,6 +4106,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             else if (selectedBeltId) focusBeltNetwork(selectedBeltId);
           },
           onAddEntity: quickAddEntity,
+          onRemoveEntity: handleRemoveEntity,
           onUpgradeEntity: (entityId) => {
             commitGame((current) => upgradeEntity(current, entityId));
             setNotice("设备升级完成");
@@ -4685,24 +4725,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onCraftItem={handleQuickCraftFleet}
           onQueueCraftItem={(recipeId, batches) => setGame((current) => queueHandcraftRecipe(current, recipeId, batches))}
           onCancelCraftQueue={(entryId) => setGame((current) => cancelHandcraftQueueEntry(current, entryId))}
-          onRemoveEntity={(entityId, count) => {
-            const entity = gameRef.current.entities.find((candidate) => candidate.id === entityId);
-            if (entity?.buildingId === "micro_black_hole_connector" &&
-              !window.confirm("回收微型黑洞连接装置会移除该实体的累计销毁统计。已经销毁的物资无法恢复，确认继续吗？")) return;
-            const removedCount = entity ? Math.min(entity.kind === "vein" ? entity.minerCount : entity.machineCount, count ?? (entity.kind === "vein" ? entity.minerCount : entity.machineCount)) : 0;
-            const removesNode = Boolean(entity && entity.kind !== "vein" && removedCount >= entity.machineCount);
-            commitGame((current) => removeEntity(current, entityId, count));
-            if (removesNode) setSelectedEntityIds((current) => current.filter((id) => id !== entityId));
-            if (entity?.kind === "vein" && entity.resourceId) {
-              const recovered = Math.min(entity.minerCount, count ?? entity.minerCount);
-              setNotice(`已回收${getBuilding(getExtractorBuildingId(entity.resourceId)).name} ×${recovered}，矿脉与运输线保持不变`);
-            } else if (entity?.buildingId && !removesNode) {
-              setNotice(`${getBuilding(entity.buildingId).name}堆叠已减少至 ×${entity.machineCount - removedCount}，缓存、进度与线路保持不变`);
-            } else if (entity?.buildingId) {
-              setNotice(`已完整回收${getBuilding(entity.buildingId).name} ×${entity.machineCount}`);
-            }
-            playTone("remove");
-          }}
+          onRemoveEntity={handleRemoveEntity}
           onRemoveBelt={(beltId) => {
             commitGame((current) => removeBelt(current, beltId));
             setSelectedBeltId(null);
@@ -5034,10 +5057,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               if (itemId) openRecipeFocus(itemId);
               setMobileActionEntityId(null);
             }} disabled={!mobileActionEntity.resourceId && !mobileActionEntity.recipeId && !Object.values(RECIPES).some((candidate) => candidate.buildingId === mobileActionEntity.buildingId)}><BookOpen size={17} /><span>查看配方</span></button>
-            <button type="button" disabled={getBlueprintEligibleEntityIds(game, [mobileActionEntity.id]).length === 0} onClick={() => { copyEntitiesAsBlueprint([mobileActionEntity.id]); setMobileActionEntityId(null); }}><Copy size={17} /><span>复制设备</span></button>
+            <button type="button" disabled={getBlueprintEligibleEntityIds(game, [mobileActionEntity.id]).length === 0} onClick={() => { copyEntitiesAsBlueprint([mobileActionEntity.id]); setMobileActionEntityId(null); }}><Copy size={17} /><span>{mobileActionEntity.kind === "vein" ? "收录采矿布局" : "复制设备"}</span></button>
             <button type="button" onClick={() => { focusPlacedEntity(mobileActionEntity.id); setMobileActionEntityId(null); }}><Focus size={17} /><span>定位检查</span></button>
             <button type="button" disabled={!canUpgradeEntities(game, [mobileActionEntity.id])} onClick={() => { commitGame((current) => upgradeEntities(current, [mobileActionEntity.id])); setMobileActionEntityId(null); playTone("upgrade"); }}><ArrowUp size={17} /><span>升级设备</span></button>
-            <button className="danger" type="button" disabled={mobileActionEntity.kind === "vein" && mobileActionEntity.minerCount < 1} onClick={() => { commitGame((current) => removeEntities(current, [mobileActionEntity.id])); setSelectedEntityIds([]); setMobileActionEntityId(null); playTone("remove"); }}><Trash2 size={17} /><span>{mobileActionEntity.kind === "vein" ? `回收采集设备 ×${mobileActionEntity.minerCount}` : "回收设备"}</span></button>
+            <button className="danger" type="button" disabled={mobileActionEntity.kind === "vein" && mobileActionEntity.minerCount < 1} onClick={() => { handleRemoveEntity(mobileActionEntity.id); setSelectedEntityIds([]); setMobileActionEntityId(null); }}><Trash2 size={17} /><span>{mobileActionEntity.kind === "vein" ? `回收采集设备 ×${mobileActionEntity.minerCount}` : "回收设备"}</span></button>
           </div>
         </section>
       </div> : null}

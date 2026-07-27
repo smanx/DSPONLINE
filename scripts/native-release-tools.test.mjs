@@ -33,14 +33,14 @@ test("native feed generator creates bounded Android and desktop update feeds", a
 
     const android = JSON.parse(await readFile(path.join(output, "android", "stable.json"), "utf8"));
     assert.equal(android.packageId, "cn.dsponline.network");
-    assert.equal(android.versionName, "1.0.5");
-    assert.match(android.apk.url, /^https:\/\/dsponline\.cn\/downloads\/android\/dsp-idle-1\.0\.5-1000005\.apk$/);
+    assert.equal(android.versionName, "1.0.6");
+    assert.match(android.apk.url, /^https:\/\/dsponline\.cn\/downloads\/android\/dsp-idle-1\.0\.6-1000006\.apk$/);
     assert.match(android.apk.sha256, /^[a-f0-9]{64}$/);
     assert.deepEqual(android.notes, ["原生测试", "更新机制"]);
 
     const desktop = JSON.parse(await readFile(path.join(output, "desktop", "stable", "release.json"), "utf8"));
     assert.equal(desktop.channel, "stable");
-    assert.equal(desktop.version, "1.0.5");
+    assert.equal(desktop.version, "1.0.6");
     assert.deepEqual(desktop.files.map((file) => file.name), ["latest.yml", "dsp-idle-1.0.1-x64-setup.exe"]);
   } finally {
     await rm(temporary, { recursive: true, force: true });

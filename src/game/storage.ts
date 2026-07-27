@@ -6,6 +6,7 @@ import {
   DEFAULT_PLANET_TRAY_ITEM_LIMIT,
   MAX_PLANET_TRAY_ITEM_LIMIT,
   MAX_BUILDING_BUFFER_LIMIT,
+  MAX_BELT_LANES,
   MAX_CONSTRUCTION_AUTOMATION_TARGET,
   MIN_PLANET_TRAY_ITEM_LIMIT,
   SOLAR_SAIL_POWER_KW,
@@ -579,7 +580,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const savedSeed = saved.version >= 20 && typeof saved.galaxy?.seed === "number" && Number.isFinite(saved.galaxy.seed)
     ? saved.galaxy.seed
     : DEFAULT_GALAXY_SEED;
@@ -747,10 +748,16 @@ export function migrateGame(value: unknown): GameState | null {
   const migratedBelts: BeltConnection[] = Array.isArray(saved.belts) ? saved.belts.map((belt: Record<string, any>) => {
     const source = entities.find((entity) => entity.id === belt.source);
     const tier = saved.version >= 8 && validBeltTier(belt.tier) ? belt.tier : 1;
+    const rawLanes = Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, nonNegativeInteger(belt.lanes) || 1));
+    const lanes = Math.min(MAX_BELT_LANES, rawLanes);
+    if (rawLanes > lanes) {
+      const constructionId = getBeltConstructionId(tier);
+      construction[constructionId] = Math.min(Number.MAX_SAFE_INTEGER, Math.floor((construction[constructionId] ?? 0) + rawLanes - lanes));
+    }
     return {
       ...belt,
       planetId: validPlanetId(belt.planetId) ? belt.planetId : source?.planetId ?? "home",
-      lanes: Math.max(1, Math.floor(belt.lanes ?? 1)),
+      lanes,
       tier,
       sorterTier: tier,
       progress: typeof belt.progress === "number" ? Math.max(0, belt.progress) : 0,
@@ -814,6 +821,12 @@ export function migrateGame(value: unknown): GameState | null {
     lastCraftedId: saved.version >= 26 && typeof saved.constructionAutomation?.lastCraftedId === "string" && validConstructionAutomationTargetId(saved.constructionAutomation.lastCraftedId)
       ? saved.constructionAutomation.lastCraftedId
       : null,
+    destroyedByproducts: saved.version >= 38 && saved.constructionAutomation?.destroyedByproducts && typeof saved.constructionAutomation.destroyedByproducts === "object"
+      ? Object.fromEntries(Object.entries(saved.constructionAutomation.destroyedByproducts).flatMap(([itemId, amount]) =>
+        itemId in ITEMS && typeof amount === "number" && Number.isFinite(amount)
+          ? [[itemId, Math.min(Number.MAX_SAFE_INTEGER, nonNegativeInteger(amount))]]
+          : [])) as GameState["constructionAutomation"]["destroyedByproducts"]
+      : {},
     jobs: {},
   };
   if (saved.version >= 31 && saved.constructionAutomation?.jobs && typeof saved.constructionAutomation.jobs === "object") {
@@ -1021,8 +1034,25 @@ export function migrateGame(value: unknown): GameState | null {
           proliferatorMode: validProliferatorMode(entity.proliferatorMode) ? entity.proliferatorMode : undefined,
         }];
       });
-      if (blueprintEntities.length === 0) return [];
-      const keys = new Set(blueprintEntities.map((entity) => entity.key));
+      const resourceAnchors = Array.isArray(blueprint.resourceAnchors) ? blueprint.resourceAnchors.flatMap((anchor: Record<string, any>, anchorIndex: number) => {
+        if (typeof anchor.resourceId !== "string" || !(anchor.resourceId in ITEMS)) return [];
+        const resourceId = anchor.resourceId as ItemId;
+        const extractorBuildingId = getExtractorBuildingId(resourceId);
+        if (typeof anchor.extractorBuildingId === "string" && anchor.extractorBuildingId !== extractorBuildingId) return [];
+        return [{
+          key: typeof anchor.key === "string" && anchor.key ? anchor.key : `resource_${anchorIndex + 1}`,
+          resourceId,
+          offset: {
+            x: typeof anchor.offset?.x === "number" && Number.isFinite(anchor.offset.x) ? anchor.offset.x : 0,
+            y: typeof anchor.offset?.y === "number" && Number.isFinite(anchor.offset.y) ? anchor.offset.y : 0,
+          },
+          extractorBuildingId,
+          minerCount: Math.max(1, Math.min(10_000, nonNegativeInteger(anchor.minerCount) || 1)),
+        }];
+      }) : [];
+      if (blueprintEntities.length === 0 && resourceAnchors.length === 0) return [];
+      const keys = new Set([...blueprintEntities.map((entity) => entity.key), ...resourceAnchors.map((anchor) => anchor.key)]);
+      if (keys.size !== blueprintEntities.length + resourceAnchors.length) return [];
       const blueprintBelts = Array.isArray(blueprint.belts) ? blueprint.belts.flatMap((belt: Record<string, any>, beltIndex: number) => {
         if (!keys.has(belt.sourceKey) || !keys.has(belt.targetKey) || typeof belt.itemId !== "string" || !(belt.itemId in ITEMS)) return [];
         const tier = validBeltTier(belt.tier) ? belt.tier : 1;
@@ -1031,7 +1061,7 @@ export function migrateGame(value: unknown): GameState | null {
           sourceKey: belt.sourceKey as string,
           targetKey: belt.targetKey as string,
           itemId: belt.itemId as ItemId,
-          lanes: Math.max(1, nonNegativeInteger(belt.lanes)),
+          lanes: Math.max(1, Math.min(MAX_BELT_LANES, nonNegativeInteger(belt.lanes) || 1)),
           tier,
           sorterTier: tier,
           priority: validPriority(belt.priority) ? belt.priority : 0,
@@ -1063,6 +1093,7 @@ export function migrateGame(value: unknown): GameState | null {
         id: typeof blueprint.id === "string" && blueprint.id ? blueprint.id : `blueprint_migrated_${blueprintIndex + 1}`,
         name: typeof blueprint.name === "string" && blueprint.name.trim() ? blueprint.name.trim().slice(0, 32) : `蓝图 ${String(blueprintIndex + 1).padStart(2, "0")}`,
         entities: blueprintEntities,
+        resourceAnchors,
         belts: blueprintBelts,
         externalPorts,
         rotation: validBlueprintRotation(blueprint.rotation) ? blueprint.rotation : 0,
@@ -1458,7 +1489,7 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 37,
+    version: 38,
     activePlanetId,
     entities,
     belts,

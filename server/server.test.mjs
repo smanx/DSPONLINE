@@ -772,7 +772,7 @@ test("validates v33 proliferator and exact infinite research fields while accept
   assert.equal(accepted.response.status, 200);
 });
 
-test("validates v34 time warp and accepts Android v35, v36 and current v37 saves", async () => {
+test("validates v34 time warp and accepts Android v35 through current v38 saves", async () => {
   const research = Object.fromEntries([
     ["matrix_compression", 1_000],
     ["vein_utilization", 1_000],
@@ -860,6 +860,40 @@ test("validates v34 time warp and accepts Android v35, v36 and current v37 saves
   });
   const rejectedV37 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalidV37, expectedRevision: 6 }) });
   assert.equal(rejectedV37.response.status, 400);
+
+  const v38Payload = payloadFor((state) => {
+    state.version = 38;
+    state.planetTrayItemLimits = { home: 100_000_000 };
+    for (const entity of state.entities) entity.interactionLocked = false;
+    state.belts[0].lanes = 4_096;
+    state.constructionAutomation = {
+      enabled: true,
+      targetStock: {},
+      cursor: 0,
+      totalCrafted: 0,
+      lastCraftedId: null,
+      destroyedByproducts: { hydrogen: 17 },
+      jobs: {},
+    };
+    state.blueprints = [{
+      id: "blueprint_1",
+      name: "采矿布局",
+      entities: [{ key: "node_1" }],
+      resourceAnchors: [{ key: "resource_1", resourceId: "iron_ore", extractorBuildingId: "mining_machine", minerCount: 3, offset: { x: 0, y: 0 } }],
+      belts: [{ key: "line_1", sourceKey: "resource_1", targetKey: "node_1", lanes: 4_096 }],
+    }];
+  });
+  const acceptedV38 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v38Payload, expectedRevision: 6 }) });
+  assert.equal(acceptedV38.response.status, 200);
+  for (const invalid of [
+    payloadFor((state) => { const parsed = JSON.parse(v38Payload); Object.assign(state, parsed.state); state.belts[0].lanes = 4_097; }),
+    payloadFor((state) => { const parsed = JSON.parse(v38Payload); Object.assign(state, parsed.state); state.constructionAutomation.destroyedByproducts.hydrogen = -1; }),
+    payloadFor((state) => { const parsed = JSON.parse(v38Payload); Object.assign(state, parsed.state); state.blueprints[0].resourceAnchors[0].minerCount = 0; }),
+    payloadFor((state) => { const parsed = JSON.parse(v38Payload); Object.assign(state, parsed.state); state.blueprints[0].belts[0].lanes = 4_097; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 7 }) });
+    assert.equal(rejected.response.status, 400);
+  }
 });
 
 test("recalculates leaderboard score on the server", async () => {

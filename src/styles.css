@@ -5775,6 +5775,25 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
 
 .entity-management-actions > .quantity-stepper { grid-column: 1 / -1; }
 
+.entity-stack-batch-remove {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 6px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-soft);
+}
+
+.entity-stack-batch-remove > label { display: grid; grid-template-columns: auto minmax(64px, 1fr); align-items: center; gap: 8px; color: var(--muted); font-size: 9px; }
+.entity-stack-batch-remove input { min-width: 0; height: 32px; padding: 0 7px; border: 1px solid var(--line-strong); border-radius: 3px; outline: 0; background: var(--surface); color: var(--text); font: inherit; text-align: center; }
+.entity-stack-batch-remove > div { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.entity-stack-batch-remove button { min-width: 0; min-height: 32px; border: 1px solid var(--line); border-radius: 3px; background: var(--surface); color: var(--text-soft); cursor: pointer; font: inherit; font-size: 9px; }
+.entity-stack-batch-remove button:disabled { cursor: not-allowed; opacity: .4; }
+.entity-stack-batch-remove small,
+.entity-stack-batch-remove em { color: var(--muted); font-size: 8px; font-style: normal; line-height: 1.45; overflow-wrap: anywhere; }
+.entity-stack-batch-remove em { color: var(--coral); }
+
 .entity-management-actions:not(.entity-management-actions--extractor) > .danger-command:last-child {
   grid-column: 1 / -1;
 }
@@ -5840,33 +5859,6 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
 .entity-add-command strong { margin-left: auto; padding-right: 8px; color: var(--yellow); font-size: 9px; }
 .entity-add-command:hover:not(:disabled) { border-color: var(--green); background: #1f3c30; }
 .entity-add-command:disabled { border-color: var(--line); background: #111715; color: #56615c; cursor: not-allowed; }
-
-.entity-stack-remove-command {
-  display: flex;
-  min-width: 0;
-  height: 34px;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  border: 1px solid #6f6039;
-  border-radius: 4px;
-  background: #282315;
-  color: #d9bd68;
-  cursor: pointer;
-  font-size: 9px;
-}
-
-.entity-stack-remove-command strong {
-  margin-left: auto;
-  padding-right: 8px;
-  color: #f0d98d;
-  font-size: 9px;
-}
-
-.entity-stack-remove-command:hover {
-  border-color: #b99c4f;
-  background: #352d18;
-}
 
 .capacity-bar {
   height: 5px;
@@ -10318,6 +10310,10 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   color: var(--text-soft);
   font-size: 8px;
 }
+
+.blueprint-resource-note { display: grid; gap: 4px; padding: 9px 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--green) 7%, transparent); }
+.blueprint-resource-note strong { color: var(--green); font-size: 9px; }
+.blueprint-resource-note span { color: var(--muted); font-size: 8px; line-height: 1.5; overflow-wrap: anywhere; }
 
 .blueprint-transform-controls,
 .blueprint-parameters,

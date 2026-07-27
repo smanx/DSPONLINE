@@ -1,6 +1,6 @@
 # 内容包 Mod 编写指南
 
-> 适用基线：DSP极简网络 `1.0.5`，内容包格式 `formatVersion: 1`。
+> 适用源码基线：DSP极简网络 `1.0.6`，内容包格式 `formatVersion: 1`。当前公开稳定版在完成发布切换前仍为 `1.0.5`。
 >
 > 本项目把 Mod 称为“内容包”。格式与行为的最终依据是 [`src/game/mods.ts`](../src/game/mods.ts) 和 [`src/game/contentPacks.ts`](../src/game/contentPacks.ts)；本文只描述当前已经实现的 v1 协议。
 

@@ -4089,7 +4089,7 @@ describe("factory simulation", () => {
     expect(state.totalProduced.steel).toBe(12);
   });
 
-  it("reports recursive manufacturing safety limits and refunds WIP when the target is cancelled", () => {
+  it("settles optional construction-center WIP without blocking and refunds required WIP when cancelled", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("construction_automation");
     state.construction.wind_turbine = 80;
@@ -4108,22 +4108,17 @@ describe("factory simulation", () => {
       inventory: { stone: 1_000_000 },
     };
 
-    const status = getConstructionAutomationStatus(state, center.id);
-    expect(status).toMatchObject({
-      stage: "缓存安全上限保护",
-      blockerReason: "safety-limit",
-      missingItemId: "iron_ingot",
-      safetyCurrent: 1_000_000,
-      safetyExpected: 1_000_001,
-      safetyLimit: 1_000_000,
-    });
-    const blocked = advanceSimulation(state, 1);
-    expect(blocked.tray.iron_ore).toBe(1);
-    expect(blocked.constructionAutomation.jobs[center.id].inventory.stone).toBe(1_000_000);
+    expect(getConstructionAutomationStatus(state, center.id)).toMatchObject({ stage: "加工 铁块", blockerReason: undefined });
+    const advanced = advanceSimulation(state, 1);
+    expect(advanced.tray.iron_ore).toBe(0);
+    expect(advanced.tray.stone).toBe(1_000_000);
+    expect(advanced.constructionAutomation.jobs[center.id].inventory).toEqual({ iron_ingot: 1 });
+    expect(advanced.constructionAutomation.destroyedByproducts.stone).toBe(100);
 
-    const cancelled = setConstructionAutomationTarget(blocked, "arc_smelter", 0);
+    const cancelled = setConstructionAutomationTarget(advanced, "arc_smelter", 0);
     expect(cancelled.constructionAutomation.jobs[center.id]).toBeUndefined();
-    expect(cancelled.tray.stone).toBe(1_000_100);
+    expect(cancelled.tray.iron_ingot).toBe(1);
+    expect(cancelled.tray.stone).toBe(1_000_000);
   });
 
   it("applies construction-center speed upgrades to material and final stages", () => {
