@@ -30,9 +30,9 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-当前香港和上海 Web/API 均为 `1.0.5-af8593bc5de4`，回滚目标均为 `1.0.4-9ca10b44507a`。两地都使用 GameState v37、云 schema v7 和 SQLite layout v2；代码回滚不得恢复数据库。上海下载站当前为 `1.0.5-af8593bc5de4`，上一目录为 `1.0.4-9ca10b44507a`，Windows 和 Android 稳定清单均为 1.0.5。完整证据见 [releases/1.0.5.md](./releases/1.0.5.md)。
+当前香港和上海 Web/API 均为 `1.0.6-a4086d0dfc94`，回滚目标均为 `1.0.5-af8593bc5de4`。两地都使用 GameState v38、云 schema v7 和 SQLite layout v2；代码回滚不得恢复数据库。上海下载站当前为 `1.0.6-a4086d0dfc94`，上一目录为 `1.0.5-af8593bc5de4`，Windows 和 Android 稳定清单均为 1.0.6。完整证据见 [releases/1.0.6.md](./releases/1.0.6.md)。
 
-`1.0.6` 候选把客户端状态上限提高到 v38，但不升级云 schema 或 SQLite layout。切换前必须在两地分别验证 v37 上传仍可接受、v38 非法并联/资源锚点/副产物累计会被拒绝，并在生产备份副本上隔离启动；上海下载页只能在 Windows 与同证书 Android 制品完整上传、哈希和覆盖升级通过后切换。
+`1.0.6` 把客户端状态上限提高到 v38，但不升级云 schema 或 SQLite layout。两地发布前已验证 v35～v38 合法存档可接受、v38 非法并联/资源锚点/副产物累计会被拒绝，并在生产备份副本上隔离启动；上海下载页只在 Windows 与同证书 Android 制品完整上传、哈希和覆盖升级通过后切换。
 
 该版本会在服务启动时按已有主存档幂等回填排行榜。首次香港回填处理 88 份主存档，重复启动备份副本时变更为 0；上海没有主云存档，因此保持空榜。后续主槽上传、自动同步或历史恢复都会自动更新排名，手动槽不会触发。任何后续排行榜规则变更仍应在切换前使用 SQLite Backup API 创建并验证备份，并在切换后核对账号、主云存档和修订数量不减少。
 
@@ -240,8 +240,8 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港和上海 `1.0.5-af8593bc5de4` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港和上海 `1.0.6-a4086d0dfc94` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 香港 layout v1 的 136.8 MB `app_state` 曾使每分钟持久化把 Node 推到约 1.6 GB并阻塞健康接口。layout v2 上线后 `app_state` 约 2.55 MB，云存档正文按修订独立写入；240 秒生产观察中健康接口最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB。监控若再次出现内存或延迟上升，应分别检查 `app_state` 大小、`cloud_save_payloads` 行数与历史元数据唯一键数，不能只调大健康超时。
 
-Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.5 发布后上海节点约剩 4.0 GiB（文件系统使用率 94%），发布目录、客户端二进制、日志与备份增长必须继续纳入日常磁盘检查；清理不得删除当前版、回滚版或有效备份。
+Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.6 发布并清理上传暂存归档后，上海节点约剩 3.2 GiB（文件系统使用率 95%），发布目录、客户端二进制、日志与备份增长必须继续纳入日常磁盘检查；清理不得删除当前版、回滚版或有效备份。
