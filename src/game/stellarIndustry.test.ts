@@ -3,6 +3,22 @@ import { createInitialState, placeBuilding, setActivePlanet, setLogisticsItem, s
 import { getPlanetIndustrySummaries, getRoutePathLabel, getStellarRouteSnapshots } from "./stellarIndustry";
 
 describe("stellar industry selectors", () => {
+  it("uses the researched vein consumption rate for depletion forecasts", () => {
+    const state = createInitialState();
+    const iron = state.entities.find((entity) => entity.id === "vein_iron")!;
+    state.entities = [iron];
+    iron.resourceCapacity = 1_000;
+    iron.resourceRemaining = 1_000;
+    iron.resourceDepletionRemainder = 0;
+    iron.productionRate = 60;
+
+    expect(getPlanetIndustrySummaries(state).find((planet) => planet.planetId === "home")?.depletionSeconds).toBeCloseTo(1_000, 8);
+    state.endgame.infiniteResearch.vein_utilization.level = 5;
+    expect(getPlanetIndustrySummaries(state).find((planet) => planet.planetId === "home")?.depletionSeconds).toBeCloseTo(2_000, 8);
+    state.endgame.infiniteResearch.vein_utilization.level = 10;
+    expect(getPlanetIndustrySummaries(state).find((planet) => planet.planetId === "home")?.depletionSeconds).toBeNull();
+  });
+
   it("builds a cross-system route snapshot from the same station slots used by simulation", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("interstellar_logistics", "stellar_exploration", "space_warp");

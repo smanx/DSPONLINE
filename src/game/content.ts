@@ -393,7 +393,7 @@ export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
   },
   artificial_star: {
     id: "artificial_star", name: "人造恒星", shortName: "人造恒星", kind: "power",
-    powerGenerationKw: 72000, speed: 1, inputCapacity: 120, outputCapacity: 0,
+    powerGenerationKw: 72000, speed: 1, inputCapacity: 30, outputCapacity: 0,
     description: "以反物质燃料棒维持湮灭反应，按电网缺口提供最高 72 MW 电力。",
   },
   accumulator: {
@@ -580,6 +580,7 @@ export const RECIPES: Record<RecipeId, RecipeDefinition> = {
   logistics_drone: { id: "logistics_drone", name: "物流运输机", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "planetary_logistics", inputs: [{ itemId: "steel", amount: 5 }, { itemId: "processor", amount: 2 }, { itemId: "electromagnetic_turbine", amount: 2 }], outputs: [{ itemId: "logistics_drone", amount: 1 }] },
   logistics_vessel: { id: "logistics_vessel", name: "物流运输船", buildingId: "assembling_machine_mk1", duration: 8, requiredTechId: "interstellar_logistics", inputs: [{ itemId: "titanium_alloy", amount: 10 }, { itemId: "processor", amount: 10 }, { itemId: "plasma_exciter", amount: 4 }], outputs: [{ itemId: "logistics_vessel", amount: 1 }] },
   space_warper: { id: "space_warper", name: "空间翘曲器", buildingId: "assembling_machine_mk1", duration: 10, requiredTechId: "space_warp", inputs: [{ itemId: "graviton_lens", amount: 1 }], outputs: [{ itemId: "space_warper", amount: 1 }] },
+  space_warper_from_gravity_matrix: { id: "space_warper_from_gravity_matrix", name: "引力矩阵制空间翘曲器", buildingId: "assembling_machine_mk1", duration: 10, requiredTechId: "space_warp", recursivePriority: 100, inputs: [{ itemId: "gravity_matrix", amount: 1 }], outputs: [{ itemId: "space_warper", amount: 8 }] },
   accumulator: { id: "accumulator", name: "蓄电器", buildingId: "assembling_machine_mk1", duration: 5, requiredTechId: "energy_storage", inputs: [{ itemId: "iron_ingot", amount: 6 }, { itemId: "magnetic_coil", amount: 6 }, { itemId: "circuit_board", amount: 4 }], outputs: [{ itemId: "accumulator", amount: 1 }] },
   accumulator_charge: { id: "accumulator_charge", name: "蓄电器充电", buildingId: "energy_exchanger", duration: 2, requiredTechId: "energy_storage", inputs: [{ itemId: "accumulator", amount: 1 }], outputs: [{ itemId: "charged_accumulator", amount: 1 }] },
   accumulator_discharge: { id: "accumulator_discharge", name: "蓄电器放电", buildingId: "energy_exchanger", duration: 2, requiredTechId: "energy_storage", inputs: [{ itemId: "charged_accumulator", amount: 1 }], outputs: [{ itemId: "accumulator", amount: 1 }] },

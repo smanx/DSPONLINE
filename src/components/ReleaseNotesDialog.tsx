@@ -1,43 +1,67 @@
-import { Check, Factory, FlaskConical, Info, MessageCircle, MonitorDown, Route, X, type LucideIcon } from "lucide-react";
+import { Check, Factory, FlaskConical, Info, MessageCircle, MonitorDown, Pickaxe, Route, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-26-v1.0.4",
-  date: "2026年7月26日",
-  version: "1.0.4",
-  title: "物流并联与终局管理",
-  summary: "1.0.4 增加已建传送带并联数量调整，修复手机无限科技入口，并将建筑制造中心的终局目标上限提升至 10 万。Windows 与 Android 安装包同步升级；GameState 继续保持 v36，覆盖安装和旧存档加载不会清除本地进度。",
+  id: "2026-07-27-v1.0.5",
+  date: "2026年7月27日",
+  version: "1.0.5",
+  title: "星际物流、戴森扩容与矿脉科技",
+  summary: "1.0.5 增加绿糖 1:8 翘曲器配方、物流塔载具目标与蓝图自动装载，修复配送枢纽、线路并联同步、缺料导航和建筑位置漂移，扩充戴森容量，并让矿脉极限利用逐级降低采矿消耗。GameState 升级至 v37，旧存档会守恒迁移。",
   items: [
     {
-      id: "belt-bundles",
-      title: "已建线路调整并联数量",
-      description: "选中传送带后可用减号、直接输入或加号调整并联线路数量。增加会消耗同级传送带，减少会返还施工托盘；吞吐同步变化，线路等级、形状、堆叠、优先级、端口和在途物资保持不变。",
+      id: "green-warper",
+      title: "绿糖精简制造翘曲器",
+      description: "空间翘曲科技解锁后开放原版高级配方：1 个引力矩阵制造 8 个空间翘曲器。原有引力透镜配方继续保留；递归制造优先尝试绿糖路线，不可完成时自动回退基础路线。",
     },
     {
-      id: "infinite-tech-mobile",
-      title: "手机无限科技恢复可见",
-      description: "新版手机科技目录现在包含全部无限科技。完成宇宙矩阵后可直接查看和研究；未解锁时显示真实前置条件，筛选为空时可一键清除筛选。经典手机、网页、PWA 和 App 共用相同规则。",
+      id: "station-fleet",
+      title: "物流塔载具目标与蓝图装载",
+      description: "物流运输机和运输船支持直接输入目标数量及一键填满，返还时不会卸载正在执行任务的载具。蓝图会记录每座物流塔的载具目标，部署后从随身载具栏自动装载；库存不足时部分装载并显示缺口。",
     },
     {
-      id: "construction-center-100k",
-      title: "制造中心目标提升至 10 万",
-      description: "完成建筑仓储扩容 II 后，单种建筑或随身载具的自动补足目标最高可设为 100,000。目标支持直接输入和常用预设；调低目标只暂停后续制造，不会删除已有超额施工库存。",
+      id: "logistics-fixes",
+      title: "物流容量与线路同步修复",
+      description: "物资配送枢纽改为以行星托盘剩余容量持续接收，不再被 900 个建筑缓存卡住；“同步首条设置”和整网同步现在包含并联数量，并先原子校验同级传送带库存。同恒星系运输明确不预留或消耗翘曲器。",
+    },
+    {
+      id: "production-diagnostics",
+      title: "产量来源与缺料导航校正",
+      description: "玻璃产量面板会明确显示行星冶炼专精等合法加成，统计口径与真实模拟一致。灰色锤子改用完整递归材料规划，原始矿物会打开对应资料而不会跳到无关中间材料。",
+    },
+    {
+      id: "dyson-capacity",
+      title: "恒星燃料与球壳容量扩充",
+      description: "人造恒星备用反物质燃料棒容量调整为每台 30 个，旧存档超额燃料优先退回所在行星托盘，放不下的完整保留。戴森球壳太阳帆容量翻倍，旧壳层会按几何结构重算并继续吸附。",
+    },
+    {
+      id: "vein-utilization",
+      title: "矿脉极限利用升级",
+      description: "无限科技“矿脉极限利用”保留每级固体采矿速度 +10%，并新增每级矿脉消耗 -10%。达到 Lv.10 后固体矿脉不再消耗储量；小数消耗使用存档内整数余数结算，在线、离线和分段模拟结果一致。",
+    },
+    {
+      id: "position-persistence",
+      title: "建筑位置不再刷新漂移",
+      description: "拖动结束会立即提交世界坐标，页面隐藏或刷新前无需等待下一帧；加载、切换行星、字号和主题变化均以存档坐标为唯一来源，连续刷新不会累计偏移。",
     },
     {
       id: "native-downloads",
       title: "Windows 与 Android 同步更新",
-      description: "下载页在新安装包完成签名、校验和上传后再切换至 1.0.4，并公开平台、日期、大小和 SHA-256。Android 保持原包名和长期签名，Windows 保持原应用标识，覆盖升级不会主动删除应用数据或浏览器存档。",
+      description: "Windows 与 Android 应用同步升级至 1.0.5。Android 保持包名和长期签名，Windows 保持应用标识；覆盖安装、网页升级和 v36→v37 迁移均不会主动删除本地存档。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "belt-bundles": Route,
-  "infinite-tech-mobile": FlaskConical,
-  "construction-center-100k": Factory,
+  "green-warper": FlaskConical,
+  "station-fleet": Route,
+  "logistics-fixes": Route,
+  "production-diagnostics": Factory,
+  "dyson-capacity": Factory,
+  "vein-utilization": Pickaxe,
+  "position-persistence": Info,
   "native-downloads": MonitorDown,
 };
 

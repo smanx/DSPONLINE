@@ -122,6 +122,8 @@ function parseEntity(value: unknown, index: number, issues: string[]): Blueprint
     ...(typeof value.stationWarpEnabled === "boolean" ? { stationWarpEnabled: value.stationWarpEnabled } : {}),
     ...(typeof value.stationWarperAutoRefill === "boolean" ? { stationWarperAutoRefill: value.stationWarperAutoRefill } : {}),
     ...(validNumber(value.stationWarperTarget, 1, 500_000) ? { stationWarperTarget: Math.floor(value.stationWarperTarget) } : {}),
+    ...(validNumber(value.stationDroneTarget, 0, 500_000) ? { stationDroneTarget: Math.floor(value.stationDroneTarget) } : {}),
+    ...(validNumber(value.stationVesselTarget, 0, 500_000) ? { stationVesselTarget: Math.floor(value.stationVesselTarget) } : {}),
     ...(typeof value.stationHubEnabled === "boolean" ? { stationHubEnabled: value.stationHubEnabled } : {}),
     ...([0, 1, 2].includes(Number(value.stationHubPriority)) ? { stationHubPriority: Number(value.stationHubPriority) as 0 | 1 | 2 } : {}),
     ...(stationSlots ? { stationSlots } : {}),

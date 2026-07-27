@@ -88,6 +88,7 @@ Public Windows and Android releases must pass the long-term platform-signing gat
 - [Project status](./docs/PROJECT_STATUS.md): current version, features, deployments, quality baseline, and known risks.
 - [Architecture](./docs/ARCHITECTURE.md): frontend, simulator, save, cloud-service, and deployment boundaries.
 - [Gameplay systems](./docs/GAMEPLAY_SYSTEMS.md): stable gameplay rules and content scale.
+- [Content-pack mod guide](./docs/MODDING.md): JSON format, fields, dependencies, import flow, save boundaries, and a working example (Chinese).
 - [Testing and release](./docs/TESTING_RELEASE.md): risk-based test selection and the production release checklist.
 - [Deployment operations](./docs/DEPLOYMENT_OPERATIONS.md): dual-node backup, release, and rollback procedures.
 - [Community builds](./docs/COMMUNITY_BUILDS.md): self-hosted API, native builds, and update URL configuration.

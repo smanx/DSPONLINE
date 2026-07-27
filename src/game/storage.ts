@@ -579,7 +579,7 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const savedSeed = saved.version >= 20 && typeof saved.galaxy?.seed === "number" && Number.isFinite(saved.galaxy.seed)
     ? saved.galaxy.seed
     : DEFAULT_GALAXY_SEED;
@@ -593,7 +593,10 @@ export function migrateGame(value: unknown): GameState | null {
       ? { planetId: currentResource.planetId, position: currentResource.position }
       : undefined;
     const planetId = legacyRelocation?.planetId ?? (validPlanetId(entity.planetId) ? entity.planetId : inferLegacyPlanet(entity));
-    const position = { ...entity.position };
+    const position = {
+      x: typeof entity.position?.x === "number" && Number.isFinite(entity.position.x) ? entity.position.x : 0,
+      y: typeof entity.position?.y === "number" && Number.isFinite(entity.position.y) ? entity.position.y : 0,
+    };
     if (legacyRelocation) Object.assign(position, legacyRelocation.position);
     const sprayCoaterInstalled = Boolean(entity.sprayCoaterInstalled);
     const planetaryStation = entity.buildingId === "planetary_logistics_station";
@@ -644,6 +647,9 @@ export function migrateGame(value: unknown): GameState | null {
             ? nonNegativeInteger(entity.resourceRemaining)
             : generatedReserve || 1,
         )
+        : undefined,
+      resourceDepletionRemainder: resourceId && ITEMS[resourceId].kind === "solid"
+        ? saved.version >= 37 ? Math.min(9, nonNegativeInteger(entity.resourceDepletionRemainder)) : 0
         : undefined,
       recipeId: energyExchanger
         ? entity.energyMode === "discharge" ? "accumulator_discharge" : "accumulator_charge"
@@ -892,6 +898,21 @@ export function migrateGame(value: unknown): GameState | null {
       : DEFAULT_PLANET_TRAY_ITEM_LIMIT;
     return [planet.id, limit];
   })) as GameState["planetTrayItemLimits"];
+  if (saved.version < 37) {
+    for (const entity of entities) {
+      if (entity.buildingId !== "artificial_star") continue;
+      const ratedCapacity = 30 * Math.max(1, nonNegativeInteger(entity.machineCount));
+      const stored = nonNegativeInteger(entity.inputs.antimatter_fuel_rod);
+      const excess = Math.max(0, stored - ratedCapacity);
+      if (excess < 1) continue;
+      const tray = planetTrays[entity.planetId];
+      const current = nonNegativeInteger(tray.antimatter_fuel_rod);
+      const moved = Math.min(excess, Math.max(0, planetTrayItemLimits[entity.planetId] - current));
+      if (moved < 1) continue;
+      tray.antimatter_fuel_rod = current + moved;
+      entity.inputs.antimatter_fuel_rod = stored - moved;
+    }
+  }
   const portableFleet: GameState["portableFleet"] = {
     logistics_drone: saved.version >= 24 ? nonNegativeInteger(saved.portableFleet?.logistics_drone) : 0,
     logistics_vessel: saved.version >= 24 ? nonNegativeInteger(saved.portableFleet?.logistics_vessel) : 0,
@@ -976,6 +997,12 @@ export function migrateGame(value: unknown): GameState | null {
               STATION_WARPER_CAPACITY_PER_BUILDING * Math.max(1, nonNegativeInteger(entity.machineCount)),
               nonNegativeInteger(entity.stationWarperTarget) || DEFAULT_STATION_WARPER_TARGET,
             ))
+            : undefined,
+          stationDroneTarget: entity.buildingId === "planetary_logistics_station" || entity.buildingId === "interstellar_logistics_station"
+            ? nonNegativeInteger(entity.stationDroneTarget)
+            : undefined,
+          stationVesselTarget: entity.buildingId === "interstellar_logistics_station"
+            ? nonNegativeInteger(entity.stationVesselTarget)
             : undefined,
           stationHubEnabled: Boolean(entity.stationHubEnabled),
           stationHubPriority: validPriority(entity.stationHubPriority) ? entity.stationHubPriority : 1,
@@ -1167,7 +1194,11 @@ export function migrateGame(value: unknown): GameState | null {
           ? [...new Set((shell.boundaryFrameIds as unknown[]).filter((frameId): frameId is string => typeof frameId === "string" && frameIds.has(frameId)))]
           : [];
         if (!nodeIds.has(shell.sourceNodeId) || !nodeIds.has(shell.targetNodeId) || boundaryFrameIds.length === 0) return [];
-        const capacity = Math.max(1, nonNegativeInteger(shell.sailCapacity));
+        const migratedCapacity = boundaryFrameIds.reduce((sum, frameId) =>
+          sum + (frames.find((frame) => frame.id === frameId)?.requiredStructurePoints ?? 0) * DYSON_SHELL_CAPACITY_PER_STRUCTURE, 0);
+        const capacity = saved.version < 37
+          ? Math.max(1, migratedCapacity)
+          : Math.max(1, nonNegativeInteger(shell.sailCapacity));
         return [{
           id: typeof shell.id === "string" && shell.id ? shell.id : `dyson_shell_migrated_${layerIndex}_${shellIndex}`,
           sourceNodeId: shell.sourceNodeId as string,
@@ -1427,7 +1458,7 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 36,
+    version: 37,
     activePlanetId,
     entities,
     belts,

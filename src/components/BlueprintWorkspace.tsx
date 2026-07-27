@@ -1,6 +1,6 @@
 import { ArrowUp, BoxSelect, Check, ChevronLeft, ChevronRight, Clock3, Copy, Download, FlipHorizontal2, Focus, Layers3, Lock, MousePointer2, PackageOpen, Palette, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Redo2, RotateCw, Route, Trash2, Undo2, Unlock, Upload, WandSparkles, X } from "lucide-react";
 import { getConstructionDefinition, getItem, getPlanet, getRecipe, getRecipesForBuilding } from "../game/content";
-import { canPlaceBlueprint, canQueueBlueprint, getBlueprintRequirements, getConstructionQueueDeficits, isTechnologyCompleted } from "../game/engine";
+import { canPlaceBlueprint, canQueueBlueprint, getBlueprintFleetLoadPreview, getBlueprintRequirements, getConstructionQueueDeficits, isTechnologyCompleted } from "../game/engine";
 import type { BlueprintDefinition, BlueprintMirror, BlueprintRotation, CanvasRegion, GameState, RecipeId } from "../game/types";
 import { Fragment, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 
@@ -253,6 +253,7 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
           <div className="blueprint-empty"><BoxSelect size={26} /><strong>蓝图库为空</strong><span>在画布中框选设备，再使用选区复制命令建立模板。</span></div>
         ) : visibleBlueprints.map((blueprint) => {
           const requirements = getBlueprintRequirements(blueprint);
+          const fleet = getBlueprintFleetLoadPreview(game, blueprint.id);
           const deployable = canPlaceBlueprint(game, blueprint.id);
           const compatible = canQueueBlueprint(game, blueprint.id);
           const recipeTemplates = blueprint.entities.filter((entity) => entity.recipeId);
@@ -291,6 +292,13 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
                   return <span className={stock >= requirement.amount ? "ready" : ""} key={requirement.constructionId}>{stock >= requirement.amount ? <Check size={11} /> : <PackageOpen size={11} />}{getConstructionDefinition(requirement.constructionId)?.name ?? requirement.constructionId} {stock}/{requirement.amount}</span>;
                 })}</div>
               </div>
+              {fleet.drones.target > 0 || fleet.vessels.target > 0 ? <div className="blueprint-requirements blueprint-fleet-targets">
+                <strong>载具目标</strong>
+                <div>
+                  {fleet.drones.target > 0 ? <span className={fleet.drones.shortfall === 0 ? "ready" : ""}><PackageOpen size={11} />运输机 {fleet.drones.loaded}/{fleet.drones.target}{fleet.drones.shortfall > 0 ? ` · 缺 ${fleet.drones.shortfall}` : ""}</span> : null}
+                  {fleet.vessels.target > 0 ? <span className={fleet.vessels.shortfall === 0 ? "ready" : ""}><PackageOpen size={11} />运输船 {fleet.vessels.loaded}/{fleet.vessels.target}{fleet.vessels.shortfall > 0 ? ` · 缺 ${fleet.vessels.shortfall}` : ""}</span> : null}
+                </div>
+              </div> : null}
               <footer>
                 <button className="blueprint-export" type="button" onClick={() => onExport(blueprint.id)} title={`导出${blueprint.name}`}><Download size={14} />导出</button>
                 <button type="button" disabled={!compatible} onClick={() => onDeploy(blueprint.id)} title={!compatible ? "当前行星不兼容" : deployable ? `在${getPlanet(game.activePlanetId).name}部署${blueprint.name}` : "点击画布创建缺料施工订单"}>{deployable ? <Copy size={14} /> : <Clock3 size={14} />}{deployable ? "部署" : "排队部署"}</button>

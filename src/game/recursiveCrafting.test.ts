@@ -39,6 +39,27 @@ describe("recursive manufacturing planner", () => {
     });
   });
 
+  it("prefers the green-matrix warper recipe and falls back to the lens recipe atomically", () => {
+    const compact = planRecursiveRequirements({
+      inventory: { gravity_matrix: 1, graviton_lens: 1 },
+      requirements: [{ itemId: "space_warper", amount: 8 }],
+      recipes,
+      completedTechnologyIds: ["space_warp"],
+    });
+    expect(compact.possible).toBe(true);
+    expect(compact.steps.at(-1)).toMatchObject({ recipeId: "space_warper_from_gravity_matrix", batches: 1, outputAmount: 8 });
+
+    const fallback = planRecursiveRequirements({
+      inventory: { graviton_lens: 1 },
+      requirements: [{ itemId: "space_warper", amount: 1 }],
+      recipes,
+      completedTechnologyIds: ["space_warp"],
+    });
+    expect(fallback.possible).toBe(true);
+    expect(fallback.steps.at(-1)?.recipeId).toBe("space_warper");
+    expect(fallback.decisions.at(-1)?.fallbacks[0]).toMatchObject({ recipeId: "space_warper_from_gravity_matrix", reason: "technology" });
+  });
+
   it.each([
     {
       name: "technology is locked",

@@ -87,6 +87,7 @@ npm run desktop:pack
 - [项目现状](./docs/PROJECT_STATUS.md)：当前版本、功能、部署、质量基线和已知风险。
 - [系统架构](./docs/ARCHITECTURE.md)：前端、模拟器、存档、云服务和部署边界。
 - [玩法与系统](./docs/GAMEPLAY_SYSTEMS.md)：稳定玩法规则和内容规模。
+- [内容包 Mod 指南](./docs/MODDING.md)：JSON 格式、字段、依赖、导入流程、存档边界和可用示例。
 - [测试与发布](./docs/TESTING_RELEASE.md)：按风险选择测试及正式发布清单。
 - [部署与运维](./docs/DEPLOYMENT_OPERATIONS.md)：双节点、备份、发布和回滚。
 - [社区构建](./docs/COMMUNITY_BUILDS.md)：自建 API、原生构建和更新地址配置。

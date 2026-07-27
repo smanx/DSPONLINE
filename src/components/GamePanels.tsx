@@ -69,7 +69,7 @@ import { QuantityStepper } from "./QuantityStepper";
 import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getTechnology, isConveyorBeltId } from "../game/content";
 import { MATERIAL_DELIVERY_SLOT_COUNT, MAX_BELT_LANES, MAX_MANUAL_CRAFT_BATCHES, MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltLaneAdjustmentCheck, getBeltNetworkIds, getConstructionAutomationStatus, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityOutputCapacity, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMaxConstructionQuickCraftBatches, getMaxRecursiveHandcraftBatches, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPlanetTrayItemLimit, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getRecursiveHandcraftPlan, getResourceReserveSnapshot, getSprayCoaterInstallCheck, getSprayCoaterRemovalRefund, getStationActiveRoutes, getStationBusyVehicleCount, getStationDroneCapacity, getStationFleetDiagnostic, getStationMinimumCargo, getStationSlotCapacity, getStationSlots, getStationVesselCapacity, getStationWarperAutoRefillTarget, getStationWarperCapacity, getStationWarperRefillSnapshot, getTimeWarpRequiredPowerKw, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
-import { getPlanetIndustrialProfile, getPlanetOrbitalYields } from "../game/galaxy";
+import { getPlanetIndustrialProfile, getPlanetOrbitalYields, specializationApplies } from "../game/galaxy";
 import { analyzeBeltNetwork } from "../game/network";
 import { ACTIVITY_MATERIAL_IDS } from "../game/activity";
 import type {
@@ -381,6 +381,7 @@ interface InspectorPanelProps {
   onStationModeChange: (entityId: string, mode: "supply" | "demand") => void;
   onStationVesselAdjust: (entityId: string, delta: number) => void;
   onStationDroneAdjust: (entityId: string, delta: number) => void;
+  onStationFleetTarget: (entityId: string, kind: "drone" | "vessel", target: number) => void;
   onStationFleetFill: (entityId: string, kind: "drone" | "vessel") => void;
   onStationWarperAdjust: (entityId: string, delta: number) => void;
   onStationWarpEnabled: (entityId: string, enabled: boolean) => void;
@@ -736,6 +737,7 @@ function EntityInspector({
   onStationModeChange,
   onStationVesselAdjust,
   onStationDroneAdjust,
+  onStationFleetTarget,
   onStationFleetFill,
   onStationWarperAdjust,
   onStationWarpEnabled,
@@ -778,6 +780,7 @@ function EntityInspector({
   onStationModeChange: (entityId: string, mode: "supply" | "demand") => void;
   onStationVesselAdjust: (entityId: string, delta: number) => void;
   onStationDroneAdjust: (entityId: string, delta: number) => void;
+  onStationFleetTarget: (entityId: string, kind: "drone" | "vessel", target: number) => void;
   onStationFleetFill: (entityId: string, kind: "drone" | "vessel") => void;
   onStationWarperAdjust: (entityId: string, delta: number) => void;
   onStationWarpEnabled: (entityId: string, enabled: boolean) => void;
@@ -1129,21 +1132,13 @@ function EntityInspector({
         <section className="station-fleet-grid">
           <div className={planetary ? "station-fleet-control" : "station-local-fleet-control"}>
             <div className="station-control-heading"><span>运输机泊位</span><small>随身 {availableDrones}</small></div>
-            <div className="station-fleet-stepper">
-              <button type="button" aria-label="卸载 1 架物流运输机" disabled={droneCount <= busyDrones} onClick={() => onStationDroneAdjust(entity.id, -1)}><Minus size={15} /></button>
-              <strong><Orbit size={15} /> {droneCount} / {droneCapacity}</strong>
-              <button type="button" aria-label="装载 1 架物流运输机" disabled={availableDrones < 1 || droneCount >= droneCapacity} onClick={() => onStationDroneAdjust(entity.id, 1)}><Plus size={15} /></button>
-            </div>
-            <button className="station-fleet-fill" type="button" disabled={availableDrones < 1 || droneCount >= droneCapacity} onClick={() => onStationFleetFill(entity.id, "drone")}><ListPlus size={14} />一键补满运输机</button>
+            <div className="station-fleet-summary"><Orbit size={15} /><strong>{droneCount} / {droneCapacity}</strong><small>执行中 {busyDrones}</small></div>
+            <QuantityStepper value={droneCount} min={busyDrones} max={droneCapacity} label="物流运输机目标" maxLabel="一键填满" onChange={(target) => onStationFleetTarget(entity.id, "drone", target)} />
           </div>
           {!planetary ? <div className="station-fleet-control">
             <div className="station-control-heading"><span>运输船泊位</span><small>随身 {availableVessels}</small></div>
-            <div className="station-fleet-stepper">
-              <button type="button" aria-label="卸载 1 艘物流运输船" disabled={vesselCount <= busyVessels} onClick={() => onStationVesselAdjust(entity.id, -1)}><Minus size={15} /></button>
-              <strong><Rocket size={15} /> {vesselCount} / {vesselCapacity}</strong>
-              <button type="button" aria-label="装载 1 艘物流运输船" disabled={availableVessels < 1 || vesselCount >= vesselCapacity} onClick={() => onStationVesselAdjust(entity.id, 1)}><Plus size={15} /></button>
-            </div>
-            <button className="station-fleet-fill" type="button" disabled={availableVessels < 1 || vesselCount >= vesselCapacity} onClick={() => onStationFleetFill(entity.id, "vessel")}><ListPlus size={14} />一键补满运输船</button>
+            <div className="station-fleet-summary"><Rocket size={15} /><strong>{vesselCount} / {vesselCapacity}</strong><small>执行中 {busyVessels}</small></div>
+            <QuantityStepper value={vesselCount} min={busyVessels} max={vesselCapacity} label="物流运输船目标" maxLabel="一键填满" onChange={(target) => onStationFleetTarget(entity.id, "vessel", target)} />
           </div> : null}
         </section>
         {fleetDiagnostic ? <section className="station-fleet-diagnostic" aria-label="物流舰队诊断">
@@ -1295,6 +1290,10 @@ function EntityInspector({
   const railEjector = entity.buildingId === "em_rail_ejector";
   const rayReceiver = entity.buildingId === "ray_receiver";
   const launchSilo = entity.buildingId === "vertical_launching_silo";
+  const industrialProfile = getPlanetIndustrialProfile(game, entity.planetId);
+  const specializationMultiplier = specializationApplies(industrialProfile, building.family, entity.buildingId)
+    ? industrialProfile.productionSpeedMultiplier
+    : 1;
   return (
     <div className="inspector-content">
       <div className="inspector-identity">
@@ -1320,6 +1319,7 @@ function EntityInspector({
             <div><dt>当前负载</dt><dd>{Math.round(entity.utilization * 100)}%</dd></div>
             {rayReceiver ? <div><dt>接收功率</dt><dd><PowerValue valueKw={entity.powerOutputKw ?? 0} /></dd></div> : null}
             <div><dt>{railEjector || launchSilo ? "发射速率" : "实际产出"}</dt><dd>{recipe?.id === "ray_power" ? <PowerValue valueKw={entity.powerOutputKw ?? 0} /> : `${entity.productionRate.toFixed(1)}/min`}</dd></div>
+            {specializationMultiplier !== 1 ? <div><dt>行星工业加成</dt><dd>{industrialProfile.specializationName ?? "行星专精"} · {specializationMultiplier.toFixed(2)}×</dd></div> : null}
             <div><dt>{rayReceiver ? "额定接收" : "额定耗电"}</dt><dd><PowerValue valueKw={rayReceiver ? getRayReceiverCapacityKw(game) * entity.machineCount : (building.powerDemandKw ?? 0) * entity.machineCount} /></dd></div>
             {entity.kind === "machine" && entity.sprayCoaterInstalled ? (
               <>
@@ -1826,7 +1826,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
           {props.selectedEntity.interactionLocked ? <div className="inspector-lock-banner"><LockKeyhole size={16} /><span><strong>建筑已锁定</strong><small>模拟与物流继续运行，修改操作已禁用</small></span><button type="button" onClick={() => props.onEntityLockChange(props.selectedEntity!.id, false)}><Unlock size={16} />解锁</button></div> : null}
           <InspectorLayoutControls preference={layoutPreference} onChange={updateLayoutPreference} />
           <fieldset className="inspector-lockable" disabled={props.selectedEntity.interactionLocked}>
-            <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationFleetFill={props.onStationFleetFill} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationWarperAutoRefillChange={props.onStationWarperAutoRefillChange} onStationWarperTargetChange={props.onStationWarperTargetChange} onStationHubChange={props.onStationHubChange} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onStationSlotRoutePolicyChange={props.onStationSlotRoutePolicyChange} onStationSlotWarperBudgetChange={props.onStationSlotWarperBudgetChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onRemoveSprayCoater={props.onRemoveSprayCoater} onOpenResourceSettings={props.onOpenResourceSettings} onProliferatorConfiguration={props.onProliferatorConfiguration} onAdd={props.onAddEntity} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} onOpenConstructionCenter={props.onOpenConstructionCenter} onGalacticExporterPausedChange={props.onGalacticExporterPausedChange} onBlackHolePausedChange={props.onBlackHolePausedChange} onTimeWarpControllerChange={props.onTimeWarpControllerChange} onTimeWarpEnabledChange={props.onTimeWarpEnabledChange} onTimeWarpRequestedMultiplierChange={props.onTimeWarpRequestedMultiplierChange} galacticActivityStatus={props.galacticActivityStatus} />
+            <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationFleetTarget={props.onStationFleetTarget} onStationFleetFill={props.onStationFleetFill} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationWarperAutoRefillChange={props.onStationWarperAutoRefillChange} onStationWarperTargetChange={props.onStationWarperTargetChange} onStationHubChange={props.onStationHubChange} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onStationSlotRoutePolicyChange={props.onStationSlotRoutePolicyChange} onStationSlotWarperBudgetChange={props.onStationSlotWarperBudgetChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onRemoveSprayCoater={props.onRemoveSprayCoater} onOpenResourceSettings={props.onOpenResourceSettings} onProliferatorConfiguration={props.onProliferatorConfiguration} onAdd={props.onAddEntity} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} onOpenConstructionCenter={props.onOpenConstructionCenter} onGalacticExporterPausedChange={props.onGalacticExporterPausedChange} onBlackHolePausedChange={props.onBlackHolePausedChange} onTimeWarpControllerChange={props.onTimeWarpControllerChange} onTimeWarpEnabledChange={props.onTimeWarpEnabledChange} onTimeWarpRequestedMultiplierChange={props.onTimeWarpRequestedMultiplierChange} galacticActivityStatus={props.galacticActivityStatus} />
           </fieldset>
         </div>
       ) : props.selectedBelt ? (

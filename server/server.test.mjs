@@ -772,7 +772,7 @@ test("validates v33 proliferator and exact infinite research fields while accept
   assert.equal(accepted.response.status, 200);
 });
 
-test("validates v34 time warp and accepts Android 1.0.2 v35 plus 1.0.3 v36 saves", async () => {
+test("validates v34 time warp and accepts Android v35, v36 and current v37 saves", async () => {
   const research = Object.fromEntries([
     ["matrix_compression", 1_000],
     ["vein_utilization", 1_000],
@@ -846,6 +846,20 @@ test("validates v34 time warp and accepts Android 1.0.2 v35 plus 1.0.3 v36 saves
   });
   const acceptedV36 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v36Payload, expectedRevision: 4 }) });
   assert.equal(acceptedV36.response.status, 200);
+  const v37Payload = payloadFor((state) => {
+    state.version = 37;
+    state.planetTrayItemLimits = { home: 100_000_000 };
+    for (const entity of state.entities) entity.interactionLocked = false;
+    state.entities.push({ id: "vein", kind: "vein", resourceId: "iron_ore", interactionLocked: false, resourceDepletionRemainder: 9 });
+  });
+  const acceptedV37 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v37Payload, expectedRevision: 5 }) });
+  assert.equal(acceptedV37.response.status, 200);
+  const invalidV37 = payloadFor((state) => {
+    state.version = 37;
+    state.entities.push({ id: "vein", kind: "vein", resourceId: "iron_ore", interactionLocked: false, resourceDepletionRemainder: 10 });
+  });
+  const rejectedV37 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalidV37, expectedRevision: 6 }) });
+  assert.equal(rejectedV37.response.status, 400);
 });
 
 test("recalculates leaderboard score on the server", async () => {

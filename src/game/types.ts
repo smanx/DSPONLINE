@@ -289,6 +289,7 @@ export type RecipeId =
   | "logistics_drone"
   | "logistics_vessel"
   | "space_warper"
+  | "space_warper_from_gravity_matrix"
   | "accumulator"
   | "accumulator_charge"
   | "accumulator_discharge"
@@ -645,6 +646,8 @@ export interface FactoryEntity {
   generationPriority?: PowerPriority;
   resourceRemaining?: number;
   resourceCapacity?: number;
+  /** Tenths of one reserve unit already consumed; kept as an integer for deterministic depletion. */
+  resourceDepletionRemainder?: number;
   stationMode?: "supply" | "demand";
   stationProgress?: number;
   stationTrips?: number;
@@ -1098,6 +1101,8 @@ export interface BlueprintEntityTemplate {
   stationWarpEnabled?: boolean;
   stationWarperAutoRefill?: boolean;
   stationWarperTarget?: number;
+  stationDroneTarget?: number;
+  stationVesselTarget?: number;
   stationHubEnabled?: boolean;
   stationHubPriority?: LogisticsPriority;
   stationSlots?: StationSlot[];
@@ -1237,7 +1242,7 @@ export interface ConstructionAutomationJob {
 }
 
 export interface GameState {
-  version: 36;
+  version: 37;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];

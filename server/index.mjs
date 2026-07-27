@@ -791,7 +791,7 @@ function validateSavePayload(payload) {
     const parsed = JSON.parse(payload);
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities) ||
-      !Number.isInteger(state.version) || state.version < 1 || state.version > 36) return false;
+      !Number.isInteger(state.version) || state.version < 1 || state.version > 37) return false;
     const validBufferLimit = (value) => Number.isInteger(value) && value >= 1_000 && value <= 100_000_000;
     const productionLimit = state.settings?.productionBufferLimit;
     const logisticsLimit = state.settings?.logisticsBufferLimit;
@@ -822,6 +822,8 @@ function validateSavePayload(payload) {
         if (typeof progress.progress !== "string" || !/^(0|[1-9][0-9]{0,63})$/.test(progress.progress)) return false;
       }
     }
+    if (state.version >= 37 && state.entities.some((entity) => entity?.resourceDepletionRemainder !== undefined &&
+      (!Number.isInteger(entity.resourceDepletionRemainder) || entity.resourceDepletionRemainder < 0 || entity.resourceDepletionRemainder > 9))) return false;
     if (state.version >= 34) {
       const timeWarp = state.timeWarp;
       if (!timeWarp || typeof timeWarp !== "object" ||

@@ -46,7 +46,7 @@ import {
   addCanvasBookmark,
   addCanvasRegion,
   applyStationSlotTemplateToEntities,
-  applyBeltConfiguration,
+  applyBeltConfigurationToBelts,
   addDysonLayer,
   addDysonNode,
   addDysonSwarmOrbit,
@@ -55,7 +55,7 @@ import {
   adjustStationVessels,
   fillStationFleet,
   advanceSimulationBudget,
-  applyBeltConfigurationToNetwork,
+  applyBeltConfigurationToNetworkResult,
   canConnectBelt,
   getBeltConnectionCheck,
   connectBelt,
@@ -166,6 +166,7 @@ import {
   setProliferatorConfiguration,
   setEntitiesProliferatorConfiguration,
   setStationMode,
+  setStationFleetTarget,
   setStationHubConfiguration,
   setStationMinimumLoad,
   setStationSlotItem,
@@ -186,6 +187,7 @@ import {
   updateCanvasRegion,
   resizeCanvasRegion,
   getBlueprintEligibleEntityIds,
+  getBlueprintFleetLoadPreview,
   dispatchGalacticExport,
   selectInfiniteResearch,
   setGalacticDispatchAutomation,
@@ -2747,7 +2749,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           return {
             id: entity.id,
             type: entity.kind,
-            position: previous?.position ?? entity.position,
+            position: { ...entity.position },
             measured: previous?.measured,
             data: {
               ...commonNodeData,
@@ -3539,6 +3541,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const deployable = canPlaceBlueprint(gameRef.current, blueprintPlacementId);
       const compatible = canQueueBlueprint(gameRef.current, blueprintPlacementId);
       const canContinue = deployable && canPlaceBlueprint(placeBlueprint(gameRef.current, blueprintPlacementId, position), blueprintPlacementId);
+      const fleetPreview = deployable ? getBlueprintFleetLoadPreview(gameRef.current, blueprintPlacementId) : null;
       const blueprintName = gameRef.current.blueprints.find((blueprint) => blueprint.id === blueprintPlacementId)?.name ?? "蓝图";
       commitGame((current) => {
         const next = canPlaceBlueprint(current, blueprintPlacementId)
@@ -3552,8 +3555,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       if (deployable) playTone("place");
       else if (compatible) setBlueprintPlacementId(null);
       setSelectedEntityIds([]);
+      const fleetShortfall = fleetPreview
+        ? [fleetPreview.drones.shortfall > 0 ? `运输机缺 ${fleetPreview.drones.shortfall}` : "", fleetPreview.vessels.shortfall > 0 ? `运输船缺 ${fleetPreview.vessels.shortfall}` : ""].filter(Boolean).join("、")
+        : "";
       setNotice(deployable
-        ? `${blueprintName}部署完成${canContinue ? " · 可继续粘贴" : ""}`
+        ? `${blueprintName}部署完成${fleetShortfall ? ` · 载具已部分装载（${fleetShortfall}）` : ""}${canContinue ? " · 可继续粘贴" : ""}`
         : compatible ? `${blueprintName}已加入施工队列，材料齐备后自动部署` : `${blueprintName}与当前行星不兼容`);
       return;
     }
@@ -3753,6 +3759,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   };
 
   const handleMissingConstructionCraft = (buildingId: ConstructionId) => {
+    setFabricatorFocusItemId(null);
+    setCampaignFocusItemId(null);
     const result = getConstructionCraftNavigation(gameRef.current, buildingId);
     if (result.status !== "target") {
       const message = result.status === "technology"
@@ -3764,6 +3772,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             : "材料已经满足，可直接制造建筑";
       setNotice(message);
       playTone(result.status === "ready" ? "confirm" : "alert");
+      if (result.status === "raw-shortage") {
+        setCampaignFocusItemId(result.itemId);
+        openCommandWorkspace("recipes");
+        if (nextMobileShell) mobileNavigation.openWorkspace("recipes");
+        setMobilePanel(null);
+      }
       return;
     }
     setFabricatorFocusItemId(result.itemId);
@@ -4260,7 +4274,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               }
               const moved = draggedNodes.length > 0 ? draggedNodes : [node];
               const positions = moved.map((candidate) => ({ id: candidate.id, position: snapFlowPosition(candidate.position) }));
-              window.requestAnimationFrame(() => commitGame((current) => moveEntities(current, positions)));
+              commitGame((current) => moveEntities(current, positions));
             }}
             onEdgeClick={(_event, edge) => {
               if (nextMobileShell && mobileCanvasMode === "select") {
@@ -4531,6 +4545,19 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onStationModeChange={(entityId, mode) => commitGame((current) => setStationMode(current, entityId, mode))}
           onStationVesselAdjust={(entityId, delta) => commitGame((current) => adjustStationVessels(current, entityId, delta))}
           onStationDroneAdjust={(entityId, delta) => commitGame((current) => adjustStationDrones(current, entityId, delta))}
+          onStationFleetTarget={(entityId, kind, target) => {
+            const result = setStationFleetTarget(gameRef.current, entityId, kind, target);
+            if (result.state !== gameRef.current) commitGame(() => result.state);
+            const label = kind === "drone" ? "物流运输机" : "物流运输船";
+            const unit = kind === "drone" ? "架" : "艘";
+            setNotice(result.reason === "busy-vehicles"
+              ? `${label}目标不能低于执行中数量 ${result.busy}，请等待返航后再卸载`
+              : result.reason === "portable-stock"
+                ? `${label}已调整为 ${result.final}/${result.capacity} ${unit} · 随身库存不足，仍缺 ${result.shortfall}`
+                : result.reason === "invalid-target" || result.reason === "invalid-station"
+                  ? `${label}数量调整失败`
+                  : `${label}已调整为 ${result.final}/${result.capacity} ${unit}${result.loaded > 0 ? ` · 装入 ${result.loaded}` : result.unloaded > 0 ? ` · 返还 ${result.unloaded}` : ""}`);
+          }}
           onStationFleetFill={(entityId, kind) => {
             const result = fillStationFleet(gameRef.current, entityId, kind);
             if (result.state !== gameRef.current) commitGame(() => result.state);
@@ -4567,8 +4594,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onBeltRouteModeChange={(beltId, routeMode: BeltRouteMode) => commitGame((current) => setBeltRouteMode(current, beltId, routeMode))}
           onBeltRouteOffsetChange={(beltId, routeOffsetY) => commitGame((current) => setBeltRouteOffsetY(current, beltId, routeOffsetY))}
           onApplyBeltConfigurationToNetwork={(beltId) => {
-            commitGame((current) => applyBeltConfigurationToNetwork(current, beltId));
-            setNotice("当前线路设置已同步到整条连续网络");
+            const result = applyBeltConfigurationToNetworkResult(gameRef.current, beltId);
+            if (result.error) {
+              setNotice(`同步失败：${result.error}`);
+              playTone("alert");
+              return;
+            }
+            if (result.state !== gameRef.current) commitGame(() => result.state);
+            setNotice(result.applied > 0 ? `当前线路设置已同步到整条连续网络 · ${result.applied} 条` : "连续网络设置已经一致");
           }}
           onFocusBeltNetwork={(beltId) => {
             if (focusedBeltNetworkId === beltId) setFocusedBeltNetworkId(null);
@@ -4593,8 +4626,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           }}
           onPasteBeltConfiguration={(beltId) => {
             if (!copiedBeltConfigurationId) return;
-            commitGame((current) => applyBeltConfiguration(current, copiedBeltConfigurationId, beltId));
-            setNotice("线路设置已应用");
+            const result = applyBeltConfigurationToBelts(gameRef.current, copiedBeltConfigurationId, [beltId]);
+            if (result.error) {
+              setNotice(`线路设置应用失败：${result.error}`);
+              playTone("alert");
+              return;
+            }
+            if (result.state !== gameRef.current) commitGame(() => result.state);
+            setNotice(result.applied > 0 ? "线路设置已应用（含并联数量）" : "线路设置已经一致");
           }}
           hasCopiedBeltConfiguration={Boolean(copiedBeltConfigurationId && game.belts.some((belt) => belt.id === copiedBeltConfigurationId))}
           onAddEntity={quickAddEntity}
@@ -4840,12 +4879,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           }}
           onBulkBeltConfiguration={(beltIds) => {
             if (beltIds.length < 2) return;
-            commitGame((current) => {
-              const sourceId = beltIds[0];
-              return beltIds.slice(1).reduce((next, originId) => getBeltNetworkIds(next, originId)
-                .reduce((configured, targetId) => applyBeltConfiguration(configured, sourceId, targetId), next), current);
-            });
-            setNotice(`已将首个网络的配置同步到其余 ${beltIds.length - 1} 个网络`);
+            const targetIds = [...new Set(beltIds.slice(1).flatMap((originId) => getBeltNetworkIds(gameRef.current, originId)))];
+            const result = applyBeltConfigurationToBelts(gameRef.current, beltIds[0], targetIds);
+            if (result.error) {
+              setNotice(`批量同步失败：${result.error}`);
+              playTone("alert");
+              return;
+            }
+            if (result.state !== gameRef.current) commitGame(() => result.state);
+            setNotice(result.applied > 0 ? `已将首条设置同步到 ${result.applied} 条线路（含并联数量）` : "所选线路设置已经一致");
           }}
           onBulkBeltRemove={(beltIds) => {
             commitGame((current) => beltIds.reduce((next, beltId) => removeBeltNetwork(next, beltId), current));

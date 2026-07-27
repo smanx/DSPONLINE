@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import documentedExample from "../../docs/examples/example-dense-materials.content-pack.json";
 import { CONSTRUCTION, ITEMS, getRecipe, getRecipesForBuilding } from "./content";
 import {
   applyContentPackRegistry,
@@ -14,6 +15,19 @@ afterEach(() => {
 });
 
 describe("content pack runtime registry", () => {
+  it("keeps the documented starter pack valid and activatable", () => {
+    const validation = validateContentPack(documentedExample);
+    expect(validation.valid).toBe(true);
+
+    const registered = registerContentPack(createContentPackRegistry(), validation);
+    const report = applyContentPackRegistry(registered.registry);
+
+    expect(registered.enabled).toBe(true);
+    expect(report.catalogValid).toBe(true);
+    expect(getRecipe("example_dense_plate_recipe" as never)?.requiredTechId).toBe("example_dense_materials");
+    expect(getRecipesForBuilding("assembling_machine_mk1").map((recipe) => recipe.id)).toContain("example_dense_plate_recipe");
+  });
+
   it("registers an enabled pack into the live item, recipe, building, and technology catalogs", () => {
     const validation = validateContentPack({
       formatVersion: 1,
