@@ -1,56 +1,38 @@
-import { Check, Factory, FlaskConical, Info, MessageCircle, MonitorDown, Pickaxe, Route, X, type LucideIcon } from "lucide-react";
+import { Activity, Check, Database, Factory, Info, MessageCircle, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-28-v1.0.6",
+  id: "2026-07-28-v1.0.7",
   date: "2026年7月28日",
-  version: "1.0.6",
-  title: "高容量产线与采矿蓝图",
-  summary: "1.0.6 校正紫色矩阵配方，将传送带并联上限提高到 4096，修复建筑制造中心副产物卡死，并增加批量减堆和矿脉唯一的采矿布局蓝图。GameState 升级至 v38，旧存档会守恒迁移。",
+  version: "1.0.7",
+  title: "制造中心 WIP 急救补丁",
+  summary: "1.0.7 移除建筑制造中心必要中间材料的固定 100 万 WIP 阻断。百万级递归链会完整保留任务所需材料，并在暂停、断电、重载和离线推进后继续运行。GameState 仍为 v38。",
   items: [
     {
-      id: "purple-matrix",
-      title: "紫色矩阵配方校正",
-      description: "信息矩阵每周期现在统一消耗 1 个粒子宽带和 2 个处理器。制造面板、图鉴、缺料分析、递归制造、规划、统计与真实模拟全部读取同一配方目录。",
+      id: "unbounded-required-wip",
+      title: "必要 WIP 不再受固定上限阻断",
+      description: "递归任务按后续步骤的真实净需求保留全部必要中间材料，不再因 108 万/100 万或未来更高成本巨构而永久停机。",
     },
     {
-      id: "belt-capacity",
-      title: "传送带并联上限提高",
-      description: "单条线路并联上限从 64 提高至 4096，检查器继续支持直接输入、增减、整网同步和蓝图参数。增加会原子消耗同级传送带，减少完整返还，线路设置与在途物资不变。",
+      id: "resumable-jobs",
+      title: "任务可自动等待和恢复",
+      description: "缺料、暂停或断电只会保留原任务并等待；条件恢复后从原阶段继续。存档重载、分段模拟和大时间步不会重复扣料或重复结算成品。",
     },
     {
-      id: "byproduct-settlement",
-      title: "制造中心副产物不再卡死",
-      description: "递归制造会保留后续步骤必需的 WIP，额外产物优先进入当前行星托盘；托盘已满时只销毁任务不再需要的副产物，并显示当前 WIP 与累计销毁量。",
-    },
-    {
-      id: "batch-unstack",
-      title: "建筑批量减少堆叠",
-      description: "建筑检查器增加目标数量、-1、-10、-100 和减至 1。减少的建筑返还施工托盘，输入输出、燃料、进度、物流槽、载具、线路和在途物资均保持不变。",
-    },
-    {
-      id: "mining-blueprints",
-      title: "采矿布局进入蓝图库",
-      description: "已安装采集设备的资源点可以作为不可建造锚点收录。部署时只匹配附近同类型现有矿脉并补齐矿机及线路，不复制、移动、补充或修改矿脉储量；重复粘贴不会重复生成矿脉或采集设备。",
-    },
-    {
-      id: "native-downloads",
-      title: "Windows 与 Android 同步更新",
-      description: "Windows 与 Android 应用同步升级至 1.0.6。Android 保持包名和长期签名，Windows 保持应用标识；覆盖安装、网页升级和 v37→v38 迁移均不会主动删除本地存档。",
+      id: "visible-settlement",
+      title: "WIP 与真实等待原因可查看",
+      description: "制造中心总览会列出各项 WIP、累计销毁的副产物和当前暂停、供电或缺料原因。非必要产物仍优先进入行星托盘，满仓时才销毁并记账。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "purple-matrix": FlaskConical,
-  "belt-capacity": Route,
-  "byproduct-settlement": Factory,
-  "batch-unstack": Factory,
-  "mining-blueprints": Pickaxe,
-  "native-downloads": MonitorDown,
+  "unbounded-required-wip": Factory,
+  "resumable-jobs": Activity,
+  "visible-settlement": Database,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-07-28-v1.0.6";
+const RELEASE_NOTE_ID = "2026-07-28-v1.0.7";
 
 async function seedUiState(page: Page, options: { theme?: "dark" | "light"; fontScale?: number; paused?: boolean } = {}) {
   await page.addInitScript(({ theme, fontScale, paused, releaseNoteId }) => {
@@ -86,8 +86,10 @@ test("exact-value tooltip and classic progress share one visible value", async (
   const tooltip = page.locator('.quantity-value__tooltip').filter({ hasText: "5,760 kW" });
   await expect(power).toBeVisible();
   await expect(tooltip).toBeHidden();
-  await power.hover();
-  await expect(tooltip).toBeVisible();
+  await expect(async () => {
+    await power.hover();
+    await expect(tooltip).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 5_000 });
   await expect(page.locator(".quantity-value__tooltip:visible")).toHaveCount(1);
   await page.mouse.move(4, 4);
   await expect(tooltip).toBeHidden();

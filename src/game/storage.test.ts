@@ -160,8 +160,19 @@ describe("game storage", () => {
     current = installMiner(current, vein.id, 2);
     current = createBlueprint(current, [vein.id], "迁移采矿锚点");
     current.constructionAutomation.destroyedByproducts = { hydrogen: 123, refined_oil: 7 };
+    current.construction.construction_center = 1;
+    current = placeBuilding(current, "construction_center", { x: 320, y: 80 });
+    const center = current.entities.find((entity) => entity.buildingId === "construction_center")!;
+    current.constructionAutomation.jobs[center.id] = {
+      constructionId: "arc_smelter",
+      steps: [{ kind: "building", constructionId: "arc_smelter" }],
+      stepIndex: 0,
+      elapsedSeconds: 2.5,
+      inventory: { iron_ingot: 180_000_000 },
+    };
     const reloaded = migrateGame(JSON.parse(JSON.stringify(current)))!;
     expect(reloaded.constructionAutomation.destroyedByproducts).toEqual({ hydrogen: 123, refined_oil: 7 });
+    expect(reloaded.constructionAutomation.jobs[center.id].inventory).toEqual({ iron_ingot: 180_000_000 });
     expect(reloaded.blueprints[0].resourceAnchors).toEqual([
       expect.objectContaining({ resourceId: "iron_ore", extractorBuildingId: "mining_machine", minerCount: 2 }),
     ]);

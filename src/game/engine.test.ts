@@ -4121,6 +4121,96 @@ describe("factory simulation", () => {
     expect(cancelled.tray.stone).toBe(1_000_000);
   });
 
+  it("keeps required construction-center WIP above the legacy one-million limit and resumes atomically", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("construction_automation", "high_efficiency_plasma_control");
+    state.construction.wind_turbine = 80;
+    state.construction.construction_center = 1;
+    state.construction.oil_extractor = 0;
+    state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 80);
+    state = placeBuilding(state, "construction_center", { x: 120, y: 0 });
+    const center = state.entities.find((entity) => entity.buildingId === "construction_center")!;
+    state.tray = {
+      iron_ore: 1_080_000,
+      stone_brick: 12,
+      circuit_board: 6,
+      plasma_exciter: 4,
+    };
+    state.planetTrays.home = state.tray;
+    state.constructionAutomation.targetStock.oil_extractor = 1;
+    state.constructionAutomation.jobs[center.id] = {
+      constructionId: "oil_extractor",
+      steps: [
+        { kind: "material", recipeId: "iron_ingot", batches: 1_080_000, outputItemId: "iron_ingot", outputAmount: 1_080_000 },
+        { kind: "material", recipeId: "steel", batches: 360_000, outputItemId: "steel", outputAmount: 360_000 },
+        { kind: "building", constructionId: "oil_extractor" },
+      ],
+      stepIndex: 0,
+      elapsedSeconds: 108_000,
+      inventory: {},
+    };
+
+    state = advanceSimulation(state, 1);
+    expect(state.constructionAutomation.jobs[center.id]).toMatchObject({
+      stepIndex: 1,
+      elapsedSeconds: 1,
+      inventory: { iron_ingot: 1_080_000 },
+    });
+    expect(state.tray.iron_ore).toBe(0);
+    expect(getConstructionAutomationStatus(state, center.id)).toMatchObject({
+      stage: "加工 钢材",
+      blockerReason: undefined,
+      wipCount: 1_080_000,
+      wipItems: [{ itemId: "iron_ingot", amount: 1_080_000 }],
+    });
+
+    state.constructionAutomation.enabled = false;
+    const pausedJob = structuredClone(state.constructionAutomation.jobs[center.id]);
+    state = advanceSimulation(state, 60);
+    expect(state.constructionAutomation.jobs[center.id]).toEqual(pausedJob);
+    expect(getConstructionAutomationStatus(state, center.id)).toMatchObject({ stage: "自动制造已暂停", blockerReason: "paused" });
+
+    state.constructionAutomation.enabled = true;
+    state.paused = true;
+    state = advanceSimulation(state, 60);
+    expect(state.constructionAutomation.jobs[center.id]).toEqual(pausedJob);
+    expect(getConstructionAutomationStatus(state, center.id)).toMatchObject({ stage: "游戏已暂停", blockerReason: "paused" });
+    state.paused = false;
+    const generators = state.entities.filter((entity) => entity.buildingId === "wind_turbine");
+    state.entities = state.entities.filter((entity) => entity.buildingId !== "wind_turbine");
+    const unpoweredJob = structuredClone(state.constructionAutomation.jobs[center.id]);
+    state = advanceSimulation(state, 60);
+    expect(state.constructionAutomation.jobs[center.id]).toEqual(unpoweredJob);
+    expect(getConstructionAutomationStatus(state, center.id)).toMatchObject({ stage: "等待供电", blockerReason: "no-power" });
+    state.entities.push(...generators);
+    state.tray.steel = getPlanetTrayItemLimit(state, "home");
+    state.constructionAutomation.jobs[center.id].elapsedSeconds = 36_000;
+    const completionInput = structuredClone(state);
+    let chunked = structuredClone(state);
+    state = advanceSimulation(completionInput, 10);
+    for (let second = 0; second < 10; second += 1) chunked = advanceSimulation(chunked, 1);
+
+    expect(state.construction.oil_extractor).toBe(1);
+    expect(state.constructionAutomation.jobs[center.id]).toBeUndefined();
+    expect(state.constructionAutomation.totalCrafted).toBe(1);
+    expect(state.constructionAutomation.destroyedByproducts.steel).toBe(359_988);
+    expect(state.tray.steel).toBe(getPlanetTrayItemLimit(state, "home"));
+    expect(state.totalProduced).toMatchObject({ iron_ingot: 1_080_000, steel: 360_000 });
+    expect(getConstructionAutomationStatus(state, center.id)).toMatchObject({
+      stage: "目标库存已满足",
+      destroyedByproductItems: [{ itemId: "steel", amount: 359_988 }],
+    });
+    expect(chunked.construction).toEqual(state.construction);
+    expect(chunked.constructionAutomation).toEqual(state.constructionAutomation);
+    expect(chunked.tray).toEqual(state.tray);
+    expect(chunked.totalProduced).toEqual(state.totalProduced);
+
+    const settled = advanceSimulation(state, 100);
+    expect(settled.construction.oil_extractor).toBe(1);
+    expect(settled.constructionAutomation.totalCrafted).toBe(1);
+    expect(settled.constructionAutomation.destroyedByproducts.steel).toBe(359_988);
+  });
+
   it("applies construction-center speed upgrades to material and final stages", () => {
     const base = createInitialState();
     expect(getConstructionAutomationMaterialSeconds(base)).toBeCloseTo(0.1, 6);

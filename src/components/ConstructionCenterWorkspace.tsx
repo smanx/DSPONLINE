@@ -169,9 +169,9 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
         <span>最近完成 <strong>{game.constructionAutomation.lastCraftedId ? isPortableFleetItem(game.constructionAutomation.lastCraftedId) ? ITEMS[game.constructionAutomation.lastCraftedId].name : getConstructionDefinition(game.constructionAutomation.lastCraftedId)?.name ?? "未知" : "尚无"}</strong></span>
         {centers.map((center) => {
           const status = getConstructionAutomationStatus(game, center.id);
-          return <span key={center.id}>{getPlanet(center.planetId).name} <strong>{status.stage}</strong>{` · WIP ${formatQuantityCompact(status.wipCount ?? 0)} · 已销毁副产物 ${formatQuantityCompact(status.destroyedByproductCount ?? 0)}`}{status.blockerReason === "safety-limit" && status.missingItemId
-            ? ` · ${ITEMS[status.missingItemId].name} ${formatQuantityCompact(status.safetyExpected ?? 0)}/${formatQuantityCompact(status.safetyLimit ?? 0)}`
-            : status.missingItemId ? ` · 缺${ITEMS[status.missingItemId].name} ${formatQuantityCompact(status.missingAmount ?? 1)}` : status.etaSeconds > 0 ? ` · ${status.etaSeconds.toFixed(1)}s` : ""}{status.recipeFallbackReason ? ` · 已回退：${status.recipeFallbackReason}` : ""}</span>;
+          const wipDetail = status.wipItems?.map((item) => `${ITEMS[item.itemId].name} ${formatQuantityCompact(item.amount)}`).join("、");
+          const destroyedDetail = status.destroyedByproductItems?.map((item) => `${ITEMS[item.itemId].name} ${formatQuantityCompact(item.amount)}`).join("、");
+          return <span key={center.id}>{getPlanet(center.planetId).name} <strong>{status.stage}</strong>{` · WIP ${formatQuantityCompact(status.wipCount ?? 0)}${wipDetail ? `（${wipDetail}）` : ""} · 已销毁副产物 ${formatQuantityCompact(status.destroyedByproductCount ?? 0)}${destroyedDetail ? `（${destroyedDetail}）` : ""}`}{status.missingItemId ? ` · 缺${ITEMS[status.missingItemId].name} ${formatQuantityCompact(status.missingAmount ?? 1)}` : status.etaSeconds > 0 ? ` · ${status.etaSeconds.toFixed(1)}s` : ""}{status.recipeFallbackReason ? ` · 已回退：${status.recipeFallbackReason}` : ""}</span>;
         })}
         {centers.length === 0 ? <em>需要先在画布放置建筑制造中心</em> : null}
       </div>

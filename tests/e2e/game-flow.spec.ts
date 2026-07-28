@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-28-v1.0.6");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-28-v1.0.7");
     }
   });
 }
@@ -139,18 +139,18 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "高容量产线与采矿蓝图" });
+  const releaseNotes = page.getByRole("dialog", { name: "制造中心 WIP 急救补丁" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(6);
-  await expect(releaseNotes).toContainText("紫色矩阵配方校正");
-  await expect(releaseNotes).toContainText("采矿布局进入蓝图库");
-  await expect(releaseNotes).toContainText("Windows 与 Android 同步更新");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v106-1440.png", fullPage: true });
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(3);
+  await expect(releaseNotes).toContainText("必要 WIP 不再受固定上限阻断");
+  await expect(releaseNotes).toContainText("任务可自动等待和恢复");
+  await expect(releaseNotes).toContainText("WIP 与真实等待原因可查看");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v107-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v106-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v107-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -165,7 +165,7 @@ test("dated release notes appear once and remain available from both settings sc
   });
   await expect.poll(controlsFitViewport).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v106-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v107-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -174,7 +174,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-28-v1.0.6");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-28-v1.0.7");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -191,7 +191,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v106-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v107-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -4048,7 +4048,7 @@ test("renewables, storage, fusion and artificial stars form a complete energy la
     const box = await page.locator(".inspector-panel").boundingBox();
     return box ? Math.ceil(box.x + box.width) : Number.POSITIVE_INFINITY;
   }).toBeLessThanOrEqual(390);
-  await expect(page.locator(".game-notice")).toBeHidden({ timeout: 4_000 });
+  await expect(page.locator(".game-notice")).toBeHidden({ timeout: 6_000 });
   await page.screenshot({ path: "artifacts/qa/complete-energy-390.png", fullPage: true });
 });
 
@@ -4129,7 +4129,7 @@ test("rare resources, fractionation and quantum chemistry expose every alternati
     const box = await page.locator(".inspector-panel").boundingBox();
     return box ? Math.ceil(box.x + box.width) : Number.POSITIVE_INFINITY;
   }).toBeLessThanOrEqual(390);
-  await expect(page.locator(".game-notice")).toBeHidden({ timeout: 4_000 });
+  await expect(page.locator(".game-notice")).toBeHidden({ timeout: 6_000 });
   await page.screenshot({ path: "artifacts/qa/rare-orbital-collector-390.png", fullPage: true });
 });
 

@@ -154,6 +154,12 @@ function buildingBufferRecord(value: unknown): Partial<Record<ItemId, number>> {
     key in ITEMS ? [[key, boundedBuildingQuantity(amount)]] : [])) as Partial<Record<ItemId, number>>;
 }
 
+function constructionAutomationInventoryRecord(value: unknown): Partial<Record<ItemId, number>> {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([key, amount]) =>
+    key in ITEMS ? [[key, Math.min(Number.MAX_SAFE_INTEGER, nonNegativeInteger(amount))]] : [])) as Partial<Record<ItemId, number>>;
+}
+
 function nonNegativeNumber(value: unknown): number {
   return Math.max(0, typeof value === "number" && Number.isFinite(value) ? value : 0);
 }
@@ -854,7 +860,7 @@ export function migrateGame(value: unknown): GameState | null {
         steps,
         stepIndex: Math.min(steps.length - 1, nonNegativeInteger(rawJob.stepIndex)),
         elapsedSeconds: nonNegativeNumber(rawJob.elapsedSeconds),
-        inventory: saved.version >= 33 ? buildingBufferRecord(rawJob.inventory) : {},
+        inventory: saved.version >= 33 ? constructionAutomationInventoryRecord(rawJob.inventory) : {},
         recipeDecisions: saved.version >= 36 && Array.isArray(rawJob.recipeDecisions)
           ? rawJob.recipeDecisions.flatMap((decision: Record<string, any>) =>
             typeof decision?.itemId === "string" && decision.itemId in ITEMS && typeof decision.recipeId === "string" && getRecipe(decision.recipeId as RecipeId)

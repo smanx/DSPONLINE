@@ -6259,7 +6259,6 @@ interface ConstructionAutomationPlan {
   recipeDecisions?: ConstructionAutomationJob["recipeDecisions"];
 }
 
-const CONSTRUCTION_AUTOMATION_WIP_LIMIT = 1_000_000;
 const CONSTRUCTION_AUTOMATION_TRAY_OVERFLOW_ALLOWANCE = 1_000_000;
 
 function constructionAutomationPending(state: GameState, constructionId: ConstructionAutomationTargetId): number {
@@ -6367,15 +6366,14 @@ export interface ConstructionAutomationStatus {
   etaSeconds: number;
   missingItemId?: ItemId;
   missingAmount?: number;
-  blockerReason?: "raw-shortage" | "technology" | "no-handcraft" | "safety-limit";
+  blockerReason?: "raw-shortage" | "technology" | "no-handcraft" | "paused" | "no-power";
   technologyName?: string;
-  safetyCurrent?: number;
-  safetyExpected?: number;
-  safetyLimit?: number;
   recipeName?: string;
   recipeFallbackReason?: string;
   wipCount?: number;
+  wipItems?: Array<{ itemId: ItemId; amount: number }>;
   destroyedByproductCount?: number;
+  destroyedByproductItems?: Array<{ itemId: ItemId; amount: number }>;
 }
 
 export interface ConstructionCenterTraceSample {
@@ -6439,8 +6437,13 @@ export function getEntityCycleRatePerSimulationSecond(state: GameState, entity: 
 export function getConstructionAutomationStatus(state: GameState, entityId: string): ConstructionAutomationStatus {
   const entity = state.entities.find((candidate) => candidate.id === entityId);
   if (!entity || entity.buildingId !== "construction_center") return { stage: "无制造任务", progress: 0, etaSeconds: 0 };
-  const destroyedByproductCount = Object.values(state.constructionAutomation.destroyedByproducts)
-    .reduce((sum, amount) => sum + Math.max(0, Math.floor(amount ?? 0)), 0);
+  const inventoryItems = (inventory: Partial<Record<ItemId, number>>) =>
+    (Object.entries(inventory) as Array<[ItemId, number]>).flatMap(([itemId, rawAmount]) => {
+      const amount = Math.max(0, Math.floor(rawAmount ?? 0));
+      return amount > 0 ? [{ itemId, amount }] : [];
+    }).sort((left, right) => left.itemId.localeCompare(right.itemId));
+  const destroyedByproductItems = inventoryItems(state.constructionAutomation.destroyedByproducts);
+  const destroyedByproductCount = destroyedByproductItems.reduce((sum, item) => sum + item.amount, 0);
   const job = state.constructionAutomation.jobs[entityId];
   if (job) {
     const step = job.steps[job.stepIndex];
@@ -6450,31 +6453,43 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
     const requirements = constructionAutomationRequirements(step);
     const missing = requirements.find((requirement) =>
       (tray[requirement.itemId] ?? 0) + (job.inventory[requirement.itemId] ?? 0) + EPSILON < requirement.amount);
-    const safetyBlocker = missing ? undefined : constructionAutomationStepSafetyBlocker(state, entity.planetId, job, step);
+    const paused = state.paused || !state.constructionAutomation.enabled;
+    const noPower = !paused && getEntityPowerFactor(state, entity) <= EPSILON;
+    const blockedByMaterials = !paused && !noPower && Boolean(missing);
     const recipeDecision = step.kind === "material"
       ? job.recipeDecisions?.find((decision) => decision.itemId === step.outputItemId && decision.recipeId === step.recipeId)
       : undefined;
+    const wipItems = inventoryItems(job.inventory);
     return {
-      stage: safetyBlocker ? "缓存安全上限保护" : step.kind === "building"
+      stage: state.paused ? "游戏已暂停" : !state.constructionAutomation.enabled ? "自动制造已暂停" : noPower ? "等待供电" : blockedByMaterials ? "等待材料" : step.kind === "building"
         ? `制造 ${getConstructionDefinition(step.constructionId)?.name ?? step.constructionId}`
         : step.kind === "fleet" ? `入库 ${ITEMS[step.itemId].name}` : `加工 ${ITEMS[step.outputItemId].name}`,
       progress: Math.max(0, Math.min(1, job.elapsedSeconds / duration)),
       etaSeconds: Math.max(0, (duration - job.elapsedSeconds) + job.steps.slice(job.stepIndex + 1).reduce((sum, pending) => sum + constructionAutomationStepDuration(state, pending), 0)) /
         Math.max(1, entity.machineCount),
-      missingItemId: missing?.itemId ?? safetyBlocker?.itemId,
-      missingAmount: missing ? Math.max(0, missing.amount - Math.floor(tray[missing.itemId] ?? 0) - Math.floor(job.inventory[missing.itemId] ?? 0)) : undefined,
-      blockerReason: missing ? "raw-shortage" : safetyBlocker ? "safety-limit" : undefined,
-      safetyCurrent: safetyBlocker?.current,
-      safetyExpected: safetyBlocker?.expected,
-      safetyLimit: safetyBlocker?.limit,
+      missingItemId: blockedByMaterials ? missing?.itemId : undefined,
+      missingAmount: blockedByMaterials && missing ? Math.max(0, missing.amount - Math.floor(tray[missing.itemId] ?? 0) - Math.floor(job.inventory[missing.itemId] ?? 0)) : undefined,
+      blockerReason: paused ? "paused" : noPower ? "no-power" : blockedByMaterials ? "raw-shortage" : undefined,
       recipeName: step.kind === "material" ? getRecipe(step.recipeId)?.name : undefined,
       recipeFallbackReason: recipeDecision?.fallbackReason,
-      wipCount: Object.values(job.inventory).reduce((sum, amount) => sum + Math.max(0, Math.floor(amount ?? 0)), 0),
+      wipCount: wipItems.reduce((sum, item) => sum + item.amount, 0),
+      wipItems,
       destroyedByproductCount,
+      destroyedByproductItems,
     };
   }
   const target = constructionAutomationTarget(state);
-  if (!target) return { stage: state.constructionAutomation.enabled ? "目标库存已满足" : "自动制造已关闭", progress: 0, etaSeconds: 0, wipCount: 0, destroyedByproductCount };
+  if (state.paused || !state.constructionAutomation.enabled) return {
+    stage: state.paused ? "游戏已暂停" : "自动制造已暂停",
+    progress: 0,
+    etaSeconds: 0,
+    blockerReason: "paused",
+    wipCount: 0,
+    wipItems: [],
+    destroyedByproductCount,
+    destroyedByproductItems,
+  };
+  if (!target) return { stage: "目标库存已满足", progress: 0, etaSeconds: 0, wipCount: 0, wipItems: [], destroyedByproductCount, destroyedByproductItems };
   const plan = buildConstructionAutomationPlan(state, target.definition, entity.planetId);
   if (plan.blocker) {
     return {
@@ -6486,9 +6501,21 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
       blockerReason: plan.blocker.reason,
       technologyName: plan.blocker.technologyName,
       wipCount: 0,
+      wipItems: [],
       destroyedByproductCount,
+      destroyedByproductItems,
     };
   }
+  if (getEntityPowerFactor(state, entity) <= EPSILON) return {
+    stage: "等待供电",
+    progress: 0,
+    etaSeconds: 0,
+    blockerReason: "no-power",
+    wipCount: 0,
+    wipItems: [],
+    destroyedByproductCount,
+    destroyedByproductItems,
+  };
   const lastDecision = plan.recipeDecisions?.at(-1);
   const recipeName = lastDecision ? getRecipe(lastDecision.recipeId)?.name : null;
   return {
@@ -6498,7 +6525,9 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
     recipeName: recipeName ?? undefined,
     recipeFallbackReason: lastDecision?.fallbackReason,
     wipCount: 0,
+    wipItems: [],
     destroyedByproductCount,
+    destroyedByproductItems,
   };
 }
 
@@ -6558,36 +6587,6 @@ function planConstructionAutomationConsumption(
     nextTray[requirement.itemId] = inTray - remaining;
   }
   return { inventory: nextInventory, tray: nextTray };
-}
-
-interface ConstructionAutomationSafetyBlocker {
-  itemId: ItemId;
-  current: number;
-  expected: number;
-  limit: number;
-}
-
-function constructionAutomationStepSafetyBlocker(
-  state: GameState,
-  planetId: PlanetId,
-  job: ConstructionAutomationJob,
-  step: ConstructionAutomationStep,
-): ConstructionAutomationSafetyBlocker | undefined {
-  const tray = trayForPlanet(state, planetId);
-  const consumed = planConstructionAutomationConsumption(job.inventory, tray, constructionAutomationRequirements(step));
-  if (!consumed) return undefined;
-  if (step.kind === "building" || step.kind === "fleet") return undefined;
-  const producedInventory = { ...consumed.inventory };
-  for (const output of getRecipe(step.recipeId)?.outputs ?? []) {
-    producedInventory[output.itemId] = Math.floor((producedInventory[output.itemId] ?? 0) + output.amount * step.batches);
-  }
-  const current = Object.values(job.inventory).reduce((sum, amount) => sum + Math.max(0, Math.floor(amount ?? 0)), 0);
-  const needed = constructionAutomationRemainingInventoryNeed(job, job.stepIndex + 1);
-  const expected = (Object.entries(producedInventory) as Array<[ItemId, number]>).reduce((sum, [itemId, amount]) =>
-    sum + Math.min(Math.max(0, Math.floor(amount ?? 0)), needed[itemId] ?? 0), 0);
-  return expected > CONSTRUCTION_AUTOMATION_WIP_LIMIT && expected > current
-    ? { itemId: step.outputItemId, current, expected, limit: CONSTRUCTION_AUTOMATION_WIP_LIMIT }
-    : undefined;
 }
 
 function constructionAutomationRemainingInventoryNeed(
@@ -6650,7 +6649,6 @@ function finishConstructionAutomationStep(state: GameState, planetId: PlanetId, 
   const tray = trayForPlanet(state, planetId);
   const consumed = planConstructionAutomationConsumption(job.inventory, tray, constructionAutomationRequirements(step));
   if (!consumed) return false;
-  if (constructionAutomationStepSafetyBlocker(state, planetId, job, step)) return false;
   if (step.kind === "building") {
     const definition = getConstructionDefinition(step.constructionId);
     if (!definition) return false;
@@ -8643,9 +8641,7 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
     if (entityPowerFactor <= EPSILON) return { code: "no-power", label: powerCoverageLabel(state, entity), tone: "blocked" };
     const automation = getConstructionAutomationStatus(state, entity.id);
     if (automation.missingItemId) {
-      const reason = automation.blockerReason === "safety-limit"
-        ? `${ITEMS[automation.missingItemId].name}达到缓存安全上限 · ${automation.safetyExpected ?? 0}/${automation.safetyLimit ?? 0}`
-        : automation.blockerReason === "technology"
+      const reason = automation.blockerReason === "technology"
         ? `需要科技：${automation.technologyName ?? "未解锁"}`
         : automation.blockerReason === "no-handcraft"
           ? `${ITEMS[automation.missingItemId].name}没有可用手工配方`

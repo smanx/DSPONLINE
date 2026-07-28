@@ -705,3 +705,26 @@ Android `1.0.5 / 1000005` APK 为 4,267,825 字节，SHA-256 `1d9b918e621b187e9f
 Android `1.0.6 / 1000006` APK 为 4,273,649 字节，SHA-256 `90bc8fa9934ce04f25bcce63b8c0b0d2d31033ed459956068213a2b7521df0cc`，v2/v3 与长期证书通过；从正式 1.0.5 覆盖升级后 `firstInstallTime` 与应用数据标记保持。Windows 1.0.6 安装程序为 103,053,096 字节，SHA-256 `74d0e357eff5c44709c5b0345955c04984b36c181e356eb1d4eab49cf5e81397`，隔离启动通过，Authenticode 仍为 `NotSigned`。
 
 两地 Web/API 与上海下载站已原子切换到 `1.0.6-a4086d0dfc94`，共同代码回滚点为 `1.0.5-af8593bc5de4`。公网根页、健康接口、公告桌面/手机截图、gzip、immutable/no-cache、Range 206、香港下载 302、Android origin 200/204、未知 origin 403 和完整二进制 SHA-256 均通过；DSP 专属日志最近 500 条无 5xx。完整记录见 [releases/1.0.6.md](./releases/1.0.6.md)。
+
+## 30. `1.0.7` / v38 建筑制造中心 WIP 急救回归
+
+`1.0.7` 保持 GameState v38、存档 envelope v2、云 schema v7 和 SQLite layout v2。专项失败用例先复现必要铁块 `1,080,000/1,000,000` 时旧固定阈值阻止步骤结算，再验证移除阈值后完整进入钢材阶段。测试继续覆盖自动制造暂停、全局暂停、实际断电、满托盘时只销毁非必要产物、成品只结算一次，以及 10 秒单次推进与 10 个 1 秒分段推进等价。
+
+存档回归把制造中心任务 WIP 设置为 `180,000,000` 并执行 JSON 往返与 `migrateGame()`，确认任务库存不再套用普通建筑缓存的 1 亿上限。界面 selector 同时验证每项 WIP、累计销毁副产物和暂停/断电/缺料状态可读。此次没有新增 GameState 字段、迁移段、服务端 schema 或依赖。
+
+本地发布候选结果：
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm ci` / `npm --prefix server ci` | 通过；服务端 0 个已知漏洞，根目录仍为 16 个既有 Electron 开发/打包链高危告警 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run typecheck` | 通过 |
+| `npm test` | 52 个文件、504 项通过，2 项显式可选基准跳过 |
+| `npm run test:server` | 35/35 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 最终 157/157 通过，单 worker 519 秒 |
+| `git diff --check` | 通过 |
+
+原生工程版本元数据同步到 `1.0.7 / 1000007` 以保持发布工具门禁一致，但本轮不构建、不上传、不切换 Windows/Android 制品或上海下载清单；公开安装包在独立原生发布前继续为 1.0.6。
