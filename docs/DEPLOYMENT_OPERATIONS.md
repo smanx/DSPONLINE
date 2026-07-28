@@ -30,11 +30,11 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-当前香港和上海 Web/API 均为 `1.0.7-6d54901d8080`，回滚目标均为 `1.0.6-a4086d0dfc94`。两地都使用 GameState v38、云 schema v7 和 SQLite layout v2；代码回滚不得恢复数据库。上海下载站当前仍为 `1.0.6-a4086d0dfc94`，上一目录为 `1.0.5-af8593bc5de4`，Windows 和 Android 稳定清单均为 1.0.6。完整证据见 [releases/1.0.7.md](./releases/1.0.7.md)。
+当前香港和上海 Web/API 均为 `1.0.8-528455cdfc2b`，回滚目标均为 `1.0.7-6d54901d8080`。两地都使用 GameState v39、云 schema v7 和 SQLite layout v2；代码回滚不得恢复数据库。上海下载站当前为 `1.0.8-528455cdfc2b`，下载回滚目录为 `1.0.6-a4086d0dfc94`，Windows 和 Android 稳定清单均为 1.0.8。完整证据见 [releases/1.0.8.md](./releases/1.0.8.md)。
 
 `1.0.7` 只修复客户端建筑制造中心任务结算和 WIP 显示，不升级 GameState、云 schema、SQLite layout 或服务端存档边界。两地发布前后均通过 SQLite Backup API 备份和 `quick_check`，未激活目录完成 126/126 文件校验、35/35 服务端、6/6 运维及生产备份副本隔离启动。上海下载站和公开原生安装包未切换。
 
-`1.0.8` 发布候选把合法客户端状态上限扩展到 v39，但继续使用 envelope v2、云 schema v7 和 SQLite layout v2。服务端开始独立校验上传 payload 的内部 FNV-1a 状态校验值，因此切换前必须用各节点 SQLite Backup API 创建并验证备份，并在备份副本上确认旧 v35-v38 云存档仍可读取、异常校验 payload 被拒绝且不会产生新修订。Android/Windows 稳定清单只能在签名连续性、覆盖升级、本地数据保留、文件哈希和完整下载验证后切换。
+`1.0.8` 把合法客户端状态上限扩展到 v39，但继续使用 envelope v2、云 schema v7 和 SQLite layout v2。服务端开始独立校验上传 payload 的内部 FNV-1a 状态校验值。两节点切换前均通过 SQLite Backup API 创建并验证备份，在备份副本确认旧 v35-v38 云存档仍可读取、异常校验 payload 被拒绝且不会产生新修订；Android/Windows 也已通过签名连续性、覆盖升级、本地数据保留、文件哈希和更新清单验证后切换。
 
 `1.0.6` 把客户端状态上限提高到 v38，但不升级云 schema 或 SQLite layout。两地发布前已验证 v35～v38 合法存档可接受、v38 非法并联/资源锚点/副产物累计会被拒绝，并在生产备份副本上隔离启动；上海下载页只在 Windows 与同证书 Android 制品完整上传、哈希和覆盖升级通过后切换。
 
@@ -244,8 +244,8 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港和上海 `1.0.7-6d54901d8080` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港和上海 `1.0.8-528455cdfc2b` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 香港 layout v1 的 136.8 MB `app_state` 曾使每分钟持久化把 Node 推到约 1.6 GB并阻塞健康接口。layout v2 上线后 `app_state` 约 2.55 MB，云存档正文按修订独立写入；240 秒生产观察中健康接口最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB。监控若再次出现内存或延迟上升，应分别检查 `app_state` 大小、`cloud_save_payloads` 行数与历史元数据唯一键数，不能只调大健康超时。
 
-Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.7 发布后上海节点约剩 3.1 GiB（文件系统使用率 95%），发布目录、客户端二进制、日志与备份增长必须继续纳入日常磁盘检查；清理不得删除当前版、回滚版或有效备份。
+Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.8 发布和临时包清理后上海节点约剩 3.0 GiB（文件系统使用率 95%），发布目录、客户端二进制、日志与备份增长必须继续纳入日常磁盘检查；清理不得删除当前版、回滚版或有效备份。

@@ -757,4 +757,8 @@ Android `1.0.6 / 1000006` APK 为 4,273,649 字节，SHA-256 `90bc8fa9934ce04f25
 
 Playwright 新增存档救援、配送端口、性能监控、亮色制造栏、经典手机与新版手机 200% 字号场景。人工检查 `v108-performance-desktop-1440x900.png`、`v108-light-fabrication-1440x900.png`、`v108-mobile-delivery-font200-390x844.png`、`v108-classic-mobile-delivery-font200-390x844.png`，以及 360×480 200% 与 844×390 的 1.0.8 公告；操作区、对比度、换行和横向边界均通过。
 
-原生安装包、签名连续性、覆盖升级、发布清单、双节点备份和公网结果在实际发布完成后追加，不得用本地候选结果代替生产证据。
+正式提交 `528455cdfc2bd6d7f5bd64352820626f76a1ca53` 的 manifest 包含 130 个文件，聚合 SHA-256 为 `9f3ca8f3128352d3291241fca7d851ec909848b6c41c68647df605eda4de9aa8`。Web 包为 776,883 字节、SHA-256 `a2ca88f1405c03626aa781c9a206e6f44ebb42df59c2a2adc50b082ad6b473bc`；API 包为 71,133 字节、SHA-256 `dac9c19dae6d15ba9cc4fb21247066daa1e2e3c5a0a6e86e7f6a53e364e7277d`。香港和上海未激活目录均通过 130/130 文件复验、36/36 服务端、6/6 运维测试和生产备份副本隔离启动。
+
+Android `1.0.8 / 1000008` APK 为 4,288,466 字节，SHA-256 `9869c15942123197765d0f1ffdabf1f8da8b09f4321f77316d0745a3250c24c6`，v2/v3 签名和长期证书连续性通过；从正式 1.0.6 使用 `adb install -r` 覆盖升级后 `firstInstallTime` 与应用数据标记保持，启动无 Fatal/ANR。Windows 1.0.8 安装程序为 103,067,374 字节，SHA-256 `66e9f87b4e09831e1222d56c0007ac1ff5cc5e8ee82035cdf0c324846fbc76f9`，隔离启动通过，Authenticode 仍为 `NotSigned`。
+
+两地 Web/API 已原子切换到 `1.0.8-528455cdfc2b`，共同回滚点为 `1.0.7-6d54901d8080`；上海下载站也切换到 1.0.8，下载回滚目录为 `1.0.6-a4086d0dfc94`。发布前后备份均通过 `quick_check`：香港账号 296→296、主云存档 250→250、正文修订 2,924→2,929、排行榜记录 250→250；上海账号和云存档继续为 0、匿名玩家记录保持 22。两个服务 active、`NRestarts=0`，公网根页和健康接口均为 200，构建 ID 正确；香港 Android Origin 为 200、未知 Origin 为 403。更新清单 no-cache、二进制 immutable、Range 返回 206，香港 `/downloads/*` 继续 302 到上海。
