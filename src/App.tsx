@@ -39,7 +39,7 @@ import { usePerformanceMonitor } from "./hooks/usePerformanceMonitor";
 import { MobilePlacementBar, MobileSelectionContextBar, type MobileCanvasMode } from "./components/mobile/MobileFactoryPanels";
 import type { OperationsTab } from "./components/OperationsWorkspace";
 import type { StatisticsTab } from "./components/StatisticsWorkspace";
-import { ITEMS, RECIPES, getBeltConstructionId, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getPlanet, getStarSystem, getTechnology } from "./game/content";
+import { ITEMS, RECIPES, getBeltConstructionId, getBeltTiers, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getPlanet, getStarSystem, getTechnology } from "./game/content";
 import { getFactoryAlerts, type FactoryAlert } from "./game/alerts";
 import { getPlanetIndustrialProfile, getPlanetSolarPowerMultiplier } from "./game/galaxy";
 import {
@@ -217,17 +217,20 @@ import { planFactoryAutoLayout } from "./game/layout";
 import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
 import { getProductionLineLocations, type ProductionLineLocation } from "./game/productionLocator";
 import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
-import { clearGameSlot, clearSaveSnapshot, exportGame, getSaveSlotSummaries, getSaveSnapshotSummaries, inspectSave, loadGameSlot, loadSaveSnapshot, repairSave, saveGame, saveGameSnapshot, saveGameSlot, type LoadedGame, type OfflineReport, type SaveGameResult, type SaveInspection, type SaveSlotId, type SaveSnapshotSummary } from "./game/storage";
+import { clearGameSlotVerified, clearSaveSnapshotVerified, clearSaveSnapshotsVerified, exportGame, getSaveSlotSummaries, getSaveSnapshotSummaries, inspectSave, loadGameSlot, loadSaveSnapshot, repairSave, saveGame, saveGameSnapshotVerified, saveGameSlotVerified, saveGameVerified, type LoadedGame, type OfflineReport, type SaveGameResult, type SaveInspection, type SaveSlotId, type SaveSnapshotSummary } from "./game/storage";
 import { runAutomaticPerformanceReport, type AutomaticPerformanceReport } from "./game/benchmark";
 import { importBlueprintExchange, parseBlueprintExchange, serializeBlueprintExchange } from "./game/blueprintExchange";
 import { exportTextFile } from "./game/fileExport";
+import { alignToDevicePixel } from "./game/displayPixels";
 import { getDesktopBridge } from "./desktop";
 import { NATIVE_APP_STATE_EVENT } from "./nativeApp";
 import { createContentPackTemplate, parseContentPack, type ModValidationResult } from "./game/mods";
+import { importWithRecovery } from "./game/dynamicImportRecovery";
 import {
   applyContentPackRegistry,
   getContentPackValidationContext,
   getContentPackUsage,
+  getActiveContentPackReferences,
   loadContentPackRegistry,
   registerContentPack,
   removeContentPack,
@@ -329,8 +332,6 @@ interface InteractionBurst {
 
 const FLOW_GRID = 20;
 const HISTORY_LIMIT = 40;
-const BELT_TIERS_DESCENDING: readonly BeltTier[] = [3, 2, 1];
-
 function beltTierIsAvailable(state: GameState, tier: BeltTier): boolean {
   const constructionId = getBeltConstructionId(tier);
   const requiredTechId = getConstructionDefinition(constructionId)?.requiredTechId;
@@ -345,15 +346,16 @@ function resolveConnectionBeltTier(
   originNodeId?: string,
   itemId?: ItemId,
 ): BeltTier {
+  const tiersDescending = getBeltTiers().sort((left, right) => right - left);
   if (mode === "manual") return manualTier;
   if (originNodeId && itemId) {
     const attachedTiers = new Set(state.belts
       .filter((belt) => belt.itemId === itemId && (belt.source === originNodeId || belt.target === originNodeId))
       .map((belt) => belt.tier));
-    const existingTier = BELT_TIERS_DESCENDING.find((tier) => attachedTiers.has(tier) && beltTierIsAvailable(state, tier));
+    const existingTier = tiersDescending.find((tier) => attachedTiers.has(tier) && beltTierIsAvailable(state, tier));
     if (existingTier) return existingTier;
   }
-  return BELT_TIERS_DESCENDING.find((tier) => beltTierIsAvailable(state, tier)) ?? manualTier;
+  return tiersDescending.find((tier) => beltTierIsAvailable(state, tier)) ?? manualTier;
 }
 
 function snapFlowPosition(position: { x: number; y: number }) {
@@ -411,16 +413,16 @@ function beltHeatColor(utilization: number): string {
   return "#697771";
 }
 
-const RecipeWorkspace = lazy(() => import("./components/RecipeWorkspace").then((module) => ({ default: module.RecipeWorkspace })));
-const StatisticsWorkspace = lazy(() => import("./components/StatisticsWorkspace").then((module) => ({ default: module.StatisticsWorkspace })));
-const StarMapWorkspace = lazy(() => import("./components/StarMapWorkspace").then((module) => ({ default: module.StarMapWorkspace })));
-const DysonPlannerWorkspace = lazy(() => import("./components/DysonPlannerWorkspace").then((module) => ({ default: module.DysonPlannerWorkspace })));
-const OfflineReportWorkspace = lazy(() => import("./components/OfflineReportWorkspace").then((module) => ({ default: module.OfflineReportWorkspace })));
-const OperationsWorkspace = lazy(() => import("./components/OperationsWorkspace").then((module) => ({ default: module.OperationsWorkspace })));
-const TechnologyWorkspace = lazy(() => import("./components/TechnologyWorkspace").then((module) => ({ default: module.TechnologyWorkspace })));
-const CampaignWorkspace = lazy(() => import("./components/CampaignWorkspace").then((module) => ({ default: module.CampaignWorkspace })));
-const GalaxyWorkspace = lazy(() => import("./components/GalaxyWorkspace").then((module) => ({ default: module.GalaxyWorkspace })));
-const ConstructionCenterWorkspace = lazy(() => import("./components/ConstructionCenterWorkspace").then((module) => ({ default: module.ConstructionCenterWorkspace })));
+const RecipeWorkspace = lazy(() => importWithRecovery(() => import("./components/RecipeWorkspace"), "生产资料库模块").then((module) => ({ default: module.RecipeWorkspace })));
+const StatisticsWorkspace = lazy(() => importWithRecovery(() => import("./components/StatisticsWorkspace"), "生产统计模块").then((module) => ({ default: module.StatisticsWorkspace })));
+const StarMapWorkspace = lazy(() => importWithRecovery(() => import("./components/StarMapWorkspace"), "星图模块").then((module) => ({ default: module.StarMapWorkspace })));
+const DysonPlannerWorkspace = lazy(() => importWithRecovery(() => import("./components/DysonPlannerWorkspace"), "戴森规划模块").then((module) => ({ default: module.DysonPlannerWorkspace })));
+const OfflineReportWorkspace = lazy(() => importWithRecovery(() => import("./components/OfflineReportWorkspace"), "离线报告模块").then((module) => ({ default: module.OfflineReportWorkspace })));
+const OperationsWorkspace = lazy(() => importWithRecovery(() => import("./components/OperationsWorkspace"), "运营中心模块").then((module) => ({ default: module.OperationsWorkspace })));
+const TechnologyWorkspace = lazy(() => importWithRecovery(() => import("./components/TechnologyWorkspace"), "科技树模块").then((module) => ({ default: module.TechnologyWorkspace })));
+const CampaignWorkspace = lazy(() => importWithRecovery(() => import("./components/CampaignWorkspace"), "主线任务模块").then((module) => ({ default: module.CampaignWorkspace })));
+const GalaxyWorkspace = lazy(() => importWithRecovery(() => import("./components/GalaxyWorkspace"), "银河工作区模块").then((module) => ({ default: module.GalaxyWorkspace })));
+const ConstructionCenterWorkspace = lazy(() => importWithRecovery(() => import("./components/ConstructionCenterWorkspace"), "建筑制造中心模块").then((module) => ({ default: module.ConstructionCenterWorkspace })));
 
 // Content packs must be active before save migration reads any modded IDs.
 const INITIAL_CONTENT_PACK_REGISTRY = loadContentPackRegistry();
@@ -1035,10 +1037,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     };
   }, []);
 
-  const persistPrimarySave = useCallback((state?: GameState): SaveGameResult => {
+  const persistPrimarySave = useCallback(async (state?: GameState): Promise<SaveGameResult> => {
     const monitorSave = performanceMonitor.isActive();
     const startedAt = monitorSave ? performance.now() : 0;
-    const result = saveGame(state ?? stateWithSimulationDebt(gameRef.current));
+    const result = await saveGameVerified(state ?? stateWithSimulationDebt(gameRef.current));
     if (monitorSave) performanceMonitor.recordSave({ durationMs: performance.now() - startedAt, bytes: result.bytes ?? 0 });
     setSaveFailure(result.success ? null : result);
     return result;
@@ -1062,8 +1064,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }
   }, [mobileNavigation.overlay, mobileNavigation.requestBack, nextMobileShell]);
 
-  const returnToMenuSafely = useCallback(() => {
-    const result = persistPrimarySave();
+  const returnToMenuSafely = useCallback(async () => {
+    const result = await persistPrimarySave();
     if (!result.success) {
       setNotice(result.message);
       playTone("alert");
@@ -1099,8 +1101,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const persistPlanetViewport = useCallback((planetId: PlanetId, viewport: CanvasViewport) => {
     const normalized = {
-      x: Math.round(viewport.x * 100) / 100,
-      y: Math.round(viewport.y * 100) / 100,
+      x: alignToDevicePixel(viewport.x),
+      y: alignToDevicePixel(viewport.y),
       zoom: Math.max(0.25, Math.min(1.8, Math.round(viewport.zoom * 1000) / 1000)),
     };
     setGame((current) => {
@@ -1254,9 +1256,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, []);
 
   useEffect(() => {
-    const timer = window.setInterval(() => persistPrimarySave(), game.settings.autosaveIntervalSeconds * 1000);
-    const saveNow = () => persistPrimarySave();
-    const saveBeforeUnload = () => { saveGame(stateWithSimulationDebt(gameRef.current)); };
+    const timer = window.setInterval(() => void persistPrimarySave(), game.settings.autosaveIntervalSeconds * 1000);
+    const saveNow = () => { void persistPrimarySave(); };
+    const saveBeforeUnload = () => { saveGame(stateWithSimulationDebt(gameRef.current), { emergencyMirror: true }); };
     const saveWhenHidden = () => { if (document.visibilityState === "hidden") saveNow(); };
     const saveWhenNativeInactive = (event: Event) => {
       if ((event as CustomEvent<{ isActive?: boolean }>).detail?.isActive === false) saveNow();
@@ -2305,8 +2307,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setSaveSnapshots(getSaveSnapshotSummaries());
   }, []);
 
-  const manualSave = useCallback(() => {
-    const result = persistPrimarySave();
+  const manualSave = useCallback(async () => {
+    const result = await persistPrimarySave();
     refreshSaveData();
     setNotice(result.message);
     playTone(result.success ? "confirm" : "alert");
@@ -2349,10 +2351,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setImportRescueArmed(false);
   }, []);
 
-  const confirmImport = useCallback(() => {
+  const confirmImport = useCallback(async () => {
     if (!pendingImportState) return;
-    saveGameSnapshot(gameRef.current, "导入外部存档前");
-    const result = persistPrimarySave(pendingImportState);
+    await saveGameSnapshotVerified(gameRef.current, "导入外部存档前");
+    const result = await persistPrimarySave(pendingImportState);
     if (!result.success) {
       setNotice(result.message);
       playTone("alert");
@@ -2385,9 +2387,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       contents: pendingImportRaw,
       fileName: `dsp-idle-save-rescue-backup-${new Date().toISOString().slice(0, 10)}.json`,
       title: "备份救援前的原始异常存档",
-    }).then(() => {
-      saveGameSnapshot(gameRef.current, "救援外部存档前");
-      const result = persistPrimarySave(repaired.inspection.state!);
+    }).then(async () => {
+      await saveGameSnapshotVerified(gameRef.current, "救援外部存档前");
+      const result = await persistPrimarySave(repaired.inspection.state!);
       if (!result.success) {
         setNotice(result.message);
         playTone("alert");
@@ -2407,7 +2409,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     });
   }, [importPreview, importRescueArmed, pendingImportRaw, persistPrimarySave, playTone, refreshSaveData, restoreGame]);
 
-  const restoreCloudSave = useCallback((raw: string): { success: boolean; message: string } => {
+  const restoreCloudSave = useCallback(async (raw: string): Promise<{ success: boolean; message: string }> => {
     const inspection = inspectSave(raw);
     if (!inspection.valid || !inspection.state) {
       if (inspection.repairable && inspection.state) {
@@ -2422,8 +2424,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       playTone("alert");
       return { success: false, message: `云存档无效：${inspection.issues[0] ?? "格式或版本无法识别"}` };
     }
-    saveGameSnapshot(gameRef.current, "恢复云存档前");
-    const result = persistPrimarySave(inspection.state);
+    await saveGameSnapshotVerified(gameRef.current, "恢复云存档前");
+    const result = await persistPrimarySave(inspection.state);
     if (!result.success) {
       playTone("alert");
       return { success: false, message: result.message };
@@ -2434,20 +2436,20 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     return { success: true, message: "云存档已恢复，原工厂已保留为本地快照" };
   }, [persistPrimarySave, playTone, refreshSaveData, restoreGame]);
 
-  const saveToSlot = useCallback((slotId: SaveSlotId) => {
-    saveGameSlot(slotId, gameRef.current);
+  const saveToSlot = useCallback(async (slotId: SaveSlotId) => {
+    const result = await saveGameSlotVerified(slotId, gameRef.current);
     refreshSaveData();
-    setNotice(`已保存到本地槽位 ${slotId}`);
-    playTone("confirm");
+    setNotice(result.message);
+    playTone(result.success ? "confirm" : "alert");
   }, [playTone, refreshSaveData]);
 
-  const loadFromSlot = useCallback((slotId: SaveSlotId) => {
+  const loadFromSlot = useCallback(async (slotId: SaveSlotId) => {
     const slot = loadGameSlot(slotId);
     if (!slot) {
       setNotice(`槽位 ${slotId} 没有可用存档`);
       return;
     }
-    const result = persistPrimarySave(slot.state);
+    const result = await persistPrimarySave(slot.state);
     if (!result.success) {
       setNotice(result.message);
       playTone("alert");
@@ -2459,27 +2461,27 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     playTone("complete");
   }, [persistPrimarySave, playTone, refreshSaveData, restoreGame]);
 
-  const deleteSlot = useCallback((slotId: SaveSlotId) => {
-    clearGameSlot(slotId);
+  const deleteSlot = useCallback(async (slotId: SaveSlotId) => {
+    const removed = await clearGameSlotVerified(slotId);
     refreshSaveData();
-    setNotice(`本地槽位 ${slotId} 已清空`);
+    setNotice(removed ? `本地槽位 ${slotId} 已清空` : `本地槽位 ${slotId} 删除失败`);
   }, [refreshSaveData]);
 
-  const createSnapshot = useCallback(() => {
-    const snapshot = saveGameSnapshot(gameRef.current, "手动快照");
+  const createSnapshot = useCallback(async () => {
+    const snapshot = await saveGameSnapshotVerified(gameRef.current, "手动快照");
     refreshSaveData();
     setNotice(snapshot ? "手动快照已创建" : "快照创建失败：本地存储空间不足");
     playTone(snapshot ? "confirm" : "alert");
   }, [playTone, refreshSaveData]);
 
-  const loadSnapshot = useCallback((snapshotId: string) => {
+  const loadSnapshot = useCallback(async (snapshotId: string) => {
     const state = loadSaveSnapshot(snapshotId);
     if (!state) {
       setNotice("快照不可用，可能已损坏");
       playTone("alert");
       return;
     }
-    const result = persistPrimarySave(state);
+    const result = await persistPrimarySave(state);
     if (!result.success) {
       setNotice(result.message);
       playTone("alert");
@@ -2491,10 +2493,18 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     playTone("complete");
   }, [persistPrimarySave, playTone, refreshSaveData, restoreGame]);
 
-  const deleteSnapshot = useCallback((snapshotId: string) => {
-    clearSaveSnapshot(snapshotId);
+  const deleteSnapshot = useCallback(async (snapshotId: string) => {
+    const removed = await clearSaveSnapshotVerified(snapshotId);
     refreshSaveData();
-    setNotice("自动快照已删除");
+    setNotice(removed ? "快照已删除" : "快照删除失败");
+  }, [refreshSaveData]);
+
+  const deleteSnapshots = useCallback(async (snapshotIds: string[]) => {
+    const result = await clearSaveSnapshotsVerified(snapshotIds);
+    refreshSaveData();
+    setNotice(result.failed.length === 0
+      ? `已删除 ${result.removed} 份所选快照`
+      : `已删除 ${result.removed} 份，${result.failed.length} 份删除失败`);
   }, [refreshSaveData]);
 
   const runBenchmark = useCallback(() => {
@@ -2517,7 +2527,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     saveContentPackRegistry(registry);
     setContentPackRegistry(registry);
     // Re-render catalog-driven panels after the live registry changes.
-    setGame((current) => ({ ...current }));
+    const contentPacks = getActiveContentPackReferences(registry);
+    setGame((current) => ({ ...current, contentPacks }));
     return report;
   }, []);
 
@@ -4040,8 +4051,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       data-mobile-overlay={mobileOverlayId}
       data-mobile-sheet-snap={mobileSheetSnap}
       data-mobile-canvas-mode={activeMobileCanvasMode}
+      data-mobile-panel-dragging={mobilePanelSwipe.dragging ? "true" : "false"}
       data-minimap-open={!minimapCollapsed ? "true" : "false"}
-      style={{ "--mobile-panel-drag": `${mobilePanelSwipe.offset}px` } as CSSProperties}
+      style={mobilePanelSwipe.dragging ? { "--mobile-panel-drag": `${mobilePanelSwipe.offset}px` } as CSSProperties : undefined}
     >
       <HeaderControls
         game={observedGame}
@@ -5133,6 +5145,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onCreateSnapshot={createSnapshot}
             onLoadSnapshot={loadSnapshot}
             onDeleteSnapshot={deleteSnapshot}
+            onDeleteSnapshots={deleteSnapshots}
             onRunBenchmark={runBenchmark}
             onOpenReleaseNotes={onOpenReleaseNotes}
             onValidateMod={validateMod}

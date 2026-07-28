@@ -141,7 +141,7 @@ describe("BeltFlowSampler", () => {
     expect(upstreamDelta).toBe(3_200);
     expect(upstreamView.belts[0].lastFlow).toBeCloseTo(10.6667, 3);
     expect(diagnoseBelt(upstreamView, upstreamView.belts[0])).toMatchObject({ limitingFactor: "upstream" });
-    expect((upstream.belts[0].totalTransferred ?? 0)).toBe(19_689);
+    expect((upstream.belts[0].totalTransferred ?? 0)).toBe(500 + 30 * 640);
     expect((smelter.inputs.silicon_ore ?? 0) + (upstream.totalProduced.high_purity_silicon ?? 0) * 2)
       .toBe(upstream.belts[0].totalTransferred ?? 0);
   });

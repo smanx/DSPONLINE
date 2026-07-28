@@ -19,6 +19,7 @@ test("active Nginx templates compress static assets while preserving cache bound
     assert.match(config, /gzip_vary\s+on;/);
     assert.match(config, /gzip_types[^;]*text\/css[^;]*application\/javascript[^;]*application\/json[^;]*image\/svg\+xml;/s);
     assert.match(config, /location \/assets\/[^}]*immutable/s);
+    assert.match(config, /location @archived_immutable_asset[^}]*\/var\/www\/dsp-idle\/shared/s);
     assert.match(config, /location = \/sw\.js[^}]*no-cache, no-store/s);
     assert.match(config, /proxy_pass http:\/\/127\.0\.0\.1:4320/);
   }

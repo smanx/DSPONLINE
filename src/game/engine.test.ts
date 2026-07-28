@@ -15,6 +15,7 @@ import {
   addCanvasRegion,
   addDysonSwarmOrbit,
   advanceSimulation,
+  advanceSimulationSession,
   applyBeltConfiguration,
   applyBeltConfigurationToBelts,
   applyBeltConfigurationToNetwork,
@@ -37,6 +38,7 @@ import {
   createBlueprint,
   createDysonLayerTemplate,
   createInitialState,
+  createSimulationAdvanceSession,
   createStandardDysonLayer,
   dispatchGalacticExport,
   dropCargoToEntity,
@@ -1558,6 +1560,88 @@ describe("factory simulation", () => {
     const fallbackReceived = fallback.smelters.map((smelter) => advanced.entities.find((entity) => entity.id === smelter.id)?.inputs.iron_ore ?? 0);
 
     expect(fallbackReceived).toEqual([getBuilding("arc_smelter").inputCapacity, lineCapacity, 1]);
+  });
+
+  const makeHighThroughputMiningFanout = () => {
+    let state = createInitialState();
+    state.settings.resourceMode = "infinite";
+    state.settings.productionBufferLimit = 1_000_000;
+    state.settings.logisticsBufferLimit = 100_000_000;
+    state.settings.beltBufferLimit = 100_000_000;
+    state.construction.wind_turbine = 1;
+    state.construction.storage_mk1 = 3;
+    state.construction.conveyor_belt_mk1 = 3;
+    state = placeBuilding(state, "wind_turbine", { x: -700, y: -500 });
+    for (let index = 0; index < 3; index += 1) state = placeBuilding(state, "storage_mk1", { x: 300, y: index * 140 });
+    const generator = state.entities.find((entity) => entity.buildingId === "wind_turbine")!;
+    generator.machineCount = 4_000_000;
+    const source = state.entities.find((entity) => entity.id === "vein_iron")!;
+    source.minerCount = 2_000_000;
+    source.outputs.iron_ore = 1_000_000;
+    const targets = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+    for (const target of targets) {
+      state.entities.find((entity) => entity.id === target.id)!.machineCount = 100_000;
+      state = setLogisticsItem(state, target.id, "iron_ore");
+      state = connectBelt(state, source.id, target.id, "iron_ore");
+      const belt = state.belts.find((candidate) => candidate.target === target.id)!;
+      belt.tier = 3;
+      belt.sorterTier = 3;
+      belt.lanes = 4_096;
+      belt.stackSize = 4;
+      belt.priority = 1;
+    }
+    return { state, sourceId: source.id, targetIds: targets.map((target) => target.id) };
+  };
+
+  it("fairly fills three ordinary outputs without using the source cache as a throughput ceiling", () => {
+    const network = makeHighThroughputMiningFanout();
+    const advanced = advanceSimulation(network.state, 1);
+    const received = network.targetIds.map((id) => advanced.entities.find((entity) => entity.id === id)?.inputs.iron_ore ?? 0);
+    const expectedPerLine = getBeltCapacity(advanced.belts[0]);
+    expect(received).toEqual([expectedPerLine, expectedPerLine, expectedPerLine]);
+    expect(received.reduce((sum, amount) => sum + amount, 0)).toBe(expectedPerLine * 3);
+  });
+
+  it("round robins limited ordinary output while preserving explicit priority order", () => {
+    const fair = makeHighThroughputMiningFanout();
+    const fairSource = fair.state.entities.find((entity) => entity.id === fair.sourceId)!;
+    fairSource.minerCount = 0;
+    fairSource.outputs.iron_ore = 5;
+    for (const belt of fair.state.belts) {
+      belt.tier = 1;
+      belt.lanes = 1;
+      belt.stackSize = 1;
+    }
+    const fairResult = advanceSimulation(fair.state, 1);
+    expect(fair.targetIds.map((id) => fairResult.entities.find((entity) => entity.id === id)?.inputs.iron_ore ?? 0)).toEqual([2, 2, 1]);
+
+    const prioritized = makeHighThroughputMiningFanout();
+    const prioritizedSource = prioritized.state.entities.find((entity) => entity.id === prioritized.sourceId)!;
+    prioritizedSource.minerCount = 0;
+    const lineCapacity = getBeltCapacity(prioritized.state.belts[0]);
+    prioritizedSource.outputs.iron_ore = lineCapacity * 2;
+    prioritized.state.belts.forEach((belt, index) => { belt.priority = [0, 1, 2][index] as 0 | 1 | 2; });
+    const priorityResult = advanceSimulation(prioritized.state, 1);
+    expect(prioritized.targetIds.map((id) => priorityResult.entities.find((entity) => entity.id === id)?.inputs.iron_ore ?? 0)).toEqual([0, lineCapacity, lineCapacity]);
+  });
+
+  it("keeps belt settlement equivalent for 10-second and 30-second offline steps", () => {
+    for (const [totalSeconds, expectedStep] of [[9 * 60 * 60, 10], [24 * 60 * 60, 30]] as const) {
+      const network = makeHighThroughputMiningFanout();
+      const session = createSimulationAdvanceSession(network.state, totalSeconds);
+      expect(session.stepSize).toBe(expectedStep);
+      advanceSimulationSession(session, 1);
+      const segmented = advanceSimulation(network.state, expectedStep);
+      const snapshot = (state: typeof network.state) => ({
+        source: state.entities.find((entity) => entity.id === network.sourceId)?.outputs.iron_ore ?? 0,
+        targets: network.targetIds.map((id) => {
+          const target = state.entities.find((entity) => entity.id === id)!;
+          return (target.inputs.iron_ore ?? 0) + (target.outputs.iron_ore ?? 0);
+        }),
+        transferred: state.belts.map((belt) => belt.totalTransferred ?? 0),
+      });
+      expect(snapshot(session.state)).toEqual(snapshot(segmented));
+    }
   });
 
   it("consumes both blue and red matrices for mixed research", () => {

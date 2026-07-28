@@ -55,7 +55,7 @@ export function DysonPlannerWorkspace({
   open: boolean;
   game: GameState;
   onClose: () => void;
-  onSave: () => { success: boolean; message: string };
+  onSave: () => Promise<{ success: boolean; message: string }>;
   onAddLayer: (systemId: StarSystemId) => void;
   onAddStandardLayer: (systemId: StarSystemId) => void;
   onSelectLayer: (systemId: StarSystemId, layerId: string) => void;
@@ -129,8 +129,7 @@ export function DysonPlannerWorkspace({
           <button type="button" disabled={!activeLayer} onClick={() => activeLayer && setLayerClipboard(createDysonLayerTemplate(activeLayer))} title="复制当前壳层设计" aria-label="复制当前壳层设计"><ClipboardCopy size={17} /><span>复制</span></button>
           <button type="button" disabled={!layerClipboard || !programReady || plan.layers.length >= 8} onClick={() => layerClipboard && onPasteLayer(systemId, layerClipboard)} title="粘贴壳层副本" aria-label="粘贴壳层副本"><ClipboardPaste size={17} /><span>粘贴</span></button>
           <button type="button" onClick={() => {
-            const result = onSave();
-            setSaveFeedback({ message: result.message, error: !result.success });
+            void onSave().then((result) => setSaveFeedback({ message: result.message, error: !result.success }));
           }} title="保存主存档" aria-label="保存主存档"><Save size={17} /><span>保存</span></button>
           <button type="button" onClick={onClose} title="关闭戴森球规划" aria-label="关闭戴森球规划"><X size={18} /><span>关闭</span></button>
         </div>

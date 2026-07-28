@@ -762,3 +762,23 @@ Playwright 新增存档救援、配送端口、性能监控、亮色制造栏、
 Android `1.0.8 / 1000008` APK 为 4,288,466 字节，SHA-256 `9869c15942123197765d0f1ffdabf1f8da8b09f4321f77316d0745a3250c24c6`，v2/v3 签名和长期证书连续性通过；从正式 1.0.6 使用 `adb install -r` 覆盖升级后 `firstInstallTime` 与应用数据标记保持，启动无 Fatal/ANR。Windows 1.0.8 安装程序为 103,067,374 字节，SHA-256 `66e9f87b4e09831e1222d56c0007ac1ff5cc5e8ee82035cdf0c324846fbc76f9`，隔离启动通过，Authenticode 仍为 `NotSigned`。
 
 两地 Web/API 已原子切换到 `1.0.8-528455cdfc2b`，共同回滚点为 `1.0.7-6d54901d8080`；上海下载站也切换到 1.0.8，下载回滚目录为 `1.0.6-a4086d0dfc94`。发布前后备份均通过 `quick_check`：香港账号 296→296、主云存档 250→250、正文修订 2,924→2,929、排行榜记录 250→250；上海账号和云存档继续为 0、匿名玩家记录保持 22。两个服务 active、`NRestarts=0`，公网根页和健康接口均为 200，构建 ID 正确；香港 Android Origin 为 200、未知 Origin 为 403。更新清单 no-cache、二进制 immutable、Range 返回 206，香港 `/downloads/*` 继续 302 到上海。
+
+## 32. `1.0.9` / v40 IndexedDB、内容包与公平线路回归
+
+`1.0.9` 将 GameState 从 v39 升至 v40，存档 envelope v2、云 schema v7 和 SQLite layout v2 不变。v39→v40 增加 `settings.beltBufferLimit`、精确 `contentPacks` 引用，并把已有空间站活动有效期迁移为长期开放；实体、线路、缓存、在途货物、物流载具、科研、制造 WIP、戴森和本地活动贡献不重建也不删除。
+
+存档专项覆盖 localStorage→IndexedDB 验证迁移、主档/备份/快照/三槽读回校验、配额错误、急救镜像恢复、手动快照批量管理、账号注册登录不改写本地状态、缺失内容包阻止载入、云存档 v35～v40 边界和服务端内容包校验。线路专项覆盖三条同级输出公平、高/标准/低优先级、堵塞回退、10 秒/30 秒步长等价、来源缓存小于线路吞吐及整数物资守恒。
+
+| 检查 | 当前发布候选结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 55 个文件通过、1 个可选基准文件跳过；523 项通过、2 项跳过 |
+| `npm run test:server` | 37/37 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 166/166 通过，单 worker 557.9 秒 |
+| `git diff --check` | 通过；仅既有行尾转换提示 |
+
+Playwright 覆盖移动组合输入、320×568 主页语言切换、200% 字体、英文亮色、长期活动旧截止点、IndexedDB 配额失败与账号本地存档守护。人工检查 `v109-language-menu-desktop-200.png`、`v109-language-menu-mobile-320x568-font200.png` 及 1.0.9 公告的桌面、390×844、360×480 200% 与 844×390 截图。原生制品、双节点备份、远端隔离复验和公网切换结果在发布完成后记录，不提前沿用 1.0.8 证据。

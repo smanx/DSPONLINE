@@ -8,8 +8,12 @@
 
 .game-shell[data-mobile-shell="true"] .mobile-next-sheet {
   grid-template-rows: var(--mobile-next-sheet-header-height) minmax(0, 1fr) auto;
-  transform: translate3d(0, max(0px, var(--mobile-sheet-drag-y, 0px)), 0);
+  transform: none;
   transition: height 180ms ease, transform 90ms linear;
+}
+
+.game-shell[data-mobile-shell="true"] .mobile-next-sheet.mobile-next-sheet--dragging {
+  transform: translate3d(0, max(0px, var(--mobile-sheet-drag-y, 0px)), 0);
 }
 
 .game-shell[data-mobile-shell="true"] .mobile-next-sheet--peek { height: var(--mobile-sheet-peek-height); }

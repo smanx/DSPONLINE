@@ -5,7 +5,7 @@ const REFRESH_PREFERENCE_KEY = "dsp-idle-network.production-refresh.v1";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-28-v1.0.8");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-29-v1.0.9");
   });
 });
 
@@ -219,11 +219,12 @@ test("galactic exporter is deployable and opens the active local construction ta
         activity: {
           enabled: true,
           status: "active",
+          openEnded: true,
           serverNow: now,
           id: "union-station-v091-test",
           revision: "v091-test",
-          startsAtMs: now - 60_000,
-          endsAtMs: now + 72 * 60 * 60 * 1_000 - 60_000,
+          startsAtMs: now - 4 * 24 * 60 * 60 * 1_000,
+          endsAtMs: now - 24 * 60 * 60 * 1_000,
           personalTargets: { universe_matrix: 1_000_000, solar_sail: 1_000_000, small_carrier_rocket: 1_000_000, antimatter_fuel_rod: 1_000_000 },
           globalTargets: { universe_matrix: 1_000_000_000, solar_sail: 1_000_000_000, small_carrier_rocket: 1_000_000_000, antimatter_fuel_rod: 1_000_000_000 },
           globalDelivered: { universe_matrix: 10_000, solar_sail: 20_000, small_carrier_rocket: 30_000, antimatter_fuel_rod: 40_000 },
@@ -266,6 +267,7 @@ test("galactic exporter is deployable and opens the active local construction ta
   await expect(task.locator(".galactic-activity")).toContainText("本地已记录");
   await expect(task.locator(".galactic-activity")).toContainText("全服模拟");
   await expect(task.locator(".galactic-activity")).toContainText("10亿");
+  await expect(task.locator(".galactic-activity")).toContainText("长期开放");
   await expect(task.getByRole("button", { name: "开始提交任务 1" })).toBeVisible();
   await task.screenshot({ path: "artifacts/qa/v091-galactic-activity-desktop.png" });
 

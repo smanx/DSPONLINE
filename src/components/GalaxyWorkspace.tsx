@@ -34,7 +34,7 @@ import {
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { ACCOUNT_AVATARS, getActiveAccount, type AccountProfileChanges, type AccountState } from "../game/account";
 import { CloudApiError, compareCloudSave, downloadCloudSave, fetchCloudLeaderboard, fetchCloudSaveHistory, loginCloudAccount, logoutCloudAccount, markCloudSaveSynchronized, registerCloudAccount, restoreCloudSaveRevision, resumeCloudSession, setCloudLeaderboardVisibility, submitCloudLeaderboard, summarizeCloudPayload, uploadCloudSave, type CloudLeaderboardEntry, type CloudSave, type CloudSaveMetadata, type CloudSaveSlot, type CloudSession, type CloudSyncState } from "../game/cloud";
-import { exportGame, exportGameSlot, getSaveSlotSummaries, inspectSave, saveGameSlot, type SaveSlotId } from "../game/storage";
+import { exportGame, exportGameSlot, getSaveSlotSummaries, inspectSave, saveGameSlotVerified, type SaveSlotId } from "../game/storage";
 import {
   LEADERBOARD_CATEGORIES,
   LEADERBOARD_SEASONS,
@@ -63,7 +63,7 @@ interface GalaxyWorkspaceProps {
   onUpdateCloudBinding: (cloud: { id: string; email: string } | null) => void;
   onCreateAccount: (displayName: string) => void;
   onSwitchAccount: (accountId: string) => void;
-  onRestoreCloudSave: (payload: string) => { success: boolean; message: string };
+  onRestoreCloudSave: (payload: string) => Promise<{ success: boolean; message: string }>;
 }
 
 const CATEGORY_ICONS: Record<LeaderboardCategoryId, ReactNode> = {
@@ -371,7 +371,8 @@ export function GalaxyWorkspace({
       if (!save) throw new Error(`云端槽位 ${slot} 为空`);
       const inspection = inspectSave(save.payload);
       if (!inspection.valid || !inspection.state) throw new Error(inspection.issues[0] ?? "云存档格式无效");
-      saveGameSlot(Number(slot) as SaveSlotId, inspection.state);
+      const result = await saveGameSlotVerified(Number(slot) as SaveSlotId, inspection.state);
+      if (!result.success) throw new Error(result.message);
       markCloudSaveSynchronized(cloudSession.user.id, save, save.payload, slot);
       setLocalSaveSlots(getSaveSlotSummaries());
       setCloudMessage(`云端槽位 ${slot} 已下载到对应本地槽位`);
@@ -428,9 +429,9 @@ export function GalaxyWorkspace({
     }
   };
 
-  const restorePendingCloudSave = () => {
+  const restorePendingCloudSave = async () => {
     if (!pendingCloudSave) return;
-    const result = onRestoreCloudSave(pendingCloudSave.payload);
+    const result = await onRestoreCloudSave(pendingCloudSave.payload);
     setCloudMessage(result.message);
     if (result.success) {
       if (cloudSession.status === "authenticated" && cloudSession.user) markCloudSaveSynchronized(cloudSession.user.id, pendingCloudSave, pendingCloudSave.payload);
@@ -446,11 +447,12 @@ export function GalaxyWorkspace({
       const cloudSave = await downloadCloudSave(cloudConflict.remote.revision, cloudConflict.slot);
       if (!cloudSave) throw new Error("云端修订已不可用，请重新连接后再试");
       const result = cloudConflict.slot === "main"
-        ? onRestoreCloudSave(cloudSave.payload)
-        : (() => {
+        ? await onRestoreCloudSave(cloudSave.payload)
+        : await (async () => {
             const inspection = inspectSave(cloudSave.payload);
             if (!inspection.valid || !inspection.state) return { success: false, message: inspection.issues[0] ?? "云存档格式无效" };
-            saveGameSlot(Number(cloudConflict.slot) as SaveSlotId, inspection.state);
+            const saved = await saveGameSlotVerified(Number(cloudConflict.slot) as SaveSlotId, inspection.state);
+            if (!saved.success) return { success: false, message: saved.message };
             setLocalSaveSlots(getSaveSlotSummaries());
             return { success: true, message: `已在本地槽位 ${cloudConflict.slot} 保留云端版本` };
           })();

@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-28-v1.0.8");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-29-v1.0.9");
     }
   });
 }
@@ -139,19 +139,19 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "存档完整性与性能诊断更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "跨端存档与高吞吐稳定性更新" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(4);
-  await expect(releaseNotes).toContainText("存档完整性自检与受控救援");
-  await expect(releaseNotes).toContainText("配送枢纽端口可独立配置");
-  await expect(releaseNotes).toContainText("亮色制造栏更清晰");
-  await expect(releaseNotes).toContainText("新增按需性能诊断");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v108-1440.png", fullPage: true });
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(6);
+  await expect(releaseNotes).toContainText("IndexedDB 可靠存档");
+  await expect(releaseNotes).toContainText("高吞吐线路公平分配");
+  await expect(releaseNotes).toContainText("空间站收集任务长期开放");
+  await expect(releaseNotes).toContainText("主页语言切换");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-29-v109-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v108-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-29-v109-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -166,7 +166,7 @@ test("dated release notes appear once and remain available from both settings sc
   });
   await expect.poll(controlsFitViewport).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v108-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-29-v109-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -175,12 +175,12 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-28-v1.0.8");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-29-v1.0.9");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
   await page.getByRole("button", { name: "游戏设置" }).click();
-  await page.getByRole("button", { name: "查看2026年7月28日版本更新记录" }).click();
+  await page.getByRole("button", { name: "查看2026年7月29日版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
   await releaseNotes.getByLabel("关闭版本更新记录").click();
 
@@ -192,7 +192,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v108-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-29-v109-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -470,16 +470,21 @@ test("username registration and login preserve every local save without automati
   await page.getByRole("button", { name: /开始游戏/ }).click();
   await page.getByTitle("保存并返回主菜单").click();
   const before = await page.evaluate(() => {
+    const comparable = (raw: string | null) => {
+      if (!raw) return null;
+      const { savedAt: _savedAt, ...envelope } = JSON.parse(raw) as Record<string, unknown>;
+      return envelope;
+    };
     const main = window.localStorage.getItem("dsp-idle-network.save.v1");
     if (!main) throw new Error("missing local main save");
     window.localStorage.setItem("dsp-idle-network.slot.1", main);
     window.localStorage.setItem("dsp-idle-network.slot.2", main);
     window.localStorage.setItem("dsp-idle-network.slot.3", main);
     return [
-      window.localStorage.getItem("dsp-idle-network.save.v1"),
-      window.localStorage.getItem("dsp-idle-network.slot.1"),
-      window.localStorage.getItem("dsp-idle-network.slot.2"),
-      window.localStorage.getItem("dsp-idle-network.slot.3"),
+      comparable(window.localStorage.getItem("dsp-idle-network.save.v1")),
+      comparable(window.localStorage.getItem("dsp-idle-network.slot.1")),
+      comparable(window.localStorage.getItem("dsp-idle-network.slot.2")),
+      comparable(window.localStorage.getItem("dsp-idle-network.slot.3")),
     ];
   });
   await page.reload();
@@ -497,12 +502,19 @@ test("username registration and login preserve every local save without automati
   await page.getByLabel("密码", { exact: true }).fill("strong-pass-123");
   await page.getByRole("button", { name: "登录云账户" }).click();
   await expect(page.locator(".start-menu-message")).toContainText("本地存档保持不变");
-  const after = await page.evaluate(() => [
-    window.localStorage.getItem("dsp-idle-network.save.v1"),
-    window.localStorage.getItem("dsp-idle-network.slot.1"),
-    window.localStorage.getItem("dsp-idle-network.slot.2"),
-    window.localStorage.getItem("dsp-idle-network.slot.3"),
-  ]);
+  const after = await page.evaluate(() => {
+    const comparable = (raw: string | null) => {
+      if (!raw) return null;
+      const { savedAt: _savedAt, ...envelope } = JSON.parse(raw) as Record<string, unknown>;
+      return envelope;
+    };
+    return [
+      comparable(window.localStorage.getItem("dsp-idle-network.save.v1")),
+      comparable(window.localStorage.getItem("dsp-idle-network.slot.1")),
+      comparable(window.localStorage.getItem("dsp-idle-network.slot.2")),
+      comparable(window.localStorage.getItem("dsp-idle-network.slot.3")),
+    ];
+  });
   expect(after).toEqual(before);
 });
 
@@ -4879,12 +4891,16 @@ test("failed primary saves stay visible and never report false success", async (
   const operations = page.getByRole("dialog", { name: "运营中心" });
   await operations.locator(".operations-tabs").getByRole("tab", { name: "存档" }).click();
   await page.evaluate(() => {
-    const runtime = window as typeof window & { __dspNativeSetItem?: Storage["setItem"] };
-    runtime.__dspNativeSetItem = Storage.prototype.setItem;
-    Storage.prototype.setItem = function (key: string, value: string) {
-      if (key === "dsp-idle-network.save.v1") throw new DOMException("quota", "QuotaExceededError");
-      runtime.__dspNativeSetItem!.call(this, key, value);
-    };
+    const runtime = window as typeof window & { __dspNativeIdbPut?: IDBObjectStore["put"] };
+    runtime.__dspNativeIdbPut = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey) {
+      if (value && typeof value === "object" && (value as { key?: unknown }).key === "dsp-idle-network.save.v1") {
+        throw new DOMException("quota", "QuotaExceededError");
+      }
+      return key === undefined
+        ? runtime.__dspNativeIdbPut!.call(this, value)
+        : runtime.__dspNativeIdbPut!.call(this, value, key);
+    } as IDBObjectStore["put"];
   });
 
   await operations.getByRole("button", { name: "立即保存" }).click();
@@ -4897,9 +4913,9 @@ test("failed primary saves stay visible and never report false success", async (
   expect(download.suggestedFilename()).toMatch(/^dsp-idle-save-\d{4}-\d{2}-\d{2}\.json$/);
 
   await page.evaluate(() => {
-    const runtime = window as typeof window & { __dspNativeSetItem?: Storage["setItem"] };
-    if (runtime.__dspNativeSetItem) Storage.prototype.setItem = runtime.__dspNativeSetItem;
-    delete runtime.__dspNativeSetItem;
+    const runtime = window as typeof window & { __dspNativeIdbPut?: IDBObjectStore["put"] };
+    if (runtime.__dspNativeIdbPut) IDBObjectStore.prototype.put = runtime.__dspNativeIdbPut;
+    delete runtime.__dspNativeIdbPut;
   });
   await operations.getByRole("button", { name: "立即保存" }).click();
   await expect(warning).toBeHidden();

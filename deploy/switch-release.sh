@@ -17,6 +17,8 @@ EOF
 web_root="${DSP_WEB_ROOT:-/var/www/dsp-idle}"
 api_root="${DSP_API_ROOT:-/opt/dsp-idle-cloud}"
 state_root="${DSP_RELEASE_STATE_ROOT:-/var/lib/dsp-idle-cloud/release-state}"
+shared_assets_root="${DSP_SHARED_ASSETS_ROOT:-$web_root/shared/assets}"
+shared_asset_retention_days="${DSP_SHARED_ASSET_RETENTION_DAYS:-30}"
 service_name="${DSP_SERVICE_NAME:-dsp-idle-cloud.service}"
 health_url="${DSP_HEALTH_URL:-http://127.0.0.1:4320/api/health}"
 skip_service_actions="${DSP_SKIP_SERVICE_ACTIONS:-0}"
@@ -61,6 +63,24 @@ case "$target_web" in "$web_root"/releases/*) ;; *) printf 'Invalid web release 
 case "$target_api" in "$api_root"/releases/*) ;; *) printf 'Invalid API release path: %s\n' "$target_api" >&2; exit 1 ;; esac
 [[ -d "$target_web" ]] || { printf 'Missing web release: %s\n' "$target_web" >&2; exit 1; }
 [[ -d "$target_api" ]] || { printf 'Missing API release: %s\n' "$target_api" >&2; exit 1; }
+[[ "$shared_asset_retention_days" =~ ^[0-9]+$ ]] || { printf 'Invalid shared asset retention: %s\n' "$shared_asset_retention_days" >&2; exit 1; }
+
+archive_release_assets() {
+  local release="$1"
+  [[ -d "$release/assets" ]] || return 0
+  install -d -m 0755 "$shared_assets_root"
+  cp -a -n "$release/assets/." "$shared_assets_root/"
+  while IFS= read -r -d '' source; do
+    touch "$shared_assets_root/${source#"$release/assets/"}"
+  done < <(find "$release/assets" -type f -print0)
+}
+
+# Hashed assets are immutable. Keeping both sides of the switch in a shared
+# archive lets tabs opened before a release finish lazy-loading their chunks.
+archive_release_assets "$current_web"
+archive_release_assets "$target_web"
+find "$shared_assets_root" -type f -mtime "+$shared_asset_retention_days" -delete
+find "$shared_assets_root" -type d -empty -delete
 
 atomic_link() {
   local target="$1" current="$2" next="${2}.next.$$"

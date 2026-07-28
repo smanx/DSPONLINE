@@ -1,44 +1,56 @@
-import { Check, Database, Gauge, Info, MessageCircle, Route, Sun, X, type LucideIcon } from "lucide-react";
+import { Check, Database, Infinity as InfinityIcon, Info, Languages, MessageCircle, PackageOpen, Route, ScanText, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-28-v1.0.8",
-  date: "2026年7月28日",
-  version: "1.0.8",
-  title: "存档完整性与性能诊断更新",
-  summary: "1.0.8 增加保存前完整性自检、云端拒绝异常存档和受控救援入口，并补齐配送枢纽端口管理、亮色制造栏对比度与按需性能诊断。GameState 升级至 v39。",
+  id: "2026-07-29-v1.0.9",
+  date: "2026年7月29日",
+  version: "1.0.9",
+  title: "跨端存档与高吞吐稳定性更新",
+  summary: "1.0.9 将本地存档迁移到 IndexedDB，修复多线路高吞吐分配和移动端组合输入，并升级声明式内容包。空间站收集任务改为长期开放，主页可直接切换中英文。GameState 升级至 v40。",
   items: [
     {
-      id: "save-integrity-rescue",
-      title: "存档完整性自检与受控救援",
-      description: "本地保存、手动导出和云上传会立即复核校验值；云端拒绝异常载荷。结构完整的异常存档会显示真实进度，并提供先导出原件、再二次确认的救援流程。",
+      id: "indexeddb-save-resilience",
+      title: "IndexedDB 可靠存档",
+      description: "主档、备份、快照和三个槽位迁入大容量存储，写入后必须读回校验。旧 localStorage 副本验证迁移后才删除，并新增占用明细与快照批量管理。",
     },
     {
-      id: "delivery-hub-ports",
-      title: "配送枢纽端口可独立配置",
-      description: "三个输入端口可以分别指定物资、恢复自动识别或清空。重置已连接端口前会确认并安全返还线路、施工件和缓存，不影响其他端口。",
+      id: "belt-fairness-capacity",
+      title: "高吞吐线路公平分配",
+      description: "同优先级输出按确定性轮询公平分配，高、标准、低优先级继续生效。矿源和生产输出不再被单步缓存误限流，线路转运额度可配置到 1 亿。",
     },
     {
-      id: "light-fabrication-contrast",
-      title: "亮色制造栏更清晰",
-      description: "建筑制造和物品手工制造的名称、选中、可制造、缺料与禁用状态使用更稳定的亮色主题对比度。",
+      id: "content-pack-v2",
+      title: "声明式内容包 v2",
+      description: "内容包可新增物品、建筑、配方、科技和 4～32 级传送带，并通过白名单调整核心建筑数值。存档记录精确包版本，缺包会阻止加载，Mod 主档不进入官方排行。",
     },
     {
-      id: "performance-monitor",
-      title: "新增按需性能诊断",
-      description: "运营中心可按需采集 FPS、主线程、Worker、任务积压、存档和各模拟阶段耗时，并导出匿名报告。监控默认关闭且不进入存档。",
+      id: "mobile-input-clarity",
+      title: "移动输入与文字清晰度",
+      description: "注册输入框正确保留中文输入法组合态和其他字段；静止抽屉移除长期 transform，拖动与画布视口按设备像素对齐，减少偶发文字模糊。",
+    },
+    {
+      id: "permanent-galactic-activity",
+      title: "空间站收集任务长期开放",
+      description: "取消活动结束倒计时。原截止点之后仍可放置超大型物资出口并继续提交四项物资，本地贡献记录完整保留。",
+    },
+    {
+      id: "prominent-language-switch",
+      title: "主页语言切换",
+      description: "主菜单首屏顶部常驻中文与 English 切换，无需进入设置；语言仍只保存在当前设备，不写入本地或云端游戏存档。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "save-integrity-rescue": Database,
-  "delivery-hub-ports": Route,
-  "light-fabrication-contrast": Sun,
-  "performance-monitor": Gauge,
+  "indexeddb-save-resilience": Database,
+  "belt-fairness-capacity": Route,
+  "content-pack-v2": PackageOpen,
+  "mobile-input-clarity": ScanText,
+  "permanent-galactic-activity": InfinityIcon,
+  "prominent-language-switch": Languages,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

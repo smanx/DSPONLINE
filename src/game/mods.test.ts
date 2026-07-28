@@ -5,7 +5,7 @@ describe("content pack validation", () => {
   it("accepts a metadata-only pack and normalizes its arrays", () => {
     const result = validateContentPack(createContentPackTemplate());
     expect(result.valid).toBe(true);
-    expect(result.manifest?.formatVersion).toBe(1);
+    expect(result.manifest?.formatVersion).toBe(2);
     expect(result.counts).toEqual({ items: 0, buildings: 0, recipes: 0, technologies: 0 });
   });
 
@@ -29,5 +29,23 @@ describe("content pack validation", () => {
     expect(result.valid).toBe(false);
     expect(result.issues[0].code).toBe("json");
   });
-});
 
+  it("accepts v1 compatibility but rejects unsafe v2 overrides and duplicate belt tiers", () => {
+    expect(validateContentPack({ formatVersion: 1, id: "legacy_pack", name: "Legacy", version: "1.0.0" }).valid).toBe(true);
+    const result = validateContentPack({
+      formatVersion: 2,
+      id: "unsafe_pack",
+      name: "Unsafe",
+      version: "1.0.0",
+      script: "alert(1)",
+      buildingOverrides: [{ id: "arc_smelter", speed: -1 }, { id: "unknown_building", speed: 2 }],
+      belts: [
+        { id: "unsafe_belt_a", name: "A", tier: 4, speed: 60, costs: [{ itemId: "iron_ingot", amount: 1 }] },
+        { id: "unsafe_belt_b", name: "B", tier: 4, speed: 90, costs: [{ itemId: "iron_ingot", amount: 1 }] },
+      ],
+    });
+    expect(result.valid).toBe(false);
+    expect(result.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining(["building-override-value", "building-override-id", "belt-duplicate"]));
+    expect(result.manifest).not.toHaveProperty("script");
+  });
+});

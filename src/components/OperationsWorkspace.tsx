@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Clock3,
   Cpu,
+  Database,
   Cloud,
   CloudOff,
   Download,
@@ -45,7 +46,7 @@ import { getPlanet } from "../game/content";
 import { DIFFICULTY_DEFINITIONS } from "../game/difficulty";
 import { ACHIEVEMENTS, getAchievementProgress } from "../game/progression";
 import type { FactoryAlert } from "../game/alerts";
-import type { SaveInspection, SaveIntegrityStatus, SaveSlotId, SaveSlotSummary, SaveSnapshotSummary } from "../game/storage";
+import { getLocalSaveStorageEstimate, type LocalSaveStorageEstimate, type SaveInspection, type SaveIntegrityStatus, type SaveSlotId, type SaveSlotSummary, type SaveSnapshotSummary } from "../game/storage";
 import type { ModValidationResult } from "../game/mods";
 import { getContentPackDependencyStatuses, getContentPackUsage, type ContentPackRegistry } from "../game/contentPacks";
 import type { AutomaticPerformanceReport } from "../game/benchmark";
@@ -101,6 +102,7 @@ interface OperationsWorkspaceProps {
   onCreateSnapshot: () => void;
   onLoadSnapshot: (snapshotId: string) => void;
   onDeleteSnapshot: (snapshotId: string) => void;
+  onDeleteSnapshots: (snapshotIds: string[]) => void;
   onRunBenchmark: () => void;
   onOpenReleaseNotes: () => void;
   onValidateMod: (raw: string) => void;
@@ -307,6 +309,7 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
       </section>
       <BufferLimitSetting label="生产建筑缓存上限" value={settings.productionBufferLimit} onChange={(productionBufferLimit) => onChange({ productionBufferLimit })} />
       <BufferLimitSetting label="仓储与物流建筑缓存上限" value={settings.logisticsBufferLimit} onChange={(logisticsBufferLimit) => onChange({ logisticsBufferLimit })} />
+      <BufferLimitSetting label="传送带转运额度上限" value={settings.beltBufferLimit} onChange={(beltBufferLimit) => onChange({ beltBufferLimit })} help="限制大时间步内每条线路累计的转运额度，不改变每秒吞吐，也不是线路中的实际货物库存。" />
       <BufferLimitSetting
         label="增产剂缓存上限"
         value={settings.proliferatorBufferLimit}
@@ -480,16 +483,26 @@ function SavesPanel({
   onCreateSnapshot,
   onLoadSnapshot,
   onDeleteSnapshot,
+  onDeleteSnapshots,
   onValidateMod,
   onExportModTemplate,
 }: Pick<OperationsWorkspaceProps,
-  "game" | "slots" | "snapshots" | "importPreview" | "modValidation" | "onManualSave" | "onExport" | "onImport" | "onConfirmImport" | "onConfirmImportRescue" | "importRescueArmed" | "onCancelImport" | "onSaveSlot" | "onLoadSlot" | "onDeleteSlot" | "onCreateSnapshot" | "onLoadSnapshot" | "onDeleteSnapshot" | "onValidateMod" | "onExportModTemplate">) {
+  "game" | "slots" | "snapshots" | "importPreview" | "modValidation" | "onManualSave" | "onExport" | "onImport" | "onConfirmImport" | "onConfirmImportRescue" | "importRescueArmed" | "onCancelImport" | "onSaveSlot" | "onLoadSlot" | "onDeleteSlot" | "onCreateSnapshot" | "onLoadSnapshot" | "onDeleteSnapshot" | "onDeleteSnapshots" | "onValidateMod" | "onExportModTemplate">) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modInputRef = useRef<HTMLInputElement>(null);
-  const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & ({ kind: "slot"; slotId: SaveSlotId } | { kind: "snapshot"; snapshotId: string })) | null>(null);
+  const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & ({ kind: "slot"; slotId: SaveSlotId } | { kind: "snapshot"; snapshotId: string } | { kind: "snapshots"; snapshotIds: string[] })) | null>(null);
+  const [selectedSnapshotIds, setSelectedSnapshotIds] = useState<string[]>([]);
+  const [storageEstimate, setStorageEstimate] = useState<LocalSaveStorageEstimate | null>(null);
   const summaryBySlot = new Map(slots.map((slot) => [slot.slotId, slot]));
   const automaticSnapshotCount = snapshots.filter((snapshot) => snapshot.reason === "自动快照").length;
   const manualSnapshotCount = snapshots.length - automaticSnapshotCount;
+  useEffect(() => {
+    let active = true;
+    void getLocalSaveStorageEstimate().then((estimate) => { if (active) setStorageEstimate(estimate); });
+    return () => { active = false; };
+  }, [slots, snapshots]);
+  useEffect(() => setSelectedSnapshotIds((current) => current.filter((id) => snapshots.some((snapshot) => snapshot.id === id))), [snapshots]);
+  const formatBytes = (bytes: number | null) => bytes === null ? "不可用" : bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(2)} MiB` : `${Math.max(0, Math.round(bytes / 1024))} KiB`;
   return (
     <div className="operations-panel operations-saves">
       <header className="operations-section-header">
@@ -546,9 +559,10 @@ function SavesPanel({
         })}
       </div>
       <section className="save-snapshot-section">
-        <header><div><History size={14} /><strong>恢复快照</strong><small>自动 {automaticSnapshotCount}/2 · 手动 {manualSnapshotCount}</small></div><span>可回滚</span></header>
+        <header><div><History size={14} /><strong>恢复快照</strong><small>自动 {automaticSnapshotCount}/2 · 手动 {manualSnapshotCount}</small></div>{selectedSnapshotIds.length > 0 ? <button className="save-batch-delete" type="button" onClick={() => setDeleteRequest({ kind: "snapshots", snapshotIds: selectedSnapshotIds, label: `${selectedSnapshotIds.length} 份所选快照`, details: "只删除明确勾选的恢复快照；主存档和三个手动槽位不会受影响" })}><Trash2 size={13} />删除所选</button> : <span>可回滚</span>}</header>
         {snapshots.length === 0 ? <p className="save-empty-note">模拟运行后会自动保留最近快照</p> : <div className="save-snapshot-list">
           {snapshots.map((snapshot) => <article className={`save-snapshot-row${snapshot.valid ? "" : " save-snapshot-row--invalid"}`} key={snapshot.id}>
+            <input type="checkbox" checked={selectedSnapshotIds.includes(snapshot.id)} onChange={(event) => setSelectedSnapshotIds((current) => event.target.checked ? [...current, snapshot.id] : current.filter((id) => id !== snapshot.id))} aria-label={`选择快照 ${snapshot.reason}`} />
             <i>{snapshot.valid ? <ShieldCheck size={14} /> : <FileCheck2 size={14} />}</i>
             <div><strong>{snapshot.reason}</strong><span>{new Date(snapshot.savedAt).toLocaleTimeString("zh-CN")} · {formatRuntime(snapshot.elapsedSeconds)} · 科技 {snapshot.completedTechCount}</span></div>
             <button type="button" disabled={!snapshot.valid} onClick={() => onLoadSnapshot(snapshot.id)} title="回滚到此快照" aria-label={`回滚到快照 ${snapshot.id}`}><RotateCcw size={13} /></button>
@@ -556,6 +570,11 @@ function SavesPanel({
           </article>)}
         </div>}
       </section>
+      {storageEstimate ? <section className="save-storage-usage" aria-label="本地存储占用">
+        <header><div><Database size={14} /><strong>存储占用</strong></div><small>{storageEstimate.backend === "indexeddb" ? "IndexedDB" : storageEstimate.backend === "local-storage" ? "兼容存储" : "临时内存"}</small></header>
+        <div className="save-storage-kpis"><span><small>存档数据</small><strong>{formatBytes(storageEstimate.payloadBytes)}</strong></span><span><small>浏览器总占用</small><strong>{formatBytes(storageEstimate.browserUsageBytes)}</strong></span><span><small>可用配额</small><strong>{storageEstimate.browserQuotaBytes === null || storageEstimate.browserUsageBytes === null ? "不可用" : formatBytes(Math.max(0, storageEstimate.browserQuotaBytes - storageEstimate.browserUsageBytes))}</strong></span></div>
+        <div className="save-storage-entries">{storageEstimate.entries.map((entry) => <div key={entry.key}><span>{entry.label}</span><strong>{formatBytes(entry.bytes)}</strong></div>)}</div>
+      </section> : null}
       <section className="content-pack-section">
         <header><div><FileCheck2 size={14} /><strong>内容包校验</strong></div><small>只读检查，不会修改核心目录</small></header>
         <div className="content-pack-actions"><button type="button" onClick={() => modInputRef.current?.click()}><Upload size={14} />选择内容包 JSON</button><button type="button" onClick={onExportModTemplate}><Download size={14} />导出模板</button></div>
@@ -565,7 +584,8 @@ function SavesPanel({
       <SaveDeleteDialog target={deleteRequest} onCancel={() => setDeleteRequest(null)} onDelete={() => {
         if (!deleteRequest) return;
         if (deleteRequest.kind === "slot") onDeleteSlot(deleteRequest.slotId);
-        else onDeleteSnapshot(deleteRequest.snapshotId);
+        else if (deleteRequest.kind === "snapshot") onDeleteSnapshot(deleteRequest.snapshotId);
+        else { onDeleteSnapshots(deleteRequest.snapshotIds); setSelectedSnapshotIds([]); }
         setDeleteRequest(null);
       }} />
     </div>

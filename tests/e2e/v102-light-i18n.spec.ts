@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-07-28-v1.0.8";
+const RELEASE_NOTE_ID = "2026-07-29-v1.0.9";
 
 async function seedEnglishFactory(page: Page, mobileUi: "legacy" | "next" = "next") {
   await page.addInitScript(({ releaseNoteId, mobileUi }) => {
@@ -73,10 +73,10 @@ test("English query and start-menu setting persist as a device preference", asyn
   await page.goto("/?menu=1&lang=en");
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
   await expect(page.getByText("DSP Idle Network", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: "Game Settings", exact: true }).click();
-  const language = page.getByLabel("Language");
+  const language = page.locator(".start-menu-language-prominent");
+  await expect(language).toBeVisible();
   await expect(language.getByRole("button", { name: "English", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await language.getByRole("button", { name: "Chinese (Simplified)", exact: true }).click();
+  await language.getByRole("button", { name: "中文", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.locale.v1"))).toBe("zh-CN");
   expect(await page.evaluate(() => window.localStorage.getItem("dsp-idle-network.save.v1"))).toBeNull();
@@ -109,9 +109,9 @@ test("English light release notes are localized and persist dismissal", async ({
   });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/?menu=1&lang=en");
-  const dialog = page.getByRole("dialog", { name: "Save Integrity & Performance Diagnostics" });
+  const dialog = page.getByRole("dialog", { name: "Cross-device Saves & High-throughput Stability" });
   await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText("1.0.8");
+  await expect(dialog).toContainText("1.0.9");
   expect(await visibleHanStrings(dialog)).toEqual([]);
   await dialog.getByRole("button", { name: "Got it" }).click();
   await expect(dialog).toHaveCount(0);

@@ -112,7 +112,11 @@ function loadMobileRecentBuilds(): Array<BuildingId | ConveyorBeltId> {
 }
 
 function constructionLabel(id: ConstructionId): string {
-  return isConveyorBeltId(id) ? `传送带 Mk.${getBeltTier(id) === 3 ? "III" : getBeltTier(id) === 2 ? "II" : "I"}` : getBuilding(id as BuildingId).name;
+  if (isConveyorBeltId(id)) {
+    const tier = getBeltTier(id);
+    return `传送带 Mk.${tier === 3 ? "III" : tier === 2 ? "II" : tier === 1 ? "I" : tier}`;
+  }
+  return getBuilding(id as BuildingId).name;
 }
 
 function isConstructionVisible(game: GameState, id: ConstructionId): boolean {

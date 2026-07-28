@@ -659,11 +659,48 @@ export const BUILDING_UPGRADES: Partial<Record<BuildingId, BuildingId>> = {
   chemical_plant: "quantum_chemical_plant",
 };
 
-export const BELT_CONSTRUCTION_BY_TIER: Record<BeltTier, ConveyorBeltId> = {
-  1: "conveyor_belt_mk1",
-  2: "conveyor_belt_mk2",
-  3: "conveyor_belt_mk3",
-};
+export interface RuntimeBeltDefinition {
+  id: ConveyorBeltId;
+  tier: BeltTier;
+  speed: number;
+  name: string;
+}
+
+const CORE_BELT_DEFINITIONS: RuntimeBeltDefinition[] = [
+  { id: "conveyor_belt_mk1", tier: 1, speed: 6, name: "传送带 Mk.I" },
+  { id: "conveyor_belt_mk2", tier: 2, speed: 12, name: "传送带 Mk.II" },
+  { id: "conveyor_belt_mk3", tier: 3, speed: 30, name: "传送带 Mk.III" },
+];
+const RUNTIME_BELT_DEFINITIONS = new Map<number, RuntimeBeltDefinition>(CORE_BELT_DEFINITIONS.map((definition) => [definition.tier, definition]));
+
+export function resetRuntimeBeltDefinitions(): void {
+  RUNTIME_BELT_DEFINITIONS.clear();
+  for (const definition of CORE_BELT_DEFINITIONS) RUNTIME_BELT_DEFINITIONS.set(definition.tier, { ...definition });
+}
+
+export function registerRuntimeBeltDefinition(definition: RuntimeBeltDefinition): boolean {
+  if (!Number.isInteger(definition.tier) || definition.tier < 4 || definition.tier > 32 ||
+    !Number.isFinite(definition.speed) || definition.speed <= 0 || RUNTIME_BELT_DEFINITIONS.has(definition.tier) ||
+    [...RUNTIME_BELT_DEFINITIONS.values()].some((entry) => entry.id === definition.id)) return false;
+  RUNTIME_BELT_DEFINITIONS.set(definition.tier, { ...definition });
+  return true;
+}
+
+export function getBeltTiers(): BeltTier[] {
+  return [...RUNTIME_BELT_DEFINITIONS.keys()].sort((left, right) => left - right);
+}
+
+export function isRegisteredBeltTier(tier: unknown): tier is BeltTier {
+  return typeof tier === "number" && Number.isInteger(tier) && RUNTIME_BELT_DEFINITIONS.has(tier);
+}
+
+export function getBeltSpeed(tier: BeltTier): number {
+  return RUNTIME_BELT_DEFINITIONS.get(tier)?.speed ?? 0;
+}
+
+export function getNextBeltTier(tier: BeltTier): BeltTier | null {
+  return getBeltTiers().find((candidate) => candidate > tier) ?? null;
+}
 
 export const SORTER_CONSTRUCTION_BY_TIER: Record<SorterTier, SorterId> = {
   1: "sorter_mk1",
@@ -687,11 +724,11 @@ export function getBuildingUpgradeTarget(buildingId: BuildingId): BuildingId | u
 }
 
 export function getBeltConstructionId(tier: BeltTier): ConveyorBeltId {
-  return BELT_CONSTRUCTION_BY_TIER[tier];
+  return RUNTIME_BELT_DEFINITIONS.get(tier)?.id ?? `unknown_conveyor_belt_tier_${tier}`;
 }
 
 export function getBeltTier(id: ConveyorBeltId): BeltTier {
-  return id === "conveyor_belt_mk3" ? 3 : id === "conveyor_belt_mk2" ? 2 : 1;
+  return [...RUNTIME_BELT_DEFINITIONS.values()].find((definition) => definition.id === id)?.tier ?? 1;
 }
 
 export function getSorterConstructionId(tier: SorterTier): SorterId {
@@ -702,8 +739,8 @@ export function getSorterTier(id: SorterId): SorterTier {
   return id === "sorter_mk3" ? 3 : id === "sorter_mk2" ? 2 : 1;
 }
 
-export function isConveyorBeltId(id: ConstructionId): id is ConveyorBeltId {
-  return id === "conveyor_belt_mk1" || id === "conveyor_belt_mk2" || id === "conveyor_belt_mk3";
+export function isConveyorBeltId(id: ConstructionId): boolean {
+  return [...RUNTIME_BELT_DEFINITIONS.values()].some((definition) => definition.id === id);
 }
 
 export function isSorterId(id: ConstructionId): id is SorterId {
@@ -1576,7 +1613,7 @@ export function validateContentCatalog(): ContentAuditResult {
   }
 
   for (const definition of CONSTRUCTION) {
-    if (!definition.buildingId.startsWith("conveyor_belt_") && !definition.buildingId.startsWith("sorter_") && !buildingIds.has(definition.buildingId)) {
+    if (!isConveyorBeltId(definition.buildingId) && !definition.buildingId.startsWith("sorter_") && !buildingIds.has(definition.buildingId)) {
       add("error", "construction-building", definition.buildingId, "施工定义引用未知建筑");
     }
     if (definition.requiredTechId && !techIds.has(definition.requiredTechId)) add("error", "construction-tech", definition.buildingId, `施工定义引用未知科技 ${definition.requiredTechId}`);

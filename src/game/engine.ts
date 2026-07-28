@@ -11,6 +11,8 @@ import {
   STAR_SYSTEMS,
   buildingSupportsRecipe,
   getBeltConstructionId,
+  getBeltSpeed,
+  getNextBeltTier,
   getBuilding,
   getBuildingUpgradeTarget,
   getConstructionDefinition,
@@ -118,7 +120,6 @@ import {
   type RecursiveCraftPlan,
 } from "./recursiveCrafting";
 
-const BELT_CAPACITY_PER_SECOND: Record<BeltTier, number> = { 1: 6, 2: 12, 3: 30 };
 export const ACCUMULATOR_ENERGY_MJ = 90;
 export const SOLAR_SAIL_POWER_KW = 88;
 export const SOLAR_SAIL_LIFETIME_SECONDS = 1200;
@@ -506,7 +507,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
     return { ...entity, resourceRemaining: reserve, resourceCapacity: reserve };
   });
   return {
-    version: 39,
+    version: 40,
     nextId: 1,
     activePlanetId: "home",
     entities,
@@ -522,6 +523,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
       DEFAULT_PLANET_TRAY_ITEM_LIMIT,
     ])) as GameState["planetTrayItemLimits"],
     construction: {
+      ...Object.fromEntries(CONSTRUCTION.map((definition) => [definition.buildingId, 0])),
       wind_turbine: 3,
       solar_panel: 0,
       geothermal_power_station: 0,
@@ -607,11 +609,13 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
       defaultBeltRouteMode: "auto",
       productionBufferLimit: 1_000_000,
       logisticsBufferLimit: 1_000_000,
+      beltBufferLimit: 100_000_000,
       proliferatorBufferLimit: 600,
       autosaveIntervalSeconds: 30,
       resourceMode: "finite",
       difficulty: "standard",
     },
+    contentPacks: [],
     achievements: { unlockedIds: [] },
     campaign: {
       activeChapterId: "foundation",
@@ -1075,14 +1079,25 @@ function availableInputCycles(state: GameState, entity: FactoryEntity): number {
     Math.min(available, (entity.inputs[input.itemId] ?? 0) / input.amount), Number.POSITIVE_INFINITY);
 }
 
-function availableOutputCycles(state: GameState, entity: FactoryEntity): number {
+type OutputCapacityCredits = ReadonlyMap<string, number>;
+
+function outputCapacityCreditKey(entityId: string, itemId: ItemId): string {
+  return `${entityId}:${itemId}`;
+}
+
+function outputCapacityCredit(credits: OutputCapacityCredits | undefined, entity: FactoryEntity, itemId: ItemId): number {
+  return Math.max(0, Math.floor(credits?.get(outputCapacityCreditKey(entity.id, itemId)) ?? 0));
+}
+
+function availableOutputCycles(state: GameState, entity: FactoryEntity, credits?: OutputCapacityCredits): number {
   const recipe = getRecipe(entity.recipeId);
   if (!recipe || !entity.buildingId) return 0;
   const capacity = getEntityOutputCapacity(state, entity);
   const extraProductBonus = getEntityExtraProductBonus(entity);
   const sprayedCycleLimit = availableFullProliferatorCycles(entity, recipe);
   return recipe.outputs.reduce((available, output) => {
-    const free = Math.floor(Math.max(0, capacity - (entity.outputs[output.itemId] ?? 0)) + EPSILON);
+    const free = Math.floor(Math.max(0, capacity - (entity.outputs[output.itemId] ?? 0)) + EPSILON) +
+      outputCapacityCredit(credits, entity, output.itemId);
     let low = 0;
     let high = Math.floor(free / output.amount);
     const bonusProgress = entity.proliferatorBonusProgress?.[output.itemId] ?? 0;
@@ -3071,7 +3086,13 @@ function targetFreeCapacity(state: GameState, target: FactoryEntity, itemId: Ite
   return Math.floor(Math.max(0, capacity - (target.inputs[itemId] ?? 0)) + EPSILON);
 }
 
-function transferBelts(state: GameState, seconds: number): void {
+function transferBelts(
+  state: GameState,
+  seconds: number,
+  deferSourceDepletionReset = false,
+  allowanceCaps?: ReadonlyMap<string, number>,
+  flowWindowSeconds = seconds,
+): void {
   const groups = new Map<string, { source: FactoryEntity; itemId: ItemId; candidates: BeltTransferCandidate[] }>();
 
   for (const belt of state.belts) {
@@ -3086,17 +3107,33 @@ function transferBelts(state: GameState, seconds: number): void {
       belt.progress = 0;
       continue;
     }
+    const capacity = getBeltCapacity(belt);
+    if (seconds > 0) {
+      const currentCredit = Math.max(0, belt.progress ?? 0);
+      const creditLimit = normalizeBuildingBufferLimit(state.settings.beltBufferLimit);
+      belt.progress = round(currentCredit > creditLimit
+        ? currentCredit
+        : Math.min(creditLimit, currentCredit + capacity * seconds));
+    }
     const available = Math.floor((source.outputs[belt.itemId] ?? 0) -
       stationReservedOutgoing(state, source.id, belt.itemId) + EPSILON);
-    if (available < 1 || targetFreeCapacity(state, target, belt.itemId, belt.targetPortIndex) < 1) {
+    if (available < 1) {
+      if (!deferSourceDepletionReset) belt.progress = 0;
+      continue;
+    }
+    if (targetFreeCapacity(state, target, belt.itemId, belt.targetPortIndex) < 1) {
       belt.progress = 0;
       continue;
     }
-    const capacity = getBeltCapacity(belt);
-    belt.progress = round((belt.progress ?? 0) + capacity * seconds);
     const key = `${belt.source}:${belt.itemId}`;
     const group = groups.get(key) ?? { source, itemId: belt.itemId, candidates: [] };
-    group.candidates.push({ belt, target, allowance: Math.floor(belt.progress + EPSILON), moved: 0, capacity });
+    group.candidates.push({
+      belt,
+      target,
+      allowance: Math.min(Math.floor(belt.progress + EPSILON), allowanceCaps?.get(belt.id) ?? Number.MAX_SAFE_INTEGER),
+      moved: 0,
+      capacity,
+    });
     groups.set(key, group);
   }
 
@@ -3119,66 +3156,65 @@ function transferBelts(state: GameState, seconds: number): void {
     }
   };
 
-  const moveOne = (group: { source: FactoryEntity; itemId: ItemId }, candidate: BeltTransferCandidate) => {
-    if (candidate.allowance < 1 || targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex) < 1) return false;
-    if (receive(candidate, group.itemId, 1) !== 1) return false;
-    candidate.allowance -= 1;
-    candidate.moved += 1;
-    return true;
-  };
-
   for (const group of groups.values()) {
     const reserved = stationReservedOutgoing(state, group.source.id, group.itemId);
     let available = Math.floor((group.source.outputs[group.itemId] ?? 0) - reserved + EPSILON);
     const usable = (candidate: BeltTransferCandidate) => candidate.allowance > 0 &&
       targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex) > 0;
 
-    if (group.source.kind === "splitter") {
-      const distribute = (candidates: BeltTransferCandidate[]) => {
-        if (candidates.length === 0) return;
-        let cursor = group.source.routingCursor % candidates.length;
-        let stalled = 0;
-        while (available > 0 && stalled < candidates.length) {
-          const candidate = candidates[cursor];
-          cursor = (cursor + 1) % candidates.length;
-          if (moveOne(group, candidate)) {
-            available -= 1;
-            stalled = 0;
-          } else {
-            stalled += 1;
-          }
-        }
-        group.source.routingCursor = cursor;
-      };
-      if (group.source.distributionMode === "priority") {
-        for (const priority of [2, 1, 0] as const) {
-          distribute(group.candidates.filter((candidate) => candidate.belt.priority === priority && usable(candidate)));
+    const distributeFair = (requestedCandidates: BeltTransferCandidate[]) => {
+      const candidates = requestedCandidates.filter(usable).sort((left, right) => left.belt.id.localeCompare(right.belt.id));
+      if (candidates.length === 0) return;
+      let cursor = group.source.routingCursor % candidates.length;
+      while (available > 0) {
+        const active = candidates.filter(usable);
+        if (active.length === 0) break;
+        const rotated = [...active.slice(cursor % active.length), ...active.slice(0, cursor % active.length)];
+        const fairShare = Math.max(1, Math.floor(available / active.length));
+        let successful = 0;
+        for (const candidate of rotated) {
           if (available <= 0) break;
+          const requested = Math.min(
+            available,
+            fairShare,
+            candidate.allowance,
+            targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex),
+          );
+          const moved = receive(candidate, group.itemId, requested);
+          if (moved <= 0) continue;
+          candidate.allowance -= moved;
+          candidate.moved += moved;
+          available -= moved;
+          successful += 1;
+          cursor = (cursor + 1) % candidates.length;
         }
-      } else {
-        distribute(group.candidates.filter(usable));
+        if (successful === 0) break;
       }
+      group.source.routingCursor = cursor;
+    };
+
+    if (group.source.kind === "splitter" && group.source.distributionMode !== "priority") {
+      distributeFair(group.candidates);
     } else {
-      for (const candidate of [...group.candidates].sort((a, b) => b.belt.priority - a.belt.priority)) {
-        const requested = Math.min(available, candidate.allowance,
-          targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex));
-        const moved = receive(candidate, group.itemId, requested);
-        if (moved <= 0) continue;
-        candidate.allowance -= moved;
-        candidate.moved += moved;
-        available -= moved;
+      for (const priority of [2, 1, 0] as const) {
+        distributeFair(group.candidates.filter((candidate) => candidate.belt.priority === priority));
         if (available <= 0) break;
       }
     }
 
     group.source.outputs[group.itemId] = available + reserved;
     for (const candidate of group.candidates) {
-      candidate.belt.progress = available <= 0 ||
+      candidate.belt.progress = (!deferSourceDepletionReset && available <= 0) ||
         targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex) <= 0
         ? 0
         : round(Math.max(0, candidate.belt.progress - candidate.moved));
-      if (candidate.moved > 0 && seconds > 0) {
-        candidate.belt.lastFlow = round(Math.min(candidate.capacity, candidate.moved / seconds), 3);
+      if (candidate.moved > 0) {
+        if (flowWindowSeconds > 0) {
+          candidate.belt.lastFlow = round(Math.min(
+            candidate.capacity,
+            (seconds > 0 ? 0 : candidate.belt.lastFlow) + candidate.moved / flowWindowSeconds,
+          ), 3);
+        }
         candidate.belt.totalTransferred = Math.floor((candidate.belt.totalTransferred ?? 0) + candidate.moved);
       }
       const sourceWaiting = (group.source.outputs[group.itemId] ?? 0) > 0;
@@ -3189,7 +3225,45 @@ function transferBelts(state: GameState, seconds: number): void {
   }
 }
 
-function runMiners(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId): void {
+interface BeltStepOutputReservation {
+  allowanceByBelt: Map<string, number>;
+  outputCredits: Map<string, number>;
+}
+
+function reserveBeltStepOutputCapacity(state: GameState): BeltStepOutputReservation {
+  const allowanceByBelt = new Map<string, number>();
+  const outputCredits = new Map<string, number>();
+  const remainingTargetCapacity = new Map<string, number>();
+  const sortedBelts = [...state.belts].sort((left, right) => left.id.localeCompare(right.id));
+  for (const belt of sortedBelts) {
+    const source = state.entities.find((entity) => entity.id === belt.source);
+    const target = state.entities.find((entity) => entity.id === belt.target);
+    if (!source || !target || source.planetId !== target.planetId || belt.planetId !== source.planetId ||
+      !sourceProduces(source, belt.itemId) || !targetConsumes(state, target, belt.itemId, belt.targetPortIndex)) continue;
+    const allowance = Math.max(0, Math.floor(belt.progress + EPSILON));
+    if (allowance < 1) continue;
+    const targetKey = target.buildingId === "material_delivery_hub"
+      ? `tray:${target.planetId}:${belt.itemId}`
+      : target.buildingId === "micro_black_hole_connector"
+        ? `black-hole:${target.id}:${belt.targetPortIndex ?? -1}`
+        : `${target.id}:${belt.itemId}`;
+    const targetFree = remainingTargetCapacity.has(targetKey)
+      ? remainingTargetCapacity.get(targetKey)!
+      : targetFreeCapacity(state, target, belt.itemId, belt.targetPortIndex);
+    const reserved = Math.min(allowance, Math.max(0, Math.floor(targetFree)));
+    if (reserved < 1) continue;
+    allowanceByBelt.set(belt.id, reserved);
+    remainingTargetCapacity.set(targetKey, Math.max(0, targetFree - reserved));
+    const sourceKey = outputCapacityCreditKey(source.id, belt.itemId);
+    outputCredits.set(sourceKey, Math.min(
+      normalizeBuildingBufferLimit(state.settings.beltBufferLimit),
+      (outputCredits.get(sourceKey) ?? 0) + reserved,
+    ));
+  }
+  return { allowanceByBelt, outputCredits };
+}
+
+function runMiners(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId, credits?: OutputCapacityCredits): void {
   const researchedMiningSpeed = getMiningSpeedMultiplier(state);
   const profile = getPlanetIndustrialProfile(state, planetId);
   for (const entity of state.entities) {
@@ -3200,7 +3274,7 @@ function runMiners(state: GameState, seconds: number, power: PowerPlan, planetId
     const miningSpeed = (ITEMS[entity.resourceId].kind === "solid" ? researchedMiningSpeed : 1) * profile.miningMultiplier;
     const capacity = getEntityOutputCapacity(state, entity);
     const current = Math.floor((entity.outputs[entity.resourceId] ?? 0) + EPSILON);
-    const free = Math.max(0, capacity - current);
+    const free = Math.max(0, capacity - current) + outputCapacityCredit(credits, entity, entity.resourceId);
     const finite = !isVeinInfiniteForState(state, entity);
     const consumptionTenths = getVeinConsumptionTenths(state, entity.resourceId);
     const outputAllowance = finite ? getFiniteVeinOutputAllowance(entity, consumptionTenths) : Number.POSITIVE_INFINITY;
@@ -3278,7 +3352,7 @@ function dysonLaunchEnergyPerCycle(recipeId: RecipeId | undefined): number {
   return 0;
 }
 
-function runMachines(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId): void {
+function runMachines(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId, credits?: OutputCapacityCredits): void {
   const profile = getPlanetIndustrialProfile(state, planetId);
   for (const entity of state.entities) {
     const recipe = getRecipe(entity.recipeId);
@@ -3305,7 +3379,7 @@ function runMachines(state: GameState, seconds: number, power: PowerPlan, planet
       continue;
     }
     const fullInputCycles = Math.floor(availableInputCycles(state, entity) + EPSILON);
-    const fullOutputCycles = Math.floor(availableOutputCycles(state, entity) + EPSILON);
+    const fullOutputCycles = Math.floor(availableOutputCycles(state, entity, credits) + EPSILON);
     const maximumCycles = Math.min(fullInputCycles, fullOutputCycles);
     const sprayedCycleLimit = availableFullProliferatorCycles(entity, recipe);
     const progressAtStart = entity.progress ?? 0;
@@ -3413,6 +3487,7 @@ function runRayReceivers(
   seconds: number,
   reception: DysonReceptionPlan,
   planetId: PlanetId,
+  credits?: OutputCapacityCredits,
 ): void {
   for (const entity of state.entities) {
     if (entity.planetId !== planetId || entity.kind !== "machine" || entity.buildingId !== "ray_receiver") continue;
@@ -3436,7 +3511,7 @@ function runRayReceivers(
     const cyclesPerSecond = building.speed * entity.machineCount / recipe.duration;
     const efficiency = reception.efficiencyByEntity.get(entity.id) ?? 0;
     const potentialCycles = cyclesPerSecond * seconds * efficiency;
-    const maximumCycles = Math.floor(availableOutputCycles(state, entity) + EPSILON);
+    const maximumCycles = Math.floor(availableOutputCycles(state, entity, credits) + EPSILON);
     if (maximumCycles < 1 || potentialCycles <= EPSILON) continue;
     const work = Math.min(potentialCycles, Math.max(0, maximumCycles - entity.progress));
     entity.progress = round(entity.progress + work, 6);
@@ -3460,7 +3535,7 @@ function resetStationRuntime(state: GameState): void {
   }
 }
 
-function runOrbitalCollectors(state: GameState, seconds: number): void {
+function runOrbitalCollectors(state: GameState, seconds: number, credits?: OutputCapacityCredits): void {
   for (const collector of state.entities.filter((entity) => entity.buildingId === "orbital_collector")) {
     const yields = getPlanetOrbitalYields(state, collector.planetId);
     const itemId = collector.storedItemId && (yields[collector.storedItemId] ?? 0) > 0
@@ -3470,7 +3545,7 @@ function runOrbitalCollectors(state: GameState, seconds: number): void {
     collector.stationMode = "supply";
     const capacity = getEntityOutputCapacity(state, collector);
     const current = Math.floor((collector.outputs[itemId] ?? 0) + EPSILON);
-    const free = Math.max(0, capacity - current);
+    const free = Math.max(0, capacity - current) + outputCapacityCredit(credits, collector, itemId);
     if (free < 1) {
       collector.progress = 0;
       continue;
@@ -4039,12 +4114,13 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
   if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
   resetStationRuntime(state);
   subsystemStartedAt = profiler ? profileNow() : 0;
-  runOrbitalCollectors(state, seconds);
   transferLogisticsBuffers(state);
   if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
   subsystemStartedAt = profiler ? profileNow() : 0;
-  transferBelts(state, seconds);
+  transferBelts(state, seconds, true);
   if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
+  const beltStepReservation = reserveBeltStepOutputCapacity(state);
+  runOrbitalCollectors(state, seconds, beltStepReservation.outputCredits);
   subsystemStartedAt = profiler ? profileNow() : 0;
   drainMaterialDeliveryHubs(state, seconds);
   if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
@@ -4087,14 +4163,14 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
     runPowerFacilities(state, seconds, power, planet.id);
     if (profiler) profiler.powerMs += profileNow() - subsystemStartedAt;
     subsystemStartedAt = profiler ? profileNow() : 0;
-    runMiners(state, seconds, power, planet.id);
-    runMachines(state, seconds, power, planet.id);
+    runMiners(state, seconds, power, planet.id, beltStepReservation.outputCredits);
+    runMachines(state, seconds, power, planet.id, beltStepReservation.outputCredits);
     if (profiler) profiler.productionMs += profileNow() - subsystemStartedAt;
     subsystemStartedAt = profiler ? profileNow() : 0;
     runConstructionCenters(state, seconds, power, planet.id);
     if (profiler) profiler.constructionMs += profileNow() - subsystemStartedAt;
     subsystemStartedAt = profiler ? profileNow() : 0;
-    runRayReceivers(state, seconds, reception, planet.id);
+    runRayReceivers(state, seconds, reception, planet.id, beltStepReservation.outputCredits);
     if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
     subsystemStartedAt = profiler ? profileNow() : 0;
     const storage = gridStoredEnergy(state, planet.id);
@@ -4119,6 +4195,10 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
     };
     if (profiler) profiler.powerMs += profileNow() - subsystemStartedAt;
   }
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  transferBelts(state, 0, false, beltStepReservation.allowanceByBelt, seconds);
+  if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
+  drainMaterialDeliveryHubs(state, seconds);
   subsystemStartedAt = profiler ? profileNow() : 0;
   refillStationWarpers(state);
   let phaseStartedAt = profileNow();
@@ -4697,7 +4777,7 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
         itemId: belt.itemId,
         lanes: belt.lanes,
         tier: belt.tier,
-        sorterTier: belt.tier,
+        sorterTier: belt.sorterTier,
         priority: belt.priority,
         stackSize: belt.stackSize,
         monitorEnabled: belt.monitorEnabled,
@@ -5081,7 +5161,7 @@ export function placeBlueprint(
       itemId: template.itemId,
       lanes: template.lanes,
       tier: template.tier,
-      sorterTier: template.tier,
+      sorterTier: Math.min(3, template.tier) as SorterTier,
       progress: 0,
       priority: template.priority,
       stackSize: template.stackSize ?? 1,
@@ -5253,10 +5333,12 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
 export function addBuildingToGroup(state: GameState, entityId: string, buildingId: BuildingId, count = 1): GameState {
   if (buildingId === "micro_black_hole_connector" || buildingId === "time_warp_device" || isEntityInteractionLocked(state, entityId)) return state;
   const amount = Math.max(1, Math.floor(count));
-  if (getBuilding(buildingId).kind === "miner" || (state.construction[buildingId] ?? 0) < amount) return state;
+  const definition = getBuilding(buildingId);
+  if (definition.kind === "miner" || (state.construction[buildingId] ?? 0) < amount) return state;
   const next = copyState(state);
   const entity = next.entities.find((item) => item.id === entityId && item.buildingId === buildingId);
   if (!entity) return state;
+  if (definition.stackLimit && entity.machineCount + amount > definition.stackLimit) return state;
   entity.machineCount += amount;
   next.construction[buildingId] = (next.construction[buildingId] ?? 0) - amount;
   return next;
@@ -7032,7 +7114,7 @@ export function connectBelt(state: GameState, sourceId: string, targetId: string
       itemId,
       lanes: 1,
       tier,
-      sorterTier: tier,
+      sorterTier: Math.min(3, tier) as SorterTier,
       progress: 0,
       priority: target.buildingId === "material_delivery_hub" ? 0 : 1,
       stackSize: canSetBeltStackSize(next, next.settings.defaultBeltStackSize) ? next.settings.defaultBeltStackSize : 1,
@@ -7686,8 +7768,9 @@ export function upgradeEntities(state: GameState, entityIds: string[]): GameStat
 
 export function canUpgradeBelt(state: GameState, beltId: string): boolean {
   const belt = state.belts.find((item) => item.id === beltId);
-  if (!belt || belt.tier >= 3) return false;
-  const targetId = getBeltConstructionId((belt.tier + 1) as BeltTier);
+  const targetTier = belt ? getNextBeltTier(belt.tier) : null;
+  if (!belt || targetTier === null) return false;
+  const targetId = getBeltConstructionId(targetTier);
   const definition = getConstructionDefinition(targetId);
   return Boolean(definition &&
     (!definition.requiredTechId || isTechnologyCompleted(state, definition.requiredTechId)) &&
@@ -7698,14 +7781,14 @@ export function upgradeBelt(state: GameState, beltId: string): GameState {
   if (!canUpgradeBelt(state, beltId)) return state;
   const current = state.belts.find((belt) => belt.id === beltId)!;
   const sourceId = getBeltConstructionId(current.tier);
-  const targetTier = (current.tier + 1) as BeltTier;
+  const targetTier = getNextBeltTier(current.tier)!;
   const targetId = getBeltConstructionId(targetTier);
   const next = copyState(state);
   const belt = next.belts.find((candidate) => candidate.id === beltId)!;
   next.construction[targetId] = (next.construction[targetId] ?? 0) - belt.lanes;
   next.construction[sourceId] = (next.construction[sourceId] ?? 0) + belt.lanes;
   belt.tier = targetTier;
-  belt.sorterTier = targetTier;
+  belt.sorterTier = Math.min(3, targetTier) as SorterTier;
   return next;
 }
 
@@ -7723,11 +7806,11 @@ export function upgradeSorter(state: GameState, beltId: string): GameState {
 }
 
 export function getSorterCapacity(belt: BeltConnection): number {
-  return BELT_CAPACITY_PER_SECOND[belt.tier] * belt.lanes * (belt.stackSize ?? 1);
+  return getBeltSpeed(belt.tier) * belt.lanes * (belt.stackSize ?? 1);
 }
 
 export function getBeltCapacity(belt: BeltConnection): number {
-  return BELT_CAPACITY_PER_SECOND[belt.tier] * belt.lanes * (belt.stackSize ?? 1);
+  return getBeltSpeed(belt.tier) * belt.lanes * (belt.stackSize ?? 1);
 }
 
 export function canSetBeltStackSize(state: GameState, stackSize: CargoStackSize): boolean {

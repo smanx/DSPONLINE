@@ -1,4 +1,5 @@
 import { useRef, useState, type HTMLAttributes, type PointerEvent as ReactPointerEvent } from "react";
+import { alignToDevicePixel } from "../game/displayPixels";
 
 type SwipeDismissBindings<T extends HTMLElement> = Pick<HTMLAttributes<T>,
   "onPointerDown" | "onPointerMove" | "onPointerUp" | "onPointerCancel">;
@@ -61,7 +62,7 @@ export function useSwipeDismiss<T extends HTMLElement>({ axis, direction, thresh
         const drag = dragRef.current;
         if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
         const current = axis === "x" ? pointerEvent.clientX : pointerEvent.clientY;
-        setOffset(Math.max(0, (current - drag.start) * direction));
+        setOffset(alignToDevicePixel(Math.max(0, (current - drag.start) * direction)));
       },
       onPointerUp: (event) => finish(event as ReactPointerEvent<T>),
       onPointerCancel: (event) => finish(event as ReactPointerEvent<T>, true),

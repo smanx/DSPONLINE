@@ -61,7 +61,7 @@ export interface FactoryEdgeData extends Record<string, unknown> {
   itemName: string;
   itemSymbol: string;
   color: string;
-  tier: 1 | 2 | 3;
+  tier: number;
   flow: number;
   capacity: number;
   stackSize: 1 | 2 | 4;

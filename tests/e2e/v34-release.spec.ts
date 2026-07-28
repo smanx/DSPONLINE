@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-28-v1.0.8");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-29-v1.0.9");
   });
 });
 
@@ -81,7 +81,7 @@ test("desktop construction closes the micro-black-hole and time-warp interaction
   await inspector.getByRole("button", { name: "倍率加一" }).click();
   await expect(inspector.getByLabel("时间扭曲请求倍率").locator("input")).toHaveValue("6");
   await expect(exactPowerTooltip).toBeHidden();
-  await expect(inspector).toContainText("离线收益与活动倒计时始终使用真实时间");
+  await expect(inspector).toContainText("离线收益与活动时钟始终使用真实时间");
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.locator(".react-flow__pane").hover({ position: { x: 24, y: 24 } });
   const nodePower = timeWarp.locator(".power-value").first();

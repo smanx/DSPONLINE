@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-07-28-v1.0.8";
+const RELEASE_NOTE_ID = "2026-07-29-v1.0.9";
 
 async function seedV108Factory(page: Page, options: { mobileUi?: "legacy" | "next"; theme?: "dark" | "light"; fontScale?: number } = {}) {
   await page.addInitScript(({ releaseNoteId, mobileUi, theme, fontScale }) => {
@@ -101,7 +101,7 @@ test("structurally complete checksum failures show real progress and require two
     const parsed = JSON.parse(rawSave);
     return { formatVersion: parsed.formatVersion, version: parsed.state.version, checksum: parsed.checksum, state: parsed.state };
   });
-  expect(integrity.version).toBe(39);
+  expect(integrity.version).toBe(40);
   expect(integrity.checksum).toBe(checksum(integrity.formatVersion, integrity.state));
 });
 

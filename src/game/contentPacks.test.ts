@@ -1,17 +1,24 @@
+/** @vitest-environment jsdom */
+
 import { afterEach, describe, expect, it } from "vitest";
 import documentedExample from "../../docs/examples/example-dense-materials.content-pack.json";
-import { CONSTRUCTION, ITEMS, getRecipe, getRecipesForBuilding } from "./content";
+import { CONSTRUCTION, ITEMS, getBeltConstructionId, getBeltSpeed, getBuilding, getRecipe, getRecipesForBuilding } from "./content";
 import {
   applyContentPackRegistry,
   createContentPackRegistry,
   getContentPackValidationContext,
+  getActiveContentPackReferences,
   registerContentPack,
+  saveContentPackRegistry,
   setContentPackEnabled,
 } from "./contentPacks";
 import { satisfiesContentPackVersion, validateContentPack } from "./mods";
+import { advanceSimulation, canSelectTechnology, createInitialState, placeBuilding, selectTechnology, setEntityRecipe } from "./engine";
+import { exportGame, inspectSave } from "./storage";
 
 afterEach(() => {
   applyContentPackRegistry(createContentPackRegistry());
+  window.localStorage.clear();
 });
 
 describe("content pack runtime registry", () => {
@@ -26,6 +33,50 @@ describe("content pack runtime registry", () => {
     expect(report.catalogValid).toBe(true);
     expect(getRecipe("example_dense_plate_recipe" as never)?.requiredTechId).toBe("example_dense_materials");
     expect(getRecipesForBuilding("assembling_machine_mk1").map((recipe) => recipe.id)).toContain("example_dense_plate_recipe");
+  });
+
+  it("applies v2 whitelist overrides, researches custom technology, and registers a custom belt tier", () => {
+    const validation = validateContentPack({
+      formatVersion: 2,
+      id: "qa_runtime_v2",
+      name: "QA Runtime v2",
+      version: "2.0.0",
+      items: [{ id: "qa_matrix", name: "QA 矩阵", kind: "matrix" }],
+      technologies: [{ id: "qa_research", name: "QA 研究", tier: 0, costs: [{ itemId: "electromagnetic_matrix", amount: 1 }] }],
+      buildingOverrides: [{ id: "arc_smelter", speed: 2.5, outputCapacity: 12_345, stackLimit: 99 }],
+      belts: [{ id: "qa_belt_mk4", name: "QA 传送带 Mk.4", tier: 4, speed: 60, requiredTechId: "qa_research", costs: [{ itemId: "iron_ingot", amount: 2 }], outputAmount: 5 }],
+    });
+    expect(validation.valid).toBe(true);
+    const registered = registerContentPack(createContentPackRegistry(), validation);
+    const report = applyContentPackRegistry(registered.registry);
+    expect(report.catalogValid).toBe(true);
+    expect(getBuilding("arc_smelter").speed).toBe(2.5);
+    expect(getBuilding("arc_smelter").stackLimit).toBe(99);
+    expect(getBeltConstructionId(4)).toBe("qa_belt_mk4");
+    expect(getBeltSpeed(4)).toBe(60);
+    expect(CONSTRUCTION.find((definition) => definition.buildingId === "qa_belt_mk4")?.outputAmount).toBe(5);
+
+    let state = createInitialState();
+    expect(state.construction.qa_belt_mk4).toBe(0);
+    expect(canSelectTechnology(state, "qa_research" as never)).toBe(true);
+    state = selectTechnology(state, "qa_research" as never);
+    state.construction.wind_turbine = 1;
+    state.construction.matrix_lab = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 });
+    state = placeBuilding(state, "matrix_lab", { x: 200, y: 0 });
+    state.entities.find((entity) => entity.buildingId === "wind_turbine")!.machineCount = 10;
+    const lab = state.entities.find((entity) => entity.buildingId === "matrix_lab")!;
+    state = setEntityRecipe(state, lab.id, "matrix_research");
+    state.entities.find((entity) => entity.id === lab.id)!.inputs.electromagnetic_matrix = 1;
+    state = advanceSimulation(state, 10);
+    expect(state.research.completedTechIds).toContain("qa_research");
+
+    expect(saveContentPackRegistry(registered.registry)).toBe(true);
+    const references = getActiveContentPackReferences(registered.registry);
+    expect(references).toEqual([{ id: "qa_runtime_v2", version: "2.0.0" }]);
+    const exported = exportGame(state);
+    expect(JSON.parse(exported).state.contentPacks).toEqual(references);
+    expect(inspectSave(exported).valid).toBe(true);
   });
 
   it("registers an enabled pack into the live item, recipe, building, and technology catalogs", () => {

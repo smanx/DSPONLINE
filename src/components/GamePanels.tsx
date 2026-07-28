@@ -67,7 +67,7 @@ import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { ItemCatalogPicker, RecipeCatalogPicker } from "./CatalogPicker";
 import { QuantityStepper } from "./QuantityStepper";
 import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
-import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getTechnology, isConveyorBeltId } from "../game/content";
+import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getNextBeltTier, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getTechnology, isConveyorBeltId } from "../game/content";
 import { MATERIAL_DELIVERY_SLOT_COUNT, MAX_BELT_LANES, MAX_MANUAL_CRAFT_BATCHES, MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltLaneAdjustmentCheck, getBeltNetworkIds, getConstructionAutomationStatus, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityOutputCapacity, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMaterialDeliverySlots, getMaxConstructionQuickCraftBatches, getMaxRecursiveHandcraftBatches, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPlanetTrayItemLimit, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getRecursiveHandcraftPlan, getResourceReserveSnapshot, getSprayCoaterInstallCheck, getSprayCoaterRemovalRefund, getStationActiveRoutes, getStationBusyVehicleCount, getStationDroneCapacity, getStationFleetDiagnostic, getStationMinimumCargo, getStationSlotCapacity, getStationSlots, getStationVesselCapacity, getStationWarperAutoRefillTarget, getStationWarperCapacity, getStationWarperRefillSnapshot, getTimeWarpRequiredPowerKw, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import { getPlanetIndustrialProfile, getPlanetOrbitalYields, specializationApplies } from "../game/galaxy";
 import { analyzeBeltNetwork } from "../game/network";
@@ -987,7 +987,7 @@ function EntityInspector({
         <button className="construction-center-open" type="button" onClick={() => onTimeWarpEnabledChange(!game.timeWarp.enabled)}>{game.timeWarp.enabled ? <Pause size={15} /> : <Play size={15} />}{game.timeWarp.enabled ? "暂停时间扭曲" : "启动时间扭曲"}</button>
       </>}
       <PowerNetworkControl game={game} entity={entity} onGridChange={onPowerGridChange} onPowerPriorityChange={onPowerPriorityChange} onGenerationPriorityChange={onGenerationPriorityChange} />
-      <p className="inspector-description">仅实时前台模拟加速；离线收益与活动倒计时始终使用真实时间。高倍率若无法实时追赶会保留时间债务。</p>
+      <p className="inspector-description">仅实时前台模拟加速；离线收益与活动时钟始终使用真实时间。高倍率若无法实时追赶会保留时间债务。</p>
       <EntityManagementActions game={game} entity={entity} onAdd={onAdd} onRemove={onRemove} />
     </div>;
   }
@@ -1388,7 +1388,7 @@ function EntityInspector({
 }
 
 function beltTierRoman(tier: BeltTier): string {
-  return tier === 3 ? "III" : tier === 2 ? "II" : "I";
+  return tier === 3 ? "III" : tier === 2 ? "II" : tier === 1 ? "I" : String(tier);
 }
 
 function BeltInspector({ game, belt, hasCopiedConfiguration, focused, onPriorityChange, onLaneCountChange, onStackSizeChange, onMonitorChange, onRouteModeChange, onRouteOffsetChange, onApplyConfigurationToNetwork, onFocusNetwork, onUpgrade, onUpgradeNetwork, onCopyConfiguration, onPasteConfiguration, onRemove, onRemoveNetwork }: {
@@ -1415,7 +1415,7 @@ function BeltInspector({ game, belt, hasCopiedConfiguration, focused, onPriority
   const [laneError, setLaneError] = useState<string | null>(null);
   const item = getItem(belt.itemId);
   const capacity = getBeltCapacity(belt);
-  const targetTier = belt.tier < 3 ? (belt.tier + 1) as BeltTier : null;
+  const targetTier = getNextBeltTier(belt.tier);
   const targetId = targetTier ? getBeltConstructionId(targetTier) : null;
   const targetDefinition = targetId ? getConstructionDefinition(targetId) : undefined;
   const targetStock = targetId ? game.construction[targetId] ?? 0 : 0;
@@ -2044,7 +2044,7 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
       <div className="dock-label">
         <div className="dock-summary">
           <span>施工托盘</span>
-          <strong>{formatQuantityCompact(Object.values(game.construction).reduce((sum, amount) => sum + (amount ?? 0), 0) + Object.values(game.portableFleet ?? {}).reduce((sum, amount) => sum + (amount ?? 0), 0))}</strong>
+          <strong>{formatQuantityCompact(Object.values(game.construction).reduce<number>((sum, amount) => sum + (amount ?? 0), 0) + Object.values(game.portableFleet ?? {}).reduce<number>((sum, amount) => sum + (amount ?? 0), 0))}</strong>
         </div>
         <select className="dock-category-select" value={category} onChange={(event) => setCategory(event.target.value as ConstructionCategory)} aria-label="施工托盘分类">
           <option value="all">全部设备</option>
@@ -2070,10 +2070,10 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
           const isBelt = isConveyorBeltId(id);
           const itemBeltTier = isBelt ? getBeltTier(id) : null;
           const active = isBelt ? beltTierMode === "manual" && beltTier === itemBeltTier : placement === id;
-          const label = isBelt ? `传送带 Mk.${beltTierRoman(itemBeltTier!)}` : getBuilding(id).name;
+          const label = isBelt ? `传送带 Mk.${beltTierRoman(itemBeltTier!)}` : getBuilding(id as BuildingId).name;
           const requiredCount = isBelt ? 1 : placementCount;
           const activePlanet = getPlanet(game.activePlanetId);
-          const compatiblePlanet = isBelt ? activePlanet.kind !== "gas-giant" : canPlaceBuildingOnPlanet(id, game.activePlanetId, game);
+          const compatiblePlanet = isBelt ? activePlanet.kind !== "gas-giant" : canPlaceBuildingOnPlanet(id as BuildingId, game.activePlanetId, game);
           const quickCraftPlan = getConstructionQuickCraftPlan(game, id);
           const craftable = quickCraftPlan.possible;
           const quickCraftState = quickCraftPlan.status;
@@ -2103,14 +2103,14 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
                     onBeltTierChange(itemBeltTier!);
                     onPlacementChange(null);
                   } else {
-                    onPlacementChange(active ? null : id);
+                    onPlacementChange(active ? null : id as BuildingId);
                   }
                 }}
                 onDragStart={(event) => {
                   if (isBelt) return;
                   event.dataTransfer.setData("application/factory-building", id);
                   event.dataTransfer.effectAllowed = "move";
-                  onPlacementChange(id);
+                  onPlacementChange(id as BuildingId);
                 }}
                 onDragEnd={() => onPlacementChange(null)}
                 title={!compatiblePlanet ? id === "geothermal_power_station" ? `${label}只能部署在烬原 II` : activePlanet.kind === "gas-giant" ? `${label}不能部署在气态巨星` : `${label}只能部署在气态巨星` : isBelt ? `选择${label}连接节点端口` : `部署${label}${placementCount > 1 ? ` ×${placementCount}` : ""}`}

@@ -1,6 +1,7 @@
 # 原生应用构建与更新
 
 > 当前公开稳定测试版本：Windows `1.0.8`；Android `1.0.8 / 1000008`
+> 下一发布候选：Windows `1.0.9`；Android `1.0.9 / 1000009`。候选包必须从最终可追溯提交重建并完成签名、覆盖升级与本地数据保留验证后，才能替换稳定清单。
 > Windows 包名：`com.dspidle.network`
 > Android applicationId：`cn.dsponline.network`
 > Android 与 Windows 1.0.8 均与 Web 共用 `GameState` v39。两端存档 envelope v2 和云 schema v7 不变；v38 存档通过守恒迁移载入。

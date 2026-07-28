@@ -1,4 +1,4 @@
-import { Clock3, RadioTower } from "lucide-react";
+import { Clock3, Infinity as InfinityIcon, RadioTower } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ITEMS } from "../game/content";
 import { activityCountdownLabel, activityOverallProgress, type GalacticActivityPublicStatus } from "../game/galacticActivity";
@@ -12,9 +12,10 @@ export function GalacticActivityPanel({ game, status, compact = false }: { game:
   const anchorRef = useRef({ status, clientAt: Date.now() });
   if (anchorRef.current.status !== status) anchorRef.current = { status, clientAt: Date.now() };
   useEffect(() => {
+    if (status?.openEnded && status.status === "active") return undefined;
     const timer = window.setInterval(() => setTick((value) => value + 1), 1_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [status?.openEnded, status?.status]);
   void tick;
   const activity = game.endgame.constructionActivity;
   if (!status?.enabled || !status.personalTargets || !status.globalTargets || !status.globalDelivered) {
@@ -28,12 +29,12 @@ export function GalacticActivityPanel({ game, status, compact = false }: { game:
   const globalOverall = activityOverallProgress(status.globalDelivered, status.globalTargets);
   const pending = Object.values(activity.pendingBatches).reduce((sum, batch) => sum + (batch?.amount ?? 0), 0);
   return <section className={`galactic-activity${compact ? " galactic-activity--compact" : ""}`}>
-    <header><span><RadioTower size={16} />宇宙联合空间站巨构建设任务</span><strong><Clock3 size={14} />{activityCountdownLabel(status, serverNow)}</strong></header>
+    <header><span><RadioTower size={16} />宇宙联合空间站巨构建设任务</span><strong>{status.openEnded && status.status === "active" ? <InfinityIcon size={14} /> : <Clock3 size={14} />}{activityCountdownLabel(status, serverNow)}</strong></header>
     <div className="galactic-activity__summary">
       <span>个人任务<strong>{Math.floor(personalOverall * 100)}%</strong></span>
       <span>全服模拟<strong>{Math.floor(globalOverall * 100)}%</strong></span>
       <span>本地已记录<strong><QuantityValue value={pending} /></strong></span>
-      <span>活动奖励<strong>后续开放</strong></span>
+      <span>开放周期<strong>长期开放</strong></span>
     </div>
     <div className="galactic-activity__materials">
       {ACTIVITY_MATERIAL_IDS.map((itemId) => {
@@ -48,6 +49,6 @@ export function GalacticActivityPanel({ game, status, compact = false }: { game:
         </div>;
       })}
     </div>
-    <p>{personalOverall >= 1 ? "个人任务已完成，继续交付仍会保留在本地记录中。" : "四项物资全部达到目标后，个人任务才算完成。"} 本版无需登录且不会上传贡献；全服进度按服务器时间模拟，活动奖励将在后续版本开放。</p>
+    <p>{personalOverall >= 1 ? "个人任务已完成，继续交付仍会保留在本地记录中。" : "四项物资全部达到目标后，个人任务才算完成。"} 活动不再倒计时并长期开放；本版无需登录且不会上传贡献，奖励将在后续版本开放。</p>
   </section>;
 }

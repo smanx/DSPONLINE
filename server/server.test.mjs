@@ -790,7 +790,7 @@ test("validates v33 proliferator and exact infinite research fields while accept
   assert.equal(accepted.response.status, 200);
 });
 
-test("validates v34 time warp and accepts Android v35 through current v39 saves", async () => {
+test("validates v34 time warp and accepts Android v35 through current v40 saves", async () => {
   const research = Object.fromEntries([
     ["matrix_compression", 1_000],
     ["vein_utilization", 1_000],
@@ -943,6 +943,58 @@ test("validates v34 time warp and accepts Android v35 through current v39 saves"
   }
   const acceptedV39 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v39PayloadFor(), expectedRevision: 7 }) });
   assert.equal(acceptedV39.response.status, 200);
+
+  const v40PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    Object.assign(state, JSON.parse(v39PayloadFor()).state);
+    state.version = 40;
+    state.settings.beltBufferLimit = 100_000_000;
+    state.contentPacks = [];
+    for (const belt of state.belts) {
+      belt.tier ??= 1;
+      belt.progress ??= 0;
+    }
+    mutate(state);
+  });
+  for (const invalid of [
+    v40PayloadFor((state) => { state.settings.beltBufferLimit = 100_000_001; }),
+    v40PayloadFor((state) => { state.belts[0].progress = 100_000_001; }),
+    v40PayloadFor((state) => { state.belts[0].tier = 33; }),
+    v40PayloadFor((state) => { state.contentPacks = [{ id: "Invalid-Pack", version: "1.0.0" }]; }),
+    v40PayloadFor((state) => { state.contentPacks = [{ id: "factory_pack", version: "latest" }]; }),
+    v40PayloadFor((state) => { state.contentPacks = [{ id: "factory_pack", version: `1.0.0-${"a".repeat(40)}` }]; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 8 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+  const acceptedV40 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v40PayloadFor(), expectedRevision: 8 }) });
+  assert.equal(acceptedV40.response.status, 200);
+});
+
+test("accepts declarative content-pack cloud saves but excludes them from official ranking", async () => {
+  const registered = await request("/api/auth/register", { method: "POST", body: JSON.stringify({ username: "modded_pilot", password: "strong-pass-456", displayName: "内容包玩家" }) });
+  assert.equal(registered.response.status, 201);
+  const modToken = registered.body.token;
+  const payload = createSavePayload({
+    version: 40,
+    elapsedSeconds: 7_200,
+    entities: [],
+    belts: [],
+    settings: { productionBufferLimit: 1_000_000, logisticsBufferLimit: 1_000_000, beltBufferLimit: 100_000_000, proliferatorBufferLimit: 600 },
+    contentPacks: [{ id: "community_factory", version: "1.2.3" }],
+    totalProduced: { universe_matrix: 999 },
+    constructionAutomation: { destroyedByproducts: {} },
+    blueprints: [],
+    dysonPlans: {},
+    timeWarp: { controllerEntityId: null, enabled: false, requestedMultiplier: 5, effectiveMultiplier: 1, pendingSimulationSeconds: 0, pendingWallSeconds: 0, requiredPowerKw: 0, allocatedPowerKw: 0 },
+    endgame: { infiniteResearch: Object.fromEntries(["matrix_compression", "vein_utilization", "galactic_logistics", "stellar_harnessing", "continuum_simulation"].map((id) => [id, { level: 0, progress: "0" }])) },
+  });
+  const uploaded = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${modToken}` }, body: JSON.stringify({ payload, expectedRevision: 0 }) });
+  assert.equal(uploaded.response.status, 200);
+  const refreshed = await request("/api/leaderboard", { method: "POST", headers: { authorization: `Bearer ${modToken}` }, body: JSON.stringify({ seasonId: "season_01" }) });
+  assert.equal(refreshed.response.status, 422);
+  assert.match(refreshed.body.error, /内容包/);
+  const leaderboard = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
+  assert.equal(leaderboard.body.entries.some((entry) => entry.displayName === "内容包玩家"), false);
 });
 
 test("recalculates leaderboard score on the server", async () => {

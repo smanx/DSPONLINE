@@ -146,6 +146,7 @@ export interface CloudPublicStatus {
     revision?: string | null;
     startsAtMs?: number;
     endsAtMs?: number;
+    openEnded?: boolean;
     personalTargets?: Record<"universe_matrix" | "solar_sail" | "small_carrier_rocket" | "antimatter_fuel_rod", number>;
     globalTargets?: Record<"universe_matrix" | "solar_sail" | "small_carrier_rocket" | "antimatter_fuel_rod", number>;
     globalDelivered?: Record<"universe_matrix" | "solar_sail" | "small_carrier_rocket" | "antimatter_fuel_rod", number>;

@@ -32,12 +32,12 @@ export function normalizeActivityConfig(raw) {
   const startsAtMs = Date.parse(raw.startsAt);
   const endsAtMs = Date.parse(raw.endsAt);
   if (!Number.isFinite(startsAtMs) || !Number.isFinite(endsAtMs) || endsAtMs - startsAtMs !== ACTIVITY_DURATION_MS) {
-    return disabled("活动时间必须精确为 3 天");
+    return disabled("全服模拟进度阶段必须精确为 3 天");
   }
   const personalTargets = exactAmountRecord(raw.personalTargets, 1_000_000);
   const globalTargets = exactAmountRecord(raw.globalTargets, null);
   if (!personalTargets || !globalTargets) return disabled("活动四项目标无效");
-  const canonical = { id: raw.id.trim(), startsAt: new Date(startsAtMs).toISOString(), endsAt: new Date(endsAtMs).toISOString(), personalTargets, globalTargets };
+  const canonical = { id: raw.id.trim(), startsAt: new Date(startsAtMs).toISOString(), endsAt: new Date(endsAtMs).toISOString(), openEnded: true, personalTargets, globalTargets };
   return {
     enabled: true,
     valid: true,
@@ -88,7 +88,7 @@ export function getActivityPublicStatus(config, now = Date.now()) {
   if (!config?.enabled || !config.valid) {
     return { enabled: false, status: "disabled", serverNow, reason: config?.reason ?? "活动配置未启用", revision: null };
   }
-  const status = serverNow < config.startsAtMs ? "scheduled" : serverNow >= config.endsAtMs ? "ended" : "active";
+  const status = serverNow < config.startsAtMs ? "scheduled" : "active";
   const sampleNow = Math.min(config.endsAtMs, Math.max(config.startsAtMs, serverNow));
   const u = (sampleNow - config.startsAtMs) / ACTIVITY_DURATION_MS;
   const globalDelivered = Object.fromEntries(ACTIVITY_MATERIAL_IDS.map((itemId) => [
@@ -105,6 +105,7 @@ export function getActivityPublicStatus(config, now = Date.now()) {
     endsAt: config.endsAt,
     startsAtMs: config.startsAtMs,
     endsAtMs: config.endsAtMs,
+    openEnded: true,
     personalTargets: { ...config.personalTargets },
     globalTargets: { ...config.globalTargets },
     globalDelivered,

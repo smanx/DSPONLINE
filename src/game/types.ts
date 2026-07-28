@@ -254,13 +254,14 @@ export type BuildingId =
   | "micro_black_hole_connector"
   | "time_warp_device";
 
-export type BeltTier = 1 | 2 | 3;
+/** Core tiers are 1..3; declarative content packs may register tiers 4..32. */
+export type BeltTier = number;
 export type SorterTier = 1 | 2 | 3;
 export type BeltRouteMode = "bezier" | "auto" | "upper" | "lower" | "manual";
 export type DefaultBeltRouteMode = Exclude<BeltRouteMode, "manual">;
 export type ProliferatorTier = 1 | 2 | 3;
 export type ProliferatorMode = "normal" | "extra" | "speed";
-export type ConveyorBeltId = "conveyor_belt_mk1" | "conveyor_belt_mk2" | "conveyor_belt_mk3";
+export type ConveyorBeltId = string;
 export type SorterId = "sorter_mk1" | "sorter_mk2" | "sorter_mk3";
 export type ConstructionId = BuildingId | ConveyorBeltId | SorterId;
 
@@ -602,6 +603,7 @@ export interface BuildingDefinition {
   outputCapacity: number;
   accepts?: "solid" | "fluid" | "any";
   tier?: BeltTier;
+  stackLimit?: number;
   family?: "smelter" | "assembler" | "chemical";
   megastructure?: boolean;
   description: string;
@@ -1051,10 +1053,17 @@ export interface GameSettings {
   defaultBeltRouteMode: DefaultBeltRouteMode;
   productionBufferLimit: number;
   logisticsBufferLimit: number;
+  /** Maximum transient transport credit per belt; not cargo or throughput. */
+  beltBufferLimit: number;
   proliferatorBufferLimit: number;
   autosaveIntervalSeconds: AutosaveIntervalSeconds;
   resourceMode: ResourceMode;
   difficulty: DifficultyMode;
+}
+
+export interface GameContentPackReference {
+  id: string;
+  version: string;
 }
 
 export type ThemeMode = "dark" | "light" | "system";
@@ -1266,7 +1275,7 @@ export interface ConstructionAutomationJob {
 }
 
 export interface GameState {
-  version: 39;
+  version: 40;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -1285,6 +1294,8 @@ export interface GameState {
   galaxy: GalaxyState;
   recipeFocus: RecipeFocusState;
   settings: GameSettings;
+  /** Enabled declarative content required to interpret extension IDs in this save. */
+  contentPacks: GameContentPackReference[];
   achievements: AchievementState;
   campaign: CampaignState;
   planetViewports: Record<PlanetId, CanvasViewport>;

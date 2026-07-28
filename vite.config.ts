@@ -41,11 +41,24 @@ function scaleUiFontSizes(): Plugin {
   };
 }
 
+function emitVersionMetadata(): Plugin {
+  return {
+    name: "emit-version-metadata",
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "version.json",
+        source: `${JSON.stringify({ version: appVersion, buildId, generatedAt: new Date().toISOString() })}\n`,
+      });
+    },
+  };
+}
+
 export default defineConfig({
   // Relative assets are required by the packaged file:// Electron shell and
   // remain valid for the root-served web/PWA build.
   base: "./",
-  plugins: [scaleUiFontSizes(), react()],
+  plugins: [scaleUiFontSizes(), react(), emitVersionMetadata()],
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
     __BUILD_ID__: JSON.stringify(buildId),

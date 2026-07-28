@@ -797,11 +797,13 @@ function validateSavePayload(payload) {
     const parsed = integrity.parsed;
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities) ||
-      !Number.isInteger(state.version) || state.version < 1 || state.version > 39) return false;
+      !Number.isInteger(state.version) || state.version < 1 || state.version > 40) return false;
     if (state.version >= 38 && !Array.isArray(state.belts)) return false;
     if (state.belts !== undefined && (!Array.isArray(state.belts) || state.belts.some((belt) =>
       state.version >= 38
-        ? !Number.isInteger(belt?.lanes) || belt.lanes < 1 || belt.lanes > 4_096
+        ? !Number.isInteger(belt?.lanes) || belt.lanes < 1 || belt.lanes > 4_096 || state.version >= 40 && (
+          !Number.isInteger(belt?.tier) || belt.tier < 1 || belt.tier > 32 ||
+          !Number.isFinite(belt?.progress) || belt.progress < 0 || belt.progress > 100_000_000)
         : belt?.lanes !== undefined && (!Number.isInteger(belt.lanes) || belt.lanes < 1 || belt.lanes > 4_096)))) return false;
     const validBufferLimit = (value) => Number.isInteger(value) && value >= 1_000 && value <= 100_000_000;
     const productionLimit = state.settings?.productionBufferLimit;
@@ -809,6 +811,12 @@ function validateSavePayload(payload) {
     if (state.version >= 32 && (!validBufferLimit(productionLimit) || !validBufferLimit(logisticsLimit))) return false;
     if (productionLimit !== undefined && !validBufferLimit(productionLimit)) return false;
     if (logisticsLimit !== undefined && !validBufferLimit(logisticsLimit)) return false;
+    if (state.version >= 40) {
+      if (!validBufferLimit(state.settings?.beltBufferLimit)) return false;
+      if (!Array.isArray(state.contentPacks) || state.contentPacks.length > 64 || state.contentPacks.some((entry) =>
+        !entry || typeof entry !== "object" || typeof entry.id !== "string" || !/^[a-z][a-z0-9_]{1,63}$/.test(entry.id) ||
+        typeof entry.version !== "string" || entry.version.length > 40 || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(entry.version))) return false;
+    }
     if (state.planetTrayItemLimits !== undefined) {
       if (!state.planetTrayItemLimits || typeof state.planetTrayItemLimits !== "object" || Array.isArray(state.planetTrayItemLimits) ||
         Object.values(state.planetTrayItemLimits).some((value) => !validBufferLimit(value))) return false;
@@ -993,6 +1001,10 @@ function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.
   if (!metadata) return { changed: false, submission: null, reason: "missing-save" };
   const materialized = typeof metadata.payload === "string" ? metadata : materializeCloudSave(store, userId, "main", metadata);
   if (!materialized) return { changed: false, submission: null, reason: "missing-payload" };
+  const state = parseSaveState(materialized.payload);
+  if (Array.isArray(state?.contentPacks) && state.contentPacks.length > 0) {
+    return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "modded-save" };
+  }
   const observed = leaderboardMetricsFromSave(materialized);
   if (!observed) return { changed: false, submission: null, reason: "invalid-save" };
   const key = `${ACTIVE_LEADERBOARD_SEASON_ID}:${userId}`;
@@ -1833,6 +1845,7 @@ export async function createCloudServer({
         const result = updateLeaderboardFromMainSave(store, auth.user.id, { force: true });
         if (result.reason === "missing-save") return send(response, 409, { error: "请先上传当前主云存档，再刷新排行榜" });
         if (result.reason === "missing-payload") return send(response, 500, { error: "云存档正文缺失，暂时无法刷新排行榜", code: "CLOUD_SAVE_PAYLOAD_MISSING" });
+        if (result.reason === "modded-save") return send(response, 422, { error: "启用内容包的存档不参与官方排行榜" });
         if (result.reason === "invalid-save" || !result.submission) return send(response, 422, { error: "主云存档无法用于排行榜计算" });
         dayMetric.leaderboardSubmissions += 1;
         await store.persist();

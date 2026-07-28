@@ -1,7 +1,7 @@
 import { BUILDINGS, ITEMS, RECIPES, TECHNOLOGIES, validateContentCatalog } from "./content";
 import type { BuildingDefinition, ItemDefinition } from "./types";
 
-export const MOD_FORMAT_VERSION = 1;
+export const MOD_FORMAT_VERSION = 2;
 
 export interface ModItemDefinition {
   id: string;
@@ -44,6 +44,28 @@ export interface ModBuildingDefinition {
   outputAmount?: number;
 }
 
+export interface ModBuildingOverride {
+  id: string;
+  speed?: number;
+  inputCapacity?: number;
+  outputCapacity?: number;
+  powerDemandKw?: number;
+  powerGenerationKw?: number;
+  powerChargeKw?: number;
+  energyCapacityMj?: number;
+  stackLimit?: number;
+}
+
+export interface ModBeltDefinition {
+  id: string;
+  name: string;
+  tier: number;
+  speed: number;
+  requiredTechId?: string;
+  costs: ModRecipeAmount[];
+  outputAmount?: number;
+}
+
 export interface ModTechnologyDefinition {
   id: string;
   name: string;
@@ -66,6 +88,8 @@ export interface ContentPackManifest {
   buildings?: ModBuildingDefinition[];
   recipes?: ModRecipeDefinition[];
   technologies?: ModTechnologyDefinition[];
+  buildingOverrides?: ModBuildingOverride[];
+  belts?: ModBeltDefinition[];
 }
 
 export interface ParsedContentPackDependency {
@@ -179,8 +203,8 @@ function parseManifest(value: unknown, issues: ModValidationIssue[], context?: C
     return null;
   }
   const formatVersion = typeof value.formatVersion === "number" ? Math.floor(value.formatVersion) : 0;
-  if (formatVersion !== MOD_FORMAT_VERSION) {
-    issues.push({ severity: "error", code: "format-version", path: "$.formatVersion", message: `内容包格式必须为 v${MOD_FORMAT_VERSION}` });
+  if (formatVersion !== 1 && formatVersion !== MOD_FORMAT_VERSION) {
+    issues.push({ severity: "error", code: "format-version", path: "$.formatVersion", message: `内容包格式必须为 v1 或 v${MOD_FORMAT_VERSION}` });
   }
   for (const [key, label] of [["id", "内容包 ID"], ["name", "内容包名称"], ["version", "版本号"]] as const) {
     if (!nonEmpty(value[key])) issues.push({ severity: "error", code: "metadata", path: `$.${key}`, message: `${label}不能为空` });
@@ -195,7 +219,9 @@ function parseManifest(value: unknown, issues: ModValidationIssue[], context?: C
   const buildings = Array.isArray(value.buildings) ? value.buildings : [];
   const recipes = Array.isArray(value.recipes) ? value.recipes : [];
   const technologies = Array.isArray(value.technologies) ? value.technologies : [];
-  if (items.length > 256 || buildings.length > 128 || recipes.length > 512 || technologies.length > 256) {
+  const buildingOverrides = formatVersion >= 2 && Array.isArray(value.buildingOverrides) ? value.buildingOverrides : [];
+  const belts = formatVersion >= 2 && Array.isArray(value.belts) ? value.belts : [];
+  if (items.length > 256 || buildings.length > 128 || recipes.length > 512 || technologies.length > 256 || buildingOverrides.length > 128 || belts.length > 29) {
     issues.push({ severity: "error", code: "size-limit", path: "$", message: "内容包超过单包内容数量上限" });
   }
 
@@ -265,13 +291,54 @@ function parseManifest(value: unknown, issues: ModValidationIssue[], context?: C
     if (entry.requiredTechId !== undefined && !validId(entry.requiredTechId)) issues.push({ severity: "error", code: "recipe-tech", path: `$.recipes[${index}].requiredTechId`, message: "配方科技 ID 无效" });
     return [{ id: entry.id, name: entry.name.trim().slice(0, 80), buildingId: entry.buildingId, duration: entry.duration, ...(entry.requiredTechId ? { requiredTechId: entry.requiredTechId } : {}), inputs: entry.inputs, outputs: entry.outputs }];
   });
+  const coreBuildings = new Set(Object.keys(BUILDINGS));
+  const overrideRanges = {
+    speed: [0.01, 1_000],
+    inputCapacity: [0, 100_000_000],
+    outputCapacity: [0, 100_000_000],
+    powerDemandKw: [0, 1_000_000_000_000],
+    powerGenerationKw: [0, 1_000_000_000_000],
+    powerChargeKw: [0, 1_000_000_000_000],
+    energyCapacityMj: [0, 1_000_000_000_000],
+    stackLimit: [1, 1_000_000],
+  } as const;
+  const validBuildingOverrides = buildingOverrides.filter(isRecord).flatMap((entry, index) => {
+    if (!validId(entry.id) || !coreBuildings.has(entry.id)) {
+      issues.push({ severity: "error", code: "building-override-id", path: `$.buildingOverrides[${index}].id`, message: "白名单覆盖只能引用现有核心建筑" });
+      return [];
+    }
+    const normalized: Record<string, number | string> = { id: entry.id };
+    let count = 0;
+    for (const [key, range] of Object.entries(overrideRanges)) {
+      const candidate = entry[key];
+      if (candidate === undefined) continue;
+      count += 1;
+      if (typeof candidate !== "number" || !Number.isFinite(candidate) || candidate < range[0] || candidate > range[1] ||
+        ((key === "inputCapacity" || key === "outputCapacity" || key === "stackLimit") && !Number.isInteger(candidate))) {
+        issues.push({ severity: "error", code: "building-override-value", path: `$.buildingOverrides[${index}].${key}`, message: `${key} 超出安全范围` });
+        continue;
+      }
+      normalized[key] = candidate;
+    }
+    if (count === 0) issues.push({ severity: "error", code: "building-override-empty", path: `$.buildingOverrides[${index}]`, message: "建筑覆盖至少需要一个白名单数值字段" });
+    return [normalized as unknown as ModBuildingOverride];
+  });
+  const validBelts = belts.filter(isRecord).flatMap((entry, index) => {
+    if (!validId(entry.id) || !nonEmpty(entry.name) || !Number.isInteger(entry.tier) || entry.tier < 4 || entry.tier > 32 ||
+      typeof entry.speed !== "number" || !Number.isFinite(entry.speed) || entry.speed <= 0 || entry.speed > 1_000_000 || !amountList(entry.costs)) {
+      issues.push({ severity: "error", code: "belt-shape", path: `$.belts[${index}]`, message: "自定义传送带需要合法 ID、4～32 级、速度和制造成本" });
+      return [];
+    }
+    if (entry.requiredTechId !== undefined && !validId(entry.requiredTechId)) issues.push({ severity: "error", code: "belt-tech", path: `$.belts[${index}].requiredTechId`, message: "传送带科技 ID 无效" });
+    if (entry.outputAmount !== undefined && (!Number.isInteger(entry.outputAmount) || entry.outputAmount < 1 || entry.outputAmount > 1_000)) issues.push({ severity: "error", code: "belt-output", path: `$.belts[${index}].outputAmount`, message: "传送带单批产出必须为 1～1000 的整数" });
+    return [{ id: entry.id, name: entry.name.trim().slice(0, 80), tier: entry.tier, speed: entry.speed, costs: entry.costs, ...(entry.requiredTechId ? { requiredTechId: entry.requiredTechId } : {}), ...(entry.outputAmount ? { outputAmount: entry.outputAmount } : {}) }];
+  });
 
   const itemIds = uniqueIds(validItems, "$.items", issues);
   const buildingIds = uniqueIds(validBuildings, "$.buildings", issues);
   const recipeIds = uniqueIds(validRecipes, "$.recipes", issues);
   const technologyIds = uniqueIds(validTechnologies, "$.technologies", issues);
   const coreItems = new Set(Object.keys(ITEMS));
-  const coreBuildings = new Set(Object.keys(BUILDINGS));
   const coreRecipes = new Set(Object.keys(RECIPES));
   const coreTechnologies = new Set(Object.keys(TECHNOLOGIES));
   for (const id of itemIds) if (coreItems.has(id)) issues.push({ severity: "error", code: "override-item", path: "$.items", message: `不能覆盖核心物品 ${id}` });
@@ -281,6 +348,14 @@ function parseManifest(value: unknown, issues: ModValidationIssue[], context?: C
   const allItems = new Set([...coreItems, ...(context?.itemIds ?? []), ...itemIds]);
   const allBuildings = new Set([...coreBuildings, ...(context?.buildingIds ?? []), ...buildingIds]);
   const allTechnologies = new Set([...coreTechnologies, ...(context?.technologyIds ?? []), ...technologyIds]);
+  if (new Set(validBelts.map((belt) => belt.id)).size !== validBelts.length || new Set(validBelts.map((belt) => belt.tier)).size !== validBelts.length) {
+    issues.push({ severity: "error", code: "belt-duplicate", path: "$.belts", message: "自定义传送带 ID 和等级必须唯一" });
+  }
+  for (const belt of validBelts) {
+    if (coreBuildings.has(belt.id) || coreItems.has(belt.id) || coreRecipes.has(belt.id) || coreTechnologies.has(belt.id)) issues.push({ severity: "error", code: "belt-id-conflict", path: `$.belts.${belt.id}`, message: `传送带 ID ${belt.id} 与核心目录冲突` });
+    if (belt.requiredTechId && !allTechnologies.has(belt.requiredTechId)) issues.push({ severity: "error", code: "belt-tech", path: `$.belts.${belt.id}`, message: `传送带引用未知科技 ${belt.requiredTechId}` });
+    for (const cost of belt.costs) if (!allItems.has(cost.itemId)) issues.push({ severity: "error", code: "belt-cost", path: `$.belts.${belt.id}`, message: `传送带引用未知物品 ${cost.itemId}` });
+  }
   for (const recipe of validRecipes) {
     if (!allBuildings.has(recipe.buildingId)) issues.push({ severity: "error", code: "recipe-building", path: `$.recipes.${recipe.id}`, message: `配方引用未知建筑 ${recipe.buildingId}` });
     if (recipe.requiredTechId && !allTechnologies.has(recipe.requiredTechId)) issues.push({ severity: "error", code: "recipe-tech", path: `$.recipes.${recipe.id}`, message: `配方引用未知科技 ${recipe.requiredTechId}` });
@@ -300,6 +375,8 @@ function parseManifest(value: unknown, issues: ModValidationIssue[], context?: C
     buildings: validBuildings,
     recipes: validRecipes,
     technologies: validTechnologies,
+    buildingOverrides: validBuildingOverrides,
+    belts: validBelts,
   };
 }
 
@@ -349,5 +426,7 @@ export function createContentPackTemplate(): ContentPackManifest {
     buildings: [],
     recipes: [],
     technologies: [],
+    buildingOverrides: [],
+    belts: [],
   };
 }

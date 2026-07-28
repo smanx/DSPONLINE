@@ -1,0 +1,46 @@
+@media (max-width: 980px) {
+  .mobile-panel--resources:not([data-mobile-panel-dragging="true"]) .resource-rail,
+  .mobile-panel--inspector:not([data-mobile-panel-dragging="true"]) .inspector-panel,
+  .game-shell:not([data-mobile-panel-dragging="true"]) .mobile-panel-swipe-handle {
+    transform: none;
+  }
+}
+
+.start-menu-language-prominent {
+  min-height: 44px;
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface-raised);
+}
+
+.start-menu-language-prominent button {
+  min-width: 72px;
+  min-height: 36px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: calc(12px * var(--ui-font-scale, 1));
+  font-weight: 700;
+}
+
+.start-menu-language-prominent button.active {
+  background: color-mix(in srgb, var(--cyan) 18%, var(--surface));
+  color: var(--cyan);
+}
+
+@media (max-width: 560px) {
+  .start-menu-topbar { height: auto; min-height: 46px; align-items: center; flex-wrap: wrap; gap: 4px; padding-block: 4px; }
+  .start-menu-language-prominent { order: 3; width: 100%; }
+  .start-menu-language-prominent button { min-width: 0; min-height: 44px; }
+}
+
+@media (max-width: 360px) {
+  .start-menu-nav { grid-template-columns: 1fr; }
+  .start-menu-title h1 { overflow: visible; text-overflow: clip; white-space: normal; }
+  .start-menu-title em { grid-column: 1 / -1; justify-self: start; }
+}
