@@ -1,5 +1,6 @@
 import type { LeaderboardCategoryId, LeaderboardMetrics } from "./leaderboard";
 import { apiFetch } from "./apiTransport";
+import { inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
 
 export const CLOUD_TOKEN_STORAGE_KEY = "dsp-idle-network.cloud-token.v1";
 export const CLOUD_SYNC_STORAGE_KEY = "dsp-idle-network.cloud-sync.v1";
@@ -66,6 +67,8 @@ export interface CloudSaveSummary {
   structurePoints: number;
   uploadedWhiteMatrix: number;
   stateChecksum: string | null;
+  computedStateChecksum?: string | null;
+  integrity?: "valid" | "invalid";
 }
 
 export interface CloudSyncMarker {
@@ -225,6 +228,7 @@ function normalizedCloudSaveSlots(
 
 export function summarizeCloudPayload(payload: string): CloudSaveSummary | null {
   try {
+    const integrity = inspectSaveEnvelopeChecksum(payload);
     const parsed = JSON.parse(payload) as Record<string, any>;
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities)) return null;
@@ -238,6 +242,8 @@ export function summarizeCloudPayload(payload: string): CloudSaveSummary | null 
       structurePoints: typeof state.dysonSphere?.structurePoints === "number" ? Math.max(0, Math.floor(state.dysonSphere.structurePoints)) : 0,
       uploadedWhiteMatrix: typeof state.totalProduced?.universe_matrix === "number" ? Math.max(0, Math.floor(state.totalProduced.universe_matrix)) : 0,
       stateChecksum: typeof parsed.checksum === "string" ? parsed.checksum : null,
+      computedStateChecksum: integrity.computedChecksum,
+      integrity: integrity.status === "valid" ? "valid" : "invalid",
     };
   } catch {
     return null;
@@ -450,6 +456,14 @@ function cloudSaveQuery(slot: CloudSaveSlot, revision?: number): string {
 }
 
 export async function uploadCloudSave(payload: string, expectedRevision: number, slot: CloudSaveSlot = "main"): Promise<CloudSaveMetadata> {
+  const integrity = inspectSaveEnvelopeChecksum(payload);
+  if (integrity.status !== "valid") {
+    throw new CloudApiError("云存档上传前完整性自检失败，请先在存档管理中导出备份并使用救援入口", 0, {
+      code: "SAVE_INTEGRITY_INVALID",
+      recordedChecksum: integrity.recordedChecksum,
+      computedChecksum: integrity.computedChecksum,
+    });
+  }
   const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save${cloudSaveQuery(slot)}`, { method: "PUT", body: JSON.stringify({ payload, expectedRevision }) }, true);
   return { ...result.cloudSave, slot };
 }

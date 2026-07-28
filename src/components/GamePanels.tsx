@@ -68,7 +68,7 @@ import { ItemCatalogPicker, RecipeCatalogPicker } from "./CatalogPicker";
 import { QuantityStepper } from "./QuantityStepper";
 import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getTechnology, isConveyorBeltId } from "../game/content";
-import { MATERIAL_DELIVERY_SLOT_COUNT, MAX_BELT_LANES, MAX_MANUAL_CRAFT_BATCHES, MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltLaneAdjustmentCheck, getBeltNetworkIds, getConstructionAutomationStatus, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityOutputCapacity, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMaxConstructionQuickCraftBatches, getMaxRecursiveHandcraftBatches, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPlanetTrayItemLimit, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getRecursiveHandcraftPlan, getResourceReserveSnapshot, getSprayCoaterInstallCheck, getSprayCoaterRemovalRefund, getStationActiveRoutes, getStationBusyVehicleCount, getStationDroneCapacity, getStationFleetDiagnostic, getStationMinimumCargo, getStationSlotCapacity, getStationSlots, getStationVesselCapacity, getStationWarperAutoRefillTarget, getStationWarperCapacity, getStationWarperRefillSnapshot, getTimeWarpRequiredPowerKw, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
+import { MATERIAL_DELIVERY_SLOT_COUNT, MAX_BELT_LANES, MAX_MANUAL_CRAFT_BATCHES, MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltLaneAdjustmentCheck, getBeltNetworkIds, getConstructionAutomationStatus, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityOutputCapacity, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMaterialDeliverySlots, getMaxConstructionQuickCraftBatches, getMaxRecursiveHandcraftBatches, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPlanetTrayItemLimit, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getRecursiveHandcraftPlan, getResourceReserveSnapshot, getSprayCoaterInstallCheck, getSprayCoaterRemovalRefund, getStationActiveRoutes, getStationBusyVehicleCount, getStationDroneCapacity, getStationFleetDiagnostic, getStationMinimumCargo, getStationSlotCapacity, getStationSlots, getStationVesselCapacity, getStationWarperAutoRefillTarget, getStationWarperCapacity, getStationWarperRefillSnapshot, getTimeWarpRequiredPowerKw, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
 import { getPlanetIndustrialProfile, getPlanetOrbitalYields, specializationApplies } from "../game/galaxy";
 import { analyzeBeltNetwork } from "../game/network";
 import { ACTIVITY_MATERIAL_IDS } from "../game/activity";
@@ -87,6 +87,7 @@ import type {
   GameState,
   InterstellarRoutePolicy,
   ItemId,
+  MaterialDeliverySlotMode,
   PlacementCount,
   PlanetId,
   PortableFleetItemId,
@@ -373,6 +374,7 @@ interface InspectorPanelProps {
   onTabChange: (tab: InspectorTab) => void;
   onRecipeChange: (entityId: string, recipeId: RecipeId) => void;
   onLogisticsItemChange: (entityId: string, itemId: ItemId) => void;
+  onMaterialDeliverySlotChange: (entityId: string, slotIndex: number, mode: MaterialDeliverySlotMode, itemId: ItemId | null) => void;
   onFuelChange: (entityId: string, itemId: ItemId) => void;
   onEnergyModeChange: (entityId: string, mode: EnergyMode) => void;
   onPowerGridChange: (entityId: string, gridId: PowerGridId) => void;
@@ -756,6 +758,7 @@ function EntityInspector({
   entity,
   onRecipeChange,
   onLogisticsItemChange,
+  onMaterialDeliverySlotChange,
   onFuelChange,
   onEnergyModeChange,
   onPowerGridChange,
@@ -799,6 +802,7 @@ function EntityInspector({
   entity: FactoryEntity;
   onRecipeChange: (entityId: string, recipeId: RecipeId) => void;
   onLogisticsItemChange: (entityId: string, itemId: ItemId) => void;
+  onMaterialDeliverySlotChange: (entityId: string, slotIndex: number, mode: MaterialDeliverySlotMode, itemId: ItemId | null) => void;
   onFuelChange: (entityId: string, itemId: ItemId) => void;
   onEnergyModeChange: (entityId: string, mode: EnergyMode) => void;
   onPowerGridChange: (entityId: string, gridId: PowerGridId) => void;
@@ -1259,13 +1263,25 @@ function EntityInspector({
   if (entity.kind === "storage" || entity.kind === "splitter") {
     if (entity.buildingId === "material_delivery_hub") {
       const deliveryItems = getMaterialDeliveryItems(entity);
+      const deliverySlots = getMaterialDeliverySlots(entity);
+      const acceptedItems = Object.values(ITEMS).filter((item) => {
+        const accepts = building.accepts ?? "any";
+        return accepts === "any" || accepts === item.kind || (accepts === "solid" && item.kind === "matrix");
+      });
       return (
         <div className="inspector-content delivery-hub-inspector">
           <div className="inspector-identity"><i className="building-mark"><Database size={18} /></i><div><span>物资托盘直送</span><strong>{building.name} ×{entity.machineCount}</strong></div></div>
           <section className="delivery-hub-slots" aria-label="物资配送接口">
-            {Array.from({ length: MATERIAL_DELIVERY_SLOT_COUNT }, (_, index) => {
-              const itemId = deliveryItems[index];
-              return <div className={itemId ? "configured" : ""} key={index}><strong>接口 {index + 1}</strong>{itemId ? <span><ItemMark itemId={itemId} />{ITEMS[itemId].name}</span> : <span><Plus size={13} />等待线路自动匹配</span>}</div>;
+            {deliverySlots.map((slot, index) => {
+              const connected = game.belts.filter((belt) => belt.target === entity.id && belt.targetPortIndex === index).length;
+              return <article className={`${slot.itemId ? "configured" : ""} delivery-hub-slot delivery-hub-slot--${slot.mode}`} key={index}>
+                <header><strong>接口 {index + 1}</strong><small>{slot.mode === "manual" ? "指定物资" : slot.mode === "disabled" ? "已清空" : slot.itemId ? "自动识别已绑定" : "等待自动识别"} · {connected} 条线路</small></header>
+                <ItemCatalogPicker value={slot.itemId ?? undefined} items={acceptedItems} label={`接口 ${index + 1} 指定物资`} onChange={(nextItemId) => { if (nextItemId) onMaterialDeliverySlotChange(entity.id, index, "manual", nextItemId); }} />
+                <div className="delivery-hub-slot-actions">
+                  <button className={slot.mode === "auto" ? "active" : ""} type="button" onClick={() => onMaterialDeliverySlotChange(entity.id, index, "auto", null)}>恢复自动识别</button>
+                  <button className={slot.mode === "disabled" ? "danger active" : "danger"} type="button" onClick={() => onMaterialDeliverySlotChange(entity.id, index, "disabled", null)}>清空接口</button>
+                </div>
+              </article>;
             })}
           </section>
           <dl className="metric-ledger">
@@ -1274,7 +1290,7 @@ function EntityInspector({
             <div><dt>最近直送速率</dt><dd>{entity.productionRate.toFixed(1)}/min</dd></div>
             <div><dt>投递位置</dt><dd>{getPlanet(entity.planetId).name}物资托盘</dd></div>
           </dl>
-          <p className="inspector-description">连接输入线路时自动占用空接口；送达物品不会停留在建筑缓存中。</p>
+          <p className="inspector-description">每个接口可独立指定、恢复自动识别或清空。重置已连接接口前会要求确认，送达物品直接进入本行星物资托盘。</p>
           <EntityManagementActions game={game} entity={entity} onAdd={onAdd} onRemove={onRemove} />
         </div>
       );
@@ -1855,7 +1871,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
           {props.selectedEntity.interactionLocked ? <div className="inspector-lock-banner"><LockKeyhole size={16} /><span><strong>建筑已锁定</strong><small>模拟与物流继续运行，修改操作已禁用</small></span><button type="button" onClick={() => props.onEntityLockChange(props.selectedEntity!.id, false)}><Unlock size={16} />解锁</button></div> : null}
           <InspectorLayoutControls preference={layoutPreference} onChange={updateLayoutPreference} />
           <fieldset className="inspector-lockable" disabled={props.selectedEntity.interactionLocked}>
-            <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationFleetTarget={props.onStationFleetTarget} onStationFleetFill={props.onStationFleetFill} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationWarperAutoRefillChange={props.onStationWarperAutoRefillChange} onStationWarperTargetChange={props.onStationWarperTargetChange} onStationHubChange={props.onStationHubChange} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onStationSlotRoutePolicyChange={props.onStationSlotRoutePolicyChange} onStationSlotWarperBudgetChange={props.onStationSlotWarperBudgetChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onRemoveSprayCoater={props.onRemoveSprayCoater} onOpenResourceSettings={props.onOpenResourceSettings} onProliferatorConfiguration={props.onProliferatorConfiguration} onAdd={props.onAddEntity} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} onOpenConstructionCenter={props.onOpenConstructionCenter} onGalacticExporterPausedChange={props.onGalacticExporterPausedChange} onBlackHolePausedChange={props.onBlackHolePausedChange} onTimeWarpControllerChange={props.onTimeWarpControllerChange} onTimeWarpEnabledChange={props.onTimeWarpEnabledChange} onTimeWarpRequestedMultiplierChange={props.onTimeWarpRequestedMultiplierChange} galacticActivityStatus={props.galacticActivityStatus} />
+            <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onLogisticsItemChange={props.onLogisticsItemChange} onMaterialDeliverySlotChange={props.onMaterialDeliverySlotChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationFleetTarget={props.onStationFleetTarget} onStationFleetFill={props.onStationFleetFill} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationWarperAutoRefillChange={props.onStationWarperAutoRefillChange} onStationWarperTargetChange={props.onStationWarperTargetChange} onStationHubChange={props.onStationHubChange} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onStationSlotRoutePolicyChange={props.onStationSlotRoutePolicyChange} onStationSlotWarperBudgetChange={props.onStationSlotWarperBudgetChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onRemoveSprayCoater={props.onRemoveSprayCoater} onOpenResourceSettings={props.onOpenResourceSettings} onProliferatorConfiguration={props.onProliferatorConfiguration} onAdd={props.onAddEntity} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} onOpenConstructionCenter={props.onOpenConstructionCenter} onGalacticExporterPausedChange={props.onGalacticExporterPausedChange} onBlackHolePausedChange={props.onBlackHolePausedChange} onTimeWarpControllerChange={props.onTimeWarpControllerChange} onTimeWarpEnabledChange={props.onTimeWarpEnabledChange} onTimeWarpRequestedMultiplierChange={props.onTimeWarpRequestedMultiplierChange} galacticActivityStatus={props.galacticActivityStatus} />
           </fieldset>
         </div>
       ) : props.selectedBelt ? (

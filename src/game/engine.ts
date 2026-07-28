@@ -63,6 +63,8 @@ import type {
   ItemId,
   InterstellarRoutePolicy,
   LogisticsPriority,
+  MaterialDeliverySlot,
+  MaterialDeliverySlotMode,
   PlanetId,
   PlanetIndustryRole,
   PowerGridId,
@@ -198,6 +200,7 @@ function copyState(state: GameState): GameState {
       outputs: { ...entity.outputs },
       stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
       deliveryItemIds: entity.deliveryItemIds ? [...entity.deliveryItemIds] : undefined,
+      deliverySlots: entity.deliverySlots?.map((slot) => ({ ...slot })),
       stationRoutes: entity.stationRoutes?.map((route) => ({
         ...route,
         waypointStationIds: route.waypointStationIds ? [...route.waypointStationIds] : [],
@@ -275,6 +278,7 @@ function copyState(state: GameState): GameState {
         ...entity,
         offset: { ...entity.offset },
         stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
+        deliverySlots: entity.deliverySlots?.map((slot) => ({ ...slot })),
       })),
       resourceAnchors: blueprint.resourceAnchors?.map((anchor) => ({ ...anchor, offset: { ...anchor.offset } })),
       belts: blueprint.belts.map((belt) => ({ ...belt })),
@@ -502,7 +506,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
     return { ...entity, resourceRemaining: reserve, resourceCapacity: reserve };
   });
   return {
-    version: 38,
+    version: 39,
     nextId: 1,
     activePlanetId: "home",
     entities,
@@ -1311,6 +1315,13 @@ export interface StationPeerMatch {
 
 export interface SimulationProfiler {
   copyStateMs: number;
+  productionMs: number;
+  beltsMs: number;
+  logisticsMs: number;
+  powerMs: number;
+  dysonMs: number;
+  constructionMs: number;
+  historyMs: number;
   stationIndexBuildMs: number;
   peerMatchMs: number;
   routeEconomicsMs: number;
@@ -3050,6 +3061,7 @@ function targetFreeCapacity(state: GameState, target: FactoryEntity, itemId: Ite
     return Number.MAX_SAFE_INTEGER;
   }
   if (target.buildingId === "material_delivery_hub") {
+    if (resolveMaterialDeliverySlotIndex(target, itemId, targetPortIndex) === undefined) return 0;
     const pending = state.entities.reduce((sum, entity) => entity.planetId === target.planetId && entity.buildingId === "material_delivery_hub"
       ? sum + Math.max(0, Math.floor(entity.inputs[itemId] ?? 0))
       : sum, 0);
@@ -3070,7 +3082,7 @@ function transferBelts(state: GameState, seconds: number): void {
     const source = state.entities.find((entity) => entity.id === belt.source);
     const target = state.entities.find((entity) => entity.id === belt.target);
     if (!source || !target || source.planetId !== target.planetId || belt.planetId !== source.planetId ||
-      !sourceProduces(source, belt.itemId) || !targetConsumes(state, target, belt.itemId)) {
+      !sourceProduces(source, belt.itemId) || !targetConsumes(state, target, belt.itemId, belt.targetPortIndex)) {
       belt.progress = 0;
       continue;
     }
@@ -4018,17 +4030,30 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
   prepareTimeWarpStep(state);
   if (lookup) rebuildDynamicRouteLookup(state, lookup);
   advanceExplorationMissions(state, seconds);
+  let subsystemStartedAt = profiler ? profileNow() : 0;
   advanceHandcraftQueue(state, seconds);
+  if (profiler) profiler.constructionMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
   absorbDysonSails(state, seconds);
   decayDysonSwarm(state, seconds);
+  if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
   resetStationRuntime(state);
+  subsystemStartedAt = profiler ? profileNow() : 0;
   runOrbitalCollectors(state, seconds);
   transferLogisticsBuffers(state);
+  if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
   transferBelts(state, seconds);
+  if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
   drainMaterialDeliveryHubs(state, seconds);
+  if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
   const reception = calculateDysonReception(state);
+  if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
   const powerByPlanet = new Map<PlanetId, PowerPlan>();
   for (const planet of PLANET_LIST) {
+    subsystemStartedAt = profiler ? profileNow() : 0;
     const gridPlans = POWER_GRID_IDS.map((gridId) => calculatePower(state, seconds, planet.id, gridId, reception, lookup, profiler));
     const power = combinePowerPlans(gridPlans);
     powerByPlanet.set(planet.id, power);
@@ -4060,10 +4085,18 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
       };
     }
     runPowerFacilities(state, seconds, power, planet.id);
+    if (profiler) profiler.powerMs += profileNow() - subsystemStartedAt;
+    subsystemStartedAt = profiler ? profileNow() : 0;
     runMiners(state, seconds, power, planet.id);
     runMachines(state, seconds, power, planet.id);
+    if (profiler) profiler.productionMs += profileNow() - subsystemStartedAt;
+    subsystemStartedAt = profiler ? profileNow() : 0;
     runConstructionCenters(state, seconds, power, planet.id);
+    if (profiler) profiler.constructionMs += profileNow() - subsystemStartedAt;
+    subsystemStartedAt = profiler ? profileNow() : 0;
     runRayReceivers(state, seconds, reception, planet.id);
+    if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
+    subsystemStartedAt = profiler ? profileNow() : 0;
     const storage = gridStoredEnergy(state, planet.id);
     state.planetMetrics[planet.id] = {
       generationKw: round(power.generationKw, 2),
@@ -4084,7 +4117,9 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
       totalItemsPerMinute: round(state.entities.reduce((sum, entity) =>
         entity.planetId === planet.id ? sum + entity.productionRate : sum, 0), 2),
     };
+    if (profiler) profiler.powerMs += profileNow() - subsystemStartedAt;
   }
+  subsystemStartedAt = profiler ? profileNow() : 0;
   refillStationWarpers(state);
   let phaseStartedAt = profileNow();
   dispatchStationScope(state, "local", powerByPlanet, lookup, profiler);
@@ -4099,10 +4134,15 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
   phaseStartedAt = profileNow();
   updateStationCongestion(state, lookup, profiler);
   if (profiler) profiler.congestionMs += profileNow() - phaseStartedAt;
+  if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
   runGalacticMaterialExporters(state, powerByPlanet);
   runGalacticExports(state, seconds);
+  if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
   syncLegacySwarmIntoOrbits(state);
   updateDysonSphereGeneration(state);
+  if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
   state.dysonSwarm.receiverLoadKw = round(reception.receiverLoadKw, 2);
   state.elapsedSeconds = round(state.elapsedSeconds + seconds);
   if (state.endgame.exportWindowStartedAt <= 0) state.endgame.exportWindowStartedAt = state.elapsedSeconds;
@@ -4190,6 +4230,13 @@ export interface SimulationAdvanceOptions {
 export function createSimulationProfiler(): SimulationProfiler {
   return {
     copyStateMs: 0,
+    productionMs: 0,
+    beltsMs: 0,
+    logisticsMs: 0,
+    powerMs: 0,
+    dysonMs: 0,
+    constructionMs: 0,
+    historyMs: 0,
     stationIndexBuildMs: 0,
     peerMatchMs: 0,
     routeEconomicsMs: 0,
@@ -4277,8 +4324,13 @@ export function completeSimulationAdvanceSession(session: SimulationAdvanceSessi
   if (session.remainingWallSeconds > EPSILON) advanceSimulationSession(session, Number.MAX_SAFE_INTEGER);
   session.state.timeWarp.pendingSimulationSeconds = 0;
   session.state.timeWarp.pendingWallSeconds = 0;
+  let startedAt = session.profiler ? profileNow() : 0;
   recordProductionHistory(session.state);
-  return processConstructionQueue(syncCampaignProgress(session.state));
+  if (session.profiler) session.profiler.historyMs += profileNow() - startedAt;
+  startedAt = session.profiler ? profileNow() : 0;
+  const completed = processConstructionQueue(syncCampaignProgress(session.state));
+  if (session.profiler) session.profiler.constructionMs += profileNow() - startedAt;
+  return completed;
 }
 
 export function advanceSimulation(state: GameState, seconds: number): GameState {
@@ -4287,8 +4339,8 @@ export function advanceSimulation(state: GameState, seconds: number): GameState 
   return completeSimulationAdvanceSession(session);
 }
 
-export function advanceSimulationBudget(state: GameState, simulationSeconds: number, wallSeconds: number): GameState {
-  const session = createSimulationAdvanceSession(state, simulationSeconds, { wallSeconds });
+export function advanceSimulationBudget(state: GameState, simulationSeconds: number, wallSeconds: number, profiler?: SimulationProfiler): GameState {
+  const session = createSimulationAdvanceSession(state, simulationSeconds, { wallSeconds, profiler });
   advanceSimulationSession(session, Number.MAX_SAFE_INTEGER);
   return completeSimulationAdvanceSession(session);
 }
@@ -4604,6 +4656,7 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
       recipeId: entity.recipeId,
       storedItemId: entity.storedItemId,
       deliveryItemIds: entity.deliveryItemIds ? [...entity.deliveryItemIds] : undefined,
+      deliverySlots: entity.deliverySlots?.map((slot) => ({ ...slot })),
       distributionMode: entity.distributionMode,
       fuelItemId: entity.fuelItemId,
       energyMode: entity.energyMode,
@@ -4939,6 +4992,7 @@ export function placeBlueprint(
       recipeId,
       storedItemId: template.storedItemId,
       deliveryItemIds: template.deliveryItemIds ? [...template.deliveryItemIds] : undefined,
+      deliverySlots: template.deliverySlots?.map((slot) => ({ ...slot })),
       distributionMode: building.kind === "splitter" ? template.distributionMode ?? "balanced" : undefined,
       fuelItemId: template.fuelItemId,
       fuelRemainingMj: getFuelItemIdsForBuilding(template.buildingId).length > 0 ? 0 : undefined,
@@ -5011,6 +5065,14 @@ export function placeBlueprint(
     const source = entityIdByKey.get(template.sourceKey);
     const target = entityIdByKey.get(template.targetKey);
     if (!source || !target) continue;
+    const targetEntity = next.entities.find((entity) => entity.id === target)!;
+    const targetPortIndex = targetEntity.buildingId === "material_delivery_hub"
+      ? resolveMaterialDeliverySlotIndex(targetEntity, template.itemId, template.targetPortIndex)
+      : targetEntity.buildingId === "micro_black_hole_connector"
+        ? resolveBlackHolePortIndex(next, target, template.targetPortIndex)
+        : undefined;
+    if ((targetEntity.buildingId === "material_delivery_hub" || targetEntity.buildingId === "micro_black_hole_connector") && targetPortIndex === undefined) continue;
+    configureTargetItem(targetEntity, template.itemId, targetPortIndex);
     next.belts.push({
       id: `belt_${next.nextId}`,
       planetId,
@@ -5026,7 +5088,7 @@ export function placeBlueprint(
       monitorEnabled: template.monitorEnabled ?? false,
       routeMode: template.routeMode ?? "auto",
       routeOffsetY: template.routeOffsetY,
-      targetPortIndex: template.targetPortIndex,
+      targetPortIndex,
       totalTransferred: 0,
       congestion: 0,
       lastFlow: 0,
@@ -5146,6 +5208,7 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
       ? (Object.keys(getPlanetOrbitalYields(state, state.activePlanetId))[0] as ItemId | undefined) ?? "hydrogen"
       : undefined,
     deliveryItemIds: buildingId === "material_delivery_hub" ? [] : undefined,
+    deliverySlots: buildingId === "material_delivery_hub" ? defaultMaterialDeliverySlots() : undefined,
     stationMode: building.kind === "station" ? "supply" : undefined,
     stationProgress: building.kind === "station" ? 0 : undefined,
     stationTrips: building.kind === "station" ? 0 : undefined,
@@ -5325,9 +5388,119 @@ function storeInPlanetTray(state: GameState, planetId: PlanetId, itemId: ItemId,
   return moved;
 }
 
-export function getMaterialDeliveryItems(entity: FactoryEntity): ItemId[] {
+function defaultMaterialDeliverySlots(): MaterialDeliverySlot[] {
+  return Array.from({ length: MATERIAL_DELIVERY_SLOT_COUNT }, () => ({ itemId: null, mode: "auto" as const }));
+}
+
+export function getMaterialDeliverySlots(entity: FactoryEntity): MaterialDeliverySlot[] {
   if (entity.buildingId !== "material_delivery_hub") return [];
-  return [...new Set((entity.deliveryItemIds ?? []).filter((itemId) => Boolean(ITEMS[itemId])))].slice(0, MATERIAL_DELIVERY_SLOT_COUNT);
+  const legacyItems = [...new Set((entity.deliveryItemIds ?? []).filter((itemId) => Boolean(ITEMS[itemId])))];
+  return defaultMaterialDeliverySlots().map((fallback, index) => {
+    const saved = entity.deliverySlots?.[index];
+    if (saved?.mode === "disabled") return { itemId: null, mode: "disabled" };
+    if (saved?.mode === "manual" && saved.itemId && ITEMS[saved.itemId]) return { itemId: saved.itemId, mode: "manual" };
+    if (saved?.mode === "auto") return { itemId: saved.itemId && ITEMS[saved.itemId] ? saved.itemId : null, mode: "auto" };
+    return legacyItems[index] ? { itemId: legacyItems[index], mode: "auto" } : fallback;
+  });
+}
+
+function synchronizeMaterialDeliverySlots(entity: FactoryEntity, slots: readonly MaterialDeliverySlot[]): void {
+  entity.deliverySlots = slots.map((slot) => ({ ...slot }));
+  entity.deliveryItemIds = [...new Set(slots.flatMap((slot) => slot.itemId ? [slot.itemId] : []))];
+}
+
+export function getMaterialDeliveryItems(entity: FactoryEntity): ItemId[] {
+  return [...new Set(getMaterialDeliverySlots(entity).flatMap((slot) => slot.itemId ? [slot.itemId] : []))];
+}
+
+function resolveMaterialDeliverySlotIndex(
+  entity: FactoryEntity,
+  itemId: ItemId,
+  requested?: 0 | 1 | 2,
+): 0 | 1 | 2 | undefined {
+  const slots = getMaterialDeliverySlots(entity);
+  const accepts = (slot: MaterialDeliverySlot) => slot.mode !== "disabled" && (!slot.itemId || slot.itemId === itemId);
+  if (requested !== undefined) return accepts(slots[requested]) ? requested : undefined;
+  const matching = slots.findIndex((slot) => slot.mode !== "disabled" && slot.itemId === itemId);
+  if (matching >= 0) return matching as 0 | 1 | 2;
+  const unbound = slots.findIndex((slot) => slot.mode === "auto" && !slot.itemId);
+  return unbound >= 0 ? unbound as 0 | 1 | 2 : undefined;
+}
+
+export type MaterialDeliverySlotChangeCheck =
+  | { ok: true; requiresDisconnect: boolean; connectedBelts: number; bufferedItems: number; label: string }
+  | { ok: false; requiresDisconnect: false; connectedBelts: 0; bufferedItems: 0; label: string };
+
+export function getMaterialDeliverySlotChangeCheck(
+  state: GameState,
+  entityId: string,
+  slotIndex: number,
+  mode: MaterialDeliverySlotMode,
+  itemId: ItemId | null = null,
+): MaterialDeliverySlotChangeCheck {
+  const entity = state.entities.find((candidate) => candidate.id === entityId && candidate.buildingId === "material_delivery_hub");
+  if (!entity || entity.interactionLocked || !Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= MATERIAL_DELIVERY_SLOT_COUNT) {
+    return { ok: false, requiresDisconnect: false, connectedBelts: 0, bufferedItems: 0, label: "物资配送接口不可修改" };
+  }
+  if (mode === "manual" && (!itemId || !ITEMS[itemId])) {
+    return { ok: false, requiresDisconnect: false, connectedBelts: 0, bufferedItems: 0, label: "请先选择要指定的物资" };
+  }
+  const slots = getMaterialDeliverySlots(entity);
+  const current = slots[slotIndex];
+  const next: MaterialDeliverySlot = mode === "manual" ? { itemId, mode } : { itemId: null, mode };
+  if (current.mode === next.mode && current.itemId === next.itemId) {
+    return { ok: true, requiresDisconnect: false, connectedBelts: 0, bufferedItems: 0, label: "接口设置没有变化" };
+  }
+  const connectedBelts = state.belts.filter((belt) => belt.target === entityId && belt.targetPortIndex === slotIndex).length;
+  const itemChanges = current.itemId !== next.itemId || next.mode === "disabled" || next.mode === "auto";
+  const remainingUsesCurrentItem = Boolean(current.itemId && slots.some((slot, index) => index !== slotIndex && slot.itemId === current.itemId));
+  const bufferedItems = current.itemId && !remainingUsesCurrentItem && itemChanges
+    ? Math.max(0, Math.floor(entity.inputs[current.itemId] ?? 0))
+    : 0;
+  const requiresDisconnect = connectedBelts > 0 && itemChanges;
+  return {
+    ok: true,
+    requiresDisconnect,
+    connectedBelts,
+    bufferedItems,
+    label: requiresDisconnect
+      ? `接口 ${slotIndex + 1} 仍连接 ${connectedBelts} 条线路；确认后会断开并返还传送带`
+      : "可以修改接口设置",
+  };
+}
+
+export function setMaterialDeliverySlot(
+  state: GameState,
+  entityId: string,
+  slotIndex: number,
+  mode: MaterialDeliverySlotMode,
+  itemId: ItemId | null = null,
+  confirmDisconnect = false,
+): GameState {
+  const check = getMaterialDeliverySlotChangeCheck(state, entityId, slotIndex, mode, itemId);
+  if (!check.ok || (check.requiresDisconnect && !confirmDisconnect)) return state;
+  const next = copyState(state);
+  const entity = next.entities.find((candidate) => candidate.id === entityId)!;
+  const slots = getMaterialDeliverySlots(entity);
+  const previousItemId = slots[slotIndex].itemId;
+  const removedBelts = next.belts.filter((belt) => belt.target === entityId && belt.targetPortIndex === slotIndex);
+  if (removedBelts.length > 0) {
+    refundBelts(next, removedBelts);
+    next.belts = next.belts.filter((belt) => belt.target !== entityId || belt.targetPortIndex !== slotIndex);
+  }
+  slots[slotIndex] = mode === "manual" ? { itemId, mode } : { itemId: null, mode };
+  synchronizeMaterialDeliverySlots(entity, slots);
+  if (previousItemId && !slots.some((slot) => slot.itemId === previousItemId)) {
+    const buffered = Math.max(0, Math.floor(entity.inputs[previousItemId] ?? 0));
+    if (buffered > 0) addToPlanetTray(next, entity.planetId, previousItemId, buffered);
+    delete entity.inputs[previousItemId];
+  }
+  for (const [bufferedItemId, amount] of Object.entries(entity.inputs)) {
+    if (slots.some((slot) => slot.itemId === bufferedItemId)) continue;
+    addToPlanetTray(next, entity.planetId, bufferedItemId as ItemId, Math.max(0, Math.floor(amount ?? 0)));
+    delete entity.inputs[bufferedItemId as ItemId];
+  }
+  return next;
 }
 
 function refundBelts(state: GameState, belts: BeltConnection[]): void {
@@ -5337,7 +5510,7 @@ function refundBelts(state: GameState, belts: BeltConnection[]): void {
   }
 }
 
-function logisticsAccepts(state: GameState, entity: FactoryEntity, itemId: ItemId): boolean {
+function logisticsAccepts(state: GameState, entity: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): boolean {
   if ((entity.kind !== "storage" && entity.kind !== "splitter" && entity.kind !== "station") || !entity.buildingId) return false;
   if (entity.buildingId === "orbital_collector") {
     return (getPlanetOrbitalYields(state, entity.planetId)[itemId] ?? 0) > 0 && (!entity.storedItemId || entity.storedItemId === itemId);
@@ -5347,8 +5520,7 @@ function logisticsAccepts(state: GameState, entity: FactoryEntity, itemId: ItemI
   const compatibleKind = accepts === "any" || accepts === itemKind || (accepts === "solid" && itemKind === "matrix");
   if (!compatibleKind) return false;
   if (entity.buildingId === "material_delivery_hub") {
-    const configured = getMaterialDeliveryItems(entity);
-    return configured.includes(itemId) || configured.length < MATERIAL_DELIVERY_SLOT_COUNT;
+    return resolveMaterialDeliverySlotIndex(entity, itemId, targetPortIndex) !== undefined;
   }
   if (entity.kind === "station") {
     const slots = getStationSlots(entity);
@@ -5362,10 +5534,10 @@ function fuelGeneratorAccepts(entity: FactoryEntity, itemId: ItemId): boolean {
     (!entity.fuelItemId || entity.fuelItemId === itemId));
 }
 
-function targetConsumes(state: GameState, entity: FactoryEntity, itemId: ItemId): boolean {
+function targetConsumes(state: GameState, entity: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): boolean {
   if (entity.buildingId === "micro_black_hole_connector") return Boolean(ITEMS[itemId]);
   if (entity.buildingId === "galactic_material_exporter") return ACTIVITY_MATERIAL_IDS.includes(itemId as import("./types").ActivityMaterialId);
-  if (logisticsAccepts(state, entity, itemId)) return true;
+  if (logisticsAccepts(state, entity, itemId, targetPortIndex)) return true;
   if (fuelGeneratorAccepts(entity, itemId)) return true;
   if (entity.sprayCoaterInstalled && getEntityProliferatorItemId(entity) === itemId) return true;
   const recipe = getRecipe(entity.recipeId);
@@ -5394,8 +5566,8 @@ function getAutoRecipeForInput(state: GameState, entity: FactoryEntity, itemId: 
   return recipes.find((recipe) => recipe.inputs.some((input) => input.itemId === itemId));
 }
 
-function targetCanAcceptBeltItem(state: GameState, entity: FactoryEntity, itemId: ItemId): boolean {
-  return targetConsumes(state, entity, itemId) || Boolean(getAutoRecipeForInput(state, entity, itemId));
+function targetCanAcceptBeltItem(state: GameState, entity: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): boolean {
+  return targetConsumes(state, entity, itemId, targetPortIndex) || Boolean(getAutoRecipeForInput(state, entity, itemId));
 }
 
 function configureAutoTargetRecipe(state: GameState, entity: FactoryEntity, itemId: ItemId): void {
@@ -5409,12 +5581,13 @@ function configureAutoTargetRecipe(state: GameState, entity: FactoryEntity, item
   entity.proliferatorBonusProgress = {};
 }
 
-function configureTargetItem(entity: FactoryEntity, itemId: ItemId): void {
+function configureTargetItem(entity: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): void {
   if (entity.buildingId === "material_delivery_hub") {
-    const configured = getMaterialDeliveryItems(entity);
-    if (!configured.includes(itemId) && configured.length < MATERIAL_DELIVERY_SLOT_COUNT) {
-      entity.deliveryItemIds = [...configured, itemId];
-    }
+    const resolved = resolveMaterialDeliverySlotIndex(entity, itemId, targetPortIndex);
+    if (resolved === undefined) return;
+    const slots = getMaterialDeliverySlots(entity);
+    if (slots[resolved].mode === "auto" && !slots[resolved].itemId) slots[resolved] = { itemId, mode: "auto" };
+    synchronizeMaterialDeliverySlots(entity, slots);
   } else if (entity.kind === "station" && entity.buildingId !== "orbital_collector") {
     const slots = ensureStationSlots(entity);
     if (!slots.some((slot) => slot.itemId === itemId)) {
@@ -6785,7 +6958,16 @@ export function getBeltConnectionCheck(state: GameState, sourceId: string, targe
   const target = state.entities.find((entity) => entity.id === targetId);
   if (!source || !target) return { ok: false, code: "missing-node", label: "连接端点不存在" };
   if (source.planetId !== target.planetId) return { ok: false, code: "different-planet", label: "传送带不能跨越行星" };
-  const requestedPortIndex = target.buildingId === "micro_black_hole_connector" ? targetPortIndex : undefined;
+  const requestedPortIndex = target.buildingId === "micro_black_hole_connector"
+    ? targetPortIndex
+    : target.buildingId === "material_delivery_hub"
+      ? resolveMaterialDeliverySlotIndex(target, itemId, targetPortIndex)
+      : undefined;
+  if (target.buildingId === "material_delivery_hub" && requestedPortIndex === undefined) {
+    return { ok: false, code: "invalid-target", label: targetPortIndex === undefined
+      ? "物资配送枢纽没有可自动识别的兼容接口"
+      : `物资配送接口 ${targetPortIndex + 1} 已停用或指定了其他物资` };
+  }
   const existing = state.belts.find((belt) => belt.source === sourceId && belt.target === targetId && belt.itemId === itemId &&
     belt.targetPortIndex === requestedPortIndex);
   if (existing && existing.lanes >= MAX_BELT_LANES) {
@@ -6803,7 +6985,7 @@ export function getBeltConnectionCheck(state: GameState, sourceId: string, targe
       return { ok: false, code: "station-slots-full", label: "物流站没有可用空槽" };
     }
   }
-  if (!targetCanAcceptBeltItem(state, target, itemId)) {
+  if (!targetCanAcceptBeltItem(state, target, itemId, requestedPortIndex)) {
     if (target.buildingId === "galactic_material_exporter") {
       return { ok: false, code: "invalid-target", label: "超大型物资出口仅接收宇宙矩阵、太阳帆、小型运载火箭和反物质燃料棒" };
     }
@@ -6829,10 +7011,12 @@ export function connectBelt(state: GameState, sourceId: string, targetId: string
   const configuredTarget = next.entities.find((entity) => entity.id === targetId)!;
   const resolvedTargetPortIndex = configuredTarget.buildingId === "micro_black_hole_connector"
     ? resolveBlackHolePortIndex(next, targetId, targetPortIndex)
-    : undefined;
-  if (configuredTarget.buildingId === "micro_black_hole_connector" && resolvedTargetPortIndex === undefined) return state;
+    : configuredTarget.buildingId === "material_delivery_hub"
+      ? resolveMaterialDeliverySlotIndex(configuredTarget, itemId, targetPortIndex)
+      : undefined;
+  if ((configuredTarget.buildingId === "micro_black_hole_connector" || configuredTarget.buildingId === "material_delivery_hub") && resolvedTargetPortIndex === undefined) return state;
   configureAutoTargetRecipe(next, configuredTarget, itemId);
-  configureTargetItem(configuredTarget, itemId);
+  configureTargetItem(configuredTarget, itemId, resolvedTargetPortIndex);
   const existing = next.belts.find((belt) => belt.source === sourceId && belt.target === targetId && belt.itemId === itemId &&
     belt.targetPortIndex === resolvedTargetPortIndex);
   if (existing) {
@@ -6930,13 +7114,7 @@ export function setLogisticsItem(state: GameState, entityId: string, itemId: Ite
   const current = state.entities.find((entity) => entity.id === entityId);
   if (!current || current.interactionLocked) return state;
   if (current.buildingId === "material_delivery_hub") {
-    const next = copyState(state);
-    const entity = next.entities.find((candidate) => candidate.id === entityId)!;
-    for (const [bufferedItemId, amount] of Object.entries(entity.inputs)) addToPlanetTray(next, entity.planetId, bufferedItemId as ItemId, amount ?? 0);
-    entity.inputs = {};
-    entity.outputs = {};
-    entity.deliveryItemIds = [itemId];
-    return next;
+    return setMaterialDeliverySlot(state, entityId, 0, "manual", itemId, true);
   }
   if (current.kind === "station" && current.buildingId !== "orbital_collector") {
     return setStationSlotItem(state, entityId, 0, itemId);

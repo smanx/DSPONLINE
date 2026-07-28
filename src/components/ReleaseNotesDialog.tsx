@@ -1,38 +1,44 @@
-import { Activity, Check, Database, Factory, Info, MessageCircle, X, type LucideIcon } from "lucide-react";
+import { Check, Database, Gauge, Info, MessageCircle, Route, Sun, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-28-v1.0.7",
+  id: "2026-07-28-v1.0.8",
   date: "2026年7月28日",
-  version: "1.0.7",
-  title: "制造中心 WIP 急救补丁",
-  summary: "1.0.7 移除建筑制造中心必要中间材料的固定 100 万 WIP 阻断。百万级递归链会完整保留任务所需材料，并在暂停、断电、重载和离线推进后继续运行。GameState 仍为 v38。",
+  version: "1.0.8",
+  title: "存档完整性与性能诊断更新",
+  summary: "1.0.8 增加保存前完整性自检、云端拒绝异常存档和受控救援入口，并补齐配送枢纽端口管理、亮色制造栏对比度与按需性能诊断。GameState 升级至 v39。",
   items: [
     {
-      id: "unbounded-required-wip",
-      title: "必要 WIP 不再受固定上限阻断",
-      description: "递归任务按后续步骤的真实净需求保留全部必要中间材料，不再因 108 万/100 万或未来更高成本巨构而永久停机。",
+      id: "save-integrity-rescue",
+      title: "存档完整性自检与受控救援",
+      description: "本地保存、手动导出和云上传会立即复核校验值；云端拒绝异常载荷。结构完整的异常存档会显示真实进度，并提供先导出原件、再二次确认的救援流程。",
     },
     {
-      id: "resumable-jobs",
-      title: "任务可自动等待和恢复",
-      description: "缺料、暂停或断电只会保留原任务并等待；条件恢复后从原阶段继续。存档重载、分段模拟和大时间步不会重复扣料或重复结算成品。",
+      id: "delivery-hub-ports",
+      title: "配送枢纽端口可独立配置",
+      description: "三个输入端口可以分别指定物资、恢复自动识别或清空。重置已连接端口前会确认并安全返还线路、施工件和缓存，不影响其他端口。",
     },
     {
-      id: "visible-settlement",
-      title: "WIP 与真实等待原因可查看",
-      description: "制造中心总览会列出各项 WIP、累计销毁的副产物和当前暂停、供电或缺料原因。非必要产物仍优先进入行星托盘，满仓时才销毁并记账。",
+      id: "light-fabrication-contrast",
+      title: "亮色制造栏更清晰",
+      description: "建筑制造和物品手工制造的名称、选中、可制造、缺料与禁用状态使用更稳定的亮色主题对比度。",
+    },
+    {
+      id: "performance-monitor",
+      title: "新增按需性能诊断",
+      description: "运营中心可按需采集 FPS、主线程、Worker、任务积压、存档和各模拟阶段耗时，并导出匿名报告。监控默认关闭且不进入存档。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "unbounded-required-wip": Factory,
-  "resumable-jobs": Activity,
-  "visible-settlement": Database,
+  "save-integrity-rescue": Database,
+  "delivery-hub-ports": Route,
+  "light-fabrication-contrast": Sun,
+  "performance-monitor": Gauge,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

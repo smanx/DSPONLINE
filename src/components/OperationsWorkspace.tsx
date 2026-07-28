@@ -54,6 +54,7 @@ import type { AutosaveIntervalSeconds, CargoStackSize, DefaultBeltRouteMode, Dif
 import { canSetBeltStackSize } from "../game/engine";
 import { validateBuildingBufferLimitInput, validateProliferatorBufferLimitInput, type BuildingBufferLimitValidation } from "../game/settings";
 import { PRODUCTION_REFRESH_PROFILES, type ProductionRefreshPreference } from "../game/productionRefresh";
+import { getPerformancePeaks, getPerformancePhaseShares, type PerformanceMonitorSnapshot } from "../game/performanceMonitor";
 import { clearClientErrors, collectClientDiagnostics, downloadDiagnostics, getClientErrors } from "../game/diagnostics";
 import { fetchCloudPublicStatus, resumeCloudSession, sendCloudFeedback, type CloudPublicStatus } from "../game/cloud";
 import { resetOnboarding } from "../game/onboarding";
@@ -62,7 +63,7 @@ import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
 import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 import { useAppLocale } from "../i18n/locale";
 
-export type OperationsTab = "alerts" | "achievements" | "settings" | "saves" | "packs" | "support";
+export type OperationsTab = "alerts" | "achievements" | "settings" | "performance" | "saves" | "packs" | "support";
 
 interface OperationsWorkspaceProps {
   open: boolean;
@@ -77,7 +78,12 @@ interface OperationsWorkspaceProps {
   performanceReport: AutomaticPerformanceReport | null;
   productionRefreshPreference: ProductionRefreshPreference;
   productionRefreshIntervalMs: number;
+  performanceMonitor: PerformanceMonitorSnapshot;
   onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void;
+  onStartPerformanceMonitor: () => void;
+  onStopPerformanceMonitor: () => void;
+  onClearPerformanceMonitor: () => void;
+  onExportPerformanceMonitor: () => void;
   onClose: () => void;
   onTabChange: (tab: OperationsTab) => void;
   onAlertSelect: (alert: FactoryAlert) => void;
@@ -86,6 +92,8 @@ interface OperationsWorkspaceProps {
   onExport: () => void;
   onImport: (raw: string) => void;
   onConfirmImport: () => void;
+  onConfirmImportRescue: () => void;
+  importRescueArmed: boolean;
   onCancelImport: () => void;
   onSaveSlot: (slotId: SaveSlotId) => void;
   onLoadSlot: (slotId: SaveSlotId) => void;
@@ -106,6 +114,7 @@ const TABS: Array<{ id: OperationsTab; label: string; icon: typeof Bell }> = [
   { id: "alerts", label: "警报", icon: Bell },
   { id: "achievements", label: "成就", icon: Trophy },
   { id: "settings", label: "设置", icon: Settings2 },
+  { id: "performance", label: "性能", icon: Activity },
   { id: "saves", label: "存档", icon: HardDrive },
   { id: "packs", label: "内容包", icon: PackagePlus },
   { id: "support", label: "诊断反馈", icon: MessageSquare },
@@ -394,6 +403,57 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
   );
 }
 
+function formatDiagnosticBytes(bytes: number | null): string {
+  if (bytes === null || !Number.isFinite(bytes) || bytes <= 0) return "--";
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${(bytes / 1024).toFixed(1)} KiB`;
+}
+
+function PerformancePanel({ game, snapshot, onStart, onStop, onClear, onExport }: {
+  game: GameState;
+  snapshot: PerformanceMonitorSnapshot;
+  onStart: () => void;
+  onStop: () => void;
+  onClear: () => void;
+  onExport: () => void;
+}) {
+  const latest = snapshot.samples.at(-1) ?? null;
+  const peaks = getPerformancePeaks(snapshot.samples);
+  const phases = getPerformancePhaseShares(latest);
+  const planetRows = Object.entries(game.planetTrays).map(([planetId]) => ({
+    planetId,
+    entities: game.entities.filter((entity) => entity.planetId === planetId).length,
+    belts: game.belts.filter((belt) => belt.planetId === planetId).length,
+    routes: game.entities.filter((entity) => entity.planetId === planetId).reduce((sum, entity) => sum + (entity.stationRoutes?.length ?? 0), 0),
+  })).filter((row) => row.entities + row.belts + row.routes > 0).sort((left, right) => right.entities + right.belts - left.entities - left.belts);
+  const stallPeaks = [...snapshot.samples].sort((left, right) => right.peakFrameMs - left.peakFrameMs).slice(0, 5);
+  return <div className="operations-panel performance-monitor-panel">
+    <header className="operations-section-header performance-monitor-header"><div><span>按需阶段计时</span><strong>性能监控与卡顿诊断</strong></div><span className={`settings-state${snapshot.active ? " positive" : ""}`}><Activity size={14} />{snapshot.active ? "正在采样" : "监控已关闭"}</span></header>
+    <div className="performance-monitor-actions">
+      {snapshot.active ? <button type="button" onClick={onStop}><Power size={15} />停止采样</button> : <button className="primary" type="button" onClick={onStart}><Activity size={15} />开始采样</button>}
+      <button type="button" disabled={snapshot.samples.length === 0} onClick={onClear}><Trash2 size={15} />清空记录</button>
+      <button type="button" disabled={snapshot.samples.length === 0} onClick={onExport}><Download size={15} />导出匿名报告</button>
+    </div>
+    <p className="performance-monitor-note">浏览器不提供各玩法的真实 CPU 百分比；下方占比来自 Worker 内各模拟阶段的实际执行耗时。监控关闭时不启用阶段计时。</p>
+    {!latest ? <div className="operations-empty performance-monitor-empty"><Gauge size={28} /><strong>{snapshot.active ? "正在建立首个 1 秒样本" : "尚未采样"}</strong><span>开启后保留最近 60 秒，不写入游戏状态或云存档。</span></div> : <>
+      <section className="performance-kpi-grid" aria-label="实时性能摘要">
+        <article><span>FPS</span><strong>{latest.fps.toFixed(1)}</strong><small>平均帧 {latest.averageFrameMs.toFixed(1)} ms</small></article>
+        <article><span>主线程峰值</span><strong>{latest.peakFrameMs.toFixed(1)} ms</strong><small>长帧 {latest.longFrameCount} 次</small></article>
+        <article><span>模拟 Worker</span><strong>{latest.workerDurationMs.toFixed(1)} ms</strong><small>往返 {latest.workerLatencyMs.toFixed(1)} ms</small></article>
+        <article><span>任务积压</span><strong>{latest.pendingTaskMs.toFixed(0)} ms</strong><small>待处理模拟时间</small></article>
+        <article><span>可用 JS 内存</span><strong>{formatDiagnosticBytes(latest.memory.availableBytes)}</strong><small>{latest.memory.deviceMemoryGb ? `设备约 ${latest.memory.deviceMemoryGb} GiB` : "浏览器未公开设备内存"}</small></article>
+        <article><span>状态 / 主存档</span><strong>{formatDiagnosticBytes(latest.stateBytes)}</strong><small>{formatDiagnosticBytes(latest.saveBytes)}</small></article>
+        <article><span>最近保存</span><strong>{latest.autosaveMs.toFixed(1)} ms</strong><small>包括写入后校验</small></article>
+        <article><span>最近离线结算</span><strong>{snapshot.lastOfflineSimulationMs > 0 ? `${snapshot.lastOfflineSimulationMs.toFixed(0)} ms` : "--"}</strong><small>本次页面会话</small></article>
+      </section>
+      <section className="performance-phase-section"><header><Cpu size={15} /><span><strong>模拟阶段耗时归因</strong><small>最近一个 Worker 批次</small></span></header>{phases.length ? <div className="performance-phase-list">{phases.map((phase) => <div key={phase.id}><span>{phase.label}</span><i><b style={{ width: `${Math.max(1, phase.share * 100)}%` }} /></i><strong>{phase.durationMs.toFixed(2)} ms</strong><em>{Math.round(phase.share * 100)}%</em></div>)}</div> : <p>等待下一次带阶段计时的 Worker 结果。</p>}</section>
+      <section className="performance-scale-section"><header><HardDrive size={15} /><span><strong>行星规模与在途物流</strong><small>当前真实状态</small></span></header><div>{planetRows.map((row) => <article key={row.planetId}><strong>{getPlanet(row.planetId as GameState["activePlanetId"]).name}</strong><span>实体 {row.entities}</span><span>线路 {row.belts}</span><span>在途 {row.routes}</span></article>)}</div></section>
+      <section className="performance-peaks-section"><header><AlertTriangle size={15} /><span><strong>最近 60 秒卡顿峰值</strong><small>主线程 {peaks.peakFrameMs.toFixed(1)} ms · Worker {peaks.peakWorkerMs.toFixed(1)} ms · 积压 {peaks.peakPendingTaskMs.toFixed(0)} ms</small></span></header>{stallPeaks.map((sample) => <div key={sample.recordedAt}><time>{new Date(sample.recordedAt).toLocaleTimeString("zh-CN")}</time><span>帧峰值 {sample.peakFrameMs.toFixed(1)} ms</span><span>Worker {sample.workerDurationMs.toFixed(1)} ms</span><span>积压 {sample.pendingTaskMs.toFixed(0)} ms</span></div>)}</section>
+    </>}
+  </div>;
+}
+
 function integrityLabel(status: SaveIntegrityStatus): string {
   if (status === "valid") return "校验通过";
   if (status === "legacy") return "旧格式"
@@ -411,6 +471,8 @@ function SavesPanel({
   onExport,
   onImport,
   onConfirmImport,
+  onConfirmImportRescue,
+  importRescueArmed,
   onCancelImport,
   onSaveSlot,
   onLoadSlot,
@@ -421,7 +483,7 @@ function SavesPanel({
   onValidateMod,
   onExportModTemplate,
 }: Pick<OperationsWorkspaceProps,
-  "game" | "slots" | "snapshots" | "importPreview" | "modValidation" | "onManualSave" | "onExport" | "onImport" | "onConfirmImport" | "onCancelImport" | "onSaveSlot" | "onLoadSlot" | "onDeleteSlot" | "onCreateSnapshot" | "onLoadSnapshot" | "onDeleteSnapshot" | "onValidateMod" | "onExportModTemplate">) {
+  "game" | "slots" | "snapshots" | "importPreview" | "modValidation" | "onManualSave" | "onExport" | "onImport" | "onConfirmImport" | "onConfirmImportRescue" | "importRescueArmed" | "onCancelImport" | "onSaveSlot" | "onLoadSlot" | "onDeleteSlot" | "onCreateSnapshot" | "onLoadSnapshot" | "onDeleteSnapshot" | "onValidateMod" | "onExportModTemplate">) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modInputRef = useRef<HTMLInputElement>(null);
   const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & ({ kind: "slot"; slotId: SaveSlotId } | { kind: "snapshot"; snapshotId: string })) | null>(null);
@@ -460,7 +522,7 @@ function SavesPanel({
           <span><small>科技</small><strong>{importPreview.summary?.completedTechCount ?? 0}</strong></span>
         </div>
         {importPreview.issues.length > 0 ? <ul>{importPreview.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul> : null}
-        <footer><button type="button" onClick={onCancelImport}>取消</button><button className="primary" type="button" onClick={onConfirmImport}><ShieldCheck size={14} />修复并导入</button></footer>
+        <footer><button type="button" onClick={onCancelImport}>取消</button>{importPreview.valid ? <button className="primary" type="button" onClick={onConfirmImport}><ShieldCheck size={14} />确认导入</button> : importPreview.repairable ? <button className={importRescueArmed ? "danger" : "primary"} type="button" onClick={onConfirmImportRescue}><ShieldCheck size={14} />{importRescueArmed ? "再次确认并救援" : "救援此存档"}</button> : <button type="button" disabled>无法导入</button>}</footer>
       </section> : null}
       <div className="save-slot-list">
         {([1, 2, 3] as SaveSlotId[]).map((slotId) => {
@@ -694,6 +756,7 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
         {props.tab === "alerts" ? <AlertsPanel alerts={props.alerts} onSelect={props.onAlertSelect} /> : null}
         {props.tab === "achievements" ? <AchievementsPanel game={props.game} /> : null}
         {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onOpenReleaseNotes={props.onOpenReleaseNotes} /> : null}
+        {props.tab === "performance" ? <PerformancePanel game={props.game} snapshot={props.performanceMonitor} onStart={props.onStartPerformanceMonitor} onStop={props.onStopPerformanceMonitor} onClear={props.onClearPerformanceMonitor} onExport={props.onExportPerformanceMonitor} /> : null}
         {props.tab === "saves" ? <SavesPanel {...props} /> : null}
         {props.tab === "packs" ? <ContentPacksPanel game={props.game} registry={props.contentPackRegistry} validation={props.modValidation} onValidate={props.onValidateMod} onExportTemplate={props.onExportModTemplate} onRegister={props.onRegisterContentPack} onSetEnabled={props.onSetContentPackEnabled} onRemove={props.onRemoveContentPack} /> : null}
         {props.tab === "support" ? <SupportPanel game={props.game} report={props.performanceReport} /> : null}

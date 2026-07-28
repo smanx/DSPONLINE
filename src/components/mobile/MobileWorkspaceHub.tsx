@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, Boxes, Calculator, Command, Database, Factory, Flag, Gauge, Globe2, Layers3, LogOut, Network, Orbit, PackageCheck, RadioTower, Route, Save, Settings, ShieldCheck, Smartphone, Telescope, TriangleAlert, Trophy, UserRound } from "lucide-react";
+import { Activity, BarChart3, BookOpen, Boxes, Calculator, Command, Database, Factory, Flag, Gauge, Globe2, Layers3, LogOut, Network, Orbit, PackageCheck, RadioTower, Route, Save, Settings, ShieldCheck, Smartphone, Telescope, TriangleAlert, Trophy, UserRound } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import type { OperationsTab } from "../OperationsWorkspace";
 import type { StatisticsTab } from "../StatisticsWorkspace";
@@ -61,6 +61,7 @@ export function MobileWorkspaceHub({ hasConstructionCenter, onOpenWorkspace, onO
       { id: "cloud", label: "云存档", detail: "主存档、手动槽位与冲突处理", icon: <Database size={21} />, run: () => onOpenGalaxy("cloud") },
       { id: "account", label: "账号", detail: "登录、邮箱、设备与数据安全", icon: <UserRound size={21} />, run: () => onOpenGalaxy("account") },
       { id: "settings", label: "游戏设置", detail: "字号、性能、动效和自动保存", icon: <Settings size={21} />, run: () => onOpenOperations("settings") },
+      { id: "performance", label: "性能监控", detail: "FPS、Worker、内存与卡顿归因", icon: <Activity size={21} />, run: () => onOpenOperations("performance") },
       { id: "packs", label: "内容包", detail: "注册、依赖、启停与版本", icon: <PackageCheck size={21} />, run: () => onOpenOperations("packs") },
       { id: "support", label: "诊断与反馈", detail: "运行状态、问题反馈和数据说明", icon: <ShieldCheck size={21} />, run: () => onOpenOperations("support") },
       { id: "legacy-ui", label: "切换经典手机界面", detail: "立即回到原有手机布局，偏好会保留", icon: <Smartphone size={21} />, run: onSwitchLegacy },

@@ -70,6 +70,7 @@ import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 import { useResolvedTheme } from "../hooks/useResolvedTheme";
 import { isSecureCloudClient } from "../nativeApp";
 import { useAppLocale } from "../i18n/locale";
+import { exportTextFile } from "../game/fileExport";
 
 type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "new";
 type CloudAuthMode = "login" | "register" | "forgot" | "reset";
@@ -222,6 +223,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [offlineProgress, setOfflineProgress] = useState<OfflineLoadProgress | null>(null);
   const [message, setMessage] = useState<MenuMessage>(null);
   const [importInspection, setImportInspection] = useState<SaveInspection | null>(null);
+  const [importRaw, setImportRaw] = useState<string | null>(null);
+  const [rescueConfirmation, setRescueConfirmation] = useState(false);
   const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & { slotId: SaveSlotId }) | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const offlineAbortRef = useRef<AbortController | null>(null);
@@ -449,12 +452,17 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
 
   const readImportFile = async (file: File) => {
     const storage = await loadStorageModule();
-    const inspection = storage.inspectSave(await file.text());
+    const raw = await file.text();
+    const inspection = storage.inspectSave(raw);
+    setImportRaw(raw);
     setImportInspection(inspection);
+    setRescueConfirmation(false);
     setView("import");
     setMessage(inspection.valid
       ? { tone: inspection.integrity === "valid" ? "ready" : "warning", text: inspection.integrity === "valid" ? "存档校验通过" : "存档将在导入时自动迁移" }
-      : { tone: "error", text: inspection.issues[0] ?? "存档格式无效" });
+      : inspection.repairable
+        ? { tone: "warning", text: "存档校验失败，但结构完整。请先备份原文件，再连续确认两次执行救援。" }
+        : { tone: "error", text: inspection.issues[0] ?? "存档格式无效" });
   };
 
   const confirmImport = async () => {
@@ -462,6 +470,32 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     const storage = await loadStorageModule();
     trackAnalyticsEvent("import_save");
     await enterLoadedGame({ state: importInspection.state, offlineSeconds: 0, offlineReport: null }, "导入外部存档前", storage);
+  };
+
+  const confirmSaveRescue = async () => {
+    if (!importInspection?.repairable || importInspection.valid || !importRaw) return;
+    if (!rescueConfirmation) {
+      setRescueConfirmation(true);
+      setMessage({ tone: "warning", text: "二次确认：救援会重新签署可解析状态。原始异常文件将先自动导出备份。" });
+      return;
+    }
+    setBusy(true);
+    try {
+      const storage = await loadStorageModule();
+      const repaired = storage.repairSave(importRaw);
+      if (!repaired.success || !repaired.raw || !repaired.inspection.state) throw new Error(repaired.message);
+      await exportTextFile({
+        contents: importRaw,
+        fileName: `dsp-idle-save-rescue-backup-${new Date().toISOString().slice(0, 10)}.json`,
+        title: "备份救援前的原始异常存档",
+      });
+      trackAnalyticsEvent("import_save");
+      await enterLoadedGame({ state: repaired.inspection.state, offlineSeconds: 0, offlineReport: null }, "救援外部存档前", storage);
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "存档救援失败" });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const authenticateCloud = async (event: FormEvent<HTMLFormElement>) => {
@@ -648,6 +682,14 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       const storage = await loadStorageModule();
       const inspection = storage.inspectSave(cloudSave.payload);
       if (!inspection.valid || !inspection.state) {
+        if (inspection.repairable && inspection.state) {
+          setImportRaw(cloudSave.payload);
+          setImportInspection(inspection);
+          setRescueConfirmation(false);
+          setView("import");
+          setMessage({ tone: "warning", text: "云端存档结构完整但校验失败，已转到受控救援入口。" });
+          return;
+        }
         setMessage({ tone: "error", text: inspection.issues[0] ?? "云存档格式无效" });
         return;
       }
@@ -670,7 +712,18 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       if (!cloudSave) throw new Error("云端修订已不可用，请重新连接后再试");
       const storage = await loadStorageModule();
       const inspection = storage.inspectSave(cloudSave.payload);
-      if (!inspection.valid || !inspection.state) throw new Error(inspection.issues[0] ?? "云存档格式无效");
+      if (!inspection.valid || !inspection.state) {
+        if (inspection.repairable && inspection.state && cloudConflict.slot === "main") {
+          setImportRaw(cloudSave.payload);
+          setImportInspection(inspection);
+          setRescueConfirmation(false);
+          setCloudConflict(null);
+          setView("import");
+          setMessage({ tone: "warning", text: "云端主存档结构完整但校验失败，已转到受控救援入口。" });
+          return;
+        }
+        throw new Error(inspection.issues[0] ?? "云存档格式无效");
+      }
       markCloudSaveSynchronized(userId, cloudSave, cloudSave.payload, cloudConflict.slot);
       setCloudConflict(null);
       trackAnalyticsEvent("cloud_download");
@@ -862,7 +915,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
 
           {view === "import" ? <div className="start-menu-import">
             <header><FileUp size={22} /><span><small>外部数据</small><strong>导入存档</strong></span></header>
-            {!importInspection ? <button className="start-menu-import-drop" type="button" onClick={() => fileInputRef.current?.click()}><FileUp size={25} /><strong>选择 JSON 存档</strong><small>支持当前格式与可迁移的旧版本</small></button> : <div className={`start-menu-import-result start-menu-import-result--${importInspection.valid ? importInspection.integrity : "corrupt"}`}><header><i>{importInspection.valid ? <Check size={18} /> : <CloudOff size={18} />}</i><span><strong>{importInspection.valid ? "存档可导入" : "存档不可用"}</strong><small>格式 v{importInspection.formatVersion ?? "?"} · 状态 v{importInspection.stateVersion ?? "?"}</small></span></header><div><span><small>运行时间</small><strong>{formatRuntime(importInspection.summary?.elapsedSeconds ?? 0)}</strong></span><span><small>实体数量</small><strong>{importInspection.state?.entities.length ?? 0}</strong></span><span><small>完成科技</small><strong>{importInspection.summary?.completedTechCount ?? 0}</strong></span></div>{importInspection.issues.length > 0 ? <ul>{importInspection.issues.slice(0, 4).map((issue) => <li key={issue}>{issue}</li>)}</ul> : null}<footer><button type="button" onClick={() => fileInputRef.current?.click()}>重新选择</button><button className="primary" type="button" disabled={busy || !importInspection.valid} onClick={() => void confirmImport()}><FileUp size={14} />确认导入并进入</button></footer></div>}
+            {!importInspection ? <button className="start-menu-import-drop" type="button" onClick={() => fileInputRef.current?.click()}><FileUp size={25} /><strong>选择 JSON 存档</strong><small>支持当前格式与可迁移的旧版本</small></button> : <div className={`start-menu-import-result start-menu-import-result--${importInspection.valid ? importInspection.integrity : "corrupt"}`}><header><i>{importInspection.valid ? <Check size={18} /> : <CloudOff size={18} />}</i><span><strong>{importInspection.valid ? "存档可导入" : importInspection.repairable ? "存档结构完整，可受控救援" : "存档不可用"}</strong><small>格式 v{importInspection.formatVersion ?? "?"} · 状态 v{importInspection.stateVersion ?? "?"}</small></span></header><div><span><small>运行时间</small><strong>{formatRuntime(importInspection.summary?.elapsedSeconds ?? 0)}</strong></span><span><small>实体数量</small><strong>{importInspection.state?.entities.length ?? 0}</strong></span><span><small>完成科技</small><strong>{importInspection.summary?.completedTechCount ?? 0}</strong></span></div>{importInspection.issues.length > 0 ? <ul>{importInspection.issues.slice(0, 4).map((issue) => <li key={issue}>{issue}</li>)}</ul> : null}<footer><button type="button" onClick={() => fileInputRef.current?.click()}>重新选择</button>{importInspection.valid ? <button className="primary" type="button" disabled={busy} onClick={() => void confirmImport()}><FileUp size={14} />确认导入并进入</button> : importInspection.repairable ? <button className={rescueConfirmation ? "danger" : "primary"} type="button" disabled={busy} onClick={() => void confirmSaveRescue()}><ShieldCheck size={14} />{rescueConfirmation ? "再次确认并救援" : "救援此存档"}</button> : <button type="button" disabled>无法导入</button>}</footer></div>}
           </div> : null}
 
           {view === "settings" ? <div className="start-menu-settings">

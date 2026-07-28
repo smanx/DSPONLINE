@@ -7,6 +7,7 @@ import { after, before, test } from "node:test";
 import Database from "better-sqlite3";
 import { cleanupExpiredAuthRecords, createCloudServer, createRateLimiter } from "./index.mjs";
 import { metricDay } from "./analytics.mjs";
+import { computeSaveStateChecksum } from "./save-integrity.mjs";
 
 let directory;
 let server;
@@ -17,18 +18,24 @@ let offsiteBackupStatusFile;
 let restoreDrillStatusFile;
 let nodeHealthStatusFile;
 const adminToken = "test-admin-secret-1234567890-abcdef";
-const cloudPayload = JSON.stringify({
-  formatVersion: 1,
-  savedAt: 123456,
-  checksum: "client-state-checksum",
-  state: {
+function createSavePayload(state, savedAt = 123456) {
+  const envelope = { formatVersion: 2, savedAt, state };
+  return JSON.stringify({ ...envelope, checksum: computeSaveStateChecksum(envelope.formatVersion, state) });
+}
+
+function mutateSavePayload(payload, mutate) {
+  const parsed = JSON.parse(payload);
+  mutate(parsed.state);
+  return createSavePayload(parsed.state, parsed.savedAt);
+}
+
+const cloudPayload = createSavePayload({
     version: 24,
     elapsedSeconds: 1_000_000,
     entities: [],
     totalProduced: { universe_matrix: 10 },
     metrics: { generationKw: 1_000, totalItemsPerMinute: 0, rayGenerationKw: 0 },
     exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
-  },
 });
 
 before(async () => {
@@ -235,7 +242,7 @@ test("opens cloud saves and verified leaderboard submissions without a mail prov
     const second = await isolatedRequest("/api/cloud-save", {
       method: "PUT",
       headers,
-      body: JSON.stringify({ payload: cloudPayload.replace('"universe_matrix":10', '"universe_matrix":12'), expectedRevision: 1 }),
+      body: JSON.stringify({ payload: mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = 12; }), expectedRevision: 1 }),
     });
     assert.equal(second.body.cloudSave.revision, 2);
     const history = await isolatedRequest("/api/cloud-save/history", { headers });
@@ -644,7 +651,7 @@ test("prunes detached SQLite payload rows with the twenty-revision history windo
     const registered = await registerResponse.json();
     assert.equal(registerResponse.status, 201);
     for (let revision = 1; revision <= 21; revision += 1) {
-      const payload = cloudPayload.replace('"universe_matrix":10', `"universe_matrix":${revision}`);
+      const payload = mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = revision; });
       const response = await fetch(`${isolatedBaseUrl}/api/cloud-save`, {
         method: "PUT",
         headers: { "content-type": "application/json", authorization: `Bearer ${registered.token}` },
@@ -661,6 +668,20 @@ test("prunes detached SQLite payload rows with the twenty-revision history windo
   }
 });
 
+test("rejects a structurally complete cloud save whose internal checksum is stale", async () => {
+  const corrupted = JSON.parse(cloudPayload);
+  corrupted.state.elapsedSeconds = 12_143;
+  const rejected = await request("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ payload: JSON.stringify(corrupted), expectedRevision: 0 }),
+  });
+  assert.equal(rejected.response.status, 400);
+  assert.equal(rejected.body.code, "SAVE_INTEGRITY_INVALID");
+  assert.equal(rejected.body.summary.elapsedSeconds, 12_143);
+  assert.equal(rejected.body.summary.integrity, "invalid");
+});
+
 test("stores revisioned cloud saves and detects conflicts", async () => {
   const saved = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
   assert.equal(saved.response.status, 200);
@@ -668,11 +689,12 @@ test("stores revisioned cloud saves and detects conflicts", async () => {
   assert.equal(saved.body.cloudSave.summary.stateVersion, 24);
   assert.equal(saved.body.cloudSave.summary.savedAt, 123456);
   assert.equal(saved.body.cloudSave.summary.completedTechCount, 0);
-  assert.equal(saved.body.cloudSave.summary.stateChecksum, "client-state-checksum");
+  assert.equal(saved.body.cloudSave.summary.stateChecksum, JSON.parse(cloudPayload).checksum);
+  assert.equal(saved.body.cloudSave.summary.integrity, "valid");
   const conflict = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
   assert.equal(conflict.response.status, 409);
 
-  const secondPayload = cloudPayload.replace('"universe_matrix":10', '"universe_matrix":12');
+  const secondPayload = mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = 12; });
   const second = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: secondPayload, expectedRevision: 1 }) });
   assert.equal(second.body.cloudSave.revision, 2);
   const history = await request("/api/cloud-save/history", { headers: { authorization: `Bearer ${token}` } });
@@ -692,13 +714,13 @@ test("stores revisioned cloud saves and detects conflicts", async () => {
 
 test("keeps main and three manual cloud slots revisioned independently", async () => {
   const slotOne = await request("/api/cloud-save?slot=1", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
-  const slotTwo = await request("/api/cloud-save?slot=2", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload.replace('"universe_matrix":10', '"universe_matrix":11'), expectedRevision: 0 }) });
+  const slotTwo = await request("/api/cloud-save?slot=2", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = 11; }), expectedRevision: 0 }) });
   assert.equal(slotOne.body.cloudSave.slot, "1");
   assert.equal(slotOne.body.cloudSave.revision, 1);
   assert.equal(slotTwo.body.cloudSave.slot, "2");
   assert.equal(slotTwo.body.cloudSave.revision, 1);
 
-  const slotOneSecond = await request("/api/cloud-save?slot=1", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload.replace('"universe_matrix":10', '"universe_matrix":15'), expectedRevision: 1 }) });
+  const slotOneSecond = await request("/api/cloud-save?slot=1", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = 15; }), expectedRevision: 1 }) });
   assert.equal(slotOneSecond.body.cloudSave.revision, 2);
   const slotOneConflict = await request("/api/cloud-save?slot=1", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 1 }) });
   assert.equal(slotOneConflict.response.status, 409);
@@ -718,18 +740,16 @@ test("keeps main and three manual cloud slots revisioned independently", async (
 });
 
 test("validates v32 gameplay buffer limits before accepting cloud saves", async () => {
-  const payloadFor = (productionBufferLimit, logisticsBufferLimit) => JSON.stringify({
-    state: {
+  const payloadFor = (productionBufferLimit, logisticsBufferLimit) => createSavePayload({
       version: 32,
       entities: [],
       settings: { productionBufferLimit, logisticsBufferLimit },
-    },
   });
   for (const payload of [
     payloadFor(999, 1_000_000),
     payloadFor(1_000_000.5, 1_000_000),
     payloadFor(1_000_000, 100_000_001),
-    JSON.stringify({ state: { version: 32, entities: [], settings: {} } }),
+    createSavePayload({ version: 32, entities: [], settings: {} }),
   ]) {
     const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload, expectedRevision: 0 }) });
     assert.equal(rejected.response.status, 400);
@@ -746,13 +766,11 @@ test("validates v33 proliferator and exact infinite research fields while accept
     ["stellar_harnessing", 1_000],
     ["continuum_simulation", 23],
   ].map(([id]) => [id, { level: 0, progress: "0", ...(overrides[id] ?? {}) }]));
-  const payloadFor = ({ proliferatorBufferLimit = 600, infiniteResearch = research() } = {}) => JSON.stringify({
-    state: {
+  const payloadFor = ({ proliferatorBufferLimit = 600, infiniteResearch = research() } = {}) => createSavePayload({
       version: 33,
       entities: [],
       settings: { productionBufferLimit: 1_000_000, logisticsBufferLimit: 1_000_000, proliferatorBufferLimit },
       endgame: { infiniteResearch },
-    },
   });
   const invalidPayloads = [
     payloadFor({ proliferatorBufferLimit: 0 }),
@@ -772,7 +790,7 @@ test("validates v33 proliferator and exact infinite research fields while accept
   assert.equal(accepted.response.status, 200);
 });
 
-test("validates v34 time warp and accepts Android v35 through current v38 saves", async () => {
+test("validates v34 time warp and accepts Android v35 through current v39 saves", async () => {
   const research = Object.fromEntries([
     ["matrix_compression", 1_000],
     ["vein_utilization", 1_000],
@@ -796,7 +814,7 @@ test("validates v34 time warp and accepts Android v35 through current v38 saves"
   const payloadFor = (mutate = () => {}) => {
     const state = structuredClone(baseState);
     mutate(state);
-    return JSON.stringify({ state });
+    return createSavePayload(state);
   };
   const invalidPayloads = [
     payloadFor((state) => { state.timeWarp.requestedMultiplier = 4; }),
@@ -894,6 +912,37 @@ test("validates v34 time warp and accepts Android v35 through current v38 saves"
     const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 7 }) });
     assert.equal(rejected.response.status, 400);
   }
+
+  const v39PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    const parsed = JSON.parse(v38Payload);
+    Object.assign(state, parsed.state);
+    state.version = 39;
+    state.entities.push({
+      id: "delivery-hub",
+      buildingId: "material_delivery_hub",
+      machineCount: 1,
+      interactionLocked: false,
+      deliveryItemIds: ["iron_ore"],
+      deliverySlots: [
+        { itemId: "iron_ore", mode: "auto" },
+        { itemId: "copper_ore", mode: "manual" },
+        { itemId: null, mode: "disabled" },
+      ],
+    });
+    state.belts.push({ id: "delivery-line", source: "source", target: "delivery-hub", itemId: "iron_ore", lanes: 1, targetPortIndex: 0 });
+    mutate(state);
+  });
+  for (const invalid of [
+    v39PayloadFor((state) => { state.entities.at(-1).deliverySlots.pop(); }),
+    v39PayloadFor((state) => { state.entities.at(-1).deliverySlots[1].itemId = null; }),
+    v39PayloadFor((state) => { state.entities.at(-1).deliverySlots[2] = { itemId: "stone", mode: "disabled" }; }),
+    v39PayloadFor((state) => { state.belts.at(-1).targetPortIndex = 2; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 7 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+  const acceptedV39 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v39PayloadFor(), expectedRevision: 7 }) });
+  assert.equal(acceptedV39.response.status, 200);
 });
 
 test("recalculates leaderboard score on the server", async () => {
@@ -916,7 +965,7 @@ test("recalculates leaderboard score on the server", async () => {
   let ranking = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
   assert.equal(ranking.body.entries.some((entry) => entry.userId === hidden.body.user.id), false);
 
-  const fourthPayload = cloudPayload.replace('"universe_matrix":10', '"universe_matrix":20');
+  const fourthPayload = mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = 20; });
   const uploadedWhileHidden = await request("/api/cloud-save", {
     method: "PUT",
     headers: { authorization: `Bearer ${token}` },

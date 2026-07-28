@@ -35,6 +35,7 @@ import { BlueprintPlacementCursor, BlueprintWorkspace, CanvasRegionEditor, Canva
 import { RecipeFocusPanel } from "./components/RecipeFocusPanel";
 import { OnboardingCoach } from "./components/OnboardingCoach";
 import { MobileGameShell } from "./components/mobile/MobileGameShell";
+import { usePerformanceMonitor } from "./hooks/usePerformanceMonitor";
 import { MobilePlacementBar, MobileSelectionContextBar, type MobileCanvasMode } from "./components/mobile/MobileFactoryPanels";
 import type { OperationsTab } from "./components/OperationsWorkspace";
 import type { StatisticsTab } from "./components/StatisticsWorkspace";
@@ -71,6 +72,7 @@ import {
   connectDysonNodes,
   craftConstruction,
   craftConstructionWithUpstream,
+  createSimulationProfiler,
   createBlueprint,
   createStandardDysonLayer,
   discardPlanetTrayItems,
@@ -84,6 +86,7 @@ import {
   getBlueprintPlacementPreview,
   getConstructionCraftNavigation,
   getConstructionQuickCraftPlan,
+  getMaterialDeliverySlotChangeCheck,
   getRecursiveHandcraftPlan,
   MIN_CANVAS_REGION_SIZE,
   getEntityOutputCapacity,
@@ -161,6 +164,7 @@ import {
   setRecipeFocusPosition,
   setFuelItem,
   setLogisticsItem,
+  setMaterialDeliverySlot,
   setPaused,
   setPlanetIndustryRole,
   setPlanetTrayItemLimit,
@@ -213,7 +217,7 @@ import { planFactoryAutoLayout } from "./game/layout";
 import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
 import { getProductionLineLocations, type ProductionLineLocation } from "./game/productionLocator";
 import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
-import { clearGameSlot, clearSaveSnapshot, exportGame, getSaveSlotSummaries, getSaveSnapshotSummaries, inspectSave, loadGameSlot, loadSaveSnapshot, saveGame, saveGameSnapshot, saveGameSlot, type LoadedGame, type OfflineReport, type SaveGameResult, type SaveInspection, type SaveSlotId, type SaveSnapshotSummary } from "./game/storage";
+import { clearGameSlot, clearSaveSnapshot, exportGame, getSaveSlotSummaries, getSaveSnapshotSummaries, inspectSave, loadGameSlot, loadSaveSnapshot, repairSave, saveGame, saveGameSnapshot, saveGameSlot, type LoadedGame, type OfflineReport, type SaveGameResult, type SaveInspection, type SaveSlotId, type SaveSnapshotSummary } from "./game/storage";
 import { runAutomaticPerformanceReport, type AutomaticPerformanceReport } from "./game/benchmark";
 import { importBlueprintExchange, parseBlueprintExchange, serializeBlueprintExchange } from "./game/blueprintExchange";
 import { exportTextFile } from "./game/fileExport";
@@ -436,13 +440,13 @@ function isAutoInputHandle(handle: string | null | undefined): boolean {
   return handle === "in:auto";
 }
 
-function parseBlackHolePortIndex(handle: string | null | undefined): 0 | 1 | 2 | undefined {
-  const match = /^in:black-hole:([0-2])$/.exec(handle ?? "");
+function parseTargetPortIndex(handle: string | null | undefined): 0 | 1 | 2 | undefined {
+  const match = /^in:(?:black-hole|delivery):([0-2])$/.exec(handle ?? "");
   return match ? Number(match[1]) as 0 | 1 | 2 : undefined;
 }
 
 function isUniversalInputHandle(handle: string | null | undefined): boolean {
-  return isAutoInputHandle(handle) || parseBlackHolePortIndex(handle) !== undefined;
+  return isAutoInputHandle(handle) || parseTargetPortIndex(handle) !== undefined;
 }
 
 function getEventPoint(event: MouseEvent | TouchEvent): { x: number; y: number } | null {
@@ -565,6 +569,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [saveSnapshots, setSaveSnapshots] = useState<SaveSnapshotSummary[]>(getSaveSnapshotSummaries);
   const [importPreview, setImportPreview] = useState<SaveInspection | null>(null);
   const [pendingImportState, setPendingImportState] = useState<GameState | null>(null);
+  const [pendingImportRaw, setPendingImportRaw] = useState<string | null>(null);
+  const [importRescueArmed, setImportRescueArmed] = useState(false);
   const [modValidation, setModValidation] = useState<ModValidationResult | null>(null);
   const [contentPackRegistry, setContentPackRegistry] = useState<ContentPackRegistry>(INITIAL_CONTENT_PACK_REGISTRY);
   const [performanceReport, setPerformanceReport] = useState<AutomaticPerformanceReport | null>(null);
@@ -656,6 +662,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const workerLatencyMsRef = useRef(0);
   const eventSequenceRef = useRef(0);
   const burstSequenceRef = useRef(0);
+  const getCurrentGame = useCallback(() => gameRef.current, []);
+  const performanceMonitor = usePerformanceMonitor(getCurrentGame);
   const { screenToFlowPosition, setCenter, setViewport, fitView, getViewport, zoomIn, zoomOut } = useReactFlow();
   const flowStore = useStoreApi<FactoryFlowNode, FactoryFlowEdge>();
   const lowEndMobile = useLowEndMobile();
@@ -1028,10 +1036,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, []);
 
   const persistPrimarySave = useCallback((state?: GameState): SaveGameResult => {
+    const monitorSave = performanceMonitor.isActive();
+    const startedAt = monitorSave ? performance.now() : 0;
     const result = saveGame(state ?? stateWithSimulationDebt(gameRef.current));
+    if (monitorSave) performanceMonitor.recordSave({ durationMs: performance.now() - startedAt, bytes: result.bytes ?? 0 });
     setSaveFailure(result.success ? null : result);
     return result;
-  }, [stateWithSimulationDebt]);
+  }, [performanceMonitor.isActive, performanceMonitor.recordSave, stateWithSimulationDebt]);
 
   const togglePause = useCallback(() => {
     const wasPaused = gameRef.current.paused;
@@ -1142,6 +1153,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       if (!submission || event.data.id !== submission.id) return;
       const latency = Math.max(0, performance.now() - submission.submittedAt);
       workerLatencyMsRef.current = workerLatencyMsRef.current > 0 ? workerLatencyMsRef.current * 0.75 + latency * 0.25 : latency;
+      if (typeof event.data.durationMs === "number") {
+        performanceMonitor.recordWorker({
+          durationMs: event.data.durationMs,
+          latencyMs: latency,
+          pendingTaskMs: simulationPendingSecondsRef.current * 1_000,
+          profiler: event.data.profiler ?? null,
+        });
+      }
       simulationSubmissionRef.current = null;
       setGame((current) => {
         if (current !== submission.state) {
@@ -1195,6 +1214,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           state: gameRef.current,
           simulationSeconds,
           wallSeconds: pendingWallSeconds,
+          profile: performanceMonitor.isActive(),
         };
         simulationRequestIdRef.current = request.id;
         simulationSubmissionRef.current = { ...request, submittedAt: performance.now() };
@@ -1207,7 +1227,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           setSimulationWorkerActive(false);
           worker.terminate();
           setGame((current) => {
-            const next = advanceSimulationBudget(current, simulationSeconds, pendingWallSeconds);
+            const profiler = performanceMonitor.isActive() ? createSimulationProfiler() : undefined;
+            const startedAt = profiler ? performance.now() : 0;
+            const next = advanceSimulationBudget(current, simulationSeconds, pendingWallSeconds, profiler);
+            if (profiler) performanceMonitor.recordWorker({ durationMs: performance.now() - startedAt, latencyMs: 0, pendingTaskMs: 0, profiler });
             lastSimulationResultRef.current = next;
             return next;
           });
@@ -1219,7 +1242,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       simulationPendingSecondsRef.current = 0;
       simulationPendingWallSecondsRef.current = 0;
       setGame((current) => {
-        const next = advanceSimulationBudget(current, simulationSeconds, pendingWallSeconds);
+        const profiler = performanceMonitor.isActive() ? createSimulationProfiler() : undefined;
+        const startedAt = profiler ? performance.now() : 0;
+        const next = advanceSimulationBudget(current, simulationSeconds, pendingWallSeconds, profiler);
+        if (profiler) performanceMonitor.recordWorker({ durationMs: performance.now() - startedAt, latencyMs: 0, pendingTaskMs: 0, profiler });
         lastSimulationResultRef.current = next;
         return next;
       });
@@ -1980,6 +2006,19 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     playTone(check.delta > 0 ? "confirm" : "remove");
   }, [commitGame, playTone]);
 
+  const updateMaterialDeliverySlot = useCallback((entityId: string, slotIndex: number, mode: import("./game/types").MaterialDeliverySlotMode, itemId: ItemId | null) => {
+    const check = getMaterialDeliverySlotChangeCheck(gameRef.current, entityId, slotIndex, mode, itemId);
+    if (!check.ok) {
+      setNotice(check.label);
+      return;
+    }
+    if (check.requiresDisconnect && !window.confirm(`${check.label}。枢纽缓存会安全退回本行星物资托盘，是否继续？`)) return;
+    commitGame((current) => setMaterialDeliverySlot(current, entityId, slotIndex, mode, itemId, check.requiresDisconnect));
+    setNotice(mode === "manual" && itemId
+      ? `接口 ${slotIndex + 1} 已指定为${ITEMS[itemId].name}`
+      : mode === "auto" ? `接口 ${slotIndex + 1} 已恢复自动识别` : `接口 ${slotIndex + 1} 已清空`);
+  }, [commitGame]);
+
   const autoLayoutEntities = useCallback((entityIds?: readonly string[]) => {
     const current = gameRef.current;
     const moves = planFactoryAutoLayout(current, current.activePlanetId, entityIds);
@@ -2289,23 +2328,30 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const importSave = useCallback((raw: string) => {
     const inspection = inspectSave(raw);
-    if (!inspection.valid || !inspection.state) {
+    if ((!inspection.valid && !inspection.repairable) || !inspection.state) {
       setNotice(`存档导入失败：${inspection.issues[0] ?? "文件格式或版本无效"}`);
       playTone("alert");
       return;
     }
     setImportPreview(inspection);
-    setPendingImportState(inspection.state);
-    setNotice(inspection.integrity === "valid" ? "已读取存档，请确认导入" : "存档可修复，请确认导入");
+    setPendingImportState(inspection.valid ? inspection.state : null);
+    setPendingImportRaw(raw);
+    setImportRescueArmed(false);
+    setNotice(inspection.valid
+      ? inspection.integrity === "valid" ? "已读取存档，请确认导入" : "存档可迁移，请确认导入"
+      : "完整性校验失败但结构完整，可使用双确认救援");
   }, [playTone]);
 
   const cancelImport = useCallback(() => {
     setImportPreview(null);
     setPendingImportState(null);
+    setPendingImportRaw(null);
+    setImportRescueArmed(false);
   }, []);
 
   const confirmImport = useCallback(() => {
     if (!pendingImportState) return;
+    saveGameSnapshot(gameRef.current, "导入外部存档前");
     const result = persistPrimarySave(pendingImportState);
     if (!result.success) {
       setNotice(result.message);
@@ -2316,13 +2362,63 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     refreshSaveData();
     setImportPreview(null);
     setPendingImportState(null);
+    setPendingImportRaw(null);
+    setImportRescueArmed(false);
     setNotice("存档导入完成，已自动创建回滚快照");
     playTone("complete");
   }, [pendingImportState, persistPrimarySave, playTone, refreshSaveData, restoreGame]);
 
+  const confirmImportRescue = useCallback(() => {
+    if (!importPreview?.repairable || importPreview.valid || !pendingImportRaw) return;
+    if (!importRescueArmed) {
+      setImportRescueArmed(true);
+      setNotice("二次确认：再次点击后将先导出原始异常文件，再重新校验并导入");
+      return;
+    }
+    const repaired = repairSave(pendingImportRaw);
+    if (!repaired.success || !repaired.inspection.state) {
+      setNotice(repaired.message);
+      playTone("alert");
+      return;
+    }
+    void exportTextFile({
+      contents: pendingImportRaw,
+      fileName: `dsp-idle-save-rescue-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      title: "备份救援前的原始异常存档",
+    }).then(() => {
+      saveGameSnapshot(gameRef.current, "救援外部存档前");
+      const result = persistPrimarySave(repaired.inspection.state!);
+      if (!result.success) {
+        setNotice(result.message);
+        playTone("alert");
+        return;
+      }
+      restoreGame(repaired.inspection.state!);
+      refreshSaveData();
+      setImportPreview(null);
+      setPendingImportState(null);
+      setPendingImportRaw(null);
+      setImportRescueArmed(false);
+      setNotice("存档救援完成，原始异常文件与当前工厂回滚快照均已保留");
+      playTone("complete");
+    }).catch((error) => {
+      setNotice(error instanceof Error ? `原始存档备份失败：${error.message}` : "原始存档备份失败，未执行救援");
+      playTone("alert");
+    });
+  }, [importPreview, importRescueArmed, pendingImportRaw, persistPrimarySave, playTone, refreshSaveData, restoreGame]);
+
   const restoreCloudSave = useCallback((raw: string): { success: boolean; message: string } => {
     const inspection = inspectSave(raw);
     if (!inspection.valid || !inspection.state) {
+      if (inspection.repairable && inspection.state) {
+        setImportPreview(inspection);
+        setPendingImportRaw(raw);
+        setPendingImportState(null);
+        setImportRescueArmed(false);
+        setOperationsTab("saves");
+        setOperationsOpen(true);
+        return { success: false, message: "云存档校验失败，已转到存档管理的受控救援入口" };
+      }
       playTone("alert");
       return { success: false, message: `云存档无效：${inspection.issues[0] ?? "格式或版本无法识别"}` };
     }
@@ -2864,7 +2960,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         source: belt.source,
         target: belt.target,
         sourceHandle: `out:${belt.itemId}`,
-        targetHandle: belt.targetPortIndex === undefined ? `in:${belt.itemId}` : `in:black-hole:${belt.targetPortIndex}`,
+        targetHandle: belt.targetPortIndex === undefined
+          ? `in:${belt.itemId}`
+          : canvasGame.entities.find((entity) => entity.id === belt.target)?.buildingId === "material_delivery_hub"
+            ? `in:delivery:${belt.targetPortIndex}`
+            : `in:black-hole:${belt.targetPortIndex}`,
         className: `factory-edge factory-edge--health-${diagnostic.health}${canvasGame.settings.beltHeatmapEnabled ? " factory-edge--heatmap" : ""}${diagnostic.flow > 0.001 ? " factory-edge--active" : ""}${focusTone === "focus" ? " factory-edge--task-focus" : focusTone === "dim" ? " factory-edge--task-dim" : ""}`,
         selected: selectedBeltId === belt.id || selectedBeltIdSet.has(belt.id),
         zIndex: selectedBeltId === belt.id || selectedBeltIdSet.has(belt.id) ? 1 : 0,
@@ -2914,19 +3014,20 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     return Boolean(source && target && source.planetId === target.planetId &&
       getProducedOutputs(source).includes(sourceItem) &&
       (!existing || existing.tier === tier) &&
-      canConnectBelt(state, connection.source, connection.target, sourceItem, tier, parseBlackHolePortIndex(connection.targetHandle)) &&
+      canConnectBelt(state, connection.source, connection.target, sourceItem, tier, parseTargetPortIndex(connection.targetHandle)) &&
       (state.construction[constructionId] ?? 0) >= 1);
   }, [beltTier, beltTierMode]);
 
   const beginConnectionDraft = useCallback((params: OnConnectStartParams): ConnectionDraft | null => {
     const itemId = parseHandleItem(params.handleId);
-    const universalPort = parseBlackHolePortIndex(params.handleId);
+    const universalPort = parseTargetPortIndex(params.handleId);
     if (!params.nodeId || !params.handleType || !params.handleId || (!itemId && universalPort === undefined)) return null;
     const tier = resolveConnectionBeltTier(gameRef.current, beltTierMode, beltTier, params.nodeId, itemId ?? undefined);
     const draft = { nodeId: params.nodeId, handleId: params.handleId, itemId, handleType: params.handleType, tier } satisfies ConnectionDraft;
     updateConnectionDraft(draft);
+    const universalLabel = params.handleId.startsWith("in:delivery:") ? `物资配送接口 ${universalPort! + 1}` : `微型黑洞接口 ${universalPort! + 1}`;
     setConnectionHint({
-      label: `${itemId ? ITEMS[itemId].name : `微型黑洞接口 ${universalPort! + 1}`} · Mk.${tier === 3 ? "III" : tier === 2 ? "II" : "I"} 已锁定 · 连接到${params.handleType === "source" ? "输入" : "输出"}端口`,
+      label: `${itemId ? ITEMS[itemId].name : universalLabel} · Mk.${tier === 3 ? "III" : tier === 2 ? "II" : "I"} 已锁定 · 连接到${params.handleType === "source" ? "输入" : "输出"}端口`,
       tone: "ready",
     });
     return draft;
@@ -2986,7 +3087,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     if (tone !== "valid" || !connection.source || !connection.target) {
       const check = connection.source && connection.target && connectionItem
         ? getBeltConnectionCheck(gameRef.current, connection.source, connection.target, connectionItem, preview.draft.tier,
-          parseBlackHolePortIndex(connection.targetHandle))
+          parseTargetPortIndex(connection.targetHandle))
         : null;
       setConnectionHint({ label: check && !check.ok ? check.label : "当前端口不可连接", tone: "blocked" });
       return;
@@ -3054,7 +3155,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const existing = current.belts.find((belt) => belt.source === source.id && belt.target === target.id && belt.itemId === fromItem);
       if (existing && existing.tier !== lockedTier) label = `已有并行线路使用 Mk.${existing.tier === 3 ? "III" : existing.tier === 2 ? "II" : "I"}，请手动指定同级传送带`;
       else {
-        const check = getBeltConnectionCheck(current, source.id, target.id, fromItem, lockedTier, parseBlackHolePortIndex(state.toHandle?.id));
+        const check = getBeltConnectionCheck(current, source.id, target.id, fromItem, lockedTier, parseTargetPortIndex(state.toHandle?.id));
         if (!check.ok) label = check.label;
       }
     }
@@ -3114,7 +3215,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const existing = current.belts.find((belt) => belt.source === source.id && belt.target === target.id && belt.itemId === sourceItem);
       if (existing && existing.tier !== preview.draft.tier) label = `已有并行线路使用 Mk.${existing.tier === 3 ? "III" : existing.tier === 2 ? "II" : "I"}，请手动指定同级传送带`;
       else {
-        const check = getBeltConnectionCheck(current, source.id, target.id, sourceItem!, preview.draft.tier, parseBlackHolePortIndex(connection?.targetHandle));
+        const check = getBeltConnectionCheck(current, source.id, target.id, sourceItem!, preview.draft.tier, parseTargetPortIndex(connection?.targetHandle));
         if (!check.ok) label = check.label;
       }
     }
@@ -3149,7 +3250,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const before = gameRef.current;
     const source = before.entities.find((entity) => entity.id === connection.source);
     const target = before.entities.find((entity) => entity.id === connection.target);
-    const targetPortIndex = parseBlackHolePortIndex(connection.targetHandle);
+    const targetPortIndex = parseTargetPortIndex(connection.targetHandle);
     const next = connectBelt(before, connection.source, connection.target, sourceItem, activeTier, targetPortIndex);
     if (next === before) {
       const reason = !source || !target
@@ -4124,6 +4225,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           },
           onRemoveSprayCoater: handleRemoveSprayCoater,
           onOpenResourceSettings: () => openMobileOperations("settings"),
+          onMaterialDeliverySlotChange: updateMaterialDeliverySlot,
         }}
         onFactory={() => {
           if (mobileNavigation.route.kind === "factory" && !mobileNavigation.overlay) {
@@ -4620,6 +4722,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onStationSlotRoutePolicyChange={(entityId, slotIndex, routePolicy) => commitGame((current) => setStationSlotRoutePolicy(current, entityId, slotIndex, routePolicy))}
           onStationSlotWarperBudgetChange={(entityId, slotIndex, warperBudget) => commitGame((current) => setStationSlotWarperBudget(current, entityId, slotIndex, warperBudget))}
           onLogisticsItemChange={(entityId, itemId) => commitGame((current) => setLogisticsItem(current, entityId, itemId))}
+          onMaterialDeliverySlotChange={updateMaterialDeliverySlot}
           onGalacticExporterPausedChange={(entityId, paused) => commitGame((current) => setGalacticMaterialExporterPaused(current, entityId, paused))}
           onBlackHolePausedChange={(entityId, paused, confirmActivation) => commitGame((current) => setBlackHolePaused(current, entityId, paused, confirmActivation))}
           onTimeWarpControllerChange={(entityId) => commitGame((current) => setTimeWarpController(current, entityId))}
@@ -5005,9 +5108,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             modValidation={modValidation}
             contentPackRegistry={contentPackRegistry}
             performanceReport={performanceReport}
+            performanceMonitor={performanceMonitor.snapshot}
             productionRefreshPreference={productionRefreshPreference}
             productionRefreshIntervalMs={productionRefreshIntervalMs}
             onProductionRefreshPreferenceChange={setProductionRefreshPreference}
+            onStartPerformanceMonitor={performanceMonitor.start}
+            onStopPerformanceMonitor={performanceMonitor.stop}
+            onClearPerformanceMonitor={performanceMonitor.clear}
+            onExportPerformanceMonitor={() => void performanceMonitor.exportAnonymous()}
             onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setOperationsOpen(false)}
             onTabChange={setOperationsTab}
             onAlertSelect={selectAlert}
@@ -5016,6 +5124,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onExport={downloadSave}
             onImport={importSave}
             onConfirmImport={confirmImport}
+            onConfirmImportRescue={confirmImportRescue}
+            importRescueArmed={importRescueArmed}
             onCancelImport={cancelImport}
             onSaveSlot={saveToSlot}
             onLoadSlot={loadFromSlot}

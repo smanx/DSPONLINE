@@ -52,6 +52,7 @@ import {
   getEntityCycleRatePerSimulationSecond,
   getEntityOperatingStatus,
   getEntityPowerFactor,
+  getMaterialDeliverySlots,
   getRecursiveHandcraftPlan,
   getResourceReserveSnapshot,
   isTechnologyCompleted,
@@ -67,12 +68,14 @@ import type {
   FactoryEntity,
   GameState,
   ItemId,
+  MaterialDeliverySlotMode,
   PlacementCount,
   PortableFleetItemId,
   RecipeId,
 } from "../../game/types";
 import type { MobileSheetSnap } from "../../hooks/useMobileNavigation";
 import { PowerValue } from "../PowerValue";
+import { ItemCatalogPicker } from "../CatalogPicker";
 import { CONSTRUCTION_BUILD_ORDER, constructionBuildIcon } from "../GamePanels";
 import { ItemGlyph } from "../ItemReference";
 import { QuantityStepper } from "../QuantityStepper";
@@ -346,7 +349,7 @@ function MobileBeltLaneControl({ game, belt, onChange }: { game: GameState; belt
   </section>;
 }
 
-export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onRemoveEntity, onUpgradeEntity, onUpgradeBelt, onBeltLaneCountChange, onEntityLockChange, onRemoveSprayCoater, onOpenResourceSettings }: {
+export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onRemoveEntity, onUpgradeEntity, onUpgradeBelt, onBeltLaneCountChange, onEntityLockChange, onRemoveSprayCoater, onOpenResourceSettings, onMaterialDeliverySlotChange }: {
   game: GameState;
   snap: MobileSheetSnap;
   entity: FactoryEntity | null;
@@ -364,6 +367,7 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
   onEntityLockChange: (entityId: string, locked: boolean) => void;
   onRemoveSprayCoater: (entityId: string) => void;
   onOpenResourceSettings: () => void;
+  onMaterialDeliverySlotChange: (entityId: string, slotIndex: number, mode: MaterialDeliverySlotMode, itemId: ItemId | null) => void;
 }) {
   const [addCount, setAddCount] = useState(1);
   const [stackTargetDraft, setStackTargetDraft] = useState(entity && entity.kind !== "vein" ? String(entity.machineCount) : "1");
@@ -374,6 +378,11 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
   const detail = status?.label ?? (belt ? `${belt.lastFlow.toFixed(1)}/s · Mk.${belt.tier}` : isMulti ? "批量操作与生产设置" : "点击画布节点或线路查看状态");
   const inputRows = entity ? amountRows(entity.inputs).slice(0, 4) : [];
   const outputRows = entity ? amountRows(entity.outputs).slice(0, 4) : [];
+  const deliverySlots = entity?.buildingId === "material_delivery_hub" ? getMaterialDeliverySlots(entity) : [];
+  const deliveryItems = entity?.buildingId === "material_delivery_hub" ? Object.values(ITEMS).filter((item) => {
+    const accepts = getBuilding(entity.buildingId!).accepts ?? "any";
+    return accepts === "any" || accepts === item.kind || (accepts === "solid" && item.kind === "matrix");
+  }) : [];
   const recipe = entity?.recipeId ? getRecipe(entity.recipeId) : undefined;
   const resourceReserve = entity ? getResourceReserveSnapshot(game, entity) : null;
   const addAvailable = entity ? Math.floor(game.construction[entity.kind === "vein" ? getExtractorBuildingId(entity.resourceId!) : entity.buildingId!] ?? 0) : 0;
@@ -415,6 +424,7 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
         {entity ? <MobileEntityProgress game={game} entity={entity} label={recipe?.name ?? (entity.kind === "vein" ? "资源采集" : "设备周期")} reserveLabel={resourceReserve ? ` · ${resourceReserve.infinite ? "无限储量" : resourceReserve.exhausted ? "资源已枯竭" : `储量 ${resourceReserve.remaining?.toLocaleString("zh-CN")}/${resourceReserve.capacity?.toLocaleString("zh-CN")} (${resourceReserve.remainingPercent}%)`}` : ""} /> : null}
         {snap !== "peek" ? <>
           {entity ? <section className={`mobile-inspector-io${entity.buildingId === "storage_mk1" || entity.buildingId === "storage_tank" ? " mobile-inspector-io--storage" : ""}`}><div><header>输入</header>{inputRows.length ? inputRows.map(([itemId, amount]) => <span key={itemId}><ItemGlyph itemId={itemId} /><em>{getItem(itemId).name}</em><strong><QuantityValue value={amount} /></strong></span>) : <small>暂无输入缓存</small>}</div><div><header>输出</header>{outputRows.length ? outputRows.map(([itemId, amount]) => <span key={itemId}><ItemGlyph itemId={itemId} /><em>{getItem(itemId).name}</em><strong><QuantityValue value={amount} /></strong></span>) : <small>暂无输出缓存</small>}</div></section> : null}
+          {entity?.buildingId === "material_delivery_hub" ? <section className="mobile-delivery-slot-controls" aria-label="物资配送接口设置"><header><span>三个直送接口</span><small>独立指定或自动识别</small></header>{deliverySlots.map((slot, index) => <article className={`mobile-delivery-slot mobile-delivery-slot--${slot.mode}`} key={index}><div><strong>接口 {index + 1}</strong><small>{slot.mode === "manual" ? "指定物资" : slot.mode === "disabled" ? "已清空" : slot.itemId ? "自动绑定" : "等待识别"}</small></div><ItemCatalogPicker value={slot.itemId ?? undefined} items={deliveryItems} label={`接口 ${index + 1} 指定物资`} onChange={(itemId) => { if (itemId) onMaterialDeliverySlotChange(entity.id, index, "manual", itemId); }} /><footer><button className={slot.mode === "auto" ? "active" : ""} type="button" onClick={() => onMaterialDeliverySlotChange(entity.id, index, "auto", null)}>自动识别</button><button className="danger" type="button" onClick={() => onMaterialDeliverySlotChange(entity.id, index, "disabled", null)}>清空接口</button></footer></article>)}</section> : null}
           {belt ? <section className="mobile-belt-summary"><div><span>物品</span><strong>{getItem(belt.itemId).name}</strong></div><div><span>近期吞吐</span><strong>{belt.lastFlow.toFixed(1)}/s</strong></div><div><span>堆叠</span><strong>×{belt.stackSize ?? 1}</strong></div><div><span>优先级</span><strong>{belt.priority === 2 ? "高" : belt.priority === 1 ? "标准" : "低"}</strong></div></section> : null}
           {belt ? <MobileBeltLaneControl game={game} belt={belt} onChange={onBeltLaneCountChange} /> : null}
           {entity ? <QuantityStepper value={addCount} max={addAvailable} disabled={addAvailable < 1} onChange={setAddCount} label="移动端增加设备" /> : null}

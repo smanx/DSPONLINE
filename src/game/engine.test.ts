@@ -75,6 +75,8 @@ import {
   getInterstellarTripSeconds,
   getLogisticsSpeedMultiplier,
   getMaterialDeliveryItems,
+  getMaterialDeliverySlots,
+  getMaterialDeliverySlotChangeCheck,
   getMaxConstructionQuickCraftBatches,
   getMaxHandcraftBatches,
   getMiningSpeedMultiplier,
@@ -161,6 +163,7 @@ import {
   setEntitiesInteractionLocked,
   setFuelItem,
   setLogisticsItem,
+  setMaterialDeliverySlot,
   setProliferatorConfiguration,
   setEntitiesProliferatorConfiguration,
   setStationMode,
@@ -3929,6 +3932,47 @@ describe("factory simulation", () => {
     expect(state.entities.find((entity) => entity.id === hub.id)?.inputs).toMatchObject({ iron_ingot: 0, copper_ingot: 0, stone_brick: 0 });
   });
 
+  it("reconfigures one delivery-hub port with confirmation while preserving every other line and buffered item", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("basic_logistics", "material_delivery_logistics");
+    state.construction.storage_mk1 = 2;
+    state.construction.material_delivery_hub = 1;
+    state.construction.conveyor_belt_mk1 = 2;
+    state = placeBuilding(state, "storage_mk1", { x: -320, y: -100 });
+    state = placeBuilding(state, "storage_mk1", { x: -320, y: 100 });
+    state = placeBuilding(state, "material_delivery_hub", { x: 0, y: 0 });
+    const [ironSource, copperSource] = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+    const hub = state.entities.find((entity) => entity.buildingId === "material_delivery_hub")!;
+    state = setLogisticsItem(state, ironSource.id, "iron_ingot");
+    state = setLogisticsItem(state, copperSource.id, "copper_ingot");
+    state = connectBelt(state, ironSource.id, hub.id, "iron_ingot", 1, 0);
+    state = connectBelt(state, copperSource.id, hub.id, "copper_ingot", 1, 1);
+    state.entities.find((entity) => entity.id === hub.id)!.inputs.iron_ingot = 7;
+
+    const check = getMaterialDeliverySlotChangeCheck(state, hub.id, 0, "manual", "stone_brick");
+    expect(check).toMatchObject({ ok: true, requiresDisconnect: true, connectedBelts: 1, bufferedItems: 7 });
+    expect(setMaterialDeliverySlot(state, hub.id, 0, "manual", "stone_brick")).toBe(state);
+
+    const stockBefore = state.construction.conveyor_belt_mk1 ?? 0;
+    state = setMaterialDeliverySlot(state, hub.id, 0, "manual", "stone_brick", true);
+    const changedHub = state.entities.find((entity) => entity.id === hub.id)!;
+    expect(getMaterialDeliverySlots(changedHub)).toEqual([
+      { itemId: "stone_brick", mode: "manual" },
+      { itemId: "copper_ingot", mode: "auto" },
+      { itemId: null, mode: "auto" },
+    ]);
+    expect(state.belts).toHaveLength(1);
+    expect(state.belts[0]).toMatchObject({ target: hub.id, itemId: "copper_ingot", targetPortIndex: 1 });
+    expect(state.construction.conveyor_belt_mk1).toBe(stockBefore + 1);
+    expect(state.tray.iron_ingot).toBe(7);
+    expect(changedHub.inputs.iron_ingot).toBeUndefined();
+
+    state = setMaterialDeliverySlot(state, hub.id, 0, "disabled");
+    expect(getMaterialDeliverySlots(state.entities.find((entity) => entity.id === hub.id)!)[0]).toEqual({ itemId: null, mode: "disabled" });
+    state = setMaterialDeliverySlot(state, hub.id, 0, "auto");
+    expect(getMaterialDeliverySlots(state.entities.find((entity) => entity.id === hub.id)!)[0]).toEqual({ itemId: null, mode: "auto" });
+  });
+
   it("treats the delivery hub as tray-backed pass-through above its 900-item building buffer", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("basic_logistics", "material_delivery_logistics", "super_magnetic_logistics");
@@ -4255,8 +4299,8 @@ describe("factory simulation", () => {
     state.construction.material_delivery_hub = 1;
     state = placeBuilding(state, "material_delivery_hub", { x: 320, y: 0 });
     const hub = state.entities.find((entity) => entity.buildingId === "material_delivery_hub")!;
-    hub.deliveryItemIds = ["copper_ingot"];
-    hub.inputs.copper_ingot = 8;
+    state = setMaterialDeliverySlot(state, hub.id, 0, "manual", "copper_ingot");
+    state.entities.find((entity) => entity.id === hub.id)!.inputs.copper_ingot = 8;
     state.tray.copper_ingot = 999;
     state = advanceSimulation(state, 1);
     expect(state.tray.copper_ingot).toBe(1_000);

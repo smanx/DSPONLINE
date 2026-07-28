@@ -25,7 +25,7 @@ import {
 import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { FUEL_ENERGY_MJ, ITEMS, MATRIX_ITEM_IDS, getBuilding, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getProliferator, getRecipe, getRecipesForBuilding } from "../game/content";
-import { MATERIAL_DELIVERY_SLOT_COUNT, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMaterialDeliveryItems, getStationDroneCapacity, getStationSlots, getStationVesselCapacity, type ResourceReserveSnapshot } from "../game/engine";
+import { MATERIAL_DELIVERY_SLOT_COUNT, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMaterialDeliveryItems, getMaterialDeliverySlots, getStationDroneCapacity, getStationSlots, getStationVesselCapacity, type ResourceReserveSnapshot } from "../game/engine";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { RecipeCatalogPicker } from "./CatalogPicker";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
@@ -258,9 +258,10 @@ interface InputSlotProps {
   connectionDraft: FactoryNodeData["connectionDraft"];
   connectionCount?: number;
   missing?: boolean;
+  handleId?: string;
 }
 
-function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, onDropDraggedItem, connectionDraft, connectionCount = 0, missing = false }: InputSlotProps) {
+function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, onDropDraggedItem, connectionDraft, connectionCount = 0, missing = false, handleId }: InputSlotProps) {
   const compatible = cargo?.itemId === itemId;
   const previousAmountRef = useRef(Math.floor(amount));
   const [arrivalPulse, setArrivalPulse] = useState(0);
@@ -285,7 +286,7 @@ function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, 
   };
   return (
     <div className={`node-port node-port--input${compatible ? " node-port--compatible" : ""}${missing ? " node-port--missing" : ""}${arrivalPulse > 0 ? " node-port--arrival" : ""}`}>
-      <Handle id={`in:${itemId}`} type="target" position={Position.Left} className={`factory-handle factory-handle--input nodrag nopan${connectionHandleClass(entityId, itemId, "target", connectionDraft)}`} />
+      <Handle id={handleId ?? `in:${itemId}`} type="target" position={Position.Left} className={`factory-handle factory-handle--input nodrag nopan${connectionHandleClass(entityId, itemId, "target", connectionDraft)}`} />
       <button
         className="node-slot nodrag nopan"
         type="button"
@@ -312,15 +313,16 @@ function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, 
   );
 }
 
-function AutoInputPort({ connectionDraft, label = "自动匹配" }: {
+function AutoInputPort({ connectionDraft, label = "自动匹配", handleId = "in:auto" }: {
   connectionDraft: FactoryNodeData["connectionDraft"];
   label?: string;
+  handleId?: string;
 }) {
   const compatible = connectionDraft?.handleType === "source";
   const muted = connectionDraft?.handleType === "target";
   return (
     <div className={`node-auto-input${compatible ? " node-auto-input--compatible" : ""}${muted ? " node-auto-input--muted" : ""}`}>
-      <Handle id="in:auto" type="target" position={Position.Left} className="factory-handle factory-handle--input factory-handle--auto nodrag nopan" />
+      <Handle id={handleId} type="target" position={Position.Left} className="factory-handle factory-handle--input factory-handle--auto nodrag nopan" />
       <Sparkles size={11} /><span>{label}</span>
     </div>
   );
@@ -635,13 +637,16 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const isStation = entity.kind === "station";
   const orbitalCollector = entity.buildingId === "orbital_collector";
   const deliveryHub = entity.buildingId === "material_delivery_hub";
+  const deliverySlots = deliveryHub ? getMaterialDeliverySlots(entity) : [];
   const warehouseStorage = entity.buildingId === "storage_mk1" || entity.buildingId === "storage_tank";
   const configuredItems = deliveryHub
     ? getMaterialDeliveryItems(entity)
     : isStation && !orbitalCollector
     ? getStationSlots(entity).flatMap((slot) => slot.itemId ? [slot.itemId] : [])
     : itemId ? [itemId] : [];
-  const nodeRef = useDynamicHandles(entity.id, `${configuredItems.join(":") || "unconfigured"}:auto`);
+  const nodeRef = useDynamicHandles(entity.id, deliveryHub
+    ? deliverySlots.map((slot) => `${slot.mode}:${slot.itemId ?? "empty"}`).join(":")
+    : `${configuredItems.join(":") || "unconfigured"}:auto`);
   const cargoKind = cargo ? getItem(cargo.itemId).kind : null;
   const acceptsCargo = Boolean(cargo && (configuredItems.length === 0 || configuredItems.includes(cargo.itemId) || (deliveryHub && configuredItems.length < MATERIAL_DELIVERY_SLOT_COUNT)) && (
     building.accepts === "any" || building.accepts === cargoKind || (building.accepts === "solid" && cargoKind === "matrix")
@@ -702,7 +707,19 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         semanticKey={`${entity.id}:${isStation ? (entity.stationRoutes ?? []).map((route) => route.id).join(",") || "idle" : configuredItems.join(",") || "empty"}`}
         effectiveSimulationMultiplier={data.simulationMultiplier}
       />
-      {configuredItems.length > 0 ? (
+      {deliveryHub ? (
+        <div className="node-io logistics-io delivery-hub-io">
+          {deliverySlots.map((slot, index) => <div className={`logistics-slot-row delivery-hub-slot-row delivery-hub-slot-row--${slot.mode}`} key={`delivery-${index}`}>
+            <div className="node-io__column">
+              <span className="node-io__label">接口 {index + 1}</span>
+              {slot.itemId ? <InputSlot entityId={entity.id} itemId={slot.itemId} amount={entity.inputs[slot.itemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} connectionDraft={data.connectionDraft} connectionCount={data.inputBeltCounts[slot.itemId] ?? 0} handleId={`in:delivery:${index}`} />
+                : slot.mode === "disabled" ? <div className="delivery-hub-port-disabled">接口已清空</div>
+                  : <AutoInputPort connectionDraft={data.connectionDraft} label="自动识别" handleId={`in:delivery:${index}`} />}
+            </div>
+            <div className="delivery-hub-target"><Database size={14} /><span>{slot.mode === "manual" ? "指定直送" : slot.mode === "disabled" ? "停止接收" : "进入物资托盘"}</span></div>
+          </div>)}
+        </div>
+      ) : configuredItems.length > 0 ? (
         <div className={`node-io logistics-io${orbitalCollector ? " logistics-io--collector" : ""}`}>
           {configuredItems.map((configuredItemId, index) => <div className={`logistics-slot-row${warehouseStorage ? " logistics-slot-row--warehouse" : ""}`} key={configuredItemId}>
             {!orbitalCollector ? <div className="node-io__column">
@@ -718,7 +735,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       ) : (
         <div className="logistics-empty">{deliveryHub ? "连接任意输出端口，自动占用 3 个直送接口" : planetaryStation ? "在检查器中选择行星货物" : isStation ? "在检查器中选择星际货物" : "拖入物品或在检查器中选择缓存类型"}</div>
       )}
-      {!orbitalCollector && data.connectionDraft && (!deliveryHub || configuredItems.length < MATERIAL_DELIVERY_SLOT_COUNT) ? <div className="logistics-auto-input"><AutoInputPort connectionDraft={data.connectionDraft} label={deliveryHub ? "自动占用直送接口" : isStation ? "连接时自动占用空槽" : "连接时自动设置物品"} /></div> : null}
+      {!orbitalCollector && !deliveryHub && data.connectionDraft ? <div className="logistics-auto-input"><AutoInputPort connectionDraft={data.connectionDraft} label={isStation ? "连接时自动占用空槽" : "连接时自动设置物品"} /></div> : null}
       <footer className="factory-node__footer">
         <span title={data.status.label}>{data.status.label}</span>
         <span title={isStation ? `累计 ${entity.stationTrips ?? 0} 航次` : undefined}>{deliveryHub ? `${configuredItems.length}/${MATERIAL_DELIVERY_SLOT_COUNT} 接口 · ${entity.productionRate.toFixed(1)}/min` : orbitalCollector ? `${itemId ? ITEMS[itemId].name : "资源"} · ${entity.productionRate.toFixed(1)}/min` : isStation ? `${primaryStationMode === "demand" ? "需求" : primaryStationMode === "supply" ? "供应" : "仓储"} · ${configuredItems.length}/5 槽 · ${stationVehicles}/${stationVehicleCapacity} ${planetaryStation ? "机队" : "舰队"}` : isSplitter ? entity.distributionMode === "priority" ? "优先分流" : "均衡分流" : `${data.outputCapacity} 容量`}</span>

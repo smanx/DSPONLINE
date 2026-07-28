@@ -1151,6 +1151,79 @@ const UI_EN: TranslationMap = {
   "缺料、暂停或断电只会保留原任务并等待；条件恢复后从原阶段继续。存档重载、分段模拟和大时间步不会重复扣料或重复结算成品。": "Missing materials, pauses, or power loss retain the current job and wait. Processing resumes from the same stage when conditions recover, without duplicate consumption or output after reloads, chunked simulation, or large time steps.",
   "WIP 与真实等待原因可查看": "Visible WIP and Real Wait Reasons",
   "制造中心总览会列出各项 WIP、累计销毁的副产物和当前暂停、供电或缺料原因。非必要产物仍优先进入行星托盘，满仓时才销毁并记账。": "The Construction Center overview lists each WIP item, cumulative discarded byproducts, and the current pause, power, or material blocker. Optional outputs still enter the planet tray first and are discarded with accounting only when the tray is full.",
+  "存档完整性与性能诊断更新": "Save Integrity & Performance Diagnostics",
+  "1.0.8 增加保存前完整性自检、云端拒绝异常存档和受控救援入口，并补齐配送枢纽端口管理、亮色制造栏对比度与按需性能诊断。GameState 升级至 v39。": "Version 1.0.8 adds integrity checks before saving, server-side rejection of invalid cloud saves, and a controlled rescue flow. It also adds delivery-hub port controls, clearer light-theme fabrication text, and on-demand performance diagnostics. GameState advances to v39.",
+  "存档完整性自检与受控救援": "Save Integrity Checks & Controlled Rescue",
+  "本地保存、手动导出和云上传会立即复核校验值；云端拒绝异常载荷。结构完整的异常存档会显示真实进度，并提供先导出原件、再二次确认的救援流程。": "Local saves, manual exports, and cloud uploads immediately verify their checksums, while the server rejects invalid payloads. Structurally complete saves show their real progress and can be rescued only after exporting the original and confirming twice.",
+  "配送枢纽端口可独立配置": "Independent Delivery-Hub Ports",
+  "三个输入端口可以分别指定物资、恢复自动识别或清空。重置已连接端口前会确认并安全返还线路、施工件和缓存，不影响其他端口。": "Each of the three input ports can assign an item, return to automatic detection, or be cleared. Resetting a connected port requires confirmation and safely returns belts, construction stock, and buffered cargo without changing the other ports.",
+  "亮色制造栏更清晰": "Clearer Light-Theme Fabrication",
+  "建筑制造和物品手工制造的名称、选中、可制造、缺料与禁用状态使用更稳定的亮色主题对比度。": "Building fabrication and item handcrafting now keep readable light-theme contrast for names, selection, craftable, missing-material, and disabled states.",
+  "新增按需性能诊断": "On-Demand Performance Diagnostics",
+  "运营中心可按需采集 FPS、主线程、Worker、任务积压、存档和各模拟阶段耗时，并导出匿名报告。监控默认关闭且不进入存档。": "Operations Center can sample FPS, main-thread time, Worker time, backlog, save size, and simulation phases on demand, then export an anonymous report. Monitoring is off by default and never enters save data.",
+  "性能": "Performance",
+  "按需阶段计时": "On-Demand Phase Timing",
+  "性能监控与卡顿诊断": "Performance Monitor & Stutter Diagnostics",
+  "正在采样": "Sampling",
+  "监控已关闭": "Monitoring Off",
+  "停止采样": "Stop Sampling",
+  "开始采样": "Start Sampling",
+  "清空记录": "Clear Records",
+  "导出匿名报告": "Export Anonymous Report",
+  "浏览器不提供各玩法的真实 CPU 百分比；下方占比来自 Worker 内各模拟阶段的实际执行耗时。监控关闭时不启用阶段计时。": "Browsers do not expose real CPU percentages by gameplay system. The shares below come from measured Worker phase durations, and phase timing is disabled while monitoring is off.",
+  "正在建立首个 1 秒样本": "Building the First 1-Second Sample",
+  "尚未采样": "No Samples Yet",
+  "开启后保留最近 60 秒，不写入游戏状态或云存档。": "When enabled, the latest 60 seconds are retained without writing to GameState or cloud saves.",
+  "实时性能摘要": "Live Performance Summary",
+  "主线程峰值": "Main-Thread Peak",
+  "模拟 Worker": "Simulation Worker",
+  "任务积压": "Task Backlog",
+  "待处理模拟时间": "Pending Simulation Time",
+  "可用 JS 内存": "Available JS Memory",
+  "浏览器未公开设备内存": "Device Memory Not Exposed",
+  "状态 / 主存档": "State / Main Save",
+  "最近保存": "Latest Save",
+  "包括写入后校验": "Includes Post-Write Verification",
+  "最近离线结算": "Latest Offline Simulation",
+  "本次页面会话": "Current Page Session",
+  "模拟阶段耗时归因": "Simulation Phase Attribution",
+  "最近一个 Worker 批次": "Latest Worker Batch",
+  "等待下一次带阶段计时的 Worker 结果。": "Waiting for the next Worker result with phase timing.",
+  "行星规模与在途物流": "Planet Scale & In-Flight Logistics",
+  "当前真实状态": "Current Authoritative State",
+  "最近 60 秒卡顿峰值": "Stutter Peaks in the Last 60 Seconds",
+  "建筑生产与采集": "Production & Extraction",
+  "制造与施工": "Fabrication & Construction",
+  "统计历史": "Statistics History",
+  "状态复制": "State Copy",
+  "其他模拟开销": "Other Simulation Overhead",
+  "性能监控": "Performance Monitor",
+  "FPS、Worker、内存与卡顿归因": "FPS, Worker, Memory & Stutter Attribution",
+  "物资配送接口": "Material Delivery Ports",
+  "物资配送接口设置": "Material Delivery Port Settings",
+  "三个直送接口": "Three Direct-Delivery Ports",
+  "独立指定或自动识别": "Assign Independently or Auto-Detect",
+  "指定物资": "Assigned Item",
+  "已清空": "Cleared",
+  "自动识别已绑定": "Auto-Detected and Bound",
+  "等待自动识别": "Waiting for Auto-Detection",
+  "自动绑定": "Auto-Bound",
+  "等待识别": "Waiting for Detection",
+  "恢复自动识别": "Restore Auto-Detection",
+  "自动识别": "Auto-Detect",
+  "清空接口": "Clear Port",
+  "每个接口可独立指定、恢复自动识别或清空。重置已连接接口前会要求确认，送达物品直接进入本行星物资托盘。": "Each port can be assigned, returned to auto-detection, or cleared independently. Resetting a connected port requires confirmation, and delivered items enter this planet's material tray.",
+  "确认导入": "Confirm Import",
+  "救援此存档": "Rescue This Save",
+  "再次确认并救援": "Confirm Again and Rescue",
+  "无法导入": "Cannot Import",
+  "存档结构完整，可受控救援": "Save Is Structurally Complete and Can Be Rescued",
+  "存档校验失败，但结构完整。请先备份原文件，再连续确认两次执行救援。": "Save integrity failed, but the structure is complete. Back up the original file and confirm twice to rescue it.",
+  "二次确认：救援会重新签署可解析状态。原始异常文件将先自动导出备份。": "Second confirmation: rescue will re-sign the parsed state after exporting the original invalid file.",
+  "备份救援前的原始异常存档": "Back Up the Original Save Before Rescue",
+  "存档救援失败": "Save Rescue Failed",
+  "云端存档结构完整但校验失败，已转到受控救援入口。": "The cloud save is structurally complete but failed integrity verification. It has been routed to controlled rescue.",
+  "云端主存档结构完整但校验失败，已转到受控救援入口。": "The main cloud save is structurally complete but failed integrity verification. It has been routed to controlled rescue.",
   "自动制造已暂停": "Automated manufacturing paused",
   "游戏已暂停": "Game paused",
   "等待供电": "Waiting for power",
@@ -1390,6 +1463,34 @@ function translateRequirementList(source: string): string {
 function translateDynamicSystemText(body: string): string {
   let match = body.match(/^长按采集(.+)$/);
   if (match) return `Hold to gather ${translateCatalogName(match[1])}`;
+  match = body.match(/^接口 (\d+)$/);
+  if (match) return `Port ${match[1]}`;
+  match = body.match(/^接口 (\d+) 指定物资$/);
+  if (match) return `Assign Item to Port ${match[1]}`;
+  match = body.match(/^接口 (\d+) 已指定为(.+)$/);
+  if (match) return `Port ${match[1]} assigned to ${translateCatalogName(match[2])}`;
+  match = body.match(/^接口 (\d+) 已恢复自动识别$/);
+  if (match) return `Port ${match[1]} restored to auto-detection`;
+  match = body.match(/^接口 (\d+) 已清空$/);
+  if (match) return `Port ${match[1]} cleared`;
+  match = body.match(/^(.+) · (\d+) 条线路$/);
+  if (match) return `${translatedTrimmed(match[1])} · ${match[2]} belt${match[2] === "1" ? "" : "s"}`;
+  match = body.match(/^平均帧 ([\d.]+) ms$/);
+  if (match) return `Average Frame ${match[1]} ms`;
+  match = body.match(/^长帧 (\d+) 次$/);
+  if (match) return `Long Frames ${match[1]}`;
+  match = body.match(/^往返 ([\d.]+) ms$/);
+  if (match) return `Round Trip ${match[1]} ms`;
+  match = body.match(/^设备约 ([\d.]+) GiB$/);
+  if (match) return `Device Approx. ${match[1]} GiB`;
+  match = body.match(/^(实体|线路|在途) (\d+)$/);
+  if (match) return `${({ 实体: "Entities", 线路: "Belts", 在途: "In Flight" } as Record<string, string>)[match[1]]} ${match[2]}`;
+  match = body.match(/^主线程 ([\d.]+) ms · Worker ([\d.]+) ms · 积压 ([\d.]+) ms$/);
+  if (match) return `Main Thread ${match[1]} ms · Worker ${match[2]} ms · Backlog ${match[3]} ms`;
+  match = body.match(/^帧峰值 ([\d.]+) ms$/);
+  if (match) return `Frame Peak ${match[1]} ms`;
+  match = body.match(/^积压 ([\d.]+) ms$/);
+  if (match) return `Backlog ${match[1]} ms`;
   match = body.match(/^(.+) ×([\d,.]+)$/);
   if (match) {
     const name = translateCatalogName(match[1]);

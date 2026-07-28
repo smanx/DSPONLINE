@@ -351,6 +351,12 @@ export type StationMinimumLoad = 0.1 | 0.25 | 0.5 | 1;
 export type StationLogisticsMode = "supply" | "demand" | "storage";
 export type StationLogisticsScope = "local" | "remote";
 export type LogisticsPriority = 0 | 1 | 2;
+export type MaterialDeliverySlotMode = "auto" | "manual" | "disabled";
+
+export interface MaterialDeliverySlot {
+  itemId: ItemId | null;
+  mode: MaterialDeliverySlotMode;
+}
 export type CargoStackSize = 1 | 2 | 4;
 export type EnergyMode = "auto" | "charge" | "discharge";
 export type PowerGridId = "grid-a" | "grid-b" | "grid-c";
@@ -632,6 +638,8 @@ export interface FactoryEntity {
   storedItemId?: ItemId;
   /** Up to three item types routed directly into this planet's material tray. */
   deliveryItemIds?: ItemId[];
+  /** Stable per-port configuration for the three material delivery inputs. */
+  deliverySlots?: MaterialDeliverySlot[];
   distributionMode?: "balanced" | "priority";
   fuelItemId?: ItemId;
   fuelRemainingMj?: number;
@@ -1090,6 +1098,7 @@ export interface BlueprintEntityTemplate {
   recipeId?: RecipeId;
   storedItemId?: ItemId;
   deliveryItemIds?: ItemId[];
+  deliverySlots?: MaterialDeliverySlot[];
   distributionMode?: "balanced" | "priority";
   fuelItemId?: ItemId;
   energyMode?: EnergyMode;
@@ -1257,7 +1266,7 @@ export interface ConstructionAutomationJob {
 }
 
 export interface GameState {
-  version: 38;
+  version: 39;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];

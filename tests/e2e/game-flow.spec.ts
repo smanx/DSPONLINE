@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-28-v1.0.7");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-28-v1.0.8");
     }
   });
 }
@@ -139,18 +139,19 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "制造中心 WIP 急救补丁" });
+  const releaseNotes = page.getByRole("dialog", { name: "存档完整性与性能诊断更新" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(3);
-  await expect(releaseNotes).toContainText("必要 WIP 不再受固定上限阻断");
-  await expect(releaseNotes).toContainText("任务可自动等待和恢复");
-  await expect(releaseNotes).toContainText("WIP 与真实等待原因可查看");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v107-1440.png", fullPage: true });
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(4);
+  await expect(releaseNotes).toContainText("存档完整性自检与受控救援");
+  await expect(releaseNotes).toContainText("配送枢纽端口可独立配置");
+  await expect(releaseNotes).toContainText("亮色制造栏更清晰");
+  await expect(releaseNotes).toContainText("新增按需性能诊断");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v108-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v107-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v108-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -165,7 +166,7 @@ test("dated release notes appear once and remain available from both settings sc
   });
   await expect.poll(controlsFitViewport).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v107-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v108-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -174,7 +175,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-28-v1.0.7");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-28-v1.0.8");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -191,7 +192,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v107-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-28-v108-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -4952,7 +4953,7 @@ test("save preview, snapshots, content-pack validation and simulation diagnostic
   });
   await expect(operations.locator(".save-import-preview")).toBeVisible();
   await expect(operations.locator(".save-import-preview")).toContainText("校验通过");
-  await operations.locator(".save-import-preview").getByRole("button", { name: "修复并导入" }).click();
+  await operations.locator(".save-import-preview").getByRole("button", { name: "确认导入" }).click();
   await expect(operations.locator(".save-import-preview")).toBeHidden();
   await page.getByLabel("打开设置").click();
   const reopenedOperations = page.getByRole("dialog", { name: "运营中心" });

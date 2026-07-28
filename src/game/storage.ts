@@ -24,7 +24,8 @@ import { createEndgameState, getOfflineSimulationLimitSeconds } from "./endgame"
 import { getInfiniteResearchCostBigInt, getInfiniteResearchMaximumLevel } from "./infiniteResearch";
 import { normalizeDecimalIntegerString } from "./quantityFormat";
 import { ACTIVITY_MATERIAL_IDS } from "./activity";
-import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
+import { computeSaveStateChecksum, inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
+import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, MaterialDeliverySlot, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -122,6 +123,8 @@ export interface SaveInspection {
   stateVersion: number | null;
   savedAt: number | null;
   checksum: "valid" | "missing" | "invalid";
+  recordedChecksum: string | null;
+  computedChecksum: string | null;
   issues: string[];
   state: GameState | null;
   summary: Omit<SaveSlotSummary, "slotId" | "integrity" | "valid" | "issues"> | null;
@@ -183,7 +186,7 @@ function nonNegativeRecord(value: unknown): Partial<Record<ItemId, number>> {
  * tests, and older browsers where Web Crypto may not be available yet.
  * It is an integrity check, not a security boundary.
  */
-function checksumFor(formatVersion: number, state: unknown): string {
+function legacyChecksumFor(formatVersion: number, state: unknown): string {
   let projected = state;
   // Achievement ids are an extensible registry. Ignore ids unknown to this
   // client so a newer export can still be imported and migrated safely.
@@ -194,17 +197,15 @@ function checksumFor(formatVersion: number, state: unknown): string {
       cloned.achievements.unlockedIds = cloned.achievements.unlockedIds.filter(isAchievementId);
     }
   }
-  const payload = JSON.stringify({ formatVersion, state: projected });
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < payload.length; index += 1) {
-    hash ^= payload.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
+  return computeSaveStateChecksum(formatVersion, projected);
 }
 
 function envelopeFor(state: GameState, savedAt = Date.now(), kind: SaveEnvelope["kind"] = "primary", reason?: string): SaveEnvelope {
-  const persistent = persistentState(state);
+  // Detach the exact serializable snapshot before hashing. The old shallow
+  // envelope could retain live nested references between checksum generation
+  // and a later stringify performed by a caller.
+  const persistent = JSON.parse(JSON.stringify(persistentState(state))) as GameState;
+  persistent.achievements.unlockedIds = persistent.achievements.unlockedIds.filter(isAchievementId);
   const envelope: SaveEnvelope = {
     formatVersion: SAVE_FORMAT_VERSION,
     kind,
@@ -212,8 +213,16 @@ function envelopeFor(state: GameState, savedAt = Date.now(), kind: SaveEnvelope[
     savedAt,
     state: persistent,
   };
-  envelope.checksum = checksumFor(SAVE_FORMAT_VERSION, persistent);
+  envelope.checksum = computeSaveStateChecksum(SAVE_FORMAT_VERSION, persistent);
   return envelope;
+}
+
+function serializeEnvelope(state: GameState, savedAt = Date.now(), kind: SaveEnvelope["kind"] = "primary", reason?: string): string {
+  const raw = JSON.stringify(envelopeFor(state, savedAt, kind, reason));
+  if (inspectSaveEnvelopeChecksum(raw).status !== "valid") {
+    throw new Error("生成的存档未通过完整性自检");
+  }
+  return raw;
 }
 
 function summaryForState(state: GameState): Omit<SaveSlotSummary, "slotId" | "integrity" | "valid" | "issues"> {
@@ -583,10 +592,22 @@ function inferLegacyPlanet(entity: FactoryEntity): PlanetId {
   return "home";
 }
 
+function normalizeMaterialDeliverySlots(entity: FactoryEntity, savedVersion: number): MaterialDeliverySlot[] {
+  const legacyItems = [...new Set((Array.isArray(entity.deliveryItemIds) ? entity.deliveryItemIds : [])
+    .filter((itemId): itemId is ItemId => typeof itemId === "string" && itemId in ITEMS))].slice(0, 3);
+  return Array.from({ length: 3 }, (_, index): MaterialDeliverySlot => {
+    const raw = savedVersion >= 39 && Array.isArray(entity.deliverySlots) ? entity.deliverySlots[index] : undefined;
+    if (raw?.mode === "disabled") return { itemId: null, mode: "disabled" };
+    if (raw?.mode === "manual" && raw.itemId && raw.itemId in ITEMS) return { itemId: raw.itemId, mode: "manual" };
+    if (raw?.mode === "auto") return { itemId: raw.itemId && raw.itemId in ITEMS ? raw.itemId : null, mode: "auto" };
+    return { itemId: legacyItems[index] ?? null, mode: "auto" };
+  });
+}
+
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const savedSeed = saved.version >= 20 && typeof saved.galaxy?.seed === "number" && Number.isFinite(saved.galaxy.seed)
     ? saved.galaxy.seed
     : DEFAULT_GALAXY_SEED;
@@ -612,6 +633,7 @@ export function migrateGame(value: unknown): GameState | null {
     const accumulator = entity.buildingId === "accumulator";
     const energyExchanger = entity.buildingId === "energy_exchanger";
     const materialDeliveryHub = entity.buildingId === "material_delivery_hub";
+    const deliverySlots = materialDeliveryHub ? normalizeMaterialDeliverySlots(entity, saved.version) : undefined;
     const blackHoleConnector = entity.buildingId === "micro_black_hole_connector";
     const storedEnergyCapacity = accumulator || energyExchanger
       ? (getBuilding(entity.buildingId!).energyCapacityMj ?? 0) * Math.max(0, Math.floor(entity.machineCount ?? 0))
@@ -667,8 +689,9 @@ export function migrateGame(value: unknown): GameState | null {
         ? entity.storedItemId && (getPlanetOrbitalYields({ galaxy }, planetId)[entity.storedItemId] ?? 0) > 0 ? entity.storedItemId : "hydrogen"
         : entity.storedItemId,
       deliveryItemIds: materialDeliveryHub
-        ? [...new Set((Array.isArray(entity.deliveryItemIds) ? entity.deliveryItemIds : []).filter((itemId): itemId is ItemId => typeof itemId === "string" && itemId in ITEMS))].slice(0, 3)
+        ? [...new Set(deliverySlots!.flatMap((slot) => slot.itemId ? [slot.itemId] : []))]
         : undefined,
+      deliverySlots,
       stationMode: entity.kind === "station" ? orbitalCollector ? "supply" : entity.stationMode ?? "supply" : entity.stationMode,
       stationProgress: entity.kind === "station" ? Math.max(0, entity.stationProgress ?? 0) : entity.stationProgress,
       stationTrips: entity.kind === "station" ? Math.max(0, Math.floor(entity.stationTrips ?? 0)) : entity.stationTrips,
@@ -777,16 +800,41 @@ export function migrateGame(value: unknown): GameState | null {
       lastFlow: typeof belt.lastFlow === "number" ? belt.lastFlow : 0,
       targetPortIndex: saved.version >= 34 &&
         (belt.targetPortIndex === 0 || belt.targetPortIndex === 1 || belt.targetPortIndex === 2) &&
-        entities.find((entity) => entity.id === belt.target)?.buildingId === "micro_black_hole_connector"
+        (entities.find((entity) => entity.id === belt.target)?.buildingId === "micro_black_hole_connector" ||
+          saved.version >= 39 && entities.find((entity) => entity.id === belt.target)?.buildingId === "material_delivery_hub")
         ? belt.targetPortIndex
         : undefined,
     } as BeltConnection;
   }) : [];
+  for (const belt of migratedBelts) {
+    const target = entities.find((entity) => entity.id === belt.target && entity.buildingId === "material_delivery_hub");
+    if (!target) continue;
+    const slots = target.deliverySlots ?? normalizeMaterialDeliverySlots(target, saved.version);
+    const requested = belt.targetPortIndex;
+    const requestedSlot = requested === 0 || requested === 1 || requested === 2 ? slots[requested] : undefined;
+    let resolved: number = requested !== undefined && requestedSlot && requestedSlot.mode !== "disabled" && (!requestedSlot.itemId || requestedSlot.itemId === belt.itemId)
+      ? requested
+      : slots.findIndex((slot) => slot.mode !== "disabled" && slot.itemId === belt.itemId);
+    if (resolved < 0) resolved = slots.findIndex((slot) => slot.mode === "auto" && !slot.itemId);
+    if (resolved < 0) {
+      belt.targetPortIndex = undefined;
+      continue;
+    }
+    belt.targetPortIndex = resolved as 0 | 1 | 2;
+    if (slots[resolved].mode === "auto" && !slots[resolved].itemId) slots[resolved] = { itemId: belt.itemId, mode: "auto" };
+    target.deliverySlots = slots;
+    target.deliveryItemIds = [...new Set(slots.flatMap((slot) => slot.itemId ? [slot.itemId] : []))];
+  }
   const occupiedBlackHolePorts = new Set<string>();
   const belts = migratedBelts.filter((belt) => {
     const source = entities.find((entity) => entity.id === belt.source);
     const target = entities.find((entity) => entity.id === belt.target);
     if (!source || !target || source.planetId !== target.planetId || belt.planetId !== source.planetId) return false;
+    if (target.buildingId === "material_delivery_hub") {
+      if (belt.targetPortIndex === undefined) return false;
+      const slot = target.deliverySlots?.[belt.targetPortIndex];
+      return Boolean(slot && slot.mode !== "disabled" && slot.itemId === belt.itemId);
+    }
     if (target.buildingId !== "micro_black_hole_connector") return belt.targetPortIndex === undefined;
     if (belt.targetPortIndex === undefined) return false;
     const key = `${target.id}:${belt.targetPortIndex}`;
@@ -991,6 +1039,9 @@ export function migrateGame(value: unknown): GameState | null {
         const recipeId = typeof entity.recipeId === "string" && getRecipe(entity.recipeId as RecipeId) ? entity.recipeId as RecipeId : undefined;
         const storedItemId = typeof entity.storedItemId === "string" && entity.storedItemId in ITEMS ? entity.storedItemId as ItemId : undefined;
         const fuelItemId = typeof entity.fuelItemId === "string" && entity.fuelItemId in ITEMS ? entity.fuelItemId as ItemId : undefined;
+        const deliverySlots = entity.buildingId === "material_delivery_hub"
+          ? normalizeMaterialDeliverySlots(entity as FactoryEntity, saved.version)
+          : undefined;
         return [{
           key: typeof entity.key === "string" && entity.key ? entity.key : `node_${entityIndex + 1}`,
           buildingId: entity.buildingId as BuildingId,
@@ -1002,8 +1053,9 @@ export function migrateGame(value: unknown): GameState | null {
           recipeId,
           storedItemId,
           deliveryItemIds: entity.buildingId === "material_delivery_hub"
-            ? [...new Set((Array.isArray(entity.deliveryItemIds) ? entity.deliveryItemIds : []).filter((itemId): itemId is ItemId => typeof itemId === "string" && itemId in ITEMS))].slice(0, 3)
+            ? [...new Set(deliverySlots!.flatMap((slot) => slot.itemId ? [slot.itemId] : []))]
             : undefined,
+          deliverySlots,
           distributionMode: entity.distributionMode === "priority" ? "priority" as const : entity.distributionMode === "balanced" ? "balanced" as const : undefined,
           fuelItemId,
           energyMode: validEnergyMode(entity.energyMode) ? entity.energyMode : undefined,
@@ -1062,6 +1114,11 @@ export function migrateGame(value: unknown): GameState | null {
       const blueprintBelts = Array.isArray(blueprint.belts) ? blueprint.belts.flatMap((belt: Record<string, any>, beltIndex: number) => {
         if (!keys.has(belt.sourceKey) || !keys.has(belt.targetKey) || typeof belt.itemId !== "string" || !(belt.itemId in ITEMS)) return [];
         const tier = validBeltTier(belt.tier) ? belt.tier : 1;
+        const targetTemplate = blueprintEntities.find((entity) => entity.key === belt.targetKey);
+        const targetPortIndex = (belt.targetPortIndex === 0 || belt.targetPortIndex === 1 || belt.targetPortIndex === 2) &&
+          (targetTemplate?.buildingId === "micro_black_hole_connector" || targetTemplate?.buildingId === "material_delivery_hub")
+          ? belt.targetPortIndex as 0 | 1 | 2
+          : undefined;
         return [{
           key: typeof belt.key === "string" && belt.key ? belt.key : `line_${beltIndex + 1}`,
           sourceKey: belt.sourceKey as string,
@@ -1075,6 +1132,7 @@ export function migrateGame(value: unknown): GameState | null {
           monitorEnabled: Boolean(belt.monitorEnabled),
           routeMode: validBeltRouteMode(belt.routeMode) ? belt.routeMode : "auto",
           routeOffsetY: routeOffset(belt.routeOffsetY),
+          targetPortIndex,
         }];
       }) : [];
       const externalPorts = Array.isArray(blueprint.externalPorts) ? blueprint.externalPorts.flatMap((port: Record<string, any>, portIndex: number) => {
@@ -1495,7 +1553,7 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 38,
+    version: 39,
     activePlanetId,
     entities,
     belts,
@@ -1621,6 +1679,8 @@ export function inspectSave(raw: string): SaveInspection {
     stateVersion,
     savedAt: null,
     checksum: "invalid",
+    recordedChecksum: null,
+    computedChecksum: null,
     issues,
     state: null,
     summary: null,
@@ -1657,9 +1717,13 @@ export function inspectSave(raw: string): SaveInspection {
 
   let checksum: SaveInspection["checksum"] = "missing";
   let checksumMatchedAfterMigration = false;
+  let recordedChecksum: string | null = null;
+  let computedChecksum: string | null = null;
   if (typeof envelope.checksum === "string" && envelope.checksum.length > 0) {
-    const expected = checksumFor(formatVersion, envelope.state);
-    checksum = envelope.checksum === expected ? "valid" : "invalid";
+    recordedChecksum = envelope.checksum;
+    computedChecksum = computeSaveStateChecksum(formatVersion, envelope.state);
+    const legacyExpected = legacyChecksumFor(formatVersion, envelope.state);
+    checksum = envelope.checksum === computedChecksum || envelope.checksum === legacyExpected ? "valid" : "invalid";
   } else {
     issues.push("旧版存档没有完整性校验，导入后会自动补写");
   }
@@ -1676,8 +1740,25 @@ export function inspectSave(raw: string): SaveInspection {
     // Unknown legacy fields (for example an achievement added by a newer
     // client) are removed by migration. Accept that lossless normalization,
     // but still reject changes to meaningful game state.
-    checksumMatchedAfterMigration = envelope.checksum === checksumFor(formatVersion, state);
-    if (!checksumMatchedAfterMigration) return invalid(["完整性校验失败：文件可能被截断或修改"], formatVersion, stateVersion);
+    checksumMatchedAfterMigration = envelope.checksum === computeSaveStateChecksum(formatVersion, state) ||
+      envelope.checksum === legacyChecksumFor(formatVersion, state);
+    if (!checksumMatchedAfterMigration) {
+      const summary = { ...summaryForState(state), savedAt };
+      return {
+        valid: false,
+        repairable: true,
+        integrity: "corrupt",
+        formatVersion,
+        stateVersion,
+        savedAt,
+        checksum: "invalid",
+        recordedChecksum,
+        computedChecksum,
+        issues: [`完整性校验失败：记录 ${recordedChecksum ?? "缺失"}，实际 ${computedChecksum ?? "无法计算"}。结构完整，可使用受控救援。`],
+        state,
+        summary,
+      };
+    }
     checksum = "valid";
     issues.push("检测到可忽略的旧字段差异，已按当前目录标准化");
   }
@@ -1702,10 +1783,38 @@ export function inspectSave(raw: string): SaveInspection {
     stateVersion,
     savedAt,
     checksum,
+    recordedChecksum,
+    computedChecksum,
     issues,
     state,
     summary,
   };
+}
+
+export interface SaveRepairResult {
+  success: boolean;
+  raw: string | null;
+  inspection: SaveInspection;
+  message: string;
+}
+
+/** Re-sign a structurally valid save after the player has preserved the original file. */
+export function repairSave(raw: string): SaveRepairResult {
+  const inspection = inspectSave(raw);
+  if (inspection.valid) return { success: true, raw, inspection, message: "存档无需救援" };
+  if (!inspection.repairable || !inspection.state) {
+    return { success: false, raw: null, inspection, message: inspection.issues[0] ?? "存档结构无法救援" };
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<SaveEnvelope>;
+    const kind = parsed.kind === "slot" || parsed.kind === "snapshot" ? parsed.kind : "primary";
+    const repairedRaw = serializeEnvelope(inspection.state, inspection.savedAt ?? Date.now(), kind, parsed.reason);
+    const repairedInspection = inspectSave(repairedRaw);
+    if (!repairedInspection.valid || repairedInspection.checksum !== "valid") throw new Error("救援结果复核失败");
+    return { success: true, raw: repairedRaw, inspection: repairedInspection, message: "存档已重新校验" };
+  } catch (error) {
+    return { success: false, raw: null, inspection, message: error instanceof Error ? error.message : "存档救援失败" };
+  }
 }
 
 function parseEnvelope(raw: string, advanceOffline: boolean): LoadedGame | null {
@@ -1850,7 +1959,7 @@ export function saveGame(state: GameState): SaveGameResult {
   const savedAt = Date.now();
   let raw: string;
   try {
-    raw = JSON.stringify(envelopeFor(state, savedAt));
+    raw = serializeEnvelope(state, savedAt);
   } catch {
     return failedSave("unavailable", "无法生成本地主存档，请立即导出当前进度");
   }
@@ -1920,7 +2029,7 @@ export function saveGame(state: GameState): SaveGameResult {
 }
 
 export function exportGame(state: GameState): string {
-  return JSON.stringify(envelopeFor(state));
+  return serializeEnvelope(state);
 }
 
 export function importGame(raw: string): GameState | null {
@@ -1936,7 +2045,7 @@ function saveSlotKey(slotId: SaveSlotId): string {
 }
 
 export function saveGameSlot(slotId: SaveSlotId, state: GameState): void {
-  window.localStorage.setItem(saveSlotKey(slotId), JSON.stringify(envelopeFor(state, Date.now(), "slot")));
+  window.localStorage.setItem(saveSlotKey(slotId), serializeEnvelope(state, Date.now(), "slot"));
 }
 
 export function loadGameSlot(slotId: SaveSlotId): LoadedGame | null {
@@ -1963,7 +2072,9 @@ export function exportGameSlot(slotId: SaveSlotId): string | null {
     const raw = window.localStorage.getItem(saveSlotKey(slotId));
     if (!raw) return null;
     const inspection = inspectSave(raw);
-    return inspection.valid && inspection.state ? raw : null;
+    return inspection.valid && inspection.state
+      ? serializeEnvelope(inspection.state, inspection.savedAt ?? Date.now(), "slot")
+      : null;
   } catch {
     return null;
   }
@@ -2098,7 +2209,7 @@ export function saveGameSnapshot(state: GameState, reason = "自动快照"): Sav
     const sequence = nextSnapshotSequence();
     const id = `${savedAt}-${sequence}`;
     const key = `${SAVE_SNAPSHOT_KEY_PREFIX}.${id}`;
-    window.localStorage.setItem(key, JSON.stringify(envelopeFor(state, savedAt, "snapshot", reason)));
+    window.localStorage.setItem(key, serializeEnvelope(state, savedAt, "snapshot", reason));
     if (reason === "自动快照") trimAutomaticSnapshots(AUTOMATIC_SAVE_SNAPSHOT_LIMIT);
     return getSaveSnapshotSummaries().find((snapshot) => snapshot.id === id) ?? null;
   } catch {

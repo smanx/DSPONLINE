@@ -14,6 +14,7 @@ import {
 } from "./analytics.mjs";
 import { createTencentSesMailer, createWebhookMailer } from "./mail.mjs";
 import { getActivityPublicStatus, loadActivityConfig, normalizeActivityConfig } from "./activity.mjs";
+import { inspectSavePayloadIntegrity } from "./save-integrity.mjs";
 
 const scrypt = promisify(scryptCallback);
 const BODY_LIMIT_BYTES = 8 * 1024 * 1024;
@@ -160,7 +161,8 @@ function normalizeActionTokens(value, users) {
 function summarizeSavePayload(payload) {
   if (typeof payload !== "string") return null;
   try {
-    const parsed = JSON.parse(payload);
+    const integrity = inspectSavePayloadIntegrity(payload);
+    const parsed = integrity.parsed;
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities)) return null;
     return {
@@ -173,6 +175,8 @@ function summarizeSavePayload(payload) {
       structurePoints: Number.isFinite(state.dysonSphere?.structurePoints) ? Math.max(0, Math.floor(state.dysonSphere.structurePoints)) : 0,
       uploadedWhiteMatrix: Number.isFinite(state.totalProduced?.universe_matrix) ? Math.max(0, Math.floor(state.totalProduced.universe_matrix)) : 0,
       stateChecksum: typeof parsed?.checksum === "string" ? parsed.checksum.slice(0, 128) : null,
+      computedStateChecksum: integrity.computedChecksum,
+      integrity: integrity.valid ? "valid" : "invalid",
     };
   } catch {
     return null;
@@ -788,10 +792,12 @@ function cloudSaveMetadata(save, slot = "main") {
 function validateSavePayload(payload) {
   if (typeof payload !== "string" || payload.length < 10 || Buffer.byteLength(payload) > BODY_LIMIT_BYTES - 1024) return false;
   try {
-    const parsed = JSON.parse(payload);
+    const integrity = inspectSavePayloadIntegrity(payload);
+    if (!integrity.valid) return false;
+    const parsed = integrity.parsed;
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities) ||
-      !Number.isInteger(state.version) || state.version < 1 || state.version > 38) return false;
+      !Number.isInteger(state.version) || state.version < 1 || state.version > 39) return false;
     if (state.version >= 38 && !Array.isArray(state.belts)) return false;
     if (state.belts !== undefined && (!Array.isArray(state.belts) || state.belts.some((belt) =>
       state.version >= 38
@@ -837,9 +843,17 @@ function validateSavePayload(payload) {
         if (!blueprint || typeof blueprint !== "object" || !Array.isArray(blueprint.entities) || !Array.isArray(blueprint.belts) ||
           (blueprint.resourceAnchors !== undefined && !Array.isArray(blueprint.resourceAnchors))) return true;
         const keys = new Set();
+        const blueprintEntityByKey = new Map();
         for (const entity of blueprint.entities) {
           if (typeof entity?.key !== "string" || keys.has(entity.key)) return true;
           keys.add(entity.key);
+          blueprintEntityByKey.set(entity.key, entity);
+          if (state.version >= 39 && entity.buildingId === "material_delivery_hub" &&
+            (!Array.isArray(entity.deliverySlots) || entity.deliverySlots.length !== 3 || entity.deliverySlots.some((slot) =>
+              !slot || !["auto", "manual", "disabled"].includes(slot.mode) ||
+              (slot.mode === "disabled" ? slot.itemId !== null : slot.mode === "manual"
+                ? typeof slot.itemId !== "string" || !/^[a-z][a-z0-9_]{1,80}$/.test(slot.itemId)
+                : !(slot.itemId === null || typeof slot.itemId === "string" && /^[a-z][a-z0-9_]{1,80}$/.test(slot.itemId)))))) return true;
         }
         for (const anchor of blueprint.resourceAnchors ?? []) {
           if (!anchor || typeof anchor.key !== "string" || keys.has(anchor.key) || typeof anchor.resourceId !== "string" ||
@@ -848,8 +862,14 @@ function validateSavePayload(payload) {
           keys.add(anchor.key);
         }
         if (keys.size < 1) return true;
-        return blueprint.belts.some((belt) => !keys.has(belt?.sourceKey) || !keys.has(belt?.targetKey) ||
-          !Number.isInteger(belt?.lanes) || belt.lanes < 1 || belt.lanes > 4_096);
+        return blueprint.belts.some((belt) => {
+          if (!keys.has(belt?.sourceKey) || !keys.has(belt?.targetKey) ||
+            !Number.isInteger(belt?.lanes) || belt.lanes < 1 || belt.lanes > 4_096) return true;
+          if (belt.targetPortIndex === undefined) return false;
+          const targetTemplate = blueprintEntityByKey.get(belt.targetKey);
+          return ![0, 1, 2].includes(belt.targetPortIndex) ||
+            (targetTemplate?.buildingId !== "micro_black_hole_connector" && targetTemplate?.buildingId !== "material_delivery_hub");
+        });
       })) return false;
     }
     if (state.version >= 34) {
@@ -876,6 +896,13 @@ function validateSavePayload(payload) {
       }
       for (const entity of state.entities) {
         if (entity?.buildingId === "time_warp_device" && (!Number.isInteger(entity.machineCount) || entity.machineCount !== 1)) return false;
+        if (state.version >= 39 && entity?.buildingId === "material_delivery_hub") {
+          if (!Array.isArray(entity.deliverySlots) || entity.deliverySlots.length !== 3 || entity.deliverySlots.some((slot) =>
+            !slot || !["auto", "manual", "disabled"].includes(slot.mode) ||
+            (slot.mode === "disabled" ? slot.itemId !== null : slot.mode === "manual"
+              ? typeof slot.itemId !== "string" || !/^[a-z][a-z0-9_]{1,80}$/.test(slot.itemId)
+              : !(slot.itemId === null || typeof slot.itemId === "string" && /^[a-z][a-z0-9_]{1,80}$/.test(slot.itemId))))) return false;
+        }
         if (entity?.buildingId !== "micro_black_hole_connector") continue;
         if (!Number.isInteger(entity.machineCount) || entity.machineCount !== 1 ||
           typeof entity.blackHolePaused !== "boolean" || typeof entity.blackHoleActivationConfirmed !== "boolean" ||
@@ -891,6 +918,10 @@ function validateSavePayload(payload) {
           const key = `${belt.target}:${belt.targetPortIndex}`;
           if (occupiedBlackHolePorts.has(key)) return false;
           occupiedBlackHolePorts.add(key);
+        } else if (state.version >= 39 && target?.buildingId === "material_delivery_hub") {
+          if (![0, 1, 2].includes(belt.targetPortIndex)) return false;
+          const slot = target.deliverySlots?.[belt.targetPortIndex];
+          if (!slot || slot.mode === "disabled" || typeof belt.itemId !== "string" || slot.itemId !== belt.itemId) return false;
         } else if (belt?.targetPortIndex !== undefined) {
           return false;
         }
@@ -1700,7 +1731,15 @@ export async function createCloudServer({
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
         if (!slot) return send(response, 400, { error: "云存档槽位无效" });
         const body = await readJson(request);
-        if (!validateSavePayload(body.payload)) return send(response, 400, { error: "云存档格式无效或体积过大" });
+        if (!validateSavePayload(body.payload)) {
+          const integrity = typeof body.payload === "string" ? inspectSavePayloadIntegrity(body.payload) : null;
+          const summary = typeof body.payload === "string" ? summarizeSavePayload(body.payload) : null;
+          return send(response, 400, {
+            error: integrity && !integrity.valid && integrity.state ? "云存档内部完整性校验失败，服务器已拒绝上传" : "云存档格式无效或体积过大",
+            code: integrity && !integrity.valid && integrity.state ? "SAVE_INTEGRITY_INVALID" : "SAVE_FORMAT_INVALID",
+            ...(summary ? { summary } : {}),
+          });
+        }
         const current = currentCloudSave(store, auth.user.id, slot);
         const expectedRevision = Number.isInteger(body.expectedRevision) ? body.expectedRevision : 0;
         if ((current?.revision ?? 0) !== expectedRevision) {

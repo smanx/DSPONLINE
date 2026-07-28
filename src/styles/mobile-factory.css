@@ -405,6 +405,21 @@
 .mobile-inspector-io--storage { grid-template-columns: 1fr; }
 .mobile-inspector-io--storage em { overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; }
 
+.mobile-delivery-slot-controls { display: grid; gap: 7px; margin: 2px 10px 9px; padding: 9px; border: 1px solid var(--theme-border); border-radius: 6px; background: var(--theme-surface); }
+.mobile-delivery-slot-controls > header { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; }
+.mobile-delivery-slot-controls > header span { font-size: calc(12px * var(--ui-font-scale, 1)); font-weight: 700; }
+.mobile-delivery-slot-controls > header small { color: var(--theme-text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); text-align: right; }
+.mobile-delivery-slot { display: grid; min-width: 0; gap: 7px; padding: 8px; border: 1px solid var(--theme-border); border-radius: 5px; background: var(--theme-surface-raised); }
+.mobile-delivery-slot > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mobile-delivery-slot > div:first-child strong,
+.mobile-delivery-slot > div:first-child small { font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-delivery-slot > div:first-child small { color: var(--theme-text-muted); }
+.mobile-delivery-slot .catalog-picker-trigger { width: 100%; min-height: 44px; }
+.mobile-delivery-slot footer { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.mobile-delivery-slot footer button { min-height: 44px; border: 1px solid var(--theme-border); border-radius: 5px; background: var(--theme-control); color: var(--theme-text-soft); font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-delivery-slot footer button.active { border-color: var(--theme-accent-border); background: var(--theme-control-active); color: var(--cyan); }
+.mobile-delivery-slot footer button.danger { border-color: var(--theme-danger-border); color: var(--coral); }
+
 .mobile-belt-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 7px 10px; }
 .mobile-belt-summary > div { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 5px; padding: 6px 8px; border: 1px solid var(--theme-border); border-radius: 6px; background: var(--theme-surface); }
 .mobile-belt-summary span { color: var(--theme-text-muted); font-size: calc(11px * var(--ui-font-scale, 1)); }

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { PLANET_LIST, getPlanet } from "../../game/content";
 import { getPlanetMetrics, isPlanetColonized, type PlanetTrayDiscardRequest } from "../../game/engine";
 import type { FactoryAlert } from "../../game/alerts";
-import type { BeltConnection, BeltTier, BuildingId, ConstructionId, FactoryEntity, GameState, ItemId, PlanetId, RecipeId } from "../../game/types";
+import type { BeltConnection, BeltTier, BuildingId, ConstructionId, FactoryEntity, GameState, ItemId, MaterialDeliverySlotMode, PlanetId, RecipeId } from "../../game/types";
 import type { MobileOverlay, MobileSheetSnap } from "../../hooks/useMobileNavigation";
 import { MobileBuildSheet, MobileInspectorSheet, MobileInventorySheet, type MobileCanvasMode } from "./MobileFactoryPanels";
 import { MobileSheetFrame } from "./MobileSheetFrame";
@@ -64,6 +64,7 @@ export interface MobileFactorySheetActions {
   onEntityLockChange: (entityId: string, locked: boolean) => void;
   onRemoveSprayCoater: (entityId: string) => void;
   onOpenResourceSettings: () => void;
+  onMaterialDeliverySlotChange: (entityId: string, slotIndex: number, mode: MaterialDeliverySlotMode, itemId: ItemId | null) => void;
 }
 
 function PlanetSheet({ game, alerts, snap, onSnap, onPlanetChange, onOpenStarMap, onClose }: {
@@ -157,5 +158,5 @@ export function MobileSheets({ game, alerts, overlay, tools, toolActions, factor
   if (overlay.id === "build") return <MobileBuildSheet game={game} snap={overlay.snap} placement={factory.placement} beltTier={factory.beltTier} beltTierMode={factory.beltTierMode} query={buildQuery} onQueryChange={setBuildQuery} onSnap={onSheetSnap} onClose={onClose} onPlacement={factoryActions.onPlacement} onBelt={factoryActions.onBelt} onCraft={factoryActions.onCraft} onCraftFleet={factoryActions.onCraftFleet} onMissingCraft={factoryActions.onMissingCraft} />;
   if (overlay.id === "inventory") return <MobileInventorySheet game={game} snap={overlay.snap} onSnap={onSheetSnap} onClose={onClose} onPickTray={factoryActions.onPickTray} onDropCargo={factoryActions.onDropCargo} onDiscardTrayItems={factoryActions.onDiscardTrayItems} onSetTrayItemLimit={factoryActions.onSetTrayItemLimit} />;
   if (overlay.snap === "full") return <MobileSheetFrame title="完整检查器" detail="配方、物流槽、电网与高级设置" snap="full" allowPeek onSnap={onSheetSnap} onClose={onClose} className="mobile-inspector-sheet--advanced"><span aria-hidden="true" /></MobileSheetFrame>;
-  return <MobileInspectorSheet game={game} snap={overlay.snap} entity={factory.selectedEntity} belt={factory.selectedBelt} selectedCount={factory.selectedCount} onSnap={onSheetSnap} onClose={onClose} onOpenAdvanced={() => onSheetSnap("full")} onFocus={factoryActions.onFocusSelection} onAddEntity={factoryActions.onAddEntity} onRemoveEntity={factoryActions.onRemoveEntity} onUpgradeEntity={factoryActions.onUpgradeEntity} onUpgradeBelt={factoryActions.onUpgradeBelt} onBeltLaneCountChange={factoryActions.onBeltLaneCountChange} onEntityLockChange={factoryActions.onEntityLockChange} onRemoveSprayCoater={factoryActions.onRemoveSprayCoater} onOpenResourceSettings={factoryActions.onOpenResourceSettings} />;
+  return <MobileInspectorSheet game={game} snap={overlay.snap} entity={factory.selectedEntity} belt={factory.selectedBelt} selectedCount={factory.selectedCount} onSnap={onSheetSnap} onClose={onClose} onOpenAdvanced={() => onSheetSnap("full")} onFocus={factoryActions.onFocusSelection} onAddEntity={factoryActions.onAddEntity} onRemoveEntity={factoryActions.onRemoveEntity} onUpgradeEntity={factoryActions.onUpgradeEntity} onUpgradeBelt={factoryActions.onUpgradeBelt} onBeltLaneCountChange={factoryActions.onBeltLaneCountChange} onEntityLockChange={factoryActions.onEntityLockChange} onRemoveSprayCoater={factoryActions.onRemoveSprayCoater} onOpenResourceSettings={factoryActions.onOpenResourceSettings} onMaterialDeliverySlotChange={factoryActions.onMaterialDeliverySlotChange} />;
 }
