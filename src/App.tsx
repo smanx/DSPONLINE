@@ -2764,10 +2764,23 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     if (canvasWorkspacePaused) stopCanvasPointerMotion();
   }, [canvasWorkspacePaused, game.activePlanetId, stopCanvasPointerMotion]);
 
+  const activePlanetEntities = useMemo(
+    () => canvasGame.entities.filter((entity) => entity.planetId === canvasGame.activePlanetId),
+    [canvasGame.activePlanetId, canvasGame.entities],
+  );
+  const activePlanetBelts = useMemo(
+    () => canvasGame.belts.filter((belt) => belt.planetId === canvasGame.activePlanetId),
+    [canvasGame.activePlanetId, canvasGame.belts],
+  );
+  const activeEntityById = useMemo(
+    () => new Map(activePlanetEntities.map((entity) => [entity.id, entity])),
+    [activePlanetEntities],
+  );
+
   const beltNodeIndex = useMemo(() => {
     const connectedInputsByTarget = new Map<string, ItemId[]>();
     const activeEntityIds = new Set<string>();
-    for (const belt of canvasGame.belts) {
+    for (const belt of activePlanetBelts) {
       const inputs = connectedInputsByTarget.get(belt.target) ?? [];
       inputs.push(belt.itemId);
       connectedInputsByTarget.set(belt.target, inputs);
@@ -2776,10 +2789,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         activeEntityIds.add(belt.target);
       }
     }
-    return { connectedInputsByTarget, activeEntityIds: [...activeEntityIds], occupancy: getPortOccupancy(canvasGame) };
-  }, [canvasGame]);
+    return { connectedInputsByTarget, activeEntityIds: [...activeEntityIds], occupancy: getPortOccupancy(canvasGame, canvasGame.activePlanetId, activePlanetBelts) };
+  }, [activePlanetBelts, canvasGame.activePlanetId, canvasGame]);
 
-  const beltBundleMap = useMemo(() => getBeltBundleMap(canvasGame), [canvasGame.activePlanetId, canvasGame.belts]);
+  const beltBundleMap = useMemo(
+    () => getBeltBundleMap(canvasGame, canvasGame.activePlanetId, activePlanetBelts),
+    [activePlanetBelts, canvasGame, canvasGame.activePlanetId],
+  );
   const focusedBeltNetwork = useMemo(() => focusedBeltNetworkId
     ? analyzeBeltNetwork(canvasGame, focusedBeltNetworkId)
     : null, [focusedBeltNetworkId, canvasGame]);
@@ -2813,22 +2829,21 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       }
       if (!changed) break;
     }
-    const entityIds = new Set(canvasGame.entities.flatMap((entity) => {
-      if (entity.planetId !== canvasGame.activePlanetId) return [];
+    const entityIds = new Set(activePlanetEntities.flatMap((entity) => {
       const directBuilding = task.navigation?.kind === "building" && entity.buildingId === task.navigation.buildingId;
       const relevantItem = (entity.resourceId && itemIds.has(entity.resourceId)) ||
         getProducedOutputs(entity).some((itemId) => itemIds.has(itemId)) ||
         getAcceptedInputs(entity, canvasGame).some((itemId) => itemIds.has(itemId));
       return directBuilding || relevantItem ? [entity.id] : [];
     }));
-    const beltIds = new Set(canvasGame.belts.flatMap((belt) => {
-      if (belt.planetId !== canvasGame.activePlanetId || !itemIds.has(belt.itemId)) return [];
+    const beltIds = new Set(activePlanetBelts.flatMap((belt) => {
+      if (!itemIds.has(belt.itemId)) return [];
       entityIds.add(belt.source);
       entityIds.add(belt.target);
       return [belt.id];
     }));
     return { entityIds, beltIds, itemIds };
-  }, [canvasGame, highlightedTaskId]);
+  }, [activePlanetBelts, activePlanetEntities, canvasGame, highlightedTaskId]);
 
   const commonNodeData = useMemo<Omit<FactoryNodeData, "entity" | "status" | "powerFactor" | "resourceReserve" | "connectedInputItemIds" | "inputBeltCounts" | "outputBeltCounts" | "blackHolePortConnections" | "cycleRatePerSecond">>(() => {
     const technology = getTechnology(canvasGame.research.selectedTechId);
@@ -2877,7 +2892,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const frame = window.requestAnimationFrame(() => {
       setNodes((current) => {
         const existing = new Map(current.map((node) => [node.id, node]));
-        return canvasGame.entities.filter((entity) => entity.planetId === canvasGame.activePlanetId).map((entity) => {
+        return activePlanetEntities.map((entity) => {
           const previous = existing.get(entity.id);
           return {
             id: entity.id,
@@ -2890,7 +2905,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               connectedInputItemIds: beltNodeIndex.connectedInputsByTarget.get(entity.id) ?? [],
               inputBeltCounts: beltNodeIndex.occupancy.input.get(entity.id) ?? {},
               outputBeltCounts: beltNodeIndex.occupancy.output.get(entity.id) ?? {},
-              blackHolePortConnections: Object.fromEntries(canvasGame.belts.filter((belt) =>
+              blackHolePortConnections: Object.fromEntries(activePlanetBelts.filter((belt) =>
                 belt.target === entity.id && belt.targetPortIndex !== undefined).map((belt) => [belt.targetPortIndex!, belt.itemId])),
               powerFactor: getEntityPowerFactor(canvasGame, entity),
               resourceReserve: getResourceReserveSnapshot(canvasGame, entity),
@@ -2912,7 +2927,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame.activePlanetId, canvasGame.entities, canvasGame.galaxy, canvasGame.settings.logisticsBufferLimit, canvasGame.settings.productionBufferLimit, canvasGame.settings.proliferatorBufferLimit, canvasGame.settings.resourceMode, commonNodeData, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, locatedProductionEntityIds, placement, productionLineFocus, selectedEntityIds, setNodes, taskHighlight.entityIds]);
+  }, [activePlanetBelts, activePlanetEntities, beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame.activePlanetId, canvasGame.galaxy, canvasGame.settings.logisticsBufferLimit, canvasGame.settings.productionBufferLimit, canvasGame.settings.proliferatorBufferLimit, canvasGame.settings.resourceMode, commonNodeData, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, locatedProductionEntityIds, placement, productionLineFocus, selectedEntityIds, setNodes, taskHighlight.entityIds]);
 
   const edges = useMemo<FactoryFlowEdge[]>(() => {
     const rects = nodes.map((node) => ({
@@ -2951,7 +2966,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const midpoint = (sourceY + targetY) / 2;
       return (Math.abs(midpoint - upper) <= Math.abs(lower - midpoint) ? upper : lower) + bundleOffset;
     };
-    return canvasGame.belts.filter((belt) => belt.planetId === canvasGame.activePlanetId).map((belt) => {
+    return activePlanetBelts.map((belt) => {
       const item = ITEMS[belt.itemId];
       const capacity = getBeltCapacity(belt);
       const flowRatio = capacity > 0 ? Math.min(1, belt.lastFlow / capacity) : 0;
@@ -2973,7 +2988,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         sourceHandle: `out:${belt.itemId}`,
         targetHandle: belt.targetPortIndex === undefined
           ? `in:${belt.itemId}`
-          : canvasGame.entities.find((entity) => entity.id === belt.target)?.buildingId === "material_delivery_hub"
+          : activeEntityById.get(belt.target)?.buildingId === "material_delivery_hub"
             ? `in:delivery:${belt.targetPortIndex}`
             : `in:black-hole:${belt.targetPortIndex}`,
         className: `factory-edge factory-edge--health-${diagnostic.health}${canvasGame.settings.beltHeatmapEnabled ? " factory-edge--heatmap" : ""}${diagnostic.flow > 0.001 ? " factory-edge--active" : ""}${focusTone === "focus" ? " factory-edge--task-focus" : focusTone === "dim" ? " factory-edge--task-dim" : ""}`,
@@ -3008,7 +3023,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         },
       } satisfies FactoryFlowEdge;
     });
-  }, [beltBundleMap, canvasGame, coarsePointer, focusedBeltNetwork, focusedNetworkBeltIds, highlightedTaskId, largeFactoryMode, locatedProductionBeltIds, nodes, performanceVisualMode, productionLineFocus, selectedBeltId, selectedBeltIdSet, taskHighlight.beltIds, viewportZoom]);
+  }, [activeEntityById, activePlanetBelts, beltBundleMap, canvasGame, coarsePointer, focusedBeltNetwork, focusedNetworkBeltIds, highlightedTaskId, largeFactoryMode, locatedProductionBeltIds, nodes, performanceVisualMode, productionLineFocus, selectedBeltId, selectedBeltIdSet, taskHighlight.beltIds, viewportZoom]);
 
   const isValidConnection = useCallback((connection: Connection | Edge) => {
     const sourceItem = parseHandleItem(connection.sourceHandle);

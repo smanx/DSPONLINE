@@ -1,56 +1,56 @@
-import { Check, Database, Infinity as InfinityIcon, Info, Languages, MessageCircle, PackageOpen, Route, ScanText, X, type LucideIcon } from "lucide-react";
+import { Check, Cpu, Database, Gauge, Info, Layers, MessageCircle, Route, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-29-v1.0.9",
+  id: "2026-07-29-v1.0.10",
   date: "2026年7月29日",
-  version: "1.0.9",
-  title: "跨端存档与高吞吐稳定性更新",
-  summary: "1.0.9 将本地存档迁移到 IndexedDB，修复多线路高吞吐分配和移动端组合输入，并升级声明式内容包。空间站收集任务改为长期开放，主页可直接切换中英文。GameState 升级至 v40。",
+  version: "1.0.10",
+  title: "终局工厂性能基础更新",
+  summary: "1.0.10 为后期多星球工厂增加会话级运行时索引，并减少画布对其他行星的重复扫描。生产、物流、科研、离线收益和存档格式保持不变，GameState 继续为 v40。",
   items: [
     {
-      id: "indexeddb-save-resilience",
-      title: "IndexedDB 可靠存档",
-      description: "主档、备份、快照和三个槽位迁入大容量存储，写入后必须读回校验。旧 localStorage 副本验证迁移后才删除，并新增占用明细与快照批量管理。",
+      id: "simulation-session-indexes",
+      title: "模拟会话运行时索引",
+      description: "实体、行星、电网、物流槽和线路端点在每次模拟会话中建立只读索引，减少后期工厂反复扫描完整状态的开销。",
     },
     {
-      id: "belt-fairness-capacity",
-      title: "高吞吐线路公平分配",
-      description: "同优先级输出按确定性轮询公平分配，高、标准、低优先级继续生效。矿源和生产输出不再被单步缓存误限流，线路转运额度可配置到 1 亿。",
+      id: "indexed-production-power",
+      title: "生产与供电按行星推进",
+      description: "供电、采矿、生产、施工、射线接收和容量统计直接读取当前行星集合，空行星不再重复遍历全部建筑。",
     },
     {
-      id: "content-pack-v2",
-      title: "声明式内容包 v2",
-      description: "内容包可新增物品、建筑、配方、科技和 4～32 级传送带，并通过白名单调整核心建筑数值。存档记录精确包版本，缺包会阻止加载，Mod 主档不进入官方排行。",
+      id: "indexed-belt-runtime",
+      title: "线路端点快速查找",
+      description: "线路转运和输出容量预留复用实体 ID 与在途物流索引，不再为每条传送带反复搜索所有建筑。",
     },
     {
-      id: "mobile-input-clarity",
-      title: "移动输入与文字清晰度",
-      description: "注册输入框正确保留中文输入法组合态和其他字段；静止抽屉移除长期 transform，拖动与画布视口按设备像素对齐，减少偶发文字模糊。",
+      id: "active-planet-canvas",
+      title: "当前行星画布派生",
+      description: "节点、线路、端口占用、并联分组和任务高亮只消费当前行星视图，多星球存档切换与画布发布减少无关扫描。",
     },
     {
-      id: "permanent-galactic-activity",
-      title: "空间站收集任务长期开放",
-      description: "取消活动结束倒计时。原截止点之后仍可放置超大型物资出口并继续提交四项物资，本地贡献记录完整保留。",
+      id: "synthetic-performance-fixtures",
+      title: "终局规模确定性门禁",
+      description: "新增 P50、P95 和 Max 匿名合成工厂基准；优化路径与旧路径必须得到完全一致的状态哈希才能通过测试。",
     },
     {
-      id: "prominent-language-switch",
-      title: "主页语言切换",
-      description: "主菜单首屏顶部常驻中文与 English 切换，无需进入设置；语言仍只保存在当前设备，不写入本地或云端游戏存档。",
+      id: "no-gameplay-tradeoff",
+      title: "玩法与存档保持不变",
+      description: "本次不降低刷新档位、产量、物流速度、离线收益、堆叠或线路上限，也不升级 GameState、存档 envelope 或云存档 schema。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "indexeddb-save-resilience": Database,
-  "belt-fairness-capacity": Route,
-  "content-pack-v2": PackageOpen,
-  "mobile-input-clarity": ScanText,
-  "permanent-galactic-activity": InfinityIcon,
-  "prominent-language-switch": Languages,
+  "simulation-session-indexes": Cpu,
+  "indexed-production-power": Gauge,
+  "indexed-belt-runtime": Route,
+  "active-planet-canvas": Layers,
+  "synthetic-performance-fixtures": Database,
+  "no-gameplay-tradeoff": Check,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

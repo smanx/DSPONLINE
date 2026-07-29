@@ -1357,6 +1357,12 @@ interface IndexedStationSlot {
 
 interface SimulationLookupContext {
   entityById: Map<string, FactoryEntity>;
+  entitiesByPlanet: Map<PlanetId, FactoryEntity[]>;
+  beltsByPlanet: Map<PlanetId, BeltConnection[]>;
+  beltById: Map<string, BeltConnection>;
+  outgoingBeltsBySource: Map<string, BeltConnection[]>;
+  incomingBeltsByTarget: Map<string, BeltConnection[]>;
+  powerSourcesByPlanetGrid: Map<string, FactoryEntity[]>;
   stationSlotsByKey: Map<string, IndexedStationSlot[]>;
   busyVehicles: Map<string, number>;
   reservedOutgoing: Map<string, number>;
@@ -1377,6 +1383,12 @@ function createSimulationLookupContext(state: GameState, profiler?: SimulationPr
   const startedAt = profileNow();
   const context: SimulationLookupContext = {
     entityById: new Map(state.entities.map((entity) => [entity.id, entity])),
+    entitiesByPlanet: new Map(),
+    beltsByPlanet: new Map(),
+    beltById: new Map(state.belts.map((belt) => [belt.id, belt])),
+    outgoingBeltsBySource: new Map(),
+    incomingBeltsByTarget: new Map(),
+    powerSourcesByPlanetGrid: new Map(),
     stationSlotsByKey: new Map(),
     busyVehicles: new Map(),
     reservedOutgoing: new Map(),
@@ -1384,6 +1396,26 @@ function createSimulationLookupContext(state: GameState, profiler?: SimulationPr
     activeRoutesByStation: new Map(),
     routeEconomics: new Map(),
   };
+  const addTo = <T>(map: Map<string, T[]>, key: string, value: T) => {
+    const values = map.get(key);
+    if (values) values.push(value);
+    else map.set(key, [value]);
+  };
+  for (const entity of state.entities) {
+    const planetEntities = context.entitiesByPlanet.get(entity.planetId);
+    if (planetEntities) planetEntities.push(entity);
+    else context.entitiesByPlanet.set(entity.planetId, [entity]);
+    if (entity.kind === "power" || (entity.buildingId === "ray_receiver" && entity.recipeId === "ray_power")) {
+      addTo(context.powerSourcesByPlanetGrid, `${entity.planetId}|${getEntityPowerGridId(entity)}`, entity);
+    }
+  }
+  for (const belt of state.belts) {
+    const planetBelts = context.beltsByPlanet.get(belt.planetId);
+    if (planetBelts) planetBelts.push(belt);
+    else context.beltsByPlanet.set(belt.planetId, [belt]);
+    addTo(context.outgoingBeltsBySource, belt.source, belt);
+    addTo(context.incomingBeltsByTarget, belt.target, belt);
+  }
   const add = (key: string, value: IndexedStationSlot) => {
     const existing = context.stationSlotsByKey.get(key);
     if (existing) existing.push(value);
@@ -2643,20 +2675,20 @@ export function getEntityPowerGridId(entity: FactoryEntity): PowerGridId {
   return entity.powerGridId ?? "grid-a";
 }
 
-function gridPowerSources(state: GameState, planetId: PlanetId, gridId: PowerGridId): FactoryEntity[] {
-  return state.entities.filter((entity) => entity.planetId === planetId && getEntityPowerGridId(entity) === gridId &&
+function gridPowerSources(state: GameState, planetId: PlanetId, gridId: PowerGridId, lookup?: SimulationLookupContext): FactoryEntity[] {
+  return lookup?.powerSourcesByPlanetGrid.get(`${planetId}|${gridId}`) ?? state.entities.filter((entity) => entity.planetId === planetId && getEntityPowerGridId(entity) === gridId &&
     (entity.kind === "power" || (entity.buildingId === "ray_receiver" && entity.recipeId === "ray_power")));
 }
 
-function powerCoverageLabel(state: GameState, entity: FactoryEntity): string {
-  return gridPowerSources(state, entity.planetId, getEntityPowerGridId(entity)).length > 0
+function powerCoverageLabel(state: GameState, entity: FactoryEntity, lookup?: SimulationLookupContext): string {
+  return gridPowerSources(state, entity.planetId, getEntityPowerGridId(entity), lookup).length > 0
     ? "电网供电不足"
     : "电网断电";
 }
 
-export function isEntityInPowerCoverage(state: GameState, entity: FactoryEntity): boolean {
+export function isEntityInPowerCoverage(state: GameState, entity: FactoryEntity, lookup?: SimulationLookupContext): boolean {
   if (entity.kind === "power" || (entity.buildingId === "ray_receiver" && entity.recipeId === "ray_power")) return true;
-  return gridPowerSources(state, entity.planetId, getEntityPowerGridId(entity)).length > 0;
+  return gridPowerSources(state, entity.planetId, getEntityPowerGridId(entity), lookup).length > 0;
 }
 
 interface PowerConsumer {
@@ -2697,8 +2729,9 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
   const powerOutputByEntity = new Map<string, number>();
   const powerInputByEntity = new Map<string, number>();
   const factorByEntity = new Map<string, number>();
+  const entities = lookup ? (lookup.entitiesByPlanet.get(planetId) ?? []) : state.entities;
 
-  for (const entity of state.entities) {
+  for (const entity of entities) {
     if (entity.planetId !== planetId || getEntityPowerGridId(entity) !== gridId) continue;
     if (entity.kind === "power" && entity.buildingId) {
       generatorCount += entity.machineCount;
@@ -2734,7 +2767,7 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
       }
       continue;
     } else if (entity.kind === "vein" && entity.minerCount > 0) {
-      if (!isEntityInPowerCoverage(state, entity)) {
+      if (!isEntityInPowerCoverage(state, entity, lookup)) {
         disconnectedEntities += 1;
         factorByEntity.set(entity.id, 0);
         const extractor = extractorFor(entity);
@@ -2752,7 +2785,7 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
       }
     } else if (entity.buildingId === "galactic_material_exporter" && entity.galacticExporterPaused === false &&
       Object.keys(ACTIVITY_PROJECT_BY_ITEM).some((itemId) => (entity.inputs[itemId as ItemId] ?? 0) >= 1)) {
-      if (!isEntityInPowerCoverage(state, entity)) {
+      if (!isEntityInPowerCoverage(state, entity, lookup)) {
         disconnectedEntities += 1;
         factorByEntity.set(entity.id, 0);
         disconnectedDemandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier;
@@ -2761,7 +2794,7 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
       connectedEntities += 1;
       consumers.push({ entity, demandKw: (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier });
     } else if (entity.buildingId === "construction_center" && constructionAutomationHasDeficit(state)) {
-      if (!isEntityInPowerCoverage(state, entity)) {
+      if (!isEntityInPowerCoverage(state, entity, lookup)) {
         disconnectedEntities += 1;
         factorByEntity.set(entity.id, 0);
         disconnectedDemandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier;
@@ -2770,7 +2803,7 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
       connectedEntities += 1;
       consumers.push({ entity, demandKw: (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier });
     } else if (canMachineRun(state, entity) && entity.buildingId) {
-      if (!isEntityInPowerCoverage(state, entity)) {
+      if (!isEntityInPowerCoverage(state, entity, lookup)) {
         disconnectedEntities += 1;
         factorByEntity.set(entity.id, 0);
         disconnectedDemandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount *
@@ -2783,7 +2816,7 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
         demandKw: (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * getEntityProliferatorPowerMultiplierForStep(state, entity, seconds) * difficultyPowerMultiplier,
       });
     } else if (entity.kind === "station" && entity.buildingId && stationRouteReady(state, entity, lookup, profiler)) {
-      if (!isEntityInPowerCoverage(state, entity)) {
+      if (!isEntityInPowerCoverage(state, entity, lookup)) {
         disconnectedEntities += 1;
         factorByEntity.set(entity.id, 0);
         disconnectedDemandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier;
@@ -2801,9 +2834,12 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
   const accumulatorCapacityKw = accumulatorCandidates.reduce((sum, candidate) => sum + candidate.capacity, 0);
   const generationKw = baseGenerationKw + exchangerCapacityKw + fuelCapacityKw + accumulatorCapacityKw;
   const regularSuppliedKw = Math.min(connectedDemandKw, generationKw);
-  const controller = state.timeWarp.enabled
-    ? state.entities.find((entity) => entity.id === state.timeWarp.controllerEntityId && entity.buildingId === "time_warp_device" &&
-      entity.planetId === planetId && getEntityPowerGridId(entity) === gridId)
+  const controllerCandidate = state.timeWarp.enabled
+    ? (lookup?.entityById.get(state.timeWarp.controllerEntityId ?? "") ?? state.entities.find((entity) => entity.id === state.timeWarp.controllerEntityId))
+    : undefined;
+  const controller = controllerCandidate && controllerCandidate.buildingId === "time_warp_device" &&
+      controllerCandidate.planetId === planetId && getEntityPowerGridId(controllerCandidate) === gridId
+    ? controllerCandidate
     : undefined;
   let timeWarpDemandKw = 0;
   let timeWarpAllocatedKw = 0;
@@ -2975,8 +3011,14 @@ function dischargeExchanger(state: GameState, entity: FactoryEntity, energyMj: n
   return completed;
 }
 
-function runPowerFacilities(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId): void {
-  for (const entity of state.entities) {
+function runPowerFacilities(
+  state: GameState,
+  seconds: number,
+  power: PowerPlan,
+  planetId: PlanetId,
+  entities = state.entities,
+): void {
+  for (const entity of entities) {
     if (entity.planetId !== planetId || entity.kind !== "power" || !entity.buildingId) continue;
     const outputKw = power.powerOutputByEntity.get(entity.id) ?? 0;
     const inputKw = power.powerInputByEntity.get(entity.id) ?? 0;
@@ -3003,10 +3045,11 @@ function runPowerFacilities(state: GameState, seconds: number, power: PowerPlan,
   }
 }
 
-function fuelReserveSeconds(state: GameState, planetId: PlanetId, gridId?: PowerGridId): number {
+function fuelReserveSeconds(state: GameState, planetId: PlanetId, gridId?: PowerGridId, lookup?: SimulationLookupContext): number {
   let electricEnergyMj = 0;
   let ratedGeneratorKw = 0;
-  for (const entity of state.entities) {
+  const entities = lookup ? (lookup.entitiesByPlanet.get(planetId) ?? []) : state.entities;
+  for (const entity of entities) {
     if (entity.planetId !== planetId || (gridId && getEntityPowerGridId(entity) !== gridId) || !isFuelGenerator(entity) || !entity.buildingId) continue;
     electricEnergyMj += fuelEnergyAvailable(entity) * getFuelEfficiency(entity.buildingId);
     ratedGeneratorKw += (getBuilding(entity.buildingId).powerGenerationKw ?? 0) * entity.machineCount;
@@ -3014,8 +3057,9 @@ function fuelReserveSeconds(state: GameState, planetId: PlanetId, gridId?: Power
   return ratedGeneratorKw > EPSILON ? round(electricEnergyMj * 1000 / ratedGeneratorKw, 1) : 0;
 }
 
-function gridStoredEnergy(state: GameState, planetId: PlanetId, gridId?: PowerGridId): { stored: number; capacity: number } {
-  return state.entities.reduce((total, entity) => {
+function gridStoredEnergy(state: GameState, planetId: PlanetId, gridId?: PowerGridId, lookup?: SimulationLookupContext): { stored: number; capacity: number } {
+  const entities = lookup ? (lookup.entitiesByPlanet.get(planetId) ?? []) : state.entities;
+  return entities.reduce((total, entity) => {
     if (entity.planetId !== planetId || (gridId && getEntityPowerGridId(entity) !== gridId) ||
       (entity.buildingId !== "accumulator" && entity.buildingId !== "energy_exchanger")) return total;
     total.stored += storedEnergy(entity);
@@ -3069,7 +3113,7 @@ interface BeltTransferCandidate {
   capacity: number;
 }
 
-function targetFreeCapacity(state: GameState, target: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): number {
+function targetFreeCapacity(state: GameState, target: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2, lookup?: SimulationLookupContext): number {
   if (!target.buildingId) return 0;
   if (target.buildingId === "micro_black_hole_connector") {
     if (target.blackHolePaused !== false || !target.blackHoleActivationConfirmed || targetPortIndex === undefined) return 0;
@@ -3077,7 +3121,8 @@ function targetFreeCapacity(state: GameState, target: FactoryEntity, itemId: Ite
   }
   if (target.buildingId === "material_delivery_hub") {
     if (resolveMaterialDeliverySlotIndex(target, itemId, targetPortIndex) === undefined) return 0;
-    const pending = state.entities.reduce((sum, entity) => entity.planetId === target.planetId && entity.buildingId === "material_delivery_hub"
+    const pendingEntities = lookup?.entitiesByPlanet.get(target.planetId) ?? state.entities;
+    const pending = pendingEntities.reduce((sum, entity) => entity.planetId === target.planetId && entity.buildingId === "material_delivery_hub"
       ? sum + Math.max(0, Math.floor(entity.inputs[itemId] ?? 0))
       : sum, 0);
     return Math.floor(Math.max(0, getPlanetTrayItemFreeCapacity(state, target.planetId, itemId) - pending) + EPSILON);
@@ -3092,6 +3137,7 @@ function transferBelts(
   deferSourceDepletionReset = false,
   allowanceCaps?: ReadonlyMap<string, number>,
   flowWindowSeconds = seconds,
+  lookup?: SimulationLookupContext,
 ): void {
   const groups = new Map<string, { source: FactoryEntity; itemId: ItemId; candidates: BeltTransferCandidate[] }>();
 
@@ -3100,8 +3146,8 @@ function transferBelts(
     const congestionDecay = Math.pow(0.85, Math.max(0, seconds));
     belt.lastFlow = round(belt.lastFlow * flowDecay, 3);
     belt.congestion = round((belt.congestion ?? 0) * congestionDecay, 3);
-    const source = state.entities.find((entity) => entity.id === belt.source);
-    const target = state.entities.find((entity) => entity.id === belt.target);
+    const source = lookup?.entityById.get(belt.source) ?? state.entities.find((entity) => entity.id === belt.source);
+    const target = lookup?.entityById.get(belt.target) ?? state.entities.find((entity) => entity.id === belt.target);
     if (!source || !target || source.planetId !== target.planetId || belt.planetId !== source.planetId ||
       !sourceProduces(source, belt.itemId) || !targetConsumes(state, target, belt.itemId, belt.targetPortIndex)) {
       belt.progress = 0;
@@ -3116,12 +3162,12 @@ function transferBelts(
         : Math.min(creditLimit, currentCredit + capacity * seconds));
     }
     const available = Math.floor((source.outputs[belt.itemId] ?? 0) -
-      stationReservedOutgoing(state, source.id, belt.itemId) + EPSILON);
+      stationReservedOutgoing(state, source.id, belt.itemId, lookup) + EPSILON);
     if (available < 1) {
       if (!deferSourceDepletionReset) belt.progress = 0;
       continue;
     }
-    if (targetFreeCapacity(state, target, belt.itemId, belt.targetPortIndex) < 1) {
+    if (targetFreeCapacity(state, target, belt.itemId, belt.targetPortIndex, lookup) < 1) {
       belt.progress = 0;
       continue;
     }
@@ -3157,10 +3203,10 @@ function transferBelts(
   };
 
   for (const group of groups.values()) {
-    const reserved = stationReservedOutgoing(state, group.source.id, group.itemId);
+    const reserved = stationReservedOutgoing(state, group.source.id, group.itemId, lookup);
     let available = Math.floor((group.source.outputs[group.itemId] ?? 0) - reserved + EPSILON);
     const usable = (candidate: BeltTransferCandidate) => candidate.allowance > 0 &&
-      targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex) > 0;
+      targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex, lookup) > 0;
 
     const distributeFair = (requestedCandidates: BeltTransferCandidate[]) => {
       const candidates = requestedCandidates.filter(usable).sort((left, right) => left.belt.id.localeCompare(right.belt.id));
@@ -3178,7 +3224,7 @@ function transferBelts(
             available,
             fairShare,
             candidate.allowance,
-            targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex),
+            targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex, lookup),
           );
           const moved = receive(candidate, group.itemId, requested);
           if (moved <= 0) continue;
@@ -3205,7 +3251,7 @@ function transferBelts(
     group.source.outputs[group.itemId] = available + reserved;
     for (const candidate of group.candidates) {
       candidate.belt.progress = (!deferSourceDepletionReset && available <= 0) ||
-        targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex) <= 0
+        targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex, lookup) <= 0
         ? 0
         : round(Math.max(0, candidate.belt.progress - candidate.moved));
       if (candidate.moved > 0) {
@@ -3218,7 +3264,7 @@ function transferBelts(
         candidate.belt.totalTransferred = Math.floor((candidate.belt.totalTransferred ?? 0) + candidate.moved);
       }
       const sourceWaiting = (group.source.outputs[group.itemId] ?? 0) > 0;
-      const targetBlocked = targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex) <= 0;
+      const targetBlocked = targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex, lookup) <= 0;
       const load = candidate.capacity > EPSILON ? candidate.belt.lastFlow / candidate.capacity : 0;
       candidate.belt.congestion = round(Math.min(1, Math.max(load, sourceWaiting && targetBlocked ? 1 : 0)), 3);
     }
@@ -3230,14 +3276,14 @@ interface BeltStepOutputReservation {
   outputCredits: Map<string, number>;
 }
 
-function reserveBeltStepOutputCapacity(state: GameState): BeltStepOutputReservation {
+function reserveBeltStepOutputCapacity(state: GameState, lookup?: SimulationLookupContext): BeltStepOutputReservation {
   const allowanceByBelt = new Map<string, number>();
   const outputCredits = new Map<string, number>();
   const remainingTargetCapacity = new Map<string, number>();
   const sortedBelts = [...state.belts].sort((left, right) => left.id.localeCompare(right.id));
   for (const belt of sortedBelts) {
-    const source = state.entities.find((entity) => entity.id === belt.source);
-    const target = state.entities.find((entity) => entity.id === belt.target);
+    const source = lookup?.entityById.get(belt.source) ?? state.entities.find((entity) => entity.id === belt.source);
+    const target = lookup?.entityById.get(belt.target) ?? state.entities.find((entity) => entity.id === belt.target);
     if (!source || !target || source.planetId !== target.planetId || belt.planetId !== source.planetId ||
       !sourceProduces(source, belt.itemId) || !targetConsumes(state, target, belt.itemId, belt.targetPortIndex)) continue;
     const allowance = Math.max(0, Math.floor(belt.progress + EPSILON));
@@ -3249,7 +3295,7 @@ function reserveBeltStepOutputCapacity(state: GameState): BeltStepOutputReservat
         : `${target.id}:${belt.itemId}`;
     const targetFree = remainingTargetCapacity.has(targetKey)
       ? remainingTargetCapacity.get(targetKey)!
-      : targetFreeCapacity(state, target, belt.itemId, belt.targetPortIndex);
+      : targetFreeCapacity(state, target, belt.itemId, belt.targetPortIndex, lookup);
     const reserved = Math.min(allowance, Math.max(0, Math.floor(targetFree)));
     if (reserved < 1) continue;
     allowanceByBelt.set(belt.id, reserved);
@@ -3263,10 +3309,11 @@ function reserveBeltStepOutputCapacity(state: GameState): BeltStepOutputReservat
   return { allowanceByBelt, outputCredits };
 }
 
-function runMiners(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId, credits?: OutputCapacityCredits): void {
+function runMiners(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId, credits?: OutputCapacityCredits, lookup?: SimulationLookupContext): void {
   const researchedMiningSpeed = getMiningSpeedMultiplier(state);
   const profile = getPlanetIndustrialProfile(state, planetId);
-  for (const entity of state.entities) {
+  const entities = lookup ? (lookup.entitiesByPlanet.get(planetId) ?? []) : state.entities;
+  for (const entity of entities) {
     if (entity.planetId !== planetId || entity.kind !== "vein" || entity.minerCount <= 0 || !entity.resourceId) continue;
     const powerFactor = powerFactorForEntity(power, entity);
     entity.powerFactor = round(powerFactor, 4);
@@ -3352,9 +3399,10 @@ function dysonLaunchEnergyPerCycle(recipeId: RecipeId | undefined): number {
   return 0;
 }
 
-function runMachines(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId, credits?: OutputCapacityCredits): void {
+function runMachines(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId, credits?: OutputCapacityCredits, lookup?: SimulationLookupContext): void {
   const profile = getPlanetIndustrialProfile(state, planetId);
-  for (const entity of state.entities) {
+  const entities = lookup ? (lookup.entitiesByPlanet.get(planetId) ?? []) : state.entities;
+  for (const entity of entities) {
     const recipe = getRecipe(entity.recipeId);
     if (entity.planetId !== planetId || entity.kind !== "machine" || entity.buildingId === "ray_receiver" || !entity.buildingId || !recipe) continue;
     entity.powerFactor = power.factorByEntity.has(entity.id)
@@ -3488,8 +3536,9 @@ function runRayReceivers(
   reception: DysonReceptionPlan,
   planetId: PlanetId,
   credits?: OutputCapacityCredits,
+  entities = state.entities,
 ): void {
-  for (const entity of state.entities) {
+  for (const entity of entities) {
     if (entity.planetId !== planetId || entity.kind !== "machine" || entity.buildingId !== "ray_receiver") continue;
     const recipe = getRecipe(entity.recipeId);
     const allocationKw = reception.allocationByEntity.get(entity.id) ?? 0;
@@ -3811,15 +3860,7 @@ function dispatchStationScope(
   lookup?: SimulationLookupContext,
   profiler?: SimulationProfiler,
 ): void {
-  const runtimeLookup = lookup ?? {
-    entityById: new Map(state.entities.map((entity) => [entity.id, entity])),
-    stationSlotsByKey: new Map(),
-    busyVehicles: new Map(),
-    reservedOutgoing: new Map(),
-    inFlightCargo: new Map(),
-    activeRoutesByStation: new Map(),
-    routeEconomics: new Map(),
-  } satisfies SimulationLookupContext;
+  const runtimeLookup = lookup ?? createSimulationLookupContext(state, profiler);
   if (!lookup) rebuildDynamicRouteLookup(state, runtimeLookup);
   const demands = state.entities.filter((entity) => {
     if (entity.kind !== "station" || entity.buildingId === "orbital_collector") return false;
@@ -4117,9 +4158,9 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
   transferLogisticsBuffers(state);
   if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
   subsystemStartedAt = profiler ? profileNow() : 0;
-  transferBelts(state, seconds, true);
+  transferBelts(state, seconds, true, undefined, seconds, lookup);
   if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
-  const beltStepReservation = reserveBeltStepOutputCapacity(state);
+  const beltStepReservation = reserveBeltStepOutputCapacity(state, lookup);
   runOrbitalCollectors(state, seconds, beltStepReservation.outputCredits);
   subsystemStartedAt = profiler ? profileNow() : 0;
   drainMaterialDeliveryHubs(state, seconds);
@@ -4135,7 +4176,7 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
     powerByPlanet.set(planet.id, power);
     for (const gridPlan of gridPlans) {
       const gridId = gridPlan.gridId!;
-      const storage = gridStoredEnergy(state, planet.id, gridId);
+      const storage = gridStoredEnergy(state, planet.id, gridId, lookup);
       state.powerGridMetrics[planet.id][gridId] = {
         gridId,
         generationKw: round(gridPlan.generationKw, 2),
@@ -4152,7 +4193,7 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
         storageChargeKw: round(gridPlan.storageChargeKw, 2),
         storedEnergyMj: round(storage.stored, 3),
         storageCapacityMj: round(storage.capacity, 3),
-        fuelReserveSeconds: fuelReserveSeconds(state, planet.id, gridId),
+        fuelReserveSeconds: fuelReserveSeconds(state, planet.id, gridId, lookup),
         totalItemsPerMinute: 0,
         connectedEntities: gridPlan.connectedEntities,
         disconnectedEntities: gridPlan.disconnectedEntities,
@@ -4160,20 +4201,20 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
         coverageRadius: POWER_SUPPLY_RADIUS,
       };
     }
-    runPowerFacilities(state, seconds, power, planet.id);
+    runPowerFacilities(state, seconds, power, planet.id, lookup ? (lookup.entitiesByPlanet.get(planet.id) ?? []) : state.entities);
     if (profiler) profiler.powerMs += profileNow() - subsystemStartedAt;
     subsystemStartedAt = profiler ? profileNow() : 0;
-    runMiners(state, seconds, power, planet.id, beltStepReservation.outputCredits);
-    runMachines(state, seconds, power, planet.id, beltStepReservation.outputCredits);
+    runMiners(state, seconds, power, planet.id, beltStepReservation.outputCredits, lookup);
+    runMachines(state, seconds, power, planet.id, beltStepReservation.outputCredits, lookup);
     if (profiler) profiler.productionMs += profileNow() - subsystemStartedAt;
     subsystemStartedAt = profiler ? profileNow() : 0;
-    runConstructionCenters(state, seconds, power, planet.id);
+    runConstructionCenters(state, seconds, power, planet.id, lookup ? (lookup.entitiesByPlanet.get(planet.id) ?? []) : state.entities);
     if (profiler) profiler.constructionMs += profileNow() - subsystemStartedAt;
     subsystemStartedAt = profiler ? profileNow() : 0;
-    runRayReceivers(state, seconds, reception, planet.id, beltStepReservation.outputCredits);
+    runRayReceivers(state, seconds, reception, planet.id, beltStepReservation.outputCredits, lookup ? (lookup.entitiesByPlanet.get(planet.id) ?? []) : state.entities);
     if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
     subsystemStartedAt = profiler ? profileNow() : 0;
-    const storage = gridStoredEnergy(state, planet.id);
+    const storage = gridStoredEnergy(state, planet.id, undefined, lookup);
     state.planetMetrics[planet.id] = {
       generationKw: round(power.generationKw, 2),
       demandKw: round(power.demandKw, 2),
@@ -4190,13 +4231,13 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
       storedEnergyMj: round(storage.stored, 3),
       storageCapacityMj: round(storage.capacity, 3),
       fuelReserveSeconds: fuelReserveSeconds(state, planet.id),
-      totalItemsPerMinute: round(state.entities.reduce((sum, entity) =>
+      totalItemsPerMinute: round((lookup?.entitiesByPlanet.get(planet.id) ?? state.entities).reduce((sum, entity) =>
         entity.planetId === planet.id ? sum + entity.productionRate : sum, 0), 2),
     };
     if (profiler) profiler.powerMs += profileNow() - subsystemStartedAt;
   }
   subsystemStartedAt = profiler ? profileNow() : 0;
-  transferBelts(state, 0, false, beltStepReservation.allowanceByBelt, seconds);
+  transferBelts(state, 0, false, beltStepReservation.allowanceByBelt, seconds, lookup);
   if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
   drainMaterialDeliveryHubs(state, seconds);
   subsystemStartedAt = profiler ? profileNow() : 0;
@@ -6938,8 +6979,8 @@ function finishConstructionAutomationStep(state: GameState, planetId: PlanetId, 
   return true;
 }
 
-function runConstructionCenters(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId): void {
-  for (const entity of state.entities) {
+function runConstructionCenters(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId, entities = state.entities): void {
+  for (const entity of entities) {
     if (entity.planetId !== planetId || entity.buildingId !== "construction_center") continue;
     const powerFactor = powerFactorForEntity(power, entity);
     entity.powerFactor = power.factorByEntity.has(entity.id) ? round(powerFactor, 4) : undefined;

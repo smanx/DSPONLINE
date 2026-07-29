@@ -4,11 +4,13 @@
 > 产品阶段：首个公网版本已上线，当前更准确的定位是“公开测试版”。
 > 事实来源：当前工作区代码、自动化测试、部署配置和线上只读检查。
 
-> 当前工作区与公开版本均为 `1.0.9` / GameState v40；本地 523 项 Vitest、166 项 Playwright、37 项服务端、6 项运维和 6 项原生工具通过。香港、上海 Web/API 与公开 Windows/Android 稳定安装包已经完成切换。
+> 当前工作区为 `1.0.10` 发布候选 / GameState v40，本地 529 项 Vitest、166 项 Playwright、37 项服务端、6 项运维和 6 项原生工具通过；香港、上海 Web/API 与公开 Windows/Android 稳定安装包在本次切换前仍为 `1.0.9`。
 
 > 香港和上海 Web/API 当前均为 `1.0.9`，使用 `GameState` v40、存档 envelope v2、云 schema v7 和 SQLite layout v2；公开 Windows 为 `1.0.9`，Android 为 `1.0.9 / 1000009`。
 
 > `1.0.9` 制品来自干净 Git 提交 `8a69426b5c9ba7dc4be43170059000e192538715`，Release ID 为 `1.0.9-8a69426b5c9b`。清单包含 132 个文件，聚合 SHA-256 为 `6630e4e4f71383c84fae5297ba8a629dd4ff7778bedcd626c015b611dbccbfac`。
+
+> `1.0.10` 性能基础版不改变 GameState、存档 envelope 或云 schema，尚未部署到任一 VPS。该批改动已通过合成 P50/P95/Max 夹具和状态哈希对照，详细结果见 [PERFORMANCE_OPTIMIZATION_REPORT_2026-07.md](./PERFORMANCE_OPTIMIZATION_REPORT_2026-07.md)。
 
 > 香港和上海 Web/API 均已原子切换到 `1.0.9-8a69426b5c9b`，共同回滚目标为 `1.0.8-528455cdfc2b`。上海下载站也已切换到 `1.0.9-8a69426b5c9b`，下载回滚目标为 `1.0.8-528455cdfc2b`；代码回滚只切换发布目录，不恢复或替换生产数据库。
 
@@ -23,6 +25,14 @@
 项目已经从单页挂机原型发展为一套可持续游玩的 2D 无限画布工厂游戏，具备本地存档、云账号与云存档、排行榜、PWA、Electron 桌面壳和双节点部署。现在最重要的工作不再是继续堆玩法，而是建立可复现发布、生产数据保护、安全加固、性能优化和原创化边界。
 
 当前工作区已经补齐 PolyForm Noncommercial 1.0.0、商业使用说明、贡献规则、安全政策、隐私政策、服务条款、商标规则、128 个 npm 运行时包的第三方许可证清单、Pull Request CI 和 Dependabot 配置。该许可禁止未经书面授权的商业使用，因此准确定位是 `source-available`，不是 OSI 意义上的开源软件。GitHub 仓库、包元数据和应用内源码入口均指向 `snowsnow0926/DSPONLINE`；远端已启用 Dependabot alerts、安全更新、私密漏洞报告、secret scanning 和 push protection，GitHub Actions 默认 token 为只读。`main` branch protection 已严格要求 `verify` 状态检查并禁止 force-push 和删除；`enforce_admins=false` 保留仓库管理员的紧急维护通道。
+
+### `1.0.10` 性能基础版（发布候选，未切换）
+
+- `engine.ts` 在一次模拟会话内建立按实体、行星、电网和线路端点组织的运行时索引；供电、采矿、生产、施工、射线接收、线路传输和容量预留复用索引，legacy 全扫描路径仍保留为确定性 oracle。
+- `network.ts` 和 `App.tsx` 支持传入当前行星线路视图，端口占用、线路分组、节点和边不再为当前画布重复扫描其他行星。
+- `performanceFixtures.ts` 生成不含玩家数据的 P50/P95/Max 合成终局夹具，并以 legacy/indexed 双路径比较阶段耗时、状态字节数、状态哈希和物流候选检查。
+- 本批只完成 P0 观测、P1 低风险索引和部分 P3 当前行星画布派生；Worker 权威状态、保存 Worker、云端 SQLite 拆分、视口级边裁剪和真实设备 30 分钟测试仍未完成，不能提前宣称完成。
+- 发布候选本地门禁为 529 项 Vitest 通过、2 项可选基准跳过，166/166 Playwright、37/37 服务端、6/6 运维、6/6 原生工具、许可证、类型检查和生产构建通过。
 
 ## 2. 当前发布面
 

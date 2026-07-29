@@ -273,10 +273,14 @@ export function listBeltNetworks(state: GameState, planetId?: PlanetId): BeltNet
   return snapshots.sort((a, b) => severity(b.health) - severity(a.health) || b.utilization - a.utilization || a.itemId.localeCompare(b.itemId));
 }
 
-export function getPortOccupancy(state: GameState, planetId = state.activePlanetId): PortOccupancy {
+export function getPortOccupancy(
+  state: GameState,
+  planetId = state.activePlanetId,
+  belts: readonly BeltConnection[] = state.belts,
+): PortOccupancy {
   const input = new Map<string, Partial<Record<ItemId, number>>>();
   const output = new Map<string, Partial<Record<ItemId, number>>>();
-  for (const belt of state.belts) {
+  for (const belt of belts) {
     if (belt.planetId !== planetId) continue;
     const source = output.get(belt.source) ?? {};
     source[belt.itemId] = (source[belt.itemId] ?? 0) + belt.lanes;
@@ -288,9 +292,13 @@ export function getPortOccupancy(state: GameState, planetId = state.activePlanet
   return { input, output };
 }
 
-export function getBeltBundleMap(state: GameState, planetId = state.activePlanetId): Map<string, BeltBundleInfo> {
+export function getBeltBundleMap(
+  state: GameState,
+  planetId = state.activePlanetId,
+  belts: readonly BeltConnection[] = state.belts,
+): Map<string, BeltBundleInfo> {
   const groups = new Map<string, BeltConnection[]>();
-  for (const belt of state.belts) {
+  for (const belt of belts) {
     if (belt.planetId !== planetId) continue;
     const key = `${belt.source}:${belt.target}`;
     const group = groups.get(key) ?? [];
