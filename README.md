@@ -2,7 +2,7 @@
 
 [English README](./README.en.md) | 简体中文
 
-《戴森球计划》生产流程的 2D 无限画布挂机工厂游戏。当前产品版本为 `1.0.4`，使用 `GameState` v36、存档 envelope v2、云 schema v7 和 SQLite layout v2，提供 Web/PWA、Electron 桌面壳、Capacitor Android 应用、云账号、四槽云存档和排行榜。Windows 与 Android 1.0.4 安装包由 [上海下载节点](https://download.dsponline.cn/) 提供；香港和上海 Web/API 均已发布 1.0.4。
+《戴森球计划》生产流程的 2D 无限画布挂机工厂游戏。当前产品版本为 `1.0.11`，使用 `GameState` v40、存档 envelope v2、云 schema v7 和 SQLite layout v2，提供 Web/PWA、Electron 桌面壳、Capacitor Android 应用、云账号、四槽云存档和排行榜。Windows 与 Android 1.0.11 安装包由 [上海下载节点](https://download.dsponline.cn/) 提供；香港和上海 Web/API 均已发布 1.0.11。
 
 正式入口：[https://dsponline.cn](https://dsponline.cn)
 源码仓库：[https://github.com/snowsnow0926/DSPONLINE](https://github.com/snowsnow0926/DSPONLINE)

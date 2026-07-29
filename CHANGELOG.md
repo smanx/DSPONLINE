@@ -10,6 +10,14 @@ All notable player-facing changes are recorded here. Game-state migration versio
 - Added privacy-safe PV, UV, sessions, active-time and allowlisted event aggregation on the Asia/Shanghai calendar.
 - Added a protected `/admin` operations dashboard and reduced the public status endpoint to anonymous player counts.
 
+## [1.0.11] - 2026-07-30
+
+- Reused stable logistics matching, route economics, active vehicle loads, and dispatch summaries within each simulation session to reduce endgame Worker latency.
+- Replaced per-item fuel, Energy Exchanger, and recursive Construction Center loops with deterministic batch settlement while preserving state hashes and material conservation.
+- Added server-side leaderboard data-integrity restrictions that survive uploads, restores, visibility changes, and startup backfills without disabling account or cloud-save access.
+- Published matching `1.0.11 / 1000011` Windows and Android packages, with Android signature continuity and save-preserving upgrade verification.
+- Kept GameState v40, save envelope v2, cloud schema v7, SQLite layout v2, production rates, refresh settings, and existing player saves unchanged.
+
 ## [1.0.3] - 2026-07-26
 
 - Added a shared atomic recursive-manufacturing planner that prefers unlocked advanced recipes, falls back to complete base chains, and reports the true raw-resource, technology, or capacity blocker.
@@ -46,6 +54,7 @@ All notable player-facing changes are recorded here. Game-state migration versio
 - Deployed independent Hong Kong production and Shanghai fallback nodes.
 
 [Unreleased]: ./docs/ROADMAP.md
+[1.0.11]: ./docs/releases/1.0.11.md
 [1.0.3]: ./docs/releases/1.0.3.md
 [1.0.2]: ./docs/releases/1.0.2.md
 [0.4.0]: ./docs/releases/0.4.0.md
