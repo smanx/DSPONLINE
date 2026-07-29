@@ -9,18 +9,21 @@ import {
 import { hashGameState } from "./benchmark";
 import type { BeltConnection, FactoryEntity, GameState, ItemId } from "./types";
 
-export type PerformanceFixtureProfile = "p50" | "p95" | "max";
+export type PerformanceFixtureProfile = "p50" | "p95" | "max" | "player" | "terminal2x";
 
 export interface PerformanceFixtureSpec {
   profile: PerformanceFixtureProfile;
   entityCount: number;
   beltCount: number;
   stationCount: number;
+  totalLanes: number;
 }
 const FIXTURE_SPECS: Record<PerformanceFixtureProfile, PerformanceFixtureSpec> = {
-  p50: { profile: "p50", entityCount: 300, beltCount: 300, stationCount: 45 },
-  p95: { profile: "p95", entityCount: 380, beltCount: 500, stationCount: 80 },
-  max: { profile: "max", entityCount: 569, beltCount: 1_160, stationCount: 128 },
+  p50: { profile: "p50", entityCount: 300, beltCount: 300, stationCount: 45, totalLanes: 300 },
+  p95: { profile: "p95", entityCount: 380, beltCount: 500, stationCount: 80, totalLanes: 500 },
+  max: { profile: "max", entityCount: 569, beltCount: 1_160, stationCount: 128, totalLanes: 1_160 },
+  player: { profile: "player", entityCount: 600, beltCount: 1_250, stationCount: 100, totalLanes: 1_500_000 },
+  terminal2x: { profile: "terminal2x", entityCount: 1_200, beltCount: 2_500, stationCount: 256, totalLanes: 3_000_000 },
 };
 
 const FIXTURE_ITEM: ItemId = "iron_ingot";
@@ -46,14 +49,14 @@ function fixtureEntity(id: string, kind: FactoryEntity["kind"], index: number): 
   };
 }
 
-function fixtureBelt(id: string, index: number, source: string, target: string): BeltConnection {
+function fixtureBelt(id: string, index: number, source: string, target: string, lanes: number): BeltConnection {
   return {
     id,
     planetId: "home",
     source,
     target,
     itemId: FIXTURE_ITEM,
-    lanes: 1,
+    lanes,
     tier: 3,
     sorterTier: 3,
     stackSize: 4,
@@ -84,8 +87,16 @@ export function createSyntheticPerformanceFixture(profile: PerformanceFixturePro
     index += 1;
   }
 
+  const baseLanes = Math.max(1, Math.floor(spec.totalLanes / spec.beltCount));
+  const extraLanes = Math.max(0, spec.totalLanes - baseLanes * spec.beltCount);
   state.belts = Array.from({ length: spec.beltCount }, (_, beltIndex) =>
-    fixtureBelt(`fixture_belt_${beltIndex.toString().padStart(4, "0")}`, beltIndex, source.id, target.id));
+    fixtureBelt(
+      `fixture_belt_${beltIndex.toString().padStart(4, "0")}`,
+      beltIndex,
+      source.id,
+      target.id,
+      baseLanes + Number(beltIndex < extraLanes),
+    ));
   state.nextId = state.entities.length + state.belts.length + 1;
   state.paused = false;
   return state;

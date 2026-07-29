@@ -5,36 +5,36 @@ import { NATIVE_BACK_EVENT } from "../nativeApp";
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-29-v1.0.10",
-  date: "2026年7月29日",
-  version: "1.0.10",
-  title: "终局工厂性能基础更新",
-  summary: "1.0.10 为后期多星球工厂增加会话级运行时索引，并减少画布对其他行星的重复扫描。生产、物流、科研、离线收益和存档格式保持不变，GameState 继续为 v40。",
+  id: "2026-07-30-v1.0.11",
+  date: "2026年7月30日",
+  version: "1.0.11",
+  title: "终局性能与数据完整性更新",
+  summary: "1.0.11 为终局物流和建筑制造中心增加确定性批量结算，降低大型工厂 Worker 积压。玩法数值、离线收益和存档格式保持不变，GameState 继续为 v40。",
   items: [
     {
-      id: "simulation-session-indexes",
-      title: "模拟会话运行时索引",
-      description: "实体、行星、电网、物流槽和线路端点在每次模拟会话中建立只读索引，减少后期工厂反复扫描完整状态的开销。",
+      id: "logistics-dispatch-cache",
+      title: "物流调度复用",
+      description: "物流伙伴、路线经济、活动载具负载和拥堵诊断在同一模拟会话内复用，减少高密度物流站重复匹配。",
     },
     {
-      id: "indexed-production-power",
-      title: "生产与供电按行星推进",
-      description: "供电、采矿、生产、施工、射线接收和容量统计直接读取当前行星集合，空行星不再重复遍历全部建筑。",
+      id: "construction-batch-settlement",
+      title: "递归制造批量结算",
+      description: "复杂递归链、副产物、多目标和多制造中心保持原有轮询与物资守恒，同时避免按成品重复规划整条材料链。",
     },
     {
-      id: "indexed-belt-runtime",
-      title: "线路端点快速查找",
-      description: "线路转运和输出容量预留复用实体 ID 与在途物流索引，不再为每条传送带反复搜索所有建筑。",
+      id: "power-storage-batches",
+      title: "燃料与蓄电批次处理",
+      description: "大堆叠发电燃料和能量枢纽改用等价闭式结算，不再按每个燃料棒或蓄电单元循环。",
     },
     {
-      id: "active-planet-canvas",
-      title: "当前行星画布派生",
-      description: "节点、线路、端口占用、并联分组和任务高亮只消费当前行星视图，多星球存档切换与画布发布减少无关扫描。",
+      id: "terminal-performance-fixtures",
+      title: "终局规模性能门禁",
+      description: "新增玩家同形和 2 倍终局匿名夹具，覆盖 300 万并联线路、256 座物流站及 1x、4x、11x 状态哈希。",
     },
     {
-      id: "synthetic-performance-fixtures",
-      title: "终局规模确定性门禁",
-      description: "新增 P50、P95 和 Max 匿名合成工厂基准；优化路径与旧路径必须得到完全一致的状态哈希才能通过测试。",
+      id: "leaderboard-integrity",
+      title: "排行榜数据完整性",
+      description: "检测数据修改异常",
     },
     {
       id: "no-gameplay-tradeoff",
@@ -45,11 +45,11 @@ export const CURRENT_RELEASE_NOTES = {
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "simulation-session-indexes": Cpu,
-  "indexed-production-power": Gauge,
-  "indexed-belt-runtime": Route,
-  "active-planet-canvas": Layers,
-  "synthetic-performance-fixtures": Database,
+  "logistics-dispatch-cache": Route,
+  "construction-batch-settlement": Cpu,
+  "power-storage-batches": Gauge,
+  "terminal-performance-fixtures": Database,
+  "leaderboard-integrity": Layers,
   "no-gameplay-tradeoff": Check,
 };
 

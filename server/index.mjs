@@ -15,6 +15,11 @@ import {
 import { createTencentSesMailer, createWebhookMailer } from "./mail.mjs";
 import { getActivityPublicStatus, loadActivityConfig, normalizeActivityConfig } from "./activity.mjs";
 import { inspectSavePayloadIntegrity } from "./save-integrity.mjs";
+import {
+  isLeaderboardRestricted,
+  LEADERBOARD_RESTRICTED_CODE,
+  normalizeLeaderboardModeration,
+} from "./leaderboard-moderation.mjs";
 
 const scrypt = promisify(scryptCallback);
 const BODY_LIMIT_BYTES = 8 * 1024 * 1024;
@@ -51,6 +56,7 @@ const DEFAULT_DATA = {
   cloudSaveSlots: {},
   cloudSaveSlotHistory: {},
   submissions: {},
+  leaderboardModeration: {},
   players: {},
   feedback: [],
   errors: [],
@@ -241,6 +247,7 @@ function normalizeStoredData(parsed) {
     cloudSaveSlots: normalizeManualSaveSlots(source.cloudSaveSlots),
     cloudSaveSlotHistory: normalizeManualSaveSlotHistory(source.cloudSaveSlotHistory),
     submissions: source.submissions && typeof source.submissions === "object" ? source.submissions : {},
+    leaderboardModeration: normalizeLeaderboardModeration(source.leaderboardModeration, users),
     players: normalizePlayerRecords(source.players),
     feedback: Array.isArray(source.feedback) ? source.feedback.slice(-1000) : [],
     errors: Array.isArray(source.errors) ? source.errors.slice(-1000) : [],
@@ -994,6 +1001,9 @@ function removeUserLeaderboardSubmissions(store, userId) {
 function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.now(), force = false } = {}) {
   const user = store.data.users[userId];
   if (!user) return { changed: false, submission: null, reason: "missing-user" };
+  if (isLeaderboardRestricted(store.data, userId)) {
+    return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "restricted" };
+  }
   if (user.leaderboardVisible === false) {
     return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "hidden" };
   }
@@ -1702,6 +1712,7 @@ export async function createCloudServer({
         delete store.data.cloudSaveHistory[userId];
         delete store.data.cloudSaveSlots[userId];
         delete store.data.cloudSaveSlotHistory[userId];
+        delete store.data.leaderboardModeration[userId];
         store.discardUserCloudSavePayloads?.(userId);
         for (const [key, submission] of Object.entries(store.data.submissions)) {
           if (submission.userId === userId) delete store.data.submissions[key];
@@ -1809,6 +1820,9 @@ export async function createCloudServer({
         if (!auth) return send(response, 401, { error: "请先登录" });
         const body = await readJson(request);
         if (typeof body.visible !== "boolean") return send(response, 400, { error: "排行榜可见性设置无效" });
+        if (body.visible && isLeaderboardRestricted(store.data, auth.user.id)) {
+          return send(response, 403, { error: "当前账号暂时不能加入官方排行榜", code: LEADERBOARD_RESTRICTED_CODE });
+        }
         auth.user.leaderboardVisible = body.visible;
         const result = body.visible
           ? updateLeaderboardFromMainSave(store, auth.user.id, { force: true })
@@ -1827,7 +1841,8 @@ export async function createCloudServer({
         const category = VALID_CATEGORIES.has(url.searchParams.get("category")) ? url.searchParams.get("category") : "galaxy";
         const seasonId = VALID_SEASONS.has(url.searchParams.get("seasonId")) ? url.searchParams.get("seasonId") : ACTIVE_LEADERBOARD_SEASON_ID;
         const entries = Object.values(store.data.submissions)
-          .filter((entry) => entry.seasonId === seasonId && entry.visible !== false && store.data.users[entry.userId]?.leaderboardVisible !== false)
+          .filter((entry) => entry.seasonId === seasonId && entry.visible !== false &&
+            store.data.users[entry.userId]?.leaderboardVisible !== false && !isLeaderboardRestricted(store.data, entry.userId))
           .map((entry) => ({ ...entry, value: categoryValue(entry.metrics, category), verified: Boolean(entry.verification?.cloudRevision) }))
           .sort((left, right) => right.value - left.value || left.userId.localeCompare(right.userId))
           .slice(0, 100)
@@ -1838,6 +1853,11 @@ export async function createCloudServer({
       if (request.method === "POST" && url.pathname === "/api/leaderboard") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
+        if (isLeaderboardRestricted(store.data, auth.user.id)) {
+          removeUserLeaderboardSubmissions(store, auth.user.id);
+          await store.persist();
+          return send(response, 403, { error: "当前账号暂时不能加入官方排行榜", code: LEADERBOARD_RESTRICTED_CODE });
+        }
         const body = await readJson(request);
         const seasonId = VALID_SEASONS.has(body.seasonId) ? body.seasonId : ACTIVE_LEADERBOARD_SEASON_ID;
         if (seasonId !== ACTIVE_LEADERBOARD_SEASON_ID) return send(response, 409, { error: "历史赛季已封存" });

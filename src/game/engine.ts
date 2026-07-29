@@ -951,8 +951,7 @@ function getCachedInterstellarRouteEconomics(
     Math.max(1, Math.floor(vehicleCount)),
     options.routePolicy ?? "relay-preferred",
     Math.max(1, Math.min(4, Math.floor(options.warperBudget ?? 2))),
-    getInfiniteResearchLevel(state, "galactic_logistics"),
-    state.exploration.unlockedSystemIds.join(","),
+    lookup.routeEnvironmentKey,
   ].join("|") : "";
   const cached = key ? lookup!.routeEconomics.get(key) : undefined;
   if (cached) {
@@ -1344,15 +1343,28 @@ export interface SimulationProfiler {
   routeAdvanceMs: number;
   congestionMs: number;
   peerCandidateChecks: number;
+  peerMatchCacheHits: number;
   routeEconomicsCalls: number;
   routeEconomicsCacheHits: number;
+  congestionDispatchReuseHits: number;
   routesCreated: number;
+  fuelItemsLoaded: number;
+  exchangerCellsSettled: number;
+  constructionJobsBatched: number;
+  constructionPlanBuilds: number;
+  constructionPlanCacheHits: number;
 }
 
 interface IndexedStationSlot {
   peer: FactoryEntity;
   peerSlotIndex: number;
   slot: StationSlot;
+}
+
+interface StationDispatchSlotResult {
+  hasMatchingPeer: boolean;
+  routesCreated: number;
+  cargoDispatched: number;
 }
 
 interface SimulationLookupContext {
@@ -1364,11 +1376,15 @@ interface SimulationLookupContext {
   incomingBeltsByTarget: Map<string, BeltConnection[]>;
   powerSourcesByPlanetGrid: Map<string, FactoryEntity[]>;
   stationSlotsByKey: Map<string, IndexedStationSlot[]>;
+  stationPeerMatches: Map<string, StationPeerMatch[]>;
+  dispatchResultsBySlot: Map<string, StationDispatchSlotResult>;
   busyVehicles: Map<string, number>;
   reservedOutgoing: Map<string, number>;
   inFlightCargo: Map<string, number>;
   activeRoutesByStation: Map<string, Array<{ demand: FactoryEntity; route: StationRoute }>>;
+  activeRouteVehicleLoadByStation: Map<string, number>;
   routeEconomics: Map<string, InterstellarRouteEconomics>;
+  routeEnvironmentKey: string;
 }
 
 function profileNow(): number {
@@ -1377,6 +1393,33 @@ function profileNow(): number {
 
 function stationSlotIndexKey(scope: StationLogisticsScope, location: PlanetId | "*", itemId: ItemId, mode: StationLogisticsMode): string {
   return `${scope}|${location}|${itemId}|${mode}`;
+}
+
+function stationPeerMatchCacheKey(
+  state: GameState,
+  stationId: string,
+  slotIndex: number,
+  scope: StationLogisticsScope,
+  environmentKey = routeEnvironmentKey(state),
+): string {
+  return [
+    stationId,
+    slotIndex,
+    scope,
+    environmentKey,
+  ].join("|");
+}
+
+function routeEnvironmentKey(state: GameState): string {
+  return [
+    getLogisticsSpeedMultiplier(state),
+    getInterstellarCargoCapacity(state),
+    state.exploration.unlockedSystemIds.join(","),
+  ].join("|");
+}
+
+function stationDispatchSlotKey(stationId: string, slotIndex: number, scope: StationLogisticsScope): string {
+  return `${stationId}|${slotIndex}|${scope}`;
 }
 
 function createSimulationLookupContext(state: GameState, profiler?: SimulationProfiler): SimulationLookupContext {
@@ -1390,11 +1433,15 @@ function createSimulationLookupContext(state: GameState, profiler?: SimulationPr
     incomingBeltsByTarget: new Map(),
     powerSourcesByPlanetGrid: new Map(),
     stationSlotsByKey: new Map(),
+    stationPeerMatches: new Map(),
+    dispatchResultsBySlot: new Map(),
     busyVehicles: new Map(),
     reservedOutgoing: new Map(),
     inFlightCargo: new Map(),
     activeRoutesByStation: new Map(),
+    activeRouteVehicleLoadByStation: new Map(),
     routeEconomics: new Map(),
+    routeEnvironmentKey: routeEnvironmentKey(state),
   };
   const addTo = <T>(map: Map<string, T[]>, key: string, value: T) => {
     const values = map.get(key);
@@ -1460,6 +1507,12 @@ export function findStationSlotPeers(
   if (mode === "storage") return [];
   if (scope === "local" && station.buildingId === "orbital_collector") return [];
   if (scope === "remote" && station.buildingId !== "interstellar_logistics_station" && station.buildingId !== "orbital_collector") return [];
+  const cacheKey = lookup ? stationPeerMatchCacheKey(state, station.id, slotIndex, scope, lookup.routeEnvironmentKey) : "";
+  const cached = cacheKey ? lookup!.stationPeerMatches.get(cacheKey) : undefined;
+  if (cached) {
+    if (profiler) profiler.peerMatchCacheHits += 1;
+    return [...cached];
+  }
   const opposite: StationLogisticsMode = mode === "supply" ? "demand" : "supply";
   const candidates: Array<StationPeerMatch & { priority: number; routeAvailable: boolean; routeDuration: number }> = [];
   const indexed = lookup?.stationSlotsByKey.get(stationSlotIndexKey(scope, scope === "local" ? station.planetId : "*", slot.itemId, opposite));
@@ -1500,7 +1553,9 @@ export function findStationSlotPeers(
   const result = candidates.sort((a, b) => Number(b.routeAvailable) - Number(a.routeAvailable) || b.priority - a.priority ||
     a.routeDuration - b.routeDuration || a.peer.id.localeCompare(b.peer.id));
   if (profiler) profiler.peerMatchMs += profileNow() - startedAt;
-  return result.map(({ peer, peerSlotIndex }) => ({ peer, peerSlotIndex }));
+  const matches = result.map(({ peer, peerSlotIndex }) => ({ peer, peerSlotIndex }));
+  if (cacheKey) lookup!.stationPeerMatches.set(cacheKey, matches);
+  return [...matches];
 }
 
 export function findStationSlotPeer(
@@ -2941,26 +2996,51 @@ function powerFactorForEntity(power: PowerPlan, entity: FactoryEntity): number {
   return power.factorByEntity.get(entity.id) ?? 1;
 }
 
-function burnFuel(entity: FactoryEntity, outputKw: number, seconds: number): void {
-  if (!entity.buildingId || !entity.fuelItemId || outputKw <= EPSILON) return;
+function burnFuelLegacy(entity: FactoryEntity, outputKw: number, seconds: number): number {
+  if (!entity.buildingId || !entity.fuelItemId || outputKw <= EPSILON) return 0;
   const energyPerItem = FUEL_ENERGY_MJ[entity.fuelItemId] ?? 0;
   let requiredHeatMj = outputKw * seconds / (1000 * getFuelEfficiency(entity.buildingId));
   let remainingHeatMj = Math.max(0, entity.fuelRemainingMj ?? 0);
+  let loaded = 0;
   while (requiredHeatMj > EPSILON) {
     if (remainingHeatMj <= EPSILON) {
       const queuedFuel = Math.floor((entity.inputs[entity.fuelItemId] ?? 0) + EPSILON);
       if (queuedFuel < 1 || energyPerItem <= EPSILON) break;
       entity.inputs[entity.fuelItemId] = queuedFuel - 1;
       remainingHeatMj += energyPerItem;
+      loaded += 1;
     }
     const burned = Math.min(requiredHeatMj, remainingHeatMj);
     requiredHeatMj -= burned;
     remainingHeatMj -= burned;
   }
   entity.fuelRemainingMj = round(Math.max(0, remainingHeatMj), 6);
+  return loaded;
 }
 
-function chargeExchanger(state: GameState, entity: FactoryEntity, energyMj: number): number {
+function burnFuel(entity: FactoryEntity, outputKw: number, seconds: number): number {
+  if (!entity.buildingId || !entity.fuelItemId || outputKw <= EPSILON) return 0;
+  const energyPerItem = FUEL_ENERGY_MJ[entity.fuelItemId] ?? 0;
+  const requiredHeatMj = Math.max(0, outputKw * seconds / (1000 * getFuelEfficiency(entity.buildingId)));
+  const initialHeatMj = Math.max(0, entity.fuelRemainingMj ?? 0);
+  const queuedFuel = Math.floor((entity.inputs[entity.fuelItemId] ?? 0) + EPSILON);
+  if (energyPerItem <= EPSILON) {
+    entity.fuelRemainingMj = round(Math.max(0, initialHeatMj - Math.min(requiredHeatMj, initialHeatMj)), 6);
+    return 0;
+  }
+  const heatNeededAfterCurrent = Math.max(0, requiredHeatMj - initialHeatMj);
+  const requestedItems = heatNeededAfterCurrent > EPSILON
+    ? Math.ceil(Math.max(0, heatNeededAfterCurrent - EPSILON) / energyPerItem)
+    : 0;
+  const loaded = Math.min(queuedFuel, requestedItems);
+  const availableHeatMj = initialHeatMj + loaded * energyPerItem;
+  const burnedHeatMj = Math.min(requiredHeatMj, availableHeatMj);
+  if (loaded > 0) entity.inputs[entity.fuelItemId] = queuedFuel - loaded;
+  entity.fuelRemainingMj = round(Math.max(0, availableHeatMj - burnedHeatMj), 6);
+  return loaded;
+}
+
+function chargeExchangerLegacy(state: GameState, entity: FactoryEntity, energyMj: number): number {
   let remaining = Math.max(0, energyMj);
   let stored = storedEnergy(entity);
   let completed = 0;
@@ -2985,7 +3065,7 @@ function chargeExchanger(state: GameState, entity: FactoryEntity, energyMj: numb
   return completed;
 }
 
-function dischargeExchanger(state: GameState, entity: FactoryEntity, energyMj: number): number {
+function dischargeExchangerLegacy(state: GameState, entity: FactoryEntity, energyMj: number): number {
   let remaining = Math.max(0, energyMj);
   let stored = storedEnergy(entity);
   let completed = 0;
@@ -3011,12 +3091,62 @@ function dischargeExchanger(state: GameState, entity: FactoryEntity, energyMj: n
   return completed;
 }
 
+function chargeExchanger(state: GameState, entity: FactoryEntity, energyMj: number): number {
+  if (energyMj <= EPSILON) return 0;
+  const stored = Math.min(ACCUMULATOR_ENERGY_MJ, storedEnergy(entity));
+  const activeCells = stored > EPSILON ? 1 : 0;
+  const queuedCells = Math.floor((entity.inputs.accumulator ?? 0) + EPSILON);
+  const usableCells = Math.min(activeCells + queuedCells, itemOutputFree(state, entity, "charged_accumulator"));
+  if (usableCells < 1) return 0;
+  const appliedEnergyMj = Math.min(Math.max(0, energyMj), Math.max(0, usableCells * ACCUMULATOR_ENERGY_MJ - stored));
+  if (appliedEnergyMj <= EPSILON) return 0;
+  const totalEnergyMj = stored + appliedEnergyMj;
+  const completed = Math.min(usableCells, Math.floor((totalEnergyMj + EPSILON) / ACCUMULATOR_ENERGY_MJ));
+  const remainingEnergyMj = Math.max(0, totalEnergyMj - completed * ACCUMULATOR_ENERGY_MJ);
+  const residual = remainingEnergyMj > EPSILON ? remainingEnergyMj : 0;
+  const touchedCells = completed + (residual > EPSILON ? 1 : 0);
+  const consumedCells = Math.min(queuedCells, Math.max(0, touchedCells - activeCells));
+  if (consumedCells > 0) entity.inputs.accumulator = queuedCells - consumedCells;
+  entity.outputs.charged_accumulator = Math.floor((entity.outputs.charged_accumulator ?? 0) + completed);
+  state.totalProduced.charged_accumulator = Math.floor((state.totalProduced.charged_accumulator ?? 0) + completed);
+  entity.storedEnergyMj = round(residual, 6);
+  entity.progress = residual / ACCUMULATOR_ENERGY_MJ;
+  return completed;
+}
+
+function dischargeExchanger(state: GameState, entity: FactoryEntity, energyMj: number): number {
+  if (energyMj <= EPSILON) return 0;
+  const stored = Math.min(ACCUMULATOR_ENERGY_MJ, storedEnergy(entity));
+  const activeCells = stored > EPSILON ? 1 : 0;
+  const queuedCells = Math.floor((entity.inputs.charged_accumulator ?? 0) + EPSILON);
+  const usableCells = Math.min(activeCells + queuedCells, itemOutputFree(state, entity, "accumulator"));
+  if (usableCells < 1) return 0;
+  const availableEnergyMj = stored + Math.max(0, usableCells - activeCells) * ACCUMULATOR_ENERGY_MJ;
+  const appliedEnergyMj = Math.min(Math.max(0, energyMj), availableEnergyMj);
+  if (appliedEnergyMj <= EPSILON) return 0;
+  const energyNeededAfterCurrent = Math.max(0, appliedEnergyMj - stored);
+  const loadedCells = Math.min(queuedCells, energyNeededAfterCurrent > EPSILON
+    ? Math.ceil(Math.max(0, energyNeededAfterCurrent - EPSILON) / ACCUMULATOR_ENERGY_MJ)
+    : 0);
+  const remainingEnergyMj = Math.max(0, stored + loadedCells * ACCUMULATOR_ENERGY_MJ - appliedEnergyMj);
+  const residual = remainingEnergyMj > EPSILON ? remainingEnergyMj : 0;
+  const completed = Math.max(0, activeCells + loadedCells - (residual > EPSILON ? 1 : 0));
+  if (loadedCells > 0) entity.inputs.charged_accumulator = queuedCells - loadedCells;
+  entity.outputs.accumulator = Math.floor((entity.outputs.accumulator ?? 0) + completed);
+  state.totalProduced.accumulator = Math.floor((state.totalProduced.accumulator ?? 0) + completed);
+  entity.storedEnergyMj = round(residual, 6);
+  entity.progress = residual > EPSILON ? 1 - residual / ACCUMULATOR_ENERGY_MJ : 0;
+  return completed;
+}
+
 function runPowerFacilities(
   state: GameState,
   seconds: number,
   power: PowerPlan,
   planetId: PlanetId,
   entities = state.entities,
+  batchPowerStorage = true,
+  profiler?: SimulationProfiler,
 ): void {
   for (const entity of entities) {
     if (entity.planetId !== planetId || entity.kind !== "power" || !entity.buildingId) continue;
@@ -3030,7 +3160,10 @@ function runPowerFacilities(
     entity.productionRate = 0;
 
     if (isFuelGenerator(entity)) {
-      burnFuel(entity, outputKw, seconds);
+      const loaded = batchPowerStorage
+        ? burnFuel(entity, outputKw, seconds)
+        : burnFuelLegacy(entity, outputKw, seconds);
+      if (profiler) profiler.fuelItemsLoaded += loaded;
     } else if (entity.buildingId === "accumulator") {
       const capacity = energyCapacity(entity);
       entity.storedEnergyMj = round(Math.min(capacity, Math.max(0,
@@ -3038,8 +3171,13 @@ function runPowerFacilities(
       entity.progress = capacity > EPSILON ? entity.storedEnergyMj / capacity : 0;
     } else if (entity.buildingId === "energy_exchanger") {
       const completed = entity.energyMode === "discharge"
-        ? dischargeExchanger(state, entity, outputKw * seconds / 1000)
-        : chargeExchanger(state, entity, inputKw * seconds / 1000);
+        ? batchPowerStorage
+          ? dischargeExchanger(state, entity, outputKw * seconds / 1000)
+          : dischargeExchangerLegacy(state, entity, outputKw * seconds / 1000)
+        : batchPowerStorage
+          ? chargeExchanger(state, entity, inputKw * seconds / 1000)
+          : chargeExchangerLegacy(state, entity, inputKw * seconds / 1000);
+      if (profiler) profiler.exchangerCellsSettled += completed;
       entity.productionRate = seconds > EPSILON ? round(completed * 60 / seconds, 2) : 0;
     }
   }
@@ -3637,6 +3775,10 @@ function addRouteToLookup(lookup: SimulationLookupContext, demand: FactoryEntity
     const active = lookup.activeRoutesByStation.get(stationId);
     if (active) active.push({ demand, route });
     else lookup.activeRoutesByStation.set(stationId, [{ demand, route }]);
+    lookup.activeRouteVehicleLoadByStation.set(
+      stationId,
+      (lookup.activeRouteVehicleLoadByStation.get(stationId) ?? 0) + route.vehicleCount,
+    );
   }
 }
 
@@ -3645,9 +3787,18 @@ function rebuildDynamicRouteLookup(state: GameState, lookup: SimulationLookupCon
   lookup.reservedOutgoing.clear();
   lookup.inFlightCargo.clear();
   lookup.activeRoutesByStation.clear();
+  lookup.activeRouteVehicleLoadByStation.clear();
   for (const demand of state.entities) {
     for (const route of demand.stationRoutes ?? []) addRouteToLookup(lookup, demand, route);
   }
+}
+
+function refreshRouteEnvironment(state: GameState, lookup: SimulationLookupContext): void {
+  const nextKey = routeEnvironmentKey(state);
+  if (lookup.routeEnvironmentKey === nextKey) return;
+  lookup.routeEnvironmentKey = nextKey;
+  lookup.stationPeerMatches.clear();
+  lookup.routeEconomics.clear();
 }
 
 function stationBusyVehicles(state: GameState, station: FactoryEntity, scope: StationLogisticsScope, lookup?: SimulationLookupContext): number {
@@ -3881,15 +4032,23 @@ function dispatchStationScope(
       if (!slot.itemId) continue;
       const fairnessKey = `${scope}:${slotIndex}`;
       const lastPeerId = demand.stationLastSupplyPeerBySlot?.[fairnessKey];
-      const matches = findStationSlotPeers(state, demand, slotIndex, scope, runtimeLookup, profiler)
-        .sort((left, right) => {
-          const leftSlot = left.peer.buildingId === "orbital_collector" ? emptyStationSlot() : getStationSlots(left.peer)[left.peerSlotIndex];
-          const rightSlot = right.peer.buildingId === "orbital_collector" ? emptyStationSlot() : getStationSlots(right.peer)[right.peerSlotIndex];
-          const priorityOrder = (rightSlot?.priority ?? 1) - (leftSlot?.priority ?? 1);
+      const matches = findStationSlotPeers(state, demand, slotIndex, scope, runtimeLookup, profiler);
+      const dispatchResult: StationDispatchSlotResult = {
+        hasMatchingPeer: matches.length > 0,
+        routesCreated: 0,
+        cargoDispatched: 0,
+      };
+      runtimeLookup.dispatchResultsBySlot.set(stationDispatchSlotKey(demand.id, slotIndex, scope), dispatchResult);
+      const orderedMatches = matches.map((match) => ({
+        ...match,
+        priority: match.peer.buildingId === "orbital_collector"
+          ? 1
+          : getStationSlots(match.peer)[match.peerSlotIndex]?.priority ?? 1,
+        activeVehicleLoad: runtimeLookup.activeRouteVehicleLoadByStation.get(match.peer.id) ?? 0,
+      })).sort((left, right) => {
+          const priorityOrder = right.priority - left.priority;
           if (priorityOrder !== 0) return priorityOrder;
-          const leftLoad = stationActiveRoutes(state, left.peer, runtimeLookup).reduce((sum, entry) => sum + entry.route.vehicleCount, 0);
-          const rightLoad = stationActiveRoutes(state, right.peer, runtimeLookup).reduce((sum, entry) => sum + entry.route.vehicleCount, 0);
-          if (leftLoad !== rightLoad) return leftLoad - rightLoad;
+          if (left.activeVehicleLoad !== right.activeVehicleLoad) return left.activeVehicleLoad - right.activeVehicleLoad;
           if (lastPeerId) {
             const leftAfter = left.peer.id.localeCompare(lastPeerId) > 0 ? 0 : 1;
             const rightAfter = right.peer.id.localeCompare(lastPeerId) > 0 ? 0 : 1;
@@ -3897,7 +4056,7 @@ function dispatchStationScope(
           }
           return left.peer.id.localeCompare(right.peer.id);
         });
-      for (const { peer: supply, peerSlotIndex } of matches) {
+      for (const { peer: supply, peerSlotIndex } of orderedMatches) {
         const supplySlot = supply.buildingId === "orbital_collector"
           ? { ...emptyStationSlot(), itemId: supply.storedItemId, remoteMode: "supply" as const }
           : ensureStationSlots(supply)[peerSlotIndex];
@@ -3973,6 +4132,8 @@ function dispatchStationScope(
           };
           demand.stationRoutes!.push(route);
           addRouteToLookup(runtimeLookup, demand, route);
+          dispatchResult.routesCreated += 1;
+          dispatchResult.cargoDispatched += cargo;
           if (profiler) profiler.routesCreated += 1;
           state.nextId += 1;
           if (requiresWarp) owner.stationWarpers = warpAvailable - dispatchable * (dispatchedEconomics?.warpersPerVessel ?? 1);
@@ -4047,8 +4208,15 @@ function advanceStationRoutes(
 function updateStationCongestion(state: GameState, lookup?: SimulationLookupContext, profiler?: SimulationProfiler): void {
   for (const station of state.entities.filter((entity) => entity.kind === "station" && entity.buildingId !== "orbital_collector")) {
     const slots = ensureStationSlots(station);
-    const waiting = slots.filter((slot, slotIndex) => slot.itemId && (["local", "remote"] as StationLogisticsScope[]).some((scope) =>
-      stationSlotMode(station, slot, scope) === "demand" && findStationSlotPeer(state, station, slotIndex, scope, lookup, profiler))).length;
+    const waiting = slots.filter((slot, slotIndex) => slot.itemId && (["local", "remote"] as StationLogisticsScope[]).some((scope) => {
+      if (stationSlotMode(station, slot, scope) !== "demand") return false;
+      const dispatched = lookup?.dispatchResultsBySlot.get(stationDispatchSlotKey(station.id, slotIndex, scope));
+      if (dispatched) {
+        if (profiler) profiler.congestionDispatchReuseHits += 1;
+        return dispatched.hasMatchingPeer;
+      }
+      return Boolean(findStationSlotPeer(state, station, slotIndex, scope, lookup, profiler));
+    })).length;
     const installed = getStationDroneCapacity(station) + getStationVesselCapacity(station);
     const busy = stationBusyVehicles(state, station, "local", lookup) + stationBusyVehicles(state, station, "remote", lookup);
     const fleetLoad = installed > 0 ? busy / installed : waiting > 0 ? 1 : 0;
@@ -4142,7 +4310,14 @@ function prepareTimeWarpStep(state: GameState): void {
   }
 }
 
-function simulateStep(state: GameState, seconds: number, lookup?: SimulationLookupContext, profiler?: SimulationProfiler): void {
+function simulateStep(
+  state: GameState,
+  seconds: number,
+  lookup?: SimulationLookupContext,
+  profiler?: SimulationProfiler,
+  batchPowerStorage = true,
+  batchConstructionAutomation = true,
+): void {
   prepareTimeWarpStep(state);
   if (lookup) rebuildDynamicRouteLookup(state, lookup);
   advanceExplorationMissions(state, seconds);
@@ -4201,14 +4376,30 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
         coverageRadius: POWER_SUPPLY_RADIUS,
       };
     }
-    runPowerFacilities(state, seconds, power, planet.id, lookup ? (lookup.entitiesByPlanet.get(planet.id) ?? []) : state.entities);
+    runPowerFacilities(
+      state,
+      seconds,
+      power,
+      planet.id,
+      lookup ? (lookup.entitiesByPlanet.get(planet.id) ?? []) : state.entities,
+      batchPowerStorage,
+      profiler,
+    );
     if (profiler) profiler.powerMs += profileNow() - subsystemStartedAt;
     subsystemStartedAt = profiler ? profileNow() : 0;
     runMiners(state, seconds, power, planet.id, beltStepReservation.outputCredits, lookup);
     runMachines(state, seconds, power, planet.id, beltStepReservation.outputCredits, lookup);
     if (profiler) profiler.productionMs += profileNow() - subsystemStartedAt;
     subsystemStartedAt = profiler ? profileNow() : 0;
-    runConstructionCenters(state, seconds, power, planet.id, lookup ? (lookup.entitiesByPlanet.get(planet.id) ?? []) : state.entities);
+    runConstructionCenters(
+      state,
+      seconds,
+      power,
+      planet.id,
+      lookup ? (lookup.entitiesByPlanet.get(planet.id) ?? []) : state.entities,
+      batchConstructionAutomation,
+      profiler,
+    );
     if (profiler) profiler.constructionMs += profileNow() - subsystemStartedAt;
     subsystemStartedAt = profiler ? profileNow() : 0;
     runRayReceivers(state, seconds, reception, planet.id, beltStepReservation.outputCredits, lookup ? (lookup.entitiesByPlanet.get(planet.id) ?? []) : state.entities);
@@ -4243,6 +4434,10 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
   subsystemStartedAt = profiler ? profileNow() : 0;
   refillStationWarpers(state);
   let phaseStartedAt = profileNow();
+  if (lookup) {
+    refreshRouteEnvironment(state, lookup);
+    lookup.dispatchResultsBySlot.clear();
+  }
   dispatchStationScope(state, "local", powerByPlanet, lookup, profiler);
   dispatchStationScope(state, "remote", powerByPlanet, lookup, profiler);
   if (profiler) profiler.dispatchMs += profileNow() - phaseStartedAt;
@@ -4337,6 +4532,8 @@ export interface SimulationAdvanceSession {
   initialActivityClockMs: number;
   advancedWallSeconds: number;
   stepSize: number;
+  batchPowerStorage: boolean;
+  batchConstructionAutomation: boolean;
   changed: boolean;
   lookup?: SimulationLookupContext;
   profiler?: SimulationProfiler;
@@ -4344,6 +4541,8 @@ export interface SimulationAdvanceSession {
 
 export interface SimulationAdvanceOptions {
   indexedLogistics?: boolean;
+  batchPowerStorage?: boolean;
+  batchConstructionAutomation?: boolean;
   profiler?: SimulationProfiler;
   wallSeconds?: number;
 }
@@ -4365,9 +4564,16 @@ export function createSimulationProfiler(): SimulationProfiler {
     routeAdvanceMs: 0,
     congestionMs: 0,
     peerCandidateChecks: 0,
+    peerMatchCacheHits: 0,
     routeEconomicsCalls: 0,
     routeEconomicsCacheHits: 0,
+    congestionDispatchReuseHits: 0,
     routesCreated: 0,
+    fuelItemsLoaded: 0,
+    exchangerCellsSettled: 0,
+    constructionJobsBatched: 0,
+    constructionPlanBuilds: 0,
+    constructionPlanCacheHits: 0,
   };
 }
 
@@ -4393,6 +4599,8 @@ export function createSimulationAdvanceSession(state: GameState, seconds: number
     initialActivityClockMs: sessionState.endgame.constructionActivity.activityClockMs,
     advancedWallSeconds: 0,
     stepSize,
+    batchPowerStorage: options.batchPowerStorage !== false,
+    batchConstructionAutomation: options.batchConstructionAutomation !== false,
     changed: totalSeconds > 0 || totalWallSeconds > 0,
     lookup: totalSeconds > 0 && options.indexedLogistics !== false
       ? createSimulationLookupContext(sessionState, options.profiler)
@@ -4426,7 +4634,14 @@ export function advanceSimulationSession(session: SimulationAdvanceSession, maxi
         if (untilBoundarySimulation > EPSILON && untilBoundarySimulation < step - EPSILON) step = untilBoundarySimulation;
       }
     }
-    simulateStep(session.state, step, session.lookup, session.profiler);
+    simulateStep(
+      session.state,
+      step,
+      session.lookup,
+      session.profiler,
+      session.batchPowerStorage,
+      session.batchConstructionAutomation,
+    );
     const wallStep = Math.min(session.remainingWallSeconds, step * wallPerSimulationSecond);
     if (activity.activityId && wallStep > 0) {
       session.advancedWallSeconds += wallStep;
@@ -6553,6 +6768,7 @@ interface ConstructionAutomationPlan {
   steps: ConstructionAutomationStep[];
   blocker?: ConstructionAutomationBlocker;
   recipeDecisions?: ConstructionAutomationJob["recipeDecisions"];
+  recursiveDecisions?: RecursiveCraftDecision[];
 }
 
 const CONSTRUCTION_AUTOMATION_TRAY_OVERFLOW_ALLOWANCE = 1_000_000;
@@ -6644,7 +6860,11 @@ function buildConstructionAutomationPlan(state: GameState, definition: Construct
   } else if (!isPortableFleetItem(definition.id)) {
     steps.push({ kind: "building", constructionId: definition.id });
   }
-  return { steps, recipeDecisions: constructionAutomationRecipeDecisions(plan.decisions) };
+  return {
+    steps,
+    recipeDecisions: constructionAutomationRecipeDecisions(plan.decisions),
+    recursiveDecisions: plan.decisions,
+  };
 }
 
 function constructionAutomationHasDeficit(state: GameState): boolean {
@@ -6979,7 +7199,267 @@ function finishConstructionAutomationStep(state: GameState, planetId: PlanetId, 
   return true;
 }
 
-function runConstructionCenters(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId, entities = state.entities): void {
+interface RepeatableConstructionAutomationBatch {
+  workSeconds: number;
+  trayCosts: Partial<Record<ItemId, number>>;
+  trayReturns: Partial<Record<ItemId, number>>;
+  fleetReturns: Partial<Record<ItemId, number>>;
+  producedItems: Partial<Record<ItemId, number>>;
+  relevantItems: ItemId[];
+  touchedTrayItems: ItemId[];
+}
+
+function analyzeRepeatableConstructionAutomationPlan(
+  state: GameState,
+  definition: ConstructionAutomationTargetDefinition,
+  plan: ConstructionAutomationPlan,
+): RepeatableConstructionAutomationBatch | null {
+  if (plan.steps.length === 0) return null;
+  const inventory: Partial<Record<ItemId, number>> = {};
+  const trayCosts: Partial<Record<ItemId, number>> = {};
+  const trayReturns: Partial<Record<ItemId, number>> = {};
+  const fleetReturns: Partial<Record<ItemId, number>> = {};
+  const producedItems: Partial<Record<ItemId, number>> = {};
+  const touchedTrayItems = new Set<ItemId>();
+  const job: ConstructionAutomationJob = {
+    constructionId: definition.id,
+    steps: plan.steps,
+    stepIndex: 0,
+    elapsedSeconds: 0,
+    inventory,
+  };
+  for (let stepIndex = 0; stepIndex < plan.steps.length; stepIndex += 1) {
+    const step = plan.steps[stepIndex];
+    for (const requirement of constructionAutomationRequirements(step)) {
+      touchedTrayItems.add(requirement.itemId);
+      let remaining = Math.max(0, Math.floor(requirement.amount));
+      const available = Math.max(0, Math.floor(inventory[requirement.itemId] ?? 0));
+      const consumed = Math.min(remaining, available);
+      inventory[requirement.itemId] = available - consumed;
+      remaining -= consumed;
+      if (remaining > 0) trayCosts[requirement.itemId] = Math.floor((trayCosts[requirement.itemId] ?? 0) + remaining);
+    }
+    if (step.kind === "material") {
+      const recipe = getRecipe(step.recipeId);
+      if (!recipe) return null;
+      for (const output of recipe.outputs) {
+        const amount = Math.max(0, Math.floor(output.amount * step.batches));
+        inventory[output.itemId] = Math.floor((inventory[output.itemId] ?? 0) + amount);
+        producedItems[output.itemId] = Math.floor((producedItems[output.itemId] ?? 0) + amount);
+      }
+    }
+    const needed = constructionAutomationRemainingInventoryNeed(job, stepIndex + 1);
+    const retained: Partial<Record<ItemId, number>> = {};
+    for (const [itemId, rawAmount] of Object.entries(inventory) as Array<[ItemId, number]>) {
+      const amount = Math.max(0, Math.floor(rawAmount ?? 0));
+      const keep = Math.min(amount, Math.max(0, Math.floor(needed[itemId] ?? 0)));
+      if (keep > 0) retained[itemId] = keep;
+      const excess = amount - keep;
+      if (excess < 1) continue;
+      const returns = isPortableFleetItem(itemId) ? fleetReturns : trayReturns;
+      returns[itemId] = Math.floor((returns[itemId] ?? 0) + excess);
+    }
+    for (const itemId of Object.keys(inventory) as ItemId[]) delete inventory[itemId];
+    Object.assign(inventory, retained);
+  }
+  if (Object.values(inventory).some((amount) => Math.max(0, Math.floor(amount ?? 0)) > 0)) return null;
+  const relevant = new Set<ItemId>(touchedTrayItems);
+  const pending = (plan.recursiveDecisions ?? []).flatMap((decision) => decision.fallbacks.flatMap((fallback) => {
+    if (fallback.reason === "technology") return [];
+    return getRecipe(fallback.recipeId)?.inputs.map((input) => input.itemId) ?? [];
+  }));
+  const recipes = recursiveManufacturingRecipes();
+  while (pending.length > 0) {
+    const itemId = pending.pop()!;
+    if (relevant.has(itemId)) continue;
+    relevant.add(itemId);
+    for (const recipe of recipes) {
+      if (!recipe.outputs.some((output) => output.itemId === itemId && output.amount > 0)) continue;
+      for (const input of recipe.inputs) pending.push(input.itemId);
+    }
+  }
+  return {
+    workSeconds: plan.steps.reduce((sum, step) => sum + constructionAutomationStepDuration(state, step), 0),
+    trayCosts,
+    trayReturns,
+    fleetReturns,
+    producedItems,
+    relevantItems: [...relevant].sort(),
+    touchedTrayItems: [...touchedTrayItems].sort(),
+  };
+}
+
+function hasSingleConstructionAutomationTarget(state: GameState, targetId: ConstructionAutomationTargetId): boolean {
+  const activeTargets = getConstructionAutomationTargets().filter((definition) => {
+    if (definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)) return false;
+    const target = state.constructionAutomation.targetStock[definition.id] ?? 0;
+    return target > constructionAutomationCurrentStock(state, definition.id) + constructionAutomationPending(state, definition.id);
+  });
+  return activeTargets.length === 1 && activeTargets[0].id === targetId;
+}
+
+interface CachedConstructionAutomationPlan {
+  plan: ConstructionAutomationPlan;
+  batch: RepeatableConstructionAutomationBatch | null;
+  relevantInventory: Partial<Record<ItemId, number>>;
+}
+
+function constructionAutomationBatchInputsAvailable(
+  state: GameState,
+  planetId: PlanetId,
+  batch: RepeatableConstructionAutomationBatch,
+  jobs = 1,
+): boolean {
+  const tray = trayForPlanet(state, planetId);
+  return (Object.entries(batch.trayCosts) as Array<[ItemId, number]>).every(([itemId, amount]) =>
+    Math.max(0, Math.floor(tray[itemId] ?? 0)) >= Math.max(0, Math.floor(amount)) * jobs);
+}
+
+function constructionAutomationCachedPlanValid(
+  state: GameState,
+  planetId: PlanetId,
+  cached: CachedConstructionAutomationPlan,
+): boolean {
+  if (!cached.batch || !constructionAutomationBatchInputsAvailable(state, planetId, cached.batch)) return false;
+  const tray = trayForPlanet(state, planetId);
+  return cached.batch.relevantItems.every((itemId) =>
+    Math.max(0, Math.floor(tray[itemId] ?? 0)) <= Math.max(0, Math.floor(cached.relevantInventory[itemId] ?? 0)));
+}
+
+function resolveConstructionAutomationPlan(
+  state: GameState,
+  definition: ConstructionAutomationTargetDefinition,
+  planetId: PlanetId,
+  cache: Map<ConstructionAutomationTargetId, CachedConstructionAutomationPlan>,
+  profiler?: SimulationProfiler,
+): CachedConstructionAutomationPlan {
+  const cached = cache.get(definition.id);
+  if (cached && constructionAutomationCachedPlanValid(state, planetId, cached)) {
+    if (profiler) profiler.constructionPlanCacheHits += 1;
+    return cached;
+  }
+  const plan = buildConstructionAutomationPlan(state, definition, planetId);
+  const batch = plan.blocker ? null : analyzeRepeatableConstructionAutomationPlan(state, definition, plan);
+  const tray = trayForPlanet(state, planetId);
+  const resolved = {
+    plan,
+    batch,
+    relevantInventory: Object.fromEntries((batch?.relevantItems ?? []).map((itemId) => [
+      itemId,
+      Math.max(0, Math.floor(tray[itemId] ?? 0)),
+    ])) as Partial<Record<ItemId, number>>,
+  };
+  cache.set(definition.id, resolved);
+  if (profiler) profiler.constructionPlanBuilds += 1;
+  return resolved;
+}
+
+function constructionAutomationBatchCanRepeat(
+  state: GameState,
+  planetId: PlanetId,
+  batch: RepeatableConstructionAutomationBatch,
+): boolean {
+  const relevant = new Set(batch.relevantItems);
+  const tray = trayForPlanet(state, planetId);
+  const limit = getPlanetTrayItemLimit(state, planetId);
+  return (Object.entries(batch.trayReturns) as Array<[ItemId, number]>).every(([itemId, amount]) => {
+    const returned = Math.max(0, Math.floor(amount));
+    if (returned < 1) return true;
+    const cost = Math.max(0, Math.floor(batch.trayCosts[itemId] ?? 0));
+    if (cost > 0 && Math.max(0, Math.floor(tray[itemId] ?? 0)) > limit) return false;
+    return !relevant.has(itemId) || returned <= cost;
+  }) &&
+    Object.values(batch.fleetReturns).every((amount) => Math.max(0, Math.floor(amount ?? 0)) < 1);
+}
+
+function applyConstructionAutomationBatch(
+  state: GameState,
+  entity: FactoryEntity,
+  targetIndex: number,
+  definition: ConstructionAutomationTargetDefinition,
+  batch: RepeatableConstructionAutomationBatch,
+  jobs: number,
+): number {
+  const count = Math.max(1, Math.floor(jobs));
+  const tray = trayForPlanet(state, entity.planetId);
+  for (const itemId of batch.touchedTrayItems) {
+    if (tray[itemId] === undefined) tray[itemId] = 0;
+  }
+  for (const [itemId, amount] of Object.entries(batch.trayCosts) as Array<[ItemId, number]>) {
+    tray[itemId] = Math.max(0, Math.floor((tray[itemId] ?? 0) - amount * count));
+  }
+  for (const [itemId, amount] of Object.entries(batch.trayReturns) as Array<[ItemId, number]>) {
+    const returned = Math.max(0, Math.floor(amount * count));
+    if (returned < 1) continue;
+    const current = Math.max(0, Math.floor(tray[itemId] ?? 0));
+    const stored = Math.min(returned, Math.max(0, getPlanetTrayItemLimit(state, entity.planetId) - current));
+    if (stored > 0) tray[itemId] = current + stored;
+    const destroyed = returned - stored;
+    if (destroyed > 0) {
+      state.constructionAutomation.destroyedByproducts[itemId] = Math.min(Number.MAX_SAFE_INTEGER, Math.floor(
+        (state.constructionAutomation.destroyedByproducts[itemId] ?? 0) + destroyed,
+      ));
+    }
+  }
+  for (const [itemId, amount] of Object.entries(batch.fleetReturns) as Array<[ItemId, number]>) {
+    const returned = Math.max(0, Math.floor(amount * count));
+    if (returned > 0 && isPortableFleetItem(itemId)) {
+      state.portableFleet[itemId] = Math.floor((state.portableFleet[itemId] ?? 0) + returned);
+    }
+  }
+  for (const [itemId, amount] of Object.entries(batch.producedItems) as Array<[ItemId, number]>) {
+    state.totalProduced[itemId] = Math.floor((state.totalProduced[itemId] ?? 0) + amount * count);
+  }
+  const completed = definition.outputAmount * count;
+  if (definition.kind === "fleet" && isPortableFleetItem(definition.id)) {
+    state.portableFleet[definition.id] = Math.floor((state.portableFleet[definition.id] ?? 0) + completed);
+  } else if (!isPortableFleetItem(definition.id)) {
+    state.construction[definition.id] = Math.floor((state.construction[definition.id] ?? 0) + completed);
+  }
+  state.constructionAutomation.totalCrafted += completed;
+  state.constructionAutomation.lastCraftedId = definition.id;
+  state.constructionAutomation.cursor = (targetIndex + 1) % Math.max(1, getConstructionAutomationTargets().length);
+  return completed;
+}
+
+function tryRunConstructionAutomationBatch(
+  state: GameState,
+  entity: FactoryEntity,
+  targetIndex: number,
+  definition: ConstructionAutomationTargetDefinition,
+  repeatable: RepeatableConstructionAutomationBatch,
+  remainingWork: number,
+): { usedWork: number; completed: number; jobs: number } | null {
+  if (repeatable.workSeconds <= EPSILON || definition.outputAmount < 1) return null;
+  const target = Math.max(0, Math.floor(state.constructionAutomation.targetStock[definition.id] ?? 0));
+  const current = constructionAutomationCurrentStock(state, definition.id) + constructionAutomationPending(state, definition.id);
+  const jobsForTarget = Math.ceil(Math.max(0, target - current) / definition.outputAmount);
+  const jobsForWork = Math.floor((Math.max(0, remainingWork) + EPSILON) / repeatable.workSeconds);
+  if (jobsForTarget < 1 || jobsForWork < 1 || !constructionAutomationBatchInputsAvailable(state, entity.planetId, repeatable)) return null;
+  const tray = trayForPlanet(state, entity.planetId);
+  let jobsForStock = Number.MAX_SAFE_INTEGER;
+  for (const [itemId, amount] of Object.entries(repeatable.trayCosts) as Array<[ItemId, number]>) {
+    if (amount < 1) continue;
+    jobsForStock = Math.min(jobsForStock, Math.floor(Math.max(0, tray[itemId] ?? 0) / amount));
+  }
+  const canRepeat = hasSingleConstructionAutomationTarget(state, definition.id) &&
+    Object.keys(state.constructionAutomation.jobs).length === 0 &&
+    constructionAutomationBatchCanRepeat(state, entity.planetId, repeatable);
+  const jobs = canRepeat ? Math.min(jobsForTarget, jobsForWork, jobsForStock) : 1;
+  const completed = applyConstructionAutomationBatch(state, entity, targetIndex, definition, repeatable, jobs);
+  return { usedWork: repeatable.workSeconds * jobs, completed, jobs };
+}
+
+function runConstructionCenters(
+  state: GameState,
+  seconds: number,
+  power: PowerPlan,
+  planetId: PlanetId,
+  entities = state.entities,
+  batchConstructionAutomation = true,
+  profiler?: SimulationProfiler,
+): void {
+  const planCache = new Map<ConstructionAutomationTargetId, CachedConstructionAutomationPlan>();
   for (const entity of entities) {
     if (entity.planetId !== planetId || entity.buildingId !== "construction_center") continue;
     const powerFactor = powerFactorForEntity(power, entity);
@@ -7001,8 +7481,22 @@ function runConstructionCenters(state: GameState, seconds: number, power: PowerP
       if (!job) {
         const target = constructionAutomationTarget(state);
         if (!target) break;
-        const plan = buildConstructionAutomationPlan(state, target.definition, entity.planetId);
+        const resolved = batchConstructionAutomation
+          ? resolveConstructionAutomationPlan(state, target.definition, entity.planetId, planCache, profiler)
+          : { plan: buildConstructionAutomationPlan(state, target.definition, entity.planetId), batch: null };
+        const plan = resolved.plan;
         if (plan.blocker) break;
+        const batched = batchConstructionAutomation && resolved.batch
+          ? tryRunConstructionAutomationBatch(state, entity, target.index, target.definition, resolved.batch, remainingWork)
+          : null;
+        if (batched) {
+          remainingWork = Math.max(0, remainingWork - batched.usedWork);
+          completed += batched.completed;
+          worked = true;
+          entity.progress = 0;
+          if (profiler) profiler.constructionJobsBatched += batched.jobs;
+          continue;
+        }
         job = {
           constructionId: target.definition.id,
           steps: plan.steps,

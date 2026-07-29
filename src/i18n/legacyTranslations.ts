@@ -1448,6 +1448,19 @@ const UI_EN: TranslationMap = {
   "玩法与存档保持不变": "Gameplay and Saves Unchanged",
   "本次不降低刷新档位、产量、物流速度、离线收益、堆叠或线路上限，也不升级 GameState、存档 envelope 或云存档 schema。": "This update does not reduce refresh profiles, production, logistics speed, offline gains, stacking, or belt limits, and does not upgrade GameState, the save envelope, or the cloud-save schema.",
   "2026年7月29日": "July 29, 2026",
+  "终局性能与数据完整性更新": "Endgame Performance & Data Integrity Update",
+  "1.0.11 为终局物流和建筑制造中心增加确定性批量结算，降低大型工厂 Worker 积压。玩法数值、离线收益和存档格式保持不变，GameState 继续为 v40。": "Version 1.0.11 adds deterministic batch settlement for endgame logistics and Construction Centers, reducing Worker backlog in large factories. Gameplay values, offline gains, and the save format remain unchanged, with GameState staying at v40.",
+  "物流调度复用": "Logistics Dispatch Reuse",
+  "物流伙伴、路线经济、活动载具负载和拥堵诊断在同一模拟会话内复用，减少高密度物流站重复匹配。": "Logistics peers, route economics, active vehicle load, and congestion diagnostics are reused within a simulation session, reducing repeated matching in dense station networks.",
+  "递归制造批量结算": "Recursive Manufacturing Batch Settlement",
+  "复杂递归链、副产物、多目标和多制造中心保持原有轮询与物资守恒，同时避免按成品重复规划整条材料链。": "Complex recursive chains, byproducts, multiple targets, and multiple Construction Centers preserve their original round robin and material conservation while avoiding full material-chain replanning for every finished item.",
+  "燃料与蓄电批次处理": "Fuel and Accumulator Batching",
+  "大堆叠发电燃料和能量枢纽改用等价闭式结算，不再按每个燃料棒或蓄电单元循环。": "Large fuel-generator stacks and Energy Exchangers now use equivalent closed-form settlement instead of looping over every fuel rod or accumulator.",
+  "终局规模性能门禁": "Terminal-scale Performance Gate",
+  "新增玩家同形和 2 倍终局匿名夹具，覆盖 300 万并联线路、256 座物流站及 1x、4x、11x 状态哈希。": "New anonymous player-shaped and 2x terminal fixtures cover three million parallel belt lanes, 256 logistics stations, and state hashes at 1x, 4x, and 11x.",
+  "排行榜数据完整性": "Leaderboard Data Integrity",
+  "检测数据修改异常": "Detected anomalous save-data modification.",
+  "2026年7月30日": "July 30, 2026",
 };
 
 let catalogEnglish = new Map<string, string>();

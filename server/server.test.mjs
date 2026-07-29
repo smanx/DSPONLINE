@@ -320,6 +320,126 @@ test("backfills existing main cloud saves when the service starts", async () => 
   }
 });
 
+test("keeps leaderboard-restricted accounts out of every ranking path without touching cloud saves", async () => {
+  const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-leaderboard-restricted-"));
+  const databaseFile = path.join(isolatedDirectory, "cloud.sqlite");
+  let isolatedServer;
+  try {
+    const start = async () => {
+      isolatedServer = await createCloudServer({ databaseFile, registrationLimit: 10, mailer: null, logger: { error() {} } });
+      await new Promise((resolve) => isolatedServer.listen(0, "127.0.0.1", resolve));
+      const origin = `http://127.0.0.1:${isolatedServer.address().port}`;
+      const call = async (route, options = {}) => {
+        const response = await fetch(`${origin}${route}`, {
+          ...options,
+          headers: { "content-type": "application/json", ...(options.headers || {}) },
+        });
+        return { response, body: await response.json() };
+      };
+      return { origin, call };
+    };
+    let runtime = await start();
+    const registered = await runtime.call("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ username: "restricted_pilot", password: "strong-pass-123", displayName: "同名工程师" }),
+    });
+    const restrictedToken = registered.body.token;
+    const restrictedUserId = registered.body.user.id;
+    const headers = { authorization: `Bearer ${restrictedToken}` };
+    const anomalousPayload = mutateSavePayload(cloudPayload, (state) => {
+      state.entities = [{ id: "vein_fixture", kind: "vein", machineCount: 1, minerCount: 0 }];
+    });
+    const uploaded = await runtime.call("/api/cloud-save", {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ payload: anomalousPayload, expectedRevision: 0 }),
+    });
+    assert.equal(uploaded.response.status, 200);
+    assert.equal(uploaded.body.cloudSave.revision, 1);
+
+    const ordinary = await runtime.call("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ username: "same_name_pilot", password: "strong-pass-456", displayName: "同名工程师" }),
+    });
+    const ordinaryHeaders = { authorization: `Bearer ${ordinary.body.token}` };
+    assert.equal((await runtime.call("/api/cloud-save", {
+      method: "PUT",
+      headers: ordinaryHeaders,
+      body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }),
+    })).response.status, 200);
+
+    isolatedServer.store.data.leaderboardModeration[restrictedUserId] = {
+      status: "blocked",
+      reasonCode: "SAVE_DATA_INTEGRITY",
+      source: "test-readonly-audit",
+      createdAt: 100,
+    };
+    await isolatedServer.store.persist();
+
+    for (const category of ["galaxy", "power", "upload", "dyson", "throughput"]) {
+      const ranking = await runtime.call(`/api/leaderboard?category=${category}&seasonId=season_01`);
+      assert.equal(ranking.body.entries.some((entry) => entry.userId === restrictedUserId), false);
+      assert.equal(ranking.body.entries.some((entry) => entry.userId === ordinary.body.user.id), true);
+    }
+    const refresh = await runtime.call("/api/leaderboard", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ seasonId: "season_01" }),
+    });
+    assert.equal(refresh.response.status, 403);
+    assert.equal(refresh.body.code, "LEADERBOARD_RESTRICTED");
+    const visibility = await runtime.call("/api/leaderboard/visibility", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ visible: true }),
+    });
+    assert.equal(visibility.response.status, 403);
+    assert.equal(visibility.body.code, "LEADERBOARD_RESTRICTED");
+
+    const secondUpload = await runtime.call("/api/cloud-save", {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ payload: anomalousPayload, expectedRevision: 1 }),
+    });
+    assert.equal(secondUpload.response.status, 200);
+    assert.equal(secondUpload.body.cloudSave.revision, 2);
+    const restored = await runtime.call("/api/cloud-save/restore", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ revision: 1, expectedRevision: 2 }),
+    });
+    assert.equal(restored.response.status, 200);
+    assert.equal(restored.body.cloudSave.revision, 3);
+    const loaded = await runtime.call("/api/cloud-save", { headers });
+    assert.equal(loaded.response.status, 200);
+    assert.equal(loaded.body.cloudSave.revision, 3);
+    const account = await runtime.call("/api/account", { headers });
+    assert.equal(account.response.status, 200);
+    assert.equal(Object.hasOwn(account.body, "leaderboardModeration"), false);
+    assert.equal(Object.hasOwn(account.body.user, "leaderboardModeration"), false);
+
+    await new Promise((resolve) => isolatedServer.close(resolve));
+    runtime = await start();
+    assert.equal(isolatedServer.leaderboardBackfill.created, 0);
+    assert.equal(isolatedServer.store.data.leaderboardModeration[restrictedUserId].status, "blocked");
+    for (const category of ["galaxy", "power", "upload", "dyson", "throughput"]) {
+      const ranking = await runtime.call(`/api/leaderboard?category=${category}&seasonId=season_01`);
+      assert.equal(ranking.body.entries.some((entry) => entry.userId === restrictedUserId), false);
+    }
+
+    const deleted = await runtime.call("/api/account/delete", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ password: "strong-pass-123", confirmation: "DELETE" }),
+    });
+    assert.equal(deleted.response.status, 200);
+    assert.equal(isolatedServer.store.data.leaderboardModeration[restrictedUserId], undefined);
+  } finally {
+    if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
+    await rm(isolatedDirectory, { recursive: true, force: true });
+  }
+});
+
 test("manages sessions and supports password change and reset", async () => {
   const secondLogin = await request("/api/auth/login", {
     method: "POST",
