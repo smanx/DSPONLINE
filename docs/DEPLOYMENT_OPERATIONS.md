@@ -30,7 +30,9 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-当前香港和上海 Web/API 均为 `1.0.11-f88462df5326`，回滚目标均为 `1.0.10-41cbf7ccb07e`。两地都使用 GameState v40、云 schema v7 和 SQLite layout v2；代码回滚不得恢复数据库。上海下载站当前为 `1.0.11-f88462df5326`，下载回滚目录为 `1.0.10-41cbf7ccb07e`，Windows 和 Android 稳定清单均为 1.0.11。完整证据见 [releases/1.0.11.md](./releases/1.0.11.md)。
+当前香港和上海 Web/API 均为 `1.0.12-4f149409f433`，回滚目标均为 `1.0.11-f88462df5326`。两地都使用 GameState v41、云 schema v7 和 SQLite layout v2；代码回滚不得恢复数据库。上海下载站当前为 `1.0.12-4f149409f433`，下载回滚目录为 `1.0.11-f88462df5326`，Windows 和 Android 稳定清单均为 1.0.12。完整证据见 [releases/1.0.12.md](./releases/1.0.12.md)。
+
+`1.0.12` 为电磁轨道弹射器增加存档级目标太阳帆轨道，并修复线路同步模板、配送枢纽大字卡片和亮色物流交互状态。v40→v41 迁移不重建或删除太阳帆、发射进度、库存、线路和戴森工程；存档 envelope、云 schema 和 SQLite layout 不变。两节点切换前分别创建并验证 SQLite Backup API 备份，未激活目录完成 135/135 文件复验、42/42 服务端、6/6 运维和生产备份副本隔离启动；Android 从正式 1.0.10 同签名覆盖升级并保留 19 小时 26 分本地主存档后，才切换 Web/API、下载页与稳定清单。
 
 `1.0.11` 在 1.0.10 运行时索引上继续复用稳定物流匹配、路线经济和派遣摘要，并把燃料、能量枢纽及递归制造改为确定性批量结算；同时增加服务器内部排行榜完整性限制。它不升级 GameState、envelope、云 schema 或 SQLite layout。两节点切换前分别创建并验证 SQLite Backup API 备份，未激活目录完成 134/134 文件复验、42/42 服务端、6/6 运维和生产备份副本隔离启动；Android 从正式 1.0.10 同签名覆盖升级并保留本地主存档后，才切换 Web/API、下载页与稳定清单。
 
@@ -117,7 +119,7 @@ sudo dsp-idle-switch-release --rollback-last
 
 SQLite layout v2 将云存档正文从 `app_state` 拆到 `cloud_save_payloads`。迁移完成后，旧 layout v1 API 虽然仍能读取元数据，却不能读取或安全新增正文；两地回滚状态因此固定保留当前 API，只允许回退 Web。迁移发布时还必须同时停止 `dsp-idle-healthcheck.timer` 和可能正在执行的 `dsp-idle-healthcheck.service`，否则已经启动的 oneshot 仍可能在维护窗口重启旧进程。
 
-云服务重启后，切换脚本默认在 10 秒窗口内短轮询本机健康接口，避免把 Node 尚未绑定端口的正常启动窗口误判为发布失败。可通过 `DSP_HEALTH_ATTEMPTS` 和 `DSP_HEALTH_DELAY_SECONDS` 调整，但不得以此掩盖持续启动错误。
+云服务重启后，切换脚本默认在约 10 秒窗口内短轮询本机健康接口。较大的生产数据库可能让 Node 的正常启动超过该窗口；`1.0.12` 香港首次切换因此按设计自动回滚，日志未发现崩溃，随后在保持同一制品和数据库的前提下将健康窗口扩展到 30 秒并成功切换。遇到同类情况应先确认自动回滚已完成、旧服务健康且 journal 没有真实启动错误，再通过 `DSP_HEALTH_ATTEMPTS` 和 `DSP_HEALTH_DELAY_SECONDS` 扩展窗口；不得用延长窗口掩盖持续错误。
 
 ### 5.3 后端
 
@@ -162,7 +164,7 @@ sudo systemctl restart dsp-idle-cloud.service
 
 活动配置保存在发布目录之外的 `/etc/dsp-idle-cloud/activity.json`，由 `/etc/dsp-idle-cloud/admin.env` 中的 `DSP_ACTIVITY_CONFIG_FILE` 指向。建议权限为 `0640 root:ubuntu`，配置文件不得放入 Web 静态目录。代码发布与活动启用必须分开：先在活动关闭状态完成备份、制品验证、原子切换和公网烟测，再安装经过 `server/activity.mjs` 规则校验的配置并重启服务。
 
-香港与上海参加同一轮模拟活动时必须使用完全相同的活动 ID、UTC 开始/曲线冻结时间、个人目标和全服目标。`endsAt - startsAt` 必须精确为 259,200,000 ms，但这三天只控制假全服曲线；曲线冻结后 `/api/public-status` 仍应返回 `status=active` 与 `openEnded=true`，玩家可长期参与。启用后分别核对 `/api/health` 的活动有效状态，以及 `/api/public-status` 的 revision、时间、目标和长期开放标记。活动配置只提供服务器时钟与模拟全服曲线；`1.0.11` 仍没有贡献提交 API，不能把本地记录描述成服务器已接收。
+香港与上海参加同一轮模拟活动时必须使用完全相同的活动 ID、UTC 开始/曲线冻结时间、个人目标和全服目标。`endsAt - startsAt` 必须精确为 259,200,000 ms，但这三天只控制假全服曲线；曲线冻结后 `/api/public-status` 仍应返回 `status=active` 与 `openEnded=true`，玩家可长期参与。启用后分别核对 `/api/health` 的活动有效状态，以及 `/api/public-status` 的 revision、时间、目标和长期开放标记。活动配置只提供服务器时钟与模拟全服曲线；`1.0.12` 仍没有贡献提交 API，不能把本地记录描述成服务器已接收。
 
 曲线冻结后保留配置并继续长期开放，不能通过重启或修改冻结时间重跑同一个活动 ID。未来若建立新的独立活动，必须使用新的 ID。
 
@@ -256,8 +258,8 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港和上海 `1.0.11-f88462df5326` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港和上海 `1.0.12-4f149409f433` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 香港 layout v1 的 136.8 MB `app_state` 曾使每分钟持久化把 Node 推到约 1.6 GB并阻塞健康接口。layout v2 上线后 `app_state` 约 2.55 MB，云存档正文按修订独立写入；240 秒生产观察中健康接口最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB。监控若再次出现内存或延迟上升，应分别检查 `app_state` 大小、`cloud_save_payloads` 行数与历史元数据唯一键数，不能只调大健康超时。
 
-Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。完成 1.0.11 发布和安全清理后，上海节点约剩 5.4 GiB，香港约剩 14 GiB；发布目录、客户端二进制、日志与备份增长仍须纳入保留策略，且清理不得删除当前版、回滚版或有效备份。
+Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。完成 1.0.12 发布及前后备份后，上海节点约剩 4.4 GiB，香港约剩 9.0 GiB；发布目录、客户端二进制、日志与备份增长仍须纳入保留策略，且清理不得删除当前版、回滚版或有效备份。
