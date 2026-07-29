@@ -16,19 +16,19 @@
   const PLANET_NAMES = {
     home: '澄海 I', ashen: '烬原 II', giant: '苍岚 III',
     frost: '霜原 I', boreal_giant: '青冥 II', magnetar: '极夜 I',
-    verdant: '翠绿', pelagic: '远洋', dune: '沙丘',
-    cinder: '余烬', crystal: '水晶', prairie: '草原',
-    salt: '盐漠', obsidian: '黑曜', tempest: '风暴',
-    inferno: '炼狱', abyss: '深渊',
-    aurora_giant: '极光巨星', ember_giant: '烬星巨星',
-    sirius_giant: '天狼巨星', white_giant: '白巨星', azure_giant: '蔚蓝巨星',
+    verdant: '翠环 I', pelagic: '澜渊 II', dune: '赤砂 I',
+    cinder: '灰烬 II', crystal: '晶穹 I', prairie: '牧云 II',
+    salt: '白盐 I', obsidian: '黑曜 II', tempest: '风暴 I',
+    inferno: '炽核 II', abyss: '幽冥 III',
+    aurora_giant: '天穹 III', ember_giant: '红飓 III',
+    sirius_giant: '银冠 III', white_giant: '苍白 III', azure_giant: '蓝穹 IV',
   };
 
   const ITEM_LABELS = {
     wind_turbine: '风力涡轮机', solar_panel: '太阳能板',
-    geothermal_power_station: '地热发电站', thermal_power_plant: '火电厂',
-    mini_fusion_power_plant: '微型核聚变', artificial_star: '人造恒星',
-    accumulator: '蓄电器', energy_exchanger: '能量交换器',
+    geothermal_power_station: '地热发电站', thermal_power_plant: '火力发电厂',
+    mini_fusion_power_plant: '微型聚变发电站', artificial_star: '人造恒星',
+    accumulator: '蓄电器', energy_exchanger: '能量枢纽',
     mining_machine: '采矿机', arc_smelter: '电弧熔炉',
     plane_smelter: '位面熔炉',
     assembling_machine_mk1: '制造台 Mk.I', assembling_machine_mk2: '制造台 Mk.II',
@@ -41,29 +41,35 @@
     oil_extractor: '原油萃取站', oil_refinery: '原油精炼厂',
     water_pump: '抽水站', chemical_plant: '化工厂',
     quantum_chemical_plant: '量子化工厂', fractionator: '分馏塔',
-    miniature_particle_collider: '微型对撞机',
+    miniature_particle_collider: '微型粒子对撞机',
     em_rail_ejector: '电磁轨道弹射器', ray_receiver: '射线接收站',
     vertical_launching_silo: '垂直发射井',
     planetary_logistics_station: '行星物流站',
     interstellar_logistics_station: '星际物流站',
     orbital_collector: '轨道采集器',
-    storage_mk1: '仓储站', storage_tank: '储液罐', splitter_4way: '四向分流器',
+    storage_mk1: '小型储物仓', storage_tank: '储液罐',
+    material_delivery_hub: '物资配送枢纽',
+    splitter_4way: '四向分流器',
+    construction_center: '建筑制造中心',
+    galactic_material_exporter: '超大型物资出口',
+    micro_black_hole_connector: '微型黑洞连接装置',
+    time_warp_device: '时间扭曲装置',
   };
 
   const RESOURCE_NAMES = {
     iron_ore: '铁矿石', copper_ore: '铜矿石', stone: '石矿', coal: '煤矿',
     crude_oil: '原油', water: '水', silicon_ore: '硅石', titanium_ore: '钛石',
-    fire_ice: '可燃冰', kimberlite_ore: '金伯利矿', fractal_silicon: '分形硅',
+    fire_ice: '可燃冰', kimberlite_ore: '金伯利矿石', fractal_silicon: '分形硅石',
     optical_grating_crystal: '光栅石', spiniform_stalagmite_crystal: '刺笋结晶',
-    unipolar_magnet: '单极磁石', sulfuric_acid: '硫酸', organic_crystal: '有机晶体',
+    unipolar_magnet: '单极磁石', sulfuric_acid: '硫酸',
   };
 
   const EXTRACTOR_MAP = {
     mining_machine: ['iron_ore', 'copper_ore', 'stone', 'coal', 'silicon_ore', 'titanium_ore',
                      'kimberlite_ore', 'fractal_silicon', 'optical_grating_crystal',
-                     'spiniform_stalagmite_crystal', 'unipolar_magnet', 'organic_crystal'],
+                     'spiniform_stalagmite_crystal', 'unipolar_magnet', 'fire_ice'],
     oil_extractor: ['crude_oil'],
-    water_pump: ['water'],
+    water_pump: ['water', 'sulfuric_acid'],
   };
 
   // All tray-able items (materials, not buildings) organized by category
@@ -72,9 +78,9 @@
       name: '矿物原料', items: [
         ['iron_ore', '铁矿石'], ['copper_ore', '铜矿石'], ['stone', '石矿'], ['coal', '煤矿'],
         ['crude_oil', '原油'], ['water', '水'], ['silicon_ore', '硅石'], ['titanium_ore', '钛石'],
-        ['fire_ice', '可燃冰'], ['kimberlite_ore', '金伯利矿'], ['fractal_silicon', '分形硅'],
+        ['fire_ice', '可燃冰'], ['kimberlite_ore', '金伯利矿石'], ['fractal_silicon', '分形硅石'],
         ['optical_grating_crystal', '光栅石'], ['spiniform_stalagmite_crystal', '刺笋结晶'],
-        ['unipolar_magnet', '单极磁石'], ['sulfuric_acid', '硫酸'], ['organic_crystal', '有机晶体'],
+        ['unipolar_magnet', '单极磁石'], ['sulfuric_acid', '硫酸'],
       ]
     },
     {
@@ -84,7 +90,7 @@
         ['magnetic_coil', '磁线圈'], ['circuit_board', '电路板'], ['prism', '棱镜'],
         ['plasma_exciter', '电浆激发器'], ['energetic_graphite', '高能石墨'],
         ['refined_oil', '精炼油'], ['hydrogen', '氢'], ['high_purity_silicon', '高纯硅块'],
-        ['titanium_ingot', '钛块'], ['titanium_alloy', '钛合金'],
+        ['titanium_ingot', '钛块'], ['titanium_alloy', '钛合金'], ['diamond', '金刚石'],
       ]
     },
     {
@@ -95,21 +101,28 @@
         ['carbon_nanotube', '碳纳米管'], ['crystal_silicon', '晶格硅'],
         ['particle_broadband', '粒子宽带'], ['electric_motor', '电动机'],
         ['electromagnetic_turbine', '电磁涡轮'], ['super_magnetic_ring', '超级磁场环'],
-        ['particle_container', '粒子容器'], ['deuterium', '氘富集'],
+        ['particle_container', '粒子容器'], ['deuterium', '氘'],
+        ['titanium_glass', '钛化玻璃'], ['casimir_crystal', '卡西米尔晶体'],
+        ['plastic', '塑料'], ['titanium_crystal', '钛晶石'], ['organic_crystal', '有机晶体'],
+      ]
+    },
+    {
+      name: '增产剂', items: [
+        ['proliferator_mk1', '增产剂 Mk.I'], ['proliferator_mk2', '增产剂 Mk.II'],
+        ['proliferator_mk3', '增产剂 Mk.III'],
       ]
     },
     {
       name: '燃料与特殊', items: [
+        ['accumulator', '蓄电器'], ['charged_accumulator', '蓄电器（满）'],
         ['hydrogen_fuel_rod', '氢燃料棒'], ['deuteron_fuel_rod', '氘核燃料棒'],
-        ['titanium_glass', '钛化玻璃'], ['casimir_crystal', '卡西米尔晶体'],
         ['plane_filter', '位面过滤器'], ['quantum_chip', '量子芯片'],
         ['strange_matter', '奇异物质'], ['graviton_lens', '引力透镜'],
         ['photon_combiner', '光子合并器'], ['solar_sail', '太阳帆'],
-        ['critical_photon', '临界光子'], ['antimatter', '质能储存'],
+        ['critical_photon', '临界光子'], ['antimatter', '反物质'],
         ['annihilation_constraint_sphere', '湮灭约束球'],
         ['antimatter_fuel_rod', '反物质燃料棒'], ['frame_material', '框架材料'],
         ['dyson_sphere_component', '戴森球组件'], ['small_carrier_rocket', '小型运载火箭'],
-        ['diamond', '金刚石'], ['plastic', '塑料'], ['titanium_crystal', '钛晶石'],
       ]
     },
     {
@@ -121,11 +134,35 @@
     },
     {
       name: '设备', items: [
-        ['accumulator', '蓄电器'], ['charged_accumulator', '蓄电器（满）'],
         ['wind_turbine', '风力涡轮机'], ['solar_panel', '太阳能板'],
+        ['geothermal_power_station', '地热发电站'], ['thermal_power_plant', '火力发电厂'],
+        ['mini_fusion_power_plant', '微型聚变发电站'], ['artificial_star', '人造恒星'],
+        ['energy_exchanger', '能量枢纽'],
         ['mining_machine', '采矿机'], ['arc_smelter', '电弧熔炉'],
-        ['water_pump', '抽水站'], ['oil_extractor', '原油萃取站'],
-        ['storage_tank', '储液罐'],
+        ['plane_smelter', '位面熔炉'],
+        ['assembling_machine_mk1', '制造台 Mk.I'], ['assembling_machine_mk2', '制造台 Mk.II'],
+        ['assembling_machine_mk3', '制造台 Mk.III'], ['spray_coater', '喷涂机'],
+        ['matrix_lab', '矩阵研究站'],
+        ['conveyor_belt_mk1', '传送带 Mk.I'], ['conveyor_belt_mk2', '传送带 Mk.II'],
+        ['conveyor_belt_mk3', '传送带 Mk.III'],
+        ['sorter_mk1', '分拣器 Mk.I'], ['sorter_mk2', '分拣器 Mk.II'],
+        ['sorter_mk3', '分拣器 Mk.III'],
+        ['oil_extractor', '原油萃取站'], ['oil_refinery', '原油精炼厂'],
+        ['water_pump', '抽水站'], ['chemical_plant', '化工厂'],
+        ['quantum_chemical_plant', '量子化工厂'], ['fractionator', '分馏塔'],
+        ['miniature_particle_collider', '微型粒子对撞机'],
+        ['em_rail_ejector', '电磁轨道弹射器'], ['ray_receiver', '射线接收站'],
+        ['vertical_launching_silo', '垂直发射井'],
+        ['planetary_logistics_station', '行星物流站'],
+        ['interstellar_logistics_station', '星际物流站'],
+        ['orbital_collector', '轨道采集器'],
+        ['storage_mk1', '小型储物仓'], ['storage_tank', '储液罐'],
+        ['material_delivery_hub', '物资配送枢纽'],
+        ['splitter_4way', '四向分流器'],
+        ['construction_center', '建筑制造中心'],
+        ['galactic_material_exporter', '超大型物资出口'],
+        ['micro_black_hole_connector', '微型黑洞连接装置'],
+        ['time_warp_device', '时间扭曲装置'],
       ]
     },
   ];
@@ -535,7 +572,7 @@
       const beltSpeed = BELT_SPEED[b.tier] || 6;
       const stackSize = b.stack || 1;
       const BUFFER = 1.1;
-      const needed = Math.max(1, Math.ceil(demand * BUFFER / (beltSpeed * stackSize)));
+      const needed = Math.min(4096, Math.max(1, Math.ceil(demand * BUFFER / (beltSpeed * stackSize))));
       if (b.lanes !== needed) { b.lanes = needed; changed++; }
     }
     commit();
@@ -991,7 +1028,7 @@
       batchLabel.style.color = '#888';
       batchLabel.style.fontSize = '12px';
       const batchInput = document.createElement('input');
-      batchInput.type = 'number'; batchInput.min = 1; batchInput.max = 10; batchInput.value = 1;
+      batchInput.type = 'number'; batchInput.min = 1; batchInput.max = 4096; batchInput.value = 1;
       Object.assign(batchInput.style, {
         width: '50px', padding: '2px 6px', borderRadius: '4px',
         border: '1px solid #333', background: '#111', color: '#e0d6b0', fontSize: '12px',
@@ -1005,7 +1042,7 @@
       batchApply.addEventListener('click', () => {
         const v = parseInt(batchInput.value, 10);
         if (isNaN(v) || v < 1 || !game) return;
-        for (const b of blist) b.lanes = Math.floor(v);
+        for (const b of blist) b.lanes = Math.min(4096, Math.floor(v));
         commit(); renderBelts();
       });
       batchRow.appendChild(batchLabel);
@@ -1032,7 +1069,7 @@
         });
 
         const laneInput = document.createElement('input');
-        laneInput.type = 'number'; laneInput.min = 1; laneInput.max = 10;
+        laneInput.type = 'number'; laneInput.min = 1; laneInput.max = 4096;
         laneInput.value = b.lanes || 1;
         Object.assign(laneInput.style, {
           width: '45px', padding: '2px 4px', borderRadius: '4px',
@@ -1043,7 +1080,7 @@
           const v = parseInt(laneInput.value, 10);
           if (isNaN(v) || v < 1 || !game) return;
           const belt = game.state.belts?.find(x => x.source === b.source && x.target === b.target && x.itemId === b.itemId);
-          if (belt) belt.lanes = Math.floor(v);
+          if (belt) belt.lanes = Math.min(4096, Math.floor(v));
           commit();
         });
 
