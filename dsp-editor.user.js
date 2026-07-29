@@ -658,6 +658,7 @@
 
   // ======== Veins Tab ========
   function renderVeins() {
+    content.innerHTML = '';
     if (!game) return;
     const veins = game.state.entities.filter(e => e.kind === 'vein');
     const byPlanet = {};
@@ -805,6 +806,7 @@
 
   // ======== Buildings Tab ========
   function renderBuildings() {
+    content.innerHTML = '';
     if (!game) return;
     const buildings = game.state.entities.filter(e =>
       e.kind !== 'vein' && e.buildingId && e.machineCount !== undefined
@@ -955,6 +957,7 @@
 
   // ======== Belts Tab ========
   function renderBelts() {
+    content.innerHTML = '';
     if (!game) return;
     const belts = game.state.belts || [];
     if (belts.length === 0) {
@@ -1005,6 +1008,49 @@
     autoRow.appendChild(autoBtn);
     autoRow.appendChild(autoStatus);
     wrapper.appendChild(autoRow);
+
+    // Global batch set row (all planets)
+    const globalBatchRow = document.createElement('div');
+    Object.assign(globalBatchRow.style, {
+      display: 'flex', gap: '8px', padding: '6px 10px', background: '#15152a',
+      borderRadius: '6px', alignItems: 'center',
+    });
+    const globalBatchLabel = document.createElement('span');
+    globalBatchLabel.textContent = '全部星球批量设并行数: ';
+    globalBatchLabel.style.cssText = 'font-size:12px;color:#ff8;';
+    const globalBatchInput = document.createElement('input');
+    globalBatchInput.type = 'number'; globalBatchInput.min = 1; globalBatchInput.max = 4096; globalBatchInput.value = 1;
+    Object.assign(globalBatchInput.style, {
+      width: '60px', padding: '2px 6px', borderRadius: '4px',
+      border: '1px solid #333', background: '#111', color: '#e0d6b0', fontSize: '12px', textAlign: 'center',
+    });
+    const globalBatchBtn = document.createElement('button');
+    globalBatchBtn.textContent = '应用';
+    Object.assign(globalBatchBtn.style, {
+      padding: '3px 14px', borderRadius: '4px', border: '1px solid #5a5',
+      background: '#2a4a2a', color: '#8f8', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold',
+    });
+    globalBatchBtn.addEventListener('click', () => {
+      const v = parseInt(globalBatchInput.value, 10);
+      if (isNaN(v) || v < 1 || !game) return;
+      for (const b of (game.state.belts || [])) b.lanes = Math.min(4096, Math.floor(v));
+      commit(); renderBelts();
+    });
+    globalBatchRow.appendChild(globalBatchLabel);
+    globalBatchRow.appendChild(globalBatchInput);
+    globalBatchRow.appendChild(globalBatchBtn);
+    const globalMaxBtn = document.createElement('button');
+    globalMaxBtn.textContent = '最大';
+    globalMaxBtn.title = '全部设为 4096';
+    Object.assign(globalMaxBtn.style, {
+      padding: '3px 10px', borderRadius: '4px', border: '1px solid #fa8',
+      background: '#3a2a1a', color: '#fa8', cursor: 'pointer', fontSize: '12px',
+    });
+    globalMaxBtn.addEventListener('click', () => {
+      globalBatchInput.value = 4096;
+    });
+    globalBatchRow.appendChild(globalMaxBtn);
+    wrapper.appendChild(globalBatchRow);
 
     for (const [planetId, blist] of Object.entries(byPlanet)) {
       const section = document.createElement('div');
