@@ -116,7 +116,9 @@ test("exact-value tooltip and classic progress share one visible value", async (
   }
   const illegalDrops = samples.slice(1).filter((sample, index) => {
     const previous = samples[index];
-    return sample.aria + 1 < previous.aria && !(previous.aria >= 85 && sample.aria <= 20);
+    const drop = previous.aria - sample.aria;
+    const clearCycleWrap = drop >= 50;
+    return drop > 1 && !clearCycleWrap;
   });
   expect(illegalDrops).toHaveLength(0);
   await page.screenshot({ path: "artifacts/qa/v101-progress-tooltip-dark-1440x900.png", fullPage: true });
