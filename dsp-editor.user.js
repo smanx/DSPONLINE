@@ -434,89 +434,36 @@
   async function ensureGameCore() {
     if (_recipeDb && _buildingDb) return;
     if (_gameCorePromise) { await _gameCorePromise; return; }
-    // Try sync paths first
-    const candidates = [];
-    try {
-      const nuxt = window._nuxt;
-      if (nuxt && nuxt.$nuxt && nuxt.$nuxt.context && nuxt.$nuxt.context.app) {
-        const g = nuxt.$nuxt.context.app.$store?.state?.game?.currentGame;
-        if (g) candidates.push(g);
-      }
-    } catch (e) {}
-    try {
-      const root = document.getElementById('root');
-      if (root) {
-        const rKey = Object.keys(root).find(k => k.startsWith('__reactContainer$'));
-        if (rKey) {
-          let fiber = root[rKey];
-          function walkFiber(f, depth) {
-            if (!f || depth > 20) return;
-            if (f.memoizedState) {
-              let hook = f.memoizedState;
-              while (hook) {
-                const val = hook.memoizedState;
-                if (val && typeof val === 'object' && (typeof val.ti === 'function' || typeof val.Kr === 'function')) {
-                  candidates.push(val);
-                  return;
-                }
-                hook = hook.next;
-              }
-            }
-            walkFiber(f.child, depth + 1);
-            walkFiber(f.sibling, depth + 1);
-          }
-          walkFiber(fiber, 0);
-        }
-      }
-    } catch (e) { }
-    try {
-      if (typeof window.__NUXT__ !== 'undefined' && window.__NUXT__?.state?.game?.currentGame) {
-        candidates.push(window.__NUXT__.state.game.currentGame);
-      }
-    } catch (e) { }
-    try {
-      if (game && (game.Hi || game.ti)) candidates.push(game);
-    } catch {}
-      for (const g of candidates) {
-        if (g && typeof g.Hi === 'object' && typeof g.Fi === 'object' && g.Hi.magnet && g.Fi.arc_smelter) {
-          console.log('[DSP Editor] Found Hi/Fi synchronously');
-          _recipeDb = (id) => g.Hi[id] || null;
-          _buildingDb = (id) => g.Fi[id] || null;
-          return;
-        }
-        if (g && typeof g.ti === 'function' && typeof g.Kr === 'function') {
-          // Try to get recipe data: ti returns just the ID string, so check if Hi/Fi exist
-          if (g.Hi && g.Fi) {
-            console.log('[DSP Editor] Found ti/Kr + Hi/Fi synchronously');
-            _recipeDb = (id) => g.Hi[id] || null;
-            _buildingDb = (id) => g.Fi[id] || null;
-            return;
-          }
-          console.log('[DSP Editor] Found ti/Kr (old format)');
-          _recipeDb = (id) => { try { return g.ti(id) } catch { return null } };
-          _buildingDb = (id) => { try { return g.Kr(id) } catch { return null } };
-          return;
-        }
-      }
-    // Async fallback: import game-core from Performance API URL
     _gameCorePromise = (async () => {
       try {
         const resources = performance.getEntriesByType('resource');
         const url = resources.find(r => r.name.includes('game-core'))?.name;
         if (url) {
           const mod = await import(url);
-          if (mod.Hi && mod.Fi) {
-            _recipeDb = (id) => mod.Hi[id] || null;
-            _buildingDb = (id) => mod.Fi[id] || null;
-            return;
+          // Search module exports for objects matching RecipeDefinition and BuildingDefinition shapes
+          let recipes = null, buildings = null;
+          for (const key of Object.keys(mod)) {
+            const val = mod[key];
+            if (val && typeof val === 'object' && !Array.isArray(val)) {
+              const values = Object.values(val);
+              if (values.length === 0) continue;
+              const sample = values.find(v => v && typeof v === 'object');
+              if (!sample) continue;
+              if ('duration' in sample && 'inputs' in sample && 'outputs' in sample && 'buildingId' in sample) {
+                recipes = val;
+              }
+              if ('speed' in sample && 'kind' in sample && 'inputCapacity' in sample) {
+                buildings = val;
+              }
+            }
           }
-          if (typeof mod.ti === 'function' && typeof mod.Kr === 'function') {
-            _recipeDb = (id) => (mod.Hi && mod.Hi[id]) ? mod.Hi[id] : (mod.ti(id) || null);
-            _buildingDb = (id) => (mod.Fi && mod.Fi[id]) ? mod.Fi[id] : (mod.Kr(id) || null);
+          if (recipes && buildings) {
+            _recipeDb = (id) => recipes[id] || null;
+            _buildingDb = (id) => buildings[id] || null;
             return;
           }
         }
-        console.log('[DSP Editor] Async: failed to load game core');
+        console.log('[DSP Editor] Failed to load game core');
       } catch (e) { console.log('[DSP Editor] Async error:', e); }
     })();
     await _gameCorePromise;
