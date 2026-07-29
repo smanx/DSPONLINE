@@ -943,7 +943,7 @@ async function openDysonSphereStageGame(page: Page) {
         absorptionProgress: 0,
         generationKw: 39600,
       },
-      paused: false,
+      paused: true,
     };
     window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
   });
