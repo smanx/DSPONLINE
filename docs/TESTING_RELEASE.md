@@ -784,3 +784,25 @@ Android `1.0.8 / 1000008` APK 为 4,288,466 字节，SHA-256 `9869c1594212319776
 Playwright 覆盖移动组合输入、320×568 主页语言切换、200% 字体、英文亮色、长期活动旧截止点、IndexedDB 配额失败与账号本地存档守护。人工检查 `v109-language-menu-desktop-200.png`、`v109-language-menu-mobile-320x568-font200.png` 及 1.0.9 公告的桌面、390×844、360×480 200% 与 844×390 截图。
 
 Android API 36.1 模拟器从正式签名 1.0.8 原地升级到 1.0.9，`firstInstallTime` 保持，旧版创建的本地工厂可继续进入且无 Fatal/ANR。两节点未激活目录分别通过 37/37 服务端、6/6 运维和生产备份副本隔离启动；Web/API 已原子切换，上海下载清单、APK 和 Windows 安装程序已切换，Range、缓存、Origin、构建 ID 与公网健康检查通过。详细证据见 [releases/1.0.9.md](./releases/1.0.9.md)。
+
+## 33. `1.0.10` / v40 终局工厂性能基础回归
+
+`1.0.10` 不升级 GameState、存档 envelope、云 schema 或 SQLite layout。`SimulationAdvanceSession` 增加只读运行时索引，生产与供电阶段按行星集合推进，线路端点和容量预留复用索引；画布只派生当前行星实体和线路。legacy 全扫描路径保留为测试 oracle。
+
+P50/P95/Max 合成 fixture 分别包含 300/380/569 个实体、300/500/1,160 条线路和 45/80/128 座物流站。相同状态推进 4 个模拟秒时，旧路径与索引路径的状态哈希和 JSON 大小完全一致；本机中位耗时分别由 103.3/328.7/803.1 ms 降至 33.1/131.2/256.7 ms。fixture 只由公开目录和固定参数生成，不含玩家存档正文、账号、昵称或 token。
+
+| 检查 | 正式发布结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 56 个文件通过、1 个可选基准文件跳过；529 项通过、2 项跳过 |
+| `npm run test:server` | 37/37 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 166/166 通过，单 worker 550 秒 |
+| `git diff --check` | 通过 |
+
+正式提交 `41cbf7ccb07e1cfb8e8e0d26067a3c92b01fb211` 的 manifest 包含 131 个文件，聚合 SHA-256 为 `1f079010c3dab2a329b5ee9ae27f7ea972215cb2573480810316ed59ea206581`。两节点未激活目录均通过文件复验、37/37 服务端、6/6 运维和生产备份副本隔离启动；隔离前后账号、云存档、修订和玩家计数一致。
+
+Android API 36.1 模拟器从正式签名 1.0.9 原地升级到 `1.0.10 / 1000010`，`firstInstallTime` 保持且旧本地主存档继续识别，日志无 Fatal/ANR。Windows FileVersion/ProductVersion 与稳定通道为 1.0.10，Authenticode 仍为 `NotSigned`。两地 Web/API、上海下载页和稳定清单均已原子切换，公网哈希、Range、缓存、Origin、构建 ID 与发布后备份通过。详细证据见 [releases/1.0.10.md](./releases/1.0.10.md)。

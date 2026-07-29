@@ -30,7 +30,9 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-当前香港和上海 Web/API 均为 `1.0.9-8a69426b5c9b`，回滚目标均为 `1.0.8-528455cdfc2b`。两地都使用 GameState v40、云 schema v7 和 SQLite layout v2；代码回滚不得恢复数据库。上海下载站当前为 `1.0.9-8a69426b5c9b`，下载回滚目录为 `1.0.8-528455cdfc2b`，Windows 和 Android 稳定清单均为 1.0.9。完整证据见 [releases/1.0.9.md](./releases/1.0.9.md)。
+当前香港和上海 Web/API 均为 `1.0.10-41cbf7ccb07e`，回滚目标均为 `1.0.9-8a69426b5c9b`。两地都使用 GameState v40、云 schema v7 和 SQLite layout v2；代码回滚不得恢复数据库。上海下载站当前为 `1.0.10-41cbf7ccb07e`，下载回滚目录为 `1.0.9-8a69426b5c9b`，Windows 和 Android 稳定清单均为 1.0.10。完整证据见 [releases/1.0.10.md](./releases/1.0.10.md)。
+
+`1.0.10` 增加模拟会话运行时索引、按行星生产/供电推进、线路端点快速查找和当前行星画布派生，不升级 GameState、envelope、云 schema 或 SQLite layout。两节点切换前分别创建并验证 SQLite Backup API 备份，未激活目录完成 131/131 文件复验、37/37 服务端、6/6 运维和生产备份副本隔离启动；Android 从正式 1.0.9 同签名覆盖升级并保留本地主存档后，才切换 Web/API、下载页与稳定清单。
 
 `1.0.9` 将浏览器权威本地存储迁入 IndexedDB，增加动态模块恢复、普通来源公平线路分配、1 亿线路转运额度和声明式内容包 v2；空间站收集任务长期开放，主页首屏提供设备级中英文切换。服务端合法客户端上限扩展到 v40，但 envelope v2、云 schema v7 和 SQLite layout v2 不变。两节点在切换前均创建并验证 SQLite Backup API 备份，未激活目录完成 37/37 服务端、6/6 运维和生产备份副本隔离启动；Android 从正式 1.0.8 同签名覆盖升级并保留本地工厂后，才切换 Web/API、下载页与稳定清单。
 
@@ -152,7 +154,7 @@ sudo systemctl restart dsp-idle-cloud.service
 
 活动配置保存在发布目录之外的 `/etc/dsp-idle-cloud/activity.json`，由 `/etc/dsp-idle-cloud/admin.env` 中的 `DSP_ACTIVITY_CONFIG_FILE` 指向。建议权限为 `0640 root:ubuntu`，配置文件不得放入 Web 静态目录。代码发布与活动启用必须分开：先在活动关闭状态完成备份、制品验证、原子切换和公网烟测，再安装经过 `server/activity.mjs` 规则校验的配置并重启服务。
 
-香港与上海参加同一轮模拟活动时必须使用完全相同的活动 ID、UTC 开始/曲线冻结时间、个人目标和全服目标。`endsAt - startsAt` 必须精确为 259,200,000 ms，但这三天只控制假全服曲线；曲线冻结后 `/api/public-status` 仍应返回 `status=active` 与 `openEnded=true`，玩家可长期参与。启用后分别核对 `/api/health` 的活动有效状态，以及 `/api/public-status` 的 revision、时间、目标和长期开放标记。活动配置只提供服务器时钟与模拟全服曲线；`1.0.9` 仍没有贡献提交 API，不能把本地记录描述成服务器已接收。
+香港与上海参加同一轮模拟活动时必须使用完全相同的活动 ID、UTC 开始/曲线冻结时间、个人目标和全服目标。`endsAt - startsAt` 必须精确为 259,200,000 ms，但这三天只控制假全服曲线；曲线冻结后 `/api/public-status` 仍应返回 `status=active` 与 `openEnded=true`，玩家可长期参与。启用后分别核对 `/api/health` 的活动有效状态，以及 `/api/public-status` 的 revision、时间、目标和长期开放标记。活动配置只提供服务器时钟与模拟全服曲线；`1.0.10` 仍没有贡献提交 API，不能把本地记录描述成服务器已接收。
 
 曲线冻结后保留配置并继续长期开放，不能通过重启或修改冻结时间重跑同一个活动 ID。未来若建立新的独立活动，必须使用新的 ID。
 
@@ -246,8 +248,8 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港和上海 `1.0.9-8a69426b5c9b` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港和上海 `1.0.10-41cbf7ccb07e` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 香港 layout v1 的 136.8 MB `app_state` 曾使每分钟持久化把 Node 推到约 1.6 GB并阻塞健康接口。layout v2 上线后 `app_state` 约 2.55 MB，云存档正文按修订独立写入；240 秒生产观察中健康接口最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB。监控若再次出现内存或延迟上升，应分别检查 `app_state` 大小、`cloud_save_payloads` 行数与历史元数据唯一键数，不能只调大健康超时。
 
-Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.9 发布后上海节点约剩 2.2 GiB（文件系统使用率 97%），香港约剩 3.4 GiB（92%）；发布目录、客户端二进制、日志与备份增长必须立即纳入保留策略治理，但清理不得删除当前版、回滚版或有效备份。
+Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。日志、临时文件和旧归档治理后完成 1.0.10 发布，上海节点约剩 5.6 GiB（91%），香港约剩 19 GiB（52%）；发布目录、客户端二进制、日志与备份增长仍须纳入保留策略，且清理不得删除当前版、回滚版或有效备份。
