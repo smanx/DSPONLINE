@@ -804,7 +804,7 @@ function validateSavePayload(payload) {
     const parsed = integrity.parsed;
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities) ||
-      !Number.isInteger(state.version) || state.version < 1 || state.version > 40) return false;
+      !Number.isInteger(state.version) || state.version < 1 || state.version > 41) return false;
     if (state.version >= 38 && !Array.isArray(state.belts)) return false;
     if (state.belts !== undefined && (!Array.isArray(state.belts) || state.belts.some((belt) =>
       state.version >= 38
@@ -863,6 +863,9 @@ function validateSavePayload(payload) {
           if (typeof entity?.key !== "string" || keys.has(entity.key)) return true;
           keys.add(entity.key);
           blueprintEntityByKey.set(entity.key, entity);
+          if (state.version >= 41 && entity.targetDysonOrbitId !== undefined &&
+            (entity.buildingId !== "em_rail_ejector" || typeof entity.targetDysonOrbitId !== "string" ||
+              entity.targetDysonOrbitId.length < 1 || entity.targetDysonOrbitId.length > 160)) return true;
           if (state.version >= 39 && entity.buildingId === "material_delivery_hub" &&
             (!Array.isArray(entity.deliverySlots) || entity.deliverySlots.length !== 3 || entity.deliverySlots.some((slot) =>
               !slot || !["auto", "manual", "disabled"].includes(slot.mode) ||
@@ -911,6 +914,8 @@ function validateSavePayload(payload) {
       }
       for (const entity of state.entities) {
         if (entity?.buildingId === "time_warp_device" && (!Number.isInteger(entity.machineCount) || entity.machineCount !== 1)) return false;
+        if (state.version >= 41 && entity?.buildingId === "em_rail_ejector" &&
+          (typeof entity.targetDysonOrbitId !== "string" || entity.targetDysonOrbitId.length < 1 || entity.targetDysonOrbitId.length > 160)) return false;
         if (state.version >= 39 && entity?.buildingId === "material_delivery_hub") {
           if (!Array.isArray(entity.deliverySlots) || entity.deliverySlots.length !== 3 || entity.deliverySlots.some((slot) =>
             !slot || !["auto", "manual", "disabled"].includes(slot.mode) ||

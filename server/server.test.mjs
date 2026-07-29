@@ -910,7 +910,7 @@ test("validates v33 proliferator and exact infinite research fields while accept
   assert.equal(accepted.response.status, 200);
 });
 
-test("validates v34 time warp and accepts Android v35 through current v40 saves", async () => {
+test("validates v34 time warp and accepts Android v35 through current v41 saves", async () => {
   const research = Object.fromEntries([
     ["matrix_compression", 1_000],
     ["vein_utilization", 1_000],
@@ -1088,6 +1088,38 @@ test("validates v34 time warp and accepts Android v35 through current v40 saves"
   }
   const acceptedV40 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v40PayloadFor(), expectedRevision: 8 }) });
   assert.equal(acceptedV40.response.status, 200);
+
+  const v41PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    Object.assign(state, JSON.parse(v40PayloadFor()).state);
+    state.version = 41;
+    state.entities.push({
+      id: "rail-ejector",
+      kind: "machine",
+      planetId: "home",
+      buildingId: "em_rail_ejector",
+      machineCount: 1,
+      interactionLocked: false,
+      targetDysonOrbitId: "dyson_orbit_helios_1",
+    });
+    state.blueprints.push({
+      id: "ejector-blueprint",
+      name: "定轨弹射器",
+      entities: [{ key: "ejector", buildingId: "em_rail_ejector", targetDysonOrbitId: "dyson_orbit_helios_1" }],
+      belts: [],
+    });
+    mutate(state);
+  });
+  for (const invalid of [
+    v41PayloadFor((state) => { delete state.entities.at(-1).targetDysonOrbitId; }),
+    v41PayloadFor((state) => { state.entities.at(-1).targetDysonOrbitId = "x".repeat(161); }),
+    v41PayloadFor((state) => { state.blueprints.at(-1).entities[0].targetDysonOrbitId = "x".repeat(161); }),
+    v41PayloadFor((state) => { state.blueprints.at(-1).entities[0].buildingId = "storage_mk1"; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 9 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+  const acceptedV41 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v41PayloadFor(), expectedRevision: 9 }) });
+  assert.equal(acceptedV41.response.status, 200);
 });
 
 test("accepts declarative content-pack cloud saves but excludes them from official ranking", async () => {

@@ -92,6 +92,7 @@ import {
   getEntityOutputCapacity,
   getEffectiveSimulationMultiplier,
   getEntityOperatingStatus,
+  getEjectorOrbitTargetStatus,
   getEntityCycleRatePerSimulationSecond,
   getEntityPowerFactor,
   getResourceReserveSnapshot,
@@ -154,6 +155,8 @@ import {
   setDysonLaunchThrottle,
   setDysonLayerOrbit,
   setDysonSwarmOrbit,
+  setEjectorTargetOrbit,
+  setEjectorTargetOrbitForEntities,
   setEnergyMode,
   setEntitiesInteractionLocked,
   setEntityGenerationPriority,
@@ -2894,6 +2897,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         const existing = new Map(current.map((node) => [node.id, node]));
         return activePlanetEntities.map((entity) => {
           const previous = existing.get(entity.id);
+          const ejectorTarget = entity.buildingId === "em_rail_ejector" ? getEjectorOrbitTargetStatus(canvasGame, entity) : null;
           return {
             id: entity.id,
             type: entity.kind,
@@ -2907,6 +2911,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               outputBeltCounts: beltNodeIndex.occupancy.output.get(entity.id) ?? {},
               blackHolePortConnections: Object.fromEntries(activePlanetBelts.filter((belt) =>
                 belt.target === entity.id && belt.targetPortIndex !== undefined).map((belt) => [belt.targetPortIndex!, belt.itemId])),
+              targetDysonOrbitLabel: ejectorTarget?.valid ? `轨道：${ejectorTarget.orbit!.name}` : ejectorTarget ? "轨道失效" : undefined,
               powerFactor: getEntityPowerFactor(canvasGame, entity),
               resourceReserve: getResourceReserveSnapshot(canvasGame, entity),
               status: getEntityOperatingStatus(canvasGame, entity),
@@ -2927,7 +2932,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activePlanetBelts, activePlanetEntities, beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame.activePlanetId, canvasGame.galaxy, canvasGame.settings.logisticsBufferLimit, canvasGame.settings.productionBufferLimit, canvasGame.settings.proliferatorBufferLimit, canvasGame.settings.resourceMode, commonNodeData, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, locatedProductionEntityIds, placement, productionLineFocus, selectedEntityIds, setNodes, taskHighlight.entityIds]);
+  }, [activePlanetBelts, activePlanetEntities, beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame.activePlanetId, canvasGame.dysonEngineering, canvasGame.galaxy, canvasGame.settings.logisticsBufferLimit, canvasGame.settings.productionBufferLimit, canvasGame.settings.proliferatorBufferLimit, canvasGame.settings.resourceMode, commonNodeData, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, locatedProductionEntityIds, placement, productionLineFocus, selectedEntityIds, setNodes, taskHighlight.entityIds]);
 
   const edges = useMemo<FactoryFlowEdge[]>(() => {
     const rects = nodes.map((node) => ({
@@ -4253,6 +4258,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onRemoveSprayCoater: handleRemoveSprayCoater,
           onOpenResourceSettings: () => openMobileOperations("settings"),
           onMaterialDeliverySlotChange: updateMaterialDeliverySlot,
+          onEjectorOrbitChange: (entityId, orbitId) => {
+            commitGame((current) => setEjectorTargetOrbit(current, entityId, orbitId));
+            setNotice("太阳帆目标轨道已更新");
+          },
         }}
         onFactory={() => {
           if (mobileNavigation.route.kind === "factory" && !mobileNavigation.overlay) {
@@ -4706,6 +4715,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             setMobilePanel(null);
           }}
           onRecipeChange={onRecipeChange}
+          onEjectorOrbitChange={(entityId, orbitId) => {
+            commitGame((current) => setEjectorTargetOrbit(current, entityId, orbitId));
+            setNotice("太阳帆目标轨道已更新");
+          }}
           onFuelChange={onFuelChange}
           onEnergyModeChange={onEnergyModeChange}
           onPowerGridChange={onPowerGridChange}
@@ -4842,6 +4855,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onBatchRecipeChange={(entityIds, recipeId) => {
             commitGame((current) => setEntitiesRecipe(current, entityIds, recipeId));
             setNotice(`已为 ${entityIds.length} 个设备切换生产配方`);
+          }}
+          onBatchEjectorOrbitChange={(entityIds, orbitId) => {
+            commitGame((current) => setEjectorTargetOrbitForEntities(current, entityIds, orbitId));
+            setNotice(`已为 ${entityIds.length} 台弹射器同步太阳帆目标轨道`);
           }}
           onBatchInstallSprayCoater={(entityIds) => {
             commitGame((current) => installSprayCoaters(current, entityIds));
@@ -5030,17 +5047,19 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             commitGame((current) => beltIds.reduce((next, beltId) => setBeltNetworkRouteMode(next, beltId, routeMode), current));
             setNotice(`已为 ${beltIds.length} 个连续网络批量改道`);
           }}
-          onBulkBeltConfiguration={(beltIds) => {
-            if (beltIds.length < 2) return;
-            const targetIds = [...new Set(beltIds.slice(1).flatMap((originId) => getBeltNetworkIds(gameRef.current, originId)))];
-            const result = applyBeltConfigurationToBelts(gameRef.current, beltIds[0], targetIds);
+          onBulkBeltConfiguration={(templateBeltId, targetNetworkIds) => {
+            const targetIds = [...new Set(targetNetworkIds.flatMap((originId) => getBeltNetworkIds(gameRef.current, originId)))];
+            const result = applyBeltConfigurationToBelts(gameRef.current, templateBeltId, targetIds);
             if (result.error) {
               setNotice(`批量同步失败：${result.error}`);
               playTone("alert");
-              return;
+              return result;
             }
             if (result.state !== gameRef.current) commitGame(() => result.state);
-            setNotice(result.applied > 0 ? `已将首条设置同步到 ${result.applied} 条线路（含并联数量）` : "所选线路设置已经一致");
+            setNotice(result.applied > 0
+              ? `模板设置同步完成：成功 ${result.applied} 条，跳过 ${result.skipped} 条，失败 ${result.failed} 条`
+              : `所选线路设置已经一致 · 跳过 ${result.skipped} 条`);
+            return result;
           }}
           onBulkBeltRemove={(beltIds) => {
             commitGame((current) => beltIds.reduce((next, beltId) => removeBeltNetwork(next, beltId), current));

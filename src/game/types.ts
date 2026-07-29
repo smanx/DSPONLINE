@@ -637,6 +637,8 @@ export interface FactoryEntity {
   buildingId?: BuildingId;
   extractorBuildingId?: BuildingId;
   recipeId?: RecipeId;
+  /** Persisted Dyson swarm orbit target for electromagnetic rail ejectors. */
+  targetDysonOrbitId?: string;
   storedItemId?: ItemId;
   /** Up to three item types routed directly into this planet's material tray. */
   deliveryItemIds?: ItemId[];
@@ -951,6 +953,7 @@ export interface EntityOperatingStatus {
     | "waiting-load"
     | "collecting"
     | "missing-dyson-swarm"
+    | "missing-dyson-orbit"
     | "launch-paused"
     | "unconfigured";
   label: string;
@@ -1105,6 +1108,7 @@ export interface BlueprintEntityTemplate {
   offset: XYPosition;
   machineCount: number;
   recipeId?: RecipeId;
+  targetDysonOrbitId?: string;
   storedItemId?: ItemId;
   deliveryItemIds?: ItemId[];
   deliverySlots?: MaterialDeliverySlot[];
@@ -1275,7 +1279,7 @@ export interface ConstructionAutomationJob {
 }
 
 export interface GameState {
-  version: 40;
+  version: 41;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];

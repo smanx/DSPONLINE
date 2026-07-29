@@ -274,7 +274,7 @@ describe("v34 gameplay release", () => {
     }
 
     const migrated = migrateGame(legacy)!;
-    expect(migrated.version).toBe(40);
+    expect(migrated.version).toBe(41);
     expect(migrated.tray.processor).toBe(321);
     expect(migrated.dysonPlans.helios).toMatchObject({ structurePoints: 17, shellSails: 9 });
     expect(migrated.endgame.constructionActivity.personalDelivered.universe_matrix).toBe(12);

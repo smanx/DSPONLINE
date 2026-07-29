@@ -507,7 +507,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
     return { ...entity, resourceRemaining: reserve, resourceCapacity: reserve };
   });
   return {
-    version: 40,
+    version: 41,
     nextId: 1,
     activePlanetId: "home",
     entities,
@@ -1113,6 +1113,7 @@ function availableOutputCycles(state: GameState, entity: FactoryEntity, credits?
 
 function canMachineRun(state: GameState, entity: FactoryEntity): boolean {
   if (entity.recipeId === "matrix_research" && !hasActiveResearch(state)) return false;
+  if (entity.recipeId === "solar_sail_launch" && !getEjectorOrbitTargetStatus(state, entity).valid) return false;
   const recipe = getRecipe(entity.recipeId);
   if (recipe?.requiredTechId && !isTechnologyCompleted(state, recipe.requiredTechId)) return false;
   if (proliferatorApplies(entity, recipe)) {
@@ -1769,6 +1770,42 @@ function allDysonOrbits(state: GameState): DysonSwarmOrbitState[] {
   return DYSON_SYSTEM_IDS.flatMap((systemId) => state.dysonEngineering.orbitsBySystem[systemId] ?? []);
 }
 
+export interface EjectorOrbitTargetStatus {
+  systemId: StarSystemId;
+  targetOrbitId: string | null;
+  orbit: DysonSwarmOrbitState | null;
+  valid: boolean;
+  reason: "missing-target" | "missing-orbit" | "foreign-system" | null;
+}
+
+export function getEjectorOrbitTargetStatus(state: GameState, entity: FactoryEntity): EjectorOrbitTargetStatus {
+  const systemId = getPlanet(entity.planetId).systemId;
+  const targetOrbitId = typeof entity.targetDysonOrbitId === "string" && entity.targetDysonOrbitId.length > 0
+    ? entity.targetDysonOrbitId
+    : null;
+  const orbit = targetOrbitId
+    ? state.dysonEngineering.orbitsBySystem[systemId]?.find((candidate) => candidate.id === targetOrbitId) ?? null
+    : null;
+  if (orbit) return { systemId, targetOrbitId, orbit, valid: true, reason: null };
+  if (!targetOrbitId) return { systemId, targetOrbitId, orbit: null, valid: false, reason: "missing-target" };
+  const belongsToAnotherSystem = DYSON_SYSTEM_IDS.some((candidateSystemId) => candidateSystemId !== systemId &&
+    state.dysonEngineering.orbitsBySystem[candidateSystemId]?.some((candidate) => candidate.id === targetOrbitId));
+  return {
+    systemId,
+    targetOrbitId,
+    orbit: null,
+    valid: false,
+    reason: belongsToAnotherSystem ? "foreign-system" : "missing-orbit",
+  };
+}
+
+function activeDysonOrbitIdForPlanet(state: GameState, planetId: PlanetId): string | undefined {
+  const systemId = getPlanet(planetId).systemId;
+  const activeId = state.dysonEngineering.activeOrbitBySystem[systemId];
+  const orbits = state.dysonEngineering.orbitsBySystem[systemId] ?? [];
+  return activeId && orbits.some((orbit) => orbit.id === activeId) ? activeId : orbits[0]?.id;
+}
+
 function aggregateDysonSwarm(state: GameState): void {
   const orbits = allDysonOrbits(state);
   state.dysonSwarm.sailsInOrbit = Math.floor(orbits.reduce((sum, orbit) => sum + Math.max(0, orbit.sailsInOrbit), 0));
@@ -1987,6 +2024,29 @@ export function setActiveDysonSwarmOrbit(state: GameState, systemId: StarSystemI
   };
 }
 
+export function setEjectorTargetOrbitForEntities(
+  state: GameState,
+  entityIds: readonly string[],
+  orbitId: string,
+): GameState {
+  const ids = [...new Set(entityIds)];
+  if (ids.length === 0 || typeof orbitId !== "string" || orbitId.length === 0) return state;
+  const targets = ids.map((entityId) => state.entities.find((entity) => entity.id === entityId));
+  if (targets.some((entity) => !entity || entity.buildingId !== "em_rail_ejector" ||
+    entity.interactionLocked ||
+    !state.dysonEngineering.orbitsBySystem[getPlanet(entity.planetId).systemId]?.some((orbit) => orbit.id === orbitId))) return state;
+  if (targets.every((entity) => entity!.targetDysonOrbitId === orbitId)) return state;
+  const idSet = new Set(ids);
+  return {
+    ...state,
+    entities: state.entities.map((entity) => idSet.has(entity.id) ? { ...entity, targetDysonOrbitId: orbitId } : entity),
+  };
+}
+
+export function setEjectorTargetOrbit(state: GameState, entityId: string, orbitId: string): GameState {
+  return setEjectorTargetOrbitForEntities(state, [entityId], orbitId);
+}
+
 export function setDysonSwarmOrbit(
   state: GameState,
   systemId: StarSystemId,
@@ -2033,7 +2093,8 @@ export function getDysonEngineeringSnapshot(state: GameState, systemId: StarSyst
   const queuedRockets = launchEntities.filter((entity) => entity.recipeId === "carrier_rocket_launch")
     .reduce((sum, entity) => sum + Math.floor(entity.inputs.small_carrier_rocket ?? 0), 0);
   const nominalRate = (recipeId: RecipeId) => launchEntities
-    .filter((entity) => entity.recipeId === recipeId)
+    .filter((entity) => entity.recipeId === recipeId &&
+      (recipeId !== "solar_sail_launch" || getEjectorOrbitTargetStatus(state, entity).valid))
     .reduce((sum, entity) => {
       const recipe = getRecipe(recipeId)!;
       return sum + getBuilding(entity.buildingId!).speed * entity.machineCount / recipe.duration * 60 * launchFactorFor(recipeId);
@@ -2482,10 +2543,11 @@ function launchDysonStructure(state: GameState, systemId: StarSystemId, amount: 
   updateDysonSphereGeneration(state);
 }
 
-function launchDysonSails(state: GameState, systemId: StarSystemId, amount: number): void {
+function launchDysonSails(state: GameState, systemId: StarSystemId, orbitId: string, amount: number): void {
   if (amount <= 0) return;
   syncLegacySwarmIntoOrbits(state);
-  const orbit = ensureDysonOrbit(state, systemId);
+  const orbit = state.dysonEngineering.orbitsBySystem[systemId]?.find((candidate) => candidate.id === orbitId);
+  if (!orbit) return;
   orbit.sailsInOrbit = Math.floor(orbit.sailsInOrbit + amount);
   orbit.totalLaunched = Math.floor(orbit.totalLaunched + amount);
   orbit.generationKw = orbit.sailsInOrbit * getSolarSailPowerFor(state, systemId);
@@ -3564,6 +3626,14 @@ function runMachines(state: GameState, seconds: number, power: PowerPlan, planet
       entity.productionRate = 0;
       continue;
     }
+    const targetDysonOrbitId = recipe.id === "solar_sail_launch"
+      ? getEjectorOrbitTargetStatus(state, entity).orbit?.id
+      : undefined;
+    if (recipe.id === "solar_sail_launch" && !targetDysonOrbitId) {
+      entity.utilization = 0;
+      entity.productionRate = 0;
+      continue;
+    }
     const fullInputCycles = Math.floor(availableInputCycles(state, entity) + EPSILON);
     const fullOutputCycles = Math.floor(availableOutputCycles(state, entity, credits) + EPSILON);
     const maximumCycles = Math.min(fullInputCycles, fullOutputCycles);
@@ -3635,7 +3705,9 @@ function runMachines(state: GameState, seconds: number, power: PowerPlan, planet
         entity.inputs[input.itemId] = Math.max(0, Math.floor((entity.inputs[input.itemId] ?? 0) - input.amount * cycles));
       }
       consumeProliferatorPoints(entity, recipe, sprayedCycles);
-      if (recipe.id === "solar_sail_launch" && cycles > 0) launchDysonSails(state, getPlanet(entity.planetId).systemId, cycles);
+      if (recipe.id === "solar_sail_launch" && cycles > 0) {
+        launchDysonSails(state, getPlanet(entity.planetId).systemId, targetDysonOrbitId!, cycles);
+      }
       if (recipe.id === "carrier_rocket_launch" && cycles > 0) {
         launchDysonStructure(state, getPlanet(entity.planetId).systemId, cycles);
       }
@@ -4990,6 +5062,7 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
       offset: { x: entity.position.x - originX, y: entity.position.y - originY },
       machineCount: Math.max(1, Math.floor(entity.machineCount)),
       recipeId: entity.recipeId,
+      targetDysonOrbitId: entity.buildingId === "em_rail_ejector" ? entity.targetDysonOrbitId : undefined,
       storedItemId: entity.storedItemId,
       deliveryItemIds: entity.deliveryItemIds ? [...entity.deliveryItemIds] : undefined,
       deliverySlots: entity.deliverySlots?.map((slot) => ({ ...slot })),
@@ -5326,6 +5399,9 @@ export function placeBlueprint(
       interactionLocked: false,
       buildingId: template.buildingId,
       recipeId,
+      targetDysonOrbitId: template.buildingId === "em_rail_ejector"
+        ? template.targetDysonOrbitId ?? activeDysonOrbitIdForPlanet(next, planetId)
+        : undefined,
       storedItemId: template.storedItemId,
       deliveryItemIds: template.deliveryItemIds ? [...template.deliveryItemIds] : undefined,
       deliverySlots: template.deliverySlots?.map((slot) => ({ ...slot })),
@@ -5533,6 +5609,9 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
     powerPriority: 2,
     generationPriority: building.kind === "power" ? defaultGenerationPriority({ buildingId } as FactoryEntity) : undefined,
     recipeId: recipe?.id,
+    targetDysonOrbitId: buildingId === "em_rail_ejector"
+      ? activeDysonOrbitIdForPlanet(next, state.activePlanetId)
+      : undefined,
     machineCount: amount,
     minerCount: 0,
     inputs: {},
@@ -8428,6 +8507,8 @@ export function setBeltNetworkRouteMode(state: GameState, beltId: string, routeM
 export interface BeltConfigurationApplyResult {
   state: GameState;
   applied: number;
+  skipped: number;
+  failed: number;
   error?: string;
 }
 
@@ -8437,12 +8518,12 @@ export function applyBeltConfigurationToBelts(
   targetBeltIds: readonly string[],
 ): BeltConfigurationApplyResult {
   const source = state.belts.find((belt) => belt.id === sourceBeltId);
-  if (!source) return { state, applied: 0, error: "首条运输线不存在" };
   const ids = [...new Set(targetBeltIds)].filter((id) => id !== sourceBeltId);
+  if (!source) return { state, applied: 0, skipped: 0, failed: ids.length, error: "模板运输线不存在" };
   const targets = ids.map((id) => state.belts.find((belt) => belt.id === id)).filter((belt): belt is BeltConnection => Boolean(belt));
-  if (targets.length !== ids.length) return { state, applied: 0, error: "目标运输线不存在" };
+  if (targets.length !== ids.length) return { state, applied: 0, skipped: 0, failed: ids.length, error: "目标运输线不存在" };
   if (source.lanes < 1 || source.lanes > MAX_BELT_LANES) {
-    return { state, applied: 0, error: `首条线路并联数量超出 1-${MAX_BELT_LANES}，请先手动调整` };
+    return { state, applied: 0, skipped: 0, failed: ids.length, error: `模板线路并联数量超出 1-${MAX_BELT_LANES}，请先手动调整` };
   }
   const netConstructionDelta = new Map<ConstructionId, number>();
   for (const target of targets) {
@@ -8453,7 +8534,7 @@ export function applyBeltConfigurationToBelts(
     const available = Math.max(0, Math.floor(state.construction[constructionId] ?? 0));
     if (delta > available) {
       const name = getConstructionDefinition(constructionId)?.name ?? "同级传送带";
-      return { state, applied: 0, error: `缺少${name} ×${delta - available}（需要 ${delta}，现有 ${available}）` };
+      return { state, applied: 0, skipped: 0, failed: ids.length, error: `缺少${name} ×${delta - available}（需要 ${delta}，现有 ${available}）` };
     }
   }
   const stackSize = canSetBeltStackSize(state, source.stackSize ?? 1) ? source.stackSize ?? 1 : 1;
@@ -8476,7 +8557,10 @@ export function applyBeltConfigurationToBelts(
     belt.routeOffsetY = source.routeOffsetY;
     if (changed) applied += 1;
   }
-  return applied > 0 ? { state: next, applied } : { state, applied: 0 };
+  const skipped = targets.length - applied;
+  return applied > 0
+    ? { state: next, applied, skipped, failed: 0 }
+    : { state, applied: 0, skipped, failed: 0 };
 }
 
 export function applyBeltConfigurationToNetworkResult(state: GameState, sourceBeltId: string): BeltConfigurationApplyResult {
@@ -9459,6 +9543,17 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
   if ((recipe.id === "solar_sail_launch" || recipe.id === "carrier_rocket_launch") &&
     dysonLaunchFactor(state, recipe.id) <= EPSILON) {
     return { code: "launch-paused", label: "戴森发射调度已暂停", tone: "idle" };
+  }
+  if (recipe.id === "solar_sail_launch") {
+    const target = getEjectorOrbitTargetStatus(state, entity);
+    if (!target.valid) {
+      const label = target.reason === "foreign-system"
+        ? "目标太阳帆轨道不属于当前恒星系"
+        : target.reason === "missing-orbit"
+          ? "目标太阳帆轨道已删除或失效"
+          : "未指定太阳帆目标轨道";
+      return { code: "missing-dyson-orbit", label, tone: "blocked" };
+    }
   }
 
   if (entity.buildingId === "ray_receiver") {

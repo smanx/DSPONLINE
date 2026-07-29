@@ -87,6 +87,7 @@ export interface FactoryNodeData extends Record<string, unknown> {
   connectionDraft: { nodeId: string; handleId: string; itemId: ItemId | null; handleType: "source" | "target" } | null;
   dysonSwarm: DysonSwarmState;
   dysonSphere: DysonSphereState;
+  targetDysonOrbitLabel?: string;
   timeWarp: import("../game/types").TimeWarpState;
   simulationMultiplier: number;
   status: EntityOperatingStatus;
@@ -609,7 +610,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
               connectionCount={data.outputBeltCounts[output.itemId] ?? 0}
             />
           )) : railEjector ? (
-            <div className="orbital-target"><Orbit size={14} /><span>在轨 {formatQuantityCompact(data.dysonSwarm.sailsInOrbit)} 帆</span></div>
+            <div className="orbital-target"><Orbit size={14} /><span title={data.targetDysonOrbitLabel}>{data.targetDysonOrbitLabel ?? `在轨 ${formatQuantityCompact(data.dysonSwarm.sailsInOrbit)} 帆`}</span></div>
           ) : launchSilo ? (
             <div className="orbital-target"><Rocket size={14} /><span>结构 {formatQuantityCompact(data.dysonSphere.structurePoints)} 点</span></div>
           ) : null}
@@ -666,7 +667,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   return (
     <article
       ref={nodeRef}
-      className={`factory-node logistics-node factory-node--status-${data.status.tone}${entity.interactionLocked ? " factory-node--locked" : ""}${isStation ? " station-node" : ""}${warehouseStorage ? " storage-buffer-node" : ""}${entity.buildingId === "storage_tank" ? " storage-buffer-node--fluid" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
+      className={`factory-node logistics-node factory-node--status-${data.status.tone}${entity.interactionLocked ? " factory-node--locked" : ""}${isStation ? " station-node" : ""}${deliveryHub ? " delivery-hub-node" : ""}${warehouseStorage ? " storage-buffer-node" : ""}${entity.buildingId === "storage_tank" ? " storage-buffer-node--fluid" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
       onClick={(event) => {
         if (!adding) return;
         event.preventDefault();
@@ -716,7 +717,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
                 : slot.mode === "disabled" ? <div className="delivery-hub-port-disabled">接口已清空</div>
                   : <AutoInputPort connectionDraft={data.connectionDraft} label="自动识别" handleId={`in:delivery:${index}`} />}
             </div>
-            <div className="delivery-hub-target"><Database size={14} /><span>{slot.mode === "manual" ? "指定直送" : slot.mode === "disabled" ? "停止接收" : "进入物资托盘"}</span></div>
+            <div className="delivery-hub-target" title={slot.mode === "manual" ? "指定物资直接送入当前行星物资托盘" : slot.mode === "disabled" ? "此接口已停止接收" : "自动识别后送入当前行星物资托盘"}><Database size={14} /><span>{slot.mode === "manual" ? "指定直送" : slot.mode === "disabled" ? "停止接收" : "进入托盘"}</span></div>
           </div>)}
         </div>
       ) : configuredItems.length > 0 ? (

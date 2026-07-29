@@ -396,6 +396,13 @@
 .mobile-inspector-progress--indeterminate > i b { width: 32%; transform: translateX(-120%); }
 .mobile-inspector-progress--indeterminate.active > i b { animation: work-cycle-indeterminate 1.3s ease-in-out infinite; }
 .mobile-inspector-progress > small { grid-column: 1 / -1; color: var(--theme-text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); }
+
+.mobile-ejector-orbit { display: grid; gap: 7px; margin: 0 10px 8px; padding: 9px; border: 1px solid var(--theme-accent-border); border-radius: 6px; background: var(--theme-surface); }
+.mobile-ejector-orbit > header { display: flex; align-items: center; gap: 7px; color: var(--cyan); font-size: calc(13px * var(--ui-font-scale, 1)); font-weight: 700; }
+.mobile-ejector-orbit select { width: 100%; min-width: 0; min-height: 48px; padding: 0 9px; border: 1px solid var(--theme-border-strong); border-radius: 5px; background: var(--theme-control); color: var(--theme-text); font-size: calc(13px * var(--ui-font-scale, 1)); }
+.mobile-ejector-orbit small { color: var(--theme-text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.45; }
+.mobile-ejector-orbit.blocked { border-color: var(--theme-danger-border); background: var(--theme-danger-bg); }
+.mobile-ejector-orbit.blocked small { color: var(--coral); }
 .mobile-inspector-peek-open { position: absolute; right: 4px; bottom: 4px; display: flex; min-height: 44px; align-items: center; gap: 3px; padding: 0 8px; border: 0; background: transparent; color: var(--cyan); font-size: calc(12px * var(--ui-font-scale, 1)); }
 
 .mobile-inspector-io { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; padding: 5px 10px 8px; }

@@ -16,7 +16,6 @@ import {
   addDysonSwarmOrbit,
   advanceSimulation,
   advanceSimulationSession,
-  applyBeltConfiguration,
   applyBeltConfigurationToBelts,
   applyBeltConfigurationToNetwork,
   canExploreStarSystem,
@@ -63,6 +62,7 @@ import {
   getColonizationRequirements,
   getDysonPlanTotals,
   getDysonEngineeringSnapshot,
+  getEjectorOrbitTargetStatus,
   getDysonShellCapacity,
   getEntityExtraProductBonus,
   getEntityInputCapacity,
@@ -156,6 +156,8 @@ import {
   setDysonLaunchMode,
   setDysonLaunchThrottle,
   setDysonSwarmOrbit,
+  setEjectorTargetOrbit,
+  setEjectorTargetOrbitForEntities,
   setRecipeFocus,
   updateCanvasRegion,
   setRecipeFocusMode,
@@ -2250,6 +2252,7 @@ describe("factory simulation", () => {
     state = addDysonSwarmOrbit(state, "borealis");
     const activeOrbitId = state.dysonEngineering.activeOrbitBySystem.borealis!;
     state = setDysonSwarmOrbit(state, "borealis", activeOrbitId, { radius: 28_000, inclination: 31, longitude: 122 });
+    state = setEjectorTargetOrbit(state, ejector.id, activeOrbitId);
     state = advanceSimulation(state, 24);
     expect(state.dysonEngineering.orbitsBySystem.borealis.find((orbit) => orbit.id === activeOrbitId)).toMatchObject({
       radius: 28_000,
@@ -2271,6 +2274,52 @@ describe("factory simulation", () => {
     state = removeDysonSwarmOrbit(state, "borealis", activeOrbitId);
     expect(state.dysonEngineering.orbitsBySystem.borealis).toHaveLength(1);
     expect(state.dysonEngineering.orbitsBySystem.borealis[0].sailsInOrbit).toBe(2);
+  });
+
+  it("keeps explicit ejector orbit targets stable, blocks deleted targets, and round-trips them through blueprints", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("dyson_swarm");
+    state.construction.wind_turbine = 12;
+    state.construction.em_rail_ejector = 4;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 12);
+    state = addDysonSwarmOrbit(state, "helios");
+    const targetOrbitId = state.dysonEngineering.activeOrbitBySystem.helios!;
+    state = setActiveDysonSwarmOrbit(state, "helios", state.dysonEngineering.orbitsBySystem.helios[0].id);
+    state = placeBuilding(state, "em_rail_ejector", { x: 300, y: 0 });
+    state = placeBuilding(state, "em_rail_ejector", { x: 300, y: 180 });
+    const ejectors = state.entities.filter((entity) => entity.buildingId === "em_rail_ejector");
+    state = setEjectorTargetOrbitForEntities(state, ejectors.map((entity) => entity.id), targetOrbitId);
+    expect(ejectors.every((entity) => entity.targetDysonOrbitId !== targetOrbitId)).toBe(true);
+    expect(state.entities.filter((entity) => entity.buildingId === "em_rail_ejector").every((entity) => entity.targetDysonOrbitId === targetOrbitId)).toBe(true);
+
+    const firstId = ejectors[0].id;
+    state.entities.find((entity) => entity.id === firstId)!.inputs.solar_sail = 2;
+    state = advanceSimulation(state, 24);
+    expect(state.dysonEngineering.orbitsBySystem.helios.find((orbit) => orbit.id === targetOrbitId)?.sailsInOrbit).toBe(2);
+
+    state = createBlueprint(state, [firstId], "定轨弹射器");
+    expect(state.blueprints.at(-1)?.entities[0].targetDysonOrbitId).toBe(targetOrbitId);
+    state = removeDysonSwarmOrbit(state, "helios", targetOrbitId);
+    const blockedBefore = state.entities.find((entity) => entity.id === firstId)!;
+    blockedBefore.inputs.solar_sail = 3;
+    blockedBefore.progress = 0.625;
+    const launchedBefore = state.dysonSwarm.totalLaunched;
+    const deterministicInput = structuredClone(state);
+    state = advanceSimulation(state, 60);
+    expect(advanceSimulation(deterministicInput, 60)).toEqual(state);
+    const blockedAfter = state.entities.find((entity) => entity.id === firstId)!;
+    expect(blockedAfter.inputs.solar_sail).toBe(3);
+    expect(blockedAfter.progress).toBe(0.625);
+    expect(state.dysonSwarm.totalLaunched).toBe(launchedBefore);
+    expect(getEjectorOrbitTargetStatus(state, blockedAfter)).toMatchObject({ valid: false, reason: "missing-orbit" });
+    expect(getEntityOperatingStatus(state, blockedAfter)).toMatchObject({ code: "missing-dyson-orbit", tone: "blocked" });
+
+    state.construction.em_rail_ejector = 1;
+    const blueprintId = state.blueprints.at(-1)!.id;
+    state = placeBlueprint(state, blueprintId, { x: 700, y: 0 });
+    const pasted = state.entities.filter((entity) => entity.buildingId === "em_rail_ejector").at(-1)!;
+    expect(pasted.targetDysonOrbitId).toBe(targetOrbitId);
+    expect(getEjectorOrbitTargetStatus(state, pasted).reason).toBe("missing-orbit");
   });
 
   it("scales solar panels and each independent Dyson plan by its host star luminosity", () => {
@@ -3468,18 +3517,25 @@ describe("factory simulation", () => {
     state.belts[0].lanes = 3;
     state.belts[1].progress = 0.75;
     state.belts[1].totalTransferred = 12;
+    state.belts[1].lastFlow = 7.5;
     state = setBeltStackSize(state, "stack_a", 4);
     state = setBeltPriority(state, "stack_a", 2);
     state = setBeltMonitorEnabled(state, "stack_a", true);
-    state = applyBeltConfiguration(state, "stack_a", "stack_b");
+    state = setBeltRouteMode(state, "stack_a", "manual");
+    state = setBeltRouteOffsetY(state, "stack_a", 64);
+    const applied = applyBeltConfigurationToBelts(state, "stack_a", ["stack_b"]);
+    expect(applied).toMatchObject({ applied: 1, skipped: 0, failed: 0 });
+    state = applied.state;
 
     expect(getBeltCapacity(state.belts[0])).toBe(72);
     expect(getBeltNetworkIds(state, "stack_a")).toEqual(["stack_a", "stack_b"]);
-    expect(state.belts[1]).toMatchObject({ lanes: 3, stackSize: 4, priority: 2, monitorEnabled: true, progress: 0.75, totalTransferred: 12 });
+    expect(state.belts[1]).toMatchObject({ lanes: 3, stackSize: 4, priority: 2, monitorEnabled: true, routeMode: "manual", routeOffsetY: 64, progress: 0.75, totalTransferred: 12, lastFlow: 7.5 });
     expect(state.construction.conveyor_belt_mk1).toBe(0);
+    expect(applyBeltConfigurationToBelts(state, "stack_a", ["stack_b"])).toMatchObject({ applied: 0, skipped: 1, failed: 0 });
 
     const blocked = applyBeltConfigurationToBelts({ ...state, construction: { ...state.construction, conveyor_belt_mk1: 0 }, belts: state.belts.map((belt) => belt.id === "stack_b" ? { ...belt, lanes: 1 } : belt) }, "stack_a", ["stack_b"]);
     expect(blocked.error).toContain("缺少传送带");
+    expect(blocked).toMatchObject({ applied: 0, skipped: 0, failed: 1 });
     expect(blocked.state.belts.find((belt) => belt.id === "stack_b")?.lanes).toBe(1);
   });
 

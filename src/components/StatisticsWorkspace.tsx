@@ -43,7 +43,12 @@ interface StatisticsWorkspaceProps {
   onBulkStationSlotApply: (entityIds: string[], slotIndex: number, template: StationSlotTemplate) => void;
   onBulkBeltUpgrade: (beltIds: string[]) => void;
   onBulkBeltRoute: (beltIds: string[], routeMode: BeltRouteMode) => void;
-  onBulkBeltConfiguration: (beltIds: string[]) => void;
+  onBulkBeltConfiguration: (templateBeltId: string, targetNetworkIds: string[]) => {
+    applied: number;
+    skipped: number;
+    failed: number;
+    error?: string;
+  };
   onBulkBeltRemove: (beltIds: string[]) => void;
   onBeltHeatmapChange: (enabled: boolean) => void;
   onAddCanvasBookmark: (name: string) => void;
@@ -102,6 +107,9 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
   const [health, setHealth] = useState<BeltHealth | "all">("all");
   const [query, setQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [templateId, setTemplateId] = useState<string | null>(null);
+  const [syncPreviewOpen, setSyncPreviewOpen] = useState(false);
+  const [syncReport, setSyncReport] = useState<{ applied: number; skipped: number; failed: number; error?: string } | null>(null);
   const [routeMode, setRouteMode] = useState<BeltRouteMode>("auto");
   const [bookmarkName, setBookmarkName] = useState("");
   const allNetworks = useMemo(() => listBeltNetworks(game, scope === "active" ? game.activePlanetId : undefined), [game, scope]);
@@ -113,15 +121,33 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
   const visibleIds = networks.map((network) => network.originBeltId);
   const selectedVisible = selectedIds.filter((id) => visibleIds.includes(id));
   const selectedCount = selectedVisible.length;
+  const templateSelected = templateId !== null && selectedVisible.includes(templateId);
+  const templateNetwork = templateSelected ? allNetworks.find((network) => network.originBeltId === templateId) : undefined;
+  const templateBelt = templateId ? game.belts.find((belt) => belt.id === templateId) : undefined;
+  const targetNetworkIds = selectedVisible.filter((id) => id !== templateId);
+  const targetLineCount = new Set(targetNetworkIds.flatMap((id) => allNetworks.find((network) => network.originBeltId === id)?.beltIds ?? [])).size;
   const totalFlow = allNetworks.reduce((sum, network) => sum + network.totalFlow, 0);
   const totalCapacity = allNetworks.reduce((sum, network) => sum + network.totalCapacity, 0);
   const problemCount = allNetworks.filter((network) => network.health === "congested" || network.health === "starved").length;
 
   useEffect(() => {
     setSelectedIds((current) => current.filter((id) => allNetworks.some((network) => network.originBeltId === id)));
+    setTemplateId((current) => current && allNetworks.some((network) => network.originBeltId === current) ? current : null);
   }, [allNetworks]);
 
-  const toggleNetwork = (id: string) => setSelectedIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  const toggleNetwork = (id: string) => {
+    setSelectedIds((current) => {
+      if (current.includes(id)) {
+        const next = current.filter((value) => value !== id);
+        if (templateId === id) setTemplateId(next[0] ?? null);
+        return next;
+      }
+      if (!templateId) setTemplateId(id);
+      return [...current, id];
+    });
+    setSyncPreviewOpen(false);
+    setSyncReport(null);
+  };
   return (
     <div className="statistics-content network-overview">
       <section className="network-summary-band">
@@ -136,20 +162,36 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
         <label className="statistics-sort"><span>状态</span><select value={health} onChange={(event) => setHealth(event.target.value as BeltHealth | "all")}><option value="all">全部</option>{Object.entries(NETWORK_HEALTH_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
       </div>
       <section className={`network-batch-bar${selectedCount > 0 ? " network-batch-bar--active" : ""}`} aria-label="批量线路操作">
-        <button type="button" className="network-select-all" onClick={() => setSelectedIds(selectedCount === visibleIds.length ? [] : visibleIds)}><CheckSquare size={14} />{selectedCount === visibleIds.length && visibleIds.length > 0 ? "取消全选" : "选择当前结果"}</button>
+        <button type="button" className="network-select-all" onClick={() => {
+          const clearing = selectedCount === visibleIds.length && visibleIds.length > 0;
+          setSelectedIds(clearing ? [] : visibleIds);
+          setTemplateId(null);
+          setSyncPreviewOpen(false);
+          setSyncReport(null);
+        }}><CheckSquare size={14} />{selectedCount === visibleIds.length && visibleIds.length > 0 ? "取消全选" : "选择当前结果"}</button>
         <strong>{selectedCount} 个网络</strong>
         <button type="button" disabled={selectedCount === 0} onClick={() => onBulkBeltUpgrade(selectedVisible)}><ArrowUp size={14} />升级传送带</button>
         <label><select value={routeMode} onChange={(event) => setRouteMode(event.target.value as BeltRouteMode)} aria-label="批量线路路由"><option value="auto">自动避让</option><option value="bezier">曲线</option><option value="upper">上绕</option><option value="lower">下绕</option><option value="manual">手动控制点</option></select><button type="button" disabled={selectedCount === 0} onClick={() => onBulkBeltRoute(selectedVisible, routeMode)}><Route size={14} />批量改道</button></label>
-        <button type="button" disabled={selectedCount < 2} onClick={() => onBulkBeltConfiguration(selectedVisible)} title="使用首个所选网络的设置覆盖其余网络"><ClipboardCopy size={14} />同步首条设置</button>
-        <button className="danger" type="button" disabled={selectedCount === 0} onClick={() => { onBulkBeltRemove(selectedVisible); setSelectedIds([]); }}><Trash2 size={14} />批量回收</button>
+        <button type="button" disabled={selectedCount < 2 || !templateSelected} onClick={() => { setSyncPreviewOpen(true); setSyncReport(null); }} title={templateSelected ? "预览模板设置并同步到其余网络" : "框选没有点击顺序，请先指定模板线路"}><ClipboardCopy size={14} />同步首条设置</button>
+        <button className="danger" type="button" disabled={selectedCount === 0} onClick={() => { onBulkBeltRemove(selectedVisible); setSelectedIds([]); setTemplateId(null); setSyncPreviewOpen(false); setSyncReport(null); }}><Trash2 size={14} />批量回收</button>
       </section>
+      {selectedCount > 1 && !templateSelected ? <p className="network-template-required">当前选择没有明确顺序，请在下方所选线路中指定一条模板。</p> : null}
+      {syncPreviewOpen && templateNetwork && templateBelt ? <section className="network-sync-preview" aria-label="线路设置同步预览">
+        <header><ClipboardCopy size={16} /><span><strong>模板：{getItem(templateNetwork.itemId).name} · {getPlanet(templateNetwork.planetId).name}</strong><small>将覆盖 {targetNetworkIds.length} 个网络、{targetLineCount} 条线路的配置</small></span></header>
+        <dl><div><dt>并联</dt><dd>×{templateBelt.lanes}</dd></div><div><dt>货物堆叠</dt><dd>×{templateBelt.stackSize ?? 1}</dd></div><div><dt>优先级</dt><dd>{templateBelt.priority === 2 ? "高" : templateBelt.priority === 1 ? "标准" : "低"}</dd></div><div><dt>线路形态</dt><dd>{{ auto: "自动避让", bezier: "曲线", upper: "上绕", lower: "下绕", manual: "手动控制点" }[templateBelt.routeMode ?? "auto"]}</dd></div><div><dt>流量监测</dt><dd>{templateBelt.monitorEnabled ? "开启" : "关闭"}</dd></div></dl>
+        <p>累计运输量、实时流量、线路进度和在途物资不会改变。</p>
+        <footer><button type="button" onClick={() => setSyncPreviewOpen(false)}>取消</button><button className="primary" type="button" onClick={() => { const result = onBulkBeltConfiguration(templateId!, targetNetworkIds); setSyncReport(result); setSyncPreviewOpen(false); }}>确认同步</button></footer>
+      </section> : null}
+      {syncReport ? <p className={`network-sync-report${syncReport.failed > 0 ? " network-sync-report--failed" : ""}`} role="status">成功 {syncReport.applied} 条 · 跳过 {syncReport.skipped} 条 · 失败 {syncReport.failed} 条{syncReport.error ? ` · ${syncReport.error}` : ""}</p> : null}
       <div className="network-workspace-layout">
         <section className="network-ledger">
           <header><span>选择 / 物品</span><span>行星与拓扑</span><span>吞吐</span><span>诊断</span><span>定位</span></header>
           <div>{networks.length === 0 ? <div className="statistics-empty"><Route size={22} /><span>没有符合条件的运输网络</span></div> : networks.map((network) => {
             const bottleneck = network.diagnostics.find((diagnostic) => diagnostic.beltId === network.bottleneckBeltId);
-            return <article className={`network-row network-row--${network.health}${selectedIds.includes(network.originBeltId) ? " network-row--selected" : ""}`} key={network.originBeltId}>
-              <label><input type="checkbox" checked={selectedIds.includes(network.originBeltId)} onChange={() => toggleNetwork(network.originBeltId)} /><ItemMark itemId={network.itemId} /><span><strong>{getItem(network.itemId).name}</strong><small>{NETWORK_HEALTH_LABELS[network.health]}</small></span></label>
+            const selected = selectedIds.includes(network.originBeltId);
+            const template = templateId === network.originBeltId;
+            return <article className={`network-row network-row--${network.health}${selected ? " network-row--selected" : ""}${template ? " network-row--template" : ""}`} key={network.originBeltId}>
+              <div className="network-row-selection"><label><input type="checkbox" checked={selected} onChange={() => toggleNetwork(network.originBeltId)} /><ItemMark itemId={network.itemId} /><span><strong>{getItem(network.itemId).name}</strong><small>{NETWORK_HEALTH_LABELS[network.health]}</small></span></label>{selected ? <button className={template ? "active" : ""} type="button" aria-pressed={template} onClick={() => { setTemplateId(network.originBeltId); setSyncPreviewOpen(false); setSyncReport(null); }} title="设为同步模板">{template ? "模板" : "设为模板"}</button> : null}</div>
               <span><strong>{getPlanet(network.planetId).name}</strong><small>{network.beltIds.length} 线路 · {network.entityIds.length} 节点 · {network.sourceEntityIds.length}→{network.sinkEntityIds.length}</small></span>
               <span className="network-throughput"><i><b style={{ width: `${network.utilization * 100}%` }} /></i><strong>{network.totalFlow.toFixed(1)} / {network.totalCapacity.toFixed(0)} s⁻¹</strong><small>{Math.round(network.utilization * 100)}% 利用率</small></span>
               <span><strong>{network.label}</strong><small>{bottleneck?.label ?? "无瓶颈"}{network.capacityDeficit > 0.01 ? ` · 缺口 ${network.capacityDeficit.toFixed(1)}/s` : ""}</small></span>

@@ -86,7 +86,7 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 ## 3. 状态与模拟流
 
 1. 主菜单调用 `loadGame()` 或加载指定槽位，得到 `LoadedGame`。
-2. `1.0.11` 的 `FactoryGame` 以 `GameState` v40 作为唯一持久游戏状态；v1-v39 由连续迁移链归一到 v40，存档 envelope 仍为 v2。
+2. `1.0.12` 的 `FactoryGame` 以 `GameState` v41 作为唯一持久游戏状态；v1-v40 由连续迁移链归一到 v41，存档 envelope 仍为 v2。
 3. 工厂每 1 秒累计并向模拟 Worker 提交真实经过时间。模拟步长、状态发布和视觉动画彼此独立；画面档位绝不能改变 `1x/2x/4x` 累计秒数、生产、物流、科研、戴森或确定性顺序。
 4. 浏览器支持 Worker 时，状态、模拟秒数和可信墙钟秒数分别提交给 `src/game/simulation.worker.ts`；Worker 调用 `advanceSimulation()`。普通倍率与时间扭曲只放大模拟预算，活动资格和倒计时只消费墙钟预算。暂停时停止重复回传完整状态，Worker 不可用或报错时使用同一个函数回退到主线程。
 5. `canvasGame` 是只读展示快照。设备级 UI 偏好 `dsp-idle-network.production-refresh.v1` 提供自动、100/200/500/1000/1500/3000 ms 档位；自动档桌面从 200 ms、粗指针设备从 500 ms 开始，并依据 FPS、Worker 延迟和积压以迟滞窗口逐档调整。固定档不会被自动策略覆盖。
@@ -172,7 +172,7 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 | 数据 | 键或位置 | 说明 |
 | --- | --- | --- |
-| 主存档 | IndexedDB `dsp-idle-network.local-saves/records`，逻辑键 `dsp-idle-network.save.v1` | v2 envelope；`1.0.9` 写 v40并可迁移 v1-v39；写入后读回校验，`productionHistory` 始终以空数组写入 |
+| 主存档 | IndexedDB `dsp-idle-network.local-saves/records`，逻辑键 `dsp-idle-network.save.v1` | v2 envelope；`1.0.12` 写 v41并可迁移 v1-v40；写入后读回校验，`productionHistory` 始终以空数组写入 |
 | 生产画面刷新偏好 | `dsp-idle-network.production-refresh.v1` | 只按设备保存，不进入 `GameState`、本地/云存档或迁移版本 |
 | 界面语言偏好 | `dsp-idle-network.locale.v1` | `zh-CN / en`；可由 `?lang=en` 更新，只按设备保存，不进入游戏存档或云同步 |
 | 检查器布局偏好 | `dsp-idle-network.inspector-layout.v1` | 分区顺序和折叠状态；损坏或未知 ID 自动归一，不进入游戏存档 |
@@ -200,6 +200,8 @@ v37→v38 为建筑制造中心增加 `destroyedByproducts`，并为蓝图增加
 v38→v39 为物资配送枢纽增加三个持久接口模式，并为指向枢纽的线路补充稳定 `targetPortIndex`。迁移按旧线路与已绑定物品确定性分配端口，不重建实体、不移动线路，也不改变缓存、在途物资、库存、科研、制造、物流或戴森进度。云 schema 与 SQLite layout 仍不升级；服务端合法客户端上限扩展到 v39，并校验接口模式、物品和线路端口归属。
 
 v39→v40 增加存档级 `settings.beltBufferLimit`（旧档默认 100,000,000）和精确 `contentPacks` 引用。已有线路等级、并联、进度、缓存和累计运输不变；旧空间站建设活动的结束时间迁移为长期开放。服务端合法客户端上限扩展到 v40，并校验线路额度、动态传送带 1～32 级及内容包 ID/版本；envelope v2、云 schema v7 和 SQLite layout v2 不升级。
+
+v40→v41 只为电磁轨道弹射器增加 `targetDysonOrbitId`。旧实体按所在恒星系迁移时的活动轨道补齐；旧蓝图保持无目标字段，并在实际部署时使用目标恒星系的活动轨道。已有 v41 中指向已删除或其他恒星系的目标 ID 原样保留并暂停发射，等待玩家重新选择，不能静默改绑。迁移不重建太阳帆、实体、蓝图、输入缓存、线路、发射进度或戴森工程数据；envelope v2、云 schema v7 和 SQLite layout v2 不升级。
 
 `saveGame()` 先深度分离一次确切的可序列化状态，再用该对象生成轻量 envelope 和校验值；生成 JSON 后立即重算校验，随后才清理过期自动快照、写主存档并读回复核。只有生成前后和写入读回都一致才返回成功。配额错误只会从最旧自动快照开始清理并重试一次，绝不自动删除手动槽位或手动快照。最终失败不会中止模拟，但运行时必须持续显示导出提示，不能把“界面继续运行”误报成“已保存”。
 

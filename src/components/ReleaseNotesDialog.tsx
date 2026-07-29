@@ -1,56 +1,50 @@
-import { Check, Cpu, Database, Gauge, Info, Layers, MessageCircle, Route, X, type LucideIcon } from "lucide-react";
+import { Check, ClipboardCopy, Info, Layers, MessageCircle, Orbit, Sun, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-30-v1.0.11",
+  id: "2026-07-30-v1.0.12",
   date: "2026年7月30日",
-  version: "1.0.11",
-  title: "终局性能与数据完整性更新",
-  summary: "1.0.11 为终局物流和建筑制造中心增加确定性批量结算，降低大型工厂 Worker 积压。玩法数值、离线收益和存档格式保持不变，GameState 继续为 v40。",
+  version: "1.0.12",
+  title: "轨道与物流交互更新",
+  summary: "1.0.12 增加弹射器独立太阳帆轨道，修复线路模板选择、配送枢纽卡片和亮色物流站状态。GameState 升级至 v41，旧存档自动沿用所在恒星系的活动轨道。",
   items: [
     {
-      id: "logistics-dispatch-cache",
-      title: "物流调度复用",
-      description: "物流伙伴、路线经济、活动载具负载和拥堵诊断在同一模拟会话内复用，减少高密度物流站重复匹配。",
+      id: "ejector-orbit-target",
+      title: "弹射器独立定轨",
+      description: "每台电磁轨道弹射器可选择当前恒星系的太阳帆轨道，支持批量修改和蓝图；轨道失效时保留物资与进度并明确暂停。",
     },
     {
-      id: "construction-batch-settlement",
-      title: "递归制造批量结算",
-      description: "复杂递归链、副产物、多目标和多制造中心保持原有轮询与物资守恒，同时避免按成品重复规划整条材料链。",
+      id: "explicit-belt-template",
+      title: "显式线路同步模板",
+      description: "玩家第一个点选的线路固定作为模板；框选需主动指定模板，并在执行前查看并联、堆叠、优先级、形态和监测摘要。",
     },
     {
-      id: "power-storage-batches",
-      title: "燃料与蓄电批次处理",
-      description: "大堆叠发电燃料和能量枢纽改用等价闭式结算，不再按每个燃料棒或蓄电单元循环。",
+      id: "delivery-hub-layout",
+      title: "配送枢纽紧凑卡片",
+      description: "三个接口改用稳定紧凑分区和单行省略，80% 至 200% 字号下不再被文字异常撑大，真实连接点保持对齐。",
     },
     {
-      id: "terminal-performance-fixtures",
-      title: "终局规模性能门禁",
-      description: "新增玩家同形和 2 倍终局匿名夹具，覆盖 300 万并联线路、256 座物流站及 1x、4x、11x 状态哈希。",
+      id: "light-station-states",
+      title: "亮色物流选中状态",
+      description: "物流槽位和设置项补齐悬停、按下、选中、焦点与禁用状态，亮色模式下可清楚识别当前配置。",
     },
     {
-      id: "leaderboard-integrity",
-      title: "排行榜数据完整性",
-      description: "检测数据修改异常",
-    },
-    {
-      id: "no-gameplay-tradeoff",
-      title: "玩法与存档保持不变",
-      description: "本次不降低刷新档位、产量、物流速度、离线收益、堆叠或线路上限，也不升级 GameState、存档 envelope 或云存档 schema。",
+      id: "v41-compatibility",
+      title: "v41 守恒迁移",
+      description: "旧弹射器自动绑定迁移时的活动轨道；库存、线路、在途物资、太阳帆、发射进度和蓝图施工数据均不重建、不删除。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "logistics-dispatch-cache": Route,
-  "construction-batch-settlement": Cpu,
-  "power-storage-batches": Gauge,
-  "terminal-performance-fixtures": Database,
-  "leaderboard-integrity": Layers,
-  "no-gameplay-tradeoff": Check,
+  "ejector-orbit-target": Orbit,
+  "explicit-belt-template": ClipboardCopy,
+  "delivery-hub-layout": Layers,
+  "light-station-states": Sun,
+  "v41-compatibility": Check,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

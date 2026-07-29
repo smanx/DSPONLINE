@@ -777,6 +777,118 @@ html[data-theme="light"] :is(.factory-node select, .factory-node button, .inspec
   color: var(--text-soft);
 }
 
+/* Logistics controls need explicit interaction states; generic light-theme
+   button rules otherwise make configured and selected options look identical. */
+html[data-theme="light"] .station-slot {
+  border-color: #b9ccc3;
+  background: #f7faf8;
+}
+
+html[data-theme="light"] .station-slot:hover {
+  border-color: #7ca798;
+  background: #f0f7f3;
+}
+
+html[data-theme="light"] .station-slot:focus-within {
+  border-color: #397e69;
+  box-shadow: 0 0 0 2px rgba(57, 126, 105, .18);
+}
+
+html[data-theme="light"] .station-slot--configured {
+  border-color: #6f9e8d;
+  background: #e5f2eb;
+}
+
+html[data-theme="light"] .station-slot--configured > header strong,
+html[data-theme="light"] .station-slot--configured .station-slot-stock strong {
+  color: #155a45;
+}
+
+html[data-theme="light"] .station-slot .segmented-control {
+  border-color: #bfd0c8;
+  background: #e8efeb;
+}
+
+html[data-theme="light"] .station-slot :is(.segmented-control button, .station-slot-configure) {
+  border-color: transparent;
+  background: transparent;
+  color: #53675e;
+}
+
+html[data-theme="light"] .station-slot :is(.segmented-control button, .station-slot-configure):hover:not(:disabled) {
+  background: #dbe9e2;
+  color: #214f40;
+}
+
+html[data-theme="light"] .station-slot .segmented-control button:active:not(:disabled) {
+  background: #c9dfd5;
+  color: #123f32;
+}
+
+html[data-theme="light"] .station-slot .segmented-control button:is(.active, [aria-pressed="true"]) {
+  border-color: #4a8d76;
+  background: #bfe0d2;
+  color: #0d513c;
+  box-shadow: inset 0 0 0 1px rgba(13, 81, 60, .12);
+  font-weight: 750;
+}
+
+html[data-theme="light"] .station-slot :is(button, select, input):focus,
+html[data-theme="light"] .station-slot :is(button, select, input):focus-visible {
+  outline: 2px solid #397e69;
+  outline-offset: 2px;
+}
+
+html[data-theme="light"] .station-slot :is(button, select, input):disabled {
+  border-color: #d8e0dc;
+  background: #edf1ef;
+  color: #84928b;
+  opacity: 1;
+}
+
+html[data-theme="light"] .station-slot--configured .catalog-picker-trigger {
+  border-color: #75a595;
+  background: #f7fcf9;
+  color: #153f32;
+}
+
+html[data-theme="light"] .station-fleet-diagnostic > div,
+html[data-theme="light"] .station-warper-auto {
+  border-color: #b9ccc3;
+  background: #f7faf8;
+  color: #173c30;
+}
+
+html[data-theme="light"] .station-fleet-diagnostic :is(span, small) {
+  color: #53675e;
+}
+
+html[data-theme="light"] .station-fleet-diagnostic .warning {
+  color: #a5432c;
+}
+
+html[data-theme="light"] .station-fleet-fill {
+  border-color: #6f9e8d;
+  background: #e5f2eb;
+  color: #155a45;
+}
+
+html[data-theme="light"] .station-fleet-fill:hover:not(:disabled) {
+  border-color: #397e69;
+  background: #d4e9df;
+}
+
+html[data-theme="light"] .station-fleet-fill:focus-visible {
+  outline: 2px solid #397e69;
+  outline-offset: 2px;
+}
+
+html[data-theme="light"] :is(.network-row--template, .network-sync-preview, .ejector-orbit-control) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-selection-bg);
+  color: var(--text);
+}
+
 html[data-locale="en"] :is(
   .settings-segmented button,
   .start-menu-segments button,

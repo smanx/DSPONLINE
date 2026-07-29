@@ -634,7 +634,7 @@ function normalizeMaterialDeliverySlots(entity: FactoryEntity, savedVersion: num
 export function migrateGame(value: unknown): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   const requiredPacks = saved.version >= 40 && Array.isArray(saved.contentPacks)
     ? saved.contentPacks.filter((entry: unknown) => entry && typeof entry === "object" && typeof (entry as { id?: unknown }).id === "string" && typeof (entry as { version?: unknown }).version === "string") as Array<{ id: string; version: string }>
     : [];
@@ -715,6 +715,10 @@ export function migrateGame(value: unknown): GameState | null {
       recipeId: energyExchanger
         ? entity.energyMode === "discharge" ? "accumulator_discharge" : "accumulator_charge"
         : entity.recipeId,
+      targetDysonOrbitId: entity.buildingId === "em_rail_ejector" && saved.version >= 41 &&
+        typeof entity.targetDysonOrbitId === "string" && entity.targetDysonOrbitId.length > 0 && entity.targetDysonOrbitId.length <= 160
+        ? entity.targetDysonOrbitId
+        : undefined,
       routingCursor: Math.max(0, Math.floor(entity.routingCursor ?? 0)),
       distributionMode: entity.kind === "splitter" ? entity.distributionMode ?? "balanced" : entity.distributionMode,
       storedItemId: orbitalCollector
@@ -1085,6 +1089,10 @@ export function migrateGame(value: unknown): GameState | null {
           },
           machineCount: Math.max(1, nonNegativeInteger(entity.machineCount)),
           recipeId,
+          targetDysonOrbitId: entity.buildingId === "em_rail_ejector" && saved.version >= 41 &&
+            typeof entity.targetDysonOrbitId === "string" && entity.targetDysonOrbitId.length > 0 && entity.targetDysonOrbitId.length <= 160
+            ? entity.targetDysonOrbitId
+            : undefined,
           storedItemId,
           deliveryItemIds: entity.buildingId === "material_delivery_hub"
             ? [...new Set(deliverySlots!.flatMap((slot) => slot.itemId ? [slot.itemId] : []))]
@@ -1441,6 +1449,11 @@ export function migrateGame(value: unknown): GameState | null {
       ? nonNegativeNumber(saved.dysonEngineering?.absorptionProgressBySystem?.[systemId]) % 1
       : systemId === "helios" ? dysonSphere.absorptionProgress : 0;
   }
+  for (const entity of entities) {
+    if (entity.buildingId !== "em_rail_ejector" || entity.targetDysonOrbitId) continue;
+    const systemId = getPlanet(entity.planetId).systemId;
+    entity.targetDysonOrbitId = dysonEngineering.activeOrbitBySystem[systemId] ?? dysonEngineering.orbitsBySystem[systemId]?.[0]?.id;
+  }
   if (!persistedOrbitData) {
     const legacyOrbit = dysonEngineering.orbitsBySystem.helios[0];
     legacyOrbit.sailsInOrbit = sailsInOrbit;
@@ -1588,7 +1601,7 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 40,
+    version: 41,
     activePlanetId,
     entities,
     belts,
