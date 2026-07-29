@@ -632,6 +632,46 @@
     const wrapper = document.createElement('div');
     Object.assign(wrapper.style, { display: 'flex', flexDirection: 'column', gap: '10px' });
 
+    // Global batch set row
+    const globalBatchRow = document.createElement('div');
+    Object.assign(globalBatchRow.style, {
+      display: 'flex', gap: '8px', padding: '6px 10px', background: '#15152a',
+      borderRadius: '6px', alignItems: 'center',
+    });
+    const globalBatchLabel = document.createElement('span');
+    globalBatchLabel.textContent = '全部星球批量设矿机: ';
+    globalBatchLabel.style.cssText = 'font-size:12px;color:#ff8;';
+    const globalBatchInput = document.createElement('input');
+    globalBatchInput.type = 'number'; globalBatchInput.min = 0; globalBatchInput.value = 0;
+    Object.assign(globalBatchInput.style, {
+      width: '60px', padding: '2px 6px', borderRadius: '4px',
+      border: '1px solid #333', background: '#111', color: '#e0d6b0', fontSize: '12px', textAlign: 'center',
+    });
+    const globalBatchBtn = document.createElement('button');
+    globalBatchBtn.textContent = '应用';
+    Object.assign(globalBatchBtn.style, {
+      padding: '3px 14px', borderRadius: '4px', border: '1px solid #5a5',
+      background: '#2a4a2a', color: '#8f8', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold',
+    });
+    globalBatchBtn.addEventListener('click', () => {
+      const v = parseInt(globalBatchInput.value, 10);
+      if (isNaN(v) || v < 0 || !game) return;
+      for (const e of game.state.entities) {
+        if (e.kind === 'vein') {
+          e.minerCount = v;
+          e.machineCount = v;
+          if (v > 0) e.extractorBuildingId = getExtractor(e.resourceId);
+          const cur = game.state.construction[e.extractorBuildingId || 'mining_machine'] || 0;
+          if (v > cur) game.state.construction[e.extractorBuildingId || 'mining_machine'] = v + 10;
+        }
+      }
+      commit(); renderVeins();
+    });
+    globalBatchRow.appendChild(globalBatchLabel);
+    globalBatchRow.appendChild(globalBatchInput);
+    globalBatchRow.appendChild(globalBatchBtn);
+    wrapper.appendChild(globalBatchRow);
+
     for (const [planetId, vlist] of Object.entries(byPlanet)) {
       const section = document.createElement('div');
       const header = document.createElement('div');
@@ -640,6 +680,46 @@
         fontSize: '13px', fontWeight: 'bold', color: '#8af', marginBottom: '4px', padding: '4px 0',
       });
       section.appendChild(header);
+
+      // Per-planet batch set row
+      const planetBatchRow = document.createElement('div');
+      Object.assign(planetBatchRow.style, {
+        display: 'flex', gap: '6px', marginBottom: '6px',
+        padding: '4px 8px', background: '#1a1a2e', borderRadius: '6px', alignItems: 'center',
+      });
+      const planetBatchLabel = document.createElement('span');
+      planetBatchLabel.textContent = '批量设矿机: ';
+      planetBatchLabel.style.cssText = 'font-size:11px;color:#888;';
+      const planetBatchInput = document.createElement('input');
+      planetBatchInput.type = 'number'; planetBatchInput.min = 0; planetBatchInput.value = 0;
+      Object.assign(planetBatchInput.style, {
+        width: '50px', padding: '2px 6px', borderRadius: '4px',
+        border: '1px solid #333', background: '#111', color: '#e0d6b0', fontSize: '11px', textAlign: 'center',
+      });
+      const planetBatchBtn = document.createElement('button');
+      planetBatchBtn.textContent = '应用';
+      Object.assign(planetBatchBtn.style, {
+        padding: '2px 10px', borderRadius: '4px', border: '1px solid #3a3a55',
+        background: '#2a2a50', color: '#e0d6b0', cursor: 'pointer', fontSize: '11px',
+      });
+      planetBatchBtn.addEventListener('click', () => {
+        const v = parseInt(planetBatchInput.value, 10);
+        if (isNaN(v) || v < 0 || !game) return;
+        for (const e of game.state.entities) {
+          if (e.kind === 'vein' && e.planetId === planetId) {
+            e.minerCount = v;
+            e.machineCount = v;
+            if (v > 0) e.extractorBuildingId = getExtractor(e.resourceId);
+            const cur = game.state.construction[e.extractorBuildingId || 'mining_machine'] || 0;
+            if (v > cur) game.state.construction[e.extractorBuildingId || 'mining_machine'] = v + 10;
+          }
+        }
+        commit(); renderVeins();
+      });
+      planetBatchRow.appendChild(planetBatchLabel);
+      planetBatchRow.appendChild(planetBatchInput);
+      planetBatchRow.appendChild(planetBatchBtn);
+      section.appendChild(planetBatchRow);
 
       const grid = document.createElement('div');
       Object.assign(grid.style, { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 10px' });
@@ -708,6 +788,44 @@
     const wrapper = document.createElement('div');
     Object.assign(wrapper.style, { display: 'flex', flexDirection: 'column', gap: '10px' });
 
+    // Global batch set row
+    const globalBatchRow = document.createElement('div');
+    Object.assign(globalBatchRow.style, {
+      display: 'flex', gap: '8px', padding: '6px 10px', background: '#15152a',
+      borderRadius: '6px', alignItems: 'center',
+    });
+    const globalBatchLabel = document.createElement('span');
+    globalBatchLabel.textContent = '全部星球批量设台数: ';
+    globalBatchLabel.style.cssText = 'font-size:12px;color:#ff8;';
+    const globalBatchInput = document.createElement('input');
+    globalBatchInput.type = 'number'; globalBatchInput.min = 0; globalBatchInput.value = 0;
+    Object.assign(globalBatchInput.style, {
+      width: '60px', padding: '2px 6px', borderRadius: '4px',
+      border: '1px solid #333', background: '#111', color: '#e0d6b0', fontSize: '12px', textAlign: 'center',
+    });
+    const globalBatchBtn = document.createElement('button');
+    globalBatchBtn.textContent = '应用';
+    Object.assign(globalBatchBtn.style, {
+      padding: '3px 14px', borderRadius: '4px', border: '1px solid #5a5',
+      background: '#2a4a2a', color: '#8f8', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold',
+    });
+    globalBatchBtn.addEventListener('click', () => {
+      const v = parseInt(globalBatchInput.value, 10);
+      if (isNaN(v) || v < 0 || !game) return;
+      for (const e of game.state.entities) {
+        if (e.kind !== 'vein' && e.buildingId && e.machineCount !== undefined) {
+          e.machineCount = v;
+          const cur = game.state.construction[e.buildingId] || 0;
+          if (v > cur) game.state.construction[e.buildingId] = v + 10;
+        }
+      }
+      commit(); renderBuildings();
+    });
+    globalBatchRow.appendChild(globalBatchLabel);
+    globalBatchRow.appendChild(globalBatchInput);
+    globalBatchRow.appendChild(globalBatchBtn);
+    wrapper.appendChild(globalBatchRow);
+
     for (const [planetId, blist] of Object.entries(byPlanet)) {
       const section = document.createElement('div');
       const header = document.createElement('div');
@@ -716,6 +834,44 @@
         fontSize: '13px', fontWeight: 'bold', color: '#8af', marginBottom: '4px', padding: '4px 0',
       });
       section.appendChild(header);
+
+      // Per-planet batch set row
+      const planetBatchRow = document.createElement('div');
+      Object.assign(planetBatchRow.style, {
+        display: 'flex', gap: '6px', marginBottom: '6px',
+        padding: '4px 8px', background: '#1a1a2e', borderRadius: '6px', alignItems: 'center',
+      });
+      const planetBatchLabel = document.createElement('span');
+      planetBatchLabel.textContent = '批量设台数: ';
+      planetBatchLabel.style.cssText = 'font-size:11px;color:#888;';
+      const planetBatchInput = document.createElement('input');
+      planetBatchInput.type = 'number'; planetBatchInput.min = 0; planetBatchInput.value = 0;
+      Object.assign(planetBatchInput.style, {
+        width: '50px', padding: '2px 6px', borderRadius: '4px',
+        border: '1px solid #333', background: '#111', color: '#e0d6b0', fontSize: '11px', textAlign: 'center',
+      });
+      const planetBatchBtn = document.createElement('button');
+      planetBatchBtn.textContent = '应用';
+      Object.assign(planetBatchBtn.style, {
+        padding: '2px 10px', borderRadius: '4px', border: '1px solid #3a3a55',
+        background: '#2a2a50', color: '#e0d6b0', cursor: 'pointer', fontSize: '11px',
+      });
+      planetBatchBtn.addEventListener('click', () => {
+        const v = parseInt(planetBatchInput.value, 10);
+        if (isNaN(v) || v < 0 || !game) return;
+        for (const e of game.state.entities) {
+          if (e.planetId === planetId && e.kind !== 'vein' && e.buildingId && e.machineCount !== undefined) {
+            e.machineCount = v;
+            const cur = game.state.construction[e.buildingId] || 0;
+            if (v > cur) game.state.construction[e.buildingId] = v + 10;
+          }
+        }
+        commit(); renderBuildings();
+      });
+      planetBatchRow.appendChild(planetBatchLabel);
+      planetBatchRow.appendChild(planetBatchInput);
+      planetBatchRow.appendChild(planetBatchBtn);
+      section.appendChild(planetBatchRow);
       const grid = document.createElement('div');
       Object.assign(grid.style, { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 10px' });
 
