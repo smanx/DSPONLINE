@@ -123,7 +123,7 @@ test("normalizes only valid internal moderation records", () => {
   assert.equal(isLeaderboardRestricted({ leaderboardModeration: normalized }, "valid"), true);
 });
 
-test("requires a unique current rank-one candidate and never matches a same-name account by name alone", () => {
+test("locks moderation to the current rank-one submission before checking its display name", () => {
   const fixture = fixtureData();
   const loadMainPayload = (userId) => userId === fixture.userId ? fixture.payload : null;
   const ready = resolveLeaderboardModerationTarget(fixture.data, { displayName: "Target Pilot", loadMainPayload });
@@ -148,11 +148,20 @@ test("requires a unique current rank-one candidate and never matches a same-name
     displayName: "Target Pilot",
     seasonId: "season_01",
     visible: true,
-    metrics: { galaxyScore: 10 },
+    metrics: { galaxyScore: 200 },
   };
-  const ambiguous = resolveLeaderboardModerationTarget(fixture.data, { displayName: "Target Pilot", loadMainPayload });
-  assert.equal(ambiguous.status, "ambiguous");
-  assert.equal(ambiguous.candidateCount, 2);
+  const sameNameResult = resolveLeaderboardModerationTarget(fixture.data, { displayName: "Target Pilot", loadMainPayload });
+  assert.equal(sameNameResult.status, "ready");
+  assert.equal(sameNameResult.candidateCount, 1);
+  assert.equal(sameNameResult.userId, fixture.userId);
+
+  fixture.data.submissions[`season_01:${fixture.userId}`].metrics.galaxyScore = 1;
+  const invalidNewLeader = resolveLeaderboardModerationTarget(fixture.data, { displayName: "Target Pilot", loadMainPayload });
+  assert.equal(invalidNewLeader.status, "verification-failed");
+  assert.equal(invalidNewLeader.userId, "same-name-user");
+  const wrongRankOne = resolveLeaderboardModerationTarget(fixture.data, { displayName: "Ordinary Pilot", loadMainPayload });
+  assert.equal(wrongRankOne.status, "not-found");
+  assert.equal(wrongRankOne.candidateCount, 0);
 });
 
 test("applies the SQLite remediation transactionally and remains idempotent", async () => {

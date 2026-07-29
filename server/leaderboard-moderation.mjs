@@ -133,11 +133,10 @@ export function resolveLeaderboardModerationTarget(data, { displayName, loadMain
   if (moderatedMatches.length > 1) return resolutionSummary("ambiguous", { candidateCount: moderatedMatches.length });
 
   const ranked = visibleSeasonSubmissions(data);
-  const named = ranked.filter((submission) => submission?.displayName === expectedName);
-  if (named.length !== 1 || ranked[0] !== named[0]) {
-    return resolutionSummary(named.length > 1 ? "ambiguous" : "not-found", { candidateCount: named.length });
+  const submission = ranked[0];
+  if (!submission || submission.displayName !== expectedName) {
+    return resolutionSummary("not-found", { candidateCount: 0 });
   }
-  const submission = named[0];
   const userId = submission.userId;
   const validation = validateCandidateData(data, userId, submission, loadMainPayload);
   const valid = validation.payloadAvailable && validation.envelopeIntegrityValid && validation.payloadChecksumMatches &&

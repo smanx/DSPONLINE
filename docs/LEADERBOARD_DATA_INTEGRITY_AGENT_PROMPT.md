@@ -82,13 +82,13 @@ leaderboardModeration: {
 
 实现一个只读 dry-run 解析流程：
 
-1. 读取当前公开可见的 `season_01` submission。
-2. 找到显示名为“伊卡洛斯”的候选。
-3. 重新按当前服务器排序确认候选确实为综合榜第一。
+1. 读取当前公开可见的 `season_01` submission，并按当前服务器规则排序。
+2. 只锁定排序结果中的唯一综合榜第一名，再核对其显示名为“伊卡洛斯”。
+3. 同名的非第一名不计入候选，不能通过显示名回退选择其他账号。
 4. 确认 `verification.strategy === "main-cloud-save-v1"`。
 5. 确认 `verification.cloudRevision` 等于当前主云档 revision。
 6. 确认 verification checksum 与当前主云档 metadata checksum 一致。
-7. 候选必须唯一；候选数为 0 或大于 1 时中止。
+7. 排名第一的提交必须唯一且通过全部校验；没有第一名、显示名不符或校验失败时中止。
 8. 输出只包含候选数、修订号、校验布尔值和将处理的 submission 数量。
 
 不要把生产 `userId`、邮箱、IP、payload 或完整 submission 打印出来。
