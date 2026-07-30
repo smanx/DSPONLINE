@@ -23,6 +23,14 @@ export interface BeltDiagnostic {
   limitingFactor: "capacity" | "upstream" | "downstream" | "source-empty" | "target-full" | "none";
 }
 
+export interface BeltDiagnosticIndex {
+  entityById: ReadonlyMap<string, FactoryEntity>;
+}
+
+export function createBeltDiagnosticIndex(entities: readonly FactoryEntity[]): BeltDiagnosticIndex {
+  return { entityById: new Map(entities.map((entity) => [entity.id, entity])) };
+}
+
 export interface BeltNetworkSnapshot {
   originBeltId: string;
   planetId: BeltConnection["planetId"];
@@ -123,9 +131,9 @@ function targetFreeCapacity(state: GameState, entity: FactoryEntity | undefined,
   return Math.max(0, Math.floor(capacity - (entity.inputs[itemId] ?? 0)));
 }
 
-export function diagnoseBelt(state: GameState, belt: BeltConnection): BeltDiagnostic {
-  const source = state.entities.find((entity) => entity.id === belt.source);
-  const target = state.entities.find((entity) => entity.id === belt.target);
+export function diagnoseBelt(state: GameState, belt: BeltConnection, index?: BeltDiagnosticIndex): BeltDiagnostic {
+  const source = index?.entityById.get(belt.source) ?? state.entities.find((entity) => entity.id === belt.source);
+  const target = index?.entityById.get(belt.target) ?? state.entities.find((entity) => entity.id === belt.target);
   const capacity = getBeltCapacity(belt);
   const flow = Math.max(0, belt.lastFlow ?? 0);
   const sampleSeconds = Math.max(0, belt.recentFlowSampleSeconds ?? 0);
@@ -225,7 +233,8 @@ export function analyzeBeltNetwork(state: GameState, beltId: string): BeltNetwor
   const outgoing = new Set(belts.map((belt) => belt.source));
   const sourceEntityIds = entityIds.filter((entityId) => !incoming.has(entityId));
   const sinkEntityIds = entityIds.filter((entityId) => !outgoing.has(entityId));
-  const diagnostics = belts.map((belt) => diagnoseBelt(state, belt));
+  const diagnosticIndex = createBeltDiagnosticIndex(state.entities);
+  const diagnostics = belts.map((belt) => diagnoseBelt(state, belt, diagnosticIndex));
   const totalFlow = diagnostics.reduce((sum, diagnostic) => sum + diagnostic.flow, 0);
   const totalCapacity = diagnostics.reduce((sum, diagnostic) => sum + diagnostic.capacity, 0);
   const health = networkHealth(diagnostics);

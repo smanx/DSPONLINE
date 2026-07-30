@@ -10,6 +10,15 @@ All notable player-facing changes are recorded here. Game-state migration versio
 - Added privacy-safe PV, UV, sessions, active-time and allowlisted event aggregation on the Asia/Shanghai calendar.
 - Added a protected `/admin` operations dashboard and reduced the public status endpoint to anonymous player counts.
 
+## [1.0.13] - 2026-07-30
+
+- Cached stable factory topology, port occupancy, belt bundles, route geometry, and unchanged React Flow objects to reduce large-factory rendering work.
+- Added viewport rendering for planets with at least 300 entities while preserving full node access for smaller desktop and mobile factories.
+- Fixed buildings remaining in a grey compact state after zooming back in; building detail now follows actual zoom instead of performance mode.
+- Reused interstellar path plans by planet pair, route policy, warper budget, and route environment without changing deterministic state hashes.
+- Removed the leaderboard's artificial `10^15` metric cap, added saturating arithmetic for extreme finite values, and expanded quantity and power units through 载 and QW before scientific notation.
+- Kept GameState v41, save envelope v2, cloud schema v7, SQLite layout v2, simulation rates, refresh preferences, and existing player saves unchanged.
+
 ## [1.0.11] - 2026-07-30
 
 - Reused stable logistics matching, route economics, active vehicle loads, and dispatch summaries within each simulation session to reduce endgame Worker latency.
@@ -54,6 +63,7 @@ All notable player-facing changes are recorded here. Game-state migration versio
 - Deployed independent Hong Kong production and Shanghai fallback nodes.
 
 [Unreleased]: ./docs/ROADMAP.md
+[1.0.13]: ./docs/releases/1.0.13.md
 [1.0.11]: ./docs/releases/1.0.11.md
 [1.0.3]: ./docs/releases/1.0.3.md
 [1.0.2]: ./docs/releases/1.0.2.md

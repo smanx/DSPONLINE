@@ -883,19 +883,19 @@ function planInterstellarPath(
     left.stations.map((station) => station.id).join(":").localeCompare(right.stations.map((station) => station.id).join(":")))[0] ?? null;
 }
 
-export function getInterstellarRouteEconomics(
+function interstellarRouteEconomicsFromPath(
   state: GameState,
   source: FactoryEntity,
   target: FactoryEntity,
-  vehicleCount = 1,
-  options: InterstellarRouteOptions = {},
+  vehicleCount: number,
+  options: InterstellarRouteOptions,
+  path: PlannedInterstellarPath | null,
+  entityById?: ReadonlyMap<string, FactoryEntity>,
 ): InterstellarRouteEconomics {
   const sourcePlanet = getPlanet(source.planetId);
   const targetPlanet = getPlanet(target.planetId);
   const requiresWarp = sourcePlanet.systemId !== targetPlanet.systemId;
-  const routePolicy = options.routePolicy ?? "relay-preferred";
   const warperBudget = Math.max(1, Math.min(4, Math.floor(options.warperBudget ?? 2)));
-  const path = requiresWarp ? planInterstellarPath(state, source, target, routePolicy, warperBudget) : null;
   const routeAvailable = !requiresWarp || Boolean(path);
   const distanceLy = path?.distanceLy ?? (requiresWarp ? getSystemDistanceLy(state, sourcePlanet.systemId, targetPlanet.systemId) : 0);
   const orbitSpan = Math.max(1, Math.abs(sourcePlanet.orbitIndex - targetPlanet.orbitIndex));
@@ -911,7 +911,7 @@ export function getInterstellarRouteEconomics(
   const targetPower = target.buildingId ? (getBuilding(target.buildingId).powerDemandKw ?? 0) * Math.max(1, target.machineCount) : 0;
   const waypointStationIds = path?.stations.slice(1, -1).map((station) => station.id) ?? [];
   const hubPower = waypointStationIds.reduce((sum, stationId) => {
-    const station = state.entities.find((entity) => entity.id === stationId);
+    const station = entityById?.get(stationId) ?? state.entities.find((entity) => entity.id === stationId);
     return sum + (station?.buildingId ? (getBuilding(station.buildingId).powerDemandKw ?? 0) * Math.max(1, station.machineCount) : 0);
   }, 0);
   const hopCount = requiresWarp ? Math.max(1, path ? path.stations.length - 1 : warperBudget) : 0;
@@ -934,6 +934,49 @@ export function getInterstellarRouteEconomics(
     maxLegDistanceLy: round(path?.maxLegDistanceLy ?? distanceLy, 2),
     warpersPerVessel: requiresWarp ? hopCount : 0,
   };
+}
+
+export function getInterstellarRouteEconomics(
+  state: GameState,
+  source: FactoryEntity,
+  target: FactoryEntity,
+  vehicleCount = 1,
+  options: InterstellarRouteOptions = {},
+): InterstellarRouteEconomics {
+  const sourceSystemId = getPlanet(source.planetId).systemId;
+  const targetSystemId = getPlanet(target.planetId).systemId;
+  const routePolicy = options.routePolicy ?? "relay-preferred";
+  const warperBudget = Math.max(1, Math.min(4, Math.floor(options.warperBudget ?? 2)));
+  const path = sourceSystemId === targetSystemId
+    ? null
+    : planInterstellarPath(state, source, target, routePolicy, warperBudget);
+  return interstellarRouteEconomicsFromPath(state, source, target, vehicleCount, options, path);
+}
+
+function getCachedInterstellarPath(
+  state: GameState,
+  source: FactoryEntity,
+  target: FactoryEntity,
+  options: InterstellarRouteOptions,
+  lookup: SimulationLookupContext,
+  profiler?: SimulationProfiler,
+): PlannedInterstellarPath | null {
+  if (getPlanet(source.planetId).systemId === getPlanet(target.planetId).systemId) return null;
+  const key = interstellarPathCacheKey(source, target, options, lookup.routeEnvironmentKey);
+  if (lookup.interstellarPaths.has(key)) {
+    if (profiler) profiler.routePathCacheHits += 1;
+    return lookup.interstellarPaths.get(key) ?? null;
+  }
+  const path = planInterstellarPath(
+    state,
+    source,
+    target,
+    options.routePolicy ?? "relay-preferred",
+    Math.max(1, Math.min(4, Math.floor(options.warperBudget ?? 2))),
+  );
+  lookup.interstellarPaths.set(key, path);
+  if (profiler) profiler.routePathPlans += 1;
+  return path;
 }
 
 function getCachedInterstellarRouteEconomics(
@@ -959,7 +1002,17 @@ function getCachedInterstellarRouteEconomics(
     return cached;
   }
   const startedAt = profileNow();
-  const result = getInterstellarRouteEconomics(state, source, target, vehicleCount, options);
+  const result = lookup
+    ? interstellarRouteEconomicsFromPath(
+      state,
+      source,
+      target,
+      vehicleCount,
+      options,
+      getCachedInterstellarPath(state, source, target, options, lookup, profiler),
+      lookup.entityById,
+    )
+    : getInterstellarRouteEconomics(state, source, target, vehicleCount, options);
   if (profiler) {
     profiler.routeEconomicsCalls += 1;
     profiler.routeEconomicsMs += profileNow() - startedAt;
@@ -1347,6 +1400,8 @@ export interface SimulationProfiler {
   peerMatchCacheHits: number;
   routeEconomicsCalls: number;
   routeEconomicsCacheHits: number;
+  routePathPlans: number;
+  routePathCacheHits: number;
   congestionDispatchReuseHits: number;
   routesCreated: number;
   fuelItemsLoaded: number;
@@ -1385,6 +1440,7 @@ interface SimulationLookupContext {
   activeRoutesByStation: Map<string, Array<{ demand: FactoryEntity; route: StationRoute }>>;
   activeRouteVehicleLoadByStation: Map<string, number>;
   routeEconomics: Map<string, InterstellarRouteEconomics>;
+  interstellarPaths: Map<string, PlannedInterstellarPath | null>;
   routeEnvironmentKey: string;
 }
 
@@ -1419,6 +1475,21 @@ function routeEnvironmentKey(state: GameState): string {
   ].join("|");
 }
 
+function interstellarPathCacheKey(
+  source: FactoryEntity,
+  target: FactoryEntity,
+  options: InterstellarRouteOptions,
+  environmentKey: string,
+): string {
+  return [
+    source.planetId,
+    target.planetId,
+    options.routePolicy ?? "relay-preferred",
+    Math.max(1, Math.min(4, Math.floor(options.warperBudget ?? 2))),
+    environmentKey,
+  ].join("|");
+}
+
 function stationDispatchSlotKey(stationId: string, slotIndex: number, scope: StationLogisticsScope): string {
   return `${stationId}|${slotIndex}|${scope}`;
 }
@@ -1442,6 +1513,7 @@ function createSimulationLookupContext(state: GameState, profiler?: SimulationPr
     activeRoutesByStation: new Map(),
     activeRouteVehicleLoadByStation: new Map(),
     routeEconomics: new Map(),
+    interstellarPaths: new Map(),
     routeEnvironmentKey: routeEnvironmentKey(state),
   };
   const addTo = <T>(map: Map<string, T[]>, key: string, value: T) => {
@@ -1488,6 +1560,10 @@ function createSimulationLookupContext(state: GameState, profiler?: SimulationPr
         add(stationSlotIndexKey("remote", "*", slot.itemId, slot.remoteMode), { peer, peerSlotIndex, slot });
       }
     }
+  }
+  for (const values of context.stationSlotsByKey.values()) {
+    values.sort((left, right) => right.slot.priority - left.slot.priority ||
+      left.peer.id.localeCompare(right.peer.id) || left.peerSlotIndex - right.peerSlotIndex);
   }
   if (profiler) profiler.stationIndexBuildMs += profileNow() - startedAt;
   return context;
@@ -1551,8 +1627,10 @@ export function findStationSlotPeers(
         });
       }
   }
-  const result = candidates.sort((a, b) => Number(b.routeAvailable) - Number(a.routeAvailable) || b.priority - a.priority ||
-    a.routeDuration - b.routeDuration || a.peer.id.localeCompare(b.peer.id));
+  const result = lookup && scope === "local"
+    ? candidates
+    : candidates.sort((a, b) => Number(b.routeAvailable) - Number(a.routeAvailable) || b.priority - a.priority ||
+      a.routeDuration - b.routeDuration || a.peer.id.localeCompare(b.peer.id));
   if (profiler) profiler.peerMatchMs += profileNow() - startedAt;
   const matches = result.map(({ peer, peerSlotIndex }) => ({ peer, peerSlotIndex }));
   if (cacheKey) lookup!.stationPeerMatches.set(cacheKey, matches);
@@ -3871,6 +3949,7 @@ function refreshRouteEnvironment(state: GameState, lookup: SimulationLookupConte
   lookup.routeEnvironmentKey = nextKey;
   lookup.stationPeerMatches.clear();
   lookup.routeEconomics.clear();
+  lookup.interstellarPaths.clear();
 }
 
 function stationBusyVehicles(state: GameState, station: FactoryEntity, scope: StationLogisticsScope, lookup?: SimulationLookupContext): number {
@@ -4639,6 +4718,8 @@ export function createSimulationProfiler(): SimulationProfiler {
     peerMatchCacheHits: 0,
     routeEconomicsCalls: 0,
     routeEconomicsCacheHits: 0,
+    routePathPlans: 0,
+    routePathCacheHits: 0,
     congestionDispatchReuseHits: 0,
     routesCreated: 0,
     fuelItemsLoaded: 0,

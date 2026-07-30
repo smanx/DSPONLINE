@@ -15,9 +15,13 @@ describe("quantity formatting", () => {
     [99_999_999, "9999万"],
     [100_000_000, "1亿"],
     [1_234_567_890, "12.3亿"],
-    [9_999_999_999_999_999n, "99999999亿"],
-    [10_000_000_000_000_000n, "1e+16"],
-    [31_441_647_386_989_570_364_354_250n, "3.144e+25"],
+    [1_000_000_000_000n, "1兆"],
+    [100_000_000_000_000n, "100兆"],
+    [9_999_999_999_999_999n, "9999兆"],
+    [10_000_000_000_000_000n, "1京"],
+    [31_441_647_386_989_570_364_354_250n, "31.4秭"],
+    [10n ** 44n, "1载"],
+    [10n ** 48n, "1e+48"],
     [-12_345, "-1.23万"],
   ])("formats %s without rounding upward", (value, expected) => {
     expect(formatQuantityCompact(value)).toBe(expected);
@@ -30,7 +34,7 @@ describe("quantity formatting", () => {
   });
 
   it("expands large finite Number values instead of formatting exponent text as digits", () => {
-    expect(formatQuantityCompact(1e21)).toBe("1e+21");
+    expect(formatQuantityCompact(1e21)).toBe("10垓");
     expect(formatQuantityExact(1e21)).toBe("1,000,000,000,000,000,000,000");
   });
 

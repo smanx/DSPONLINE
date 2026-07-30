@@ -1,50 +1,50 @@
-import { Check, ClipboardCopy, Info, Layers, MessageCircle, Orbit, Sun, X, type LucideIcon } from "lucide-react";
+import { Check, Gauge, Info, Layers, MessageCircle, Route, Trophy, X, ZoomIn, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-30-v1.0.12",
+  id: "2026-07-30-v1.0.13",
   date: "2026年7月30日",
-  version: "1.0.12",
-  title: "轨道与物流交互更新",
-  summary: "1.0.12 增加弹射器独立太阳帆轨道，修复线路模板选择、配送枢纽卡片和亮色物流站状态。GameState 升级至 v41，旧存档自动沿用所在恒星系的活动轨道。",
+  version: "1.0.13",
+  title: "终局画布与大数显示更新",
+  summary: "1.0.13 优化大型工厂画布和跨星系物流路径，修复放大后建筑仍保持灰色精简态的问题，并取消排行榜一千万亿的人为封顶。GameState 继续为 v41，存档格式不变。",
   items: [
     {
-      id: "ejector-orbit-target",
-      title: "弹射器独立定轨",
-      description: "每台电磁轨道弹射器可选择当前恒星系的太阳帆轨道，支持批量修改和蓝图；轨道失效时保留物资与进度并明确暂停。",
+      id: "canvas-topology-cache",
+      title: "大型工厂画布缓存",
+      description: "建筑拓扑、线路几何与实时库存分开更新；没有移动或改线时不再重复计算整张工厂地图，300 个以上实体的大工厂会裁剪屏幕外节点和线路。",
     },
     {
-      id: "explicit-belt-template",
-      title: "显式线路同步模板",
-      description: "玩家第一个点选的线路固定作为模板；框选需主动指定模板，并在执行前查看并联、堆叠、优先级、形态和监测摘要。",
+      id: "zoom-detail-restore",
+      title: "放大恢复建筑细节",
+      description: "大工厂和低端设备仍会自动精简动画，但建筑细节只由真实画布缩放决定；放大后立即恢复文字、状态、缓存和操作区域。",
     },
     {
-      id: "delivery-hub-layout",
-      title: "配送枢纽紧凑卡片",
-      description: "三个接口改用稳定紧凑分区和单行省略，80% 至 200% 字号下不再被文字异常撑大，真实连接点保持对齐。",
+      id: "logistics-route-cache",
+      title: "跨星系路线复用",
+      description: "同一对行星和路线策略只规划一次中转路径，后续物流塔直接复用；500 站合成压力档保持相同状态哈希并进一步降低调度耗时。",
     },
     {
-      id: "light-station-states",
-      title: "亮色物流选中状态",
-      description: "物流槽位和设置项补齐悬停、按下、选中、焦点与禁用状态，亮色模式下可清楚识别当前配置。",
+      id: "uncapped-leaderboard",
+      title: "排行榜不再提前封顶",
+      description: "服务端移除每项 10^15 的人为上限；主云存档继续自动计算真实排名，下一次主档同步即可更新超过旧上限的记录。",
     },
     {
-      id: "v41-compatibility",
-      title: "v41 守恒迁移",
-      description: "旧弹射器自动绑定迁移时的活动轨道；库存、线路、在途物资、太阳帆、发射进度和蓝图施工数据均不重建、不删除。",
+      id: "extended-number-units",
+      title: "更清楚的终局单位",
+      description: "数量显示扩展到兆、京、垓、秭、穰、沟、涧、正、载，功率扩展到 EW、ZW、YW、RW、QW；排行榜保留精确值悬停提示。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "ejector-orbit-target": Orbit,
-  "explicit-belt-template": ClipboardCopy,
-  "delivery-hub-layout": Layers,
-  "light-station-states": Sun,
-  "v41-compatibility": Check,
+  "canvas-topology-cache": Layers,
+  "zoom-detail-restore": ZoomIn,
+  "logistics-route-cache": Route,
+  "uncapped-leaderboard": Trophy,
+  "extended-number-units": Gauge,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

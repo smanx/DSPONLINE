@@ -113,6 +113,8 @@ export interface LogisticsBenchmarkModeReport {
   medianPeerMatchCacheHits: number;
   medianRouteEconomicsCalls: number;
   medianRouteEconomicsCacheHits: number;
+  medianRoutePathPlans: number;
+  medianRoutePathCacheHits: number;
   medianCongestionDispatchReuseHits: number;
   medianCopyStateMs: number;
   medianDispatchMs: number;
@@ -157,6 +159,8 @@ function summarize(samples: LogisticsBenchmarkSample[]): LogisticsBenchmarkModeR
     medianPeerMatchCacheHits: percentile(samples.map((sample) => sample.profiler.peerMatchCacheHits), 0.5),
     medianRouteEconomicsCalls: percentile(samples.map((sample) => sample.profiler.routeEconomicsCalls), 0.5),
     medianRouteEconomicsCacheHits: percentile(samples.map((sample) => sample.profiler.routeEconomicsCacheHits), 0.5),
+    medianRoutePathPlans: percentile(samples.map((sample) => sample.profiler.routePathPlans), 0.5),
+    medianRoutePathCacheHits: percentile(samples.map((sample) => sample.profiler.routePathCacheHits), 0.5),
     medianCongestionDispatchReuseHits: percentile(samples.map((sample) => sample.profiler.congestionDispatchReuseHits), 0.5),
     medianCopyStateMs: percentile(samples.map((sample) => sample.profiler.copyStateMs), 0.5),
     medianDispatchMs: percentile(samples.map((sample) => sample.profiler.dispatchMs), 0.5),

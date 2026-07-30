@@ -85,6 +85,27 @@ describe("local account state", () => {
     expect(getActiveAccount(account).ledger.energyGeneratedMj).toBe(2);
   });
 
+  it("saturates extreme ranking totals without producing Infinity", () => {
+    const game = createInitialState();
+    game.elapsedSeconds = Number.MAX_VALUE;
+    game.planetMetrics.home.generationKw = Number.MAX_VALUE;
+    game.planetMetrics.ashen.generationKw = Number.MAX_VALUE;
+    game.planetMetrics.home.totalItemsPerMinute = Number.MAX_VALUE;
+    game.planetMetrics.ashen.totalItemsPerMinute = Number.MAX_VALUE;
+    game.dysonSwarm.generationKw = Number.MAX_VALUE;
+    game.dysonSphere.generationKw = Number.MAX_VALUE;
+    game.endgame.exportProjects.universe_archive.totalDelivered = Number.MAX_VALUE;
+
+    const account = recordAccountProgress(createAccountState(100), game, 200);
+    expect(getActiveAccount(account).ledger).toMatchObject({
+      energyGeneratedMj: Number.MAX_VALUE,
+      uploadedWhiteMatrix: Number.MAX_VALUE,
+      peakGenerationKw: Number.MAX_VALUE,
+      peakThroughputPerMinute: Number.MAX_VALUE,
+      peakDysonPowerKw: Number.MAX_VALUE,
+    });
+  });
+
   it("migrates local identities and moves one cloud binding without touching ledgers", () => {
     let state = createAccountState(100);
     const firstId = state.activeAccountId;

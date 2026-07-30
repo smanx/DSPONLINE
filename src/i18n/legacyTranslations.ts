@@ -1489,6 +1489,18 @@ const UI_EN: TranslationMap = {
   "旧弹射器自动绑定迁移时的活动轨道；库存、线路、在途物资、太阳帆、发射进度和蓝图施工数据均不重建、不删除。": "Existing ejectors bind to the active orbit during migration. Inventory, belts, in-transit cargo, solar sails, launch progress, and blueprint construction data are neither rebuilt nor deleted.",
   "轨道与物流交互更新": "Orbit & Logistics Interaction Update",
   "1.0.12 增加弹射器独立太阳帆轨道，修复线路模板选择、配送枢纽卡片和亮色物流站状态。GameState 升级至 v41，旧存档自动沿用所在恒星系的活动轨道。": "Version 1.0.12 adds per-ejector solar sail orbit targets and fixes belt template selection, Delivery Hub cards, and light-theme logistics states. GameState advances to v41; existing saves inherit each system's active orbit.",
+  "大型工厂画布缓存": "Large Factory Canvas Cache",
+  "建筑拓扑、线路几何与实时库存分开更新；没有移动或改线时不再重复计算整张工厂地图，300 个以上实体的大工厂会裁剪屏幕外节点和线路。": "Building topology, belt geometry, and live inventory now update separately. Unchanged maps are no longer recomputed, while factories above 300 entities clip off-screen nodes and belts.",
+  "放大恢复建筑细节": "Zoom Restores Building Detail",
+  "大工厂和低端设备仍会自动精简动画，但建筑细节只由真实画布缩放决定；放大后立即恢复文字、状态、缓存和操作区域。": "Large factories and low-end devices still reduce animation cost, but building detail now follows the actual canvas zoom and returns immediately when zoomed in.",
+  "跨星系路线复用": "Interstellar Route Reuse",
+  "同一对行星和路线策略只规划一次中转路径，后续物流塔直接复用；500 站合成压力档保持相同状态哈希并进一步降低调度耗时。": "Each planet pair and route policy plans its relay path once for reuse by later stations. The 500-station stress fixture keeps the same state hash with lower dispatch time.",
+  "排行榜不再提前封顶": "Leaderboard Values No Longer Cap Early",
+  "服务端移除每项 10^15 的人为上限；主云存档继续自动计算真实排名，下一次主档同步即可更新超过旧上限的记录。": "The service no longer imposes the previous 10^15 metric cap. Main cloud saves still calculate verified rankings automatically, and the next sync can raise records beyond the old limit.",
+  "更清楚的终局单位": "Clearer Endgame Units",
+  "数量显示扩展到兆、京、垓、秭、穰、沟、涧、正、载，功率扩展到 EW、ZW、YW、RW、QW；排行榜保留精确值悬停提示。": "Quantity displays now extend through larger Chinese units, while power supports EW, ZW, YW, RW, and QW. Leaderboards retain exact-value hover text.",
+  "终局画布与大数显示更新": "Endgame Canvas & Large-number Update",
+  "1.0.13 优化大型工厂画布和跨星系物流路径，修复放大后建筑仍保持灰色精简态的问题，并取消排行榜一千万亿的人为封顶。GameState 继续为 v41，存档格式不变。": "Version 1.0.13 optimizes large factory canvases and interstellar routing, restores full building detail after zooming in, and removes the leaderboard's artificial metric cap. GameState remains v41 with no save-format change.",
 };
 
 let catalogEnglish = new Map<string, string>();
@@ -1518,17 +1530,32 @@ function translateCatalogName(source: string): string {
 }
 
 function formatEnglishCompactNumber(value: number): string {
-  if (value >= 100_000_000) return `${Number((value / 1_000_000).toFixed(2))}M`;
-  if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(2))}M`;
-  if (value >= 1_000) return `${Number((value / 1_000).toFixed(2))}K`;
+  const units = [
+    { divisor: 1e33, suffix: "Dc" },
+    { divisor: 1e30, suffix: "No" },
+    { divisor: 1e27, suffix: "Oc" },
+    { divisor: 1e24, suffix: "Sp" },
+    { divisor: 1e21, suffix: "Sx" },
+    { divisor: 1e18, suffix: "Qi" },
+    { divisor: 1e15, suffix: "Qa" },
+    { divisor: 1e12, suffix: "T" },
+    { divisor: 1e9, suffix: "B" },
+    { divisor: 1e6, suffix: "M" },
+    { divisor: 1e3, suffix: "K" },
+  ] as const;
+  const unit = units.find((candidate) => value >= candidate.divisor);
+  if (unit) return `${Number((value / unit.divisor).toFixed(2))}${unit.suffix}`;
   return String(value);
 }
 
 function translateChineseCompactNumbers(source: string): string {
-  return source
-    .replace(/(\d+(?:\.\d+)?)\s*亿/g, (_, value: string) => formatEnglishCompactNumber(Number(value) * 100_000_000))
-    .replace(/(\d+(?:\.\d+)?)\s*万/g, (_, value: string) => formatEnglishCompactNumber(Number(value) * 10_000))
-    .replace(/(\d+(?:\.\d+)?)\s*千/g, (_, value: string) => formatEnglishCompactNumber(Number(value) * 1_000));
+  const powers: Record<string, number> = {
+    千: 3, 万: 4, 亿: 8, 兆: 12, 京: 16, 垓: 20, 秭: 24, 穰: 28, 沟: 32, 涧: 36, 正: 40, 载: 44,
+  };
+  return source.replace(/(\d+(?:\.\d+)?)\s*(千|万|亿|兆|京|垓|秭|穰|沟|涧|正|载)/g, (_, value: string, unit: string) => {
+    const expanded = Number(value) * 10 ** powers[unit];
+    return Number.isFinite(expanded) ? formatEnglishCompactNumber(expanded) : `${value}e+${powers[unit]}`;
+  });
 }
 
 function translateMaterialList(source: string): string {
@@ -1762,6 +1789,10 @@ function translateDynamicSystemText(body: string): string {
   if (match) return `${match[1]} sec`;
   match = body.match(/^(\d+(?:\.\d+)?)\s*项体验更新$/);
   if (match) return `${match[1]} experience updates`;
+  match = body.match(/^([\d,.]+(?:e[+-]?\d+)?)\s*分$/i);
+  if (match) return `${match[1]} pts`;
+  match = body.match(/^([\d.]+(?:万|亿|兆|京|垓|秭|穰|沟|涧|正|载))\s*分$/);
+  if (match) return `${translateChineseCompactNumbers(match[1])} pts`;
   const compact = translateChineseCompactNumbers(body);
   return compact !== body && !/[\u3400-\u9fff]/.test(compact) ? compact : body;
 }

@@ -48,7 +48,7 @@ import type { GameState } from "../game/types";
 import { CloudAccountSecurity } from "./CloudAccountSecurity";
 import { CloudSaveConflictDialog } from "./CloudSaveConflictDialog";
 import { CloudSaveSlotsPanel } from "./CloudSaveSlotsPanel";
-import { formatQuantityCompact } from "../game/quantityFormat";
+import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 import { PowerValue } from "./PowerValue";
 
 type GalaxyTab = "ranking" | "cloud" | "account";
@@ -548,7 +548,7 @@ export function GalaxyWorkspace({
                     <strong className="galaxy-rank-number">{entry.rank <= 3 ? <Crown size={15} /> : null}{String(entry.rank).padStart(2, "0")}</strong>
                     <div className="galaxy-rank-identity"><span className="galaxy-avatar">{entry.avatar}</span><span><strong>{entry.displayName}</strong><small>{entry.isLocal ? "当前账户" : leaderboardStatus === "ready" ? "真实玩家" : "本地模拟样本"}</small></span></div>
                     <span className="galaxy-rank-footprint"><strong>{entry.metrics.exploredSystems} 星系 · {entry.metrics.colonizedPlanets} 行星</strong><small>峰值发电 <PowerValue valueKw={entry.metrics.peakGenerationKw} /></small></span>
-                    <strong className="galaxy-rank-value">{formatLeaderboardValue(entry.value, category)}<small>{snapshot.category.unit}</small></strong>
+                    <strong className="galaxy-rank-value" title={`${formatQuantityExact(Math.floor(entry.value))}${snapshot.category.unit ? ` ${snapshot.category.unit}` : category === "dyson" ? " kW" : ""}`}>{formatLeaderboardValue(entry.value, category)}<small>{snapshot.category.unit}</small></strong>
                     <span className={`galaxy-rank-status${entry.isLocal && !entry.submitted ? " galaxy-rank-status--preview" : ""}`}>{entry.verified ? <ShieldCheck size={13} /> : <Activity size={13} />}{leaderboardStatus === "ready" ? "主云存档计算" : entry.accountId.startsWith("npc_") ? "模拟基准" : "本地记录"}</span>
                   </article>
                 ))}

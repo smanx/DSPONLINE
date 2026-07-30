@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-30-v1.0.12");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-30-v1.0.13");
     }
   });
 }
@@ -139,19 +139,19 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "轨道与物流交互更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "终局画布与大数显示更新" });
   await expect(releaseNotes).toBeVisible();
   await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(5);
-  await expect(releaseNotes).toContainText("弹射器独立定轨");
-  await expect(releaseNotes).toContainText("显式线路同步模板");
-  await expect(releaseNotes).toContainText("配送枢纽紧凑卡片");
-  await expect(releaseNotes).toContainText("v41 守恒迁移");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-30-v112-1440.png", fullPage: true });
+  await expect(releaseNotes).toContainText("大型工厂画布缓存");
+  await expect(releaseNotes).toContainText("放大恢复建筑细节");
+  await expect(releaseNotes).toContainText("跨星系路线复用");
+  await expect(releaseNotes).toContainText("排行榜不再提前封顶");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-30-v113-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-30-v112-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-30-v113-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -166,7 +166,7 @@ test("dated release notes appear once and remain available from both settings sc
   });
   await expect.poll(controlsFitViewport).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-30-v112-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-30-v113-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -175,7 +175,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-30-v1.0.12");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-30-v1.0.13");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -192,7 +192,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-30-v112-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-30-v113-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -2412,6 +2412,15 @@ test("low-end phones automatically use the lightweight renderer", async ({ page 
   await expect(shell).toHaveAttribute("data-mobile-performance", "true");
   await expect(shell).toHaveAttribute("data-performance-mode", "true");
   await expect(shell).toHaveAttribute("data-performance-auto", "true");
+  await expect(shell).toHaveAttribute("data-large-factory", "true");
+
+  const vein = page.locator(".vein-node").first();
+  for (let index = 0; index < 4; index += 1) await page.locator(".react-flow__controls-zoomout").click();
+  await expect(shell).toHaveAttribute("data-zoom-lod", "compact");
+  await expect(vein.locator(".manual-mine")).toHaveCSS("opacity", "0.12");
+  for (let index = 0; index < 7; index += 1) await page.locator(".react-flow__controls-zoomin").click();
+  await expect(shell).toHaveAttribute("data-zoom-lod", "full");
+  await expect(vein.locator(".manual-mine")).toHaveCSS("opacity", "1");
 });
 
 test("dragging matching ports creates a belt connection", async ({ page }) => {

@@ -57,6 +57,7 @@ function controlledOrthogonalPath(sourceX: number, sourceY: number, targetX: num
 }
 
 export interface FactoryEdgeData extends Record<string, unknown> {
+  visualSignature: string;
   itemId: ItemId;
   itemName: string;
   itemSymbol: string;

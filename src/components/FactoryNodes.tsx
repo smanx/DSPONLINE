@@ -51,6 +51,7 @@ import type {
 } from "../game/types";
 
 export interface FactoryNodeData extends Record<string, unknown> {
+  visualSignature: string;
   entity: FactoryEntity;
   cargo: CargoStack | null;
   placement: BuildingId | null;
@@ -70,12 +71,11 @@ export interface FactoryNodeData extends Record<string, unknown> {
   onInteractionLockChange: (entityId: string, locked: boolean) => void;
   researchLabel: string | null;
   researchCosts: ItemAmount[];
-  connectedInputItemIds: ItemId[];
+  connectedInputItemIds: readonly ItemId[];
   inputBeltCounts: Partial<Record<ItemId, number>>;
   outputBeltCounts: Partial<Record<ItemId, number>>;
   blackHolePortConnections: Partial<Record<0 | 1 | 2, ItemId>>;
   completedTechIds: TechId[];
-  networkTime: number;
   paused: boolean;
   powerFactor: number;
   resourceReserve: ResourceReserveSnapshot | null;

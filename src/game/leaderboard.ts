@@ -90,15 +90,27 @@ function integer(value: unknown): number {
   return Math.floor(nonNegative(value));
 }
 
+function saturatingProduct(left: number, right: number): number {
+  if (left <= 0 || right <= 0) return 0;
+  return left > Number.MAX_VALUE / right ? Number.MAX_VALUE : left * right;
+}
+
+function saturatingAdd(left: number, right: number): number {
+  const safeLeft = nonNegative(left);
+  const safeRight = nonNegative(right);
+  return safeLeft >= Number.MAX_VALUE - safeRight ? Number.MAX_VALUE : safeLeft + safeRight;
+}
+
 function calculateGalaxyScore(metrics: Omit<LeaderboardMetrics, "galaxyScore">): number {
-  return Math.round(
-    metrics.energyGeneratedMj / 1_000_000 +
-    metrics.uploadedWhiteMatrix * 12 +
-    metrics.peakDysonPowerKw / 100 +
-    metrics.peakThroughputPerMinute * 8 +
-    metrics.exploredSystems * 10_000 +
-    metrics.colonizedPlanets * 2_000,
-  );
+  const terms = [
+    metrics.energyGeneratedMj / 1_000_000,
+    saturatingProduct(metrics.uploadedWhiteMatrix, 12),
+    metrics.peakDysonPowerKw / 100,
+    saturatingProduct(metrics.peakThroughputPerMinute, 8),
+    saturatingProduct(metrics.exploredSystems, 10_000),
+    saturatingProduct(metrics.colonizedPlanets, 2_000),
+  ];
+  return Math.round(terms.reduce(saturatingAdd, 0));
 }
 
 function normalizeMetrics(value: unknown): LeaderboardMetrics {

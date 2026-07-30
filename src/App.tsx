@@ -215,7 +215,8 @@ import {
 } from "./game/engine";
 import { getAchievement, getNewAchievementIds, unlockAchievements } from "./game/progression";
 import { getDifficultyDefinition } from "./game/difficulty";
-import { analyzeBeltNetwork, diagnoseBelt, getBeltBundleMap, getPortOccupancy, predictBeltConnection } from "./game/network";
+import { analyzeBeltNetwork, createBeltDiagnosticIndex, diagnoseBelt, predictBeltConnection } from "./game/network";
+import { buildFactoryEdgeRouteCenters, reconcileFactoryCanvasTopology, type FactoryCanvasTopology } from "./game/canvasTopology";
 import { planFactoryAutoLayout } from "./game/layout";
 import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
 import { getProductionLineLocations, type ProductionLineLocation } from "./game/productionLocator";
@@ -612,6 +613,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [pointer, setPointer] = useState({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const gameRef = useRef(game);
   const latestCanvasGameRef = useRef(game);
+  const canvasTopologyRef = useRef<FactoryCanvasTopology | null>(null);
+  const edgeRouteCacheRef = useRef<{ key: string; centers: ReadonlyMap<string, number | undefined> } | null>(null);
+  const edgeRenderCacheRef = useRef<Map<string, FactoryFlowEdge>>(new Map());
   const accountStateRef = useRef(accountState);
   const completedTechCountRef = useRef(game.research.completedTechIds.length);
   const achievementCountRef = useRef(game.achievements.unlockedIds.length);
@@ -2780,25 +2784,38 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     [activePlanetEntities],
   );
 
+  const canvasTopology = useMemo(() => {
+    const next = reconcileFactoryCanvasTopology(
+      canvasTopologyRef.current,
+      canvasGame.activePlanetId,
+      activePlanetEntities,
+      activePlanetBelts,
+    );
+    canvasTopologyRef.current = next;
+    return next;
+  }, [activePlanetBelts, activePlanetEntities, canvasGame.activePlanetId]);
+
+  const beltDiagnosticIndex = useMemo(
+    () => createBeltDiagnosticIndex(activePlanetEntities),
+    [activePlanetEntities],
+  );
+
   const beltNodeIndex = useMemo(() => {
-    const connectedInputsByTarget = new Map<string, ItemId[]>();
     const activeEntityIds = new Set<string>();
     for (const belt of activePlanetBelts) {
-      const inputs = connectedInputsByTarget.get(belt.target) ?? [];
-      inputs.push(belt.itemId);
-      connectedInputsByTarget.set(belt.target, inputs);
       if (belt.lastFlow > 0.001) {
         activeEntityIds.add(belt.source);
         activeEntityIds.add(belt.target);
       }
     }
-    return { connectedInputsByTarget, activeEntityIds: [...activeEntityIds], occupancy: getPortOccupancy(canvasGame, canvasGame.activePlanetId, activePlanetBelts) };
-  }, [activePlanetBelts, canvasGame.activePlanetId, canvasGame]);
+    return {
+      connectedInputsByTarget: canvasTopology.connectedInputsByTarget,
+      activeEntityIds: [...activeEntityIds],
+      occupancy: canvasTopology.occupancy,
+    };
+  }, [activePlanetBelts, canvasTopology]);
 
-  const beltBundleMap = useMemo(
-    () => getBeltBundleMap(canvasGame, canvasGame.activePlanetId, activePlanetBelts),
-    [activePlanetBelts, canvasGame, canvasGame.activePlanetId],
-  );
+  const beltBundleMap = canvasTopology.bundleByBeltId;
   const focusedBeltNetwork = useMemo(() => focusedBeltNetworkId
     ? analyzeBeltNetwork(canvasGame, focusedBeltNetworkId)
     : null, [focusedBeltNetworkId, canvasGame]);
@@ -2848,7 +2865,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     return { entityIds, beltIds, itemIds };
   }, [activePlanetBelts, activePlanetEntities, canvasGame, highlightedTaskId]);
 
-  const commonNodeData = useMemo<Omit<FactoryNodeData, "entity" | "status" | "powerFactor" | "resourceReserve" | "connectedInputItemIds" | "inputBeltCounts" | "outputBeltCounts" | "blackHolePortConnections" | "cycleRatePerSecond">>(() => {
+  const commonNodeData = useMemo<Omit<FactoryNodeData, "visualSignature" | "entity" | "status" | "powerFactor" | "resourceReserve" | "connectedInputItemIds" | "inputBeltCounts" | "outputBeltCounts" | "blackHolePortConnections" | "cycleRatePerSecond">>(() => {
     const technology = getTechnology(canvasGame.research.selectedTechId);
     const progress = technology ? canvasGame.research.progressByTech[technology.id] ?? {} : {};
     const planetProfile = getPlanetIndustrialProfile(canvasGame, canvasGame.activePlanetId);
@@ -2875,7 +2892,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       researchLabel: technology?.name ?? null,
       researchCosts: technology?.costs.filter((cost) => (progress[cost.itemId] ?? 0) < cost.amount) ?? [],
       completedTechIds: canvasGame.research.completedTechIds,
-      networkTime: canvasGame.elapsedSeconds,
       paused: canvasGame.paused,
       powerDemandMultiplier: getDifficultyDefinition(canvasGame.settings.difficulty).powerDemandMultiplier,
       solarGenerationMultiplier: getPlanetSolarPowerMultiplier(canvasGame, canvasGame.activePlanetId),
@@ -2888,16 +2904,69 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       timeWarp: canvasGame.timeWarp,
       simulationMultiplier: getEffectiveSimulationMultiplier(canvasGame),
     };
-  }, [beltNodeIndex.activeEntityIds, canvasGame.activePlanetId, canvasGame.cargo, canvasGame.dysonSphere, canvasGame.dysonSwarm, canvasGame.elapsedSeconds, canvasGame.galaxy, canvasGame.paused, canvasGame.research.completedTechIds, canvasGame.research.progressByTech, canvasGame.research.selectedTechId, canvasGame.settings.difficulty, canvasGame.settings.simulationSpeed, canvasGame.timeWarp, commitGame, connectionDraft, miningEntityId, onAddBuilding, onDropCargo, onDropDraggedItem, onEnergyModeChange, onFuelChange, onInstallMiner, onMiningStart, onMiningStop, onPickInput, onPickOutput, onRecipeChange, placement, placementCount]);
+  }, [beltNodeIndex.activeEntityIds, canvasGame.activePlanetId, canvasGame.cargo, canvasGame.dysonSphere, canvasGame.dysonSwarm, canvasGame.galaxy, canvasGame.paused, canvasGame.research.completedTechIds, canvasGame.research.progressByTech, canvasGame.research.selectedTechId, canvasGame.settings.difficulty, canvasGame.settings.simulationSpeed, canvasGame.timeWarp, commitGame, connectionDraft, miningEntityId, onAddBuilding, onDropCargo, onDropDraggedItem, onEnergyModeChange, onFuelChange, onInstallMiner, onMiningStart, onMiningStop, onPickInput, onPickOutput, onRecipeChange, placement, placementCount]);
 
   useEffect(() => {
     if (nodeDragActiveRef.current) return;
     const frame = window.requestAnimationFrame(() => {
       setNodes((current) => {
         const existing = new Map(current.map((node) => [node.id, node]));
-        return activePlanetEntities.map((entity) => {
+        const next = activePlanetEntities.map((entity) => {
           const previous = existing.get(entity.id);
           const ejectorTarget = entity.buildingId === "em_rail_ejector" ? getEjectorOrbitTargetStatus(canvasGame, entity) : null;
+          const connectedInputItemIds = beltNodeIndex.connectedInputsByTarget.get(entity.id) ?? [];
+          const inputBeltCounts = beltNodeIndex.occupancy.input.get(entity.id) ?? {};
+          const outputBeltCounts = beltNodeIndex.occupancy.output.get(entity.id) ?? {};
+          const blackHolePortConnections = canvasTopology.targetPortItemsByEntity.get(entity.id) ?? {};
+          const targetDysonOrbitLabel = ejectorTarget?.valid ? `轨道：${ejectorTarget.orbit!.name}` : ejectorTarget ? "轨道失效" : undefined;
+          const powerFactor = getEntityPowerFactor(canvasGame, entity);
+          const resourceReserve = getResourceReserveSnapshot(canvasGame, entity);
+          const status = getEntityOperatingStatus(canvasGame, entity);
+          const outputCapacity = getEntityOutputCapacity(canvasGame, entity);
+          const cycleRatePerSecond = getEntityCycleRatePerSimulationSecond(canvasGame, entity);
+          const selected = selectedEntityIds.includes(entity.id);
+          const className = highlightedTaskId
+            ? taskHighlight.entityIds.has(entity.id) ? "factory-flow-node--task-focus" : "factory-flow-node--task-dim"
+            : productionLineFocus?.planetId === canvasGame.activePlanetId
+              ? locatedProductionEntityIds.has(entity.id) ? "factory-flow-node--network-focus" : "factory-flow-node--network-dim"
+            : focusedBeltNetwork
+              ? focusedNetworkEntityIds.has(entity.id) ? "factory-flow-node--network-focus" : "factory-flow-node--network-dim"
+              : undefined;
+          const draggable = !placement && !blueprintPlacementId && !entity.interactionLocked;
+          const visualSignature = JSON.stringify([
+            entity,
+            connectedInputItemIds,
+            inputBeltCounts,
+            outputBeltCounts,
+            blackHolePortConnections,
+            targetDysonOrbitLabel,
+            powerFactor,
+            resourceReserve,
+            status,
+            outputCapacity,
+            cycleRatePerSecond,
+            commonNodeData.cargo,
+            commonNodeData.placement,
+            commonNodeData.placementCount,
+            commonNodeData.miningEntityId === entity.id,
+            commonNodeData.paused,
+            commonNodeData.simulationMultiplier,
+            commonNodeData.connectionDraft,
+            (commonNodeData.activeLogisticsEntityIds as string[]).includes(entity.id),
+            entity.kind === "machine" || entity.kind === "power" ? commonNodeData.completedTechIds : null,
+            entity.recipeId === "matrix_research" ? [commonNodeData.researchLabel, commonNodeData.researchCosts] : null,
+            entity.buildingId === "em_rail_ejector" ? commonNodeData.dysonSwarm : null,
+            entity.buildingId === "vertical_launching_silo" ? commonNodeData.dysonSphere : null,
+            entity.buildingId === "time_warp_device" ? commonNodeData.timeWarp : null,
+            entity.kind === "power" ? [commonNodeData.solarGenerationMultiplier, commonNodeData.windGenerationMultiplier, commonNodeData.geothermalGenerationMultiplier] : null,
+            commonNodeData.powerDemandMultiplier,
+            selected,
+            className,
+            draggable,
+          ]);
+          if (previous?.data.visualSignature === visualSignature &&
+            previous.position.x === entity.position.x && previous.position.y === entity.position.y &&
+            previous.selected === selected && previous.className === className && previous.draggable === draggable) return previous;
           return {
             id: entity.id,
             type: entity.kind,
@@ -2905,36 +2974,31 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             measured: previous?.measured,
             data: {
               ...commonNodeData,
+              visualSignature,
               entity,
-              connectedInputItemIds: beltNodeIndex.connectedInputsByTarget.get(entity.id) ?? [],
-              inputBeltCounts: beltNodeIndex.occupancy.input.get(entity.id) ?? {},
-              outputBeltCounts: beltNodeIndex.occupancy.output.get(entity.id) ?? {},
-              blackHolePortConnections: Object.fromEntries(activePlanetBelts.filter((belt) =>
-                belt.target === entity.id && belt.targetPortIndex !== undefined).map((belt) => [belt.targetPortIndex!, belt.itemId])),
-              targetDysonOrbitLabel: ejectorTarget?.valid ? `轨道：${ejectorTarget.orbit!.name}` : ejectorTarget ? "轨道失效" : undefined,
-              powerFactor: getEntityPowerFactor(canvasGame, entity),
-              resourceReserve: getResourceReserveSnapshot(canvasGame, entity),
-              status: getEntityOperatingStatus(canvasGame, entity),
-              outputCapacity: getEntityOutputCapacity(canvasGame, entity),
-              cycleRatePerSecond: getEntityCycleRatePerSimulationSecond(canvasGame, entity),
+              connectedInputItemIds,
+              inputBeltCounts,
+              outputBeltCounts,
+              blackHolePortConnections,
+              targetDysonOrbitLabel,
+              powerFactor,
+              resourceReserve,
+              status,
+              outputCapacity,
+              cycleRatePerSecond,
             } as FactoryNodeData,
-            selected: selectedEntityIds.includes(entity.id),
-            className: highlightedTaskId
-              ? taskHighlight.entityIds.has(entity.id) ? "factory-flow-node--task-focus" : "factory-flow-node--task-dim"
-              : productionLineFocus?.planetId === canvasGame.activePlanetId
-                ? locatedProductionEntityIds.has(entity.id) ? "factory-flow-node--network-focus" : "factory-flow-node--network-dim"
-              : focusedBeltNetwork
-                ? focusedNetworkEntityIds.has(entity.id) ? "factory-flow-node--network-focus" : "factory-flow-node--network-dim"
-                : undefined,
-            draggable: !placement && !blueprintPlacementId && !entity.interactionLocked,
+            selected,
+            className,
+            draggable,
           } satisfies FactoryFlowNode;
         });
+        return next.length === current.length && next.every((node, index) => node === current[index]) ? current : next;
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activePlanetBelts, activePlanetEntities, beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame.activePlanetId, canvasGame.dysonEngineering, canvasGame.galaxy, canvasGame.settings.logisticsBufferLimit, canvasGame.settings.productionBufferLimit, canvasGame.settings.proliferatorBufferLimit, canvasGame.settings.resourceMode, commonNodeData, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, locatedProductionEntityIds, placement, productionLineFocus, selectedEntityIds, setNodes, taskHighlight.entityIds]);
+  }, [activePlanetEntities, beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame.activePlanetId, canvasGame.dysonEngineering, canvasGame.galaxy, canvasGame.settings.logisticsBufferLimit, canvasGame.settings.productionBufferLimit, canvasGame.settings.proliferatorBufferLimit, canvasGame.settings.resourceMode, canvasTopology.targetPortItemsByEntity, commonNodeData, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, locatedProductionEntityIds, placement, productionLineFocus, selectedEntityIds, setNodes, taskHighlight.entityIds]);
 
-  const edges = useMemo<FactoryFlowEdge[]>(() => {
+  const edgeRouteCenters = useMemo(() => {
     const rects = nodes.map((node) => ({
       id: node.id,
       x: node.position.x,
@@ -2942,41 +3006,21 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       width: node.measured?.width ?? 256,
       height: node.measured?.height ?? 180,
     }));
-    const rectById = new Map(rects.map((rect) => [rect.id, rect]));
-    const routeCenterFor = (belt: GameState["belts"][number], bundleIndex: number, bundleSize: number) => {
-      const mode = belt.routeMode ?? "auto";
-      if (mode === "bezier" || largeFactoryMode) return undefined;
-      const source = rectById.get(belt.source);
-      const target = rectById.get(belt.target);
-      if (!source || !target) return undefined;
-      const sourceY = source.y + source.height / 2;
-      const targetY = target.y + target.height / 2;
-      const bundleOffset = (bundleIndex - (bundleSize - 1) / 2) * 18;
-      if (mode === "manual") return (sourceY + targetY) / 2 + (belt.routeOffsetY ?? 0) + bundleOffset;
-      if (mode === "upper") return Math.min(source.y, target.y) - 64 + bundleOffset;
-      if (mode === "lower") return Math.max(source.y + source.height, target.y + target.height) + 64 + bundleOffset;
-      const sourceX = source.x + source.width;
-      const targetX = target.x;
-      const left = Math.min(sourceX, targetX);
-      const right = Math.max(sourceX, targetX);
-      const blockers = rects.filter((rect) => {
-        if (rect.id === source.id || rect.id === target.id || rect.x > right || rect.x + rect.width < left) return false;
-        const ratio = right - left > 0.001 ? (rect.x + rect.width / 2 - left) / (right - left) : 0.5;
-        const routeY = sourceY + (targetY - sourceY) * Math.max(0, Math.min(1, ratio));
-        return routeY >= rect.y - 18 && routeY <= rect.y + rect.height + 18;
-      });
-      if (blockers.length === 0) return (sourceY + targetY) / 2 + bundleOffset;
-      const upper = Math.min(sourceY, targetY, ...blockers.map((rect) => rect.y)) - 52;
-      const lower = Math.max(sourceY, targetY, ...blockers.map((rect) => rect.y + rect.height)) + 52;
-      const midpoint = (sourceY + targetY) / 2;
-      return (Math.abs(midpoint - upper) <= Math.abs(lower - midpoint) ? upper : lower) + bundleOffset;
-    };
-    return activePlanetBelts.map((belt) => {
+    const key = `${canvasTopology.signature}|${largeFactoryMode ? 1 : 0}|${rects.map((rect) => `${rect.id}:${rect.x}:${rect.y}:${rect.width}:${rect.height}`).join(";")}`;
+    if (edgeRouteCacheRef.current?.key === key) return edgeRouteCacheRef.current.centers;
+    const centers = buildFactoryEdgeRouteCenters(canvasTopology, rects, largeFactoryMode);
+    edgeRouteCacheRef.current = { key, centers };
+    return centers;
+  }, [canvasTopology, largeFactoryMode, nodes]);
+
+  const edges = useMemo<FactoryFlowEdge[]>(() => {
+    const nextCache = new Map<string, FactoryFlowEdge>();
+    const next = activePlanetBelts.map((belt) => {
       const item = ITEMS[belt.itemId];
       const capacity = getBeltCapacity(belt);
       const flowRatio = capacity > 0 ? Math.min(1, belt.lastFlow / capacity) : 0;
       const bundle = beltBundleMap.get(belt.id) ?? { index: 0, size: 1 };
-      const diagnostic = diagnoseBelt(canvasGame, belt);
+      const diagnostic = diagnoseBelt(canvasGame, belt, beltDiagnosticIndex);
       const routeColor = canvasGame.settings.beltHeatmapEnabled ? beltHeatColor(diagnostic.utilization) : item.color;
       const focusTone = highlightedTaskId
         ? taskHighlight.beltIds.has(belt.id) ? "focus" : "dim"
@@ -2985,23 +3029,41 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         : focusedBeltNetwork
           ? focusedNetworkBeltIds.has(belt.id) ? "focus" : "dim"
           : "normal";
-      return {
+      const selected = selectedBeltId === belt.id || selectedBeltIdSet.has(belt.id);
+      const targetHandle = belt.targetPortIndex === undefined
+        ? `in:${belt.itemId}`
+        : activeEntityById.get(belt.target)?.buildingId === "material_delivery_hub"
+          ? `in:delivery:${belt.targetPortIndex}`
+          : `in:black-hole:${belt.targetPortIndex}`;
+      const className = `factory-edge factory-edge--health-${diagnostic.health}${canvasGame.settings.beltHeatmapEnabled ? " factory-edge--heatmap" : ""}${diagnostic.flow > 0.001 ? " factory-edge--active" : ""}${focusTone === "focus" ? " factory-edge--task-focus" : focusTone === "dim" ? " factory-edge--task-dim" : ""}`;
+      const routeCenterY = edgeRouteCenters.get(belt.id);
+      const detailVisible = viewportZoom >= 0.55;
+      const motionEnabled = !coarsePointer && !performanceVisualMode && !canvasGame.settings.reducedMotion;
+      const strokeWidth = selected ? 3.5 : canvasGame.settings.beltHeatmapEnabled ? 1.8 + diagnostic.utilization * 2.4 : 2;
+      const visualSignature = JSON.stringify([
+        belt.id, belt.source, belt.target, belt.itemId, belt.tier, belt.stackSize ?? 1, belt.routeMode ?? "auto",
+        targetHandle, diagnostic.health, diagnostic.flow, diagnostic.utilization, belt.congestion ?? 0,
+        belt.monitorEnabled ?? false, routeColor, focusTone, selected, routeCenterY, detailVisible, motionEnabled, bundle, strokeWidth,
+      ]);
+      const previous = edgeRenderCacheRef.current.get(belt.id);
+      if (previous?.data?.visualSignature === visualSignature) {
+        nextCache.set(belt.id, previous);
+        return previous;
+      }
+      const edge = {
         id: belt.id,
         type: "factory",
         source: belt.source,
         target: belt.target,
         sourceHandle: `out:${belt.itemId}`,
-        targetHandle: belt.targetPortIndex === undefined
-          ? `in:${belt.itemId}`
-          : activeEntityById.get(belt.target)?.buildingId === "material_delivery_hub"
-            ? `in:delivery:${belt.targetPortIndex}`
-            : `in:black-hole:${belt.targetPortIndex}`,
-        className: `factory-edge factory-edge--health-${diagnostic.health}${canvasGame.settings.beltHeatmapEnabled ? " factory-edge--heatmap" : ""}${diagnostic.flow > 0.001 ? " factory-edge--active" : ""}${focusTone === "focus" ? " factory-edge--task-focus" : focusTone === "dim" ? " factory-edge--task-dim" : ""}`,
-        selected: selectedBeltId === belt.id || selectedBeltIdSet.has(belt.id),
-        zIndex: selectedBeltId === belt.id || selectedBeltIdSet.has(belt.id) ? 1 : 0,
+        targetHandle,
+        className,
+        selected,
+        zIndex: selected ? 1 : 0,
         interactionWidth: 36,
         markerEnd: { type: MarkerType.ArrowClosed, color: routeColor },
         data: {
+          visualSignature,
           itemId: belt.itemId,
           itemName: item.name,
           itemSymbol: item.symbol,
@@ -3013,10 +3075,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           congestion: belt.congestion ?? 0,
           monitored: belt.monitorEnabled ?? false,
           durationSeconds: Math.max(0.55, 1.65 - flowRatio * 0.9),
-          detailVisible: !largeFactoryMode && viewportZoom >= 0.55,
-          motionEnabled: !coarsePointer && !performanceVisualMode && !canvasGame.settings.reducedMotion,
+          detailVisible,
+          motionEnabled,
           routeMode: belt.routeMode ?? "auto",
-          routeCenterY: routeCenterFor(belt, bundle.index, bundle.size),
+          routeCenterY,
           bundleIndex: bundle.index,
           bundleSize: bundle.size,
           health: diagnostic.health,
@@ -3024,11 +3086,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         },
         style: {
           stroke: routeColor,
-          strokeWidth: selectedBeltId === belt.id || selectedBeltIdSet.has(belt.id) ? 3.5 : canvasGame.settings.beltHeatmapEnabled ? 1.8 + diagnostic.utilization * 2.4 : 2,
+          strokeWidth,
         },
       } satisfies FactoryFlowEdge;
+      nextCache.set(belt.id, edge);
+      return edge;
     });
-  }, [activeEntityById, activePlanetBelts, beltBundleMap, canvasGame, coarsePointer, focusedBeltNetwork, focusedNetworkBeltIds, highlightedTaskId, largeFactoryMode, locatedProductionBeltIds, nodes, performanceVisualMode, productionLineFocus, selectedBeltId, selectedBeltIdSet, taskHighlight.beltIds, viewportZoom]);
+    edgeRenderCacheRef.current = nextCache;
+    return next;
+  }, [activeEntityById, activePlanetBelts, beltBundleMap, beltDiagnosticIndex, canvasGame, coarsePointer, edgeRouteCenters, focusedBeltNetwork, focusedNetworkBeltIds, highlightedTaskId, locatedProductionBeltIds, performanceVisualMode, productionLineFocus, selectedBeltId, selectedBeltIdSet, taskHighlight.beltIds, viewportZoom]);
 
   const isValidConnection = useCallback((connection: Connection | Edge) => {
     const sourceItem = parseHandleItem(connection.sourceHandle);
@@ -4059,7 +4125,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       data-production-refresh={productionRefreshPreference}
       data-production-refresh-ms={productionRefreshIntervalMs}
       data-difficulty={game.settings.difficulty}
-      data-zoom-lod={largeFactoryMode || viewportZoom < 0.55 ? "compact" : viewportZoom < 0.86 ? "medium" : "full"}
+      data-zoom-lod={viewportZoom < 0.55 ? "compact" : viewportZoom < 0.86 ? "medium" : "full"}
       data-large-factory={largeFactoryMode ? "true" : "false"}
       data-network-heatmap={game.settings.beltHeatmapEnabled ? "true" : "false"}
       data-coarse-pointer={coarsePointer ? "true" : "false"}
@@ -4504,7 +4570,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             zoomOnDoubleClick={false}
             deleteKeyCode={null}
             fitViewOptions={{ padding: 0.18 }}
-            onlyRenderVisibleElements={performanceVisualMode}
+            onlyRenderVisibleElements={activePlanetEntityCount >= 300}
             proOptions={{ hideAttribution: true }}
           >
             <Background variant={BackgroundVariant.Dots} gap={20} size={1.1} color={resolvedTheme === "light" ? "#b7c8bf" : "#3c4743"} />

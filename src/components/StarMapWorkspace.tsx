@@ -7,6 +7,7 @@ import { getInterplanetaryLogisticsDiagnostics, getPlanetIndustrySummaries, getR
 import type { GameState, ItemId, LogisticsPriority, PlanetId, PlanetIndustryRole, StarSystemId, StationMinimumLoad } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { PowerValue } from "./PowerValue";
+import { formatQuantityCompact } from "../game/quantityFormat";
 
 function formatDistance(distanceLy: number): string {
   return distanceLy <= 0 ? "本地" : `${distanceLy.toFixed(1)} 光年`;
@@ -14,9 +15,7 @@ function formatDistance(distanceLy: number): string {
 
 function compactNumber(value: number): string {
   if (!Number.isFinite(value)) return "--";
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-  return Math.round(value).toString();
+  return formatQuantityCompact(Math.round(value));
 }
 
 function formatDepletion(seconds: number | null): string {

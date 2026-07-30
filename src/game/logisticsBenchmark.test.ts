@@ -12,6 +12,8 @@ describe("logistics lookup benchmark", () => {
     expect(report.indexed.routeCount).toBe(report.legacy.routeCount);
     expect(report.indexed.medianPeerCandidateChecks).toBeLessThan(report.legacy.medianPeerCandidateChecks);
     expect(report.indexed.medianRouteEconomicsCalls).toBeLessThanOrEqual(report.legacy.medianRouteEconomicsCalls);
+    expect(report.indexed.medianRoutePathPlans).toBeLessThanOrEqual(report.indexed.medianRouteEconomicsCalls);
+    expect(report.indexed.medianRoutePathCacheHits).toBeGreaterThanOrEqual(0);
     expect(report.indexed.medianPeerMatchCacheHits).toBeGreaterThan(0);
     expect(report.indexed.medianCongestionDispatchReuseHits).toBeGreaterThan(0);
   }, 30_000);

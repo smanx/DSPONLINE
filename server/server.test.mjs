@@ -1191,6 +1191,60 @@ test("recalculates leaderboard score on the server", async () => {
   assert.equal(ranking.body.entries[0].verified, true);
 });
 
+test("keeps server-derived leaderboard values above the former metric cap", async () => {
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "uncapped_rank", password: "rank-pass-123", displayName: "超大工厂" }),
+  });
+  assert.equal(registered.response.status, 201);
+  const payload = createSavePayload({
+    version: 24,
+    elapsedSeconds: 1_000,
+    entities: [],
+    totalProduced: { universe_matrix: 10 },
+    metrics: { generationKw: 2_500_000_000_000_000, totalItemsPerMinute: 1_500_000_000_000_000, rayGenerationKw: 0 },
+    exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
+  });
+  const uploaded = await request("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.body.token}` },
+    body: JSON.stringify({ payload, expectedRevision: 0 }),
+  });
+  assert.equal(uploaded.response.status, 200);
+  const ranking = await request("/api/leaderboard?category=power&seasonId=season_01");
+  const entry = ranking.body.entries.find((candidate) => candidate.displayName === "超大工厂");
+  assert.equal(entry.metrics.energyGeneratedMj, 2_500_000_000_000_000);
+  assert.equal(entry.metrics.peakThroughputPerMinute, 1_500_000_000_000_000);
+});
+
+test("saturates extreme leaderboard totals instead of wrapping them to zero", async () => {
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "saturated_rank", password: "rank-pass-123", displayName: "极限工厂" }),
+  });
+  const payload = createSavePayload({
+    version: 24,
+    elapsedSeconds: Number.MAX_VALUE,
+    entities: [],
+    totalProduced: { universe_matrix: Number.MAX_VALUE },
+    metrics: { generationKw: Number.MAX_VALUE, totalItemsPerMinute: Number.MAX_VALUE, rayGenerationKw: 0 },
+    dysonSwarm: { generationKw: Number.MAX_VALUE },
+    dysonSphere: { generationKw: Number.MAX_VALUE },
+    exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
+  });
+  const uploaded = await request("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.body.token}` },
+    body: JSON.stringify({ payload, expectedRevision: 0 }),
+  });
+  assert.equal(uploaded.response.status, 200);
+  const ranking = await request("/api/leaderboard?category=dyson&seasonId=season_01");
+  const entry = ranking.body.entries.find((candidate) => candidate.displayName === "极限工厂");
+  assert.equal(entry.metrics.energyGeneratedMj, Number.MAX_VALUE);
+  assert.equal(entry.metrics.peakDysonPowerKw, Number.MAX_VALUE);
+  assert.equal(entry.metrics.galaxyScore, Number.MAX_VALUE);
+});
+
 test("deletes an account and all directly owned cloud data", async () => {
   const created = await request("/api/auth/register", { method: "POST", body: JSON.stringify({ username: "delete_pilot", password: "delete-pass-123", displayName: "待注销工程师" }) });
   assert.equal(created.response.status, 201);

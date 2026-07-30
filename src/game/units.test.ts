@@ -13,7 +13,12 @@ describe("power formatting", () => {
     expect(formatPowerKw(1_000_000)).toBe("1 GW");
     expect(formatPowerKw(1_000_000_000)).toBe("1 TW");
     expect(formatPowerKw(1_000_000_000_000)).toBe("1 PW");
-    expect(formatPowerKw(1_000_000_000_000_000)).toBe("1.00e3 PW");
+    expect(formatPowerKw(1_000_000_000_000_000)).toBe("1 EW");
+    expect(formatPowerKw(1e18)).toBe("1 ZW");
+    expect(formatPowerKw(1e21)).toBe("1 YW");
+    expect(formatPowerKw(1e24)).toBe("1 RW");
+    expect(formatPowerKw(1e27)).toBe("1 QW");
+    expect(formatPowerKw(1e30)).toBe("1.00e3 QW");
     expect(formatPowerKw(Number.NaN)).toBe("0 kW");
     expect(formatPowerKw(Number.POSITIVE_INFINITY)).toBe("0 kW");
   });

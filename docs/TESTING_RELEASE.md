@@ -5,9 +5,9 @@
 | 层级 | 命令 | 当前规模 | 覆盖重点 |
 | --- | --- | ---: | --- |
 | 类型检查 | `npm run typecheck` | 全部前端 TS | 严格类型、Vite 配置 |
-| 单元/领域 | `npm test` | `1.0.12` 正式版 548 项通过，3 项可选基准跳过 | 引擎、v1-v41 存档、弹射器目标轨道、确定性物流索引、燃料/蓄电/复杂递归制造批次、终局夹具、离线 Worker、内容包、云同步和原生更新配置等 |
-| 浏览器 E2E | `npm run test:e2e` | `1.0.12` 正式版 176/176 通过 | 从开局到银河终局、物流与制造、双语亮暗主题、新旧手机壳、配送枢纽几何、线路模板、轨道选择、IndexedDB 存档保护和横竖屏回归 |
-| 云服务 | `npm run test:server` | `1.0.12` 正式版 42 项 | 用户名注册、四槽云存档、schema v3→v7、SQLite layout v1→v2、v41 存档边界、自动排名、内部排行榜限制、幂等处置和管理员保护 |
+| 单元/领域 | `npm test` | `1.0.13` 候选版 556 项通过，3 项可选基准跳过 | 引擎、v1-v41 存档、画布拓扑、物流路径缓存、大数格式、确定性物流索引、终局夹具、离线 Worker、内容包、云同步和原生更新配置等 |
+| 浏览器 E2E | `npm run test:e2e` | `1.0.13` 候选版 176/176 通过 | 从开局到银河终局、物流与制造、双语亮暗主题、新旧手机壳、缩放 LOD、视口边界、IndexedDB 存档保护和横竖屏回归 |
+| 云服务 | `npm run test:server` | `1.0.13` 候选版 44 项 | 用户名注册、四槽云存档、schema v3→v7、SQLite layout v1→v2、v41 存档边界、无人工封顶与极值饱和排名、内部排行榜限制和管理员保护 |
 | 运维工具 | `npm run test:ops` | 6 项 | SQLite 一致性快照、认证加密、异地复制、隔离恢复、篡改拒绝、Nginx 压缩与缓存边界、Android origin 模板、端点/磁盘探针和告警载荷 |
 | 原生配置与发布工具 | `npm run test:native` | 6 项 | 社区更新源默认关闭、HTTPS 通道、Android/桌面更新清单、调试 APK 拒绝和显式发布基址 |
 | 第三方许可证 | `npm run licenses:check` | 128 个运行时包 | 根项目/云服务 lockfile、直接依赖通知、完整许可证文本和 public 法律文件一致性 |
@@ -867,3 +867,23 @@ Android API 36.1 模拟器从正式签名 `1.0.10 / 1000010` 原地升级到 `1.
 Android API 36.1 模拟器从正式签名 `1.0.10 / 1000010` 原地升级到 `1.0.12 / 1000012`，`firstInstallTime` 和 19 小时 26 分本地主存档保持，日志无 Fatal/ANR。Windows FileVersion/ProductVersion 与稳定通道为 1.0.12，隔离启动通过，Authenticode 仍为 `NotSigned`。两地 Web/API、上海下载页和稳定清单均已原子切换到 `1.0.12-4f149409f433`；公网 Build ID、文件哈希、Range、immutable/no-cache 和 Android Origin 边界通过。
 
 发布前后四份 SQLite Backup API 备份均通过 `quick_check`。香港账号、主云档、公开 submission、玩家和内部排行榜限制数量没有减少；发布窗口增加的一条修订和正文来自正常在线上传。上海账号和云档继续为 0、玩家记录保持 24。香港首次切换因默认健康窗口短于正常启动时间而自动回滚，确认无崩溃后使用 30 秒健康窗口重试成功；数据库从未恢复或替换。完整证据见 [releases/1.0.12.md](./releases/1.0.12.md)。
+
+## 36. `1.0.13` / v41 画布、物流路径和大数回归
+
+`1.0.13` 不升级 GameState、envelope、云 schema 或 SQLite layout。专项覆盖稳定拓扑缓存、节点/边视觉签名复用、300 实体视口裁剪边界、缩放从 compact 恢复 full、预构建线路诊断索引、跨星系路径缓存、排行榜超 `10^15` 值和中文/SI 大数格式。
+
+正式候选门禁：
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 58 个文件通过、1 个可选基准文件跳过；556 项通过、3 项跳过 |
+| `npm run test:server` | 44/44 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 176/176 通过，单 worker 约 555 秒 |
+| `npm run benchmark:logistics` | 7/7 通过；10/50/100/128/300/500 站哈希一致 |
+
+视觉检查使用 `artifacts/qa/stress-factory-1440.png`、`factory-phone-portrait-390.png`、`factory-phone-landscape-844.png` 和 `font-200-*.png`。桌面、390×844、844×390 与 200% 字体均恢复完整建筑内容，没有改变线路层级或端口几何。

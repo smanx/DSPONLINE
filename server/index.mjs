@@ -324,10 +324,41 @@ function clientTypeForRequest(request) {
   return "desktop-web";
 }
 
-function normalizeMetric(value, integer = false, maximum = 1e15) {
+function normalizeMetric(value, integer = false, maximum = Number.MAX_VALUE) {
   const number = typeof value === "number" && Number.isFinite(value) ? value : 0;
   const normalized = Math.max(0, Math.min(maximum, number));
-  return integer ? Math.floor(normalized) : Math.round(normalized * 100) / 100;
+  if (integer) return Math.floor(normalized);
+  return normalized > Number.MAX_VALUE / 100 ? normalized : Math.round(normalized * 100) / 100;
+}
+
+function saturatingMetricProduct(left, right) {
+  const normalizedLeft = normalizeMetric(left);
+  const normalizedRight = normalizeMetric(right);
+  if (normalizedLeft === 0 || normalizedRight === 0) return 0;
+  return normalizedLeft > Number.MAX_VALUE / normalizedRight
+    ? Number.MAX_VALUE
+    : normalizedLeft * normalizedRight;
+}
+
+function saturatingMetricAdd(left, right) {
+  const normalizedLeft = normalizeMetric(left);
+  const normalizedRight = normalizeMetric(right);
+  return normalizedLeft >= Number.MAX_VALUE - normalizedRight
+    ? Number.MAX_VALUE
+    : normalizedLeft + normalizedRight;
+}
+
+function calculateGalaxyScore(metrics) {
+  const terms = [
+    metrics.energyGeneratedMj / 1_000_000,
+    saturatingMetricProduct(metrics.uploadedWhiteMatrix, 12),
+    metrics.peakDysonPowerKw / 100,
+    saturatingMetricProduct(metrics.peakThroughputPerMinute, 8),
+    saturatingMetricProduct(metrics.exploredSystems, 10_000),
+    saturatingMetricProduct(metrics.colonizedPlanets, 2_000),
+  ];
+  const total = terms.reduce(saturatingMetricAdd, 0);
+  return Math.round(total);
 }
 
 function normalizeMetrics(value) {
@@ -341,14 +372,7 @@ function normalizeMetrics(value) {
     exploredSystems: normalizeMetric(source.exploredSystems, true, 10_000),
     colonizedPlanets: normalizeMetric(source.colonizedPlanets, true, 100_000),
   };
-  metrics.galaxyScore = Math.round(
-    metrics.energyGeneratedMj / 1_000_000 +
-    metrics.uploadedWhiteMatrix * 12 +
-    metrics.peakDysonPowerKw / 100 +
-    metrics.peakThroughputPerMinute * 8 +
-    metrics.exploredSystems * 10_000 +
-    metrics.colonizedPlanets * 2_000,
-  );
+  metrics.galaxyScore = calculateGalaxyScore(metrics);
   return metrics;
 }
 
@@ -975,10 +999,10 @@ function leaderboardMetricsFromSave(save) {
   const producedWhiteMatrix = Math.floor(numberAt(state.totalProduced?.universe_matrix));
   const exploredSystems = Array.isArray(state.exploration?.unlockedSystemIds) ? new Set(state.exploration.unlockedSystemIds).size : 1;
   const colonizedPlanets = Array.isArray(state.exploration?.colonizedPlanetIds) ? new Set(state.exploration.colonizedPlanetIds).size : 1;
-  const dysonPowerKw = numberAt(state.dysonSwarm?.generationKw) + numberAt(state.dysonSphere?.generationKw);
+  const dysonPowerKw = saturatingMetricAdd(state.dysonSwarm?.generationKw, state.dysonSphere?.generationKw);
   const throughput = numberAt(state.metrics?.totalItemsPerMinute);
   return normalizeMetrics({
-    energyGeneratedMj: generationKw * elapsedSeconds / 1000,
+    energyGeneratedMj: saturatingMetricProduct(generationKw, elapsedSeconds / 1000),
     uploadedWhiteMatrix: producedWhiteMatrix,
     peakGenerationKw: generationKw,
     peakThroughputPerMinute: throughput,
