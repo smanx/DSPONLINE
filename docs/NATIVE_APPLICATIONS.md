@@ -1,7 +1,7 @@
 # 原生应用构建与更新
 
-> 当前工作区候选版本：Windows `1.0.13`；Android `1.0.13 / 1000013`
-> 当前公开稳定测试版本：Windows `1.0.12`；Android `1.0.12 / 1000012`
+> 当前工作区版本：Windows `1.0.13`；Android `1.0.13 / 1000013`
+> 当前公开稳定测试版本：Windows `1.0.12`；Android `1.0.12 / 1000012`（1.0.13 签名工作流待补齐既有 Secrets）
 > Windows 包名：`com.dspidle.network`
 > Android applicationId：`cn.dsponline.network`
 > Android 与 Windows 1.0.13 均与 Web 共用 `GameState` v41。两端存档 envelope v2 和云 schema v7 不变；v1-v40 存档通过连续守恒迁移载入。
@@ -132,6 +132,6 @@ node scripts/create-native-update-manifests.mjs `
 - Windows x64 安装程序版本为 `1.0.12`，大小 112,071,648 字节，SHA-256 为 `50818086cd6ff4e4c708da8a52bb701b62dd991e7dbb47da9f85e6522ae889e8`。Authenticode 状态为 `NotSigned`，下载页会持续显示未知发布者警告。
 - 上海下载站当前目录为 `/var/www/dsp-idle-downloads/releases/1.0.12-4f149409f433`，下载回滚目录为 `1.0.11-f88462df5326`；旧版目录与安装包继续保留。二进制使用 immutable 缓存，更新清单使用 no-cache，Range 请求返回 `206`，香港 `/downloads/*` 重定向至上海下载域名。
 - 1.0.12 原生制品来自 Git 提交 `4f149409f433b6400142ed757e177fad8daf9de7`，包内版本、官方 API、更新源与公网文件哈希均已复验。
-- GitHub Android Release 工作流已具备签名门禁，但仓库尚未配置 keystore Secrets；本次使用受保护的本机长期密钥构建。配置 CI Secrets 前，工作流会在恢复签名密钥步骤按设计失败，不会产出错误签名包。
+- GitHub Android/Desktop Release 工作流已具备签名门禁，但当前仓库没有可用 keystore、Windows 证书和对应 Secrets；`android-v1.0.13`、`desktop-v1.0.13` 因此按设计失败，没有产出错误签名包。补齐既有长期证书后应从相同提交重跑，不能新建 Android 证书替代覆盖升级链。
 - Android 系统浏览器安装 APK 时，玩家设备可能要求允许该来源安装应用；正式商店分发可作为后续渠道，但不改变包名和签名连续性要求。
 - Windows 可信代码签名、iOS 壳层、App Store/Google Play 发布、崩溃收集和物理 Android/iPhone 30 分钟温度耗电测试仍在后续范围。

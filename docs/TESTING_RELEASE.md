@@ -887,3 +887,5 @@ Android API 36.1 模拟器从正式签名 `1.0.10 / 1000010` 原地升级到 `1.
 | `npm run benchmark:logistics` | 7/7 通过；10/50/100/128/300/500 站哈希一致 |
 
 视觉检查使用 `artifacts/qa/stress-factory-1440.png`、`factory-phone-portrait-390.png`、`factory-phone-landscape-844.png` 和 `font-200-*.png`。桌面、390×844、844×390 与 200% 字体均恢复完整建筑内容，没有改变线路层级或端口几何。
+
+发布状态：香港 Web/API 已完成备份、未激活目录复验、原子切换和公网健康验收；上海节点与下载站待取得发布 SSH 授权。Android/Desktop 签名工作流因既有签名 Secrets 未配置而失败，未发布 unsigned 或新证书包，公开原生版本仍保持 1.0.12。

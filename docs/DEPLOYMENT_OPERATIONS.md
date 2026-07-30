@@ -30,7 +30,9 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-当前香港和上海 Web/API 均为 `1.0.12-4f149409f433`，回滚目标均为 `1.0.11-f88462df5326`。两地都使用 GameState v41、云 schema v7 和 SQLite layout v2；代码回滚不得恢复数据库。上海下载站当前为 `1.0.12-4f149409f433`，下载回滚目录为 `1.0.11-f88462df5326`，Windows 和 Android 稳定清单均为 1.0.12。完整证据见 [releases/1.0.12.md](./releases/1.0.12.md)。
+香港 Web/API 当前为 `1.0.13-694b61fc3a1c`，回滚目标为 `1.0.12-4f149409f433`；上海 Web/API、下载站和原生稳定包仍为 `1.0.12-4f149409f433`。两地均使用 GameState v41、云 schema v7 和 SQLite layout v2；代码回滚不得恢复数据库。1.0.13 香港备份与公网证据见 [releases/1.0.13.md](./releases/1.0.13.md)。
+
+`1.0.13` 香港发布只切换 Web/API 代码，未执行数据库迁移。发布前后 Backup API 快照均通过 `quick_check`；前备份为 887,271,424 字节，后备份为 888,795,136 字节。上海部署暂缓，原因是当前操作环境只有受限备份传输账号而没有发布 SSH shell 授权；不得把受限账号用于代码切换。
 
 `1.0.12` 为电磁轨道弹射器增加存档级目标太阳帆轨道，并修复线路同步模板、配送枢纽大字卡片和亮色物流交互状态。v40→v41 迁移不重建或删除太阳帆、发射进度、库存、线路和戴森工程；存档 envelope、云 schema 和 SQLite layout 不变。两节点切换前分别创建并验证 SQLite Backup API 备份，未激活目录完成 135/135 文件复验、42/42 服务端、6/6 运维和生产备份副本隔离启动；Android 从正式 1.0.10 同签名覆盖升级并保留 19 小时 26 分本地主存档后，才切换 Web/API、下载页与稳定清单。
 
@@ -258,7 +260,7 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港和上海 `1.0.12-4f149409f433` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港 `1.0.13-694b61fc3a1c` 与上海 `1.0.12-4f149409f433` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 香港 layout v1 的 136.8 MB `app_state` 曾使每分钟持久化把 Node 推到约 1.6 GB并阻塞健康接口。layout v2 上线后 `app_state` 约 2.55 MB，云存档正文按修订独立写入；240 秒生产观察中健康接口最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB。监控若再次出现内存或延迟上升，应分别检查 `app_state` 大小、`cloud_save_payloads` 行数与历史元数据唯一键数，不能只调大健康超时。
 
