@@ -285,18 +285,36 @@
 .game-shell[data-mobile-shell="true"] .mobile-star-map > .star-map-tabs button { min-height: 44px; }
 .mobile-star-system-list { padding: 8px 10px 22px; }
 .mobile-star-system-list > header { display: flex; min-height: 40px; align-items: center; justify-content: space-between; color: var(--theme-text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .star-map-search { flex: 0 0 auto; margin: 4px 0 8px; background: var(--theme-surface-raised); }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .stellar-metadata-manager { position: static; min-width: 0; margin: 4px 0 8px; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .stellar-metadata-manager > summary { min-height: 48px; background: var(--theme-surface-raised); }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .stellar-metadata-manager > div { position: static; width: 100%; max-height: none; grid-template-columns: 1fr; margin-top: 6px; overflow: visible; box-shadow: none; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .stellar-metadata-manager form { background: var(--theme-surface-raised); }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .stellar-metadata-manager :is(input, select, textarea) { font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mobile-star-system-detail > .stellar-metadata-manager,
+.mobile-planet-detail > .stellar-metadata-manager { margin: 8px 10px !important; }
 .mobile-star-system-list > button,
+.mobile-star-system-list__row > button,
 .mobile-system-planets > button { display: grid; width: 100%; min-height: 76px; grid-template-columns: 44px minmax(0, 1fr) auto 24px; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--theme-border); background: var(--theme-surface); color: var(--theme-text-soft); text-align: left; }
+.mobile-star-system-list__row { border-bottom: 1px solid var(--theme-border); }
+.mobile-star-system-list__row > button:first-child { border-bottom: 0; }
+.mobile-star-system-list__upgrade { width: 100%; min-height: 44px; border: 0; border-top: 1px solid var(--theme-border); border-radius: 0; background: var(--theme-control-hover); color: var(--theme-accent); justify-content: flex-start; text-align: left; }
 .mobile-star-system-list > button > i,
+.mobile-star-system-list__row > button > i,
 .mobile-system-planets > button > i { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid var(--theme-border-strong); border-radius: 50%; }
 .mobile-star-system-list > button > span,
+.mobile-star-system-list__row > button > span,
 .mobile-system-planets > button > span { display: grid; gap: 2px; }
 .mobile-star-system-list > button small,
+.mobile-star-system-list__row > button small,
 .mobile-system-planets > button small { color: var(--theme-text-muted); }
 .mobile-star-system-list > button strong,
+.mobile-star-system-list__row > button strong,
 .mobile-system-planets > button strong { font-size: calc(14px * var(--ui-font-scale, 1)); }
 .mobile-star-system-list > button em { color: var(--theme-text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); font-style: normal; }
+.mobile-star-system-list__row > button em { color: var(--theme-text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); font-style: normal; }
 .mobile-star-system-list > button > b,
+.mobile-star-system-list__row > button > b,
 .mobile-system-planets > button > b { color: var(--yellow); font-size: calc(12px * var(--ui-font-scale, 1)); white-space: nowrap; }
 .mobile-star-system-detail,
 .mobile-planet-detail { padding-bottom: 10px; }
@@ -323,6 +341,7 @@
 
 /* Blueprint list -> editor. */
 .game-shell[data-mobile-shell="true"] .mobile-blueprints { display: block !important; overflow: hidden auto !important; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-library-shell { display: block; overflow: visible; }
 .game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-import-file { display: none; }
 .game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-import-panel { position: static; width: auto; margin: 8px; }
 .game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-library { display: grid; grid-template-columns: 1fr; gap: 8px; padding: 9px; overflow: visible; }

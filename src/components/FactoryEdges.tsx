@@ -1,4 +1,5 @@
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, getSmoothStepPath, type ConnectionLineComponentProps, type Edge, type EdgeProps } from "@xyflow/react";
+import { memo } from "react";
 import type { BeltRouteMode, ItemId } from "../game/types";
 import type { BeltHealth } from "../game/network";
 
@@ -203,4 +204,14 @@ export function FactoryEdge({
   );
 }
 
-export const EDGE_TYPES = { factory: FactoryEdge };
+const MemoFactoryEdge = memo(FactoryEdge, (previous, next) =>
+  previous.id === next.id &&
+  previous.selected === next.selected &&
+  previous.sourceX === next.sourceX &&
+  previous.sourceY === next.sourceY &&
+  previous.targetX === next.targetX &&
+  previous.targetY === next.targetY &&
+  previous.data?.visualSignature === next.data?.visualSignature,
+);
+
+export const EDGE_TYPES = { factory: MemoFactoryEdge };

@@ -5173,6 +5173,22 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   border-bottom: 1px solid var(--line);
 }
 
+.station-upgrade-control { display: grid; gap: 8px; margin: 8px 0 12px; padding: 10px; border: 1px solid var(--line, rgba(255,255,255,.14)); border-radius: 6px; background: var(--panel-soft, rgba(255,255,255,.035)); }
+.station-upgrade-control > header { display: flex; align-items: center; gap: 6px; }
+.station-upgrade-control > header svg { color: #9de8be; }
+.station-upgrade-control > header span { color: var(--muted, #9db2aa); }
+.station-upgrade-control > header strong { margin-left: auto; }
+.station-upgrade-status { margin: 0; color: var(--muted, #9db2aa); font-size: 11px; line-height: 1.45; }
+.station-upgrade-status--ready { color: #9de8be; }
+.station-upgrade-status--materials,
+.station-upgrade-status--technology,
+.station-upgrade-status--invalid { color: #f0bd75; }
+.station-upgrade-costs { display: grid; gap: 4px; }
+.station-upgrade-costs span { display: flex; justify-content: space-between; gap: 8px; color: var(--muted, #9db2aa); font-size: 11px; }
+.station-upgrade-costs strong { color: var(--text, #eef7f2); font-weight: 600; }
+.station-upgrade-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; border: 1px solid rgba(127,221,171,.34); border-radius: 6px; color: #b8f1cf; background: rgba(70,170,114,.12); cursor: pointer; }
+.station-upgrade-button:hover { background: rgba(70,170,114,.22); }
+
 .station-fleet-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -10262,6 +10278,25 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   padding: 20px;
 }
 
+.blueprint-library-shell {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.blueprint-library-shell > .blueprint-library {
+  grid-row: 2;
+}
+
+.blueprint-library-shell > .blueprint-import-panel {
+  grid-row: 1;
+  min-width: 0;
+  max-height: min(280px, 42vh);
+  overflow: auto;
+}
+
 .blueprint-empty {
   display: flex;
   min-height: 240px;
@@ -10733,6 +10768,185 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   background: var(--surface-raised);
   color: var(--text-soft);
   cursor: pointer;
+}
+
+.star-map-controls {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(220px, 360px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.star-map-controls > span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.star-map-search {
+  display: grid;
+  min-height: 44px;
+  min-width: 0;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+}
+
+.star-map-search input {
+  min-width: 0;
+  height: 40px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+.star-map-search button {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+.stellar-metadata-manager {
+  position: relative;
+  min-width: 230px;
+}
+
+.stellar-metadata-manager > summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface-raised);
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+}
+
+.stellar-metadata-manager > summary::-webkit-details-marker {
+  display: none;
+}
+
+.stellar-metadata-manager > summary small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.stellar-metadata-manager > div {
+  position: absolute;
+  z-index: 34;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  width: min(720px, calc(100vw - 36px));
+  max-height: min(620px, calc(100vh - 180px));
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 1px;
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--line);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 38%);
+}
+
+.stellar-metadata-manager form {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--surface-raised);
+}
+
+.stellar-metadata-manager form > header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+}
+
+.stellar-metadata-manager label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.stellar-metadata-manager label > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.stellar-metadata-manager input,
+.stellar-metadata-manager select,
+.stellar-metadata-manager textarea {
+  width: 100%;
+  min-height: 44px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
+.stellar-metadata-manager label small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.stellar-metadata-manager footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.stellar-metadata-manager footer button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+.stellar-metadata-manager footer button.primary {
+  border-color: var(--cyan-deep);
+  background: var(--cyan-deep);
+  color: #fff;
 }
 
 .star-map-route {
@@ -18154,6 +18368,150 @@ input:focus-visible,
   .command-palette-list > button {
     min-height: 52px;
   }
+}
+
+/* Simulation pause freezes production visuals without disabling editor input. */
+.game-shell[data-simulation-paused="true"] .factory-edge-visual-path--active,
+.game-shell[data-simulation-paused="true"] .factory-cargo-packets,
+.game-shell[data-simulation-paused="true"] .factory-node .status-dot,
+.game-shell[data-simulation-paused="true"] .factory-node .machine-status,
+.game-shell[data-simulation-paused="true"] .factory-node .factory-node__status,
+.game-shell[data-simulation-paused="true"] .factory-node .vein-reserve--depleted {
+  animation: none !important;
+}
+
+.game-shell[data-simulation-paused="true"] .factory-cargo-packets {
+  display: none;
+}
+
+.system-space-station-workspace {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel, #101917);
+  color: var(--text, #eef7f2);
+}
+.system-space-station-header,
+.system-space-station-footer {
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line, rgba(255,255,255,.12));
+  background: var(--panel-strong, rgba(10,20,18,.96));
+}
+.system-space-station-footer { border-top: 1px solid var(--line, rgba(255,255,255,.12)); border-bottom: 0; font-size: 12px; color: var(--muted, #9db2aa); }
+.system-space-station-title { display: flex; align-items: center; gap: 10px; }
+.system-space-station-title > i { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; color: #8de1ba; background: rgba(91,190,143,.16); }
+.system-space-station-title span { display: grid; gap: 2px; }
+.system-space-station-title small { color: var(--muted, #9db2aa); font-size: 11px; }
+.system-space-station-title strong { font-size: 18px; }
+.system-space-station-title b { margin-left: 8px; padding: 4px 8px; border-radius: 999px; color: #9de8be; background: rgba(91,190,143,.14); font-size: 11px; }
+.system-space-station-close { border: 0; background: transparent; color: inherit; padding: 8px; cursor: pointer; }
+.system-space-station-scroll { flex: 1; overflow: auto; padding: 18px; display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); align-content: start; }
+.system-space-station-overview,
+.system-space-station-card { border: 1px solid var(--line, rgba(255,255,255,.12)); background: var(--panel-soft, rgba(255,255,255,.04)); border-radius: 8px; }
+.system-space-station-overview { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(280px, 1fr); gap: 16px; padding: 16px; }
+.system-space-station-overview-main { display: grid; gap: 5px; }
+.system-space-station-overview-main > span { color: var(--muted, #9db2aa); font-size: 12px; }
+.system-space-station-overview-main > strong { font-size: 30px; }
+.system-space-station-overview-main > small { color: var(--muted, #9db2aa); }
+.system-space-station-progress { height: 8px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.08); }
+.system-space-station-progress i { display: block; height: 100%; background: #79d4a6; }
+.system-space-station-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.system-space-station-kpis span { display: grid; grid-template-columns: 18px 1fr; gap: 2px 6px; padding: 9px; border-radius: 6px; background: rgba(255,255,255,.04); color: var(--muted, #9db2aa); font-size: 11px; }
+.system-space-station-kpis svg { grid-row: span 2; color: #8de1ba; }
+.system-space-station-kpis strong { color: var(--text, #eef7f2); font-size: 15px; }
+.system-space-station-card { padding: 14px; display: grid; gap: 12px; }
+.system-space-station-card > header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.system-space-station-card > header svg { color: #8de1ba; }
+.system-space-station-card > header strong { font-size: 15px; }
+.system-space-station-card > header span { flex-basis: 100%; color: var(--muted, #9db2aa); font-size: 12px; }
+.system-space-station-start { display: flex; align-items: center; gap: 12px; }
+.system-space-station-start > svg { color: #8de1ba; flex: 0 0 auto; }
+.system-space-station-start > div { display: grid; gap: 3px; flex: 1; }
+.system-space-station-start span { color: var(--muted, #9db2aa); font-size: 12px; }
+.system-space-station-card button { min-height: 36px; border: 1px solid rgba(127,221,171,.34); border-radius: 6px; padding: 0 12px; color: #b8f1cf; background: rgba(70,170,114,.12); cursor: pointer; }
+.system-space-station-card button.active { color: #10251b; background: #8de1ba; }
+.system-space-station-card button:disabled { opacity: .5; cursor: not-allowed; }
+.system-space-station-delivery-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+.system-space-station-delivery-tools label,
+.system-space-station-modules label,
+.system-space-station-outputs label { display: grid; gap: 4px; color: var(--muted, #9db2aa); font-size: 11px; }
+.system-space-station-delivery-tools select,
+.system-space-station-modules input,
+.system-space-station-outputs select { min-height: 34px; min-width: 140px; color: var(--text, #eef7f2); border: 1px solid var(--line, rgba(255,255,255,.16)); border-radius: 5px; background: var(--panel-strong, #13211d); padding: 0 8px; }
+.system-space-station-requirements { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 6px; }
+.system-space-station-requirements > div { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 8px; border-radius: 5px; background: rgba(255,255,255,.035); }
+.system-space-station-requirements > div span { color: var(--muted, #9db2aa); font-size: 11px; }
+.system-space-station-requirements > div strong { font-size: 12px; }
+.system-space-station-requirements > div em { grid-column: 1 / -1; color: var(--muted, #9db2aa); font-size: 11px; font-style: normal; }
+.system-space-station-requirements > div.complete { color: #9de8be; background: rgba(91,190,143,.12); }
+.system-space-station-inventory { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 6px; }
+.system-space-station-inventory span { display: flex; justify-content: space-between; gap: 10px; padding: 8px; border-radius: 5px; background: rgba(255,255,255,.04); }
+.system-space-station-inventory strong { color: #9de8be; }
+.system-space-station-modules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.system-space-station-stations { display: grid; gap: 8px; }
+.system-space-station-stations article { display: grid; gap: 8px; padding: 10px; border-radius: 6px; background: rgba(255,255,255,.04); }
+.system-space-station-stations article > div:first-child { display: grid; gap: 2px; }
+.system-space-station-stations article small { color: var(--muted, #9db2aa); }
+.system-space-station-station-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.system-space-station-bulk-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.system-space-station-bulk-actions button { display: inline-flex; align-items: center; gap: 6px; }
+.system-space-station-bulk-actions small,
+.system-space-station-upgrade-status { color: var(--muted, #9db2aa); font-size: 11px; }
+.system-space-station-upgrade-status { margin: 0; }
+.system-space-station-upgrade-status--ready { color: #9de8be; }
+.system-space-station-upgrade-status--materials,
+.system-space-station-upgrade-status--technology,
+.system-space-station-upgrade-status--invalid { color: #f0bd75; }
+.system-space-station-outputs { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.system-space-station-footer span { display: inline-flex; align-items: center; gap: 5px; }
+.system-space-station-footer button { display: inline-flex; align-items: center; gap: 5px; border: 0; color: inherit; background: transparent; cursor: pointer; }
+.elevator-logistics-io { display: grid; gap: 6px; }
+.star-system-space-station-open,
+.mobile-detail-system-station { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 36px; margin: 8px 0; padding: 0 10px; border: 1px solid rgba(127,221,171,.26); border-radius: 6px; color: #a9e9c5; background: rgba(70,170,114,.1); cursor: pointer; }
+.star-system-space-station-actions { display: grid; gap: 6px; margin: 8px 0; }
+.star-system-space-station-actions .star-system-space-station-open { margin: 0; }
+.star-system-space-station-upgrade,
+.star-map-bulk-upgrade,
+.mobile-detail-system-upgrade,
+.mobile-star-system-list__upgrade { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; border: 1px solid rgba(127,221,171,.34); border-radius: 6px; padding: 0 10px; color: #b8f1cf; background: rgba(70,170,114,.12); cursor: pointer; }
+.star-system-space-station-upgrade:hover,
+.star-map-bulk-upgrade:hover,
+.mobile-detail-system-upgrade:hover,
+.mobile-star-system-list__upgrade:hover { background: rgba(70,170,114,.22); }
+.star-map-bulk-upgrade { white-space: nowrap; }
+.mobile-detail-system-actions { display: grid; gap: 6px; margin: 8px 10px; }
+.mobile-detail-system-actions .mobile-detail-system-station { margin: 0; }
+.star-system-space-station-open svg:last-child,
+.mobile-detail-system-station svg:last-child { margin-left: auto; }
+.mobile-detail-system-station span { display: grid; gap: 2px; text-align: left; }
+.mobile-detail-system-station small { color: var(--muted, #9db2aa); }
+@media (max-width: 720px) {
+  .star-map-controls {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    padding: 8px 10px;
+  }
+  .star-map-controls > span {
+    white-space: normal;
+  }
+  .star-map-controls .star-map-bulk-upgrade {
+    width: 100%;
+    white-space: normal;
+  }
+  .system-space-station-header { padding-top: calc(10px + env(safe-area-inset-top, 0px)); }
+  .system-space-station-footer { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .system-space-station-scroll { padding: 12px; }
+  .system-space-station-overview { grid-template-columns: 1fr; }
+  .system-space-station-modules { grid-template-columns: 1fr; }
+  .system-space-station-start { align-items: flex-start; flex-wrap: wrap; }
+  .system-space-station-start button { margin-left: 46px; }
 }
 
 @media (pointer: coarse) {

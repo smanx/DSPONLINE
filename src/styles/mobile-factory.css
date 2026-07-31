@@ -288,7 +288,7 @@
 
 .mobile-build-card > i .item-glyph { width: 24px; height: 24px; }
 .mobile-build-card > span { display: grid; min-width: 0; gap: 2px; }
-.mobile-build-card > span strong { display: -webkit-box; overflow: hidden; padding-right: 18px; font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.25; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.mobile-build-card > span strong { display: -webkit-box; overflow: hidden; font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.25; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .mobile-build-card > span small { overflow: hidden; color: var(--theme-text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-build-card > em { position: absolute; top: 4px; right: 5px; padding: 2px 4px; border-radius: 4px; background: var(--theme-surface-soft); color: var(--yellow); font-size: calc(12px * var(--ui-font-scale, 1)); font-style: normal; }
 .mobile-build-card > b { display: flex; min-width: 0; min-height: 28px; grid-column: 1 / -1; align-items: center; justify-content: center; gap: 4px; border-top: 1px solid var(--theme-border); color: var(--cyan); font-size: calc(12px * var(--ui-font-scale, 1)); }
@@ -297,6 +297,8 @@
 .mobile-build-card.unavailable { border-color: var(--theme-danger-bg); color: var(--theme-text-muted); }
 .mobile-build-card.unavailable > i,
 .mobile-build-card.unavailable > b { color: var(--theme-text-muted); }
+.mobile-build-card[aria-disabled="true"] { border-color: var(--theme-border); background: var(--theme-surface-soft); cursor: help; }
+.mobile-build-card[aria-disabled="true"] > b { color: var(--theme-text-muted); }
 .mobile-build-card:disabled { opacity: .44; cursor: not-allowed; }
 .mobile-build-grid--fleet .mobile-build-card { grid-column: span 3; min-height: 74px; grid-template-columns: 44px minmax(0, 1fr) auto; grid-template-rows: 1fr; }
 .mobile-build-grid--fleet .mobile-build-card > b { min-height: 44px; grid-column: auto; border-top: 0; border-left: 1px solid var(--theme-border); padding-left: 8px; }

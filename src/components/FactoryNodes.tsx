@@ -14,6 +14,7 @@ import {
   Orbit,
   Pickaxe,
   RadioTower,
+  Route,
   Rocket,
   Satellite,
   Sparkles,
@@ -23,12 +24,13 @@ import {
   Zap,
 } from "lucide-react";
 import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { memo, useEffect, useRef, useState, type RefObject } from "react";
 import { FUEL_ENERGY_MJ, ITEMS, MATRIX_ITEM_IDS, getBuilding, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getProliferator, getRecipe, getRecipesForBuilding } from "../game/content";
 import { MATERIAL_DELIVERY_SLOT_COUNT, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMaterialDeliveryItems, getMaterialDeliverySlots, getStationDroneCapacity, getStationSlots, getStationVesselCapacity, type ResourceReserveSnapshot } from "../game/engine";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { RecipeCatalogPicker } from "./CatalogPicker";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
+import { isElevatorStation } from "../game/systemHubLogistics";
 import { PowerValue } from "./PowerValue";
 import { ACTIVITY_MATERIAL_IDS } from "../game/activity";
 import type { WorkProgressMode } from "../game/productionRefresh";
@@ -638,16 +640,19 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const isStation = entity.kind === "station";
   const orbitalCollector = entity.buildingId === "orbital_collector";
   const deliveryHub = entity.buildingId === "material_delivery_hub";
+  const elevatorStation = isElevatorStation(entity);
   const deliverySlots = deliveryHub ? getMaterialDeliverySlots(entity) : [];
   const warehouseStorage = entity.buildingId === "storage_mk1" || entity.buildingId === "storage_tank";
-  const configuredItems = deliveryHub
+  const configuredItems = elevatorStation
+    ? []
+    : deliveryHub
     ? getMaterialDeliveryItems(entity)
     : isStation && !orbitalCollector
     ? getStationSlots(entity).flatMap((slot) => slot.itemId ? [slot.itemId] : [])
     : itemId ? [itemId] : [];
   const nodeRef = useDynamicHandles(entity.id, deliveryHub
     ? deliverySlots.map((slot) => `${slot.mode}:${slot.itemId ?? "empty"}`).join(":")
-    : `${configuredItems.join(":") || "unconfigured"}:auto`);
+    : `${configuredItems.join(":") || "unconfigured"}:${elevatorStation ? (entity.elevatorOutputItems ?? []).join(":") : "auto"}`);
   const cargoKind = cargo ? getItem(cargo.itemId).kind : null;
   const acceptsCargo = Boolean(cargo && (configuredItems.length === 0 || configuredItems.includes(cargo.itemId) || (deliveryHub && configuredItems.length < MATERIAL_DELIVERY_SLOT_COUNT)) && (
     building.accepts === "any" || building.accepts === cargoKind || (building.accepts === "solid" && cargoKind === "matrix")
@@ -708,7 +713,12 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         semanticKey={`${entity.id}:${isStation ? (entity.stationRoutes ?? []).map((route) => route.id).join(",") || "idle" : configuredItems.join(",") || "empty"}`}
         effectiveSimulationMultiplier={data.simulationMultiplier}
       />
-      {deliveryHub ? (
+      {elevatorStation ? (
+        <div className="node-io logistics-io elevator-logistics-io">
+          <div className="logistics-slot-row"><div className="node-io__column"><span className="node-io__label">通用输入</span><AutoInputPort connectionDraft={data.connectionDraft} label="任意物资" handleId="in:auto" /></div><div className="delivery-hub-target"><Database size={14} /><span>进入系统共享仓库</span></div></div>
+          {(entity.elevatorOutputItems ?? []).map((outputItemId, index) => outputItemId ? <div className="logistics-slot-row" key={`${outputItemId}:${index}`}><div className="node-io__column node-io__column--output"><span className="node-io__label">输出 {index + 1}</span><OutputSlot entityId={entity.id} itemId={outputItemId} amount={entity.outputs[outputItemId] ?? 0} onPick={data.onPickOutput} connectionDraft={data.connectionDraft} connectionCount={data.outputBeltCounts[outputItemId] ?? 0} /></div><div className="delivery-hub-target"><Route size={14} /><span>{ITEMS[outputItemId].name}</span></div></div> : <div className="logistics-slot-row" key={`empty-output:${index}`}><div className="node-io__column node-io__column--output"><span className="node-io__label">输出 {index + 1}</span><span className="logistics-empty">未配置</span></div></div>)}
+        </div>
+      ) : deliveryHub ? (
         <div className="node-io logistics-io delivery-hub-io">
           {deliverySlots.map((slot, index) => <div className={`logistics-slot-row delivery-hub-slot-row delivery-hub-slot-row--${slot.mode}`} key={`delivery-${index}`}>
             <div className="node-io__column">
@@ -867,11 +877,24 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   );
 }
 
+function areNodeVisualPropsEqual(previous: NodeProps<FactoryFlowNode>, next: NodeProps<FactoryFlowNode>): boolean {
+  return previous.id === next.id &&
+    previous.selected === next.selected &&
+    previous.data.visualSignature === next.data.visualSignature &&
+    previous.data.entity.position.x === next.data.entity.position.x &&
+    previous.data.entity.position.y === next.data.entity.position.y;
+}
+
+const MemoVeinNode = memo(VeinNode, areNodeVisualPropsEqual);
+const MemoMachineNode = memo(MachineNode, areNodeVisualPropsEqual);
+const MemoLogisticsNode = memo(LogisticsNode, areNodeVisualPropsEqual);
+const MemoPowerNode = memo(PowerNode, areNodeVisualPropsEqual);
+
 export const NODE_TYPES = {
-  vein: VeinNode,
-  machine: MachineNode,
-  power: PowerNode,
-  storage: LogisticsNode,
-  splitter: LogisticsNode,
-  station: LogisticsNode,
+  vein: MemoVeinNode,
+  machine: MemoMachineNode,
+  power: MemoPowerNode,
+  storage: MemoLogisticsNode,
+  splitter: MemoLogisticsNode,
+  station: MemoLogisticsNode,
 };

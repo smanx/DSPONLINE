@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-07-30-v1.0.13";
+const RELEASE_NOTE_ID = "2026-07-31-v1.0.16";
 
 async function seedV108Factory(page: Page, options: { mobileUi?: "legacy" | "next"; theme?: "dark" | "light"; fontScale?: number } = {}) {
   await page.addInitScript(({ releaseNoteId, mobileUi, theme, fontScale }) => {
@@ -105,7 +105,7 @@ test("structurally complete checksum failures show real progress and require two
     const parsed = JSON.parse(rawSave);
     return { formatVersion: parsed.formatVersion, version: parsed.state.version, checksum: parsed.checksum, state: parsed.state };
   });
-  expect(integrity.version).toBe(41);
+  expect(integrity.version).toBe(44);
   expect(integrity.checksum).toBe(checksum(integrity.formatVersion, integrity.state));
 });
 
@@ -130,7 +130,7 @@ test("delivery-hub ports reset independently and the performance monitor samples
   await expect(operations).toContainText("监控已关闭");
   await operations.getByRole("button", { name: "开始采样" }).click();
   await expect(operations).toContainText("正在采样");
-  await expect.poll(async () => operations.locator(".performance-kpi-grid article").count(), { timeout: 8_000 }).toBe(8);
+  await expect.poll(async () => operations.locator(".performance-kpi-grid article").count(), { timeout: 8_000 }).toBe(9);
   await expect(operations.locator(".performance-phase-list > div")).toHaveCount(9);
   await expect(operations).toContainText("建筑生产与采集");
   await operations.getByRole("button", { name: "停止采样" }).click();

@@ -8,6 +8,7 @@ import {
   type PerformanceSaveMeasurement,
   type PerformanceWorkerMeasurement,
 } from "../game/performanceMonitor";
+import { getLocalSaveSummaryMetrics } from "../game/storage";
 import type { GameState } from "../game/types";
 
 function readLastOfflineDuration(): number {
@@ -45,7 +46,7 @@ function textSize(value: string): number {
   return typeof TextEncoder !== "undefined" ? new TextEncoder().encode(value).byteLength : value.length;
 }
 
-export function usePerformanceMonitor(getGame: () => GameState) {
+export function usePerformanceMonitor(getGame: () => GameState, paused = false) {
   const initial = useRef<PerformanceMonitorSnapshot>({
     active: false,
     startedAt: null,
@@ -56,7 +57,8 @@ export function usePerformanceMonitor(getGame: () => GameState) {
   const snapshotRef = useRef(snapshot);
   const activeRef = useRef(false);
   const workerRef = useRef<PerformanceWorkerMeasurement>({ durationMs: 0, latencyMs: 0, pendingTaskMs: 0, profiler: null });
-  const saveRef = useRef<PerformanceSaveMeasurement>({ durationMs: 0, bytes: 0 });
+  const saveRef = useRef<PerformanceSaveMeasurement>({ durationMs: 0, bytes: 0, stages: null });
+  const saveStorageRef = useRef<ReturnType<typeof getLocalSaveSummaryMetrics> | null>(null);
   const stateBytesRef = useRef(0);
 
   const updateSnapshot = useCallback((updater: (current: PerformanceMonitorSnapshot) => PerformanceMonitorSnapshot) => {
@@ -97,11 +99,15 @@ export function usePerformanceMonitor(getGame: () => GameState) {
 
   const recordSave = useCallback((measurement: PerformanceSaveMeasurement) => {
     if (!activeRef.current) return;
-    saveRef.current = { durationMs: Math.max(0, measurement.durationMs), bytes: Math.max(0, Math.floor(measurement.bytes)) };
+    saveRef.current = {
+      durationMs: Math.max(0, measurement.durationMs),
+      bytes: Math.max(0, Math.floor(measurement.bytes)),
+      stages: measurement.stages ? { ...measurement.stages } : null,
+    };
   }, []);
 
   useEffect(() => {
-    if (!snapshot.active) return;
+    if (!snapshot.active || paused) return;
     let frameId = 0;
     let previousFrameAt = performance.now();
     let windowStartedAt = previousFrameAt;
@@ -130,7 +136,10 @@ export function usePerformanceMonitor(getGame: () => GameState) {
       const elapsed = now - windowStartedAt;
       if (elapsed >= 1_000) {
         sampleSequence += 1;
-        if (sampleSequence === 1 || sampleSequence % 5 === 0) stateBytesRef.current = serializedSize(getGame());
+        if (sampleSequence === 1 || sampleSequence % 5 === 0) {
+          stateBytesRef.current = serializedSize(getGame());
+          saveStorageRef.current = getLocalSaveSummaryMetrics();
+        }
         const worker = workerRef.current;
         const save = saveRef.current;
         const sample = {
@@ -145,6 +154,8 @@ export function usePerformanceMonitor(getGame: () => GameState) {
           stateBytes: stateBytesRef.current,
           saveBytes: save.bytes,
           autosaveMs: save.durationMs,
+          saveStages: save.stages ? { ...save.stages } : null,
+          saveStorage: saveStorageRef.current ? { ...saveStorageRef.current } : null,
           memory: memorySample(),
           phases: worker.profiler ? { ...worker.profiler } : null,
         };
@@ -163,7 +174,7 @@ export function usePerformanceMonitor(getGame: () => GameState) {
     };
     frameId = window.requestAnimationFrame(sampleFrame);
     return () => window.cancelAnimationFrame(frameId);
-  }, [getGame, snapshot.active, updateSnapshot]);
+  }, [getGame, paused, snapshot.active, updateSnapshot]);
 
   const exportAnonymous = useCallback(async () => {
     const report = createAnonymousPerformanceReport(getGame(), snapshotRef.current);
