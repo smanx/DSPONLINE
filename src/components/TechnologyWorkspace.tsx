@@ -1,7 +1,7 @@
 import { Check, ChevronDown, ChevronUp, FlaskConical, Gauge, ListOrdered, LockKeyhole, PackageCheck, Pause, Pickaxe, Play, Rocket, Satellite, Timer, X, Zap } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
-import { ITEMS, MATRIX_ITEM_IDS, PLANET_LIST, TECHNOLOGY_LIST, getTechnology } from "../game/content";
+import { ITEMS, MATRIX_ITEM_IDS, PLANET_LIST, TECHNOLOGY_LIST, getTechnology, isDeprecatedTechnology } from "../game/content";
 import { canQueueTechnology, getDysonSailAbsorptionMultiplier, getInterstellarCargoCapacity, getLogisticsSpeedMultiplier, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getRayReceiverCapacityKw, getRecipeSpeedMultiplier, getSolarSailLifetimeSeconds, isTechnologyCompleted } from "../game/engine";
 import { INFINITE_RESEARCH_DEFINITIONS, getInfiniteResearchCompletion, getInfiniteResearchLevel, isEndgameUnlocked } from "../game/endgame";
 import { getInfiniteResearchCostString, isInfiniteResearchComplete } from "../game/infiniteResearch";
@@ -92,6 +92,7 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
     ? (selectedCostTotal > 0 ? Math.min(100, selectedProgressTotal / selectedCostTotal * 100) : 0)
     : activeInfinite && activeInfiniteProgress ? getInfiniteResearchCompletion(activeInfiniteProgress, activeInfinite.id) * 100 : 0;
   const maximumTier = Math.max(...TECHNOLOGY_LIST.map((technology) => technology.tier));
+  const activeCompletedCount = game.research.completedTechIds.filter((techId) => !isDeprecatedTechnology(techId)).length;
 
   if (mobile) {
     const detailTechId = mobileSubview?.startsWith("tech:") ? mobileSubview.slice(5) as TechId : null;
@@ -190,7 +191,7 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
           {MATRIX_ITEM_IDS.map((itemId) => {
             return <span className="matrix-stock" key={itemId}><ItemHoverCard itemId={itemId}><ItemGlyph itemId={itemId} /></ItemHoverCard><strong>{networkMatrixStock(game, itemId)}</strong></span>;
           })}
-          <span>已完成 <strong>{game.research.completedTechIds.length}/{TECHNOLOGY_LIST.length}</strong></span>
+          <span>已完成 <strong>{activeCompletedCount}/{TECHNOLOGY_LIST.length}</strong></span>
           <span>无限等级 <strong>{Object.values(game.endgame.infiniteResearch).reduce((sum, progress) => sum + progress.level, 0)}</strong></span>
         </div>
         <div className="technology-layout-toggle" role="group" aria-label="科技树布局">

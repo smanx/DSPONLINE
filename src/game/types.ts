@@ -213,7 +213,15 @@ export type TechId =
   | "vertical_launching_silo"
   | "dyson_shell"
   | "micro_black_hole_containment"
-  | "time_warp_engineering";
+  | "time_warp_engineering"
+  | "orbital_elevator_engineering"
+  | "orbital_multi_cargo_bus"
+  | "orbital_energy_recovery"
+  | "system_space_station_engineering"
+  | "orbital_modular_assembly"
+  | "autonomous_station_construction"
+  | "unified_system_logistics_protocol"
+  | "quantum_logistics_network";
 
 export type BuildingId =
   | "wind_turbine"
@@ -252,7 +260,8 @@ export type BuildingId =
   | "construction_center"
   | "galactic_material_exporter"
   | "micro_black_hole_connector"
-  | "time_warp_device";
+  | "time_warp_device"
+  | "space_station_construction_launcher";
 
 /** Core tiers are 1..3; declarative content packs may register tiers 4..32. */
 export type BeltTier = number;
@@ -388,6 +397,92 @@ export type GalacticDispatchThrottle = 0.25 | 0.5 | 1;
 export type DecimalIntegerString = string;
 export type GalacticExportInputMode = "legacy-network" | "building";
 export type ActivityMaterialId = "universe_matrix" | "solar_sail" | "small_carrier_rocket" | "antimatter_fuel_rod";
+export type StationTier = 1 | 2;
+export type StationOperationMode = "legacy" | "elevator";
+export type StationModeTransition = "to-elevator" | "to-legacy" | null;
+export type SpaceStationStatus = "not-started" | "building" | "operational";
+export type SpaceStationOutputPortIndex = 0 | 1 | 2 | 3 | 4;
+
+/**
+ * Quantum logistics is deliberately independent from the deprecated space
+ * station/elevator mode. A tower is upgraded first, then explicitly attached
+ * to the shared network.
+ */
+export type QuantumStationMode = "legacy" | "transitioning" | "quantum";
+
+export interface QuantumBridgeContract {
+  id: string;
+  itemId: ItemId;
+  sourceStationId: string;
+  targetStationId: string;
+  cargo: DecimalIntegerString;
+  remainingCargo: DecimalIntegerString;
+  arriveAtSecond: number;
+}
+
+export interface QuantumStationTransition {
+  targetMode: "quantum" | "legacy";
+  startedAtSecond: number;
+  boundarySecond: number;
+  bridges: QuantumBridgeContract[];
+}
+
+export interface QuantumLogisticsNetworkState {
+  enabled: boolean;
+  inventory: Partial<Record<ItemId, DecimalIntegerString>>;
+  routingCursors: Partial<Record<ItemId, number>>;
+}
+
+export interface SystemHubItemPolicy {
+  interstellarEnabled: boolean;
+  reserve: DecimalIntegerString;
+  target: DecimalIntegerString;
+}
+
+export interface SpaceStationModules {
+  backbone: number;
+  energy: number;
+  interstellar: number;
+}
+
+export interface SpaceStationDecoration {
+  id: string;
+  kind: "marker" | "label";
+  position: XYPosition;
+  text?: string;
+}
+
+export interface SystemSpaceStationState {
+  systemId: StarSystemId;
+  status: SpaceStationStatus;
+  costRevision: number;
+  costMultiplierBasisPoints: number;
+  phaseIndex: number;
+  delivered: Partial<Record<ItemId, DecimalIntegerString>>;
+  /** Materials that reached a construction launcher but are waiting for a later phase. */
+  constructionBuffer: Partial<Record<ItemId, DecimalIntegerString>>;
+  inventory: Partial<Record<ItemId, DecimalIntegerString>>;
+  itemPolicies: Partial<Record<ItemId, SystemHubItemPolicy>>;
+  modules: SpaceStationModules;
+  routingCursors: Record<string, number>;
+  viewport: CanvasViewport;
+  decorations: SpaceStationDecoration[];
+}
+
+export interface FleetReturnBucket {
+  routeKey: string;
+  returnAtSecond: number;
+  vesselCount: number;
+}
+
+export interface GalacticHubNetworkState {
+  fleetInstalled: number;
+  fleetBusy: number;
+  fleetReturns: FleetReturnBucket[];
+  warpers: DecimalIntegerString;
+  warperTarget: DecimalIntegerString;
+  routingCursors: Record<string, number>;
+}
 
 export interface BlackHolePortState {
   index: 0 | 1 | 2;
@@ -661,6 +756,14 @@ export interface FactoryEntity {
   /** Tenths of one reserve unit already consumed; kept as an integer for deterministic depletion. */
   resourceDepletionRemainder?: number;
   stationMode?: "supply" | "demand";
+  stationTier?: StationTier;
+  stationOperationMode?: StationOperationMode;
+  stationModeTransition?: StationModeTransition;
+  /** Explicit quantum network attachment; absent means legacy behavior. */
+  quantumMode?: QuantumStationMode;
+  quantumTransition?: QuantumStationTransition | null;
+  /** Fixed five output assignments used only by Mk.II elevator mode. */
+  elevatorOutputItems?: Array<ItemId | null>;
   stationProgress?: number;
   stationTrips?: number;
   stationLastTransfer?: number;
@@ -721,6 +824,8 @@ export interface BeltConnection {
   routeMode?: BeltRouteMode;
   routeOffsetY?: number;
   targetPortIndex?: 0 | 1 | 2;
+  /** Stable output port used by a Mk.II space elevator. */
+  elevatorOutputIndex?: SpaceStationOutputPortIndex;
 }
 
 export interface StationSlot {
@@ -1029,11 +1134,23 @@ export interface StarSystemProfile {
   distanceFromOriginLy: number;
 }
 
+export interface PlanetDisplayMetadata {
+  customName: string;
+  note: string;
+  tags: string[];
+}
+
+export interface StarSystemDisplayMetadata {
+  customName: string;
+}
+
 export interface GalaxyState {
   seed: number;
   profiles: Record<PlanetId, PlanetIndustrialProfile>;
   systemProfiles: Record<StarSystemId, StarSystemProfile>;
   planetRoles: Record<PlanetId, PlanetIndustryRole>;
+  planetMetadata: Partial<Record<PlanetId, PlanetDisplayMetadata>>;
+  systemMetadata: Partial<Record<StarSystemId, StarSystemDisplayMetadata>>;
 }
 
 export interface RecipeFocusState {
@@ -1119,6 +1236,9 @@ export interface BlueprintEntityTemplate {
   powerPriority?: PowerPriority;
   generationPriority?: PowerPriority;
   stationMode?: "supply" | "demand";
+  stationTier?: StationTier;
+  stationOperationMode?: StationOperationMode;
+  elevatorOutputItems?: Array<ItemId | null>;
   stationMinimumLoad?: StationMinimumLoad;
   stationWarpEnabled?: boolean;
   stationWarperAutoRefill?: boolean;
@@ -1147,6 +1267,7 @@ export interface BlueprintBeltTemplate {
   routeMode?: BeltRouteMode;
   routeOffsetY?: number;
   targetPortIndex?: 0 | 1 | 2;
+  elevatorOutputIndex?: SpaceStationOutputPortIndex;
 }
 
 /**
@@ -1279,7 +1400,9 @@ export interface ConstructionAutomationJob {
 }
 
 export interface GameState {
-  version: 41;
+  /** v44 adds the quantum network state. v43 is retained in the type only so
+   * old test fixtures can be inspected and rejected without unsafe casts. */
+  version: 43 | 44;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -1319,6 +1442,9 @@ export interface GameState {
   dysonSphere: DysonSphereState;
   dysonEngineering: DysonEngineeringState;
   dysonPlans: Record<StarSystemId, DysonSpherePlanState>;
+  systemSpaceStations: Partial<Record<StarSystemId, SystemSpaceStationState>>;
+  galacticHubNetwork: GalacticHubNetworkState;
+  quantumLogisticsNetwork: QuantumLogisticsNetworkState;
   timeWarp: TimeWarpState;
   endgame: EndgameState;
   paused: boolean;

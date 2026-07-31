@@ -25,7 +25,10 @@ import { getInfiniteResearchCostBigInt, getInfiniteResearchMaximumLevel } from "
 import { normalizeDecimalIntegerString } from "./quantityFormat";
 import { ACTIVITY_MATERIAL_IDS } from "./activity";
 import { computeSaveStateChecksum, inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
-import { getActiveContentPackReferences, getMissingContentPackRequirements, loadContentPackRegistry } from "./contentPacks";
+import { createEmptyGalacticHubNetwork, createEmptySystemSpaceStations } from "./systemSpaceStation";
+import { normalizeHubInteger, SYSTEM_HUB_MAX_DIGITS } from "./systemHubLogistics";
+import { createEmptyQuantumLogisticsNetworkState, normalizeQuantumInteger, normalizeQuantumLogisticsNetworkState, QUANTUM_MAX_INTEGER_DIGITS } from "./quantumLogisticsNetwork";
+import { getActiveContentPackReferences, getMissingContentPackRequirements, loadContentPackRegistry, type ContentPackRegistry } from "./contentPacks";
 import {
   clearPrimarySaveEmergencyMirror,
   flushLocalSaveWrites,
@@ -40,7 +43,7 @@ import {
   writePrimarySaveEmergencyMirror,
   type LocalSaveStorageEstimate,
 } from "./localSaveStore";
-import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, MaterialDeliverySlot, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, SorterTier, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId } from "./types";
+import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, MaterialDeliverySlot, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, SorterTier, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId, SystemSpaceStationState, GalacticHubNetworkState } from "./types";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -51,6 +54,13 @@ const SAVE_FORMAT_VERSION = 2;
 const AUTO_SNAPSHOT_MIN_SECONDS = 5 * 60;
 const RETURNING_REWARD_KEY_PREFIX = "dsp-idle-network.returning-reward";
 const RETURNING_REWARD_MIN_SECONDS = 72 * 60 * 60;
+
+type CachedSaveSummary = {
+  raw: string;
+  summary: SaveSlotSummary | SaveSnapshotSummary;
+};
+
+const saveSummaryCache = new Map<string, CachedSaveSummary>();
 
 export type SaveSlotId = 1 | 2 | 3;
 
@@ -128,6 +138,24 @@ export interface SaveGameResult {
   bytes?: number;
   removedAutomaticSnapshots?: number;
   backupSaved?: boolean;
+  timings?: SaveStageTimings;
+}
+
+export interface SaveStageTimings {
+  totalMs: number;
+  serializeMs: number;
+  snapshotScanMs: number;
+  capacityMs: number;
+  primaryWriteMs: number;
+  backupMs: number;
+  automaticSnapshotMs: number;
+}
+
+export interface LocalSaveSummaryMetrics {
+  slotCount: number;
+  snapshotCount: number;
+  totalBytes: number;
+  scanMs: number;
 }
 
 export class MissingContentPacksError extends Error {
@@ -158,6 +186,20 @@ export interface SaveInspection {
 export interface ContinueSaveInspection {
   source: SaveRecovery["source"];
   inspection: SaveInspection;
+}
+
+function pruneSaveSummaryCache(keys: Iterable<string>, scope: "slots" | "snapshots" | "all" = "all"): void {
+  const retained = new Set(keys);
+  for (const key of saveSummaryCache.keys()) {
+    const inScope = scope === "all" ||
+      scope === "slots" && key.startsWith(`${SAVE_SLOT_KEY_PREFIX}.`) ||
+      scope === "snapshots" && key.startsWith(`${SAVE_SNAPSHOT_KEY_PREFIX}.`);
+    if (inScope && !retained.has(key)) saveSummaryCache.delete(key);
+  }
+}
+
+function invalidateSaveSummaryCache(key: string): void {
+  saveSummaryCache.delete(key);
 }
 
 function integerRecord(value: unknown): Partial<Record<ItemId, number>> {
@@ -631,14 +673,108 @@ function normalizeMaterialDeliverySlots(entity: FactoryEntity, savedVersion: num
   });
 }
 
-export function migrateGame(value: unknown): GameState | null {
+function normalizeHubIntegerRecord(value: unknown): Partial<Record<ItemId, string>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([itemId, amount]) => {
+    if (!(itemId in ITEMS)) return [];
+    const normalized = normalizeHubInteger(amount);
+    return normalized.length <= SYSTEM_HUB_MAX_DIGITS ? [[itemId, normalized]] : [];
+  })) as Partial<Record<ItemId, string>>;
+}
+
+function normalizeSystemSpaceStations(saved: Record<string, any>): Partial<Record<StarSystemId, SystemSpaceStationState>> {
+  const defaults = createEmptySystemSpaceStations();
+  const rawStations = saved.version >= 43 && saved.systemSpaceStations && typeof saved.systemSpaceStations === "object"
+    ? saved.systemSpaceStations
+    : {};
+  for (const systemId of Object.keys(defaults) as StarSystemId[]) {
+    const fallback = defaults[systemId]!;
+    const raw = rawStations[systemId];
+    if (!raw || typeof raw !== "object") continue;
+    const policies = raw.itemPolicies && typeof raw.itemPolicies === "object" && !Array.isArray(raw.itemPolicies)
+      ? Object.fromEntries(Object.entries(raw.itemPolicies).flatMap(([itemId, policy]) => {
+        if (!(itemId in ITEMS) || !policy || typeof policy !== "object") return [];
+        return [[itemId, {
+          interstellarEnabled: Boolean((policy as any).interstellarEnabled),
+          reserve: normalizeHubInteger((policy as any).reserve),
+          target: normalizeHubInteger((policy as any).target),
+        }]];
+      }))
+      : {};
+    const modules = raw.modules && typeof raw.modules === "object" ? raw.modules : {};
+    const viewport = raw.viewport && typeof raw.viewport === "object" ? raw.viewport : {};
+    defaults[systemId] = {
+      ...fallback,
+      status: raw.status === "building" || raw.status === "operational" ? raw.status : "not-started",
+      costRevision: Number.isSafeInteger(raw.costRevision) ? Math.max(0, raw.costRevision) : 0,
+      costMultiplierBasisPoints: raw.costMultiplierBasisPoints === 8_000 || raw.costMultiplierBasisPoints === 9_000 ? raw.costMultiplierBasisPoints : 10_000,
+      phaseIndex: Number.isSafeInteger(raw.phaseIndex) ? Math.max(0, Math.min(16, raw.phaseIndex)) : 0,
+      delivered: normalizeHubIntegerRecord(raw.delivered),
+      constructionBuffer: normalizeHubIntegerRecord(raw.constructionBuffer),
+      inventory: normalizeHubIntegerRecord(raw.inventory),
+      itemPolicies: policies,
+      modules: {
+        backbone: Number.isSafeInteger(modules.backbone) ? Math.max(0, Math.min(1_000_000, modules.backbone)) : 0,
+        energy: Number.isSafeInteger(modules.energy) ? Math.max(0, Math.min(1_000_000, modules.energy)) : 0,
+        interstellar: Number.isSafeInteger(modules.interstellar) ? Math.max(0, Math.min(1_000_000, modules.interstellar)) : 0,
+      },
+      routingCursors: raw.routingCursors && typeof raw.routingCursors === "object"
+        ? Object.fromEntries(Object.entries(raw.routingCursors).flatMap(([key, value]) => typeof value === "number" && Number.isSafeInteger(value) ? [[key.slice(0, 160), Math.max(0, value)]] : []))
+        : {},
+      viewport: {
+        x: Number.isFinite(viewport.x) ? viewport.x : fallback.viewport.x,
+        y: Number.isFinite(viewport.y) ? viewport.y : fallback.viewport.y,
+        zoom: Number.isFinite(viewport.zoom) ? Math.max(0.1, Math.min(4, viewport.zoom)) : fallback.viewport.zoom,
+      },
+      decorations: Array.isArray(raw.decorations) ? raw.decorations.slice(0, 256).flatMap((decoration: any, index: number) =>
+        decoration && typeof decoration === "object" && (decoration.kind === "marker" || decoration.kind === "label") &&
+        Number.isFinite(decoration.position?.x) && Number.isFinite(decoration.position?.y)
+          ? [{ id: typeof decoration.id === "string" && decoration.id ? decoration.id.slice(0, 160) : `station_decoration_${index}`, kind: decoration.kind, position: { x: decoration.position.x, y: decoration.position.y }, ...(typeof decoration.text === "string" ? { text: decoration.text.slice(0, 120) } : {}) }]
+          : []) : [],
+    };
+  }
+  return defaults;
+}
+
+function normalizeGalacticHubNetwork(saved: Record<string, any>): GalacticHubNetworkState {
+  const fallback = createEmptyGalacticHubNetwork();
+  const raw = saved.version >= 43 && saved.galacticHubNetwork && typeof saved.galacticHubNetwork === "object" ? saved.galacticHubNetwork : {};
+  const fleetReturns = Array.isArray(raw.fleetReturns) ? raw.fleetReturns.slice(0, 4096).flatMap((bucket: any) =>
+    bucket && typeof bucket.routeKey === "string" && bucket.routeKey.length <= 160 && Number.isSafeInteger(bucket.returnAtSecond) &&
+    Number.isSafeInteger(bucket.vesselCount) && bucket.returnAtSecond >= 0 && bucket.vesselCount > 0
+      ? [{ routeKey: bucket.routeKey, returnAtSecond: bucket.returnAtSecond, vesselCount: bucket.vesselCount }] : []) : [];
+  return {
+    fleetInstalled: Number.isSafeInteger(raw.fleetInstalled) ? Math.max(0, Math.min(1_000_000_000, raw.fleetInstalled)) : fallback.fleetInstalled,
+    fleetBusy: Number.isSafeInteger(raw.fleetBusy) ? Math.max(0, Math.min(1_000_000_000, raw.fleetBusy)) : fallback.fleetBusy,
+    fleetReturns,
+    warpers: normalizeHubInteger(raw.warpers),
+    warperTarget: normalizeHubInteger(raw.warperTarget),
+    routingCursors: raw.routingCursors && typeof raw.routingCursors === "object"
+      ? Object.fromEntries(Object.entries(raw.routingCursors).flatMap(([key, value]) => typeof value === "number" && Number.isSafeInteger(value) ? [[key.slice(0, 160), Math.max(0, value)]] : []))
+      : fallback.routingCursors,
+  };
+}
+
+export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegistry = loadContentPackRegistry()): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  // v43 was an unpublished space-station/elevator experiment. Never merge
+  // its station inventory or fleet into the quantum pool. A v43 envelope that
+  // actually contains those fields is rejected; a clean v43 fixture can still
+  // be normalized to the quantum version without carrying the old state.
+  if (saved.version === 43) {
+    const stationMap = saved.systemSpaceStations && typeof saved.systemSpaceStations === "object" ? Object.values(saved.systemSpaceStations) : [];
+    const hasActiveStation = stationMap.some((station: any) => station && station.status && station.status !== "not-started");
+    const hub = saved.galacticHubNetwork && typeof saved.galacticHubNetwork === "object" ? saved.galacticHubNetwork : {};
+    const hasHubAssets = Number(hub.fleetInstalled ?? 0) > 0 || Number(hub.fleetBusy ?? 0) > 0 || normalizeQuantumInteger(hub.warpers) !== "0";
+    const hasElevatorEntity = saved.entities.some((entity: any) => entity?.stationTier === 2 || entity?.stationOperationMode === "elevator" || entity?.stationModeTransition);
+    if (hasActiveStation || hasHubAssets || hasElevatorEntity) return null;
+  }
   const requiredPacks = saved.version >= 40 && Array.isArray(saved.contentPacks)
     ? saved.contentPacks.filter((entry: unknown) => entry && typeof entry === "object" && typeof (entry as { id?: unknown }).id === "string" && typeof (entry as { version?: unknown }).version === "string") as Array<{ id: string; version: string }>
     : [];
-  const missingPacks = getMissingContentPackRequirements(requiredPacks);
+  const missingPacks = getMissingContentPackRequirements(requiredPacks, contentPackRegistry);
   if (missingPacks.length > 0) throw new MissingContentPacksError(missingPacks);
   const savedSeed = saved.version >= 20 && typeof saved.galaxy?.seed === "number" && Number.isFinite(saved.galaxy.seed)
     ? saved.galaxy.seed
@@ -729,6 +865,42 @@ export function migrateGame(value: unknown): GameState | null {
         : undefined,
       deliverySlots,
       stationMode: entity.kind === "station" ? orbitalCollector ? "supply" : entity.stationMode ?? "supply" : entity.stationMode,
+      stationTier: interstellarStation ? saved.version >= 43 && entity.stationTier === 2 ? 2 : 1 : undefined,
+      stationOperationMode: interstellarStation && saved.version >= 43 && entity.stationTier === 2 && entity.stationOperationMode === "elevator" ? "elevator" : interstellarStation ? "legacy" : undefined,
+      stationModeTransition: interstellarStation
+        ? saved.version >= 43 && (entity.stationModeTransition === "to-elevator" || entity.stationModeTransition === "to-legacy") ? entity.stationModeTransition : null
+        : undefined,
+      quantumMode: interstellarStation && saved.version >= 44 &&
+        (entity.quantumMode === "legacy" || entity.quantumMode === "transitioning" || entity.quantumMode === "quantum")
+        ? entity.quantumMode
+        : interstellarStation ? "legacy" : undefined,
+      quantumTransition: interstellarStation && saved.version >= 44 && entity.quantumTransition && typeof entity.quantumTransition === "object"
+        ? {
+          targetMode: entity.quantumTransition.targetMode === "legacy" ? "legacy" : "quantum",
+          startedAtSecond: nonNegativeNumber(entity.quantumTransition.startedAtSecond),
+          boundarySecond: Math.max(0, nonNegativeNumber(entity.quantumTransition.boundarySecond)),
+          bridges: Array.isArray(entity.quantumTransition.bridges)
+            ? entity.quantumTransition.bridges.slice(0, 256).flatMap((bridge: any) => {
+              if (!bridge || typeof bridge.id !== "string" || typeof bridge.itemId !== "string" || !(bridge.itemId as ItemId in ITEMS)) return [];
+              return [{
+                id: bridge.id.slice(0, 160),
+                itemId: bridge.itemId as ItemId,
+                sourceStationId: typeof bridge.sourceStationId === "string" ? bridge.sourceStationId.slice(0, 160) : "",
+                targetStationId: typeof bridge.targetStationId === "string" ? bridge.targetStationId.slice(0, 160) : "",
+                cargo: normalizeQuantumInteger(bridge.cargo),
+                remainingCargo: normalizeQuantumInteger(bridge.remainingCargo),
+                arriveAtSecond: nonNegativeNumber(bridge.arriveAtSecond),
+              }];
+            })
+            : [],
+        }
+        : null,
+      elevatorOutputItems: interstellarStation && saved.version >= 43 && Array.isArray(entity.elevatorOutputItems)
+        ? Array.from({ length: 5 }, (_, index) => {
+          const itemId = (entity.elevatorOutputItems as unknown[])[index];
+          return typeof itemId === "string" && itemId in ITEMS ? itemId as ItemId : null;
+        })
+        : interstellarStation ? [null, null, null, null, null] : undefined,
       stationProgress: entity.kind === "station" ? Math.max(0, entity.stationProgress ?? 0) : entity.stationProgress,
       stationTrips: entity.kind === "station" ? Math.max(0, Math.floor(entity.stationTrips ?? 0)) : entity.stationTrips,
       stationLastTransfer: entity.kind === "station" ? Math.max(0, Math.floor(entity.stationLastTransfer ?? 0)) : entity.stationLastTransfer,
@@ -833,6 +1005,9 @@ export function migrateGame(value: unknown): GameState | null {
       monitorEnabled: Boolean(belt.monitorEnabled),
       routeMode: validBeltRouteMode(belt.routeMode) ? belt.routeMode : "auto",
       routeOffsetY: routeOffset(belt.routeOffsetY),
+      elevatorOutputIndex: saved.version >= 43 && Number.isInteger(belt.elevatorOutputIndex) && belt.elevatorOutputIndex >= 0 && belt.elevatorOutputIndex < 5
+        ? belt.elevatorOutputIndex
+        : undefined,
       totalTransferred: nonNegativeInteger(belt.totalTransferred),
       congestion: Math.min(1, nonNegativeNumber(belt.congestion)),
       lastFlow: typeof belt.lastFlow === "number" ? belt.lastFlow : 0,
@@ -1093,6 +1268,17 @@ export function migrateGame(value: unknown): GameState | null {
             typeof entity.targetDysonOrbitId === "string" && entity.targetDysonOrbitId.length > 0 && entity.targetDysonOrbitId.length <= 160
             ? entity.targetDysonOrbitId
             : undefined,
+          stationTier: entity.buildingId === "interstellar_logistics_station" && saved.version >= 43 && entity.stationTier === 2 ? 2 :
+            entity.buildingId === "interstellar_logistics_station" ? 1 : undefined,
+          stationOperationMode: entity.buildingId === "interstellar_logistics_station" && saved.version >= 43 && entity.stationTier === 2 && entity.stationOperationMode === "elevator"
+            ? "elevator"
+            : entity.buildingId === "interstellar_logistics_station" ? "legacy" : undefined,
+          elevatorOutputItems: entity.buildingId === "interstellar_logistics_station" && saved.version >= 43 && Array.isArray(entity.elevatorOutputItems)
+            ? Array.from({ length: 5 }, (_, index) => {
+              const itemId = entity.elevatorOutputItems[index];
+              return typeof itemId === "string" && itemId in ITEMS ? itemId as ItemId : null;
+            })
+            : entity.buildingId === "interstellar_logistics_station" && entity.stationTier === 2 ? [null, null, null, null, null] : undefined,
           storedItemId,
           deliveryItemIds: entity.buildingId === "material_delivery_hub"
             ? [...new Set(deliverySlots!.flatMap((slot) => slot.itemId ? [slot.itemId] : []))]
@@ -1161,6 +1347,10 @@ export function migrateGame(value: unknown): GameState | null {
           (targetTemplate?.buildingId === "micro_black_hole_connector" || targetTemplate?.buildingId === "material_delivery_hub")
           ? belt.targetPortIndex as 0 | 1 | 2
           : undefined;
+        const elevatorOutputIndex = (belt.elevatorOutputIndex === 0 || belt.elevatorOutputIndex === 1 || belt.elevatorOutputIndex === 2 || belt.elevatorOutputIndex === 3 || belt.elevatorOutputIndex === 4) &&
+          blueprintEntities.some((entity) => entity.key === belt.sourceKey && entity.buildingId === "interstellar_logistics_station" && entity.stationTier === 2)
+          ? belt.elevatorOutputIndex as 0 | 1 | 2 | 3 | 4
+          : undefined;
         return [{
           key: typeof belt.key === "string" && belt.key ? belt.key : `line_${beltIndex + 1}`,
           sourceKey: belt.sourceKey as string,
@@ -1175,6 +1365,7 @@ export function migrateGame(value: unknown): GameState | null {
           routeMode: validBeltRouteMode(belt.routeMode) ? belt.routeMode : "auto",
           routeOffsetY: routeOffset(belt.routeOffsetY),
           targetPortIndex,
+          elevatorOutputIndex,
         }];
       }) : [];
       const externalPorts = Array.isArray(blueprint.externalPorts) ? blueprint.externalPorts.flatMap((port: Record<string, any>, portIndex: number) => {
@@ -1200,7 +1391,7 @@ export function migrateGame(value: unknown): GameState | null {
         name: typeof blueprint.name === "string" && blueprint.name.trim() ? blueprint.name.trim().slice(0, 32) : `蓝图 ${String(blueprintIndex + 1).padStart(2, "0")}`,
         entities: blueprintEntities,
         resourceAnchors,
-        belts: blueprintBelts,
+          belts: blueprintBelts,
         externalPorts,
         rotation: validBlueprintRotation(blueprint.rotation) ? blueprint.rotation : 0,
         mirror: validBlueprintMirror(blueprint.mirror) ? blueprint.mirror : "none",
@@ -1574,6 +1765,11 @@ export function migrateGame(value: unknown): GameState | null {
     ? [...new Set(saved.achievements.unlockedIds.filter(isAchievementId))]
     : [];
   const endgame = migrateEndgame(saved);
+  const systemSpaceStations = normalizeSystemSpaceStations(saved);
+  const galacticHubNetwork = normalizeGalacticHubNetwork(saved);
+  const quantumLogisticsNetwork = saved.version >= 44
+    ? normalizeQuantumLogisticsNetworkState(saved.quantumLogisticsNetwork)
+    : createEmptyQuantumLogisticsNetworkState();
   const requestedTimeWarpMultiplier = Number.isSafeInteger(saved.timeWarp?.requestedMultiplier)
     ? Math.max(5, saved.timeWarp.requestedMultiplier)
     : 5;
@@ -1601,7 +1797,7 @@ export function migrateGame(value: unknown): GameState | null {
   const migrated = {
     ...initial,
     ...saved,
-    version: 41,
+    version: saved.version >= 42 ? 44 : 43,
     activePlanetId,
     entities,
     belts,
@@ -1655,6 +1851,9 @@ export function migrateGame(value: unknown): GameState | null {
     dysonSphere,
     dysonEngineering,
     dysonPlans,
+    systemSpaceStations,
+    galacticHubNetwork,
+    quantumLogisticsNetwork,
     timeWarp,
     endgame,
   } as GameState;
@@ -1729,7 +1928,7 @@ function applyReturningReward(state: GameState, savedAt: number, seconds: number
 }
 
 /** Inspect an imported or locally stored envelope without advancing time. */
-export function inspectSave(raw: string): SaveInspection {
+export function inspectSave(raw: string, contentPackRegistry?: ContentPackRegistry): SaveInspection {
   const invalid = (issues: string[], formatVersion: number | null = null, stateVersion: number | null = null): SaveInspection => ({
     valid: false,
     repairable: false,
@@ -1776,7 +1975,7 @@ export function inspectSave(raw: string): SaveInspection {
   const requiredPacks = Array.isArray(envelope.state.contentPacks)
     ? envelope.state.contentPacks.filter((entry: unknown) => entry && typeof entry === "object" && typeof (entry as { id?: unknown }).id === "string" && typeof (entry as { version?: unknown }).version === "string") as Array<{ id: string; version: string }>
     : [];
-  const missingPacks = getMissingContentPackRequirements(requiredPacks);
+  const missingPacks = getMissingContentPackRequirements(requiredPacks, contentPackRegistry);
   if (missingPacks.length > 0) return invalid([`无法加载存档：${missingPacks.join("；")}`], formatVersion, stateVersion);
 
   let checksum: SaveInspection["checksum"] = "missing";
@@ -1794,7 +1993,7 @@ export function inspectSave(raw: string): SaveInspection {
 
   let state: GameState | null = null;
   try {
-    state = migrateGame(envelope.state);
+    state = migrateGame(envelope.state, contentPackRegistry);
   } catch {
     return invalid(["存档数据结构无法修复"], formatVersion, stateVersion);
   }
@@ -2011,6 +2210,10 @@ function utf8ByteLength(value: string): number {
   }
 }
 
+function monotonicNow(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+}
+
 function isQuotaExceededError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const candidate = error as { name?: unknown; code?: unknown };
@@ -2132,7 +2335,9 @@ async function recoverLocalSaveCache(): Promise<void> {
  * an exact read-back plus envelope checksum validation. Optional backups and
  * automatic snapshots are deliberately attempted after the primary commit.
  */
-export async function saveGameVerified(state: GameState): Promise<SaveGameResult> {
+async function saveGameVerifiedOnce(state: GameState): Promise<SaveGameResult> {
+  const totalStartedAt = monotonicNow();
+  const serializeStartedAt = totalStartedAt;
   const savedAt = Date.now();
   let raw: string;
   try {
@@ -2140,10 +2345,13 @@ export async function saveGameVerified(state: GameState): Promise<SaveGameResult
   } catch {
     return failedSave("unavailable", "无法生成本地主存档，请立即导出当前进度");
   }
+  const serializeMs = Math.max(0, monotonicNow() - serializeStartedAt);
 
   const bytes = utf8ByteLength(raw);
   const previous = getLocalSaveValue(SAVE_KEY);
+  const snapshotScanStartedAt = monotonicNow();
   let removedAutomaticSnapshots = prepareAutomaticSnapshotsForPrimarySave();
+  const snapshotScanMs = Math.max(0, monotonicNow() - snapshotScanStartedAt);
   try {
     await flushLocalSaveWrites();
   } catch {
@@ -2151,10 +2359,13 @@ export async function saveGameVerified(state: GameState): Promise<SaveGameResult
     // chance, and quota recovery below retries after removing all auto points.
   }
 
+  const capacityStartedAt = monotonicNow();
   const capacity = await hasLocalSaveCapacity(SAVE_KEY, raw);
+  let capacityMs = Math.max(0, monotonicNow() - capacityStartedAt);
   if (!capacity.ok) {
     removedAutomaticSnapshots += removeAutomaticSnapshotsForQuotaRetry();
     try { await flushLocalSaveWrites(); } catch { /* handled by the primary write */ }
+    capacityMs = Math.max(capacityMs, monotonicNow() - capacityStartedAt);
   }
 
   const commitPrimary = async (): Promise<boolean> => {
@@ -2162,6 +2373,7 @@ export async function saveGameVerified(state: GameState): Promise<SaveGameResult
     return verifyPersistedEnvelope(SAVE_KEY, raw);
   };
 
+  const primaryWriteStartedAt = monotonicNow();
   let verified = false;
   try {
     verified = await commitPrimary();
@@ -2192,8 +2404,10 @@ export async function saveGameVerified(state: GameState): Promise<SaveGameResult
     await recoverLocalSaveCache();
     return failedSave("verification", "本地主存档写入校验失败，当前进度尚未保存。请立即导出存档。", bytes, removedAutomaticSnapshots);
   }
+  const primaryWriteMs = Math.max(0, monotonicNow() - primaryWriteStartedAt);
   clearPrimarySaveEmergencyMirror(raw);
 
+  const backupStartedAt = monotonicNow();
   let backupSaved = false;
   if (previous && inspectSave(previous).valid) {
     try {
@@ -2203,12 +2417,15 @@ export async function saveGameVerified(state: GameState): Promise<SaveGameResult
       // The already verified primary remains authoritative.
     }
   }
+  const backupMs = Math.max(0, monotonicNow() - backupStartedAt);
 
+  const automaticSnapshotStartedAt = monotonicNow();
   try {
     await maybeSaveAutomaticSnapshotVerified(state);
   } catch {
     // Recovery points never downgrade a successful primary commit.
   }
+  const automaticSnapshotMs = Math.max(0, monotonicNow() - automaticSnapshotStartedAt);
   return {
     success: true,
     message: "主存档已保存",
@@ -2216,7 +2433,63 @@ export async function saveGameVerified(state: GameState): Promise<SaveGameResult
     bytes,
     removedAutomaticSnapshots,
     backupSaved,
+    timings: {
+      totalMs: Math.max(0, monotonicNow() - totalStartedAt),
+      serializeMs,
+      snapshotScanMs,
+      capacityMs,
+      primaryWriteMs,
+      backupMs,
+      automaticSnapshotMs,
+    },
   };
+}
+
+interface PendingPrimarySave {
+  state: GameState;
+  waiters: Array<(result: SaveGameResult) => void>;
+}
+
+let activePrimarySave: Promise<void> | null = null;
+let pendingPrimarySave: PendingPrimarySave | null = null;
+
+/**
+ * Serialize primary saves and coalesce requests that arrive while IndexedDB
+ * is still writing. The newest state wins; every caller still receives the
+ * result of the committed request. This prevents autosave, visibility and
+ * native lifecycle events from creating a save backlog.
+ */
+export function saveGameVerified(state: GameState): Promise<SaveGameResult> {
+  return new Promise((resolve) => {
+    if (activePrimarySave) {
+      if (!pendingPrimarySave) pendingPrimarySave = { state, waiters: [] };
+      pendingPrimarySave.state = state;
+      pendingPrimarySave.waiters.push(resolve);
+      return;
+    }
+
+    let current: PendingPrimarySave | null = { state, waiters: [resolve] };
+    const run = async () => {
+      while (current) {
+        const request = current;
+        current = null;
+        let result: SaveGameResult;
+        try {
+          result = await saveGameVerifiedOnce(request.state);
+        } catch {
+          result = failedSave("unavailable", "本地主存档写入失败，请立即导出当前进度");
+        }
+        request.waiters.forEach((waiter) => waiter(result));
+        current = pendingPrimarySave;
+        pendingPrimarySave = null;
+      }
+    };
+    const inFlight = run();
+    activePrimarySave = inFlight;
+    void inFlight.finally(() => {
+      if (activePrimarySave === inFlight) activePrimarySave = null;
+    });
+  });
 }
 
 export function exportGame(state: GameState): string {
@@ -2236,7 +2509,9 @@ function saveSlotKey(slotId: SaveSlotId): string {
 }
 
 export function saveGameSlot(slotId: SaveSlotId, state: GameState): void {
-  setLocalSaveValue(saveSlotKey(slotId), serializeEnvelope(state, Date.now(), "slot"));
+  const key = saveSlotKey(slotId);
+  invalidateSaveSummaryCache(key);
+  setLocalSaveValue(key, serializeEnvelope(state, Date.now(), "slot"));
 }
 
 export async function saveGameSlotVerified(slotId: SaveSlotId, state: GameState): Promise<SaveGameResult> {
@@ -2249,6 +2524,7 @@ export async function saveGameSlotVerified(slotId: SaveSlotId, state: GameState)
     if (!capacity.ok) {
       return failedSave("quota", "本地存储空间不足，槽位尚未保存。请先管理快照或导出存档。", utf8ByteLength(raw));
     }
+    invalidateSaveSummaryCache(key);
     setLocalSaveValue(key, raw);
     if (!await verifyPersistedEnvelope(key, raw)) {
       await recoverLocalSaveCache();
@@ -2304,6 +2580,7 @@ export async function clearGameSlotVerified(slotId: SaveSlotId): Promise<boolean
   const key = saveSlotKey(slotId);
   try {
     removeLocalSaveValue(key);
+    invalidateSaveSummaryCache(key);
     await flushLocalSaveWrites();
     return await readPersistedLocalSaveValue(key) === null;
   } catch {
@@ -2313,26 +2590,33 @@ export async function clearGameSlotVerified(slotId: SaveSlotId): Promise<boolean
 }
 
 export function getSaveSlotSummaries(): SaveSlotSummary[] {
+  const keys = ([1, 2, 3] as SaveSlotId[]).map(saveSlotKey);
+  pruneSaveSummaryCache(keys, "slots");
   return ([1, 2, 3] as SaveSlotId[]).flatMap((slotId) => {
+    const key = saveSlotKey(slotId);
     try {
-      const raw = getLocalSaveValue(saveSlotKey(slotId));
+      const raw = getLocalSaveValue(key);
       if (!raw) return [];
+      const cached = saveSummaryCache.get(key);
+      if (cached?.raw === raw) return [cached.summary as SaveSlotSummary];
       const inspection = inspectSave(raw);
       const parsed = JSON.parse(raw) as Partial<SaveEnvelope>;
-      const summary = inspection.summary ?? {
+      const fallbackSummary = inspection.summary ?? {
         savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : 0,
         elapsedSeconds: 0,
         completedTechCount: 0,
         structurePoints: 0,
         activePlanetId: "home" as PlanetId,
       };
-      return [{
+      const summary = {
         slotId,
-        ...summary,
+        ...fallbackSummary,
         integrity: inspection.integrity,
         valid: inspection.valid,
         issues: inspection.issues,
-      }];
+      } satisfies SaveSlotSummary;
+      saveSummaryCache.set(key, { raw, summary });
+      return [summary];
     } catch {
       return [];
     }
@@ -2349,32 +2633,57 @@ function listSnapshotKeys(): string[] {
 interface StoredSnapshotEntry {
   key: string;
   savedAt: number;
+  elapsedSeconds: number;
   automatic: boolean;
   hasPersistedProductionHistory: boolean;
 }
 
+type CachedSnapshotMetadata = {
+  raw: string;
+  entry: StoredSnapshotEntry | null;
+};
+
+const snapshotMetadataCache = new Map<string, CachedSnapshotMetadata>();
+
 function storedSnapshotEntries(): StoredSnapshotEntry[] {
-  return listSnapshotKeys().flatMap((key) => {
+  const keys = listSnapshotKeys();
+  const retained = new Set(keys);
+  for (const key of snapshotMetadataCache.keys()) {
+    if (!retained.has(key)) snapshotMetadataCache.delete(key);
+  }
+  return keys.flatMap((key) => {
     try {
       const raw = getLocalSaveValue(key);
       if (!raw) return [];
+      const cached = snapshotMetadataCache.get(key);
+      if (cached?.raw === raw) return cached.entry ? [cached.entry] : [];
       const parsed = JSON.parse(raw) as unknown;
-      if (!isRecord(parsed)) return [];
+      if (!isRecord(parsed)) {
+        snapshotMetadataCache.set(key, { raw, entry: null });
+        return [];
+      }
       const reason = typeof parsed.reason === "string" ? parsed.reason : "";
       const state = isRecord(parsed.state) ? parsed.state : parsed;
       const history = isRecord(state) && Array.isArray(state.productionHistory) ? state.productionHistory : [];
       const idTimestamp = Number(key.slice(`${SAVE_SNAPSHOT_KEY_PREFIX}.`.length).split("-")[0]);
-      return [{
+      const entry = {
         key,
         savedAt: typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt)
           ? parsed.savedAt
           : Number.isFinite(idTimestamp) ? idTimestamp : 0,
+        elapsedSeconds: isRecord(state) && typeof state.elapsedSeconds === "number" && Number.isFinite(state.elapsedSeconds)
+          ? Math.max(0, state.elapsedSeconds)
+          : 0,
         automatic: reason.length === 0 || reason === "自动快照",
         hasPersistedProductionHistory: history.length > 0,
-      }];
+      } satisfies StoredSnapshotEntry;
+      snapshotMetadataCache.set(key, { raw, entry });
+      return [entry];
     } catch {
       // Unknown or corrupt snapshots are left untouched. They may be a manual
       // recovery point whose reason can no longer be read safely.
+      const raw = getLocalSaveValue(key);
+      if (raw) snapshotMetadataCache.set(key, { raw, entry: null });
       return [];
     }
   }).sort((left, right) => right.savedAt - left.savedAt || right.key.localeCompare(left.key));
@@ -2384,6 +2693,8 @@ function removeStoredSnapshots(entries: StoredSnapshotEntry[]): number {
   let removed = 0;
   for (const entry of entries) {
     removeLocalSaveValue(entry.key);
+    invalidateSaveSummaryCache(entry.key);
+    snapshotMetadataCache.delete(entry.key);
     removed += 1;
   }
   return removed;
@@ -2425,17 +2736,49 @@ function nextSnapshotSequence(): number {
 }
 
 function maybeSaveAutomaticSnapshot(state: GameState): void {
-  const latest = getSaveSnapshotSummaries().find((snapshot) => snapshot.valid && snapshot.reason === "自动快照");
+  const latest = latestAutomaticSnapshotSummary();
   if (!latest || state.elapsedSeconds < latest.elapsedSeconds || state.elapsedSeconds - latest.elapsedSeconds >= AUTO_SNAPSHOT_MIN_SECONDS) {
     saveGameSnapshot(state, "自动快照");
   }
 }
 
 async function maybeSaveAutomaticSnapshotVerified(state: GameState): Promise<void> {
-  const latest = getSaveSnapshotSummaries().find((snapshot) => snapshot.valid && snapshot.reason === "自动快照");
+  const latest = latestAutomaticSnapshotSummary();
   if (!latest || state.elapsedSeconds < latest.elapsedSeconds || state.elapsedSeconds - latest.elapsedSeconds >= AUTO_SNAPSHOT_MIN_SECONDS) {
     await saveGameSnapshotVerified(state, "自动快照");
   }
+}
+
+function getSnapshotSummaryForKey(key: string, raw = getLocalSaveValue(key)): SaveSnapshotSummary | null {
+  if (!raw) return null;
+  const cached = saveSummaryCache.get(key);
+  if (cached?.raw === raw) return cached.summary as SaveSnapshotSummary;
+  const inspection = inspectSave(raw);
+  const parsed = JSON.parse(raw) as Partial<SaveEnvelope>;
+  const fallbackSummary = inspection.summary ?? {
+    savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : 0,
+    elapsedSeconds: 0,
+    completedTechCount: 0,
+    structurePoints: 0,
+    activePlanetId: "home" as PlanetId,
+  };
+  const summary = {
+    id: key.slice(`${SAVE_SNAPSHOT_KEY_PREFIX}.`.length),
+    ...fallbackSummary,
+    reason: typeof parsed.reason === "string" && parsed.reason ? parsed.reason : "自动快照",
+    integrity: inspection.integrity,
+    valid: inspection.valid,
+    issues: inspection.issues,
+  } satisfies SaveSnapshotSummary;
+  saveSummaryCache.set(key, { raw, summary });
+  return summary;
+}
+
+function latestAutomaticSnapshotSummary(): SaveSnapshotSummary | null {
+  const latest = storedSnapshotEntries().find((entry) => entry.automatic);
+  if (!latest) return null;
+  const summary = getSnapshotSummaryForKey(latest.key);
+  return summary?.valid && summary.reason === "自动快照" ? summary : null;
 }
 
 export function saveGameSnapshot(state: GameState, reason = "自动快照"): SaveSnapshotSummary | null {
@@ -2444,9 +2787,12 @@ export function saveGameSnapshot(state: GameState, reason = "自动快照"): Sav
     const sequence = nextSnapshotSequence();
     const id = `${savedAt}-${sequence}`;
     const key = `${SAVE_SNAPSHOT_KEY_PREFIX}.${id}`;
-    setLocalSaveValue(key, serializeEnvelope(state, savedAt, "snapshot", reason));
+    const raw = serializeEnvelope(state, savedAt, "snapshot", reason);
+    invalidateSaveSummaryCache(key);
+    snapshotMetadataCache.delete(key);
+    setLocalSaveValue(key, raw);
     if (reason === "自动快照") trimAutomaticSnapshots(AUTOMATIC_SAVE_SNAPSHOT_LIMIT);
-    return getSaveSnapshotSummaries().find((snapshot) => snapshot.id === id) ?? null;
+    return getSnapshotSummaryForKey(key, raw);
   } catch {
     return null;
   }
@@ -2461,11 +2807,13 @@ export async function saveGameSnapshotVerified(state: GameState, reason = "自�
     const raw = serializeEnvelope(state, savedAt, "snapshot", reason);
     const capacity = await hasLocalSaveCapacity(key, raw);
     if (!capacity.ok) return null;
+    invalidateSaveSummaryCache(key);
+    snapshotMetadataCache.delete(key);
     setLocalSaveValue(key, raw);
     if (reason === "自动快照") trimAutomaticSnapshots(AUTOMATIC_SAVE_SNAPSHOT_LIMIT);
     await flushLocalSaveWrites();
     if (!await verifyPersistedEnvelope(key, raw)) return null;
-    return getSaveSnapshotSummaries().find((snapshot) => snapshot.id === id) ?? null;
+    return getSnapshotSummaryForKey(key, raw);
   } catch {
     await recoverLocalSaveCache();
     return null;
@@ -2473,32 +2821,96 @@ export async function saveGameSnapshotVerified(state: GameState, reason = "自�
 }
 
 export function getSaveSnapshotSummaries(): SaveSnapshotSummary[] {
-  return listSnapshotKeys().flatMap((key) => {
+  const keys = listSnapshotKeys();
+  pruneSaveSummaryCache(keys, "snapshots");
+  return keys.flatMap((key) => {
     try {
       const raw = getLocalSaveValue(key);
       if (!raw) return [];
-      const inspection = inspectSave(raw);
-      const parsed = JSON.parse(raw) as Partial<SaveEnvelope>;
-      const id = key.slice(`${SAVE_SNAPSHOT_KEY_PREFIX}.`.length);
-      const summary = inspection.summary ?? {
-        savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : 0,
-        elapsedSeconds: 0,
-        completedTechCount: 0,
-        structurePoints: 0,
-        activePlanetId: "home" as PlanetId,
-      };
-      return [{
-        id,
-        ...summary,
-        reason: typeof parsed.reason === "string" && parsed.reason ? parsed.reason : "自动快照",
-        integrity: inspection.integrity,
-        valid: inspection.valid,
-        issues: inspection.issues,
-      }];
+      const summary = getSnapshotSummaryForKey(key, raw);
+      return summary ? [summary] : [];
     } catch {
       return [];
     }
   }).sort((left, right) => right.savedAt - left.savedAt);
+}
+
+interface SaveSummaryWorkerEntry {
+  key: string;
+  kind: "slot" | "snapshot";
+  slotId?: SaveSlotId;
+  raw: string;
+}
+
+interface SaveSummaryWorkerResponse {
+  id: number;
+  summaries: Array<{ key: string; summary: SaveSlotSummary | SaveSnapshotSummary }>;
+}
+
+let saveSummaryWorkerRequestId = 0;
+
+/** Validate changed save summaries off the main thread when workers are available. */
+export async function getSaveSummariesInWorker(): Promise<{ slots: SaveSlotSummary[]; snapshots: SaveSnapshotSummary[] }> {
+  const slotEntries: SaveSummaryWorkerEntry[] = ([1, 2, 3] as SaveSlotId[]).flatMap((slotId) => {
+    const key = saveSlotKey(slotId);
+    const raw = getLocalSaveValue(key);
+    return raw ? [{ key, kind: "slot", slotId, raw }] : [];
+  });
+  const snapshotEntries: SaveSummaryWorkerEntry[] = listSnapshotKeys().flatMap((key) => {
+    const raw = getLocalSaveValue(key);
+    return raw ? [{ key, kind: "snapshot", raw }] : [];
+  });
+  const entries = [...slotEntries, ...snapshotEntries];
+  pruneSaveSummaryCache(entries.map((entry) => entry.key), "all");
+  const pending = entries.filter((entry) => saveSummaryCache.get(entry.key)?.raw !== entry.raw);
+  if (pending.length === 0 || typeof Worker === "undefined") {
+    return { slots: getSaveSlotSummaries(), snapshots: getSaveSnapshotSummaries() };
+  }
+
+  return new Promise((resolve) => {
+    const id = ++saveSummaryWorkerRequestId;
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL("./saveSummary.worker.ts", import.meta.url), { type: "module", name: "save-summary-validation" });
+    } catch {
+      resolve({ slots: getSaveSlotSummaries(), snapshots: getSaveSnapshotSummaries() });
+      return;
+    }
+    const fallback = () => {
+      worker.terminate();
+      resolve({ slots: getSaveSlotSummaries(), snapshots: getSaveSnapshotSummaries() });
+    };
+    worker.onerror = fallback;
+    worker.onmessage = (event: MessageEvent<SaveSummaryWorkerResponse>) => {
+      if (event.data?.id !== id) return;
+      worker.terminate();
+      for (const entry of event.data.summaries ?? []) {
+        const source = pending.find((candidate) => candidate.key === entry.key);
+        if (source) saveSummaryCache.set(entry.key, { raw: source.raw, summary: entry.summary });
+      }
+      resolve({ slots: getSaveSlotSummaries(), snapshots: getSaveSnapshotSummaries() });
+    };
+    worker.postMessage({ id, registry: loadContentPackRegistry(), entries: pending });
+  });
+}
+
+/**
+ * Return cheap storage diagnostics without parsing or validating any envelope.
+ * The performance panel calls this only while sampling is enabled.
+ */
+export function getLocalSaveSummaryMetrics(): LocalSaveSummaryMetrics {
+  const startedAt = monotonicNow();
+  const keys = listLocalSaveKeys().filter((key) => key !== `${SAVE_KEY}.snapshot.sequence`);
+  let totalBytes = 0;
+  let slotCount = 0;
+  let snapshotCount = 0;
+  for (const key of keys) {
+    const raw = getLocalSaveValue(key);
+    if (raw !== null) totalBytes += utf8ByteLength(raw);
+    if (key.startsWith(`${SAVE_SLOT_KEY_PREFIX}.`)) slotCount += 1;
+    if (key.startsWith(`${SAVE_SNAPSHOT_KEY_PREFIX}.`)) snapshotCount += 1;
+  }
+  return { slotCount, snapshotCount, totalBytes, scanMs: Math.max(0, monotonicNow() - startedAt) };
 }
 
 export function loadSaveSnapshot(id: string): GameState | null {
@@ -2511,13 +2923,18 @@ export function loadSaveSnapshot(id: string): GameState | null {
 }
 
 export function clearSaveSnapshot(id: string): void {
-  removeLocalSaveValue(`${SAVE_SNAPSHOT_KEY_PREFIX}.${id}`);
+  const key = `${SAVE_SNAPSHOT_KEY_PREFIX}.${id}`;
+  invalidateSaveSummaryCache(key);
+  snapshotMetadataCache.delete(key);
+  removeLocalSaveValue(key);
 }
 
 export async function clearSaveSnapshotVerified(id: string): Promise<boolean> {
   const key = `${SAVE_SNAPSHOT_KEY_PREFIX}.${id}`;
   try {
     removeLocalSaveValue(key);
+    invalidateSaveSummaryCache(key);
+    snapshotMetadataCache.delete(key);
     await flushLocalSaveWrites();
     return await readPersistedLocalSaveValue(key) === null;
   } catch {
@@ -2528,7 +2945,12 @@ export async function clearSaveSnapshotVerified(id: string): Promise<boolean> {
 
 export async function clearSaveSnapshotsVerified(ids: string[]): Promise<{ removed: number; failed: string[] }> {
   const uniqueIds = [...new Set(ids)];
-  for (const id of uniqueIds) removeLocalSaveValue(`${SAVE_SNAPSHOT_KEY_PREFIX}.${id}`);
+  for (const id of uniqueIds) {
+    const key = `${SAVE_SNAPSHOT_KEY_PREFIX}.${id}`;
+    invalidateSaveSummaryCache(key);
+    snapshotMetadataCache.delete(key);
+    removeLocalSaveValue(key);
+  }
   try {
     await flushLocalSaveWrites();
   } catch {

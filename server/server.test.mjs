@@ -910,7 +910,7 @@ test("validates v33 proliferator and exact infinite research fields while accept
   assert.equal(accepted.response.status, 200);
 });
 
-test("validates v34 time warp and accepts Android v35 through current v41 saves", async () => {
+test("validates v34 time warp and accepts Android v35 through current v43 saves", async () => {
   const research = Object.fromEntries([
     ["matrix_compression", 1_000],
     ["vein_utilization", 1_000],
@@ -1120,6 +1120,59 @@ test("validates v34 time warp and accepts Android v35 through current v41 saves"
   }
   const acceptedV41 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v41PayloadFor(), expectedRevision: 9 }) });
   assert.equal(acceptedV41.response.status, 200);
+
+  const v42PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    Object.assign(state, JSON.parse(v41PayloadFor()).state);
+    state.version = 42;
+    state.galaxy = {
+      planetMetadata: { home: { customName: "母星生产区", note: "主产线", tags: ["出口"] } },
+      systemMetadata: { helios: { customName: "曙光庭" } },
+    };
+    mutate(state);
+  });
+  for (const invalid of [
+    v42PayloadFor((state) => { state.galaxy.planetMetadata.home.tags = Array(9).fill("tag"); }),
+    v42PayloadFor((state) => { state.galaxy.planetMetadata.home.note = "x".repeat(241); }),
+    v42PayloadFor((state) => { state.galaxy.systemMetadata.helios.customName = ""; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 10 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+  const acceptedV42 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v42PayloadFor(), expectedRevision: 10 }) });
+  assert.equal(acceptedV42.response.status, 200);
+
+  const v43PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    Object.assign(state, JSON.parse(v42PayloadFor()).state);
+    state.version = 43;
+    state.systemSpaceStations = {
+      helios: {
+        systemId: "helios",
+        status: "operational",
+        costRevision: 1,
+        costMultiplierBasisPoints: 10_000,
+        phaseIndex: 16,
+        delivered: { titanium_alloy: "1000000" },
+        inventory: { iron_ingot: "100000000000000000000" },
+        itemPolicies: { iron_ingot: { interstellarEnabled: true, reserve: "0", target: "1000" } },
+        modules: { backbone: 0, energy: 0, interstellar: 1 },
+        routingCursors: { iron_ingot: 3 },
+        viewport: { x: 0, y: 0, zoom: 0.85 },
+        decorations: [],
+      },
+    };
+    state.galacticHubNetwork = { fleetInstalled: 10, fleetBusy: 2, fleetReturns: [{ routeKey: "helios->borealis:iron_ingot", returnAtSecond: 30, vesselCount: 2 }], warpers: "100000000000000000000", warperTarget: "200", routingCursors: {} };
+    mutate(state);
+  });
+  const acceptedV43 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v43PayloadFor(), expectedRevision: 11 }) });
+  assert.equal(acceptedV43.response.status, 200);
+  for (const invalid of [
+    v43PayloadFor((state) => { state.systemSpaceStations.helios.inventory.iron_ingot = "01"; }),
+    v43PayloadFor((state) => { state.galacticHubNetwork.fleetReturns[0].vesselCount = 0; }),
+    v43PayloadFor((state) => { state.belts[0].elevatorOutputIndex = 5; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 12 }) });
+    assert.equal(rejected.response.status, 400);
+  }
 });
 
 test("accepts declarative content-pack cloud saves but excludes them from official ranking", async () => {

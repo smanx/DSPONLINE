@@ -54,6 +54,7 @@ import {
   getEntityCycleRatePerSimulationSecond,
   getEntityOperatingStatus,
   getEntityPowerFactor,
+  getQuantumAttachmentStatus,
   getMaterialDeliverySlots,
   getRecursiveHandcraftPlan,
   getResourceReserveSnapshot,
@@ -83,6 +84,7 @@ import { ItemGlyph } from "../ItemReference";
 import { QuantityStepper } from "../QuantityStepper";
 import { QuantityValue } from "../QuantityValue";
 import { formatQuantityCompact } from "../../game/quantityFormat";
+import { getInterstellarStationUpgradeStatus } from "../../game/systemSpaceStation";
 import { MobileSheetFrame } from "./MobileSheetFrame";
 import { useWorkDisplayProgress } from "../../hooks/useProductionVisualClock";
 import type { WorkProgressMode } from "../../game/productionRefresh";
@@ -95,7 +97,7 @@ type BuildCategory = "all" | "recent" | "power" | "production" | "logistics" | "
 const BUILD_CATEGORIES: Record<Exclude<BuildCategory, "all" | "recent">, Set<ConstructionId>> = {
   power: new Set(["wind_turbine", "solar_panel", "geothermal_power_station", "thermal_power_plant", "mini_fusion_power_plant", "artificial_star", "accumulator", "energy_exchanger"]),
   production: new Set(["mining_machine", "arc_smelter", "plane_smelter", "assembling_machine_mk1", "assembling_machine_mk2", "assembling_machine_mk3", "matrix_lab", "oil_extractor", "oil_refinery", "water_pump", "chemical_plant", "quantum_chemical_plant", "fractionator", "miniature_particle_collider", "spray_coater", "construction_center"]),
-  logistics: new Set(["conveyor_belt_mk1", "conveyor_belt_mk2", "conveyor_belt_mk3", "storage_mk1", "material_delivery_hub", "splitter_4way", "storage_tank", "planetary_logistics_station", "interstellar_logistics_station", "orbital_collector"]),
+  logistics: new Set(["conveyor_belt_mk1", "conveyor_belt_mk2", "conveyor_belt_mk3", "storage_mk1", "material_delivery_hub", "splitter_4way", "storage_tank", "planetary_logistics_station", "interstellar_logistics_station", "space_station_construction_launcher", "orbital_collector"]),
   dyson: new Set(["em_rail_ejector", "vertical_launching_silo", "ray_receiver", "galactic_material_exporter", "micro_black_hole_connector", "time_warp_device"]),
 };
 
@@ -227,7 +229,9 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
           const active = isBelt ? beltTierMode === "manual" && beltTier === getBeltTier(id) : placement === id;
           const consumption = plan.consumedItems.slice(0, 2).map((entry) => `${getItem(entry.itemId).name}×${formatQuantityCompact(entry.amount)}`).join("、");
           const disabled = mode === "deploy" && (count < 1 || !compatible);
-          return <button className={`mobile-build-card${active ? " active" : ""}${plan.usesUpstream ? " upstream" : ""}${mode === "craft" && !plan.possible ? " unavailable" : ""}`} type="button" disabled={disabled} key={id} onClick={() => {
+          const craftUnavailable = mode === "craft" && !plan.possible;
+          const accessibleState = mode === "deploy" ? `${label}，施工库存 ${count}` : plan.possible ? `${label}，可以制造` : `${label}，当前不可制造，点击查看原因`;
+          return <button className={`mobile-build-card${active ? " active" : ""}${plan.usesUpstream ? " upstream" : ""}${craftUnavailable ? " unavailable" : ""}`} type="button" disabled={disabled} aria-disabled={craftUnavailable || undefined} aria-label={accessibleState} key={id} onClick={() => {
             if (mode === "deploy") {
               if (!CONSTRUCTION_BUILD_ORDER.includes(id as BuildingId | ConveyorBeltId)) return;
               remember(id as BuildingId | ConveyorBeltId);
@@ -240,7 +244,6 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
           }} title={mode === "deploy" ? compatible ? `部署${label}` : "当前行星无法部署" : plan.possible ? `制造${label}` : "查看缺失材料"}>
             <i>{constructionBuildIcon(id as BuildingId | ConveyorBeltId)}</i>
             <span><strong>{label}</strong><small>{mode === "deploy" ? `库存 ×${count}` : plan.possible ? consumption || "材料齐备" : plan.blocker ? `安全上限：${getItem(plan.blocker.itemId).name}` : plan.missingTechnology ? `缺科技：${plan.missingTechnology}` : `缺 ${plan.missingItems[0] ? getItem(plan.missingItems[0].itemId).name : "材料"}`}</small></span>
-            <em>{active ? "已选择" : mode === "deploy" ? `×${count}` : plan.usesUpstream ? "可合成" : plan.possible ? "可制造" : "不可制造"}</em>
             <b>{mode === "deploy" ? <><Pin size={15} />部署</> : <><Hammer size={15} />制造</>}</b>
           </button>;
         })}
@@ -355,7 +358,7 @@ function MobileBeltLaneControl({ game, belt, onChange }: { game: GameState; belt
   </section>;
 }
 
-export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onRemoveEntity, onUpgradeEntity, onUpgradeBelt, onBeltLaneCountChange, onEntityLockChange, onRemoveSprayCoater, onOpenResourceSettings, onMaterialDeliverySlotChange, onEjectorOrbitChange }: {
+export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onRemoveEntity, onUpgradeEntity, onUpgradeInterstellarStation, onQuantumAttachment, onUpgradeBelt, onBeltLaneCountChange, onEntityLockChange, onRemoveSprayCoater, onOpenResourceSettings, onMaterialDeliverySlotChange, onEjectorOrbitChange }: {
   game: GameState;
   snap: MobileSheetSnap;
   entity: FactoryEntity | null;
@@ -368,6 +371,8 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
   onAddEntity: (entityId: string, count: number) => void;
   onRemoveEntity: (entityId: string, count?: number) => void;
   onUpgradeEntity: (entityId: string) => void;
+  onUpgradeInterstellarStation: (entityId: string) => void;
+  onQuantumAttachment: (entityId: string) => void;
   onUpgradeBelt: (beltId: string) => void;
   onBeltLaneCountChange: (beltId: string, targetLanes: number) => void;
   onEntityLockChange: (entityId: string, locked: boolean) => void;
@@ -395,6 +400,8 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
   const ejectorTarget = entity?.buildingId === "em_rail_ejector" ? getEjectorOrbitTargetStatus(game, entity) : null;
   const ejectorOrbits = ejectorTarget ? game.dysonEngineering.orbitsBySystem[ejectorTarget.systemId] ?? [] : [];
   const addAvailable = entity ? Math.floor(game.construction[entity.kind === "vein" ? getExtractorBuildingId(entity.resourceId!) : entity.buildingId!] ?? 0) : 0;
+  const stationUpgradeStatus = entity?.buildingId === "interstellar_logistics_station" ? getInterstellarStationUpgradeStatus(game, entity.id) : null;
+  const quantumStatus = entity?.buildingId === "interstellar_logistics_station" ? getQuantumAttachmentStatus(game, entity.id) : null;
   useEffect(() => {
     setAddCount((current) => Math.max(1, Math.min(Math.max(1, addAvailable), current)));
   }, [addAvailable, entity?.id]);
@@ -431,6 +438,8 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
           {entity ? <b>{Math.round(getEntityPowerFactor(game, entity) * 100)}% 供电</b> : belt ? <b>{Math.round((belt.congestion ?? 0) * 100)}% 拥堵</b> : null}
         </section>
         {entity ? <MobileEntityProgress game={game} entity={entity} label={recipe?.name ?? (entity.kind === "vein" ? "资源采集" : "设备周期")} reserveLabel={resourceReserve ? ` · ${resourceReserve.infinite ? "无限储量" : resourceReserve.exhausted ? "资源已枯竭" : `储量 ${resourceReserve.remaining?.toLocaleString("zh-CN")}/${resourceReserve.capacity?.toLocaleString("zh-CN")} (${resourceReserve.remainingPercent}%)`}` : ""} /> : null}
+        {entity?.buildingId === "interstellar_logistics_station" && entity.stationTier !== 2 && stationUpgradeStatus ? <section className={`station-upgrade-control mobile-station-upgrade-control`} aria-label="星际物流站升级"><header><Sparkles size={15} /><span>物流站升级</span><strong>Mk.I → Mk.II</strong></header><p className={`station-upgrade-status station-upgrade-status--${stationUpgradeStatus.blocker}`}>{stationUpgradeStatus.reason}</p></section> : null}
+        {entity?.buildingId === "interstellar_logistics_station" && entity.stationTier === 2 && quantumStatus ? <section className="station-upgrade-control mobile-station-upgrade-control" aria-label="量子物流网络接入"><header><Sparkles size={15} /><span>量子物流网络</span><strong>{quantumStatus.mode === "quantum" ? "已接入" : quantumStatus.mode === "transitioning" ? "交接中" : "传统模式"}</strong></header><p className="station-upgrade-status station-upgrade-status--ready">{quantumStatus.mode === "quantum" ? "全宇宙共享物资池已启用" : quantumStatus.mode === "transitioning" ? `等待 ${quantumStatus.bridgeCount} 条旧航线尾货完成` : "接入前保留传统航线"}</p></section> : null}
         {entity && ejectorTarget ? <section className={`mobile-ejector-orbit${ejectorTarget.valid ? "" : " blocked"}`}>
           <header><Orbit size={18} /><span>太阳帆目标轨道</span></header>
           <select value={entity.targetDysonOrbitId ?? ""} disabled={entity.interactionLocked} onChange={(event) => event.target.value && onEjectorOrbitChange(entity.id, event.target.value)} aria-label="选择太阳帆目标轨道">
@@ -449,7 +458,7 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
           <div className="mobile-inspector-actions">
             <button type="button" onClick={onFocus}><Focus size={18} /><span>定位</span></button>
             {entity ? <button type="button" disabled={entity.interactionLocked || addAvailable < 1} onClick={() => onAddEntity(entity.id, addCount)}><Plus size={18} /><span>增加 ×{Math.min(addCount, addAvailable)}</span><b>余 {addAvailable}</b></button> : null}
-            {entity ? <button type="button" disabled={entity.interactionLocked || !canUpgradeEntity(game, entity.id)} onClick={() => onUpgradeEntity(entity.id)}><Sparkles size={18} /><span>升级</span></button> : belt ? <button type="button" disabled={!canUpgradeBelt(game, belt.id)} onClick={() => onUpgradeBelt(belt.id)}><Sparkles size={18} /><span>升级线路</span></button> : null}
+            {entity ? entity.buildingId === "interstellar_logistics_station" && entity.stationTier !== 2 ? <button type="button" disabled={entity.interactionLocked} title={stationUpgradeStatus?.reason} onClick={() => onUpgradeInterstellarStation(entity.id)}><Sparkles size={18} /><span>升级 Mk.II</span></button> : entity.buildingId === "interstellar_logistics_station" && quantumStatus?.mode === "legacy" ? <button type="button" disabled={entity.interactionLocked} onClick={() => onQuantumAttachment(entity.id)}><Sparkles size={18} /><span>接入量子网络</span></button> : <button type="button" disabled={entity.interactionLocked || !canUpgradeEntity(game, entity.id)} onClick={() => onUpgradeEntity(entity.id)}><Sparkles size={18} /><span>升级</span></button> : belt ? <button type="button" disabled={!canUpgradeBelt(game, belt.id)} onClick={() => onUpgradeBelt(belt.id)}><Sparkles size={18} /><span>升级线路</span></button> : null}
             {entity ? <button type="button" onClick={() => onEntityLockChange(entity.id, !entity.interactionLocked)}>{entity.interactionLocked ? <Unlock size={18} /> : <Lock size={18} />}<span>{entity.interactionLocked ? "解锁" : "锁定"}</span></button> : null}
             {entity?.sprayCoaterInstalled ? <button type="button" disabled={entity.interactionLocked} onClick={() => onRemoveSprayCoater(entity.id)}><Trash2 size={18} /><span>拆卸喷涂</span></button> : null}
             {entity ? <button className="danger" type="button" disabled={entity.interactionLocked || entity.kind === "vein" && entity.minerCount < 1} onClick={() => onRemoveEntity(entity.id)}><Trash2 size={18} /><span>{entity.kind === "vein" ? "回收全部采集设备" : "完整回收建筑"}</span></button> : null}

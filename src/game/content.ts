@@ -553,6 +553,11 @@ export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
     speed: 1, inputCapacity: 0, outputCapacity: 0, megastructure: true,
     description: "消耗所在电网的剩余功率加速全存档实时模拟；离线收益和活动墙钟不受影响。",
   },
+  space_station_construction_launcher: {
+    id: "space_station_construction_launcher", name: "空间站施工发射平台", shortName: "空间站平台", kind: "station",
+    powerDemandKw: 10000, speed: 1, inputCapacity: 4000, outputCapacity: 0, accepts: "any", megastructure: true,
+    description: "将所在行星的终局材料真实送入本恒星系空间站工地。每颗行星最多建设一座。",
+  },
 };
 
 export const RECIPES: Record<RecipeId, RecipeDefinition> = {
@@ -788,6 +793,7 @@ export const CONSTRUCTION: ConstructionDefinition[] = [
   { buildingId: "galactic_material_exporter", name: "超大型物资出口", outputAmount: 1, requiredTechId: "universe_matrix", costs: [{ itemId: "universe_matrix", amount: 1000 }, { itemId: "small_carrier_rocket", amount: 500 }, { itemId: "frame_material", amount: 1000 }, { itemId: "quantum_chip", amount: 1000 }] },
   { buildingId: "micro_black_hole_connector", name: "微型黑洞连接装置", outputAmount: 1, requiredTechId: "micro_black_hole_containment", costs: [{ itemId: "universe_matrix", amount: 12000 }, { itemId: "frame_material", amount: 7500 }, { itemId: "quantum_chip", amount: 6000 }, { itemId: "antimatter_fuel_rod", amount: 4500 }] },
   { buildingId: "time_warp_device", name: "时间扭曲装置", outputAmount: 1, requiredTechId: "time_warp_engineering", costs: [{ itemId: "universe_matrix", amount: 60000 }, { itemId: "frame_material", amount: 36000 }, { itemId: "quantum_chip", amount: 30000 }, { itemId: "antimatter_fuel_rod", amount: 24000 }] },
+  { buildingId: "space_station_construction_launcher", name: "空间站施工发射平台", outputAmount: 1, requiredTechId: "system_space_station_engineering", costs: [{ itemId: "titanium_alloy", amount: 2000 }, { itemId: "frame_material", amount: 1000 }, { itemId: "quantum_chip", amount: 1000 }, { itemId: "processor", amount: 2000 }] },
 ];
 
 export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
@@ -1503,9 +1509,89 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     summary: "同步壳面框架与太阳帆姿态控制，使永久结构吸附轨道太阳帆的速度提高一倍。",
     unlocks: ["壳面太阳帆吸附速度 2.00×"],
   },
+  orbital_elevator_engineering: {
+    id: "orbital_elevator_engineering", name: "轨道升降工程", tier: 24,
+    costs: [{ itemId: "universe_matrix", amount: 100_000 }],
+    prerequisites: ["universe_matrix", "interstellar_logistics"],
+    summary: "以轨道升降结构改造星际物流站，使其可以原地升级为保留传统功能的 Mk.II。",
+    unlocks: ["星际物流站 Mk.II", "太空电梯模式切换"],
+  },
+  orbital_multi_cargo_bus: {
+    id: "orbital_multi_cargo_bus", name: "多物质轨道汇流", tier: 25,
+    costs: [{ itemId: "universe_matrix", amount: 1_000_000 }],
+    prerequisites: ["orbital_elevator_engineering", "universe_matrix"],
+    summary: "把五个传统输入汇合为一个通用入口，并为太空电梯开放五路独立输出。",
+    unlocks: ["通用输入口", "五路电梯输出口", "恒星系共享仓库"],
+  },
+  orbital_energy_recovery: {
+    id: "orbital_energy_recovery", name: "轨道升降能量回收", tier: 26,
+    costs: [{ itemId: "universe_matrix", amount: 10_000_000 }],
+    prerequisites: ["orbital_multi_cargo_bus", "dyson_shell"],
+    summary: "回收电梯升降过程中的能量，使太空电梯动态物流能耗降低 50%。",
+    unlocks: ["太空电梯能耗 -50%", "联合协议前置"],
+  },
+  system_space_station_engineering: {
+    id: "system_space_station_engineering", name: "恒星系空间站工程", tier: 24,
+    costs: [{ itemId: "universe_matrix", amount: 1_000_000 }],
+    prerequisites: ["universe_matrix", "dyson_sphere_program", "vertical_launching_silo"],
+    summary: "解锁每个已探索恒星系独立建设一座联合空间站的施工工地。",
+    unlocks: ["空间站建设工地", "空间站施工发射平台"],
+  },
+  orbital_modular_assembly: {
+    id: "orbital_modular_assembly", name: "轨道模块化装配", tier: 25,
+    costs: [{ itemId: "universe_matrix", amount: 10_000_000 }],
+    prerequisites: ["system_space_station_engineering", "orbital_multi_cargo_bus"],
+    summary: "把空间站施工材料需求降至 90%，并让施工平台吞吐翻倍。",
+    unlocks: ["空间站 90% 成本", "物流主干模块"],
+  },
+  autonomous_station_construction: {
+    id: "autonomous_station_construction", name: "自律空间站建造", tier: 26,
+    costs: [{ itemId: "universe_matrix", amount: 100_000_000 }],
+    prerequisites: ["orbital_modular_assembly", "orbital_energy_recovery"],
+    summary: "以自律施工机器人把新空间站材料需求降至 80%，并开放能源与星际运输模块。",
+    unlocks: ["空间站 80% 成本", "能源核心模块", "星际运输模块"],
+  },
+  unified_system_logistics_protocol: {
+    id: "unified_system_logistics_protocol", name: "恒星系联合物流协议", tier: 27,
+    costs: [{ itemId: "universe_matrix", amount: 1_000_000_000 }],
+    prerequisites: ["orbital_energy_recovery", "autonomous_station_construction"],
+    summary: "将已建空间站接入共享舰队、共享翘曲仓和银河能源池，开启跨恒星系聚合调度。",
+    unlocks: ["最多 8 座空间站聚合物流", "共享舰队与翘曲仓", "银河能源池"],
+  },
+  quantum_logistics_network: {
+    id: "quantum_logistics_network", name: "量子物流网络", tier: 24,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 500 },
+      { itemId: "energy_matrix", amount: 500 },
+      { itemId: "structure_matrix", amount: 500 },
+      { itemId: "information_matrix", amount: 500 },
+      { itemId: "gravity_matrix", amount: 500 },
+      { itemId: "universe_matrix", amount: 1_000 },
+    ],
+    prerequisites: ["interstellar_logistics", "space_warp", "universe_matrix"],
+    summary: "把已升级的星际物流塔接入一份全宇宙共享物资池；输入和输出按供电、带宽与公平游标在五秒边界结算。",
+    unlocks: ["量子物流塔接入", "全宇宙共享库存", "单塔上传/下载带宽"],
+  },
 };
 
-export const TECHNOLOGY_LIST = Object.values(TECHNOLOGIES);
+/**
+ * Historical system-space-station technologies remain in the catalog so old
+ * saves and migration code can resolve their ids, but they are no longer
+ * offered as new research.  The orbital elevator chain still unlocks the
+ * compatible Mk.II station upgrade used by existing saves.
+ */
+export const DEPRECATED_TECHNOLOGY_IDS: ReadonlySet<TechId> = new Set<TechId>([
+  "system_space_station_engineering",
+  "orbital_modular_assembly",
+  "autonomous_station_construction",
+  "unified_system_logistics_protocol",
+]);
+
+export function isDeprecatedTechnology(id: TechId | null | undefined): boolean {
+  return Boolean(id && DEPRECATED_TECHNOLOGY_IDS.has(id));
+}
+
+export const TECHNOLOGY_LIST = Object.values(TECHNOLOGIES).filter((technology) => !isDeprecatedTechnology(technology.id));
 
 export const FUEL_ENERGY_MJ: Partial<Record<ItemId, number>> = {
   coal: 2.7,

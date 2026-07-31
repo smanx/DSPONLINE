@@ -15,6 +15,7 @@ import {
   addCanvasRegion,
   addDysonSwarmOrbit,
   advanceSimulation,
+  advanceSimulationBudget,
   advanceSimulationSession,
   applyBeltConfigurationToBelts,
   applyBeltConfigurationToNetwork,
@@ -38,6 +39,8 @@ import {
   createDysonLayerTemplate,
   createInitialState,
   createSimulationAdvanceSession,
+  createPersistentSimulationRuntime,
+  advancePersistentSimulationRuntime,
   createStandardDysonLayer,
   dispatchGalacticExport,
   dropCargoToEntity,
@@ -167,6 +170,7 @@ import {
   setEntitiesInteractionLocked,
   setFuelItem,
   setLogisticsItem,
+  setPaused,
   setMaterialDeliverySlot,
   setProliferatorConfiguration,
   setEntitiesProliferatorConfiguration,
@@ -1644,6 +1648,21 @@ describe("factory simulation", () => {
       });
       expect(snapshot(session.state)).toEqual(snapshot(segmented));
     }
+  });
+
+  it("treats pause as a hard simulation boundary", () => {
+    let state = createInitialState();
+    state.timeWarp.pendingSimulationSeconds = 12.5;
+    state.timeWarp.pendingWallSeconds = 4.5;
+    const paused = setPaused(state, true);
+    expect(paused.paused).toBe(true);
+    expect(paused.timeWarp.pendingSimulationSeconds).toBe(0);
+    expect(paused.timeWarp.pendingWallSeconds).toBe(0);
+    const resumed = setPaused(paused, false);
+    const advanced = advanceSimulation(resumed, 0);
+    expect(advanced.elapsedSeconds).toBe(0);
+    const stillPaused = advanceSimulationBudget(paused, 30, 30);
+    expect(stillPaused.elapsedSeconds).toBe(0);
   });
 
   it("consumes both blue and red matrices for mixed research", () => {
@@ -5010,5 +5029,35 @@ describe("factory simulation", () => {
     expect(tailed.belts[0].totalTransferred).toBe(integer.belts[0].totalTransferred);
     expect(tailed.belts[0].progress).toBeCloseTo(integer.belts[0].progress, 5);
     expect(tailed.belts[0].lastFlow).not.toBe(9.6);
+  });
+
+  it("keeps the persistent worker runtime equivalent to cloned simulation chunks", () => {
+    const source = createInitialState(42_042);
+    const runtime = createPersistentSimulationRuntime(structuredClone(source));
+    let persistent = runtime.state;
+    let cloned = structuredClone(source);
+    for (const seconds of [1, 1, 2, 0.5, 3]) {
+      persistent = advancePersistentSimulationRuntime(runtime, seconds, seconds).state;
+      cloned = advanceSimulation(cloned, seconds);
+    }
+    expect(JSON.parse(JSON.stringify(persistent))).toEqual(JSON.parse(JSON.stringify(cloned)));
+  });
+
+  it("commits a million-unit blueprint atomically and refuses shortages", () => {
+    const state = createInitialState();
+    const blueprint = {
+      id: "blueprint_huge_fixture",
+      name: "百万熔炉夹具",
+      entities: [{ key: "node_1", buildingId: "arc_smelter" as const, offset: { x: 0, y: 0 }, machineCount: 1_000_000 }],
+      belts: [],
+    };
+    const stocked = { ...state, blueprints: [blueprint], construction: { ...state.construction, arc_smelter: 1_000_000 } };
+    const deployed = placeBlueprint(stocked, blueprint.id, { x: 120, y: 120 });
+    expect(deployed).not.toBe(stocked);
+    expect(deployed.construction.arc_smelter).toBe(0);
+    expect(deployed.entities.at(-1)).toMatchObject({ buildingId: "arc_smelter", machineCount: 1_000_000 });
+    const shortage = { ...stocked, construction: { ...stocked.construction, arc_smelter: 999_999 } };
+    expect(placeBlueprint(shortage, blueprint.id, { x: 120, y: 120 })).toBe(shortage);
+    expect(shortage.construction.arc_smelter).toBe(999_999);
   });
 });

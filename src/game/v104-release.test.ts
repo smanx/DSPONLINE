@@ -123,7 +123,7 @@ describe("V1.04 construction-center target", () => {
 
     const reloaded = migrateGame(JSON.parse(JSON.stringify(configured)));
     expect(reloaded).not.toBeNull();
-    expect(reloaded!.version).toBe(41);
+    expect(reloaded!.version).toBe(44);
     expect(reloaded!.constructionAutomation.targetStock.arc_smelter).toBe(100_000);
     expect(reloaded!.construction.arc_smelter).toBe(120_000);
   });

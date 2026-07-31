@@ -828,7 +828,7 @@ function validateSavePayload(payload) {
     const parsed = integrity.parsed;
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities) ||
-      !Number.isInteger(state.version) || state.version < 1 || state.version > 41) return false;
+      !Number.isInteger(state.version) || state.version < 1 || state.version > 44) return false;
     if (state.version >= 38 && !Array.isArray(state.belts)) return false;
     if (state.belts !== undefined && (!Array.isArray(state.belts) || state.belts.some((belt) =>
       state.version >= 38
@@ -847,6 +847,84 @@ function validateSavePayload(payload) {
       if (!Array.isArray(state.contentPacks) || state.contentPacks.length > 64 || state.contentPacks.some((entry) =>
         !entry || typeof entry !== "object" || typeof entry.id !== "string" || !/^[a-z][a-z0-9_]{1,63}$/.test(entry.id) ||
         typeof entry.version !== "string" || entry.version.length > 40 || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(entry.version))) return false;
+    }
+    if (state.version >= 42) {
+      const planetMetadata = state.galaxy?.planetMetadata;
+      const systemMetadata = state.galaxy?.systemMetadata;
+      if (!planetMetadata || typeof planetMetadata !== "object" || Array.isArray(planetMetadata) ||
+        Object.keys(planetMetadata).length > 256 || Object.values(planetMetadata).some((metadata) =>
+          !metadata || typeof metadata !== "object" || Array.isArray(metadata) ||
+          typeof metadata.customName !== "string" || metadata.customName.length > 32 ||
+          typeof metadata.note !== "string" || metadata.note.length > 240 ||
+          !Array.isArray(metadata.tags) || metadata.tags.length > 8 || metadata.tags.some((tag) => typeof tag !== "string" || tag.length < 1 || tag.length > 16))) return false;
+      if (!systemMetadata || typeof systemMetadata !== "object" || Array.isArray(systemMetadata) ||
+        Object.keys(systemMetadata).length > 64 || Object.values(systemMetadata).some((metadata) =>
+          !metadata || typeof metadata !== "object" || Array.isArray(metadata) ||
+          typeof metadata.customName !== "string" || metadata.customName.length < 1 || metadata.customName.length > 32)) return false;
+    }
+    if (state.version === 43) {
+      const decimal = (value) => typeof value === "string" && /^(0|[1-9][0-9]{0,255})$/.test(value);
+      const stationMap = state.systemSpaceStations;
+      if (!stationMap || typeof stationMap !== "object" || Array.isArray(stationMap) || Object.keys(stationMap).length > 8) return false;
+      for (const [systemId, station] of Object.entries(stationMap)) {
+        if (!/^[a-z][a-z0-9_]{1,31}$/.test(systemId) || !station || typeof station !== "object" ||
+          station.systemId !== systemId || !["not-started", "building", "operational"].includes(station.status) ||
+          !Number.isSafeInteger(station.costRevision) || station.costRevision < 0 ||
+          ![8_000, 9_000, 10_000].includes(station.costMultiplierBasisPoints) ||
+          !Number.isSafeInteger(station.phaseIndex) || station.phaseIndex < 0 || station.phaseIndex > 16 ||
+          !station.delivered || typeof station.delivered !== "object" || Array.isArray(station.delivered) ||
+          Object.entries(station.delivered).some(([itemId, amount]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !decimal(amount)) ||
+          !station.inventory || typeof station.inventory !== "object" || Array.isArray(station.inventory) ||
+          Object.entries(station.inventory).some(([itemId, amount]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !decimal(amount)) ||
+          !station.modules || typeof station.modules !== "object" ||
+          [station.modules.backbone, station.modules.energy, station.modules.interstellar].some((value) => !Number.isSafeInteger(value) || value < 0 || value > 1_000_000) ||
+          !station.routingCursors || typeof station.routingCursors !== "object" ||
+          Object.values(station.routingCursors).some((value) => !Number.isSafeInteger(value) || value < 0) ||
+          !station.viewport || !Number.isFinite(station.viewport.x) || !Number.isFinite(station.viewport.y) ||
+          !Number.isFinite(station.viewport.zoom) || station.viewport.zoom < 0.1 || station.viewport.zoom > 4 ||
+          !Array.isArray(station.decorations) || station.decorations.length > 256) return false;
+        if (station.itemPolicies !== undefined && (!station.itemPolicies || typeof station.itemPolicies !== "object" || Array.isArray(station.itemPolicies) ||
+          Object.entries(station.itemPolicies).some(([itemId, policy]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !policy || typeof policy !== "object" ||
+            typeof policy.interstellarEnabled !== "boolean" || !decimal(policy.reserve) || !decimal(policy.target)))) return false;
+      }
+      const network = state.galacticHubNetwork;
+      if (!network || typeof network !== "object" || Array.isArray(network) ||
+        !Number.isSafeInteger(network.fleetInstalled) || network.fleetInstalled < 0 || network.fleetInstalled > 1_000_000_000 ||
+        !Number.isSafeInteger(network.fleetBusy) || network.fleetBusy < 0 || network.fleetBusy > 1_000_000_000 ||
+        !decimal(network.warpers) || !decimal(network.warperTarget) || !Array.isArray(network.fleetReturns) || network.fleetReturns.length > 4_096 ||
+        network.fleetReturns.some((bucket) => !bucket || typeof bucket.routeKey !== "string" || bucket.routeKey.length < 1 || bucket.routeKey.length > 160 ||
+          !Number.isSafeInteger(bucket.returnAtSecond) || bucket.returnAtSecond < 0 || !Number.isSafeInteger(bucket.vesselCount) || bucket.vesselCount < 1)) return false;
+      for (const entity of state.entities) {
+        if (entity?.buildingId !== "interstellar_logistics_station") continue;
+        if (entity.stationTier !== 1 && entity.stationTier !== 2) return false;
+        if (entity.stationOperationMode !== "legacy" && entity.stationOperationMode !== "elevator") return false;
+        if (entity.stationModeTransition !== null && entity.stationModeTransition !== "to-elevator" && entity.stationModeTransition !== "to-legacy") return false;
+        if (!Array.isArray(entity.elevatorOutputItems) || entity.elevatorOutputItems.length !== 5 || entity.elevatorOutputItems.some((itemId) => itemId !== null && (typeof itemId !== "string" || !/^[a-z][a-z0-9_]{1,80}$/.test(itemId)))) return false;
+      }
+      if ((state.belts ?? []).some((belt) => belt.elevatorOutputIndex !== undefined &&
+        (!Number.isInteger(belt.elevatorOutputIndex) || belt.elevatorOutputIndex < 0 || belt.elevatorOutputIndex > 4))) return false;
+    }
+    if (state.version >= 44) {
+      const quantum = state.quantumLogisticsNetwork;
+      const decimal = (value) => typeof value === "string" && /^(0|[1-9][0-9]{0,255})$/.test(value);
+      if (!quantum || typeof quantum !== "object" || Array.isArray(quantum) || typeof quantum.enabled !== "boolean" ||
+        !quantum.inventory || typeof quantum.inventory !== "object" || Array.isArray(quantum.inventory) ||
+        Object.entries(quantum.inventory).some(([itemId, amount]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !decimal(amount)) ||
+        !quantum.routingCursors || typeof quantum.routingCursors !== "object" || Array.isArray(quantum.routingCursors) ||
+        Object.entries(quantum.routingCursors).some(([itemId, cursor]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !Number.isSafeInteger(cursor) || cursor < 0)) return false;
+      for (const entity of state.entities) {
+        if (entity?.buildingId !== "interstellar_logistics_station") continue;
+        if (entity.quantumMode !== undefined && !["legacy", "transitioning", "quantum"].includes(entity.quantumMode)) return false;
+        const transition = entity.quantumTransition;
+        if (transition !== undefined && transition !== null) {
+          if (!transition || typeof transition !== "object" || !["quantum", "legacy"].includes(transition.targetMode) ||
+            !Number.isFinite(transition.startedAtSecond) || transition.startedAtSecond < 0 ||
+            !Number.isFinite(transition.boundarySecond) || transition.boundarySecond < 0 || !Array.isArray(transition.bridges) || transition.bridges.length > 256 ||
+            transition.bridges.some((bridge) => !bridge || typeof bridge !== "object" || typeof bridge.id !== "string" || bridge.id.length > 160 ||
+              !/^[a-z][a-z0-9_]{1,80}$/.test(bridge.itemId) || typeof bridge.sourceStationId !== "string" || typeof bridge.targetStationId !== "string" ||
+              !decimal(bridge.cargo) || !decimal(bridge.remainingCargo) || !Number.isFinite(bridge.arriveAtSecond) || bridge.arriveAtSecond < 0)) return false;
+        }
+      }
     }
     if (state.planetTrayItemLimits !== undefined) {
       if (!state.planetTrayItemLimits || typeof state.planetTrayItemLimits !== "object" || Array.isArray(state.planetTrayItemLimits) ||

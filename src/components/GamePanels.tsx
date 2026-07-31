@@ -68,10 +68,11 @@ import { ItemCatalogPicker, RecipeCatalogPicker } from "./CatalogPicker";
 import { QuantityStepper } from "./QuantityStepper";
 import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getNextBeltTier, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getTechnology, isConveyorBeltId } from "../game/content";
-import { MATERIAL_DELIVERY_SLOT_COUNT, MAX_BELT_LANES, MAX_MANUAL_CRAFT_BATCHES, MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltLaneAdjustmentCheck, getBeltNetworkIds, getConstructionAutomationStatus, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEjectorOrbitTargetStatus, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityOutputCapacity, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMaterialDeliverySlots, getMaxConstructionQuickCraftBatches, getMaxRecursiveHandcraftBatches, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPlanetTrayItemLimit, getPowerGridMetrics, getProliferatorSprayCost, getRayReceiverCapacityKw, getRecursiveHandcraftPlan, getResourceReserveSnapshot, getSprayCoaterInstallCheck, getSprayCoaterRemovalRefund, getStationActiveRoutes, getStationBusyVehicleCount, getStationDroneCapacity, getStationFleetDiagnostic, getStationMinimumCargo, getStationSlotCapacity, getStationSlots, getStationVesselCapacity, getStationWarperAutoRefillTarget, getStationWarperCapacity, getStationWarperRefillSnapshot, getTimeWarpRequiredPowerKw, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
-import { getPlanetIndustrialProfile, getPlanetOrbitalYields, specializationApplies } from "../game/galaxy";
+ import { MATERIAL_DELIVERY_SLOT_COUNT, MAX_BELT_LANES, MAX_MANUAL_CRAFT_BATCHES, MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, PORTABLE_FLEET_ITEM_IDS, POWER_GRID_IDS, POWER_GRID_LABELS, canPlaceBuildingOnPlanet, canQueueHandcraftRecipe, canSetBeltStackSize, canUpgradeBelt, canUpgradeEntity, findInterstellarPeer, findPlanetaryPeer, getBeltCapacity, getBeltLaneAdjustmentCheck, getBeltNetworkIds, getConstructionAutomationStatus, getConstructionCraftDeficits, getConstructionQuickCraftPlan, getDysonEngineeringSnapshot, getDysonShellCapacity, getEjectorOrbitTargetStatus, getEntityExtraProductBonus, getEntityOperatingStatus, getEntityOutputCapacity, getEntityPowerFactor, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getInterstellarCargoCapacity, getInterstellarTripSeconds, getMaterialDeliveryItems, getMaterialDeliverySlots, getMaxConstructionQuickCraftBatches, getMaxRecursiveHandcraftBatches, getMiningSpeedMultiplier, getPlanetaryCargoCapacity, getPlanetaryTripSeconds, getPlanetMetrics, getPlanetTrayItemLimit, getPowerGridMetrics, getProliferatorSprayCost, getQuantumAttachmentStatus, getRayReceiverCapacityKw, getRecursiveHandcraftPlan, getResourceReserveSnapshot, getSprayCoaterInstallCheck, getSprayCoaterRemovalRefund, getStationActiveRoutes, getStationBusyVehicleCount, getStationDroneCapacity, getStationFleetDiagnostic, getStationMinimumCargo, getStationSlotCapacity, getStationSlots, getStationVesselCapacity, getStationWarperAutoRefillTarget, getStationWarperCapacity, getStationWarperRefillSnapshot, getTimeWarpRequiredPowerKw, isEntityInPowerCoverage, isHandcraftableRecipe, isPlanetColonized, isPortableFleetItem, isProliferatorEligible, isTechnologyCompleted, stationRouteRequiresWarp } from "../game/engine";
+import { getPlanetDisplayName, getPlanetIndustrialProfile, getPlanetOrbitalYields, specializationApplies } from "../game/galaxy";
 import { analyzeBeltNetwork } from "../game/network";
 import { ACTIVITY_MATERIAL_IDS } from "../game/activity";
+import { getInterstellarStationUpgradeStatus } from "../game/systemSpaceStation";
 import type {
   BeltRouteMode,
   BeltTier,
@@ -270,7 +271,7 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
             step={1000}
             inputMode="numeric"
             value={trayLimitDraft}
-            aria-label={`${getPlanet(game.activePlanetId).name}单种物资上限`}
+            aria-label={`${getPlanetDisplayName(game, game.activePlanetId)}单种物资上限`}
             onChange={(event) => setTrayLimitDraft(event.target.value)}
             onBlur={commitTrayItemLimit}
             onKeyDown={(event) => {
@@ -348,9 +349,9 @@ export function PlanetNavigator({ game, onPlanetChange }: { game: GameState; onP
         const deviceCount = game.entities.reduce((sum, entity) =>
           entity.planetId === planet.id ? sum + entity.machineCount + entity.minerCount : sum, 0);
         return (
-          <button type="button" className={`${active ? "active" : ""}${unlocked ? "" : " locked"}`} aria-pressed={active} key={planet.id} disabled={!unlocked} onClick={() => onPlanetChange(planet.id)} title={unlocked ? `切换到${planet.name}` : "完成星际物流系统科技后开放"}>
+          <button type="button" className={`${active ? "active" : ""}${unlocked ? "" : " locked"}`} aria-pressed={active} key={planet.id} disabled={!unlocked} onClick={() => onPlanetChange(planet.id)} title={unlocked ? `切换到${getPlanetDisplayName(game, planet.id)}` : "完成星际物流系统科技后开放"}>
             <i style={{ color: unlocked ? planet.color : undefined }}>{unlocked ? <Orbit size={15} /> : <LockKeyhole size={15} />}</i>
-            <span><strong>{planet.name}</strong><small>{unlocked ? `${planet.code} · ${planet.environment}` : "星图锁定 · 需要星际物流系统"}</small></span>
+            <span><strong>{getPlanetDisplayName(game, planet.id)}</strong><small>{unlocked ? `${planet.code} · ${planet.environment}` : "星图锁定 · 需要星际物流系统"}</small></span>
             <em>{deviceCount}</em>
             <b className={metrics.powerFactor < 0.999 ? "warning" : ""}>{Math.round(metrics.powerFactor * 100)}%</b>
           </button>
@@ -420,6 +421,8 @@ interface InspectorPanelProps {
   onCancelCraftQueue: (entryId: string) => void;
   onAddEntity: (entityId: string, count: number) => void;
   onUpgradeEntity: (entityId: string) => void;
+  onUpgradeInterstellarStation: (entityId: string) => void;
+  onQuantumAttachment: (entityId: string) => void;
   onUpgradeBelt: (beltId: string) => void;
   onInstallSprayCoater: (entityId: string) => void;
   onRemoveSprayCoater: (entityId: string) => void;
@@ -440,6 +443,7 @@ interface InspectorPanelProps {
   onTimeWarpRequestedMultiplierChange: (multiplier: number) => void;
   galacticActivityStatus: GalacticActivityPublicStatus | null;
   fabricatorFocusItemId?: ItemId | null;
+  onOpenTutorial?: (sectionId?: string) => void;
 }
 
 function EjectorOrbitTargetControl({ game, entities, onChange, batch = false }: {
@@ -460,7 +464,7 @@ function EjectorOrbitTargetControl({ game, entities, onChange, batch = false }: 
   const status = entities.length === 1 ? getEjectorOrbitTargetStatus(game, entities[0]) : null;
   const invalidTarget = commonTargetId && !orbits.some((orbit) => orbit.id === commonTargetId) ? commonTargetId : null;
   return <section className={`ejector-orbit-control${status && !status.valid ? " ejector-orbit-control--blocked" : ""}`}>
-    <header><Orbit size={14} /><span>{batch ? "批量太阳帆轨道" : "太阳帆目标轨道"}</span><strong>{getPlanet(entities[0].planetId).name}</strong></header>
+    <header><Orbit size={14} /><span>{batch ? "批量太阳帆轨道" : "太阳帆目标轨道"}</span><strong>{getPlanetDisplayName(game, entities[0].planetId)}</strong></header>
     <select value={commonTargetId} disabled={locked} onChange={(event) => event.target.value && onChange(entities.map((entity) => entity.id), event.target.value)} aria-label={batch ? "批量选择太阳帆目标轨道" : "选择太阳帆目标轨道"}>
       {!commonTargetId ? <option value="" disabled>多个不同目标</option> : null}
       {invalidTarget ? <option value={invalidTarget}>失效轨道（请重新选择）</option> : null}
@@ -550,7 +554,7 @@ function MultiSelectionInspector({ game, entities, onRecipeChange, onEjectorOrbi
   );
 }
 
-function InspectorEmpty({ game }: { game: GameState }) {
+function InspectorEmpty({ game, onOpenTutorial }: { game: GameState; onOpenTutorial?: (sectionId?: string) => void }) {
   const planetEntities = game.entities.filter((entity) => entity.planetId === game.activePlanetId);
   const machines = planetEntities.reduce((sum, entity) => sum + entity.machineCount + entity.minerCount, 0);
   const topConsumer = planetEntities
@@ -583,6 +587,7 @@ function InspectorEmpty({ game }: { game: GameState }) {
         <div><dt>最大耗电设备</dt><dd>{topConsumer?.demand ? <>{topConsumer.name} <PowerValue valueKw={topConsumer.demand} /></> : "-"}</dd></div>
         <div><dt>运行时间</dt><dd>{Math.floor(game.elapsedSeconds / 60)} min</dd></div>
       </dl>
+      {onOpenTutorial ? <button className="inspector-tutorial-link" type="button" onClick={() => onOpenTutorial("troubleshooting")}><BookOpen size={14} />查看常见故障排查教程</button> : null}
     </div>
   );
 }
@@ -824,6 +829,8 @@ function EntityInspector({
   onProliferatorConfiguration,
   onAdd,
   onUpgrade,
+  onUpgradeInterstellarStation,
+  onQuantumAttachment,
   onRemove,
   onOpenConstructionCenter,
   onGalacticExporterPausedChange,
@@ -831,6 +838,7 @@ function EntityInspector({
   onTimeWarpControllerChange,
   onTimeWarpEnabledChange,
   onTimeWarpRequestedMultiplierChange,
+  onOpenTutorial,
   galacticActivityStatus,
 }: {
   game: GameState;
@@ -869,6 +877,8 @@ function EntityInspector({
   onProliferatorConfiguration: (entityId: string, tier: ProliferatorTier, mode: ProliferatorMode) => void;
   onAdd: (entityId: string, count: number) => void;
   onUpgrade: (entityId: string) => void;
+  onUpgradeInterstellarStation: (entityId: string) => void;
+  onQuantumAttachment: (entityId: string) => void;
   onRemove: (entityId: string, count?: number) => void;
   onOpenConstructionCenter: () => void;
   onGalacticExporterPausedChange: (entityId: string, paused: boolean) => void;
@@ -876,6 +886,7 @@ function EntityInspector({
   onTimeWarpControllerChange: (entityId: string) => void;
   onTimeWarpEnabledChange: (enabled: boolean) => void;
   onTimeWarpRequestedMultiplierChange: (multiplier: number) => void;
+  onOpenTutorial?: (sectionId?: string) => void;
   galacticActivityStatus: GalacticActivityPublicStatus | null;
 }) {
   const [editingStationSlot, setEditingStationSlot] = useState<number | null>(null);
@@ -962,7 +973,7 @@ function EntityInspector({
       .map((belt) => [belt.targetPortIndex!, belt]));
     const resume = () => {
       if (!entity.blackHoleActivationConfirmed) {
-        if (!window.confirm(`即将启动${getPlanet(entity.planetId).name}上的微型黑洞连接装置。输入物资将被永久销毁且无法找回。`)) return;
+        if (!window.confirm(`即将启动${getPlanetDisplayName(game, entity.planetId)}上的微型黑洞连接装置。输入物资将被永久销毁且无法找回。`)) return;
         if (!window.confirm("请再次确认：启动后，传送带送入的物资不会进入任何库存，也无法恢复。")) return;
         onBlackHolePausedChange(entity.id, false, true);
         return;
@@ -1020,10 +1031,11 @@ function EntityInspector({
           }} />
           <button type="button" aria-label="倍率加一" onClick={() => onTimeWarpRequestedMultiplierChange(game.timeWarp.requestedMultiplier + 1)}>+</button>
         </div>
-        <button className="construction-center-open" type="button" onClick={() => onTimeWarpEnabledChange(!game.timeWarp.enabled)}>{game.timeWarp.enabled ? <Pause size={15} /> : <Play size={15} />}{game.timeWarp.enabled ? "暂停时间扭曲" : "启动时间扭曲"}</button>
+      <button className="construction-center-open" type="button" onClick={() => onTimeWarpEnabledChange(!game.timeWarp.enabled)}>{game.timeWarp.enabled ? <Pause size={15} /> : <Play size={15} />}{game.timeWarp.enabled ? "纯挂机运行中" : "开始纯挂机"}</button>
+      {onOpenTutorial && status.tone !== "running" ? <button className="inspector-tutorial-link" type="button" onClick={() => onOpenTutorial("time-warp")}><BookOpen size={14} />查看时间扭曲教程</button> : null}
       </>}
       <PowerNetworkControl game={game} entity={entity} onGridChange={onPowerGridChange} onPowerPriorityChange={onPowerPriorityChange} onGenerationPriorityChange={onGenerationPriorityChange} />
-      <p className="inspector-description">仅实时前台模拟加速；离线收益与活动时钟始终使用真实时间。高倍率若无法实时追赶会保留时间债务。</p>
+      <p className="inspector-description">时间扭曲只有纯挂机模式。开始后会进入独立挂机页面并冻结画布；离线收益与活动时钟始终使用真实时间。高倍率若无法实时追赶会显示模拟积压。</p>
       <EntityManagementActions game={game} entity={entity} onAdd={onAdd} onRemove={onRemove} />
     </div>;
   }
@@ -1120,6 +1132,7 @@ function EntityInspector({
 
   if (entity.kind === "station") {
     const planetary = entity.buildingId === "planetary_logistics_station";
+    const interstellar = entity.buildingId === "interstellar_logistics_station";
     const collector = entity.buildingId === "orbital_collector";
     const acceptedItems = collector
       ? Object.entries(getPlanetOrbitalYields(game, entity.planetId))
@@ -1141,7 +1154,7 @@ function EntityInspector({
           </div>
           <dl className="metric-ledger">
             <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
-            <div><dt>需求目标</dt><dd>{peer ? `${getPlanet(peer.planetId).name} · ${peer.id}` : "等待星际需求"}</dd></div>
+            <div><dt>需求目标</dt><dd>{peer ? `${getPlanetDisplayName(game, peer.planetId)} · ${peer.id}` : "等待星际需求"}</dd></div>
             <div><dt>可用库存</dt><dd>{itemId ? formatQuantityCompact(entity.outputs[itemId] ?? 0) : "-"}</dd></div>
             <div><dt>采集周期</dt><dd>{Math.floor(entity.progress * 100)}%</dd></div>
             <div><dt>采集速率</dt><dd>{entity.productionRate.toFixed(1)}/min</dd></div>
@@ -1192,12 +1205,29 @@ function EntityInspector({
     const primaryRouteSeconds = planetary
       ? getPlanetaryTripSeconds(game)
       : getInterstellarTripSeconds(game, Boolean(peer && stationRouteRequiresWarp(entity, peer)));
+    const upgradeStatus = interstellar ? getInterstellarStationUpgradeStatus(game, entity.id) : null;
+    const quantumStatus = interstellar ? getQuantumAttachmentStatus(game, entity.id) : null;
     return (
       <div className="inspector-content station-inspector">
         <div className="inspector-identity">
           <i className="building-mark building-mark--station"><Orbit size={18} /></i>
           <div><span>{planetary ? "行星多槽调度" : "本地与星际联合调度"}</span><strong>{building.name} ×{entity.machineCount}</strong></div>
         </div>
+        {interstellar ? <section className="station-upgrade-control" aria-label="星际物流站升级">
+          <header><Sparkles size={15} /><span>物流站等级</span><strong>{entity.stationTier === 2 ? "Mk.II" : "Mk.I"}</strong></header>
+          {entity.stationTier === 2 ? <p className="station-upgrade-status station-upgrade-status--ready">已是 Mk.II，传统航线与电梯模式可在此切换。</p> : <>
+            <p className={`station-upgrade-status station-upgrade-status--${upgradeStatus?.blocker ?? "invalid"}`}>{upgradeStatus?.reason}</p>
+            {upgradeStatus && Object.keys(upgradeStatus.costs).length > 0 ? <div className="station-upgrade-costs">{Object.entries(upgradeStatus.costs).map(([itemId, amount]) => <span key={itemId}><em>{getItem(itemId as ItemId).name}</em><strong>{formatQuantityCompact(game.planetTrays[entity.planetId]?.[itemId as ItemId] ?? 0)} / {formatQuantityCompact(amount)}</strong></span>)}</div> : null}
+            <button className="station-upgrade-button" type="button" onClick={() => onUpgradeInterstellarStation(entity.id)}><Sparkles size={15} />升级 Mk.II</button>
+          </>}
+        </section> : null}
+        {interstellar && entity.stationTier === 2 ? <section className="station-upgrade-control quantum-network-control" aria-label="量子物流网络接入">
+          <header><Atom size={15} /><span>量子物流网络</span><strong>{quantumStatus?.mode === "quantum" ? "已接入" : quantumStatus?.mode === "transitioning" ? "交接中" : "传统模式"}</strong></header>
+          <p className={`station-upgrade-status station-upgrade-status--${quantumStatus?.mode === "quantum" ? "ready" : quantumStatus?.mode === "transitioning" ? "pending" : "idle"}`}>
+            {quantumStatus?.mode === "quantum" ? "已访问全宇宙共享物资池，不创建量子航线。" : quantumStatus?.mode === "transitioning" ? `旧航线尾货交接中 · ${quantumStatus.bridgeCount} 条桥接` : "升级与接入是两个独立动作；接入前传统航线继续运行。"}
+          </p>
+          {quantumStatus?.mode !== "quantum" && quantumStatus?.mode !== "transitioning" ? <button className="station-upgrade-button" type="button" disabled={entity.interactionLocked} onClick={() => onQuantumAttachment(entity.id)}><Atom size={15} />接入量子网络</button> : null}
+        </section> : null}
         <section className="station-fleet-grid">
           <div className={planetary ? "station-fleet-control" : "station-local-fleet-control"}>
             <div className="station-control-heading"><span>运输机泊位</span><small>随身 {availableDrones}</small></div>
@@ -1276,7 +1306,7 @@ function EntityInspector({
         <dl className="metric-ledger">
           <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
           <div><dt>已配置槽位</dt><dd>{configuredItems.size} / 5</dd></div>
-          <div><dt>航线目标</dt><dd>{peer ? planetary ? peer.id : getPlanet(peer.planetId).name : "未配对"}</dd></div>
+          <div><dt>航线目标</dt><dd>{peer ? planetary ? peer.id : getPlanetDisplayName(game, peer.planetId) : "未配对"}</dd></div>
           <div><dt>在途航线</dt><dd>{activeRoutes.length}</dd></div>
           <div><dt>线路拥堵</dt><dd>{Math.round((entity.stationCongestion ?? 0) * 100)}%</dd></div>
           <div><dt>单机载荷</dt><dd>{primaryUnitCargo} 件/{primaryVehicleUnit}</dd></div>
@@ -1324,7 +1354,7 @@ function EntityInspector({
             <div><dt>设备状态</dt><dd className={`status-text status-text--${status.tone}`}>{status.label}</dd></div>
             <div><dt>已配置接口</dt><dd>{deliveryItems.length} / {MATERIAL_DELIVERY_SLOT_COUNT}</dd></div>
             <div><dt>最近直送速率</dt><dd>{entity.productionRate.toFixed(1)}/min</dd></div>
-            <div><dt>投递位置</dt><dd>{getPlanet(entity.planetId).name}物资托盘</dd></div>
+          <div><dt>投递位置</dt><dd>{getPlanetDisplayName(game, entity.planetId)}物资托盘</dd></div>
           </dl>
           <p className="inspector-description">每个接口可独立指定、恢复自动识别或清空。重置已连接接口前会要求确认，送达物品直接进入本行星物资托盘。</p>
           <EntityManagementActions game={game} entity={entity} onAdd={onAdd} onRemove={onRemove} />
@@ -1908,12 +1938,12 @@ export function InspectorPanel(props: InspectorPanelProps) {
           {props.selectedEntity.interactionLocked ? <div className="inspector-lock-banner"><LockKeyhole size={16} /><span><strong>建筑已锁定</strong><small>模拟与物流继续运行，修改操作已禁用</small></span><button type="button" onClick={() => props.onEntityLockChange(props.selectedEntity!.id, false)}><Unlock size={16} />解锁</button></div> : null}
           <InspectorLayoutControls preference={layoutPreference} onChange={updateLayoutPreference} />
           <fieldset className="inspector-lockable" disabled={props.selectedEntity.interactionLocked}>
-            <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onEjectorOrbitChange={props.onEjectorOrbitChange} onLogisticsItemChange={props.onLogisticsItemChange} onMaterialDeliverySlotChange={props.onMaterialDeliverySlotChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationFleetTarget={props.onStationFleetTarget} onStationFleetFill={props.onStationFleetFill} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationWarperAutoRefillChange={props.onStationWarperAutoRefillChange} onStationWarperTargetChange={props.onStationWarperTargetChange} onStationHubChange={props.onStationHubChange} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onStationSlotRoutePolicyChange={props.onStationSlotRoutePolicyChange} onStationSlotWarperBudgetChange={props.onStationSlotWarperBudgetChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onRemoveSprayCoater={props.onRemoveSprayCoater} onOpenResourceSettings={props.onOpenResourceSettings} onProliferatorConfiguration={props.onProliferatorConfiguration} onAdd={props.onAddEntity} onUpgrade={props.onUpgradeEntity} onRemove={props.onRemoveEntity} onOpenConstructionCenter={props.onOpenConstructionCenter} onGalacticExporterPausedChange={props.onGalacticExporterPausedChange} onBlackHolePausedChange={props.onBlackHolePausedChange} onTimeWarpControllerChange={props.onTimeWarpControllerChange} onTimeWarpEnabledChange={props.onTimeWarpEnabledChange} onTimeWarpRequestedMultiplierChange={props.onTimeWarpRequestedMultiplierChange} galacticActivityStatus={props.galacticActivityStatus} />
+          <EntityInspector game={props.game} entity={props.selectedEntity} onRecipeChange={props.onRecipeChange} onEjectorOrbitChange={props.onEjectorOrbitChange} onLogisticsItemChange={props.onLogisticsItemChange} onMaterialDeliverySlotChange={props.onMaterialDeliverySlotChange} onFuelChange={props.onFuelChange} onEnergyModeChange={props.onEnergyModeChange} onPowerGridChange={props.onPowerGridChange} onPowerPriorityChange={props.onPowerPriorityChange} onGenerationPriorityChange={props.onGenerationPriorityChange} onStationModeChange={props.onStationModeChange} onStationVesselAdjust={props.onStationVesselAdjust} onStationDroneAdjust={props.onStationDroneAdjust} onStationFleetTarget={props.onStationFleetTarget} onStationFleetFill={props.onStationFleetFill} onStationWarperAdjust={props.onStationWarperAdjust} onStationWarpEnabled={props.onStationWarpEnabled} onStationWarperAutoRefillChange={props.onStationWarperAutoRefillChange} onStationWarperTargetChange={props.onStationWarperTargetChange} onStationHubChange={props.onStationHubChange} onStationMinimumLoadChange={props.onStationMinimumLoadChange} onStationSlotItemChange={props.onStationSlotItemChange} onStationSlotModeChange={props.onStationSlotModeChange} onStationSlotMinimumLoadChange={props.onStationSlotMinimumLoadChange} onStationSlotLimitsChange={props.onStationSlotLimitsChange} onStationSlotPriorityChange={props.onStationSlotPriorityChange} onStationSlotRoutePolicyChange={props.onStationSlotRoutePolicyChange} onStationSlotWarperBudgetChange={props.onStationSlotWarperBudgetChange} onSplitterModeChange={props.onSplitterModeChange} onInstallSprayCoater={props.onInstallSprayCoater} onRemoveSprayCoater={props.onRemoveSprayCoater} onOpenResourceSettings={props.onOpenResourceSettings} onProliferatorConfiguration={props.onProliferatorConfiguration} onAdd={props.onAddEntity} onUpgrade={props.onUpgradeEntity} onUpgradeInterstellarStation={props.onUpgradeInterstellarStation} onQuantumAttachment={props.onQuantumAttachment} onRemove={props.onRemoveEntity} onOpenConstructionCenter={props.onOpenConstructionCenter} onGalacticExporterPausedChange={props.onGalacticExporterPausedChange} onBlackHolePausedChange={props.onBlackHolePausedChange} onTimeWarpControllerChange={props.onTimeWarpControllerChange} onTimeWarpEnabledChange={props.onTimeWarpEnabledChange} onTimeWarpRequestedMultiplierChange={props.onTimeWarpRequestedMultiplierChange} onOpenTutorial={props.onOpenTutorial} galacticActivityStatus={props.galacticActivityStatus} />
           </fieldset>
         </div>
       ) : props.selectedBelt ? (
         <BeltInspector game={props.game} belt={props.selectedBelt} hasCopiedConfiguration={props.hasCopiedBeltConfiguration} focused={props.focusedBeltNetworkId === props.selectedBelt.id} onPriorityChange={props.onBeltPriorityChange} onLaneCountChange={props.onBeltLaneCountChange} onStackSizeChange={props.onBeltStackSizeChange} onMonitorChange={props.onBeltMonitorChange} onRouteModeChange={props.onBeltRouteModeChange} onRouteOffsetChange={props.onBeltRouteOffsetChange} onApplyConfigurationToNetwork={props.onApplyBeltConfigurationToNetwork} onFocusNetwork={props.onFocusBeltNetwork} onUpgrade={props.onUpgradeBelt} onUpgradeNetwork={props.onUpgradeBeltNetwork} onCopyConfiguration={props.onCopyBeltConfiguration} onPasteConfiguration={props.onPasteBeltConfiguration} onRemove={props.onRemoveBelt} onRemoveNetwork={props.onRemoveBeltNetwork} />
-      ) : <InspectorEmpty game={props.game} />}
+      ) : <InspectorEmpty game={props.game} onOpenTutorial={props.onOpenTutorial} />}
     </aside>
   );
 }
@@ -1953,6 +1983,7 @@ export const CONSTRUCTION_BUILD_ORDER: Array<BuildingId | ConveyorBeltId> = [
   "ray_receiver",
   "planetary_logistics_station",
   "interstellar_logistics_station",
+  "space_station_construction_launcher",
   "orbital_collector",
   "construction_center",
   "galactic_material_exporter",
@@ -1980,7 +2011,7 @@ export function constructionBuildIcon(id: BuildingId | ConveyorBeltId) {
   if (id === "em_rail_ejector") return <Satellite size={18} />;
   if (id === "vertical_launching_silo") return <Rocket size={18} />;
   if (id === "ray_receiver") return <RadioTower size={18} />;
-  if (id === "planetary_logistics_station" || id === "interstellar_logistics_station" || id === "orbital_collector") return <Orbit size={18} />;
+  if (id === "planetary_logistics_station" || id === "interstellar_logistics_station" || id === "space_station_construction_launcher" || id === "orbital_collector") return <Orbit size={18} />;
   if (id === "construction_center") return <Factory size={18} />;
   if (id === "galactic_material_exporter") return <RadioTower size={18} />;
   if (id === "micro_black_hole_connector") return <Atom size={18} />;
@@ -2033,7 +2064,7 @@ function loadCompactConstruction(): boolean {
 const CONSTRUCTION_CATEGORY_IDS: Record<Exclude<ConstructionCategory, "all" | "recent">, Set<BuildingId | ConveyorBeltId>> = {
   power: new Set(["wind_turbine", "solar_panel", "geothermal_power_station", "thermal_power_plant", "mini_fusion_power_plant", "artificial_star", "accumulator", "energy_exchanger"]),
   production: new Set(["mining_machine", "arc_smelter", "plane_smelter", "assembling_machine_mk1", "assembling_machine_mk2", "assembling_machine_mk3", "matrix_lab", "oil_extractor", "oil_refinery", "water_pump", "chemical_plant", "quantum_chemical_plant", "fractionator", "miniature_particle_collider", "construction_center"]),
-  logistics: new Set(["conveyor_belt_mk1", "conveyor_belt_mk2", "conveyor_belt_mk3", "storage_mk1", "material_delivery_hub", "splitter_4way", "storage_tank", "planetary_logistics_station", "interstellar_logistics_station", "orbital_collector"]),
+  logistics: new Set(["conveyor_belt_mk1", "conveyor_belt_mk2", "conveyor_belt_mk3", "storage_mk1", "material_delivery_hub", "splitter_4way", "storage_tank", "planetary_logistics_station", "interstellar_logistics_station", "space_station_construction_launcher", "orbital_collector"]),
   dyson: new Set(["em_rail_ejector", "vertical_launching_silo", "ray_receiver", "galactic_material_exporter", "micro_black_hole_connector", "time_warp_device"]),
 };
 
