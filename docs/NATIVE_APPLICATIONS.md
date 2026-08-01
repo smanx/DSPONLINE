@@ -1,10 +1,10 @@
 # 原生应用构建与更新
 
-> 当前工作区版本：Web/Windows `1.0.20`；Android 正式包 `1.0.20 / 1000020`
-> 当前公开稳定测试版本：Windows `1.0.20` 未签名测试包；Android `1.0.20 / 1000020` 正式签名包
+> 当前工作区版本：Web/Windows `1.0.21`；Android 正式包 `1.0.21 / 1000021`
+> 当前公开稳定测试版本：Windows `1.0.21` 未签名测试包；Android `1.0.21 / 1000021` 正式签名包
 > Windows 包名：`com.dspidle.network`
 > Android applicationId：`cn.dsponline.network`
-> Web、Windows 与 Android 1.0.18 共用 `GameState` v45。两端存档 envelope v2 和云 schema v7 不变；旧存档通过连续守恒迁移载入。
+> Web、Windows 与 Android 1.0.21 共用 `GameState` v46。两端存档 envelope v2 和云 schema v7 不变；旧存档通过连续守恒迁移载入。
 > 公开下载入口：`https://download.dsponline.cn/`，文件由上海节点提供，不消耗香港游戏节点流量。
 
 ## 1. 架构边界
