@@ -46,3 +46,12 @@ export function canvasLineBatchBytes(batch: CanvasLineBatch): number {
 export function canvasLineBatchIncludes(batch: CanvasLineBatch, belt: BeltConnection): boolean {
   return batch.beltIds.includes(belt.id);
 }
+
+/** Canvas/WebGL is still a developer experiment until long-run rendering QA completes. */
+export function readExperimentalCanvasBatchMode(): boolean {
+  try {
+    return typeof window !== "undefined" && window.localStorage.getItem("dsp-idle-network.experimental-canvas-batch.v1") === "true";
+  } catch {
+    return false;
+  }
+}

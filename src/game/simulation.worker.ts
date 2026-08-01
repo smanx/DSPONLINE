@@ -4,6 +4,7 @@ import { applyContentPackRuntimeSnapshot, type ContentPackRuntimeSnapshot } from
 import { advancePersistentSimulationRuntime, createPersistentSimulationRuntime, createSimulationProfiler, replacePersistentSimulationRuntimeState, type PersistentSimulationRuntime, type SimulationProfiler } from "./engine";
 import type { GameState } from "./types";
 import { createSimulationProjection, type SimulationProjection } from "./simulationProjection";
+import { createSimulationStateDelta, type SimulationStateDelta } from "./simulationDelta";
 
 export interface SimulationWorkerRequest {
   id: number;
@@ -13,6 +14,8 @@ export interface SimulationWorkerRequest {
   profile?: boolean;
   registryFingerprint: string;
   registry?: ContentPackRuntimeSnapshot;
+  protocol?: "full" | "delta";
+  stateRevision?: number;
 }
 
 export interface SimulationWorkerResponse {
@@ -29,13 +32,17 @@ export interface SimulationWorkerResponse {
   registryError?: string;
   /** Optional P4 projection; `state` remains the compatibility oracle. */
   projection?: SimulationProjection;
+  protocol?: "full" | "delta";
+  stateRevision?: number;
+  delta?: SimulationStateDelta;
 }
 
 let runtime: PersistentSimulationRuntime | null = null;
 let activeRegistryFingerprint: string | null = null;
+let runtimeRevision = 0;
 
 self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
-  const { id, state, simulationSeconds, wallSeconds, profile, registryFingerprint, registry } = event.data;
+  const { id, state, simulationSeconds, wallSeconds, profile, registryFingerprint, registry, stateRevision } = event.data;
   const profiler = profile ? createSimulationProfiler() : undefined;
   const reusedState = !state && Boolean(runtime);
   if (profiler && reusedState) profiler.persistentRuntimeHits += 1;
@@ -67,9 +74,11 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
     // is rebuilt at this boundary; no inventory, route, or production progress is recreated.
     if (runtime) replacePersistentSimulationRuntimeState(runtime, runtime.state, profiler);
   }
+  const suppliedState = Boolean(state);
   if (state) {
     if (runtime) replacePersistentSimulationRuntimeState(runtime, state, profiler);
     else runtime = createPersistentSimulationRuntime(state, profiler);
+    runtimeRevision = Math.max(runtimeRevision + 1, stateRevision ?? 0);
   }
   if (!runtime) {
     self.postMessage({ id, changed: false, needsState: true, registryFingerprint: activeRegistryFingerprint } satisfies SimulationWorkerResponse);
@@ -77,17 +86,24 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
   }
   const startedAt = profile ? performance.now() : 0;
   const previousState = runtime.state;
+  const previousRevision = runtimeRevision;
   const result = advancePersistentSimulationRuntime(runtime, simulationSeconds, wallSeconds, profiler);
+  if (result.changed) runtimeRevision += 1;
   if (profiler && result.cacheRebuilt) profiler.persistentRuntimeRebuilds += 1;
   const response: SimulationWorkerResponse = {
     id,
     changed: result.changed,
-    ...(result.changed ? { state: result.state } : {}),
+    protocol: event.data.protocol ?? "full",
+    stateRevision: runtimeRevision,
+    ...(result.changed && (event.data.protocol !== "delta" || suppliedState) ? { state: result.state } : {}),
     ...(profile ? { durationMs: Math.max(0, performance.now() - startedAt), profiler } : {}),
     reusedState,
     cacheRebuilt: result.cacheRebuilt,
     registryFingerprint: activeRegistryFingerprint ?? undefined,
     ...(result.changed ? { projection: createSimulationProjection(previousState, result.state) } : {}),
+    ...(result.changed && event.data.protocol === "delta" && !suppliedState
+      ? { delta: createSimulationStateDelta(previousState, result.state, previousRevision, runtimeRevision) }
+      : {}),
   };
   self.postMessage(response);
 };

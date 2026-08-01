@@ -1033,6 +1033,14 @@ describe("game storage", () => {
     expect(loadGame().state.elapsedSeconds).toBe(20);
   });
 
+  it("skips a repeated verified save for the same immutable state", async () => {
+    const state = createInitialState();
+    const first = await saveGameVerified(state);
+    const second = await saveGameVerified(state);
+    expect(first.success).toBe(true);
+    expect(second).toMatchObject({ success: true, skippedUnchanged: true });
+  });
+
   it("migrates v15 research and Dyson plans into the v17 operations model", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("dyson_sphere_program", "dyson_shell", "mining_speed_1");

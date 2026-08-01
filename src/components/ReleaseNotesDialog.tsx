@@ -5,11 +5,11 @@ import { NATIVE_BACK_EVENT } from "../nativeApp";
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-08-01-v1.0.19",
-  date: "2026年8月1日",
-  version: "1.0.19",
-  title: "蓝图施工与模拟一致性更新",
-  summary: "1.0.19 修复内容包 Worker、超大蓝图和递归制造问题，加入待建补料、统计窗口与游戏内确认框，并把量子基础吞吐提高到 5000 件/分钟。GameState 升至 v46，旧存档和旧蓝图守恒迁移。",
+  id: "2026-08-02-v1.0.21",
+  date: "2026年8月2日",
+  version: "1.0.21",
+  title: "云存档、蓝图与终局稳定性更新",
+  summary: "1.0.21 修复大存档云上传边界、存档读取与蓝图界面稳定性问题，降低终局工厂的主线程压力，并保留旧存档、库存、线路和在途物资。GameState v46、云 schema v7 与存档格式保持兼容。",
   items: [
     {
       id: "content-pack-worker-registry",
@@ -56,6 +56,11 @@ export const CURRENT_RELEASE_NOTES = {
       title: "量子网络基础吞吐提高",
       description: "全局上传和下载基础值从 400 提高到 5000 件/分钟，再乘银河物流无限科技倍率平方与全部量子塔堆叠总数。",
     },
+    {
+      id: "cloud-save-stability",
+      title: "大存档云上传与读取保护",
+      description: "云存档请求支持更大的合法正文并分别提示格式、完整性和体积错误；上传前后保留校验、事务和上一份有效云档，读取失败仍显示真实摘要。",
+    },
   ],
 } as const;
 
@@ -69,6 +74,7 @@ const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["i
   "production-statistics-windows": Gauge,
   "pending-blueprint-construction": Layers,
   "quantum-bandwidth-5000": Info,
+  "cloud-save-stability": Info,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

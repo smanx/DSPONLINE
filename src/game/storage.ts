@@ -139,6 +139,8 @@ export interface SaveGameResult {
   bytes?: number;
   removedAutomaticSnapshots?: number;
   backupSaved?: boolean;
+  /** True when the requested state is already the last verified primary save. */
+  skippedUnchanged?: boolean;
   timings?: SaveStageTimings;
 }
 
@@ -2627,6 +2629,8 @@ interface PendingPrimarySave {
 
 let activePrimarySave: Promise<void> | null = null;
 let pendingPrimarySave: PendingPrimarySave | null = null;
+let lastVerifiedPrimaryState: GameState | null = null;
+let lastVerifiedPrimaryResult: SaveGameResult | null = null;
 
 /**
  * Serialize primary saves and coalesce requests that arrive while IndexedDB
@@ -2636,6 +2640,12 @@ let pendingPrimarySave: PendingPrimarySave | null = null;
  */
 export function saveGameVerified(state: GameState): Promise<SaveGameResult> {
   return new Promise((resolve) => {
+    // Lifecycle hooks can request the same immutable state several times while
+    // paused. Avoid serializing and writing it again after a verified commit.
+    if (lastVerifiedPrimaryState === state && lastVerifiedPrimaryResult?.success && getLocalSaveValue(SAVE_KEY) !== null) {
+      resolve({ ...lastVerifiedPrimaryResult, skippedUnchanged: true, message: "主存档未变化，跳过重复保存" });
+      return;
+    }
     if (activePrimarySave) {
       if (!pendingPrimarySave) pendingPrimarySave = { state, waiters: [] };
       pendingPrimarySave.state = state;
@@ -2655,6 +2665,13 @@ export function saveGameVerified(state: GameState): Promise<SaveGameResult> {
           result = failedSave("unavailable", "本地主存档写入失败，请立即导出当前进度");
         }
         request.waiters.forEach((waiter) => waiter(result));
+        if (result.success) {
+          lastVerifiedPrimaryState = request.state;
+          lastVerifiedPrimaryResult = result;
+        } else if (lastVerifiedPrimaryState === request.state) {
+          lastVerifiedPrimaryState = null;
+          lastVerifiedPrimaryResult = null;
+        }
         current = pendingPrimarySave;
         pendingPrimarySave = null;
       }

@@ -2112,6 +2112,23 @@ select:focus-visible {
   background: #0b100e;
 }
 
+/* P5 batch line renderer is opt-in in endgame extreme mode. React Flow keeps
+   the invisible edge hit paths; the canvas only replaces their visual layer. */
+.factory-canvas[data-batch-renderer="true"] .factory-edge-visual-layer {
+  visibility: hidden;
+}
+
+.canvas-belt-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.factory-canvas[data-batch-renderer="true"] .react-flow__nodes {
+  z-index: 2;
+}
+
 .planet-navigator {
   position: relative;
   z-index: 6;

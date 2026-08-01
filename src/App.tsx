@@ -29,6 +29,7 @@ import {
 import { CommandPalette, type CommandWorkspace } from "./components/CommandPalette";
 import { NODE_TYPES, type FactoryFlowNode, type FactoryNodeData } from "./components/FactoryNodes";
 import { EDGE_TYPES, FactoryConnectionLine, type FactoryFlowEdge } from "./components/FactoryEdges";
+import { CanvasBeltLayer } from "./components/CanvasBeltLayer";
 import { BlueprintWorkspace, CanvasRegionEditor, CanvasRegionLayer, CanvasSelectionTools, PendingBlueprintLayer, SelectionToolbar, type CanvasRegionRectangle, type CanvasRegionResizeHandle } from "./components/BlueprintWorkspace";
 import { CanvasInteractionOverlay, type CanvasClickConnectionPreview, type CanvasConnectionPreviewTone } from "./components/CanvasInteractionOverlay";
 import { GAME_DIALOG_CLOSED_EVENT, useGameDialog } from "./components/GameDialogProvider";
@@ -229,6 +230,7 @@ import { deliverSystemSpaceStationMaterial, getInterstellarStationUpgradeStatus,
 import { getDifficultyDefinition } from "./game/difficulty";
 import { analyzeBeltNetwork, createBeltDiagnosticIndex, diagnoseBelt, predictBeltConnection } from "./game/network";
 import { buildFactoryEdgeRouteCenters, reconcileFactoryCanvasTopology, type FactoryCanvasTopology } from "./game/canvasTopology";
+import { readExperimentalCanvasBatchMode } from "./game/canvasLineBatch";
 import { planFactoryAutoLayout } from "./game/layout";
 import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
 import { getProductionLineLocations, type ProductionLineLocation } from "./game/productionLocator";
@@ -262,6 +264,7 @@ import { trackAnalyticsEvent } from "./game/analytics";
 import { CLOUD_AUTO_SYNC_INTERVAL_MS, CloudApiError, compareCloudSave, fetchCloudPublicStatus, getCloudToken, markCloudSaveSynchronized, readCloudAutoSyncStatus, resumeCloudSession, uploadCloudSave, writeCloudAutoSyncStatus } from "./game/cloud";
 import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CanvasRegion, CanvasViewport, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad, StationSlotTemplate } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
+import { applySimulationStateDelta, readExperimentalSimulationDeltaMode } from "./game/simulationDelta";
 import { getOnboardingFocusTarget, getOnboardingStep, recordBasicOnboardingEvent, type OnboardingActionId } from "./game/onboarding";
 import { useCoarsePointer } from "./hooks/useCoarsePointer";
 import { useCompactLayout } from "./hooks/useCompactLayout";
@@ -768,7 +771,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const simulationWorkerDisabledRef = useRef(false);
   const contentPackRuntimeSnapshotRef = useRef<ContentPackRuntimeSnapshot>(createContentPackRuntimeSnapshot(INITIAL_CONTENT_PACK_REGISTRY));
   const simulationWorkerRegistryFingerprintRef = useRef<string | null>(null);
-  const simulationSubmissionRef = useRef<{ id: number; state: GameState; simulationSeconds: number; wallSeconds: number; registryFingerprint: string; submittedAt: number } | null>(null);
+  const simulationSubmissionRef = useRef<{ id: number; state: GameState; simulationSeconds: number; wallSeconds: number; registryFingerprint: string; submittedAt: number; baseStateRevision: number | null } | null>(null);
+  const simulationStateRevisionRef = useRef(0);
+  const experimentalSimulationDeltaRef = useRef(readExperimentalSimulationDeltaMode());
   const lastSimulationResultRef = useRef<GameState | null>(null);
   const simulationPendingSecondsRef = useRef(game.timeWarp.pendingSimulationSeconds);
   const simulationPendingWallSecondsRef = useRef(game.timeWarp.pendingWallSeconds);
@@ -1186,6 +1191,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const submitted = simulationSubmissionRef.current;
     const pendingSimulationSeconds = simulationPendingSecondsRef.current + (submitted?.simulationSeconds ?? 0);
     const pendingWallSeconds = simulationPendingWallSecondsRef.current + (submitted?.wallSeconds ?? 0);
+    if (pendingSimulationSeconds === state.timeWarp.pendingSimulationSeconds && pendingWallSeconds === state.timeWarp.pendingWallSeconds) return state;
     return {
       ...state,
       timeWarp: {
@@ -1441,10 +1447,31 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           simulationPendingWallSecondsRef.current += submission.wallSeconds;
           return current;
         }
-        if (!event.data.changed || !event.data.state) {
+        if (!event.data.changed) {
           lastSimulationResultRef.current = current;
+          if (typeof event.data.stateRevision === "number") simulationStateRevisionRef.current = event.data.stateRevision;
           return current;
         }
+        if (event.data.delta) {
+          if (submission.baseStateRevision === null || event.data.delta.baseRevision !== simulationStateRevisionRef.current) {
+            simulationPendingSecondsRef.current += submission.simulationSeconds;
+            simulationPendingWallSecondsRef.current += submission.wallSeconds;
+            lastSimulationResultRef.current = null;
+            return current;
+          }
+          const next = applySimulationStateDelta(current, event.data.delta);
+          simulationStateRevisionRef.current = event.data.delta.nextRevision;
+          lastSimulationResultRef.current = next;
+          gameRef.current = next;
+          return next;
+        }
+        if (!event.data.state) {
+          simulationPendingSecondsRef.current += submission.simulationSeconds;
+          simulationPendingWallSecondsRef.current += submission.wallSeconds;
+          lastSimulationResultRef.current = null;
+          return current;
+        }
+        if (typeof event.data.stateRevision === "number") simulationStateRevisionRef.current = event.data.stateRevision;
         lastSimulationResultRef.current = event.data.state;
         gameRef.current = event.data.state;
         return event.data.state;
@@ -1511,6 +1538,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           wallSeconds: pendingWallSeconds,
           profile: performanceMonitor.isActive(),
           registryFingerprint: registrySnapshot.fingerprint,
+          protocol: experimentalSimulationDeltaRef.current ? "delta" : "full",
+          ...(experimentalSimulationDeltaRef.current ? { stateRevision: simulationStateRevisionRef.current } : {}),
           ...(simulationWorkerRegistryFingerprintRef.current !== registrySnapshot.fingerprint ? { registry: registrySnapshot } : {}),
         };
         simulationRequestIdRef.current = request.id;
@@ -1520,6 +1549,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           simulationSeconds,
           wallSeconds: pendingWallSeconds,
           registryFingerprint: registrySnapshot.fingerprint,
+          baseStateRevision: mainState === lastSimulationResultRef.current && experimentalSimulationDeltaRef.current ? simulationStateRevisionRef.current : null,
           submittedAt: performance.now(),
         };
         try {
@@ -3170,6 +3200,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     () => canvasGame.belts.filter((belt) => belt.planetId === canvasGame.activePlanetId),
     [canvasGame.activePlanetId, canvasGame.belts],
   );
+  const canvasBatchRendererEnabled = endgameExtremeMode && readExperimentalCanvasBatchMode() && activePlanetBelts.length >= 600;
   const activeEntityById = useMemo(
     () => new Map(activePlanetEntities.map((entity) => [entity.id, entity])),
     [activePlanetEntities],
@@ -4895,6 +4926,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         />
         <section
             className="factory-canvas"
+            data-batch-renderer={canvasBatchRendererEnabled ? "true" : "false"}
             aria-label="生产网络画布"
             ref={factoryCanvasRef}
             onPointerDownCapture={(event) => {
@@ -5015,6 +5047,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onMove={(_event, viewport) => {
               viewportRef.current = viewport;
               if (connectionHandleSpatialIndexRef.current) connectionHandleSpatialIndexRef.current.viewport = viewport;
+              if (canvasBatchRendererEnabled) setPendingBlueprintViewport(viewport);
               const currentLod = getCanvasLod(viewportZoom);
               const nextLod = getCanvasLod(viewport.zoom);
               canvasPinchLodRef.current = nextLod;
@@ -5071,6 +5104,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             /> : null}
             <Controls position="bottom-left" showInteractive={false} />
           </ReactFlow>
+          {canvasBatchRendererEnabled ? <CanvasBeltLayer
+            state={canvasGame}
+            planetId={canvasGame.activePlanetId}
+            viewport={viewportRef.current}
+            width={canvasViewportSize.width}
+            height={canvasViewportSize.height}
+            selectedBeltIds={selectedBeltIdSet}
+          /> : null}
           <button className={`canvas-minimap-toggle nodrag nopan${minimapCollapsed ? " canvas-minimap-toggle--collapsed" : ""}`} type="button" onClick={() => setMinimapCollapsed((collapsed) => !collapsed)} title={minimapCollapsed ? "展开小地图" : "折叠小地图"} aria-label={minimapCollapsed ? "展开小地图" : "折叠小地图"} aria-expanded={!minimapCollapsed}>
             {minimapCollapsed ? <MapIcon size={16} /> : <PanelRightClose size={16} />}
           </button>

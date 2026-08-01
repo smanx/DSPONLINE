@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-01-v1.0.19");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-02-v1.0.21");
     }
   });
 }
@@ -139,9 +139,9 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "蓝图施工与模拟一致性更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "云存档、蓝图与终局稳定性更新" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(9);
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(10);
   await expect(releaseNotes).toContainText("内容包同步到模拟 Worker");
   await expect(releaseNotes).toContainText("超大蓝图完整往返");
   await expect(releaseNotes).toContainText("蓝图缺料预建设与多次补足");
@@ -175,12 +175,12 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-01-v1.0.19");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-02-v1.0.21");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
   await page.getByRole("button", { name: "游戏设置" }).click();
-  await page.getByRole("button", { name: "查看2026年8月1日版本更新记录" }).click();
+  await page.getByRole("button", { name: "查看2026年8月2日版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
   await releaseNotes.getByLabel("关闭版本更新记录").click();
 
