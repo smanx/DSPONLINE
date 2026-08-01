@@ -4,6 +4,16 @@ All notable player-facing changes are recorded here. Game-state migration versio
 
 ## [Unreleased]
 
+## [1.0.21] - 2026-08-02
+
+- Raised the cloud-save raw request boundary from 8 MiB to 32 MiB, bounded compressed and expanded payloads, and separated format, integrity, compression, and size errors without replacing the last valid cloud save.
+- Added the device-only Endgame Extreme Mode and reduced current-planet belt observation, while preserving simulation time, production, logistics, inventory, and save results.
+- Fixed the PWA response-clone race and added incremental canvas topology/runtime updates to reduce redundant React Flow work.
+- Added compact and detailed blueprint views with stable deployment actions, plus blueprint memory for micro black hole connector operation intent with a danger confirmation.
+- Added repeated-save short-circuiting for an unchanged verified state; state changes and failures still use the complete save path.
+- Added guarded experimental incremental Worker, batched belt-renderer, and multi-Worker safety-gate paths. Full-state transport and one authoritative Worker remain the defaults.
+- Preserved GameState v46, save envelope v2, cloud schema v7, old saves, inventories, belts, routes, and in-transit cargo.
+
 ## [1.0.20] - 2026-08-02
 
 - 量子供应端在物资实际送达时直接写入共享库存；容量不足时只把精确余量保留在本地缓存或源端，不受五秒上传带宽和塔槽位缓存限制。

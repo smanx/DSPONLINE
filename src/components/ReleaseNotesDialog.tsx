@@ -1,4 +1,4 @@
-import { BookOpen, Check, Focus, Gauge, Info, Layers, MessageCircle, Route, Sparkles, X, type LucideIcon } from "lucide-react";
+import { Check, Focus, Gauge, Info, Layers, MessageCircle, Route, Sparkles, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
@@ -8,73 +8,79 @@ export const CURRENT_RELEASE_NOTES = {
   id: "2026-08-02-v1.0.21",
   date: "2026年8月2日",
   version: "1.0.21",
-  title: "云存档、蓝图与终局稳定性更新",
-  summary: "1.0.21 修复大存档云上传边界、存档读取与蓝图界面稳定性问题，降低终局工厂的主线程压力，并保留旧存档、库存、线路和在途物资。GameState v46、云 schema v7 与存档格式保持兼容。",
+  title: "紧急稳定性、云存档与蓝图界面更新",
+  summary: "1.0.21 针对大存档云上传、终局工厂卡顿和蓝图界面进行了稳定性修复；默认模拟结果、产量、库存、线路和在途物资不变。GameState v46、存档 envelope v2 与云 schema v7 保持兼容。",
   items: [
     {
-      id: "content-pack-worker-registry",
-      title: "内容包同步到模拟 Worker",
-      description: "实时、纯挂机和离线模拟使用同一份内容包注册表；启用、更新或关闭内容包后无需刷新页面，配方和建筑规则不会在 Worker 中失效。",
+      id: "cloud-save-boundary",
+      title: "大存档云上传边界",
+      description: "云存档原始请求上限由 8 MiB 提高至 32 MiB，并限制压缩与解压后的大小；格式、完整性、压缩和体积错误分别提示，失败请求不会覆盖上一份有效云档。",
     },
     {
-      id: "large-blueprint-roundtrip",
-      title: "超大蓝图完整往返",
-      description: "单个建筑堆叠最高支持 1 亿，导入不再把超过 1 万的合法数量误判为损坏，也不会静默截断或免费建造。",
+      id: "service-worker-cache",
+      title: "修复 PWA 缓存响应错误",
+      description: "Service Worker 在页面读取响应前同步创建缓存副本，避免更新或离线启动时出现“响应正文已使用”的错误。",
     },
     {
-      id: "alignment-guides",
-      title: "建筑拖动对齐辅助线",
-      description: "单选和多选建筑接近其他建筑的中心或边缘时显示水平、垂直辅助线；松开后立即清除，不写入存档。",
+      id: "endgame-extreme",
+      title: "终局优化·极限模式",
+      description: "设置中新增设备级极限模式，降低非关键画面、线路动画、粒子和普通读数刷新；模拟时间、产量、物流、库存和存档结果不变。",
     },
     {
-      id: "quantum-blueprint-target",
-      title: "蓝图记忆量子网络目标",
-      description: "复制量子物流塔时保留计划接入状态；科技和 Mk.II 条件满足后自动接入，同时保留本地运输机、槽位、缓存和载具。",
+      id: "belt-observation",
+      title: "终局线路观测降负",
+      description: "传送带流量观测优先处理当前行星、可见或选中的线路，减少全星区复制和扫描，视口外线路仍保留生产与运输结果。",
     },
     {
-      id: "recursive-overflow",
-      title: "递归制造不再被副产物卡死",
-      description: "轨道采集器等递归手搓在氢满仓时仍能原子完成，真实副产物允许暂时超过托盘软上限且不会被删除。",
+      id: "react-flow-incremental",
+      title: "画布增量渲染与更新保护",
+      description: "拓扑、运行数据和选择状态分开更新；未变化的节点和线路复用对象，减少重复 setNodes/setEdges、节点测量和 React 更新循环。",
     },
     {
-      id: "in-game-dialogs",
-      title: "统一游戏内确认框",
-      description: "回收、拆卸和重置等确认不再调用原生阻塞弹窗；确认或取消后，数字输入、中文输入法、指针和键盘焦点均可继续使用。",
+      id: "blueprint-compact",
+      title: "蓝图精简与详细模式",
+      description: "蓝图库默认使用稳定高度的精简卡片，部署和排队部署按钮保持可见；需要时可打开单个蓝图的完整参数，不改变蓝图、材料和施工规则。",
     },
     {
-      id: "production-statistics-windows",
-      title: "生产统计排序与时间窗口",
-      description: "新增每秒、每分钟、每十分钟和每小时窗口，生产与消耗列可稳定排序，大数量统一使用万、亿及更高单位并保留精确值。",
+      id: "black-hole-blueprint",
+      title: "巨构蓝图记忆启用意图",
+      description: "微型黑洞连接装置蓝图可以记住部署后启用或停用意图；自动启用仍需危险确认，运行计数和临时缓存不会从来源建筑复制。",
     },
     {
-      id: "pending-blueprint-construction",
-      title: "蓝图缺料预建设与多次补足",
-      description: "缺少建筑时仍可连续放置灰色待建蓝图，之后分批投入建筑、线路和载具；材料齐备后原子建成，取消会完整返还预留物资。",
+      id: "save-short-circuit",
+      title: "保存重复短路",
+      description: "最近一次已验证的不可变存档状态未变化时，自动保存跳过重复序列化和写入；状态变化、写入失败或主键变化会自动回到完整保存路径。",
     },
     {
-      id: "quantum-bandwidth-5000",
-      title: "量子网络基础吞吐提高",
-      description: "全局上传和下载基础值从 400 提高到 5000 件/分钟，再乘银河物流无限科技倍率平方与全部量子塔堆叠总数。",
+      id: "simulation-delta-experiment",
+      title: "增量 Worker 协议（实验）",
+      description: "新增带 revision 边界的增量状态协议，但默认仍使用完整状态；仅本地开发开关开启时试用，首次加载、命令边界和不匹配会回退安全路径。",
     },
     {
-      id: "cloud-save-stability",
-      title: "大存档云上传与读取保护",
-      description: "云存档请求支持更大的合法正文并分别提示格式、完整性和体积错误；上传前后保留校验、事务和上一份有效云档，读取失败仍显示真实摘要。",
+      id: "canvas-batch-experiment",
+      title: "批量传送带绘制层（实验）",
+      description: "新增可选的批量线路绘制层，仅在极限模式、线路达到阈值且开发开关开启时使用；建筑、选中线路、命中和连接预览继续使用原交互路径。",
+    },
+    {
+      id: "multicore-guardrail",
+      title: "多 Worker 安全门槛（实验）",
+      description: "新增多 Worker 实验规划器，只有工作量足够且基准提升超过 15% 才允许规划，正式模拟默认保持单权威 Worker，手机不强制多核。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "content-pack-worker-registry": Route,
-  "large-blueprint-roundtrip": Layers,
-  "alignment-guides": Focus,
-  "quantum-blueprint-target": Sparkles,
-  "recursive-overflow": BookOpen,
-  "in-game-dialogs": Check,
-  "production-statistics-windows": Gauge,
-  "pending-blueprint-construction": Layers,
-  "quantum-bandwidth-5000": Info,
-  "cloud-save-stability": Info,
+  "cloud-save-boundary": Info,
+  "service-worker-cache": Route,
+  "endgame-extreme": Gauge,
+  "belt-observation": Focus,
+  "react-flow-incremental": Layers,
+  "blueprint-compact": Layers,
+  "black-hole-blueprint": Sparkles,
+  "save-short-circuit": Check,
+  "simulation-delta-experiment": Route,
+  "canvas-batch-experiment": Layers,
+  "multicore-guardrail": Gauge,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

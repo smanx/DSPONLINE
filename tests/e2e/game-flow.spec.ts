@@ -139,19 +139,22 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "云存档、蓝图与终局稳定性更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "紧急稳定性、云存档与蓝图界面更新" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(10);
-  await expect(releaseNotes).toContainText("内容包同步到模拟 Worker");
-  await expect(releaseNotes).toContainText("超大蓝图完整往返");
-  await expect(releaseNotes).toContainText("蓝图缺料预建设与多次补足");
-  await expect(releaseNotes).toContainText("量子网络基础吞吐提高");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-01-v119-1440.png", fullPage: true });
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(11);
+  await expect(releaseNotes).toContainText("大存档云上传边界");
+  await expect(releaseNotes).toContainText("终局优化·极限模式");
+  await expect(releaseNotes).toContainText("蓝图精简与详细模式");
+  await expect(releaseNotes).toContainText("增量 Worker 协议（实验）");
+  await expect(releaseNotes).toContainText("多 Worker 安全门槛（实验）");
+  await expect(releaseNotes).not.toContainText("内容包同步到模拟 Worker");
+  await expect(releaseNotes).not.toContainText("量子网络基础吞吐提高");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-02-v121-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-01-v119-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-02-v121-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -166,7 +169,7 @@ test("dated release notes appear once and remain available from both settings sc
   });
   await expect.poll(controlsFitViewport).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-01-v119-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-02-v121-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -192,7 +195,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-01-v117-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-02-v121-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
