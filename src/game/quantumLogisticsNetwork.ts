@@ -114,6 +114,42 @@ export function minQuantumInteger(...values: unknown[]): DecimalIntegerString {
   return decimal(values.map(integer).reduce((min, value) => value < min ? value : min));
 }
 
+export interface QuantumInventoryDepositResult {
+  accepted: DecimalIntegerString;
+  remainder: DecimalIntegerString;
+  state: QuantumLogisticsNetworkState;
+}
+
+/**
+ * Put material into the shared inventory without applying the five-second
+ * upload budget. This is used at the moment a quantum supply endpoint actually
+ * receives material; the regular boundary settlement remains responsible for
+ * any material still sitting in a local tower buffer.
+ */
+export function depositIntoQuantumInventory(
+  network: QuantumLogisticsNetworkState,
+  itemId: ItemId,
+  amount: DecimalIntegerString | number,
+): QuantumInventoryDepositResult {
+  const runtimeFlow = network.runtimeFlow;
+  const state = normalizeQuantumLogisticsNetworkState(network);
+  if (runtimeFlow) state.runtimeFlow = runtimeFlow;
+  const requested = integer(amount);
+  if (!state.enabled || requested <= 0n) {
+    return { accepted: "0", remainder: decimal(requested), state };
+  }
+  const current = integer(state.inventory[itemId]);
+  const capacity = integer(getQuantumItemCapacity(state, itemId));
+  const free = capacity > current ? capacity - current : 0n;
+  const accepted = requested < free ? requested : free;
+  if (accepted > 0n) state.inventory[itemId] = decimal(current + accepted);
+  return {
+    accepted: decimal(accepted),
+    remainder: decimal(requested - accepted),
+    state,
+  };
+}
+
 export interface QuantumBandwidth {
   mode: QuantumStationMode;
   powerFactor: number;

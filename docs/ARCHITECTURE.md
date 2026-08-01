@@ -1,6 +1,6 @@
 # 系统架构
 
-> **方向变更（2026-07-31）**：量子物流网络当前使用 `1.0.19 / GameState v46`。有效资产的 v43 空间站实验存档不迁入量子共享池；传统物流站升级入口仍作为兼容域命令保留。量子网络改动遵循 [量子物流网络开发 Agent 提示词](./QUANTUM_LOGISTICS_NETWORK_AGENT_PROMPT.md)。
+> **方向变更（2026-07-31）**：量子物流网络当前使用 `1.0.20 / GameState v46`。有效资产的 v43 空间站实验存档不迁入量子共享池；传统物流站升级入口仍作为兼容域命令保留。量子网络改动遵循 [量子物流网络开发 Agent 提示词](./QUANTUM_LOGISTICS_NETWORK_AGENT_PROMPT.md)。
 
 ## 1. 总体拓扑
 
@@ -33,7 +33,7 @@ flowchart LR
 - `src/FactoryRuntime.tsx`：按需加载 React Flow Provider 与 `FactoryGame`，避免主菜单提前下载画布 JavaScript 和模拟器。React Flow 基础 CSS 在 `styles.css` 最前合并，以保留自定义端口覆盖的稳定级联顺序。
 - `src/hooks/usePlayerPresence.ts`、`src/game/presence.ts`：进入工厂后的匿名心跳、可见性节流与本机稳定 ID；不读取游戏存档。
 - `src/game/analytics.ts`：页面访问、活跃时长和白名单关键事件的会话级批处理；页面加载、LCP 和静态传输量只上传隐私分桶，不上传原始时序、URL 参数或游戏存档。
-- `src/game/localSaveStore.ts`、`savePreview.ts`：IndexedDB 是主档、备份、快照和三个槽位的权威存储，主菜单只读内存索引解析摘要；首次启动把旧 localStorage 副本读回验证后迁入并删除。正式 envelope 校验仍由 `storage.ts` 在载入时执行。
+- `src/game/localSaveStore.ts`、`savePreview.ts`：IndexedDB 是主档、备份、快照和三个槽位的权威存储，主菜单只读内存索引解析摘要；首次启动把旧 localStorage 副本读回验证后迁入并删除。正式 envelope 校验仍由 `storage.ts` 在载入时执行。存档迁移和持久化序列化会剔除普通建筑及普通蓝图模板的历史 `quantumTarget` 字段，只允许星际物流站保留它；服务端对遗留 `false` 做向后兼容，避免一次升级锁死旧云存档。
 - `src/components/AdminDashboard.tsx`：独立 `/admin` 路由，只使用浏览器会话中的管理员 token 读取聚合运营数据。
 - `src/components/StartMenu.tsx`：开始/继续、槽位、导入、云账号、邮箱验证/密码重置链接、主菜单设置和首屏常驻的设备级中英文切换。
 - `src/components/CloudAccountSecurity.tsx`、`CloudSaveConflictDialog.tsx`、`CloudSaveSlotsPanel.tsx`：主菜单与银河工作区共用的账号安全、邮箱绑定、设备会话、数据导出、四槽云存档和云冲突选择界面。

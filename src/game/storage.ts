@@ -783,6 +783,10 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
   const initial = createInitialState(savedSeed, saved.version < 20);
   const galaxy = normalizeGalaxyState(saved.version >= 20 ? saved.galaxy : { seed: initial.galaxy.seed }, saved.version < 20);
   const entities = saved.entities.map((entity: FactoryEntity) => {
+    // `quantumTarget` was briefly written to every building by an older
+    // client. Keep it only for interstellar stations; ordinary buildings
+    // must not carry the extension back into the next cloud save.
+    const { quantumTarget: _legacyQuantumTarget, ...entityWithoutLegacyQuantumTarget } = entity;
     const currentResource = saved.version < 13
       ? initial.entities.find((candidate) => candidate.kind === "vein" && candidate.id === entity.id)
       : undefined;
@@ -813,7 +817,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
       position.x += 640;
     }
     return {
-      ...entity,
+      ...entityWithoutLegacyQuantumTarget,
       planetId,
       position,
       interactionLocked: saved.version >= 35 && entity.interactionLocked === true,
@@ -896,7 +900,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
             : [],
         }
         : null,
-      quantumTarget: interstellarStation && entity.quantumTarget === true,
+      ...(interstellarStation ? { quantumTarget: entity.quantumTarget === true } : {}),
       elevatorOutputItems: interstellarStation && saved.version >= 43 && Array.isArray(entity.elevatorOutputItems)
         ? Array.from({ length: 5 }, (_, index) => {
           const itemId = (entity.elevatorOutputItems as unknown[])[index];
@@ -1286,7 +1290,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
           stationOperationMode: entity.buildingId === "interstellar_logistics_station" && saved.version >= 43 && entity.stationTier === 2 && entity.stationOperationMode === "elevator"
             ? "elevator"
             : entity.buildingId === "interstellar_logistics_station" ? "legacy" : undefined,
-          quantumTarget: entity.buildingId === "interstellar_logistics_station" && entity.quantumTarget === true,
+          ...(entity.buildingId === "interstellar_logistics_station" ? { quantumTarget: entity.quantumTarget === true } : {}),
           elevatorOutputItems: entity.buildingId === "interstellar_logistics_station" && saved.version >= 43 && Array.isArray(entity.elevatorOutputItems)
             ? Array.from({ length: 5 }, (_, index) => {
               const itemId = entity.elevatorOutputItems[index];
@@ -1942,12 +1946,26 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
 
 function persistentState(state: GameState): GameState {
   const { runtimeFlow: _runtimeFlow, ...quantumLogisticsNetwork } = state.quantumLogisticsNetwork;
+  const persistentEntities = state.entities.map((entity) => {
+    if (entity.buildingId === "interstellar_logistics_station") return entity;
+    const { quantumTarget: _legacyQuantumTarget, ...withoutLegacyQuantumTarget } = entity;
+    return withoutLegacyQuantumTarget;
+  });
+  const sanitizeBlueprint = (blueprint: BlueprintDefinition): BlueprintDefinition => ({
+    ...blueprint,
+    entities: blueprint.entities.map((entity) => entity.buildingId === "interstellar_logistics_station"
+      ? entity
+      : (({ quantumTarget: _legacyQuantumTarget, ...withoutLegacyQuantumTarget }) => withoutLegacyQuantumTarget)(entity)),
+  });
   return {
     ...state,
     // Production curves are runtime diagnostics. Keeping them in every local
     // recovery point multiplies save size without affecting factory progress.
     productionHistory: [],
     contentPacks: getActiveContentPackReferences(loadContentPackRegistry()),
+    entities: persistentEntities,
+    blueprints: state.blueprints.map(sanitizeBlueprint),
+    blueprintVersions: state.blueprintVersions.map((snapshot) => ({ ...snapshot, definition: sanitizeBlueprint(snapshot.definition) })),
     planetTrays: { ...state.planetTrays, [state.activePlanetId]: { ...state.tray } },
     quantumLogisticsNetwork,
   };

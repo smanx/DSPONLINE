@@ -1170,7 +1170,7 @@ function EntityInspector({
             <header><Atom size={15} /><span>量子采集网络</span><strong>{collectorQuantumStatus?.mode === "quantum" ? "已接入" : collectorQuantumStatus?.mode === "transitioning" ? "交接中" : "传统模式"}</strong></header>
             <p className={`station-upgrade-status station-upgrade-status--${collectorQuantumStatus?.mode === "quantum" ? "ready" : collectorQuantumStatus?.mode === "transitioning" ? "pending" : "idle"}`}>
               {collectorQuantumStatus?.mode === "quantum"
-                ? "只向共享库存上传当前采集气体，并与量子塔供应槽共享全局上传额度。"
+                ? "只向共享库存上传当前采集气体，送达时直接入池，不受量子上传带宽限制。"
                 : collectorQuantumStatus?.mode === "transitioning"
                   ? `等待传统航线尾货完成 · ${collectorQuantumStatus.bridgeCount} 条在途`
                   : collectorQuantumStatus?.blocker === "technology" ? "需要先研究“量子物流网络”" : "接入前继续使用传统星际物流。"}

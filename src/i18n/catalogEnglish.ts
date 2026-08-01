@@ -360,7 +360,7 @@ const TECHNOLOGY_UNLOCKS_EN: Record<string, string> = {
   "壳面太阳帆吸附速度 2.00×": "Shell Solar Sail Absorption Speed 2.00×",
   "量子物流塔接入": "Quantum Logistics Tower Access",
   "全宇宙共享库存": "Universal Shared Inventory",
-  "单塔上传/下载带宽": "Per-tower Upload/Download Bandwidth",
+  "量子网络全局吞吐": "Quantum Network Global Throughput",
 };
 
 const PLANET_NAMES_EN: Record<string, string> = {

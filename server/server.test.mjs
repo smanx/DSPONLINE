@@ -802,6 +802,17 @@ test("rejects a structurally complete cloud save whose internal checksum is stal
   assert.equal(rejected.body.summary.integrity, "invalid");
 });
 
+test("reports cloud save format and size failures separately", async () => {
+  const malformed = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: "not-json", expectedRevision: 0 }) });
+  assert.equal(malformed.response.status, 400);
+  assert.equal(malformed.body.code, "SAVE_FORMAT_INVALID");
+  const oversized = "x".repeat(8 * 1024 * 1024 - 512);
+  const tooLarge = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: oversized, expectedRevision: 0 }) });
+  assert.equal(tooLarge.response.status, 413);
+  assert.equal(tooLarge.body.code, "SAVE_SIZE_TOO_LARGE");
+  assert.match(tooLarge.body.error, /体积过大/);
+});
+
 test("stores revisioned cloud saves and detects conflicts", async () => {
   const saved = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
   assert.equal(saved.response.status, 200);
@@ -1269,13 +1280,24 @@ test("validates v34 time warp and accepts Android v35 through current v46 saves"
   });
   const acceptedV46 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v46PayloadFor(), expectedRevision: 14 }) });
   assert.equal(acceptedV46.response.status, 200, JSON.stringify(acceptedV46.body));
+  const legacyQuantumTarget = v46PayloadFor((state) => {
+    state.blueprints[0].entities[0].quantumTarget = false;
+    state.blueprintVersions[0].definition.entities[0].quantumTarget = false;
+  });
+  const acceptedLegacyQuantumTarget = await request("/api/cloud-save?slot=3", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ payload: legacyQuantumTarget, expectedRevision: 15 }),
+  });
+  assert.equal(acceptedLegacyQuantumTarget.response.status, 200, JSON.stringify(acceptedLegacyQuantumTarget.body));
   for (const invalid of [
     v46PayloadFor((state) => { state.blueprints[0].entities[0].machineCount = 100_000_001; }),
+    v46PayloadFor((state) => { state.blueprints[0].entities[0].quantumTarget = true; }),
     v46PayloadFor((state) => { state.constructionQueue[0].blueprintVersionId = "missing@1"; }),
     v46PayloadFor((state) => { state.constructionQueue[0].reservedConstruction.storage_mk1 = -1; }),
     v46PayloadFor((state) => { state.constructionQueue[0].status = "waiting-fleet"; state.constructionQueue[0].buildingCompletedAt = 123; }),
   ]) {
-    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 15 }) });
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 16 }) });
     assert.equal(rejected.response.status, 400);
   }
 });

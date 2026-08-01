@@ -1569,8 +1569,8 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
       { itemId: "universe_matrix", amount: 1_000 },
     ],
     prerequisites: ["interstellar_logistics", "space_warp", "universe_matrix"],
-    summary: "把已升级的星际物流塔接入一份全宇宙共享物资池；输入和输出按供电、带宽与公平游标在五秒边界结算。",
-    unlocks: ["量子物流塔接入", "全宇宙共享库存", "单塔上传/下载带宽"],
+    summary: "把已升级的星际物流塔接入一份全宇宙共享物资池；供应物资送达时优先直接入池，下载与溢出缓存仍在五秒边界结算。",
+    unlocks: ["量子物流塔接入", "全宇宙共享库存", "量子网络全局吞吐"],
   },
 };
 

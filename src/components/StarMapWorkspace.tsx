@@ -290,7 +290,7 @@ function QuantumInventoryConsole({ game, onCollectorModeChange, onItemCapacityCh
     <header className="quantum-inventory-summary">
       <div><Atom size={18} /><span><small>量子空间库存</small><strong>全星区共享物资池</strong></span></div>
       <dl>
-        <div><dt>上传额度</dt><dd>{formatQuantityCompact(Math.floor(bandwidth.globalUploadPerMinute))}<small>/min</small></dd></div>
+        <div><dt>即时上传</dt><dd>不限</dd><small>送达时优先入库</small></div>
         <div><dt>下载额度</dt><dd>{formatQuantityCompact(Math.floor(bandwidth.globalDownloadPerMinute))}<small>/min</small></dd></div>
         <div><dt>量子塔堆叠</dt><dd>{formatQuantityCompact(bandwidth.activeTowerStacks)}</dd></div>
         <div><dt>量子采集器</dt><dd>{formatQuantityCompact(connectedCollectors.reduce((sum, entity) => sum + entity.machineCount, 0))}</dd></div>

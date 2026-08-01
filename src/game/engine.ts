@@ -123,10 +123,12 @@ import {
   addQuantumInteger,
   beginOrbitalCollectorQuantumModeChange,
   beginOrbitalCollectorQuantumModeChanges,
+  depositIntoQuantumInventory,
   createEmptyQuantumLogisticsNetworkState,
   beginQuantumAttachment,
   beginQuantumAttachments,
   getQuantumBandwidthSummary,
+  getQuantumItemCapacity,
   normalizeQuantumInteger,
   setQuantumNetworkItemCapacity,
   settleQuantumAttachments,
@@ -1490,6 +1492,102 @@ function isTraditionalStationScopeDisabled(station: FactoryEntity, scope: Statio
 
 function hasQuantumBoundaryLogistics(station: FactoryEntity): boolean {
   return isQuantumStation(station) || isQuantumCollector(station) || Boolean(station.quantumTransition);
+}
+
+function quantumSupplySlot(station: FactoryEntity, itemId: ItemId): StationSlot | undefined {
+  if (!isQuantumStation(station)) return undefined;
+  return getStationSlots(station).find((slot) => slot.itemId === itemId && slot.remoteMode === "supply");
+}
+
+function quantumInventoryFree(state: GameState, itemId: ItemId): number {
+  if (!state.quantumLogisticsNetwork?.enabled) return 0;
+  const current = BigInt(normalizeQuantumInteger(state.quantumLogisticsNetwork.inventory[itemId]));
+  const capacity = BigInt(getQuantumItemCapacity(state.quantumLogisticsNetwork, itemId));
+  const free = capacity > current ? capacity - current : 0n;
+  return Number(free > BigInt(Number.MAX_SAFE_INTEGER) ? BigInt(Number.MAX_SAFE_INTEGER) : free);
+}
+
+function quantumSupplyFreeCapacity(
+  state: GameState,
+  station: FactoryEntity,
+  itemId: ItemId,
+  lookup?: SimulationLookupContext,
+): number {
+  const slot = quantumSupplySlot(station, itemId);
+  if (!slot) return 0;
+  const localCapacity = getEntityItemInputCapacity(state, station, itemId);
+  const localFree = Math.max(0, Math.floor(localCapacity - (station.inputs[itemId] ?? 0)));
+  void lookup;
+  return Math.max(0, quantumInventoryFree(state, itemId) + localFree);
+}
+
+function recordImmediateQuantumUpload(state: GameState, itemId: ItemId, amount: number): void {
+  if (amount < 1) return;
+  if (!state.quantumLogisticsNetwork?.enabled) return;
+  const boundarySecond = (Math.floor(state.elapsedSeconds / QUANTUM_SETTLEMENT_SECONDS) + 1) * QUANTUM_SETTLEMENT_SECONDS;
+  if (state.quantumLogisticsNetwork.runtimeFlow?.boundarySecond !== boundarySecond) {
+    state.quantumLogisticsNetwork.runtimeFlow = createQuantumBoundaryFlow(state, boundarySecond);
+  }
+  const flow = state.quantumLogisticsNetwork.runtimeFlow;
+  if (!flow) return;
+  addQuantumBoundaryFlow(flow.uploaded, itemId, amount);
+}
+
+/**
+ * Receive material at a quantum supply tower. The configured minStock remains
+ * local; everything else is deposited directly into shared inventory and any
+ * capacity remainder falls back to the ordinary tower input buffer.
+ */
+function receiveQuantumSupplyMaterial(
+  state: GameState,
+  station: FactoryEntity,
+  itemId: ItemId,
+  amount: number,
+): number {
+  const slot = quantumSupplySlot(station, itemId);
+  if (!slot || amount < 1 || !state.quantumLogisticsNetwork?.enabled) return 0;
+  const requested = Math.max(0, Math.floor(amount));
+  const currentInput = Math.max(0, Math.floor(station.inputs[itemId] ?? 0));
+  const currentOutput = Math.max(0, Math.floor(station.outputs[itemId] ?? 0));
+  const inputCapacity = Math.max(0, Math.floor(getEntityItemInputCapacity(state, station, itemId)));
+  const inputFree = Math.max(0, inputCapacity - currentInput);
+  const localReserve = Math.max(0, Math.floor(slot.minStock ?? 0) - currentInput - currentOutput);
+  const kept = Math.min(requested, inputFree, localReserve);
+  if (kept > 0) station.inputs[itemId] = currentInput + kept;
+  let remaining = requested - kept;
+  if (remaining > 0) {
+    const deposited = depositIntoQuantumInventory(state.quantumLogisticsNetwork, itemId, remaining);
+    state.quantumLogisticsNetwork = deposited.state;
+    const accepted = Number(deposited.accepted);
+    if (accepted > 0) recordImmediateQuantumUpload(state, itemId, accepted);
+    remaining = Number(deposited.remainder);
+  }
+  const localRemainder = Math.min(remaining, Math.max(0, inputFree - kept));
+  if (localRemainder > 0) station.inputs[itemId] = Math.floor((station.inputs[itemId] ?? 0) + localRemainder);
+  return kept + (requested - kept - remaining) + localRemainder;
+}
+
+function flushQuantumSupplyBuffer(state: GameState, station: FactoryEntity, itemId: ItemId, lookup?: SimulationLookupContext): number {
+  const slot = quantumSupplySlot(station, itemId);
+  if (!slot || !state.quantumLogisticsNetwork?.enabled) return 0;
+  const input = Math.max(0, Math.floor(station.inputs[itemId] ?? 0));
+  const output = Math.max(0, Math.floor(station.outputs[itemId] ?? 0));
+  const reserve = Math.max(0, Math.floor(slot.minStock ?? 0));
+  const reservedOutgoing = Math.max(0, Math.floor(stationReservedOutgoing(state, station.id, itemId, lookup)));
+  const uploadable = Math.max(0, output - reserve - reservedOutgoing) +
+    Math.max(0, input - Math.max(0, reserve - output));
+  if (uploadable < 1) return 0;
+  const deposited = depositIntoQuantumInventory(state.quantumLogisticsNetwork, itemId, uploadable);
+  state.quantumLogisticsNetwork = deposited.state;
+  const accepted = Number(deposited.accepted);
+  if (accepted < 1) return 0;
+  let remaining = accepted;
+  const fromOutput = Math.min(Math.max(0, output - reserve - reservedOutgoing), remaining);
+  if (fromOutput > 0) station.outputs[itemId] = output - fromOutput;
+  remaining -= fromOutput;
+  if (remaining > 0) station.inputs[itemId] = Math.max(0, input - remaining);
+  recordImmediateQuantumUpload(state, itemId, accepted);
+  return accepted;
 }
 
 export interface StationPeerMatch {
@@ -3523,7 +3621,7 @@ function gridStoredEnergy(state: GameState, planetId: PlanetId, gridId?: PowerGr
   }, { stored: 0, capacity: 0 });
 }
 
-function transferLogisticsBuffers(state: GameState): void {
+function transferLogisticsBuffers(state: GameState, lookup?: SimulationLookupContext): void {
   for (const entity of state.entities) {
     if ((entity.kind !== "storage" && entity.kind !== "splitter" && entity.kind !== "station") || !entity.buildingId) continue;
     if (entity.buildingId === "material_delivery_hub") continue;
@@ -3540,6 +3638,7 @@ function transferLogisticsBuffers(state: GameState): void {
       const moved = Math.min(incoming, Math.max(0, capacity - stored));
       entity.inputs[slot.itemId] = incoming - moved;
       entity.outputs[slot.itemId] = stored + moved;
+      if (isQuantumStation(entity)) flushQuantumSupplyBuffer(state, entity, slot.itemId, lookup);
     }
   }
 }
@@ -3582,6 +3681,9 @@ function targetFreeCapacity(state: GameState, target: FactoryEntity, itemId: Ite
       ? sum + Math.max(0, Math.floor(entity.inputs[itemId] ?? 0))
       : sum, 0);
     return Math.floor(Math.max(0, getPlanetTrayItemFreeCapacity(state, target.planetId, itemId) - pending) + EPSILON);
+  }
+  if (quantumSupplySlot(target, itemId)) {
+    return Math.max(0, quantumSupplyFreeCapacity(state, target, itemId, lookup) - stationInFlightCargo(target, itemId, lookup));
   }
   const capacity = getEntityItemInputCapacity(state, target, itemId);
   return Math.floor(Math.max(0, capacity - (target.inputs[itemId] ?? 0)) + EPSILON);
@@ -3644,6 +3746,9 @@ function transferBelts(
   const receive = (candidate: BeltTransferCandidate, itemId: ItemId, amount: number): number => {
     const moved = Math.max(0, Math.floor(amount));
     if (moved < 1) return 0;
+    if (isQuantumStation(candidate.target) && quantumSupplySlot(candidate.target, itemId)) {
+      return receiveQuantumSupplyMaterial(state, candidate.target, itemId, moved);
+    }
     if (candidate.target.buildingId !== "micro_black_hole_connector") {
       candidate.target.inputs[itemId] = Math.floor((candidate.target.inputs[itemId] ?? 0) + moved);
       return moved;
@@ -4471,8 +4576,11 @@ function dispatchStationScope(
           const available = Math.max(0, Math.floor((supply.outputs[itemId] ?? 0) - supplySlot.minStock -
             stationReservedOutgoing(state, supply.id, itemId, runtimeLookup) + EPSILON));
           const demandCapacity = getStationSlotCapacity(state, demand, slot);
-          const free = Math.max(0, Math.floor(demandCapacity - (demand.outputs[itemId] ?? 0) -
-            stationInFlightCargo(demand, itemId, runtimeLookup) + EPSILON));
+          const free = quantumSupplySlot(demand, itemId)
+            ? Math.max(0, Math.floor(quantumSupplyFreeCapacity(state, demand, itemId, runtimeLookup) -
+              stationInFlightCargo(demand, itemId, runtimeLookup) + EPSILON))
+            : Math.max(0, Math.floor(demandCapacity - (demand.outputs[itemId] ?? 0) -
+              stationInFlightCargo(demand, itemId, runtimeLookup) + EPSILON));
           const unitCargo = scope === "local" ? getPlanetaryCargoCapacity(state) : getInterstellarCargoCapacity(state);
           const ownerSlotIndex = owner.id === demand.id ? slotIndex : peerSlotIndex;
           const minimumCargo = getStationMinimumCargo(state, owner, ownerSlotIndex, scope);
@@ -4568,15 +4676,24 @@ function advanceStationRoutes(
         remaining.push(route);
         continue;
       }
-      demand.outputs[route.itemId] = Math.floor((demand.outputs[route.itemId] ?? 0) + route.cargo);
-      if (peer) peer.outputs[route.itemId] = Math.max(0, Math.floor((peer.outputs[route.itemId] ?? 0) - route.cargo));
+      let deliveredCargo = route.cargo;
+      if (scope === "local" && isQuantumStation(demand) && quantumSupplySlot(demand, route.itemId)) {
+        const received = receiveQuantumSupplyMaterial(state, demand, route.itemId, route.cargo);
+        deliveredCargo = received;
+        if (received < route.cargo) {
+          remaining.push({ ...route, progress: 1, cargo: route.cargo - received });
+        }
+      } else {
+        demand.outputs[route.itemId] = Math.floor((demand.outputs[route.itemId] ?? 0) + route.cargo);
+      }
+      if (peer && deliveredCargo > 0) peer.outputs[route.itemId] = Math.max(0, Math.floor((peer.outputs[route.itemId] ?? 0) - deliveredCargo));
       demand.stationTrips = Math.floor((demand.stationTrips ?? 0) + route.vehicleCount);
-      demand.stationLastTransfer = route.cargo;
-      completedCargo += route.cargo;
+      demand.stationLastTransfer = deliveredCargo;
+      completedCargo += deliveredCargo;
       if (lookup) lookup.dynamicRouteLookupDirty = true;
       if (peer) {
         peer.stationTrips = Math.floor((peer.stationTrips ?? 0) + route.vehicleCount);
-        peer.stationLastTransfer = route.cargo;
+        peer.stationLastTransfer = deliveredCargo;
       }
     }
     demand.stationRoutes = remaining;
@@ -4726,9 +4843,10 @@ function addQuantumBoundaryFlow(
 function createQuantumBoundaryFlow(state: GameState, boundarySecond: number): QuantumBoundaryFlow {
   const level = state.endgame.infiniteResearch.galactic_logistics?.level ?? 0;
   const bandwidth = getQuantumBandwidthSummary(state.entities, level);
+  const existing = state.quantumLogisticsNetwork?.runtimeFlow;
   return {
     boundarySecond,
-    uploaded: {},
+    uploaded: existing?.boundarySecond === boundarySecond ? { ...existing.uploaded } : {},
     downloaded: {},
     globalUploadPerMinute: bandwidth.globalUploadPerMinute,
     globalDownloadPerMinute: bandwidth.globalDownloadPerMinute,
@@ -4786,6 +4904,9 @@ function settleQuantumNetworkDownloads(
     globalDownloadCap: quantumBoundaryCapacity(flow.globalDownloadPerMinute, seconds),
   });
   state.quantumLogisticsNetwork = result.state;
+  // Keep the runtime flow object attached to the post-settlement network so
+  // same-step local drone deliveries can append their immediate uploads.
+  state.quantumLogisticsNetwork.runtimeFlow = flow;
   for (const request of outputs) {
     const station = stationById.get(request.stationId);
     if (!station) continue;
@@ -4805,10 +4926,17 @@ function settleQuantumNetworkUploads(
   boundarySecond: number,
   previousFlow: QuantumBoundaryFlow | null,
   seconds = QUANTUM_SETTLEMENT_SECONDS,
+  lookup?: SimulationLookupContext,
   profiler?: SimulationProfiler,
 ): void {
   if (!state.quantumLogisticsNetwork?.enabled) return;
   const flow = previousFlow ?? createQuantumBoundaryFlow(state, boundarySecond);
+  if (state.quantumLogisticsNetwork.runtimeFlow && state.quantumLogisticsNetwork.runtimeFlow !== flow) {
+    for (const [itemId, amount] of Object.entries(state.quantumLogisticsNetwork.runtimeFlow.uploaded)) {
+      addQuantumBoundaryFlow(flow.uploaded, itemId as ItemId, Number(amount));
+    }
+  }
+  state.quantumLogisticsNetwork.runtimeFlow = flow;
   // Attachment may have completed after the download phase. Refresh the
   // shared budget before accepting supply, without granting collectors any
   // separate bandwidth of their own.
@@ -4821,6 +4949,15 @@ function settleQuantumNetworkUploads(
 
   const endpoints = state.entities.filter((entity) => isQuantumStation(entity) || isQuantumCollector(entity));
   const endpointById = new Map(endpoints.map((endpoint) => [endpoint.id, endpoint]));
+  // Existing tower buffers are an overflow path only. Drain them directly
+  // before building the legacy boundary requests so newly freed inventory is
+  // never throttled by the five-second upload budget.
+  for (const endpoint of endpoints) {
+    if (!isQuantumStation(endpoint)) continue;
+    for (const slot of getStationSlots(endpoint)) {
+      if (slot.itemId && slot.remoteMode === "supply") flushQuantumSupplyBuffer(state, endpoint, slot.itemId, lookup);
+    }
+  }
   const requestByEndpointItem = new Map<string, QuantumSettlementInput>();
   for (const endpoint of endpoints) {
     if (isQuantumCollector(endpoint)) {
@@ -4898,7 +5035,7 @@ function simulateStep(
   if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
   resetStationRuntime(state);
   subsystemStartedAt = profiler ? profileNow() : 0;
-  transferLogisticsBuffers(state);
+  transferLogisticsBuffers(state, lookup);
   if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
   subsystemStartedAt = profiler ? profileNow() : 0;
   contractExperiment?.beforeInputBelts?.(state);
@@ -5088,6 +5225,7 @@ function simulateStep(
       boundary * SYSTEM_HUB_SETTLEMENT_SECONDS,
       quantumBoundaryFlow,
       QUANTUM_SETTLEMENT_SECONDS,
+      lookup,
       profiler,
     );
     if (profiler) profiler.quantumMs += profileNow() - quantumStartedAt;

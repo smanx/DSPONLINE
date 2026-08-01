@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-/** @vitest-environment-options {"url":"http://public.example.test"} */
+/** @vitest-environment-options {"url":"https://public.example.test"} */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,8 +10,12 @@ import {
   markCloudSaveSynchronized,
   resumeCloudSession,
   summarizeCloudPayload,
+  uploadCloudSave,
   type CloudSaveMetadata,
 } from "./cloud";
+import { createInitialState, placeBuilding } from "./engine";
+import { exportGame, importGame } from "./storage";
+import { computeSaveStateChecksum } from "./saveEnvelopeIntegrity";
 
 function payload(checksum: string, elapsedSeconds: number): string {
   return JSON.stringify({
@@ -108,4 +112,32 @@ describe("cloud save synchronization markers", () => {
     expect(getCloudSyncMarker("legacy_user", "main")).toMatchObject({ revision: 4, slot: "main" });
     expect(getCloudSyncMarker("legacy_user", "1")).toBeNull();
   });
+
+  it("reads once, re-saves, and uploads a legacy ordinary-building quantumTarget save", async () => {
+    let state = createInitialState();
+    state.construction.storage_mk1 = 1;
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "storage_mk1", { x: 0, y: 0 });
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 300, y: 0 });
+    const ordinary = state.entities.find((entity) => entity.buildingId === "storage_mk1")!;
+    const legacy = JSON.parse(exportGame(state));
+    legacy.state.entities.find((entity: Record<string, unknown>) => entity.id === ordinary.id).quantumTarget = false;
+    legacy.checksum = computeSaveStateChecksum(legacy.formatVersion, legacy.state);
+    const loaded = importGame(JSON.stringify(legacy));
+    expect(loaded).not.toBeNull();
+    const payload = exportGame(loaded!);
+    const saved = JSON.parse(payload);
+    expect(saved.state.entities.find((entity: Record<string, unknown>) => entity.id === ordinary.id)).not.toHaveProperty("quantumTarget");
+
+    const cloudSave = { revision: 1, updatedAt: 2, size: payload.length, checksum: "server-checksum", summary: null };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ cloudSave }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    await expect(uploadCloudSave(payload, 0)).resolves.toMatchObject({ revision: 1 });
+    expect(fetchMock).toHaveBeenCalledWith("/api/cloud-save", expect.objectContaining({ method: "PUT" }));
+    const request = fetchMock.mock.calls.at(-1)?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body)).payload).toBe(payload);
+  });
+
 });

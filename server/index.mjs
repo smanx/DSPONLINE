@@ -703,6 +703,7 @@ async function readJson(request) {
     if (size > BODY_LIMIT_BYTES) {
       const error = new Error("请求内容超过 8 MB");
       error.statusCode = 413;
+      error.code = "REQUEST_BODY_TOO_LARGE";
       throw error;
     }
     chunks.push(chunk);
@@ -713,6 +714,7 @@ async function readJson(request) {
   } catch {
     const error = new Error("JSON 格式无效");
     error.statusCode = 400;
+    error.code = "REQUEST_FORMAT_INVALID";
     throw error;
   }
 }
@@ -923,6 +925,7 @@ function validateSavePayload(payload) {
       for (const entity of state.entities) {
         const quantumEndpoint = entity?.buildingId === "interstellar_logistics_station" ||
           state.version >= 45 && entity?.buildingId === "orbital_collector";
+        if (!quantumEndpoint && entity?.quantumTarget !== undefined && entity.quantumTarget !== false) return false;
         if (!quantumEndpoint) continue;
         if (entity.quantumMode !== undefined && !["legacy", "transitioning", "quantum"].includes(entity.quantumMode)) return false;
         if (state.version >= 45 && !["legacy", "transitioning", "quantum"].includes(entity.quantumMode)) return false;
@@ -1015,7 +1018,10 @@ function validateSavePayload(payload) {
           if (!entity || typeof entity !== "object" || !validId(entity.key) || keys.has(entity.key) || !validId(entity.buildingId, 80) ||
             !Number.isSafeInteger(entity.machineCount) || entity.machineCount < 1 || entity.machineCount > 100_000_000 ||
             !Number.isFinite(entity.offset?.x) || !Number.isFinite(entity.offset?.y) ||
-            (entity.quantumTarget !== undefined && (entity.buildingId !== "interstellar_logistics_station" || typeof entity.quantumTarget !== "boolean"))) return false;
+            (entity.quantumTarget !== undefined &&
+              (entity.buildingId === "interstellar_logistics_station"
+                ? typeof entity.quantumTarget !== "boolean"
+                : entity.quantumTarget !== false))) return false;
           keys.add(entity.key);
         }
         for (const anchor of blueprint.resourceAnchors ?? []) {
@@ -1927,14 +1933,21 @@ export async function createCloudServer({
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
         if (!slot) return send(response, 400, { error: "云存档槽位无效" });
         const body = await readJson(request);
-        if (!validateSavePayload(body.payload)) {
-          const integrity = typeof body.payload === "string" ? inspectSavePayloadIntegrity(body.payload) : null;
-          const summary = typeof body.payload === "string" ? summarizeSavePayload(body.payload) : null;
-          return send(response, 400, {
-            error: integrity && !integrity.valid && integrity.state ? "云存档内部完整性校验失败，服务器已拒绝上传" : "云存档格式无效或体积过大",
-            code: integrity && !integrity.valid && integrity.state ? "SAVE_INTEGRITY_INVALID" : "SAVE_FORMAT_INVALID",
-            ...(summary ? { summary } : {}),
-          });
+         if (!validateSavePayload(body.payload)) {
+           const integrity = typeof body.payload === "string" ? inspectSavePayloadIntegrity(body.payload) : null;
+           const summary = typeof body.payload === "string" ? summarizeSavePayload(body.payload) : null;
+           const tooLarge = typeof body.payload === "string" && Buffer.byteLength(body.payload) > BODY_LIMIT_BYTES - 1024;
+           return send(response, tooLarge ? 413 : 400, {
+             error: tooLarge
+               ? `云存档体积过大，单个存档不能超过 ${Math.floor((BODY_LIMIT_BYTES - 1024) / 1024 / 1024 * 100) / 100} MB`
+               : integrity && !integrity.valid && integrity.state
+                 ? "云存档内部完整性校验失败，服务器已拒绝上传"
+                 : "云存档格式无效，服务器已拒绝上传",
+             code: tooLarge
+               ? "SAVE_SIZE_TOO_LARGE"
+               : integrity && !integrity.valid && integrity.state ? "SAVE_INTEGRITY_INVALID" : "SAVE_FORMAT_INVALID",
+             ...(summary ? { summary } : {}),
+           });
         }
         const current = currentCloudSave(store, auth.user.id, slot);
         const expectedRevision = Number.isInteger(body.expectedRevision) ? body.expectedRevision : 0;
@@ -2070,7 +2083,10 @@ export async function createCloudServer({
       runtime.errors += 1;
       dayMetric.errors += 1;
       logger.error?.("cloud request failed", error);
-      return send(response, error?.statusCode || 500, { error: error?.statusCode ? error.message : "服务暂时不可用" });
+      return send(response, error?.statusCode || 500, {
+        error: error?.statusCode ? error.message : "服务暂时不可用",
+        ...(error?.code ? { code: error.code } : {}),
+      });
     }
   });
 

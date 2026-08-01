@@ -4,6 +4,7 @@ import {
   beginQuantumAttachment,
   compareQuantumInteger,
   createEmptyQuantumLogisticsNetworkState,
+  depositIntoQuantumInventory,
   getQuantumItemCapacity,
   getQuantumLogisticsMultiplier,
   getQuantumTowerBandwidth,
@@ -16,6 +17,50 @@ import { advanceSimulation, attachAllInterstellarStationsToQuantumNetwork, creat
 import type { FactoryEntity, StationSlot } from "./types";
 
 describe("quantum logistics network", () => {
+  it("deposits immediately up to per-item capacity and returns the exact remainder", () => {
+    const base = { ...createEmptyQuantumLogisticsNetworkState(), enabled: true };
+    const full = depositIntoQuantumInventory(base, "iron_ore", 100);
+    expect(full.accepted).toBe("100");
+    expect(full.remainder).toBe("0");
+    expect(full.state.inventory.iron_ore).toBe("100");
+
+    const partial = depositIntoQuantumInventory({
+      ...base,
+      inventory: { iron_ore: "9960" },
+      itemCapacities: { iron_ore: "10000" },
+    }, "iron_ore", 100);
+    expect(partial.accepted).toBe("40");
+    expect(partial.remainder).toBe("60");
+    expect(partial.state.inventory.iron_ore).toBe("10000");
+
+    const blocked = depositIntoQuantumInventory(partial.state, "iron_ore", 1);
+    expect(blocked.accepted).toBe("0");
+    expect(blocked.remainder).toBe("1");
+    expect(blocked.state.inventory.iron_ore).toBe("10000");
+  });
+
+  it("lets a quantum supply belt bypass tower input capacity while preserving minStock", () => {
+    const state = createPlayerInitialState();
+    state.quantumLogisticsNetwork.enabled = true;
+    state.quantumLogisticsNetwork.itemCapacities.iron_ore = "1000000";
+    const station: FactoryEntity = {
+      id: "direct-supply", kind: "station", planetId: "home", position: { x: 0, y: 0 }, interactionLocked: false,
+      buildingId: "interstellar_logistics_station", stationTier: 2, quantumMode: "quantum", machineCount: 1,
+      minerCount: 0, stationSlots: [{ itemId: "iron_ore", localMode: "storage", remoteMode: "supply", minimumLoad: 0.1, minStock: 10, maxStock: 0, priority: 1, routePolicy: "direct", warperBudget: 2 }], stationRoutes: [], stationDrones: 0, stationVessels: 0,
+      inputs: {}, outputs: {}, progress: 0, utilization: 0, productionRate: 0, routingCursor: 0,
+    };
+    state.entities.push(station);
+    const source: FactoryEntity = {
+      id: "direct-source", kind: "storage", planetId: "home", position: { x: -100, y: 0 }, interactionLocked: false,
+      buildingId: "storage_mk1", storedItemId: "iron_ore", machineCount: 1, minerCount: 0, inputs: {}, outputs: { iron_ore: 100 }, progress: 0, utilization: 0, productionRate: 0, routingCursor: 0,
+    };
+    state.entities.push(source);
+    state.belts.push({ id: "direct-belt", planetId: "home", source: source.id, target: station.id, itemId: "iron_ore", lanes: 1, tier: 1, sorterTier: 1, progress: 100, priority: 1, lastFlow: 0 });
+    const advanced = advanceSimulation(state, 1);
+    expect(advanced.quantumLogisticsNetwork.inventory.iron_ore).toBe("90");
+    expect(advanced.entities.find((entity) => entity.id === station.id)?.inputs.iron_ore).toBe(10);
+    expect(advanced.entities.find((entity) => entity.id === source.id)?.outputs.iron_ore).toBe(0);
+  });
   it("normalizes hostile quantities and keeps exact decimal arithmetic", () => {
     expect(normalizeQuantumInteger("0000012")).toBe("12");
     expect(normalizeQuantumInteger("1e6")).toBe("0");

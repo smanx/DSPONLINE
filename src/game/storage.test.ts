@@ -1529,6 +1529,28 @@ describe("game storage", () => {
     });
   });
 
+  it("cleans legacy quantumTarget from ordinary buildings while retaining it for interstellar stations", () => {
+    let state = createInitialState();
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 300, y: 0 });
+    const ordinary = state.entities.find((entity) => entity.buildingId !== "interstellar_logistics_station")! as any;
+    const station = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    ordinary.quantumTarget = false;
+    station.quantumTarget = true;
+
+    const legacy = JSON.parse(JSON.stringify(state));
+    const migrated = migrateGame(legacy)!;
+    expect((migrated.entities.find((entity) => entity.id === ordinary.id) as any).quantumTarget).toBeUndefined();
+    expect(migrated.entities.find((entity) => entity.id === station.id)?.quantumTarget).toBe(true);
+
+    const saved = JSON.parse(exportGame(migrated));
+    expect(saved.state.entities.find((entity: any) => entity.id === ordinary.id)).not.toHaveProperty("quantumTarget");
+    expect(saved.state.entities.find((entity: any) => entity.id === station.id)).toHaveProperty("quantumTarget", true);
+    const reloaded = importGame(JSON.stringify(saved))!;
+    expect((reloaded.entities.find((entity) => entity.id === ordinary.id) as any).quantumTarget).toBeUndefined();
+    expect(reloaded.entities.find((entity) => entity.id === station.id)?.quantumTarget).toBe(true);
+  });
+
   it("migrates v10 power records into the current energy model", () => {
     let current = createInitialState();
     current.construction.thermal_power_plant = 1;

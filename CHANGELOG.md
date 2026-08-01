@@ -4,6 +4,13 @@ All notable player-facing changes are recorded here. Game-state migration versio
 
 ## [Unreleased]
 
+## [1.0.20] - 2026-08-02
+
+- 量子供应端在物资实际送达时直接写入共享库存；容量不足时只把精确余量保留在本地缓存或源端，不受五秒上传带宽和塔槽位缓存限制。
+- 量子直接入库覆盖传送带、本地运输机和已有本地溢出缓存，并保持 `minStock`、在途货物、五秒统计和 GameState v46 守恒。
+- 云存档兼容普通建筑遗留的 `quantumTarget: false`；普通建筑和普通蓝图在下一次保存时清理该字段，星际物流站字段继续保留。
+- 服务端把存档格式错误、内部完整性错误、存档过大和请求体过大分开报告，并补充读取、重存、云上传回归测试。
+
 ## [1.0.19] - 2026-08-01
 
 - Synchronized declarative content-pack registries with real-time, idle, and offline simulation Workers using a versioned snapshot/fingerprint boundary; stale Worker responses cannot overwrite a newer registry state.

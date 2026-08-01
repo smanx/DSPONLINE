@@ -16,7 +16,6 @@ import { GalacticActivityPanel } from "./GalacticActivityPanel";
 import { QuantityValue } from "./QuantityValue";
 import { PowerValue } from "./PowerValue";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
-import { getQuantumBandwidthSummary } from "../game/quantumLogisticsNetwork";
 import {
   calculateProductionWindowSnapshot,
   formatProductionStatistic,
@@ -581,7 +580,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
                 <header><Sparkles size={15} /><span>量子物流网络</span><strong>全宇宙共享池</strong></header>
                 <div className="galactic-summary-grid">
                   <div><span>接入量子塔</span><strong>{game.entities.filter((entity) => entity.buildingId === "interstellar_logistics_station" && entity.quantumMode === "quantum").length}</strong><small>跨星走共享池，本地运输机保留</small></div>
-                  <div><span>上传带宽</span><strong>{formatQuantityCompact(Math.floor(getQuantumBandwidthSummary(game.entities, game.endgame.infiniteResearch.galactic_logistics?.level ?? 0).globalUploadPerMinute))}<small>/min</small></strong><small>全星区量子塔堆叠共享</small></div>
+                  <div><span>即时上传</span><strong>不限</strong><small>送达时直接入池；溢出缓存按边界结算</small></div>
                   <div><span>共享库存种类</span><strong>{Object.keys(game.quantumLogisticsNetwork.inventory).length}</strong><small>输入先入池再输出</small></div>
                   <div><span>共享库存总量</span><strong>{formatQuantityCompact(Object.values(game.quantumLogisticsNetwork.inventory).reduce((sum, value) => BigInt(sum) + BigInt(value), 0n))}</strong><small>精确值 {formatQuantityExact(Object.values(game.quantumLogisticsNetwork.inventory).reduce((sum, value) => BigInt(sum) + BigInt(value), 0n))}</small></div>
                 </div>
