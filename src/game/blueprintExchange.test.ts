@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_BELT_LANES, createBlueprint, createInitialState, installMiner, placeBuilding, setLogisticsItem, setStationHubConfiguration, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
+import { MAX_BELT_LANES, createBlueprint, createInitialState, installMiner, placeBlueprint, placeBuilding, setLogisticsItem, setStationHubConfiguration, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
 import { importBlueprintExchange, parseBlueprintExchange, serializeBlueprintExchange } from "./blueprintExchange";
 
 describe("blueprint exchange", () => {
@@ -121,6 +121,29 @@ describe("blueprint exchange", () => {
     const parsed = parseBlueprintExchange(serializeBlueprintExchange(state.blueprints[0]));
     expect(parsed.valid).toBe(true);
     expect(parsed.blueprint?.entities[0]).toMatchObject({ stationTier: 2, quantumTarget: true });
+  });
+
+  it("round-trips and applies the micro black hole deploy intent without copying runtime counters", () => {
+    let state = createInitialState();
+    state.construction.micro_black_hole_connector = 2;
+    state = placeBuilding(state, "micro_black_hole_connector", { x: 120, y: 80 });
+    const source = state.entities.find((entity) => entity.buildingId === "micro_black_hole_connector")!;
+    source.blackHolePaused = false;
+    source.blackHoleActivationConfirmed = true;
+    source.blackHolePorts![0].totalDestroyed = "123";
+    state = createBlueprint(state, [source.id], "自动黑洞");
+    const raw = serializeBlueprintExchange(state.blueprints[0]);
+    const parsed = parseBlueprintExchange(raw);
+    expect(parsed.valid).toBe(true);
+    expect(parsed.blueprint?.entities[0]).toMatchObject({ operationEnabledOnDeploy: true });
+
+    state.construction.micro_black_hole_connector = 1;
+    state = { ...state, blueprints: [parsed.blueprint!] };
+    const deployed = placeBlueprint(state, parsed.blueprint!.id, { x: 600, y: 80 });
+    const placed = deployed.entities.filter((entity) => entity.buildingId === "micro_black_hole_connector").at(-1)!;
+    expect(placed.blackHolePaused).toBe(false);
+    expect(placed.blackHoleActivationConfirmed).toBe(true);
+    expect(placed.blackHolePorts?.[0].totalDestroyed).toBe("0");
   });
 
   it("round-trips v2 mining anchors and the raised belt-lane limit", () => {

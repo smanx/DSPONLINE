@@ -281,6 +281,7 @@ import { buildAlignmentSpatialIndex, findAlignmentGuides, type AlignmentSpatialI
 import { synchronizeGalacticActivity, type GalacticActivityPublicStatus } from "./game/galacticActivity";
 import { TutorialWorkspace } from "./components/TutorialWorkspace";
 import { TimeWarpIdleOverlay } from "./components/TimeWarpIdleOverlay";
+import { acknowledgeEndgameExtremeMode, readEndgameExtremeMode, writeEndgameExtremeMode } from "./game/endgamePerformance";
 import {
   beginCanvasPointerMotion,
   canvasPointerMotionFrameIsActive,
@@ -616,6 +617,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const coarsePointer = useCoarsePointer();
   const [mobileUiPreference, setMobileUiPreference] = useMobileUiPreference();
   const [productionRefreshPreference, setProductionRefreshPreference] = useProductionRefreshPreference();
+  const [endgameExtremeMode, setEndgameExtremeMode] = useState(readEndgameExtremeMode);
   const [loaded] = useState(initialLoad);
   const [game, setGame] = useState(loaded.state);
   const observedGame = useObservedBeltFlowGame(game, !game.paused);
@@ -817,7 +819,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [flowStore]);
   const lowEndMobile = useLowEndMobile();
   const nextMobileShell = mobileUiPreference === "next";
-  const productionRefreshIntervalMs = resolveProductionRefreshInterval(productionRefreshPreference, automaticRefreshState);
+  const productionRefreshIntervalMs = endgameExtremeMode
+    ? Math.max(5_000, resolveProductionRefreshInterval(productionRefreshPreference, automaticRefreshState))
+    : resolveProductionRefreshInterval(productionRefreshPreference, automaticRefreshState);
   const activeMobileCanvasMode: MobileCanvasMode = placement
     ? "place"
     : connectionDraft || clickConnectionPreview
@@ -2107,8 +2111,22 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }), [game, operationsOpen, operationsTab]);
   const activePlanetEntityCount = useMemo(() => game.entities.filter((entity) => entity.planetId === game.activePlanetId).length, [game.activePlanetId, game.entities]);
   const automaticPerformanceMode = activePlanetEntityCount >= 300 || constrainedMobile || lowFrameRateMode;
-  const performanceVisualMode = game.settings.performanceMode || automaticPerformanceMode;
+  const performanceVisualMode = endgameExtremeMode || game.settings.performanceMode || automaticPerformanceMode;
   const largeFactoryMode = performanceVisualMode && (activePlanetEntityCount >= 150 || constrainedMobile);
+
+  const toggleEndgameExtremeMode = useCallback(async (enabled: boolean) => {
+    if (enabled) {
+      const confirmed = await gameDialog.confirm("终局优化·极限模式会减少线路动画、装饰和普通读数刷新，普通读数最多延迟约 5 秒，但不会改变模拟结果、产量或存档。是否开启？", {
+        confirmLabel: "开启极限模式",
+        cancelLabel: "暂不开启",
+      });
+      if (!confirmed) return;
+      acknowledgeEndgameExtremeMode();
+    }
+    writeEndgameExtremeMode(enabled);
+    setEndgameExtremeMode(enabled);
+    setNotice(enabled ? "终局优化·极限模式已开启：模拟结果不变，视觉刷新已降级" : "终局优化·极限模式已关闭");
+  }, [gameDialog]);
 
   const updateSettings = useCallback((settings: Partial<GameSettings>) => {
     setGame((current) => ({ ...current, settings: { ...current.settings, ...settings } }));
@@ -2676,11 +2694,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, []);
 
   const manualSave = useCallback(async () => {
-    const result = await persistPrimarySave();
+    // Explicit user saves keep the existing immediate local mirror contract so
+    // the save panel can reflect the new runtime without waiting for the
+    // IndexedDB/Worker verification round trip. Automatic saves stay fully
+    // asynchronous through persistPrimarySave().
+    const immediate = saveGame(stateWithSimulationDebt(gameRef.current));
+    const result = immediate.success ? await persistPrimarySave() : immediate;
     void refreshSaveData();
     setNotice(result.message);
     playTone(result.success ? "confirm" : "alert");
-  }, [persistPrimarySave, playTone, refreshSaveData]);
+  }, [persistPrimarySave, playTone, refreshSaveData, stateWithSimulationDebt]);
 
   const downloadSave = useCallback(() => {
     void exportTextFile({
@@ -4530,6 +4553,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       data-difficulty={game.settings.difficulty}
       data-zoom-lod={viewportZoom < 0.55 ? "compact" : viewportZoom < 0.86 ? "medium" : "full"}
       data-large-factory={largeFactoryMode ? "true" : "false"}
+      data-endgame-extreme={endgameExtremeMode ? "true" : "false"}
       data-network-heatmap={game.settings.beltHeatmapEnabled ? "true" : "false"}
       data-coarse-pointer={coarsePointer ? "true" : "false"}
       data-mobile-ui={mobileUiPreference}
@@ -5717,6 +5741,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             performanceMonitor={performanceMonitor.snapshot}
             productionRefreshPreference={productionRefreshPreference}
             productionRefreshIntervalMs={productionRefreshIntervalMs}
+            endgameExtremeMode={endgameExtremeMode}
+            onEndgameExtremeModeChange={toggleEndgameExtremeMode}
             onProductionRefreshPreferenceChange={setProductionRefreshPreference}
             onStartPerformanceMonitor={performanceMonitor.start}
             onStopPerformanceMonitor={performanceMonitor.stop}

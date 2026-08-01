@@ -4,6 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
 import Database from "better-sqlite3";
 import {
   DEFAULT_METRIC_TIME_ZONE,
@@ -22,7 +23,11 @@ import {
 } from "./leaderboard-moderation.mjs";
 
 const scrypt = promisify(scryptCallback);
-const BODY_LIMIT_BYTES = 8 * 1024 * 1024;
+// The envelope remains v2, but end-game saves can exceed the historical 8 MiB
+// request boundary. Keep a finite compressed and expanded limit so increasing
+// the boundary cannot turn the endpoint into an unbounded decompression sink.
+const BODY_LIMIT_BYTES = 32 * 1024 * 1024;
+const SAVE_PAYLOAD_LIMIT_BYTES = BODY_LIMIT_BYTES - 1024;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CLOUD_HISTORY_LIMIT = 20;
 const CLOUD_SAVE_SLOTS = ["main", "1", "2", "3"];
@@ -701,7 +706,7 @@ async function readJson(request) {
   for await (const chunk of request) {
     size += chunk.length;
     if (size > BODY_LIMIT_BYTES) {
-      const error = new Error("请求内容超过 8 MB");
+      const error = new Error("请求内容超过 32 MB");
       error.statusCode = 413;
       error.code = "REQUEST_BODY_TOO_LARGE";
       throw error;
@@ -709,8 +714,33 @@ async function readJson(request) {
     chunks.push(chunk);
   }
   if (chunks.length === 0) return {};
+  let raw = Buffer.concat(chunks);
+  const encoding = String(request.headers["content-encoding"] ?? "").toLowerCase();
+  if (encoding && encoding !== "identity") {
+    if (encoding !== "gzip") {
+      const error = new Error("请求压缩格式不受支持");
+      error.statusCode = 415;
+      error.code = "REQUEST_ENCODING_UNSUPPORTED";
+      throw error;
+    }
+    try {
+      raw = gunzipSync(raw, { maxOutputLength: BODY_LIMIT_BYTES });
+    } catch (cause) {
+      const tooLarge = cause && typeof cause === "object" && "code" in cause && cause.code === "ERR_BUFFER_TOO_LARGE";
+      const error = new Error(tooLarge ? "解压后的请求内容超过 32 MB" : "请求压缩内容无效");
+      error.statusCode = tooLarge ? 413 : 400;
+      error.code = tooLarge ? "REQUEST_EXPANDED_BODY_TOO_LARGE" : "REQUEST_ENCODING_INVALID";
+      throw error;
+    }
+  }
+  if (raw.byteLength > BODY_LIMIT_BYTES) {
+    const error = new Error("解压后的请求内容超过 32 MB");
+    error.statusCode = 413;
+    error.code = "REQUEST_EXPANDED_BODY_TOO_LARGE";
+    throw error;
+  }
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return JSON.parse(raw.toString("utf8"));
   } catch {
     const error = new Error("JSON 格式无效");
     error.statusCode = 400;
@@ -823,7 +853,7 @@ function cloudSaveMetadata(save, slot = "main") {
 }
 
 function validateSavePayload(payload) {
-  if (typeof payload !== "string" || payload.length < 10 || Buffer.byteLength(payload) > BODY_LIMIT_BYTES - 1024) return false;
+  if (typeof payload !== "string" || payload.length < 10 || Buffer.byteLength(payload) > SAVE_PAYLOAD_LIMIT_BYTES) return false;
   try {
     const integrity = inspectSavePayloadIntegrity(payload);
     if (!integrity.valid) return false;
@@ -1936,10 +1966,10 @@ export async function createCloudServer({
          if (!validateSavePayload(body.payload)) {
            const integrity = typeof body.payload === "string" ? inspectSavePayloadIntegrity(body.payload) : null;
            const summary = typeof body.payload === "string" ? summarizeSavePayload(body.payload) : null;
-           const tooLarge = typeof body.payload === "string" && Buffer.byteLength(body.payload) > BODY_LIMIT_BYTES - 1024;
+           const tooLarge = typeof body.payload === "string" && Buffer.byteLength(body.payload) > SAVE_PAYLOAD_LIMIT_BYTES;
            return send(response, tooLarge ? 413 : 400, {
              error: tooLarge
-               ? `云存档体积过大，单个存档不能超过 ${Math.floor((BODY_LIMIT_BYTES - 1024) / 1024 / 1024 * 100) / 100} MB`
+               ? `云存档体积过大，单个存档不能超过 ${Math.floor(SAVE_PAYLOAD_LIMIT_BYTES / 1024 / 1024 * 100) / 100} MB`
                : integrity && !integrity.valid && integrity.state
                  ? "云存档内部完整性校验失败，服务器已拒绝上传"
                  : "云存档格式无效，服务器已拒绝上传",

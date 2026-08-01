@@ -1,4 +1,4 @@
-import type { BeltConnection, GameState } from "./types";
+import type { BeltConnection, GameState, PlanetId } from "./types";
 
 export const BELT_FLOW_WINDOW_SECONDS = 5;
 
@@ -34,11 +34,12 @@ export class BeltFlowSampler {
   private readonly histories = new Map<string, BeltFlowPoint[]>();
   private readonly latest = new Map<string, BeltFlowObservation>();
 
-  sample(state: GameState): ReadonlyMap<string, BeltFlowObservation> {
+  sample(state: GameState, options: { planetId?: PlanetId } = {}): ReadonlyMap<string, BeltFlowObservation> {
     const elapsedSeconds = Math.max(0, state.elapsedSeconds);
     const activeIds = new Set<string>();
 
     for (const belt of state.belts) {
+      if (options.planetId && belt.planetId !== options.planetId) continue;
       activeIds.add(belt.id);
       const totalTransferred = normalizedTotal(belt);
       let history = this.histories.get(belt.id);
@@ -89,12 +90,13 @@ export class BeltFlowSampler {
 export function applyBeltFlowObservations(
   state: GameState,
   observations: ReadonlyMap<string, BeltFlowObservation>,
+  planetId?: PlanetId,
 ): GameState {
   if (state.belts.length === 0) return state;
   return {
     ...state,
     belts: state.belts.map((belt) => {
-      const observation = observations.get(belt.id);
+      const observation = planetId && belt.planetId !== planetId ? undefined : observations.get(belt.id);
       if (!observation) return belt;
       return {
         ...belt,

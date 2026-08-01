@@ -10712,6 +10712,65 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   color: var(--coral);
 }
 
+.blueprint-card--compact {
+  min-height: 204px;
+  height: 214px;
+}
+
+.blueprint-card--compact > .blueprint-resource-note,
+.blueprint-card--compact > .blueprint-parameters,
+.blueprint-card--compact > .blueprint-external-ports,
+.blueprint-card--compact > .blueprint-requirements,
+.blueprint-card--compact > .blueprint-fleet-targets {
+  display: none;
+}
+
+.blueprint-card--compact > .blueprint-transform-controls--compact {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 4px 8px;
+}
+
+.blueprint-transform-controls--compact > span {
+  display: none;
+}
+
+.blueprint-transform-controls--compact .segmented-control {
+  min-width: 0;
+}
+
+.blueprint-transform-controls--compact .segmented-control button {
+  height: 26px;
+  padding: 0 3px;
+  font-size: 7px;
+}
+
+.blueprint-transform-controls--compact .blueprint-mirror {
+  height: 26px;
+  padding: 0 5px;
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.blueprint-card--compact > .blueprint-composition {
+  min-height: 48px;
+  max-height: 66px;
+  overflow: hidden;
+}
+
+.blueprint-card--compact > footer {
+  min-height: 44px;
+}
+
+.blueprint-composition-more,
+.blueprint-danger-status {
+  border-color: #8d5b45 !important;
+  color: var(--coral) !important;
+}
+
 .construction-queue-panel {
   min-width: 0;
   max-height: 176px;
@@ -20022,6 +20081,10 @@ input:focus-visible,
 /* Blueprint exchange stays within the library rather than opening a separate full-screen flow. */
 .blueprint-header { grid-template-columns: minmax(220px, 1fr) auto auto; }
 .blueprint-header-actions { display: flex; align-items: center; gap: 5px; }
+.blueprint-view-mode { display: inline-flex; min-height: 32px; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: var(--surface-raised); }
+.blueprint-view-mode button { min-width: 40px; padding: 0 7px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; font-size: 8px; }
+.blueprint-view-mode button:last-child { border-right: 0; }
+.blueprint-view-mode button.active { background: var(--theme-accent-soft); color: var(--cyan); }
 .blueprint-header-actions > button { display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-raised); color: var(--text-soft); cursor: pointer; }
 .blueprint-header-actions > button:hover { border-color: #55947f; color: var(--green); }
 .blueprint-import-file { display: none; }

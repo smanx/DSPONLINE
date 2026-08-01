@@ -1258,6 +1258,8 @@ export interface BlueprintEntityTemplate {
   stationOperationMode?: StationOperationMode;
   /** Request quantum attachment after the placed station satisfies its prerequisites. */
   quantumTarget?: boolean;
+  /** Player intent for micro black hole connectors; runtime counters are never copied. */
+  operationEnabledOnDeploy?: boolean;
   elevatorOutputItems?: Array<ItemId | null>;
   stationMinimumLoad?: StationMinimumLoad;
   stationWarpEnabled?: boolean;

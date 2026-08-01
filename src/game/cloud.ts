@@ -1,6 +1,7 @@
 import type { LeaderboardCategoryId, LeaderboardMetrics } from "./leaderboard";
 import { apiFetch } from "./apiTransport";
 import { inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
+import { getDesktopBridge } from "../desktop";
 
 export const CLOUD_TOKEN_STORAGE_KEY = "dsp-idle-network.cloud-token.v1";
 export const CLOUD_SYNC_STORAGE_KEY = "dsp-idle-network.cloud-sync.v1";
@@ -465,8 +466,42 @@ export async function uploadCloudSave(payload: string, expectedRevision: number,
       computedChecksum: integrity.computedChecksum,
     });
   }
-  const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save${cloudSaveQuery(slot)}`, { method: "PUT", body: JSON.stringify({ payload, expectedRevision }) }, true);
+  const rawBody = JSON.stringify({ payload, expectedRevision });
+  const compressed = await compressCloudRequestBody(rawBody);
+  const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save${cloudSaveQuery(slot)}`, {
+    method: "PUT",
+    body: compressed?.body ?? rawBody,
+    ...(compressed ? { headers: compressed.headers } : {}),
+  }, true);
   return { ...result.cloudSave, slot };
+}
+
+async function compressCloudRequestBody(rawBody: string): Promise<{ body: Blob; headers: Record<string, string> } | null> {
+  // The Electron bridge accepts JSON strings only. Browser fetch can send the
+  // gzip stream directly, preserving compatibility with existing desktop
+  // clients while reducing large end-game uploads substantially.
+  if (getDesktopBridge() || typeof CompressionStream === "undefined" || typeof TextEncoder === "undefined") return null;
+  const encoder = new TextEncoder();
+  const rawBytes = encoder.encode(rawBody);
+  if (rawBytes.byteLength < 256 * 1024) return null;
+  try {
+    const compressor = new CompressionStream("gzip");
+    const writer = compressor.writable.getWriter();
+    await writer.write(rawBytes);
+    await writer.close();
+    const compressed = await new Response(compressor.readable).arrayBuffer();
+    if (compressed.byteLength >= rawBytes.byteLength) return null;
+    return {
+      body: new Blob([compressed], { type: "application/json" }),
+      headers: {
+        "content-encoding": "gzip",
+        "x-dsp-save-original-bytes": String(rawBytes.byteLength),
+        "x-dsp-save-compressed-bytes": String(compressed.byteLength),
+      },
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function downloadCloudSave(revision?: number, slot: CloudSaveSlot = "main"): Promise<CloudSave | null> {

@@ -160,6 +160,10 @@ function parseEntity(value: unknown, index: number, issues: string[]): Blueprint
     return null;
   }
   const stationSlots = parseStationSlots(value.stationSlots, index, issues);
+  if (value.operationEnabledOnDeploy !== undefined && value.buildingId !== "micro_black_hole_connector") {
+    issues.push(`设备 ${index + 1} 的 operationEnabledOnDeploy 只允许用于微型黑洞连接装置`);
+    return null;
+  }
   const stationTier = value.buildingId === "interstellar_logistics_station" && (value.stationTier === 1 || value.stationTier === 2)
     ? value.stationTier
     : undefined;
@@ -183,6 +187,7 @@ function parseEntity(value: unknown, index: number, issues: string[]): Blueprint
     ...(stationTier ? { stationTier } : {}),
     ...(stationOperationMode ? { stationOperationMode } : {}),
     ...(value.buildingId === "interstellar_logistics_station" && typeof value.quantumTarget === "boolean" ? { quantumTarget: value.quantumTarget } : {}),
+    ...(value.buildingId === "micro_black_hole_connector" && typeof value.operationEnabledOnDeploy === "boolean" ? { operationEnabledOnDeploy: value.operationEnabledOnDeploy } : {}),
     ...(elevatorOutputItems ? { elevatorOutputItems } : {}),
     ...(value.distributionMode === "balanced" || value.distributionMode === "priority" ? { distributionMode: value.distributionMode } : {}),
     ...(typeof value.fuelItemId === "string" && value.fuelItemId in ITEMS ? { fuelItemId: value.fuelItemId as ItemId } : {}),

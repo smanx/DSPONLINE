@@ -1,7 +1,7 @@
 {
   "name": "dsp-idle-network",
   "private": true,
-  "version": "1.0.20",
+  "version": "1.0.21",
   "releaseChannel": "stable",
   "updateBaseUrl": "",
   "cloudApiBaseUrl": "",
@@ -32,6 +32,7 @@
     "benchmark:refresh": "node scripts/measure-refresh-profiles.mjs",
     "benchmark:v106-belts": "cross-env DSP_RUN_V106_BELT_BENCHMARK=1 vitest run src/game/v106BeltBenchmark.test.ts --reporter=verbose",
     "benchmark:multicore": "node --expose-gc scripts/benchmark-multicore-simulation.mjs",
+    "benchmark:canvas": "node scripts/benchmark-canvas-batch.mjs",
     "server:dev": "node server/index.mjs",
     "typecheck": "tsc -b --pretty false",
     "release:manifest": "node deploy/create-release-manifest.mjs",

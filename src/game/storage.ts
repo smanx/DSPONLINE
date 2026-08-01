@@ -293,6 +293,66 @@ function serializeEnvelope(state: GameState, savedAt = Date.now(), kind: SaveEnv
   return raw;
 }
 
+export interface BackgroundSaveResult {
+  raw: string;
+  durationMs: number;
+  usedWorker: boolean;
+}
+
+let backgroundSaveRequestId = 0;
+
+/**
+ * Prepare the persistent projection once on the main thread, then let a
+ * short-lived Worker perform the large checksum/stringify step. The old
+ * synchronous serializer remains the fallback for browsers without Worker.
+ */
+export function serializeEnvelopeInWorker(state: GameState, savedAt = Date.now(), kind: SaveEnvelope["kind"] = "primary", reason?: string): Promise<BackgroundSaveResult> {
+  if (typeof Worker === "undefined") {
+    const startedAt = monotonicNow();
+    return Promise.resolve({ raw: serializeEnvelope(state, savedAt, kind, reason), durationMs: Math.max(0, monotonicNow() - startedAt), usedWorker: false });
+  }
+  const persistent = prepareSaveStateForBackground(state);
+  const id = ++backgroundSaveRequestId;
+  return new Promise((resolve) => {
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL("./save.worker.ts", import.meta.url), { type: "module", name: "save-serialization" });
+    } catch {
+      const startedAt = monotonicNow();
+      resolve({ raw: serializeEnvelope(state, savedAt, kind, reason), durationMs: Math.max(0, monotonicNow() - startedAt), usedWorker: false });
+      return;
+    }
+    let settled = false;
+    const finish = (result: BackgroundSaveResult) => {
+      if (settled) return;
+      settled = true;
+      worker.terminate();
+      resolve(result);
+    };
+    const fallback = () => {
+      const startedAt = monotonicNow();
+      finish({ raw: serializeEnvelope(state, savedAt, kind, reason), durationMs: Math.max(0, monotonicNow() - startedAt), usedWorker: false });
+    };
+    worker.onerror = fallback;
+    worker.onmessage = (event: MessageEvent<{ id: number; raw?: string; durationMs?: number; error?: string }>) => {
+      if (event.data.id !== id || !event.data.raw || event.data.error) {
+        fallback();
+        return;
+      }
+      if (inspectSaveEnvelopeChecksum(event.data.raw).status !== "valid") {
+        fallback();
+        return;
+      }
+      finish({ raw: event.data.raw, durationMs: Math.max(0, event.data.durationMs ?? 0), usedWorker: true });
+    };
+    try {
+      worker.postMessage({ id, formatVersion: SAVE_FORMAT_VERSION, savedAt, kind, ...(reason ? { reason } : {}), state: persistent });
+    } catch {
+      fallback();
+    }
+  });
+}
+
 function summaryForState(state: GameState): Omit<SaveSlotSummary, "slotId" | "integrity" | "valid" | "issues"> {
   return {
     savedAt: 0,
@@ -1291,6 +1351,9 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
             ? "elevator"
             : entity.buildingId === "interstellar_logistics_station" ? "legacy" : undefined,
           ...(entity.buildingId === "interstellar_logistics_station" ? { quantumTarget: entity.quantumTarget === true } : {}),
+          ...(entity.buildingId === "micro_black_hole_connector" && typeof entity.operationEnabledOnDeploy === "boolean"
+            ? { operationEnabledOnDeploy: entity.operationEnabledOnDeploy }
+            : {}),
           elevatorOutputItems: entity.buildingId === "interstellar_logistics_station" && saved.version >= 43 && Array.isArray(entity.elevatorOutputItems)
             ? Array.from({ length: 5 }, (_, index) => {
               const itemId = entity.elevatorOutputItems[index];
@@ -1953,9 +2016,14 @@ function persistentState(state: GameState): GameState {
   });
   const sanitizeBlueprint = (blueprint: BlueprintDefinition): BlueprintDefinition => ({
     ...blueprint,
-    entities: blueprint.entities.map((entity) => entity.buildingId === "interstellar_logistics_station"
-      ? entity
-      : (({ quantumTarget: _legacyQuantumTarget, ...withoutLegacyQuantumTarget }) => withoutLegacyQuantumTarget)(entity)),
+    entities: blueprint.entities.map((entity) => {
+      const { quantumTarget: _legacyQuantumTarget, operationEnabledOnDeploy: _legacyOperation, ...withoutLegacyFields } = entity;
+      if (entity.buildingId === "interstellar_logistics_station") return { ...withoutLegacyFields, quantumTarget: entity.quantumTarget === true };
+      if (entity.buildingId === "micro_black_hole_connector") return typeof entity.operationEnabledOnDeploy === "boolean"
+        ? { ...withoutLegacyFields, operationEnabledOnDeploy: entity.operationEnabledOnDeploy }
+        : withoutLegacyFields;
+      return withoutLegacyFields;
+    }),
   });
   return {
     ...state,
@@ -1969,6 +2037,13 @@ function persistentState(state: GameState): GameState {
     planetTrays: { ...state.planetTrays, [state.activePlanetId]: { ...state.tray } },
     quantumLogisticsNetwork,
   };
+}
+
+/** Detach runtime-only fields before handing a snapshot to the save Worker. */
+export function prepareSaveStateForBackground(state: GameState): GameState {
+  const prepared = JSON.parse(JSON.stringify(persistentState(state))) as GameState;
+  prepared.achievements.unlockedIds = prepared.achievements.unlockedIds.filter(isAchievementId);
+  return prepared;
 }
 
 function buildOfflineReport(before: GameState, after: GameState, seconds: number): OfflineReport {
@@ -2441,7 +2516,7 @@ async function saveGameVerifiedOnce(state: GameState): Promise<SaveGameResult> {
   const savedAt = Date.now();
   let raw: string;
   try {
-    raw = serializeEnvelope(state, savedAt);
+    raw = (await serializeEnvelopeInWorker(state, savedAt)).raw;
   } catch {
     return failedSave("unavailable", "无法生成本地主存档，请立即导出当前进度");
   }

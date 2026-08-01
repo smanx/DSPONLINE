@@ -5896,6 +5896,9 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
       quantumTarget: entity.buildingId === "interstellar_logistics_station"
         ? entity.quantumMode === "quantum" || entity.quantumTransition?.targetMode === "quantum" || entity.quantumTarget === true
         : undefined,
+      operationEnabledOnDeploy: entity.buildingId === "micro_black_hole_connector"
+        ? entity.blackHolePaused === false && entity.blackHoleActivationConfirmed === true
+        : undefined,
       elevatorOutputItems: entity.buildingId === "interstellar_logistics_station"
         ? Array.from({ length: 5 }, (_, index) => entity.elevatorOutputItems?.[index] ?? null)
         : undefined,
@@ -6373,8 +6376,8 @@ export function placeBlueprint(
       proliferatorMode: template.sprayCoaterInstalled ? template.proliferatorMode ?? "normal" : undefined,
       proliferatorPoints: 0,
       proliferatorBonusProgress: {},
-      blackHolePaused: template.buildingId === "micro_black_hole_connector" ? true : undefined,
-      blackHoleActivationConfirmed: template.buildingId === "micro_black_hole_connector" ? false : undefined,
+      blackHolePaused: template.buildingId === "micro_black_hole_connector" ? template.operationEnabledOnDeploy !== true : undefined,
+      blackHoleActivationConfirmed: template.buildingId === "micro_black_hole_connector" ? template.operationEnabledOnDeploy === true : undefined,
       blackHolePorts: template.buildingId === "micro_black_hole_connector" ? ([0, 1, 2] as const).map((index) => ({ index, totalDestroyed: "0" })) : undefined,
       machineCount: template.buildingId === "micro_black_hole_connector" || template.buildingId === "time_warp_device" ? 1 : template.machineCount,
       minerCount: 0,

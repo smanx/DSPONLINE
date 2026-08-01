@@ -237,6 +237,15 @@ const PENDING_BLUEPRINT_GEOMETRY_CELL = 640;
 const PENDING_BLUEPRINT_NODE_RENDER_LIMIT = 900;
 const PENDING_BLUEPRINT_LINE_RENDER_LIMIT = 1_400;
 const pendingBlueprintGeometryCache = new Map<string, PendingBlueprintGeometry>();
+const BLUEPRINT_VIEW_MODE_KEY = "dsp-idle-network.blueprint-view-mode.v1";
+
+function readBlueprintViewMode(): "compact" | "detailed" {
+  try {
+    return window.localStorage.getItem(BLUEPRINT_VIEW_MODE_KEY) === "detailed" ? "detailed" : "compact";
+  } catch {
+    return "compact";
+  }
+}
 
 function pendingBlueprintBucketKey(x: number, y: number): string {
   return `${Math.floor(x / PENDING_BLUEPRINT_GEOMETRY_CELL)}:${Math.floor(y / PENDING_BLUEPRINT_GEOMETRY_CELL)}`;
@@ -439,6 +448,22 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
   const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"compact" | "detailed">(readBlueprintViewMode);
+  const setBlueprintViewMode = (mode: "compact" | "detailed") => {
+    setViewMode(mode);
+    try { window.localStorage.setItem(BLUEPRINT_VIEW_MODE_KEY, mode); } catch { /* device preference is best effort */ }
+  };
+  const requestDeploy = async (blueprint: BlueprintDefinition) => {
+    const autoEnabled = blueprint.entities.some((entity) => entity.buildingId === "micro_black_hole_connector" && entity.operationEnabledOnDeploy === true);
+    if (autoEnabled) {
+      const confirmed = await gameDialog.confirm("此蓝图包含部署后自动启用的微型黑洞连接装置。输入物资会被永久销毁，是否继续？", {
+        confirmLabel: "确认并部署",
+        cancelLabel: "取消",
+      });
+      if (!confirmed) return;
+    }
+    onDeploy(blueprint.id);
+  };
   const importRaw = (raw: string) => {
     const result = onImport(raw);
     setImportMessage(result.message);
@@ -459,7 +484,13 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
       <header className="blueprint-header">
         <div className="blueprint-title"><i><Layers3 size={20} /></i><div><span>生产网络模板</span><strong>{activeTab === "library" ? "蓝图库" : "待建与补足"}</strong></div></div>
         <div className="blueprint-headline"><span>模板 <strong>{game.blueprints.length}</strong></span><span>施工队列 <strong>{game.constructionQueue.length}</strong></span><span>部署行星 <strong>{getPlanet(game.activePlanetId).name}</strong></span></div>
-        <div className="blueprint-header-actions">{activeTab === "library" ? <button type="button" onClick={() => { setImportOpen((current) => !current); setImportMessage(null); }} title="导入蓝图" aria-label="导入蓝图"><Upload size={15} /></button> : null}<button className="blueprint-close" type="button" onClick={onClose} title="关闭蓝图工作区" aria-label="关闭蓝图工作区"><X size={18} /></button></div>
+        <div className="blueprint-header-actions">{activeTab === "library" ? <>
+          <div className="blueprint-view-mode" role="group" aria-label="蓝图卡片显示模式">
+            <button className={viewMode === "compact" ? "active" : ""} type="button" aria-pressed={viewMode === "compact"} onClick={() => setBlueprintViewMode("compact")} title="只显示部署所需摘要">精简</button>
+            <button className={viewMode === "detailed" ? "active" : ""} type="button" aria-pressed={viewMode === "detailed"} onClick={() => setBlueprintViewMode("detailed")} title="显示蓝图完整参数">详细</button>
+          </div>
+          <button type="button" onClick={() => { setImportOpen((current) => !current); setImportMessage(null); }} title="导入蓝图" aria-label="导入蓝图"><Upload size={15} /></button>
+        </> : null}<button className="blueprint-close" type="button" onClick={onClose} title="关闭蓝图工作区" aria-label="关闭蓝图工作区"><X size={18} /></button></div>
       </header>
       <nav className="blueprint-tabs" aria-label="蓝图视图">
         <button className={activeTab === "library" ? "active" : ""} type="button" onClick={() => setActiveTab("library")}><Layers3 size={14} />蓝图库</button>
@@ -484,18 +515,20 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
           const recipeTemplates = blueprint.entities.filter((entity) => entity.recipeId);
           const sourceRecipeIds = [...new Set(recipeTemplates.flatMap((entity) => entity.recipeId ? [entity.recipeId] : []))];
           return (
-            <article className="blueprint-card" key={blueprint.id}>
+            <article className={`blueprint-card${viewMode === "compact" && !detailBlueprintId ? " blueprint-card--compact" : ""}`} key={blueprint.id}>
               <header>
                 <i><Layers3 size={18} /></i>
                 <label><span>蓝图名称</span><input defaultValue={blueprint.name} aria-label={`${blueprint.name}名称`} onBlur={(event) => onRename(blueprint.id, event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
                 <em>{blueprint.entities.length} 设备 · {blueprint.resourceAnchors?.length ?? 0} 资源锚点 · {blueprint.belts.length} 线路 · {blueprint.externalPorts?.length ?? 0} 外部端口</em>
               </header>
               <div className="blueprint-composition">
-                {blueprintBuildingSummary(blueprint).map((label) => <span key={label}>{label}</span>)}
+                {blueprintBuildingSummary(blueprint).slice(0, viewMode === "compact" && !detailBlueprintId ? 3 : undefined).map((label) => <span key={label}>{label}</span>)}
+                {viewMode === "compact" && blueprintBuildingSummary(blueprint).length > 3 ? <span className="blueprint-composition-more">+{blueprintBuildingSummary(blueprint).length - 3}</span> : null}
+                {blueprint.entities.some((entity) => entity.buildingId === "micro_black_hole_connector" && entity.operationEnabledOnDeploy === true) ? <span className="blueprint-danger-status">部署后自动启用黑洞</span> : null}
               </div>
               {(blueprint.resourceAnchors?.length ?? 0) > 0 ? <div className="blueprint-resource-note"><strong>矿脉保持唯一</strong><span>部署时只匹配附近同类型资源点，并补齐采集设备；不会复制、移动或补充矿脉储量。</span></div> : null}
               {mobile && !detailBlueprintId ? <button className="mobile-blueprint-open" type="button" onClick={() => onMobileOpenDetail?.(`blueprint:${blueprint.id}`)}>查看与部署<ChevronRight size={18} /></button> : null}
-              <div className="blueprint-transform-controls">
+              <div className={`blueprint-transform-controls${viewMode === "compact" && !detailBlueprintId ? " blueprint-transform-controls--compact" : ""}`}>
                 <span>部署方向</span>
                 <div className="segmented-control">
                   {([0, 90, 180, 270] as BlueprintRotation[]).map((rotation) => <button className={(blueprint.rotation ?? 0) === rotation ? "active" : ""} type="button" key={rotation} onClick={() => onTransform(blueprint.id, rotation, blueprint.mirror ?? "none")}><RotateCw size={12} />{rotation}°</button>)}
@@ -527,7 +560,7 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
               </div> : null}
               <footer>
                 <button className="blueprint-export" type="button" onClick={() => onExport(blueprint.id)} title={`导出${blueprint.name}`}><Download size={14} />导出</button>
-                <button type="button" disabled={!compatible} onClick={() => onDeploy(blueprint.id)} title={!compatible ? "当前行星不兼容" : deployable ? `在${getPlanet(game.activePlanetId).name}部署${blueprint.name}` : "点击画布创建缺料施工订单"}>{deployable ? <Copy size={14} /> : <Clock3 size={14} />}{deployable ? "部署" : "排队部署"}</button>
+                <button type="button" disabled={!compatible} onClick={() => void requestDeploy(blueprint)} title={!compatible ? "当前行星不兼容" : deployable ? `在${getPlanet(game.activePlanetId).name}部署${blueprint.name}` : "点击画布创建缺料施工订单"}>{deployable ? <Copy size={14} /> : <Clock3 size={14} />}{deployable ? "部署" : "排队部署"}</button>
                 <button className="danger" type="button" onClick={() => onRemove(blueprint.id)} title={`删除${blueprint.name}`} aria-label={`删除${blueprint.name}`}><Trash2 size={14} /></button>
               </footer>
             </article>

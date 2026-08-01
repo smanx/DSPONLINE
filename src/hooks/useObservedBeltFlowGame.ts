@@ -10,6 +10,7 @@ export function useObservedBeltFlowGame(game: GameState, sampleEnabled = true): 
     // rebuilding every belt observation until simulation or editing publishes
     // a new source state.
     if (!sampleEnabled) return game;
-    return applyBeltFlowObservations(game, samplerRef.current!.sample(game));
-  }, [game, sampleEnabled]);
+    const observations = samplerRef.current!.sample(game, { planetId: game.activePlanetId });
+    return applyBeltFlowObservations(game, observations, game.activePlanetId);
+  }, [game, game.activePlanetId, sampleEnabled]);
 }

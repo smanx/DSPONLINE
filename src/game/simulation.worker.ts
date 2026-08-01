@@ -3,6 +3,7 @@
 import { applyContentPackRuntimeSnapshot, type ContentPackRuntimeSnapshot } from "./contentPacks";
 import { advancePersistentSimulationRuntime, createPersistentSimulationRuntime, createSimulationProfiler, replacePersistentSimulationRuntimeState, type PersistentSimulationRuntime, type SimulationProfiler } from "./engine";
 import type { GameState } from "./types";
+import { createSimulationProjection, type SimulationProjection } from "./simulationProjection";
 
 export interface SimulationWorkerRequest {
   id: number;
@@ -26,6 +27,8 @@ export interface SimulationWorkerResponse {
   registryFingerprint?: string;
   needsRegistry?: boolean;
   registryError?: string;
+  /** Optional P4 projection; `state` remains the compatibility oracle. */
+  projection?: SimulationProjection;
 }
 
 let runtime: PersistentSimulationRuntime | null = null;
@@ -73,6 +76,7 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
     return;
   }
   const startedAt = profile ? performance.now() : 0;
+  const previousState = runtime.state;
   const result = advancePersistentSimulationRuntime(runtime, simulationSeconds, wallSeconds, profiler);
   if (profiler && result.cacheRebuilt) profiler.persistentRuntimeRebuilds += 1;
   const response: SimulationWorkerResponse = {
@@ -83,6 +87,7 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
     reusedState,
     cacheRebuilt: result.cacheRebuilt,
     registryFingerprint: activeRegistryFingerprint ?? undefined,
+    ...(result.changed ? { projection: createSimulationProjection(previousState, result.state) } : {}),
   };
   self.postMessage(response);
 };

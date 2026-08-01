@@ -3,6 +3,7 @@ import { scryptSync } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import { after, before, test } from "node:test";
 import Database from "better-sqlite3";
 import { cleanupExpiredAuthRecords, createCloudServer, createRateLimiter } from "./index.mjs";
@@ -547,7 +548,7 @@ test("deduplicates anonymous players and reports total, daily and online counts"
 
   const oversized = await request("/api/presence", {
     method: "POST",
-    body: JSON.stringify({ playerId: firstId, padding: "x".repeat(8 * 1024 * 1024) }),
+    body: JSON.stringify({ playerId: firstId, padding: "x".repeat(32 * 1024 * 1024) }),
   });
   assert.equal(oversized.response.status, 413);
   for (let index = 0; index < 5; index += 1) {
@@ -806,11 +807,63 @@ test("reports cloud save format and size failures separately", async () => {
   const malformed = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: "not-json", expectedRevision: 0 }) });
   assert.equal(malformed.response.status, 400);
   assert.equal(malformed.body.code, "SAVE_FORMAT_INVALID");
-  const oversized = "x".repeat(8 * 1024 * 1024 - 512);
+  const oversized = "x".repeat(32 * 1024 * 1024 - 512);
   const tooLarge = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: oversized, expectedRevision: 0 }) });
   assert.equal(tooLarge.response.status, 413);
   assert.equal(tooLarge.body.code, "SAVE_SIZE_TOO_LARGE");
   assert.match(tooLarge.body.error, /体积过大/);
+});
+
+test("accepts gzip cloud saves and rejects invalid or expanded gzip bodies", async () => {
+  const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-cloud-gzip-"));
+  let isolatedServer;
+  try {
+    isolatedServer = await createCloudServer({ databaseFile: path.join(isolatedDirectory, "cloud.sqlite"), registrationLimit: 10, mailer: null, logger: { error() {} } });
+    await new Promise((resolve) => isolatedServer.listen(0, "127.0.0.1", resolve));
+    const isolatedBaseUrl = `http://127.0.0.1:${isolatedServer.address().port}`;
+    const registeredResponse = await fetch(`${isolatedBaseUrl}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "gzip_pilot", password: "strong-pass-123", displayName: "压缩上传测试" }),
+    });
+    const registered = await registeredResponse.json();
+    const isolatedRequest = async (route, options = {}) => {
+      const response = await fetch(`${isolatedBaseUrl}${route}`, { ...options, headers: { "content-type": "application/json", ...(options.headers ?? {}) } });
+      return { response, body: await response.json() };
+    };
+  const base = JSON.parse(cloudPayload);
+  const largeState = { ...base.state, padding: "repeated-cloud-save-data-".repeat(20_000) };
+  const largePayload = createSavePayload(largeState);
+  const compressedBody = gzipSync(Buffer.from(JSON.stringify({ payload: largePayload, expectedRevision: 0 })));
+  const uploaded = await isolatedRequest("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.token}`, "content-encoding": "gzip", "content-type": "application/json" },
+    body: compressedBody,
+  });
+  assert.equal(uploaded.response.status, 200);
+  assert.equal(uploaded.body.cloudSave.revision, 1);
+
+  const invalidEncoding = await isolatedRequest("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.token}`, "content-encoding": "gzip", "content-type": "application/json" },
+    body: Buffer.from("not-gzip"),
+  });
+  assert.equal(invalidEncoding.response.status, 400);
+  assert.equal(invalidEncoding.body.code, "REQUEST_ENCODING_INVALID");
+
+  const expandedState = { ...base.state, padding: "x".repeat(32 * 1024 * 1024 + 1) };
+  const expandedBody = gzipSync(Buffer.from(JSON.stringify({ payload: createSavePayload(expandedState), expectedRevision: 1 })));
+  const expanded = await isolatedRequest("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.token}`, "content-encoding": "gzip", "content-type": "application/json" },
+    body: expandedBody,
+  });
+  assert.equal(expanded.response.status, 413);
+  assert.equal(expanded.body.code, "REQUEST_EXPANDED_BODY_TOO_LARGE");
+  } finally {
+    if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
+    await rm(isolatedDirectory, { recursive: true, force: true });
+  }
 });
 
 test("stores revisioned cloud saves and detects conflicts", async () => {

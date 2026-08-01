@@ -19,14 +19,19 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
   if (event.request.mode === "navigate") {
     event.respondWith(fetch(event.request).then((response) => {
-      if (response.ok) void caches.open(CACHE_NAME).then((cache) => cache.put("/index.html", response.clone()));
+      // Clone synchronously while the response body is still untouched. A
+      // delayed clone inside the cache promise races the page consumer and
+      // produces "Response body is already used" in Chromium.
+      const cacheCopy = response.ok ? response.clone() : null;
+      if (cacheCopy) void caches.open(CACHE_NAME).then((cache) => cache.put("/index.html", cacheCopy)).catch(() => undefined);
       return response;
     }).catch(() => caches.match("/index.html")));
     return;
   }
   event.respondWith(caches.match(event.request).then((cached) => {
     const network = fetch(event.request).then((response) => {
-      if (response.ok) void caches.open(CACHE_NAME).then((cache) => cache.put(event.request, response.clone()));
+      const cacheCopy = response.ok ? response.clone() : null;
+      if (cacheCopy) void caches.open(CACHE_NAME).then((cache) => cache.put(event.request, cacheCopy)).catch(() => undefined);
       return response;
     }).catch(() => cached ?? Response.error());
     return cached ?? network;
