@@ -6,6 +6,7 @@ import {
   DEFAULT_PLANET_TRAY_ITEM_LIMIT,
   MAX_PLANET_TRAY_ITEM_LIMIT,
   MAX_BUILDING_BUFFER_LIMIT,
+  MAX_BUILDING_STACK_COUNT,
   MAX_BELT_LANES,
   MAX_CONSTRUCTION_AUTOMATION_TARGET,
   MIN_PLANET_TRAY_ITEM_LIMIT,
@@ -215,7 +216,7 @@ function nonNegativeInteger(value: unknown): number {
 }
 
 function boundedBuildingQuantity(value: unknown): number {
-  return Math.min(MAX_BUILDING_BUFFER_LIMIT, nonNegativeInteger(value));
+  return Math.min(MAX_BUILDING_STACK_COUNT, nonNegativeInteger(value));
 }
 
 function buildingBufferRecord(value: unknown): Partial<Record<ItemId, number>> {
@@ -758,7 +759,7 @@ function normalizeGalacticHubNetwork(saved: Record<string, any>): GalacticHubNet
 export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegistry = loadContentPackRegistry()): GameState | null {
   if (!value || typeof value !== "object") return null;
   const saved = value as Record<string, any>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44].includes(saved.version) || !Array.isArray(saved.entities)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46].includes(saved.version) || !Array.isArray(saved.entities)) return null;
   // v43 was an unpublished space-station/elevator experiment. Never merge
   // its station inventory or fleet into the quantum pool. A v43 envelope that
   // actually contains those fields is rejected; a clean v43 fixture can still
@@ -870,11 +871,11 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
       stationModeTransition: interstellarStation
         ? saved.version >= 43 && (entity.stationModeTransition === "to-elevator" || entity.stationModeTransition === "to-legacy") ? entity.stationModeTransition : null
         : undefined,
-      quantumMode: interstellarStation && saved.version >= 44 &&
+      quantumMode: (interstellarStation && saved.version >= 44 || orbitalCollector && saved.version >= 45) &&
         (entity.quantumMode === "legacy" || entity.quantumMode === "transitioning" || entity.quantumMode === "quantum")
         ? entity.quantumMode
-        : interstellarStation ? "legacy" : undefined,
-      quantumTransition: interstellarStation && saved.version >= 44 && entity.quantumTransition && typeof entity.quantumTransition === "object"
+        : interstellarStation || orbitalCollector ? "legacy" : undefined,
+      quantumTransition: (interstellarStation && saved.version >= 44 || orbitalCollector && saved.version >= 45) && entity.quantumTransition && typeof entity.quantumTransition === "object"
         ? {
           targetMode: entity.quantumTransition.targetMode === "legacy" ? "legacy" : "quantum",
           startedAtSecond: nonNegativeNumber(entity.quantumTransition.startedAtSecond),
@@ -895,6 +896,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
             : [],
         }
         : null,
+      quantumTarget: interstellarStation && entity.quantumTarget === true,
       elevatorOutputItems: interstellarStation && saved.version >= 43 && Array.isArray(entity.elevatorOutputItems)
         ? Array.from({ length: 5 }, (_, index) => {
           const itemId = (entity.elevatorOutputItems as unknown[])[index];
@@ -1244,8 +1246,19 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
       }];
     })
     : [];
-  const blueprints: BlueprintDefinition[] = saved.version >= 14 && Array.isArray(saved.blueprints)
-    ? saved.blueprints.flatMap((blueprint: Record<string, any>, blueprintIndex: number) => {
+  const savedBlueprints = saved.version >= 14 && Array.isArray(saved.blueprints) ? saved.blueprints : [];
+  const savedBlueprintVersions = saved.version >= 46 && Array.isArray(saved.blueprintVersions)
+    ? saved.blueprintVersions.slice(0, 100)
+    : [];
+  const blueprintSources = [
+    ...savedBlueprints.map((blueprint: Record<string, any>, blueprintIndex: number) => ({ kind: "library" as const, blueprint, blueprintIndex })),
+    ...savedBlueprintVersions.flatMap((snapshot: Record<string, any>, blueprintIndex: number) =>
+      snapshot && typeof snapshot === "object" && snapshot.definition && typeof snapshot.definition === "object"
+        ? [{ kind: "snapshot" as const, blueprint: snapshot.definition as Record<string, any>, blueprintIndex, snapshot }]
+        : []),
+  ];
+  const normalizedBlueprintSources = blueprintSources.flatMap((source) => {
+      const { blueprint, blueprintIndex } = source;
       if (!Array.isArray(blueprint.entities)) return [];
       const blueprintEntities = blueprint.entities.flatMap((entity: Record<string, any>, entityIndex: number) => {
         if (typeof entity.buildingId !== "string" || !(entity.buildingId in BUILDINGS)) return [];
@@ -1262,7 +1275,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
             x: typeof entity.offset?.x === "number" && Number.isFinite(entity.offset.x) ? entity.offset.x : 0,
             y: typeof entity.offset?.y === "number" && Number.isFinite(entity.offset.y) ? entity.offset.y : 0,
           },
-          machineCount: Math.max(1, nonNegativeInteger(entity.machineCount)),
+          machineCount: Math.max(1, Math.min(MAX_BUILDING_STACK_COUNT, nonNegativeInteger(entity.machineCount))),
           recipeId,
           targetDysonOrbitId: entity.buildingId === "em_rail_ejector" && saved.version >= 41 &&
             typeof entity.targetDysonOrbitId === "string" && entity.targetDysonOrbitId.length > 0 && entity.targetDysonOrbitId.length <= 160
@@ -1273,6 +1286,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
           stationOperationMode: entity.buildingId === "interstellar_logistics_station" && saved.version >= 43 && entity.stationTier === 2 && entity.stationOperationMode === "elevator"
             ? "elevator"
             : entity.buildingId === "interstellar_logistics_station" ? "legacy" : undefined,
+          quantumTarget: entity.buildingId === "interstellar_logistics_station" && entity.quantumTarget === true,
           elevatorOutputItems: entity.buildingId === "interstellar_logistics_station" && saved.version >= 43 && Array.isArray(entity.elevatorOutputItems)
             ? Array.from({ length: 5 }, (_, index) => {
               const itemId = entity.elevatorOutputItems[index];
@@ -1386,9 +1400,10 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
         getRecipe(sourceId as RecipeId) && typeof targetId === "string" && getRecipe(targetId as RecipeId)
           ? [[sourceId, targetId]]
           : [])) as BlueprintDefinition["recipeOverrides"];
-      return [{
+      const definition = {
         id: typeof blueprint.id === "string" && blueprint.id ? blueprint.id : `blueprint_migrated_${blueprintIndex + 1}`,
         name: typeof blueprint.name === "string" && blueprint.name.trim() ? blueprint.name.trim().slice(0, 32) : `蓝图 ${String(blueprintIndex + 1).padStart(2, "0")}`,
+        revision: Number.isSafeInteger(blueprint.revision) ? Math.max(1, nonNegativeInteger(blueprint.revision)) : 1,
         entities: blueprintEntities,
         resourceAnchors,
           belts: blueprintBelts,
@@ -1396,16 +1411,74 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
         rotation: validBlueprintRotation(blueprint.rotation) ? blueprint.rotation : 0,
         mirror: validBlueprintMirror(blueprint.mirror) ? blueprint.mirror : "none",
         recipeOverrides,
-      } as BlueprintDefinition];
-    })
-    : [];
+      } as BlueprintDefinition;
+      return [{ ...source, definition }];
+    });
+  const blueprints = normalizedBlueprintSources
+    .filter((source) => source.kind === "library")
+    .map((source) => source.definition);
+  const blueprintVersions: GameState["blueprintVersions"] = [];
+  for (const source of normalizedBlueprintSources) {
+    if (source.kind !== "snapshot") continue;
+    const revision = Number.isSafeInteger(source.snapshot.revision)
+      ? Math.max(1, nonNegativeInteger(source.snapshot.revision))
+      : Math.max(1, source.definition.revision ?? 1);
+    const blueprintId = typeof source.snapshot.blueprintId === "string" && source.snapshot.blueprintId
+      ? source.snapshot.blueprintId.slice(0, 160)
+      : source.definition.id;
+    const id = typeof source.snapshot.id === "string" && source.snapshot.id
+      ? source.snapshot.id.slice(0, 200)
+      : `${blueprintId}@${revision}`;
+    if (blueprintVersions.some((snapshot) => snapshot.id === id)) continue;
+    blueprintVersions.push({ id, blueprintId, revision, definition: source.definition });
+  }
   const constructionQueue: GameState["constructionQueue"] = Array.isArray(saved.constructionQueue)
-    ? saved.constructionQueue.flatMap((entry: Record<string, any>, index: number) => {
-      const blueprint = blueprints.find((candidate) => candidate.id === entry.blueprintId);
-      if (!blueprint || !validPlanetId(entry.planetId)) return [];
+    ? saved.constructionQueue.slice(0, 100).flatMap((entry: Record<string, any>, index: number) => {
+      if (!validPlanetId(entry.planetId)) return [];
+      let snapshot = typeof entry.blueprintVersionId === "string"
+        ? blueprintVersions.find((candidate) => candidate.id === entry.blueprintVersionId)
+        : undefined;
+      const libraryBlueprint = blueprints.find((candidate) => candidate.id === entry.blueprintId);
+      const blueprint = snapshot?.definition ?? libraryBlueprint;
+      if (!blueprint) return [];
+      if (!snapshot) {
+        const revision = Math.max(1, Math.floor(blueprint.revision ?? 1));
+        const versionId = `${blueprint.id}@${revision}`;
+        snapshot = blueprintVersions.find((candidate) => candidate.id === versionId);
+        if (!snapshot) {
+          snapshot = {
+            id: versionId,
+            blueprintId: blueprint.id,
+            revision,
+            definition: JSON.parse(JSON.stringify(blueprint)) as BlueprintDefinition,
+          };
+          blueprintVersions.push(snapshot);
+        }
+      }
+      const status = saved.version >= 46 && entry.status === "waiting-fleet" ? "waiting-fleet" as const : "pending-materials" as const;
+      const reservedConstruction = status === "pending-materials" && entry.reservedConstruction && typeof entry.reservedConstruction === "object" && !Array.isArray(entry.reservedConstruction)
+        ? Object.fromEntries(Object.entries(entry.reservedConstruction).flatMap(([constructionId, amount]) =>
+          constructionId in construction && Number.isSafeInteger(amount) && (amount as number) >= 0
+            ? [[constructionId, amount]]
+            : [])) as GameState["constructionQueue"][number]["reservedConstruction"]
+        : {};
+      const reservedFleet = status === "pending-materials" && entry.reservedFleet && typeof entry.reservedFleet === "object" && !Array.isArray(entry.reservedFleet)
+        ? Object.fromEntries((["logistics_drone", "logistics_vessel"] as const).flatMap((itemId) => {
+          const amount = entry.reservedFleet[itemId];
+          return Number.isSafeInteger(amount) && amount >= 0 ? [[itemId, amount]] : [];
+        })) as GameState["constructionQueue"][number]["reservedFleet"]
+        : {};
+      const placedEntityIdsByKey = status === "waiting-fleet" && entry.placedEntityIdsByKey && typeof entry.placedEntityIdsByKey === "object" && !Array.isArray(entry.placedEntityIdsByKey)
+        ? Object.fromEntries(Object.entries(entry.placedEntityIdsByKey).flatMap(([key, entityId]) =>
+          typeof entityId === "string" && entities.some((entity) => entity.id === entityId)
+            ? [[key.slice(0, 160), entityId]]
+            : []))
+        : {};
       return [{
-        id: typeof entry.id === "string" && entry.id ? entry.id : `construction_migrated_${index + 1}`,
-        blueprintId: blueprint.id,
+        id: typeof entry.id === "string" && entry.id ? entry.id.slice(0, 160) : `construction_migrated_${index + 1}`,
+        blueprintId: snapshot.blueprintId,
+        blueprintVersionId: snapshot.id,
+        blueprintRevision: snapshot.revision,
         blueprintName: typeof entry.blueprintName === "string" && entry.blueprintName.trim()
           ? entry.blueprintName.trim().slice(0, 32)
           : blueprint.name,
@@ -1417,6 +1490,11 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
         rotation: validBlueprintRotation(entry.rotation) ? entry.rotation : blueprint.rotation ?? 0,
         mirror: validBlueprintMirror(entry.mirror) ? entry.mirror : blueprint.mirror ?? "none",
         queuedAt: nonNegativeNumber(entry.queuedAt),
+        status,
+        reservedConstruction,
+        reservedFleet,
+        placedEntityIdsByKey,
+        buildingCompletedAt: status === "waiting-fleet" ? nonNegativeNumber(entry.buildingCompletedAt) : undefined,
       }];
     })
     : [];
@@ -1460,6 +1538,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
       if (elapsedSeconds <= 0) return [];
       return [{
         elapsedSeconds,
+        sampleDurationSeconds: Math.max(1, Math.min(3_600, nonNegativeNumber(sample.sampleDurationSeconds) || 10)),
         productionPerMinute: nonNegativeRecord(sample.productionPerMinute),
         consumptionPerMinute: nonNegativeRecord(sample.consumptionPerMinute),
         inventory: integerRecord(sample.inventory),
@@ -1797,7 +1876,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
   const migrated = {
     ...initial,
     ...saved,
-    version: saved.version >= 42 ? 44 : 43,
+    version: 46,
     activePlanetId,
     entities,
     belts,
@@ -1836,6 +1915,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     canvasBookmarks,
     canvasRegions,
     blueprints,
+    blueprintVersions,
     constructionQueue,
     handcraftQueue,
     productionPlans,
@@ -1861,6 +1941,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
 }
 
 function persistentState(state: GameState): GameState {
+  const { runtimeFlow: _runtimeFlow, ...quantumLogisticsNetwork } = state.quantumLogisticsNetwork;
   return {
     ...state,
     // Production curves are runtime diagnostics. Keeping them in every local
@@ -1868,6 +1949,7 @@ function persistentState(state: GameState): GameState {
     productionHistory: [],
     contentPacks: getActiveContentPackReferences(loadContentPackRegistry()),
     planetTrays: { ...state.planetTrays, [state.activePlanetId]: { ...state.tray } },
+    quantumLogisticsNetwork,
   };
 }
 

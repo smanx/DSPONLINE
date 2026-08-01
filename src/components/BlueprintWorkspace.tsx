@@ -1,8 +1,10 @@
-import { ArrowUp, BoxSelect, Check, ChevronLeft, ChevronRight, Clock3, Copy, Download, FlipHorizontal2, Focus, Layers3, Lock, MousePointer2, PackageOpen, Palette, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Redo2, RotateCw, Route, Trash2, Undo2, Unlock, Upload, WandSparkles, X } from "lucide-react";
+import { ArrowUp, BoxSelect, Check, ChevronLeft, ChevronRight, Clock3, Copy, Download, FlipHorizontal2, Focus, Layers3, ListChecks, Lock, MousePointer2, PackageCheck, PackageOpen, Palette, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Redo2, RotateCw, Route, Trash2, Truck, Undo2, Unlock, Upload, WandSparkles, X } from "lucide-react";
 import { getConstructionDefinition, getItem, getPlanet, getRecipe, getRecipesForBuilding } from "../game/content";
-import { canPlaceBlueprint, canQueueBlueprint, getBlueprintFleetLoadPreview, getBlueprintRequirements, getConstructionQueueDeficits, isTechnologyCompleted } from "../game/engine";
-import type { BlueprintDefinition, BlueprintMirror, BlueprintRotation, CanvasRegion, GameState, RecipeId } from "../game/types";
-import { Fragment, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { canPlaceBlueprint, canQueueBlueprint, getBlueprintFleetLoadPreview, getBlueprintRequirements, getConstructionQueueDetails, isTechnologyCompleted, transformBlueprintOffset } from "../game/engine";
+import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
+import type { BlueprintDefinition, BlueprintMirror, BlueprintRotation, CanvasRegion, CanvasViewport, GameState, PlanetId, RecipeId } from "../game/types";
+import { Fragment, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useGameDialog } from "./GameDialogProvider";
 
 function blueprintBuildingSummary(blueprint: BlueprintDefinition): string[] {
   const counts = new Map<string, number>();
@@ -205,7 +207,215 @@ export function BlueprintPlacementCursor({ blueprint, x, y }: { blueprint: Bluep
   );
 }
 
-export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, onRename, onTransform, onRecipeOverride, onCancelQueue, onExport, onImport, mobile = false, mobileSubview, onMobileOpenDetail }: {
+interface PendingBlueprintGeometryNode {
+  key: string;
+  x: number;
+  y: number;
+  buildingId: string;
+  amount: number;
+  anchor: boolean;
+  index: number;
+}
+
+interface PendingBlueprintGeometryLine {
+  key: string;
+  sourceKey: string;
+  targetKey: string;
+  sourceX: number;
+  sourceY: number;
+  targetX: number;
+  targetY: number;
+}
+
+interface PendingBlueprintGeometry {
+  nodes: PendingBlueprintGeometryNode[];
+  buckets: Map<string, number[]>;
+  linesByNodeKey: Map<string, PendingBlueprintGeometryLine[]>;
+}
+
+const PENDING_BLUEPRINT_GEOMETRY_CELL = 640;
+const PENDING_BLUEPRINT_NODE_RENDER_LIMIT = 900;
+const PENDING_BLUEPRINT_LINE_RENDER_LIMIT = 1_400;
+const pendingBlueprintGeometryCache = new Map<string, PendingBlueprintGeometry>();
+
+function pendingBlueprintBucketKey(x: number, y: number): string {
+  return `${Math.floor(x / PENDING_BLUEPRINT_GEOMETRY_CELL)}:${Math.floor(y / PENDING_BLUEPRINT_GEOMETRY_CELL)}`;
+}
+
+function getPendingBlueprintGeometry(
+  cacheKey: string,
+  blueprint: BlueprintDefinition,
+  rotation: BlueprintRotation,
+  mirror: BlueprintMirror,
+): PendingBlueprintGeometry {
+  const key = `${cacheKey}:${rotation}:${mirror}`;
+  const cached = pendingBlueprintGeometryCache.get(key);
+  if (cached) return cached;
+  const nodes: PendingBlueprintGeometryNode[] = [
+    ...blueprint.entities.map((entity, index) => {
+      const offset = transformBlueprintOffset(entity.offset, rotation, mirror);
+      return { key: entity.key, x: offset.x, y: offset.y, buildingId: entity.buildingId, amount: entity.machineCount, anchor: false, index };
+    }),
+    ...(blueprint.resourceAnchors ?? []).map((anchor, anchorIndex) => {
+      const offset = transformBlueprintOffset(anchor.offset, rotation, mirror);
+      return { key: anchor.key, x: offset.x, y: offset.y, buildingId: anchor.extractorBuildingId, amount: anchor.minerCount, anchor: true, index: blueprint.entities.length + anchorIndex };
+    }),
+  ];
+  const buckets = new Map<string, number[]>();
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index];
+    const bucketKey = pendingBlueprintBucketKey(node.x, node.y);
+    const bucket = buckets.get(bucketKey) ?? [];
+    bucket.push(index);
+    buckets.set(bucketKey, bucket);
+  }
+  const nodeByKey = new Map(nodes.map((node) => [node.key, node]));
+  const linesByNodeKey = new Map<string, PendingBlueprintGeometryLine[]>();
+  for (const belt of blueprint.belts) {
+    const source = nodeByKey.get(belt.sourceKey);
+    const target = nodeByKey.get(belt.targetKey);
+    if (!source || !target) continue;
+    const line = {
+      key: belt.key,
+      sourceKey: source.key,
+      targetKey: target.key,
+      sourceX: source.x + 128,
+      sourceY: source.y + 48,
+      targetX: target.x + 128,
+      targetY: target.y + 48,
+    };
+    for (const nodeKey of source.key === target.key ? [source.key] : [source.key, target.key]) {
+      const lines = linesByNodeKey.get(nodeKey) ?? [];
+      lines.push(line);
+      linesByNodeKey.set(nodeKey, lines);
+    }
+  }
+  const geometry = { nodes, buckets, linesByNodeKey };
+  pendingBlueprintGeometryCache.set(key, geometry);
+  while (pendingBlueprintGeometryCache.size > 32) pendingBlueprintGeometryCache.delete(pendingBlueprintGeometryCache.keys().next().value!);
+  return geometry;
+}
+
+function getQueuedBlueprint(game: GameState, entry: GameState["constructionQueue"][number]): BlueprintDefinition | undefined {
+  const snapshot = entry.blueprintVersionId
+    ? game.blueprintVersions.find((candidate) => candidate.id === entry.blueprintVersionId)
+    : undefined;
+  return snapshot?.definition ?? game.blueprints.find((candidate) => candidate.id === entry.blueprintId);
+}
+
+export function PendingBlueprintLayer({ game, planetId, viewport, canvasSize }: {
+  game: GameState;
+  planetId: PlanetId;
+  viewport: CanvasViewport;
+  canvasSize: { width: number; height: number };
+}) {
+  const latestGameRef = useRef(game);
+  latestGameRef.current = game;
+  const geometryKey = game.constructionQueue
+    .filter((entry) => entry.planetId === planetId && (entry.status ?? "pending-materials") === "pending-materials")
+    .map((entry) => `${entry.id}:${entry.blueprintVersionId ?? `${entry.blueprintId}@${entry.blueprintRevision ?? 1}`}:${entry.position.x}:${entry.position.y}:${entry.rotation}:${entry.mirror}`)
+    .join("|");
+  const rendered = useMemo(() => {
+    const currentGame = latestGameRef.current;
+    const zoom = Math.max(0.25, viewport.zoom);
+    const margin = 420 / zoom;
+    const worldBounds = {
+      left: -viewport.x / zoom - margin,
+      top: -viewport.y / zoom - margin,
+      right: (canvasSize.width - viewport.x) / zoom + margin,
+      bottom: (canvasSize.height - viewport.y) / zoom + margin,
+    };
+    const nodes: Array<PendingBlueprintGeometryNode & { orderId: string; orderName: string; worldX: number; worldY: number }> = [];
+    const lines: Array<PendingBlueprintGeometryLine & { orderId: string; worldSourceX: number; worldSourceY: number; worldTargetX: number; worldTargetY: number }> = [];
+    const sortedEntries = currentGame.constructionQueue
+      .filter((entry) => entry.planetId === planetId && (entry.status ?? "pending-materials") === "pending-materials")
+      .sort((left, right) => left.queuedAt - right.queuedAt || left.id.localeCompare(right.id));
+    for (const entry of sortedEntries) {
+      if (nodes.length >= PENDING_BLUEPRINT_NODE_RENDER_LIMIT) break;
+      const blueprint = getQueuedBlueprint(currentGame, entry);
+      if (!blueprint) continue;
+      const geometry = getPendingBlueprintGeometry(
+        entry.blueprintVersionId ?? `${blueprint.id}@${entry.blueprintRevision ?? blueprint.revision ?? 1}`,
+        blueprint,
+        entry.rotation,
+        entry.mirror,
+      );
+      const relativeBounds = {
+        left: worldBounds.left - entry.position.x,
+        top: worldBounds.top - entry.position.y,
+        right: worldBounds.right - entry.position.x,
+        bottom: worldBounds.bottom - entry.position.y,
+      };
+      const seenNodeIndexes = new Set<number>();
+      const visibleNodeKeys = new Set<string>();
+      const minBucketX = Math.floor(relativeBounds.left / PENDING_BLUEPRINT_GEOMETRY_CELL);
+      const maxBucketX = Math.floor(relativeBounds.right / PENDING_BLUEPRINT_GEOMETRY_CELL);
+      const minBucketY = Math.floor(relativeBounds.top / PENDING_BLUEPRINT_GEOMETRY_CELL);
+      const maxBucketY = Math.floor(relativeBounds.bottom / PENDING_BLUEPRINT_GEOMETRY_CELL);
+      for (let bucketY = minBucketY; bucketY <= maxBucketY && nodes.length < PENDING_BLUEPRINT_NODE_RENDER_LIMIT; bucketY += 1) {
+        for (let bucketX = minBucketX; bucketX <= maxBucketX && nodes.length < PENDING_BLUEPRINT_NODE_RENDER_LIMIT; bucketX += 1) {
+          for (const nodeIndex of geometry.buckets.get(`${bucketX}:${bucketY}`) ?? []) {
+            if (seenNodeIndexes.has(nodeIndex)) continue;
+            seenNodeIndexes.add(nodeIndex);
+            const node = geometry.nodes[nodeIndex];
+            if (node.x < relativeBounds.left || node.x > relativeBounds.right || node.y < relativeBounds.top || node.y > relativeBounds.bottom) continue;
+            visibleNodeKeys.add(node.key);
+            nodes.push({ ...node, orderId: entry.id, orderName: entry.blueprintName, worldX: entry.position.x + node.x, worldY: entry.position.y + node.y });
+            if (nodes.length >= PENDING_BLUEPRINT_NODE_RENDER_LIMIT) break;
+          }
+        }
+      }
+      const seenLines = new Set<string>();
+      for (const nodeKey of visibleNodeKeys) {
+        for (const line of geometry.linesByNodeKey.get(nodeKey) ?? []) {
+          if (lines.length >= PENDING_BLUEPRINT_LINE_RENDER_LIMIT || seenLines.has(line.key)) continue;
+          seenLines.add(line.key);
+          lines.push({
+            ...line,
+            orderId: entry.id,
+            worldSourceX: entry.position.x + line.sourceX,
+            worldSourceY: entry.position.y + line.sourceY,
+            worldTargetX: entry.position.x + line.targetX,
+            worldTargetY: entry.position.y + line.targetY,
+          });
+        }
+      }
+    }
+    return { nodes, lines };
+  }, [canvasSize.height, canvasSize.width, geometryKey, planetId, viewport.x, viewport.y, viewport.zoom]);
+  if (rendered.nodes.length === 0) return null;
+  const compact = viewport.zoom < 0.55;
+  return <div className={`pending-blueprint-layer${compact ? " pending-blueprint-layer--compact" : ""}`} aria-hidden="true">
+    {rendered.lines.map((line) => {
+      const dx = line.worldTargetX - line.worldSourceX;
+      const dy = line.worldTargetY - line.worldSourceY;
+      return <i
+        className="pending-blueprint-line"
+        key={`${line.orderId}:${line.key}`}
+        style={{ left: line.worldSourceX, top: line.worldSourceY, width: Math.hypot(dx, dy), transform: `rotate(${Math.atan2(dy, dx)}rad)` }}
+      />;
+    })}
+    {rendered.nodes.map((node) => <div
+      className={`pending-blueprint-node${node.anchor ? " pending-blueprint-node--anchor" : ""}`}
+      key={`${node.orderId}:${node.key}`}
+      style={{ left: node.worldX, top: node.worldY }}
+    >
+      <span>{getConstructionDefinition(node.buildingId)?.name ?? node.buildingId}</span>
+      <strong title={formatQuantityExact(node.amount)}>×{formatQuantityCompact(node.amount)}</strong>
+      {node.index === 0 ? <em>{node.orderName}</em> : null}
+    </div>)}
+  </div>;
+}
+
+function formatSimulationTime(seconds: number): string {
+  const value = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor(value % 3600 / 60);
+  const remainder = value % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
+}
+
+export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, onRename, onTransform, onRecipeOverride, onFundQueue, onFundAllQueues, onCancelQueue, onExport, onImport, mobile = false, mobileSubview, onMobileOpenDetail }: {
   open: boolean;
   game: GameState;
   onClose: () => void;
@@ -214,6 +424,8 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
   onRename: (blueprintId: string, name: string) => void;
   onTransform: (blueprintId: string, rotation: BlueprintRotation, mirror: BlueprintMirror) => void;
   onRecipeOverride: (blueprintId: string, sourceRecipeId: RecipeId, targetRecipeId: RecipeId) => void;
+  onFundQueue: (entryId: string, scope: "construction" | "fleet" | "all") => void;
+  onFundAllQueues: () => void;
   onCancelQueue: (entryId: string) => void;
   onExport: (blueprintId: string) => void;
   onImport: (raw: string) => { success: boolean; message: string };
@@ -221,7 +433,9 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
   mobileSubview?: string | null;
   onMobileOpenDetail?: (subview: string) => void;
 }) {
+  const gameDialog = useGameDialog();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [activeTab, setActiveTab] = useState<"library" | "pending">("library");
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
   const [importMessage, setImportMessage] = useState<string | null>(null);
@@ -239,14 +453,21 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
   if (!open) return null;
   const detailBlueprintId = mobile && mobileSubview?.startsWith("blueprint:") ? mobileSubview.slice(10) : null;
   const visibleBlueprints = detailBlueprintId ? game.blueprints.filter((blueprint) => blueprint.id === detailBlueprintId) : game.blueprints;
+  const pendingCount = game.constructionQueue.length;
   return (
-    <section className={`blueprint-workspace${mobile ? ` mobile-workspace mobile-blueprints${detailBlueprintId ? " mobile-workspace--detail" : ""}` : ""}`} role="dialog" aria-modal="true" aria-label="蓝图库">
+    <section className={`blueprint-workspace${mobile ? ` mobile-workspace mobile-blueprints${detailBlueprintId ? " mobile-workspace--detail" : ""}` : ""}`} role="dialog" aria-modal="true" aria-label="蓝图与待建施工">
       <header className="blueprint-header">
-        <div className="blueprint-title"><i><Layers3 size={20} /></i><div><span>生产网络模板</span><strong>蓝图库</strong></div></div>
+        <div className="blueprint-title"><i><Layers3 size={20} /></i><div><span>生产网络模板</span><strong>{activeTab === "library" ? "蓝图库" : "待建与补足"}</strong></div></div>
         <div className="blueprint-headline"><span>模板 <strong>{game.blueprints.length}</strong></span><span>施工队列 <strong>{game.constructionQueue.length}</strong></span><span>部署行星 <strong>{getPlanet(game.activePlanetId).name}</strong></span></div>
-        <div className="blueprint-header-actions"><button type="button" onClick={() => { setImportOpen((current) => !current); setImportMessage(null); }} title="导入蓝图" aria-label="导入蓝图"><Upload size={15} /></button><button className="blueprint-close" type="button" onClick={onClose} title="关闭蓝图库" aria-label="关闭蓝图库"><X size={18} /></button></div>
+        <div className="blueprint-header-actions">{activeTab === "library" ? <button type="button" onClick={() => { setImportOpen((current) => !current); setImportMessage(null); }} title="导入蓝图" aria-label="导入蓝图"><Upload size={15} /></button> : null}<button className="blueprint-close" type="button" onClick={onClose} title="关闭蓝图工作区" aria-label="关闭蓝图工作区"><X size={18} /></button></div>
       </header>
+      <nav className="blueprint-tabs" aria-label="蓝图视图">
+        <button className={activeTab === "library" ? "active" : ""} type="button" onClick={() => setActiveTab("library")}><Layers3 size={14} />蓝图库</button>
+        <button className={activeTab === "pending" ? "active" : ""} type="button" onClick={() => setActiveTab("pending")}><ListChecks size={14} />待建与补足{pendingCount > 0 ? <em>{pendingCount}</em> : null}</button>
+      </nav>
+      {activeTab === "library" ? <>
       <input ref={fileInputRef} className="blueprint-import-file" type="file" accept="application/json,.json" aria-label="选择要导入的蓝图文件" onChange={async (event) => { const file = event.target.files?.[0]; if (file) importRaw(await file.text()); event.target.value = ""; }} />
+      <div className="blueprint-library-shell">
       {importOpen ? <section className="blueprint-import-panel" aria-label="蓝图导入">
         <header><div><Upload size={15} /><span><strong>导入蓝图</strong><small>交换文件会校验当前内容目录中的设备、物品和配方。</small></span></div><button type="button" onClick={() => fileInputRef.current?.click()}><Upload size={13} />选择文件</button></header>
         <textarea value={importText} onChange={(event) => setImportText(event.target.value)} placeholder="粘贴蓝图交换 JSON" aria-label="粘贴蓝图交换 JSON" />
@@ -313,13 +534,67 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
           );
         })}
       </div>
-      {game.constructionQueue.length > 0 ? <section className="construction-queue-panel">
-        <header><Clock3 size={16} /><div><span>自动施工协议</span><strong>待建队列</strong></div><em>{game.constructionQueue.length}</em></header>
-        <div>{game.constructionQueue.map((entry) => {
-          const deficits = getConstructionQueueDeficits(game, entry.id);
-          return <article key={entry.id}><div><strong>{entry.blueprintName}</strong><span>{getPlanet(entry.planetId).name} · {entry.rotation}°{entry.mirror === "horizontal" ? " · 镜像" : ""}</span></div><p>{deficits.length === 0 ? "材料齐备，等待下一模拟周期" : deficits.map((deficit) => `${getConstructionDefinition(deficit.constructionId)?.name ?? deficit.constructionId} -${deficit.missing}`).join(" · ")}</p><button type="button" onClick={() => onCancelQueue(entry.id)} title="取消施工订单" aria-label={`取消${entry.blueprintName}施工订单`}><X size={13} /></button></article>;
-        })}</div>
-      </section> : null}
+      </div>
+      </> : <section className="pending-construction-workspace" aria-label="待建与补足">
+        <header>
+          <div><ListChecks size={17} /><span><strong>施工订单</strong><small>按创建顺序稳定分配施工托盘与随身载具</small></span></div>
+          <button type="button" disabled={pendingCount === 0} onClick={onFundAllQueues}><PackageCheck size={14} />一键补足全部</button>
+        </header>
+        {pendingCount === 0 ? <div className="blueprint-empty"><PackageCheck size={28} /><strong>没有待处理施工订单</strong><span>缺料蓝图会保留在画布，并在这里显示补足与取消状态。</span></div> : <div className="pending-construction-list">
+          {[...game.constructionQueue].sort((left, right) => left.queuedAt - right.queuedAt || left.id.localeCompare(right.id)).map((entry) => {
+            const details = getConstructionQueueDetails(game, entry.id);
+            const constructionReady = details.status === "pending-materials" && details.requirements.every((item) => item.missing === 0);
+            const constructionAvailable = details.status === "pending-materials" && details.requirements.some((item) => item.missing > 0 && item.available > 0);
+            const fleetAvailable = details.fleet.some((item) => item.missing > 0 && item.available > 0);
+            const canFundConstruction = details.compatible && (constructionReady || constructionAvailable);
+            const canFundFleet = details.compatible && fleetAvailable;
+            return <article className={`pending-construction-order pending-construction-order--${details.status}`} key={entry.id}>
+              <header>
+                <div><i><Layers3 size={16} /></i><span><strong>{entry.blueprintName}</strong><small>{getPlanet(entry.planetId).name} · 坐标 {Math.round(entry.position.x)}, {Math.round(entry.position.y)}</small></span></div>
+                <em>{details.status === "waiting-fleet" ? "建筑完成 · 等待载具" : details.compatible ? "灰模待建" : "施工阻塞"}</em>
+              </header>
+              <dl className="pending-construction-meta">
+                <div><dt>放置时间</dt><dd>运行 {formatSimulationTime(entry.queuedAt)}</dd></div>
+                <div><dt>方向</dt><dd>{entry.rotation}°{entry.mirror === "horizontal" ? " · 水平镜像" : ""}</dd></div>
+                <div><dt>版本</dt><dd>r{entry.blueprintRevision ?? details.blueprint?.revision ?? 1}</dd></div>
+              </dl>
+              {details.blockedReason ? <p className="pending-construction-blocked">{details.blockedReason}</p> : null}
+              {details.requirements.length > 0 ? <section className="pending-construction-materials">
+                <strong>建筑与线路</strong>
+                <div>{details.requirements.map((item) => {
+                  const exact = `${formatQuantityExact(item.reserved)} / ${formatQuantityExact(item.total)}，剩余 ${formatQuantityExact(item.missing)}，托盘可用 ${formatQuantityExact(item.available)}`;
+                  return <span className={item.missing === 0 ? "ready" : ""} key={item.constructionId} title={exact}>
+                    {item.missing === 0 ? <Check size={12} /> : <PackageOpen size={12} />}
+                    <b>{getConstructionDefinition(item.constructionId)?.name ?? item.constructionId}</b>
+                    <em>{formatQuantityCompact(item.reserved)}/{formatQuantityCompact(item.total)}</em>
+                    <small>剩 {formatQuantityCompact(item.missing)} · 可用 {formatQuantityCompact(item.available)}</small>
+                  </span>;
+                })}</div>
+              </section> : null}
+              {details.fleet.length > 0 ? <section className="pending-construction-materials pending-construction-fleet">
+                <strong>物流载具</strong>
+                <div>{details.fleet.map((item) => {
+                  const exact = `${formatQuantityExact(item.installedOrReserved)} / ${formatQuantityExact(item.total)}，剩余 ${formatQuantityExact(item.missing)}，随身可用 ${formatQuantityExact(item.available)}`;
+                  return <span className={item.missing === 0 ? "ready" : ""} key={item.itemId} title={exact}>
+                    {item.missing === 0 ? <Check size={12} /> : <Truck size={12} />}
+                    <b>{getItem(item.itemId).name}</b>
+                    <em>{formatQuantityCompact(item.installedOrReserved)}/{formatQuantityCompact(item.total)}</em>
+                    <small>剩 {formatQuantityCompact(item.missing)} · 可用 {formatQuantityCompact(item.available)}</small>
+                  </span>;
+                })}</div>
+              </section> : null}
+              <footer>
+                <button type="button" disabled={!canFundConstruction} onClick={() => onFundQueue(entry.id, "construction")}><PackageOpen size={14} />{constructionReady ? "开始建造" : "补足建筑与线路"}</button>
+                <button type="button" disabled={!canFundFleet} onClick={() => onFundQueue(entry.id, "fleet")}><Truck size={14} />补足物流载具</button>
+                <button className="primary" type="button" disabled={!details.compatible || (!canFundConstruction && !canFundFleet)} onClick={() => onFundQueue(entry.id, "all")}><PackageCheck size={14} />一键补足本订单</button>
+                <button className="danger" type="button" onClick={async () => {
+                  if (await gameDialog.confirm(`取消“${entry.blueprintName}”施工订单？已投入的建筑、线路和载具会完整返还。`, { danger: true, confirmLabel: "取消并返还" })) onCancelQueue(entry.id);
+                }}><Trash2 size={14} />取消并返还</button>
+              </footer>
+            </article>;
+          })}
+        </div>}
+      </section>}
     </section>
   );
 }

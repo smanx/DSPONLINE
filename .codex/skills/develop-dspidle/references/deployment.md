@@ -4,8 +4,10 @@ Read `docs/DEPLOYMENT_OPERATIONS.md` in full before any server mutation.
 
 ## Topology
 
-- Hong Kong production: `https://dsponline.cn`, host `43.129.249.102`.
-- Shanghai legacy: `http://111.229.128.211`, independently serves its local frontend and local API.
+The hostnames below are sanitized repository placeholders. Resolve real deployment targets only from the secured operations environment.
+
+- Hong Kong production: `https://dsponline.cn`, host `hk-origin.example.invalid`.
+- Shanghai legacy: `https://shanghai-node.example.invalid`, independently serves its local frontend and local API.
 - Frontend root: `/var/www/dsp-idle/current`.
 - Backend root: `/opt/dsp-idle-cloud/current`.
 - Production database: `/var/lib/dsp-idle-cloud/cloud.sqlite`.

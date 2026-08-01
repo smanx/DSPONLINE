@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-07-30-v1.0.13";
+const RELEASE_NOTE_ID = "2026-08-01-v1.0.19";
 
 async function seedReleaseFactory(page: Page, options: { theme?: "dark" | "light"; locale?: "zh-CN" | "en"; paused?: boolean; mobileUi?: "legacy" | "next" } = {}) {
   await page.addInitScript(({ releaseNoteId, theme, locale, paused, mobileUi }) => {
@@ -90,7 +90,7 @@ async function seedReleaseFactory(page: Page, options: { theme?: "dark" | "light
         { id: "ore-belt-a", planetId: "home", source: "vein_iron", target: "smelter-a", itemId: "iron_ore", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 1, lastFlow: 0 },
         { id: "ore-belt-b", planetId: "home", source: "vein_iron", target: "smelter-b", itemId: "iron_ore", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 1, lastFlow: 0 },
       ],
-      construction: { arc_smelter: 2, storage_mk1: 2, storage_tank: 2, spray_coater: 0 },
+      construction: { arc_smelter: 2, storage_mk1: 2, storage_tank: 2, spray_coater: 0, conveyor_belt_mk1: 10 },
       tray: {
         iron_ore: 36,
         titanium_ingot: 12,
@@ -326,18 +326,24 @@ test("depleted-resource shortcut and spray removal preserve reachable recovery a
   await page.getByRole("button", { name: /矿脉已枯竭/ }).click();
   const operations = page.getByRole("dialog", { name: "运营中心" });
   const infinite = operations.getByLabel("资源模式").getByRole("button", { name: "无限矿脉" });
-  page.once("dialog", (dialog) => dialog.accept());
   await infinite.click();
+  await page.locator(".game-dialog").getByRole("button", { name: "确认切换" }).click();
   await expect(infinite).toHaveClass(/active/);
   await page.keyboard.press("Escape");
 
   await page.locator('.react-flow__node[data-id="smelter-a"]').click();
   const removal = page.getByRole("button", { name: "拆卸喷涂模块" });
   await expect(removal).toContainText("增产剂 Mk.I ×4");
-  page.once("dialog", (dialog) => dialog.accept());
   await removal.click();
+  await page.locator(".game-dialog").getByRole("button", { name: "确认拆卸" }).click();
   await expect(page.getByRole("button", { name: "拆卸喷涂模块" })).toHaveCount(0);
   await expect(page.getByRole("status").filter({ hasText: /喷涂模块已拆卸并返还/ })).toBeVisible();
+
+  await page.locator('.react-flow__edge[data-id="ore-belt-b"]').evaluate((element: SVGGElement) => element.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  const laneInput = page.locator(".inspector-panel").getByLabel("并联线路目标数量");
+  await laneInput.fill("2");
+  await laneInput.blur();
+  await expect(laneInput).toHaveValue("2");
   await page.screenshot({ path: "artifacts/qa/v103-resource-spray-actions-desktop-1920x1080.png", fullPage: true });
 });
 

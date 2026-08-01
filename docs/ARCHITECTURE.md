@@ -1,5 +1,7 @@
 # 系统架构
 
+> **方向变更（2026-07-31）**：量子物流网络当前使用 `1.0.19 / GameState v46`。有效资产的 v43 空间站实验存档不迁入量子共享池；传统物流站升级入口仍作为兼容域命令保留。量子网络改动遵循 [量子物流网络开发 Agent 提示词](./QUANTUM_LOGISTICS_NETWORK_AGENT_PROMPT.md)。
+
 ## 1. 总体拓扑
 
 ```mermaid
@@ -15,6 +17,8 @@ flowchart LR
 ```
 
 前端是游戏运行时和本地数据的主载体；后端只负责账号、云存档、排行榜和运营数据，不参与每个生产周期的权威模拟。
+
+实时、纯挂机和离线 Worker 在首次模拟前接收同一份规范化内容包运行时快照。快照带有单调 revision 和 fingerprint；注册表变化会建立模拟边界，旧代次响应被丢弃，必要时只重建运行时目录和索引，不重建 `GameState`。主线程 fallback 与两个 Worker 对同一状态、注册表和时间预算必须保持确定性等价；`GameState.contentPacks` 仍只保存 `{ id, version }`。
 
 ## 2. 前端分层
 
@@ -36,6 +40,9 @@ flowchart LR
 - `src/components/ReleaseNotesDialog.tsx`：版本公告单一数据源、首次展示偏好和主菜单/游戏内设置共用弹窗。
 - `src/game/onboarding.ts`、`src/components/OnboardingCoach.tsx`：独立于 `GameState` 的 5 步基础操作和 13 步渐进教学偏好、真实命令里程碑判定及设备/线路卡点诊断；教学关闭状态不会随存档或云同步改写。
 - `src/App.tsx`：顶层会话和工厂编排。它管理工作区、画布交互、连接、选中状态、存档定时器和模拟 Worker。
+- `src/components/TimeWarpIdleOverlay.tsx`：时间扭曲纯挂机覆盖层。覆盖层是独立的交互边界，隐藏画布并只展示实际倍率、挂机时间、模拟积压、关键产量和保存状态；停止前由 `App` 等待 Worker 安全边界并校验主存档。
+- `src/components/TutorialWorkspace.tsx`：零基础教程工作区。内容是只读 UI 数据，搜索、目录和阅读进度使用设备级 `localStorage`，不写入 `GameState` 或云存档。
+- `src/components/SystemSpaceStationWorkspace.tsx`：空间站/太空电梯独立工作区；只通过领域命令管理施工、Mk.II 模式、共享仓库、模块和五路输出，不把空间站伪装成普通行星画布。
 
 ### 展示与交互层
 
@@ -55,6 +62,8 @@ flowchart LR
 React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新计算视口平移以保持原世界中心；触摸端的扩大吸附、连接虚影和低性能 LOD 都是瞬时展示状态，不写入存档。第二根触摸指针由画布捕获层接管，先取消第一指未提交的节点拖动、连线、采矿、放置、区域草稿和长按，再以双指中心与距离直接更新 React Flow 视口。生产区域的矩形、名称与颜色保存在 `GameState.canvasRegions`，但区域草稿和编辑器选择仍是瞬时 UI 状态。
 
 桌面与移动端共用节流后的 `canvasGame` 展示快照：确定性模拟继续按真实时间推进，节点、端口和线路按设备级生产画面刷新偏好发布；选中对象和检查器优先追上真实 Worker 状态。科技树、统计、星图等全屏工作区打开或页面进入后台时，底层画布快照冻结，关闭工作区后一次性追上最新 `GameState`。该快照绝不能反向写回游戏状态。
+
+暂停是模拟调度的硬边界：计时器不累积墙钟预算，Worker 不提交新任务；暂停切换会清理未到达提交边界的预算，恢复从暂停时的确定状态继续，不补算暂停时长。纯挂机仍使用同一 `advancePersistentSimulationRuntime` 路径，只降低状态发布频率，不改变模拟秒、产量或状态哈希。
 
 阶段 0-3 的新版手机壳由 `?mobileUi=next` 或独立的 `dsp-idle-network.mobile-ui.v1` 偏好启用；`legacy` 仍保留为回退路径。偏好、移动路由、抽屉高度、画布模式、连续放置开关、工作区详情栈和最近使用列表都不进入 `GameState` 或云存档。`useMobileNavigation` 同时管理 `peek / half / full`、工作区 subview 栈和浏览器历史，因此界面返回、Android 返回与浏览器返回按相同顺序收起抽屉、退出详情和返回工厂。
 
@@ -80,13 +89,17 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 - `src/game/productionRefresh.ts`、`quantityFormat.ts`、`infiniteResearch.ts`、`galacticActivity.ts`：设备级画面发布策略、精确大数显示、BigInt 无限科研曲线和银河活动时间域。前三者不读取墙上时间；活动时钟只接受服务器校准后持久化的单调时间。
 - `src/game/storage.ts`、`saveEnvelopeIntegrity.ts`：迁移、确定性 envelope 校验、自检序列化、受控救援、离线结算、槽位、备份与快照。校验函数在客户端与服务端各有无浏览器依赖的同算法实现。
 - `src/game/performanceMonitor.ts`、`src/hooks/usePerformanceMonitor.ts`：默认关闭的页面会话性能采样、60 秒滚动窗口和匿名报告；只读取权威状态与 Worker 计时，不进入 `GameState`。
+- `src/game/systemSpaceStation.ts`：空间站四阶段施工、Mk.I→Mk.II 原地升级、升级状态/材料缺口查询、稳定顺序批量升级、legacy/elevator 模式切换、五路输出约束和模块成本；命令只返回新的 `GameState`，不持有可变全局配置。
+- `src/game/systemHubLogistics.ts`：系统共享仓库的规范十进制大整数、五秒边界比例分配、跨星系舰队返回桶和电梯站输入/输出结算。运行时只保存聚合舰队桶，`bigint` 不进入 JSON。
+- `src/game/quantumLogisticsNetwork.ts`：全星区量子库存的规范十进制大整数、逐物品容量、上传/下载独立全局预算、公平游标，以及星际物流塔和轨道采集器的五秒接入桥。采集器不产生独立带宽；传统本地运输机仍由 `engine.ts` 的 `local` 调度路径处理。
+- `src/components/SystemSpaceStationWorkspace.tsx`：从星图进入的桌面/新版手机空间站工作区；阶段材料、共享库存、模块、物流站模式和五个输出口均调用领域命令。
 - `src/game/cloud.ts`：同源 `/api` 客户端、会话和 8 秒请求超时。账号与云存档只允许 HTTPS 或本地开发入口；匿名只读 `/health`、`/public-status` 和 `GET /leaderboard` 可在上海 HTTP 同源读取节点状态、活动时钟和公开排名，且不会附带 token。打包的 Electron/Android 只有在构建时显式配置 `VITE_API_BASE_URL` 才启用云功能，社区包默认离线。Capacitor 的内部页面 origin 固定为 `https://localhost`；生产 API 白名单需精确允许它，以覆盖原生 HTTP 补丁不可用时的标准 Fetch 回退，未知 origin 仍拒绝。
 - `src/game/mods.ts`、`contentPacks.ts`：内容包格式校验、依赖和运行时目录注入。
 
 ## 3. 状态与模拟流
 
 1. 主菜单调用 `loadGame()` 或加载指定槽位，得到 `LoadedGame`。
-2. `1.0.13` 的 `FactoryGame` 以 `GameState` v41 作为唯一持久游戏状态；v1-v40 由连续迁移链归一到 v41，存档 envelope 仍为 v2。
+2. 当前未发布工作区的 `FactoryGame` 以 `GameState` v45 作为唯一持久游戏状态；v1-v42 与不含实验资产的干净 v43 经连续迁移归一到 v45，v44 补齐逐物品容量、上传游标和采集器 legacy 默认值。存档 envelope 仍为 v2。v44 增加量子共享库存与量子塔接入字段；v45 增加采集器显式接入、逐物品 1 万至 100 亿容量和运行时流量摘要边界。运行时摘要在序列化前移除；旧实体、线路、库存、槽位、本地/星际在途路线逐字段保留，带有效旧空间站资产的 v43 存档继续拒绝加载。
 3. 工厂每 1 秒累计并向模拟 Worker 提交真实经过时间。模拟步长、状态发布和视觉动画彼此独立；画面档位绝不能改变 `1x/2x/4x` 累计秒数、生产、物流、科研、戴森或确定性顺序。
 4. 浏览器支持 Worker 时，状态、模拟秒数和可信墙钟秒数分别提交给 `src/game/simulation.worker.ts`；Worker 调用 `advanceSimulation()`。普通倍率与时间扭曲只放大模拟预算，活动资格和倒计时只消费墙钟预算。暂停时停止重复回传完整状态，Worker 不可用或报错时使用同一个函数回退到主线程。
 5. `canvasGame` 是只读展示快照。设备级 UI 偏好 `dsp-idle-network.production-refresh.v1` 提供自动、100/200/500/1000/1500/3000 ms 档位；自动档桌面从 200 ms、粗指针设备从 500 ms 开始，并依据 FPS、Worker 延迟和积压以迟滞窗口逐档调整。固定档不会被自动策略覆盖。
@@ -96,7 +109,9 @@ React Flow 的持久真相仍来自 `GameState`。手机横竖屏切换只重新
 
 性能监控只有玩家主动开启后才随 Worker 请求附带 `profile=true`。模拟器在生产/采集、传送带、物流、电力、戴森、制造施工、统计历史和状态复制边界累计耗时；这些数字不参与状态变更、随机顺序或哈希。主线程 hook 以每秒最多一个样本记录 FPS、帧峰值、Worker 往返、积压、内存、状态/存档大小和保存耗时，停止后不再执行阶段计时。
 
-模拟会话还可以建立只读 `SimulationLookupContext`。它按实体 ID、行星、电网和线路端点组织运行时索引，并缓存物流槽候选、稳定站点匹配、在途货物、活动载具负载、路线环境签名和路线经济计算。每步派遣写入不持久化的槽位结果，拥堵统计直接复用该结果；科技或探索使路线环境变化时会清空相关缓存。索引只在会话内随状态复制创建，绝不写入 `GameState`、存档或状态哈希；任何索引路径都必须能与 legacy 全扫描路径逐状态比较。供电、采矿、生产、施工、射线接收、线路转运和容量预留在索引存在时保持原数组顺序，索引不存在时继续使用 legacy 路径。
+模拟会话还可以建立只读 `SimulationLookupContext`。它按实体 ID、行星、电网和线路端点组织运行时索引，并缓存物流槽候选、稳定站点匹配、在途货物、活动载具负载、路线环境签名和路线经济计算。动态航线账本带有 Worker 私有脏标记：会话开始或航线完成时才重建，派遣新路线立即增量写入；未完成航线不会每个模拟步全量扫描。每步派遣写入不持久化的槽位结果，拥堵统计直接复用该结果；科技或探索使路线环境变化时会清空相关缓存。索引只在会话内随状态复制创建，绝不写入 `GameState`、存档或状态哈希；legacy 全扫描路径继续作为逐状态比较的确定性 oracle。供电、采矿、生产、施工、射线接收、线路转运和容量预留在索引存在时保持原数组顺序，索引不存在时继续使用 legacy 路径。
+
+离线 Worker 通过 `offlineCriticalEvents.ts` 只计算保守的路线到达、机器周期和探索任务边界；边界只是精确模拟会话的切段提示，不能跳过任何结算公式。Worker 每约 75ms 主动让出线程，找不到可证明边界时继续原精确窗口。`alerts.ts` 在告警工作区关闭时只构造计数快照，打开工作区才生成标题、位置和完整说明。
 
 燃料发电和能量枢纽使用“完整燃料/蓄电单元数量 + 最后一个余量”的闭式批量结算，避免极端堆叠按物品循环。建筑制造中心把一份完整递归计划编译成托盘消耗、必要 WIP、托盘/随身载具返还、副产物销毁、产出统计和工作秒数的确定性事务；复杂配方、副产物、多目标和多中心均可复用。只有单一活动目标且返还不会改变后续递归选择时才跨成品整批结算；其他情况按原轮询顺序快速结算单份事务，已有部分 WIP 仍走原逐步路径。计划缓存只在相关物资增加或整份消耗不足时失效。`SimulationAdvanceOptions` 的批处理开关只作为非持久测试 oracle，不进入 Worker 协议、GameState 或存档。
 
@@ -174,7 +189,7 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 | 数据 | 键或位置 | 说明 |
 | --- | --- | --- |
-| 主存档 | IndexedDB `dsp-idle-network.local-saves/records`，逻辑键 `dsp-idle-network.save.v1` | v2 envelope；`1.0.13` 写 v41并可迁移 v1-v40；写入后读回校验，`productionHistory` 始终以空数组写入 |
+| 主存档 | IndexedDB `dsp-idle-network.local-saves/records`，逻辑键 `dsp-idle-network.save.v1` | v2 envelope；`1.0.14` 写 v42并可迁移 v1-v41；写入后读回校验，`productionHistory` 始终以空数组写入 |
 | 生产画面刷新偏好 | `dsp-idle-network.production-refresh.v1` | 只按设备保存，不进入 `GameState`、本地/云存档或迁移版本 |
 | 界面语言偏好 | `dsp-idle-network.locale.v1` | `zh-CN / en`；可由 `?lang=en` 更新，只按设备保存，不进入游戏存档或云同步 |
 | 检查器布局偏好 | `dsp-idle-network.inspector-layout.v1` | 分区顺序和折叠状态；损坏或未知 ID 自动归一，不进入游戏存档 |
@@ -204,6 +219,8 @@ v38→v39 为物资配送枢纽增加三个持久接口模式，并为指向枢�
 v39→v40 增加存档级 `settings.beltBufferLimit`（旧档默认 100,000,000）和精确 `contentPacks` 引用。已有线路等级、并联、进度、缓存和累计运输不变；旧空间站建设活动的结束时间迁移为长期开放。服务端合法客户端上限扩展到 v40，并校验线路额度、动态传送带 1～32 级及内容包 ID/版本；envelope v2、云 schema v7 和 SQLite layout v2 不升级。
 
 v40→v41 只为电磁轨道弹射器增加 `targetDysonOrbitId`。旧实体按所在恒星系迁移时的活动轨道补齐；旧蓝图保持无目标字段，并在实际部署时使用目标恒星系的活动轨道。已有 v41 中指向已删除或其他恒星系的目标 ID 原样保留并暂停发射，等待玩家重新选择，不能静默改绑。迁移不重建太阳帆、实体、蓝图、输入缓存、线路、发射进度或戴森工程数据；envelope v2、云 schema v7 和 SQLite layout v2 不升级。
+
+v41→v42 只增加 `galaxy.planetMetadata` 与 `galaxy.systemMetadata`。旧存档和缺字段存档使用空元数据；自定义名称、备注和标签在载入及服务端校验时分别限制为 32/240/16 字符、8 个标签和合法目录 ID。元数据只参与显示、搜索和星图跳转，不参与生产、物流、科研、戴森或状态确定性；删除或重置显示名称不会删除星球实体或改写任何内部引用。envelope v2、云 schema v7 和 SQLite layout v2 不升级。
 
 `saveGame()` 先深度分离一次确切的可序列化状态，再用该对象生成轻量 envelope 和校验值；生成 JSON 后立即重算校验，随后才清理过期自动快照、写主存档并读回复核。只有生成前后和写入读回都一致才返回成功。配额错误只会从最旧自动快照开始清理并重试一次，绝不自动删除手动槽位或手动快照。最终失败不会中止模拟，但运行时必须持续显示导出提示，不能把“界面继续运行”误报成“已保存”。
 

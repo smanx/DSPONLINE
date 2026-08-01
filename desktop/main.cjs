@@ -29,6 +29,9 @@ let updater = null;
 let zoomTimer = null;
 let windowStateTimer = null;
 let updateTimer = null;
+let updateShutdownPromise = null;
+let updateShutdownResolve = null;
+let updateShutdownRequested = false;
 let fontScale = 1;
 let updateState = {
   state: isDevelopment ? "development" : "idle",
@@ -293,12 +296,45 @@ ipcMain.handle("desktop:download-update", async () => {
   return updateState;
 });
 
-ipcMain.handle("desktop:install-update", () => {
-  if (updateState.state === "downloaded" && updater) {
-    setImmediate(() => updater.quitAndInstall());
+ipcMain.handle("desktop:update-ready", (event) => {
+  if (!trustedSender(event) || !updateShutdownRequested) return;
+  updateShutdownResolve?.();
+  updateShutdownResolve = null;
+});
+
+async function requestRendererSaveBeforeUpdate() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (updateShutdownPromise) return updateShutdownPromise;
+  updateShutdownRequested = true;
+  updateShutdownPromise = new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      updateShutdownResolve = null;
+      resolve();
+    };
+    updateShutdownResolve = finish;
+    mainWindow.webContents.send("desktop:prepare-for-update");
+    setTimeout(finish, 15_000);
+  }).finally(() => {
+    updateShutdownPromise = null;
+  });
+  await updateShutdownPromise;
+}
+
+ipcMain.handle("desktop:install-update", async () => {
+  if (updateState.state !== "downloaded" || !updater) return { accepted: false };
+  try {
+    await requestRendererSaveBeforeUpdate();
+    // quitAndInstall waits for the Electron process and its renderer to exit;
+    // the renderer acknowledgement above ensures the last local save is on disk.
+    setImmediate(() => updater.quitAndInstall(false, true));
     return { accepted: true };
+  } catch (error) {
+    publishUpdateState({ state: "error", message: `升级前保存失败：${error instanceof Error ? error.message : "未知错误"}` });
+    return { accepted: false };
   }
-  return { accepted: false };
 });
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();

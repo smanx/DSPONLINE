@@ -281,7 +281,7 @@
 /* Star systems and planets use a route-backed two-level detail flow. */
 .game-shell[data-mobile-shell="true"] .mobile-star-map { display: grid !important; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
 .game-shell[data-mobile-shell="true"] .mobile-star-map.mobile-workspace--detail { grid-template-rows: minmax(0, 1fr); }
-.game-shell[data-mobile-shell="true"] .mobile-star-map > .star-map-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); min-height: 52px; padding: 4px 8px; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map > .star-map-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); min-height: 52px; padding: 4px 8px; }
 .game-shell[data-mobile-shell="true"] .mobile-star-map > .star-map-tabs button { min-height: 44px; }
 .mobile-star-system-list { padding: 8px 10px 22px; }
 .mobile-star-system-list > header { display: flex; min-height: 40px; align-items: center; justify-content: space-between; color: var(--theme-text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); }
@@ -338,6 +338,15 @@
 .game-shell[data-mobile-shell="true"] .mobile-star-map .stellar-industry { height: auto; overflow: visible; padding: 8px; }
 .game-shell[data-mobile-shell="true"] .mobile-star-map :is(.stellar-system-overview, .interplanetary-diagnostics, .stellar-route-console) { overflow: visible; }
 .game-shell[data-mobile-shell="true"] .mobile-star-map :is(.stellar-system-row, .stellar-route-row, .interplanetary-diagnostic) { min-width: 0; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .quantum-inventory-console { min-height: 100%; grid-template-rows: auto auto auto; overflow: visible; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .quantum-inventory-summary { grid-template-columns: 1fr; padding: 10px; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .quantum-inventory-summary dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .quantum-collector-actions { grid-column: auto; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .quantum-inventory-toolbar { grid-template-columns: 1fr; padding: 8px 10px; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .quantum-inventory-list { overflow: visible; padding: 4px 10px 28px; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .quantum-inventory-row { grid-template-columns: minmax(0, 1fr) minmax(120px, .8fr); gap: 8px; padding: 11px 4px; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .quantum-inventory-flow,
+.game-shell[data-mobile-shell="true"] .mobile-star-map .quantum-capacity-editor { grid-column: 1 / -1; }
 
 /* Blueprint list -> editor. */
 .game-shell[data-mobile-shell="true"] .mobile-blueprints { display: block !important; overflow: hidden auto !important; }
@@ -354,6 +363,16 @@
 .game-shell[data-mobile-shell="true"] .mobile-blueprints.mobile-workspace--detail .blueprint-card :is(button, input, select) { min-height: 44px; }
 .game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-transform-controls .segmented-control { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .game-shell[data-mobile-shell="true"] .mobile-blueprints .construction-queue-panel { height: auto; margin: 8px; overflow: visible; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-tabs { position: sticky; z-index: 12; top: 0; min-height: 48px; padding: 0 6px; background: var(--theme-canvas); }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-tabs > button { min-width: 0; min-height: 48px; flex: 1; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .pending-construction-workspace { display: block; overflow: visible; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .pending-construction-workspace > header { position: sticky; z-index: 10; top: 48px; display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 8px; background: var(--theme-canvas); }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .pending-construction-workspace > header small { display: none; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .pending-construction-workspace > header > button { min-height: 44px; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .pending-construction-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; overflow: visible; padding: 8px; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .pending-construction-order > footer { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .pending-construction-order > footer > button { min-height: 46px; padding: 5px; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .pending-construction-materials > div { grid-template-columns: minmax(0, 1fr); }
 
 /* Remaining stage-3 workspaces share a single vertical page without exposing
    the frozen canvas or preserving desktop multi-column scroll regions. */

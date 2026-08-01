@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-07-30-v1.0.13";
+const RELEASE_NOTE_ID = "2026-08-01-v1.0.19";
 
 async function seedUiState(page: Page, options: { theme?: "dark" | "light"; fontScale?: number; paused?: boolean } = {}) {
   await page.addInitScript(({ theme, fontScale, paused, releaseNoteId }) => {

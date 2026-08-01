@@ -54,6 +54,7 @@ import {
   getEntityCycleRatePerSimulationSecond,
   getEntityOperatingStatus,
   getEntityPowerFactor,
+  getOrbitalCollectorQuantumStatus,
   getQuantumAttachmentStatus,
   getMaterialDeliverySlots,
   getRecursiveHandcraftPlan,
@@ -358,7 +359,7 @@ function MobileBeltLaneControl({ game, belt, onChange }: { game: GameState; belt
   </section>;
 }
 
-export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onRemoveEntity, onUpgradeEntity, onUpgradeInterstellarStation, onQuantumAttachment, onUpgradeBelt, onBeltLaneCountChange, onEntityLockChange, onRemoveSprayCoater, onOpenResourceSettings, onMaterialDeliverySlotChange, onEjectorOrbitChange }: {
+export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, onSnap, onClose, onOpenAdvanced, onFocus, onAddEntity, onRemoveEntity, onUpgradeEntity, onUpgradeInterstellarStation, onQuantumAttachment, onOrbitalCollectorQuantumMode, onUpgradeBelt, onBeltLaneCountChange, onEntityLockChange, onRemoveSprayCoater, onOpenResourceSettings, onMaterialDeliverySlotChange, onEjectorOrbitChange }: {
   game: GameState;
   snap: MobileSheetSnap;
   entity: FactoryEntity | null;
@@ -373,6 +374,7 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
   onUpgradeEntity: (entityId: string) => void;
   onUpgradeInterstellarStation: (entityId: string) => void;
   onQuantumAttachment: (entityId: string) => void;
+  onOrbitalCollectorQuantumMode: (entityId: string, enabled: boolean) => void;
   onUpgradeBelt: (beltId: string) => void;
   onBeltLaneCountChange: (beltId: string, targetLanes: number) => void;
   onEntityLockChange: (entityId: string, locked: boolean) => void;
@@ -402,6 +404,7 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
   const addAvailable = entity ? Math.floor(game.construction[entity.kind === "vein" ? getExtractorBuildingId(entity.resourceId!) : entity.buildingId!] ?? 0) : 0;
   const stationUpgradeStatus = entity?.buildingId === "interstellar_logistics_station" ? getInterstellarStationUpgradeStatus(game, entity.id) : null;
   const quantumStatus = entity?.buildingId === "interstellar_logistics_station" ? getQuantumAttachmentStatus(game, entity.id) : null;
+  const collectorQuantumStatus = entity?.buildingId === "orbital_collector" ? getOrbitalCollectorQuantumStatus(game, entity.id) : null;
   useEffect(() => {
     setAddCount((current) => Math.max(1, Math.min(Math.max(1, addAvailable), current)));
   }, [addAvailable, entity?.id]);
@@ -458,7 +461,7 @@ export function MobileInspectorSheet({ game, snap, entity, belt, selectedCount, 
           <div className="mobile-inspector-actions">
             <button type="button" onClick={onFocus}><Focus size={18} /><span>定位</span></button>
             {entity ? <button type="button" disabled={entity.interactionLocked || addAvailable < 1} onClick={() => onAddEntity(entity.id, addCount)}><Plus size={18} /><span>增加 ×{Math.min(addCount, addAvailable)}</span><b>余 {addAvailable}</b></button> : null}
-            {entity ? entity.buildingId === "interstellar_logistics_station" && entity.stationTier !== 2 ? <button type="button" disabled={entity.interactionLocked} title={stationUpgradeStatus?.reason} onClick={() => onUpgradeInterstellarStation(entity.id)}><Sparkles size={18} /><span>升级 Mk.II</span></button> : entity.buildingId === "interstellar_logistics_station" && quantumStatus?.mode === "legacy" ? <button type="button" disabled={entity.interactionLocked} onClick={() => onQuantumAttachment(entity.id)}><Sparkles size={18} /><span>接入量子网络</span></button> : <button type="button" disabled={entity.interactionLocked || !canUpgradeEntity(game, entity.id)} onClick={() => onUpgradeEntity(entity.id)}><Sparkles size={18} /><span>升级</span></button> : belt ? <button type="button" disabled={!canUpgradeBelt(game, belt.id)} onClick={() => onUpgradeBelt(belt.id)}><Sparkles size={18} /><span>升级线路</span></button> : null}
+            {entity ? entity.buildingId === "interstellar_logistics_station" && entity.stationTier !== 2 ? <button type="button" disabled={entity.interactionLocked} title={stationUpgradeStatus?.reason} onClick={() => onUpgradeInterstellarStation(entity.id)}><Sparkles size={18} /><span>升级 Mk.II</span></button> : entity.buildingId === "interstellar_logistics_station" && quantumStatus?.mode === "legacy" ? <button type="button" disabled={entity.interactionLocked} onClick={() => onQuantumAttachment(entity.id)}><Sparkles size={18} /><span>接入量子网络</span></button> : entity.buildingId === "orbital_collector" ? <button type="button" disabled={entity.interactionLocked || collectorQuantumStatus?.mode === "transitioning" || collectorQuantumStatus?.blocker === "technology"} onClick={() => onOrbitalCollectorQuantumMode(entity.id, collectorQuantumStatus?.mode !== "quantum")}><Sparkles size={18} /><span>{collectorQuantumStatus?.mode === "quantum" ? "关闭量子采集" : collectorQuantumStatus?.mode === "transitioning" ? "量子交接中" : "接入量子采集"}</span></button> : <button type="button" disabled={entity.interactionLocked || !canUpgradeEntity(game, entity.id)} onClick={() => onUpgradeEntity(entity.id)}><Sparkles size={18} /><span>升级</span></button> : belt ? <button type="button" disabled={!canUpgradeBelt(game, belt.id)} onClick={() => onUpgradeBelt(belt.id)}><Sparkles size={18} /><span>升级线路</span></button> : null}
             {entity ? <button type="button" onClick={() => onEntityLockChange(entity.id, !entity.interactionLocked)}>{entity.interactionLocked ? <Unlock size={18} /> : <Lock size={18} />}<span>{entity.interactionLocked ? "解锁" : "锁定"}</span></button> : null}
             {entity?.sprayCoaterInstalled ? <button type="button" disabled={entity.interactionLocked} onClick={() => onRemoveSprayCoater(entity.id)}><Trash2 size={18} /><span>拆卸喷涂</span></button> : null}
             {entity ? <button className="danger" type="button" disabled={entity.interactionLocked || entity.kind === "vein" && entity.minerCount < 1} onClick={() => onRemoveEntity(entity.id)}><Trash2 size={18} /><span>{entity.kind === "vein" ? "回收全部采集设备" : "完整回收建筑"}</span></button> : null}

@@ -20,8 +20,6 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Activity, AlertTriangle, ArrowUp, BookOpen, Check, ChevronLeft, ChevronRight, Copy, Download, Focus, Map as MapIcon, PanelRightClose, Route, Sparkles, Trash2, WandSparkles, X } from "lucide-react";
 import {
-  BuildingPlacementCursor,
-  CargoCursor,
   ConstructionDock,
   HeaderControls,
   InspectorPanel,
@@ -31,7 +29,9 @@ import {
 import { CommandPalette, type CommandWorkspace } from "./components/CommandPalette";
 import { NODE_TYPES, type FactoryFlowNode, type FactoryNodeData } from "./components/FactoryNodes";
 import { EDGE_TYPES, FactoryConnectionLine, type FactoryFlowEdge } from "./components/FactoryEdges";
-import { BlueprintPlacementCursor, BlueprintWorkspace, CanvasRegionEditor, CanvasRegionLayer, CanvasSelectionTools, SelectionToolbar, type CanvasRegionRectangle, type CanvasRegionResizeHandle } from "./components/BlueprintWorkspace";
+import { BlueprintWorkspace, CanvasRegionEditor, CanvasRegionLayer, CanvasSelectionTools, PendingBlueprintLayer, SelectionToolbar, type CanvasRegionRectangle, type CanvasRegionResizeHandle } from "./components/BlueprintWorkspace";
+import { CanvasInteractionOverlay, type CanvasClickConnectionPreview, type CanvasConnectionPreviewTone } from "./components/CanvasInteractionOverlay";
+import { GAME_DIALOG_CLOSED_EVENT, useGameDialog } from "./components/GameDialogProvider";
 import { RecipeFocusPanel } from "./components/RecipeFocusPanel";
 import { OnboardingCoach } from "./components/OnboardingCoach";
 import { MobileGameShell } from "./components/mobile/MobileGameShell";
@@ -67,6 +67,8 @@ import {
   canQueueBlueprint,
   cancelHandcraftQueueEntry,
   cancelConstructionQueueEntry,
+  fundAllConstructionQueueEntries,
+  fundConstructionQueueEntry,
   canUpgradeEntities,
   canUpgradeBelt,
   cancelCurrentResearch,
@@ -171,12 +173,15 @@ import {
   setRecipeFocusPosition,
   setFuelItem,
   setLogisticsItem,
+  setAllOrbitalCollectorsQuantumMode,
+  setOrbitalCollectorQuantumMode,
   setMaterialDeliverySlot,
   setPaused,
   setPlanetIndustryRole,
   setPlanetDisplayMetadata,
   setStarSystemDisplayName,
   setPlanetTrayItemLimit,
+  setQuantumLogisticsItemCapacity,
   setProliferatorConfiguration,
   setEntitiesProliferatorConfiguration,
   setStationMode,
@@ -239,6 +244,7 @@ import { createContentPackTemplate, parseContentPack, type ModValidationResult }
 import { importWithRecovery } from "./game/dynamicImportRecovery";
 import {
   applyContentPackRegistry,
+  createContentPackRuntimeSnapshot,
   getContentPackValidationContext,
   getContentPackUsage,
   getActiveContentPackReferences,
@@ -248,6 +254,7 @@ import {
   saveContentPackRegistry,
   setContentPackEnabled,
   type ContentPackRegistry,
+  type ContentPackRuntimeSnapshot,
 } from "./game/contentPacks";
 import { baselineAccountProgress, createLocalAccount, getActiveAccount, loadAccountState, recordAccountProgress, saveAccountState, setActiveCloudBinding, switchLocalAccount, updateAccountProfile, type AccountProfileChanges } from "./game/account";
 import { removeLeaderboardData } from "./game/leaderboard";
@@ -269,6 +276,8 @@ import { usePlayerPresence } from "./hooks/usePlayerPresence";
 import { useSwipeDismiss } from "./hooks/useSwipeDismiss";
 import { useAppLocale } from "./i18n/locale";
 import { createAutomaticRefreshState, resolveProductionRefreshInterval, updateAutomaticRefreshState } from "./game/productionRefresh";
+import { getCanvasLod, shouldVirtualizeCanvas, type CanvasLod } from "./game/canvasPerformance";
+import { buildAlignmentSpatialIndex, findAlignmentGuides, type AlignmentSpatialIndex } from "./game/alignmentGuides";
 import { synchronizeGalacticActivity, type GalacticActivityPublicStatus } from "./game/galacticActivity";
 import { TutorialWorkspace } from "./components/TutorialWorkspace";
 import { TimeWarpIdleOverlay } from "./components/TimeWarpIdleOverlay";
@@ -310,14 +319,9 @@ interface ConnectionHandleTarget {
   handleType: "source" | "target";
 }
 
-interface ClickConnectionPreviewState {
-  originX: number;
-  originY: number;
-  handleType: "source" | "target";
+interface ClickConnectionPreviewState extends CanvasClickConnectionPreview {
   draft: ConnectionDraft;
 }
-
-type ConnectionPreviewTone = "pending" | "valid" | "invalid";
 
 type InteractionSound = "confirm" | "complete" | "alert" | "place" | "connect" | "upgrade" | "remove" | "travel" | "launch";
 
@@ -479,18 +483,97 @@ function getConnectionHandleTarget(target: EventTarget | null): ConnectionHandle
   return element && nodeId && handleId && handleType ? { element, nodeId, handleId, handleType } : null;
 }
 
-function findConnectionHandleAtPoint(x: number, y: number, maximumDistance = 24, preferred?: (target: ConnectionHandleTarget) => boolean): ConnectionHandleTarget | null {
+interface ConnectionHandleSpatialEntry {
+  target: ConnectionHandleTarget;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+interface ConnectionHandleSpatialIndex {
+  cellSize: number;
+  viewport: CanvasViewport;
+  buckets: Map<string, ConnectionHandleSpatialEntry[]>;
+}
+
+function buildConnectionHandleSpatialIndex(viewport: CanvasViewport): ConnectionHandleSpatialIndex {
+  const cellSize = 128;
+  const buckets = new Map<string, ConnectionHandleSpatialEntry[]>();
+  const zoom = Math.max(0.01, viewport.zoom);
+  const elements = document.querySelectorAll<HTMLElement>(".factory-canvas .react-flow__handle");
+  for (const element of elements) {
+    const target = getConnectionHandleTarget(element);
+    if (!target) continue;
+    const bounds = element.getBoundingClientRect();
+    const left = (bounds.left - viewport.x) / zoom;
+    const right = (bounds.right - viewport.x) / zoom;
+    const top = (bounds.top - viewport.y) / zoom;
+    const bottom = (bounds.bottom - viewport.y) / zoom;
+    const entry = { target, left, right, top, bottom } satisfies ConnectionHandleSpatialEntry;
+    const minX = Math.floor(left / cellSize);
+    const maxX = Math.floor(right / cellSize);
+    const minY = Math.floor(top / cellSize);
+    const maxY = Math.floor(bottom / cellSize);
+    for (let cellX = minX; cellX <= maxX; cellX += 1) {
+      for (let cellY = minY; cellY <= maxY; cellY += 1) {
+        const key = `${cellX}:${cellY}`;
+        const bucket = buckets.get(key) ?? [];
+        bucket.push(entry);
+        buckets.set(key, bucket);
+      }
+    }
+  }
+  return { cellSize, viewport, buckets };
+}
+
+function findConnectionHandleAtPoint(
+  x: number,
+  y: number,
+  maximumDistance = 24,
+  preferred?: (target: ConnectionHandleTarget) => boolean,
+  spatialIndex?: ConnectionHandleSpatialIndex | null,
+): ConnectionHandleTarget | null {
   const direct = getConnectionHandleTarget(document.elementFromPoint(x, y));
   if (direct) return direct;
   let nearest: { target: ConnectionHandleTarget; distance: number } | null = null;
   let nearestPreferred: { target: ConnectionHandleTarget; distance: number } | null = null;
-  for (const element of document.querySelectorAll<HTMLElement>(".factory-canvas .react-flow__handle")) {
-    const target = getConnectionHandleTarget(element);
-    if (!target) continue;
-    const bounds = element.getBoundingClientRect();
-    const dx = Math.max(bounds.left - x, 0, x - bounds.right);
-    const dy = Math.max(bounds.top - y, 0, y - bounds.bottom);
-    const distance = Math.hypot(dx, dy);
+  const entries = spatialIndex
+    ? (() => {
+      const zoom = Math.max(0.01, spatialIndex.viewport.zoom);
+      const flowX = (x - spatialIndex.viewport.x) / zoom;
+      const flowY = (y - spatialIndex.viewport.y) / zoom;
+      const radius = maximumDistance / zoom;
+      const minX = Math.floor((flowX - radius) / spatialIndex.cellSize);
+      const maxX = Math.floor((flowX + radius) / spatialIndex.cellSize);
+      const minY = Math.floor((flowY - radius) / spatialIndex.cellSize);
+      const maxY = Math.floor((flowY + radius) / spatialIndex.cellSize);
+      const candidates: ConnectionHandleSpatialEntry[] = [];
+      const seen = new Set<HTMLElement>();
+      for (let cellX = minX; cellX <= maxX; cellX += 1) {
+        for (let cellY = minY; cellY <= maxY; cellY += 1) {
+          for (const entry of spatialIndex.buckets.get(`${cellX}:${cellY}`) ?? []) {
+            if (seen.has(entry.target.element)) continue;
+            seen.add(entry.target.element);
+            candidates.push(entry);
+          }
+        }
+      }
+      return candidates;
+    })()
+    : Array.from(document.querySelectorAll<HTMLElement>(".factory-canvas .react-flow__handle")).flatMap((element) => {
+      const target = getConnectionHandleTarget(element);
+      if (!target) return [];
+      const bounds = element.getBoundingClientRect();
+      return [{ target, left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom } satisfies ConnectionHandleSpatialEntry];
+    });
+  for (const entry of entries) {
+    const target = entry.target;
+    const dx = Math.max(entry.left - (spatialIndex ? (x - spatialIndex.viewport.x) / spatialIndex.viewport.zoom : x), 0,
+      (spatialIndex ? (x - spatialIndex.viewport.x) / spatialIndex.viewport.zoom : x) - entry.right);
+    const dy = Math.max(entry.top - (spatialIndex ? (y - spatialIndex.viewport.y) / spatialIndex.viewport.zoom : y), 0,
+      (spatialIndex ? (y - spatialIndex.viewport.y) / spatialIndex.viewport.zoom : y) - entry.bottom);
+    const distance = Math.hypot(dx, dy) * (spatialIndex?.viewport.zoom ?? 1);
     if (distance <= maximumDistance && (!nearest || distance < nearest.distance)) nearest = { target, distance };
     if (distance <= maximumDistance && preferred?.(target) && (!nearestPreferred || distance < nearestPreferred.distance)) nearestPreferred = { target, distance };
   }
@@ -502,25 +585,6 @@ function connectionFromDraft(draft: ConnectionDraft, target: ConnectionHandleTar
   return draft.handleType === "source"
     ? { source: draft.nodeId, sourceHandle: originHandleId, target: target.nodeId, targetHandle: target.handleId }
     : { source: target.nodeId, sourceHandle: target.handleId, target: draft.nodeId, targetHandle: originHandleId };
-}
-
-function ClickConnectionPreview({ preview, pointer, tone }: {
-  preview: ClickConnectionPreviewState;
-  pointer: { x: number; y: number };
-  tone: ConnectionPreviewTone;
-}) {
-  const reach = Math.max(48, Math.abs(pointer.x - preview.originX) * 0.42);
-  const direction = preview.handleType === "source" ? 1 : -1;
-  const path = `M${preview.originX} ${preview.originY} C${preview.originX + reach * direction} ${preview.originY} ${pointer.x - reach * direction} ${pointer.y} ${pointer.x} ${pointer.y}`;
-  return (
-    <svg className="factory-click-connection-preview" aria-hidden="true">
-      <g className={`factory-connection-preview factory-connection-preview--${tone}`}>
-        <path className="factory-connection-preview__halo" d={path} />
-        <path className="factory-connection-preview__path" d={path} />
-        <circle className="factory-connection-preview__target" cx={pointer.x} cy={pointer.y} r="7" />
-      </g>
-    </svg>
-  );
 }
 
 function visualEntitySignature(entity: FactoryEntity): string {
@@ -547,6 +611,7 @@ function minerPlacementHint(buildingId: BuildingId): string {
 export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }: { initialLoad: LoadedGame; onReturnToMenu: () => void; onOpenReleaseNotes: () => void }) {
   usePlayerPresence();
   const { isEnglish } = useAppLocale();
+  const gameDialog = useGameDialog();
   const compactLayout = useCompactLayout();
   const coarsePointer = useCoarsePointer();
   const [mobileUiPreference, setMobileUiPreference] = useMobileUiPreference();
@@ -621,11 +686,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [alignmentGuides, setAlignmentGuides] = useState<AlignmentGuides>({ x: null, y: null });
   const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null);
   const [clickConnectionPreview, setClickConnectionPreview] = useState<ClickConnectionPreviewState | null>(null);
-  const [clickConnectionTone, setClickConnectionTone] = useState<ConnectionPreviewTone>("pending");
+  const [clickConnectionTone, setClickConnectionTone] = useState<CanvasConnectionPreviewTone>("pending");
   const [clickConnectionSnapPoint, setClickConnectionSnapPoint] = useState<{ x: number; y: number } | null>(null);
   const [connectionHint, setConnectionHint] = useState<{ label: string; tone: "ready" | "blocked" | "warning" } | null>(null);
   const initialViewport = loaded.state.planetViewports[loaded.state.activePlanetId] ?? { x: 510, y: 250, zoom: 0.84 };
   const [viewportZoom, setViewportZoom] = useState(initialViewport.zoom);
+  const [pendingBlueprintViewport, setPendingBlueprintViewport] = useState<CanvasViewport>({ ...initialViewport });
+  const [canvasViewportSize, setCanvasViewportSize] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
   const [highlightedTaskId, setHighlightedTaskId] = useState<CampaignTaskId | null>(null);
   const [rewardFlights, setRewardFlights] = useState<RewardFlight[]>([]);
   const [planetTransition, setPlanetTransition] = useState<PlanetTransition | null>(null);
@@ -641,7 +708,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [eventHistory, setEventHistory] = useState<Array<{ id: number; text: string }>>([]);
   const [interactionBursts, setInteractionBursts] = useState<InteractionBurst[]>([]);
   const [ctrlHeld, setCtrlHeld] = useState(false);
-  const [pointer, setPointer] = useState({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const gameRef = useRef(game);
   const latestCanvasGameRef = useRef(game);
   const canvasTopologyRef = useRef<FactoryCanvasTopology | null>(null);
@@ -655,7 +721,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const miningTimerRef = useRef<number | null>(null);
   const nodeDragActiveRef = useRef(false);
   const factoryCanvasRef = useRef<HTMLElement | null>(null);
-  const pointerRef = useRef(pointer);
+  const pointerRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const clickConnectionPreviewRef = useRef<ClickConnectionPreviewState | null>(null);
   const clickConnectionSucceededRef = useRef(false);
   const dragConnectionStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -683,8 +749,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const canvasSizeRef = useRef<{ width: number; height: number } | null>(null);
   const canvasPointerMotionRef = useRef(createCanvasPointerMotionSession());
   const canvasPointerMotionFrameRef = useRef<number | null>(null);
-  const pointerOverlayFrameRef = useRef<number | null>(null);
   const canvasPointerCaptureRef = useRef<{ element: HTMLElement; pointerId: number } | null>(null);
+  const connectionHandleSpatialIndexRef = useRef<ConnectionHandleSpatialIndex | null>(null);
+  const alignmentSpatialIndexRef = useRef<AlignmentSpatialIndex | null>(null);
+  const dragAlignmentSpatialIndexRef = useRef<AlignmentSpatialIndex | null>(null);
+  const canvasPinchLodRef = useRef<CanvasLod>(getCanvasLod(initialViewport.zoom));
   const continuousPlacementRef = useRef<{ entityId: string; buildingId: BuildingId; planetId: PlanetId } | null>(null);
   const ctrlHeldRef = useRef(false);
   const undoStackRef = useRef<GameState[]>([]);
@@ -695,7 +764,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const audioContextRef = useRef<AudioContext | null>(null);
   const simulationWorkerRef = useRef<Worker | null>(null);
   const simulationWorkerDisabledRef = useRef(false);
-  const simulationSubmissionRef = useRef<{ id: number; state: GameState; simulationSeconds: number; wallSeconds: number; submittedAt: number } | null>(null);
+  const contentPackRuntimeSnapshotRef = useRef<ContentPackRuntimeSnapshot>(createContentPackRuntimeSnapshot(INITIAL_CONTENT_PACK_REGISTRY));
+  const simulationWorkerRegistryFingerprintRef = useRef<string | null>(null);
+  const simulationSubmissionRef = useRef<{ id: number; state: GameState; simulationSeconds: number; wallSeconds: number; registryFingerprint: string; submittedAt: number } | null>(null);
   const lastSimulationResultRef = useRef<GameState | null>(null);
   const simulationPendingSecondsRef = useRef(game.timeWarp.pendingSimulationSeconds);
   const simulationPendingWallSecondsRef = useRef(game.timeWarp.pendingWallSeconds);
@@ -709,6 +780,41 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const performanceMonitor = usePerformanceMonitor(getCurrentGame, game.paused);
   const { screenToFlowPosition, setCenter, setViewport, fitView, getViewport, zoomIn, zoomOut } = useReactFlow();
   const flowStore = useStoreApi<FactoryFlowNode, FactoryFlowEdge>();
+  useEffect(() => {
+    const resetAfterDialog = () => {
+      const capture = canvasPointerCaptureRef.current;
+      if (capture) {
+        try { if (capture.element.hasPointerCapture(capture.pointerId)) capture.element.releasePointerCapture(capture.pointerId); } catch { /* WebView can invalidate the pointer during modal focus changes. */ }
+      }
+      canvasPointerCaptureRef.current = null;
+      if (canvasPointerMotionFrameRef.current != null) window.cancelAnimationFrame(canvasPointerMotionFrameRef.current);
+      canvasPointerMotionFrameRef.current = null;
+      activeCanvasTouchesRef.current.clear();
+      canvasMultiTouchRef.current = null;
+      regionPointerRef.current = null;
+      regionResizeRef.current = null;
+      nodeDragActiveRef.current = false;
+      dragAlignmentSpatialIndexRef.current = null;
+      blockCanvasTouchRef.current = false;
+      syntheticTouchCancelRef.current = false;
+      ctrlHeldRef.current = false;
+      setCtrlHeld(false);
+      setAlignmentGuides({ x: null, y: null });
+      setRegionDraft(null);
+      flowStore.getState().cancelConnection();
+      flowStore.setState({ connectionClickStartHandle: null });
+      clickConnectionPreviewRef.current = null;
+      clickConnectionSucceededRef.current = false;
+      setClickConnectionPreview(null);
+      setClickConnectionTone("pending");
+      setClickConnectionSnapPoint(null);
+      connectionDraftRef.current = null;
+      setConnectionDraft(null);
+      setConnectionHint(null);
+    };
+    window.addEventListener(GAME_DIALOG_CLOSED_EVENT, resetAfterDialog);
+    return () => window.removeEventListener(GAME_DIALOG_CLOSED_EVENT, resetAfterDialog);
+  }, [flowStore]);
   const lowEndMobile = useLowEndMobile();
   const nextMobileShell = mobileUiPreference === "next";
   const productionRefreshIntervalMs = resolveProductionRefreshInterval(productionRefreshPreference, automaticRefreshState);
@@ -819,6 +925,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const nextSize = { width: entry.contentRect.width, height: entry.contentRect.height };
       const previousSize = canvasSizeRef.current;
       canvasSizeRef.current = nextSize;
+      setCanvasViewportSize((current) => Math.abs(current.width - nextSize.width) < 1 && Math.abs(current.height - nextSize.height) < 1 ? current : nextSize);
       if ((!coarsePointer && !nextMobileShell) || !previousSize || nextSize.width <= 0 || nextSize.height <= 0 ||
         (Math.abs(previousSize.width - nextSize.width) < 1 && Math.abs(previousSize.height - nextSize.height) < 1)) return;
       const viewport = viewportRef.current;
@@ -834,6 +941,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
         viewportRef.current = preserved;
+        setPendingBlueprintViewport(preserved);
         void setViewport(preserved, { duration: 0 });
       });
     });
@@ -984,7 +1092,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   useEffect(() => { selectedEntityIdsRef.current = selectedEntityIds; }, [selectedEntityIds]);
   useEffect(() => { selectedBeltIdRef.current = selectedBeltId; }, [selectedBeltId]);
   useEffect(() => { selectedBeltIdsRef.current = selectedBeltIds; }, [selectedBeltIds]);
-  useEffect(() => { pointerRef.current = pointer; }, [pointer]);
   useEffect(() => { if (technologyOpen) trackAnalyticsEvent("open_technology"); }, [technologyOpen]);
   useEffect(() => { if (recipesOpen) trackAnalyticsEvent("open_recipes"); }, [recipesOpen]);
   useEffect(() => { if (statisticsOpen) trackAnalyticsEvent("open_statistics"); }, [statisticsOpen]);
@@ -1290,6 +1397,27 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         });
       }
       simulationSubmissionRef.current = null;
+      const currentRegistryFingerprint = contentPackRuntimeSnapshotRef.current.fingerprint;
+      if (event.data.needsRegistry || event.data.registryError) {
+        simulationPendingSecondsRef.current += submission.simulationSeconds;
+        simulationPendingWallSecondsRef.current += submission.wallSeconds;
+        lastSimulationResultRef.current = null;
+        simulationWorkerRegistryFingerprintRef.current = null;
+        simulationWorkerDisabledRef.current = true;
+        simulationWorkerRef.current = null;
+        setSimulationWorkerActive(false);
+        worker.terminate();
+        setNotice(`模拟 Worker 内容包同步失败：${event.data.registryError ?? "注册表需要刷新"}，已切换到安全模拟`);
+        return;
+      }
+      if (submission.registryFingerprint !== currentRegistryFingerprint || event.data.registryFingerprint !== submission.registryFingerprint) {
+        simulationPendingSecondsRef.current += submission.simulationSeconds;
+        simulationPendingWallSecondsRef.current += submission.wallSeconds;
+        lastSimulationResultRef.current = null;
+        simulationWorkerRegistryFingerprintRef.current = event.data.registryFingerprint ?? null;
+        return;
+      }
+      simulationWorkerRegistryFingerprintRef.current = event.data.registryFingerprint;
       if (event.data.needsState) {
         simulationPendingSecondsRef.current += submission.simulationSeconds;
         simulationPendingWallSecondsRef.current += submission.wallSeconds;
@@ -1371,12 +1499,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         simulationPendingSecondsRef.current = 0;
         simulationPendingWallSecondsRef.current = 0;
         const mainState = gameRef.current;
+        const registrySnapshot = contentPackRuntimeSnapshotRef.current;
         const request: SimulationWorkerRequest = {
           id: simulationRequestIdRef.current + 1,
           ...(mainState !== lastSimulationResultRef.current ? { state: mainState } : {}),
           simulationSeconds,
           wallSeconds: pendingWallSeconds,
           profile: performanceMonitor.isActive(),
+          registryFingerprint: registrySnapshot.fingerprint,
+          ...(simulationWorkerRegistryFingerprintRef.current !== registrySnapshot.fingerprint ? { registry: registrySnapshot } : {}),
         };
         simulationRequestIdRef.current = request.id;
         simulationSubmissionRef.current = {
@@ -1384,6 +1515,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           state: mainState,
           simulationSeconds,
           wallSeconds: pendingWallSeconds,
+          registryFingerprint: registrySnapshot.fingerprint,
           submittedAt: performance.now(),
         };
         try {
@@ -1514,28 +1646,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, []);
 
   useEffect(() => () => { if (audioContextRef.current) void audioContextRef.current.close(); }, []);
-
-  useEffect(() => {
-    const updatePointer = (event: PointerEvent | DragEvent) => {
-      const next = { x: event.clientX, y: event.clientY };
-      // Keep imperative coordinates current for hit testing, but only publish
-      // to React while an overlay or connection preview actually needs them.
-      pointerRef.current = next;
-      if (!pointerOverlayActive || pointerOverlayFrameRef.current !== null) return;
-      pointerOverlayFrameRef.current = window.requestAnimationFrame(() => {
-        pointerOverlayFrameRef.current = null;
-        setPointer(pointerRef.current);
-      });
-    };
-    window.addEventListener("pointermove", updatePointer);
-    window.addEventListener("dragover", updatePointer);
-    return () => {
-      window.removeEventListener("pointermove", updatePointer);
-      window.removeEventListener("dragover", updatePointer);
-      if (pointerOverlayFrameRef.current !== null) window.cancelAnimationFrame(pointerOverlayFrameRef.current);
-      pointerOverlayFrameRef.current = null;
-    };
-  }, [pointerOverlayActive]);
 
   useEffect(() => {
     if (!notice) return;
@@ -1857,7 +1967,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setNotice(`${result.name}已扩建至 ×${result.count}${keepContinuous ? " · 施工库存已用完" : ""}`);
   }, [expandEntityGroup]);
 
-  const handleRemoveEntity = useCallback((entityId: string, count?: number) => {
+  const handleRemoveEntity = useCallback(async (entityId: string, count?: number) => {
     const entity = gameRef.current.entities.find((candidate) => candidate.id === entityId);
     if (!entity) return;
     const availableCount = entity.kind === "vein" ? entity.minerCount : entity.machineCount;
@@ -1867,7 +1977,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const warning = entity.buildingId === "micro_black_hole_connector"
         ? "回收微型黑洞连接装置会移除该实体的累计销毁统计。已经销毁的物资无法恢复，确认继续吗？"
         : `确认完整回收${getBuilding(entity.buildingId!).name} ×${entity.machineCount}？输入、输出、燃料和线路物资会按现有回收规则返还。`;
-      if (!window.confirm(warning)) return;
+      if (!await gameDialog.confirm(warning, { danger: true, confirmLabel: "确认回收" })) return;
     }
     commitGame((current) => removeEntity(current, entityId, count));
     if (removesNode) setSelectedEntityIds((current) => current.filter((id) => id !== entityId));
@@ -1880,7 +1990,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       setNotice(`已完整回收${getBuilding(entity.buildingId).name} ×${entity.machineCount}`);
     }
     playTone("remove");
-  }, [commitGame, playTone]);
+  }, [commitGame, gameDialog, playTone]);
 
   const onInstallMiner = useCallback((entityId: string, count: PlacementCount) => {
     expandPlacedEntity(entityId, count);
@@ -1962,6 +2072,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setNodes([]);
     viewportRef.current = { ...destinationViewport };
     setViewportZoom(destinationViewport.zoom);
+    setPendingBlueprintViewport({ ...destinationViewport });
     setViewport(destinationViewport, { duration: gameRef.current.settings.reducedMotion ? 0 : 180 });
     if (cargo) {
       const titanium = cargo.itemId === "titanium_ore" || cargo.itemId === "titanium_ingot";
@@ -2124,7 +2235,22 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const skippedText = preview.skipped.length > 0
       ? `，跳过 ${preview.skipped.length} 座（${preview.skipped.slice(0, 2).map((entry) => entry.reason).join("；")}${preview.skipped.length > 2 ? "…" : ""}）`
       : "";
-    setNotice(`${scope}已提交 ${preview.startedIds.length} 座物流站接入量子网络，等待五秒边界交接${skippedText}`);
+    setNotice(`${scope}已提交 ${preview.startedIds.length} 座物流站接入量子网络，仅等待旧星际航线和五秒边界；本地运输机继续运行${skippedText}`);
+    playTone("confirm");
+  }, [commitGame, playTone]);
+
+  const handleAllOrbitalCollectorsQuantumMode = useCallback((enabled: boolean, systemId?: StarSystemId) => {
+    const preview = setAllOrbitalCollectorsQuantumMode(gameRef.current, enabled, systemId);
+    const scope = systemId ? `${getStarSystem(systemId).name}内` : "全星区";
+    if (preview.startedIds.length === 0) {
+      const firstReason = preview.skipped[0]?.reason ?? "没有找到可切换的轨道采集器";
+      setNotice(`${scope}量子采集切换未执行：${firstReason}`);
+      playTone("alert");
+      return;
+    }
+    commitGame((current) => setAllOrbitalCollectorsQuantumMode(current, enabled, systemId).state);
+    const skippedText = preview.skipped.length > 0 ? `，跳过 ${preview.skipped.length} 台` : "";
+    setNotice(`${scope}已提交 ${preview.startedIds.length} 台轨道采集器${enabled ? "接入" : "关闭"}量子采集网络${skippedText}`);
     playTone("confirm");
   }, [commitGame, playTone]);
 
@@ -2166,6 +2292,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const viewport = state.planetViewports[state.activePlanetId] ?? { x: 510, y: 250, zoom: 0.84 };
     viewportRef.current = { ...viewport };
     setViewportZoom(viewport.zoom);
+    setPendingBlueprintViewport({ ...viewport });
     setViewport(viewport, { duration: state.settings.reducedMotion ? 0 : 180 });
   }, [clearHistory, onMiningStop, setNodes, setViewport]);
 
@@ -2245,18 +2372,18 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     playTone(check.delta > 0 ? "confirm" : "remove");
   }, [commitGame, playTone]);
 
-  const updateMaterialDeliverySlot = useCallback((entityId: string, slotIndex: number, mode: import("./game/types").MaterialDeliverySlotMode, itemId: ItemId | null) => {
+  const updateMaterialDeliverySlot = useCallback(async (entityId: string, slotIndex: number, mode: import("./game/types").MaterialDeliverySlotMode, itemId: ItemId | null) => {
     const check = getMaterialDeliverySlotChangeCheck(gameRef.current, entityId, slotIndex, mode, itemId);
     if (!check.ok) {
       setNotice(check.label);
       return;
     }
-    if (check.requiresDisconnect && !window.confirm(`${check.label}。枢纽缓存会安全退回本行星物资托盘，是否继续？`)) return;
+    if (check.requiresDisconnect && !await gameDialog.confirm(`${check.label}。枢纽缓存会安全退回本行星物资托盘，是否继续？`, { danger: true, confirmLabel: "断开并重置" })) return;
     commitGame((current) => setMaterialDeliverySlot(current, entityId, slotIndex, mode, itemId, check.requiresDisconnect));
     setNotice(mode === "manual" && itemId
       ? `接口 ${slotIndex + 1} 已指定为${ITEMS[itemId].name}`
       : mode === "auto" ? `接口 ${slotIndex + 1} 已恢复自动识别` : `接口 ${slotIndex + 1} 已清空`);
-  }, [commitGame]);
+  }, [commitGame, gameDialog]);
 
   const autoLayoutEntities = useCallback((entityIds?: readonly string[]) => {
     const current = gameRef.current;
@@ -2766,6 +2893,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const applyRegisteredContentPacks = useCallback((registry: ContentPackRegistry) => {
     const report = applyContentPackRegistry(registry);
     saveContentPackRegistry(registry);
+    contentPackRuntimeSnapshotRef.current = createContentPackRuntimeSnapshot(registry);
+    simulationWorkerRegistryFingerprintRef.current = null;
+    lastSimulationResultRef.current = null;
     setContentPackRegistry(registry);
     // Re-render catalog-driven panels after the live registry changes.
     const contentPacks = getActiveContentPackReferences(registry);
@@ -3236,7 +3366,19 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     return () => window.cancelAnimationFrame(frame);
   }, [activePlanetEntities, beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame.activePlanetId, canvasGame.dysonEngineering, canvasGame.galaxy, canvasGame.settings.logisticsBufferLimit, canvasGame.settings.productionBufferLimit, canvasGame.settings.proliferatorBufferLimit, canvasGame.settings.resourceMode, canvasTopology.targetPortItemsByEntity, commonNodeData, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, locatedProductionEntityIds, placement, productionLineFocus, selectedEntityIds, setNodes, taskHighlight.entityIds]);
 
+  const canvasHandleGeometryKey = useMemo(() => nodes.map((node) => `${node.id}:${node.position.x}:${node.position.y}:${node.measured?.width ?? 0}:${node.measured?.height ?? 0}`).join("|"), [nodes]);
+
+  useEffect(() => {
+    if (nodeDragActiveRef.current) return;
+    let frame = 0;
+    frame = window.requestAnimationFrame(() => {
+      connectionHandleSpatialIndexRef.current = buildConnectionHandleSpatialIndex(viewportRef.current);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [canvasHandleGeometryKey, canvasGame.activePlanetId, viewportZoom]);
+
   const edgeRouteCenters = useMemo(() => {
+    if (nodeDragActiveRef.current && edgeRouteCacheRef.current) return edgeRouteCacheRef.current.centers;
     const rects = nodes.map((node) => ({
       id: node.id,
       x: node.position.x,
@@ -3392,14 +3534,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setClickConnectionPreview(preview);
   }, [beginConnectionDraft]);
 
-  useEffect(() => {
-    const preview = clickConnectionPreview;
+  const handleCanvasPointerPosition = useCallback((point: { x: number; y: number }) => {
+    pointerRef.current = point;
+    const preview = clickConnectionPreviewRef.current;
     if (!preview) return;
     const handle = findConnectionHandleAtPoint(
-      pointer.x,
-      pointer.y,
+      point.x,
+      point.y,
       coarsePointer ? 56 : 24,
       (candidate) => isValidConnection(connectionFromDraft(preview.draft, candidate)),
+      connectionHandleSpatialIndexRef.current,
     );
     const overOrigin = handle?.nodeId === preview.draft.nodeId && handle.handleType === preview.draft.handleType &&
       handle.handleId === preview.draft.handleId;
@@ -3433,7 +3577,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       label: forecast ? `${ITEMS[connectionItem].name} · ${forecast.label}` : `${ITEMS[connectionItem].name} · 可以连接`,
       tone: forecast?.tone === "capacity" || forecast?.tone === "starved" ? "blocked" : "ready",
     });
-  }, [clickConnectionPreview, coarsePointer, isValidConnection, pointer]);
+  }, [coarsePointer, isValidConnection]);
 
   const onConnectEnd = useCallback((event: MouseEvent | TouchEvent, state: FinalConnectionState) => {
     const endPoint = getEventPoint(event);
@@ -3443,6 +3587,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       endPoint.y,
       coarsePointer ? 56 : 24,
       draft ? (candidate) => isValidConnection(connectionFromDraft(draft, candidate)) : undefined,
+      connectionHandleSpatialIndexRef.current,
     ) : null);
     const startPoint = dragConnectionStartRef.current;
     dragConnectionStartRef.current = null;
@@ -3509,6 +3654,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       point.y,
       coarsePointer ? 56 : 24,
       (candidate) => isValidConnection(connectionFromDraft(preview.draft, candidate)),
+      connectionHandleSpatialIndexRef.current,
     ) : null);
     const connection = targetHandle ? connectionFromDraft(preview.draft, targetHandle) : null;
     let succeeded = clickConnectionSucceededRef.current;
@@ -3622,6 +3768,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       y,
       coarsePointer ? 56 : 24,
       (candidate) => isValidConnection(connectionFromDraft(preview.draft, candidate)),
+      connectionHandleSpatialIndexRef.current,
     );
     const connection = targetHandle ? connectionFromDraft(preview.draft, targetHandle) : null;
     if (!connection || !isValidConnection(connection)) return false;
@@ -3680,54 +3827,31 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     };
   }, [blueprintPlacementId, completeClickConnectionAtPoint, flowStore, placement]);
 
-  const alignmentSpatialIndex = useMemo(() => {
-    const cellSize = 96;
-    const buckets = new Map<string, Array<{ id: string; x: number; y: number; width: number; height: number; selected: boolean }>>();
-    for (const candidate of nodes) {
-      const width = candidate.measured?.width ?? 256;
-      const height = candidate.measured?.height ?? 180;
-      const x = candidate.position.x + width / 2;
-      const y = candidate.position.y + height / 2;
-      const key = `${Math.floor(x / cellSize)}:${Math.floor(y / cellSize)}`;
-      const bucket = buckets.get(key) ?? [];
-      bucket.push({ id: candidate.id, x, y, width, height, selected: Boolean(candidate.selected) });
-      buckets.set(key, bucket);
-    }
-    return { cellSize, buckets };
-  }, [nodes]);
+  const alignmentSpatialIndex = useMemo<AlignmentSpatialIndex>(() => buildAlignmentSpatialIndex(nodes.map((candidate) => ({
+    id: candidate.id,
+    x: candidate.position.x,
+    y: candidate.position.y,
+    width: candidate.measured?.width ?? 256,
+    height: candidate.measured?.height ?? 180,
+    selected: Boolean(candidate.selected),
+  }))), [nodes]);
 
-  const onNodeDrag = useCallback((_event: MouseEvent | TouchEvent, node: FactoryFlowNode) => {
-    const width = node.measured?.width ?? 256;
-    const height = node.measured?.height ?? 180;
-    const centerX = node.position.x + width / 2;
-    const centerY = node.position.y + height / 2;
+  useEffect(() => {
+    alignmentSpatialIndexRef.current = alignmentSpatialIndex;
+  }, [alignmentSpatialIndex]);
+
+  const onNodeDrag = useCallback((_event: MouseEvent | TouchEvent, node: FactoryFlowNode, draggedNodes: FactoryFlowNode[]) => {
     const threshold = 7 / Math.max(0.3, viewportZoom);
-    let guideX: number | null = null;
-    let guideY: number | null = null;
-    let nearestX = Number.POSITIVE_INFINITY;
-    let nearestY = Number.POSITIVE_INFINITY;
-    const cellX = Math.floor(centerX / alignmentSpatialIndex.cellSize);
-    const cellY = Math.floor(centerY / alignmentSpatialIndex.cellSize);
-    const nearby: Array<{ id: string; x: number; y: number; width: number; height: number; selected: boolean }> = [];
-    for (let x = cellX - 1; x <= cellX + 1; x += 1) {
-      for (let y = cellY - 1; y <= cellY + 1; y += 1) nearby.push(...(alignmentSpatialIndex.buckets.get(`${x}:${y}`) ?? []));
-    }
-    for (const candidate of nearby) {
-      if (candidate.id === node.id || candidate.selected) continue;
-      const candidateX = candidate.x;
-      const candidateY = candidate.y;
-      const distanceX = Math.abs(candidateX - centerX);
-      const distanceY = Math.abs(candidateY - centerY);
-      if (distanceX < threshold && distanceX < nearestX) {
-        nearestX = distanceX;
-        guideX = candidateX;
-      }
-      if (distanceY < threshold && distanceY < nearestY) {
-        nearestY = distanceY;
-        guideY = candidateY;
-      }
-    }
-    setAlignmentGuides((current) => current.x === guideX && current.y === guideY ? current : { x: guideX, y: guideY });
+    const index = dragAlignmentSpatialIndexRef.current ?? alignmentSpatialIndex;
+    const moving = (draggedNodes.length > 0 ? draggedNodes : [node]).map((candidate) => ({
+      id: candidate.id,
+      x: candidate.position.x,
+      y: candidate.position.y,
+      width: candidate.measured?.width ?? 256,
+      height: candidate.measured?.height ?? 180,
+    }));
+    const guides = findAlignmentGuides(index, moving, threshold);
+    setAlignmentGuides((current) => current.x === guides.x && current.y === guides.y ? current : guides);
   }, [alignmentSpatialIndex, viewportZoom]);
 
   const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: OnSelectionChangeParams<FactoryFlowNode, Edge>) => {
@@ -3889,6 +4013,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     stopCanvasPointerMotion();
     blockCanvasTouchRef.current = true;
     nodeDragActiveRef.current = false;
+    dragAlignmentSpatialIndexRef.current = null;
     onMiningStop();
     continuousPlacementRef.current = null;
     regionPointerRef.current = null;
@@ -3930,6 +4055,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       initialDistance: Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)),
       initialViewport: { ...viewportRef.current },
     };
+    canvasPinchLodRef.current = getCanvasLod(viewportRef.current.zoom);
     cancelPendingTouchAction();
     for (const pointerId of [firstId, secondId]) {
       try { event.currentTarget.setPointerCapture(pointerId); } catch { /* Safari can reject transfer from a child capture. */ }
@@ -3977,7 +4103,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       zoom,
     };
     viewportRef.current = viewport;
-    setViewportZoom(zoom);
+    const nextLod = getCanvasLod(zoom);
+    if (nextLod !== canvasPinchLodRef.current) {
+      canvasPinchLodRef.current = nextLod;
+      setViewportZoom(zoom);
+    }
     void setViewport(viewport, { duration: 0 });
     event.preventDefault();
     event.stopPropagation();
@@ -4022,25 +4152,23 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const position = snapFlowPosition(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
       const blueprint = gameRef.current.blueprints.find((candidate) => candidate.id === blueprintPlacementId);
       const preview = getBlueprintPlacementPreview(gameRef.current, blueprintPlacementId, position);
-      const deployable = preview.canPlace;
-      const compatible = canQueueBlueprint(gameRef.current, blueprintPlacementId) &&
+      const compatible = canQueueBlueprint(gameRef.current, blueprintPlacementId, gameRef.current.activePlanetId, position) &&
         Boolean(blueprint?.entities.length || preview.matchedResourceAnchors > 0);
-      const placedPreview = deployable ? placeBlueprint(gameRef.current, blueprintPlacementId, position) : gameRef.current;
-      const canContinue = deployable && getBlueprintPlacementPreview(placedPreview, blueprintPlacementId, position).canPlace;
+      const deployable = preview.canPlace && compatible;
       const fleetPreview = deployable ? getBlueprintFleetLoadPreview(gameRef.current, blueprintPlacementId) : null;
       const blueprintName = blueprint?.name ?? "蓝图";
       commitGame((current) => {
         const currentPreview = getBlueprintPlacementPreview(current, blueprintPlacementId, position);
-        const next = currentPreview.canPlace
+        const currentCompatible = canQueueBlueprint(current, blueprintPlacementId, current.activePlanetId, position) &&
+          Boolean(current.blueprints.find((candidate) => candidate.id === blueprintPlacementId)?.entities.length || currentPreview.matchedResourceAnchors > 0);
+        const next = currentPreview.canPlace && currentCompatible
           ? placeBlueprint(current, blueprintPlacementId, position)
-          : canQueueBlueprint(current, blueprintPlacementId) && Boolean(current.blueprints.find((candidate) => candidate.id === blueprintPlacementId)?.entities.length || currentPreview.matchedResourceAnchors > 0)
+          : currentCompatible
             ? queueBlueprint(current, blueprintPlacementId, position)
             : current;
-        if (next !== current && !getBlueprintPlacementPreview(next, blueprintPlacementId, position).canPlace) setBlueprintPlacementId(null);
         return next;
       });
       if (deployable) playTone("place");
-      else if (compatible) setBlueprintPlacementId(null);
       setSelectedEntityIds([]);
       const fleetShortfall = fleetPreview
         ? [fleetPreview.drones.shortfall > 0 ? `运输机缺 ${fleetPreview.drones.shortfall}` : "", fleetPreview.vessels.shortfall > 0 ? `运输船缺 ${fleetPreview.vessels.shortfall}` : ""].filter(Boolean).join("、")
@@ -4051,8 +4179,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           ? ` · 匹配 ${preview.matchedResourceAnchors} 个矿脉并安装 ${preview.extractorInstallCount} 台采集设备`
           : "";
       setNotice(deployable
-        ? `${blueprintName}部署完成${resourceSummary}${fleetShortfall ? ` · 载具已部分装载（${fleetShortfall}）` : ""}${canContinue ? " · 可继续粘贴" : ""}`
-        : compatible ? `${blueprintName}已加入施工队列，材料齐备后自动部署${resourceSummary}`
+        ? `${blueprintName}部署完成${resourceSummary}${fleetShortfall ? ` · 载具已部分装载（${fleetShortfall}）` : ""} · 连续放置中`
+        : compatible ? `${blueprintName}已加入施工队列${resourceSummary} · 连续放置中`
           : preview.skippedResourceAnchors.length > 0
             ? `${blueprintName}未部署：附近没有对应类型的资源点，矿脉和采集设备均未改动`
             : `${blueprintName}与当前行星不兼容`);
@@ -4242,12 +4370,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     playTone("confirm");
   };
 
-  const handleRemoveSprayCoater = (entityId: string) => {
+  const handleRemoveSprayCoater = async (entityId: string) => {
     const refund = getSprayCoaterRemovalRefund(gameRef.current, entityId);
     const confirmation = isEnglish
       ? `Remove the spray module? The module and ${refund?.proliferatorItems ?? 0} remaining proliferator item(s) will be returned.`
       : `确认拆卸喷涂模块？将返还喷涂模块 ×${refund?.sprayCoaters ?? 1}${refund?.proliferatorItemId && refund.proliferatorItems > 0 ? `、${ITEMS[refund.proliferatorItemId].name} ×${refund.proliferatorItems}` : ""}。`;
-    if (!refund || !window.confirm(confirmation)) return;
+    if (!refund || !await gameDialog.confirm(confirmation, { confirmLabel: isEnglish ? "Remove" : "确认拆卸" })) return;
     commitGame((current) => removeSprayCoater(current, entityId));
     setNotice(`喷涂模块已拆卸并返还${refund.proliferatorItems > 0 ? ` · 未消耗增产剂 ×${refund.proliferatorItems}` : ""}`);
     playTone("remove");
@@ -4386,6 +4514,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         const target = event.target as HTMLElement | null;
         if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
         event.preventDefault();
+        if (blueprintPlacementId) {
+          setBlueprintPlacementId(null);
+          setNotice("已结束蓝图连续放置");
+        }
       }}
       data-reduced-motion={game.settings.reducedMotion ? "true" : "false"}
       data-performance-mode={performanceVisualMode ? "true" : "false"}
@@ -4591,7 +4723,19 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               return;
             }
             commitGame((current) => attachInterstellarStationToQuantumNetwork(current, entityId));
-            setNotice("已提交量子网络接入，等待五秒边界交接");
+            setNotice("已提交量子网络接入，仅等待旧星际航线和五秒边界；本地运输机继续运行");
+            playTone("confirm");
+          },
+          onOrbitalCollectorQuantumMode: (entityId, enabled) => {
+            const before = gameRef.current;
+            const next = setOrbitalCollectorQuantumMode(before, entityId, enabled);
+            if (next === before) {
+              setNotice("量子采集模式未切换，请检查科技、锁定状态或交接进度");
+              playTone("alert");
+              return;
+            }
+            commitGame(() => next);
+            setNotice(`已提交轨道采集器${enabled ? "接入" : "关闭"}量子采集网络`);
             playTone("confirm");
           },
           onUpgradeBelt: (beltId) => {
@@ -4700,8 +4844,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           commitGame((current) => setEntitiesInteractionLocked(current, ids, false));
           setNotice(`已解锁 ${ids.length} 个建筑`);
         }}
-        onRemove={() => {
-          if (!window.confirm(`确认回收 ${selectedEntityIds.length} 个节点和 ${selectedBeltIds.length} 条线路？`)) return;
+        onRemove={async () => {
+          if (!await gameDialog.confirm(`确认回收 ${selectedEntityIds.length} 个节点和 ${selectedBeltIds.length} 条线路？`, { danger: true, confirmLabel: "确认回收" })) return;
           commitGame((current) => selectedBeltIds.reduce((next, beltId) => removeBelt(next, beltId), removeEntities(current, selectedEntityIds)));
           setSelectedEntityIds([]);
           setSelectedBeltIds([]);
@@ -4790,10 +4934,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             isValidConnection={isValidConnection}
             onNodeClick={onNodeClick}
             onNodeDoubleClick={onNodeDoubleClick}
-            onNodeDragStart={() => { if (!blockCanvasTouchRef.current) nodeDragActiveRef.current = true; }}
+            onNodeDragStart={() => {
+              if (blockCanvasTouchRef.current) return;
+              nodeDragActiveRef.current = true;
+              dragAlignmentSpatialIndexRef.current = alignmentSpatialIndexRef.current ?? alignmentSpatialIndex;
+            }}
             onNodeDrag={onNodeDrag}
             onNodeDragStop={(_event, node, draggedNodes) => {
               nodeDragActiveRef.current = false;
+              dragAlignmentSpatialIndexRef.current = null;
               setAlignmentGuides({ x: null, y: null });
               if (blockCanvasTouchRef.current) {
                 restoreCanvasEntityPositions();
@@ -4802,6 +4951,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               const moved = draggedNodes.length > 0 ? draggedNodes : [node];
               const positions = moved.map((candidate) => ({ id: candidate.id, position: snapFlowPosition(candidate.position) }));
               commitGame((current) => moveEntities(current, positions));
+              window.requestAnimationFrame(() => {
+                connectionHandleSpatialIndexRef.current = buildConnectionHandleSpatialIndex(viewportRef.current);
+              });
             }}
             onEdgeClick={(_event, edge) => {
               if (nextMobileShell && mobileCanvasMode === "select") {
@@ -4838,13 +4990,18 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             defaultViewport={initialViewport}
             onMove={(_event, viewport) => {
               viewportRef.current = viewport;
-              const currentLod = viewportZoom < 0.55 ? "compact" : viewportZoom < 0.86 ? "medium" : "full";
-              const nextLod = viewport.zoom < 0.55 ? "compact" : viewport.zoom < 0.86 ? "medium" : "full";
+              if (connectionHandleSpatialIndexRef.current) connectionHandleSpatialIndexRef.current.viewport = viewport;
+              const currentLod = getCanvasLod(viewportZoom);
+              const nextLod = getCanvasLod(viewport.zoom);
+              canvasPinchLodRef.current = nextLod;
               if (currentLod !== nextLod) setViewportZoom(viewport.zoom);
             }}
             onMoveEnd={(_event, viewport) => {
               viewportRef.current = viewport;
+              if (connectionHandleSpatialIndexRef.current) connectionHandleSpatialIndexRef.current.viewport = viewport;
+              canvasPinchLodRef.current = getCanvasLod(viewport.zoom);
               setViewportZoom(viewport.zoom);
+              setPendingBlueprintViewport(viewport);
               persistPlanetViewport(gameRef.current.activePlanetId, viewport);
             }}
             panOnScroll
@@ -4859,11 +5016,17 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             zoomOnDoubleClick={false}
             deleteKeyCode={null}
             fitViewOptions={{ padding: 0.18 }}
-            onlyRenderVisibleElements={activePlanetEntityCount >= 300}
+            onlyRenderVisibleElements={shouldVirtualizeCanvas(activePlanetEntityCount, activePlanetBelts.length)}
             proOptions={{ hideAttribution: true }}
           >
             <Background variant={BackgroundVariant.Dots} gap={20} size={1.1} color={resolvedTheme === "light" ? "#b7c8bf" : "#3c4743"} />
             <ViewportPortal>
+              <PendingBlueprintLayer
+                game={observedGame}
+                planetId={canvasGame.activePlanetId}
+                viewport={pendingBlueprintViewport}
+                canvasSize={canvasViewportSize}
+              />
               <CanvasRegionLayer
                 regions={canvasGame.canvasRegions.filter((region) => region.planetId === canvasGame.activePlanetId)}
                 draft={regionDraft}
@@ -4884,7 +5047,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             /> : null}
             <Controls position="bottom-left" showInteractive={false} />
           </ReactFlow>
-          {clickConnectionPreview ? <ClickConnectionPreview preview={clickConnectionPreview} pointer={clickConnectionSnapPoint ?? pointer} tone={clickConnectionTone} /> : null}
           <button className={`canvas-minimap-toggle nodrag nopan${minimapCollapsed ? " canvas-minimap-toggle--collapsed" : ""}`} type="button" onClick={() => setMinimapCollapsed((collapsed) => !collapsed)} title={minimapCollapsed ? "展开小地图" : "折叠小地图"} aria-label={minimapCollapsed ? "展开小地图" : "折叠小地图"} aria-expanded={!minimapCollapsed}>
             {minimapCollapsed ? <MapIcon size={16} /> : <PanelRightClose size={16} />}
           </button>
@@ -5194,7 +5356,19 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               return;
             }
             commitGame((current) => attachInterstellarStationToQuantumNetwork(current, entityId));
-            setNotice("已提交量子网络接入，传统航线尾货将在五秒边界安全交接");
+            setNotice("已提交量子网络接入，旧星际航线将在五秒边界安全交接；本地运输机继续运行");
+            playTone("confirm");
+          }}
+          onOrbitalCollectorQuantumMode={(entityId, enabled) => {
+            const before = gameRef.current;
+            const next = setOrbitalCollectorQuantumMode(before, entityId, enabled);
+            if (next === before) {
+              setNotice("量子采集模式未切换，请检查科技、锁定状态或交接进度");
+              playTone("alert");
+              return;
+            }
+            commitGame(() => next);
+            setNotice(`已提交轨道采集器${enabled ? "接入" : "关闭"}量子采集网络`);
             playTone("confirm");
           }}
           onUpgradeBelt={(beltId) => {
@@ -5293,6 +5467,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         onRename={(blueprintId, name) => commitGame((current) => renameBlueprint(current, blueprintId, name))}
         onTransform={(blueprintId, rotation, mirror) => commitGame((current) => setBlueprintTransform(current, blueprintId, rotation, mirror))}
         onRecipeOverride={(blueprintId, sourceRecipeId, targetRecipeId) => commitGame((current) => setBlueprintRecipeOverride(current, blueprintId, sourceRecipeId, targetRecipeId))}
+        onFundQueue={(entryId, scope) => commitGame((current) => fundConstructionQueueEntry(current, entryId, scope))}
+        onFundAllQueues={() => commitGame((current) => fundAllConstructionQueueEntries(current))}
         onCancelQueue={(entryId) => commitGame((current) => cancelConstructionQueueEntry(current, entryId))}
         onExport={downloadBlueprint}
         onImport={importBlueprint}
@@ -5465,9 +5641,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onRoleChange={(planetId: PlanetId, role: PlanetIndustryRole) => commitGame((current) => setPlanetIndustryRole(current, planetId, role))}
             onPlanetMetadataChange={(planetId, metadata) => commitGame((current) => setPlanetDisplayMetadata(current, planetId, metadata))}
             onSystemNameChange={(systemId, customName) => commitGame((current) => setStarSystemDisplayName(current, systemId, customName))}
-            onOpenSystemStation={openSystemSpaceStation}
             onUpgradeAllStations={handleUpgradeAllInterstellarStations}
             onAttachAllQuantumStations={handleAttachAllQuantumStations}
+            onCollectorQuantumModeChange={handleAllOrbitalCollectorsQuantumMode}
+            onQuantumItemCapacityChange={(itemId, value) => commitGame((current) => setQuantumLogisticsItemCapacity(current, itemId, value))}
             onStationPriorityChange={(entityId: string, slotIndex: number, priority: LogisticsPriority) => commitGame((current) => setStationSlotPriority(current, entityId, slotIndex, priority))}
             onStationMinimumLoadChange={(entityId: string, slotIndex: number, minimumLoad: StationMinimumLoad) => commitGame((current) => setStationSlotMinimumLoad(current, entityId, slotIndex, minimumLoad))}
             onStationLimitsChange={(entityId: string, slotIndex: number, minStock: number, maxStock: number) => commitGame((current) => setStationSlotLimits(current, entityId, slotIndex, minStock, maxStock))}
@@ -5627,11 +5804,19 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           ))}
         </div>
       ) : null}
-      <BuildingPlacementCursor buildingId={game.cargo ? null : placement} count={placementCount} x={pointer.x} y={pointer.y} />
-      <CargoCursor cargo={game.cargo} x={pointer.x} y={pointer.y} />
-      {activeBlueprint ? <BlueprintPlacementCursor blueprint={activeBlueprint} x={pointer.x} y={pointer.y + (game.cargo ? 42 : 0)} /> : null}
-      {connectionHint ? <div className={`connection-hint connection-hint--${connectionHint.tone}`} style={{ transform: `translate3d(${pointer.x + 18}px, ${pointer.y + 18}px, 0)` }}>{connectionHint.label}</div> : null}
-      {placement && ctrlHeld ? <div className="continuous-placement-indicator" style={{ left: pointer.x + 18, top: pointer.y - 34 }}><span>Ctrl</span><b>连续扩建</b></div> : null}
+      <CanvasInteractionOverlay
+        active={pointerOverlayActive}
+        placement={placement}
+        placementCount={placementCount}
+        cargo={game.cargo}
+        blueprint={activeBlueprint}
+        ctrlHeld={ctrlHeld}
+        clickConnectionPreview={clickConnectionPreview}
+        clickConnectionTone={clickConnectionTone}
+        clickConnectionSnapPoint={clickConnectionSnapPoint}
+        connectionHint={connectionHint}
+        onPointerPosition={handleCanvasPointerPosition}
+      />
       {interactionBursts.map((burst) => <div className={`interaction-burst interaction-burst--${burst.tone}`} style={{ left: burst.x, top: burst.y }} key={burst.id}><i>{burst.tone === "warning" ? <Sparkles size={13} /> : <Check size={13} />}</i><span>{burst.label}</span></div>)}
       {saveFailure ? <aside className="save-emergency-warning" role="alert" aria-live="assertive">
         <AlertTriangle size={20} />

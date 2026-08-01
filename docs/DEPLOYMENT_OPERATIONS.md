@@ -1,13 +1,15 @@
 # 部署与运维手册
 
+> 公开仓库脱敏说明：本文及 `deploy/` 模板中的节点地址、证书主机名和对象存储标识均使用示例占位符。实际值只应从受保护的运维环境注入，不能提交到 Git。
+
 ## 1. 环境边界
 
 | 环境 | 地址 | 主机 | 作用 |
 | --- | --- | --- | --- |
-| 香港正式 | `https://dsponline.cn` | `43.129.249.102` | 正式 Web、云账号、云存档、排行榜 |
+| 香港正式 | `https://dsponline.cn` | `hk-origin.example.invalid` | 正式 Web、云账号、云存档、排行榜 |
 | 香港别名 | `https://www.dsponline.cn` | 同上 | 301 到根域名 |
-| 上海旧节点 | `http://111.229.128.211` | `111.229.128.211` | 独立旧入口和备用试玩 |
-| 上海下载节点 | `https://download.dsponline.cn` | `111.229.128.211` | Windows/Android 安装包与稳定更新清单 |
+| 上海旧节点 | `https://shanghai-node.example.invalid` | `shanghai-node.example.invalid` | 独立旧入口和备用试玩 |
+| 上海下载节点 | `https://download.dsponline.cn` | `shanghai-node.example.invalid` | Windows/Android 安装包与稳定更新清单 |
 | 本地前端 | `http://127.0.0.1:4318` | 开发机 | Vite |
 | 本地 API | `http://127.0.0.1:4320` | 开发机 | Node 云服务 |
 
@@ -30,9 +32,11 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-香港 Web/API 当前为 `1.0.13-694b61fc3a1c`，回滚目标为 `1.0.12-4f149409f433`；上海 Web/API、下载站和原生稳定包仍为 `1.0.12-4f149409f433`。两地均使用 GameState v41、云 schema v7 和 SQLite layout v2；代码回滚不得恢复数据库。1.0.13 香港备份与公网证据见 [releases/1.0.13.md](./releases/1.0.13.md)。
+香港与上海 Web/API 当前生产基线为 `1.0.18-0383e85d2d9d-dirty` / GameState v45，代码回滚目标为 `1.0.17-0383e85d2d9d-dirty`；两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库。上海下载站当前为独立目录 `1.0.18-0383e85d2d9d-dirty`，下载回滚目标为 1.0.17，Windows/Android 稳定清单均为 1.0.18；香港 `/downloads/*` 仍重定向上海。Android 1.0.18 SHA-256 为 `7294976ad074e77206d5e35258a4a70d0e4f1a9612987f028d3f174f2882aba3`，Windows 1.0.18 SHA-256 为 `b6b4d6343b82fa8001370dfb01cabb287fe97bffc256ce08ef6412d404c4a4d6`。发布前后 Backup API 快照均通过 `quick_check`，记录摘要无减少；公网健康、下载页、APK/EXE 完整下载哈希、Range 和缓存头均通过。发布后约上海 2.6 GiB、香港 13 GiB 可用；香港 COS 加密异地备份任务恢复成功。完整证据见 [releases/1.0.18.md](./releases/1.0.18.md)。
 
-`1.0.13` 香港发布只切换 Web/API 代码，未执行数据库迁移。发布前后 Backup API 快照均通过 `quick_check`；前备份为 887,271,424 字节，后备份为 888,795,136 字节。上海部署暂缓，原因是当前操作环境只有受限备份传输账号而没有发布 SSH shell 授权；不得把受限账号用于代码切换。
+`1.0.13` 两节点发布都只切换 Web/API 代码，未执行数据库迁移。香港发布前后 Backup API 快照均通过 `quick_check`；前备份为 887,271,424 字节，后备份为 888,795,136 字节。上海发布前后备份均为 122,880 字节并通过 `quick_check`；发布前 SHA-256 为 `a8af0eec173e6f8aad36af09b7e6d8c56b2b00014d76efd53124ddfb81b7e6a7`，发布后为 `8cb0c7bbbb270ac804b7c16909fc1b4274d0b2aed34a4ae7f379f333596cd737`。上海 0 个账号、0 个主云档、24 条玩家记录和 23 条错误记录均未减少，服务 `NRestarts=0`。受限备份传输账号仍只用于异地备份，代码发布使用独立的 `ubuntu` 授权。
+
+`1.0.13` Android APK 使用与 1.0.0～1.0.12 相同的长期发布证书，模拟器从正式 1.0.12 使用 `adb install -r` 覆盖升级后 `firstInstallTime` 和 19 小时 26 分本地主存档保持。Windows 安装程序继续按历史策略作为未签名测试包发布。上海下载站在独立目录完成 6/6 文件哈希和清单复验后原子切换，旧 1.0.12 目录作为回滚点保留。
 
 `1.0.12` 为电磁轨道弹射器增加存档级目标太阳帆轨道，并修复线路同步模板、配送枢纽大字卡片和亮色物流交互状态。v40→v41 迁移不重建或删除太阳帆、发射进度、库存、线路和戴森工程；存档 envelope、云 schema 和 SQLite layout 不变。两节点切换前分别创建并验证 SQLite Backup API 备份，未激活目录完成 135/135 文件复验、42/42 服务端、6/6 运维和生产备份副本隔离启动；Android 从正式 1.0.10 同签名覆盖升级并保留 19 小时 26 分本地主存档后，才切换 Web/API、下载页与稳定清单。
 
@@ -203,8 +207,8 @@ DSP_MAIL_REPLY_TO=
 curl -I https://dsponline.cn/
 curl https://dsponline.cn/api/health
 curl -I https://www.dsponline.cn/
-curl -I http://111.229.128.211/
-curl http://111.229.128.211/api/health
+curl -I https://shanghai-node.example.invalid/
+curl https://shanghai-node.example.invalid/api/health
 ```
 
 期望：正式根域名 `200`、`www` 为 301、上海根页面和本机 API 均为 `200`。不要用生产账号执行自动化写测试。
@@ -241,6 +245,25 @@ chmod 0600 backup-private.pem
 
 `0.2.0` 发布窗口已经完成首轮生产闭环：香港每日创建认证加密备份并通过固定主机指纹和受限 SFTP 账号传到上海；上海私钥未离开恢复节点，隔离恢复验证 schema v5、账号、会话、云存档、修订和玩家计数一致，结束后明文 SQLite 数量为 0。香港每日 timer 与上海每月 timer 均为 active，上海密文接收目录保留 30 天。
 
+### 香港 COS 归档现状（2026-07-31）
+
+香港服务器的 COSFS 挂载点是 `<COS_MOUNT_PATH>`，实际桶和前缀通过受保护配置注入；挂载凭据文件必须保持 `0600` 权限。公开仓库不记录桶名、账号标识或密钥。变更桶前必须先在控制台确认名称、地域和 CAM 权限。
+
+数据库历史副本使用 RSA-OAEP + AES-256-GCM 加密后写入受保护的 COS 归档前缀。公开仓库不记录对象存储桶名、账号标识或真实对象路径。每份都有独立 manifest、大小和 SHA-256；跨卸载重挂抽样校验通过。生产数据库、云存档正文、账号和玩家数据未删除；本地只保留快速恢复副本。
+
+每日 `dsp-idle-offsite-backup.timer` 已改为写入 `/lhcos-data/dsp-idle-archive/daily/`，`DSP_OFFSITE_BACKUP_KEEP=2`，systemd 只额外允许写入 COS 挂载路径。2026-07-31 手动运行成功，schema v7、账号 376、主云档 312、修订 3,726 等记录摘要未减少；staging 只保留 2 份加密副本，COS 日目录已通过 SHA-256 校验。COSFS 当前使用单并发、多段 10 MiB 和 5 GiB 本地安全阈值。
+
+云服务自身每 6 小时的快速快照也已改为 `DSP_CLOUD_BACKUP_DIRECTORY=/lhcos-data/dsp-idle-archive/auto`，因此不会再把 30 份约 1 GiB 文件写满香港根盘；该目录位于私有 COS 挂载，不代替加密日备份。香港节点探针的 `DSP_MONITOR_MIN_DISK_FREE_RATIO` 已从 0.15 提高到 0.20，剩余空间低于约 8 GiB 时提前告警。
+
+本次爆满原因是历史备份副本而非游戏数据库异常：香港本地 `backups` 曾累积约 25 GiB、35 份 0.16～1.0 GiB SQLite 快照；异地 staging 另有约 1.5 GiB 加密副本；旧 API 发布目录约 0.86 GiB，日志、APT 缓存和新版本备份又叠加约 0.5 GiB。原 COS 挂载为空且每日任务仍按 SCP + 本地保留 14 份运行，导致三天内再次接近满盘。
+
+长期运营规则：
+
+1. 生产盘只保留当前数据库、当前/回滚代码、4 份本地快速恢复副本和 staging 2 份；所有更早快照必须先生成加密对象、manifest 和跨重挂载哈希，再删除本地副本。
+2. 每日备份写 COS，保留上海已有异地加密副本作为第二恢复位置；COS 桶设置 30～90 天生命周期和版本控制，避免对象无限增长。任何切换到新桶都要先完成小文件写入、重挂载读取和完整对象计数校验。
+3. 磁盘探针将告警阈值设为 80%，硬保护阈值设为 90%；超过 80% 自动暂停非必要发布/快照并提示归档，超过 90% 只允许完成当前备份和清理已验证副本，不能删除数据库或手动恢复点。
+4. 每周检查 `cloud.sqlite`、本地快照、staging、发布目录、日志和 COS 对象数量；每月在隔离端口用 COS 密文完成一次恢复演练。密钥应替换为只允许 COS 指定前缀读写的 CAM 子账号，并定期轮换。
+
 ## 9. 监控与日常检查
 
 - `dsp-idle-cloud.service`：active，重启次数无异常。
@@ -260,8 +283,8 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港 `1.0.13-694b61fc3a1c` 与上海 `1.0.12-4f149409f433` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港与上海 `1.0.17-0383e85d2d9d-dirty` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 香港 layout v1 的 136.8 MB `app_state` 曾使每分钟持久化把 Node 推到约 1.6 GB并阻塞健康接口。layout v2 上线后 `app_state` 约 2.55 MB，云存档正文按修订独立写入；240 秒生产观察中健康接口最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB。监控若再次出现内存或延迟上升，应分别检查 `app_state` 大小、`cloud_save_payloads` 行数与历史元数据唯一键数，不能只调大健康超时。
 
-Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。完成 1.0.12 发布及前后备份后，上海节点约剩 4.4 GiB，香港约剩 9.0 GiB；发布目录、客户端二进制、日志与备份增长仍须纳入保留策略，且清理不得删除当前版、回滚版或有效备份。
+Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.17 发布后上海约剩 2.8 GiB、香港约剩 16 GiB；下载包临时上传文件已清理，历史 SQLite 备份与旧发布目录仍保留，继续按备份保留/异地归档告警运营，且清理不得删除当前版、回滚版或有效备份。

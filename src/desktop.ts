@@ -25,6 +25,8 @@ export interface DesktopBridge {
   checkForUpdates: () => Promise<DesktopUpdateStatus>;
   downloadUpdate: () => Promise<DesktopUpdateStatus>;
   installUpdate: () => Promise<{ accepted: boolean }>;
+  confirmUpdateReady: () => Promise<void>;
+  onPrepareForUpdate: (listener: () => void) => () => void;
   onUpdateStatus: (listener: (status: DesktopUpdateStatus) => void) => () => void;
 }
 

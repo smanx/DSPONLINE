@@ -1,5 +1,6 @@
 import { Bell, ChevronDown, ChevronLeft, Orbit, Pause, Play, Zap } from "lucide-react";
 import { getPlanet } from "../../game/content";
+import { getPlanetDisplayName } from "../../game/galaxy";
 import type { GameState } from "../../game/types";
 import type { MobileRoute } from "../../hooks/useMobileNavigation";
 
@@ -42,9 +43,9 @@ export function MobileTopBar({ game, route, alertCount, onBack, onOpenPlanet, on
   const powerTone = powerPercent >= 100 ? "positive" : powerPercent > 0 ? "warning" : "negative";
   return (
     <header className="mobile-next-topbar">
-      <button className="mobile-next-planet-command" type="button" onClick={onOpenPlanet} aria-label={`切换行星，当前${planet.name}`}>
+      <button className="mobile-next-planet-command" type="button" onClick={onOpenPlanet} aria-label={`切换行星，当前${getPlanetDisplayName(game, game.activePlanetId)}`}>
         <Orbit size={20} />
-        <span><strong>{planet.name}</strong><small>{planet.code}</small></span>
+        <span><strong>{getPlanetDisplayName(game, game.activePlanetId)}</strong><small>{planet.code}</small></span>
         <ChevronDown size={16} />
       </button>
       <div className={`mobile-next-power mobile-next-power--${powerTone}`} aria-label={`供电效率 ${powerPercent}%`}>

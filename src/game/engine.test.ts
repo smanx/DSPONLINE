@@ -47,6 +47,8 @@ import {
   dropCargoToTray,
   exploreStarSystem,
   fillStationFleet,
+  fundAllConstructionQueueEntries,
+  fundConstructionQueueEntry,
   colonizePlanet,
   getEntityOperatingStatus,
   getEntityPowerFactor,
@@ -57,6 +59,7 @@ import {
   getBlueprintRequirements,
   getBlueprintFleetLoadPreview,
   getConstructionQueueDeficits,
+  getConstructionQueueDetails,
   getConstructionCraftNavigation,
   getConstructionAutomationMaterialSeconds,
   getConstructionAutomationStatus,
@@ -126,6 +129,7 @@ import {
   queueHandcraftRecipe,
   cancelHandcraftQueueEntry,
   removeEntity,
+  removeBlueprint,
   removeSprayCoater,
   removeBeltNetwork,
   removeCanvasBookmark,
@@ -165,6 +169,7 @@ import {
   updateCanvasRegion,
   setRecipeFocusMode,
   renameCanvasBookmark,
+  renameBlueprint,
   setEntitiesRecipe,
   setEnergyMode,
   setEntitiesInteractionLocked,
@@ -2855,6 +2860,28 @@ describe("factory simulation", () => {
     expect(JSON.stringify(state)).toBe(before);
   });
 
+  it("finishes recursive orbital-collector handcraft when hydrogen is already above the tray soft limit", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("orbital_collection", "rare_resource_utilization");
+    state.planetTrayItemLimits.home = 100_000_000;
+    state.tray = {
+      hydrogen: 101_000_000,
+      titanium_alloy: 40,
+      super_magnetic_ring: 20,
+      fire_ice: 20,
+    };
+    state.planetTrays.home = state.tray;
+
+    const plan = getConstructionQuickCraftPlan(state, "orbital_collector");
+    expect(plan).toMatchObject({ possible: true, status: "upstream" });
+    const crafted = craftConstructionWithUpstream(state, "orbital_collector");
+    expect(crafted).not.toBe(state);
+    expect(crafted.construction.orbital_collector).toBe(1);
+    expect(crafted.tray.hydrogen).toBe(101_000_010);
+    expect(crafted.tray.fire_ice).toBe(0);
+    expect(crafted.planetTrayItemLimits.home).toBe(100_000_000);
+  });
+
   it("stores manufactured and cursor-carried logistics vehicles in the portable fleet across planets", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("interstellar_logistics");
@@ -3618,6 +3645,149 @@ describe("factory simulation", () => {
     const pendingId = state.constructionQueue[0].id;
     state = cancelConstructionQueueEntry(state, pendingId);
     expect(state.constructionQueue).toEqual([]);
+  });
+
+  it("reserves blueprint materials across repeated funding and refunds them exactly on cancellation", () => {
+    let state = createInitialState();
+    state.construction.storage_mk1 = 2;
+    state = placeBuilding(state, "storage_mk1", { x: 0, y: 0 });
+    state = placeBuilding(state, "storage_mk1", { x: 240, y: 0 });
+    const storages = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+    state = setLogisticsItem(state, storages[0].id, "gear");
+    state = setLogisticsItem(state, storages[1].id, "gear");
+    state = connectBelt(state, storages[0].id, storages[1].id, "gear");
+    state = createBlueprint(state, storages.map((entity) => entity.id), "分批补足蓝图");
+    const blueprintId = state.blueprints[0].id;
+    state.construction.storage_mk1 = 1;
+    state.construction.conveyor_belt_mk1 = 0;
+    state = queueBlueprint(state, blueprintId, { x: 800, y: 500 });
+    const orderId = state.constructionQueue[0].id;
+
+    state = fundConstructionQueueEntry(state, orderId, "construction");
+    expect(state.constructionQueue[0].reservedConstruction).toEqual({ storage_mk1: 1, conveyor_belt_mk1: 0 });
+    expect(state.construction.storage_mk1).toBe(0);
+    expect(state.entities.filter((entity) => entity.position.y === 500)).toHaveLength(0);
+
+    state.construction.conveyor_belt_mk1 = 1;
+    state = fundConstructionQueueEntry(state, orderId, "construction");
+    expect(state.constructionQueue[0].reservedConstruction).toEqual({ storage_mk1: 1, conveyor_belt_mk1: 1 });
+    state = cancelConstructionQueueEntry(state, orderId);
+    expect(state.constructionQueue).toEqual([]);
+    expect(state.construction.storage_mk1).toBe(1);
+    expect(state.construction.conveyor_belt_mk1).toBe(1);
+    expect(state.blueprintVersions).toEqual([]);
+  });
+
+  it("keeps queued blueprint revisions immutable after library edits or deletion", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    state = createBlueprint(state, [assembler.id], "不可变版本");
+    const blueprintId = state.blueprints[0].id;
+    state.construction.assembling_machine_mk1 = 0;
+    state = queueBlueprint(state, blueprintId, { x: 900, y: 600 });
+    const orderId = state.constructionQueue[0].id;
+    const versionId = state.constructionQueue[0].blueprintVersionId;
+
+    state = renameBlueprint(state, blueprintId, "已修改蓝图");
+    state = setBlueprintTransform(state, blueprintId, 90, "horizontal");
+    state = removeBlueprint(state, blueprintId);
+    expect(state.blueprints).toEqual([]);
+    expect(getConstructionQueueDetails(state, orderId).blueprint).toMatchObject({ name: "不可变版本", rotation: 0, mirror: "none" });
+    expect(state.blueprintVersions[0].id).toBe(versionId);
+
+    state.construction.assembling_machine_mk1 = 1;
+    state = fundConstructionQueueEntry(state, orderId, "construction");
+    expect(state.entities.some((entity) => entity.position.x === 900 && entity.position.y === 600)).toBe(true);
+    expect(state.constructionQueue).toEqual([]);
+    expect(state.blueprintVersions).toEqual([]);
+  });
+
+  it("keeps fleet optional during construction and installs it later without touching unreserved vehicles", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics");
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 });
+    const source = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    source.stationDrones = 5;
+    source.stationVessels = 3;
+    state = createBlueprint(state, [source.id], "载具后补蓝图");
+    const blueprintId = state.blueprints[0].id;
+    state.construction.interstellar_logistics_station = 1;
+    state.portableFleet = { logistics_drone: 20, logistics_vessel: 20 };
+    state = queueBlueprint(state, blueprintId, { x: 700, y: 700 });
+    const orderId = state.constructionQueue[0].id;
+
+    state = fundConstructionQueueEntry(state, orderId, "construction");
+    const placed = state.entities.find((entity) => entity.position.x === 700 && entity.position.y === 700)!;
+    expect(placed).toMatchObject({ stationDrones: 0, stationVessels: 0 });
+    expect(state.portableFleet).toEqual({ logistics_drone: 20, logistics_vessel: 20 });
+    expect(state.constructionQueue[0]).toMatchObject({ status: "waiting-fleet", reservedConstruction: {}, reservedFleet: {} });
+
+    state = fundConstructionQueueEntry(state, orderId, "fleet");
+    expect(state.entities.find((entity) => entity.id === placed.id)).toMatchObject({ stationDrones: 5, stationVessels: 3 });
+    expect(state.portableFleet).toEqual({ logistics_drone: 15, logistics_vessel: 17 });
+    expect(state.constructionQueue).toEqual([]);
+  });
+
+  it("funds competing construction orders in stable creation order without duplicate placement", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    state = createBlueprint(state, [assembler.id], "竞争订单");
+    const blueprintId = state.blueprints[0].id;
+    state.construction.assembling_machine_mk1 = 0;
+    state = queueBlueprint(state, blueprintId, { x: 700, y: 300 });
+    state = queueBlueprint(state, blueprintId, { x: 900, y: 300 });
+    const [firstOrder, secondOrder] = state.constructionQueue.map((entry) => entry.id);
+
+    state.construction.assembling_machine_mk1 = 1;
+    state = fundAllConstructionQueueEntries(state);
+    expect(state.entities.some((entity) => entity.position.x === 700 && entity.position.y === 300)).toBe(true);
+    expect(state.entities.some((entity) => entity.position.x === 900 && entity.position.y === 300)).toBe(false);
+    expect(state.constructionQueue.map((entry) => entry.id)).toEqual([secondOrder]);
+    expect(state.constructionQueue.some((entry) => entry.id === firstOrder)).toBe(false);
+
+    state.construction.assembling_machine_mk1 = 1;
+    state = fundAllConstructionQueueEntries(state);
+    expect(state.entities.filter((entity) => entity.position.y === 300)).toHaveLength(2);
+    expect(state.constructionQueue).toEqual([]);
+    expect(state.construction.assembling_machine_mk1).toBe(0);
+  });
+
+  it("blocks a queued deployment if its position becomes occupied and cancels fleet follow-up when its tower is removed", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    state = createBlueprint(state, [assembler.id], "重叠保护");
+    const blueprintId = state.blueprints[0].id;
+    state.construction.assembling_machine_mk1 = 0;
+    state = queueBlueprint(state, blueprintId, { x: 800, y: 200 });
+    const orderId = state.constructionQueue[0].id;
+    state.construction.assembling_machine_mk1 = 2;
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 800, y: 200 });
+    const unchanged = fundConstructionQueueEntry(state, orderId, "construction");
+    expect(unchanged).toBe(state);
+    expect(getConstructionQueueDetails(state, orderId)).toMatchObject({ compatible: false, blockedReason: "放置位置、行星或资源锚点已不兼容" });
+    state = cancelConstructionQueueEntry(state, orderId);
+
+    state.research.completedTechIds.push("interstellar_logistics");
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 500 });
+    const source = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    source.stationDrones = 2;
+    state = createBlueprint(state, [source.id], "拆塔取消补足");
+    const stationBlueprintId = state.blueprints.at(-1)!.id;
+    state.construction.interstellar_logistics_station = 1;
+    state.portableFleet.logistics_drone = 0;
+    state = queueBlueprint(state, stationBlueprintId, { x: 600, y: 600 });
+    const fleetOrderId = state.constructionQueue[0].id;
+    state = fundConstructionQueueEntry(state, fleetOrderId, "construction");
+    const placedTower = state.entities.find((entity) => entity.position.x === 600 && entity.position.y === 600)!;
+    expect(state.constructionQueue[0].status).toBe("waiting-fleet");
+    state = removeEntity(state, placedTower.id);
+    expect(state.constructionQueue).toEqual([]);
+    expect(state.blueprintVersions).toEqual([]);
   });
 
   it("applies logistics engine and cargo upgrades to real station dispatches", () => {

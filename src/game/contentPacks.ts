@@ -22,6 +22,7 @@ import type {
 
 const CONTENT_PACK_STORAGE_KEY = "dsp-idle-network.content-packs.v1";
 const REGISTRY_VERSION = 1;
+export const CONTENT_PACK_RUNTIME_PROTOCOL_VERSION = 1 as const;
 
 const CORE_ITEM_IDS = new Set(Object.keys(ITEMS));
 const CORE_BUILDING_IDS = new Set(Object.keys(BUILDINGS));
@@ -46,6 +47,13 @@ export interface RegisteredContentPack {
 export interface ContentPackRegistry {
   version: typeof REGISTRY_VERSION;
   packs: Record<string, RegisteredContentPack>;
+}
+
+/** Serializable runtime directory sent to simulation workers; never persisted in GameState. */
+export interface ContentPackRuntimeSnapshot {
+  protocolVersion: typeof CONTENT_PACK_RUNTIME_PROTOCOL_VERSION;
+  fingerprint: string;
+  registry: ContentPackRegistry;
 }
 
 export interface ContentPackDependencyStatus {
@@ -99,11 +107,56 @@ function cloneManifest(manifest: ContentPackManifest): ContentPackManifest {
 function cloneRegistry(registry: ContentPackRegistry): ContentPackRegistry {
   return {
     version: REGISTRY_VERSION,
-    packs: Object.fromEntries(Object.entries(registry.packs).map(([id, pack]) => [id, {
+    packs: Object.fromEntries(Object.entries(registry.packs).sort(([left], [right]) => left.localeCompare(right)).map(([id, pack]) => [id, {
       ...pack,
       manifest: cloneManifest(pack.manifest),
     }])),
   };
+}
+
+function stableSerialize(value: unknown): string {
+  if (value === undefined) return "undefined";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((entry) => stableSerialize(entry)).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`).join(",")}}`;
+}
+
+function hashString(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+export function getContentPackRegistryFingerprint(registry: ContentPackRegistry): string {
+  return hashString(stableSerialize(cloneRegistry(registry)));
+}
+
+export function createContentPackRuntimeSnapshot(registry: ContentPackRegistry): ContentPackRuntimeSnapshot {
+  const normalized = cloneRegistry(registry);
+  return {
+    protocolVersion: CONTENT_PACK_RUNTIME_PROTOCOL_VERSION,
+    fingerprint: getContentPackRegistryFingerprint(normalized),
+    registry: normalized,
+  };
+}
+
+export function validateContentPackRuntimeSnapshot(snapshot: ContentPackRuntimeSnapshot | null | undefined): boolean {
+  return Boolean(snapshot &&
+    snapshot.protocolVersion === CONTENT_PACK_RUNTIME_PROTOCOL_VERSION &&
+    snapshot.registry?.version === REGISTRY_VERSION &&
+    snapshot.fingerprint === getContentPackRegistryFingerprint(snapshot.registry));
+}
+
+/** Validate and activate the exact catalog snapshot used for one simulation boundary. */
+export function applyContentPackRuntimeSnapshot(snapshot: ContentPackRuntimeSnapshot | null | undefined): ContentPackActivationReport {
+  if (!snapshot || !validateContentPackRuntimeSnapshot(snapshot)) throw new Error("内容包运行时注册表缺失或指纹不匹配");
+  const report = applyContentPackRegistry(snapshot.registry);
+  if (!report.catalogValid) throw new Error(`内容包运行时目录校验失败：${report.issues.join("；")}`);
+  return report;
 }
 
 function normalizeRegistry(value: unknown): ContentPackRegistry {

@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 function installStationTrayFixture() {
   return () => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-31-v1.0.16");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-01-v1.0.19");
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({
       savedAt: Date.now(),
@@ -40,7 +40,7 @@ test("space station construction launcher appears in desktop and mobile construc
   await expect(page.locator("button.mobile-build-card").filter({ hasText: "空间站施工发射平台" })).toBeVisible();
 });
 
-test("local development mode allows a zero-material station construction smoke test", async ({ page }) => {
+test("star map no longer exposes the deprecated space-station and elevator entry", async ({ page }) => {
   await page.addInitScript(() => {
     const entityBase = { interactionLocked: false, minerCount: 0, routingCursor: 0, progress: 0, utilization: 0, productionRate: 0, inputs: {}, outputs: {} };
     const state = {
@@ -56,7 +56,7 @@ test("local development mode allows a zero-material station construction smoke t
       settings: { theme: "dark", fontScale: 1, simulationSpeed: 1, autosaveIntervalSeconds: 30 }, paused: true,
     };
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-31-v1.0.16");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-01-v1.0.19");
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
   });
@@ -64,11 +64,6 @@ test("local development mode allows a zero-material station construction smoke t
   await page.goto("/");
   await page.locator(".game-header").getByLabel("打开星图").click();
   const starMap = page.locator(".star-map-workspace");
-  await starMap.getByRole("button", { name: "空间站与太空电梯" }).first().click();
-  const workspace = page.locator(".system-space-station-workspace");
-  await expect(workspace).toBeVisible();
-  await workspace.getByRole("button", { name: "开始施工" }).click();
-  await expect(workspace).toContainText("已运行");
-  await expect(workspace.locator(".system-space-station-overview-main")).toContainText("100%");
-  await expect(workspace).not.toContainText("阶段材料交付");
+  await expect(starMap.getByRole("button", { name: "空间站与太空电梯" })).toHaveCount(0);
+  await expect(starMap).not.toContainText("空间站与太空电梯");
 });

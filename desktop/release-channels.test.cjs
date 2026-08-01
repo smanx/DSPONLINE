@@ -1,4 +1,6 @@
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
+const path = require("node:path");
 const test = require("node:test");
 const { createReleaseChannels, resolveReleaseChannel } = require("./release-channels.cjs");
 
@@ -21,4 +23,15 @@ test("official desktop builds derive HTTPS channel URLs from an explicit base", 
 test("desktop update channels reject cleartext configuration", () => {
   assert.throws(() => createReleaseChannels({ updateBaseUrl: "http://updates.example.test" }), /HTTPS/);
   assert.throws(() => createReleaseChannels({ stableUrl: "http://updates.example.test/stable" }), /HTTPS/);
+});
+
+test("official dist packaging refuses missing cloud and update addresses", () => {
+  const result = spawnSync(process.execPath, [path.join(__dirname, "pack.cjs"), "dist"], {
+    cwd: path.join(__dirname, ".."),
+    env: { ...process.env, DSP_DESKTOP_API_BASE_URL: "", DSP_UPDATE_BASE_URL: "" },
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stderr}\n${result.stdout}`, /必须同时配置/);
 });

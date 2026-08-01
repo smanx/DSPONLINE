@@ -1,55 +1,84 @@
-import { Check, Gauge, Info, Layers, MessageCircle, Route, Trophy, X, ZoomIn, type LucideIcon } from "lucide-react";
+import { BookOpen, Check, Focus, Gauge, Info, Layers, MessageCircle, Route, Sparkles, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-30-v1.0.13",
-  date: "2026年7月30日",
-  version: "1.0.13",
-  title: "终局画布与大数显示更新",
-  summary: "1.0.13 优化大型工厂画布和跨星系物流路径，修复放大后建筑仍保持灰色精简态的问题，并取消排行榜一千万亿的人为封顶。GameState 继续为 v41，存档格式不变。",
+  id: "2026-08-01-v1.0.19",
+  date: "2026年8月1日",
+  version: "1.0.19",
+  title: "蓝图施工与模拟一致性更新",
+  summary: "1.0.19 修复内容包 Worker、超大蓝图和递归制造问题，加入待建补料、统计窗口与游戏内确认框，并把量子基础吞吐提高到 5000 件/分钟。GameState 升至 v46，旧存档和旧蓝图守恒迁移。",
   items: [
     {
-      id: "canvas-topology-cache",
-      title: "大型工厂画布缓存",
-      description: "建筑拓扑、线路几何与实时库存分开更新；没有移动或改线时不再重复计算整张工厂地图，300 个以上实体的大工厂会裁剪屏幕外节点和线路。",
+      id: "content-pack-worker-registry",
+      title: "内容包同步到模拟 Worker",
+      description: "实时、纯挂机和离线模拟使用同一份内容包注册表；启用、更新或关闭内容包后无需刷新页面，配方和建筑规则不会在 Worker 中失效。",
     },
     {
-      id: "zoom-detail-restore",
-      title: "放大恢复建筑细节",
-      description: "大工厂和低端设备仍会自动精简动画，但建筑细节只由真实画布缩放决定；放大后立即恢复文字、状态、缓存和操作区域。",
+      id: "large-blueprint-roundtrip",
+      title: "超大蓝图完整往返",
+      description: "单个建筑堆叠最高支持 1 亿，导入不再把超过 1 万的合法数量误判为损坏，也不会静默截断或免费建造。",
     },
     {
-      id: "logistics-route-cache",
-      title: "跨星系路线复用",
-      description: "同一对行星和路线策略只规划一次中转路径，后续物流塔直接复用；500 站合成压力档保持相同状态哈希并进一步降低调度耗时。",
+      id: "alignment-guides",
+      title: "建筑拖动对齐辅助线",
+      description: "单选和多选建筑接近其他建筑的中心或边缘时显示水平、垂直辅助线；松开后立即清除，不写入存档。",
     },
     {
-      id: "uncapped-leaderboard",
-      title: "排行榜不再提前封顶",
-      description: "服务端移除每项 10^15 的人为上限；主云存档继续自动计算真实排名，下一次主档同步即可更新超过旧上限的记录。",
+      id: "quantum-blueprint-target",
+      title: "蓝图记忆量子网络目标",
+      description: "复制量子物流塔时保留计划接入状态；科技和 Mk.II 条件满足后自动接入，同时保留本地运输机、槽位、缓存和载具。",
     },
     {
-      id: "extended-number-units",
-      title: "更清楚的终局单位",
-      description: "数量显示扩展到兆、京、垓、秭、穰、沟、涧、正、载，功率扩展到 EW、ZW、YW、RW、QW；排行榜保留精确值悬停提示。",
+      id: "recursive-overflow",
+      title: "递归制造不再被副产物卡死",
+      description: "轨道采集器等递归手搓在氢满仓时仍能原子完成，真实副产物允许暂时超过托盘软上限且不会被删除。",
+    },
+    {
+      id: "in-game-dialogs",
+      title: "统一游戏内确认框",
+      description: "回收、拆卸和重置等确认不再调用原生阻塞弹窗；确认或取消后，数字输入、中文输入法、指针和键盘焦点均可继续使用。",
+    },
+    {
+      id: "production-statistics-windows",
+      title: "生产统计排序与时间窗口",
+      description: "新增每秒、每分钟、每十分钟和每小时窗口，生产与消耗列可稳定排序，大数量统一使用万、亿及更高单位并保留精确值。",
+    },
+    {
+      id: "pending-blueprint-construction",
+      title: "蓝图缺料预建设与多次补足",
+      description: "缺少建筑时仍可连续放置灰色待建蓝图，之后分批投入建筑、线路和载具；材料齐备后原子建成，取消会完整返还预留物资。",
+    },
+    {
+      id: "quantum-bandwidth-5000",
+      title: "量子网络基础吞吐提高",
+      description: "全局上传和下载基础值从 400 提高到 5000 件/分钟，再乘银河物流无限科技倍率平方与全部量子塔堆叠总数。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "canvas-topology-cache": Layers,
-  "zoom-detail-restore": ZoomIn,
-  "logistics-route-cache": Route,
-  "uncapped-leaderboard": Trophy,
-  "extended-number-units": Gauge,
+  "content-pack-worker-registry": Route,
+  "large-blueprint-roundtrip": Layers,
+  "alignment-guides": Focus,
+  "quantum-blueprint-target": Sparkles,
+  "recursive-overflow": BookOpen,
+  "in-game-dialogs": Check,
+  "production-statistics-windows": Gauge,
+  "pending-blueprint-construction": Layers,
+  "quantum-bandwidth-5000": Info,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {
   try {
-    return window.localStorage.getItem(RELEASE_NOTES_SEEN_KEY) === CURRENT_RELEASE_NOTES.id;
+    if (window.localStorage.getItem(RELEASE_NOTES_SEEN_KEY) === CURRENT_RELEASE_NOTES.id) return true;
+    // Isolated browser fixtures intentionally bypass first-run chrome. This
+    // keeps older release fixtures deterministic without hiding new notes for
+    // real players who have already seen a previous version.
+    const isReleaseNotesTest = new URLSearchParams(window.location.search).get("releaseNotesTest") === "1";
+    return !isReleaseNotesTest && window.sessionStorage.getItem("dsp-idle-network.test-bypass-menu") === "1";
   } catch {
     try { return window.sessionStorage.getItem(RELEASE_NOTES_SEEN_KEY) === CURRENT_RELEASE_NOTES.id; } catch { return false; }
   }

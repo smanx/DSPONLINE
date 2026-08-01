@@ -4570,7 +4570,7 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
 
 .alignment-guide {
   position: absolute;
-  z-index: 1000;
+  z-index: 1;
   display: block;
   background: rgba(115, 222, 199, 0.78);
   box-shadow: 0 0 7px rgba(115, 222, 199, 0.36);
@@ -4587,6 +4587,78 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   left: -10000px;
   width: 20000px;
   height: 1px;
+}
+
+.pending-blueprint-layer {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+}
+
+.pending-blueprint-line {
+  position: absolute;
+  height: 0;
+  transform-origin: 0 50%;
+  border-top: 3px dashed rgba(145, 154, 150, .62);
+  filter: grayscale(1);
+}
+
+.pending-blueprint-node {
+  position: absolute;
+  display: grid;
+  width: 256px;
+  min-height: 88px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: center;
+  gap: 5px 8px;
+  padding: 12px;
+  border: 2px dashed rgba(158, 166, 162, .72);
+  border-radius: 5px;
+  background: rgba(78, 84, 81, .42);
+  box-shadow: inset 0 0 0 1px rgba(230, 235, 232, .08);
+  color: #d2d7d4;
+  filter: grayscale(1);
+  opacity: .72;
+}
+
+.pending-blueprint-node > span {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-blueprint-node > strong { font-size: 10px; }
+
+.pending-blueprint-node > em {
+  overflow: hidden;
+  grid-column: 1 / -1;
+  color: #afb7b2;
+  font-size: 8px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-blueprint-node--anchor {
+  border-style: dotted;
+  background: rgba(95, 99, 91, .34);
+}
+
+.pending-blueprint-layer--compact .pending-blueprint-node {
+  width: 112px;
+  min-height: 56px;
+  padding: 8px;
+}
+
+.pending-blueprint-layer--compact .pending-blueprint-node > span,
+.pending-blueprint-layer--compact .pending-blueprint-node > em { display: none; }
+
+.pending-blueprint-layer--compact .pending-blueprint-node > strong {
+  grid-column: 1 / -1;
+  text-align: center;
 }
 
 .react-flow__node.factory-flow-node--task-dim {
@@ -4888,6 +4960,41 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
+
+.game-dialog-backdrop {
+  position: fixed;
+  z-index: 20000;
+  display: grid;
+  place-items: center;
+  inset: 0;
+  padding: 18px;
+  background: rgba(4, 8, 7, .72);
+}
+
+.game-dialog {
+  display: grid;
+  width: min(440px, 100%);
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .45);
+  color: var(--text);
+}
+
+.game-dialog > header { display: grid; grid-template-columns: 32px minmax(0, 1fr) 30px; align-items: center; gap: 8px; }
+.game-dialog > header > i { display: grid; width: 30px; height: 30px; place-items: center; color: var(--cyan); }
+.game-dialog--danger > header > i { color: var(--coral); }
+.game-dialog > header > strong { min-width: 0; font-size: 13px; }
+.game-dialog > header > button { display: grid; width: 30px; height: 30px; place-items: center; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.game-dialog > p { margin: 0; color: var(--text-soft); font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.game-dialog > input { width: 100%; min-height: 38px; border: 1px solid var(--line-strong); border-radius: 4px; outline: 0; background: var(--surface); color: var(--text); padding: 0 10px; }
+.game-dialog > input:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px color-mix(in srgb, var(--cyan) 22%, transparent); }
+.game-dialog > footer { display: flex; justify-content: flex-end; gap: 8px; }
+.game-dialog > footer button { min-width: 76px; min-height: 34px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--text-soft); cursor: pointer; }
+.game-dialog > footer button.primary { border-color: #397b75; background: #173d39; color: #a8e4da; }
+.game-dialog > footer button.danger { border-color: #8e4b47; background: #472522; color: #ffd1cb; }
 
 .panel-tabs button {
   display: flex;
@@ -10193,7 +10300,7 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: 64px minmax(0, 1fr) auto;
+  grid-template-rows: 64px 42px minmax(0, 1fr);
   background: #0c110f;
 }
 
@@ -10252,6 +10359,48 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   margin-left: 4px;
   color: var(--text);
   font-size: 12px;
+}
+
+.blueprint-tabs {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+  background: #0f1512;
+}
+
+.blueprint-tabs > button {
+  position: relative;
+  display: inline-flex;
+  min-width: 142px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.blueprint-tabs > button.active {
+  border-bottom-color: var(--cyan);
+  color: var(--cyan);
+}
+
+.blueprint-tabs > button > em {
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--coral);
+  color: #fff;
+  font-size: 8px;
+  font-style: normal;
 }
 
 .blueprint-close {
@@ -10654,6 +10803,225 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   cursor: pointer;
 }
 
+.pending-construction-workspace {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: 54px minmax(0, 1fr);
+  background: #0c110f;
+}
+
+.pending-construction-workspace > header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pending-construction-workspace > header > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  color: var(--cyan);
+}
+
+.pending-construction-workspace > header span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.pending-construction-workspace > header strong { color: var(--text); font-size: 11px; }
+
+.pending-construction-workspace > header small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-construction-workspace > header > button,
+.pending-construction-order > footer > button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: 8px;
+}
+
+.pending-construction-workspace > header > button { border-color: #3f7665; color: var(--green); }
+.pending-construction-workspace button:disabled { opacity: .42; cursor: default; }
+
+.pending-construction-list {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+  align-content: start;
+  gap: 12px;
+  overflow: auto;
+  padding: 16px 18px 24px;
+}
+
+.pending-construction-order {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #121916;
+}
+
+.pending-construction-order > header {
+  display: flex;
+  min-width: 0;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pending-construction-order > header > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.pending-construction-order > header i {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border: 1px dashed #68736e;
+  border-radius: 4px;
+  color: #adb6b1;
+  font-style: normal;
+}
+
+.pending-construction-order > header span { display: grid; min-width: 0; gap: 3px; }
+
+.pending-construction-order > header strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-construction-order > header small,
+.pending-construction-order > header em { color: var(--muted); font-size: 8px; font-style: normal; }
+
+.pending-construction-order > header > em {
+  flex: 0 0 auto;
+  padding: 4px 6px;
+  border: 1px solid #5b625f;
+  border-radius: 3px;
+}
+
+.pending-construction-order--waiting-fleet > header > em { border-color: #7b6841; color: var(--yellow); }
+.pending-construction-order--invalid > header > em { border-color: #71463f; color: var(--coral); }
+
+.pending-construction-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.pending-construction-meta > div {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border-right: 1px solid var(--line);
+}
+
+.pending-construction-meta > div:last-child { border-right: 0; }
+.pending-construction-meta dt { color: var(--muted); font-size: 7px; }
+
+.pending-construction-meta dd {
+  overflow: hidden;
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-construction-blocked {
+  margin: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid #6d453d;
+  background: rgba(210, 111, 92, .08);
+  color: var(--coral);
+  font-size: 8px;
+}
+
+.pending-construction-materials {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pending-construction-materials > strong { color: var(--muted); font-size: 8px; }
+
+.pending-construction-materials > div {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 6px;
+}
+
+.pending-construction-materials span {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px 5px;
+  padding: 7px;
+  border: 1px solid #59433d;
+  border-radius: 3px;
+  color: var(--coral);
+}
+
+.pending-construction-materials span.ready { border-color: #385c4b; color: var(--green); }
+
+.pending-construction-materials span b {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-construction-materials span em { font-size: 8px; font-style: normal; }
+.pending-construction-materials span small { grid-column: 2 / -1; color: var(--muted); font-size: 7px; }
+
+.pending-construction-order > footer {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 9px;
+}
+
+.pending-construction-order > footer > button.primary { border-color: #397160; background: #162a23; color: var(--green); }
+.pending-construction-order > footer > button.danger { border-color: #6b4039; color: var(--coral); }
+
 .star-map-workspace {
   position: fixed;
   z-index: 90;
@@ -10694,6 +11062,95 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
 .star-map-tabs button.active {
   border-bottom-color: var(--cyan);
   color: var(--text);
+}
+
+.quantum-inventory-console {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--surface-deep, #0b100e);
+}
+
+.quantum-inventory-summary {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(210px, 1fr) minmax(360px, 2fr) minmax(230px, auto);
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.quantum-inventory-summary > div:first-child {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  color: var(--cyan);
+}
+
+.quantum-inventory-summary > div:first-child > span { display: grid; min-width: 0; gap: 2px; }
+.quantum-inventory-summary > div:first-child small { color: var(--muted); font-size: calc(9px * var(--ui-font-scale, 1)); }
+.quantum-inventory-summary > div:first-child strong { overflow: hidden; color: var(--text); font-size: calc(14px * var(--ui-font-scale, 1)); text-overflow: ellipsis; white-space: nowrap; }
+.quantum-inventory-summary dl { display: grid; min-width: 0; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 0; background: var(--line); }
+.quantum-inventory-summary dl > div { display: grid; min-width: 0; gap: 3px; padding: 8px 10px; background: var(--surface-raised); }
+.quantum-inventory-summary dt { color: var(--muted); font-size: calc(9px * var(--ui-font-scale, 1)); }
+.quantum-inventory-summary dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--text); font-size: calc(13px * var(--ui-font-scale, 1)); font-weight: 700; }
+.quantum-inventory-summary dd small { margin-left: 3px; color: var(--muted); font-size: calc(9px * var(--ui-font-scale, 1)); font-weight: 400; }
+.quantum-collector-actions { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.quantum-collector-actions button { display: flex; min-height: 38px; min-width: 0; align-items: center; justify-content: center; gap: 6px; padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface-raised); color: var(--text-soft); cursor: pointer; font-size: calc(10px * var(--ui-font-scale, 1)); overflow-wrap: anywhere; }
+.quantum-collector-actions button:first-child { border-color: var(--theme-accent-border, #3c6d67); color: var(--cyan); }
+.quantum-collector-actions button:disabled { cursor: default; opacity: .45; }
+.quantum-collector-actions small { grid-column: 1 / -1; color: var(--yellow); font-size: calc(9px * var(--ui-font-scale, 1)); }
+
+.quantum-inventory-toolbar {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(220px, 420px) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-raised);
+}
+
+.quantum-inventory-toolbar > span { color: var(--muted); font-size: calc(10px * var(--ui-font-scale, 1)); }
+.quantum-inventory-list { min-width: 0; min-height: 0; overflow: auto; padding: 8px 18px 24px; }
+.quantum-inventory-row { display: grid; min-width: 0; grid-template-columns: minmax(150px, .85fr) minmax(190px, 1fr) minmax(180px, .9fr) minmax(360px, 2fr); align-items: center; gap: 12px; padding: 10px 8px; border-bottom: 1px solid var(--line); }
+.quantum-inventory-row--over { background: color-mix(in srgb, var(--yellow) 8%, transparent); }
+.quantum-inventory-item { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.quantum-inventory-item > :first-child { flex: 0 0 auto; }
+.quantum-inventory-item > span { display: grid; min-width: 0; gap: 2px; }
+.quantum-inventory-item strong { overflow: hidden; color: var(--text); font-size: calc(12px * var(--ui-font-scale, 1)); text-overflow: ellipsis; white-space: nowrap; }
+.quantum-inventory-item small { overflow: hidden; color: var(--muted); font-size: calc(9px * var(--ui-font-scale, 1)); text-overflow: ellipsis; white-space: nowrap; }
+.quantum-inventory-amount { display: grid; min-width: 0; gap: 2px; }
+.quantum-inventory-amount > span { color: var(--muted); font-size: calc(9px * var(--ui-font-scale, 1)); }
+.quantum-inventory-amount > strong { overflow: hidden; color: var(--text); font-size: calc(15px * var(--ui-font-scale, 1)); text-overflow: ellipsis; white-space: nowrap; }
+.quantum-inventory-amount > small { overflow-wrap: anywhere; color: var(--muted); font-size: calc(9px * var(--ui-font-scale, 1)); }
+.quantum-inventory-amount > em { color: var(--yellow); font-size: calc(9px * var(--ui-font-scale, 1)); font-style: normal; }
+.quantum-inventory-flow { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 8px; }
+.quantum-inventory-flow span { display: flex; min-width: 0; align-items: center; gap: 4px; color: var(--text-soft); font-size: calc(10px * var(--ui-font-scale, 1)); }
+.quantum-inventory-flow strong { grid-column: 1 / -1; color: var(--muted); font-size: calc(10px * var(--ui-font-scale, 1)); }
+.quantum-inventory-flow strong.positive { color: var(--green); }
+.quantum-inventory-flow strong.negative { color: var(--yellow); }
+.quantum-capacity-editor { display: grid; min-width: 0; gap: 5px; }
+.quantum-capacity-presets { display: flex; min-width: 0; flex-wrap: wrap; gap: 4px; }
+.quantum-capacity-presets button { min-height: 30px; padding: 4px 7px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; font-size: calc(9px * var(--ui-font-scale, 1)); }
+.quantum-capacity-presets button.active { border-color: var(--theme-accent-border, #3c6d67); background: var(--theme-accent-soft, #15312c); color: var(--text); }
+.quantum-capacity-custom { display: grid; min-width: 0; grid-template-columns: minmax(120px, 1fr) auto; gap: 5px; }
+.quantum-capacity-custom input { min-width: 0; min-height: 34px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 4px; outline: 0; background: var(--surface-raised); color: var(--text); font-size: calc(11px * var(--ui-font-scale, 1)); }
+.quantum-capacity-custom input[aria-invalid="true"] { border-color: var(--red); }
+.quantum-capacity-custom button { display: flex; min-height: 34px; align-items: center; justify-content: center; gap: 4px; padding: 0 9px; border: 1px solid var(--theme-accent-border, #3c6d67); border-radius: 4px; background: var(--theme-accent-soft, #15312c); color: var(--text); cursor: pointer; font-size: calc(10px * var(--ui-font-scale, 1)); }
+.quantum-capacity-error { color: var(--red); font-size: calc(9px * var(--ui-font-scale, 1)); }
+
+@media (max-width: 1180px) {
+  .quantum-inventory-summary { grid-template-columns: minmax(190px, .8fr) minmax(320px, 1.5fr); }
+  .quantum-collector-actions { grid-column: 1 / -1; }
+  .quantum-inventory-row { grid-template-columns: minmax(140px, .8fr) minmax(170px, 1fr) minmax(170px, 1fr); }
+  .quantum-capacity-editor { grid-column: 1 / -1; }
 }
 
 .star-map-header {
@@ -12122,6 +12579,49 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   font-size: 10px;
 }
 
+.statistics-production .statistics-toolbar {
+  grid-template-columns: minmax(180px, 260px) minmax(280px, 1fr) minmax(360px, auto);
+}
+
+.statistics-production-controls {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(250px, 1fr) minmax(130px, 0.65fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.statistics-window-control {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-raised);
+}
+
+.statistics-window-control button {
+  min-width: 0;
+  height: 27px;
+  padding: 0 5px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statistics-window-control button.active {
+  background: #20322d;
+  color: var(--cyan);
+}
+
 .statistics-table {
   min-width: 780px;
 }
@@ -12141,6 +12641,27 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   color: var(--muted);
   font-size: 8px;
   font-weight: 700;
+}
+
+.statistics-table > header > button {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statistics-table > header > button.active {
+  color: var(--cyan);
 }
 
 .statistics-row {
@@ -13832,6 +14353,14 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
     grid-template-columns: minmax(170px, 1fr) minmax(280px, 1.5fr) 150px;
   }
 
+  .statistics-production .statistics-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .statistics-production-controls {
+    grid-template-columns: 1fr;
+  }
+
   .power-summary-band {
     grid-template-columns: repeat(3, 1fr);
   }
@@ -14220,7 +14749,7 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
 
   .blueprint-workspace {
     inset: 58px 0 96px;
-    grid-template-rows: 56px minmax(0, 1fr) auto;
+    grid-template-rows: 56px 42px minmax(0, 1fr);
   }
 
   .blueprint-header {
@@ -14255,6 +14784,13 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
     grid-template-columns: minmax(0, 1fr);
     padding: 10px;
   }
+
+  .blueprint-tabs { padding: 0 8px; }
+  .blueprint-tabs > button { min-width: 0; flex: 1; }
+  .pending-construction-workspace > header { padding: 7px 9px; }
+  .pending-construction-workspace > header small { display: none; }
+  .pending-construction-list { grid-template-columns: minmax(0, 1fr); padding: 10px; }
+  .pending-construction-order > footer { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
   .canvas-selection-tools {
     top: 116px;

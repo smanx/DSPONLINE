@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createInitialState, placeBuilding, setActivePlanet, setLogisticsItem, setStationHubConfiguration, setStationSlotLimits, setStationSlotMode, setStationSlotRoutePolicy, setStationSlotWarperBudget } from "./engine";
+import { createInitialState, getInfiniteResourceCollectionSpeedMultiplier, placeBuilding, setActivePlanet, setLogisticsItem, setStationHubConfiguration, setStationSlotLimits, setStationSlotMode, setStationSlotRoutePolicy, setStationSlotWarperBudget } from "./engine";
 import { getPlanetIndustrySummaries, getRoutePathLabel, getStellarRouteSnapshots } from "./stellarIndustry";
 
 describe("stellar industry selectors", () => {
@@ -17,6 +17,18 @@ describe("stellar industry selectors", () => {
     expect(getPlanetIndustrySummaries(state).find((planet) => planet.planetId === "home")?.depletionSeconds).toBeCloseTo(2_000, 8);
     state.endgame.infiniteResearch.vein_utilization.level = 10;
     expect(getPlanetIndustrySummaries(state).find((planet) => planet.planetId === "home")?.depletionSeconds).toBeNull();
+  });
+
+  it("uses the same infinite collection speed multiplier for liquid and orbital resources", () => {
+    const state = createInitialState();
+    expect(getInfiniteResourceCollectionSpeedMultiplier(state)).toBe(1);
+    state.endgame.infiniteResearch.vein_utilization.level = 7;
+    expect(getInfiniteResourceCollectionSpeedMultiplier(state)).toBeCloseTo(1.7, 10);
+    const before = getPlanetIndustrySummaries(state).find((planet) => planet.planetId === "home")!;
+    state.endgame.infiniteResearch.vein_utilization.level = 0;
+    const baseline = getPlanetIndustrySummaries(state).find((planet) => planet.planetId === "home")!;
+    expect(before.miningPerMinute).toBe(baseline.miningPerMinute);
+    expect(getInfiniteResourceCollectionSpeedMultiplier({ ...state, endgame: { ...state.endgame, infiniteResearch: { ...state.endgame.infiniteResearch, vein_utilization: { ...state.endgame.infiniteResearch.vein_utilization, level: 7 } } } })).toBeCloseTo(1.7, 10);
   });
 
   it("builds a cross-system route snapshot from the same station slots used by simulation", () => {
@@ -50,6 +62,7 @@ describe("stellar industry selectors", () => {
     expect(route.warpersPerTrip).toBe(2);
     expect(route.targetLimit).toBe(320);
     expect(route.status).toBe("missing-warper");
+    expect(route.dispatchDirection).toBe("demand-pickup");
 
     state.entities.find((entity) => entity.id === target.id)!.stationWarpers = 2;
     const ready = getStellarRouteSnapshots(state).find((candidate) => candidate.scope === "remote")!;
@@ -93,6 +106,7 @@ describe("stellar industry selectors", () => {
       targetStationId: target.id,
       installedVehicles: 2,
       availableWarpers: 2,
+      dispatchDirection: "supply-delivery",
       status: "ready",
     });
   });

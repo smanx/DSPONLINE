@@ -7,6 +7,7 @@ import {
   sumEscalatingModuleCost,
 } from "./systemHubLogistics";
 import type {
+  FactoryEntity,
   GameState,
   GalacticHubNetworkState,
   ItemId,
@@ -396,11 +397,17 @@ export interface InterstellarStationUpgradeBatchResult {
   skipped: InterstellarStationUpgradeBatchSkip[];
 }
 
+/**
+ * Quantum logistics is an access-mode change, not a second construction
+ * project.  Keep the legacy Mk.II upgrade package in the shape of the save
+ * and status payload, but make every amount zero so switching to the quantum
+ * tower never consumes player materials.
+ */
 const INTERSTELLAR_STATION_UPGRADE_BASE_COSTS: Partial<Record<ItemId, number>> = {
-  titanium_alloy: 10_000,
-  frame_material: 5_000,
-  quantum_chip: 5_000,
-  universe_matrix: 10_000,
+  titanium_alloy: 0,
+  frame_material: 0,
+  quantum_chip: 0,
+  universe_matrix: 0,
 };
 
 function getUpgradeMachineCount(entity: { machineCount: number }): number | null {
@@ -420,8 +427,11 @@ function getInterstellarStationUpgradeCosts(): Partial<Record<ItemId, number>> {
  * Keeping this pure lets desktop, mobile and batch actions show the same state
  * without mutating the save or relying on a hidden UI-only flag.
  */
-export function getInterstellarStationUpgradeStatus(state: GameState, entityId: string): InterstellarStationUpgradeStatus {
-  const entity = state.entities.find((candidate) => candidate.id === entityId);
+function getInterstellarStationUpgradeStatusForEntity(
+  state: GameState,
+  entity: FactoryEntity | undefined,
+  availableTray?: Partial<Record<ItemId, number>>,
+): InterstellarStationUpgradeStatus {
   if (!entity || entity.buildingId !== "interstellar_logistics_station") {
     return { blocker: "not-found", reason: "找不到可升级的星际物流站", costs: {}, missing: {} };
   }
@@ -432,10 +442,13 @@ export function getInterstellarStationUpgradeStatus(state: GameState, entityId: 
   if (machineCount == null || Object.keys(costs).length === 0) {
     return { ...base, blocker: "invalid", reason: "建筑堆叠数量无效，无法安全计算升级材料" };
   }
-  if (!hasTech(state, "orbital_elevator_engineering")) {
-    return { ...base, blocker: "technology", reason: "需要先研究“轨道升降工程”" };
+  // New saves use the quantum-network technology.  The historical orbital
+  // elevator technology remains accepted so old saves can still upgrade an
+  // existing station without being forced through a removed research node.
+  if (!hasTech(state, "quantum_logistics_network") && !hasTech(state, "orbital_elevator_engineering")) {
+    return { ...base, blocker: "technology", reason: "需要先研究“量子物流网络”" };
   }
-  const tray = state.planetTrays[entity.planetId] ?? {};
+  const tray = availableTray ?? state.planetTrays[entity.planetId] ?? {};
   const missing = Object.fromEntries(Object.entries(costs).flatMap(([itemId, amount]) => {
     const available = Math.max(0, Math.floor(tray[itemId as ItemId] ?? 0));
     const deficit = Math.max(0, amount - available);
@@ -448,29 +461,67 @@ export function getInterstellarStationUpgradeStatus(state: GameState, entityId: 
   return { ...base, blocker: "ready", reason: "科技与升级材料均已满足，可原地升级为 Mk.II" };
 }
 
+export function getInterstellarStationUpgradeStatus(state: GameState, entityId: string): InterstellarStationUpgradeStatus {
+  return getInterstellarStationUpgradeStatusForEntity(
+    state,
+    state.entities.find((candidate) => candidate.id === entityId),
+  );
+}
+
 /** Upgrade every eligible station in a stable entity-id order. */
 export function upgradeAllInterstellarStationsToMk2(state: GameState, systemId?: StarSystemId): InterstellarStationUpgradeBatchResult {
   const candidates = state.entities
     .filter((entity) => entity.buildingId === "interstellar_logistics_station")
     .filter((entity) => systemId == null || getPlanet(entity.planetId).systemId === systemId)
     .sort((left, right) => left.id.localeCompare(right.id));
-  let next = state;
   const upgradedIds: string[] = [];
   const skipped: InterstellarStationUpgradeBatchSkip[] = [];
+  const plannedTrays = new Map<PlanetId, Partial<Record<ItemId, number>>>();
+  const outputItemsByStation = new Map<string, Array<ItemId | null>>();
   for (const candidate of candidates) {
-    const status = getInterstellarStationUpgradeStatus(next, candidate.id);
+    const tray = plannedTrays.get(candidate.planetId) ?? { ...(state.planetTrays[candidate.planetId] ?? {}) };
+    const status = getInterstellarStationUpgradeStatusForEntity(state, candidate, tray);
     if (status.blocker !== "ready") {
       skipped.push({ entityId: candidate.id, blocker: status.blocker, reason: status.reason });
       continue;
     }
-    const upgraded = upgradeInterstellarStationToMk2(next, candidate.id);
-    if (upgraded === next) {
-      skipped.push({ entityId: candidate.id, blocker: "invalid", reason: "升级未提交，状态已变化" });
-      continue;
+    for (const [itemId, amount] of Object.entries(status.costs)) {
+      if (amount <= 0) continue;
+      tray[itemId as ItemId] = Math.max(0, Math.floor((tray[itemId as ItemId] ?? 0) - amount));
     }
-    next = upgraded;
+    plannedTrays.set(candidate.planetId, tray);
+    outputItemsByStation.set(candidate.id, candidate.elevatorOutputItems ?? [
+      ...(candidate.stationSlots ?? []).slice(0, 5).map((slot) => slot.itemId ?? null),
+      null, null, null, null, null,
+    ].slice(0, 5));
     upgradedIds.push(candidate.id);
   }
+  if (upgradedIds.length === 0) return { state, upgradedIds, skipped };
+  const planetTrays = { ...state.planetTrays };
+  for (const [planetId, tray] of plannedTrays) planetTrays[planetId] = tray;
+  const belts = state.belts.map((belt) => {
+    const outputItems = outputItemsByStation.get(belt.source);
+    if (!outputItems || belt.elevatorOutputIndex !== undefined) return belt;
+    const index = outputItems.findIndex((item) => item === belt.itemId);
+    return index >= 0 ? { ...belt, elevatorOutputIndex: index as SpaceStationOutputPortIndex } : belt;
+  });
+  const entities = state.entities.map((entity) => {
+    const outputItems = outputItemsByStation.get(entity.id);
+    return outputItems ? {
+      ...entity,
+      stationTier: 2 as const,
+      stationOperationMode: entity.stationOperationMode ?? "legacy" as const,
+      stationModeTransition: null,
+      elevatorOutputItems: outputItems,
+    } : entity;
+  });
+  const next = {
+    ...state,
+    entities,
+    belts,
+    planetTrays,
+    tray: plannedTrays.has(state.activePlanetId) ? planetTrays[state.activePlanetId] : state.tray,
+  };
   return { state: next, upgradedIds, skipped };
 }
 
@@ -481,7 +532,10 @@ export function upgradeInterstellarStationToMk2(state: GameState, entityId: stri
   const costs = status.costs;
   const tray = { ...(state.planetTrays[station.planetId] ?? {}) };
   if (Object.entries(costs).some(([itemId, amount]) => (tray[itemId as ItemId] ?? 0) < amount)) return state;
-  for (const [itemId, amount] of Object.entries(costs)) tray[itemId as ItemId] = Math.max(0, Math.floor((tray[itemId as ItemId] ?? 0) - amount));
+  for (const [itemId, amount] of Object.entries(costs)) {
+    if (amount <= 0) continue;
+    tray[itemId as ItemId] = Math.max(0, Math.floor((tray[itemId as ItemId] ?? 0) - amount));
+  }
   const withTray = updatePlanetTray(state, station.planetId, tray);
   const outputItems = station.elevatorOutputItems ?? [
     ...(station.stationSlots ?? []).slice(0, 5).map((slot) => slot.itemId ?? null),

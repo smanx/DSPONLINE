@@ -105,7 +105,7 @@ describe("system space station domain", () => {
 
   it("upgrades a station atomically and preserves the legacy mode until requested", () => {
     let state = createInitialState();
-    state.research.completedTechIds.push("orbital_elevator_engineering");
+    state.research.completedTechIds.push("quantum_logistics_network");
     state.construction.interstellar_logistics_station = 1;
     state = placeBuilding(state, "interstellar_logistics_station", { x: 10, y: 10 });
     const station = state.entities.at(-1)!;
@@ -116,7 +116,7 @@ describe("system space station domain", () => {
     const upgraded = state.entities.find((entity) => entity.id === station.id)!;
     expect(upgraded.stationTier).toBe(2);
     expect(upgraded.stationOperationMode).toBe("legacy");
-    expect(state.planetTrays.home.universe_matrix).toBe(0);
+    expect(state.planetTrays.home).toEqual({ titanium_alloy: 10_000, frame_material: 5_000, quantum_chip: 5_000, universe_matrix: 10_000 });
   });
 
   it("reports the actual blocker instead of silently ignoring an upgrade", () => {
@@ -126,14 +126,12 @@ describe("system space station domain", () => {
     const station = state.entities.at(-1)!;
     expect(getInterstellarStationUpgradeStatus(state, station.id)).toMatchObject({ blocker: "technology" });
     state.research.completedTechIds.push("orbital_elevator_engineering");
-    expect(getInterstellarStationUpgradeStatus(state, station.id)).toMatchObject({ blocker: "materials" });
-    state.planetTrays.home = { titanium_alloy: 10_000, frame_material: 5_000, quantum_chip: 5_000, universe_matrix: 10_000 };
     expect(getInterstellarStationUpgradeStatus(state, station.id)).toMatchObject({ blocker: "ready", missing: {} });
     state = upgradeInterstellarStationToMk2(state, station.id);
     expect(getInterstellarStationUpgradeStatus(state, station.id)).toMatchObject({ blocker: "already-upgraded" });
   });
 
-  it("charges one upgrade package for a stacked station entity", () => {
+  it("keeps the zero-cost quantum upgrade for a stacked station entity", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("orbital_elevator_engineering");
     state.construction.interstellar_logistics_station = 11_532;
@@ -144,13 +142,13 @@ describe("system space station domain", () => {
     state.planetTrays.home = { titanium_alloy: 10_000, frame_material: 5_000, quantum_chip: 5_000, universe_matrix: 10_000 };
     const status = getInterstellarStationUpgradeStatus(state, station.id);
     expect(status.blocker).toBe("ready");
-    expect(status.costs).toEqual({ titanium_alloy: 10_000, frame_material: 5_000, quantum_chip: 5_000, universe_matrix: 10_000 });
+    expect(status.costs).toEqual({ titanium_alloy: 0, frame_material: 0, quantum_chip: 0, universe_matrix: 0 });
     const upgraded = upgradeInterstellarStationToMk2(state, station.id);
     expect(upgraded.entities.find((entity) => entity.id === station.id)?.stationTier).toBe(2);
-    expect(upgraded.planetTrays.home).toEqual({ titanium_alloy: 0, frame_material: 0, quantum_chip: 0, universe_matrix: 0 });
+    expect(upgraded.planetTrays.home).toEqual({ titanium_alloy: 10_000, frame_material: 5_000, quantum_chip: 5_000, universe_matrix: 10_000 });
   });
 
-  it("upgrades eligible stations in stable order and skips stations with independent blockers", () => {
+  it("upgrades eligible stations in stable order without consuming materials", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("orbital_elevator_engineering");
     state.construction.interstellar_logistics_station = 2;
@@ -159,13 +157,13 @@ describe("system space station domain", () => {
     const stations = state.entities.filter((entity) => entity.buildingId === "interstellar_logistics_station");
     const first = stations[0]!;
     const second = stations[1]!;
-    state.planetTrays.home = { titanium_alloy: 10_000, frame_material: 5_000, quantum_chip: 5_000, universe_matrix: 10_000 };
+    state.planetTrays.home = {};
     const result = upgradeAllInterstellarStationsToMk2(state, "helios");
-    expect(result.upgradedIds).toEqual([first.id]);
-    expect(result.skipped).toEqual([expect.objectContaining({ entityId: second.id, blocker: "materials" })]);
+    expect(result.upgradedIds).toEqual([first.id, second.id]);
+    expect(result.skipped).toEqual([]);
     expect(result.state.entities.find((entity) => entity.id === first.id)?.stationTier).toBe(2);
-    expect(result.state.entities.find((entity) => entity.id === second.id)?.stationTier).toBe(1);
-    expect(result.state.planetTrays.home).toEqual({ titanium_alloy: 0, frame_material: 0, quantum_chip: 0, universe_matrix: 0 });
+    expect(result.state.entities.find((entity) => entity.id === second.id)?.stationTier).toBe(2);
+    expect(result.state.planetTrays.home).toEqual({});
   });
 
   it("upgrades every eligible station across the full star map without mixing planet trays", () => {
@@ -191,8 +189,8 @@ describe("system space station domain", () => {
     expect(result.upgradedIds).toEqual(stations.map((station) => station.id).sort());
     expect(result.skipped).toEqual([]);
     expect(result.state.entities.filter((entity) => entity.buildingId === "interstellar_logistics_station" && entity.stationTier === 2)).toHaveLength(2);
-    expect(result.state.planetTrays.home).toEqual({ titanium_alloy: 0, frame_material: 0, quantum_chip: 0, universe_matrix: 0 });
-    expect(result.state.planetTrays.frost).toEqual({ titanium_alloy: 0, frame_material: 0, quantum_chip: 0, universe_matrix: 0 });
+    expect(result.state.planetTrays.home).toEqual({ titanium_alloy: 10_000, frame_material: 5_000, quantum_chip: 5_000, universe_matrix: 10_000 });
+    expect(result.state.planetTrays.frost).toEqual({ titanium_alloy: 10_000, frame_material: 5_000, quantum_chip: 5_000, universe_matrix: 10_000 });
   });
 
   it("does not complete a mode transition while any route role still references the station", () => {

@@ -1581,6 +1581,9 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
  * compatible Mk.II station upgrade used by existing saves.
  */
 export const DEPRECATED_TECHNOLOGY_IDS: ReadonlySet<TechId> = new Set<TechId>([
+  "orbital_elevator_engineering",
+  "orbital_multi_cargo_bus",
+  "orbital_energy_recovery",
   "system_space_station_engineering",
   "orbital_modular_assembly",
   "autonomous_station_construction",

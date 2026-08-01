@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-30-v1.0.13");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-01-v1.0.19");
   });
 });
 
@@ -58,14 +58,10 @@ test("desktop construction closes the micro-black-hole and time-warp interaction
   await expect(inspector).toContainText("输入物资将被永久销毁且无法找回");
   await expect(inspector.locator(".black-hole-port-list > div")).toHaveCount(3);
 
-  let confirmations = 0;
-  page.on("dialog", async (dialog) => {
-    confirmations += 1;
-    await dialog.accept();
-  });
   await inspector.getByRole("button", { name: "启动微型黑洞" }).click();
+  await page.locator(".game-dialog").getByRole("button", { name: "继续确认" }).click();
+  await page.locator(".game-dialog").getByRole("button", { name: "确认启动" }).click();
   await expect(inspector.getByRole("button", { name: "暂停销毁" })).toBeVisible();
-  expect(confirmations).toBe(2);
 
   await timeWarpDock.locator(".construction-item").click();
   await page.locator(".react-flow__pane").click({ position: { x: 1050, y: 360 } });
@@ -107,7 +103,7 @@ test("next mobile construction finds both v1.0 megastructures at 200 percent fon
     await search.fill("微型黑洞");
     await expect(build).toContainText("微型黑洞连接装置");
     await search.fill("时间扭曲");
-    const result = build.getByRole("button", { name: /时间扭曲装置.*部署/ });
+    const result = build.getByRole("button", { name: /时间扭曲装置.*施工库存/ });
     await result.scrollIntoViewIfNeeded();
     await expect(result).toBeVisible();
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);

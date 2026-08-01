@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-30-v1.0.13");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-01-v1.0.19");
     }
   });
 }
@@ -139,19 +139,19 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "终局画布与大数显示更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "蓝图施工与模拟一致性更新" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(5);
-  await expect(releaseNotes).toContainText("大型工厂画布缓存");
-  await expect(releaseNotes).toContainText("放大恢复建筑细节");
-  await expect(releaseNotes).toContainText("跨星系路线复用");
-  await expect(releaseNotes).toContainText("排行榜不再提前封顶");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-30-v113-1440.png", fullPage: true });
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(9);
+  await expect(releaseNotes).toContainText("内容包同步到模拟 Worker");
+  await expect(releaseNotes).toContainText("超大蓝图完整往返");
+  await expect(releaseNotes).toContainText("蓝图缺料预建设与多次补足");
+  await expect(releaseNotes).toContainText("量子网络基础吞吐提高");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-01-v119-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-30-v113-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-01-v119-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -166,7 +166,7 @@ test("dated release notes appear once and remain available from both settings sc
   });
   await expect.poll(controlsFitViewport).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-30-v113-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-01-v119-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -175,12 +175,12 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-07-30-v1.0.13");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-01-v1.0.19");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
   await page.getByRole("button", { name: "游戏设置" }).click();
-  await page.getByRole("button", { name: "查看2026年7月30日版本更新记录" }).click();
+  await page.getByRole("button", { name: "查看2026年8月1日版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
   await releaseNotes.getByLabel("关闭版本更新记录").click();
 
@@ -192,7 +192,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-07-30-v113-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-01-v117-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -3000,6 +3000,7 @@ test("production equipment and belt lanes upgrade in place without losing the ne
   await page.setViewportSize({ width: 1440, height: 900 });
   await openUpgradeStageGame(page);
   await page.locator(".react-flow__controls-fitview").click();
+  await page.getByRole("button", { name: "继续模拟" }).click();
   await expect(page.locator(".factory-cargo-packet").first()).toBeVisible();
 
   const assembler = page.locator(".machine-node").filter({ hasText: "齿轮" });
@@ -4361,7 +4362,7 @@ test("box selection copies, pastes, moves and upgrades a production blueprint", 
   await expect(page.locator(".game-notice")).toContainText("部署完成");
 
   await page.getByLabel("打开蓝图库").click();
-  const library = page.getByRole("dialog", { name: "蓝图库" });
+  const library = page.getByRole("dialog", { name: "蓝图与待建施工" });
   await expect(library.locator(".blueprint-card")).toHaveCount(1);
   await expect(library.locator(".blueprint-card")).toContainText("2 设备 · 0 资源锚点 · 1 线路");
   await expect(library.locator(".blueprint-requirements")).toContainText("制造台 Mk.I 0/2");
@@ -4370,7 +4371,7 @@ test("box selection copies, pastes, moves and upgrades a production blueprint", 
   await nameInput.press("Enter");
   await expect(nameInput).toHaveValue("处理器模块");
   await page.screenshot({ path: "artifacts/qa/blueprint-library-1440.png", fullPage: true });
-  await page.getByLabel("关闭蓝图库").click();
+  await page.getByLabel("关闭蓝图工作区").click();
 
   await boxSelect();
   const targetBeforeMove = await target.boundingBox();
@@ -4519,7 +4520,7 @@ test("blueprint transforms, recipe parameters and missing-stock construction que
   await page.getByLabel("复制所选为蓝图").click();
   await page.locator(".react-flow__pane").click({ position: { x: 690, y: 120 } });
   await page.getByLabel("打开蓝图库").click();
-  const library = page.getByRole("dialog", { name: "蓝图库" });
+  const library = page.getByRole("dialog", { name: "蓝图与待建施工" });
   const card = library.locator(".blueprint-card");
   await card.getByRole("button", { name: "90°", exact: true }).click();
   await card.getByRole("button", { name: "水平镜像" }).click();
@@ -4529,12 +4530,16 @@ test("blueprint transforms, recipe parameters and missing-stock construction que
   await page.locator(".react-flow__pane").click({ position: { x: 620, y: 500 }, force: true });
   await expect(page.locator(".game-notice")).toContainText("已加入施工队列");
   await page.getByLabel("打开蓝图库").click();
-  await expect(library.locator(".construction-queue-panel")).toContainText("待建队列");
-  await expect(library.locator(".construction-queue-panel")).toContainText("90° · 镜像");
+  await library.getByRole("button", { name: /待建与补足/ }).click();
+  const pendingWorkspace = library.locator(".pending-construction-workspace");
+  const pendingOrder = pendingWorkspace.locator(".pending-construction-order");
+  await expect(pendingWorkspace).toContainText("施工订单");
+  await expect(pendingOrder).toContainText("90° · 水平镜像");
   await page.waitForTimeout(220);
   await page.screenshot({ path: "artifacts/qa/blueprint-queue-1440.png", fullPage: true });
-  await library.locator(".construction-queue-panel").getByRole("button", { name: /取消.*施工订单/ }).click();
-  await expect(library.locator(".construction-queue-panel")).toHaveCount(0);
+  await pendingOrder.getByRole("button", { name: "取消并返还" }).click();
+  await page.locator(".game-dialog").getByRole("button", { name: "取消并返还" }).click();
+  await expect(pendingOrder).toHaveCount(0);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect.poll(async () => library.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
@@ -4710,8 +4715,8 @@ test("construction cards craft in place and Ctrl-click chains building placement
   await expect(page.locator(".entity-add-command")).toBeEnabled();
   await batchReduction.getByRole("button", { name: "-1", exact: true }).click();
   await expect(sourceAssembler).toContainText("×1");
-  page.once("dialog", (dialog) => dialog.accept());
   await page.locator(".inspector-panel").getByRole("button", { name: "回收设备" }).click();
+  await page.locator(".game-dialog").getByRole("button", { name: "确认回收" }).click();
   await expect(sourceAssembler).toHaveCount(0);
 });
 

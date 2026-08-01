@@ -255,6 +255,7 @@ const TECHNOLOGY_NAMES_EN: Record<string, string> = {
   ray_transmission_1: "Ray Transmission Efficiency I",
   ray_transmission_2: "Ray Transmission Efficiency II",
   dyson_absorption_1: "Shell Absorption Efficiency",
+  quantum_logistics_network: "Quantum Logistics Network",
 };
 
 const TECHNOLOGY_UNLOCKS_EN: Record<string, string> = {
@@ -357,6 +358,9 @@ const TECHNOLOGY_UNLOCKS_EN: Record<string, string> = {
   "射线接收上限 9 MW/台": "Ray Receiver Limit 9 MW per Facility",
   "射线接收上限累计 12 MW/台": "Cumulative Ray Receiver Limit 12 MW per Facility",
   "壳面太阳帆吸附速度 2.00×": "Shell Solar Sail Absorption Speed 2.00×",
+  "量子物流塔接入": "Quantum Logistics Tower Access",
+  "全宇宙共享库存": "Universal Shared Inventory",
+  "单塔上传/下载带宽": "Per-tower Upload/Download Bandwidth",
 };
 
 const PLANET_NAMES_EN: Record<string, string> = {

@@ -4,6 +4,7 @@ import { StartMenu } from "./components/StartMenu";
 import { DynamicImportBoundary, DynamicImportRecoveryNotice } from "./components/DynamicImportRecovery";
 import { importWithRecovery } from "./game/dynamicImportRecovery";
 import type { LoadedGame } from "./game/storage";
+import { GameDialogProvider } from "./components/GameDialogProvider";
 
 const FactoryRuntime = lazy(() => importWithRecovery(() => import("./FactoryRuntime"), "行星工厂模块"));
 
@@ -42,7 +43,7 @@ export function App() {
   }, [bypassMenu]);
 
   return (
-    <>
+    <GameDialogProvider>
       <DynamicImportBoundary>
         {!launch && bypassLoading ? <FactoryLoading /> : !launch ? (
           <StartMenu onEnterGame={(loaded) => setLaunch({ id: Date.now(), loaded })} onOpenReleaseNotes={openReleaseNotes} />
@@ -54,6 +55,6 @@ export function App() {
       </DynamicImportBoundary>
       <DynamicImportRecoveryNotice />
       <ReleaseNotesDialog open={releaseNotesOpen} onClose={closeReleaseNotes} />
-    </>
+    </GameDialogProvider>
   );
 }

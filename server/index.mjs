@@ -828,7 +828,7 @@ function validateSavePayload(payload) {
     const parsed = integrity.parsed;
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities) ||
-      !Number.isInteger(state.version) || state.version < 1 || state.version > 44) return false;
+      !Number.isInteger(state.version) || state.version < 1 || state.version > 46) return false;
     if (state.version >= 38 && !Array.isArray(state.belts)) return false;
     if (state.belts !== undefined && (!Array.isArray(state.belts) || state.belts.some((belt) =>
       state.version >= 38
@@ -912,9 +912,20 @@ function validateSavePayload(payload) {
         Object.entries(quantum.inventory).some(([itemId, amount]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !decimal(amount)) ||
         !quantum.routingCursors || typeof quantum.routingCursors !== "object" || Array.isArray(quantum.routingCursors) ||
         Object.entries(quantum.routingCursors).some(([itemId, cursor]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !Number.isSafeInteger(cursor) || cursor < 0)) return false;
+      if (state.version >= 45) {
+        const validCapacity = (value) => decimal(value) && BigInt(value) >= 10_000n && BigInt(value) <= 10_000_000_000n;
+        if (!quantum.itemCapacities || typeof quantum.itemCapacities !== "object" || Array.isArray(quantum.itemCapacities) ||
+          Object.entries(quantum.itemCapacities).some(([itemId, amount]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !validCapacity(amount)) ||
+          !quantum.uploadRoutingCursors || typeof quantum.uploadRoutingCursors !== "object" || Array.isArray(quantum.uploadRoutingCursors) ||
+          Object.entries(quantum.uploadRoutingCursors).some(([itemId, cursor]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !Number.isSafeInteger(cursor) || cursor < 0) ||
+          quantum.runtimeFlow !== undefined) return false;
+      }
       for (const entity of state.entities) {
-        if (entity?.buildingId !== "interstellar_logistics_station") continue;
+        const quantumEndpoint = entity?.buildingId === "interstellar_logistics_station" ||
+          state.version >= 45 && entity?.buildingId === "orbital_collector";
+        if (!quantumEndpoint) continue;
         if (entity.quantumMode !== undefined && !["legacy", "transitioning", "quantum"].includes(entity.quantumMode)) return false;
+        if (state.version >= 45 && !["legacy", "transitioning", "quantum"].includes(entity.quantumMode)) return false;
         const transition = entity.quantumTransition;
         if (transition !== undefined && transition !== null) {
           if (!transition || typeof transition !== "object" || !["quantum", "legacy"].includes(transition.targetMode) ||
@@ -991,6 +1002,61 @@ function validateSavePayload(payload) {
             (targetTemplate?.buildingId !== "micro_black_hole_connector" && targetTemplate?.buildingId !== "material_delivery_hub");
         });
       })) return false;
+    }
+    if (state.version >= 46) {
+      const validId = (value, maximum = 160) => typeof value === "string" && value.length >= 1 && value.length <= maximum;
+      const validBlueprintDefinition = (blueprint) => {
+        if (!blueprint || typeof blueprint !== "object" || !validId(blueprint.id) || !validId(blueprint.name, 32) ||
+          !Number.isSafeInteger(blueprint.revision) || blueprint.revision < 1 || !Array.isArray(blueprint.entities) ||
+          blueprint.entities.length > 100_000 || !Array.isArray(blueprint.belts) || blueprint.belts.length > 250_000 ||
+          (blueprint.resourceAnchors !== undefined && (!Array.isArray(blueprint.resourceAnchors) || blueprint.resourceAnchors.length > 256))) return false;
+        const keys = new Set();
+        for (const entity of blueprint.entities) {
+          if (!entity || typeof entity !== "object" || !validId(entity.key) || keys.has(entity.key) || !validId(entity.buildingId, 80) ||
+            !Number.isSafeInteger(entity.machineCount) || entity.machineCount < 1 || entity.machineCount > 100_000_000 ||
+            !Number.isFinite(entity.offset?.x) || !Number.isFinite(entity.offset?.y) ||
+            (entity.quantumTarget !== undefined && (entity.buildingId !== "interstellar_logistics_station" || typeof entity.quantumTarget !== "boolean"))) return false;
+          keys.add(entity.key);
+        }
+        for (const anchor of blueprint.resourceAnchors ?? []) {
+          if (!anchor || typeof anchor !== "object" || !validId(anchor.key) || keys.has(anchor.key) || !validId(anchor.resourceId, 80) ||
+            !validId(anchor.extractorBuildingId, 80) || !Number.isInteger(anchor.minerCount) || anchor.minerCount < 1 || anchor.minerCount > 10_000 ||
+            !Number.isFinite(anchor.offset?.x) || !Number.isFinite(anchor.offset?.y)) return false;
+          keys.add(anchor.key);
+        }
+        if (keys.size < 1) return false;
+        return blueprint.belts.every((belt) => belt && typeof belt === "object" && validId(belt.key) && keys.has(belt.sourceKey) && keys.has(belt.targetKey) &&
+          belt.sourceKey !== belt.targetKey && validId(belt.itemId, 80) && Number.isInteger(belt.lanes) && belt.lanes >= 1 && belt.lanes <= 4_096 &&
+          Number.isInteger(belt.tier) && belt.tier >= 1 && belt.tier <= 32 && [0, 1, 2].includes(belt.priority));
+      };
+      if (!Array.isArray(state.blueprints) || state.blueprints.some((blueprint) => !validBlueprintDefinition(blueprint)) ||
+        !Array.isArray(state.blueprintVersions) || state.blueprintVersions.length > 100) return false;
+      const snapshotById = new Map();
+      for (const snapshot of state.blueprintVersions) {
+        if (!snapshot || typeof snapshot !== "object" || !validId(snapshot.id, 200) || snapshotById.has(snapshot.id) ||
+          !validId(snapshot.blueprintId) || !Number.isSafeInteger(snapshot.revision) || snapshot.revision < 1 ||
+          !validBlueprintDefinition(snapshot.definition) || snapshot.definition.id !== snapshot.blueprintId ||
+          snapshot.definition.revision !== snapshot.revision) return false;
+        snapshotById.set(snapshot.id, snapshot);
+      }
+      if (!Array.isArray(state.constructionQueue) || state.constructionQueue.length > 100) return false;
+      for (const entry of state.constructionQueue) {
+        const snapshot = entry && typeof entry === "object" ? snapshotById.get(entry.blueprintVersionId) : undefined;
+        const validInventory = (value, allowedKeys) => value && typeof value === "object" && !Array.isArray(value) &&
+          Object.entries(value).every(([key, amount]) => allowedKeys(key) && Number.isSafeInteger(amount) && amount >= 0);
+        if (!entry || typeof entry !== "object" || !validId(entry.id) || !snapshot || entry.blueprintId !== snapshot.blueprintId ||
+          entry.blueprintRevision !== snapshot.revision || !validId(entry.blueprintName, 32) || !validId(entry.planetId, 80) ||
+          !Number.isFinite(entry.position?.x) || !Number.isFinite(entry.position?.y) || ![0, 90, 180, 270].includes(entry.rotation) ||
+          !["none", "horizontal", "vertical"].includes(entry.mirror) || !Number.isFinite(entry.queuedAt) || entry.queuedAt < 0 ||
+          !["pending-materials", "waiting-fleet"].includes(entry.status) ||
+          !validInventory(entry.reservedConstruction, (key) => /^[a-z][a-z0-9_]{1,80}$/.test(key)) ||
+          !validInventory(entry.reservedFleet, (key) => key === "logistics_drone" || key === "logistics_vessel") ||
+          !entry.placedEntityIdsByKey || typeof entry.placedEntityIdsByKey !== "object" || Array.isArray(entry.placedEntityIdsByKey) ||
+          Object.entries(entry.placedEntityIdsByKey).some(([key, entityId]) => !validId(key) || !validId(entityId, 200))) return false;
+        if (entry.status === "waiting-fleet" && (Object.keys(entry.reservedConstruction).length > 0 || Object.keys(entry.reservedFleet).length > 0 ||
+          !Number.isFinite(entry.buildingCompletedAt) || entry.buildingCompletedAt < 0)) return false;
+        if (entry.status === "pending-materials" && Object.keys(entry.placedEntityIdsByKey).length > 0) return false;
+      }
     }
     if (state.version >= 34) {
       const timeWarp = state.timeWarp;

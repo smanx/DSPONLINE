@@ -3,7 +3,10 @@ import {
   createGalaxyState,
   createVeinReserve,
   getPlanetSolarPowerMultiplier,
+  getPlanetDisplayName,
+  getPlanetSearchText,
   getRecommendedPlanetRole,
+  getStarSystemDisplayName,
   getSystemDistanceLy,
   isInfiniteResource,
   normalizeGalaxyState,
@@ -48,6 +51,21 @@ describe("planet industrial profiles", () => {
     const baseline = createGalaxyState(240_721, true);
     baseline.planetRoles.ashen = "smelting";
     expect(normalizeGalaxyState(JSON.parse(JSON.stringify(baseline)))).toEqual(baseline);
+  });
+
+  it("normalizes display metadata without changing internal galaxy ids", () => {
+    const baseline = createGalaxyState(240_721, true);
+    const normalized = normalizeGalaxyState({
+      ...baseline,
+      planetMetadata: { home: { customName: "  我的母星  ", note: "主产线", tags: ["出口", "出口", ""].concat(Array(20).fill("x")) } },
+      systemMetadata: { helios: { customName: "  曙光庭  " } },
+    });
+    expect(getPlanetDisplayName({ galaxy: normalized }, "home")).toBe("我的母星");
+    expect(getStarSystemDisplayName({ galaxy: normalized }, "helios")).toBe("曙光庭");
+    expect(normalized.profiles.home.planetId).toBe("home");
+    expect(normalized.planetMetadata.home?.tags).toEqual(["出口", "x"]);
+    expect(getPlanetSearchText({ galaxy: normalized }, "home")).toContain("主产线");
+    expect(getPlanetSearchText({ galaxy: normalized }, "home")).toContain("我的母星");
   });
 
   it("maps environmental specializations to concrete planning roles and equipment", () => {

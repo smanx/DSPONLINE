@@ -4,6 +4,7 @@ import { ITEMS, STAR_SYSTEM_LIST, getItem, getPlanet, getStarSystem } from "../g
 import { canStartSystemSpaceStation, getInterstellarStationUpgradeStatus, getSpaceStationProgress, getSpaceStationState, isSpaceStationFreeBuildTestMode, SPACE_STATION_MODULE_BASE_COSTS } from "../game/systemSpaceStation";
 import { formatQuantityCompact } from "../game/quantityFormat";
 import type { GameState, ItemId, SpaceStationOutputPortIndex, StarSystemId } from "../game/types";
+import { useGameDialog } from "./GameDialogProvider";
 
 function quantity(value: string | number | undefined): string {
   if (typeof value === "number") return formatQuantityCompact(Math.max(0, Math.floor(value)));
@@ -43,6 +44,7 @@ export function SystemSpaceStationWorkspace({
   onSetOutput,
   onSetModuleCount,
 }: SystemSpaceStationWorkspaceProps) {
+  const gameDialog = useGameDialog();
   const [selectedPlanetId, setSelectedPlanetId] = useState(game.activePlanetId);
   const [selectedItemId, setSelectedItemId] = useState<ItemId | null>(null);
   const system = getStarSystem(systemId);
@@ -73,7 +75,29 @@ export function SystemSpaceStationWorkspace({
         <section className="system-space-station-card"><header><Power size={17} /><strong>功能模块</strong><span>模块成本每十级翻倍，拆除会返还对应成本的一半。</span></header><div className="system-space-station-modules">{(Object.keys(SPACE_STATION_MODULE_BASE_COSTS) as Array<"backbone" | "energy" | "interstellar">).map((module) => <label key={module}><span>{module === "backbone" ? "物流主干" : module === "energy" ? "能源核心" : "星际运输"}</span><input type="number" min={0} max={1_000_000} value={station.modules[module]} onChange={(event) => onSetModuleCount(systemId, module, Math.max(0, Math.floor(Number(event.target.value) || 0)))} /></label>)}</div></section>
       </> : null}
 
-        <section className="system-space-station-card"><header><Route size={17} /><strong>星际物流站</strong><span>升级原地完成，传统航线在切换完成前继续运行。</span></header><div className="system-space-station-bulk-actions"><button type="button" disabled={pendingUpgradeCount === 0} onClick={() => onUpgradeAllStations(systemId)}><Sparkles size={15} />一键升级本系全部 Mk.II{pendingUpgradeCount > 0 ? `（${pendingUpgradeCount}）` : ""}</button><small>{pendingUpgradeCount === 0 ? "本系物流站均已升级" : `当前 ${readyUpgradeCount}/${pendingUpgradeCount} 座满足科技与材料条件`}</small></div><div className="system-space-station-stations">{stations.length === 0 ? <em>当前恒星系还没有星际物流站</em> : stations.map((entity) => { const upgradeStatus = getInterstellarStationUpgradeStatus(game, entity.id); return <article key={entity.id}><div><strong>{getPlanet(entity.planetId).name}</strong><small>{entity.stationTier === 2 ? "Mk.II" : "Mk.I"} · {entity.stationOperationMode === "elevator" ? "太空电梯" : "传统物流"}{entity.stationModeTransition ? " · 等待航线完成" : ""}</small></div><div className="system-space-station-station-actions">{entity.stationTier !== 2 ? <button type="button" onClick={() => onUpgradeStation(entity.id)}>升级 Mk.II</button> : <><button type="button" className={entity.stationOperationMode === "legacy" ? "active" : ""} onClick={() => onRequestMode(entity.id, "legacy")}>传统模式</button><button type="button" className={entity.stationOperationMode === "elevator" ? "active" : ""} onClick={() => onRequestMode(entity.id, "elevator")}>电梯模式</button></>}</div>{entity.stationTier !== 2 ? <p className={`system-space-station-upgrade-status system-space-station-upgrade-status--${upgradeStatus.blocker}`}>{upgradeStatus.reason}</p> : null}{entity.stationTier === 2 && entity.stationOperationMode === "elevator" ? <div className="system-space-station-outputs">{Array.from({ length: 5 }, (_, index) => { const current = entity.elevatorOutputItems?.[index] ?? null; return <label key={index}><span>输出 {index + 1}</span><select value={current ?? ""} onChange={(event) => { const next = (event.target.value || null) as ItemId | null; if (next !== current) { if (!window.confirm("第一次确认：更换输出口会断开该口现有线路，并返还施工件。是否继续？")) return; if (!window.confirm("第二次确认：仅该输出口的线路会被拆除，线路物资将退回共享仓库。确定执行？")) return; } onSetOutput(entity.id, index as SpaceStationOutputPortIndex, next); }}><option value="">空</option>{Object.keys(ITEMS).map((itemId) => <option value={itemId} key={itemId}>{getItem(itemId as ItemId).name}</option>)}</select></label>; })}</div> : null}</article>; })}</div></section>
+        <section className="system-space-station-card">
+          <header><Route size={17} /><strong>星际物流站</strong><span>升级原地完成，传统航线在切换完成前继续运行。</span></header>
+          <div className="system-space-station-bulk-actions"><button type="button" disabled={pendingUpgradeCount === 0} onClick={() => onUpgradeAllStations(systemId)}><Sparkles size={15} />一键升级本系全部 Mk.II{pendingUpgradeCount > 0 ? `（${pendingUpgradeCount}）` : ""}</button><small>{pendingUpgradeCount === 0 ? "本系物流站均已升级" : `当前 ${readyUpgradeCount}/${pendingUpgradeCount} 座满足科技与材料条件`}</small></div>
+          <div className="system-space-station-stations">{stations.length === 0 ? <em>当前恒星系还没有星际物流站</em> : stations.map((entity) => {
+            const upgradeStatus = getInterstellarStationUpgradeStatus(game, entity.id);
+            return <article key={entity.id}>
+              <div><strong>{getPlanet(entity.planetId).name}</strong><small>{entity.stationTier === 2 ? "Mk.II" : "Mk.I"} · {entity.stationOperationMode === "elevator" ? "太空电梯" : "传统物流"}{entity.stationModeTransition ? " · 等待航线完成" : ""}</small></div>
+              <div className="system-space-station-station-actions">{entity.stationTier !== 2 ? <button type="button" onClick={() => onUpgradeStation(entity.id)}>升级 Mk.II</button> : <><button type="button" className={entity.stationOperationMode === "legacy" ? "active" : ""} onClick={() => onRequestMode(entity.id, "legacy")}>传统模式</button><button type="button" className={entity.stationOperationMode === "elevator" ? "active" : ""} onClick={() => onRequestMode(entity.id, "elevator")}>电梯模式</button></>}</div>
+              {entity.stationTier !== 2 ? <p className={`system-space-station-upgrade-status system-space-station-upgrade-status--${upgradeStatus.blocker}`}>{upgradeStatus.reason}</p> : null}
+              {entity.stationTier === 2 && entity.stationOperationMode === "elevator" ? <div className="system-space-station-outputs">{Array.from({ length: 5 }, (_, index) => {
+                const current = entity.elevatorOutputItems?.[index] ?? null;
+                return <label key={index}><span>输出 {index + 1}</span><select value={current ?? ""} onChange={async (event) => {
+                  const next = (event.target.value || null) as ItemId | null;
+                  if (next !== current) {
+                    if (!await gameDialog.confirm("第一次确认：更换输出口会断开该口现有线路，并返还施工件。是否继续？", { danger: true, confirmLabel: "继续确认" })) return;
+                    if (!await gameDialog.confirm("第二次确认：仅该输出口的线路会被拆除，线路物资将退回共享仓库。确定执行？", { danger: true, confirmLabel: "确认更换" })) return;
+                  }
+                  onSetOutput(entity.id, index as SpaceStationOutputPortIndex, next);
+                }}><option value="">空</option>{Object.keys(ITEMS).map((itemId) => <option value={itemId} key={itemId}>{getItem(itemId as ItemId).name}</option>)}</select></label>;
+              })}</div> : null}
+            </article>;
+          })}</div>
+        </section>
     </div>
     <footer className="system-space-station-footer"><span><CircleOff size={14} />状态写入 GameState v44，旧物流路线不会被覆盖{isSpaceStationFreeBuildTestMode() ? " · 本地测试：升级与施工材料为 0" : ""}</span><button type="button" onClick={onClose}><ArrowLeft size={15} />返回工厂</button></footer>
   </section>;

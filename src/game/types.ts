@@ -430,7 +430,22 @@ export interface QuantumStationTransition {
 export interface QuantumLogisticsNetworkState {
   enabled: boolean;
   inventory: Partial<Record<ItemId, DecimalIntegerString>>;
+  /** Missing entries use the default 10-billion per-item capacity. */
+  itemCapacities: Partial<Record<ItemId, DecimalIntegerString>>;
   routingCursors: Partial<Record<ItemId, number>>;
+  uploadRoutingCursors: Partial<Record<ItemId, number>>;
+  /** Runtime-only diagnostics. Save serialization deliberately removes this. */
+  runtimeFlow?: QuantumLogisticsRuntimeFlow;
+}
+
+export interface QuantumLogisticsRuntimeFlow {
+  boundarySecond: number;
+  uploaded: Partial<Record<ItemId, DecimalIntegerString>>;
+  downloaded: Partial<Record<ItemId, DecimalIntegerString>>;
+  globalUploadPerMinute: number;
+  globalDownloadPerMinute: number;
+  quantumTowerStacks: number;
+  quantumCollectorStacks: number;
 }
 
 export interface SystemHubItemPolicy {
@@ -759,9 +774,11 @@ export interface FactoryEntity {
   stationTier?: StationTier;
   stationOperationMode?: StationOperationMode;
   stationModeTransition?: StationModeTransition;
-  /** Explicit quantum network attachment; absent means legacy behavior. */
+  /** Explicit quantum network attachment for Mk.II towers and orbital collectors. */
   quantumMode?: QuantumStationMode;
   quantumTransition?: QuantumStationTransition | null;
+  /** Persisted blueprint intent; cleared after a safe quantum handoff starts. */
+  quantumTarget?: boolean;
   /** Fixed five output assignments used only by Mk.II elevator mode. */
   elevatorOutputItems?: Array<ItemId | null>;
   stationProgress?: number;
@@ -1056,6 +1073,7 @@ export interface EntityOperatingStatus {
      | "missing-warper"
      | "missing-hub"
     | "waiting-load"
+    | "waiting-route"
     | "collecting"
     | "missing-dyson-swarm"
     | "missing-dyson-orbit"
@@ -1238,6 +1256,8 @@ export interface BlueprintEntityTemplate {
   stationMode?: "supply" | "demand";
   stationTier?: StationTier;
   stationOperationMode?: StationOperationMode;
+  /** Request quantum attachment after the placed station satisfies its prerequisites. */
+  quantumTarget?: boolean;
   elevatorOutputItems?: Array<ItemId | null>;
   stationMinimumLoad?: StationMinimumLoad;
   stationWarpEnabled?: boolean;
@@ -1297,6 +1317,8 @@ export interface BlueprintExternalPort {
 export interface BlueprintDefinition {
   id: string;
   name: string;
+  /** Monotonic local revision used by immutable queued construction orders. */
+  revision?: number;
   entities: BlueprintEntityTemplate[];
   resourceAnchors?: BlueprintResourceAnchor[];
   belts: BlueprintBeltTemplate[];
@@ -1306,15 +1328,31 @@ export interface BlueprintDefinition {
   recipeOverrides?: Partial<Record<RecipeId, RecipeId>>;
 }
 
+export interface BlueprintVersionSnapshot {
+  id: string;
+  blueprintId: string;
+  revision: number;
+  definition: BlueprintDefinition;
+}
+
+export type BlueprintConstructionStatus = "pending-materials" | "waiting-fleet";
+
 export interface ConstructionQueueEntry {
   id: string;
   blueprintId: string;
+  blueprintVersionId?: string;
+  blueprintRevision?: number;
   blueprintName: string;
   planetId: PlanetId;
   position: XYPosition;
   rotation: BlueprintRotation;
   mirror: BlueprintMirror;
   queuedAt: number;
+  status?: BlueprintConstructionStatus;
+  reservedConstruction?: Partial<Record<ConstructionId, number>>;
+  reservedFleet?: Partial<Record<PortableFleetItemId, number>>;
+  placedEntityIdsByKey?: Record<string, string>;
+  buildingCompletedAt?: number;
 }
 
 export interface HandcraftQueueEntry {
@@ -1339,6 +1377,8 @@ export interface ProductionTargetPlan {
 
 export interface ProductionHistorySample {
   elapsedSeconds: number;
+  /** Simulated seconds represented by this rolling bucket. Legacy samples imply 10 seconds. */
+  sampleDurationSeconds?: number;
   productionPerMinute: Partial<Record<ItemId, number>>;
   consumptionPerMinute: Partial<Record<ItemId, number>>;
   inventory: Partial<Record<ItemId, number>>;
@@ -1400,9 +1440,10 @@ export interface ConstructionAutomationJob {
 }
 
 export interface GameState {
-  /** v44 adds the quantum network state. v43 is retained in the type only so
-   * old test fixtures can be inspected and rejected without unsafe casts. */
-  version: 43 | 44;
+  /** v45 adds quantum item limits and collector endpoints; v46 adds immutable
+    * blueprint construction reservations. v43 is retained so
+    * old test fixtures can be inspected and rejected without unsafe casts. */
+  version: 43 | 44 | 45 | 46;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -1429,6 +1470,7 @@ export interface GameState {
   canvasBookmarks: CanvasBookmark[];
   canvasRegions: CanvasRegion[];
   blueprints: BlueprintDefinition[];
+  blueprintVersions: BlueprintVersionSnapshot[];
   constructionQueue: ConstructionQueueEntry[];
   handcraftQueue: HandcraftQueueEntry[];
   productionPlans: ProductionTargetPlan[];

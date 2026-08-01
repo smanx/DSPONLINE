@@ -910,7 +910,7 @@ test("validates v33 proliferator and exact infinite research fields while accept
   assert.equal(accepted.response.status, 200);
 });
 
-test("validates v34 time warp and accepts Android v35 through current v43 saves", async () => {
+test("validates v34 time warp and accepts Android v35 through current v46 saves", async () => {
   const research = Object.fromEntries([
     ["matrix_compression", 1_000],
     ["vein_utilization", 1_000],
@@ -1171,6 +1171,111 @@ test("validates v34 time warp and accepts Android v35 through current v43 saves"
     v43PayloadFor((state) => { state.belts[0].elevatorOutputIndex = 5; }),
   ]) {
     const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 12 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+
+  const v44PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    Object.assign(state, JSON.parse(v42PayloadFor()).state);
+    state.version = 44;
+    state.quantumLogisticsNetwork = {
+      enabled: true,
+      inventory: { iron_ore: "123" },
+      routingCursors: { iron_ore: 2 },
+    };
+    state.entities.push({
+      id: "quantum-tower",
+      buildingId: "interstellar_logistics_station",
+      machineCount: 1,
+      interactionLocked: false,
+      quantumMode: "quantum",
+      quantumTransition: null,
+    });
+    mutate(state);
+  });
+  const acceptedV44 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v44PayloadFor(), expectedRevision: 12 }) });
+  assert.equal(acceptedV44.response.status, 200, JSON.stringify(acceptedV44.body));
+  for (const invalid of [
+    v44PayloadFor((state) => { state.quantumLogisticsNetwork.inventory.iron_ore = "01"; }),
+    v44PayloadFor((state) => { state.quantumLogisticsNetwork.routingCursors.iron_ore = -1; }),
+    v44PayloadFor((state) => { state.entities.at(-1).quantumMode = "instant"; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 13 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+
+  const v45PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    Object.assign(state, JSON.parse(v44PayloadFor()).state);
+    state.version = 45;
+    state.quantumLogisticsNetwork.itemCapacities = { iron_ore: "10000000000" };
+    state.quantumLogisticsNetwork.uploadRoutingCursors = { iron_ore: 1 };
+    state.entities.push({
+      id: "quantum-collector",
+      buildingId: "orbital_collector",
+      machineCount: 10,
+      interactionLocked: false,
+      quantumMode: "legacy",
+      quantumTransition: null,
+    });
+    mutate(state);
+  });
+  const acceptedV45 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v45PayloadFor(), expectedRevision: 13 }) });
+  assert.equal(acceptedV45.response.status, 200, JSON.stringify(acceptedV45.body));
+  for (const invalid of [
+    v45PayloadFor((state) => { state.quantumLogisticsNetwork.itemCapacities.iron_ore = "9999"; }),
+    v45PayloadFor((state) => { state.quantumLogisticsNetwork.itemCapacities.iron_ore = "10000000001"; }),
+    v45PayloadFor((state) => { state.quantumLogisticsNetwork.itemCapacities.iron_ore = "1e6"; }),
+    v45PayloadFor((state) => { state.quantumLogisticsNetwork.uploadRoutingCursors.iron_ore = -1; }),
+    v45PayloadFor((state) => { state.quantumLogisticsNetwork.runtimeFlow = {}; }),
+    v45PayloadFor((state) => { delete state.entities.at(-1).quantumMode; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 14 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+
+  const v46PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    Object.assign(state, JSON.parse(v45PayloadFor()).state);
+    state.version = 46;
+    const definition = {
+      id: "queued_factory",
+      name: "待建工厂",
+      revision: 3,
+      entities: [{ key: "storage", buildingId: "storage_mk1", offset: { x: 0, y: 0 }, machineCount: 400_000 }],
+      resourceAnchors: [],
+      belts: [],
+      externalPorts: [],
+      rotation: 0,
+      mirror: "none",
+      recipeOverrides: {},
+    };
+    state.blueprints = [structuredClone(definition)];
+    state.blueprintVersions = [{ id: "queued_factory@3", blueprintId: "queued_factory", revision: 3, definition: structuredClone(definition) }];
+    state.constructionQueue = [{
+      id: "construction_1",
+      blueprintId: "queued_factory",
+      blueprintVersionId: "queued_factory@3",
+      blueprintRevision: 3,
+      blueprintName: "待建工厂",
+      planetId: "home",
+      position: { x: 100, y: 200 },
+      rotation: 0,
+      mirror: "none",
+      queuedAt: 123,
+      status: "pending-materials",
+      reservedConstruction: { storage_mk1: 120_000 },
+      reservedFleet: {},
+      placedEntityIdsByKey: {},
+    }];
+    mutate(state);
+  });
+  const acceptedV46 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v46PayloadFor(), expectedRevision: 14 }) });
+  assert.equal(acceptedV46.response.status, 200, JSON.stringify(acceptedV46.body));
+  for (const invalid of [
+    v46PayloadFor((state) => { state.blueprints[0].entities[0].machineCount = 100_000_001; }),
+    v46PayloadFor((state) => { state.constructionQueue[0].blueprintVersionId = "missing@1"; }),
+    v46PayloadFor((state) => { state.constructionQueue[0].reservedConstruction.storage_mk1 = -1; }),
+    v46PayloadFor((state) => { state.constructionQueue[0].status = "waiting-fleet"; state.constructionQueue[0].buildingCompletedAt = 123; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 15 }) });
     assert.equal(rejected.response.status, 400);
   }
 });

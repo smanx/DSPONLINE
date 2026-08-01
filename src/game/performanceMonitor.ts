@@ -1,4 +1,5 @@
 import type { SimulationProfiler } from "./engine";
+import type { LocalSaveSummaryMetrics, SaveStageTimings } from "./storage";
 import type { GameState, PlanetId } from "./types";
 
 export const PERFORMANCE_SAMPLE_WINDOW_SECONDS = 60;
@@ -23,6 +24,8 @@ export interface PerformanceMonitorSample {
   stateBytes: number;
   saveBytes: number;
   autosaveMs: number;
+  saveStages?: SaveStageTimings | null;
+  saveStorage?: LocalSaveSummaryMetrics | null;
   memory: PerformanceMemorySample;
   phases: SimulationProfiler | null;
 }
@@ -44,10 +47,11 @@ export interface PerformanceWorkerMeasurement {
 export interface PerformanceSaveMeasurement {
   durationMs: number;
   bytes: number;
+  stages?: SaveStageTimings | null;
 }
 
 export interface PerformancePhaseShare {
-  id: "production" | "belts" | "logistics" | "power" | "dyson" | "construction" | "history" | "copy" | "other";
+  id: "production" | "belts" | "logistics" | "quantum" | "power" | "dyson" | "construction" | "history" | "copy" | "other";
   label: string;
   durationMs: number;
   share: number;
@@ -57,6 +61,7 @@ const PHASES: Array<{ id: PerformancePhaseShare["id"]; label: string; key: keyof
   { id: "production", label: "建筑生产与采集", key: "productionMs" },
   { id: "belts", label: "传送带", key: "beltsMs" },
   { id: "logistics", label: "物流运输", key: "logisticsMs" },
+  { id: "quantum", label: "量子物流", key: "quantumMs" },
   { id: "power", label: "电力", key: "powerMs" },
   { id: "dyson", label: "戴森系统", key: "dysonMs" },
   { id: "construction", label: "制造与施工", key: "constructionMs" },

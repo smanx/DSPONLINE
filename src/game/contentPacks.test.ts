@@ -5,15 +5,18 @@ import documentedExample from "../../docs/examples/example-dense-materials.conte
 import { CONSTRUCTION, ITEMS, getBeltConstructionId, getBeltSpeed, getBuilding, getRecipe, getRecipesForBuilding } from "./content";
 import {
   applyContentPackRegistry,
+  applyContentPackRuntimeSnapshot,
+  createContentPackRuntimeSnapshot,
   createContentPackRegistry,
   getContentPackValidationContext,
   getActiveContentPackReferences,
   registerContentPack,
   saveContentPackRegistry,
   setContentPackEnabled,
+  validateContentPackRuntimeSnapshot,
 } from "./contentPacks";
 import { satisfiesContentPackVersion, validateContentPack } from "./mods";
-import { advanceSimulation, canSelectTechnology, createInitialState, placeBuilding, selectTechnology, setEntityRecipe } from "./engine";
+import { advancePersistentSimulationRuntime, advanceSimulation, advanceSimulationSession, canSelectTechnology, completeSimulationAdvanceSession, createInitialState, createPersistentSimulationRuntime, createSimulationAdvanceSession, placeBuilding, selectTechnology, setEntityRecipe } from "./engine";
 import { exportGame, inspectSave } from "./storage";
 
 afterEach(() => {
@@ -22,6 +25,74 @@ afterEach(() => {
 });
 
 describe("content pack runtime registry", () => {
+  it("normalizes, fingerprints, validates, and applies a serializable Worker registry snapshot", () => {
+    const validation = validateContentPack({
+      formatVersion: 2,
+      id: "worker_registry_regression",
+      name: "Worker Registry Regression",
+      version: "1.0.0",
+      recipes: [{
+        id: "worker_gravity_matrix_to_warpers",
+        name: "Worker 引力矩阵制空间翘曲器",
+        buildingId: "assembling_machine_mk1",
+        duration: 10,
+        inputs: [{ itemId: "gravity_matrix", amount: 1 }],
+        outputs: [{ itemId: "space_warper", amount: 8 }],
+      }],
+    });
+    const registry = registerContentPack(createContentPackRegistry(), validation).registry;
+    const snapshot = createContentPackRuntimeSnapshot(registry);
+    expect(validateContentPackRuntimeSnapshot(structuredClone(snapshot))).toBe(true);
+    expect(createContentPackRuntimeSnapshot(structuredClone(registry)).fingerprint).toBe(snapshot.fingerprint);
+    expect(() => applyContentPackRuntimeSnapshot({ ...snapshot, fingerprint: "stale" })).toThrow(/指纹/);
+    expect(applyContentPackRuntimeSnapshot(structuredClone(snapshot)).catalogValid).toBe(true);
+    expect(getRecipe("worker_gravity_matrix_to_warpers" as never)?.outputs).toEqual([{ itemId: "space_warper", amount: 8 }]);
+  });
+
+  it("keeps custom recipe results deterministic across main, persistent, and offline-style sessions", () => {
+    const validation = validateContentPack({
+      formatVersion: 2,
+      id: "worker_registry_regression",
+      name: "Worker Registry Regression",
+      version: "1.0.0",
+      recipes: [{
+        id: "worker_gravity_matrix_to_warpers",
+        name: "Worker 引力矩阵制空间翘曲器",
+        buildingId: "assembling_machine_mk1",
+        duration: 10,
+        inputs: [{ itemId: "gravity_matrix", amount: 1 }],
+        outputs: [{ itemId: "space_warper", amount: 8 }],
+      }],
+    });
+    const snapshot = createContentPackRuntimeSnapshot(registerContentPack(createContentPackRegistry(), validation).registry);
+    applyContentPackRuntimeSnapshot(snapshot);
+    let initial = createInitialState();
+    initial.construction.assembling_machine_mk1 = 1;
+    initial.construction.wind_turbine = 100;
+    initial = placeBuilding(initial, "wind_turbine", { x: -200, y: 0 }, 100);
+    initial = placeBuilding(initial, "assembling_machine_mk1", { x: 0, y: 0 });
+    const entityId = initial.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!.id;
+    initial = setEntityRecipe(initial, entityId, "worker_gravity_matrix_to_warpers" as never);
+    initial.entities.find((entity) => entity.id === entityId)!.inputs.gravity_matrix = 1;
+
+    applyContentPackRuntimeSnapshot(snapshot);
+    const main = advanceSimulation(structuredClone(initial), 20);
+    applyContentPackRuntimeSnapshot(snapshot);
+    const persistentRuntime = createPersistentSimulationRuntime(structuredClone(initial));
+    const persistent = advancePersistentSimulationRuntime(persistentRuntime, 20, 20).state;
+    applyContentPackRuntimeSnapshot(snapshot);
+    const offlineSession = createSimulationAdvanceSession(structuredClone(initial), 20);
+    advanceSimulationSession(offlineSession, Number.MAX_SAFE_INTEGER);
+    const offline = completeSimulationAdvanceSession(offlineSession);
+
+    for (const result of [main, persistent, offline]) {
+      const machine = result.entities.find((entity) => entity.id === entityId)!;
+      expect(machine.inputs.gravity_matrix ?? 0).toBe(0);
+      expect(machine.outputs.space_warper).toBe(8);
+    }
+    expect(persistent.entities).toEqual(main.entities);
+    expect(offline.entities).toEqual(main.entities);
+  });
   it("keeps the documented starter pack valid and activatable", () => {
     const validation = validateContentPack(documentedExample);
     expect(validation.valid).toBe(true);

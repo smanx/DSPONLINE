@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-07-30-v1.0.13";
+const RELEASE_NOTE_ID = "2026-08-01-v1.0.19";
 
 async function seedV106Factory(page: Page, mobileUi: "legacy" | "next" = "legacy") {
   await page.addInitScript(({ releaseNoteId, selectedMobileUi }) => {
@@ -79,7 +79,7 @@ test("desktop exposes 4096 belt lanes, batch unstacking and vein-safe blueprint 
   await expect(inspector).toContainText("缓存、进度、线路和在途物资保持不变");
 
   await page.getByLabel("打开蓝图库").click();
-  const library = page.getByRole("dialog", { name: "蓝图库" });
+  const library = page.getByRole("dialog", { name: "蓝图与待建施工" });
   await expect(library).toContainText("1 资源锚点");
   await expect(library).toContainText("矿脉保持唯一");
   await expect(library).toContainText("不会复制、移动或补充矿脉储量");

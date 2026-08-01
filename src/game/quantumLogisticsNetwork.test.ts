@@ -4,8 +4,10 @@ import {
   beginQuantumAttachment,
   compareQuantumInteger,
   createEmptyQuantumLogisticsNetworkState,
+  getQuantumItemCapacity,
   getQuantumLogisticsMultiplier,
   getQuantumTowerBandwidth,
+  isValidQuantumItemCapacity,
   normalizeQuantumInteger,
   settleQuantumAttachment,
   settleQuantumLogisticsNetwork,
@@ -25,23 +27,63 @@ describe("quantum logistics network", () => {
   it("uses the squared wireless technology multiplier and independent directions", () => {
     expect(getQuantumLogisticsMultiplier(0)).toBe(1);
     expect(getQuantumLogisticsMultiplier(10)).toBe(2.25);
+    const baseBandwidth = getQuantumTowerBandwidth({
+      buildingId: "interstellar_logistics_station",
+      machineCount: 1,
+      quantumMode: "quantum",
+    }, 0);
+    expect(baseBandwidth.uploadPerMinute).toBe(5_000);
+    expect(baseBandwidth.downloadPerMinute).toBe(5_000);
     const bandwidth = getQuantumTowerBandwidth({ buildingId: "interstellar_logistics_station", machineCount: 10, quantumMode: "quantum" }, 232, 0.5);
-    expect(bandwidth.uploadPerMinute).toBeCloseTo(317_520, 6);
-    expect(bandwidth.uploadPerBoundary).toBe(26_460);
+    expect(bandwidth.uploadPerMinute).toBeCloseTo(7_938_000, 6);
+    expect(bandwidth.uploadPerBoundary).toBe(661_500);
     expect(bandwidth.downloadPerBoundary).toBe(bandwidth.uploadPerBoundary);
   });
 
-  it("settles input before output and preserves inventory exactly", () => {
+  it("accepts only the configured per-item capacity range", () => {
+    const network = createEmptyQuantumLogisticsNetworkState();
+    expect(getQuantumItemCapacity(network, "iron_ore")).toBe("10000000000");
+    expect(isValidQuantumItemCapacity("10000")).toBe(true);
+    expect(isValidQuantumItemCapacity("10000000000")).toBe(true);
+    for (const invalid of ["", "9999", "10000000001", "1.5", "1e4", "-1", "iron", NaN]) {
+      expect(isValidQuantumItemCapacity(invalid)).toBe(false);
+    }
+  });
+
+  it("preserves existing over-capacity inventory and lets downloads free upload space", () => {
+    const network = {
+      ...createEmptyQuantumLogisticsNetworkState(),
+      enabled: true,
+      inventory: { iron_ore: "15000" as const },
+      itemCapacities: { iron_ore: "10000" as const },
+    };
+    const blocked = settleQuantumLogisticsNetwork(network, [
+      { key: "blocked", stationId: "supply", itemId: "iron_ore", requested: 100 },
+    ], [], { globalUploadCap: 100 });
+    expect(blocked.inputAccepted.blocked).toBe("0");
+    expect(blocked.state.inventory.iron_ore).toBe("15000");
+
+    const drained = settleQuantumLogisticsNetwork(network, [
+      { key: "upload", stationId: "supply", itemId: "iron_ore", requested: 5000 },
+    ], [
+      { key: "download", stationId: "demand", itemId: "iron_ore", requested: 7000, capacity: 7000 },
+    ], { globalUploadCap: 5000, globalDownloadCap: 7000 });
+    expect(drained.outputDelivered.download).toBe("7000");
+    expect(drained.inputAccepted.upload).toBe("2000");
+    expect(drained.state.inventory.iron_ore).toBe("10000");
+  });
+
+  it("settles downloads before uploads and preserves inventory exactly", () => {
     const network = { ...createEmptyQuantumLogisticsNetworkState(), enabled: true, inventory: { iron_ore: "10" } };
     const result = settleQuantumLogisticsNetwork(network, [
       { key: "supply-b", stationId: "supply", itemId: "iron_ore", requested: "100" },
     ], [
       { key: "demand-a", stationId: "demand", itemId: "iron_ore", requested: "80", capacity: "80" },
-    ], { uploadCapByStation: { supply: 50 }, downloadCapByStation: { demand: 80 } });
+    ], { globalUploadCap: 50, globalDownloadCap: 80 });
     expect(result.inputAccepted["supply-b"]).toBe("50");
-    expect(result.outputDelivered["demand-a"]).toBe("60");
-    expect(result.state.inventory.iron_ore).toBe("0");
-    expect(result.diagnostics.blockedByInventory).toBe("20");
+    expect(result.outputDelivered["demand-a"]).toBe("10");
+    expect(result.state.inventory.iron_ore).toBe("50");
+    expect(result.diagnostics.blockedByInventory).toBe("70");
   });
 
   it("is deterministic when request arrays are reordered and rotates equal requests fairly", () => {
@@ -76,7 +118,9 @@ describe("quantum logistics network", () => {
     const started = beginQuantumAttachment(base, "quantum-station");
     expect(started.changed).toBe(true);
     expect(started.state.entities.find((entity) => entity.id === "quantum-station")?.quantumMode).toBe("transitioning");
-    expect(settleQuantumAttachment({ ...started.state, elapsedSeconds: 5 }, "quantum-station").changed).toBe(false);
+    const waiting = settleQuantumAttachment({ ...started.state, elapsedSeconds: 5 }, "quantum-station");
+    expect(waiting.changed).toBe(true);
+    expect(waiting.state.entities.find((entity) => entity.id === "quantum-station")?.quantumMode).toBe("transitioning");
     const done = settleQuantumAttachment({
       ...started.state,
       elapsedSeconds: 15,
@@ -91,6 +135,288 @@ describe("quantum logistics network", () => {
     }, "quantum-station");
     expect(done.changed).toBe(true);
     expect(done.state.entities.find((entity) => entity.id === "quantum-station")?.quantumMode).toBe("quantum");
+  });
+
+  it("tracks a supply tower route stored on the demand tower and clears it after completion", () => {
+    const state = createPlayerInitialState();
+    state.quantumLogisticsNetwork.enabled = true;
+    state.entities.push(
+      {
+        id: "tail-supply",
+        kind: "station",
+        planetId: "home",
+        position: { x: 0, y: 0 },
+        interactionLocked: false,
+        buildingId: "interstellar_logistics_station",
+        stationTier: 2,
+        quantumMode: "legacy",
+        stationSlots: [],
+        stationRoutes: [],
+        inputs: {}, outputs: { iron_ore: 10 }, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: 1, minerCount: 0,
+      },
+      {
+        id: "tail-demand",
+        kind: "station",
+        planetId: "home",
+        position: { x: 20, y: 0 },
+        interactionLocked: false,
+        buildingId: "interstellar_logistics_station",
+        stationTier: 2,
+        quantumMode: "legacy",
+        stationSlots: [],
+        stationRoutes: [{
+          id: "tail-route", slotIndex: 0, peerId: "tail-supply", itemId: "iron_ore", scope: "remote",
+          cargo: 10, vehicleCount: 1, progress: 0, duration: 10, requiresWarp: false, vehicleStationId: "tail-supply",
+        }],
+        inputs: {}, outputs: {}, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: 1, minerCount: 0,
+      },
+    );
+    const started = beginQuantumAttachment(state, "tail-supply");
+    expect(started.changed).toBe(true);
+    const bridge = started.state.entities.find((entity) => entity.id === "tail-supply")?.quantumTransition?.bridges[0];
+    expect(bridge?.remainingCargo).toBe("10");
+    expect(bridge?.sourceStationId).toBe("tail-supply");
+    expect(bridge?.targetStationId).toBe("tail-demand");
+
+    const waiting = settleQuantumAttachment({ ...started.state, elapsedSeconds: 5 }, "tail-supply");
+    expect(waiting.changed).toBe(true);
+    expect(waiting.state.entities.find((entity) => entity.id === "tail-supply")?.quantumMode).toBe("transitioning");
+    expect(waiting.state.entities.find((entity) => entity.id === "tail-supply")?.quantumTransition?.bridges[0].remainingCargo).toBe("10");
+
+    const completed = {
+      ...waiting.state,
+      elapsedSeconds: 15,
+      entities: waiting.state.entities.map((entity) => entity.id === "tail-demand" ? { ...entity, stationRoutes: [] } : entity),
+    };
+    const done = settleQuantumAttachment(completed, "tail-supply");
+    expect(done.changed).toBe(true);
+    expect(done.state.entities.find((entity) => entity.id === "tail-supply")?.quantumMode).toBe("quantum");
+    expect(done.state.entities.find((entity) => entity.id === "tail-supply")?.quantumTransition).toBeNull();
+  });
+
+  it("lets the normal engine route settlement release a supply tower attachment", () => {
+    const state = createPlayerInitialState();
+    state.quantumLogisticsNetwork.enabled = true;
+    state.entities.push(
+      {
+        id: "engine-supply",
+        kind: "station",
+        planetId: "home",
+        position: { x: 0, y: 0 },
+        interactionLocked: false,
+        buildingId: "interstellar_logistics_station",
+        stationTier: 2,
+        quantumMode: "legacy",
+        stationSlots: [{
+          itemId: "iron_ore", localMode: "storage", remoteMode: "supply", minimumLoad: 1,
+          minStock: 0, maxStock: 0, priority: 1, routePolicy: "direct", warperBudget: 2,
+        }], stationRoutes: [], stationVessels: 1,
+        inputs: {}, outputs: { iron_ore: 10 }, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: 1, minerCount: 0,
+      },
+      {
+        id: "engine-demand",
+        kind: "station",
+        planetId: "home",
+        position: { x: 20, y: 0 },
+        interactionLocked: false,
+        buildingId: "interstellar_logistics_station",
+        stationTier: 2,
+        quantumMode: "legacy",
+        stationSlots: [{
+          itemId: "iron_ore", localMode: "storage", remoteMode: "demand", minimumLoad: 1,
+          minStock: 0, maxStock: 0, priority: 1, routePolicy: "direct", warperBudget: 2,
+        }], stationVessels: 1,
+        stationRoutes: [{ id: "engine-route", slotIndex: 0, peerId: "engine-supply", itemId: "iron_ore", scope: "remote", cargo: 10, vehicleCount: 1, progress: 0, duration: 1, requiresWarp: false, vehicleStationId: "engine-supply" }],
+        inputs: {}, outputs: {}, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: 1, minerCount: 0,
+      },
+      {
+        id: "engine-wind", kind: "power", planetId: "home", position: { x: 10, y: 0 }, interactionLocked: false,
+        buildingId: "wind_turbine", inputs: {}, outputs: {}, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: 100, minerCount: 0,
+      },
+    );
+    const started = beginQuantumAttachment(state, "engine-supply");
+    const advanced = advanceSimulation(started.state, 5);
+    const supply = advanced.entities.find((entity) => entity.id === "engine-supply")!;
+    const demand = advanced.entities.find((entity) => entity.id === "engine-demand")!;
+    expect(supply.quantumMode).toBe("quantum");
+    expect(supply.quantumTransition).toBeNull();
+    expect(demand.stationRoutes).toEqual([]);
+    expect(demand.outputs.iron_ore).toBe(10);
+    expect(supply.outputs.iron_ore).toBe(0);
+  });
+
+  it("keeps local drone routes running while a tower attaches and after it becomes quantum", () => {
+    const state = createPlayerInitialState();
+    state.quantumLogisticsNetwork.enabled = true;
+    state.entities.push(
+      {
+        id: "local-quantum-supply",
+        kind: "station",
+        planetId: "home",
+        position: { x: 0, y: 0 },
+        interactionLocked: false,
+        buildingId: "interstellar_logistics_station",
+        stationTier: 2,
+        quantumMode: "legacy",
+        stationSlots: [{
+          itemId: "iron_ore", localMode: "supply", remoteMode: "storage", minimumLoad: 0.1,
+          minStock: 0, maxStock: 0, priority: 1, routePolicy: "direct", warperBudget: 2,
+        }],
+        stationRoutes: [], stationDrones: 10, stationVessels: 10,
+        inputs: {}, outputs: { iron_ore: 1000 }, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: 1, minerCount: 0,
+      },
+      {
+        id: "local-traditional-demand",
+        kind: "station",
+        planetId: "home",
+        position: { x: 20, y: 0 },
+        interactionLocked: false,
+        buildingId: "planetary_logistics_station",
+        stationSlots: [{
+          itemId: "iron_ore", localMode: "demand", remoteMode: "storage", minimumLoad: 0.1,
+          minStock: 0, maxStock: 0, priority: 1, routePolicy: "direct", warperBudget: 2,
+        }],
+        stationRoutes: [], stationDrones: 10,
+        inputs: {}, outputs: {}, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: 1, minerCount: 0,
+      },
+      {
+        id: "local-quantum-power", kind: "power", planetId: "home", position: { x: 10, y: 0 }, interactionLocked: false,
+        buildingId: "wind_turbine", inputs: {}, outputs: {}, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: 10_000, minerCount: 0,
+      },
+    );
+    const started = beginQuantumAttachment(state, "local-quantum-supply");
+    expect(started.state.entities.find((entity) => entity.id === "local-quantum-supply")?.quantumTransition?.bridges).toEqual([]);
+    const advanced = advanceSimulation(started.state, 30);
+    const supply = advanced.entities.find((entity) => entity.id === "local-quantum-supply")!;
+    const demand = advanced.entities.find((entity) => entity.id === "local-traditional-demand")!;
+    const inFlight = (demand.stationRoutes ?? []).reduce((sum, route) => sum + route.cargo, 0);
+    expect(supply.quantumMode).toBe("quantum");
+    expect(demand.outputs.iron_ore).toBeGreaterThan(0);
+    expect((supply.outputs.iron_ore ?? 0) + (demand.outputs.iron_ore ?? 0) + inFlight).toBe(1000);
+    expect(advanced.quantumLogisticsNetwork.inventory.iron_ore).toBeUndefined();
+  });
+
+  it("supports local collection before upload and local delivery after download", () => {
+    const state = createPlayerInitialState();
+    state.quantumLogisticsNetwork.enabled = true;
+    state.quantumLogisticsNetwork.inventory.copper_ore = "1000";
+    const station = (
+      id: string,
+      buildingId: "planetary_logistics_station" | "interstellar_logistics_station",
+      itemId: "iron_ore" | "copper_ore",
+      localMode: "supply" | "demand",
+      remoteMode: "storage" | "supply" | "demand",
+      outputs: Partial<Record<"iron_ore" | "copper_ore", number>>,
+      quantum = false,
+    ): FactoryEntity => ({
+      id, kind: "station", planetId: "home", position: { x: 0, y: 0 }, interactionLocked: false,
+      buildingId, stationTier: buildingId === "interstellar_logistics_station" ? 2 : undefined,
+      quantumMode: quantum ? "quantum" : undefined,
+      stationSlots: [{ itemId, localMode, remoteMode, minimumLoad: 0.1, minStock: 0, maxStock: 0, priority: 1, routePolicy: "direct", warperBudget: 2 }],
+      stationRoutes: [], stationDrones: 10, stationVessels: buildingId === "interstellar_logistics_station" ? 10 : undefined,
+      inputs: {}, outputs, progress: 0, utilization: 0, productionRate: 0,
+      routingCursor: 0, machineCount: 1, minerCount: 0,
+    });
+    state.entities.push(
+      station("local-source", "planetary_logistics_station", "iron_ore", "supply", "storage", { iron_ore: 1000 }),
+      station("quantum-upload", "interstellar_logistics_station", "iron_ore", "demand", "supply", {}, true),
+      station("quantum-download", "interstellar_logistics_station", "copper_ore", "supply", "demand", {}, true),
+      station("local-sink", "planetary_logistics_station", "copper_ore", "demand", "storage", {}),
+      {
+        id: "hybrid-power", kind: "power", planetId: "home", position: { x: 10, y: 0 }, interactionLocked: false,
+        buildingId: "wind_turbine", inputs: {}, outputs: {}, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: 10_000, minerCount: 0,
+      },
+    );
+    const advanced = advanceSimulation(state, 60);
+    const source = advanced.entities.find((entity) => entity.id === "local-source")!;
+    const sink = advanced.entities.find((entity) => entity.id === "local-sink")!;
+    expect(source.outputs.iron_ore).toBeLessThan(1000);
+    expect(Number(advanced.quantumLogisticsNetwork.inventory.iron_ore ?? "0")).toBeGreaterThan(0);
+    expect(sink.outputs.copper_ore).toBeGreaterThan(0);
+    expect(Number(advanced.quantumLogisticsNetwork.inventory.copper_ore ?? "0")).toBeLessThan(1000);
+    expect(advanced.entities.flatMap((entity) => entity.stationRoutes ?? []).every((route) => route.scope === "local")).toBe(true);
+  });
+
+  it("does not double-spend local route reservations at a quantum boundary", () => {
+    const uploadState = createPlayerInitialState();
+    uploadState.quantumLogisticsNetwork.enabled = true;
+    uploadState.entities.push(
+      {
+        id: "reserved-quantum-supply", kind: "station", planetId: "home", position: { x: 0, y: 0 }, interactionLocked: false,
+        buildingId: "interstellar_logistics_station", stationTier: 2, quantumMode: "quantum",
+        stationSlots: [{ itemId: "iron_ore", localMode: "supply", remoteMode: "supply", minimumLoad: 0.1, minStock: 0, maxStock: 0, priority: 1, routePolicy: "direct", warperBudget: 2 }],
+        stationRoutes: [], stationDrones: 1, stationVessels: 0,
+        inputs: {}, outputs: { iron_ore: 100 }, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: 1, minerCount: 0,
+      },
+      {
+        id: "reserved-local-demand", kind: "station", planetId: "home", position: { x: 20, y: 0 }, interactionLocked: false,
+        buildingId: "planetary_logistics_station",
+        stationSlots: [{ itemId: "iron_ore", localMode: "demand", remoteMode: "storage", minimumLoad: 0.1, minStock: 0, maxStock: 0, priority: 1, routePolicy: "direct", warperBudget: 2 }],
+        stationRoutes: [{ id: "reserved-local-route", slotIndex: 0, peerId: "reserved-quantum-supply", itemId: "iron_ore", scope: "local", cargo: 100, vehicleCount: 1, progress: 0, duration: 100, requiresWarp: false, vehicleStationId: "reserved-local-demand" }],
+        stationDrones: 1, inputs: {}, outputs: {}, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: 1, minerCount: 0,
+      },
+    );
+    const uploadAdvanced = advanceSimulation(uploadState, 5);
+    expect(uploadAdvanced.quantumLogisticsNetwork.inventory.iron_ore).toBeUndefined();
+    expect(uploadAdvanced.entities.find((entity) => entity.id === "reserved-quantum-supply")?.outputs.iron_ore).toBe(100);
+
+    const downloadState = createPlayerInitialState();
+    downloadState.quantumLogisticsNetwork.enabled = true;
+    downloadState.quantumLogisticsNetwork.inventory.copper_ore = "100";
+    downloadState.entities.push(
+      {
+        id: "reserved-local-supply", kind: "station", planetId: "home", position: { x: 0, y: 0 }, interactionLocked: false,
+        buildingId: "planetary_logistics_station", stationSlots: [], stationRoutes: [], stationDrones: 1,
+        inputs: {}, outputs: { copper_ore: 100 }, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: 1, minerCount: 0,
+      },
+      {
+        id: "reserved-quantum-demand", kind: "station", planetId: "home", position: { x: 20, y: 0 }, interactionLocked: false,
+        buildingId: "interstellar_logistics_station", stationTier: 2, quantumMode: "quantum",
+        stationSlots: [{ itemId: "copper_ore", localMode: "demand", remoteMode: "demand", minimumLoad: 0.1, minStock: 0, maxStock: 100, priority: 1, routePolicy: "direct", warperBudget: 2 }],
+        stationRoutes: [{ id: "reserved-incoming-route", slotIndex: 0, peerId: "reserved-local-supply", itemId: "copper_ore", scope: "local", cargo: 100, vehicleCount: 1, progress: 0, duration: 100, requiresWarp: false, vehicleStationId: "reserved-quantum-demand" }],
+        stationDrones: 1, stationVessels: 0, inputs: {}, outputs: {}, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: 1, minerCount: 0,
+      },
+    );
+    const downloadAdvanced = advanceSimulation(downloadState, 5);
+    expect(downloadAdvanced.quantumLogisticsNetwork.inventory.copper_ore).toBe("100");
+    expect(downloadAdvanced.entities.find((entity) => entity.id === "reserved-quantum-demand")?.outputs.copper_ore).toBe(0);
+  });
+
+  it("lets collectors share tower upload bandwidth without contributing their own", () => {
+    const makeState = (towerStacks: number) => {
+      const state = createPlayerInitialState();
+      state.quantumLogisticsNetwork.enabled = true;
+      state.entities.push({
+        id: "quantum-collector", kind: "station", planetId: "giant", position: { x: 0, y: 0 }, interactionLocked: false,
+        buildingId: "orbital_collector", quantumMode: "quantum", storedItemId: "hydrogen",
+        stationRoutes: [], inputs: {}, outputs: { hydrogen: 100 }, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: 1_000_000, minerCount: 0,
+      });
+      if (towerStacks > 0) state.entities.push({
+        id: "bandwidth-tower", kind: "station", planetId: "home", position: { x: 0, y: 0 }, interactionLocked: false,
+        buildingId: "interstellar_logistics_station", stationTier: 2, quantumMode: "quantum", stationSlots: [], stationRoutes: [],
+        inputs: {}, outputs: {}, progress: 0, utilization: 0, productionRate: 0,
+        routingCursor: 0, machineCount: towerStacks, minerCount: 0,
+      });
+      return state;
+    };
+    const withoutTower = advanceSimulation(makeState(0), 5);
+    expect(withoutTower.quantumLogisticsNetwork.inventory.hydrogen).toBeUndefined();
+    const withTower = advanceSimulation(makeState(1), 5);
+    expect(withTower.quantumLogisticsNetwork.inventory.hydrogen).toBe("416");
   });
 
   it("uses the engine five-second boundary without creating a quantum StationRoute", () => {
@@ -112,13 +438,13 @@ describe("quantum logistics network", () => {
       buildingId: "wind_turbine", inputs: {}, outputs: {}, progress: 0, utilization: 0, productionRate: 0,
       routingCursor: 0, machineCount: 20, minerCount: 0,
     });
-    const advanced = advanceSimulation(state, 5);
+    const advanced = advanceSimulation(state, 10);
     const supply = advanced.entities.find((entity) => entity.id === "q-supply")!;
     const demand = advanced.entities.find((entity) => entity.id === "q-demand")!;
     expect(supply.stationRoutes).toEqual([]);
     expect(demand.stationRoutes).toEqual([]);
-    expect(demand.outputs.iron_ore).toBe(33);
-    expect(supply.outputs.iron_ore).toBe(67);
+    expect(demand.outputs.iron_ore).toBe(100);
+    expect(supply.outputs.iron_ore).toBe(0);
   });
 
   it("starts all eligible stations in stable order and scopes a batch to one star system", () => {

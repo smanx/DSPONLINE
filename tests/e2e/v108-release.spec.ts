@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-07-31-v1.0.16";
+const RELEASE_NOTE_ID = "2026-08-01-v1.0.19";
 
 async function seedV108Factory(page: Page, options: { mobileUi?: "legacy" | "next"; theme?: "dark" | "light"; fontScale?: number } = {}) {
   await page.addInitScript(({ releaseNoteId, mobileUi, theme, fontScale }) => {
@@ -105,7 +105,7 @@ test("structurally complete checksum failures show real progress and require two
     const parsed = JSON.parse(rawSave);
     return { formatVersion: parsed.formatVersion, version: parsed.state.version, checksum: parsed.checksum, state: parsed.state };
   });
-  expect(integrity.version).toBe(44);
+  expect(integrity.version).toBe(46);
   expect(integrity.checksum).toBe(checksum(integrity.formatVersion, integrity.state));
 });
 
@@ -118,8 +118,8 @@ test("delivery-hub ports reset independently and the performance monitor samples
   await expect(inspector.locator(".delivery-hub-slot")).toHaveCount(3);
   const firstPort = inspector.locator(".delivery-hub-slot").first();
   await expect(firstPort).toContainText("自动识别已绑定");
-  page.once("dialog", (dialog) => dialog.accept());
   await firstPort.getByRole("button", { name: "清空接口" }).click();
+  await page.locator(".game-dialog").getByRole("button", { name: "断开并重置" }).click();
   await expect(firstPort).toContainText("已清空");
   await expect(page.locator('.react-flow__edge[data-id="v108_delivery_line"]')).toHaveCount(0);
   await expect(inspector.locator(".delivery-hub-slot").nth(1)).toContainText("等待自动识别");
@@ -131,8 +131,9 @@ test("delivery-hub ports reset independently and the performance monitor samples
   await operations.getByRole("button", { name: "开始采样" }).click();
   await expect(operations).toContainText("正在采样");
   await expect.poll(async () => operations.locator(".performance-kpi-grid article").count(), { timeout: 8_000 }).toBe(9);
-  await expect(operations.locator(".performance-phase-list > div")).toHaveCount(9);
+  await expect(operations.locator(".performance-phase-list > div")).toHaveCount(10);
   await expect(operations).toContainText("建筑生产与采集");
+  await expect(operations).toContainText("量子物流");
   await operations.getByRole("button", { name: "停止采样" }).click();
   await expect(operations).toContainText("监控已关闭");
   await page.screenshot({ path: "artifacts/qa/v108-performance-desktop-1440x900.png", fullPage: true });

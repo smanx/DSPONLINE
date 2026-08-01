@@ -5,7 +5,7 @@ const MOBILE_UI_KEY = "dsp-idle-network.mobile-ui.v1";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-30-v1.0.13");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-01-v1.0.19");
   });
 });
 
@@ -391,7 +391,7 @@ test("technology, recipes and star map use route-backed mobile list and detail v
   await page.getByRole("button", { name: /星图与星际工业/ }).click();
   const starMap = page.getByRole("dialog", { name: "星图" });
   await expect(starMap.locator(".mobile-star-system-list")).toBeVisible();
-  await starMap.locator(".mobile-star-system-list > button").first().click();
+  await starMap.locator(".mobile-star-system-list__row > button").first().click();
   await expect(page.locator('.game-shell[data-mobile-subview^="system:"]')).toBeVisible();
   await starMap.locator(".mobile-system-planets > button").first().click();
   await expect(page.locator('.game-shell[data-mobile-subview^="planet:"]')).toBeVisible();
@@ -403,7 +403,7 @@ test("technology, recipes and star map use route-backed mobile list and detail v
 test("every remaining stage-three workspace is opaque, reachable and horizontally contained", async ({ page }) => {
   await openNextMobile(page);
   const cases = [
-    { action: /蓝图库/, dialog: "蓝图库" },
+    { action: /蓝图库/, dialog: "蓝图与待建施工" },
     { action: /戴森规划/, dialog: "戴森球规划" },
     { action: /主线任务/, dialog: "主线任务中心" },
     { action: /银河网络/, dialog: "银河网络" },

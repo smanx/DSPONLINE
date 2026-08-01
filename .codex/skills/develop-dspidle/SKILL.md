@@ -55,7 +55,7 @@ For high-risk changes, broaden tests and explicitly verify backwards compatibili
 - Never expose private keys, passwords, tokens, certificate keys, user save payloads, or backup contents in code, docs, logs, or responses.
 - Before a backend, schema, or persistence deployment, create and verify a SQLite backup with the backup API.
 - Roll back code independently from data. Restore an older database only as an explicit disaster-recovery action after backing up the current database.
-- Keep the Hong Kong production node and Shanghai legacy node independent. Do not redirect or proxy `111.229.128.211` to Hong Kong.
+- Keep the Hong Kong production node and Shanghai legacy node independent. Do not redirect or proxy the Shanghai node to Hong Kong.
 - Keep cloud credentials disabled on non-local HTTP pages. Do not weaken `src/game/cloud.ts` to support insecure login.
 - Do not mutate production systems unless the user explicitly asks for deployment or operations work.
 

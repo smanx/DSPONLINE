@@ -18,6 +18,45 @@ describe("blueprint exchange", () => {
     expect(imported.blueprints[1].id).not.toBe(original.id);
   });
 
+  it("round-trips high stack counts without truncating blueprint production", () => {
+    const raw = JSON.stringify({
+      type: "dsp-idle-blueprint",
+      formatVersion: 2,
+      blueprint: {
+        id: "high_stack",
+        name: "高堆叠往返",
+        entities: [
+          { key: "node_1", buildingId: "ray_receiver", offset: { x: 0, y: 0 }, machineCount: 400_000 },
+          { key: "node_2", buildingId: "storage_mk1", offset: { x: 240, y: 0 }, machineCount: 10_240 },
+        ],
+        belts: [{ key: "line_1", sourceKey: "node_1", targetKey: "node_2", itemId: "critical_photon", lanes: 1, tier: 3, priority: 0 }],
+      },
+    });
+    const parsed = parseBlueprintExchange(raw);
+    expect(parsed.valid).toBe(true);
+    expect(parsed.blueprint?.entities.map((entity) => entity.machineCount)).toEqual([400_000, 10_240]);
+    const reparsed = parseBlueprintExchange(serializeBlueprintExchange(parsed.blueprint!));
+    expect(reparsed.valid).toBe(true);
+    expect(reparsed.blueprint?.entities.map((entity) => entity.machineCount)).toEqual([400_000, 10_240]);
+  });
+
+  it("reports an exact invalid machineCount once and suppresses dependent belt endpoint noise", () => {
+    const result = parseBlueprintExchange(JSON.stringify({
+      type: "dsp-idle-blueprint",
+      formatVersion: 2,
+      blueprint: {
+        name: "非法堆叠",
+        entities: [
+          { key: "node_bad", buildingId: "arc_smelter", offset: { x: 0, y: 0 }, machineCount: 100_000_001 },
+          { key: "node_ok", buildingId: "storage_mk1", offset: { x: 200, y: 0 }, machineCount: 1 },
+        ],
+        belts: [{ key: "line_1", sourceKey: "node_bad", targetKey: "node_ok", itemId: "iron_ingot", lanes: 1, tier: 1, priority: 0 }],
+      },
+    }));
+    expect(result.valid).toBe(false);
+    expect(result.issues).toEqual([expect.stringMatching(/machineCount=100000001.*1～100000000/)]);
+  });
+
   it("rejects exchange files that reference content missing from the active catalog", () => {
     const result = parseBlueprintExchange(JSON.stringify({
       type: "dsp-idle-blueprint",
@@ -55,6 +94,33 @@ describe("blueprint exchange", () => {
       stationWarperTarget: 35,
       stationSlots: expect.arrayContaining([expect.objectContaining({ itemId: "processor", routePolicy: "relay-required", warperBudget: 3 })]),
     });
+  });
+
+  it("round-trips Mk.II elevator mode and stable output-port assignments", () => {
+    let state = createInitialState();
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 120, y: 80 });
+    const station = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    station.stationTier = 2;
+    station.stationOperationMode = "elevator";
+    station.elevatorOutputItems = ["processor", null, "iron_ingot", null, null];
+    state = createBlueprint(state, [station.id], "电梯站蓝图");
+    const parsed = parseBlueprintExchange(serializeBlueprintExchange(state.blueprints[0]));
+    expect(parsed.valid).toBe(true);
+    expect(parsed.blueprint?.entities[0]).toMatchObject({ stationTier: 2, stationOperationMode: "elevator", elevatorOutputItems: ["processor", null, "iron_ingot", null, null] });
+  });
+
+  it("round-trips the planned quantum attachment state for Mk.II stations", () => {
+    let state = createInitialState();
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 120, y: 80 });
+    const station = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    station.stationTier = 2;
+    station.quantumMode = "quantum";
+    state = createBlueprint(state, [station.id], "量子站蓝图");
+    const parsed = parseBlueprintExchange(serializeBlueprintExchange(state.blueprints[0]));
+    expect(parsed.valid).toBe(true);
+    expect(parsed.blueprint?.entities[0]).toMatchObject({ stationTier: 2, quantumTarget: true });
   });
 
   it("round-trips v2 mining anchors and the raised belt-lane limit", () => {
