@@ -5,4 +5,4 @@ After=dsp-idle-cloud.service
 [Service]
 Type=oneshot
 User=root
-ExecStart=/bin/sh -c '/usr/bin/curl --fail --silent --show-error --max-time 8 http://127.0.0.1:4320/api/health >/dev/null || { /usr/bin/systemctl restart dsp-idle-cloud.service; exit 1; }'
+ExecStart=/bin/sh -c '/usr/bin/curl --fail --silent --show-error --max-time 60 http://127.0.0.1:4320/api/health >/dev/null || { /usr/bin/systemctl restart dsp-idle-cloud.service; exit 1; }'

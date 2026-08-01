@@ -267,7 +267,7 @@ chmod 0600 backup-private.pem
 ## 9. 监控与日常检查
 
 - `dsp-idle-cloud.service`：active，重启次数无异常。
-- `dsp-idle-healthcheck.timer`：active，每两分钟运行。
+- `dsp-idle-healthcheck.timer`：active，每两分钟运行；探针超时为 60 秒，覆盖大 SQLite 快照启动/备份期间的正常延迟，避免误重启服务。
 - Certbot timer：active，定期执行续期演练。
 - Nginx access/error log：关注 5xx、429、超时和异常大请求。
 - systemd journal：关注数据库写入、备份、Origin 拒绝和崩溃。
