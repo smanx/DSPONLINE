@@ -32,7 +32,7 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-香港、上海 Web/API 与上海下载站均已切换到 `1.0.20-b41ffbca6e40` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍重定向上海。1.0.20 Android SHA-256 为 `d0e95796a150c6bd4cc010be7fc91a6316c10d8dcec24d917458a6cf5fb09841`，Windows SHA-256 为 `f9e64a9796ded879e66ff9df34a7dc2d98202831ae0a454248f787faf4b2049d`。两地发布前 Backup API 快照均通过 `quick_check`，公网健康、下载页、完整下载哈希、Range 和缓存头均通过。完整证据见 [releases/1.0.20.md](./releases/1.0.20.md)。
+香港、上海 Web/API 与上海下载站均已切换到 `1.0.21-830c938` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍重定向上海。1.0.21 Android SHA-256 为 `441dadd6de08882387cf98660b9263106fa69718dcbe45fa325d1836edceeabe`，Windows SHA-256 为 `886d28ab0a81f75380e0b9f9fafd41e15be0696c60e17e8a4972f1fae744e743`。两地发布前 Backup API 快照均通过 `quick_check`，公网健康、下载页、完整下载哈希、Range 和缓存头均通过。完整证据见 [releases/1.0.21.md](./releases/1.0.21.md)。
 
 `1.0.13` 两节点发布都只切换 Web/API 代码，未执行数据库迁移。香港发布前后 Backup API 快照均通过 `quick_check`；前备份为 887,271,424 字节，后备份为 888,795,136 字节。上海发布前后备份均为 122,880 字节并通过 `quick_check`；发布前 SHA-256 为 `a8af0eec173e6f8aad36af09b7e6d8c56b2b00014d76efd53124ddfb81b7e6a7`，发布后为 `8cb0c7bbbb270ac804b7c16909fc1b4274d0b2aed34a4ae7f379f333596cd737`。上海 0 个账号、0 个主云档、24 条玩家记录和 23 条错误记录均未减少，服务 `NRestarts=0`。受限备份传输账号仍只用于异地备份，代码发布使用独立的 `ubuntu` 授权。
 
@@ -109,6 +109,16 @@ node /path/to/backup-sqlite.mjs \
 3. 原子切换 `current` 指向新目录。
 4. 执行 `nginx -t`，只有成功后才 reload。
 5. 验证根页面、service worker、manifest 和一个静态 chunk。
+
+上海客户端下载页是独立的静态发布目录，不依赖游戏 `assets/*` 或运行时 JavaScript。准备好 APK、Windows 安装包、`stable.json`、`latest.yml` 和 `release.json` 后，在发布目录生成页面并复验包清单：
+
+```powershell
+npm run download:page -- --release release/download-site-<build-id>
+Get-FileHash release/download-site-<build-id>/downloads/android/*.apk -Algorithm SHA256
+Get-FileHash release/download-site-<build-id>/downloads/desktop/stable/*.exe -Algorithm SHA256
+```
+
+`npm run download:page` 会校验两个清单中的文件大小和 SHA-256，再把版本、构建号、下载链接、签名提示和精确哈希写入 `index.html`。生成后的目录上传到新的 `/var/www/dsp-idle-downloads/releases/<build-id>`，确认首页、两个按钮、稳定清单和旧版本文件存在后，才原子切换 `current`；上一下载目录必须保留作为回滚目标。
 
 前端回滚只需把 `current` 切回上一发布目录，不触碰数据库。
 

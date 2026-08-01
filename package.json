@@ -37,6 +37,7 @@
     "typecheck": "tsc -b --pretty false",
     "release:manifest": "node deploy/create-release-manifest.mjs",
     "release:verify": "node deploy/create-release-manifest.mjs --verify",
+    "download:page": "node scripts/create-download-site.mjs",
     "release:test-switch": "bash deploy/test-switch-release.sh",
     "build:desktop": "node scripts/build-platform.mjs desktop",
     "build:android": "node scripts/build-platform.mjs android",

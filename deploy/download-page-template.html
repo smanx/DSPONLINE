@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b100e" />
+    <title>DSP极简网络客户端下载</title>
+    <style>
+      :root { color-scheme: dark; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #0b100e; color: #d5e4de; }
+      * { box-sizing: border-box; }
+      body { min-height: 100vh; margin: 0; background: #0b100e; }
+      header { border-bottom: 1px solid #293a34; background: #111815; }
+      header > div, main { width: min(960px, calc(100% - 32px)); margin: 0 auto; }
+      header > div { display: flex; min-height: 78px; align-items: center; gap: 14px; }
+      header img { width: 42px; height: 42px; }
+      h1, h2, p { margin: 0; }
+      h1 { font-size: 22px; }
+      header p { margin-top: 4px; color: #8da198; font-size: 13px; }
+      main { padding: 30px 0 50px; }
+      .intro { color: #a8bbb3; line-height: 1.8; }
+      .release { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 22px; }
+      article { display: grid; min-width: 0; gap: 14px; padding: 18px; border: 1px solid #31483f; border-radius: 6px; background: #121b17; }
+      article > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; border: 0; background: transparent; }
+      article h2 { font-size: 17px; }
+      article header span { color: #74d5bb; font-size: 12px; white-space: nowrap; }
+      dl { display: grid; gap: 8px; margin: 0; color: #8da198; font-size: 13px; }
+      dl div { display: flex; justify-content: space-between; gap: 12px; }
+      dt, dd { margin: 0; }
+      dd { color: #c9d8d2; text-align: right; overflow-wrap: anywhere; }
+      .warning, .verified { padding: 10px; border-left: 3px solid; font-size: 12px; line-height: 1.6; }
+      .warning { border-color: #d5a54d; background: #241f14; color: #e2c98f; }
+      .verified { border-color: #5db99f; background: #10241e; color: #9bd8c6; }
+      .download { display: flex; min-height: 48px; align-items: center; justify-content: center; border: 1px solid #579b87; border-radius: 4px; background: #19382e; color: #dff6ee; font-weight: 700; text-decoration: none; }
+      .download:hover, .download:focus-visible { background: #235041; outline: 2px solid #8fc8b8; outline-offset: 2px; }
+      .hashes { margin-top: 22px; padding: 16px; border: 1px solid #293a34; background: #0f1613; }
+      .hashes h2 { font-size: 15px; }
+      .hashes code { display: block; margin-top: 12px; overflow-wrap: anywhere; color: #8fc8b8; font-size: 11px; line-height: 1.7; }
+      footer { margin-top: 22px; color: #70837b; font-size: 12px; line-height: 1.7; }
+      footer a { color: #8fc8b8; }
+      @media (max-width: 680px) { .release { grid-template-columns: 1fr; } header > div, main { width: min(100% - 24px, 960px); } }
+    </style>
+  </head>
+  <body>
+    <header><div><img src="/icon.svg" alt="" /><span><h1>DSP极简网络</h1><p>Windows 与 Android 稳定版客户端下载</p></span></div></header>
+    <main>
+      <p class="intro">当前稳定版 <strong>__VERSION__</strong>（构建 __BUILD_ID__）。网页版与原生客户端使用相同的游戏规则和存档格式。安装或更新前建议先在游戏中导出一份本地存档；旧版本文件仍保留在下载目录中。</p>
+      <section class="release" aria-label="客户端下载">
+        <article>
+          <header><h2>Windows x64</h2><span>__DESKTOP_SIZE_HUMAN__</span></header>
+          <dl><div><dt>版本</dt><dd>__VERSION__</dd></div><div><dt>平台</dt><dd>Windows x64</dd></div><div><dt>文件大小</dt><dd>__DESKTOP_SIZE__ 字节</dd></div><div><dt>更新通道</dt><dd>stable</dd></div></dl>
+          <p class="warning">Windows 安装程序目前未配置 Authenticode 证书，系统可能显示“未知发布者”或 SmartScreen 提示。请仅从本页面下载并核对 SHA-256。</p>
+          <a class="download" href="/downloads/desktop/stable/__DESKTOP_FILE__" download>下载 Windows __VERSION__</a>
+        </article>
+        <article>
+          <header><h2>Android 7+</h2><span>__ANDROID_SIZE_HUMAN__</span></header>
+          <dl><div><dt>版本</dt><dd>__VERSION__（__ANDROID_CODE__）</dd></div><div><dt>平台</dt><dd>Android 7+</dd></div><div><dt>文件大小</dt><dd>__ANDROID_SIZE__ 字节</dd></div><div><dt>签名</dt><dd>APK v2 / v3，长期证书</dd></div></dl>
+          <p class="verified">Android 包保持历史长期发布证书，可从同包名旧版本覆盖升级并保留本地存档。首次安装时，系统可能要求允许浏览器安装未知来源应用。</p>
+          <a class="download" href="/downloads/android/__ANDROID_FILE__" download>下载 Android __VERSION__</a>
+        </article>
+      </section>
+      <section class="hashes"><h2>版本说明</h2><p class="intro">__RELEASE_SUMMARY__</p></section>
+      <section class="hashes"><h2>SHA-256 校验</h2><code>Windows: __DESKTOP_SHA256__<br />Android: __ANDROID_SHA256__</code></section>
+      <footer>下载文件由上海服务器直接提供，不经过香港游戏服务器。返回 <a href="https://dsponline.cn">网页版</a>。稳定更新清单：<a href="/downloads/android/stable.json">Android</a> · <a href="/downloads/desktop/stable/latest.yml">Windows</a></footer>
+    </main>
+  </body>
+</html>

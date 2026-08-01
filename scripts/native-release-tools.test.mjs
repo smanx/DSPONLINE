@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,6 +13,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageVersion = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version;
 const nativeVersionProperties = Object.fromEntries((await readFile(path.join(root, "android", "native-version.properties"), "utf8"))
   .trim().split(/\r?\n/).map((line) => line.split("=", 2)));
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
 
 test("native feed generator creates bounded Android and desktop update feeds", async () => {
   const temporary = await mkdtemp(path.join(tmpdir(), "dsp-native-feed-"));
@@ -77,6 +82,54 @@ test("native feed generator requires an explicit update base URL", async () => {
       "--allow-debug", "true",
       "--output", path.join(temporary, "feed"),
     ], { cwd: root, env: { ...process.env, DSP_NATIVE_UPDATE_BASE_URL: "" } }), /base-url.*required/i);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("static download page generator validates manifests and renders current packages", async () => {
+  const temporary = await mkdtemp(path.join(tmpdir(), "dsp-download-page-"));
+  try {
+    const androidDirectory = path.join(temporary, "downloads", "android");
+    const desktopDirectory = path.join(temporary, "downloads", "desktop", "stable");
+    await mkdir(androidDirectory, { recursive: true });
+    await mkdir(desktopDirectory, { recursive: true });
+
+    const apk = Buffer.from("apk fixture");
+    const installer = Buffer.from("windows installer fixture");
+    const installerName = `dsp-idle-${packageVersion}-x64-setup.exe`;
+    const apkName = `dsp-idle-${packageVersion}-${nativeVersionProperties.VERSION_CODE}.apk`;
+    await writeFile(path.join(androidDirectory, apkName), apk);
+    await writeFile(path.join(desktopDirectory, installerName), installer);
+    await writeFile(path.join(desktopDirectory, "latest.yml"), `version: ${packageVersion}\npath: ${installerName}\n`);
+    await writeFile(path.join(temporary, "version.json"), JSON.stringify({ version: packageVersion, buildId: "test-build" }));
+    await writeFile(path.join(androidDirectory, "stable.json"), JSON.stringify({
+      versionName: packageVersion,
+      versionCode: Number(nativeVersionProperties.VERSION_CODE),
+      apk: { url: `https://download.example.test/downloads/android/${apkName}`, sha256: sha256(apk), size: apk.byteLength },
+    }));
+    await writeFile(path.join(desktopDirectory, "release.json"), JSON.stringify({
+      files: [{ name: "latest.yml", sha256: sha256(Buffer.from(`version: ${packageVersion}\npath: ${installerName}\n`)), size: Buffer.byteLength(`version: ${packageVersion}\npath: ${installerName}\n`) },
+        { name: installerName, sha256: sha256(installer), size: installer.byteLength }],
+    }));
+
+    await execFileAsync(process.execPath, [
+      path.join(root, "scripts", "create-download-site.mjs"),
+      "--release", temporary,
+    ], { cwd: root });
+    const page = await readFile(path.join(temporary, "index.html"), "utf8");
+    assert.match(page, new RegExp(`下载 Windows ${packageVersion}`));
+    assert.match(page, new RegExp(`下载 Android ${packageVersion}`));
+    assert.match(page, new RegExp(sha256(installer)));
+    assert.match(page, new RegExp(sha256(apk)));
+
+    const mismatched = JSON.parse(await readFile(path.join(desktopDirectory, "release.json"), "utf8"));
+    mismatched.files[1].sha256 = "0".repeat(64);
+    await writeFile(path.join(desktopDirectory, "release.json"), JSON.stringify(mismatched));
+    await assert.rejects(execFileAsync(process.execPath, [
+      path.join(root, "scripts", "create-download-site.mjs"),
+      "--release", temporary,
+    ], { cwd: root }), /Desktop manifest SHA-256 does not match installer/);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
