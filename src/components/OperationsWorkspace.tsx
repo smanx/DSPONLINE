@@ -340,8 +340,18 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         <p className="settings-help">只调整生产画面与状态发布节奏，不改变模拟时间、产量、物流、科研或戴森工程。固定档位不会被自动调节覆盖。</p>
       </section>
       <section className="settings-group settings-toggle-list settings-endgame-extreme">
-        <ToggleSetting checked={endgameExtremeMode} label="终局优化·极限模式" value={endgameExtremeMode ? "视觉降级，模拟与存档结果不变" : "关闭"} icon={<Cpu size={16} />} onChange={onEndgameExtremeModeChange} />
-        <p className="settings-help">只保存在当前设备；开启后线路动画、装饰和普通读数刷新会减少，适合大型工厂或长时间挂机。</p>
+        <ToggleSetting
+          checked={endgameExtremeMode}
+          label={locale === "en" ? "Endgame Extreme Mode" : "终局优化·极限模式"}
+          value={endgameExtremeMode
+            ? locale === "en" ? "Reduced visuals; simulation and saves unchanged" : "视觉降级，模拟与存档结果不变"
+            : locale === "en" ? "Off" : "关闭"}
+          icon={<Cpu size={16} />}
+          onChange={onEndgameExtremeModeChange}
+        />
+        <p className="settings-help">{locale === "en"
+          ? "Device-only setting; reduces belt animation, decoration, and routine readings for large factories or long idle runs."
+          : "只保存在当前设备；开启后线路动画、装饰和普通读数刷新会减少，适合大型工厂或长时间挂机。"}</p>
       </section>
       <section className="settings-group settings-toggle-list">
         <ToggleSetting checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "精简粒子、阴影与线路动画" : "完整视觉特效"} icon={<Cpu size={16} />} onChange={(performanceMode) => onChange({ performanceMode })} />

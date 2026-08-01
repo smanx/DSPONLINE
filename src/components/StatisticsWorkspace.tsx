@@ -24,6 +24,7 @@ import {
   type ProductionStatisticsWindow,
 } from "../game/productionStatistics";
 import { ExactValue } from "./ExactValue";
+import { useAppLocale } from "../i18n/locale";
 
 export type StatisticsTab = "management" | "production" | "efficiency" | "networks" | "planning" | "power" | "issues" | "galaxy";
 type ItemFilter = "all" | "producing" | "deficit" | "blocked";
@@ -243,6 +244,7 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
 }
 
 export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExporterPausedChange, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, onFocusEntity, onFocusBeltNetwork, onBulkRecipeChange, onBulkStationSlotApply, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark, focusTab, mobile = false, galacticActivityStatus }: StatisticsWorkspaceProps) {
+  const { isEnglish } = useAppLocale();
   const [tab, setTab] = useState<StatisticsTab>("production");
   const [filter, setFilter] = useState<ItemFilter>("all");
   const [sort, setSort] = useState<ItemSort>({ key: "catalog", direction: "asc" });
@@ -580,7 +582,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
                 <header><Sparkles size={15} /><span>量子物流网络</span><strong>全宇宙共享池</strong></header>
                 <div className="galactic-summary-grid">
                   <div><span>接入量子塔</span><strong>{game.entities.filter((entity) => entity.buildingId === "interstellar_logistics_station" && entity.quantumMode === "quantum").length}</strong><small>跨星走共享池，本地运输机保留</small></div>
-                  <div><span>即时上传</span><strong>不限</strong><small>送达时直接入池；溢出缓存按边界结算</small></div>
+                  <div><span>{isEnglish ? "Instant upload" : "即时上传"}</span><strong>{isEnglish ? "Unlimited" : "不限"}</strong><small>{isEnglish ? "Deposited on delivery; overflow settles at the boundary" : "送达时直接入池；溢出缓存按边界结算"}</small></div>
                   <div><span>共享库存种类</span><strong>{Object.keys(game.quantumLogisticsNetwork.inventory).length}</strong><small>输入先入池再输出</small></div>
                   <div><span>共享库存总量</span><strong>{formatQuantityCompact(Object.values(game.quantumLogisticsNetwork.inventory).reduce((sum, value) => BigInt(sum) + BigInt(value), 0n))}</strong><small>精确值 {formatQuantityExact(Object.values(game.quantumLogisticsNetwork.inventory).reduce((sum, value) => BigInt(sum) + BigInt(value), 0n))}</small></div>
                 </div>
