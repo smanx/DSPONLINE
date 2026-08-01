@@ -32,7 +32,7 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-香港与上海 Web/API 当前生产基线为 `1.0.18-0383e85d2d9d-dirty` / GameState v45，代码回滚目标为 `1.0.17-0383e85d2d9d-dirty`；两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库。上海下载站当前为独立目录 `1.0.18-0383e85d2d9d-dirty`，下载回滚目标为 1.0.17，Windows/Android 稳定清单均为 1.0.18；香港 `/downloads/*` 仍重定向上海。Android 1.0.18 SHA-256 为 `7294976ad074e77206d5e35258a4a70d0e4f1a9612987f028d3f174f2882aba3`，Windows 1.0.18 SHA-256 为 `b6b4d6343b82fa8001370dfb01cabb287fe97bffc256ce08ef6412d404c4a4d6`。发布前后 Backup API 快照均通过 `quick_check`，记录摘要无减少；公网健康、下载页、APK/EXE 完整下载哈希、Range 和缓存头均通过。发布后约上海 2.6 GiB、香港 13 GiB 可用；香港 COS 加密异地备份任务恢复成功。完整证据见 [releases/1.0.18.md](./releases/1.0.18.md)。
+香港、上海 Web/API 与上海下载站均已切换到 `1.0.20-b41ffbca6e40` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍重定向上海。1.0.20 Android SHA-256 为 `d0e95796a150c6bd4cc010be7fc91a6316c10d8dcec24d917458a6cf5fb09841`，Windows SHA-256 为 `f9e64a9796ded879e66ff9df34a7dc2d98202831ae0a454248f787faf4b2049d`。两地发布前 Backup API 快照均通过 `quick_check`，公网健康、下载页、完整下载哈希、Range 和缓存头均通过。完整证据见 [releases/1.0.20.md](./releases/1.0.20.md)。
 
 `1.0.13` 两节点发布都只切换 Web/API 代码，未执行数据库迁移。香港发布前后 Backup API 快照均通过 `quick_check`；前备份为 887,271,424 字节，后备份为 888,795,136 字节。上海发布前后备份均为 122,880 字节并通过 `quick_check`；发布前 SHA-256 为 `a8af0eec173e6f8aad36af09b7e6d8c56b2b00014d76efd53124ddfb81b7e6a7`，发布后为 `8cb0c7bbbb270ac804b7c16909fc1b4274d0b2aed34a4ae7f379f333596cd737`。上海 0 个账号、0 个主云档、24 条玩家记录和 23 条错误记录均未减少，服务 `NRestarts=0`。受限备份传输账号仍只用于异地备份，代码发布使用独立的 `ubuntu` 授权。
 
