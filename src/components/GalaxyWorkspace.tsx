@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { ACCOUNT_AVATARS, getActiveAccount, type AccountProfileChanges, type AccountState } from "../game/account";
-import { CloudApiError, compareCloudSave, downloadCloudSave, fetchCloudLeaderboard, fetchCloudSaveHistory, loginCloudAccount, logoutCloudAccount, markCloudSaveSynchronized, registerCloudAccount, restoreCloudSaveRevision, resumeCloudSession, setCloudLeaderboardVisibility, submitCloudLeaderboard, summarizeCloudPayload, uploadCloudSave, type CloudLeaderboardEntry, type CloudSave, type CloudSaveMetadata, type CloudSaveSlot, type CloudSession, type CloudSyncState } from "../game/cloud";
+import { CloudApiError, compareCloudSave, downloadCloudSave, fetchCloudLeaderboard, fetchCloudSaveHistory, loginCloudAccount, logoutCloudAccount, markCloudSaveSynchronized, refreshCloudSaveMetadata, registerCloudAccount, restoreCloudSaveRevision, resumeCloudSession, setCloudLeaderboardVisibility, submitCloudLeaderboard, summarizeCloudPayload, uploadCloudSave, type CloudLeaderboardEntry, type CloudSave, type CloudSaveMetadata, type CloudSaveSlot, type CloudSession, type CloudSyncState, type CloudUploadStage } from "../game/cloud";
 import { exportGame, exportGameSlot, getSaveSlotSummaries, inspectSave, saveGameSlotVerified, type SaveSlotId } from "../game/storage";
 import {
   LEADERBOARD_CATEGORIES,
@@ -94,6 +94,12 @@ function cloudSyncLabel(state: CloudSyncState): string {
   if (state === "cloud-newer" || state === "cloud-only") return "其他设备有云端更新";
   if (state === "conflict" || state === "unbound") return "本地与云端需要选择版本";
   return "尚未建立云存档";
+}
+
+function cloudUploadStageLabel(stage: CloudUploadStage): string {
+  if (stage === "compressing") return "压缩存档";
+  if (stage === "sending") return "发送云端";
+  return "等待服务器确认";
 }
 
 export function GalaxyWorkspace({
@@ -298,7 +304,10 @@ export function GalaxyWorkspace({
         setCloudMessage("检测到本地与云端进度分叉，请先选择保留版本");
         return;
       }
-      const metadata = await uploadCloudSave(localPayload, cloudSession.cloudSave?.revision ?? 0);
+      const uploaded = await uploadCloudSave(localPayload, cloudSession.cloudSave?.revision ?? 0, "main", {
+        onStage: (stage) => setCloudMessage(cloudUploadStageLabel(stage)),
+      });
+      const metadata = await refreshCloudSaveMetadata("main").catch(() => uploaded) ?? uploaded;
       markCloudSaveSynchronized(userId, metadata, localPayload);
       setCloudSession((current) => ({ ...current, cloudSave: metadata, cloudSaves: { "1": null, "2": null, "3": null, ...current.cloudSaves, main: metadata } }));
       setUploadRevision((revision) => revision + 1);
@@ -339,7 +348,10 @@ export function GalaxyWorkspace({
         setCloudMessage(`本地槽位 ${slot} 与云端版本不同，请选择保留版本`);
         return;
       }
-      const metadata = await uploadCloudSave(localPayload, remote?.revision ?? 0, slot);
+      const uploaded = await uploadCloudSave(localPayload, remote?.revision ?? 0, slot, {
+        onStage: (stage) => setCloudMessage(`槽位 ${slot} · ${cloudUploadStageLabel(stage)}`),
+      });
+      const metadata = await refreshCloudSaveMetadata(slot).catch(() => uploaded) ?? uploaded;
       markCloudSaveSynchronized(cloudSession.user.id, metadata, localPayload, slot);
       updateCloudSlot(slot, metadata);
       setCloudMessage(`本地槽位 ${slot} 已上传为云端修订 ${metadata.revision}`);
@@ -474,7 +486,10 @@ export function GalaxyWorkspace({
     const userId = cloudSession.user.id;
     setCloudBusy(true);
     try {
-      const metadata = await uploadCloudSave(cloudConflict.localPayload, cloudConflict.remote.revision, cloudConflict.slot);
+      const uploaded = await uploadCloudSave(cloudConflict.localPayload, cloudConflict.remote.revision, cloudConflict.slot, {
+        onStage: (stage) => setCloudMessage(cloudUploadStageLabel(stage)),
+      });
+      const metadata = await refreshCloudSaveMetadata(cloudConflict.slot).catch(() => uploaded) ?? uploaded;
       markCloudSaveSynchronized(userId, metadata, cloudConflict.localPayload, cloudConflict.slot);
       updateCloudSlot(cloudConflict.slot, metadata);
       setCloudConflict(null);

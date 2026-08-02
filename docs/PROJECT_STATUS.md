@@ -6,6 +6,8 @@
 > 产品阶段：首个公网版本已上线，当前更准确的定位是“公开测试版”。
 > 事实来源：当前工作区代码、自动化测试、部署配置和线上只读检查。
 
+> `1.0.23` 云上传紧急热修已完成开发候选，尚未部署生产或更新公开下载页。浏览器 gzip 改为持续消费的流式压缩，压缩阶段有 5 秒超时和 30 MiB 明文回退上限；网络超时先核对远端 revision 与完整摘要，避免误报成功或重复修订。进入游戏和上传云存档均可放弃过长离线结算，放弃不发放收益且不重复结算。GameState v46、存档 envelope v2、云 schema v7 和 SQLite layout v2 不变。本次门禁为 Vitest 666 通过/9 跳过、服务端 46/46、运维 6/6、原生发布工具 8/8、Playwright 204 通过/1 跳过；7.3 MB 玩家夹具只在本地副本运行，主线程长任务为 0。详见 [releases/1.0.23-candidate.md](./releases/1.0.23-candidate.md)。
+
 > `1.0.22` 已于 2026-08-02 完成香港原子发布，构建 `1.0.22+a46d5f807701`（提交 `a46d5f807701d11c90fe1dfc31e3492ca67f2169`）。本版修复大存档云上传主线程卡死：上传流程使用离线/保存 Worker、复用单份已验证 payload，并提供阶段进度与取消；GameState v46、存档 envelope v2、云 schema v7 和 SQLite layout v2 不变。香港公网 `version.json`、API health、Nginx、服务 `active`/`NRestarts=0` 均验收通过；旧 `1.0.21-85ddb30` 目录和发布前 SQLite 备份保留。详见 [releases/1.0.22.md](./releases/1.0.22.md)。
 
 > 2026-08-02 P5/P6 同设备复核：使用 2,906 实体、6,340 线路的终局夹具，在同一 Chrome 设备上静态最小缩放 FPS 约 `135.31 -> 135.46`（+0.11%），运行模拟约 `24.12 -> 24.76`（+2.62%），运行场景 P95/最大帧没有改善；120 秒精确引擎模拟平均单步 `57.873 ms`、P95 `73.524 ms`，状态守恒。P6 仍只有只读分区探针，未接入正式 simulation.worker；Android 长期 keystore 和 Windows 签名环境仍不可读。因此 P3/P5/P6 未全部满足默认开启和发布门禁，公网继续保持 `1.0.21`。详见 [PERFORMANCE_COMPARISON_1.0.22_P5_P6_ENDGAME_2026-08-02.md](./PERFORMANCE_COMPARISON_1.0.22_P5_P6_ENDGAME_2026-08-02.md)。

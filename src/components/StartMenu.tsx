@@ -26,6 +26,7 @@ import {
   RefreshCw,
   Save,
   Settings,
+  SkipForward,
   ShieldCheck,
   Type,
   Trash2,
@@ -48,6 +49,7 @@ import {
   requestCloudPasswordReset,
   resetCloudPassword,
   resumeCloudSession,
+  refreshCloudSaveMetadata,
   summarizeCloudPayload,
   uploadCloudSave,
   uploadCloudSaveWithOptions,
@@ -56,6 +58,7 @@ import {
   type CloudSaveSlot,
   type CloudSyncState,
   type CloudSession,
+  type CloudUploadStage,
 } from "../game/cloud";
 import { trackAnalyticsEvent } from "../game/analytics";
 import { getMenuContinueSave, getMenuPlanetName, getMenuSlotSummaries, getMenuSnapshotSummaries, type MenuContinueSave, type MenuSaveSource } from "../game/savePreview";
@@ -77,8 +80,14 @@ import { exportTextFile } from "../game/fileExport";
 
 type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "new";
 type CloudAuthMode = "login" | "register" | "forgot" | "reset";
-type MenuMessage = { tone: "ready" | "warning" | "error"; text: string } | null;
+type MenuMessage = { tone: "busy" | "ready" | "warning" | "error"; text: string } | null;
 type OfflineLoadProgress = { label: string; completedSeconds: number; totalSeconds: number; progress: number };
+
+function cloudUploadStageLabel(stage: CloudUploadStage): string {
+  if (stage === "compressing") return "压缩存档";
+  if (stage === "sending") return "发送云端";
+  return "等待服务器确认";
+}
 
 const MENU_SETTINGS_KEY = "dsp-idle-network.menu-settings.v1";
 const REGISTRATION_DRAFT_KEY = "dsp-idle-network.registration-draft.v1";
@@ -281,9 +290,10 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [cloudPassword, setCloudPassword] = useState("");
   const [cloudPasswordConfirmation, setCloudPasswordConfirmation] = useState("");
   const [cloudDisplayName, setCloudDisplayName] = useState(registrationDraft.displayName);
-  const [cloudConflict, setCloudConflict] = useState<{ slot: CloudSaveSlot; localPayload: string; remote: CloudSaveMetadata } | null>(null);
+  const [cloudConflict, setCloudConflict] = useState<{ slot: CloudSaveSlot; localPayload: string; remote: CloudSaveMetadata; commitLocalAfterUpload?: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [cloudUploadActive, setCloudUploadActive] = useState(false);
+  const [cloudUploadOfflineStage, setCloudUploadOfflineStage] = useState(false);
   const [offlineProgress, setOfflineProgress] = useState<OfflineLoadProgress | null>(null);
   const [message, setMessage] = useState<MenuMessage>(null);
   const [importInspection, setImportInspection] = useState<SaveInspection | null>(null);
@@ -293,6 +303,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const offlineAbortRef = useRef<AbortController | null>(null);
   const cloudUploadAbortRef = useRef<AbortController | null>(null);
+  const cloudUploadSkipOfflineRef = useRef(false);
   const cloudAuthAllowed = isSecureCloudClient();
   const cloudMailAvailable = cloudSession.mailAvailable;
   const brandIconUrl = `${import.meta.env.BASE_URL}icon.svg`;
@@ -425,10 +436,17 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       offlineAbortRef.current = controller;
       setOfflineProgress({ label, completedSeconds: 0, totalSeconds: loaded.offlineSeconds, progress: 0 });
       const { runOfflineSimulationInWorker } = await importWithRecovery(() => import("../game/offlineSimulation"), "离线结算模块");
-      completed = await runOfflineSimulationInWorker(loaded.state, loaded.offlineSeconds, {
-        signal: controller.signal,
-        onProgress: (progress) => setOfflineProgress({ label, ...progress }),
-      });
+      try {
+        completed = await runOfflineSimulationInWorker(loaded.state, loaded.offlineSeconds, {
+          signal: controller.signal,
+          onProgress: (progress) => setOfflineProgress({ label, ...progress }),
+        });
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
+        const skipped = storage.cancelDeferredOfflineGame(loaded);
+        await enterLoadedGame(skipped, preserveReason, storage);
+        return;
+      }
     }
     const finalized = storage.finalizeDeferredOfflineGame(loaded, completed);
     await enterLoadedGame(finalized, preserveReason, storage);
@@ -641,44 +659,76 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     if (cloudSession.status !== "authenticated" || !cloudSession.user || !continueSave) return;
     const userId = cloudSession.user.id;
     let attemptedPayload: string | null = null;
-    const controller = new AbortController();
+    let controller = new AbortController();
     cloudUploadAbortRef.current = controller;
+    cloudUploadSkipOfflineRef.current = false;
     setCloudUploadActive(true);
+    setCloudUploadOfflineStage(true);
     setBusy(true);
-    setMessage({ tone: "ready", text: "准备上传" });
+    setMessage({ tone: "busy", text: "准备上传" });
     try {
       // Let React paint the stage before any module loading or Worker message
       // transfers begin. This is important for multi-megabyte local saves.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
       const storage = await loadStorageModule();
       const { prepareCloudUploadInWorker } = await importWithRecovery(() => import("../game/offlineSimulation"), "云存档后台模块");
-      setMessage({ tone: "ready", text: "离线结算" });
-      const prepared = await prepareCloudUploadInWorker(continueSave.raw, {
+      const prepare = (skipOffline = false) => prepareCloudUploadInWorker(continueSave.raw, {
         signal: controller.signal,
         now: Date.now(),
         menuSettings: settings,
         returningRewardClaimed: storage.hasReturningRewardClaim(continueSave.summary.savedAt),
+        skipOffline,
         onProgress: (progress) => {
           if (progress.totalSeconds > 0) {
-            setMessage({ tone: "ready", text: `离线结算 ${Math.round(progress.progress * 100)}%` });
+            setMessage({ tone: "busy", text: `离线结算 ${Math.round(progress.progress * 100)}%` });
           }
         },
       });
-      setMessage({ tone: "ready", text: "生成校验" });
-      const localSaveResult = await storage.saveVerifiedPayload(prepared.payload, { verified: true, deferBackup: true });
-      if (!localSaveResult.success) throw new Error(localSaveResult.message);
-      if (prepared.returningReward.length > 0) storage.markReturningRewardClaimed(continueSave.summary.savedAt);
+      setMessage({ tone: "busy", text: "离线结算" });
+      let prepared;
+      try {
+        prepared = await prepare();
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError") || !cloudUploadSkipOfflineRef.current) throw error;
+        cloudUploadSkipOfflineRef.current = false;
+        controller = new AbortController();
+        cloudUploadAbortRef.current = controller;
+        setMessage({ tone: "busy", text: "已放弃离线运算，上传当前存档" });
+        prepared = await prepare(true);
+      }
+      setCloudUploadOfflineStage(false);
+      setMessage({ tone: "busy", text: "生成校验" });
       attemptedPayload = prepared.payload;
       const comparison = compareCloudSaveSummary(userId, prepared.summary, cloudSession.cloudSave);
       if (cloudSession.cloudSave && ["cloud-newer", "conflict", "unbound"].includes(comparison.state)) {
-        setCloudConflict({ slot: "main", localPayload: prepared.payload, remote: cloudSession.cloudSave });
+        setCloudConflict({ slot: "main", localPayload: prepared.payload, remote: cloudSession.cloudSave, commitLocalAfterUpload: true });
         setMessage({ tone: "warning", text: "检测到本地与云端进度分叉，请先选择保留版本" });
         return;
       }
-      setMessage({ tone: "ready", text: "压缩请求" });
+      setMessage({ tone: "busy", text: "压缩请求" });
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-      setMessage({ tone: "ready", text: "上传云端" });
-      const cloudSave = await uploadCloudSaveWithOptions(prepared.payload, cloudSession.cloudSave?.revision ?? 0, "main", { verified: true, signal: controller.signal });
+      setMessage({ tone: "busy", text: "上传云端" });
+      const uploaded = await uploadCloudSaveWithOptions(prepared.payload, cloudSession.cloudSave?.revision ?? 0, "main", {
+        verified: true,
+        signal: controller.signal,
+        onStage: (stage) => setMessage({ tone: "busy", text: cloudUploadStageLabel(stage) }),
+      });
+      let cloudSave = uploaded;
+      try {
+        // Once the PUT has returned a new revision, cancellation must not
+        // turn a confirmed cloud update into a misleading local "cancelled".
+        cloudSave = await refreshCloudSaveMetadata("main") ?? uploaded;
+      } catch (error) {
+        // The PUT response is already authoritative. Metadata refresh is a
+        // best-effort read and must not hide the confirmed revision.
+      }
+      const localSaveResult = await storage.saveVerifiedPayload(prepared.payload, { verified: true });
+      if (!localSaveResult.success) {
+        updateCloudSlot("main", cloudSave);
+        setMessage({ tone: "error", text: `云存档已更新到修订 ${cloudSave.revision}，但本地存档未写入：${localSaveResult.message}` });
+        return;
+      }
+      if (prepared.returningReward.length > 0) storage.markReturningRewardClaimed(continueSave.summary.savedAt);
       markCloudSaveSynchronized(userId, cloudSave);
       trackAnalyticsEvent("cloud_upload");
       updateCloudSlot("main", cloudSave);
@@ -700,17 +750,26 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         return;
       }
       if (error instanceof CloudApiError && error.status === 409 && error.payload.cloudSave) {
-        if (attemptedPayload) setCloudConflict({ slot: "main", localPayload: attemptedPayload, remote: error.payload.cloudSave as CloudSaveMetadata });
+        if (attemptedPayload) setCloudConflict({ slot: "main", localPayload: attemptedPayload, remote: error.payload.cloudSave as CloudSaveMetadata, commitLocalAfterUpload: true });
       }
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "云存档上传失败" });
     } finally {
       cloudUploadAbortRef.current = null;
+      cloudUploadSkipOfflineRef.current = false;
       setCloudUploadActive(false);
+      setCloudUploadOfflineStage(false);
       setBusy(false);
     }
   };
 
+  const skipCloudUploadOffline = () => {
+    if (!cloudUploadOfflineStage) return;
+    cloudUploadSkipOfflineRef.current = true;
+    cloudUploadAbortRef.current?.abort();
+  };
+
   const cancelCloudUpload = () => {
+    cloudUploadSkipOfflineRef.current = false;
     cloudUploadAbortRef.current?.abort();
   };
 
@@ -738,7 +797,10 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         setMessage({ tone: "warning", text: `本地槽位 ${slot} 与云端版本不同，请选择保留版本` });
         return;
       }
-      const cloudSave = await uploadCloudSave(localPayload, remote?.revision ?? 0, slot);
+      const uploaded = await uploadCloudSave(localPayload, remote?.revision ?? 0, slot, {
+        onStage: (stage) => setMessage({ tone: "busy", text: `槽位 ${slot} · ${cloudUploadStageLabel(stage)}` }),
+      });
+      const cloudSave = await refreshCloudSaveMetadata(slot).catch(() => uploaded) ?? uploaded;
       markCloudSaveSynchronized(cloudSession.user.id, cloudSave, localPayload, slot);
       updateCloudSlot(slot, cloudSave);
       setMessage({ tone: "ready", text: `本地槽位 ${slot} 已上传为云端修订 ${cloudSave.revision}` });
@@ -861,12 +923,26 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
 
   const keepLocalConflictVersion = async () => {
     if (!cloudConflict || cloudSession.status !== "authenticated" || !cloudSession.user) return;
+    const pendingConflict = cloudConflict;
     const userId = cloudSession.user.id;
     setBusy(true);
     try {
-      const cloudSave = await uploadCloudSave(cloudConflict.localPayload, cloudConflict.remote.revision, cloudConflict.slot);
-      markCloudSaveSynchronized(userId, cloudSave, cloudConflict.localPayload, cloudConflict.slot);
-      updateCloudSlot(cloudConflict.slot, cloudSave);
+      const uploaded = await uploadCloudSave(pendingConflict.localPayload, pendingConflict.remote.revision, pendingConflict.slot, {
+        onStage: (stage) => setMessage({ tone: "busy", text: cloudUploadStageLabel(stage) }),
+      });
+      const cloudSave = await refreshCloudSaveMetadata(pendingConflict.slot).catch(() => uploaded) ?? uploaded;
+      if (pendingConflict.commitLocalAfterUpload && pendingConflict.slot === "main") {
+        const storage = await loadStorageModule();
+        const localSaveResult = await storage.saveVerifiedPayload(pendingConflict.localPayload, { verified: true });
+        if (!localSaveResult.success) {
+          updateCloudSlot(pendingConflict.slot, cloudSave);
+          setCloudConflict((current) => current ? { ...current, remote: cloudSave } : current);
+          setMessage({ tone: "error", text: `云端已更新到修订 ${cloudSave.revision}，但本地存档未写入：${localSaveResult.message}` });
+          return;
+        }
+      }
+      markCloudSaveSynchronized(userId, cloudSave, pendingConflict.localPayload, pendingConflict.slot);
+      updateCloudSlot(pendingConflict.slot, cloudSave);
       setCloudConflict(null);
       setMessage({ tone: "ready", text: `本地进度已保存为云端修订 ${cloudSave.revision}` });
     } catch (error) {
@@ -923,8 +999,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
           </span>
         </div>
         <progress max={1} value={Math.max(0, Math.min(1, offlineProgress.progress))} />
-        <p>完成后才会一次性保存并进入工厂；取消不会改写当前存档。</p>
-        <button type="button" onClick={() => offlineAbortRef.current?.abort()}>取消离线运算</button>
+        <p>完成后才会一次性保存并进入工厂；放弃后直接进入当前存档，不发放离线收益。</p>
+        <button type="button" onClick={() => offlineAbortRef.current?.abort()}>放弃离线并直接进入</button>
       </section> : null}
 
       <section className="start-menu-layout">
@@ -1028,7 +1104,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             </form> : null}
             {cloudSession.status === "authenticated" && cloudSession.user ? <div className="start-menu-cloud-account">
               <section className="start-menu-cloud-user"><i>{cloudSession.user.displayName.slice(0, 1).toUpperCase()}</i><span><strong>{cloudSession.user.displayName}</strong><small>@{cloudSession.user.username}{cloudSession.user.email ? ` · ${cloudSession.user.email}` : ""}</small></span><button type="button" title="退出云账户" aria-label="退出云账户" onClick={() => { setBusy(true); void logoutCloudAccount().then(() => setCloudSession((current) => ({ status: "anonymous", user: null, cloudSave: null, mailAvailable: current.mailAvailable, message: null }))).finally(() => setBusy(false)); }}><LogOut size={15} /></button></section>
-              <section className="start-menu-cloud-save"><header><Cloud size={18} /><span><small>当前主存档</small><strong>{cloudSession.cloudSave ? `修订 ${cloudSession.cloudSave.revision}` : "尚未上传"}</strong></span><em>{cloudSession.cloudSave ? formatSavedAt(cloudSession.cloudSave.updatedAt) : "--"}</em></header>{cloudComparison ? <p className={`cloud-sync-state cloud-sync-state--${cloudComparison.state}`}>{cloudSyncLabel(cloudComparison.state)}</p> : null}<dl className="cloud-sync-summary"><div><dt>本地进度</dt><dd>{comparisonPayload ? `${formatRuntime(cloudComparison?.local?.elapsedSeconds ?? 0)} · 科技 ${cloudComparison?.local?.completedTechCount ?? 0}` : "无本地存档"}</dd></div><div><dt>云端进度</dt><dd>{cloudSession.cloudSave?.summary ? `${formatRuntime(cloudSession.cloudSave.summary.elapsedSeconds)} · 科技 ${cloudSession.cloudSave.summary.completedTechCount}` : cloudSession.cloudSave ? "旧版摘要待更新" : "无云存档"}</dd></div></dl><div><button type="button" disabled={busy || !continueSave} onClick={() => void uploadLocalSave()}><Upload size={14} />上传本地存档</button>{cloudUploadActive ? <button type="button" onClick={cancelCloudUpload}><CloudOff size={14} />取消上传</button> : null}<button className="primary" type="button" disabled={busy || !cloudSession.cloudSave} onClick={() => void downloadAndEnterCloudSave()}><Download size={14} />下载并进入</button></div></section>
+              <section className="start-menu-cloud-save"><header><Cloud size={18} /><span><small>当前主存档</small><strong>{cloudSession.cloudSave ? `修订 ${cloudSession.cloudSave.revision}` : "尚未上传"}</strong></span><em>{cloudSession.cloudSave ? formatSavedAt(cloudSession.cloudSave.updatedAt) : "--"}</em></header>{cloudComparison ? <p className={`cloud-sync-state cloud-sync-state--${cloudComparison.state}`}>{cloudSyncLabel(cloudComparison.state)}</p> : null}<dl className="cloud-sync-summary"><div><dt>本地进度</dt><dd>{comparisonPayload ? `${formatRuntime(cloudComparison?.local?.elapsedSeconds ?? 0)} · 科技 ${cloudComparison?.local?.completedTechCount ?? 0}` : "无本地存档"}</dd></div><div><dt>云端进度</dt><dd>{cloudSession.cloudSave?.summary ? `${formatRuntime(cloudSession.cloudSave.summary.elapsedSeconds)} · 科技 ${cloudSession.cloudSave.summary.completedTechCount}` : cloudSession.cloudSave ? "旧版摘要待更新" : "无云存档"}</dd></div></dl><div><button type="button" disabled={busy || !continueSave} onClick={() => void uploadLocalSave()}><Upload size={14} />上传本地存档</button>{cloudUploadActive && cloudUploadOfflineStage ? <button type="button" onClick={skipCloudUploadOffline}><SkipForward size={14} />跳过离线并继续上传</button> : null}{cloudUploadActive ? <button type="button" onClick={cancelCloudUpload}><CloudOff size={14} />取消上传</button> : null}<button className="primary" type="button" disabled={busy || !cloudSession.cloudSave} onClick={() => void downloadAndEnterCloudSave()}><Download size={14} />下载并进入</button></div></section>
               <CloudSaveSlotsPanel cloudSaves={cloudSession.cloudSaves} localSlots={slots} busySlot={busy ? "main" : null} uploadDisabled={false} onUpload={(slot) => void uploadManualCloudSlot(slot)} onDownload={(slot) => void downloadManualCloudSlot(slot)} />
               <CloudAccountSecurity user={cloudSession.user} mailAvailable={cloudMailAvailable} onUserChange={(user) => setCloudSession((current) => ({ ...current, user }))} onLoggedOut={() => setCloudSession((current) => ({ status: "anonymous", user: null, cloudSave: null, mailAvailable: current.mailAvailable, message: null }))} />
             </div> : null}

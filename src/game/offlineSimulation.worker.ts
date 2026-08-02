@@ -64,7 +64,7 @@ self.onmessage = (event: MessageEvent<OfflineSimulationWorkerRequest>) => {
       const inspection = inspectSave(request.raw, request.registry.registry);
       if (!inspection.valid || !inspection.state) throw new Error(inspection.issues[0] ?? "本地存档格式或完整性无效");
       const savedAt = inspection.savedAt ?? request.now;
-      const offlineSeconds = !inspection.state.paused
+      const offlineSeconds = !request.skipOffline && !inspection.state.paused
         ? Math.min(getOfflineSimulationLimitSeconds(inspection.state), Math.max(0, (request.now - savedAt) / 1000))
         : 0;
       const session = createSimulationAdvanceSession(inspection.state, offlineSeconds);

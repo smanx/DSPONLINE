@@ -4,14 +4,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CLOUD_SYNC_STORAGE_KEY,
+  CloudApiError,
   compareCloudSave,
   compareCloudSaveSummary,
+  compressCloudRequestBody,
   fetchCloudPublicStatus,
   getCloudSyncMarker,
   markCloudSaveSynchronized,
   resumeCloudSession,
   summarizeCloudPayload,
   uploadCloudSave,
+  uploadCloudSaveWithOptions,
   type CloudSaveMetadata,
 } from "./cloud";
 import { createInitialState, placeBuilding } from "./engine";
@@ -45,10 +48,37 @@ function metadata(revision: number, cloudChecksum: string, source: string): Clou
   };
 }
 
+function largePayload(targetPaddingBytes = 320_000): string {
+  const envelope = JSON.parse(payload("state-large", 100)) as { formatVersion: number; state: Record<string, unknown> } & Record<string, unknown>;
+  envelope.state.padding = "repeated-upload-data-".repeat(Math.ceil(targetPaddingBytes / 22));
+  envelope.checksum = computeSaveStateChecksum(envelope.formatVersion, envelope.state as any);
+  return JSON.stringify(envelope);
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+class TestCompressionStream {
+  readonly readable: ReadableStream<Uint8Array>;
+  readonly writable: WritableStream<Uint8Array>;
+
+  constructor() {
+    const transform = new TransformStream<Uint8Array, Uint8Array>({
+      transform(_chunk, controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3, 4]));
+      },
+    });
+    this.readable = transform.readable;
+    this.writable = transform.writable;
+  }
+}
+
 describe("cloud save synchronization markers", () => {
   beforeEach(() => {
     window.localStorage.clear();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("allows anonymous public status discovery on HTTP without opening account transport", async () => {
@@ -148,6 +178,122 @@ describe("cloud save synchronization markers", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/cloud-save", expect.objectContaining({ method: "PUT" }));
     const request = fetchMock.mock.calls.at(-1)?.[1] as RequestInit;
     expect(JSON.parse(String(request.body)).payload).toBe(payload);
+  });
+
+  it("streams gzip output before waiting for the compressed body", async () => {
+    vi.stubGlobal("CompressionStream", TestCompressionStream);
+    const source = largePayload();
+    const cloudSave = metadata(1, "server-checksum", source);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ cloudSave }));
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).resolves.toMatchObject({ revision: 1 });
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect((request.headers as Record<string, string>)["content-encoding"]).toBe("gzip");
+    expect(typeof (request.body as Blob).size).toBe("number");
+    expect((request.body as Blob).size).toBeGreaterThan(0);
+  });
+
+  it("falls back to one raw JSON request when CompressionStream is unavailable", async () => {
+    vi.stubGlobal("CompressionStream", undefined);
+    const source = largePayload();
+    const cloudSave = metadata(1, "server-checksum", source);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ cloudSave }));
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).resolves.toMatchObject({ revision: 1 });
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect((request.headers as Record<string, string>)?.["content-encoding"]).toBeUndefined();
+    expect(typeof request.body).toBe("string");
+  });
+
+  it("falls back to raw JSON when the compression reader exceeds its safety timeout", async () => {
+    vi.stubGlobal("CompressionStream", TestCompressionStream);
+    const descriptor = Object.getOwnPropertyDescriptor(Blob.prototype, "stream");
+    Object.defineProperty(Blob.prototype, "stream", {
+      configurable: true,
+      value: () => new ReadableStream<Uint8Array>({ pull: () => new Promise<void>(() => undefined) }),
+    });
+    const source = largePayload();
+    const cloudSave = metadata(1, "server-checksum", source);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ cloudSave }));
+    const startedAt = Date.now();
+    try {
+      await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).resolves.toMatchObject({ revision: 1 });
+    } finally {
+      if (descriptor) Object.defineProperty(Blob.prototype, "stream", descriptor);
+      else delete (Blob.prototype as unknown as { stream?: unknown }).stream;
+    }
+    expect(Date.now() - startedAt).toBeLessThan(7_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(typeof (fetchMock.mock.calls[0]?.[1] as RequestInit).body).toBe("string");
+  }, 12_000);
+
+  it("honors cancellation during compression without sending a raw fallback", async () => {
+    vi.stubGlobal("CompressionStream", TestCompressionStream);
+    const descriptor = Object.getOwnPropertyDescriptor(Blob.prototype, "stream");
+    Object.defineProperty(Blob.prototype, "stream", {
+      configurable: true,
+      value: () => new ReadableStream<Uint8Array>({ pull: () => new Promise<void>(() => undefined) }),
+    });
+    const controller = new AbortController();
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    try {
+      const pending = uploadCloudSaveWithOptions(largePayload(), 0, "main", { verified: true, signal: controller.signal });
+      setTimeout(() => controller.abort(), 20);
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    } finally {
+      if (descriptor) Object.defineProperty(Blob.prototype, "stream", descriptor);
+      else delete (Blob.prototype as unknown as { stream?: unknown }).stream;
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  }, 12_000);
+
+  it("confirms a committed request after a network timeout without creating a second revision", async () => {
+    const source = largePayload();
+    const cloudSave = metadata(1, "server-checksum", source);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new DOMException("timed out", "AbortError"))
+      .mockResolvedValueOnce(jsonResponse({ cloudSave }));
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).resolves.toMatchObject({ revision: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/api/account");
+  });
+
+  it("retries once as raw JSON when the timed-out request did not commit", async () => {
+    const source = largePayload();
+    const cloudSave = metadata(1, "server-checksum", source);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new DOMException("timed out", "AbortError"))
+      .mockResolvedValueOnce(jsonResponse({ cloudSave: null, cloudSaves: {} }))
+      .mockResolvedValueOnce(jsonResponse({ cloudSave }));
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).resolves.toMatchObject({ revision: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const retry = fetchMock.mock.calls[2]?.[1] as RequestInit;
+    expect(typeof retry.body).toBe("string");
+    expect((retry.headers as Record<string, string>)?.["content-encoding"]).toBeUndefined();
+  });
+
+  it("turns an unrelated newer cloud revision into a conflict after timeout", async () => {
+    const source = largePayload();
+    const other = metadata(1, "other-checksum", payload("different", 900));
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new DOMException("timed out", "AbortError"))
+      .mockResolvedValueOnce(jsonResponse({ cloudSave: other }));
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).rejects.toMatchObject({
+      status: 409,
+      payload: { cloudSave: other },
+    } satisfies Partial<CloudApiError>);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors cancellation before compression and never sends a fallback request", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    await expect(compressCloudRequestBody(largePayload(), controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
 });

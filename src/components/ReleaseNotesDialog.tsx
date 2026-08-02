@@ -1,86 +1,86 @@
-import { Check, Focus, Gauge, Info, Layers, MessageCircle, Route, Sparkles, X, type LucideIcon } from "lucide-react";
+import { Activity, Check, Gauge, Info, Layers, MessageCircle, RefreshCw, Route, Shield, ShieldCheck, SkipForward, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-08-02-v1.0.21",
+  id: "2026-08-02-v1.0.23",
   date: "2026年8月2日",
-  version: "1.0.21",
-  title: "紧急稳定性、云存档与蓝图界面更新",
-  summary: "1.0.21 针对大存档云上传、终局工厂卡顿和蓝图界面进行了稳定性修复；默认模拟结果、产量、库存、线路和在途物资不变。GameState v46、存档 envelope v2 与云 schema v7 保持兼容。",
+  version: "1.0.23",
+  title: "云存档上传热修与取消保护",
+  summary: "1.0.23 修复安卓和桌面浏览器云存档压缩死锁、上传卡住和误报成功；离线结算、存档内容和云端冲突保护保持兼容。GameState v46、存档 envelope v2 与云 schema v7 不变。",
   items: [
     {
-      id: "cloud-save-boundary",
-      title: "大存档云上传边界",
-      description: "云存档原始请求上限由 8 MiB 提高至 32 MiB，并限制压缩与解压后的大小；格式、完整性、压缩和体积错误分别提示，失败请求不会覆盖上一份有效云档。",
+      id: "cloud-compression-stream",
+      title: "修复压缩流死锁",
+      description: "云存档改为边读取边压缩并持续消费 gzip 流，1 MB、2 MB 和 7 MB 级别的存档不会再因为先写后读形成永久等待。",
     },
     {
-      id: "service-worker-cache",
-      title: "修复 PWA 缓存响应错误",
-      description: "Service Worker 在页面读取响应前同步创建缓存副本，避免更新或离线启动时出现“响应正文已使用”的错误。",
+      id: "cloud-raw-fallback",
+      title: "压缩失败安全回退",
+      description: "浏览器不支持压缩、压缩异常或压缩阶段超时时，只在原始请求不超过 30 MiB 时发送一次明文 JSON；超限会明确报错，不改本地存档。",
     },
     {
-      id: "endgame-extreme",
-      title: "终局优化·极限模式",
-      description: "设置中新增设备级极限模式，降低非关键画面、线路动画、粒子和普通读数刷新；模拟时间、产量、物流、库存和存档结果不变。",
+      id: "cloud-timeout-confirm",
+      title: "网络超时先核对云端",
+      description: "网络请求超时后先读取远端修订号、校验值、时间和摘要；已提交才判定成功，未提交才允许同一 expectedRevision 的一次明文重试。",
     },
     {
-      id: "belt-observation",
-      title: "终局线路观测降负",
-      description: "传送带流量观测优先处理当前行星、可见或选中的线路，减少全星区复制和扫描，视口外线路仍保留生产与运输结果。",
+      id: "cloud-cancel",
+      title: "取消上传立即生效",
+      description: "压缩、离线结算和上传都接入 AbortController；玩家主动取消后不发送明文回退请求，本地有效存档、备份和快照保持不变。",
     },
     {
-      id: "react-flow-incremental",
-      title: "画布增量渲染与更新保护",
-      description: "拓扑、运行数据和选择状态分开更新；未变化的节点和线路复用对象，减少重复 setNodes/setEdges、节点测量和 React 更新循环。",
+      id: "cloud-stage-status",
+      title: "上传阶段状态真实反馈",
+      description: "准备、离线结算、生成校验、压缩、发送和等待确认阶段统一显示进行中状态，只有服务器确认新修订后才显示绿色成功。",
     },
     {
-      id: "blueprint-compact",
-      title: "蓝图精简与详细模式",
-      description: "蓝图库默认使用稳定高度的精简卡片，部署和排队部署按钮保持可见；需要时可打开单个蓝图的完整参数，不改变蓝图、材料和施工规则。",
+      id: "cloud-metadata-refresh",
+      title: "成功后刷新云端摘要",
+      description: "上传成功后立即刷新云端时间、运行时长、科技数量和修订号，避免页面继续显示旧的云存档状态。",
     },
     {
-      id: "black-hole-blueprint",
-      title: "巨构蓝图记忆启用意图",
-      description: "微型黑洞连接装置蓝图可以记住部署后启用或停用意图；自动启用仍需危险确认，运行计数和临时缓存不会从来源建筑复制。",
+      id: "offline-skip",
+      title: "离线结算可以跳过",
+      description: "进入游戏或上传云存档时可以放弃过长的离线运算并继续；跳过不会发放离线收益，也不会在下次加载重复结算。",
     },
     {
-      id: "save-short-circuit",
-      title: "保存重复短路",
-      description: "最近一次已验证的不可变存档状态未变化时，自动保存跳过重复序列化和写入；状态变化、写入失败或主键变化会自动回到完整保存路径。",
+      id: "local-save-protection",
+      title: "失败不覆盖本地存档",
+      description: "云端确认前不写回主存档；上传失败、取消或状态未知时保留本地有效版本，冲突仍进入明确的选择流程。",
     },
     {
-      id: "simulation-delta-experiment",
-      title: "增量 Worker 协议（实验）",
-      description: "新增带 revision 边界的增量状态协议，但默认仍使用完整状态；仅本地开发开关开启时试用，首次加载、命令边界和不匹配会回退安全路径。",
+      id: "cloud-entry-points",
+      title: "所有上传入口统一保护",
+      description: "主存档手动上传、十分钟自动同步、手动槽位 1–3、银河页面和冲突覆盖上传共用同一压缩、重试、取消和修订保护。",
     },
     {
-      id: "canvas-batch-experiment",
-      title: "批量传送带绘制层（实验）",
-      description: "新增可选的批量线路绘制层，仅在极限模式、线路达到阈值且开发开关开启时使用；建筑、选中线路、命中和连接预览继续使用原交互路径。",
+      id: "cloud-compatibility",
+      title: "存档和云协议保持兼容",
+      description: "不升级 GameState v46、存档 envelope v2、云 schema v7 或 SQLite layout v2，不改变生产、物流、库存、离线收益和排行榜规则。",
     },
     {
-      id: "multicore-guardrail",
-      title: "多 Worker 安全门槛（实验）",
-      description: "新增多 Worker 实验规划器，只有工作量足够且基准提升超过 15% 才允许规划，正式模拟默认保持单权威 Worker，手机不强制多核。",
+      id: "cloud-revision-safety",
+      title: "避免重复创建云端修订",
+      description: "相同状态不会重复创建云端修订；请求超时、409 冲突、格式错误、完整性错误、体积错误和网络错误继续分别提示。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "cloud-save-boundary": Info,
-  "service-worker-cache": Route,
-  "endgame-extreme": Gauge,
-  "belt-observation": Focus,
-  "react-flow-incremental": Layers,
-  "blueprint-compact": Layers,
-  "black-hole-blueprint": Sparkles,
-  "save-short-circuit": Check,
-  "simulation-delta-experiment": Route,
-  "canvas-batch-experiment": Layers,
-  "multicore-guardrail": Gauge,
+  "cloud-compression-stream": Route,
+  "cloud-raw-fallback": Shield,
+  "cloud-timeout-confirm": RefreshCw,
+  "cloud-cancel": X,
+  "cloud-stage-status": Activity,
+  "cloud-metadata-refresh": Info,
+  "offline-skip": SkipForward,
+  "local-save-protection": ShieldCheck,
+  "cloud-entry-points": Layers,
+  "cloud-compatibility": Check,
+  "cloud-revision-safety": Gauge,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {

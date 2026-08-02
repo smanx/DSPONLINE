@@ -664,6 +664,7 @@
 
 .start-menu-message { position: sticky; z-index: 3; right: 16px; bottom: 14px; left: 16px; display: flex; min-height: 38px; align-items: center; gap: 7px; margin: 0 16px 14px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 3px; background: #17201d; color: var(--text-soft); font-size: 8px; box-shadow: 0 8px 22px rgba(0, 0, 0, .32); }
 .start-menu-message--ready { border-color: #4b7b68; color: var(--green); }
+.start-menu-message--busy { border-color: #416d81; color: #8ed7ed; }
 .start-menu-message--warning { border-color: #7b673b; color: var(--yellow); }
 .start-menu-message--error { border-color: #784b43; color: #e58e7e; }
 

@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-02-v1.0.21");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-02-v1.0.23");
     }
   });
 }
@@ -89,7 +89,7 @@ test("start menu gates simulation and exposes saves, cloud, import and settings"
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.player-id.v1"))).toBe(presenceIds[0]);
 });
 
-test("start menu runs long offline advancement in a cancellable worker without saving partial state", async ({ page }) => {
+test("start menu can abandon long offline advancement and enter the unchanged save", async ({ page }) => {
   await page.addInitScript(() => {
     const entities = Array.from({ length: 500 }, (_, index) => ({
       id: `offline_storage_${index}`,
@@ -123,30 +123,39 @@ test("start menu runs long offline advancement in a cancellable worker without s
     window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now() - 7 * 24 * 60 * 60 * 1_000, state }));
   });
   await page.goto("/?menu=1");
-  const original = await page.evaluate(() => window.localStorage.getItem("dsp-idle-network.save.v1"));
+  const original = await page.evaluate(() => {
+    const raw = window.localStorage.getItem("dsp-idle-network.save.v1");
+    if (!raw) throw new Error("missing offline save");
+    const state = (JSON.parse(raw) as { state: { elapsedSeconds?: number; totalProduced?: Record<string, number> } }).state;
+    return { elapsedSeconds: state.elapsedSeconds ?? 0, totalProduced: state.totalProduced ?? {} };
+  });
   await page.getByRole("button", { name: /继续游戏/ }).click();
   const progress = page.getByRole("dialog", { name: "正在进行离线运算" });
   await expect(progress).toBeVisible();
   await expect(progress).toContainText("完成后才会一次性保存");
-  await progress.getByRole("button", { name: "取消离线运算" }).click();
+  await progress.getByRole("button", { name: "放弃离线并直接进入" }).click();
   await expect(progress).toHaveCount(0);
-  await expect(page.locator(".start-menu-message--warning")).toContainText("存档未发生修改");
-  await expect(page.locator(".game-shell")).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.save.v1"))).toBe(original);
+  await expect(page.locator(".game-shell")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => {
+    const raw = window.localStorage.getItem("dsp-idle-network.save.v1");
+    if (!raw) return null;
+    const state = (JSON.parse(raw) as { state: { elapsedSeconds?: number; totalProduced?: Record<string, number> } }).state;
+    return { elapsedSeconds: state.elapsedSeconds ?? 0, totalProduced: state.totalProduced ?? {} };
+  })).toEqual(original);
 });
 
 test("dated release notes appear once and remain available from both settings screens", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "紧急稳定性、云存档与蓝图界面更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "云存档上传热修与取消保护" });
   await expect(releaseNotes).toBeVisible();
   await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(11);
-  await expect(releaseNotes).toContainText("大存档云上传边界");
-  await expect(releaseNotes).toContainText("终局优化·极限模式");
-  await expect(releaseNotes).toContainText("蓝图精简与详细模式");
-  await expect(releaseNotes).toContainText("增量 Worker 协议（实验）");
-  await expect(releaseNotes).toContainText("多 Worker 安全门槛（实验）");
+  await expect(releaseNotes).toContainText("修复压缩流死锁");
+  await expect(releaseNotes).toContainText("压缩失败安全回退");
+  await expect(releaseNotes).toContainText("离线结算可以跳过");
+  await expect(releaseNotes).toContainText("所有上传入口统一保护");
+  await expect(releaseNotes).toContainText("避免重复创建云端修订");
   await expect(releaseNotes).not.toContainText("内容包同步到模拟 Worker");
   await expect(releaseNotes).not.toContainText("量子网络基础吞吐提高");
   await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-02-v121-1440.png", fullPage: true });
@@ -178,7 +187,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-02-v1.0.21");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-02-v1.0.23");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -443,6 +452,100 @@ test("cloud save divergence requires an explicit keep-local or use-cloud choice"
   await expect(dialog).toHaveCount(0);
   expect(overwriteExpectedRevision).toBe(2);
   await expect(page.locator(".start-menu-message")).toContainText("修订 3");
+});
+
+test("cloud upload can abandon offline settlement and continue with the saved factory", async ({ page }) => {
+  const user = {
+    id: "user_upload_skip_offline",
+    username: "upload_skip_offline",
+    email: "upload-skip@example.com",
+    displayName: "上传取消离线测试",
+    createdAt: Date.now() - 1000,
+    emailVerified: true,
+    emailVerifiedAt: Date.now() - 900,
+    passwordChangedAt: Date.now() - 1000,
+  };
+  let uploadedPayload: string | null = null;
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    const fulfill = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (pathname === "/api/health") return fulfill({ ok: true, schemaVersion: 7 });
+    if (pathname === "/api/auth/login") return fulfill({ token: "upload-skip-token", user });
+    if (pathname === "/api/account" && request.method() === "GET") return fulfill({ user, cloudSave: null, cloudSaves: { main: null, "1": null, "2": null, "3": null } });
+    if (pathname === "/api/account/sessions") return fulfill({ sessions: [] });
+    if (pathname === "/api/cloud-save" && request.method() === "PUT") {
+      const body = request.postDataJSON() as { payload: string };
+      uploadedPayload = body.payload;
+      const envelope = JSON.parse(body.payload) as { checksum?: string; savedAt?: number; state?: { elapsedSeconds?: number; entities?: unknown[]; research?: { completedTechIds?: unknown[] } } };
+      return fulfill({ cloudSave: {
+        revision: 1,
+        updatedAt: Date.now(),
+        size: body.payload.length,
+        checksum: envelope.checksum ?? "upload-skip-checksum",
+        summary: {
+          stateVersion: 46,
+          savedAt: envelope.savedAt ?? Date.now(),
+          elapsedSeconds: envelope.state?.elapsedSeconds ?? 0,
+          activePlanetId: "home",
+          entityCount: envelope.state?.entities?.length ?? 0,
+          completedTechCount: envelope.state?.research?.completedTechIds?.length ?? 0,
+          structurePoints: 0,
+          uploadedWhiteMatrix: 0,
+          stateChecksum: envelope.checksum ?? null,
+        },
+      } });
+    }
+    return fulfill({ accepted: true });
+  });
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "CompressionStream", { configurable: true, value: undefined });
+    const entities = Array.from({ length: 500 }, (_, index) => ({
+      id: `upload_skip_${index}`,
+      kind: "storage",
+      planetId: "home",
+      position: { x: index % 25 * 260, y: Math.floor(index / 25) * 190 },
+      buildingId: "storage_mk1",
+      storedItemId: "iron_ingot",
+      machineCount: 1,
+      minerCount: 0,
+      inputs: {},
+      outputs: { iron_ingot: index % 3 },
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+    }));
+    const state = {
+      version: 31,
+      nextId: 501,
+      activePlanetId: "home",
+      entities,
+      belts: [],
+      construction: {},
+      tray: {},
+      planetTrays: { home: {} },
+      totalProduced: {},
+      research: { selectedTechId: null, pausedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: [] },
+      paused: false,
+    };
+    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now() - 7 * 24 * 60 * 60 * 1_000, state }));
+  });
+
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: "登录与云存档" }).click();
+  await page.getByLabel("用户名或邮箱").fill("upload-skip@example.com");
+  await page.getByLabel("密码", { exact: true }).fill("strong-pass-123");
+  await page.getByRole("button", { name: "登录云账户" }).click();
+  await page.getByRole("button", { name: "上传本地存档" }).click();
+  const skipButton = page.getByRole("button", { name: "跳过离线并继续上传" });
+  await expect(skipButton).toBeVisible();
+  await skipButton.click();
+  await expect(page.locator(".start-menu-message")).toContainText("云存档已更新到修订 1", { timeout: 30_000 });
+  expect(uploadedPayload).not.toBeNull();
+  const uploaded = JSON.parse(uploadedPayload!) as { state?: { elapsedSeconds?: number; totalProduced?: Record<string, number> } };
+  expect(uploaded.state?.elapsedSeconds).toBe(0);
+  expect(uploaded.state?.totalProduced).toEqual({});
 });
 
 test("username registration and login preserve every local save without automatic cloud restore", async ({ page }) => {

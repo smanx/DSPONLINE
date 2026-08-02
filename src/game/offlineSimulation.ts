@@ -11,6 +11,7 @@ export type OfflineSimulationWorkerRequest =
     now: number;
     menuSettings?: Partial<GameSettings>;
     returningRewardClaimed: boolean;
+    skipOffline?: boolean;
     registry: ContentPackRuntimeSnapshot;
   }
   | { type: "cancel"; id: number };
@@ -105,6 +106,7 @@ export function prepareCloudUploadInWorker(
     now?: number;
     menuSettings?: Partial<GameSettings>;
     returningRewardClaimed?: boolean;
+    skipOffline?: boolean;
     registry?: ContentPackRuntimeSnapshot;
     onProgress?: (progress: OfflineSimulationProgress) => void;
   } = {},
@@ -158,6 +160,7 @@ export function prepareCloudUploadInWorker(
         now,
         menuSettings: options.menuSettings,
         returningRewardClaimed: options.returningRewardClaimed ?? false,
+        skipOffline: options.skipOffline === true,
         registry,
       } satisfies OfflineSimulationWorkerRequest);
     } catch {

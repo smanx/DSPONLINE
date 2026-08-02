@@ -114,6 +114,18 @@ export interface CloudAutoSyncStatus {
   message: string;
 }
 
+export type CloudUploadStage = "compressing" | "sending" | "waiting";
+
+export interface CloudUploadOptions {
+  verified?: boolean;
+  signal?: AbortSignal;
+  onStage?: (stage: CloudUploadStage) => void;
+}
+
+const CLOUD_COMPRESSION_MIN_BYTES = 256 * 1024;
+const CLOUD_COMPRESSION_TIMEOUT_MS = 5_000;
+const CLOUD_UPLOAD_RAW_FALLBACK_LIMIT_BYTES = 30 * 1024 * 1024;
+
 export interface CloudLeaderboardEntry {
   userId: string;
   accountId: string;
@@ -335,6 +347,10 @@ async function cloudRequest<T>(path: string, options: RequestInit = {}, authenti
   const timer = window.setTimeout(() => controller.abort(), 8_000);
   const token = authenticated ? getCloudToken() : null;
   const externalSignal = options.signal;
+  if (externalSignal?.aborted) {
+    window.clearTimeout(timer);
+    throw new DOMException("云存档上传已取消", "AbortError");
+  }
   const abortFromCaller = () => controller.abort();
   externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
   try {
@@ -353,7 +369,10 @@ async function cloudRequest<T>(path: string, options: RequestInit = {}, authenti
   } catch (error) {
     if (error instanceof CloudApiError) throw error;
     if (externalSignal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
-    throw new CloudApiError(error instanceof DOMException && error.name === "AbortError" ? "云服务连接超时" : "无法连接云服务", 0);
+    const timedOut = error instanceof DOMException && error.name === "AbortError";
+    throw new CloudApiError(timedOut ? "云服务连接超时" : "无法连接云服务", 0, {
+      code: timedOut ? "CLOUD_REQUEST_TIMEOUT" : "CLOUD_REQUEST_NETWORK",
+    });
   } finally {
     externalSignal?.removeEventListener("abort", abortFromCaller);
     window.clearTimeout(timer);
@@ -467,15 +486,85 @@ function cloudSaveQuery(slot: CloudSaveSlot, revision?: number): string {
   return query ? `?${query}` : "";
 }
 
-export async function uploadCloudSave(payload: string, expectedRevision: number, slot: CloudSaveSlot = "main"): Promise<CloudSaveMetadata> {
-  return uploadCloudSaveWithOptions(payload, expectedRevision, slot);
+export async function uploadCloudSave(
+  payload: string,
+  expectedRevision: number,
+  slot: CloudSaveSlot = "main",
+  options: CloudUploadOptions = {},
+): Promise<CloudSaveMetadata> {
+  return uploadCloudSaveWithOptions(payload, expectedRevision, slot, options);
+}
+
+function isUncertainCloudRequestError(error: unknown): error is CloudApiError {
+  return error instanceof CloudApiError
+    && error.status === 0
+    && (error.payload.code === "CLOUD_REQUEST_TIMEOUT" || error.payload.code === "CLOUD_REQUEST_NETWORK");
+}
+
+function cloudSummaryMatchesPayload(remote: CloudSaveMetadata, payloadSummary: CloudSaveSummary | null): boolean {
+  const summary = remote.summary;
+  if (!summary || !payloadSummary) return false;
+  const keys: Array<keyof CloudSaveSummary> = [
+    "stateVersion",
+    "savedAt",
+    "elapsedSeconds",
+    "activePlanetId",
+    "entityCount",
+    "completedTechCount",
+    "structurePoints",
+    "uploadedWhiteMatrix",
+    "stateChecksum",
+  ];
+  return keys.every((key) => summary[key] === payloadSummary[key]);
+}
+
+/** Re-read only the current cloud metadata after an uncertain upload response. */
+export async function refreshCloudSaveMetadata(slot: CloudSaveSlot = "main", signal?: AbortSignal): Promise<CloudSaveMetadata | null> {
+  const result = await cloudRequest<{
+    cloudSave: CloudSaveMetadata | null;
+    cloudSaves?: Partial<Record<CloudSaveSlot, CloudSaveMetadata | null>>;
+  }>("/account", { signal }, true);
+  const save = result.cloudSaves?.[slot] ?? (slot === "main" ? result.cloudSave : null);
+  return save ? { ...save, slot } : null;
+}
+
+function unknownCloudUploadState(): CloudApiError {
+  return new CloudApiError("云存档上传状态未知，请重新打开云存档核对修订号", 0, {
+    code: "CLOUD_UPLOAD_STATUS_UNKNOWN",
+  });
+}
+
+function conflictFromCloudSave(cloudSave: CloudSaveMetadata): CloudApiError {
+  return new CloudApiError("云端已有更新版本，请先下载或确认覆盖", 409, { cloudSave });
+}
+
+async function confirmTimedOutUpload(
+  payload: string,
+  expectedRevision: number,
+  slot: CloudSaveSlot,
+  signal?: AbortSignal,
+): Promise<{ state: "confirmed" | "retry"; cloudSave?: CloudSaveMetadata }> {
+  let cloudSave: CloudSaveMetadata | null;
+  try {
+    cloudSave = await refreshCloudSaveMetadata(slot, signal);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw unknownCloudUploadState();
+  }
+  const payloadSummary = summarizeCloudPayload(payload);
+  if (cloudSave && cloudSave.revision > expectedRevision) {
+    if (cloudSummaryMatchesPayload(cloudSave, payloadSummary)) return { state: "confirmed", cloudSave };
+    throw conflictFromCloudSave(cloudSave);
+  }
+  if ((cloudSave?.revision ?? 0) !== expectedRevision) throw unknownCloudUploadState();
+  return { state: "retry" };
 }
 
 export async function uploadCloudSaveWithOptions(
   payload: string,
   expectedRevision: number,
   slot: CloudSaveSlot = "main",
-  options: { verified?: boolean; signal?: AbortSignal } = {},
+  options: CloudUploadOptions = {},
 ): Promise<CloudSaveMetadata> {
   if (!options.verified) {
     const integrity = inspectSaveEnvelopeChecksum(payload);
@@ -487,36 +576,122 @@ export async function uploadCloudSaveWithOptions(
       });
     }
   }
+  if (options.signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
   const rawBody = JSON.stringify({ payload, expectedRevision });
+  const rawBodyBytes = typeof Blob !== "undefined" ? new Blob([rawBody]).size : new TextEncoder().encode(rawBody).byteLength;
+  options.onStage?.("compressing");
   const compressed = await compressCloudRequestBody(rawBody, options.signal);
-  const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save${cloudSaveQuery(slot)}`, {
-    method: "PUT",
-    body: compressed?.body ?? rawBody,
-    ...(compressed ? { headers: compressed.headers } : {}),
-    signal: options.signal,
-  }, true);
-  return { ...result.cloudSave, slot };
+  if (options.signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
+  if (!compressed && rawBodyBytes > CLOUD_UPLOAD_RAW_FALLBACK_LIMIT_BYTES) {
+    throw new CloudApiError("压缩失败且原始请求超过安全上限（30 MiB），本地存档未修改", 413, {
+      code: "CLOUD_UPLOAD_RAW_FALLBACK_TOO_LARGE",
+      originalBytes: rawBodyBytes,
+    });
+  }
+
+  const send = async (body: BodyInit, headers?: Record<string, string>): Promise<CloudSaveMetadata> => {
+    options.onStage?.("sending");
+    options.onStage?.("waiting");
+    const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save${cloudSaveQuery(slot)}`, {
+      method: "PUT",
+      body,
+      ...(headers ? { headers } : {}),
+      signal: options.signal,
+    }, true);
+    return { ...result.cloudSave, slot };
+  };
+
+  try {
+    return await send(compressed?.body ?? rawBody, compressed?.headers);
+  } catch (error) {
+    if (!isUncertainCloudRequestError(error)) throw error;
+    const confirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, options.signal);
+    if (confirmation.state === "confirmed" && confirmation.cloudSave) return confirmation.cloudSave;
+    try {
+      return await send(rawBody);
+    } catch (retryError) {
+      if (retryError instanceof CloudApiError && retryError.status === 409) {
+        const finalConfirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, options.signal);
+        if (finalConfirmation.state === "confirmed" && finalConfirmation.cloudSave) return finalConfirmation.cloudSave;
+        throw retryError;
+      }
+      if (!isUncertainCloudRequestError(retryError)) throw retryError;
+      const finalConfirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, options.signal);
+      if (finalConfirmation.state === "confirmed" && finalConfirmation.cloudSave) return finalConfirmation.cloudSave;
+      throw unknownCloudUploadState();
+    }
+  }
 }
 
-async function compressCloudRequestBody(rawBody: string, signal?: AbortSignal): Promise<{ body: Blob; headers: Record<string, string> } | null> {
-  // The Electron bridge accepts JSON strings only. Browser fetch can send the
-  // gzip stream directly, preserving compatibility with existing desktop
-  // clients while reducing large end-game uploads substantially.
+/**
+ * Compress a request while continuously consuming the output stream. Starting
+ * the writer before the reader can deadlock on browser stream backpressure.
+ */
+export async function compressCloudRequestBody(rawBody: string, signal?: AbortSignal): Promise<{ body: Blob; headers: Record<string, string> } | null> {
   if (signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
-  if (getDesktopBridge() || typeof CompressionStream === "undefined" || typeof TextEncoder === "undefined") return null;
-  const encoder = new TextEncoder();
-  const rawBytes = encoder.encode(rawBody);
-  if (rawBytes.byteLength < 256 * 1024) return null;
+  if (
+    getDesktopBridge()
+    || typeof CompressionStream === "undefined"
+    || typeof TextEncoder === "undefined"
+    || typeof Blob === "undefined"
+    || typeof ReadableStream === "undefined"
+  ) return null;
+  const rawBytes = new TextEncoder().encode(rawBody);
+  if (rawBytes.byteLength < CLOUD_COMPRESSION_MIN_BYTES) return null;
+
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let rejectControl: (reason?: unknown) => void = () => undefined;
+  let timedOut = false;
+  const control = new Promise<never>((_, reject) => { rejectControl = reject; });
+  const chunks: Uint8Array[] = [];
+  let compressedBytes = 0;
+  let readAll: Promise<void> = Promise.resolve();
+  let timeout: number | null = null;
+  let onAbort: (() => void) | null = null;
   try {
     const compressor = new CompressionStream("gzip");
-    const writer = compressor.writable.getWriter();
-    await writer.write(rawBytes);
+    const source = typeof Blob.prototype.stream === "function"
+      ? new Blob([rawBytes]).stream()
+      : new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(rawBytes);
+          controller.close();
+        },
+      });
+    const compressedStream = source.pipeThrough(compressor as unknown as ReadableWritablePair<Uint8Array, Uint8Array>);
+    reader = compressedStream.getReader();
+    readAll = (async () => {
+      while (true) {
+        const result = await reader!.read();
+        if (result.done) return;
+        if (result.value) {
+          const chunk = new Uint8Array(result.value);
+          chunks.push(chunk);
+          compressedBytes += chunk.byteLength;
+        }
+      }
+    })();
+    onAbort = () => {
+      void reader?.cancel();
+      rejectControl(new DOMException("云存档上传已取消", "AbortError"));
+    };
+    timeout = window.setTimeout(() => {
+      timedOut = true;
+      void reader?.cancel();
+      rejectControl(new Error("云存档压缩超时"));
+    }, CLOUD_COMPRESSION_TIMEOUT_MS);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    await Promise.race([readAll, control]);
     if (signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
-    await writer.close();
-    const compressed = await new Response(compressor.readable).arrayBuffer();
+    const compressed = new Uint8Array(compressedBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      compressed.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
     if (compressed.byteLength >= rawBytes.byteLength) return null;
     return {
-      body: new Blob([compressed], { type: "application/json" }),
+      body: new Blob([compressed.buffer], { type: "application/json" }),
       headers: {
         "content-encoding": "gzip",
         "x-dsp-save-original-bytes": String(rawBytes.byteLength),
@@ -524,8 +699,15 @@ async function compressCloudRequestBody(rawBody: string, signal?: AbortSignal): 
       },
     };
   } catch (error) {
-    if (signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
+    if (signal?.aborted) {
+      throw new DOMException("云存档上传已取消", "AbortError");
+    }
     return null;
+  } finally {
+    if (timeout !== null) window.clearTimeout(timeout);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
+    if (timedOut) void readAll.catch(() => undefined);
+    try { reader?.releaseLock(); } catch { /* stream is already cancelled */ }
   }
 }
 

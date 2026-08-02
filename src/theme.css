@@ -816,7 +816,7 @@ html[data-theme="light"] .station-slot :is(.segmented-control button, .station-s
 }
 
 html[data-theme="light"] .station-slot :is(.segmented-control button, .station-slot-configure):hover:not(:disabled) {
-  background: #dbe9e2;
+  background: #dbe9e2 !important;
   color: #214f40;
 }
 

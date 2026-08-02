@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addCanvasBookmark, addCanvasRegion, addDysonSwarmOrbit, advanceSimulation, connectBelt, createBlueprint, createInitialState, createStandardDysonLayer, fundConstructionQueueEntry, getMaterialDeliverySlots, installMiner, pauseCurrentResearch, placeBuilding, queueBlueprint, queueHandcraftRecipe, resizeCanvasRegion, selectTechnology, setActivePlanet, setBeltRouteOffsetY, setBlueprintTransform, setDysonLaunchMode, setDysonLaunchThrottle, setDysonSwarmOrbit, setFuelItem, setLogisticsItem, setPlanetTrayItemLimit, setStationHubConfiguration, setStationSlotMode, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
 import { createProductionPlan } from "./planning";
-import { clearGameSlot, exportGame, exportGameSlot, finalizeDeferredOfflineGame, getSaveSlotSummaries, getSaveSnapshotSummaries, importGame, inspectSave, loadGame, loadGameDeferredOffline, loadGameSlot, loadGameSlotDeferredOffline, loadSaveSnapshot, migrateGame, repairSave, saveGame, saveGameSnapshot, saveGameSlot, saveGameVerified, saveVerifiedPayload } from "./storage";
+import { cancelDeferredOfflineGame, clearGameSlot, exportGame, exportGameSlot, finalizeDeferredOfflineGame, getSaveSlotSummaries, getSaveSnapshotSummaries, importGame, inspectSave, loadGame, loadGameDeferredOffline, loadGameSlot, loadGameSlotDeferredOffline, loadSaveSnapshot, migrateGame, repairSave, saveGame, saveGameSnapshot, saveGameSlot, saveGameVerified, saveVerifiedPayload } from "./storage";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
@@ -143,6 +143,25 @@ describe("game storage", () => {
     const synchronousSlot = loadGameSlot(1)!;
     expect(finalizedMain).toEqual(synchronousMain);
     expect(finalizedSlot).toEqual(synchronousSlot);
+  });
+
+  it("can abandon a deferred offline interval without applying rewards or simulation", () => {
+    vi.useFakeTimers();
+    const savedAt = new Date("2026-07-23T00:00:00.000Z");
+    vi.setSystemTime(savedAt);
+    const state = createInitialState();
+    state.elapsedSeconds = 120;
+    expect(saveGame(state).success).toBe(true);
+
+    vi.setSystemTime(savedAt.getTime() + 2 * 60 * 60 * 1_000);
+    const deferred = loadGameDeferredOffline();
+    const cancelled = cancelDeferredOfflineGame(deferred);
+
+    expect(deferred.offlineSeconds).toBe(2 * 60 * 60);
+    expect(cancelled.state).toBe(deferred.state);
+    expect(cancelled.offlineSeconds).toBe(0);
+    expect(cancelled.offlineReport).toBeNull();
+    expect(cancelled.state.elapsedSeconds).toBe(120);
   });
 
   it("migrates v32 endgame state to v33 without losing legacy export or historical research", () => {

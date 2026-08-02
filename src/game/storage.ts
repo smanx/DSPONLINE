@@ -2332,6 +2332,15 @@ export function finalizeDeferredOfflineGame(loaded: DeferredLoadedGame, advanced
   return { state: returning.state, offlineSeconds: loaded.offlineSeconds, offlineReport: report, recovery: loaded.recovery };
 }
 
+/**
+ * Discard a pending offline interval without applying simulation or rewards.
+ * The caller must persist this unchanged state before entering the game so a
+ * later reload does not immediately offer the same abandoned interval again.
+ */
+export function cancelDeferredOfflineGame(loaded: DeferredLoadedGame): LoadedGame {
+  return { state: loaded.state, offlineSeconds: 0, offlineReport: null, recovery: loaded.recovery };
+}
+
 export function loadGame(): LoadedGame {
   try {
     const candidates: Array<{ source: SaveRecovery["source"]; raw: string | null; issues?: string[] }> = [
