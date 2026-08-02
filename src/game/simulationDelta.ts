@@ -17,6 +17,16 @@ export interface SimulationStateDelta {
   topLevel: Partial<Omit<GameState, "entities" | "belts">>;
 }
 
+/**
+ * Compare wire sizes before opting into the experimental delta transport.
+ * JSON byte length is a conservative UTF-16 approximation here; both values
+ * use the same encoding, so it is sufficient for the relative decision and
+ * avoids introducing a second serialization format.
+ */
+export function shouldUseSimulationDelta(state: GameState, delta: SimulationStateDelta): boolean {
+  return JSON.stringify(delta).length < JSON.stringify(state).length;
+}
+
 function serialized(value: unknown): string {
   return JSON.stringify(value);
 }

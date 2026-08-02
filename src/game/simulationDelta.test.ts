@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createInitialState } from "./engine";
-import { applySimulationStateDelta, createSimulationStateDelta } from "./simulationDelta";
+import { applySimulationStateDelta, createSimulationStateDelta, shouldUseSimulationDelta } from "./simulationDelta";
 
 describe("experimental simulation delta protocol", () => {
   it("round-trips changed runtime records and top-level state without changing order", () => {
@@ -23,5 +23,36 @@ describe("experimental simulation delta protocol", () => {
     const applied = applySimulationStateDelta(previous, delta);
     expect(applied.entities.some((entity) => entity.id === removed.id)).toBe(false);
     expect(applied.entities.filter((entity) => entity.id === "new-entity")).toHaveLength(1);
+  });
+
+  it("rejects a delta when changing most records would be larger than full state", () => {
+    const previous = createInitialState();
+    previous.entities = Array.from({ length: 96 }, (_, index) => ({
+      ...previous.entities[0],
+      id: `entity_${index}`,
+      position: { x: index, y: -index },
+      inputs: { iron_ore: index + 1 },
+      outputs: { iron_ingot: index + 2 },
+    }));
+    const current = structuredClone(previous);
+    current.entities = current.entities.map((entity, index) => ({
+      ...entity,
+      inputs: { iron_ore: index + 10, copper_ore: index + 20 },
+      outputs: { iron_ingot: index + 30, copper_ingot: index + 40 },
+      statusMessage: `changed-${index}-${"x".repeat(80)}`,
+    }));
+    current.totalProduced = Object.fromEntries(
+      Array.from({ length: 2_000 }, (_, index) => [`custom_${index}`, index + 1]),
+    ) as typeof current.totalProduced;
+    const delta = createSimulationStateDelta(previous, current, 10, 11);
+    const oversized = {
+      ...delta,
+      changedEntities: Array.from({ length: 1_000 }, (_, index) => ({
+        ...current.entities[0],
+        id: `duplicate_${index}`,
+        statusMessage: "x".repeat(200),
+      })),
+    };
+    expect(shouldUseSimulationDelta(current, oversized)).toBe(false);
   });
 });

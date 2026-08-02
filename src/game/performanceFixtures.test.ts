@@ -84,6 +84,11 @@ describe("synthetic endgame performance fixtures", () => {
     const parsed = JSON.parse(raw);
     const state = migrateGame(parsed.state ?? parsed);
     expect(state).not.toBeNull();
+    // The supplied end-game fixture is intentionally paused. Benchmark the
+    // real simulation path only on an in-memory clone; never write this save.
+    state!.paused = false;
+    state!.timeWarp.pendingSimulationSeconds = 0;
+    state!.timeWarp.pendingWallSeconds = 0;
     const sample = (indexedLogistics: boolean) => {
       const profiler = createSimulationProfiler();
       const startedAt = performance.now();

@@ -4,7 +4,7 @@ import { applyContentPackRuntimeSnapshot, type ContentPackRuntimeSnapshot } from
 import { advancePersistentSimulationRuntime, createPersistentSimulationRuntime, createSimulationProfiler, replacePersistentSimulationRuntimeState, type PersistentSimulationRuntime, type SimulationProfiler } from "./engine";
 import type { GameState } from "./types";
 import { createSimulationProjection, type SimulationProjection } from "./simulationProjection";
-import { createSimulationStateDelta, type SimulationStateDelta } from "./simulationDelta";
+import { createSimulationStateDelta, shouldUseSimulationDelta, type SimulationStateDelta } from "./simulationDelta";
 
 export interface SimulationWorkerRequest {
   id: number;
@@ -35,6 +35,7 @@ export interface SimulationWorkerResponse {
   protocol?: "full" | "delta";
   stateRevision?: number;
   delta?: SimulationStateDelta;
+  deltaFallback?: "larger-than-full";
 }
 
 let runtime: PersistentSimulationRuntime | null = null;
@@ -101,10 +102,20 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
     cacheRebuilt: result.cacheRebuilt,
     registryFingerprint: activeRegistryFingerprint ?? undefined,
     ...(result.changed ? { projection: createSimulationProjection(previousState, result.state) } : {}),
-    ...(result.changed && event.data.protocol === "delta" && !suppliedState
-      ? { delta: createSimulationStateDelta(previousState, result.state, previousRevision, runtimeRevision) }
-      : {}),
   };
+  if (result.changed && event.data.protocol === "delta" && !suppliedState) {
+    const delta = createSimulationStateDelta(previousState, result.state, previousRevision, runtimeRevision);
+    if (shouldUseSimulationDelta(result.state, delta)) {
+      response.delta = delta;
+    } else {
+      // A busy end-game state can change most records every second. Sending a
+      // larger delta would increase GC and structured-clone cost, so fall back
+      // to the compatibility payload while keeping the same revision.
+      response.protocol = "full";
+      response.state = result.state;
+      response.deltaFallback = "larger-than-full";
+    }
+  }
   self.postMessage(response);
 };
 

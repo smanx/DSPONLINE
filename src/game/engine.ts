@@ -3699,11 +3699,13 @@ function transferBelts(
   skippedBeltIds?: ReadonlySet<string>,
 ): void {
   const groups = new Map<string, { source: FactoryEntity; itemId: ItemId; candidates: BeltTransferCandidate[] }>();
+  // These decay factors depend only on the simulation window. Compute them
+  // once instead of once per belt; the persisted rounding behavior is intact.
+  const flowDecay = Math.pow(0.8, Math.max(0, seconds));
+  const congestionDecay = Math.pow(0.85, Math.max(0, seconds));
 
   for (const belt of (lookup?.sortedBelts ?? state.belts)) {
     if (skippedBeltIds?.has(belt.id)) continue;
-    const flowDecay = Math.pow(0.8, Math.max(0, seconds));
-    const congestionDecay = Math.pow(0.85, Math.max(0, seconds));
     belt.lastFlow = round(belt.lastFlow * flowDecay, 3);
     belt.congestion = round((belt.congestion ?? 0) * congestionDecay, 3);
     const source = lookup?.entityById.get(belt.source) ?? state.entities.find((entity) => entity.id === belt.source);
