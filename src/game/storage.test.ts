@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addCanvasBookmark, addCanvasRegion, addDysonSwarmOrbit, advanceSimulation, connectBelt, createBlueprint, createInitialState, createStandardDysonLayer, fundConstructionQueueEntry, getMaterialDeliverySlots, installMiner, pauseCurrentResearch, placeBuilding, queueBlueprint, queueHandcraftRecipe, resizeCanvasRegion, selectTechnology, setActivePlanet, setBeltRouteOffsetY, setBlueprintTransform, setDysonLaunchMode, setDysonLaunchThrottle, setDysonSwarmOrbit, setFuelItem, setLogisticsItem, setPlanetTrayItemLimit, setStationHubConfiguration, setStationSlotMode, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
 import { createProductionPlan } from "./planning";
-import { clearGameSlot, exportGame, exportGameSlot, finalizeDeferredOfflineGame, getSaveSlotSummaries, getSaveSnapshotSummaries, importGame, inspectSave, loadGame, loadGameDeferredOffline, loadGameSlot, loadGameSlotDeferredOffline, loadSaveSnapshot, migrateGame, repairSave, saveGame, saveGameSnapshot, saveGameSlot, saveGameVerified } from "./storage";
+import { clearGameSlot, exportGame, exportGameSlot, finalizeDeferredOfflineGame, getSaveSlotSummaries, getSaveSnapshotSummaries, importGame, inspectSave, loadGame, loadGameDeferredOffline, loadGameSlot, loadGameSlotDeferredOffline, loadSaveSnapshot, migrateGame, repairSave, saveGame, saveGameSnapshot, saveGameSlot, saveGameVerified, saveVerifiedPayload } from "./storage";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
@@ -1039,6 +1039,15 @@ describe("game storage", () => {
     const second = await saveGameVerified(state);
     expect(first.success).toBe(true);
     expect(second).toMatchObject({ success: true, skippedUnchanged: true });
+  });
+
+  it("commits a Worker-verified payload without reloading or simulating it on the main thread", async () => {
+    const state = createInitialState();
+    state.elapsedSeconds = 321;
+    const raw = exportGame(state);
+    const result = await saveVerifiedPayload(raw, { verified: true });
+    expect(result).toMatchObject({ success: true, bytes: expect.any(Number) });
+    expect(loadGameDeferredOffline().state.elapsedSeconds).toBe(321);
   });
 
   it("migrates v15 research and Dyson plans into the v17 operations model", () => {

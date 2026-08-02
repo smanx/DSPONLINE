@@ -1660,7 +1660,7 @@ interface StationDispatchSlotResult {
   cargoDispatched: number;
 }
 
-interface SimulationLookupContext {
+export interface SimulationLookupContext {
   entityById: Map<string, FactoryEntity>;
   entitiesByPlanet: Map<PlanetId, FactoryEntity[]>;
   beltsByPlanet: Map<PlanetId, BeltConnection[]>;
@@ -1734,7 +1734,7 @@ function stationDispatchSlotKey(stationId: string, slotIndex: number, scope: Sta
   return `${stationId}|${slotIndex}|${scope}`;
 }
 
-function createSimulationLookupContext(state: GameState, profiler?: SimulationProfiler): SimulationLookupContext {
+export function createSimulationLookupContext(state: GameState, profiler?: SimulationProfiler): SimulationLookupContext {
   const startedAt = profileNow();
   const context: SimulationLookupContext = {
     entityById: new Map(state.entities.map((entity) => [entity.id, entity])),
@@ -2052,7 +2052,7 @@ function stationRouteReady(state: GameState, station: FactoryEntity, lookup?: Si
   return false;
 }
 
-interface PowerPlan {
+export interface SimulationPowerPlan {
   gridId?: PowerGridId;
   generationKw: number;
   demandKw: number;
@@ -2074,13 +2074,18 @@ interface PowerPlan {
   generatorCount: number;
 }
 
-interface DysonReceptionPlan {
+export interface SimulationDysonReceptionPlan {
   efficiency: number;
   receiverLoadKw: number;
   allocationByEntity: Map<string, number>;
   efficiencyByEntity: Map<string, number>;
   rayPowerByPlanet: Map<PlanetId, number>;
 }
+
+// Internal aliases keep the simulation implementation readable while the
+// phased worker protocol can use the same deterministic domain types.
+type PowerPlan = SimulationPowerPlan;
+type DysonReceptionPlan = SimulationDysonReceptionPlan;
 
 const DYSON_SYSTEM_IDS: StarSystemId[] = STAR_SYSTEM_LIST.map((system) => system.id);
 
@@ -5008,6 +5013,435 @@ function settleQuantumNetworkUploads(
   state.quantumLogisticsNetwork.runtimeFlow = flow;
 }
 
+export interface SimulationBeltStepReservation {
+  allowanceByBelt: Map<string, number>;
+  outputCredits: Map<string, number>;
+}
+
+export interface SimulationStepPrepared {
+  elapsedBeforeStep: number;
+  projectedElapsed: number;
+  firstHubBoundary: number;
+  lastHubBoundary: number;
+  quantumBoundarySecond: number | null;
+  quantumBoundaryFlow: QuantumBoundaryFlow | null;
+  beltStepReservation: SimulationBeltStepReservation;
+  reception: SimulationDysonReceptionPlan;
+}
+
+export interface SimulationPlanetPhaseResult {
+  planetId: PlanetId;
+  entities: FactoryEntity[];
+  powerGridMetrics: GameState["powerGridMetrics"][PlanetId];
+  planetMetrics: GameState["planetMetrics"][PlanetId];
+  totalProducedDelta: Partial<Record<ItemId, number>>;
+  totalProducedKeys: ItemId[];
+  powerPlan: SimulationPowerPlan;
+}
+
+/**
+ * Executes the mutable, planet-local part of a simulation step. The caller
+ * must keep global logistics/quantum phases at a barrier and merge the
+ * returned entity and counter deltas in stable planet order.
+ */
+export function runPlanetSimulationPhase(
+  state: GameState,
+  seconds: number,
+  planetId: PlanetId,
+  reception: SimulationDysonReceptionPlan,
+  beltStepReservation: SimulationBeltStepReservation,
+  lookup?: SimulationLookupContext,
+  profiler?: SimulationProfiler,
+  batchPowerStorage = true,
+  batchConstructionAutomation = true,
+  contractExperiment?: SimulationContractExperiment,
+): SimulationPlanetPhaseResult {
+  const phaseLookup = lookup ?? createSimulationLookupContext(state, profiler);
+  if (!lookup) ensureDynamicRouteLookup(state, phaseLookup);
+  const baselineProduced = { ...state.totalProduced };
+  let subsystemStartedAt = profiler ? profileNow() : 0;
+  const gridPlans = POWER_GRID_IDS.map((gridId) => calculatePower(state, seconds, planetId, gridId, reception, phaseLookup, profiler));
+  const power = combinePowerPlans(gridPlans);
+  for (const gridPlan of gridPlans) {
+    const gridId = gridPlan.gridId!;
+    const storage = gridStoredEnergy(state, planetId, gridId, lookup);
+    state.powerGridMetrics[planetId][gridId] = {
+      gridId,
+      generationKw: round(gridPlan.generationKw, 2),
+      demandKw: round(gridPlan.demandKw, 2),
+      powerFactor: round(gridPlan.factor, 4),
+      windGenerationKw: round(gridPlan.windGenerationKw, 2),
+      solarGenerationKw: round(gridPlan.solarGenerationKw, 2),
+      geothermalGenerationKw: round(gridPlan.geothermalGenerationKw, 2),
+      thermalGenerationKw: round(gridPlan.thermalGenerationKw, 2),
+      fusionGenerationKw: round(gridPlan.fusionGenerationKw, 2),
+      artificialStarGenerationKw: round(gridPlan.artificialStarGenerationKw, 2),
+      rayGenerationKw: round(gridPlan.rayGenerationKw, 2),
+      storageDischargeKw: round(gridPlan.storageDischargeKw, 2),
+      storageChargeKw: round(gridPlan.storageChargeKw, 2),
+      storedEnergyMj: round(storage.stored, 3),
+      storageCapacityMj: round(storage.capacity, 3),
+      fuelReserveSeconds: fuelReserveSeconds(state, planetId, gridId, lookup),
+      totalItemsPerMinute: 0,
+      connectedEntities: gridPlan.connectedEntities,
+      disconnectedEntities: gridPlan.disconnectedEntities,
+      generatorCount: gridPlan.generatorCount,
+      coverageRadius: POWER_SUPPLY_RADIUS,
+    };
+  }
+  runPowerFacilities(
+    state,
+    seconds,
+    power,
+    planetId,
+    phaseLookup.entitiesByPlanet.get(planetId) ?? [],
+    batchPowerStorage,
+    profiler,
+  );
+  if (profiler) profiler.powerMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  contractExperiment?.beforePlanetProduction?.(state, planetId);
+  runMiners(state, seconds, power, planetId, beltStepReservation.outputCredits, phaseLookup, contractExperiment?.skippedProductionEntityIds);
+  runMachines(state, seconds, power, planetId, beltStepReservation.outputCredits, phaseLookup, contractExperiment?.skippedProductionEntityIds);
+  contractExperiment?.afterPlanetProduction?.(state, planetId);
+  if (profiler) profiler.productionMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  runConstructionCenters(
+    state,
+    seconds,
+    power,
+    planetId,
+    phaseLookup.entitiesByPlanet.get(planetId) ?? [],
+    batchConstructionAutomation,
+    profiler,
+  );
+  if (profiler) profiler.constructionMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  runRayReceivers(state, seconds, reception, planetId, beltStepReservation.outputCredits, phaseLookup.entitiesByPlanet.get(planetId) ?? []);
+  if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  const storage = gridStoredEnergy(state, planetId, undefined, phaseLookup);
+  state.planetMetrics[planetId] = {
+    generationKw: round(power.generationKw, 2),
+    demandKw: round(power.demandKw, 2),
+    powerFactor: round(power.factor, 4),
+    windGenerationKw: round(power.windGenerationKw, 2),
+    solarGenerationKw: round(power.solarGenerationKw, 2),
+    geothermalGenerationKw: round(power.geothermalGenerationKw, 2),
+    thermalGenerationKw: round(power.thermalGenerationKw, 2),
+    fusionGenerationKw: round(power.fusionGenerationKw, 2),
+    artificialStarGenerationKw: round(power.artificialStarGenerationKw, 2),
+    rayGenerationKw: round(power.rayGenerationKw, 2),
+    storageDischargeKw: round(power.storageDischargeKw, 2),
+    storageChargeKw: round(power.storageChargeKw, 2),
+    storedEnergyMj: round(storage.stored, 3),
+    storageCapacityMj: round(storage.capacity, 3),
+    fuelReserveSeconds: fuelReserveSeconds(state, planetId),
+    totalItemsPerMinute: round((phaseLookup.entitiesByPlanet.get(planetId) ?? []).reduce((sum, entity) =>
+      entity.planetId === planetId ? sum + entity.productionRate : sum, 0), 2),
+  };
+  if (profiler) profiler.powerMs += profileNow() - subsystemStartedAt;
+  const localEntities = state.entities.filter((entity) => entity.planetId === planetId);
+  const totalProducedDelta: Partial<Record<ItemId, number>> = {};
+  for (const [itemId, amount] of Object.entries(state.totalProduced)) {
+    const delta = Math.floor(amount ?? 0) - Math.floor(baselineProduced[itemId as ItemId] ?? 0);
+    if (delta !== 0) totalProducedDelta[itemId as ItemId] = delta;
+  }
+  return {
+    planetId,
+    entities: localEntities,
+    powerGridMetrics: state.powerGridMetrics[planetId],
+    planetMetrics: state.planetMetrics[planetId],
+    totalProducedDelta,
+    totalProducedKeys: Object.keys(state.totalProduced) as ItemId[],
+    powerPlan: power,
+  };
+}
+
+/** Runs the stateful global prefix before planet-local work. */
+export function prepareSimulationStep(
+  state: GameState,
+  seconds: number,
+  lookup?: SimulationLookupContext,
+  profiler?: SimulationProfiler,
+  contractExperiment?: SimulationContractExperiment,
+): SimulationStepPrepared {
+  const elapsedBeforeStep = state.elapsedSeconds;
+  const projectedElapsed = round(elapsedBeforeStep + seconds);
+  const firstHubBoundary = Math.floor(elapsedBeforeStep / SYSTEM_HUB_SETTLEMENT_SECONDS) + 1;
+  const lastHubBoundary = Math.floor(projectedElapsed / SYSTEM_HUB_SETTLEMENT_SECONDS);
+  const quantumBoundarySecond = firstHubBoundary <= lastHubBoundary
+    ? firstHubBoundary * SYSTEM_HUB_SETTLEMENT_SECONDS
+    : null;
+  prepareTimeWarpStep(state);
+  if (lookup) ensureDynamicRouteLookup(state, lookup);
+  advanceExplorationMissions(state, seconds);
+  let subsystemStartedAt = profiler ? profileNow() : 0;
+  advanceHandcraftQueue(state, seconds);
+  if (profiler) profiler.constructionMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  absorbDysonSails(state, seconds);
+  decayDysonSwarm(state, seconds);
+  if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
+  resetStationRuntime(state);
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  transferLogisticsBuffers(state, lookup);
+  if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  contractExperiment?.beforeInputBelts?.(state);
+  transferBelts(state, seconds, true, undefined, seconds, lookup, contractExperiment?.skippedBeltIds);
+  contractExperiment?.afterInputBelts?.(state);
+  if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
+  const beltStepReservation = reserveBeltStepOutputCapacity(state, lookup, contractExperiment?.skippedBeltIds);
+  runOrbitalCollectors(state, seconds, beltStepReservation.outputCredits);
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  drainMaterialDeliveryHubs(state, seconds);
+  if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  const reception = calculateDysonReception(state);
+  if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
+  return {
+    elapsedBeforeStep,
+    projectedElapsed,
+    firstHubBoundary,
+    lastHubBoundary,
+    quantumBoundarySecond,
+    quantumBoundaryFlow: null,
+    beltStepReservation,
+    reception,
+  };
+}
+
+/** Runs the global barrier after all planet-local results have been merged. */
+export function completeSimulationStep(
+  state: GameState,
+  seconds: number,
+  prepared: SimulationStepPrepared,
+  powerByPlanet: Map<PlanetId, PowerPlan>,
+  lookup?: SimulationLookupContext,
+  profiler?: SimulationProfiler,
+  contractExperiment?: SimulationContractExperiment,
+): void {
+  let quantumBoundaryFlow = prepared.quantumBoundaryFlow;
+  if (prepared.quantumBoundarySecond !== null) {
+    const quantumStartedAt = profiler ? profileNow() : 0;
+    quantumBoundaryFlow = settleQuantumNetworkDownloads(
+      state,
+      prepared.beltStepReservation.outputCredits,
+      prepared.quantumBoundarySecond,
+      QUANTUM_SETTLEMENT_SECONDS,
+      profiler,
+    );
+    if (profiler) profiler.quantumMs += profileNow() - quantumStartedAt;
+  }
+  let subsystemStartedAt = profiler ? profileNow() : 0;
+  contractExperiment?.beforeOutputBelts?.(state);
+  transferBelts(state, 0, false, prepared.beltStepReservation.allowanceByBelt, seconds, lookup, contractExperiment?.skippedBeltIds);
+  contractExperiment?.afterOutputBelts?.(state);
+  if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
+  drainMaterialDeliveryHubs(state, seconds);
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  refillStationWarpers(state);
+  let phaseStartedAt = profileNow();
+  if (lookup) {
+    refreshRouteEnvironment(state, lookup);
+    lookup.dispatchResultsBySlot.clear();
+  }
+  dispatchStationScope(state, "local", powerByPlanet, lookup, profiler);
+  dispatchStationScope(state, "remote", powerByPlanet, lookup, profiler);
+  if (profiler) profiler.dispatchMs += profileNow() - phaseStartedAt;
+  phaseStartedAt = profileNow();
+  advanceStationRoutes(state, "local", seconds, powerByPlanet, lookup);
+  advanceStationRoutes(state, "remote", seconds, powerByPlanet, lookup);
+  refillStationWarpers(state);
+  if (profiler) profiler.routeAdvanceMs += profileNow() - phaseStartedAt;
+  if (lookup) ensureDynamicRouteLookup(state, lookup);
+  phaseStartedAt = profileNow();
+  updateStationCongestion(state, lookup, profiler);
+  if (profiler) profiler.congestionMs += profileNow() - phaseStartedAt;
+  if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  runGalacticMaterialExporters(state, powerByPlanet);
+  runGalacticExports(state, seconds);
+  if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  syncLegacySwarmIntoOrbits(state);
+  updateDysonSphereGeneration(state);
+  if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
+  state.dysonSwarm.receiverLoadKw = round(prepared.reception.receiverLoadKw, 2);
+  state.elapsedSeconds = prepared.projectedElapsed;
+  let boundaryLookupDirty = false;
+  for (let boundary = prepared.firstHubBoundary; boundary <= prepared.lastHubBoundary; boundary += 1) {
+    for (const station of state.entities) {
+      if (station.stationModeTransition) {
+        const transitioned = completeStationOperationModeTransition(state, station.id);
+        if (transitioned !== state) {
+          state.entities = transitioned.entities;
+          boundaryLookupDirty = true;
+        }
+      }
+    }
+    const quantumStartedAt = profiler ? profileNow() : 0;
+    if (isTechnologyCompleted(state, "quantum_logistics_network")) {
+      const plannedStationIds = state.entities
+        .filter((entity) => entity.buildingId === "interstellar_logistics_station" && entity.quantumTarget === true &&
+          (entity.stationTier ?? 1) >= 2 && entity.quantumMode !== "quantum" && !entity.quantumTransition)
+        .map((entity) => entity.id);
+      if (plannedStationIds.length > 0) {
+        const planned = beginQuantumAttachments(state, plannedStationIds);
+        if (planned.startedIds.length > 0) {
+          const started = new Set(planned.startedIds);
+          state.entities = planned.state.entities.map((entity) => started.has(entity.id) ? { ...entity, quantumTarget: undefined } : entity);
+          boundaryLookupDirty = true;
+        }
+      }
+    }
+    const transitionedQuantum = settleQuantumAttachments(state);
+    if (transitionedQuantum.changed) {
+      state.entities = transitionedQuantum.state.entities;
+      state.quantumLogisticsNetwork = transitionedQuantum.state.quantumLogisticsNetwork;
+      boundaryLookupDirty = true;
+    }
+    settleSpaceStationConstructionInputs(state);
+    settleSystemHubLogistics(state, boundary * SYSTEM_HUB_SETTLEMENT_SECONDS);
+    settleQuantumNetworkUploads(
+      state,
+      boundary * SYSTEM_HUB_SETTLEMENT_SECONDS,
+      quantumBoundaryFlow,
+      QUANTUM_SETTLEMENT_SECONDS,
+      lookup,
+      profiler,
+    );
+    if (profiler) profiler.quantumMs += profileNow() - quantumStartedAt;
+  }
+  if (lookup && boundaryLookupDirty) Object.assign(lookup, createSimulationLookupContext(state, profiler));
+  if (state.endgame.exportWindowStartedAt <= 0) state.endgame.exportWindowStartedAt = state.elapsedSeconds;
+  const exportWindowSeconds = state.elapsedSeconds - state.endgame.exportWindowStartedAt;
+  if (exportWindowSeconds >= 10 - EPSILON) {
+    state.endgame.exportedLastMinute = round(state.endgame.exportWindowAmount * 60 / exportWindowSeconds, 2);
+    state.endgame.exportWindowAmount = 0;
+    state.endgame.exportWindowStartedAt = state.elapsedSeconds;
+  }
+  state.metrics = { ...state.planetMetrics[state.activePlanetId] };
+}
+
+export interface SimulationPlanetPhaseExecutor {
+  run(
+    state: GameState,
+    seconds: number,
+    prepared: SimulationStepPrepared,
+    planetIds: readonly PlanetId[],
+    options: { batchPowerStorage: boolean; batchConstructionAutomation: boolean },
+  ): Promise<SimulationPlanetPhaseResult[]>;
+}
+
+export function mergeSimulationPlanetPhaseResults(
+  state: GameState,
+  results: readonly SimulationPlanetPhaseResult[],
+): Map<PlanetId, PowerPlan> {
+  const entityById = new Map(state.entities.map((entity) => [entity.id, entity]));
+  const expectedEntityIds = new Set(entityById.keys());
+  const expectedPlanets = new Set(PLANET_LIST.map((planet) => planet.id));
+  const seenPlanets = new Set<PlanetId>();
+  const returnedEntityIds = new Set<string>();
+  const orderedResults = [...results].sort((left, right) => left.planetId.localeCompare(right.planetId));
+
+  // Validate the complete barrier before mutating the authoritative state.
+  // A missing or duplicated partition must never leave a partially merged
+  // state visible to the coordinator or to the next simulation request.
+  for (const result of orderedResults) {
+    if (!expectedPlanets.has(result.planetId)) throw new Error(`星球分区返回了未知星球：${result.planetId}`);
+    if (seenPlanets.has(result.planetId)) throw new Error(`重复的星球分区结果：${result.planetId}`);
+    seenPlanets.add(result.planetId);
+    for (const entity of result.entities) {
+      const target = entityById.get(entity.id);
+      if (!target || target.planetId !== result.planetId) throw new Error(`星球分区返回了未知实体：${entity.id}`);
+      if (returnedEntityIds.has(entity.id)) throw new Error(`实体出现在多个星球分区：${entity.id}`);
+      returnedEntityIds.add(entity.id);
+    }
+  }
+  if (seenPlanets.size !== expectedPlanets.size || [...expectedPlanets].some((planetId) => !seenPlanets.has(planetId))) {
+    throw new Error("星球分区结果不完整");
+  }
+  if (returnedEntityIds.size !== expectedEntityIds.size || [...expectedEntityIds].some((entityId) => !returnedEntityIds.has(entityId))) {
+    throw new Error("星球分区实体结果不完整");
+  }
+
+  const powerByPlanet = new Map<PlanetId, PowerPlan>();
+  for (const result of orderedResults) {
+    for (const entity of result.entities) {
+      const target = entityById.get(entity.id);
+      // The complete validation pass above guarantees the lookup succeeds.
+      if (!target) throw new Error(`星球分区返回了未知实体：${entity.id}`);
+      Object.assign(target, entity);
+    }
+    state.powerGridMetrics[result.planetId] = result.powerGridMetrics;
+    state.planetMetrics[result.planetId] = result.planetMetrics;
+    for (const [itemId, delta] of Object.entries(result.totalProducedDelta)) {
+      state.totalProduced[itemId as ItemId] = Math.floor((state.totalProduced[itemId as ItemId] ?? 0) + (delta ?? 0));
+    }
+    for (const itemId of result.totalProducedKeys) {
+      if (!(itemId in state.totalProduced)) state.totalProduced[itemId] = 0;
+    }
+    powerByPlanet.set(result.planetId, result.powerPlan);
+  }
+  return powerByPlanet;
+}
+
+/**
+ * Async counterpart used only by the opt-in P6 coordinator. Global phases are
+ * never executed in child workers; only the planet-local phase crosses the
+ * worker boundary, then results are merged before logistics/quantum settle.
+ */
+export async function advanceSimulationSessionMulticore(
+  session: SimulationAdvanceSession,
+  maximumSteps: number,
+  execute: SimulationPlanetPhaseExecutor,
+): Promise<number> {
+  const stepLimit = Math.max(0, Math.floor(Number.isFinite(maximumSteps) ? maximumSteps : 0));
+  let steps = 0;
+  if (session.remainingSeconds <= EPSILON && session.remainingWallSeconds > EPSILON && steps < stepLimit) {
+    const activity = session.state.endgame.constructionActivity;
+    session.advancedWallSeconds += session.remainingWallSeconds;
+    if (activity.activityId) activity.activityClockMs = Math.max(0, Math.floor(session.initialActivityClockMs + session.advancedWallSeconds * 1_000));
+    session.remainingWallSeconds = 0;
+    return 1;
+  }
+  while (session.remainingSeconds > EPSILON && steps < stepLimit) {
+    let step = Math.min(session.stepSize, session.remainingSeconds);
+    const activity = session.state.endgame.constructionActivity;
+    const wallPerSimulationSecond = session.remainingSeconds > EPSILON
+      ? session.remainingWallSeconds / session.remainingSeconds
+      : 0;
+    if (activity.activityId) {
+      for (const boundaryMs of [activity.startsAtMs, activity.endsAtMs]) {
+        const untilBoundaryWall = (boundaryMs - activity.activityClockMs) / 1_000;
+        const untilBoundarySimulation = wallPerSimulationSecond > EPSILON
+          ? untilBoundaryWall / wallPerSimulationSecond
+          : Number.POSITIVE_INFINITY;
+        if (untilBoundarySimulation > EPSILON && untilBoundarySimulation < step - EPSILON) step = untilBoundarySimulation;
+      }
+    }
+    const prepared = prepareSimulationStep(session.state, step, session.lookup, session.profiler, session.contractExperiment);
+    const results = await execute.run(session.state, step, prepared, PLANET_LIST.map((planet) => planet.id), {
+      batchPowerStorage: session.batchPowerStorage,
+      batchConstructionAutomation: session.batchConstructionAutomation,
+    });
+    const powerByPlanet = mergeSimulationPlanetPhaseResults(session.state, results);
+    session.lookup = createSimulationLookupContext(session.state, session.profiler);
+    completeSimulationStep(session.state, step, prepared, powerByPlanet, session.lookup, session.profiler, session.contractExperiment);
+    const wallStep = Math.min(session.remainingWallSeconds, step * wallPerSimulationSecond);
+    if (activity.activityId && wallStep > 0) {
+      session.advancedWallSeconds += wallStep;
+      activity.activityClockMs = Math.max(0, Math.floor(session.initialActivityClockMs + session.advancedWallSeconds * 1_000));
+    }
+    session.remainingSeconds = Math.max(0, session.remainingSeconds - step);
+    session.remainingWallSeconds = Math.max(0, session.remainingWallSeconds - wallStep);
+    steps += 1;
+  }
+  return steps;
+}
+
 function simulateStep(
   state: GameState,
   seconds: number,
@@ -5054,89 +5488,19 @@ function simulateStep(
   if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
   const powerByPlanet = new Map<PlanetId, PowerPlan>();
   for (const planet of PLANET_LIST) {
-    subsystemStartedAt = profiler ? profileNow() : 0;
-    const gridPlans = POWER_GRID_IDS.map((gridId) => calculatePower(state, seconds, planet.id, gridId, reception, lookup, profiler));
-    const power = combinePowerPlans(gridPlans);
-    powerByPlanet.set(planet.id, power);
-    for (const gridPlan of gridPlans) {
-      const gridId = gridPlan.gridId!;
-      const storage = gridStoredEnergy(state, planet.id, gridId, lookup);
-      state.powerGridMetrics[planet.id][gridId] = {
-        gridId,
-        generationKw: round(gridPlan.generationKw, 2),
-        demandKw: round(gridPlan.demandKw, 2),
-        powerFactor: round(gridPlan.factor, 4),
-        windGenerationKw: round(gridPlan.windGenerationKw, 2),
-        solarGenerationKw: round(gridPlan.solarGenerationKw, 2),
-        geothermalGenerationKw: round(gridPlan.geothermalGenerationKw, 2),
-        thermalGenerationKw: round(gridPlan.thermalGenerationKw, 2),
-        fusionGenerationKw: round(gridPlan.fusionGenerationKw, 2),
-        artificialStarGenerationKw: round(gridPlan.artificialStarGenerationKw, 2),
-        rayGenerationKw: round(gridPlan.rayGenerationKw, 2),
-        storageDischargeKw: round(gridPlan.storageDischargeKw, 2),
-        storageChargeKw: round(gridPlan.storageChargeKw, 2),
-        storedEnergyMj: round(storage.stored, 3),
-        storageCapacityMj: round(storage.capacity, 3),
-        fuelReserveSeconds: fuelReserveSeconds(state, planet.id, gridId, lookup),
-        totalItemsPerMinute: 0,
-        connectedEntities: gridPlan.connectedEntities,
-        disconnectedEntities: gridPlan.disconnectedEntities,
-        generatorCount: gridPlan.generatorCount,
-        coverageRadius: POWER_SUPPLY_RADIUS,
-      };
-    }
-    runPowerFacilities(
+    const result = runPlanetSimulationPhase(
       state,
       seconds,
-      power,
       planet.id,
-      lookup ? (lookup.entitiesByPlanet.get(planet.id) ?? []) : state.entities,
+      reception,
+      beltStepReservation,
+      lookup,
+      profiler,
       batchPowerStorage,
-      profiler,
-    );
-    if (profiler) profiler.powerMs += profileNow() - subsystemStartedAt;
-    subsystemStartedAt = profiler ? profileNow() : 0;
-    contractExperiment?.beforePlanetProduction?.(state, planet.id);
-    runMiners(state, seconds, power, planet.id, beltStepReservation.outputCredits, lookup, contractExperiment?.skippedProductionEntityIds);
-    runMachines(state, seconds, power, planet.id, beltStepReservation.outputCredits, lookup, contractExperiment?.skippedProductionEntityIds);
-    contractExperiment?.afterPlanetProduction?.(state, planet.id);
-    if (profiler) profiler.productionMs += profileNow() - subsystemStartedAt;
-    subsystemStartedAt = profiler ? profileNow() : 0;
-    runConstructionCenters(
-      state,
-      seconds,
-      power,
-      planet.id,
-      lookup ? (lookup.entitiesByPlanet.get(planet.id) ?? []) : state.entities,
       batchConstructionAutomation,
-      profiler,
+      contractExperiment,
     );
-    if (profiler) profiler.constructionMs += profileNow() - subsystemStartedAt;
-    subsystemStartedAt = profiler ? profileNow() : 0;
-    runRayReceivers(state, seconds, reception, planet.id, beltStepReservation.outputCredits, lookup ? (lookup.entitiesByPlanet.get(planet.id) ?? []) : state.entities);
-    if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
-    subsystemStartedAt = profiler ? profileNow() : 0;
-    const storage = gridStoredEnergy(state, planet.id, undefined, lookup);
-    state.planetMetrics[planet.id] = {
-      generationKw: round(power.generationKw, 2),
-      demandKw: round(power.demandKw, 2),
-      powerFactor: round(power.factor, 4),
-      windGenerationKw: round(power.windGenerationKw, 2),
-      solarGenerationKw: round(power.solarGenerationKw, 2),
-      geothermalGenerationKw: round(power.geothermalGenerationKw, 2),
-      thermalGenerationKw: round(power.thermalGenerationKw, 2),
-      fusionGenerationKw: round(power.fusionGenerationKw, 2),
-      artificialStarGenerationKw: round(power.artificialStarGenerationKw, 2),
-      rayGenerationKw: round(power.rayGenerationKw, 2),
-      storageDischargeKw: round(power.storageDischargeKw, 2),
-      storageChargeKw: round(power.storageChargeKw, 2),
-      storedEnergyMj: round(storage.stored, 3),
-      storageCapacityMj: round(storage.capacity, 3),
-      fuelReserveSeconds: fuelReserveSeconds(state, planet.id),
-      totalItemsPerMinute: round((lookup?.entitiesByPlanet.get(planet.id) ?? state.entities).reduce((sum, entity) =>
-        entity.planetId === planet.id ? sum + entity.productionRate : sum, 0), 2),
-    };
-    if (profiler) profiler.powerMs += profileNow() - subsystemStartedAt;
+    powerByPlanet.set(planet.id, result.powerPlan);
   }
   if (quantumBoundarySecond !== null) {
     const quantumStartedAt = profiler ? profileNow() : 0;
@@ -5543,6 +5907,29 @@ export function advancePersistentSimulationRuntime(
     lookup: runtime.lookup,
   });
   advanceSimulationSession(session, Number.MAX_SAFE_INTEGER);
+  const next = completeSimulationAdvanceSession(session);
+  runtime.state = next;
+  const cacheRebuilt = next !== before;
+  if (cacheRebuilt) runtime.lookup = next.paused ? undefined : createSimulationLookupContext(next, profiler);
+  return { state: next, changed: session.changed, cacheRebuilt };
+}
+
+export async function advancePersistentSimulationRuntimeMulticore(
+  runtime: PersistentSimulationRuntime,
+  simulationSeconds: number,
+  wallSeconds: number,
+  execute: SimulationPlanetPhaseExecutor,
+  profiler?: SimulationProfiler,
+): Promise<{ state: GameState; changed: boolean; cacheRebuilt: boolean }> {
+  if (!runtime.lookup && !runtime.state.paused && simulationSeconds > 0) runtime.lookup = createSimulationLookupContext(runtime.state, profiler);
+  const before = runtime.state;
+  const session = createSimulationAdvanceSession(before, simulationSeconds, {
+    wallSeconds,
+    profiler,
+    mutateState: true,
+    lookup: runtime.lookup,
+  });
+  await advanceSimulationSessionMulticore(session, Number.MAX_SAFE_INTEGER, execute);
   const next = completeSimulationAdvanceSession(session);
   runtime.state = next;
   const cacheRebuilt = next !== before;

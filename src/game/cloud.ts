@@ -285,8 +285,13 @@ export function clearCloudSyncMarker(userId: string, slot?: CloudSaveSlot): void
 }
 
 export function compareCloudSave(userId: string, localPayload: string | null, cloudSave: CloudSaveMetadata | null, slot: CloudSaveSlot = "main"): CloudSyncComparison {
-  const marker = getCloudSyncMarker(userId, slot);
   const local = localPayload ? summarizeCloudPayload(localPayload) : null;
+  return compareCloudSaveSummary(userId, local, cloudSave, slot);
+}
+
+/** Compare a payload using a summary produced by the upload Worker. */
+export function compareCloudSaveSummary(userId: string, local: CloudSaveSummary | null, cloudSave: CloudSaveMetadata | null, slot: CloudSaveSlot = "main"): CloudSyncComparison {
+  const marker = getCloudSyncMarker(userId, slot);
   if (!local && !cloudSave) return { state: "empty", marker, local, cloud: cloudSave, localChanged: false, cloudChanged: false };
   if (local && !cloudSave) return { state: "local-only", marker, local, cloud: cloudSave, localChanged: true, cloudChanged: false };
   if (!local && cloudSave) return { state: "cloud-only", marker, local, cloud: cloudSave, localChanged: false, cloudChanged: true };
@@ -329,6 +334,9 @@ async function cloudRequest<T>(path: string, options: RequestInit = {}, authenti
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 8_000);
   const token = authenticated ? getCloudToken() : null;
+  const externalSignal = options.signal;
+  const abortFromCaller = () => controller.abort();
+  externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
   try {
     const response = await apiFetch(`${base}${path}`, {
       ...options,
@@ -344,8 +352,10 @@ async function cloudRequest<T>(path: string, options: RequestInit = {}, authenti
     return payload as T;
   } catch (error) {
     if (error instanceof CloudApiError) throw error;
+    if (externalSignal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
     throw new CloudApiError(error instanceof DOMException && error.name === "AbortError" ? "云服务连接超时" : "无法连接云服务", 0);
   } finally {
+    externalSignal?.removeEventListener("abort", abortFromCaller);
     window.clearTimeout(timer);
   }
 }
@@ -458,28 +468,41 @@ function cloudSaveQuery(slot: CloudSaveSlot, revision?: number): string {
 }
 
 export async function uploadCloudSave(payload: string, expectedRevision: number, slot: CloudSaveSlot = "main"): Promise<CloudSaveMetadata> {
-  const integrity = inspectSaveEnvelopeChecksum(payload);
-  if (integrity.status !== "valid") {
-    throw new CloudApiError("云存档上传前完整性自检失败，请先在存档管理中导出备份并使用救援入口", 0, {
-      code: "SAVE_INTEGRITY_INVALID",
-      recordedChecksum: integrity.recordedChecksum,
-      computedChecksum: integrity.computedChecksum,
-    });
+  return uploadCloudSaveWithOptions(payload, expectedRevision, slot);
+}
+
+export async function uploadCloudSaveWithOptions(
+  payload: string,
+  expectedRevision: number,
+  slot: CloudSaveSlot = "main",
+  options: { verified?: boolean; signal?: AbortSignal } = {},
+): Promise<CloudSaveMetadata> {
+  if (!options.verified) {
+    const integrity = inspectSaveEnvelopeChecksum(payload);
+    if (integrity.status !== "valid") {
+      throw new CloudApiError("云存档上传前完整性自检失败，请先在存档管理中导出备份并使用救援入口", 0, {
+        code: "SAVE_INTEGRITY_INVALID",
+        recordedChecksum: integrity.recordedChecksum,
+        computedChecksum: integrity.computedChecksum,
+      });
+    }
   }
   const rawBody = JSON.stringify({ payload, expectedRevision });
-  const compressed = await compressCloudRequestBody(rawBody);
+  const compressed = await compressCloudRequestBody(rawBody, options.signal);
   const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save${cloudSaveQuery(slot)}`, {
     method: "PUT",
     body: compressed?.body ?? rawBody,
     ...(compressed ? { headers: compressed.headers } : {}),
+    signal: options.signal,
   }, true);
   return { ...result.cloudSave, slot };
 }
 
-async function compressCloudRequestBody(rawBody: string): Promise<{ body: Blob; headers: Record<string, string> } | null> {
+async function compressCloudRequestBody(rawBody: string, signal?: AbortSignal): Promise<{ body: Blob; headers: Record<string, string> } | null> {
   // The Electron bridge accepts JSON strings only. Browser fetch can send the
   // gzip stream directly, preserving compatibility with existing desktop
   // clients while reducing large end-game uploads substantially.
+  if (signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
   if (getDesktopBridge() || typeof CompressionStream === "undefined" || typeof TextEncoder === "undefined") return null;
   const encoder = new TextEncoder();
   const rawBytes = encoder.encode(rawBody);
@@ -488,6 +511,7 @@ async function compressCloudRequestBody(rawBody: string): Promise<{ body: Blob; 
     const compressor = new CompressionStream("gzip");
     const writer = compressor.writable.getWriter();
     await writer.write(rawBytes);
+    if (signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
     await writer.close();
     const compressed = await new Response(compressor.readable).arrayBuffer();
     if (compressed.byteLength >= rawBytes.byteLength) return null;
@@ -499,7 +523,8 @@ async function compressCloudRequestBody(rawBody: string): Promise<{ body: Blob; 
         "x-dsp-save-compressed-bytes": String(compressed.byteLength),
       },
     };
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
     return null;
   }
 }

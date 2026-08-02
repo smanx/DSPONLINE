@@ -1,22 +1,258 @@
-import type { GameState } from "./types";
+import {
+  runPlanetSimulationPhase,
+  type SimulationPlanetPhaseExecutor,
+  type SimulationPlanetPhaseResult,
+  type SimulationStepPrepared,
+} from "./engine";
+import type { GameState, PlanetId } from "./types";
+import type { ContentPackRuntimeSnapshot } from "./contentPacks";
 
 export interface MulticoreSimulationPlan {
   requestedWorkers: number;
   workerCount: number;
   enabled: boolean;
-  reason: "disabled" | "insufficient-work" | "transfer-cost" | "approved";
+  reason: "disabled" | "insufficient-work" | "transfer-cost" | "unsafe-boundary" | "approved";
+  mode: "single" | "planet-phase";
+}
+
+export interface MulticoreSimulationOptions {
+  requestedWorkers?: number;
+  benchmarkSpeedup?: number;
+  enabled?: boolean;
+  /** Explicitly supplied only by the local development experiment. */
+  completeSimulationProof?: boolean;
+}
+
+const MULTICORE_FLAG = "dsp-idle-network.experimental-multicore-simulation.v1";
+
+/**
+ * P6 gate. The production default remains one authoritative Worker. Planet
+ * phase parallelism is only planned when the caller has a complete-simulation
+ * benchmark and an explicit opt-in; the engine still falls back on any
+ * boundary, revision, or worker error.
+ */
+export function planMulticoreSimulation(
+  state: Pick<GameState, "entities" | "belts" | "paused" | "timeWarp" | "research" | "constructionAutomation" | "endgame">,
+  options: MulticoreSimulationOptions = {},
+): MulticoreSimulationPlan {
+  const requestedWorkers = Math.max(1, Math.floor(options.requestedWorkers ?? 1));
+  const workUnits = state.entities.length + state.belts.length;
+  const unsafe = state.paused || state.timeWarp.enabled ||
+    (state.constructionAutomation.enabled && state.entities.some((entity) => entity.buildingId === "construction_center")) ||
+    (Boolean(state.research.selectedTechId || state.endgame.activeInfiniteResearchId) && state.entities.some((entity) => entity.recipeId === "matrix_research")) ||
+    state.entities.some((entity) => entity.recipeId === "solar_sail_launch" || entity.recipeId === "carrier_rocket_launch");
+  const base = (reason: MulticoreSimulationPlan["reason"]): MulticoreSimulationPlan => ({
+    requestedWorkers,
+    workerCount: 1,
+    enabled: false,
+    reason,
+    mode: "single",
+  });
+  if (!options.enabled) return base("disabled");
+  if (workUnits < 512 || requestedWorkers < 2) return base("insufficient-work");
+  if (unsafe) return base("unsafe-boundary");
+  if (!options.completeSimulationProof || (options.benchmarkSpeedup ?? 0) <= 1.15) return base("transfer-cost");
+  return {
+    requestedWorkers,
+    workerCount: Math.min(requestedWorkers, 4),
+    enabled: true,
+    reason: "approved",
+    mode: "planet-phase",
+  };
+}
+
+export function readMulticoreSimulationOptions(): MulticoreSimulationOptions {
+  if (typeof window === "undefined") return {};
+  const enabled = window.localStorage.getItem(MULTICORE_FLAG) === "true";
+  const requestedWorkers = Number.parseInt(window.localStorage.getItem(`${MULTICORE_FLAG}.workers`) ?? "4", 10);
+  const benchmarkSpeedup = Number.parseFloat(window.localStorage.getItem(`${MULTICORE_FLAG}.speedup`) ?? "0");
+  const completeSimulationProof = window.localStorage.getItem(`${MULTICORE_FLAG}.proof`) === "true";
+  return { enabled, requestedWorkers, benchmarkSpeedup, completeSimulationProof };
+}
+
+export interface PlanetPhaseWorkerRequest {
+  id: number;
+  planetId: PlanetId;
+  state: GameState;
+  seconds: number;
+  reception: {
+    efficiency: number;
+    receiverLoadKw: number;
+    allocationByEntity: Array<[string, number]>;
+    efficiencyByEntity: Array<[string, number]>;
+    rayPowerByPlanet: Array<[PlanetId, number]>;
+  };
+  outputCredits: Array<[string, number]>;
+  batchPowerStorage: boolean;
+  batchConstructionAutomation: boolean;
+  registryFingerprint: string;
+  registry?: ContentPackRuntimeSnapshot;
+}
+
+export interface PlanetPhaseWorkerResponse {
+  id: number;
+  ok: boolean;
+  result?: SimulationPlanetPhaseResult;
+  error?: string;
+}
+
+function copyForPlanetPhase(state: GameState, planetId: PlanetId): GameState {
+  // The planet phase is logically local, but power coverage, route readiness,
+  // content-dependent capacity and deterministic tie-breaking read the global
+  // entity/belt catalogue. Send the complete read-only catalogue to each child
+  // and return only the requested planet's entities; omitting remote context
+  // changes production on dense late-game saves.
+  const snapshot = {
+    ...state,
+    entities: [...state.entities],
+    belts: [...state.belts],
+    productionHistory: [],
+    blueprints: [],
+    blueprintVersions: [],
+    constructionQueue: [],
+    handcraftQueue: [],
+    productionPlans: [],
+    canvasBookmarks: [],
+    canvasRegions: [],
+    planetViewports: {},
+    tray: { ...state.tray },
+    totalProduced: { ...state.totalProduced },
+  } as unknown as GameState;
+  return snapshot;
+}
+
+function serialisePrepared(prepared: SimulationStepPrepared): PlanetPhaseWorkerRequest["reception"] {
+  return {
+    efficiency: prepared.reception.efficiency,
+    receiverLoadKw: prepared.reception.receiverLoadKw,
+    allocationByEntity: [...prepared.reception.allocationByEntity.entries()],
+    efficiencyByEntity: [...prepared.reception.efficiencyByEntity.entries()],
+    rayPowerByPlanet: [...prepared.reception.rayPowerByPlanet.entries()],
+  };
+}
+
+function makeRequest(
+  id: number,
+  state: GameState,
+  seconds: number,
+  prepared: SimulationStepPrepared,
+  planetId: PlanetId,
+  options: { batchPowerStorage: boolean; batchConstructionAutomation: boolean },
+): PlanetPhaseWorkerRequest {
+  return {
+    id,
+    planetId,
+    state: copyForPlanetPhase(state, planetId),
+    seconds,
+    reception: serialisePrepared(prepared),
+    outputCredits: [...prepared.beltStepReservation.outputCredits.entries()],
+    batchPowerStorage: options.batchPowerStorage,
+    batchConstructionAutomation: options.batchConstructionAutomation,
+    registryFingerprint: "core",
+  };
+}
+
+/** Synchronous implementation used by deterministic unit tests and fallback. */
+export const runPlanetPhaseSynchronously: SimulationPlanetPhaseExecutor = {
+  run: async (state, seconds, prepared, planetIds, options) => planetIds.map((planetId) => {
+    const local = structuredClone(copyForPlanetPhase(state, planetId));
+    return runPlanetSimulationPhase(
+      local,
+      seconds,
+      planetId,
+      prepared.reception,
+      prepared.beltStepReservation,
+      undefined,
+      undefined,
+      options.batchPowerStorage,
+      options.batchConstructionAutomation,
+    );
+  }),
+};
+
+interface WorkerLike {
+  postMessage(message: PlanetPhaseWorkerRequest): void;
+  terminate(): void;
+  onmessage: ((event: MessageEvent<PlanetPhaseWorkerResponse>) => void) | null;
+  onerror: ((event: ErrorEvent) => void) | null;
 }
 
 /**
- * P6 guardrail: parallelism is opt-in and only allowed after an external
- * deterministic benchmark proves transfer/merge cost is worthwhile. The
- * normal game path remains one authoritative Worker.
+ * Browser Worker pool. It owns no GameState and can only return local phase
+ * deltas; the coordinator remains the sole authority for global state.
  */
-export function planMulticoreSimulation(state: Pick<GameState, "entities" | "belts">, options: { requestedWorkers?: number; benchmarkSpeedup?: number; enabled?: boolean } = {}): MulticoreSimulationPlan {
-  const requestedWorkers = Math.max(1, Math.floor(options.requestedWorkers ?? 1));
-  const workUnits = state.entities.length + state.belts.length;
-  if (!options.enabled) return { requestedWorkers, workerCount: 1, enabled: false, reason: "disabled" };
-  if (workUnits < 512 || requestedWorkers < 2) return { requestedWorkers, workerCount: 1, enabled: false, reason: "insufficient-work" };
-  if ((options.benchmarkSpeedup ?? 0) <= 1.15) return { requestedWorkers, workerCount: 1, enabled: false, reason: "transfer-cost" };
-  return { requestedWorkers, workerCount: Math.min(requestedWorkers, 4), enabled: true, reason: "approved" };
+export class BrowserMulticoreExecutor implements SimulationPlanetPhaseExecutor {
+  private readonly workers: WorkerLike[];
+  private readonly pending = new Map<number, { resolve: (result: SimulationPlanetPhaseResult) => void; reject: (error: Error) => void }>();
+  private nextId = 1;
+  private registry?: ContentPackRuntimeSnapshot;
+  private registryFingerprint = "core";
+
+  constructor(workerCount: number, factory: () => WorkerLike = () => new Worker(
+    new URL("./multicoreSimulation.worker.ts", import.meta.url),
+    { type: "module", name: "factory-simulation-planet" },
+  ) as unknown as WorkerLike, registry?: ContentPackRuntimeSnapshot) {
+    this.registry = registry;
+    this.registryFingerprint = registry?.fingerprint ?? "core";
+    const count = Math.max(1, Math.min(4, Math.floor(workerCount)));
+    this.workers = Array.from({ length: count }, () => factory());
+    for (const worker of this.workers) {
+      worker.onmessage = (event) => {
+        const pending = this.pending.get(event.data.id);
+        if (!pending) return;
+        this.pending.delete(event.data.id);
+        if (event.data.ok && event.data.result) pending.resolve(event.data.result);
+        else pending.reject(new Error(event.data.error ?? "星球分区 Worker 失败"));
+      };
+      worker.onerror = () => {
+        for (const [id, pending] of this.pending) {
+          this.pending.delete(id);
+          pending.reject(new Error("星球分区 Worker 异常退出"));
+        }
+      };
+    }
+  }
+
+  setRegistry(registry?: ContentPackRuntimeSnapshot): void {
+    this.registry = registry;
+    this.registryFingerprint = registry?.fingerprint ?? "core";
+  }
+
+  run(
+    state: GameState,
+    seconds: number,
+    prepared: SimulationStepPrepared,
+    planetIds: readonly PlanetId[],
+    options: { batchPowerStorage: boolean; batchConstructionAutomation: boolean },
+  ): Promise<SimulationPlanetPhaseResult[]> {
+    const jobs = planetIds.map((planetId, index) => new Promise<SimulationPlanetPhaseResult>((resolve, reject) => {
+      const id = this.nextId++;
+      this.pending.set(id, { resolve, reject });
+      try {
+        const request = makeRequest(id, state, seconds, prepared, planetId, options);
+        request.registryFingerprint = this.registryFingerprint;
+        request.registry = this.registry;
+        this.workers[index % this.workers.length].postMessage(request);
+      } catch (error) {
+        this.pending.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    }));
+    return Promise.all(jobs);
+  }
+
+  terminate(): void {
+    for (const worker of this.workers) worker.terminate();
+    for (const [id, pending] of this.pending) {
+      this.pending.delete(id);
+      pending.reject(new Error("星球分区 Worker 已终止"));
+    }
+  }
+}
+
+export function canRunPlanetPhaseParallel(state: Pick<GameState, "paused" | "timeWarp" | "entities" | "research" | "constructionAutomation" | "endgame">): boolean {
+  return !state.paused && !state.timeWarp.enabled &&
+    !(state.constructionAutomation.enabled && state.entities.some((entity) => entity.buildingId === "construction_center")) &&
+    !(Boolean(state.research.selectedTechId || state.endgame.activeInfiniteResearchId) && state.entities.some((entity) => entity.recipeId === "matrix_research")) &&
+    !state.entities.some((entity) => entity.recipeId === "solar_sail_launch" || entity.recipeId === "carrier_rocket_launch");
 }

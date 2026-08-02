@@ -265,6 +265,7 @@ import { CLOUD_AUTO_SYNC_INTERVAL_MS, CloudApiError, compareCloudSave, fetchClou
 import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CanvasRegion, CanvasViewport, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad, StationSlotTemplate } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 import { applySimulationStateDelta, readExperimentalSimulationDeltaMode } from "./game/simulationDelta";
+import { readMulticoreSimulationOptions } from "./game/multicoreSimulation";
 import { getOnboardingFocusTarget, getOnboardingStep, recordBasicOnboardingEvent, type OnboardingActionId } from "./game/onboarding";
 import { useCoarsePointer } from "./hooks/useCoarsePointer";
 import { useCompactLayout } from "./hooks/useCompactLayout";
@@ -774,6 +775,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const simulationSubmissionRef = useRef<{ id: number; state: GameState; simulationSeconds: number; wallSeconds: number; registryFingerprint: string; submittedAt: number; baseStateRevision: number | null } | null>(null);
   const simulationStateRevisionRef = useRef(0);
   const experimentalSimulationDeltaRef = useRef(readExperimentalSimulationDeltaMode());
+  const multicoreSimulationOptionsRef = useRef(readMulticoreSimulationOptions());
   const lastSimulationResultRef = useRef<GameState | null>(null);
   const simulationPendingSecondsRef = useRef(game.timeWarp.pendingSimulationSeconds);
   const simulationPendingWallSecondsRef = useRef(game.timeWarp.pendingWallSeconds);
@@ -1539,6 +1541,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           profile: performanceMonitor.isActive(),
           registryFingerprint: registrySnapshot.fingerprint,
           protocol: experimentalSimulationDeltaRef.current ? "delta" : "full",
+          multicore: multicoreSimulationOptionsRef.current,
           ...(experimentalSimulationDeltaRef.current ? { stateRevision: simulationStateRevisionRef.current } : {}),
           ...(simulationWorkerRegistryFingerprintRef.current !== registrySnapshot.fingerprint ? { registry: registrySnapshot } : {}),
         };

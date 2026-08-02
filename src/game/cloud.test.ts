@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CLOUD_SYNC_STORAGE_KEY,
   compareCloudSave,
+  compareCloudSaveSummary,
   fetchCloudPublicStatus,
   getCloudSyncMarker,
   markCloudSaveSynchronized,
@@ -72,6 +73,15 @@ describe("cloud save synchronization markers", () => {
     expect(compareCloudSave("user_a", local, cloud).state).toBe("synced");
     expect(compareCloudSave("user_a", payload("state-b", 200), cloud).state).toBe("local-newer");
     expect(compareCloudSave("user_a", local, { ...cloud, revision: 2, checksum: "cloud-b" }).state).toBe("cloud-newer");
+  });
+
+  it("compares a Worker-provided summary without parsing the payload again", () => {
+    const local = payload("state-a", 100);
+    const cloud = metadata(1, "cloud-a", local);
+    const summary = summarizeCloudPayload(local)!;
+    expect(compareCloudSaveSummary("user_summary", summary, cloud).state).toBe("synced");
+    markCloudSaveSynchronized("user_summary", cloud);
+    expect(compareCloudSaveSummary("user_summary", { ...summary, elapsedSeconds: 101 }, cloud).state).toBe("synced");
   });
 
   it("requires an explicit choice when local and cloud both changed", () => {

@@ -39,6 +39,7 @@ import { QuantityValue } from "./QuantityValue";
 import {
   CloudApiError,
   compareCloudSave,
+  compareCloudSaveSummary,
   downloadCloudSave,
   loginCloudAccount,
   logoutCloudAccount,
@@ -49,6 +50,7 @@ import {
   resumeCloudSession,
   summarizeCloudPayload,
   uploadCloudSave,
+  uploadCloudSaveWithOptions,
   verifyCloudEmail,
   type CloudSaveMetadata,
   type CloudSaveSlot,
@@ -281,6 +283,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [cloudDisplayName, setCloudDisplayName] = useState(registrationDraft.displayName);
   const [cloudConflict, setCloudConflict] = useState<{ slot: CloudSaveSlot; localPayload: string; remote: CloudSaveMetadata } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cloudUploadActive, setCloudUploadActive] = useState(false);
   const [offlineProgress, setOfflineProgress] = useState<OfflineLoadProgress | null>(null);
   const [message, setMessage] = useState<MenuMessage>(null);
   const [importInspection, setImportInspection] = useState<SaveInspection | null>(null);
@@ -289,6 +292,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & { slotId: SaveSlotId }) | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const offlineAbortRef = useRef<AbortController | null>(null);
+  const cloudUploadAbortRef = useRef<AbortController | null>(null);
   const cloudAuthAllowed = isSecureCloudClient();
   const cloudMailAvailable = cloudSession.mailAvailable;
   const brandIconUrl = `${import.meta.env.BASE_URL}icon.svg`;
@@ -384,6 +388,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
 
   useEffect(() => () => {
     offlineAbortRef.current?.abort();
+    cloudUploadAbortRef.current?.abort();
   }, []);
 
   const updateMenuSettings = (changes: Partial<GameSettings>) => {
@@ -636,36 +641,77 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     if (cloudSession.status !== "authenticated" || !cloudSession.user || !continueSave) return;
     const userId = cloudSession.user.id;
     let attemptedPayload: string | null = null;
+    const controller = new AbortController();
+    cloudUploadAbortRef.current = controller;
+    setCloudUploadActive(true);
     setBusy(true);
-    setMessage(null);
+    setMessage({ tone: "ready", text: "准备上传" });
     try {
+      // Let React paint the stage before any module loading or Worker message
+      // transfers begin. This is important for multi-megabyte local saves.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
       const storage = await loadStorageModule();
-      const loaded = storage.loadGame();
-      const state = { ...loaded.state, settings: mergeMenuRuntimeSettings(loaded.state.settings, settings) };
-      const localSaveResult = await storage.saveGameVerified(state);
+      const { prepareCloudUploadInWorker } = await importWithRecovery(() => import("../game/offlineSimulation"), "云存档后台模块");
+      setMessage({ tone: "ready", text: "离线结算" });
+      const prepared = await prepareCloudUploadInWorker(continueSave.raw, {
+        signal: controller.signal,
+        now: Date.now(),
+        menuSettings: settings,
+        returningRewardClaimed: storage.hasReturningRewardClaim(continueSave.summary.savedAt),
+        onProgress: (progress) => {
+          if (progress.totalSeconds > 0) {
+            setMessage({ tone: "ready", text: `离线结算 ${Math.round(progress.progress * 100)}%` });
+          }
+        },
+      });
+      setMessage({ tone: "ready", text: "生成校验" });
+      const localSaveResult = await storage.saveVerifiedPayload(prepared.payload, { verified: true, deferBackup: true });
       if (!localSaveResult.success) throw new Error(localSaveResult.message);
-      const localPayload = storage.exportGame(state);
-      attemptedPayload = localPayload;
-      const comparison = compareCloudSave(userId, localPayload, cloudSession.cloudSave);
+      if (prepared.returningReward.length > 0) storage.markReturningRewardClaimed(continueSave.summary.savedAt);
+      attemptedPayload = prepared.payload;
+      const comparison = compareCloudSaveSummary(userId, prepared.summary, cloudSession.cloudSave);
       if (cloudSession.cloudSave && ["cloud-newer", "conflict", "unbound"].includes(comparison.state)) {
-        setCloudConflict({ slot: "main", localPayload, remote: cloudSession.cloudSave });
+        setCloudConflict({ slot: "main", localPayload: prepared.payload, remote: cloudSession.cloudSave });
         setMessage({ tone: "warning", text: "检测到本地与云端进度分叉，请先选择保留版本" });
         return;
       }
-      const cloudSave = await uploadCloudSave(localPayload, cloudSession.cloudSave?.revision ?? 0);
-      markCloudSaveSynchronized(userId, cloudSave, localPayload);
+      setMessage({ tone: "ready", text: "压缩请求" });
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      setMessage({ tone: "ready", text: "上传云端" });
+      const cloudSave = await uploadCloudSaveWithOptions(prepared.payload, cloudSession.cloudSave?.revision ?? 0, "main", { verified: true, signal: controller.signal });
+      markCloudSaveSynchronized(userId, cloudSave);
       trackAnalyticsEvent("cloud_upload");
       updateCloudSlot("main", cloudSave);
-      refreshLocalSaves();
+      setContinueSave((current) => current ? {
+        ...current,
+        raw: prepared.payload,
+        summary: {
+          savedAt: prepared.summary.savedAt,
+          elapsedSeconds: prepared.summary.elapsedSeconds,
+          completedTechCount: prepared.summary.completedTechCount,
+          structurePoints: prepared.summary.structurePoints,
+          activePlanetId: prepared.summary.activePlanetId as MenuContinueSave["summary"]["activePlanetId"],
+        },
+      } : current);
       setMessage({ tone: "ready", text: `云存档已更新到修订 ${cloudSave.revision}` });
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setMessage({ tone: "warning", text: "云存档上传已取消，本地有效存档未删除" });
+        return;
+      }
       if (error instanceof CloudApiError && error.status === 409 && error.payload.cloudSave) {
         if (attemptedPayload) setCloudConflict({ slot: "main", localPayload: attemptedPayload, remote: error.payload.cloudSave as CloudSaveMetadata });
       }
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "云存档上传失败" });
     } finally {
+      cloudUploadAbortRef.current = null;
+      setCloudUploadActive(false);
       setBusy(false);
     }
+  };
+
+  const cancelCloudUpload = () => {
+    cloudUploadAbortRef.current?.abort();
   };
 
   const updateCloudSlot = (slot: CloudSaveSlot, cloudSave: CloudSaveMetadata) => {
@@ -982,7 +1028,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             </form> : null}
             {cloudSession.status === "authenticated" && cloudSession.user ? <div className="start-menu-cloud-account">
               <section className="start-menu-cloud-user"><i>{cloudSession.user.displayName.slice(0, 1).toUpperCase()}</i><span><strong>{cloudSession.user.displayName}</strong><small>@{cloudSession.user.username}{cloudSession.user.email ? ` · ${cloudSession.user.email}` : ""}</small></span><button type="button" title="退出云账户" aria-label="退出云账户" onClick={() => { setBusy(true); void logoutCloudAccount().then(() => setCloudSession((current) => ({ status: "anonymous", user: null, cloudSave: null, mailAvailable: current.mailAvailable, message: null }))).finally(() => setBusy(false)); }}><LogOut size={15} /></button></section>
-              <section className="start-menu-cloud-save"><header><Cloud size={18} /><span><small>当前主存档</small><strong>{cloudSession.cloudSave ? `修订 ${cloudSession.cloudSave.revision}` : "尚未上传"}</strong></span><em>{cloudSession.cloudSave ? formatSavedAt(cloudSession.cloudSave.updatedAt) : "--"}</em></header>{cloudComparison ? <p className={`cloud-sync-state cloud-sync-state--${cloudComparison.state}`}>{cloudSyncLabel(cloudComparison.state)}</p> : null}<dl className="cloud-sync-summary"><div><dt>本地进度</dt><dd>{comparisonPayload ? `${formatRuntime(cloudComparison?.local?.elapsedSeconds ?? 0)} · 科技 ${cloudComparison?.local?.completedTechCount ?? 0}` : "无本地存档"}</dd></div><div><dt>云端进度</dt><dd>{cloudSession.cloudSave?.summary ? `${formatRuntime(cloudSession.cloudSave.summary.elapsedSeconds)} · 科技 ${cloudSession.cloudSave.summary.completedTechCount}` : cloudSession.cloudSave ? "旧版摘要待更新" : "无云存档"}</dd></div></dl><div><button type="button" disabled={busy || !continueSave} onClick={() => void uploadLocalSave()}><Upload size={14} />上传本地存档</button><button className="primary" type="button" disabled={busy || !cloudSession.cloudSave} onClick={() => void downloadAndEnterCloudSave()}><Download size={14} />下载并进入</button></div></section>
+              <section className="start-menu-cloud-save"><header><Cloud size={18} /><span><small>当前主存档</small><strong>{cloudSession.cloudSave ? `修订 ${cloudSession.cloudSave.revision}` : "尚未上传"}</strong></span><em>{cloudSession.cloudSave ? formatSavedAt(cloudSession.cloudSave.updatedAt) : "--"}</em></header>{cloudComparison ? <p className={`cloud-sync-state cloud-sync-state--${cloudComparison.state}`}>{cloudSyncLabel(cloudComparison.state)}</p> : null}<dl className="cloud-sync-summary"><div><dt>本地进度</dt><dd>{comparisonPayload ? `${formatRuntime(cloudComparison?.local?.elapsedSeconds ?? 0)} · 科技 ${cloudComparison?.local?.completedTechCount ?? 0}` : "无本地存档"}</dd></div><div><dt>云端进度</dt><dd>{cloudSession.cloudSave?.summary ? `${formatRuntime(cloudSession.cloudSave.summary.elapsedSeconds)} · 科技 ${cloudSession.cloudSave.summary.completedTechCount}` : cloudSession.cloudSave ? "旧版摘要待更新" : "无云存档"}</dd></div></dl><div><button type="button" disabled={busy || !continueSave} onClick={() => void uploadLocalSave()}><Upload size={14} />上传本地存档</button>{cloudUploadActive ? <button type="button" onClick={cancelCloudUpload}><CloudOff size={14} />取消上传</button> : null}<button className="primary" type="button" disabled={busy || !cloudSession.cloudSave} onClick={() => void downloadAndEnterCloudSave()}><Download size={14} />下载并进入</button></div></section>
               <CloudSaveSlotsPanel cloudSaves={cloudSession.cloudSaves} localSlots={slots} busySlot={busy ? "main" : null} uploadDisabled={false} onUpload={(slot) => void uploadManualCloudSlot(slot)} onDownload={(slot) => void downloadManualCloudSlot(slot)} />
               <CloudAccountSecurity user={cloudSession.user} mailAvailable={cloudMailAvailable} onUserChange={(user) => setCloudSession((current) => ({ ...current, user }))} onLoggedOut={() => setCloudSession((current) => ({ status: "anonymous", user: null, cloudSave: null, mailAvailable: current.mailAvailable, message: null }))} />
             </div> : null}

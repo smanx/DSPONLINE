@@ -270,11 +270,17 @@ function legacyChecksumFor(formatVersion: number, state: unknown): string {
   return computeSaveStateChecksum(formatVersion, projected);
 }
 
-function envelopeFor(state: GameState, savedAt = Date.now(), kind: SaveEnvelope["kind"] = "primary", reason?: string): SaveEnvelope {
+function envelopeFor(
+  state: GameState,
+  savedAt = Date.now(),
+  kind: SaveEnvelope["kind"] = "primary",
+  reason?: string,
+  contentPackRegistry: ContentPackRegistry = loadContentPackRegistry(),
+): SaveEnvelope {
   // Detach the exact serializable snapshot before hashing. The old shallow
   // envelope could retain live nested references between checksum generation
   // and a later stringify performed by a caller.
-  const persistent = JSON.parse(JSON.stringify(persistentState(state))) as GameState;
+  const persistent = JSON.parse(JSON.stringify(persistentState(state, contentPackRegistry))) as GameState;
   persistent.achievements.unlockedIds = persistent.achievements.unlockedIds.filter(isAchievementId);
   const envelope: SaveEnvelope = {
     formatVersion: SAVE_FORMAT_VERSION,
@@ -287,8 +293,14 @@ function envelopeFor(state: GameState, savedAt = Date.now(), kind: SaveEnvelope[
   return envelope;
 }
 
-function serializeEnvelope(state: GameState, savedAt = Date.now(), kind: SaveEnvelope["kind"] = "primary", reason?: string): string {
-  const raw = JSON.stringify(envelopeFor(state, savedAt, kind, reason));
+export function serializeEnvelope(
+  state: GameState,
+  savedAt = Date.now(),
+  kind: SaveEnvelope["kind"] = "primary",
+  reason?: string,
+  contentPackRegistry: ContentPackRegistry = loadContentPackRegistry(),
+): string {
+  const raw = JSON.stringify(envelopeFor(state, savedAt, kind, reason, contentPackRegistry));
   if (inspectSaveEnvelopeChecksum(raw).status !== "valid") {
     throw new Error("生成的存档未通过完整性自检");
   }
@@ -2009,7 +2021,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
   return syncCampaignProgress(migrated, { grantRewards: saved.version >= 18 });
 }
 
-function persistentState(state: GameState): GameState {
+function persistentState(state: GameState, contentPackRegistry: ContentPackRegistry = loadContentPackRegistry()): GameState {
   const { runtimeFlow: _runtimeFlow, ...quantumLogisticsNetwork } = state.quantumLogisticsNetwork;
   const persistentEntities = state.entities.map((entity) => {
     if (entity.buildingId === "interstellar_logistics_station") return entity;
@@ -2032,7 +2044,7 @@ function persistentState(state: GameState): GameState {
     // Production curves are runtime diagnostics. Keeping them in every local
     // recovery point multiplies save size without affecting factory progress.
     productionHistory: [],
-    contentPacks: getActiveContentPackReferences(loadContentPackRegistry()),
+    contentPacks: getActiveContentPackReferences(contentPackRegistry),
     entities: persistentEntities,
     blueprints: state.blueprints.map(sanitizeBlueprint),
     blueprintVersions: state.blueprintVersions.map((snapshot) => ({ ...snapshot, definition: sanitizeBlueprint(snapshot.definition) })),
@@ -2076,14 +2088,26 @@ function buildOfflineReport(before: GameState, after: GameState, seconds: number
   };
 }
 
-function applyReturningReward(state: GameState, savedAt: number, seconds: number): { state: GameState; reward: Array<{ itemId: ItemId; amount: number }> } {
-  if (seconds < RETURNING_REWARD_MIN_SECONDS) return { state, reward: [] };
-  const claimKey = `${RETURNING_REWARD_KEY_PREFIX}.${Math.floor(savedAt)}`;
-  try {
-    if (window.localStorage.getItem(claimKey)) return { state, reward: [] };
-  } catch {
-    return { state, reward: [] };
-  }
+export function returningRewardClaimKey(savedAt: number): string {
+  return `${RETURNING_REWARD_KEY_PREFIX}.${Math.floor(savedAt)}`;
+}
+
+export function hasReturningRewardClaim(savedAt: number): boolean {
+  try { return Boolean(window.localStorage.getItem(returningRewardClaimKey(savedAt))); } catch { return false; }
+}
+
+export function markReturningRewardClaimed(savedAt: number): void {
+  try { window.localStorage.setItem(returningRewardClaimKey(savedAt), String(Date.now())); } catch { /* optional reward receipt */ }
+}
+
+/** Pure reward application used by both the foreground loader and upload Worker. */
+export function applyReturningRewardToState(
+  state: GameState,
+  savedAt: number,
+  seconds: number,
+  alreadyClaimed = false,
+): { state: GameState; reward: Array<{ itemId: ItemId; amount: number }> } {
+  if (seconds < RETURNING_REWARD_MIN_SECONDS || alreadyClaimed) return { state, reward: [] };
   const amount = Math.min(2_000, Math.max(240, Math.floor(seconds / 3600) * 4));
   const reward = (["iron_ore", "copper_ore", "stone", "coal"] as ItemId[]).map((itemId) => ({ itemId, amount }));
   const rawLimit = state.planetTrayItemLimits?.[state.activePlanetId];
@@ -2100,8 +2124,13 @@ function applyReturningReward(state: GameState, savedAt: number, seconds: number
     tray,
     planetTrays: { ...state.planetTrays, [state.activePlanetId]: { ...tray } },
   };
-  try { window.localStorage.setItem(claimKey, String(Date.now())); } catch { /* optional reward receipt */ }
   return { state: next, reward };
+}
+
+function applyReturningReward(state: GameState, savedAt: number, seconds: number): { state: GameState; reward: Array<{ itemId: ItemId; amount: number }> } {
+  const returning = applyReturningRewardToState(state, savedAt, seconds, hasReturningRewardClaim(savedAt));
+  if (returning.reward.length > 0) markReturningRewardClaimed(savedAt);
+  return returning;
 }
 
 /** Inspect an imported or locally stored envelope without advancing time. */
@@ -2492,6 +2521,67 @@ async function verifyPersistedEnvelope(key: string, expectedRaw: string): Promis
   if (stored !== expectedRaw) return false;
   const inspection = inspectSave(stored);
   return inspection.valid && inspection.checksum === "valid";
+}
+
+/**
+ * Commit a payload that was already migrated, simulated and checksum-verified
+ * in a Worker. This path deliberately does not parse old snapshots or create a
+ * recovery point while the user is waiting for a cloud upload. The exact raw
+ * value is still read back from IndexedDB before success is reported.
+ */
+export async function saveVerifiedPayload(raw: string, options: { verified?: boolean; deferBackup?: boolean } = {}): Promise<SaveGameResult> {
+  if (!options.verified) {
+    const integrity = inspectSaveEnvelopeChecksum(raw);
+    if (integrity.status !== "valid") return failedSave("verification", "后台生成的存档完整性校验失败，请重试", utf8ByteLength(raw));
+  }
+  const startedAt = monotonicNow();
+  const bytes = utf8ByteLength(raw);
+  const previous = getLocalSaveValue(SAVE_KEY);
+  const capacity = await hasLocalSaveCapacity(SAVE_KEY, raw);
+  if (!capacity.ok) return failedSave("quota", "本地存储空间不足，当前进度尚未保存。请先管理快照或导出存档。", bytes);
+  try {
+    setLocalSaveValue(SAVE_KEY, raw);
+    await flushLocalSaveWrites();
+    const stored = await readPersistedLocalSaveValue(SAVE_KEY);
+    if (stored !== raw) {
+      await recoverLocalSaveCache();
+      return failedSave("verification", "本地主存档写入校验失败，当前进度尚未保存。请立即导出存档。", bytes);
+    }
+    let backupSaved = false;
+    if (previous !== null && !options.deferBackup) {
+      try {
+        setLocalSaveValue(SAVE_BACKUP_KEY, previous);
+        await flushLocalSaveWrites();
+        backupSaved = true;
+      } catch {
+        // The verified primary remains authoritative if its optional backup fails.
+      }
+    }
+    clearPrimarySaveEmergencyMirror(raw);
+    return {
+      success: true,
+      message: "主存档已保存",
+      savedAt: Date.now(),
+      bytes,
+      backupSaved,
+      timings: {
+        totalMs: Math.max(0, monotonicNow() - startedAt),
+        serializeMs: 0,
+        snapshotScanMs: 0,
+        capacityMs: 0,
+        primaryWriteMs: 0,
+        backupMs: 0,
+        automaticSnapshotMs: 0,
+      },
+    };
+  } catch (error) {
+    await recoverLocalSaveCache();
+    return failedSave(
+      isQuotaExceededError(error) ? "quota" : "unavailable",
+      isQuotaExceededError(error) ? "本地存储空间不足，当前进度尚未保存。请立即导出存档。" : "本地主存档写入失败，请立即导出当前进度",
+      bytes,
+    );
+  }
 }
 
 async function recoverLocalSaveCache(): Promise<void> {
