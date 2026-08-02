@@ -1,25 +1,36 @@
 ---
 name: develop-dspidle
-description: Maintain and extend the DSPidle2 / DSP极简网络 repository across gameplay content, deterministic simulation, React Flow factory UI, desktop and mobile interaction, save migration, content packs, cloud accounts and rankings, PWA/Electron packaging, testing, documentation, and the Hong Kong/Shanghai deployments. Use whenever Codex plans, implements, reviews, diagnoses, tests, releases, or documents a change in this project.
+description: Maintain and extend the DSPidle2 / DSP极简网络 repository across feedback triage, deterministic gameplay and UI development, save migration, cloud accounts, rankings, PWA/Electron packaging, testing, documentation, and Hong Kong/Shanghai release operations. Use when Codex analyzes player reports, implements or reviews a change, builds artifacts, deploys a verified release, updates the download page, or performs authorized server maintenance.
 ---
 
 # Develop DSPidle
 
 Use the repository baseline as the source of truth. Preserve player data and deterministic behavior while extending the existing architecture.
 
+## Conversation Roles
+
+Run each dedicated conversation in exactly one role. Declare it at the start as `Role: feedback`, `Role: develop`, or `Role: release`; do not silently switch roles mid-task. The complete handoff fields and role checklists are in [references/agent-roles.md](references/agent-roles.md).
+
+- **Feedback / analysis**: collect player reports and attachments, reproduce or inspect them read-only, classify priority and risk, and produce an implementation-ready handoff. Do not edit source code, build artifacts, or production systems.
+- **Development**: consume an approved handoff, modify source/tests/canonical docs, run the proportional validation matrix, and produce a traceable commit and build handoff. Do not SSH to production, change live symlinks, or update the public download page.
+- **Release / operations**: consume a development handoff and immutable artifacts, verify checksums and release gates, back up production, atomically deploy the requested node(s), update the download page when authorized, and report rollback targets and smoke checks. Do not change gameplay code or repair a failed release by editing files on the server.
+
+The release role requires an explicit target and release instruction. A development result is not permission to deploy. If a required artifact, signature, backup, health check, or rollback pointer is missing, stop and report the blocker instead of improvising.
+
 ## Start Every Task
 
-1. Locate the repository root containing `package.json`, `src/`, `server/`, and `deploy/`.
-2. Read `docs/PROJECT_STATUS.md` before making claims about current functionality or deployment state.
-3. Read the task-specific canonical document:
+1. Confirm the conversation role and read the matching handoff in `references/agent-roles.md`.
+2. Locate the repository root containing `package.json`, `src/`, `server/`, and `deploy/`.
+3. Read `docs/PROJECT_STATUS.md` before making claims about current functionality or deployment state.
+4. Read the task-specific canonical document:
    - Architecture or cross-module work: `docs/ARCHITECTURE.md`
    - Gameplay, recipes, technology, progression, or interaction rules: `docs/GAMEPLAY_SYSTEMS.md`
    - Server or deployment work: `docs/DEPLOYMENT_OPERATIONS.md`
    - Tests, build, packaging, or release work: `docs/TESTING_RELEASE.md`
    - Planning or prioritization: `docs/ROADMAP.md`
-4. Read [references/project-map.md](references/project-map.md) to route the task to the smallest ownership area.
-5. Run `git status --short`. Treat all existing tracked and untracked changes as user work. Do not reset, clean, discard, or overwrite them.
-6. Inspect the relevant implementation and tests before proposing or applying a change. Reconcile documentation with code when they disagree.
+5. Read [references/project-map.md](references/project-map.md) to route the task to the smallest ownership area.
+6. Run `git status --short`. Treat all existing tracked and untracked changes as user work. Do not reset, clean, discard, or overwrite them.
+7. Inspect the relevant implementation and tests before proposing or applying a change. Reconcile documentation with code when they disagree.
 
 ## Classify Risk
 
@@ -58,6 +69,7 @@ For high-risk changes, broaden tests and explicitly verify backwards compatibili
 - Keep the Hong Kong production node and Shanghai legacy node independent. Do not redirect or proxy the Shanghai node to Hong Kong.
 - Keep cloud credentials disabled on non-local HTTP pages. Do not weaken `src/game/cloud.ts` to support insecure login.
 - Do not mutate production systems unless the user explicitly asks for deployment or operations work.
+- Keep role ownership separate: analysis may write only explicitly requested analysis/handoff artifacts; development owns source and tests; release owns release directories, deployment state, and release records. Never overwrite another role's uncommitted work.
 
 Read [references/deployment.md](references/deployment.md) before any server action.
 
@@ -86,6 +98,8 @@ Validate authentication, body size, origin, rate limits, conflict behavior, pers
 ### Release Or Deployment
 
 Follow the backup, release-directory, atomic switch, health-check, smoke-test, and rollback workflow in the operations docs. Verify Hong Kong and Shanghai separately. Record Git SHA, app version, build ID, and deployed artifact hashes.
+
+The release role must deploy from a clean, traceable development commit and an immutable manifest. Build or test in an isolated directory before touching production; never copy a working tree, player save, SQLite database, secret, or private key into a release. Update `docs/PROJECT_STATUS.md` and `docs/releases/<version>.md` only after the live checks actually pass.
 
 ## Validate Proportionally
 

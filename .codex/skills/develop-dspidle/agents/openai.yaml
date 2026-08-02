@@ -1,4 +1,4 @@
 interface:
   display_name: "DSPidle Project Development"
   short_description: "Maintain DSPidle gameplay, saves, cloud, and releases"
-  default_prompt: "Use $develop-dspidle to inspect the project baseline before implementing and validating a DSPidle2 change."
+  default_prompt: "Use $develop-dspidle, declare feedback, develop, or release role, and follow the matching handoff and validation gates for this DSPidle2 task."
