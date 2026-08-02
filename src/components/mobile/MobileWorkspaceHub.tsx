@@ -46,6 +46,7 @@ export function MobileWorkspaceHub({ hasConstructionCenter, onOpenWorkspace, onO
     ];
     const expansion: HubAction[] = [
       { id: "star-map", label: "星图与星际工业", detail: "探索、殖民、航线与行星分工", icon: <Telescope size={21} />, run: () => onOpenWorkspace("star-map") },
+      { id: "logistics", label: "物流管理", detail: "跨星球编辑物流塔、轨道采集器与量子模式", icon: <Route size={21} />, run: () => onOpenOperations("logistics") },
       { id: "dyson", label: "戴森规划", detail: "太阳帆、轨道、壳层和发射", icon: <Orbit size={21} />, run: () => onOpenWorkspace("dyson") },
       { id: "galaxy", label: "银河网络", detail: "排行榜、云存档与终局档案", icon: <Globe2 size={21} />, run: () => onOpenGalaxy("ranking") },
     ];

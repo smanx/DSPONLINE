@@ -33,6 +33,7 @@ import {
   canQueueTechnology,
   canSelectTechnology,
   connectBelt,
+  connectBeltWithResult,
   craftConstruction,
   craftConstructionWithUpstream,
   createBlueprint,
@@ -51,6 +52,7 @@ import {
   fundConstructionQueueEntry,
   colonizePlanet,
   getEntityOperatingStatus,
+  getEntityRemovalPreview,
   getEntityPowerFactor,
   getAcceptedInputs,
   getBeltCapacity,
@@ -105,6 +107,7 @@ import {
   getStationBusyVehicleCount,
   getStationSlotCapacity,
   getStationSlots,
+  getBuildingStackAdditionCheck,
   getStationWarperRefillSnapshot,
   getTechnologyConstructionRewards,
   handcraftRecipe,
@@ -129,6 +132,8 @@ import {
   queueHandcraftRecipe,
   cancelHandcraftQueueEntry,
   removeEntity,
+  removeEntities,
+  removeBelt,
   removeBlueprint,
   removeSprayCoater,
   removeBeltNetwork,
@@ -181,6 +186,10 @@ import {
   setEntitiesProliferatorConfiguration,
   setStationMode,
   setStationFleetTarget,
+  setRemoteStationFleetTarget,
+  setRemoteStationSlotItem,
+  setRemoteBuildingStackTarget,
+  adjustRemoteStationWarpers,
   setStationHubConfiguration,
   setStationMinimumLoad,
   setStationSlotItem,
@@ -199,6 +208,7 @@ import {
   upgradeEntities,
   upgradeEntity,
   upgradeSorter,
+  MAX_BUILDING_STACK_COUNT,
 } from "./engine";
 import { getGalacticExportTarget } from "./endgame";
 import { PLANET_LIST, STAR_SYSTEM_LIST, TECHNOLOGY_LIST, getBuilding } from "./content";
@@ -5229,5 +5239,155 @@ describe("factory simulation", () => {
     const shortage = { ...stocked, construction: { ...stocked.construction, arc_smelter: 999_999 } };
     expect(placeBlueprint(shortage, blueprint.id, { x: 120, y: 120 })).toBe(shortage);
     expect(shortage.construction.arc_smelter).toBe(999_999);
+  });
+
+  it("caps every new building stack at one hundred million while preserving reducible historical stacks", () => {
+    let state = createInitialState();
+    state.construction.storage_mk1 = MAX_BUILDING_STACK_COUNT;
+    state = placeBuilding(state, "storage_mk1", { x: 120, y: 80 }, MAX_BUILDING_STACK_COUNT);
+    const storage = state.entities.find((entity) => entity.buildingId === "storage_mk1")!;
+    expect(storage.machineCount).toBe(MAX_BUILDING_STACK_COUNT);
+    expect(state.construction.storage_mk1).toBe(0);
+
+    state.construction.storage_mk1 = 1;
+    expect(addUnitToEntityGroup(state, storage.id)).toBe(state);
+    expect(getBuildingStackAdditionCheck(MAX_BUILDING_STACK_COUNT, 1, "储物仓")).toMatchObject({ ok: false, code: "stack-limit" });
+
+    storage.machineCount = MAX_BUILDING_STACK_COUNT + 1;
+    const historical = state;
+    expect(addUnitToEntityGroup(historical, storage.id)).toBe(historical);
+    const reduced = removeEntity(historical, storage.id, 1);
+    expect(reduced.entities.find((entity) => entity.id === storage.id)?.machineCount).toBe(MAX_BUILDING_STACK_COUNT);
+    expect(reduced.construction.storage_mk1).toBe(2);
+
+    const unsafeRefund = {
+      ...reduced,
+      construction: { ...reduced.construction, storage_mk1: Number.MAX_SAFE_INTEGER },
+    };
+    const beforeEntity = unsafeRefund.entities.find((entity) => entity.id === storage.id);
+    expect(removeEntity(unsafeRefund, storage.id, 1)).toBe(unsafeRefund);
+    expect(unsafeRefund.entities.find((entity) => entity.id === storage.id)).toBe(beforeEntity);
+    expect(getEntityRemovalPreview(unsafeRefund, [storage.id]).refundSafe).toBe(false);
+
+    const invalidBatch = { ...reduced, construction: { ...reduced.construction, storage_mk1: MAX_BUILDING_STACK_COUNT + 1 } };
+    expect(placeBuilding(invalidBatch, "storage_mk1", { x: 420, y: 80 }, MAX_BUILDING_STACK_COUNT + 1)).toBe(invalidBatch);
+    expect(invalidBatch.construction.storage_mk1).toBe(MAX_BUILDING_STACK_COUNT + 1);
+  });
+
+  it("returns the exact affected belt id for new and parallel connections", () => {
+    let state = createInitialState();
+    state.construction.storage_mk1 = 1;
+    state.construction.material_delivery_hub = 1;
+    state.construction.conveyor_belt_mk1 = 4;
+    state.construction.conveyor_belt_mk2 = 1;
+    state = placeBuilding(state, "storage_mk1", { x: 0, y: 0 });
+    state = placeBuilding(state, "material_delivery_hub", { x: 320, y: 0 });
+    const source = state.entities.find((entity) => entity.buildingId === "storage_mk1")!;
+    const target = state.entities.find((entity) => entity.buildingId === "material_delivery_hub")!;
+    source.storedItemId = "iron_ingot";
+    source.outputs.iron_ingot = 100;
+
+    const first = connectBeltWithResult(state, source.id, target.id, "iron_ingot", 1, 0);
+    expect(first).toMatchObject({ created: true, beltId: expect.any(String) });
+    const parallel = connectBeltWithResult(first.state, source.id, target.id, "iron_ingot", 1, 0);
+    expect(parallel.beltId).toBe(first.beltId);
+    expect(parallel.created).toBe(false);
+    expect(parallel.state.belts.find((belt) => belt.id === first.beltId)?.lanes).toBe(2);
+
+    const otherPort = connectBeltWithResult(parallel.state, source.id, target.id, "iron_ingot", 1, 1);
+    expect(otherPort.created).toBe(true);
+    expect(otherPort.beltId).not.toBe(first.beltId);
+    expect(otherPort.state.belts.find((belt) => belt.id === otherPort.beltId)).toMatchObject({
+      source: source.id,
+      target: target.id,
+      itemId: "iron_ingot",
+      targetPortIndex: 1,
+      tier: 1,
+    });
+    const wrongTier = connectBeltWithResult(otherPort.state, source.id, target.id, "iron_ingot", 2, 1);
+    expect(wrongTier).toMatchObject({ state: otherPort.state, beltId: null, created: false });
+  });
+
+  it("edits a remote station without switching planets and preserves refunds and fleet inventory", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics", "space_warp");
+    state.exploration.colonizedPlanetIds.push("ashen");
+    state.construction.interstellar_logistics_station = 3;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 200, y: 0 });
+    const stationId = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!.id;
+    state = setStationSlotItem(state, stationId, 0, "iron_ingot");
+    const station = state.entities.find((entity) => entity.id === stationId)!;
+    station.inputs.iron_ingot = 7;
+    station.outputs.iron_ingot = 11;
+    state.portableFleet.logistics_drone = 5;
+    state.tray.space_warper = 12;
+    state = setActivePlanet(state, "ashen");
+
+    const changed = setRemoteStationSlotItem(state, stationId, 0, "copper_ingot");
+    expect(changed.activePlanetId).toBe("ashen");
+    expect(getStationSlots(changed.entities.find((entity) => entity.id === stationId)!)[0].itemId).toBe("copper_ingot");
+    expect(changed.planetTrays.home.iron_ingot).toBe(18);
+    expect(changed.tray.iron_ingot ?? 0).toBe(0);
+
+    let configured = setStationSlotMode(changed, stationId, 0, "local", "demand");
+    configured = setStationSlotMode(configured, stationId, 0, "remote", "demand");
+    configured = setStationSlotMinimumLoad(configured, stationId, 0, 0.5);
+    configured = setStationSlotLimits(configured, stationId, 0, 10, 200);
+    configured = setStationSlotPriority(configured, stationId, 0, 2);
+    configured = setStationWarpEnabled(configured, stationId, false);
+    configured = setStationWarperAutoRefill(configured, stationId, true);
+    configured = setStationWarperTarget(configured, stationId, 25);
+    const configuredStation = configured.entities.find((entity) => entity.id === stationId)!;
+    expect(configured.activePlanetId).toBe("ashen");
+    expect(getStationSlots(configuredStation)[0]).toMatchObject({
+      itemId: "copper_ingot",
+      localMode: "demand",
+      remoteMode: "demand",
+      minimumLoad: 0.5,
+      minStock: 10,
+      maxStock: 200,
+      priority: 2,
+    });
+    expect(configuredStation).toMatchObject({ stationWarpEnabled: false, stationWarperAutoRefill: true, stationWarperTarget: 25 });
+
+    const fleet = setRemoteStationFleetTarget(configured, stationId, "drone", 3);
+    expect(fleet.state.activePlanetId).toBe("ashen");
+    expect(fleet.final).toBe(3);
+    expect(fleet.state.portableFleet.logistics_drone).toBe(2);
+    const warped = adjustRemoteStationWarpers(fleet.state, stationId, 5);
+    expect(warped.activePlanetId).toBe("ashen");
+    expect(warped.entities.find((entity) => entity.id === stationId)?.stationWarpers).toBe(5);
+    expect(warped.planetTrays.home.space_warper).toBe(7);
+
+    const stacked = setRemoteBuildingStackTarget(warped, stationId, 2);
+    expect(stacked.activePlanetId).toBe("ashen");
+    expect(stacked.entities.find((entity) => entity.id === stationId)?.machineCount).toBe(2);
+    expect(stacked.construction.interstellar_logistics_station).toBe(1);
+  });
+
+  it("previews and removes selected entities through the shared removal commands", () => {
+    let state = createInitialState();
+    state.construction.storage_mk1 = 2;
+    state.construction.conveyor_belt_mk1 = 1;
+    state = placeBuilding(state, "storage_mk1", { x: 0, y: 0 });
+    state = placeBuilding(state, "storage_mk1", { x: 300, y: 0 });
+    const [source, target] = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+    source.storedItemId = "iron_ingot";
+    source.outputs.iron_ingot = 3;
+    target.storedItemId = "iron_ingot";
+    state = connectBelt(state, source.id, target.id, "iron_ingot");
+    const preview = getEntityRemovalPreview(state, [source.id, target.id]);
+    expect(preview).toMatchObject({ entityCount: 2, buildingCount: 2, relatedBeltCount: 1 });
+    expect(preview.returns).toEqual(expect.arrayContaining([
+      { constructionId: "storage_mk1", amount: 2 },
+      { constructionId: "conveyor_belt_mk1", amount: 1 },
+    ]));
+
+    const removed = removeEntities(state, [source.id, target.id]);
+    expect(removed.entities.some((entity) => entity.id === source.id || entity.id === target.id)).toBe(false);
+    expect(removed.belts).toHaveLength(0);
+    expect(removed.construction.storage_mk1).toBe(2);
+    expect(removed.construction.conveyor_belt_mk1).toBe(1);
+    expect(removeBelt(removed, "missing-belt")).toBe(removed);
   });
 });

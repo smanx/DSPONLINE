@@ -1397,6 +1397,39 @@ export const DEFAULT_PROLIFERATOR_BUFFER_LIMIT = 600;
 export const MAX_PROLIFERATOR_BUFFER_LIMIT = 100_000;
 export const MAX_CONSTRUCTION_AUTOMATION_TARGET = 100_000;
 
+export type BuildingStackAdditionCheck =
+  | { ok: true; amount: number; total: number }
+  | { ok: false; amount: number; total: number; code: "invalid-count" | "unsafe-total" | "stack-limit"; label: string };
+
+/**
+ * New construction is capped even when a grandfathered save already exceeds
+ * the current limit. Historical stacks may be reduced, but never extended.
+ */
+export function getBuildingStackAdditionCheck(
+  currentCount: number,
+  requestedCount: number,
+  subject = "建筑堆叠",
+): BuildingStackAdditionCheck {
+  if (!Number.isSafeInteger(requestedCount) || requestedCount < 1) {
+    return { ok: false, amount: 0, total: currentCount, code: "invalid-count", label: `${subject}新增数量必须是正安全整数` };
+  }
+  const amount = requestedCount;
+  if (!Number.isSafeInteger(currentCount) || currentCount < 0 || !Number.isSafeInteger(currentCount + amount)) {
+    return { ok: false, amount, total: currentCount, code: "unsafe-total", label: `${subject}数量超出安全整数范围，请先导出备份并联系存档救援` };
+  }
+  const total = currentCount + amount;
+  if (total > MAX_BUILDING_STACK_COUNT) {
+    return {
+      ok: false,
+      amount,
+      total,
+      code: "stack-limit",
+      label: `${subject}最多为 ${MAX_BUILDING_STACK_COUNT.toLocaleString("zh-CN")}；历史超限堆叠可以保留和回收，但不能继续增加`,
+    };
+  }
+  return { ok: true, amount, total };
+}
+
 export function normalizeBuildingBufferLimit(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_BUILDING_BUFFER_LIMIT;
   return Math.max(MIN_BUILDING_BUFFER_LIMIT, Math.min(MAX_BUILDING_BUFFER_LIMIT, Math.floor(value)));
@@ -6263,6 +6296,10 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
   const eligibleIds = getBlueprintEligibleEntityIds(state, entityIds);
   if (eligibleIds.length === 0) return state;
   const selected = state.entities.filter((entity) => eligibleIds.includes(entity.id));
+  if (selected.some((entity) => {
+    const count = entity.kind === "vein" ? entity.minerCount : entity.machineCount;
+    return !Number.isSafeInteger(count) || count < 1 || count > MAX_BUILDING_STACK_COUNT;
+  })) return state;
   const originX = Math.min(...selected.map((entity) => entity.position.x));
   const originY = Math.min(...selected.map((entity) => entity.position.y));
   const keyById = new Map(selected.map((entity, index) => [entity.id, `node_${index + 1}`]));
@@ -6556,7 +6593,7 @@ function createBlueprintDeploymentPlan(
   const allKeys = [...blueprint.entities.map((entity) => entity.key), ...(blueprint.resourceAnchors ?? []).map((anchor) => anchor.key)];
   if (new Set(allKeys).size !== allKeys.length || blueprint.entities.some((entity) =>
     !Number.isSafeInteger(entity.machineCount) || entity.machineCount < 1 || entity.machineCount > MAX_BUILDING_STACK_COUNT) || (blueprint.resourceAnchors ?? []).some((anchor) =>
-    !Number.isSafeInteger(anchor.minerCount) || anchor.minerCount < 1) || blueprint.belts.some((belt) =>
+    !Number.isSafeInteger(anchor.minerCount) || anchor.minerCount < 1 || anchor.minerCount > MAX_BUILDING_STACK_COUNT) || blueprint.belts.some((belt) =>
     !Number.isSafeInteger(belt.lanes) || belt.lanes < 1)) return null;
   const matches = resolveBlueprintResourceAnchors(state, blueprint, position, planetId, rotation, mirror);
   const activeKeys = new Set([
@@ -7251,7 +7288,10 @@ export function canPlaceBuildingOnPlanet(buildingId: BuildingId, planetId: Plane
 export function placeBuilding(state: GameState, buildingId: BuildingId, position: { x: number; y: number }, count = 1): GameState {
   const building = getBuilding(buildingId);
   const singleEntityMegastructure = buildingId === "micro_black_hole_connector" || buildingId === "time_warp_device";
-  const amount = singleEntityMegastructure ? 1 : Math.max(1, Math.floor(count));
+  const requested = singleEntityMegastructure ? 1 : count;
+  const stackCheck = getBuildingStackAdditionCheck(0, requested, building.name);
+  if (!stackCheck.ok) return state;
+  const amount = stackCheck.amount;
   if (buildingId === "space_station_construction_launcher" && state.entities.some((entity) => entity.planetId === state.activePlanetId && entity.buildingId === buildingId)) return state;
   if (building.kind === "miner" || !canPlaceBuildingOnPlanet(buildingId, state.activePlanetId, state) ||
     (state.construction[buildingId] ?? 0) < amount) return state;
@@ -7333,15 +7373,16 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
 
 export function addBuildingToGroup(state: GameState, entityId: string, buildingId: BuildingId, count = 1): GameState {
   if (buildingId === "micro_black_hole_connector" || buildingId === "time_warp_device" || isEntityInteractionLocked(state, entityId)) return state;
-  const amount = Math.max(1, Math.floor(count));
   const definition = getBuilding(buildingId);
-  if (definition.kind === "miner" || (state.construction[buildingId] ?? 0) < amount) return state;
+  const current = state.entities.find((item) => item.id === entityId && item.buildingId === buildingId);
+  if (!current || definition.kind === "miner") return state;
+  const stackCheck = getBuildingStackAdditionCheck(current.machineCount, count, definition.name);
+  if (!stackCheck.ok || (state.construction[buildingId] ?? 0) < stackCheck.amount) return state;
+  if (definition.stackLimit && stackCheck.total > definition.stackLimit) return state;
   const next = copyState(state);
-  const entity = next.entities.find((item) => item.id === entityId && item.buildingId === buildingId);
-  if (!entity) return state;
-  if (definition.stackLimit && entity.machineCount + amount > definition.stackLimit) return state;
-  entity.machineCount += amount;
-  next.construction[buildingId] = (next.construction[buildingId] ?? 0) - amount;
+  const entity = next.entities.find((item) => item.id === entityId && item.buildingId === buildingId)!;
+  entity.machineCount = stackCheck.total;
+  next.construction[buildingId] = (next.construction[buildingId] ?? 0) - stackCheck.amount;
   return next;
 }
 
@@ -7357,14 +7398,14 @@ export function installMiner(state: GameState, entityId: string, count = 1): Gam
   const source = state.entities.find((item) => item.id === entityId && item.kind === "vein");
   if (!source?.resourceId || source.interactionLocked) return state;
   const extractorId = getExtractorBuildingId(source.resourceId);
-  const amount = Math.max(1, Math.floor(count));
-  if ((state.construction[extractorId] ?? 0) < amount) return state;
+  const stackCheck = getBuildingStackAdditionCheck(source.minerCount, count, getBuilding(extractorId).name);
+  if (!stackCheck.ok || (state.construction[extractorId] ?? 0) < stackCheck.amount) return state;
   const next = copyState(state);
   const entity = next.entities.find((item) => item.id === entityId && item.kind === "vein");
   if (!entity) return state;
-  entity.minerCount += amount;
+  entity.minerCount = stackCheck.total;
   entity.extractorBuildingId = extractorId;
-  next.construction[extractorId] = (next.construction[extractorId] ?? 0) - amount;
+  next.construction[extractorId] = (next.construction[extractorId] ?? 0) - stackCheck.amount;
   return next;
 }
 
@@ -9371,12 +9412,18 @@ export function canConnectBelt(state: GameState, sourceId: string, targetId: str
   return getBeltConnectionCheck(state, sourceId, targetId, itemId, tier, targetPortIndex).ok;
 }
 
-export function connectBelt(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1, targetPortIndex?: 0 | 1 | 2): GameState {
+export interface ConnectBeltResult {
+  state: GameState;
+  beltId: string | null;
+  created: boolean;
+}
+
+export function connectBeltWithResult(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1, targetPortIndex?: 0 | 1 | 2): ConnectBeltResult {
   const constructionId = getBeltConstructionId(tier);
-  if (!canConnectBelt(state, sourceId, targetId, itemId, tier, targetPortIndex)) return state;
+  if (!canConnectBelt(state, sourceId, targetId, itemId, tier, targetPortIndex)) return { state, beltId: null, created: false };
   const source = state.entities.find((entity) => entity.id === sourceId);
   const target = state.entities.find((entity) => entity.id === targetId);
-  if (!source || !target) return state;
+  if (!source || !target) return { state, beltId: null, created: false };
   const next = copyState(state);
   const configuredTarget = next.entities.find((entity) => entity.id === targetId)!;
   const resolvedTargetPortIndex = configuredTarget.buildingId === "micro_black_hole_connector"
@@ -9384,22 +9431,28 @@ export function connectBelt(state: GameState, sourceId: string, targetId: string
     : configuredTarget.buildingId === "material_delivery_hub"
       ? resolveMaterialDeliverySlotIndex(configuredTarget, itemId, targetPortIndex)
       : undefined;
-  if ((configuredTarget.buildingId === "micro_black_hole_connector" || configuredTarget.buildingId === "material_delivery_hub") && resolvedTargetPortIndex === undefined) return state;
+  if ((configuredTarget.buildingId === "micro_black_hole_connector" || configuredTarget.buildingId === "material_delivery_hub") && resolvedTargetPortIndex === undefined) return { state, beltId: null, created: false };
   configureAutoTargetRecipe(next, configuredTarget, itemId);
   configureTargetItem(configuredTarget, itemId, resolvedTargetPortIndex);
   const configuredSource = next.entities.find((entity) => entity.id === sourceId)!;
   const resolvedElevatorOutputIndex = isElevatorStation(configuredSource)
     ? configuredSource.elevatorOutputItems?.findIndex((candidate) => candidate === itemId)
     : -1;
-  const existing = next.belts.find((belt) => belt.source === sourceId && belt.target === targetId && belt.itemId === itemId &&
+  const matchingEndpoint = next.belts.find((belt) => belt.source === sourceId && belt.target === targetId && belt.itemId === itemId &&
     belt.targetPortIndex === resolvedTargetPortIndex);
+  if (matchingEndpoint && matchingEndpoint.tier !== tier) return { state, beltId: null, created: false };
+  const existing = next.belts.find((belt) => belt.source === sourceId && belt.target === targetId && belt.itemId === itemId &&
+    belt.targetPortIndex === resolvedTargetPortIndex && belt.tier === tier);
+  let beltId: string;
+  let created = false;
   if (existing) {
-    if (configuredTarget.buildingId === "micro_black_hole_connector") return state;
-    if (existing.tier !== tier) return state;
+    if (configuredTarget.buildingId === "micro_black_hole_connector") return { state, beltId: null, created: false };
     existing.lanes += 1;
+    beltId = existing.id;
   } else {
+    beltId = `belt_${next.nextId}`;
     next.belts.push({
-      id: `belt_${next.nextId}`,
+      id: beltId,
       planetId: source.planetId,
       source: sourceId,
       target: targetId,
@@ -9421,18 +9474,25 @@ export function connectBelt(state: GameState, sourceId: string, targetId: string
         : undefined,
     });
     next.nextId += 1;
+    created = true;
   }
   next.construction[constructionId] = (next.construction[constructionId] ?? 0) - 1;
-  return next;
+  return { state: next, beltId, created };
+}
+
+export function connectBelt(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1, targetPortIndex?: 0 | 1 | 2): GameState {
+  return connectBeltWithResult(state, sourceId, targetId, itemId, tier, targetPortIndex).state;
 }
 
 export function removeBelt(state: GameState, beltId: string): GameState {
   const belt = state.belts.find((item) => item.id === beltId);
   if (!belt) return state;
+  const constructionId = getBeltConstructionId(belt.tier);
+  const returned = safeInventoryAdd(state.construction[constructionId], belt.lanes);
+  if (returned === null) return state;
   const next = copyState(state);
   next.belts = next.belts.filter((item) => item.id !== beltId);
-  const constructionId = getBeltConstructionId(belt.tier);
-  next.construction[constructionId] = (next.construction[constructionId] ?? 0) + belt.lanes;
+  next.construction[constructionId] = returned;
   return next;
 }
 
@@ -9500,8 +9560,8 @@ export function setLogisticsItem(state: GameState, entityId: string, itemId: Ite
   if (current.storedItemId === itemId) return state;
   const next = copyState(state);
   const entity = next.entities.find((candidate) => candidate.id === entityId)!;
-  for (const [bufferedItemId, amount] of Object.entries(entity.inputs)) addToTray(next, bufferedItemId as ItemId, amount ?? 0);
-  for (const [bufferedItemId, amount] of Object.entries(entity.outputs)) addToTray(next, bufferedItemId as ItemId, amount ?? 0);
+  for (const [bufferedItemId, amount] of Object.entries(entity.inputs)) addToPlanetTray(next, entity.planetId, bufferedItemId as ItemId, amount ?? 0);
+  for (const [bufferedItemId, amount] of Object.entries(entity.outputs)) addToPlanetTray(next, entity.planetId, bufferedItemId as ItemId, amount ?? 0);
   entity.inputs = {};
   entity.outputs = {};
   entity.storedItemId = itemId;
@@ -9520,9 +9580,21 @@ export function setStationSlotItem(
   slotIndex: number,
   itemId: ItemId | null,
 ): GameState {
+  const current = state.entities.find((entity) => entity.id === entityId);
+  if (!current || current.planetId !== state.activePlanetId) return state;
+  return setRemoteStationSlotItem(state, entityId, slotIndex, itemId);
+}
+
+/** Edit a station on its own planet without changing activePlanetId. */
+export function setRemoteStationSlotItem(
+  state: GameState,
+  entityId: string,
+  slotIndex: number,
+  itemId: ItemId | null,
+): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.kind === "station" &&
     entity.buildingId !== "orbital_collector");
-  if (!current || current.interactionLocked || current.planetId !== state.activePlanetId || slotIndex < 0 || slotIndex >= STATION_SLOT_COUNT ||
+  if (!current || current.interactionLocked || slotIndex < 0 || slotIndex >= STATION_SLOT_COUNT ||
     (itemId && !ITEMS[itemId])) return state;
   const currentSlots = getStationSlots(current);
   const previousItemId = currentSlots[slotIndex]?.itemId;
@@ -9531,8 +9603,8 @@ export function setStationSlotItem(
   const station = next.entities.find((entity) => entity.id === entityId)!;
   const slots = ensureStationSlots(station);
   if (previousItemId) {
-    addToTray(next, previousItemId, station.inputs[previousItemId] ?? 0);
-    addToTray(next, previousItemId, station.outputs[previousItemId] ?? 0);
+    addToPlanetTray(next, station.planetId, previousItemId, station.inputs[previousItemId] ?? 0);
+    addToPlanetTray(next, station.planetId, previousItemId, station.outputs[previousItemId] ?? 0);
     station.inputs[previousItemId] = 0;
     station.outputs[previousItemId] = 0;
     const removedBelts = next.belts.filter((belt) =>
@@ -9934,11 +10006,25 @@ export function setStationFleetTarget(
   targetCount: number,
 ): StationFleetTargetResult {
   const entity = state.entities.find((candidate) => candidate.id === entityId);
+  if (!entity || entity.planetId !== state.activePlanetId) {
+    return { state, kind, current: 0, requested: 0, final: 0, capacity: 0, busy: 0, available: 0, loaded: 0, unloaded: 0, shortfall: 0, reason: "invalid-station" };
+  }
+  return setRemoteStationFleetTarget(state, entityId, kind, targetCount);
+}
+
+/** Adjust a remote station fleet from the global portable fleet pool. */
+export function setRemoteStationFleetTarget(
+  state: GameState,
+  entityId: string,
+  kind: StationFleetKind,
+  targetCount: number,
+): StationFleetTargetResult {
+  const entity = state.entities.find((candidate) => candidate.id === entityId);
   const compatible = kind === "drone"
     ? entity?.buildingId === "planetary_logistics_station" || entity?.buildingId === "interstellar_logistics_station"
     : entity?.buildingId === "interstellar_logistics_station";
   const current = Math.max(0, Math.floor(kind === "drone" ? entity?.stationDrones ?? 0 : entity?.stationVessels ?? 0));
-  if (!entity || entity.interactionLocked || !compatible || entity.planetId !== state.activePlanetId) {
+  if (!entity || entity.interactionLocked || !compatible) {
     return { state, kind, current, requested: current, final: current, capacity: 0, busy: 0, available: 0, loaded: 0, unloaded: 0, shortfall: 0, reason: "invalid-station" };
   }
   const capacity = kind === "drone" ? getStationDroneCapacity(entity) : getStationVesselCapacity(entity);
@@ -10011,12 +10097,20 @@ export function fillStationFleet(state: GameState, entityId: string, kind: Stati
 
 export function adjustStationWarpers(state: GameState, entityId: string, delta: number): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
+  if (!current || current.planetId !== state.activePlanetId) return state;
+  return adjustRemoteStationWarpers(state, entityId, delta);
+}
+
+/** Load or unload warpers from the station's own planet tray. */
+export function adjustRemoteStationWarpers(state: GameState, entityId: string, delta: number): GameState {
+  const current = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
   const requested = Math.trunc(delta);
-  if (!current || current.interactionLocked || current.planetId !== state.activePlanetId || requested === 0 ||
+  if (!current || current.interactionLocked || requested === 0 ||
     !isTechnologyCompleted(state, "space_warp")) return state;
   const loaded = Math.max(0, Math.floor(current.stationWarpers ?? 0));
   const capacity = getStationWarperCapacity(current);
-  const available = Math.max(0, Math.floor(state.tray.space_warper ?? 0));
+  const planetTray = current.planetId === state.activePlanetId ? state.tray : state.planetTrays[current.planetId] ?? {};
+  const available = Math.max(0, Math.floor(planetTray.space_warper ?? 0));
   const change = requested > 0
     ? Math.min(requested, capacity - loaded, available)
     : -Math.min(-requested, loaded);
@@ -10024,8 +10118,11 @@ export function adjustStationWarpers(state: GameState, entityId: string, delta: 
   const next = copyState(state);
   const station = next.entities.find((entity) => entity.id === entityId)!;
   station.stationWarpers = loaded + change;
-  if (change > 0) next.tray.space_warper = available - change;
-  else addToTray(next, "space_warper", -change);
+  if (change > 0) {
+    const nextPlanetTray = station.planetId === next.activePlanetId ? next.tray : { ...(next.planetTrays[station.planetId] ?? {}) };
+    nextPlanetTray.space_warper = available - change;
+    if (station.planetId !== next.activePlanetId) next.planetTrays[station.planetId] = nextPlanetTray;
+  } else addToPlanetTray(next, station.planetId, "space_warper", -change);
   return next;
 }
 
@@ -10141,11 +10238,13 @@ export function removeEntity(state: GameState, entityId: string, count?: number)
     if (!entity.resourceId || entity.minerCount < 1) return state;
     const requested = count === undefined ? entity.minerCount : Math.max(1, Math.floor(count));
     const recovered = Math.min(entity.minerCount, requested);
+    const extractorId = getExtractorBuildingId(entity.resourceId);
+    const returned = safeInventoryAdd(state.construction[extractorId], recovered);
+    if (returned === null) return state;
     const next = copyState(state);
     const target = next.entities.find((item) => item.id === entityId)!;
-    const extractorId = getExtractorBuildingId(target.resourceId!);
     target.minerCount -= recovered;
-    next.construction[extractorId] = Math.floor((next.construction[extractorId] ?? 0) + recovered);
+    next.construction[extractorId] = returned;
     if (target.minerCount === 0) {
       target.utilization = 0;
       target.productionRate = 0;
@@ -10155,12 +10254,15 @@ export function removeEntity(state: GameState, entityId: string, count?: number)
   }
   const requested = count === undefined ? entity.machineCount : Math.max(1, Math.floor(count));
   if (entity.buildingId && entity.machineCount > requested) {
+    const returned = safeInventoryAdd(state.construction[entity.buildingId], requested);
+    if (returned === null) return state;
     const next = copyState(state);
     const target = next.entities.find((item) => item.id === entityId)!;
     target.machineCount -= requested;
-    next.construction[target.buildingId!] = Math.floor((next.construction[target.buildingId!] ?? 0) + requested);
+    next.construction[target.buildingId!] = returned;
     return next;
   }
+  if (!getEntityRemovalPreview(state, [entityId]).refundSafe) return state;
   const next = copyState(state);
   const target = next.entities.find((item) => item.id === entityId)!;
   if (target.buildingId === "construction_center") {
@@ -10206,9 +10308,71 @@ export function removeEntity(state: GameState, entityId: string, count?: number)
 }
 
 export function removeEntities(state: GameState, entityIds: string[]): GameState {
+  if (!getEntityRemovalPreview(state, entityIds).refundSafe) return state;
   let next = state;
   for (const entityId of [...new Set(entityIds)]) next = removeEntity(next, entityId);
   return next;
+}
+
+export interface RemovalPreviewEntry {
+  constructionId: ConstructionId;
+  amount: number;
+}
+
+export interface EntityRemovalPreview {
+  entityCount: number;
+  buildingCount: number;
+  relatedBeltCount: number;
+  returns: RemovalPreviewEntry[];
+  refundSafe: boolean;
+}
+
+/** Read-only summary used by every selection-removal confirmation surface. */
+export function getEntityRemovalPreview(state: GameState, entityIds: readonly string[], beltIds: readonly string[] = []): EntityRemovalPreview {
+  const requestedIds = new Set(entityIds);
+  const entities = state.entities.filter((entity) => requestedIds.has(entity.id) && !entity.interactionLocked);
+  const removableIds = new Set(entities.map((entity) => entity.id));
+  const selectedBeltIds = new Set(beltIds);
+  const relatedBelts = state.belts.filter((belt) => selectedBeltIds.has(belt.id) || removableIds.has(belt.source) || removableIds.has(belt.target));
+  const totals = new Map<ConstructionId, number>();
+  let refundSafe = true;
+  const add = (constructionId: ConstructionId, amount: number) => {
+    const current = totals.get(constructionId) ?? 0;
+    const addition = Math.max(0, Math.floor(amount));
+    const next = current + addition;
+    const returned = safeInventoryAdd(state.construction[constructionId], next);
+    if (!Number.isSafeInteger(addition) || !Number.isSafeInteger(next) || returned === null) {
+      refundSafe = false;
+      return;
+    }
+    totals.set(constructionId, next);
+  };
+  let buildingCount = 0;
+  for (const entity of entities) {
+    const amount = entity.kind === "vein" ? entity.minerCount : entity.machineCount;
+    buildingCount += amount;
+    if (entity.kind === "vein" && entity.resourceId && entity.minerCount > 0) add(getExtractorBuildingId(entity.resourceId), entity.minerCount);
+    else if (entity.buildingId) add(entity.buildingId, entity.machineCount);
+    if (entity.sprayCoaterInstalled) add("spray_coater", 1);
+  }
+  for (const belt of relatedBelts) add(getBeltConstructionId(belt.tier), belt.lanes);
+  return {
+    entityCount: entities.length,
+    buildingCount: Number.isSafeInteger(buildingCount) ? buildingCount : Number.MAX_SAFE_INTEGER,
+    relatedBeltCount: relatedBelts.length,
+    returns: [...totals].map(([constructionId, amount]) => ({ constructionId, amount })),
+    refundSafe,
+  };
+}
+
+/** Set a remote station stack without switching the active planet. */
+export function setRemoteBuildingStackTarget(state: GameState, entityId: string, targetCount: number): GameState {
+  const entity = state.entities.find((candidate) => candidate.id === entityId && candidate.buildingId);
+  if (!entity || entity.interactionLocked || !Number.isSafeInteger(targetCount) || targetCount < 1 ||
+    (targetCount > MAX_BUILDING_STACK_COUNT && targetCount >= entity.machineCount)) return state;
+  if (targetCount === entity.machineCount) return state;
+  if (targetCount > entity.machineCount) return addBuildingToGroup(state, entityId, entity.buildingId!, targetCount - entity.machineCount);
+  return removeEntity(state, entityId, entity.machineCount - targetCount);
 }
 
 export function canUpgradeEntity(state: GameState, entityId: string): boolean {

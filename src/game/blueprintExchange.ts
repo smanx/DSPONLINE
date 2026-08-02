@@ -71,8 +71,8 @@ function parseResourceAnchors(value: unknown, issues: string[]): BlueprintResour
   const keys = new Set<string>();
   value.forEach((entry, index) => {
     if (!isRecord(entry) || !validId(entry.key) || keys.has(entry.key) || typeof entry.resourceId !== "string" || !(entry.resourceId in ITEMS) ||
-      !validPosition(entry.offset) || !validNumber(entry.minerCount, 1, 10_000) || !Number.isInteger(entry.minerCount)) {
-      issues.push(`资源锚点 ${index + 1} 缺少合法的 key、资源、位置或采集设备数量`);
+      !validPosition(entry.offset) || !Number.isSafeInteger(entry.minerCount) || Number(entry.minerCount) < 1 || Number(entry.minerCount) > MAX_BUILDING_STACK_COUNT) {
+      issues.push(`资源锚点 ${index + 1} 的 minerCount=${String(entry && typeof entry === "object" ? entry.minerCount : undefined)} 超出允许范围 1～${MAX_BUILDING_STACK_COUNT}`);
       return;
     }
     const resourceId = entry.resourceId as ItemId;
@@ -87,7 +87,7 @@ function parseResourceAnchors(value: unknown, issues: string[]): BlueprintResour
       resourceId,
       offset: { x: Math.round(entry.offset.x), y: Math.round(entry.offset.y) },
       extractorBuildingId,
-      minerCount: Math.floor(entry.minerCount),
+      minerCount: Math.floor(Number(entry.minerCount)),
     });
   });
   return anchors;
@@ -264,9 +264,14 @@ function parseExternalPorts(value: unknown, entityKeys: Set<string>, issues: str
 
 export function validateBlueprintExchange(value: unknown): BlueprintExchangeResult {
   const issues: string[] = [];
-  if (!isRecord(value) || value.type !== "dsp-idle-blueprint" || (value.formatVersion !== 1 && value.formatVersion !== BLUEPRINT_EXCHANGE_FORMAT_VERSION) || !isRecord(value.blueprint)) {
-    return { valid: false, blueprint: null, issues: ["不是支持的蓝图交换文件"] };
+  if (!isRecord(value)) return { valid: false, blueprint: null, issues: ["蓝图交换文件根节点必须是对象"] };
+  if (value.type !== "dsp-idle-blueprint") {
+    return { valid: false, blueprint: null, issues: [`蓝图文件 type=${String(value.type)} 无效，应为 dsp-idle-blueprint`] };
   }
+  if (value.formatVersion !== 1 && value.formatVersion !== BLUEPRINT_EXCHANGE_FORMAT_VERSION) {
+    return { valid: false, blueprint: null, issues: [`蓝图格式版本 formatVersion=${String(value.formatVersion)} 不受支持，当前支持 v1～v${BLUEPRINT_EXCHANGE_FORMAT_VERSION}`] };
+  }
+  if (!isRecord(value.blueprint)) return { valid: false, blueprint: null, issues: ["蓝图文件缺少有效的 blueprint 对象"] };
   const source = value.blueprint;
   if (typeof source.name !== "string" || !source.name.trim() || source.name.trim().length > 48 || !Array.isArray(source.entities) || source.entities.length > 256 || !Array.isArray(source.belts) || source.belts.length > 512) {
     return { valid: false, blueprint: null, issues: ["蓝图名称、设备数量或线路数量不合法"] };

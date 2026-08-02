@@ -217,14 +217,36 @@ function nonNegativeInteger(value: unknown): number {
   return Math.max(0, Math.floor(typeof value === "number" && Number.isFinite(value) ? value : 0));
 }
 
-function boundedBuildingQuantity(value: unknown): number {
-  return Math.min(MAX_BUILDING_STACK_COUNT, nonNegativeInteger(value));
+class UnsafePersistedQuantityError extends Error {
+  constructor(readonly field: string, readonly value: unknown, readonly reason: "unsafe" | "invalid" = "unsafe") {
+    super(reason === "unsafe" ? `${field} 超出 JavaScript 安全整数范围` : `${field} 不是合法的非负安全整数`);
+    this.name = "UnsafePersistedQuantityError";
+  }
 }
 
-function buildingBufferRecord(value: unknown): Partial<Record<ItemId, number>> {
+function persistedNonNegativeInteger(value: unknown, field: string, allowLegacyFraction = false): number {
+  if (value === undefined || value === null) return 0;
+  if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+    throw new UnsafePersistedQuantityError(field, value);
+  }
+  if (value < 0) throw new UnsafePersistedQuantityError(field, value, "invalid");
+  if (!Number.isSafeInteger(value)) {
+    if (allowLegacyFraction) return Math.floor(value);
+    throw new UnsafePersistedQuantityError(field, value, "invalid");
+  }
+  return value;
+}
+
+function persistedPositiveInteger(value: unknown, field: string): number {
+  const normalized = persistedNonNegativeInteger(value, field);
+  if (normalized < 1) throw new UnsafePersistedQuantityError(field, value, "invalid");
+  return normalized;
+}
+
+function buildingBufferRecord(value: unknown, allowLegacyFraction = false): Partial<Record<ItemId, number>> {
   if (!value || typeof value !== "object") return {};
   return Object.fromEntries(Object.entries(value).flatMap(([key, amount]) =>
-    key in ITEMS ? [[key, boundedBuildingQuantity(amount)]] : [])) as Partial<Record<ItemId, number>>;
+    key in ITEMS ? [[key, persistedNonNegativeInteger(amount, `建筑缓存.${key}`, allowLegacyFraction)]] : [])) as Partial<Record<ItemId, number>>;
 }
 
 function constructionAutomationInventoryRecord(value: unknown): Partial<Record<ItemId, number>> {
@@ -510,7 +532,7 @@ function normalizeStationRoutes(entity: FactoryEntity): StationRoute[] | undefin
       peerId: route.peerId,
       itemId: route.itemId,
       scope: route.scope,
-      cargo: boundedBuildingQuantity(route.cargo),
+      cargo: persistedNonNegativeInteger(route.cargo, `物流航线 ${route.id ?? "未知"}.cargo`),
       vehicleCount: Math.max(1, nonNegativeInteger(route.vehicleCount)),
       progress: Math.min(1, nonNegativeNumber(route.progress)),
       duration: Math.max(1, nonNegativeNumber(route.duration)),
@@ -882,8 +904,10 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     const materialDeliveryHub = entity.buildingId === "material_delivery_hub";
     const deliverySlots = materialDeliveryHub ? normalizeMaterialDeliverySlots(entity, saved.version) : undefined;
     const blackHoleConnector = entity.buildingId === "micro_black_hole_connector";
+    const machineCount = persistedNonNegativeInteger(entity.machineCount, `实体 ${entity.id ?? "未知"}.machineCount`);
+    const minerCount = persistedNonNegativeInteger(entity.minerCount, `实体 ${entity.id ?? "未知"}.minerCount`);
     const storedEnergyCapacity = accumulator || energyExchanger
-      ? (getBuilding(entity.buildingId!).energyCapacityMj ?? 0) * Math.max(0, Math.floor(entity.machineCount ?? 0))
+      ? (getBuilding(entity.buildingId!).energyCapacityMj ?? 0) * machineCount
       : 0;
     const resourceId = entity.kind === "vein" && entity.resourceId && ITEMS[entity.resourceId] ? entity.resourceId : undefined;
     const generatedReserve = resourceId ? createVeinReserve(galaxy, planetId, resourceId, entity.id) : undefined;
@@ -895,10 +919,10 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
       planetId,
       position,
       interactionLocked: saved.version >= 35 && entity.interactionLocked === true,
-      inputs: buildingBufferRecord(entity.inputs),
-      outputs: buildingBufferRecord(entity.outputs),
-      machineCount: boundedBuildingQuantity(entity.machineCount),
-      minerCount: boundedBuildingQuantity(entity.minerCount),
+      inputs: buildingBufferRecord(entity.inputs, saved.version <= 1),
+      outputs: buildingBufferRecord(entity.outputs, saved.version <= 1),
+      machineCount,
+      minerCount,
       progress: typeof entity.progress === "number" ? Math.max(0, entity.progress) : 0,
       fuelRemainingMj: typeof entity.fuelRemainingMj === "number" ? Math.max(0, entity.fuelRemainingMj) : 0,
       powerOutputKw: typeof entity.powerOutputKw === "number" ? Math.max(0, entity.powerOutputKw) : 0,
@@ -1353,7 +1377,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
             x: typeof entity.offset?.x === "number" && Number.isFinite(entity.offset.x) ? entity.offset.x : 0,
             y: typeof entity.offset?.y === "number" && Number.isFinite(entity.offset.y) ? entity.offset.y : 0,
           },
-          machineCount: Math.max(1, Math.min(MAX_BUILDING_STACK_COUNT, nonNegativeInteger(entity.machineCount))),
+          machineCount: persistedPositiveInteger(entity.machineCount, `蓝图 ${blueprint.name ?? blueprintIndex + 1} 设备 ${entity.key ?? entityIndex + 1}.machineCount`),
           recipeId,
           targetDysonOrbitId: entity.buildingId === "em_rail_ejector" && saved.version >= 41 &&
             typeof entity.targetDysonOrbitId === "string" && entity.targetDysonOrbitId.length > 0 && entity.targetDysonOrbitId.length <= 160
@@ -1428,7 +1452,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
             y: typeof anchor.offset?.y === "number" && Number.isFinite(anchor.offset.y) ? anchor.offset.y : 0,
           },
           extractorBuildingId,
-          minerCount: Math.max(1, Math.min(10_000, nonNegativeInteger(anchor.minerCount) || 1)),
+          minerCount: persistedPositiveInteger(anchor.minerCount, `蓝图 ${blueprint.name ?? blueprintIndex + 1} 资源锚点 ${anchor.key ?? anchorIndex + 1}.minerCount`),
         }];
       }) : [];
       if (blueprintEntities.length === 0 && resourceAnchors.length === 0) return [];
@@ -2200,7 +2224,16 @@ export function inspectSave(raw: string, contentPackRegistry?: ContentPackRegist
   let state: GameState | null = null;
   try {
     state = migrateGame(envelope.state, contentPackRegistry);
-  } catch {
+  } catch (error) {
+    if (error instanceof UnsafePersistedQuantityError) {
+      const reason = error.reason === "unsafe"
+        ? "超过 Number.MAX_SAFE_INTEGER，已阻止危险转换。"
+        : "不是合法的非负安全整数，已阻止静默截断或补零。";
+      return invalid([
+        `${error.field}=${String(error.value)} ${reason}`,
+        "请保留原始存档并立即导出备份，不要覆盖现有文件；该存档需要受控救援后才能载入。",
+      ], formatVersion, stateVersion);
+    }
     return invalid(["存档数据结构无法修复"], formatVersion, stateVersion);
   }
   if (!state) return invalid(["游戏状态版本不受支持或缺少实体列表"], formatVersion, stateVersion);
@@ -2237,6 +2270,19 @@ export function inspectSave(raw: string, contentPackRegistry?: ContentPackRegist
   if (migrated) issues.push(`游戏状态已从 v${stateVersion ?? "未知"} 迁移到 v${state.version}`);
   if (!hasEnvelope) issues.push("检测到旧版裸状态格式");
   if (formatUpgrade && !hasEnvelope) issues.push(`导入后会升级到存档格式 v${SAVE_FORMAT_VERSION}`);
+  const oversizedEntityStacks = state.entities.filter((entity) =>
+    entity.machineCount > MAX_BUILDING_STACK_COUNT || entity.minerCount > MAX_BUILDING_STACK_COUNT).length;
+  const oversizedBlueprintStacks = [
+    ...state.blueprints,
+    ...state.blueprintVersions.map((snapshot) => snapshot.definition),
+  ].reduce((sum, blueprint) => sum + blueprint.entities.filter((entity) => entity.machineCount > MAX_BUILDING_STACK_COUNT).length +
+    (blueprint.resourceAnchors ?? []).filter((anchor) => anchor.minerCount > MAX_BUILDING_STACK_COUNT).length, 0);
+  if (oversizedEntityStacks > 0) {
+    issues.push(`检测到 ${oversizedEntityStacks} 个历史建筑堆叠超过 1 亿，数量已原样保留；可以回收但不能继续增加。`);
+  }
+  if (oversizedBlueprintStacks > 0) {
+    issues.push(`检测到 ${oversizedBlueprintStacks} 个历史蓝图堆叠超过 1 亿，数量已原样保留；该蓝图需降至上限内才能部署。`);
+  }
   const integrity: SaveIntegrityStatus = migrated || formatUpgrade || checksumMatchedAfterMigration
     ? "repaired"
     : checksum === "missing" ? "legacy" : "valid";

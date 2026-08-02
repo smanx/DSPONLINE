@@ -632,7 +632,7 @@ describe("game storage", () => {
     });
   });
 
-  it("migrates v31 gameplay settings to v32 defaults and clamps malicious buffer limits", () => {
+  it("migrates v31 gameplay settings to v32 defaults while preserving oversized safe quantities", () => {
     const legacy = JSON.parse(JSON.stringify(createInitialState())) as Record<string, any>;
     legacy.version = 31;
     delete legacy.settings.defaultBeltStackSize;
@@ -654,15 +654,69 @@ describe("game storage", () => {
     const hostile = JSON.parse(JSON.stringify(migrated)) as Record<string, any>;
     hostile.settings.productionBufferLimit = -500;
     hostile.settings.logisticsBufferLimit = 999_999_999;
-    hostile.entities[0].inputs.iron_ore = Number.MAX_VALUE;
-    hostile.entities[0].outputs.iron_ore = -12;
-    hostile.entities[0].minerCount = Number.MAX_VALUE;
+    hostile.entities[0].inputs.iron_ore = 100_000_001;
+    hostile.entities[0].outputs.iron_ore = 0;
+    hostile.entities[0].minerCount = 100_000_001;
     const repaired = migrateGame(hostile)!;
     expect(repaired.settings.productionBufferLimit).toBe(1_000);
     expect(repaired.settings.logisticsBufferLimit).toBe(100_000_000);
-    expect(repaired.entities[0].inputs.iron_ore).toBe(100_000_000);
+    expect(repaired.entities[0].inputs.iron_ore).toBe(100_000_001);
     expect(repaired.entities[0].outputs.iron_ore).toBe(0);
-    expect(repaired.entities[0].minerCount).toBe(100_000_000);
+    expect(repaired.entities[0].minerCount).toBe(100_000_001);
+  });
+
+  it("round-trips historical safe stacks above one hundred million without truncating blueprints or buffers", () => {
+    let state = createInitialState();
+    state.construction.storage_mk1 = 1;
+    state = placeBuilding(state, "storage_mk1", { x: 120, y: 80 });
+    const storageId = state.entities.find((entity) => entity.buildingId === "storage_mk1")!.id;
+    state = createBlueprint(state, [storageId], "历史超限堆叠");
+    state = queueBlueprint(state, state.blueprints[0].id, { x: 720, y: 80 });
+
+    const storage = state.entities.find((entity) => entity.id === storageId)!;
+    storage.machineCount = 100_000_001;
+    storage.inputs.iron_ingot = 100_000_002;
+    state.blueprints[0].entities[0].machineCount = 100_000_003;
+    state.blueprintVersions[0].definition.entities[0].machineCount = 100_000_004;
+
+    expect(saveGame(state).success).toBe(true);
+    const loaded = loadGame().state;
+    expect(loaded.entities.find((entity) => entity.id === storageId)).toMatchObject({
+      machineCount: 100_000_001,
+      inputs: { iron_ingot: 100_000_002 },
+    });
+    expect(loaded.blueprints[0].entities[0].machineCount).toBe(100_000_003);
+    expect(loaded.blueprintVersions[0].definition.entities[0].machineCount).toBe(100_000_004);
+
+    const exported = exportGame(loaded);
+    const inspection = inspectSave(exported);
+    expect(inspection.valid).toBe(true);
+    expect(inspection.issues).toEqual(expect.arrayContaining([
+      expect.stringMatching(/历史建筑堆叠超过 1 亿.*原样保留/),
+      expect.stringMatching(/历史蓝图堆叠超过 1 亿.*原样保留/),
+    ]));
+    const imported = importGame(exported)!;
+    expect(imported.entities.find((entity) => entity.id === storageId)?.machineCount).toBe(100_000_001);
+    expect(imported.blueprints[0].entities[0].machineCount).toBe(100_000_003);
+    expect(imported.blueprintVersions[0].definition.entities[0].machineCount).toBe(100_000_004);
+  });
+
+  it("rejects unsafe, fractional and negative persisted stack counts with rescue guidance", () => {
+    const rawFor = (field: "machineCount" | "minerCount", value: number) => {
+      const envelope = JSON.parse(exportGame(createInitialState()));
+      envelope.state.entities[0][field] = value;
+      return JSON.stringify(envelope);
+    };
+    for (const [field, value] of [
+      ["machineCount", Number.MAX_SAFE_INTEGER + 1],
+      ["machineCount", 1.5],
+      ["minerCount", -1],
+    ] as const) {
+      const inspection = inspectSave(rawFor(field, value));
+      expect(inspection.valid).toBe(false);
+      expect(inspection.issues.join(" ")).toContain(field);
+      expect(inspection.issues.join(" ")).toMatch(/备份.*受控救援/);
+    }
   });
 
   it("migrates a real v24-shaped seeded galaxy without changing existing player state", () => {

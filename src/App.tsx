@@ -34,6 +34,7 @@ import { BlueprintWorkspace, CanvasRegionEditor, CanvasRegionLayer, CanvasSelect
 import { CanvasInteractionOverlay, type CanvasClickConnectionPreview, type CanvasConnectionPreviewTone } from "./components/CanvasInteractionOverlay";
 import { GAME_DIALOG_CLOSED_EVENT, useGameDialog } from "./components/GameDialogProvider";
 import { RecipeFocusPanel } from "./components/RecipeFocusPanel";
+import { ItemReferenceActionsProvider } from "./components/ItemReference";
 import { OnboardingCoach } from "./components/OnboardingCoach";
 import { MobileGameShell } from "./components/mobile/MobileGameShell";
 import { usePerformanceMonitor } from "./hooks/usePerformanceMonitor";
@@ -63,7 +64,7 @@ import {
   applyBeltConfigurationToNetworkResult,
   canConnectBelt,
   getBeltConnectionCheck,
-  connectBelt,
+  connectBeltWithResult,
   canPlaceBlueprint,
   canQueueBlueprint,
   cancelHandcraftQueueEntry,
@@ -96,6 +97,7 @@ import {
   getRecursiveHandcraftPlan,
   MIN_CANVAS_REGION_SIZE,
   getEntityOutputCapacity,
+  getEntityRemovalPreview,
   getEffectiveSimulationMultiplier,
   getEntityOperatingStatus,
   getEjectorOrbitTargetStatus,
@@ -106,6 +108,8 @@ import {
   getSprayCoaterRemovalRefund,
   getSprayCoaterInstallCheck,
   getProducedOutputs,
+  getBuildingStackAdditionCheck,
+  getStationSlots,
   getTechnologyConstructionRewards,
   handcraftRecipeWithUpstream,
   installSprayCoater,
@@ -187,6 +191,10 @@ import {
   setEntitiesProliferatorConfiguration,
   setStationMode,
   setStationFleetTarget,
+  setRemoteStationFleetTarget,
+  adjustRemoteStationWarpers,
+  setRemoteStationSlotItem,
+  setRemoteBuildingStackTarget,
   setStationHubConfiguration,
   setStationMinimumLoad,
   setStationSlotItem,
@@ -225,6 +233,7 @@ import {
   renameBlueprint,
   renameCanvasBookmark,
 } from "./game/engine";
+import { formatQuantityCompact } from "./game/quantityFormat";
 import { getAchievement, getNewAchievementIds, unlockAchievements } from "./game/progression";
 import { deliverSystemSpaceStationMaterial, getInterstellarStationUpgradeStatus, requestStationOperationMode, setElevatorOutputItem, setSystemSpaceStationModuleCount, startSystemSpaceStationConstruction, upgradeAllInterstellarStationsToMk2, upgradeInterstellarStationToMk2 } from "./game/systemSpaceStation";
 import { getDifficultyDefinition } from "./game/difficulty";
@@ -684,6 +693,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [performanceReport, setPerformanceReport] = useState<AutomaticPerformanceReport | null>(null);
   const [blueprintPlacementId, setBlueprintPlacementId] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
+  const [deleteMode, setDeleteMode] = useState(false);
   const [regionMode, setRegionMode] = useState(false);
   const [regionDraft, setRegionDraft] = useState<CanvasRegionRectangle | null>(null);
   const [regionResizePreview, setRegionResizePreview] = useState<{ regionId: string; rectangle: CanvasRegionRectangle } | null>(null);
@@ -1103,6 +1113,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   useEffect(() => { selectedEntityIdsRef.current = selectedEntityIds; }, [selectedEntityIds]);
   useEffect(() => { selectedBeltIdRef.current = selectedBeltId; }, [selectedBeltId]);
   useEffect(() => { selectedBeltIdsRef.current = selectedBeltIds; }, [selectedBeltIds]);
+  useEffect(() => {
+    if (!selectionMode && deleteMode) setDeleteMode(false);
+  }, [deleteMode, selectionMode]);
   useEffect(() => { if (technologyOpen) trackAnalyticsEvent("open_technology"); }, [technologyOpen]);
   useEffect(() => { if (recipesOpen) trackAnalyticsEvent("open_recipes"); }, [recipesOpen]);
   useEffect(() => { if (statisticsOpen) trackAnalyticsEvent("open_statistics"); }, [statisticsOpen]);
@@ -1851,7 +1864,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         const beltIds = [...new Set([...selectedBeltIdsRef.current, ...(selectedBeltIdRef.current ? [selectedBeltIdRef.current] : [])])];
         if (entityIds.length > 0 || beltIds.length > 0) {
           event.preventDefault();
-          commitGame((current) => beltIds.reduce((next, beltId) => removeBelt(next, beltId), removeEntities(current, entityIds)));
+          const current = gameRef.current;
+          const next = beltIds.reduce((candidate, beltId) => removeBelt(candidate, beltId), removeEntities(current, entityIds));
+          if (next === current) {
+            setNotice("回收未执行：目标可能已锁定，或返还数量超出安全整数范围，请先导出备份");
+            playTone("alert");
+            return;
+          }
+          commitGame(() => next);
           setSelectedEntityIds([]);
           setSelectedBeltId(null);
           setSelectedBeltIds([]);
@@ -1963,6 +1983,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     if (!constructionId) return null;
     const name = getBuilding(constructionId).name;
     const amount = Math.max(1, Math.floor(requestedCount));
+    const currentCount = entity.kind === "vein" ? entity.minerCount : entity.machineCount;
+    const stackCheck = getBuildingStackAdditionCheck(currentCount, amount, name);
+    if (!stackCheck.ok) {
+      setNotice(stackCheck.label);
+      playTone("alert");
+      return null;
+    }
     const next = addUnitToEntityGroup(current, entityId, amount);
     if (next === current) {
       setNotice(`施工托盘中没有足够的${name}（需要 ${amount} 台）`);
@@ -2017,7 +2044,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         : `确认完整回收${getBuilding(entity.buildingId!).name} ×${entity.machineCount}？输入、输出、燃料和线路物资会按现有回收规则返还。`;
       if (!await gameDialog.confirm(warning, { danger: true, confirmLabel: "确认回收" })) return;
     }
-    commitGame((current) => removeEntity(current, entityId, count));
+    const before = gameRef.current;
+    const next = removeEntity(before, entityId, count);
+    if (next === before) {
+      setNotice("回收未执行：返还后数量将超出安全整数范围，请先导出备份并联系存档救援");
+      playTone("alert");
+      return;
+    }
+    commitGame(() => next);
     if (removesNode) setSelectedEntityIds((current) => current.filter((id) => id !== entityId));
     if (entity.kind === "vein" && entity.resourceId) {
       const recovered = Math.min(entity.minerCount, count ?? entity.minerCount);
@@ -2392,6 +2426,25 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     window.setTimeout(() => focusEntityIds(location.producerEntityIds), gameRef.current.settings.reducedMotion ? 0 : 50);
     setNotice(`已定位${getPlanetDisplayName(gameRef.current, planetId)}的${ITEMS[itemId].name}产线 · ${location.producerEntityIds.length} 个生产节点`);
   }, [closeAllWorkspaces, focusEntityIds, mobileNavigation.goFactory, nextMobileShell, onPlanetChange]);
+
+  const itemReferenceActions = useMemo(() => ({
+    getLocateAvailability: (itemId: ItemId) => {
+      const locations = getProductionLineLocations(gameRef.current, itemId);
+      return locations.length > 0
+        ? { available: true }
+        : { available: false, reason: `${ITEMS[itemId].name}在当前存档中没有生产来源` };
+    },
+    onLocate: (itemId: ItemId) => {
+      const locations = getProductionLineLocations(gameRef.current, itemId);
+      const target = locations.find((location) => location.planetId === gameRef.current.activePlanetId) ?? locations[0];
+      if (!target) {
+        setNotice(`${ITEMS[itemId].name}在当前存档中没有可定位的生产设备`);
+        return;
+      }
+      locateProductionLine(itemId, target.planetId);
+    },
+    onOpenCodex: (itemId: ItemId) => openRecipeFocus(itemId),
+  }), [locateProductionLine, openRecipeFocus]);
 
   const cycleProductionLineTarget = useCallback((direction: -1 | 1) => {
     setProductionLineFocus((current) => {
@@ -3062,7 +3115,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }
     const importedName = result.blueprint.name;
     commitGame((current) => importBlueprintExchange(current, result.blueprint!));
-    const message = `已导入蓝图：${importedName}`;
+    const message = `已导入蓝图：${importedName} · ${result.blueprint.entities.length} 个建筑 · ${result.blueprint.belts.length} 条传送带`;
     setNotice(message);
     playTone("complete");
     return { success: true, message };
@@ -3751,10 +3804,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     else if (source.planetId !== target.planetId) label = "两端必须位于同一行星";
     else if (!sourceItem || !getProducedOutputs(source).includes(sourceItem)) label = `${sourceItem ? ITEMS[sourceItem].name : "该物品"}不是当前输出`;
     else {
-      const existing = current.belts.find((belt) => belt.source === source.id && belt.target === target.id && belt.itemId === sourceItem);
+      const targetPortIndex = parseTargetPortIndex(connection?.targetHandle);
+      const existing = current.belts.find((belt) => belt.source === source.id && belt.target === target.id && belt.itemId === sourceItem &&
+        belt.targetPortIndex === targetPortIndex);
       if (existing && existing.tier !== preview.draft.tier) label = `已有并行线路使用 Mk.${existing.tier === 3 ? "III" : existing.tier === 2 ? "II" : "I"}，请手动指定同级传送带`;
       else {
-        const check = getBeltConnectionCheck(current, source.id, target.id, sourceItem!, preview.draft.tier, parseTargetPortIndex(connection?.targetHandle));
+        const check = getBeltConnectionCheck(current, source.id, target.id, sourceItem!, preview.draft.tier, targetPortIndex);
         if (!check.ok) label = check.label;
       }
     }
@@ -3780,18 +3835,19 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       setInspectorTab("fabricate");
       return;
     }
-    const existing = gameRef.current.belts.find((belt) =>
-      belt.source === connection.source && belt.target === connection.target && belt.itemId === sourceItem);
-    if (existing && existing.tier !== activeTier) {
-      setNotice(`已有并行线路使用 Mk.${existing.tier === 3 ? "III" : existing.tier === 2 ? "II" : "I"}，请手动选择同级传送带`);
+    const targetPortIndex = parseTargetPortIndex(connection.targetHandle);
+    const matchingEndpoint = gameRef.current.belts.find((belt) =>
+      belt.source === connection.source && belt.target === connection.target && belt.itemId === sourceItem &&
+      belt.targetPortIndex === targetPortIndex);
+    if (matchingEndpoint && matchingEndpoint.tier !== activeTier) {
+      setNotice(`已有并行线路使用 Mk.${matchingEndpoint.tier === 3 ? "III" : matchingEndpoint.tier === 2 ? "II" : "I"}，请手动选择同级传送带`);
       return;
     }
     const before = gameRef.current;
     const source = before.entities.find((entity) => entity.id === connection.source);
     const target = before.entities.find((entity) => entity.id === connection.target);
-    const targetPortIndex = parseTargetPortIndex(connection.targetHandle);
-    const next = connectBelt(before, connection.source, connection.target, sourceItem, activeTier, targetPortIndex);
-    if (next === before) {
+    const result = connectBeltWithResult(before, connection.source, connection.target, sourceItem, activeTier, targetPortIndex);
+    if (result.state === before || !result.beltId) {
       const reason = !source || !target
         ? "节点已不存在"
         : source.planetId !== target.planetId
@@ -3808,13 +3864,21 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       return;
     }
     if (clickConnectionPreviewRef.current) clickConnectionSucceededRef.current = true;
-    commitGame(() => next);
+    flowStore.getState().resetSelectedElements();
+    commitGame(() => result.state);
+    setSelectedEntityIds([]);
+    setSelectedBeltId(result.beltId);
+    setSelectedBeltIds([result.beltId]);
+    setInspectorTab("inspect");
+    setRightSidebarCollapsed(false);
+    if (nextMobileShell) mobileNavigation.openSheet("inspector", "peek");
+    else if (coarsePointer) setMobilePanel("inspector");
     recordBasicOnboardingEvent("belt-connected");
     trackAnalyticsEvent("belt_connect");
     setNotice(`${ITEMS[sourceItem].name}运输线已建立 · Mk.${tierName}`);
     spawnInteractionBurst(pointerRef.current.x, pointerRef.current.y, "运输线已建立", "positive");
     playTone("connect");
-  }, [beltTier, beltTierMode, commitGame, playTone, spawnInteractionBurst]);
+  }, [beltTier, beltTierMode, coarsePointer, commitGame, flowStore, mobileNavigation.openSheet, nextMobileShell, playTone, spawnInteractionBurst]);
 
   useEffect(() => { connectRequestRef.current = onConnect; }, [onConnect]);
 
@@ -3920,7 +3984,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       if (belt.planetId === gameRef.current.activePlanetId && nodeIds.has(belt.source) && nodeIds.has(belt.target)) beltIds.add(belt.id);
     }
     setSelectedEntityIds((current) => current.length === ids.length && current.every((id, index) => id === ids[index]) ? current : ids);
-    setSelectedBeltIds([...beltIds]);
+    const nextBeltIds = [...beltIds];
+    setSelectedBeltIds((current) => current.length === beltIds.size && current.every((id) => beltIds.has(id)) ? current : nextBeltIds);
     if (ids.length > 0 || beltIds.size > 1) setSelectedBeltId(null);
     else if (beltIds.size === 1) setSelectedBeltId([...beltIds][0]);
   }, []);
@@ -4357,17 +4422,145 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const activeBlueprint = game.blueprints.find((blueprint) => blueprint.id === blueprintPlacementId) ?? null;
   const mobileActionEntity = game.entities.find((entity) => entity.id === mobileActionEntityId) ?? null;
 
+  const confirmRemoveSelection = useCallback(async () => {
+    const entityIds = [...selectedEntityIdsRef.current];
+    const beltIds = [...new Set([
+      ...selectedBeltIdsRef.current,
+      ...(selectedBeltIdRef.current ? [selectedBeltIdRef.current] : []),
+    ])];
+    const preview = getEntityRemovalPreview(gameRef.current, entityIds, beltIds);
+    if (preview.entityCount === 0 && preview.relatedBeltCount === 0) {
+      setNotice("当前选区没有可回收内容；已锁定建筑不会被删除");
+      playTone("alert");
+      return;
+    }
+    if (!preview.refundSafe) {
+      setNotice("回收未执行：预计返还会超出安全整数范围，请先导出备份并联系存档救援");
+      playTone("alert");
+      return;
+    }
+    const returnLabels = preview.returns.slice(0, 6).map((entry) =>
+      `${getConstructionDefinition(entry.constructionId)?.name ?? entry.constructionId} ×${formatQuantityCompact(entry.amount)}`);
+    const returnSummary = returnLabels.length > 0
+      ? `预计返还：${returnLabels.join("、")}${preview.returns.length > returnLabels.length ? `等 ${preview.returns.length} 类物资` : ""}。`
+      : "没有可返还的施工物资。";
+    const confirmed = await gameDialog.confirm(
+      `确认回收 ${preview.entityCount} 个建筑节点（合计堆叠 ${preview.buildingCount.toLocaleString("zh-CN")}）和 ${preview.relatedBeltCount} 条相关传送带？${returnSummary}`,
+      { danger: true, confirmLabel: "确认回收" },
+    );
+    if (!confirmed) return;
+    const current = gameRef.current;
+    const next = beltIds.reduce((state, beltId) => removeBelt(state, beltId), removeEntities(current, entityIds));
+    if (next === current) {
+      setNotice("回收未执行：目标可能已锁定、已删除，或返还数量超出安全整数范围");
+      playTone("alert");
+      return;
+    }
+    commitGame(() => next);
+    setSelectedEntityIds([]);
+    setSelectedBeltIds([]);
+    setSelectedBeltId(null);
+    setNotice(`已回收 ${preview.entityCount} 个建筑节点和 ${preview.relatedBeltCount} 条相关传送带`);
+    playTone("remove");
+  }, [commitGame, gameDialog, playTone]);
+
+  const changeRemoteStationSlotItem = useCallback(async (entityId: string, slotIndex: number, itemId: ItemId | null) => {
+    const station = gameRef.current.entities.find((entity) => entity.id === entityId);
+    const previousItemId = station ? getStationSlots(station)[slotIndex]?.itemId : undefined;
+    if (!station || previousItemId === itemId) return;
+    const previousLabel = previousItemId ? ITEMS[previousItemId].name : "空槽位";
+    const nextLabel = itemId ? ITEMS[itemId].name : "清空槽位";
+    const confirmed = await gameDialog.confirm(
+      `确认将${getPlanetDisplayName(gameRef.current, station.planetId)}的槽位 ${slotIndex + 1} 从“${previousLabel}”改为“${nextLabel}”？原槽位缓存会退回该行星物资托盘，相关传送带会拆除并返还，相关运输任务会安全取消。`,
+      { danger: Boolean(previousItemId), confirmLabel: "确认修改" },
+    );
+    if (!confirmed) return;
+    const before = gameRef.current;
+    const next = setRemoteStationSlotItem(before, entityId, slotIndex, itemId);
+    if (next === before) {
+      setNotice("槽位物品未修改：目标已锁定、配置重复或状态已变化");
+      playTone("alert");
+      return;
+    }
+    commitGame(() => next);
+    setNotice(`已远程修改${getPlanetDisplayName(next, station.planetId)}的物流槽位`);
+  }, [commitGame, gameDialog, playTone]);
+
+  const changeRemoteCollectorItem = useCallback(async (entityId: string, itemId: ItemId) => {
+    const collector = gameRef.current.entities.find((entity) => entity.id === entityId && entity.buildingId === "orbital_collector");
+    if (!collector || collector.storedItemId === itemId) return;
+    const confirmed = await gameDialog.confirm(
+      `确认将${getPlanetDisplayName(gameRef.current, collector.planetId)}的轨道采集器切换为${ITEMS[itemId].name}？已有本地缓存、线路和运输任务会按现有物流切换规则处理。`,
+      { confirmLabel: "确认切换" },
+    );
+    if (!confirmed) return;
+    const before = gameRef.current;
+    const next = setLogisticsItem(before, entityId, itemId);
+    if (next === before) {
+      setNotice("轨道采集物品未修改：目标已锁定或该气体不可用");
+      playTone("alert");
+      return;
+    }
+    commitGame(() => next);
+    setNotice(`轨道采集器已切换为${ITEMS[itemId].name}`);
+  }, [commitGame, gameDialog, playTone]);
+
+  const changeRemoteFleetTarget = useCallback((entityId: string, kind: "drone" | "vessel", target: number) => {
+    const result = setRemoteStationFleetTarget(gameRef.current, entityId, kind, target);
+    if (result.state !== gameRef.current) commitGame(() => result.state);
+    const label = kind === "drone" ? "物流运输机" : "物流运输船";
+    setNotice(result.reason === "busy-vehicles"
+      ? `${label}目标不能低于执行中数量 ${result.busy}`
+      : result.reason === "portable-stock"
+        ? `${label}已调整为 ${result.final}/${result.capacity}，随身库存不足，仍缺 ${result.shortfall}`
+        : result.reason ? `${label}数量调整失败` : `${label}已调整为 ${result.final}/${result.capacity}`);
+  }, [commitGame]);
+
+  const changeRemoteStackTarget = useCallback((entityId: string, target: number) => {
+    const before = gameRef.current;
+    const entity = before.entities.find((candidate) => candidate.id === entityId && candidate.buildingId);
+    if (!entity || !Number.isSafeInteger(target) || target < 1) {
+      setNotice("堆叠数量必须是正安全整数");
+      playTone("alert");
+      return;
+    }
+    if (target > entity.machineCount) {
+      const check = getBuildingStackAdditionCheck(entity.machineCount, target - entity.machineCount, getBuilding(entity.buildingId!).name);
+      if (!check.ok) {
+        setNotice(check.label);
+        playTone("alert");
+        return;
+      }
+    }
+    const next = setRemoteBuildingStackTarget(before, entityId, target);
+    if (next === before && target !== entity.machineCount) {
+      setNotice(target > entity.machineCount ? "扩建失败：施工托盘库存不足或建筑不可编辑" : "减堆失败：返还数量超出安全范围或建筑不可编辑");
+      playTone("alert");
+      return;
+    }
+    if (next !== before) commitGame(() => next);
+    setNotice(`${getBuilding(entity.buildingId!).name}堆叠已调整为 ×${target.toLocaleString("zh-CN")}`);
+  }, [commitGame, playTone]);
+
   const copyEntitiesAsBlueprint = (entityIds: readonly string[]) => {
     const eligibleIds = getBlueprintEligibleEntityIds(gameRef.current, [...entityIds]);
     if (eligibleIds.length === 0) {
       setNotice("选区中没有可复制的设备");
       return;
     }
+    const before = gameRef.current;
     const blueprintId = `blueprint_${gameRef.current.nextId}`;
-    commitGame((current) => createBlueprint(current, eligibleIds));
+    const next = createBlueprint(before, eligibleIds);
+    if (next === before) {
+      setNotice("蓝图未创建：建筑或采矿设备堆叠必须是 1～100,000,000 的安全整数；历史超限建筑仍会保留");
+      playTone("alert");
+      return;
+    }
+    commitGame(() => next);
     setBlueprintPlacementId(blueprintId);
     setPlacement(null);
     setSelectionMode(false);
+    setDeleteMode(false);
     setRegionMode(false);
     setNotice(`已复制 ${eligibleIds.length} 个设备，点击画布粘贴蓝图`);
   };
@@ -4380,6 +4573,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setDysonPlannerOpen(false);
     setPlacement(null);
     setSelectionMode(false);
+    setDeleteMode(false);
     setRegionMode(false);
     setSelectedEntityIds([]);
     setNotice("点击画布确定蓝图部署位置");
@@ -4566,8 +4760,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [game.timeWarp.enabled]);
 
   return (
+    <ItemReferenceActionsProvider actions={itemReferenceActions}>
     <main
-      className={`game-shell${placement || blueprintPlacementId ? " game-shell--placing" : ""}${selectionMode ? " game-shell--selecting" : ""}${regionMode ? " game-shell--regioning" : ""}${mobilePanel ? ` mobile-panel--${mobilePanel} mobile-panel-stage--${mobilePanelStage}` : ""}${leftSidebarCollapsed ? " sidebar-left-collapsed" : ""}${rightSidebarCollapsed ? " sidebar-right-collapsed" : ""}${pureIdleActive ? " game-shell--pure-idle" : ""}`}
+      className={`game-shell${placement || blueprintPlacementId ? " game-shell--placing" : ""}${selectionMode ? " game-shell--selecting" : ""}${deleteMode ? " game-shell--deleting" : ""}${regionMode ? " game-shell--regioning" : ""}${mobilePanel ? ` mobile-panel--${mobilePanel} mobile-panel-stage--${mobilePanelStage}` : ""}${leftSidebarCollapsed ? " sidebar-left-collapsed" : ""}${rightSidebarCollapsed ? " sidebar-right-collapsed" : ""}${pureIdleActive ? " game-shell--pure-idle" : ""}`}
       onContextMenuCapture={(event) => {
         const target = event.target as HTMLElement | null;
         if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
@@ -4904,13 +5099,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           setNotice(`已解锁 ${ids.length} 个建筑`);
         }}
         onRemove={async () => {
-          if (!await gameDialog.confirm(`确认回收 ${selectedEntityIds.length} 个节点和 ${selectedBeltIds.length} 条线路？`, { danger: true, confirmLabel: "确认回收" })) return;
-          commitGame((current) => selectedBeltIds.reduce((next, beltId) => removeBelt(next, beltId), removeEntities(current, selectedEntityIds)));
-          setSelectedEntityIds([]);
-          setSelectedBeltIds([]);
-          setSelectedBeltId(null);
-          setNotice("选区设备与运输线已回收至施工托盘");
-          playTone("remove");
+          await confirmRemoveSelection();
         }}
         onClear={() => { setSelectedEntityIds([]); setSelectedBeltIds([]); setSelectedBeltId(null); }}
       /> : null}
@@ -5137,6 +5326,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onToggleRightSidebar={() => setRightSidebarCollapsed((collapsed) => !collapsed)}
             onModeChange={(enabled) => {
               setSelectionMode(enabled);
+              setDeleteMode(false);
               setRegionMode(false);
               setRegionDraft(null);
               setPlacement(null);
@@ -5151,6 +5341,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               setRegionMode(enabled);
               setRegionDraft(null);
               setSelectionMode(false);
+              setDeleteMode(false);
               setPlacement(null);
               setBlueprintPlacementId(null);
               setSelectedEntityIds([]);
@@ -5162,6 +5353,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               if (blueprintsOpen) closeAllWorkspaces();
               else openCommandWorkspace("blueprints");
               setSelectionMode(false);
+              setDeleteMode(false);
               setRegionMode(false);
               setMobilePanel(null);
             }}
@@ -5172,6 +5364,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
                 setStatisticsFocusTab("networks");
               }
               setSelectionMode(false);
+              setDeleteMode(false);
               setRegionMode(false);
               setMobilePanel(null);
               setNotice(null);
@@ -5221,17 +5414,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               commitGame((current) => setEntitiesInteractionLocked(current, ids, false));
               setNotice(`已解锁 ${ids.length} 个建筑`);
             }}
-            onRemove={() => {
-              commitGame((current) => selectedBeltIds.reduce((next, beltId) => removeBelt(next, beltId), removeEntities(current, selectedEntityIds)));
-              setSelectedEntityIds([]);
-              setSelectedBeltIds([]);
-              setSelectedBeltId(null);
-              setNotice("选区设备与运输线已回收至施工托盘");
-              playTone("remove");
-            }}
+            onRemove={() => void confirmRemoveSelection()}
             onClear={() => { setSelectedEntityIds([]); setSelectedBeltIds([]); setSelectedBeltId(null); }}
             onDone={() => {
               setSelectionMode(false);
+              setDeleteMode(false);
               setSelectedEntityIds([]);
               setSelectedBeltIds([]);
               setSelectedBeltId(null);
@@ -5493,6 +5680,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       </div>
       <ConstructionDock
         game={observedGame}
+        deleteMode={deleteMode}
         placement={placement}
         beltTier={dockBeltTier}
         beltTierMode={beltTierMode}
@@ -5501,6 +5689,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           setPlacement(buildingId);
           setBlueprintPlacementId(null);
           setSelectionMode(false);
+          setDeleteMode(false);
           setRegionMode(false);
           setRegionDraft(null);
           setSelectedEntityIds([]);
@@ -5519,6 +5708,19 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         onCraftItem={handleQuickCraftFleet}
         onStowCargo={handleStowCargo}
         onMissingCraftNavigate={handleMissingConstructionCraft}
+        onDeleteModeChange={(enabled) => {
+          setDeleteMode(enabled);
+          setSelectionMode(enabled);
+          setRegionMode(false);
+          setRegionDraft(null);
+          setPlacement(null);
+          setBlueprintPlacementId(null);
+          setSelectedEntityIds([]);
+          setSelectedBeltIds([]);
+          setSelectedBeltId(null);
+          if (nextMobileShell) setMobileCanvasMode(enabled ? "select" : "browse");
+          setNotice(enabled ? "回收模式：单击、Shift 多选、框选或手机逐点选择建筑，再点击回收确认" : "已退出建筑回收模式");
+        }}
       />
       <OnboardingCoach game={observedGame} onAction={runOnboardingAction} compact={nextMobileShell} />
       <BlueprintWorkspace
@@ -5819,6 +6021,29 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onRegisterContentPack={registerValidatedContentPack}
             onSetContentPackEnabled={toggleRegisteredContentPack}
             onRemoveContentPack={removeRegisteredContentPack}
+            logisticsActions={{
+              onSlotItemChange: (entityId, slotIndex, itemId) => void changeRemoteStationSlotItem(entityId, slotIndex, itemId),
+              onSlotModeChange: (entityId, slotIndex, scope, mode) => commitGame((current) => setStationSlotMode(current, entityId, slotIndex, scope, mode)),
+              onSlotMinimumLoadChange: (entityId, slotIndex, minimumLoad) => commitGame((current) => setStationSlotMinimumLoad(current, entityId, slotIndex, minimumLoad)),
+              onSlotLimitsChange: (entityId, slotIndex, minStock, maxStock) => commitGame((current) => setStationSlotLimits(current, entityId, slotIndex, minStock, maxStock)),
+              onSlotPriorityChange: (entityId, slotIndex, priority) => commitGame((current) => setStationSlotPriority(current, entityId, slotIndex, priority)),
+              onFleetTargetChange: changeRemoteFleetTarget,
+              onWarperAdjust: (entityId, delta) => commitGame((current) => adjustRemoteStationWarpers(current, entityId, delta)),
+              onWarpEnabledChange: (entityId, enabled) => commitGame((current) => setStationWarpEnabled(current, entityId, enabled)),
+              onWarperAutoRefillChange: (entityId, enabled) => commitGame((current) => setStationWarperAutoRefill(current, entityId, enabled)),
+              onWarperTargetChange: (entityId, target) => commitGame((current) => setStationWarperTarget(current, entityId, target)),
+              onStackTargetChange: changeRemoteStackTarget,
+              onQuantumAttach: (entityId) => {
+                const before = gameRef.current;
+                const next = attachInterstellarStationToQuantumNetwork(before, entityId);
+                if (next !== before) {
+                  commitGame(() => next);
+                  setNotice("量子网络接入已开始，旧星际航线会先安全完成");
+                } else setNotice(getQuantumAttachmentStatus(before, entityId)?.blocker === "not-upgraded" ? "需要先升级到 Mk.II" : "当前物流塔无法接入量子网络");
+              },
+              onCollectorQuantumModeChange: (entityId, enabled) => commitGame((current) => setOrbitalCollectorQuantumMode(current, entityId, enabled)),
+              onCollectorItemChange: (entityId, itemId) => void changeRemoteCollectorItem(entityId, itemId),
+            }}
           />
         ) : null}
         {offlineReport ? <OfflineReportWorkspace report={offlineReport} onClose={closeOfflineReport} /> : null}
@@ -5901,5 +6126,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       {notice ? <div className="game-notice" role="status">{notice}</div> : null}
       {pureIdleActive ? <TimeWarpIdleOverlay game={observedGame} startedAt={pureIdleStartedAt} saveFailure={saveFailure} workerActive={simulationWorkerActive} onStop={stopPureIdle} /> : null}
     </main>
+    </ItemReferenceActionsProvider>
   );
 }

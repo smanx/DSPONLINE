@@ -20,6 +20,8 @@ const UI_EN: TranslationMap = {
   "运营中心": "Operations Center",
   "警报": "Alerts",
   "成就": "Achievements",
+  "物流管理": "Logistics Management",
+  "跨星球编辑物流塔、轨道采集器与量子模式": "Edit logistics stations, orbital collectors, and quantum modes across planets",
   "存档": "Saves",
   "内容包": "Content Packs",
   "生产统计": "Production Statistics",

@@ -489,7 +489,11 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
             <button className={viewMode === "compact" ? "active" : ""} type="button" aria-pressed={viewMode === "compact"} onClick={() => setBlueprintViewMode("compact")} title="只显示部署所需摘要">精简</button>
             <button className={viewMode === "detailed" ? "active" : ""} type="button" aria-pressed={viewMode === "detailed"} onClick={() => setBlueprintViewMode("detailed")} title="显示蓝图完整参数">详细</button>
           </div>
-          <button type="button" onClick={() => { setImportOpen((current) => !current); setImportMessage(null); }} title="导入蓝图" aria-label="导入蓝图"><Upload size={15} /></button>
+          <button className="blueprint-import-open" type="button" onClick={() => {
+            setImportOpen(true);
+            setImportMessage(null);
+            fileInputRef.current?.click();
+          }} title="选择蓝图文件或粘贴 JSON" aria-label="导入蓝图"><Upload size={15} /><span>导入蓝图</span></button>
         </> : null}<button className="blueprint-close" type="button" onClick={onClose} title="关闭蓝图工作区" aria-label="关闭蓝图工作区"><X size={18} /></button></div>
       </header>
       <nav className="blueprint-tabs" aria-label="蓝图视图">
@@ -498,6 +502,13 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
       </nav>
       {activeTab === "library" ? <>
       <input ref={fileInputRef} className="blueprint-import-file" type="file" accept="application/json,.json" aria-label="选择要导入的蓝图文件" onChange={async (event) => { const file = event.target.files?.[0]; if (file) importRaw(await file.text()); event.target.value = ""; }} />
+      {mobile && !detailBlueprintId ? <div className="mobile-blueprint-library-actions">
+        <button type="button" onClick={() => {
+          setImportOpen(true);
+          setImportMessage(null);
+          fileInputRef.current?.click();
+        }} aria-label="导入蓝图"><Upload size={17} /><span>导入蓝图</span></button>
+      </div> : null}
       <div className="blueprint-library-shell">
       {importOpen ? <section className="blueprint-import-panel" aria-label="蓝图导入">
         <header><div><Upload size={15} /><span><strong>导入蓝图</strong><small>交换文件会校验当前内容目录中的设备、物品和配方。</small></span></div><button type="button" onClick={() => fileInputRef.current?.click()}><Upload size={13} />选择文件</button></header>

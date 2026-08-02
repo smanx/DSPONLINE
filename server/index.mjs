@@ -861,6 +861,9 @@ function validateSavePayload(payload) {
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities) ||
       !Number.isInteger(state.version) || state.version < 1 || state.version > 46) return false;
+    if (state.entities.some((entity) => !entity || typeof entity !== "object" ||
+      (entity.machineCount !== undefined && (!Number.isSafeInteger(entity.machineCount) || entity.machineCount < 0)) ||
+      (entity.minerCount !== undefined && (!Number.isSafeInteger(entity.minerCount) || entity.minerCount < 0)))) return false;
     if (state.version >= 38 && !Array.isArray(state.belts)) return false;
     if (state.belts !== undefined && (!Array.isArray(state.belts) || state.belts.some((belt) =>
       state.version >= 38
@@ -1021,7 +1024,7 @@ function validateSavePayload(payload) {
         }
         for (const anchor of blueprint.resourceAnchors ?? []) {
           if (!anchor || typeof anchor.key !== "string" || keys.has(anchor.key) || typeof anchor.resourceId !== "string" ||
-            typeof anchor.extractorBuildingId !== "string" || !Number.isInteger(anchor.minerCount) || anchor.minerCount < 1 || anchor.minerCount > 10_000 ||
+            typeof anchor.extractorBuildingId !== "string" || !Number.isSafeInteger(anchor.minerCount) || anchor.minerCount < 1 || anchor.minerCount > Number.MAX_SAFE_INTEGER ||
             !Number.isFinite(anchor.offset?.x) || !Number.isFinite(anchor.offset?.y)) return true;
           keys.add(anchor.key);
         }
@@ -1046,7 +1049,7 @@ function validateSavePayload(payload) {
         const keys = new Set();
         for (const entity of blueprint.entities) {
           if (!entity || typeof entity !== "object" || !validId(entity.key) || keys.has(entity.key) || !validId(entity.buildingId, 80) ||
-            !Number.isSafeInteger(entity.machineCount) || entity.machineCount < 1 || entity.machineCount > 100_000_000 ||
+            !Number.isSafeInteger(entity.machineCount) || entity.machineCount < 1 || entity.machineCount > Number.MAX_SAFE_INTEGER ||
             !Number.isFinite(entity.offset?.x) || !Number.isFinite(entity.offset?.y) ||
             (entity.quantumTarget !== undefined &&
               (entity.buildingId === "interstellar_logistics_station"
@@ -1056,7 +1059,7 @@ function validateSavePayload(payload) {
         }
         for (const anchor of blueprint.resourceAnchors ?? []) {
           if (!anchor || typeof anchor !== "object" || !validId(anchor.key) || keys.has(anchor.key) || !validId(anchor.resourceId, 80) ||
-            !validId(anchor.extractorBuildingId, 80) || !Number.isInteger(anchor.minerCount) || anchor.minerCount < 1 || anchor.minerCount > 10_000 ||
+            !validId(anchor.extractorBuildingId, 80) || !Number.isSafeInteger(anchor.minerCount) || anchor.minerCount < 1 || anchor.minerCount > Number.MAX_SAFE_INTEGER ||
             !Number.isFinite(anchor.offset?.x) || !Number.isFinite(anchor.offset?.y)) return false;
           keys.add(anchor.key);
         }

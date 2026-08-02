@@ -352,6 +352,8 @@
 .game-shell[data-mobile-shell="true"] .mobile-blueprints { display: block !important; overflow: hidden auto !important; }
 .game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-library-shell { display: block; overflow: visible; }
 .game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-import-file { display: none; }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .mobile-blueprint-library-actions { position: sticky; z-index: 11; top: 48px; display: flex; justify-content: flex-end; padding: 7px 9px; border-bottom: 1px solid var(--theme-border); background: var(--theme-canvas); }
+.game-shell[data-mobile-shell="true"] .mobile-blueprints .mobile-blueprint-library-actions > button { display: inline-flex; min-width: 132px; min-height: 48px; align-items: center; justify-content: center; gap: 7px; padding: 6px 12px; border: 1px solid var(--theme-accent-border); border-radius: 6px; background: var(--theme-accent-soft); color: var(--cyan); cursor: pointer; }
 .game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-import-panel { position: static; width: auto; margin: 8px; }
 .game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-library { display: grid; grid-template-columns: 1fr; gap: 8px; padding: 9px; overflow: visible; }
 .game-shell[data-mobile-shell="true"] .mobile-blueprints .blueprint-card { min-width: 0; }

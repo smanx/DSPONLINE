@@ -1,5 +1,5 @@
-import { Factory, FlaskConical, MapPin } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { BookOpen, Crosshair, Factory, FlaskConical, MapPin } from "lucide-react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { getCompatibleRecipeBuildings, getItem, getPlanet } from "../game/content";
 import { getConsumingRecipes, getProducingRecipes, getResearchUses, getResourceSources } from "../game/recipeGraph";
@@ -17,6 +17,18 @@ const KIND_LABELS = {
   matrix: "科研矩阵",
 } as const;
 
+export interface ItemReferenceActions {
+  getLocateAvailability: (itemId: ItemId) => { available: boolean; reason?: string };
+  onLocate: (itemId: ItemId) => void;
+  onOpenCodex: (itemId: ItemId) => void;
+}
+
+const ItemReferenceActionsContext = createContext<ItemReferenceActions | null>(null);
+
+export function ItemReferenceActionsProvider({ actions, children }: { actions: ItemReferenceActions; children: ReactNode }) {
+  return <ItemReferenceActionsContext.Provider value={actions}>{children}</ItemReferenceActionsContext.Provider>;
+}
+
 export function ItemGlyph({ itemId, className = "" }: { itemId: ItemId; className?: string }) {
   const item = getItem(itemId);
   return <i className={`item-glyph item-glyph--${item.kind}${className ? ` ${className}` : ""}`} style={{ backgroundColor: item.color }}>{item.symbol}</i>;
@@ -28,6 +40,9 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
   className?: string;
 }) {
   const [anchor, setAnchor] = useState<TooltipAnchor | null>(null);
+  const actions = useContext(ItemReferenceActionsContext);
+  const closeTimerRef = useRef<number | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
   const item = getItem(itemId);
   const details = useMemo(() => ({
     producers: getProducingRecipes(itemId),
@@ -47,7 +62,23 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
     };
   }, [anchor]);
 
+  useEffect(() => () => {
+    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+    if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
+  }, []);
+
+  const cancelClose = () => {
+    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = null;
+  };
+
+  const scheduleClose = () => {
+    cancelClose();
+    closeTimerRef.current = window.setTimeout(() => setAnchor(null), 140);
+  };
+
   const open = (element: HTMLElement) => {
+    cancelClose();
     const bounds = element.getBoundingClientRect();
     const width = Math.min(286, window.innerWidth - 16);
     const left = Math.max(8, Math.min(window.innerWidth - width - 8, bounds.left + bounds.width / 2 - width / 2));
@@ -62,15 +93,44 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
   const primaryEquipment = primaryRecipe
     ? getCompatibleRecipeBuildings(primaryRecipe).map((building) => building.shortName).join(" / ")
     : "";
+  const locateAvailability = actions?.getLocateAvailability(itemId) ?? { available: false, reason: "当前页面未连接工厂定位" };
   return (
     <span
       className={`item-reference${className ? ` ${className}` : ""}`}
       onMouseEnter={(event) => open(event.currentTarget)}
-      onMouseLeave={() => setAnchor(null)}
+      onMouseLeave={scheduleClose}
+      onFocus={(event) => open(event.currentTarget)}
+      onBlur={scheduleClose}
+      onClick={(event) => {
+        if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable='true']")) return;
+        if (window.matchMedia?.("(pointer: coarse)").matches) open(event.currentTarget);
+      }}
+      onPointerDown={(event) => {
+        if (event.pointerType === "mouse" || event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable='true']")) return;
+        if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
+        const element = event.currentTarget;
+        longPressTimerRef.current = window.setTimeout(() => open(element), 420);
+      }}
+      onPointerUp={() => {
+        if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }}
+      onPointerCancel={() => {
+        if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }}
     >
       {children}
       {anchor ? createPortal(
-        <aside className="item-hover-card" role="tooltip" style={anchor}>
+        <aside
+          className="item-hover-card"
+          role="dialog"
+          aria-label={`${item.name}快捷操作`}
+          style={anchor}
+          onMouseEnter={cancelClose}
+          onMouseLeave={scheduleClose}
+          onClick={(event) => event.stopPropagation()}
+        >
           <header>
             <ItemGlyph itemId={itemId} />
             <span><strong>{item.name}</strong><small>{KIND_LABELS[item.kind]}</small></span>
@@ -95,6 +155,22 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
             </div>
           ) : null}
           {details.sources.length === 0 && !primaryRecipe ? <div className="item-hover-empty">暂无已登记的生产来源</div> : null}
+          <footer className="item-hover-actions">
+            <button
+              type="button"
+              disabled={!locateAvailability.available}
+              title={locateAvailability.available ? `定位${item.name}生产线` : locateAvailability.reason ?? "当前存档没有生产来源"}
+              aria-label={locateAvailability.available ? `定位${item.name}生产线` : `${item.name}没有可定位的生产来源`}
+              onClick={() => { actions?.onLocate(itemId); setAnchor(null); }}
+            ><Crosshair size={15} /><span>定位</span></button>
+            <button
+              type="button"
+              disabled={!actions}
+              title={`打开${item.name}图鉴`}
+              aria-label={`打开${item.name}图鉴`}
+              onClick={() => { actions?.onOpenCodex(itemId); setAnchor(null); }}
+            ><BookOpen size={15} /><span>打开图鉴</span></button>
+          </footer>
         </aside>,
         document.body,
       ) : null}

@@ -2061,6 +2061,8 @@ interface ConstructionDockProps {
   onCraftItem: (recipeId: RecipeId) => void;
   onStowCargo: () => void;
   onMissingCraftNavigate: (buildingId: ConstructionId) => void;
+  deleteMode: boolean;
+  onDeleteModeChange: (enabled: boolean) => void;
 }
 
 const PLACEMENT_COUNTS: PlacementCount[] = [1, 2, 5, 10];
@@ -2094,7 +2096,7 @@ const CONSTRUCTION_CATEGORY_IDS: Record<Exclude<ConstructionCategory, "all" | "r
   dyson: new Set(["em_rail_ejector", "vertical_launching_silo", "ray_receiver", "galactic_material_exporter", "micro_black_hole_connector", "time_warp_device"]),
 };
 
-export function ConstructionDock({ game, placement, beltTier, beltTierMode, placementCount, onPlacementChange, onBeltTierChange, onBeltTierModeChange, onPlacementCountChange, onOpenFabricator, onCraft, onCraftItem, onStowCargo, onMissingCraftNavigate }: ConstructionDockProps) {
+export function ConstructionDock({ game, placement, beltTier, beltTierMode, placementCount, onPlacementChange, onBeltTierChange, onBeltTierModeChange, onPlacementCountChange, onOpenFabricator, onCraft, onCraftItem, onStowCargo, onMissingCraftNavigate, deleteMode, onDeleteModeChange }: ConstructionDockProps) {
   const { isEnglish } = useAppLocale();
   const [category, setCategory] = useState<ConstructionCategory>("all");
   const [recent, setRecent] = useState<Array<BuildingId | ConveyorBeltId>>(loadRecentConstruction);
@@ -2151,6 +2153,7 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
         <div className="dock-mode-buttons">
           <button className="dock-compact-toggle" type="button" aria-pressed={compact} onClick={toggleCompact} title={compact ? "恢复标准施工托盘" : "使用两行精简施工托盘"} aria-label={compact ? "关闭施工托盘精简模式" : "开启施工托盘精简模式"}>{compact ? <Rows3 size={12} /> : <LayoutGrid size={12} />}<span>{compact ? "标准" : "精简"}</span></button>
           <button className={`dock-belt-auto${beltTierMode === "auto" ? " active" : ""}`} type="button" aria-pressed={beltTierMode === "auto"} onClick={() => onBeltTierModeChange("auto")} title={isEnglish ? `Automatically use the highest belt tier in inventory; current: Mk.${beltTierRoman(beltTier)}` : `自动使用现有库存中的最高等级传送带，当前 Mk.${beltTierRoman(beltTier)}`}><Route size={12} /><span>{isEnglish ? "Auto" : "自动"} Mk.{beltTierRoman(beltTier)}</span></button>
+          <button className={`dock-remove-mode${deleteMode ? " active" : ""}`} type="button" aria-pressed={deleteMode} onClick={() => onDeleteModeChange(!deleteMode)} title={deleteMode ? "退出建筑回收模式" : "选择并回收画布建筑"} aria-label={deleteMode ? "退出建筑回收模式" : "进入建筑回收模式"}><Trash2 size={12} /><span>{deleteMode ? "退出回收" : "回收"}</span></button>
         </div>
         <div className="placement-count" aria-label="批量部署数量">
           {PLACEMENT_COUNTS.map((count) => (

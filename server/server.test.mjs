@@ -1343,14 +1343,26 @@ test("validates v34 time warp and accepts Android v35 through current v46 saves"
     body: JSON.stringify({ payload: legacyQuantumTarget, expectedRevision: 15 }),
   });
   assert.equal(acceptedLegacyQuantumTarget.response.status, 200, JSON.stringify(acceptedLegacyQuantumTarget.body));
+  const historicalOversizedStacks = v46PayloadFor((state) => {
+    state.entities[2].machineCount = 100_000_001;
+    state.blueprints[0].entities[0].machineCount = 100_000_002;
+    state.blueprintVersions[0].definition.entities[0].machineCount = 100_000_003;
+  });
+  const acceptedHistoricalOversizedStacks = await request("/api/cloud-save?slot=3", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ payload: historicalOversizedStacks, expectedRevision: 16 }),
+  });
+  assert.equal(acceptedHistoricalOversizedStacks.response.status, 200, JSON.stringify(acceptedHistoricalOversizedStacks.body));
   for (const invalid of [
-    v46PayloadFor((state) => { state.blueprints[0].entities[0].machineCount = 100_000_001; }),
+    v46PayloadFor((state) => { state.entities[2].machineCount = Number.MAX_SAFE_INTEGER + 1; }),
+    v46PayloadFor((state) => { state.blueprints[0].entities[0].machineCount = Number.MAX_SAFE_INTEGER + 1; }),
     v46PayloadFor((state) => { state.blueprints[0].entities[0].quantumTarget = true; }),
     v46PayloadFor((state) => { state.constructionQueue[0].blueprintVersionId = "missing@1"; }),
     v46PayloadFor((state) => { state.constructionQueue[0].reservedConstruction.storage_mk1 = -1; }),
     v46PayloadFor((state) => { state.constructionQueue[0].status = "waiting-fleet"; state.constructionQueue[0].buildingCompletedAt = 123; }),
   ]) {
-    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 16 }) });
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 17 }) });
     assert.equal(rejected.response.status, 400);
   }
 });

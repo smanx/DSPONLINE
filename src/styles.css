@@ -1829,6 +1829,34 @@ select:focus-visible {
   font-size: 8px;
 }
 
+.item-hover-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.item-hover-actions button {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: calc(9px * var(--ui-font-scale, 1));
+}
+
+.item-hover-actions button:first-child { border-color: #3c6d67; color: var(--cyan); }
+.item-hover-actions button:disabled { border-color: var(--line); color: var(--muted); cursor: not-allowed; opacity: .62; }
+
 .tray-list {
   display: flex;
   max-height: 250px;
@@ -7019,12 +7047,13 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
 .dock-mode-buttons {
   display: grid;
   width: 100%;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 3px;
 }
 
 .dock-compact-toggle,
-.dock-belt-auto {
+.dock-belt-auto,
+.dock-remove-mode {
   display: inline-flex;
   min-width: 0;
   min-height: 22px;
@@ -7047,6 +7076,15 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   background: #20322d;
   color: var(--cyan);
 }
+
+.dock-remove-mode.active {
+  border-color: #8b544b;
+  background: #2b1917;
+  color: #ef9b8a;
+}
+
+.game-shell--deleting .factory-canvas { cursor: crosshair; }
+.game-shell--deleting .selection-toolbar .danger { border-color: #9b5a4e; background: #351d19; color: #ffad9a; }
 
 .placement-count {
   display: grid;
@@ -16802,6 +16840,131 @@ select {
   margin: 0 auto;
 }
 
+.logistics-management { width: min(1240px, 100%); }
+
+.logistics-management-filters {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) 170px 150px;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.logistics-management-filters label {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--muted);
+}
+
+.logistics-management-filters label > svg { justify-self: center; }
+.logistics-management-filters input,
+.logistics-management-filters select {
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  outline: 0;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  font-size: calc(10px * var(--ui-font-scale, 1));
+}
+
+.logistics-management-filters label input { border: 0; background: transparent; }
+.logistics-management-filters select { padding: 0 8px; }
+.logistics-management-filters :is(input, select):focus { border-color: #4a8070; }
+
+.logistics-tree { display: grid; gap: 7px; padding-bottom: 24px; }
+.logistics-system { border-top: 1px solid var(--line-strong); background: #0f1513; }
+.logistics-planets { display: grid; gap: 5px; padding: 0 0 8px 22px; }
+.logistics-planet { border-left: 2px solid #2c4940; }
+.logistics-stations { display: grid; gap: 4px; padding: 0 8px 8px 24px; }
+
+.logistics-tree-toggle,
+.logistics-station-summary {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  text-align: left;
+}
+
+.logistics-tree-toggle { grid-template-columns: 24px minmax(0, 1fr); gap: 4px; padding: 5px 10px; }
+.logistics-tree-toggle > span,
+.logistics-station-summary > span { display: grid; min-width: 0; gap: 2px; }
+.logistics-tree-toggle strong,
+.logistics-station-summary strong { overflow-wrap: anywhere; font-size: calc(11px * var(--ui-font-scale, 1)); }
+.logistics-tree-toggle small,
+.logistics-station-summary small { color: var(--muted); font-size: calc(8px * var(--ui-font-scale, 1)); overflow-wrap: anywhere; }
+.logistics-tree-toggle:hover,
+.logistics-station-summary:hover { background: rgba(78, 122, 108, .09); }
+
+.logistics-station { border-top: 1px solid #30453e; background: #121916; }
+.logistics-station--issue { border-left: 3px solid #a27448; }
+.logistics-station--locked { opacity: .72; }
+.logistics-station-summary { grid-template-columns: 22px 24px minmax(0, 1fr) auto 20px; gap: 5px; padding: 5px 9px; }
+.logistics-station-summary > em { padding: 3px 6px; border: 1px solid #3d6256; border-radius: 3px; color: var(--cyan); font-size: calc(8px * var(--ui-font-scale, 1)); font-style: normal; white-space: nowrap; }
+.logistics-station--issue .logistics-station-summary > svg:last-child { color: var(--yellow); }
+
+.logistics-station-editor { padding: 0 10px 10px 36px; }
+.logistics-station-editor fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.logistics-editor-warning { display: flex; min-height: 36px; align-items: center; gap: 6px; margin: 0 0 7px; color: var(--yellow); font-size: calc(9px * var(--ui-font-scale, 1)); }
+.logistics-station-settings { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 6px; }
+.logistics-station-settings > label,
+.logistics-slot-editor label,
+.logistics-collector-settings label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  color: var(--muted);
+  font-size: calc(8px * var(--ui-font-scale, 1));
+}
+
+.logistics-station-settings input,
+.logistics-slot-editor :is(input, select),
+.logistics-collector-settings select {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  outline: 0;
+  background: #0d1311;
+  color: var(--text-soft);
+  font-size: calc(10px * var(--ui-font-scale, 1));
+}
+
+.logistics-checkbox { display: flex !important; min-height: 44px; align-items: center; grid-template-columns: 22px minmax(0, 1fr); }
+.logistics-checkbox input { width: 18px; min-height: 18px; }
+.logistics-warper-stepper { display: grid; min-height: 36px; grid-template-columns: 52px minmax(36px, 1fr) 52px; align-items: stretch; border: 1px solid var(--line-strong); }
+.logistics-warper-stepper button { border: 0; background: #17201d; color: var(--text-soft); cursor: pointer; }
+.logistics-warper-stepper b { display: grid; place-items: center; color: var(--text); }
+
+.logistics-collector-settings,
+.logistics-quantum-setting { display: flex; min-height: 48px; align-items: end; justify-content: space-between; gap: 8px; margin-top: 8px; padding: 7px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.logistics-collector-settings label { min-width: min(360px, 60%); }
+.logistics-collector-settings button,
+.logistics-quantum-setting button { min-height: 38px; padding: 0 10px; border: 1px solid #3c6d67; border-radius: 4px; background: #15231e; color: var(--cyan); cursor: pointer; font-size: calc(9px * var(--ui-font-scale, 1)); }
+.logistics-collector-settings button:disabled,
+.logistics-quantum-setting button:disabled { border-color: var(--line); color: var(--muted); cursor: not-allowed; }
+.logistics-quantum-setting > span { color: var(--muted); font-size: calc(9px * var(--ui-font-scale, 1)); }
+.logistics-quantum-setting strong { color: var(--text); }
+
+.logistics-slot-editor-list { display: grid; gap: 6px; margin-top: 8px; }
+.logistics-slot-editor { display: grid; gap: 7px; padding: 8px; border-top: 1px solid #30473f; background: #101714; }
+.logistics-slot-editor > header { display: flex; min-height: 24px; align-items: center; justify-content: space-between; gap: 8px; }
+.logistics-slot-editor > header strong { font-size: calc(10px * var(--ui-font-scale, 1)); }
+.logistics-slot-editor > header span { color: var(--muted); font-size: calc(8px * var(--ui-font-scale, 1)); text-align: right; overflow-wrap: anywhere; }
+.logistics-slot-grid { display: grid; grid-template-columns: repeat(6, minmax(100px, 1fr)); gap: 6px; }
+
 .operations-section-header {
   display: flex;
   min-height: 54px;
@@ -20104,6 +20267,7 @@ input:focus-visible,
 .blueprint-view-mode button:last-child { border-right: 0; }
 .blueprint-view-mode button.active { background: var(--theme-accent-soft); color: var(--cyan); }
 .blueprint-header-actions > button { display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-raised); color: var(--text-soft); cursor: pointer; }
+.blueprint-header-actions > .blueprint-import-open { display: inline-flex; width: auto; min-width: 104px; align-items: center; justify-content: center; gap: 6px; padding: 0 9px; font-size: calc(9px * var(--ui-font-scale, 1)); white-space: nowrap; }
 .blueprint-header-actions > button:hover { border-color: #55947f; color: var(--green); }
 .blueprint-import-file { display: none; }
 .blueprint-import-panel { display: grid; gap: 8px; margin: 0 12px 10px; padding: 9px; border: 1px solid #406b5d; border-radius: 4px; background: #101b17; }
@@ -20352,6 +20516,14 @@ input:focus-visible,
 .start-menu-native-update .desktop-update-actions > button { min-height: 36px; }
 @media (pointer: coarse) {
   .start-menu-native-update .desktop-update-actions > button { min-width: 44px; min-height: 44px; }
+  .item-hover-actions button { min-width: 44px; min-height: 44px; }
+  .logistics-station-settings input,
+  .logistics-slot-editor :is(input, select),
+  .logistics-collector-settings select,
+  .logistics-collector-settings button,
+  .logistics-quantum-setting button,
+  .logistics-warper-stepper { min-height: 44px; }
+  .logistics-warper-stepper button { min-width: 44px; }
 }
 
 @media (max-width: 760px) {
@@ -20363,7 +20535,33 @@ input:focus-visible,
   .content-pack-usage { max-width: 100%; white-space: normal; }
   .blueprint-header { grid-template-columns: minmax(145px, 1fr) auto auto; }
   .blueprint-headline { display: none; }
+  .blueprint-view-mode { display: none; }
+  .blueprint-header-actions > button { min-width: 44px; width: 44px; height: 44px; }
+  .blueprint-header-actions > .blueprint-import-open { width: auto; min-width: 116px; padding: 0 9px; white-space: normal; }
   .blueprint-import-panel { margin: 0 8px 8px; }
+  .blueprint-import-panel > header > button,
+  .blueprint-import-panel > footer > button { min-height: 44px; }
+  .logistics-management-filters { grid-template-columns: minmax(0, 1fr); }
+  .logistics-management-filters input,
+  .logistics-management-filters select { min-height: 45px; }
+  .logistics-planets { padding-left: 8px; }
+  .logistics-stations { padding-right: 3px; padding-left: 8px; }
+  .logistics-station-summary { grid-template-columns: 20px 22px minmax(0, 1fr) auto 18px; padding-right: 5px; padding-left: 5px; }
+  .logistics-station-editor { padding: 0 5px 8px 12px; }
+  .logistics-station-settings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .logistics-station-settings input,
+  .logistics-slot-editor :is(input, select),
+  .logistics-collector-settings select { min-height: 44px; }
+  .logistics-collector-settings,
+  .logistics-quantum-setting { align-items: stretch; flex-direction: column; }
+  .logistics-collector-settings label { min-width: 0; }
+  .logistics-collector-settings button,
+  .logistics-quantum-setting button { min-height: 44px; }
+  .logistics-slot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .logistics-slot-editor > header { align-items: flex-start; flex-direction: column; }
+  .logistics-slot-editor > header span { text-align: left; }
+  .dock-mode-buttons span { display: none; }
+  .dock-remove-mode { padding: 0; }
   .interplanetary-diagnostics > header small { display: none; }
   .interplanetary-diagnostic { grid-template-columns: 28px minmax(0, 1fr); }
   .interplanetary-diagnostic > button { grid-column: 2; justify-self: start; }
@@ -22243,6 +22441,18 @@ html[data-ui-font-scale="200"] .fabricator-list {
   overflow-wrap: anywhere;
 }
 
+html[data-ui-font-scale="200"] .logistics-station-settings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+html[data-ui-font-scale="200"] .logistics-slot-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+html[data-ui-font-scale="200"] .logistics-tree-toggle,
+html[data-ui-font-scale="200"] .logistics-station-summary { min-height: 52px; }
+html[data-ui-font-scale="200"] .blueprint-import-open { min-width: 148px; }
+
+@media (max-width: 760px) {
+  html[data-ui-font-scale="200"] .logistics-station-settings,
+  html[data-ui-font-scale="200"] .logistics-slot-grid { grid-template-columns: minmax(0, 1fr); }
+  html[data-ui-font-scale="200"] .blueprint-header-actions > .blueprint-import-open { min-width: 132px; }
+}
+
 html[data-ui-font-scale="200"] .construction-center-toolbar {
   flex-wrap: wrap;
 }
@@ -22489,6 +22699,15 @@ html:not([data-native-ui-scale])[data-ui-font-scale="150"] .construction-dock {
 
 html:not([data-native-ui-scale])[data-ui-font-scale="200"] .construction-dock {
   grid-template-columns: 196px minmax(0, 1fr) 172px;
+}
+
+html:not([data-native-ui-scale])[data-ui-font-scale="200"] .dock-mode-buttons span {
+  display: none;
+}
+
+html:not([data-native-ui-scale])[data-ui-font-scale="200"] .dock-mode-buttons button {
+  padding-right: 0;
+  padding-left: 0;
 }
 
 html:not([data-native-ui-scale])[data-ui-font-scale="125"] .construction-items {

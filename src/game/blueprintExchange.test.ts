@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_BELT_LANES, createBlueprint, createInitialState, installMiner, placeBlueprint, placeBuilding, setLogisticsItem, setStationHubConfiguration, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
+import { MAX_BELT_LANES, MAX_BUILDING_STACK_COUNT, createBlueprint, createInitialState, installMiner, placeBlueprint, placeBuilding, setLogisticsItem, setStationHubConfiguration, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
 import { importBlueprintExchange, parseBlueprintExchange, serializeBlueprintExchange } from "./blueprintExchange";
 
 describe("blueprint exchange", () => {
@@ -55,6 +55,44 @@ describe("blueprint exchange", () => {
     }));
     expect(result.valid).toBe(false);
     expect(result.issues).toEqual([expect.stringMatching(/machineCount=100000001.*1～100000000/)]);
+  });
+
+  it("reports the unsupported exchange format version explicitly", () => {
+    const result = parseBlueprintExchange(JSON.stringify({
+      type: "dsp-idle-blueprint",
+      formatVersion: 99,
+      blueprint: {},
+    }));
+    expect(result.valid).toBe(false);
+    expect(result.issues).toEqual(["蓝图格式版本 formatVersion=99 不受支持，当前支持 v1～v2"]);
+  });
+
+  it("accepts the exact building and resource-anchor stack limit and preserves it on exchange round-trip", () => {
+    const raw = JSON.stringify({
+      type: "dsp-idle-blueprint",
+      formatVersion: 2,
+      blueprint: {
+        id: "stack_limit_boundary",
+        name: "堆叠上限边界",
+        entities: [{ key: "node_1", buildingId: "storage_mk1", offset: { x: 240, y: 0 }, machineCount: MAX_BUILDING_STACK_COUNT }],
+        resourceAnchors: [{
+          key: "resource_1",
+          resourceId: "iron_ore",
+          extractorBuildingId: "mining_machine",
+          offset: { x: 0, y: 0 },
+          minerCount: MAX_BUILDING_STACK_COUNT,
+        }],
+        belts: [],
+      },
+    });
+    const parsed = parseBlueprintExchange(raw);
+    expect(parsed.valid).toBe(true);
+    expect(parsed.blueprint?.entities[0].machineCount).toBe(MAX_BUILDING_STACK_COUNT);
+    expect(parsed.blueprint?.resourceAnchors?.[0].minerCount).toBe(MAX_BUILDING_STACK_COUNT);
+    const roundTrip = parseBlueprintExchange(serializeBlueprintExchange(parsed.blueprint!));
+    expect(roundTrip.valid).toBe(true);
+    expect(roundTrip.blueprint?.entities[0].machineCount).toBe(MAX_BUILDING_STACK_COUNT);
+    expect(roundTrip.blueprint?.resourceAnchors?.[0].minerCount).toBe(MAX_BUILDING_STACK_COUNT);
   });
 
   it("rejects exchange files that reference content missing from the active catalog", () => {

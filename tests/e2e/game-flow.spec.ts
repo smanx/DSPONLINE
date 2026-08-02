@@ -3540,6 +3540,7 @@ test("spray coating closes the Mk.III proliferator logistics and extra-output lo
   await statistics.getByLabel("关闭生产统计").click();
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await assembler.click();
   await page.getByLabel("打开检查器").click();
   await expect(inspector.locator(".proliferator-control")).toBeVisible();
   await inspector.locator(".proliferator-control").scrollIntoViewIfNeeded();

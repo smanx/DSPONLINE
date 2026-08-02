@@ -67,8 +67,9 @@ import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
 import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 import { useAppLocale } from "../i18n/locale";
 import { useGameDialog } from "./GameDialogProvider";
+import { LogisticsManagementPanel, type LogisticsManagementPanelProps } from "./LogisticsManagementPanel";
 
-export type OperationsTab = "alerts" | "achievements" | "settings" | "performance" | "saves" | "packs" | "support";
+export type OperationsTab = "alerts" | "achievements" | "logistics" | "settings" | "performance" | "saves" | "packs" | "support";
 
 interface OperationsWorkspaceProps {
   open: boolean;
@@ -117,11 +118,13 @@ interface OperationsWorkspaceProps {
   onRegisterContentPack: () => void;
   onSetContentPackEnabled: (packId: string, enabled: boolean) => void;
   onRemoveContentPack: (packId: string) => void;
+  logisticsActions: Omit<LogisticsManagementPanelProps, "game">;
 }
 
 const TABS: Array<{ id: OperationsTab; label: string; icon: typeof Bell }> = [
   { id: "alerts", label: "警报", icon: Bell },
   { id: "achievements", label: "成就", icon: Trophy },
+  { id: "logistics", label: "物流管理", icon: Route },
   { id: "settings", label: "设置", icon: Settings2 },
   { id: "performance", label: "性能", icon: Activity },
   { id: "saves", label: "存档", icon: HardDrive },
@@ -812,6 +815,7 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
       <div className="operations-body">
         {props.tab === "alerts" ? <AlertsPanel alerts={props.alerts} onSelect={props.onAlertSelect} onOpenTutorial={props.onOpenTutorial} /> : null}
         {props.tab === "achievements" ? <AchievementsPanel game={props.game} /> : null}
+        {props.tab === "logistics" ? <LogisticsManagementPanel game={props.game} {...props.logisticsActions} /> : null}
         {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} endgameExtremeMode={props.endgameExtremeMode} onEndgameExtremeModeChange={props.onEndgameExtremeModeChange} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onOpenReleaseNotes={props.onOpenReleaseNotes} onOpenTutorial={props.onOpenTutorial} /> : null}
         {props.tab === "performance" ? <PerformancePanel game={props.game} snapshot={props.performanceMonitor} onStart={props.onStartPerformanceMonitor} onStop={props.onStopPerformanceMonitor} onClear={props.onClearPerformanceMonitor} onExport={props.onExportPerformanceMonitor} /> : null}
         {props.tab === "saves" ? <SavesPanel {...props} /> : null}
