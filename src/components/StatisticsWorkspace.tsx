@@ -127,6 +127,13 @@ const NETWORK_HEALTH_LABELS: Record<BeltHealth, string> = {
   idle: "等待",
 };
 
+const PRODUCTION_STATISTICS_WINDOW_LABELS_EN: Record<ProductionStatisticsWindow, string> = {
+  second: "Per second",
+  minute: "Per minute",
+  "ten-minutes": "Per 10 minutes",
+  hour: "Per hour",
+};
+
 const EMPTY_FACTORY_STATISTICS: FactoryStatistics = {
   items: [],
   issues: [],
@@ -383,8 +390,8 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
               ))}
             </div>
             <div className="statistics-production-controls">
-              <div className="statistics-window-control" role="group" aria-label="生产统计时间范围">
-                {PRODUCTION_STATISTICS_WINDOWS.map((window) => <button type="button" className={productionWindowId === window.id ? "active" : ""} aria-pressed={productionWindowId === window.id} key={window.id} onClick={() => setProductionWindowId(window.id)}>{window.label}</button>)}
+              <div className="statistics-window-control" role="group" aria-label={isEnglish ? "Production statistics time range" : "生产统计时间范围"}>
+                {PRODUCTION_STATISTICS_WINDOWS.map((window) => <button type="button" className={productionWindowId === window.id ? "active" : ""} aria-pressed={productionWindowId === window.id} key={window.id} onClick={() => setProductionWindowId(window.id)}>{isEnglish ? PRODUCTION_STATISTICS_WINDOW_LABELS_EN[window.id] : window.label}</button>)}
               </div>
               <label className="statistics-sort"><span>排序</span><select value={sort.key} onChange={(event) => {
                 const key = event.target.value as ItemSortKey;
