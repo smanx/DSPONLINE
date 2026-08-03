@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-03-v1.0.24");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-03-v1.0.25");
     }
   });
 }
@@ -148,7 +148,7 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "工厂管理与终局画布更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "画布交互与设置体验更新" });
   await expect(releaseNotes).toBeVisible();
   await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(11);
   await expect(releaseNotes).toContainText("一亿新增上限与历史堆叠保护");
@@ -194,7 +194,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-03-v1.0.24");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-03-v1.0.25");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 

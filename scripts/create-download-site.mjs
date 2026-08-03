@@ -54,9 +54,9 @@ if (desktopSha !== String(desktopRecord.sha256).toLowerCase()) throw new Error("
 const humanSize = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 const escaped = (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 const notes = [
-  `${version.version} 工厂管理、历史堆叠兼容与终局画布更新`,
-  "物流管理、精确线路、批量回收、物品快捷操作和手机蓝图导入",
-  "极限画布为设备级可选项，多 Worker 保持生产关闭，存档与在线协议不升级",
+  `${version.version} 画布交互、生产统计与设置体验更新`,
+  "稳定建筑选中、上下游寻线、星球统计筛选与独立侧栏收起",
+  "新增缺料跳转开关和 10 分钟/关闭自动保存，存档与在线协议不升级",
 ].join("；");
 const values = {
   __VERSION__: version.version,
