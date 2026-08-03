@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import { runPlanetSimulationPhase } from "./engine";
+import { createSimulationPlanetPhaseLookup, runPlanetSimulationPhase } from "./engine";
 import type { PlanetPhaseWorkerRequest, PlanetPhaseWorkerResponse } from "./multicoreSimulation";
 import { applyContentPackRuntimeSnapshot } from "./contentPacks";
 
@@ -23,18 +23,20 @@ self.onmessage = (event: MessageEvent<PlanetPhaseWorkerRequest>) => {
       efficiencyByEntity: new Map(request.reception.efficiencyByEntity),
       rayPowerByPlanet: new Map(request.reception.rayPowerByPlanet),
     };
-    const result = runPlanetSimulationPhase(
+    const lookup = createSimulationPlanetPhaseLookup(request.state);
+    const beltStepReservation = { allowanceByBelt: new Map<string, number>(), outputCredits: new Map(request.outputCredits) };
+    const results = request.planetIds.map((planetId) => runPlanetSimulationPhase(
       request.state,
       request.seconds,
-      request.planetId,
+      planetId,
       reception,
-      { allowanceByBelt: new Map(), outputCredits: new Map(request.outputCredits) },
-      undefined,
+      beltStepReservation,
+      lookup,
       undefined,
       request.batchPowerStorage,
       request.batchConstructionAutomation,
-    );
-    self.postMessage({ id: request.id, ok: true, result } satisfies PlanetPhaseWorkerResponse);
+    ));
+    self.postMessage({ id: request.id, ok: true, results } satisfies PlanetPhaseWorkerResponse);
   } catch (error) {
     self.postMessage({
       id: request.id,

@@ -68,6 +68,7 @@ import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 import { useAppLocale } from "../i18n/locale";
 import { useGameDialog } from "./GameDialogProvider";
 import { LogisticsManagementPanel, type LogisticsManagementPanelProps } from "./LogisticsManagementPanel";
+import type { CanvasPerformanceFeatureId, CanvasPerformanceFeatures } from "../game/endgamePerformance";
 
 export type OperationsTab = "alerts" | "achievements" | "logistics" | "settings" | "performance" | "saves" | "packs" | "support";
 
@@ -86,6 +87,8 @@ interface OperationsWorkspaceProps {
   productionRefreshIntervalMs: number;
   endgameExtremeMode: boolean;
   onEndgameExtremeModeChange: (enabled: boolean) => void;
+  canvasPerformanceFeatures: CanvasPerformanceFeatures;
+  onCanvasPerformanceFeatureChange: (id: CanvasPerformanceFeatureId, enabled: boolean) => void;
   performanceMonitor: PerformanceMonitorSnapshot;
   onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void;
   onStartPerformanceMonitor: () => void;
@@ -267,10 +270,39 @@ function BufferLimitSetting({ label, value, onChange, presets = BUFFER_LIMIT_PRE
   </section>;
 }
 
-function SettingsPanel({ game, report, productionRefreshPreference, productionRefreshIntervalMs, endgameExtremeMode, onEndgameExtremeModeChange, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onOpenReleaseNotes, onOpenTutorial }: { game: GameState; report: AutomaticPerformanceReport | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; endgameExtremeMode: boolean; onEndgameExtremeModeChange: (enabled: boolean) => void; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onOpenReleaseNotes: () => void; onOpenTutorial: () => void }) {
+function SettingsPanel({ game, report, productionRefreshPreference, productionRefreshIntervalMs, endgameExtremeMode, canvasPerformanceFeatures, onEndgameExtremeModeChange, onCanvasPerformanceFeatureChange, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onOpenReleaseNotes, onOpenTutorial }: { game: GameState; report: AutomaticPerformanceReport | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; endgameExtremeMode: boolean; canvasPerformanceFeatures: CanvasPerformanceFeatures; onEndgameExtremeModeChange: (enabled: boolean) => void; onCanvasPerformanceFeatureChange: (id: CanvasPerformanceFeatureId, enabled: boolean) => void; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onOpenReleaseNotes: () => void; onOpenTutorial: () => void }) {
   const { settings } = game;
   const { locale, setLocale } = useAppLocale();
   const gameDialog = useGameDialog();
+  const canvasPerformanceCopy = locale === "en"
+    ? {
+        ariaLabel: "Independent canvas optimization fallbacks",
+        items: [
+          ["renderProjection", "Lightweight planet snapshot", "Safe optimization"],
+          ["topologyCache", "Topology and route cache", "Safe optimization"],
+          ["spatialIndexes", "Port and alignment spatial index", "Safe optimization"],
+          ["extremeVisuals", "Reduce animation and routine labels", "Extreme mode only"],
+          ["nodeLod", "True compact node LOD", "Extreme mode only"],
+          ["canvasBelts", "Canvas batch belts", "Extreme mode only"],
+          ["viewportCulling", "Stronger viewport culling", "Extreme mode only"],
+          ["minimapThrottle", "Low-frequency minimap snapshot", "Extreme mode only"],
+        ] as Array<[CanvasPerformanceFeatureId, string, string]>,
+        help: "Each switch can be disabled independently; disabled features fall back to the current React Flow path. Visual reductions are inactive while extreme mode is off.",
+      }
+    : {
+        ariaLabel: "画布优化独立回退开关",
+        items: [
+          ["renderProjection", "当前星球轻量快照", "安全优化"],
+          ["topologyCache", "拓扑与路线缓存", "安全优化"],
+          ["spatialIndexes", "对齐与端口空间索引", "安全优化"],
+          ["extremeVisuals", "减少动画与普通标签", "仅极限模式"],
+          ["nodeLod", "真正的紧凑节点 LOD", "仅极限模式"],
+          ["canvasBelts", "Canvas 批量线路", "仅极限模式"],
+          ["viewportCulling", "强化视口裁剪", "仅极限模式"],
+          ["minimapThrottle", "小地图低频快照", "仅极限模式"],
+        ] as Array<[CanvasPerformanceFeatureId, string, string]>,
+        help: "每项开关都可独立关闭；关闭后回退到当前 React Flow 路径。视觉降级项在极限模式关闭时不会生效。",
+      };
   return (
     <div className="operations-panel operations-settings">
       <header className="operations-section-header">
@@ -355,6 +387,17 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         <p className="settings-help">{locale === "en"
           ? "Device-only setting; reduces belt animation, decoration, and routine readings for large factories or long idle runs."
           : "只保存在当前设备；开启后线路动画、装饰和普通读数刷新会减少，适合大型工厂或长时间挂机。"}</p>
+        <div className="canvas-performance-feature-list" aria-label={canvasPerformanceCopy.ariaLabel}>
+          {canvasPerformanceCopy.items.map(([id, label, scope]) => <ToggleSetting
+            checked={canvasPerformanceFeatures[id]}
+            label={label}
+            value={scope}
+            icon={<Gauge size={15} />}
+            onChange={(enabled) => onCanvasPerformanceFeatureChange(id, enabled)}
+            key={id}
+          />)}
+        </div>
+        <p className="settings-help">{canvasPerformanceCopy.help}</p>
       </section>
       <section className="settings-group settings-toggle-list">
         <ToggleSetting checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "精简粒子、阴影与线路动画" : "完整视觉特效"} icon={<Cpu size={16} />} onChange={(performanceMode) => onChange({ performanceMode })} />
@@ -479,10 +522,16 @@ function PerformancePanel({ game, snapshot, onStart, onStop, onClear, onExport }
     {!latest ? <div className="operations-empty performance-monitor-empty"><Gauge size={28} /><strong>{snapshot.active ? "正在建立首个 1 秒样本" : "尚未采样"}</strong><span>开启后保留最近 60 秒，不写入游戏状态或云存档。</span></div> : <>
       <section className="performance-kpi-grid" aria-label="实时性能摘要">
         <article><span>FPS</span><strong>{latest.fps.toFixed(1)}</strong><small>平均帧 {latest.averageFrameMs.toFixed(1)} ms</small></article>
-        <article><span>主线程峰值</span><strong>{latest.peakFrameMs.toFixed(1)} ms</strong><small>长帧 {latest.longFrameCount} 次</small></article>
+        <article><span>帧耗时 P50 / P95</span><strong>{latest.frameP50Ms.toFixed(1)} / {latest.frameP95Ms.toFixed(1)} ms</strong><small>最大 {latest.peakFrameMs.toFixed(1)} ms</small></article>
+        <article><span>长帧分桶</span><strong>{latest.longFrames.over50Ms} / {latest.longFrames.over100Ms}</strong><small>&gt;50 / &gt;100 ms · &gt;250 {latest.longFrames.over250Ms} · &gt;500 {latest.longFrames.over500Ms}</small></article>
         <article><span>模拟 Worker</span><strong>{latest.workerDurationMs.toFixed(1)} ms</strong><small>往返 {latest.workerLatencyMs.toFixed(1)} ms</small></article>
+        <article><span>Worker 状态传输</span><strong>{formatDiagnosticBytes(latest.stateTransferBytes)}</strong><small>请求 {formatDiagnosticBytes(latest.workerRequestBytes)} · 响应 {formatDiagnosticBytes(latest.workerResponseBytes)}</small></article>
         <article><span>任务积压</span><strong>{latest.pendingTaskMs.toFixed(0)} ms</strong><small>待处理模拟时间</small></article>
-        <article><span>可用 JS 内存</span><strong>{formatDiagnosticBytes(latest.memory.availableBytes)}</strong><small>{latest.memory.deviceMemoryGb ? `设备约 ${latest.memory.deviceMemoryGb} GiB` : "浏览器未公开设备内存"}</small></article>
+        <article><span>JS 堆内存</span><strong>{formatDiagnosticBytes(latest.memory.usedBytes)}</strong><small>可用 {formatDiagnosticBytes(latest.memory.availableBytes)}</small></article>
+        <article><span>画布快照</span><strong>{latest.canvas.snapshotMs.toFixed(2)} ms</strong><small>节点 {latest.canvas.nodeDerivationMs.toFixed(2)} · 线路 {latest.canvas.edgeDerivationMs.toFixed(2)} ms</small></article>
+        <article><span>React Flow 对象</span><strong>{latest.canvas.reactFlowNodeCount} 节点 / {latest.canvas.reactFlowEdgeCount} 线路</strong><small>Canvas 批量 {latest.canvas.canvasLineSegments} 条</small></article>
+        <article><span>实际 DOM</span><strong>{latest.canvas.domNodeCount} 节点 / {latest.canvas.domEdgeCount} 线路</strong><small>画布元素 {latest.canvas.domElementCount.toLocaleString("zh-CN")}</small></article>
+        <article><span>画布发布</span><strong>{latest.canvas.refreshIntervalMs} ms</strong><small>{latest.canvas.endgameExtremeMode ? "终局·极限模式" : "普通模式"} · LOD {latest.canvas.lod}</small></article>
         <article><span>状态 / 主存档</span><strong>{formatDiagnosticBytes(latest.stateBytes)}</strong><small>{formatDiagnosticBytes(latest.saveBytes)}</small></article>
         <article><span>最近保存</span><strong>{latest.autosaveMs.toFixed(1)} ms</strong><small>包括写入后校验</small></article>
         {latest.saveStorage ? <article><span>本地存档</span><strong>{latest.saveStorage.slotCount} 槽 / {latest.saveStorage.snapshotCount} 快照</strong><small>{formatDiagnosticBytes(latest.saveStorage.totalBytes)} · 统计 {latest.saveStorage.scanMs.toFixed(1)} ms</small></article> : null}
@@ -492,7 +541,7 @@ function PerformancePanel({ game, snapshot, onStart, onStop, onClear, onExport }
       <section className="performance-phase-section"><header><Cpu size={15} /><span><strong>模拟阶段耗时归因</strong><small>最近一个 Worker 批次</small></span></header>{phases.length ? <div className="performance-phase-list">{phases.map((phase) => <div key={phase.id}><span>{phase.label}</span><i><b style={{ width: `${Math.max(1, phase.share * 100)}%` }} /></i><strong>{phase.durationMs.toFixed(2)} ms</strong><em>{Math.round(phase.share * 100)}%</em></div>)}</div> : <p>等待下一次带阶段计时的 Worker 结果。</p>}</section>
       {logisticsProfile ? <section className="performance-scale-section performance-logistics-cache"><header><Route size={15} /><span><strong>物流匹配与缓存</strong><small>最近一个 Worker 批次</small></span></header><div><article><strong>{logisticsProfile.peerCandidateChecks.toLocaleString("zh-CN")}</strong><span>伙伴候选检查</span><span>匹配调用 {logisticsProfile.peerMatchCalls}</span></article><article><strong>{Math.round(peerHitRate * 100)}%</strong><span>伙伴缓存命中</span><span>{logisticsProfile.peerMatchCacheHits} 次复用</span></article><article><strong>{logisticsProfile.dispatchSlotChecks.toLocaleString("zh-CN")}</strong><span>派遣槽检查</span><span>建立航线 {logisticsProfile.routesCreated}</span></article><article><strong>{logisticsProfile.routePathPlans.toLocaleString("zh-CN")}</strong><span>实际路径规划</span><span>路径命中 {logisticsProfile.routePathCacheHits}</span></article><article><strong>{Math.round(routeHitRate * 100)}%</strong><span>路线经济缓存</span><span>Worker 状态复用 {logisticsProfile.persistentRuntimeHits}</span></article></div></section> : null}
       <section className="performance-scale-section"><header><HardDrive size={15} /><span><strong>行星规模与在途物流</strong><small>当前真实状态</small></span></header><div>{planetRows.map((row) => <article key={row.planetId}><strong>{getPlanetDisplayName(game, row.planetId as GameState["activePlanetId"])}</strong><span>实体 {row.entities}</span><span>线路 {row.belts}</span><span>在途 {row.routes}</span></article>)}</div></section>
-      <section className="performance-peaks-section"><header><AlertTriangle size={15} /><span><strong>最近 60 秒卡顿峰值</strong><small>主线程 {peaks.peakFrameMs.toFixed(1)} ms · Worker {peaks.peakWorkerMs.toFixed(1)} ms · 积压 {peaks.peakPendingTaskMs.toFixed(0)} ms</small></span></header>{stallPeaks.map((sample) => <div key={sample.recordedAt}><time>{new Date(sample.recordedAt).toLocaleTimeString("zh-CN")}</time><span>帧峰值 {sample.peakFrameMs.toFixed(1)} ms</span><span>Worker {sample.workerDurationMs.toFixed(1)} ms</span><span>积压 {sample.pendingTaskMs.toFixed(0)} ms</span></div>)}</section>
+      <section className="performance-peaks-section"><header><AlertTriangle size={15} /><span><strong>最近 60 秒卡顿峰值</strong><small>主线程 {peaks.peakFrameMs.toFixed(1)} ms · Worker {peaks.peakWorkerMs.toFixed(1)} ms · &gt;100 {peaks.over100Ms} · &gt;250 {peaks.over250Ms} · &gt;500 {peaks.over500Ms}</small></span></header>{stallPeaks.map((sample) => <div key={sample.recordedAt}><time>{new Date(sample.recordedAt).toLocaleTimeString("zh-CN")}</time><span>帧峰值 {sample.peakFrameMs.toFixed(1)} ms</span><span>Worker {sample.workerDurationMs.toFixed(1)} ms</span><span>积压 {sample.pendingTaskMs.toFixed(0)} ms</span></div>)}</section>
     </>}
   </div>;
 }
@@ -816,7 +865,7 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
         {props.tab === "alerts" ? <AlertsPanel alerts={props.alerts} onSelect={props.onAlertSelect} onOpenTutorial={props.onOpenTutorial} /> : null}
         {props.tab === "achievements" ? <AchievementsPanel game={props.game} /> : null}
         {props.tab === "logistics" ? <LogisticsManagementPanel game={props.game} {...props.logisticsActions} /> : null}
-        {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} endgameExtremeMode={props.endgameExtremeMode} onEndgameExtremeModeChange={props.onEndgameExtremeModeChange} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onOpenReleaseNotes={props.onOpenReleaseNotes} onOpenTutorial={props.onOpenTutorial} /> : null}
+        {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} endgameExtremeMode={props.endgameExtremeMode} canvasPerformanceFeatures={props.canvasPerformanceFeatures} onEndgameExtremeModeChange={props.onEndgameExtremeModeChange} onCanvasPerformanceFeatureChange={props.onCanvasPerformanceFeatureChange} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onOpenReleaseNotes={props.onOpenReleaseNotes} onOpenTutorial={props.onOpenTutorial} /> : null}
         {props.tab === "performance" ? <PerformancePanel game={props.game} snapshot={props.performanceMonitor} onStart={props.onStartPerformanceMonitor} onStop={props.onStopPerformanceMonitor} onClear={props.onClearPerformanceMonitor} onExport={props.onExportPerformanceMonitor} /> : null}
         {props.tab === "saves" ? <SavesPanel {...props} /> : null}
         {props.tab === "packs" ? <ContentPacksPanel game={props.game} registry={props.contentPackRegistry} validation={props.modValidation} onValidate={props.onValidateMod} onExportTemplate={props.onExportModTemplate} onRegister={props.onRegisterContentPack} onSetEnabled={props.onSetContentPackEnabled} onRemove={props.onRemoveContentPack} /> : null}

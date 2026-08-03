@@ -4,7 +4,17 @@ export interface CanvasLineBatch {
   planetId: PlanetId;
   beltIds: string[];
   positions: Float32Array;
+  routeCenters: Float32Array;
+  routeModes: Uint8Array;
   segments: number;
+}
+
+export interface CanvasLineNodeGeometry {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 /**
@@ -36,22 +46,54 @@ export function buildCanvasLineBatch(
     beltIds.push(belt.id);
     positions.push(sourceX, sourceY, targetX, targetY);
   }
-  return { planetId, beltIds, positions: Float32Array.from(positions), segments: beltIds.length };
+  return {
+    planetId,
+    beltIds,
+    positions: Float32Array.from(positions),
+    routeCenters: new Float32Array(beltIds.length).fill(Number.NaN),
+    routeModes: new Uint8Array(beltIds.length),
+    segments: beltIds.length,
+  };
+}
+
+/** Builds routed endpoints from the already-mounted React Flow geometry. */
+export function buildCanvasLineBatchFromGeometry(
+  belts: readonly BeltConnection[],
+  planetId: PlanetId,
+  nodes: readonly CanvasLineNodeGeometry[],
+  routeCenters: ReadonlyMap<string, number | undefined>,
+  hiddenBeltIds: ReadonlySet<string> = new Set(),
+): CanvasLineBatch {
+  const geometryById = new Map(nodes.map((node) => [node.id, node]));
+  const beltIds: string[] = [];
+  const positions: number[] = [];
+  const centers: number[] = [];
+  const modes: number[] = [];
+  for (const belt of belts) {
+    if (belt.planetId !== planetId || hiddenBeltIds.has(belt.id)) continue;
+    const source = geometryById.get(belt.source);
+    const target = geometryById.get(belt.target);
+    if (!source || !target) continue;
+    beltIds.push(belt.id);
+    positions.push(source.x + source.width, source.y + source.height / 2, target.x, target.y + target.height / 2);
+    centers.push(routeCenters.get(belt.id) ?? Number.NaN);
+    modes.push((belt.routeMode ?? "auto") === "bezier" ? 0 : 1);
+  }
+  return {
+    planetId,
+    beltIds,
+    positions: Float32Array.from(positions),
+    routeCenters: Float32Array.from(centers),
+    routeModes: Uint8Array.from(modes),
+    segments: beltIds.length,
+  };
 }
 
 export function canvasLineBatchBytes(batch: CanvasLineBatch): number {
-  return batch.positions.byteLength + batch.beltIds.reduce((total, id) => total + id.length * 2, 0);
+  return batch.positions.byteLength + batch.routeCenters.byteLength + batch.routeModes.byteLength +
+    batch.beltIds.reduce((total, id) => total + id.length * 2, 0);
 }
 
 export function canvasLineBatchIncludes(batch: CanvasLineBatch, belt: BeltConnection): boolean {
   return batch.beltIds.includes(belt.id);
-}
-
-/** Canvas/WebGL is still a developer experiment until long-run rendering QA completes. */
-export function readExperimentalCanvasBatchMode(): boolean {
-  try {
-    return typeof window !== "undefined" && window.localStorage.getItem("dsp-idle-network.experimental-canvas-batch.v1") === "true";
-  } catch {
-    return false;
-  }
 }

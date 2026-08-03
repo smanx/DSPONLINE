@@ -62,7 +62,7 @@ export function planMulticoreSimulation(
 }
 
 export function readMulticoreSimulationOptions(): MulticoreSimulationOptions {
-  if (typeof window === "undefined") return {};
+  if (typeof window === "undefined" || !import.meta.env.DEV) return {};
   const enabled = window.localStorage.getItem(MULTICORE_FLAG) === "true";
   const requestedWorkers = Number.parseInt(window.localStorage.getItem(`${MULTICORE_FLAG}.workers`) ?? "4", 10);
   const benchmarkSpeedup = Number.parseFloat(window.localStorage.getItem(`${MULTICORE_FLAG}.speedup`) ?? "0");
@@ -72,7 +72,7 @@ export function readMulticoreSimulationOptions(): MulticoreSimulationOptions {
 
 export interface PlanetPhaseWorkerRequest {
   id: number;
-  planetId: PlanetId;
+  planetIds: PlanetId[];
   state: GameState;
   seconds: number;
   reception: {
@@ -92,20 +92,24 @@ export interface PlanetPhaseWorkerRequest {
 export interface PlanetPhaseWorkerResponse {
   id: number;
   ok: boolean;
-  result?: SimulationPlanetPhaseResult;
+  results?: SimulationPlanetPhaseResult[];
   error?: string;
 }
 
-function copyForPlanetPhase(state: GameState, planetId: PlanetId): GameState {
-  // The planet phase is logically local, but power coverage, route readiness,
-  // content-dependent capacity and deterministic tie-breaking read the global
-  // entity/belt catalogue. Send the complete read-only catalogue to each child
-  // and return only the requested planet's entities; omitting remote context
-  // changes production on dense late-game saves.
+function copyForPlanetPhase(state: GameState, planetIds?: readonly PlanetId[]): GameState {
+  // The mutable phase is planet-local. Remote stations remain as read-only
+  // route-readiness context, while belts have already been settled and
+  // reserved by the coordinator barrier.
+  const localPlanets = planetIds ? new Set(planetIds) : null;
   const snapshot = {
     ...state,
-    entities: [...state.entities],
-    belts: [...state.belts],
+    // A planet phase only mutates its assigned planets. Remote logistics
+    // stations remain as read-only routing context for station power demand;
+    // belts are already settled/reserved by the coordinator barrier.
+    entities: localPlanets
+      ? state.entities.filter((entity) => localPlanets.has(entity.planetId) || entity.kind === "station")
+      : [...state.entities],
+    belts: localPlanets ? [] : [...state.belts],
     productionHistory: [],
     blueprints: [],
     blueprintVersions: [],
@@ -136,13 +140,13 @@ function makeRequest(
   state: GameState,
   seconds: number,
   prepared: SimulationStepPrepared,
-  planetId: PlanetId,
+  planetIds: PlanetId[],
   options: { batchPowerStorage: boolean; batchConstructionAutomation: boolean },
 ): PlanetPhaseWorkerRequest {
   return {
     id,
-    planetId,
-    state: copyForPlanetPhase(state, planetId),
+    planetIds,
+    state: copyForPlanetPhase(state, planetIds),
     seconds,
     reception: serialisePrepared(prepared),
     outputCredits: [...prepared.beltStepReservation.outputCredits.entries()],
@@ -155,7 +159,7 @@ function makeRequest(
 /** Synchronous implementation used by deterministic unit tests and fallback. */
 export const runPlanetPhaseSynchronously: SimulationPlanetPhaseExecutor = {
   run: async (state, seconds, prepared, planetIds, options) => planetIds.map((planetId) => {
-    const local = structuredClone(copyForPlanetPhase(state, planetId));
+    const local = structuredClone(copyForPlanetPhase(state));
     return runPlanetSimulationPhase(
       local,
       seconds,
@@ -183,7 +187,7 @@ interface WorkerLike {
  */
 export class BrowserMulticoreExecutor implements SimulationPlanetPhaseExecutor {
   private readonly workers: WorkerLike[];
-  private readonly pending = new Map<number, { resolve: (result: SimulationPlanetPhaseResult) => void; reject: (error: Error) => void }>();
+  private readonly pending = new Map<number, { resolve: (results: SimulationPlanetPhaseResult[]) => void; reject: (error: Error) => void }>();
   private nextId = 1;
   private registry?: ContentPackRuntimeSnapshot;
   private registryFingerprint = "core";
@@ -201,7 +205,7 @@ export class BrowserMulticoreExecutor implements SimulationPlanetPhaseExecutor {
         const pending = this.pending.get(event.data.id);
         if (!pending) return;
         this.pending.delete(event.data.id);
-        if (event.data.ok && event.data.result) pending.resolve(event.data.result);
+        if (event.data.ok && event.data.results) pending.resolve(event.data.results);
         else pending.reject(new Error(event.data.error ?? "星球分区 Worker 失败"));
       };
       worker.onerror = () => {
@@ -218,6 +222,10 @@ export class BrowserMulticoreExecutor implements SimulationPlanetPhaseExecutor {
     this.registryFingerprint = registry?.fingerprint ?? "core";
   }
 
+  get workerCount(): number {
+    return this.workers.length;
+  }
+
   run(
     state: GameState,
     seconds: number,
@@ -225,11 +233,12 @@ export class BrowserMulticoreExecutor implements SimulationPlanetPhaseExecutor {
     planetIds: readonly PlanetId[],
     options: { batchPowerStorage: boolean; batchConstructionAutomation: boolean },
   ): Promise<SimulationPlanetPhaseResult[]> {
-    const jobs = planetIds.map((planetId, index) => new Promise<SimulationPlanetPhaseResult>((resolve, reject) => {
+    const partitions = partitionPlanetPhaseWork(state, planetIds, this.workers.length);
+    const jobs = partitions.map((partition, index) => new Promise<SimulationPlanetPhaseResult[]>((resolve, reject) => {
       const id = this.nextId++;
       this.pending.set(id, { resolve, reject });
       try {
-        const request = makeRequest(id, state, seconds, prepared, planetId, options);
+        const request = makeRequest(id, state, seconds, prepared, partition, options);
         request.registryFingerprint = this.registryFingerprint;
         request.registry = this.registry;
         this.workers[index % this.workers.length].postMessage(request);
@@ -238,7 +247,7 @@ export class BrowserMulticoreExecutor implements SimulationPlanetPhaseExecutor {
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     }));
-    return Promise.all(jobs);
+    return Promise.all(jobs).then((results) => results.flat());
   }
 
   terminate(): void {
@@ -248,6 +257,29 @@ export class BrowserMulticoreExecutor implements SimulationPlanetPhaseExecutor {
       pending.reject(new Error("星球分区 Worker 已终止"));
     }
   }
+}
+
+export function partitionPlanetPhaseWork(
+  state: Pick<GameState, "entities">,
+  planetIds: readonly PlanetId[],
+  workerCount: number,
+): PlanetId[][] {
+  const count = Math.max(1, Math.min(Math.floor(workerCount), planetIds.length));
+  const weights = new Map<PlanetId, number>(planetIds.map((planetId) => [planetId, 0]));
+  for (const entity of state.entities) {
+    if (!weights.has(entity.planetId)) continue;
+    const phaseWeight = entity.kind === "machine" || entity.kind === "vein" || entity.kind === "power" ? 3 : 1;
+    weights.set(entity.planetId, (weights.get(entity.planetId) ?? 0) + phaseWeight);
+  }
+  const partitions = Array.from({ length: count }, () => ({ planetIds: [] as PlanetId[], weight: 0 }));
+  const ordered = [...planetIds].sort((left, right) =>
+    (weights.get(right) ?? 0) - (weights.get(left) ?? 0) || left.localeCompare(right));
+  for (const planetId of ordered) {
+    partitions.sort((left, right) => left.weight - right.weight || left.planetIds.join("|").localeCompare(right.planetIds.join("|")));
+    partitions[0].planetIds.push(planetId);
+    partitions[0].weight += weights.get(planetId) ?? 0;
+  }
+  return partitions.map((partition) => partition.planetIds);
 }
 
 export function canRunPlanetPhaseParallel(state: Pick<GameState, "paused" | "timeWarp" | "entities" | "research" | "constructionAutomation" | "endgame">): boolean {

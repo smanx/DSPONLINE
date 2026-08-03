@@ -2141,21 +2141,102 @@ select:focus-visible {
   background: #0b100e;
 }
 
-/* P5 batch line renderer is opt-in in endgame extreme mode. React Flow keeps
-   the invisible edge hit paths; the canvas only replaces their visual layer. */
-.factory-canvas[data-batch-renderer="true"] .factory-edge-visual-layer {
-  visibility: hidden;
-}
+/* P5 keeps React Flow's invisible edge hit paths; only ordinary visuals move
+   into this single Canvas surface. Selected and hovered lines stay in SVG. */
 
 .canvas-belt-layer {
   position: absolute;
   inset: 0;
-  z-index: 0;
+  z-index: 1;
   pointer-events: none;
 }
 
 .factory-canvas[data-batch-renderer="true"] .react-flow__nodes {
+  z-index: 3;
+}
+
+.factory-canvas[data-batch-renderer="true"] .factory-edge-visual-layer,
+.factory-canvas[data-batch-renderer="true"] .factory-edge-label {
   z-index: 2;
+}
+
+.factory-node-lod {
+  position: relative;
+  width: 224px;
+  min-height: 68px;
+  padding: 10px 12px;
+}
+
+.factory-node-lod--medium {
+  width: 244px;
+  min-height: 118px;
+}
+
+.factory-node-lod .factory-node__header {
+  margin: 0;
+}
+
+.factory-node-lod__summary {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(107, 139, 128, .18);
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.factory-node-lod__summary > strong {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.factory-node-lod__io {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.factory-node-lod__io > span {
+  overflow: hidden;
+  padding: 4px 6px;
+  border: 1px solid rgba(107, 139, 128, .16);
+  background: rgba(10, 15, 13, .52);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.factory-node-lod__handle {
+  width: 14px;
+  height: 14px;
+}
+
+.game-shell[data-canvas-extreme-visuals="true"] .factory-node:not(.factory-node--selected),
+.game-shell[data-canvas-extreme-visuals="true"] .factory-edge-visual-path:not(.factory-edge-visual-path--selected) {
+  box-shadow: none;
+  filter: none;
+}
+
+.game-shell[data-canvas-extreme-visuals="true"] .factory-node--status-running::after,
+.game-shell[data-canvas-extreme-visuals="true"] .factory-node--status-running .node-icon,
+.game-shell[data-canvas-extreme-visuals="true"] .work-cycle--active > i::after,
+.game-shell[data-canvas-extreme-visuals="true"] .node-input-arrival,
+.game-shell[data-canvas-extreme-visuals="true"] .node-output-pulse,
+.game-shell[data-canvas-extreme-visuals="true"] .reward-flight,
+.game-shell[data-canvas-extreme-visuals="true"] .interaction-burst {
+  animation: none !important;
+}
+
+@media (pointer: coarse) {
+  .factory-node-lod__handle {
+    width: 22px;
+    height: 22px;
+  }
 }
 
 .planet-navigator {
@@ -2327,6 +2408,19 @@ select:focus-visible {
   border: 1px solid var(--line);
   border-radius: 5px;
   background: #0f1513;
+}
+
+.canvas-minimap-snapshot {
+  width: 200px;
+  height: 150px;
+}
+
+.canvas-minimap-snapshot canvas {
+  display: block;
+  width: 200px;
+  height: 150px;
+  cursor: crosshair;
+  touch-action: none;
 }
 
 .canvas-minimap-toggle {
@@ -21304,7 +21398,7 @@ input:focus-visible,
   max-height: min(720px, calc(100dvh - 32px));
   max-height: min(720px, calc(var(--release-notes-viewport-height, 100vh) - 32px));
   min-height: 0;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
   border: 1px solid #4b7469;
   border-radius: 6px;
@@ -22631,8 +22725,8 @@ html[data-ui-font-scale="200"] .release-notes-footer {
   }
 
   html[data-ui-font-scale="200"] .release-notes-summary {
-    max-height: 88px;
-    overflow: auto;
+    max-height: none;
+    overflow: visible;
   }
 
   html[data-ui-font-scale="200"] .release-notes-footer {

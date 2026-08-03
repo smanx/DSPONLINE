@@ -14,6 +14,7 @@ export type CanvasBeltTopology = Pick<BeltConnection,
 
 export interface FactoryCanvasTopology {
   planetId: PlanetId;
+  revision: number;
   signature: string;
   entities: readonly CanvasEntityTopology[];
   belts: readonly CanvasBeltTopology[];
@@ -59,9 +60,11 @@ export function reconcileFactoryCanvasTopology(
   planetId: PlanetId,
   entities: readonly FactoryEntity[],
   belts: readonly BeltConnection[],
+  topologyRevision?: number,
 ): FactoryCanvasTopology {
+  if (topologyRevision !== undefined && previous?.planetId === planetId && previous.revision === topologyRevision) return previous;
   const signature = topologySignature(planetId, entities, belts);
-  if (previous?.signature === signature) return previous;
+  if (topologyRevision === undefined && previous?.signature === signature) return previous;
 
   const connectedInputsByTarget = new Map<string, ItemId[]>();
   const targetPortItemsByEntity = new Map<string, Partial<Record<0 | 1 | 2, ItemId>>>();
@@ -115,6 +118,7 @@ export function reconcileFactoryCanvasTopology(
 
   return {
     planetId,
+    revision: topologyRevision ?? (previous?.revision ?? 0) + 1,
     signature,
     entities: entities.map((entity) => ({
       id: entity.id,

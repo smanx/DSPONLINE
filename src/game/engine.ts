@@ -4300,6 +4300,13 @@ function ensureDynamicRouteLookup(state: GameState, lookup: SimulationLookupCont
   rebuildDynamicRouteLookup(state, lookup);
 }
 
+/** Builds the hydrated read-only indexes used by one P6 planet-phase batch. */
+export function createSimulationPlanetPhaseLookup(state: GameState, profiler?: SimulationProfiler): SimulationLookupContext {
+  const lookup = createSimulationLookupContext(state, profiler);
+  ensureDynamicRouteLookup(state, lookup);
+  return lookup;
+}
+
 function refreshRouteEnvironment(state: GameState, lookup: SimulationLookupContext): void {
   const nextKey = routeEnvironmentKey(state);
   if (lookup.routeEnvironmentKey === nextKey) return;
@@ -5461,7 +5468,6 @@ export async function advanceSimulationSessionMulticore(
       batchConstructionAutomation: session.batchConstructionAutomation,
     });
     const powerByPlanet = mergeSimulationPlanetPhaseResults(session.state, results);
-    session.lookup = createSimulationLookupContext(session.state, session.profiler);
     completeSimulationStep(session.state, step, prepared, powerByPlanet, session.lookup, session.profiler, session.contractExperiment);
     const wallStep = Math.min(session.remainingWallSeconds, step * wallPerSimulationSecond);
     if (activity.activityId && wallStep > 0) {

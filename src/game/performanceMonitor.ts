@@ -1,6 +1,7 @@
 import type { SimulationProfiler } from "./engine";
 import type { LocalSaveSummaryMetrics, SaveStageTimings } from "./storage";
 import type { GameState, PlanetId } from "./types";
+import type { CanvasLod } from "./canvasPerformance";
 
 export const PERFORMANCE_SAMPLE_WINDOW_SECONDS = 60;
 export const OFFLINE_PERFORMANCE_SESSION_KEY = "dsp-idle-network.offline-performance.v1";
@@ -16,10 +17,16 @@ export interface PerformanceMonitorSample {
   recordedAt: number;
   fps: number;
   averageFrameMs: number;
+  frameP50Ms: number;
+  frameP95Ms: number;
   peakFrameMs: number;
   longFrameCount: number;
+  longFrames: PerformanceLongFrameBuckets;
   workerDurationMs: number;
   workerLatencyMs: number;
+  workerRequestBytes: number;
+  workerResponseBytes: number;
+  stateTransferBytes: number;
   pendingTaskMs: number;
   stateBytes: number;
   saveBytes: number;
@@ -28,6 +35,32 @@ export interface PerformanceMonitorSample {
   saveStorage?: LocalSaveSummaryMetrics | null;
   memory: PerformanceMemorySample;
   phases: SimulationProfiler | null;
+  canvas: PerformanceCanvasMeasurement;
+}
+
+export interface PerformanceLongFrameBuckets {
+  over50Ms: number;
+  over100Ms: number;
+  over250Ms: number;
+  over500Ms: number;
+}
+
+export interface PerformanceCanvasMeasurement {
+  snapshotMs: number;
+  nodeDerivationMs: number;
+  edgeDerivationMs: number;
+  reactFlowNodeCount: number;
+  reactFlowEdgeCount: number;
+  domNodeCount: number;
+  domEdgeCount: number;
+  domElementCount: number;
+  refreshIntervalMs: number;
+  lod: CanvasLod;
+  endgameExtremeMode: boolean;
+  projectionEnabled: boolean;
+  topologyRevision: number;
+  runtimeRevision: number;
+  canvasLineSegments: number;
 }
 
 export interface PerformanceMonitorSnapshot {
@@ -42,6 +75,8 @@ export interface PerformanceWorkerMeasurement {
   latencyMs: number;
   pendingTaskMs: number;
   profiler: SimulationProfiler | null;
+  requestBytes?: number;
+  responseBytes?: number;
 }
 
 export interface PerformanceSaveMeasurement {
@@ -49,6 +84,9 @@ export interface PerformanceSaveMeasurement {
   bytes: number;
   stages?: SaveStageTimings | null;
 }
+
+export type PerformanceCanvasUpdate = Partial<Omit<PerformanceCanvasMeasurement,
+  "domNodeCount" | "domEdgeCount" | "domElementCount">>;
 
 export interface PerformancePhaseShare {
   id: "production" | "belts" | "logistics" | "quantum" | "power" | "dyson" | "construction" | "history" | "copy" | "other";
@@ -91,7 +129,17 @@ export function getPerformancePeaks(samples: readonly PerformanceMonitorSample[]
     peakLatencyMs: samples.reduce((peak, sample) => Math.max(peak, sample.workerLatencyMs), 0),
     peakPendingTaskMs: samples.reduce((peak, sample) => Math.max(peak, sample.pendingTaskMs), 0),
     longFrameCount: samples.reduce((sum, sample) => sum + sample.longFrameCount, 0),
+    over100Ms: samples.reduce((sum, sample) => sum + sample.longFrames.over100Ms, 0),
+    over250Ms: samples.reduce((sum, sample) => sum + sample.longFrames.over250Ms, 0),
+    over500Ms: samples.reduce((sum, sample) => sum + sample.longFrames.over500Ms, 0),
   };
+}
+
+export function percentile(values: readonly number[], ratio: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * Math.max(0, Math.min(1, ratio))) - 1));
+  return sorted[index] ?? 0;
 }
 
 function planetCounts(game: GameState): Record<PlanetId, { entities: number; belts: number; inFlightRoutes: number }> {

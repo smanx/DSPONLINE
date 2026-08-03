@@ -72,6 +72,7 @@ export interface FactoryEdgeData extends Record<string, unknown> {
   durationSeconds: number;
   detailVisible: boolean;
   motionEnabled: boolean;
+  batched: boolean;
   routeMode: BeltRouteMode;
   routeCenterY?: number;
   bundleIndex: number;
@@ -146,6 +147,9 @@ export function FactoryEdge({
       })
     : getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
   const [path, labelX, labelY] = route;
+  if (data?.batched) {
+    return <BaseEdge id={id} path={path} interactionWidth={interactionWidth} style={{ ...style, opacity: 0 }} />;
+  }
   const active = Boolean(data && data.flow > 0.001);
   const packetCount = data ? Math.max(1, Math.min(4, Math.ceil(data.flow / Math.max(0.001, data.capacity) * 4))) : 0;
   const duration = data?.durationSeconds ?? 1;

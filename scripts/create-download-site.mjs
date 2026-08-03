@@ -54,9 +54,9 @@ if (desktopSha !== String(desktopRecord.sha256).toLowerCase()) throw new Error("
 const humanSize = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 const escaped = (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 const notes = [
-  `${version.version} 云存档、蓝图与终局稳定性更新`,
-  "P3-P6 默认保持安全门槛，实验路径不改变存档和生产确定性",
-  "旧存档、蓝图、库存、线路和在途物资保持兼容",
+  `${version.version} 工厂管理、历史堆叠兼容与终局画布更新`,
+  "物流管理、精确线路、批量回收、物品快捷操作和手机蓝图导入",
+  "极限画布为设备级可选项，多 Worker 保持生产关闭，存档与在线协议不升级",
 ].join("；");
 const values = {
   __VERSION__: version.version,

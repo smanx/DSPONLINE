@@ -1,86 +1,86 @@
-import { Activity, Check, Gauge, Info, Layers, MessageCircle, RefreshCw, Route, Shield, ShieldCheck, SkipForward, X, type LucideIcon } from "lucide-react";
+import { Activity, Check, Gauge, Info, Layers, MessageCircle, RefreshCw, Route, Shield, ShieldCheck, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-08-02-v1.0.23",
-  date: "2026年8月2日",
-  version: "1.0.23",
-  title: "云存档上传热修与取消保护",
-  summary: "1.0.23 修复安卓和桌面浏览器云存档压缩死锁、上传卡住和误报成功；离线结算、存档内容和云端冲突保护保持兼容。GameState v46、存档 envelope v2 与云 schema v7 不变。",
+  id: "2026-08-03-v1.0.24",
+  date: "2026年8月3日",
+  version: "1.0.24",
+  title: "工厂管理与终局画布更新",
+  summary: "1.0.24 增加工厂级物流管理、精确线路与回收操作，并为超大工厂加入可回退的画布性能路径；历史安全整数堆叠原样保留。GameState v46、存档 envelope v2 与云 schema v7 不变。",
   items: [
     {
-      id: "cloud-compression-stream",
-      title: "修复压缩流死锁",
-      description: "云存档改为边读取边压缩并持续消费 gzip 流，1 MB、2 MB 和 7 MB 级别的存档不会再因为先写后读形成永久等待。",
+      id: "stack-history-safety",
+      title: "一亿新增上限与历史堆叠保护",
+      description: "新增建筑堆叠统一限制为一亿；旧存档中更大但仍为安全整数的堆叠原样保留，可回收但不能继续增加，危险数值会明确拒绝。",
     },
     {
-      id: "cloud-raw-fallback",
-      title: "压缩失败安全回退",
-      description: "浏览器不支持压缩、压缩异常或压缩阶段超时时，只在原始请求不超过 30 MiB 时发送一次明文 JSON；超限会明确报错，不改本地存档。",
+      id: "logistics-management",
+      title: "跨星球物流管理",
+      description: "运营中心新增按恒星系、行星和物流塔组织的物流管理页，可搜索、筛选并远程编辑槽位、供需、舰队、翘曲器和量子模式。",
     },
     {
-      id: "cloud-timeout-confirm",
-      title: "网络超时先核对云端",
-      description: "网络请求超时后先读取远端修订号、校验值、时间和摘要；已提交才判定成功，未提交才允许同一 expectedRevision 的一次明文重试。",
+      id: "exact-belt-selection",
+      title: "连接后精确选中线路",
+      description: "新建传送带或增加并联线路后会立即选中真正受影响的线路并打开检查器，不再依赖模糊的端点匹配。",
     },
     {
-      id: "cloud-cancel",
-      title: "取消上传立即生效",
-      description: "压缩、离线结算和上传都接入 AbortController；玩家主动取消后不发送明文回退请求，本地有效存档、备份和快照保持不变。",
+      id: "recycle-mode",
+      title: "建筑批量回收",
+      description: "施工托盘新增回收模式，支持单选、Shift 多选、框选和触摸选择；确认前显示建筑、关联线路和预计返还。",
     },
     {
-      id: "cloud-stage-status",
-      title: "上传阶段状态真实反馈",
-      description: "准备、离线结算、生成校验、压缩、发送和等待确认阶段统一显示进行中状态，只有服务器确认新修订后才显示绿色成功。",
+      id: "item-actions",
+      title: "物品定位与图鉴快捷操作",
+      description: "物品悬浮卡可以直接定位生产设备或打开图鉴；移动端长按后同样可操作，没有生产来源时会说明原因。",
     },
     {
-      id: "cloud-metadata-refresh",
-      title: "成功后刷新云端摘要",
-      description: "上传成功后立即刷新云端时间、运行时长、科技数量和修订号，避免页面继续显示旧的云存档状态。",
+      id: "mobile-blueprint-import",
+      title: "手机版蓝图导入",
+      description: "新版和经典手机界面都提供可见的蓝图导入入口，支持文件和粘贴 JSON，并显示明确的成功摘要或格式错误。",
     },
     {
-      id: "offline-skip",
-      title: "离线结算可以跳过",
-      description: "进入游戏或上传云存档时可以放弃过长的离线运算并继续；跳过不会发放离线收益，也不会在下次加载重复结算。",
+      id: "canvas-projection-cache",
+      title: "当前星球轻量快照与拓扑缓存",
+      description: "画布只消费当前星球的轻量运行快照，并复用拓扑、端口、路线和空间索引；其他星球变化不再反复重建当前画布。",
     },
     {
-      id: "local-save-protection",
-      title: "失败不覆盖本地存档",
-      description: "云端确认前不写回主存档；上传失败、取消或状态未知时保留本地有效版本，冲突仍进入明确的选择流程。",
+      id: "endgame-canvas-mode",
+      title: "可选终局画布极限模式",
+      description: "超大工厂可按设备开启节点 LOD、Canvas 批量线路、视口裁剪和低频小地图；普通模式与模拟结果保持不变。",
     },
     {
-      id: "cloud-entry-points",
-      title: "所有上传入口统一保护",
-      description: "主存档手动上传、十分钟自动同步、手动槽位 1–3、银河页面和冲突覆盖上传共用同一压缩、重试、取消和修订保护。",
+      id: "canvas-fallback",
+      title: "画布失效自动回退",
+      description: "Canvas 或小地图上下文不可用时会自动恢复完整 React Flow 线路和小地图，选中、命中、连接预览与视口保持可用。",
     },
     {
-      id: "cloud-compatibility",
-      title: "存档和云协议保持兼容",
-      description: "不升级 GameState v46、存档 envelope v2、云 schema v7 或 SQLite layout v2，不改变生产、物流、库存、离线收益和排行榜规则。",
+      id: "multicore-guardrail",
+      title: "多 Worker 继续保持生产关闭",
+      description: "多 Worker 确定性和守恒测试已通过，但真实终局模拟仍慢于单 Worker，因此正式构建继续使用单一权威 Worker。",
     },
     {
-      id: "cloud-revision-safety",
-      title: "避免重复创建云端修订",
-      description: "相同状态不会重复创建云端修订；请求超时、409 冲突、格式错误、完整性错误、体积错误和网络错误继续分别提示。",
+      id: "release-compatibility",
+      title: "存档与在线协议保持兼容",
+      description: "不升级 GameState v46、存档 envelope v2、云 schema v7 或 SQLite layout v2；库存、线路、在途物资、账号和排行榜数据无需迁移。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "cloud-compression-stream": Route,
-  "cloud-raw-fallback": Shield,
-  "cloud-timeout-confirm": RefreshCw,
-  "cloud-cancel": X,
-  "cloud-stage-status": Activity,
-  "cloud-metadata-refresh": Info,
-  "offline-skip": SkipForward,
-  "local-save-protection": ShieldCheck,
-  "cloud-entry-points": Layers,
-  "cloud-compatibility": Check,
-  "cloud-revision-safety": Gauge,
+  "stack-history-safety": Shield,
+  "logistics-management": Route,
+  "exact-belt-selection": Activity,
+  "recycle-mode": RefreshCw,
+  "item-actions": Info,
+  "mobile-blueprint-import": Layers,
+  "canvas-projection-cache": Gauge,
+  "endgame-canvas-mode": Layers,
+  "canvas-fallback": ShieldCheck,
+  "multicore-guardrail": Gauge,
+  "release-compatibility": Check,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {
@@ -163,8 +163,8 @@ export function ReleaseNotesDialog({ open, onClose }: { open: boolean; onClose: 
           <div><small>{CURRENT_RELEASE_NOTES.date} · 公开测试版</small><h2 id="release-notes-title">{CURRENT_RELEASE_NOTES.title}</h2></div>
           <button ref={closeButtonRef} type="button" onClick={onClose} title="关闭版本更新记录" aria-label="关闭版本更新记录"><X size={18} /></button>
         </header>
-        <p className="release-notes-summary"><Info size={16} /><span>{CURRENT_RELEASE_NOTES.summary}</span></p>
         <div className="release-notes-scroll">
+          <p className="release-notes-summary"><Info size={16} /><span>{CURRENT_RELEASE_NOTES.summary}</span></p>
           <ol>
             {CURRENT_RELEASE_NOTES.items.map((item, index) => {
               const Icon = RELEASE_NOTE_ICONS[item.id];

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-02-v1.0.23";
+const RELEASE_NOTE_ID = "2026-08-03-v1.0.24";
 
 async function seedV108Factory(page: Page, options: { mobileUi?: "legacy" | "next"; theme?: "dark" | "light"; fontScale?: number } = {}) {
   await page.addInitScript(({ releaseNoteId, mobileUi, theme, fontScale }) => {
@@ -130,7 +130,7 @@ test("delivery-hub ports reset independently and the performance monitor samples
   await expect(operations).toContainText("监控已关闭");
   await operations.getByRole("button", { name: "开始采样" }).click();
   await expect(operations).toContainText("正在采样");
-  await expect.poll(async () => operations.locator(".performance-kpi-grid article").count(), { timeout: 8_000 }).toBe(9);
+  await expect.poll(async () => operations.locator(".performance-kpi-grid article").count(), { timeout: 8_000 }).toBeGreaterThanOrEqual(15);
   await expect(operations.locator(".performance-phase-list > div")).toHaveCount(10);
   await expect(operations).toContainText("建筑生产与采集");
   await expect(operations).toContainText("量子物流");

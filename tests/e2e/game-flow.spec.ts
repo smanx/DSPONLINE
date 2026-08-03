@@ -4,7 +4,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-02-v1.0.23");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-03-v1.0.24");
     }
   });
 }
@@ -148,28 +148,28 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "云存档上传热修与取消保护" });
+  const releaseNotes = page.getByRole("dialog", { name: "工厂管理与终局画布更新" });
   await expect(releaseNotes).toBeVisible();
   await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(11);
-  await expect(releaseNotes).toContainText("修复压缩流死锁");
-  await expect(releaseNotes).toContainText("压缩失败安全回退");
-  await expect(releaseNotes).toContainText("离线结算可以跳过");
-  await expect(releaseNotes).toContainText("所有上传入口统一保护");
-  await expect(releaseNotes).toContainText("避免重复创建云端修订");
-  await expect(releaseNotes).not.toContainText("内容包同步到模拟 Worker");
-  await expect(releaseNotes).not.toContainText("量子网络基础吞吐提高");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-02-v121-1440.png", fullPage: true });
+  await expect(releaseNotes).toContainText("一亿新增上限与历史堆叠保护");
+  await expect(releaseNotes).toContainText("跨星球物流管理");
+  await expect(releaseNotes).toContainText("手机版蓝图导入");
+  await expect(releaseNotes).toContainText("画布失效自动回退");
+  await expect(releaseNotes).toContainText("多 Worker 继续保持生产关闭");
+  await expect(releaseNotes).not.toContainText("修复压缩流死锁");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-03-v124-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-02-v121-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-03-v124-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "200";
     document.documentElement.style.setProperty("--ui-font-scale", "2");
   });
+  await releaseNotes.locator(".release-notes-scroll").evaluate((element) => { element.scrollTop = 0; });
   const controlsFitViewport = async () => releaseNotes.evaluate((dialog) => {
     const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
     const close = dialog.querySelector<HTMLButtonElement>(".release-notes-header > button")?.getBoundingClientRect();
@@ -177,8 +177,15 @@ test("dated release notes appear once and remain available from both settings sc
     return Boolean(close && confirm && close.top >= 0 && close.bottom <= viewportHeight && confirm.top >= 0 && confirm.bottom <= viewportHeight);
   });
   await expect.poll(controlsFitViewport).toBe(true);
+  await expect.poll(() => releaseNotes.evaluate((dialog) => {
+    const scroll = dialog.querySelector<HTMLElement>(".release-notes-scroll")?.getBoundingClientRect();
+    const summary = dialog.querySelector<HTMLElement>(".release-notes-summary")?.getBoundingClientRect();
+    const firstItem = dialog.querySelector<HTMLElement>(".release-notes-scroll li")?.getBoundingClientRect();
+    const footer = dialog.querySelector<HTMLElement>(".release-notes-footer")?.getBoundingClientRect();
+    return Boolean(scroll && summary && firstItem && footer && summary.bottom <= firstItem.top + 1 && scroll.bottom <= footer.top + 1);
+  })).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-02-v121-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-03-v124-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -187,12 +194,12 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-02-v1.0.23");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-03-v1.0.24");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
   await page.getByRole("button", { name: "游戏设置" }).click();
-  await page.getByRole("button", { name: "查看2026年8月2日版本更新记录" }).click();
+  await page.getByRole("button", { name: "查看2026年8月3日版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
   await releaseNotes.getByLabel("关闭版本更新记录").click();
 
@@ -204,7 +211,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-02-v121-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-03-v124-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });

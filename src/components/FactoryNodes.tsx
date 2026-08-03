@@ -51,6 +51,7 @@ import type {
   RecipeId,
   TechId,
 } from "../game/types";
+import type { CanvasLod } from "../game/canvasPerformance";
 
 export interface FactoryNodeData extends Record<string, unknown> {
   visualSignature: string;
@@ -95,6 +96,10 @@ export interface FactoryNodeData extends Record<string, unknown> {
   status: EntityOperatingStatus;
   outputCapacity: number;
   cycleRatePerSecond: number;
+  lod: CanvasLod;
+  extremeVisuals: boolean;
+  acceptedInputItemIds: readonly ItemId[];
+  producedOutputItemIds: readonly ItemId[];
 }
 
 export type FactoryFlowNode = Node<FactoryNodeData, EntityKind>;
@@ -331,7 +336,80 @@ function AutoInputPort({ connectionDraft, label = "自动匹配", handleId = "in
   );
 }
 
-export function VeinNode({ data, selected }: NodeProps<FactoryFlowNode>) {
+function uniqueItemIds(...groups: readonly (readonly ItemId[])[]): ItemId[] {
+  return [...new Set(groups.flat())];
+}
+
+function LightweightNodeHandles({ data }: { data: FactoryNodeData }) {
+  const { entity } = data;
+  const specialInputs = entity.buildingId === "material_delivery_hub"
+    ? (entity.deliverySlots ?? []).flatMap((slot, index) => slot.mode === "disabled" ? [] : [{ id: `in:delivery:${index}`, itemId: slot.itemId }])
+    : entity.buildingId === "micro_black_hole_connector"
+      ? ([0, 1, 2] as const).map((index) => ({ id: `in:black-hole:${index}`, itemId: data.blackHolePortConnections[index] }))
+      : [];
+  const inputItems = uniqueItemIds(data.acceptedInputItemIds, Object.keys(data.inputBeltCounts) as ItemId[]);
+  const outputItems = uniqueItemIds(data.producedOutputItemIds, Object.keys(data.outputBeltCounts) as ItemId[]);
+  const showAutoInput = specialInputs.length === 0 && inputItems.length === 0;
+  const inputCount = specialInputs.length || inputItems.length || (showAutoInput ? 1 : 0);
+  const position = (index: number, count: number) => `${((index + 1) / (count + 1)) * 100}%`;
+  return <>
+    {specialInputs.length > 0 ? specialInputs.map((port, index) => <Handle
+      id={port.id}
+      type="target"
+      position={Position.Left}
+      style={{ top: position(index, specialInputs.length) }}
+      className={`factory-handle factory-handle--input factory-node-lod__handle nodrag nopan${port.itemId ? connectionHandleClass(entity.id, port.itemId, "target", data.connectionDraft) : " factory-handle--universal"}`}
+      key={port.id}
+    />) : inputItems.map((itemId, index) => <Handle
+      id={`in:${itemId}`}
+      type="target"
+      position={Position.Left}
+      style={{ top: position(index, inputCount) }}
+      className={`factory-handle factory-handle--input factory-node-lod__handle nodrag nopan${connectionHandleClass(entity.id, itemId, "target", data.connectionDraft)}`}
+      key={`in:${itemId}`}
+    />)}
+    {showAutoInput ? <Handle id="in:auto" type="target" position={Position.Left} className="factory-handle factory-handle--input factory-handle--auto factory-node-lod__handle nodrag nopan" /> : null}
+    {outputItems.map((itemId, index) => <Handle
+      id={`out:${itemId}`}
+      type="source"
+      position={Position.Right}
+      style={{ top: position(index, outputItems.length) }}
+      className={`factory-handle factory-handle--output factory-node-lod__handle nodrag nopan${connectionHandleClass(entity.id, itemId, "source", data.connectionDraft)}`}
+      key={`out:${itemId}`}
+    />)}
+  </>;
+}
+
+function FactoryNodeLodView({ data, selected }: NodeProps<FactoryFlowNode>) {
+  const { entity, lod } = data;
+  const resource = entity.resourceId ? getItem(entity.resourceId) : null;
+  const building = entity.buildingId ? getBuilding(entity.buildingId) : null;
+  const name = resource?.name ?? building?.name ?? "工厂节点";
+  const category = entity.kind === "vein" ? "资源矿脉" : entity.kind === "power" ? "电力设施" : entity.kind === "station" ? "物流设施" : entity.kind === "storage" ? "仓储设施" : entity.kind === "splitter" ? "分流设施" : "生产设施";
+  const count = entity.kind === "vein" ? entity.minerCount : entity.machineCount;
+  const icon = entity.kind === "vein" ? <Pickaxe size={18} /> : entity.kind === "power" ? <Zap size={18} /> : entity.kind === "station" ? <Orbit size={18} /> : entity.kind === "storage" ? <Database size={18} /> : entity.kind === "splitter" ? <GitFork size={18} /> : <Factory size={18} />;
+  const inputItems = uniqueItemIds(data.acceptedInputItemIds, Object.keys(data.inputBeltCounts) as ItemId[]);
+  const outputItems = uniqueItemIds(data.producedOutputItemIds, Object.keys(data.outputBeltCounts) as ItemId[]);
+  return <article className={`factory-node factory-node-lod factory-node-lod--${lod} factory-node--status-${data.status.tone}${selected ? " factory-node--selected" : ""}${entity.interactionLocked ? " factory-node--locked" : ""}`} data-node-lod={lod}>
+    <LightweightNodeHandles data={data} />
+    <header className="factory-node__header">
+      <div className="node-icon" style={resource ? { color: resource.color } : undefined}>{icon}</div>
+      <div><span>{category}</span><strong>{name}</strong></div>
+      <small>×{count}</small>
+    </header>
+    {lod === "medium" ? <div className="factory-node-lod__summary">
+      <span className={`status-dot status-dot--${data.status.tone === "running" ? "good" : data.status.tone === "warning" ? "partial" : data.status.tone === "blocked" ? "blocked" : "idle"}`} />
+      <strong>{data.status.label}</strong>
+      <small>{Math.round(data.powerFactor * 100)}% 电力</small>
+      <div className="factory-node-lod__io" aria-label="简化输入输出">
+        <span>入 {inputItems.slice(0, 3).map((itemId) => ITEMS[itemId]?.symbol ?? "?").join(" ") || "--"}</span>
+        <span>出 {outputItems.slice(0, 3).map((itemId) => ITEMS[itemId]?.symbol ?? "?").join(" ") || "--"}</span>
+      </div>
+    </div> : null}
+  </article>;
+}
+
+function VeinFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const { entity, cargo, placement } = data;
   const resourceId = entity.resourceId!;
   const resource = getItem(resourceId);
@@ -411,7 +489,7 @@ export function VeinNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   );
 }
 
-export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
+function MachineFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const { entity, cargo, placement } = data;
   const building = getBuilding(entity.buildingId!);
   const recipe = getRecipe(entity.recipeId);
@@ -633,7 +711,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   );
 }
 
-export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
+function LogisticsFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const { entity, cargo, placement } = data;
   const building = getBuilding(entity.buildingId!);
   const itemId = entity.storedItemId;
@@ -755,7 +833,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   );
 }
 
-export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
+function PowerFullNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const { entity, placement, cargo } = data;
   const building = getBuilding(entity.buildingId!);
   const recipe = getRecipe(entity.recipeId);
@@ -875,6 +953,22 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       ) : null}
     </article>
   );
+}
+
+export function VeinNode(props: NodeProps<FactoryFlowNode>) {
+  return props.data.lod === "full" ? <VeinFullNode {...props} /> : <FactoryNodeLodView {...props} />;
+}
+
+export function MachineNode(props: NodeProps<FactoryFlowNode>) {
+  return props.data.lod === "full" ? <MachineFullNode {...props} /> : <FactoryNodeLodView {...props} />;
+}
+
+export function LogisticsNode(props: NodeProps<FactoryFlowNode>) {
+  return props.data.lod === "full" ? <LogisticsFullNode {...props} /> : <FactoryNodeLodView {...props} />;
+}
+
+export function PowerNode(props: NodeProps<FactoryFlowNode>) {
+  return props.data.lod === "full" ? <PowerFullNode {...props} /> : <FactoryNodeLodView {...props} />;
 }
 
 function areNodeVisualPropsEqual(previous: NodeProps<FactoryFlowNode>, next: NodeProps<FactoryFlowNode>): boolean {

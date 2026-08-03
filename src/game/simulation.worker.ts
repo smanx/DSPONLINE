@@ -4,7 +4,7 @@ import { applyContentPackRuntimeSnapshot, type ContentPackRuntimeSnapshot } from
 import { advancePersistentSimulationRuntime, advancePersistentSimulationRuntimeMulticore, createPersistentSimulationRuntime, createSimulationProfiler, replacePersistentSimulationRuntimeState, type PersistentSimulationRuntime, type SimulationProfiler } from "./engine";
 import { BrowserMulticoreExecutor, planMulticoreSimulation, type MulticoreSimulationOptions } from "./multicoreSimulation";
 import type { GameState } from "./types";
-import { createSimulationProjection, type SimulationProjection } from "./simulationProjection";
+import { captureSimulationProjectionBaseline, createSimulationProjection, type SimulationProjection } from "./simulationProjection";
 import { createSimulationStateDelta, shouldUseSimulationDelta, type SimulationStateDelta } from "./simulationDelta";
 
 export interface SimulationWorkerRequest {
@@ -25,6 +25,8 @@ export interface SimulationWorkerResponse {
   changed: boolean;
   state?: GameState;
   durationMs?: number;
+  /** JSON-equivalent payload size, sampled only while the diagnostics panel is active. */
+  transferBytes?: number;
   profiler?: SimulationProfiler;
   needsState?: boolean;
   reusedState?: boolean;
@@ -45,6 +47,7 @@ let runtime: PersistentSimulationRuntime | null = null;
 let activeRegistryFingerprint: string | null = null;
 let runtimeRevision = 0;
 let multicoreExecutor: BrowserMulticoreExecutor | null = null;
+let multicoreExecutorWorkerCount = 0;
 let activeRegistrySnapshot: ContentPackRuntimeSnapshot | undefined;
 let simulationMessageQueue: Promise<void> = Promise.resolve();
 
@@ -112,6 +115,7 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
   }
   const startedAt = profile ? performance.now() : 0;
   const previousState = runtime.state;
+  const projectionBaseline = captureSimulationProjectionBaseline(previousState);
   const previousRevision = runtimeRevision;
   const multicorePlan = requestMulticorePlan(runtime.state, event.data.multicore);
   let multicoreUsed = false;
@@ -120,7 +124,11 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
   if (multicorePlan.enabled && multicorePlan.mode === "planet-phase") {
     const baseline = structuredClone(runtime.state);
     try {
-      multicoreExecutor ??= new BrowserMulticoreExecutor(multicorePlan.workerCount, undefined, activeRegistrySnapshot);
+      if (!multicoreExecutor || multicoreExecutorWorkerCount !== multicorePlan.workerCount) {
+        multicoreExecutor?.terminate();
+        multicoreExecutor = new BrowserMulticoreExecutor(multicorePlan.workerCount, undefined, activeRegistrySnapshot);
+        multicoreExecutorWorkerCount = multicorePlan.workerCount;
+      }
       multicoreExecutor.setRegistry(activeRegistrySnapshot);
       result = await advancePersistentSimulationRuntimeMulticore(runtime, simulationSeconds, wallSeconds, multicoreExecutor, profiler);
       multicoreUsed = true;
@@ -129,12 +137,18 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
       if (multicoreExecutor) {
         multicoreExecutor.terminate();
         multicoreExecutor = null;
+        multicoreExecutorWorkerCount = 0;
       }
       replacePersistentSimulationRuntimeState(runtime, baseline, profiler);
       result = advancePersistentSimulationRuntime(runtime, simulationSeconds, wallSeconds, profiler);
       void error;
     }
   } else {
+    if (multicoreExecutor) {
+      multicoreExecutor.terminate();
+      multicoreExecutor = null;
+      multicoreExecutorWorkerCount = 0;
+    }
     result = advancePersistentSimulationRuntime(runtime, simulationSeconds, wallSeconds, profiler);
   }
   if (result.changed) runtimeRevision += 1;
@@ -149,8 +163,13 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
     reusedState,
     cacheRebuilt: result.cacheRebuilt,
     registryFingerprint: activeRegistryFingerprint ?? undefined,
-    ...(result.changed ? { projection: createSimulationProjection(previousState, result.state) } : {}),
-    ...(event.data.multicore ? { multicore: { enabled: multicoreUsed, workerCount: multicorePlan.workerCount, fallback: multicoreFallback, reason: multicorePlan.reason } } : {}),
+    ...(result.changed ? { projection: createSimulationProjection(projectionBaseline, result.state) } : {}),
+    ...(event.data.multicore ? { multicore: {
+      enabled: multicoreUsed,
+      workerCount: multicoreUsed ? multicoreExecutor?.workerCount ?? multicorePlan.workerCount : multicorePlan.workerCount,
+      fallback: multicoreFallback,
+      reason: multicorePlan.reason,
+    } } : {}),
   };
   if (result.changed && event.data.protocol === "delta" && !suppliedState) {
     const delta = createSimulationStateDelta(previousState, result.state, previousRevision, runtimeRevision);
@@ -163,6 +182,14 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
       response.protocol = "full";
       response.state = result.state;
       response.deltaFallback = "larger-than-full";
+    }
+  }
+  if (profile) {
+    try {
+      const raw = JSON.stringify(response);
+      response.transferBytes = typeof TextEncoder === "undefined" ? raw.length : new TextEncoder().encode(raw).byteLength;
+    } catch {
+      response.transferBytes = 0;
     }
   }
   self.postMessage(response);

@@ -61,7 +61,7 @@ import {
   Zap,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useHorizontalPan } from "../hooks/useHorizontalPan";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { ItemCatalogPicker, RecipeCatalogPicker } from "./CatalogPicker";
@@ -1681,14 +1681,22 @@ function Fabricator({ game, focusItemId, onCraft, onCraftItem, onQueueCraftItem,
   const [focusedHandcraftItemId, setFocusedHandcraftItemId] = useState<ItemId | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const term = query.trim().toLocaleLowerCase("zh-CN");
-  const handcraftRecipes = Object.values(RECIPES).filter((recipe) => {
+  const handcraftRecipes = useMemo(() => Object.values(RECIPES).filter((recipe) => {
     if (!isHandcraftableRecipe(recipe.id)) return false;
     if (!term) return true;
     const itemNames = [...recipe.inputs, ...recipe.outputs].map((entry) => getItem(entry.itemId).name).join(" ");
     return `${recipe.name} ${itemNames} ${getBuilding(recipe.buildingId).name}`.toLocaleLowerCase("zh-CN").includes(term);
-  });
-  const constructionDefinitions = CONSTRUCTION.filter((definition) => !term || `${definition.name} ${definition.costs.map((cost) => getItem(cost.itemId).name).join(" ")}`.toLocaleLowerCase("zh-CN").includes(term));
-  const handcraftOutputItemIds = new Set(Object.values(RECIPES).filter((recipe) => isHandcraftableRecipe(recipe.id)).flatMap((recipe) => recipe.outputs.map((output) => output.itemId)));
+  }), [term]);
+  const constructionDefinitions = useMemo(() => CONSTRUCTION.filter((definition) => !term || `${definition.name} ${definition.costs.map((cost) => getItem(cost.itemId).name).join(" ")}`.toLocaleLowerCase("zh-CN").includes(term)), [term]);
+  const handcraftOutputItemIds = useMemo(() => new Set(Object.values(RECIPES).filter((recipe) => isHandcraftableRecipe(recipe.id)).flatMap((recipe) => recipe.outputs.map((output) => output.itemId))), []);
+  const constructionPlans = useMemo(() => new Map(constructionDefinitions.map((definition) => [
+    definition.buildingId,
+    getConstructionQuickCraftPlan(game, definition.buildingId, batches),
+  ])), [constructionDefinitions, game.research.completedTechIds, game.tray, game.portableFleet, batches]);
+  const recursivePlans = useMemo(() => new Map(handcraftRecipes.map((recipe) => [
+    recipe.id,
+    getRecursiveHandcraftPlan(game, recipe.id, batches),
+  ])), [handcraftRecipes, game.research.completedTechIds, game.tray, game.portableFleet, batches]);
   const recentSearches = searchHistory[mode];
   const quantityConstruction = constructionDefinitions.find((definition) => definition.buildingId === quantityTargetId) ?? constructionDefinitions[0];
   const quantityRecipe = handcraftRecipes.find((recipe) => recipe.id === quantityTargetId) ?? handcraftRecipes[0];
@@ -1811,7 +1819,7 @@ function Fabricator({ game, focusItemId, onCraft, onCraftItem, onQueueCraftItem,
       <div ref={listRef} className={`fabricator-list${mode === "items" ? " fabricator-list--items" : ""}${view === "compact" ? " fabricator-list--compact" : ""}`}>
       {mode === "construction" ? constructionDefinitions.map((definition) => {
         const unlocked = !definition.requiredTechId || isTechnologyCompleted(game, definition.requiredTechId);
-        const plan = getConstructionQuickCraftPlan(game, definition.buildingId, batches);
+        const plan = constructionPlans.get(definition.buildingId) ?? getConstructionQuickCraftPlan(game, definition.buildingId, batches);
         return (
           <article className={`fabricator-row${quantityConstruction?.buildingId === definition.buildingId ? " fabricator-row--quantity-target" : ""}`} key={definition.buildingId} onPointerDown={() => setQuantityTargetId(definition.buildingId)}>
             <header>
@@ -1838,7 +1846,7 @@ function Fabricator({ game, focusItemId, onCraft, onCraftItem, onQueueCraftItem,
       }) : handcraftRecipes.map((recipe) => {
         const output = recipe.outputs[0];
         const unlocked = !recipe.requiredTechId || isTechnologyCompleted(game, recipe.requiredTechId);
-        const recursivePlan = getRecursiveHandcraftPlan(game, recipe.id, batches);
+        const recursivePlan = recursivePlans.get(recipe.id) ?? getRecursiveHandcraftPlan(game, recipe.id, batches);
         const available = recursivePlan.possible;
         return (
           <article className={`fabricator-row handcraft-row${focusedHandcraftItemId === output.itemId ? " fabricator-row--focused" : ""}${quantityRecipe?.id === recipe.id ? " fabricator-row--quantity-target" : ""}`} data-output-item={output.itemId} tabIndex={-1} key={recipe.id} onPointerDown={() => setQuantityTargetId(recipe.id)}>
@@ -2102,25 +2110,33 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
   const [recent, setRecent] = useState<Array<BuildingId | ConveyorBeltId>>(loadRecentConstruction);
   const [compact, setCompact] = useState(loadCompactConstruction);
   const horizontalPan = useHorizontalPan<HTMLDivElement>();
-  const unlockedBuildOrder = CONSTRUCTION_BUILD_ORDER.filter((id) => {
+  const unlockedBuildOrder = useMemo(() => CONSTRUCTION_BUILD_ORDER.filter((id) => {
     if ((game.construction[id] ?? 0) > 0) return true;
     if (isConveyorBeltId(id) && game.belts.some((belt) => belt.tier === getBeltTier(id))) return true;
     if (id === "mining_machine" && game.entities.some((entity) => entity.minerCount > 0)) return true;
     if (!isConveyorBeltId(id) && game.entities.some((entity) => entity.buildingId === id)) return true;
     const requiredTechId = getConstructionDefinition(id)?.requiredTechId;
     return !requiredTechId || isTechnologyCompleted(game, requiredTechId);
-  });
-  const visibleBuildOrder = category === "all"
+  }), [game.construction, game.belts, game.entities, game.research.completedTechIds]);
+  const visibleBuildOrder = useMemo(() => category === "all"
     ? unlockedBuildOrder
     : category === "recent"
       ? recent.filter((id) => unlockedBuildOrder.includes(id))
-      : unlockedBuildOrder.filter((id) => CONSTRUCTION_CATEGORY_IDS[category].has(id));
-  const visibleFleetItems = category === "all" || category === "logistics"
+      : unlockedBuildOrder.filter((id) => CONSTRUCTION_CATEGORY_IDS[category].has(id)), [category, recent, unlockedBuildOrder]);
+  const visibleFleetItems = useMemo(() => category === "all" || category === "logistics"
     ? PORTABLE_FLEET_ITEM_IDS.filter((itemId) => {
         const recipe = getRecipe(itemId);
         return (game.portableFleet?.[itemId] ?? 0) > 0 || !recipe?.requiredTechId || isTechnologyCompleted(game, recipe.requiredTechId);
       })
-    : [];
+    : [], [category, game.portableFleet, game.research.completedTechIds]);
+  const visibleConstructionPlans = useMemo(() => new Map(visibleBuildOrder.map((id) => [
+    id,
+    getConstructionQuickCraftPlan(game, id),
+  ])), [visibleBuildOrder, game.research.completedTechIds, game.tray, game.portableFleet]);
+  const fleetCraftability = useMemo(() => new Map(PORTABLE_FLEET_ITEM_IDS.map((itemId) => {
+    const recipe = getRecipe(itemId);
+    return [itemId, recipe ? getRecursiveHandcraftPlan(game, recipe.id, 1).possible : false] as const;
+  })), [game.research.completedTechIds, game.tray, game.portableFleet]);
   const remember = (id: BuildingId | ConveyorBeltId) => {
     setRecent((current) => {
       const next = [id, ...current.filter((candidate) => candidate !== id)].slice(0, 8);
@@ -2171,7 +2187,7 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
           const requiredCount = isBelt ? 1 : placementCount;
           const activePlanet = getPlanet(game.activePlanetId);
           const compatiblePlanet = isBelt ? activePlanet.kind !== "gas-giant" : canPlaceBuildingOnPlanet(id as BuildingId, game.activePlanetId, game);
-          const quickCraftPlan = getConstructionQuickCraftPlan(game, id);
+          const quickCraftPlan = visibleConstructionPlans.get(id) ?? getConstructionQuickCraftPlan(game, id);
           const craftable = quickCraftPlan.possible;
           const quickCraftState = quickCraftPlan.status;
           const consumptionHint = quickCraftPlan.consumedItems.map((item) => `${getItem(item.itemId).name}×${formatQuantityCompact(item.amount)}`).join("、");
@@ -2232,7 +2248,7 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
           const recipe = getRecipe(itemId)!;
           const count = Math.max(0, Math.floor(game.portableFleet?.[itemId] ?? 0));
           const cargoReady = game.cargo?.itemId === itemId;
-          const craftable = getRecursiveHandcraftPlan(game, recipe.id, 1).possible;
+          const craftable = fleetCraftability.get(itemId) ?? getRecursiveHandcraftPlan(game, recipe.id, 1).possible;
           const missingTechnology = recipe.requiredTechId && !isTechnologyCompleted(game, recipe.requiredTechId)
             ? getTechnology(recipe.requiredTechId)?.name
             : null;

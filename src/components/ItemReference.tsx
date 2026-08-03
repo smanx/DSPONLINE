@@ -93,7 +93,11 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
   const primaryEquipment = primaryRecipe
     ? getCompatibleRecipeBuildings(primaryRecipe).map((building) => building.shortName).join(" / ")
     : "";
-  const locateAvailability = actions?.getLocateAvailability(itemId) ?? { available: false, reason: "当前页面未连接工厂定位" };
+  // Production-line lookup walks the factory graph. Keep it out of the normal
+  // render path; only an opened card needs to know whether its action is enabled.
+  const locateAvailability = anchor && actions
+    ? actions.getLocateAvailability(itemId)
+    : { available: false, reason: "打开卡片后检查生产来源" };
   return (
     <span
       className={`item-reference${className ? ` ${className}` : ""}`}

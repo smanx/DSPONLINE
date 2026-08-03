@@ -29,7 +29,8 @@ import {
 import { CommandPalette, type CommandWorkspace } from "./components/CommandPalette";
 import { NODE_TYPES, type FactoryFlowNode, type FactoryNodeData } from "./components/FactoryNodes";
 import { EDGE_TYPES, FactoryConnectionLine, type FactoryFlowEdge } from "./components/FactoryEdges";
-import { CanvasBeltLayer } from "./components/CanvasBeltLayer";
+import { CanvasBeltLayer, type CanvasBeltLayerHandle } from "./components/CanvasBeltLayer";
+import { CanvasMiniMap } from "./components/CanvasMiniMap";
 import { BlueprintWorkspace, CanvasRegionEditor, CanvasRegionLayer, CanvasSelectionTools, PendingBlueprintLayer, SelectionToolbar, type CanvasRegionRectangle, type CanvasRegionResizeHandle } from "./components/BlueprintWorkspace";
 import { CanvasInteractionOverlay, type CanvasClickConnectionPreview, type CanvasConnectionPreviewTone } from "./components/CanvasInteractionOverlay";
 import { GAME_DIALOG_CLOSED_EVENT, useGameDialog } from "./components/GameDialogProvider";
@@ -237,9 +238,9 @@ import { formatQuantityCompact } from "./game/quantityFormat";
 import { getAchievement, getNewAchievementIds, unlockAchievements } from "./game/progression";
 import { deliverSystemSpaceStationMaterial, getInterstellarStationUpgradeStatus, requestStationOperationMode, setElevatorOutputItem, setSystemSpaceStationModuleCount, startSystemSpaceStationConstruction, upgradeAllInterstellarStationsToMk2, upgradeInterstellarStationToMk2 } from "./game/systemSpaceStation";
 import { getDifficultyDefinition } from "./game/difficulty";
-import { analyzeBeltNetwork, createBeltDiagnosticIndex, diagnoseBelt, predictBeltConnection } from "./game/network";
+import { analyzeBeltNetwork, diagnoseBelt, predictBeltConnection } from "./game/network";
 import { buildFactoryEdgeRouteCenters, reconcileFactoryCanvasTopology, type FactoryCanvasTopology } from "./game/canvasTopology";
-import { readExperimentalCanvasBatchMode } from "./game/canvasLineBatch";
+import { createCanvasRenderSnapshot, reconcileCanvasRenderSnapshot, type CanvasRenderSnapshot } from "./game/canvasRenderSnapshot";
 import { planFactoryAutoLayout } from "./game/layout";
 import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
 import { getProductionLineLocations, type ProductionLineLocation } from "./game/productionLocator";
@@ -273,6 +274,7 @@ import { trackAnalyticsEvent } from "./game/analytics";
 import { CLOUD_AUTO_SYNC_INTERVAL_MS, CloudApiError, compareCloudSave, fetchCloudPublicStatus, getCloudToken, markCloudSaveSynchronized, readCloudAutoSyncStatus, refreshCloudSaveMetadata, resumeCloudSession, uploadCloudSave, writeCloudAutoSyncStatus } from "./game/cloud";
 import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CanvasRegion, CanvasViewport, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad, StationSlotTemplate } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
+import { mergeSimulationProjections, type SimulationProjection } from "./game/simulationProjection";
 import { applySimulationStateDelta, readExperimentalSimulationDeltaMode } from "./game/simulationDelta";
 import { readMulticoreSimulationOptions } from "./game/multicoreSimulation";
 import { getOnboardingFocusTarget, getOnboardingStep, recordBasicOnboardingEvent, type OnboardingActionId } from "./game/onboarding";
@@ -294,7 +296,15 @@ import { buildAlignmentSpatialIndex, findAlignmentGuides, type AlignmentSpatialI
 import { synchronizeGalacticActivity, type GalacticActivityPublicStatus } from "./game/galacticActivity";
 import { TutorialWorkspace } from "./components/TutorialWorkspace";
 import { TimeWarpIdleOverlay } from "./components/TimeWarpIdleOverlay";
-import { acknowledgeEndgameExtremeMode, readEndgameExtremeMode, writeEndgameExtremeMode } from "./game/endgamePerformance";
+import {
+  acknowledgeEndgameExtremeMode,
+  canvasPerformanceFeatureIsActive,
+  readCanvasPerformanceFeatures,
+  readEndgameExtremeMode,
+  writeCanvasPerformanceFeatures,
+  writeEndgameExtremeMode,
+  type CanvasPerformanceFeatureId,
+} from "./game/endgamePerformance";
 import {
   beginCanvasPointerMotion,
   canvasPointerMotionFrameIsActive,
@@ -616,6 +626,15 @@ function visualEntitySignature(entity: FactoryEntity): string {
   return `${scalars}|inputs=${mapToken(entity.inputs)}|outputs=${mapToken(entity.outputs)}|slots=${slots}|nested=${nested}`;
 }
 
+function serializedPayloadBytes(value: unknown): number {
+  try {
+    const raw = JSON.stringify(value);
+    return typeof TextEncoder === "undefined" ? raw.length : new TextEncoder().encode(raw).byteLength;
+  } catch {
+    return 0;
+  }
+}
+
 function minerPlacementHint(buildingId: BuildingId): string {
   if (buildingId === "oil_extractor") return "原油萃取站需要部署在原油涌泉上";
   if (buildingId === "water_pump") return "抽水站需要部署在水或硫酸海洋上";
@@ -631,11 +650,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [mobileUiPreference, setMobileUiPreference] = useMobileUiPreference();
   const [productionRefreshPreference, setProductionRefreshPreference] = useProductionRefreshPreference();
   const [endgameExtremeMode, setEndgameExtremeMode] = useState(readEndgameExtremeMode);
+  const [canvasPerformanceFeatures, setCanvasPerformanceFeatures] = useState(readCanvasPerformanceFeatures);
   const [loaded] = useState(initialLoad);
   const [game, setGame] = useState(loaded.state);
   const observedGame = useObservedBeltFlowGame(game, !game.paused);
   const resolvedTheme = useResolvedTheme(game.settings.theme);
-  const [canvasGameSnapshot, setCanvasGame] = useState(loaded.state);
+  const [canvasRenderSnapshot, setCanvasRenderSnapshot] = useState<CanvasRenderSnapshot>(() => createCanvasRenderSnapshot(loaded.state));
+  const canvasGameSnapshot = canvasRenderSnapshot.game;
   const canvasGame = useObservedBeltFlowGame(canvasGameSnapshot, !canvasGameSnapshot.paused);
   const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([]);
   const [selectedBeltId, setSelectedBeltId] = useState<string | null>(null);
@@ -707,7 +728,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [connectionHint, setConnectionHint] = useState<{ label: string; tone: "ready" | "blocked" | "warning" } | null>(null);
   const initialViewport = loaded.state.planetViewports[loaded.state.activePlanetId] ?? { x: 510, y: 250, zoom: 0.84 };
   const [viewportZoom, setViewportZoom] = useState(initialViewport.zoom);
+  const [canvasGeometryRevision, setCanvasGeometryRevision] = useState(0);
+  const [hoveredBeltId, setHoveredBeltId] = useState<string | null>(null);
+  const [canvasBatchFailed, setCanvasBatchFailed] = useState(false);
+  const [minimapCanvasFailed, setMinimapCanvasFailed] = useState(false);
   const [pendingBlueprintViewport, setPendingBlueprintViewport] = useState<CanvasViewport>({ ...initialViewport });
+  const [minimapViewport, setMinimapViewport] = useState<CanvasViewport>({ ...initialViewport });
   const [canvasViewportSize, setCanvasViewportSize] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
   const [highlightedTaskId, setHighlightedTaskId] = useState<CampaignTaskId | null>(null);
   const [rewardFlights, setRewardFlights] = useState<RewardFlight[]>([]);
@@ -726,8 +752,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [ctrlHeld, setCtrlHeld] = useState(false);
   const gameRef = useRef(game);
   const latestCanvasGameRef = useRef(game);
+  const lastCanvasPublishedGameRef = useRef(game);
+  const canvasRenderSnapshotRef = useRef(canvasRenderSnapshot);
+  const pendingCanvasProjectionRef = useRef<SimulationProjection | null>(null);
   const canvasTopologyRef = useRef<FactoryCanvasTopology | null>(null);
-  const edgeRouteCacheRef = useRef<{ key: string; centers: ReadonlyMap<string, number | undefined> } | null>(null);
+  const edgeRouteCacheRef = useRef<{ topologyRevision: number; geometryRevision: number; simplified: boolean; centers: ReadonlyMap<string, number | undefined> } | null>(null);
   const edgeRenderCacheRef = useRef<Map<string, FactoryFlowEdge>>(new Map());
   const accountStateRef = useRef(accountState);
   const completedTechCountRef = useRef(game.research.completedTechIds.length);
@@ -762,10 +791,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const suppressConnectionClickRef = useRef(false);
   const suppressConnectionClickTimerRef = useRef(0);
   const viewportRef = useRef<CanvasViewport>({ ...initialViewport });
+  const pendingPlanetViewportRef = useRef(new Map<PlanetId, { viewport: CanvasViewport; timer: number }>());
+  const viewportOnlyGameStateRef = useRef<GameState | null>(null);
   const canvasSizeRef = useRef<{ width: number; height: number } | null>(null);
   const canvasPointerMotionRef = useRef(createCanvasPointerMotionSession());
   const canvasPointerMotionFrameRef = useRef<number | null>(null);
   const canvasPointerCaptureRef = useRef<{ element: HTMLElement; pointerId: number } | null>(null);
+  const canvasBeltLayerRef = useRef<CanvasBeltLayerHandle | null>(null);
   const connectionHandleSpatialIndexRef = useRef<ConnectionHandleSpatialIndex | null>(null);
   const alignmentSpatialIndexRef = useRef<AlignmentSpatialIndex | null>(null);
   const dragAlignmentSpatialIndexRef = useRef<AlignmentSpatialIndex | null>(null);
@@ -782,7 +814,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const simulationWorkerDisabledRef = useRef(false);
   const contentPackRuntimeSnapshotRef = useRef<ContentPackRuntimeSnapshot>(createContentPackRuntimeSnapshot(INITIAL_CONTENT_PACK_REGISTRY));
   const simulationWorkerRegistryFingerprintRef = useRef<string | null>(null);
-  const simulationSubmissionRef = useRef<{ id: number; state: GameState; simulationSeconds: number; wallSeconds: number; registryFingerprint: string; submittedAt: number; baseStateRevision: number | null } | null>(null);
+  const simulationSubmissionRef = useRef<{ id: number; state: GameState; simulationSeconds: number; wallSeconds: number; registryFingerprint: string; submittedAt: number; baseStateRevision: number | null; requestBytes: number } | null>(null);
   const simulationStateRevisionRef = useRef(0);
   const experimentalSimulationDeltaRef = useRef(readExperimentalSimulationDeltaMode());
   const multicoreSimulationOptionsRef = useRef(readMulticoreSimulationOptions());
@@ -839,6 +871,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const productionRefreshIntervalMs = endgameExtremeMode
     ? Math.max(5_000, resolveProductionRefreshInterval(productionRefreshPreference, automaticRefreshState))
     : resolveProductionRefreshInterval(productionRefreshPreference, automaticRefreshState);
+  const projectionFeatureActive = canvasPerformanceFeatureIsActive(canvasPerformanceFeatures, "renderProjection", endgameExtremeMode);
+  const topologyCacheFeatureActive = canvasPerformanceFeatureIsActive(canvasPerformanceFeatures, "topologyCache", endgameExtremeMode);
+  const extremeVisualsActive = canvasPerformanceFeatureIsActive(canvasPerformanceFeatures, "extremeVisuals", endgameExtremeMode);
+  const nodeLodFeatureActive = canvasPerformanceFeatureIsActive(canvasPerformanceFeatures, "nodeLod", endgameExtremeMode);
+  const canvasBeltsFeatureActive = canvasPerformanceFeatureIsActive(canvasPerformanceFeatures, "canvasBelts", endgameExtremeMode);
+  const viewportCullingFeatureActive = canvasPerformanceFeatureIsActive(canvasPerformanceFeatures, "viewportCulling", endgameExtremeMode);
+  const spatialIndexesFeatureActive = canvasPerformanceFeatureIsActive(canvasPerformanceFeatures, "spatialIndexes", endgameExtremeMode);
+  const minimapThrottleFeatureActive = canvasPerformanceFeatureIsActive(canvasPerformanceFeatures, "minimapThrottle", endgameExtremeMode);
   const activeMobileCanvasMode: MobileCanvasMode = placement
     ? "place"
     : connectionDraft || clickConnectionPreview
@@ -963,6 +1003,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       frame = window.requestAnimationFrame(() => {
         viewportRef.current = preserved;
         setPendingBlueprintViewport(preserved);
+        setMinimapViewport(preserved);
         void setViewport(preserved, { duration: 0 });
       });
     });
@@ -1079,24 +1120,62 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     };
   }, []);
 
+  const publishCanvasSnapshot = useCallback((state: GameState, force = false) => {
+    if (!force && lastCanvasPublishedGameRef.current === state) return;
+    const startedAt = performanceMonitor.isActive() ? performance.now() : 0;
+    const result = reconcileCanvasRenderSnapshot(
+      canvasRenderSnapshotRef.current,
+      state,
+      pendingCanvasProjectionRef.current,
+      { force, enabled: projectionFeatureActive },
+    );
+    pendingCanvasProjectionRef.current = null;
+    lastCanvasPublishedGameRef.current = state;
+    canvasRenderSnapshotRef.current = result.snapshot;
+    setCanvasRenderSnapshot(result.snapshot);
+    if (performanceMonitor.isActive()) {
+      performanceMonitor.recordCanvas({
+        snapshotMs: performance.now() - startedAt,
+        refreshIntervalMs: productionRefreshIntervalMs,
+        lod: getCanvasLod(viewportRef.current.zoom),
+        endgameExtremeMode,
+        projectionEnabled: projectionFeatureActive,
+        topologyRevision: result.snapshot.topologyRevision,
+        runtimeRevision: result.snapshot.runtimeRevision,
+      });
+    }
+  }, [endgameExtremeMode, performanceMonitor.isActive, performanceMonitor.recordCanvas, productionRefreshIntervalMs, projectionFeatureActive]);
+
   useEffect(() => {
     gameRef.current = game;
     latestCanvasGameRef.current = game;
+    if (viewportOnlyGameStateRef.current === game) {
+      viewportOnlyGameStateRef.current = null;
+      lastCanvasPublishedGameRef.current = game;
+      return;
+    }
     // Editing while paused must still update the canvas immediately. Simulation
     // snapshots remain frozen because no new game state is published.
-    if (!canvasWorkspacePaused && (game !== lastSimulationResultRef.current || game.paused)) setCanvasGame(game);
-  }, [canvasWorkspacePaused, game]);
+    if (!canvasWorkspacePaused && (game !== lastSimulationResultRef.current || game.paused)) {
+      pendingCanvasProjectionRef.current = null;
+      publishCanvasSnapshot(game, true);
+    }
+  }, [canvasWorkspacePaused, game, publishCanvasSnapshot]);
   useEffect(() => {
     if (canvasRefreshPaused) return;
     const timer = window.setInterval(() => {
-      setCanvasGame((current) => current === latestCanvasGameRef.current ? current : latestCanvasGameRef.current);
+      publishCanvasSnapshot(latestCanvasGameRef.current);
     }, productionRefreshIntervalMs);
     return () => window.clearInterval(timer);
-  }, [canvasRefreshPaused, productionRefreshIntervalMs]);
+  }, [canvasRefreshPaused, productionRefreshIntervalMs, publishCanvasSnapshot]);
   useEffect(() => {
     if (canvasWorkspacePaused || (selectedEntityIds.length === 0 && !selectedBeltId && selectedBeltIds.length === 0)) return;
-    setCanvasGame(game);
-  }, [canvasWorkspacePaused, game, selectedBeltId, selectedBeltIds.length, selectedEntityIds.length]);
+    publishCanvasSnapshot(game);
+  }, [canvasWorkspacePaused, game, publishCanvasSnapshot, selectedBeltId, selectedBeltIds.length, selectedEntityIds.length]);
+  useEffect(() => {
+    pendingCanvasProjectionRef.current = null;
+    publishCanvasSnapshot(gameRef.current, true);
+  }, [projectionFeatureActive, publishCanvasSnapshot]);
   useEffect(() => {
     if (mobilePanel) setMobilePanelStage("half");
   }, [mobilePanel]);
@@ -1203,14 +1282,26 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, []);
 
   const stateWithSimulationDebt = useCallback((state: GameState): GameState => {
+    let current = state;
+    const pendingViewports = pendingPlanetViewportRef.current;
+    if (pendingViewports.size > 0) {
+      let planetViewports = state.planetViewports;
+      for (const [planetId, pending] of pendingViewports) {
+        const previous = planetViewports[planetId];
+        if (previous?.x === pending.viewport.x && previous.y === pending.viewport.y && previous.zoom === pending.viewport.zoom) continue;
+        if (planetViewports === state.planetViewports) planetViewports = { ...state.planetViewports };
+        planetViewports[planetId] = pending.viewport;
+      }
+      if (planetViewports !== state.planetViewports) current = { ...state, planetViewports };
+    }
     const submitted = simulationSubmissionRef.current;
     const pendingSimulationSeconds = simulationPendingSecondsRef.current + (submitted?.simulationSeconds ?? 0);
     const pendingWallSeconds = simulationPendingWallSecondsRef.current + (submitted?.wallSeconds ?? 0);
-    if (pendingSimulationSeconds === state.timeWarp.pendingSimulationSeconds && pendingWallSeconds === state.timeWarp.pendingWallSeconds) return state;
+    if (pendingSimulationSeconds === current.timeWarp.pendingSimulationSeconds && pendingWallSeconds === current.timeWarp.pendingWallSeconds) return current;
     return {
-      ...state,
+      ...current,
       timeWarp: {
-        ...state.timeWarp,
+        ...current.timeWarp,
         pendingSimulationSeconds,
         pendingWallSeconds,
       },
@@ -1363,13 +1454,26 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       y: alignToDevicePixel(viewport.y),
       zoom: Math.max(0.25, Math.min(1.8, Math.round(viewport.zoom * 1000) / 1000)),
     };
-    setGame((current) => {
-      const previous = current.planetViewports[planetId];
-      if (previous && previous.x === normalized.x && previous.y === normalized.y && previous.zoom === normalized.zoom) return current;
-      const next = { ...current, planetViewports: { ...current.planetViewports, [planetId]: normalized } };
-      gameRef.current = next;
-      return next;
-    });
+    const pending = pendingPlanetViewportRef.current.get(planetId);
+    if (pending) window.clearTimeout(pending.timer);
+    const timer = window.setTimeout(() => {
+      const latest = pendingPlanetViewportRef.current.get(planetId);
+      if (!latest || latest.timer !== timer) return;
+      pendingPlanetViewportRef.current.delete(planetId);
+      setGame((current) => {
+        const previous = current.planetViewports[planetId];
+        if (previous && previous.x === latest.viewport.x && previous.y === latest.viewport.y && previous.zoom === latest.viewport.zoom) return current;
+        const next = { ...current, planetViewports: { ...current.planetViewports, [planetId]: latest.viewport } };
+        viewportOnlyGameStateRef.current = next;
+        gameRef.current = next;
+        return next;
+      });
+    }, 160);
+    pendingPlanetViewportRef.current.set(planetId, { viewport: normalized, timer });
+  }, []);
+  useEffect(() => () => {
+    for (const pending of pendingPlanetViewportRef.current.values()) window.clearTimeout(pending.timer);
+    pendingPlanetViewportRef.current.clear();
   }, []);
 
   const undoGame = useCallback(() => {
@@ -1419,6 +1523,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           latencyMs: latency,
           pendingTaskMs: simulationPendingSecondsRef.current * 1_000,
           profiler: event.data.profiler ?? null,
+          requestBytes: submission.requestBytes,
+          responseBytes: event.data.transferBytes ?? 0,
         });
       }
       simulationSubmissionRef.current = null;
@@ -1478,6 +1584,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           simulationStateRevisionRef.current = event.data.delta.nextRevision;
           lastSimulationResultRef.current = next;
           gameRef.current = next;
+          if (event.data.projection) {
+            pendingCanvasProjectionRef.current = mergeSimulationProjections(pendingCanvasProjectionRef.current, event.data.projection);
+          }
           return next;
         }
         if (!event.data.state) {
@@ -1489,6 +1598,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         if (typeof event.data.stateRevision === "number") simulationStateRevisionRef.current = event.data.stateRevision;
         lastSimulationResultRef.current = event.data.state;
         gameRef.current = event.data.state;
+        if (event.data.projection) {
+          pendingCanvasProjectionRef.current = mergeSimulationProjections(pendingCanvasProjectionRef.current, event.data.projection);
+        }
         return event.data.state;
       });
     };
@@ -1567,6 +1679,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           registryFingerprint: registrySnapshot.fingerprint,
           baseStateRevision: mainState === lastSimulationResultRef.current && experimentalSimulationDeltaRef.current ? simulationStateRevisionRef.current : null,
           submittedAt: performance.now(),
+          requestBytes: performanceMonitor.isActive() ? serializedPayloadBytes(request) : 0,
         };
         try {
           worker.postMessage(request);
@@ -2145,6 +2258,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     viewportRef.current = { ...destinationViewport };
     setViewportZoom(destinationViewport.zoom);
     setPendingBlueprintViewport({ ...destinationViewport });
+    setMinimapViewport({ ...destinationViewport });
     setViewport(destinationViewport, { duration: gameRef.current.settings.reducedMotion ? 0 : 180 });
     if (cargo) {
       const titanium = cargo.itemId === "titanium_ore" || cargo.itemId === "titanium_ingot";
@@ -2177,14 +2291,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     // when the player opens the alert workspace.
     details: operationsOpen && operationsTab === "alerts",
   }), [game, operationsOpen, operationsTab]);
-  const activePlanetEntityCount = useMemo(() => game.entities.filter((entity) => entity.planetId === game.activePlanetId).length, [game.activePlanetId, game.entities]);
+  const activePlanetEntityCount = canvasRenderSnapshot.planetId === game.activePlanetId
+    ? canvasRenderSnapshot.entityById.size
+    : game.entities.filter((entity) => entity.planetId === game.activePlanetId).length;
   const automaticPerformanceMode = activePlanetEntityCount >= 300 || constrainedMobile || lowFrameRateMode;
   const performanceVisualMode = endgameExtremeMode || game.settings.performanceMode || automaticPerformanceMode;
   const largeFactoryMode = performanceVisualMode && (activePlanetEntityCount >= 150 || constrainedMobile);
 
   const toggleEndgameExtremeMode = useCallback(async (enabled: boolean) => {
     if (enabled) {
-      const confirmed = await gameDialog.confirm("终局优化·极限模式会减少线路动画、装饰和普通读数刷新，普通读数最多延迟约 5 秒，但不会改变模拟结果、产量或存档。是否开启？", {
+      const confirmed = await gameDialog.confirm("终局·极限模式将减少动画、线路标签和普通数据刷新，以换取更高的画布流畅度。不会改变生产、物流、库存或存档数据。", {
         confirmLabel: "开启极限模式",
         cancelLabel: "暂不开启",
       });
@@ -2195,6 +2311,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setEndgameExtremeMode(enabled);
     setNotice(enabled ? "终局优化·极限模式已开启：模拟结果不变，视觉刷新已降级" : "终局优化·极限模式已关闭");
   }, [gameDialog]);
+
+  const updateCanvasPerformanceFeature = useCallback((id: CanvasPerformanceFeatureId, enabled: boolean) => {
+    setCanvasPerformanceFeatures((current) => {
+      const next = { ...current, [id]: enabled };
+      writeCanvasPerformanceFeatures(next);
+      return next;
+    });
+    if (id === "canvasBelts") setCanvasBatchFailed(false);
+  }, []);
 
   const updateSettings = useCallback((settings: Partial<GameSettings>) => {
     setGame((current) => ({ ...current, settings: { ...current.settings, ...settings } }));
@@ -2379,6 +2504,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     viewportRef.current = { ...viewport };
     setViewportZoom(viewport.zoom);
     setPendingBlueprintViewport({ ...viewport });
+    setMinimapViewport({ ...viewport });
     setViewport(viewport, { duration: state.settings.reducedMotion ? 0 : 180 });
   }, [clearHistory, onMiningStop, setNodes, setViewport]);
 
@@ -3257,10 +3383,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     () => canvasGame.belts.filter((belt) => belt.planetId === canvasGame.activePlanetId),
     [canvasGame.activePlanetId, canvasGame.belts],
   );
-  const canvasBatchRendererEnabled = endgameExtremeMode && readExperimentalCanvasBatchMode() && activePlanetBelts.length >= 600;
+  const canvasBatchRendererEnabled = canvasBeltsFeatureActive && !canvasBatchFailed && activePlanetBelts.length >= 180;
   const activeEntityById = useMemo(
-    () => new Map(activePlanetEntities.map((entity) => [entity.id, entity])),
-    [activePlanetEntities],
+    () => canvasRenderSnapshot.planetId === canvasGame.activePlanetId
+      ? canvasRenderSnapshot.entityById
+      : new Map(activePlanetEntities.map((entity) => [entity.id, entity])),
+    [activePlanetEntities, canvasGame.activePlanetId, canvasRenderSnapshot.entityById, canvasRenderSnapshot.planetId],
   );
 
   const canvasTopology = useMemo(() => {
@@ -3269,15 +3397,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       canvasGame.activePlanetId,
       activePlanetEntities,
       activePlanetBelts,
+      topologyCacheFeatureActive ? canvasRenderSnapshot.topologyRevision : undefined,
     );
     canvasTopologyRef.current = next;
     return next;
-  }, [activePlanetBelts, activePlanetEntities, canvasGame.activePlanetId]);
+  }, [activePlanetBelts, activePlanetEntities, canvasGame.activePlanetId, canvasRenderSnapshot.topologyRevision, topologyCacheFeatureActive]);
 
-  const beltDiagnosticIndex = useMemo(
-    () => createBeltDiagnosticIndex(activePlanetEntities),
-    [activePlanetEntities],
-  );
+  const beltDiagnosticIndex = useMemo(() => ({ entityById: activeEntityById }), [activeEntityById]);
 
   const beltNodeIndex = useMemo(() => {
     const activeEntityIds = new Set<string>();
@@ -3295,6 +3421,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [activePlanetBelts, canvasTopology]);
 
   const beltBundleMap = canvasTopology.bundleByBeltId;
+  const activeLogisticsEntityIdSet = useMemo(() => new Set(beltNodeIndex.activeEntityIds), [beltNodeIndex.activeEntityIds]);
   const focusedBeltNetwork = useMemo(() => focusedBeltNetworkId
     ? analyzeBeltNetwork(canvasGame, focusedBeltNetworkId)
     : null, [focusedBeltNetworkId, canvasGame]);
@@ -3302,7 +3429,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const focusedNetworkEntityIds = useMemo(() => new Set(focusedBeltNetwork?.entityIds ?? []), [focusedBeltNetwork]);
   const locatedProductionEntityIds = useMemo(() => new Set(productionLineFocus?.relatedEntityIds ?? []), [productionLineFocus]);
   const locatedProductionBeltIds = useMemo(() => new Set(productionLineFocus?.relatedBeltIds ?? []), [productionLineFocus]);
-  const selectedBeltIdSet = useMemo(() => new Set(selectedBeltIds), [selectedBeltIds]);
+  const selectedBeltIdSet = useMemo(() => new Set([...selectedBeltIds, ...(selectedBeltId ? [selectedBeltId] : [])]), [selectedBeltId, selectedBeltIds]);
 
   useEffect(() => {
     if (focusedBeltNetworkId && !game.belts.some((belt) => belt.id === focusedBeltNetworkId)) {
@@ -3344,7 +3471,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     return { entityIds, beltIds, itemIds };
   }, [activePlanetBelts, activePlanetEntities, canvasGame, highlightedTaskId]);
 
-  const commonNodeData = useMemo<Omit<FactoryNodeData, "visualSignature" | "entity" | "status" | "powerFactor" | "resourceReserve" | "connectedInputItemIds" | "inputBeltCounts" | "outputBeltCounts" | "blackHolePortConnections" | "cycleRatePerSecond">>(() => {
+  const commonNodeData = useMemo<Omit<FactoryNodeData, "visualSignature" | "entity" | "status" | "powerFactor" | "resourceReserve" | "connectedInputItemIds" | "inputBeltCounts" | "outputBeltCounts" | "blackHolePortConnections" | "cycleRatePerSecond" | "lod" | "acceptedInputItemIds" | "producedOutputItemIds">>(() => {
     const technology = getTechnology(canvasGame.research.selectedTechId);
     const progress = technology ? canvasGame.research.progressByTech[technology.id] ?? {} : {};
     const planetProfile = getPlanetIndustrialProfile(canvasGame, canvasGame.activePlanetId);
@@ -3382,12 +3509,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       dysonSphere: canvasGame.dysonSphere,
       timeWarp: canvasGame.timeWarp,
       simulationMultiplier: getEffectiveSimulationMultiplier(canvasGame),
+      extremeVisuals: extremeVisualsActive,
     };
-  }, [beltNodeIndex.activeEntityIds, canvasGame.activePlanetId, canvasGame.cargo, canvasGame.dysonSphere, canvasGame.dysonSwarm, canvasGame.galaxy, canvasGame.paused, canvasGame.research.completedTechIds, canvasGame.research.progressByTech, canvasGame.research.selectedTechId, canvasGame.settings.difficulty, canvasGame.settings.simulationSpeed, canvasGame.timeWarp, commitGame, connectionDraft, miningEntityId, onAddBuilding, onDropCargo, onDropDraggedItem, onEnergyModeChange, onFuelChange, onInstallMiner, onMiningStart, onMiningStop, onPickInput, onPickOutput, onRecipeChange, placement, placementCount]);
+  }, [beltNodeIndex.activeEntityIds, canvasGame.activePlanetId, canvasGame.cargo, canvasGame.dysonSphere, canvasGame.dysonSwarm, canvasGame.galaxy, canvasGame.paused, canvasGame.research.completedTechIds, canvasGame.research.progressByTech, canvasGame.research.selectedTechId, canvasGame.settings.difficulty, canvasGame.settings.simulationSpeed, canvasGame.timeWarp, commitGame, connectionDraft, extremeVisualsActive, miningEntityId, onAddBuilding, onDropCargo, onDropDraggedItem, onEnergyModeChange, onFuelChange, onInstallMiner, onMiningStart, onMiningStop, onPickInput, onPickOutput, onRecipeChange, placement, placementCount]);
 
   useEffect(() => {
     if (nodeDragActiveRef.current) return;
     const frame = window.requestAnimationFrame(() => {
+      const derivationStartedAt = performanceMonitor.isActive() ? performance.now() : 0;
       setNodes((current) => {
         const existing = new Map(current.map((node) => [node.id, node]));
         const next = activePlanetEntities.map((entity) => {
@@ -3404,6 +3533,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           const outputCapacity = getEntityOutputCapacity(canvasGame, entity);
           const cycleRatePerSecond = getEntityCycleRatePerSimulationSecond(canvasGame, entity);
           const selected = selectedEntityIds.includes(entity.id);
+          const interactionNeedsFullNode = selected || !nodeLodFeatureActive || Boolean(placement || blueprintPlacementId || connectionDraft);
+          const zoomLod = getCanvasLod(viewportZoom);
+          const lod: CanvasLod = interactionNeedsFullNode ? "full" : zoomLod === "full" ? "medium" : zoomLod;
+          const acceptedInputItemIds = getAcceptedInputs(entity, canvasGame);
+          const producedOutputItemIds = getProducedOutputs(entity);
           const className = highlightedTaskId
             ? taskHighlight.entityIds.has(entity.id) ? "factory-flow-node--task-focus" : "factory-flow-node--task-dim"
             : productionLineFocus?.planetId === canvasGame.activePlanetId
@@ -3431,7 +3565,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             commonNodeData.paused,
             commonNodeData.simulationMultiplier,
             commonNodeData.connectionDraft,
-            (commonNodeData.activeLogisticsEntityIds as string[]).includes(entity.id),
+            activeLogisticsEntityIdSet.has(entity.id),
             entity.kind === "machine" || entity.kind === "power" ? commonNodeData.completedTechIds : null,
             entity.recipeId === "matrix_research" ? [commonNodeData.researchLabel, commonNodeData.researchCosts] : null,
             entity.buildingId === "em_rail_ejector" ? commonNodeData.dysonSwarm : null,
@@ -3442,6 +3576,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             selected,
             className,
             draggable,
+            lod,
+            commonNodeData.extremeVisuals,
+            acceptedInputItemIds,
+            producedOutputItemIds,
           ].join("|");
           if (previous?.data.visualSignature === visualSignature &&
             previous.position.x === entity.position.x && previous.position.y === entity.position.y &&
@@ -3465,19 +3603,35 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               status,
               outputCapacity,
               cycleRatePerSecond,
-            } as FactoryNodeData,
+              lod,
+              acceptedInputItemIds,
+              producedOutputItemIds,
+            } as unknown as FactoryNodeData,
             selected,
             className,
             draggable,
           } satisfies FactoryFlowNode;
         });
+        if (performanceMonitor.isActive()) {
+          performanceMonitor.recordCanvas({
+            nodeDerivationMs: performance.now() - derivationStartedAt,
+            reactFlowNodeCount: next.length,
+          });
+        }
         return next.length === current.length && next.every((node, index) => node === current[index]) ? current : next;
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activePlanetEntities, beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame.activePlanetId, canvasGame.dysonEngineering, canvasGame.galaxy, canvasGame.settings.logisticsBufferLimit, canvasGame.settings.productionBufferLimit, canvasGame.settings.proliferatorBufferLimit, canvasGame.settings.resourceMode, canvasTopology.targetPortItemsByEntity, commonNodeData, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, locatedProductionEntityIds, placement, productionLineFocus, selectedEntityIds, setNodes, taskHighlight.entityIds]);
+  }, [activeLogisticsEntityIdSet, activePlanetEntities, beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame, canvasTopology.targetPortItemsByEntity, commonNodeData, connectionDraft, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, locatedProductionEntityIds, nodeLodFeatureActive, performanceMonitor.isActive, performanceMonitor.recordCanvas, placement, productionLineFocus, selectedEntityIds, setNodes, taskHighlight.entityIds, viewportZoom]);
 
-  const canvasHandleGeometryKey = useMemo(() => nodes.map((node) => `${node.id}:${node.position.x}:${node.position.y}:${node.measured?.width ?? 0}:${node.measured?.height ?? 0}`).join("|"), [nodes]);
+  const handleNodesChange = useCallback((changes: Parameters<typeof onNodesChange>[0]) => {
+    onNodesChange(changes);
+    if (changes.some((change) => change.type === "dimensions" || change.type === "add" || change.type === "remove" ||
+      (change.type === "position" && !nodeDragActiveRef.current))) {
+      setCanvasGeometryRevision((revision) => revision + 1);
+    }
+  }, [onNodesChange]);
+  const connectionGeometryToken: number | readonly FactoryFlowNode[] = spatialIndexesFeatureActive ? canvasGeometryRevision : nodes;
 
   useEffect(() => {
     if (nodeDragActiveRef.current) return;
@@ -3486,10 +3640,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       connectionHandleSpatialIndexRef.current = buildConnectionHandleSpatialIndex(viewportRef.current);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [canvasHandleGeometryKey, canvasGame.activePlanetId, viewportZoom]);
+  }, [canvasGame.activePlanetId, canvasRenderSnapshot.topologyRevision, connectionGeometryToken, viewportZoom]);
 
   const edgeRouteCenters = useMemo(() => {
     if (nodeDragActiveRef.current && edgeRouteCacheRef.current) return edgeRouteCacheRef.current.centers;
+    if (topologyCacheFeatureActive && edgeRouteCacheRef.current?.topologyRevision === canvasTopology.revision &&
+      edgeRouteCacheRef.current.geometryRevision === canvasGeometryRevision && edgeRouteCacheRef.current.simplified === largeFactoryMode) {
+      return edgeRouteCacheRef.current.centers;
+    }
     const rects = nodes.map((node) => ({
       id: node.id,
       x: node.position.x,
@@ -3497,14 +3655,20 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       width: node.measured?.width ?? 256,
       height: node.measured?.height ?? 180,
     }));
-    const key = `${canvasTopology.signature}|${largeFactoryMode ? 1 : 0}|${rects.map((rect) => `${rect.id}:${rect.x}:${rect.y}:${rect.width}:${rect.height}`).join(";")}`;
-    if (edgeRouteCacheRef.current?.key === key) return edgeRouteCacheRef.current.centers;
     const centers = buildFactoryEdgeRouteCenters(canvasTopology, rects, largeFactoryMode);
-    edgeRouteCacheRef.current = { key, centers };
+    edgeRouteCacheRef.current = { topologyRevision: canvasTopology.revision, geometryRevision: canvasGeometryRevision, simplified: largeFactoryMode, centers };
     return centers;
-  }, [canvasTopology, largeFactoryMode, nodes]);
+  }, [canvasGeometryRevision, canvasTopology, largeFactoryMode, nodes, topologyCacheFeatureActive]);
+  const canvasLineNodeGeometry = useMemo(() => nodes.map((node) => ({
+    id: node.id,
+    x: node.position.x,
+    y: node.position.y,
+    width: node.measured?.width ?? 256,
+    height: node.measured?.height ?? 180,
+  })), [canvasGeometryRevision, canvasTopology.revision]);
 
   const edges = useMemo<FactoryFlowEdge[]>(() => {
+    const derivationStartedAt = performanceMonitor.isActive() ? performance.now() : 0;
     const nextCache = new Map<string, FactoryFlowEdge>();
     const next = activePlanetBelts.map((belt) => {
       const item = ITEMS[belt.itemId];
@@ -3521,6 +3685,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           ? focusedNetworkBeltIds.has(belt.id) ? "focus" : "dim"
           : "normal";
       const selected = selectedBeltId === belt.id || selectedBeltIdSet.has(belt.id);
+      const detailBypass = selected || hoveredBeltId === belt.id || focusTone === "focus";
       const targetHandle = belt.targetPortIndex === undefined
         ? `in:${belt.itemId}`
         : activeEntityById.get(belt.target)?.buildingId === "material_delivery_hub"
@@ -3528,13 +3693,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           : `in:black-hole:${belt.targetPortIndex}`;
       const className = `factory-edge factory-edge--health-${diagnostic.health}${canvasGame.settings.beltHeatmapEnabled ? " factory-edge--heatmap" : ""}${diagnostic.flow > 0.001 ? " factory-edge--active" : ""}${focusTone === "focus" ? " factory-edge--task-focus" : focusTone === "dim" ? " factory-edge--task-dim" : ""}`;
       const routeCenterY = edgeRouteCenters.get(belt.id);
-      const detailVisible = viewportZoom >= 0.55;
-      const motionEnabled = !coarsePointer && !performanceVisualMode && !canvasGame.settings.reducedMotion;
+      const detailVisible = extremeVisualsActive ? detailBypass : viewportZoom >= 0.55;
+      const motionEnabled = !extremeVisualsActive && !coarsePointer && !performanceVisualMode && !canvasGame.settings.reducedMotion;
+      const batched = canvasBatchRendererEnabled && !detailBypass;
       const strokeWidth = selected ? 3.5 : canvasGame.settings.beltHeatmapEnabled ? 1.8 + diagnostic.utilization * 2.4 : 2;
       const visualSignature = [
         belt.id, belt.source, belt.target, belt.itemId, belt.tier, belt.stackSize ?? 1, belt.routeMode ?? "auto",
         targetHandle, diagnostic.health, diagnostic.flow, diagnostic.utilization, belt.congestion ?? 0,
-        belt.monitorEnabled ?? false, routeColor, focusTone, selected, routeCenterY, detailVisible, motionEnabled, bundle, strokeWidth,
+        belt.monitorEnabled ?? false, routeColor, focusTone, selected, routeCenterY, detailVisible, motionEnabled, batched, bundle, strokeWidth,
       ].join("|");
       const previous = edgeRenderCacheRef.current.get(belt.id);
       if (previous?.data?.visualSignature === visualSignature) {
@@ -3568,6 +3734,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           durationSeconds: Math.max(0.55, 1.65 - flowRatio * 0.9),
           detailVisible,
           motionEnabled,
+          batched,
           routeMode: belt.routeMode ?? "auto",
           routeCenterY,
           bundleIndex: bundle.index,
@@ -3584,8 +3751,51 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       return edge;
     });
     edgeRenderCacheRef.current = nextCache;
+    if (performanceMonitor.isActive()) {
+      performanceMonitor.recordCanvas({
+        edgeDerivationMs: performance.now() - derivationStartedAt,
+        reactFlowEdgeCount: next.length,
+        canvasLineSegments: canvasBatchRendererEnabled ? next.filter((edge) => edge.data?.batched).length : 0,
+      });
+    }
     return next;
-  }, [activeEntityById, activePlanetBelts, beltBundleMap, beltDiagnosticIndex, canvasGame, coarsePointer, edgeRouteCenters, focusedBeltNetwork, focusedNetworkBeltIds, highlightedTaskId, locatedProductionBeltIds, performanceVisualMode, productionLineFocus, selectedBeltId, selectedBeltIdSet, taskHighlight.beltIds, viewportZoom]);
+  }, [activeEntityById, activePlanetBelts, beltBundleMap, beltDiagnosticIndex, canvasBatchRendererEnabled, canvasGame, coarsePointer, edgeRouteCenters, extremeVisualsActive, focusedBeltNetwork, focusedNetworkBeltIds, highlightedTaskId, hoveredBeltId, locatedProductionBeltIds, performanceMonitor.isActive, performanceMonitor.recordCanvas, performanceVisualMode, productionLineFocus, selectedBeltId, selectedBeltIdSet, taskHighlight.beltIds, viewportZoom]);
+  const detailedCanvasBeltIds = useMemo(() => {
+    const ids = new Set(selectedBeltIdSet);
+    if (hoveredBeltId) ids.add(hoveredBeltId);
+    for (const id of focusedNetworkBeltIds) ids.add(id);
+    for (const id of taskHighlight.beltIds) ids.add(id);
+    for (const id of locatedProductionBeltIds) ids.add(id);
+    return ids;
+  }, [focusedNetworkBeltIds, hoveredBeltId, locatedProductionBeltIds, selectedBeltIdSet, taskHighlight.beltIds]);
+  const handleCanvasBatchUnavailable = useCallback(() => {
+    setCanvasBatchFailed(true);
+    setNotice("批量线路画布不可用，已自动回退到完整 SVG 线路");
+  }, []);
+  const handleMinimapCanvasUnavailable = useCallback(() => {
+    setMinimapCanvasFailed(true);
+    setNotice("低频小地图不可用，已自动回退到完整小地图");
+  }, []);
+  const centerCanvasFromMinimap = useCallback((x: number, y: number) => {
+    void setCenter(x, y, { zoom: viewportRef.current.zoom, duration: gameRef.current.settings.reducedMotion ? 0 : 100 });
+  }, [setCenter]);
+  const zoomCanvasFromMinimap = useCallback((direction: 1 | -1) => {
+    void (direction > 0 ? zoomIn({ duration: 0 }) : zoomOut({ duration: 0 }));
+  }, [zoomIn, zoomOut]);
+  useEffect(() => {
+    if (!performanceMonitor.snapshot.active) return;
+    performanceMonitor.recordCanvas({
+      reactFlowNodeCount: nodes.length,
+      reactFlowEdgeCount: edges.length,
+      canvasLineSegments: canvasBatchRendererEnabled ? edges.filter((edge) => edge.data?.batched).length : 0,
+      refreshIntervalMs: productionRefreshIntervalMs,
+      lod: getCanvasLod(viewportRef.current.zoom),
+      endgameExtremeMode,
+      projectionEnabled: projectionFeatureActive,
+      topologyRevision: canvasRenderSnapshot.topologyRevision,
+      runtimeRevision: canvasRenderSnapshot.runtimeRevision,
+    });
+  }, [canvasBatchRendererEnabled, canvasRenderSnapshot.runtimeRevision, canvasRenderSnapshot.topologyRevision, edges, endgameExtremeMode, nodes, performanceMonitor.recordCanvas, performanceMonitor.snapshot.active, productionRefreshIntervalMs, projectionFeatureActive]);
 
   const isValidConnection = useCallback((connection: Connection | Edge) => {
     const sourceItem = parseHandleItem(connection.sourceHandle);
@@ -3949,14 +4159,21 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     };
   }, [blueprintPlacementId, completeClickConnectionAtPoint, flowStore, placement]);
 
-  const alignmentSpatialIndex = useMemo<AlignmentSpatialIndex>(() => buildAlignmentSpatialIndex(nodes.map((candidate) => ({
+  const alignmentIndexNodes = spatialIndexesFeatureActive ? canvasLineNodeGeometry : nodes.map((node) => ({
+    id: node.id,
+    x: node.position.x,
+    y: node.position.y,
+    width: node.measured?.width ?? 256,
+    height: node.measured?.height ?? 180,
+  }));
+  const alignmentSpatialIndex = useMemo<AlignmentSpatialIndex>(() => buildAlignmentSpatialIndex(alignmentIndexNodes.map((candidate) => ({
     id: candidate.id,
-    x: candidate.position.x,
-    y: candidate.position.y,
-    width: candidate.measured?.width ?? 256,
-    height: candidate.measured?.height ?? 180,
-    selected: Boolean(candidate.selected),
-  }))), [nodes]);
+    x: candidate.x,
+    y: candidate.y,
+    width: candidate.width,
+    height: candidate.height,
+    selected: selectedEntityIds.includes(candidate.id),
+  }))), [alignmentIndexNodes, selectedEntityIds]);
 
   useEffect(() => {
     alignmentSpatialIndexRef.current = alignmentSpatialIndex;
@@ -4784,6 +5001,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       data-zoom-lod={viewportZoom < 0.55 ? "compact" : viewportZoom < 0.86 ? "medium" : "full"}
       data-large-factory={largeFactoryMode ? "true" : "false"}
       data-endgame-extreme={endgameExtremeMode ? "true" : "false"}
+      data-canvas-extreme-visuals={extremeVisualsActive ? "true" : "false"}
+      data-canvas-node-lod={nodeLodFeatureActive ? "true" : "false"}
+      data-canvas-viewport-culling={viewportCullingFeatureActive ? "true" : "false"}
       data-network-heatmap={game.settings.beltHeatmapEnabled ? "true" : "false"}
       data-coarse-pointer={coarsePointer ? "true" : "false"}
       data-mobile-ui={mobileUiPreference}
@@ -5120,6 +5340,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         <section
             className="factory-canvas"
             data-batch-renderer={canvasBatchRendererEnabled ? "true" : "false"}
+            data-minimap-throttled={minimapThrottleFeatureActive && !minimapCanvasFailed ? "true" : "false"}
             aria-label="生产网络画布"
             ref={factoryCanvasRef}
             onPointerDownCapture={(event) => {
@@ -5173,7 +5394,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             edges={edges}
             nodeTypes={NODE_TYPES}
             edgeTypes={EDGE_TYPES}
-            onNodesChange={onNodesChange}
+            onNodesChange={handleNodesChange}
             onSelectionChange={onSelectionChange}
             onConnect={onConnect}
             onConnectStart={onConnectStart}
@@ -5192,6 +5413,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onNodeDragStop={(_event, node, draggedNodes) => {
               nodeDragActiveRef.current = false;
               dragAlignmentSpatialIndexRef.current = null;
+              setCanvasGeometryRevision((revision) => revision + 1);
               setAlignmentGuides({ x: null, y: null });
               if (blockCanvasTouchRef.current) {
                 restoreCanvasEntityPositions();
@@ -5217,6 +5439,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               if (nextMobileShell) mobileNavigation.openSheet("inspector", "peek");
               else setMobilePanel("inspector");
             }}
+            onEdgeMouseEnter={(_event, edge) => setHoveredBeltId(edge.id)}
+            onEdgeMouseLeave={(_event, edge) => setHoveredBeltId((current) => current === edge.id ? null : current)}
             onEdgeDoubleClick={(_event, edge) => {
               setFocusedBeltNetworkId((current) => current === edge.id ? null : edge.id);
               setHighlightedTaskId(null);
@@ -5240,7 +5464,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onMove={(_event, viewport) => {
               viewportRef.current = viewport;
               if (connectionHandleSpatialIndexRef.current) connectionHandleSpatialIndexRef.current.viewport = viewport;
-              if (canvasBatchRendererEnabled) setPendingBlueprintViewport(viewport);
+              canvasBeltLayerRef.current?.setViewport(viewport);
+              if (blueprintPlacementId) setPendingBlueprintViewport(viewport);
               const currentLod = getCanvasLod(viewportZoom);
               const nextLod = getCanvasLod(viewport.zoom);
               canvasPinchLodRef.current = nextLod;
@@ -5252,6 +5477,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               canvasPinchLodRef.current = getCanvasLod(viewport.zoom);
               setViewportZoom(viewport.zoom);
               setPendingBlueprintViewport(viewport);
+              setMinimapViewport(viewport);
               persistPlanetViewport(gameRef.current.activePlanetId, viewport);
             }}
             panOnScroll
@@ -5266,10 +5492,23 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             zoomOnDoubleClick={false}
             deleteKeyCode={null}
             fitViewOptions={{ padding: 0.18 }}
-            onlyRenderVisibleElements={shouldVirtualizeCanvas(activePlanetEntityCount, activePlanetBelts.length)}
+            onlyRenderVisibleElements={viewportCullingFeatureActive || shouldVirtualizeCanvas(activePlanetEntityCount, activePlanetBelts.length)}
             proOptions={{ hideAttribution: true }}
           >
             <Background variant={BackgroundVariant.Dots} gap={20} size={1.1} color={resolvedTheme === "light" ? "#b7c8bf" : "#3c4743"} />
+            {canvasBatchRendererEnabled ? <CanvasBeltLayer
+              ref={canvasBeltLayerRef}
+              belts={activePlanetBelts}
+              nodes={canvasLineNodeGeometry}
+              routeCenters={edgeRouteCenters}
+              planetId={canvasGame.activePlanetId}
+              viewport={pendingBlueprintViewport}
+              width={canvasViewportSize.width}
+              height={canvasViewportSize.height}
+              selectedBeltIds={selectedBeltIdSet}
+              detailedBeltIds={detailedCanvasBeltIds}
+              onUnavailable={handleCanvasBatchUnavailable}
+            /> : null}
             <ViewportPortal>
               <PendingBlueprintLayer
                 game={observedGame}
@@ -5289,7 +5528,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               {alignmentGuides.x != null ? <i className="alignment-guide alignment-guide--vertical" style={{ left: alignmentGuides.x }} /> : null}
               {alignmentGuides.y != null ? <i className="alignment-guide alignment-guide--horizontal" style={{ top: alignmentGuides.y }} /> : null}
             </ViewportPortal>
-            {!minimapCollapsed ? <MiniMap
+            {!minimapCollapsed ? minimapThrottleFeatureActive && !minimapCanvasFailed ? <CanvasMiniMap
+              nodes={canvasTopology.entities}
+              viewport={minimapViewport}
+              canvasWidth={canvasViewportSize.width}
+              canvasHeight={canvasViewportSize.height}
+              lightTheme={resolvedTheme === "light"}
+              onCenter={centerCanvasFromMinimap}
+              onZoom={zoomCanvasFromMinimap}
+              onUnavailable={handleMinimapCanvasUnavailable}
+            /> : <MiniMap
               pannable
               zoomable
               nodeColor={(node) => node.type === "vein" ? ITEMS[(node.data as FactoryNodeData).entity.resourceId!].color : node.type === "power" ? "#e1b452" : node.type === "station" ? "#d8794d" : node.type === "storage" ? "#8aa69d" : node.type === "splitter" ? "#d2aa5b" : "#61a9a4"}
@@ -5297,14 +5545,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             /> : null}
             <Controls position="bottom-left" showInteractive={false} />
           </ReactFlow>
-          {canvasBatchRendererEnabled ? <CanvasBeltLayer
-            state={canvasGame}
-            planetId={canvasGame.activePlanetId}
-            viewport={viewportRef.current}
-            width={canvasViewportSize.width}
-            height={canvasViewportSize.height}
-            selectedBeltIds={selectedBeltIdSet}
-          /> : null}
           <button className={`canvas-minimap-toggle nodrag nopan${minimapCollapsed ? " canvas-minimap-toggle--collapsed" : ""}`} type="button" onClick={() => setMinimapCollapsed((collapsed) => !collapsed)} title={minimapCollapsed ? "展开小地图" : "折叠小地图"} aria-label={minimapCollapsed ? "展开小地图" : "折叠小地图"} aria-expanded={!minimapCollapsed}>
             {minimapCollapsed ? <MapIcon size={16} /> : <PanelRightClose size={16} />}
           </button>
@@ -5989,7 +6229,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             productionRefreshPreference={productionRefreshPreference}
             productionRefreshIntervalMs={productionRefreshIntervalMs}
             endgameExtremeMode={endgameExtremeMode}
+            canvasPerformanceFeatures={canvasPerformanceFeatures}
             onEndgameExtremeModeChange={toggleEndgameExtremeMode}
+            onCanvasPerformanceFeatureChange={updateCanvasPerformanceFeature}
             onProductionRefreshPreferenceChange={setProductionRefreshPreference}
             onStartPerformanceMonitor={performanceMonitor.start}
             onStopPerformanceMonitor={performanceMonitor.stop}

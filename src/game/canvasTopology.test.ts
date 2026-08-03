@@ -12,6 +12,15 @@ describe("factory canvas topology", () => {
     expect(next).toBe(previous);
   });
 
+  it("skips full signatures when an explicit topology revision is unchanged", () => {
+    const state = createInitialState();
+    const entities = state.entities.filter((entity) => entity.planetId === state.activePlanetId);
+    const previous = reconcileFactoryCanvasTopology(null, state.activePlanetId, entities, [], 7);
+    const runtimeOnly = entities.map((entity) => ({ ...entity, progress: entity.progress + 1 }));
+    expect(reconcileFactoryCanvasTopology(previous, state.activePlanetId, runtimeOnly, [], 7)).toBe(previous);
+    expect(reconcileFactoryCanvasTopology(previous, state.activePlanetId, runtimeOnly, [], 8)).not.toBe(previous);
+  });
+
   it("rebuilds stable occupancy and route geometry after topology changes", () => {
     const state = createInitialState();
     const [source, target, blocker] = state.entities.slice(0, 3);
