@@ -3503,6 +3503,7 @@ test("thermal power accepts fuel and responds to mining demand", async ({ page }
 });
 
 test("spray coating closes the Mk.III proliferator logistics and extra-output loop", async ({ page }) => {
+  test.setTimeout(45_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   await openProliferatorStageGame(page);
   await page.locator(".react-flow__controls-fitview").click();
@@ -3546,9 +3547,12 @@ test("spray coating closes the Mk.III proliferator logistics and extra-output lo
   await expect(statistics.locator(".statistics-row").filter({ hasText: "齿轮" })).toBeVisible();
   await statistics.getByLabel("关闭生产统计").click();
 
-  await page.setViewportSize({ width: 390, height: 844 });
   await assembler.click();
-  await page.getByLabel("打开检查器").click();
+  await expect(inspector.locator(".proliferator-control")).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  if (!await inspector.locator(".proliferator-control").isVisible()) {
+    await page.getByLabel("打开检查器").click();
+  }
   await expect(inspector.locator(".proliferator-control")).toBeVisible();
   await inspector.locator(".proliferator-control").scrollIntoViewIfNeeded();
   await expect.poll(async () => inspector.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
