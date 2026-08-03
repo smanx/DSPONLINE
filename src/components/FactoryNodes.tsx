@@ -384,7 +384,11 @@ function FactoryNodeLodView({ data, selected }: NodeProps<FactoryFlowNode>) {
   const { entity, lod } = data;
   const resource = entity.resourceId ? getItem(entity.resourceId) : null;
   const building = entity.buildingId ? getBuilding(entity.buildingId) : null;
-  const name = resource?.name ?? building?.name ?? "工厂节点";
+  const recipe = entity.recipeId ? getRecipe(entity.recipeId) : null;
+  const productionTitle = entity.recipeId === "matrix_research"
+    ? data.researchLabel ?? "科研模式"
+    : recipe?.name ?? (recipe?.outputs[0] ? getItem(recipe.outputs[0].itemId).name : entity.kind === "machine" ? "未设置配方" : null);
+  const name = resource?.name ?? (productionTitle && entity.kind !== "station" && entity.kind !== "storage" && entity.kind !== "splitter" ? productionTitle : building?.name) ?? "工厂节点";
   const category = entity.kind === "vein" ? "资源矿脉" : entity.kind === "power" ? "电力设施" : entity.kind === "station" ? "物流设施" : entity.kind === "storage" ? "仓储设施" : entity.kind === "splitter" ? "分流设施" : "生产设施";
   const count = entity.kind === "vein" ? entity.minerCount : entity.machineCount;
   const icon = entity.kind === "vein" ? <Pickaxe size={18} /> : entity.kind === "power" ? <Zap size={18} /> : entity.kind === "station" ? <Orbit size={18} /> : entity.kind === "storage" ? <Database size={18} /> : entity.kind === "splitter" ? <GitFork size={18} /> : <Factory size={18} />;
@@ -394,7 +398,7 @@ function FactoryNodeLodView({ data, selected }: NodeProps<FactoryFlowNode>) {
     <LightweightNodeHandles data={data} />
     <header className="factory-node__header">
       <div className="node-icon" style={resource ? { color: resource.color } : undefined}>{icon}</div>
-      <div><span>{category}</span><strong>{name}</strong></div>
+      <div><span>{productionTitle && name === productionTitle ? `${productionTitle} · ${building?.name ?? category}` : category}</span><strong title={name}>{name}</strong></div>
       <small>×{count}</small>
     </header>
     {lod === "medium" ? <div className="factory-node-lod__summary">

@@ -238,7 +238,7 @@ import { formatQuantityCompact } from "./game/quantityFormat";
 import { getAchievement, getNewAchievementIds, unlockAchievements } from "./game/progression";
 import { deliverSystemSpaceStationMaterial, getInterstellarStationUpgradeStatus, requestStationOperationMode, setElevatorOutputItem, setSystemSpaceStationModuleCount, startSystemSpaceStationConstruction, upgradeAllInterstellarStationsToMk2, upgradeInterstellarStationToMk2 } from "./game/systemSpaceStation";
 import { getDifficultyDefinition } from "./game/difficulty";
-import { analyzeBeltNetwork, diagnoseBelt, predictBeltConnection } from "./game/network";
+import { analyzeBeltNetwork, analyzeEntityLineTrace, diagnoseBelt, predictBeltConnection } from "./game/network";
 import { buildFactoryEdgeRouteCenters, reconcileFactoryCanvasTopology, type FactoryCanvasTopology } from "./game/canvasTopology";
 import { createCanvasRenderSnapshot, reconcileCanvasRenderSnapshot, type CanvasRenderSnapshot } from "./game/canvasRenderSnapshot";
 import { planFactoryAutoLayout } from "./game/layout";
@@ -469,6 +469,8 @@ const SystemSpaceStationWorkspace = lazy(() => importWithRecovery(() => import("
 // Content packs must be active before save migration reads any modded IDs.
 const INITIAL_CONTENT_PACK_REGISTRY = loadContentPackRegistry();
 applyContentPackRegistry(INITIAL_CONTENT_PACK_REGISTRY);
+const SIDEBAR_PREFERENCE_KEY = "dsp-idle-network.sidebar-preferences.v1";
+const LINE_FIND_PREFERENCE_KEY = "dsp-idle-network.line-find-mode.v1";
 
 function WorkspaceLoading() {
   return <div className="workspace-loading" role="status"><i /><span>正在载入工作区</span></div>;
@@ -662,6 +664,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [selectedBeltId, setSelectedBeltId] = useState<string | null>(null);
   const [selectedBeltIds, setSelectedBeltIds] = useState<string[]>([]);
   const [focusedBeltNetworkId, setFocusedBeltNetworkId] = useState<string | null>(null);
+  const [lineFindMode, setLineFindMode] = useState(() => {
+    try { return window.localStorage.getItem(LINE_FIND_PREFERENCE_KEY) === "true"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem(LINE_FIND_PREFERENCE_KEY, String(lineFindMode)); } catch { /* optional local preference */ }
+  }, [lineFindMode]);
   const [productionLineFocus, setProductionLineFocus] = useState<(ProductionLineLocation & { itemId: ItemId; activeIndex: number }) | null>(null);
   const [copiedBeltConfigurationId, setCopiedBeltConfigurationId] = useState<string | null>(null);
   const [placement, setPlacement] = useState<BuildingId | null>(null);
@@ -674,9 +682,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [mobileActionEntityId, setMobileActionEntityId] = useState<string | null>(null);
   const [mobileCanvasMode, setMobileCanvasMode] = useState<MobileCanvasMode>("browse");
   const [mobileContinuousPlacement, setMobileContinuousPlacement] = useState(false);
-  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
-  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false);
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(() => {
+    try { return JSON.parse(window.localStorage.getItem(SIDEBAR_PREFERENCE_KEY) ?? "null")?.left === true; } catch { return false; }
+  });
+  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(() => {
+    try { return JSON.parse(window.localStorage.getItem(SIDEBAR_PREFERENCE_KEY) ?? "null")?.right === true; } catch { return false; }
+  });
   const [minimapCollapsed, setMinimapCollapsed] = useState(false);
+  useEffect(() => {
+    try { window.localStorage.setItem(SIDEBAR_PREFERENCE_KEY, JSON.stringify({ left: leftSidebarCollapsed, right: rightSidebarCollapsed })); } catch { /* optional local preference */ }
+  }, [leftSidebarCollapsed, rightSidebarCollapsed]);
   const [autoLayoutUndo, setAutoLayoutUndo] = useState<AutoLayoutUndoSnapshot | null>(null);
   const [technologyOpen, setTechnologyOpen] = useState(false);
   const [statisticsOpen, setStatisticsOpen] = useState(false);
@@ -809,6 +824,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const selectedEntityIdsRef = useRef<string[]>([]);
   const selectedBeltIdRef = useRef<string | null>(null);
   const selectedBeltIdsRef = useRef<string[]>([]);
+  const selectionModeRef = useRef(false);
+  const deleteModeRef = useRef(false);
+  const lineFindTraceCacheRef = useRef<{ planetId: PlanetId; revision: number; traces: Map<string, ReturnType<typeof analyzeEntityLineTrace>> } | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const simulationWorkerRef = useRef<Worker | null>(null);
   const simulationWorkerDisabledRef = useRef(false);
@@ -1192,6 +1210,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   useEffect(() => { selectedEntityIdsRef.current = selectedEntityIds; }, [selectedEntityIds]);
   useEffect(() => { selectedBeltIdRef.current = selectedBeltId; }, [selectedBeltId]);
   useEffect(() => { selectedBeltIdsRef.current = selectedBeltIds; }, [selectedBeltIds]);
+  useEffect(() => { selectionModeRef.current = selectionMode; deleteModeRef.current = deleteMode; }, [deleteMode, selectionMode]);
   useEffect(() => {
     if (!selectionMode && deleteMode) setDeleteMode(false);
   }, [deleteMode, selectionMode]);
@@ -1717,7 +1736,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, []);
 
   useEffect(() => {
-    const timer = window.setInterval(() => void persistPrimarySave(), game.settings.autosaveIntervalSeconds * 1000);
+    const timer = game.settings.autosaveIntervalSeconds > 0
+      ? window.setInterval(() => void persistPrimarySave(), game.settings.autosaveIntervalSeconds * 1000)
+      : null;
     const saveNow = () => { void persistPrimarySave(); };
     const saveBeforeUnload = () => { saveGame(stateWithSimulationDebt(gameRef.current), { emergencyMirror: true }); };
     const saveWhenHidden = () => { if (document.visibilityState === "hidden") saveNow(); };
@@ -1729,7 +1750,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     document.addEventListener("visibilitychange", saveWhenHidden);
     window.addEventListener(NATIVE_APP_STATE_EVENT, saveWhenNativeInactive);
     return () => {
-      window.clearInterval(timer);
+      if (timer !== null) window.clearInterval(timer);
       window.removeEventListener("beforeunload", saveBeforeUnload);
       window.removeEventListener("pagehide", saveBeforeUnload);
       document.removeEventListener("visibilitychange", saveWhenHidden);
@@ -3427,6 +3448,25 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     : null, [focusedBeltNetworkId, canvasGame]);
   const focusedNetworkBeltIds = useMemo(() => new Set(focusedBeltNetwork?.beltIds ?? []), [focusedBeltNetwork]);
   const focusedNetworkEntityIds = useMemo(() => new Set(focusedBeltNetwork?.entityIds ?? []), [focusedBeltNetwork]);
+  const lineFindTrace = useMemo(() => {
+    if (!lineFindMode || selectedEntityIds.length !== 1) return null;
+    const revision = canvasTopology.revision;
+    const planetId = canvasGame.activePlanetId;
+    const cached = lineFindTraceCacheRef.current;
+    if (!cached || cached.planetId !== planetId || cached.revision !== revision) {
+      lineFindTraceCacheRef.current = { planetId, revision, traces: new Map() };
+    }
+    const traceCache = lineFindTraceCacheRef.current;
+    if (!traceCache) return null;
+    const traces = traceCache.traces;
+    const entityId = selectedEntityIds[0];
+    if (!traces.has(entityId)) traces.set(entityId, analyzeEntityLineTrace(canvasGame, entityId));
+    return traces.get(entityId) ?? null;
+  }, [canvasGame.activePlanetId, canvasTopology.revision, lineFindMode, selectedEntityIds]);
+  const lineFindUpstreamEntityIds = useMemo(() => new Set(lineFindTrace?.upstreamEntityIds ?? []), [lineFindTrace]);
+  const lineFindDownstreamEntityIds = useMemo(() => new Set(lineFindTrace?.downstreamEntityIds ?? []), [lineFindTrace]);
+  const lineFindUpstreamBeltIds = useMemo(() => new Set(lineFindTrace?.upstreamBeltIds ?? []), [lineFindTrace]);
+  const lineFindDownstreamBeltIds = useMemo(() => new Set(lineFindTrace?.downstreamBeltIds ?? []), [lineFindTrace]);
   const locatedProductionEntityIds = useMemo(() => new Set(productionLineFocus?.relatedEntityIds ?? []), [productionLineFocus]);
   const locatedProductionBeltIds = useMemo(() => new Set(productionLineFocus?.relatedBeltIds ?? []), [productionLineFocus]);
   const selectedBeltIdSet = useMemo(() => new Set([...selectedBeltIds, ...(selectedBeltId ? [selectedBeltId] : [])]), [selectedBeltId, selectedBeltIds]);
@@ -3538,7 +3578,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           const lod: CanvasLod = interactionNeedsFullNode ? "full" : zoomLod === "full" ? "medium" : zoomLod;
           const acceptedInputItemIds = getAcceptedInputs(entity, canvasGame);
           const producedOutputItemIds = getProducedOutputs(entity);
-          const className = highlightedTaskId
+          const lineTraceActive = Boolean(lineFindTrace && lineFindTrace.planetId === canvasGame.activePlanetId);
+          const className = lineTraceActive
+            ? entity.id === lineFindTrace?.entityId
+              ? "factory-flow-node--line-find-center"
+              : lineFindUpstreamEntityIds.has(entity.id)
+                ? "factory-flow-node--line-find-upstream"
+                : lineFindDownstreamEntityIds.has(entity.id)
+                  ? "factory-flow-node--line-find-downstream"
+                  : "factory-flow-node--line-find-dim"
+            : highlightedTaskId
             ? taskHighlight.entityIds.has(entity.id) ? "factory-flow-node--task-focus" : "factory-flow-node--task-dim"
             : productionLineFocus?.planetId === canvasGame.activePlanetId
               ? locatedProductionEntityIds.has(entity.id) ? "factory-flow-node--network-focus" : "factory-flow-node--network-dim"
@@ -3622,7 +3671,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeLogisticsEntityIdSet, activePlanetEntities, beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame, canvasTopology.targetPortItemsByEntity, commonNodeData, connectionDraft, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, locatedProductionEntityIds, nodeLodFeatureActive, performanceMonitor.isActive, performanceMonitor.recordCanvas, placement, productionLineFocus, selectedEntityIds, setNodes, taskHighlight.entityIds, viewportZoom]);
+  }, [activeLogisticsEntityIdSet, activePlanetEntities, beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasGame, canvasTopology.targetPortItemsByEntity, commonNodeData, connectionDraft, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, lineFindDownstreamEntityIds, lineFindTrace, lineFindUpstreamEntityIds, locatedProductionEntityIds, nodeLodFeatureActive, performanceMonitor.isActive, performanceMonitor.recordCanvas, placement, productionLineFocus, selectedEntityIds, setNodes, taskHighlight.entityIds, viewportZoom]);
 
   const handleNodesChange = useCallback((changes: Parameters<typeof onNodesChange>[0]) => {
     onNodesChange(changes);
@@ -3677,7 +3726,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const bundle = beltBundleMap.get(belt.id) ?? { index: 0, size: 1 };
       const diagnostic = diagnoseBelt(canvasGame, belt, beltDiagnosticIndex);
       const routeColor = canvasGame.settings.beltHeatmapEnabled ? beltHeatColor(diagnostic.utilization) : item.color;
-      const focusTone = highlightedTaskId
+      const lineTraceActive = Boolean(lineFindTrace && lineFindTrace.planetId === canvasGame.activePlanetId);
+      const focusTone = lineTraceActive
+        ? lineFindUpstreamBeltIds.has(belt.id) ? "line-upstream" : lineFindDownstreamBeltIds.has(belt.id) ? "line-downstream" : "line-dim"
+        : highlightedTaskId
         ? taskHighlight.beltIds.has(belt.id) ? "focus" : "dim"
         : productionLineFocus?.planetId === canvasGame.activePlanetId
           ? locatedProductionBeltIds.has(belt.id) ? "focus" : "dim"
@@ -3691,7 +3743,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         : activeEntityById.get(belt.target)?.buildingId === "material_delivery_hub"
           ? `in:delivery:${belt.targetPortIndex}`
           : `in:black-hole:${belt.targetPortIndex}`;
-      const className = `factory-edge factory-edge--health-${diagnostic.health}${canvasGame.settings.beltHeatmapEnabled ? " factory-edge--heatmap" : ""}${diagnostic.flow > 0.001 ? " factory-edge--active" : ""}${focusTone === "focus" ? " factory-edge--task-focus" : focusTone === "dim" ? " factory-edge--task-dim" : ""}`;
+      const className = `factory-edge factory-edge--health-${diagnostic.health}${canvasGame.settings.beltHeatmapEnabled ? " factory-edge--heatmap" : ""}${diagnostic.flow > 0.001 ? " factory-edge--active" : ""}${focusTone === "focus" ? " factory-edge--task-focus" : focusTone === "dim" ? " factory-edge--task-dim" : ""}${focusTone === "line-upstream" ? " factory-edge--line-find-upstream" : focusTone === "line-downstream" ? " factory-edge--line-find-downstream" : focusTone === "line-dim" ? " factory-edge--line-find-dim" : ""}`;
       const routeCenterY = edgeRouteCenters.get(belt.id);
       const detailVisible = extremeVisualsActive ? detailBypass : viewportZoom >= 0.55;
       const motionEnabled = !extremeVisualsActive && !coarsePointer && !performanceVisualMode && !canvasGame.settings.reducedMotion;
@@ -3759,7 +3811,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       });
     }
     return next;
-  }, [activeEntityById, activePlanetBelts, beltBundleMap, beltDiagnosticIndex, canvasBatchRendererEnabled, canvasGame, coarsePointer, edgeRouteCenters, extremeVisualsActive, focusedBeltNetwork, focusedNetworkBeltIds, highlightedTaskId, hoveredBeltId, locatedProductionBeltIds, performanceMonitor.isActive, performanceMonitor.recordCanvas, performanceVisualMode, productionLineFocus, selectedBeltId, selectedBeltIdSet, taskHighlight.beltIds, viewportZoom]);
+  }, [activeEntityById, activePlanetBelts, beltBundleMap, beltDiagnosticIndex, canvasBatchRendererEnabled, canvasGame, coarsePointer, edgeRouteCenters, extremeVisualsActive, focusedBeltNetwork, focusedNetworkBeltIds, highlightedTaskId, hoveredBeltId, lineFindDownstreamBeltIds, lineFindTrace, lineFindUpstreamBeltIds, locatedProductionBeltIds, performanceMonitor.isActive, performanceMonitor.recordCanvas, performanceVisualMode, productionLineFocus, selectedBeltId, selectedBeltIdSet, taskHighlight.beltIds, viewportZoom]);
   const detailedCanvasBeltIds = useMemo(() => {
     const ids = new Set(selectedBeltIdSet);
     if (hoveredBeltId) ids.add(hoveredBeltId);
@@ -4195,6 +4247,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: OnSelectionChangeParams<FactoryFlowNode, Edge>) => {
     const ids = selectedNodes.map((node) => node.id);
+    // React Flow can emit a transient empty selection while node objects are
+    // replaced by a simulation refresh. Pane clicks remain the explicit
+    // cancellation path, so preserve a stable browse-mode selection here.
+    if (ids.length === 0 && selectedEdges.length === 0 && selectedEntityIdsRef.current.length > 0 && !selectionModeRef.current && !deleteModeRef.current) return;
     const nodeIds = new Set(ids);
     const beltIds = new Set(selectedEdges.map((edge) => edge.id));
     for (const belt of gameRef.current.belts) {
@@ -4240,9 +4296,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }
     const mobileSelecting = nextMobileShell && mobileCanvasMode === "select";
     const clickedEntity = gameRef.current.entities.find((entity) => entity.id === node.id);
-    setSelectedEntityIds((current) => event.shiftKey || selectionMode || mobileSelecting
-      ? current.includes(node.id) ? current.filter((id) => id !== node.id) : [...current, node.id]
-      : [node.id]);
+    setSelectedEntityIds((current) => {
+      const nextIds = event.shiftKey || selectionMode || mobileSelecting
+        ? current.includes(node.id) ? current.filter((id) => id !== node.id) : [...current, node.id]
+        : [node.id];
+      selectedEntityIdsRef.current = nextIds;
+      return nextIds;
+    });
     setSelectedBeltId(null);
     setSelectedBeltIds([]);
     setInspectorTab("inspect");
@@ -4804,6 +4864,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       setNotice(plan.blocker
         ? `制造暂停：${ITEMS[plan.blocker.itemId].name}预计 ${plan.blocker.expected}，超过安全上限 ${plan.blocker.limit}`
         : "制造失败：材料或科技不足");
+      if (before.settings.autoShortageNavigation) handleMissingConstructionCraft(buildingId);
       playTone("alert");
       return;
     }
@@ -4828,6 +4889,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           ? `${ITEMS[blocker.itemId].name}缓存已满（${blocker.current}/${blocker.limit}）`
           : blocker ? `缺少${ITEMS[blocker.itemId].name} ${Math.max(0, blocker.required - blocker.current)}` : "材料或科技不足";
       setNotice(`制造失败：${blockerLabel}`);
+      if (before.settings.autoShortageNavigation && blocker?.itemId) openRecipeFocus(blocker.itemId);
       playTone("alert");
       return;
     }
@@ -5337,6 +5399,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onDiscardTrayItems={(requests) => commitGame((current) => discardPlanetTrayItems(current, current.activePlanetId, requests))}
           onDropDraggedItem={handleDraggedItemToTray}
         />
+        <button className={`sidebar-edge-toggle sidebar-edge-toggle--left${leftSidebarCollapsed ? " is-collapsed" : ""}`} type="button" onClick={() => setLeftSidebarCollapsed((collapsed) => !collapsed)} title={leftSidebarCollapsed ? "边缘按钮：展开左侧物资面板" : "边缘按钮：收起左侧物资面板"} aria-label={leftSidebarCollapsed ? "边缘按钮：展开左侧物资面板" : "边缘按钮：收起左侧物资面板"}>{leftSidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}</button>
         <section
             className="factory-canvas"
             data-batch-renderer={canvasBatchRendererEnabled ? "true" : "false"}
@@ -5552,6 +5615,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           <CanvasSelectionTools
             selectionMode={selectionMode}
             regionMode={regionMode}
+            lineFindMode={lineFindMode}
             blueprintCount={game.blueprints.length}
             beltCount={game.belts.filter((belt) => belt.planetId === game.activePlanetId).length}
             regionCount={game.canvasRegions.filter((region) => region.planetId === game.activePlanetId).length}
@@ -5564,6 +5628,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onRedo={redoGame}
             onToggleLeftSidebar={() => setLeftSidebarCollapsed((collapsed) => !collapsed)}
             onToggleRightSidebar={() => setRightSidebarCollapsed((collapsed) => !collapsed)}
+            onToggleLineFindMode={() => {
+              setLineFindMode((enabled) => !enabled);
+              if (!lineFindMode) setNotice("寻线模式已开启：选中建筑后显示上下游线路");
+              else setNotice("寻线模式已关闭");
+            }}
             onModeChange={(enabled) => {
               setSelectionMode(enabled);
               setDeleteMode(false);
@@ -5917,6 +5986,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             playTone("remove");
           }}
         />
+        <button className={`sidebar-edge-toggle sidebar-edge-toggle--right${rightSidebarCollapsed ? " is-collapsed" : ""}`} type="button" onClick={() => setRightSidebarCollapsed((collapsed) => !collapsed)} title={rightSidebarCollapsed ? "边缘按钮：展开右侧检查器面板" : "边缘按钮：收起右侧检查器面板"} aria-label={rightSidebarCollapsed ? "边缘按钮：展开右侧检查器面板" : "边缘按钮：收起右侧检查器面板"}>{rightSidebarCollapsed ? <ChevronLeft size={15} /> : <ChevronRight size={15} />}</button>
       </div>
       <ConstructionDock
         game={observedGame}
@@ -6230,8 +6300,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             productionRefreshIntervalMs={productionRefreshIntervalMs}
             endgameExtremeMode={endgameExtremeMode}
             canvasPerformanceFeatures={canvasPerformanceFeatures}
+            lineFindMode={lineFindMode}
             onEndgameExtremeModeChange={toggleEndgameExtremeMode}
             onCanvasPerformanceFeatureChange={updateCanvasPerformanceFeature}
+            onLineFindModeChange={setLineFindMode}
             onProductionRefreshPreferenceChange={setProductionRefreshPreference}
             onStartPerformanceMonitor={performanceMonitor.start}
             onStopPerformanceMonitor={performanceMonitor.stop}

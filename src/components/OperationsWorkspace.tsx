@@ -89,6 +89,8 @@ interface OperationsWorkspaceProps {
   onEndgameExtremeModeChange: (enabled: boolean) => void;
   canvasPerformanceFeatures: CanvasPerformanceFeatures;
   onCanvasPerformanceFeatureChange: (id: CanvasPerformanceFeatureId, enabled: boolean) => void;
+  lineFindMode: boolean;
+  onLineFindModeChange: (enabled: boolean) => void;
   performanceMonitor: PerformanceMonitorSnapshot;
   onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void;
   onStartPerformanceMonitor: () => void;
@@ -270,7 +272,7 @@ function BufferLimitSetting({ label, value, onChange, presets = BUFFER_LIMIT_PRE
   </section>;
 }
 
-function SettingsPanel({ game, report, productionRefreshPreference, productionRefreshIntervalMs, endgameExtremeMode, canvasPerformanceFeatures, onEndgameExtremeModeChange, onCanvasPerformanceFeatureChange, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onOpenReleaseNotes, onOpenTutorial }: { game: GameState; report: AutomaticPerformanceReport | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; endgameExtremeMode: boolean; canvasPerformanceFeatures: CanvasPerformanceFeatures; onEndgameExtremeModeChange: (enabled: boolean) => void; onCanvasPerformanceFeatureChange: (id: CanvasPerformanceFeatureId, enabled: boolean) => void; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onOpenReleaseNotes: () => void; onOpenTutorial: () => void }) {
+function SettingsPanel({ game, report, productionRefreshPreference, productionRefreshIntervalMs, endgameExtremeMode, canvasPerformanceFeatures, onEndgameExtremeModeChange, onCanvasPerformanceFeatureChange, lineFindMode, onLineFindModeChange, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onOpenReleaseNotes, onOpenTutorial }: { game: GameState; report: AutomaticPerformanceReport | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; endgameExtremeMode: boolean; canvasPerformanceFeatures: CanvasPerformanceFeatures; onEndgameExtremeModeChange: (enabled: boolean) => void; onCanvasPerformanceFeatureChange: (id: CanvasPerformanceFeatureId, enabled: boolean) => void; lineFindMode: boolean; onLineFindModeChange: (enabled: boolean) => void; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onOpenReleaseNotes: () => void; onOpenTutorial: () => void }) {
   const { settings } = game;
   const { locale, setLocale } = useAppLocale();
   const gameDialog = useGameDialog();
@@ -404,14 +406,17 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         <ToggleSetting checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态效果关闭" : "动态效果开启"} icon={<Gauge size={16} />} onChange={(reducedMotion) => onChange({ reducedMotion })} />
         <ToggleSetting checked={settings.soundEnabled} label="操作音效" value={settings.soundEnabled ? "声音开启" : "声音关闭"} icon={settings.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />} onChange={(soundEnabled) => onChange({ soundEnabled })} />
         <ToggleSetting checked={settings.allowDoubleClickZoom} label="允许双击缩放" value={settings.allowDoubleClickZoom ? "双击聚焦画布" : "连续点击不缩放"} icon={<MousePointer2 size={16} />} onChange={(allowDoubleClickZoom) => onChange({ allowDoubleClickZoom })} />
+        <ToggleSetting checked={settings.autoShortageNavigation} label="资源不足自动跳转" value={settings.autoShortageNavigation ? "缺料时打开对应配方" : "缺料只提示，主动点击仍可跳转"} icon={<MapPin size={16} />} onChange={(autoShortageNavigation) => onChange({ autoShortageNavigation })} />
+        <ToggleSetting checked={lineFindMode} label="寻线模式默认开启" value={lineFindMode ? "选中建筑后追踪上下游" : "保持普通画布显示"} icon={<Route size={16} />} onChange={onLineFindModeChange} />
       </section>
       <section className="settings-group">
         <header><Clock3 size={14} /><span>自动保存间隔</span></header>
         <div className="settings-segmented" aria-label="自动保存间隔">
-          {([30, 60, 120] as AutosaveIntervalSeconds[]).map((seconds) => (
-            <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => onChange({ autosaveIntervalSeconds: seconds })}>{seconds} 秒</button>
+          {([30, 60, 120, 600, 0] as AutosaveIntervalSeconds[]).map((seconds) => (
+            <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => onChange({ autosaveIntervalSeconds: seconds })}>{seconds === 0 ? "关闭" : seconds === 600 ? "10 分钟" : `${seconds} 秒`}</button>
           ))}
         </div>
+        {settings.autosaveIntervalSeconds === 0 ? <p className="settings-warning">关闭后，刷新、崩溃或异常退出可能丢失未保存进度；手动保存和云同步保持独立。</p> : null}
       </section>
       <section className="settings-group">
         <header><MapPin size={14} /><span>星区与资源</span><small>种子 #{game.galaxy.seed}</small></header>
@@ -865,7 +870,7 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
         {props.tab === "alerts" ? <AlertsPanel alerts={props.alerts} onSelect={props.onAlertSelect} onOpenTutorial={props.onOpenTutorial} /> : null}
         {props.tab === "achievements" ? <AchievementsPanel game={props.game} /> : null}
         {props.tab === "logistics" ? <LogisticsManagementPanel game={props.game} {...props.logisticsActions} /> : null}
-        {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} endgameExtremeMode={props.endgameExtremeMode} canvasPerformanceFeatures={props.canvasPerformanceFeatures} onEndgameExtremeModeChange={props.onEndgameExtremeModeChange} onCanvasPerformanceFeatureChange={props.onCanvasPerformanceFeatureChange} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onOpenReleaseNotes={props.onOpenReleaseNotes} onOpenTutorial={props.onOpenTutorial} /> : null}
+        {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} endgameExtremeMode={props.endgameExtremeMode} canvasPerformanceFeatures={props.canvasPerformanceFeatures} onEndgameExtremeModeChange={props.onEndgameExtremeModeChange} onCanvasPerformanceFeatureChange={props.onCanvasPerformanceFeatureChange} lineFindMode={props.lineFindMode} onLineFindModeChange={props.onLineFindModeChange} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onOpenReleaseNotes={props.onOpenReleaseNotes} onOpenTutorial={props.onOpenTutorial} /> : null}
         {props.tab === "performance" ? <PerformancePanel game={props.game} snapshot={props.performanceMonitor} onStart={props.onStartPerformanceMonitor} onStop={props.onStopPerformanceMonitor} onClear={props.onClearPerformanceMonitor} onExport={props.onExportPerformanceMonitor} /> : null}
         {props.tab === "saves" ? <SavesPanel {...props} /> : null}
         {props.tab === "packs" ? <ContentPacksPanel game={props.game} registry={props.contentPackRegistry} validation={props.modValidation} onValidate={props.onValidateMod} onExportTemplate={props.onExportModTemplate} onRegister={props.onRegisterContentPack} onSetEnabled={props.onSetContentPackEnabled} onRemove={props.onRemoveContentPack} /> : null}

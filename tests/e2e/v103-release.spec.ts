@@ -4,6 +4,10 @@ const RELEASE_NOTE_ID = "2026-08-01-v1.0.19";
 
 async function seedReleaseFactory(page: Page, options: { theme?: "dark" | "light"; locale?: "zh-CN" | "en"; paused?: boolean; mobileUi?: "legacy" | "next" } = {}) {
   await page.addInitScript(({ releaseNoteId, theme, locale, paused, mobileUi }) => {
+    // Keep this development fixture on the freshly built bundle instead of a
+    // service-worker cache from an earlier focused run.
+    void globalThis.caches?.keys().then((keys) => Promise.all(keys.map((key) => globalThis.caches!.delete(key))));
+    void navigator.serviceWorker?.getRegistrations().then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())));
     const entityBase = {
       planetId: "home",
       minerCount: 0,
@@ -376,4 +380,33 @@ test("new production-location surfaces remain English in light mode", async ({ p
   expect(visibleText).not.toMatch(/[\u3400-\u9fff]/);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await page.screenshot({ path: "artifacts/qa/v103-production-locator-english-light-1920x1080.png", fullPage: true });
+});
+
+test("next-version selection, line finder, planet statistics and local settings stay reachable", async ({ page }) => {
+  await seedReleaseFactory(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openGame(page);
+
+  const lineFinder = page.getByTestId("line-find-toggle");
+  await lineFinder.click();
+  await page.locator('.react-flow__node[data-id="smelter-a"]').click();
+  await expect(page.locator('.react-flow__node[data-id="smelter-a"]')).toHaveClass(/factory-flow-node--line-find-center/);
+  await lineFinder.click();
+
+  await openHeaderWorkspace(page, "打开生产统计", /^生产统计$/);
+  const statistics = page.getByRole("dialog", { name: "生产统计" });
+  const planetSelect = statistics.getByLabel("选择统计星球");
+  await expect(planetSelect).toHaveValue("all");
+  await planetSelect.selectOption("home");
+  await expect(statistics.locator('[data-planet-scope="home"]')).toBeVisible();
+  await statistics.getByRole("button", { name: "关闭生产统计" }).click();
+
+  await openHeaderWorkspace(page, "打开设置", /^运营中心$/);
+  const operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.getByRole("tab", { name: "设置" }).click();
+  await expect(operations.getByRole("button", { name: "10 分钟" })).toBeVisible();
+  await expect(operations.getByRole("button", { name: "关闭", exact: true })).toBeVisible();
+  await operations.getByText("寻线模式默认开启").click();
+  await page.getByRole("button", { name: "关闭运营中心" }).click();
+  await expect(page.locator(".factory-canvas")).toBeVisible();
 });

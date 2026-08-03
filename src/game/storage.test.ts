@@ -928,6 +928,7 @@ describe("game storage", () => {
       beltBufferLimit: 100_000_000,
       proliferatorBufferLimit: 600,
       autosaveIntervalSeconds: 30,
+      autoShortageNavigation: false,
       resourceMode: "infinite",
       difficulty: "standard",
     });
@@ -953,6 +954,7 @@ describe("game storage", () => {
       beltBufferLimit: 100_000_000,
       proliferatorBufferLimit: 600,
       autosaveIntervalSeconds: 30,
+      autoShortageNavigation: false,
       resourceMode: "infinite",
       difficulty: "standard",
     };
@@ -964,6 +966,17 @@ describe("game storage", () => {
     expect(imported?.settings).toEqual(state.settings);
     expect(imported?.achievements.unlockedIds).toEqual(["first_manual_mine", "dyson_swarm_online"]);
     expect(importGame("not-json")).toBeNull();
+  });
+
+  it("preserves the ten-minute and disabled autosave settings during migration", () => {
+    const state = createInitialState();
+    state.settings.autosaveIntervalSeconds = 600;
+    state.settings.autoShortageNavigation = true;
+    const loaded = importGame(exportGame(state));
+    expect(loaded?.settings.autosaveIntervalSeconds).toBe(600);
+    expect(loaded?.settings.autoShortageNavigation).toBe(true);
+    state.settings.autosaveIntervalSeconds = 0;
+    expect(importGame(exportGame(state))?.settings.autosaveIntervalSeconds).toBe(0);
   });
 
   it("round-trips v22 Dyson launch controls and independent swarm orbits", () => {

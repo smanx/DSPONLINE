@@ -94,7 +94,7 @@ const REGISTRATION_DRAFT_KEY = "dsp-idle-network.registration-draft.v1";
 const NATIVE_DOWNLOAD_URL = "https://download.dsponline.cn/";
 const FONT_SCALES: FontScale[] = [0.8, 1, 1.25, 1.5, 2];
 const SIMULATION_SPEEDS: SimulationSpeed[] = [1, 2, 4];
-const AUTOSAVE_INTERVALS: AutosaveIntervalSeconds[] = [30, 60, 120];
+const AUTOSAVE_INTERVALS: AutosaveIntervalSeconds[] = [30, 60, 120, 600, 0];
 const DEFAULT_MENU_SETTINGS: GameSettings = {
   simulationSpeed: 1,
   fontScale: 1,
@@ -112,6 +112,7 @@ const DEFAULT_MENU_SETTINGS: GameSettings = {
   beltBufferLimit: 100_000_000,
   proliferatorBufferLimit: 600,
   autosaveIntervalSeconds: 30,
+  autoShortageNavigation: false,
   resourceMode: "finite",
   difficulty: "standard",
 };
@@ -158,6 +159,7 @@ function readMenuSettings(fallback: GameSettings): GameSettings {
       theme: parsed.theme === "light" || parsed.theme === "system" ? parsed.theme : "dark",
       technologyLayout: parsed.technologyLayout === "compact" ? "compact" : "standard",
       autosaveIntervalSeconds: AUTOSAVE_INTERVALS.includes(parsed.autosaveIntervalSeconds as AutosaveIntervalSeconds) ? parsed.autosaveIntervalSeconds as AutosaveIntervalSeconds : fallback.autosaveIntervalSeconds,
+      autoShortageNavigation: typeof parsed.autoShortageNavigation === "boolean" ? parsed.autoShortageNavigation : fallback.autoShortageNavigation,
       performanceMode: typeof parsed.performanceMode === "boolean" ? parsed.performanceMode : fallback.performanceMode,
       reducedMotion: typeof parsed.reducedMotion === "boolean" ? parsed.reducedMotion : fallback.reducedMotion,
       soundEnabled: typeof parsed.soundEnabled === "boolean" ? parsed.soundEnabled : fallback.soundEnabled,
@@ -1123,7 +1125,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             <section><header><Languages size={15} /><strong>语言</strong><small>{locale === "en" ? "English" : "简体中文"}</small></header><div className="start-menu-segments" aria-label="语言"><button className={locale === "zh-CN" ? "active" : ""} type="button" aria-pressed={locale === "zh-CN"} onClick={() => setLocale("zh-CN")}>简体中文</button><button className={locale === "en" ? "active" : ""} type="button" aria-pressed={locale === "en"} onClick={() => setLocale("en")}>English</button></div></section>
             <section><header><Factory size={15} /><strong>科技树布局</strong><small>{settings.technologyLayout === "compact" ? "精简" : "标准"}</small></header><div className="start-menu-segments">{(["standard", "compact"] as const).map((technologyLayout) => <button className={settings.technologyLayout === technologyLayout ? "active" : ""} type="button" key={technologyLayout} onClick={() => updateMenuSettings({ technologyLayout })}>{technologyLayout === "compact" ? "精简模式" : "标准模式"}</button>)}</div></section>
             <section><header><Zap size={15} /><strong>模拟速度</strong><small>{settings.simulationSpeed}×</small></header><div className="start-menu-segments">{SIMULATION_SPEEDS.map((speed) => <button className={settings.simulationSpeed === speed ? "active" : ""} type="button" key={speed} onClick={() => updateMenuSettings({ simulationSpeed: speed })}>{speed}×</button>)}</div></section>
-            <section><header><Clock3 size={15} /><strong>自动保存</strong><small>{settings.autosaveIntervalSeconds} 秒</small></header><div className="start-menu-segments">{AUTOSAVE_INTERVALS.map((seconds) => <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => updateMenuSettings({ autosaveIntervalSeconds: seconds })}>{seconds} 秒</button>)}</div></section>
+            <section><header><Clock3 size={15} /><strong>自动保存</strong><small>{settings.autosaveIntervalSeconds === 0 ? "已关闭" : `${settings.autosaveIntervalSeconds} 秒`}</small></header><div className="start-menu-segments">{AUTOSAVE_INTERVALS.map((seconds) => <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => updateMenuSettings({ autosaveIntervalSeconds: seconds })}>{seconds === 0 ? "关闭" : seconds === 600 ? "10 分钟" : `${seconds} 秒`}</button>)}</div>{settings.autosaveIntervalSeconds === 0 ? <small className="settings-warning">关闭后，刷新页面或异常退出可能丢失未保存进度；手动保存和云同步不受影响。</small> : null}</section>
             <section className="start-menu-setting-toggles"><ToggleRow checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "低频渲染" : "完整渲染"} icon={<Cpu size={16} />} onChange={(performanceMode) => updateMenuSettings({ performanceMode })} /><ToggleRow checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态已精简" : "完整动态"} icon={<Gauge size={16} />} onChange={(reducedMotion) => updateMenuSettings({ reducedMotion })} /><ToggleRow checked={settings.soundEnabled} label="操作音效" value={settings.soundEnabled ? "已开启" : "已关闭"} icon={settings.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />} onChange={(soundEnabled) => updateMenuSettings({ soundEnabled })} /><ToggleRow checked={settings.allowDoubleClickZoom} label="允许双击缩放" value={settings.allowDoubleClickZoom ? "双击聚焦画布" : "连续点击不缩放"} icon={<MousePointer2 size={16} />} onChange={(allowDoubleClickZoom) => updateMenuSettings({ allowDoubleClickZoom })} /></section>
             <NativeUpdateCard className="start-menu-native-update" />
             <section className="start-menu-release-notes"><header><History size={15} /><strong>版本更新记录</strong><small>{CURRENT_RELEASE_NOTES.date}</small></header><button type="button" onClick={onOpenReleaseNotes} aria-label={`查看${CURRENT_RELEASE_NOTES.date}版本更新记录`}><span><strong>{CURRENT_RELEASE_NOTES.title}</strong><small>{CURRENT_RELEASE_NOTES.items.length} 项体验更新</small></span><ArrowRight size={15} /></button></section>

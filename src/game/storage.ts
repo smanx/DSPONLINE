@@ -734,7 +734,7 @@ function validFontScale(value: unknown): value is GameState["settings"]["fontSca
 }
 
 function validAutosaveInterval(value: unknown): value is GameState["settings"]["autosaveIntervalSeconds"] {
-  return value === 30 || value === 60 || value === 120;
+  return value === 0 || value === 30 || value === 60 || value === 120 || value === 600;
 }
 
 function validDefaultBeltRouteMode(value: unknown): value is GameState["settings"]["defaultBeltRouteMode"] {
@@ -1646,6 +1646,12 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
         sampleDurationSeconds: Math.max(1, Math.min(3_600, nonNegativeNumber(sample.sampleDurationSeconds) || 10)),
         productionPerMinute: nonNegativeRecord(sample.productionPerMinute),
         consumptionPerMinute: nonNegativeRecord(sample.consumptionPerMinute),
+        planetProductionPerMinute: isRecord(sample.planetProductionPerMinute)
+          ? Object.fromEntries(Object.entries(sample.planetProductionPerMinute).flatMap(([planetId, values]) => validPlanetId(planetId) && isRecord(values) ? [[planetId, nonNegativeRecord(values)]] : [])) as GameState["productionHistory"][number]["planetProductionPerMinute"]
+          : undefined,
+        planetConsumptionPerMinute: isRecord(sample.planetConsumptionPerMinute)
+          ? Object.fromEntries(Object.entries(sample.planetConsumptionPerMinute).flatMap(([planetId, values]) => validPlanetId(planetId) && isRecord(values) ? [[planetId, nonNegativeRecord(values)]] : [])) as GameState["productionHistory"][number]["planetConsumptionPerMinute"]
+          : undefined,
         inventory: integerRecord(sample.inventory),
         generationKw: nonNegativeNumber(sample.generationKw),
         demandKw: nonNegativeNumber(sample.demandKw),
@@ -1882,6 +1888,9 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     autosaveIntervalSeconds: validAutosaveInterval(saved.settings?.autosaveIntervalSeconds)
       ? saved.settings.autosaveIntervalSeconds
       : initial.settings.autosaveIntervalSeconds,
+    autoShortageNavigation: typeof saved.settings?.autoShortageNavigation === "boolean"
+      ? saved.settings.autoShortageNavigation
+      : initial.settings.autoShortageNavigation,
     resourceMode: saved.version >= 20 && saved.settings?.resourceMode === "finite" ? "finite" : "infinite",
     difficulty: isDifficultyMode(saved.settings?.difficulty) ? saved.settings.difficulty : initial.settings.difficulty,
   };

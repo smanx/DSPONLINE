@@ -52,6 +52,17 @@ export interface BeltNetworkSnapshot {
   diagnostics: BeltDiagnostic[];
 }
 
+export interface EntityLineTrace {
+  planetId: PlanetId;
+  entityId: string;
+  entityIds: string[];
+  upstreamEntityIds: string[];
+  downstreamEntityIds: string[];
+  beltIds: string[];
+  upstreamBeltIds: string[];
+  downstreamBeltIds: string[];
+}
+
 export interface PortOccupancy {
   input: Map<string, Partial<Record<ItemId, number>>>;
   output: Map<string, Partial<Record<ItemId, number>>>;
@@ -261,6 +272,64 @@ export function analyzeBeltNetwork(state: GameState, beltId: string): BeltNetwor
     bottleneckBeltId: bottleneck?.beltId ?? beltId,
     capacityDeficit: diagnostics.reduce((sum, diagnostic) => sum + diagnostic.capacityDeficit, 0),
     diagnostics,
+  };
+}
+
+/**
+ * Trace every physical belt reachable from a building in both directions.
+ * The visited sets make cycles and split/merge graphs finite. Callers can
+ * cache the result against the canvas topology revision.
+ */
+export function analyzeEntityLineTrace(state: GameState, entityId: string): EntityLineTrace | null {
+  const entity = state.entities.find((candidate) => candidate.id === entityId);
+  if (!entity) return null;
+  const belts = state.belts.filter((belt) => belt.planetId === entity.planetId);
+  const incoming = new Map<string, BeltConnection[]>();
+  const outgoing = new Map<string, BeltConnection[]>();
+  for (const belt of belts) {
+    const incomingList = incoming.get(belt.target) ?? [];
+    incomingList.push(belt);
+    incoming.set(belt.target, incomingList);
+    const outgoingList = outgoing.get(belt.source) ?? [];
+    outgoingList.push(belt);
+    outgoing.set(belt.source, outgoingList);
+  }
+  const beltIds = new Set<string>();
+  const upstreamBeltIds = new Set<string>();
+  const downstreamBeltIds = new Set<string>();
+  const entityIds = new Set<string>([entityId]);
+  const upstreamEntityIds = new Set<string>();
+  const downstreamEntityIds = new Set<string>();
+  const walk = (direction: "upstream" | "downstream") => {
+    const queue = [entityId];
+    const seenEntities = new Set<string>(queue);
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const candidates = direction === "upstream" ? incoming.get(current) ?? [] : outgoing.get(current) ?? [];
+      for (const belt of candidates) {
+        beltIds.add(belt.id);
+        (direction === "upstream" ? upstreamBeltIds : downstreamBeltIds).add(belt.id);
+        const nextEntity = direction === "upstream" ? belt.source : belt.target;
+        entityIds.add(nextEntity);
+        (direction === "upstream" ? upstreamEntityIds : downstreamEntityIds).add(nextEntity);
+        if (!seenEntities.has(nextEntity)) {
+          seenEntities.add(nextEntity);
+          queue.push(nextEntity);
+        }
+      }
+    }
+  };
+  walk("upstream");
+  walk("downstream");
+  return {
+    planetId: entity.planetId,
+    entityId,
+    entityIds: [...entityIds].sort(),
+    upstreamEntityIds: [...upstreamEntityIds].sort(),
+    downstreamEntityIds: [...downstreamEntityIds].sort(),
+    beltIds: [...beltIds].sort(),
+    upstreamBeltIds: [...upstreamBeltIds].sort(),
+    downstreamBeltIds: [...downstreamBeltIds].sort(),
   };
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { connectBelt, createInitialState, getEntityItemInputCapacity, placeBuilding, setEntityRecipe, setLogisticsItem } from "./engine";
-import { analyzeBeltNetwork, diagnoseBelt, getBeltBundleMap, getPortOccupancy, listBeltNetworks, predictBeltConnection } from "./network";
+import { analyzeBeltNetwork, analyzeEntityLineTrace, diagnoseBelt, getBeltBundleMap, getPortOccupancy, listBeltNetworks, predictBeltConnection } from "./network";
 
 describe("production network diagnostics", () => {
   it("forecasts a connection before the belt is built", () => {
@@ -64,5 +64,27 @@ describe("production network diagnostics", () => {
     expect(networks).toHaveLength(1);
     expect(networks[0]).toMatchObject({ health: "congested", beltIds: expect.arrayContaining(state.belts.map((belt) => belt.id)) });
     expect(networks[0].capacityDeficit).toBeGreaterThan(0);
+  });
+
+  it("traces a selected building through branches and cycles without recursion overflow", () => {
+    let state = createInitialState();
+    state.construction.storage_mk1 = 1;
+    state.construction.arc_smelter = 1;
+    state.construction.conveyor_belt_mk1 = 2;
+    state = placeBuilding(state, "storage_mk1", { x: 0, y: 0 });
+    state = placeBuilding(state, "arc_smelter", { x: 400, y: 0 });
+    const storage = state.entities.find((entity) => entity.buildingId === "storage_mk1")!;
+    const smelter = state.entities.find((entity) => entity.buildingId === "arc_smelter")!;
+    state = setLogisticsItem(state, storage.id, "iron_ore");
+    state = setEntityRecipe(state, smelter.id, "iron_ingot");
+    state = connectBelt(state, "vein_iron", storage.id, "iron_ore");
+    state = connectBelt(state, storage.id, smelter.id, "iron_ore");
+    // Deliberately close a self-cycle; the trace must remain bounded.
+    state.belts[0].source = storage.id;
+    const trace = analyzeEntityLineTrace(state, storage.id)!;
+    expect(trace.entityIds).toEqual(expect.arrayContaining([storage.id, smelter.id]));
+    expect(trace.upstreamBeltIds).toContain(state.belts[0].id);
+    expect(trace.downstreamBeltIds).toContain(state.belts[1].id);
+    expect(new Set(trace.beltIds).size).toBe(trace.beltIds.length);
   });
 });

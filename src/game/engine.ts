@@ -347,6 +347,12 @@ function copyState(state: GameState): GameState {
       ...sample,
       productionPerMinute: { ...sample.productionPerMinute },
       consumptionPerMinute: { ...sample.consumptionPerMinute },
+      planetProductionPerMinute: sample.planetProductionPerMinute
+        ? Object.fromEntries(Object.entries(sample.planetProductionPerMinute).map(([planetId, values]) => [planetId, { ...values }])) as GameState["productionHistory"][number]["planetProductionPerMinute"]
+        : undefined,
+      planetConsumptionPerMinute: sample.planetConsumptionPerMinute
+        ? Object.fromEntries(Object.entries(sample.planetConsumptionPerMinute).map(([planetId, values]) => [planetId, { ...values }])) as GameState["productionHistory"][number]["planetConsumptionPerMinute"]
+        : undefined,
       inventory: { ...sample.inventory },
     })),
     metrics: { ...state.metrics },
@@ -699,6 +705,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
       beltBufferLimit: 100_000_000,
       proliferatorBufferLimit: 600,
       autosaveIntervalSeconds: 30,
+      autoShortageNavigation: false,
       resourceMode: "finite",
       difficulty: "standard",
     },
@@ -5655,19 +5662,38 @@ function recordProductionHistory(state: GameState): void {
   const refreshDiagnostics = !previousSample || sampleDurationSeconds >= 10 || previousBoundary !== currentBoundary;
   const productionPerMinute: Partial<Record<ItemId, number>> = {};
   const consumptionPerMinute: Partial<Record<ItemId, number>> = {};
+  const planetProductionPerMinute: Partial<Record<PlanetId, Partial<Record<ItemId, number>>>> = {};
+  const planetConsumptionPerMinute: Partial<Record<PlanetId, Partial<Record<ItemId, number>>>> = {};
   const inventory: Partial<Record<ItemId, number>> = refreshDiagnostics ? {} : { ...previousSample.inventory };
   const add = (record: Partial<Record<ItemId, number>>, itemId: ItemId, amount: number) => {
     record[itemId] = round((record[itemId] ?? 0) + amount, 2);
   };
+  const addPlanet = (record: Partial<Record<PlanetId, Partial<Record<ItemId, number>>>>, planetId: PlanetId, itemId: ItemId, amount: number) => {
+    const planetRecord = record[planetId] ?? {};
+    planetRecord[itemId] = round((planetRecord[itemId] ?? 0) + amount, 2);
+    record[planetId] = planetRecord;
+  };
   for (const entity of state.entities) {
-    if (entity.kind === "vein" && entity.resourceId) add(productionPerMinute, entity.resourceId, entity.productionRate);
+    if (entity.kind === "vein" && entity.resourceId) {
+      add(productionPerMinute, entity.resourceId, entity.productionRate);
+      addPlanet(planetProductionPerMinute, entity.planetId, entity.resourceId, entity.productionRate);
+    }
     else if (entity.buildingId === "orbital_collector" && entity.storedItemId) {
       add(productionPerMinute, entity.storedItemId, entity.productionRate);
+      addPlanet(planetProductionPerMinute, entity.planetId, entity.storedItemId, entity.productionRate);
     } else if (entity.kind === "machine") {
       const recipe = getRecipe(entity.recipeId);
       if (recipe && recipe.id !== "matrix_research") {
-        for (const input of recipe.inputs) add(consumptionPerMinute, input.itemId, entity.productionRate * input.amount);
-        for (const output of recipe.outputs) add(productionPerMinute, output.itemId, entity.productionRate * output.amount);
+        for (const input of recipe.inputs) {
+          const amount = entity.productionRate * input.amount;
+          add(consumptionPerMinute, input.itemId, amount);
+          addPlanet(planetConsumptionPerMinute, entity.planetId, input.itemId, amount);
+        }
+        for (const output of recipe.outputs) {
+          const amount = entity.productionRate * output.amount;
+          add(productionPerMinute, output.itemId, amount);
+          addPlanet(planetProductionPerMinute, entity.planetId, output.itemId, amount);
+        }
       }
     }
     if (refreshDiagnostics) {
@@ -5700,6 +5726,8 @@ function recordProductionHistory(state: GameState): void {
     sampleDurationSeconds,
     productionPerMinute,
     consumptionPerMinute,
+    planetProductionPerMinute,
+    planetConsumptionPerMinute,
     inventory,
     generationKw: round(Object.values(state.planetMetrics).reduce((sum, metrics) => sum + metrics.generationKw, 0), 2),
     demandKw: round(Object.values(state.planetMetrics).reduce((sum, metrics) => sum + metrics.demandKw, 0), 2),

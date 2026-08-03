@@ -376,7 +376,8 @@ export type ResourceMode = "finite" | "infinite";
 export type DifficultyMode = "relaxed" | "standard" | "hard";
 export type RecipeFocusMode = "full" | "two-level";
 export type SimulationSpeed = 1 | 2 | 4;
-export type AutosaveIntervalSeconds = 30 | 60 | 120;
+/** Local save cadence. Zero explicitly disables the periodic timer. */
+export type AutosaveIntervalSeconds = 0 | 30 | 60 | 120 | 600;
 export type FontScale = 0.8 | 1 | 1.25 | 1.5 | 2;
 
 /** Repeatable endgame research tracks unlocked after the universe matrix. */
@@ -1195,6 +1196,8 @@ export interface GameSettings {
   beltBufferLimit: number;
   proliferatorBufferLimit: number;
   autosaveIntervalSeconds: AutosaveIntervalSeconds;
+  /** Automatically open the missing recipe after a failed quick-craft. */
+  autoShortageNavigation: boolean;
   resourceMode: ResourceMode;
   difficulty: DifficultyMode;
 }
@@ -1383,6 +1386,9 @@ export interface ProductionHistorySample {
   sampleDurationSeconds?: number;
   productionPerMinute: Partial<Record<ItemId, number>>;
   consumptionPerMinute: Partial<Record<ItemId, number>>;
+  /** Optional v46-compatible runtime history for planet-scoped statistics. */
+  planetProductionPerMinute?: Partial<Record<PlanetId, Partial<Record<ItemId, number>>>>;
+  planetConsumptionPerMinute?: Partial<Record<PlanetId, Partial<Record<ItemId, number>>>>;
   inventory: Partial<Record<ItemId, number>>;
   generationKw: number;
   demandKw: number;

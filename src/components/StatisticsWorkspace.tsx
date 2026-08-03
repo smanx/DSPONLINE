@@ -1,6 +1,6 @@
 import { AlertTriangle, ArrowDown, ArrowUp, BarChart3, Bookmark, BookmarkPlus, Box, Calculator, CheckSquare, CircleCheckBig, ClipboardCopy, Factory, Focus, Gauge, MapPin, Orbit, Pause, Play, Plus, Rocket, Route, Search, Send, Settings2, Sparkles, Trash2, TrendingUp, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { ITEMS, PLANET_LIST, getBuilding, getItem, getPlanet, getRecipe } from "../game/content";
+import { ITEMS, PLANET_LIST, getBuilding, getItem, getPlanet, getRecipe, getStarSystem } from "../game/content";
 import { calculateProductionPlan, getProductionRecipeOptions } from "../game/planning";
 import { calculateFactoryStatistics, type FactoryStatistics, type ItemStatistics } from "../game/statistics";
 import { getGalacticIndustrySnapshot, getPowerGridMetrics, getResourceReserveSnapshot, POWER_GRID_IDS, POWER_GRID_LABELS } from "../game/engine";
@@ -257,6 +257,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
   const [sort, setSort] = useState<ItemSort>({ key: "catalog", direction: "asc" });
   const [productionWindowId, setProductionWindowId] = useState<ProductionStatisticsWindow>("minute");
   const [query, setQuery] = useState("");
+  const [planetScope, setPlanetScope] = useState<PlanetId | "all">("all");
   const [planItemId, setPlanItemId] = useState<ItemId>("electromagnetic_matrix");
   const [planTarget, setPlanTarget] = useState(60);
   const [planPlanetId, setPlanPlanetId] = useState<PlanetId | "all">("all");
@@ -264,13 +265,23 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
   const [expandedItemId, setExpandedItemId] = useState<ItemId | null>(null);
   // The closed workspace stays mounted. Avoid repeating the full entity and
   // operating-status scan for every authoritative Worker state publication.
-  const statistics = useMemo(() => open ? calculateFactoryStatistics(game) : EMPTY_FACTORY_STATISTICS, [game, open]);
+  const statistics = useMemo(() => open ? calculateFactoryStatistics(game, planetScope) : EMPTY_FACTORY_STATISTICS, [game, open, planetScope]);
   const galactic = useMemo(() => getGalacticIndustrySnapshot(game), [game]);
   const productionWindow = useMemo(() => {
     const fallbackProduction = Object.fromEntries(statistics.items.map((item) => [item.itemId, item.productionPerMinute])) as Partial<Record<ItemId, number>>;
     const fallbackConsumption = Object.fromEntries(statistics.items.map((item) => [item.itemId, item.consumptionPerMinute])) as Partial<Record<ItemId, number>>;
-    return calculateProductionWindowSnapshot(game.productionHistory, productionWindowId, fallbackProduction, fallbackConsumption);
-  }, [game.productionHistory, productionWindowId, statistics.items]);
+    // History samples are global in v46. For a selected planet use the
+    // filtered, current production rates as a deterministic per-planet view;
+    // the all-planet view keeps the rolling history unchanged.
+    const history = planetScope === "all"
+      ? game.productionHistory
+      : game.productionHistory.map((sample) => ({
+        ...sample,
+        productionPerMinute: sample.planetProductionPerMinute?.[planetScope] ?? {},
+        consumptionPerMinute: sample.planetConsumptionPerMinute?.[planetScope] ?? {},
+      }));
+    return calculateProductionWindowSnapshot(history, productionWindowId, fallbackProduction, fallbackConsumption);
+  }, [game.productionHistory, planetScope, productionWindowId, statistics.items]);
   const productionItems = useMemo(() => {
     const currentById = new Map(statistics.items.map((item) => [item.itemId, item]));
     const ids = new Set<ItemId>([
@@ -339,9 +350,9 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
   return (
     <section className={`statistics-workspace${mobile ? " mobile-workspace mobile-statistics" : ""}`} role="dialog" aria-modal="true" aria-label="生产统计">
       <header className="statistics-header">
-        <div className="statistics-title">
+          <div className="statistics-title">
           <i><BarChart3 size={20} /></i>
-          <div><span>{getPlanetDisplayName(game, game.activePlanetId)}电网 · 星系物流</span><strong>生产统计</strong></div>
+          <div><span>{planetScope === "all" ? "全星区" : `${getPlanetDisplayName(game, planetScope)} · ${getStarSystem(getPlanet(planetScope).systemId).name}`} · 星系物流</span><strong>生产统计</strong></div>
         </div>
         <div className="statistics-headline">
           <span>生产 <strong><ProductionStatisticValue value={productionTotals.production} suffix={productionWindow.window.suffix} showSuffix /></strong></span>
@@ -381,6 +392,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
       {tab === "production" ? (
         <div className="statistics-content statistics-production">
           <div className="statistics-toolbar">
+            <label className="statistics-planet-filter"><span>统计星球</span><select value={planetScope} onChange={(event) => setPlanetScope(event.target.value as PlanetId | "all")} aria-label="选择统计星球"><option value="all">全部星球</option>{PLANET_LIST.map((planet) => <option value={planet.id} key={planet.id}>{getPlanetDisplayName(game, planet.id)} · {getStarSystem(planet.systemId).name}</option>)}</select></label>
             <label className="statistics-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="筛选物品" aria-label="筛选统计物品" /></label>
             <div className="statistics-filter" aria-label="物品统计筛选">
               {(["all", "producing", "deficit", "blocked"] as ItemFilter[]).map((option) => (
@@ -399,7 +411,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
               }}><option value="catalog">目录顺序</option><option value="production">生产量</option><option value="consumption">消耗量</option><option value="net">净增量</option><option value="inventory">库存</option><option value="name">物品名称</option></select></label>
             </div>
           </div>
-          <div className={`statistics-table${items.length === 0 ? " statistics-table--empty" : ""}`}>
+          <div className={`statistics-table${items.length === 0 ? " statistics-table--empty" : ""}`} data-planet-scope={planetScope}>
             <header><span>物品</span><button type="button" className={sort.key === "production" ? "active" : ""} onClick={() => toggleColumnSort("production")}>生产 {productionWindow.window.suffix}{sort.key === "production" ? sort.direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} /> : null}</button><button type="button" className={sort.key === "consumption" ? "active" : ""} onClick={() => toggleColumnSort("consumption")}>消耗 {productionWindow.window.suffix}{sort.key === "consumption" ? sort.direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} /> : null}</button><span>净增量 {productionWindow.window.suffix}</span><span>网络库存</span><span>节点</span></header>
             <div>
               {items.length === 0 ? <div className="statistics-empty"><Box size={20} /><span>没有符合条件的物品</span></div> : items.map((item) => (

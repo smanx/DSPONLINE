@@ -1427,6 +1427,28 @@ select:focus-visible {
   border-left: 1px solid var(--line);
 }
 
+.game-workspace { position: relative; }
+.sidebar-edge-toggle {
+  position: absolute;
+  z-index: 28;
+  top: 50%;
+  display: grid;
+  width: 24px;
+  height: 48px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  background: rgba(13, 22, 19, 0.94);
+  color: var(--text-soft);
+  transform: translateY(-50%);
+}
+.sidebar-edge-toggle:hover,
+.sidebar-edge-toggle:focus-visible { border-color: var(--cyan); color: var(--cyan); }
+.sidebar-edge-toggle--left { left: var(--resource-rail-width, 288px); border-left: 0; border-radius: 0 4px 4px 0; }
+.sidebar-edge-toggle--right { right: var(--inspector-panel-width, 332px); border-right: 0; border-radius: 4px 0 0 4px; }
+.sidebar-edge-toggle.is-collapsed.sidebar-edge-toggle--left { left: 0; }
+.sidebar-edge-toggle.is-collapsed.sidebar-edge-toggle--right { right: 0; }
+
 @media (min-width: 761px) {
   .game-shell.sidebar-left-collapsed .game-workspace {
     --resource-rail-width: 0px;
@@ -1450,6 +1472,12 @@ select:focus-visible {
   .inspector-panel {
     transition: opacity 140ms ease;
   }
+}
+
+@media (max-width: 760px) {
+  .sidebar-edge-toggle { display: grid !important; top: 42%; width: 28px; height: 52px; }
+  .sidebar-edge-toggle--left { left: 0; }
+  .sidebar-edge-toggle--right { right: 0; }
 }
 
 .rail-block {
@@ -4469,7 +4497,9 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   top: 72px;
   right: 12px;
   display: flex;
-  overflow: hidden;
+  max-width: calc(100% - 16px);
+  overflow-x: auto;
+  overflow-y: hidden;
   border: 1px solid var(--line-strong);
   border-radius: 5px;
   background: #121916;
@@ -4491,6 +4521,7 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  flex: 0 0 34px;
 }
 
 .canvas-selection-tools button:last-child {
@@ -17350,6 +17381,23 @@ select {
   background: #0e1311;
 }
 
+.statistics-planet-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.statistics-planet-filter select {
+  max-width: 220px;
+  min-height: 34px;
+}
+
+@media (max-width: 620px) {
+  .statistics-planet-filter,
+  .statistics-planet-filter select { width: 100%; max-width: none; }
+}
+
 .settings-segmented button {
   height: 32px;
   border-radius: 3px;
@@ -17556,6 +17604,88 @@ select {
   border-radius: 10px;
   background: #171d1b;
 }
+
+/* Large font scales must keep settings readable instead of collapsing the
+   label into a narrow grid column. */
+.settings-warning {
+  display: block;
+  margin: 8px 0 0;
+  color: #e5bb72;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.settings-segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+@media (max-width: 620px), (min-resolution: 1.5dppx) {
+  .setting-row {
+    grid-template-columns: 34px minmax(0, 1fr) 38px;
+    gap: 8px;
+    min-height: 64px;
+  }
+
+  .setting-row > span strong,
+  .setting-row > span small {
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+}
+
+@media (max-width: 390px) {
+  .setting-row {
+    grid-template-columns: 32px minmax(0, 1fr);
+    align-items: start;
+    padding: 8px 0;
+  }
+
+  .setting-row > b {
+    grid-column: 2;
+    justify-self: start;
+    margin-top: 4px;
+  }
+}
+
+/* Keep selected feedback visible across compact nodes and React Flow refreshes. */
+.factory-node.factory-node--selected,
+.react-flow__node.selected .factory-node {
+  border-color: #78e5d1 !important;
+  background: linear-gradient(180deg, rgba(46, 96, 88, 0.98), rgba(21, 43, 39, 0.98)) !important;
+  box-shadow: 0 0 0 2px rgba(116, 229, 209, 0.92), 0 0 18px rgba(98, 181, 174, 0.55), inset 0 0 0 1px rgba(226, 255, 247, 0.24) !important;
+  z-index: 20;
+}
+
+.factory-node.factory-node--selected::before,
+.react-flow__node.selected .factory-node::before {
+  content: "已选中";
+  position: absolute;
+  top: -10px;
+  right: 8px;
+  z-index: 2;
+  padding: 2px 5px;
+  border: 1px solid rgba(120, 229, 209, 0.75);
+  border-radius: 3px;
+  background: #163b35;
+  color: #d9fff5;
+  font-size: 9px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.factory-flow-node--line-find-center .factory-node {
+  border-color: #f3d37b !important;
+  box-shadow: 0 0 0 3px rgba(243, 211, 123, 0.9), 0 0 24px rgba(243, 180, 82, 0.72) !important;
+}
+
+.factory-flow-node--line-find-upstream .factory-node { border-color: #66c4ff !important; }
+.factory-flow-node--line-find-downstream .factory-node { border-color: #ff9d76 !important; }
+.factory-flow-node--line-find-dim .factory-node { opacity: 0.28; filter: saturate(0.45); }
+.factory-edge--line-find-upstream .react-flow__edge-path { stroke: #66c4ff !important; stroke-width: 3.5 !important; }
+.factory-edge--line-find-downstream .react-flow__edge-path { stroke: #ff9d76 !important; stroke-width: 3.5 !important; }
+.factory-edge--line-find-dim { opacity: 0.2; }
 
 .setting-row > b > i {
   position: absolute;

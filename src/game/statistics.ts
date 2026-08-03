@@ -2,7 +2,7 @@ import { FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, getBuilding, getExtractorBuildingId
 import { getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getProliferatorSprayCost, getRecipeSpeedMultiplier } from "./engine";
 import { getInfiniteResearchDefinition } from "./endgame";
 import { getPlanetIndustrialProfile, specializationApplies } from "./galaxy";
-import type { EntityOperatingStatus, FactoryEntity, GameState, ItemId } from "./types";
+import type { EntityOperatingStatus, FactoryEntity, GameState, ItemId, PlanetId } from "./types";
 
 export interface ItemStatistics {
   itemId: ItemId;
@@ -72,7 +72,9 @@ function isDeployedDevice(entity: FactoryEntity): boolean {
   return entity.machineCount > 0;
 }
 
-export function calculateFactoryStatistics(state: GameState): FactoryStatistics {
+export function calculateFactoryStatistics(state: GameState, planetScope: PlanetId | "all" = "all"): FactoryStatistics {
+  const selectedPlanetId = planetScope === "all" ? null : planetScope;
+  const entities = selectedPlanetId ? state.entities.filter((entity) => entity.planetId === selectedPlanetId) : state.entities;
   const records = new Map<ItemId, ItemStatistics>();
   const recordFor = (itemId: ItemId) => {
     const existing = records.get(itemId);
@@ -92,13 +94,14 @@ export function calculateFactoryStatistics(state: GameState): FactoryStatistics 
   };
 
   for (const planet of PLANET_LIST) {
+    if (selectedPlanetId && planet.id !== selectedPlanetId) continue;
     const tray = planet.id === state.activePlanetId ? state.tray : state.planetTrays[planet.id];
     for (const [itemId, amount] of Object.entries(tray) as Array<[ItemId, number]>) {
       recordFor(itemId).inventory += Math.floor(amount ?? 0);
     }
   }
-  if (state.cargo) recordFor(state.cargo.itemId).inventory += Math.floor(state.cargo.amount);
-  for (const entity of state.entities) {
+  if (state.cargo && (!selectedPlanetId || selectedPlanetId === state.activePlanetId)) recordFor(state.cargo.itemId).inventory += Math.floor(state.cargo.amount);
+  for (const entity of entities) {
     for (const [itemId, amount] of Object.entries(entity.inputs) as Array<[ItemId, number]>) {
       recordFor(itemId).inventory += Math.floor(amount ?? 0);
     }
@@ -110,7 +113,7 @@ export function calculateFactoryStatistics(state: GameState): FactoryStatistics 
   const issues: EquipmentIssue[] = [];
   const powerConsumers: PowerConsumerStatistics[] = [];
 
-  for (const entity of state.entities) {
+  for (const entity of entities) {
     const status = getEntityOperatingStatus(state, entity);
     if (isDeployedDevice(entity) && (status.tone === "blocked" || status.tone === "warning")) {
       issues.push({
@@ -129,7 +132,7 @@ export function calculateFactoryStatistics(state: GameState): FactoryStatistics 
       const extractorId = getExtractorBuildingId(entity.resourceId);
       const ratedDemandKw = (getBuilding(extractorId).powerDemandKw ?? 0) * entity.minerCount;
       const demanding = ["running", "low-power", "no-power"].includes(status.code);
-      if (entity.planetId === state.activePlanetId) {
+      if (!selectedPlanetId || entity.planetId === selectedPlanetId) {
         powerConsumers.push({
           entityId: entity.id,
           equipmentName: getBuilding(extractorId).name,
@@ -154,7 +157,7 @@ export function calculateFactoryStatistics(state: GameState): FactoryStatistics 
 
     if (entity.kind === "power" && (entity.buildingId === "accumulator" || entity.buildingId === "energy_exchanger")) {
       const building = getBuilding(entity.buildingId);
-      if (entity.planetId === state.activePlanetId) {
+      if (!selectedPlanetId || entity.planetId === selectedPlanetId) {
         powerConsumers.push({
           entityId: entity.id,
           equipmentName: building.name,
@@ -190,7 +193,7 @@ export function calculateFactoryStatistics(state: GameState): FactoryStatistics 
     if (entity.kind === "station" && entity.buildingId) {
       const ratedDemandKw = (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount;
       const demanding = ["running", "low-power", "no-power"].includes(status.code);
-      if (entity.planetId === state.activePlanetId) {
+      if (!selectedPlanetId || entity.planetId === selectedPlanetId) {
         powerConsumers.push({
           entityId: entity.id,
           equipmentName: getBuilding(entity.buildingId).name,
@@ -214,7 +217,7 @@ export function calculateFactoryStatistics(state: GameState): FactoryStatistics 
     const ratedDemandKw = (building.powerDemandKw ?? 0) * entity.machineCount *
       getEntityProliferatorPowerMultiplier(entity);
     const demanding = ["running", "low-power", "no-power"].includes(status.code);
-    if (ratedDemandKw > 0 && entity.planetId === state.activePlanetId) {
+    if (ratedDemandKw > 0 && (!selectedPlanetId || entity.planetId === selectedPlanetId)) {
       powerConsumers.push({
         entityId: entity.id,
         equipmentName: getBuilding(entity.buildingId).name,

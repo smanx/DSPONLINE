@@ -78,7 +78,7 @@ export interface FactoryEdgeData extends Record<string, unknown> {
   bundleIndex: number;
   bundleSize: number;
   health: BeltHealth;
-  taskTone?: "normal" | "focus" | "dim";
+  taskTone?: "normal" | "focus" | "dim" | "line-upstream" | "line-downstream" | "line-dim";
 }
 
 export type FactoryFlowEdge = Edge<FactoryEdgeData, "factory">;

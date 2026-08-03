@@ -100,4 +100,31 @@ describe("factory statistics", () => {
     expect(glass.productionPerMinute).toBeCloseTo(result.productionRate, 2);
     expect(result.productionRate / 9_446.4).toBeCloseTo(1.12, 3);
   });
+
+  it("filters production, consumption and inventory by planet without changing the all-planet total", () => {
+    let state = createInitialState();
+    state.exploration.colonizedPlanetIds.push("ashen");
+    state.construction.arc_smelter = 2;
+    state.tray.iron_ore = 0;
+    state.planetTrays.home.iron_ore = 0;
+    state.planetTrays.ashen.iron_ore = 0;
+    state = placeBuilding(state, "arc_smelter", { x: 0, y: 0 });
+    const homeSmelter = state.entities.find((entity) => entity.buildingId === "arc_smelter")!;
+    homeSmelter.recipeId = "iron_ingot";
+    homeSmelter.inputs.iron_ore = 100;
+    state = setActivePlanet(state, "ashen");
+    state = placeBuilding(state, "arc_smelter", { x: 300, y: 0 });
+    const ashenSmelter = state.entities.filter((entity) => entity.buildingId === "arc_smelter").at(-1)!;
+    ashenSmelter.recipeId = "iron_ingot";
+    ashenSmelter.inputs.iron_ore = 200;
+    const all = calculateFactoryStatistics(state);
+    const home = calculateFactoryStatistics(state, "home");
+    const ashen = calculateFactoryStatistics(state, "ashen");
+    const allIngot = all.items.find((item) => item.itemId === "iron_ingot")!;
+    const homeIngot = home.items.find((item) => item.itemId === "iron_ingot")!;
+    const ashenIngot = ashen.items.find((item) => item.itemId === "iron_ingot")!;
+    expect(homeIngot.productionPerMinute + ashenIngot.productionPerMinute).toBeCloseTo(allIngot.productionPerMinute);
+    expect(home.items.find((item) => item.itemId === "iron_ore")?.inventory).toBe(100);
+    expect(ashen.items.find((item) => item.itemId === "iron_ore")?.inventory).toBe(200);
+  });
 });

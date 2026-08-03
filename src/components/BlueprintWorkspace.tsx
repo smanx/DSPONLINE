@@ -19,9 +19,10 @@ function blueprintBuildingSummary(blueprint: BlueprintDefinition): string[] {
   return [...counts].map(([name, amount]) => `${name} ×${amount}`);
 }
 
-export function CanvasSelectionTools({ selectionMode, regionMode, blueprintCount, beltCount, regionCount, canUndo, canRedo, canUndoAutoLayout, leftSidebarCollapsed, rightSidebarCollapsed, onModeChange, onRegionModeChange, onOpenBlueprints, onOpenNetworks, onAutoLayout, onUndoAutoLayout, onUndo, onRedo, onToggleLeftSidebar, onToggleRightSidebar }: {
+export function CanvasSelectionTools({ selectionMode, regionMode, lineFindMode, blueprintCount, beltCount, regionCount, canUndo, canRedo, canUndoAutoLayout, leftSidebarCollapsed, rightSidebarCollapsed, onModeChange, onRegionModeChange, onToggleLineFindMode, onOpenBlueprints, onOpenNetworks, onAutoLayout, onUndoAutoLayout, onUndo, onRedo, onToggleLeftSidebar, onToggleRightSidebar }: {
   selectionMode: boolean;
   regionMode: boolean;
+  lineFindMode: boolean;
   blueprintCount: number;
   beltCount: number;
   regionCount: number;
@@ -32,6 +33,7 @@ export function CanvasSelectionTools({ selectionMode, regionMode, blueprintCount
   rightSidebarCollapsed: boolean;
   onModeChange: (enabled: boolean) => void;
   onRegionModeChange: (enabled: boolean) => void;
+  onToggleLineFindMode: () => void;
   onOpenBlueprints: () => void;
   onOpenNetworks: () => void;
   onAutoLayout: () => void;
@@ -50,6 +52,7 @@ export function CanvasSelectionTools({ selectionMode, regionMode, blueprintCount
         <button className={regionMode ? "active" : ""} type="button" onClick={() => onRegionModeChange(!regionMode)} title="在空白画布拖拽创建生产区域" aria-label="生产区域模式"><Palette size={16} /><em>{regionCount}</em></button>
         <button type="button" onClick={onOpenBlueprints} title="打开蓝图库" aria-label="打开蓝图库"><Layers3 size={16} /><em>{blueprintCount}</em></button>
         <button type="button" onClick={onOpenNetworks} title="打开生产网络总览" aria-label="打开生产网络总览"><Route size={16} /><em>{beltCount}</em></button>
+        <button className={lineFindMode ? "active" : ""} type="button" onClick={onToggleLineFindMode} title="寻线模式：选中建筑后高亮上下游线路" aria-label="切换寻线模式" aria-pressed={lineFindMode} data-testid="line-find-toggle"><Route size={16} /></button>
         <button type="button" onClick={onAutoLayout} title="按物流上下游自动整理当前行星" aria-label="自动整理当前行星布局"><WandSparkles size={16} /></button>
         <button type="button" disabled={!canUndoAutoLayout} onClick={onUndoAutoLayout} title="恢复到最近一次自动整理前的位置" aria-label="撤销最近一次自动整理"><Undo2 size={16} /></button>
         <span className="canvas-selection-tools__separator" />
