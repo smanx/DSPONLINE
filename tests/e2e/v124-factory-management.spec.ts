@@ -193,9 +193,13 @@ test("one-hundred-million additions are blocked while a historical safe stack su
 
   await page.locator('.react-flow__node[data-id="stack_limit"] .factory-node__header').click();
   const inspector = page.locator(".inspector-panel");
-  await expect(inspector.getByLabel("建筑堆叠目标数量")).toHaveValue("100000000");
-  await inspector.getByLabel(/快速增加 1 台建筑/).click();
-  await expect(page.getByRole("status")).toContainText("最多为 100,000,000");
+  const target = inspector.getByLabel("建筑堆叠目标数量");
+  await expect(target).toHaveValue("100000000");
+  await expect(inspector.locator(".entity-stack-target-shortcuts").getByRole("button", { name: "+1", exact: true })).toBeDisabled();
+  await target.fill("100000001");
+  await target.blur();
+  await expect(inspector.getByRole("alert")).toContainText("1 至 100,000,000");
+  await expect(inspector.getByRole("alert")).toContainText("历史超限数量只允许降低");
 
   await page.locator('.react-flow__node[data-id="stack_history"] .factory-node__header').click();
   await expect(inspector.getByLabel("建筑堆叠目标数量")).toHaveValue("100000001");

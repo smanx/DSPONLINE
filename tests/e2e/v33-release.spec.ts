@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { selectSettingsCategory } from "./settings-helpers";
 
 const REFRESH_PREFERENCE_KEY = "dsp-idle-network.production-refresh.v1";
 
@@ -74,6 +75,7 @@ test("native application settings expose the desktop update lifecycle", async ({
 
 test("production refresh profiles stay device-local and fixed choices are never overridden", async ({ page }) => {
   const operations = await openDesktopSettings(page);
+  await selectSettingsCategory(operations, "终局性能", "performance");
   const shell = page.locator(".game-shell");
   const profiles = operations.getByRole("radiogroup", { name: "生产画面刷新频率" });
 
@@ -155,7 +157,9 @@ test("refresh controls remain usable in classic and next mobile shells at 200 pe
     }
     const operations = page.getByRole("dialog", { name: "运营中心" });
     await operations.getByRole("tab", { name: "设置" }).click();
+    await selectSettingsCategory(operations, "画面与主题", "visual");
     await operations.getByLabel("字体大小").getByRole("button", { name: "200%" }).click();
+    await selectSettingsCategory(operations, "终局性能", "performance");
     const refresh = operations.getByRole("radiogroup", { name: "生产画面刷新频率" });
     await refresh.scrollIntoViewIfNeeded();
     await expect(refresh.getByRole("radio")).toHaveCount(7);

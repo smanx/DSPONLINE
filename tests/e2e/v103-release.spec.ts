@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { selectSettingsCategory } from "./settings-helpers";
 
 const RELEASE_NOTE_ID = "2026-08-01-v1.0.19";
 
@@ -329,6 +330,7 @@ test("depleted-resource shortcut and spray removal preserve reachable recovery a
   await vein.click();
   await page.getByRole("button", { name: /矿脉已枯竭/ }).click();
   const operations = page.getByRole("dialog", { name: "运营中心" });
+  await selectSettingsCategory(operations, "存档与云同步", "storage");
   const infinite = operations.getByLabel("资源模式").getByRole("button", { name: "无限矿脉" });
   await infinite.click();
   await page.locator(".game-dialog").getByRole("button", { name: "确认切换" }).click();
@@ -404,8 +406,10 @@ test("next-version selection, line finder, planet statistics and local settings 
   await openHeaderWorkspace(page, "打开设置", /^运营中心$/);
   const operations = page.getByRole("dialog", { name: "运营中心" });
   await operations.getByRole("tab", { name: "设置" }).click();
+  await selectSettingsCategory(operations, "存档与云同步", "storage");
   await expect(operations.getByRole("button", { name: "10 分钟" })).toBeVisible();
   await expect(operations.getByRole("button", { name: "关闭", exact: true })).toBeVisible();
+  await selectSettingsCategory(operations, "交互与控制", "interaction");
   await operations.getByText("寻线模式默认开启").click();
   await page.getByRole("button", { name: "关闭运营中心" }).click();
   await expect(page.locator(".factory-canvas")).toBeVisible();

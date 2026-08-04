@@ -5,6 +5,7 @@ if (!Number.isSafeInteger(requestedPort) || requestedPort < 1024 || requestedPor
   throw new Error("DSP_E2E_PORT must be an available user port");
 }
 const baseURL = `http://127.0.0.1:${requestedPort}`;
+const apiProxyTarget = process.env.DSP_E2E_API_PROXY_TARGET?.trim() || "http://127.0.0.1:65534";
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -23,7 +24,11 @@ export default defineConfig({
   webServer: {
     command: `npm run dev -- --port ${requestedPort}`,
     url: baseURL,
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     timeout: 120_000,
+    env: {
+      ...process.env,
+      DSP_API_PROXY_TARGET: apiProxyTarget,
+    },
   },
 });

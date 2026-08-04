@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { selectSettingsCategory } from "./settings-helpers";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -32,6 +33,7 @@ async function openSettings(page: Page, mode: "desktop" | "legacy" | "next") {
 
 test("building buffer presets and custom validation persist independently", async ({ page }) => {
   const operations = await openSettings(page, "desktop");
+  await selectSettingsCategory(operations, "终局性能", "performance");
   const production = operations.locator(".settings-buffer-limit").filter({ hasText: "生产建筑缓存上限" });
   const logistics = operations.locator(".settings-buffer-limit").filter({ hasText: "仓储与物流建筑缓存上限" });
   const belts = operations.locator(".settings-buffer-limit").filter({ hasText: "传送带转运额度上限" });
@@ -75,9 +77,11 @@ test("buffer controls fit desktop and both mobile settings from 80 to 200 percen
     const operations = await openSettings(page, mode);
     const fontScale = operations.getByLabel("字体大小");
     const sections = operations.locator(".settings-buffer-limit");
-    await expect(sections).toHaveCount(4);
     for (const scale of [80, 100, 125, 150, 200] as const) {
+      await selectSettingsCategory(operations, "画面与主题", "visual");
       await fontScale.getByRole("button", { name: `${scale}%` }).click();
+      await selectSettingsCategory(operations, "终局性能", "performance");
+      await expect(sections).toHaveCount(4);
       await expect(sections.first().getByRole("button", { name: "1万", exact: true })).toBeVisible();
       await expect(sections.first().getByRole("button", { name: "自定义" })).toBeVisible();
       await expect.poll(async () => operations.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);

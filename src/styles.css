@@ -17112,6 +17112,10 @@ select {
     width: 224px;
   }
 
+  .storage-buffer-node {
+    width: 288px;
+  }
+
   .canvas-status strong {
     display: none;
   }

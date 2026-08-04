@@ -16,6 +16,10 @@ describe("device-local English translations", () => {
     expect(translateLegacyText("铁矿石", "en")).toBe("Iron Ore");
     expect(translateLegacyText("制造台 Mk.III", "en")).toBe("Assembling Machine Mk.III");
     expect(translateLegacyText("戴森球计划", "en")).toBe("Dyson Sphere Program");
+    expect(translateLegacyText("重整精炼", "en")).toBe("Reforming Refine");
+    expect(translateLegacyText("重整精炼配方", "en")).toBe("Reforming Refine Recipe");
+    expect(translateLegacyText("白糖产量", "en")).toBe("White Matrix Output");
+    expect(translateLegacyText("主题快速设置", "en")).toBe("Theme Quick Settings");
     expect(translateLegacyText("澄海 I", "en")).toBe("Clearwater I");
     expect(translateLegacyText("层级 01", "en")).toBe("Tier 01");
     expect(translateLegacyText("前置：能量矩阵、基础物流系统", "en")).toBe("Prerequisites: Energy Matrix, Basic Logistics System");

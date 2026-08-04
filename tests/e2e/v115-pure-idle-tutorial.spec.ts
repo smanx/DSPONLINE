@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { selectSettingsCategory } from "./settings-helpers";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -34,6 +35,7 @@ test("settings opens the complete tutorial and keeps independent reading progres
   await page.getByLabel("打开设置").click();
   const operations = page.getByRole("dialog", { name: "运营中心" });
   await operations.getByRole("tab", { name: "设置" }).click();
+  await selectSettingsCategory(operations, "教程、版本与其他", "other");
   await operations.getByRole("button", { name: "打开新手教程" }).click();
   const tutorial = page.getByRole("dialog", { name: "新手教程" });
   await expect(tutorial).toContainText("认识画布");
@@ -84,8 +86,10 @@ test("tutorial remains readable in portrait and landscape mobile shells", async 
   if (await onboarding.count()) await onboarding.first().click();
   await page.getByRole("button", { name: "更多" }).click();
   await page.getByRole("button", { name: /游戏设置/ }).click();
-  await page.getByRole("dialog", { name: "运营中心" }).getByRole("tab", { name: "设置" }).click();
-  await page.getByRole("dialog", { name: "运营中心" }).getByRole("button", { name: "打开新手教程" }).click();
+  const operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.getByRole("tab", { name: "设置" }).click();
+  await selectSettingsCategory(operations, "教程、版本与其他", "other");
+  await operations.getByRole("button", { name: "打开新手教程" }).click();
   const tutorial = page.getByRole("dialog", { name: "新手教程" });
   await expect(tutorial).toBeVisible();
   await tutorial.screenshot({ path: "artifacts/qa/v115-tutorial-mobile-390x844.png", animations: "disabled" });

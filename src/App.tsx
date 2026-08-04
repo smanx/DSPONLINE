@@ -5060,6 +5060,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       return { ok: false, error };
     }
     if (next !== before) commitGame(() => next);
+    const entity = before.entities.find((candidate) => candidate.id === entityId);
+    if (check.delta > 0 && entity?.kind !== "vein") recordBasicOnboardingEvent("building-stacked");
     setNotice(`${getBuilding(check.constructionId).name}堆叠已调整为 ×${target.toLocaleString("zh-CN")}`);
     return { ok: true };
   }, [commitGame, playTone]);

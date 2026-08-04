@@ -1656,6 +1656,26 @@ const UI_EN: TranslationMap = {
   "版本列表": "Release List",
   "第": "Page",
   "页": "",
+  "白糖产量": "White Matrix Output",
+  "相邻有效主云存档区间的实际产量峰值": "Peak actual output between consecutive valid primary cloud-save snapshots",
+  "白糖产量峰值": "Peak White Matrix Output",
+  "设置分类": "Settings Categories",
+  "画面与主题": "Appearance & Theme",
+  "终局性能": "Endgame Performance",
+  "交互与控制": "Interaction & Controls",
+  "存档与云同步": "Saves & Cloud Sync",
+  "统计与运行记录": "Statistics & Run Log",
+  "教程、版本与其他": "Tutorial, Releases & More",
+  "分类只影响本机设置页面的显示，不会改变存档内容；返回后会保留上次分类。": "Categories only change how settings are shown on this device. They do not alter save data, and the last category is preserved when you return.",
+  "设置分类总览": "Settings Category Overview",
+  "主题快速设置": "Theme Quick Settings",
+  "亮色/深色、字体、语言和默认画布显示": "Light or dark theme, text size, language, and default canvas display",
+  "刷新频率、极限模式与独立画布回退开关": "Refresh rate, extreme mode, and independent canvas fallbacks",
+  "线路、缺料跳转、寻线和输入行为": "Belts, shortage navigation, line tracing, and input behavior",
+  "自动保存、资源模式和存档保护": "Autosave, resource mode, and save protection",
+  "性能采样、运行记录和诊断报告": "Performance sampling, run log, and diagnostics",
+  "教程入口、版本记录、难度与社区": "Tutorials, release history, difficulty, and community",
+  "返回设置分类": "Back to Settings Categories",
   "亮色主题与工厂交互更新": "Light Theme & Factory Interaction Update",
   "1.0.28 统一亮色/深色主题、设置分类、版本历史、科技树滚轮和物品悬浮交互，并改进批量建造、科研喷涂、统计与重整精炼。GameState v46、存档 envelope v2 与云 schema v7 不变。": "Version 1.0.28 unifies light and dark themes, settings categories, release history, technology-tree scrolling, and item hover interactions, while improving batch construction, research proliferator support, statistics, and reforming refine. GameState v46, save envelope v2, and cloud schema v7 are unchanged.",
   "统一语义主题": "Unified Semantic Themes",
@@ -1844,6 +1864,8 @@ function translateRequirementList(source: string): string {
 function translateDynamicSystemText(body: string): string {
   let match = body.match(/^长按采集(.+)$/);
   if (match) return `Hold to gather ${translateCatalogName(match[1])}`;
+  match = body.match(/^采样于模拟 ([\d.]+) 秒 · 后台计算 ([\d.]+) ms · 最多每秒刷新一次$/);
+  if (match) return `Sampled at ${match[1]} simulation seconds · Background compute ${match[2]} ms · Refreshed at most once per second`;
   match = body.match(/^(.+)容量预设$/);
   if (match) return `${translateCatalogName(match[1])} Capacity Presets`;
   match = body.match(/^(.+)自定义量子容量$/);

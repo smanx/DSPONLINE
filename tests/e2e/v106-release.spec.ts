@@ -74,9 +74,11 @@ test("desktop exposes 4096 belt lanes, batch unstacking and vein-safe blueprint 
   await expect(inspector).toContainText("电弧熔炉 ×51");
   await inspector.locator(".entity-stack-batch-remove").getByRole("button", { name: "-10", exact: true }).click();
   await expect(target).toHaveValue("41");
-  await inspector.getByRole("button", { name: "减至 1" }).click();
+  await target.fill("1");
+  await target.blur();
   await expect(target).toHaveValue("1");
-  await expect(inspector).toContainText("缓存、进度、线路和在途物资保持不变");
+  await expect(page.getByRole("status")).toContainText("电弧熔炉堆叠已调整为 ×1");
+  await expect(page.locator('.react-flow__edge[data-id="v106_belt"]')).toHaveCount(1);
 
   await page.getByLabel("打开蓝图库").click();
   const library = page.getByRole("dialog", { name: "蓝图与待建施工" });

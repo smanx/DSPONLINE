@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { selectSettingsCategory } from "./settings-helpers";
 
 const RELEASE_NOTE_ID = "2026-08-05-v1.0.28";
 
@@ -168,6 +169,7 @@ test("English light next-mobile shell keeps navigation and settings reachable", 
   expect(luminance(await hub.evaluate((element) => getComputedStyle(element).backgroundColor))).toBeGreaterThan(205);
   await hub.getByRole("button", { name: /Game Settings/ }).click();
   const operations = page.getByRole("dialog", { name: "Operations Center" });
+  await selectSettingsCategory(operations, "Appearance & Theme", "visual");
   await expect(operations.getByLabel("Language")).toBeVisible();
   expect(await visibleHanStrings(operations)).toEqual([]);
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);

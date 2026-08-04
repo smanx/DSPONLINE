@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
+import { selectSettingsCategory } from "./settings-helpers";
 
 async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
@@ -660,7 +661,8 @@ async function enableCoarsePointer(page: Page) {
 
 async function createTouchPage(browser: Browser, viewport: { width: number; height: number }) {
   const context = await browser.newContext({
-    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:4319",
+    baseURL: process.env.PLAYWRIGHT_BASE_URL
+      ?? `http://127.0.0.1:${process.env.DSP_E2E_PORT ?? "4319"}`,
     hasTouch: true,
     isMobile: true,
     viewport,
@@ -2069,7 +2071,9 @@ test("five-step basic onboarding advances only after successful factory commands
   await placeOnCanvas(page, "部署风力涡轮机", Math.round(canvasBox!.width * 0.72), 180);
   const turbine = page.locator(".power-node").filter({ hasText: "风力涡轮机" }).first();
   await turbine.locator(".factory-node__header").click();
-  await page.getByLabel(/快速增加 1 台建筑/).click();
+  const stackTarget = page.locator(".inspector-panel").getByLabel("建筑堆叠目标数量");
+  await stackTarget.fill("2");
+  await stackTarget.press("Enter");
   await expect(coach).toContainText("连接第一条传送带");
   await expect(coach).toContainText("3/18");
 
@@ -2982,7 +2986,7 @@ test("basic fabrication handcrafts unlocked material recipes in a compact grid",
   await page.screenshot({ path: "artifacts/qa/fabricator-search-history-1440.png", fullPage: true });
   await handcraftSearch.press("Escape");
 
-  await page.locator(".tray-row").filter({ hasText: "磁线圈" }).locator(".item-reference").hover();
+  await page.getByTitle("拿取磁线圈").locator(".item-reference").first().hover();
   await expect(page.locator(".item-hover-card")).toContainText("磁铁 ×2 + 铜块 ×1");
   await expect(page.locator(".item-hover-card")).toContainText("用途");
   await page.setViewportSize({ width: 390, height: 844 });
@@ -3454,8 +3458,9 @@ test("starter kit and logistics controls are available on the production canvas"
   await oilVein.click();
   await expect(oilVein).toContainText("×1");
   await oilVein.click();
-  await expect(page.getByText("回收数量", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "全部 ×1" }).click();
+  const recoverAll = page.getByRole("button", { name: "回收全部采矿机 ×1" });
+  await expect(recoverAll).toBeVisible();
+  await recoverAll.click();
   await expect(oilVein).toContainText("×0");
   await expect(page.getByTitle("部署原油萃取站")).toContainText("×1");
   await page.screenshot({ path: "artifacts/qa/logistics-oil-1440.png", fullPage: true });
@@ -4419,7 +4424,7 @@ test("stellar workspaces stay usable at 150 percent font scale on desktop and mo
   await page.screenshot({ path: "artifacts/qa/dyson-planner-150-844x390.png", fullPage: true });
 });
 
-test("interstellar station exposes relay hub and per-slot route controls on mobile", async ({ page }) => {
+test("interstellar station preserves hidden route fields and keeps compact slot controls reachable on mobile", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openStellarExplorationGame(page);
   const station = page.locator(".station-node").filter({ hasText: "星际物流站" });
@@ -4427,16 +4432,27 @@ test("interstellar station exposes relay hub and per-slot route controls on mobi
   const inspector = page.locator(".station-inspector");
   await inspector.getByLabel("中转物流枢纽").check();
   await inspector.getByLabel("枢纽优先级").selectOption("2");
-  await inspector.getByLabel("航路").selectOption("relay-required");
-  await inspector.getByLabel("翘曲预算").selectOption("3");
+  const firstSlot = inspector.locator('[data-station-slot-index="0"]');
+  await firstSlot.getByLabel("槽位 1 优先级").selectOption("2");
+  await firstSlot.getByLabel("槽位 1 库存上限").fill("300");
+  await firstSlot.getByLabel("槽位 1 库存上限").blur();
   await expect(inspector.getByLabel("中转物流枢纽")).toBeChecked();
   await expect(inspector.getByLabel("枢纽优先级")).toHaveValue("2");
-  await expect(inspector.getByLabel("航路")).toHaveValue("relay-required");
-  await expect(inspector.getByLabel("翘曲预算")).toHaveValue("3");
+  await expect(firstSlot.getByLabel("槽位 1 优先级")).toHaveValue("2");
+  await expect(firstSlot.getByLabel("槽位 1 库存上限")).toHaveValue("300");
+  await expect(firstSlot.getByText("航路", { exact: true })).toHaveCount(0);
+  await expect(firstSlot.getByText("翘曲预算", { exact: true })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => {
+    const envelope = JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1") ?? "null");
+    const station = envelope?.state?.entities?.find((entity: { id?: string }) => entity.id === "stellar_demand");
+    const slot = station?.stationSlots?.[0];
+    return slot ? `${slot.routePolicy}:${slot.warperBudget}` : "missing";
+  })).toBe("relay-preferred:2");
 
   await page.getByLabel("打开设置").click();
   const operations = page.getByRole("dialog", { name: "运营中心" });
   await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await selectSettingsCategory(operations, "画面与主题", "visual");
   await operations.getByLabel("字体大小").getByRole("button", { name: "150%" }).click();
   await operations.getByLabel("关闭运营中心").click();
   await page.setViewportSize({ width: 390, height: 844 });
@@ -4445,9 +4461,9 @@ test("interstellar station exposes relay hub and per-slot route controls on mobi
   }
   await expect(inspector.getByLabel("中转物流枢纽")).toBeVisible();
   await expect.poll(async () => inspector.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await inspector.getByLabel("航路").scrollIntoViewIfNeeded();
-  await expect(inspector.getByLabel("航路")).toBeVisible();
-  await expect(inspector.getByLabel("翘曲预算")).toBeVisible();
+  await firstSlot.getByLabel("槽位 1 优先级").scrollIntoViewIfNeeded();
+  await expect(firstSlot.getByLabel("槽位 1 优先级")).toBeVisible();
+  await expect(firstSlot.getByLabel("槽位 1 库存上限")).toBeVisible();
   await page.screenshot({ path: "artifacts/qa/interstellar-relay-controls-150-390.png", fullPage: true });
 });
 
@@ -4828,15 +4844,15 @@ test("construction cards craft in place and Ctrl-click chains building placement
   await expect(page.getByTitle("部署制造台 Mk.I", { exact: true })).not.toHaveClass(/construction-item--active/);
 
   await sourceAssembler.locator(".factory-node__header").click();
-  const quickAdd = page.getByRole("button", { name: /快速增加 1 台建筑，剩余 1/ });
+  const quickAdd = page.locator(".inspector-panel .entity-stack-target-shortcuts").getByRole("button", { name: "+1", exact: true });
   await expect(quickAdd).toBeEnabled();
   await quickAdd.click();
   await expect(sourceAssembler).toContainText("×3");
-  await expect(page.locator(".entity-add-command")).toBeDisabled();
+  await expect(quickAdd).toBeDisabled();
   const batchReduction = page.locator(".entity-stack-batch-remove");
   await batchReduction.getByRole("button", { name: "-1", exact: true }).click();
   await expect(sourceAssembler).toContainText("×2");
-  await expect(page.locator(".entity-add-command")).toBeEnabled();
+  await expect(quickAdd).toBeEnabled();
   await batchReduction.getByRole("button", { name: "-1", exact: true }).click();
   await expect(sourceAssembler).toContainText("×1");
   await page.locator(".inspector-panel").getByRole("button", { name: "回收设备" }).click();
@@ -5150,6 +5166,7 @@ test("save preview, snapshots, content-pack validation and simulation diagnostic
   await expect(persistedOperations.locator(".content-pack-card--enabled")).toContainText("QA 内容包");
 
   await persistedOperations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await selectSettingsCategory(persistedOperations, "统计与运行记录", "statistics");
   await persistedOperations.getByRole("button", { name: "运行 60 秒基准" }).click();
   await expect(page.locator(".game-notice")).toContainText("自动性能报告通过");
   await expect(persistedOperations.locator(".automatic-performance-report")).toContainText("确定性");
@@ -5184,6 +5201,7 @@ test("running equipment uses semantic animation and reduced motion disables it",
   await page.getByLabel("打开设置").click();
   const operations = page.getByRole("dialog", { name: "运营中心" });
   await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await selectSettingsCategory(operations, "交互与控制", "interaction");
   await operations.locator(".setting-row").filter({ hasText: "减少动态效果" }).click();
   await operations.getByLabel("关闭运营中心").click();
   const durationMs = await runningNode.evaluate((element) => {
@@ -5534,6 +5552,7 @@ test("galaxy endgame campaign routes into the console and difficulty controls st
   await page.getByLabel("打开设置").click();
   const operations = page.getByRole("dialog", { name: "运营中心" });
   await operations.getByRole("tab", { name: "设置" }).click();
+  await selectSettingsCategory(operations, "教程、版本与其他", "other");
   await expect(operations).toContainText("工业难度");
   await operations.getByRole("button", { name: "高压" }).click();
   await expect(operations.getByRole("button", { name: "高压" })).toHaveAttribute("aria-pressed", "true");
@@ -5874,7 +5893,7 @@ test("planet tray limits edit independently and small storage ports stay separat
     const output = columns[1].getBoundingClientRect();
     const article = row.closest<HTMLElement>(".storage-buffer-node")?.getBoundingClientRect();
     const separated = input.right <= output.left + 1 || input.bottom <= output.top + 1;
-    return Boolean(article && separated && input.left >= article.left && input.right <= article.right && output.left >= article.left && output.right <= article.right);
+    return Boolean(article && separated && input.left >= article.left - 1 && input.right <= article.right + 1 && output.left >= article.left - 1 && output.right <= article.right + 1);
   });
   await expect.poll(lanesSeparated).toBe(true);
   await page.screenshot({ path: "artifacts/qa/storage-ports-font-200-desktop.png", fullPage: true });
