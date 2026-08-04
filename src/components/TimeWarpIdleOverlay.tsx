@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ITEMS } from "../game/content";
 import type { GameState, ItemId } from "../game/types";
 import type { SaveGameResult } from "../game/storage";
+import type { TimeWarpComputeGovernorState, TimeWarpComputeLimits, TimeWarpThrottleReason } from "../game/timeWarpComputeGovernor";
 import { formatPowerKw } from "../game/units";
 import "../styles/time-warp-idle.css";
 
@@ -14,17 +15,33 @@ function formatDuration(seconds: number): string {
   return hours > 0 ? `${hours}小时 ${minutes}分 ${rest}秒` : `${minutes}分 ${rest}秒`;
 }
 
+const THROTTLE_REASON_LABELS: Record<TimeWarpThrottleReason, string> = {
+  "warming-up": "正在测量设备性能",
+  "requested-limit": "已达到请求倍率",
+  "power-limit": "受供电上限限制",
+  "compute-limit": "受设备计算能力限制",
+  "worker-slow": "Worker 单次计算过慢",
+  backlog: "模拟积压触发降档",
+  "worker-unavailable": "Worker 不可用",
+};
+
 export function TimeWarpIdleOverlay({
   game,
   startedAt,
   saveFailure,
   workerActive,
+  computeLimits,
+  computeState,
+  pendingSimulationSeconds,
   onStop,
 }: {
   game: GameState;
   startedAt: number | null;
   saveFailure: SaveGameResult | null;
   workerActive: boolean;
+  computeLimits: TimeWarpComputeLimits;
+  computeState: TimeWarpComputeGovernorState;
+  pendingSimulationSeconds: number;
   onStop: () => Promise<void>;
 }) {
   const [now, setNow] = useState(() => Date.now());
@@ -56,15 +73,19 @@ export function TimeWarpIdleOverlay({
         </header>
         <p className="time-warp-idle-lead">生产、采集、物流、科研与戴森工程仍按实际倍率计算。停止前会完成当前安全计算并校验主存档。</p>
         <section className="time-warp-idle-metrics">
-          <div><Gauge size={17} /><span>实际倍率</span><strong>{game.timeWarp.effectiveMultiplier}x</strong></div>
+          <div><Gauge size={17} /><span>实际倍率</span><strong>{computeLimits.actualMultiplier}x</strong></div>
           <div><Clock3 size={17} /><span>本次挂机</span><strong>{formatDuration(elapsed)}</strong></div>
-          <div><Pause size={17} /><span>模拟积压</span><strong>{game.timeWarp.pendingSimulationSeconds.toFixed(1)} 秒</strong></div>
+          <div><Pause size={17} /><span>模拟积压</span><strong>{pendingSimulationSeconds.toFixed(1)} 秒</strong></div>
           <div><HardDrive size={17} /><span>保存状态</span><strong className={saveFailure ? "warning" : "ready"}>{saveFailure ? "需要导出" : "最近保存正常"}</strong></div>
         </section>
         <section className="time-warp-idle-status">
           <div><span>请求倍率</span><strong>{game.timeWarp.requestedMultiplier}x</strong></div>
+          <div><span>供电上限</span><strong>{computeLimits.powerLimitedMultiplier}x</strong></div>
+          <div><span>计算上限</span><strong>{computeLimits.computeLimitedMultiplier}x</strong></div>
           <div><span>获得功率</span><strong>{formatPowerKw(game.timeWarp.allocatedPowerKw)}</strong></div>
-          <div><span>状态回传</span><strong>{workerActive ? "Worker 分段运行" : "主线程回退"}</strong></div>
+          <div><span>Worker 最近耗时</span><strong>{computeState.sampleCount > 0 ? `${Math.round(computeState.recentWorkerDurationMs)} ms` : "测量中"}</strong></div>
+          <div><span>自动调速</span><strong>{THROTTLE_REASON_LABELS[computeLimits.reason]}</strong></div>
+          <div><span>状态回传</span><strong>{workerActive ? "Worker 分段运行" : "已停止安全计算"}</strong></div>
         </section>
         <section className="time-warp-idle-output" aria-label="关键产量">
           <header><span>关键累计产量</span><small>数字以真实快照为准</small></header>

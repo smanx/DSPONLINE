@@ -575,6 +575,7 @@ export const RECIPES: Record<RecipeId, RecipeDefinition> = {
   plasma_exciter: { id: "plasma_exciter", name: "电浆激发器", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "high_efficiency_plasma_control", inputs: [{ itemId: "magnetic_coil", amount: 4 }, { itemId: "prism", amount: 2 }], outputs: [{ itemId: "plasma_exciter", amount: 1 }] },
   plasma_refining: { id: "plasma_refining", name: "等离子精炼", buildingId: "oil_refinery", duration: 4, requiredTechId: "high_efficiency_plasma_control", inputs: [{ itemId: "crude_oil", amount: 2 }], outputs: [{ itemId: "refined_oil", amount: 2 }, { itemId: "hydrogen", amount: 1 }] },
   xray_cracking: { id: "xray_cracking", name: "X 射线裂解", buildingId: "oil_refinery", duration: 4, requiredTechId: "xray_cracking", inputs: [{ itemId: "refined_oil", amount: 2 }, { itemId: "hydrogen", amount: 1 }], outputs: [{ itemId: "energetic_graphite", amount: 1 }, { itemId: "hydrogen", amount: 3 }] },
+  reforming_refine: { id: "reforming_refine", name: "重整精炼", buildingId: "oil_refinery", duration: 4, requiredTechId: "reforming_refine", inputs: [{ itemId: "coal", amount: 1 }, { itemId: "hydrogen", amount: 1 }, { itemId: "refined_oil", amount: 2 }], outputs: [{ itemId: "refined_oil", amount: 3 }] },
   high_purity_silicon: { id: "high_purity_silicon", name: "高纯硅块", buildingId: "arc_smelter", duration: 2, requiredTechId: "high_strength_crystal", inputs: [{ itemId: "silicon_ore", amount: 2 }], outputs: [{ itemId: "high_purity_silicon", amount: 1 }] },
   silicon_ore_from_stone: { id: "silicon_ore_from_stone", name: "石矿提炼硅石", buildingId: "arc_smelter", duration: 10, requiredTechId: "high_strength_crystal", inputs: [{ itemId: "stone", amount: 10 }], outputs: [{ itemId: "silicon_ore", amount: 1 }] },
   titanium_ingot: { id: "titanium_ingot", name: "钛块", buildingId: "arc_smelter", duration: 2, requiredTechId: "high_strength_crystal", inputs: [{ itemId: "titanium_ore", amount: 2 }], outputs: [{ itemId: "titanium_ingot", amount: 1 }] },
@@ -891,6 +892,13 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     prerequisites: ["energy_matrix"],
     summary: "利用高能光子裂解精炼油，重新分配氢与碳材料产出。",
     unlocks: ["X 射线裂解配方", "氢与石墨替代路线"],
+  },
+  reforming_refine: {
+    id: "reforming_refine", name: "重整精炼", tier: 6,
+    costs: [{ itemId: "electromagnetic_matrix", amount: 15 }, { itemId: "energy_matrix", amount: 15 }],
+    prerequisites: ["xray_cracking", "basic_chemical_engineering"],
+    summary: "以煤和氢重整精炼油，建立可控的油路循环增产路线。",
+    unlocks: ["重整精炼配方", "精炼油循环增产"],
   },
   high_strength_crystal: {
     id: "high_strength_crystal", name: "高强度晶体", tier: 5,

@@ -98,17 +98,17 @@ describe("V1.04 belt bundles", () => {
 });
 
 describe("V1.04 construction-center target", () => {
-  it("keeps the existing technology progression and raises the final limit to 100,000", () => {
+  it("keeps the existing technology progression and raises the final limit to 100,000,000", () => {
     const state = createInitialState(10_107);
     expect(getConstructionAutomationStockLimit(state)).toBe(100);
     state.research.completedTechIds.push("construction_capacity_1");
     expect(getConstructionAutomationStockLimit(state)).toBe(500);
     state.research.completedTechIds.push("construction_capacity_2");
-    expect(getConstructionAutomationStockLimit(state)).toBe(100_000);
+    expect(getConstructionAutomationStockLimit(state)).toBe(100_000_000);
 
-    const configured = setConstructionAutomationTarget(state, "arc_smelter", 100_000);
-    expect(configured.constructionAutomation.targetStock.arc_smelter).toBe(100_000);
-    expect(setConstructionAutomationTarget(configured, "arc_smelter", 100_001)).toBe(configured);
+    const configured = setConstructionAutomationTarget(state, "arc_smelter", 100_000_000);
+    expect(configured.constructionAutomation.targetStock.arc_smelter).toBe(100_000_000);
+    expect(setConstructionAutomationTarget(configured, "arc_smelter", 100_000_001)).toBe(configured);
     expect(setConstructionAutomationTarget(configured, "arc_smelter", 12.5)).toBe(configured);
   });
 
@@ -116,7 +116,7 @@ describe("V1.04 construction-center target", () => {
     const state = createInitialState(10_108);
     state.research.completedTechIds.push("construction_capacity_1", "construction_capacity_2");
     state.construction.arc_smelter = 120_000;
-    const configured = setConstructionAutomationTarget(state, "arc_smelter", 100_000);
+    const configured = setConstructionAutomationTarget(state, "arc_smelter", 100_000_000);
     const lowered = setConstructionAutomationTarget(configured, "arc_smelter", 10_000);
     expect(lowered.construction.arc_smelter).toBe(120_000);
     expect(lowered.constructionAutomation.targetStock.arc_smelter).toBe(10_000);
@@ -124,7 +124,7 @@ describe("V1.04 construction-center target", () => {
     const reloaded = migrateGame(JSON.parse(JSON.stringify(configured)));
     expect(reloaded).not.toBeNull();
     expect(reloaded!.version).toBe(46);
-    expect(reloaded!.constructionAutomation.targetStock.arc_smelter).toBe(100_000);
+    expect(reloaded!.constructionAutomation.targetStock.arc_smelter).toBe(100_000_000);
     expect(reloaded!.construction.arc_smelter).toBe(120_000);
   });
 });

@@ -1,9 +1,9 @@
 /// <reference lib="webworker" />
 
-import { advanceSimulationSession, completeSimulationAdvanceSession, createSimulationAdvanceSession } from "./engine";
+import { completeSimulationAdvanceSession, createSimulationAdvanceSession } from "./engine";
 import { applyContentPackRuntimeSnapshot } from "./contentPacks";
-import type { OfflineSimulationWorkerRequest, OfflineSimulationWorkerResponse } from "./offlineSimulation";
-import { getNextOfflineCriticalEvent } from "./offlineCriticalEvents";
+import { advanceOfflineSimulationChunk, type OfflineSimulationWorkerRequest, type OfflineSimulationWorkerResponse } from "./offlineSimulation";
+import { runOfflineApproximationAsync, type OfflineApproximationReport } from "./offlineApproximation";
 import { applyReturningRewardToState, inspectSave, serializeEnvelope } from "./storage";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
 import type { GameSettings, GameState } from "./types";
@@ -50,7 +50,7 @@ function uploadSummary(state: GameState, payload: string, savedAt: number) {
   };
 }
 
-self.onmessage = (event: MessageEvent<OfflineSimulationWorkerRequest>) => {
+self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => {
   const request = event.data;
   if (request.type === "cancel") {
     if (activeId === request.id) cancelled = true;
@@ -76,8 +76,7 @@ self.onmessage = (event: MessageEvent<OfflineSimulationWorkerRequest>) => {
         const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
         if (session.remainingSeconds > 0) {
           do {
-            const event = getNextOfflineCriticalEvent(session.state, session.remainingSeconds, 256);
-            advanceSimulationSession(session, event?.seconds ?? 256);
+            advanceOfflineSimulationChunk(session, { maximumWindowSeconds: 256 });
             if (activeId !== request.id || cancelled) {
               post({ type: "cancelled", id: request.id });
               return;
@@ -114,6 +113,31 @@ self.onmessage = (event: MessageEvent<OfflineSimulationWorkerRequest>) => {
       runChunk();
       return;
     }
+    let approximation: OfflineApproximationReport | undefined;
+    if (request.approximate === true) {
+      // Do not create the exact session until the experiment declines. The
+      // approximation owns its isolated calibration copies and otherwise this
+      // would clone the entire save twice before any useful work starts.
+      const experiment = await runOfflineApproximationAsync(request.state, request.seconds, {
+        shouldCancel: () => activeId !== request.id || cancelled,
+        onProgress: (completedSeconds, totalSeconds) => {
+          if (activeId !== request.id || cancelled) return;
+          post({
+            type: "progress",
+            id: request.id,
+            completedSeconds,
+            totalSeconds,
+            progress: totalSeconds > 0 ? completedSeconds / totalSeconds : 1,
+          });
+        },
+      });
+      approximation = experiment.report;
+      if (experiment.status === "approximate") {
+        post({ type: "complete", id: request.id, state: experiment.state, totalSeconds: request.seconds, approximation });
+        activeId = null;
+        return;
+      }
+    }
     const session = createSimulationAdvanceSession(request.state, request.seconds);
     const runChunk = () => {
       if (activeId !== request.id || cancelled) {
@@ -122,11 +146,9 @@ self.onmessage = (event: MessageEvent<OfflineSimulationWorkerRequest>) => {
       }
       const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
       do {
-        const event = getNextOfflineCriticalEvent(session.state, session.remainingSeconds, 256);
-        // The event only bounds an exact session chunk. It never skips the
-        // engine's deterministic settlement steps, so there is no alternate
-        // offline result to reconcile.
-        advanceSimulationSession(session, event?.seconds ?? 256);
+        // The helper only changes scheduling overhead. Every engine step and
+        // settlement boundary remains the same deterministic path.
+        advanceOfflineSimulationChunk(session, { maximumWindowSeconds: 256 });
         if (activeId !== request.id || cancelled) {
           post({ type: "cancelled", id: request.id });
           return;
@@ -145,7 +167,7 @@ self.onmessage = (event: MessageEvent<OfflineSimulationWorkerRequest>) => {
         setTimeout(runChunk, 0);
         return;
       }
-      post({ type: "complete", id: request.id, state: completeSimulationAdvanceSession(session), totalSeconds: session.totalSeconds });
+      post({ type: "complete", id: request.id, state: completeSimulationAdvanceSession(session), totalSeconds: session.totalSeconds, approximation });
       activeId = null;
     };
     runChunk();

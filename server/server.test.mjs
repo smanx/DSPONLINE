@@ -283,6 +283,78 @@ test("opens cloud saves and verified leaderboard submissions without a mail prov
   }
 });
 
+test("calculates a verified white-matrix per-minute peak from adjacent main saves", async () => {
+  const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-white-rate-"));
+  let isolatedServer;
+  try {
+    isolatedServer = await createCloudServer({ databaseFile: path.join(isolatedDirectory, "cloud.sqlite"), registrationLimit: 2, mailer: null, logger: { error() {} } });
+    await new Promise((resolve) => isolatedServer.listen(0, "127.0.0.1", resolve));
+    const isolatedBaseUrl = `http://127.0.0.1:${isolatedServer.address().port}`;
+    const isolatedRequest = async (route, options = {}) => {
+      const response = await fetch(`${isolatedBaseUrl}${route}`, {
+        ...options,
+        headers: { "content-type": "application/json", ...(options.headers || {}) },
+      });
+      return { response, body: await response.json() };
+    };
+    const registered = await isolatedRequest("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ username: "white_rate_pilot", password: "strong-pass-123", displayName: "白糖速率测试" }),
+    });
+    assert.equal(registered.response.status, 201);
+    const headers = { authorization: `Bearer ${registered.body.token}` };
+    const saveAt = (elapsedSeconds, whiteMatrix) => createSavePayload({
+      version: 24,
+      elapsedSeconds,
+      entities: [],
+      totalProduced: { universe_matrix: whiteMatrix },
+      metrics: { generationKw: 1_000, totalItemsPerMinute: 0, rayGenerationKw: 0 },
+      exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
+    }, elapsedSeconds * 10);
+    const put = async (payload, expectedRevision) => isolatedRequest("/api/cloud-save", {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ payload, expectedRevision }),
+    });
+    const rate = async () => {
+      const ranking = await isolatedRequest("/api/leaderboard?category=white-rate&seasonId=season_01");
+      return ranking.body.entries.find((entry) => entry.userId === registered.body.user.id)?.metrics.peakWhiteMatrixPerMinute ?? 0;
+    };
+
+    assert.equal((await put(saveAt(1_000, 1_000), 0)).response.status, 200);
+    assert.equal(await rate(), 0);
+    assert.equal((await put(saveAt(1_059, 1_590), 1)).response.status, 200);
+    assert.equal(await rate(), 0, "a window shorter than 60 simulation seconds is ignored");
+    assert.equal((await put(saveAt(1_120, 2_200), 2)).response.status, 200);
+    assert.equal(await rate(), 600);
+    assert.equal((await put(saveAt(1_180, 2_800), 3)).response.status, 200);
+    assert.equal(await rate(), 600);
+    assert.equal((await put(saveAt(1_240, 2_700), 4)).response.status, 200);
+    assert.equal(await rate(), 600, "negative production deltas do not reduce the peak");
+    assert.equal((await put(saveAt(1_300, 3_960), 5)).response.status, 200);
+    assert.equal(await rate(), 1_260);
+
+    const submissionKey = `season_01:${registered.body.user.id}`;
+    delete isolatedServer.store.data.submissions[submissionKey].metrics.peakWhiteMatrixPerMinute;
+    await isolatedServer.store.persist();
+    assert.equal(await rate(), 0, "old records without the new metric normalize to zero");
+    const refreshed = await isolatedRequest("/api/leaderboard", { method: "POST", headers, body: JSON.stringify({ seasonId: "season_01" }) });
+    assert.equal(refreshed.response.status, 200);
+    assert.equal(refreshed.body.submission.metrics.peakWhiteMatrixPerMinute, 1_260);
+
+    const restored = await isolatedRequest("/api/cloud-save/restore", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ revision: 2, expectedRevision: 6 }),
+    });
+    assert.equal(restored.response.status, 200);
+    assert.equal(await rate(), 1_260, "a rollback revision cannot erase the historical peak");
+  } finally {
+    if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
+    await rm(isolatedDirectory, { recursive: true, force: true });
+  }
+});
+
 test("backfills existing main cloud saves when the service starts", async () => {
   const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-leaderboard-backfill-"));
   const databaseFile = path.join(isolatedDirectory, "cloud.sqlite");

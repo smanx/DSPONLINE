@@ -1154,13 +1154,16 @@ function getSolarSailPowerFor(state: GameState, systemId: StarSystemId): number 
 }
 
 function proliferatorApplies(entity: FactoryEntity, recipe: RecipeDefinition | undefined): boolean {
-  return Boolean(entity.sprayCoaterInstalled && entity.proliferatorTier && entity.proliferatorMode &&
-    entity.proliferatorMode !== "normal" && recipe && recipe.inputs.length > 0 && recipe.outputs.length > 0);
+  if (!entity.sprayCoaterInstalled || !entity.proliferatorTier || !entity.proliferatorMode ||
+    entity.proliferatorMode === "normal" || !recipe) return false;
+  if (recipe.id === "matrix_research") return entity.proliferatorMode === "speed";
+  return recipe.inputs.length > 0 && recipe.outputs.length > 0;
 }
 
 export function isProliferatorEligible(entity: FactoryEntity): boolean {
   const recipe = getRecipe(entity.recipeId);
-  return entity.kind === "machine" && entity.buildingId !== "spray_coater" && Boolean(recipe?.inputs.length && recipe.outputs.length);
+  return entity.kind === "machine" && entity.buildingId !== "spray_coater" &&
+    Boolean(recipe && (recipe.id === "matrix_research" || (recipe.inputs.length > 0 && recipe.outputs.length > 0)));
 }
 
 export function getEntityProliferatorItemId(entity: FactoryEntity): ItemId | undefined {
@@ -1402,7 +1405,8 @@ export const MAX_BUILDING_STACK_COUNT = 100_000_000;
 export const MIN_PROLIFERATOR_BUFFER_LIMIT = 1;
 export const DEFAULT_PROLIFERATOR_BUFFER_LIMIT = 600;
 export const MAX_PROLIFERATOR_BUFFER_LIMIT = 100_000;
-export const MAX_CONSTRUCTION_AUTOMATION_TARGET = 100_000;
+/** Maximum target inventory for the construction center after capacity II. */
+export const MAX_CONSTRUCTION_AUTOMATION_TARGET = 100_000_000;
 
 export type BuildingStackAdditionCheck =
   | { ok: true; amount: number; total: number }
@@ -1694,6 +1698,14 @@ interface IndexedStationSlot {
   slot: StationSlot;
 }
 
+interface IndexedBeltRoute {
+  belt: BeltConnection;
+  source?: FactoryEntity;
+  target?: FactoryEntity;
+  capacity: number;
+  compatible: boolean;
+}
+
 interface StationDispatchSlotResult {
   hasMatchingPeer: boolean;
   routesCreated: number;
@@ -1703,9 +1715,20 @@ interface StationDispatchSlotResult {
 export interface SimulationLookupContext {
   entityById: Map<string, FactoryEntity>;
   entitiesByPlanet: Map<PlanetId, FactoryEntity[]>;
+  /** Planet/grid partitions avoid scanning every planet entity for each grid. */
+  entitiesByPlanetGrid: Map<string, FactoryEntity[]>;
+  /** Stable entity-kind views reused by every exact simulation step. */
+  machinesByPlanet: Map<PlanetId, FactoryEntity[]>;
+  stations: FactoryEntity[];
+  orbitalCollectors: FactoryEntity[];
+  logisticsBufferEntities: FactoryEntity[];
+  materialDeliveryHubs: FactoryEntity[];
+  galacticExporters: FactoryEntity[];
+  timeWarpDevices: FactoryEntity[];
   beltsByPlanet: Map<PlanetId, BeltConnection[]>;
   beltById: Map<string, BeltConnection>;
   sortedBelts: BeltConnection[];
+  beltRoutes: IndexedBeltRoute[];
   outgoingBeltsBySource: Map<string, BeltConnection[]>;
   incomingBeltsByTarget: Map<string, BeltConnection[]>;
   powerSourcesByPlanetGrid: Map<string, FactoryEntity[]>;
@@ -1779,11 +1802,20 @@ export function createSimulationLookupContext(state: GameState, profiler?: Simul
   const context: SimulationLookupContext = {
     entityById: new Map(state.entities.map((entity) => [entity.id, entity])),
     entitiesByPlanet: new Map(),
+    entitiesByPlanetGrid: new Map(),
+    machinesByPlanet: new Map(),
+    stations: [],
+    orbitalCollectors: [],
+    logisticsBufferEntities: [],
+    materialDeliveryHubs: [],
+    galacticExporters: [],
+    timeWarpDevices: [],
     beltsByPlanet: new Map(),
     beltById: new Map(state.belts.map((belt) => [belt.id, belt])),
     // Preserve persisted belt order. It is part of the legacy deterministic
     // tie-breaking for equal-priority sources; caching must not reorder it.
     sortedBelts: [...state.belts],
+    beltRoutes: [],
     outgoingBeltsBySource: new Map(),
     incomingBeltsByTarget: new Map(),
     powerSourcesByPlanetGrid: new Map(),
@@ -1809,6 +1841,23 @@ export function createSimulationLookupContext(state: GameState, profiler?: Simul
     const planetEntities = context.entitiesByPlanet.get(entity.planetId);
     if (planetEntities) planetEntities.push(entity);
     else context.entitiesByPlanet.set(entity.planetId, [entity]);
+    const gridKey = `${entity.planetId}|${getEntityPowerGridId(entity)}`;
+    const gridEntities = context.entitiesByPlanetGrid.get(gridKey);
+    if (gridEntities) gridEntities.push(entity);
+    else context.entitiesByPlanetGrid.set(gridKey, [entity]);
+    if (entity.kind === "machine") {
+      const machines = context.machinesByPlanet.get(entity.planetId);
+      if (machines) machines.push(entity);
+      else context.machinesByPlanet.set(entity.planetId, [entity]);
+    }
+    if (entity.kind === "station") context.stations.push(entity);
+    if (entity.buildingId === "orbital_collector") context.orbitalCollectors.push(entity);
+    if ((entity.kind === "storage" || entity.kind === "splitter" || entity.kind === "station") && entity.buildingId !== "material_delivery_hub" && !isElevatorStation(entity)) {
+      context.logisticsBufferEntities.push(entity);
+    }
+    if (entity.buildingId === "material_delivery_hub") context.materialDeliveryHubs.push(entity);
+    if (entity.buildingId === "galactic_material_exporter") context.galacticExporters.push(entity);
+    if (entity.buildingId === "time_warp_device") context.timeWarpDevices.push(entity);
     if (entity.kind === "power" || (entity.buildingId === "ray_receiver" && entity.recipeId === "ray_power")) {
       addTo(context.powerSourcesByPlanetGrid, `${entity.planetId}|${getEntityPowerGridId(entity)}`, entity);
     }
@@ -1820,6 +1869,14 @@ export function createSimulationLookupContext(state: GameState, profiler?: Simul
     addTo(context.outgoingBeltsBySource, belt.source, belt);
     addTo(context.incomingBeltsByTarget, belt.target, belt);
   }
+  context.beltRoutes = context.sortedBelts.map((belt) => {
+    const source = context.entityById.get(belt.source);
+    const target = context.entityById.get(belt.target);
+    const compatible = Boolean(source && target && source.planetId === target.planetId &&
+      belt.planetId === source.planetId && sourceProduces(source, belt.itemId) &&
+      targetConsumes(state, target, belt.itemId, belt.targetPortIndex));
+    return { belt, source, target, capacity: getBeltCapacity(belt), compatible };
+  });
   const add = (key: string, value: IndexedStationSlot) => {
     const existing = context.stationSlotsByKey.get(key);
     if (existing) existing.push(value);
@@ -3224,7 +3281,9 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
   const powerOutputByEntity = new Map<string, number>();
   const powerInputByEntity = new Map<string, number>();
   const factorByEntity = new Map<string, number>();
-  const entities = lookup ? (lookup.entitiesByPlanet.get(planetId) ?? []) : state.entities;
+  const entities = lookup
+    ? (lookup.entitiesByPlanetGrid.get(`${planetId}|${gridId}`) ?? [])
+    : state.entities;
 
   for (const entity of entities) {
     if (entity.planetId !== planetId || getEntityPowerGridId(entity) !== gridId) continue;
@@ -3667,7 +3726,7 @@ function gridStoredEnergy(state: GameState, planetId: PlanetId, gridId?: PowerGr
 }
 
 function transferLogisticsBuffers(state: GameState, lookup?: SimulationLookupContext): void {
-  for (const entity of state.entities) {
+  for (const entity of lookup?.logisticsBufferEntities ?? state.entities) {
     if ((entity.kind !== "storage" && entity.kind !== "splitter" && entity.kind !== "station") || !entity.buildingId) continue;
     if (entity.buildingId === "material_delivery_hub") continue;
     if (isElevatorStation(entity)) continue;
@@ -3688,8 +3747,8 @@ function transferLogisticsBuffers(state: GameState, lookup?: SimulationLookupCon
   }
 }
 
-function drainMaterialDeliveryHubs(state: GameState, seconds: number): void {
-  for (const entity of state.entities) {
+function drainMaterialDeliveryHubs(state: GameState, seconds: number, lookup?: SimulationLookupContext): void {
+  for (const entity of lookup?.materialDeliveryHubs ?? state.entities) {
     if (entity.buildingId !== "material_delivery_hub") continue;
     let delivered = 0;
     for (const itemId of getMaterialDeliveryItems(entity)) {
@@ -3744,23 +3803,55 @@ function transferBelts(
   skippedBeltIds?: ReadonlySet<string>,
 ): void {
   const groups = new Map<string, { source: FactoryEntity; itemId: ItemId; candidates: BeltTransferCandidate[] }>();
+  // Quantum capacity checks include a BigInt inventory-capacity calculation.
+  // Cache only that expensive branch; ordinary machine/storage targets stay
+  // on the existing direct path to avoid adding Map overhead to every belt.
+  const remainingQuantumCapacity = new Map<string, number>();
+  const targetCapacityKey = (target: FactoryEntity, itemId: ItemId, portIndex?: 0 | 1 | 2) =>
+    `${target.id}:${itemId}:${portIndex ?? -1}`;
+  const targetFree = (target: FactoryEntity, itemId: ItemId, portIndex?: 0 | 1 | 2): number => {
+    if (!isQuantumStation(target)) return Math.max(0, targetFreeCapacity(state, target, itemId, portIndex, lookup));
+    const key = targetCapacityKey(target, itemId, portIndex);
+    const cached = remainingQuantumCapacity.get(key);
+    if (cached !== undefined) return cached;
+    const free = Math.max(0, targetFreeCapacity(state, target, itemId, portIndex, lookup));
+    remainingQuantumCapacity.set(key, free);
+    return free;
+  };
+  const consumeTargetCapacity = (target: FactoryEntity, itemId: ItemId, portIndex: 0 | 1 | 2 | undefined, amount: number) => {
+    if (!isQuantumStation(target)) return;
+    const key = targetCapacityKey(target, itemId, portIndex);
+    remainingQuantumCapacity.set(key, Math.max(0, targetFree(target, itemId, portIndex) - Math.max(0, amount)));
+  };
   // These decay factors depend only on the simulation window. Compute them
   // once instead of once per belt; the persisted rounding behavior is intact.
   const flowDecay = Math.pow(0.8, Math.max(0, seconds));
   const congestionDecay = Math.pow(0.85, Math.max(0, seconds));
 
-  for (const belt of (lookup?.sortedBelts ?? state.belts)) {
+  const routes = lookup?.beltRoutes ?? state.belts.map((belt) => ({
+    belt,
+    source: state.entities.find((entity) => entity.id === belt.source),
+    target: state.entities.find((entity) => entity.id === belt.target),
+    capacity: getBeltCapacity(belt),
+    compatible: (() => {
+      const source = state.entities.find((entity) => entity.id === belt.source);
+      const target = state.entities.find((entity) => entity.id === belt.target);
+      return Boolean(source && target && source.planetId === target.planetId && belt.planetId === source.planetId &&
+        sourceProduces(source, belt.itemId) && targetConsumes(state, target, belt.itemId, belt.targetPortIndex));
+    })(),
+  } satisfies IndexedBeltRoute));
+  for (const route of routes) {
+    const belt = route.belt;
     if (skippedBeltIds?.has(belt.id)) continue;
     belt.lastFlow = round(belt.lastFlow * flowDecay, 3);
     belt.congestion = round((belt.congestion ?? 0) * congestionDecay, 3);
-    const source = lookup?.entityById.get(belt.source) ?? state.entities.find((entity) => entity.id === belt.source);
-    const target = lookup?.entityById.get(belt.target) ?? state.entities.find((entity) => entity.id === belt.target);
-    if (!source || !target || source.planetId !== target.planetId || belt.planetId !== source.planetId ||
-      !sourceProduces(source, belt.itemId) || !targetConsumes(state, target, belt.itemId, belt.targetPortIndex)) {
+    const source = route.source;
+    const target = route.target;
+    if (!route.compatible || !source || !target) {
       belt.progress = 0;
       continue;
     }
-    const capacity = getBeltCapacity(belt);
+    const capacity = route.capacity;
     if (seconds > 0) {
       const currentCredit = Math.max(0, belt.progress ?? 0);
       const creditLimit = normalizeBuildingBufferLimit(state.settings.beltBufferLimit);
@@ -3774,7 +3865,7 @@ function transferBelts(
       if (!deferSourceDepletionReset) belt.progress = 0;
       continue;
     }
-    if (targetFreeCapacity(state, target, belt.itemId, belt.targetPortIndex, lookup) < 1) {
+    if (targetFree(target, belt.itemId, belt.targetPortIndex) < 1) {
       belt.progress = 0;
       continue;
     }
@@ -3816,7 +3907,7 @@ function transferBelts(
     const reserved = stationReservedOutgoing(state, group.source.id, group.itemId, lookup);
     let available = Math.floor((group.source.outputs[group.itemId] ?? 0) - reserved + EPSILON);
     const usable = (candidate: BeltTransferCandidate) => candidate.allowance > 0 &&
-      targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex, lookup) > 0;
+      targetFree(candidate.target, group.itemId, candidate.belt.targetPortIndex) > 0;
 
     const distributeFair = (requestedCandidates: BeltTransferCandidate[]) => {
       const candidates = requestedCandidates.filter(usable).sort((left, right) => left.belt.id.localeCompare(right.belt.id));
@@ -3834,10 +3925,11 @@ function transferBelts(
             available,
             fairShare,
             candidate.allowance,
-            targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex, lookup),
+            targetFree(candidate.target, group.itemId, candidate.belt.targetPortIndex),
           );
           const moved = receive(candidate, group.itemId, requested);
           if (moved <= 0) continue;
+          consumeTargetCapacity(candidate.target, group.itemId, candidate.belt.targetPortIndex, moved);
           candidate.allowance -= moved;
           candidate.moved += moved;
           available -= moved;
@@ -3861,7 +3953,7 @@ function transferBelts(
     group.source.outputs[group.itemId] = available + reserved;
     for (const candidate of group.candidates) {
       candidate.belt.progress = (!deferSourceDepletionReset && available <= 0) ||
-        targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex, lookup) <= 0
+        targetFree(candidate.target, group.itemId, candidate.belt.targetPortIndex) <= 0
         ? 0
         : round(Math.max(0, candidate.belt.progress - candidate.moved));
       if (candidate.moved > 0) {
@@ -3874,7 +3966,7 @@ function transferBelts(
         candidate.belt.totalTransferred = Math.floor((candidate.belt.totalTransferred ?? 0) + candidate.moved);
       }
       const sourceWaiting = (group.source.outputs[group.itemId] ?? 0) > 0;
-      const targetBlocked = targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex, lookup) <= 0;
+      const targetBlocked = targetFree(candidate.target, group.itemId, candidate.belt.targetPortIndex) <= 0;
       const load = candidate.capacity > EPSILON ? candidate.belt.lastFlow / candidate.capacity : 0;
       candidate.belt.congestion = round(Math.min(1, Math.max(load, sourceWaiting && targetBlocked ? 1 : 0)), 3);
     }
@@ -3894,13 +3986,24 @@ function reserveBeltStepOutputCapacity(
   const allowanceByBelt = new Map<string, number>();
   const outputCredits = new Map<string, number>();
   const remainingTargetCapacity = new Map<string, number>();
-  const sortedBelts = lookup?.sortedBelts ?? [...state.belts].sort((left, right) => left.id.localeCompare(right.id));
-  for (const belt of sortedBelts) {
+  const routes = lookup?.beltRoutes ?? [...state.belts].sort((left, right) => left.id.localeCompare(right.id)).map((belt) => {
+    const source = state.entities.find((entity) => entity.id === belt.source);
+    const target = state.entities.find((entity) => entity.id === belt.target);
+    return {
+      belt,
+      source,
+      target,
+      capacity: getBeltCapacity(belt),
+      compatible: Boolean(source && target && source.planetId === target.planetId && belt.planetId === source.planetId &&
+        sourceProduces(source, belt.itemId) && targetConsumes(state, target, belt.itemId, belt.targetPortIndex)),
+    } satisfies IndexedBeltRoute;
+  });
+  for (const route of routes) {
+    const belt = route.belt;
     if (skippedBeltIds?.has(belt.id)) continue;
-    const source = lookup?.entityById.get(belt.source) ?? state.entities.find((entity) => entity.id === belt.source);
-    const target = lookup?.entityById.get(belt.target) ?? state.entities.find((entity) => entity.id === belt.target);
-    if (!source || !target || source.planetId !== target.planetId || belt.planetId !== source.planetId ||
-      !sourceProduces(source, belt.itemId) || !targetConsumes(state, target, belt.itemId, belt.targetPortIndex)) continue;
+    const source = route.source;
+    const target = route.target;
+    if (!route.compatible || !source || !target) continue;
     const allowance = Math.max(0, Math.floor(belt.progress + EPSILON));
     if (allowance < 1) continue;
     const targetKey = target.buildingId === "material_delivery_hub"
@@ -4035,7 +4138,7 @@ function runMachines(
   skippedEntityIds?: ReadonlySet<string>,
 ): void {
   const profile = getPlanetIndustrialProfile(state, planetId);
-  const entities = lookup ? (lookup.entitiesByPlanet.get(planetId) ?? []) : state.entities;
+  const entities = lookup ? (lookup.machinesByPlanet.get(planetId) ?? []) : state.entities;
   for (const entity of entities) {
     const recipe = getRecipe(entity.recipeId);
     if (entity.planetId !== planetId || entity.kind !== "machine" || entity.buildingId === "ray_receiver" || !entity.buildingId || !recipe) continue;
@@ -4100,6 +4203,7 @@ function runMachines(
       const techId = state.research.selectedTechId;
       const technology = getTechnology(techId);
       const infiniteId = state.endgame?.activeInfiniteResearchId;
+      let consumedResearchMatrices = 0;
       if (techId && technology && cycles > 0) {
         const progress = { ...(state.research.progressByTech[techId] ?? {}) };
         let remainingCycles = cycles;
@@ -4115,6 +4219,7 @@ function runMachines(
           entity.inputs[cost.itemId] = Math.floor((entity.inputs[cost.itemId] ?? 0) - consumed);
           progress[cost.itemId] = Math.floor((progress[cost.itemId] ?? 0) + consumed);
           remainingCycles -= consumed;
+          consumedResearchMatrices += consumed;
         }
         state.research.progressByTech[techId] = progress;
         const completed = technology.costs.every((cost) => (progress[cost.itemId] ?? 0) >= cost.amount);
@@ -4130,11 +4235,13 @@ function runMachines(
         const consumed = investInfiniteResearch(state, infiniteId, Math.min(cycles, available));
         if (consumed > 0) {
           entity.inputs.universe_matrix = Math.floor((entity.inputs.universe_matrix ?? 0) - consumed);
+          consumedResearchMatrices = consumed;
           for (const researchEntity of state.entities) {
             if (researchEntity.recipeId === "matrix_research") researchEntity.progress = 0;
           }
         }
       }
+      consumeProliferatorPoints(entity, recipe, Math.min(sprayedCycles, consumedResearchMatrices));
     } else {
       for (const input of recipe.inputs) {
         entity.inputs[input.itemId] = Math.max(0, Math.floor((entity.inputs[input.itemId] ?? 0) - input.amount * cycles));
@@ -4221,16 +4328,16 @@ function runRayReceivers(
   }
 }
 
-function resetStationRuntime(state: GameState): void {
-  for (const station of state.entities.filter((entity) => entity.kind === "station")) {
+function resetStationRuntime(state: GameState, lookup?: SimulationLookupContext): void {
+  for (const station of lookup?.stations ?? state.entities.filter((entity) => entity.kind === "station")) {
     station.utilization = 0;
     station.productionRate = 0;
     station.stationPeerId = undefined;
   }
 }
 
-function runOrbitalCollectors(state: GameState, seconds: number, credits?: OutputCapacityCredits): void {
-  for (const collector of state.entities.filter((entity) => entity.buildingId === "orbital_collector")) {
+function runOrbitalCollectors(state: GameState, seconds: number, credits?: OutputCapacityCredits, lookup?: SimulationLookupContext): void {
+  for (const collector of lookup?.orbitalCollectors ?? state.entities.filter((entity) => entity.buildingId === "orbital_collector")) {
     const yields = getPlanetOrbitalYields(state, collector.planetId);
     const itemId = collector.storedItemId && (yields[collector.storedItemId] ?? 0) > 0
       ? collector.storedItemId
@@ -4296,7 +4403,7 @@ function rebuildDynamicRouteLookup(state: GameState, lookup: SimulationLookupCon
   lookup.inFlightCargo.clear();
   lookup.activeRoutesByStation.clear();
   lookup.activeRouteVehicleLoadByStation.clear();
-  for (const demand of state.entities) {
+  for (const demand of lookup.stations) {
     for (const route of demand.stationRoutes ?? []) addRouteToLookup(lookup, demand, route);
   }
   lookup.dynamicRouteLookupDirty = false;
@@ -4549,7 +4656,7 @@ function dispatchStationScope(
 ): void {
   const runtimeLookup = lookup ?? createSimulationLookupContext(state, profiler);
   if (!lookup) rebuildDynamicRouteLookup(state, runtimeLookup);
-  const demands = state.entities.filter((entity) => {
+  const demands = (lookup?.stations ?? state.entities.filter((entity) => entity.kind === "station")).filter((entity) => {
     if (entity.kind !== "station" || entity.buildingId === "orbital_collector") return false;
     if (isElevatorStation(entity) || isTraditionalStationScopeDisabled(entity, scope)) return false;
     if (scope === "remote" && entity.buildingId !== "interstellar_logistics_station") return false;
@@ -4698,7 +4805,7 @@ function advanceStationRoutes(
   powerByPlanet: Map<PlanetId, PowerPlan>,
   lookup?: SimulationLookupContext,
 ): void {
-  for (const demand of state.entities.filter((entity) => entity.kind === "station" && (entity.stationRoutes?.length ?? 0) > 0)) {
+  for (const demand of (lookup?.stations ?? state.entities.filter((entity) => entity.kind === "station")).filter((entity) => (entity.stationRoutes?.length ?? 0) > 0)) {
     const remaining: StationRoute[] = [];
     let completedCargo = 0;
     for (const route of demand.stationRoutes ?? []) {
@@ -4757,7 +4864,7 @@ function advanceStationRoutes(
 }
 
 function updateStationCongestion(state: GameState, lookup?: SimulationLookupContext, profiler?: SimulationProfiler): void {
-  for (const station of state.entities.filter((entity) => entity.kind === "station" && entity.buildingId !== "orbital_collector")) {
+  for (const station of (lookup?.stations ?? state.entities.filter((entity) => entity.kind === "station")).filter((entity) => entity.buildingId !== "orbital_collector")) {
     if (isElevatorStation(station)) continue;
     const candidateScopes: StationLogisticsScope[] = station.buildingId === "interstellar_logistics_station"
       ? ["local", "remote"]
@@ -4852,8 +4959,9 @@ export function refillStationWarpers(state: GameState): void {
   }
 }
 
-function prepareTimeWarpStep(state: GameState): void {
-  const controller = state.entities.find((entity) => entity.id === state.timeWarp.controllerEntityId && entity.buildingId === "time_warp_device");
+function prepareTimeWarpStep(state: GameState, lookup?: SimulationLookupContext): void {
+  const controller = lookup?.entityById.get(state.timeWarp.controllerEntityId ?? "") ??
+    state.entities.find((entity) => entity.id === state.timeWarp.controllerEntityId && entity.buildingId === "time_warp_device");
   if (!controller) {
     state.timeWarp.controllerEntityId = null;
     state.timeWarp.enabled = false;
@@ -4861,7 +4969,7 @@ function prepareTimeWarpStep(state: GameState): void {
   state.timeWarp.effectiveMultiplier = state.settings.simulationSpeed;
   state.timeWarp.requiredPowerKw = 0;
   state.timeWarp.allocatedPowerKw = 0;
-  for (const entity of state.entities) {
+  for (const entity of lookup?.timeWarpDevices ?? state.entities) {
     if (entity.buildingId !== "time_warp_device") continue;
     entity.powerInputKw = 0;
     entity.powerFactor = 0;
@@ -5188,7 +5296,7 @@ export function runPlanetSimulationPhase(
       entity.planetId === planetId ? sum + entity.productionRate : sum, 0), 2),
   };
   if (profiler) profiler.powerMs += profileNow() - subsystemStartedAt;
-  const localEntities = state.entities.filter((entity) => entity.planetId === planetId);
+  const localEntities = phaseLookup.entitiesByPlanet.get(planetId) ?? [];
   const totalProducedDelta: Partial<Record<ItemId, number>> = {};
   for (const [itemId, amount] of Object.entries(state.totalProduced)) {
     const delta = Math.floor(amount ?? 0) - Math.floor(baselineProduced[itemId as ItemId] ?? 0);
@@ -5220,7 +5328,7 @@ export function prepareSimulationStep(
   const quantumBoundarySecond = firstHubBoundary <= lastHubBoundary
     ? firstHubBoundary * SYSTEM_HUB_SETTLEMENT_SECONDS
     : null;
-  prepareTimeWarpStep(state);
+  prepareTimeWarpStep(state, lookup);
   if (lookup) ensureDynamicRouteLookup(state, lookup);
   advanceExplorationMissions(state, seconds);
   let subsystemStartedAt = profiler ? profileNow() : 0;
@@ -5230,7 +5338,7 @@ export function prepareSimulationStep(
   absorbDysonSails(state, seconds);
   decayDysonSwarm(state, seconds);
   if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
-  resetStationRuntime(state);
+  resetStationRuntime(state, lookup);
   subsystemStartedAt = profiler ? profileNow() : 0;
   transferLogisticsBuffers(state, lookup);
   if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
@@ -5240,9 +5348,9 @@ export function prepareSimulationStep(
   contractExperiment?.afterInputBelts?.(state);
   if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
   const beltStepReservation = reserveBeltStepOutputCapacity(state, lookup, contractExperiment?.skippedBeltIds);
-  runOrbitalCollectors(state, seconds, beltStepReservation.outputCredits);
+  runOrbitalCollectors(state, seconds, beltStepReservation.outputCredits, lookup);
   subsystemStartedAt = profiler ? profileNow() : 0;
-  drainMaterialDeliveryHubs(state, seconds);
+  drainMaterialDeliveryHubs(state, seconds, lookup);
   if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
   subsystemStartedAt = profiler ? profileNow() : 0;
   const reception = calculateDysonReception(state);
@@ -5286,7 +5394,7 @@ export function completeSimulationStep(
   transferBelts(state, 0, false, prepared.beltStepReservation.allowanceByBelt, seconds, lookup, contractExperiment?.skippedBeltIds);
   contractExperiment?.afterOutputBelts?.(state);
   if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
-  drainMaterialDeliveryHubs(state, seconds);
+  drainMaterialDeliveryHubs(state, seconds, lookup);
   subsystemStartedAt = profiler ? profileNow() : 0;
   refillStationWarpers(state);
   let phaseStartedAt = profileNow();
@@ -5308,7 +5416,7 @@ export function completeSimulationStep(
   if (profiler) profiler.congestionMs += profileNow() - phaseStartedAt;
   if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
   subsystemStartedAt = profiler ? profileNow() : 0;
-  runGalacticMaterialExporters(state, powerByPlanet);
+  runGalacticMaterialExporters(state, powerByPlanet, lookup);
   runGalacticExports(state, seconds);
   if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
   subsystemStartedAt = profiler ? profileNow() : 0;
@@ -5505,7 +5613,7 @@ function simulateStep(
     ? firstHubBoundary * SYSTEM_HUB_SETTLEMENT_SECONDS
     : null;
   let quantumBoundaryFlow: QuantumBoundaryFlow | null = null;
-  prepareTimeWarpStep(state);
+  prepareTimeWarpStep(state, lookup);
   if (lookup) ensureDynamicRouteLookup(state, lookup);
   advanceExplorationMissions(state, seconds);
   let subsystemStartedAt = profiler ? profileNow() : 0;
@@ -5515,7 +5623,7 @@ function simulateStep(
   absorbDysonSails(state, seconds);
   decayDysonSwarm(state, seconds);
   if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
-  resetStationRuntime(state);
+  resetStationRuntime(state, lookup);
   subsystemStartedAt = profiler ? profileNow() : 0;
   transferLogisticsBuffers(state, lookup);
   if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
@@ -5525,9 +5633,9 @@ function simulateStep(
   contractExperiment?.afterInputBelts?.(state);
   if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
   const beltStepReservation = reserveBeltStepOutputCapacity(state, lookup, contractExperiment?.skippedBeltIds);
-  runOrbitalCollectors(state, seconds, beltStepReservation.outputCredits);
+  runOrbitalCollectors(state, seconds, beltStepReservation.outputCredits, lookup);
   subsystemStartedAt = profiler ? profileNow() : 0;
-  drainMaterialDeliveryHubs(state, seconds);
+  drainMaterialDeliveryHubs(state, seconds, lookup);
   if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
   subsystemStartedAt = profiler ? profileNow() : 0;
   const reception = calculateDysonReception(state);
@@ -5564,7 +5672,7 @@ function simulateStep(
   transferBelts(state, 0, false, beltStepReservation.allowanceByBelt, seconds, lookup, contractExperiment?.skippedBeltIds);
   contractExperiment?.afterOutputBelts?.(state);
   if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
-  drainMaterialDeliveryHubs(state, seconds);
+  drainMaterialDeliveryHubs(state, seconds, lookup);
   subsystemStartedAt = profiler ? profileNow() : 0;
   refillStationWarpers(state);
   let phaseStartedAt = profileNow();
@@ -5586,7 +5694,7 @@ function simulateStep(
   if (profiler) profiler.congestionMs += profileNow() - phaseStartedAt;
   if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
   subsystemStartedAt = profiler ? profileNow() : 0;
-  runGalacticMaterialExporters(state, powerByPlanet);
+  runGalacticMaterialExporters(state, powerByPlanet, lookup);
   runGalacticExports(state, seconds);
   if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
   subsystemStartedAt = profiler ? profileNow() : 0;
@@ -5763,6 +5871,62 @@ export interface SimulationAdvanceSession {
   contractExperiment?: SimulationContractExperiment;
 }
 
+/**
+ * A large save can contain thousands of inert storage/placeholder records.
+ * When no subsystem has a scheduled boundary or mutable work, running the
+ * complete production pipeline is both unnecessary and disproportionately
+ * expensive. This predicate is intentionally strict; one active machine,
+ * belt, station, mission, Dyson task, or time-warp controller keeps the exact
+ * engine path.
+ */
+function canFastForwardQuiescentState(state: GameState): boolean {
+  if (state.paused || state.timeWarp.enabled || state.timeWarp.controllerEntityId) return false;
+  if (state.timeWarp.pendingSimulationSeconds > EPSILON || state.timeWarp.pendingWallSeconds > EPSILON) return false;
+  if (state.entities.length === 0 && state.belts.length === 0) {
+    // The remaining checks below cover global clocks and activities.
+  } else if (state.belts.length > 0 || state.entities.some((entity) =>
+    entity.kind === "machine" || entity.kind === "vein" || entity.kind === "power" ||
+    entity.kind === "station" || (entity.stationRoutes?.length ?? 0) > 0 ||
+    entity.buildingId === "galactic_material_exporter" || entity.buildingId === "construction_center" ||
+    entity.buildingId === "space_station_construction_launcher" || entity.buildingId === "material_delivery_hub" ||
+    entity.buildingId === "micro_black_hole_connector" || entity.buildingId === "time_warp_device" ||
+    Object.values(entity.inputs).some((amount) => Math.floor(amount ?? 0) > 0))) return false;
+  if (state.handcraftQueue.length > 0 || state.constructionQueue.length > 0 ||
+    Object.keys(state.constructionAutomation.jobs).length > 0 ||
+    (state.constructionAutomation.enabled && Object.keys(state.constructionAutomation.targetStock).length > 0)) return false;
+  if (state.exploration.missions.length > 0 || state.endgame.constructionActivity.activityId ||
+    state.endgame.activeInfiniteResearchId || Object.values(state.endgame.exportProjects).some((project) => project.enabled)) return false;
+  if (state.dysonSwarm.totalLaunched > 0 || state.dysonSphere.totalRocketsLaunched > 0 ||
+    (state.dysonEngineering.launchEnabled && state.entities.some((entity) =>
+      entity.recipeId === "solar_sail_launch" || entity.recipeId === "carrier_rocket_launch")) ||
+    Object.values(state.systemSpaceStations).some((station) => station?.status === "building")) return false;
+  if (state.quantumLogisticsNetwork?.enabled && (
+    Object.keys(state.quantumLogisticsNetwork.inventory).length > 0)) return false;
+  return true;
+}
+
+function fastForwardQuiescentState(session: SimulationAdvanceSession): void {
+  const state = session.state;
+  const elapsedBefore = state.elapsedSeconds;
+  const elapsedAfter = round(elapsedBefore + session.remainingSeconds);
+  state.elapsedSeconds = elapsedAfter;
+  if (state.endgame.exportWindowStartedAt <= 0) state.endgame.exportWindowStartedAt = elapsedBefore;
+  const exportWindowSeconds = state.elapsedSeconds - state.endgame.exportWindowStartedAt;
+  if (exportWindowSeconds >= 10 - EPSILON) {
+    state.endgame.exportedLastMinute = round(state.endgame.exportWindowAmount * 60 / exportWindowSeconds, 2);
+    state.endgame.exportWindowAmount = 0;
+    // The exact engine resets this rolling window after every simulation
+    // step. Preserve the final boundary instead of treating the whole bulk
+    // interval as one observation, which would change the saved diagnostics.
+    state.endgame.exportWindowStartedAt = Math.max(
+      0,
+      state.elapsedSeconds - Math.min(session.stepSize, session.remainingSeconds),
+    );
+  }
+  state.metrics = { ...state.planetMetrics[state.activePlanetId] };
+  session.remainingSeconds = 0;
+}
+
 export interface SimulationAdvanceOptions {
   indexedLogistics?: boolean;
   batchPowerStorage?: boolean;
@@ -5861,6 +6025,10 @@ export function advanceSimulationSession(session: SimulationAdvanceSession, maxi
     session.advancedWallSeconds += session.remainingWallSeconds;
     if (activity.activityId) activity.activityClockMs = Math.max(0, Math.floor(session.initialActivityClockMs + session.advancedWallSeconds * 1_000));
     session.remainingWallSeconds = 0;
+    return 1;
+  }
+  if (steps < stepLimit && session.remainingSeconds > EPSILON && canFastForwardQuiescentState(session.state)) {
+    fastForwardQuiescentState(session);
     return 1;
   }
   while (session.remainingSeconds > EPSILON && steps < stepLimit) {
@@ -7968,7 +8136,8 @@ export function getSprayCoaterInstallCheck(state: GameState, entityId: string): 
   const recipe = getRecipe(entity.recipeId);
   if (!recipe) return { ready: false, code: "recipe-missing", reason: "请先为设备选择生产配方" };
   if (!entity.buildingId || entity.kind !== "machine" || entity.buildingId === "spray_coater" ||
-    !buildingSupportsRecipe(entity.buildingId, recipe) || recipe.inputs.length === 0 || recipe.outputs.length === 0) {
+    !buildingSupportsRecipe(entity.buildingId, recipe) ||
+    (recipe.id !== "matrix_research" && (recipe.inputs.length === 0 || recipe.outputs.length === 0))) {
     return { ready: false, code: "recipe-incompatible", reason: "当前设备或配方不兼容喷涂机" };
   }
   return { ready: true, code: "ready", reason: "可以安装喷涂机" };
@@ -8056,6 +8225,7 @@ export function setProliferatorConfiguration(
   const current = state.entities.find((entity) => entity.id === entityId);
   const definition = getProliferator(tier);
   if (!current?.sprayCoaterInstalled || current.interactionLocked || !isProliferatorEligible(current) ||
+    (current.recipeId === "matrix_research" && mode === "extra") ||
     !isTechnologyCompleted(state, definition.requiredTechId)) return state;
   if (current.proliferatorTier === tier && current.proliferatorMode === mode) return state;
   const next = copyState(state);
@@ -8583,6 +8753,60 @@ export function setConstructionAutomationTarget(state: GameState, constructionId
     return next;
   }
   return { ...state, constructionAutomation: { ...state.constructionAutomation, targetStock } };
+}
+
+export interface ConstructionAutomationBatchTargetResult {
+  state: GameState;
+  ok: boolean;
+  changedCount: number;
+  affectedCount: number;
+  skippedLockedCount: number;
+  error?: "invalid-target" | "technology-limit" | "no-unlocked-buildings";
+  label?: string;
+}
+
+/**
+ * Set one target for every unlocked, manufacturable building in one state
+ * update. Existing jobs and WIP are deliberately left untouched: changing a
+ * target is a policy change, not a cancellation or refund operation.
+ */
+export function setConstructionAutomationTargetsForBuildings(state: GameState, target: number): ConstructionAutomationBatchTargetResult {
+  if (!Number.isSafeInteger(target) || target < 1) {
+    return { state, ok: false, changedCount: 0, affectedCount: 0, skippedLockedCount: 0, error: "invalid-target", label: "目标数量必须是正安全整数" };
+  }
+  const stockLimit = getConstructionAutomationStockLimit(state);
+  if (target > stockLimit) {
+    return {
+      state,
+      ok: false,
+      changedCount: 0,
+      affectedCount: 0,
+      skippedLockedCount: 0,
+      error: "technology-limit",
+      label: `当前科技允许的目标上限为 ${stockLimit.toLocaleString("zh-CN")}，完成建筑仓储扩容 II 后可设置到 ${MAX_CONSTRUCTION_AUTOMATION_TARGET.toLocaleString("zh-CN")}`,
+    };
+  }
+  const definitions = getConstructionAutomationTargets();
+  const unlocked = definitions.filter((definition) => definition.kind === "building" && (!definition.requiredTechId || isTechnologyCompleted(state, definition.requiredTechId)));
+  const skippedLockedCount = definitions.filter((definition) => definition.kind === "building" && definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)).length;
+  if (unlocked.length === 0) {
+    return { state, ok: false, changedCount: 0, affectedCount: 0, skippedLockedCount, error: "no-unlocked-buildings", label: "当前没有已解锁的可制造建筑" };
+  }
+  const targetStock = { ...state.constructionAutomation.targetStock };
+  let changedCount = 0;
+  for (const definition of unlocked) {
+    if ((targetStock[definition.id] ?? 0) === target) continue;
+    targetStock[definition.id] = target;
+    changedCount += 1;
+  }
+  if (changedCount === 0) return { state, ok: true, changedCount: 0, affectedCount: unlocked.length, skippedLockedCount };
+  return {
+    state: { ...state, constructionAutomation: { ...state.constructionAutomation, targetStock } },
+    ok: true,
+    changedCount,
+    affectedCount: unlocked.length,
+    skippedLockedCount,
+  };
 }
 
 interface ConstructionAutomationBlocker {
@@ -9573,6 +9797,151 @@ export function setBeltLaneCount(state: GameState, beltId: string, targetLanes: 
   return next;
 }
 
+export interface BatchSelectionIncreaseResult {
+  state: GameState;
+  ok: boolean;
+  changedBuildingCount: number;
+  changedBeltCount: number;
+  buildingAtLimitCount: number;
+  beltAtLimitCount: number;
+  skippedLockedCount: number;
+  requiredConstruction: Partial<Record<ConstructionId, number>>;
+  missingConstruction: Partial<Record<ConstructionId, number>>;
+  error?: "invalid-count" | "empty-selection" | "missing-construction";
+  label?: string;
+}
+
+/**
+ * Atomically add the same number of units/lanes to a mixed selection. The
+ * preview data is returned even on failure so the UI can explain shortages
+ * and limit hits without mutating the authoritative state.
+ */
+export function batchIncreaseSelection(
+  state: GameState,
+  entityIds: readonly string[],
+  beltIds: readonly string[],
+  amount: number,
+): BatchSelectionIncreaseResult {
+  const emptyResult = (error?: BatchSelectionIncreaseResult["error"], label?: string): BatchSelectionIncreaseResult => ({
+    state,
+    ok: false,
+    changedBuildingCount: 0,
+    changedBeltCount: 0,
+    buildingAtLimitCount: 0,
+    beltAtLimitCount: 0,
+    skippedLockedCount: 0,
+    requiredConstruction: {},
+    missingConstruction: {},
+    error,
+    label,
+  });
+  if (!Number.isSafeInteger(amount) || amount < 1 || amount > 1_000_000) {
+    return emptyResult("invalid-count", "本次增加量必须是 1～1,000,000 的正整数");
+  }
+  const selectedEntityIdSet = new Set(entityIds);
+  const selectedBeltIdSet = new Set(beltIds);
+  if (selectedEntityIdSet.size === 0 && selectedBeltIdSet.size === 0) return emptyResult("empty-selection", "请先选择建筑或传送带");
+
+  const requiredConstruction: Partial<Record<ConstructionId, number>> = {};
+  const entityUpdates: Array<{ id: string; count: number; constructionId: ConstructionId }> = [];
+  let buildingAtLimitCount = 0;
+  let skippedLockedCount = 0;
+  for (const entity of state.entities) {
+    if (!selectedEntityIdSet.has(entity.id)) continue;
+    if (entity.interactionLocked) { skippedLockedCount += 1; continue; }
+    const buildingId = entity.kind === "vein"
+      ? entity.resourceId ? getExtractorBuildingId(entity.resourceId) : undefined
+      : entity.buildingId;
+    if (!buildingId) { skippedLockedCount += 1; continue; }
+    const definition = getBuilding(buildingId);
+    if (definition.kind === "miner" && entity.kind !== "vein") { skippedLockedCount += 1; continue; }
+    const current = entity.kind === "vein" ? entity.minerCount : entity.machineCount;
+    const check = getBuildingStackAdditionCheck(current, amount, definition.name);
+    if (!check.ok || (definition.stackLimit !== undefined && check.total > definition.stackLimit)) {
+      buildingAtLimitCount += 1;
+      continue;
+    }
+    entityUpdates.push({ id: entity.id, count: check.total, constructionId: buildingId });
+    requiredConstruction[buildingId] = Math.floor((requiredConstruction[buildingId] ?? 0) + amount);
+  }
+
+  const beltUpdates: Array<{ id: string; lanes: number; constructionId: ConstructionId }> = [];
+  let beltAtLimitCount = 0;
+  for (const belt of state.belts) {
+    if (!selectedBeltIdSet.has(belt.id)) continue;
+    const targetLanes = belt.lanes + amount;
+    if (!Number.isSafeInteger(targetLanes) || targetLanes > MAX_BELT_LANES) {
+      beltAtLimitCount += 1;
+      continue;
+    }
+    const constructionId = getBeltConstructionId(belt.tier);
+    beltUpdates.push({ id: belt.id, lanes: targetLanes, constructionId });
+    requiredConstruction[constructionId] = Math.floor((requiredConstruction[constructionId] ?? 0) + amount);
+  }
+
+  const missingConstruction: Partial<Record<ConstructionId, number>> = {};
+  for (const [constructionId, required] of Object.entries(requiredConstruction) as Array<[ConstructionId, number]>) {
+    const available = Math.max(0, Math.floor(state.construction[constructionId] ?? 0));
+    const missing = Math.max(0, required - available);
+    if (missing > 0) missingConstruction[constructionId] = missing;
+  }
+  const hasChanges = entityUpdates.length > 0 || beltUpdates.length > 0;
+  if (Object.keys(missingConstruction).length > 0) {
+    return {
+      state,
+      ok: false,
+      changedBuildingCount: 0,
+      changedBeltCount: 0,
+      buildingAtLimitCount,
+      beltAtLimitCount,
+      skippedLockedCount,
+      requiredConstruction,
+      missingConstruction,
+      error: "missing-construction",
+      label: "施工托盘不足，批量增加未执行任何项目",
+    };
+  }
+  if (!hasChanges) {
+    return {
+      state,
+      ok: true,
+      changedBuildingCount: 0,
+      changedBeltCount: 0,
+      buildingAtLimitCount,
+      beltAtLimitCount,
+      skippedLockedCount,
+      requiredConstruction,
+      missingConstruction,
+      label: "所选项目均已达到上限或不可堆叠",
+    };
+  }
+  const next = copyState(state);
+  for (const update of entityUpdates) {
+    const entity = next.entities.find((candidate) => candidate.id === update.id);
+    if (!entity) continue;
+    if (entity.kind === "vein") entity.minerCount = update.count;
+    else entity.machineCount = update.count;
+  }
+  for (const update of beltUpdates) {
+    const belt = next.belts.find((candidate) => candidate.id === update.id);
+    if (belt) belt.lanes = update.lanes;
+  }
+  for (const [constructionId, required] of Object.entries(requiredConstruction) as Array<[ConstructionId, number]>) {
+    next.construction[constructionId] = Math.max(0, Math.floor((next.construction[constructionId] ?? 0) - required));
+  }
+  return {
+    state: next,
+    ok: true,
+    changedBuildingCount: entityUpdates.length,
+    changedBeltCount: beltUpdates.length,
+    buildingAtLimitCount,
+    beltAtLimitCount,
+    skippedLockedCount,
+    requiredConstruction,
+    missingConstruction,
+  };
+}
+
 export function setBeltPriority(state: GameState, beltId: string, priority: 0 | 1 | 2): GameState {
   if (!state.belts.some((belt) => belt.id === beltId)) return state;
   return {
@@ -10399,14 +10768,69 @@ export function getEntityRemovalPreview(state: GameState, entityIds: readonly st
   };
 }
 
+export type EntityStackTargetCheck =
+  | { ok: true; current: number; target: number; delta: number; constructionId: BuildingId }
+  | { ok: false; current: number; target: number; code: "missing" | "locked" | "invalid-count" | "stack-limit" | "unique" | "inventory" | "unsafe-refund"; label: string };
+
+/** Shared validation for local inspectors and cross-planet logistics editing. */
+export function getEntityStackTargetCheck(state: GameState, entityId: string, targetCount: number): EntityStackTargetCheck {
+  const entity = state.entities.find((candidate) => candidate.id === entityId);
+  if (!entity || (!entity.buildingId && !(entity.kind === "vein" && entity.resourceId))) {
+    return { ok: false, current: 0, target: targetCount, code: "missing", label: "目标建筑不存在或不支持堆叠调整" };
+  }
+  const current = entity.kind === "vein" ? entity.minerCount : entity.machineCount;
+  if (entity.interactionLocked) {
+    return { ok: false, current, target: targetCount, code: "locked", label: "建筑已锁定，请先解锁后再调整堆叠" };
+  }
+  if (!Number.isSafeInteger(targetCount) || targetCount < 1) {
+    return { ok: false, current, target: targetCount, code: "invalid-count", label: "堆叠目标必须是 1 至 100,000,000 的正整数" };
+  }
+  const constructionId = entity.kind === "vein"
+    ? getExtractorBuildingId(entity.resourceId!)
+    : entity.buildingId!;
+  if (targetCount === current) return { ok: true, current, target: targetCount, delta: 0, constructionId };
+  if ((entity.buildingId === "micro_black_hole_connector" || entity.buildingId === "time_warp_device") && targetCount !== 1) {
+    return { ok: false, current, target: targetCount, code: "unique", label: `${getBuilding(constructionId).name}是唯一巨构，堆叠目标固定为 1` };
+  }
+  if (targetCount > current) {
+    const addition = targetCount - current;
+    const additionCheck = getBuildingStackAdditionCheck(current, addition, getBuilding(constructionId).name);
+    if (!additionCheck.ok) {
+      return { ok: false, current, target: targetCount, code: additionCheck.code === "stack-limit" ? "stack-limit" : "invalid-count", label: additionCheck.label };
+    }
+    const definition = getBuilding(constructionId);
+    if (definition.stackLimit && targetCount > definition.stackLimit) {
+      return { ok: false, current, target: targetCount, code: "stack-limit", label: `${definition.name}最多堆叠 ${definition.stackLimit.toLocaleString("zh-CN")}` };
+    }
+    const available = Math.floor(state.construction[constructionId] ?? 0);
+    if (available < addition) {
+      return {
+        ok: false,
+        current,
+        target: targetCount,
+        code: "inventory",
+        label: `施工托盘中的${getBuilding(constructionId).name}不足：需要 ${addition.toLocaleString("zh-CN")}，现有 ${available.toLocaleString("zh-CN")}`,
+      };
+    }
+    return { ok: true, current, target: targetCount, delta: addition, constructionId };
+  }
+  const refund = current - targetCount;
+  if (safeInventoryAdd(state.construction[constructionId], refund) === null) {
+    return { ok: false, current, target: targetCount, code: "unsafe-refund", label: "返还后的施工托盘数量会超出安全整数范围，请先导出备份并联系存档救援" };
+  }
+  return { ok: true, current, target: targetCount, delta: -refund, constructionId };
+}
+
+export function setEntityStackTarget(state: GameState, entityId: string, targetCount: number): GameState {
+  const check = getEntityStackTargetCheck(state, entityId, targetCount);
+  if (!check.ok || check.delta === 0) return state;
+  if (check.delta > 0) return addUnitToEntityGroup(state, entityId, check.delta);
+  return removeEntity(state, entityId, -check.delta);
+}
+
 /** Set a remote station stack without switching the active planet. */
 export function setRemoteBuildingStackTarget(state: GameState, entityId: string, targetCount: number): GameState {
-  const entity = state.entities.find((candidate) => candidate.id === entityId && candidate.buildingId);
-  if (!entity || entity.interactionLocked || !Number.isSafeInteger(targetCount) || targetCount < 1 ||
-    (targetCount > MAX_BUILDING_STACK_COUNT && targetCount >= entity.machineCount)) return state;
-  if (targetCount === entity.machineCount) return state;
-  if (targetCount > entity.machineCount) return addBuildingToGroup(state, entityId, entity.buildingId!, targetCount - entity.machineCount);
-  return removeEntity(state, entityId, entity.machineCount - targetCount);
+  return setEntityStackTarget(state, entityId, targetCount);
 }
 
 export function canUpgradeEntity(state: GameState, entityId: string): boolean {
@@ -10676,6 +11100,9 @@ export function canCraftConstruction(state: GameState, buildingId: ConstructionI
 }
 
 const NON_HANDCRAFTABLE_RECIPE_IDS = new Set<RecipeId>([
+  "plasma_refining",
+  "xray_cracking",
+  "reforming_refine",
   "ray_power",
   "critical_photon",
   "matrix_research",
@@ -11204,9 +11631,9 @@ function galacticActivityStepIsActive(state: GameState): boolean {
   return Boolean(activity.activityId && activity.activityClockMs >= activity.startsAtMs && activity.activityClockMs < activity.endsAtMs);
 }
 
-function runGalacticMaterialExporters(state: GameState, powerByPlanet: Map<PlanetId, PowerPlan>): void {
+function runGalacticMaterialExporters(state: GameState, powerByPlanet: Map<PlanetId, PowerPlan>, lookup?: SimulationLookupContext): void {
   const activityEligible = galacticActivityStepIsActive(state);
-  for (const entity of state.entities.filter((candidate) => candidate.buildingId === "galactic_material_exporter")) {
+  for (const entity of lookup?.galacticExporters ?? state.entities.filter((candidate) => candidate.buildingId === "galactic_material_exporter")) {
     const plan = powerByPlanet.get(entity.planetId);
     const powerFactor = plan?.factorByEntity.get(entity.id) ?? plan?.factor ?? 0;
     entity.powerFactor = plan?.factorByEntity.has(entity.id) ? round(powerFactor, 4) : undefined;
@@ -11707,7 +12134,10 @@ export function getAcceptedInputs(entity: FactoryEntity, state?: GameState): Ite
   }
   if ((entity.kind === "storage" || entity.kind === "splitter" || entity.kind === "station") && entity.storedItemId) return [entity.storedItemId];
   if (entity.buildingId === "thermal_power_plant" && entity.fuelItemId) return [entity.fuelItemId];
-  if (entity.recipeId === "matrix_research" && state) return [...MATRIX_ITEM_IDS];
+  if (entity.recipeId === "matrix_research" && state) {
+    const proliferatorItemId = entity.sprayCoaterInstalled ? getEntityProliferatorItemId(entity) : undefined;
+    return proliferatorItemId ? [...MATRIX_ITEM_IDS, proliferatorItemId] : [...MATRIX_ITEM_IDS];
+  }
   const recipeInputs = getRecipe(entity.recipeId)?.inputs.map((input) => input.itemId) ?? [];
   const proliferatorItemId = entity.sprayCoaterInstalled ? getEntityProliferatorItemId(entity) : undefined;
   return proliferatorItemId ? [...recipeInputs, proliferatorItemId] : recipeInputs;

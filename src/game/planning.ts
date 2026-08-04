@@ -41,9 +41,15 @@ function unlockedRecipe(state: GameState, recipe: RecipeDefinition): boolean {
   return !recipe.requiredTechId || state.research.completedTechIds.includes(recipe.requiredTechId);
 }
 
+function netRecipeOutput(recipe: RecipeDefinition, itemId: ItemId): number {
+  const produced = recipe.outputs.reduce((sum, output) => sum + (output.itemId === itemId ? output.amount : 0), 0);
+  const consumed = recipe.inputs.reduce((sum, input) => sum + (input.itemId === itemId ? input.amount : 0), 0);
+  return produced - consumed;
+}
+
 export function getProductionRecipeOptions(state: GameState, itemId: ItemId): RecipeDefinition[] {
   return Object.values(RECIPES).filter((recipe) => !EXCLUDED_PLAN_RECIPES.has(recipe.id) &&
-    recipe.outputs.some((output) => output.itemId === itemId && output.amount > 0) && unlockedRecipe(state, recipe));
+    netRecipeOutput(recipe, itemId) > 0 && unlockedRecipe(state, recipe));
 }
 
 function isDirectResource(state: GameState, itemId: ItemId): boolean {
@@ -73,7 +79,7 @@ interface AccumulatedRequirement {
 
 function selectedRecipe(state: GameState, plan: ProductionTargetPlan, itemId: ItemId): RecipeDefinition | undefined {
   const selected = getRecipe(plan.recipeSelections[itemId]);
-  if (selected && selected.outputs.some((output) => output.itemId === itemId) && unlockedRecipe(state, selected)) return selected;
+  if (selected && netRecipeOutput(selected, itemId) > 0 && unlockedRecipe(state, selected)) return selected;
   if (isDirectResource(state, itemId)) return undefined;
   return getProductionRecipeOptions(state, itemId)[0];
 }
@@ -94,10 +100,13 @@ export function calculateProductionPlan(state: GameState, plan: ProductionTarget
       source: current?.source === "recipe" || source === "recipe" ? "recipe" : "resource",
     });
     if (!recipe || cycle) return;
-    const outputAmount = recipe.outputs.find((output) => output.itemId === itemId)?.amount ?? 1;
+    const outputAmount = Math.max(0.0001, netRecipeOutput(recipe, itemId));
     const cyclesPerMinute = requiredPerMinute / outputAmount;
     const nextPath = new Set(path).add(itemId);
-    for (const input of recipe.inputs) walk(input.itemId, cyclesPerMinute * input.amount, depth + 1, nextPath);
+    for (const input of recipe.inputs) {
+      if (input.itemId === itemId) continue;
+      walk(input.itemId, cyclesPerMinute * input.amount, depth + 1, nextPath);
+    }
   };
   walk(plan.itemId, Math.max(0.01, plan.targetPerMinute), 0, new Set());
 
@@ -111,7 +120,7 @@ export function calculateProductionPlan(state: GameState, plan: ProductionTarget
     const recipe = entry.recipe;
     const buildingId = recipe?.buildingId ?? getExtractorBuildingId(entry.itemId);
     const building = getBuilding(buildingId);
-    const outputAmount = recipe?.outputs.find((output) => output.itemId === entry.itemId)?.amount ?? 1;
+    const outputAmount = recipe ? Math.max(0.0001, netRecipeOutput(recipe, entry.itemId)) : 1;
     const perMachinePerMinute = recipe
       ? building.speed * 60 / recipe.duration * outputAmount
       : building.speed * (ITEMS[entry.itemId].kind === "solid" ? getMiningSpeedMultiplier(state) : 1) * 60;
@@ -192,7 +201,7 @@ export function updateProductionPlan(
 export function setProductionPlanRecipe(state: GameState, planId: string, itemId: ItemId, recipeId: RecipeId): GameState {
   const plan = state.productionPlans.find((candidate) => candidate.id === planId);
   const recipe = getRecipe(recipeId);
-  if (!plan || !recipe || !recipe.outputs.some((output) => output.itemId === itemId) || !unlockedRecipe(state, recipe)) return state;
+  if (!plan || !recipe || netRecipeOutput(recipe, itemId) <= 0 || !unlockedRecipe(state, recipe)) return state;
   return {
     ...state,
     productionPlans: state.productionPlans.map((candidate) => candidate.id === planId ? {

@@ -41,6 +41,7 @@ import {
   formatLeaderboardValue,
   getLeaderboardMetrics,
   getLeaderboardSnapshot,
+  getLeaderboardValue,
   type LeaderboardEntry,
   type LeaderboardCategoryId,
 } from "../game/leaderboard";
@@ -69,6 +70,7 @@ interface GalaxyWorkspaceProps {
 const CATEGORY_ICONS: Record<LeaderboardCategoryId, ReactNode> = {
   power: <Zap size={15} />,
   upload: <Database size={15} />,
+  "white-rate": <Gauge size={15} />,
   dyson: <Orbit size={15} />,
   throughput: <Factory size={15} />,
   galaxy: <Trophy size={15} />,
@@ -548,7 +550,7 @@ export function GalaxyWorkspace({
 
           <section className="galaxy-summary-band">
             <div><span>我的排名</span><strong>{cloudSession.status !== "authenticated" ? "未登录" : displayedLocalEntry?.rank ? `#${displayedLocalEntry.rank}` : !leaderboardVisible ? "已退出" : "未上榜"}</strong><small>{displayedLocalEntry?.submitted ? "主云存档已计入" : cloudSession.status === "authenticated" ? "上传主云存档后自动加入" : "访客可查看真实排名"}</small></div>
-            <div><span>{snapshot.category.label}</span><strong>{formatLeaderboardValue(displayedLocalEntry?.value ?? metrics[category === "power" ? "energyGeneratedMj" : category === "upload" ? "uploadedWhiteMatrix" : category === "dyson" ? "peakDysonPowerKw" : category === "throughput" ? "peakThroughputPerMinute" : "galaxyScore"], category)}<small>{snapshot.category.unit}</small></strong><small>{snapshot.category.description}</small></div>
+            <div><span>{snapshot.category.label}</span><strong>{formatLeaderboardValue(displayedLocalEntry?.value ?? getLeaderboardValue(metrics, category), category)}<small>{snapshot.category.unit}</small></strong><small>{snapshot.category.description}</small></div>
             <div><span>银河规模</span><strong>{metrics.exploredSystems}<small>星系</small></strong><small>{metrics.colonizedPlanets} 颗殖民行星</small></div>
             <div><span>节点状态</span><strong className={leaderboardStatus === "ready" ? "positive" : "preview"}>{leaderboardStatus === "ready" ? "真实排行" : leaderboardStatus === "loading" ? "读取中" : "本地回退"}</strong><small>{displayedLocalEntry ? formatTimestamp(displayedLocalEntry.submittedAt) : "--"}</small></div>
           </section>
@@ -575,6 +577,7 @@ export function GalaxyWorkspace({
               <dl>
                 <div><dt>累计发电</dt><dd>{formatMetric(metrics.energyGeneratedMj, 1)} <small>MJ</small></dd></div>
                 <div><dt>白矩阵上传</dt><dd>{formatMetric(metrics.uploadedWhiteMatrix)} <small>份</small></dd></div>
+                <div><dt>白糖产量峰值</dt><dd>{formatMetric(displayedLocalEntry?.metrics.peakWhiteMatrixPerMinute ?? 0, 1)} <small>/min</small></dd></div>
                 <div><dt>戴森峰值</dt><dd><PowerValue valueKw={metrics.peakDysonPowerKw} /></dd></div>
                 <div><dt>吞吐峰值</dt><dd>{formatMetric(metrics.peakThroughputPerMinute, 1)} <small>/min</small></dd></div>
               </dl>
@@ -589,6 +592,7 @@ export function GalaxyWorkspace({
               </button>
               {cloudSession.status === "authenticated" ? <label className="galaxy-leaderboard-visibility"><span><strong>{leaderboardVisible ? "参与公开排行榜" : "已退出排行榜"}</strong><small>{leaderboardVisible ? "主云存档同步成功后自动更新排名" : "后续同步不会重新加入，可随时恢复"}</small></span><input type="checkbox" checked={leaderboardVisible} disabled={leaderboardVisibilityBusy} onChange={(event) => void updateLeaderboardVisibility(event.target.checked)} aria-label="参与公开排行榜" /></label> : null}
               {leaderboardError ? <p className="galaxy-leaderboard-error" role="alert"><CloudOff size={13} /><span>{leaderboardError}</span></p> : null}
+              {category === "white-rate" && (displayedLocalEntry?.metrics.peakWhiteMatrixPerMinute ?? 0) <= 0 ? <p><Gauge size={13} /><span>至少需要两次相隔 60 个模拟秒的有效主云同步，服务端才会形成白糖产量区间。</span></p> : null}
               <p><RadioTower size={13} /><span>{cloudSession.status === "authenticated" ? cloudSession.cloudSave ? "主云存档上传和十分钟自动同步成功后，服务端会自动更新排名。" : "请先上传当前主云存档；手动槽位不会加入排行榜。" : "访客可查看真实玩家排名；登录并上传主云存档后自动参与。"}</span></p>
             </aside>
           </div>

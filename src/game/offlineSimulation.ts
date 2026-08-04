@@ -1,9 +1,15 @@
 import type { GameSettings, GameState } from "./types";
 import { OFFLINE_PERFORMANCE_SESSION_KEY } from "./performanceMonitor";
 import { createContentPackRuntimeSnapshot, loadContentPackRegistry, type ContentPackRuntimeSnapshot } from "./contentPacks";
+import { advanceSimulationSession, type SimulationAdvanceSession } from "./engine";
+import { getNextOfflineCriticalEvent } from "./offlineCriticalEvents";
+import {
+  runOfflineApproximation,
+  type OfflineApproximationReport,
+} from "./offlineApproximation";
 
 export type OfflineSimulationWorkerRequest =
-  | { type: "start"; id: number; state: GameState; seconds: number; registry: ContentPackRuntimeSnapshot }
+  | { type: "start"; id: number; state: GameState; seconds: number; registry: ContentPackRuntimeSnapshot; approximate?: boolean }
   | {
     type: "prepare-upload";
     id: number;
@@ -18,7 +24,7 @@ export type OfflineSimulationWorkerRequest =
 
 export type OfflineSimulationWorkerResponse =
   | { type: "progress"; id: number; completedSeconds: number; totalSeconds: number; progress: number }
-  | { type: "complete"; id: number; state: GameState; totalSeconds: number }
+  | { type: "complete"; id: number; state: GameState; totalSeconds: number; approximation?: OfflineApproximationReport }
   | { type: "upload-complete"; id: number; payload: string; summary: CloudUploadSummary; offlineSeconds: number; returningReward: Array<{ itemId: string; amount: number }> }
   | { type: "cancelled"; id: number }
   | { type: "error"; id: number; message: string };
@@ -27,6 +33,37 @@ export interface OfflineSimulationProgress {
   completedSeconds: number;
   totalSeconds: number;
   progress: number;
+}
+
+export interface OfflineSimulationRunResult {
+  state: GameState;
+  approximation?: OfflineApproximationReport;
+}
+
+export interface OfflineSimulationChunkOptions {
+  /** Maximum amount of deterministic session work requested per worker turn. */
+  maximumWindowSeconds?: number;
+  /** Keep critical-event scheduling for sessions whose engine step is larger than a hub boundary. */
+  scanCriticalEvents?: boolean;
+}
+
+/**
+ * Advance one bounded exact chunk without inventing an alternate simulation
+ * formula. Sessions with a five-second hub step already settle every
+ * boundary inside the engine; scanning every machine for a cycle boundary in
+ * that case only adds O(entityCount) work and can never make the engine settle
+ * an extra phase. Larger-step sessions retain the conservative event hint.
+ */
+export function advanceOfflineSimulationChunk(
+  session: SimulationAdvanceSession,
+  options: OfflineSimulationChunkOptions = {},
+): number {
+  const maximumWindowSeconds = Math.max(1, Math.floor(options.maximumWindowSeconds ?? 256));
+  const scanCriticalEvents = options.scanCriticalEvents ?? session.stepSize > 5;
+  const event = scanCriticalEvents
+    ? getNextOfflineCriticalEvent(session.state, session.remainingSeconds, maximumWindowSeconds)
+    : null;
+  return advanceSimulationSession(session, event?.seconds ?? maximumWindowSeconds);
 }
 
 export interface CloudUploadSummary {
@@ -46,13 +83,21 @@ export interface CloudUploadSummary {
 export function runOfflineSimulationInWorker(
   state: GameState,
   seconds: number,
-  options: { signal?: AbortSignal; onProgress?: (progress: OfflineSimulationProgress) => void; registry?: ContentPackRuntimeSnapshot } = {},
+  options: { signal?: AbortSignal; onProgress?: (progress: OfflineSimulationProgress) => void; registry?: ContentPackRuntimeSnapshot; approximate?: boolean; onApproximationReport?: (report: OfflineApproximationReport) => void } = {},
 ): Promise<GameState> {
+  return runOfflineSimulationInWorkerDetailed(state, seconds, options).then((result) => result.state);
+}
+
+export function runOfflineSimulationInWorkerDetailed(
+  state: GameState,
+  seconds: number,
+  options: { signal?: AbortSignal; onProgress?: (progress: OfflineSimulationProgress) => void; registry?: ContentPackRuntimeSnapshot; approximate?: boolean; onApproximationReport?: (report: OfflineApproximationReport) => void } = {},
+): Promise<OfflineSimulationRunResult> {
   if (typeof Worker === "undefined") return Promise.reject(new Error("当前浏览器不支持离线计算 Worker"));
   const worker = new Worker(new URL("./offlineSimulation.worker.ts", import.meta.url), { type: "module", name: "offline-simulation" });
   const id = Date.now() + Math.floor(Math.random() * 1_000_000);
   const startedAt = performance.now();
-  return new Promise<GameState>((resolve, reject) => {
+  return new Promise<OfflineSimulationRunResult>((resolve, reject) => {
     let settled = false;
     const finish = (callback: () => void) => {
       if (settled) return;
@@ -79,7 +124,8 @@ export function runOfflineSimulationInWorker(
       }
       if (message.type === "complete") {
         try { window.sessionStorage.setItem(OFFLINE_PERFORMANCE_SESSION_KEY, String(Math.max(0, performance.now() - startedAt))); } catch { /* optional diagnostics */ }
-        finish(() => resolve(message.state));
+        if (message.approximation) options.onApproximationReport?.(message.approximation);
+        finish(() => resolve({ state: message.state, approximation: message.approximation }));
         return;
       }
       if (message.type === "cancelled") {
@@ -90,7 +136,7 @@ export function runOfflineSimulationInWorker(
     };
     worker.onerror = () => finish(() => reject(new Error("离线计算 Worker 运行失败，未保存任何半成品")));
     const registry = options.registry ?? createContentPackRuntimeSnapshot(loadContentPackRegistry());
-    worker.postMessage({ type: "start", id, state, seconds, registry } satisfies OfflineSimulationWorkerRequest);
+    worker.postMessage({ type: "start", id, state, seconds, registry, approximate: options.approximate === true } satisfies OfflineSimulationWorkerRequest);
   });
 }
 

@@ -1,8 +1,10 @@
 import { AlertTriangle, ArrowDown, ArrowUp, BarChart3, Bookmark, BookmarkPlus, Box, Calculator, CheckSquare, CircleCheckBig, ClipboardCopy, Factory, Focus, Gauge, MapPin, Orbit, Pause, Play, Plus, Rocket, Route, Search, Send, Settings2, Sparkles, Trash2, TrendingUp, X, Zap } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ITEMS, PLANET_LIST, getBuilding, getItem, getPlanet, getRecipe, getStarSystem } from "../game/content";
 import { calculateProductionPlan, getProductionRecipeOptions } from "../game/planning";
-import { calculateFactoryStatistics, type FactoryStatistics, type ItemStatistics } from "../game/statistics";
+import { calculateFactoryStatisticsAsync, type FactoryStatistics, type ItemStatistics } from "../game/statistics";
+import type { StatisticsWorkerRequest, StatisticsWorkerResponse } from "../game/statistics.worker";
+import type { ContentPackRuntimeSnapshot } from "../game/contentPacks";
 import { getGalacticIndustrySnapshot, getPowerGridMetrics, getResourceReserveSnapshot, POWER_GRID_IDS, POWER_GRID_LABELS } from "../game/engine";
 import { GALACTIC_EXPORT_DEFINITIONS, INFINITE_RESEARCH_DEFINITIONS, getGalacticExportTarget, getInfiniteResearchCompletion, getInfiniteResearchLevel } from "../game/endgame";
 import { getInfiniteResearchCostString, isInfiniteResearchComplete } from "../game/infiniteResearch";
@@ -73,6 +75,7 @@ interface StatisticsWorkspaceProps {
   focusTab?: StatisticsTab | null;
   mobile?: boolean;
   galacticActivityStatus: GalacticActivityPublicStatus | null;
+  contentPackRuntimeSnapshot: ContentPackRuntimeSnapshot;
 }
 
 function ItemMark({ itemId }: { itemId: ItemId }) {
@@ -250,7 +253,7 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
   );
 }
 
-export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExporterPausedChange, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, onFocusEntity, onFocusBeltNetwork, onBulkRecipeChange, onBulkStationSlotApply, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark, focusTab, mobile = false, galacticActivityStatus }: StatisticsWorkspaceProps) {
+export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExporterPausedChange, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, onFocusEntity, onFocusBeltNetwork, onBulkRecipeChange, onBulkStationSlotApply, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark, focusTab, mobile = false, galacticActivityStatus, contentPackRuntimeSnapshot }: StatisticsWorkspaceProps) {
   const { isEnglish } = useAppLocale();
   const [tab, setTab] = useState<StatisticsTab>("production");
   const [filter, setFilter] = useState<ItemFilter>("all");
@@ -263,10 +266,102 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
   const [planPlanetId, setPlanPlanetId] = useState<PlanetId | "all">("all");
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [expandedItemId, setExpandedItemId] = useState<ItemId | null>(null);
-  // The closed workspace stays mounted. Avoid repeating the full entity and
-  // operating-status scan for every authoritative Worker state publication.
-  const statistics = useMemo(() => open ? calculateFactoryStatistics(game, planetScope) : EMPTY_FACTORY_STATISTICS, [game, open, planetScope]);
-  const galactic = useMemo(() => getGalacticIndustrySnapshot(game), [game]);
+  const [statistics, setStatistics] = useState<FactoryStatistics>(EMPTY_FACTORY_STATISTICS);
+  const [statisticsLoading, setStatisticsLoading] = useState(false);
+  const [statisticsError, setStatisticsError] = useState<string | null>(null);
+  const [statisticsSample, setStatisticsSample] = useState<{ elapsedSeconds: number; durationMs: number } | null>(null);
+  const statisticsGameRef = useRef(game);
+  const statisticsRequestIdRef = useRef(0);
+  statisticsGameRef.current = game;
+  const statisticsRequired = open && (tab === "production" || tab === "power" || tab === "issues");
+  useEffect(() => {
+    if (!statisticsRequired) return;
+    let disposed = false;
+    let inFlight = false;
+    let worker: Worker | null = null;
+    let fallbackController: AbortController | null = null;
+    setStatistics(EMPTY_FACTORY_STATISTICS);
+    setStatisticsSample(null);
+    setStatisticsError(null);
+    setStatisticsLoading(true);
+
+    const finish = (result: FactoryStatistics, elapsedSeconds: number, durationMs: number) => {
+      if (disposed) return;
+      setStatistics(result);
+      setStatisticsSample({ elapsedSeconds, durationMs });
+      setStatisticsError(null);
+      setStatisticsLoading(false);
+      inFlight = false;
+    };
+    const fail = (error: unknown) => {
+      if (disposed || (error instanceof Error && error.name === "AbortError")) return;
+      setStatisticsError(error instanceof Error ? error.message : "生产统计计算失败");
+      setStatisticsLoading(false);
+      inFlight = false;
+    };
+    const calculate = () => {
+      if (disposed || inFlight) return;
+      inFlight = true;
+      const state = statisticsGameRef.current;
+      const requestId = statisticsRequestIdRef.current + 1;
+      statisticsRequestIdRef.current = requestId;
+      if (typeof Worker !== "undefined") {
+        if (!worker) {
+          worker = new Worker(new URL("../game/statistics.worker.ts", import.meta.url), { type: "module", name: "factory-statistics" });
+          worker.onmessage = (event: MessageEvent<StatisticsWorkerResponse>) => {
+            if (disposed || event.data.id !== statisticsRequestIdRef.current) return;
+            if (!event.data.statistics || event.data.error) {
+              fail(new Error(event.data.error ?? "统计 Worker 未返回有效结果"));
+              return;
+            }
+            finish(event.data.statistics, event.data.sampledAtSeconds, event.data.durationMs);
+          };
+          worker.onerror = () => {
+            worker?.terminate();
+            worker = null;
+            inFlight = false;
+            fallbackController = new AbortController();
+            const startedAt = performance.now();
+            void calculateFactoryStatisticsAsync(state, planetScope, { signal: fallbackController.signal })
+              .then((result) => finish(result, state.elapsedSeconds, performance.now() - startedAt))
+              .catch(fail);
+          };
+        }
+        const request: StatisticsWorkerRequest = {
+          id: requestId,
+          state,
+          planetScope,
+          registry: contentPackRuntimeSnapshot,
+        };
+        try {
+          worker.postMessage(request);
+        } catch (error) {
+          worker.terminate();
+          worker = null;
+          inFlight = false;
+          fail(error);
+        }
+        return;
+      }
+      fallbackController = new AbortController();
+      const startedAt = performance.now();
+      void calculateFactoryStatisticsAsync(state, planetScope, { signal: fallbackController.signal })
+        .then((result) => finish(result, state.elapsedSeconds, performance.now() - startedAt))
+        .catch(fail);
+    };
+
+    const initialTimer = window.setTimeout(calculate, 0);
+    const refreshTimer = window.setInterval(calculate, 1_000);
+    return () => {
+      disposed = true;
+      statisticsRequestIdRef.current += 1;
+      window.clearTimeout(initialTimer);
+      window.clearInterval(refreshTimer);
+      fallbackController?.abort();
+      worker?.terminate();
+    };
+  }, [contentPackRuntimeSnapshot.fingerprint, planetScope, statisticsRequired]);
+  const galactic = useMemo(() => open && tab === "galaxy" ? getGalacticIndustrySnapshot(game) : null, [game, open, tab]);
   const productionWindow = useMemo(() => {
     const fallbackProduction = Object.fromEntries(statistics.items.map((item) => [item.itemId, item.productionPerMinute])) as Partial<Record<ItemId, number>>;
     const fallbackConsumption = Object.fromEntries(statistics.items.map((item) => [item.itemId, item.consumptionPerMinute])) as Partial<Record<ItemId, number>>;
@@ -320,22 +415,22 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
     key,
     direction: current.key === key && current.direction === "desc" ? "asc" : "desc",
   }));
-  const selectedPlan = game.productionPlans.find((plan) => plan.id === selectedPlanId) ?? game.productionPlans[0] ?? null;
-  const planResult = useMemo(() => selectedPlan ? calculateProductionPlan(game, selectedPlan) : null, [game, selectedPlan]);
-  const targetHistory = useMemo(() => selectedPlan ? game.productionHistory.map((sample) => ({
+  const selectedPlan = tab === "planning" ? game.productionPlans.find((plan) => plan.id === selectedPlanId) ?? game.productionPlans[0] ?? null : null;
+  const planResult = useMemo(() => open && tab === "planning" && selectedPlan ? calculateProductionPlan(game, selectedPlan) : null, [game, open, selectedPlan, tab]);
+  const targetHistory = useMemo(() => open && tab === "planning" && selectedPlan ? game.productionHistory.map((sample) => ({
     elapsedSeconds: sample.elapsedSeconds,
     production: sample.productionPerMinute[selectedPlan.itemId] ?? 0,
     consumption: sample.consumptionPerMinute[selectedPlan.itemId] ?? 0,
     inventory: sample.inventory[selectedPlan.itemId] ?? 0,
-  })).slice(-60) : [], [game.productionHistory, selectedPlan]);
-  const efficiencyHistory = useMemo(() => game.productionHistory.slice(-90).map((sample) => ({
+  })).slice(-60) : [], [game.productionHistory, open, selectedPlan, tab]);
+  const efficiencyHistory = useMemo(() => open && tab === "efficiency" ? game.productionHistory.slice(-90).map((sample) => ({
     elapsedSeconds: sample.elapsedSeconds,
     machine: sample.machineEfficiency ?? 0,
     logistics: sample.logisticsEfficiency ?? 0,
     power: sample.powerEfficiency ?? (sample.demandKw > 0 ? 0 : 1),
     activeMachines: sample.activeMachines ?? 0,
     blockedMachines: sample.blockedMachines ?? 0,
-  })), [game.productionHistory]);
+  })) : [], [game.productionHistory, open, tab]);
   const latestEfficiency = efficiencyHistory.at(-1);
 
   useEffect(() => {
@@ -343,6 +438,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
   }, [focusTab, open]);
 
   if (!open) return null;
+  const activeStatisticsPlanet = getPlanet(game.activePlanetId);
   const generationUtilization = game.metrics.generationKw > 0
     ? Math.min(100, game.metrics.demandKw / game.metrics.generationKw * 100)
     : game.metrics.demandKw > 0 ? 100 : 0;
@@ -368,11 +464,11 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
         <button type="button" role="tab" aria-selected={tab === "management"} className={tab === "management" ? "active" : ""} onClick={() => setTab("management")}><Settings2 size={15} />管理</button>
         <button type="button" role="tab" aria-selected={tab === "production"} className={tab === "production" ? "active" : ""} onClick={() => setTab("production")}><Factory size={15} />生产</button>
         <button type="button" role="tab" aria-selected={tab === "efficiency"} className={tab === "efficiency" ? "active" : ""} onClick={() => setTab("efficiency")}><Gauge size={15} />效率</button>
-        <button type="button" role="tab" aria-selected={tab === "networks"} className={tab === "networks" ? "active" : ""} onClick={() => setTab("networks")}><Route size={15} />网络 <strong>{listBeltNetworks(game).length}</strong></button>
+        <button type="button" role="tab" aria-selected={tab === "networks"} className={tab === "networks" ? "active" : ""} onClick={() => setTab("networks")}><Route size={15} />网络</button>
         <button type="button" role="tab" aria-selected={tab === "planning"} className={tab === "planning" ? "active" : ""} onClick={() => setTab("planning")}><Calculator size={15} />规划 <strong>{game.productionPlans.length}</strong></button>
         <button type="button" role="tab" aria-selected={tab === "power"} className={tab === "power" ? "active" : ""} onClick={() => setTab("power")}><Zap size={15} />电力</button>
         <button type="button" role="tab" aria-selected={tab === "issues"} className={tab === "issues" ? "active" : ""} onClick={() => setTab("issues")}><AlertTriangle size={15} />瓶颈 <strong>{statistics.issues.length}</strong></button>
-        <button type="button" role="tab" aria-selected={tab === "galaxy"} className={tab === "galaxy" ? "active" : ""} onClick={() => setTab("galaxy")}><Orbit size={15} />银河 <strong title={formatQuantityExact(galactic.galacticScore)}>{formatQuantityCompact(galactic.galacticScore)}</strong></button>
+        <button type="button" role="tab" aria-selected={tab === "galaxy"} className={tab === "galaxy" ? "active" : ""} onClick={() => setTab("galaxy")}><Orbit size={15} />银河 {galactic ? <strong title={formatQuantityExact(galactic.galacticScore)}>{formatQuantityCompact(galactic.galacticScore)}</strong> : null}</button>
       </nav>
 
       {tab === "management" ? <ProductionManagement
@@ -392,7 +488,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
       {tab === "production" ? (
         <div className="statistics-content statistics-production">
           <div className="statistics-toolbar">
-            <label className="statistics-planet-filter"><span>统计星球</span><select value={planetScope} onChange={(event) => setPlanetScope(event.target.value as PlanetId | "all")} aria-label="选择统计星球"><option value="all">全部星球</option>{PLANET_LIST.map((planet) => <option value={planet.id} key={planet.id}>{getPlanetDisplayName(game, planet.id)} · {getStarSystem(planet.systemId).name}</option>)}</select></label>
+            <label className="statistics-planet-filter"><span>统计星球</span><select value={planetScope} onChange={(event) => setPlanetScope(event.target.value as PlanetId | "all")} aria-label="选择统计星球"><option value="all">全部星球</option><option value={game.activePlanetId}>当前星球：{getPlanetDisplayName(game, game.activePlanetId)} · {getStarSystem(activeStatisticsPlanet.systemId).name}</option>{PLANET_LIST.filter((planet) => planet.id !== game.activePlanetId).map((planet) => <option value={planet.id} key={planet.id}>{getPlanetDisplayName(game, planet.id)} · {getStarSystem(planet.systemId).name}</option>)}</select></label>
             <label className="statistics-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="筛选物品" aria-label="筛选统计物品" /></label>
             <div className="statistics-filter" aria-label="物品统计筛选">
               {(["all", "producing", "deficit", "blocked"] as ItemFilter[]).map((option) => (
@@ -410,6 +506,13 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
                 setSort({ key, direction: key === "catalog" || key === "name" ? "asc" : "desc" });
               }}><option value="catalog">目录顺序</option><option value="production">生产量</option><option value="consumption">消耗量</option><option value="net">净增量</option><option value="inventory">库存</option><option value="name">物品名称</option></select></label>
             </div>
+          </div>
+          <div className={`statistics-sample-status${statisticsError ? " statistics-sample-status--error" : ""}`} role="status">
+            {statisticsLoading && !statisticsSample ? "正在后台计算生产统计，页面仍可操作" : statisticsError
+              ? `统计失败：${statisticsError}`
+              : statisticsSample
+                ? `采样于模拟 ${statisticsSample.elapsedSeconds.toFixed(1)} 秒 · 后台计算 ${statisticsSample.durationMs.toFixed(1)} ms · 最多每秒刷新一次`
+                : "等待统计采样"}
           </div>
           <div className={`statistics-table${items.length === 0 ? " statistics-table--empty" : ""}`} data-planet-scope={planetScope}>
             <header><span>物品</span><button type="button" className={sort.key === "production" ? "active" : ""} onClick={() => toggleColumnSort("production")}>生产 {productionWindow.window.suffix}{sort.key === "production" ? sort.direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} /> : null}</button><button type="button" className={sort.key === "consumption" ? "active" : ""} onClick={() => toggleColumnSort("consumption")}>消耗 {productionWindow.window.suffix}{sort.key === "consumption" ? sort.direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} /> : null}</button><span>净增量 {productionWindow.window.suffix}</span><span>网络库存</span><span>节点</span></header>
@@ -583,7 +686,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
         </div>
       ) : null}
 
-      {tab === "galaxy" ? (
+      {tab === "galaxy" && galactic ? (
         <div className="statistics-content galactic-industry">
           {!galactic.unlocked ? (
             <div className="galactic-lock"><Orbit size={28} /><strong>银河工业协议尚未解锁</strong><span>完成宇宙矩阵科技后，终局研究、出口项目和长期挂机会在这里接管。</span></div>

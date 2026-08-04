@@ -601,7 +601,7 @@ html[data-theme="light"] :is(
   .galaxy-leaderboard-rows > article.galaxy-rank-row--local,
   .galaxy-avatar-picker button.active
 ) {
-  background: var(--theme-selection-bg);
+  background: var(--theme-selection-bg) !important;
 }
 
 html[data-theme="light"] :is(
@@ -654,7 +654,7 @@ html[data-theme="light"] :is(
   .planet-card.active
 ) {
   border-color: var(--theme-accent-border);
-  background: var(--theme-selection-bg);
+  background: var(--theme-selection-bg) !important;
 }
 
 html[data-theme="light"] :is(
@@ -775,6 +775,136 @@ html[data-theme="light"] :is(.factory-node select, .factory-node button, .inspec
   border-color: var(--line);
   background-color: var(--theme-control);
   color: var(--text-soft);
+}
+
+/* Final semantic pass for controls which historically carried dark literals.
+   Keep this list intentionally class-based so new light surfaces inherit the
+   same contrast rules without changing the dark theme. */
+html[data-theme="light"] :is(
+  .item-hover-card,
+  .factory-node,
+  .factory-node--megastructure,
+  .canvas-selection-tools,
+  .selection-toolbar,
+  .interaction-event-feed,
+  .settings-category-tabs,
+  .settings-category-overview button,
+  .settings-category-quick,
+  .settings-category-back,
+  .settings-group,
+  .settings-buffer-custom,
+  .start-menu-message,
+  .start-menu-import-drop,
+  .start-menu-import-result,
+  .start-menu-snapshots,
+  .start-menu-cloud-account,
+  .start-menu-cloud-offline,
+  .save-emergency-warning
+) {
+  border-color: var(--line);
+  background-color: var(--surface);
+  color: var(--text);
+  box-shadow: 0 8px 24px var(--theme-shadow);
+}
+
+html[data-theme="light"] :is(
+  .item-hover-card > p,
+  .item-hover-line,
+  .item-hover-empty,
+  .interaction-event-feed p,
+  .settings-group small,
+  .settings-help,
+  .start-menu-import-result small,
+  .start-menu-snapshots small,
+  .start-menu-cloud-offline small
+) {
+  color: var(--theme-text-soft);
+}
+
+html[data-theme="light"] :is(
+  .item-hover-actions button,
+  .settings-category-tabs button,
+  .settings-category-overview button,
+  .settings-category-quick,
+  .settings-category-back,
+  .settings-group button,
+  .canvas-selection-tools button,
+  .selection-toolbar button,
+  .start-menu-snapshots > button,
+  .start-menu-import-result footer button
+) {
+  border-color: var(--line);
+  background: var(--theme-control);
+  color: var(--text-soft);
+}
+
+html[data-theme="light"] :is(
+  .item-hover-actions button:hover:not(:disabled),
+  .item-hover-actions button:focus-visible,
+  .settings-category-tabs button:hover,
+  .settings-category-tabs button.active,
+  .settings-category-overview button:hover,
+  .settings-category-overview button:focus-visible,
+  .settings-category-back:hover,
+  .settings-category-back:focus-visible,
+  .settings-group button:hover:not(:disabled),
+  .canvas-selection-tools button:hover,
+  .canvas-selection-tools button.active,
+  .selection-toolbar button:hover:not(:disabled),
+  .start-menu-snapshots > button:hover:not(:disabled)
+) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-selection-bg);
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] :is(
+  .factory-node--selected,
+  .react-flow__node.selected .factory-node,
+  .factory-node--selected.factory-node--megastructure
+) {
+  border-color: var(--theme-focus-ring) !important;
+  background: var(--theme-selection-bg) !important;
+  background-image: none !important;
+  box-shadow: 0 0 0 2px var(--theme-accent-border), 0 10px 28px var(--theme-shadow) !important;
+}
+
+html[data-theme="light"] :is(.factory-node--selected::before, .react-flow__node.selected .factory-node::before) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-accent-soft);
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] :is(.factory-node--selected .factory-node__header, .factory-node--selected .factory-node__footer) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-accent-soft);
+}
+
+html[data-theme="light"] .item-hover-card > header {
+  border-color: var(--line);
+}
+
+html[data-theme="light"] .item-hover-card > header > i {
+  color: #102018;
+}
+
+html[data-theme="light"] :is(
+  .settings-group input,
+  .settings-group select,
+  .settings-group textarea,
+  .start-menu-settings input,
+  .start-menu-settings select,
+  .start-menu-settings textarea
+) {
+  border-color: var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+
+html[data-theme="light"] :is(.danger, .danger-command, .save-emergency-warning) {
+  border-color: var(--theme-danger-border);
+  background: var(--theme-danger-bg);
+  color: var(--coral);
 }
 
 /* Logistics controls need explicit interaction states; generic light-theme
@@ -983,4 +1113,563 @@ html[data-theme="light"] :is(.performance-monitor-actions button, .performance-m
 
 html[data-theme="light"] .performance-phase-list i {
   background: var(--surface-soft);
+}
+
+/* Player-feedback audit: legacy canvas overlays and inspector controls used
+   dark literals even after the surrounding workspace switched to light. */
+html[data-theme="light"] .sidebar-edge-toggle {
+  border-color: var(--line-strong);
+  background: var(--theme-surface-translucent);
+  color: var(--text-soft);
+  box-shadow: 0 5px 16px var(--theme-shadow);
+}
+
+html[data-theme="light"] .sidebar-edge-toggle:hover,
+html[data-theme="light"] .sidebar-edge-toggle:focus-visible {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-selection-bg);
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] .planet-navigator {
+  border-color: var(--line-strong);
+  background: var(--theme-surface-translucent);
+  box-shadow: 0 7px 18px var(--theme-shadow);
+}
+
+html[data-theme="light"] .planet-navigator > button {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+html[data-theme="light"] .planet-navigator > button:hover:not(:disabled),
+html[data-theme="light"] .planet-navigator > button.active {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-selection-bg);
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] .planet-navigator > button.active {
+  box-shadow: inset 3px 0 0 var(--theme-focus-ring);
+}
+
+html[data-theme="light"] .planet-navigator > button.locked,
+html[data-theme="light"] .planet-navigator > button.locked:hover {
+  border-color: var(--line);
+  background: var(--surface-soft);
+  color: var(--theme-text-muted);
+  opacity: 1;
+}
+
+html[data-theme="light"] .planet-navigator > button.locked > i,
+html[data-theme="light"] .planet-navigator > button.locked > span small {
+  color: var(--theme-text-muted);
+}
+
+html[data-theme="light"] :is(.resource-rail--drop-ready .tray-block, .resource-rail--drop-ready .cargo-block, .rail-block--cargo-drop) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-success-bg);
+  box-shadow: inset -3px 0 0 rgba(39, 133, 75, .22);
+}
+
+html[data-theme="light"] .mobile-toggle--cargo {
+  border-color: var(--theme-accent-border) !important;
+  background: var(--theme-success-bg) !important;
+  color: #1d6138 !important;
+  box-shadow: 0 0 0 2px rgba(39, 133, 75, .14);
+}
+
+html[data-theme="light"] .cargo-slot {
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+
+html[data-theme="light"] .cargo-slot--loaded {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-success-bg);
+  color: var(--text);
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+html[data-theme="light"] :is(.task-path-indicator, .network-focus-indicator, .production-line-focus-indicator) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-surface-translucent);
+  color: var(--text);
+  box-shadow: 0 7px 20px var(--theme-shadow);
+}
+
+html[data-theme="light"] .campaign-summary-block {
+  background: var(--surface-raised);
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+html[data-theme="light"] :is(.campaign-summary-command, .campaign-summary-complete) {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--text-soft);
+}
+
+html[data-theme="light"] .campaign-summary-command:hover {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-selection-bg);
+}
+
+html[data-theme="light"] .campaign-summary-command > i {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-success-bg);
+  color: #1d6138;
+}
+
+html[data-theme="light"] .campaign-summary-deficits > span:not(:first-child) {
+  border-color: var(--theme-danger-border);
+  background: var(--theme-danger-bg);
+  color: var(--coral);
+}
+
+html[data-theme="light"] .rail-heading-command {
+  color: var(--text-muted);
+}
+
+html[data-theme="light"] .rail-heading-command:hover {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-selection-bg);
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] .task-path-indicator {
+  border-color: var(--theme-warning-border);
+  background: var(--theme-warning-bg);
+}
+
+html[data-theme="light"] :is(.task-path-indicator, .network-focus-indicator) button {
+  border-color: var(--line);
+  color: var(--text-muted);
+}
+
+html[data-theme="light"] :is(.power-network-control, .proliferator-control) {
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+html[data-theme="light"] .power-network-control > header {
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] .power-grid-switcher button {
+  border-color: var(--line);
+  background: var(--theme-control);
+  color: var(--text-soft);
+}
+
+html[data-theme="light"] .power-grid-switcher button:hover:not(:disabled),
+html[data-theme="light"] .power-grid-switcher button.active {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-selection-bg);
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] .power-grid-switcher button.active {
+  box-shadow: inset 0 0 0 1px rgba(24, 127, 122, .2);
+  font-weight: 750;
+}
+
+html[data-theme="light"] :is(.segmented-control, .settings-segmented) {
+  border-color: var(--line);
+  background: var(--surface-soft);
+}
+
+html[data-theme="light"] :is(.segmented-control, .settings-segmented) button {
+  background: transparent;
+  color: var(--text-soft);
+}
+
+html[data-theme="light"] :is(.segmented-control, .settings-segmented) button:hover:not(:disabled) {
+  background: var(--theme-control-hover);
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] :is(.segmented-control, .settings-segmented) button:is(.active, [aria-pressed="true"], [aria-checked="true"]) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-selection-bg);
+  color: var(--cyan-deep);
+  box-shadow: inset 0 0 0 1px rgba(24, 127, 122, .18), inset 3px 0 0 var(--theme-focus-ring);
+  font-weight: 750;
+}
+
+html[data-theme="light"] :is(.segmented-control, .settings-segmented) button:disabled {
+  background: transparent;
+  color: #84928b;
+  opacity: 1;
+}
+
+html[data-theme="light"] .toggle-row {
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--text-soft);
+}
+
+html[data-theme="light"] .toggle-row:has(input:checked) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-selection-bg);
+  color: var(--cyan-deep);
+  box-shadow: inset 3px 0 0 var(--theme-focus-ring);
+}
+
+html[data-theme="light"] .toggle-row input {
+  accent-color: var(--theme-focus-ring);
+}
+
+html[data-theme="light"] .selection-toolbar {
+  border-color: var(--line-strong);
+  background: var(--theme-surface-translucent);
+  box-shadow: 0 9px 24px var(--theme-shadow);
+}
+
+html[data-theme="light"] .selection-toolbar > span {
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--text-soft);
+}
+
+html[data-theme="light"] .selection-toolbar button {
+  border-color: var(--line);
+  background: var(--theme-control);
+  color: var(--text-soft);
+}
+
+html[data-theme="light"] .selection-toolbar button.confirm {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-success-bg);
+  color: #1d6138;
+}
+
+html[data-theme="light"] .selection-toolbar button.danger {
+  border-color: var(--theme-danger-border);
+  background: var(--theme-danger-bg);
+  color: var(--coral);
+}
+
+html[data-theme="light"] .selection-toolbar button:is(.confirm, .danger):hover:not(:disabled) {
+  filter: saturate(1.08);
+}
+
+html[data-theme="light"] .selection-toolbar button:disabled {
+  border-color: var(--line);
+  background: var(--surface-soft);
+  color: #84928b;
+  opacity: 1;
+}
+
+html[data-theme="light"] :is(.entity-add-command, .station-upgrade-button) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-success-bg);
+  color: #1d6138;
+}
+
+html[data-theme="light"] :is(.entity-add-command, .station-upgrade-button):hover:not(:disabled) {
+  border-color: var(--theme-focus-ring);
+  background: #d7ebdd;
+  color: #145a35;
+}
+
+html[data-theme="light"] .entity-add-command strong {
+  color: #236b3e;
+}
+
+html[data-theme="light"] :is(.danger-command, .selection-toolbar button.danger, .save-batch-delete) {
+  border-color: var(--theme-danger-border);
+  background: var(--theme-danger-bg);
+  color: var(--coral);
+}
+
+html[data-theme="light"] :is(.danger-command, .selection-toolbar button.danger, .save-batch-delete):hover:not(:disabled) {
+  border-color: #aa5f53;
+  background: #ffe3de;
+  color: #963729;
+}
+
+html[data-theme="light"] :is(.danger-command, .entity-add-command):disabled {
+  border-color: var(--line);
+  background: var(--surface-soft);
+  color: #84928b;
+  opacity: 1;
+}
+
+html[data-theme="light"] :is(.belt-clipboard-actions button, .save-primary-actions button, .save-slot-actions button, .save-snapshot-row > button, .save-import-preview footer button) {
+  border-color: var(--line);
+  background: var(--theme-control);
+  color: var(--text-soft);
+}
+
+html[data-theme="light"] :is(.belt-clipboard-actions button, .save-primary-actions button, .save-slot-actions button, .save-snapshot-row > button, .save-import-preview footer button):hover:not(:disabled) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-control-hover);
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] :is(.belt-clipboard-actions button.active, .save-primary-actions button:first-child, .save-import-preview footer button.primary) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-success-bg);
+  color: #1d6138;
+  box-shadow: inset 3px 0 0 var(--theme-focus-ring);
+}
+
+html[data-theme="light"] :is(.save-slot-actions button:last-child, .save-snapshot-row > button:last-child) {
+  color: var(--coral);
+}
+
+html[data-theme="light"] :is(.belt-clipboard-actions button, .save-slot-actions button, .save-snapshot-row > button):disabled {
+  border-color: var(--line);
+  background: var(--surface-soft);
+  color: #84928b;
+  opacity: 1;
+}
+
+html[data-theme="light"] :is(
+  .settings-diagnostics > button,
+  .settings-release-notes > button,
+  .settings-tutorial-entry > button,
+  .settings-community > div
+) {
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  box-shadow: none;
+}
+
+html[data-theme="light"] :is(.settings-diagnostics > button, .settings-release-notes > button, .settings-tutorial-entry > button):hover {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-selection-bg);
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] .settings-category-overview button {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--text-soft);
+  box-shadow: 0 3px 10px rgba(40, 62, 51, .06);
+}
+
+html[data-theme="light"] .construction-item-craft {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-success-bg);
+  color: #1d6138;
+  box-shadow: inset 0 -2px 0 rgba(39, 133, 75, .18);
+}
+
+html[data-theme="light"] .construction-item-craft:hover:not(:disabled) {
+  border-color: var(--theme-focus-ring);
+  background: #d7ebdd;
+  color: #145a35;
+}
+
+html[data-theme="light"] :is(.construction-item-craft:disabled, .construction-item-craft--disabled, .construction-item-craft--disabled:hover) {
+  border-color: var(--line-strong);
+  border-style: dashed;
+  background: var(--surface-soft);
+  color: #64766d;
+  box-shadow: none;
+  opacity: 1;
+}
+
+html[data-theme="light"] .construction-item-craft--upstream {
+  border-color: var(--theme-warning-border) !important;
+  border-style: double;
+  background: var(--theme-warning-bg) !important;
+  color: #8a5d00 !important;
+  box-shadow: inset 0 -2px 0 rgba(154, 106, 8, .18);
+}
+
+html[data-theme="light"] :is(.cargo-cursor, .building-placement-cursor, .connection-hint, .game-notice, .continuous-placement-indicator, .interaction-burst) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-surface-translucent);
+  color: var(--text-soft);
+  box-shadow: 0 8px 22px var(--theme-shadow);
+}
+
+html[data-theme="light"] .cargo-cursor {
+  border-color: var(--theme-focus-ring);
+  background: var(--theme-success-bg);
+  box-shadow: 0 6px 18px var(--theme-shadow), inset 3px 0 0 var(--green);
+}
+
+html[data-theme="light"] .cargo-cursor strong {
+  color: #1d6138;
+}
+
+html[data-theme="light"] .building-placement-cursor {
+  border-color: var(--theme-warning-border);
+  background: var(--theme-warning-bg);
+}
+
+html[data-theme="light"] .building-placement-array > i {
+  border-color: var(--theme-warning-border);
+  background: #fffaf0;
+  color: #8a5d00;
+}
+
+html[data-theme="light"] .connection-hint--blocked,
+html[data-theme="light"] .interaction-burst--warning,
+html[data-theme="light"] .game-notice--danger {
+  border-color: var(--theme-danger-border);
+  background: var(--theme-danger-bg);
+  color: var(--coral);
+}
+
+html[data-theme="light"] .connection-hint--warning,
+html[data-theme="light"] .game-notice--warning {
+  border-color: var(--theme-warning-border);
+  background: var(--theme-warning-bg);
+  color: #8a5d00;
+}
+
+html[data-theme="light"] :is(.game-notice--achievement, .game-notice--success) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-success-bg);
+  color: #1d6138;
+  box-shadow: 0 8px 24px var(--theme-shadow), inset 3px 0 0 var(--green);
+}
+
+html[data-theme="light"] .continuous-placement-indicator > span {
+  border-color: var(--theme-accent-border);
+  background: var(--surface);
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] .interaction-event-feed {
+  border-color: var(--line-strong);
+  background: var(--theme-surface-translucent);
+  color: var(--text);
+  box-shadow: 0 8px 24px var(--theme-shadow);
+}
+
+html[data-theme="light"] .interaction-event-feed > header {
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] .interaction-event-feed > header button {
+  border-color: var(--line);
+  background: var(--theme-control);
+  color: var(--text-soft);
+}
+
+html[data-theme="light"] .interaction-event-feed p {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--text-soft);
+}
+
+html[data-theme="light"] .interaction-event-feed p:last-child {
+  background: var(--theme-selection-bg);
+  color: var(--text);
+}
+
+/* The node clips overflow by design, so keep the selection badge inside the
+   header instead of positioning it above the card where it was truncated. */
+html[data-theme="light"] :is(.factory-node--selected::before, .react-flow__node.selected .factory-node::before) {
+  top: 3px;
+  right: 6px;
+  z-index: 9;
+  box-shadow: 0 1px 4px rgba(40, 62, 51, .14);
+}
+
+/* Keep the full node surface light. Progress and port state still use semantic
+   borders/fills, but no longer depend on the dark-theme base panels. */
+html[data-theme="light"] :is(
+  .node-inline-select,
+  .work-cycle,
+  .ray-reception,
+  .proliferator-readout,
+  .orbital-launch-track,
+  .node-auto-input
+) {
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--theme-text-muted);
+}
+
+html[data-theme="light"] :is(.work-cycle > strong, .ray-reception strong, .proliferator-readout strong) {
+  color: var(--text-soft);
+}
+
+html[data-theme="light"] .work-cycle > i {
+  border-color: var(--theme-accent-border);
+  background: rgba(39, 133, 75, .12);
+}
+
+html[data-theme="light"] .work-cycle--active {
+  color: #236b3e;
+}
+
+html[data-theme="light"] :is(.proliferator-readout--extra, .node-auto-input--compatible) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-success-bg);
+  color: #236b3e;
+}
+
+html[data-theme="light"] .proliferator-readout--speed {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-selection-bg);
+}
+
+html[data-theme="light"] .node-port__connections {
+  border-color: var(--theme-accent-border);
+  background: var(--surface);
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] .node-slot:hover:not(:disabled),
+html[data-theme="light"] .node-port--compatible .node-slot {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-selection-bg);
+}
+
+html[data-theme="light"] .factory-node--selected :is(.node-inline-select, .work-cycle, .ray-reception, .proliferator-readout) {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-accent-soft);
+}
+
+html[data-theme="light"] .belt-network-diagnostic {
+  border-color: var(--theme-accent-border);
+  background: var(--surface-raised);
+  color: var(--text-soft);
+}
+
+html[data-theme="light"] .belt-network-diagnostic > header strong {
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] .belt-network-load > i {
+  background: var(--surface-soft);
+}
+
+html[data-theme="light"] :is(.belt-network-diagnostic--congested, .belt-network-diagnostic--starved) {
+  border-color: var(--theme-danger-border);
+  background: var(--theme-danger-bg);
+}
+
+html[data-theme="light"] :is(.belt-network-diagnostic--congested, .belt-network-diagnostic--starved) > header strong {
+  color: var(--coral);
+}
+
+html[data-theme="light"] .release-notes-header h2,
+html[data-theme="light"] .release-notes-scroll li strong {
+  color: var(--text);
+}
+
+html[data-theme="light"] .release-notes-scroll li > i {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-selection-bg);
+  color: var(--cyan-deep);
+}
+
+html[data-theme="light"] .release-notes-footer > button {
+  border-color: var(--theme-accent-border);
+  background: var(--theme-success-bg);
+  color: #1d6138;
 }

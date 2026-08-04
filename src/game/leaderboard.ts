@@ -4,7 +4,7 @@ import { formatPowerKw } from "./units";
 
 export const LEADERBOARD_STORAGE_KEY = "dsp-idle-network.leaderboard.v1";
 
-export type LeaderboardCategoryId = "power" | "upload" | "dyson" | "throughput" | "galaxy";
+export type LeaderboardCategoryId = "power" | "upload" | "white-rate" | "dyson" | "throughput" | "galaxy";
 
 export interface LeaderboardCategoryDefinition {
   id: LeaderboardCategoryId;
@@ -25,6 +25,7 @@ export interface LeaderboardSeason {
 export interface LeaderboardMetrics {
   energyGeneratedMj: number;
   uploadedWhiteMatrix: number;
+  peakWhiteMatrixPerMinute: number;
   peakGenerationKw: number;
   peakThroughputPerMinute: number;
   peakDysonPowerKw: number;
@@ -61,6 +62,7 @@ export interface LeaderboardSnapshot {
 export const LEADERBOARD_CATEGORIES: readonly LeaderboardCategoryDefinition[] = [
   { id: "power", label: "累计发电", unit: "MJ", description: "工业电网累计输出的能量", color: "#e4b955" },
   { id: "upload", label: "白矩阵上传", unit: "份", description: "提交至银河档案的白矩阵", color: "#d9dedb" },
+  { id: "white-rate", label: "白糖产量", unit: "/min", description: "相邻有效主云存档区间的实际产量峰值", color: "#8bc7b7" },
   { id: "dyson", label: "戴森功率", unit: "", description: "戴森云与戴森球当前功率", color: "#e7bd58" },
   { id: "throughput", label: "生产吞吐", unit: "/min", description: "历史峰值生产通量", color: "#69cbb0" },
   { id: "galaxy", label: "银河综合", unit: "分", description: "发电、上传、戴森与工业规模综合评分", color: "#b8a0e4" },
@@ -72,14 +74,14 @@ export const LEADERBOARD_SEASONS: readonly LeaderboardSeason[] = [
 ] as const;
 
 const NPC_ENTRIES: readonly { accountId: string; displayName: string; avatar: string; metrics: LeaderboardMetrics }[] = [
-  { accountId: "npc_orion", displayName: "Orion Forge", avatar: "O", metrics: { energyGeneratedMj: 9_800_000_000, uploadedWhiteMatrix: 1_240_000, peakGenerationKw: 8_600_000, peakThroughputPerMinute: 480_000, peakDysonPowerKw: 5_200_000, exploredSystems: 3, colonizedPlanets: 6, galaxyScore: 0 } },
-  { accountId: "npc_kuiper", displayName: "柯伊伯联合体", avatar: "K", metrics: { energyGeneratedMj: 7_600_000_000, uploadedWhiteMatrix: 980_000, peakGenerationKw: 6_900_000, peakThroughputPerMinute: 620_000, peakDysonPowerKw: 3_900_000, exploredSystems: 3, colonizedPlanets: 6, galaxyScore: 0 } },
-  { accountId: "npc_nova", displayName: "Nova Assembly", avatar: "N", metrics: { energyGeneratedMj: 6_200_000_000, uploadedWhiteMatrix: 1_100_000, peakGenerationKw: 5_800_000, peakThroughputPerMinute: 330_000, peakDysonPowerKw: 4_100_000, exploredSystems: 3, colonizedPlanets: 5, galaxyScore: 0 } },
-  { accountId: "npc_tianji", displayName: "天玑工坊", avatar: "T", metrics: { energyGeneratedMj: 4_900_000_000, uploadedWhiteMatrix: 760_000, peakGenerationKw: 4_800_000, peakThroughputPerMinute: 410_000, peakDysonPowerKw: 2_700_000, exploredSystems: 2, colonizedPlanets: 5, galaxyScore: 0 } },
-  { accountId: "npc_helios", displayName: "Helios Cooperative", avatar: "H", metrics: { energyGeneratedMj: 3_800_000_000, uploadedWhiteMatrix: 640_000, peakGenerationKw: 3_900_000, peakThroughputPerMinute: 290_000, peakDysonPowerKw: 2_100_000, exploredSystems: 2, colonizedPlanets: 4, galaxyScore: 0 } },
-  { accountId: "npc_ashen", displayName: "烬原开拓局", avatar: "A", metrics: { energyGeneratedMj: 2_700_000_000, uploadedWhiteMatrix: 520_000, peakGenerationKw: 3_200_000, peakThroughputPerMinute: 240_000, peakDysonPowerKw: 1_600_000, exploredSystems: 2, colonizedPlanets: 4, galaxyScore: 0 } },
-  { accountId: "npc_magnetar", displayName: "Magnetar Line", avatar: "M", metrics: { energyGeneratedMj: 1_900_000_000, uploadedWhiteMatrix: 410_000, peakGenerationKw: 2_600_000, peakThroughputPerMinute: 180_000, peakDysonPowerKw: 1_200_000, exploredSystems: 2, colonizedPlanets: 3, galaxyScore: 0 } },
-  { accountId: "npc_borealis", displayName: "北冕资源网", avatar: "B", metrics: { energyGeneratedMj: 1_100_000_000, uploadedWhiteMatrix: 300_000, peakGenerationKw: 1_900_000, peakThroughputPerMinute: 120_000, peakDysonPowerKw: 820_000, exploredSystems: 2, colonizedPlanets: 3, galaxyScore: 0 } },
+  { accountId: "npc_orion", displayName: "Orion Forge", avatar: "O", metrics: { energyGeneratedMj: 9_800_000_000, uploadedWhiteMatrix: 1_240_000, peakWhiteMatrixPerMinute: 38_000, peakGenerationKw: 8_600_000, peakThroughputPerMinute: 480_000, peakDysonPowerKw: 5_200_000, exploredSystems: 3, colonizedPlanets: 6, galaxyScore: 0 } },
+  { accountId: "npc_kuiper", displayName: "柯伊伯联合体", avatar: "K", metrics: { energyGeneratedMj: 7_600_000_000, uploadedWhiteMatrix: 980_000, peakWhiteMatrixPerMinute: 44_000, peakGenerationKw: 6_900_000, peakThroughputPerMinute: 620_000, peakDysonPowerKw: 3_900_000, exploredSystems: 3, colonizedPlanets: 6, galaxyScore: 0 } },
+  { accountId: "npc_nova", displayName: "Nova Assembly", avatar: "N", metrics: { energyGeneratedMj: 6_200_000_000, uploadedWhiteMatrix: 1_100_000, peakWhiteMatrixPerMinute: 31_000, peakGenerationKw: 5_800_000, peakThroughputPerMinute: 330_000, peakDysonPowerKw: 4_100_000, exploredSystems: 3, colonizedPlanets: 5, galaxyScore: 0 } },
+  { accountId: "npc_tianji", displayName: "天玑工坊", avatar: "T", metrics: { energyGeneratedMj: 4_900_000_000, uploadedWhiteMatrix: 760_000, peakWhiteMatrixPerMinute: 35_000, peakGenerationKw: 4_800_000, peakThroughputPerMinute: 410_000, peakDysonPowerKw: 2_700_000, exploredSystems: 2, colonizedPlanets: 5, galaxyScore: 0 } },
+  { accountId: "npc_helios", displayName: "Helios Cooperative", avatar: "H", metrics: { energyGeneratedMj: 3_800_000_000, uploadedWhiteMatrix: 640_000, peakWhiteMatrixPerMinute: 24_000, peakGenerationKw: 3_900_000, peakThroughputPerMinute: 290_000, peakDysonPowerKw: 2_100_000, exploredSystems: 2, colonizedPlanets: 4, galaxyScore: 0 } },
+  { accountId: "npc_ashen", displayName: "烬原开拓局", avatar: "A", metrics: { energyGeneratedMj: 2_700_000_000, uploadedWhiteMatrix: 520_000, peakWhiteMatrixPerMinute: 21_000, peakGenerationKw: 3_200_000, peakThroughputPerMinute: 240_000, peakDysonPowerKw: 1_600_000, exploredSystems: 2, colonizedPlanets: 4, galaxyScore: 0 } },
+  { accountId: "npc_magnetar", displayName: "Magnetar Line", avatar: "M", metrics: { energyGeneratedMj: 1_900_000_000, uploadedWhiteMatrix: 410_000, peakWhiteMatrixPerMinute: 16_000, peakGenerationKw: 2_600_000, peakThroughputPerMinute: 180_000, peakDysonPowerKw: 1_200_000, exploredSystems: 2, colonizedPlanets: 3, galaxyScore: 0 } },
+  { accountId: "npc_borealis", displayName: "北冕资源网", avatar: "B", metrics: { energyGeneratedMj: 1_100_000_000, uploadedWhiteMatrix: 300_000, peakWhiteMatrixPerMinute: 11_000, peakGenerationKw: 1_900_000, peakThroughputPerMinute: 120_000, peakDysonPowerKw: 820_000, exploredSystems: 2, colonizedPlanets: 3, galaxyScore: 0 } },
 ] as const;
 
 function nonNegative(value: unknown): number {
@@ -113,11 +115,12 @@ function calculateGalaxyScore(metrics: Omit<LeaderboardMetrics, "galaxyScore">):
   return Math.round(terms.reduce(saturatingAdd, 0));
 }
 
-function normalizeMetrics(value: unknown): LeaderboardMetrics {
+export function normalizeLeaderboardMetrics(value: unknown): LeaderboardMetrics {
   const source = value && typeof value === "object" ? value as Record<string, any> : {};
   const metrics = {
     energyGeneratedMj: nonNegative(source.energyGeneratedMj),
     uploadedWhiteMatrix: integer(source.uploadedWhiteMatrix),
+    peakWhiteMatrixPerMinute: nonNegative(source.peakWhiteMatrixPerMinute),
     peakGenerationKw: nonNegative(source.peakGenerationKw),
     peakThroughputPerMinute: nonNegative(source.peakThroughputPerMinute),
     peakDysonPowerKw: nonNegative(source.peakDysonPowerKw),
@@ -131,6 +134,7 @@ export function getLeaderboardMetrics(ledger: AccountLedger): LeaderboardMetrics
   const metrics: LeaderboardMetrics = {
     energyGeneratedMj: nonNegative(ledger.energyGeneratedMj),
     uploadedWhiteMatrix: integer(ledger.uploadedWhiteMatrix),
+    peakWhiteMatrixPerMinute: 0,
     peakGenerationKw: nonNegative(ledger.peakGenerationKw),
     peakThroughputPerMinute: nonNegative(ledger.peakThroughputPerMinute),
     peakDysonPowerKw: nonNegative(ledger.peakDysonPowerKw),
@@ -153,6 +157,7 @@ export function getLeaderboardSeason(id = "season_01"): LeaderboardSeason {
 export function getLeaderboardValue(metrics: LeaderboardMetrics, category: LeaderboardCategoryId): number {
   if (category === "power") return metrics.energyGeneratedMj;
   if (category === "upload") return metrics.uploadedWhiteMatrix;
+  if (category === "white-rate") return metrics.peakWhiteMatrixPerMinute;
   if (category === "dyson") return metrics.peakDysonPowerKw;
   if (category === "throughput") return metrics.peakThroughputPerMinute;
   return metrics.galaxyScore;
@@ -160,7 +165,7 @@ export function getLeaderboardValue(metrics: LeaderboardMetrics, category: Leade
 
 export function formatLeaderboardValue(value: number, category: LeaderboardCategoryId): string {
   if (category === "dyson") return formatPowerKw(value);
-  if (category === "throughput" && Math.abs(value) < 10_000) return value.toFixed(1);
+  if ((category === "throughput" || category === "white-rate") && Math.abs(value) < 10_000) return value.toFixed(1).replace(/\.0$/, "");
   return formatQuantityCompact(Math.floor(value));
 }
 
@@ -177,7 +182,7 @@ function loadSubmissions(): LeaderboardSubmission[] {
         displayName: typeof entry.displayName === "string" ? entry.displayName.slice(0, 24) : "匿名工程师",
         avatar: typeof entry.avatar === "string" ? entry.avatar.slice(0, 2) : "A",
         seasonId: entry.seasonId,
-        metrics: normalizeMetrics(entry.metrics),
+        metrics: normalizeLeaderboardMetrics(entry.metrics),
         submittedAt: nonNegative(entry.submittedAt),
       }];
     });
@@ -236,7 +241,7 @@ export function getLeaderboardSnapshot(profile: AccountProfile, ledger: AccountL
   } satisfies LeaderboardEntry];
   const candidates: Array<LeaderboardEntry> = [
     ...NPC_ENTRIES.map((entry) => {
-      const metrics = normalizeMetrics(entry.metrics);
+      const metrics = normalizeLeaderboardMetrics(entry.metrics);
       return { ...entry, metrics, seasonId: season.id, submittedAt: season.startsAt, rank: 0, value: getLeaderboardValue(metrics, category), isLocal: false, submitted: true, verified: true };
     }),
     ...localEntry,

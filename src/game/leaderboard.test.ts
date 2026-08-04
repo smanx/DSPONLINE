@@ -7,6 +7,7 @@ import {
   formatLeaderboardValue,
   getLeaderboardMetrics,
   getLeaderboardSnapshot,
+  normalizeLeaderboardMetrics,
   removeLeaderboardData,
   submitLeaderboardData,
 } from "./leaderboard";
@@ -78,5 +79,14 @@ describe("local galaxy leaderboard", () => {
     expect(submitLeaderboardData(account.profile, account.ledger, "season_00")).toBeNull();
     const snapshot = getLeaderboardSnapshot(account.profile, account.ledger, "power", "season_00");
     expect(snapshot.localRank).toBeNull();
+  });
+
+  it("keeps the white-rate category compatible with old records", () => {
+    const legacy = normalizeLeaderboardMetrics({ uploadedWhiteMatrix: 100 });
+    expect(legacy.peakWhiteMatrixPerMinute).toBe(0);
+    const account = getActiveAccount(createAccountState(101));
+    const snapshot = getLeaderboardSnapshot(account.profile, account.ledger, "white-rate");
+    expect(snapshot.category.unit).toBe("/min");
+    expect(snapshot.entries.some((entry) => entry.value > 0)).toBe(true);
   });
 });

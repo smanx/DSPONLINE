@@ -1474,6 +1474,52 @@ select:focus-visible {
   }
 }
 
+/* Font scaling must reflow controls instead of shrinking a setting card to a
+   one-character column. */
+.settings-group,
+.settings-group > header,
+.settings-group > header > span,
+.settings-group > header > small {
+  min-width: 0;
+}
+
+.settings-group > header > span,
+.settings-group > header > small {
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+@media (max-width: 760px) {
+  .settings-group > header {
+    grid-template-columns: 20px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .settings-group > header > small {
+    grid-column: 2;
+    justify-self: start;
+    margin-top: 3px;
+  }
+
+  .settings-segmented {
+    grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+  }
+}
+
+html[data-ui-font-scale="150"] .settings-group > header,
+html[data-ui-font-scale="200"] .settings-group > header {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+}
+
+html[data-ui-font-scale="150"] .settings-group > header > small,
+html[data-ui-font-scale="200"] .settings-group > header > small {
+  grid-column: 2;
+  justify-self: start;
+  margin-top: 3px;
+}
+
 @media (max-width: 760px) {
   .sidebar-edge-toggle { display: grid !important; top: 42%; width: 28px; height: 52px; }
   .sidebar-edge-toggle--left { left: 0; }
@@ -1763,8 +1809,12 @@ select:focus-visible {
 }
 
 .item-reference--badge {
-  display: block;
-  width: 100%;
+  /* The hover target follows the actual icon/name/amount content instead of
+     the entire input row, so blank space and adjacent controls do not open a
+     card accidentally. */
+  display: inline-grid;
+  width: auto;
+  max-width: 100%;
 }
 
 .item-hover-card {
@@ -1885,6 +1935,179 @@ select:focus-visible {
 .item-hover-actions button:first-child { border-color: #3c6d67; color: var(--cyan); }
 .item-hover-actions button:disabled { border-color: var(--line); color: var(--muted); cursor: not-allowed; opacity: .62; }
 
+/* Settings categories are a local UI filter. The default "全部" view keeps
+   legacy automation and keyboard navigation intact; selecting a category
+   hides only unrelated groups without changing GameState. */
+.settings-category-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0 0 6px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-soft);
+}
+
+.settings-category-tabs button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.settings-category-tabs button:hover,
+.settings-category-tabs button:focus-visible,
+.settings-category-tabs button.active {
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
+  color: var(--cyan);
+}
+
+.settings-category-hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.operations-settings:not([data-settings-category]) > [data-settings-category] {
+  display: block;
+}
+
+.settings-category-overview {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 10px;
+}
+
+.settings-category-overview button {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-category-overview button > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.settings-category-overview button strong {
+  color: var(--text);
+  font-size: 10px;
+}
+
+.settings-category-overview button small {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.settings-category-overview button:hover,
+.settings-category-overview button:focus-visible {
+  border-color: var(--theme-accent-border, var(--line-strong));
+  background: var(--theme-selection-bg, var(--surface-soft));
+  color: var(--cyan);
+}
+
+.settings-category-quick {
+  display: grid;
+  gap: 7px;
+  margin-top: 3px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-raised);
+}
+
+.settings-category-quick > header {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-category-quick > header span {
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.settings-category-quick > header small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.settings-category-back {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 5px;
+  margin: 0 0 8px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+.settings-category-back:hover,
+.settings-category-back:focus-visible {
+  border-color: var(--theme-accent-border, var(--line-strong));
+  background: var(--theme-selection-bg, var(--surface-soft));
+  color: var(--cyan);
+}
+
+.operations-settings[data-settings-category="all"] > [data-settings-category] {
+  display: none;
+}
+
+.operations-settings:not([data-settings-category="all"]) > .settings-category-overview {
+  display: none;
+}
+
+.operations-settings[data-settings-category="visual"] > [data-settings-category]:not([data-settings-category~="visual"]),
+.operations-settings[data-settings-category="performance"] > [data-settings-category]:not([data-settings-category~="performance"]),
+.operations-settings[data-settings-category="interaction"] > [data-settings-category]:not([data-settings-category~="interaction"]),
+.operations-settings[data-settings-category="storage"] > [data-settings-category]:not([data-settings-category~="storage"]),
+.operations-settings[data-settings-category="statistics"] > [data-settings-category]:not([data-settings-category~="statistics"]),
+.operations-settings[data-settings-category="other"] > [data-settings-category]:not([data-settings-category~="other"]) {
+  display: none;
+}
+
+@media (max-width: 620px) {
+  .settings-category-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-category-tabs button {
+    min-width: 0;
+    min-height: 42px;
+    overflow-wrap: anywhere;
+  }
+
+  .settings-category-overview button {
+    min-height: 64px;
+  }
+}
+
 .tray-list {
   display: flex;
   max-height: 250px;
@@ -1988,6 +2211,20 @@ select:focus-visible {
 .tray-row strong {
   color: var(--text);
   font-size: 11px;
+}
+
+.tray-row > .item-reference {
+  max-width: 100%;
+  justify-self: start;
+}
+
+.tray-row > .item-reference:last-child {
+  justify-self: end;
+}
+
+.tray-row > .item-reference > span {
+  display: block;
+  max-width: 100%;
 }
 
 .tray-empty {
@@ -2494,6 +2731,11 @@ select:focus-visible {
 }
 
 .factory-node {
+  /* React Flow positions the node's world-space top-left. UI font scaling is
+     intentionally isolated from canvas geometry so changing text size cannot
+     move node centers, handles or attached belt endpoints. Full-size text is
+     still available in the inspector. */
+  --ui-font-scale: 1;
   width: 256px;
   overflow: hidden;
   border: 1px solid var(--line-strong);
@@ -2505,7 +2747,10 @@ select:focus-visible {
 
 .factory-node--selected {
   border-color: var(--cyan);
-  box-shadow: 0 0 0 1px rgba(98, 181, 174, 0.22), 0 10px 28px rgba(0, 0, 0, 0.34);
+  outline: 2px solid color-mix(in srgb, var(--cyan) 72%, transparent);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--cyan) 7%, #131917);
+  box-shadow: 0 0 0 1px rgba(98, 181, 174, 0.32), 0 10px 28px rgba(0, 0, 0, 0.34);
 }
 
 .factory-node--placement {
@@ -3575,8 +3820,8 @@ select:focus-visible {
 }
 
 .factory-handle {
-  width: 18px;
-  height: 18px;
+  width: calc(18px * var(--connection-point-scale, 1));
+  height: calc(18px * var(--connection-point-scale, 1));
   border: 3px solid #dbe4df;
   background: var(--cyan-deep);
   box-shadow: 0 0 0 3px rgba(98, 181, 174, 0.08);
@@ -3585,7 +3830,7 @@ select:focus-visible {
 }
 
 .factory-handle--input {
-  left: 9px;
+  left: calc(9px * var(--connection-point-scale, 1));
 }
 
 .factory-handle--auto {
@@ -3594,7 +3839,7 @@ select:focus-visible {
 }
 
 .factory-handle--output {
-  right: 9px;
+  right: calc(9px * var(--connection-point-scale, 1));
   background: #a47a35;
 }
 
@@ -3669,6 +3914,41 @@ select:focus-visible {
   stroke: #e3fff8;
   stroke-width: 2;
   filter: drop-shadow(0 0 5px rgba(98, 181, 174, 0.72));
+}
+
+.game-shell {
+  --connection-point-scale: 1;
+}
+
+.game-shell[data-connection-point-size="large25"] {
+  --connection-point-scale: 1.25;
+}
+
+.game-shell[data-connection-point-size="large50"] {
+  --connection-point-scale: 1.5;
+}
+
+.game-shell[data-connection-point-size="large25"] .node-port__connections,
+.game-shell[data-connection-point-size="large50"] .node-port__connections {
+  min-width: calc(14px * var(--connection-point-scale));
+  height: calc(14px * var(--connection-point-scale));
+  border-radius: calc(7px * var(--connection-point-scale));
+  font-size: calc(7px * var(--connection-point-scale));
+}
+
+.game-shell[data-connection-point-size="large25"] .node-port--input .node-port__connections,
+.game-shell[data-connection-point-size="large50"] .node-port--input .node-port__connections {
+  left: calc(9px * var(--connection-point-scale));
+}
+
+.game-shell[data-connection-point-size="large25"] .node-port--output .node-port__connections,
+.game-shell[data-connection-point-size="large50"] .node-port--output .node-port__connections {
+  right: calc(9px * var(--connection-point-scale));
+}
+
+.game-shell[data-connection-point-size="large25"] .factory-connection-preview__target,
+.game-shell[data-connection-point-size="large50"] .factory-connection-preview__target {
+  r: calc(7px * var(--connection-point-scale));
 }
 
 .factory-connection-preview--valid .factory-connection-preview__path {
@@ -3933,19 +4213,6 @@ select:focus-visible {
   min-width: 5ch;
   font-variant-numeric: tabular-nums;
   text-align: right;
-}
-
-html[data-ui-font-scale="125"] .storage-buffer-node .logistics-slot-row,
-html[data-ui-font-scale="150"] .storage-buffer-node .logistics-slot-row,
-html[data-ui-font-scale="200"] .storage-buffer-node .logistics-slot-row {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
-}
-
-html[data-ui-font-scale="125"] .storage-buffer-node,
-html[data-ui-font-scale="150"] .storage-buffer-node,
-html[data-ui-font-scale="200"] .storage-buffer-node {
-  width: max(316px, calc(288px * var(--ui-font-scale, 1)));
 }
 
 .logistics-empty {
@@ -4627,6 +4894,59 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
 .selection-toolbar button:disabled {
   color: #505b56;
   cursor: default;
+}
+
+.selection-toolbar__batch {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  border-right: 1px solid var(--line);
+}
+
+.selection-toolbar__batch button {
+  width: 42px;
+  gap: 2px;
+  color: var(--green);
+  font-size: 9px;
+}
+
+.selection-toolbar__batch input {
+  width: 72px;
+  height: 28px;
+  margin: 0 3px;
+  padding: 0 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  outline: 0;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 9px;
+}
+
+.mobile-selection-context__custom {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 2px;
+  padding: 0 3px;
+  border-right: 1px solid var(--line);
+}
+
+.mobile-selection-context__custom input {
+  width: 68px;
+  height: 34px;
+  padding: 0 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 10px;
+}
+
+.mobile-selection-context__custom button {
+  width: 38px;
+  min-height: 38px;
+  border: 0;
 }
 
 .batch-control {
@@ -5708,7 +6028,6 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
 }
 
 .station-slot > header,
-.station-slot-stock,
 .station-slot-scope,
 .station-route-progress {
   display: flex;
@@ -5732,8 +6051,7 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   font-size: 9px;
 }
 
-.station-slot > select,
-.station-slot-configure,
+.station-slot-primary .catalog-picker-trigger,
 .station-slot-options select,
 .station-slot-options input {
   width: 100%;
@@ -5747,23 +6065,37 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   font-size: 9px;
 }
 
-.station-slot-configure {
-  display: inline-flex;
+.station-slot-primary {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(112px, 1.45fr) minmax(54px, .6fr) minmax(96px, 1fr);
   align-items: center;
-  justify-content: center;
-  gap: 5px;
-  cursor: pointer;
+  gap: 6px;
+}
+
+.station-slot-primary .catalog-picker-trigger {
+  width: 100%;
+  padding-inline: 6px;
+}
+
+.station-slot-input,
+.station-slot-stock {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.station-slot-input strong {
+  color: var(--text-soft);
+  font-weight: 700;
 }
 
 .station-slot-stock {
-  margin-top: 7px;
-  color: var(--muted);
-  font-size: 9px;
-}
-
-.station-slot-stock .item-mark {
-  width: 22px;
-  height: 22px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
 }
 
 .station-slot-stock strong {
@@ -5788,6 +6120,7 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
 
 .station-slot-scope .segmented-control button {
   min-width: 0;
+  min-height: 30px;
   padding: 0 4px;
   font-size: 8px;
 }
@@ -5796,7 +6129,7 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
-  margin-top: 7px;
+  margin-top: 6px;
 }
 
 .station-slot-options label {
@@ -5810,21 +6143,42 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
 
 .station-slot-load {
   display: grid;
-  grid-column: 1 / -1;
   grid-template-columns: 34px minmax(0, 1fr);
   align-items: center;
+  margin-top: 6px;
   color: var(--muted);
   font-size: 8px;
 }
 
 .station-slot-load .segmented-control button {
   min-width: 0;
+  min-height: 30px;
   padding: 0 2px;
   font-size: 8px;
 }
 
 .station-slot-options input {
   padding: 0 5px;
+}
+
+@media (max-width: 520px) {
+  .station-slot-primary {
+    grid-template-columns: minmax(118px, 1fr) auto;
+  }
+
+  .station-slot-stock {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+}
+
+@media (pointer: coarse) {
+  .station-slot-primary .catalog-picker-trigger,
+  .station-slot-scope .segmented-control button,
+  .station-slot-load .segmented-control button,
+  .station-slot-options :is(select, input) {
+    min-height: 44px;
+  }
 }
 
 .station-route-progress {
@@ -6145,6 +6499,7 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
 .entity-stack-batch-remove > label { display: grid; grid-template-columns: auto minmax(64px, 1fr); align-items: center; gap: 8px; color: var(--muted); font-size: 9px; }
 .entity-stack-batch-remove input { min-width: 0; height: 32px; padding: 0 7px; border: 1px solid var(--line-strong); border-radius: 3px; outline: 0; background: var(--surface); color: var(--text); font: inherit; text-align: center; }
 .entity-stack-batch-remove > div { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.entity-stack-target-shortcuts { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
 .entity-stack-batch-remove button { min-width: 0; min-height: 32px; border: 1px solid var(--line); border-radius: 3px; background: var(--surface); color: var(--text-soft); cursor: pointer; font: inherit; font-size: 9px; }
 .entity-stack-batch-remove button:disabled { cursor: not-allowed; opacity: .4; }
 .entity-stack-batch-remove small,
@@ -6321,6 +6676,10 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   display: grid;
   gap: 7px;
   margin: 10px 0;
+}
+
+.belt-routing-controls > .segmented-control:not(.belt-route-mode) {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .belt-network-diagnostic {
@@ -12823,6 +13182,20 @@ html[data-ui-font-scale="200"] .storage-buffer-node {
   grid-template-columns: minmax(180px, 260px) minmax(280px, 1fr) minmax(360px, auto);
 }
 
+.statistics-sample-status {
+  min-height: 28px;
+  padding: 7px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.statistics-sample-status--error {
+  color: var(--coral);
+}
+
 .statistics-production-controls {
   display: grid;
   min-width: 0;
@@ -16897,12 +17270,27 @@ select {
 
 .operations-tabs {
   display: flex;
+  min-width: 0;
+  max-width: 100%;
   align-items: stretch;
   justify-content: center;
   gap: 2px;
   padding: 6px 18px 0;
   border-bottom: 1px solid var(--line);
   background: #0e1311;
+}
+
+@media (min-width: 761px) and (max-width: 1200px) {
+  .operations-tabs {
+    justify-content: flex-start;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  .operations-tabs > button {
+    flex: 0 0 auto;
+  }
 }
 
 .operations-tabs button {
@@ -17549,6 +17937,25 @@ select {
   gap: 0;
 }
 
+/* Help copy used to create an implicit second grid column in toggle groups.
+   That collapsed every setting label to a one-glyph strip at large scales. */
+.settings-toggle-list > .settings-help,
+.settings-toggle-list > .canvas-performance-feature-list {
+  width: 100%;
+  min-width: 0;
+  grid-column: 1 / -1;
+}
+
+.canvas-performance-feature-list {
+  display: grid;
+  min-width: 0;
+}
+
+.canvas-performance-feature-list .setting-row {
+  width: 100%;
+  min-width: 0;
+}
+
 .setting-row {
   display: grid;
   min-height: 58px;
@@ -17621,7 +18028,7 @@ select {
   gap: 6px;
 }
 
-@media (max-width: 620px), (min-resolution: 1.5dppx) {
+@media (max-width: 620px) {
   .setting-row {
     grid-template-columns: 34px minmax(0, 1fr) 38px;
     gap: 8px;
@@ -17633,6 +18040,53 @@ select {
     overflow-wrap: anywhere;
     word-break: normal;
   }
+}
+
+html[data-ui-font-scale="150"] .operations-settings .settings-group,
+html[data-ui-font-scale="200"] .operations-settings .settings-group {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 9px;
+}
+
+html[data-ui-font-scale="150"] .operations-settings .settings-group > *,
+html[data-ui-font-scale="200"] .operations-settings .settings-group > * {
+  min-width: 0;
+  grid-column: 1;
+}
+
+html[data-ui-font-scale="150"] .operations-settings .settings-help,
+html[data-ui-font-scale="200"] .operations-settings .settings-help {
+  margin-top: -2px;
+}
+
+html[data-ui-font-scale="150"] .operations-settings .settings-belt-defaults > label,
+html[data-ui-font-scale="200"] .operations-settings .settings-belt-defaults > label {
+  grid-template-columns: minmax(112px, auto) minmax(0, 1fr);
+}
+
+html[data-ui-font-scale="150"] .operations-settings .settings-segmented button,
+html[data-ui-font-scale="200"] .operations-settings .settings-segmented button {
+  min-width: 0;
+  min-height: 44px;
+  height: auto;
+  flex: 1 1 92px;
+  padding: 6px 9px;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+html[data-ui-font-scale="150"] .operations-settings .setting-row,
+html[data-ui-font-scale="200"] .operations-settings .setting-row {
+  grid-template-columns: 36px minmax(0, 1fr) 42px;
+  gap: 10px;
+  min-height: 70px;
+}
+
+html[data-ui-font-scale="150"] .operations-settings .setting-row > span,
+html[data-ui-font-scale="200"] .operations-settings .setting-row > span {
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 @media (max-width: 390px) {
@@ -17662,9 +18116,9 @@ select {
 .react-flow__node.selected .factory-node::before {
   content: "已选中";
   position: absolute;
-  top: -10px;
-  right: 8px;
-  z-index: 2;
+  top: 3px;
+  right: 6px;
+  z-index: 9;
   padding: 2px 5px;
   border: 1px solid rgba(120, 229, 209, 0.75);
   border-radius: 3px;
@@ -19348,8 +19802,8 @@ input:focus-visible,
 
 @media (pointer: coarse) {
   .factory-handle {
-    width: 18px !important;
-    height: 18px !important;
+    width: calc(18px * var(--connection-point-scale, 1)) !important;
+    height: calc(18px * var(--connection-point-scale, 1)) !important;
   }
 
   .node-slot,
@@ -21619,7 +22073,15 @@ input:focus-visible,
   color: var(--cyan);
 }
 
+.release-notes-body {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .release-notes-scroll {
+  flex: 1 1 auto;
   min-height: 0;
   overflow: hidden auto;
   overscroll-behavior: contain;
@@ -21627,6 +22089,95 @@ input:focus-visible,
   -webkit-overflow-scrolling: touch;
   scrollbar-color: var(--line-strong) transparent;
   scrollbar-width: thin;
+}
+
+.release-notes-history-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-raised);
+}
+
+.release-notes-history-toolbar > span {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.release-notes-history-toolbar > label {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.release-notes-history-toolbar select {
+  min-width: 74px;
+  height: 32px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-soft);
+  font: inherit;
+}
+
+.release-notes-history-toolbar button,
+.release-notes-history-list button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: 8px;
+}
+
+.release-notes-history-toolbar button:hover:not(:disabled),
+.release-notes-history-toolbar button:focus-visible,
+.release-notes-history-list button:hover,
+.release-notes-history-list button.active {
+  border-color: var(--theme-accent-border, var(--line-strong));
+  background: var(--theme-selection-bg, var(--surface-soft));
+  color: var(--cyan);
+}
+
+.release-notes-history-toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.release-notes-history-list {
+  display: grid;
+  gap: 5px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.release-notes-history-list button {
+  width: 100%;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.release-notes-history-list button > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.release-notes-history-list button small {
+  color: var(--muted);
+  font-size: 7px;
 }
 
 .release-notes-scroll ol {
@@ -22174,6 +22725,31 @@ input:focus-visible,
   background: #0e1512;
 }
 
+.construction-center-batch-target {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.construction-center-batch-target > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.construction-center-batch-target strong { color: var(--text); font-size: 10px; }
+.construction-center-batch-target small { color: var(--muted); font-size: 8px; }
+.construction-center-batch-target em { grid-column: 1 / -1; color: var(--coral); font-size: 8px; font-style: normal; }
+.construction-center-batch-target__actions { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; }
+.construction-center-batch-target__actions button { min-height: 30px; padding: 0 9px; border: 1px solid var(--line); border-radius: 3px; background: var(--surface-raised); color: var(--text-soft); cursor: pointer; font-size: 9px; }
+.construction-center-batch-target__actions button.primary { border-color: var(--theme-accent-border, #4c806f); background: var(--theme-accent-soft, #183026); color: var(--green); }
+.construction-center-batch-target__actions input { width: 100px; min-height: 30px; padding: 0 7px; border: 1px solid var(--line-strong); border-radius: 3px; outline: 0; background: var(--surface-raised); color: var(--text); font-size: 9px; }
+
 .construction-center-toggle {
   display: grid;
   min-width: 168px;
@@ -22675,6 +23251,8 @@ html[data-ui-font-scale="200"] .blueprint-import-open { min-width: 148px; }
   html[data-ui-font-scale="200"] .logistics-station-settings,
   html[data-ui-font-scale="200"] .logistics-slot-grid { grid-template-columns: minmax(0, 1fr); }
   html[data-ui-font-scale="200"] .blueprint-header-actions > .blueprint-import-open { min-width: 132px; }
+  .construction-center-batch-target { grid-template-columns: minmax(0, 1fr); }
+  .construction-center-batch-target__actions { justify-content: flex-start; }
 }
 
 html[data-ui-font-scale="200"] .construction-center-toolbar {
@@ -22968,72 +23546,6 @@ html:not([data-native-ui-scale])[data-ui-font-scale="150"] .construction-dock--c
 
 html:not([data-native-ui-scale])[data-ui-font-scale="200"] .construction-dock--compact .construction-items {
   grid-auto-columns: minmax(232px, 268px);
-}
-
-html:not([data-native-ui-scale])[data-ui-font-scale="150"] .factory-node {
-  width: 316px;
-}
-
-html:not([data-native-ui-scale])[data-ui-font-scale="200"] .factory-node {
-  width: 372px;
-}
-
-html:not([data-native-ui-scale])[data-ui-font-scale="125"] .delivery-hub-node {
-  width: 286px;
-  max-width: 286px;
-}
-
-html:not([data-native-ui-scale])[data-ui-font-scale="150"] .delivery-hub-node {
-  width: 304px;
-  max-width: 304px;
-}
-
-html:not([data-native-ui-scale])[data-ui-font-scale="200"] .delivery-hub-node {
-  width: 328px;
-  max-width: 328px;
-}
-
-html:not([data-native-ui-scale])[data-ui-font-scale="150"] .delivery-hub-slot-row,
-html:not([data-native-ui-scale])[data-ui-font-scale="200"] .delivery-hub-slot-row {
-  grid-template-columns: minmax(0, 1fr) 84px;
-  gap: 7px;
-}
-
-html:not([data-native-ui-scale])[data-ui-font-scale="150"] .factory-node--megastructure {
-  width: 632px;
-  min-height: 380px;
-}
-
-html:not([data-native-ui-scale])[data-ui-font-scale="200"] .factory-node--megastructure {
-  width: 744px;
-  min-height: 460px;
-}
-
-html:not([data-native-ui-scale])[data-ui-font-scale="125"] .storage-buffer-node {
-  width: 316px;
-}
-
-html:not([data-native-ui-scale])[data-ui-font-scale="150"] .storage-buffer-node {
-  width: 354px;
-}
-
-html:not([data-native-ui-scale])[data-ui-font-scale="200"] .storage-buffer-node {
-  width: 420px;
-}
-
-html:not([data-native-ui-scale])[data-ui-font-scale="150"] .node-io,
-html:not([data-native-ui-scale])[data-ui-font-scale="200"] .node-io {
-  gap: 14px;
-}
-
-html:not([data-native-ui-scale])[data-ui-font-scale="150"] .storage-buffer-node .logistics-slot-row,
-html:not([data-native-ui-scale])[data-ui-font-scale="200"] .storage-buffer-node .logistics-slot-row {
-  gap: 20px;
-}
-
-html:not([data-native-ui-scale])[data-ui-font-scale="150"] .storage-buffer-node .logistics-slot-row,
-html:not([data-native-ui-scale])[data-ui-font-scale="200"] .storage-buffer-node .logistics-slot-row {
-  grid-template-columns: 1fr;
 }
 
 html:not([data-native-ui-scale])[data-ui-font-scale="125"] .construction-item,

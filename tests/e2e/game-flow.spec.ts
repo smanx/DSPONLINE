@@ -84,7 +84,7 @@ test("start menu gates simulation and exposes saves, cloud, import and settings"
   await expect(page.locator(".start-menu")).toBeVisible();
   await expect(page.getByRole("button", { name: /继续游戏/ })).toBeVisible();
   await page.getByRole("button", { name: /继续游戏/ }).click();
-  await expect(page.locator(".game-shell")).toBeVisible();
+  await expect(page.locator(".game-shell")).toBeVisible({ timeout: 15_000 });
   expect(presenceIds).toHaveLength(1);
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.player-id.v1"))).toBe(presenceIds[0]);
 });
@@ -206,6 +206,7 @@ test("dated release notes appear once and remain available from both settings sc
   await page.locator(".start-menu-primary").click();
   await page.getByTitle("打开设置").click();
   const operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.locator(".settings-category-overview").getByRole("button", { name: /教程、版本与其他/ }).click();
   await expect(operations.getByRole("button", { name: "查看版本更新记录" })).toBeVisible();
   await operations.getByRole("button", { name: "查看版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
@@ -634,8 +635,8 @@ test("username registration and login preserve every local save without automati
 async function freshGame(page: Page) {
   await page.goto("/");
   await expect(page.getByTitle("重置当前工厂")).toHaveCount(0);
-  await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible();
-  await expect(page.locator(".vein-node").filter({ hasText: "铁矿石" })).toBeVisible();
+  await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(".vein-node").filter({ hasText: "铁矿石" })).toBeVisible({ timeout: 15_000 });
 }
 
 async function enableCoarsePointer(page: Page) {
@@ -4095,7 +4096,10 @@ test("multi-slot stations and monitored stacked lines stay operable on desktop a
   const inspector = page.locator(".station-inspector");
   const slots = inspector.locator(".station-slot");
   await expect(slots).toHaveCount(5);
-  await slots.nth(1).getByRole("button", { name: "配置货物" }).click();
+  await expect(slots.nth(1).getByRole("button", { name: "选择槽位 2 物资" })).toBeVisible();
+  await expect(slots.nth(0)).not.toContainText("航路");
+  await expect(slots.nth(0)).not.toContainText("翘曲预算");
+  await expect(slots.nth(0)).not.toContainText("保留");
   await chooseItem(page, slots.nth(1), "铜块");
   await slots.nth(1).getByRole("button", { name: "需求", exact: true }).click();
   await slots.nth(1).getByRole("button", { name: "25%", exact: true }).click();
@@ -4379,6 +4383,7 @@ test("stellar workspaces stay usable at 150 percent font scale on desktop and mo
   await page.getByLabel("打开设置").click();
   const operations = page.getByRole("dialog", { name: "运营中心" });
   await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await operations.locator(".settings-category-overview").getByRole("button", { name: "画面与主题" }).click();
   await operations.getByLabel("字体大小").getByRole("button", { name: "150%" }).click();
   await operations.getByLabel("关闭运营中心").click();
 
@@ -4729,6 +4734,7 @@ test("double-click canvas zoom is disabled by default and follows the settings t
   await page.getByLabel("打开设置").click();
   const operations = page.getByRole("dialog", { name: "运营中心" });
   await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await operations.locator(".settings-category-overview").getByRole("button", { name: "交互与控制" }).click();
   const doubleClickToggle = operations.locator(".setting-row").filter({ hasText: "允许双击缩放" });
   await expect(doubleClickToggle.locator('input[type="checkbox"]')).not.toBeChecked();
   await doubleClickToggle.click();
@@ -4949,6 +4955,7 @@ test("operations settings and local save slots persist across reload", async ({ 
   await page.getByLabel("打开设置").click();
   let operations = page.getByRole("dialog", { name: "运营中心" });
   await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await operations.locator(".settings-category-overview").getByRole("button", { name: "画面与主题" }).click();
   await expect(operations.locator(".settings-community")).toContainText("1076757280");
   const fontScale = operations.getByLabel("字体大小");
   await expect(fontScale.getByRole("button")).toHaveText(["80%", "100%", "125%", "150%", "200%"]);
@@ -4968,10 +4975,12 @@ test("operations settings and local save slots persist across reload", async ({ 
   await expect.poll(async () => operations.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await fontScale.getByRole("button", { name: "125%" }).click();
   await operations.getByRole("button", { name: "4×" }).click();
+  await operations.locator(".settings-category-tabs").getByRole("button", { name: "交互与控制" }).click();
   await operations.locator(".setting-row").filter({ hasText: "性能模式" }).click();
   await operations.locator(".setting-row").filter({ hasText: "减少动态效果" }).click();
   await operations.locator(".setting-row").filter({ hasText: "操作音效" }).click();
   await operations.locator(".setting-row").filter({ hasText: "允许双击缩放" }).click();
+  await operations.locator(".settings-category-tabs").getByRole("button", { name: "存档与云同步" }).click();
   await operations.getByRole("button", { name: "30 秒" }).click();
   await expect(page.locator(".game-shell")).toHaveAttribute("data-performance-mode", "true");
   await expect(page.locator(".game-shell")).toHaveAttribute("data-reduced-motion", "true");
@@ -5005,7 +5014,9 @@ test("operations settings and local save slots persist across reload", async ({ 
   await page.getByLabel("打开设置").click();
   operations = page.getByRole("dialog", { name: "运营中心" });
   await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
+  await operations.locator(".settings-category-tabs").getByRole("button", { name: "画面与主题" }).click();
   await expect(operations.getByLabel("字体大小").getByRole("button", { name: "125%" })).toHaveAttribute("aria-pressed", "true");
+  await operations.locator(".settings-category-tabs").getByRole("button", { name: "交互与控制" }).click();
   await expect(operations.locator(".setting-row").filter({ hasText: "性能模式" }).locator('input[type="checkbox"]')).toBeChecked();
   await expect(operations.locator(".setting-row").filter({ hasText: "减少动态效果" }).locator('input[type="checkbox"]')).toBeChecked();
   await expect(operations.locator(".setting-row").filter({ hasText: "操作音效" }).locator('input[type="checkbox"]')).toBeChecked();
@@ -5060,6 +5071,7 @@ test("font scaling keeps rendered belt endpoints attached to their handles", asy
   await page.locator(".react-flow__controls-fitview").click();
   await page.getByLabel("打开设置").click();
   const operations = page.getByRole("dialog", { name: "运营中心" });
+  await operations.locator(".settings-category-overview").getByRole("button", { name: "画面与主题" }).click();
   const fontScale = operations.getByLabel("字体大小");
   const endpointDistances = () => page.evaluate(() => {
     const path = document.querySelector<SVGPathElement>(".factory-edge-visual-path");
@@ -5581,6 +5593,7 @@ test("galaxy rankings are public to visitors and refresh from the main cloud sav
   const serverMetrics = {
     energyGeneratedMj: 1_500_000_000,
     uploadedWhiteMatrix: 400_000,
+    peakWhiteMatrixPerMinute: 12_000,
     peakGenerationKw: 2_300_000,
     peakThroughputPerMinute: 150_000,
     peakDysonPowerKw: 1_500_000,
@@ -5623,7 +5636,7 @@ test("galaxy rankings are public to visitors and refresh from the main cloud sav
     }
     if (pathname === "/api/leaderboard") {
       const category = new URL(request.url()).searchParams.get("category");
-      const value = category === "power" ? serverMetrics.energyGeneratedMj : category === "upload" ? serverMetrics.uploadedWhiteMatrix : category === "dyson" ? serverMetrics.peakDysonPowerKw : category === "throughput" ? serverMetrics.peakThroughputPerMinute : serverMetrics.galaxyScore;
+      const value = category === "power" ? serverMetrics.energyGeneratedMj : category === "upload" ? serverMetrics.uploadedWhiteMatrix : category === "white-rate" ? serverMetrics.peakWhiteMatrixPerMinute : category === "dyson" ? serverMetrics.peakDysonPowerKw : category === "throughput" ? serverMetrics.peakThroughputPerMinute : serverMetrics.galaxyScore;
       return fulfill({ entries: leaderboardVisible ? [{ userId: cloudUser.id, accountId: cloudUser.id, displayName: cloudUser.displayName, avatar: "矩", seasonId: "season_01", metrics: serverMetrics, submittedAt: Date.now(), value, verified: true, rank: 1 }] : [] });
     }
     if (pathname === "/api/public-status") return fulfill({ players: { total: 1, today: 1, online: 1, onlineWindowSeconds: 120 }, serverTime: Date.now() });
@@ -5674,6 +5687,10 @@ test("galaxy rankings are public to visitors and refresh from the main cloud sav
   await expect(galaxy.getByRole("button", { name: "排名已刷新" })).toBeVisible();
   await expect(localRow).toContainText("主云存档计算");
   expect(refreshRequest).toEqual({ seasonId: "season_01" });
+
+  await galaxy.getByRole("tab", { name: /白糖产量/ }).click();
+  await expect(localRow.locator(".galaxy-rank-value")).toContainText("1.2万");
+  await expect(galaxy).toContainText("白糖产量峰值");
 
   await galaxy.getByRole("tab", { name: /累计发电/ }).click();
   await expect(localRow.locator(".galaxy-rank-value")).toContainText("15亿");

@@ -45,6 +45,7 @@ import {
   type LocalSaveStorageEstimate,
 } from "./localSaveStore";
 import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, MaterialDeliverySlot, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, SorterTier, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId, SystemSpaceStationState, GalacticHubNetworkState } from "./types";
+import type { OfflineApproximationReport } from "./offlineApproximation";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -102,6 +103,7 @@ export interface OfflineReport {
   exported?: Array<{ projectId: GalacticExportProjectId; amount: number }>;
   galacticCreditsAdded?: number;
   returningReward?: Array<{ itemId: ItemId; amount: number }>;
+  approximation?: OfflineApproximationReport;
 }
 
 export interface SaveSlotSummary {

@@ -1,4 +1,4 @@
-import type { LeaderboardCategoryId, LeaderboardMetrics } from "./leaderboard";
+import { normalizeLeaderboardMetrics, type LeaderboardCategoryId, type LeaderboardMetrics } from "./leaderboard";
 import { apiFetch } from "./apiTransport";
 import { inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
 import { getDesktopBridge } from "../desktop";
@@ -728,7 +728,7 @@ export async function restoreCloudSaveRevision(revision: number, expectedRevisio
 
 export async function fetchCloudLeaderboard(category: LeaderboardCategoryId, seasonId: string): Promise<CloudLeaderboardEntry[]> {
   const result = await cloudRequest<{ entries: CloudLeaderboardEntry[] }>(`/leaderboard?category=${encodeURIComponent(category)}&seasonId=${encodeURIComponent(seasonId)}`, {}, false, true);
-  return result.entries;
+  return result.entries.map((entry) => ({ ...entry, metrics: normalizeLeaderboardMetrics(entry.metrics) }));
 }
 
 export async function fetchCloudPublicStatus(): Promise<CloudPublicStatus> {

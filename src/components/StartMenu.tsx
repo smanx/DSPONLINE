@@ -77,6 +77,8 @@ import { useResolvedTheme } from "../hooks/useResolvedTheme";
 import { isSecureCloudClient } from "../nativeApp";
 import { useAppLocale } from "../i18n/locale";
 import { exportTextFile } from "../game/fileExport";
+import { readOfflineApproximationEnabled, writeOfflineApproximationEnabled, type OfflineApproximationReport } from "../game/offlineApproximation";
+import { readShowRunLogPreference, readThemePreference, writeShowRunLogPreference, writeThemePreference } from "../game/uiPreferences";
 
 type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "new";
 type CloudAuthMode = "login" | "register" | "forgot" | "reset";
@@ -151,12 +153,13 @@ function cloudSyncLabel(state: CloudSyncState): string {
 function readMenuSettings(fallback: GameSettings): GameSettings {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(MENU_SETTINGS_KEY) ?? "null") as Partial<GameSettings> | null;
-    if (!parsed) return fallback;
+    const localTheme = readThemePreference();
+    if (!parsed) return localTheme ? { ...fallback, theme: localTheme } : fallback;
     return {
       ...fallback,
       simulationSpeed: SIMULATION_SPEEDS.includes(parsed.simulationSpeed as SimulationSpeed) ? parsed.simulationSpeed as SimulationSpeed : fallback.simulationSpeed,
       fontScale: FONT_SCALES.includes(parsed.fontScale as FontScale) ? parsed.fontScale as FontScale : fallback.fontScale,
-      theme: parsed.theme === "light" || parsed.theme === "system" ? parsed.theme : "dark",
+      theme: localTheme ?? (parsed.theme === "light" || parsed.theme === "system" ? parsed.theme : "dark"),
       technologyLayout: parsed.technologyLayout === "compact" ? "compact" : "standard",
       autosaveIntervalSeconds: AUTOSAVE_INTERVALS.includes(parsed.autosaveIntervalSeconds as AutosaveIntervalSeconds) ? parsed.autosaveIntervalSeconds as AutosaveIntervalSeconds : fallback.autosaveIntervalSeconds,
       autoShortageNavigation: typeof parsed.autoShortageNavigation === "boolean" ? parsed.autoShortageNavigation : fallback.autoShortageNavigation,
@@ -276,6 +279,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [slots, setSlots] = useState(getMenuSlotSummaries);
   const [snapshots, setSnapshots] = useState(getMenuSnapshotSummaries);
   const [settings, setSettings] = useState<GameSettings>(() => readMenuSettings(defaultSettings));
+  const [showRunLog, setShowRunLog] = useState(readShowRunLogPreference);
+  const [offlineApproximationEnabled, setOfflineApproximationEnabled] = useState(readOfflineApproximationEnabled);
   useResolvedTheme(settings.theme);
   const [cloudSession, setCloudSession] = useState<CloudSession>({ status: "checking", user: null, cloudSave: null, mailAvailable: false, message: null });
   const initialCloudAction = useMemo(() => {
@@ -408,6 +413,12 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     const next = { ...settings, ...changes };
     setSettings(next);
     saveMenuSettings(next);
+    if (changes.theme) writeThemePreference(changes.theme);
+  };
+
+  const updateRunLogPreference = (enabled: boolean) => {
+    setShowRunLog(enabled);
+    writeShowRunLogPreference(enabled);
   };
 
   const preserveCurrentSave = async (reason: string, storage?: StorageModule) => {
@@ -433,16 +444,20 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     storage: StorageModule,
   ) => {
     let completed = loaded.state;
+    let approximationReport: OfflineApproximationReport | undefined;
     if (loaded.offlineSeconds >= 1) {
       const controller = new AbortController();
       offlineAbortRef.current = controller;
       setOfflineProgress({ label, completedSeconds: 0, totalSeconds: loaded.offlineSeconds, progress: 0 });
-      const { runOfflineSimulationInWorker } = await importWithRecovery(() => import("../game/offlineSimulation"), "离线结算模块");
+      const { runOfflineSimulationInWorkerDetailed } = await importWithRecovery(() => import("../game/offlineSimulation"), "离线结算模块");
       try {
-        completed = await runOfflineSimulationInWorker(loaded.state, loaded.offlineSeconds, {
+        const result = await runOfflineSimulationInWorkerDetailed(loaded.state, loaded.offlineSeconds, {
           signal: controller.signal,
+          approximate: offlineApproximationEnabled,
           onProgress: (progress) => setOfflineProgress({ label, ...progress }),
         });
+        completed = result.state;
+        approximationReport = result.approximation;
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
         const skipped = storage.cancelDeferredOfflineGame(loaded);
@@ -451,6 +466,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       }
     }
     const finalized = storage.finalizeDeferredOfflineGame(loaded, completed);
+    if (approximationReport && finalized.offlineReport) finalized.offlineReport = { ...finalized.offlineReport, approximation: approximationReport };
     await enterLoadedGame(finalized, preserveReason, storage);
   };
 
@@ -1126,7 +1142,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             <section><header><Factory size={15} /><strong>科技树布局</strong><small>{settings.technologyLayout === "compact" ? "精简" : "标准"}</small></header><div className="start-menu-segments">{(["standard", "compact"] as const).map((technologyLayout) => <button className={settings.technologyLayout === technologyLayout ? "active" : ""} type="button" key={technologyLayout} onClick={() => updateMenuSettings({ technologyLayout })}>{technologyLayout === "compact" ? "精简模式" : "标准模式"}</button>)}</div></section>
             <section><header><Zap size={15} /><strong>模拟速度</strong><small>{settings.simulationSpeed}×</small></header><div className="start-menu-segments">{SIMULATION_SPEEDS.map((speed) => <button className={settings.simulationSpeed === speed ? "active" : ""} type="button" key={speed} onClick={() => updateMenuSettings({ simulationSpeed: speed })}>{speed}×</button>)}</div></section>
             <section><header><Clock3 size={15} /><strong>自动保存</strong><small>{settings.autosaveIntervalSeconds === 0 ? "已关闭" : `${settings.autosaveIntervalSeconds} 秒`}</small></header><div className="start-menu-segments">{AUTOSAVE_INTERVALS.map((seconds) => <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => updateMenuSettings({ autosaveIntervalSeconds: seconds })}>{seconds === 0 ? "关闭" : seconds === 600 ? "10 分钟" : `${seconds} 秒`}</button>)}</div>{settings.autosaveIntervalSeconds === 0 ? <small className="settings-warning">关闭后，刷新页面或异常退出可能丢失未保存进度；手动保存和云同步不受影响。</small> : null}</section>
-            <section className="start-menu-setting-toggles"><ToggleRow checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "低频渲染" : "完整渲染"} icon={<Cpu size={16} />} onChange={(performanceMode) => updateMenuSettings({ performanceMode })} /><ToggleRow checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态已精简" : "完整动态"} icon={<Gauge size={16} />} onChange={(reducedMotion) => updateMenuSettings({ reducedMotion })} /><ToggleRow checked={settings.soundEnabled} label="操作音效" value={settings.soundEnabled ? "已开启" : "已关闭"} icon={settings.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />} onChange={(soundEnabled) => updateMenuSettings({ soundEnabled })} /><ToggleRow checked={settings.allowDoubleClickZoom} label="允许双击缩放" value={settings.allowDoubleClickZoom ? "双击聚焦画布" : "连续点击不缩放"} icon={<MousePointer2 size={16} />} onChange={(allowDoubleClickZoom) => updateMenuSettings({ allowDoubleClickZoom })} /></section>
+            <section className="start-menu-setting-toggles"><ToggleRow checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "低频渲染" : "完整渲染"} icon={<Cpu size={16} />} onChange={(performanceMode) => updateMenuSettings({ performanceMode })} /><ToggleRow checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态已精简" : "完整动态"} icon={<Gauge size={16} />} onChange={(reducedMotion) => updateMenuSettings({ reducedMotion })} /><ToggleRow checked={settings.soundEnabled} label="操作音效" value={settings.soundEnabled ? "已开启" : "已关闭"} icon={settings.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />} onChange={(soundEnabled) => updateMenuSettings({ soundEnabled })} /><ToggleRow checked={settings.allowDoubleClickZoom} label="允许双击缩放" value={settings.allowDoubleClickZoom ? "双击聚焦画布" : "连续点击不缩放"} icon={<MousePointer2 size={16} />} onChange={(allowDoubleClickZoom) => updateMenuSettings({ allowDoubleClickZoom })} /><ToggleRow checked={showRunLog} label="显示运行记录" value={showRunLog ? "显示运行反馈浮条" : "仅保留错误、成就和诊断"} icon={<Activity size={16} />} onChange={updateRunLogPreference} /><ToggleRow checked={offlineApproximationEnabled} label="近似离线结算（实验）" value={offlineApproximationEnabled ? "仅稳定产线尝试，失败自动精确回退" : "关闭，使用精确结算"} icon={<Gauge size={16} />} onChange={(enabled) => { writeOfflineApproximationEnabled(enabled); setOfflineApproximationEnabled(enabled); }} /></section>
+            {offlineApproximationEnabled ? <p className="settings-warning">实验功能只在稳定固体产线尝试宏观跳算；涉及物流、量子、流体、戴森或缓存边界时会自动回到精确路径，不改变存档格式。</p> : null}
             <NativeUpdateCard className="start-menu-native-update" />
             <section className="start-menu-release-notes"><header><History size={15} /><strong>版本更新记录</strong><small>{CURRENT_RELEASE_NOTES.date}</small></header><button type="button" onClick={onOpenReleaseNotes} aria-label={`查看${CURRENT_RELEASE_NOTES.date}版本更新记录`}><span><strong>{CURRENT_RELEASE_NOTES.title}</strong><small>{CURRENT_RELEASE_NOTES.items.length} 项体验更新</small></span><ArrowRight size={15} /></button></section>
             <section className="start-menu-community"><header><MessageCircle size={15} /><strong>QQ 交流群</strong><small>意见、建议与问题反馈</small></header><p>群号 <strong>1076757280</strong></p></section>

@@ -48,6 +48,7 @@ import { getSaveSummaryRefreshIntervalMs, shouldRefreshSaveSummaries } from "./g
 import { getPlanetDisplayName, getPlanetIndustrialProfile, getPlanetSolarPowerMultiplier, getStarSystemDisplayName } from "./game/galaxy";
 import {
   addUnitToEntityGroup,
+  batchIncreaseSelection,
   addCanvasBookmark,
   addCanvasRegion,
   applyStationSlotTemplateToEntities,
@@ -110,6 +111,7 @@ import {
   getSprayCoaterInstallCheck,
   getProducedOutputs,
   getBuildingStackAdditionCheck,
+  getEntityStackTargetCheck,
   getStationSlots,
   getTechnologyConstructionRewards,
   handcraftRecipeWithUpstream,
@@ -157,6 +159,7 @@ import {
   setBeltStackSize,
   setConstructionAutomationEnabled,
   setConstructionAutomationTarget,
+  setConstructionAutomationTargetsForBuildings,
   setActivePlanet,
   setEntityRecipe,
   setEntitiesRecipe,
@@ -195,7 +198,7 @@ import {
   setRemoteStationFleetTarget,
   adjustRemoteStationWarpers,
   setRemoteStationSlotItem,
-  setRemoteBuildingStackTarget,
+  setEntityStackTarget,
   setStationHubConfiguration,
   setStationMinimumLoad,
   setStationSlotItem,
@@ -278,6 +281,16 @@ import { mergeSimulationProjections, type SimulationProjection } from "./game/si
 import { applySimulationStateDelta, readExperimentalSimulationDeltaMode } from "./game/simulationDelta";
 import { readMulticoreSimulationOptions } from "./game/multicoreSimulation";
 import { getOnboardingFocusTarget, getOnboardingStep, recordBasicOnboardingEvent, type OnboardingActionId } from "./game/onboarding";
+import { takeSimulationBudgetSlice } from "./game/simulationBudget";
+import { readOfflineApproximationEnabled } from "./game/offlineApproximation";
+import {
+  createTimeWarpComputeGovernor,
+  markTimeWarpWorkerUnavailable,
+  recordTimeWarpComputeSample,
+  resolveTimeWarpComputeLimits,
+  shouldAbortTimeWarpWorker,
+  type TimeWarpComputeGovernorState,
+} from "./game/timeWarpComputeGovernor";
 import { useCoarsePointer } from "./hooks/useCoarsePointer";
 import { useCompactLayout } from "./hooks/useCompactLayout";
 import { useLongPress } from "./hooks/useLongPress";
@@ -313,8 +326,24 @@ import {
   setCanvasPointerEdgeVelocity,
   stopCanvasPointerMotion as stopCanvasPointerMotionSession,
 } from "./hooks/canvasPointerMotion";
+import { readConnectionPointSize, readShowRunLogPreference, readThemePreference, writeConnectionPointSize, writeShowRunLogPreference, writeThemePreference, type ConnectionPointSize } from "./game/uiPreferences";
 
 type InspectorTab = "inspect" | "fabricate";
+
+// Run-log visibility is a presentation preference. Keep safety-critical
+// feedback visible when the routine event feed is disabled, while allowing
+// ordinary success/status toasts to stay out of the player's way.
+function isPersistentNotice(message: string): boolean {
+  return /失败|错误|异常|损坏|未保存|冲突|无法|不能|不可|未执行|超出安全|成就解锁|研究完成|任务完成|云端已有|同步失败/.test(message);
+}
+
+function getNoticeTone(message: string): "achievement" | "success" | "warning" | "danger" | "neutral" {
+  if (/成就解锁/.test(message)) return "achievement";
+  if (/失败|错误|异常|损坏|未保存|冲突|无法|不能|不可|超出安全|同步失败/.test(message)) return "danger";
+  if (/不足|警告|暂停|尚未|等待|未执行|需要手动|需要确认/.test(message)) return "warning";
+  if (/完成|成功|已保存|已更新|已创建|已放置|已回收|已升级|已定位|已开启|已切换|研究完成|任务完成/.test(message)) return "success";
+  return "neutral";
+}
 
 interface AlignmentGuides {
   x: number | null;
@@ -656,7 +685,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [loaded] = useState(initialLoad);
   const [game, setGame] = useState(loaded.state);
   const observedGame = useObservedBeltFlowGame(game, !game.paused);
-  const resolvedTheme = useResolvedTheme(game.settings.theme);
+  const [themeMode, setThemeMode] = useState(() => readThemePreference() ?? loaded.state.settings.theme);
+  const [connectionPointSize, setConnectionPointSize] = useState<ConnectionPointSize>(readConnectionPointSize);
+  useEffect(() => { writeConnectionPointSize(connectionPointSize); }, [connectionPointSize]);
+  const [showRunLog, setShowRunLog] = useState(readShowRunLogPreference);
+  const resolvedTheme = useResolvedTheme(themeMode);
   const [canvasRenderSnapshot, setCanvasRenderSnapshot] = useState<CanvasRenderSnapshot>(() => createCanvasRenderSnapshot(loaded.state));
   const canvasGameSnapshot = canvasRenderSnapshot.game;
   const canvasGame = useObservedBeltFlowGame(canvasGameSnapshot, !canvasGameSnapshot.paused);
@@ -712,6 +745,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [tutorialSectionId, setTutorialSectionId] = useState<string | undefined>();
   const [pureIdleActive, setPureIdleActive] = useState(() => loaded.state.timeWarp.enabled);
   const [pureIdleStartedAt, setPureIdleStartedAt] = useState<number | null>(() => loaded.state.timeWarp.enabled ? Date.now() : null);
+  const [timeWarpComputeState, setTimeWarpComputeState] = useState<TimeWarpComputeGovernorState>(() =>
+    createTimeWarpComputeGovernor(loaded.state.settings.simulationSpeed));
+  const [timeWarpPendingUi, setTimeWarpPendingUi] = useState(() => loaded.state.timeWarp.pendingSimulationSeconds);
   const [fabricatorFocusItemId, setFabricatorFocusItemId] = useState<ItemId | null>(null);
   const [accountState, setAccountState] = useState(loadAccountState);
   const [campaignFocusItemId, setCampaignFocusItemId] = useState<ItemId | null>(null);
@@ -839,6 +875,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const lastSimulationResultRef = useRef<GameState | null>(null);
   const simulationPendingSecondsRef = useRef(game.timeWarp.pendingSimulationSeconds);
   const simulationPendingWallSecondsRef = useRef(game.timeWarp.pendingWallSeconds);
+  const timeWarpComputeStateRef = useRef(timeWarpComputeState);
   const simulationRequestIdRef = useRef(0);
   const pureIdleActiveRef = useRef(loaded.state.timeWarp.enabled);
   const pureIdleStoppingRef = useRef(false);
@@ -847,6 +884,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const burstSequenceRef = useRef(0);
   const getCurrentGame = useCallback(() => gameRef.current, []);
   const performanceMonitor = usePerformanceMonitor(getCurrentGame, game.paused);
+  const publishTimeWarpComputeState = useCallback((next: TimeWarpComputeGovernorState) => {
+    timeWarpComputeStateRef.current = next;
+    setTimeWarpComputeState(next);
+  }, []);
   const { screenToFlowPosition, setCenter, setViewport, fitView, getViewport, zoomIn, zoomOut } = useReactFlow();
   const flowStore = useStoreApi<FactoryFlowNode, FactoryFlowEdge>();
   useEffect(() => {
@@ -897,6 +938,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const viewportCullingFeatureActive = canvasPerformanceFeatureIsActive(canvasPerformanceFeatures, "viewportCulling", endgameExtremeMode);
   const spatialIndexesFeatureActive = canvasPerformanceFeatureIsActive(canvasPerformanceFeatures, "spatialIndexes", endgameExtremeMode);
   const minimapThrottleFeatureActive = canvasPerformanceFeatureIsActive(canvasPerformanceFeatures, "minimapThrottle", endgameExtremeMode);
+  const connectionPointScale = connectionPointSize === "large50" ? 1.5 : connectionPointSize === "large25" ? 1.25 : 1;
+  const connectionHitRadius = (coarsePointer ? 56 : 24) * connectionPointScale;
+  const connectionFlowRadius = (coarsePointer ? 56 : 30) * connectionPointScale;
+  const timeWarpComputeLimits = resolveTimeWarpComputeLimits(
+    timeWarpComputeState,
+    game.timeWarp.requestedMultiplier,
+    getEffectiveSimulationMultiplier(game),
+    game.settings.simulationSpeed,
+  );
   const activeMobileCanvasMode: MobileCanvasMode = placement
     ? "place"
     : connectionDraft || clickConnectionPreview
@@ -1359,6 +1409,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const handleTimeWarpEnabledChange = useCallback((enabled: boolean) => {
     if (enabled) {
+      if (!simulationWorkerRef.current || simulationWorkerDisabledRef.current) {
+        setNotice("当前环境没有可用的模拟 Worker，已阻止高倍率纯挂机以避免主线程卡死");
+        return;
+      }
+      const governor = createTimeWarpComputeGovernor(gameRef.current.settings.simulationSpeed);
+      publishTimeWarpComputeState(governor);
+      simulationPendingSecondsRef.current = 0;
+      simulationPendingWallSecondsRef.current = 0;
+      setTimeWarpPendingUi(0);
       setPureIdleActive(true);
       pureIdleActiveRef.current = true;
       setPureIdleStartedAt(Date.now());
@@ -1378,32 +1437,64 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     pureIdleActiveRef.current = false;
     setPureIdleActive(false);
     setPureIdleStartedAt(null);
+    simulationPendingSecondsRef.current = 0;
+    simulationPendingWallSecondsRef.current = 0;
+    setTimeWarpPendingUi(0);
     setNotice("纯挂机已停止");
-  }, []);
+  }, [publishTimeWarpComputeState]);
+
+  const abortPureIdleForWorkerFailure = useCallback((message: string) => {
+    simulationWorkerRef.current?.terminate();
+    simulationWorkerRef.current = null;
+    simulationWorkerDisabledRef.current = true;
+    simulationSubmissionRef.current = null;
+    lastSimulationResultRef.current = null;
+    simulationPendingSecondsRef.current = 0;
+    simulationPendingWallSecondsRef.current = 0;
+    setTimeWarpPendingUi(0);
+    setSimulationWorkerActive(false);
+    publishTimeWarpComputeState(markTimeWarpWorkerUnavailable(
+      timeWarpComputeStateRef.current,
+      gameRef.current.settings.simulationSpeed,
+    ));
+    setGame((current) => {
+      const next = setPaused(setTimeWarpEnabled(current, false), true);
+      gameRef.current = next;
+      return next;
+    });
+    pureIdleActiveRef.current = false;
+    setPureIdleActive(false);
+    setPureIdleStartedAt(null);
+    setNotice(message);
+  }, [publishTimeWarpComputeState]);
 
   const stopPureIdle = useCallback(async () => {
     pureIdleStoppingRef.current = true;
     // Let one already-running worker segment reach its safe boundary before
     // taking the final snapshot. The timer will not submit another segment.
     const waitStartedAt = performance.now();
-    while (simulationSubmissionRef.current && performance.now() - waitStartedAt < 15_000) {
+    while (simulationSubmissionRef.current && performance.now() - waitStartedAt < 5_000) {
       await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
     }
+    let timedOut = false;
     if (simulationSubmissionRef.current) {
-      const inFlight = simulationSubmissionRef.current;
+      timedOut = true;
+      simulationWorkerRef.current?.terminate();
+      simulationWorkerRef.current = null;
+      simulationWorkerDisabledRef.current = true;
+      setSimulationWorkerActive(false);
       simulationSubmissionRef.current = null;
-      simulationPendingSecondsRef.current += inFlight.simulationSeconds;
-      simulationPendingWallSecondsRef.current += inFlight.wallSeconds;
+      lastSimulationResultRef.current = null;
     }
-    const pendingSimulationSeconds = simulationPendingSecondsRef.current;
-    const pendingWallSeconds = simulationPendingWallSecondsRef.current;
+    // Pending acceleration is only a scheduler budget. It has not reached a
+    // deterministic commit and must never be synchronously replayed on the
+    // main thread while the player is trying to stop.
     simulationPendingSecondsRef.current = 0;
     simulationPendingWallSecondsRef.current = 0;
-    let settled = gameRef.current;
-    if (!settled.paused && (pendingSimulationSeconds > 0 || pendingWallSeconds > 0)) {
-      settled = advanceSimulationBudget(settled, pendingSimulationSeconds, pendingWallSeconds);
-    }
-    const next = setTimeWarpEnabled(settled, false);
+    setTimeWarpPendingUi(0);
+    const next = timedOut
+      ? setPaused(setTimeWarpEnabled(gameRef.current, false), true)
+      : setTimeWarpEnabled(gameRef.current, false);
     gameRef.current = next;
     setGame(next);
     pureIdleActiveRef.current = false;
@@ -1416,7 +1507,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       pureIdleStoppingRef.current = false;
       return;
     }
-    setNotice("纯挂机已停止，进度已校验保存");
+    setNotice(timedOut
+      ? "纯挂机 Worker 未在安全窗口响应；未完成切片已丢弃，模拟已暂停且已完成存档校验"
+      : "纯挂机已停止，进度已校验保存");
     pureIdleStoppingRef.current = false;
   }, [persistPrimarySave]);
 
@@ -1526,6 +1619,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   useEffect(() => {
     if (typeof Worker === "undefined") {
       simulationWorkerDisabledRef.current = true;
+      if (gameRef.current.timeWarp.enabled) {
+        abortPureIdleForWorkerFailure("当前环境不支持模拟 Worker，纯挂机已安全停止并暂停模拟");
+      }
       return;
     }
     const worker = new Worker(new URL("./game/simulation.worker.ts", import.meta.url), { type: "module", name: "factory-simulation" });
@@ -1573,6 +1669,23 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         simulationPendingWallSecondsRef.current += submission.wallSeconds;
         lastSimulationResultRef.current = null;
         return;
+      }
+      if (submission.state.timeWarp.enabled && typeof event.data.durationMs === "number") {
+        const baseMultiplier = submission.state.settings.simulationSpeed;
+        const powerLimitedMultiplier = Math.max(
+          baseMultiplier,
+          Math.floor(submission.state.timeWarp.effectiveMultiplier),
+        );
+        const governor = recordTimeWarpComputeSample(timeWarpComputeStateRef.current, {
+          simulationSeconds: submission.simulationSeconds,
+          durationMs: Math.max(event.data.durationMs, latency),
+          pendingSimulationSeconds: simulationPendingSecondsRef.current,
+          requestedMultiplier: submission.state.timeWarp.requestedMultiplier,
+          powerLimitedMultiplier,
+          baseMultiplier,
+        });
+        publishTimeWarpComputeState(governor);
+        setTimeWarpPendingUi(simulationPendingSecondsRef.current);
       }
       setGame((current) => {
         if (current !== submission.state) {
@@ -1625,6 +1738,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     };
     worker.onerror = () => {
       const submission = simulationSubmissionRef.current;
+      if (submission?.state.timeWarp.enabled || gameRef.current.timeWarp.enabled) {
+        abortPureIdleForWorkerFailure("模拟 Worker 异常，纯挂机已安全停止；未完成预算没有计入收益");
+        return;
+      }
       if (submission) {
         simulationPendingSecondsRef.current += submission.simulationSeconds;
         simulationPendingWallSecondsRef.current += submission.wallSeconds;
@@ -1640,7 +1757,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       simulationWorkerRef.current = null;
       simulationSubmissionRef.current = null;
     };
-  }, []);
+  }, [abortPureIdleForWorkerFailure, publishTimeWarpComputeState]);
 
   useEffect(() => {
     let previous = performance.now();
@@ -1651,30 +1768,79 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         previous = now;
         return;
       }
+      const inFlight = simulationSubmissionRef.current;
+      if (currentState.timeWarp.enabled && inFlight && shouldAbortTimeWarpWorker(inFlight.submittedAt, now)) {
+        previous = now;
+        abortPureIdleForWorkerFailure("模拟 Worker 单个切片超过安全时限，纯挂机已自动停止并暂停模拟");
+        return;
+      }
       // Paused means no simulation budget at all. In particular, do not turn
       // wall-clock time spent in a menu into catch-up production on resume.
       if (currentState.paused) {
         previous = now;
         simulationPendingSecondsRef.current = 0;
         simulationPendingWallSecondsRef.current = 0;
+        setTimeWarpPendingUi(0);
         return;
       }
       const wallSeconds = Math.max(0, (now - previous) / 1000);
-      const elapsedSimulationSeconds = wallSeconds * getEffectiveSimulationMultiplier(currentState);
+      const baseMultiplier = currentState.settings.simulationSpeed;
+      const powerLimitedMultiplier = getEffectiveSimulationMultiplier(currentState);
+      let timeWarpLimits = currentState.timeWarp.enabled
+        ? resolveTimeWarpComputeLimits(
+          timeWarpComputeStateRef.current,
+          currentState.timeWarp.requestedMultiplier,
+          powerLimitedMultiplier,
+          baseMultiplier,
+        )
+        : null;
+      const elapsedSimulationSeconds = wallSeconds * (timeWarpLimits?.actualMultiplier ?? powerLimitedMultiplier);
       previous = now;
-      simulationPendingSecondsRef.current += elapsedSimulationSeconds;
-      simulationPendingWallSecondsRef.current += wallSeconds;
-      // Pure idle mode deliberately publishes less often. The worker still
-      // advances the exact accumulated budget, while the covered canvas stays
-      // frozen and avoids copying/rendering the full factory every second.
-      if (currentState.timeWarp.enabled && simulationPendingWallSecondsRef.current < 5) return;
+      const nextPendingSimulationSeconds = simulationPendingSecondsRef.current + elapsedSimulationSeconds;
+      if (timeWarpLimits && nextPendingSimulationSeconds > timeWarpLimits.maximumPendingSimulationSeconds) {
+        const governor = {
+          ...timeWarpComputeStateRef.current,
+          stableSampleCount: 0,
+          computeLimitedMultiplier: Math.max(baseMultiplier, Math.floor(timeWarpComputeStateRef.current.computeLimitedMultiplier * 0.7)),
+          reason: "backlog" as const,
+        };
+        publishTimeWarpComputeState(governor);
+        timeWarpLimits = resolveTimeWarpComputeLimits(
+          governor,
+          currentState.timeWarp.requestedMultiplier,
+          powerLimitedMultiplier,
+          baseMultiplier,
+        );
+      }
+      simulationPendingSecondsRef.current = timeWarpLimits
+        ? Math.min(nextPendingSimulationSeconds, timeWarpLimits.maximumPendingSimulationSeconds)
+        : nextPendingSimulationSeconds;
+      simulationPendingWallSecondsRef.current = timeWarpLimits
+        ? Math.min(
+          simulationPendingWallSecondsRef.current + wallSeconds,
+          timeWarpLimits.maximumPendingSimulationSeconds / Math.max(1, timeWarpLimits.actualMultiplier),
+        )
+        : simulationPendingWallSecondsRef.current + wallSeconds;
+      if (timeWarpLimits) setTimeWarpPendingUi(simulationPendingSecondsRef.current);
       const worker = simulationWorkerRef.current;
       if (worker && !simulationWorkerDisabledRef.current) {
         if (simulationSubmissionRef.current) return;
-        const simulationSeconds = simulationPendingSecondsRef.current;
-        const pendingWallSeconds = simulationPendingWallSecondsRef.current;
-        simulationPendingSecondsRef.current = 0;
-        simulationPendingWallSecondsRef.current = 0;
+        const budget = currentState.timeWarp.enabled
+          ? takeSimulationBudgetSlice(
+            simulationPendingSecondsRef.current,
+            simulationPendingWallSecondsRef.current,
+            timeWarpLimits?.sliceSimulationSeconds ?? baseMultiplier,
+          )
+          : {
+            simulationSeconds: simulationPendingSecondsRef.current,
+            wallSeconds: simulationPendingWallSecondsRef.current,
+            remainingSimulationSeconds: 0,
+            remainingWallSeconds: 0,
+          };
+        const simulationSeconds = budget.simulationSeconds;
+        const pendingWallSeconds = budget.wallSeconds;
+        simulationPendingSecondsRef.current = budget.remainingSimulationSeconds;
+        simulationPendingWallSecondsRef.current = budget.remainingWallSeconds;
         const mainState = gameRef.current;
         const registrySnapshot = contentPackRuntimeSnapshotRef.current;
         const request: SimulationWorkerRequest = {
@@ -1687,6 +1853,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           protocol: experimentalSimulationDeltaRef.current ? "delta" : "full",
           multicore: multicoreSimulationOptionsRef.current,
           ...(experimentalSimulationDeltaRef.current ? { stateRevision: simulationStateRevisionRef.current } : {}),
+          ...(simulationSeconds >= 60 && readOfflineApproximationEnabled() ? { approximate: true } : {}),
           ...(simulationWorkerRegistryFingerprintRef.current !== registrySnapshot.fingerprint ? { registry: registrySnapshot } : {}),
         };
         simulationRequestIdRef.current = request.id;
@@ -1703,6 +1870,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         try {
           worker.postMessage(request);
         } catch {
+          if (currentState.timeWarp.enabled) {
+            abortPureIdleForWorkerFailure("模拟 Worker 无法接收任务，纯挂机已安全停止；未完成预算没有计入收益");
+            return;
+          }
           simulationSubmissionRef.current = null;
           simulationWorkerDisabledRef.current = true;
           simulationWorkerRef.current = null;
@@ -1719,10 +1890,20 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         }
         return;
       }
-      const simulationSeconds = simulationPendingSecondsRef.current;
-      const pendingWallSeconds = simulationPendingWallSecondsRef.current;
-      simulationPendingSecondsRef.current = 0;
-      simulationPendingWallSecondsRef.current = 0;
+      if (currentState.timeWarp.enabled) {
+        abortPureIdleForWorkerFailure("模拟 Worker 不可用，纯挂机已安全停止并暂停模拟");
+        return;
+      }
+      const budget = {
+          simulationSeconds: simulationPendingSecondsRef.current,
+          wallSeconds: simulationPendingWallSecondsRef.current,
+          remainingSimulationSeconds: 0,
+          remainingWallSeconds: 0,
+        };
+      const simulationSeconds = budget.simulationSeconds;
+      const pendingWallSeconds = budget.wallSeconds;
+      simulationPendingSecondsRef.current = budget.remainingSimulationSeconds;
+      simulationPendingWallSecondsRef.current = budget.remainingWallSeconds;
       setGame((current) => {
         const profiler = performanceMonitor.isActive() ? createSimulationProfiler() : undefined;
         const startedAt = profiler ? performance.now() : 0;
@@ -1733,7 +1914,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       });
     }, 1_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [abortPureIdleForWorkerFailure, publishTimeWarpComputeState]);
 
   useEffect(() => {
     const timer = game.settings.autosaveIntervalSeconds > 0
@@ -1834,12 +2015,20 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   useEffect(() => {
     if (!notice) return;
-    const id = eventSequenceRef.current + 1;
-    eventSequenceRef.current = id;
-    setEventHistory((current) => [...current, { id, text: notice }].slice(-4));
+    if (showRunLog) {
+      const id = eventSequenceRef.current + 1;
+      eventSequenceRef.current = id;
+      setEventHistory((current) => [...current, { id, text: notice }].slice(-4));
+    }
+    if (!showRunLog && !isPersistentNotice(notice)) return;
     const timer = window.setTimeout(() => setNotice(null), 4000);
     return () => window.clearTimeout(timer);
-  }, [notice]);
+  }, [notice, showRunLog]);
+
+  useEffect(() => {
+    if (showRunLog || !notice || isPersistentNotice(notice)) return;
+    setNotice(null);
+  }, [notice, showRunLog]);
 
   useEffect(() => {
     if (eventHistory.length === 0) return;
@@ -2262,9 +2451,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       gameRef.current = next;
       return next;
     });
+    selectedEntityIdsRef.current = [];
+    selectedBeltIdRef.current = null;
+    selectedBeltIdsRef.current = [];
     setSelectedEntityIds([]);
     setSelectedBeltId(null);
-    setSelectedBeltIds([]);
     setSelectedBeltIds([]);
     setFocusedBeltNetworkId(null);
     setPlacement(null);
@@ -2344,8 +2535,21 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const updateSettings = useCallback((settings: Partial<GameSettings>) => {
     setGame((current) => ({ ...current, settings: { ...current.settings, ...settings } }));
+    if (settings.theme) {
+      setThemeMode(settings.theme);
+      writeThemePreference(settings.theme);
+    }
     if (settings.soundEnabled === true) playTone("confirm", true);
   }, [playTone]);
+
+  const updateRunLogPreference = useCallback((enabled: boolean) => {
+    setShowRunLog(enabled);
+    writeShowRunLogPreference(enabled);
+    if (!enabled) {
+      setEventHistory([]);
+      setNotice((current) => current && isPersistentNotice(current) ? current : null);
+    }
+  }, []);
 
   const updateGalaxyProfile = useCallback((changes: AccountProfileChanges) => {
     const current = accountStateRef.current;
@@ -3914,7 +4118,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const handle = findConnectionHandleAtPoint(
       point.x,
       point.y,
-      coarsePointer ? 56 : 24,
+      connectionHitRadius,
       (candidate) => isValidConnection(connectionFromDraft(preview.draft, candidate)),
       connectionHandleSpatialIndexRef.current,
     );
@@ -3950,7 +4154,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       label: forecast ? `${ITEMS[connectionItem].name} · ${forecast.label}` : `${ITEMS[connectionItem].name} · 可以连接`,
       tone: forecast?.tone === "capacity" || forecast?.tone === "starved" ? "blocked" : "ready",
     });
-  }, [coarsePointer, isValidConnection]);
+  }, [connectionHitRadius, isValidConnection]);
 
   const onConnectEnd = useCallback((event: MouseEvent | TouchEvent, state: FinalConnectionState) => {
     const endPoint = getEventPoint(event);
@@ -3958,7 +4162,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const releaseHandle = getConnectionHandleTarget(event.target) ?? (endPoint ? findConnectionHandleAtPoint(
       endPoint.x,
       endPoint.y,
-      coarsePointer ? 56 : 24,
+      connectionHitRadius,
       draft ? (candidate) => isValidConnection(connectionFromDraft(draft, candidate)) : undefined,
       connectionHandleSpatialIndexRef.current,
     ) : null);
@@ -4025,7 +4229,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const targetHandle = getConnectionHandleTarget(event.target) ?? (point ? findConnectionHandleAtPoint(
       point.x,
       point.y,
-      coarsePointer ? 56 : 24,
+      connectionHitRadius,
       (candidate) => isValidConnection(connectionFromDraft(preview.draft, candidate)),
       connectionHandleSpatialIndexRef.current,
     ) : null);
@@ -4150,7 +4354,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const targetHandle = findConnectionHandleAtPoint(
       x,
       y,
-      coarsePointer ? 56 : 24,
+      connectionHitRadius,
       (candidate) => isValidConnection(connectionFromDraft(preview.draft, candidate)),
       connectionHandleSpatialIndexRef.current,
     );
@@ -4166,7 +4370,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setClickConnectionSnapPoint(null);
     updateConnectionDraft(null);
     return true;
-  }, [coarsePointer, flowStore, isValidConnection, updateConnectionDraft]);
+  }, [connectionHitRadius, flowStore, isValidConnection, updateConnectionDraft]);
 
   useEffect(() => {
     const completeSnappedConnection = (event: PointerEvent) => {
@@ -4246,6 +4450,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [alignmentSpatialIndex, viewportZoom]);
 
   const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: OnSelectionChangeParams<FactoryFlowNode, Edge>) => {
+    if (nextMobileShell && mobileCanvasMode === "select") return;
     const ids = selectedNodes.map((node) => node.id);
     // React Flow can emit a transient empty selection while node objects are
     // replaced by a simulation refresh. Pane clicks remain the explicit
@@ -4256,12 +4461,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     for (const belt of gameRef.current.belts) {
       if (belt.planetId === gameRef.current.activePlanetId && nodeIds.has(belt.source) && nodeIds.has(belt.target)) beltIds.add(belt.id);
     }
+    selectedEntityIdsRef.current = ids;
+    selectedBeltIdsRef.current = [...beltIds];
+    selectedBeltIdRef.current = beltIds.size === 1 ? [...beltIds][0] : null;
     setSelectedEntityIds((current) => current.length === ids.length && current.every((id, index) => id === ids[index]) ? current : ids);
     const nextBeltIds = [...beltIds];
     setSelectedBeltIds((current) => current.length === beltIds.size && current.every((id) => beltIds.has(id)) ? current : nextBeltIds);
     if (ids.length > 0 || beltIds.size > 1) setSelectedBeltId(null);
     else if (beltIds.size === 1) setSelectedBeltId([...beltIds][0]);
-  }, []);
+  }, [mobileCanvasMode, nextMobileShell]);
 
   const onNodeClick: NodeMouseHandler<FactoryFlowNode> = useCallback((event, node) => {
     if (blueprintPlacementId) return;
@@ -4303,6 +4511,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       selectedEntityIdsRef.current = nextIds;
       return nextIds;
     });
+    selectedBeltIdRef.current = null;
+    selectedBeltIdsRef.current = [];
     setSelectedBeltId(null);
     setSelectedBeltIds([]);
     setInspectorTab("inspect");
@@ -4665,11 +4875,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       }
       return;
     }
+    if (nextMobileShell && mobileCanvasMode === "select") return;
+    selectedEntityIdsRef.current = [];
+    selectedBeltIdRef.current = null;
+    selectedBeltIdsRef.current = [];
     setSelectedEntityIds([]);
     setSelectedBeltId(null);
     setSelectedBeltIds([]);
     if (nextMobileShell && mobileNavigation.overlay?.kind === "sheet" && mobileNavigation.overlay.id === "inspector") mobileNavigation.requestBack();
-  }, [blueprintPlacementId, commitGame, completeClickConnectionAtPoint, connectionDraft, expandEntityGroup, flowStore, mobileContinuousPlacement, mobileNavigation.openSheet, mobileNavigation.overlay, mobileNavigation.requestBack, nextMobileShell, nodes, placement, placementCount, playTone, regionMode, screenToFlowPosition, selectionMode, spawnInteractionBurst, viewportZoom]);
+  }, [blueprintPlacementId, commitGame, completeClickConnectionAtPoint, connectionDraft, expandEntityGroup, flowStore, mobileCanvasMode, mobileContinuousPlacement, mobileNavigation.openSheet, mobileNavigation.overlay, mobileNavigation.requestBack, nextMobileShell, nodes, placement, placementCount, playTone, regionMode, screenToFlowPosition, selectionMode, spawnInteractionBurst, viewportZoom]);
 
   const onCanvasDrop = useCallback((event: React.DragEvent) => {
     const buildingId = event.dataTransfer.getData("application/factory-building") as BuildingId;
@@ -4741,6 +4955,43 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     playTone("remove");
   }, [commitGame, gameDialog, playTone]);
 
+  const batchIncreaseSelected = useCallback(async (amount: number) => {
+    const entityIds = [...selectedEntityIdsRef.current];
+    const beltIds = [...new Set([
+      ...selectedBeltIdsRef.current,
+      ...(selectedBeltIdRef.current ? [selectedBeltIdRef.current] : []),
+    ])];
+    const preview = batchIncreaseSelection(gameRef.current, entityIds, beltIds, amount);
+    if (!preview.ok) {
+      setNotice(preview.label ?? (preview.error === "missing-construction" ? "施工托盘不足，批量增加未执行任何项目" : "批量增加未执行"));
+      playTone("alert");
+      return;
+    }
+    if (preview.changedBuildingCount === 0 && preview.changedBeltCount === 0) {
+      setNotice(`没有可增加的项目${preview.buildingAtLimitCount + preview.beltAtLimitCount > 0 ? ` · ${preview.buildingAtLimitCount + preview.beltAtLimitCount} 项已达到上限` : ""}`);
+      playTone("alert");
+      return;
+    }
+    const required = Object.entries(preview.requiredConstruction)
+      .map(([id, count]) => `${getConstructionDefinition(id as ConstructionId)?.name ?? id} ×${formatQuantityCompact(count ?? 0)}`)
+      .join("、");
+    const confirmed = await gameDialog.confirm(
+      `将为 ${preview.changedBuildingCount} 个建筑和 ${preview.changedBeltCount} 条传送带各增加 ${formatQuantityCompact(amount)}。预计消耗：${required || "无"}${preview.buildingAtLimitCount + preview.beltAtLimitCount > 0 ? `。另有 ${preview.buildingAtLimitCount + preview.beltAtLimitCount} 项达到上限，将保持不变` : ""}。确认执行？`,
+      { confirmLabel: "批量增加" },
+    );
+    if (!confirmed) return;
+    const result = batchIncreaseSelection(gameRef.current, entityIds, beltIds, amount);
+    if (!result.ok) {
+      setNotice(result.label ?? "批量增加失败，状态未改变");
+      playTone("alert");
+      return;
+    }
+    if (result.state !== gameRef.current) commitGame(() => result.state);
+    const limitCount = result.buildingAtLimitCount + result.beltAtLimitCount;
+    setNotice(`已批量增加 ${result.changedBuildingCount} 个建筑、${result.changedBeltCount} 条传送带${limitCount > 0 ? ` · ${limitCount} 项达到上限` : ""}`);
+    playTone("confirm");
+  }, [commitGame, gameDialog, playTone]);
+
   const changeRemoteStationSlotItem = useCallback(async (entityId: string, slotIndex: number, itemId: ItemId | null) => {
     const station = gameRef.current.entities.find((entity) => entity.id === entityId);
     const previousItemId = station ? getStationSlots(station)[slotIndex]?.itemId : undefined;
@@ -4795,28 +5046,22 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const changeRemoteStackTarget = useCallback((entityId: string, target: number) => {
     const before = gameRef.current;
-    const entity = before.entities.find((candidate) => candidate.id === entityId && candidate.buildingId);
-    if (!entity || !Number.isSafeInteger(target) || target < 1) {
-      setNotice("堆叠数量必须是正安全整数");
+    const check = getEntityStackTargetCheck(before, entityId, target);
+    if (!check.ok) {
+      setNotice(check.label);
       playTone("alert");
-      return;
+      return { ok: false, error: check.label };
     }
-    if (target > entity.machineCount) {
-      const check = getBuildingStackAdditionCheck(entity.machineCount, target - entity.machineCount, getBuilding(entity.buildingId!).name);
-      if (!check.ok) {
-        setNotice(check.label);
-        playTone("alert");
-        return;
-      }
-    }
-    const next = setRemoteBuildingStackTarget(before, entityId, target);
-    if (next === before && target !== entity.machineCount) {
-      setNotice(target > entity.machineCount ? "扩建失败：施工托盘库存不足或建筑不可编辑" : "减堆失败：返还数量超出安全范围或建筑不可编辑");
+    const next = setEntityStackTarget(before, entityId, target);
+    if (next === before && check.delta !== 0) {
+      const error = "堆叠调整未提交，库存和建筑状态保持不变";
+      setNotice(error);
       playTone("alert");
-      return;
+      return { ok: false, error };
     }
     if (next !== before) commitGame(() => next);
-    setNotice(`${getBuilding(entity.buildingId!).name}堆叠已调整为 ×${target.toLocaleString("zh-CN")}`);
+    setNotice(`${getBuilding(check.constructionId).name}堆叠已调整为 ×${target.toLocaleString("zh-CN")}`);
+    return { ok: true };
   }, [commitGame, playTone]);
 
   const copyEntitiesAsBlueprint = (entityIds: readonly string[]) => {
@@ -5063,6 +5308,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       data-zoom-lod={viewportZoom < 0.55 ? "compact" : viewportZoom < 0.86 ? "medium" : "full"}
       data-large-factory={largeFactoryMode ? "true" : "false"}
       data-endgame-extreme={endgameExtremeMode ? "true" : "false"}
+      data-connection-point-size={connectionPointSize}
       data-canvas-extreme-visuals={extremeVisualsActive ? "true" : "false"}
       data-canvas-node-lod={nodeLodFeatureActive ? "true" : "false"}
       data-canvas-viewport-culling={viewportCullingFeatureActive ? "true" : "false"}
@@ -5370,6 +5616,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           setNotice(`已升级选区内 ${selectedBeltIds.length} 条传送带`);
           playTone("upgrade");
         }}
+        onBatchIncrease={(amount) => void batchIncreaseSelected(amount)}
         onLock={() => {
           const ids = selectedEntities.filter((entity) => !entity.interactionLocked).map((entity) => entity.id);
           commitGame((current) => setEntitiesInteractionLocked(current, ids, true));
@@ -5515,7 +5762,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
             minZoom={0.25}
             maxZoom={1.8}
-            connectionRadius={coarsePointer ? 56 : 30}
+            connectionRadius={connectionFlowRadius}
             snapToGrid
             snapGrid={[FLOW_GRID, FLOW_GRID]}
             autoPanOnConnect={!coarsePointer}
@@ -5713,6 +5960,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               setNotice(`已升级选区内 ${selectedBeltIds.length} 条可升级传送带，原连接保持不变`);
               playTone("upgrade");
             }}
+            onBatchIncrease={(amount) => void batchIncreaseSelected(amount)}
             onLock={() => {
               const ids = selectedEntities.filter((entity) => !entity.interactionLocked).map((entity) => entity.id);
               commitGame((current) => setEntitiesInteractionLocked(current, ids, true));
@@ -5903,6 +6151,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           }}
           hasCopiedBeltConfiguration={Boolean(copiedBeltConfigurationId && game.belts.some((belt) => belt.id === copiedBeltConfigurationId))}
           onAddEntity={quickAddEntity}
+          onEntityStackTarget={changeRemoteStackTarget}
           onUpgradeEntity={(entityId) => {
             const entity = gameRef.current.entities.find((candidate) => candidate.id === entityId);
             const targetId = entity?.buildingId ? getBuildingUpgradeTarget(entity.buildingId) : undefined;
@@ -6074,6 +6323,18 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setConstructionCenterOpen(false)}
             onEnabledChange={(enabled) => commitGame((current) => setConstructionAutomationEnabled(current, enabled))}
             onTargetChange={(constructionId: ConstructionAutomationTargetId, target: number) => commitGame((current) => setConstructionAutomationTarget(current, constructionId, target))}
+            onBatchTargetChange={async (target) => {
+              if (!await gameDialog.confirm(`将把所有已解锁建筑的自动补足目标统一设置为 ${target.toLocaleString("zh-CN")}。不会生成建筑，也不会取消现有制造任务。是否继续？`, { confirmLabel: "应用全部目标" })) return;
+              const result = setConstructionAutomationTargetsForBuildings(gameRef.current, target);
+              if (!result.ok) {
+                setNotice(result.label ?? "批量目标设置失败");
+                playTone("alert");
+                return;
+              }
+              if (result.state !== gameRef.current) commitGame(() => result.state);
+              setNotice(`已为 ${result.affectedCount} 种已解锁建筑设置目标 ${target.toLocaleString("zh-CN")}${result.skippedLockedCount > 0 ? ` · 跳过 ${result.skippedLockedCount} 种未解锁建筑` : ""}`);
+              playTone("confirm");
+            }}
           />
         ) : null}
         {galaxyOpen ? (
@@ -6128,6 +6389,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         {statisticsOpen ? <StatisticsWorkspace
           open
           game={observedGame}
+          contentPackRuntimeSnapshot={contentPackRuntimeSnapshotRef.current}
           mobile={nextMobileShell}
           galacticActivityStatus={galacticActivityStatus}
           focusTab={statisticsFocusTab}
@@ -6301,9 +6563,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             endgameExtremeMode={endgameExtremeMode}
             canvasPerformanceFeatures={canvasPerformanceFeatures}
             lineFindMode={lineFindMode}
+            connectionPointSize={connectionPointSize}
+            showRunLog={showRunLog}
             onEndgameExtremeModeChange={toggleEndgameExtremeMode}
             onCanvasPerformanceFeatureChange={updateCanvasPerformanceFeature}
             onLineFindModeChange={setLineFindMode}
+            onConnectionPointSizeChange={setConnectionPointSize}
+            onRunLogChange={updateRunLogPreference}
             onProductionRefreshPreferenceChange={setProductionRefreshPreference}
             onStartPerformanceMonitor={performanceMonitor.start}
             onStopPerformanceMonitor={performanceMonitor.stop}
@@ -6433,12 +6699,21 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         <span><strong>{saveFailure.code === "quota" ? "本地存储空间不足，当前进度尚未保存。请立即导出存档。" : saveFailure.message}</strong><small>自动保存会继续重试，导出文件不会删除或覆盖现有存档。</small></span>
         <button type="button" onClick={downloadSave}><Download size={15} /><span>立即导出当前进度</span></button>
       </aside> : null}
-      {eventHistory.length > 0 ? <aside className="interaction-event-feed" role="log" aria-label="运行事件" aria-live="polite">
+      {showRunLog && eventHistory.length > 0 ? <aside className="interaction-event-feed" role="log" aria-label="运行事件" aria-live="polite">
         <header><Activity size={13} /><span>运行记录</span><button type="button" onClick={() => setEventHistory([])} title="清空运行记录" aria-label="清空运行记录"><X size={12} /></button></header>
         <div>{eventHistory.map((event) => <p key={event.id}>{event.text}</p>)}</div>
       </aside> : null}
-      {notice ? <div className="game-notice" role="status">{notice}</div> : null}
-      {pureIdleActive ? <TimeWarpIdleOverlay game={observedGame} startedAt={pureIdleStartedAt} saveFailure={saveFailure} workerActive={simulationWorkerActive} onStop={stopPureIdle} /> : null}
+      {notice && (showRunLog || isPersistentNotice(notice)) ? <div className={`game-notice game-notice--${getNoticeTone(notice)}`} role="status" data-notice-tone={getNoticeTone(notice)}>{notice}</div> : null}
+      {pureIdleActive ? <TimeWarpIdleOverlay
+        game={observedGame}
+        startedAt={pureIdleStartedAt}
+        saveFailure={saveFailure}
+        workerActive={simulationWorkerActive}
+        computeLimits={timeWarpComputeLimits}
+        computeState={timeWarpComputeState}
+        pendingSimulationSeconds={timeWarpPendingUi}
+        onStop={stopPureIdle}
+      /> : null}
     </main>
     </ItemReferenceActionsProvider>
   );

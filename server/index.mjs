@@ -37,12 +37,14 @@ const EMAIL_ACTION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_PLAYER_ONLINE_WINDOW_MS = 120_000;
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{16,96}$/;
 const USERNAME_PATTERN = /^[A-Za-z0-9_]{4,24}$/;
-const VALID_CATEGORIES = new Set(["power", "upload", "dyson", "throughput", "galaxy"]);
+const VALID_CATEGORIES = new Set(["power", "upload", "white-rate", "dyson", "throughput", "galaxy"]);
 const VALID_SEASONS = new Set(["season_01", "season_00"]);
 const ACTIVE_LEADERBOARD_SEASON_ID = "season_01";
+const WHITE_MATRIX_RATE_MIN_INTERVAL_SECONDS = 60;
 const METRIC_KEYS = [
   "energyGeneratedMj",
   "uploadedWhiteMatrix",
+  "peakWhiteMatrixPerMinute",
   "peakGenerationKw",
   "peakThroughputPerMinute",
   "peakDysonPowerKw",
@@ -371,6 +373,7 @@ function normalizeMetrics(value) {
   const metrics = {
     energyGeneratedMj: normalizeMetric(source.energyGeneratedMj),
     uploadedWhiteMatrix: normalizeMetric(source.uploadedWhiteMatrix, true),
+    peakWhiteMatrixPerMinute: normalizeMetric(source.peakWhiteMatrixPerMinute),
     peakGenerationKw: normalizeMetric(source.peakGenerationKw),
     peakThroughputPerMinute: normalizeMetric(source.peakThroughputPerMinute),
     peakDysonPowerKw: normalizeMetric(source.peakDysonPowerKw),
@@ -384,6 +387,7 @@ function normalizeMetrics(value) {
 function categoryValue(metrics, category) {
   if (category === "power") return metrics.energyGeneratedMj;
   if (category === "upload") return metrics.uploadedWhiteMatrix;
+  if (category === "white-rate") return metrics.peakWhiteMatrixPerMinute;
   if (category === "dyson") return metrics.peakDysonPowerKw;
   if (category === "throughput") return metrics.peakThroughputPerMinute;
   return metrics.galaxyScore;
@@ -1174,7 +1178,28 @@ function numberAt(value, fallback = 0) {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }
 
-function leaderboardMetricsFromSave(save) {
+function whiteMatrixRateFromAdjacentRevision(store, userId, currentSave, currentState) {
+  const currentRevision = Number.isInteger(currentSave?.revision) ? currentSave.revision : 0;
+  if (currentRevision <= 1) return 0;
+  const previousMetadata = saveHistory(store, userId, "main").find((entry) => entry.revision === currentRevision - 1);
+  const previousSave = materializeCloudSave(store, userId, "main", previousMetadata);
+  const previousState = parseSaveState(previousSave?.payload);
+  if (!previousState || typeof previousState !== "object" || !currentState || typeof currentState !== "object") return 0;
+  if ((Array.isArray(previousState.contentPacks) && previousState.contentPacks.length > 0)
+    || (Array.isArray(currentState.contentPacks) && currentState.contentPacks.length > 0)) return 0;
+  const previousElapsed = numberAt(previousState.elapsedSeconds);
+  const currentElapsed = numberAt(currentState.elapsedSeconds);
+  const elapsedDelta = currentElapsed - previousElapsed;
+  if (elapsedDelta < WHITE_MATRIX_RATE_MIN_INTERVAL_SECONDS) return 0;
+  const previousProduced = Math.floor(numberAt(previousState.totalProduced?.universe_matrix));
+  const currentProduced = Math.floor(numberAt(currentState.totalProduced?.universe_matrix));
+  const producedDelta = currentProduced - previousProduced;
+  if (producedDelta <= 0) return 0;
+  const scaled = producedDelta > Number.MAX_VALUE / 60 ? Number.MAX_VALUE : producedDelta * 60;
+  return Number.isFinite(scaled) ? normalizeMetric(scaled / elapsedDelta) : Number.MAX_VALUE;
+}
+
+function leaderboardMetricsFromSave(save, peakWhiteMatrixPerMinute = 0) {
   const state = parseSaveState(save?.payload);
   if (!state || typeof state !== "object") return null;
   const generationKw = numberAt(state.metrics?.generationKw);
@@ -1187,6 +1212,7 @@ function leaderboardMetricsFromSave(save) {
   return normalizeMetrics({
     energyGeneratedMj: saturatingMetricProduct(generationKw, elapsedSeconds / 1000),
     uploadedWhiteMatrix: producedWhiteMatrix,
+    peakWhiteMatrixPerMinute,
     peakGenerationKw: generationKw,
     peakThroughputPerMinute: throughput,
     peakDysonPowerKw: dysonPowerKw,
@@ -1198,6 +1224,10 @@ function leaderboardMetricsFromSave(save) {
 function mergeLeaderboardMetrics(previous, current) {
   if (!previous) return current;
   return normalizeMetrics(Object.fromEntries(METRIC_KEYS.map((key) => [key, Math.max(numberAt(previous[key]), numberAt(current[key]))])));
+}
+
+function isServerLeaderboardSubmission(value) {
+  return typeof value?.verification?.strategy === "string" && value.verification.strategy.startsWith("main-cloud-save-v");
 }
 
 function removeUserLeaderboardSubmissions(store, userId) {
@@ -1227,19 +1257,23 @@ function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.
   if (Array.isArray(state?.contentPacks) && state.contentPacks.length > 0) {
     return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "modded-save" };
   }
-  const observed = leaderboardMetricsFromSave(materialized);
+  const observed = leaderboardMetricsFromSave(materialized, whiteMatrixRateFromAdjacentRevision(store, userId, materialized, state));
   if (!observed) return { changed: false, submission: null, reason: "invalid-save" };
   const key = `${ACTIVE_LEADERBOARD_SEASON_ID}:${userId}`;
   const previous = store.data.submissions[key];
+  const previousServerMetrics = isServerLeaderboardSubmission(previous) ? previous.metrics : null;
+  const metrics = mergeLeaderboardMetrics(previousServerMetrics, observed);
+  const sameMetrics = previousServerMetrics
+    && METRIC_KEYS.every((key) => numberAt(previousServerMetrics[key]) === numberAt(metrics[key]))
+    && numberAt(previousServerMetrics.galaxyScore) === numberAt(metrics.galaxyScore);
   if (!force
-    && previous?.verification?.strategy === "main-cloud-save-v1"
+    && isServerLeaderboardSubmission(previous)
     && previous.verification.cloudRevision === materialized.revision
     && previous.displayName === user.displayName
-    && previous.visible !== false) {
+    && previous.visible !== false
+    && sameMetrics) {
     return { changed: false, submission: previous, reason: "current" };
   }
-  const previousServerMetrics = previous?.verification?.strategy === "main-cloud-save-v1" ? previous.metrics : null;
-  const metrics = mergeLeaderboardMetrics(previousServerMetrics, observed);
   const submission = {
     userId,
     accountId: userId,
@@ -2062,7 +2096,10 @@ export async function createCloudServer({
         const entries = Object.values(store.data.submissions)
           .filter((entry) => entry.seasonId === seasonId && entry.visible !== false &&
             store.data.users[entry.userId]?.leaderboardVisible !== false && !isLeaderboardRestricted(store.data, entry.userId))
-          .map((entry) => ({ ...entry, value: categoryValue(entry.metrics, category), verified: Boolean(entry.verification?.cloudRevision) }))
+          .map((entry) => {
+            const metrics = normalizeMetrics(entry.metrics);
+            return { ...entry, metrics, value: categoryValue(metrics, category), verified: Boolean(entry.verification?.cloudRevision) };
+          })
           .sort((left, right) => right.value - left.value || left.userId.localeCompare(right.userId))
           .slice(0, 100)
           .map((entry, index) => ({ ...entry, rank: index + 1 }));

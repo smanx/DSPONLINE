@@ -71,6 +71,7 @@ function recursiveRawTray(amount = 100_000_000): Partial<Record<ItemId, number>>
     "crude_oil",
     "water",
     "hydrogen",
+    "refined_oil",
     "sulfuric_acid",
     "organic_crystal",
     "fire_ice",
