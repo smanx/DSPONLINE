@@ -18,6 +18,16 @@ describe("content catalog", () => {
     expect(rates.outputPerMinute.processor).toBe(15);
   });
 
+  it("keeps both warper recipes and exposes the green-matrix compact output", () => {
+    expect(RECIPES.space_warper).toMatchObject({ inputs: [{ itemId: "graviton_lens", amount: 1 }], outputs: [{ itemId: "space_warper", amount: 1 }] });
+    expect(RECIPES.space_warper_from_gravity_matrix).toMatchObject({
+      requiredTechId: "space_warp",
+      recursivePriority: 100,
+      inputs: [{ itemId: "gravity_matrix", amount: 1 }],
+      outputs: [{ itemId: "space_warper", amount: 8 }],
+    });
+  });
+
   it("starts with smelting and basic assembly unlocked without placeholder technologies", () => {
     expect("automatic_metallurgy" in TECHNOLOGIES).toBe(false);
     expect("basic_assembling" in TECHNOLOGIES).toBe(false);

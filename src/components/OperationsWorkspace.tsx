@@ -4,8 +4,10 @@ import {
   Bell,
   Bug,
   CheckCircle2,
+  ChevronRight,
   Clock3,
   Cpu,
+  Database,
   Cloud,
   CloudOff,
   Download,
@@ -16,6 +18,7 @@ import {
   GraduationCap,
   HardDrive,
   History,
+  Languages,
   MapPin,
   PackagePlus,
   Power,
@@ -27,6 +30,7 @@ import {
   Upload,
   RotateCcw,
   Radio,
+  Route,
   MessageSquare,
   MousePointer2,
   Palette,
@@ -42,9 +46,10 @@ import { PowerValue } from "./PowerValue";
 import { useEffect, useRef, useState } from "react";
 import { getPlanet } from "../game/content";
 import { DIFFICULTY_DEFINITIONS } from "../game/difficulty";
+import { getPlanetDisplayName } from "../game/galaxy";
 import { ACHIEVEMENTS, getAchievementProgress } from "../game/progression";
 import type { FactoryAlert } from "../game/alerts";
-import type { SaveInspection, SaveIntegrityStatus, SaveSlotId, SaveSlotSummary, SaveSnapshotSummary } from "../game/storage";
+import { getLocalSaveStorageEstimate, type LocalSaveStorageEstimate, type SaveInspection, type SaveIntegrityStatus, type SaveSlotId, type SaveSlotSummary, type SaveSnapshotSummary } from "../game/storage";
 import type { ModValidationResult } from "../game/mods";
 import { getContentPackDependencyStatuses, getContentPackUsage, type ContentPackRegistry } from "../game/contentPacks";
 import type { AutomaticPerformanceReport } from "../game/benchmark";
@@ -53,14 +58,17 @@ import type { AutosaveIntervalSeconds, CargoStackSize, DefaultBeltRouteMode, Dif
 import { canSetBeltStackSize } from "../game/engine";
 import { validateBuildingBufferLimitInput, validateProliferatorBufferLimitInput, type BuildingBufferLimitValidation } from "../game/settings";
 import { PRODUCTION_REFRESH_PROFILES, type ProductionRefreshPreference } from "../game/productionRefresh";
+import { getPerformancePeaks, getPerformancePhaseShares, type PerformanceMonitorSnapshot } from "../game/performanceMonitor";
 import { clearClientErrors, collectClientDiagnostics, downloadDiagnostics, getClientErrors } from "../game/diagnostics";
 import { fetchCloudPublicStatus, resumeCloudSession, sendCloudFeedback, type CloudPublicStatus } from "../game/cloud";
 import { resetOnboarding } from "../game/onboarding";
 import { applyPwaUpdate, getPwaRuntimeState, requestPwaInstall, subscribePwaRuntime, type PwaRuntimeState } from "../pwa";
 import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
 import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
+import { useAppLocale } from "../i18n/locale";
+import { useGameDialog } from "./GameDialogProvider";
 
-export type OperationsTab = "alerts" | "achievements" | "settings" | "saves" | "packs" | "support";
+export type OperationsTab = "alerts" | "achievements" | "settings" | "performance" | "saves" | "packs" | "support";
 
 interface OperationsWorkspaceProps {
   open: boolean;
@@ -75,7 +83,14 @@ interface OperationsWorkspaceProps {
   performanceReport: AutomaticPerformanceReport | null;
   productionRefreshPreference: ProductionRefreshPreference;
   productionRefreshIntervalMs: number;
+  endgameExtremeMode: boolean;
+  onEndgameExtremeModeChange: (enabled: boolean) => void;
+  performanceMonitor: PerformanceMonitorSnapshot;
   onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void;
+  onStartPerformanceMonitor: () => void;
+  onStopPerformanceMonitor: () => void;
+  onClearPerformanceMonitor: () => void;
+  onExportPerformanceMonitor: () => void;
   onClose: () => void;
   onTabChange: (tab: OperationsTab) => void;
   onAlertSelect: (alert: FactoryAlert) => void;
@@ -84,6 +99,8 @@ interface OperationsWorkspaceProps {
   onExport: () => void;
   onImport: (raw: string) => void;
   onConfirmImport: () => void;
+  onConfirmImportRescue: () => void;
+  importRescueArmed: boolean;
   onCancelImport: () => void;
   onSaveSlot: (slotId: SaveSlotId) => void;
   onLoadSlot: (slotId: SaveSlotId) => void;
@@ -91,8 +108,10 @@ interface OperationsWorkspaceProps {
   onCreateSnapshot: () => void;
   onLoadSnapshot: (snapshotId: string) => void;
   onDeleteSnapshot: (snapshotId: string) => void;
+  onDeleteSnapshots: (snapshotIds: string[]) => void;
   onRunBenchmark: () => void;
   onOpenReleaseNotes: () => void;
+  onOpenTutorial: (sectionId?: string) => void;
   onValidateMod: (raw: string) => void;
   onExportModTemplate: () => void;
   onRegisterContentPack: () => void;
@@ -104,6 +123,7 @@ const TABS: Array<{ id: OperationsTab; label: string; icon: typeof Bell }> = [
   { id: "alerts", label: "警报", icon: Bell },
   { id: "achievements", label: "成就", icon: Trophy },
   { id: "settings", label: "设置", icon: Settings2 },
+  { id: "performance", label: "性能", icon: Activity },
   { id: "saves", label: "存档", icon: HardDrive },
   { id: "packs", label: "内容包", icon: PackagePlus },
   { id: "support", label: "诊断反馈", icon: MessageSquare },
@@ -117,7 +137,7 @@ function formatRuntime(seconds: number): string {
   return hours > 0 ? `${hours} 小时 ${minutes} 分` : `${minutes} 分钟`;
 }
 
-function AlertsPanel({ alerts, onSelect }: { alerts: FactoryAlert[]; onSelect: (alert: FactoryAlert) => void }) {
+function AlertsPanel({ alerts, onSelect, onOpenTutorial }: { alerts: FactoryAlert[]; onSelect: (alert: FactoryAlert) => void; onOpenTutorial: (sectionId?: string) => void }) {
   const criticalCount = alerts.filter((alert) => alert.severity === "critical").length;
   return (
     <div className="operations-panel operations-alerts">
@@ -133,6 +153,7 @@ function AlertsPanel({ alerts, onSelect }: { alerts: FactoryAlert[]; onSelect: (
           <CheckCircle2 size={28} />
           <strong>生产网络运行正常</strong>
           <span>当前没有需要处理的设备警报</span>
+          <button type="button" onClick={() => onOpenTutorial("troubleshooting")}><GraduationCap size={14} />查看排障教程</button>
         </div>
       ) : (
         <div className="alert-list">
@@ -143,6 +164,7 @@ function AlertsPanel({ alerts, onSelect }: { alerts: FactoryAlert[]; onSelect: (
               <em><MapPin size={12} />{alert.location}</em>
             </button>
           ))}
+          <button className="operations-tutorial-link" type="button" onClick={() => onOpenTutorial("troubleshooting")}><GraduationCap size={14} />打开常见故障排查教程</button>
         </div>
       )}
     </div>
@@ -242,8 +264,10 @@ function BufferLimitSetting({ label, value, onChange, presets = BUFFER_LIMIT_PRE
   </section>;
 }
 
-function SettingsPanel({ game, report, productionRefreshPreference, productionRefreshIntervalMs, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onOpenReleaseNotes }: { game: GameState; report: AutomaticPerformanceReport | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onOpenReleaseNotes: () => void }) {
+function SettingsPanel({ game, report, productionRefreshPreference, productionRefreshIntervalMs, endgameExtremeMode, onEndgameExtremeModeChange, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onOpenReleaseNotes, onOpenTutorial }: { game: GameState; report: AutomaticPerformanceReport | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; endgameExtremeMode: boolean; onEndgameExtremeModeChange: (enabled: boolean) => void; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onOpenReleaseNotes: () => void; onOpenTutorial: () => void }) {
   const { settings } = game;
+  const { locale, setLocale } = useAppLocale();
+  const gameDialog = useGameDialog();
   return (
     <div className="operations-panel operations-settings">
       <header className="operations-section-header">
@@ -273,6 +297,14 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         </div>
       </section>
       <section className="settings-group">
+        <header><Languages size={14} /><span>语言</span><small>{locale === "en" ? "English" : "简体中文"}</small></header>
+        <div className="settings-segmented" aria-label="语言">
+          <button className={locale === "zh-CN" ? "active" : ""} type="button" aria-pressed={locale === "zh-CN"} onClick={() => setLocale("zh-CN")}>简体中文</button>
+          <button className={locale === "en" ? "active" : ""} type="button" aria-pressed={locale === "en"} onClick={() => setLocale("en")}>English</button>
+        </div>
+        <p className="settings-help">语言仅保存在当前设备，不会写入游戏存档或云存档。</p>
+      </section>
+      <section className="settings-group">
         <header><Settings2 size={14} /><span>科技树布局</span><small>{settings.technologyLayout === "compact" ? "精简" : "标准"}</small></header>
         <div className="settings-segmented" aria-label="科技树布局">
           <button className={settings.technologyLayout === "standard" ? "active" : ""} type="button" onClick={() => onChange({ technologyLayout: "standard" })}>标准模式</button>
@@ -287,6 +319,7 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
       </section>
       <BufferLimitSetting label="生产建筑缓存上限" value={settings.productionBufferLimit} onChange={(productionBufferLimit) => onChange({ productionBufferLimit })} />
       <BufferLimitSetting label="仓储与物流建筑缓存上限" value={settings.logisticsBufferLimit} onChange={(logisticsBufferLimit) => onChange({ logisticsBufferLimit })} />
+      <BufferLimitSetting label="传送带转运额度上限" value={settings.beltBufferLimit} onChange={(beltBufferLimit) => onChange({ beltBufferLimit })} help="限制大时间步内每条线路累计的转运额度，不改变每秒吞吐，也不是线路中的实际货物库存。" />
       <BufferLimitSetting
         label="增产剂缓存上限"
         value={settings.proliferatorBufferLimit}
@@ -306,6 +339,10 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         </div>
         <p className="settings-help">只调整生产画面与状态发布节奏，不改变模拟时间、产量、物流、科研或戴森工程。固定档位不会被自动调节覆盖。</p>
       </section>
+      <section className="settings-group settings-toggle-list settings-endgame-extreme">
+        <ToggleSetting checked={endgameExtremeMode} label="终局优化·极限模式" value={endgameExtremeMode ? "视觉降级，模拟与存档结果不变" : "关闭"} icon={<Cpu size={16} />} onChange={onEndgameExtremeModeChange} />
+        <p className="settings-help">只保存在当前设备；开启后线路动画、装饰和普通读数刷新会减少，适合大型工厂或长时间挂机。</p>
+      </section>
       <section className="settings-group settings-toggle-list">
         <ToggleSetting checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "精简粒子、阴影与线路动画" : "完整视觉特效"} icon={<Cpu size={16} />} onChange={(performanceMode) => onChange({ performanceMode })} />
         <ToggleSetting checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态效果关闭" : "动态效果开启"} icon={<Gauge size={16} />} onChange={(reducedMotion) => onChange({ reducedMotion })} />
@@ -323,8 +360,22 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
       <section className="settings-group">
         <header><MapPin size={14} /><span>星区与资源</span><small>种子 #{game.galaxy.seed}</small></header>
         <div className="settings-segmented" aria-label="资源模式">
-          <button className={settings.resourceMode === "finite" ? "active" : ""} type="button" onClick={() => onChange({ resourceMode: "finite" })}>有限矿脉</button>
-          <button className={settings.resourceMode === "infinite" ? "active" : ""} type="button" onClick={() => onChange({ resourceMode: "infinite" })}>无限矿脉</button>
+          <button className={settings.resourceMode === "finite" ? "active" : ""} type="button" onClick={async () => {
+            if (settings.resourceMode === "finite") return;
+            const confirmed = await gameDialog.confirm(locale === "en"
+              ? "Switch to finite resources? Existing miners, belts, and buffers will be preserved, and veins will resume consuming their remaining reserves."
+              : "确认切换为有限矿脉？现有矿机、线路与缓存会保留，矿脉将继续消耗剩余储量。", { confirmLabel: locale === "en" ? "Switch" : "确认切换" });
+            if (!confirmed) return;
+            onChange({ resourceMode: "finite" });
+          }}>有限矿脉</button>
+          <button className={settings.resourceMode === "infinite" ? "active" : ""} type="button" onClick={async () => {
+            if (settings.resourceMode === "infinite") return;
+            const confirmed = await gameDialog.confirm(locale === "en"
+              ? "Switch to infinite resources? Existing miners, belts, and buffers will be preserved, and depleted veins will resume production."
+              : "确认切换为无限矿脉？现有矿机、线路与缓存会保留，已枯竭矿脉将恢复生产。", { confirmLabel: locale === "en" ? "Switch" : "确认切换" });
+            if (!confirmed) return;
+            onChange({ resourceMode: "infinite" });
+          }}>无限矿脉</button>
         </div>
       </section>
       <section className="settings-group settings-difficulty-group">
@@ -357,6 +408,10 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         </div> : null}
       </section>
       <NativeUpdateCard showWebFallback />
+      <section className="settings-group settings-tutorial-entry">
+        <header><GraduationCap size={14} /><span>零基础教程</span><small>桌面与手机通用</small></header>
+        <button type="button" onClick={onOpenTutorial} aria-label="打开新手教程"><GraduationCap size={15} /><span><strong>打开完整自然语言教程</strong><small>从采集、传送带到物流、戴森和存档</small></span><ChevronRight size={15} /></button>
+      </section>
       <section className="settings-group settings-release-notes">
         <header><History size={14} /><span>版本更新记录</span><small>{CURRENT_RELEASE_NOTES.date}</small></header>
         <button type="button" onClick={onOpenReleaseNotes} aria-label="查看版本更新记录"><History size={15} /><span><strong>{CURRENT_RELEASE_NOTES.title}</strong><small>{CURRENT_RELEASE_NOTES.items.length} 项体验更新</small></span></button>
@@ -367,6 +422,66 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
       </section>
     </div>
   );
+}
+
+function formatDiagnosticBytes(bytes: number | null): string {
+  if (bytes === null || !Number.isFinite(bytes) || bytes <= 0) return "--";
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${(bytes / 1024).toFixed(1)} KiB`;
+}
+
+function PerformancePanel({ game, snapshot, onStart, onStop, onClear, onExport }: {
+  game: GameState;
+  snapshot: PerformanceMonitorSnapshot;
+  onStart: () => void;
+  onStop: () => void;
+  onClear: () => void;
+  onExport: () => void;
+}) {
+  const latest = snapshot.samples.at(-1) ?? null;
+  const logisticsProfile = latest?.phases;
+  const peerHitRate = logisticsProfile && logisticsProfile.peerMatchCalls > 0
+    ? logisticsProfile.peerMatchCacheHits / logisticsProfile.peerMatchCalls
+    : 0;
+  const routeCalls = (logisticsProfile?.routeEconomicsCalls ?? 0) + (logisticsProfile?.routeEconomicsCacheHits ?? 0);
+  const routeHitRate = routeCalls > 0 ? (logisticsProfile?.routeEconomicsCacheHits ?? 0) / routeCalls : 0;
+  const peaks = getPerformancePeaks(snapshot.samples);
+  const phases = getPerformancePhaseShares(latest);
+  const planetRows = Object.entries(game.planetTrays).map(([planetId]) => ({
+    planetId,
+    entities: game.entities.filter((entity) => entity.planetId === planetId).length,
+    belts: game.belts.filter((belt) => belt.planetId === planetId).length,
+    routes: game.entities.filter((entity) => entity.planetId === planetId).reduce((sum, entity) => sum + (entity.stationRoutes?.length ?? 0), 0),
+  })).filter((row) => row.entities + row.belts + row.routes > 0).sort((left, right) => right.entities + right.belts - left.entities - left.belts);
+  const stallPeaks = [...snapshot.samples].sort((left, right) => right.peakFrameMs - left.peakFrameMs).slice(0, 5);
+  return <div className="operations-panel performance-monitor-panel">
+    <header className="operations-section-header performance-monitor-header"><div><span>按需阶段计时</span><strong>性能监控与卡顿诊断</strong></div><span className={`settings-state${snapshot.active ? " positive" : ""}`}><Activity size={14} />{snapshot.active ? "正在采样" : "监控已关闭"}</span></header>
+    <div className="performance-monitor-actions">
+      {snapshot.active ? <button type="button" onClick={onStop}><Power size={15} />停止采样</button> : <button className="primary" type="button" onClick={onStart}><Activity size={15} />开始采样</button>}
+      <button type="button" disabled={snapshot.samples.length === 0} onClick={onClear}><Trash2 size={15} />清空记录</button>
+      <button type="button" disabled={snapshot.samples.length === 0} onClick={onExport}><Download size={15} />导出匿名报告</button>
+    </div>
+    <p className="performance-monitor-note">浏览器不提供各玩法的真实 CPU 百分比；下方占比来自 Worker 内各模拟阶段的实际执行耗时。监控关闭时不启用阶段计时。</p>
+    {!latest ? <div className="operations-empty performance-monitor-empty"><Gauge size={28} /><strong>{snapshot.active ? "正在建立首个 1 秒样本" : "尚未采样"}</strong><span>开启后保留最近 60 秒，不写入游戏状态或云存档。</span></div> : <>
+      <section className="performance-kpi-grid" aria-label="实时性能摘要">
+        <article><span>FPS</span><strong>{latest.fps.toFixed(1)}</strong><small>平均帧 {latest.averageFrameMs.toFixed(1)} ms</small></article>
+        <article><span>主线程峰值</span><strong>{latest.peakFrameMs.toFixed(1)} ms</strong><small>长帧 {latest.longFrameCount} 次</small></article>
+        <article><span>模拟 Worker</span><strong>{latest.workerDurationMs.toFixed(1)} ms</strong><small>往返 {latest.workerLatencyMs.toFixed(1)} ms</small></article>
+        <article><span>任务积压</span><strong>{latest.pendingTaskMs.toFixed(0)} ms</strong><small>待处理模拟时间</small></article>
+        <article><span>可用 JS 内存</span><strong>{formatDiagnosticBytes(latest.memory.availableBytes)}</strong><small>{latest.memory.deviceMemoryGb ? `设备约 ${latest.memory.deviceMemoryGb} GiB` : "浏览器未公开设备内存"}</small></article>
+        <article><span>状态 / 主存档</span><strong>{formatDiagnosticBytes(latest.stateBytes)}</strong><small>{formatDiagnosticBytes(latest.saveBytes)}</small></article>
+        <article><span>最近保存</span><strong>{latest.autosaveMs.toFixed(1)} ms</strong><small>包括写入后校验</small></article>
+        {latest.saveStorage ? <article><span>本地存档</span><strong>{latest.saveStorage.slotCount} 槽 / {latest.saveStorage.snapshotCount} 快照</strong><small>{formatDiagnosticBytes(latest.saveStorage.totalBytes)} · 统计 {latest.saveStorage.scanMs.toFixed(1)} ms</small></article> : null}
+        <article><span>最近离线结算</span><strong>{snapshot.lastOfflineSimulationMs > 0 ? `${snapshot.lastOfflineSimulationMs.toFixed(0)} ms` : "--"}</strong><small>本次页面会话</small></article>
+      </section>
+      {latest.saveStages ? <section className="performance-scale-section performance-save-stages"><header><HardDrive size={15} /><span><strong>存档阶段耗时</strong><small>最近一次已完成保存</small></span></header><div><article><strong>{latest.saveStages.serializeMs.toFixed(1)} ms</strong><span>序列化与校验</span></article><article><strong>{latest.saveStages.snapshotScanMs.toFixed(1)} ms</strong><span>快照元数据</span></article><article><strong>{latest.saveStages.capacityMs.toFixed(1)} ms</strong><span>容量检查</span></article><article><strong>{latest.saveStages.primaryWriteMs.toFixed(1)} ms</strong><span>主档写入/读回</span></article><article><strong>{latest.saveStages.backupMs.toFixed(1)} ms</strong><span>上一版备份</span></article><article><strong>{latest.saveStages.automaticSnapshotMs.toFixed(1)} ms</strong><span>自动快照</span></article></div></section> : null}
+      <section className="performance-phase-section"><header><Cpu size={15} /><span><strong>模拟阶段耗时归因</strong><small>最近一个 Worker 批次</small></span></header>{phases.length ? <div className="performance-phase-list">{phases.map((phase) => <div key={phase.id}><span>{phase.label}</span><i><b style={{ width: `${Math.max(1, phase.share * 100)}%` }} /></i><strong>{phase.durationMs.toFixed(2)} ms</strong><em>{Math.round(phase.share * 100)}%</em></div>)}</div> : <p>等待下一次带阶段计时的 Worker 结果。</p>}</section>
+      {logisticsProfile ? <section className="performance-scale-section performance-logistics-cache"><header><Route size={15} /><span><strong>物流匹配与缓存</strong><small>最近一个 Worker 批次</small></span></header><div><article><strong>{logisticsProfile.peerCandidateChecks.toLocaleString("zh-CN")}</strong><span>伙伴候选检查</span><span>匹配调用 {logisticsProfile.peerMatchCalls}</span></article><article><strong>{Math.round(peerHitRate * 100)}%</strong><span>伙伴缓存命中</span><span>{logisticsProfile.peerMatchCacheHits} 次复用</span></article><article><strong>{logisticsProfile.dispatchSlotChecks.toLocaleString("zh-CN")}</strong><span>派遣槽检查</span><span>建立航线 {logisticsProfile.routesCreated}</span></article><article><strong>{logisticsProfile.routePathPlans.toLocaleString("zh-CN")}</strong><span>实际路径规划</span><span>路径命中 {logisticsProfile.routePathCacheHits}</span></article><article><strong>{Math.round(routeHitRate * 100)}%</strong><span>路线经济缓存</span><span>Worker 状态复用 {logisticsProfile.persistentRuntimeHits}</span></article></div></section> : null}
+      <section className="performance-scale-section"><header><HardDrive size={15} /><span><strong>行星规模与在途物流</strong><small>当前真实状态</small></span></header><div>{planetRows.map((row) => <article key={row.planetId}><strong>{getPlanetDisplayName(game, row.planetId as GameState["activePlanetId"])}</strong><span>实体 {row.entities}</span><span>线路 {row.belts}</span><span>在途 {row.routes}</span></article>)}</div></section>
+      <section className="performance-peaks-section"><header><AlertTriangle size={15} /><span><strong>最近 60 秒卡顿峰值</strong><small>主线程 {peaks.peakFrameMs.toFixed(1)} ms · Worker {peaks.peakWorkerMs.toFixed(1)} ms · 积压 {peaks.peakPendingTaskMs.toFixed(0)} ms</small></span></header>{stallPeaks.map((sample) => <div key={sample.recordedAt}><time>{new Date(sample.recordedAt).toLocaleTimeString("zh-CN")}</time><span>帧峰值 {sample.peakFrameMs.toFixed(1)} ms</span><span>Worker {sample.workerDurationMs.toFixed(1)} ms</span><span>积压 {sample.pendingTaskMs.toFixed(0)} ms</span></div>)}</section>
+    </>}
+  </div>;
 }
 
 function integrityLabel(status: SaveIntegrityStatus): string {
@@ -386,6 +501,8 @@ function SavesPanel({
   onExport,
   onImport,
   onConfirmImport,
+  onConfirmImportRescue,
+  importRescueArmed,
   onCancelImport,
   onSaveSlot,
   onLoadSlot,
@@ -393,16 +510,26 @@ function SavesPanel({
   onCreateSnapshot,
   onLoadSnapshot,
   onDeleteSnapshot,
+  onDeleteSnapshots,
   onValidateMod,
   onExportModTemplate,
 }: Pick<OperationsWorkspaceProps,
-  "game" | "slots" | "snapshots" | "importPreview" | "modValidation" | "onManualSave" | "onExport" | "onImport" | "onConfirmImport" | "onCancelImport" | "onSaveSlot" | "onLoadSlot" | "onDeleteSlot" | "onCreateSnapshot" | "onLoadSnapshot" | "onDeleteSnapshot" | "onValidateMod" | "onExportModTemplate">) {
+  "game" | "slots" | "snapshots" | "importPreview" | "modValidation" | "onManualSave" | "onExport" | "onImport" | "onConfirmImport" | "onConfirmImportRescue" | "importRescueArmed" | "onCancelImport" | "onSaveSlot" | "onLoadSlot" | "onDeleteSlot" | "onCreateSnapshot" | "onLoadSnapshot" | "onDeleteSnapshot" | "onDeleteSnapshots" | "onValidateMod" | "onExportModTemplate">) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modInputRef = useRef<HTMLInputElement>(null);
-  const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & ({ kind: "slot"; slotId: SaveSlotId } | { kind: "snapshot"; snapshotId: string })) | null>(null);
+  const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & ({ kind: "slot"; slotId: SaveSlotId } | { kind: "snapshot"; snapshotId: string } | { kind: "snapshots"; snapshotIds: string[] })) | null>(null);
+  const [selectedSnapshotIds, setSelectedSnapshotIds] = useState<string[]>([]);
+  const [storageEstimate, setStorageEstimate] = useState<LocalSaveStorageEstimate | null>(null);
   const summaryBySlot = new Map(slots.map((slot) => [slot.slotId, slot]));
   const automaticSnapshotCount = snapshots.filter((snapshot) => snapshot.reason === "自动快照").length;
   const manualSnapshotCount = snapshots.length - automaticSnapshotCount;
+  useEffect(() => {
+    let active = true;
+    void getLocalSaveStorageEstimate().then((estimate) => { if (active) setStorageEstimate(estimate); });
+    return () => { active = false; };
+  }, [slots, snapshots]);
+  useEffect(() => setSelectedSnapshotIds((current) => current.filter((id) => snapshots.some((snapshot) => snapshot.id === id))), [snapshots]);
+  const formatBytes = (bytes: number | null) => bytes === null ? "不可用" : bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(2)} MiB` : `${Math.max(0, Math.round(bytes / 1024))} KiB`;
   return (
     <div className="operations-panel operations-saves">
       <header className="operations-section-header">
@@ -435,7 +562,7 @@ function SavesPanel({
           <span><small>科技</small><strong>{importPreview.summary?.completedTechCount ?? 0}</strong></span>
         </div>
         {importPreview.issues.length > 0 ? <ul>{importPreview.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul> : null}
-        <footer><button type="button" onClick={onCancelImport}>取消</button><button className="primary" type="button" onClick={onConfirmImport}><ShieldCheck size={14} />修复并导入</button></footer>
+        <footer><button type="button" onClick={onCancelImport}>取消</button>{importPreview.valid ? <button className="primary" type="button" onClick={onConfirmImport}><ShieldCheck size={14} />确认导入</button> : importPreview.repairable ? <button className={importRescueArmed ? "danger" : "primary"} type="button" onClick={onConfirmImportRescue}><ShieldCheck size={14} />{importRescueArmed ? "再次确认并救援" : "救援此存档"}</button> : <button type="button" disabled>无法导入</button>}</footer>
       </section> : null}
       <div className="save-slot-list">
         {([1, 2, 3] as SaveSlotId[]).map((slotId) => {
@@ -459,9 +586,10 @@ function SavesPanel({
         })}
       </div>
       <section className="save-snapshot-section">
-        <header><div><History size={14} /><strong>恢复快照</strong><small>自动 {automaticSnapshotCount}/2 · 手动 {manualSnapshotCount}</small></div><span>可回滚</span></header>
+        <header><div><History size={14} /><strong>恢复快照</strong><small>自动 {automaticSnapshotCount}/2 · 手动 {manualSnapshotCount}</small></div>{selectedSnapshotIds.length > 0 ? <button className="save-batch-delete" type="button" onClick={() => setDeleteRequest({ kind: "snapshots", snapshotIds: selectedSnapshotIds, label: `${selectedSnapshotIds.length} 份所选快照`, details: "只删除明确勾选的恢复快照；主存档和三个手动槽位不会受影响" })}><Trash2 size={13} />删除所选</button> : <span>可回滚</span>}</header>
         {snapshots.length === 0 ? <p className="save-empty-note">模拟运行后会自动保留最近快照</p> : <div className="save-snapshot-list">
           {snapshots.map((snapshot) => <article className={`save-snapshot-row${snapshot.valid ? "" : " save-snapshot-row--invalid"}`} key={snapshot.id}>
+            <input type="checkbox" checked={selectedSnapshotIds.includes(snapshot.id)} onChange={(event) => setSelectedSnapshotIds((current) => event.target.checked ? [...current, snapshot.id] : current.filter((id) => id !== snapshot.id))} aria-label={`选择快照 ${snapshot.reason}`} />
             <i>{snapshot.valid ? <ShieldCheck size={14} /> : <FileCheck2 size={14} />}</i>
             <div><strong>{snapshot.reason}</strong><span>{new Date(snapshot.savedAt).toLocaleTimeString("zh-CN")} · {formatRuntime(snapshot.elapsedSeconds)} · 科技 {snapshot.completedTechCount}</span></div>
             <button type="button" disabled={!snapshot.valid} onClick={() => onLoadSnapshot(snapshot.id)} title="回滚到此快照" aria-label={`回滚到快照 ${snapshot.id}`}><RotateCcw size={13} /></button>
@@ -469,6 +597,11 @@ function SavesPanel({
           </article>)}
         </div>}
       </section>
+      {storageEstimate ? <section className="save-storage-usage" aria-label="本地存储占用">
+        <header><div><Database size={14} /><strong>存储占用</strong></div><small>{storageEstimate.backend === "indexeddb" ? "IndexedDB" : storageEstimate.backend === "local-storage" ? "兼容存储" : "临时内存"}</small></header>
+        <div className="save-storage-kpis"><span><small>存档数据</small><strong>{formatBytes(storageEstimate.payloadBytes)}</strong></span><span><small>浏览器总占用</small><strong>{formatBytes(storageEstimate.browserUsageBytes)}</strong></span><span><small>可用配额</small><strong>{storageEstimate.browserQuotaBytes === null || storageEstimate.browserUsageBytes === null ? "不可用" : formatBytes(Math.max(0, storageEstimate.browserQuotaBytes - storageEstimate.browserUsageBytes))}</strong></span></div>
+        <div className="save-storage-entries">{storageEstimate.entries.map((entry) => <div key={entry.key}><span>{entry.label}</span><strong>{formatBytes(entry.bytes)}</strong></div>)}</div>
+      </section> : null}
       <section className="content-pack-section">
         <header><div><FileCheck2 size={14} /><strong>内容包校验</strong></div><small>只读检查，不会修改核心目录</small></header>
         <div className="content-pack-actions"><button type="button" onClick={() => modInputRef.current?.click()}><Upload size={14} />选择内容包 JSON</button><button type="button" onClick={onExportModTemplate}><Download size={14} />导出模板</button></div>
@@ -478,7 +611,8 @@ function SavesPanel({
       <SaveDeleteDialog target={deleteRequest} onCancel={() => setDeleteRequest(null)} onDelete={() => {
         if (!deleteRequest) return;
         if (deleteRequest.kind === "slot") onDeleteSlot(deleteRequest.slotId);
-        else onDeleteSnapshot(deleteRequest.snapshotId);
+        else if (deleteRequest.kind === "snapshot") onDeleteSnapshot(deleteRequest.snapshotId);
+        else { onDeleteSnapshots(deleteRequest.snapshotIds); setSelectedSnapshotIds([]); }
         setDeleteRequest(null);
       }} />
     </div>
@@ -666,9 +800,10 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
         })}
       </nav>
       <div className="operations-body">
-        {props.tab === "alerts" ? <AlertsPanel alerts={props.alerts} onSelect={props.onAlertSelect} /> : null}
+        {props.tab === "alerts" ? <AlertsPanel alerts={props.alerts} onSelect={props.onAlertSelect} onOpenTutorial={props.onOpenTutorial} /> : null}
         {props.tab === "achievements" ? <AchievementsPanel game={props.game} /> : null}
-        {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onOpenReleaseNotes={props.onOpenReleaseNotes} /> : null}
+        {props.tab === "settings" ? <SettingsPanel game={props.game} report={props.performanceReport} productionRefreshPreference={props.productionRefreshPreference} productionRefreshIntervalMs={props.productionRefreshIntervalMs} endgameExtremeMode={props.endgameExtremeMode} onEndgameExtremeModeChange={props.onEndgameExtremeModeChange} onProductionRefreshPreferenceChange={props.onProductionRefreshPreferenceChange} onChange={props.onSettingsChange} onRunBenchmark={props.onRunBenchmark} onOpenReleaseNotes={props.onOpenReleaseNotes} onOpenTutorial={props.onOpenTutorial} /> : null}
+        {props.tab === "performance" ? <PerformancePanel game={props.game} snapshot={props.performanceMonitor} onStart={props.onStartPerformanceMonitor} onStop={props.onStopPerformanceMonitor} onClear={props.onClearPerformanceMonitor} onExport={props.onExportPerformanceMonitor} /> : null}
         {props.tab === "saves" ? <SavesPanel {...props} /> : null}
         {props.tab === "packs" ? <ContentPacksPanel game={props.game} registry={props.contentPackRegistry} validation={props.modValidation} onValidate={props.onValidateMod} onExportTemplate={props.onExportModTemplate} onRegister={props.onRegisterContentPack} onSetEnabled={props.onSetContentPackEnabled} onRemove={props.onRemoveContentPack} /> : null}
         {props.tab === "support" ? <SupportPanel game={props.game} report={props.performanceReport} /> : null}

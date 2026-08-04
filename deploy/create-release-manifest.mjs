@@ -55,10 +55,14 @@ async function describeReleaseFiles() {
     "server/analytics.mjs",
     "server/analytics.test.mjs",
     "server/index.mjs",
+    "server/leaderboard-moderation.mjs",
+    "server/leaderboard-moderation.test.mjs",
     "server/mail.mjs",
     "server/mail.test.mjs",
+    "server/moderate-leaderboard.mjs",
     "server/package.json",
     "server/package-lock.json",
+    "server/save-integrity.mjs",
     "server/server.test.mjs",
   ];
   return Promise.all(paths.sort().map(describeFile));

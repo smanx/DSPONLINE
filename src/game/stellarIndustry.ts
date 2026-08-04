@@ -1,4 +1,4 @@
-import { getBuilding, getPlanet, getStarSystem, PLANET_LIST, STAR_SYSTEM_LIST } from "./content";
+import { getBuilding, getPlanet, getStarSystem, ITEMS, PLANET_LIST, STAR_SYSTEM_LIST } from "./content";
 import {
   findStationSlotPeer,
   getEntityPowerFactor,
@@ -13,10 +13,11 @@ import {
   getStationBusyVehicleCount,
   getStationSlotCapacity,
   getStationSlots,
+  getVeinConsumptionMultiplier,
   isTechnologyCompleted,
   stationRouteRequiresWarp,
 } from "./engine";
-import { PLANET_INDUSTRY_ROLE_LABELS, getRecommendedPlanetRole } from "./galaxy";
+import { PLANET_INDUSTRY_ROLE_LABELS, getPlanetDisplayName, getRecommendedPlanetRole, getStarSystemDisplayName } from "./galaxy";
 import type {
   FactoryEntity,
   GameState,
@@ -69,6 +70,9 @@ export interface StellarRouteSnapshot {
   warpersPerTrip: number;
   warpersPerVessel: number;
   availableWarpers: number;
+  dispatchStationId?: string;
+  dispatchPlanetId?: PlanetId;
+  dispatchDirection: "supply-delivery" | "demand-pickup" | "unassigned";
   routeKind: "local" | "direct" | "relay";
   waypointStationIds: string[];
   hopCount: number;
@@ -235,6 +239,15 @@ export function getStellarRouteSnapshots(game: GameState): StellarRouteSnapshot[
           (station.stationWarpers ?? 0) >= requiredWarpers);
         const localVehiclePowerReady = scope !== "local" || vehicleStations.some((station) =>
           (availableVehiclesByStation.get(station.id) ?? 0) > 0 && getEntityPowerFactor(game, station) > 0);
+        const activeOwnerId = active[0]?.vehicleStationId ?? (active.length > 0 ? target.id : undefined);
+        const dispatchStation = activeOwnerId
+          ? vehicleStations.find((station) => station.id === activeOwnerId)
+          : vehicleStations.find((station) => (availableVehiclesByStation.get(station.id) ?? 0) > 0 &&
+            (!requiresWarp || station.stationWarpEnabled && (station.stationWarpers ?? 0) >= requiredWarpers)) ??
+            vehicleStations.find((station) => (availableVehiclesByStation.get(station.id) ?? 0) > 0);
+        const dispatchDirection = !dispatchStation
+          ? "unassigned" as const
+          : dispatchStation.id === source?.id ? "supply-delivery" as const : "demand-pickup" as const;
         const status = getRouteStatus(game, source, target, scope, activeVehicles, availableVehicles, requiresWarp,
           economics?.routeAvailable ?? true, warpVehicleReady, localVehiclePowerReady,
           sourceStock, minimumCargo, targetFree, economics?.waypointStationIds ?? []);
@@ -265,10 +278,10 @@ export function getStellarRouteSnapshots(game: GameState): StellarRouteSnapshot[
           energyMjPerTrip: economics?.energyMjPerTrip ?? ((getBuilding(target.buildingId!).powerDemandKw ?? 0) + 120 * installedVehicles) * durationSeconds / 1_000,
           warpersPerTrip: economics?.warpersPerTrip ?? 0,
           warpersPerVessel: economics?.warpersPerVessel ?? 0,
-          availableWarpers: vehicleStations.reduce((sum, station) => sum +
-            ((availableVehiclesByStation.get(station.id) ?? 0) > 0 && station.stationWarpEnabled
-              ? Math.max(0, Math.floor(station.stationWarpers ?? 0))
-              : 0), 0),
+          availableWarpers: dispatchStation?.stationWarpEnabled ? Math.max(0, Math.floor(dispatchStation.stationWarpers ?? 0)) : 0,
+          dispatchStationId: dispatchStation?.id,
+          dispatchPlanetId: dispatchStation?.planetId,
+          dispatchDirection,
           routeKind: economics?.routeKind ?? "local",
           waypointStationIds: economics?.waypointStationIds ?? [],
           hopCount: economics?.hopCount ?? 0,
@@ -297,8 +310,10 @@ export function getInterplanetaryLogisticsDiagnostics(
 ): InterplanetaryLogisticsDiagnostic[] {
   const diagnostics: InterplanetaryLogisticsDiagnostic[] = [];
   for (const route of routes.filter((candidate) => candidate.scope === "remote")) {
-    const sourceLabel = route.sourcePlanetId ? getPlanet(route.sourcePlanetId).name : "未匹配供应端";
-    const targetLabel = getPlanet(route.targetPlanetId).name;
+    const sourceLabel = route.sourcePlanetId ? getPlanetDisplayName(game, route.sourcePlanetId) : "未匹配供应端";
+    const targetLabel = getPlanetDisplayName(game, route.targetPlanetId);
+    const dispatchLabel = route.dispatchPlanetId ? getPlanetDisplayName(game, route.dispatchPlanetId) : "可派船站点";
+    const directionLabel = route.dispatchDirection === "supply-delivery" ? "供应端主动送货" : route.dispatchDirection === "demand-pickup" ? "需求端主动取货" : "等待确定派遣方向";
     const base = {
       id: `diagnostic:${route.id}`,
       itemId: route.itemId,
@@ -311,7 +326,7 @@ export function getInterplanetaryLogisticsDiagnostics(
     if (route.status === "active") {
       const target = game.entities.find((entity) => entity.id === route.targetStationId);
       if ((target?.stationCongestion ?? 0) >= 0.8) {
-        diagnostics.push({ ...base, severity: "warning", title: `${getPlanet(route.targetPlanetId).name}物流站拥堵`, detail: `${route.itemId} 航线正在运输，但需求站拥堵 ${Math.round((target?.stationCongestion ?? 0) * 100)}%。`, recommendation: "提高目标槽位上限、分流下游库存，或增加独立需求站。" });
+        diagnostics.push({ ...base, severity: "warning", title: `${getPlanetDisplayName(game, route.targetPlanetId)}物流站拥堵`, detail: `${route.itemId} 航线正在运输，但需求站拥堵 ${Math.round((target?.stationCongestion ?? 0) * 100)}%。`, recommendation: "提高目标槽位上限、分流下游库存，或增加独立需求站。" });
       }
       continue;
     }
@@ -319,11 +334,11 @@ export function getInterplanetaryLogisticsDiagnostics(
     const definition = route.status === "missing-source"
       ? { severity: "critical" as const, title: `${targetLabel}缺少${route.itemId}供应站`, detail: "需求槽位找不到具有远程供应权限的同物品槽位。", recommendation: "在来源物流塔配置该物品为远程供应，或检查来源站是否已停用。" }
         : route.status === "missing-vehicle"
-        ? { severity: "critical" as const, title: `${targetLabel}没有可用运输船`, detail: `${route.itemId} 已建立供需匹配，但需求站没有星际运输船。`, recommendation: "向需求星际物流站装入物流运输船。" }
+        ? { severity: "critical" as const, title: `${sourceLabel}与${targetLabel}没有可用运输船`, detail: `${route.itemId} 已建立供需匹配，但供需两侧都没有空闲运输船。`, recommendation: "运输船可装在供应塔主动送货，也可装在需求塔主动取货。" }
         : route.status === "missing-hub"
           ? { severity: "critical" as const, title: `${targetLabel}缺少中转物流枢纽`, detail: `${sourceLabel} 到 ${targetLabel} 采用强制中转策略，但 ${route.warperBudget} 跳预算内没有已启用枢纽。`, recommendation: "在中间恒星系的星际物流站启用中转枢纽，或把需求槽改为优先中转/直达。" }
         : route.status === "missing-warper"
-          ? { severity: "critical" as const, title: `${targetLabel}缺少翘曲条件`, detail: `${sourceLabel} 到 ${targetLabel} 的航线需要空间翘曲器。`, recommendation: "完成空间翘曲科技、启用需求站翘曲，并向站内补充空间翘曲器。" }
+          ? { severity: "critical" as const, title: `${dispatchLabel}派船侧缺少翘曲条件`, detail: `${directionLabel}；跨恒星系往返需要派出塔为每艘运输船预留 ${Math.max(2, route.warpersPerVessel)} 个空间翘曲器，另一端无需库存。`, recommendation: `只需在实际派船的${dispatchLabel}物流塔启用翘曲并补充空间翘曲器。` }
           : route.status === "no-power"
             ? { severity: "critical" as const, title: `${route.itemId}航线断电`, detail: `${sourceLabel} 或 ${targetLabel} 的物流站未获得电力。`, recommendation: "恢复两端行星电网供电后，物流会自动重新调度。" }
             : route.status === "missing-stock"
@@ -369,6 +384,8 @@ export function getPlanetIndustrySummaries(game: GameState, routes = getStellarR
     const veins = entities.filter((entity) => getResourceReserveSnapshot(game, entity)?.infinite === false);
     const reserveRemaining = veins.reduce((sum, vein) => sum + (getResourceReserveSnapshot(game, vein)?.remaining ?? 0), 0);
     const miningPerMinute = veins.reduce((sum, vein) => sum + Math.max(0, vein.productionRate), 0);
+    const depletionPerMinute = veins.reduce((sum, vein) => sum + Math.max(0, vein.productionRate) *
+      (vein.resourceId && ITEMS[vein.resourceId].kind === "solid" ? getVeinConsumptionMultiplier(game) : 1), 0);
     const depletedVeins = veins.filter((vein) => getResourceReserveSnapshot(game, vein)?.exhausted).length;
     const detectedRole = detectedPlanetRole(game, planet.id);
     const recommendedRole = getRecommendedPlanetRole(game, planet.id);
@@ -405,7 +422,7 @@ export function getPlanetIndustrySummaries(game: GameState, routes = getStellarR
       configuredExports: routes.filter((route) => route.sourcePlanetId === planet.id).length,
       reserveRemaining,
       miningPerMinute,
-      depletionSeconds: miningPerMinute > 0 && reserveRemaining > 0 ? reserveRemaining / miningPerMinute * 60 : null,
+      depletionSeconds: depletionPerMinute > 0 && reserveRemaining > 0 ? reserveRemaining / depletionPerMinute * 60 : null,
       depletedVeins,
       powerFactor: metrics.powerFactor,
       generationKw: metrics.generationKw,
@@ -449,7 +466,7 @@ export function getRouteEndpointLabel(stationId: string | undefined, game: GameS
   if (!stationId) return "未匹配";
   const station = game.entities.find((entity) => entity.id === stationId);
   if (!station) return "已移除站点";
-  return `${getPlanet(station.planetId).name} · ${station.buildingId ? getBuilding(station.buildingId).shortName : "物流站"}`;
+  return `${getPlanetDisplayName(game, station.planetId)} · ${station.buildingId ? getBuilding(station.buildingId).shortName : "物流站"}`;
 }
 
 export function getRouteDistanceLabel(route: StellarRouteSnapshot): string {
@@ -468,8 +485,8 @@ export function getRoutePathLabel(route: StellarRouteSnapshot, game: GameState):
   ].filter((planetId): planetId is PlanetId => Boolean(planetId));
   if (planetIds.length === 0) return "待匹配";
   const labels = route.distanceLy > 0
-    ? planetIds.map((planetId) => getStarSystem(getPlanet(planetId).systemId).name)
-    : planetIds.map((planetId) => getPlanet(planetId).name);
+    ? planetIds.map((planetId) => getStarSystemDisplayName(game, getPlanet(planetId).systemId))
+    : planetIds.map((planetId) => getPlanetDisplayName(game, planetId));
   return labels.filter((label, index) => index === 0 || label !== labels[index - 1]).join(" → ");
 }
 

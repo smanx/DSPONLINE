@@ -91,7 +91,7 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
       const updated = await bindCloudEmail(bindingEmail);
       onUserChange(updated);
       setBindingEmail(updated.email);
-      setNotice({ tone: "ready", text: "验证邮件已发送；完成验证后可找回密码并提交排行榜" });
+      setNotice({ tone: "ready", text: "验证邮件已发送；完成验证后可使用邮箱找回密码" });
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "邮箱绑定失败" });
     } finally {
@@ -194,12 +194,12 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
 
       <div className={`cloud-account-verification cloud-account-verification--${user.emailVerified ? "ready" : "warning"}`}>
         {user.emailVerified ? <MailCheck size={17} /> : <MailWarning size={17} />}
-        <span><strong>{user.emailVerified ? mailAvailable ? "邮箱已验证" : "邮箱已验证 · 邮件系统尚未开放" : mailAvailable ? user.email ? "邮箱等待验证" : "尚未绑定邮箱" : "邮件系统尚未开放"}</strong><small>{user.email ? `${user.email} · 云存档正常可用` : mailAvailable ? "绑定并验证后可找回密码与提交排行榜；云存档无需邮箱" : "云存档与自动同步正常可用；未绑定邮箱暂时无法找回密码，排行榜仍需验证"}</small></span>
+        <span><strong>{user.emailVerified ? mailAvailable ? "邮箱已验证" : "邮箱已验证 · 邮件系统尚未开放" : mailAvailable ? user.email ? "邮箱等待验证" : "尚未绑定邮箱" : "邮件系统尚未开放"}</strong><small>{user.email ? `${user.email} · 云存档与排行榜正常可用` : mailAvailable ? "绑定并验证后可使用邮箱找回密码；排行榜无需邮箱" : "云存档、自动同步与排行榜正常可用；未绑定邮箱暂时无法找回密码"}</small></span>
         {!user.emailVerified && user.email ? <button type="button" disabled={!mailAvailable || busyAction === "verify"} title={!mailAvailable ? "邮箱验证正在开发中" : undefined} onClick={() => void resendVerification()}>{busyAction === "verify" ? <LoaderCircle size={13} /> : <RefreshCw size={13} />}{mailAvailable ? "重发" : "开发中"}</button> : user.emailVerified ? <Check size={14} /> : null}
       </div>
 
       {!user.emailVerified ? <details className="cloud-account-section" open={!user.email}>
-        <summary><MailWarning size={15} /><span><strong>{mailAvailable ? user.email ? "更换待验证邮箱" : "绑定邮箱" : "绑定邮箱 · 等待开放"}</strong><small>{mailAvailable ? "验证后可找回密码与提交排行榜；云存档已经开放" : "邮件系统开放后可绑定验证，不影响当前云存档"}</small></span></summary>
+        <summary><MailWarning size={15} /><span><strong>{mailAvailable ? user.email ? "更换待验证邮箱" : "绑定邮箱" : "绑定邮箱 · 等待开放"}</strong><small>{mailAvailable ? "验证后可使用邮箱找回密码；云存档与排行榜已经开放" : "邮件系统开放后可绑定验证，不影响云存档与排行榜"}</small></span></summary>
         <form className="cloud-account-email-form" onSubmit={bindEmail}>
           <label><span>邮箱地址</span><input type="email" value={bindingEmail} onChange={(event) => setBindingEmail(event.target.value)} maxLength={254} required autoComplete="email" disabled={!mailAvailable} /></label>
           <button className="primary" type="submit" disabled={!mailAvailable || busyAction === "email"}>{busyAction === "email" ? <LoaderCircle size={13} /> : <MailCheck size={13} />}{mailAvailable ? "绑定并发送验证邮件" : "邮件功能开发中"}</button>

@@ -1,4 +1,5 @@
 import type { GameSettings, PlanetId } from "./types";
+import { getLocalSaveValue, listLocalSaveKeys } from "./localSaveStore";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_BACKUP_KEY = `${SAVE_KEY}.backup`;
@@ -71,14 +72,10 @@ function isPlanetId(value: unknown): value is PlanetId {
 }
 
 function snapshotKeys(): string[] {
-  try {
-    const sequenceKey = `${SAVE_SNAPSHOT_KEY_PREFIX}.sequence`;
-    return Object.keys(window.localStorage)
-      .filter((key) => key.startsWith(`${SAVE_SNAPSHOT_KEY_PREFIX}.`) && key !== sequenceKey)
-      .sort((left, right) => right.localeCompare(left));
-  } catch {
-    return [];
-  }
+  const sequenceKey = `${SAVE_SNAPSHOT_KEY_PREFIX}.sequence`;
+  return listLocalSaveKeys()
+    .filter((key) => key.startsWith(`${SAVE_SNAPSHOT_KEY_PREFIX}.`) && key !== sequenceKey)
+    .sort((left, right) => right.localeCompare(left));
 }
 
 function parsePreview(raw: string): { summary: MenuSaveSummary; settings: Partial<GameSettings> | null; reason: string } | null {
@@ -107,7 +104,7 @@ function parsePreview(raw: string): { summary: MenuSaveSummary; settings: Partia
 
 function readPreview(key: string): ({ raw: string } & NonNullable<ReturnType<typeof parsePreview>>) | null {
   try {
-    const raw = window.localStorage.getItem(key);
+    const raw = getLocalSaveValue(key);
     const preview = raw ? parsePreview(raw) : null;
     return raw && preview ? { raw, ...preview } : null;
   } catch {

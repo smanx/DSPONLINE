@@ -1,4 +1,4 @@
-import { BUILDINGS, CONSTRUCTION, ITEMS, RECIPES, TECHNOLOGIES, TECHNOLOGY_LIST, validateContentCatalog } from "./content";
+import { BUILDINGS, CONSTRUCTION, ITEMS, RECIPES, TECHNOLOGIES, TECHNOLOGY_LIST, registerRuntimeBeltDefinition, resetRuntimeBeltDefinitions, validateContentCatalog } from "./content";
 import {
   parseContentPackDependency,
   satisfiesContentPackVersion,
@@ -22,11 +22,13 @@ import type {
 
 const CONTENT_PACK_STORAGE_KEY = "dsp-idle-network.content-packs.v1";
 const REGISTRY_VERSION = 1;
+export const CONTENT_PACK_RUNTIME_PROTOCOL_VERSION = 1 as const;
 
 const CORE_ITEM_IDS = new Set(Object.keys(ITEMS));
 const CORE_BUILDING_IDS = new Set(Object.keys(BUILDINGS));
 const CORE_RECIPE_IDS = new Set(Object.keys(RECIPES));
 const CORE_TECH_IDS = new Set(Object.keys(TECHNOLOGIES));
+const CORE_BUILDING_DEFINITIONS = new Map(Object.entries(BUILDINGS).map(([id, definition]) => [id, { ...definition }]));
 const CORE_CONSTRUCTION_LENGTH = CONSTRUCTION.length;
 const CORE_TECHNOLOGY_LENGTH = TECHNOLOGY_LIST.length;
 
@@ -45,6 +47,13 @@ export interface RegisteredContentPack {
 export interface ContentPackRegistry {
   version: typeof REGISTRY_VERSION;
   packs: Record<string, RegisteredContentPack>;
+}
+
+/** Serializable runtime directory sent to simulation workers; never persisted in GameState. */
+export interface ContentPackRuntimeSnapshot {
+  protocolVersion: typeof CONTENT_PACK_RUNTIME_PROTOCOL_VERSION;
+  fingerprint: string;
+  registry: ContentPackRegistry;
 }
 
 export interface ContentPackDependencyStatus {
@@ -90,17 +99,64 @@ function cloneManifest(manifest: ContentPackManifest): ContentPackManifest {
     buildings: manifest.buildings?.map((building) => ({ ...building, costs: building.costs?.map((cost) => ({ ...cost })) })),
     recipes: manifest.recipes?.map((recipe) => ({ ...recipe, inputs: recipe.inputs.map((input) => ({ ...input })), outputs: recipe.outputs.map((output) => ({ ...output })) })),
     technologies: manifest.technologies?.map((technology) => ({ ...technology, prerequisites: [...(technology.prerequisites ?? [])], costs: technology.costs?.map((cost) => ({ ...cost })), unlocks: technology.unlocks ? [...technology.unlocks] : undefined })),
+    buildingOverrides: manifest.buildingOverrides?.map((override) => ({ ...override })),
+    belts: manifest.belts?.map((belt) => ({ ...belt, costs: belt.costs.map((cost) => ({ ...cost })) })),
   };
 }
 
 function cloneRegistry(registry: ContentPackRegistry): ContentPackRegistry {
   return {
     version: REGISTRY_VERSION,
-    packs: Object.fromEntries(Object.entries(registry.packs).map(([id, pack]) => [id, {
+    packs: Object.fromEntries(Object.entries(registry.packs).sort(([left], [right]) => left.localeCompare(right)).map(([id, pack]) => [id, {
       ...pack,
       manifest: cloneManifest(pack.manifest),
     }])),
   };
+}
+
+function stableSerialize(value: unknown): string {
+  if (value === undefined) return "undefined";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((entry) => stableSerialize(entry)).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`).join(",")}}`;
+}
+
+function hashString(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+export function getContentPackRegistryFingerprint(registry: ContentPackRegistry): string {
+  return hashString(stableSerialize(cloneRegistry(registry)));
+}
+
+export function createContentPackRuntimeSnapshot(registry: ContentPackRegistry): ContentPackRuntimeSnapshot {
+  const normalized = cloneRegistry(registry);
+  return {
+    protocolVersion: CONTENT_PACK_RUNTIME_PROTOCOL_VERSION,
+    fingerprint: getContentPackRegistryFingerprint(normalized),
+    registry: normalized,
+  };
+}
+
+export function validateContentPackRuntimeSnapshot(snapshot: ContentPackRuntimeSnapshot | null | undefined): boolean {
+  return Boolean(snapshot &&
+    snapshot.protocolVersion === CONTENT_PACK_RUNTIME_PROTOCOL_VERSION &&
+    snapshot.registry?.version === REGISTRY_VERSION &&
+    snapshot.fingerprint === getContentPackRegistryFingerprint(snapshot.registry));
+}
+
+/** Validate and activate the exact catalog snapshot used for one simulation boundary. */
+export function applyContentPackRuntimeSnapshot(snapshot: ContentPackRuntimeSnapshot | null | undefined): ContentPackActivationReport {
+  if (!snapshot || !validateContentPackRuntimeSnapshot(snapshot)) throw new Error("内容包运行时注册表缺失或指纹不匹配");
+  const report = applyContentPackRegistry(snapshot.registry);
+  if (!report.catalogValid) throw new Error(`内容包运行时目录校验失败：${report.issues.join("；")}`);
+  return report;
 }
 
 function normalizeRegistry(value: unknown): ContentPackRegistry {
@@ -177,6 +233,9 @@ export function getContentPackConflicts(registry: ContentPackRegistry, manifest:
   const buildings = new Set(manifest.buildings?.map((building) => building.id) ?? []);
   const recipes = new Set(manifest.recipes?.map((recipe) => recipe.id) ?? []);
   const technologies = new Set(manifest.technologies?.map((technology) => technology.id) ?? []);
+  const overrides = new Set(manifest.buildingOverrides?.map((override) => override.id) ?? []);
+  const beltIds = new Set(manifest.belts?.map((belt) => belt.id) ?? []);
+  const beltTiers = new Set(manifest.belts?.map((belt) => belt.tier) ?? []);
   const conflicts: string[] = [];
   for (const pack of Object.values(registry.packs)) {
     if (pack.manifest.id === manifest.id) continue;
@@ -184,6 +243,11 @@ export function getContentPackConflicts(registry: ContentPackRegistry, manifest:
     for (const building of pack.manifest.buildings ?? []) if (buildings.has(building.id)) conflicts.push(`建筑 ${building.id} 已由 ${pack.manifest.name} 提供`);
     for (const recipe of pack.manifest.recipes ?? []) if (recipes.has(recipe.id)) conflicts.push(`配方 ${recipe.id} 已由 ${pack.manifest.name} 提供`);
     for (const technology of pack.manifest.technologies ?? []) if (technologies.has(technology.id)) conflicts.push(`科技 ${technology.id} 已由 ${pack.manifest.name} 提供`);
+    for (const override of pack.manifest.buildingOverrides ?? []) if (overrides.has(override.id)) conflicts.push(`建筑 ${override.id} 已由 ${pack.manifest.name} 调整`);
+    for (const belt of pack.manifest.belts ?? []) {
+      if (beltIds.has(belt.id)) conflicts.push(`传送带 ${belt.id} 已由 ${pack.manifest.name} 提供`);
+      if (beltTiers.has(belt.tier)) conflicts.push(`传送带等级 ${belt.tier} 已由 ${pack.manifest.name} 提供`);
+    }
   }
   return [...new Set(conflicts)];
 }
@@ -258,7 +322,7 @@ function activePacksInDependencyOrder(registry: ContentPackRegistry): { active: 
   const pending = new Map(Object.entries(registry.packs).filter(([, pack]) => pack.enabled));
   const active: RegisteredContentPack[] = [];
   while (pending.size > 0) {
-    const ready = [...pending.entries()].filter(([, pack]) => getContentPackDependencyStatuses(registry, pack.manifest).every((dependency) => dependency.satisfied));
+    const ready = [...pending.entries()].filter(([, pack]) => getContentPackDependencyStatuses(registry, pack.manifest).every((dependency) => dependency.satisfied && !pending.has(dependency.id)));
     if (ready.length === 0) break;
     ready.sort(([left], [right]) => left.localeCompare(right));
     for (const [id, pack] of ready) {
@@ -276,10 +340,24 @@ function resetRuntimeContent(): void {
   const technologies = TECHNOLOGIES as unknown as RuntimeTechnologies;
   for (const id of Object.keys(items)) if (!CORE_ITEM_IDS.has(id)) delete items[id];
   for (const id of Object.keys(buildings)) if (!CORE_BUILDING_IDS.has(id)) delete buildings[id];
+  for (const [id, definition] of CORE_BUILDING_DEFINITIONS) buildings[id] = { ...definition };
   for (const id of Object.keys(recipes)) if (!CORE_RECIPE_IDS.has(id)) delete recipes[id];
   for (const id of Object.keys(technologies)) if (!CORE_TECH_IDS.has(id)) delete technologies[id];
   CONSTRUCTION.splice(CORE_CONSTRUCTION_LENGTH);
   TECHNOLOGY_LIST.splice(CORE_TECHNOLOGY_LENGTH);
+  resetRuntimeBeltDefinitions();
+}
+
+function applyBuildingOverrides(packs: RegisteredContentPack[]): void {
+  const buildings = BUILDINGS as unknown as RuntimeBuildings;
+  for (const pack of packs) for (const override of pack.manifest.buildingOverrides ?? []) {
+    const current = buildings[override.id];
+    if (!current) continue;
+    buildings[override.id] = {
+      ...current,
+      ...Object.fromEntries(Object.entries(override).filter(([key, value]) => key !== "id" && typeof value === "number")),
+    } as BuildingDefinition;
+  }
 }
 
 function registerItems(packs: RegisteredContentPack[]): void {
@@ -360,15 +438,30 @@ function registerConstruction(packs: RegisteredContentPack[]): void {
   }
 }
 
+function registerBelts(packs: RegisteredContentPack[]): void {
+  for (const pack of packs) for (const belt of pack.manifest.belts ?? []) {
+    if (!registerRuntimeBeltDefinition({ id: belt.id, tier: belt.tier, speed: belt.speed, name: belt.name })) continue;
+    CONSTRUCTION.push({
+      buildingId: belt.id,
+      name: belt.name,
+      outputAmount: Math.max(1, Math.floor(belt.outputAmount ?? 3)),
+      costs: belt.costs.map((cost) => ({ itemId: cost.itemId as ItemId, amount: Math.max(1, Math.floor(cost.amount)) })),
+      ...(belt.requiredTechId ? { requiredTechId: belt.requiredTechId as TechId } : {}),
+    });
+  }
+}
+
 /** Rebuild the live catalog from the enabled local registry. Call this before loading saves. */
 export function applyContentPackRegistry(registry: ContentPackRegistry): ContentPackActivationReport {
   resetRuntimeContent();
   const { active, blocked } = activePacksInDependencyOrder(registry);
   registerItems(active);
   registerBuildings(active);
+  applyBuildingOverrides(active);
   registerTechnologies(active);
   registerRecipes(active);
   registerConstruction(active);
+  registerBelts(active);
   const audit = validateContentCatalog();
   return {
     activePackIds: active.map((pack) => pack.manifest.id),
@@ -376,6 +469,24 @@ export function applyContentPackRegistry(registry: ContentPackRegistry): Content
     catalogValid: audit.valid,
     issues: audit.issues.map((issue) => `${issue.id}：${issue.message}`),
   };
+}
+
+export function getActiveContentPackReferences(registry: ContentPackRegistry): GameState["contentPacks"] {
+  const { active } = activePacksInDependencyOrder(registry);
+  return active.map((pack) => ({ id: pack.manifest.id, version: pack.manifest.version }));
+}
+
+export function getMissingContentPackRequirements(
+  requirements: readonly { id: string; version: string }[],
+  registry: ContentPackRegistry = loadContentPackRegistry(),
+): string[] {
+  return requirements.flatMap((requirement) => {
+    const installed = registry.packs[requirement.id];
+    if (!installed) return [`缺少内容包 ${requirement.id}@${requirement.version}`];
+    if (!installed.enabled) return [`内容包 ${requirement.id}@${requirement.version} 已安装但未启用`];
+    if (installed.manifest.version !== requirement.version) return [`内容包 ${requirement.id} 版本不匹配：存档需要 ${requirement.version}，当前为 ${installed.manifest.version}`];
+    return [];
+  });
 }
 
 export function getContentPackUsage(state: GameState, manifest: ContentPackManifest): ContentPackUsage {

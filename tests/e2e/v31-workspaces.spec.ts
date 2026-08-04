@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v1.0.0");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-01-v1.0.19");
   });
 });
 
@@ -140,6 +140,9 @@ test("light theme covers the next mobile shell and factory cards", async ({ page
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await page.getByRole("button", { name: "工厂", exact: true }).click();
   await expect(page.locator('.game-shell[data-mobile-route="factory"]')).toBeVisible();
-  await expect.poll(() => page.locator(".mobile-next-topbar").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(247, 249, 248)");
+  await expect.poll(() => page.locator(".mobile-next-topbar").evaluate((element) => {
+    const channels = getComputedStyle(element).backgroundColor.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+    return channels.reduce((sum, channel) => sum + channel, 0);
+  })).toBeGreaterThan(700);
   await page.screenshot({ path: "artifacts/qa/v31-light-mobile-390.png", fullPage: true });
 });

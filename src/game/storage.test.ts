@@ -1,9 +1,9 @@
 /** @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { addCanvasBookmark, addCanvasRegion, addDysonSwarmOrbit, advanceSimulation, connectBelt, createBlueprint, createInitialState, createStandardDysonLayer, installMiner, pauseCurrentResearch, placeBuilding, queueBlueprint, queueHandcraftRecipe, resizeCanvasRegion, selectTechnology, setActivePlanet, setBeltRouteOffsetY, setBlueprintTransform, setDysonLaunchMode, setDysonLaunchThrottle, setDysonSwarmOrbit, setFuelItem, setLogisticsItem, setPlanetTrayItemLimit, setStationHubConfiguration, setStationSlotMode, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
+import { addCanvasBookmark, addCanvasRegion, addDysonSwarmOrbit, advanceSimulation, connectBelt, createBlueprint, createInitialState, createStandardDysonLayer, fundConstructionQueueEntry, getMaterialDeliverySlots, installMiner, pauseCurrentResearch, placeBuilding, queueBlueprint, queueHandcraftRecipe, resizeCanvasRegion, selectTechnology, setActivePlanet, setBeltRouteOffsetY, setBlueprintTransform, setDysonLaunchMode, setDysonLaunchThrottle, setDysonSwarmOrbit, setFuelItem, setLogisticsItem, setPlanetTrayItemLimit, setStationHubConfiguration, setStationSlotMode, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
 import { createProductionPlan } from "./planning";
-import { clearGameSlot, exportGame, exportGameSlot, finalizeDeferredOfflineGame, getSaveSlotSummaries, getSaveSnapshotSummaries, importGame, inspectSave, loadGame, loadGameDeferredOffline, loadGameSlot, loadGameSlotDeferredOffline, loadSaveSnapshot, migrateGame, saveGame, saveGameSnapshot, saveGameSlot } from "./storage";
+import { clearGameSlot, exportGame, exportGameSlot, finalizeDeferredOfflineGame, getSaveSlotSummaries, getSaveSnapshotSummaries, importGame, inspectSave, loadGame, loadGameDeferredOffline, loadGameSlot, loadGameSlotDeferredOffline, loadSaveSnapshot, migrateGame, repairSave, saveGame, saveGameSnapshot, saveGameSlot, saveGameVerified } from "./storage";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
@@ -13,6 +13,103 @@ describe("game storage", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("migrates v39 saves through v41 defaults without changing factory data", () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialState()));
+    legacy.version = 39;
+    delete legacy.contentPacks;
+    delete legacy.settings.beltBufferLimit;
+    legacy.entities[0].outputs.iron_ore = 321;
+    legacy.endgame.constructionActivity.activityId = "union-station-v091";
+    legacy.endgame.constructionActivity.endsAtMs = 4_000;
+    const migrated = migrateGame(legacy)!;
+    expect(migrated).toMatchObject({ version: 46, contentPacks: [], settings: { beltBufferLimit: 100_000_000 } });
+    expect(migrated.entities[0].outputs.iron_ore).toBe(321);
+    expect(migrated.endgame.constructionActivity.endsAtMs).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it("migrates v41 galaxy data to v42 display metadata without changing factory ids", () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialState())) as Record<string, any>;
+    legacy.version = 41;
+    delete legacy.galaxy.planetMetadata;
+    delete legacy.galaxy.systemMetadata;
+    const migrated = migrateGame(legacy)!;
+    expect(migrated.version).toBe(46);
+    expect(migrated.galaxy.planetMetadata).toEqual({});
+    expect(migrated.galaxy.systemMetadata).toEqual({});
+    const migratedIds = new Set(migrated.entities.map((entity) => entity.id));
+    expect(legacy.entities.every((entity: any) => migratedIds.has(entity.id))).toBe(true);
+  });
+
+  it("migrates v42 saves to the v43 space-station shape without enabling elevator mode", () => {
+    let state = createInitialState();
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 50, y: 50 });
+    const stationId = state.entities.at(-1)!.id;
+    const legacy = JSON.parse(JSON.stringify(state)) as Record<string, any>;
+    legacy.version = 42;
+    delete legacy.systemSpaceStations;
+    delete legacy.galacticHubNetwork;
+    delete legacy.entities.find((entity: any) => entity.id === stationId).stationTier;
+    delete legacy.entities.find((entity: any) => entity.id === stationId).stationOperationMode;
+    const migrated = migrateGame(legacy)!;
+    const station = migrated.entities.find((entity) => entity.id === stationId)!;
+    expect(migrated.version).toBe(46);
+    expect(station.stationTier).toBe(1);
+    expect(station.stationOperationMode).toBe("legacy");
+    expect(migrated.systemSpaceStations.helios?.status).toBe("not-started");
+    expect(migrated.galacticHubNetwork).toMatchObject({ fleetInstalled: 0, fleetBusy: 0, warpers: "0", fleetReturns: [] });
+    expect(migrateGame(JSON.parse(JSON.stringify(migrated)))!.systemSpaceStations).toEqual(migrated.systemSpaceStations);
+  });
+
+  it("clamps saved display metadata and keeps only bounded tags", () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialState())) as Record<string, any>;
+    legacy.galaxy.planetMetadata = {
+      home: { customName: ` ${"x".repeat(100)} `, note: "n".repeat(400), tags: Array.from({ length: 20 }, (_, index) => `tag-${index}`) },
+    };
+    legacy.galaxy.systemMetadata = { helios: { customName: ` ${"s".repeat(100)} ` } };
+    const migrated = migrateGame(legacy)!;
+    expect(migrated.galaxy.planetMetadata.home?.customName).toHaveLength(32);
+    expect(migrated.galaxy.planetMetadata.home?.note).toHaveLength(240);
+    expect(migrated.galaxy.planetMetadata.home?.tags).toHaveLength(8);
+    expect(migrated.galaxy.systemMetadata.helios?.customName).toHaveLength(32);
+  });
+
+  it("migrates v40 ejectors to their active system orbit and preserves explicit v41 targets", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("dyson_swarm");
+    state = addDysonSwarmOrbit(state, "helios");
+    const activeOrbitId = state.dysonEngineering.activeOrbitBySystem.helios!;
+    state.construction.em_rail_ejector = 2;
+    state = placeBuilding(state, "em_rail_ejector", { x: 100, y: 100 });
+    const ejector = state.entities.find((entity) => entity.buildingId === "em_rail_ejector")!;
+    state = createBlueprint(state, [ejector.id], "旧弹射器蓝图");
+
+    const legacy = JSON.parse(JSON.stringify(state));
+    legacy.version = 40;
+    delete legacy.entities.find((entity: { id: string }) => entity.id === ejector.id).targetDysonOrbitId;
+    delete legacy.blueprints[0].entities[0].targetDysonOrbitId;
+    const migrated = migrateGame(legacy)!;
+    expect(migrated.version).toBe(46);
+    expect(migrated.entities.find((entity) => entity.id === ejector.id)?.targetDysonOrbitId).toBe(activeOrbitId);
+    expect(migrated.blueprints[0].entities[0].targetDysonOrbitId).toBeUndefined();
+
+    const placed = placeBuilding(migrated, "em_rail_ejector", { x: 500, y: 100 });
+    expect(placed.entities.at(-1)?.targetDysonOrbitId).toBe(activeOrbitId);
+    const reloaded = migrateGame(JSON.parse(JSON.stringify(placed)))!;
+    expect(reloaded.entities.at(-1)?.targetDysonOrbitId).toBe(activeOrbitId);
+  });
+
+  it("blocks a structurally valid save when its exact content pack is unavailable", () => {
+    const envelope = JSON.parse(exportGame(createInitialState()));
+    envelope.state.contentPacks = [{ id: "missing_factory_pack", version: "1.2.3" }];
+    const raw = JSON.stringify(envelope);
+    const inspection = inspectSave(raw);
+    expect(inspection.valid).toBe(false);
+    expect(inspection.issues[0]).toContain("缺少内容包 missing_factory_pack@1.2.3");
+    window.localStorage.setItem(SAVE_KEY, raw);
+    expect(() => loadGameDeferredOffline()).toThrow("missing_factory_pack@1.2.3");
   });
 
   it("defers main and slot offline advancement without changing the eventual result", () => {
@@ -59,7 +156,7 @@ describe("game storage", () => {
     legacy.construction.galactic_material_exporter = 0;
 
     const migrated = migrateGame(legacy)!;
-    expect(migrated.version).toBe(34);
+    expect(migrated.version).toBe(46);
     expect(migrated.settings.proliferatorBufferLimit).toBe(600);
     expect(migrated.endgame.exportInputMode).toBe("legacy-network");
     expect(migrated.construction.galactic_material_exporter).toBe(1);
@@ -68,6 +165,216 @@ describe("game storage", () => {
       historicalLevel: 1_005,
       progress: "99",
     });
+  });
+
+  it("migrates v34 entities to unlocked v35 records and preserves valid v35 locks idempotently", () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialState())) as any;
+    legacy.version = 34;
+    legacy.entities[0].interactionLocked = true;
+    legacy.entities[0].outputs[legacy.entities[0].resourceId] = 77;
+    const migrated = migrateGame(legacy)!;
+    expect(migrated.version).toBe(46);
+    expect(migrated.entities.every((entity) => entity.interactionLocked === false)).toBe(true);
+    expect(migrated.entities[0].outputs[migrated.entities[0].resourceId!]).toBe(77);
+
+    migrated.entities[0].interactionLocked = true;
+    const reloaded = migrateGame(JSON.parse(JSON.stringify(migrated)))!;
+    expect(reloaded.entities[0].interactionLocked).toBe(true);
+    expect(migrateGame(JSON.parse(JSON.stringify(reloaded)))).toEqual(reloaded);
+  });
+
+  it("migrates v35 to v36 and round-trips portable-fleet construction-center targets", () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialState())) as any;
+    legacy.version = 35;
+    legacy.constructionAutomation.targetStock = { arc_smelter: 2 };
+    const migrated = migrateGame(legacy)!;
+    expect(migrated.version).toBe(46);
+    expect(migrated.constructionAutomation.targetStock).toEqual({ arc_smelter: 2 });
+
+    let state = createInitialState();
+    state.construction.construction_center = 1;
+    state = placeBuilding(state, "construction_center", { x: 0, y: 0 });
+    const center = state.entities.find((entity) => entity.buildingId === "construction_center")!;
+    state.constructionAutomation.targetStock.logistics_vessel = 4;
+    state.constructionAutomation.lastCraftedId = "logistics_vessel";
+    state.constructionAutomation.jobs[center.id] = {
+      constructionId: "logistics_vessel",
+      steps: [
+        { kind: "material", recipeId: "logistics_vessel", batches: 1, outputItemId: "logistics_vessel", outputAmount: 1 },
+        { kind: "fleet", itemId: "logistics_vessel", amount: 1 },
+      ],
+      stepIndex: 1,
+      elapsedSeconds: 0,
+      inventory: { logistics_vessel: 1 },
+      recipeDecisions: [{ itemId: "logistics_vessel", recipeId: "logistics_vessel", fallbackReason: "测试回退说明" }],
+    };
+    const reloaded = migrateGame(JSON.parse(JSON.stringify(state)))!;
+    expect(reloaded.constructionAutomation.targetStock.logistics_vessel).toBe(4);
+    expect(reloaded.constructionAutomation.lastCraftedId).toBe("logistics_vessel");
+    expect(reloaded.constructionAutomation.jobs[center.id]).toEqual(state.constructionAutomation.jobs[center.id]);
+  });
+
+  it("migrates v36 artificial-star fuel and Dyson shell capacity without deleting overflow", () => {
+    let current = createInitialState();
+    current.construction.artificial_star = 2;
+    current = placeBuilding(current, "artificial_star", { x: 220, y: 80 }, 2);
+    const star = current.entities.find((entity) => entity.buildingId === "artificial_star")!;
+    star.inputs.antimatter_fuel_rod = 100;
+    current.tray.antimatter_fuel_rod = 999_995;
+    current.planetTrays.home = { ...current.tray };
+    current.research.completedTechIds.push("dyson_sphere_program", "dyson_shell");
+    current = createStandardDysonLayer(current, "helios");
+    const oldCapacities = current.dysonPlans.helios.layers[0].shells.map((shell) => {
+      shell.sailCapacity /= 2;
+      return shell.sailCapacity;
+    });
+    const legacy = JSON.parse(JSON.stringify(current));
+    legacy.version = 36;
+
+    const migrated = migrateGame(legacy)!;
+    const migratedStar = migrated.entities.find((entity) => entity.id === star.id)!;
+    expect(migrated.version).toBe(46);
+    expect(migrated.tray.antimatter_fuel_rod).toBe(1_000_000);
+    expect(migratedStar.inputs.antimatter_fuel_rod).toBe(95);
+    expect(migrated.dysonPlans.helios.layers[0].shells.map((shell) => shell.sailCapacity)).toEqual(oldCapacities.map((capacity) => capacity * 2));
+
+    const reloaded = migrateGame(JSON.parse(JSON.stringify(migrated)))!;
+    expect(reloaded.tray.antimatter_fuel_rod).toBe(1_000_000);
+    expect(reloaded.entities.find((entity) => entity.id === star.id)?.inputs.antimatter_fuel_rod).toBe(95);
+  });
+
+  it("migrates v37 to v38 defaults and round-trips byproduct totals plus mining blueprint anchors", () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialState())) as any;
+    legacy.version = 37;
+    delete legacy.constructionAutomation.destroyedByproducts;
+    const migratedLegacy = migrateGame(legacy)!;
+    expect(migratedLegacy.version).toBe(46);
+    expect(migratedLegacy.constructionAutomation.destroyedByproducts).toEqual({});
+
+    let current = createInitialState(10_609);
+    current.construction.mining_machine = 2;
+    const vein = current.entities.find((entity) => entity.id === "vein_iron")!;
+    current = installMiner(current, vein.id, 2);
+    current = createBlueprint(current, [vein.id], "迁移采矿锚点");
+    current.constructionAutomation.destroyedByproducts = { hydrogen: 123, refined_oil: 7 };
+    current.construction.construction_center = 1;
+    current = placeBuilding(current, "construction_center", { x: 320, y: 80 });
+    const center = current.entities.find((entity) => entity.buildingId === "construction_center")!;
+    current.constructionAutomation.jobs[center.id] = {
+      constructionId: "arc_smelter",
+      steps: [{ kind: "building", constructionId: "arc_smelter" }],
+      stepIndex: 0,
+      elapsedSeconds: 2.5,
+      inventory: { iron_ingot: 180_000_000 },
+    };
+    const reloaded = migrateGame(JSON.parse(JSON.stringify(current)))!;
+    expect(reloaded.constructionAutomation.destroyedByproducts).toEqual({ hydrogen: 123, refined_oil: 7 });
+    expect(reloaded.constructionAutomation.jobs[center.id].inventory).toEqual({ iron_ingot: 180_000_000 });
+    expect(reloaded.blueprints[0].resourceAnchors).toEqual([
+      expect.objectContaining({ resourceId: "iron_ore", extractorBuildingId: "mining_machine", minerCount: 2 }),
+    ]);
+  });
+
+  it("migrates v38 delivery hubs to three stable ports without dropping lines or inventory", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("basic_logistics", "material_delivery_logistics");
+    state.construction.material_delivery_hub = 1;
+    state.construction.conveyor_belt_mk1 = 2;
+    state = placeBuilding(state, "material_delivery_hub", { x: 240, y: 0 });
+    const hub = state.entities.find((entity) => entity.buildingId === "material_delivery_hub")!;
+    state = connectBelt(state, "vein_iron", hub.id, "iron_ore");
+    state = connectBelt(state, "vein_copper", hub.id, "copper_ore");
+    const connectedHub = state.entities.find((entity) => entity.id === hub.id)!;
+    connectedHub.inputs.iron_ore = 3;
+    connectedHub.inputs.copper_ore = 4;
+
+    const legacy = JSON.parse(JSON.stringify(state)) as any;
+    legacy.version = 38;
+    delete legacy.entities.find((entity: { id: string }) => entity.id === hub.id).deliverySlots;
+    for (const belt of legacy.belts) delete belt.targetPortIndex;
+    const migrated = migrateGame(legacy)!;
+    const migratedHub = migrated.entities.find((entity) => entity.id === hub.id)!;
+    expect(migrated.version).toBe(46);
+    expect(getMaterialDeliverySlots(migratedHub)).toEqual([
+      { itemId: "iron_ore", mode: "auto" },
+      { itemId: "copper_ore", mode: "auto" },
+      { itemId: null, mode: "auto" },
+    ]);
+    expect(migrated.belts.map((belt) => ({ itemId: belt.itemId, targetPortIndex: belt.targetPortIndex }))).toEqual([
+      { itemId: "iron_ore", targetPortIndex: 0 },
+      { itemId: "copper_ore", targetPortIndex: 1 },
+    ]);
+    expect(migratedHub.inputs).toMatchObject({ iron_ore: 3, copper_ore: 4 });
+
+    const reloaded = migrateGame(JSON.parse(JSON.stringify(migrated)))!;
+    expect(reloaded.entities.find((entity) => entity.id === hub.id)?.deliverySlots).toEqual(migratedHub.deliverySlots);
+    expect(reloaded.belts).toEqual(migrated.belts);
+  });
+
+  it("clamps malicious oversized belt bundles and refunds every removed physical belt", () => {
+    const current = createInitialState(10_610);
+    const originalStock = current.construction.conveyor_belt_mk1 ?? 0;
+    current.belts.push({
+      id: "oversized_bundle",
+      planetId: "home",
+      source: "vein_iron",
+      target: "vein_copper",
+      itemId: "iron_ore",
+      lanes: 5_000,
+      tier: 1,
+      sorterTier: 1,
+      progress: 0,
+      priority: 0,
+      stackSize: 1,
+      monitorEnabled: false,
+      totalTransferred: 0,
+      congestion: 0,
+      lastFlow: 0,
+      routeMode: "auto",
+    });
+    const reloaded = migrateGame(JSON.parse(JSON.stringify(current)))!;
+    expect(reloaded.belts[0].lanes).toBe(4_096);
+    expect(reloaded.construction.conveyor_belt_mk1).toBe(originalStock + 904);
+  });
+
+  it("preserves exact finite world coordinates across repeated v37 loads", () => {
+    const saved = JSON.parse(JSON.stringify(createInitialState()));
+    saved.entities[0].position = { x: 123.456789, y: -987.654321 };
+    const first = migrateGame(saved)!;
+    const second = migrateGame(JSON.parse(JSON.stringify(first)))!;
+    expect(first.entities[0].position).toEqual({ x: 123.456789, y: -987.654321 });
+    expect(second.entities[0].position).toEqual(first.entities[0].position);
+  });
+
+  it("migrates and validates deterministic solid-vein depletion remainders", () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialState()));
+    const legacyIron = legacy.entities.find((entity: { id: string }) => entity.id === "vein_iron");
+    legacy.version = 36;
+    legacyIron.resourceDepletionRemainder = 7;
+    const migrated = migrateGame(legacy)!;
+    expect(migrated.entities.find((entity) => entity.id === "vein_iron")?.resourceDepletionRemainder).toBe(0);
+
+    const current = JSON.parse(JSON.stringify(migrated));
+    current.entities.find((entity: { id: string }) => entity.id === "vein_iron").resourceDepletionRemainder = 7;
+    expect(migrateGame(current)!.entities.find((entity) => entity.id === "vein_iron")?.resourceDepletionRemainder).toBe(7);
+
+    current.entities.find((entity: { id: string }) => entity.id === "vein_iron").resourceDepletionRemainder = 999;
+    expect(migrateGame(current)!.entities.find((entity) => entity.id === "vein_iron")?.resourceDepletionRemainder).toBe(9);
+  });
+
+  it("preserves an explicitly depleted finite resource across migration and reload", () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialState())) as any;
+    legacy.version = 35;
+    legacy.settings.resourceMode = "finite";
+    const iron = legacy.entities.find((entity: { id: string }) => entity.id === "vein_iron");
+    iron.resourceCapacity = 50_000;
+    iron.resourceRemaining = 0;
+
+    const migrated = migrateGame(legacy)!;
+    const migratedIron = migrated.entities.find((entity) => entity.id === "vein_iron")!;
+    expect(migratedIron.resourceCapacity).toBe(50_000);
+    expect(migratedIron.resourceRemaining).toBe(0);
+    expect(migrateGame(JSON.parse(JSON.stringify(migrated)))?.entities.find((entity) => entity.id === "vein_iron")?.resourceRemaining).toBe(0);
   });
 
   it("preserves v33 exact research, construction WIP and local activity batches on reload", () => {
@@ -117,7 +424,7 @@ describe("game storage", () => {
     saveGame(state);
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.activePlanetId).toBe("home");
     expect(loaded.planetMetrics.ashen.powerFactor).toBe(1);
     expect(loaded.research.selectedTechId).toBe("electromagnetic_matrix");
@@ -139,7 +446,7 @@ describe("game storage", () => {
     saveGame(state);
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.settings.allowDoubleClickZoom).toBe(true);
     expect(loaded.research).toMatchObject({ selectedTechId: null, pausedTechId: "electromagnetic_matrix" });
     expect(loaded.research.progressByTech.electromagnetic_matrix).toEqual({ electromagnetic_matrix: 2 });
@@ -164,7 +471,7 @@ describe("game storage", () => {
     legacy.tray.iron_ore = 1_200_000;
     legacy.planetTrays.home = { ...legacy.tray };
     const migrated = migrateGame(legacy)!;
-    expect(migrated.version).toBe(34);
+    expect(migrated.version).toBe(46);
     expect(migrated.settings.allowDoubleClickZoom).toBe(false);
     expect(migrated.research.pausedTechId).toBeNull();
     expect(migrated.canvasRegions).toEqual([]);
@@ -187,7 +494,7 @@ describe("game storage", () => {
     const migrated = migrateGame(legacy)!;
     const wells = guaranteedPlanets.map((planetId) => migrated.entities.find((entity) =>
       entity.id === `vein_${planetId}_crude_oil`)!);
-    expect(migrated.version).toBe(34);
+    expect(migrated.version).toBe(46);
     expect(wells.every((well) => well?.resourceId === "crude_oil")).toBe(true);
     expect(guaranteedPlanets.every((planetId) => migrated.galaxy.profiles[planetId as keyof typeof migrated.galaxy.profiles].resourceIds.includes("crude_oil"))).toBe(true);
     expect(wells[1].resourceCapacity).toBeGreaterThan(wells[2].resourceCapacity ?? 0);
@@ -226,7 +533,7 @@ describe("game storage", () => {
     state.belts[0].priority = 2;
 
     const roundTripped = migrateGame(JSON.parse(JSON.stringify(state)))!;
-    expect(roundTripped.version).toBe(34);
+    expect(roundTripped.version).toBe(46);
     expect(roundTripped.entities.find((entity) => entity.id === station.id)).toMatchObject({
       stationWarperAutoRefill: true,
       stationWarperTarget: 37,
@@ -238,7 +545,7 @@ describe("game storage", () => {
     delete legacy.entities.find((entity: { id: string }) => entity.id === station.id).stationWarperAutoRefill;
     delete legacy.entities.find((entity: { id: string }) => entity.id === station.id).stationWarperTarget;
     const migrated = migrateGame(legacy)!;
-    expect(migrated.version).toBe(34);
+    expect(migrated.version).toBe(46);
     expect(migrated.entities.find((entity) => entity.id === station.id)).toMatchObject({
       stationWarperAutoRefill: false,
       stationWarperTarget: 50,
@@ -261,7 +568,7 @@ describe("game storage", () => {
     delete legacy.constructionAutomation.jobs;
 
     const migrated = migrateGame(legacy)!;
-    expect(migrated.version).toBe(34);
+    expect(migrated.version).toBe(46);
     expect(migrated.construction).toMatchObject({
       conveyor_belt_mk1: 6,
       conveyor_belt_mk2: 8,
@@ -315,12 +622,13 @@ describe("game storage", () => {
     delete legacy.settings.logisticsBufferLimit;
 
     const migrated = migrateGame(legacy)!;
-    expect(migrated.version).toBe(34);
+    expect(migrated.version).toBe(46);
     expect(migrated.settings).toMatchObject({
       defaultBeltStackSize: 1,
       defaultBeltRouteMode: "auto",
       productionBufferLimit: 1_000_000,
       logisticsBufferLimit: 1_000_000,
+      beltBufferLimit: 100_000_000,
       proliferatorBufferLimit: 600,
     });
 
@@ -395,7 +703,7 @@ describe("game storage", () => {
 
     const migrated = migrateGame(legacy)!;
 
-    expect(migrated.version).toBe(34);
+    expect(migrated.version).toBe(46);
     expect(migrated.galaxy.seed).toBe(987_654);
     expect(migrated.tray.iron_ingot).toBe(321);
     expect(migrated.galaxy.profiles.ashen.miningMultiplier).toBe(0.77);
@@ -423,7 +731,7 @@ describe("game storage", () => {
     legacy.exploration.colonizedPlanetIds = ["home"];
 
     const migrated = migrateGame(legacy)!;
-    expect(migrated.version).toBe(34);
+    expect(migrated.version).toBe(46);
     expect(migrated.tray).toEqual({ iron_ore: 37, processor: 4 });
     expect(migrated.settings.fontScale).toBe(2);
     expect(migrated.constructionAutomation).toEqual({
@@ -432,6 +740,7 @@ describe("game storage", () => {
       cursor: 0,
       totalCrafted: 0,
       lastCraftedId: null,
+      destroyedByproducts: {},
       jobs: {},
     });
     expect(migrated.exploration.colonizedPlanetIds).toEqual(expect.arrayContaining(["home", "ashen", "giant"]));
@@ -512,7 +821,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.portableFleet).toEqual({ logistics_drone: 5, logistics_vessel: 5 });
     expect(loaded.tray.logistics_drone).toBeUndefined();
     expect(loaded.tray.logistics_vessel).toBeUndefined();
@@ -528,7 +837,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.settings).toEqual({
       simulationSpeed: 1,
       fontScale: 1,
@@ -543,6 +852,7 @@ describe("game storage", () => {
       defaultBeltRouteMode: "auto",
       productionBufferLimit: 1_000_000,
       logisticsBufferLimit: 1_000_000,
+      beltBufferLimit: 100_000_000,
       proliferatorBufferLimit: 600,
       autosaveIntervalSeconds: 30,
       resourceMode: "infinite",
@@ -567,6 +877,7 @@ describe("game storage", () => {
       defaultBeltRouteMode: "auto",
       productionBufferLimit: 1_000_000,
       logisticsBufferLimit: 1_000_000,
+      beltBufferLimit: 100_000_000,
       proliferatorBufferLimit: 600,
       autosaveIntervalSeconds: 30,
       resourceMode: "infinite",
@@ -594,7 +905,7 @@ describe("game storage", () => {
     saveGame(state);
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.dysonEngineering).toMatchObject({
       launchMode: "swarm",
       launchThrottle: 0.75,
@@ -712,6 +1023,16 @@ describe("game storage", () => {
     expect(getSaveSlotSummaries().map((slot) => slot.slotId)).toEqual([2]);
   });
 
+  it("coalesces overlapping verified primary saves and commits the newest state", async () => {
+    const first = createInitialState();
+    first.elapsedSeconds = 10;
+    const second = createInitialState();
+    second.elapsedSeconds = 20;
+    const results = await Promise.all([saveGameVerified(first), saveGameVerified(second)]);
+    expect(results.every((result) => result.success)).toBe(true);
+    expect(loadGame().state.elapsedSeconds).toBe(20);
+  });
+
   it("migrates v15 research and Dyson plans into the v17 operations model", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("dyson_sphere_program", "dyson_shell", "mining_speed_1");
@@ -722,7 +1043,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.research.completedTechIds).toEqual(expect.arrayContaining(["dyson_sphere_program", "dyson_shell", "mining_speed_1"]));
     expect(loaded.dysonPlans.helios.layers[0]).toMatchObject({
       name: "标准壳层 1",
@@ -748,7 +1069,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.tray.iron_ore).toBe(4);
     expect(loaded.entities[0].outputs.iron_ore).toBe(3);
     expect(loaded.entities.every((entity) => entity.progress === 0)).toBe(true);
@@ -871,7 +1192,7 @@ describe("game storage", () => {
 
     const loaded = loadGame().state;
     const station = loaded.entities.find((entity) => entity.kind === "station")!;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(station.stationVessels).toBe(1);
     expect(station.stationMinimumLoad).toBe(1);
   });
@@ -925,7 +1246,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.dysonSwarm).toEqual({
       sailsInOrbit: 0,
       totalLaunched: 0,
@@ -1007,18 +1328,18 @@ describe("game storage", () => {
     expect(loaded.dysonSphere).toEqual({
       structurePoints: 3,
       totalRocketsLaunched: 3,
-      shellSails: 60,
-      totalSailsAbsorbed: 60,
+      shellSails: 100,
+      totalSailsAbsorbed: 100,
       absorptionProgress: 0.25,
-      generationKw: 8160,
+      generationKw: 11680,
     });
     expect(loaded.dysonSwarm).toEqual({
       sailsInOrbit: 12,
-      totalLaunched: 74,
+      totalLaunched: 114,
       totalExpired: 2,
       decayProgress: 0.75,
       generationKw: 1056,
-      receiverLoadKw: 9216,
+      receiverLoadKw: 12736,
     });
   });
 
@@ -1048,7 +1369,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.belts[0]).toMatchObject({ id: "legacy_belt", tier: 1, progress: 0.5 });
     expect(loaded.construction).toMatchObject({
       plane_smelter: 0,
@@ -1102,7 +1423,7 @@ describe("game storage", () => {
 
     const loaded = loadGame().state;
     const migrated = loaded.entities.find((entity) => entity.id === assembler.id)!;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.construction.spray_coater).toBe(0);
     expect(migrated).toMatchObject({ sprayCoaterInstalled: false, proliferatorPoints: 0, proliferatorBonusProgress: {} });
     expect(migrated.proliferatorTier).toBeUndefined();
@@ -1161,7 +1482,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.belts[0]).toMatchObject({ id: "v9_belt", tier: 2, sorterTier: 2, progress: 0.25 });
     expect(loaded.planetTrays.giant).toEqual({});
     expect(loaded.planetMetrics.giant.powerFactor).toBe(1);
@@ -1208,6 +1529,28 @@ describe("game storage", () => {
     });
   });
 
+  it("cleans legacy quantumTarget from ordinary buildings while retaining it for interstellar stations", () => {
+    let state = createInitialState();
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 300, y: 0 });
+    const ordinary = state.entities.find((entity) => entity.buildingId !== "interstellar_logistics_station")! as any;
+    const station = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    ordinary.quantumTarget = false;
+    station.quantumTarget = true;
+
+    const legacy = JSON.parse(JSON.stringify(state));
+    const migrated = migrateGame(legacy)!;
+    expect((migrated.entities.find((entity) => entity.id === ordinary.id) as any).quantumTarget).toBeUndefined();
+    expect(migrated.entities.find((entity) => entity.id === station.id)?.quantumTarget).toBe(true);
+
+    const saved = JSON.parse(exportGame(migrated));
+    expect(saved.state.entities.find((entity: any) => entity.id === ordinary.id)).not.toHaveProperty("quantumTarget");
+    expect(saved.state.entities.find((entity: any) => entity.id === station.id)).toHaveProperty("quantumTarget", true);
+    const reloaded = importGame(JSON.stringify(saved))!;
+    expect((reloaded.entities.find((entity) => entity.id === ordinary.id) as any).quantumTarget).toBeUndefined();
+    expect(reloaded.entities.find((entity) => entity.id === station.id)?.quantumTarget).toBe(true);
+  });
+
   it("migrates v10 power records into the current energy model", () => {
     let current = createInitialState();
     current.construction.thermal_power_plant = 1;
@@ -1226,7 +1569,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.construction).toMatchObject({
       solar_panel: 0,
       geothermal_power_station: 0,
@@ -1291,7 +1634,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.entities.filter((entity) => entity.kind === "vein").map((entity) => entity.resourceId)).toEqual(expect.arrayContaining(rareItems));
     expect(loaded.construction).toMatchObject({ quantum_chemical_plant: 0, fractionator: 0 });
   });
@@ -1323,7 +1666,7 @@ describe("game storage", () => {
     saveGame(state);
 
     let loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.blueprints).toEqual([
       expect.objectContaining({
         name: "处理器缓存",
@@ -1337,7 +1680,7 @@ describe("game storage", () => {
     delete legacy.blueprints;
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
     loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.blueprints).toEqual([]);
   });
 
@@ -1405,7 +1748,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.dysonPlans.helios).toMatchObject({
       systemId: "helios",
       activeLayerId: null,
@@ -1437,7 +1780,7 @@ describe("game storage", () => {
     saveGame(state);
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.dysonPlans.helios.layers[0]).toMatchObject({
       name: "标准壳层 1",
       nodes: expect.arrayContaining([expect.objectContaining({ completedStructurePoints: 1 })]),
@@ -1472,7 +1815,7 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
 
     const loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.exploration.unlockedSystemIds).toEqual(["helios", "borealis", "neutron"]);
     expect(loaded.planetTrays).toMatchObject({ frost: {}, boreal_giant: {}, magnetar: {} });
     expect(loaded.entities.find((entity) => entity.id === "vein_optical_grating")).toMatchObject({
@@ -1502,7 +1845,7 @@ describe("game storage", () => {
 
     const loaded = loadGame().state;
     const migratedStation = loaded.entities.find((entity) => entity.id === station.id)!;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(migratedStation.stationSlots).toHaveLength(5);
     expect(migratedStation.stationSlots?.[0]).toMatchObject({ itemId: "processor", localMode: "demand", minimumLoad: 1 });
     expect(migratedStation.stationRoutes).toEqual([]);
@@ -1516,8 +1859,12 @@ describe("game storage", () => {
     state = createBlueprint(state, [assembler.id], "排队模板");
     const blueprintId = state.blueprints[0].id;
     state = setBlueprintTransform(state, blueprintId, 270, "horizontal");
-    state.construction.assembling_machine_mk1 = 0;
+    state.blueprints[0].entities[0].machineCount = 2;
+    state.blueprints[0].revision = 3;
+    state.construction.assembling_machine_mk1 = 1;
     state = queueBlueprint(state, blueprintId, { x: 640, y: 320 });
+    const orderId = state.constructionQueue[0].id;
+    state = fundConstructionQueueEntry(state, orderId, "construction");
     state = createProductionPlan(state, "magnetic_coil", 90, "home");
     state.productionHistory = [{
       elapsedSeconds: 20,
@@ -1533,12 +1880,54 @@ describe("game storage", () => {
     const loaded = loadGame().state;
     expect(result.success).toBe(true);
     expect(loaded.blueprints[0]).toMatchObject({ rotation: 270, mirror: "horizontal" });
-    expect(loaded.constructionQueue[0]).toMatchObject({ blueprintId, position: { x: 640, y: 320 }, rotation: 270, mirror: "horizontal" });
+    expect(loaded.constructionQueue[0]).toMatchObject({
+      blueprintId,
+      blueprintRevision: 3,
+      position: { x: 640, y: 320 },
+      rotation: 270,
+      mirror: "horizontal",
+      status: "pending-materials",
+      reservedConstruction: { assembling_machine_mk1: 1 },
+    });
+    expect(loaded.blueprintVersions).toHaveLength(1);
+    expect(loaded.blueprintVersions[0]).toMatchObject({ blueprintId, revision: 3, definition: { entities: [expect.objectContaining({ machineCount: 2 })] } });
     expect(loaded.productionPlans[0]).toMatchObject({ itemId: "magnetic_coil", targetPerMinute: 90, planetId: "home" });
     expect(loaded.productionHistory).toEqual([]);
     expect(state.productionHistory[0]).toMatchObject({ elapsedSeconds: 20, productionPerMinute: { magnetic_coil: 30 } });
     expect(JSON.parse(window.localStorage.getItem(SAVE_KEY)!).state.productionHistory).toEqual([]);
     expect(loaded.historyRecordedAt).toBe(20);
+  });
+
+  it("migrates v45 construction orders to immutable v46 blueprint snapshots", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 100, y: 100 });
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    state = createBlueprint(state, [assembler.id], "旧待建订单");
+    const blueprintId = state.blueprints[0].id;
+    state.construction.assembling_machine_mk1 = 0;
+    state = queueBlueprint(state, blueprintId, { x: 500, y: 300 });
+    const legacy = JSON.parse(JSON.stringify(state));
+    legacy.version = 45;
+    delete legacy.blueprintVersions;
+    delete legacy.constructionQueue[0].blueprintVersionId;
+    delete legacy.constructionQueue[0].blueprintRevision;
+    delete legacy.constructionQueue[0].status;
+    delete legacy.constructionQueue[0].reservedConstruction;
+    delete legacy.constructionQueue[0].reservedFleet;
+    delete legacy.constructionQueue[0].placedEntityIdsByKey;
+
+    const migrated = migrateGame(legacy)!;
+    expect(migrated.version).toBe(46);
+    expect(migrated.blueprintVersions).toHaveLength(1);
+    expect(migrated.constructionQueue[0]).toMatchObject({
+      blueprintId,
+      blueprintVersionId: migrated.blueprintVersions[0].id,
+      blueprintRevision: 1,
+      status: "pending-materials",
+      reservedConstruction: {},
+      reservedFleet: {},
+      placedEntityIdsByKey: {},
+    });
   });
 
   it("migrates legacy saves into the endgame protocol and round-trips its controls", () => {
@@ -1547,7 +1936,7 @@ describe("game storage", () => {
     delete legacy.endgame;
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state: legacy }));
     let loaded = loadGame().state;
-    expect(loaded.version).toBe(34);
+    expect(loaded.version).toBe(46);
     expect(loaded.endgame.activeInfiniteResearchId).toBeNull();
     expect(loaded.endgame.exportProjects.universe_archive.level).toBe(0);
 
@@ -1574,10 +1963,39 @@ describe("game storage", () => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify(raw));
     const inspection = inspectSave(JSON.stringify(raw));
     expect(inspection.valid).toBe(false);
+    expect(inspection.repairable).toBe(true);
+    expect(inspection.state?.elapsedSeconds).toBe(999);
+    expect(inspection.summary?.elapsedSeconds).toBe(999);
+    expect(inspection.recordedChecksum).toMatch(/^[a-f0-9]{8}$/);
+    expect(inspection.computedChecksum).toMatch(/^[a-f0-9]{8}$/);
+    expect(inspection.recordedChecksum).not.toBe(inspection.computedChecksum);
     expect(inspection.issues[0]).toContain("完整性校验失败");
     const loaded = loadGame();
     expect(loaded.recovery?.source).toBe("snapshot");
     expect(loaded.state.elapsedSeconds).toBe(44);
+  });
+
+  it("re-signs a structurally complete mismatched save and preserves its real summary", () => {
+    const source = createInitialState();
+    source.elapsedSeconds = 12_143;
+    source.research.completedTechIds = source.research.completedTechIds.slice(0, 0);
+    const corrupted = JSON.parse(exportGame(source));
+    corrupted.state.elapsedSeconds = 12_144;
+    corrupted.state.entities = [...corrupted.state.entities, ...corrupted.state.entities.slice(0, 2).map((entity: any, index: number) => ({ ...entity, id: `rescue_${index}` }))];
+    const raw = JSON.stringify(corrupted);
+
+    const before = inspectSave(raw);
+    expect(before).toMatchObject({ valid: false, repairable: true, checksum: "invalid" });
+    expect(before.summary?.elapsedSeconds).toBe(12_144);
+    expect(before.state?.entities.some((entity) => entity.id === "rescue_0")).toBe(true);
+    const migratedEntityCount = before.state!.entities.length;
+
+    const repaired = repairSave(raw);
+    expect(repaired.success).toBe(true);
+    expect(repaired.raw).not.toBe(raw);
+    expect(repaired.inspection).toMatchObject({ valid: true, checksum: "valid", integrity: "valid" });
+    expect(repaired.inspection.summary?.elapsedSeconds).toBe(12_144);
+    expect(repaired.inspection.state?.entities).toHaveLength(migratedEntityCount);
   });
 
   it("keeps manual snapshots while trimming automatic snapshots to two", () => {

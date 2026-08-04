@@ -393,7 +393,7 @@ export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
   },
   artificial_star: {
     id: "artificial_star", name: "人造恒星", shortName: "人造恒星", kind: "power",
-    powerGenerationKw: 72000, speed: 1, inputCapacity: 120, outputCapacity: 0,
+    powerGenerationKw: 72000, speed: 1, inputCapacity: 30, outputCapacity: 0,
     description: "以反物质燃料棒维持湮灭反应，按电网缺口提供最高 72 MW 电力。",
   },
   accumulator: {
@@ -553,6 +553,11 @@ export const BUILDINGS: Record<BuildingId, BuildingDefinition> = {
     speed: 1, inputCapacity: 0, outputCapacity: 0, megastructure: true,
     description: "消耗所在电网的剩余功率加速全存档实时模拟；离线收益和活动墙钟不受影响。",
   },
+  space_station_construction_launcher: {
+    id: "space_station_construction_launcher", name: "空间站施工发射平台", shortName: "空间站平台", kind: "station",
+    powerDemandKw: 10000, speed: 1, inputCapacity: 4000, outputCapacity: 0, accepts: "any", megastructure: true,
+    description: "将所在行星的终局材料真实送入本恒星系空间站工地。每颗行星最多建设一座。",
+  },
 };
 
 export const RECIPES: Record<RecipeId, RecipeDefinition> = {
@@ -580,37 +585,38 @@ export const RECIPES: Record<RecipeId, RecipeDefinition> = {
   logistics_drone: { id: "logistics_drone", name: "物流运输机", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "planetary_logistics", inputs: [{ itemId: "steel", amount: 5 }, { itemId: "processor", amount: 2 }, { itemId: "electromagnetic_turbine", amount: 2 }], outputs: [{ itemId: "logistics_drone", amount: 1 }] },
   logistics_vessel: { id: "logistics_vessel", name: "物流运输船", buildingId: "assembling_machine_mk1", duration: 8, requiredTechId: "interstellar_logistics", inputs: [{ itemId: "titanium_alloy", amount: 10 }, { itemId: "processor", amount: 10 }, { itemId: "plasma_exciter", amount: 4 }], outputs: [{ itemId: "logistics_vessel", amount: 1 }] },
   space_warper: { id: "space_warper", name: "空间翘曲器", buildingId: "assembling_machine_mk1", duration: 10, requiredTechId: "space_warp", inputs: [{ itemId: "graviton_lens", amount: 1 }], outputs: [{ itemId: "space_warper", amount: 1 }] },
+  space_warper_from_gravity_matrix: { id: "space_warper_from_gravity_matrix", name: "引力矩阵制空间翘曲器", buildingId: "assembling_machine_mk1", duration: 10, requiredTechId: "space_warp", recursivePriority: 100, inputs: [{ itemId: "gravity_matrix", amount: 1 }], outputs: [{ itemId: "space_warper", amount: 8 }] },
   accumulator: { id: "accumulator", name: "蓄电器", buildingId: "assembling_machine_mk1", duration: 5, requiredTechId: "energy_storage", inputs: [{ itemId: "iron_ingot", amount: 6 }, { itemId: "magnetic_coil", amount: 6 }, { itemId: "circuit_board", amount: 4 }], outputs: [{ itemId: "accumulator", amount: 1 }] },
   accumulator_charge: { id: "accumulator_charge", name: "蓄电器充电", buildingId: "energy_exchanger", duration: 2, requiredTechId: "energy_storage", inputs: [{ itemId: "accumulator", amount: 1 }], outputs: [{ itemId: "charged_accumulator", amount: 1 }] },
   accumulator_discharge: { id: "accumulator_discharge", name: "蓄电器放电", buildingId: "energy_exchanger", duration: 2, requiredTechId: "energy_storage", inputs: [{ itemId: "charged_accumulator", amount: 1 }], outputs: [{ itemId: "accumulator", amount: 1 }] },
   hydrogen_fuel_rod: { id: "hydrogen_fuel_rod", name: "氢燃料棒", buildingId: "assembling_machine_mk1", duration: 6, requiredTechId: "fractionation", inputs: [{ itemId: "titanium_ingot", amount: 1 }, { itemId: "hydrogen", amount: 10 }], outputs: [{ itemId: "hydrogen_fuel_rod", amount: 2 }] },
   deuterium_fractionation: { id: "deuterium_fractionation", name: "氢分馏", buildingId: "fractionator", duration: 1, requiredTechId: "fractionation", inputs: [{ itemId: "hydrogen", amount: 10 }], outputs: [{ itemId: "hydrogen", amount: 9 }, { itemId: "deuterium", amount: 1 }] },
   graphene: { id: "graphene", name: "石墨烯", buildingId: "chemical_plant", duration: 3, requiredTechId: "nanomaterials", inputs: [{ itemId: "energetic_graphite", amount: 3 }, { itemId: "sulfuric_acid", amount: 1 }], outputs: [{ itemId: "graphene", amount: 2 }] },
-  graphene_from_fire_ice: { id: "graphene_from_fire_ice", name: "可燃冰裂解", buildingId: "chemical_plant", duration: 2, requiredTechId: "rare_resource_utilization", inputs: [{ itemId: "fire_ice", amount: 2 }], outputs: [{ itemId: "graphene", amount: 2 }, { itemId: "hydrogen", amount: 1 }] },
+  graphene_from_fire_ice: { id: "graphene_from_fire_ice", name: "可燃冰裂解", buildingId: "chemical_plant", duration: 2, requiredTechId: "rare_resource_utilization", recursivePriority: 100, inputs: [{ itemId: "fire_ice", amount: 2 }], outputs: [{ itemId: "graphene", amount: 2 }, { itemId: "hydrogen", amount: 1 }] },
   carbon_nanotube: { id: "carbon_nanotube", name: "碳纳米管", buildingId: "chemical_plant", duration: 4, requiredTechId: "nanomaterials", inputs: [{ itemId: "graphene", amount: 3 }, { itemId: "titanium_ingot", amount: 1 }], outputs: [{ itemId: "carbon_nanotube", amount: 2 }] },
-  carbon_nanotube_from_spiniform: { id: "carbon_nanotube_from_spiniform", name: "刺笋结晶制碳纳米管", buildingId: "chemical_plant", duration: 4, requiredTechId: "rare_resource_utilization", inputs: [{ itemId: "spiniform_stalagmite_crystal", amount: 6 }], outputs: [{ itemId: "carbon_nanotube", amount: 2 }] },
+  carbon_nanotube_from_spiniform: { id: "carbon_nanotube_from_spiniform", name: "刺笋结晶制碳纳米管", buildingId: "chemical_plant", duration: 4, requiredTechId: "rare_resource_utilization", recursivePriority: 100, inputs: [{ itemId: "spiniform_stalagmite_crystal", amount: 6 }], outputs: [{ itemId: "carbon_nanotube", amount: 2 }] },
   proliferator_mk1: { id: "proliferator_mk1", name: "增产剂 Mk.I", buildingId: "assembling_machine_mk1", duration: 0.5, requiredTechId: "proliferator_1", inputs: [{ itemId: "coal", amount: 1 }], outputs: [{ itemId: "proliferator_mk1", amount: 1 }] },
   proliferator_mk2: { id: "proliferator_mk2", name: "增产剂 Mk.II", buildingId: "assembling_machine_mk1", duration: 1, requiredTechId: "proliferator_2", inputs: [{ itemId: "proliferator_mk1", amount: 2 }, { itemId: "diamond", amount: 1 }], outputs: [{ itemId: "proliferator_mk2", amount: 1 }] },
   proliferator_mk3: { id: "proliferator_mk3", name: "增产剂 Mk.III", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "proliferator_3", inputs: [{ itemId: "proliferator_mk2", amount: 2 }, { itemId: "carbon_nanotube", amount: 1 }], outputs: [{ itemId: "proliferator_mk3", amount: 1 }] },
   crystal_silicon: { id: "crystal_silicon", name: "晶格硅", buildingId: "arc_smelter", duration: 2, requiredTechId: "nanomaterials", inputs: [{ itemId: "high_purity_silicon", amount: 1 }], outputs: [{ itemId: "crystal_silicon", amount: 1 }] },
-  crystal_silicon_from_fractal: { id: "crystal_silicon_from_fractal", name: "分形硅晶格化", buildingId: "arc_smelter", duration: 1.5, requiredTechId: "rare_resource_utilization", inputs: [{ itemId: "fractal_silicon", amount: 1 }], outputs: [{ itemId: "crystal_silicon", amount: 2 }] },
+  crystal_silicon_from_fractal: { id: "crystal_silicon_from_fractal", name: "分形硅晶格化", buildingId: "arc_smelter", duration: 1.5, requiredTechId: "rare_resource_utilization", recursivePriority: 100, inputs: [{ itemId: "fractal_silicon", amount: 1 }], outputs: [{ itemId: "crystal_silicon", amount: 2 }] },
   particle_broadband: { id: "particle_broadband", name: "粒子宽带", buildingId: "assembling_machine_mk1", duration: 8, requiredTechId: "information_matrix", inputs: [{ itemId: "carbon_nanotube", amount: 2 }, { itemId: "crystal_silicon", amount: 2 }, { itemId: "plastic", amount: 1 }], outputs: [{ itemId: "particle_broadband", amount: 1 }] },
   electric_motor: { id: "electric_motor", name: "电动机", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "basic_logistics", inputs: [{ itemId: "iron_ingot", amount: 2 }, { itemId: "gear", amount: 1 }, { itemId: "magnetic_coil", amount: 1 }], outputs: [{ itemId: "electric_motor", amount: 1 }] },
   electromagnetic_turbine: { id: "electromagnetic_turbine", name: "电磁涡轮", buildingId: "assembling_machine_mk1", duration: 2, requiredTechId: "high_speed_logistics", inputs: [{ itemId: "electric_motor", amount: 2 }, { itemId: "magnetic_coil", amount: 2 }], outputs: [{ itemId: "electromagnetic_turbine", amount: 1 }] },
   super_magnetic_ring: { id: "super_magnetic_ring", name: "超级磁场环", buildingId: "assembling_machine_mk1", duration: 3, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "electromagnetic_turbine", amount: 2 }, { itemId: "magnet", amount: 3 }, { itemId: "energetic_graphite", amount: 1 }], outputs: [{ itemId: "super_magnetic_ring", amount: 1 }] },
   particle_container: { id: "particle_container", name: "粒子容器", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "electromagnetic_turbine", amount: 2 }, { itemId: "copper_ingot", amount: 2 }, { itemId: "graphene", amount: 2 }], outputs: [{ itemId: "particle_container", amount: 1 }] },
-  particle_container_from_unipolar: { id: "particle_container_from_unipolar", name: "单极磁石粒子容器", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "rare_resource_utilization", inputs: [{ itemId: "unipolar_magnet", amount: 10 }, { itemId: "copper_ingot", amount: 2 }], outputs: [{ itemId: "particle_container", amount: 1 }] },
+  particle_container_from_unipolar: { id: "particle_container_from_unipolar", name: "单极磁石粒子容器", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "rare_resource_utilization", recursivePriority: 100, inputs: [{ itemId: "unipolar_magnet", amount: 10 }, { itemId: "copper_ingot", amount: 2 }], outputs: [{ itemId: "particle_container", amount: 1 }] },
   deuterium: { id: "deuterium", name: "氘富集", buildingId: "miniature_particle_collider", duration: 5, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "hydrogen", amount: 10 }], outputs: [{ itemId: "deuterium", amount: 5 }] },
   deuteron_fuel_rod: { id: "deuteron_fuel_rod", name: "氘核燃料棒", buildingId: "assembling_machine_mk1", duration: 6, requiredTechId: "miniature_particle_collider", inputs: [{ itemId: "titanium_alloy", amount: 1 }, { itemId: "deuterium", amount: 20 }, { itemId: "super_magnetic_ring", amount: 1 }], outputs: [{ itemId: "deuteron_fuel_rod", amount: 2 }] },
   titanium_glass: { id: "titanium_glass", name: "钛化玻璃", buildingId: "assembling_machine_mk1", duration: 5, requiredTechId: "quantum_chip", inputs: [{ itemId: "glass", amount: 2 }, { itemId: "titanium_ingot", amount: 2 }, { itemId: "water", amount: 2 }], outputs: [{ itemId: "titanium_glass", amount: 2 }] },
   casimir_crystal: { id: "casimir_crystal", name: "卡西米尔晶体", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "quantum_chip", inputs: [{ itemId: "titanium_crystal", amount: 1 }, { itemId: "graphene", amount: 2 }, { itemId: "hydrogen", amount: 12 }], outputs: [{ itemId: "casimir_crystal", amount: 1 }] },
-  casimir_crystal_advanced: { id: "casimir_crystal_advanced", name: "高效卡西米尔晶体", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "rare_resource_utilization", inputs: [{ itemId: "optical_grating_crystal", amount: 4 }, { itemId: "graphene", amount: 2 }, { itemId: "hydrogen", amount: 12 }], outputs: [{ itemId: "casimir_crystal", amount: 1 }] },
+  casimir_crystal_advanced: { id: "casimir_crystal_advanced", name: "高效卡西米尔晶体", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "rare_resource_utilization", recursivePriority: 100, inputs: [{ itemId: "optical_grating_crystal", amount: 4 }, { itemId: "graphene", amount: 2 }, { itemId: "hydrogen", amount: 12 }], outputs: [{ itemId: "casimir_crystal", amount: 1 }] },
   plane_filter: { id: "plane_filter", name: "位面过滤器", buildingId: "assembling_machine_mk1", duration: 12, requiredTechId: "quantum_chip", inputs: [{ itemId: "casimir_crystal", amount: 1 }, { itemId: "titanium_glass", amount: 2 }], outputs: [{ itemId: "plane_filter", amount: 1 }] },
   quantum_chip: { id: "quantum_chip", name: "量子芯片", buildingId: "assembling_machine_mk1", duration: 6, requiredTechId: "quantum_chip", inputs: [{ itemId: "processor", amount: 2 }, { itemId: "plane_filter", amount: 2 }], outputs: [{ itemId: "quantum_chip", amount: 1 }] },
   strange_matter: { id: "strange_matter", name: "奇异物质", buildingId: "miniature_particle_collider", duration: 8, requiredTechId: "gravity_matrix", inputs: [{ itemId: "particle_container", amount: 2 }, { itemId: "iron_ingot", amount: 2 }, { itemId: "deuterium", amount: 10 }], outputs: [{ itemId: "strange_matter", amount: 1 }] },
   graviton_lens: { id: "graviton_lens", name: "引力透镜", buildingId: "assembling_machine_mk1", duration: 6, requiredTechId: "gravity_matrix", inputs: [{ itemId: "diamond", amount: 4 }, { itemId: "strange_matter", amount: 1 }], outputs: [{ itemId: "graviton_lens", amount: 1 }] },
   photon_combiner: { id: "photon_combiner", name: "光子合并器", buildingId: "assembling_machine_mk1", duration: 3, requiredTechId: "dyson_swarm", inputs: [{ itemId: "prism", amount: 2 }, { itemId: "circuit_board", amount: 1 }], outputs: [{ itemId: "photon_combiner", amount: 1 }] },
-  photon_combiner_from_grating: { id: "photon_combiner_from_grating", name: "光栅石光子合并器", buildingId: "assembling_machine_mk1", duration: 3, requiredTechId: "rare_resource_utilization", inputs: [{ itemId: "optical_grating_crystal", amount: 1 }, { itemId: "circuit_board", amount: 1 }], outputs: [{ itemId: "photon_combiner", amount: 1 }] },
+  photon_combiner_from_grating: { id: "photon_combiner_from_grating", name: "光栅石光子合并器", buildingId: "assembling_machine_mk1", duration: 3, requiredTechId: "rare_resource_utilization", recursivePriority: 100, inputs: [{ itemId: "optical_grating_crystal", amount: 1 }, { itemId: "circuit_board", amount: 1 }], outputs: [{ itemId: "photon_combiner", amount: 1 }] },
   solar_sail: { id: "solar_sail", name: "太阳帆", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "dyson_swarm", inputs: [{ itemId: "graphene", amount: 1 }, { itemId: "photon_combiner", amount: 1 }], outputs: [{ itemId: "solar_sail", amount: 2 }] },
   solar_sail_launch: { id: "solar_sail_launch", name: "太阳帆发射", buildingId: "em_rail_ejector", duration: 12, requiredTechId: "dyson_swarm", inputs: [{ itemId: "solar_sail", amount: 1 }], outputs: [] },
   ray_power: { id: "ray_power", name: "电力接收", buildingId: "ray_receiver", duration: 1, requiredTechId: "ray_receiver", inputs: [], outputs: [] },
@@ -623,14 +629,14 @@ export const RECIPES: Record<RecipeId, RecipeDefinition> = {
   small_carrier_rocket: { id: "small_carrier_rocket", name: "小型运载火箭", buildingId: "assembling_machine_mk1", duration: 6, requiredTechId: "vertical_launching_silo", inputs: [{ itemId: "dyson_sphere_component", amount: 2 }, { itemId: "deuteron_fuel_rod", amount: 4 }, { itemId: "quantum_chip", amount: 2 }], outputs: [{ itemId: "small_carrier_rocket", amount: 1 }] },
   carrier_rocket_launch: { id: "carrier_rocket_launch", name: "运载火箭发射", buildingId: "vertical_launching_silo", duration: 6, requiredTechId: "vertical_launching_silo", inputs: [{ itemId: "small_carrier_rocket", amount: 1 }], outputs: [] },
   diamond: { id: "diamond", name: "金刚石", buildingId: "arc_smelter", duration: 2, requiredTechId: "high_strength_crystal", inputs: [{ itemId: "energetic_graphite", amount: 1 }], outputs: [{ itemId: "diamond", amount: 1 }] },
-  diamond_from_kimberlite: { id: "diamond_from_kimberlite", name: "金伯利矿提炼", buildingId: "arc_smelter", duration: 1.5, requiredTechId: "rare_resource_utilization", inputs: [{ itemId: "kimberlite_ore", amount: 1 }], outputs: [{ itemId: "diamond", amount: 2 }] },
+  diamond_from_kimberlite: { id: "diamond_from_kimberlite", name: "金伯利矿提炼", buildingId: "arc_smelter", duration: 1.5, requiredTechId: "rare_resource_utilization", recursivePriority: 100, inputs: [{ itemId: "kimberlite_ore", amount: 1 }], outputs: [{ itemId: "diamond", amount: 2 }] },
   plastic: { id: "plastic", name: "塑料", buildingId: "chemical_plant", duration: 3, requiredTechId: "basic_chemical_engineering", inputs: [{ itemId: "refined_oil", amount: 2 }, { itemId: "energetic_graphite", amount: 1 }], outputs: [{ itemId: "plastic", amount: 1 }] },
   organic_crystal: { id: "organic_crystal", name: "有机晶体", buildingId: "chemical_plant", duration: 6, requiredTechId: "polymer_chemistry", inputs: [{ itemId: "plastic", amount: 2 }, { itemId: "refined_oil", amount: 1 }, { itemId: "water", amount: 1 }], outputs: [{ itemId: "organic_crystal", amount: 1 }] },
   titanium_crystal: { id: "titanium_crystal", name: "钛晶石", buildingId: "assembling_machine_mk1", duration: 4, requiredTechId: "structure_matrix", inputs: [{ itemId: "titanium_ingot", amount: 3 }, { itemId: "organic_crystal", amount: 1 }], outputs: [{ itemId: "titanium_crystal", amount: 1 }] },
   electromagnetic_matrix: { id: "electromagnetic_matrix", name: "电磁矩阵", buildingId: "matrix_lab", duration: 3, inputs: [{ itemId: "magnetic_coil", amount: 1 }, { itemId: "circuit_board", amount: 1 }], outputs: [{ itemId: "electromagnetic_matrix", amount: 1 }] },
   energy_matrix: { id: "energy_matrix", name: "能量矩阵", buildingId: "matrix_lab", duration: 6, requiredTechId: "energy_matrix", inputs: [{ itemId: "energetic_graphite", amount: 2 }, { itemId: "hydrogen", amount: 2 }], outputs: [{ itemId: "energy_matrix", amount: 1 }] },
   structure_matrix: { id: "structure_matrix", name: "结构矩阵", buildingId: "matrix_lab", duration: 8, requiredTechId: "structure_matrix", inputs: [{ itemId: "diamond", amount: 1 }, { itemId: "titanium_crystal", amount: 1 }], outputs: [{ itemId: "structure_matrix", amount: 1 }] },
-  information_matrix: { id: "information_matrix", name: "信息矩阵", buildingId: "matrix_lab", duration: 10, requiredTechId: "information_matrix", inputs: [{ itemId: "particle_broadband", amount: 2 }, { itemId: "processor", amount: 2 }], outputs: [{ itemId: "information_matrix", amount: 1 }] },
+  information_matrix: { id: "information_matrix", name: "信息矩阵", buildingId: "matrix_lab", duration: 10, requiredTechId: "information_matrix", inputs: [{ itemId: "particle_broadband", amount: 1 }, { itemId: "processor", amount: 2 }], outputs: [{ itemId: "information_matrix", amount: 1 }] },
   gravity_matrix: { id: "gravity_matrix", name: "引力矩阵", buildingId: "matrix_lab", duration: 24, requiredTechId: "gravity_matrix", inputs: [{ itemId: "graviton_lens", amount: 1 }, { itemId: "quantum_chip", amount: 1 }], outputs: [{ itemId: "gravity_matrix", amount: 2 }] },
   universe_matrix: { id: "universe_matrix", name: "宇宙矩阵", buildingId: "matrix_lab", duration: 15, requiredTechId: "universe_matrix", inputs: [{ itemId: "electromagnetic_matrix", amount: 1 }, { itemId: "energy_matrix", amount: 1 }, { itemId: "structure_matrix", amount: 1 }, { itemId: "information_matrix", amount: 1 }, { itemId: "gravity_matrix", amount: 1 }, { itemId: "antimatter", amount: 1 }], outputs: [{ itemId: "universe_matrix", amount: 1 }] },
   matrix_research: { id: "matrix_research", name: "科研模式", buildingId: "matrix_lab", duration: 3, inputs: [], outputs: [] },
@@ -658,11 +664,48 @@ export const BUILDING_UPGRADES: Partial<Record<BuildingId, BuildingId>> = {
   chemical_plant: "quantum_chemical_plant",
 };
 
-export const BELT_CONSTRUCTION_BY_TIER: Record<BeltTier, ConveyorBeltId> = {
-  1: "conveyor_belt_mk1",
-  2: "conveyor_belt_mk2",
-  3: "conveyor_belt_mk3",
-};
+export interface RuntimeBeltDefinition {
+  id: ConveyorBeltId;
+  tier: BeltTier;
+  speed: number;
+  name: string;
+}
+
+const CORE_BELT_DEFINITIONS: RuntimeBeltDefinition[] = [
+  { id: "conveyor_belt_mk1", tier: 1, speed: 6, name: "传送带 Mk.I" },
+  { id: "conveyor_belt_mk2", tier: 2, speed: 12, name: "传送带 Mk.II" },
+  { id: "conveyor_belt_mk3", tier: 3, speed: 30, name: "传送带 Mk.III" },
+];
+const RUNTIME_BELT_DEFINITIONS = new Map<number, RuntimeBeltDefinition>(CORE_BELT_DEFINITIONS.map((definition) => [definition.tier, definition]));
+
+export function resetRuntimeBeltDefinitions(): void {
+  RUNTIME_BELT_DEFINITIONS.clear();
+  for (const definition of CORE_BELT_DEFINITIONS) RUNTIME_BELT_DEFINITIONS.set(definition.tier, { ...definition });
+}
+
+export function registerRuntimeBeltDefinition(definition: RuntimeBeltDefinition): boolean {
+  if (!Number.isInteger(definition.tier) || definition.tier < 4 || definition.tier > 32 ||
+    !Number.isFinite(definition.speed) || definition.speed <= 0 || RUNTIME_BELT_DEFINITIONS.has(definition.tier) ||
+    [...RUNTIME_BELT_DEFINITIONS.values()].some((entry) => entry.id === definition.id)) return false;
+  RUNTIME_BELT_DEFINITIONS.set(definition.tier, { ...definition });
+  return true;
+}
+
+export function getBeltTiers(): BeltTier[] {
+  return [...RUNTIME_BELT_DEFINITIONS.keys()].sort((left, right) => left - right);
+}
+
+export function isRegisteredBeltTier(tier: unknown): tier is BeltTier {
+  return typeof tier === "number" && Number.isInteger(tier) && RUNTIME_BELT_DEFINITIONS.has(tier);
+}
+
+export function getBeltSpeed(tier: BeltTier): number {
+  return RUNTIME_BELT_DEFINITIONS.get(tier)?.speed ?? 0;
+}
+
+export function getNextBeltTier(tier: BeltTier): BeltTier | null {
+  return getBeltTiers().find((candidate) => candidate > tier) ?? null;
+}
 
 export const SORTER_CONSTRUCTION_BY_TIER: Record<SorterTier, SorterId> = {
   1: "sorter_mk1",
@@ -686,11 +729,11 @@ export function getBuildingUpgradeTarget(buildingId: BuildingId): BuildingId | u
 }
 
 export function getBeltConstructionId(tier: BeltTier): ConveyorBeltId {
-  return BELT_CONSTRUCTION_BY_TIER[tier];
+  return RUNTIME_BELT_DEFINITIONS.get(tier)?.id ?? `unknown_conveyor_belt_tier_${tier}`;
 }
 
 export function getBeltTier(id: ConveyorBeltId): BeltTier {
-  return id === "conveyor_belt_mk3" ? 3 : id === "conveyor_belt_mk2" ? 2 : 1;
+  return [...RUNTIME_BELT_DEFINITIONS.values()].find((definition) => definition.id === id)?.tier ?? 1;
 }
 
 export function getSorterConstructionId(tier: SorterTier): SorterId {
@@ -701,8 +744,8 @@ export function getSorterTier(id: SorterId): SorterTier {
   return id === "sorter_mk3" ? 3 : id === "sorter_mk2" ? 2 : 1;
 }
 
-export function isConveyorBeltId(id: ConstructionId): id is ConveyorBeltId {
-  return id === "conveyor_belt_mk1" || id === "conveyor_belt_mk2" || id === "conveyor_belt_mk3";
+export function isConveyorBeltId(id: ConstructionId): boolean {
+  return [...RUNTIME_BELT_DEFINITIONS.values()].some((definition) => definition.id === id);
 }
 
 export function isSorterId(id: ConstructionId): id is SorterId {
@@ -750,6 +793,7 @@ export const CONSTRUCTION: ConstructionDefinition[] = [
   { buildingId: "galactic_material_exporter", name: "超大型物资出口", outputAmount: 1, requiredTechId: "universe_matrix", costs: [{ itemId: "universe_matrix", amount: 1000 }, { itemId: "small_carrier_rocket", amount: 500 }, { itemId: "frame_material", amount: 1000 }, { itemId: "quantum_chip", amount: 1000 }] },
   { buildingId: "micro_black_hole_connector", name: "微型黑洞连接装置", outputAmount: 1, requiredTechId: "micro_black_hole_containment", costs: [{ itemId: "universe_matrix", amount: 12000 }, { itemId: "frame_material", amount: 7500 }, { itemId: "quantum_chip", amount: 6000 }, { itemId: "antimatter_fuel_rod", amount: 4500 }] },
   { buildingId: "time_warp_device", name: "时间扭曲装置", outputAmount: 1, requiredTechId: "time_warp_engineering", costs: [{ itemId: "universe_matrix", amount: 60000 }, { itemId: "frame_material", amount: 36000 }, { itemId: "quantum_chip", amount: 30000 }, { itemId: "antimatter_fuel_rod", amount: 24000 }] },
+  { buildingId: "space_station_construction_launcher", name: "空间站施工发射平台", outputAmount: 1, requiredTechId: "system_space_station_engineering", costs: [{ itemId: "titanium_alloy", amount: 2000 }, { itemId: "frame_material", amount: 1000 }, { itemId: "quantum_chip", amount: 1000 }, { itemId: "processor", amount: 2000 }] },
 ];
 
 export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
@@ -1266,7 +1310,7 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     ],
     prerequisites: ["construction_capacity_1", "universe_matrix"],
     summary: "使用宇宙矩阵统一建筑制造协议，将库存与制造吞吐提升到终局规模。",
-    unlocks: ["目标库存上限 2000", "自动制造周期 1 秒"],
+    unlocks: ["目标库存上限 10万", "自动制造周期 1 秒"],
   },
   research_speed_3: {
     id: "research_speed_3", name: "科研速度 III", tier: 20,
@@ -1465,9 +1509,92 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     summary: "同步壳面框架与太阳帆姿态控制，使永久结构吸附轨道太阳帆的速度提高一倍。",
     unlocks: ["壳面太阳帆吸附速度 2.00×"],
   },
+  orbital_elevator_engineering: {
+    id: "orbital_elevator_engineering", name: "轨道升降工程", tier: 24,
+    costs: [{ itemId: "universe_matrix", amount: 100_000 }],
+    prerequisites: ["universe_matrix", "interstellar_logistics"],
+    summary: "以轨道升降结构改造星际物流站，使其可以原地升级为保留传统功能的 Mk.II。",
+    unlocks: ["星际物流站 Mk.II", "太空电梯模式切换"],
+  },
+  orbital_multi_cargo_bus: {
+    id: "orbital_multi_cargo_bus", name: "多物质轨道汇流", tier: 25,
+    costs: [{ itemId: "universe_matrix", amount: 1_000_000 }],
+    prerequisites: ["orbital_elevator_engineering", "universe_matrix"],
+    summary: "把五个传统输入汇合为一个通用入口，并为太空电梯开放五路独立输出。",
+    unlocks: ["通用输入口", "五路电梯输出口", "恒星系共享仓库"],
+  },
+  orbital_energy_recovery: {
+    id: "orbital_energy_recovery", name: "轨道升降能量回收", tier: 26,
+    costs: [{ itemId: "universe_matrix", amount: 10_000_000 }],
+    prerequisites: ["orbital_multi_cargo_bus", "dyson_shell"],
+    summary: "回收电梯升降过程中的能量，使太空电梯动态物流能耗降低 50%。",
+    unlocks: ["太空电梯能耗 -50%", "联合协议前置"],
+  },
+  system_space_station_engineering: {
+    id: "system_space_station_engineering", name: "恒星系空间站工程", tier: 24,
+    costs: [{ itemId: "universe_matrix", amount: 1_000_000 }],
+    prerequisites: ["universe_matrix", "dyson_sphere_program", "vertical_launching_silo"],
+    summary: "解锁每个已探索恒星系独立建设一座联合空间站的施工工地。",
+    unlocks: ["空间站建设工地", "空间站施工发射平台"],
+  },
+  orbital_modular_assembly: {
+    id: "orbital_modular_assembly", name: "轨道模块化装配", tier: 25,
+    costs: [{ itemId: "universe_matrix", amount: 10_000_000 }],
+    prerequisites: ["system_space_station_engineering", "orbital_multi_cargo_bus"],
+    summary: "把空间站施工材料需求降至 90%，并让施工平台吞吐翻倍。",
+    unlocks: ["空间站 90% 成本", "物流主干模块"],
+  },
+  autonomous_station_construction: {
+    id: "autonomous_station_construction", name: "自律空间站建造", tier: 26,
+    costs: [{ itemId: "universe_matrix", amount: 100_000_000 }],
+    prerequisites: ["orbital_modular_assembly", "orbital_energy_recovery"],
+    summary: "以自律施工机器人把新空间站材料需求降至 80%，并开放能源与星际运输模块。",
+    unlocks: ["空间站 80% 成本", "能源核心模块", "星际运输模块"],
+  },
+  unified_system_logistics_protocol: {
+    id: "unified_system_logistics_protocol", name: "恒星系联合物流协议", tier: 27,
+    costs: [{ itemId: "universe_matrix", amount: 1_000_000_000 }],
+    prerequisites: ["orbital_energy_recovery", "autonomous_station_construction"],
+    summary: "将已建空间站接入共享舰队、共享翘曲仓和银河能源池，开启跨恒星系聚合调度。",
+    unlocks: ["最多 8 座空间站聚合物流", "共享舰队与翘曲仓", "银河能源池"],
+  },
+  quantum_logistics_network: {
+    id: "quantum_logistics_network", name: "量子物流网络", tier: 24,
+    costs: [
+      { itemId: "electromagnetic_matrix", amount: 500 },
+      { itemId: "energy_matrix", amount: 500 },
+      { itemId: "structure_matrix", amount: 500 },
+      { itemId: "information_matrix", amount: 500 },
+      { itemId: "gravity_matrix", amount: 500 },
+      { itemId: "universe_matrix", amount: 1_000 },
+    ],
+    prerequisites: ["interstellar_logistics", "space_warp", "universe_matrix"],
+    summary: "把已升级的星际物流塔接入一份全宇宙共享物资池；供应物资送达时优先直接入池，下载与溢出缓存仍在五秒边界结算。",
+    unlocks: ["量子物流塔接入", "全宇宙共享库存", "量子网络全局吞吐"],
+  },
 };
 
-export const TECHNOLOGY_LIST = Object.values(TECHNOLOGIES);
+/**
+ * Historical system-space-station technologies remain in the catalog so old
+ * saves and migration code can resolve their ids, but they are no longer
+ * offered as new research.  The orbital elevator chain still unlocks the
+ * compatible Mk.II station upgrade used by existing saves.
+ */
+export const DEPRECATED_TECHNOLOGY_IDS: ReadonlySet<TechId> = new Set<TechId>([
+  "orbital_elevator_engineering",
+  "orbital_multi_cargo_bus",
+  "orbital_energy_recovery",
+  "system_space_station_engineering",
+  "orbital_modular_assembly",
+  "autonomous_station_construction",
+  "unified_system_logistics_protocol",
+]);
+
+export function isDeprecatedTechnology(id: TechId | null | undefined): boolean {
+  return Boolean(id && DEPRECATED_TECHNOLOGY_IDS.has(id));
+}
+
+export const TECHNOLOGY_LIST = Object.values(TECHNOLOGIES).filter((technology) => !isDeprecatedTechnology(technology.id));
 
 export const FUEL_ENERGY_MJ: Partial<Record<ItemId, number>> = {
   coal: 2.7,
@@ -1575,7 +1702,7 @@ export function validateContentCatalog(): ContentAuditResult {
   }
 
   for (const definition of CONSTRUCTION) {
-    if (!definition.buildingId.startsWith("conveyor_belt_") && !definition.buildingId.startsWith("sorter_") && !buildingIds.has(definition.buildingId)) {
+    if (!isConveyorBeltId(definition.buildingId) && !definition.buildingId.startsWith("sorter_") && !buildingIds.has(definition.buildingId)) {
       add("error", "construction-building", definition.buildingId, "施工定义引用未知建筑");
     }
     if (definition.requiredTechId && !techIds.has(definition.requiredTechId)) add("error", "construction-tech", definition.buildingId, `施工定义引用未知科技 ${definition.requiredTechId}`);

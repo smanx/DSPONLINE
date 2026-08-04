@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { advanceSimulation, createInitialState } from "./engine";
+import { advanceSimulation, advanceSimulationBudget, createInitialState, createSimulationProfiler } from "./engine";
+import { hashGameState } from "./benchmark";
 import type { BeltConnection, FactoryEntity } from "./types";
 
 function createStressFactory() {
@@ -9,6 +10,7 @@ function createStressFactory() {
     kind: "storage",
     planetId: "home",
     position: { x: index % 25 * 280, y: Math.floor(index / 25) * 220 },
+    interactionLocked: false,
     buildingId: "storage_mk1",
     machineCount: 1,
     minerCount: 0,
@@ -51,5 +53,16 @@ describe("large factory performance", () => {
     expect(state.belts.some((belt) => belt.lastFlow > 0)).toBe(true);
     expect(state.entities.every((entity) => Number.isInteger(entity.inputs.iron_ingot ?? 0) && Number.isInteger(entity.outputs.iron_ingot ?? 0))).toBe(true);
     expect(duration).toBeLessThan(2_000);
+  });
+
+  it("keeps simulation output identical when opt-in phase profiling is enabled", () => {
+    const initial = createStressFactory();
+    const profiler = createSimulationProfiler();
+    const profiled = advanceSimulationBudget(initial, 10, 10, profiler);
+    const ordinary = advanceSimulationBudget(initial, 10, 10);
+
+    expect(hashGameState(profiled)).toBe(hashGameState(ordinary));
+    expect(Object.values(profiler).every((value) => Number.isFinite(value) && value >= 0)).toBe(true);
+    expect(profiler.copyStateMs + profiler.beltsMs + profiler.logisticsMs).toBeGreaterThan(0);
   });
 });

@@ -11,6 +11,8 @@ import {
   STAR_SYSTEMS,
   buildingSupportsRecipe,
   getBeltConstructionId,
+  getBeltSpeed,
+  getNextBeltTier,
   getBuilding,
   getBuildingUpgradeTarget,
   getConstructionDefinition,
@@ -23,6 +25,7 @@ import {
   getRecipesForBuilding,
   getStarSystem,
   getTechnology,
+  isDeprecatedTechnology,
 } from "./content";
 import {
   DEFAULT_GALAXY_SEED,
@@ -35,19 +38,26 @@ import {
   getStarLuminosity,
   getSystemDistanceLy,
   isInfiniteResource,
+  normalizePlanetDisplayMetadata,
+  normalizeStarSystemDisplayMetadata,
   specializationApplies,
 } from "./galaxy";
+import { completeStationOperationModeTransition, createEmptyGalacticHubNetwork, createEmptySystemSpaceStations, settleSpaceStationConstructionInputs } from "./systemSpaceStation";
+import { isElevatorStation, settleSystemHubLogistics, SYSTEM_HUB_SETTLEMENT_SECONDS } from "./systemHubLogistics";
+import { compactProductionHistory, PRODUCTION_HISTORY_SAMPLE_SECONDS } from "./productionStatistics";
 import type {
   BeltTier,
   BeltRouteMode,
   BeltConnection,
   BlueprintDefinition,
+  BlueprintResourceAnchor,
   BlueprintMirror,
   BlueprintRotation,
   BuildingId,
   CanvasRegion,
   CargoStackSize,
   ConstructionId,
+  DecimalIntegerString,
   DysonEngineeringSnapshot,
   DysonEngineeringState,
   DysonLayerState,
@@ -62,6 +72,8 @@ import type {
   ItemId,
   InterstellarRoutePolicy,
   LogisticsPriority,
+  MaterialDeliverySlot,
+  MaterialDeliverySlotMode,
   PlanetId,
   PlanetIndustryRole,
   PowerGridId,
@@ -74,6 +86,7 @@ import type {
   RecipeId,
   ConstructionAutomationStep,
   ConstructionAutomationJob,
+  ConstructionAutomationTargetId,
   SorterTier,
   StationLogisticsMode,
   StationLogisticsScope,
@@ -106,15 +119,38 @@ import {
 } from "./infiniteResearch";
 import { ACTIVITY_MATERIAL_IDS, ACTIVITY_PROJECT_BY_ITEM } from "./activity";
 import { formatPowerKw } from "./units";
+import {
+  addQuantumInteger,
+  beginOrbitalCollectorQuantumModeChange,
+  beginOrbitalCollectorQuantumModeChanges,
+  depositIntoQuantumInventory,
+  createEmptyQuantumLogisticsNetworkState,
+  beginQuantumAttachment,
+  beginQuantumAttachments,
+  getQuantumBandwidthSummary,
+  getQuantumItemCapacity,
+  normalizeQuantumInteger,
+  setQuantumNetworkItemCapacity,
+  settleQuantumAttachments,
+  settleQuantumLogisticsNetwork,
+  QUANTUM_SETTLEMENT_SECONDS,
+} from "./quantumLogisticsNetwork";
+import type { QuantumSettlementInput, QuantumSettlementOutput } from "./quantumLogisticsNetwork";
+import {
+  planRecursiveRequirements,
+  planSelectedRecipe,
+  type RecursiveCraftBlocker,
+  type RecursiveCraftDecision,
+  type RecursiveCraftPlan,
+} from "./recursiveCrafting";
 
-const BELT_CAPACITY_PER_SECOND: Record<BeltTier, number> = { 1: 6, 2: 12, 3: 30 };
 export const ACCUMULATOR_ENERGY_MJ = 90;
 export const SOLAR_SAIL_POWER_KW = 88;
 export const SOLAR_SAIL_LIFETIME_SECONDS = 1200;
 export const RAY_RECEIVER_CAPACITY_KW = 6000;
 export const DYSON_STRUCTURE_POWER_KW = 960;
 export const DYSON_SHELL_SAIL_POWER_KW = 88;
-export const DYSON_SHELL_CAPACITY_PER_STRUCTURE = 20;
+export const DYSON_SHELL_CAPACITY_PER_STRUCTURE = 40;
 export const DYSON_SAIL_ABSORPTION_PER_STRUCTURE_PER_SECOND = 0.1;
 export const DYSON_SAIL_LAUNCH_ENERGY_MJ = 21.6;
 export const DYSON_ROCKET_LAUNCH_ENERGY_MJ = 108;
@@ -131,6 +167,7 @@ export const STATION_MINIMUM_LOAD_OPTIONS: StationMinimumLoad[] = [0.1, 0.25, 0.
 export const STATION_SLOT_COUNT = 5;
 export const PORTABLE_FLEET_ITEM_IDS: PortableFleetItemId[] = ["logistics_drone", "logistics_vessel"];
 export const CARGO_STACK_OPTIONS: CargoStackSize[] = [1, 2, 4];
+export const MAX_BELT_LANES = 4096;
 export const POWER_GRID_IDS: PowerGridId[] = ["grid-a", "grid-b", "grid-c"];
 export const POWER_GRID_LABELS: Record<PowerGridId, string> = {
   "grid-a": "A 主网",
@@ -140,9 +177,10 @@ export const POWER_GRID_LABELS: Record<PowerGridId, string> = {
 /** Zero represents an unlimited, planet-wide grid domain. */
 export const POWER_SUPPLY_RADIUS = 0;
 export const MATERIAL_DELIVERY_SLOT_COUNT = 3;
+const VEIN_DEPLETION_SCALE = 10;
 export const MIN_PLANET_TRAY_ITEM_LIMIT = 1_000;
-export const MAX_PLANET_TRAY_ITEM_LIMIT = 1_000_000;
-export const DEFAULT_PLANET_TRAY_ITEM_LIMIT = MAX_PLANET_TRAY_ITEM_LIMIT;
+export const MAX_PLANET_TRAY_ITEM_LIMIT = 100_000_000;
+export const DEFAULT_PLANET_TRAY_ITEM_LIMIT = 1_000_000;
 export const MIN_CANVAS_REGION_SIZE = 40;
 const EPSILON = 0.0001;
 const TIME_WARP_MINIMUM_MULTIPLIER = 4;
@@ -168,7 +206,7 @@ export function getMaximumStableTimeWarpMultiplier(availablePowerKw: number, req
   return Math.min(requestedMultiplier, supported);
 }
 
-export function isPortableFleetItem(itemId: ItemId): itemId is PortableFleetItemId {
+export function isPortableFleetItem(itemId: ItemId | ConstructionId): itemId is PortableFleetItemId {
   return PORTABLE_FLEET_ITEM_IDS.includes(itemId as PortableFleetItemId);
 }
 
@@ -187,6 +225,7 @@ function copyState(state: GameState): GameState {
       outputs: { ...entity.outputs },
       stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
       deliveryItemIds: entity.deliveryItemIds ? [...entity.deliveryItemIds] : undefined,
+      deliverySlots: entity.deliverySlots?.map((slot) => ({ ...slot })),
       stationRoutes: entity.stationRoutes?.map((route) => ({
         ...route,
         waypointStationIds: route.waypointStationIds ? [...route.waypointStationIds] : [],
@@ -206,9 +245,15 @@ function copyState(state: GameState): GameState {
     constructionAutomation: {
       ...state.constructionAutomation,
       targetStock: { ...state.constructionAutomation.targetStock },
+      destroyedByproducts: { ...state.constructionAutomation.destroyedByproducts },
       jobs: Object.fromEntries(Object.entries(state.constructionAutomation.jobs).map(([entityId, job]) => [
         entityId,
-        { ...job, steps: job.steps.map((step) => ({ ...step })), inventory: { ...job.inventory } },
+        {
+          ...job,
+          steps: job.steps.map((step) => ({ ...step })),
+          inventory: { ...job.inventory },
+          recipeDecisions: job.recipeDecisions?.map((decision) => ({ ...decision })),
+        },
       ])),
     },
     portableFleet: state.portableFleet ? { ...state.portableFleet } : { logistics_drone: 0, logistics_vessel: 0 },
@@ -246,6 +291,14 @@ function copyState(state: GameState): GameState {
         { ...profile },
       ])) as GameState["galaxy"]["systemProfiles"],
       planetRoles: { ...(state.galaxy.planetRoles ?? {}) },
+      planetMetadata: Object.fromEntries(Object.entries(state.galaxy.planetMetadata ?? {}).map(([planetId, metadata]) => [
+        planetId,
+        metadata ? { ...metadata, tags: [...metadata.tags] } : metadata,
+      ])),
+      systemMetadata: Object.fromEntries(Object.entries(state.galaxy.systemMetadata ?? {}).map(([systemId, metadata]) => [
+        systemId,
+        metadata ? { ...metadata } : metadata,
+      ])),
     },
     recipeFocus: { ...state.recipeFocus, position: { ...state.recipeFocus.position } },
     planetViewports: Object.fromEntries(Object.entries(state.planetViewports).map(([planetId, viewport]) => [
@@ -258,12 +311,36 @@ function copyState(state: GameState): GameState {
         ...entity,
         offset: { ...entity.offset },
         stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
+        deliverySlots: entity.deliverySlots?.map((slot) => ({ ...slot })),
       })),
+      resourceAnchors: blueprint.resourceAnchors?.map((anchor) => ({ ...anchor, offset: { ...anchor.offset } })),
       belts: blueprint.belts.map((belt) => ({ ...belt })),
       externalPorts: blueprint.externalPorts?.map((port) => ({ ...port, offset: { ...port.offset } })),
       recipeOverrides: { ...blueprint.recipeOverrides },
     })),
-    constructionQueue: state.constructionQueue.map((entry) => ({ ...entry, position: { ...entry.position } })),
+    blueprintVersions: (state.blueprintVersions ?? []).map((snapshot) => ({
+      ...snapshot,
+      definition: {
+        ...snapshot.definition,
+        entities: snapshot.definition.entities.map((entity) => ({
+          ...entity,
+          offset: { ...entity.offset },
+          stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
+          deliverySlots: entity.deliverySlots?.map((slot) => ({ ...slot })),
+        })),
+        resourceAnchors: snapshot.definition.resourceAnchors?.map((anchor) => ({ ...anchor, offset: { ...anchor.offset } })),
+        belts: snapshot.definition.belts.map((belt) => ({ ...belt })),
+        externalPorts: snapshot.definition.externalPorts?.map((port) => ({ ...port, offset: { ...port.offset } })),
+        recipeOverrides: { ...snapshot.definition.recipeOverrides },
+      },
+    })),
+    constructionQueue: state.constructionQueue.map((entry) => ({
+      ...entry,
+      position: { ...entry.position },
+      reservedConstruction: { ...entry.reservedConstruction },
+      reservedFleet: { ...entry.reservedFleet },
+      placedEntityIdsByKey: { ...entry.placedEntityIdsByKey },
+    })),
     handcraftQueue: state.handcraftQueue.map((entry) => ({ ...entry })),
     productionPlans: state.productionPlans.map((plan) => ({ ...plan, recipeSelections: { ...plan.recipeSelections } })),
     productionHistory: state.productionHistory.map((sample) => ({
@@ -304,6 +381,39 @@ function copyState(state: GameState): GameState {
         })),
       },
     ])) as GameState["dysonPlans"],
+    systemSpaceStations: Object.fromEntries(Object.entries(state.systemSpaceStations).map(([systemId, station]) => [
+      systemId,
+      {
+        ...station,
+        delivered: { ...station.delivered },
+        constructionBuffer: { ...station.constructionBuffer },
+        inventory: { ...station.inventory },
+        itemPolicies: Object.fromEntries(Object.entries(station.itemPolicies).map(([itemId, policy]) => [itemId, policy ? { ...policy } : policy])),
+        modules: { ...station.modules },
+        routingCursors: { ...station.routingCursors },
+        viewport: { ...station.viewport },
+        decorations: station.decorations.map((decoration) => ({ ...decoration, position: { ...decoration.position } })),
+      },
+    ])) as GameState["systemSpaceStations"],
+    galacticHubNetwork: {
+      ...state.galacticHubNetwork,
+      fleetReturns: state.galacticHubNetwork.fleetReturns.map((bucket) => ({ ...bucket })),
+      routingCursors: { ...state.galacticHubNetwork.routingCursors },
+    },
+    quantumLogisticsNetwork: {
+      enabled: state.quantumLogisticsNetwork?.enabled === true,
+      inventory: { ...(state.quantumLogisticsNetwork?.inventory ?? {}) },
+      itemCapacities: { ...(state.quantumLogisticsNetwork?.itemCapacities ?? {}) },
+      routingCursors: { ...(state.quantumLogisticsNetwork?.routingCursors ?? {}) },
+      uploadRoutingCursors: { ...(state.quantumLogisticsNetwork?.uploadRoutingCursors ?? {}) },
+      ...(state.quantumLogisticsNetwork?.runtimeFlow ? {
+        runtimeFlow: {
+          ...state.quantumLogisticsNetwork.runtimeFlow,
+          uploaded: { ...state.quantumLogisticsNetwork.runtimeFlow.uploaded },
+          downloaded: { ...state.quantumLogisticsNetwork.runtimeFlow.downloaded },
+        },
+      } : {}),
+    },
     timeWarp: { ...state.timeWarp },
     endgame: {
       ...sourceEndgame,
@@ -418,6 +528,7 @@ function makeVein(id: string, planetId: PlanetId, resourceId: ItemId, x: number,
     kind: "vein",
     planetId,
     position: { x, y },
+    interactionLocked: false,
     resourceId,
     powerGridId: "grid-a",
     powerPriority: 2,
@@ -429,6 +540,7 @@ function makeVein(id: string, planetId: PlanetId, resourceId: ItemId, x: number,
     routingCursor: 0,
     utilization: 0,
     productionRate: 0,
+    ...(ITEMS[resourceId].kind === "solid" ? { resourceDepletionRemainder: 0 } : {}),
   };
 }
 
@@ -482,7 +594,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
     return { ...entity, resourceRemaining: reserve, resourceCapacity: reserve };
   });
   return {
-    version: 34,
+    version: 46,
     nextId: 1,
     activePlanetId: "home",
     entities,
@@ -498,6 +610,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
       DEFAULT_PLANET_TRAY_ITEM_LIMIT,
     ])) as GameState["planetTrayItemLimits"],
     construction: {
+      ...Object.fromEntries(CONSTRUCTION.map((definition) => [definition.buildingId, 0])),
       wind_turbine: 3,
       solar_panel: 0,
       geothermal_power_station: 0,
@@ -548,6 +661,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
       cursor: 0,
       totalCrafted: 0,
       lastCraftedId: null,
+      destroyedByproducts: {},
       jobs: {},
     },
     portableFleet: { logistics_drone: 0, logistics_vessel: 0 },
@@ -582,11 +696,13 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
       defaultBeltRouteMode: "auto",
       productionBufferLimit: 1_000_000,
       logisticsBufferLimit: 1_000_000,
+      beltBufferLimit: 100_000_000,
       proliferatorBufferLimit: 600,
       autosaveIntervalSeconds: 30,
       resourceMode: "finite",
       difficulty: "standard",
     },
+    contentPacks: [],
     achievements: { unlockedIds: [] },
     campaign: {
       activeChapterId: "foundation",
@@ -601,6 +717,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
     canvasBookmarks: [],
     canvasRegions: [],
     blueprints: [],
+    blueprintVersions: [],
     constructionQueue: [],
     handcraftQueue: [],
     productionPlans: [],
@@ -628,6 +745,9 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
     },
     dysonEngineering: createEmptyDysonEngineering(),
     dysonPlans: createEmptyDysonPlans(),
+    systemSpaceStations: createEmptySystemSpaceStations(),
+    galacticHubNetwork: createEmptyGalacticHubNetwork(),
+    quantumLogisticsNetwork: createEmptyQuantumLogisticsNetworkState(),
     timeWarp: {
       controllerEntityId: null,
       enabled: false,
@@ -684,7 +804,47 @@ export function getMiningSpeedMultiplier(state: GameState): number {
     : state.research.completedTechIds.includes("mining_speed_2")
       ? 2
       : state.research.completedTechIds.includes("mining_speed_1") ? 1.5 : 1;
-  return base * (1 + getInfiniteResearchLevel(state, "vein_utilization") * 0.1) * difficulty.miningMultiplier;
+  return base * getInfiniteResourceCollectionSpeedMultiplier(state) * difficulty.miningMultiplier;
+}
+
+export function getInfiniteResourceCollectionSpeedMultiplier(state: GameState): number {
+  return 1 + getInfiniteResearchLevel(state, "vein_utilization") * 0.1;
+}
+
+export function getVeinConsumptionMultiplier(state: GameState): number {
+  return Math.max(0, VEIN_DEPLETION_SCALE - Math.min(10, getInfiniteResearchLevel(state, "vein_utilization"))) /
+    VEIN_DEPLETION_SCALE;
+}
+
+function getVeinConsumptionTenths(state: GameState, resourceId: ItemId): number {
+  if (ITEMS[resourceId].kind !== "solid") return VEIN_DEPLETION_SCALE;
+  return Math.max(0, VEIN_DEPLETION_SCALE - Math.min(10, getInfiniteResearchLevel(state, "vein_utilization")));
+}
+
+function getVeinDepletionRemainder(entity: FactoryEntity): number {
+  return Math.max(0, Math.min(VEIN_DEPLETION_SCALE - 1, Math.floor(entity.resourceDepletionRemainder ?? 0)));
+}
+
+function getFiniteVeinOutputAllowance(entity: FactoryEntity, consumptionTenths: number): number {
+  if (consumptionTenths <= 0) return Number.POSITIVE_INFINITY;
+  const remaining = Math.max(0, Math.floor(entity.resourceRemaining ?? 0));
+  const availableTenths = Math.max(0, remaining * VEIN_DEPLETION_SCALE - getVeinDepletionRemainder(entity));
+  return Math.floor(availableTenths / consumptionTenths);
+}
+
+function consumeFiniteVeinReserve(entity: FactoryEntity, amount: number, consumptionTenths: number): void {
+  if (amount < 1 || consumptionTenths <= 0) return;
+  const remaining = Math.max(0, Math.floor(entity.resourceRemaining ?? 0));
+  const accruedTenths = getVeinDepletionRemainder(entity) + Math.max(0, Math.floor(amount)) * consumptionTenths;
+  const depleted = Math.min(remaining, Math.floor(accruedTenths / VEIN_DEPLETION_SCALE));
+  entity.resourceRemaining = remaining - depleted;
+  entity.resourceDepletionRemainder = accruedTenths - depleted * VEIN_DEPLETION_SCALE;
+}
+
+function isVeinInfiniteForState(state: GameState, entity: FactoryEntity): boolean {
+  if (!entity.resourceId) return false;
+  return isInfiniteResource(entity.resourceId, entity.planetId, state.settings.resourceMode, state.galaxy) ||
+    getVeinConsumptionTenths(state, entity.resourceId) === 0;
 }
 
 export function getLogisticsSpeedMultiplier(state: GameState): number {
@@ -818,19 +978,19 @@ function planInterstellarPath(
     left.stations.map((station) => station.id).join(":").localeCompare(right.stations.map((station) => station.id).join(":")))[0] ?? null;
 }
 
-export function getInterstellarRouteEconomics(
+function interstellarRouteEconomicsFromPath(
   state: GameState,
   source: FactoryEntity,
   target: FactoryEntity,
-  vehicleCount = 1,
-  options: InterstellarRouteOptions = {},
+  vehicleCount: number,
+  options: InterstellarRouteOptions,
+  path: PlannedInterstellarPath | null,
+  entityById?: ReadonlyMap<string, FactoryEntity>,
 ): InterstellarRouteEconomics {
   const sourcePlanet = getPlanet(source.planetId);
   const targetPlanet = getPlanet(target.planetId);
   const requiresWarp = sourcePlanet.systemId !== targetPlanet.systemId;
-  const routePolicy = options.routePolicy ?? "relay-preferred";
   const warperBudget = Math.max(1, Math.min(4, Math.floor(options.warperBudget ?? 2)));
-  const path = requiresWarp ? planInterstellarPath(state, source, target, routePolicy, warperBudget) : null;
   const routeAvailable = !requiresWarp || Boolean(path);
   const distanceLy = path?.distanceLy ?? (requiresWarp ? getSystemDistanceLy(state, sourcePlanet.systemId, targetPlanet.systemId) : 0);
   const orbitSpan = Math.max(1, Math.abs(sourcePlanet.orbitIndex - targetPlanet.orbitIndex));
@@ -846,7 +1006,7 @@ export function getInterstellarRouteEconomics(
   const targetPower = target.buildingId ? (getBuilding(target.buildingId).powerDemandKw ?? 0) * Math.max(1, target.machineCount) : 0;
   const waypointStationIds = path?.stations.slice(1, -1).map((station) => station.id) ?? [];
   const hubPower = waypointStationIds.reduce((sum, stationId) => {
-    const station = state.entities.find((entity) => entity.id === stationId);
+    const station = entityById?.get(stationId) ?? state.entities.find((entity) => entity.id === stationId);
     return sum + (station?.buildingId ? (getBuilding(station.buildingId).powerDemandKw ?? 0) * Math.max(1, station.machineCount) : 0);
   }, 0);
   const hopCount = requiresWarp ? Math.max(1, path ? path.stations.length - 1 : warperBudget) : 0;
@@ -871,6 +1031,49 @@ export function getInterstellarRouteEconomics(
   };
 }
 
+export function getInterstellarRouteEconomics(
+  state: GameState,
+  source: FactoryEntity,
+  target: FactoryEntity,
+  vehicleCount = 1,
+  options: InterstellarRouteOptions = {},
+): InterstellarRouteEconomics {
+  const sourceSystemId = getPlanet(source.planetId).systemId;
+  const targetSystemId = getPlanet(target.planetId).systemId;
+  const routePolicy = options.routePolicy ?? "relay-preferred";
+  const warperBudget = Math.max(1, Math.min(4, Math.floor(options.warperBudget ?? 2)));
+  const path = sourceSystemId === targetSystemId
+    ? null
+    : planInterstellarPath(state, source, target, routePolicy, warperBudget);
+  return interstellarRouteEconomicsFromPath(state, source, target, vehicleCount, options, path);
+}
+
+function getCachedInterstellarPath(
+  state: GameState,
+  source: FactoryEntity,
+  target: FactoryEntity,
+  options: InterstellarRouteOptions,
+  lookup: SimulationLookupContext,
+  profiler?: SimulationProfiler,
+): PlannedInterstellarPath | null {
+  if (getPlanet(source.planetId).systemId === getPlanet(target.planetId).systemId) return null;
+  const key = interstellarPathCacheKey(source, target, options, lookup.routeEnvironmentKey);
+  if (lookup.interstellarPaths.has(key)) {
+    if (profiler) profiler.routePathCacheHits += 1;
+    return lookup.interstellarPaths.get(key) ?? null;
+  }
+  const path = planInterstellarPath(
+    state,
+    source,
+    target,
+    options.routePolicy ?? "relay-preferred",
+    Math.max(1, Math.min(4, Math.floor(options.warperBudget ?? 2))),
+  );
+  lookup.interstellarPaths.set(key, path);
+  if (profiler) profiler.routePathPlans += 1;
+  return path;
+}
+
 function getCachedInterstellarRouteEconomics(
   state: GameState,
   source: FactoryEntity,
@@ -886,8 +1089,7 @@ function getCachedInterstellarRouteEconomics(
     Math.max(1, Math.floor(vehicleCount)),
     options.routePolicy ?? "relay-preferred",
     Math.max(1, Math.min(4, Math.floor(options.warperBudget ?? 2))),
-    getInfiniteResearchLevel(state, "galactic_logistics"),
-    state.exploration.unlockedSystemIds.join(","),
+    lookup.routeEnvironmentKey,
   ].join("|") : "";
   const cached = key ? lookup!.routeEconomics.get(key) : undefined;
   if (cached) {
@@ -895,7 +1097,17 @@ function getCachedInterstellarRouteEconomics(
     return cached;
   }
   const startedAt = profileNow();
-  const result = getInterstellarRouteEconomics(state, source, target, vehicleCount, options);
+  const result = lookup
+    ? interstellarRouteEconomicsFromPath(
+      state,
+      source,
+      target,
+      vehicleCount,
+      options,
+      getCachedInterstellarPath(state, source, target, options, lookup, profiler),
+      lookup.entityById,
+    )
+    : getInterstellarRouteEconomics(state, source, target, vehicleCount, options);
   if (profiler) {
     profiler.routeEconomicsCalls += 1;
     profiler.routeEconomicsMs += profileNow() - startedAt;
@@ -1014,14 +1226,25 @@ function availableInputCycles(state: GameState, entity: FactoryEntity): number {
     Math.min(available, (entity.inputs[input.itemId] ?? 0) / input.amount), Number.POSITIVE_INFINITY);
 }
 
-function availableOutputCycles(state: GameState, entity: FactoryEntity): number {
+type OutputCapacityCredits = ReadonlyMap<string, number>;
+
+function outputCapacityCreditKey(entityId: string, itemId: ItemId): string {
+  return `${entityId}:${itemId}`;
+}
+
+function outputCapacityCredit(credits: OutputCapacityCredits | undefined, entity: FactoryEntity, itemId: ItemId): number {
+  return Math.max(0, Math.floor(credits?.get(outputCapacityCreditKey(entity.id, itemId)) ?? 0));
+}
+
+function availableOutputCycles(state: GameState, entity: FactoryEntity, credits?: OutputCapacityCredits): number {
   const recipe = getRecipe(entity.recipeId);
   if (!recipe || !entity.buildingId) return 0;
   const capacity = getEntityOutputCapacity(state, entity);
   const extraProductBonus = getEntityExtraProductBonus(entity);
   const sprayedCycleLimit = availableFullProliferatorCycles(entity, recipe);
   return recipe.outputs.reduce((available, output) => {
-    const free = Math.floor(Math.max(0, capacity - (entity.outputs[output.itemId] ?? 0)) + EPSILON);
+    const free = Math.floor(Math.max(0, capacity - (entity.outputs[output.itemId] ?? 0)) + EPSILON) +
+      outputCapacityCredit(credits, entity, output.itemId);
     let low = 0;
     let high = Math.floor(free / output.amount);
     const bonusProgress = entity.proliferatorBonusProgress?.[output.itemId] ?? 0;
@@ -1038,6 +1261,7 @@ function availableOutputCycles(state: GameState, entity: FactoryEntity): number 
 
 function canMachineRun(state: GameState, entity: FactoryEntity): boolean {
   if (entity.recipeId === "matrix_research" && !hasActiveResearch(state)) return false;
+  if (entity.recipeId === "solar_sail_launch" && !getEjectorOrbitTargetStatus(state, entity).valid) return false;
   const recipe = getRecipe(entity.recipeId);
   if (recipe?.requiredTechId && !isTechnologyCompleted(state, recipe.requiredTechId)) return false;
   if (proliferatorApplies(entity, recipe)) {
@@ -1063,6 +1287,11 @@ export function getPowerGridMetrics(state: GameState, planetId: PlanetId, gridId
 }
 
 export function getEntityPowerFactor(state: GameState, entity: FactoryEntity): number {
+  // Orbital collectors are self-powered infrastructure. Treating their gas
+  // giant grid (which intentionally has no generators) as a route endpoint
+  // made otherwise healthy interstellar routes alternate between no-power
+  // and all-vessels-busy diagnostics.
+  if (entity.buildingId === "orbital_collector") return 1;
   if (!isEntityInPowerCoverage(state, entity)) return 0;
   if (typeof entity.powerFactor === "number" && Number.isFinite(entity.powerFactor)) {
     return Math.max(0, Math.min(1, entity.powerFactor));
@@ -1161,9 +1390,12 @@ function ensureStationSlots(station: FactoryEntity): StationSlot[] {
 export const MIN_BUILDING_BUFFER_LIMIT = 1_000;
 export const DEFAULT_BUILDING_BUFFER_LIMIT = 1_000_000;
 export const MAX_BUILDING_BUFFER_LIMIT = 100_000_000;
+/** Shared upper bound for persisted entity and blueprint building stacks. */
+export const MAX_BUILDING_STACK_COUNT = 100_000_000;
 export const MIN_PROLIFERATOR_BUFFER_LIMIT = 1;
 export const DEFAULT_PROLIFERATOR_BUFFER_LIMIT = 600;
 export const MAX_PROLIFERATOR_BUFFER_LIMIT = 100_000;
+export const MAX_CONSTRUCTION_AUTOMATION_TARGET = 100_000;
 
 export function normalizeBuildingBufferLimit(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_BUILDING_BUFFER_LIMIT;
@@ -1241,6 +1473,123 @@ function stationSlotMode(station: FactoryEntity, slot: StationSlot, scope: Stati
   return scope === "local" ? slot.localMode : slot.remoteMode;
 }
 
+function isQuantumStation(station: FactoryEntity): boolean {
+  return station.kind === "station" && station.buildingId === "interstellar_logistics_station" && station.quantumMode === "quantum";
+}
+
+function isQuantumCollector(station: FactoryEntity): boolean {
+  return station.kind === "station" && station.buildingId === "orbital_collector" && station.quantumMode === "quantum";
+}
+
+/**
+ * Quantum access replaces interstellar vessel dispatch only. Quantum towers
+ * keep their local drone network live before, during, and after handoff.
+ */
+function isTraditionalStationScopeDisabled(station: FactoryEntity, scope: StationLogisticsScope): boolean {
+  if (scope === "local") return station.buildingId === "orbital_collector";
+  return isQuantumStation(station) || isQuantumCollector(station) || Boolean(station.quantumTransition);
+}
+
+function hasQuantumBoundaryLogistics(station: FactoryEntity): boolean {
+  return isQuantumStation(station) || isQuantumCollector(station) || Boolean(station.quantumTransition);
+}
+
+function quantumSupplySlot(station: FactoryEntity, itemId: ItemId): StationSlot | undefined {
+  if (!isQuantumStation(station)) return undefined;
+  return getStationSlots(station).find((slot) => slot.itemId === itemId && slot.remoteMode === "supply");
+}
+
+function quantumInventoryFree(state: GameState, itemId: ItemId): number {
+  if (!state.quantumLogisticsNetwork?.enabled) return 0;
+  const current = BigInt(normalizeQuantumInteger(state.quantumLogisticsNetwork.inventory[itemId]));
+  const capacity = BigInt(getQuantumItemCapacity(state.quantumLogisticsNetwork, itemId));
+  const free = capacity > current ? capacity - current : 0n;
+  return Number(free > BigInt(Number.MAX_SAFE_INTEGER) ? BigInt(Number.MAX_SAFE_INTEGER) : free);
+}
+
+function quantumSupplyFreeCapacity(
+  state: GameState,
+  station: FactoryEntity,
+  itemId: ItemId,
+  lookup?: SimulationLookupContext,
+): number {
+  const slot = quantumSupplySlot(station, itemId);
+  if (!slot) return 0;
+  const localCapacity = getEntityItemInputCapacity(state, station, itemId);
+  const localFree = Math.max(0, Math.floor(localCapacity - (station.inputs[itemId] ?? 0)));
+  void lookup;
+  return Math.max(0, quantumInventoryFree(state, itemId) + localFree);
+}
+
+function recordImmediateQuantumUpload(state: GameState, itemId: ItemId, amount: number): void {
+  if (amount < 1) return;
+  if (!state.quantumLogisticsNetwork?.enabled) return;
+  const boundarySecond = (Math.floor(state.elapsedSeconds / QUANTUM_SETTLEMENT_SECONDS) + 1) * QUANTUM_SETTLEMENT_SECONDS;
+  if (state.quantumLogisticsNetwork.runtimeFlow?.boundarySecond !== boundarySecond) {
+    state.quantumLogisticsNetwork.runtimeFlow = createQuantumBoundaryFlow(state, boundarySecond);
+  }
+  const flow = state.quantumLogisticsNetwork.runtimeFlow;
+  if (!flow) return;
+  addQuantumBoundaryFlow(flow.uploaded, itemId, amount);
+}
+
+/**
+ * Receive material at a quantum supply tower. The configured minStock remains
+ * local; everything else is deposited directly into shared inventory and any
+ * capacity remainder falls back to the ordinary tower input buffer.
+ */
+function receiveQuantumSupplyMaterial(
+  state: GameState,
+  station: FactoryEntity,
+  itemId: ItemId,
+  amount: number,
+): number {
+  const slot = quantumSupplySlot(station, itemId);
+  if (!slot || amount < 1 || !state.quantumLogisticsNetwork?.enabled) return 0;
+  const requested = Math.max(0, Math.floor(amount));
+  const currentInput = Math.max(0, Math.floor(station.inputs[itemId] ?? 0));
+  const currentOutput = Math.max(0, Math.floor(station.outputs[itemId] ?? 0));
+  const inputCapacity = Math.max(0, Math.floor(getEntityItemInputCapacity(state, station, itemId)));
+  const inputFree = Math.max(0, inputCapacity - currentInput);
+  const localReserve = Math.max(0, Math.floor(slot.minStock ?? 0) - currentInput - currentOutput);
+  const kept = Math.min(requested, inputFree, localReserve);
+  if (kept > 0) station.inputs[itemId] = currentInput + kept;
+  let remaining = requested - kept;
+  if (remaining > 0) {
+    const deposited = depositIntoQuantumInventory(state.quantumLogisticsNetwork, itemId, remaining);
+    state.quantumLogisticsNetwork = deposited.state;
+    const accepted = Number(deposited.accepted);
+    if (accepted > 0) recordImmediateQuantumUpload(state, itemId, accepted);
+    remaining = Number(deposited.remainder);
+  }
+  const localRemainder = Math.min(remaining, Math.max(0, inputFree - kept));
+  if (localRemainder > 0) station.inputs[itemId] = Math.floor((station.inputs[itemId] ?? 0) + localRemainder);
+  return kept + (requested - kept - remaining) + localRemainder;
+}
+
+function flushQuantumSupplyBuffer(state: GameState, station: FactoryEntity, itemId: ItemId, lookup?: SimulationLookupContext): number {
+  const slot = quantumSupplySlot(station, itemId);
+  if (!slot || !state.quantumLogisticsNetwork?.enabled) return 0;
+  const input = Math.max(0, Math.floor(station.inputs[itemId] ?? 0));
+  const output = Math.max(0, Math.floor(station.outputs[itemId] ?? 0));
+  const reserve = Math.max(0, Math.floor(slot.minStock ?? 0));
+  const reservedOutgoing = Math.max(0, Math.floor(stationReservedOutgoing(state, station.id, itemId, lookup)));
+  const uploadable = Math.max(0, output - reserve - reservedOutgoing) +
+    Math.max(0, input - Math.max(0, reserve - output));
+  if (uploadable < 1) return 0;
+  const deposited = depositIntoQuantumInventory(state.quantumLogisticsNetwork, itemId, uploadable);
+  state.quantumLogisticsNetwork = deposited.state;
+  const accepted = Number(deposited.accepted);
+  if (accepted < 1) return 0;
+  let remaining = accepted;
+  const fromOutput = Math.min(Math.max(0, output - reserve - reservedOutgoing), remaining);
+  if (fromOutput > 0) station.outputs[itemId] = output - fromOutput;
+  remaining -= fromOutput;
+  if (remaining > 0) station.inputs[itemId] = Math.max(0, input - remaining);
+  recordImmediateQuantumUpload(state, itemId, accepted);
+  return accepted;
+}
+
 export interface StationPeerMatch {
   peer: FactoryEntity;
   peerSlotIndex: number;
@@ -1248,6 +1597,14 @@ export interface StationPeerMatch {
 
 export interface SimulationProfiler {
   copyStateMs: number;
+  productionMs: number;
+  beltsMs: number;
+  logisticsMs: number;
+  quantumMs: number;
+  powerMs: number;
+  dysonMs: number;
+  constructionMs: number;
+  historyMs: number;
   stationIndexBuildMs: number;
   peerMatchMs: number;
   routeEconomicsMs: number;
@@ -1255,9 +1612,40 @@ export interface SimulationProfiler {
   routeAdvanceMs: number;
   congestionMs: number;
   peerCandidateChecks: number;
+  peerMatchCalls: number;
+  peerMatchCacheHits: number;
   routeEconomicsCalls: number;
   routeEconomicsCacheHits: number;
+  routePathPlans: number;
+  routePathCacheHits: number;
+  congestionDispatchReuseHits: number;
   routesCreated: number;
+  dispatchSlotChecks: number;
+  quantumStationCount: number;
+  quantumRequestCount: number;
+  persistentRuntimeHits: number;
+  persistentRuntimeRebuilds: number;
+  fuelItemsLoaded: number;
+  exchangerCellsSettled: number;
+  constructionJobsBatched: number;
+  constructionPlanBuilds: number;
+  constructionPlanCacheHits: number;
+}
+
+/**
+ * Local benchmark hook for proving deterministic simulation contracts. The
+ * production runtime never supplies this object; it deliberately stays out of
+ * GameState and save data.
+ */
+export interface SimulationContractExperiment {
+  skippedBeltIds?: ReadonlySet<string>;
+  skippedProductionEntityIds?: ReadonlySet<string>;
+  beforeInputBelts?: (state: GameState) => void;
+  afterInputBelts?: (state: GameState) => void;
+  beforePlanetProduction?: (state: GameState, planetId: PlanetId) => void;
+  afterPlanetProduction?: (state: GameState, planetId: PlanetId) => void;
+  beforeOutputBelts?: (state: GameState) => void;
+  afterOutputBelts?: (state: GameState) => void;
 }
 
 interface IndexedStationSlot {
@@ -1266,14 +1654,34 @@ interface IndexedStationSlot {
   slot: StationSlot;
 }
 
+interface StationDispatchSlotResult {
+  hasMatchingPeer: boolean;
+  routesCreated: number;
+  cargoDispatched: number;
+}
+
 interface SimulationLookupContext {
   entityById: Map<string, FactoryEntity>;
+  entitiesByPlanet: Map<PlanetId, FactoryEntity[]>;
+  beltsByPlanet: Map<PlanetId, BeltConnection[]>;
+  beltById: Map<string, BeltConnection>;
+  sortedBelts: BeltConnection[];
+  outgoingBeltsBySource: Map<string, BeltConnection[]>;
+  incomingBeltsByTarget: Map<string, BeltConnection[]>;
+  powerSourcesByPlanetGrid: Map<string, FactoryEntity[]>;
   stationSlotsByKey: Map<string, IndexedStationSlot[]>;
+  stationPeerMatches: Map<string, StationPeerMatch[]>;
+  dispatchResultsBySlot: Map<string, StationDispatchSlotResult>;
   busyVehicles: Map<string, number>;
   reservedOutgoing: Map<string, number>;
   inFlightCargo: Map<string, number>;
   activeRoutesByStation: Map<string, Array<{ demand: FactoryEntity; route: StationRoute }>>;
+  activeRouteVehicleLoadByStation: Map<string, number>;
   routeEconomics: Map<string, InterstellarRouteEconomics>;
+  interstellarPaths: Map<string, PlannedInterstellarPath | null>;
+  routeEnvironmentKey: string;
+  /** Runtime-only dirty bit for the active-route ledger. */
+  dynamicRouteLookupDirty: boolean;
 }
 
 function profileNow(): number {
@@ -1284,17 +1692,94 @@ function stationSlotIndexKey(scope: StationLogisticsScope, location: PlanetId | 
   return `${scope}|${location}|${itemId}|${mode}`;
 }
 
+function stationPeerMatchCacheKey(
+  state: GameState,
+  stationId: string,
+  slotIndex: number,
+  scope: StationLogisticsScope,
+  environmentKey = routeEnvironmentKey(state),
+): string {
+  return [
+    stationId,
+    slotIndex,
+    scope,
+    environmentKey,
+  ].join("|");
+}
+
+function routeEnvironmentKey(state: GameState): string {
+  return [
+    getLogisticsSpeedMultiplier(state),
+    getInterstellarCargoCapacity(state),
+    state.exploration.unlockedSystemIds.join(","),
+  ].join("|");
+}
+
+function interstellarPathCacheKey(
+  source: FactoryEntity,
+  target: FactoryEntity,
+  options: InterstellarRouteOptions,
+  environmentKey: string,
+): string {
+  return [
+    source.planetId,
+    target.planetId,
+    options.routePolicy ?? "relay-preferred",
+    Math.max(1, Math.min(4, Math.floor(options.warperBudget ?? 2))),
+    environmentKey,
+  ].join("|");
+}
+
+function stationDispatchSlotKey(stationId: string, slotIndex: number, scope: StationLogisticsScope): string {
+  return `${stationId}|${slotIndex}|${scope}`;
+}
+
 function createSimulationLookupContext(state: GameState, profiler?: SimulationProfiler): SimulationLookupContext {
   const startedAt = profileNow();
   const context: SimulationLookupContext = {
     entityById: new Map(state.entities.map((entity) => [entity.id, entity])),
+    entitiesByPlanet: new Map(),
+    beltsByPlanet: new Map(),
+    beltById: new Map(state.belts.map((belt) => [belt.id, belt])),
+    // Preserve persisted belt order. It is part of the legacy deterministic
+    // tie-breaking for equal-priority sources; caching must not reorder it.
+    sortedBelts: [...state.belts],
+    outgoingBeltsBySource: new Map(),
+    incomingBeltsByTarget: new Map(),
+    powerSourcesByPlanetGrid: new Map(),
     stationSlotsByKey: new Map(),
+    stationPeerMatches: new Map(),
+    dispatchResultsBySlot: new Map(),
     busyVehicles: new Map(),
     reservedOutgoing: new Map(),
     inFlightCargo: new Map(),
     activeRoutesByStation: new Map(),
+    activeRouteVehicleLoadByStation: new Map(),
     routeEconomics: new Map(),
+    interstellarPaths: new Map(),
+    routeEnvironmentKey: routeEnvironmentKey(state),
+    dynamicRouteLookupDirty: true,
   };
+  const addTo = <T>(map: Map<string, T[]>, key: string, value: T) => {
+    const values = map.get(key);
+    if (values) values.push(value);
+    else map.set(key, [value]);
+  };
+  for (const entity of state.entities) {
+    const planetEntities = context.entitiesByPlanet.get(entity.planetId);
+    if (planetEntities) planetEntities.push(entity);
+    else context.entitiesByPlanet.set(entity.planetId, [entity]);
+    if (entity.kind === "power" || (entity.buildingId === "ray_receiver" && entity.recipeId === "ray_power")) {
+      addTo(context.powerSourcesByPlanetGrid, `${entity.planetId}|${getEntityPowerGridId(entity)}`, entity);
+    }
+  }
+  for (const belt of context.sortedBelts) {
+    const planetBelts = context.beltsByPlanet.get(belt.planetId);
+    if (planetBelts) planetBelts.push(belt);
+    else context.beltsByPlanet.set(belt.planetId, [belt]);
+    addTo(context.outgoingBeltsBySource, belt.source, belt);
+    addTo(context.incomingBeltsByTarget, belt.target, belt);
+  }
   const add = (key: string, value: IndexedStationSlot) => {
     const existing = context.stationSlotsByKey.get(key);
     if (existing) existing.push(value);
@@ -1302,7 +1787,12 @@ function createSimulationLookupContext(state: GameState, profiler?: SimulationPr
   };
   for (const peer of state.entities) {
     if (peer.kind !== "station") continue;
+    // Mk.II elevator stations use the system hub contract and must never enter
+    // the legacy slot/partner index. Transitioning stations keep their legacy
+    // mode until all old routes have drained.
+    if (isElevatorStation(peer)) continue;
     if (peer.buildingId === "orbital_collector") {
+      if (isTraditionalStationScopeDisabled(peer, "remote")) continue;
       if (peer.storedItemId) add(stationSlotIndexKey("remote", "*", peer.storedItemId, "supply"), {
         peer,
         peerSlotIndex: 0,
@@ -1314,11 +1804,17 @@ function createSimulationLookupContext(state: GameState, profiler?: SimulationPr
     for (let peerSlotIndex = 0; peerSlotIndex < slots.length; peerSlotIndex += 1) {
       const slot = slots[peerSlotIndex];
       if (!slot.itemId) continue;
-      add(stationSlotIndexKey("local", peer.planetId, slot.itemId, slot.localMode), { peer, peerSlotIndex, slot });
-      if (peer.buildingId === "interstellar_logistics_station") {
+      if (!isTraditionalStationScopeDisabled(peer, "local")) {
+        add(stationSlotIndexKey("local", peer.planetId, slot.itemId, slot.localMode), { peer, peerSlotIndex, slot });
+      }
+      if (peer.buildingId === "interstellar_logistics_station" && !isTraditionalStationScopeDisabled(peer, "remote")) {
         add(stationSlotIndexKey("remote", "*", slot.itemId, slot.remoteMode), { peer, peerSlotIndex, slot });
       }
     }
+  }
+  for (const values of context.stationSlotsByKey.values()) {
+    values.sort((left, right) => right.slot.priority - left.slot.priority ||
+      left.peer.id.localeCompare(right.peer.id) || left.peerSlotIndex - right.peerSlotIndex);
   }
   if (profiler) profiler.stationIndexBuildMs += profileNow() - startedAt;
   return context;
@@ -1339,11 +1835,19 @@ export function findStationSlotPeers(
   if (mode === "storage") return [];
   if (scope === "local" && station.buildingId === "orbital_collector") return [];
   if (scope === "remote" && station.buildingId !== "interstellar_logistics_station" && station.buildingId !== "orbital_collector") return [];
+  const cacheKey = lookup ? stationPeerMatchCacheKey(state, station.id, slotIndex, scope, lookup.routeEnvironmentKey) : "";
+  if (profiler) profiler.peerMatchCalls += 1;
+  const cached = cacheKey ? lookup!.stationPeerMatches.get(cacheKey) : undefined;
+  if (cached) {
+    if (profiler) profiler.peerMatchCacheHits += 1;
+    return [...cached];
+  }
   const opposite: StationLogisticsMode = mode === "supply" ? "demand" : "supply";
   const candidates: Array<StationPeerMatch & { priority: number; routeAvailable: boolean; routeDuration: number }> = [];
-  const indexed = lookup?.stationSlotsByKey.get(stationSlotIndexKey(scope, scope === "local" ? station.planetId : "*", slot.itemId, opposite));
-  const peerCandidates: IndexedStationSlot[] = indexed ?? state.entities.flatMap((peer) => {
+  const indexKey = stationSlotIndexKey(scope, scope === "local" ? station.planetId : "*", slot.itemId, opposite);
+  const peerCandidates: IndexedStationSlot[] = lookup ? (lookup.stationSlotsByKey.get(indexKey) ?? []) : state.entities.flatMap((peer) => {
     if (peer.kind !== "station") return [];
+    if (isElevatorStation(peer) || isTraditionalStationScopeDisabled(peer, scope)) return [];
     const peerSlots = peer.buildingId === "orbital_collector"
       ? [{ ...emptyStationSlot(), itemId: peer.storedItemId, remoteMode: "supply" as const }]
       : getStationSlots(peer);
@@ -1352,6 +1856,8 @@ export function findStationSlotPeers(
   if (profiler) profiler.peerCandidateChecks += peerCandidates.length;
   for (const { peer, peerSlotIndex, slot: peerSlot } of peerCandidates) {
     if (peer.id === station.id || peer.kind !== "station") continue;
+    if (isElevatorStation(peer) || isTraditionalStationScopeDisabled(peer, scope) ||
+      isElevatorStation(station) || isTraditionalStationScopeDisabled(station, scope)) continue;
     if (scope === "local") {
       if (peer.planetId !== station.planetId || peer.buildingId === "orbital_collector") continue;
     } else {
@@ -1376,10 +1882,14 @@ export function findStationSlotPeers(
         });
       }
   }
+  // The index narrows the candidate pool, but must not alter the legacy
+  // deterministic ordering used by logistics fairness and route allocation.
   const result = candidates.sort((a, b) => Number(b.routeAvailable) - Number(a.routeAvailable) || b.priority - a.priority ||
     a.routeDuration - b.routeDuration || a.peer.id.localeCompare(b.peer.id));
   if (profiler) profiler.peerMatchMs += profileNow() - startedAt;
-  return result.map(({ peer, peerSlotIndex }) => ({ peer, peerSlotIndex }));
+  const matches = result.map(({ peer, peerSlotIndex }) => ({ peer, peerSlotIndex }));
+  if (cacheKey) lookup!.stationPeerMatches.set(cacheKey, matches);
+  return [...matches];
 }
 
 export function findStationSlotPeer(
@@ -1591,6 +2101,42 @@ function ensureDysonOrbit(state: GameState, systemId: StarSystemId): DysonSwarmO
 
 function allDysonOrbits(state: GameState): DysonSwarmOrbitState[] {
   return DYSON_SYSTEM_IDS.flatMap((systemId) => state.dysonEngineering.orbitsBySystem[systemId] ?? []);
+}
+
+export interface EjectorOrbitTargetStatus {
+  systemId: StarSystemId;
+  targetOrbitId: string | null;
+  orbit: DysonSwarmOrbitState | null;
+  valid: boolean;
+  reason: "missing-target" | "missing-orbit" | "foreign-system" | null;
+}
+
+export function getEjectorOrbitTargetStatus(state: GameState, entity: FactoryEntity): EjectorOrbitTargetStatus {
+  const systemId = getPlanet(entity.planetId).systemId;
+  const targetOrbitId = typeof entity.targetDysonOrbitId === "string" && entity.targetDysonOrbitId.length > 0
+    ? entity.targetDysonOrbitId
+    : null;
+  const orbit = targetOrbitId
+    ? state.dysonEngineering.orbitsBySystem[systemId]?.find((candidate) => candidate.id === targetOrbitId) ?? null
+    : null;
+  if (orbit) return { systemId, targetOrbitId, orbit, valid: true, reason: null };
+  if (!targetOrbitId) return { systemId, targetOrbitId, orbit: null, valid: false, reason: "missing-target" };
+  const belongsToAnotherSystem = DYSON_SYSTEM_IDS.some((candidateSystemId) => candidateSystemId !== systemId &&
+    state.dysonEngineering.orbitsBySystem[candidateSystemId]?.some((candidate) => candidate.id === targetOrbitId));
+  return {
+    systemId,
+    targetOrbitId,
+    orbit: null,
+    valid: false,
+    reason: belongsToAnotherSystem ? "foreign-system" : "missing-orbit",
+  };
+}
+
+function activeDysonOrbitIdForPlanet(state: GameState, planetId: PlanetId): string | undefined {
+  const systemId = getPlanet(planetId).systemId;
+  const activeId = state.dysonEngineering.activeOrbitBySystem[systemId];
+  const orbits = state.dysonEngineering.orbitsBySystem[systemId] ?? [];
+  return activeId && orbits.some((orbit) => orbit.id === activeId) ? activeId : orbits[0]?.id;
 }
 
 function aggregateDysonSwarm(state: GameState): void {
@@ -1811,6 +2357,29 @@ export function setActiveDysonSwarmOrbit(state: GameState, systemId: StarSystemI
   };
 }
 
+export function setEjectorTargetOrbitForEntities(
+  state: GameState,
+  entityIds: readonly string[],
+  orbitId: string,
+): GameState {
+  const ids = [...new Set(entityIds)];
+  if (ids.length === 0 || typeof orbitId !== "string" || orbitId.length === 0) return state;
+  const targets = ids.map((entityId) => state.entities.find((entity) => entity.id === entityId));
+  if (targets.some((entity) => !entity || entity.buildingId !== "em_rail_ejector" ||
+    entity.interactionLocked ||
+    !state.dysonEngineering.orbitsBySystem[getPlanet(entity.planetId).systemId]?.some((orbit) => orbit.id === orbitId))) return state;
+  if (targets.every((entity) => entity!.targetDysonOrbitId === orbitId)) return state;
+  const idSet = new Set(ids);
+  return {
+    ...state,
+    entities: state.entities.map((entity) => idSet.has(entity.id) ? { ...entity, targetDysonOrbitId: orbitId } : entity),
+  };
+}
+
+export function setEjectorTargetOrbit(state: GameState, entityId: string, orbitId: string): GameState {
+  return setEjectorTargetOrbitForEntities(state, [entityId], orbitId);
+}
+
 export function setDysonSwarmOrbit(
   state: GameState,
   systemId: StarSystemId,
@@ -1857,7 +2426,8 @@ export function getDysonEngineeringSnapshot(state: GameState, systemId: StarSyst
   const queuedRockets = launchEntities.filter((entity) => entity.recipeId === "carrier_rocket_launch")
     .reduce((sum, entity) => sum + Math.floor(entity.inputs.small_carrier_rocket ?? 0), 0);
   const nominalRate = (recipeId: RecipeId) => launchEntities
-    .filter((entity) => entity.recipeId === recipeId)
+    .filter((entity) => entity.recipeId === recipeId &&
+      (recipeId !== "solar_sail_launch" || getEjectorOrbitTargetStatus(state, entity).valid))
     .reduce((sum, entity) => {
       const recipe = getRecipe(recipeId)!;
       return sum + getBuilding(entity.buildingId!).speed * entity.machineCount / recipe.duration * 60 * launchFactorFor(recipeId);
@@ -2306,10 +2876,11 @@ function launchDysonStructure(state: GameState, systemId: StarSystemId, amount: 
   updateDysonSphereGeneration(state);
 }
 
-function launchDysonSails(state: GameState, systemId: StarSystemId, amount: number): void {
+function launchDysonSails(state: GameState, systemId: StarSystemId, orbitId: string, amount: number): void {
   if (amount <= 0) return;
   syncLegacySwarmIntoOrbits(state);
-  const orbit = ensureDysonOrbit(state, systemId);
+  const orbit = state.dysonEngineering.orbitsBySystem[systemId]?.find((candidate) => candidate.id === orbitId);
+  if (!orbit) return;
   orbit.sailsInOrbit = Math.floor(orbit.sailsInOrbit + amount);
   orbit.totalLaunched = Math.floor(orbit.totalLaunched + amount);
   orbit.generationKw = orbit.sailsInOrbit * getSolarSailPowerFor(state, systemId);
@@ -2554,20 +3125,20 @@ export function getEntityPowerGridId(entity: FactoryEntity): PowerGridId {
   return entity.powerGridId ?? "grid-a";
 }
 
-function gridPowerSources(state: GameState, planetId: PlanetId, gridId: PowerGridId): FactoryEntity[] {
-  return state.entities.filter((entity) => entity.planetId === planetId && getEntityPowerGridId(entity) === gridId &&
+function gridPowerSources(state: GameState, planetId: PlanetId, gridId: PowerGridId, lookup?: SimulationLookupContext): FactoryEntity[] {
+  return lookup?.powerSourcesByPlanetGrid.get(`${planetId}|${gridId}`) ?? state.entities.filter((entity) => entity.planetId === planetId && getEntityPowerGridId(entity) === gridId &&
     (entity.kind === "power" || (entity.buildingId === "ray_receiver" && entity.recipeId === "ray_power")));
 }
 
-function powerCoverageLabel(state: GameState, entity: FactoryEntity): string {
-  return gridPowerSources(state, entity.planetId, getEntityPowerGridId(entity)).length > 0
+function powerCoverageLabel(state: GameState, entity: FactoryEntity, lookup?: SimulationLookupContext): string {
+  return gridPowerSources(state, entity.planetId, getEntityPowerGridId(entity), lookup).length > 0
     ? "电网供电不足"
     : "电网断电";
 }
 
-export function isEntityInPowerCoverage(state: GameState, entity: FactoryEntity): boolean {
+export function isEntityInPowerCoverage(state: GameState, entity: FactoryEntity, lookup?: SimulationLookupContext): boolean {
   if (entity.kind === "power" || (entity.buildingId === "ray_receiver" && entity.recipeId === "ray_power")) return true;
-  return gridPowerSources(state, entity.planetId, getEntityPowerGridId(entity)).length > 0;
+  return gridPowerSources(state, entity.planetId, getEntityPowerGridId(entity), lookup).length > 0;
 }
 
 interface PowerConsumer {
@@ -2608,8 +3179,9 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
   const powerOutputByEntity = new Map<string, number>();
   const powerInputByEntity = new Map<string, number>();
   const factorByEntity = new Map<string, number>();
+  const entities = lookup ? (lookup.entitiesByPlanet.get(planetId) ?? []) : state.entities;
 
-  for (const entity of state.entities) {
+  for (const entity of entities) {
     if (entity.planetId !== planetId || getEntityPowerGridId(entity) !== gridId) continue;
     if (entity.kind === "power" && entity.buildingId) {
       generatorCount += entity.machineCount;
@@ -2645,7 +3217,7 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
       }
       continue;
     } else if (entity.kind === "vein" && entity.minerCount > 0) {
-      if (!isEntityInPowerCoverage(state, entity)) {
+      if (!isEntityInPowerCoverage(state, entity, lookup)) {
         disconnectedEntities += 1;
         factorByEntity.set(entity.id, 0);
         const extractor = extractorFor(entity);
@@ -2663,7 +3235,7 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
       }
     } else if (entity.buildingId === "galactic_material_exporter" && entity.galacticExporterPaused === false &&
       Object.keys(ACTIVITY_PROJECT_BY_ITEM).some((itemId) => (entity.inputs[itemId as ItemId] ?? 0) >= 1)) {
-      if (!isEntityInPowerCoverage(state, entity)) {
+      if (!isEntityInPowerCoverage(state, entity, lookup)) {
         disconnectedEntities += 1;
         factorByEntity.set(entity.id, 0);
         disconnectedDemandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier;
@@ -2672,7 +3244,7 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
       connectedEntities += 1;
       consumers.push({ entity, demandKw: (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier });
     } else if (entity.buildingId === "construction_center" && constructionAutomationHasDeficit(state)) {
-      if (!isEntityInPowerCoverage(state, entity)) {
+      if (!isEntityInPowerCoverage(state, entity, lookup)) {
         disconnectedEntities += 1;
         factorByEntity.set(entity.id, 0);
         disconnectedDemandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier;
@@ -2680,8 +3252,28 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
       }
       connectedEntities += 1;
       consumers.push({ entity, demandKw: (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier });
+    } else if (entity.buildingId === "space_station_construction_launcher" &&
+      state.systemSpaceStations[getPlanet(entity.planetId).systemId]?.status === "building") {
+      if (!isEntityInPowerCoverage(state, entity, lookup)) {
+        disconnectedEntities += 1;
+        factorByEntity.set(entity.id, 0);
+        disconnectedDemandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier;
+        continue;
+      }
+      connectedEntities += 1;
+      consumers.push({ entity, demandKw: (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier });
+    } else if (entity.kind === "station" && (isQuantumStation(entity) ||
+      isElevatorStation(entity) && state.systemSpaceStations[getPlanet(entity.planetId).systemId]?.status === "operational")) {
+      if (!isEntityInPowerCoverage(state, entity, lookup)) {
+        disconnectedEntities += 1;
+        factorByEntity.set(entity.id, 0);
+        disconnectedDemandKw += (getBuilding(entity.buildingId!).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier;
+        continue;
+      }
+      connectedEntities += 1;
+      consumers.push({ entity, demandKw: (getBuilding(entity.buildingId!).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier });
     } else if (canMachineRun(state, entity) && entity.buildingId) {
-      if (!isEntityInPowerCoverage(state, entity)) {
+      if (!isEntityInPowerCoverage(state, entity, lookup)) {
         disconnectedEntities += 1;
         factorByEntity.set(entity.id, 0);
         disconnectedDemandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount *
@@ -2694,7 +3286,7 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
         demandKw: (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * getEntityProliferatorPowerMultiplierForStep(state, entity, seconds) * difficultyPowerMultiplier,
       });
     } else if (entity.kind === "station" && entity.buildingId && stationRouteReady(state, entity, lookup, profiler)) {
-      if (!isEntityInPowerCoverage(state, entity)) {
+      if (!isEntityInPowerCoverage(state, entity, lookup)) {
         disconnectedEntities += 1;
         factorByEntity.set(entity.id, 0);
         disconnectedDemandKw += (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount * difficultyPowerMultiplier;
@@ -2712,9 +3304,12 @@ function calculatePower(state: GameState, seconds: number, planetId: PlanetId, g
   const accumulatorCapacityKw = accumulatorCandidates.reduce((sum, candidate) => sum + candidate.capacity, 0);
   const generationKw = baseGenerationKw + exchangerCapacityKw + fuelCapacityKw + accumulatorCapacityKw;
   const regularSuppliedKw = Math.min(connectedDemandKw, generationKw);
-  const controller = state.timeWarp.enabled
-    ? state.entities.find((entity) => entity.id === state.timeWarp.controllerEntityId && entity.buildingId === "time_warp_device" &&
-      entity.planetId === planetId && getEntityPowerGridId(entity) === gridId)
+  const controllerCandidate = state.timeWarp.enabled
+    ? (lookup?.entityById.get(state.timeWarp.controllerEntityId ?? "") ?? state.entities.find((entity) => entity.id === state.timeWarp.controllerEntityId))
+    : undefined;
+  const controller = controllerCandidate && controllerCandidate.buildingId === "time_warp_device" &&
+      controllerCandidate.planetId === planetId && getEntityPowerGridId(controllerCandidate) === gridId
+    ? controllerCandidate
     : undefined;
   let timeWarpDemandKw = 0;
   let timeWarpAllocatedKw = 0;
@@ -2816,26 +3411,51 @@ function powerFactorForEntity(power: PowerPlan, entity: FactoryEntity): number {
   return power.factorByEntity.get(entity.id) ?? 1;
 }
 
-function burnFuel(entity: FactoryEntity, outputKw: number, seconds: number): void {
-  if (!entity.buildingId || !entity.fuelItemId || outputKw <= EPSILON) return;
+function burnFuelLegacy(entity: FactoryEntity, outputKw: number, seconds: number): number {
+  if (!entity.buildingId || !entity.fuelItemId || outputKw <= EPSILON) return 0;
   const energyPerItem = FUEL_ENERGY_MJ[entity.fuelItemId] ?? 0;
   let requiredHeatMj = outputKw * seconds / (1000 * getFuelEfficiency(entity.buildingId));
   let remainingHeatMj = Math.max(0, entity.fuelRemainingMj ?? 0);
+  let loaded = 0;
   while (requiredHeatMj > EPSILON) {
     if (remainingHeatMj <= EPSILON) {
       const queuedFuel = Math.floor((entity.inputs[entity.fuelItemId] ?? 0) + EPSILON);
       if (queuedFuel < 1 || energyPerItem <= EPSILON) break;
       entity.inputs[entity.fuelItemId] = queuedFuel - 1;
       remainingHeatMj += energyPerItem;
+      loaded += 1;
     }
     const burned = Math.min(requiredHeatMj, remainingHeatMj);
     requiredHeatMj -= burned;
     remainingHeatMj -= burned;
   }
   entity.fuelRemainingMj = round(Math.max(0, remainingHeatMj), 6);
+  return loaded;
 }
 
-function chargeExchanger(state: GameState, entity: FactoryEntity, energyMj: number): number {
+function burnFuel(entity: FactoryEntity, outputKw: number, seconds: number): number {
+  if (!entity.buildingId || !entity.fuelItemId || outputKw <= EPSILON) return 0;
+  const energyPerItem = FUEL_ENERGY_MJ[entity.fuelItemId] ?? 0;
+  const requiredHeatMj = Math.max(0, outputKw * seconds / (1000 * getFuelEfficiency(entity.buildingId)));
+  const initialHeatMj = Math.max(0, entity.fuelRemainingMj ?? 0);
+  const queuedFuel = Math.floor((entity.inputs[entity.fuelItemId] ?? 0) + EPSILON);
+  if (energyPerItem <= EPSILON) {
+    entity.fuelRemainingMj = round(Math.max(0, initialHeatMj - Math.min(requiredHeatMj, initialHeatMj)), 6);
+    return 0;
+  }
+  const heatNeededAfterCurrent = Math.max(0, requiredHeatMj - initialHeatMj);
+  const requestedItems = heatNeededAfterCurrent > EPSILON
+    ? Math.ceil(Math.max(0, heatNeededAfterCurrent - EPSILON) / energyPerItem)
+    : 0;
+  const loaded = Math.min(queuedFuel, requestedItems);
+  const availableHeatMj = initialHeatMj + loaded * energyPerItem;
+  const burnedHeatMj = Math.min(requiredHeatMj, availableHeatMj);
+  if (loaded > 0) entity.inputs[entity.fuelItemId] = queuedFuel - loaded;
+  entity.fuelRemainingMj = round(Math.max(0, availableHeatMj - burnedHeatMj), 6);
+  return loaded;
+}
+
+function chargeExchangerLegacy(state: GameState, entity: FactoryEntity, energyMj: number): number {
   let remaining = Math.max(0, energyMj);
   let stored = storedEnergy(entity);
   let completed = 0;
@@ -2860,7 +3480,7 @@ function chargeExchanger(state: GameState, entity: FactoryEntity, energyMj: numb
   return completed;
 }
 
-function dischargeExchanger(state: GameState, entity: FactoryEntity, energyMj: number): number {
+function dischargeExchangerLegacy(state: GameState, entity: FactoryEntity, energyMj: number): number {
   let remaining = Math.max(0, energyMj);
   let stored = storedEnergy(entity);
   let completed = 0;
@@ -2886,8 +3506,64 @@ function dischargeExchanger(state: GameState, entity: FactoryEntity, energyMj: n
   return completed;
 }
 
-function runPowerFacilities(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId): void {
-  for (const entity of state.entities) {
+function chargeExchanger(state: GameState, entity: FactoryEntity, energyMj: number): number {
+  if (energyMj <= EPSILON) return 0;
+  const stored = Math.min(ACCUMULATOR_ENERGY_MJ, storedEnergy(entity));
+  const activeCells = stored > EPSILON ? 1 : 0;
+  const queuedCells = Math.floor((entity.inputs.accumulator ?? 0) + EPSILON);
+  const usableCells = Math.min(activeCells + queuedCells, itemOutputFree(state, entity, "charged_accumulator"));
+  if (usableCells < 1) return 0;
+  const appliedEnergyMj = Math.min(Math.max(0, energyMj), Math.max(0, usableCells * ACCUMULATOR_ENERGY_MJ - stored));
+  if (appliedEnergyMj <= EPSILON) return 0;
+  const totalEnergyMj = stored + appliedEnergyMj;
+  const completed = Math.min(usableCells, Math.floor((totalEnergyMj + EPSILON) / ACCUMULATOR_ENERGY_MJ));
+  const remainingEnergyMj = Math.max(0, totalEnergyMj - completed * ACCUMULATOR_ENERGY_MJ);
+  const residual = remainingEnergyMj > EPSILON ? remainingEnergyMj : 0;
+  const touchedCells = completed + (residual > EPSILON ? 1 : 0);
+  const consumedCells = Math.min(queuedCells, Math.max(0, touchedCells - activeCells));
+  if (consumedCells > 0) entity.inputs.accumulator = queuedCells - consumedCells;
+  entity.outputs.charged_accumulator = Math.floor((entity.outputs.charged_accumulator ?? 0) + completed);
+  state.totalProduced.charged_accumulator = Math.floor((state.totalProduced.charged_accumulator ?? 0) + completed);
+  entity.storedEnergyMj = round(residual, 6);
+  entity.progress = residual / ACCUMULATOR_ENERGY_MJ;
+  return completed;
+}
+
+function dischargeExchanger(state: GameState, entity: FactoryEntity, energyMj: number): number {
+  if (energyMj <= EPSILON) return 0;
+  const stored = Math.min(ACCUMULATOR_ENERGY_MJ, storedEnergy(entity));
+  const activeCells = stored > EPSILON ? 1 : 0;
+  const queuedCells = Math.floor((entity.inputs.charged_accumulator ?? 0) + EPSILON);
+  const usableCells = Math.min(activeCells + queuedCells, itemOutputFree(state, entity, "accumulator"));
+  if (usableCells < 1) return 0;
+  const availableEnergyMj = stored + Math.max(0, usableCells - activeCells) * ACCUMULATOR_ENERGY_MJ;
+  const appliedEnergyMj = Math.min(Math.max(0, energyMj), availableEnergyMj);
+  if (appliedEnergyMj <= EPSILON) return 0;
+  const energyNeededAfterCurrent = Math.max(0, appliedEnergyMj - stored);
+  const loadedCells = Math.min(queuedCells, energyNeededAfterCurrent > EPSILON
+    ? Math.ceil(Math.max(0, energyNeededAfterCurrent - EPSILON) / ACCUMULATOR_ENERGY_MJ)
+    : 0);
+  const remainingEnergyMj = Math.max(0, stored + loadedCells * ACCUMULATOR_ENERGY_MJ - appliedEnergyMj);
+  const residual = remainingEnergyMj > EPSILON ? remainingEnergyMj : 0;
+  const completed = Math.max(0, activeCells + loadedCells - (residual > EPSILON ? 1 : 0));
+  if (loadedCells > 0) entity.inputs.charged_accumulator = queuedCells - loadedCells;
+  entity.outputs.accumulator = Math.floor((entity.outputs.accumulator ?? 0) + completed);
+  state.totalProduced.accumulator = Math.floor((state.totalProduced.accumulator ?? 0) + completed);
+  entity.storedEnergyMj = round(residual, 6);
+  entity.progress = residual > EPSILON ? 1 - residual / ACCUMULATOR_ENERGY_MJ : 0;
+  return completed;
+}
+
+function runPowerFacilities(
+  state: GameState,
+  seconds: number,
+  power: PowerPlan,
+  planetId: PlanetId,
+  entities = state.entities,
+  batchPowerStorage = true,
+  profiler?: SimulationProfiler,
+): void {
+  for (const entity of entities) {
     if (entity.planetId !== planetId || entity.kind !== "power" || !entity.buildingId) continue;
     const outputKw = power.powerOutputByEntity.get(entity.id) ?? 0;
     const inputKw = power.powerInputByEntity.get(entity.id) ?? 0;
@@ -2899,7 +3575,10 @@ function runPowerFacilities(state: GameState, seconds: number, power: PowerPlan,
     entity.productionRate = 0;
 
     if (isFuelGenerator(entity)) {
-      burnFuel(entity, outputKw, seconds);
+      const loaded = batchPowerStorage
+        ? burnFuel(entity, outputKw, seconds)
+        : burnFuelLegacy(entity, outputKw, seconds);
+      if (profiler) profiler.fuelItemsLoaded += loaded;
     } else if (entity.buildingId === "accumulator") {
       const capacity = energyCapacity(entity);
       entity.storedEnergyMj = round(Math.min(capacity, Math.max(0,
@@ -2907,17 +3586,23 @@ function runPowerFacilities(state: GameState, seconds: number, power: PowerPlan,
       entity.progress = capacity > EPSILON ? entity.storedEnergyMj / capacity : 0;
     } else if (entity.buildingId === "energy_exchanger") {
       const completed = entity.energyMode === "discharge"
-        ? dischargeExchanger(state, entity, outputKw * seconds / 1000)
-        : chargeExchanger(state, entity, inputKw * seconds / 1000);
+        ? batchPowerStorage
+          ? dischargeExchanger(state, entity, outputKw * seconds / 1000)
+          : dischargeExchangerLegacy(state, entity, outputKw * seconds / 1000)
+        : batchPowerStorage
+          ? chargeExchanger(state, entity, inputKw * seconds / 1000)
+          : chargeExchangerLegacy(state, entity, inputKw * seconds / 1000);
+      if (profiler) profiler.exchangerCellsSettled += completed;
       entity.productionRate = seconds > EPSILON ? round(completed * 60 / seconds, 2) : 0;
     }
   }
 }
 
-function fuelReserveSeconds(state: GameState, planetId: PlanetId, gridId?: PowerGridId): number {
+function fuelReserveSeconds(state: GameState, planetId: PlanetId, gridId?: PowerGridId, lookup?: SimulationLookupContext): number {
   let electricEnergyMj = 0;
   let ratedGeneratorKw = 0;
-  for (const entity of state.entities) {
+  const entities = lookup ? (lookup.entitiesByPlanet.get(planetId) ?? []) : state.entities;
+  for (const entity of entities) {
     if (entity.planetId !== planetId || (gridId && getEntityPowerGridId(entity) !== gridId) || !isFuelGenerator(entity) || !entity.buildingId) continue;
     electricEnergyMj += fuelEnergyAvailable(entity) * getFuelEfficiency(entity.buildingId);
     ratedGeneratorKw += (getBuilding(entity.buildingId).powerGenerationKw ?? 0) * entity.machineCount;
@@ -2925,8 +3610,9 @@ function fuelReserveSeconds(state: GameState, planetId: PlanetId, gridId?: Power
   return ratedGeneratorKw > EPSILON ? round(electricEnergyMj * 1000 / ratedGeneratorKw, 1) : 0;
 }
 
-function gridStoredEnergy(state: GameState, planetId: PlanetId, gridId?: PowerGridId): { stored: number; capacity: number } {
-  return state.entities.reduce((total, entity) => {
+function gridStoredEnergy(state: GameState, planetId: PlanetId, gridId?: PowerGridId, lookup?: SimulationLookupContext): { stored: number; capacity: number } {
+  const entities = lookup ? (lookup.entitiesByPlanet.get(planetId) ?? []) : state.entities;
+  return entities.reduce((total, entity) => {
     if (entity.planetId !== planetId || (gridId && getEntityPowerGridId(entity) !== gridId) ||
       (entity.buildingId !== "accumulator" && entity.buildingId !== "energy_exchanger")) return total;
     total.stored += storedEnergy(entity);
@@ -2935,10 +3621,11 @@ function gridStoredEnergy(state: GameState, planetId: PlanetId, gridId?: PowerGr
   }, { stored: 0, capacity: 0 });
 }
 
-function transferLogisticsBuffers(state: GameState): void {
+function transferLogisticsBuffers(state: GameState, lookup?: SimulationLookupContext): void {
   for (const entity of state.entities) {
     if ((entity.kind !== "storage" && entity.kind !== "splitter" && entity.kind !== "station") || !entity.buildingId) continue;
     if (entity.buildingId === "material_delivery_hub") continue;
+    if (isElevatorStation(entity)) continue;
     const slots = entity.kind === "station" && entity.buildingId !== "orbital_collector"
       ? ensureStationSlots(entity).filter((slot): slot is StationSlot & { itemId: ItemId } => Boolean(slot.itemId))
       : entity.storedItemId ? [{ ...emptyStationSlot(), itemId: entity.storedItemId }] : [];
@@ -2951,6 +3638,7 @@ function transferLogisticsBuffers(state: GameState): void {
       const moved = Math.min(incoming, Math.max(0, capacity - stored));
       entity.inputs[slot.itemId] = incoming - moved;
       entity.outputs[slot.itemId] = stored + moved;
+      if (isQuantumStation(entity)) flushQuantumSupplyBuffer(state, entity, slot.itemId, lookup);
     }
   }
 }
@@ -2980,46 +3668,87 @@ interface BeltTransferCandidate {
   capacity: number;
 }
 
-function targetFreeCapacity(state: GameState, target: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): number {
+function targetFreeCapacity(state: GameState, target: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2, lookup?: SimulationLookupContext): number {
   if (!target.buildingId) return 0;
   if (target.buildingId === "micro_black_hole_connector") {
     if (target.blackHolePaused !== false || !target.blackHoleActivationConfirmed || targetPortIndex === undefined) return 0;
     return Number.MAX_SAFE_INTEGER;
   }
+  if (target.buildingId === "material_delivery_hub") {
+    if (resolveMaterialDeliverySlotIndex(target, itemId, targetPortIndex) === undefined) return 0;
+    const pendingEntities = lookup?.entitiesByPlanet.get(target.planetId) ?? state.entities;
+    const pending = pendingEntities.reduce((sum, entity) => entity.planetId === target.planetId && entity.buildingId === "material_delivery_hub"
+      ? sum + Math.max(0, Math.floor(entity.inputs[itemId] ?? 0))
+      : sum, 0);
+    return Math.floor(Math.max(0, getPlanetTrayItemFreeCapacity(state, target.planetId, itemId) - pending) + EPSILON);
+  }
+  if (quantumSupplySlot(target, itemId)) {
+    return Math.max(0, quantumSupplyFreeCapacity(state, target, itemId, lookup) - stationInFlightCargo(target, itemId, lookup));
+  }
   const capacity = getEntityItemInputCapacity(state, target, itemId);
   return Math.floor(Math.max(0, capacity - (target.inputs[itemId] ?? 0)) + EPSILON);
 }
 
-function transferBelts(state: GameState, seconds: number): void {
+function transferBelts(
+  state: GameState,
+  seconds: number,
+  deferSourceDepletionReset = false,
+  allowanceCaps?: ReadonlyMap<string, number>,
+  flowWindowSeconds = seconds,
+  lookup?: SimulationLookupContext,
+  skippedBeltIds?: ReadonlySet<string>,
+): void {
   const groups = new Map<string, { source: FactoryEntity; itemId: ItemId; candidates: BeltTransferCandidate[] }>();
 
-  for (const belt of state.belts) {
-    belt.lastFlow = round(belt.lastFlow * 0.8, 3);
-    belt.congestion = round((belt.congestion ?? 0) * 0.85, 3);
-    const source = state.entities.find((entity) => entity.id === belt.source);
-    const target = state.entities.find((entity) => entity.id === belt.target);
+  for (const belt of (lookup?.sortedBelts ?? state.belts)) {
+    if (skippedBeltIds?.has(belt.id)) continue;
+    const flowDecay = Math.pow(0.8, Math.max(0, seconds));
+    const congestionDecay = Math.pow(0.85, Math.max(0, seconds));
+    belt.lastFlow = round(belt.lastFlow * flowDecay, 3);
+    belt.congestion = round((belt.congestion ?? 0) * congestionDecay, 3);
+    const source = lookup?.entityById.get(belt.source) ?? state.entities.find((entity) => entity.id === belt.source);
+    const target = lookup?.entityById.get(belt.target) ?? state.entities.find((entity) => entity.id === belt.target);
     if (!source || !target || source.planetId !== target.planetId || belt.planetId !== source.planetId ||
-      !sourceProduces(source, belt.itemId) || !targetConsumes(state, target, belt.itemId)) {
-      belt.progress = 0;
-      continue;
-    }
-    const available = Math.floor((source.outputs[belt.itemId] ?? 0) -
-      stationReservedOutgoing(state, source.id, belt.itemId) + EPSILON);
-    if (available < 1 || targetFreeCapacity(state, target, belt.itemId, belt.targetPortIndex) < 1) {
+      !sourceProduces(source, belt.itemId) || !targetConsumes(state, target, belt.itemId, belt.targetPortIndex)) {
       belt.progress = 0;
       continue;
     }
     const capacity = getBeltCapacity(belt);
-    belt.progress = round((belt.progress ?? 0) + capacity * seconds);
+    if (seconds > 0) {
+      const currentCredit = Math.max(0, belt.progress ?? 0);
+      const creditLimit = normalizeBuildingBufferLimit(state.settings.beltBufferLimit);
+      belt.progress = round(currentCredit > creditLimit
+        ? currentCredit
+        : Math.min(creditLimit, currentCredit + capacity * seconds));
+    }
+    const available = Math.floor((source.outputs[belt.itemId] ?? 0) -
+      stationReservedOutgoing(state, source.id, belt.itemId, lookup) + EPSILON);
+    if (available < 1) {
+      if (!deferSourceDepletionReset) belt.progress = 0;
+      continue;
+    }
+    if (targetFreeCapacity(state, target, belt.itemId, belt.targetPortIndex, lookup) < 1) {
+      belt.progress = 0;
+      continue;
+    }
     const key = `${belt.source}:${belt.itemId}`;
     const group = groups.get(key) ?? { source, itemId: belt.itemId, candidates: [] };
-    group.candidates.push({ belt, target, allowance: Math.floor(belt.progress + EPSILON), moved: 0, capacity });
+    group.candidates.push({
+      belt,
+      target,
+      allowance: Math.min(Math.floor(belt.progress + EPSILON), allowanceCaps?.get(belt.id) ?? Number.MAX_SAFE_INTEGER),
+      moved: 0,
+      capacity,
+    });
     groups.set(key, group);
   }
 
   const receive = (candidate: BeltTransferCandidate, itemId: ItemId, amount: number): number => {
     const moved = Math.max(0, Math.floor(amount));
     if (moved < 1) return 0;
+    if (isQuantumStation(candidate.target) && quantumSupplySlot(candidate.target, itemId)) {
+      return receiveQuantumSupplyMaterial(state, candidate.target, itemId, moved);
+    }
     if (candidate.target.buildingId !== "micro_black_hole_connector") {
       candidate.target.inputs[itemId] = Math.floor((candidate.target.inputs[itemId] ?? 0) + moved);
       return moved;
@@ -3036,100 +3765,155 @@ function transferBelts(state: GameState, seconds: number): void {
     }
   };
 
-  const moveOne = (group: { source: FactoryEntity; itemId: ItemId }, candidate: BeltTransferCandidate) => {
-    if (candidate.allowance < 1 || targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex) < 1) return false;
-    if (receive(candidate, group.itemId, 1) !== 1) return false;
-    candidate.allowance -= 1;
-    candidate.moved += 1;
-    return true;
-  };
-
   for (const group of groups.values()) {
-    const reserved = stationReservedOutgoing(state, group.source.id, group.itemId);
+    const reserved = stationReservedOutgoing(state, group.source.id, group.itemId, lookup);
     let available = Math.floor((group.source.outputs[group.itemId] ?? 0) - reserved + EPSILON);
     const usable = (candidate: BeltTransferCandidate) => candidate.allowance > 0 &&
-      targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex) > 0;
+      targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex, lookup) > 0;
 
-    if (group.source.kind === "splitter") {
-      const distribute = (candidates: BeltTransferCandidate[]) => {
-        if (candidates.length === 0) return;
-        let cursor = group.source.routingCursor % candidates.length;
-        let stalled = 0;
-        while (available > 0 && stalled < candidates.length) {
-          const candidate = candidates[cursor];
-          cursor = (cursor + 1) % candidates.length;
-          if (moveOne(group, candidate)) {
-            available -= 1;
-            stalled = 0;
-          } else {
-            stalled += 1;
-          }
-        }
-        group.source.routingCursor = cursor;
-      };
-      if (group.source.distributionMode === "priority") {
-        for (const priority of [2, 1, 0] as const) {
-          distribute(group.candidates.filter((candidate) => candidate.belt.priority === priority && usable(candidate)));
+    const distributeFair = (requestedCandidates: BeltTransferCandidate[]) => {
+      const candidates = requestedCandidates.filter(usable).sort((left, right) => left.belt.id.localeCompare(right.belt.id));
+      if (candidates.length === 0) return;
+      let cursor = group.source.routingCursor % candidates.length;
+      while (available > 0) {
+        const active = candidates.filter(usable);
+        if (active.length === 0) break;
+        const rotated = [...active.slice(cursor % active.length), ...active.slice(0, cursor % active.length)];
+        const fairShare = Math.max(1, Math.floor(available / active.length));
+        let successful = 0;
+        for (const candidate of rotated) {
           if (available <= 0) break;
+          const requested = Math.min(
+            available,
+            fairShare,
+            candidate.allowance,
+            targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex, lookup),
+          );
+          const moved = receive(candidate, group.itemId, requested);
+          if (moved <= 0) continue;
+          candidate.allowance -= moved;
+          candidate.moved += moved;
+          available -= moved;
+          successful += 1;
+          cursor = (cursor + 1) % candidates.length;
         }
-      } else {
-        distribute(group.candidates.filter(usable));
+        if (successful === 0) break;
       }
+      group.source.routingCursor = cursor;
+    };
+
+    if (group.source.kind === "splitter" && group.source.distributionMode !== "priority") {
+      distributeFair(group.candidates);
     } else {
-      for (const candidate of [...group.candidates].sort((a, b) => b.belt.priority - a.belt.priority)) {
-        const requested = Math.min(available, candidate.allowance,
-          targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex));
-        const moved = receive(candidate, group.itemId, requested);
-        if (moved <= 0) continue;
-        candidate.allowance -= moved;
-        candidate.moved += moved;
-        available -= moved;
+      for (const priority of [2, 1, 0] as const) {
+        distributeFair(group.candidates.filter((candidate) => candidate.belt.priority === priority));
         if (available <= 0) break;
       }
     }
 
     group.source.outputs[group.itemId] = available + reserved;
     for (const candidate of group.candidates) {
-      candidate.belt.progress = available <= 0 ||
-        targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex) <= 0
+      candidate.belt.progress = (!deferSourceDepletionReset && available <= 0) ||
+        targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex, lookup) <= 0
         ? 0
         : round(Math.max(0, candidate.belt.progress - candidate.moved));
-      if (candidate.moved > 0 && seconds > 0) {
-        candidate.belt.lastFlow = round(Math.min(candidate.capacity, candidate.moved / seconds), 3);
+      if (candidate.moved > 0) {
+        if (flowWindowSeconds > 0) {
+          candidate.belt.lastFlow = round(Math.min(
+            candidate.capacity,
+            (seconds > 0 ? 0 : candidate.belt.lastFlow) + candidate.moved / flowWindowSeconds,
+          ), 3);
+        }
         candidate.belt.totalTransferred = Math.floor((candidate.belt.totalTransferred ?? 0) + candidate.moved);
       }
       const sourceWaiting = (group.source.outputs[group.itemId] ?? 0) > 0;
-      const targetBlocked = targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex) <= 0;
+      const targetBlocked = targetFreeCapacity(state, candidate.target, group.itemId, candidate.belt.targetPortIndex, lookup) <= 0;
       const load = candidate.capacity > EPSILON ? candidate.belt.lastFlow / candidate.capacity : 0;
       candidate.belt.congestion = round(Math.min(1, Math.max(load, sourceWaiting && targetBlocked ? 1 : 0)), 3);
     }
   }
 }
 
-function runMiners(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId): void {
+interface BeltStepOutputReservation {
+  allowanceByBelt: Map<string, number>;
+  outputCredits: Map<string, number>;
+}
+
+function reserveBeltStepOutputCapacity(
+  state: GameState,
+  lookup?: SimulationLookupContext,
+  skippedBeltIds?: ReadonlySet<string>,
+): BeltStepOutputReservation {
+  const allowanceByBelt = new Map<string, number>();
+  const outputCredits = new Map<string, number>();
+  const remainingTargetCapacity = new Map<string, number>();
+  const sortedBelts = lookup?.sortedBelts ?? [...state.belts].sort((left, right) => left.id.localeCompare(right.id));
+  for (const belt of sortedBelts) {
+    if (skippedBeltIds?.has(belt.id)) continue;
+    const source = lookup?.entityById.get(belt.source) ?? state.entities.find((entity) => entity.id === belt.source);
+    const target = lookup?.entityById.get(belt.target) ?? state.entities.find((entity) => entity.id === belt.target);
+    if (!source || !target || source.planetId !== target.planetId || belt.planetId !== source.planetId ||
+      !sourceProduces(source, belt.itemId) || !targetConsumes(state, target, belt.itemId, belt.targetPortIndex)) continue;
+    const allowance = Math.max(0, Math.floor(belt.progress + EPSILON));
+    if (allowance < 1) continue;
+    const targetKey = target.buildingId === "material_delivery_hub"
+      ? `tray:${target.planetId}:${belt.itemId}`
+      : target.buildingId === "micro_black_hole_connector"
+        ? `black-hole:${target.id}:${belt.targetPortIndex ?? -1}`
+        : `${target.id}:${belt.itemId}`;
+    const targetFree = remainingTargetCapacity.has(targetKey)
+      ? remainingTargetCapacity.get(targetKey)!
+      : targetFreeCapacity(state, target, belt.itemId, belt.targetPortIndex, lookup);
+    const reserved = Math.min(allowance, Math.max(0, Math.floor(targetFree)));
+    if (reserved < 1) continue;
+    allowanceByBelt.set(belt.id, reserved);
+    remainingTargetCapacity.set(targetKey, Math.max(0, targetFree - reserved));
+    const sourceKey = outputCapacityCreditKey(source.id, belt.itemId);
+    outputCredits.set(sourceKey, Math.min(
+      normalizeBuildingBufferLimit(state.settings.beltBufferLimit),
+      (outputCredits.get(sourceKey) ?? 0) + reserved,
+    ));
+  }
+  return { allowanceByBelt, outputCredits };
+}
+
+function runMiners(
+  state: GameState,
+  seconds: number,
+  power: PowerPlan,
+  planetId: PlanetId,
+  credits?: OutputCapacityCredits,
+  lookup?: SimulationLookupContext,
+  skippedEntityIds?: ReadonlySet<string>,
+): void {
   const researchedMiningSpeed = getMiningSpeedMultiplier(state);
   const profile = getPlanetIndustrialProfile(state, planetId);
-  for (const entity of state.entities) {
+  const entities = lookup ? (lookup.entitiesByPlanet.get(planetId) ?? []) : state.entities;
+  for (const entity of entities) {
     if (entity.planetId !== planetId || entity.kind !== "vein" || entity.minerCount <= 0 || !entity.resourceId) continue;
+    if (skippedEntityIds?.has(entity.id)) continue;
     const powerFactor = powerFactorForEntity(power, entity);
     entity.powerFactor = round(powerFactor, 4);
     const miner = extractorFor(entity);
-    const miningSpeed = (ITEMS[entity.resourceId].kind === "solid" ? researchedMiningSpeed : 1) * profile.miningMultiplier;
+    const miningSpeed = (ITEMS[entity.resourceId].kind === "solid"
+      ? researchedMiningSpeed
+      : getInfiniteResourceCollectionSpeedMultiplier(state)) * profile.miningMultiplier;
     const capacity = getEntityOutputCapacity(state, entity);
     const current = Math.floor((entity.outputs[entity.resourceId] ?? 0) + EPSILON);
-    const free = Math.max(0, capacity - current);
-    const finite = !isInfiniteResource(entity.resourceId, planetId, state.settings.resourceMode, state.galaxy);
-    const remaining = finite ? Math.max(0, Math.floor(entity.resourceRemaining ?? 0)) : Number.POSITIVE_INFINITY;
-    if (free < 1 || powerFactor <= EPSILON || remaining < 1) {
+    const free = Math.max(0, capacity - current) + outputCapacityCredit(credits, entity, entity.resourceId);
+    const finite = !isVeinInfiniteForState(state, entity);
+    const consumptionTenths = getVeinConsumptionTenths(state, entity.resourceId);
+    const outputAllowance = finite ? getFiniteVeinOutputAllowance(entity, consumptionTenths) : Number.POSITIVE_INFINITY;
+    if (free < 1 || powerFactor <= EPSILON || outputAllowance < 1) {
       entity.progress = 0;
       entity.utilization = 0;
       entity.productionRate = 0;
       continue;
     }
     entity.progress = round((entity.progress ?? 0) + miner.speed * miningSpeed * entity.minerCount * seconds * powerFactor);
-    const produced = Math.min(free, remaining, Math.floor(entity.progress + EPSILON));
+    const produced = Math.min(free, outputAllowance, Math.floor(entity.progress + EPSILON));
     entity.outputs[entity.resourceId] = current + produced;
-    if (finite) entity.resourceRemaining = Math.max(0, remaining - produced);
+    if (finite) consumeFiniteVeinReserve(entity, produced, consumptionTenths);
     entity.progress = produced >= free ? 0 : round(entity.progress - produced);
     entity.utilization = powerFactor;
     entity.productionRate = round(miner.speed * miningSpeed * entity.minerCount * powerFactor * 60, 2);
@@ -3194,11 +3978,21 @@ function dysonLaunchEnergyPerCycle(recipeId: RecipeId | undefined): number {
   return 0;
 }
 
-function runMachines(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId): void {
+function runMachines(
+  state: GameState,
+  seconds: number,
+  power: PowerPlan,
+  planetId: PlanetId,
+  credits?: OutputCapacityCredits,
+  lookup?: SimulationLookupContext,
+  skippedEntityIds?: ReadonlySet<string>,
+): void {
   const profile = getPlanetIndustrialProfile(state, planetId);
-  for (const entity of state.entities) {
+  const entities = lookup ? (lookup.entitiesByPlanet.get(planetId) ?? []) : state.entities;
+  for (const entity of entities) {
     const recipe = getRecipe(entity.recipeId);
     if (entity.planetId !== planetId || entity.kind !== "machine" || entity.buildingId === "ray_receiver" || !entity.buildingId || !recipe) continue;
+    if (skippedEntityIds?.has(entity.id)) continue;
     entity.powerFactor = power.factorByEntity.has(entity.id)
       ? round(power.factorByEntity.get(entity.id)!, 4)
       : undefined;
@@ -3220,8 +4014,16 @@ function runMachines(state: GameState, seconds: number, power: PowerPlan, planet
       entity.productionRate = 0;
       continue;
     }
+    const targetDysonOrbitId = recipe.id === "solar_sail_launch"
+      ? getEjectorOrbitTargetStatus(state, entity).orbit?.id
+      : undefined;
+    if (recipe.id === "solar_sail_launch" && !targetDysonOrbitId) {
+      entity.utilization = 0;
+      entity.productionRate = 0;
+      continue;
+    }
     const fullInputCycles = Math.floor(availableInputCycles(state, entity) + EPSILON);
-    const fullOutputCycles = Math.floor(availableOutputCycles(state, entity) + EPSILON);
+    const fullOutputCycles = Math.floor(availableOutputCycles(state, entity, credits) + EPSILON);
     const maximumCycles = Math.min(fullInputCycles, fullOutputCycles);
     const sprayedCycleLimit = availableFullProliferatorCycles(entity, recipe);
     const progressAtStart = entity.progress ?? 0;
@@ -3291,7 +4093,9 @@ function runMachines(state: GameState, seconds: number, power: PowerPlan, planet
         entity.inputs[input.itemId] = Math.max(0, Math.floor((entity.inputs[input.itemId] ?? 0) - input.amount * cycles));
       }
       consumeProliferatorPoints(entity, recipe, sprayedCycles);
-      if (recipe.id === "solar_sail_launch" && cycles > 0) launchDysonSails(state, getPlanet(entity.planetId).systemId, cycles);
+      if (recipe.id === "solar_sail_launch" && cycles > 0) {
+        launchDysonSails(state, getPlanet(entity.planetId).systemId, targetDysonOrbitId!, cycles);
+      }
       if (recipe.id === "carrier_rocket_launch" && cycles > 0) {
         launchDysonStructure(state, getPlanet(entity.planetId).systemId, cycles);
       }
@@ -3329,8 +4133,10 @@ function runRayReceivers(
   seconds: number,
   reception: DysonReceptionPlan,
   planetId: PlanetId,
+  credits?: OutputCapacityCredits,
+  entities = state.entities,
 ): void {
-  for (const entity of state.entities) {
+  for (const entity of entities) {
     if (entity.planetId !== planetId || entity.kind !== "machine" || entity.buildingId !== "ray_receiver") continue;
     const recipe = getRecipe(entity.recipeId);
     const allocationKw = reception.allocationByEntity.get(entity.id) ?? 0;
@@ -3352,7 +4158,7 @@ function runRayReceivers(
     const cyclesPerSecond = building.speed * entity.machineCount / recipe.duration;
     const efficiency = reception.efficiencyByEntity.get(entity.id) ?? 0;
     const potentialCycles = cyclesPerSecond * seconds * efficiency;
-    const maximumCycles = Math.floor(availableOutputCycles(state, entity) + EPSILON);
+    const maximumCycles = Math.floor(availableOutputCycles(state, entity, credits) + EPSILON);
     if (maximumCycles < 1 || potentialCycles <= EPSILON) continue;
     const work = Math.min(potentialCycles, Math.max(0, maximumCycles - entity.progress));
     entity.progress = round(entity.progress + work, 6);
@@ -3376,7 +4182,7 @@ function resetStationRuntime(state: GameState): void {
   }
 }
 
-function runOrbitalCollectors(state: GameState, seconds: number): void {
+function runOrbitalCollectors(state: GameState, seconds: number, credits?: OutputCapacityCredits): void {
   for (const collector of state.entities.filter((entity) => entity.buildingId === "orbital_collector")) {
     const yields = getPlanetOrbitalYields(state, collector.planetId);
     const itemId = collector.storedItemId && (yields[collector.storedItemId] ?? 0) > 0
@@ -3386,13 +4192,14 @@ function runOrbitalCollectors(state: GameState, seconds: number): void {
     collector.stationMode = "supply";
     const capacity = getEntityOutputCapacity(state, collector);
     const current = Math.floor((collector.outputs[itemId] ?? 0) + EPSILON);
-    const free = Math.max(0, capacity - current);
+    const free = Math.max(0, capacity - current) + outputCapacityCredit(credits, collector, itemId);
     if (free < 1) {
       collector.progress = 0;
       continue;
     }
     const profile = getPlanetIndustrialProfile(state, collector.planetId);
-    const rate = (yields[itemId] ?? 0) * collector.machineCount * profile.orbitalYieldMultiplier;
+    const rate = (yields[itemId] ?? 0) * collector.machineCount * profile.orbitalYieldMultiplier *
+      getInfiniteResourceCollectionSpeedMultiplier(state);
     collector.progress = round((collector.progress ?? 0) + rate * seconds, 6);
     const produced = Math.min(free, Math.floor(collector.progress + EPSILON));
     collector.outputs[itemId] = current + produced;
@@ -3429,6 +4236,10 @@ function addRouteToLookup(lookup: SimulationLookupContext, demand: FactoryEntity
     const active = lookup.activeRoutesByStation.get(stationId);
     if (active) active.push({ demand, route });
     else lookup.activeRoutesByStation.set(stationId, [{ demand, route }]);
+    lookup.activeRouteVehicleLoadByStation.set(
+      stationId,
+      (lookup.activeRouteVehicleLoadByStation.get(stationId) ?? 0) + route.vehicleCount,
+    );
   }
 }
 
@@ -3437,9 +4248,25 @@ function rebuildDynamicRouteLookup(state: GameState, lookup: SimulationLookupCon
   lookup.reservedOutgoing.clear();
   lookup.inFlightCargo.clear();
   lookup.activeRoutesByStation.clear();
+  lookup.activeRouteVehicleLoadByStation.clear();
   for (const demand of state.entities) {
     for (const route of demand.stationRoutes ?? []) addRouteToLookup(lookup, demand, route);
   }
+  lookup.dynamicRouteLookupDirty = false;
+}
+
+function ensureDynamicRouteLookup(state: GameState, lookup: SimulationLookupContext): void {
+  if (!lookup.dynamicRouteLookupDirty) return;
+  rebuildDynamicRouteLookup(state, lookup);
+}
+
+function refreshRouteEnvironment(state: GameState, lookup: SimulationLookupContext): void {
+  const nextKey = routeEnvironmentKey(state);
+  if (lookup.routeEnvironmentKey === nextKey) return;
+  lookup.routeEnvironmentKey = nextKey;
+  lookup.stationPeerMatches.clear();
+  lookup.routeEconomics.clear();
+  lookup.interstellarPaths.clear();
 }
 
 function stationBusyVehicles(state: GameState, station: FactoryEntity, scope: StationLogisticsScope, lookup?: SimulationLookupContext): number {
@@ -3595,9 +4422,23 @@ function diagnoseStationFleetScope(state: GameState, station: FactoryEntity, sco
 export function getStationFleetDiagnostic(state: GameState, stationId: string): StationFleetDiagnostic | null {
   const station = state.entities.find((entity) => entity.id === stationId && entity.kind === "station" && entity.buildingId !== "orbital_collector");
   if (!station) return null;
+  const vesselCapacity = getStationVesselCapacity(station);
+  const installedVessels = stationInstalledVehicles(station, "remote");
+  const busyVessels = stationBusyVehicles(state, station, "remote");
   return {
     drones: diagnoseStationFleetScope(state, station, "local"),
-    vessels: diagnoseStationFleetScope(state, station, "remote"),
+    vessels: isTraditionalStationScopeDisabled(station, "remote")
+      ? {
+        installed: installedVessels,
+        capacity: vesselCapacity,
+        busy: busyVessels,
+        available: Math.max(0, installedVessels - busyVessels),
+        blocked: 0,
+        blockerCode: "none",
+        blockerLabel: busyVessels > 0 ? `旧星际航线尾货返航中 · ${busyVessels} 艘` : "量子跨星模式不使用运输船",
+        affectedSlotIndices: [],
+      }
+      : diagnoseStationFleetScope(state, station, "remote"),
   };
 }
 
@@ -3652,18 +4493,11 @@ function dispatchStationScope(
   lookup?: SimulationLookupContext,
   profiler?: SimulationProfiler,
 ): void {
-  const runtimeLookup = lookup ?? {
-    entityById: new Map(state.entities.map((entity) => [entity.id, entity])),
-    stationSlotsByKey: new Map(),
-    busyVehicles: new Map(),
-    reservedOutgoing: new Map(),
-    inFlightCargo: new Map(),
-    activeRoutesByStation: new Map(),
-    routeEconomics: new Map(),
-  } satisfies SimulationLookupContext;
+  const runtimeLookup = lookup ?? createSimulationLookupContext(state, profiler);
   if (!lookup) rebuildDynamicRouteLookup(state, runtimeLookup);
   const demands = state.entities.filter((entity) => {
     if (entity.kind !== "station" || entity.buildingId === "orbital_collector") return false;
+    if (isElevatorStation(entity) || isTraditionalStationScopeDisabled(entity, scope)) return false;
     if (scope === "remote" && entity.buildingId !== "interstellar_logistics_station") return false;
     return getStationSlots(entity).some((slot) => stationSlotMode(entity, slot, scope) === "demand" && slot.itemId);
   });
@@ -3679,17 +4513,26 @@ function dispatchStationScope(
       : orderedSlots;
     for (const { slot, slotIndex } of rotated) {
       if (!slot.itemId) continue;
+      if (profiler) profiler.dispatchSlotChecks += 1;
       const fairnessKey = `${scope}:${slotIndex}`;
       const lastPeerId = demand.stationLastSupplyPeerBySlot?.[fairnessKey];
-      const matches = findStationSlotPeers(state, demand, slotIndex, scope, runtimeLookup, profiler)
-        .sort((left, right) => {
-          const leftSlot = left.peer.buildingId === "orbital_collector" ? emptyStationSlot() : getStationSlots(left.peer)[left.peerSlotIndex];
-          const rightSlot = right.peer.buildingId === "orbital_collector" ? emptyStationSlot() : getStationSlots(right.peer)[right.peerSlotIndex];
-          const priorityOrder = (rightSlot?.priority ?? 1) - (leftSlot?.priority ?? 1);
+      const matches = findStationSlotPeers(state, demand, slotIndex, scope, runtimeLookup, profiler);
+      const dispatchResult: StationDispatchSlotResult = {
+        hasMatchingPeer: matches.length > 0,
+        routesCreated: 0,
+        cargoDispatched: 0,
+      };
+      runtimeLookup.dispatchResultsBySlot.set(stationDispatchSlotKey(demand.id, slotIndex, scope), dispatchResult);
+      const orderedMatches = matches.map((match) => ({
+        ...match,
+        priority: match.peer.buildingId === "orbital_collector"
+          ? 1
+          : getStationSlots(match.peer)[match.peerSlotIndex]?.priority ?? 1,
+        activeVehicleLoad: runtimeLookup.activeRouteVehicleLoadByStation.get(match.peer.id) ?? 0,
+      })).sort((left, right) => {
+          const priorityOrder = right.priority - left.priority;
           if (priorityOrder !== 0) return priorityOrder;
-          const leftLoad = stationActiveRoutes(state, left.peer, runtimeLookup).reduce((sum, entry) => sum + entry.route.vehicleCount, 0);
-          const rightLoad = stationActiveRoutes(state, right.peer, runtimeLookup).reduce((sum, entry) => sum + entry.route.vehicleCount, 0);
-          if (leftLoad !== rightLoad) return leftLoad - rightLoad;
+          if (left.activeVehicleLoad !== right.activeVehicleLoad) return left.activeVehicleLoad - right.activeVehicleLoad;
           if (lastPeerId) {
             const leftAfter = left.peer.id.localeCompare(lastPeerId) > 0 ? 0 : 1;
             const rightAfter = right.peer.id.localeCompare(lastPeerId) > 0 ? 0 : 1;
@@ -3697,13 +4540,15 @@ function dispatchStationScope(
           }
           return left.peer.id.localeCompare(right.peer.id);
         });
-      for (const { peer: supply, peerSlotIndex } of matches) {
+      for (const { peer: supply, peerSlotIndex } of orderedMatches) {
         const supplySlot = supply.buildingId === "orbital_collector"
           ? { ...emptyStationSlot(), itemId: supply.storedItemId, remoteMode: "supply" as const }
           : ensureStationSlots(supply)[peerSlotIndex];
         const sourcePlan = powerByPlanet.get(supply.planetId);
         const targetPlan = powerByPlanet.get(demand.planetId);
-        const sourcePower = sourcePlan?.factorByEntity.get(supply.id) ?? sourcePlan?.factor ?? 0;
+        const sourcePower = supply.buildingId === "orbital_collector"
+          ? 1
+          : sourcePlan?.factorByEntity.get(supply.id) ?? sourcePlan?.factor ?? 0;
         const targetPower = targetPlan?.factorByEntity.get(demand.id) ?? targetPlan?.factor ?? 0;
         const requiresWarp = scope === "remote" && stationRouteRequiresWarp(demand, supply);
         const economics = scope === "remote" ? getCachedInterstellarRouteEconomics(state, supply, demand, 1, {
@@ -3731,8 +4576,11 @@ function dispatchStationScope(
           const available = Math.max(0, Math.floor((supply.outputs[itemId] ?? 0) - supplySlot.minStock -
             stationReservedOutgoing(state, supply.id, itemId, runtimeLookup) + EPSILON));
           const demandCapacity = getStationSlotCapacity(state, demand, slot);
-          const free = Math.max(0, Math.floor(demandCapacity - (demand.outputs[itemId] ?? 0) -
-            stationInFlightCargo(demand, itemId, runtimeLookup) + EPSILON));
+          const free = quantumSupplySlot(demand, itemId)
+            ? Math.max(0, Math.floor(quantumSupplyFreeCapacity(state, demand, itemId, runtimeLookup) -
+              stationInFlightCargo(demand, itemId, runtimeLookup) + EPSILON))
+            : Math.max(0, Math.floor(demandCapacity - (demand.outputs[itemId] ?? 0) -
+              stationInFlightCargo(demand, itemId, runtimeLookup) + EPSILON));
           const unitCargo = scope === "local" ? getPlanetaryCargoCapacity(state) : getInterstellarCargoCapacity(state);
           const ownerSlotIndex = owner.id === demand.id ? slotIndex : peerSlotIndex;
           const minimumCargo = getStationMinimumCargo(state, owner, ownerSlotIndex, scope);
@@ -3771,6 +4619,8 @@ function dispatchStationScope(
           };
           demand.stationRoutes!.push(route);
           addRouteToLookup(runtimeLookup, demand, route);
+          dispatchResult.routesCreated += 1;
+          dispatchResult.cargoDispatched += cargo;
           if (profiler) profiler.routesCreated += 1;
           state.nextId += 1;
           if (requiresWarp) owner.stationWarpers = warpAvailable - dispatchable * (dispatchedEconomics?.warpersPerVessel ?? 1);
@@ -3807,7 +4657,9 @@ function advanceStationRoutes(
       const sourcePlan = peer ? powerByPlanet.get(peer.planetId) : undefined;
       const targetPlan = powerByPlanet.get(demand.planetId);
       const ownerPlan = powerByPlanet.get(vehicleOwner.planetId);
-      const sourcePower = peer ? sourcePlan?.factorByEntity.get(peer.id) ?? sourcePlan?.factor ?? 0 : 1;
+      const sourcePower = peer?.buildingId === "orbital_collector"
+        ? 1
+        : peer ? sourcePlan?.factorByEntity.get(peer.id) ?? sourcePlan?.factor ?? 0 : 1;
       const targetPower = targetPlan?.factorByEntity.get(demand.id) ?? targetPlan?.factor ?? 0;
       const ownerPower = ownerPlan?.factorByEntity.get(vehicleOwner.id) ?? ownerPlan?.factor ?? 0;
       const hubPower = (route.waypointStationIds ?? []).reduce((factor, stationId) => {
@@ -3824,14 +4676,24 @@ function advanceStationRoutes(
         remaining.push(route);
         continue;
       }
-      demand.outputs[route.itemId] = Math.floor((demand.outputs[route.itemId] ?? 0) + route.cargo);
-      if (peer) peer.outputs[route.itemId] = Math.max(0, Math.floor((peer.outputs[route.itemId] ?? 0) - route.cargo));
+      let deliveredCargo = route.cargo;
+      if (scope === "local" && isQuantumStation(demand) && quantumSupplySlot(demand, route.itemId)) {
+        const received = receiveQuantumSupplyMaterial(state, demand, route.itemId, route.cargo);
+        deliveredCargo = received;
+        if (received < route.cargo) {
+          remaining.push({ ...route, progress: 1, cargo: route.cargo - received });
+        }
+      } else {
+        demand.outputs[route.itemId] = Math.floor((demand.outputs[route.itemId] ?? 0) + route.cargo);
+      }
+      if (peer && deliveredCargo > 0) peer.outputs[route.itemId] = Math.max(0, Math.floor((peer.outputs[route.itemId] ?? 0) - deliveredCargo));
       demand.stationTrips = Math.floor((demand.stationTrips ?? 0) + route.vehicleCount);
-      demand.stationLastTransfer = route.cargo;
-      completedCargo += route.cargo;
+      demand.stationLastTransfer = deliveredCargo;
+      completedCargo += deliveredCargo;
+      if (lookup) lookup.dynamicRouteLookupDirty = true;
       if (peer) {
         peer.stationTrips = Math.floor((peer.stationTrips ?? 0) + route.vehicleCount);
-        peer.stationLastTransfer = route.cargo;
+        peer.stationLastTransfer = deliveredCargo;
       }
     }
     demand.stationRoutes = remaining;
@@ -3842,11 +4704,26 @@ function advanceStationRoutes(
 
 function updateStationCongestion(state: GameState, lookup?: SimulationLookupContext, profiler?: SimulationProfiler): void {
   for (const station of state.entities.filter((entity) => entity.kind === "station" && entity.buildingId !== "orbital_collector")) {
+    if (isElevatorStation(station)) continue;
+    const candidateScopes: StationLogisticsScope[] = station.buildingId === "interstellar_logistics_station"
+      ? ["local", "remote"]
+      : ["local"];
+    const scopes = candidateScopes.filter((scope) => !isTraditionalStationScopeDisabled(station, scope));
+    if (scopes.length === 0) continue;
     const slots = ensureStationSlots(station);
-    const waiting = slots.filter((slot, slotIndex) => slot.itemId && (["local", "remote"] as StationLogisticsScope[]).some((scope) =>
-      stationSlotMode(station, slot, scope) === "demand" && findStationSlotPeer(state, station, slotIndex, scope, lookup, profiler))).length;
-    const installed = getStationDroneCapacity(station) + getStationVesselCapacity(station);
-    const busy = stationBusyVehicles(state, station, "local", lookup) + stationBusyVehicles(state, station, "remote", lookup);
+    const waiting = slots.filter((slot, slotIndex) => slot.itemId && scopes.some((scope) => {
+      if (stationSlotMode(station, slot, scope) !== "demand") return false;
+      const dispatched = lookup?.dispatchResultsBySlot.get(stationDispatchSlotKey(station.id, slotIndex, scope));
+      if (dispatched) {
+        if (profiler) profiler.congestionDispatchReuseHits += 1;
+        return dispatched.hasMatchingPeer;
+      }
+      return Boolean(findStationSlotPeer(state, station, slotIndex, scope, lookup, profiler));
+    })).length;
+    const installed = scopes.reduce((sum, scope) => sum + (scope === "local"
+      ? getStationDroneCapacity(station)
+      : getStationVesselCapacity(station)), 0);
+    const busy = scopes.reduce((sum, scope) => sum + stationBusyVehicles(state, station, scope, lookup), 0);
     const fleetLoad = installed > 0 ? busy / installed : waiting > 0 ? 1 : 0;
     station.stationCongestion = round(Math.min(1, Math.max(fleetLoad, waiting > 0 && busy === 0 ? 0.35 : 0)), 3);
     const activeRoutes = stationActiveRoutes(state, station, lookup).map(({ route }) => route);
@@ -3856,19 +4733,68 @@ function updateStationCongestion(state: GameState, lookup?: SimulationLookupCont
   }
 }
 
-function refillStationWarpersFromPlanetTrays(state: GameState): void {
+export interface StationWarperRefillSnapshot {
+  loaded: number;
+  target: number;
+  capacity: number;
+  inputAvailable: number;
+  outputStored: number;
+  outputReserved: number;
+  outputAvailable: number;
+  trayAvailable: number;
+  blocker: "technology-locked" | "disabled" | "target-met" | "capacity-full" | "stock-empty" | "ready";
+}
+
+export function getStationWarperRefillSnapshot(state: GameState, stationId: string): StationWarperRefillSnapshot | null {
+  const station = state.entities.find((entity) => entity.id === stationId && entity.buildingId === "interstellar_logistics_station");
+  if (!station) return null;
+  const loaded = Math.max(0, Math.floor(station.stationWarpers ?? 0));
+  const target = getStationWarperAutoRefillTarget(station);
+  const capacity = getStationWarperCapacity(station);
+  const inputAvailable = Math.max(0, Math.floor(station.inputs.space_warper ?? 0));
+  const outputStored = Math.max(0, Math.floor(station.outputs.space_warper ?? 0));
+  const outputReserved = Math.min(outputStored, Math.max(0, Math.floor(stationReservedOutgoing(state, station.id, "space_warper"))));
+  const outputAvailable = Math.max(0, outputStored - outputReserved);
+  const trayAvailable = Math.max(0, Math.floor(trayForPlanet(state, station.planetId).space_warper ?? 0));
+  const blocker = !isTechnologyCompleted(state, "space_warp")
+    ? "technology-locked"
+    : !station.stationWarperAutoRefill
+      ? "disabled"
+      : loaded >= capacity
+        ? "capacity-full"
+        : loaded >= target
+          ? "target-met"
+          : inputAvailable + outputAvailable + trayAvailable < 1 ? "stock-empty" : "ready";
+  return { loaded, target, capacity, inputAvailable, outputStored, outputReserved, outputAvailable, trayAvailable, blocker };
+}
+
+export function refillStationWarpers(state: GameState): void {
   if (!isTechnologyCompleted(state, "space_warp")) return;
   for (const station of state.entities) {
-    if (station.buildingId !== "interstellar_logistics_station" || !station.stationWarperAutoRefill) continue;
-    const loaded = Math.max(0, Math.floor(station.stationWarpers ?? 0));
-    const target = getStationWarperAutoRefillTarget(station);
-    if (loaded >= target) continue;
+    if (station.buildingId !== "interstellar_logistics_station" ||
+      isTraditionalStationScopeDisabled(station, "remote") || !station.stationWarperAutoRefill) continue;
+    const snapshot = getStationWarperRefillSnapshot(state, station.id)!;
+    let needed = Math.max(0, Math.min(snapshot.target, snapshot.capacity) - snapshot.loaded);
+    if (needed < 1) continue;
+    const fromInput = Math.min(needed, snapshot.inputAvailable);
+    if (fromInput > 0) {
+      station.inputs.space_warper = snapshot.inputAvailable - fromInput;
+      station.stationWarpers = snapshot.loaded + fromInput;
+      needed -= fromInput;
+    }
+    const fromOutput = Math.min(needed, snapshot.outputAvailable);
+    if (fromOutput > 0) {
+      station.outputs.space_warper = snapshot.outputStored - fromOutput;
+      station.stationWarpers = Math.max(0, Math.floor(station.stationWarpers ?? 0)) + fromOutput;
+      needed -= fromOutput;
+    }
+    if (needed < 1) continue;
     const tray = trayForPlanet(state, station.planetId);
-    const available = Math.max(0, Math.floor(tray.space_warper ?? 0));
-    const moved = Math.min(target - loaded, available);
-    if (moved < 1) continue;
-    station.stationWarpers = loaded + moved;
-    tray.space_warper = available - moved;
+    const fromTray = Math.min(needed, snapshot.trayAvailable);
+    if (fromTray > 0) {
+      tray.space_warper = snapshot.trayAvailable - fromTray;
+      station.stationWarpers = Math.max(0, Math.floor(station.stationWarpers ?? 0)) + fromTray;
+    }
   }
 }
 
@@ -3890,27 +4816,249 @@ function prepareTimeWarpStep(state: GameState): void {
   }
 }
 
-function simulateStep(state: GameState, seconds: number, lookup?: SimulationLookupContext, profiler?: SimulationProfiler): void {
+interface QuantumBoundaryFlow {
+  boundarySecond: number;
+  uploaded: Partial<Record<ItemId, DecimalIntegerString>>;
+  downloaded: Partial<Record<ItemId, DecimalIntegerString>>;
+  globalUploadPerMinute: number;
+  globalDownloadPerMinute: number;
+  quantumTowerStacks: number;
+  quantumCollectorStacks: number;
+}
+
+function quantumBoundaryCapacity(perMinute: number, seconds: number): number {
+  if (!Number.isFinite(perMinute) || perMinute <= 0 || !Number.isFinite(seconds) || seconds <= 0) return 0;
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(perMinute * seconds / 60)));
+}
+
+function addQuantumBoundaryFlow(
+  record: Partial<Record<ItemId, DecimalIntegerString>>,
+  itemId: ItemId,
+  amount: number,
+): void {
+  if (amount < 1) return;
+  record[itemId] = addQuantumInteger(record[itemId], Math.floor(amount));
+}
+
+function createQuantumBoundaryFlow(state: GameState, boundarySecond: number): QuantumBoundaryFlow {
+  const level = state.endgame.infiniteResearch.galactic_logistics?.level ?? 0;
+  const bandwidth = getQuantumBandwidthSummary(state.entities, level);
+  const existing = state.quantumLogisticsNetwork?.runtimeFlow;
+  return {
+    boundarySecond,
+    uploaded: existing?.boundarySecond === boundarySecond ? { ...existing.uploaded } : {},
+    downloaded: {},
+    globalUploadPerMinute: bandwidth.globalUploadPerMinute,
+    globalDownloadPerMinute: bandwidth.globalDownloadPerMinute,
+    quantumTowerStacks: bandwidth.activeTowerStacks,
+    quantumCollectorStacks: state.entities.reduce((sum, entity) =>
+      sum + (isQuantumCollector(entity) ? Math.max(0, Math.floor(entity.machineCount)) : 0), 0),
+  };
+}
+
+/** Download before output belts so a demand tower can use reserved line space. */
+function settleQuantumNetworkDownloads(
+  state: GameState,
+  credits: OutputCapacityCredits,
+  boundarySecond: number,
+  seconds = QUANTUM_SETTLEMENT_SECONDS,
+  profiler?: SimulationProfiler,
+): QuantumBoundaryFlow | null {
+  if (!state.quantumLogisticsNetwork?.enabled) return null;
+  const flow = createQuantumBoundaryFlow(state, boundarySecond);
+  const stations = state.entities.filter(isQuantumStation);
+  const stationById = new Map(stations.map((station) => [station.id, station]));
+  const requestByStationItem = new Map<string, QuantumSettlementOutput>();
+  for (const station of stations) {
+    for (const slot of getStationSlots(station)) {
+      if (!slot.itemId || slot.remoteMode !== "demand") continue;
+      const current = Math.max(0, Math.floor(station.outputs[slot.itemId] ?? 0));
+      const localCapacity = Math.max(0, Math.floor(getStationSlotCapacity(state, station, slot)));
+      const incoming = stationInFlightCargo(station, slot.itemId);
+      const localFree = Math.max(0, localCapacity - current - incoming);
+      // Existing over-capacity stock must drain instead of being backfilled.
+      const directThrough = current <= localCapacity ? outputCapacityCredit(credits, station, slot.itemId) : 0;
+      const capacity = Math.min(Number.MAX_SAFE_INTEGER, localFree + directThrough);
+      if (capacity < 1) continue;
+      const key = `${station.id}:${slot.itemId}`;
+      const existing = requestByStationItem.get(key);
+      if (!existing || (slot.priority ?? 1) > (existing.priority ?? 1)) {
+        requestByStationItem.set(key, {
+          key,
+          stationId: station.id,
+          itemId: slot.itemId,
+          requested: capacity,
+          capacity,
+          priority: slot.priority,
+        });
+      }
+    }
+  }
+  const outputs = [...requestByStationItem.values()];
+  if (profiler) {
+    profiler.quantumStationCount += stations.length;
+    profiler.quantumRequestCount += outputs.length;
+  }
+  const result = settleQuantumLogisticsNetwork(state.quantumLogisticsNetwork, [], outputs, {
+    seconds,
+    globalDownloadCap: quantumBoundaryCapacity(flow.globalDownloadPerMinute, seconds),
+  });
+  state.quantumLogisticsNetwork = result.state;
+  // Keep the runtime flow object attached to the post-settlement network so
+  // same-step local drone deliveries can append their immediate uploads.
+  state.quantumLogisticsNetwork.runtimeFlow = flow;
+  for (const request of outputs) {
+    const station = stationById.get(request.stationId);
+    if (!station) continue;
+    const delivered = Math.max(0, Math.floor(Number(result.outputDelivered[request.key] ?? "0")));
+    if (delivered < 1) continue;
+    station.outputs[request.itemId] = Math.floor((station.outputs[request.itemId] ?? 0) + delivered);
+    station.stationLastTransfer = delivered;
+    station.productionRate += seconds > EPSILON ? delivered * 60 / seconds : 0;
+    addQuantumBoundaryFlow(flow.downloaded, request.itemId, delivered);
+  }
+  return flow;
+}
+
+/** Upload after legacy routes advance so handoff tails keep their old owner. */
+function settleQuantumNetworkUploads(
+  state: GameState,
+  boundarySecond: number,
+  previousFlow: QuantumBoundaryFlow | null,
+  seconds = QUANTUM_SETTLEMENT_SECONDS,
+  lookup?: SimulationLookupContext,
+  profiler?: SimulationProfiler,
+): void {
+  if (!state.quantumLogisticsNetwork?.enabled) return;
+  const flow = previousFlow ?? createQuantumBoundaryFlow(state, boundarySecond);
+  if (state.quantumLogisticsNetwork.runtimeFlow && state.quantumLogisticsNetwork.runtimeFlow !== flow) {
+    for (const [itemId, amount] of Object.entries(state.quantumLogisticsNetwork.runtimeFlow.uploaded)) {
+      addQuantumBoundaryFlow(flow.uploaded, itemId as ItemId, Number(amount));
+    }
+  }
+  state.quantumLogisticsNetwork.runtimeFlow = flow;
+  // Attachment may have completed after the download phase. Refresh the
+  // shared budget before accepting supply, without granting collectors any
+  // separate bandwidth of their own.
+  const bandwidth = getQuantumBandwidthSummary(state.entities, state.endgame.infiniteResearch.galactic_logistics?.level ?? 0);
+  flow.globalUploadPerMinute = bandwidth.globalUploadPerMinute;
+  flow.globalDownloadPerMinute = bandwidth.globalDownloadPerMinute;
+  flow.quantumTowerStacks = bandwidth.activeTowerStacks;
+  flow.quantumCollectorStacks = state.entities.reduce((sum, entity) =>
+    sum + (isQuantumCollector(entity) ? Math.max(0, Math.floor(entity.machineCount)) : 0), 0);
+
+  const endpoints = state.entities.filter((entity) => isQuantumStation(entity) || isQuantumCollector(entity));
+  const endpointById = new Map(endpoints.map((endpoint) => [endpoint.id, endpoint]));
+  // Existing tower buffers are an overflow path only. Drain them directly
+  // before building the legacy boundary requests so newly freed inventory is
+  // never throttled by the five-second upload budget.
+  for (const endpoint of endpoints) {
+    if (!isQuantumStation(endpoint)) continue;
+    for (const slot of getStationSlots(endpoint)) {
+      if (slot.itemId && slot.remoteMode === "supply") flushQuantumSupplyBuffer(state, endpoint, slot.itemId, lookup);
+    }
+  }
+  const requestByEndpointItem = new Map<string, QuantumSettlementInput>();
+  for (const endpoint of endpoints) {
+    if (isQuantumCollector(endpoint)) {
+      const itemId = endpoint.storedItemId;
+      const available = itemId ? Math.max(0, Math.floor(endpoint.outputs[itemId] ?? 0)) : 0;
+      if (itemId && available > 0) {
+        const key = `${endpoint.id}:${itemId}`;
+        requestByEndpointItem.set(key, { key, stationId: endpoint.id, itemId, requested: available, priority: 1 });
+      }
+      continue;
+    }
+    for (const slot of getStationSlots(endpoint)) {
+      if (!slot.itemId || slot.remoteMode !== "supply") continue;
+      const reserved = stationReservedOutgoing(state, endpoint.id, slot.itemId);
+      const available = Math.max(0, Math.floor((endpoint.outputs[slot.itemId] ?? 0) - slot.minStock - reserved));
+      if (available < 1) continue;
+      const key = `${endpoint.id}:${slot.itemId}`;
+      const existing = requestByEndpointItem.get(key);
+      if (!existing || (slot.priority ?? 1) > (existing.priority ?? 1)) {
+        requestByEndpointItem.set(key, {
+          key,
+          stationId: endpoint.id,
+          itemId: slot.itemId,
+          requested: available,
+          priority: slot.priority,
+        });
+      }
+    }
+  }
+  const inputs = [...requestByEndpointItem.values()];
+  if (profiler) profiler.quantumRequestCount += inputs.length;
+  const result = settleQuantumLogisticsNetwork(state.quantumLogisticsNetwork, inputs, [], {
+    seconds,
+    globalUploadCap: quantumBoundaryCapacity(flow.globalUploadPerMinute, seconds),
+  });
+  state.quantumLogisticsNetwork = result.state;
+  for (const request of inputs) {
+    const endpoint = endpointById.get(request.stationId);
+    if (!endpoint) continue;
+    const accepted = Math.max(0, Math.floor(Number(result.inputAccepted[request.key] ?? "0")));
+    if (accepted < 1) continue;
+    endpoint.outputs[request.itemId] = Math.max(0, Math.floor(endpoint.outputs[request.itemId] ?? 0) - accepted);
+    endpoint.stationLastTransfer = accepted;
+    addQuantumBoundaryFlow(flow.uploaded, request.itemId, accepted);
+  }
+  state.quantumLogisticsNetwork.runtimeFlow = flow;
+}
+
+function simulateStep(
+  state: GameState,
+  seconds: number,
+  lookup?: SimulationLookupContext,
+  profiler?: SimulationProfiler,
+  batchPowerStorage = true,
+  batchConstructionAutomation = true,
+  contractExperiment?: SimulationContractExperiment,
+): void {
+  const elapsedBeforeStep = state.elapsedSeconds;
+  const projectedElapsed = round(elapsedBeforeStep + seconds);
+  const firstHubBoundary = Math.floor(elapsedBeforeStep / SYSTEM_HUB_SETTLEMENT_SECONDS) + 1;
+  const lastHubBoundary = Math.floor(projectedElapsed / SYSTEM_HUB_SETTLEMENT_SECONDS);
+  const quantumBoundarySecond = firstHubBoundary <= lastHubBoundary
+    ? firstHubBoundary * SYSTEM_HUB_SETTLEMENT_SECONDS
+    : null;
+  let quantumBoundaryFlow: QuantumBoundaryFlow | null = null;
   prepareTimeWarpStep(state);
-  if (lookup) rebuildDynamicRouteLookup(state, lookup);
+  if (lookup) ensureDynamicRouteLookup(state, lookup);
   advanceExplorationMissions(state, seconds);
+  let subsystemStartedAt = profiler ? profileNow() : 0;
   advanceHandcraftQueue(state, seconds);
+  if (profiler) profiler.constructionMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
   absorbDysonSails(state, seconds);
   decayDysonSwarm(state, seconds);
+  if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
   resetStationRuntime(state);
-  runOrbitalCollectors(state, seconds);
-  transferLogisticsBuffers(state);
-  transferBelts(state, seconds);
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  transferLogisticsBuffers(state, lookup);
+  if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  contractExperiment?.beforeInputBelts?.(state);
+  transferBelts(state, seconds, true, undefined, seconds, lookup, contractExperiment?.skippedBeltIds);
+  contractExperiment?.afterInputBelts?.(state);
+  if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
+  const beltStepReservation = reserveBeltStepOutputCapacity(state, lookup, contractExperiment?.skippedBeltIds);
+  runOrbitalCollectors(state, seconds, beltStepReservation.outputCredits);
+  subsystemStartedAt = profiler ? profileNow() : 0;
   drainMaterialDeliveryHubs(state, seconds);
+  if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
   const reception = calculateDysonReception(state);
+  if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
   const powerByPlanet = new Map<PlanetId, PowerPlan>();
   for (const planet of PLANET_LIST) {
+    subsystemStartedAt = profiler ? profileNow() : 0;
     const gridPlans = POWER_GRID_IDS.map((gridId) => calculatePower(state, seconds, planet.id, gridId, reception, lookup, profiler));
     const power = combinePowerPlans(gridPlans);
     powerByPlanet.set(planet.id, power);
     for (const gridPlan of gridPlans) {
       const gridId = gridPlan.gridId!;
-      const storage = gridStoredEnergy(state, planet.id, gridId);
+      const storage = gridStoredEnergy(state, planet.id, gridId, lookup);
       state.powerGridMetrics[planet.id][gridId] = {
         gridId,
         generationKw: round(gridPlan.generationKw, 2),
@@ -3927,7 +5075,7 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
         storageChargeKw: round(gridPlan.storageChargeKw, 2),
         storedEnergyMj: round(storage.stored, 3),
         storageCapacityMj: round(storage.capacity, 3),
-        fuelReserveSeconds: fuelReserveSeconds(state, planet.id, gridId),
+        fuelReserveSeconds: fuelReserveSeconds(state, planet.id, gridId, lookup),
         totalItemsPerMinute: 0,
         connectedEntities: gridPlan.connectedEntities,
         disconnectedEntities: gridPlan.disconnectedEntities,
@@ -3935,12 +5083,38 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
         coverageRadius: POWER_SUPPLY_RADIUS,
       };
     }
-    runPowerFacilities(state, seconds, power, planet.id);
-    runMiners(state, seconds, power, planet.id);
-    runMachines(state, seconds, power, planet.id);
-    runConstructionCenters(state, seconds, power, planet.id);
-    runRayReceivers(state, seconds, reception, planet.id);
-    const storage = gridStoredEnergy(state, planet.id);
+    runPowerFacilities(
+      state,
+      seconds,
+      power,
+      planet.id,
+      lookup ? (lookup.entitiesByPlanet.get(planet.id) ?? []) : state.entities,
+      batchPowerStorage,
+      profiler,
+    );
+    if (profiler) profiler.powerMs += profileNow() - subsystemStartedAt;
+    subsystemStartedAt = profiler ? profileNow() : 0;
+    contractExperiment?.beforePlanetProduction?.(state, planet.id);
+    runMiners(state, seconds, power, planet.id, beltStepReservation.outputCredits, lookup, contractExperiment?.skippedProductionEntityIds);
+    runMachines(state, seconds, power, planet.id, beltStepReservation.outputCredits, lookup, contractExperiment?.skippedProductionEntityIds);
+    contractExperiment?.afterPlanetProduction?.(state, planet.id);
+    if (profiler) profiler.productionMs += profileNow() - subsystemStartedAt;
+    subsystemStartedAt = profiler ? profileNow() : 0;
+    runConstructionCenters(
+      state,
+      seconds,
+      power,
+      planet.id,
+      lookup ? (lookup.entitiesByPlanet.get(planet.id) ?? []) : state.entities,
+      batchConstructionAutomation,
+      profiler,
+    );
+    if (profiler) profiler.constructionMs += profileNow() - subsystemStartedAt;
+    subsystemStartedAt = profiler ? profileNow() : 0;
+    runRayReceivers(state, seconds, reception, planet.id, beltStepReservation.outputCredits, lookup ? (lookup.entitiesByPlanet.get(planet.id) ?? []) : state.entities);
+    if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
+    subsystemStartedAt = profiler ? profileNow() : 0;
+    const storage = gridStoredEnergy(state, planet.id, undefined, lookup);
     state.planetMetrics[planet.id] = {
       generationKw: round(power.generationKw, 2),
       demandKw: round(power.demandKw, 2),
@@ -3957,29 +5131,106 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
       storedEnergyMj: round(storage.stored, 3),
       storageCapacityMj: round(storage.capacity, 3),
       fuelReserveSeconds: fuelReserveSeconds(state, planet.id),
-      totalItemsPerMinute: round(state.entities.reduce((sum, entity) =>
+      totalItemsPerMinute: round((lookup?.entitiesByPlanet.get(planet.id) ?? state.entities).reduce((sum, entity) =>
         entity.planetId === planet.id ? sum + entity.productionRate : sum, 0), 2),
     };
+    if (profiler) profiler.powerMs += profileNow() - subsystemStartedAt;
   }
-  refillStationWarpersFromPlanetTrays(state);
+  if (quantumBoundarySecond !== null) {
+    const quantumStartedAt = profiler ? profileNow() : 0;
+    quantumBoundaryFlow = settleQuantumNetworkDownloads(
+      state,
+      beltStepReservation.outputCredits,
+      quantumBoundarySecond,
+      QUANTUM_SETTLEMENT_SECONDS,
+      profiler,
+    );
+    if (profiler) profiler.quantumMs += profileNow() - quantumStartedAt;
+  }
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  contractExperiment?.beforeOutputBelts?.(state);
+  transferBelts(state, 0, false, beltStepReservation.allowanceByBelt, seconds, lookup, contractExperiment?.skippedBeltIds);
+  contractExperiment?.afterOutputBelts?.(state);
+  if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
+  drainMaterialDeliveryHubs(state, seconds);
+  subsystemStartedAt = profiler ? profileNow() : 0;
+  refillStationWarpers(state);
   let phaseStartedAt = profileNow();
+  if (lookup) {
+    refreshRouteEnvironment(state, lookup);
+    lookup.dispatchResultsBySlot.clear();
+  }
   dispatchStationScope(state, "local", powerByPlanet, lookup, profiler);
   dispatchStationScope(state, "remote", powerByPlanet, lookup, profiler);
   if (profiler) profiler.dispatchMs += profileNow() - phaseStartedAt;
   phaseStartedAt = profileNow();
   advanceStationRoutes(state, "local", seconds, powerByPlanet, lookup);
   advanceStationRoutes(state, "remote", seconds, powerByPlanet, lookup);
+  refillStationWarpers(state);
   if (profiler) profiler.routeAdvanceMs += profileNow() - phaseStartedAt;
-  if (lookup) rebuildDynamicRouteLookup(state, lookup);
+  if (lookup) ensureDynamicRouteLookup(state, lookup);
   phaseStartedAt = profileNow();
   updateStationCongestion(state, lookup, profiler);
   if (profiler) profiler.congestionMs += profileNow() - phaseStartedAt;
+  if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
   runGalacticMaterialExporters(state, powerByPlanet);
   runGalacticExports(state, seconds);
+  if (profiler) profiler.logisticsMs += profileNow() - subsystemStartedAt;
+  subsystemStartedAt = profiler ? profileNow() : 0;
   syncLegacySwarmIntoOrbits(state);
   updateDysonSphereGeneration(state);
+  if (profiler) profiler.dysonMs += profileNow() - subsystemStartedAt;
   state.dysonSwarm.receiverLoadKw = round(reception.receiverLoadKw, 2);
-  state.elapsedSeconds = round(state.elapsedSeconds + seconds);
+  state.elapsedSeconds = projectedElapsed;
+  // System-hub logistics is deliberately quantized to five-second boundaries.
+  // Iterate crossed boundaries so large offline steps cannot skip a settlement;
+  // the elevator mode remains outside the legacy per-slot dispatch path.
+  let boundaryLookupDirty = false;
+  for (let boundary = firstHubBoundary; boundary <= lastHubBoundary; boundary += 1) {
+    for (const station of state.entities) {
+      if (station.stationModeTransition) {
+        const transitioned = completeStationOperationModeTransition(state, station.id);
+        if (transitioned !== state) {
+          state.entities = transitioned.entities;
+          boundaryLookupDirty = true;
+        }
+      }
+    }
+    const quantumStartedAt = profiler ? profileNow() : 0;
+    if (isTechnologyCompleted(state, "quantum_logistics_network")) {
+      const plannedStationIds = state.entities
+        .filter((entity) => entity.buildingId === "interstellar_logistics_station" && entity.quantumTarget === true &&
+          (entity.stationTier ?? 1) >= 2 && entity.quantumMode !== "quantum" && !entity.quantumTransition)
+        .map((entity) => entity.id);
+      if (plannedStationIds.length > 0) {
+        const planned = beginQuantumAttachments(state, plannedStationIds);
+        if (planned.startedIds.length > 0) {
+          const started = new Set(planned.startedIds);
+          state.entities = planned.state.entities.map((entity) => started.has(entity.id) ? { ...entity, quantumTarget: undefined } : entity);
+          boundaryLookupDirty = true;
+        }
+      }
+    }
+    const transitionedQuantum = settleQuantumAttachments(state);
+    if (transitionedQuantum.changed) {
+      state.entities = transitionedQuantum.state.entities;
+      state.quantumLogisticsNetwork = transitionedQuantum.state.quantumLogisticsNetwork;
+      boundaryLookupDirty = true;
+    }
+    settleSpaceStationConstructionInputs(state);
+    settleSystemHubLogistics(state, boundary * SYSTEM_HUB_SETTLEMENT_SECONDS);
+    settleQuantumNetworkUploads(
+      state,
+      boundary * SYSTEM_HUB_SETTLEMENT_SECONDS,
+      quantumBoundaryFlow,
+      QUANTUM_SETTLEMENT_SECONDS,
+      lookup,
+      profiler,
+    );
+    if (profiler) profiler.quantumMs += profileNow() - quantumStartedAt;
+  }
+  if (lookup && boundaryLookupDirty) Object.assign(lookup, createSimulationLookupContext(state, profiler));
   if (state.endgame.exportWindowStartedAt <= 0) state.endgame.exportWindowStartedAt = state.elapsedSeconds;
   const exportWindowSeconds = state.elapsedSeconds - state.endgame.exportWindowStartedAt;
   if (exportWindowSeconds >= 10 - EPSILON) {
@@ -3991,10 +5242,15 @@ function simulateStep(state: GameState, seconds: number, lookup?: SimulationLook
 }
 
 function recordProductionHistory(state: GameState): void {
-  if (state.elapsedSeconds - state.historyRecordedAt < 10 - EPSILON) return;
+  if (state.elapsedSeconds - state.historyRecordedAt < PRODUCTION_HISTORY_SAMPLE_SECONDS - EPSILON) return;
+  const sampleDurationSeconds = Math.max(PRODUCTION_HISTORY_SAMPLE_SECONDS, state.elapsedSeconds - state.historyRecordedAt);
+  const previousSample = state.productionHistory.at(-1);
+  const previousBoundary = Math.floor(Math.max(0, state.elapsedSeconds - sampleDurationSeconds) / 10);
+  const currentBoundary = Math.floor(Math.max(0, state.elapsedSeconds) / 10);
+  const refreshDiagnostics = !previousSample || sampleDurationSeconds >= 10 || previousBoundary !== currentBoundary;
   const productionPerMinute: Partial<Record<ItemId, number>> = {};
   const consumptionPerMinute: Partial<Record<ItemId, number>> = {};
-  const inventory: Partial<Record<ItemId, number>> = {};
+  const inventory: Partial<Record<ItemId, number>> = refreshDiagnostics ? {} : { ...previousSample.inventory };
   const add = (record: Partial<Record<ItemId, number>>, itemId: ItemId, amount: number) => {
     record[itemId] = round((record[itemId] ?? 0) + amount, 2);
   };
@@ -4009,35 +5265,50 @@ function recordProductionHistory(state: GameState): void {
         for (const output of recipe.outputs) add(productionPerMinute, output.itemId, entity.productionRate * output.amount);
       }
     }
-    for (const [itemId, amount] of Object.entries(entity.inputs)) add(inventory, itemId as ItemId, Math.floor(amount ?? 0));
-    for (const [itemId, amount] of Object.entries(entity.outputs)) add(inventory, itemId as ItemId, Math.floor(amount ?? 0));
+    if (refreshDiagnostics) {
+      for (const [itemId, amount] of Object.entries(entity.inputs)) add(inventory, itemId as ItemId, Math.floor(amount ?? 0));
+      for (const [itemId, amount] of Object.entries(entity.outputs)) add(inventory, itemId as ItemId, Math.floor(amount ?? 0));
+    }
   }
-  for (const tray of Object.values(state.planetTrays)) {
-    for (const [itemId, amount] of Object.entries(tray)) add(inventory, itemId as ItemId, Math.floor(amount ?? 0));
+  if (refreshDiagnostics) {
+    for (const tray of Object.values(state.planetTrays)) {
+      for (const [itemId, amount] of Object.entries(tray)) add(inventory, itemId as ItemId, Math.floor(amount ?? 0));
+    }
   }
-  const productiveEntities = state.entities.filter((entity) => entity.kind === "machine" || (entity.kind === "vein" && entity.minerCount > 0));
+  const productiveEntities = refreshDiagnostics
+    ? state.entities.filter((entity) => entity.kind === "machine" || (entity.kind === "vein" && entity.minerCount > 0))
+    : [];
   const productiveUnits = productiveEntities.reduce((sum, entity) => sum + (entity.kind === "vein" ? entity.minerCount : entity.machineCount), 0);
   const utilizedUnits = productiveEntities.reduce((sum, entity) => sum + entity.utilization * (entity.kind === "vein" ? entity.minerCount : entity.machineCount), 0);
-  const activeMachines = productiveEntities.reduce((sum, entity) => sum + (entity.utilization > EPSILON ? (entity.kind === "vein" ? entity.minerCount : entity.machineCount) : 0), 0);
-  const blockedMachines = productiveEntities.reduce((sum, entity) => sum + (getEntityOperatingStatus(state, entity).tone === "blocked" ? (entity.kind === "vein" ? entity.minerCount : entity.machineCount) : 0), 0);
-  const beltCapacity = state.belts.reduce((sum, belt) => sum + getBeltCapacity(belt), 0);
-  const beltFlow = state.belts.reduce((sum, belt) => sum + Math.max(0, belt.lastFlow ?? 0), 0);
+  const activeMachines = refreshDiagnostics
+    ? productiveEntities.reduce((sum, entity) => sum + (entity.utilization > EPSILON ? (entity.kind === "vein" ? entity.minerCount : entity.machineCount) : 0), 0)
+    : previousSample?.activeMachines ?? 0;
+  const blockedMachines = refreshDiagnostics
+    ? productiveEntities.reduce((sum, entity) => sum + (getEntityOperatingStatus(state, entity).tone === "blocked" ? (entity.kind === "vein" ? entity.minerCount : entity.machineCount) : 0), 0)
+    : previousSample?.blockedMachines ?? 0;
+  const beltCapacity = refreshDiagnostics ? state.belts.reduce((sum, belt) => sum + getBeltCapacity(belt), 0) : 0;
+  const beltFlow = refreshDiagnostics ? state.belts.reduce((sum, belt) => sum + Math.max(0, belt.lastFlow ?? 0), 0) : 0;
   const totalPowerDemand = Object.values(state.planetMetrics).reduce((sum, metrics) => sum + metrics.demandKw, 0);
   const deliveredPower = Object.values(state.planetMetrics).reduce((sum, metrics) => sum + metrics.demandKw * metrics.powerFactor, 0);
   state.productionHistory.push({
     elapsedSeconds: state.elapsedSeconds,
+    sampleDurationSeconds,
     productionPerMinute,
     consumptionPerMinute,
     inventory,
     generationKw: round(Object.values(state.planetMetrics).reduce((sum, metrics) => sum + metrics.generationKw, 0), 2),
     demandKw: round(Object.values(state.planetMetrics).reduce((sum, metrics) => sum + metrics.demandKw, 0), 2),
-    machineEfficiency: round(productiveUnits > 0 ? utilizedUnits / productiveUnits : 0, 4),
-    logisticsEfficiency: round(beltCapacity > 0 ? Math.min(1, beltFlow / beltCapacity) : 0, 4),
+    machineEfficiency: refreshDiagnostics
+      ? round(productiveUnits > 0 ? utilizedUnits / productiveUnits : 0, 4)
+      : previousSample?.machineEfficiency ?? 0,
+    logisticsEfficiency: refreshDiagnostics
+      ? round(beltCapacity > 0 ? Math.min(1, beltFlow / beltCapacity) : 0, 4)
+      : previousSample?.logisticsEfficiency ?? 0,
     powerEfficiency: round(totalPowerDemand > 0 ? Math.min(1, deliveredPower / totalPowerDemand) : 1, 4),
     activeMachines: Math.max(0, Math.floor(activeMachines)),
     blockedMachines: Math.max(0, Math.floor(blockedMachines)),
   });
-  state.productionHistory = state.productionHistory.slice(-180);
+  state.productionHistory = compactProductionHistory(state.productionHistory);
   state.historyRecordedAt = state.elapsedSeconds;
 }
 
@@ -4051,20 +5322,36 @@ export interface SimulationAdvanceSession {
   initialActivityClockMs: number;
   advancedWallSeconds: number;
   stepSize: number;
+  batchPowerStorage: boolean;
+  batchConstructionAutomation: boolean;
   changed: boolean;
   lookup?: SimulationLookupContext;
   profiler?: SimulationProfiler;
+  contractExperiment?: SimulationContractExperiment;
 }
 
 export interface SimulationAdvanceOptions {
   indexedLogistics?: boolean;
+  batchPowerStorage?: boolean;
+  batchConstructionAutomation?: boolean;
   profiler?: SimulationProfiler;
   wallSeconds?: number;
+  mutateState?: boolean;
+  lookup?: SimulationLookupContext;
+  contractExperiment?: SimulationContractExperiment;
 }
 
 export function createSimulationProfiler(): SimulationProfiler {
   return {
     copyStateMs: 0,
+    productionMs: 0,
+    beltsMs: 0,
+    logisticsMs: 0,
+    quantumMs: 0,
+    powerMs: 0,
+    dysonMs: 0,
+    constructionMs: 0,
+    historyMs: 0,
     stationIndexBuildMs: 0,
     peerMatchMs: 0,
     routeEconomicsMs: 0,
@@ -4072,23 +5359,45 @@ export function createSimulationProfiler(): SimulationProfiler {
     routeAdvanceMs: 0,
     congestionMs: 0,
     peerCandidateChecks: 0,
+    peerMatchCalls: 0,
+    peerMatchCacheHits: 0,
     routeEconomicsCalls: 0,
     routeEconomicsCacheHits: 0,
+    routePathPlans: 0,
+    routePathCacheHits: 0,
+    congestionDispatchReuseHits: 0,
     routesCreated: 0,
+    dispatchSlotChecks: 0,
+    quantumStationCount: 0,
+    quantumRequestCount: 0,
+    persistentRuntimeHits: 0,
+    persistentRuntimeRebuilds: 0,
+    fuelItemsLoaded: 0,
+    exchangerCellsSettled: 0,
+    constructionJobsBatched: 0,
+    constructionPlanBuilds: 0,
+    constructionPlanCacheHits: 0,
   };
 }
 
 export function createSimulationAdvanceSession(state: GameState, seconds: number, options: SimulationAdvanceOptions = {}): SimulationAdvanceSession {
   const requestedWallSeconds = options.wallSeconds ?? seconds;
-  const totalWallSeconds = !Number.isFinite(requestedWallSeconds) || requestedWallSeconds <= 0
+  const totalWallSeconds = state.paused || !Number.isFinite(requestedWallSeconds) || requestedWallSeconds <= 0
     ? 0
     : Math.min(requestedWallSeconds, 30 * 24 * 60 * 60);
   const totalSeconds = state.paused || !Number.isFinite(seconds) || seconds <= 0
     ? 0
     : Math.min(seconds, 30 * 24 * 60 * 60);
-  const stepSize = totalSeconds >= 24 * 60 * 60 ? 30 : totalSeconds > 8 * 60 * 60 ? 10 : 1;
+  const baseStepSize = totalSeconds >= 24 * 60 * 60 ? 30 : totalSeconds > 8 * 60 * 60 ? 10 : 1;
+  // Elevator contracts settle on a fixed five-second boundary. Keep a hub
+  // session from jumping over those boundaries so 1s/5s/offline segmentation
+  // observes the same input and output order.
+  const hasBoundaryStation = state.entities.some((entity) => isElevatorStation(entity) || hasQuantumBoundaryLogistics(entity));
+  const stepSize = hasBoundaryStation ? Math.min(baseStepSize, SYSTEM_HUB_SETTLEMENT_SECONDS) : baseStepSize;
   const copyStartedAt = profileNow();
-  const sessionState = totalSeconds > 0 || totalWallSeconds > 0 ? copyState(state) : state;
+  const sessionState = totalSeconds > 0 || totalWallSeconds > 0
+    ? options.mutateState ? state : copyState(state)
+    : state;
   if (options.profiler) options.profiler.copyStateMs += profileNow() - copyStartedAt;
   return {
     originalState: state,
@@ -4100,11 +5409,14 @@ export function createSimulationAdvanceSession(state: GameState, seconds: number
     initialActivityClockMs: sessionState.endgame.constructionActivity.activityClockMs,
     advancedWallSeconds: 0,
     stepSize,
+    batchPowerStorage: options.batchPowerStorage !== false,
+    batchConstructionAutomation: options.batchConstructionAutomation !== false,
     changed: totalSeconds > 0 || totalWallSeconds > 0,
     lookup: totalSeconds > 0 && options.indexedLogistics !== false
-      ? createSimulationLookupContext(sessionState, options.profiler)
+      ? options.lookup ?? createSimulationLookupContext(sessionState, options.profiler)
       : undefined,
     profiler: options.profiler,
+    contractExperiment: options.contractExperiment,
   };
 }
 
@@ -4133,7 +5445,15 @@ export function advanceSimulationSession(session: SimulationAdvanceSession, maxi
         if (untilBoundarySimulation > EPSILON && untilBoundarySimulation < step - EPSILON) step = untilBoundarySimulation;
       }
     }
-    simulateStep(session.state, step, session.lookup, session.profiler);
+    simulateStep(
+      session.state,
+      step,
+      session.lookup,
+      session.profiler,
+      session.batchPowerStorage,
+      session.batchConstructionAutomation,
+      session.contractExperiment,
+    );
     const wallStep = Math.min(session.remainingWallSeconds, step * wallPerSimulationSecond);
     if (activity.activityId && wallStep > 0) {
       session.advancedWallSeconds += wallStep;
@@ -4152,8 +5472,15 @@ export function completeSimulationAdvanceSession(session: SimulationAdvanceSessi
   if (session.remainingWallSeconds > EPSILON) advanceSimulationSession(session, Number.MAX_SAFE_INTEGER);
   session.state.timeWarp.pendingSimulationSeconds = 0;
   session.state.timeWarp.pendingWallSeconds = 0;
+  let startedAt = session.profiler ? profileNow() : 0;
   recordProductionHistory(session.state);
-  return processConstructionQueue(syncCampaignProgress(session.state));
+  if (session.profiler) session.profiler.historyMs += profileNow() - startedAt;
+  startedAt = session.profiler ? profileNow() : 0;
+  // Blueprint reservations are reconciled by inventory/player commands. They
+  // are deliberately absent from the per-step simulation hot path.
+  const completed = syncCampaignProgress(session.state);
+  if (session.profiler) session.profiler.constructionMs += profileNow() - startedAt;
+  return completed;
 }
 
 export function advanceSimulation(state: GameState, seconds: number): GameState {
@@ -4162,10 +5489,63 @@ export function advanceSimulation(state: GameState, seconds: number): GameState 
   return completeSimulationAdvanceSession(session);
 }
 
-export function advanceSimulationBudget(state: GameState, simulationSeconds: number, wallSeconds: number): GameState {
-  const session = createSimulationAdvanceSession(state, simulationSeconds, { wallSeconds });
+export function advanceSimulationBudget(state: GameState, simulationSeconds: number, wallSeconds: number, profiler?: SimulationProfiler): GameState {
+  const session = createSimulationAdvanceSession(state, simulationSeconds, { wallSeconds, profiler });
   advanceSimulationSession(session, Number.MAX_SAFE_INTEGER);
   return completeSimulationAdvanceSession(session);
+}
+
+/** Worker-owned mutable state and indexes. Never persist or expose this runtime object. */
+export interface PersistentSimulationRuntime {
+  state: GameState;
+  lookup?: SimulationLookupContext;
+}
+
+function normalizePersistentRuntimeShape(state: GameState): void {
+  state.quantumLogisticsNetwork ??= createEmptyQuantumLogisticsNetworkState();
+  for (const entity of state.entities) {
+    entity.stationLastSupplyPeerBySlot ??= {};
+    entity.proliferatorBonusProgress ??= {};
+    if (entity.buildingId === "interstellar_logistics_station" || entity.buildingId === "orbital_collector") {
+      entity.quantumMode ??= "legacy";
+    }
+  }
+}
+
+export function createPersistentSimulationRuntime(state: GameState, profiler?: SimulationProfiler): PersistentSimulationRuntime {
+  normalizePersistentRuntimeShape(state);
+  return {
+    state,
+    lookup: state.paused ? undefined : createSimulationLookupContext(state, profiler),
+  };
+}
+
+export function replacePersistentSimulationRuntimeState(runtime: PersistentSimulationRuntime, state: GameState, profiler?: SimulationProfiler): void {
+  normalizePersistentRuntimeShape(state);
+  runtime.state = state;
+  runtime.lookup = state.paused ? undefined : createSimulationLookupContext(state, profiler);
+}
+
+export function advancePersistentSimulationRuntime(
+  runtime: PersistentSimulationRuntime,
+  simulationSeconds: number,
+  wallSeconds: number,
+  profiler?: SimulationProfiler,
+): { state: GameState; changed: boolean; cacheRebuilt: boolean } {
+  if (!runtime.lookup && !runtime.state.paused && simulationSeconds > 0) runtime.lookup = createSimulationLookupContext(runtime.state, profiler);
+  const before = runtime.state;
+  const session = createSimulationAdvanceSession(before, simulationSeconds, {
+    wallSeconds,
+    profiler,
+    mutateState: true,
+    lookup: runtime.lookup,
+  });
+  advanceSimulationSession(session, Number.MAX_SAFE_INTEGER);
+  const next = completeSimulationAdvanceSession(session);
+  runtime.state = next;
+  const cacheRebuilt = next !== before;
+  if (cacheRebuilt) runtime.lookup = next.paused ? undefined : createSimulationLookupContext(next, profiler);
+  return { state: next, changed: session.changed, cacheRebuilt };
 }
 
 export function getEffectiveSimulationMultiplier(state: GameState): number {
@@ -4174,12 +5554,38 @@ export function getEffectiveSimulationMultiplier(state: GameState): number {
 }
 
 export function setPaused(state: GameState, paused: boolean): GameState {
-  return { ...state, paused };
+  if (state.paused === paused && (!paused || (state.timeWarp.pendingSimulationSeconds <= EPSILON && state.timeWarp.pendingWallSeconds <= EPSILON))) return state;
+  return {
+    ...state,
+    paused,
+    // A pause is a simulation boundary. Any budget that has not reached a
+    // deterministic commit is discarded instead of being replayed on resume.
+    timeWarp: paused
+      ? { ...state.timeWarp, pendingSimulationSeconds: 0, pendingWallSeconds: 0 }
+      : state.timeWarp,
+  };
+}
+
+export function isEntityInteractionLocked(state: GameState, entityId: string): boolean {
+  return state.entities.some((entity) => entity.id === entityId && entity.interactionLocked);
+}
+
+export function setEntitiesInteractionLocked(
+  state: GameState,
+  entityIds: readonly string[],
+  locked: boolean,
+): GameState {
+  const requested = new Set(entityIds);
+  if (requested.size === 0 || !state.entities.some((entity) => requested.has(entity.id) && entity.interactionLocked !== locked)) return state;
+  return {
+    ...state,
+    entities: state.entities.map((entity) => requested.has(entity.id) ? { ...entity, interactionLocked: locked } : entity),
+  };
 }
 
 export function setBlackHolePaused(state: GameState, entityId: string, paused: boolean, confirmActivation = false): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "micro_black_hole_connector");
-  if (!current || (!paused && !current.blackHoleActivationConfirmed && !confirmActivation)) return state;
+  if (!current || current.interactionLocked || (!paused && !current.blackHoleActivationConfirmed && !confirmActivation)) return state;
   if (current.blackHolePaused === paused && (paused || current.blackHoleActivationConfirmed)) return state;
   return {
     ...state,
@@ -4192,7 +5598,7 @@ export function setBlackHolePaused(state: GameState, entityId: string, paused: b
 }
 
 export function setTimeWarpController(state: GameState, entityId: string): GameState {
-  if (!state.entities.some((entity) => entity.id === entityId && entity.buildingId === "time_warp_device") ||
+  if (!state.entities.some((entity) => entity.id === entityId && entity.buildingId === "time_warp_device" && !entity.interactionLocked) ||
     state.timeWarp.controllerEntityId === entityId) return state;
   return {
     ...state,
@@ -4209,7 +5615,7 @@ export function setTimeWarpController(state: GameState, entityId: string): GameS
 
 export function setTimeWarpEnabled(state: GameState, enabled: boolean): GameState {
   if (!state.timeWarp.controllerEntityId || !state.entities.some((entity) =>
-    entity.id === state.timeWarp.controllerEntityId && entity.buildingId === "time_warp_device") || state.timeWarp.enabled === enabled) return state;
+    entity.id === state.timeWarp.controllerEntityId && entity.buildingId === "time_warp_device" && !entity.interactionLocked) || state.timeWarp.enabled === enabled) return state;
   return {
     ...state,
     timeWarp: {
@@ -4223,7 +5629,8 @@ export function setTimeWarpEnabled(state: GameState, enabled: boolean): GameStat
 }
 
 export function setTimeWarpRequestedMultiplier(state: GameState, multiplier: number): GameState {
-  if (!Number.isSafeInteger(multiplier) || multiplier < 5 || multiplier === state.timeWarp.requestedMultiplier) return state;
+  if (!Number.isSafeInteger(multiplier) || multiplier < 5 || multiplier === state.timeWarp.requestedMultiplier ||
+    (state.timeWarp.controllerEntityId ? isEntityInteractionLocked(state, state.timeWarp.controllerEntityId) : false)) return state;
   return { ...state, timeWarp: { ...state.timeWarp, requestedMultiplier: multiplier } };
 }
 
@@ -4396,23 +5803,47 @@ export function setPlanetIndustryRole(state: GameState, planetId: PlanetId, role
   };
 }
 
+export function setPlanetDisplayMetadata(
+  state: GameState,
+  planetId: PlanetId,
+  metadata: { customName: string; note: string; tags: string[] },
+): GameState {
+  if (!PLANET_LIST.some((planet) => planet.id === planetId)) return state;
+  const normalized = normalizePlanetDisplayMetadata(metadata);
+  const planetMetadata = { ...(state.galaxy.planetMetadata ?? {}) };
+  if (normalized) planetMetadata[planetId] = normalized;
+  else delete planetMetadata[planetId];
+  return { ...state, galaxy: { ...state.galaxy, planetMetadata } };
+}
+
+export function setStarSystemDisplayName(state: GameState, systemId: StarSystemId, customName: string): GameState {
+  if (!STAR_SYSTEM_LIST.some((system) => system.id === systemId)) return state;
+  const normalized = normalizeStarSystemDisplayMetadata({ customName });
+  const systemMetadata = { ...(state.galaxy.systemMetadata ?? {}) };
+  if (normalized) systemMetadata[systemId] = normalized;
+  else delete systemMetadata[systemId];
+  return { ...state, galaxy: { ...state.galaxy, systemMetadata } };
+}
+
 export function manualMine(state: GameState, entityId: string, amount = 1): GameState {
   const next = copyState(state);
   const entity = next.entities.find((item) => item.id === entityId);
   if (!entity || entity.kind !== "vein" || !entity.resourceId || ITEMS[entity.resourceId].kind === "fluid") return state;
   const capacity = getManualMiningOutputCapacity(next, entity);
   const current = Math.floor((entity.outputs[entity.resourceId] ?? 0) + EPSILON);
-  const finite = !isInfiniteResource(entity.resourceId, entity.planetId, next.settings.resourceMode, next.galaxy);
-  const remaining = finite ? Math.max(0, Math.floor(entity.resourceRemaining ?? 0)) : Number.POSITIVE_INFINITY;
-  const mined = Math.max(0, Math.floor(Math.min(amount, capacity - current, remaining)));
+  const finite = !isVeinInfiniteForState(next, entity);
+  const consumptionTenths = getVeinConsumptionTenths(next, entity.resourceId);
+  const outputAllowance = finite ? getFiniteVeinOutputAllowance(entity, consumptionTenths) : Number.POSITIVE_INFINITY;
+  const mined = Math.max(0, Math.floor(Math.min(amount, capacity - current, outputAllowance)));
   entity.outputs[entity.resourceId] = current + mined;
-  if (finite) entity.resourceRemaining = Math.max(0, remaining - mined);
+  if (finite) consumeFiniteVeinReserve(entity, mined, consumptionTenths);
   next.manualMined = Math.floor(next.manualMined + mined);
   next.totalProduced[entity.resourceId] = Math.floor((next.totalProduced[entity.resourceId] ?? 0) + mined);
   return next;
 }
 
 export function moveEntity(state: GameState, entityId: string, position: { x: number; y: number }): GameState {
+  if (isEntityInteractionLocked(state, entityId)) return state;
   return {
     ...state,
     entities: state.entities.map((entity) => entity.id === entityId ? { ...entity, position } : entity),
@@ -4420,7 +5851,7 @@ export function moveEntity(state: GameState, entityId: string, position: { x: nu
 }
 
 export function moveEntities(state: GameState, positions: Array<{ id: string; position: { x: number; y: number } }>): GameState {
-  const positionById = new Map(positions.map((entry) => [entry.id, entry.position]));
+  const positionById = new Map(positions.flatMap((entry) => isEntityInteractionLocked(state, entry.id) ? [] : [[entry.id, entry.position]]));
   if (positionById.size === 0) return state;
   return {
     ...state,
@@ -4434,7 +5865,8 @@ export function moveEntities(state: GameState, positions: Array<{ id: string; po
 export function getBlueprintEligibleEntityIds(state: GameState, entityIds: string[]): string[] {
   const selectedIds = new Set(entityIds);
   return state.entities
-    .filter((entity) => entity.planetId === state.activePlanetId && entity.kind !== "vein" && entity.buildingId && selectedIds.has(entity.id))
+    .filter((entity) => entity.planetId === state.activePlanetId && selectedIds.has(entity.id) &&
+      (entity.kind === "vein" ? Boolean(entity.resourceId && entity.minerCount > 0) : Boolean(entity.buildingId)))
     .map((entity) => entity.id);
 }
 
@@ -4445,17 +5877,33 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
   const originX = Math.min(...selected.map((entity) => entity.position.x));
   const originY = Math.min(...selected.map((entity) => entity.position.y));
   const keyById = new Map(selected.map((entity, index) => [entity.id, `node_${index + 1}`]));
+  const selectedBuildings = selected.filter((entity) => entity.kind !== "vein" && entity.buildingId);
+  const selectedResources = selected.filter((entity) => entity.kind === "vein" && entity.resourceId && entity.minerCount > 0);
   const blueprint: BlueprintDefinition = {
     id: `blueprint_${state.nextId}`,
     name: name?.trim().slice(0, 32) || `蓝图 ${String(state.blueprints.length + 1).padStart(2, "0")}`,
-    entities: selected.map((entity) => ({
+    revision: 1,
+    entities: selectedBuildings.map((entity) => ({
       key: keyById.get(entity.id)!,
       buildingId: entity.buildingId!,
       offset: { x: entity.position.x - originX, y: entity.position.y - originY },
       machineCount: Math.max(1, Math.floor(entity.machineCount)),
       recipeId: entity.recipeId,
+      targetDysonOrbitId: entity.buildingId === "em_rail_ejector" ? entity.targetDysonOrbitId : undefined,
       storedItemId: entity.storedItemId,
+      stationTier: entity.buildingId === "interstellar_logistics_station" ? entity.stationTier : undefined,
+      stationOperationMode: entity.buildingId === "interstellar_logistics_station" ? entity.stationOperationMode : undefined,
+      quantumTarget: entity.buildingId === "interstellar_logistics_station"
+        ? entity.quantumMode === "quantum" || entity.quantumTransition?.targetMode === "quantum" || entity.quantumTarget === true
+        : undefined,
+      operationEnabledOnDeploy: entity.buildingId === "micro_black_hole_connector"
+        ? entity.blackHolePaused === false && entity.blackHoleActivationConfirmed === true
+        : undefined,
+      elevatorOutputItems: entity.buildingId === "interstellar_logistics_station"
+        ? Array.from({ length: 5 }, (_, index) => entity.elevatorOutputItems?.[index] ?? null)
+        : undefined,
       deliveryItemIds: entity.deliveryItemIds ? [...entity.deliveryItemIds] : undefined,
+      deliverySlots: entity.deliverySlots?.map((slot) => ({ ...slot })),
       distributionMode: entity.distributionMode,
       fuelItemId: entity.fuelItemId,
       energyMode: entity.energyMode,
@@ -4467,6 +5915,12 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
       stationWarpEnabled: entity.stationWarpEnabled,
       stationWarperAutoRefill: entity.stationWarperAutoRefill,
       stationWarperTarget: entity.stationWarperTarget,
+      stationDroneTarget: entity.buildingId === "planetary_logistics_station" || entity.buildingId === "interstellar_logistics_station"
+        ? Math.max(0, Math.floor(entity.stationDrones ?? 0))
+        : undefined,
+      stationVesselTarget: entity.buildingId === "interstellar_logistics_station"
+        ? Math.max(0, Math.floor(entity.stationVessels ?? 0))
+        : undefined,
       stationHubEnabled: entity.stationHubEnabled,
       stationHubPriority: entity.stationHubPriority,
       stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
@@ -4474,23 +5928,37 @@ export function createBlueprint(state: GameState, entityIds: string[], name?: st
       proliferatorTier: entity.proliferatorTier,
       proliferatorMode: entity.proliferatorMode,
     })),
+    resourceAnchors: selectedResources.map((entity): BlueprintResourceAnchor => ({
+      key: keyById.get(entity.id)!,
+      resourceId: entity.resourceId!,
+      offset: { x: entity.position.x - originX, y: entity.position.y - originY },
+      extractorBuildingId: entity.extractorBuildingId ?? getExtractorBuildingId(entity.resourceId!),
+      minerCount: Math.max(1, Math.floor(entity.minerCount)),
+    })),
     belts: state.belts
       .filter((belt) => keyById.has(belt.source) && keyById.has(belt.target))
-      .map((belt, index) => ({
-        key: `line_${index + 1}`,
-        sourceKey: keyById.get(belt.source)!,
-        targetKey: keyById.get(belt.target)!,
-        itemId: belt.itemId,
-        lanes: belt.lanes,
-        tier: belt.tier,
-        sorterTier: belt.tier,
-        priority: belt.priority,
-        stackSize: belt.stackSize,
-        monitorEnabled: belt.monitorEnabled,
-        routeMode: belt.routeMode ?? "auto",
-        routeOffsetY: belt.routeOffsetY,
-        targetPortIndex: belt.targetPortIndex,
-      })),
+      .map((belt, index) => {
+        const sourceEntity = selected.find((entity) => entity.id === belt.source);
+        const inferredElevatorIndex = sourceEntity && isElevatorStation(sourceEntity)
+          ? sourceEntity.elevatorOutputItems?.findIndex((itemId) => itemId === belt.itemId)
+          : -1;
+        return {
+          key: `line_${index + 1}`,
+          sourceKey: keyById.get(belt.source)!,
+          targetKey: keyById.get(belt.target)!,
+          itemId: belt.itemId,
+          lanes: belt.lanes,
+          tier: belt.tier,
+          sorterTier: belt.sorterTier,
+          priority: belt.priority,
+          stackSize: belt.stackSize,
+          monitorEnabled: belt.monitorEnabled,
+          routeMode: belt.routeMode ?? "auto",
+          routeOffsetY: belt.routeOffsetY,
+          targetPortIndex: belt.targetPortIndex,
+          elevatorOutputIndex: belt.elevatorOutputIndex ?? (inferredElevatorIndex !== undefined && inferredElevatorIndex >= 0 ? inferredElevatorIndex as 0 | 1 | 2 | 3 | 4 : undefined),
+        };
+      }),
     externalPorts: state.belts
       .filter((belt) => keyById.has(belt.source) !== keyById.has(belt.target))
       .map((belt, index) => {
@@ -4520,7 +5988,23 @@ export function renameBlueprint(state: GameState, blueprintId: string, name: str
   if (!normalized || !state.blueprints.some((blueprint) => blueprint.id === blueprintId)) return state;
   return {
     ...state,
-    blueprints: state.blueprints.map((blueprint) => blueprint.id === blueprintId ? { ...blueprint, name: normalized } : blueprint),
+    blueprints: state.blueprints.map((blueprint) => blueprint.id === blueprintId ? { ...blueprint, name: normalized, revision: Math.max(1, blueprint.revision ?? 1) + 1 } : blueprint),
+  };
+}
+
+function cloneBlueprintDefinition(blueprint: BlueprintDefinition): BlueprintDefinition {
+  return {
+    ...blueprint,
+    entities: blueprint.entities.map((entity) => ({
+      ...entity,
+      offset: { ...entity.offset },
+      stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
+      deliverySlots: entity.deliverySlots?.map((slot) => ({ ...slot })),
+    })),
+    resourceAnchors: blueprint.resourceAnchors?.map((anchor) => ({ ...anchor, offset: { ...anchor.offset } })),
+    belts: blueprint.belts.map((belt) => ({ ...belt })),
+    externalPorts: blueprint.externalPorts?.map((port) => ({ ...port, offset: { ...port.offset } })),
+    recipeOverrides: { ...blueprint.recipeOverrides },
   };
 }
 
@@ -4529,7 +6013,6 @@ export function removeBlueprint(state: GameState, blueprintId: string): GameStat
   return {
     ...state,
     blueprints: state.blueprints.filter((blueprint) => blueprint.id !== blueprintId),
-    constructionQueue: state.constructionQueue.filter((entry) => entry.blueprintId !== blueprintId),
   };
 }
 
@@ -4544,7 +6027,7 @@ export function setBlueprintTransform(
   return {
     ...state,
     blueprints: state.blueprints.map((blueprint) => blueprint.id === blueprintId
-      ? { ...blueprint, rotation, mirror }
+      ? { ...blueprint, rotation, mirror, revision: Math.max(1, blueprint.revision ?? 1) + 1 }
       : blueprint),
   };
 }
@@ -4566,34 +6049,221 @@ export function setBlueprintRecipeOverride(
   else overrides[sourceRecipeId] = targetRecipeId;
   return {
     ...state,
-    blueprints: state.blueprints.map((candidate) => candidate.id === blueprintId ? { ...candidate, recipeOverrides: overrides } : candidate),
+    blueprints: state.blueprints.map((candidate) => candidate.id === blueprintId ? { ...candidate, recipeOverrides: overrides, revision: Math.max(1, candidate.revision ?? 1) + 1 } : candidate),
   };
 }
 
-export function getBlueprintRequirements(blueprint: BlueprintDefinition): Array<{ constructionId: ConstructionId; amount: number }> {
+interface ResolvedBlueprintResourceAnchor {
+  anchor: BlueprintResourceAnchor;
+  entity: FactoryEntity;
+  installCount: number;
+}
+
+export interface BlueprintPlacementPreview {
+  matchedResourceAnchors: number;
+  skippedResourceAnchors: Array<{ key: string; resourceId: ItemId }>;
+  extractorInstallCount: number;
+  requirements: Array<{ constructionId: ConstructionId; amount: number }>;
+  compatible: boolean;
+  inventoryReady: boolean;
+  canPlace: boolean;
+}
+
+const BLUEPRINT_RESOURCE_ANCHOR_RADIUS = 180;
+
+function resolveBlueprintResourceAnchors(
+  state: GameState,
+  blueprint: BlueprintDefinition,
+  position: { x: number; y: number },
+  planetId: PlanetId,
+  rotation: BlueprintRotation,
+  mirror: BlueprintMirror,
+): { resolved: ResolvedBlueprintResourceAnchor[]; skipped: BlueprintResourceAnchor[] } {
+  const usedEntityIds = new Set<string>();
+  const resolved: ResolvedBlueprintResourceAnchor[] = [];
+  const skipped: BlueprintResourceAnchor[] = [];
+  for (const anchor of blueprint.resourceAnchors ?? []) {
+    const offset = transformBlueprintOffset(anchor.offset, rotation, mirror);
+    const expected = { x: position.x + offset.x, y: position.y + offset.y };
+    const candidate = state.entities
+      .filter((entity) => entity.kind === "vein" && entity.planetId === planetId && entity.resourceId === anchor.resourceId && !usedEntityIds.has(entity.id))
+      .map((entity) => ({ entity, distance: Math.hypot(entity.position.x - expected.x, entity.position.y - expected.y) }))
+      .filter(({ distance }) => distance <= BLUEPRINT_RESOURCE_ANCHOR_RADIUS)
+      .sort((a, b) => a.distance - b.distance || a.entity.id.localeCompare(b.entity.id))[0]?.entity;
+    if (!candidate) {
+      skipped.push(anchor);
+      continue;
+    }
+    usedEntityIds.add(candidate.id);
+    resolved.push({
+      anchor,
+      entity: candidate,
+      installCount: Math.max(0, Math.floor(anchor.minerCount) - Math.max(0, Math.floor(candidate.minerCount))),
+    });
+  }
+  return { resolved, skipped };
+}
+
+function blueprintRequirements(
+  blueprint: BlueprintDefinition,
+  resourceInstalls = new Map((blueprint.resourceAnchors ?? []).map((anchor) => [anchor.key, Math.max(1, Math.floor(anchor.minerCount))])),
+  activeKeys = new Set([...blueprint.entities.map((entity) => entity.key), ...(blueprint.resourceAnchors ?? []).map((anchor) => anchor.key)]),
+): Array<{ constructionId: ConstructionId; amount: number }> | null {
   const requirements = new Map<ConstructionId, number>();
+  let valid = true;
   const add = (constructionId: ConstructionId, amount: number) => {
-    requirements.set(constructionId, (requirements.get(constructionId) ?? 0) + amount);
+    if (!Number.isSafeInteger(amount) || amount < 0) {
+      valid = false;
+      return;
+    }
+    if (amount < 1) return;
+    const total = (requirements.get(constructionId) ?? 0) + amount;
+    if (!Number.isSafeInteger(total)) {
+      valid = false;
+      return;
+    }
+    requirements.set(constructionId, total);
   };
   for (const entity of blueprint.entities) {
     add(entity.buildingId, entity.machineCount);
     if (entity.sprayCoaterInstalled) add("spray_coater", 1);
   }
+  for (const anchor of blueprint.resourceAnchors ?? []) add(anchor.extractorBuildingId, resourceInstalls.get(anchor.key) ?? 0);
   for (const belt of blueprint.belts) {
+    if (!activeKeys.has(belt.sourceKey) || !activeKeys.has(belt.targetKey)) continue;
     add(getBeltConstructionId(belt.tier), belt.lanes);
   }
-  return [...requirements].map(([constructionId, amount]) => ({ constructionId, amount }));
+  return valid ? [...requirements].map(([constructionId, amount]) => ({ constructionId, amount })) : null;
 }
 
-export function canPlaceBlueprint(state: GameState, blueprintId: string, planetId: PlanetId = state.activePlanetId): boolean {
+export function getBlueprintRequirements(blueprint: BlueprintDefinition): Array<{ constructionId: ConstructionId; amount: number }> {
+  return blueprintRequirements(blueprint) ?? [];
+}
+
+interface BlueprintDeploymentPlan {
+  blueprint: BlueprintDefinition;
+  planetId: PlanetId;
+  rotation: BlueprintRotation;
+  mirror: BlueprintMirror;
+  matches: ReturnType<typeof resolveBlueprintResourceAnchors>;
+  requirements: Array<{ constructionId: ConstructionId; amount: number }>;
+  compatible: boolean;
+  inventoryReady: boolean;
+  canPlace: boolean;
+}
+
+function createBlueprintDeploymentPlan(
+  state: GameState,
+  blueprintId: string,
+  position: { x: number; y: number },
+  options: { planetId?: PlanetId; rotation?: BlueprintRotation; mirror?: BlueprintMirror } = {},
+): BlueprintDeploymentPlan | null {
   const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
-  if (!blueprint || blueprint.entities.length === 0 ||
+  const planetId = options.planetId ?? state.activePlanetId;
+  const rotation = options.rotation ?? blueprint?.rotation ?? 0;
+  const mirror = options.mirror ?? blueprint?.mirror ?? "none";
+  if (!blueprint || !PLANET_LIST.some((planet) => planet.id === planetId) || ![0, 90, 180, 270].includes(rotation) ||
+    (mirror !== "none" && mirror !== "horizontal") || !Number.isFinite(position.x) || !Number.isFinite(position.y)) return null;
+  const allKeys = [...blueprint.entities.map((entity) => entity.key), ...(blueprint.resourceAnchors ?? []).map((anchor) => anchor.key)];
+  if (new Set(allKeys).size !== allKeys.length || blueprint.entities.some((entity) =>
+    !Number.isSafeInteger(entity.machineCount) || entity.machineCount < 1 || entity.machineCount > MAX_BUILDING_STACK_COUNT) || (blueprint.resourceAnchors ?? []).some((anchor) =>
+    !Number.isSafeInteger(anchor.minerCount) || anchor.minerCount < 1) || blueprint.belts.some((belt) =>
+    !Number.isSafeInteger(belt.lanes) || belt.lanes < 1)) return null;
+  const matches = resolveBlueprintResourceAnchors(state, blueprint, position, planetId, rotation, mirror);
+  const activeKeys = new Set([
+    ...blueprint.entities.map((entity) => entity.key),
+    ...matches.resolved.map(({ anchor }) => anchor.key),
+  ]);
+  const requirements = blueprintRequirements(
+    blueprint,
+    new Map(matches.resolved.map(({ anchor, installCount }) => [anchor.key, installCount])),
+    activeKeys,
+  );
+  if (!requirements) return null;
+  const compatible = (blueprint.entities.length > 0 || matches.resolved.length > 0) &&
+    blueprint.entities.every((entity) => canPlaceBuildingOnPlanet(entity.buildingId, planetId, state)) &&
+    blueprint.entities.filter((entity) => entity.buildingId === "space_station_construction_launcher").length <= 1 &&
+    !(blueprint.entities.some((entity) => entity.buildingId === "space_station_construction_launcher") &&
+      state.entities.some((entity) => entity.planetId === planetId && entity.buildingId === "space_station_construction_launcher"));
+  const inventoryReady = requirements.every((requirement) => {
+    const available = state.construction[requirement.constructionId] ?? 0;
+    return Number.isSafeInteger(available) && available >= requirement.amount;
+  });
+  return { blueprint, planetId, rotation, mirror, matches, requirements, compatible, inventoryReady, canPlace: compatible && inventoryReady };
+}
+
+export function getBlueprintPlacementPreview(
+  state: GameState,
+  blueprintId: string,
+  position: { x: number; y: number },
+  options: { planetId?: PlanetId; rotation?: BlueprintRotation; mirror?: BlueprintMirror } = {},
+): BlueprintPlacementPreview {
+  const plan = createBlueprintDeploymentPlan(state, blueprintId, position, options);
+  if (!plan) return { matchedResourceAnchors: 0, skippedResourceAnchors: [], extractorInstallCount: 0, requirements: [], compatible: false, inventoryReady: false, canPlace: false };
+  return {
+    matchedResourceAnchors: plan.matches.resolved.length,
+    skippedResourceAnchors: plan.matches.skipped.map((anchor) => ({ key: anchor.key, resourceId: anchor.resourceId })),
+    extractorInstallCount: plan.matches.resolved.reduce((sum, match) => sum + match.installCount, 0),
+    requirements: plan.requirements,
+    compatible: plan.compatible,
+    inventoryReady: plan.inventoryReady,
+    canPlace: plan.canPlace,
+  };
+}
+
+export interface BlueprintFleetLoadPreview {
+  drones: { target: number; loaded: number; shortfall: number };
+  vessels: { target: number; loaded: number; shortfall: number };
+}
+
+function getBlueprintFleetTargets(blueprint: BlueprintDefinition): { drones: number; vessels: number } {
+  let drones = 0;
+  let vessels = 0;
+  for (const template of blueprint.entities) {
+    const count = Math.max(1, Math.floor(template.machineCount));
+    if (template.buildingId === "planetary_logistics_station" || template.buildingId === "interstellar_logistics_station") {
+      drones += Math.min(STATION_DRONES_PER_BUILDING * count, Math.max(0, Math.floor(template.stationDroneTarget ?? 0)));
+    }
+    if (template.buildingId === "interstellar_logistics_station") {
+      vessels += Math.min(STATION_VESSELS_PER_BUILDING * count, Math.max(0, Math.floor(template.stationVesselTarget ?? 0)));
+    }
+  }
+  return { drones, vessels };
+}
+
+export function getBlueprintFleetLoadPreview(state: GameState, blueprintId: string): BlueprintFleetLoadPreview {
+  const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
+  const result: BlueprintFleetLoadPreview = {
+    drones: { target: 0, loaded: 0, shortfall: 0 },
+    vessels: { target: 0, loaded: 0, shortfall: 0 },
+  };
+  if (!blueprint) return result;
+  const targets = getBlueprintFleetTargets(blueprint);
+  result.drones.target = targets.drones;
+  result.vessels.target = targets.vessels;
+  result.drones.loaded = Math.min(result.drones.target, Math.max(0, Math.floor(state.portableFleet.logistics_drone ?? 0)));
+  result.vessels.loaded = Math.min(result.vessels.target, Math.max(0, Math.floor(state.portableFleet.logistics_vessel ?? 0)));
+  result.drones.shortfall = result.drones.target - result.drones.loaded;
+  result.vessels.shortfall = result.vessels.target - result.vessels.loaded;
+  return result;
+}
+
+export function canPlaceBlueprint(
+  state: GameState,
+  blueprintId: string,
+  planetId: PlanetId = state.activePlanetId,
+  position?: { x: number; y: number },
+): boolean {
+  const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
+  if (position) return getBlueprintPlacementPreview(state, blueprintId, position, { planetId }).canPlace;
+  if (!blueprint || (blueprint.entities.length === 0 && (blueprint.resourceAnchors?.length ?? 0) === 0) ||
     blueprint.entities.some((entity) => !canPlaceBuildingOnPlanet(entity.buildingId, planetId, state))) return false;
-  return getBlueprintRequirements(blueprint).every((requirement) =>
+  const requirements = blueprintRequirements(blueprint);
+  return Boolean(requirements) && requirements!.every((requirement) =>
     (state.construction[requirement.constructionId] ?? 0) >= requirement.amount);
 }
 
-function transformBlueprintOffset(
+export function transformBlueprintOffset(
   offset: { x: number; y: number },
   rotation: BlueprintRotation,
   mirror: BlueprintMirror,
@@ -4611,16 +6281,21 @@ export function placeBlueprint(
   position: { x: number; y: number },
   options: { planetId?: PlanetId; rotation?: BlueprintRotation; mirror?: BlueprintMirror } = {},
 ): GameState {
-  const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
-  const planetId = options.planetId ?? state.activePlanetId;
-  const rotation = options.rotation ?? blueprint?.rotation ?? 0;
-  const mirror = options.mirror ?? blueprint?.mirror ?? "none";
-  if (!blueprint || !canPlaceBlueprint(state, blueprintId, planetId)) return state;
-  const next = copyState(state);
-  for (const requirement of getBlueprintRequirements(blueprint)) {
+  const plan = createBlueprintDeploymentPlan(state, blueprintId, position, options);
+  if (!plan?.canPlace) return state;
+  const { blueprint, planetId, rotation, mirror, matches, requirements } = plan;
+  let next = copyState(state);
+  for (const requirement of requirements) {
     next.construction[requirement.constructionId] = (next.construction[requirement.constructionId] ?? 0) - requirement.amount;
+    if (!Number.isSafeInteger(next.construction[requirement.constructionId]) || next.construction[requirement.constructionId]! < 0) return state;
   }
-  const entityIdByKey = new Map<string, string>();
+  const entityIdByKey = new Map<string, string>(matches.resolved.map(({ anchor, entity }) => [anchor.key, entity.id]));
+  for (const match of matches.resolved) {
+    if (match.installCount < 1) continue;
+    const target = next.entities.find((entity) => entity.id === match.entity.id)!;
+    target.minerCount = Math.floor(target.minerCount + match.installCount);
+    target.extractorBuildingId = match.anchor.extractorBuildingId;
+  }
   for (const template of blueprint.entities) {
     const building = getBuilding(template.buildingId);
     const transformedOffset = transformBlueprintOffset(template.offset, rotation, mirror);
@@ -4639,10 +6314,26 @@ export function placeBlueprint(
         building.kind === "splitter" ? "splitter" : building.kind === "station" ? "station" : "machine",
       planetId,
       position: { x: position.x + transformedOffset.x, y: position.y + transformedOffset.y },
+      interactionLocked: false,
       buildingId: template.buildingId,
       recipeId,
+      targetDysonOrbitId: template.buildingId === "em_rail_ejector"
+        ? template.targetDysonOrbitId ?? activeDysonOrbitIdForPlanet(next, planetId)
+        : undefined,
       storedItemId: template.storedItemId,
+      stationTier: template.buildingId === "interstellar_logistics_station" ? template.stationTier ?? 1 : undefined,
+      stationOperationMode: template.buildingId === "interstellar_logistics_station"
+        ? (template.stationTier === 2 ? template.stationOperationMode ?? "legacy" : "legacy")
+        : undefined,
+      stationModeTransition: template.buildingId === "interstellar_logistics_station" ? null : undefined,
+      quantumMode: template.buildingId === "interstellar_logistics_station" ? "legacy" : undefined,
+      quantumTransition: template.buildingId === "interstellar_logistics_station" ? null : undefined,
+      quantumTarget: template.buildingId === "interstellar_logistics_station" ? Boolean(template.quantumTarget) : undefined,
+      elevatorOutputItems: template.buildingId === "interstellar_logistics_station"
+        ? Array.from({ length: 5 }, (_, index) => template.elevatorOutputItems?.[index] ?? null)
+        : undefined,
       deliveryItemIds: template.deliveryItemIds ? [...template.deliveryItemIds] : undefined,
+      deliverySlots: template.deliverySlots?.map((slot) => ({ ...slot })),
       distributionMode: building.kind === "splitter" ? template.distributionMode ?? "balanced" : undefined,
       fuelItemId: template.fuelItemId,
       fuelRemainingMj: getFuelItemIdsForBuilding(template.buildingId).length > 0 ? 0 : undefined,
@@ -4685,8 +6376,8 @@ export function placeBlueprint(
       proliferatorMode: template.sprayCoaterInstalled ? template.proliferatorMode ?? "normal" : undefined,
       proliferatorPoints: 0,
       proliferatorBonusProgress: {},
-      blackHolePaused: template.buildingId === "micro_black_hole_connector" ? true : undefined,
-      blackHoleActivationConfirmed: template.buildingId === "micro_black_hole_connector" ? false : undefined,
+      blackHolePaused: template.buildingId === "micro_black_hole_connector" ? template.operationEnabledOnDeploy !== true : undefined,
+      blackHoleActivationConfirmed: template.buildingId === "micro_black_hole_connector" ? template.operationEnabledOnDeploy === true : undefined,
       blackHolePorts: template.buildingId === "micro_black_hole_connector" ? ([0, 1, 2] as const).map((index) => ({ index, totalDestroyed: "0" })) : undefined,
       machineCount: template.buildingId === "micro_black_hole_connector" || template.buildingId === "time_warp_device" ? 1 : template.machineCount,
       minerCount: 0,
@@ -4697,11 +6388,54 @@ export function placeBlueprint(
       utilization: 0,
       productionRate: 0,
     });
+    const placed = next.entities.at(-1)!;
+    if (placed.buildingId === "planetary_logistics_station" || placed.buildingId === "interstellar_logistics_station") {
+      const target = Math.min(getStationDroneCapacity(placed), Math.max(0, Math.floor(template.stationDroneTarget ?? 0)));
+      const loaded = Math.min(target, Math.max(0, Math.floor(next.portableFleet.logistics_drone ?? 0)));
+      placed.stationDrones = loaded;
+      next.portableFleet.logistics_drone -= loaded;
+    }
+    if (placed.buildingId === "interstellar_logistics_station") {
+      const target = Math.min(getStationVesselCapacity(placed), Math.max(0, Math.floor(template.stationVesselTarget ?? 0)));
+      const loaded = Math.min(target, Math.max(0, Math.floor(next.portableFleet.logistics_vessel ?? 0)));
+      placed.stationVessels = loaded;
+      next.portableFleet.logistics_vessel -= loaded;
+    }
+  }
+  if (isTechnologyCompleted(next, "quantum_logistics_network")) {
+    const plannedStationIds = next.entities
+      .filter((entity) => entity.buildingId === "interstellar_logistics_station" && entity.quantumTarget === true && (entity.stationTier ?? 1) >= 2 && !entity.quantumTransition && entity.quantumMode !== "quantum")
+      .map((entity) => entity.id);
+    if (plannedStationIds.length > 0) {
+      const attached = beginQuantumAttachments(next, plannedStationIds);
+      if (attached.startedIds.length > 0) {
+        const started = new Set(attached.startedIds);
+        next = { ...attached.state, entities: attached.state.entities.map((entity) => started.has(entity.id) ? { ...entity, quantumTarget: undefined } : entity) };
+      }
+    }
   }
   for (const template of blueprint.belts) {
     const source = entityIdByKey.get(template.sourceKey);
     const target = entityIdByKey.get(template.targetKey);
     if (!source || !target) continue;
+    const targetEntity = next.entities.find((entity) => entity.id === target)!;
+    const sourceEntity = next.entities.find((entity) => entity.id === source)!;
+    if (template.elevatorOutputIndex !== undefined) {
+      if (!isElevatorStation(sourceEntity)) return state;
+      const outputItems = Array.from({ length: 5 }, (_, index) => sourceEntity.elevatorOutputItems?.[index] ?? null);
+      const currentOutput = outputItems[template.elevatorOutputIndex];
+      if (currentOutput && currentOutput !== template.itemId) return state;
+      if (outputItems.some((itemId, index) => index !== template.elevatorOutputIndex && itemId === template.itemId)) return state;
+      outputItems[template.elevatorOutputIndex] = template.itemId;
+      sourceEntity.elevatorOutputItems = outputItems;
+    }
+    const targetPortIndex = targetEntity.buildingId === "material_delivery_hub"
+      ? resolveMaterialDeliverySlotIndex(targetEntity, template.itemId, template.targetPortIndex)
+      : targetEntity.buildingId === "micro_black_hole_connector"
+        ? resolveBlackHolePortIndex(next, target, template.targetPortIndex)
+        : undefined;
+    if ((targetEntity.buildingId === "material_delivery_hub" || targetEntity.buildingId === "micro_black_hole_connector") && targetPortIndex === undefined) return state;
+    configureTargetItem(targetEntity, template.itemId, targetPortIndex);
     next.belts.push({
       id: `belt_${next.nextId}`,
       planetId,
@@ -4710,14 +6444,15 @@ export function placeBlueprint(
       itemId: template.itemId,
       lanes: template.lanes,
       tier: template.tier,
-      sorterTier: template.tier,
+      sorterTier: Math.min(3, template.tier) as SorterTier,
       progress: 0,
       priority: template.priority,
       stackSize: template.stackSize ?? 1,
       monitorEnabled: template.monitorEnabled ?? false,
       routeMode: template.routeMode ?? "auto",
       routeOffsetY: template.routeOffsetY,
-      targetPortIndex: template.targetPortIndex,
+      targetPortIndex,
+      elevatorOutputIndex: template.elevatorOutputIndex,
       totalTransferred: 0,
       congestion: 0,
       lastFlow: 0,
@@ -4727,10 +6462,111 @@ export function placeBlueprint(
   return next;
 }
 
-export function canQueueBlueprint(state: GameState, blueprintId: string, planetId: PlanetId = state.activePlanetId): boolean {
+export const MAX_BLUEPRINT_CONSTRUCTION_ORDERS = 100;
+export const MAX_BLUEPRINT_CONSTRUCTION_NODES = 100_000;
+export const MAX_BLUEPRINT_CONSTRUCTION_BELTS = 250_000;
+
+function getConstructionQueueBlueprint(state: GameState, entry: GameState["constructionQueue"][number]): BlueprintDefinition | undefined {
+  const snapshot = entry.blueprintVersionId
+    ? (state.blueprintVersions ?? []).find((candidate) => candidate.id === entry.blueprintVersionId)
+    : undefined;
+  return snapshot?.definition ?? state.blueprints.find((candidate) => candidate.id === entry.blueprintId);
+}
+
+function queueBlueprintVersionId(blueprint: BlueprintDefinition): string {
+  return `${blueprint.id}@${Math.max(1, Math.floor(blueprint.revision ?? 1))}`;
+}
+
+function ensureBlueprintVersion(state: GameState, blueprint: BlueprintDefinition): { state: GameState; versionId: string } {
+  const versionId = queueBlueprintVersionId(blueprint);
+  if ((state.blueprintVersions ?? []).some((snapshot) => snapshot.id === versionId)) return { state, versionId };
+  return {
+    state: {
+      ...state,
+      blueprintVersions: [...(state.blueprintVersions ?? []), {
+        id: versionId,
+        blueprintId: blueprint.id,
+        revision: Math.max(1, Math.floor(blueprint.revision ?? 1)),
+        definition: cloneBlueprintDefinition(blueprint),
+      }],
+    },
+    versionId,
+  };
+}
+
+function pruneBlueprintVersions(state: GameState): GameState {
+  const referenced = new Set(state.constructionQueue.flatMap((entry) => entry.blueprintVersionId ? [entry.blueprintVersionId] : []));
+  const nextVersions = (state.blueprintVersions ?? []).filter((snapshot) => referenced.has(snapshot.id));
+  return nextVersions.length === (state.blueprintVersions ?? []).length ? state : { ...state, blueprintVersions: nextVersions };
+}
+
+function queueBlueprintPreview(state: GameState, entry: GameState["constructionQueue"][number], blueprint: BlueprintDefinition): BlueprintPlacementPreview {
+  const previewState = { ...state, blueprints: [blueprint] };
+  const preview = getBlueprintPlacementPreview(previewState, blueprint.id, entry.position, {
+    planetId: entry.planetId,
+    rotation: entry.rotation,
+    mirror: entry.mirror,
+  });
+  const overlaps = hasQueuedBlueprintOverlap(
+    state,
+    blueprint,
+    entry.position,
+    entry.planetId,
+    entry.rotation,
+    entry.mirror,
+    entry.id,
+  );
+  return overlaps ? { ...preview, compatible: false, canPlace: false } : preview;
+}
+
+function hasQueuedBlueprintOverlap(
+  state: GameState,
+  blueprint: BlueprintDefinition,
+  position: { x: number; y: number },
+  planetId: PlanetId,
+  rotation: BlueprintRotation,
+  mirror: BlueprintMirror,
+  excludedEntryId?: string,
+): boolean {
+  const occupied = new Set(state.entities
+    .filter((entity) => entity.planetId === planetId)
+    .map((entity) => `${Math.round(entity.position.x)}:${Math.round(entity.position.y)}`));
+  for (const entry of state.constructionQueue) {
+    if (entry.id === excludedEntryId || entry.planetId !== planetId || (entry.status ?? "pending-materials") === "waiting-fleet") continue;
+    const queued = getConstructionQueueBlueprint(state, entry);
+    if (!queued) continue;
+    for (const template of queued.entities) {
+      const offset = transformBlueprintOffset(template.offset, entry.rotation, entry.mirror);
+      occupied.add(`${Math.round(entry.position.x + offset.x)}:${Math.round(entry.position.y + offset.y)}`);
+    }
+  }
+  return blueprint.entities.some((template) => {
+    const offset = transformBlueprintOffset(template.offset, rotation, mirror);
+    return occupied.has(`${Math.round(position.x + offset.x)}:${Math.round(position.y + offset.y)}`);
+  });
+}
+
+export function canQueueBlueprint(
+  state: GameState,
+  blueprintId: string,
+  planetId: PlanetId = state.activePlanetId,
+  position?: { x: number; y: number },
+): boolean {
   const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
-  return Boolean(blueprint?.entities.length && blueprint.entities.every((entity) =>
-    canPlaceBuildingOnPlanet(entity.buildingId, planetId, state)));
+  if (!blueprint || (blueprint.entities.length === 0 && (blueprint.resourceAnchors?.length ?? 0) === 0) ||
+    state.constructionQueue.length >= MAX_BLUEPRINT_CONSTRUCTION_ORDERS ||
+    blueprint.entities.length + (blueprint.resourceAnchors?.length ?? 0) > MAX_BLUEPRINT_CONSTRUCTION_NODES ||
+    blueprint.belts.length > MAX_BLUEPRINT_CONSTRUCTION_BELTS) return false;
+  if (!position) return blueprint.entities.every((entity) => canPlaceBuildingOnPlanet(entity.buildingId, planetId, state));
+  const preview = getBlueprintPlacementPreview(state, blueprintId, position, { planetId });
+  return preview.compatible && !hasQueuedBlueprintOverlap(
+    state,
+    blueprint,
+    position,
+    planetId,
+    blueprint.rotation ?? 0,
+    blueprint.mirror ?? "none",
+  ) && Boolean(blueprint.entities.length || preview.matchedResourceAnchors > 0);
 }
 
 export function queueBlueprint(
@@ -4739,54 +6575,282 @@ export function queueBlueprint(
   position: { x: number; y: number },
 ): GameState {
   const blueprint = state.blueprints.find((candidate) => candidate.id === blueprintId);
-  if (!blueprint || !canQueueBlueprint(state, blueprintId)) return state;
+  if (!blueprint || !canQueueBlueprint(state, blueprintId, state.activePlanetId, position)) return state;
   const next = copyState(state);
-  next.constructionQueue.push({
-    id: `construction_${next.nextId}`,
+  const version = ensureBlueprintVersion(next, blueprint);
+  const withVersion = version.state;
+  withVersion.constructionQueue.push({
+    id: `construction_${withVersion.nextId}`,
     blueprintId,
+    blueprintVersionId: version.versionId,
+    blueprintRevision: Math.max(1, Math.floor(blueprint.revision ?? 1)),
     blueprintName: blueprint.name,
-    planetId: next.activePlanetId,
+    planetId: withVersion.activePlanetId,
     position: { ...position },
     rotation: blueprint.rotation ?? 0,
     mirror: blueprint.mirror ?? "none",
-    queuedAt: next.elapsedSeconds,
+    queuedAt: withVersion.elapsedSeconds,
+    status: "pending-materials",
+    reservedConstruction: {},
+    reservedFleet: {},
+    placedEntityIdsByKey: {},
   });
-  next.nextId += 1;
-  return next;
+  withVersion.nextId += 1;
+  return withVersion;
 }
 
-export function cancelConstructionQueueEntry(state: GameState, entryId: string): GameState {
-  if (!state.constructionQueue.some((entry) => entry.id === entryId)) return state;
-  return { ...state, constructionQueue: state.constructionQueue.filter((entry) => entry.id !== entryId) };
+export interface ConstructionQueueRequirementStatus {
+  constructionId: ConstructionId;
+  total: number;
+  reserved: number;
+  available: number;
+  missing: number;
+}
+
+export interface ConstructionQueueFleetStatus {
+  itemId: PortableFleetItemId;
+  total: number;
+  installedOrReserved: number;
+  available: number;
+  missing: number;
+}
+
+export interface ConstructionQueueDetails {
+  status: "pending-materials" | "waiting-fleet" | "invalid";
+  blueprint?: BlueprintDefinition;
+  requirements: ConstructionQueueRequirementStatus[];
+  fleet: ConstructionQueueFleetStatus[];
+  compatible: boolean;
+  blockedReason?: string;
+}
+
+function installedFleetForEntry(
+  state: GameState,
+  entry: GameState["constructionQueue"][number],
+  blueprint: BlueprintDefinition,
+): { drones: number; vessels: number } {
+  let drones = 0;
+  let vessels = 0;
+  for (const template of blueprint.entities) {
+    const entityId = entry.placedEntityIdsByKey?.[template.key];
+    const entity = entityId ? state.entities.find((candidate) => candidate.id === entityId) : undefined;
+    if (!entity) continue;
+    const droneTarget = template.buildingId === "planetary_logistics_station" || template.buildingId === "interstellar_logistics_station"
+      ? Math.min(getStationDroneCapacity(entity), Math.max(0, Math.floor(template.stationDroneTarget ?? 0)))
+      : 0;
+    const vesselTarget = template.buildingId === "interstellar_logistics_station"
+      ? Math.min(getStationVesselCapacity(entity), Math.max(0, Math.floor(template.stationVesselTarget ?? 0)))
+      : 0;
+    drones += Math.min(droneTarget, Math.max(0, Math.floor(entity.stationDrones ?? 0)));
+    vessels += Math.min(vesselTarget, Math.max(0, Math.floor(entity.stationVessels ?? 0)));
+  }
+  return { drones, vessels };
+}
+
+export function getConstructionQueueDetails(state: GameState, entryId: string): ConstructionQueueDetails {
+  const entry = state.constructionQueue.find((candidate) => candidate.id === entryId);
+  const blueprint = entry ? getConstructionQueueBlueprint(state, entry) : undefined;
+  if (!entry || !blueprint) return { status: "invalid", requirements: [], fleet: [], compatible: false, blockedReason: "蓝图版本不可用" };
+  const preview = queueBlueprintPreview(state, entry, blueprint);
+  const pendingMaterials = (entry.status ?? "pending-materials") !== "waiting-fleet";
+  const requirements = pendingMaterials ? preview.requirements.map((requirement) => {
+    const reserved = Math.max(0, Math.floor(entry.reservedConstruction?.[requirement.constructionId] ?? 0));
+    const available = Math.max(0, Math.floor(state.construction[requirement.constructionId] ?? 0));
+    return { ...requirement, total: requirement.amount, reserved, available, missing: Math.max(0, requirement.amount - reserved) };
+  }) : [];
+  const targets = getBlueprintFleetTargets(blueprint);
+  const installed = pendingMaterials
+    ? { drones: Math.max(0, Math.floor(entry.reservedFleet?.logistics_drone ?? 0)), vessels: Math.max(0, Math.floor(entry.reservedFleet?.logistics_vessel ?? 0)) }
+    : installedFleetForEntry(state, entry, blueprint);
+  const fleet = ([
+    { itemId: "logistics_drone", total: targets.drones, installedOrReserved: installed.drones, available: Math.max(0, Math.floor(state.portableFleet.logistics_drone ?? 0)), missing: Math.max(0, targets.drones - installed.drones) },
+    { itemId: "logistics_vessel", total: targets.vessels, installedOrReserved: installed.vessels, available: Math.max(0, Math.floor(state.portableFleet.logistics_vessel ?? 0)), missing: Math.max(0, targets.vessels - installed.vessels) },
+  ] satisfies ConstructionQueueFleetStatus[]).filter((item) => item.total > 0);
+  const missingPlacedEntity = !pendingMaterials && blueprint.entities.some((template) => {
+    const entityId = entry.placedEntityIdsByKey?.[template.key];
+    return (template.stationDroneTarget ?? 0) > 0 || (template.stationVesselTarget ?? 0) > 0
+      ? !entityId || !state.entities.some((entity) => entity.id === entityId)
+      : false;
+  });
+  const compatible = pendingMaterials ? preview.compatible : !missingPlacedEntity;
+  return {
+    status: pendingMaterials ? "pending-materials" : "waiting-fleet",
+    blueprint,
+    requirements,
+    fleet,
+    compatible,
+    blockedReason: compatible ? undefined : pendingMaterials ? "放置位置、行星或资源锚点已不兼容" : "目标物流塔已拆除",
+  };
 }
 
 export function getConstructionQueueDeficits(state: GameState, entryId: string) {
+  return getConstructionQueueDetails(state, entryId).requirements.filter((requirement) => requirement.missing > 0);
+}
+
+function safeInventoryAdd(current: number | undefined, amount: number): number | null {
+  const next = Math.max(0, Math.floor(current ?? 0)) + Math.max(0, Math.floor(amount));
+  return Number.isSafeInteger(next) ? next : null;
+}
+
+function deployFundedConstructionQueueEntry(state: GameState, entryId: string): GameState {
   const entry = state.constructionQueue.find((candidate) => candidate.id === entryId);
-  const blueprint = entry ? state.blueprints.find((candidate) => candidate.id === entry.blueprintId) : undefined;
-  if (!blueprint) return [];
-  return getBlueprintRequirements(blueprint).flatMap((requirement) => {
-    const available = Math.floor(state.construction[requirement.constructionId] ?? 0);
-    const missing = Math.max(0, requirement.amount - available);
-    return missing > 0 ? [{ ...requirement, available, missing }] : [];
+  const blueprint = entry ? getConstructionQueueBlueprint(state, entry) : undefined;
+  const details = getConstructionQueueDetails(state, entryId);
+  if (!entry || !blueprint || details.status !== "pending-materials" || !details.compatible || details.requirements.some((requirement) => requirement.missing > 0)) return state;
+
+  const temporary = copyState(state);
+  temporary.blueprints = [cloneBlueprintDefinition(blueprint)];
+  temporary.construction = { ...entry.reservedConstruction };
+  temporary.portableFleet = {
+    logistics_drone: Math.max(0, Math.floor(entry.reservedFleet?.logistics_drone ?? 0)),
+    logistics_vessel: Math.max(0, Math.floor(entry.reservedFleet?.logistics_vessel ?? 0)),
+  };
+  const previousEntityIds = new Set(temporary.entities.map((entity) => entity.id));
+  const deployed = placeBlueprint(temporary, blueprint.id, entry.position, {
+    planetId: entry.planetId,
+    rotation: entry.rotation,
+    mirror: entry.mirror,
   });
+  if (deployed === temporary) return state;
+
+  const restoredConstruction = { ...state.construction };
+  for (const [constructionId, amount] of Object.entries(deployed.construction) as Array<[ConstructionId, number | undefined]>) {
+    const merged = safeInventoryAdd(restoredConstruction[constructionId], amount ?? 0);
+    if (merged === null) return state;
+    restoredConstruction[constructionId] = merged;
+  }
+  const restoredFleet = { ...state.portableFleet };
+  for (const itemId of ["logistics_drone", "logistics_vessel"] as PortableFleetItemId[]) {
+    const merged = safeInventoryAdd(restoredFleet[itemId], deployed.portableFleet[itemId]);
+    if (merged === null) return state;
+    restoredFleet[itemId] = merged;
+  }
+  const placedEntities = deployed.entities.filter((entity) => !previousEntityIds.has(entity.id));
+  const placedEntityIdsByKey = Object.fromEntries(blueprint.entities.map((template, index) => [template.key, placedEntities[index]?.id]).filter((entry): entry is [string, string] => Boolean(entry[1])));
+  let next: GameState = {
+    ...deployed,
+    blueprints: state.blueprints,
+    blueprintVersions: state.blueprintVersions,
+    construction: restoredConstruction,
+    portableFleet: restoredFleet,
+    constructionQueue: deployed.constructionQueue.map((candidate) => candidate.id === entryId ? {
+      ...candidate,
+      status: "waiting-fleet" as const,
+      reservedConstruction: {},
+      reservedFleet: {},
+      placedEntityIdsByKey,
+      buildingCompletedAt: deployed.elapsedSeconds,
+    } : candidate),
+  };
+  const fleetComplete = getConstructionQueueDetails(next, entryId).fleet.every((item) => item.missing === 0);
+  if (fleetComplete) next = { ...next, constructionQueue: next.constructionQueue.filter((candidate) => candidate.id !== entryId) };
+  return pruneBlueprintVersions(next);
+}
+
+function fundWaitingFleetEntry(state: GameState, entryId: string): GameState {
+  const entry = state.constructionQueue.find((candidate) => candidate.id === entryId);
+  const blueprint = entry ? getConstructionQueueBlueprint(state, entry) : undefined;
+  if (!entry || !blueprint || (entry.status ?? "pending-materials") !== "waiting-fleet") return state;
+  const next = copyState(state);
+  const nextEntry = next.constructionQueue.find((candidate) => candidate.id === entryId)!;
+  for (const template of blueprint.entities) {
+    const entityId = nextEntry.placedEntityIdsByKey?.[template.key];
+    const entity = entityId ? next.entities.find((candidate) => candidate.id === entityId) : undefined;
+    if (!entity) continue;
+    if (template.buildingId === "planetary_logistics_station" || template.buildingId === "interstellar_logistics_station") {
+      const target = Math.min(getStationDroneCapacity(entity), Math.max(0, Math.floor(template.stationDroneTarget ?? 0)));
+      const missing = Math.max(0, target - Math.max(0, Math.floor(entity.stationDrones ?? 0)));
+      const loaded = Math.min(missing, next.portableFleet.logistics_drone);
+      entity.stationDrones = Math.max(0, Math.floor(entity.stationDrones ?? 0)) + loaded;
+      next.portableFleet.logistics_drone -= loaded;
+    }
+    if (template.buildingId === "interstellar_logistics_station") {
+      const target = Math.min(getStationVesselCapacity(entity), Math.max(0, Math.floor(template.stationVesselTarget ?? 0)));
+      const missing = Math.max(0, target - Math.max(0, Math.floor(entity.stationVessels ?? 0)));
+      const loaded = Math.min(missing, next.portableFleet.logistics_vessel);
+      entity.stationVessels = Math.max(0, Math.floor(entity.stationVessels ?? 0)) + loaded;
+      next.portableFleet.logistics_vessel -= loaded;
+    }
+  }
+  const details = getConstructionQueueDetails(next, entryId);
+  if (!details.compatible || details.fleet.every((item) => item.missing === 0)) {
+    next.constructionQueue = next.constructionQueue.filter((candidate) => candidate.id !== entryId);
+  }
+  return pruneBlueprintVersions(next);
+}
+
+export function fundConstructionQueueEntry(
+  state: GameState,
+  entryId: string,
+  scope: "construction" | "fleet" | "all" = "all",
+): GameState {
+  const details = getConstructionQueueDetails(state, entryId);
+  if (!details.blueprint || !details.compatible) return state;
+  if (details.status === "waiting-fleet") return scope === "construction" ? state : fundWaitingFleetEntry(state, entryId);
+  const constructionAlreadyFunded = details.requirements.every((requirement) => requirement.missing === 0);
+  const next = copyState(state);
+  const entry = next.constructionQueue.find((candidate) => candidate.id === entryId)!;
+  let changed = false;
+  if (scope !== "fleet") {
+    const requiredIds = new Set(details.requirements.map((requirement) => requirement.constructionId));
+    for (const [constructionId, reserved] of Object.entries(entry.reservedConstruction ?? {}) as Array<[ConstructionId, number | undefined]>) {
+      const target = details.requirements.find((requirement) => requirement.constructionId === constructionId)?.total ?? 0;
+      if (requiredIds.has(constructionId) && (reserved ?? 0) <= target) continue;
+      const returned = safeInventoryAdd(next.construction[constructionId], Math.max(0, Math.floor(reserved ?? 0)) - target);
+      if (returned === null) return state;
+      next.construction[constructionId] = returned;
+      entry.reservedConstruction![constructionId] = target;
+      changed = true;
+    }
+    for (const requirement of details.requirements) {
+      const reserved = Math.max(0, Math.floor(entry.reservedConstruction?.[requirement.constructionId] ?? 0));
+      const taken = Math.min(requirement.total - reserved, Math.max(0, Math.floor(next.construction[requirement.constructionId] ?? 0)));
+      entry.reservedConstruction![requirement.constructionId] = reserved + taken;
+      next.construction[requirement.constructionId] = Math.max(0, Math.floor(next.construction[requirement.constructionId] ?? 0)) - taken;
+      if (taken > 0) changed = true;
+    }
+  }
+  if (scope !== "construction") {
+    for (const fleet of details.fleet) {
+      const reserved = Math.max(0, Math.floor(entry.reservedFleet?.[fleet.itemId] ?? 0));
+      const taken = Math.min(fleet.total - reserved, Math.max(0, Math.floor(next.portableFleet[fleet.itemId] ?? 0)));
+      entry.reservedFleet![fleet.itemId] = reserved + taken;
+      next.portableFleet[fleet.itemId] -= taken;
+      if (taken > 0) changed = true;
+    }
+  }
+  if (!changed) return constructionAlreadyFunded ? deployFundedConstructionQueueEntry(state, entryId) : state;
+  return deployFundedConstructionQueueEntry(next, entryId);
+}
+
+export function fundAllConstructionQueueEntries(state: GameState): GameState {
+  const ids = [...state.constructionQueue]
+    .sort((left, right) => left.queuedAt - right.queuedAt || left.id.localeCompare(right.id))
+    .map((entry) => entry.id);
+  return ids.reduce((next, entryId) => fundConstructionQueueEntry(next, entryId, "all"), state);
+}
+
+export function cancelConstructionQueueEntry(state: GameState, entryId: string): GameState {
+  const entry = state.constructionQueue.find((candidate) => candidate.id === entryId);
+  if (!entry) return state;
+  const next = copyState(state);
+  const nextEntry = next.constructionQueue.find((candidate) => candidate.id === entryId)!;
+  for (const [constructionId, amount] of Object.entries(nextEntry.reservedConstruction ?? {}) as Array<[ConstructionId, number | undefined]>) {
+    const returned = safeInventoryAdd(next.construction[constructionId], amount ?? 0);
+    if (returned === null) return state;
+    next.construction[constructionId] = returned;
+  }
+  for (const [itemId, amount] of Object.entries(nextEntry.reservedFleet ?? {}) as Array<[PortableFleetItemId, number | undefined]>) {
+    const returned = safeInventoryAdd(next.portableFleet[itemId], amount ?? 0);
+    if (returned === null) return state;
+    next.portableFleet[itemId] = returned;
+  }
+  next.constructionQueue = next.constructionQueue.filter((candidate) => candidate.id !== entryId);
+  return pruneBlueprintVersions(next);
 }
 
 export function processConstructionQueue(state: GameState): GameState {
-  let next = state;
-  for (const entry of state.constructionQueue) {
-    if (!canPlaceBlueprint(next, entry.blueprintId, entry.planetId)) continue;
-    const deployed = placeBlueprint(next, entry.blueprintId, entry.position, {
-      planetId: entry.planetId,
-      rotation: entry.rotation,
-      mirror: entry.mirror,
-    });
-    if (deployed === next) continue;
-    next = {
-      ...deployed,
-      constructionQueue: deployed.constructionQueue.filter((candidate) => candidate.id !== entry.id),
-    };
-  }
-  return next;
+  return fundAllConstructionQueueEntries(state);
 }
 
 export function canPlaceBuildingOnPlanet(buildingId: BuildingId, planetId: PlanetId, state?: { galaxy?: GameState["galaxy"] }): boolean {
@@ -4799,6 +6863,7 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
   const building = getBuilding(buildingId);
   const singleEntityMegastructure = buildingId === "micro_black_hole_connector" || buildingId === "time_warp_device";
   const amount = singleEntityMegastructure ? 1 : Math.max(1, Math.floor(count));
+  if (buildingId === "space_station_construction_launcher" && state.entities.some((entity) => entity.planetId === state.activePlanetId && entity.buildingId === buildingId)) return state;
   if (building.kind === "miner" || !canPlaceBuildingOnPlanet(buildingId, state.activePlanetId, state) ||
     (state.construction[buildingId] ?? 0) < amount) return state;
   const next = copyState(state);
@@ -4811,11 +6876,15 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
       building.kind === "splitter" ? "splitter" : building.kind === "station" ? "station" : "machine",
     planetId: state.activePlanetId,
     position,
+    interactionLocked: false,
     buildingId,
     powerGridId: "grid-a",
     powerPriority: 2,
     generationPriority: building.kind === "power" ? defaultGenerationPriority({ buildingId } as FactoryEntity) : undefined,
     recipeId: recipe?.id,
+    targetDysonOrbitId: buildingId === "em_rail_ejector"
+      ? activeDysonOrbitIdForPlanet(next, state.activePlanetId)
+      : undefined,
     machineCount: amount,
     minerCount: 0,
     inputs: {},
@@ -4827,7 +6896,12 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
       ? (Object.keys(getPlanetOrbitalYields(state, state.activePlanetId))[0] as ItemId | undefined) ?? "hydrogen"
       : undefined,
     deliveryItemIds: buildingId === "material_delivery_hub" ? [] : undefined,
+    deliverySlots: buildingId === "material_delivery_hub" ? defaultMaterialDeliverySlots() : undefined,
     stationMode: building.kind === "station" ? "supply" : undefined,
+    stationTier: buildingId === "interstellar_logistics_station" ? 1 : undefined,
+    stationOperationMode: buildingId === "interstellar_logistics_station" ? "legacy" : undefined,
+    stationModeTransition: buildingId === "interstellar_logistics_station" ? null : undefined,
+    elevatorOutputItems: buildingId === "interstellar_logistics_station" ? [null, null, null, null, null] : undefined,
     stationProgress: building.kind === "station" ? 0 : undefined,
     stationTrips: building.kind === "station" ? 0 : undefined,
     stationLastTransfer: building.kind === "station" ? 0 : undefined,
@@ -4869,12 +6943,14 @@ export function placeBuilding(state: GameState, buildingId: BuildingId, position
 }
 
 export function addBuildingToGroup(state: GameState, entityId: string, buildingId: BuildingId, count = 1): GameState {
-  if (buildingId === "micro_black_hole_connector" || buildingId === "time_warp_device") return state;
+  if (buildingId === "micro_black_hole_connector" || buildingId === "time_warp_device" || isEntityInteractionLocked(state, entityId)) return state;
   const amount = Math.max(1, Math.floor(count));
-  if (getBuilding(buildingId).kind === "miner" || (state.construction[buildingId] ?? 0) < amount) return state;
+  const definition = getBuilding(buildingId);
+  if (definition.kind === "miner" || (state.construction[buildingId] ?? 0) < amount) return state;
   const next = copyState(state);
   const entity = next.entities.find((item) => item.id === entityId && item.buildingId === buildingId);
   if (!entity) return state;
+  if (definition.stackLimit && entity.machineCount + amount > definition.stackLimit) return state;
   entity.machineCount += amount;
   next.construction[buildingId] = (next.construction[buildingId] ?? 0) - amount;
   return next;
@@ -4890,7 +6966,7 @@ export function addUnitToEntityGroup(state: GameState, entityId: string, count =
 
 export function installMiner(state: GameState, entityId: string, count = 1): GameState {
   const source = state.entities.find((item) => item.id === entityId && item.kind === "vein");
-  if (!source?.resourceId) return state;
+  if (!source?.resourceId || source.interactionLocked) return state;
   const extractorId = getExtractorBuildingId(source.resourceId);
   const amount = Math.max(1, Math.floor(count));
   if ((state.construction[extractorId] ?? 0) < amount) return state;
@@ -5006,9 +7082,119 @@ function storeInPlanetTray(state: GameState, planetId: PlanetId, itemId: ItemId,
   return moved;
 }
 
-export function getMaterialDeliveryItems(entity: FactoryEntity): ItemId[] {
+function defaultMaterialDeliverySlots(): MaterialDeliverySlot[] {
+  return Array.from({ length: MATERIAL_DELIVERY_SLOT_COUNT }, () => ({ itemId: null, mode: "auto" as const }));
+}
+
+export function getMaterialDeliverySlots(entity: FactoryEntity): MaterialDeliverySlot[] {
   if (entity.buildingId !== "material_delivery_hub") return [];
-  return [...new Set((entity.deliveryItemIds ?? []).filter((itemId) => Boolean(ITEMS[itemId])))].slice(0, MATERIAL_DELIVERY_SLOT_COUNT);
+  const legacyItems = [...new Set((entity.deliveryItemIds ?? []).filter((itemId) => Boolean(ITEMS[itemId])))];
+  return defaultMaterialDeliverySlots().map((fallback, index) => {
+    const saved = entity.deliverySlots?.[index];
+    if (saved?.mode === "disabled") return { itemId: null, mode: "disabled" };
+    if (saved?.mode === "manual" && saved.itemId && ITEMS[saved.itemId]) return { itemId: saved.itemId, mode: "manual" };
+    if (saved?.mode === "auto") return { itemId: saved.itemId && ITEMS[saved.itemId] ? saved.itemId : null, mode: "auto" };
+    return legacyItems[index] ? { itemId: legacyItems[index], mode: "auto" } : fallback;
+  });
+}
+
+function synchronizeMaterialDeliverySlots(entity: FactoryEntity, slots: readonly MaterialDeliverySlot[]): void {
+  entity.deliverySlots = slots.map((slot) => ({ ...slot }));
+  entity.deliveryItemIds = [...new Set(slots.flatMap((slot) => slot.itemId ? [slot.itemId] : []))];
+}
+
+export function getMaterialDeliveryItems(entity: FactoryEntity): ItemId[] {
+  return [...new Set(getMaterialDeliverySlots(entity).flatMap((slot) => slot.itemId ? [slot.itemId] : []))];
+}
+
+function resolveMaterialDeliverySlotIndex(
+  entity: FactoryEntity,
+  itemId: ItemId,
+  requested?: 0 | 1 | 2,
+): 0 | 1 | 2 | undefined {
+  const slots = getMaterialDeliverySlots(entity);
+  const accepts = (slot: MaterialDeliverySlot) => slot.mode !== "disabled" && (!slot.itemId || slot.itemId === itemId);
+  if (requested !== undefined) return accepts(slots[requested]) ? requested : undefined;
+  const matching = slots.findIndex((slot) => slot.mode !== "disabled" && slot.itemId === itemId);
+  if (matching >= 0) return matching as 0 | 1 | 2;
+  const unbound = slots.findIndex((slot) => slot.mode === "auto" && !slot.itemId);
+  return unbound >= 0 ? unbound as 0 | 1 | 2 : undefined;
+}
+
+export type MaterialDeliverySlotChangeCheck =
+  | { ok: true; requiresDisconnect: boolean; connectedBelts: number; bufferedItems: number; label: string }
+  | { ok: false; requiresDisconnect: false; connectedBelts: 0; bufferedItems: 0; label: string };
+
+export function getMaterialDeliverySlotChangeCheck(
+  state: GameState,
+  entityId: string,
+  slotIndex: number,
+  mode: MaterialDeliverySlotMode,
+  itemId: ItemId | null = null,
+): MaterialDeliverySlotChangeCheck {
+  const entity = state.entities.find((candidate) => candidate.id === entityId && candidate.buildingId === "material_delivery_hub");
+  if (!entity || entity.interactionLocked || !Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= MATERIAL_DELIVERY_SLOT_COUNT) {
+    return { ok: false, requiresDisconnect: false, connectedBelts: 0, bufferedItems: 0, label: "物资配送接口不可修改" };
+  }
+  if (mode === "manual" && (!itemId || !ITEMS[itemId])) {
+    return { ok: false, requiresDisconnect: false, connectedBelts: 0, bufferedItems: 0, label: "请先选择要指定的物资" };
+  }
+  const slots = getMaterialDeliverySlots(entity);
+  const current = slots[slotIndex];
+  const next: MaterialDeliverySlot = mode === "manual" ? { itemId, mode } : { itemId: null, mode };
+  if (current.mode === next.mode && current.itemId === next.itemId) {
+    return { ok: true, requiresDisconnect: false, connectedBelts: 0, bufferedItems: 0, label: "接口设置没有变化" };
+  }
+  const connectedBelts = state.belts.filter((belt) => belt.target === entityId && belt.targetPortIndex === slotIndex).length;
+  const itemChanges = current.itemId !== next.itemId || next.mode === "disabled" || next.mode === "auto";
+  const remainingUsesCurrentItem = Boolean(current.itemId && slots.some((slot, index) => index !== slotIndex && slot.itemId === current.itemId));
+  const bufferedItems = current.itemId && !remainingUsesCurrentItem && itemChanges
+    ? Math.max(0, Math.floor(entity.inputs[current.itemId] ?? 0))
+    : 0;
+  const requiresDisconnect = connectedBelts > 0 && itemChanges;
+  return {
+    ok: true,
+    requiresDisconnect,
+    connectedBelts,
+    bufferedItems,
+    label: requiresDisconnect
+      ? `接口 ${slotIndex + 1} 仍连接 ${connectedBelts} 条线路；确认后会断开并返还传送带`
+      : "可以修改接口设置",
+  };
+}
+
+export function setMaterialDeliverySlot(
+  state: GameState,
+  entityId: string,
+  slotIndex: number,
+  mode: MaterialDeliverySlotMode,
+  itemId: ItemId | null = null,
+  confirmDisconnect = false,
+): GameState {
+  const check = getMaterialDeliverySlotChangeCheck(state, entityId, slotIndex, mode, itemId);
+  if (!check.ok || (check.requiresDisconnect && !confirmDisconnect)) return state;
+  const next = copyState(state);
+  const entity = next.entities.find((candidate) => candidate.id === entityId)!;
+  const slots = getMaterialDeliverySlots(entity);
+  const previousItemId = slots[slotIndex].itemId;
+  const removedBelts = next.belts.filter((belt) => belt.target === entityId && belt.targetPortIndex === slotIndex);
+  if (removedBelts.length > 0) {
+    refundBelts(next, removedBelts);
+    next.belts = next.belts.filter((belt) => belt.target !== entityId || belt.targetPortIndex !== slotIndex);
+  }
+  slots[slotIndex] = mode === "manual" ? { itemId, mode } : { itemId: null, mode };
+  synchronizeMaterialDeliverySlots(entity, slots);
+  if (previousItemId && !slots.some((slot) => slot.itemId === previousItemId)) {
+    const buffered = Math.max(0, Math.floor(entity.inputs[previousItemId] ?? 0));
+    if (buffered > 0) addToPlanetTray(next, entity.planetId, previousItemId, buffered);
+    delete entity.inputs[previousItemId];
+  }
+  for (const [bufferedItemId, amount] of Object.entries(entity.inputs)) {
+    if (slots.some((slot) => slot.itemId === bufferedItemId)) continue;
+    addToPlanetTray(next, entity.planetId, bufferedItemId as ItemId, Math.max(0, Math.floor(amount ?? 0)));
+    delete entity.inputs[bufferedItemId as ItemId];
+  }
+  return next;
 }
 
 function refundBelts(state: GameState, belts: BeltConnection[]): void {
@@ -5018,7 +7204,7 @@ function refundBelts(state: GameState, belts: BeltConnection[]): void {
   }
 }
 
-function logisticsAccepts(state: GameState, entity: FactoryEntity, itemId: ItemId): boolean {
+function logisticsAccepts(state: GameState, entity: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): boolean {
   if ((entity.kind !== "storage" && entity.kind !== "splitter" && entity.kind !== "station") || !entity.buildingId) return false;
   if (entity.buildingId === "orbital_collector") {
     return (getPlanetOrbitalYields(state, entity.planetId)[itemId] ?? 0) > 0 && (!entity.storedItemId || entity.storedItemId === itemId);
@@ -5028,8 +7214,7 @@ function logisticsAccepts(state: GameState, entity: FactoryEntity, itemId: ItemI
   const compatibleKind = accepts === "any" || accepts === itemKind || (accepts === "solid" && itemKind === "matrix");
   if (!compatibleKind) return false;
   if (entity.buildingId === "material_delivery_hub") {
-    const configured = getMaterialDeliveryItems(entity);
-    return configured.includes(itemId) || configured.length < MATERIAL_DELIVERY_SLOT_COUNT;
+    return resolveMaterialDeliverySlotIndex(entity, itemId, targetPortIndex) !== undefined;
   }
   if (entity.kind === "station") {
     const slots = getStationSlots(entity);
@@ -5043,10 +7228,11 @@ function fuelGeneratorAccepts(entity: FactoryEntity, itemId: ItemId): boolean {
     (!entity.fuelItemId || entity.fuelItemId === itemId));
 }
 
-function targetConsumes(state: GameState, entity: FactoryEntity, itemId: ItemId): boolean {
+function targetConsumes(state: GameState, entity: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): boolean {
   if (entity.buildingId === "micro_black_hole_connector") return Boolean(ITEMS[itemId]);
+  if (isElevatorStation(entity)) return Boolean(ITEMS[itemId]);
   if (entity.buildingId === "galactic_material_exporter") return ACTIVITY_MATERIAL_IDS.includes(itemId as import("./types").ActivityMaterialId);
-  if (logisticsAccepts(state, entity, itemId)) return true;
+  if (logisticsAccepts(state, entity, itemId, targetPortIndex)) return true;
   if (fuelGeneratorAccepts(entity, itemId)) return true;
   if (entity.sprayCoaterInstalled && getEntityProliferatorItemId(entity) === itemId) return true;
   const recipe = getRecipe(entity.recipeId);
@@ -5075,8 +7261,8 @@ function getAutoRecipeForInput(state: GameState, entity: FactoryEntity, itemId: 
   return recipes.find((recipe) => recipe.inputs.some((input) => input.itemId === itemId));
 }
 
-function targetCanAcceptBeltItem(state: GameState, entity: FactoryEntity, itemId: ItemId): boolean {
-  return targetConsumes(state, entity, itemId) || Boolean(getAutoRecipeForInput(state, entity, itemId));
+function targetCanAcceptBeltItem(state: GameState, entity: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): boolean {
+  return targetConsumes(state, entity, itemId, targetPortIndex) || Boolean(getAutoRecipeForInput(state, entity, itemId));
 }
 
 function configureAutoTargetRecipe(state: GameState, entity: FactoryEntity, itemId: ItemId): void {
@@ -5090,13 +7276,14 @@ function configureAutoTargetRecipe(state: GameState, entity: FactoryEntity, item
   entity.proliferatorBonusProgress = {};
 }
 
-function configureTargetItem(entity: FactoryEntity, itemId: ItemId): void {
+function configureTargetItem(entity: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): void {
   if (entity.buildingId === "material_delivery_hub") {
-    const configured = getMaterialDeliveryItems(entity);
-    if (!configured.includes(itemId) && configured.length < MATERIAL_DELIVERY_SLOT_COUNT) {
-      entity.deliveryItemIds = [...configured, itemId];
-    }
-  } else if (entity.kind === "station" && entity.buildingId !== "orbital_collector") {
+    const resolved = resolveMaterialDeliverySlotIndex(entity, itemId, targetPortIndex);
+    if (resolved === undefined) return;
+    const slots = getMaterialDeliverySlots(entity);
+    if (slots[resolved].mode === "auto" && !slots[resolved].itemId) slots[resolved] = { itemId, mode: "auto" };
+    synchronizeMaterialDeliverySlots(entity, slots);
+  } else if (entity.kind === "station" && entity.buildingId !== "orbital_collector" && !isElevatorStation(entity)) {
     const slots = ensureStationSlots(entity);
     if (!slots.some((slot) => slot.itemId === itemId)) {
       const empty = slots.find((slot) => !slot.itemId);
@@ -5116,6 +7303,7 @@ function configureTargetItem(entity: FactoryEntity, itemId: ItemId): void {
 }
 
 export function setEntityRecipe(state: GameState, entityId: string, recipeId: RecipeId): GameState {
+  if (isEntityInteractionLocked(state, entityId)) return state;
   const next = copyState(state);
   const entity = next.entities.find((item) => item.id === entityId);
   const recipe = getRecipe(recipeId);
@@ -5288,7 +7476,7 @@ export function getRecipeCompatibleEntityIds(state: GameState, entityIds: string
   if (!recipe || (recipe.requiredTechId && !isTechnologyCompleted(state, recipe.requiredTechId))) return [];
   const requested = new Set(entityIds);
   return state.entities
-    .filter((entity) => requested.has(entity.id) && entity.buildingId && buildingSupportsRecipe(entity.buildingId, recipe))
+    .filter((entity) => requested.has(entity.id) && !entity.interactionLocked && entity.buildingId && buildingSupportsRecipe(entity.buildingId, recipe))
     .map((entity) => entity.id);
 }
 
@@ -5302,13 +7490,14 @@ export function setEntitiesRecipe(state: GameState, entityIds: string[], recipeI
 
 export type SprayCoaterInstallCheck = {
   ready: boolean;
-  code: "ready" | "entity-missing" | "already-installed" | "technology-locked" | "stock-empty" | "recipe-missing" | "recipe-incompatible";
+  code: "ready" | "entity-missing" | "entity-locked" | "already-installed" | "technology-locked" | "stock-empty" | "recipe-missing" | "recipe-incompatible";
   reason: string;
 };
 
 export function getSprayCoaterInstallCheck(state: GameState, entityId: string): SprayCoaterInstallCheck {
   const entity = state.entities.find((item) => item.id === entityId);
   if (!entity) return { ready: false, code: "entity-missing", reason: "设备不存在或已被回收" };
+  if (entity.interactionLocked) return { ready: false, code: "entity-locked", reason: "建筑已锁定，请先解锁" };
   if (entity.sprayCoaterInstalled) return { ready: false, code: "already-installed", reason: "该设备已经安装喷涂机" };
   if (!isTechnologyCompleted(state, "proliferator_1")) return { ready: false, code: "technology-locked", reason: "需要科技：增产剂 Mk.I" };
   if ((state.construction.spray_coater ?? 0) < 1) return { ready: false, code: "stock-empty", reason: "施工托盘中没有可用喷涂机" };
@@ -5342,6 +7531,58 @@ export function installSprayCoaters(state: GameState, entityIds: string[]): Game
   return [...new Set(entityIds)].reduce((current, entityId) => installSprayCoater(current, entityId), state);
 }
 
+export interface SprayCoaterRemovalRefund {
+  sprayCoaters: number;
+  proliferatorItemId?: ItemId;
+  proliferatorItems: number;
+  bufferedProliferatorItems: number;
+  recoveredPointItems: number;
+  remainingSprayPoints: number;
+}
+
+export function getSprayCoaterRemovalRefund(state: GameState, entityId: string): SprayCoaterRemovalRefund | null {
+  const entity = state.entities.find((candidate) => candidate.id === entityId);
+  if (!entity?.sprayCoaterInstalled) return null;
+  const itemId = getEntityProliferatorItemId(entity);
+  const bufferedProliferatorItems = itemId ? Math.max(0, Math.floor(entity.inputs[itemId] ?? 0)) : 0;
+  const remainingSprayPoints = Math.max(0, Math.floor(entity.proliferatorPoints ?? 0));
+  const pointsPerItem = entity.proliferatorTier ? getProliferator(entity.proliferatorTier).sprayPoints : 0;
+  const recoveredPointItems = itemId && remainingSprayPoints > 0 && pointsPerItem > 0
+    ? Math.ceil(remainingSprayPoints / pointsPerItem)
+    : 0;
+  return {
+    sprayCoaters: 1,
+    proliferatorItemId: itemId,
+    proliferatorItems: bufferedProliferatorItems + recoveredPointItems,
+    bufferedProliferatorItems,
+    recoveredPointItems,
+    remainingSprayPoints,
+  };
+}
+
+export function removeSprayCoater(state: GameState, entityId: string): GameState {
+  const current = state.entities.find((candidate) => candidate.id === entityId);
+  if (!current?.sprayCoaterInstalled || current.interactionLocked) return state;
+  const refund = getSprayCoaterRemovalRefund(state, entityId);
+  if (!refund) return state;
+  const next = copyState(state);
+  const entity = next.entities.find((candidate) => candidate.id === entityId)!;
+  if (refund.proliferatorItemId && refund.proliferatorItems > 0) {
+    addToPlanetTray(next, entity.planetId, refund.proliferatorItemId, refund.proliferatorItems);
+    entity.inputs[refund.proliferatorItemId] = 0;
+  }
+  const removedBelts = next.belts.filter((belt) => belt.target === entityId && PROLIFERATOR_ITEM_IDS.includes(belt.itemId));
+  refundBelts(next, removedBelts);
+  next.belts = next.belts.filter((belt) => !removedBelts.includes(belt));
+  next.construction.spray_coater = Math.floor((next.construction.spray_coater ?? 0) + 1);
+  entity.sprayCoaterInstalled = false;
+  entity.proliferatorTier = undefined;
+  entity.proliferatorMode = undefined;
+  entity.proliferatorPoints = 0;
+  entity.proliferatorBonusProgress = {};
+  return next;
+}
+
 export function setProliferatorConfiguration(
   state: GameState,
   entityId: string,
@@ -5350,7 +7591,7 @@ export function setProliferatorConfiguration(
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId);
   const definition = getProliferator(tier);
-  if (!current?.sprayCoaterInstalled || !isProliferatorEligible(current) ||
+  if (!current?.sprayCoaterInstalled || current.interactionLocked || !isProliferatorEligible(current) ||
     !isTechnologyCompleted(state, definition.requiredTechId)) return state;
   if (current.proliferatorTier === tier && current.proliferatorMode === mode) return state;
   const next = copyState(state);
@@ -5578,73 +7819,61 @@ export interface ConstructionQuickCraftPlan {
   batches: number;
   outputAmount: number;
   blocker?: { reason: "safety-limit"; itemId: ItemId; current: number; expected: number; limit: number };
-}
-
-interface ConstructionQuickCraftWork {
-  inventory: Partial<Record<ItemId, number>>;
-  produced: Partial<Record<ItemId, number>>;
+  recipeDecisions?: RecursiveCraftDecision[];
 }
 
 interface InternalConstructionQuickCraftPlan extends ConstructionQuickCraftPlan {
   inventory?: Partial<Record<ItemId, number>>;
 }
 
-const QUICK_CRAFT_OPTION_LIMIT = 24;
+const recursiveManufacturingRecipes = (): RecipeDefinition[] =>
+  Object.values(RECIPES).filter((recipe) => isHandcraftableRecipe(recipe.id));
 
-function copyQuickCraftWork(work: ConstructionQuickCraftWork): ConstructionQuickCraftWork {
-  return { inventory: { ...work.inventory }, produced: { ...work.produced } };
+function recursiveManufacturingInventory(state: GameState): Partial<Record<ItemId, number>> {
+  return {
+    ...state.tray,
+    logistics_drone: Math.max(0, Math.floor(state.portableFleet?.logistics_drone ?? 0)),
+    logistics_vessel: Math.max(0, Math.floor(state.portableFleet?.logistics_vessel ?? 0)),
+  };
 }
 
-function ensureQuickCraftItemOptions(
-  state: GameState,
-  work: ConstructionQuickCraftWork,
-  itemId: ItemId,
-  requiredAmount: number,
-  resolving: ReadonlySet<ItemId>,
-): ConstructionQuickCraftWork[] {
-  const available = Math.max(0, Math.floor(work.inventory[itemId] ?? 0));
-  if (available >= requiredAmount) return [work];
-  if (resolving.has(itemId)) return [];
-
-  const nextResolving = new Set(resolving);
-  nextResolving.add(itemId);
-  const options: ConstructionQuickCraftWork[] = [];
-  const recipes = Object.values(RECIPES).filter((recipe) =>
-    isHandcraftableRecipe(recipe.id) &&
-    (!recipe.requiredTechId || isTechnologyCompleted(state, recipe.requiredTechId)) &&
-    recipe.outputs.some((output) => output.itemId === itemId && output.amount > 0));
-
-  for (const recipe of recipes) {
-    const requestedOutput = recipe.outputs.find((output) => output.itemId === itemId)!;
-    const batches = Math.ceil((requiredAmount - available) / requestedOutput.amount);
-    let candidates = [copyQuickCraftWork(work)];
-    for (const input of recipe.inputs) {
-      const requiredInput = input.amount * batches;
-      const reserved: ConstructionQuickCraftWork[] = [];
-      for (const candidate of candidates) {
-        for (const supplied of ensureQuickCraftItemOptions(state, candidate, input.itemId, requiredInput, nextResolving)) {
-          const next = copyQuickCraftWork(supplied);
-          next.inventory[input.itemId] = Math.max(0, Math.floor((next.inventory[input.itemId] ?? 0) - requiredInput));
-          reserved.push(next);
-          if (reserved.length >= QUICK_CRAFT_OPTION_LIMIT) break;
-        }
-        if (reserved.length >= QUICK_CRAFT_OPTION_LIMIT) break;
-      }
-      candidates = reserved;
-      if (candidates.length === 0) break;
-    }
-
-    for (const candidate of candidates) {
-      for (const output of recipe.outputs) {
-        const amount = output.amount * batches;
-        candidate.inventory[output.itemId] = Math.floor((candidate.inventory[output.itemId] ?? 0) + amount);
-        candidate.produced[output.itemId] = Math.floor((candidate.produced[output.itemId] ?? 0) + amount);
-      }
-      if ((candidate.inventory[itemId] ?? 0) >= requiredAmount) options.push(candidate);
-      if (options.length >= QUICK_CRAFT_OPTION_LIMIT) return options;
+function recursiveProducedItems(plan: RecursiveCraftPlan): Array<{ itemId: ItemId; amount: number }> {
+  const totals = new Map<ItemId, number>();
+  for (const step of plan.steps) {
+    const recipe = getRecipe(step.recipeId);
+    if (!recipe) continue;
+    for (const output of recipe.outputs) {
+      totals.set(output.itemId, (totals.get(output.itemId) ?? 0) + output.amount * step.batches);
     }
   }
-  return options;
+  return [...totals].map(([itemId, amount]) => ({ itemId, amount: Math.max(0, Math.floor(amount)) }));
+}
+
+function applyRecursiveManufacturingInventory(state: GameState, inventory: Partial<Record<ItemId, number>>): void {
+  const tray = { ...inventory };
+  state.portableFleet.logistics_drone = Math.max(0, Math.floor(tray.logistics_drone ?? 0));
+  state.portableFleet.logistics_vessel = Math.max(0, Math.floor(tray.logistics_vessel ?? 0));
+  delete tray.logistics_drone;
+  delete tray.logistics_vessel;
+  state.tray = tray;
+  state.planetTrays[state.activePlanetId] = { ...tray };
+}
+
+function findUnsafeRecursiveInventory(inventory: Partial<Record<ItemId, number>>): { itemId: ItemId; value: number } | undefined {
+  return (Object.entries(inventory) as Array<[ItemId, number | undefined]>).map(([itemId, amount]) => ({
+    itemId,
+    value: amount ?? 0,
+  })).find(({ value }) => !Number.isSafeInteger(value) || value < 0 || value > Number.MAX_SAFE_INTEGER);
+}
+
+function recursiveMissingItem(blocker: RecursiveCraftBlocker | undefined): ConstructionQuickCraftPlan["missingItems"] {
+  if (!blocker) return [];
+  return [{
+    itemId: blocker.itemId,
+    current: blocker.current,
+    required: blocker.required,
+    missing: Math.max(0, blocker.required - blocker.current),
+  }];
 }
 
 function buildConstructionQuickCraftPlan(state: GameState, buildingId: ConstructionId, batches = 1): InternalConstructionQuickCraftPlan {
@@ -5664,44 +7893,40 @@ function buildConstructionQuickCraftPlan(state: GameState, buildingId: Construct
   } satisfies ConstructionQuickCraftPlan;
   if (!definition || directDeficits.missingTechnology) return impossible;
 
-  const initialInventory = Object.fromEntries((Object.entries(state.tray) as Array<[ItemId, number]>).map(([itemId, amount]) => [
-    itemId,
-    Math.max(0, Math.floor(amount ?? 0)),
-  ])) as Partial<Record<ItemId, number>>;
-  let candidates: ConstructionQuickCraftWork[] = [{ inventory: { ...initialInventory }, produced: {} }];
-  for (const cost of definition.costs) {
-    const requiredCost = cost.amount * amount;
-    const paid: ConstructionQuickCraftWork[] = [];
-    for (const candidate of candidates) {
-      for (const supplied of ensureQuickCraftItemOptions(state, candidate, cost.itemId, requiredCost, new Set())) {
-        const next = copyQuickCraftWork(supplied);
-        next.inventory[cost.itemId] = Math.max(0, Math.floor((next.inventory[cost.itemId] ?? 0) - requiredCost));
-        paid.push(next);
-        if (paid.length >= QUICK_CRAFT_OPTION_LIMIT) break;
-      }
-      if (paid.length >= QUICK_CRAFT_OPTION_LIMIT) break;
-    }
-    candidates = paid;
-    if (candidates.length === 0) return impossible;
+  const initialInventory = recursiveManufacturingInventory(state);
+  const recursivePlan = planRecursiveRequirements({
+    inventory: initialInventory,
+    requirements: definition.costs.map((cost) => ({ itemId: cost.itemId, amount: cost.amount * amount })),
+    recipes: recursiveManufacturingRecipes(),
+    completedTechnologyIds: state.research.completedTechIds,
+  });
+  if (!recursivePlan.possible) {
+    return {
+      ...impossible,
+      missingTechnology: recursivePlan.blocker?.reason === "technology" && recursivePlan.blocker.technologyId
+        ? getTechnology(recursivePlan.blocker.technologyId)?.name ?? recursivePlan.blocker.technologyId
+        : null,
+      missingItems: recursiveMissingItem(recursivePlan.blocker),
+    };
   }
 
-  const selected = candidates[0];
-  const protectionLimit = getPlanetTrayItemLimit(state, state.activePlanetId) + CONSTRUCTION_AUTOMATION_TRAY_OVERFLOW_ALLOWANCE;
-  const unsafe = (Object.keys(ITEMS) as ItemId[]).map((itemId) => ({
-    itemId,
-    current: Math.max(0, Math.floor(initialInventory[itemId] ?? 0)),
-    expected: Math.max(0, Math.floor(selected.inventory[itemId] ?? 0)),
-  })).find(({ current, expected }) => expected > current && expected > protectionLimit);
+  const selected = recursivePlan;
+  const unsafe = findUnsafeRecursiveInventory(selected.inventory);
   if (unsafe) return {
     ...impossible,
-    blocker: { reason: "safety-limit", ...unsafe, limit: protectionLimit },
+    blocker: {
+      reason: "safety-limit",
+      itemId: unsafe.itemId,
+      current: Math.max(0, Math.floor(initialInventory[unsafe.itemId] ?? 0)),
+      expected: unsafe.value,
+      limit: Number.MAX_SAFE_INTEGER,
+    },
   };
   const consumedItems = (Object.keys(ITEMS) as ItemId[]).flatMap((itemId) => {
     const consumed = Math.max(0, Math.floor((initialInventory[itemId] ?? 0) - (selected.inventory[itemId] ?? 0)));
     return consumed > 0 ? [{ itemId, amount: consumed }] : [];
   });
-  const producedItems = (Object.entries(selected.produced) as Array<[ItemId, number]>).flatMap(([itemId, amount]) =>
-    amount > 0 ? [{ itemId, amount: Math.floor(amount) }] : []);
+  const producedItems = recursiveProducedItems(recursivePlan);
   return {
     status: producedItems.length > 0 ? "upstream" : "direct",
     possible: true,
@@ -5713,6 +7938,7 @@ function buildConstructionQuickCraftPlan(state: GameState, buildingId: Construct
     batches: amount,
     outputAmount: definition.outputAmount * amount,
     inventory: selected.inventory,
+    recipeDecisions: selected.decisions,
   };
 }
 
@@ -5745,61 +7971,6 @@ export type ConstructionCraftNavigationResult =
   | { status: "no-handcraft"; itemId: ItemId }
   | { status: "ready" };
 
-function findConstructionCraftNavigationTarget(
-  state: GameState,
-  itemId: ItemId,
-  required: number,
-  resolving: ReadonlySet<ItemId>,
-): ConstructionCraftNavigationResult {
-  const current = Math.max(0, Math.floor(state.tray[itemId] ?? 0));
-  if (current >= required) return { status: "ready" };
-  if (resolving.has(itemId)) return { status: "no-handcraft", itemId };
-
-  const producingRecipes = Object.values(RECIPES).filter((recipe) =>
-    recipe.outputs.some((output) => output.itemId === itemId && output.amount > 0));
-  const handcraftRecipes = producingRecipes.filter((recipe) => isHandcraftableRecipe(recipe.id));
-  if (handcraftRecipes.length === 0) {
-    return producingRecipes.length === 0
-      ? { status: "raw-shortage", itemId, current, required }
-      : { status: "no-handcraft", itemId };
-  }
-
-  const unlockedRecipes = handcraftRecipes.filter((recipe) =>
-    !recipe.requiredTechId || isTechnologyCompleted(state, recipe.requiredTechId));
-  if (unlockedRecipes.length === 0) {
-    const locked = handcraftRecipes.find((recipe) => recipe.requiredTechId);
-    return {
-      status: "technology",
-      itemId,
-      technologyName: locked?.requiredTechId
-        ? getTechnology(locked.requiredTechId)?.name ?? locked.requiredTechId
-        : "未知科技",
-    };
-  }
-
-  for (const recipe of unlockedRecipes) {
-    if (canHandcraftRecipe(state, recipe.id, 1)) return { status: "target", itemId, recipeId: recipe.id };
-  }
-
-  const nextResolving = new Set(resolving);
-  nextResolving.add(itemId);
-  const blockers: ConstructionCraftNavigationResult[] = [];
-  for (const recipe of unlockedRecipes) {
-    for (const input of recipe.inputs) {
-      const available = Math.max(0, Math.floor(state.tray[input.itemId] ?? 0));
-      if (available >= input.amount) continue;
-      const result = findConstructionCraftNavigationTarget(state, input.itemId, input.amount, nextResolving);
-      if (result.status === "target") return result;
-      if (result.status !== "ready") blockers.push(result);
-    }
-  }
-
-  return blockers.find((result) => result.status === "technology")
-    ?? blockers.find((result) => result.status === "raw-shortage")
-    ?? blockers[0]
-    ?? { status: "no-handcraft", itemId };
-}
-
 export function getConstructionCraftNavigation(state: GameState, buildingId: ConstructionId): ConstructionCraftNavigationResult {
   const definition = getConstructionDefinition(buildingId);
   if (!definition) return { status: "no-handcraft", itemId: "iron_ore" };
@@ -5810,11 +7981,29 @@ export function getConstructionCraftNavigation(state: GameState, buildingId: Con
       technologyName: getTechnology(definition.requiredTechId)?.name ?? definition.requiredTechId,
     };
   }
-  for (const cost of definition.costs) {
-    const result = findConstructionCraftNavigationTarget(state, cost.itemId, cost.amount, new Set());
-    if (result.status !== "ready") return result;
+  const plan = planRecursiveRequirements({
+    inventory: recursiveManufacturingInventory(state),
+    requirements: definition.costs,
+    recipes: recursiveManufacturingRecipes(),
+    completedTechnologyIds: state.research.completedTechIds,
+  });
+  if (plan.possible) {
+    const step = plan.steps[0];
+    return step ? { status: "target", itemId: step.outputItemId, recipeId: step.recipeId } : { status: "ready" };
   }
-  return { status: "ready" };
+  const blocker = plan.blocker;
+  if (!blocker) return { status: "no-handcraft", itemId: definition.costs[0]?.itemId ?? "iron_ore" };
+  if (blocker.reason === "technology") {
+    return {
+      status: "technology",
+      itemId: blocker.itemId,
+      technologyName: blocker.technologyId ? getTechnology(blocker.technologyId)?.name ?? blocker.technologyId : "未知科技",
+    };
+  }
+  if (blocker.reason === "raw-shortage") {
+    return { status: "raw-shortage", itemId: blocker.itemId, current: blocker.current, required: blocker.required };
+  }
+  return { status: "no-handcraft", itemId: blocker.itemId };
 }
 
 export function craftConstructionWithUpstream(state: GameState, buildingId: ConstructionId, batches = 1): GameState {
@@ -5822,7 +8011,7 @@ export function craftConstructionWithUpstream(state: GameState, buildingId: Cons
   const plan = buildConstructionQuickCraftPlan(state, buildingId, batches);
   if (!definition || !plan.possible || !plan.inventory) return state;
   const next = copyState(state);
-  next.tray = { ...plan.inventory };
+  applyRecursiveManufacturingInventory(next, plan.inventory);
   for (const item of plan.producedItems) {
     next.totalProduced[item.itemId] = Math.floor((next.totalProduced[item.itemId] ?? 0) + item.amount);
   }
@@ -5831,7 +8020,7 @@ export function craftConstructionWithUpstream(state: GameState, buildingId: Cons
 }
 
 export function getConstructionAutomationStockLimit(state: GameState): number {
-  if (isTechnologyCompleted(state, "construction_capacity_2")) return 2000;
+  if (isTechnologyCompleted(state, "construction_capacity_2")) return MAX_CONSTRUCTION_AUTOMATION_TARGET;
   if (isTechnologyCompleted(state, "construction_capacity_1")) return 500;
   return 100;
 }
@@ -5849,7 +8038,7 @@ export function setConstructionAutomationEnabled(state: GameState, enabled: bool
 
 export function setGalacticMaterialExporterPaused(state: GameState, entityId: string, paused: boolean): GameState {
   const entity = state.entities.find((candidate) => candidate.id === entityId && candidate.buildingId === "galactic_material_exporter");
-  if (!entity || (entity.galacticExporterPaused !== false) === paused) return state;
+  if (!entity || entity.interactionLocked || (entity.galacticExporterPaused !== false) === paused) return state;
   return {
     ...state,
     entities: state.entities.map((candidate) => candidate.id === entityId ? { ...candidate, galacticExporterPaused: paused } : candidate),
@@ -5861,18 +8050,65 @@ function refundConstructionAutomationJob(state: GameState, entityId: string, job
   const tray = trayForPlanet(state, planetId);
   for (const [itemId, amount] of Object.entries(job.inventory) as Array<[ItemId, number]>) {
     const refund = Math.max(0, Math.floor(amount ?? 0));
-    if (refund > 0) tray[itemId] = Math.floor((tray[itemId] ?? 0) + refund);
+    if (refund < 1) continue;
+    if (isPortableFleetItem(itemId)) state.portableFleet[itemId] = Math.floor((state.portableFleet[itemId] ?? 0) + refund);
+    else tray[itemId] = Math.floor((tray[itemId] ?? 0) + refund);
   }
 }
 
-export function setConstructionAutomationTarget(state: GameState, constructionId: ConstructionId, target: number): GameState {
-  if (!getConstructionDefinition(constructionId)) return state;
+interface ConstructionAutomationTargetDefinition {
+  id: ConstructionAutomationTargetId;
+  name: string;
+  outputAmount: number;
+  costs: Array<{ itemId: ItemId; amount: number }>;
+  requiredTechId?: TechId;
+  kind: "building" | "fleet";
+  recipeId?: RecipeId;
+}
+
+function getConstructionAutomationTargets(): ConstructionAutomationTargetDefinition[] {
+  const buildings = CONSTRUCTION.map((definition) => ({
+    id: definition.buildingId,
+    name: definition.name,
+    outputAmount: definition.outputAmount,
+    costs: definition.costs,
+    requiredTechId: definition.requiredTechId,
+    kind: "building" as const,
+  }));
+  const fleet = PORTABLE_FLEET_ITEM_IDS.flatMap((itemId) => {
+    const recipe = getRecipe(itemId);
+    const output = recipe?.outputs.find((candidate) => candidate.itemId === itemId);
+    return recipe && output ? [{
+      id: itemId,
+      name: ITEMS[itemId].name,
+      outputAmount: output.amount,
+      costs: recipe.inputs,
+      requiredTechId: recipe.requiredTechId,
+      kind: "fleet" as const,
+      recipeId: recipe.id,
+    }] : [];
+  });
+  return [...buildings, ...fleet];
+}
+
+function getConstructionAutomationTargetDefinition(id: ConstructionAutomationTargetId): ConstructionAutomationTargetDefinition | undefined {
+  return getConstructionAutomationTargets().find((definition) => definition.id === id);
+}
+
+function constructionAutomationCurrentStock(state: GameState, id: ConstructionAutomationTargetId): number {
+  return isPortableFleetItem(id)
+    ? Math.max(0, Math.floor(state.portableFleet[id] ?? 0))
+    : Math.max(0, Math.floor(state.construction[id] ?? 0));
+}
+
+export function setConstructionAutomationTarget(state: GameState, constructionId: ConstructionAutomationTargetId, target: number): GameState {
+  if (!getConstructionAutomationTargetDefinition(constructionId) || !Number.isSafeInteger(target)) return state;
   const normalized = Math.max(0, Math.min(getConstructionAutomationStockLimit(state), Math.floor(target)));
   if ((state.constructionAutomation.targetStock[constructionId] ?? 0) === normalized) return state;
   const targetStock = { ...state.constructionAutomation.targetStock };
   if (normalized < 1) delete targetStock[constructionId];
   else targetStock[constructionId] = normalized;
-  if (normalized <= (state.construction[constructionId] ?? 0)) {
+  if (normalized <= constructionAutomationCurrentStock(state, constructionId)) {
     const next = copyState(state);
     next.constructionAutomation.targetStock = targetStock;
     for (const [entityId, job] of Object.entries(next.constructionAutomation.jobs)) {
@@ -5896,110 +8132,102 @@ interface ConstructionAutomationBlocker {
 interface ConstructionAutomationPlan {
   steps: ConstructionAutomationStep[];
   blocker?: ConstructionAutomationBlocker;
+  recipeDecisions?: ConstructionAutomationJob["recipeDecisions"];
+  recursiveDecisions?: RecursiveCraftDecision[];
 }
 
-const CONSTRUCTION_AUTOMATION_WIP_LIMIT = 1_000_000;
-const CONSTRUCTION_AUTOMATION_TRAY_OVERFLOW_ALLOWANCE = 1_000_000;
-
-interface ConstructionAutomationPlanWork {
-  inventory: Partial<Record<ItemId, number>>;
-  steps: ConstructionAutomationStep[];
+function constructionAutomationPending(state: GameState, constructionId: ConstructionAutomationTargetId): number {
+  return Object.values(state.constructionAutomation.jobs).reduce((sum, job) => {
+    if (job.constructionId !== constructionId) return sum;
+    const definition = getConstructionAutomationTargetDefinition(constructionId);
+    return sum + (definition?.outputAmount ?? 0);
+  }, 0);
 }
 
-function constructionAutomationPending(state: GameState, constructionId: ConstructionId): number {
-  return Object.values(state.constructionAutomation.jobs).reduce((sum, job) => sum + job.steps
-    .filter((step) => step.kind === "building" && step.constructionId === constructionId).length, 0);
-}
-
-function constructionAutomationTarget(state: GameState, cursor = state.constructionAutomation.cursor): { index: number; definition: typeof CONSTRUCTION[number] } | null {
-  if (CONSTRUCTION.length === 0) return null;
-  for (let offset = 0; offset < CONSTRUCTION.length; offset += 1) {
-    const index = (cursor + offset) % CONSTRUCTION.length;
-    const definition = CONSTRUCTION[index];
-    const target = state.constructionAutomation.targetStock[definition.buildingId] ?? 0;
-    const current = (state.construction[definition.buildingId] ?? 0) + constructionAutomationPending(state, definition.buildingId);
+function constructionAutomationTarget(state: GameState, cursor = state.constructionAutomation.cursor): { index: number; definition: ConstructionAutomationTargetDefinition } | null {
+  const definitions = getConstructionAutomationTargets();
+  if (definitions.length === 0) return null;
+  for (let offset = 0; offset < definitions.length; offset += 1) {
+    const index = (cursor + offset) % definitions.length;
+    const definition = definitions[index];
+    const target = state.constructionAutomation.targetStock[definition.id] ?? 0;
+    const current = constructionAutomationCurrentStock(state, definition.id) + constructionAutomationPending(state, definition.id);
     if (target <= current || definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)) continue;
     return { index, definition };
   }
   return null;
 }
 
-function automationRecipesForOutput(state: GameState, itemId: ItemId): RecipeDefinition[] {
-  void state;
-  return Object.values(RECIPES).filter((recipe) =>
-    isHandcraftableRecipe(recipe.id) &&
-    recipe.outputs.some((output) => output.itemId === itemId && output.amount > 0));
-}
-
-function planAutomationItem(
-  state: GameState,
-  work: ConstructionAutomationPlanWork,
-  itemId: ItemId,
-  requiredAmount: number,
-  resolving: ReadonlySet<ItemId>,
-): { work?: ConstructionAutomationPlanWork; blocker?: ConstructionAutomationBlocker } {
-  const current = Math.max(0, Math.floor(work.inventory[itemId] ?? 0));
-  if (current >= requiredAmount) return { work };
-  if (resolving.has(itemId)) return { blocker: { itemId, current, required: requiredAmount, reason: "no-handcraft" } };
-  const recipes = automationRecipesForOutput(state, itemId);
-  if (recipes.length === 0) return { blocker: { itemId, current, required: requiredAmount, reason: "raw-shortage" } };
-  const nextResolving = new Set(resolving);
-  nextResolving.add(itemId);
-  let lastBlocker: ConstructionAutomationBlocker | undefined;
-  for (const recipe of recipes) {
-    if (recipe.requiredTechId && !isTechnologyCompleted(state, recipe.requiredTechId)) {
-      lastBlocker = { itemId, current, required: requiredAmount, reason: "technology", technologyName: getTechnology(recipe.requiredTechId)?.name ?? recipe.requiredTechId };
-      continue;
-    }
-    const primary = recipe.outputs.find((output) => output.itemId === itemId && output.amount > 0)!;
-    const batches = Math.max(1, Math.ceil((requiredAmount - current) / primary.amount));
-    let candidate: ConstructionAutomationPlanWork = {
-      inventory: { ...work.inventory },
-      steps: work.steps.map((step) => ({ ...step })),
-    };
-    let failed: ConstructionAutomationBlocker | undefined;
-    for (const input of recipe.inputs) {
-      const result = planAutomationItem(state, candidate, input.itemId, input.amount * batches, nextResolving);
-      if (!result.work) {
-        failed = result.blocker;
-        break;
-      }
-      candidate = result.work;
-      candidate.inventory[input.itemId] = Math.max(0, Math.floor((candidate.inventory[input.itemId] ?? 0) - input.amount * batches));
-    }
-    if (failed) {
-      lastBlocker = failed;
-      continue;
-    }
-    for (const output of recipe.outputs) {
-      candidate.inventory[output.itemId] = Math.floor((candidate.inventory[output.itemId] ?? 0) + output.amount * batches);
-    }
-    candidate.steps.push({
-      kind: "material",
-      recipeId: recipe.id,
-      batches,
-      outputItemId: itemId,
-      outputAmount: primary.amount * batches,
-    });
-    return { work: candidate };
-  }
-  return { blocker: lastBlocker ?? { itemId, current, required: requiredAmount, reason: "no-handcraft" } };
-}
-
-function buildConstructionAutomationPlan(state: GameState, definition: typeof CONSTRUCTION[number], planetId: PlanetId): ConstructionAutomationPlan {
-  const tray = trayForPlanet(state, planetId);
-  let work: ConstructionAutomationPlanWork = {
-    inventory: Object.fromEntries((Object.entries(tray) as Array<[ItemId, number]>).map(([itemId, amount]) => [itemId, Math.max(0, Math.floor(amount ?? 0))])),
-    steps: [],
+function constructionAutomationBlocker(blocker: RecursiveCraftBlocker | undefined): ConstructionAutomationBlocker | undefined {
+  if (!blocker) return undefined;
+  return {
+    itemId: blocker.itemId,
+    current: blocker.current,
+    required: blocker.required,
+    reason: blocker.reason === "raw-shortage" ? "raw-shortage"
+      : blocker.reason === "technology" ? "technology" : "no-handcraft",
+    technologyName: blocker.technologyId
+      ? getTechnology(blocker.technologyId)?.name ?? blocker.technologyId
+      : undefined,
   };
-  for (const cost of definition.costs) {
-    const result = planAutomationItem(state, work, cost.itemId, cost.amount, new Set());
-    if (!result.work) return { steps: [], blocker: result.blocker };
-    work = result.work;
-    work.inventory[cost.itemId] = Math.max(0, Math.floor((work.inventory[cost.itemId] ?? 0) - cost.amount));
+}
+
+function constructionAutomationRecipeDecisions(decisions: RecursiveCraftDecision[]): ConstructionAutomationJob["recipeDecisions"] {
+  return decisions.map((decision) => ({
+    itemId: decision.itemId,
+    recipeId: decision.recipeId,
+    fallbackReason: decision.fallbacks.length > 0
+      ? decision.fallbacks.map((fallback) => {
+        const recipeName = getRecipe(fallback.recipeId)?.name ?? fallback.recipeId;
+        if (fallback.reason === "technology") return `${recipeName}科技未解锁`;
+        const blockerName = fallback.blocker ? ITEMS[fallback.blocker.itemId]?.name : null;
+        return blockerName ? `${recipeName}缺少${blockerName}` : `${recipeName}材料链不可完成`;
+      }).join("；")
+      : undefined,
+  }));
+}
+
+function buildConstructionAutomationPlan(state: GameState, definition: ConstructionAutomationTargetDefinition, planetId: PlanetId): ConstructionAutomationPlan {
+  const tray = trayForPlanet(state, planetId);
+  const inventory = Object.fromEntries((Object.entries(tray) as Array<[ItemId, number]>).map(([itemId, amount]) => [
+    itemId,
+    Math.max(0, Math.floor(amount ?? 0)),
+  ])) as Partial<Record<ItemId, number>>;
+  const recipes = recursiveManufacturingRecipes();
+  const plan = definition.kind === "fleet" && definition.recipeId
+    ? planSelectedRecipe({
+      inventory,
+      recipe: RECIPES[definition.recipeId],
+      batches: 1,
+      recipes,
+      completedTechnologyIds: state.research.completedTechIds,
+      allowRecipe: (recipe) => isHandcraftableRecipe(recipe.id),
+    })
+    : planRecursiveRequirements({
+      inventory,
+      requirements: definition.costs,
+      recipes,
+      completedTechnologyIds: state.research.completedTechIds,
+      allowRecipe: (recipe) => isHandcraftableRecipe(recipe.id),
+    });
+  if (!plan.possible) return { steps: [], blocker: constructionAutomationBlocker(plan.blocker) };
+  const steps: ConstructionAutomationStep[] = plan.steps.map((step) => ({
+    kind: "material",
+    recipeId: step.recipeId,
+    batches: step.batches,
+    outputItemId: step.outputItemId,
+    outputAmount: step.outputAmount,
+  }));
+  if (definition.kind === "fleet" && isPortableFleetItem(definition.id)) {
+    steps.push({ kind: "fleet", itemId: definition.id, amount: definition.outputAmount });
+  } else if (!isPortableFleetItem(definition.id)) {
+    steps.push({ kind: "building", constructionId: definition.id });
   }
-  work.steps.push({ kind: "building", constructionId: definition.buildingId });
-  return { steps: work.steps };
+  return {
+    steps,
+    recipeDecisions: constructionAutomationRecipeDecisions(plan.decisions),
+    recursiveDecisions: plan.decisions,
+  };
 }
 
 function constructionAutomationHasDeficit(state: GameState): boolean {
@@ -6017,21 +8245,84 @@ export interface ConstructionAutomationStatus {
   etaSeconds: number;
   missingItemId?: ItemId;
   missingAmount?: number;
-  blockerReason?: "raw-shortage" | "technology" | "no-handcraft" | "safety-limit";
+  blockerReason?: "raw-shortage" | "technology" | "no-handcraft" | "paused" | "no-power";
   technologyName?: string;
-  safetyCurrent?: number;
-  safetyExpected?: number;
-  safetyLimit?: number;
+  recipeName?: string;
+  recipeFallbackReason?: string;
+  wipCount?: number;
+  wipItems?: Array<{ itemId: ItemId; amount: number }>;
+  destroyedByproductCount?: number;
+  destroyedByproductItems?: Array<{ itemId: ItemId; amount: number }>;
+}
+
+export interface ConstructionCenterTraceSample {
+  wallSecond: number;
+  simulationSecond: number;
+  workerLatencyMs: number;
+  pendingSimulationSeconds: number;
+  entityId: string;
+  constructionId: ConstructionId | null;
+  stepIndex: number;
+  stepKind: ConstructionAutomationStep["kind"] | null;
+  stepItemId: ItemId | null;
+  stepElapsedSeconds: number;
+  stepDurationSeconds: number;
+  wipCount: number;
+  powerFactor: number;
+  statusCode: string;
+  completedBuildings: number;
+  guardHitCount: number;
 }
 
 function constructionAutomationStepDuration(state: GameState, step: ConstructionAutomationStep): number {
   if (step.kind === "building") return getConstructionAutomationCycleSeconds(state);
+  if (step.kind === "fleet") return 0.01;
   return Math.max(0.01, getConstructionAutomationMaterialSeconds(state) * step.outputAmount);
+}
+
+export function getEntityRecipeCycleCapacityPerSimulationSecond(state: GameState, entity: FactoryEntity): number {
+  if (state.paused) return 0;
+  if (entity.kind === "vein") return Math.max(0, entity.productionRate / 60);
+  if (entity.buildingId === "construction_center") {
+    const job = state.constructionAutomation.jobs[entity.id];
+    const step = job?.steps[job.stepIndex];
+    return step ? Math.max(0, entity.machineCount * getEntityPowerFactor(state, entity) / constructionAutomationStepDuration(state, step)) : 0;
+  }
+  const recipe = getRecipe(entity.recipeId);
+  if (!entity.buildingId || !recipe) return 0;
+  if (entity.buildingId === "ray_receiver") {
+    return recipe.id === "critical_photon"
+      ? getBuilding(entity.buildingId).speed * entity.machineCount / recipe.duration * entity.utilization
+      : 0;
+  }
+  if (entity.kind === "machine") {
+    const building = getBuilding(entity.buildingId);
+    const profile = getPlanetIndustrialProfile(state, entity.planetId);
+    const planetSpeed = specializationApplies(profile, building.family, entity.buildingId) ? profile.productionSpeedMultiplier : 1;
+    const spraySpeed = entity.proliferatorMode === "speed" && availableFullProliferatorCycles(entity, recipe) > 0
+      ? getEntityProliferatorSpeedMultiplier(entity)
+      : 1;
+    return Math.max(0, building.speed * entity.machineCount * getRecipeSpeedMultiplier(state, recipe.id) * planetSpeed /
+      recipe.duration * getEntityPowerFactor(state, entity) * dysonLaunchFactor(state, recipe.id) * spraySpeed);
+  }
+  return Math.max(0, entity.productionRate / Math.max(1, recipe.outputs.reduce((sum, output) => sum + output.amount, 0)) / 60);
+}
+
+export function getEntityCycleRatePerSimulationSecond(state: GameState, entity: FactoryEntity): number {
+  if (entity.utilization <= EPSILON) return 0;
+  return getEntityRecipeCycleCapacityPerSimulationSecond(state, entity);
 }
 
 export function getConstructionAutomationStatus(state: GameState, entityId: string): ConstructionAutomationStatus {
   const entity = state.entities.find((candidate) => candidate.id === entityId);
   if (!entity || entity.buildingId !== "construction_center") return { stage: "无制造任务", progress: 0, etaSeconds: 0 };
+  const inventoryItems = (inventory: Partial<Record<ItemId, number>>) =>
+    (Object.entries(inventory) as Array<[ItemId, number]>).flatMap(([itemId, rawAmount]) => {
+      const amount = Math.max(0, Math.floor(rawAmount ?? 0));
+      return amount > 0 ? [{ itemId, amount }] : [];
+    }).sort((left, right) => left.itemId.localeCompare(right.itemId));
+  const destroyedByproductItems = inventoryItems(state.constructionAutomation.destroyedByproducts);
+  const destroyedByproductCount = destroyedByproductItems.reduce((sum, item) => sum + item.amount, 0);
   const job = state.constructionAutomation.jobs[entityId];
   if (job) {
     const step = job.steps[job.stepIndex];
@@ -6041,24 +8332,43 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
     const requirements = constructionAutomationRequirements(step);
     const missing = requirements.find((requirement) =>
       (tray[requirement.itemId] ?? 0) + (job.inventory[requirement.itemId] ?? 0) + EPSILON < requirement.amount);
-    const safetyBlocker = missing ? undefined : constructionAutomationStepSafetyBlocker(state, entity.planetId, job, step);
+    const paused = state.paused || !state.constructionAutomation.enabled;
+    const noPower = !paused && getEntityPowerFactor(state, entity) <= EPSILON;
+    const blockedByMaterials = !paused && !noPower && Boolean(missing);
+    const recipeDecision = step.kind === "material"
+      ? job.recipeDecisions?.find((decision) => decision.itemId === step.outputItemId && decision.recipeId === step.recipeId)
+      : undefined;
+    const wipItems = inventoryItems(job.inventory);
     return {
-      stage: safetyBlocker ? "缓存安全上限保护" : step.kind === "building"
+      stage: state.paused ? "游戏已暂停" : !state.constructionAutomation.enabled ? "自动制造已暂停" : noPower ? "等待供电" : blockedByMaterials ? "等待材料" : step.kind === "building"
         ? `制造 ${getConstructionDefinition(step.constructionId)?.name ?? step.constructionId}`
-        : `加工 ${ITEMS[step.outputItemId].name}`,
+        : step.kind === "fleet" ? `入库 ${ITEMS[step.itemId].name}` : `加工 ${ITEMS[step.outputItemId].name}`,
       progress: Math.max(0, Math.min(1, job.elapsedSeconds / duration)),
       etaSeconds: Math.max(0, (duration - job.elapsedSeconds) + job.steps.slice(job.stepIndex + 1).reduce((sum, pending) => sum + constructionAutomationStepDuration(state, pending), 0)) /
         Math.max(1, entity.machineCount),
-      missingItemId: missing?.itemId ?? safetyBlocker?.itemId,
-      missingAmount: missing ? Math.max(0, missing.amount - Math.floor(tray[missing.itemId] ?? 0) - Math.floor(job.inventory[missing.itemId] ?? 0)) : undefined,
-      blockerReason: missing ? "raw-shortage" : safetyBlocker ? "safety-limit" : undefined,
-      safetyCurrent: safetyBlocker?.current,
-      safetyExpected: safetyBlocker?.expected,
-      safetyLimit: safetyBlocker?.limit,
+      missingItemId: blockedByMaterials ? missing?.itemId : undefined,
+      missingAmount: blockedByMaterials && missing ? Math.max(0, missing.amount - Math.floor(tray[missing.itemId] ?? 0) - Math.floor(job.inventory[missing.itemId] ?? 0)) : undefined,
+      blockerReason: paused ? "paused" : noPower ? "no-power" : blockedByMaterials ? "raw-shortage" : undefined,
+      recipeName: step.kind === "material" ? getRecipe(step.recipeId)?.name : undefined,
+      recipeFallbackReason: recipeDecision?.fallbackReason,
+      wipCount: wipItems.reduce((sum, item) => sum + item.amount, 0),
+      wipItems,
+      destroyedByproductCount,
+      destroyedByproductItems,
     };
   }
   const target = constructionAutomationTarget(state);
-  if (!target) return { stage: state.constructionAutomation.enabled ? "目标库存已满足" : "自动制造已关闭", progress: 0, etaSeconds: 0 };
+  if (state.paused || !state.constructionAutomation.enabled) return {
+    stage: state.paused ? "游戏已暂停" : "自动制造已暂停",
+    progress: 0,
+    etaSeconds: 0,
+    blockerReason: "paused",
+    wipCount: 0,
+    wipItems: [],
+    destroyedByproductCount,
+    destroyedByproductItems,
+  };
+  if (!target) return { stage: "目标库存已满足", progress: 0, etaSeconds: 0, wipCount: 0, wipItems: [], destroyedByproductCount, destroyedByproductItems };
   const plan = buildConstructionAutomationPlan(state, target.definition, entity.planetId);
   if (plan.blocker) {
     return {
@@ -6069,15 +8379,73 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
       missingAmount: Math.max(0, plan.blocker.required - plan.blocker.current),
       blockerReason: plan.blocker.reason,
       technologyName: plan.blocker.technologyName,
+      wipCount: 0,
+      wipItems: [],
+      destroyedByproductCount,
+      destroyedByproductItems,
     };
   }
-  return { stage: `准备 ${target.definition.name}`, progress: 0, etaSeconds: plan.steps.reduce((sum, step) => sum + constructionAutomationStepDuration(state, step), 0) / Math.max(1, entity.machineCount) };
+  if (getEntityPowerFactor(state, entity) <= EPSILON) return {
+    stage: "等待供电",
+    progress: 0,
+    etaSeconds: 0,
+    blockerReason: "no-power",
+    wipCount: 0,
+    wipItems: [],
+    destroyedByproductCount,
+    destroyedByproductItems,
+  };
+  const lastDecision = plan.recipeDecisions?.at(-1);
+  const recipeName = lastDecision ? getRecipe(lastDecision.recipeId)?.name : null;
+  return {
+    stage: `准备 ${target.definition.name}${recipeName ? ` · ${recipeName}` : ""}`,
+    progress: 0,
+    etaSeconds: plan.steps.reduce((sum, step) => sum + constructionAutomationStepDuration(state, step), 0) / Math.max(1, entity.machineCount),
+    recipeName: recipeName ?? undefined,
+    recipeFallbackReason: lastDecision?.fallbackReason,
+    wipCount: 0,
+    wipItems: [],
+    destroyedByproductCount,
+    destroyedByproductItems,
+  };
+}
+
+export function getConstructionCenterTraceSample(
+  state: GameState,
+  entityId: string,
+  wallSecond: number,
+  workerLatencyMs = 0,
+  pendingSimulationSeconds = 0,
+): ConstructionCenterTraceSample | null {
+  const entity = state.entities.find((candidate) => candidate.id === entityId && candidate.buildingId === "construction_center");
+  if (!entity) return null;
+  const job = state.constructionAutomation.jobs[entityId];
+  const step = job?.steps[job.stepIndex];
+  return {
+    wallSecond: Math.max(0, wallSecond),
+    simulationSecond: Math.max(0, state.elapsedSeconds),
+    workerLatencyMs: Math.max(0, workerLatencyMs),
+    pendingSimulationSeconds: Math.max(0, pendingSimulationSeconds),
+    entityId,
+    constructionId: job && !isPortableFleetItem(job.constructionId) ? job.constructionId : null,
+    stepIndex: job?.stepIndex ?? -1,
+    stepKind: step?.kind ?? null,
+    stepItemId: step?.kind === "material" ? step.outputItemId : step?.kind === "fleet" ? step.itemId : null,
+    stepElapsedSeconds: Math.max(0, job?.elapsedSeconds ?? 0),
+    stepDurationSeconds: step ? constructionAutomationStepDuration(state, step) : 0,
+    wipCount: Object.values(job?.inventory ?? {}).reduce((sum, amount) => sum + Math.max(0, Math.floor(amount ?? 0)), 0),
+    powerFactor: getEntityPowerFactor(state, entity),
+    statusCode: getEntityOperatingStatus(state, entity).code,
+    completedBuildings: Math.max(0, Math.floor(state.constructionAutomation.totalCrafted)),
+    guardHitCount: 0,
+  };
 }
 
 function constructionAutomationRequirements(step: ConstructionAutomationStep): Array<{ itemId: ItemId; amount: number }> {
   return step.kind === "building"
     ? getConstructionDefinition(step.constructionId)?.costs ?? []
-    : getRecipe(step.recipeId)?.inputs.map((input) => ({ itemId: input.itemId, amount: input.amount * step.batches })) ?? [];
+    : step.kind === "fleet" ? [{ itemId: step.itemId, amount: step.amount }]
+      : getRecipe(step.recipeId)?.inputs.map((input) => ({ itemId: input.itemId, amount: input.amount * step.batches })) ?? [];
 }
 
 function planConstructionAutomationConsumption(
@@ -6100,42 +8468,55 @@ function planConstructionAutomationConsumption(
   return { inventory: nextInventory, tray: nextTray };
 }
 
-interface ConstructionAutomationSafetyBlocker {
-  itemId: ItemId;
-  current: number;
-  expected: number;
-  limit: number;
+function constructionAutomationRemainingInventoryNeed(
+  job: ConstructionAutomationJob,
+  startIndex: number,
+): Partial<Record<ItemId, number>> {
+  const needed: Partial<Record<ItemId, number>> = {};
+  for (let index = job.steps.length - 1; index >= startIndex; index -= 1) {
+    const step = job.steps[index];
+    for (const requirement of constructionAutomationRequirements(step)) {
+      needed[requirement.itemId] = Math.max(0, Math.floor((needed[requirement.itemId] ?? 0) + requirement.amount));
+    }
+    if (step.kind !== "material") continue;
+    for (const output of getRecipe(step.recipeId)?.outputs ?? []) {
+      needed[output.itemId] = Math.max(0, Math.floor((needed[output.itemId] ?? 0) - output.amount * step.batches));
+    }
+  }
+  return needed;
 }
 
-function constructionAutomationStepSafetyBlocker(
+function settleConstructionAutomationExcess(
   state: GameState,
   planetId: PlanetId,
   job: ConstructionAutomationJob,
-  step: ConstructionAutomationStep,
-): ConstructionAutomationSafetyBlocker | undefined {
+  nextStepIndex: number,
+): void {
   const tray = trayForPlanet(state, planetId);
-  const consumed = planConstructionAutomationConsumption(job.inventory, tray, constructionAutomationRequirements(step));
-  if (!consumed) return undefined;
-  if (step.kind === "building") {
-    const protectionLimit = getPlanetTrayItemLimit(state, planetId) + CONSTRUCTION_AUTOMATION_TRAY_OVERFLOW_ALLOWANCE;
-    for (const [itemId, amount] of Object.entries(consumed.inventory) as Array<[ItemId, number]>) {
-      const refund = Math.max(0, Math.floor(amount ?? 0));
-      if (refund < 1) continue;
-      const current = Math.max(0, Math.floor(consumed.tray[itemId] ?? 0));
-      const expected = current + refund;
-      if (expected > protectionLimit && expected > current) return { itemId, current, expected, limit: protectionLimit };
+  const needed = constructionAutomationRemainingInventoryNeed(job, nextStepIndex);
+  const retained: Partial<Record<ItemId, number>> = {};
+  for (const [itemId, rawAmount] of Object.entries(job.inventory) as Array<[ItemId, number]>) {
+    const amount = Math.max(0, Math.floor(rawAmount ?? 0));
+    const keep = Math.min(amount, Math.max(0, Math.floor(needed[itemId] ?? 0)));
+    if (keep > 0) retained[itemId] = keep;
+    let excess = amount - keep;
+    if (excess < 1) continue;
+    if (isPortableFleetItem(itemId)) {
+      state.portableFleet[itemId] = Math.floor((state.portableFleet[itemId] ?? 0) + excess);
+      continue;
     }
-    return undefined;
+    const current = Math.max(0, Math.floor(tray[itemId] ?? 0));
+    const free = Math.max(0, getPlanetTrayItemLimit(state, planetId) - current);
+    const stored = Math.min(excess, free);
+    if (stored > 0) tray[itemId] = current + stored;
+    excess -= stored;
+    if (excess > 0) {
+      state.constructionAutomation.destroyedByproducts[itemId] = Math.min(Number.MAX_SAFE_INTEGER, Math.floor(
+        (state.constructionAutomation.destroyedByproducts[itemId] ?? 0) + excess,
+      ));
+    }
   }
-  const producedInventory = { ...consumed.inventory };
-  for (const output of getRecipe(step.recipeId)?.outputs ?? []) {
-    producedInventory[output.itemId] = Math.floor((producedInventory[output.itemId] ?? 0) + output.amount * step.batches);
-  }
-  const current = Object.values(job.inventory).reduce((sum, amount) => sum + Math.max(0, Math.floor(amount ?? 0)), 0);
-  const expected = Object.values(producedInventory).reduce((sum, amount) => sum + Math.max(0, Math.floor(amount ?? 0)), 0);
-  return expected > CONSTRUCTION_AUTOMATION_WIP_LIMIT && expected > current
-    ? { itemId: step.outputItemId, current, expected, limit: CONSTRUCTION_AUTOMATION_WIP_LIMIT }
-    : undefined;
+  job.inventory = retained;
 }
 
 function constructionAutomationInputsAvailable(state: GameState, planetId: PlanetId, job: ConstructionAutomationJob, step: ConstructionAutomationStep): boolean {
@@ -6147,19 +8528,23 @@ function finishConstructionAutomationStep(state: GameState, planetId: PlanetId, 
   const tray = trayForPlanet(state, planetId);
   const consumed = planConstructionAutomationConsumption(job.inventory, tray, constructionAutomationRequirements(step));
   if (!consumed) return false;
-  if (constructionAutomationStepSafetyBlocker(state, planetId, job, step)) return false;
   if (step.kind === "building") {
     const definition = getConstructionDefinition(step.constructionId);
     if (!definition) return false;
     Object.assign(tray, consumed.tray);
-    for (const [itemId, amount] of Object.entries(consumed.inventory) as Array<[ItemId, number]>) {
-      const refund = Math.max(0, Math.floor(amount ?? 0));
-      if (refund > 0) tray[itemId] = Math.floor((tray[itemId] ?? 0) + refund);
-    }
-    job.inventory = {};
+    job.inventory = consumed.inventory;
+    settleConstructionAutomationExcess(state, planetId, job, job.steps.length);
     state.construction[step.constructionId] = Math.floor((state.construction[step.constructionId] ?? 0) + definition.outputAmount);
     state.constructionAutomation.totalCrafted += definition.outputAmount;
     state.constructionAutomation.lastCraftedId = step.constructionId;
+    return true;
+  }
+  if (step.kind === "fleet") {
+    Object.assign(tray, consumed.tray);
+    job.inventory = consumed.inventory;
+    state.portableFleet[step.itemId] = Math.floor((state.portableFleet[step.itemId] ?? 0) + step.amount);
+    state.constructionAutomation.totalCrafted += step.amount;
+    state.constructionAutomation.lastCraftedId = step.itemId;
     return true;
   }
   const recipe = getRecipe(step.recipeId);
@@ -6170,14 +8555,275 @@ function finishConstructionAutomationStep(state: GameState, planetId: PlanetId, 
   }
   Object.assign(tray, consumed.tray);
   job.inventory = producedInventory;
+  settleConstructionAutomationExcess(state, planetId, job, job.stepIndex + 1);
   for (const output of recipe.outputs) {
     state.totalProduced[output.itemId] = Math.floor((state.totalProduced[output.itemId] ?? 0) + output.amount * step.batches);
   }
   return true;
 }
 
-function runConstructionCenters(state: GameState, seconds: number, power: PowerPlan, planetId: PlanetId): void {
-  for (const entity of state.entities) {
+interface RepeatableConstructionAutomationBatch {
+  workSeconds: number;
+  trayCosts: Partial<Record<ItemId, number>>;
+  trayReturns: Partial<Record<ItemId, number>>;
+  fleetReturns: Partial<Record<ItemId, number>>;
+  producedItems: Partial<Record<ItemId, number>>;
+  relevantItems: ItemId[];
+  touchedTrayItems: ItemId[];
+}
+
+function analyzeRepeatableConstructionAutomationPlan(
+  state: GameState,
+  definition: ConstructionAutomationTargetDefinition,
+  plan: ConstructionAutomationPlan,
+): RepeatableConstructionAutomationBatch | null {
+  if (plan.steps.length === 0) return null;
+  const inventory: Partial<Record<ItemId, number>> = {};
+  const trayCosts: Partial<Record<ItemId, number>> = {};
+  const trayReturns: Partial<Record<ItemId, number>> = {};
+  const fleetReturns: Partial<Record<ItemId, number>> = {};
+  const producedItems: Partial<Record<ItemId, number>> = {};
+  const touchedTrayItems = new Set<ItemId>();
+  const job: ConstructionAutomationJob = {
+    constructionId: definition.id,
+    steps: plan.steps,
+    stepIndex: 0,
+    elapsedSeconds: 0,
+    inventory,
+  };
+  for (let stepIndex = 0; stepIndex < plan.steps.length; stepIndex += 1) {
+    const step = plan.steps[stepIndex];
+    for (const requirement of constructionAutomationRequirements(step)) {
+      touchedTrayItems.add(requirement.itemId);
+      let remaining = Math.max(0, Math.floor(requirement.amount));
+      const available = Math.max(0, Math.floor(inventory[requirement.itemId] ?? 0));
+      const consumed = Math.min(remaining, available);
+      inventory[requirement.itemId] = available - consumed;
+      remaining -= consumed;
+      if (remaining > 0) trayCosts[requirement.itemId] = Math.floor((trayCosts[requirement.itemId] ?? 0) + remaining);
+    }
+    if (step.kind === "material") {
+      const recipe = getRecipe(step.recipeId);
+      if (!recipe) return null;
+      for (const output of recipe.outputs) {
+        const amount = Math.max(0, Math.floor(output.amount * step.batches));
+        inventory[output.itemId] = Math.floor((inventory[output.itemId] ?? 0) + amount);
+        producedItems[output.itemId] = Math.floor((producedItems[output.itemId] ?? 0) + amount);
+      }
+    }
+    const needed = constructionAutomationRemainingInventoryNeed(job, stepIndex + 1);
+    const retained: Partial<Record<ItemId, number>> = {};
+    for (const [itemId, rawAmount] of Object.entries(inventory) as Array<[ItemId, number]>) {
+      const amount = Math.max(0, Math.floor(rawAmount ?? 0));
+      const keep = Math.min(amount, Math.max(0, Math.floor(needed[itemId] ?? 0)));
+      if (keep > 0) retained[itemId] = keep;
+      const excess = amount - keep;
+      if (excess < 1) continue;
+      const returns = isPortableFleetItem(itemId) ? fleetReturns : trayReturns;
+      returns[itemId] = Math.floor((returns[itemId] ?? 0) + excess);
+    }
+    for (const itemId of Object.keys(inventory) as ItemId[]) delete inventory[itemId];
+    Object.assign(inventory, retained);
+  }
+  if (Object.values(inventory).some((amount) => Math.max(0, Math.floor(amount ?? 0)) > 0)) return null;
+  const relevant = new Set<ItemId>(touchedTrayItems);
+  const pending = (plan.recursiveDecisions ?? []).flatMap((decision) => decision.fallbacks.flatMap((fallback) => {
+    if (fallback.reason === "technology") return [];
+    return getRecipe(fallback.recipeId)?.inputs.map((input) => input.itemId) ?? [];
+  }));
+  const recipes = recursiveManufacturingRecipes();
+  while (pending.length > 0) {
+    const itemId = pending.pop()!;
+    if (relevant.has(itemId)) continue;
+    relevant.add(itemId);
+    for (const recipe of recipes) {
+      if (!recipe.outputs.some((output) => output.itemId === itemId && output.amount > 0)) continue;
+      for (const input of recipe.inputs) pending.push(input.itemId);
+    }
+  }
+  return {
+    workSeconds: plan.steps.reduce((sum, step) => sum + constructionAutomationStepDuration(state, step), 0),
+    trayCosts,
+    trayReturns,
+    fleetReturns,
+    producedItems,
+    relevantItems: [...relevant].sort(),
+    touchedTrayItems: [...touchedTrayItems].sort(),
+  };
+}
+
+function hasSingleConstructionAutomationTarget(state: GameState, targetId: ConstructionAutomationTargetId): boolean {
+  const activeTargets = getConstructionAutomationTargets().filter((definition) => {
+    if (definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)) return false;
+    const target = state.constructionAutomation.targetStock[definition.id] ?? 0;
+    return target > constructionAutomationCurrentStock(state, definition.id) + constructionAutomationPending(state, definition.id);
+  });
+  return activeTargets.length === 1 && activeTargets[0].id === targetId;
+}
+
+interface CachedConstructionAutomationPlan {
+  plan: ConstructionAutomationPlan;
+  batch: RepeatableConstructionAutomationBatch | null;
+  relevantInventory: Partial<Record<ItemId, number>>;
+}
+
+function constructionAutomationBatchInputsAvailable(
+  state: GameState,
+  planetId: PlanetId,
+  batch: RepeatableConstructionAutomationBatch,
+  jobs = 1,
+): boolean {
+  const tray = trayForPlanet(state, planetId);
+  return (Object.entries(batch.trayCosts) as Array<[ItemId, number]>).every(([itemId, amount]) =>
+    Math.max(0, Math.floor(tray[itemId] ?? 0)) >= Math.max(0, Math.floor(amount)) * jobs);
+}
+
+function constructionAutomationCachedPlanValid(
+  state: GameState,
+  planetId: PlanetId,
+  cached: CachedConstructionAutomationPlan,
+): boolean {
+  if (!cached.batch || !constructionAutomationBatchInputsAvailable(state, planetId, cached.batch)) return false;
+  const tray = trayForPlanet(state, planetId);
+  return cached.batch.relevantItems.every((itemId) =>
+    Math.max(0, Math.floor(tray[itemId] ?? 0)) <= Math.max(0, Math.floor(cached.relevantInventory[itemId] ?? 0)));
+}
+
+function resolveConstructionAutomationPlan(
+  state: GameState,
+  definition: ConstructionAutomationTargetDefinition,
+  planetId: PlanetId,
+  cache: Map<ConstructionAutomationTargetId, CachedConstructionAutomationPlan>,
+  profiler?: SimulationProfiler,
+): CachedConstructionAutomationPlan {
+  const cached = cache.get(definition.id);
+  if (cached && constructionAutomationCachedPlanValid(state, planetId, cached)) {
+    if (profiler) profiler.constructionPlanCacheHits += 1;
+    return cached;
+  }
+  const plan = buildConstructionAutomationPlan(state, definition, planetId);
+  const batch = plan.blocker ? null : analyzeRepeatableConstructionAutomationPlan(state, definition, plan);
+  const tray = trayForPlanet(state, planetId);
+  const resolved = {
+    plan,
+    batch,
+    relevantInventory: Object.fromEntries((batch?.relevantItems ?? []).map((itemId) => [
+      itemId,
+      Math.max(0, Math.floor(tray[itemId] ?? 0)),
+    ])) as Partial<Record<ItemId, number>>,
+  };
+  cache.set(definition.id, resolved);
+  if (profiler) profiler.constructionPlanBuilds += 1;
+  return resolved;
+}
+
+function constructionAutomationBatchCanRepeat(
+  state: GameState,
+  planetId: PlanetId,
+  batch: RepeatableConstructionAutomationBatch,
+): boolean {
+  const relevant = new Set(batch.relevantItems);
+  const tray = trayForPlanet(state, planetId);
+  const limit = getPlanetTrayItemLimit(state, planetId);
+  return (Object.entries(batch.trayReturns) as Array<[ItemId, number]>).every(([itemId, amount]) => {
+    const returned = Math.max(0, Math.floor(amount));
+    if (returned < 1) return true;
+    const cost = Math.max(0, Math.floor(batch.trayCosts[itemId] ?? 0));
+    if (cost > 0 && Math.max(0, Math.floor(tray[itemId] ?? 0)) > limit) return false;
+    return !relevant.has(itemId) || returned <= cost;
+  }) &&
+    Object.values(batch.fleetReturns).every((amount) => Math.max(0, Math.floor(amount ?? 0)) < 1);
+}
+
+function applyConstructionAutomationBatch(
+  state: GameState,
+  entity: FactoryEntity,
+  targetIndex: number,
+  definition: ConstructionAutomationTargetDefinition,
+  batch: RepeatableConstructionAutomationBatch,
+  jobs: number,
+): number {
+  const count = Math.max(1, Math.floor(jobs));
+  const tray = trayForPlanet(state, entity.planetId);
+  for (const itemId of batch.touchedTrayItems) {
+    if (tray[itemId] === undefined) tray[itemId] = 0;
+  }
+  for (const [itemId, amount] of Object.entries(batch.trayCosts) as Array<[ItemId, number]>) {
+    tray[itemId] = Math.max(0, Math.floor((tray[itemId] ?? 0) - amount * count));
+  }
+  for (const [itemId, amount] of Object.entries(batch.trayReturns) as Array<[ItemId, number]>) {
+    const returned = Math.max(0, Math.floor(amount * count));
+    if (returned < 1) continue;
+    const current = Math.max(0, Math.floor(tray[itemId] ?? 0));
+    const stored = Math.min(returned, Math.max(0, getPlanetTrayItemLimit(state, entity.planetId) - current));
+    if (stored > 0) tray[itemId] = current + stored;
+    const destroyed = returned - stored;
+    if (destroyed > 0) {
+      state.constructionAutomation.destroyedByproducts[itemId] = Math.min(Number.MAX_SAFE_INTEGER, Math.floor(
+        (state.constructionAutomation.destroyedByproducts[itemId] ?? 0) + destroyed,
+      ));
+    }
+  }
+  for (const [itemId, amount] of Object.entries(batch.fleetReturns) as Array<[ItemId, number]>) {
+    const returned = Math.max(0, Math.floor(amount * count));
+    if (returned > 0 && isPortableFleetItem(itemId)) {
+      state.portableFleet[itemId] = Math.floor((state.portableFleet[itemId] ?? 0) + returned);
+    }
+  }
+  for (const [itemId, amount] of Object.entries(batch.producedItems) as Array<[ItemId, number]>) {
+    state.totalProduced[itemId] = Math.floor((state.totalProduced[itemId] ?? 0) + amount * count);
+  }
+  const completed = definition.outputAmount * count;
+  if (definition.kind === "fleet" && isPortableFleetItem(definition.id)) {
+    state.portableFleet[definition.id] = Math.floor((state.portableFleet[definition.id] ?? 0) + completed);
+  } else if (!isPortableFleetItem(definition.id)) {
+    state.construction[definition.id] = Math.floor((state.construction[definition.id] ?? 0) + completed);
+  }
+  state.constructionAutomation.totalCrafted += completed;
+  state.constructionAutomation.lastCraftedId = definition.id;
+  state.constructionAutomation.cursor = (targetIndex + 1) % Math.max(1, getConstructionAutomationTargets().length);
+  return completed;
+}
+
+function tryRunConstructionAutomationBatch(
+  state: GameState,
+  entity: FactoryEntity,
+  targetIndex: number,
+  definition: ConstructionAutomationTargetDefinition,
+  repeatable: RepeatableConstructionAutomationBatch,
+  remainingWork: number,
+): { usedWork: number; completed: number; jobs: number } | null {
+  if (repeatable.workSeconds <= EPSILON || definition.outputAmount < 1) return null;
+  const target = Math.max(0, Math.floor(state.constructionAutomation.targetStock[definition.id] ?? 0));
+  const current = constructionAutomationCurrentStock(state, definition.id) + constructionAutomationPending(state, definition.id);
+  const jobsForTarget = Math.ceil(Math.max(0, target - current) / definition.outputAmount);
+  const jobsForWork = Math.floor((Math.max(0, remainingWork) + EPSILON) / repeatable.workSeconds);
+  if (jobsForTarget < 1 || jobsForWork < 1 || !constructionAutomationBatchInputsAvailable(state, entity.planetId, repeatable)) return null;
+  const tray = trayForPlanet(state, entity.planetId);
+  let jobsForStock = Number.MAX_SAFE_INTEGER;
+  for (const [itemId, amount] of Object.entries(repeatable.trayCosts) as Array<[ItemId, number]>) {
+    if (amount < 1) continue;
+    jobsForStock = Math.min(jobsForStock, Math.floor(Math.max(0, tray[itemId] ?? 0) / amount));
+  }
+  const canRepeat = hasSingleConstructionAutomationTarget(state, definition.id) &&
+    Object.keys(state.constructionAutomation.jobs).length === 0 &&
+    constructionAutomationBatchCanRepeat(state, entity.planetId, repeatable);
+  const jobs = canRepeat ? Math.min(jobsForTarget, jobsForWork, jobsForStock) : 1;
+  const completed = applyConstructionAutomationBatch(state, entity, targetIndex, definition, repeatable, jobs);
+  return { usedWork: repeatable.workSeconds * jobs, completed, jobs };
+}
+
+function runConstructionCenters(
+  state: GameState,
+  seconds: number,
+  power: PowerPlan,
+  planetId: PlanetId,
+  entities = state.entities,
+  batchConstructionAutomation = true,
+  profiler?: SimulationProfiler,
+): void {
+  const planCache = new Map<ConstructionAutomationTargetId, CachedConstructionAutomationPlan>();
+  for (const entity of entities) {
     if (entity.planetId !== planetId || entity.buildingId !== "construction_center") continue;
     const powerFactor = powerFactorForEntity(power, entity);
     entity.powerFactor = power.factorByEntity.has(entity.id) ? round(powerFactor, 4) : undefined;
@@ -6191,16 +8837,39 @@ function runConstructionCenters(state: GameState, seconds: number, power: PowerP
     let remainingWork = Math.max(0, seconds) * Math.max(1, entity.machineCount) * powerFactor;
     let completed = 0;
     let worked = false;
-    let guard = 0;
-    while (remainingWork > EPSILON && guard++ < 128) {
+    while (remainingWork > EPSILON) {
+      const remainingBeforeIteration = remainingWork;
+      const jobBeforeIteration = job;
+      const stepBeforeIteration = job?.stepIndex;
       if (!job) {
         const target = constructionAutomationTarget(state);
         if (!target) break;
-        const plan = buildConstructionAutomationPlan(state, target.definition, entity.planetId);
+        const resolved = batchConstructionAutomation
+          ? resolveConstructionAutomationPlan(state, target.definition, entity.planetId, planCache, profiler)
+          : { plan: buildConstructionAutomationPlan(state, target.definition, entity.planetId), batch: null };
+        const plan = resolved.plan;
         if (plan.blocker) break;
-        job = { constructionId: target.definition.buildingId, steps: plan.steps, stepIndex: 0, elapsedSeconds: 0, inventory: {} };
+        const batched = batchConstructionAutomation && resolved.batch
+          ? tryRunConstructionAutomationBatch(state, entity, target.index, target.definition, resolved.batch, remainingWork)
+          : null;
+        if (batched) {
+          remainingWork = Math.max(0, remainingWork - batched.usedWork);
+          completed += batched.completed;
+          worked = true;
+          entity.progress = 0;
+          if (profiler) profiler.constructionJobsBatched += batched.jobs;
+          continue;
+        }
+        job = {
+          constructionId: target.definition.id,
+          steps: plan.steps,
+          stepIndex: 0,
+          elapsedSeconds: 0,
+          inventory: {},
+          recipeDecisions: plan.recipeDecisions,
+        };
         state.constructionAutomation.jobs[entity.id] = job;
-        state.constructionAutomation.cursor = (target.index + 1) % Math.max(1, CONSTRUCTION.length);
+        state.constructionAutomation.cursor = (target.index + 1) % Math.max(1, getConstructionAutomationTargets().length);
       }
       const step = job.steps[job.stepIndex];
       if (!step) {
@@ -6219,6 +8888,7 @@ function runConstructionCenters(state: GameState, seconds: number, power: PowerP
       if (job.elapsedSeconds + EPSILON < duration) break;
       if (!finishConstructionAutomationStep(state, entity.planetId, job, step)) break;
       if (step.kind === "building") completed += getConstructionDefinition(step.constructionId)?.outputAmount ?? 0;
+      else if (step.kind === "fleet") completed += step.amount;
       job.stepIndex += 1;
       job.elapsedSeconds = 0;
       entity.progress = 0;
@@ -6226,6 +8896,7 @@ function runConstructionCenters(state: GameState, seconds: number, power: PowerP
         delete state.constructionAutomation.jobs[entity.id];
         job = undefined;
       }
+      if (remainingWork + EPSILON >= remainingBeforeIteration && job === jobBeforeIteration && job?.stepIndex === stepBeforeIteration) break;
     }
     entity.utilization = worked || completed > 0 ? powerFactor : 0;
     entity.productionRate = seconds > EPSILON ? round(completed * 60 / seconds, 2) : 0;
@@ -6235,6 +8906,7 @@ function runConstructionCenters(state: GameState, seconds: number, power: PowerP
 function sourceProduces(entity: FactoryEntity, itemId: ItemId): boolean {
   if (entity.kind === "vein") return entity.resourceId === itemId;
   if (entity.kind === "station" && entity.buildingId !== "orbital_collector") {
+    if (isElevatorStation(entity)) return (entity.elevatorOutputItems ?? []).includes(itemId);
     // A logistics station can expose up to five independent item slots. The
     // legacy storedItemId field mirrors only the first configured slot, so
     // using it here silently invalidates every second/third belt output.
@@ -6257,7 +8929,7 @@ function resolveBlackHolePortIndex(
 
 export type BeltConnectionCheck =
   | { ok: true; code: "ready"; label: string }
-  | { ok: false; code: "missing-belt" | "same-node" | "missing-node" | "different-planet" | "invalid-source" | "station-slots-full" | "item-conflict" | "invalid-target" | "target-port-occupied"; label: string };
+  | { ok: false; code: "missing-belt" | "same-node" | "missing-node" | "different-planet" | "invalid-source" | "station-slots-full" | "item-conflict" | "invalid-target" | "target-port-occupied" | "line-limit"; label: string };
 
 export function getBeltConnectionCheck(state: GameState, sourceId: string, targetId: string, itemId: ItemId, tier: BeltTier = 1, targetPortIndex?: 0 | 1 | 2): BeltConnectionCheck {
   const constructionId = getBeltConstructionId(tier);
@@ -6267,19 +8939,34 @@ export function getBeltConnectionCheck(state: GameState, sourceId: string, targe
   const target = state.entities.find((entity) => entity.id === targetId);
   if (!source || !target) return { ok: false, code: "missing-node", label: "连接端点不存在" };
   if (source.planetId !== target.planetId) return { ok: false, code: "different-planet", label: "传送带不能跨越行星" };
+  const requestedPortIndex = target.buildingId === "micro_black_hole_connector"
+    ? targetPortIndex
+    : target.buildingId === "material_delivery_hub"
+      ? resolveMaterialDeliverySlotIndex(target, itemId, targetPortIndex)
+      : undefined;
+  if (target.buildingId === "material_delivery_hub" && requestedPortIndex === undefined) {
+    return { ok: false, code: "invalid-target", label: targetPortIndex === undefined
+      ? "物资配送枢纽没有可自动识别的兼容接口"
+      : `物资配送接口 ${targetPortIndex + 1} 已停用或指定了其他物资` };
+  }
+  const existing = state.belts.find((belt) => belt.source === sourceId && belt.target === targetId && belt.itemId === itemId &&
+    belt.targetPortIndex === requestedPortIndex);
+  if (existing && existing.lanes >= MAX_BELT_LANES) {
+    return { ok: false, code: "line-limit", label: `并联线路已达到上限 ${MAX_BELT_LANES}` };
+  }
   if (!sourceProduces(source, itemId)) return { ok: false, code: "invalid-source", label: "来源设备不能输出该物品" };
   if (target.buildingId === "micro_black_hole_connector" && resolveBlackHolePortIndex(state, target.id, targetPortIndex) === undefined) {
     return { ok: false, code: "target-port-occupied", label: targetPortIndex === undefined
       ? "微型黑洞的三个输入接口均已占用"
       : `微型黑洞接口 ${targetPortIndex + 1} 已占用` };
   }
-  if (target.kind === "station" && target.buildingId !== "orbital_collector") {
+  if (target.kind === "station" && target.buildingId !== "orbital_collector" && !isElevatorStation(target)) {
     const slots = getStationSlots(target);
     if (!slots.some((slot) => slot.itemId === itemId) && !slots.some((slot) => !slot.itemId)) {
       return { ok: false, code: "station-slots-full", label: "物流站没有可用空槽" };
     }
   }
-  if (!targetCanAcceptBeltItem(state, target, itemId)) {
+  if (!targetCanAcceptBeltItem(state, target, itemId, requestedPortIndex)) {
     if (target.buildingId === "galactic_material_exporter") {
       return { ok: false, code: "invalid-target", label: "超大型物资出口仅接收宇宙矩阵、太阳帆、小型运载火箭和反物质燃料棒" };
     }
@@ -6305,10 +8992,16 @@ export function connectBelt(state: GameState, sourceId: string, targetId: string
   const configuredTarget = next.entities.find((entity) => entity.id === targetId)!;
   const resolvedTargetPortIndex = configuredTarget.buildingId === "micro_black_hole_connector"
     ? resolveBlackHolePortIndex(next, targetId, targetPortIndex)
-    : undefined;
-  if (configuredTarget.buildingId === "micro_black_hole_connector" && resolvedTargetPortIndex === undefined) return state;
+    : configuredTarget.buildingId === "material_delivery_hub"
+      ? resolveMaterialDeliverySlotIndex(configuredTarget, itemId, targetPortIndex)
+      : undefined;
+  if ((configuredTarget.buildingId === "micro_black_hole_connector" || configuredTarget.buildingId === "material_delivery_hub") && resolvedTargetPortIndex === undefined) return state;
   configureAutoTargetRecipe(next, configuredTarget, itemId);
-  configureTargetItem(configuredTarget, itemId);
+  configureTargetItem(configuredTarget, itemId, resolvedTargetPortIndex);
+  const configuredSource = next.entities.find((entity) => entity.id === sourceId)!;
+  const resolvedElevatorOutputIndex = isElevatorStation(configuredSource)
+    ? configuredSource.elevatorOutputItems?.findIndex((candidate) => candidate === itemId)
+    : -1;
   const existing = next.belts.find((belt) => belt.source === sourceId && belt.target === targetId && belt.itemId === itemId &&
     belt.targetPortIndex === resolvedTargetPortIndex);
   if (existing) {
@@ -6324,7 +9017,7 @@ export function connectBelt(state: GameState, sourceId: string, targetId: string
       itemId,
       lanes: 1,
       tier,
-      sorterTier: tier,
+      sorterTier: Math.min(3, tier) as SorterTier,
       progress: 0,
       priority: target.buildingId === "material_delivery_hub" ? 0 : 1,
       stackSize: canSetBeltStackSize(next, next.settings.defaultBeltStackSize) ? next.settings.defaultBeltStackSize : 1,
@@ -6334,6 +9027,9 @@ export function connectBelt(state: GameState, sourceId: string, targetId: string
       lastFlow: 0,
       routeMode: next.settings.defaultBeltRouteMode,
       targetPortIndex: resolvedTargetPortIndex,
+      elevatorOutputIndex: resolvedElevatorOutputIndex !== undefined && resolvedElevatorOutputIndex >= 0
+        ? resolvedElevatorOutputIndex as 0 | 1 | 2 | 3 | 4
+        : undefined,
     });
     next.nextId += 1;
   }
@@ -6351,6 +9047,49 @@ export function removeBelt(state: GameState, beltId: string): GameState {
   return next;
 }
 
+export type BeltLaneAdjustmentCheck =
+  | { ok: true; code: "ready" | "unchanged"; label: string; targetLanes: number; delta: number; constructionId: ConstructionId; available: number }
+  | { ok: false; code: "missing-line" | "invalid-count" | "minimum" | "maximum" | "missing-construction"; label: string };
+
+export function getBeltLaneAdjustmentCheck(state: GameState, beltId: string, targetLanes: number): BeltLaneAdjustmentCheck {
+  const belt = state.belts.find((candidate) => candidate.id === beltId);
+  if (!belt) return { ok: false, code: "missing-line", label: "运输线不存在" };
+  if (!Number.isSafeInteger(targetLanes)) return { ok: false, code: "invalid-count", label: "并联数量必须为整数" };
+  if (targetLanes < 1) return { ok: false, code: "minimum", label: "至少保留 1 条并联线路；如需拆除请使用回收" };
+  // Grandfathered saves may contain more than the current limit. They can be
+  // reduced without losing cargo, but cannot add lanes above their current count.
+  if (targetLanes > MAX_BELT_LANES && targetLanes >= belt.lanes) {
+    return { ok: false, code: "maximum", label: `并联数量不能超过 ${MAX_BELT_LANES}` };
+  }
+  const constructionId = getBeltConstructionId(belt.tier);
+  const available = Math.max(0, Math.floor(state.construction[constructionId] ?? 0));
+  const delta = targetLanes - belt.lanes;
+  if (delta > available) {
+    const name = getConstructionDefinition(constructionId)?.name ?? "同级传送带";
+    return { ok: false, code: "missing-construction", label: `缺少${name} ×${delta - available}（需要 ${delta}，现有 ${available}）` };
+  }
+  return {
+    ok: true,
+    code: delta === 0 ? "unchanged" : "ready",
+    label: delta === 0 ? "并联数量未变化" : delta > 0 ? `将消耗同级传送带 ×${delta}` : `将返还同级传送带 ×${Math.abs(delta)}`,
+    targetLanes,
+    delta,
+    constructionId,
+    available,
+  };
+}
+
+export function setBeltLaneCount(state: GameState, beltId: string, targetLanes: number): GameState {
+  const check = getBeltLaneAdjustmentCheck(state, beltId, targetLanes);
+  if (!check.ok || check.delta === 0) return state;
+  const next = copyState(state);
+  const belt = next.belts.find((candidate) => candidate.id === beltId);
+  if (!belt) return state;
+  belt.lanes = check.targetLanes;
+  next.construction[check.constructionId] = check.available - check.delta;
+  return next;
+}
+
 export function setBeltPriority(state: GameState, beltId: string, priority: 0 | 1 | 2): GameState {
   if (!state.belts.some((belt) => belt.id === beltId)) return state;
   return {
@@ -6361,15 +9100,9 @@ export function setBeltPriority(state: GameState, beltId: string, priority: 0 | 
 
 export function setLogisticsItem(state: GameState, entityId: string, itemId: ItemId): GameState {
   const current = state.entities.find((entity) => entity.id === entityId);
-  if (!current) return state;
+  if (!current || current.interactionLocked) return state;
   if (current.buildingId === "material_delivery_hub") {
-    const next = copyState(state);
-    const entity = next.entities.find((candidate) => candidate.id === entityId)!;
-    for (const [bufferedItemId, amount] of Object.entries(entity.inputs)) addToPlanetTray(next, entity.planetId, bufferedItemId as ItemId, amount ?? 0);
-    entity.inputs = {};
-    entity.outputs = {};
-    entity.deliveryItemIds = [itemId];
-    return next;
+    return setMaterialDeliverySlot(state, entityId, 0, "manual", itemId, true);
   }
   if (current.kind === "station" && current.buildingId !== "orbital_collector") {
     return setStationSlotItem(state, entityId, 0, itemId);
@@ -6400,7 +9133,7 @@ export function setStationSlotItem(
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.kind === "station" &&
     entity.buildingId !== "orbital_collector");
-  if (!current || current.planetId !== state.activePlanetId || slotIndex < 0 || slotIndex >= STATION_SLOT_COUNT ||
+  if (!current || current.interactionLocked || current.planetId !== state.activePlanetId || slotIndex < 0 || slotIndex >= STATION_SLOT_COUNT ||
     (itemId && !ITEMS[itemId])) return state;
   const currentSlots = getStationSlots(current);
   const previousItemId = currentSlots[slotIndex]?.itemId;
@@ -6442,7 +9175,7 @@ export function setStationSlotMode(
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.kind === "station" &&
     entity.buildingId !== "orbital_collector");
-  if (!current || !getStationSlots(current)[slotIndex]?.itemId ||
+  if (!current || current.interactionLocked || !getStationSlots(current)[slotIndex]?.itemId ||
     (scope === "remote" && current.buildingId !== "interstellar_logistics_station")) return state;
   const next = copyState(state);
   const station = next.entities.find((entity) => entity.id === entityId)!;
@@ -6466,7 +9199,7 @@ export function setStationSlotMinimumLoad(
   minimumLoad: StationMinimumLoad,
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.kind === "station");
-  if (!current || !STATION_MINIMUM_LOAD_OPTIONS.includes(minimumLoad) || !getStationSlots(current)[slotIndex]?.itemId) return state;
+  if (!current || current.interactionLocked || !STATION_MINIMUM_LOAD_OPTIONS.includes(minimumLoad) || !getStationSlots(current)[slotIndex]?.itemId) return state;
   const next = copyState(state);
   const station = next.entities.find((entity) => entity.id === entityId)!;
   ensureStationSlots(station)[slotIndex].minimumLoad = minimumLoad;
@@ -6482,7 +9215,7 @@ export function setStationSlotLimits(
   maxStock: number,
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.kind === "station");
-  if (!current || !getStationSlots(current)[slotIndex]?.itemId) return state;
+  if (!current || current.interactionLocked || !getStationSlots(current)[slotIndex]?.itemId) return state;
   const next = copyState(state);
   const station = next.entities.find((entity) => entity.id === entityId)!;
   const slot = ensureStationSlots(station)[slotIndex];
@@ -6500,7 +9233,7 @@ export function setStationSlotPriority(
   priority: 0 | 1 | 2,
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.kind === "station");
-  if (!current || !getStationSlots(current)[slotIndex]?.itemId) return state;
+  if (!current || current.interactionLocked || !getStationSlots(current)[slotIndex]?.itemId) return state;
   const next = copyState(state);
   const station = next.entities.find((entity) => entity.id === entityId)!;
   ensureStationSlots(station)[slotIndex].priority = priority;
@@ -6515,7 +9248,7 @@ export function setStationSlotRoutePolicy(
   routePolicy: InterstellarRoutePolicy,
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
-  if (!current || !getStationSlots(current)[slotIndex]?.itemId ||
+  if (!current || current.interactionLocked || !getStationSlots(current)[slotIndex]?.itemId ||
     (routePolicy !== "direct" && routePolicy !== "relay-preferred" && routePolicy !== "relay-required")) return state;
   const next = copyState(state);
   const station = next.entities.find((entity) => entity.id === entityId)!;
@@ -6531,7 +9264,7 @@ export function setStationSlotWarperBudget(
 ): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
   const budget = Math.max(1, Math.min(4, Math.floor(warperBudget)));
-  if (!current || !getStationSlots(current)[slotIndex]?.itemId || !Number.isFinite(warperBudget)) return state;
+  if (!current || current.interactionLocked || !getStationSlots(current)[slotIndex]?.itemId || !Number.isFinite(warperBudget)) return state;
   const next = copyState(state);
   const station = next.entities.find((entity) => entity.id === entityId)!;
   ensureStationSlots(station)[slotIndex].warperBudget = budget;
@@ -6544,7 +9277,7 @@ export function setStationHubConfiguration(
   enabled: boolean,
   priority: LogisticsPriority = 1,
 ): GameState {
-  if (!state.entities.some((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station")) return state;
+  if (!state.entities.some((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station" && !entity.interactionLocked)) return state;
   return {
     ...state,
     entities: state.entities.map((entity) => entity.id === entityId
@@ -6563,7 +9296,7 @@ export function getStationTemplateCompatibleEntityIds(
   const requested = new Set(entityIds);
   return state.entities
     .filter((entity) => {
-      if (!requested.has(entity.id) || entity.kind !== "station" || entity.buildingId === "orbital_collector") return false;
+      if (!requested.has(entity.id) || entity.interactionLocked || entity.kind !== "station" || entity.buildingId === "orbital_collector") return false;
       return !getStationSlots(entity).some((slot, index) => index !== slotIndex && slot.itemId === template.itemId);
     })
     .map((entity) => entity.id);
@@ -6601,68 +9334,266 @@ export function applyStationSlotTemplateToEntities(
 export function setStationMode(state: GameState, entityId: string, mode: "supply" | "demand"): GameState {
   const station = state.entities.find((entity) => entity.id === entityId && entity.kind === "station" &&
     entity.buildingId !== "orbital_collector");
-  if (!station) return state;
+  if (!station || station.interactionLocked) return state;
   const scope: StationLogisticsScope = station.buildingId === "planetary_logistics_station" ? "local" : "remote";
   return setStationSlotMode(state, entityId, 0, scope, mode);
 }
 
-export function adjustStationVessels(state: GameState, entityId: string, delta: number): GameState {
-  const current = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
-  const requested = Math.trunc(delta);
-  if (!current || current.planetId !== state.activePlanetId || requested === 0) return state;
-  const loaded = Math.max(0, Math.floor(current.stationVessels ?? 0));
-  const busy = stationBusyVehicles(state, current, "remote");
-  const capacity = getStationVesselCapacity(current);
-  const available = Math.max(0, Math.floor(state.portableFleet?.logistics_vessel ?? 0));
-  const change = requested > 0
-    ? Math.min(requested, capacity - loaded, available)
-    : -Math.min(-requested, Math.max(0, loaded - busy));
-  if (change === 0) return state;
+export type QuantumAttachmentBlocker = "missing-station" | "technology" | "not-upgraded" | "already-quantum" | "already-legacy" | "transition-active" | "locked";
 
-  const next = copyState(state);
-  const station = next.entities.find((entity) => entity.id === entityId)!;
-  station.stationVessels = loaded + change;
-  station.stationProgress = 0;
-  if (change > 0) {
-    next.portableFleet.logistics_vessel = available - change;
-  } else {
-    addToTray(next, "logistics_vessel", -change);
-  }
-  if (station.stationPeerId) {
-    const peer = next.entities.find((entity) => entity.id === station.stationPeerId);
-    if (peer) peer.stationProgress = 0;
-  }
-  return next;
+export interface QuantumAttachmentStatus {
+  stationId: string;
+  mode: "legacy" | "transitioning" | "quantum";
+  blocker: QuantumAttachmentBlocker | null;
+  bridgeCount: number;
+  bridgeCargo: string;
 }
 
-export function adjustStationDrones(state: GameState, entityId: string, delta: number): GameState {
-  const current = state.entities.find((entity) => entity.id === entityId &&
-    (entity.buildingId === "planetary_logistics_station" || entity.buildingId === "interstellar_logistics_station"));
-  const requested = Math.trunc(delta);
-  if (!current || current.planetId !== state.activePlanetId || requested === 0) return state;
-  const loaded = Math.max(0, Math.floor(current.stationDrones ?? 0));
-  const busy = stationBusyVehicles(state, current, "local");
-  const capacity = getStationDroneCapacity(current);
-  const available = Math.max(0, Math.floor(state.portableFleet?.logistics_drone ?? 0));
-  const change = requested > 0
-    ? Math.min(requested, capacity - loaded, available)
-    : -Math.min(-requested, Math.max(0, loaded - busy));
-  if (change === 0) return state;
+export function getQuantumAttachmentStatus(state: GameState, entityId: string): QuantumAttachmentStatus | null {
+  const entity = state.entities.find((candidate) => candidate.id === entityId && candidate.buildingId === "interstellar_logistics_station");
+  if (!entity) return null;
+  const mode = entity.quantumMode ?? "legacy";
+  const bridgeCargo = (entity.quantumTransition?.bridges ?? []).reduce((sum, bridge) => sum + BigInt(normalizeQuantumInteger(bridge.remainingCargo)), 0n).toString();
+  return {
+    stationId: entityId,
+    mode,
+    blocker: mode === "quantum" ? "already-quantum" : entity.quantumTransition ? "transition-active" : !isTechnologyCompleted(state, "quantum_logistics_network") ? "technology" : (entity.stationTier ?? 1) < 2 ? "not-upgraded" : null,
+    bridgeCount: entity.quantumTransition?.bridges.length ?? 0,
+    bridgeCargo,
+  };
+}
 
-  const next = copyState(state);
-  const station = next.entities.find((entity) => entity.id === entityId)!;
-  station.stationDrones = loaded + change;
-  station.stationProgress = 0;
-  if (change > 0) next.portableFleet.logistics_drone = available - change;
-  else addToTray(next, "logistics_drone", -change);
-  if (station.stationPeerId) {
-    const peer = next.entities.find((entity) => entity.id === station.stationPeerId);
-    if (peer) peer.stationProgress = 0;
+/** Begin the independent second action after a station reaches Mk.II. */
+export function attachInterstellarStationToQuantumNetwork(state: GameState, entityId: string): GameState {
+  if (!isTechnologyCompleted(state, "quantum_logistics_network")) return state;
+  const result = beginQuantumAttachment(state, entityId);
+  return result.changed ? result.state : state;
+}
+
+export function getOrbitalCollectorQuantumStatus(state: GameState, entityId: string): QuantumAttachmentStatus | null {
+  const entity = state.entities.find((candidate) => candidate.id === entityId && candidate.buildingId === "orbital_collector");
+  if (!entity) return null;
+  const mode = entity.quantumMode ?? "legacy";
+  const bridgeCargo = (entity.quantumTransition?.bridges ?? []).reduce((sum, bridge) =>
+    sum + BigInt(normalizeQuantumInteger(bridge.remainingCargo)), 0n).toString();
+  return {
+    stationId: entityId,
+    mode,
+    blocker: entity.interactionLocked
+      ? "locked"
+      : entity.quantumTransition
+        ? "transition-active"
+        : !isTechnologyCompleted(state, "quantum_logistics_network")
+          ? "technology"
+          : mode === "quantum" ? "already-quantum" : null,
+    bridgeCount: entity.quantumTransition?.bridges.length ?? 0,
+    bridgeCargo,
+  };
+}
+
+export function setOrbitalCollectorQuantumMode(state: GameState, entityId: string, enabled: boolean): GameState {
+  const collector = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "orbital_collector");
+  if (!collector || collector.interactionLocked || enabled && !isTechnologyCompleted(state, "quantum_logistics_network")) return state;
+  const result = beginOrbitalCollectorQuantumModeChange(state, entityId, enabled ? "quantum" : "legacy");
+  return result.changed ? result.state : state;
+}
+
+export function setAllOrbitalCollectorsQuantumMode(
+  state: GameState,
+  enabled: boolean,
+  systemId?: StarSystemId,
+): QuantumAttachmentBatchResult {
+  const candidates = state.entities
+    .filter((entity) => entity.buildingId === "orbital_collector")
+    .filter((entity) => systemId == null || getPlanet(entity.planetId).systemId === systemId)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const eligibleIds: string[] = [];
+  const skipped: QuantumAttachmentBatchSkip[] = [];
+  for (const candidate of candidates) {
+    const mode = candidate.quantumMode ?? "legacy";
+    const blocker: QuantumAttachmentBlocker | null = candidate.interactionLocked
+      ? "locked"
+      : candidate.quantumTransition
+        ? "transition-active"
+        : enabled && !isTechnologyCompleted(state, "quantum_logistics_network")
+          ? "technology"
+          : enabled && mode === "quantum"
+            ? "already-quantum"
+            : !enabled && mode !== "quantum" ? "already-legacy" : null;
+    if (blocker) {
+      skipped.push({
+        entityId: candidate.id,
+        blocker,
+        reason: blocker === "technology" ? "需要先研究“量子物流网络”"
+          : blocker === "transition-active" ? "传统航线尾货仍在交接"
+            : blocker === "locked" ? "轨道采集器已锁定"
+              : blocker === "already-quantum" ? "已经接入量子采集网络" : "已经使用传统物流",
+      });
+      continue;
+    }
+    eligibleIds.push(candidate.id);
   }
+  const batch = beginOrbitalCollectorQuantumModeChanges(state, eligibleIds, enabled ? "quantum" : "legacy");
+  return { state: batch.state, startedIds: batch.startedIds, skipped };
+}
+
+export function setQuantumLogisticsItemCapacity(state: GameState, itemId: ItemId, value: unknown): GameState {
+  if (!(itemId in ITEMS)) return state;
+  const quantumLogisticsNetwork = setQuantumNetworkItemCapacity(state.quantumLogisticsNetwork, itemId, value);
+  return quantumLogisticsNetwork === state.quantumLogisticsNetwork ? state : { ...state, quantumLogisticsNetwork };
+}
+
+export interface QuantumAttachmentBatchSkip {
+  entityId: string;
+  reason: string;
+  blocker: QuantumAttachmentBlocker;
+}
+
+export interface QuantumAttachmentBatchResult {
+  state: GameState;
+  startedIds: string[];
+  skipped: QuantumAttachmentBatchSkip[];
+}
+
+/**
+ * Start the same safe handoff as the single-station action for every eligible
+ * interstellar station.  This only writes transition metadata; traditional
+ * routes and their cargo are settled by the existing five-second boundary.
+ */
+export function attachAllInterstellarStationsToQuantumNetwork(
+  state: GameState,
+  systemId?: StarSystemId,
+): QuantumAttachmentBatchResult {
+  const candidates = state.entities
+    .filter((entity) => entity.buildingId === "interstellar_logistics_station")
+    .filter((entity) => systemId == null || getPlanet(entity.planetId).systemId === systemId)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const startedIds: string[] = [];
+  const skipped: QuantumAttachmentBatchSkip[] = [];
+  const eligibleIds: string[] = [];
+  const technologyReady = isTechnologyCompleted(state, "quantum_logistics_network");
+  for (const candidate of candidates) {
+    if (!technologyReady) {
+      skipped.push({ entityId: candidate.id, blocker: "technology", reason: "需要先研究“量子物流网络”" });
+      continue;
+    }
+    const mode = candidate.quantumMode ?? "legacy";
+    const blocker: QuantumAttachmentBlocker | null = mode === "quantum"
+      ? "already-quantum"
+      : candidate.quantumTransition
+        ? "transition-active"
+        : (candidate.stationTier ?? 1) < 2
+          ? "not-upgraded"
+          : null;
+    if (blocker) {
+      const reason = blocker === "already-quantum"
+        ? "该物流站已经接入量子网络"
+        : blocker === "transition-active"
+          ? "传统航线尾货仍在等待交接"
+          : blocker === "not-upgraded"
+            ? "请先将星际物流站升级到 Mk.II"
+            : "需要先研究“量子物流网络”";
+      skipped.push({ entityId: candidate.id, blocker, reason });
+      continue;
+    }
+    eligibleIds.push(candidate.id);
+  }
+  const batch = beginQuantumAttachments(state, eligibleIds);
+  startedIds.push(...batch.startedIds);
+  for (const entry of batch.entries) {
+    if (entry.changed) continue;
+    skipped.push({ entityId: entry.stationId, blocker: entry.reason ?? "transition-active", reason: "状态已变化，未重复提交接入" });
+  }
+  return { state: batch.state, startedIds, skipped };
+}
+
+export function cancelQuantumStationAttachment(state: GameState, entityId: string): GameState {
+  const station = state.entities.find((entity) => entity.id === entityId && entity.quantumTransition);
+  if (!station) return state;
+  const transition = station.quantumTransition!;
+  const next = {
+    ...state,
+    entities: state.entities.map((entity) => entity.id === entityId ? { ...entity, quantumMode: "legacy" as const, quantumTransition: null } : entity),
+  };
+  // Cancellation is deliberately a metadata-only operation: the legacy
+  // StationRoute list remains untouched and all tail cargo keeps its owner.
+  void transition;
   return next;
 }
 
 export type StationFleetKind = "drone" | "vessel";
+
+export interface StationFleetTargetResult {
+  state: GameState;
+  kind: StationFleetKind;
+  current: number;
+  requested: number;
+  final: number;
+  capacity: number;
+  busy: number;
+  available: number;
+  loaded: number;
+  unloaded: number;
+  shortfall: number;
+  reason?: "invalid-station" | "invalid-target" | "busy-vehicles" | "portable-stock";
+}
+
+export function setStationFleetTarget(
+  state: GameState,
+  entityId: string,
+  kind: StationFleetKind,
+  targetCount: number,
+): StationFleetTargetResult {
+  const entity = state.entities.find((candidate) => candidate.id === entityId);
+  const compatible = kind === "drone"
+    ? entity?.buildingId === "planetary_logistics_station" || entity?.buildingId === "interstellar_logistics_station"
+    : entity?.buildingId === "interstellar_logistics_station";
+  const current = Math.max(0, Math.floor(kind === "drone" ? entity?.stationDrones ?? 0 : entity?.stationVessels ?? 0));
+  if (!entity || entity.interactionLocked || !compatible || entity.planetId !== state.activePlanetId) {
+    return { state, kind, current, requested: current, final: current, capacity: 0, busy: 0, available: 0, loaded: 0, unloaded: 0, shortfall: 0, reason: "invalid-station" };
+  }
+  const capacity = kind === "drone" ? getStationDroneCapacity(entity) : getStationVesselCapacity(entity);
+  const busy = stationBusyVehicles(state, entity, kind === "drone" ? "local" : "remote");
+  const portableItemId: PortableFleetItemId = kind === "drone" ? "logistics_drone" : "logistics_vessel";
+  const available = Math.max(0, Math.floor(state.portableFleet?.[portableItemId] ?? 0));
+  if (!Number.isSafeInteger(targetCount) || targetCount < 0) {
+    return { state, kind, current, requested: current, final: current, capacity, busy, available, loaded: 0, unloaded: 0, shortfall: 0, reason: "invalid-target" };
+  }
+  const requested = Math.min(capacity, targetCount);
+  const desired = Math.max(busy, requested);
+  const loaded = desired > current ? Math.min(desired - current, available) : 0;
+  const unloaded = desired < current ? current - desired : 0;
+  const final = current + loaded - unloaded;
+  const shortfall = Math.max(0, requested - final);
+  const reason = requested < busy ? "busy-vehicles" : shortfall > 0 ? "portable-stock" : undefined;
+  if (final === current) {
+    return { state, kind, current, requested, final, capacity, busy, available, loaded, unloaded, shortfall, reason };
+  }
+  const next = copyState(state);
+  const station = next.entities.find((candidate) => candidate.id === entityId)!;
+  if (kind === "drone") station.stationDrones = final;
+  else station.stationVessels = final;
+  station.stationProgress = 0;
+  if (loaded > 0) next.portableFleet[portableItemId] = available - loaded;
+  if (unloaded > 0) addToTray(next, portableItemId, unloaded);
+  if (station.stationPeerId) {
+    const peer = next.entities.find((candidate) => candidate.id === station.stationPeerId);
+    if (peer) peer.stationProgress = 0;
+  }
+  return { state: next, kind, current, requested, final, capacity, busy, available, loaded, unloaded, shortfall, reason };
+}
+
+export function adjustStationVessels(state: GameState, entityId: string, delta: number): GameState {
+  const current = state.entities.find((entity) => entity.id === entityId);
+  const loaded = Math.max(0, Math.floor(current?.stationVessels ?? 0));
+  return setStationFleetTarget(state, entityId, "vessel", Math.max(0, loaded + Math.trunc(delta))).state;
+}
+
+export function adjustStationDrones(state: GameState, entityId: string, delta: number): GameState {
+  const current = state.entities.find((entity) => entity.id === entityId);
+  const loaded = Math.max(0, Math.floor(current?.stationDrones ?? 0));
+  return setStationFleetTarget(state, entityId, "drone", Math.max(0, loaded + Math.trunc(delta))).state;
+}
 
 export interface StationFleetFillResult {
   state: GameState;
@@ -6676,7 +9607,7 @@ export function fillStationFleet(state: GameState, entityId: string, kind: Stati
   const compatible = kind === "drone"
     ? entity?.buildingId === "planetary_logistics_station" || entity?.buildingId === "interstellar_logistics_station"
     : entity?.buildingId === "interstellar_logistics_station";
-  if (!entity || !compatible || entity.planetId !== state.activePlanetId) {
+  if (!entity || entity.interactionLocked || !compatible || entity.planetId !== state.activePlanetId) {
     return { state, loaded: 0, shortfall: 0, capacity: 0 };
   }
   const capacity = kind === "drone" ? getStationDroneCapacity(entity) : getStationVesselCapacity(entity);
@@ -6685,16 +9616,14 @@ export function fillStationFleet(state: GameState, entityId: string, kind: Stati
   const available = Math.max(0, Math.floor(state.portableFleet?.[portableItemId] ?? 0));
   const empty = Math.max(0, capacity - current);
   const loaded = Math.min(empty, available);
-  const next = loaded > 0
-    ? kind === "drone" ? adjustStationDrones(state, entityId, loaded) : adjustStationVessels(state, entityId, loaded)
-    : state;
-  return { state: next, loaded, shortfall: Math.max(0, empty - loaded), capacity };
+  const result = setStationFleetTarget(state, entityId, kind, capacity);
+  return { state: result.state, loaded: result.loaded, shortfall: result.shortfall, capacity };
 }
 
 export function adjustStationWarpers(state: GameState, entityId: string, delta: number): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
   const requested = Math.trunc(delta);
-  if (!current || current.planetId !== state.activePlanetId || requested === 0 ||
+  if (!current || current.interactionLocked || current.planetId !== state.activePlanetId || requested === 0 ||
     !isTechnologyCompleted(state, "space_warp")) return state;
   const loaded = Math.max(0, Math.floor(current.stationWarpers ?? 0));
   const capacity = getStationWarperCapacity(current);
@@ -6712,7 +9641,7 @@ export function adjustStationWarpers(state: GameState, entityId: string, delta: 
 }
 
 export function setStationWarpEnabled(state: GameState, entityId: string, enabled: boolean): GameState {
-  if (!state.entities.some((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station") ||
+  if (!state.entities.some((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station" && !entity.interactionLocked) ||
     (enabled && !isTechnologyCompleted(state, "space_warp"))) return state;
   return {
     ...state,
@@ -6722,7 +9651,7 @@ export function setStationWarpEnabled(state: GameState, entityId: string, enable
 
 export function setStationWarperAutoRefill(state: GameState, entityId: string, enabled: boolean): GameState {
   const station = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
-  if (!station || (enabled && !isTechnologyCompleted(state, "space_warp")) || Boolean(station.stationWarperAutoRefill) === enabled) return state;
+  if (!station || station.interactionLocked || (enabled && !isTechnologyCompleted(state, "space_warp")) || Boolean(station.stationWarperAutoRefill) === enabled) return state;
   return {
     ...state,
     entities: state.entities.map((entity) => entity.id === entityId ? { ...entity, stationWarperAutoRefill: enabled } : entity),
@@ -6731,7 +9660,7 @@ export function setStationWarperAutoRefill(state: GameState, entityId: string, e
 
 export function setStationWarperTarget(state: GameState, entityId: string, target: number): GameState {
   const station = state.entities.find((entity) => entity.id === entityId && entity.buildingId === "interstellar_logistics_station");
-  if (!station || !Number.isFinite(target)) return state;
+  if (!station || station.interactionLocked || !Number.isFinite(target)) return state;
   const normalized = Math.max(1, Math.min(getStationWarperCapacity(station), Math.floor(target)));
   if (getStationWarperAutoRefillTarget(station) === normalized) return state;
   return {
@@ -6742,13 +9671,13 @@ export function setStationWarperTarget(state: GameState, entityId: string, targe
 
 export function setStationMinimumLoad(state: GameState, entityId: string, minimumLoad: StationMinimumLoad): GameState {
   const current = state.entities.find((entity) => entity.id === entityId && entity.kind === "station");
-  if (!current || !STATION_MINIMUM_LOAD_OPTIONS.includes(minimumLoad) || getStationMinimumLoad(current) === minimumLoad) return state;
+  if (!current || current.interactionLocked || !STATION_MINIMUM_LOAD_OPTIONS.includes(minimumLoad) || getStationMinimumLoad(current) === minimumLoad) return state;
   return setStationSlotMinimumLoad(state, entityId, 0, minimumLoad);
 }
 
 export function setFuelItem(state: GameState, entityId: string, itemId: ItemId): GameState {
   const current = state.entities.find((entity) => entity.id === entityId);
-  if (!current?.buildingId || !getFuelItemIdsForBuilding(current.buildingId).includes(itemId)) return state;
+  if (!current?.buildingId || current.interactionLocked || !getFuelItemIdsForBuilding(current.buildingId).includes(itemId)) return state;
   if (current.fuelItemId === itemId) return state;
   const next = copyState(state);
   const entity = next.entities.find((candidate) => candidate.id === entityId)!;
@@ -6764,7 +9693,7 @@ export function setFuelItem(state: GameState, entityId: string, itemId: ItemId):
 
 export function setEnergyMode(state: GameState, entityId: string, mode: EnergyMode): GameState {
   const current = state.entities.find((entity) => entity.id === entityId);
-  if (!current || current.buildingId !== "energy_exchanger" || mode === "auto" ||
+  if (!current || current.interactionLocked || current.buildingId !== "energy_exchanger" || mode === "auto" ||
     current.energyMode === mode || storedEnergy(current) > EPSILON) return state;
   const next = copyState(state);
   const entity = next.entities.find((candidate) => candidate.id === entityId)!;
@@ -6784,7 +9713,7 @@ export function setEnergyMode(state: GameState, entityId: string, mode: EnergyMo
 }
 
 export function setEntityPowerGrid(state: GameState, entityId: string, gridId: PowerGridId): GameState {
-  if (!POWER_GRID_IDS.includes(gridId) || !state.entities.some((entity) => entity.id === entityId)) return state;
+  if (!POWER_GRID_IDS.includes(gridId) || !state.entities.some((entity) => entity.id === entityId && !entity.interactionLocked)) return state;
   return {
     ...state,
     entities: state.entities.map((entity) => entity.id === entityId ? { ...entity, powerGridId: gridId } : entity),
@@ -6792,7 +9721,7 @@ export function setEntityPowerGrid(state: GameState, entityId: string, gridId: P
 }
 
 export function setEntityPowerPriority(state: GameState, entityId: string, priority: PowerPriority): GameState {
-  if (![1, 2, 3].includes(priority) || !state.entities.some((entity) => entity.id === entityId)) return state;
+  if (![1, 2, 3].includes(priority) || !state.entities.some((entity) => entity.id === entityId && !entity.interactionLocked)) return state;
   return {
     ...state,
     entities: state.entities.map((entity) => entity.id === entityId ? { ...entity, powerPriority: priority } : entity),
@@ -6801,7 +9730,7 @@ export function setEntityPowerPriority(state: GameState, entityId: string, prior
 
 export function setEntityGenerationPriority(state: GameState, entityId: string, priority: PowerPriority): GameState {
   const target = state.entities.find((entity) => entity.id === entityId);
-  if (![1, 2, 3].includes(priority) || !target || (target.kind !== "power" && target.buildingId !== "ray_receiver")) return state;
+  if (![1, 2, 3].includes(priority) || !target || target.interactionLocked || (target.kind !== "power" && target.buildingId !== "ray_receiver")) return state;
   return {
     ...state,
     entities: state.entities.map((entity) => entity.id === entityId ? { ...entity, generationPriority: priority } : entity),
@@ -6809,7 +9738,7 @@ export function setEntityGenerationPriority(state: GameState, entityId: string, 
 }
 
 export function setSplitterMode(state: GameState, entityId: string, mode: "balanced" | "priority"): GameState {
-  if (!state.entities.some((entity) => entity.id === entityId && entity.kind === "splitter")) return state;
+  if (!state.entities.some((entity) => entity.id === entityId && entity.kind === "splitter" && !entity.interactionLocked)) return state;
   return {
     ...state,
     entities: state.entities.map((entity) => entity.id === entityId ? { ...entity, distributionMode: mode } : entity),
@@ -6818,7 +9747,7 @@ export function setSplitterMode(state: GameState, entityId: string, mode: "balan
 
 export function removeEntity(state: GameState, entityId: string, count?: number): GameState {
   const entity = state.entities.find((item) => item.id === entityId);
-  if (!entity) return state;
+  if (!entity || entity.interactionLocked) return state;
   if (entity.kind === "vein") {
     if (!entity.resourceId || entity.minerCount < 1) return state;
     const requested = count === undefined ? entity.minerCount : Math.max(1, Math.floor(count));
@@ -6874,6 +9803,9 @@ export function removeEntity(state: GameState, entityId: string, count?: number)
   refundBelts(next, removedBelts);
   next.entities = next.entities.filter((item) => item.id !== entityId);
   next.belts = next.belts.filter((belt) => belt.source !== entityId && belt.target !== entityId);
+  next.constructionQueue = next.constructionQueue.filter((entry) =>
+    (entry.status ?? "pending-materials") !== "waiting-fleet" ||
+    !Object.values(entry.placedEntityIdsByKey ?? {}).includes(entityId));
   if (next.timeWarp.controllerEntityId === entityId) {
     next.timeWarp.controllerEntityId = null;
     next.timeWarp.enabled = false;
@@ -6881,7 +9813,7 @@ export function removeEntity(state: GameState, entityId: string, count?: number)
     next.timeWarp.requiredPowerKw = 0;
     next.timeWarp.allocatedPowerKw = 0;
   }
-  return next;
+  return pruneBlueprintVersions(next);
 }
 
 export function removeEntities(state: GameState, entityIds: string[]): GameState {
@@ -6892,7 +9824,7 @@ export function removeEntities(state: GameState, entityIds: string[]): GameState
 
 export function canUpgradeEntity(state: GameState, entityId: string): boolean {
   const entity = state.entities.find((item) => item.id === entityId);
-  if (!entity?.buildingId || entity.kind === "vein") return false;
+  if (!entity?.buildingId || entity.interactionLocked || entity.kind === "vein") return false;
   const targetId = getBuildingUpgradeTarget(entity.buildingId);
   const definition = targetId ? getConstructionDefinition(targetId) : undefined;
   return Boolean(targetId && definition &&
@@ -6927,8 +9859,9 @@ export function upgradeEntities(state: GameState, entityIds: string[]): GameStat
 
 export function canUpgradeBelt(state: GameState, beltId: string): boolean {
   const belt = state.belts.find((item) => item.id === beltId);
-  if (!belt || belt.tier >= 3) return false;
-  const targetId = getBeltConstructionId((belt.tier + 1) as BeltTier);
+  const targetTier = belt ? getNextBeltTier(belt.tier) : null;
+  if (!belt || targetTier === null) return false;
+  const targetId = getBeltConstructionId(targetTier);
   const definition = getConstructionDefinition(targetId);
   return Boolean(definition &&
     (!definition.requiredTechId || isTechnologyCompleted(state, definition.requiredTechId)) &&
@@ -6939,14 +9872,14 @@ export function upgradeBelt(state: GameState, beltId: string): GameState {
   if (!canUpgradeBelt(state, beltId)) return state;
   const current = state.belts.find((belt) => belt.id === beltId)!;
   const sourceId = getBeltConstructionId(current.tier);
-  const targetTier = (current.tier + 1) as BeltTier;
+  const targetTier = getNextBeltTier(current.tier)!;
   const targetId = getBeltConstructionId(targetTier);
   const next = copyState(state);
   const belt = next.belts.find((candidate) => candidate.id === beltId)!;
   next.construction[targetId] = (next.construction[targetId] ?? 0) - belt.lanes;
   next.construction[sourceId] = (next.construction[sourceId] ?? 0) + belt.lanes;
   belt.tier = targetTier;
-  belt.sorterTier = targetTier;
+  belt.sorterTier = Math.min(3, targetTier) as SorterTier;
   return next;
 }
 
@@ -6964,11 +9897,11 @@ export function upgradeSorter(state: GameState, beltId: string): GameState {
 }
 
 export function getSorterCapacity(belt: BeltConnection): number {
-  return BELT_CAPACITY_PER_SECOND[belt.tier] * belt.lanes * (belt.stackSize ?? 1);
+  return getBeltSpeed(belt.tier) * belt.lanes * (belt.stackSize ?? 1);
 }
 
 export function getBeltCapacity(belt: BeltConnection): number {
-  return BELT_CAPACITY_PER_SECOND[belt.tier] * belt.lanes * (belt.stackSize ?? 1);
+  return getBeltSpeed(belt.tier) * belt.lanes * (belt.stackSize ?? 1);
 }
 
 export function canSetBeltStackSize(state: GameState, stackSize: CargoStackSize): boolean {
@@ -7048,23 +9981,71 @@ export function setBeltNetworkRouteMode(state: GameState, beltId: string, routeM
   return { ...state, belts: state.belts.map((belt) => ids.has(belt.id) ? { ...belt, routeMode } : belt) };
 }
 
-export function applyBeltConfigurationToNetwork(state: GameState, sourceBeltId: string): GameState {
+export interface BeltConfigurationApplyResult {
+  state: GameState;
+  applied: number;
+  skipped: number;
+  failed: number;
+  error?: string;
+}
+
+export function applyBeltConfigurationToBelts(
+  state: GameState,
+  sourceBeltId: string,
+  targetBeltIds: readonly string[],
+): BeltConfigurationApplyResult {
   const source = state.belts.find((belt) => belt.id === sourceBeltId);
-  if (!source) return state;
-  const ids = new Set(getBeltNetworkIds(state, sourceBeltId));
+  const ids = [...new Set(targetBeltIds)].filter((id) => id !== sourceBeltId);
+  if (!source) return { state, applied: 0, skipped: 0, failed: ids.length, error: "模板运输线不存在" };
+  const targets = ids.map((id) => state.belts.find((belt) => belt.id === id)).filter((belt): belt is BeltConnection => Boolean(belt));
+  if (targets.length !== ids.length) return { state, applied: 0, skipped: 0, failed: ids.length, error: "目标运输线不存在" };
+  if (source.lanes < 1 || source.lanes > MAX_BELT_LANES) {
+    return { state, applied: 0, skipped: 0, failed: ids.length, error: `模板线路并联数量超出 1-${MAX_BELT_LANES}，请先手动调整` };
+  }
+  const netConstructionDelta = new Map<ConstructionId, number>();
+  for (const target of targets) {
+    const constructionId = getBeltConstructionId(target.tier);
+    netConstructionDelta.set(constructionId, (netConstructionDelta.get(constructionId) ?? 0) + source.lanes - target.lanes);
+  }
+  for (const [constructionId, delta] of netConstructionDelta) {
+    const available = Math.max(0, Math.floor(state.construction[constructionId] ?? 0));
+    if (delta > available) {
+      const name = getConstructionDefinition(constructionId)?.name ?? "同级传送带";
+      return { state, applied: 0, skipped: 0, failed: ids.length, error: `缺少${name} ×${delta - available}（需要 ${delta}，现有 ${available}）` };
+    }
+  }
   const stackSize = canSetBeltStackSize(state, source.stackSize ?? 1) ? source.stackSize ?? 1 : 1;
-  return {
-    ...state,
-    belts: state.belts.map((belt) => ids.has(belt.id) ? {
-      ...belt,
-      priority: source.priority,
-      stackSize,
-      monitorEnabled: source.monitorEnabled,
-      routeMode: source.routeMode ?? "auto",
-      routeOffsetY: source.routeOffsetY,
-      progress: 0,
-    } : belt),
-  };
+  const next = copyState(state);
+  for (const [constructionId, delta] of netConstructionDelta) {
+    next.construction[constructionId] = Math.max(0, Math.floor(next.construction[constructionId] ?? 0) - delta);
+  }
+  const targetIds = new Set(ids);
+  let applied = 0;
+  for (const belt of next.belts) {
+    if (!targetIds.has(belt.id)) continue;
+    const changed = belt.lanes !== source.lanes || belt.priority !== source.priority || (belt.stackSize ?? 1) !== stackSize ||
+      belt.monitorEnabled !== source.monitorEnabled || (belt.routeMode ?? "auto") !== (source.routeMode ?? "auto") ||
+      belt.routeOffsetY !== source.routeOffsetY;
+    belt.lanes = source.lanes;
+    belt.priority = source.priority;
+    belt.stackSize = stackSize;
+    belt.monitorEnabled = source.monitorEnabled;
+    belt.routeMode = source.routeMode ?? "auto";
+    belt.routeOffsetY = source.routeOffsetY;
+    if (changed) applied += 1;
+  }
+  const skipped = targets.length - applied;
+  return applied > 0
+    ? { state: next, applied, skipped, failed: 0 }
+    : { state, applied: 0, skipped, failed: 0 };
+}
+
+export function applyBeltConfigurationToNetworkResult(state: GameState, sourceBeltId: string): BeltConfigurationApplyResult {
+  return applyBeltConfigurationToBelts(state, sourceBeltId, getBeltNetworkIds(state, sourceBeltId));
+}
+
+export function applyBeltConfigurationToNetwork(state: GameState, sourceBeltId: string): GameState {
+  return applyBeltConfigurationToNetworkResult(state, sourceBeltId).state;
 }
 
 export function removeBeltNetwork(state: GameState, beltId: string): GameState {
@@ -7078,22 +10059,7 @@ export function removeBeltNetwork(state: GameState, beltId: string): GameState {
 }
 
 export function applyBeltConfiguration(state: GameState, sourceBeltId: string, targetBeltId: string): GameState {
-  const source = state.belts.find((belt) => belt.id === sourceBeltId);
-  const target = state.belts.find((belt) => belt.id === targetBeltId);
-  if (!source || !target || source.id === target.id) return state;
-  const stackSize = canSetBeltStackSize(state, source.stackSize ?? 1) ? source.stackSize ?? 1 : 1;
-  return {
-    ...state,
-    belts: state.belts.map((belt) => belt.id === targetBeltId ? {
-      ...belt,
-      priority: source.priority,
-      stackSize,
-      monitorEnabled: source.monitorEnabled,
-      routeMode: source.routeMode ?? "auto",
-      routeOffsetY: source.routeOffsetY,
-      progress: 0,
-    } : belt),
-  };
+  return applyBeltConfigurationToBelts(state, sourceBeltId, [targetBeltId]).state;
 }
 
 export function getConstructionCraftDeficits(state: GameState, buildingId: ConstructionId, batches = 1): {
@@ -7154,6 +10120,114 @@ export function canHandcraftRecipe(state: GameState, recipeId: RecipeId, batches
     (!recipe.requiredTechId || isTechnologyCompleted(state, recipe.requiredTechId)) &&
     recipe.inputs.every((input) => (state.tray[input.itemId] ?? 0) + EPSILON >= input.amount * amount) &&
     canStoreRecipeOutputsInTray(state, recipe, amount));
+}
+
+export interface RecursiveHandcraftPlan {
+  possible: boolean;
+  recipeId: RecipeId;
+  batches: number;
+  outputAmount: number;
+  consumedItems: Array<{ itemId: ItemId; amount: number }>;
+  producedItems: Array<{ itemId: ItemId; amount: number }>;
+  decisions: RecursiveCraftDecision[];
+  blocker?: RecursiveCraftBlocker | {
+    reason: "capacity";
+    itemId: ItemId;
+    current: number;
+    required: number;
+    limit: number;
+  };
+}
+
+interface InternalRecursiveHandcraftPlan extends RecursiveHandcraftPlan {
+  inventory?: Partial<Record<ItemId, number>>;
+}
+
+function buildRecursiveHandcraftPlan(state: GameState, recipeId: RecipeId, batches = 1): InternalRecursiveHandcraftPlan {
+  const amount = normalizeManualCraftBatches(batches);
+  const recipe = getRecipe(recipeId);
+  const outputAmount = recipe?.outputs.reduce((sum, output) => sum + output.amount * amount, 0) ?? 0;
+  const blocked = (blocker?: InternalRecursiveHandcraftPlan["blocker"]): InternalRecursiveHandcraftPlan => ({
+    possible: false,
+    recipeId,
+    batches: amount,
+    outputAmount,
+    consumedItems: [],
+    producedItems: [],
+    decisions: [],
+    blocker,
+  });
+  if (!recipe || !isHandcraftableRecipe(recipeId)) {
+    return blocked({ itemId: recipe?.outputs[0]?.itemId ?? "iron_ore", current: 0, required: 1, reason: "no-recipe" });
+  }
+
+  const initialInventory = recursiveManufacturingInventory(state);
+  const plan = planSelectedRecipe({
+    inventory: initialInventory,
+    recipe,
+    batches: amount,
+    recipes: recursiveManufacturingRecipes(),
+    completedTechnologyIds: state.research.completedTechIds,
+    allowRecipe: (candidate) => isHandcraftableRecipe(candidate.id),
+  });
+  if (!plan.possible) return blocked(plan.blocker);
+
+  const unsafe = findUnsafeRecursiveInventory(plan.inventory);
+  if (unsafe) return blocked({
+    itemId: unsafe.itemId,
+    current: Math.max(0, Math.floor(initialInventory[unsafe.itemId] ?? 0)),
+    required: unsafe.value,
+    reason: "capacity",
+    limit: Number.MAX_SAFE_INTEGER,
+  });
+
+  const consumedItems = (Object.keys(ITEMS) as ItemId[]).flatMap((itemId) => {
+    const consumed = Math.max(0, Math.floor((initialInventory[itemId] ?? 0) - (plan.inventory[itemId] ?? 0)));
+    return consumed > 0 ? [{ itemId, amount: consumed }] : [];
+  });
+  return {
+    possible: true,
+    recipeId,
+    batches: amount,
+    outputAmount,
+    consumedItems,
+    producedItems: recursiveProducedItems(plan),
+    decisions: plan.decisions,
+    inventory: plan.inventory,
+  };
+}
+
+export function getRecursiveHandcraftPlan(state: GameState, recipeId: RecipeId, batches = 1): RecursiveHandcraftPlan {
+  const { inventory: _inventory, ...plan } = buildRecursiveHandcraftPlan(state, recipeId, batches);
+  return plan;
+}
+
+export function getMaxRecursiveHandcraftBatches(state: GameState, recipeId: RecipeId): number {
+  if (!buildRecursiveHandcraftPlan(state, recipeId, 1).possible) return 0;
+  let low = 1;
+  let high = 2;
+  while (high < MAX_MANUAL_CRAFT_BATCHES && buildRecursiveHandcraftPlan(state, recipeId, high).possible) {
+    low = high;
+    high = Math.min(MAX_MANUAL_CRAFT_BATCHES, high * 2);
+  }
+  if (high === MAX_MANUAL_CRAFT_BATCHES && buildRecursiveHandcraftPlan(state, recipeId, high).possible) return high;
+  while (low + 1 < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (buildRecursiveHandcraftPlan(state, recipeId, middle).possible) low = middle;
+    else high = middle;
+  }
+  return low;
+}
+
+export function handcraftRecipeWithUpstream(state: GameState, recipeId: RecipeId, batches = 1): GameState {
+  const plan = buildRecursiveHandcraftPlan(state, recipeId, batches);
+  if (!plan.possible || !plan.inventory) return state;
+  const next = copyState(state);
+  applyRecursiveManufacturingInventory(next, plan.inventory);
+  for (const item of plan.producedItems) {
+    next.totalProduced[item.itemId] = Math.floor((next.totalProduced[item.itemId] ?? 0) + item.amount);
+  }
+  return next;
 }
 
 export function handcraftRecipe(state: GameState, recipeId: RecipeId, batches = 1): GameState {
@@ -7281,14 +10355,14 @@ function completeTechnology(state: GameState, techId: TechId): void {
 
 export function canSelectTechnology(state: GameState, techId: TechId): boolean {
   const technology = getTechnology(techId);
-  return Boolean(technology && !isTechnologyCompleted(state, techId) && state.research.selectedTechId !== techId &&
+  return Boolean(technology && !isDeprecatedTechnology(techId) && !isTechnologyCompleted(state, techId) && state.research.selectedTechId !== techId &&
     !state.research.queuedTechIds.includes(techId) &&
     technology.prerequisites.every((prerequisite) => isTechnologyCompleted(state, prerequisite)));
 }
 
 export function canQueueTechnology(state: GameState, techId: TechId): boolean {
   const technology = getTechnology(techId);
-  if (!technology || isTechnologyCompleted(state, techId) || state.research.selectedTechId === techId ||
+  if (!technology || isDeprecatedTechnology(techId) || isTechnologyCompleted(state, techId) || state.research.selectedTechId === techId ||
     state.research.queuedTechIds.includes(techId)) return false;
   const planned = new Set<TechId>([
     ...state.research.completedTechIds,
@@ -7679,7 +10753,7 @@ export interface ResourceReserveSnapshot {
 
 export function getResourceReserveSnapshot(state: GameState, entity: FactoryEntity): ResourceReserveSnapshot | null {
   if (entity.kind !== "vein" || !entity.resourceId) return null;
-  const infinite = isInfiniteResource(entity.resourceId, entity.planetId, state.settings.resourceMode, state.galaxy);
+  const infinite = isVeinInfiniteForState(state, entity);
   if (infinite) {
     return { infinite: true, exhausted: false, remaining: null, capacity: null, remainingRatio: 1, remainingPercent: 100 };
   }
@@ -7688,7 +10762,7 @@ export function getResourceReserveSnapshot(state: GameState, entity: FactoryEnti
   const remainingRatio = capacity > 0 ? Math.max(0, Math.min(1, remaining / capacity)) : 0;
   return {
     infinite: false,
-    exhausted: remaining < 1,
+    exhausted: getFiniteVeinOutputAllowance(entity, getVeinConsumptionTenths(state, entity.resourceId)) < 1,
     remaining,
     capacity,
     remainingRatio,
@@ -7757,6 +10831,14 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
 
   if (entity.kind === "station") {
     if (entity.buildingId === "orbital_collector") {
+      if (entity.quantumTransition) {
+        return { code: "waiting-route", label: "等待传统航线尾货交接", tone: "idle" };
+      }
+      if (isQuantumCollector(entity)) {
+        return state.quantumLogisticsNetwork.enabled
+          ? { code: "running", label: "量子采集网络供应端", tone: "running" }
+          : { code: "paused", label: "量子网络未启用", tone: "idle" };
+      }
       const yields = getPlanetOrbitalYields(state, entity.planetId);
       const itemId = entity.storedItemId && (yields[entity.storedItemId] ?? 0) > 0
         ? entity.storedItemId
@@ -7771,6 +10853,21 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
     const configured = slots.map((slot, slotIndex) => ({ slot, slotIndex })).filter(({ slot }) => slot.itemId);
     if (configured.length === 0) return { code: "unconfigured", label: "未配置物流槽位", tone: "blocked" };
     const activeRoutes = stationActiveRoutes(state, entity).map(({ route }) => route);
+    const activeLocalRoutes = activeRoutes.filter((route) => route.scope === "local");
+    if (isQuantumStation(entity)) {
+      if (!state.quantumLogisticsNetwork?.enabled) return { code: "paused", label: "量子网络未启用", tone: "idle" };
+      const demand = configured.filter(({ slot }) => slot.remoteMode === "demand").length;
+      const supply = configured.filter(({ slot }) => slot.remoteMode === "supply").length;
+      return activeLocalRoutes.length > 0
+        ? { code: "running", label: `量子共享池 · 运输机配送中 · ${activeLocalRoutes.length} 条在途`, tone: "running" }
+        : { code: "running", label: `量子共享池 · 上传 ${supply} · 下载 ${demand} · 本地运输可用`, tone: "running" };
+    }
+    if (entity.quantumTransition) {
+      const activeRemoteRoutes = activeRoutes.filter((route) => route.scope === "remote");
+      return activeLocalRoutes.length > 0
+        ? { code: "running", label: `量子交接中 · 运输机配送 ${activeLocalRoutes.length} 条在途`, tone: "running" }
+        : { code: "waiting-route", label: `等待旧星际尾货 ${activeRemoteRoutes.length} 条 · 本地运输可用`, tone: "idle" };
+    }
     if (activeRoutes.length > 0) {
       const lead = activeRoutes.reduce((best, route) => route.progress > best.progress ? route : best, activeRoutes[0]);
       return {
@@ -7811,6 +10908,15 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
           candidate.buildingId !== "orbital_collector" && all.findIndex((entry) => entry.id === candidate.id) === index);
         const availableOwners = vehicleOwners.filter((owner) => stationInstalledVehicles(owner, scope) - stationBusyVehicles(state, owner, scope) > 0);
         if (availableOwners.length === 0) {
+          const installedVehicles = vehicleOwners.reduce((sum, owner) => sum + stationInstalledVehicles(owner, scope), 0);
+          const busyVehicles = vehicleOwners.reduce((sum, owner) => sum + stationBusyVehicles(state, owner, scope), 0);
+          if (installedVehicles > 0 && busyVehicles >= installedVehicles) {
+            return {
+              code: "fleet-busy",
+              label: `${scope === "local" ? "运输机" : "运输船"}全部执行中 · 舰队容量瓶颈 ${busyVehicles}/${installedVehicles}`,
+              tone: "warning",
+            };
+          }
           return scope === "local"
             ? { code: "missing-drone", label: "缺少可用物流运输机", tone: "blocked" }
             : { code: "missing-vessel", label: "缺少可用物流运输船", tone: "blocked" };
@@ -7861,6 +10967,11 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
     if (entity.buildingId === "material_delivery_hub") {
       const configured = getMaterialDeliveryItems(entity);
       if (configured.length === 0) return { code: "unconfigured", label: "等待连接输入线路", tone: "idle" };
+      const fullItemId = configured.find((itemId) => getPlanetTrayItemFreeCapacity(state, entity.planetId, itemId) < 1);
+      if (fullItemId) {
+        const current = Math.max(0, Math.floor(trayForPlanet(state, entity.planetId)[fullItemId] ?? 0));
+        return { code: "output-blocked", label: `${ITEMS[fullItemId].name}托盘已达上限 · ${current}/${getPlanetTrayItemLimit(state, entity.planetId)}`, tone: "blocked" };
+      }
       const flowing = state.belts.some((belt) => belt.target === entity.id && belt.lastFlow > 0.001);
       return flowing
         ? { code: "running", label: "物资直送托盘中", tone: "running" }
@@ -7911,9 +11022,7 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
     if (entityPowerFactor <= EPSILON) return { code: "no-power", label: powerCoverageLabel(state, entity), tone: "blocked" };
     const automation = getConstructionAutomationStatus(state, entity.id);
     if (automation.missingItemId) {
-      const reason = automation.blockerReason === "safety-limit"
-        ? `${ITEMS[automation.missingItemId].name}达到缓存安全上限 · ${automation.safetyExpected ?? 0}/${automation.safetyLimit ?? 0}`
-        : automation.blockerReason === "technology"
+      const reason = automation.blockerReason === "technology"
         ? `需要科技：${automation.technologyName ?? "未解锁"}`
         : automation.blockerReason === "no-handcraft"
           ? `${ITEMS[automation.missingItemId].name}没有可用手工配方`
@@ -7935,6 +11044,17 @@ export function getEntityOperatingStatus(state: GameState, entity: FactoryEntity
   if ((recipe.id === "solar_sail_launch" || recipe.id === "carrier_rocket_launch") &&
     dysonLaunchFactor(state, recipe.id) <= EPSILON) {
     return { code: "launch-paused", label: "戴森发射调度已暂停", tone: "idle" };
+  }
+  if (recipe.id === "solar_sail_launch") {
+    const target = getEjectorOrbitTargetStatus(state, entity);
+    if (!target.valid) {
+      const label = target.reason === "foreign-system"
+        ? "目标太阳帆轨道不属于当前恒星系"
+        : target.reason === "missing-orbit"
+          ? "目标太阳帆轨道已删除或失效"
+          : "未指定太阳帆目标轨道";
+      return { code: "missing-dyson-orbit", label, tone: "blocked" };
+    }
   }
 
   if (entity.buildingId === "ray_receiver") {

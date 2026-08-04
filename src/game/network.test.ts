@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { connectBelt, createInitialState, placeBuilding, setEntityRecipe, setLogisticsItem } from "./engine";
+import { connectBelt, createInitialState, getEntityItemInputCapacity, placeBuilding, setEntityRecipe, setLogisticsItem } from "./engine";
 import { analyzeBeltNetwork, diagnoseBelt, getBeltBundleMap, getPortOccupancy, listBeltNetworks, predictBeltConnection } from "./network";
 
 describe("production network diagnostics", () => {
@@ -42,12 +42,14 @@ describe("production network diagnostics", () => {
     state.construction.conveyor_belt_mk1 = 2;
     state = placeBuilding(state, "arc_smelter", { x: 300, y: 0 });
     state = placeBuilding(state, "arc_smelter", { x: 300, y: 260 });
-    const [first, second] = state.entities.filter((entity) => entity.buildingId === "arc_smelter");
-    state = connectBelt(state, "vein_iron", first.id, "iron_ore");
+    const [firstPlaced, second] = state.entities.filter((entity) => entity.buildingId === "arc_smelter");
+    state = setEntityRecipe(state, firstPlaced.id, "iron_ingot");
+    state = connectBelt(state, "vein_iron", firstPlaced.id, "iron_ore");
     state = connectBelt(state, "vein_iron", second.id, "iron_ore");
+    const first = state.entities.find((entity) => entity.id === firstPlaced.id)!;
     state.belts[0].congestion = 0.9;
     state.entities.find((entity) => entity.id === "vein_iron")!.outputs.iron_ore = 20;
-    first.inputs.iron_ore = 240;
+    first.inputs.iron_ore = getEntityItemInputCapacity(state, first, "iron_ore");
 
     expect(diagnoseBelt(state, state.belts[0]).health).toBe("congested");
     const occupancy = getPortOccupancy(state);

@@ -1,6 +1,7 @@
 import { FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, getBuilding, getExtractorBuildingId, getFuelEfficiency, getFuelItemIdsForBuilding, getProliferator, getRecipe, getTechnology } from "./content";
 import { getEntityExtraProductBonus, getEntityOperatingStatus, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getProliferatorSprayCost, getRecipeSpeedMultiplier } from "./engine";
 import { getInfiniteResearchDefinition } from "./endgame";
+import { getPlanetIndustrialProfile, specializationApplies } from "./galaxy";
 import type { EntityOperatingStatus, FactoryEntity, GameState, ItemId } from "./types";
 
 export interface ItemStatistics {
@@ -203,9 +204,14 @@ export function calculateFactoryStatistics(state: GameState): FactoryStatistics 
 
     const recipe = getRecipe(entity.recipeId);
     if (entity.kind !== "machine" || !entity.buildingId || !recipe) continue;
-    const cyclesPerMinute = getBuilding(entity.buildingId).speed * entity.machineCount * getRecipeSpeedMultiplier(state, recipe.id) *
+    const building = getBuilding(entity.buildingId);
+    const planetProfile = getPlanetIndustrialProfile(state, entity.planetId);
+    const planetSpeed = specializationApplies(planetProfile, building.family, entity.buildingId)
+      ? planetProfile.productionSpeedMultiplier
+      : 1;
+    const cyclesPerMinute = building.speed * entity.machineCount * getRecipeSpeedMultiplier(state, recipe.id) * planetSpeed *
       getEntityProliferatorSpeedMultiplier(entity) / recipe.duration * 60 * entity.utilization;
-    const ratedDemandKw = (getBuilding(entity.buildingId).powerDemandKw ?? 0) * entity.machineCount *
+    const ratedDemandKw = (building.powerDemandKw ?? 0) * entity.machineCount *
       getEntityProliferatorPowerMultiplier(entity);
     const demanding = ["running", "low-power", "no-power"].includes(status.code);
     if (ratedDemandKw > 0 && entity.planetId === state.activePlanetId) {

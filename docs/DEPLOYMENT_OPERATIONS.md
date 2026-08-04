@@ -1,12 +1,15 @@
 # 部署与运维手册
 
+> 公开仓库脱敏说明：本文及 `deploy/` 模板中的节点地址、证书主机名和对象存储标识均使用示例占位符。实际值只应从受保护的运维环境注入，不能提交到 Git。
+
 ## 1. 环境边界
 
 | 环境 | 地址 | 主机 | 作用 |
 | --- | --- | --- | --- |
-| 香港正式 | `https://dsponline.cn` | `43.129.249.102` | 正式 Web、云账号、云存档、排行榜 |
+| 香港正式 | `https://dsponline.cn` | `hk-origin.example.invalid` | 正式 Web、云账号、云存档、排行榜 |
 | 香港别名 | `https://www.dsponline.cn` | 同上 | 301 到根域名 |
-| 上海旧节点 | `http://111.229.128.211` | `111.229.128.211` | 独立旧入口和备用试玩 |
+| 上海旧节点 | `https://shanghai-node.example.invalid` | `shanghai-node.example.invalid` | 独立旧入口和备用试玩 |
+| 上海下载节点 | `https://download.dsponline.cn` | `shanghai-node.example.invalid` | Windows/Android 安装包与稳定更新清单 |
 | 本地前端 | `http://127.0.0.1:4318` | 开发机 | Vite |
 | 本地 API | `http://127.0.0.1:4320` | 开发机 | Node 云服务 |
 
@@ -23,12 +26,33 @@
 | `/var/lib/dsp-idle-cloud/cloud.sqlite` | 生产 SQLite 数据库 |
 | `/var/lib/dsp-idle-cloud/cloud.json` | 旧 JSON 数据，仅用于兼容迁移 |
 | `/var/lib/dsp-idle-cloud/backups` | SQLite/JSON 备份 |
+| `/var/www/dsp-idle-downloads/current` | 上海客户端下载站当前发布目录或软链接 |
 | `/etc/nginx/snippets/dsp-idle-app.conf` | 公共静态与 API 规则 |
 | `/etc/dsp-idle-cloud/admin.env` | 仅 root/服务账号可读的管理员 token 与邮件 API 凭据，不进入发布目录 |
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-当前香港与上海 Web/API 均为 `1.0.0-01492dea3c51`，使用云 schema v7 和 SQLite layout v2。香港 `previous-release` 为 Web `1.0.0-87f482ae18c6` + 当前 API，上海为 Web `0.9.1-d3a90c389ed4` + 当前 API；旧 API 不理解独立正文表，禁止把 API 回滚到 layout v1 实现。完整哈希、生产备份、活动 revision 和验收记录见 [releases/1.0.0.md](./releases/1.0.0.md)。
+香港、上海 Web/API 与上海下载站均已切换到 `1.0.20-b41ffbca6e40` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍重定向上海。1.0.20 Android SHA-256 为 `d0e95796a150c6bd4cc010be7fc91a6316c10d8dcec24d917458a6cf5fb09841`，Windows SHA-256 为 `f9e64a9796ded879e66ff9df34a7dc2d98202831ae0a454248f787faf4b2049d`。两地发布前 Backup API 快照均通过 `quick_check`，公网健康、下载页、完整下载哈希、Range 和缓存头均通过。完整证据见 [releases/1.0.20.md](./releases/1.0.20.md)。
+
+`1.0.13` 两节点发布都只切换 Web/API 代码，未执行数据库迁移。香港发布前后 Backup API 快照均通过 `quick_check`；前备份为 887,271,424 字节，后备份为 888,795,136 字节。上海发布前后备份均为 122,880 字节并通过 `quick_check`；发布前 SHA-256 为 `a8af0eec173e6f8aad36af09b7e6d8c56b2b00014d76efd53124ddfb81b7e6a7`，发布后为 `8cb0c7bbbb270ac804b7c16909fc1b4274d0b2aed34a4ae7f379f333596cd737`。上海 0 个账号、0 个主云档、24 条玩家记录和 23 条错误记录均未减少，服务 `NRestarts=0`。受限备份传输账号仍只用于异地备份，代码发布使用独立的 `ubuntu` 授权。
+
+`1.0.13` Android APK 使用与 1.0.0～1.0.12 相同的长期发布证书，模拟器从正式 1.0.12 使用 `adb install -r` 覆盖升级后 `firstInstallTime` 和 19 小时 26 分本地主存档保持。Windows 安装程序继续按历史策略作为未签名测试包发布。上海下载站在独立目录完成 6/6 文件哈希和清单复验后原子切换，旧 1.0.12 目录作为回滚点保留。
+
+`1.0.12` 为电磁轨道弹射器增加存档级目标太阳帆轨道，并修复线路同步模板、配送枢纽大字卡片和亮色物流交互状态。v40→v41 迁移不重建或删除太阳帆、发射进度、库存、线路和戴森工程；存档 envelope、云 schema 和 SQLite layout 不变。两节点切换前分别创建并验证 SQLite Backup API 备份，未激活目录完成 135/135 文件复验、42/42 服务端、6/6 运维和生产备份副本隔离启动；Android 从正式 1.0.10 同签名覆盖升级并保留 19 小时 26 分本地主存档后，才切换 Web/API、下载页与稳定清单。
+
+`1.0.11` 在 1.0.10 运行时索引上继续复用稳定物流匹配、路线经济和派遣摘要，并把燃料、能量枢纽及递归制造改为确定性批量结算；同时增加服务器内部排行榜完整性限制。它不升级 GameState、envelope、云 schema 或 SQLite layout。两节点切换前分别创建并验证 SQLite Backup API 备份，未激活目录完成 134/134 文件复验、42/42 服务端、6/6 运维和生产备份副本隔离启动；Android 从正式 1.0.10 同签名覆盖升级并保留本地主存档后，才切换 Web/API、下载页与稳定清单。
+
+`1.0.10` 增加模拟会话运行时索引、按行星生产/供电推进、线路端点快速查找和当前行星画布派生，不升级 GameState、envelope、云 schema 或 SQLite layout。两节点切换前分别创建并验证 SQLite Backup API 备份，未激活目录完成 131/131 文件复验、37/37 服务端、6/6 运维和生产备份副本隔离启动；Android 从正式 1.0.9 同签名覆盖升级并保留本地主存档后，才切换 Web/API、下载页与稳定清单。
+
+`1.0.9` 将浏览器权威本地存储迁入 IndexedDB，增加动态模块恢复、普通来源公平线路分配、1 亿线路转运额度和声明式内容包 v2；空间站收集任务长期开放，主页首屏提供设备级中英文切换。服务端合法客户端上限扩展到 v40，但 envelope v2、云 schema v7 和 SQLite layout v2 不变。两节点在切换前均创建并验证 SQLite Backup API 备份，未激活目录完成 37/37 服务端、6/6 运维和生产备份副本隔离启动；Android 从正式 1.0.8 同签名覆盖升级并保留本地工厂后，才切换 Web/API、下载页与稳定清单。
+
+`1.0.7` 只修复客户端建筑制造中心任务结算和 WIP 显示，不升级 GameState、云 schema、SQLite layout 或服务端存档边界。两地发布前后均通过 SQLite Backup API 备份和 `quick_check`，未激活目录完成 126/126 文件校验、35/35 服务端、6/6 运维及生产备份副本隔离启动。上海下载站和公开原生安装包未切换。
+
+`1.0.8` 把合法客户端状态上限扩展到 v39，但继续使用 envelope v2、云 schema v7 和 SQLite layout v2。服务端开始独立校验上传 payload 的内部 FNV-1a 状态校验值。两节点切换前均通过 SQLite Backup API 创建并验证备份，在备份副本确认旧 v35-v38 云存档仍可读取、异常校验 payload 被拒绝且不会产生新修订；Android/Windows 也已通过签名连续性、覆盖升级、本地数据保留、文件哈希和更新清单验证后切换。
+
+`1.0.6` 把客户端状态上限提高到 v38，但不升级云 schema 或 SQLite layout。两地发布前已验证 v35～v38 合法存档可接受、v38 非法并联/资源锚点/副产物累计会被拒绝，并在生产备份副本上隔离启动；上海下载页只在 Windows 与同证书 Android 制品完整上传、哈希和覆盖升级通过后切换。
+
+该版本会在服务启动时按已有主存档幂等回填排行榜。首次香港回填处理 88 份主存档，重复启动备份副本时变更为 0；上海没有主云存档，因此保持空榜。后续主槽上传、自动同步或历史恢复都会自动更新排名，手动槽不会触发。任何后续排行榜规则变更仍应在切换前使用 SQLite Backup API 创建并验证备份，并在切换后核对账号、主云存档和修订数量不减少。
 
 ## 3. 绝对数据保护规则
 
@@ -101,7 +125,7 @@ sudo dsp-idle-switch-release --rollback-last
 
 SQLite layout v2 将云存档正文从 `app_state` 拆到 `cloud_save_payloads`。迁移完成后，旧 layout v1 API 虽然仍能读取元数据，却不能读取或安全新增正文；两地回滚状态因此固定保留当前 API，只允许回退 Web。迁移发布时还必须同时停止 `dsp-idle-healthcheck.timer` 和可能正在执行的 `dsp-idle-healthcheck.service`，否则已经启动的 oneshot 仍可能在维护窗口重启旧进程。
 
-云服务重启后，切换脚本默认在 10 秒窗口内短轮询本机健康接口，避免把 Node 尚未绑定端口的正常启动窗口误判为发布失败。可通过 `DSP_HEALTH_ATTEMPTS` 和 `DSP_HEALTH_DELAY_SECONDS` 调整，但不得以此掩盖持续启动错误。
+云服务重启后，切换脚本默认在约 10 秒窗口内短轮询本机健康接口。较大的生产数据库可能让 Node 的正常启动超过该窗口；`1.0.12` 香港首次切换因此按设计自动回滚，日志未发现崩溃，随后在保持同一制品和数据库的前提下将健康窗口扩展到 30 秒并成功切换。遇到同类情况应先确认自动回滚已完成、旧服务健康且 journal 没有真实启动错误，再通过 `DSP_HEALTH_ATTEMPTS` 和 `DSP_HEALTH_DELAY_SECONDS` 扩展窗口；不得用延长窗口掩盖持续错误。
 
 ### 5.3 后端
 
@@ -113,13 +137,19 @@ SQLite layout v2 将云存档正文从 `app_state` 拆到 `cloud_save_payloads`�
 
 后端失败时切回上一代码目录并重启；除非新代码已执行不可逆数据迁移，否则不要回滚数据库。
 
+### 5.4 排行榜数据完整性处置
+
+`server/moderate-leaderboard.mjs` 是受保护的运维入口，不是普通管理 API。默认 dry-run 使用只读 SQLite 和 `query_only`；实际写入必须同时提供经过 Backup API 验证的独立备份、有限来源标识和服务已停止确认。目标解析先按服务器综合榜排序锁定唯一第一名，再核对受保护的显示名输入、主档 revision、SHA-256、envelope 和官方矿脉不变量；任何一步不唯一或不一致都必须中止。
+
+处置事务只写入内部 `leaderboardModeration`、删除目标公开 submission 并追加不含 PII 的审计动作。它不能删除账号、主云档、历史正文或其他同名账号。后验必须确认主档 revision、历史数量和正文行数不变，五榜均不可见，服务重启和回填不能重建提交。普通代码回滚保留该内部状态，不恢复旧数据库；撤销处置需要新的审计批准和独立管理员流程。完整边界见 [LEADERBOARD_DATA_INTEGRITY_REMEDIATION_2026-07.md](./LEADERBOARD_DATA_INTEGRITY_REMEDIATION_2026-07.md)。
+
 ## 6. 节点配置
 
 ### 香港正式节点
 
 - Nginx 模板：`deploy/nginx-dsp-idle-domain.conf` 与公共 snippet。
 - systemd 环境模板：`deploy/dsp-idle-cloud-hk.service`。
-- 允许 Origin：正式根域名、`www` 和明确保留的兼容入口。
+- 允许 Origin：正式根域名、`www`、Capacitor Android WebView 的精确 `https://localhost` 和明确保留的兼容入口。不得用 `*` 代替；仓库模板完成不代表生产 unit 已同步，部署后必须用带 Origin 的 GET 与 PUT 预检分别验证。
 - TLS：Let’s Encrypt，`www` 和 HTTP 均跳到 `https://dsponline.cn`。
 - SSH：仅密钥，禁止 root 与密码登录。
 
@@ -140,9 +170,9 @@ sudo systemctl restart dsp-idle-cloud.service
 
 活动配置保存在发布目录之外的 `/etc/dsp-idle-cloud/activity.json`，由 `/etc/dsp-idle-cloud/admin.env` 中的 `DSP_ACTIVITY_CONFIG_FILE` 指向。建议权限为 `0640 root:ubuntu`，配置文件不得放入 Web 静态目录。代码发布与活动启用必须分开：先在活动关闭状态完成备份、制品验证、原子切换和公网烟测，再安装经过 `server/activity.mjs` 规则校验的配置并重启服务。
 
-香港与上海参加同一轮模拟活动时必须使用完全相同的活动 ID、UTC 开始/结束时间、个人目标和全服目标。`endsAt - startsAt` 必须精确为 259,200,000 ms。启用后分别核对 `/api/health` 的活动有效状态，以及 `/api/public-status` 的 revision、时间和目标。活动配置只提供服务器时钟与模拟全服曲线；`1.0.0` 仍没有贡献提交 API，不能把本地记录描述成服务器已接收。
+香港与上海参加同一轮模拟活动时必须使用完全相同的活动 ID、UTC 开始/曲线冻结时间、个人目标和全服目标。`endsAt - startsAt` 必须精确为 259,200,000 ms，但这三天只控制假全服曲线；曲线冻结后 `/api/public-status` 仍应返回 `status=active` 与 `openEnded=true`，玩家可长期参与。启用后分别核对 `/api/health` 的活动有效状态，以及 `/api/public-status` 的 revision、时间、目标和长期开放标记。活动配置只提供服务器时钟与模拟全服曲线；`1.0.12` 仍没有贡献提交 API，不能把本地记录描述成服务器已接收。
 
-活动结束后保留配置以展示冻结结果，不能通过重启或修改结束时间延长同一个活动 ID。新一轮活动必须使用新的 ID。
+曲线冻结后保留配置并继续长期开放，不能通过重启或修改冻结时间重跑同一个活动 ID。未来若建立新的独立活动，必须使用新的 ID。
 
 ### 账号邮件
 
@@ -160,7 +190,7 @@ DSP_MAIL_REPLY_TO=
 
 验证与重置模板分别使用 [deploy/mail-templates/account-verification.html](../deploy/mail-templates/account-verification.html) 和 [deploy/mail-templates/password-reset.html](../deploy/mail-templates/password-reset.html)。模板链接必须固定保留 `https://dsponline.cn` 域名，分别使用 `https://dsponline.cn/?verify={{actionToken}}` 和 `https://dsponline.cn/?reset={{actionToken}}`，只让腾讯替换 URL-safe 的单一 `{{actionToken}}` 变量；不得把整个 `href` 写成变量。两个模板必须审核通过后再填写数值 ID。CAM 应使用独立子账号并只授予 `name/ses:SendEmail`；SecretId/SecretKey 不得使用主账号长期密钥，也不得写入仓库、发布目录、命令历史或聊天。
 
-腾讯配置完整时优先使用 SES API；原有 `DSP_MAIL_WEBHOOK_URL` / `DSP_MAIL_WEBHOOK_TOKEN` 仅作为兼容回退。两种发送器都未配置时，用户名密码注册、登录、四槽云存档和自动同步继续开放；邮箱绑定、验证重发和找回密码返回 `503 EMAIL_SERVICE_UNAVAILABLE`，排行榜仍拒绝未验证邮箱账号。邮件上线前必须用专用测试邮箱验证绑定、验证链接、过期链接、忘记密码和重置密码完整链路，并在 `/api/health` 确认 `mailProvider` 为 `tencent-ses`。上海公开入口是 HTTP，前端继续拒绝任何账号密码传输。
+腾讯配置完整时优先使用 SES API；原有 `DSP_MAIL_WEBHOOK_URL` / `DSP_MAIL_WEBHOOK_TOKEN` 仅作为兼容回退。两种发送器都未配置时，用户名密码注册、登录、四槽云存档、自动同步和排行榜继续开放；邮箱绑定、验证重发和找回密码返回 `503 EMAIL_SERVICE_UNAVAILABLE`。排行榜提交只要求有效登录会话和可校验的主云存档，不要求邮箱验证。邮件上线前必须用专用测试邮箱验证绑定、验证链接、过期链接、忘记密码和重置密码完整链路，并在 `/api/health` 确认 `mailProvider` 为 `tencent-ses`。上海公开入口是 HTTP，前端继续拒绝任何账号密码传输。
 
 ### 上海旧节点
 
@@ -177,8 +207,8 @@ DSP_MAIL_REPLY_TO=
 curl -I https://dsponline.cn/
 curl https://dsponline.cn/api/health
 curl -I https://www.dsponline.cn/
-curl -I http://111.229.128.211/
-curl http://111.229.128.211/api/health
+curl -I https://shanghai-node.example.invalid/
+curl https://shanghai-node.example.invalid/api/health
 ```
 
 期望：正式根域名 `200`、`www` 为 301、上海根页面和本机 API 均为 `200`。不要用生产账号执行自动化写测试。
@@ -215,6 +245,25 @@ chmod 0600 backup-private.pem
 
 `0.2.0` 发布窗口已经完成首轮生产闭环：香港每日创建认证加密备份并通过固定主机指纹和受限 SFTP 账号传到上海；上海私钥未离开恢复节点，隔离恢复验证 schema v5、账号、会话、云存档、修订和玩家计数一致，结束后明文 SQLite 数量为 0。香港每日 timer 与上海每月 timer 均为 active，上海密文接收目录保留 30 天。
 
+### 香港 COS 归档现状（2026-07-31）
+
+香港服务器的 COSFS 挂载点是 `<COS_MOUNT_PATH>`，实际桶和前缀通过受保护配置注入；挂载凭据文件必须保持 `0600` 权限。公开仓库不记录桶名、账号标识或密钥。变更桶前必须先在控制台确认名称、地域和 CAM 权限。
+
+数据库历史副本使用 RSA-OAEP + AES-256-GCM 加密后写入受保护的 COS 归档前缀。公开仓库不记录对象存储桶名、账号标识或真实对象路径。每份都有独立 manifest、大小和 SHA-256；跨卸载重挂抽样校验通过。生产数据库、云存档正文、账号和玩家数据未删除；本地只保留快速恢复副本。
+
+每日 `dsp-idle-offsite-backup.timer` 已改为写入 `/lhcos-data/dsp-idle-archive/daily/`，`DSP_OFFSITE_BACKUP_KEEP=2`，systemd 只额外允许写入 COS 挂载路径。2026-07-31 手动运行成功，schema v7、账号 376、主云档 312、修订 3,726 等记录摘要未减少；staging 只保留 2 份加密副本，COS 日目录已通过 SHA-256 校验。COSFS 当前使用单并发、多段 10 MiB 和 5 GiB 本地安全阈值。
+
+云服务自身每 6 小时的快速快照也已改为 `DSP_CLOUD_BACKUP_DIRECTORY=/lhcos-data/dsp-idle-archive/auto`，因此不会再把 30 份约 1 GiB 文件写满香港根盘；该目录位于私有 COS 挂载，不代替加密日备份。香港节点探针的 `DSP_MONITOR_MIN_DISK_FREE_RATIO` 已从 0.15 提高到 0.20，剩余空间低于约 8 GiB 时提前告警。
+
+本次爆满原因是历史备份副本而非游戏数据库异常：香港本地 `backups` 曾累积约 25 GiB、35 份 0.16～1.0 GiB SQLite 快照；异地 staging 另有约 1.5 GiB 加密副本；旧 API 发布目录约 0.86 GiB，日志、APT 缓存和新版本备份又叠加约 0.5 GiB。原 COS 挂载为空且每日任务仍按 SCP + 本地保留 14 份运行，导致三天内再次接近满盘。
+
+长期运营规则：
+
+1. 生产盘只保留当前数据库、当前/回滚代码、4 份本地快速恢复副本和 staging 2 份；所有更早快照必须先生成加密对象、manifest 和跨重挂载哈希，再删除本地副本。
+2. 每日备份写 COS，保留上海已有异地加密副本作为第二恢复位置；COS 桶设置 30～90 天生命周期和版本控制，避免对象无限增长。任何切换到新桶都要先完成小文件写入、重挂载读取和完整对象计数校验。
+3. 磁盘探针将告警阈值设为 80%，硬保护阈值设为 90%；超过 80% 自动暂停非必要发布/快照并提示归档，超过 90% 只允许完成当前备份和清理已验证副本，不能删除数据库或手动恢复点。
+4. 每周检查 `cloud.sqlite`、本地快照、staging、发布目录、日志和 COS 对象数量；每月在隔离端口用 COS 密文完成一次恢复演练。密钥应替换为只允许 COS 指定前缀读写的 CAM 子账号，并定期轮换。
+
 ## 9. 监控与日常检查
 
 - `dsp-idle-cloud.service`：active，重启次数无异常。
@@ -234,8 +283,8 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港与上海 `1.0.0` 均为 JS/CSS 启用 gzip，并验证 `Content-Encoding: gzip`；hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港与上海 `1.0.17-0383e85d2d9d-dirty` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 香港 layout v1 的 136.8 MB `app_state` 曾使每分钟持久化把 Node 推到约 1.6 GB并阻塞健康接口。layout v2 上线后 `app_state` 约 2.55 MB，云存档正文按修订独立写入；240 秒生产观察中健康接口最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB。监控若再次出现内存或延迟上升，应分别检查 `app_state` 大小、`cloud_save_payloads` 行数与历史元数据唯一键数，不能只调大健康超时。
 
-Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。上海节点 `1.0.0` 发布后约剩 6.2 GiB（文件系统使用率约 90%），发布目录、日志与备份增长应纳入日常磁盘检查。
+Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.17 发布后上海约剩 2.8 GiB、香港约剩 16 GiB；下载包临时上传文件已清理，历史 SQLite 备份与旧发布目录仍保留，继续按备份保留/异地归档告警运营，且清理不得删除当前版、回滚版或有效备份。

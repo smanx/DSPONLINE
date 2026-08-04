@@ -20,7 +20,7 @@ export function synchronizeGalacticActivity(
     !Number.isFinite(status.startsAtMs) || !Number.isFinite(status.endsAtMs) || !status.personalTargets || !status.globalTargets) return state;
   const serverNow = Math.floor(status.serverNow);
   const startsAtMs = Math.floor(status.startsAtMs!);
-  const endsAtMs = Math.floor(status.endsAtMs!);
+  const endsAtMs = status.openEnded ? Number.MAX_SAFE_INTEGER : Math.floor(status.endsAtMs!);
   const previous = state.endgame.constructionActivity;
   const newActivity = previous.activityId !== status.id;
   const activityClockMs = newActivity
@@ -54,6 +54,7 @@ export function activityOverallProgress(values: Record<ActivityMaterialId, numbe
 
 export function activityCountdownLabel(status: GalacticActivityPublicStatus, now: number): string {
   if (!status.enabled || !status.startsAtMs || !status.endsAtMs) return "活动未开放";
+  if (status.openEnded && now >= status.startsAtMs) return "长期开放";
   const target = now < status.startsAtMs ? status.startsAtMs : status.endsAtMs;
   const remaining = Math.max(0, target - now);
   const totalSeconds = Math.floor(remaining / 1_000);

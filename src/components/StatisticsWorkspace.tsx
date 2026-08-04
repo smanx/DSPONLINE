@@ -1,13 +1,13 @@
-import { AlertTriangle, ArrowUp, BarChart3, Bookmark, BookmarkPlus, Box, Calculator, CheckSquare, CircleCheckBig, ClipboardCopy, Factory, Focus, Gauge, MapPin, Orbit, Pause, Play, Plus, Rocket, Route, Search, Send, Settings2, Sparkles, Trash2, TrendingUp, X, Zap } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, BarChart3, Bookmark, BookmarkPlus, Box, Calculator, CheckSquare, CircleCheckBig, ClipboardCopy, Factory, Focus, Gauge, MapPin, Orbit, Pause, Play, Plus, Rocket, Route, Search, Send, Settings2, Sparkles, Trash2, TrendingUp, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ITEMS, PLANET_LIST, getBuilding, getItem, getPlanet, getRecipe } from "../game/content";
 import { calculateProductionPlan, getProductionRecipeOptions } from "../game/planning";
-import { calculateFactoryStatistics, type ItemStatistics } from "../game/statistics";
+import { calculateFactoryStatistics, type FactoryStatistics, type ItemStatistics } from "../game/statistics";
 import { getGalacticIndustrySnapshot, getPowerGridMetrics, getResourceReserveSnapshot, POWER_GRID_IDS, POWER_GRID_LABELS } from "../game/engine";
 import { GALACTIC_EXPORT_DEFINITIONS, INFINITE_RESEARCH_DEFINITIONS, getGalacticExportTarget, getInfiniteResearchCompletion, getInfiniteResearchLevel } from "../game/endgame";
 import { getInfiniteResearchCostString, isInfiniteResearchComplete } from "../game/infiniteResearch";
 import type { GalacticActivityPublicStatus } from "../game/galacticActivity";
-import { getPlanetIndustrialProfile } from "../game/galaxy";
+import { getPlanetDisplayName, getPlanetIndustrialProfile } from "../game/galaxy";
 import { listBeltNetworks, type BeltHealth } from "../game/network";
 import type { BeltRouteMode, CanvasBookmark, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlanetId, RecipeId, StationSlotTemplate } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
@@ -16,10 +16,24 @@ import { GalacticActivityPanel } from "./GalacticActivityPanel";
 import { QuantityValue } from "./QuantityValue";
 import { PowerValue } from "./PowerValue";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
+import {
+  calculateProductionWindowSnapshot,
+  formatProductionStatistic,
+  formatProductionStatisticExact,
+  PRODUCTION_STATISTICS_WINDOWS,
+  type ProductionStatisticsWindow,
+} from "../game/productionStatistics";
+import { ExactValue } from "./ExactValue";
 
 export type StatisticsTab = "management" | "production" | "efficiency" | "networks" | "planning" | "power" | "issues" | "galaxy";
 type ItemFilter = "all" | "producing" | "deficit" | "blocked";
-type ItemSort = "production" | "consumption" | "net" | "inventory" | "name";
+type ItemSortKey = "catalog" | "production" | "consumption" | "net" | "inventory" | "name";
+type ItemSortDirection = "asc" | "desc";
+
+interface ItemSort {
+  key: ItemSortKey;
+  direction: ItemSortDirection;
+}
 
 interface StatisticsWorkspaceProps {
   open: boolean;
@@ -43,7 +57,12 @@ interface StatisticsWorkspaceProps {
   onBulkStationSlotApply: (entityIds: string[], slotIndex: number, template: StationSlotTemplate) => void;
   onBulkBeltUpgrade: (beltIds: string[]) => void;
   onBulkBeltRoute: (beltIds: string[], routeMode: BeltRouteMode) => void;
-  onBulkBeltConfiguration: (beltIds: string[]) => void;
+  onBulkBeltConfiguration: (templateBeltId: string, targetNetworkIds: string[]) => {
+    applied: number;
+    skipped: number;
+    failed: number;
+    error?: string;
+  };
   onBulkBeltRemove: (beltIds: string[]) => void;
   onBeltHeatmapChange: (enabled: boolean) => void;
   onAddCanvasBookmark: (name: string) => void;
@@ -59,9 +78,12 @@ function ItemMark({ itemId }: { itemId: ItemId }) {
   return <ItemHoverCard itemId={itemId}><ItemGlyph itemId={itemId} className="item-mark" /></ItemHoverCard>;
 }
 
-function rate(value: number): string {
-  if (Math.abs(value) < 0.005) return "0.00";
-  return value.toFixed(2);
+function ProductionStatisticValue({ value, suffix, sign = "", showSuffix = false }: { value: number; suffix: string; sign?: string; showSuffix?: boolean }) {
+  const normalizedSign = Math.abs(value) < 0.005 ? "" : sign;
+  return <ExactValue
+    compact={<>{normalizedSign}{formatProductionStatistic(Math.abs(value))}{showSuffix ? <small>{suffix}</small> : null}</>}
+    label={`${normalizedSign}${formatProductionStatisticExact(Math.abs(value))}${suffix}`}
+  />;
 }
 
 function reserveTime(seconds: number): string {
@@ -79,12 +101,20 @@ function efficiencyPoints(values: number[]): string {
 }
 
 function sortItems(items: ItemStatistics[], sort: ItemSort): ItemStatistics[] {
+  const catalogOrder = new Map((Object.keys(ITEMS) as ItemId[]).map((itemId, index) => [itemId, index]));
+  const catalogDifference = (a: ItemStatistics, b: ItemStatistics) =>
+    (catalogOrder.get(a.itemId) ?? Number.MAX_SAFE_INTEGER) - (catalogOrder.get(b.itemId) ?? Number.MAX_SAFE_INTEGER) ||
+    a.itemId.localeCompare(b.itemId);
   return [...items].sort((a, b) => {
-    if (sort === "name") return getItem(a.itemId).name.localeCompare(getItem(b.itemId).name, "zh-CN");
-    if (sort === "inventory") return b.inventory - a.inventory;
-    if (sort === "consumption") return b.consumptionPerMinute - a.consumptionPerMinute;
-    if (sort === "net") return a.netPerMinute - b.netPerMinute;
-    return b.productionPerMinute - a.productionPerMinute;
+    if (sort.key === "catalog") return catalogDifference(a, b);
+    const direction = sort.direction === "asc" ? 1 : -1;
+    let difference = 0;
+    if (sort.key === "name") difference = getItem(a.itemId).name.localeCompare(getItem(b.itemId).name, "zh-CN");
+    else if (sort.key === "inventory") difference = a.inventory - b.inventory;
+    else if (sort.key === "consumption") difference = a.consumptionPerMinute - b.consumptionPerMinute;
+    else if (sort.key === "net") difference = a.netPerMinute - b.netPerMinute;
+    else difference = a.productionPerMinute - b.productionPerMinute;
+    return difference === 0 ? catalogDifference(a, b) : difference * direction;
   });
 }
 
@@ -96,36 +126,65 @@ const NETWORK_HEALTH_LABELS: Record<BeltHealth, string> = {
   idle: "等待",
 };
 
+const EMPTY_FACTORY_STATISTICS: FactoryStatistics = {
+  items: [],
+  issues: [],
+  powerConsumers: [],
+  totalProductionPerMinute: 0,
+  totalConsumptionPerMinute: 0,
+};
+
 function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark }: Pick<StatisticsWorkspaceProps,
   "game" | "onFocusBeltNetwork" | "onBulkBeltUpgrade" | "onBulkBeltRoute" | "onBulkBeltConfiguration" | "onBulkBeltRemove" | "onBeltHeatmapChange" | "onAddCanvasBookmark" | "onRenameCanvasBookmark" | "onOpenCanvasBookmark" | "onRemoveCanvasBookmark">) {
   const [scope, setScope] = useState<"active" | "all">("active");
   const [health, setHealth] = useState<BeltHealth | "all">("all");
   const [query, setQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [templateId, setTemplateId] = useState<string | null>(null);
+  const [syncPreviewOpen, setSyncPreviewOpen] = useState(false);
+  const [syncReport, setSyncReport] = useState<{ applied: number; skipped: number; failed: number; error?: string } | null>(null);
   const [routeMode, setRouteMode] = useState<BeltRouteMode>("auto");
   const [bookmarkName, setBookmarkName] = useState("");
   const allNetworks = useMemo(() => listBeltNetworks(game, scope === "active" ? game.activePlanetId : undefined), [game, scope]);
   const networks = useMemo(() => allNetworks.filter((network) => {
     if (health !== "all" && network.health !== health) return false;
     const term = query.trim().toLocaleLowerCase("zh-CN");
-    return !term || `${getItem(network.itemId).name} ${getPlanet(network.planetId).name} ${network.label}`.toLocaleLowerCase("zh-CN").includes(term);
+    return !term || `${getItem(network.itemId).name} ${getPlanetDisplayName(game, network.planetId)} ${network.label}`.toLocaleLowerCase("zh-CN").includes(term);
   }), [allNetworks, health, query]);
   const visibleIds = networks.map((network) => network.originBeltId);
   const selectedVisible = selectedIds.filter((id) => visibleIds.includes(id));
   const selectedCount = selectedVisible.length;
+  const templateSelected = templateId !== null && selectedVisible.includes(templateId);
+  const templateNetwork = templateSelected ? allNetworks.find((network) => network.originBeltId === templateId) : undefined;
+  const templateBelt = templateId ? game.belts.find((belt) => belt.id === templateId) : undefined;
+  const targetNetworkIds = selectedVisible.filter((id) => id !== templateId);
+  const targetLineCount = new Set(targetNetworkIds.flatMap((id) => allNetworks.find((network) => network.originBeltId === id)?.beltIds ?? [])).size;
   const totalFlow = allNetworks.reduce((sum, network) => sum + network.totalFlow, 0);
   const totalCapacity = allNetworks.reduce((sum, network) => sum + network.totalCapacity, 0);
   const problemCount = allNetworks.filter((network) => network.health === "congested" || network.health === "starved").length;
 
   useEffect(() => {
     setSelectedIds((current) => current.filter((id) => allNetworks.some((network) => network.originBeltId === id)));
+    setTemplateId((current) => current && allNetworks.some((network) => network.originBeltId === current) ? current : null);
   }, [allNetworks]);
 
-  const toggleNetwork = (id: string) => setSelectedIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  const toggleNetwork = (id: string) => {
+    setSelectedIds((current) => {
+      if (current.includes(id)) {
+        const next = current.filter((value) => value !== id);
+        if (templateId === id) setTemplateId(next[0] ?? null);
+        return next;
+      }
+      if (!templateId) setTemplateId(id);
+      return [...current, id];
+    });
+    setSyncPreviewOpen(false);
+    setSyncReport(null);
+  };
   return (
     <div className="statistics-content network-overview">
       <section className="network-summary-band">
-        <div><span>连续网络</span><strong>{allNetworks.length}</strong><small>{scope === "active" ? getPlanet(game.activePlanetId).name : "全星区"}</small></div>
+        <div><span>连续网络</span><strong>{allNetworks.length}</strong><small>{scope === "active" ? getPlanetDisplayName(game, game.activePlanetId) : "全星区"}</small></div>
         <div><span>实时吞吐</span><strong>{totalFlow.toFixed(1)}<small>/s</small></strong><small>容量 {totalCapacity.toFixed(0)}/s</small></div>
         <div className={problemCount > 0 ? "warning" : ""}><span>需处理</span><strong>{problemCount}</strong><small>拥堵或缺料</small></div>
         <label className="network-heatmap-toggle"><input type="checkbox" checked={game.settings.beltHeatmapEnabled} onChange={(event) => onBeltHeatmapChange(event.target.checked)} /><span>吞吐热力图</span><strong>{game.settings.beltHeatmapEnabled ? "显示中" : "关闭"}</strong></label>
@@ -136,21 +195,37 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
         <label className="statistics-sort"><span>状态</span><select value={health} onChange={(event) => setHealth(event.target.value as BeltHealth | "all")}><option value="all">全部</option>{Object.entries(NETWORK_HEALTH_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
       </div>
       <section className={`network-batch-bar${selectedCount > 0 ? " network-batch-bar--active" : ""}`} aria-label="批量线路操作">
-        <button type="button" className="network-select-all" onClick={() => setSelectedIds(selectedCount === visibleIds.length ? [] : visibleIds)}><CheckSquare size={14} />{selectedCount === visibleIds.length && visibleIds.length > 0 ? "取消全选" : "选择当前结果"}</button>
+        <button type="button" className="network-select-all" onClick={() => {
+          const clearing = selectedCount === visibleIds.length && visibleIds.length > 0;
+          setSelectedIds(clearing ? [] : visibleIds);
+          setTemplateId(null);
+          setSyncPreviewOpen(false);
+          setSyncReport(null);
+        }}><CheckSquare size={14} />{selectedCount === visibleIds.length && visibleIds.length > 0 ? "取消全选" : "选择当前结果"}</button>
         <strong>{selectedCount} 个网络</strong>
         <button type="button" disabled={selectedCount === 0} onClick={() => onBulkBeltUpgrade(selectedVisible)}><ArrowUp size={14} />升级传送带</button>
         <label><select value={routeMode} onChange={(event) => setRouteMode(event.target.value as BeltRouteMode)} aria-label="批量线路路由"><option value="auto">自动避让</option><option value="bezier">曲线</option><option value="upper">上绕</option><option value="lower">下绕</option><option value="manual">手动控制点</option></select><button type="button" disabled={selectedCount === 0} onClick={() => onBulkBeltRoute(selectedVisible, routeMode)}><Route size={14} />批量改道</button></label>
-        <button type="button" disabled={selectedCount < 2} onClick={() => onBulkBeltConfiguration(selectedVisible)} title="使用首个所选网络的设置覆盖其余网络"><ClipboardCopy size={14} />同步首条设置</button>
-        <button className="danger" type="button" disabled={selectedCount === 0} onClick={() => { onBulkBeltRemove(selectedVisible); setSelectedIds([]); }}><Trash2 size={14} />批量回收</button>
+        <button type="button" disabled={selectedCount < 2 || !templateSelected} onClick={() => { setSyncPreviewOpen(true); setSyncReport(null); }} title={templateSelected ? "预览模板设置并同步到其余网络" : "框选没有点击顺序，请先指定模板线路"}><ClipboardCopy size={14} />同步首条设置</button>
+        <button className="danger" type="button" disabled={selectedCount === 0} onClick={() => { onBulkBeltRemove(selectedVisible); setSelectedIds([]); setTemplateId(null); setSyncPreviewOpen(false); setSyncReport(null); }}><Trash2 size={14} />批量回收</button>
       </section>
+      {selectedCount > 1 && !templateSelected ? <p className="network-template-required">当前选择没有明确顺序，请在下方所选线路中指定一条模板。</p> : null}
+      {syncPreviewOpen && templateNetwork && templateBelt ? <section className="network-sync-preview" aria-label="线路设置同步预览">
+        <header><ClipboardCopy size={16} /><span><strong>模板：{getItem(templateNetwork.itemId).name} · {getPlanetDisplayName(game, templateNetwork.planetId)}</strong><small>将覆盖 {targetNetworkIds.length} 个网络、{targetLineCount} 条线路的配置</small></span></header>
+        <dl><div><dt>并联</dt><dd>×{templateBelt.lanes}</dd></div><div><dt>货物堆叠</dt><dd>×{templateBelt.stackSize ?? 1}</dd></div><div><dt>优先级</dt><dd>{templateBelt.priority === 2 ? "高" : templateBelt.priority === 1 ? "标准" : "低"}</dd></div><div><dt>线路形态</dt><dd>{{ auto: "自动避让", bezier: "曲线", upper: "上绕", lower: "下绕", manual: "手动控制点" }[templateBelt.routeMode ?? "auto"]}</dd></div><div><dt>流量监测</dt><dd>{templateBelt.monitorEnabled ? "开启" : "关闭"}</dd></div></dl>
+        <p>累计运输量、实时流量、线路进度和在途物资不会改变。</p>
+        <footer><button type="button" onClick={() => setSyncPreviewOpen(false)}>取消</button><button className="primary" type="button" onClick={() => { const result = onBulkBeltConfiguration(templateId!, targetNetworkIds); setSyncReport(result); setSyncPreviewOpen(false); }}>确认同步</button></footer>
+      </section> : null}
+      {syncReport ? <p className={`network-sync-report${syncReport.failed > 0 ? " network-sync-report--failed" : ""}`} role="status">成功 {syncReport.applied} 条 · 跳过 {syncReport.skipped} 条 · 失败 {syncReport.failed} 条{syncReport.error ? ` · ${syncReport.error}` : ""}</p> : null}
       <div className="network-workspace-layout">
         <section className="network-ledger">
           <header><span>选择 / 物品</span><span>行星与拓扑</span><span>吞吐</span><span>诊断</span><span>定位</span></header>
           <div>{networks.length === 0 ? <div className="statistics-empty"><Route size={22} /><span>没有符合条件的运输网络</span></div> : networks.map((network) => {
             const bottleneck = network.diagnostics.find((diagnostic) => diagnostic.beltId === network.bottleneckBeltId);
-            return <article className={`network-row network-row--${network.health}${selectedIds.includes(network.originBeltId) ? " network-row--selected" : ""}`} key={network.originBeltId}>
-              <label><input type="checkbox" checked={selectedIds.includes(network.originBeltId)} onChange={() => toggleNetwork(network.originBeltId)} /><ItemMark itemId={network.itemId} /><span><strong>{getItem(network.itemId).name}</strong><small>{NETWORK_HEALTH_LABELS[network.health]}</small></span></label>
-              <span><strong>{getPlanet(network.planetId).name}</strong><small>{network.beltIds.length} 线路 · {network.entityIds.length} 节点 · {network.sourceEntityIds.length}→{network.sinkEntityIds.length}</small></span>
+            const selected = selectedIds.includes(network.originBeltId);
+            const template = templateId === network.originBeltId;
+            return <article className={`network-row network-row--${network.health}${selected ? " network-row--selected" : ""}${template ? " network-row--template" : ""}`} key={network.originBeltId}>
+              <div className="network-row-selection"><label><input type="checkbox" checked={selected} onChange={() => toggleNetwork(network.originBeltId)} /><ItemMark itemId={network.itemId} /><span><strong>{getItem(network.itemId).name}</strong><small>{NETWORK_HEALTH_LABELS[network.health]}</small></span></label>{selected ? <button className={template ? "active" : ""} type="button" aria-pressed={template} onClick={() => { setTemplateId(network.originBeltId); setSyncPreviewOpen(false); setSyncReport(null); }} title="设为同步模板">{template ? "模板" : "设为模板"}</button> : null}</div>
+              <span><strong>{getPlanetDisplayName(game, network.planetId)}</strong><small>{network.beltIds.length} 线路 · {network.entityIds.length} 节点 · {network.sourceEntityIds.length}→{network.sinkEntityIds.length}</small></span>
               <span className="network-throughput"><i><b style={{ width: `${network.utilization * 100}%` }} /></i><strong>{network.totalFlow.toFixed(1)} / {network.totalCapacity.toFixed(0)} s⁻¹</strong><small>{Math.round(network.utilization * 100)}% 利用率</small></span>
               <span><strong>{network.label}</strong><small>{bottleneck?.label ?? "无瓶颈"}{network.capacityDeficit > 0.01 ? ` · 缺口 ${network.capacityDeficit.toFixed(1)}/s` : ""}</small></span>
               <button type="button" onClick={() => onFocusBeltNetwork(network.originBeltId, network.planetId)} title={`定位${getItem(network.itemId).name}网络`} aria-label={`定位${getItem(network.itemId).name}网络`}><Focus size={15} /></button>
@@ -159,8 +234,8 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
         </section>
         <aside className="canvas-bookmarks">
           <header><Bookmark size={15} /><span>画布书签</span><strong>{game.canvasBookmarks.length}/24</strong></header>
-          <form onSubmit={(event) => { event.preventDefault(); onAddCanvasBookmark(bookmarkName); setBookmarkName(""); }}><input value={bookmarkName} onChange={(event) => setBookmarkName(event.target.value)} maxLength={28} placeholder={`${getPlanet(game.activePlanetId).name}视角`} aria-label="画布书签名称" /><button type="submit" title="保存当前画布视角" aria-label="保存当前画布视角"><BookmarkPlus size={14} /></button></form>
-          <div>{game.canvasBookmarks.length === 0 ? <p><MapPin size={18} /><span>尚未保存视角</span></p> : game.canvasBookmarks.map((bookmark) => <article key={bookmark.id}><MapPin size={13} /><span><input defaultValue={bookmark.name} aria-label={`${bookmark.name}名称`} onBlur={(event) => onRenameCanvasBookmark(bookmark.id, event.target.value)} /><small>{getPlanet(bookmark.planetId).name} · {Math.round(bookmark.viewport.zoom * 100)}%</small></span><button type="button" onClick={() => onOpenCanvasBookmark(bookmark)} title={`打开${bookmark.name}`} aria-label={`打开${bookmark.name}`}><Focus size={13} /></button><button className="danger" type="button" onClick={() => onRemoveCanvasBookmark(bookmark.id)} title={`删除${bookmark.name}`} aria-label={`删除${bookmark.name}`}><Trash2 size={13} /></button></article>)}</div>
+          <form onSubmit={(event) => { event.preventDefault(); onAddCanvasBookmark(bookmarkName); setBookmarkName(""); }}><input value={bookmarkName} onChange={(event) => setBookmarkName(event.target.value)} maxLength={28} placeholder={`${getPlanetDisplayName(game, game.activePlanetId)}视角`} aria-label="画布书签名称" /><button type="submit" title="保存当前画布视角" aria-label="保存当前画布视角"><BookmarkPlus size={14} /></button></form>
+          <div>{game.canvasBookmarks.length === 0 ? <p><MapPin size={18} /><span>尚未保存视角</span></p> : game.canvasBookmarks.map((bookmark) => <article key={bookmark.id}><MapPin size={13} /><span><input defaultValue={bookmark.name} aria-label={`${bookmark.name}名称`} onBlur={(event) => onRenameCanvasBookmark(bookmark.id, event.target.value)} /><small>{getPlanetDisplayName(game, bookmark.planetId)} · {Math.round(bookmark.viewport.zoom * 100)}%</small></span><button type="button" onClick={() => onOpenCanvasBookmark(bookmark)} title={`打开${bookmark.name}`} aria-label={`打开${bookmark.name}`}><Focus size={13} /></button><button className="danger" type="button" onClick={() => onRemoveCanvasBookmark(bookmark.id)} title={`删除${bookmark.name}`} aria-label={`删除${bookmark.name}`}><Trash2 size={13} /></button></article>)}</div>
         </aside>
       </div>
     </div>
@@ -170,22 +245,61 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
 export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdatePlan, onSetPlanRecipe, onRemovePlan, onSelectInfiniteResearch, onInfiniteResearchAutomation, onGalacticDispatchAutomation, onGalacticDispatchThrottle, onGalacticExporterPausedChange, onGalacticExportEnabled, onGalacticExportPriority, onDispatchGalacticExport, onFocusEntity, onFocusBeltNetwork, onBulkRecipeChange, onBulkStationSlotApply, onBulkBeltUpgrade, onBulkBeltRoute, onBulkBeltConfiguration, onBulkBeltRemove, onBeltHeatmapChange, onAddCanvasBookmark, onRenameCanvasBookmark, onOpenCanvasBookmark, onRemoveCanvasBookmark, focusTab, mobile = false, galacticActivityStatus }: StatisticsWorkspaceProps) {
   const [tab, setTab] = useState<StatisticsTab>("production");
   const [filter, setFilter] = useState<ItemFilter>("all");
-  const [sort, setSort] = useState<ItemSort>("production");
+  const [sort, setSort] = useState<ItemSort>({ key: "catalog", direction: "asc" });
+  const [productionWindowId, setProductionWindowId] = useState<ProductionStatisticsWindow>("minute");
   const [query, setQuery] = useState("");
   const [planItemId, setPlanItemId] = useState<ItemId>("electromagnetic_matrix");
   const [planTarget, setPlanTarget] = useState(60);
   const [planPlanetId, setPlanPlanetId] = useState<PlanetId | "all">("all");
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [expandedItemId, setExpandedItemId] = useState<ItemId | null>(null);
-  const statistics = useMemo(() => calculateFactoryStatistics(game), [game]);
+  // The closed workspace stays mounted. Avoid repeating the full entity and
+  // operating-status scan for every authoritative Worker state publication.
+  const statistics = useMemo(() => open ? calculateFactoryStatistics(game) : EMPTY_FACTORY_STATISTICS, [game, open]);
   const galactic = useMemo(() => getGalacticIndustrySnapshot(game), [game]);
-  const items = useMemo(() => sortItems(statistics.items.filter((item) => {
+  const productionWindow = useMemo(() => {
+    const fallbackProduction = Object.fromEntries(statistics.items.map((item) => [item.itemId, item.productionPerMinute])) as Partial<Record<ItemId, number>>;
+    const fallbackConsumption = Object.fromEntries(statistics.items.map((item) => [item.itemId, item.consumptionPerMinute])) as Partial<Record<ItemId, number>>;
+    return calculateProductionWindowSnapshot(game.productionHistory, productionWindowId, fallbackProduction, fallbackConsumption);
+  }, [game.productionHistory, productionWindowId, statistics.items]);
+  const productionItems = useMemo(() => {
+    const currentById = new Map(statistics.items.map((item) => [item.itemId, item]));
+    const ids = new Set<ItemId>([
+      ...currentById.keys(),
+      ...Object.keys(productionWindow.production) as ItemId[],
+      ...Object.keys(productionWindow.consumption) as ItemId[],
+    ]);
+    return [...ids].map((itemId): ItemStatistics => {
+      const current = currentById.get(itemId);
+      const productionPerMinute = productionWindow.production[itemId] ?? 0;
+      const consumptionPerMinute = productionWindow.consumption[itemId] ?? 0;
+      return {
+        itemId,
+        productionPerMinute,
+        consumptionPerMinute,
+        netPerMinute: productionPerMinute - consumptionPerMinute,
+        inventory: current?.inventory ?? 0,
+        producerCount: current?.producerCount ?? 0,
+        consumerCount: current?.consumerCount ?? 0,
+        blockedProducerCount: current?.blockedProducerCount ?? 0,
+      };
+    });
+  }, [productionWindow, statistics.items]);
+  const items = useMemo(() => sortItems(productionItems.filter((item) => {
     if (query && !getItem(item.itemId).name.includes(query.trim())) return false;
     if (filter === "producing") return item.productionPerMinute > 0;
     if (filter === "deficit") return item.netPerMinute < -0.005;
     if (filter === "blocked") return item.blockedProducerCount > 0;
     return true;
-  }), sort), [filter, query, sort, statistics.items]);
+  }), sort), [filter, productionItems, query, sort]);
+  const productionTotals = useMemo(() => productionItems.reduce((totals, item) => ({
+    production: totals.production + item.productionPerMinute,
+    consumption: totals.consumption + item.consumptionPerMinute,
+  }), { production: 0, consumption: 0 }), [productionItems]);
+  const toggleColumnSort = (key: "production" | "consumption") => setSort((current) => ({
+    key,
+    direction: current.key === key && current.direction === "desc" ? "asc" : "desc",
+  }));
   const selectedPlan = game.productionPlans.find((plan) => plan.id === selectedPlanId) ?? game.productionPlans[0] ?? null;
   const planResult = useMemo(() => selectedPlan ? calculateProductionPlan(game, selectedPlan) : null, [game, selectedPlan]);
   const targetHistory = useMemo(() => selectedPlan ? game.productionHistory.map((sample) => ({
@@ -218,17 +332,17 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
       <header className="statistics-header">
         <div className="statistics-title">
           <i><BarChart3 size={20} /></i>
-          <div><span>{getPlanet(game.activePlanetId).name}电网 · 星系物流</span><strong>生产统计</strong></div>
+          <div><span>{getPlanetDisplayName(game, game.activePlanetId)}电网 · 星系物流</span><strong>生产统计</strong></div>
         </div>
         <div className="statistics-headline">
-          <span>生产 <strong>{rate(statistics.totalProductionPerMinute)}/min</strong></span>
-          <span>消耗 <strong>{rate(statistics.totalConsumptionPerMinute)}/min</strong></span>
+          <span>生产 <strong><ProductionStatisticValue value={productionTotals.production} suffix={productionWindow.window.suffix} showSuffix /></strong></span>
+          <span>消耗 <strong><ProductionStatisticValue value={productionTotals.consumption} suffix={productionWindow.window.suffix} showSuffix /></strong></span>
           <span className={statistics.issues.length > 0 ? "has-issues" : ""}>异常 <strong>{statistics.issues.length}</strong></span>
         </div>
         <button className="statistics-close" type="button" onClick={onClose} title="关闭生产统计" aria-label="关闭生产统计"><X size={18} /></button>
       </header>
 
-      {mobile ? <section className="mobile-statistics-overview" aria-label="生产概览"><div><span>生产</span><strong>{rate(statistics.totalProductionPerMinute)}/min</strong></div><div><span>消耗</span><strong>{rate(statistics.totalConsumptionPerMinute)}/min</strong></div><div className={statistics.issues.length > 0 ? "warning" : ""}><span>异常</span><strong>{statistics.issues.length}</strong></div><div><span>供电</span><strong>{Math.round(game.metrics.powerFactor * 100)}%</strong></div></section> : null}
+      {mobile ? <section className="mobile-statistics-overview" aria-label="生产概览"><div><span>生产</span><strong><ProductionStatisticValue value={productionTotals.production} suffix={productionWindow.window.suffix} showSuffix /></strong></div><div><span>消耗</span><strong><ProductionStatisticValue value={productionTotals.consumption} suffix={productionWindow.window.suffix} showSuffix /></strong></div><div className={statistics.issues.length > 0 ? "warning" : ""}><span>异常</span><strong>{statistics.issues.length}</strong></div><div><span>供电</span><strong>{Math.round(game.metrics.powerFactor * 100)}%</strong></div></section> : null}
 
       <nav className="statistics-tabs" role="tablist" aria-label="统计视图">
         <button type="button" role="tab" aria-selected={tab === "management"} className={tab === "management" ? "active" : ""} onClick={() => setTab("management")}><Settings2 size={15} />管理</button>
@@ -266,20 +380,28 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
                 </button>
               ))}
             </div>
-            <label className="statistics-sort"><span>排序</span><select value={sort} onChange={(event) => setSort(event.target.value as ItemSort)}><option value="production">生产量</option><option value="consumption">消耗量</option><option value="net">净增量</option><option value="inventory">库存</option><option value="name">物品名称</option></select></label>
+            <div className="statistics-production-controls">
+              <div className="statistics-window-control" role="group" aria-label="生产统计时间范围">
+                {PRODUCTION_STATISTICS_WINDOWS.map((window) => <button type="button" className={productionWindowId === window.id ? "active" : ""} aria-pressed={productionWindowId === window.id} key={window.id} onClick={() => setProductionWindowId(window.id)}>{window.label}</button>)}
+              </div>
+              <label className="statistics-sort"><span>排序</span><select value={sort.key} onChange={(event) => {
+                const key = event.target.value as ItemSortKey;
+                setSort({ key, direction: key === "catalog" || key === "name" ? "asc" : "desc" });
+              }}><option value="catalog">目录顺序</option><option value="production">生产量</option><option value="consumption">消耗量</option><option value="net">净增量</option><option value="inventory">库存</option><option value="name">物品名称</option></select></label>
+            </div>
           </div>
           <div className={`statistics-table${items.length === 0 ? " statistics-table--empty" : ""}`}>
-            <header><span>物品</span><span>生产 / min</span><span>消耗 / min</span><span>净增量 / min</span><span>网络库存</span><span>节点</span></header>
+            <header><span>物品</span><button type="button" className={sort.key === "production" ? "active" : ""} onClick={() => toggleColumnSort("production")}>生产 {productionWindow.window.suffix}{sort.key === "production" ? sort.direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} /> : null}</button><button type="button" className={sort.key === "consumption" ? "active" : ""} onClick={() => toggleColumnSort("consumption")}>消耗 {productionWindow.window.suffix}{sort.key === "consumption" ? sort.direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} /> : null}</button><span>净增量 {productionWindow.window.suffix}</span><span>网络库存</span><span>节点</span></header>
             <div>
               {items.length === 0 ? <div className="statistics-empty"><Box size={20} /><span>没有符合条件的物品</span></div> : items.map((item) => (
                 <div className={`statistics-row${mobile && expandedItemId === item.itemId ? " statistics-row--expanded" : ""}`} key={item.itemId} role={mobile ? "button" : undefined} tabIndex={mobile ? 0 : undefined} onClick={mobile ? () => setExpandedItemId((current) => current === item.itemId ? null : item.itemId) : undefined} onKeyDown={mobile ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setExpandedItemId((current) => current === item.itemId ? null : item.itemId); } } : undefined}>
                   <span className="statistics-item"><ItemMark itemId={item.itemId} /><strong>{getItem(item.itemId).name}</strong></span>
-                  <span className="rate-positive">+{rate(item.productionPerMinute)}</span>
-                  <span className="rate-negative">-{rate(item.consumptionPerMinute)}</span>
-                  <span className={item.netPerMinute > 0.005 ? "rate-positive" : item.netPerMinute < -0.005 ? "rate-negative" : "rate-neutral"}>{item.netPerMinute > 0 ? "+" : ""}{rate(item.netPerMinute)}</span>
+                  <span className="rate-positive"><ProductionStatisticValue value={item.productionPerMinute} suffix={productionWindow.window.suffix} sign="+" /></span>
+                  <span className="rate-negative"><ProductionStatisticValue value={item.consumptionPerMinute} suffix={productionWindow.window.suffix} sign="-" /></span>
+                  <span className={item.netPerMinute > 0.005 ? "rate-positive" : item.netPerMinute < -0.005 ? "rate-negative" : "rate-neutral"}><ProductionStatisticValue value={item.netPerMinute} suffix={productionWindow.window.suffix} sign={item.netPerMinute > 0 ? "+" : item.netPerMinute < 0 ? "-" : ""} /></span>
                   <span><QuantityValue value={item.inventory} /></span>
                   <span className={item.blockedProducerCount > 0 ? "node-count node-count--blocked" : "node-count"}>{item.producerCount} / {item.consumerCount}{item.blockedProducerCount > 0 ? ` · ${item.blockedProducerCount} 堵塞` : ""}</span>
-                  {mobile && expandedItemId === item.itemId ? <small className="statistics-row-detail">生产 {rate(item.productionPerMinute)}/min · 消耗 {rate(item.consumptionPerMinute)}/min · {item.producerCount} 个生产节点 / {item.consumerCount} 个消费节点</small> : null}
+                  {mobile && expandedItemId === item.itemId ? <small className="statistics-row-detail">生产 {formatProductionStatistic(item.productionPerMinute)}{productionWindow.window.suffix} · 消耗 {formatProductionStatistic(item.consumptionPerMinute)}{productionWindow.window.suffix} · {item.producerCount} 个生产节点 / {item.consumerCount} 个消费节点</small> : null}
                 </div>
               ))}
             </div>
@@ -320,20 +442,20 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
           <div className="planning-create-bar">
             <label><span>目标物品</span><select value={planItemId} onChange={(event) => setPlanItemId(event.target.value as ItemId)}>{Object.values(ITEMS).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
             <label><span>目标产量</span><input type="number" min={0.01} step={1} value={planTarget} onChange={(event) => setPlanTarget(Math.max(0.01, Number(event.target.value)))} /><em>/min</em></label>
-            <label><span>规划范围</span><select value={planPlanetId} onChange={(event) => setPlanPlanetId(event.target.value as PlanetId | "all")}><option value="all">全星区</option>{PLANET_LIST.map((planet) => <option value={planet.id} key={planet.id}>{planet.name}</option>)}</select></label>
+            <label><span>规划范围</span><select value={planPlanetId} onChange={(event) => setPlanPlanetId(event.target.value as PlanetId | "all")}><option value="all">全星区</option>{PLANET_LIST.map((planet) => <option value={planet.id} key={planet.id}>{getPlanetDisplayName(game, planet.id)}</option>)}</select></label>
             <button type="button" onClick={() => { const id = `plan_${game.nextId}`; onCreatePlan(planItemId, planTarget, planPlanetId); setSelectedPlanId(id); }}><Plus size={14} />新建方案</button>
           </div>
           {selectedPlan && planResult ? <div className="planning-layout">
             <aside className="planning-list">
               <header><Calculator size={14} /><span>生产目标</span><strong>{game.productionPlans.length}</strong></header>
-              <div>{game.productionPlans.map((plan) => <button className={plan.id === selectedPlan.id ? "active" : ""} type="button" key={plan.id} onClick={() => setSelectedPlanId(plan.id)}><ItemMark itemId={plan.itemId} /><span><strong>{plan.name}</strong><small>{plan.targetPerMinute.toFixed(1)}/min · {plan.planetId === "all" ? "全星区" : getPlanet(plan.planetId).name}</small></span></button>)}</div>
+              <div>{game.productionPlans.map((plan) => <button className={plan.id === selectedPlan.id ? "active" : ""} type="button" key={plan.id} onClick={() => setSelectedPlanId(plan.id)}><ItemMark itemId={plan.itemId} /><span><strong>{plan.name}</strong><small>{plan.targetPerMinute.toFixed(1)}/min · {plan.planetId === "all" ? "全星区" : getPlanetDisplayName(game, plan.planetId)}</small></span></button>)}</div>
             </aside>
             <main className="planning-detail">
               <header className="planning-config">
                 <label><span>方案名称</span><input defaultValue={selectedPlan.name} key={`${selectedPlan.id}-${selectedPlan.name}`} onBlur={(event) => onUpdatePlan(selectedPlan.id, { name: event.target.value })} /></label>
                 <label><span>目标物品</span><select value={selectedPlan.itemId} onChange={(event) => onUpdatePlan(selectedPlan.id, { itemId: event.target.value as ItemId })}>{Object.values(ITEMS).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
                 <label><span>产量 / min</span><input type="number" min={0.01} value={selectedPlan.targetPerMinute} onChange={(event) => onUpdatePlan(selectedPlan.id, { targetPerMinute: Number(event.target.value) })} /></label>
-                <label><span>范围</span><select value={selectedPlan.planetId} onChange={(event) => onUpdatePlan(selectedPlan.id, { planetId: event.target.value as PlanetId | "all" })}><option value="all">全星区</option>{PLANET_LIST.map((planet) => <option value={planet.id} key={planet.id}>{planet.name}</option>)}</select></label>
+                <label><span>范围</span><select value={selectedPlan.planetId} onChange={(event) => onUpdatePlan(selectedPlan.id, { planetId: event.target.value as PlanetId | "all" })}><option value="all">全星区</option>{PLANET_LIST.map((planet) => <option value={planet.id} key={planet.id}>{getPlanetDisplayName(game, planet.id)}</option>)}</select></label>
                 <button type="button" onClick={() => { onRemovePlan(selectedPlan.id); setSelectedPlanId(null); }} title="删除生产方案" aria-label="删除生产方案"><Trash2 size={15} /></button>
               </header>
               <div className="planning-summary-band">
@@ -454,6 +576,15 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
                 <div><span>运行设备</span><strong>{galactic.operatingEntities}</strong><small>瓶颈 {galactic.blockedEntities}</small></div>
                 <div><span>物流航次</span><strong><QuantityValue value={galactic.logisticsTrips} /></strong><small>无限等级 {galactic.infiniteResearchLevels}</small></div>
               </section>
+              {game.quantumLogisticsNetwork?.enabled ? <section className="galactic-panel quantum-network-summary" aria-label="量子物流网络共享库存">
+                <header><Sparkles size={15} /><span>量子物流网络</span><strong>全宇宙共享池</strong></header>
+                <div className="galactic-summary-grid">
+                  <div><span>接入量子塔</span><strong>{game.entities.filter((entity) => entity.buildingId === "interstellar_logistics_station" && entity.quantumMode === "quantum").length}</strong><small>跨星走共享池，本地运输机保留</small></div>
+                  <div><span>即时上传</span><strong>不限</strong><small>送达时直接入池；溢出缓存按边界结算</small></div>
+                  <div><span>共享库存种类</span><strong>{Object.keys(game.quantumLogisticsNetwork.inventory).length}</strong><small>输入先入池再输出</small></div>
+                  <div><span>共享库存总量</span><strong>{formatQuantityCompact(Object.values(game.quantumLogisticsNetwork.inventory).reduce((sum, value) => BigInt(sum) + BigInt(value), 0n))}</strong><small>精确值 {formatQuantityExact(Object.values(game.quantumLogisticsNetwork.inventory).reduce((sum, value) => BigInt(sum) + BigInt(value), 0n))}</small></div>
+                </div>
+              </section> : null}
               <GalacticActivityPanel game={game} status={galacticActivityStatus} />
               {game.endgame.exportInputMode === "legacy-network" ? <section className="galactic-automation-bar">
                 <header><span><Gauge size={15} />旧档网络调度</span><strong>{game.endgame.autoDispatch ? "运行中" : "已暂停"}</strong></header>

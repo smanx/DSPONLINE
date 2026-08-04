@@ -55,7 +55,7 @@ function entityOrder(left: FactoryEntity, right: FactoryEntity): number {
 export function planFactoryAutoLayout(state: GameState, planetId: PlanetId, entityIds?: readonly string[]): FactoryLayoutMove[] {
   const requested = entityIds?.length ? new Set(entityIds) : null;
   const movable = state.entities
-    .filter((entity) => entity.planetId === planetId && entity.kind !== "vein" && (!requested || requested.has(entity.id)))
+    .filter((entity) => entity.planetId === planetId && entity.kind !== "vein" && !entity.interactionLocked && (!requested || requested.has(entity.id)))
     .sort(entityOrder);
   if (movable.length === 0) return [];
 

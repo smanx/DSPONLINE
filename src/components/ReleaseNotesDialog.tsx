@@ -1,67 +1,84 @@
-import { Check, ClipboardCopy, Gauge, Info, MessageCircle, MonitorDown, Orbit, RadioTower, Route, X, Zap, type LucideIcon } from "lucide-react";
+import { BookOpen, Check, Focus, Gauge, Info, Layers, MessageCircle, Route, Sparkles, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-07-24-v1.0.0",
-  date: "2026年7月24日",
-  version: "1.0.0",
-  title: "恒星巨构与物流调度",
-  summary: "1.0.0 完成戴森工程、终局巨构、活动物资输入和星际物流调度升级。旧存档会自动迁移，现有建筑、线路、库存、科研、物流航线和戴森建设进度保持不变。",
+  id: "2026-08-01-v1.0.19",
+  date: "2026年8月1日",
+  version: "1.0.19",
+  title: "蓝图施工与模拟一致性更新",
+  summary: "1.0.19 修复内容包 Worker、超大蓝图和递归制造问题，加入待建补料、统计窗口与游戏内确认框，并把量子基础吞吐提高到 5000 件/分钟。GameState 升至 v46，旧存档和旧蓝图守恒迁移。",
   items: [
     {
-      id: "dyson-copy",
-      title: "戴森球壳层复制",
-      description: "建设中或已完成的壳层都可复制到本恒星系或其他已解锁恒星系。副本保留设计拓扑但从零建设，不继承目标系统已有火箭、结构点或壳面帆。",
+      id: "content-pack-worker-registry",
+      title: "内容包同步到模拟 Worker",
+      description: "实时、纯挂机和离线模拟使用同一份内容包注册表；启用、更新或关闭内容包后无需刷新页面，配方和建筑规则不会在 Worker 中失效。",
     },
     {
-      id: "activity-input",
-      title: "活动出口传送带输入",
-      description: "超大型物资出口的四个专用接口现可正确接收宇宙矩阵、太阳帆、小型运载火箭和反物质燃料棒。活动倒计时改用真实墙钟，不再受暂停或模拟倍率影响。",
+      id: "large-blueprint-roundtrip",
+      title: "超大蓝图完整往返",
+      description: "单个建筑堆叠最高支持 1 亿，导入不再把超过 1 万的合法数量误判为损坏，也不会静默截断或免费建造。",
     },
     {
-      id: "dyson-layout",
-      title: "戴森规划界面重整",
-      description: "复制、粘贴、保存和关闭命令始终保持可见；在 1080p、紧凑桌面、手机横竖屏和 80% 至 200% 字体下，规划区拥有独立滚动边界。",
+      id: "alignment-guides",
+      title: "建筑拖动对齐辅助线",
+      description: "单选和多选建筑接近其他建筑的中心或边缘时显示水平、垂直辅助线；松开后立即清除，不写入存档。",
     },
     {
-      id: "black-hole",
-      title: "微型黑洞连接装置",
-      description: "新增三输入终局巨构，可永久销毁传送带送达的任意物资并精确记录每个接口的累计数量。放置后默认暂停，首次启动和回收均有明确安全确认。",
+      id: "quantum-blueprint-target",
+      title: "蓝图记忆量子网络目标",
+      description: "复制量子物流塔时保留计划接入状态；科技和 Mk.II 条件满足后自动接入，同时保留本地运输机、槽位、缓存和载具。",
     },
     {
-      id: "time-warp",
-      title: "时间扭曲装置",
-      description: "新增以十倍功耗逐档提升实时模拟倍率的终局巨构。主控只使用所在电网剩余功率，供电不足时自动降档，离线收益和活动时钟保持真实时间。",
+      id: "recursive-overflow",
+      title: "递归制造不再被副产物卡死",
+      description: "轨道采集器等递归手搓在氢满仓时仍能原子完成，真实副产物允许暂时超过托盘软上限且不会被删除。",
     },
     {
-      id: "power-units",
-      title: "功率单位自动换算",
-      description: "功率统一按 kW、MW、GW、TW、PW 自动换算。桌面悬停或聚焦、手机点击功率数值时可查看精确 kW，不再出现手工除以 1000 的显示差异。",
+      id: "in-game-dialogs",
+      title: "统一游戏内确认框",
+      description: "回收、拆卸和重置等确认不再调用原生阻塞弹窗；确认或取消后，数字输入、中文输入法、指针和键盘焦点均可继续使用。",
     },
     {
-      id: "logistics-dispatch",
-      title: "多供应源物流调度",
-      description: "需求站会跳过缺货、断电或不可达的供应塔，并在同一步从多个来源补足。相同优先级按公平游标轮换，舰队诊断会明确显示载具、翘曲器和路线限制。",
+      id: "production-statistics-windows",
+      title: "生产统计排序与时间窗口",
+      description: "新增每秒、每分钟、每十分钟和每小时窗口，生产与消耗列可稳定排序，大数量统一使用万、亿及更高单位并保留精确值。",
+    },
+    {
+      id: "pending-blueprint-construction",
+      title: "蓝图缺料预建设与多次补足",
+      description: "缺少建筑时仍可连续放置灰色待建蓝图，之后分批投入建筑、线路和载具；材料齐备后原子建成，取消会完整返还预留物资。",
+    },
+    {
+      id: "quantum-bandwidth-5000",
+      title: "量子网络基础吞吐提高",
+      description: "全局上传和下载基础值从 400 提高到 5000 件/分钟，再乘银河物流无限科技倍率平方与全部量子塔堆叠总数。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "dyson-copy": ClipboardCopy,
-  "activity-input": Route,
-  "dyson-layout": MonitorDown,
-  "black-hole": Orbit,
-  "time-warp": Gauge,
-  "power-units": Zap,
-  "logistics-dispatch": RadioTower,
+  "content-pack-worker-registry": Route,
+  "large-blueprint-roundtrip": Layers,
+  "alignment-guides": Focus,
+  "quantum-blueprint-target": Sparkles,
+  "recursive-overflow": BookOpen,
+  "in-game-dialogs": Check,
+  "production-statistics-windows": Gauge,
+  "pending-blueprint-construction": Layers,
+  "quantum-bandwidth-5000": Info,
 };
 
 export function hasSeenCurrentReleaseNotes(): boolean {
   try {
-    return window.localStorage.getItem(RELEASE_NOTES_SEEN_KEY) === CURRENT_RELEASE_NOTES.id;
+    if (window.localStorage.getItem(RELEASE_NOTES_SEEN_KEY) === CURRENT_RELEASE_NOTES.id) return true;
+    // Isolated browser fixtures intentionally bypass first-run chrome. This
+    // keeps older release fixtures deterministic without hiding new notes for
+    // real players who have already seen a previous version.
+    const isReleaseNotesTest = new URLSearchParams(window.location.search).get("releaseNotesTest") === "1";
+    return !isReleaseNotesTest && window.sessionStorage.getItem("dsp-idle-network.test-bypass-menu") === "1";
   } catch {
     try { return window.sessionStorage.getItem(RELEASE_NOTES_SEEN_KEY) === CURRENT_RELEASE_NOTES.id; } catch { return false; }
   }

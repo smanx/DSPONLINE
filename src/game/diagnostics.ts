@@ -30,14 +30,24 @@ export function clearClientErrors(): void {
   try { window.localStorage.removeItem(CLIENT_ERROR_STORAGE_KEY); } catch { /* optional diagnostics */ }
 }
 
-export function recordClientError(record: Omit<ClientErrorRecord, "id" | "occurredAt">): ClientErrorRecord {
-  const entry: ClientErrorRecord = {
+function createClientErrorRecord(record: Omit<ClientErrorRecord, "id" | "occurredAt">): ClientErrorRecord {
+  return {
     ...record,
     id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `error_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     occurredAt: Date.now(),
   };
-  try { window.localStorage.setItem(CLIENT_ERROR_STORAGE_KEY, JSON.stringify([...loadRecords(), entry].slice(-50))); } catch { /* optional diagnostics */ }
-  return entry;
+}
+
+/** Persist several diagnostics in one synchronous storage write. */
+export function recordClientErrors(records: Array<Omit<ClientErrorRecord, "id" | "occurredAt">>): ClientErrorRecord[] {
+  if (records.length === 0) return [];
+  const entries = records.map(createClientErrorRecord);
+  try { window.localStorage.setItem(CLIENT_ERROR_STORAGE_KEY, JSON.stringify([...loadRecords(), ...entries].slice(-50))); } catch { /* optional diagnostics */ }
+  return entries;
+}
+
+export function recordClientError(record: Omit<ClientErrorRecord, "id" | "occurredAt">): ClientErrorRecord {
+  return recordClientErrors([record])[0];
 }
 
 export function collectClientDiagnostics(game?: GameState, performanceReport?: AutomaticPerformanceReport | null): Record<string, unknown> {

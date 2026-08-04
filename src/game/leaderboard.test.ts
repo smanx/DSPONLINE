@@ -29,11 +29,22 @@ describe("local galaxy leaderboard", () => {
     });
     expect(metrics.galaxyScore).toBe(26_941);
     expect(formatLeaderboardValue(1_500_000_000, "power")).toBe("15亿");
+    expect(formatLeaderboardValue(100_000_000_000_000, "power")).toBe("100兆");
 
     const account = getActiveAccount(createAccountState(100));
     const snapshot = getLeaderboardSnapshot(account.profile, account.ledger, "galaxy");
     expect(snapshot.entries[0].value).toBeGreaterThan(0);
     expect(snapshot.entries.map((entry) => entry.value)).toEqual([...snapshot.entries.map((entry) => entry.value)].sort((a, b) => b - a));
+  });
+
+  it("keeps finite leaderboard values above the former service cap", () => {
+    const account = getActiveAccount(createAccountState(100));
+    account.ledger.energyGeneratedMj = 2_500_000_000_000_000;
+    account.ledger.peakThroughputPerMinute = 1_500_000_000_000_000;
+    const metrics = getLeaderboardMetrics(account.ledger);
+    expect(metrics.energyGeneratedMj).toBe(2_500_000_000_000_000);
+    expect(metrics.peakThroughputPerMinute).toBe(1_500_000_000_000_000);
+    expect(Number.isFinite(metrics.galaxyScore)).toBe(true);
   });
 
   it("shows a live local projection and marks it submitted after upload", () => {

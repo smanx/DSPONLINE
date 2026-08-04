@@ -6,6 +6,20 @@ interface ParsedQuantity {
   digits: string;
 }
 
+const CHINESE_LARGE_NUMBER_UNITS = [
+  { divisorZeros: 4, suffix: "万" },
+  { divisorZeros: 8, suffix: "亿" },
+  { divisorZeros: 12, suffix: "兆" },
+  { divisorZeros: 16, suffix: "京" },
+  { divisorZeros: 20, suffix: "垓" },
+  { divisorZeros: 24, suffix: "秭" },
+  { divisorZeros: 28, suffix: "穰" },
+  { divisorZeros: 32, suffix: "沟" },
+  { divisorZeros: 36, suffix: "涧" },
+  { divisorZeros: 40, suffix: "正" },
+  { divisorZeros: 44, suffix: "载" },
+] as const;
+
 function parseQuantity(value: QuantityInput): ParsedQuantity | null {
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return null;
@@ -60,8 +74,8 @@ export function formatQuantityCompact(value: QuantityInput): string {
   if (!parsed) return "--";
   const sign = parsed.negative ? "-" : "";
   if (parsed.digits.length < 5) return `${sign}${groupedDigits(parsed.digits)}`;
-  if (parsed.digits.length <= 8) return `${sign}${decimalScaled(parsed.digits, 4)}万`;
-  if (parsed.digits.length <= 16) return `${sign}${decimalScaled(parsed.digits, 8)}亿`;
+  const unit = CHINESE_LARGE_NUMBER_UNITS.find(({ divisorZeros }) => parsed.digits.length <= divisorZeros + 4);
+  if (unit) return `${sign}${decimalScaled(parsed.digits, unit.divisorZeros)}${unit.suffix}`;
   return formatQuantityScientific(`${sign}${parsed.digits}`);
 }
 

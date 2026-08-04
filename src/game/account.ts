@@ -71,6 +71,19 @@ function integer(value: unknown): number {
   return Math.floor(nonNegative(value));
 }
 
+function saturatingAdd(left: number, right: number): number {
+  const safeLeft = nonNegative(left);
+  const safeRight = nonNegative(right);
+  return safeLeft >= Number.MAX_VALUE - safeRight ? Number.MAX_VALUE : safeLeft + safeRight;
+}
+
+function saturatingProduct(left: number, right: number): number {
+  const safeLeft = nonNegative(left);
+  const safeRight = nonNegative(right);
+  if (safeLeft === 0 || safeRight === 0) return 0;
+  return safeLeft > Number.MAX_VALUE / safeRight ? Number.MAX_VALUE : safeLeft * safeRight;
+}
+
 function normalizeName(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   const name = value.trim().replace(/\s+/g, " ").slice(0, 24);
@@ -251,7 +264,7 @@ export function setActiveCloudBinding(state: AccountState, cloud: { id: string; 
 export function baselineAccountProgress(state: AccountState, game: GameState, timestamp = now()): AccountState {
   const active = getActiveAccount(state);
   const generationKw = getGenerationKw(game);
-  const dysonPowerKw = nonNegative(game.dysonSwarm?.generationKw) + nonNegative(game.dysonSphere?.generationKw);
+  const dysonPowerKw = saturatingAdd(game.dysonSwarm?.generationKw ?? 0, game.dysonSphere?.generationKw ?? 0);
   const nextLedger: AccountLedger = {
     ...active.ledger,
     peakGenerationKw: Math.max(active.ledger.peakGenerationKw, generationKw),
@@ -269,12 +282,12 @@ export function baselineAccountProgress(state: AccountState, game: GameState, ti
 }
 
 function getGenerationKw(game: GameState): number {
-  const metrics = Object.values(game.planetMetrics ?? {}).reduce((sum, metric) => sum + nonNegative(metric.generationKw), 0);
+  const metrics = Object.values(game.planetMetrics ?? {}).reduce((sum, metric) => saturatingAdd(sum, metric.generationKw), 0);
   return Math.max(0, metrics);
 }
 
 function getThroughput(game: GameState): number {
-  const metrics = Object.values(game.planetMetrics ?? {}).reduce((sum, metric) => sum + nonNegative(metric.totalItemsPerMinute), 0);
+  const metrics = Object.values(game.planetMetrics ?? {}).reduce((sum, metric) => saturatingAdd(sum, metric.totalItemsPerMinute), 0);
   return Math.max(0, metrics);
 }
 
@@ -289,11 +302,11 @@ export function recordAccountProgress(state: AccountState, game: GameState, time
   const whiteMatrixDelta = whiteMatrixTotal >= ledger.lastWhiteMatrixTotal
     ? whiteMatrixTotal - ledger.lastWhiteMatrixTotal
     : whiteMatrixTotal;
-  const dysonPowerKw = nonNegative(game.dysonSwarm?.generationKw) + nonNegative(game.dysonSphere?.generationKw);
+  const dysonPowerKw = saturatingAdd(game.dysonSwarm?.generationKw ?? 0, game.dysonSphere?.generationKw ?? 0);
   const nextLedger: AccountLedger = {
     ...ledger,
-    energyGeneratedMj: ledger.energyGeneratedMj + generationKw * elapsedDelta / 1000,
-    uploadedWhiteMatrix: ledger.uploadedWhiteMatrix + whiteMatrixDelta,
+    energyGeneratedMj: saturatingAdd(ledger.energyGeneratedMj, saturatingProduct(generationKw, elapsedDelta / 1000)),
+    uploadedWhiteMatrix: saturatingAdd(ledger.uploadedWhiteMatrix, whiteMatrixDelta),
     peakGenerationKw: Math.max(ledger.peakGenerationKw, generationKw),
     peakThroughputPerMinute: Math.max(ledger.peakThroughputPerMinute, getThroughput(game)),
     peakDysonPowerKw: Math.max(ledger.peakDysonPowerKw, dysonPowerKw),

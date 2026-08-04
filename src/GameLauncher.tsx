@@ -1,9 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { ReleaseNotesDialog, hasSeenCurrentReleaseNotes, markCurrentReleaseNotesSeen } from "./components/ReleaseNotesDialog";
 import { StartMenu } from "./components/StartMenu";
+import { DynamicImportBoundary, DynamicImportRecoveryNotice } from "./components/DynamicImportRecovery";
+import { importWithRecovery } from "./game/dynamicImportRecovery";
 import type { LoadedGame } from "./game/storage";
+import { GameDialogProvider } from "./components/GameDialogProvider";
 
-const FactoryRuntime = lazy(() => import("./FactoryRuntime"));
+const FactoryRuntime = lazy(() => importWithRecovery(() => import("./FactoryRuntime"), "行星工厂模块"));
 
 function FactoryLoading() {
   return <div className="workspace-loading" role="status"><i /><span>正在载入行星工厂</span></div>;
@@ -29,7 +32,9 @@ export function App() {
   useEffect(() => {
     if (!bypassMenu) return;
     let active = true;
-    void import("./game/storage")
+    void importWithRecovery(() => import("./game/contentPacks"), "内容包注册表")
+      .then((contentPacks) => contentPacks.applyContentPackRegistry(contentPacks.loadContentPackRegistry()))
+      .then(() => importWithRecovery(() => import("./game/storage"), "本地存档模块"))
       .then(({ loadGame }) => {
         if (active) setLaunch({ id: Date.now(), loaded: loadGame() });
       })
@@ -38,15 +43,18 @@ export function App() {
   }, [bypassMenu]);
 
   return (
-    <>
-      {!launch && bypassLoading ? <FactoryLoading /> : !launch ? (
-        <StartMenu onEnterGame={(loaded) => setLaunch({ id: Date.now(), loaded })} onOpenReleaseNotes={openReleaseNotes} />
-      ) : (
-        <Suspense fallback={<FactoryLoading />}>
-          <FactoryRuntime launchId={launch.id} initialLoad={launch.loaded} onReturnToMenu={() => setLaunch(null)} onOpenReleaseNotes={openReleaseNotes} />
-        </Suspense>
-      )}
+    <GameDialogProvider>
+      <DynamicImportBoundary>
+        {!launch && bypassLoading ? <FactoryLoading /> : !launch ? (
+          <StartMenu onEnterGame={(loaded) => setLaunch({ id: Date.now(), loaded })} onOpenReleaseNotes={openReleaseNotes} />
+        ) : (
+          <Suspense fallback={<FactoryLoading />}>
+            <FactoryRuntime launchId={launch.id} initialLoad={launch.loaded} onReturnToMenu={() => setLaunch(null)} onOpenReleaseNotes={openReleaseNotes} />
+          </Suspense>
+        )}
+      </DynamicImportBoundary>
+      <DynamicImportRecoveryNotice />
       <ReleaseNotesDialog open={releaseNotesOpen} onClose={closeReleaseNotes} />
-    </>
+    </GameDialogProvider>
   );
 }

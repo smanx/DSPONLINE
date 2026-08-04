@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
 import {
   Activity,
   ArrowRight,
@@ -14,6 +14,7 @@ import {
   Gauge,
   HardDrive,
   History,
+  Languages,
   LogIn,
   LogOut,
   MailWarning,
@@ -60,6 +61,7 @@ import type { DeferredLoadedGame, LoadedGame, SaveInspection, SaveSlotId } from 
 import type { AutosaveIntervalSeconds, FontScale, GameSettings, SimulationSpeed } from "../game/types";
 import { getDesktopBridge } from "../desktop";
 import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
+import { importWithRecovery } from "../game/dynamicImportRecovery";
 import { NativeUpdateCard } from "./NativeUpdateCard";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 import { CloudAccountSecurity } from "./CloudAccountSecurity";
@@ -68,6 +70,8 @@ import { CloudSaveSlotsPanel } from "./CloudSaveSlotsPanel";
 import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 import { useResolvedTheme } from "../hooks/useResolvedTheme";
 import { isSecureCloudClient } from "../nativeApp";
+import { useAppLocale } from "../i18n/locale";
+import { exportTextFile } from "../game/fileExport";
 
 type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "new";
 type CloudAuthMode = "login" | "register" | "forgot" | "reset";
@@ -75,6 +79,8 @@ type MenuMessage = { tone: "ready" | "warning" | "error"; text: string } | null;
 type OfflineLoadProgress = { label: string; completedSeconds: number; totalSeconds: number; progress: number };
 
 const MENU_SETTINGS_KEY = "dsp-idle-network.menu-settings.v1";
+const REGISTRATION_DRAFT_KEY = "dsp-idle-network.registration-draft.v1";
+const NATIVE_DOWNLOAD_URL = "https://download.dsponline.cn/";
 const FONT_SCALES: FontScale[] = [0.8, 1, 1.25, 1.5, 2];
 const SIMULATION_SPEEDS: SimulationSpeed[] = [1, 2, 4];
 const AUTOSAVE_INTERVALS: AutosaveIntervalSeconds[] = [30, 60, 120];
@@ -92,12 +98,17 @@ const DEFAULT_MENU_SETTINGS: GameSettings = {
   defaultBeltRouteMode: "auto",
   productionBufferLimit: 1_000_000,
   logisticsBufferLimit: 1_000_000,
+  beltBufferLimit: 100_000_000,
   proliferatorBufferLimit: 600,
   autosaveIntervalSeconds: 30,
   resourceMode: "finite",
   difficulty: "standard",
 };
-const loadStorageModule = () => import("../game/storage");
+const loadStorageModule = async () => {
+  const contentPacks = await importWithRecovery(() => import("../game/contentPacks"), "内容包注册表");
+  contentPacks.applyContentPackRegistry(contentPacks.loadContentPackRegistry());
+  return importWithRecovery(() => import("../game/storage"), "本地存档模块");
+};
 type StorageModule = Awaited<ReturnType<typeof loadStorageModule>>;
 
 interface StartMenuProps {
@@ -164,6 +175,10 @@ function mergeMenuRuntimeSettings(saved: GameSettings, menu: GameSettings): Game
     defaultBeltRouteMode: saved.defaultBeltRouteMode,
     productionBufferLimit: saved.productionBufferLimit,
     logisticsBufferLimit: saved.logisticsBufferLimit,
+    beltBufferLimit: saved.beltBufferLimit,
+    proliferatorBufferLimit: saved.proliferatorBufferLimit,
+    resourceMode: saved.resourceMode,
+    difficulty: saved.difficulty,
   };
 }
 
@@ -190,7 +205,57 @@ function ToggleRow({ checked, label, value, icon, onChange }: {
   );
 }
 
+function CompositionSafeInput({ value, onValueChange, onBlur, ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange"> & {
+  value: string;
+  onValueChange: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const composingRef = useRef(false);
+  useEffect(() => {
+    if (!composingRef.current) setDraft(value);
+  }, [value]);
+  const commit = (next: string) => {
+    setDraft(next);
+    onValueChange(next);
+  };
+  return <input
+    {...props}
+    value={draft}
+    onChange={(event) => {
+      const next = event.currentTarget.value;
+      setDraft(next);
+      if (!composingRef.current) onValueChange(next);
+    }}
+    onCompositionStart={() => { composingRef.current = true; }}
+    onCompositionEnd={(event) => {
+      composingRef.current = false;
+      commit(event.currentTarget.value);
+    }}
+    onBlur={(event) => {
+      if (composingRef.current || event.currentTarget.value !== value) {
+        composingRef.current = false;
+        commit(event.currentTarget.value);
+      }
+      onBlur?.(event);
+    }}
+  />;
+}
+
+function readRegistrationDraft(): { identifier: string; displayName: string } {
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(REGISTRATION_DRAFT_KEY) ?? "null") as unknown;
+    if (!parsed || typeof parsed !== "object") return { identifier: "", displayName: "" };
+    return {
+      identifier: typeof (parsed as { identifier?: unknown }).identifier === "string" ? (parsed as { identifier: string }).identifier : "",
+      displayName: typeof (parsed as { displayName?: unknown }).displayName === "string" ? (parsed as { displayName: string }).displayName : "",
+    };
+  } catch {
+    return { identifier: "", displayName: "" };
+  }
+}
+
 export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
+  const { locale, setLocale } = useAppLocale();
   const initialContinueSave = useMemo(() => getMenuContinueSave(), []);
   const defaultSettings = { ...DEFAULT_MENU_SETTINGS, ...initialContinueSave?.settings };
   const [view, setView] = useState<StartMenuView>("overview");
@@ -208,16 +273,19 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     return resetToken ? { kind: "reset" as const, token: resetToken } : null;
   }, []);
   const [cloudMode, setCloudMode] = useState<CloudAuthMode>(initialCloudAction?.kind === "reset" ? "reset" : "login");
-  const [cloudIdentifier, setCloudIdentifier] = useState("");
+  const registrationDraft = useMemo(readRegistrationDraft, []);
+  const [cloudIdentifier, setCloudIdentifier] = useState(registrationDraft.identifier);
   const [cloudEmail, setCloudEmail] = useState("");
   const [cloudPassword, setCloudPassword] = useState("");
   const [cloudPasswordConfirmation, setCloudPasswordConfirmation] = useState("");
-  const [cloudDisplayName, setCloudDisplayName] = useState("");
+  const [cloudDisplayName, setCloudDisplayName] = useState(registrationDraft.displayName);
   const [cloudConflict, setCloudConflict] = useState<{ slot: CloudSaveSlot; localPayload: string; remote: CloudSaveMetadata } | null>(null);
   const [busy, setBusy] = useState(false);
   const [offlineProgress, setOfflineProgress] = useState<OfflineLoadProgress | null>(null);
   const [message, setMessage] = useState<MenuMessage>(null);
   const [importInspection, setImportInspection] = useState<SaveInspection | null>(null);
+  const [importRaw, setImportRaw] = useState<string | null>(null);
+  const [rescueConfirmation, setRescueConfirmation] = useState(false);
   const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & { slotId: SaveSlotId }) | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const offlineAbortRef = useRef<AbortController | null>(null);
@@ -226,6 +294,11 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const brandIconUrl = `${import.meta.env.BASE_URL}icon.svg`;
   const automaticSnapshotCount = snapshots.filter((snapshot) => snapshot.reason === "自动快照").length;
   const manualSnapshotCount = snapshots.length - automaticSnapshotCount;
+
+  useEffect(() => {
+    if (cloudMode !== "register") return;
+    try { window.sessionStorage.setItem(REGISTRATION_DRAFT_KEY, JSON.stringify({ identifier: cloudIdentifier, displayName: cloudDisplayName })); } catch { /* draft recovery is optional */ }
+  }, [cloudDisplayName, cloudIdentifier, cloudMode]);
 
   useEffect(() => {
     const onNativeBack = (event: Event) => {
@@ -294,7 +367,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
           const session = await resumeCloudSession();
           if (!active) return;
           setCloudSession(session);
-          setMessage({ tone: "ready", text: "邮箱验证完成，找回密码与排行榜提交已开放" });
+          setMessage({ tone: "ready", text: "邮箱验证完成，邮箱找回密码已开放" });
           clearActionQuery();
         })
         .catch((error) => {
@@ -322,14 +395,14 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const preserveCurrentSave = async (reason: string, storage?: StorageModule) => {
     const activeStorage = storage ?? await loadStorageModule();
     const state = activeStorage.inspectContinueSave()?.inspection.state;
-    if (state) activeStorage.saveGameSnapshot(state, reason);
+    if (state) await activeStorage.saveGameSnapshotVerified(state, reason);
   };
 
   const enterLoadedGame = async (loaded: LoadedGame, preserveReason?: string, storage?: StorageModule) => {
     const activeStorage = storage ?? await loadStorageModule();
     if (preserveReason) await preserveCurrentSave(preserveReason, activeStorage);
     const state = { ...loaded.state, settings: mergeMenuRuntimeSettings(loaded.state.settings, settings) };
-    const saveResult = activeStorage.saveGame(state);
+    const saveResult = await activeStorage.saveGameVerified(state);
     if (!saveResult.success) throw new Error(saveResult.message);
     trackAnalyticsEvent("game_enter");
     onEnterGame({ ...loaded, state });
@@ -346,7 +419,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       const controller = new AbortController();
       offlineAbortRef.current = controller;
       setOfflineProgress({ label, completedSeconds: 0, totalSeconds: loaded.offlineSeconds, progress: 0 });
-      const { runOfflineSimulationInWorker } = await import("../game/offlineSimulation");
+      const { runOfflineSimulationInWorker } = await importWithRecovery(() => import("../game/offlineSimulation"), "离线结算模块");
       completed = await runOfflineSimulationInWorker(loaded.state, loaded.offlineSeconds, {
         signal: controller.signal,
         onProgress: (progress) => setOfflineProgress({ label, ...progress }),
@@ -383,11 +456,11 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const startNewGame = async () => {
     setBusy(true);
     try {
-      const [storage, { createPlayerInitialState }] = await Promise.all([loadStorageModule(), import("../game/engine")]);
+      const [storage, { createPlayerInitialState }] = await Promise.all([loadStorageModule(), importWithRecovery(() => import("../game/engine"), "模拟核心模块")]);
       await preserveCurrentSave("开始新工厂前", storage);
       const state = createPlayerInitialState();
       state.settings = mergeMenuRuntimeSettings(state.settings, settings);
-      const saveResult = storage.saveGame(state);
+      const saveResult = await storage.saveGameVerified(state);
       if (!saveResult.success) throw new Error(saveResult.message);
       trackAnalyticsEvent("new_game");
       trackAnalyticsEvent("game_enter");
@@ -445,12 +518,17 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
 
   const readImportFile = async (file: File) => {
     const storage = await loadStorageModule();
-    const inspection = storage.inspectSave(await file.text());
+    const raw = await file.text();
+    const inspection = storage.inspectSave(raw);
+    setImportRaw(raw);
     setImportInspection(inspection);
+    setRescueConfirmation(false);
     setView("import");
     setMessage(inspection.valid
       ? { tone: inspection.integrity === "valid" ? "ready" : "warning", text: inspection.integrity === "valid" ? "存档校验通过" : "存档将在导入时自动迁移" }
-      : { tone: "error", text: inspection.issues[0] ?? "存档格式无效" });
+      : inspection.repairable
+        ? { tone: "warning", text: "存档校验失败，但结构完整。请先备份原文件，再连续确认两次执行救援。" }
+        : { tone: "error", text: inspection.issues[0] ?? "存档格式无效" });
   };
 
   const confirmImport = async () => {
@@ -458,6 +536,32 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     const storage = await loadStorageModule();
     trackAnalyticsEvent("import_save");
     await enterLoadedGame({ state: importInspection.state, offlineSeconds: 0, offlineReport: null }, "导入外部存档前", storage);
+  };
+
+  const confirmSaveRescue = async () => {
+    if (!importInspection?.repairable || importInspection.valid || !importRaw) return;
+    if (!rescueConfirmation) {
+      setRescueConfirmation(true);
+      setMessage({ tone: "warning", text: "二次确认：救援会重新签署可解析状态。原始异常文件将先自动导出备份。" });
+      return;
+    }
+    setBusy(true);
+    try {
+      const storage = await loadStorageModule();
+      const repaired = storage.repairSave(importRaw);
+      if (!repaired.success || !repaired.raw || !repaired.inspection.state) throw new Error(repaired.message);
+      await exportTextFile({
+        contents: importRaw,
+        fileName: `dsp-idle-save-rescue-backup-${new Date().toISOString().slice(0, 10)}.json`,
+        title: "备份救援前的原始异常存档",
+      });
+      trackAnalyticsEvent("import_save");
+      await enterLoadedGame({ state: repaired.inspection.state, offlineSeconds: 0, offlineReport: null }, "救援外部存档前", storage);
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "存档救援失败" });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const authenticateCloud = async (event: FormEvent<HTMLFormElement>) => {
@@ -472,6 +576,9 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       setCloudSession(session);
       trackAnalyticsEvent(cloudMode === "register" ? "cloud_register" : "cloud_login");
       setCloudPassword("");
+      if (cloudMode === "register") {
+        try { window.sessionStorage.removeItem(REGISTRATION_DRAFT_KEY); } catch { /* optional draft */ }
+      }
       setMessage({ tone: "ready", text: cloudMode === "register" ? "云账户已创建，云存档与自动同步已开放" : "云账户登录成功，本地存档保持不变" });
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "云账户登录失败" });
@@ -535,7 +642,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       const storage = await loadStorageModule();
       const loaded = storage.loadGame();
       const state = { ...loaded.state, settings: mergeMenuRuntimeSettings(loaded.state.settings, settings) };
-      storage.saveGame(state);
+      const localSaveResult = await storage.saveGameVerified(state);
+      if (!localSaveResult.success) throw new Error(localSaveResult.message);
       const localPayload = storage.exportGame(state);
       attemptedPayload = localPayload;
       const comparison = compareCloudSave(userId, localPayload, cloudSession.cloudSave);
@@ -619,7 +727,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       if (!cloudSave) throw new Error(`云端槽位 ${slot} 为空`);
       const inspection = storage.inspectSave(cloudSave.payload);
       if (!inspection.valid || !inspection.state) throw new Error(inspection.issues[0] ?? "云存档格式无效");
-      storage.saveGameSlot(Number(slot) as SaveSlotId, inspection.state);
+      const saveResult = await storage.saveGameSlotVerified(Number(slot) as SaveSlotId, inspection.state);
+      if (!saveResult.success) throw new Error(saveResult.message);
       markCloudSaveSynchronized(cloudSession.user.id, cloudSave, cloudSave.payload, slot);
       refreshLocalSaves();
       setMessage({ tone: "ready", text: `云端槽位 ${slot} 已下载到对应本地槽位` });
@@ -644,6 +753,14 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       const storage = await loadStorageModule();
       const inspection = storage.inspectSave(cloudSave.payload);
       if (!inspection.valid || !inspection.state) {
+        if (inspection.repairable && inspection.state) {
+          setImportRaw(cloudSave.payload);
+          setImportInspection(inspection);
+          setRescueConfirmation(false);
+          setView("import");
+          setMessage({ tone: "warning", text: "云端存档结构完整但校验失败，已转到受控救援入口。" });
+          return;
+        }
         setMessage({ tone: "error", text: inspection.issues[0] ?? "云存档格式无效" });
         return;
       }
@@ -666,14 +783,26 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       if (!cloudSave) throw new Error("云端修订已不可用，请重新连接后再试");
       const storage = await loadStorageModule();
       const inspection = storage.inspectSave(cloudSave.payload);
-      if (!inspection.valid || !inspection.state) throw new Error(inspection.issues[0] ?? "云存档格式无效");
+      if (!inspection.valid || !inspection.state) {
+        if (inspection.repairable && inspection.state && cloudConflict.slot === "main") {
+          setImportRaw(cloudSave.payload);
+          setImportInspection(inspection);
+          setRescueConfirmation(false);
+          setCloudConflict(null);
+          setView("import");
+          setMessage({ tone: "warning", text: "云端主存档结构完整但校验失败，已转到受控救援入口。" });
+          return;
+        }
+        throw new Error(inspection.issues[0] ?? "云存档格式无效");
+      }
       markCloudSaveSynchronized(userId, cloudSave, cloudSave.payload, cloudConflict.slot);
       setCloudConflict(null);
       trackAnalyticsEvent("cloud_download");
       if (cloudConflict.slot === "main") {
         await enterLoadedGame({ state: inspection.state, offlineSeconds: 0, offlineReport: null }, "解决云存档冲突前", storage);
       } else {
-        storage.saveGameSlot(Number(cloudConflict.slot) as SaveSlotId, inspection.state);
+        const saveResult = await storage.saveGameSlotVerified(Number(cloudConflict.slot) as SaveSlotId, inspection.state);
+        if (!saveResult.success) throw new Error(saveResult.message);
         refreshLocalSaves();
         setMessage({ tone: "ready", text: `已在本地槽位 ${cloudConflict.slot} 保留云端版本` });
       }
@@ -729,6 +858,10 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
 
       <header className="start-menu-topbar">
         <div className="start-menu-brand-mini"><img src={brandIconUrl} alt="" /><strong>DSP极简网络</strong></div>
+        <div className="start-menu-language-prominent" role="group" aria-label="Language / 语言">
+          <button className={locale === "zh-CN" ? "active" : ""} type="button" aria-pressed={locale === "zh-CN"} onClick={() => setLocale("zh-CN")}>中文</button>
+          <button className={locale === "en" ? "active" : ""} type="button" aria-pressed={locale === "en"} onClick={() => setLocale("en")}>English</button>
+        </div>
         <div className={`start-menu-node-state start-menu-node-state--${cloudSession.status}`}>
           {cloudSession.status === "offline" ? <CloudOff size={14} /> : <Cloud size={14} />}
           <span>{cloudStateLabel}</span>
@@ -773,6 +906,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             <button className={view === "cloud" ? "active" : ""} type="button" onClick={() => { setView("cloud"); setMessage(null); }}><Cloud size={17} /><span>登录与云存档</span></button>
             <button className={view === "import" ? "active" : ""} type="button" onClick={() => fileInputRef.current?.click()}><FileUp size={17} /><span>导入存档</span></button>
             <button className={view === "settings" ? "active" : ""} type="button" onClick={() => { setView("settings"); setMessage(null); }}><Settings size={17} /><span>游戏设置</span></button>
+            {__APP_PLATFORM__ === "web" ? <a className="start-menu-download-link" href={NATIVE_DOWNLOAD_URL} target="_blank" rel="noreferrer" title="下载 Windows 或 Android 客户端"><Download size={17} /><span>客户端下载</span><em>测试版</em></a> : null}
           </nav>
           <input ref={fileInputRef} className="start-menu-file-input" type="file" accept="application/json,.json" aria-label="选择存档文件" onChange={async (event) => { const file = event.target.files?.[0]; if (file) await readImportFile(file); event.target.value = ""; }} />
         </aside>
@@ -828,9 +962,9 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             {cloudAuthAllowed && cloudSession.status === "offline" ? <div className="start-menu-cloud-offline"><CloudOff size={24} /><span><strong>云节点暂时不可用</strong><small>{cloudSession.message}</small></span><button type="button" onClick={() => { setCloudSession({ status: "checking", user: null, cloudSave: null, mailAvailable: false, message: null }); void resumeCloudSession().then(setCloudSession); }}><RefreshCw size={14} />重试</button></div> : null}
             {cloudSession.status === "anonymous" && (cloudMode === "login" || cloudMode === "register") ? <form className="start-menu-auth" onSubmit={authenticateCloud}>
               <div className="start-menu-auth-mode"><button className={cloudMode === "login" ? "active" : ""} type="button" onClick={() => setCloudMode("login")}><LogIn size={14} />登录</button><button className={cloudMode === "register" ? "active" : ""} type="button" onClick={() => setCloudMode("register")}><UserPlus size={14} />注册</button></div>
-              {!cloudMailAvailable ? <p className="start-menu-auth-development"><MailWarning size={14} /><span><strong>邮件系统尚未开放</strong><small>用户名密码注册、主云存档、三个手动槽和自动同步均可使用；未绑定邮箱暂时无法找回密码，排行榜仍需邮箱验证。</small></span></p> : null}
-              {cloudMode === "register" ? <label><span>显示名称</span><input value={cloudDisplayName} onChange={(event) => setCloudDisplayName(event.target.value)} minLength={2} maxLength={24} required autoComplete="nickname" /></label> : null}
-              <label><span>{cloudMode === "register" ? "用户名" : "用户名或邮箱"}</span><input type="text" value={cloudIdentifier} onChange={(event) => setCloudIdentifier(event.target.value)} required minLength={cloudMode === "register" ? 4 : undefined} maxLength={cloudMode === "register" ? 24 : 254} pattern={cloudMode === "register" ? "[A-Za-z0-9_]{4,24}" : undefined} title={cloudMode === "register" ? "4 至 24 位英文字母、数字或下划线" : undefined} autoComplete="username" placeholder={cloudMode === "register" ? "4-24 位字母、数字或下划线" : "用户名或已绑定邮箱"} /></label>
+              {!cloudMailAvailable ? <p className="start-menu-auth-development"><MailWarning size={14} /><span><strong>邮件系统尚未开放</strong><small>用户名密码注册、主云存档、三个手动槽、自动同步和排行榜均可使用；未绑定邮箱暂时无法找回密码。</small></span></p> : null}
+              {cloudMode === "register" ? <label><span>显示名称</span><CompositionSafeInput name="displayName" value={cloudDisplayName} onValueChange={setCloudDisplayName} minLength={2} maxLength={24} required autoComplete="nickname" /></label> : null}
+              <label><span>{cloudMode === "register" ? "用户名" : "用户名或邮箱"}</span><CompositionSafeInput name="username" type="text" value={cloudIdentifier} onValueChange={setCloudIdentifier} required minLength={cloudMode === "register" ? 4 : undefined} maxLength={cloudMode === "register" ? 24 : 254} pattern={cloudMode === "register" ? "[A-Za-z0-9_]{4,24}" : undefined} title={cloudMode === "register" ? "4 至 24 位英文字母、数字或下划线" : undefined} autoComplete="username" placeholder={cloudMode === "register" ? "4-24 位字母、数字或下划线" : "用户名或已绑定邮箱"} /></label>
               <label><span>密码</span><input type="password" value={cloudPassword} onChange={(event) => setCloudPassword(event.target.value)} required minLength={8} maxLength={128} autoComplete={cloudMode === "register" ? "new-password" : "current-password"} /></label>
               {cloudMode === "login" ? <button className="start-menu-auth-link" type="button" disabled={!cloudMailAvailable} title={!cloudMailAvailable ? "邮箱找回密码正在开发中" : undefined} onClick={() => setCloudMode("forgot")}>{cloudMailAvailable ? "忘记密码" : "忘记密码 · 开发中"}</button> : null}
               <button className="primary" type="submit" disabled={busy}>{busy ? <Activity size={15} /> : cloudMode === "register" ? <UserPlus size={15} /> : <LogIn size={15} />}{cloudMode === "register" ? "创建云账户" : "登录云账户"}</button>
@@ -857,13 +991,14 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
 
           {view === "import" ? <div className="start-menu-import">
             <header><FileUp size={22} /><span><small>外部数据</small><strong>导入存档</strong></span></header>
-            {!importInspection ? <button className="start-menu-import-drop" type="button" onClick={() => fileInputRef.current?.click()}><FileUp size={25} /><strong>选择 JSON 存档</strong><small>支持当前格式与可迁移的旧版本</small></button> : <div className={`start-menu-import-result start-menu-import-result--${importInspection.valid ? importInspection.integrity : "corrupt"}`}><header><i>{importInspection.valid ? <Check size={18} /> : <CloudOff size={18} />}</i><span><strong>{importInspection.valid ? "存档可导入" : "存档不可用"}</strong><small>格式 v{importInspection.formatVersion ?? "?"} · 状态 v{importInspection.stateVersion ?? "?"}</small></span></header><div><span><small>运行时间</small><strong>{formatRuntime(importInspection.summary?.elapsedSeconds ?? 0)}</strong></span><span><small>实体数量</small><strong>{importInspection.state?.entities.length ?? 0}</strong></span><span><small>完成科技</small><strong>{importInspection.summary?.completedTechCount ?? 0}</strong></span></div>{importInspection.issues.length > 0 ? <ul>{importInspection.issues.slice(0, 4).map((issue) => <li key={issue}>{issue}</li>)}</ul> : null}<footer><button type="button" onClick={() => fileInputRef.current?.click()}>重新选择</button><button className="primary" type="button" disabled={busy || !importInspection.valid} onClick={() => void confirmImport()}><FileUp size={14} />确认导入并进入</button></footer></div>}
+            {!importInspection ? <button className="start-menu-import-drop" type="button" onClick={() => fileInputRef.current?.click()}><FileUp size={25} /><strong>选择 JSON 存档</strong><small>支持当前格式与可迁移的旧版本</small></button> : <div className={`start-menu-import-result start-menu-import-result--${importInspection.valid ? importInspection.integrity : "corrupt"}`}><header><i>{importInspection.valid ? <Check size={18} /> : <CloudOff size={18} />}</i><span><strong>{importInspection.valid ? "存档可导入" : importInspection.repairable ? "存档结构完整，可受控救援" : "存档不可用"}</strong><small>格式 v{importInspection.formatVersion ?? "?"} · 状态 v{importInspection.stateVersion ?? "?"}</small></span></header><div><span><small>运行时间</small><strong>{formatRuntime(importInspection.summary?.elapsedSeconds ?? 0)}</strong></span><span><small>实体数量</small><strong>{importInspection.state?.entities.length ?? 0}</strong></span><span><small>完成科技</small><strong>{importInspection.summary?.completedTechCount ?? 0}</strong></span></div>{importInspection.issues.length > 0 ? <ul>{importInspection.issues.slice(0, 4).map((issue) => <li key={issue}>{issue}</li>)}</ul> : null}<footer><button type="button" onClick={() => fileInputRef.current?.click()}>重新选择</button>{importInspection.valid ? <button className="primary" type="button" disabled={busy} onClick={() => void confirmImport()}><FileUp size={14} />确认导入并进入</button> : importInspection.repairable ? <button className={rescueConfirmation ? "danger" : "primary"} type="button" disabled={busy} onClick={() => void confirmSaveRescue()}><ShieldCheck size={14} />{rescueConfirmation ? "再次确认并救援" : "救援此存档"}</button> : <button type="button" disabled>无法导入</button>}</footer></div>}
           </div> : null}
 
           {view === "settings" ? <div className="start-menu-settings">
             <header><span><small>本机运行参数</small><strong>游戏设置</strong></span><em>即时生效</em></header>
             <section><header><Type size={15} /><strong>字体大小</strong><small>{Math.round(settings.fontScale * 100)}%</small></header><div className="start-menu-segments">{FONT_SCALES.map((scale) => <button className={settings.fontScale === scale ? "active" : ""} type="button" key={scale} onClick={() => updateMenuSettings({ fontScale: scale })}>{Math.round(scale * 100)}%</button>)}</div></section>
             <section><header><Palette size={15} /><strong>界面主题</strong><small>{{ dark: "深色", light: "亮色", system: "跟随系统" }[settings.theme]}</small></header><div className="start-menu-segments">{(["dark", "light", "system"] as const).map((theme) => <button className={settings.theme === theme ? "active" : ""} type="button" key={theme} onClick={() => updateMenuSettings({ theme })}>{{ dark: "深色", light: "亮色", system: "跟随系统" }[theme]}</button>)}</div></section>
+            <section><header><Languages size={15} /><strong>语言</strong><small>{locale === "en" ? "English" : "简体中文"}</small></header><div className="start-menu-segments" aria-label="语言"><button className={locale === "zh-CN" ? "active" : ""} type="button" aria-pressed={locale === "zh-CN"} onClick={() => setLocale("zh-CN")}>简体中文</button><button className={locale === "en" ? "active" : ""} type="button" aria-pressed={locale === "en"} onClick={() => setLocale("en")}>English</button></div></section>
             <section><header><Factory size={15} /><strong>科技树布局</strong><small>{settings.technologyLayout === "compact" ? "精简" : "标准"}</small></header><div className="start-menu-segments">{(["standard", "compact"] as const).map((technologyLayout) => <button className={settings.technologyLayout === technologyLayout ? "active" : ""} type="button" key={technologyLayout} onClick={() => updateMenuSettings({ technologyLayout })}>{technologyLayout === "compact" ? "精简模式" : "标准模式"}</button>)}</div></section>
             <section><header><Zap size={15} /><strong>模拟速度</strong><small>{settings.simulationSpeed}×</small></header><div className="start-menu-segments">{SIMULATION_SPEEDS.map((speed) => <button className={settings.simulationSpeed === speed ? "active" : ""} type="button" key={speed} onClick={() => updateMenuSettings({ simulationSpeed: speed })}>{speed}×</button>)}</div></section>
             <section><header><Clock3 size={15} /><strong>自动保存</strong><small>{settings.autosaveIntervalSeconds} 秒</small></header><div className="start-menu-segments">{AUTOSAVE_INTERVALS.map((seconds) => <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => updateMenuSettings({ autosaveIntervalSeconds: seconds })}>{seconds} 秒</button>)}</div></section>
@@ -881,8 +1016,9 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       <SaveDeleteDialog target={deleteRequest} onCancel={() => setDeleteRequest(null)} onDelete={() => {
         if (!deleteRequest) return;
         setBusy(true);
-        void loadStorageModule().then(({ clearGameSlot }) => {
-          clearGameSlot(deleteRequest.slotId);
+        void loadStorageModule().then(async ({ clearGameSlotVerified }) => {
+          const removed = await clearGameSlotVerified(deleteRequest.slotId);
+          if (!removed) throw new Error(`${deleteRequest.label}删除失败`);
           refreshLocalSaves();
           setMessage({ tone: "ready", text: `${deleteRequest.label}已删除，其他存档未受影响` });
           setDeleteRequest(null);

@@ -1,8 +1,10 @@
 import { BoxSelect, ChevronRight, Focus, Layers3, LayoutTemplate, LockKeyhole, Map, MapPin, MousePointer2, Orbit, Palette, Redo2, Route, Undo2, WandSparkles, ZoomIn, ZoomOut } from "lucide-react";
+import { useEffect, useState } from "react";
 import { PLANET_LIST, getPlanet } from "../../game/content";
 import { getPlanetMetrics, isPlanetColonized, type PlanetTrayDiscardRequest } from "../../game/engine";
+import { getPlanetDisplayName } from "../../game/galaxy";
 import type { FactoryAlert } from "../../game/alerts";
-import type { BeltConnection, BeltTier, BuildingId, ConstructionId, FactoryEntity, GameState, ItemId, PlanetId, RecipeId } from "../../game/types";
+import type { BeltConnection, BeltTier, BuildingId, ConstructionId, FactoryEntity, GameState, ItemId, MaterialDeliverySlotMode, PlanetId, RecipeId } from "../../game/types";
 import type { MobileOverlay, MobileSheetSnap } from "../../hooks/useMobileNavigation";
 import { MobileBuildSheet, MobileInspectorSheet, MobileInventorySheet, type MobileCanvasMode } from "./MobileFactoryPanels";
 import { MobileSheetFrame } from "./MobileSheetFrame";
@@ -53,10 +55,21 @@ export interface MobileFactorySheetActions {
   onPickTray: (itemId: ItemId) => void;
   onDropCargo: () => void;
   onDiscardTrayItems: (requests: PlanetTrayDiscardRequest[]) => void;
+  onSetTrayItemLimit: (value: number) => void;
   onFocusSelection: () => void;
   onAddEntity: (entityId: string, count: number) => void;
+  onRemoveEntity: (entityId: string, count?: number) => void;
   onUpgradeEntity: (entityId: string) => void;
+  onUpgradeInterstellarStation: (entityId: string) => void;
+  onQuantumAttachment: (entityId: string) => void;
+  onOrbitalCollectorQuantumMode: (entityId: string, enabled: boolean) => void;
   onUpgradeBelt: (beltId: string) => void;
+  onBeltLaneCountChange: (beltId: string, targetLanes: number) => void;
+  onEntityLockChange: (entityId: string, locked: boolean) => void;
+  onRemoveSprayCoater: (entityId: string) => void;
+  onOpenResourceSettings: () => void;
+  onMaterialDeliverySlotChange: (entityId: string, slotIndex: number, mode: MaterialDeliverySlotMode, itemId: ItemId | null) => void;
+  onEjectorOrbitChange: (entityId: string, orbitId: string) => void;
 }
 
 function PlanetSheet({ game, alerts, snap, onSnap, onPlanetChange, onOpenStarMap, onClose }: {
@@ -80,7 +93,7 @@ function PlanetSheet({ game, alerts, snap, onSnap, onPlanetChange, onOpenStarMap
           const issues = alerts.filter((alert) => alert.planetId === planet.id).length;
           return <button className={active ? "active" : ""} type="button" aria-pressed={active} key={planet.id} onClick={() => { onPlanetChange(planet.id); onClose(); }}>
             <i style={{ color: planet.color }}><Orbit size={21} /></i>
-            <span><strong>{planet.name}</strong><small>{planet.code} · {planet.environment}</small></span>
+            <span><strong>{getPlanetDisplayName(game, planet.id)}</strong><small>{planet.code} · {planet.environment}</small></span>
             <em>{devices} 台<br />供电 {Math.round(metrics.powerFactor * 100)}%</em>
             {issues > 0 ? <b>{issues} 项</b> : <ChevronRight size={18} />}
           </button>;
@@ -136,6 +149,10 @@ export function MobileSheets({ game, alerts, overlay, tools, toolActions, factor
   onConfirmExit: () => void;
   onDismissExit: () => void;
 }) {
+  const [buildQuery, setBuildQuery] = useState("");
+  useEffect(() => {
+    if (overlay?.kind !== "sheet" || overlay.id !== "build") setBuildQuery("");
+  }, [overlay]);
   if (!overlay) return null;
   if (overlay.kind === "modal") {
     if (overlay.id === "command") return null;
@@ -143,8 +160,8 @@ export function MobileSheets({ game, alerts, overlay, tools, toolActions, factor
   }
   if (overlay.id === "planet") return <PlanetSheet game={game} alerts={alerts} snap={overlay.snap} onSnap={onSheetSnap} onPlanetChange={onPlanetChange} onOpenStarMap={onOpenStarMap} onClose={onClose} />;
   if (overlay.id === "tools") return <ToolsSheet state={tools} actions={toolActions} snap={overlay.snap} onSnap={onSheetSnap} onClose={onClose} />;
-  if (overlay.id === "build") return <MobileBuildSheet game={game} snap={overlay.snap} placement={factory.placement} beltTier={factory.beltTier} beltTierMode={factory.beltTierMode} onSnap={onSheetSnap} onClose={onClose} onPlacement={factoryActions.onPlacement} onBelt={factoryActions.onBelt} onCraft={factoryActions.onCraft} onCraftFleet={factoryActions.onCraftFleet} onMissingCraft={factoryActions.onMissingCraft} />;
-  if (overlay.id === "inventory") return <MobileInventorySheet game={game} snap={overlay.snap} onSnap={onSheetSnap} onClose={onClose} onPickTray={factoryActions.onPickTray} onDropCargo={factoryActions.onDropCargo} onDiscardTrayItems={factoryActions.onDiscardTrayItems} />;
+  if (overlay.id === "build") return <MobileBuildSheet game={game} snap={overlay.snap} placement={factory.placement} beltTier={factory.beltTier} beltTierMode={factory.beltTierMode} query={buildQuery} onQueryChange={setBuildQuery} onSnap={onSheetSnap} onClose={onClose} onPlacement={factoryActions.onPlacement} onBelt={factoryActions.onBelt} onCraft={factoryActions.onCraft} onCraftFleet={factoryActions.onCraftFleet} onMissingCraft={factoryActions.onMissingCraft} />;
+  if (overlay.id === "inventory") return <MobileInventorySheet game={game} snap={overlay.snap} onSnap={onSheetSnap} onClose={onClose} onPickTray={factoryActions.onPickTray} onDropCargo={factoryActions.onDropCargo} onDiscardTrayItems={factoryActions.onDiscardTrayItems} onSetTrayItemLimit={factoryActions.onSetTrayItemLimit} />;
   if (overlay.snap === "full") return <MobileSheetFrame title="完整检查器" detail="配方、物流槽、电网与高级设置" snap="full" allowPeek onSnap={onSheetSnap} onClose={onClose} className="mobile-inspector-sheet--advanced"><span aria-hidden="true" /></MobileSheetFrame>;
-  return <MobileInspectorSheet game={game} snap={overlay.snap} entity={factory.selectedEntity} belt={factory.selectedBelt} selectedCount={factory.selectedCount} onSnap={onSheetSnap} onClose={onClose} onOpenAdvanced={() => onSheetSnap("full")} onFocus={factoryActions.onFocusSelection} onAddEntity={factoryActions.onAddEntity} onUpgradeEntity={factoryActions.onUpgradeEntity} onUpgradeBelt={factoryActions.onUpgradeBelt} />;
+  return <MobileInspectorSheet game={game} snap={overlay.snap} entity={factory.selectedEntity} belt={factory.selectedBelt} selectedCount={factory.selectedCount} onSnap={onSheetSnap} onClose={onClose} onOpenAdvanced={() => onSheetSnap("full")} onFocus={factoryActions.onFocusSelection} onAddEntity={factoryActions.onAddEntity} onRemoveEntity={factoryActions.onRemoveEntity} onUpgradeEntity={factoryActions.onUpgradeEntity} onUpgradeInterstellarStation={factoryActions.onUpgradeInterstellarStation} onQuantumAttachment={factoryActions.onQuantumAttachment} onOrbitalCollectorQuantumMode={factoryActions.onOrbitalCollectorQuantumMode} onUpgradeBelt={factoryActions.onUpgradeBelt} onBeltLaneCountChange={factoryActions.onBeltLaneCountChange} onEntityLockChange={factoryActions.onEntityLockChange} onRemoveSprayCoater={factoryActions.onRemoveSprayCoater} onOpenResourceSettings={factoryActions.onOpenResourceSettings} onMaterialDeliverySlotChange={factoryActions.onMaterialDeliverySlotChange} onEjectorOrbitChange={factoryActions.onEjectorOrbitChange} />;
 }

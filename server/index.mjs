@@ -4,6 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
 import Database from "better-sqlite3";
 import {
   DEFAULT_METRIC_TIME_ZONE,
@@ -14,9 +15,19 @@ import {
 } from "./analytics.mjs";
 import { createTencentSesMailer, createWebhookMailer } from "./mail.mjs";
 import { getActivityPublicStatus, loadActivityConfig, normalizeActivityConfig } from "./activity.mjs";
+import { inspectSavePayloadIntegrity } from "./save-integrity.mjs";
+import {
+  isLeaderboardRestricted,
+  LEADERBOARD_RESTRICTED_CODE,
+  normalizeLeaderboardModeration,
+} from "./leaderboard-moderation.mjs";
 
 const scrypt = promisify(scryptCallback);
-const BODY_LIMIT_BYTES = 8 * 1024 * 1024;
+// The envelope remains v2, but end-game saves can exceed the historical 8 MiB
+// request boundary. Keep a finite compressed and expanded limit so increasing
+// the boundary cannot turn the endpoint into an unbounded decompression sink.
+const BODY_LIMIT_BYTES = 32 * 1024 * 1024;
+const SAVE_PAYLOAD_LIMIT_BYTES = BODY_LIMIT_BYTES - 1024;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CLOUD_HISTORY_LIMIT = 20;
 const CLOUD_SAVE_SLOTS = ["main", "1", "2", "3"];
@@ -28,6 +39,7 @@ const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{16,96}$/;
 const USERNAME_PATTERN = /^[A-Za-z0-9_]{4,24}$/;
 const VALID_CATEGORIES = new Set(["power", "upload", "dyson", "throughput", "galaxy"]);
 const VALID_SEASONS = new Set(["season_01", "season_00"]);
+const ACTIVE_LEADERBOARD_SEASON_ID = "season_01";
 const METRIC_KEYS = [
   "energyGeneratedMj",
   "uploadedWhiteMatrix",
@@ -49,6 +61,7 @@ const DEFAULT_DATA = {
   cloudSaveSlots: {},
   cloudSaveSlotHistory: {},
   submissions: {},
+  leaderboardModeration: {},
   players: {},
   feedback: [],
   errors: [],
@@ -120,6 +133,7 @@ function normalizeUserRecords(value, sourceSchemaVersion) {
       createdAt,
       emailVerifiedAt,
       passwordChangedAt: Number.isFinite(record.passwordChangedAt) ? Math.max(createdAt, Math.floor(record.passwordChangedAt)) : createdAt,
+      leaderboardVisible: record.leaderboardVisible !== false,
     };
   }
   return users;
@@ -158,7 +172,8 @@ function normalizeActionTokens(value, users) {
 function summarizeSavePayload(payload) {
   if (typeof payload !== "string") return null;
   try {
-    const parsed = JSON.parse(payload);
+    const integrity = inspectSavePayloadIntegrity(payload);
+    const parsed = integrity.parsed;
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities)) return null;
     return {
@@ -171,6 +186,8 @@ function summarizeSavePayload(payload) {
       structurePoints: Number.isFinite(state.dysonSphere?.structurePoints) ? Math.max(0, Math.floor(state.dysonSphere.structurePoints)) : 0,
       uploadedWhiteMatrix: Number.isFinite(state.totalProduced?.universe_matrix) ? Math.max(0, Math.floor(state.totalProduced.universe_matrix)) : 0,
       stateChecksum: typeof parsed?.checksum === "string" ? parsed.checksum.slice(0, 128) : null,
+      computedStateChecksum: integrity.computedChecksum,
+      integrity: integrity.valid ? "valid" : "invalid",
     };
   } catch {
     return null;
@@ -235,6 +252,7 @@ function normalizeStoredData(parsed) {
     cloudSaveSlots: normalizeManualSaveSlots(source.cloudSaveSlots),
     cloudSaveSlotHistory: normalizeManualSaveSlotHistory(source.cloudSaveSlotHistory),
     submissions: source.submissions && typeof source.submissions === "object" ? source.submissions : {},
+    leaderboardModeration: normalizeLeaderboardModeration(source.leaderboardModeration, users),
     players: normalizePlayerRecords(source.players),
     feedback: Array.isArray(source.feedback) ? source.feedback.slice(-1000) : [],
     errors: Array.isArray(source.errors) ? source.errors.slice(-1000) : [],
@@ -287,6 +305,7 @@ function publicUser(user) {
     emailVerified: Number.isFinite(user.emailVerifiedAt),
     emailVerifiedAt: Number.isFinite(user.emailVerifiedAt) ? user.emailVerifiedAt : null,
     passwordChangedAt: user.passwordChangedAt,
+    leaderboardVisible: user.leaderboardVisible !== false,
   };
 }
 
@@ -310,10 +329,41 @@ function clientTypeForRequest(request) {
   return "desktop-web";
 }
 
-function normalizeMetric(value, integer = false, maximum = 1e15) {
+function normalizeMetric(value, integer = false, maximum = Number.MAX_VALUE) {
   const number = typeof value === "number" && Number.isFinite(value) ? value : 0;
   const normalized = Math.max(0, Math.min(maximum, number));
-  return integer ? Math.floor(normalized) : Math.round(normalized * 100) / 100;
+  if (integer) return Math.floor(normalized);
+  return normalized > Number.MAX_VALUE / 100 ? normalized : Math.round(normalized * 100) / 100;
+}
+
+function saturatingMetricProduct(left, right) {
+  const normalizedLeft = normalizeMetric(left);
+  const normalizedRight = normalizeMetric(right);
+  if (normalizedLeft === 0 || normalizedRight === 0) return 0;
+  return normalizedLeft > Number.MAX_VALUE / normalizedRight
+    ? Number.MAX_VALUE
+    : normalizedLeft * normalizedRight;
+}
+
+function saturatingMetricAdd(left, right) {
+  const normalizedLeft = normalizeMetric(left);
+  const normalizedRight = normalizeMetric(right);
+  return normalizedLeft >= Number.MAX_VALUE - normalizedRight
+    ? Number.MAX_VALUE
+    : normalizedLeft + normalizedRight;
+}
+
+function calculateGalaxyScore(metrics) {
+  const terms = [
+    metrics.energyGeneratedMj / 1_000_000,
+    saturatingMetricProduct(metrics.uploadedWhiteMatrix, 12),
+    metrics.peakDysonPowerKw / 100,
+    saturatingMetricProduct(metrics.peakThroughputPerMinute, 8),
+    saturatingMetricProduct(metrics.exploredSystems, 10_000),
+    saturatingMetricProduct(metrics.colonizedPlanets, 2_000),
+  ];
+  const total = terms.reduce(saturatingMetricAdd, 0);
+  return Math.round(total);
 }
 
 function normalizeMetrics(value) {
@@ -327,14 +377,7 @@ function normalizeMetrics(value) {
     exploredSystems: normalizeMetric(source.exploredSystems, true, 10_000),
     colonizedPlanets: normalizeMetric(source.colonizedPlanets, true, 100_000),
   };
-  metrics.galaxyScore = Math.round(
-    metrics.energyGeneratedMj / 1_000_000 +
-    metrics.uploadedWhiteMatrix * 12 +
-    metrics.peakDysonPowerKw / 100 +
-    metrics.peakThroughputPerMinute * 8 +
-    metrics.exploredSystems * 10_000 +
-    metrics.colonizedPlanets * 2_000,
-  );
+  metrics.galaxyScore = calculateGalaxyScore(metrics);
   return metrics;
 }
 
@@ -577,10 +620,22 @@ class SqliteStore {
   }
 }
 
-function createRateLimiter() {
+export function createRateLimiter(nowProvider = Date.now) {
   const buckets = new Map();
-  return (key, maximum, windowMs) => {
-    const now = Date.now();
+  let nextCleanupAt = 0;
+  const cleanup = (now = nowProvider()) => {
+    let removed = 0;
+    for (const [key, bucket] of buckets) {
+      if (bucket.resetAt > now) continue;
+      buckets.delete(key);
+      removed += 1;
+    }
+    nextCleanupAt = now + 60_000;
+    return removed;
+  };
+  const rateLimit = (key, maximum, windowMs) => {
+    const now = nowProvider();
+    if (now >= nextCleanupAt) cleanup(now);
     const bucket = buckets.get(key);
     if (!bucket || bucket.resetAt <= now) {
       buckets.set(key, { count: 1, resetAt: now + windowMs });
@@ -589,6 +644,29 @@ function createRateLimiter() {
     bucket.count += 1;
     return bucket.count <= maximum;
   };
+  rateLimit.cleanup = cleanup;
+  return rateLimit;
+}
+
+export function cleanupExpiredAuthRecords(data, now = Date.now()) {
+  const users = data?.users && typeof data.users === "object" ? data.users : {};
+  const removed = { sessions: 0, emailVerifications: 0, passwordResets: 0, total: 0 };
+  for (const collectionName of ["sessions", "emailVerifications", "passwordResets"]) {
+    const collection = data?.[collectionName];
+    if (!collection || typeof collection !== "object") continue;
+    for (const [tokenHash, record] of Object.entries(collection)) {
+      const invalid = !record
+        || typeof record !== "object"
+        || !users[record.userId]
+        || !Number.isFinite(record.expiresAt)
+        || record.expiresAt <= now;
+      if (!invalid) continue;
+      delete collection[tokenHash];
+      removed[collectionName] += 1;
+      removed.total += 1;
+    }
+  }
+  return removed;
 }
 
 function requestIp(request) {
@@ -628,18 +706,45 @@ async function readJson(request) {
   for await (const chunk of request) {
     size += chunk.length;
     if (size > BODY_LIMIT_BYTES) {
-      const error = new Error("请求内容超过 8 MB");
+      const error = new Error("请求内容超过 32 MB");
       error.statusCode = 413;
+      error.code = "REQUEST_BODY_TOO_LARGE";
       throw error;
     }
     chunks.push(chunk);
   }
   if (chunks.length === 0) return {};
+  let raw = Buffer.concat(chunks);
+  const encoding = String(request.headers["content-encoding"] ?? "").toLowerCase();
+  if (encoding && encoding !== "identity") {
+    if (encoding !== "gzip") {
+      const error = new Error("请求压缩格式不受支持");
+      error.statusCode = 415;
+      error.code = "REQUEST_ENCODING_UNSUPPORTED";
+      throw error;
+    }
+    try {
+      raw = gunzipSync(raw, { maxOutputLength: BODY_LIMIT_BYTES });
+    } catch (cause) {
+      const tooLarge = cause && typeof cause === "object" && "code" in cause && cause.code === "ERR_BUFFER_TOO_LARGE";
+      const error = new Error(tooLarge ? "解压后的请求内容超过 32 MB" : "请求压缩内容无效");
+      error.statusCode = tooLarge ? 413 : 400;
+      error.code = tooLarge ? "REQUEST_EXPANDED_BODY_TOO_LARGE" : "REQUEST_ENCODING_INVALID";
+      throw error;
+    }
+  }
+  if (raw.byteLength > BODY_LIMIT_BYTES) {
+    const error = new Error("解压后的请求内容超过 32 MB");
+    error.statusCode = 413;
+    error.code = "REQUEST_EXPANDED_BODY_TOO_LARGE";
+    throw error;
+  }
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return JSON.parse(raw.toString("utf8"));
   } catch {
     const error = new Error("JSON 格式无效");
     error.statusCode = 400;
+    error.code = "REQUEST_FORMAT_INVALID";
     throw error;
   }
 }
@@ -723,12 +828,6 @@ function removeUserActionTokens(store, userId) {
   }
 }
 
-function requireLeaderboardVerifiedUser(response, auth) {
-  if (Number.isFinite(auth.user.emailVerifiedAt)) return true;
-  send(response, 403, { error: "排行榜提交需要已验证邮箱；邮件系统开放后可在账号设置中绑定并验证", code: "EMAIL_VERIFICATION_REQUIRED" });
-  return false;
-}
-
 function publicSession(session, currentTokenHash, tokenHash) {
   return {
     id: session.id,
@@ -754,18 +853,127 @@ function cloudSaveMetadata(save, slot = "main") {
 }
 
 function validateSavePayload(payload) {
-  if (typeof payload !== "string" || payload.length < 10 || Buffer.byteLength(payload) > BODY_LIMIT_BYTES - 1024) return false;
+  if (typeof payload !== "string" || payload.length < 10 || Buffer.byteLength(payload) > SAVE_PAYLOAD_LIMIT_BYTES) return false;
   try {
-    const parsed = JSON.parse(payload);
+    const integrity = inspectSavePayloadIntegrity(payload);
+    if (!integrity.valid) return false;
+    const parsed = integrity.parsed;
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities) ||
-      !Number.isInteger(state.version) || state.version < 1 || state.version > 34) return false;
+      !Number.isInteger(state.version) || state.version < 1 || state.version > 46) return false;
+    if (state.version >= 38 && !Array.isArray(state.belts)) return false;
+    if (state.belts !== undefined && (!Array.isArray(state.belts) || state.belts.some((belt) =>
+      state.version >= 38
+        ? !Number.isInteger(belt?.lanes) || belt.lanes < 1 || belt.lanes > 4_096 || state.version >= 40 && (
+          !Number.isInteger(belt?.tier) || belt.tier < 1 || belt.tier > 32 ||
+          !Number.isFinite(belt?.progress) || belt.progress < 0 || belt.progress > 100_000_000)
+        : belt?.lanes !== undefined && (!Number.isInteger(belt.lanes) || belt.lanes < 1 || belt.lanes > 4_096)))) return false;
     const validBufferLimit = (value) => Number.isInteger(value) && value >= 1_000 && value <= 100_000_000;
     const productionLimit = state.settings?.productionBufferLimit;
     const logisticsLimit = state.settings?.logisticsBufferLimit;
     if (state.version >= 32 && (!validBufferLimit(productionLimit) || !validBufferLimit(logisticsLimit))) return false;
     if (productionLimit !== undefined && !validBufferLimit(productionLimit)) return false;
     if (logisticsLimit !== undefined && !validBufferLimit(logisticsLimit)) return false;
+    if (state.version >= 40) {
+      if (!validBufferLimit(state.settings?.beltBufferLimit)) return false;
+      if (!Array.isArray(state.contentPacks) || state.contentPacks.length > 64 || state.contentPacks.some((entry) =>
+        !entry || typeof entry !== "object" || typeof entry.id !== "string" || !/^[a-z][a-z0-9_]{1,63}$/.test(entry.id) ||
+        typeof entry.version !== "string" || entry.version.length > 40 || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(entry.version))) return false;
+    }
+    if (state.version >= 42) {
+      const planetMetadata = state.galaxy?.planetMetadata;
+      const systemMetadata = state.galaxy?.systemMetadata;
+      if (!planetMetadata || typeof planetMetadata !== "object" || Array.isArray(planetMetadata) ||
+        Object.keys(planetMetadata).length > 256 || Object.values(planetMetadata).some((metadata) =>
+          !metadata || typeof metadata !== "object" || Array.isArray(metadata) ||
+          typeof metadata.customName !== "string" || metadata.customName.length > 32 ||
+          typeof metadata.note !== "string" || metadata.note.length > 240 ||
+          !Array.isArray(metadata.tags) || metadata.tags.length > 8 || metadata.tags.some((tag) => typeof tag !== "string" || tag.length < 1 || tag.length > 16))) return false;
+      if (!systemMetadata || typeof systemMetadata !== "object" || Array.isArray(systemMetadata) ||
+        Object.keys(systemMetadata).length > 64 || Object.values(systemMetadata).some((metadata) =>
+          !metadata || typeof metadata !== "object" || Array.isArray(metadata) ||
+          typeof metadata.customName !== "string" || metadata.customName.length < 1 || metadata.customName.length > 32)) return false;
+    }
+    if (state.version === 43) {
+      const decimal = (value) => typeof value === "string" && /^(0|[1-9][0-9]{0,255})$/.test(value);
+      const stationMap = state.systemSpaceStations;
+      if (!stationMap || typeof stationMap !== "object" || Array.isArray(stationMap) || Object.keys(stationMap).length > 8) return false;
+      for (const [systemId, station] of Object.entries(stationMap)) {
+        if (!/^[a-z][a-z0-9_]{1,31}$/.test(systemId) || !station || typeof station !== "object" ||
+          station.systemId !== systemId || !["not-started", "building", "operational"].includes(station.status) ||
+          !Number.isSafeInteger(station.costRevision) || station.costRevision < 0 ||
+          ![8_000, 9_000, 10_000].includes(station.costMultiplierBasisPoints) ||
+          !Number.isSafeInteger(station.phaseIndex) || station.phaseIndex < 0 || station.phaseIndex > 16 ||
+          !station.delivered || typeof station.delivered !== "object" || Array.isArray(station.delivered) ||
+          Object.entries(station.delivered).some(([itemId, amount]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !decimal(amount)) ||
+          !station.inventory || typeof station.inventory !== "object" || Array.isArray(station.inventory) ||
+          Object.entries(station.inventory).some(([itemId, amount]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !decimal(amount)) ||
+          !station.modules || typeof station.modules !== "object" ||
+          [station.modules.backbone, station.modules.energy, station.modules.interstellar].some((value) => !Number.isSafeInteger(value) || value < 0 || value > 1_000_000) ||
+          !station.routingCursors || typeof station.routingCursors !== "object" ||
+          Object.values(station.routingCursors).some((value) => !Number.isSafeInteger(value) || value < 0) ||
+          !station.viewport || !Number.isFinite(station.viewport.x) || !Number.isFinite(station.viewport.y) ||
+          !Number.isFinite(station.viewport.zoom) || station.viewport.zoom < 0.1 || station.viewport.zoom > 4 ||
+          !Array.isArray(station.decorations) || station.decorations.length > 256) return false;
+        if (station.itemPolicies !== undefined && (!station.itemPolicies || typeof station.itemPolicies !== "object" || Array.isArray(station.itemPolicies) ||
+          Object.entries(station.itemPolicies).some(([itemId, policy]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !policy || typeof policy !== "object" ||
+            typeof policy.interstellarEnabled !== "boolean" || !decimal(policy.reserve) || !decimal(policy.target)))) return false;
+      }
+      const network = state.galacticHubNetwork;
+      if (!network || typeof network !== "object" || Array.isArray(network) ||
+        !Number.isSafeInteger(network.fleetInstalled) || network.fleetInstalled < 0 || network.fleetInstalled > 1_000_000_000 ||
+        !Number.isSafeInteger(network.fleetBusy) || network.fleetBusy < 0 || network.fleetBusy > 1_000_000_000 ||
+        !decimal(network.warpers) || !decimal(network.warperTarget) || !Array.isArray(network.fleetReturns) || network.fleetReturns.length > 4_096 ||
+        network.fleetReturns.some((bucket) => !bucket || typeof bucket.routeKey !== "string" || bucket.routeKey.length < 1 || bucket.routeKey.length > 160 ||
+          !Number.isSafeInteger(bucket.returnAtSecond) || bucket.returnAtSecond < 0 || !Number.isSafeInteger(bucket.vesselCount) || bucket.vesselCount < 1)) return false;
+      for (const entity of state.entities) {
+        if (entity?.buildingId !== "interstellar_logistics_station") continue;
+        if (entity.stationTier !== 1 && entity.stationTier !== 2) return false;
+        if (entity.stationOperationMode !== "legacy" && entity.stationOperationMode !== "elevator") return false;
+        if (entity.stationModeTransition !== null && entity.stationModeTransition !== "to-elevator" && entity.stationModeTransition !== "to-legacy") return false;
+        if (!Array.isArray(entity.elevatorOutputItems) || entity.elevatorOutputItems.length !== 5 || entity.elevatorOutputItems.some((itemId) => itemId !== null && (typeof itemId !== "string" || !/^[a-z][a-z0-9_]{1,80}$/.test(itemId)))) return false;
+      }
+      if ((state.belts ?? []).some((belt) => belt.elevatorOutputIndex !== undefined &&
+        (!Number.isInteger(belt.elevatorOutputIndex) || belt.elevatorOutputIndex < 0 || belt.elevatorOutputIndex > 4))) return false;
+    }
+    if (state.version >= 44) {
+      const quantum = state.quantumLogisticsNetwork;
+      const decimal = (value) => typeof value === "string" && /^(0|[1-9][0-9]{0,255})$/.test(value);
+      if (!quantum || typeof quantum !== "object" || Array.isArray(quantum) || typeof quantum.enabled !== "boolean" ||
+        !quantum.inventory || typeof quantum.inventory !== "object" || Array.isArray(quantum.inventory) ||
+        Object.entries(quantum.inventory).some(([itemId, amount]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !decimal(amount)) ||
+        !quantum.routingCursors || typeof quantum.routingCursors !== "object" || Array.isArray(quantum.routingCursors) ||
+        Object.entries(quantum.routingCursors).some(([itemId, cursor]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !Number.isSafeInteger(cursor) || cursor < 0)) return false;
+      if (state.version >= 45) {
+        const validCapacity = (value) => decimal(value) && BigInt(value) >= 10_000n && BigInt(value) <= 10_000_000_000n;
+        if (!quantum.itemCapacities || typeof quantum.itemCapacities !== "object" || Array.isArray(quantum.itemCapacities) ||
+          Object.entries(quantum.itemCapacities).some(([itemId, amount]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !validCapacity(amount)) ||
+          !quantum.uploadRoutingCursors || typeof quantum.uploadRoutingCursors !== "object" || Array.isArray(quantum.uploadRoutingCursors) ||
+          Object.entries(quantum.uploadRoutingCursors).some(([itemId, cursor]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !Number.isSafeInteger(cursor) || cursor < 0) ||
+          quantum.runtimeFlow !== undefined) return false;
+      }
+      for (const entity of state.entities) {
+        const quantumEndpoint = entity?.buildingId === "interstellar_logistics_station" ||
+          state.version >= 45 && entity?.buildingId === "orbital_collector";
+        if (!quantumEndpoint && entity?.quantumTarget !== undefined && entity.quantumTarget !== false) return false;
+        if (!quantumEndpoint) continue;
+        if (entity.quantumMode !== undefined && !["legacy", "transitioning", "quantum"].includes(entity.quantumMode)) return false;
+        if (state.version >= 45 && !["legacy", "transitioning", "quantum"].includes(entity.quantumMode)) return false;
+        const transition = entity.quantumTransition;
+        if (transition !== undefined && transition !== null) {
+          if (!transition || typeof transition !== "object" || !["quantum", "legacy"].includes(transition.targetMode) ||
+            !Number.isFinite(transition.startedAtSecond) || transition.startedAtSecond < 0 ||
+            !Number.isFinite(transition.boundarySecond) || transition.boundarySecond < 0 || !Array.isArray(transition.bridges) || transition.bridges.length > 256 ||
+            transition.bridges.some((bridge) => !bridge || typeof bridge !== "object" || typeof bridge.id !== "string" || bridge.id.length > 160 ||
+              !/^[a-z][a-z0-9_]{1,80}$/.test(bridge.itemId) || typeof bridge.sourceStationId !== "string" || typeof bridge.targetStationId !== "string" ||
+              !decimal(bridge.cargo) || !decimal(bridge.remainingCargo) || !Number.isFinite(bridge.arriveAtSecond) || bridge.arriveAtSecond < 0)) return false;
+        }
+      }
+    }
+    if (state.planetTrayItemLimits !== undefined) {
+      if (!state.planetTrayItemLimits || typeof state.planetTrayItemLimits !== "object" || Array.isArray(state.planetTrayItemLimits) ||
+        Object.values(state.planetTrayItemLimits).some((value) => !validBufferLimit(value))) return false;
+    }
     if (state.version >= 33) {
       const proliferatorLimit = state.settings?.proliferatorBufferLimit;
       if (!Number.isInteger(proliferatorLimit) || proliferatorLimit < 1 || proliferatorLimit > 100_000) return false;
@@ -784,6 +992,106 @@ function validateSavePayload(payload) {
         if (progress.historicalLevel !== undefined &&
           (!Number.isInteger(progress.historicalLevel) || progress.historicalLevel < progress.level)) return false;
         if (typeof progress.progress !== "string" || !/^(0|[1-9][0-9]{0,63})$/.test(progress.progress)) return false;
+      }
+    }
+    if (state.version >= 37 && state.entities.some((entity) => entity?.resourceDepletionRemainder !== undefined &&
+      (!Number.isInteger(entity.resourceDepletionRemainder) || entity.resourceDepletionRemainder < 0 || entity.resourceDepletionRemainder > 9))) return false;
+    if (state.version >= 38) {
+      const destroyed = state.constructionAutomation?.destroyedByproducts;
+      if (!destroyed || typeof destroyed !== "object" || Array.isArray(destroyed) ||
+        Object.entries(destroyed).some(([itemId, amount]) => !/^[a-z][a-z0-9_]{1,80}$/.test(itemId) || !Number.isSafeInteger(amount) || amount < 0)) return false;
+      if (!Array.isArray(state.blueprints) || state.blueprints.some((blueprint) => {
+        if (!blueprint || typeof blueprint !== "object" || !Array.isArray(blueprint.entities) || !Array.isArray(blueprint.belts) ||
+          (blueprint.resourceAnchors !== undefined && !Array.isArray(blueprint.resourceAnchors))) return true;
+        const keys = new Set();
+        const blueprintEntityByKey = new Map();
+        for (const entity of blueprint.entities) {
+          if (typeof entity?.key !== "string" || keys.has(entity.key)) return true;
+          keys.add(entity.key);
+          blueprintEntityByKey.set(entity.key, entity);
+          if (state.version >= 41 && entity.targetDysonOrbitId !== undefined &&
+            (entity.buildingId !== "em_rail_ejector" || typeof entity.targetDysonOrbitId !== "string" ||
+              entity.targetDysonOrbitId.length < 1 || entity.targetDysonOrbitId.length > 160)) return true;
+          if (state.version >= 39 && entity.buildingId === "material_delivery_hub" &&
+            (!Array.isArray(entity.deliverySlots) || entity.deliverySlots.length !== 3 || entity.deliverySlots.some((slot) =>
+              !slot || !["auto", "manual", "disabled"].includes(slot.mode) ||
+              (slot.mode === "disabled" ? slot.itemId !== null : slot.mode === "manual"
+                ? typeof slot.itemId !== "string" || !/^[a-z][a-z0-9_]{1,80}$/.test(slot.itemId)
+                : !(slot.itemId === null || typeof slot.itemId === "string" && /^[a-z][a-z0-9_]{1,80}$/.test(slot.itemId)))))) return true;
+        }
+        for (const anchor of blueprint.resourceAnchors ?? []) {
+          if (!anchor || typeof anchor.key !== "string" || keys.has(anchor.key) || typeof anchor.resourceId !== "string" ||
+            typeof anchor.extractorBuildingId !== "string" || !Number.isInteger(anchor.minerCount) || anchor.minerCount < 1 || anchor.minerCount > 10_000 ||
+            !Number.isFinite(anchor.offset?.x) || !Number.isFinite(anchor.offset?.y)) return true;
+          keys.add(anchor.key);
+        }
+        if (keys.size < 1) return true;
+        return blueprint.belts.some((belt) => {
+          if (!keys.has(belt?.sourceKey) || !keys.has(belt?.targetKey) ||
+            !Number.isInteger(belt?.lanes) || belt.lanes < 1 || belt.lanes > 4_096) return true;
+          if (belt.targetPortIndex === undefined) return false;
+          const targetTemplate = blueprintEntityByKey.get(belt.targetKey);
+          return ![0, 1, 2].includes(belt.targetPortIndex) ||
+            (targetTemplate?.buildingId !== "micro_black_hole_connector" && targetTemplate?.buildingId !== "material_delivery_hub");
+        });
+      })) return false;
+    }
+    if (state.version >= 46) {
+      const validId = (value, maximum = 160) => typeof value === "string" && value.length >= 1 && value.length <= maximum;
+      const validBlueprintDefinition = (blueprint) => {
+        if (!blueprint || typeof blueprint !== "object" || !validId(blueprint.id) || !validId(blueprint.name, 32) ||
+          !Number.isSafeInteger(blueprint.revision) || blueprint.revision < 1 || !Array.isArray(blueprint.entities) ||
+          blueprint.entities.length > 100_000 || !Array.isArray(blueprint.belts) || blueprint.belts.length > 250_000 ||
+          (blueprint.resourceAnchors !== undefined && (!Array.isArray(blueprint.resourceAnchors) || blueprint.resourceAnchors.length > 256))) return false;
+        const keys = new Set();
+        for (const entity of blueprint.entities) {
+          if (!entity || typeof entity !== "object" || !validId(entity.key) || keys.has(entity.key) || !validId(entity.buildingId, 80) ||
+            !Number.isSafeInteger(entity.machineCount) || entity.machineCount < 1 || entity.machineCount > 100_000_000 ||
+            !Number.isFinite(entity.offset?.x) || !Number.isFinite(entity.offset?.y) ||
+            (entity.quantumTarget !== undefined &&
+              (entity.buildingId === "interstellar_logistics_station"
+                ? typeof entity.quantumTarget !== "boolean"
+                : entity.quantumTarget !== false))) return false;
+          keys.add(entity.key);
+        }
+        for (const anchor of blueprint.resourceAnchors ?? []) {
+          if (!anchor || typeof anchor !== "object" || !validId(anchor.key) || keys.has(anchor.key) || !validId(anchor.resourceId, 80) ||
+            !validId(anchor.extractorBuildingId, 80) || !Number.isInteger(anchor.minerCount) || anchor.minerCount < 1 || anchor.minerCount > 10_000 ||
+            !Number.isFinite(anchor.offset?.x) || !Number.isFinite(anchor.offset?.y)) return false;
+          keys.add(anchor.key);
+        }
+        if (keys.size < 1) return false;
+        return blueprint.belts.every((belt) => belt && typeof belt === "object" && validId(belt.key) && keys.has(belt.sourceKey) && keys.has(belt.targetKey) &&
+          belt.sourceKey !== belt.targetKey && validId(belt.itemId, 80) && Number.isInteger(belt.lanes) && belt.lanes >= 1 && belt.lanes <= 4_096 &&
+          Number.isInteger(belt.tier) && belt.tier >= 1 && belt.tier <= 32 && [0, 1, 2].includes(belt.priority));
+      };
+      if (!Array.isArray(state.blueprints) || state.blueprints.some((blueprint) => !validBlueprintDefinition(blueprint)) ||
+        !Array.isArray(state.blueprintVersions) || state.blueprintVersions.length > 100) return false;
+      const snapshotById = new Map();
+      for (const snapshot of state.blueprintVersions) {
+        if (!snapshot || typeof snapshot !== "object" || !validId(snapshot.id, 200) || snapshotById.has(snapshot.id) ||
+          !validId(snapshot.blueprintId) || !Number.isSafeInteger(snapshot.revision) || snapshot.revision < 1 ||
+          !validBlueprintDefinition(snapshot.definition) || snapshot.definition.id !== snapshot.blueprintId ||
+          snapshot.definition.revision !== snapshot.revision) return false;
+        snapshotById.set(snapshot.id, snapshot);
+      }
+      if (!Array.isArray(state.constructionQueue) || state.constructionQueue.length > 100) return false;
+      for (const entry of state.constructionQueue) {
+        const snapshot = entry && typeof entry === "object" ? snapshotById.get(entry.blueprintVersionId) : undefined;
+        const validInventory = (value, allowedKeys) => value && typeof value === "object" && !Array.isArray(value) &&
+          Object.entries(value).every(([key, amount]) => allowedKeys(key) && Number.isSafeInteger(amount) && amount >= 0);
+        if (!entry || typeof entry !== "object" || !validId(entry.id) || !snapshot || entry.blueprintId !== snapshot.blueprintId ||
+          entry.blueprintRevision !== snapshot.revision || !validId(entry.blueprintName, 32) || !validId(entry.planetId, 80) ||
+          !Number.isFinite(entry.position?.x) || !Number.isFinite(entry.position?.y) || ![0, 90, 180, 270].includes(entry.rotation) ||
+          !["none", "horizontal", "vertical"].includes(entry.mirror) || !Number.isFinite(entry.queuedAt) || entry.queuedAt < 0 ||
+          !["pending-materials", "waiting-fleet"].includes(entry.status) ||
+          !validInventory(entry.reservedConstruction, (key) => /^[a-z][a-z0-9_]{1,80}$/.test(key)) ||
+          !validInventory(entry.reservedFleet, (key) => key === "logistics_drone" || key === "logistics_vessel") ||
+          !entry.placedEntityIdsByKey || typeof entry.placedEntityIdsByKey !== "object" || Array.isArray(entry.placedEntityIdsByKey) ||
+          Object.entries(entry.placedEntityIdsByKey).some(([key, entityId]) => !validId(key) || !validId(entityId, 200))) return false;
+        if (entry.status === "waiting-fleet" && (Object.keys(entry.reservedConstruction).length > 0 || Object.keys(entry.reservedFleet).length > 0 ||
+          !Number.isFinite(entry.buildingCompletedAt) || entry.buildingCompletedAt < 0)) return false;
+        if (entry.status === "pending-materials" && Object.keys(entry.placedEntityIdsByKey).length > 0) return false;
       }
     }
     if (state.version >= 34) {
@@ -810,6 +1118,15 @@ function validateSavePayload(payload) {
       }
       for (const entity of state.entities) {
         if (entity?.buildingId === "time_warp_device" && (!Number.isInteger(entity.machineCount) || entity.machineCount !== 1)) return false;
+        if (state.version >= 41 && entity?.buildingId === "em_rail_ejector" &&
+          (typeof entity.targetDysonOrbitId !== "string" || entity.targetDysonOrbitId.length < 1 || entity.targetDysonOrbitId.length > 160)) return false;
+        if (state.version >= 39 && entity?.buildingId === "material_delivery_hub") {
+          if (!Array.isArray(entity.deliverySlots) || entity.deliverySlots.length !== 3 || entity.deliverySlots.some((slot) =>
+            !slot || !["auto", "manual", "disabled"].includes(slot.mode) ||
+            (slot.mode === "disabled" ? slot.itemId !== null : slot.mode === "manual"
+              ? typeof slot.itemId !== "string" || !/^[a-z][a-z0-9_]{1,80}$/.test(slot.itemId)
+              : !(slot.itemId === null || typeof slot.itemId === "string" && /^[a-z][a-z0-9_]{1,80}$/.test(slot.itemId))))) return false;
+        }
         if (entity?.buildingId !== "micro_black_hole_connector") continue;
         if (!Number.isInteger(entity.machineCount) || entity.machineCount !== 1 ||
           typeof entity.blackHolePaused !== "boolean" || typeof entity.blackHoleActivationConfirmed !== "boolean" ||
@@ -825,11 +1142,16 @@ function validateSavePayload(payload) {
           const key = `${belt.target}:${belt.targetPortIndex}`;
           if (occupiedBlackHolePorts.has(key)) return false;
           occupiedBlackHolePorts.add(key);
+        } else if (state.version >= 39 && target?.buildingId === "material_delivery_hub") {
+          if (![0, 1, 2].includes(belt.targetPortIndex)) return false;
+          const slot = target.deliverySlots?.[belt.targetPortIndex];
+          if (!slot || slot.mode === "disabled" || typeof belt.itemId !== "string" || slot.itemId !== belt.itemId) return false;
         } else if (belt?.targetPortIndex !== undefined) {
           return false;
         }
       }
     }
+    if (state.version >= 35 && state.entities.some((entity) => typeof entity?.interactionLocked !== "boolean")) return false;
     return true;
   } catch {
     return false;
@@ -849,7 +1171,7 @@ function numberAt(value, fallback = 0) {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }
 
-function metricsSupportedBySave(save) {
+function leaderboardMetricsFromSave(save) {
   const state = parseSaveState(save?.payload);
   if (!state || typeof state !== "object") return null;
   const generationKw = numberAt(state.metrics?.generationKw);
@@ -857,29 +1179,95 @@ function metricsSupportedBySave(save) {
   const producedWhiteMatrix = Math.floor(numberAt(state.totalProduced?.universe_matrix));
   const exploredSystems = Array.isArray(state.exploration?.unlockedSystemIds) ? new Set(state.exploration.unlockedSystemIds).size : 1;
   const colonizedPlanets = Array.isArray(state.exploration?.colonizedPlanetIds) ? new Set(state.exploration.colonizedPlanetIds).size : 1;
-  const dysonPowerKw = Math.max(numberAt(state.dysonSphere?.generationKw), numberAt(state.metrics?.rayGenerationKw));
+  const dysonPowerKw = saturatingMetricAdd(state.dysonSwarm?.generationKw, state.dysonSphere?.generationKw);
   const throughput = numberAt(state.metrics?.totalItemsPerMinute);
-  return {
-    energyGeneratedMj: generationKw * elapsedSeconds / 1000 * 1.25 + 1000,
+  return normalizeMetrics({
+    energyGeneratedMj: saturatingMetricProduct(generationKw, elapsedSeconds / 1000),
     uploadedWhiteMatrix: producedWhiteMatrix,
-    peakGenerationKw: generationKw * 1.25 + 1,
-    peakThroughputPerMinute: throughput * 1.25 + 1,
-    peakDysonPowerKw: dysonPowerKw * 1.25 + 1,
+    peakGenerationKw: generationKw,
+    peakThroughputPerMinute: throughput,
+    peakDysonPowerKw: dysonPowerKw,
     exploredSystems,
     colonizedPlanets,
-  };
+  });
 }
 
-function verifyLeaderboardMetrics(submitted, save, previous) {
-  const supported = metricsSupportedBySave(save);
-  if (!supported) return { ok: false, error: "云存档无法用于成绩校验" };
-  const previousMetrics = previous?.metrics ?? {};
-  const violations = METRIC_KEYS.filter((key) => {
-    const prior = numberAt(previousMetrics[key]);
-    return submitted[key] > Math.max(prior, numberAt(supported[key]));
-  });
-  if (violations.length > 0) return { ok: false, error: `成绩超过云存档可验证范围：${violations.join(", ")}` };
-  return { ok: true, metrics: submitted, supported };
+function mergeLeaderboardMetrics(previous, current) {
+  if (!previous) return current;
+  return normalizeMetrics(Object.fromEntries(METRIC_KEYS.map((key) => [key, Math.max(numberAt(previous[key]), numberAt(current[key]))])));
+}
+
+function removeUserLeaderboardSubmissions(store, userId) {
+  let removed = 0;
+  for (const [key, submission] of Object.entries(store.data.submissions)) {
+    if (submission.userId !== userId && submission.accountId !== userId) continue;
+    delete store.data.submissions[key];
+    removed += 1;
+  }
+  return removed;
+}
+
+function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.now(), force = false } = {}) {
+  const user = store.data.users[userId];
+  if (!user) return { changed: false, submission: null, reason: "missing-user" };
+  if (isLeaderboardRestricted(store.data, userId)) {
+    return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "restricted" };
+  }
+  if (user.leaderboardVisible === false) {
+    return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "hidden" };
+  }
+  const metadata = save ?? store.data.cloudSaves[userId];
+  if (!metadata) return { changed: false, submission: null, reason: "missing-save" };
+  const materialized = typeof metadata.payload === "string" ? metadata : materializeCloudSave(store, userId, "main", metadata);
+  if (!materialized) return { changed: false, submission: null, reason: "missing-payload" };
+  const state = parseSaveState(materialized.payload);
+  if (Array.isArray(state?.contentPacks) && state.contentPacks.length > 0) {
+    return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "modded-save" };
+  }
+  const observed = leaderboardMetricsFromSave(materialized);
+  if (!observed) return { changed: false, submission: null, reason: "invalid-save" };
+  const key = `${ACTIVE_LEADERBOARD_SEASON_ID}:${userId}`;
+  const previous = store.data.submissions[key];
+  if (!force
+    && previous?.verification?.strategy === "main-cloud-save-v1"
+    && previous.verification.cloudRevision === materialized.revision
+    && previous.displayName === user.displayName
+    && previous.visible !== false) {
+    return { changed: false, submission: previous, reason: "current" };
+  }
+  const previousServerMetrics = previous?.verification?.strategy === "main-cloud-save-v1" ? previous.metrics : null;
+  const metrics = mergeLeaderboardMetrics(previousServerMetrics, observed);
+  const submission = {
+    userId,
+    accountId: userId,
+    displayName: user.displayName,
+    avatar: user.displayName.trim().slice(0, 1).toUpperCase() || "A",
+    seasonId: ACTIVE_LEADERBOARD_SEASON_ID,
+    metrics,
+    submittedAt: Number.isFinite(materialized.updatedAt) ? materialized.updatedAt : now,
+    visible: true,
+    verification: {
+      strategy: "main-cloud-save-v1",
+      cloudRevision: materialized.revision,
+      checksum: materialized.checksum,
+      checkedAt: now,
+    },
+  };
+  store.data.submissions[key] = submission;
+  return { changed: true, submission, reason: previous ? "updated" : "created" };
+}
+
+function backfillLeaderboardFromMainSaves(store) {
+  const summary = { changed: 0, created: 0, updated: 0, hidden: 0, skipped: 0 };
+  for (const userId of Object.keys(store.data.users).sort()) {
+    const result = updateLeaderboardFromMainSave(store, userId);
+    if (result.changed) summary.changed += 1;
+    if (result.reason === "created") summary.created += 1;
+    else if (result.reason === "updated") summary.updated += 1;
+    else if (result.reason === "hidden") summary.hidden += 1;
+    else summary.skipped += 1;
+  }
+  return summary;
 }
 
 function normalizedCloudSaveSlot(value) {
@@ -1089,6 +1477,9 @@ export async function createCloudServer({
       if (error?.code !== "ENOENT") logger.error?.("legacy cloud data migration failed", error);
     }
   }
+  const startupAuthCleanup = cleanupExpiredAuthRecords(store.data);
+  const leaderboardBackfill = backfillLeaderboardFromMainSaves(store);
+  if (leaderboardBackfill.changed > 0 || startupAuthCleanup.total > 0) await store.persist();
   const startedAt = Date.now();
   const galacticActivityConfig = activityConfig ? normalizeActivityConfig(activityConfig) : await loadActivityConfig(activityConfigFile);
   const rateLimit = createRateLimiter();
@@ -1136,7 +1527,12 @@ export async function createCloudServer({
     ? "custom"
     : tencentSesMailer ? "tencent-ses" : webhookMailer ? "webhook" : "disabled";
 
-  const flushMetrics = setInterval(() => void store.persist().catch((error) => logger.error?.("cloud metrics persistence failed", error)), 60_000);
+  const flushMetrics = setInterval(() => {
+    cleanupExpiredAuthRecords(store.data);
+    rateLimit.cleanup();
+    registrationRateLimit.cleanup();
+    void store.persist().catch((error) => logger.error?.("cloud metrics persistence failed", error));
+  }, 60_000);
   flushMetrics.unref?.();
   const createBackup = async () => {
     try {
@@ -1317,6 +1713,7 @@ export async function createCloudServer({
           createdAt: now,
           emailVerifiedAt: null,
           passwordChangedAt: now,
+          leaderboardVisible: true,
           ...credentials,
         };
         store.data.users[user.id] = user;
@@ -1524,6 +1921,7 @@ export async function createCloudServer({
         delete store.data.cloudSaveHistory[userId];
         delete store.data.cloudSaveSlots[userId];
         delete store.data.cloudSaveSlotHistory[userId];
+        delete store.data.leaderboardModeration[userId];
         store.discardUserCloudSavePayloads?.(userId);
         for (const [key, submission] of Object.entries(store.data.submissions)) {
           if (submission.userId === userId) delete store.data.submissions[key];
@@ -1565,7 +1963,22 @@ export async function createCloudServer({
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
         if (!slot) return send(response, 400, { error: "云存档槽位无效" });
         const body = await readJson(request);
-        if (!validateSavePayload(body.payload)) return send(response, 400, { error: "云存档格式无效或体积过大" });
+         if (!validateSavePayload(body.payload)) {
+           const integrity = typeof body.payload === "string" ? inspectSavePayloadIntegrity(body.payload) : null;
+           const summary = typeof body.payload === "string" ? summarizeSavePayload(body.payload) : null;
+           const tooLarge = typeof body.payload === "string" && Buffer.byteLength(body.payload) > SAVE_PAYLOAD_LIMIT_BYTES;
+           return send(response, tooLarge ? 413 : 400, {
+             error: tooLarge
+               ? `云存档体积过大，单个存档不能超过 ${Math.floor(SAVE_PAYLOAD_LIMIT_BYTES / 1024 / 1024 * 100) / 100} MB`
+               : integrity && !integrity.valid && integrity.state
+                 ? "云存档内部完整性校验失败，服务器已拒绝上传"
+                 : "云存档格式无效，服务器已拒绝上传",
+             code: tooLarge
+               ? "SAVE_SIZE_TOO_LARGE"
+               : integrity && !integrity.valid && integrity.state ? "SAVE_INTEGRITY_INVALID" : "SAVE_FORMAT_INVALID",
+             ...(summary ? { summary } : {}),
+           });
+        }
         const current = currentCloudSave(store, auth.user.id, slot);
         const expectedRevision = Number.isInteger(body.expectedRevision) ? body.expectedRevision : 0;
         if ((current?.revision ?? 0) !== expectedRevision) {
@@ -1581,6 +1994,7 @@ export async function createCloudServer({
           summary: summarizeSavePayload(body.payload),
         };
         appendSaveRevision(store, auth.user.id, next, slot);
+        if (slot === "main") updateLeaderboardFromMainSave(store, auth.user.id, { save: next });
         dayMetric.cloudUploads += 1;
         await store.persist();
         return send(response, 200, { cloudSave: cloudSaveMetadata(next, slot) });
@@ -1610,17 +2024,41 @@ export async function createCloudServer({
           restoredFromRevision: sourceRevision,
         };
         appendSaveRevision(store, auth.user.id, restored, slot);
+        if (slot === "main") updateLeaderboardFromMainSave(store, auth.user.id, { save: restored });
         dayMetric.cloudUploads += 1;
         appendAudit(store, request, "cloud.revision_restored", auth.user.id);
         await store.persist();
         return send(response, 200, { cloudSave: cloudSaveMetadata(restored, slot) });
       }
 
+      if (request.method === "POST" && url.pathname === "/api/leaderboard/visibility") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        const body = await readJson(request);
+        if (typeof body.visible !== "boolean") return send(response, 400, { error: "排行榜可见性设置无效" });
+        if (body.visible && isLeaderboardRestricted(store.data, auth.user.id)) {
+          return send(response, 403, { error: "当前账号暂时不能加入官方排行榜", code: LEADERBOARD_RESTRICTED_CODE });
+        }
+        auth.user.leaderboardVisible = body.visible;
+        const result = body.visible
+          ? updateLeaderboardFromMainSave(store, auth.user.id, { force: true })
+          : { changed: removeUserLeaderboardSubmissions(store, auth.user.id) > 0, submission: null, reason: "hidden" };
+        appendAudit(store, request, body.visible ? "leaderboard.visibility_enabled" : "leaderboard.visibility_disabled", auth.user.id);
+        await store.persist();
+        return send(response, 200, {
+          visible: body.visible,
+          user: publicUser(auth.user),
+          submission: result.submission,
+          autoJoined: Boolean(result.submission),
+        });
+      }
+
       if (request.method === "GET" && url.pathname === "/api/leaderboard") {
         const category = VALID_CATEGORIES.has(url.searchParams.get("category")) ? url.searchParams.get("category") : "galaxy";
-        const seasonId = VALID_SEASONS.has(url.searchParams.get("seasonId")) ? url.searchParams.get("seasonId") : "season_01";
+        const seasonId = VALID_SEASONS.has(url.searchParams.get("seasonId")) ? url.searchParams.get("seasonId") : ACTIVE_LEADERBOARD_SEASON_ID;
         const entries = Object.values(store.data.submissions)
-          .filter((entry) => entry.seasonId === seasonId)
+          .filter((entry) => entry.seasonId === seasonId && entry.visible !== false &&
+            store.data.users[entry.userId]?.leaderboardVisible !== false && !isLeaderboardRestricted(store.data, entry.userId))
           .map((entry) => ({ ...entry, value: categoryValue(entry.metrics, category), verified: Boolean(entry.verification?.cloudRevision) }))
           .sort((left, right) => right.value - left.value || left.userId.localeCompare(right.userId))
           .slice(0, 100)
@@ -1631,34 +2069,23 @@ export async function createCloudServer({
       if (request.method === "POST" && url.pathname === "/api/leaderboard") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
-        if (!requireLeaderboardVerifiedUser(response, auth)) return;
+        if (isLeaderboardRestricted(store.data, auth.user.id)) {
+          removeUserLeaderboardSubmissions(store, auth.user.id);
+          await store.persist();
+          return send(response, 403, { error: "当前账号暂时不能加入官方排行榜", code: LEADERBOARD_RESTRICTED_CODE });
+        }
         const body = await readJson(request);
-        const seasonId = VALID_SEASONS.has(body.seasonId) ? body.seasonId : "season_01";
-        if (seasonId !== "season_01") return send(response, 409, { error: "历史赛季已封存" });
-        const metrics = normalizeMetrics(body.metrics);
-        if (!METRIC_KEYS.some((key) => metrics[key] > 0)) return send(response, 400, { error: "没有可上传的工业数据" });
-        const key = `${seasonId}:${auth.user.id}`;
-        const previous = store.data.submissions[key];
-        const cloudSaveMetadataRecord = store.data.cloudSaves[auth.user.id];
-        if (!cloudSaveMetadataRecord) return send(response, 409, { error: "请先上传当前云存档，再提交排行榜成绩" });
-        const cloudSave = materializeCloudSave(store, auth.user.id, "main", cloudSaveMetadataRecord);
-        if (!cloudSave) return send(response, 500, { error: "云存档正文缺失，暂时无法校验排行榜成绩", code: "CLOUD_SAVE_PAYLOAD_MISSING" });
-        const verification = verifyLeaderboardMetrics(metrics, cloudSave, previous);
-        if (!verification.ok) return send(response, 422, { error: verification.error });
-        const merged = previous ? normalizeMetrics(Object.fromEntries(METRIC_KEYS.map((metric) => [metric, Math.max(previous.metrics[metric] ?? 0, metrics[metric] ?? 0)]))) : metrics;
-        store.data.submissions[key] = {
-          userId: auth.user.id,
-          accountId: auth.user.id,
-          displayName: auth.user.displayName,
-          avatar: auth.user.displayName.slice(0, 1).toUpperCase(),
-          seasonId,
-          metrics: merged,
-          submittedAt: Date.now(),
-          verification: { cloudRevision: cloudSave.revision, checksum: cloudSave.checksum, checkedAt: Date.now() },
-        };
+        const seasonId = VALID_SEASONS.has(body.seasonId) ? body.seasonId : ACTIVE_LEADERBOARD_SEASON_ID;
+        if (seasonId !== ACTIVE_LEADERBOARD_SEASON_ID) return send(response, 409, { error: "历史赛季已封存" });
+        if (auth.user.leaderboardVisible === false) return send(response, 409, { error: "当前账号已退出公开排行榜" });
+        const result = updateLeaderboardFromMainSave(store, auth.user.id, { force: true });
+        if (result.reason === "missing-save") return send(response, 409, { error: "请先上传当前主云存档，再刷新排行榜" });
+        if (result.reason === "missing-payload") return send(response, 500, { error: "云存档正文缺失，暂时无法刷新排行榜", code: "CLOUD_SAVE_PAYLOAD_MISSING" });
+        if (result.reason === "modded-save") return send(response, 422, { error: "启用内容包的存档不参与官方排行榜" });
+        if (result.reason === "invalid-save" || !result.submission) return send(response, 422, { error: "主云存档无法用于排行榜计算" });
         dayMetric.leaderboardSubmissions += 1;
         await store.persist();
-        return send(response, 200, { submission: store.data.submissions[key], verified: true });
+        return send(response, 200, { submission: result.submission, verified: true, source: "main-cloud-save" });
       }
 
       if (request.method === "POST" && (url.pathname === "/api/feedback" || url.pathname === "/api/errors")) {
@@ -1686,11 +2113,15 @@ export async function createCloudServer({
       runtime.errors += 1;
       dayMetric.errors += 1;
       logger.error?.("cloud request failed", error);
-      return send(response, error?.statusCode || 500, { error: error?.statusCode ? error.message : "服务暂时不可用" });
+      return send(response, error?.statusCode || 500, {
+        error: error?.statusCode ? error.message : "服务暂时不可用",
+        ...(error?.code ? { code: error.code } : {}),
+      });
     }
   });
 
   server.store = store;
+  server.leaderboardBackfill = leaderboardBackfill;
   server.on("close", () => {
     clearInterval(flushMetrics);
     if (backupTimer) clearInterval(backupTimer);

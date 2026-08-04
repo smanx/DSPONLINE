@@ -3,10 +3,12 @@ import { scryptSync } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import { after, before, test } from "node:test";
 import Database from "better-sqlite3";
-import { createCloudServer } from "./index.mjs";
+import { cleanupExpiredAuthRecords, createCloudServer, createRateLimiter } from "./index.mjs";
 import { metricDay } from "./analytics.mjs";
+import { computeSaveStateChecksum } from "./save-integrity.mjs";
 
 let directory;
 let server;
@@ -17,18 +19,24 @@ let offsiteBackupStatusFile;
 let restoreDrillStatusFile;
 let nodeHealthStatusFile;
 const adminToken = "test-admin-secret-1234567890-abcdef";
-const cloudPayload = JSON.stringify({
-  formatVersion: 1,
-  savedAt: 123456,
-  checksum: "client-state-checksum",
-  state: {
+function createSavePayload(state, savedAt = 123456) {
+  const envelope = { formatVersion: 2, savedAt, state };
+  return JSON.stringify({ ...envelope, checksum: computeSaveStateChecksum(envelope.formatVersion, state) });
+}
+
+function mutateSavePayload(payload, mutate) {
+  const parsed = JSON.parse(payload);
+  mutate(parsed.state);
+  return createSavePayload(parsed.state, parsed.savedAt);
+}
+
+const cloudPayload = createSavePayload({
     version: 24,
     elapsedSeconds: 1_000_000,
     entities: [],
     totalProduced: { universe_matrix: 10 },
     metrics: { generationKw: 1_000, totalItemsPerMinute: 0, rayGenerationKw: 0 },
     exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
-  },
 });
 
 before(async () => {
@@ -47,6 +55,7 @@ before(async () => {
     restoreDrillStatusFile,
     nodeHealthStatusFile,
     registrationLimit: 100,
+    allowedOrigin: "https://dsponline.cn,https://localhost",
     mailer: async (message) => { mailbox.push(message); return true; },
     logger: { error() {} },
   });
@@ -67,7 +76,74 @@ async function request(route, options = {}) {
   return { response, body: await response.json() };
 }
 
-test("registers by username, preserves the leaderboard email gate and verifies a bound email", async () => {
+test("cleans only expired and orphaned authentication records", () => {
+  const now = 10_000;
+  const data = {
+    users: { active_user: { id: "active_user" } },
+    sessions: {
+      active_session: { userId: "active_user", expiresAt: now + 1 },
+      expired_session: { userId: "active_user", expiresAt: now },
+      orphaned_session: { userId: "missing_user", expiresAt: now + 1_000 },
+    },
+    emailVerifications: {
+      active_verification: { userId: "active_user", expiresAt: now + 1 },
+      expired_verification: { userId: "active_user", expiresAt: now - 1 },
+    },
+    passwordResets: {
+      active_reset: { userId: "active_user", expiresAt: now + 1 },
+      invalid_reset: { userId: "active_user", expiresAt: Number.NaN },
+    },
+  };
+
+  assert.deepEqual(cleanupExpiredAuthRecords(data, now), {
+    sessions: 2,
+    emailVerifications: 1,
+    passwordResets: 1,
+    total: 4,
+  });
+  assert.deepEqual(Object.keys(data.sessions), ["active_session"]);
+  assert.deepEqual(Object.keys(data.emailVerifications), ["active_verification"]);
+  assert.deepEqual(Object.keys(data.passwordResets), ["active_reset"]);
+});
+
+test("rate limiter reclaims expired buckets without resetting active keys", () => {
+  let now = 1_000;
+  const rateLimit = createRateLimiter(() => now);
+  assert.equal(rateLimit("short", 1, 100), true);
+  assert.equal(rateLimit("short", 1, 100), false);
+  assert.equal(rateLimit("long", 1, 1_000), true);
+  now = 1_101;
+  assert.equal(rateLimit.cleanup(), 1);
+  assert.equal(rateLimit("short", 1, 100), true);
+  assert.equal(rateLimit("long", 1, 1_000), false);
+  now = 2_001;
+  assert.equal(rateLimit.cleanup(), 2);
+  assert.equal(rateLimit("long", 1, 1_000), true);
+});
+
+test("authorizes the Android WebView origin and rejects unknown origins", async () => {
+  const android = await request("/api/health", { headers: { origin: "https://localhost" } });
+  assert.equal(android.response.status, 200);
+  assert.equal(android.response.headers.get("access-control-allow-origin"), "https://localhost");
+
+  const preflight = await fetch(`${baseUrl}/api/cloud-save`, {
+    method: "OPTIONS",
+    headers: {
+      origin: "https://localhost",
+      "access-control-request-method": "PUT",
+      "access-control-request-headers": "authorization,content-type",
+    },
+  });
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get("access-control-allow-origin"), "https://localhost");
+  assert.match(preflight.headers.get("access-control-allow-methods") ?? "", /PUT/);
+
+  const unknown = await request("/api/health", { headers: { origin: "https://attacker.invalid" } });
+  assert.equal(unknown.response.status, 403);
+  assert.equal(unknown.response.headers.get("access-control-allow-origin"), null);
+});
+
+test("registers by username, requires a main cloud save for ranking and verifies a bound email", async () => {
   const health = await request("/api/health");
   assert.equal(health.body.mailProvider, "custom");
   assert.equal(health.body.schemaVersion, 7);
@@ -78,15 +154,22 @@ test("registers by username, preserves the leaderboard email gate and verifies a
   assert.equal(registered.body.user.username, "pilot_one");
   assert.equal(registered.body.user.email, "");
   assert.equal(registered.body.user.emailVerified, false);
+  assert.equal(registered.body.user.leaderboardVisible, true);
   token = registered.body.token;
+
+  const anonymousLeaderboard = await request("/api/leaderboard", {
+    method: "POST",
+    body: JSON.stringify({ seasonId: "season_01", metrics: { energyGeneratedMj: 1 } }),
+  });
+  assert.equal(anonymousLeaderboard.response.status, 401);
 
   const blockedLeaderboard = await request("/api/leaderboard", {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
     body: JSON.stringify({ seasonId: "season_01", metrics: { energyGeneratedMj: 1 } }),
   });
-  assert.equal(blockedLeaderboard.response.status, 403);
-  assert.equal(blockedLeaderboard.body.code, "EMAIL_VERIFICATION_REQUIRED");
+  assert.equal(blockedLeaderboard.response.status, 409);
+  assert.match(blockedLeaderboard.body.error, /主云存档/);
 
   const duplicate = await request("/api/auth/register", { method: "POST", body: JSON.stringify({ username: "PILOT_ONE", password: "strong-pass-123", displayName: "另一位工程师" }) });
   assert.equal(duplicate.response.status, 409);
@@ -106,7 +189,7 @@ test("registers by username, preserves the leaderboard email gate and verifies a
   assert.equal(reused.response.status, 400);
 });
 
-test("opens all cloud save functions without mail while keeping leaderboard verification required", async () => {
+test("opens cloud saves and verified leaderboard submissions without a mail provider", async () => {
   const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-no-mail-"));
   let isolatedServer;
   try {
@@ -153,10 +236,14 @@ test("opens all cloud save functions without mail while keeping leaderboard veri
       assert.equal(saved.body.cloudSave.revision, 1);
       assert.equal(saved.body.cloudSave.slot, slot);
     }
+    const autoRanked = await isolatedRequest("/api/leaderboard?category=galaxy&seasonId=season_01");
+    assert.equal(autoRanked.body.entries.length, 1);
+    assert.equal(autoRanked.body.entries[0].metrics.uploadedWhiteMatrix, 10);
+    assert.equal(autoRanked.body.entries[0].verified, true);
     const second = await isolatedRequest("/api/cloud-save", {
       method: "PUT",
       headers,
-      body: JSON.stringify({ payload: cloudPayload.replace('"universe_matrix":10', '"universe_matrix":12'), expectedRevision: 1 }),
+      body: JSON.stringify({ payload: mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = 12; }), expectedRevision: 1 }),
     });
     assert.equal(second.body.cloudSave.revision, 2);
     const history = await isolatedRequest("/api/cloud-save/history", { headers });
@@ -174,13 +261,15 @@ test("opens all cloud save functions without mail while keeping leaderboard veri
     assert.equal(account.body.cloudSaves["2"].revision, 1);
     assert.equal(account.body.cloudSaves["3"].revision, 1);
 
-    const blockedLeaderboard = await isolatedRequest("/api/leaderboard", {
+    const submittedLeaderboard = await isolatedRequest("/api/leaderboard", {
       method: "POST",
       headers,
       body: JSON.stringify({ seasonId: "season_01", metrics: { energyGeneratedMj: 1 } }),
     });
-    assert.equal(blockedLeaderboard.response.status, 403);
-    assert.equal(blockedLeaderboard.body.code, "EMAIL_VERIFICATION_REQUIRED");
+    assert.equal(submittedLeaderboard.response.status, 200);
+    assert.equal(submittedLeaderboard.body.verified, true);
+    assert.equal(submittedLeaderboard.body.submission.verification.cloudRevision, 3);
+    assert.equal(submittedLeaderboard.body.submission.metrics.uploadedWhiteMatrix, 12);
 
     const loggedIn = await isolatedRequest("/api/auth/login", {
       method: "POST",
@@ -188,6 +277,164 @@ test("opens all cloud save functions without mail while keeping leaderboard veri
     });
     assert.equal(loggedIn.response.status, 200);
     assert.equal(loggedIn.body.user.username, "no_mail_pilot");
+  } finally {
+    if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
+    await rm(isolatedDirectory, { recursive: true, force: true });
+  }
+});
+
+test("backfills existing main cloud saves when the service starts", async () => {
+  const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-leaderboard-backfill-"));
+  const databaseFile = path.join(isolatedDirectory, "cloud.sqlite");
+  let isolatedServer;
+  try {
+    isolatedServer = await createCloudServer({ databaseFile, registrationLimit: 10, mailer: null, logger: { error() {} } });
+    await new Promise((resolve) => isolatedServer.listen(0, "127.0.0.1", resolve));
+    let isolatedBaseUrl = `http://127.0.0.1:${isolatedServer.address().port}`;
+    const registeredResponse = await fetch(`${isolatedBaseUrl}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "backfill_pilot", password: "strong-pass-123", displayName: "回填工程师" }),
+    });
+    const registered = await registeredResponse.json();
+    const savedResponse = await fetch(`${isolatedBaseUrl}/api/cloud-save`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", authorization: `Bearer ${registered.token}` },
+      body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }),
+    });
+    assert.equal(savedResponse.status, 200);
+    delete isolatedServer.store.data.submissions[`season_01:${registered.user.id}`];
+    await isolatedServer.store.persist();
+    await new Promise((resolve) => isolatedServer.close(resolve));
+
+    isolatedServer = await createCloudServer({ databaseFile, registrationLimit: 10, mailer: null, logger: { error() {} } });
+    assert.equal(isolatedServer.leaderboardBackfill.created, 1);
+    await new Promise((resolve) => isolatedServer.listen(0, "127.0.0.1", resolve));
+    isolatedBaseUrl = `http://127.0.0.1:${isolatedServer.address().port}`;
+    const rankingResponse = await fetch(`${isolatedBaseUrl}/api/leaderboard?category=galaxy&seasonId=season_01`);
+    const ranking = await rankingResponse.json();
+    assert.equal(ranking.entries.length, 1);
+    assert.equal(ranking.entries[0].displayName, "回填工程师");
+  } finally {
+    if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
+    await rm(isolatedDirectory, { recursive: true, force: true });
+  }
+});
+
+test("keeps leaderboard-restricted accounts out of every ranking path without touching cloud saves", async () => {
+  const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-leaderboard-restricted-"));
+  const databaseFile = path.join(isolatedDirectory, "cloud.sqlite");
+  let isolatedServer;
+  try {
+    const start = async () => {
+      isolatedServer = await createCloudServer({ databaseFile, registrationLimit: 10, mailer: null, logger: { error() {} } });
+      await new Promise((resolve) => isolatedServer.listen(0, "127.0.0.1", resolve));
+      const origin = `http://127.0.0.1:${isolatedServer.address().port}`;
+      const call = async (route, options = {}) => {
+        const response = await fetch(`${origin}${route}`, {
+          ...options,
+          headers: { "content-type": "application/json", ...(options.headers || {}) },
+        });
+        return { response, body: await response.json() };
+      };
+      return { origin, call };
+    };
+    let runtime = await start();
+    const registered = await runtime.call("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ username: "restricted_pilot", password: "strong-pass-123", displayName: "同名工程师" }),
+    });
+    const restrictedToken = registered.body.token;
+    const restrictedUserId = registered.body.user.id;
+    const headers = { authorization: `Bearer ${restrictedToken}` };
+    const anomalousPayload = mutateSavePayload(cloudPayload, (state) => {
+      state.entities = [{ id: "vein_fixture", kind: "vein", machineCount: 1, minerCount: 0 }];
+    });
+    const uploaded = await runtime.call("/api/cloud-save", {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ payload: anomalousPayload, expectedRevision: 0 }),
+    });
+    assert.equal(uploaded.response.status, 200);
+    assert.equal(uploaded.body.cloudSave.revision, 1);
+
+    const ordinary = await runtime.call("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ username: "same_name_pilot", password: "strong-pass-456", displayName: "同名工程师" }),
+    });
+    const ordinaryHeaders = { authorization: `Bearer ${ordinary.body.token}` };
+    assert.equal((await runtime.call("/api/cloud-save", {
+      method: "PUT",
+      headers: ordinaryHeaders,
+      body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }),
+    })).response.status, 200);
+
+    isolatedServer.store.data.leaderboardModeration[restrictedUserId] = {
+      status: "blocked",
+      reasonCode: "SAVE_DATA_INTEGRITY",
+      source: "test-readonly-audit",
+      createdAt: 100,
+    };
+    await isolatedServer.store.persist();
+
+    for (const category of ["galaxy", "power", "upload", "dyson", "throughput"]) {
+      const ranking = await runtime.call(`/api/leaderboard?category=${category}&seasonId=season_01`);
+      assert.equal(ranking.body.entries.some((entry) => entry.userId === restrictedUserId), false);
+      assert.equal(ranking.body.entries.some((entry) => entry.userId === ordinary.body.user.id), true);
+    }
+    const refresh = await runtime.call("/api/leaderboard", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ seasonId: "season_01" }),
+    });
+    assert.equal(refresh.response.status, 403);
+    assert.equal(refresh.body.code, "LEADERBOARD_RESTRICTED");
+    const visibility = await runtime.call("/api/leaderboard/visibility", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ visible: true }),
+    });
+    assert.equal(visibility.response.status, 403);
+    assert.equal(visibility.body.code, "LEADERBOARD_RESTRICTED");
+
+    const secondUpload = await runtime.call("/api/cloud-save", {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ payload: anomalousPayload, expectedRevision: 1 }),
+    });
+    assert.equal(secondUpload.response.status, 200);
+    assert.equal(secondUpload.body.cloudSave.revision, 2);
+    const restored = await runtime.call("/api/cloud-save/restore", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ revision: 1, expectedRevision: 2 }),
+    });
+    assert.equal(restored.response.status, 200);
+    assert.equal(restored.body.cloudSave.revision, 3);
+    const loaded = await runtime.call("/api/cloud-save", { headers });
+    assert.equal(loaded.response.status, 200);
+    assert.equal(loaded.body.cloudSave.revision, 3);
+    const account = await runtime.call("/api/account", { headers });
+    assert.equal(account.response.status, 200);
+    assert.equal(Object.hasOwn(account.body, "leaderboardModeration"), false);
+    assert.equal(Object.hasOwn(account.body.user, "leaderboardModeration"), false);
+
+    await new Promise((resolve) => isolatedServer.close(resolve));
+    runtime = await start();
+    assert.equal(isolatedServer.leaderboardBackfill.created, 0);
+    assert.equal(isolatedServer.store.data.leaderboardModeration[restrictedUserId].status, "blocked");
+    for (const category of ["galaxy", "power", "upload", "dyson", "throughput"]) {
+      const ranking = await runtime.call(`/api/leaderboard?category=${category}&seasonId=season_01`);
+      assert.equal(ranking.body.entries.some((entry) => entry.userId === restrictedUserId), false);
+    }
+
+    const deleted = await runtime.call("/api/account/delete", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ password: "strong-pass-123", confirmation: "DELETE" }),
+    });
+    assert.equal(deleted.response.status, 200);
+    assert.equal(isolatedServer.store.data.leaderboardModeration[restrictedUserId], undefined);
   } finally {
     if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
     await rm(isolatedDirectory, { recursive: true, force: true });
@@ -301,7 +548,7 @@ test("deduplicates anonymous players and reports total, daily and online counts"
 
   const oversized = await request("/api/presence", {
     method: "POST",
-    body: JSON.stringify({ playerId: firstId, padding: "x".repeat(8 * 1024 * 1024) }),
+    body: JSON.stringify({ playerId: firstId, padding: "x".repeat(32 * 1024 * 1024) }),
   });
   assert.equal(oversized.response.status, 413);
   for (let index = 0; index < 5; index += 1) {
@@ -525,7 +772,7 @@ test("prunes detached SQLite payload rows with the twenty-revision history windo
     const registered = await registerResponse.json();
     assert.equal(registerResponse.status, 201);
     for (let revision = 1; revision <= 21; revision += 1) {
-      const payload = cloudPayload.replace('"universe_matrix":10', `"universe_matrix":${revision}`);
+      const payload = mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = revision; });
       const response = await fetch(`${isolatedBaseUrl}/api/cloud-save`, {
         method: "PUT",
         headers: { "content-type": "application/json", authorization: `Bearer ${registered.token}` },
@@ -542,6 +789,83 @@ test("prunes detached SQLite payload rows with the twenty-revision history windo
   }
 });
 
+test("rejects a structurally complete cloud save whose internal checksum is stale", async () => {
+  const corrupted = JSON.parse(cloudPayload);
+  corrupted.state.elapsedSeconds = 12_143;
+  const rejected = await request("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ payload: JSON.stringify(corrupted), expectedRevision: 0 }),
+  });
+  assert.equal(rejected.response.status, 400);
+  assert.equal(rejected.body.code, "SAVE_INTEGRITY_INVALID");
+  assert.equal(rejected.body.summary.elapsedSeconds, 12_143);
+  assert.equal(rejected.body.summary.integrity, "invalid");
+});
+
+test("reports cloud save format and size failures separately", async () => {
+  const malformed = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: "not-json", expectedRevision: 0 }) });
+  assert.equal(malformed.response.status, 400);
+  assert.equal(malformed.body.code, "SAVE_FORMAT_INVALID");
+  const oversized = "x".repeat(32 * 1024 * 1024 - 512);
+  const tooLarge = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: oversized, expectedRevision: 0 }) });
+  assert.equal(tooLarge.response.status, 413);
+  assert.equal(tooLarge.body.code, "SAVE_SIZE_TOO_LARGE");
+  assert.match(tooLarge.body.error, /体积过大/);
+});
+
+test("accepts gzip cloud saves and rejects invalid or expanded gzip bodies", async () => {
+  const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-cloud-gzip-"));
+  let isolatedServer;
+  try {
+    isolatedServer = await createCloudServer({ databaseFile: path.join(isolatedDirectory, "cloud.sqlite"), registrationLimit: 10, mailer: null, logger: { error() {} } });
+    await new Promise((resolve) => isolatedServer.listen(0, "127.0.0.1", resolve));
+    const isolatedBaseUrl = `http://127.0.0.1:${isolatedServer.address().port}`;
+    const registeredResponse = await fetch(`${isolatedBaseUrl}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "gzip_pilot", password: "strong-pass-123", displayName: "压缩上传测试" }),
+    });
+    const registered = await registeredResponse.json();
+    const isolatedRequest = async (route, options = {}) => {
+      const response = await fetch(`${isolatedBaseUrl}${route}`, { ...options, headers: { "content-type": "application/json", ...(options.headers ?? {}) } });
+      return { response, body: await response.json() };
+    };
+  const base = JSON.parse(cloudPayload);
+  const largeState = { ...base.state, padding: "repeated-cloud-save-data-".repeat(20_000) };
+  const largePayload = createSavePayload(largeState);
+  const compressedBody = gzipSync(Buffer.from(JSON.stringify({ payload: largePayload, expectedRevision: 0 })));
+  const uploaded = await isolatedRequest("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.token}`, "content-encoding": "gzip", "content-type": "application/json" },
+    body: compressedBody,
+  });
+  assert.equal(uploaded.response.status, 200);
+  assert.equal(uploaded.body.cloudSave.revision, 1);
+
+  const invalidEncoding = await isolatedRequest("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.token}`, "content-encoding": "gzip", "content-type": "application/json" },
+    body: Buffer.from("not-gzip"),
+  });
+  assert.equal(invalidEncoding.response.status, 400);
+  assert.equal(invalidEncoding.body.code, "REQUEST_ENCODING_INVALID");
+
+  const expandedState = { ...base.state, padding: "x".repeat(32 * 1024 * 1024 + 1) };
+  const expandedBody = gzipSync(Buffer.from(JSON.stringify({ payload: createSavePayload(expandedState), expectedRevision: 1 })));
+  const expanded = await isolatedRequest("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.token}`, "content-encoding": "gzip", "content-type": "application/json" },
+    body: expandedBody,
+  });
+  assert.equal(expanded.response.status, 413);
+  assert.equal(expanded.body.code, "REQUEST_EXPANDED_BODY_TOO_LARGE");
+  } finally {
+    if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
+    await rm(isolatedDirectory, { recursive: true, force: true });
+  }
+});
+
 test("stores revisioned cloud saves and detects conflicts", async () => {
   const saved = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
   assert.equal(saved.response.status, 200);
@@ -549,11 +873,12 @@ test("stores revisioned cloud saves and detects conflicts", async () => {
   assert.equal(saved.body.cloudSave.summary.stateVersion, 24);
   assert.equal(saved.body.cloudSave.summary.savedAt, 123456);
   assert.equal(saved.body.cloudSave.summary.completedTechCount, 0);
-  assert.equal(saved.body.cloudSave.summary.stateChecksum, "client-state-checksum");
+  assert.equal(saved.body.cloudSave.summary.stateChecksum, JSON.parse(cloudPayload).checksum);
+  assert.equal(saved.body.cloudSave.summary.integrity, "valid");
   const conflict = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
   assert.equal(conflict.response.status, 409);
 
-  const secondPayload = cloudPayload.replace('"universe_matrix":10', '"universe_matrix":12');
+  const secondPayload = mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = 12; });
   const second = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: secondPayload, expectedRevision: 1 }) });
   assert.equal(second.body.cloudSave.revision, 2);
   const history = await request("/api/cloud-save/history", { headers: { authorization: `Bearer ${token}` } });
@@ -573,13 +898,13 @@ test("stores revisioned cloud saves and detects conflicts", async () => {
 
 test("keeps main and three manual cloud slots revisioned independently", async () => {
   const slotOne = await request("/api/cloud-save?slot=1", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
-  const slotTwo = await request("/api/cloud-save?slot=2", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload.replace('"universe_matrix":10', '"universe_matrix":11'), expectedRevision: 0 }) });
+  const slotTwo = await request("/api/cloud-save?slot=2", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = 11; }), expectedRevision: 0 }) });
   assert.equal(slotOne.body.cloudSave.slot, "1");
   assert.equal(slotOne.body.cloudSave.revision, 1);
   assert.equal(slotTwo.body.cloudSave.slot, "2");
   assert.equal(slotTwo.body.cloudSave.revision, 1);
 
-  const slotOneSecond = await request("/api/cloud-save?slot=1", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload.replace('"universe_matrix":10', '"universe_matrix":15'), expectedRevision: 1 }) });
+  const slotOneSecond = await request("/api/cloud-save?slot=1", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = 15; }), expectedRevision: 1 }) });
   assert.equal(slotOneSecond.body.cloudSave.revision, 2);
   const slotOneConflict = await request("/api/cloud-save?slot=1", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 1 }) });
   assert.equal(slotOneConflict.response.status, 409);
@@ -599,18 +924,16 @@ test("keeps main and three manual cloud slots revisioned independently", async (
 });
 
 test("validates v32 gameplay buffer limits before accepting cloud saves", async () => {
-  const payloadFor = (productionBufferLimit, logisticsBufferLimit) => JSON.stringify({
-    state: {
+  const payloadFor = (productionBufferLimit, logisticsBufferLimit) => createSavePayload({
       version: 32,
       entities: [],
       settings: { productionBufferLimit, logisticsBufferLimit },
-    },
   });
   for (const payload of [
     payloadFor(999, 1_000_000),
     payloadFor(1_000_000.5, 1_000_000),
     payloadFor(1_000_000, 100_000_001),
-    JSON.stringify({ state: { version: 32, entities: [], settings: {} } }),
+    createSavePayload({ version: 32, entities: [], settings: {} }),
   ]) {
     const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload, expectedRevision: 0 }) });
     assert.equal(rejected.response.status, 400);
@@ -627,13 +950,11 @@ test("validates v33 proliferator and exact infinite research fields while accept
     ["stellar_harnessing", 1_000],
     ["continuum_simulation", 23],
   ].map(([id]) => [id, { level: 0, progress: "0", ...(overrides[id] ?? {}) }]));
-  const payloadFor = ({ proliferatorBufferLimit = 600, infiniteResearch = research() } = {}) => JSON.stringify({
-    state: {
+  const payloadFor = ({ proliferatorBufferLimit = 600, infiniteResearch = research() } = {}) => createSavePayload({
       version: 33,
       entities: [],
       settings: { productionBufferLimit: 1_000_000, logisticsBufferLimit: 1_000_000, proliferatorBufferLimit },
       endgame: { infiniteResearch },
-    },
   });
   const invalidPayloads = [
     payloadFor({ proliferatorBufferLimit: 0 }),
@@ -653,7 +974,7 @@ test("validates v33 proliferator and exact infinite research fields while accept
   assert.equal(accepted.response.status, 200);
 });
 
-test("validates v34 time warp, Dyson allocation floors and black-hole ports", async () => {
+test("validates v34 time warp and accepts Android v35 through current v46 saves", async () => {
   const research = Object.fromEntries([
     ["matrix_compression", 1_000],
     ["vein_utilization", 1_000],
@@ -677,7 +998,7 @@ test("validates v34 time warp, Dyson allocation floors and black-hole ports", as
   const payloadFor = (mutate = () => {}) => {
     const state = structuredClone(baseState);
     mutate(state);
-    return JSON.stringify({ state });
+    return createSavePayload(state);
   };
   const invalidPayloads = [
     payloadFor((state) => { state.timeWarp.requestedMultiplier = 4; }),
@@ -695,24 +1016,466 @@ test("validates v34 time warp, Dyson allocation floors and black-hole ports", as
   }
   const accepted = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: payloadFor(), expectedRevision: 2 }) });
   assert.equal(accepted.response.status, 200);
+
+  const v35Payload = payloadFor((state) => {
+    state.version = 35;
+    state.planetTrayItemLimits = { home: 100_000_000, extension_planet: 1_000 };
+    for (const entity of state.entities) entity.interactionLocked = false;
+    state.entities[2].interactionLocked = true;
+  });
+  const acceptedV35 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v35Payload, expectedRevision: 3 }) });
+  assert.equal(acceptedV35.response.status, 200);
+  for (const invalid of [
+    payloadFor((state) => { state.version = 35; state.entities.forEach((entity) => { entity.interactionLocked = false; }); state.entities[0].interactionLocked = "false"; }),
+    payloadFor((state) => { state.planetTrayItemLimits = { home: 100_000_001 }; }),
+    payloadFor((state) => { state.planetTrayItemLimits = { home: 1_000.5 }; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 4 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+  const v36Payload = payloadFor((state) => {
+    state.version = 36;
+    state.planetTrayItemLimits = { home: 100_000_000 };
+    for (const entity of state.entities) entity.interactionLocked = false;
+    state.constructionAutomation = {
+      enabled: true,
+      targetStock: { logistics_vessel: 4 },
+      cursor: 0,
+      totalCrafted: 0,
+      lastCraftedId: null,
+      jobs: {},
+    };
+  });
+  const acceptedV36 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v36Payload, expectedRevision: 4 }) });
+  assert.equal(acceptedV36.response.status, 200);
+  const v37Payload = payloadFor((state) => {
+    state.version = 37;
+    state.planetTrayItemLimits = { home: 100_000_000 };
+    for (const entity of state.entities) entity.interactionLocked = false;
+    state.entities.push({ id: "vein", kind: "vein", resourceId: "iron_ore", interactionLocked: false, resourceDepletionRemainder: 9 });
+  });
+  const acceptedV37 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v37Payload, expectedRevision: 5 }) });
+  assert.equal(acceptedV37.response.status, 200);
+  const invalidV37 = payloadFor((state) => {
+    state.version = 37;
+    state.entities.push({ id: "vein", kind: "vein", resourceId: "iron_ore", interactionLocked: false, resourceDepletionRemainder: 10 });
+  });
+  const rejectedV37 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalidV37, expectedRevision: 6 }) });
+  assert.equal(rejectedV37.response.status, 400);
+
+  const v38Payload = payloadFor((state) => {
+    state.version = 38;
+    state.planetTrayItemLimits = { home: 100_000_000 };
+    for (const entity of state.entities) entity.interactionLocked = false;
+    state.belts[0].lanes = 4_096;
+    state.constructionAutomation = {
+      enabled: true,
+      targetStock: {},
+      cursor: 0,
+      totalCrafted: 0,
+      lastCraftedId: null,
+      destroyedByproducts: { hydrogen: 17 },
+      jobs: {},
+    };
+    state.blueprints = [{
+      id: "blueprint_1",
+      name: "采矿布局",
+      entities: [{ key: "node_1" }],
+      resourceAnchors: [{ key: "resource_1", resourceId: "iron_ore", extractorBuildingId: "mining_machine", minerCount: 3, offset: { x: 0, y: 0 } }],
+      belts: [{ key: "line_1", sourceKey: "resource_1", targetKey: "node_1", lanes: 4_096 }],
+    }];
+  });
+  const acceptedV38 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v38Payload, expectedRevision: 6 }) });
+  assert.equal(acceptedV38.response.status, 200);
+  for (const invalid of [
+    payloadFor((state) => { const parsed = JSON.parse(v38Payload); Object.assign(state, parsed.state); state.belts[0].lanes = 4_097; }),
+    payloadFor((state) => { const parsed = JSON.parse(v38Payload); Object.assign(state, parsed.state); state.constructionAutomation.destroyedByproducts.hydrogen = -1; }),
+    payloadFor((state) => { const parsed = JSON.parse(v38Payload); Object.assign(state, parsed.state); state.blueprints[0].resourceAnchors[0].minerCount = 0; }),
+    payloadFor((state) => { const parsed = JSON.parse(v38Payload); Object.assign(state, parsed.state); state.blueprints[0].belts[0].lanes = 4_097; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 7 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+
+  const v39PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    const parsed = JSON.parse(v38Payload);
+    Object.assign(state, parsed.state);
+    state.version = 39;
+    state.entities.push({
+      id: "delivery-hub",
+      buildingId: "material_delivery_hub",
+      machineCount: 1,
+      interactionLocked: false,
+      deliveryItemIds: ["iron_ore"],
+      deliverySlots: [
+        { itemId: "iron_ore", mode: "auto" },
+        { itemId: "copper_ore", mode: "manual" },
+        { itemId: null, mode: "disabled" },
+      ],
+    });
+    state.belts.push({ id: "delivery-line", source: "source", target: "delivery-hub", itemId: "iron_ore", lanes: 1, targetPortIndex: 0 });
+    mutate(state);
+  });
+  for (const invalid of [
+    v39PayloadFor((state) => { state.entities.at(-1).deliverySlots.pop(); }),
+    v39PayloadFor((state) => { state.entities.at(-1).deliverySlots[1].itemId = null; }),
+    v39PayloadFor((state) => { state.entities.at(-1).deliverySlots[2] = { itemId: "stone", mode: "disabled" }; }),
+    v39PayloadFor((state) => { state.belts.at(-1).targetPortIndex = 2; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 7 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+  const acceptedV39 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v39PayloadFor(), expectedRevision: 7 }) });
+  assert.equal(acceptedV39.response.status, 200);
+
+  const v40PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    Object.assign(state, JSON.parse(v39PayloadFor()).state);
+    state.version = 40;
+    state.settings.beltBufferLimit = 100_000_000;
+    state.contentPacks = [];
+    for (const belt of state.belts) {
+      belt.tier ??= 1;
+      belt.progress ??= 0;
+    }
+    mutate(state);
+  });
+  for (const invalid of [
+    v40PayloadFor((state) => { state.settings.beltBufferLimit = 100_000_001; }),
+    v40PayloadFor((state) => { state.belts[0].progress = 100_000_001; }),
+    v40PayloadFor((state) => { state.belts[0].tier = 33; }),
+    v40PayloadFor((state) => { state.contentPacks = [{ id: "Invalid-Pack", version: "1.0.0" }]; }),
+    v40PayloadFor((state) => { state.contentPacks = [{ id: "factory_pack", version: "latest" }]; }),
+    v40PayloadFor((state) => { state.contentPacks = [{ id: "factory_pack", version: `1.0.0-${"a".repeat(40)}` }]; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 8 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+  const acceptedV40 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v40PayloadFor(), expectedRevision: 8 }) });
+  assert.equal(acceptedV40.response.status, 200);
+
+  const v41PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    Object.assign(state, JSON.parse(v40PayloadFor()).state);
+    state.version = 41;
+    state.entities.push({
+      id: "rail-ejector",
+      kind: "machine",
+      planetId: "home",
+      buildingId: "em_rail_ejector",
+      machineCount: 1,
+      interactionLocked: false,
+      targetDysonOrbitId: "dyson_orbit_helios_1",
+    });
+    state.blueprints.push({
+      id: "ejector-blueprint",
+      name: "定轨弹射器",
+      entities: [{ key: "ejector", buildingId: "em_rail_ejector", targetDysonOrbitId: "dyson_orbit_helios_1" }],
+      belts: [],
+    });
+    mutate(state);
+  });
+  for (const invalid of [
+    v41PayloadFor((state) => { delete state.entities.at(-1).targetDysonOrbitId; }),
+    v41PayloadFor((state) => { state.entities.at(-1).targetDysonOrbitId = "x".repeat(161); }),
+    v41PayloadFor((state) => { state.blueprints.at(-1).entities[0].targetDysonOrbitId = "x".repeat(161); }),
+    v41PayloadFor((state) => { state.blueprints.at(-1).entities[0].buildingId = "storage_mk1"; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 9 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+  const acceptedV41 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v41PayloadFor(), expectedRevision: 9 }) });
+  assert.equal(acceptedV41.response.status, 200);
+
+  const v42PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    Object.assign(state, JSON.parse(v41PayloadFor()).state);
+    state.version = 42;
+    state.galaxy = {
+      planetMetadata: { home: { customName: "母星生产区", note: "主产线", tags: ["出口"] } },
+      systemMetadata: { helios: { customName: "曙光庭" } },
+    };
+    mutate(state);
+  });
+  for (const invalid of [
+    v42PayloadFor((state) => { state.galaxy.planetMetadata.home.tags = Array(9).fill("tag"); }),
+    v42PayloadFor((state) => { state.galaxy.planetMetadata.home.note = "x".repeat(241); }),
+    v42PayloadFor((state) => { state.galaxy.systemMetadata.helios.customName = ""; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 10 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+  const acceptedV42 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v42PayloadFor(), expectedRevision: 10 }) });
+  assert.equal(acceptedV42.response.status, 200);
+
+  const v43PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    Object.assign(state, JSON.parse(v42PayloadFor()).state);
+    state.version = 43;
+    state.systemSpaceStations = {
+      helios: {
+        systemId: "helios",
+        status: "operational",
+        costRevision: 1,
+        costMultiplierBasisPoints: 10_000,
+        phaseIndex: 16,
+        delivered: { titanium_alloy: "1000000" },
+        inventory: { iron_ingot: "100000000000000000000" },
+        itemPolicies: { iron_ingot: { interstellarEnabled: true, reserve: "0", target: "1000" } },
+        modules: { backbone: 0, energy: 0, interstellar: 1 },
+        routingCursors: { iron_ingot: 3 },
+        viewport: { x: 0, y: 0, zoom: 0.85 },
+        decorations: [],
+      },
+    };
+    state.galacticHubNetwork = { fleetInstalled: 10, fleetBusy: 2, fleetReturns: [{ routeKey: "helios->borealis:iron_ingot", returnAtSecond: 30, vesselCount: 2 }], warpers: "100000000000000000000", warperTarget: "200", routingCursors: {} };
+    mutate(state);
+  });
+  const acceptedV43 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v43PayloadFor(), expectedRevision: 11 }) });
+  assert.equal(acceptedV43.response.status, 200);
+  for (const invalid of [
+    v43PayloadFor((state) => { state.systemSpaceStations.helios.inventory.iron_ingot = "01"; }),
+    v43PayloadFor((state) => { state.galacticHubNetwork.fleetReturns[0].vesselCount = 0; }),
+    v43PayloadFor((state) => { state.belts[0].elevatorOutputIndex = 5; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 12 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+
+  const v44PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    Object.assign(state, JSON.parse(v42PayloadFor()).state);
+    state.version = 44;
+    state.quantumLogisticsNetwork = {
+      enabled: true,
+      inventory: { iron_ore: "123" },
+      routingCursors: { iron_ore: 2 },
+    };
+    state.entities.push({
+      id: "quantum-tower",
+      buildingId: "interstellar_logistics_station",
+      machineCount: 1,
+      interactionLocked: false,
+      quantumMode: "quantum",
+      quantumTransition: null,
+    });
+    mutate(state);
+  });
+  const acceptedV44 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v44PayloadFor(), expectedRevision: 12 }) });
+  assert.equal(acceptedV44.response.status, 200, JSON.stringify(acceptedV44.body));
+  for (const invalid of [
+    v44PayloadFor((state) => { state.quantumLogisticsNetwork.inventory.iron_ore = "01"; }),
+    v44PayloadFor((state) => { state.quantumLogisticsNetwork.routingCursors.iron_ore = -1; }),
+    v44PayloadFor((state) => { state.entities.at(-1).quantumMode = "instant"; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 13 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+
+  const v45PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    Object.assign(state, JSON.parse(v44PayloadFor()).state);
+    state.version = 45;
+    state.quantumLogisticsNetwork.itemCapacities = { iron_ore: "10000000000" };
+    state.quantumLogisticsNetwork.uploadRoutingCursors = { iron_ore: 1 };
+    state.entities.push({
+      id: "quantum-collector",
+      buildingId: "orbital_collector",
+      machineCount: 10,
+      interactionLocked: false,
+      quantumMode: "legacy",
+      quantumTransition: null,
+    });
+    mutate(state);
+  });
+  const acceptedV45 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v45PayloadFor(), expectedRevision: 13 }) });
+  assert.equal(acceptedV45.response.status, 200, JSON.stringify(acceptedV45.body));
+  for (const invalid of [
+    v45PayloadFor((state) => { state.quantumLogisticsNetwork.itemCapacities.iron_ore = "9999"; }),
+    v45PayloadFor((state) => { state.quantumLogisticsNetwork.itemCapacities.iron_ore = "10000000001"; }),
+    v45PayloadFor((state) => { state.quantumLogisticsNetwork.itemCapacities.iron_ore = "1e6"; }),
+    v45PayloadFor((state) => { state.quantumLogisticsNetwork.uploadRoutingCursors.iron_ore = -1; }),
+    v45PayloadFor((state) => { state.quantumLogisticsNetwork.runtimeFlow = {}; }),
+    v45PayloadFor((state) => { delete state.entities.at(-1).quantumMode; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 14 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+
+  const v46PayloadFor = (mutate = () => {}) => payloadFor((state) => {
+    Object.assign(state, JSON.parse(v45PayloadFor()).state);
+    state.version = 46;
+    const definition = {
+      id: "queued_factory",
+      name: "待建工厂",
+      revision: 3,
+      entities: [{ key: "storage", buildingId: "storage_mk1", offset: { x: 0, y: 0 }, machineCount: 400_000 }],
+      resourceAnchors: [],
+      belts: [],
+      externalPorts: [],
+      rotation: 0,
+      mirror: "none",
+      recipeOverrides: {},
+    };
+    state.blueprints = [structuredClone(definition)];
+    state.blueprintVersions = [{ id: "queued_factory@3", blueprintId: "queued_factory", revision: 3, definition: structuredClone(definition) }];
+    state.constructionQueue = [{
+      id: "construction_1",
+      blueprintId: "queued_factory",
+      blueprintVersionId: "queued_factory@3",
+      blueprintRevision: 3,
+      blueprintName: "待建工厂",
+      planetId: "home",
+      position: { x: 100, y: 200 },
+      rotation: 0,
+      mirror: "none",
+      queuedAt: 123,
+      status: "pending-materials",
+      reservedConstruction: { storage_mk1: 120_000 },
+      reservedFleet: {},
+      placedEntityIdsByKey: {},
+    }];
+    mutate(state);
+  });
+  const acceptedV46 = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: v46PayloadFor(), expectedRevision: 14 }) });
+  assert.equal(acceptedV46.response.status, 200, JSON.stringify(acceptedV46.body));
+  const legacyQuantumTarget = v46PayloadFor((state) => {
+    state.blueprints[0].entities[0].quantumTarget = false;
+    state.blueprintVersions[0].definition.entities[0].quantumTarget = false;
+  });
+  const acceptedLegacyQuantumTarget = await request("/api/cloud-save?slot=3", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ payload: legacyQuantumTarget, expectedRevision: 15 }),
+  });
+  assert.equal(acceptedLegacyQuantumTarget.response.status, 200, JSON.stringify(acceptedLegacyQuantumTarget.body));
+  for (const invalid of [
+    v46PayloadFor((state) => { state.blueprints[0].entities[0].machineCount = 100_000_001; }),
+    v46PayloadFor((state) => { state.blueprints[0].entities[0].quantumTarget = true; }),
+    v46PayloadFor((state) => { state.constructionQueue[0].blueprintVersionId = "missing@1"; }),
+    v46PayloadFor((state) => { state.constructionQueue[0].reservedConstruction.storage_mk1 = -1; }),
+    v46PayloadFor((state) => { state.constructionQueue[0].status = "waiting-fleet"; state.constructionQueue[0].buildingCompletedAt = 123; }),
+  ]) {
+    const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: invalid, expectedRevision: 16 }) });
+    assert.equal(rejected.response.status, 400);
+  }
+});
+
+test("accepts declarative content-pack cloud saves but excludes them from official ranking", async () => {
+  const registered = await request("/api/auth/register", { method: "POST", body: JSON.stringify({ username: "modded_pilot", password: "strong-pass-456", displayName: "内容包玩家" }) });
+  assert.equal(registered.response.status, 201);
+  const modToken = registered.body.token;
+  const payload = createSavePayload({
+    version: 40,
+    elapsedSeconds: 7_200,
+    entities: [],
+    belts: [],
+    settings: { productionBufferLimit: 1_000_000, logisticsBufferLimit: 1_000_000, beltBufferLimit: 100_000_000, proliferatorBufferLimit: 600 },
+    contentPacks: [{ id: "community_factory", version: "1.2.3" }],
+    totalProduced: { universe_matrix: 999 },
+    constructionAutomation: { destroyedByproducts: {} },
+    blueprints: [],
+    dysonPlans: {},
+    timeWarp: { controllerEntityId: null, enabled: false, requestedMultiplier: 5, effectiveMultiplier: 1, pendingSimulationSeconds: 0, pendingWallSeconds: 0, requiredPowerKw: 0, allocatedPowerKw: 0 },
+    endgame: { infiniteResearch: Object.fromEntries(["matrix_compression", "vein_utilization", "galactic_logistics", "stellar_harnessing", "continuum_simulation"].map((id) => [id, { level: 0, progress: "0" }])) },
+  });
+  const uploaded = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${modToken}` }, body: JSON.stringify({ payload, expectedRevision: 0 }) });
+  assert.equal(uploaded.response.status, 200);
+  const refreshed = await request("/api/leaderboard", { method: "POST", headers: { authorization: `Bearer ${modToken}` }, body: JSON.stringify({ seasonId: "season_01" }) });
+  assert.equal(refreshed.response.status, 422);
+  assert.match(refreshed.body.error, /内容包/);
+  const leaderboard = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
+  assert.equal(leaderboard.body.entries.some((entry) => entry.displayName === "内容包玩家"), false);
 });
 
 test("recalculates leaderboard score on the server", async () => {
-  const rejected = await request("/api/leaderboard", {
+  const refreshed = await request("/api/leaderboard", {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
     body: JSON.stringify({ seasonId: "season_01", metrics: { energyGeneratedMj: 1_000_000, uploadedWhiteMatrix: 1_000_000 } }),
   });
-  assert.equal(rejected.response.status, 422);
-  const submitted = await request("/api/leaderboard", {
+  assert.equal(refreshed.response.status, 200);
+  assert.equal(refreshed.body.submission.metrics.uploadedWhiteMatrix, 12);
+  assert.equal(refreshed.body.submission.metrics.galaxyScore, 12_145);
+
+  const hidden = await request("/api/leaderboard/visibility", {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
-    body: JSON.stringify({ seasonId: "season_01", metrics: { energyGeneratedMj: 1_000_000, uploadedWhiteMatrix: 10, galaxyScore: 999_999_999 } }),
+    body: JSON.stringify({ visible: false }),
   });
-  assert.equal(submitted.response.status, 200);
-  assert.equal(submitted.body.submission.metrics.galaxyScore, 121);
-  const ranking = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
+  assert.equal(hidden.response.status, 200);
+  assert.equal(hidden.body.user.leaderboardVisible, false);
+  let ranking = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
+  assert.equal(ranking.body.entries.some((entry) => entry.userId === hidden.body.user.id), false);
+
+  const fourthPayload = mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = 20; });
+  const uploadedWhileHidden = await request("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ payload: fourthPayload, expectedRevision: 3 }),
+  });
+  assert.equal(uploadedWhileHidden.response.status, 200);
+  ranking = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
+  assert.equal(ranking.body.entries.some((entry) => entry.userId === hidden.body.user.id), false);
+
+  const visible = await request("/api/leaderboard/visibility", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ visible: true }),
+  });
+  assert.equal(visible.response.status, 200);
+  assert.equal(visible.body.autoJoined, true);
+  assert.equal(visible.body.submission.metrics.uploadedWhiteMatrix, 20);
+  ranking = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
   assert.equal(ranking.body.entries[0].verified, true);
+});
+
+test("keeps server-derived leaderboard values above the former metric cap", async () => {
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "uncapped_rank", password: "rank-pass-123", displayName: "超大工厂" }),
+  });
+  assert.equal(registered.response.status, 201);
+  const payload = createSavePayload({
+    version: 24,
+    elapsedSeconds: 1_000,
+    entities: [],
+    totalProduced: { universe_matrix: 10 },
+    metrics: { generationKw: 2_500_000_000_000_000, totalItemsPerMinute: 1_500_000_000_000_000, rayGenerationKw: 0 },
+    exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
+  });
+  const uploaded = await request("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.body.token}` },
+    body: JSON.stringify({ payload, expectedRevision: 0 }),
+  });
+  assert.equal(uploaded.response.status, 200);
+  const ranking = await request("/api/leaderboard?category=power&seasonId=season_01");
+  const entry = ranking.body.entries.find((candidate) => candidate.displayName === "超大工厂");
+  assert.equal(entry.metrics.energyGeneratedMj, 2_500_000_000_000_000);
+  assert.equal(entry.metrics.peakThroughputPerMinute, 1_500_000_000_000_000);
+});
+
+test("saturates extreme leaderboard totals instead of wrapping them to zero", async () => {
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "saturated_rank", password: "rank-pass-123", displayName: "极限工厂" }),
+  });
+  const payload = createSavePayload({
+    version: 24,
+    elapsedSeconds: Number.MAX_VALUE,
+    entities: [],
+    totalProduced: { universe_matrix: Number.MAX_VALUE },
+    metrics: { generationKw: Number.MAX_VALUE, totalItemsPerMinute: Number.MAX_VALUE, rayGenerationKw: 0 },
+    dysonSwarm: { generationKw: Number.MAX_VALUE },
+    dysonSphere: { generationKw: Number.MAX_VALUE },
+    exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
+  });
+  const uploaded = await request("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.body.token}` },
+    body: JSON.stringify({ payload, expectedRevision: 0 }),
+  });
+  assert.equal(uploaded.response.status, 200);
+  const ranking = await request("/api/leaderboard?category=dyson&seasonId=season_01");
+  const entry = ranking.body.entries.find((candidate) => candidate.displayName === "极限工厂");
+  assert.equal(entry.metrics.energyGeneratedMj, Number.MAX_VALUE);
+  assert.equal(entry.metrics.peakDysonPowerKw, Number.MAX_VALUE);
+  assert.equal(entry.metrics.galaxyScore, Number.MAX_VALUE);
 });
 
 test("deletes an account and all directly owned cloud data", async () => {

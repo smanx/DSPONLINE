@@ -15,7 +15,9 @@ import {
   addCanvasRegion,
   addDysonSwarmOrbit,
   advanceSimulation,
-  applyBeltConfiguration,
+  advanceSimulationBudget,
+  advanceSimulationSession,
+  applyBeltConfigurationToBelts,
   applyBeltConfigurationToNetwork,
   canExploreStarSystem,
   canColonizePlanet,
@@ -36,12 +38,17 @@ import {
   createBlueprint,
   createDysonLayerTemplate,
   createInitialState,
+  createSimulationAdvanceSession,
+  createPersistentSimulationRuntime,
+  advancePersistentSimulationRuntime,
   createStandardDysonLayer,
   dispatchGalacticExport,
   dropCargoToEntity,
   dropCargoToTray,
   exploreStarSystem,
   fillStationFleet,
+  fundAllConstructionQueueEntries,
+  fundConstructionQueueEntry,
   colonizePlanet,
   getEntityOperatingStatus,
   getEntityPowerFactor,
@@ -50,14 +57,18 @@ import {
   getBeltConnectionCheck,
   getBeltNetworkIds,
   getBlueprintRequirements,
+  getBlueprintFleetLoadPreview,
   getConstructionQueueDeficits,
+  getConstructionQueueDetails,
   getConstructionCraftNavigation,
   getConstructionAutomationMaterialSeconds,
   getConstructionAutomationStatus,
+  getConstructionCenterTraceSample,
   getConstructionQuickCraftPlan,
   getColonizationRequirements,
   getDysonPlanTotals,
   getDysonEngineeringSnapshot,
+  getEjectorOrbitTargetStatus,
   getDysonShellCapacity,
   getEntityExtraProductBonus,
   getEntityInputCapacity,
@@ -72,24 +83,32 @@ import {
   getInterstellarTripSeconds,
   getLogisticsSpeedMultiplier,
   getMaterialDeliveryItems,
+  getMaterialDeliverySlots,
+  getMaterialDeliverySlotChangeCheck,
   getMaxConstructionQuickCraftBatches,
   getMaxHandcraftBatches,
   getMiningSpeedMultiplier,
+  getVeinConsumptionMultiplier,
   getPlanetaryCargoCapacity,
   getPlanetaryTripSeconds,
   getPlanetTrayItemLimit,
   getRayReceiverCapacityKw,
+  getRecursiveHandcraftPlan,
   getRecipeSpeedMultiplier,
   getResourceReserveSnapshot,
   getSprayCoaterInstallCheck,
+  getSprayCoaterRemovalRefund,
   getSolarSailLifetimeSeconds,
   getSorterCapacity,
   getStationDroneCapacity,
+  getStationFleetDiagnostic,
   getStationBusyVehicleCount,
   getStationSlotCapacity,
   getStationSlots,
+  getStationWarperRefillSnapshot,
   getTechnologyConstructionRewards,
   handcraftRecipe,
+  handcraftRecipeWithUpstream,
   installSprayCoater,
   installSprayCoaters,
   installMiner,
@@ -110,6 +129,8 @@ import {
   queueHandcraftRecipe,
   cancelHandcraftQueueEntry,
   removeEntity,
+  removeBlueprint,
+  removeSprayCoater,
   removeBeltNetwork,
   removeCanvasBookmark,
   removeCanvasRegion,
@@ -117,6 +138,7 @@ import {
   removeDysonNode,
   removeDysonSwarmOrbit,
   removeQueuedTechnology,
+  refillStationWarpers,
   resumePausedResearch,
   selectInfiniteResearch,
   setGalacticDispatchAutomation,
@@ -141,17 +163,24 @@ import {
   setDysonLaunchMode,
   setDysonLaunchThrottle,
   setDysonSwarmOrbit,
+  setEjectorTargetOrbit,
+  setEjectorTargetOrbitForEntities,
   setRecipeFocus,
   updateCanvasRegion,
   setRecipeFocusMode,
   renameCanvasBookmark,
+  renameBlueprint,
   setEntitiesRecipe,
   setEnergyMode,
+  setEntitiesInteractionLocked,
   setFuelItem,
   setLogisticsItem,
+  setPaused,
+  setMaterialDeliverySlot,
   setProliferatorConfiguration,
   setEntitiesProliferatorConfiguration,
   setStationMode,
+  setStationFleetTarget,
   setStationHubConfiguration,
   setStationMinimumLoad,
   setStationSlotItem,
@@ -344,10 +373,14 @@ describe("factory simulation", () => {
     const upstream = createInitialState();
     upstream.tray = { iron_ore: 1 };
     expect(getConstructionCraftNavigation(upstream, "arc_smelter")).toEqual({
-      status: "target",
-      itemId: "iron_ingot",
-      recipeId: "iron_ingot",
+      status: "raw-shortage",
+      itemId: "iron_ore",
+      current: 1,
+      required: 4,
     });
+
+    upstream.tray = { iron_ore: 16, copper_ore: 6, stone: 2 };
+    expect(getConstructionCraftNavigation(upstream, "arc_smelter")).toEqual({ status: "target", itemId: "iron_ingot", recipeId: "iron_ingot" });
 
     const rawBlocked = createInitialState();
     rawBlocked.tray = {};
@@ -355,7 +388,7 @@ describe("factory simulation", () => {
       status: "raw-shortage",
       itemId: "iron_ore",
       current: 0,
-      required: 1,
+      required: 4,
     });
 
     expect(getConstructionCraftNavigation(createInitialState(), "conveyor_belt_mk1")).toMatchObject({
@@ -1540,6 +1573,103 @@ describe("factory simulation", () => {
     expect(fallbackReceived).toEqual([getBuilding("arc_smelter").inputCapacity, lineCapacity, 1]);
   });
 
+  const makeHighThroughputMiningFanout = () => {
+    let state = createInitialState();
+    state.settings.resourceMode = "infinite";
+    state.settings.productionBufferLimit = 1_000_000;
+    state.settings.logisticsBufferLimit = 100_000_000;
+    state.settings.beltBufferLimit = 100_000_000;
+    state.construction.wind_turbine = 1;
+    state.construction.storage_mk1 = 3;
+    state.construction.conveyor_belt_mk1 = 3;
+    state = placeBuilding(state, "wind_turbine", { x: -700, y: -500 });
+    for (let index = 0; index < 3; index += 1) state = placeBuilding(state, "storage_mk1", { x: 300, y: index * 140 });
+    const generator = state.entities.find((entity) => entity.buildingId === "wind_turbine")!;
+    generator.machineCount = 4_000_000;
+    const source = state.entities.find((entity) => entity.id === "vein_iron")!;
+    source.minerCount = 2_000_000;
+    source.outputs.iron_ore = 1_000_000;
+    const targets = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+    for (const target of targets) {
+      state.entities.find((entity) => entity.id === target.id)!.machineCount = 100_000;
+      state = setLogisticsItem(state, target.id, "iron_ore");
+      state = connectBelt(state, source.id, target.id, "iron_ore");
+      const belt = state.belts.find((candidate) => candidate.target === target.id)!;
+      belt.tier = 3;
+      belt.sorterTier = 3;
+      belt.lanes = 4_096;
+      belt.stackSize = 4;
+      belt.priority = 1;
+    }
+    return { state, sourceId: source.id, targetIds: targets.map((target) => target.id) };
+  };
+
+  it("fairly fills three ordinary outputs without using the source cache as a throughput ceiling", () => {
+    const network = makeHighThroughputMiningFanout();
+    const advanced = advanceSimulation(network.state, 1);
+    const received = network.targetIds.map((id) => advanced.entities.find((entity) => entity.id === id)?.inputs.iron_ore ?? 0);
+    const expectedPerLine = getBeltCapacity(advanced.belts[0]);
+    expect(received).toEqual([expectedPerLine, expectedPerLine, expectedPerLine]);
+    expect(received.reduce((sum, amount) => sum + amount, 0)).toBe(expectedPerLine * 3);
+  });
+
+  it("round robins limited ordinary output while preserving explicit priority order", () => {
+    const fair = makeHighThroughputMiningFanout();
+    const fairSource = fair.state.entities.find((entity) => entity.id === fair.sourceId)!;
+    fairSource.minerCount = 0;
+    fairSource.outputs.iron_ore = 5;
+    for (const belt of fair.state.belts) {
+      belt.tier = 1;
+      belt.lanes = 1;
+      belt.stackSize = 1;
+    }
+    const fairResult = advanceSimulation(fair.state, 1);
+    expect(fair.targetIds.map((id) => fairResult.entities.find((entity) => entity.id === id)?.inputs.iron_ore ?? 0)).toEqual([2, 2, 1]);
+
+    const prioritized = makeHighThroughputMiningFanout();
+    const prioritizedSource = prioritized.state.entities.find((entity) => entity.id === prioritized.sourceId)!;
+    prioritizedSource.minerCount = 0;
+    const lineCapacity = getBeltCapacity(prioritized.state.belts[0]);
+    prioritizedSource.outputs.iron_ore = lineCapacity * 2;
+    prioritized.state.belts.forEach((belt, index) => { belt.priority = [0, 1, 2][index] as 0 | 1 | 2; });
+    const priorityResult = advanceSimulation(prioritized.state, 1);
+    expect(prioritized.targetIds.map((id) => priorityResult.entities.find((entity) => entity.id === id)?.inputs.iron_ore ?? 0)).toEqual([0, lineCapacity, lineCapacity]);
+  });
+
+  it("keeps belt settlement equivalent for 10-second and 30-second offline steps", () => {
+    for (const [totalSeconds, expectedStep] of [[9 * 60 * 60, 10], [24 * 60 * 60, 30]] as const) {
+      const network = makeHighThroughputMiningFanout();
+      const session = createSimulationAdvanceSession(network.state, totalSeconds);
+      expect(session.stepSize).toBe(expectedStep);
+      advanceSimulationSession(session, 1);
+      const segmented = advanceSimulation(network.state, expectedStep);
+      const snapshot = (state: typeof network.state) => ({
+        source: state.entities.find((entity) => entity.id === network.sourceId)?.outputs.iron_ore ?? 0,
+        targets: network.targetIds.map((id) => {
+          const target = state.entities.find((entity) => entity.id === id)!;
+          return (target.inputs.iron_ore ?? 0) + (target.outputs.iron_ore ?? 0);
+        }),
+        transferred: state.belts.map((belt) => belt.totalTransferred ?? 0),
+      });
+      expect(snapshot(session.state)).toEqual(snapshot(segmented));
+    }
+  });
+
+  it("treats pause as a hard simulation boundary", () => {
+    let state = createInitialState();
+    state.timeWarp.pendingSimulationSeconds = 12.5;
+    state.timeWarp.pendingWallSeconds = 4.5;
+    const paused = setPaused(state, true);
+    expect(paused.paused).toBe(true);
+    expect(paused.timeWarp.pendingSimulationSeconds).toBe(0);
+    expect(paused.timeWarp.pendingWallSeconds).toBe(0);
+    const resumed = setPaused(paused, false);
+    const advanced = advanceSimulation(resumed, 0);
+    expect(advanced.elapsedSeconds).toBe(0);
+    const stillPaused = advanceSimulationBudget(paused, 30, 30);
+    expect(stillPaused.elapsedSeconds).toBe(0);
+  });
+
   it("consumes both blue and red matrices for mixed research", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("energy_matrix");
@@ -1852,6 +1982,8 @@ describe("factory simulation", () => {
 
     expect(state.entities.find((entity) => entity.id === demandId)?.outputs.titanium_ingot ?? 0).toBe(0);
     expect(state.entities.find((entity) => entity.id === demandId)?.stationProgress).toBeCloseTo(15 / expectedTripSeconds, 3);
+    expect(state.entities.find((entity) => entity.id === demandId)?.stationRoutes?.[0]).toMatchObject({ requiresWarp: false, warpersPerVessel: 0 });
+    expect(state.entities.find((entity) => entity.id === demandId)?.stationWarpers ?? 0).toBe(0);
 
     state = advanceSimulation(state, Math.ceil(expectedTripSeconds - 15) + 1);
     const supply = state.entities.find((entity) => entity.id === supplyId)!;
@@ -1861,6 +1993,35 @@ describe("factory simulation", () => {
     expect(demand.stationTrips).toBe(1);
     expect(demand.stationLastTransfer).toBe(100);
     expect(Number.isInteger(demand.outputs.titanium_ingot)).toBe(true);
+  });
+
+  it("keeps same-system supply-owned vessel routes free of warper reservation and consumption", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics", "space_warp");
+    state.exploration.colonizedPlanetIds.push("ashen");
+    state.construction.wind_turbine = 8;
+    state.construction.interstellar_logistics_station = 2;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 4);
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 });
+    const supply = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    state = setLogisticsItem(state, supply.id, "processor");
+    state.entities.find((entity) => entity.id === supply.id)!.outputs.processor = 100;
+    state.portableFleet.logistics_vessel = 1;
+    state.tray.space_warper = 3;
+    state = adjustStationVessels(state, supply.id, 1);
+    state = adjustStationWarpers(state, supply.id, 3);
+
+    state = setActivePlanet(state, "ashen");
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 4);
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 });
+    const demand = state.entities.find((entity) => entity.planetId === "ashen" && entity.buildingId === "interstellar_logistics_station")!;
+    state = setLogisticsItem(state, demand.id, "processor");
+    state = setStationMode(state, demand.id, "demand");
+    state = advanceSimulation(state, 0.1);
+
+    const route = state.entities.find((entity) => entity.id === demand.id)?.stationRoutes?.[0];
+    expect(route).toMatchObject({ vehicleStationId: supply.id, requiresWarp: false, warpersPerVessel: 0 });
+    expect(state.entities.find((entity) => entity.id === supply.id)?.stationWarpers).toBe(3);
   });
 
   it("preserves legacy station progress when dispatching the first migrated route", () => {
@@ -2115,6 +2276,7 @@ describe("factory simulation", () => {
     state = addDysonSwarmOrbit(state, "borealis");
     const activeOrbitId = state.dysonEngineering.activeOrbitBySystem.borealis!;
     state = setDysonSwarmOrbit(state, "borealis", activeOrbitId, { radius: 28_000, inclination: 31, longitude: 122 });
+    state = setEjectorTargetOrbit(state, ejector.id, activeOrbitId);
     state = advanceSimulation(state, 24);
     expect(state.dysonEngineering.orbitsBySystem.borealis.find((orbit) => orbit.id === activeOrbitId)).toMatchObject({
       radius: 28_000,
@@ -2136,6 +2298,52 @@ describe("factory simulation", () => {
     state = removeDysonSwarmOrbit(state, "borealis", activeOrbitId);
     expect(state.dysonEngineering.orbitsBySystem.borealis).toHaveLength(1);
     expect(state.dysonEngineering.orbitsBySystem.borealis[0].sailsInOrbit).toBe(2);
+  });
+
+  it("keeps explicit ejector orbit targets stable, blocks deleted targets, and round-trips them through blueprints", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("dyson_swarm");
+    state.construction.wind_turbine = 12;
+    state.construction.em_rail_ejector = 4;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 }, 12);
+    state = addDysonSwarmOrbit(state, "helios");
+    const targetOrbitId = state.dysonEngineering.activeOrbitBySystem.helios!;
+    state = setActiveDysonSwarmOrbit(state, "helios", state.dysonEngineering.orbitsBySystem.helios[0].id);
+    state = placeBuilding(state, "em_rail_ejector", { x: 300, y: 0 });
+    state = placeBuilding(state, "em_rail_ejector", { x: 300, y: 180 });
+    const ejectors = state.entities.filter((entity) => entity.buildingId === "em_rail_ejector");
+    state = setEjectorTargetOrbitForEntities(state, ejectors.map((entity) => entity.id), targetOrbitId);
+    expect(ejectors.every((entity) => entity.targetDysonOrbitId !== targetOrbitId)).toBe(true);
+    expect(state.entities.filter((entity) => entity.buildingId === "em_rail_ejector").every((entity) => entity.targetDysonOrbitId === targetOrbitId)).toBe(true);
+
+    const firstId = ejectors[0].id;
+    state.entities.find((entity) => entity.id === firstId)!.inputs.solar_sail = 2;
+    state = advanceSimulation(state, 24);
+    expect(state.dysonEngineering.orbitsBySystem.helios.find((orbit) => orbit.id === targetOrbitId)?.sailsInOrbit).toBe(2);
+
+    state = createBlueprint(state, [firstId], "定轨弹射器");
+    expect(state.blueprints.at(-1)?.entities[0].targetDysonOrbitId).toBe(targetOrbitId);
+    state = removeDysonSwarmOrbit(state, "helios", targetOrbitId);
+    const blockedBefore = state.entities.find((entity) => entity.id === firstId)!;
+    blockedBefore.inputs.solar_sail = 3;
+    blockedBefore.progress = 0.625;
+    const launchedBefore = state.dysonSwarm.totalLaunched;
+    const deterministicInput = structuredClone(state);
+    state = advanceSimulation(state, 60);
+    expect(advanceSimulation(deterministicInput, 60)).toEqual(state);
+    const blockedAfter = state.entities.find((entity) => entity.id === firstId)!;
+    expect(blockedAfter.inputs.solar_sail).toBe(3);
+    expect(blockedAfter.progress).toBe(0.625);
+    expect(state.dysonSwarm.totalLaunched).toBe(launchedBefore);
+    expect(getEjectorOrbitTargetStatus(state, blockedAfter)).toMatchObject({ valid: false, reason: "missing-orbit" });
+    expect(getEntityOperatingStatus(state, blockedAfter)).toMatchObject({ code: "missing-dyson-orbit", tone: "blocked" });
+
+    state.construction.em_rail_ejector = 1;
+    const blueprintId = state.blueprints.at(-1)!.id;
+    state = placeBlueprint(state, blueprintId, { x: 700, y: 0 });
+    const pasted = state.entities.filter((entity) => entity.buildingId === "em_rail_ejector").at(-1)!;
+    expect(pasted.targetDysonOrbitId).toBe(targetOrbitId);
+    expect(getEjectorOrbitTargetStatus(state, pasted).reason).toBe("missing-orbit");
   });
 
   it("scales solar panels and each independent Dyson plan by its host star luminosity", () => {
@@ -2463,7 +2671,7 @@ describe("factory simulation", () => {
     state = advanceSimulation(state, 0.1);
     layer = state.dysonPlans.helios.layers[0];
     expect(layer.frames.every((frame) => frame.completedStructurePoints === frame.requiredStructurePoints)).toBe(true);
-    expect(getDysonShellCapacity(state)).toBe(160);
+    expect(getDysonShellCapacity(state)).toBe(320);
   });
 
   it("assigns launched rockets to the silo's star system without changing other plans", () => {
@@ -2493,11 +2701,11 @@ describe("factory simulation", () => {
     state.dysonSwarm.sailsInOrbit = 500;
     state.dysonSwarm.totalLaunched = 500;
     state = createStandardDysonLayer(state, "helios");
-    state = advanceSimulation(state, 120);
+    state = advanceSimulation(state, 240);
 
-    expect(state.dysonPlans.helios.shellSails).toBe(160);
-    expect(state.dysonSphere.shellSails).toBe(160);
-    expect(getDysonPlanTotals(state.dysonPlans.helios).sailCapacity).toBe(160);
+    expect(state.dysonPlans.helios.shellSails).toBe(320);
+    expect(state.dysonSphere.shellSails).toBe(320);
+    expect(getDysonPlanTotals(state.dysonPlans.helios).sailCapacity).toBe(320);
 
     const layer = state.dysonPlans.helios.layers[0];
     state = removeDysonNode(state, "helios", layer.id, layer.nodes[0].id);
@@ -2505,7 +2713,7 @@ describe("factory simulation", () => {
     expect(reduced.nodes).toHaveLength(7);
     expect(reduced.frames).toHaveLength(6);
     expect(reduced.shells).toHaveLength(6);
-    expect(getDysonShellCapacity(state)).toBe(120);
+    expect(getDysonShellCapacity(state)).toBe(240);
   });
 
   it("doubles planned shell absorption after the terminal efficiency upgrade", () => {
@@ -2624,6 +2832,54 @@ describe("factory simulation", () => {
       plasma_exciter: 0,
       graviton_lens: 0,
     });
+  });
+
+  it("recursively manufactures a logistics vessel atomically and stores it in the portable fleet", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("high_efficiency_plasma_control", "titanium_alloy", "interstellar_logistics");
+    state.tray = {
+      iron_ore: 36,
+      titanium_ingot: 12,
+      sulfuric_acid: 24,
+      processor: 10,
+      plasma_exciter: 4,
+    };
+    state.planetTrays.home = state.tray;
+
+    const plan = getRecursiveHandcraftPlan(state, "logistics_vessel", 1);
+    expect(plan.possible).toBe(true);
+    expect(plan.decisions.map((decision) => decision.recipeId)).toEqual(expect.arrayContaining(["iron_ingot", "steel", "titanium_alloy", "logistics_vessel"]));
+    const crafted = handcraftRecipeWithUpstream(state, "logistics_vessel", 1);
+    expect(crafted.portableFleet.logistics_vessel).toBe(1);
+    expect(crafted.tray.logistics_vessel).toBeUndefined();
+    expect(crafted.tray.iron_ore).toBe(0);
+
+    state.tray.iron_ore = 35;
+    const before = JSON.stringify(state);
+    expect(handcraftRecipeWithUpstream(state, "logistics_vessel", 1)).toBe(state);
+    expect(JSON.stringify(state)).toBe(before);
+  });
+
+  it("finishes recursive orbital-collector handcraft when hydrogen is already above the tray soft limit", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("orbital_collection", "rare_resource_utilization");
+    state.planetTrayItemLimits.home = 100_000_000;
+    state.tray = {
+      hydrogen: 101_000_000,
+      titanium_alloy: 40,
+      super_magnetic_ring: 20,
+      fire_ice: 20,
+    };
+    state.planetTrays.home = state.tray;
+
+    const plan = getConstructionQuickCraftPlan(state, "orbital_collector");
+    expect(plan).toMatchObject({ possible: true, status: "upstream" });
+    const crafted = craftConstructionWithUpstream(state, "orbital_collector");
+    expect(crafted).not.toBe(state);
+    expect(crafted.construction.orbital_collector).toBe(1);
+    expect(crafted.tray.hydrogen).toBe(101_000_010);
+    expect(crafted.tray.fire_ice).toBe(0);
+    expect(crafted.planetTrayItemLimits.home).toBe(100_000_000);
   });
 
   it("stores manufactured and cursor-carried logistics vehicles in the portable fleet across planets", () => {
@@ -2857,7 +3113,7 @@ describe("factory simulation", () => {
     expect(fluid.entities.find((entity) => entity.id === "vein_water")?.productionRate).toBe(60);
   });
 
-  it("locks spray-coater installation behind technology and returns the module on removal", () => {
+  it("locks spray-coater installation and losslessly removes the module from an existing building", () => {
     let state = createInitialState();
     state.construction.spray_coater = 1;
     state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
@@ -2876,9 +3132,23 @@ describe("factory simulation", () => {
       proliferatorPoints: 0,
     });
     expect(state.construction.spray_coater).toBe(0);
-
-    state = removeEntity(state, assembler.id);
+    const installed = state.entities.find((entity) => entity.id === assembler.id)!;
+    installed.inputs.proliferator_mk1 = 3;
+    installed.proliferatorPoints = 2;
+    state.belts.push({ id: "spray_line", planetId: "home", source: "vein_coal", target: assembler.id, itemId: "proliferator_mk1", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 1, lastFlow: 0 });
+    expect(getSprayCoaterRemovalRefund(state, assembler.id)).toMatchObject({
+      sprayCoaters: 1,
+      proliferatorItemId: "proliferator_mk1",
+      proliferatorItems: 4,
+      bufferedProliferatorItems: 3,
+      recoveredPointItems: 1,
+      remainingSprayPoints: 2,
+    });
+    state = removeSprayCoater(state, assembler.id);
     expect(state.construction.spray_coater).toBe(1);
+    expect(state.tray.proliferator_mk1).toBe(4);
+    expect(state.belts.some((belt) => belt.id === "spray_line")).toBe(false);
+    expect(state.entities.find((entity) => entity.id === assembler.id)).toMatchObject({ sprayCoaterInstalled: false, proliferatorPoints: 0 });
   });
 
   it("diagnoses spray-coater installation and installs two smelters in sequence", () => {
@@ -3198,6 +3468,29 @@ describe("factory simulation", () => {
     expect(vessels.state.portableFleet.logistics_vessel).toBe(0);
   });
 
+  it("sets station fleet targets by difference and refuses to unload busy vehicles", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics");
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 });
+    const station = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    state.portableFleet = { logistics_drone: 10, logistics_vessel: 10 };
+
+    const drones = setStationFleetTarget(state, station.id, "drone", 7);
+    expect(drones).toMatchObject({ current: 0, final: 7, loaded: 7, unloaded: 0, shortfall: 0 });
+    const vessels = setStationFleetTarget(drones.state, station.id, "vessel", 4);
+    expect(vessels).toMatchObject({ final: 4, loaded: 4, shortfall: 0 });
+    const unloaded = setStationFleetTarget(vessels.state, station.id, "drone", 2);
+    expect(unloaded).toMatchObject({ final: 2, loaded: 0, unloaded: 5 });
+    expect(unloaded.state.portableFleet).toEqual({ logistics_drone: 8, logistics_vessel: 6 });
+
+    const activeStation = unloaded.state.entities.find((entity) => entity.id === station.id)!;
+    activeStation.stationRoutes = [{ id: "busy", slotIndex: 0, peerId: station.id, itemId: "iron_ingot", scope: "local", cargo: 1, vehicleCount: 2, progress: 0.5, duration: 10, requiresWarp: false, vehicleStationId: station.id }];
+    const blocked = setStationFleetTarget(unloaded.state, station.id, "drone", 0);
+    expect(blocked).toMatchObject({ final: 2, busy: 2, reason: "busy-vehicles" });
+    expect(blocked.state).toBe(unloaded.state);
+  });
+
   it("uses both station fleets without reserving a vehicle or cargo twice", () => {
     let state = createInitialState();
     state.construction.wind_turbine = 4;
@@ -3266,14 +3559,52 @@ describe("factory simulation", () => {
       { id: "stack_a", planetId: "home", source: "a", target: "b", itemId: "iron_ingot", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 0, lastFlow: 0 },
       { id: "stack_b", planetId: "home", source: "b", target: "c", itemId: "iron_ingot", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 0, lastFlow: 0 },
     ];
+    state.construction.conveyor_belt_mk1 = 2;
+    state.belts[0].lanes = 3;
+    state.belts[1].progress = 0.75;
+    state.belts[1].totalTransferred = 12;
+    state.belts[1].lastFlow = 7.5;
     state = setBeltStackSize(state, "stack_a", 4);
     state = setBeltPriority(state, "stack_a", 2);
     state = setBeltMonitorEnabled(state, "stack_a", true);
-    state = applyBeltConfiguration(state, "stack_a", "stack_b");
+    state = setBeltRouteMode(state, "stack_a", "manual");
+    state = setBeltRouteOffsetY(state, "stack_a", 64);
+    const applied = applyBeltConfigurationToBelts(state, "stack_a", ["stack_b"]);
+    expect(applied).toMatchObject({ applied: 1, skipped: 0, failed: 0 });
+    state = applied.state;
 
-    expect(getBeltCapacity(state.belts[0])).toBe(24);
+    expect(getBeltCapacity(state.belts[0])).toBe(72);
     expect(getBeltNetworkIds(state, "stack_a")).toEqual(["stack_a", "stack_b"]);
-    expect(state.belts[1]).toMatchObject({ stackSize: 4, priority: 2, monitorEnabled: true });
+    expect(state.belts[1]).toMatchObject({ lanes: 3, stackSize: 4, priority: 2, monitorEnabled: true, routeMode: "manual", routeOffsetY: 64, progress: 0.75, totalTransferred: 12, lastFlow: 7.5 });
+    expect(state.construction.conveyor_belt_mk1).toBe(0);
+    expect(applyBeltConfigurationToBelts(state, "stack_a", ["stack_b"])).toMatchObject({ applied: 0, skipped: 1, failed: 0 });
+
+    const blocked = applyBeltConfigurationToBelts({ ...state, construction: { ...state.construction, conveyor_belt_mk1: 0 }, belts: state.belts.map((belt) => belt.id === "stack_b" ? { ...belt, lanes: 1 } : belt) }, "stack_a", ["stack_b"]);
+    expect(blocked.error).toContain("缺少传送带");
+    expect(blocked).toMatchObject({ applied: 0, skipped: 0, failed: 1 });
+    expect(blocked.state.belts.find((belt) => belt.id === "stack_b")?.lanes).toBe(1);
+  });
+
+  it("records station fleet targets in blueprints and partially loads from the portable fleet", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics");
+    state.construction.interstellar_logistics_station = 2;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 });
+    const source = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    source.stationDrones = 12;
+    source.stationVessels = 3;
+    state = createBlueprint(state, [source.id], "载具目标蓝图");
+    const blueprint = state.blueprints[0];
+    expect(blueprint.entities[0]).toMatchObject({ stationDroneTarget: 12, stationVesselTarget: 3 });
+    state.portableFleet = { logistics_drone: 5, logistics_vessel: 2 };
+    expect(getBlueprintFleetLoadPreview(state, blueprint.id)).toEqual({
+      drones: { target: 12, loaded: 5, shortfall: 7 },
+      vessels: { target: 3, loaded: 2, shortfall: 1 },
+    });
+    state = placeBlueprint(state, blueprint.id, { x: 500, y: 500 });
+    const placed = state.entities.find((entity) => entity.id !== source.id && entity.buildingId === "interstellar_logistics_station")!;
+    expect(placed).toMatchObject({ stationDrones: 5, stationVessels: 2, stationRoutes: [] });
+    expect(state.portableFleet).toEqual({ logistics_drone: 0, logistics_vessel: 0 });
   });
 
   it("rotates, mirrors and parameterizes blueprint deployment while preserving external ports", () => {
@@ -3314,6 +3645,149 @@ describe("factory simulation", () => {
     const pendingId = state.constructionQueue[0].id;
     state = cancelConstructionQueueEntry(state, pendingId);
     expect(state.constructionQueue).toEqual([]);
+  });
+
+  it("reserves blueprint materials across repeated funding and refunds them exactly on cancellation", () => {
+    let state = createInitialState();
+    state.construction.storage_mk1 = 2;
+    state = placeBuilding(state, "storage_mk1", { x: 0, y: 0 });
+    state = placeBuilding(state, "storage_mk1", { x: 240, y: 0 });
+    const storages = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+    state = setLogisticsItem(state, storages[0].id, "gear");
+    state = setLogisticsItem(state, storages[1].id, "gear");
+    state = connectBelt(state, storages[0].id, storages[1].id, "gear");
+    state = createBlueprint(state, storages.map((entity) => entity.id), "分批补足蓝图");
+    const blueprintId = state.blueprints[0].id;
+    state.construction.storage_mk1 = 1;
+    state.construction.conveyor_belt_mk1 = 0;
+    state = queueBlueprint(state, blueprintId, { x: 800, y: 500 });
+    const orderId = state.constructionQueue[0].id;
+
+    state = fundConstructionQueueEntry(state, orderId, "construction");
+    expect(state.constructionQueue[0].reservedConstruction).toEqual({ storage_mk1: 1, conveyor_belt_mk1: 0 });
+    expect(state.construction.storage_mk1).toBe(0);
+    expect(state.entities.filter((entity) => entity.position.y === 500)).toHaveLength(0);
+
+    state.construction.conveyor_belt_mk1 = 1;
+    state = fundConstructionQueueEntry(state, orderId, "construction");
+    expect(state.constructionQueue[0].reservedConstruction).toEqual({ storage_mk1: 1, conveyor_belt_mk1: 1 });
+    state = cancelConstructionQueueEntry(state, orderId);
+    expect(state.constructionQueue).toEqual([]);
+    expect(state.construction.storage_mk1).toBe(1);
+    expect(state.construction.conveyor_belt_mk1).toBe(1);
+    expect(state.blueprintVersions).toEqual([]);
+  });
+
+  it("keeps queued blueprint revisions immutable after library edits or deletion", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    state = createBlueprint(state, [assembler.id], "不可变版本");
+    const blueprintId = state.blueprints[0].id;
+    state.construction.assembling_machine_mk1 = 0;
+    state = queueBlueprint(state, blueprintId, { x: 900, y: 600 });
+    const orderId = state.constructionQueue[0].id;
+    const versionId = state.constructionQueue[0].blueprintVersionId;
+
+    state = renameBlueprint(state, blueprintId, "已修改蓝图");
+    state = setBlueprintTransform(state, blueprintId, 90, "horizontal");
+    state = removeBlueprint(state, blueprintId);
+    expect(state.blueprints).toEqual([]);
+    expect(getConstructionQueueDetails(state, orderId).blueprint).toMatchObject({ name: "不可变版本", rotation: 0, mirror: "none" });
+    expect(state.blueprintVersions[0].id).toBe(versionId);
+
+    state.construction.assembling_machine_mk1 = 1;
+    state = fundConstructionQueueEntry(state, orderId, "construction");
+    expect(state.entities.some((entity) => entity.position.x === 900 && entity.position.y === 600)).toBe(true);
+    expect(state.constructionQueue).toEqual([]);
+    expect(state.blueprintVersions).toEqual([]);
+  });
+
+  it("keeps fleet optional during construction and installs it later without touching unreserved vehicles", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics");
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 });
+    const source = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    source.stationDrones = 5;
+    source.stationVessels = 3;
+    state = createBlueprint(state, [source.id], "载具后补蓝图");
+    const blueprintId = state.blueprints[0].id;
+    state.construction.interstellar_logistics_station = 1;
+    state.portableFleet = { logistics_drone: 20, logistics_vessel: 20 };
+    state = queueBlueprint(state, blueprintId, { x: 700, y: 700 });
+    const orderId = state.constructionQueue[0].id;
+
+    state = fundConstructionQueueEntry(state, orderId, "construction");
+    const placed = state.entities.find((entity) => entity.position.x === 700 && entity.position.y === 700)!;
+    expect(placed).toMatchObject({ stationDrones: 0, stationVessels: 0 });
+    expect(state.portableFleet).toEqual({ logistics_drone: 20, logistics_vessel: 20 });
+    expect(state.constructionQueue[0]).toMatchObject({ status: "waiting-fleet", reservedConstruction: {}, reservedFleet: {} });
+
+    state = fundConstructionQueueEntry(state, orderId, "fleet");
+    expect(state.entities.find((entity) => entity.id === placed.id)).toMatchObject({ stationDrones: 5, stationVessels: 3 });
+    expect(state.portableFleet).toEqual({ logistics_drone: 15, logistics_vessel: 17 });
+    expect(state.constructionQueue).toEqual([]);
+  });
+
+  it("funds competing construction orders in stable creation order without duplicate placement", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    state = createBlueprint(state, [assembler.id], "竞争订单");
+    const blueprintId = state.blueprints[0].id;
+    state.construction.assembling_machine_mk1 = 0;
+    state = queueBlueprint(state, blueprintId, { x: 700, y: 300 });
+    state = queueBlueprint(state, blueprintId, { x: 900, y: 300 });
+    const [firstOrder, secondOrder] = state.constructionQueue.map((entry) => entry.id);
+
+    state.construction.assembling_machine_mk1 = 1;
+    state = fundAllConstructionQueueEntries(state);
+    expect(state.entities.some((entity) => entity.position.x === 700 && entity.position.y === 300)).toBe(true);
+    expect(state.entities.some((entity) => entity.position.x === 900 && entity.position.y === 300)).toBe(false);
+    expect(state.constructionQueue.map((entry) => entry.id)).toEqual([secondOrder]);
+    expect(state.constructionQueue.some((entry) => entry.id === firstOrder)).toBe(false);
+
+    state.construction.assembling_machine_mk1 = 1;
+    state = fundAllConstructionQueueEntries(state);
+    expect(state.entities.filter((entity) => entity.position.y === 300)).toHaveLength(2);
+    expect(state.constructionQueue).toEqual([]);
+    expect(state.construction.assembling_machine_mk1).toBe(0);
+  });
+
+  it("blocks a queued deployment if its position becomes occupied and cancels fleet follow-up when its tower is removed", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 });
+    const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    state = createBlueprint(state, [assembler.id], "重叠保护");
+    const blueprintId = state.blueprints[0].id;
+    state.construction.assembling_machine_mk1 = 0;
+    state = queueBlueprint(state, blueprintId, { x: 800, y: 200 });
+    const orderId = state.constructionQueue[0].id;
+    state.construction.assembling_machine_mk1 = 2;
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 800, y: 200 });
+    const unchanged = fundConstructionQueueEntry(state, orderId, "construction");
+    expect(unchanged).toBe(state);
+    expect(getConstructionQueueDetails(state, orderId)).toMatchObject({ compatible: false, blockedReason: "放置位置、行星或资源锚点已不兼容" });
+    state = cancelConstructionQueueEntry(state, orderId);
+
+    state.research.completedTechIds.push("interstellar_logistics");
+    state.construction.interstellar_logistics_station = 1;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 500 });
+    const source = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+    source.stationDrones = 2;
+    state = createBlueprint(state, [source.id], "拆塔取消补足");
+    const stationBlueprintId = state.blueprints.at(-1)!.id;
+    state.construction.interstellar_logistics_station = 1;
+    state.portableFleet.logistics_drone = 0;
+    state = queueBlueprint(state, stationBlueprintId, { x: 600, y: 600 });
+    const fleetOrderId = state.constructionQueue[0].id;
+    state = fundConstructionQueueEntry(state, fleetOrderId, "construction");
+    const placedTower = state.entities.find((entity) => entity.position.x === 600 && entity.position.y === 600)!;
+    expect(state.constructionQueue[0].status).toBe("waiting-fleet");
+    state = removeEntity(state, placedTower.id);
+    expect(state.constructionQueue).toEqual([]);
+    expect(state.blueprintVersions).toEqual([]);
   });
 
   it("applies logistics engine and cargo upgrades to real station dispatches", () => {
@@ -3384,6 +3858,38 @@ describe("factory simulation", () => {
     expect(collector.outputs.hydrogen).toBeLessThan(40);
     expect(station.stationTrips).toBe(1);
     expect(Number.isInteger(station.outputs.hydrogen ?? 0)).toBe(true);
+  });
+
+  it("treats orbital collectors as self-powered and reports a saturated vessel fleet without false power alarms", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics");
+    state.construction.orbital_collector = 1;
+    state.construction.interstellar_logistics_station = 1;
+    state.construction.wind_turbine = 80;
+    state = setActivePlanet(state, "giant");
+    state = placeBuilding(state, "orbital_collector", { x: 0, y: 0 });
+    const collectorId = state.entities.find((entity) => entity.buildingId === "orbital_collector")!.id;
+    state.entities.find((entity) => entity.id === collectorId)!.outputs.hydrogen = 10_000;
+    state = setActivePlanet(state, "home");
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 80);
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 300, y: 0 });
+    const stationId = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!.id;
+    state = setLogisticsItem(state, stationId, "hydrogen");
+    state = setStationMode(state, stationId, "demand");
+    state = setStationMinimumLoad(state, stationId, 0.1);
+    state.portableFleet.logistics_vessel = 10;
+    state = adjustStationVessels(state, stationId, 10);
+    expect(getEntityPowerFactor(state, state.entities.find((entity) => entity.id === collectorId)!)).toBe(1);
+
+    state = advanceSimulation(state, 0.1);
+    expect(getStationFleetDiagnostic(state, stationId)?.vessels).toMatchObject({ installed: 10, busy: 10, available: 0, blockerCode: "all-busy" });
+    expect(state.entities.find((entity) => entity.id === stationId)?.stationRoutes?.every((route) => !route.requiresWarp && (route.warpersPerVessel ?? 0) === 0)).toBe(true);
+    for (let second = 0; second < 45; second += 1) {
+      const status = getEntityOperatingStatus(state, state.entities.find((entity) => entity.id === stationId)!);
+      expect(["no-power", "low-power"]).not.toContain(status.code);
+      state = advanceSimulation(state, 1);
+    }
+    expect(state.entities.find((entity) => entity.id === stationId)?.stationTrips).toBe(10);
   });
 
   it("loads, toggles and refunds a station warper reserve", () => {
@@ -3755,6 +4261,74 @@ describe("factory simulation", () => {
     expect(state.entities.find((entity) => entity.id === hub.id)?.inputs).toMatchObject({ iron_ingot: 0, copper_ingot: 0, stone_brick: 0 });
   });
 
+  it("reconfigures one delivery-hub port with confirmation while preserving every other line and buffered item", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("basic_logistics", "material_delivery_logistics");
+    state.construction.storage_mk1 = 2;
+    state.construction.material_delivery_hub = 1;
+    state.construction.conveyor_belt_mk1 = 2;
+    state = placeBuilding(state, "storage_mk1", { x: -320, y: -100 });
+    state = placeBuilding(state, "storage_mk1", { x: -320, y: 100 });
+    state = placeBuilding(state, "material_delivery_hub", { x: 0, y: 0 });
+    const [ironSource, copperSource] = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+    const hub = state.entities.find((entity) => entity.buildingId === "material_delivery_hub")!;
+    state = setLogisticsItem(state, ironSource.id, "iron_ingot");
+    state = setLogisticsItem(state, copperSource.id, "copper_ingot");
+    state = connectBelt(state, ironSource.id, hub.id, "iron_ingot", 1, 0);
+    state = connectBelt(state, copperSource.id, hub.id, "copper_ingot", 1, 1);
+    state.entities.find((entity) => entity.id === hub.id)!.inputs.iron_ingot = 7;
+
+    const check = getMaterialDeliverySlotChangeCheck(state, hub.id, 0, "manual", "stone_brick");
+    expect(check).toMatchObject({ ok: true, requiresDisconnect: true, connectedBelts: 1, bufferedItems: 7 });
+    expect(setMaterialDeliverySlot(state, hub.id, 0, "manual", "stone_brick")).toBe(state);
+
+    const stockBefore = state.construction.conveyor_belt_mk1 ?? 0;
+    state = setMaterialDeliverySlot(state, hub.id, 0, "manual", "stone_brick", true);
+    const changedHub = state.entities.find((entity) => entity.id === hub.id)!;
+    expect(getMaterialDeliverySlots(changedHub)).toEqual([
+      { itemId: "stone_brick", mode: "manual" },
+      { itemId: "copper_ingot", mode: "auto" },
+      { itemId: null, mode: "auto" },
+    ]);
+    expect(state.belts).toHaveLength(1);
+    expect(state.belts[0]).toMatchObject({ target: hub.id, itemId: "copper_ingot", targetPortIndex: 1 });
+    expect(state.construction.conveyor_belt_mk1).toBe(stockBefore + 1);
+    expect(state.tray.iron_ingot).toBe(7);
+    expect(changedHub.inputs.iron_ingot).toBeUndefined();
+
+    state = setMaterialDeliverySlot(state, hub.id, 0, "disabled");
+    expect(getMaterialDeliverySlots(state.entities.find((entity) => entity.id === hub.id)!)[0]).toEqual({ itemId: null, mode: "disabled" });
+    state = setMaterialDeliverySlot(state, hub.id, 0, "auto");
+    expect(getMaterialDeliverySlots(state.entities.find((entity) => entity.id === hub.id)!)[0]).toEqual({ itemId: null, mode: "auto" });
+  });
+
+  it("treats the delivery hub as tray-backed pass-through above its 900-item building buffer", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("basic_logistics", "material_delivery_logistics", "super_magnetic_logistics");
+    state.construction.storage_mk1 = 1;
+    state.construction.material_delivery_hub = 1;
+    state.construction.conveyor_belt_mk1 = 1;
+    state = placeBuilding(state, "storage_mk1", { x: -320, y: 0 });
+    state = placeBuilding(state, "material_delivery_hub", { x: 0, y: 0 });
+    const source = state.entities.find((entity) => entity.buildingId === "storage_mk1")!;
+    const hub = state.entities.find((entity) => entity.buildingId === "material_delivery_hub")!;
+    state = setLogisticsItem(state, source.id, "iron_ingot");
+    state.entities.find((entity) => entity.id === source.id)!.outputs.iron_ingot = 6_000;
+    state = connectBelt(state, source.id, hub.id, "iron_ingot");
+    const belt = state.belts[0];
+    belt.tier = 3;
+    belt.sorterTier = 3;
+    belt.lanes = 64;
+    belt.stackSize = 4;
+    state = setPlanetTrayItemLimit(state, "home", 5_000);
+
+    state = advanceSimulation(state, 10);
+    expect(state.tray.iron_ingot).toBe(5_000);
+    expect(state.entities.find((entity) => entity.id === source.id)?.outputs.iron_ingot).toBe(1_000);
+    expect(state.entities.find((entity) => entity.id === hub.id)?.inputs.iron_ingot ?? 0).toBe(0);
+    expect(getEntityOperatingStatus(state, state.entities.find((entity) => entity.id === hub.id)!)).toMatchObject({ code: "output-blocked" });
+  });
+
   it("defaults delivery-hub inputs below ordinary lines and preserves a manual priority override", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("basic_logistics", "material_delivery_logistics");
@@ -3816,6 +4390,23 @@ describe("factory simulation", () => {
     expect(state.tray).toMatchObject({ iron_ingot: 0, stone_brick: 0, circuit_board: 0, magnetic_coil: 0 });
   });
 
+  it("lets the construction center maintain logistics-vessel stock", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("construction_automation", "interstellar_logistics");
+    state.construction.wind_turbine = 80;
+    state.construction.construction_center = 1;
+    state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 80);
+    state = placeBuilding(state, "construction_center", { x: 120, y: 0 });
+    state.tray = { titanium_alloy: 10, processor: 10, plasma_exciter: 4 };
+    state.planetTrays.home = state.tray;
+    state = setConstructionAutomationTarget(state, "logistics_vessel", 1);
+    state = advanceSimulation(state, 2);
+
+    expect(state.portableFleet.logistics_vessel).toBe(1);
+    expect(state.constructionAutomation).toMatchObject({ totalCrafted: 1, lastCraftedId: "logistics_vessel" });
+    expect(state.constructionAutomation.jobs).toEqual({});
+  });
+
   it("recursively processes construction intermediates but never creates missing raw resources", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("construction_automation");
@@ -3853,7 +4444,25 @@ describe("factory simulation", () => {
     expect(status.missingItemId).toBeDefined();
   });
 
-  it("reports recursive manufacturing safety limits and refunds WIP when the target is cancelled", () => {
+  it("continues from iron ore through iron ingots and steel for construction-center targets", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("construction_automation", "high_efficiency_plasma_control");
+    state.construction.wind_turbine = 80;
+    state.construction.construction_center = 1;
+    state.construction.oil_extractor = 0;
+    state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 80);
+    state = placeBuilding(state, "construction_center", { x: 120, y: 0 });
+    state.tray = { iron_ore: 36, stone_brick: 12, circuit_board: 6, plasma_exciter: 4 };
+    state.planetTrays.home = state.tray;
+    state = setConstructionAutomationTarget(state, "oil_extractor", 1);
+    state = advanceSimulation(state, 12);
+
+    expect(state.construction.oil_extractor).toBe(1);
+    expect(state.tray.iron_ore).toBe(0);
+    expect(state.totalProduced.steel).toBe(12);
+  });
+
+  it("settles optional construction-center WIP without blocking and refunds required WIP when cancelled", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("construction_automation");
     state.construction.wind_turbine = 80;
@@ -3872,22 +4481,107 @@ describe("factory simulation", () => {
       inventory: { stone: 1_000_000 },
     };
 
-    const status = getConstructionAutomationStatus(state, center.id);
-    expect(status).toMatchObject({
-      stage: "缓存安全上限保护",
-      blockerReason: "safety-limit",
-      missingItemId: "iron_ingot",
-      safetyCurrent: 1_000_000,
-      safetyExpected: 1_000_001,
-      safetyLimit: 1_000_000,
-    });
-    const blocked = advanceSimulation(state, 1);
-    expect(blocked.tray.iron_ore).toBe(1);
-    expect(blocked.constructionAutomation.jobs[center.id].inventory.stone).toBe(1_000_000);
+    expect(getConstructionAutomationStatus(state, center.id)).toMatchObject({ stage: "加工 铁块", blockerReason: undefined });
+    const advanced = advanceSimulation(state, 1);
+    expect(advanced.tray.iron_ore).toBe(0);
+    expect(advanced.tray.stone).toBe(1_000_000);
+    expect(advanced.constructionAutomation.jobs[center.id].inventory).toEqual({ iron_ingot: 1 });
+    expect(advanced.constructionAutomation.destroyedByproducts.stone).toBe(100);
 
-    const cancelled = setConstructionAutomationTarget(blocked, "arc_smelter", 0);
+    const cancelled = setConstructionAutomationTarget(advanced, "arc_smelter", 0);
     expect(cancelled.constructionAutomation.jobs[center.id]).toBeUndefined();
-    expect(cancelled.tray.stone).toBe(1_000_100);
+    expect(cancelled.tray.iron_ingot).toBe(1);
+    expect(cancelled.tray.stone).toBe(1_000_000);
+  });
+
+  it("keeps required construction-center WIP above the legacy one-million limit and resumes atomically", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("construction_automation", "high_efficiency_plasma_control");
+    state.construction.wind_turbine = 80;
+    state.construction.construction_center = 1;
+    state.construction.oil_extractor = 0;
+    state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 80);
+    state = placeBuilding(state, "construction_center", { x: 120, y: 0 });
+    const center = state.entities.find((entity) => entity.buildingId === "construction_center")!;
+    state.tray = {
+      iron_ore: 1_080_000,
+      stone_brick: 12,
+      circuit_board: 6,
+      plasma_exciter: 4,
+    };
+    state.planetTrays.home = state.tray;
+    state.constructionAutomation.targetStock.oil_extractor = 1;
+    state.constructionAutomation.jobs[center.id] = {
+      constructionId: "oil_extractor",
+      steps: [
+        { kind: "material", recipeId: "iron_ingot", batches: 1_080_000, outputItemId: "iron_ingot", outputAmount: 1_080_000 },
+        { kind: "material", recipeId: "steel", batches: 360_000, outputItemId: "steel", outputAmount: 360_000 },
+        { kind: "building", constructionId: "oil_extractor" },
+      ],
+      stepIndex: 0,
+      elapsedSeconds: 108_000,
+      inventory: {},
+    };
+
+    state = advanceSimulation(state, 1);
+    expect(state.constructionAutomation.jobs[center.id]).toMatchObject({
+      stepIndex: 1,
+      elapsedSeconds: 1,
+      inventory: { iron_ingot: 1_080_000 },
+    });
+    expect(state.tray.iron_ore).toBe(0);
+    expect(getConstructionAutomationStatus(state, center.id)).toMatchObject({
+      stage: "加工 钢材",
+      blockerReason: undefined,
+      wipCount: 1_080_000,
+      wipItems: [{ itemId: "iron_ingot", amount: 1_080_000 }],
+    });
+
+    state.constructionAutomation.enabled = false;
+    const pausedJob = structuredClone(state.constructionAutomation.jobs[center.id]);
+    state = advanceSimulation(state, 60);
+    expect(state.constructionAutomation.jobs[center.id]).toEqual(pausedJob);
+    expect(getConstructionAutomationStatus(state, center.id)).toMatchObject({ stage: "自动制造已暂停", blockerReason: "paused" });
+
+    state.constructionAutomation.enabled = true;
+    state.paused = true;
+    state = advanceSimulation(state, 60);
+    expect(state.constructionAutomation.jobs[center.id]).toEqual(pausedJob);
+    expect(getConstructionAutomationStatus(state, center.id)).toMatchObject({ stage: "游戏已暂停", blockerReason: "paused" });
+    state.paused = false;
+    const generators = state.entities.filter((entity) => entity.buildingId === "wind_turbine");
+    state.entities = state.entities.filter((entity) => entity.buildingId !== "wind_turbine");
+    const unpoweredJob = structuredClone(state.constructionAutomation.jobs[center.id]);
+    state = advanceSimulation(state, 60);
+    expect(state.constructionAutomation.jobs[center.id]).toEqual(unpoweredJob);
+    expect(getConstructionAutomationStatus(state, center.id)).toMatchObject({ stage: "等待供电", blockerReason: "no-power" });
+    state.entities.push(...generators);
+    state.tray.steel = getPlanetTrayItemLimit(state, "home");
+    state.constructionAutomation.jobs[center.id].elapsedSeconds = 36_000;
+    const completionInput = structuredClone(state);
+    let chunked = structuredClone(state);
+    state = advanceSimulation(completionInput, 10);
+    for (let second = 0; second < 10; second += 1) chunked = advanceSimulation(chunked, 1);
+
+    expect(state.construction.oil_extractor).toBe(1);
+    expect(state.constructionAutomation.jobs[center.id]).toBeUndefined();
+    expect(state.constructionAutomation.totalCrafted).toBe(1);
+    expect(state.constructionAutomation.destroyedByproducts.steel).toBe(359_988);
+    expect(state.tray.steel).toBe(getPlanetTrayItemLimit(state, "home"));
+    expect(state.totalProduced).toMatchObject({ iron_ingot: 1_080_000, steel: 360_000 });
+    expect(getConstructionAutomationStatus(state, center.id)).toMatchObject({
+      stage: "目标库存已满足",
+      destroyedByproductItems: [{ itemId: "steel", amount: 359_988 }],
+    });
+    expect(chunked.construction).toEqual(state.construction);
+    expect(chunked.constructionAutomation).toEqual(state.constructionAutomation);
+    expect(chunked.tray).toEqual(state.tray);
+    expect(chunked.totalProduced).toEqual(state.totalProduced);
+
+    const settled = advanceSimulation(state, 100);
+    expect(settled.construction.oil_extractor).toBe(1);
+    expect(settled.constructionAutomation.totalCrafted).toBe(1);
+    expect(settled.constructionAutomation.destroyedByproducts.steel).toBe(359_988);
   });
 
   it("applies construction-center speed upgrades to material and final stages", () => {
@@ -3934,8 +4628,8 @@ describe("factory simulation", () => {
     state.construction.material_delivery_hub = 1;
     state = placeBuilding(state, "material_delivery_hub", { x: 320, y: 0 });
     const hub = state.entities.find((entity) => entity.buildingId === "material_delivery_hub")!;
-    hub.deliveryItemIds = ["copper_ingot"];
-    hub.inputs.copper_ingot = 8;
+    state = setMaterialDeliverySlot(state, hub.id, 0, "manual", "copper_ingot");
+    state.entities.find((entity) => entity.id === hub.id)!.inputs.copper_ingot = 8;
     state.tray.copper_ingot = 999;
     state = advanceSimulation(state, 1);
     expect(state.tray.copper_ingot).toBe(1_000);
@@ -4123,6 +4817,79 @@ describe("factory simulation", () => {
     expect(state.entities.find((entity) => entity.id === vein.id)?.resourceRemaining).toBe(infiniteBefore);
   });
 
+  it("reduces solid vein consumption by ten percent per level and becomes lossless at level ten", () => {
+    let state = createInitialState();
+    state.endgame.infiniteResearch.vein_utilization.level = 1;
+    expect(getVeinConsumptionMultiplier(state)).toBe(0.9);
+    state.construction.wind_turbine = 2;
+    state.construction.mining_machine = 1;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -180 }, 2);
+    state = installMiner(state, "vein_iron");
+    const vein = state.entities.find((entity) => entity.id === "vein_iron")!;
+    vein.resourceCapacity = 100;
+    vein.resourceRemaining = 100;
+    vein.resourceDepletionRemainder = 0;
+    vein.outputs.iron_ore = 0;
+
+    let chunked = JSON.parse(JSON.stringify(state)) as typeof state;
+    state = advanceSimulation(state, 20);
+    for (let second = 0; second < 20; second += 1) chunked = advanceSimulation(chunked, 1);
+    expect(state.entities.find((entity) => entity.id === vein.id)).toMatchObject({
+      outputs: { iron_ore: 11 },
+      resourceRemaining: 91,
+      resourceDepletionRemainder: 9,
+    });
+    expect(chunked.entities.find((entity) => entity.id === vein.id)).toMatchObject({
+      outputs: { iron_ore: 11 },
+      resourceRemaining: 91,
+      resourceDepletionRemainder: 9,
+    });
+
+    const almostDepleted = state.entities.find((entity) => entity.id === vein.id)!;
+    almostDepleted.outputs.iron_ore = 0;
+    almostDepleted.progress = 0;
+    almostDepleted.resourceRemaining = 1;
+    almostDepleted.resourceDepletionRemainder = 9;
+    state = advanceSimulation(state, 20);
+    expect(state.entities.find((entity) => entity.id === vein.id)?.outputs.iron_ore).toBe(0);
+    expect(getResourceReserveSnapshot(state, state.entities.find((entity) => entity.id === vein.id)!)).toMatchObject({
+      infinite: false,
+      exhausted: true,
+    });
+
+    state.endgame.infiniteResearch.vein_utilization.level = 10;
+    expect(getVeinConsumptionMultiplier(state)).toBe(0);
+    state = advanceSimulation(state, 20);
+    expect(state.entities.find((entity) => entity.id === vein.id)).toMatchObject({
+      outputs: { iron_ore: 20 },
+      resourceRemaining: 1,
+      resourceDepletionRemainder: 9,
+    });
+    expect(getResourceReserveSnapshot(state, state.entities.find((entity) => entity.id === vein.id)!)).toMatchObject({
+      infinite: true,
+      exhausted: false,
+    });
+  });
+
+  it("applies vein utilization to manual mining without changing integer material conservation", () => {
+    let state = createInitialState();
+    state.endgame.infiniteResearch.vein_utilization.level = 1;
+    const vein = state.entities.find((entity) => entity.id === "vein_iron")!;
+    vein.resourceRemaining = 20;
+    vein.resourceCapacity = 20;
+    state = manualMine(state, vein.id, 11);
+    expect(state.entities.find((entity) => entity.id === vein.id)).toMatchObject({
+      outputs: { iron_ore: 11 },
+      resourceRemaining: 11,
+      resourceDepletionRemainder: 9,
+    });
+
+    state.endgame.infiniteResearch.vein_utilization.level = 10;
+    const before = state.entities.find((entity) => entity.id === vein.id)!.resourceRemaining;
+    state = manualMine(state, vein.id, 5);
+    expect(state.entities.find((entity) => entity.id === vein.id)?.resourceRemaining).toBe(before);
+  });
+
   it("reports one reserve snapshot for finite, depleted and genuinely infinite resources", () => {
     const state = createInitialState();
     const iron = state.entities.find((entity) => entity.id === "vein_iron")!;
@@ -4254,5 +5021,213 @@ describe("factory simulation", () => {
   it("continues beyond the legacy eight-hour offline window with bounded stepping", () => {
     const state = advanceSimulation(createInitialState(), 9 * 60 * 60);
     expect(state.elapsedSeconds).toBe(9 * 60 * 60);
+  });
+
+  it("locks only player interaction while preserving simulation state and unlocks explicitly", () => {
+    let state = createInitialState();
+    state.construction.arc_smelter = 2;
+    state = placeBuilding(state, "arc_smelter", { x: 0, y: 0 });
+    const entity = state.entities.find((candidate) => candidate.buildingId === "arc_smelter")!;
+    entity.inputs.iron_ore = 20;
+    state = setEntitiesInteractionLocked(state, [entity.id, entity.id, "missing"], true);
+    const locked = state.entities.find((candidate) => candidate.id === entity.id)!;
+    expect(locked.interactionLocked).toBe(true);
+    expect(moveEntities(state, [{ id: entity.id, position: { x: 500, y: 500 } }])).toBe(state);
+    expect(removeEntity(state, entity.id)).toBe(state);
+    expect(upgradeEntity(state, entity.id)).toBe(state);
+    const simulated = advanceSimulation(state, 1);
+    expect(simulated.entities.find((candidate) => candidate.id === entity.id)?.inputs.iron_ore).toBeLessThanOrEqual(20);
+    state = setEntitiesInteractionLocked(simulated, [entity.id], false);
+    expect(state.entities.find((candidate) => candidate.id === entity.id)?.interactionLocked).toBe(false);
+  });
+
+  it("refills a station warper bay from input, unreserved output, then its planet tray", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("interstellar_logistics", "space_warp");
+    state.construction.interstellar_logistics_station = 2;
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 });
+    state = placeBuilding(state, "interstellar_logistics_station", { x: 300, y: 0 });
+    const [source, demand] = state.entities.filter((entity) => entity.buildingId === "interstellar_logistics_station");
+    source.stationWarperAutoRefill = true;
+    source.stationWarperTarget = 6;
+    source.inputs.space_warper = 3;
+    source.outputs.space_warper = 5;
+    demand.stationRoutes = [{ id: "reserved-warper-route", slotIndex: 0, peerId: source.id, itemId: "space_warper", scope: "remote", cargo: 4, vehicleCount: 1, progress: 0.5, duration: 10, requiresWarp: false, vehicleStationId: demand.id }];
+    state.tray.space_warper = 10;
+
+    expect(getStationWarperRefillSnapshot(state, source.id)).toMatchObject({ inputAvailable: 3, outputStored: 5, outputReserved: 4, outputAvailable: 1, trayAvailable: 10 });
+    refillStationWarpers(state);
+    expect(source.stationWarpers).toBe(6);
+    expect(source.inputs.space_warper).toBe(0);
+    expect(source.outputs.space_warper).toBe(4);
+    expect(state.tray.space_warper).toBe(8);
+  });
+
+  it("dispatches every available vessel without a hidden twenty-vessel ceiling", () => {
+    const createFleetScenario = (warpers: number) => {
+      let state = createInitialState();
+      state.research.completedTechIds.push("interstellar_logistics", "space_warp");
+      state.exploration.unlockedSystemIds.push("aurora", "sirius");
+      state.exploration.colonizedPlanetIds.push("verdant", "crystal");
+      state.construction.wind_turbine = 60;
+      state.construction.interstellar_logistics_station = 15;
+      state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 20);
+      state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 }, 5);
+      const supply = state.entities.find((entity) => entity.buildingId === "interstellar_logistics_station")!;
+      state = setStationSlotItem(state, supply.id, 0, "processor");
+      state.entities.find((entity) => entity.id === supply.id)!.outputs.processor = 5_000;
+      state.entities.find((entity) => entity.id === supply.id)!.stationVessels = 50;
+      state.entities.find((entity) => entity.id === supply.id)!.stationWarpers = warpers;
+
+      state = setActivePlanet(state, "verdant");
+      state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 20);
+      state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 }, 5);
+      const hub = state.entities.find((entity) => entity.planetId === "verdant" && entity.buildingId === "interstellar_logistics_station")!;
+      state = setStationHubConfiguration(state, hub.id, true, 2);
+
+      state = setActivePlanet(state, "crystal");
+      state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 20);
+      state = placeBuilding(state, "interstellar_logistics_station", { x: 0, y: 0 }, 5);
+      const demand = state.entities.find((entity) => entity.planetId === "crystal" && entity.buildingId === "interstellar_logistics_station")!;
+      state = setStationSlotItem(state, demand.id, 0, "processor");
+      state = setStationSlotMode(state, demand.id, 0, "remote", "demand");
+      state = setStationSlotMinimumLoad(state, demand.id, 0, 0.1);
+      state = setStationSlotRoutePolicy(state, demand.id, 0, "relay-required");
+      state = setStationSlotWarperBudget(state, demand.id, 0, 2);
+      return { state, supplyId: supply.id, demandId: demand.id };
+    };
+
+    const full = createFleetScenario(200);
+    let state = advanceSimulation(full.state, 0.1);
+    const routes = state.entities.find((entity) => entity.id === full.demandId)?.stationRoutes ?? [];
+    expect(routes.reduce((sum, route) => sum + route.vehicleCount, 0)).toBe(50);
+    expect(routes.every((route) => route.warpersPerVessel === 2 && route.waypointStationIds?.length === 1)).toBe(true);
+    expect(getStationBusyVehicleCount(state, full.supplyId, "remote")).toBe(50);
+    expect(state.entities.find((entity) => entity.id === full.supplyId)?.stationWarpers).toBe(100);
+
+    const limited = createFleetScenario(40);
+    state = advanceSimulation(limited.state, 0.1);
+    const limitedRoutes = state.entities.find((entity) => entity.id === limited.demandId)?.stationRoutes ?? [];
+    expect(limitedRoutes.reduce((sum, route) => sum + route.vehicleCount, 0)).toBe(20);
+    expect(limitedRoutes.every((route) => route.warpersPerVessel === 2 && route.waypointStationIds?.length === 1)).toBe(true);
+    expect(getStationBusyVehicleCount(state, limited.supplyId, "remote")).toBe(20);
+    expect(state.entities.find((entity) => entity.id === limited.supplyId)?.stationWarpers).toBe(0);
+    expect(getStationFleetDiagnostic(state, limited.supplyId)?.vessels).toMatchObject({
+      installed: 50,
+      busy: 20,
+      available: 0,
+      blocked: 30,
+      blockerCode: "missing-warper",
+    });
+  });
+
+  it("settles long construction-center work without the former 128-iteration truncation", () => {
+    const createFactory = () => {
+      let state = createInitialState(55_001);
+      state.research.completedTechIds.push("construction_automation", "construction_capacity_1");
+      state.construction.wind_turbine = 80;
+      state.construction.construction_center = 1;
+      state.construction.arc_smelter = 0;
+      state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 80);
+      state = placeBuilding(state, "construction_center", { x: 120, y: 0 });
+      state.tray.iron_ingot = 2_000;
+      state.tray.stone_brick = 1_000;
+      state.tray.circuit_board = 2_000;
+      state.tray.magnetic_coil = 1_000;
+      return setConstructionAutomationTarget(state, "arc_smelter", 500);
+    };
+    const singleChunk = advanceSimulation(createFactory(), 600);
+    let oneSecondChunks = createFactory();
+    const centerId = oneSecondChunks.entities.find((entity) => entity.buildingId === "construction_center")!.id;
+    const trace = [];
+    for (let second = 1; second <= 600; second += 1) {
+      oneSecondChunks = advanceSimulation(oneSecondChunks, 1);
+      trace.push(getConstructionCenterTraceSample(oneSecondChunks, centerId, second, 0, 0)!);
+    }
+    expect(singleChunk.construction.arc_smelter).toBeGreaterThan(128);
+    expect(singleChunk.construction.arc_smelter).toBe(oneSecondChunks.construction.arc_smelter);
+    expect(singleChunk.tray).toMatchObject(oneSecondChunks.tray);
+    expect(singleChunk.constructionAutomation.totalCrafted).toBe(oneSecondChunks.constructionAutomation.totalCrafted);
+    expect(trace).toHaveLength(600);
+    expect(trace.every((sample) => sample.guardHitCount === 0 && sample.simulationSecond === sample.wallSecond)).toBe(true);
+    for (let end = 30; end < trace.length; end += 30) {
+      expect(trace[end].completedBuildings - trace[end - 30].completedBuildings).toBeGreaterThanOrEqual(5);
+    }
+
+    const fourXBudget = advanceSimulation(createFactory(), 2_400);
+    let backgroundChunks = createFactory();
+    for (let elapsed = 0; elapsed < 2_400;) {
+      const chunk = Math.min(2_400 - elapsed, elapsed % 90 === 0 ? 30 : 60);
+      backgroundChunks = advanceSimulation(backgroundChunks, chunk);
+      elapsed += chunk;
+    }
+    expect(backgroundChunks.construction.arc_smelter).toBe(fourXBudget.construction.arc_smelter);
+    expect(backgroundChunks.tray).toEqual(fourXBudget.tray);
+    expect(backgroundChunks.constructionAutomation).toEqual(fourXBudget.constructionAutomation);
+
+    let saveLoadSplit = advanceSimulation(createFactory(), 300);
+    saveLoadSplit = JSON.parse(JSON.stringify(saveLoadSplit)) as typeof saveLoadSplit;
+    saveLoadSplit = advanceSimulation(saveLoadSplit, 300);
+    expect(saveLoadSplit.construction.arc_smelter).toBe(singleChunk.construction.arc_smelter);
+    expect(saveLoadSplit.tray).toEqual(singleChunk.tray);
+    expect(saveLoadSplit.constructionAutomation).toEqual(singleChunk.constructionAutomation);
+  });
+
+  it("keeps Mk.II transport equivalent across non-integer worker request tails", () => {
+    const createLine = () => {
+      let state = createInitialState();
+      state.construction.storage_mk1 = 2;
+      state.construction.conveyor_belt_mk2 = 1;
+      state = placeBuilding(state, "storage_mk1", { x: 0, y: 0 });
+      state = placeBuilding(state, "storage_mk1", { x: 300, y: 0 });
+      const [source, target] = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+      source.storedItemId = "silicon_ore";
+      target.storedItemId = "silicon_ore";
+      source.machineCount = 100;
+      target.machineCount = 100;
+      source.outputs.silicon_ore = 10_000;
+      return connectBelt(state, source.id, target.id, "silicon_ore", 2);
+    };
+    let integer = createLine();
+    for (let second = 0; second < 60; second += 1) integer = advanceSimulation(integer, 1);
+    let tailed = createLine();
+    for (let pair = 0; pair < 30; pair += 1) {
+      tailed = advanceSimulation(tailed, 1.02);
+      tailed = advanceSimulation(tailed, 0.98);
+    }
+    expect(integer.belts[0].totalTransferred).toBe(720);
+    expect(tailed.belts[0].totalTransferred).toBe(integer.belts[0].totalTransferred);
+    expect(tailed.belts[0].progress).toBeCloseTo(integer.belts[0].progress, 5);
+    expect(tailed.belts[0].lastFlow).not.toBe(9.6);
+  });
+
+  it("keeps the persistent worker runtime equivalent to cloned simulation chunks", () => {
+    const source = createInitialState(42_042);
+    const runtime = createPersistentSimulationRuntime(structuredClone(source));
+    let persistent = runtime.state;
+    let cloned = structuredClone(source);
+    for (const seconds of [1, 1, 2, 0.5, 3]) {
+      persistent = advancePersistentSimulationRuntime(runtime, seconds, seconds).state;
+      cloned = advanceSimulation(cloned, seconds);
+    }
+    expect(JSON.parse(JSON.stringify(persistent))).toEqual(JSON.parse(JSON.stringify(cloned)));
+  });
+
+  it("commits a million-unit blueprint atomically and refuses shortages", () => {
+    const state = createInitialState();
+    const blueprint = {
+      id: "blueprint_huge_fixture",
+      name: "百万熔炉夹具",
+      entities: [{ key: "node_1", buildingId: "arc_smelter" as const, offset: { x: 0, y: 0 }, machineCount: 1_000_000 }],
+      belts: [],
+    };
+    const stocked = { ...state, blueprints: [blueprint], construction: { ...state.construction, arc_smelter: 1_000_000 } };
+    const deployed = placeBlueprint(stocked, blueprint.id, { x: 120, y: 120 });
+    expect(deployed).not.toBe(stocked);
+    expect(deployed.construction.arc_smelter).toBe(0);
+    expect(deployed.entities.at(-1)).toMatchObject({ buildingId: "arc_smelter", machineCount: 1_000_000 });
+    const shortage = { ...stocked, construction: { ...stocked.construction, arc_smelter: 999_999 } };
+    expect(placeBlueprint(shortage, blueprint.id, { x: 120, y: 120 })).toBe(shortage);
+    expect(shortage.construction.arc_smelter).toBe(999_999);
   });
 });

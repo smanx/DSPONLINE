@@ -15,7 +15,8 @@
   "type": "module",
   "scripts": {
     "start": "node index.mjs",
-    "test": "node --test server.test.mjs analytics.test.mjs mail.test.mjs activity.test.mjs"
+    "test": "node --test server.test.mjs leaderboard-moderation.test.mjs analytics.test.mjs mail.test.mjs activity.test.mjs",
+    "leaderboard:moderate": "node moderate-leaderboard.mjs"
   },
   "engines": {
     "node": ">=20.20"

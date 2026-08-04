@@ -10,9 +10,11 @@ import {
   Gauge,
   GitFork,
   Hand,
+  Lock,
   Orbit,
   Pickaxe,
   RadioTower,
+  Route,
   Rocket,
   Satellite,
   Sparkles,
@@ -22,14 +24,17 @@ import {
   Zap,
 } from "lucide-react";
 import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type RefObject } from "react";
 import { FUEL_ENERGY_MJ, ITEMS, MATRIX_ITEM_IDS, getBuilding, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getProliferator, getRecipe, getRecipesForBuilding } from "../game/content";
-import { MATERIAL_DELIVERY_SLOT_COUNT, getEntityExtraProductBonus, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMaterialDeliveryItems, getStationDroneCapacity, getStationSlots, getStationVesselCapacity, type ResourceReserveSnapshot } from "../game/engine";
+import { MATERIAL_DELIVERY_SLOT_COUNT, getEntityProliferatorItemId, getEntityProliferatorPowerMultiplier, getEntityProliferatorSpeedMultiplier, getMaterialDeliveryItems, getMaterialDeliverySlots, getStationDroneCapacity, getStationSlots, getStationVesselCapacity, type ResourceReserveSnapshot } from "../game/engine";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { RecipeCatalogPicker } from "./CatalogPicker";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
+import { isElevatorStation } from "../game/systemHubLogistics";
 import { PowerValue } from "./PowerValue";
 import { ACTIVITY_MATERIAL_IDS } from "../game/activity";
+import type { WorkProgressMode } from "../game/productionRefresh";
+import { useWorkDisplayProgress } from "../hooks/useProductionVisualClock";
 import type {
   BuildingId,
   CargoStack,
@@ -48,6 +53,7 @@ import type {
 } from "../game/types";
 
 export interface FactoryNodeData extends Record<string, unknown> {
+  visualSignature: string;
   entity: FactoryEntity;
   cargo: CargoStack | null;
   placement: BuildingId | null;
@@ -64,14 +70,14 @@ export interface FactoryNodeData extends Record<string, unknown> {
   onRecipeChange: (entityId: string, recipeId: RecipeId) => void;
   onFuelChange: (entityId: string, itemId: ItemId) => void;
   onEnergyModeChange: (entityId: string, mode: EnergyMode) => void;
+  onInteractionLockChange: (entityId: string, locked: boolean) => void;
   researchLabel: string | null;
   researchCosts: ItemAmount[];
-  connectedInputItemIds: ItemId[];
+  connectedInputItemIds: readonly ItemId[];
   inputBeltCounts: Partial<Record<ItemId, number>>;
   outputBeltCounts: Partial<Record<ItemId, number>>;
   blackHolePortConnections: Partial<Record<0 | 1 | 2, ItemId>>;
   completedTechIds: TechId[];
-  networkTime: number;
   paused: boolean;
   powerFactor: number;
   resourceReserve: ResourceReserveSnapshot | null;
@@ -83,19 +89,32 @@ export interface FactoryNodeData extends Record<string, unknown> {
   connectionDraft: { nodeId: string; handleId: string; itemId: ItemId | null; handleType: "source" | "target" } | null;
   dysonSwarm: DysonSwarmState;
   dysonSphere: DysonSphereState;
+  targetDysonOrbitLabel?: string;
   timeWarp: import("../game/types").TimeWarpState;
+  simulationMultiplier: number;
   status: EntityOperatingStatus;
   outputCapacity: number;
+  cycleRatePerSecond: number;
 }
 
 export type FactoryFlowNode = Node<FactoryNodeData, EntityKind>;
 
-function useDynamicHandles(entityId: string, signature: string): void {
+function useDynamicHandles(entityId: string, signature: string): RefObject<HTMLElement | null> {
   const updateNodeInternals = useUpdateNodeInternals();
+  const nodeRef = useRef<HTMLElement>(null);
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => updateNodeInternals(entityId));
-    return () => window.cancelAnimationFrame(frame);
+    let frame = window.requestAnimationFrame(() => updateNodeInternals(entityId));
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => updateNodeInternals(entityId));
+    });
+    if (nodeRef.current) observer?.observe(nodeRef.current);
+    return () => {
+      observer?.disconnect();
+      window.cancelAnimationFrame(frame);
+    };
   }, [entityId, signature, updateNodeInternals]);
+  return nodeRef;
 }
 
 function ItemBadge({ itemId, amount, muted = false }: { itemId: ItemId; amount: number; muted?: boolean }) {
@@ -111,44 +130,68 @@ function ItemBadge({ itemId, amount, muted = false }: { itemId: ItemId; amount: 
   );
 }
 
+function InteractionLockBadge({ entity, onChange }: { entity: FactoryEntity; onChange: FactoryNodeData["onInteractionLockChange"] }) {
+  if (!entity.interactionLocked) return null;
+  return <button
+    className="factory-node__lock nodrag nopan"
+    type="button"
+    title="建筑已锁定，点击解锁"
+    aria-label="建筑已锁定，点击解锁"
+    onPointerDown={(event) => event.stopPropagation()}
+    onClick={(event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onChange(entity.id, false);
+    }}
+  ><Lock size={14} /></button>;
+}
+
 function WorkCycle({
   label,
   progress,
   active,
   efficiency,
   cyclesPerSecond = 0,
+  mode = "cycle",
+  semanticKey = label,
+  effectiveSimulationMultiplier = 1,
 }: {
   label: string;
   progress: number;
   active: boolean;
   efficiency: number;
   cyclesPerSecond?: number;
+  mode?: WorkProgressMode;
+  semanticKey?: string;
+  effectiveSimulationMultiplier?: number;
 }) {
   const normalized = Math.max(0, Math.min(1, progress));
-  const percent = Math.round(normalized * 100);
-  const previousProgressRef = useRef(normalized);
-  const [completionPulse, setCompletionPulse] = useState(0);
-  useEffect(() => {
-    if (active && previousProgressRef.current > 0.72 && normalized < 0.28) {
-      setCompletionPulse((current) => current + 1);
-    }
-    previousProgressRef.current = normalized;
-  }, [active, normalized]);
+  const displayProgress = useWorkDisplayProgress({
+    mode,
+    semanticKey,
+    snapshotProgress: normalized,
+    cyclesPerSecond,
+    effectiveSimulationMultiplier,
+    active,
+  });
+  const percent = Math.round(displayProgress * 100);
+  if (mode === "indeterminate") {
+    return <div className={`work-cycle work-cycle--indeterminate${active ? " work-cycle--active" : ""}`} aria-label={`${label} ${active ? "运行中" : "待机"}`}>
+      <i aria-hidden="true" />
+      <span>{label}</span>
+      <strong>{active ? "运行中" : "待机"}</strong>
+    </div>;
+  }
   return (
     <div
-      className={`work-cycle${active ? " work-cycle--active" : ""}${active && cyclesPerSecond > 0 ? " work-cycle--interpolated" : ""}`}
+      className={`work-cycle work-cycle--${mode}${active ? " work-cycle--active" : ""}${active && cyclesPerSecond > 0 ? " work-cycle--interpolated" : ""}`}
       role="progressbar"
       aria-label={label}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={percent}
     >
-      <i style={active && cyclesPerSecond > 0 ? {
-        width: `${percent}%`,
-        animationDuration: `${Math.max(0.08, 1 / cyclesPerSecond)}s`,
-        animationDelay: `${-normalized / cyclesPerSecond}s`,
-      } : { width: `${percent}%` }} />
-      {completionPulse > 0 ? <b className="work-cycle__completion" key={completionPulse} aria-hidden="true" /> : null}
+      <i style={{ transform: `scaleX(${displayProgress})` }} />
       <span>{label}</span>
       <strong>{active ? `${percent}% · 效率 ${Math.round(efficiency * 100)}%` : percent > 0 ? `${percent}% · 暂停` : "待机"}</strong>
     </div>
@@ -218,9 +261,10 @@ interface InputSlotProps {
   connectionDraft: FactoryNodeData["connectionDraft"];
   connectionCount?: number;
   missing?: boolean;
+  handleId?: string;
 }
 
-function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, onDropDraggedItem, connectionDraft, connectionCount = 0, missing = false }: InputSlotProps) {
+function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, onDropDraggedItem, connectionDraft, connectionCount = 0, missing = false, handleId }: InputSlotProps) {
   const compatible = cargo?.itemId === itemId;
   const previousAmountRef = useRef(Math.floor(amount));
   const [arrivalPulse, setArrivalPulse] = useState(0);
@@ -245,7 +289,7 @@ function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, 
   };
   return (
     <div className={`node-port node-port--input${compatible ? " node-port--compatible" : ""}${missing ? " node-port--missing" : ""}${arrivalPulse > 0 ? " node-port--arrival" : ""}`}>
-      <Handle id={`in:${itemId}`} type="target" position={Position.Left} className={`factory-handle factory-handle--input nodrag nopan${connectionHandleClass(entityId, itemId, "target", connectionDraft)}`} />
+      <Handle id={handleId ?? `in:${itemId}`} type="target" position={Position.Left} className={`factory-handle factory-handle--input nodrag nopan${connectionHandleClass(entityId, itemId, "target", connectionDraft)}`} />
       <button
         className="node-slot nodrag nopan"
         type="button"
@@ -272,15 +316,16 @@ function InputSlot({ entityId, itemId, amount, cargo, onDropCargo, onPickInput, 
   );
 }
 
-function AutoInputPort({ connectionDraft, label = "自动匹配" }: {
+function AutoInputPort({ connectionDraft, label = "自动匹配", handleId = "in:auto" }: {
   connectionDraft: FactoryNodeData["connectionDraft"];
   label?: string;
+  handleId?: string;
 }) {
   const compatible = connectionDraft?.handleType === "source";
   const muted = connectionDraft?.handleType === "target";
   return (
     <div className={`node-auto-input${compatible ? " node-auto-input--compatible" : ""}${muted ? " node-auto-input--muted" : ""}`}>
-      <Handle id="in:auto" type="target" position={Position.Left} className="factory-handle factory-handle--input factory-handle--auto nodrag nopan" />
+      <Handle id={handleId} type="target" position={Position.Left} className="factory-handle factory-handle--input factory-handle--auto nodrag nopan" />
       <Sparkles size={11} /><span>{label}</span>
     </div>
   );
@@ -310,7 +355,7 @@ export function VeinNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
-      className={`factory-node vein-node factory-node--status-${data.status.tone}${selected ? " factory-node--selected" : ""}${installing ? " factory-node--placement" : ""}`}
+      className={`factory-node vein-node factory-node--status-${data.status.tone}${reserve?.exhausted ? " vein-node--depleted" : ""}${entity.interactionLocked ? " factory-node--locked" : ""}${selected ? " factory-node--selected" : ""}${installing ? " factory-node--placement" : ""}`}
       onClick={install}
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes("application/factory-building")) event.preventDefault();
@@ -323,6 +368,7 @@ export function VeinNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         data.onInstallMiner(entity.id, data.placementCount);
       }}
     >
+      <InteractionLockBadge entity={entity} onChange={data.onInteractionLockChange} />
       <header className="factory-node__header">
         <div className="node-icon" style={{ color: resource.color }}>{fluid ? <Droplets size={18} /> : <Pickaxe size={18} />}</div>
         <div>
@@ -337,7 +383,7 @@ export function VeinNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         <span className={reserve?.exhausted ? "vein-reserve vein-reserve--depleted" : "vein-reserve"}>{reserve?.infinite ? "无限储量" : `储量 ${formatQuantityCompact(reserve?.remaining ?? 0)} / ${formatQuantityCompact(reserve?.capacity ?? 0)} · ${reserve?.remainingPercent ?? 0}%`}</span>
       </div>
       {entity.minerCount > 0 ? (
-        <WorkCycle label="采矿周期" progress={entity.progress} active={!data.paused && entity.utilization > 0.001} efficiency={data.powerFactor} />
+        <WorkCycle label="采矿周期" progress={entity.progress} active={!data.paused && entity.utilization > 0.001} efficiency={data.powerFactor} cyclesPerSecond={data.cycleRatePerSecond} semanticKey={`${entity.id}:${entity.resourceId}`} effectiveSimulationMultiplier={data.simulationMultiplier} />
       ) : null}
       {fluid ? (
         <div className="manual-mine manual-mine--locked"><Droplets size={16} /><span>{entity.minerCount > 0 ? `由${extractor.shortName}自动抽取` : `需要${extractor.name}`}</span></div>
@@ -411,11 +457,6 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const proliferatorPoints = proliferator
     ? Math.floor((entity.proliferatorPoints ?? 0) + (entity.inputs[proliferator.itemId] ?? 0) * proliferator.sprayPoints)
     : 0;
-  const unitsPerCycle = recipe?.id === "matrix_research" || recipe?.id === "solar_sail_launch" || recipe?.id === "carrier_rocket_launch"
-    ? 1
-    : Math.max(1, (recipe?.outputs.reduce((sum, output) => sum + output.amount, 0) ?? 1) * (1 + getEntityExtraProductBonus(entity)));
-  const visualCyclesPerSecond = Math.max(0, entity.productionRate / unitsPerCycle / 60);
-
   const add = (event: React.MouseEvent) => {
     if (!adding) return;
     event.preventDefault();
@@ -425,7 +466,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
-      className={`factory-node machine-node factory-node--status-${data.status.tone}${constructionCenter || galacticExporter || blackHoleConnector || timeWarpDevice ? " factory-node--megastructure" : ""}${galacticExporter ? " factory-node--galactic-exporter" : ""}${blackHoleConnector ? " factory-node--black-hole" : ""}${timeWarpDevice ? " factory-node--time-warp" : ""}${building.tier && building.tier > 1 ? ` factory-node--tier-${building.tier}` : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}${(railEjector || launchSilo) && entity.utilization > 0.001 ? " factory-node--orbital-active" : ""}`}
+      className={`factory-node machine-node factory-node--status-${data.status.tone}${entity.interactionLocked ? " factory-node--locked" : ""}${constructionCenter || galacticExporter || blackHoleConnector || timeWarpDevice ? " factory-node--megastructure" : ""}${galacticExporter ? " factory-node--galactic-exporter" : ""}${blackHoleConnector ? " factory-node--black-hole" : ""}${timeWarpDevice ? " factory-node--time-warp" : ""}${building.tier && building.tier > 1 ? ` factory-node--tier-${building.tier}` : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}${(railEjector || launchSilo) && entity.utilization > 0.001 ? " factory-node--orbital-active" : ""}`}
       onClick={add}
       onDragOver={(event) => {
         if (event.dataTransfer.types.some((type) => type === "application/factory-item" || type === "application/factory-building")) {
@@ -448,6 +489,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         }
       }}
     >
+      <InteractionLockBadge entity={entity} onChange={data.onInteractionLockChange} />
       <header className="factory-node__header">
         <div className={`node-icon${rayReceiver ? " node-icon--ray" : railEjector || launchSilo ? " node-icon--orbit" : ""}`}>
           {blackHoleConnector ? <Atom size={18} /> : timeWarpDevice ? <Gauge size={18} /> : galacticExporter ? <Rocket size={18} /> : entity.buildingId === "miniature_particle_collider" ? <Atom size={18} /> : railEjector ? <Satellite size={18} /> : launchSilo ? <Rocket size={18} /> : rayReceiver ? <RadioTower size={18} /> : <Factory size={18} />}
@@ -472,7 +514,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           <div><dt>阵列等级</dt><dd>Mk.{constructionCenterTier}</dd></div>
         </dl>
       </section> : null}
-      {selected && !constructionCenter && !galacticExporter && !blackHoleConnector && !timeWarpDevice ? (
+      {selected && !entity.interactionLocked && !constructionCenter && !galacticExporter && !blackHoleConnector && !timeWarpDevice ? (
         <div className="node-inline-select nodrag nopan" onPointerDown={(event) => event.stopPropagation()}>
           <span>生产配方</span>
           <RecipeCatalogPicker value={entity.recipeId} recipes={recipeOptions} onChange={(recipeId) => data.onRecipeChange(entity.id, recipeId)} compact />
@@ -516,7 +558,9 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           progress={entity.progress}
           active={!data.paused && entity.utilization > 0.001}
           efficiency={entity.utilization}
-          cyclesPerSecond={visualCyclesPerSecond}
+          cyclesPerSecond={data.cycleRatePerSecond}
+          semanticKey={`${entity.id}:${recipe?.id ?? "idle"}`}
+          effectiveSimulationMultiplier={data.simulationMultiplier}
         />
       )}
       {railEjector || launchSilo ? (
@@ -568,7 +612,7 @@ export function MachineNode({ data, selected }: NodeProps<FactoryFlowNode>) {
               connectionCount={data.outputBeltCounts[output.itemId] ?? 0}
             />
           )) : railEjector ? (
-            <div className="orbital-target"><Orbit size={14} /><span>在轨 {formatQuantityCompact(data.dysonSwarm.sailsInOrbit)} 帆</span></div>
+            <div className="orbital-target"><Orbit size={14} /><span title={data.targetDysonOrbitLabel}>{data.targetDysonOrbitLabel ?? `在轨 ${formatQuantityCompact(data.dysonSwarm.sailsInOrbit)} 帆`}</span></div>
           ) : launchSilo ? (
             <div className="orbital-target"><Rocket size={14} /><span>结构 {formatQuantityCompact(data.dysonSphere.structurePoints)} 点</span></div>
           ) : null}
@@ -596,13 +640,19 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const isStation = entity.kind === "station";
   const orbitalCollector = entity.buildingId === "orbital_collector";
   const deliveryHub = entity.buildingId === "material_delivery_hub";
+  const elevatorStation = isElevatorStation(entity);
+  const deliverySlots = deliveryHub ? getMaterialDeliverySlots(entity) : [];
   const warehouseStorage = entity.buildingId === "storage_mk1" || entity.buildingId === "storage_tank";
-  const configuredItems = deliveryHub
+  const configuredItems = elevatorStation
+    ? []
+    : deliveryHub
     ? getMaterialDeliveryItems(entity)
     : isStation && !orbitalCollector
     ? getStationSlots(entity).flatMap((slot) => slot.itemId ? [slot.itemId] : [])
     : itemId ? [itemId] : [];
-  useDynamicHandles(entity.id, `${configuredItems.join(":") || "unconfigured"}:auto`);
+  const nodeRef = useDynamicHandles(entity.id, deliveryHub
+    ? deliverySlots.map((slot) => `${slot.mode}:${slot.itemId ?? "empty"}`).join(":")
+    : `${configuredItems.join(":") || "unconfigured"}:${elevatorStation ? (entity.elevatorOutputItems ?? []).join(":") : "auto"}`);
   const cargoKind = cargo ? getItem(cargo.itemId).kind : null;
   const acceptsCargo = Boolean(cargo && (configuredItems.length === 0 || configuredItems.includes(cargo.itemId) || (deliveryHub && configuredItems.length < MATERIAL_DELIVERY_SLOT_COUNT)) && (
     building.accepts === "any" || building.accepts === cargoKind || (building.accepts === "solid" && cargoKind === "matrix")
@@ -621,7 +671,8 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
 
   return (
     <article
-      className={`factory-node logistics-node factory-node--status-${data.status.tone}${isStation ? " station-node" : ""}${warehouseStorage ? " storage-buffer-node" : ""}${entity.buildingId === "storage_tank" ? " storage-buffer-node--fluid" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
+      ref={nodeRef}
+      className={`factory-node logistics-node factory-node--status-${data.status.tone}${entity.interactionLocked ? " factory-node--locked" : ""}${isStation ? " station-node" : ""}${deliveryHub ? " delivery-hub-node" : ""}${warehouseStorage ? " storage-buffer-node" : ""}${entity.buildingId === "storage_tank" ? " storage-buffer-node--fluid" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}${acceptsCargo ? " factory-node--accepts-cargo" : ""}`}
       onClick={(event) => {
         if (!adding) return;
         event.preventDefault();
@@ -646,6 +697,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         data.onDropDraggedItem(entity.id, draggedItem, sourceKind, sourceId);
       }}
     >
+      <InteractionLockBadge entity={entity} onChange={data.onInteractionLockChange} />
       <header className="factory-node__header">
         <div className="node-icon">{isStation ? <Orbit size={18} /> : isSplitter ? <GitFork size={18} /> : <Database size={18} />}</div>
         <div><span>{deliveryHub ? "物资托盘直送" : orbitalCollector ? "气态巨星采集" : planetaryStation ? "行星无线运输" : isStation ? "跨行星运输" : isSplitter ? "物流分配" : "物流缓存"}</span><strong>{building.name}</strong></div>
@@ -653,14 +705,34 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       </header>
       <WorkCycle
         label={deliveryHub ? "直送周期" : orbitalCollector ? "采集周期" : planetaryStation ? "运输机航程" : isStation ? "运输船航程" : "物流周期"}
-        progress={orbitalCollector ? entity.progress : isStation ? entity.stationProgress ?? 0 : data.networkTime % 1}
+        progress={orbitalCollector ? entity.progress : isStation ? entity.stationProgress ?? 0 : 0}
         active={!data.paused && (isStation ? entity.utilization > 0.001 : data.activeLogisticsEntityIds.includes(entity.id))}
         efficiency={isStation ? entity.utilization : data.activeLogisticsEntityIds.includes(entity.id) ? 1 : 0}
+        cyclesPerSecond={orbitalCollector ? data.cycleRatePerSecond : 0}
+        mode={orbitalCollector ? "cycle" : isStation ? "route" : "indeterminate"}
+        semanticKey={`${entity.id}:${isStation ? (entity.stationRoutes ?? []).map((route) => route.id).join(",") || "idle" : configuredItems.join(",") || "empty"}`}
+        effectiveSimulationMultiplier={data.simulationMultiplier}
       />
-      {configuredItems.length > 0 ? (
+      {elevatorStation ? (
+        <div className="node-io logistics-io elevator-logistics-io">
+          <div className="logistics-slot-row"><div className="node-io__column"><span className="node-io__label">通用输入</span><AutoInputPort connectionDraft={data.connectionDraft} label="任意物资" handleId="in:auto" /></div><div className="delivery-hub-target"><Database size={14} /><span>进入系统共享仓库</span></div></div>
+          {(entity.elevatorOutputItems ?? []).map((outputItemId, index) => outputItemId ? <div className="logistics-slot-row" key={`${outputItemId}:${index}`}><div className="node-io__column node-io__column--output"><span className="node-io__label">输出 {index + 1}</span><OutputSlot entityId={entity.id} itemId={outputItemId} amount={entity.outputs[outputItemId] ?? 0} onPick={data.onPickOutput} connectionDraft={data.connectionDraft} connectionCount={data.outputBeltCounts[outputItemId] ?? 0} /></div><div className="delivery-hub-target"><Route size={14} /><span>{ITEMS[outputItemId].name}</span></div></div> : <div className="logistics-slot-row" key={`empty-output:${index}`}><div className="node-io__column node-io__column--output"><span className="node-io__label">输出 {index + 1}</span><span className="logistics-empty">未配置</span></div></div>)}
+        </div>
+      ) : deliveryHub ? (
+        <div className="node-io logistics-io delivery-hub-io">
+          {deliverySlots.map((slot, index) => <div className={`logistics-slot-row delivery-hub-slot-row delivery-hub-slot-row--${slot.mode}`} key={`delivery-${index}`}>
+            <div className="node-io__column">
+              <span className="node-io__label">接口 {index + 1}</span>
+              {slot.itemId ? <InputSlot entityId={entity.id} itemId={slot.itemId} amount={entity.inputs[slot.itemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} connectionDraft={data.connectionDraft} connectionCount={data.inputBeltCounts[slot.itemId] ?? 0} handleId={`in:delivery:${index}`} />
+                : slot.mode === "disabled" ? <div className="delivery-hub-port-disabled">接口已清空</div>
+                  : <AutoInputPort connectionDraft={data.connectionDraft} label="自动识别" handleId={`in:delivery:${index}`} />}
+            </div>
+            <div className="delivery-hub-target" title={slot.mode === "manual" ? "指定物资直接送入当前行星物资托盘" : slot.mode === "disabled" ? "此接口已停止接收" : "自动识别后送入当前行星物资托盘"}><Database size={14} /><span>{slot.mode === "manual" ? "指定直送" : slot.mode === "disabled" ? "停止接收" : "进入托盘"}</span></div>
+          </div>)}
+        </div>
+      ) : configuredItems.length > 0 ? (
         <div className={`node-io logistics-io${orbitalCollector ? " logistics-io--collector" : ""}`}>
           {configuredItems.map((configuredItemId, index) => <div className={`logistics-slot-row${warehouseStorage ? " logistics-slot-row--warehouse" : ""}`} key={configuredItemId}>
-            {warehouseStorage ? <div className="storage-slot-summary"><strong>{ITEMS[configuredItemId].name}</strong><span>输入 {formatQuantityCompact(entity.inputs[configuredItemId] ?? 0)} · 输出 {formatQuantityCompact(entity.outputs[configuredItemId] ?? 0)}</span></div> : null}
             {!orbitalCollector ? <div className="node-io__column">
               {index === 0 ? <span className="node-io__label">输入</span> : null}
               <InputSlot entityId={entity.id} itemId={configuredItemId} amount={entity.inputs[configuredItemId] ?? 0} cargo={cargo} onDropCargo={data.onDropCargo} onPickInput={data.onPickInput} onDropDraggedItem={data.onDropDraggedItem} connectionDraft={data.connectionDraft} connectionCount={data.inputBeltCounts[configuredItemId] ?? 0} />
@@ -674,7 +746,7 @@ export function LogisticsNode({ data, selected }: NodeProps<FactoryFlowNode>) {
       ) : (
         <div className="logistics-empty">{deliveryHub ? "连接任意输出端口，自动占用 3 个直送接口" : planetaryStation ? "在检查器中选择行星货物" : isStation ? "在检查器中选择星际货物" : "拖入物品或在检查器中选择缓存类型"}</div>
       )}
-      {!orbitalCollector && data.connectionDraft && (!deliveryHub || configuredItems.length < MATERIAL_DELIVERY_SLOT_COUNT) ? <div className="logistics-auto-input"><AutoInputPort connectionDraft={data.connectionDraft} label={deliveryHub ? "自动占用直送接口" : isStation ? "连接时自动占用空槽" : "连接时自动设置物品"} /></div> : null}
+      {!orbitalCollector && !deliveryHub && data.connectionDraft ? <div className="logistics-auto-input"><AutoInputPort connectionDraft={data.connectionDraft} label={isStation ? "连接时自动占用空槽" : "连接时自动设置物品"} /></div> : null}
       <footer className="factory-node__footer">
         <span title={data.status.label}>{data.status.label}</span>
         <span title={isStation ? `累计 ${entity.stationTrips ?? 0} 航次` : undefined}>{deliveryHub ? `${configuredItems.length}/${MATERIAL_DELIVERY_SLOT_COUNT} 接口 · ${entity.productionRate.toFixed(1)}/min` : orbitalCollector ? `${itemId ? ITEMS[itemId].name : "资源"} · ${entity.productionRate.toFixed(1)}/min` : isStation ? `${primaryStationMode === "demand" ? "需求" : primaryStationMode === "supply" ? "供应" : "仓储"} · ${configuredItems.length}/5 槽 · ${stationVehicles}/${stationVehicleCapacity} ${planetaryStation ? "机队" : "舰队"}` : isSplitter ? entity.distributionMode === "priority" ? "优先分流" : "均衡分流" : `${data.outputCapacity} 容量`}</span>
@@ -706,7 +778,7 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   const category = accumulator ? "电网缓冲储能" : exchanger ? "可运输储能" : fuelGenerator ? "可调度能源" : solar ? "恒星辐射发电" : geothermal ? "熔岩地热发电" : "行星电网";
   return (
     <article
-      className={`factory-node power-node factory-node--status-${data.status.tone}${fuelGenerator ? " thermal-node" : ""}${accumulator || exchanger ? " storage-power-node" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}`}
+      className={`factory-node power-node factory-node--status-${data.status.tone}${entity.interactionLocked ? " factory-node--locked" : ""}${fuelGenerator ? " thermal-node" : ""}${accumulator || exchanger ? " storage-power-node" : ""}${selected ? " factory-node--selected" : ""}${adding ? " factory-node--placement" : ""}`}
       onClick={(event) => {
         if (!adding) return;
         event.preventDefault();
@@ -735,6 +807,7 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         data.onDropDraggedItem(entity.id, draggedItem, sourceKind, sourceId);
       }}
     >
+      <InteractionLockBadge entity={entity} onChange={data.onInteractionLockChange} />
       <header className="factory-node__header">
         <div className="node-icon node-icon--power">{icon}</div>
         <div>
@@ -743,7 +816,7 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
         </div>
         <small>×{entity.machineCount}</small>
       </header>
-      {fuelGenerator && selected ? (
+      {fuelGenerator && selected && !entity.interactionLocked ? (
         <label className="node-inline-select nodrag nopan" onPointerDown={(event) => event.stopPropagation()}>
           <span>燃烧燃料</span>
           <select value={fuelId ?? ""} onChange={(event) => data.onFuelChange(entity.id, event.target.value as ItemId)}>
@@ -752,7 +825,7 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           </select>
         </label>
       ) : null}
-      {exchanger && selected ? (
+      {exchanger && selected && !entity.interactionLocked ? (
         <label className="node-inline-select nodrag nopan" onPointerDown={(event) => event.stopPropagation()}>
           <span>能量模式</span>
           <select value={entity.energyMode === "discharge" ? "discharge" : "charge"} disabled={(entity.storedEnergyMj ?? 0) > 0.0001} onChange={(event) => data.onEnergyModeChange(entity.id, event.target.value as EnergyMode)}>
@@ -767,6 +840,10 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
           progress={accumulator ? energyPercent : entity.progress}
           active={!data.paused && ((entity.powerInputKw ?? 0) > 0.001 || (entity.powerOutputKw ?? 0) > 0.001)}
           efficiency={entity.utilization}
+          cyclesPerSecond={accumulator ? 0 : data.cycleRatePerSecond}
+          mode={accumulator ? "level" : "cycle"}
+          semanticKey={`${entity.id}:${accumulator ? "stored-energy" : entity.energyMode ?? "charge"}`}
+          effectiveSimulationMultiplier={data.simulationMultiplier}
         />
       ) : null}
       <div className="power-output">
@@ -800,11 +877,24 @@ export function PowerNode({ data, selected }: NodeProps<FactoryFlowNode>) {
   );
 }
 
+function areNodeVisualPropsEqual(previous: NodeProps<FactoryFlowNode>, next: NodeProps<FactoryFlowNode>): boolean {
+  return previous.id === next.id &&
+    previous.selected === next.selected &&
+    previous.data.visualSignature === next.data.visualSignature &&
+    previous.data.entity.position.x === next.data.entity.position.x &&
+    previous.data.entity.position.y === next.data.entity.position.y;
+}
+
+const MemoVeinNode = memo(VeinNode, areNodeVisualPropsEqual);
+const MemoMachineNode = memo(MachineNode, areNodeVisualPropsEqual);
+const MemoLogisticsNode = memo(LogisticsNode, areNodeVisualPropsEqual);
+const MemoPowerNode = memo(PowerNode, areNodeVisualPropsEqual);
+
 export const NODE_TYPES = {
-  vein: VeinNode,
-  machine: MachineNode,
-  power: PowerNode,
-  storage: LogisticsNode,
-  splitter: LogisticsNode,
-  station: LogisticsNode,
+  vein: MemoVeinNode,
+  machine: MemoMachineNode,
+  power: MemoPowerNode,
+  storage: MemoLogisticsNode,
+  splitter: MemoLogisticsNode,
+  station: MemoLogisticsNode,
 };

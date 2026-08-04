@@ -6,6 +6,7 @@ import type {
   ItemId,
   PlanetId,
   PlanetIndustrialProfile,
+  PlanetDisplayMetadata,
   PlanetIndustryRole,
   PlanetOceanType,
   PlanetSpecialization,
@@ -14,6 +15,7 @@ import type {
   StarClassId,
   StarSystemId,
   StarSystemProfile,
+  StarSystemDisplayMetadata,
 } from "./types";
 
 export const GUARANTEED_CRUDE_OIL_PLANETS = ["pelagic", "dune", "prairie"] as const satisfies readonly PlanetId[];
@@ -27,6 +29,11 @@ function guaranteePlanetResources(planetId: PlanetId, resourceIds: ItemId[]): It
 
 export const DEFAULT_GALAXY_SEED = 240721;
 export const TIDAL_LOCKED_SOLAR_BONUS = 1.25;
+export const PLANET_CUSTOM_NAME_MAX_LENGTH = 32;
+export const STAR_SYSTEM_CUSTOM_NAME_MAX_LENGTH = 32;
+export const PLANET_NOTE_MAX_LENGTH = 240;
+export const PLANET_TAG_MAX_LENGTH = 16;
+export const PLANET_TAG_MAX_COUNT = 8;
 
 export const PLANET_INDUSTRY_ROLES: PlanetIndustryRole[] = [
   "auto",
@@ -203,7 +210,28 @@ export function createGalaxyState(seed = DEFAULT_GALAXY_SEED, preserveBaseline =
     return [planet.id, profile];
   })) as GalaxyState["profiles"];
   const planetRoles = Object.fromEntries(PLANET_LIST.map((planet) => [planet.id, "auto" as PlanetIndustryRole])) as Record<PlanetId, PlanetIndustryRole>;
-  return { seed: normalized, profiles, systemProfiles, planetRoles };
+  return { seed: normalized, profiles, systemProfiles, planetRoles, planetMetadata: {}, systemMetadata: {} };
+}
+
+function normalizedText(value: unknown, maximumLength: number): string {
+  return typeof value === "string" ? value.trim().slice(0, maximumLength) : "";
+}
+
+export function normalizePlanetDisplayMetadata(value: unknown): PlanetDisplayMetadata | null {
+  if (!value || typeof value !== "object") return null;
+  const source = value as Record<string, unknown>;
+  const customName = normalizedText(source.customName, PLANET_CUSTOM_NAME_MAX_LENGTH);
+  const note = normalizedText(source.note, PLANET_NOTE_MAX_LENGTH);
+  const tags = Array.isArray(source.tags)
+    ? [...new Set(source.tags.map((tag) => normalizedText(tag, PLANET_TAG_MAX_LENGTH)).filter(Boolean))].slice(0, PLANET_TAG_MAX_COUNT)
+    : [];
+  return customName || note || tags.length > 0 ? { customName, note, tags } : null;
+}
+
+export function normalizeStarSystemDisplayMetadata(value: unknown): StarSystemDisplayMetadata | null {
+  if (!value || typeof value !== "object") return null;
+  const customName = normalizedText((value as Record<string, unknown>).customName, STAR_SYSTEM_CUSTOM_NAME_MAX_LENGTH);
+  return customName ? { customName } : null;
 }
 
 function profileNumber(value: unknown, fallback: number, minimum: number, maximum: number): number {
@@ -324,6 +352,20 @@ export function normalizeGalaxyState(value: unknown, preserveBaseline = false): 
     const role = sourceRoles[planetId];
     if (PLANET_INDUSTRY_ROLES.includes(role as PlanetIndustryRole)) normalized.planetRoles[planetId] = role as PlanetIndustryRole;
   }
+  const sourcePlanetMetadata = source.planetMetadata && typeof source.planetMetadata === "object"
+    ? source.planetMetadata as Record<string, unknown>
+    : {};
+  for (const planetId of Object.keys(normalized.profiles) as PlanetId[]) {
+    const metadata = normalizePlanetDisplayMetadata(sourcePlanetMetadata[planetId]);
+    if (metadata) normalized.planetMetadata[planetId] = metadata;
+  }
+  const sourceSystemMetadata = source.systemMetadata && typeof source.systemMetadata === "object"
+    ? source.systemMetadata as Record<string, unknown>
+    : {};
+  for (const systemId of Object.keys(normalized.systemProfiles) as StarSystemId[]) {
+    const metadata = normalizeStarSystemDisplayMetadata(sourceSystemMetadata[systemId]);
+    if (metadata) normalized.systemMetadata[systemId] = metadata;
+  }
   return normalized;
 }
 
@@ -340,6 +382,29 @@ export function getPlanetIndustrialProfile(state: { galaxy?: GalaxyState }, plan
 
 export function getStarSystemProfile(state: { galaxy?: GalaxyState }, systemId: StarSystemId): StarSystemProfile {
   return state.galaxy?.systemProfiles?.[systemId] ?? fallbackGalaxy().systemProfiles[systemId];
+}
+
+export function getPlanetDisplayName(state: { galaxy?: GalaxyState }, planetId: PlanetId): string {
+  return state.galaxy?.planetMetadata?.[planetId]?.customName || PLANETS[planetId].name;
+}
+
+export function getStarSystemDisplayName(state: { galaxy?: GalaxyState }, systemId: StarSystemId): string {
+  return state.galaxy?.systemMetadata?.[systemId]?.customName || STAR_SYSTEMS[systemId].name;
+}
+
+export function getPlanetSearchText(state: { galaxy?: GalaxyState }, planetId: PlanetId): string {
+  const planet = PLANETS[planetId];
+  const system = STAR_SYSTEMS[planet.systemId];
+  const metadata = state.galaxy?.planetMetadata?.[planetId];
+  return [
+    planet.name,
+    planet.code,
+    getPlanetDisplayName(state, planetId),
+    system.name,
+    getStarSystemDisplayName(state, planet.systemId),
+    metadata?.note ?? "",
+    ...(metadata?.tags ?? []),
+  ].join(" ").toLocaleLowerCase("zh-CN");
 }
 
 export function getStarLuminosity(state: { galaxy?: GalaxyState }, systemId: StarSystemId): number {

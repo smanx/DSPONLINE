@@ -1,20 +1,24 @@
 # 测试与发布基线
 
+> **方向变更（2026-07-31）**：当前物流重构使用 GameState v46；有效资产的 v43 空间站实验存档拒绝加载。量子网络回归以 `1.0.20 / GameState v46` 语义为基线，并保留传统物流站升级兼容测试。
+
 ## 1. 当前自动化覆盖
 
 | 层级 | 命令 | 当前规模 | 覆盖重点 |
 | --- | --- | ---: | --- |
 | 类型检查 | `npm run typecheck` | 全部前端 TS | 严格类型、Vite 配置 |
-| 单元/领域 | `npm test` | 当前工作区 433 项，1 项可选基准跳过 | 引擎、v1-v34 存档、物流索引等价、增产剂、无限科研、戴森复制、银河活动、生产刷新偏好、可配置缓存、离线 Worker 等价性、存档配额急救、科研、电力、蓝图、规划、网络、云同步和原生更新配置等 |
-| 浏览器 E2E | `npm run test:e2e` | `1.0.0` / v34 131 项 | 从开局到银河终局、终局巨构、戴森复制、时间扭曲、七档生产刷新、新旧手机壳、本地存档保护和桌面/手机横竖屏回归 |
-| 云服务 | `npm run test:server` | `1.0.0` 31 项 | 用户名注册、四槽云存档、schema v3→v7、SQLite layout v1→v2、历史正文裁剪、设备会话、匿名统计、v34 校验、活动、腾讯 SES、排行榜邮箱门槛和管理员保护 |
-| 运维工具 | `npm run test:ops` | 5 项 | SQLite 一致性快照、认证加密、异地复制、隔离恢复、篡改拒绝、Nginx 压缩与缓存边界、端点/磁盘探针和告警载荷 |
-| 原生配置与发布工具 | `npm run test:native` | 6 项 | 社区更新源默认关闭、HTTPS 通道、Android/桌面更新清单、调试 APK 拒绝和显式发布基址 |
+| 单元/领域 | `npm test` | `1.0.20`：70 个文件通过、1 个跳过；643 项通过、9 项跳过 | 引擎暂停边界、量子共享带宽、直接入库、云存档兼容、轨道采集接入、本地运输兼容、v1-v46 存档、超大蓝图、递归副产物、异步确认框、统计窗口、确定性物流、离线 Worker、内容包注册表同步和云同步等 |
+| 浏览器 E2E | `npm run test:e2e` | `1.0.19` 全量 198/198 | 版本公告、开局到银河终局、量子库存、内容包 Worker、待建施工、蓝图往返、双语亮暗主题、新旧手机壳、390×844 与 200% 字号、暂停画布、IndexedDB 存档保护和横竖屏回归 |
+| 云服务 | `npm run test:server` | `1.0.20`：45/45 | 用户名注册、四槽云存档、schema v3→v7、SQLite layout v1→v2、v35-v46 存档边界、旧 quantumTarget 兼容、完整性/格式/体积错误、无人工封顶与极值饱和排名、内部排行榜限制和管理员保护 |
+| 运维工具 | `npm run test:ops` | 6 项 | SQLite 一致性快照、认证加密、异地复制、隔离恢复、篡改拒绝、Nginx 压缩与缓存边界、Android origin 模板、端点/磁盘探针和告警载荷 |
+| 原生配置与发布工具 | `npm run test:native` | 7/7 | 社区更新源默认关闭、HTTPS 通道、Android/桌面更新清单、调试 APK 拒绝、显式发布基址和桌面包内元数据门禁 |
 | 第三方许可证 | `npm run licenses:check` | 128 个运行时包 | 根项目/云服务 lockfile、直接依赖通知、完整许可证文本和 public 法律文件一致性 |
-| 生产构建 | `npm run build` | 1 次构建 | `tsc -b`、Vite chunk 和 PWA 资源 |
+| 生产构建 | `npm run build` | 1,862 个模块 | `tsc -b`、Vite chunk、Worker 和 PWA 资源 |
 | 桌面目录包 | `npm run desktop:pack` | 按需 | Electron 启动与 Windows 解包 |
 
-Playwright 使用本机 Google Chrome，串行执行，并在隔离的 `127.0.0.1:4319` 自动启动临时 Vite 服务，避免复用玩家正在试玩的 `4318` 进程或其旧模块缓存。失败时保留截图和 trace。
+1.0.18 专项回归覆盖量子上传/下载独立全局预算、轨道采集器供应端、无量子塔时零额度、本地运输机兼容、逐物品 1 万至 100 亿容量、调低容量保留超额库存、五秒流量摘要、v44→v45 守恒迁移，以及英文、390×844 和 200% 字号量子库存界面。完整门禁和线上证据见 [releases/1.0.18.md](./releases/1.0.18.md)。
+
+Playwright 使用本机 Google Chrome，串行执行，并在隔离的 `127.0.0.1:4319` 自动启动临时 Vite 服务，避免复用玩家正在试玩的 `4318` 进程或其旧模块缓存。失败时保留截图和 trace；GitHub CI 对单个失败用例最多重试 1 次，本地开发保持 0 次重试，持续性回归仍会使门禁失败。
 
 ## 2. 日常开发最小矩阵
 
@@ -415,7 +419,7 @@ Chrome 147 的强制 GC 活跃堆从 14.06 MiB 到 16.23 MiB（+2.17 MiB），Re
 | `npm run test:e2e` | 119/119 通过，约 5.5 分钟 |
 | `git diff --check` | 通过 |
 
-服务端专项覆盖用户名注册、大小写唯一、无邮件发送器时的全部四槽云存档、主槽历史恢复、注册限流、旧邮箱登录、邮箱排行榜门槛、schema v3→v7 归一化及重启持久化。浏览器专项会真实创建本地主存档和三个本地槽，完成注册、退出及重新登录后逐字比较四份 localStorage 数据，确认账号操作不改写或清除本地进度。
+服务端专项覆盖用户名注册、大小写唯一、无邮件发送器时的全部四槽云存档、主槽历史恢复、注册限流、旧邮箱登录、无邮箱账号凭主云存档提交排行榜、schema v3→v7 归一化及重启持久化。浏览器专项会真实创建本地主存档和三个本地槽，完成注册、退出及重新登录后逐字比较四份 localStorage 数据，确认账号操作不改写或清除本地进度。
 
 香港和上海分别在 schema v6→v7 前、最终修订切换前及上线后通过 SQLite Backup API 创建一致性快照。隔离迁移审计确认旧账号身份字段及全部云存档 payload 哈希不变，账号、会话、主存档、三个手动槽、历史、排行榜和匿名玩家记录没有减少。上线过程中没有恢复数据库、上传测试存档或使用生产账号执行写测试。
 
@@ -508,3 +512,442 @@ Windows `release/win-unpacked` 已生成，EXE 产品版本为 `1.0.0.0`，但 A
 香港真实备份副本迁移后，551 个修订正文与元数据逐键、大小和 SHA-256 一致，`app_state` 从 136.8 MB 降至约 2.55 MB。正式观察 240 秒内 24/24 健康请求成功，最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB；上海 140 秒内 14/14 成功，最大 1.506 ms、`NRestarts=0`、RSS 约 65～66 MB。两地上线后备份均为 layout v2 且元数据修订数与正文行数一致。
 
 公网验收覆盖香港根域名、`www` 301、上海独立入口、两地健康接口 layout v2、管理员 401、gzip、immutable/no-cache、活动 revision、服务/timer active、journal warning 和最近 500 条访问日志 5xx。旧 API 不能读取 layout v2 正文，因此两地回滚目标只回退 Web，API 固定保留当前实现。完整证据见 [releases/1.0.0.md](./releases/1.0.0.md)。
+
+## 20. `1.0.0` 排行榜资格热修复验收
+
+本次热修复保持应用版本 `1.0.0`、GameState v34、存档 envelope v2、云 schema v7 和 SQLite layout v2。两地 release ID 为 `1.0.0-leaderboard-01492dea3c51`，构建 ID 为 `1.0.0+01492dea3c51.leaderboard`。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run build` | 通过，包含 TypeScript 严格检查 |
+| `npm test` | 42/42 文件、431/431 通过，1 项可选基准跳过 |
+| `npm run test:server` | 31/31 通过 |
+| `npm run test:ops` | 5/5 通过 |
+| `npm run test:native` | 2/2 通过 |
+| 排行榜 focused Playwright | 2/2 通过 |
+| `npm run test:e2e` | 131/131 通过 |
+| 远端服务端测试 | 香港 31/31、上海 31/31 |
+
+服务端专项覆盖匿名提交 `401`、缺少主云存档 `409`、无邮箱且未验证账号凭主云存档成功提交、分数重算和历史赛季约束。浏览器专项覆盖未登录只读、服务端成功后才记录提交、未验证邮箱账号提交以及隐私账号撤榜。完整 E2E 仍有既有非阻断 `ResizeObserver` 卸载提示，最终退出码成功。
+
+两地均先通过 SQLite Backup API 创建发布前快照，在未激活目录安装依赖并通过测试后使用固定工具原子切换，再创建发布后快照。四份快照均通过 `quick_check`，生产账号、会话、云存档和修订没有减少；没有使用生产账号执行写测试。公网验收确认两地根页和健康接口为 200、香港 `www` 为 301、活动 revision 不变、gzip/immutable/no-cache 正常、服务 active、`NRestarts=0`、journal 无 warning 且最近 500 条 DSP 访问日志无 5xx。完整证据见 [releases/1.0.0-leaderboard.md](./releases/1.0.0-leaderboard.md)。
+
+## 21. 主云存档自动排名正式验收
+
+本次发布保持应用 `1.0.0`、GameState v34、存档 envelope v2、云 schema v7 和 SQLite layout v2。两地 release ID 为 `1.0.0-ranking-auto-b61ce8f2c54f`，构建 ID 为 `1.0.0+01492dea3c51.ranking-auto.b61ce8f2c54f`。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm ci` | 根目录 457 个包；生产依赖审计 0 个已知漏洞 |
+| `npm run typecheck` | 通过 |
+| `npm test` | 42/42 文件、431/431 通过，1 项可选基准跳过 |
+| `npm run test:server` | 32/32 通过 |
+| `npm run test:ops` | 5/5 通过 |
+| `npm run test:native` | 2/2 通过 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 131/131 通过 |
+| 远端服务端测试 | 香港 32/32、上海 32/32 |
+| Release manifest | 115 个文件验证通过 |
+
+服务端专项覆盖主槽上传自动入榜、手动槽不影响、客户端伪造指标被忽略、历史峰值保留、服务启动回填、退出后主槽继续同步但不重新加入、重新加入后立即从主存档恢复，以及无主存档拒绝刷新。浏览器专项覆盖匿名访客读取真实玩家、只发送赛季 ID 的“立即刷新排名”、账号级退出/恢复和在线空榜。
+
+两地均先通过 SQLite Backup API 创建发布前一致性快照，在未激活目录完成依赖安装、32/32 服务测试和 115 文件复验后原子切换，再创建发布后快照。香港首次回填 88 份主存档，重复启动备份副本时变更为 0；上海没有主存档，排行榜保持为空。账号、会话、主存档和有效修订没有减少，没有恢复或替换数据库，也没有使用生产账号执行写测试。
+
+公网验收确认香港和上海根页及健康接口为 200、香港 `www` 为 301、schema v7、layout v2、活动配置、服务 active 和 `NRestarts=0` 均正常。香港五个榜单分类各返回 89 名真实玩家，上海五类均为 0；两地手机 390×844 均无横向溢出。最近访问日志无 5xx；香港切换窗口仅出现一次预期的上游短暂拒绝连接，服务启动后未再发生。完整证据见 [releases/1.0.0-ranking-auto.md](./releases/1.0.0-ranking-auto.md)。
+
+## 22. `1.0.1` 界面与物流回归
+
+`1.0.1` 使用 GameState v35、存档 envelope v2、云 schema v7 和 SQLite layout v2。v34→v35 只为实体补充默认关闭的交互锁；服务端同步验证锁值类型及 1,000～100,000,000 的行星托盘上限，不迁移生产数据库布局。
+
+专项回归覆盖：Portal 精确值提示的鼠标/键盘/触摸生命周期；深色/亮色和异步工作区；储物仓/储液罐在 80%～200% 下的端口布局；锁定实体的移动、删除、批量命令和蓝图；检查器分区排序偏好；三级翘曲补仓；50 艘运输船及多塔公平/故障切换；1 亿托盘上限；制造中心长时推进；生产进度 fill/text/ARIA 同步；Mk.II 线路 12/s、下游 11/s、上游 10.6667/s 三种限制，以及非整数 Worker chunk 和 5 模拟秒近期窗口。
+
+完整浏览器回归固定单 worker 执行，避免多个大型确定性工厂并发争用 CPU 造成假超时。视觉证据位于 `artifacts/qa/v101-*.png` 和 `artifacts/qa/release-notes-2026-07-25-v101-*.png`，覆盖 1920×1080 深/亮主题 80%～200%、390×844 经典/新版手机、844×390 横屏、768×1024 平板及生产资料库、储物节点、进度与 Tooltip 场景。
+
+本次发布的最终命令、制品哈希、远端测试、备份和公网验收记录见 [releases/1.0.1.md](./releases/1.0.1.md)。
+
+## 23. `1.0.1` Windows 与 Android 安装包
+
+Android 稳定 APK 使用与 `1.0.0` 相同的长期发布证书签名，包名为 `cn.dsponline.network`，版本为 `1.0.1` / `1000001`，APK Signature Scheme v2/v3 均通过。API 36.1 模拟器先安装 `1.0.0`、启动后再用 `adb install -r` 覆盖到 `1.0.1`，升级成功且 `firstInstallTime` 不变。AAB 已构建，但因严格 JAR 校验出现 bundle entry 兼容警告而未进入公共下载源。
+
+Windows x64 安装程序版本为 `1.0.1`，内置云 API 和稳定更新地址均已核验，`latest.yml` 的 SHA-512 与安装程序一致。Authenticode 状态仍为 `NotSigned`，因此只作为带显式未知发布者提示的公开测试包；取得可信代码签名证书之前不能视为正式签名发布。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run test:native` | 6/6 通过 |
+| `npm run typecheck` | 通过 |
+| Android APK | 4,206,410 字节；SHA-256 `27611a9eaf64ecb586c7d9da3a42510b060a86245152baa2f984c55f06210e0f` |
+| Windows 安装程序 | 112,084,006 字节；SHA-256 `db849b10f6e151d5228f5202250d4a7131b9eb7f5d308b6cee98b07f8c5108e2` |
+| 下载站归档 | SHA-256 `f2ea3baf56d5420fd7eec98f722517e48df60ffcc00413c5f66ea327be888d17` |
+
+上海下载站完成新目录上传、校验和原子切换；当前目录为 `/var/www/dsp-idle-downloads/releases/1.0.1-f4e2a5501435-dirty`，上一目录为 `/var/www/dsp-idle-downloads/releases/1.0.0-01492dea3c51`。公网首页、Android JSON、桌面 YAML 和二进制均返回 `200`，Range 请求返回 `206`，二进制为 immutable，清单为 no-cache；香港 `/downloads/*` 返回到上海下载域名的 `302`。桌面与 390×844 下载页截图位于 `artifacts/qa/native-1.0.1/`。
+
+## 24. `1.0.2` 英文版与亮色主题回归
+
+`1.0.2` 不升级 GameState v35、存档 envelope v2、云 schema v7 或 SQLite layout v2。语言使用独立的 `dsp-idle-network.locale.v1` 设备偏好；测试确认切换语言不会创建或改写游戏存档。
+
+单元测试覆盖中英文目录的 ID 对齐、英文名称/说明完整性和常用搜索别名。浏览器专项覆盖 `?lang=en`、开始菜单和游戏内切换、英文目录懒加载、桌面核心工作区无可见中文、经典/新版手机导航、亮色表面不透明度、横向溢出、更新公告关闭与持久化，以及生产构建 `pagehide` 保存路径。
+
+本地完整回归为 451/451 Vitest、143/143 Playwright、32/32 服务端、5/5 运维、6/6 原生工具，类型检查、128 个运行时包许可证校验和生产构建通过。截图位于 `artifacts/qa/v102-english-light-*.png` 与 `artifacts/qa/release-notes-2026-07-25-v102-*.png`，覆盖 1440 桌面、390×844 竖屏、844×390 横屏及 200% 字体。最终制品、签名、备份和公网结果见 [releases/1.0.2.md](./releases/1.0.2.md)。
+
+正式制品来自干净提交 `df7bee45e60a`，两台未激活目录均通过 32/32 服务测试与 124 文件聚合哈希复验，并在真实备份副本上用隔离端口启动 schema v7/layout v2。Android `1.0.2` / `1000002` 使用既有证书、APK v2/v3 通过，模拟器从 1.0.1 原地升级且 `firstInstallTime` 不变；Windows FileVersion/ProductVersion 为 1.0.2，Authenticode 仍为 `NotSigned`。
+
+上线后两地 Web/API 和上海下载站均指向 `1.0.2-df7bee45e60a`，上一目录为 `1.0.1-f4e2a5501435-dirty`。两地根页/API 为 200、香港 `www` 为 301、下载二进制 Range 为 206、服务 `NRestarts=0`、最近 500 条 DSP 日志无 5xx；公网桌面、390×844、844×390及英文亮色桌面/竖屏截图烟测通过。
+
+## 25. `1.0.3` / v36 递归制造与生产定位回归
+
+`1.0.3` 将 GameState 从 v35 升至 v36，存档 envelope v2、云 schema v7 和 SQLite layout v2 不变。v35→v36 增加建筑制造中心随身载具目标、`fleet` 入库步骤和递归配方决策，旧建筑目标、库存、线路、物流、科研、制造 WIP、活动和戴森状态保持不变。
+
+专项单元测试覆盖高级配方优先与基础配方回退、分形硅→晶格硅、铁矿石→铁块→钢材、多需求竞争回溯、物流运输船递归快制及建筑制造中心目标、失败原子性、轨道采集器自供能、舰队全忙诊断、喷涂拆卸返还、有限资源零储量重载，以及 4x/5x/6x 各 60 秒真实产量与活动墙钟隔离。
+
+Playwright 专项覆盖鸿蒙中文组合输入在状态刷新/横竖屏下保持、关闭建造面板后清空；物品产线定位、上游节点/线路高亮、多目标切换与清除；仓储端口 80%～200%；320×568 与 844×390/200% 托盘删除操作区；枯竭资源入口、喷涂拆卸、390×844 递归运输船以及英文亮色产线定位。截图位于 `artifacts/qa/v103-*.png` 和 `artifacts/qa/release-notes-2026-07-26-v103-*.png`。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm ci` | 根目录与服务端通过；服务端 0 个已知漏洞 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run typecheck` | 通过 |
+| `npm test` | 47/47 文件，467/467 通过，1 项可选基准跳过 |
+| `npm run test:server` | 32/32 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run test:ops` | 5/5 通过 |
+| `npm run build` | 通过；入口 HTML 未 preload 工厂、React Flow、游戏核心或存档 chunk |
+| `npm run test:e2e` | 149/149 通过，单 worker 约 8.6 分钟 |
+| `git diff --check` | 通过 |
+
+根目录 `npm ci` 的完整开发/打包依赖审计仍报告 16 个既有高危项，集中于 Electron 构建链；本轮没有新增依赖，也没有执行可能破坏锁文件的 `npm audit fix --force`。服务端生产依赖审计为 0。完整 E2E 仍记录既有非阻断 Vite `ResizeObserver` 卸载提示，但最终退出码成功。
+
+Windows 与 Android 源码版本元数据同步到 `1.0.3 / 1000003` 以保持版本门禁一致；本轮没有构建、签名、上传原生二进制，也没有修改上海稳定更新清单，公开安装包继续为 `1.0.2`。
+
+正式 Web/API 制品来自干净提交 `6d59252f4f15`，release ID 为 `1.0.3-6d59252f4f15`。Manifest 包含 125 个文件，聚合 SHA-256 为 `3bdb6a019cafc77ca071e6493f8368df84f14c96f1ebfacbb1e7f8386a62dec8`；两台未激活目录均通过 32/32 服务测试、125/125 文件复验和发布前备份副本隔离启动。
+
+香港和上海在切换前后分别通过 SQLite Backup API 创建一致性快照并通过 `quick_check`。香港账号、会话、主云存档、有效修订、排行榜、反馈和错误聚合记录没有减少；上海账号与云存档继续为空，匿名玩家记录保持 19。两地数据库没有被恢复、替换、初始化或写入测试存档。
+
+两地 Web/API 已原子切换到 `1.0.3-6d59252f4f15`，共同回滚目标为 `1.0.2-df7bee45e60a`。公网根页、manifest、健康接口、香港 `www` 301、schema v7、layout v2、活动 revision、gzip、immutable/no-cache、服务 active、`NRestarts=0` 和最近 500 条 5xx 均通过；隔离 Chrome 覆盖两地桌面、390×844 和 844×390，无页面错误或横向溢出。完整证据见 [releases/1.0.3.md](./releases/1.0.3.md)。
+
+## 26. Android `1.0.3` 云存档兼容发布
+
+本次不升级 GameState v36、存档 envelope v2、云 schema v7 或 SQLite layout v2。服务端专项明确接受 Android 1.0.2 的 v35 和 1.0.3 的 v36 存档；Android WebView `https://localhost` 的 GET/PUT 预检通过，未知 origin 保持 403。1.0.3 Android 独立发布时香港生产 unit 尚未安装新 origin 模板；该模板已随 1.0.4 部署并完成生产预检。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 49 个文件，472 项通过，1 项可选基准跳过 |
+| `npm run test:server` | 35/35 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 148/149；唯一既有 Tooltip hover 时序失败，原用例独立重跑 1/1 通过 |
+| Android release | `1.0.3 / 1000003`，APK v2/v3，批准证书一致 |
+| 覆盖升级 | API 36.1 模拟器从正式 1.0.2 `adb install -r` 成功，`firstInstallTime` 不变 |
+
+APK 为 4,255,736 字节，SHA-256 `b8d43072b17de16079f12e458bd2dc264e20273dde41b176fcbc7da80622f32f`。上海下载站最终原子切换到 `1.0.3-android-b8d43072-r2`，上一 1.0.3 目录和 1.0.2 目录均保留；稳定清单 no-cache、新旧 APK 200、新 APK Range 206/immutable 和公网完整下载哈希均通过。完整记录见 [releases/1.0.3-android.md](./releases/1.0.3-android.md)。
+
+## 27. `1.0.4` 物流并联与终局管理发布
+
+`1.0.4` 保持 GameState v36、存档 envelope v2、云 schema v7 和 SQLite layout v2，不增加迁移或修改游戏状态结构。传送带并联数量调整、手机无限科技目录和制造中心 100,000 目标上限均有单元与浏览器回归。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 50 个文件，477 项通过，1 项可选基准跳过 |
+| `npm run test:server` | 35/35 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | 通过；为 Web、Windows 和 Android 分别重建 |
+| `npm run test:e2e` | 152/152 通过 |
+| 双节点未激活目录 | 香港和上海均通过服务端 35/35、运维 6/6、127/127 文件复验和各自备份副本隔离启动 |
+
+正式清单包含 127 个文件，聚合 SHA-256 为 `e0fb648523352f42ed555e5f09183fa54f889a084348c72297db1f4d237841bb`。香港和上海切换前后均使用 SQLite Backup API 生成备份并通过 `quick_check`；两个生产库均没有被替换、恢复或写入测试存档。两地 Web/API 均指向 `1.0.4-9ca10b44507a`，回滚目标均为 `1.0.3-6d59252f4f15`；服务 active、`NRestarts=0`，最近 500 条 DSP 访问日志无 5xx。
+
+Windows 1.0.4 安装程序为 103,129,814 字节，SHA-256 `1cc01e21522afa48ab49f69f033d46faab3b98d1dfee3c285ec1919d12fcd4a8`，Authenticode 为 `NotSigned`。Android 1.0.4/1000004 APK 为 4,261,343 字节，SHA-256 `7ad998fdcd620562421f482e39dd14a8e65854c24408143baa7be9f1e55553d4`，v2/v3 和长期证书均通过。API 36.1 模拟器从正式 1.0.3 覆盖升级后 `firstInstallTime` 不变，启动无致命异常。
+
+上海下载站已原子切换到 `1.0.4-9ca10b44507a`，上一目录为 `1.0.3-android-b8d43072-r2`。公网完整下载哈希与本地制品一致，清单 no-cache、二进制 immutable、Range 206 和香港 302 跳转均通过。下载页桌面与 390×844 截图无横向溢出，证据位于 `artifacts/qa/v104-download-*.png`。
+
+香港发布前后备份分别为 366,043,136 与 366,149,632 字节。账号 179、云存档 148、排行数据 148、反馈 7 和错误聚合 1000 没有减少，云修订 1610→1611、匿名玩家 2584→2585 是发布窗口内的正常新增。Android `https://localhost` GET/PUT 预检为 200/204，未知 origin 为 403；活动 revision 保持 `e227b03a6fbd4d148b3f07ad`。完整证据见 [releases/1.0.4.md](./releases/1.0.4.md)。
+
+## 28. `1.0.5` / v37 星际物流、戴森扩容与矿脉科技回归
+
+`1.0.5` 将 GameState 从 v36 升至 v37，存档 envelope v2、云 schema v7 和 SQLite layout v2 不变。v36→v37 为固体矿脉增加 0～9 的十分之一消耗余数；旧人造恒星超额燃料只在本行星托盘可接收时退回，剩余超额原位保留；旧戴森球壳按新容量系数重算且不删除已吸附帆；旧蓝图缺失载具目标时保持零目标。服务端接受 v35、v36 和 v37，拒绝非法矿脉余数。
+
+专项回归覆盖：引力矩阵 `1→8` 翘曲配方及递归回退；物流塔目标数量、忙碌载具和蓝图部分装载；配送枢纽超过旧 900 缓存继续输送；线路单条/整网同步 `lanes` 的物资守恒；同恒星系不预留翘曲器与跨系正常扣除；人造恒星超额燃料迁移；标准球壳 10,000 容量；玻璃真实行星加成；原矿缺料导航；拖动后立即保存世界坐标；矿脉 Lv.1～Lv.10 消耗、分段确定性和有限资源预算。
+
+最终提交 `af8593bc5de48a88ad11cf5ee0264f9ddc1cef28` 的完整结果为：51 个 Vitest 文件中 492 项通过、1 项可选基准跳过；154/154 Playwright；35/35 服务端；6/6 运维；6/6 原生发布工具；类型检查、128 包许可证检查、生产构建和 `git diff --check` 通过。正式 manifest 包含 127 个文件，聚合 SHA-256 为 `d4383deb72ec72ed68fab4a228e3ceb6fe85f44b61895ad0b06600d1ed745706`。
+
+香港和上海未激活目录均通过 35/35 服务端、6/6 运维、127/127 文件复验和各自生产备份副本隔离启动。两地发布前后备份均通过 `quick_check`，账号、云存档、排行榜和有效修订没有减少；数据库未恢复、替换、初始化或写入测试存档。Web/API 已原子切换到 `1.0.5-af8593bc5de4`，共同回滚目标为 `1.0.4-9ca10b44507a`。
+
+Android `1.0.5 / 1000005` APK 为 4,267,825 字节，SHA-256 `1d9b918e621b187e9f97d6f01c822d4b35943a112fda9ff420985d70cfd9fb7c`，v2/v3 与长期证书通过；从正式 1.0.4 覆盖升级后 `firstInstallTime` 不变。Windows 1.0.5 安装程序为 112,039,520 字节，SHA-256 `12ca09de705a72830c7a224bcc8a756ae43f5ba6532cfc8eec4a85e615dc3220`，隔离启动通过，Authenticode 仍为 `NotSigned`。上海下载站已原子切换，公网清单 no-cache、二进制 immutable/Range 206、香港 302 和完整下载 SHA-256 均通过。
+
+公网烟测确认两地根页和健康接口为 200、香港 `www` 为 301、schema v7/layout v2、服务 active、`NRestarts=0`、近期 journal 无错误匹配且最近 500 条 DSP 日志无 5xx；正式桌面、390×844 手机和下载页截图无页面错误。完整记录见 [releases/1.0.5.md](./releases/1.0.5.md)。
+
+## 29. `1.0.6` / v38 高容量产线与采矿蓝图回归
+
+`1.0.6` 将 GameState 从 v37 升至 v38，存档 envelope v2、云 schema v7 和 SQLite layout v2 不变。v37→v38 为建筑制造中心补充非负安全整数的 `destroyedByproducts`，并让旧蓝图默认没有资源锚点；旧实体、线路、库存、物流载具、科研、WIP、活动和戴森工程不重建。
+
+专项单元测试覆盖紫色矩阵仅 1 个粒子宽带的单周期生产、1～4,096 并联边界与恶意存档退款、制造中心产氢副产物在满托盘时不阻塞、取消和重载守恒、101→1 批量减堆、物流塔忙碌载具保持，以及矿脉锚点匹配、缺失跳过和重复部署幂等。可选 `npm run benchmark:v106-belts` 在同一条线路 2,000 步下测得 64/256/1,024/4,096 并联分别约 690/600/591/591 ms；并联只改变容量，不扩成多个线路对象。
+
+正式提交的本地最终结果：
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm ci` | 根目录与服务端通过；服务端 0 个已知漏洞 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run typecheck` | 通过 |
+| `npm test` | 52 个文件、503 项通过，2 项显式可选基准跳过 |
+| `npm run test:server` | 35/35 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 157/157 通过，单 worker 517 秒 |
+| `git diff --check` | 通过 |
+
+重点截图为 `artifacts/qa/v106-desktop-1440x900.png`、`artifacts/qa/v106-mobile-next-font200-390x844.png` 和 `artifacts/qa/v106-mobile-classic-font200-390x844.png`。根项目依赖审计仍报告 16 个集中在 Electron 开发/打包链的既有高危告警；服务端生产依赖为 0，本轮没有新增依赖或执行破坏 lockfile 的强制升级。
+
+正式提交 `a4086d0dfc94f1a92ace66d25f050c69f825068f` 的 manifest 包含 127 个文件，聚合 SHA-256 为 `dee7d1ce8cabba2700b5b4457335e40f27779dea8bac7475504b6e4658ae5fc0`。香港和上海未激活目录均再次通过 35/35 服务端、6/6 运维、127/127 文件复验和各自生产备份副本隔离启动；前后备份均通过 `quick_check`，账号、主云存档、修订和排行榜记录没有减少。
+
+Android `1.0.6 / 1000006` APK 为 4,273,649 字节，SHA-256 `90bc8fa9934ce04f25bcce63b8c0b0d2d31033ed459956068213a2b7521df0cc`，v2/v3 与长期证书通过；从正式 1.0.5 覆盖升级后 `firstInstallTime` 与应用数据标记保持。Windows 1.0.6 安装程序为 103,053,096 字节，SHA-256 `74d0e357eff5c44709c5b0345955c04984b36c181e356eb1d4eab49cf5e81397`，隔离启动通过，Authenticode 仍为 `NotSigned`。
+
+两地 Web/API 与上海下载站已原子切换到 `1.0.6-a4086d0dfc94`，共同代码回滚点为 `1.0.5-af8593bc5de4`。公网根页、健康接口、公告桌面/手机截图、gzip、immutable/no-cache、Range 206、香港下载 302、Android origin 200/204、未知 origin 403 和完整二进制 SHA-256 均通过；DSP 专属日志最近 500 条无 5xx。完整记录见 [releases/1.0.6.md](./releases/1.0.6.md)。
+
+## 30. `1.0.7` / v38 建筑制造中心 WIP 急救回归
+
+`1.0.7` 保持 GameState v38、存档 envelope v2、云 schema v7 和 SQLite layout v2。专项失败用例先复现必要铁块 `1,080,000/1,000,000` 时旧固定阈值阻止步骤结算，再验证移除阈值后完整进入钢材阶段。测试继续覆盖自动制造暂停、全局暂停、实际断电、满托盘时只销毁非必要产物、成品只结算一次，以及 10 秒单次推进与 10 个 1 秒分段推进等价。
+
+存档回归把制造中心任务 WIP 设置为 `180,000,000` 并执行 JSON 往返与 `migrateGame()`，确认任务库存不再套用普通建筑缓存的 1 亿上限。界面 selector 同时验证每项 WIP、累计销毁副产物和暂停/断电/缺料状态可读。此次没有新增 GameState 字段、迁移段、服务端 schema 或依赖。
+
+正式发布结果：
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm ci` / `npm --prefix server ci` | 通过；服务端 0 个已知漏洞，根目录仍为 16 个既有 Electron 开发/打包链高危告警 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run typecheck` | 通过 |
+| `npm test` | 52 个文件、504 项通过，2 项显式可选基准跳过 |
+| `npm run test:server` | 35/35 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 最终 157/157 通过，单 worker 519 秒 |
+| `git diff --check` | 通过 |
+
+原生工程版本元数据同步到 `1.0.7 / 1000007` 以保持发布工具门禁一致，但本轮不构建、不上传、不切换 Windows/Android 制品或上海下载清单；公开安装包在独立原生发布前继续为 1.0.6。
+
+正式提交 `6d54901d8080bb68f9ffb860e043aa4893f95b15` 的 manifest 包含 126 个文件，聚合 SHA-256 为 `851b3d02ec9f173a3491c81ab38f398bcdfd83abdbc30ee3bac721e3937ebcdd`。香港和上海未激活目录均再次通过 126/126 文件复验、35/35 服务端和 6/6 运维测试，并用各自发布前备份副本在随机本机端口完成 schema v7/layout v2 健康烟测。
+
+两地 Web/API 已原子切换到 `1.0.7-6d54901d8080`，共同回滚点为 `1.0.6-a4086d0dfc94`。发布前后四份备份均通过 `quick_check`；香港账号 280→281、主云存档 235→235、修订 2691→2697，上海账号和云存档继续为 0，均无记录减少。两个服务 active、`NRestarts=0`，稳定观察窗口最近 100 条 DSP 访问无 5xx；香港 Android Origin GET/OPTIONS 为 200/204，未知 Origin 为 403。公网桌面和 390×844 截图确认 1.0.7 公告操作区完整可达。完整记录见 [releases/1.0.7.md](./releases/1.0.7.md)。
+
+## 31. `1.0.8` / v39 存档完整性、配送端口与性能诊断回归
+
+`1.0.8` 将 GameState 从 v38 升至 v39，存档 envelope v2、云 schema v7 和 SQLite layout v2 不变。v38→v39 只为物资配送枢纽增加三个稳定 `deliverySlots` 并为既有输入线路分配 `targetPortIndex`；迁移测试固定端口顺序、其他线路不变和重复加载幂等。客户端保存、导出和云上传复用相同 envelope 校验，服务端用无浏览器依赖实现独立重算并拒绝过期校验值。
+
+存档专项覆盖生成后自检、写入读回复核、异常云上传拒绝、真实摘要保留、不可救援结构、原件导出、两次确认和救援后重签。用户样本只在本机只读验证，修复前后均保持 12,143.1581 秒、149 个实体、50 条线路和 30 项科技，修复后迁移为校验有效的 v39；原文件未修改且未上传。
+
+配送枢纽测试覆盖 auto/manual/disabled 三模式、独立端口、旧线路迁移、需要确认的断开、并联施工库存退款、缓存/在途物资保护性返还、蓝图与服务端字段边界。性能监控测试确认默认关闭、60 秒有界样本、匿名报告不含存档正文、Worker 八阶段与未测开销归因，以及 profile 开启/关闭状态哈希完全一致。离线等价继续覆盖 1 小时、8 小时、9 小时、24 小时、7 天和 30 天。
+
+本地发布矩阵：
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 53 个文件通过、1 个可选基准文件跳过；510 项通过、2 项跳过 |
+| `npm run test:server` | 36/36 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run licenses:check` | 128 个运行时包清单一致 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 162/162 通过，单 worker 561.1 秒 |
+| `git diff --check` | 通过；仅提示既有 `theme.css` 行尾转换 |
+
+Playwright 新增存档救援、配送端口、性能监控、亮色制造栏、经典手机与新版手机 200% 字号场景。人工检查 `v108-performance-desktop-1440x900.png`、`v108-light-fabrication-1440x900.png`、`v108-mobile-delivery-font200-390x844.png`、`v108-classic-mobile-delivery-font200-390x844.png`，以及 360×480 200% 与 844×390 的 1.0.8 公告；操作区、对比度、换行和横向边界均通过。
+
+正式提交 `528455cdfc2bd6d7f5bd64352820626f76a1ca53` 的 manifest 包含 130 个文件，聚合 SHA-256 为 `9f3ca8f3128352d3291241fca7d851ec909848b6c41c68647df605eda4de9aa8`。Web 包为 776,883 字节、SHA-256 `a2ca88f1405c03626aa781c9a206e6f44ebb42df59c2a2adc50b082ad6b473bc`；API 包为 71,133 字节、SHA-256 `dac9c19dae6d15ba9cc4fb21247066daa1e2e3c5a0a6e86e7f6a53e364e7277d`。香港和上海未激活目录均通过 130/130 文件复验、36/36 服务端、6/6 运维测试和生产备份副本隔离启动。
+
+Android `1.0.8 / 1000008` APK 为 4,288,466 字节，SHA-256 `9869c15942123197765d0f1ffdabf1f8da8b09f4321f77316d0745a3250c24c6`，v2/v3 签名和长期证书连续性通过；从正式 1.0.6 使用 `adb install -r` 覆盖升级后 `firstInstallTime` 与应用数据标记保持，启动无 Fatal/ANR。Windows 1.0.8 安装程序为 103,067,374 字节，SHA-256 `66e9f87b4e09831e1222d56c0007ac1ff5cc5e8ee82035cdf0c324846fbc76f9`，隔离启动通过，Authenticode 仍为 `NotSigned`。
+
+两地 Web/API 已原子切换到 `1.0.8-528455cdfc2b`，共同回滚点为 `1.0.7-6d54901d8080`；上海下载站也切换到 1.0.8，下载回滚目录为 `1.0.6-a4086d0dfc94`。发布前后备份均通过 `quick_check`：香港账号 296→296、主云存档 250→250、正文修订 2,924→2,929、排行榜记录 250→250；上海账号和云存档继续为 0、匿名玩家记录保持 22。两个服务 active、`NRestarts=0`，公网根页和健康接口均为 200，构建 ID 正确；香港 Android Origin 为 200、未知 Origin 为 403。更新清单 no-cache、二进制 immutable、Range 返回 206，香港 `/downloads/*` 继续 302 到上海。
+
+## 32. `1.0.9` / v40 IndexedDB、内容包与公平线路回归
+
+`1.0.9` 将 GameState 从 v39 升至 v40，存档 envelope v2、云 schema v7 和 SQLite layout v2 不变。v39→v40 增加 `settings.beltBufferLimit`、精确 `contentPacks` 引用，并把已有空间站活动有效期迁移为长期开放；实体、线路、缓存、在途货物、物流载具、科研、制造 WIP、戴森和本地活动贡献不重建也不删除。
+
+存档专项覆盖 localStorage→IndexedDB 验证迁移、主档/备份/快照/三槽读回校验、配额错误、急救镜像恢复、手动快照批量管理、账号注册登录不改写本地状态、缺失内容包阻止载入、云存档 v35～v40 边界和服务端内容包校验。线路专项覆盖三条同级输出公平、高/标准/低优先级、堵塞回退、10 秒/30 秒步长等价、来源缓存小于线路吞吐及整数物资守恒。
+
+| 检查 | 正式发布结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 55 个文件通过、1 个可选基准文件跳过；523 项通过、2 项跳过 |
+| `npm run test:server` | 37/37 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 166/166 通过，单 worker 557.9 秒 |
+| `git diff --check` | 通过；仅既有行尾转换提示 |
+
+Playwright 覆盖移动组合输入、320×568 主页语言切换、200% 字体、英文亮色、长期活动旧截止点、IndexedDB 配额失败与账号本地存档守护。人工检查 `v109-language-menu-desktop-200.png`、`v109-language-menu-mobile-320x568-font200.png` 及 1.0.9 公告的桌面、390×844、360×480 200% 与 844×390 截图。
+
+Android API 36.1 模拟器从正式签名 1.0.8 原地升级到 1.0.9，`firstInstallTime` 保持，旧版创建的本地工厂可继续进入且无 Fatal/ANR。两节点未激活目录分别通过 37/37 服务端、6/6 运维和生产备份副本隔离启动；Web/API 已原子切换，上海下载清单、APK 和 Windows 安装程序已切换，Range、缓存、Origin、构建 ID 与公网健康检查通过。详细证据见 [releases/1.0.9.md](./releases/1.0.9.md)。
+
+## 33. `1.0.10` / v40 终局工厂性能基础回归
+
+`1.0.10` 不升级 GameState、存档 envelope、云 schema 或 SQLite layout。`SimulationAdvanceSession` 增加只读运行时索引，生产与供电阶段按行星集合推进，线路端点和容量预留复用索引；画布只派生当前行星实体和线路。legacy 全扫描路径保留为测试 oracle。
+
+P50/P95/Max 合成 fixture 分别包含 300/380/569 个实体、300/500/1,160 条线路和 45/80/128 座物流站。相同状态推进 4 个模拟秒时，旧路径与索引路径的状态哈希和 JSON 大小完全一致；本机中位耗时分别由 103.3/328.7/803.1 ms 降至 33.1/131.2/256.7 ms。fixture 只由公开目录和固定参数生成，不含玩家存档正文、账号、昵称或 token。
+
+| 检查 | 正式发布结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 56 个文件通过、1 个可选基准文件跳过；529 项通过、2 项跳过 |
+| `npm run test:server` | 37/37 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 166/166 通过，单 worker 550 秒 |
+| `git diff --check` | 通过 |
+
+正式提交 `41cbf7ccb07e1cfb8e8e0d26067a3c92b01fb211` 的 manifest 包含 131 个文件，聚合 SHA-256 为 `1f079010c3dab2a329b5ee9ae27f7ea972215cb2573480810316ed59ea206581`。两节点未激活目录均通过文件复验、37/37 服务端、6/6 运维和生产备份副本隔离启动；隔离前后账号、云存档、修订和玩家计数一致。
+
+Android API 36.1 模拟器从正式签名 1.0.9 原地升级到 `1.0.10 / 1000010`，`firstInstallTime` 保持且旧本地主存档继续识别，日志无 Fatal/ANR。Windows FileVersion/ProductVersion 与稳定通道为 1.0.10，Authenticode 仍为 `NotSigned`。两地 Web/API、上海下载页和稳定清单均已原子切换，公网哈希、Range、缓存、Origin、构建 ID 与发布后备份通过。详细证据见 [releases/1.0.10.md](./releases/1.0.10.md)。
+
+## 34. `1.0.11` / v40 终局批次与排行榜完整性回归
+
+`1.0.11` 不升级 GameState、存档 envelope、云 schema 或 SQLite layout。燃料和能量枢纽保留 legacy 逐项 oracle；建筑制造中心额外保留 `batchConstructionAutomation=false` 的逐步 oracle。复杂递归计划被编译为托盘消耗、WIP、返还、副产物销毁、累计产出和工作秒数事务，已有部分 WIP 继续走旧步骤语义。
+
+聚焦测试覆盖部分燃料、500 万蓄电单元、50,000 个直接制造任务、10,000 个含副产物递归任务、复杂高级配方、多目标、多制造中心、长步/分段和完整状态哈希。匿名玩家同形与 2 倍终局夹具分别覆盖 600/1,200 个实体、1,250/2,500 条线路、100/256 座物流站和 150/300 万并联；1x、4x、11x 六组 optimized/legacy 状态哈希一致且无未完成模拟债务。
+
+服务端测试覆盖内部处置状态归一化、同名候选拒绝、当前综合榜第一唯一解析、envelope/SHA-256/主档修订一致性、官方矿脉不变量、五榜过滤、刷新/可见性稳定错误码、上传/历史恢复/启动回填防重建、云档能力保留、账号注销清理和 SQLite layout v2 幂等事务。运维 CLI 默认只读并启用 `query_only`；写入必须提供已验证备份和服务停止确认，后验必须证明主档修订、历史数量和正文行数不变。
+
+正式发布已运行：
+
+| 检查 | 正式发布结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 57 个文件通过、1 个可选基准文件跳过；546 项通过、3 项跳过 |
+| `npm run test:server` | 42/42 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | TypeScript 与 Vite 生产构建通过 |
+| `npm run test:e2e` | 166/166 通过，单 worker 约 540.5 秒 |
+| 玩家同形基准 | 1x/4x/11x 约 34/58/116 ms，哈希一致 |
+| 2 倍终局基准 | 1x/4x/11x 约 278/401/745 ms，哈希一致；首次路线缓存约占 227 ms |
+| 原生覆盖升级 / 双节点发布 | Android 1.0.10→1.0.11 保档覆盖升级、Windows 隔离启动、双节点和上海下载站公网验收通过 |
+
+正式提交 `f88462df53262d1b4d9ac1893a372a209d7b979a` 的 manifest 包含 134 个文件，聚合 SHA-256 为 `0e9a5ae566c3be83fc9674c8b0b062be78b53a3393a85f1ec79908ea1b0aa429`。两节点未激活目录均通过 134/134 文件复验、42/42 服务端、6/6 运维和生产备份副本隔离启动；隔离检查没有写入生产数据库。
+
+Android API 36.1 模拟器从正式签名 `1.0.10 / 1000010` 原地升级到 `1.0.11 / 1000011`，`firstInstallTime` 和旧本地主存档保持，日志无 Fatal/ANR。Windows FileVersion/ProductVersion 与稳定通道为 1.0.11，隔离启动通过，Authenticode 仍为 `NotSigned`。两地 Web/API、上海下载页和稳定清单均已原子切换到 `1.0.11-f88462df5326`；公网 Build ID、文件哈希、Range、immutable/no-cache 和 Android Origin 边界通过。
+
+发布前后四份 SQLite Backup API 备份均通过 `quick_check`。香港排行榜处置先按综合榜排序锁定唯一第一名，再核对受保护显示名、主档 revision、SHA-256、envelope 和矿脉不变量；首次同名 dry-run 安全中止且未写数据，修复解析器后事务删除 1 条公开 submission、写入 1 条内部限制。账号、主云档、历史和正文行数没有减少，其他同名账号未处理；重启和回填后五榜仍不可见。上海没有执行该数据处置。详细证据见 [releases/1.0.11.md](./releases/1.0.11.md)。
+
+## 35. `1.0.12` / v41 轨道与物流交互回归
+
+`1.0.12` 将 GameState 从 v40 升至 v41，存档 envelope v2、云 schema v7 和 SQLite layout v2 不变。迁移只为已有电磁轨道弹射器补齐所在恒星系的活动轨道；旧蓝图在部署时使用目标恒星系活动轨道。合法 v41 目标、失效目标、太阳帆输入、发射进度、线路、库存和戴森状态均保持原位。
+
+专项覆盖：
+
+- 弹射器单台与批量换轨、跨恒星系和已删除轨道阻塞、目标轨道实际接收太阳帆、锁定实体保护、蓝图往返及 v40→v41 保存重载。
+- 第一条逐项点选网络保持模板；全选/框选要求显式模板；同步预览与成功/跳过/失败报告；并联、堆叠、优先级、形态、监测和路由同步时不改写进度、实时流量、累计运输和在途物资。
+- 配送枢纽在 80/100/125/150/200% 字体、390×844 和 768×1024 下保持紧凑，三个真实输入 handle 始终位于卡片边界且命中尺寸不缩小。
+- 亮色物流塔的默认、悬停、按下、选中、焦点、配置、禁用与舰队诊断面板保持明确对比；新版手机轨道选择器命中高度至少 44px。
+
+正式发布门禁：
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 57 个文件通过、1 个可选基准文件跳过；548 项通过、3 项跳过 |
+| `npm run test:server` | 42/42 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 176/176 通过，单 worker 约 557.5 秒 |
+| 原生覆盖升级 / 双节点发布 | Android 1.0.10→1.0.12 保档覆盖升级、Windows 隔离启动、双节点和上海下载站公网验收通过 |
+
+正式提交 `4f149409f433b6400142ed757e177fad8daf9de7` 的 manifest 包含 135 个文件，聚合 SHA-256 为 `cf16046a709ff52368c34709b6e14f4685bf5f1caaf5c89839fa1ba7b8b94b39`。两节点未激活目录均通过 135/135 文件复验、42/42 服务端、6/6 运维和生产备份副本隔离启动；隔离检查没有写入生产数据库。
+
+Android API 36.1 模拟器从正式签名 `1.0.10 / 1000010` 原地升级到 `1.0.12 / 1000012`，`firstInstallTime` 和 19 小时 26 分本地主存档保持，日志无 Fatal/ANR。Windows FileVersion/ProductVersion 与稳定通道为 1.0.12，隔离启动通过，Authenticode 仍为 `NotSigned`。两地 Web/API、上海下载页和稳定清单均已原子切换到 `1.0.12-4f149409f433`；公网 Build ID、文件哈希、Range、immutable/no-cache 和 Android Origin 边界通过。
+
+发布前后四份 SQLite Backup API 备份均通过 `quick_check`。香港账号、主云档、公开 submission、玩家和内部排行榜限制数量没有减少；发布窗口增加的一条修订和正文来自正常在线上传。上海账号和云档继续为 0、玩家记录保持 24。香港首次切换因默认健康窗口短于正常启动时间而自动回滚，确认无崩溃后使用 30 秒健康窗口重试成功；数据库从未恢复或替换。完整证据见 [releases/1.0.12.md](./releases/1.0.12.md)。
+
+## 36. `1.0.13` / v41 画布、物流路径和大数回归
+
+`1.0.13` 不升级 GameState、envelope、云 schema 或 SQLite layout。专项覆盖稳定拓扑缓存、节点/边视觉签名复用、300 实体视口裁剪边界、缩放从 compact 恢复 full、预构建线路诊断索引、跨星系路径缓存、排行榜超 `10^15` 值和中文/SI 大数格式。
+
+正式候选门禁：
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 58 个文件通过、1 个可选基准文件跳过；556 项通过、3 项跳过 |
+| `npm run test:server` | 44/44 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | 通过 |
+| `npm run test:e2e` | 176/176 通过，单 worker 约 555 秒 |
+| `npm run benchmark:logistics` | 7/7 通过；10/50/100/128/300/500 站哈希一致 |
+
+视觉检查使用 `artifacts/qa/stress-factory-1440.png`、`factory-phone-portrait-390.png`、`factory-phone-landscape-844.png` 和 `font-200-*.png`。桌面、390×844、844×390 与 200% 字体均恢复完整建筑内容，没有改变线路层级或端口几何。
+
+原生验收：Android APK 为 `1.0.13 / 1000013`，使用与 1.0.0～1.0.12 相同的长期证书并通过 v2/v3；API 36.1 模拟器从正式 1.0.12 使用 `adb install -r` 覆盖升级后 `firstInstallTime` 不变，19 小时 26 分本地主存档继续显示，日志无 Fatal/ANR。Windows FileVersion/ProductVersion 为 1.0.13，包内 Build ID、正式 HTTPS API 和稳定更新地址通过，隔离用户数据目录启动通过；Authenticode 与历史版本相同，仍为 `NotSigned`。
+
+发布状态：香港与上海 Web/API 均已完成备份、未激活目录复验、原子切换和公网健康验收。上海发布前后备份通过 `quick_check`，记录摘要不减少，服务 active 且 `NRestarts=0`；公网 Build ID 为 `1.0.13+694b61fc3a1c`。上海下载站已切换到 `1.0.13-694b61fc3a1c`，回滚目标为 1.0.12；页面、Android JSON、桌面 YAML、公网 SHA-256、Range `206`、manifest no-cache、binary immutable 与香港 302 均通过。下载页桌面和 390×844 截图位于 `artifacts/qa/native-1.0.13/`。
+
+## 37. `1.0.14` / v42 星区资料与物流索引回归
+
+本批新增 v41→v42 元数据迁移、无限采集倍率、十万级蓝图原子部署、派遣方向诊断和索引物流路径。索引只缓存运行时派生结构，传送带沿用存档顺序；真实后期存档单步 legacy/indexed 状态哈希一致，候选检查为 6,105（目标小于 20,000）。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 59 个文件中 58 个通过、1 个可选基准跳过；563 项通过、4 项跳过 |
+| `npm run test:server` | 44/44 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 6/6 通过 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | 通过；Web 与 Android 资源同步到 1.0.14 |
+| 聚焦 Playwright | 117/117 通过，包含版本公告、离线取消、旧/新版手机壳、双指接管、物流、蓝图、亮暗主题和存档保护 |
+| 真实存档夹具 | 旧/索引路径哈希一致；物流约 327ms→66ms，传送带约 282ms→21ms，候选检查 1,045,590→6,105 |
+
+## 38. `1.0.17` / v44 量子接入与暂停画布回归
+
+本批以 GameState v44 为发布基线，不升级存档 envelope、云 schema 或 SQLite layout。量子物流接入改为扫描全局航线账本，并在旧航线安全完成后清零尾货；画布 P1-P5 将交互预览、端口命中、拖动几何和手机缩放与主画布状态分离。星图中的废弃空间站/太空电梯入口移除，量子物流塔升级材料保持为零。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 67 个文件通过、1 个可选基准跳过；610 项通过、5 项跳过 |
+| `npm run test:server` | 本地与两地新 release 均为 44/44 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 7/7 通过 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | 通过；1,859 个模块转换完成 |
+| `npm run test:e2e -- --workers=1` | 187 个场景完成，命令退出码 0；此前一次长跑末段新版手机加载超时，单独重跑通过，未复现功能失败 |
+| 发布清单 | 141/141 文件验证通过；dirty 工作区构建 ID 为 `1.0.17+0383e85d2d9d.dirty` |
+
+发布前后两地均使用 SQLite Backup API 创建快照并通过 `quick_check`。香港发布前后摘要为用户 422、云档 347、修订 4,128、榜单 344、玩家 4,264；上海为用户 0、云档 0、玩家 25、错误 23，均未减少。两地 Web/API release 和上海下载页均原子切换至 `1.0.17-0383e85d2d9d-dirty`，服务 `active`、`NRestarts=0`；公网健康 200、香港下载 302、APK/EXE 哈希、immutable 缓存和 EXE Range `206` 均通过。
+
+Android `1.0.17 / 1000017` 使用长期签名证书，SHA-256 为 `1673a9c5bfefb7c05bd02526cebb67425d855a7bef5257a74802f26bd7db33d0`；Windows 安装包仍为未签名测试包，SHA-256 为 `5348bbb5fc3047fd40ee7780c74873becaa07b135e6c440569cda10a7f41a572`。发布目录、旧安装包、数据库和回滚目标均保留。
+
+## 39. `1.0.18` / v45 量子空间库存与采集网络
+
+本批将量子上传、下载改为两个独立的全星区共享预算，增加轨道采集器只上传接入、逐物品容量和独立量子空间库存面板；量子模式继续保留同一行星的运输机配送。v44→v45 迁移不改变存档 envelope、云 schema 或 SQLite layout。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm test` | 68 个文件通过、1 个跳过；620 项通过、9 项跳过 |
+| `npm run test:server` | 本地与两地新 release 均为 44/44 |
+| `npm run test:ops` | 6/6 |
+| `npm run test:native` | 7/7 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | 1,859 个模块，构建通过 |
+| `npm run test:e2e -- --workers=1` | 189/189，耗时约 575 秒 |
+| 发布清单 | 143 个源发布文件复验通过；Web 暂存 121 个文件，API/运维暂存 22 个文件 |
+
+Android `1.0.18 / 1000018` 使用历史长期证书，APK v2/v3 通过，SHA-256 为 `7294976ad074e77206d5e35258a4a70d0e4f1a9612987f028d3f174f2882aba3`。Windows 1.0.18 包内官方云 API 和更新地址复验通过，SHA-256 为 `b6b4d6343b82fa8001370dfb01cabb287fe97bffc256ce08ef6412d404c4a4d6`；Authenticode 仍为 `NotSigned`。
+
+两地发布前后备份均通过 `quick_check`，记录摘要无减少，服务 active 且 `NRestarts=0`，代码回滚目标为 1.0.17。上海下载页通过完整 HTTP 下载哈希、清单 no-cache、二进制 immutable、Range 206 和香港 302 验收；香港 COS 加密异地备份在补齐发布目录运维脚本后恢复成功。完整路径、大小和记录摘要见 [releases/1.0.18.md](./releases/1.0.18.md)。

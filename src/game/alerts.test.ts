@@ -31,4 +31,11 @@ describe("factory alerts", () => {
     });
     expect(getFactoryAlerts(setPaused(state, true))).toEqual([]);
   });
+
+  it("can publish a count-only alert snapshot without building descriptions", () => {
+    let state = createInitialState();
+    state = placeBuilding(state, "arc_smelter", { x: 0, y: 0 });
+    const alert = getFactoryAlerts(state, { details: false }).find((candidate) => candidate.statusCode === "missing-input");
+    expect(alert).toMatchObject({ title: "", reason: "", location: "" });
+  });
 });

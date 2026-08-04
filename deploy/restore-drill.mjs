@@ -12,11 +12,14 @@ async function writeJson(file, value) {
 }
 
 function recordsMatch(left, right, allowHistoryRepair = false) {
-  const exactKeys = ["users", "sessions", "cloudSaves", "submissions", "players", "feedback", "errors"];
+  const exactKeys = ["users", "sessions", "cloudSaves", "players", "feedback", "errors"];
   const exact = exactKeys.every((key) => Number(left?.[key] ?? 0) === Number(right?.[key] ?? 0));
+  const leftSubmissions = Number(left?.submissions ?? 0);
+  const rightSubmissions = Number(right?.submissions ?? 0);
+  const submissionsMatch = allowHistoryRepair ? leftSubmissions >= rightSubmissions : leftSubmissions === rightSubmissions;
   const leftHistory = Number(left?.cloudSaveRevisions ?? 0);
   const rightHistory = Number(right?.cloudSaveRevisions ?? 0);
-  return exact && (allowHistoryRepair ? leftHistory >= rightHistory : leftHistory === rightHistory);
+  return exact && submissionsMatch && (allowHistoryRepair ? leftHistory >= rightHistory : leftHistory === rightHistory);
 }
 
 function cloudServerModulePath(configured) {

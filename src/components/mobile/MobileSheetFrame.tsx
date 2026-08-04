@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, GripHorizontal, X } from "lucide-react";
 import { useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import type { MobileSheetSnap } from "../../hooks/useMobileNavigation";
+import { alignToDevicePixel } from "../../game/displayPixels";
 
 const SNAP_ORDER: MobileSheetSnap[] = ["peek", "half", "full"];
 
@@ -38,8 +39,8 @@ export function MobileSheetFrame({ title, detail, snap, allowPeek = false, onSna
     <div className="mobile-next-sheet-layer" data-sheet-snap={snap}>
       <button className="mobile-next-sheet-backdrop" type="button" onClick={onClose} aria-label={`关闭${title}`} />
       <section
-        className={`mobile-next-sheet mobile-next-sheet--${snap}${className ? ` ${className}` : ""}`}
-        style={{ "--mobile-sheet-drag-y": `${Math.max(-36, dragY)}px` } as CSSProperties}
+        className={`mobile-next-sheet mobile-next-sheet--${snap}${dragY !== 0 ? " mobile-next-sheet--dragging" : ""}${className ? ` ${className}` : ""}`}
+        style={dragY !== 0 ? { "--mobile-sheet-drag-y": `${alignToDevicePixel(Math.max(-36, dragY))}px` } as CSSProperties : undefined}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -54,7 +55,7 @@ export function MobileSheetFrame({ title, detail, snap, allowPeek = false, onSna
           onPointerMove={(event) => {
             const drag = dragRef.current;
             if (!drag || drag.pointerId !== event.pointerId) return;
-            setDragY(event.clientY - drag.y);
+            setDragY(alignToDevicePixel(event.clientY - drag.y));
           }}
           onPointerUp={finishDrag}
           onPointerCancel={(event) => {

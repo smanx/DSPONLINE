@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { advanceSimulation, createInitialState, installMiner, installSprayCoater, placeBuilding, setFuelItem, setProliferatorConfiguration } from "./engine";
+import { advanceSimulation, createInitialState, installMiner, installSprayCoater, placeBuilding, setActivePlanet, setFuelItem, setProliferatorConfiguration } from "./engine";
 import { calculateFactoryStatistics } from "./statistics";
 
 describe("factory statistics", () => {
@@ -72,5 +72,32 @@ describe("factory statistics", () => {
     expect(statistics.items.find((item) => item.itemId === "iron_ingot")).toMatchObject({ consumptionPerMinute: 45 });
     expect(statistics.items.find((item) => item.itemId === "proliferator_mk1")).toMatchObject({ consumptionPerMinute: 3.75 });
     expect(statistics.powerConsumers.find((consumer) => consumer.entityId === assemblerId)).toMatchObject({ ratedDemandKw: 351 });
+  });
+
+  it("attributes the lava-planet smelting bonus in both real 60-second output and statistics", () => {
+    let state = createInitialState();
+    state.exploration.colonizedPlanetIds.push("ashen");
+    state = setActivePlanet(state, "ashen");
+    state.endgame.infiniteResearch.matrix_compression = { level: 16, progress: "0" };
+    state.construction.wind_turbine = 1_000;
+    state.construction.plane_smelter = 48;
+    state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 1_000);
+    state = placeBuilding(state, "plane_smelter", { x: 300, y: 0 }, 48);
+    const smelter = state.entities.find((entity) => entity.buildingId === "plane_smelter")!;
+    smelter.recipeId = "glass";
+    smelter.sprayCoaterInstalled = true;
+    smelter.proliferatorTier = 3;
+    smelter.proliferatorMode = "speed";
+    smelter.inputs = { stone: 100_000, proliferator_mk3: 1_000 };
+
+    state = advanceSimulation(state, 60);
+    const result = state.entities.find((entity) => entity.id === smelter.id)!;
+    const statistics = calculateFactoryStatistics(state);
+    const glass = statistics.items.find((item) => item.itemId === "glass")!;
+    expect(48 * 2 * 1.64 * 2 / 2 * 60).toBeCloseTo(9_446.4, 5);
+    expect(result.outputs.glass).toBe(10_579);
+    expect(result.productionRate).toBeCloseTo(10_580, 0);
+    expect(glass.productionPerMinute).toBeCloseTo(result.productionRate, 2);
+    expect(result.productionRate / 9_446.4).toBeCloseTo(1.12, 3);
   });
 });

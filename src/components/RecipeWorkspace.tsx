@@ -6,6 +6,7 @@ import {
   Factory,
   FlaskConical,
   LockKeyhole,
+  LocateFixed,
   MapPin,
   Pickaxe,
   Pin,
@@ -24,6 +25,7 @@ import {
 } from "../game/recipeGraph";
 import { getRecipeRates } from "../game/recipeGraph";
 import { validateContentCatalog } from "../game/content";
+import { getProductionLineLocations } from "../game/productionLocator";
 import type { BuildingId, GameState, ItemId, PlanetId, RecipeDefinition, TechId } from "../game/types";
 import { CODEX_SECTION_LABELS, CodexSections, type CodexSection } from "./CodexSections";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
@@ -113,12 +115,13 @@ function RecipeFlowCard({ recipe, game, onSelect, onSelectBuilding, onSelectTech
   );
 }
 
-export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, mobile = false, mobileSubview, onMobileOpenDetail, onMobileReplaceDetail }: {
+export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, onLocateProductionLine, mobile = false, mobileSubview, onMobileOpenDetail, onMobileReplaceDetail }: {
   open: boolean;
   game: GameState;
   onClose: () => void;
   focusItemId?: ItemId | null;
   onFocus: (itemId: ItemId | null) => void;
+  onLocateProductionLine: (itemId: ItemId, planetId: PlanetId) => void;
   mobile?: boolean;
   mobileSubview?: string | null;
   onMobileOpenDetail?: (subview: string) => void;
@@ -194,6 +197,8 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, mob
   const upstreamItems = [...new Set(producingRecipes.flatMap((recipe) => recipe.inputs.map((input) => input.itemId)))];
   const downstreamItems = [...new Set(consumingRecipes.flatMap((recipe) => recipe.outputs.map((output) => output.itemId)))];
   const stock = networkItemStock(game, selectedItemId);
+  const productionLocations = getProductionLineLocations(game, selectedItemId);
+  const currentProductionLocation = productionLocations.find((location) => location.planetId === game.activePlanetId);
   const catalogAudit = validateContentCatalog();
 
   const mobileDetail = Boolean(mobile && mobileSubview);
@@ -266,7 +271,8 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, mob
             <ItemMark itemId={selectedItemId} />
             <div><span>{item.kind === "matrix" ? "科研矩阵" : item.kind === "fluid" ? "流体物品" : sources.length > 0 ? "天然资源" : "工业物品"}</span><strong>{item.name}</strong><p>{item.description}</p></div>
             <div className="recipe-item-actions">
-              <button type="button" className={game.recipeFocus.itemId === selectedItemId ? "active" : ""} onClick={() => onFocus(game.recipeFocus.itemId === selectedItemId ? null : selectedItemId)} title={game.recipeFocus.itemId === selectedItemId ? "取消主界面聚焦" : "固定生产链到主界面"}><Pin size={14} />{game.recipeFocus.itemId === selectedItemId ? "已固定" : "固定到主界面"}</button>
+              <button type="button" className={game.recipeFocus.itemId === selectedItemId ? "active" : ""} onClick={() => onFocus(game.recipeFocus.itemId === selectedItemId ? null : selectedItemId)} title={game.recipeFocus.itemId === selectedItemId ? "取消主界面聚焦" : "固定生产链到主界面"}><Pin size={14} /><span>{game.recipeFocus.itemId === selectedItemId ? "已固定" : "固定到主界面"}</span></button>
+              {currentProductionLocation ? <button type="button" onClick={() => onLocateProductionLine(selectedItemId, game.activePlanetId)} title={`定位当前行星 ${currentProductionLocation.producerEntityIds.length} 条产线`}><LocateFixed size={14} /><span>定位产线 · {currentProductionLocation.producerEntityIds.length}</span></button> : null}
             </div>
             <dl>
               <div><dt>网络库存</dt><dd><QuantityValue value={stock} /></dd></div>
@@ -274,6 +280,11 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, mob
               <div><dt>下游流程</dt><dd>{consumingRecipes.length}</dd></div>
             </dl>
           </header>
+
+          {!currentProductionLocation && productionLocations.length > 0 ? <section className="recipe-production-locations" aria-label="其他行星生产位置">
+            <header><LocateFixed size={15} /><span>当前行星没有生产该物品的设备</span><strong>其他行星 {productionLocations.length}</strong></header>
+            <div>{productionLocations.map((location) => <button type="button" key={location.planetId} onClick={() => onLocateProductionLine(selectedItemId, location.planetId)}><MapPin size={14} /><span>{getPlanet(location.planetId).name}</span><strong>{location.producerEntityIds.length} 条产线</strong></button>)}</div>
+          </section> : productionLocations.length === 0 ? <p className="recipe-production-empty">当前存档尚未部署该物品的生产设备。</p> : null}
 
           <section className="recipe-relations">
             <div><span>上游材料</span><div>{upstreamItems.length > 0 ? upstreamItems.map((id) => <ItemLink itemId={id} onSelect={selectItem} key={id} />) : <small>无合成上游</small>}</div></div>

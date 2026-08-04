@@ -14,7 +14,15 @@ export function NativeUpdateCard({ className = "", showWebFallback = false }: { 
 
   useEffect(() => {
     let active = true;
-    void getNativeReleaseInfo().then((info) => { if (active) setRelease(info); }).catch(() => undefined);
+    void getNativeReleaseInfo().then((info) => {
+      if (!active) return;
+      setRelease(info);
+      if (info?.platform === "android" && info.update.state === "idle") {
+        void checkNativeUpdate().then((update) => {
+          if (active && update) setRelease((current) => current ? { ...current, update } : current);
+        }).catch(() => undefined);
+      }
+    }).catch(() => undefined);
     const unsubscribe = subscribeNativeUpdate((update) => {
       if (!active) return;
       setRelease((current) => current ? { ...current, update } : current);

@@ -1,0 +1,2072 @@
+import { useEffect } from "react";
+
+import type { AppLocale } from "./locale";
+
+type TranslationMap = Readonly<Record<string, string>>;
+
+const UI_EN: TranslationMap = {
+  "DSP极简网络": "DSP Idle Network",
+  "星系生产资料库": "Stellar Production Library",
+  "生产资料库": "Production Library",
+  "游戏图鉴": "Game Codex",
+  "工厂": "Factory",
+  "建造": "Build",
+  "物资": "Materials",
+  "科研": "Research",
+  "更多": "More",
+  "返回工厂": "Back to Factory",
+  "主菜单": "Main Menu",
+  "设置": "Settings",
+  "运营中心": "Operations Center",
+  "警报": "Alerts",
+  "成就": "Achievements",
+  "存档": "Saves",
+  "内容包": "Content Packs",
+  "生产统计": "Production Statistics",
+  "生产管理": "Production Management",
+  "配方图鉴": "Recipe Codex",
+  "科技界面": "Technology",
+  "科技树": "Technology Tree",
+  "星图与行星探索": "Star Map & Planet Exploration",
+  "星图": "Star Map",
+  "银河网络": "Galactic Network",
+  "戴森规划": "Dyson Planning",
+  "戴森球规划": "Dyson Sphere Planning",
+  "主线任务": "Campaign",
+  "蓝图": "Blueprints",
+  "命令面板": "Command Palette",
+  "物品与配方": "Items & Recipes",
+  "物品": "Items",
+  "建筑": "Buildings",
+  "数据": "Data",
+  "生产方式": "Production Method",
+  "物品产线定位": "Production Line Locator",
+  "定位产线": "Locate Production Line",
+  "定位产线 ·": "Locate Production Line ·",
+  "上一个生产节点": "Previous Production Node",
+  "下一个生产节点": "Next Production Node",
+  "显示全部生产节点": "Show All Production Nodes",
+  "清除产线高亮": "Clear Production Highlight",
+  "当前行星没有生产该物品的设备": "No facility on the current planet produces this item",
+  "个生产节点 ·": "production nodes ·",
+  "条上游线路": "upstream belts",
+  "条产线": "production lines",
+  "其他行星": "Other Planets",
+  "其他行星生产位置": "Production Locations on Other Planets",
+  "当前存档尚未部署该物品的生产设备。": "This save has no deployed facility producing this item.",
+  "作为原料": "Used As Material",
+  "上游材料": "Upstream Materials",
+  "当前物品": "Current Item",
+  "下游产物": "Downstream Products",
+  "无合成上游": "No upstream recipe",
+  "可手动采集或自动开采": "Can be gathered manually or mined automatically",
+  "资源来源": "Resource Sources",
+  "星球": "Planet",
+  "行星": "Planet",
+  "工业物品": "Industrial Item",
+  "流体物品": "Fluid Item",
+  "科研矩阵": "Research Matrix",
+  "没有符合条件的库存": "No matching inventory",
+  "语言仅保存在当前设备，不会写入游戏存档或云存档。": "Language is stored on this device only and is never written to game or cloud saves.",
+  "澄海 I": "Clearwater I",
+  "烬原 II": "Cinderfield II",
+  "苍岚 III": "Azurewind III",
+  "霜原 I": "Frostplain I",
+  "青冥 II": "Deepblue II",
+  "极夜 I": "Polar Night I",
+  "翠环 I": "Verdant Ring I",
+  "澜渊 II": "Pelagic Deep II",
+  "天穹 III": "Skyvault III",
+  "赤砂 I": "Red Dune I",
+  "灰烬 II": "Ashfall II",
+  "红飓 III": "Redstorm III",
+  "晶穹 I": "Crystal Vault I",
+  "牧云 II": "Cloudpasture II",
+  "银冠 III": "Silver Crown III",
+  "白盐 I": "White Salt I",
+  "黑曜 II": "Obsidian II",
+  "苍白 III": "Pale Giant III",
+  "风暴 I": "Tempest I",
+  "炽核 II": "Inferno Core II",
+  "幽冥 III": "Abyss III",
+  "蓝穹 IV": "Azure Vault IV",
+  "曙光庭": "Aurora Court",
+  "余烬座": "Ember Reach",
+  "天狼工域": "Sirius Industrial Domain",
+  "苍白余烬": "Pale Ember",
+  "蔚蓝王座": "Azure Throne",
+  "赫利俄斯": "Helios",
+  "北冕座": "Corona Borealis",
+  "赫卡忒": "Hecate",
+  "建筑设施": "Buildings",
+  "物流运输": "Logistics",
+  "电力与能源": "Power & Energy",
+  "星球与资源": "Planets & Resources",
+  "戴森工程": "Dyson Engineering",
+  "科研与机制": "Research & Systems",
+  "全部": "All",
+  "删除一半": "Delete Half",
+  "全部删除": "Delete All",
+  "物资托盘管理": "Material Tray Management",
+  "再次确认删除": "Confirm Deletion Again",
+  "不可撤销操作": "Irreversible Action",
+  "天然资源": "Natural Resources",
+  "固体": "Solid",
+  "流体": "Fluid",
+  "矩阵": "Matrix",
+  "搜索物品、缩写或说明": "Search items, abbreviations, or descriptions",
+  "搜索建筑、配方或说明": "Search buildings, recipes, or descriptions",
+  "搜索": "Search",
+  "关闭": "Close",
+  "取消": "Cancel",
+  "确认": "Confirm",
+  "删除": "Delete",
+  "保存": "Save",
+  "载入": "Load",
+  "导入": "Import",
+  "导出": "Export",
+  "应用": "Apply",
+  "重置": "Reset",
+  "恢复默认": "Restore defaults",
+  "返回": "Back",
+  "下一步": "Next",
+  "上一步": "Previous",
+  "完成": "Done",
+  "跳过": "Skip",
+  "开始游戏": "Start Game",
+  "继续游戏": "Continue",
+  "新建工厂": "New Factory",
+  "加载存档": "Load Save",
+  "导入存档": "Import Save",
+  "游戏设置": "Game Settings",
+  "版本更新": "Release Notes",
+  "我知道了": "Got it",
+  "打开生产资料库": "Open Production Library",
+  "打开科技树": "Open Technology Tree",
+  "更多工作区": "More workspaces",
+  "展开小地图": "Expand minimap",
+  "折叠小地图": "Collapse minimap",
+  "界面主题": "Theme",
+  "深色": "Dark",
+  "亮色": "Light",
+  "跟随系统": "System",
+  "语言": "Language",
+  "简体中文": "Chinese (Simplified)",
+  "English": "English",
+  "字体大小": "Text Size",
+  "模拟速度": "Simulation Speed",
+  "请求倍率": "Requested Multiplier",
+  "实际倍率": "Effective Multiplier",
+  "请求所需功率": "Power Required for Request",
+  "当前档位需电": "Current Tier Power Demand",
+  "获得功率": "Allocated Power",
+  "自动降档原因": "Automatic Downgrade Reason",
+  "待处理模拟": "Pending Simulation",
+  "装置未启动": "Device is not active",
+  "无，当前供电满足请求倍率": "None; available power satisfies the requested multiplier",
+  "请求倍率超出数值安全范围": "Requested multiplier exceeds the numeric safety range",
+  "科技树布局": "Technology Tree Layout",
+  "标准模式": "Standard",
+  "精简模式": "Compact",
+  "新建传送带默认参数": "New Belt Defaults",
+  "货物堆叠": "Cargo Stacking",
+  "线路形状": "Route Shape",
+  "自动避让": "Auto route",
+  "曲线": "Curve",
+  "上绕": "Route above",
+  "下绕": "Route below",
+  "生产建筑缓存上限": "Production Buffer Limit",
+  "仓储与物流建筑缓存上限": "Storage & Logistics Buffer Limit",
+  "增产剂缓存上限": "Proliferator Buffer Limit",
+  "自定义": "Custom",
+  "性能模式": "Performance Mode",
+  "减少动画": "Reduce Motion",
+  "声音": "Sound",
+  "允许双击缩放": "Allow double-click zoom",
+  "生产画面刷新": "Production Visual Refresh",
+  "× 模拟": "× Simulation",
+  "自动调节（推荐）": "Automatic (recommended)",
+  "经典流畅": "Classic smooth",
+  "高流畅": "High refresh",
+  "省电": "Power saver",
+  "低配置": "Low-end device",
+  "极限省电": "Maximum power saving",
+  "暂停": "Pause",
+  "继续": "Resume",
+  "正在暂停": "Paused",
+  "供电效率": "Power Efficiency",
+  "电网负载": "Grid Load",
+  "生产通量": "Production Throughput",
+  "生产周期": "Production Cycle",
+  "当前行星": "Current Planet",
+  "母星": "Homeworld",
+  "供电": "Power",
+  "资源矿脉": "Resource Vein",
+  "原油涌泉": "Oil Seep",
+  "海洋水源": "Ocean Source",
+  "硫酸海洋": "Sulfuric Acid Ocean",
+  "模拟已暂停": "Simulation paused",
+  "无限储量": "Infinite reserves",
+  "采集": "Gather",
+  "需要采矿机": "Mining Machine required",
+  "需要抽水站": "Water Pump required",
+  "需要原油萃取站": "Oil Extractor required",
+  "基础操作": "Basic Controls",
+  "母星工业节点": "Homeworld Industrial Node",
+  "建立母星节点": "Establish Homeworld Node",
+  "恢复最近工厂": "Restore Recent Factory",
+  "建立新的母星生产网络": "Establish a New Homeworld Production Network",
+  "新工厂协议": "New Factory Protocol",
+  "蓝 / 红 / 黄 / 紫 / 绿 / 白矩阵": "Blue / Red / Yellow / Purple / Green / White Matrix",
+  "传送带": "Conveyor Belt",
+  "传送带 Mk.I": "Conveyor Belt Mk.I",
+  "传送带 Mk.II": "Conveyor Belt Mk.II",
+  "传送带 Mk.III": "Conveyor Belt Mk.III",
+  "收纳第一组物品": "Store your first items",
+  "查看物资托盘": "View Material Tray",
+  "关闭启动引导": "Close Getting Started",
+  "跳过启动引导": "Skip Getting Started",
+  "物资托盘": "Material Tray",
+  "施工托盘": "Construction Tray",
+  "基础制造": "Basic Manufacturing",
+  "建筑制造": "Building Manufacturing",
+  "手工制造": "Handcrafting",
+  "配方": "Recipe",
+  "选择配方": "Choose Recipe",
+  "未选择配方": "No recipe selected",
+  "输入": "Input",
+  "输出": "Output",
+  "库存": "Inventory",
+  "输入缓存": "Input Buffer",
+  "输出缓存": "Output Buffer",
+  "燃料": "Fuel",
+  "速度": "Speed",
+  "功率": "Power",
+  "可用配方": "Available Recipes",
+  "制造材料": "Build Materials",
+  "解锁科技": "Unlock Technology",
+  "默认可用": "Available by default",
+  "已完成": "Completed",
+  "进行中": "In progress",
+  "已暂停": "Paused",
+  "未解锁": "Locked",
+  "缺少材料": "Missing materials",
+  "缺少科技": "Technology required",
+  "材料不足": "Insufficient materials",
+  "科技不足": "Technology required",
+  "可制造": "Craftable",
+  "立即制造": "Craft now",
+  "制造": "Craft",
+  "拆卸喷涂": "Remove Spray Module",
+  "拆卸喷涂模块": "Remove Spray Module",
+  "拆卸后返还喷涂模块和未消耗的增产剂": "Returns the spray module and all unused proliferator after removal",
+  "批量制造": "Batch Craft",
+  "快速增加建筑": "Quick Add Building",
+  "回收": "Recycle",
+  "升级": "Upgrade",
+  "复制": "Copy",
+  "锁定": "Lock",
+  "解锁": "Unlock",
+  "已锁定": "Locked",
+  "未锁定": "Unlocked",
+  "登录": "Sign in",
+  "注册": "Register",
+  "退出登录": "Sign out",
+  "用户名": "Username",
+  "密码": "Password",
+  "确认密码": "Confirm password",
+  "邮箱": "Email",
+  "云存档": "Cloud Saves",
+  "主云存档": "Main Cloud Save",
+  "手动槽位": "Manual Slots",
+  "上传": "Upload",
+  "下载": "Download",
+  "量子库存": "Quantum Inventory",
+  "量子空间库存": "Quantum-space Inventory",
+  "全星区共享物资池": "Galaxy-wide Shared Inventory Pool",
+  "上传额度": "Upload Budget",
+  "下载额度": "Download Budget",
+  "量子塔堆叠": "Quantum Tower Stacks",
+  "量子采集器": "Quantum Collectors",
+  "全部采集器接入": "Attach All Collectors",
+  "全部采集器关闭": "Disconnect All Collectors",
+  "等待首个五秒结算边界": "Waiting for the first five-second settlement boundary",
+  "当前库存": "Current Inventory",
+  "· 精确": "· Exact",
+  "超出上限，仅允许下载": "Above limit; downloads only",
+  "净变化": "Net Change",
+  "没有匹配的量子物品": "No Matching Quantum Items",
+  "清除搜索后查看全部物品。": "Clear the search to view all items.",
+  "搜索量子库存物品": "Search quantum inventory items",
+  "清除量子库存搜索": "Clear quantum inventory search",
+  "请输入容量": "Enter a capacity",
+  "只能输入正整数，不支持小数、负数或指数格式": "Enter a positive integer; decimals, negative values, and exponent notation are not supported",
+  "容量不能低于 1万": "Capacity cannot be below 10,000",
+  "容量不能高于 100亿": "Capacity cannot exceed 10 billion",
+  "量子采集网络接入": "Quantum Collection Network Attachment",
+  "量子采集网络": "Quantum Collection Network",
+  "已接入": "Attached",
+  "交接中": "Transitioning",
+  "传统模式": "Legacy Mode",
+  "只向共享库存上传当前采集气体，送达时直接入池，不受量子上传带宽限制。": "Uploads the collected gas directly into shared inventory when delivered, without a quantum upload-bandwidth limit.",
+  "接入前继续使用传统星际物流。": "Legacy interstellar logistics continues until attachment.",
+  "关闭量子采集": "Disconnect Quantum Collection",
+  "接入量子采集网络": "Attach to Quantum Collection Network",
+  "接入量子采集": "Attach Quantum Collection",
+  "量子交接中": "Quantum Transition in Progress",
+  "星际槽访问共享池；本地供需继续使用运输机，运输船与翘曲器保持停用。": "Interstellar slots use the shared pool; local supply and demand keep using drones while vessels and warpers remain disabled.",
+  "升级与接入是两个独立动作；接入前传统航线继续运行。": "Upgrade and attachment are separate actions; legacy routes continue before attachment.",
+  "量子物流": "Quantum Logistics",
+  "量子物流网络": "Quantum Logistics Network",
+  "全宇宙共享池": "Galaxy-wide Shared Pool",
+  "接入量子塔": "Attached Quantum Towers",
+  "跨星走共享池，本地运输机保留": "Shared pool across stars; local drones retained",
+  "上传带宽": "Legacy Overflow Upload Budget",
+  "即时上传": "Immediate Upload",
+  "全星区量子塔堆叠共享": "Shared by all quantum tower stacks",
+  "共享库存种类": "Shared Inventory Items",
+  "输入先入池再输出": "Inputs enter the pool before outputs",
+  "共享库存总量": "Total Shared Inventory",
+  "精确值": "Exact Value",
+  "一键切换本系量子物流站": "Switch This System to Quantum Logistics",
+  "上传主存档": "Upload Main Save",
+  "立即刷新排名": "Refresh Ranking",
+  "排行榜": "Leaderboard",
+  "公开参与排行榜": "Join leaderboard",
+  "退出排行榜": "Leave leaderboard",
+  "本地与云端一致": "Local and cloud match",
+  "本地有待上传进度": "Local progress pending upload",
+  "其他设备有云端更新": "Cloud has an update from another device",
+  "需要选择保留版本": "Choose a version to keep",
+  "尚未建立云存档": "No cloud save yet",
+  "应用版本": "App Version",
+  "检查更新": "Check for Updates",
+  "下载更新": "Download Update",
+  "重启安装": "Restart to Install",
+  "下载安装包": "Download Installer",
+  "已是最新版本": "You are up to date",
+  "正在检查更新": "Checking for updates",
+  "正在下载更新": "Downloading update",
+  "更新已下载，重启后安装": "Update downloaded. Restart to install.",
+  "生产网络运行正常": "Production network is healthy",
+  "当前没有需要处理的设备警报": "There are no device alerts to address.",
+  "网络诊断": "Network Diagnostics",
+  "运行警报": "Operational Alerts",
+  "工业里程碑": "Industrial Milestones",
+  "成就记录": "Achievement Log",
+  "星系运行协议": "Stellar Operations Protocol",
+  "模拟参数": "Simulation Parameters",
+  "运行设置": "Runtime Settings",
+  "诊断反馈": "Diagnostics & Feedback",
+  "QQ 交流群": "QQ Community Group",
+  "隐私设置": "Privacy Settings",
+  "反馈": "Feedback",
+  "提交反馈": "Submit Feedback",
+  "体验": "Experience",
+  "故障": "Bug",
+  "数值": "Balance",
+  "手机端": "Mobile",
+  "描述出现的问题或建议": "Describe an issue or suggestion",
+  "进入工厂": "Enter Factory",
+  "正在载入行星工厂": "Loading planetary factory",
+  "保存中": "Saving",
+  "已保存": "Saved",
+  "尚未保存": "Not saved yet",
+  "自动快照": "Automatic Snapshot",
+  "备用存档": "Backup Save",
+  "主存档": "Main Save",
+  "本地槽位": "Local Slot",
+  "空槽位": "Empty Slot",
+  "恢复快照": "Restore Snapshot",
+  "可回滚": "Rollback available",
+  "有限资源": "Finite resources",
+  "无限资源": "Infinite resources",
+  "资源已枯竭": "Resource depleted",
+  "矿脉已枯竭": "Resource Vein Depleted",
+  "前往设置 → 资源模式切换无限矿": "Open Settings → Resource Mode to enable infinite resources",
+  "资源剩余": "Resource remaining",
+  "无限": "Infinite",
+  "矿脉极限利用": "Vein Utilization",
+  "提高固体采矿速度并逐级降低矿脉消耗，最终实现无损开采。": "Increase solid mining speed while progressively reducing vein depletion until extraction becomes lossless.",
+  "每级固体采矿速度 +10%、矿脉消耗 -10%；Lv.10 起固体矿脉无限": "Each level: solid mining speed +10% and vein depletion -10%; solid veins become infinite at Lv.10",
+  "离线节点": "Offline Node",
+  "本地节点可继续使用": "The local node remains available",
+  "云端不可达 · 本地回退": "Cloud unavailable · local fallback",
+  "本地回退": "Local fallback",
+  "尚未同步": "Not synced",
+  "本地模拟样本": "Local simulation sample",
+  "星系 ·": "systems ·",
+  "峰值发电": "Peak generation",
+  "模拟基准": "Simulated benchmark",
+  "柯伊伯联合体": "Kuiper Consortium",
+  "天玑工坊": "Tianji Works",
+  "烬原开拓局": "Ashen Frontier Bureau",
+  "北冕资源网": "Corona Resource Network",
+  "本地记录": "Local record",
+  "云服务返回 502": "Cloud service returned 502",
+  "行星物流站": "Planetary Logistics Station",
+  "星际物流站": "Interstellar Logistics Station",
+  "运输机": "Logistics Drone",
+  "运输船": "Logistics Vessel",
+  "舰队容量瓶颈": "Fleet Capacity Bottleneck",
+  "翘曲器": "Space Warper",
+  "发送": "Send",
+  "接收": "Receive",
+  "供给": "Supply",
+  "需求": "Demand",
+  "高": "High",
+  "标准": "Standard",
+  "低": "Low",
+  "均衡": "Balanced",
+  "优先线路": "Priority Route",
+  "全选": "Select All",
+  "自动整理": "Auto Arrange",
+  "撤销": "Undo",
+  "退出到主菜单": "Return to Main Menu",
+  "熔": "Smelt",
+  "制": "Build",
+  "矩": "Matrix",
+  "云端未登录": "Signed out",
+  "云端已登录": "Signed in",
+  "云端离线": "Cloud offline",
+  "连接云节点": "Connecting to cloud",
+  "等待启动": "Ready to start",
+  "初始建设物资已装载": "Starter materials loaded",
+  "新建游戏": "New Game",
+  "登录与云存档": "Account & Cloud Saves",
+  "客户端下载": "Download Apps",
+  "测试版": "Beta",
+  "工厂状态": "Factory Status",
+  "等待初始化": "Waiting for initialization",
+  "累计运行": "Total Runtime",
+  "已完成科技": "Technologies Completed",
+  "结构点数": "Structure Points",
+  "本地存档": "Local Save",
+  "空": "Empty",
+  "云端节点": "Cloud Node",
+  "模拟核心": "Simulation Core",
+  "待启动": "Standby",
+  "免费个人作品": "Free Personal Project",
+  "项目说明": "Project Information",
+  "本项目为免费个人作品，仅供交流与学习使用。欢迎大家提出宝贵的意见与建议。": "This is a free personal project for discussion and learning. Feedback and suggestions are welcome.",
+  "强烈推荐您在体验本项目之前，购买并游玩《戴森球计划》，相信它会为您带来更加丰富而精彩的游戏体验。": "Before trying this project, we strongly recommend purchasing and playing Dyson Sphere Program for the complete original experience.",
+  "进入工厂后会使用本机生成的匿名标识统计游玩与在线人数，不采集完整存档或设备指纹。": "After entering the factory, a locally generated anonymous ID is used for aggregate player and online counts. Full saves and device fingerprints are not collected.",
+  "查看存档记录": "View Save History",
+  "建立工厂": "Establish Factory",
+  "可继续运行": "Ready to continue",
+  "已检测": "Detected",
+  "模拟核心按需载入": "Simulation core loads on demand",
+  "载入时校验存档": "Saves are validated while loading",
+  "风力涡轮机": "Wind Turbine",
+  "采矿机": "Mining Machine",
+  "熔炉": "Smelter",
+  "制造台": "Assembling Machine",
+  "研究站": "Research Station",
+  "下载 Windows 或 Android 客户端": "Download the Windows or Android app",
+  "选择存档文件": "Choose a save file",
+  "光标载荷": "Cursor Cargo",
+  "空载": "Empty",
+  "光标当前未携带物资": "The cursor is not carrying any materials",
+  "戴森系统": "Dyson System",
+  "尚未建立": "Not established",
+  "在轨太阳帆": "Orbiting Solar Sails",
+  "永久结构": "Permanent Structure",
+  "点": "pts",
+  "壳面太阳帆": "Shell-absorbed Sails",
+  "单种物资上限": "Per-item Tray Limit",
+  "当前任务": "Current Mission",
+  "采集第一份矿石": "Gather Your First Ore",
+  "亲手采集一份固体矿物，确认这颗星球可以成为工业基地。": "Manually gather one solid resource to confirm this planet can support an industrial base.",
+  "可手动采集": "Manual gathering available",
+  "等待抽水站": "Awaiting Water Pump",
+  "等待萃取站": "Awaiting Oil Extractor",
+  "母星 · 海洋型行星": "Homeworld · Ocean Planet",
+  "星图锁定 · 需要星际物流系统": "Star map locked · Interstellar Logistics required",
+  "实时运行": "Live",
+  "工厂区": "Factory Zone",
+  "行星生产网络": "Planetary Production Network",
+  "生产节点": "Production Nodes",
+  "已部署设备": "Deployed Facilities",
+  "物流连接": "Logistics Links",
+  "可再生能源": "Renewable Power",
+  "射线电力": "Ray Receiver Power",
+  "戴森球功率": "Dyson Sphere Power",
+  "燃料发电": "Fuel Generation",
+  "燃料续航": "Fuel Runtime",
+  "电网储能": "Grid Storage",
+  "最大耗电设备": "Largest Power Consumer",
+  "运行时间": "Runtime",
+  "精简": "Compact",
+  "从节点或物资区拿起物品，再点击左侧物资托盘放下。": "Pick up an item from a node or material area, then click the tray on the left to store it.",
+  "从节点拿起物品，再点击左侧物资托盘放下": "Pick up an item from a node, then click the tray on the left to store it",
+  "保存并返回主菜单": "Save and Return to Main Menu",
+  "打开设置": "Open Settings",
+  "打开银河网络": "Open Galactic Network",
+  "打开主线任务中心": "Open Campaign Center",
+  "打开星图": "Open Star Map",
+  "打开生产统计": "Open Production Statistics",
+  "打开命令面板": "Open Command Palette",
+  "打开命令面板（Ctrl/⌘+K）": "Open Command Palette (Ctrl/⌘+K)",
+  "打开物资托盘": "Open Material Tray",
+  "打开检查器": "Open Inspector",
+  "检查器": "Inspector",
+  "暂停模拟": "Pause Simulation",
+  "暂停模拟（Space）": "Pause Simulation (Space)",
+  "打开戴森球规划": "Open Dyson Sphere Planning",
+  "管理当前行星物资": "Manage Current Planet Materials",
+  "完成星际物流系统科技后开放": "Unlocks after completing Interstellar Logistics System",
+  "折叠行星切换": "Collapse Planet Switcher",
+  "指针模式": "Pointer Mode",
+  "指针与节点移动": "Pointer and node movement",
+  "框选模式": "Selection Mode",
+  "拖拽框选节点，可按 Shift 增减选择": "Drag to select nodes; hold Shift to add or remove selections",
+  "生产区域模式": "Production Region Mode",
+  "在空白画布拖拽创建生产区域": "Drag on empty canvas to create a production region",
+  "打开蓝图库": "Open Blueprint Library",
+  "打开生产网络总览": "Open Production Network Overview",
+  "自动整理当前行星布局": "Auto-arrange Current Planet",
+  "按物流上下游自动整理当前行星": "Arrange the current planet by logistics flow",
+  "撤销最近一次自动整理": "Undo Last Auto-arrange",
+  "恢复到最近一次自动整理前的位置": "Restore positions from before the last auto-arrange",
+  "撤销上一步工厂操作 (Ctrl+Z)": "Undo the last factory action (Ctrl+Z)",
+  "重做": "Redo",
+  "重做工厂操作 (Ctrl+Y)": "Redo factory action (Ctrl+Y)",
+  "折叠物资侧栏": "Collapse Material Sidebar",
+  "折叠检查器侧栏": "Collapse Inspector Sidebar",
+  "折叠画布工具": "Collapse Canvas Tools",
+  "开启施工托盘精简模式": "Enable Compact Construction Tray",
+  "使用两行精简施工托盘": "Use the compact two-row construction tray",
+  "自动 Mk.I": "Auto Mk.I",
+  "跳过渐进教学": "Skip Guided Tutorial",
+  "关闭侧栏": "Close Sidebar",
+  "清空运行记录": "Clear Activity Log",
+  "严重": "Critical",
+  "仅影响新线路": "New routes only",
+  "推荐": "Recommended",
+  "有限矿脉": "Finite Deposits",
+  "无限矿脉": "Infinite Deposits",
+  "工业难度": "Industrial Difficulty",
+  "自动保存间隔": "Autosave Interval",
+  "星区与资源": "Sector & Resources",
+  "资源模式": "Resource Mode",
+  "操作音效": "Sound Effects",
+  "减少动态效果": "Reduce Motion",
+  "生产画面刷新频率": "Production Visual Refresh Rate",
+  "版本更新记录": "Release Notes",
+  "意见、建议与问题反馈": "Feedback, suggestions, and issue reports",
+  "群号": "Group ID",
+  "搜索配方物品": "Search recipe items",
+  "固定到主界面": "Pin to Main View",
+  "网络库存": "Network Inventory",
+  "下游流程": "Downstream Process",
+  "矿脉开采": "Vein Mining",
+  "星系科研协议": "Stellar Research Protocol",
+  "当前研究": "Current Research",
+  "未选择科技": "No technology selected",
+  "科研详情": "Research Details",
+  "科研队列": "Research Queue",
+  "队列为空": "Queue is empty",
+  "矩阵研究站制造": "Matrix Lab Construction",
+  "蓝色矩阵科研": "Blue Matrix Research",
+  "前置": "Prerequisites",
+  "设备速度": "Facility Speed",
+  "批": "batches",
+  "种": "types",
+  "自动": "Auto",
+  "层级": "Tier",
+  "前置：": "Prerequisites: ",
+  "项": "entries",
+  "筛选统计物品": "Filter Statistics Item",
+  "筛选物品": "Filter Items",
+  "生产中": "Producing",
+  "净消耗": "Net Consumption",
+  "堵塞": "Blocked",
+  "排序": "Sort",
+  "生产": "Production",
+  "消耗": "Consumption",
+  "净增量": "Net Change",
+  "节点": "Nodes",
+  "电网 · 星系物流": "Grid · Stellar Logistics",
+  "恒星级导航阵列": "Stellar Navigation Array",
+  "母恒星系": "Home System",
+  "本地": "Local",
+  "设备": "Facilities",
+  "未殖民": "Not Colonized",
+  "殖民前哨需求": "Colonial Outpost Requirements",
+  "材料取自“澄海 I”物资托盘；运输载具取自随身载具栏": "Materials are taken from the Clearwater I tray; logistics vehicles are taken from carried vehicle inventory.",
+  "物资与闲置载具均满足，可建立殖民前哨": "All materials and idle vehicles are available. The colonial outpost can be established.",
+  "永久航标在线 · 未殖民行星需建立前哨": "Permanent beacon online · Uncolonized planets require an outpost",
+  "需要科技": "Technology Required",
+  "当前行星托盘": "Current Planet Tray",
+  "随身载具": "Carried Vehicles",
+  "水海洋": "Water Ocean",
+  "冻结海洋": "Frozen Ocean",
+  "无海洋": "No Ocean",
+  "熔岩海": "Lava Ocean",
+  "潮汐锁定": "Tidally Locked",
+  "稀有": "Rare",
+  "宜": "Best for",
+  "冶炼基地": "Smelting Base",
+  "化工基地": "Chemical Base",
+  "物流枢纽": "Logistics Hub",
+  "科研中心": "Research Center",
+  "光年": "ly",
+  "本地星际档案协议": "Local Interstellar Archive Protocol",
+  "公共云节点": "Public Cloud Node",
+  "真实排行只读 · 登录后参与": "Live leaderboard is read-only · Sign in to participate",
+  "当前账户": "Current Account",
+  "新星际工程师": "New Interstellar Engineer",
+  "累计发电": "Total Power Generated",
+  "工业电网累计输出的能量": "Total energy delivered by the industrial grid",
+  "白矩阵上传": "White Matrix Uploads",
+  "提交至银河档案的白矩阵": "White Matrices submitted to the Galactic Archive",
+  "戴森功率": "Dyson Power",
+  "戴森云与戴森球当前功率": "Current Dyson Swarm and Sphere power",
+  "生产吞吐": "Production Throughput",
+  "历史峰值生产通量": "Historical peak production throughput",
+  "银河综合": "Galactic Composite",
+  "发电、上传、戴森与工业规模综合评分": "Composite score from power, uploads, Dyson output, and industrial scale",
+  "排行榜赛季": "Leaderboard Season",
+  "我的排名": "My Rank",
+  "未登录": "Signed Out",
+  "访客可查看真实排名": "Guests can view the live leaderboard",
+  "分": "pts",
+  "银河规模": "Galactic Scale",
+  "星系": "Star Systems",
+  "节点状态": "Node Status",
+  "真实排行": "Live Ranking",
+  "排名": "Rank",
+  "工程组织": "Engineering Organization",
+  "工业规模": "Industrial Scale",
+  "节点记录": "Node Record",
+  "本季还没有可公开展示的玩家排名": "No public player rankings are available this season yet.",
+  "本季个人档案": "Personal Season Record",
+  "份": "units",
+  "戴森峰值": "Peak Dyson Power",
+  "吞吐峰值": "Peak Throughput",
+  "访客可查看真实玩家排名；登录并上传主云存档后自动参与。": "Guests can view real player rankings. Sign in and upload a main cloud save to participate automatically.",
+  "星系扩张协议": "Stellar Expansion Protocol",
+  "主线任务中心": "Campaign Center",
+  "当前章节": "Current Chapter",
+  "主线完成": "Campaign Complete",
+  "当前目标": "Current Objective",
+  "主线": "Main",
+  "支线": "Side",
+  "缺少": "Missing",
+  "蓝图保留自身参数，并行线沿用原线路；未解锁的堆叠等级不可选择。": "Blueprints keep their own parameters, parallel routes keep the original settings, and locked stacking levels cannot be selected.",
+  "按每一种输入、输出或物流槽独立限制；调低不会删除已有库存。": "Applied independently to each input, output, and logistics slot. Lowering the limit never deletes existing inventory.",
+  "只限制已安装喷涂机当前等级的增产剂物品；内部喷涂点和既有超额库存不会被删除。": "Only limits the proliferator item used by the installed spray module. Internal spray points and existing excess inventory are preserved.",
+  "根据帧率、Worker 延迟和任务积压平滑调节": "Adjusts smoothly using FPS, Worker latency, and task backlog",
+  "每秒 10 次": "10 updates/sec",
+  "每秒 5 次": "5 updates/sec",
+  "每秒 2 次": "2 updates/sec",
+  "每秒 1 次": "1 update/sec",
+  "每 1.5 秒 1 次": "1 update every 1.5 sec",
+  "每 3 秒 1 次": "1 update every 3 sec",
+  "只调整生产画面与状态发布节奏，不改变模拟时间、产量、物流、科研或戴森工程。固定档位不会被自动调节覆盖。": "Only changes visual and state publication frequency. Simulation time, production, logistics, research, and Dyson engineering remain unchanged. Automatic adjustment never overrides a fixed profile.",
+  "完整视觉特效": "Full Visual Effects",
+  "精简粒子、阴影与线路动画": "Reduced particles, shadows, and belt animations",
+  "动态效果开启": "Motion Enabled",
+  "动态效果关闭": "Motion Disabled",
+  "声音开启": "Sound On",
+  "声音关闭": "Sound Off",
+  "双击聚焦画布": "Double-click focuses the canvas",
+  "连续点击不缩放": "Repeated clicks do not zoom",
+  "舒缓": "Relaxed",
+  "生产与物流更宽松，适合专注布局和生产链。": "More forgiving production and logistics for players focused on layout and production chains.",
+  "按当前原型的默认节奏运行。": "Uses the standard production and logistics balance.",
+  "高压": "Hard",
+  "生产与物流更紧凑，电网负载更高，适合挑战优化。": "Tighter production and logistics with heavier grid load for optimization challenges.",
+  "模拟诊断": "Simulation Diagnostics",
+  "确定性、2/8/24/72 小时挂机与数值平衡": "Determinism, 2/8/24/72-hour idle simulation, and balance",
+  "当前使用网页版本。桌面与 Android 应用支持稳定版、Beta 和 Nightly 更新通道。": "You are using the web version. Desktop and Android apps support Stable, Beta, and Nightly update channels.",
+  "恒星巨构设计协议": "Stellar Megastructure Design Protocol",
+  "粘贴": "Paste",
+  "壳层": "Shell Layers",
+  "尚无壳层方案": "No shell plan yet",
+  "太阳帆轨道": "Solar Sail Orbits",
+  "太阳帆轨道 A": "Solar Sail Orbit A",
+  "帆": "Sails",
+  "戴森球计划尚未解锁": "Dyson Sphere Program is not unlocked",
+  "科技锁定": "Technology Locked",
+  "火箭": "Rockets",
+  "太阳帆队列": "Solar Sail Queue",
+  "运载火箭队列": "Carrier Rocket Queue",
+  "发射能耗": "Launch Energy",
+  "计划功率": "Planned Power",
+  "理论接收率": "Theoretical Reception Rate",
+  "接收站实际利用率": "Actual Receiver Utilization",
+  "戴森功率利用率": "Dyson Power Utilization",
+  "接收站状态": "Receiver Status",
+  "反物质回馈": "Antimatter Return",
+  "· 宜": "· Best for",
+  "· 稀有": "· Rare:",
+  "· 潮汐锁定": "· Tidally Locked",
+  "· 火箭": "· Rockets",
+  "MJ · 火箭": "MJ · Rocket",
+  "材料取自“": "Materials are taken from “",
+  "”物资托盘；运输载具取自随身载具栏": "” tray; logistics vehicles are taken from carried vehicle inventory",
+  "材料取自": "Materials are taken from ",
+  "，运输载具取自随身载具栏": "; logistics vehicles are taken from carried vehicle inventory",
+  "轨道窗口 · 采集器 +15%": "Orbital Window · Collectors +15%",
+  "需要完成": "Requires ",
+  "颗殖民行星": "colonized planets",
+  "/种": "/item",
+  "秒": "sec",
+  "种子 #": "Seed #",
+  "项体验更新": "experience updates",
+  "设备速度 ·": "facility speed ·",
+  "批/min": "batches/min",
+  "× 设备速度 ·": "× facility speed ·",
+  "% 主线完成": "% campaign complete",
+  "科技": "Technology",
+  "分钟": "min",
+  "手动": "Manual",
+  "本地数据": "Local Data",
+  "最近快照": "Latest Snapshot",
+  "恢复点": "Recovery Points",
+  "个恢复点": "recovery points",
+  "· 科技": "· Technology",
+  "· 手动": "· Manual",
+  "银河数据节点": "Galactic Data Node",
+  "账户与云存档": "Account & Cloud Saves",
+  "邮件系统尚未开放": "Email Service Not Yet Available",
+  "用户名密码注册、主云存档、三个手动槽、自动同步和排行榜均可使用；未绑定邮箱暂时无法找回密码。": "Username registration, the main cloud save, three manual slots, automatic sync, and the leaderboard are available. Password recovery is unavailable until email is connected.",
+  "用户名或邮箱": "Username or Email",
+  "用户名或已绑定邮箱": "Username or linked email",
+  "忘记密码 · 开发中": "Forgot Password · In Development",
+  "邮箱找回密码正在开发中": "Email password recovery is in development",
+  "本机运行参数": "Device Runtime Settings",
+  "即时生效": "Applies Immediately",
+  "自动保存": "Autosave",
+  "完整渲染": "Full Rendering",
+  "低频渲染": "Reduced Rendering",
+  "完整动态": "Full Motion",
+  "动态已精简": "Reduced Motion",
+  "已开启": "Enabled",
+  "已关闭": "Disabled",
+  "运行记录": "Activity Log",
+  "没有找到可恢复的存档，已创建新工厂": "No recoverable save was found. A new factory has been created.",
+  "关闭建造": "Close Build Panel",
+  "施工库存": "Construction Inventory",
+  "部署": "Deploy",
+  "载具": "Vehicles",
+  "搜索建造项目": "Search Build Catalog",
+  "搜索建筑或设备": "Search buildings or facilities",
+  "最近": "Recent",
+  "能源": "Power",
+  "物流": "Logistics",
+  "戴森": "Dyson",
+  "库存 ×": "Inventory ×",
+  "关闭物资": "Close Materials Panel",
+  "母星物资托盘": "Homeworld Material Tray",
+  "当前空载": "Currently Empty",
+  "无物资": "No Materials",
+  "托盘": "Tray",
+  "戴森摘要": "Dyson Summary",
+  "搜索物资": "Search Materials",
+  "搜索当前行星物资": "Search current planet materials",
+  "科研空闲": "Research Idle",
+  "选择一个可研究科技": "Choose an Available Technology",
+  "队列": "Queue",
+  "可研究": "Available",
+  "产量、消耗、效率和电力": "Production, consumption, efficiency, and power",
+  "全行星设备、缺料与堵塞": "All-planet facilities, shortages, and bottlenecks",
+  "物品、建筑、物流、能源、星球与科研": "Items, buildings, logistics, power, planets, and research",
+  "运输吞吐、断料与拥堵": "Transport throughput, shortages, and congestion",
+  "工业规划": "Industrial Planning",
+  "按目标产量反推设备需求": "Calculate facility requirements from a target output",
+  "扩张": "Expansion",
+  "星图与星际工业": "Star Map & Interstellar Industry",
+  "探索、殖民、航线与行星分工": "Exploration, colonization, routes, and planetary roles",
+  "太阳帆、轨道、壳层和发射": "Solar sails, orbits, shells, and launches",
+  "排行榜、云存档与终局档案": "Leaderboard, cloud saves, and endgame archive",
+  "工具": "Tools",
+  "章节目标、奖励与卡点定位": "Chapter goals, rewards, and blocker navigation",
+  "蓝图库": "Blueprint Library",
+  "保存、导入与部署生产布局": "Save, import, and deploy production layouts",
+  "需要先建造并放置建筑制造中心": "Build and place a Building Manufacturing Center first",
+  "警报与成就": "Alerts & Achievements",
+  "停机原因、里程碑与定位": "Downtime causes, milestones, and navigation",
+  "搜索设备、物品和快速动作": "Search facilities, items, and quick actions",
+  "系统": "System",
+  "存档管理": "Save Management",
+  "保存、槽位、快照、导入和导出": "Save, slots, snapshots, import, and export",
+  "主存档、手动槽位与冲突处理": "Main save, manual slots, and conflict resolution",
+  "账号": "Account",
+  "登录、邮箱、设备与数据安全": "Sign-in, email, devices, and data security",
+  "字号、性能、动效和自动保存": "Text size, performance, motion, and autosave",
+  "注册、依赖、启停与版本": "Registration, dependencies, enablement, and versions",
+  "诊断与反馈": "Diagnostics & Feedback",
+  "运行状态、问题反馈和数据说明": "Runtime status, issue reports, and data information",
+  "切换经典手机界面": "Switch to Classic Mobile UI",
+  "立即回到原有手机布局，偏好会保留": "Return to the original mobile layout now; the preference will be preserved",
+  "保存当前工厂后离开游戏": "Save the current factory before leaving the game",
+  "立即保存": "Save Now",
+  "创建快照": "Create Snapshot",
+  "导出 JSON": "Export JSON",
+  "导入 JSON": "Import JSON",
+  "内容包校验": "Content Pack Validation",
+  "只读检查，不会修改核心目录": "Read-only validation; the core catalog is never modified",
+  "扩展内容目录": "Extended Content Catalog",
+  "内容包管理器": "Content Pack Manager",
+  "注册新内容包": "Register New Content Pack",
+  "通过校验后可以直接写入本地注册表，并按依赖版本启用。": "After validation, a content pack can be registered locally and enabled according to its dependency versions.",
+  "还没有注册内容包": "No content packs are registered",
+  "导入通过校验的 JSON 后，它会成为可启用的实际内容目录。": "Import a validated JSON file to register it as an available content catalog.",
+  "发布与运行质量": "Release & Runtime Quality",
+  "本机错误记录": "Local Error Log",
+  "清空": "Clear",
+  "今日进入工厂": "Factory Entries Today",
+  "日历": "Calendar",
+  "累计游玩玩家": "Total Players",
+  "匿名标识去重": "Deduplicated Anonymous IDs",
+  "当前在线游玩": "Players Online",
+  "秒内活跃": "sec active window",
+  "PWA 状态": "PWA Status",
+  "浏览器运行": "Running in Browser",
+  "网页版本": "Web Version",
+  "已是最新": "Up to Date",
+  "匿名诊断包": "Anonymous Diagnostics Package",
+  "环境、工厂规模、性能结果和最近错误，不包含密码与完整存档。": "Environment, factory scale, performance results, and recent errors. Passwords and full saves are excluded.",
+  "源码仓库": "Source Repository",
+  "仅限非商业用途": "Noncommercial use only",
+  "会附带同一份匿名诊断摘要": "Includes the same anonymous diagnostics summary",
+  "反馈内容": "Feedback Details",
+  "渐进教学": "Guided Tutorial",
+  "重新打开 5 步基础操作和从手动采矿到白糖、跨星物流与戴森云的 13 步进阶教学。": "Replay the 5-step basic tutorial and the 13-step advanced tutorial from manual mining through White Matrices, interstellar logistics, and the Dyson Swarm.",
+  "重新开始教学": "Restart Tutorial",
+  "正在载入工作区": "Loading Workspace",
+  "管理": "Management",
+  "效率": "Efficiency",
+  "网络": "Networks",
+  "规划": "Planning",
+  "电力": "Power",
+  "瓶颈": "Bottlenecks",
+  "银河": "Galaxy",
+  "全星球设备": "All-planet Facilities",
+  "个已殖民行星": "colonized planets",
+  "正在运行": "Running",
+  "节点在线": "nodes online",
+  "缺料链": "Shortage Chain",
+  "可追踪输入与原矿": "Trace inputs and raw resources",
+  "输出堵塞": "Output Blockage",
+  "可定位线路与下游": "Locate routes and downstream facilities",
+  "异常": "Issues",
+  "搜索生产设备": "Search Production Facilities",
+  "设备、配方、物品、状态": "Facilities, recipes, items, and status",
+  "状态": "Status",
+  "个节点": "nodes",
+  "目标产量反推": "Target Output Planning",
+  "目标每分钟产量": "Target output per minute",
+  "选择 /": "Select /",
+  "流程与状态": "Process & Status",
+  "效率与产能": "Efficiency & Capacity",
+  "缺料 / 堵塞来源": "Shortage / Blockage Sources",
+  "定位": "Locate",
+  "没有符合条件的生产设备": "No production facilities match the filters",
+  "全星球生产节点没有阻断级问题。": "No blocking issues were found across planetary production nodes.",
+  "设备效率": "Facility Efficiency",
+  "运行设备": "Running Facilities",
+  "传送带利用率": "Belt Utilization",
+  "连续网络实时流量": "Live flow across connected networks",
+  "受电负载占比": "Powered Load Ratio",
+  "停机设备": "Stopped Facilities",
+  "缺料、堵塞或断电": "Shortage, blockage, or power loss",
+  "生产效率曲线": "Production Efficiency Trend",
+  "等待生产采样": "Waiting for Production Samples",
+  "模拟运行 20 秒后会显示效率趋势": "Efficiency trends appear after 20 seconds of simulation",
+  "当前判断": "Current Assessment",
+  "设备效率偏低：优先检查缺料、输出堵塞和电力。": "Facility efficiency is low. Check shortages, blocked outputs, and power first.",
+  "物流仍有可用吞吐。": "Logistics still has available throughput.",
+  "电网供给充足。": "Grid supply is sufficient.",
+  "连续网络": "Connected Networks",
+  "实时吞吐": "Live Throughput",
+  "需处理": "Needs Attention",
+  "拥堵或缺料": "Congestion or shortage",
+  "吞吐热力图": "Throughput Heatmap",
+  "筛选运输网络": "Filter Transport Networks",
+  "物品、行星或状态": "Item, planet, or status",
+  "全星区": "All Systems",
+  "个网络": "networks",
+  "行星与拓扑": "Planet & Topology",
+  "吞吐": "Throughput",
+  "诊断": "Diagnostics",
+  "没有符合条件的运输网络": "No transport networks match the filters",
+  "画布书签": "Canvas Bookmarks",
+  "画布书签名称": "Canvas bookmark name",
+  "视角": "View",
+  "尚未保存视角": "No saved view",
+  "目标物品": "Target Item",
+  "目标产量": "Target Output",
+  "规划范围": "Planning Scope",
+  "建立第一个生产目标": "Create the First Production Target",
+  "选择目标物品和每分钟产量，规划器会反推完整原料、设备、电力与物流需求。": "Choose a target item and output per minute. The planner will calculate all required materials, facilities, power, and logistics.",
+  "电力需求": "Power Demand",
+  "可用容量": "Available Capacity",
+  "风力容量": "Wind Capacity",
+  "太阳能容量": "Solar Capacity",
+  "地热容量": "Geothermal Capacity",
+  "火电出力": "Thermal Output",
+  "聚变出力": "Fusion Output",
+  "储能水平": "Stored Energy",
+  "储能充电": "Storage Charging",
+  "储能放电": "Storage Discharging",
+  "戴森云功率": "Dyson Swarm Power",
+  "容量利用率": "Capacity Utilization",
+  "独立电网域": "Independent Power Grids",
+  "负载 / 容量": "Load / Capacity",
+  "范围内设备": "Facilities in Range",
+  "A 主网": "A Main Grid",
+  "B 工业网": "B Industrial Grid",
+  "C 备用网": "C Backup Grid",
+  "断开": "Disconnected",
+  "当前行星工业档案": "Current Planet Industrial Profile",
+  "常规": "Standard",
+  "资源储量统计": "Resource Reserve Statistics",
+  "资源状态": "Resource Status",
+  "剩余 / 初始": "Remaining / Initial",
+  "剩余比例": "Remaining Ratio",
+  "耗电设备": "Power Consumers",
+  "当前需求": "Current Demand",
+  "额定需求": "Rated Demand",
+  "暂无耗电设备": "No power-consuming facilities",
+  "需处理设备": "Facilities Requiring Attention",
+  "银河工业协议尚未解锁": "Galactic Industry Protocol is not unlocked",
+  "完成宇宙矩阵科技后，终局研究、出口项目和长期挂机会在这里接管。": "Complete Universe Matrix technology to unlock endgame research, export projects, and long-term automation here.",
+  "搜索建筑、用途或类型": "Search buildings, purposes, or types",
+  "项设施": "facilities",
+  "电力设施": "Power Facilities",
+  "采集设备": "Gathering Facilities",
+  "基础": "Basic",
+  "生产设备 · Mk.1": "Production Facilities · Mk.1",
+  "生产设备 · Mk.2": "Production Facilities · Mk.2",
+  "生产设备 · Mk.3": "Production Facilities · Mk.3",
+  "生产设备": "Production Facilities",
+  "物流站点": "Logistics Stations",
+  "仓储设施": "Storage Facilities",
+  "物流分配": "Logistics Distribution",
+  "基础速度": "Base Speed",
+  "额定耗电": "Rated Power Demand",
+  "额定发电": "Rated Power Generation",
+  "无": "None",
+  "适用配方": "Compatible Recipes",
+  "条": "recipes",
+  "基础配方": "Base Recipe",
+  "单次输入": "Input per Cycle",
+  "单次产出 / 每分钟": "Output per Cycle / per Minute",
+  "传送带吞吐": "Conveyor Belt Throughput",
+  "数值来自当前线路引擎": "Values come from the current belt engine",
+  "件/秒": "items/sec",
+  "层": "layers",
+  "物流设施": "Logistics Facilities",
+  "类": "types",
+  "当前已铺设 0 条线路；堆叠吞吐会按每条线路的实际层数计算。": "No routes are currently built. Stacked throughput is calculated from the actual layer count of each route.",
+  "额定": "Rated",
+  "燃料热值": "Fuel Energy Value",
+  "引擎实际 MJ/件": "Actual engine MJ/item",
+  "颗确定性行星": "deterministic planets",
+  "类地行星": "Terrestrial Planet",
+  "海洋": "Ocean",
+  "矿储倍率": "Reserve Multiplier",
+  "采矿倍率": "Mining Multiplier",
+  "风力倍率": "Wind Multiplier",
+  "太阳能倍率": "Solar Multiplier",
+  "地热倍率": "Geothermal Multiplier",
+  "资源目录": "Resource Catalog",
+  "殖民成本": "Colonization Cost",
+  "无额外殖民成本": "No additional colonization cost",
+  "本系戴森参数": "Local Dyson Parameters",
+  "轨道数量": "Orbit Count",
+  "轨道": "Orbit",
+  "火箭发射": "Rocket Launches",
+  "射线接收": "Ray Reception",
+  "工程设施": "Engineering Facilities",
+  "工程物资": "Engineering Materials",
+  "搜索科技或解锁内容": "Search technologies or unlocks",
+  "项科技": "technologies",
+  "科技层级": "Technology Tier",
+  "未完成": "Incomplete",
+  "尚未完成": "Not completed",
+  "研究成本": "Research Cost",
+  "前置科技": "Prerequisite Technologies",
+  "无前置科技": "No prerequisite technologies",
+  "主要解锁": "Primary Unlocks",
+  "星际工业调度": "Interstellar Industry Dispatch",
+  "稳定": "Stable",
+  "光度": "Luminosity",
+  "航线": "Routes",
+  "储量": "Reserves",
+  "运行正常": "Operating Normally",
+  "工业角色": "Industrial Role",
+  "进": "In",
+  "出": "Out",
+  "储": "Stored",
+  "最近枯竭": "Recently Depleted",
+  "跨星物流诊断": "Interstellar Logistics Diagnostics",
+  "按可处理优先级汇总远程物流塔、运输船、翘曲和电网问题": "Summarizes remote station, vessel, warper, and grid issues by actionable priority",
+  "当前没有需要处理的跨星物流问题": "There are no interstellar logistics issues requiring attention",
+  "全星区调度": "All-system Dispatch",
+  "全局航线表": "Global Route Table",
+  "搜索全局航线": "Search Global Routes",
+  "搜索物品或行星": "Search items or planets",
+  "星际": "Interstellar",
+  "问题": "Issues",
+  "没有匹配的物流航线": "No logistics routes match the filters",
+  "在物流站把槽位设为供应与需求后，航线会自动进入此表。": "Set logistics station slots to Supply and Demand to have routes appear here automatically.",
+  "DSP 极简网络云节点": "DSP Idle Network Cloud Node",
+  "登录云账户": "Sign In to Cloud Account",
+  "访客": "Guest",
+  "邮件系统尚未开放。用户名注册、全部云存档、自动同步和排行榜均可使用；找回密码暂不可用。": "Email is not available yet. Username registration, all cloud-save slots, automatic sync, and the leaderboard are available; password recovery is temporarily unavailable.",
+  "至少 8 位": "At least 8 characters",
+  "冲突与校验": "Conflict Protection & Validation",
+  "每次上传都携带云端修订号；另一台设备先更新后，本机不会静默覆盖。恢复云存档前会保留当前工厂快照。": "Every upload includes a cloud revision. This device never silently overwrites a newer update from another device, and a local snapshot is preserved before restoring a cloud save.",
+  "新账户名称": "New Account Name",
+  "账户设置": "Account Settings",
+  "星际工程师档案": "Interstellar Engineer Profile",
+  "显示名称": "Display Name",
+  "账户显示名称": "Account display name",
+  "保存名称": "Save Name",
+  "公开账户上传后会以此名称出现在银河排行。": "After an upload, a public account appears on the galactic leaderboard under this name.",
+  "账户识别标记": "Account Identity Tag",
+  "参与公开排行榜": "Participate in Public Leaderboard",
+  "登录云账号后可设置账号级排行榜参与状态": "Sign in to configure leaderboard participation for this account",
+  "切换账户不会切换当前工厂存档": "Switching accounts does not switch the current factory save",
+  "存档边界": "Save Boundary",
+  "账户档案与工厂存档分别保存。重置工厂不会删除账户或累计排行榜账本。": "Account profiles and factory saves are stored separately. Resetting a factory does not delete the account or cumulative leaderboard record.",
+  "生产网络模板": "Production Network Templates",
+  "蓝图库为空": "Blueprint Library is Empty",
+  "在画布中框选设备，再使用选区复制命令建立模板。": "Select facilities on the canvas, then use the selection copy command to create a template.",
+  "搜索设备、工作区、设置或物品": "Search facilities, workspaces, settings, or items",
+  "搜索命令": "Search Commands",
+  "输入设备、物品、工作区或动作": "Enter a facility, item, workspace, or action",
+  "打开星图与星际工业": "Open Star Map & Interstellar Industry",
+  "探索、航线和行星角色": "Exploration, routes, and planetary roles",
+  "账户、累计发电与白矩阵排行榜": "Accounts, total power, and White Matrix leaderboard",
+  "网络、吞吐和工业规划": "Networks, throughput, and industrial planning",
+  "物品、建筑、物流、能源、星球、戴森与科研": "Items, buildings, logistics, power, planets, Dyson engineering, and research",
+  "科研队列和解锁路径": "Research queue and unlock paths",
+  "打开运营中心": "Open Operations Center",
+  "警报、设置和存档": "Alerts, settings, and saves",
+  "打开主线任务": "Open Campaign",
+  "查看章节目标和奖励": "View chapter goals and rewards",
+  "部署和管理生产蓝图": "Deploy and manage production blueprints",
+  "打开戴森规划": "Open Dyson Planning",
+  "轨道、壳层和发射": "Orbits, shells, and launches",
+  "打开设备检查器": "Open Facility Inspector",
+  "查看当前选中设备": "Inspect the currently selected facility",
+  "库存与跨星球物资": "Inventory and interplanetary materials",
+  "行星电网": "Planetary Grid",
+  "生产配方": "Production Recipe",
+  "物流缓存": "Logistics Buffers",
+  "物流周期": "Logistics Cycle",
+  "待机": "Idle",
+  "熔岩星 · 熔岩型行星": "Lava World · Volcanic Planet",
+  "气态巨星 · 冰气态巨星": "Gas Giant · Ice Giant",
+  "模拟暂停": "Simulation Paused",
+  "当前配方": "Current Recipe",
+  "设备状态": "Facility Status",
+  "当前负载": "Current Load",
+  "配方周期": "Recipe Cycle",
+  "供电状态": "Power Status",
+  "供电范围": "Power Coverage",
+  "全行星": "Entire Planet",
+  "用电优先级": "Power Priority",
+  "中": "Medium",
+  "模块未安装": "Module Not Installed",
+  "喷涂机库存": "Spray Coater Inventory",
+  "单机耗电": "Power per Facility",
+  "升级设备": "Upgrade Facility",
+  "增加建筑堆叠数量": "Increase Building Stack",
+  "最大": "Max",
+  "暂无库存": "No Inventory",
+  "容量": "Capacity",
+  "物流缓存设施": "Logistics Buffer Facility",
+  "缓存物品": "Stored Item",
+  "可用库存": "Available Inventory",
+  "容量上限": "Capacity Limit",
+  "电网断电": "Grid Offline",
+  "行星无线运输": "Planetary Wireless Transport",
+  "运输机航程": "Drone Travel Time",
+  "在检查器中选择行星货物": "Choose planetary cargo in the inspector",
+  "供应": "Supply",
+  "槽": "slots",
+  "机队": "fleet",
+  "累计": "Total",
+  "航次": "trips",
+  "行星多槽调度": "Planetary Multi-slot Dispatch",
+  "运输机泊位": "Drone Bays",
+  "随身": "Carried",
+  "安装": "Installed",
+  "忙碌": "Busy",
+  "可用": "Available",
+  "受阻": "Blocked",
+  "无匹配供应/需求": "No matching supply/demand",
+  "槽位": "Slot",
+  "空闲": "Idle",
+  "已配置槽位": "Configured Slots",
+  "航线目标": "Route Target",
+  "未配对": "Unpaired",
+  "在途航线": "Routes in Transit",
+  "线路拥堵": "Route Congestion",
+  "单机载荷": "Capacity per Drone",
+  "件/架": "items/drone",
+  "最低启航货量": "Minimum Dispatch Load",
+  "额定航程": "Rated Travel Time",
+  "本地载荷": "Local Cargo",
+  "完成航次": "Completed Trips",
+  "最近运量": "Latest Cargo Volume",
+  "2026年7月25日": "July 25, 2026",
+  "公开测试版": "Public Beta",
+  "· 公开测试版": "· Public Beta",
+  "关闭版本更新记录": "Close Release Notes",
+  "完整英文版与亮色模式补全": "Complete English UI & Light Theme",
+  "1.0.2 增加可随时切换的英文界面，并补齐开始菜单、账号、云存档、排行榜、全屏工作区和两套手机界面的亮色主题。语言只保存在当前设备，本次不升级 GameState，现有存档与云存档保持兼容。": "Version 1.0.2 adds a switchable English interface and completes the light theme across the start menu, accounts, cloud saves, leaderboard, full-screen workspaces, and both mobile interfaces. Language is stored on this device only; GameState is unchanged and existing local and cloud saves remain compatible.",
+  "中英文即时切换": "Instant Chinese / English Switching",
+  "开始菜单和游戏内设置都可切换简体中文与 English，也可使用 ?lang=en 直接进入英文版。偏好仅保存在当前设备，不写入本地或云端游戏存档。": "Switch between Simplified Chinese and English from the start menu or in-game settings, or open the English version directly with ?lang=en. This preference is stored on the current device and is never written to local or cloud game saves.",
+  "生产目录完整英文化": "Complete English Production Catalog",
+  "78 项物品、78 条配方、37 类建筑、67 项科技、22 颗行星、8 个恒星系，以及生态、科研效果和主线任务均提供英文名称与说明。": "English names and descriptions cover 78 items, 78 recipes, 37 building types, 67 technologies, 22 planets, 8 star systems, planetary ecologies, research effects, and the full campaign.",
+  "核心工作区英文覆盖": "English Coverage for Core Workspaces",
+  "开始菜单、工厂画布、制造、检查器、科技、统计、星图、资料库、排行榜、云存档、主线、戴森规划、蓝图和运营设置均可用英文完成主要操作。": "Primary actions are available in English across the start menu, factory canvas, manufacturing, inspector, technology, statistics, star map, production library, leaderboard, cloud saves, campaign, Dyson planning, blueprints, and operations settings.",
+  "亮色模式全面补齐": "Complete Light Theme Coverage",
+  "修复开始菜单、账号与云存档、更新公告、统计、科技树、星图、资料库、排行榜、模态层和手机抽屉仍使用深色背景的问题。": "Fixes remaining dark backgrounds in the start menu, account and cloud-save views, release notes, statistics, technology tree, star map, production library, leaderboard, modal layers, and mobile drawers.",
+  "桌面与手机保持一致": "Desktop and Mobile Parity",
+  "经典手机界面和新版手机壳都可切换语言与主题，建造、物资、科研、更多工作区及横竖屏继续保留完整入口和安全区。": "Both classic and next-generation mobile interfaces support language and theme switching, while Build, Materials, Research, More, portrait, landscape, and safe-area access remain complete.",
+  "原生应用同步更新": "Native Apps Updated",
+  "Windows 与 Android 应用同步升级至 1.0.2，继续使用现有更新通道、应用数据目录和 Android 发布签名，覆盖安装不会清除本地存档。": "Windows and Android apps are updated to 1.0.2 while retaining the existing update channels, app data locations, and Android release signing identity. Installing over an existing version does not clear local saves.",
+  "2026年7月26日": "July 26, 2026",
+  "递归制造与生产定位": "Recursive Manufacturing & Production Location",
+  "1.0.3 打通物流运输船与建筑制造中心的多级递归制造，增加物品产线定位，并修复高运输量诊断、枯竭矿脉、喷涂拆卸及手机输入和弹窗适配问题。GameState 升级至 v36，旧存档会无损迁移。": "Version 1.0.3 completes multi-stage recursive manufacturing for logistics vessels and Construction Centers, adds item production-line location, and fixes high-volume logistics diagnostics, depleted veins, spray-module removal, mobile input, and modal layout. GameState advances to v36 with lossless migration for existing saves.",
+  "递归制造完整打通": "Complete Recursive Manufacturing",
+  "物流运输船现在支持一键递归制造；建筑制造中心会先规划完整材料链，优先尝试已解锁的高级精简配方，无法完成时再回退基础配方。铁矿石可继续加工为铁块和钢材，不再误报缺少中间材料。": "Logistics vessels now support one-click recursive manufacturing. Construction Centers plan the complete material chain first, prefer unlocked advanced recipes, and fall back to base recipes only when necessary. Iron ore can continue through iron ingots and steel without false intermediate-material errors.",
+  "物品图鉴定位产线": "Locate Production Lines from the Item Codex",
+  "物品详情可定位当前行星的全部生产设备并高亮完整上游网络；多个目标可逐个切换，其他行星的结果可直接跳转，定位高亮可随时清除。": "Item details can locate every producer on the current planet and highlight the complete upstream network. Multiple targets can be cycled individually, results on other planets can be opened directly, and the highlight can be cleared at any time.",
+  "物流与时间倍率诊断": "Logistics & Time Multiplier Diagnostics",
+  "轨道采集器不再被误判为航线断电；运输船全部执行任务时明确显示舰队容量瓶颈。时间扭曲界面新增请求倍率、实际倍率、供电需求、获得功率和自动降档原因。": "Orbital Collectors are no longer misreported as unpowered route endpoints. When every vessel is active, the station now reports a fleet-capacity bottleneck. Time Warp now shows requested and effective multipliers, required and allocated power, and the reason for automatic downgrading.",
+  "手机输入与弹窗适配": "Mobile Input & Modal Layout",
+  "修复鸿蒙 App 搜索文字被状态刷新清空的问题，并兼容中文输入法组合过程。储物仓与储液罐端口在 80% 至 200% 字号下保持可连接，托盘删除操作在手机横竖屏始终固定可见。": "Fixes search text being cleared by state refreshes in the HarmonyOS app and preserves Chinese IME composition. Storage and tank ports remain connectable from 80% to 200% text size, and tray deletion actions stay fixed and visible in mobile portrait and landscape.",
+  "枯竭资源提醒与恢复": "Depleted Resource Alerts & Recovery",
+  "有限矿脉枯竭后会显示醒目的节点提示和设置快捷入口；切换有限或无限资源前需要主动确认，矿机、线路和已有缓存均会保留。枯竭状态在保存重载后不再错误恢复储量。": "Depleted finite veins now show a prominent node alert and a shortcut to resource settings. Switching between finite and infinite resources requires confirmation and preserves miners, belts, and existing buffers. Saving and reloading no longer restores reserves to depleted nodes.",
+  "喷涂拆卸与侧栏修复": "Spray Removal & Sidebar Fixes",
+  "建筑检查器新增喷涂模块拆卸，返还模块、缓存中的增产剂和尚未用完的喷涂点折算物；物资侧栏折叠后会完整退出，不再残留黑色容器。": "The building inspector can now remove spray modules and return the module, buffered proliferator, and items recovered from unused spray points. Collapsing the materials sidebar now removes the entire container without leaving a dark block.",
+  "物流并联与终局管理": "Belt Bundles & Endgame Management",
+  "1.0.4 增加已建传送带并联数量调整，修复手机无限科技入口，并将建筑制造中心的终局目标上限提升至 10 万。Windows 与 Android 安装包同步升级；GameState 继续保持 v36，覆盖安装和旧存档加载不会清除本地进度。": "Version 1.0.4 adds lane-count controls for existing belts, restores infinite research on mobile, and raises the endgame Construction Center target to 100,000. Windows and Android packages are updated together; GameState remains v36, and in-place upgrades or existing saves do not clear local progress.",
+  "已建线路调整并联数量": "Adjust Existing Belt Bundles",
+  "选中传送带后可用减号、直接输入或加号调整并联线路数量。增加会消耗同级传送带，减少会返还施工托盘；吞吐同步变化，线路等级、形状、堆叠、优先级、端口和在途物资保持不变。": "Use minus, direct input, or plus to change the parallel lane count of a selected belt. Adding lanes consumes belts of the same tier; removing lanes returns them to construction inventory. Throughput changes immediately while tier, shape, stacking, priority, ports, and in-transit cargo remain intact.",
+  "手机无限科技恢复可见": "Infinite Research Restored on Mobile",
+  "新版手机科技目录现在包含全部无限科技。完成宇宙矩阵后可直接查看和研究；未解锁时显示真实前置条件，筛选为空时可一键清除筛选。经典手机、网页、PWA 和 App 共用相同规则。": "The next mobile technology catalog now includes every infinite research project. Complete Universe Matrix to view and research them directly; locked entries show their real prerequisite, and empty filters can be cleared in one tap. Classic mobile, web, PWA, and app builds use the same rules.",
+  "制造中心目标提升至 10 万": "Construction Center Targets Raised to 100,000",
+  "完成建筑仓储扩容 II 后，单种建筑或随身载具的自动补足目标最高可设为 100,000。目标支持直接输入和常用预设；调低目标只暂停后续制造，不会删除已有超额施工库存。": "After Construction Storage Expansion II, each building or portable vehicle target can be set as high as 100,000. Targets support direct input and common presets; lowering a target pauses future production without deleting excess construction inventory.",
+  "Windows 与 Android 同步更新": "Windows & Android Updated Together",
+  "下载页在新安装包完成签名、校验和上传后再切换至 1.0.4，并公开平台、日期、大小和 SHA-256。Android 保持原包名和长期签名，Windows 保持原应用标识，覆盖升级不会主动删除应用数据或浏览器存档。": "The download page switches to 1.0.4 only after new packages are signed, verified, and uploaded, and shows platform, date, size, and SHA-256. Android retains its package name and long-term signer, Windows retains its app identity, and in-place upgrades do not proactively delete app data or browser saves.",
+  "2026年7月27日": "July 27, 2026",
+  "星际物流、戴森扩容与矿脉科技": "Interstellar Logistics, Dyson Capacity & Vein Research",
+  "1.0.5 增加绿糖 1:8 翘曲器配方、物流塔载具目标与蓝图自动装载，修复配送枢纽、线路并联同步、缺料导航和建筑位置漂移，扩充戴森容量，并让矿脉极限利用逐级降低采矿消耗。GameState 升级至 v37，旧存档会守恒迁移。": "Version 1.0.5 adds the 1:8 Gravity Matrix warper recipe, station fleet targets, and blueprint fleet loading; fixes the Material Delivery Hub, belt-lane synchronization, shortage navigation, and position drift; expands Dyson capacities; and makes Vein Utilization progressively reduce mining depletion. GameState advances to v37 with conservation-safe migration for existing saves.",
+  "绿糖精简制造翘曲器": "Efficient Warpers from Gravity Matrices",
+  "空间翘曲科技解锁后开放原版高级配方：1 个引力矩阵制造 8 个空间翘曲器。原有引力透镜配方继续保留；递归制造优先尝试绿糖路线，不可完成时自动回退基础路线。": "Space Warp unlocks the advanced original recipe: 1 Gravity Matrix produces 8 Space Warpers. The existing Graviton Lens recipe remains available; recursive crafting prefers the matrix route and falls back to the base route when needed.",
+  "物流塔载具目标与蓝图装载": "Station Fleet Targets & Blueprint Loading",
+  "物流运输机和运输船支持直接输入目标数量及一键填满，返还时不会卸载正在执行任务的载具。蓝图会记录每座物流塔的载具目标，部署后从随身载具栏自动装载；库存不足时部分装载并显示缺口。": "Logistics Drones and Vessels support direct target input and one-click filling, while vehicles on active trips cannot be unloaded. Blueprints record each station's fleet targets and load from the portable fleet after deployment; shortages produce a partial load with a clear deficit.",
+  "物流容量与线路同步修复": "Logistics Capacity & Belt Synchronization Fixes",
+  "物资配送枢纽改为以行星托盘剩余容量持续接收，不再被 900 个建筑缓存卡住；“同步首条设置”和整网同步现在包含并联数量，并先原子校验同级传送带库存。同恒星系运输明确不预留或消耗翘曲器。": "The Material Delivery Hub now receives against remaining planet-tray capacity instead of stopping at its former 900-item buffer. First-belt and network synchronization now include parallel lanes and atomically validate same-tier belt stock. Routes inside one star system no longer reserve or consume warpers.",
+  "产量来源与缺料导航校正": "Production Sources & Shortage Navigation",
+  "玻璃产量面板会明确显示行星冶炼专精等合法加成，统计口径与真实模拟一致。灰色锤子改用完整递归材料规划，原始矿物会打开对应资料而不会跳到无关中间材料。": "Glass production now lists valid bonuses such as planetary smelting specialization, with statistics matching the simulation. Disabled quick-build hammers use the full recursive material plan, so raw-resource shortages open the correct reference instead of an unrelated intermediate.",
+  "恒星燃料与球壳容量扩充": "Artificial-Star Fuel & Shell Capacity",
+  "人造恒星备用反物质燃料棒容量调整为每台 30 个，旧存档超额燃料优先退回所在行星托盘，放不下的完整保留。戴森球壳太阳帆容量翻倍，旧壳层会按几何结构重算并继续吸附。": "Artificial Stars now hold 30 Antimatter Fuel Rods per unit. Existing-save overflow returns to the local planet tray when possible and is otherwise preserved. Dyson shell sail capacity is doubled, and existing shells recalculate from their geometry and continue absorbing sails.",
+  "矿脉极限利用升级": "Vein Utilization Upgrade",
+  "无限科技“矿脉极限利用”保留每级固体采矿速度 +10%，并新增每级矿脉消耗 -10%。达到 Lv.10 后固体矿脉不再消耗储量；小数消耗使用存档内整数余数结算，在线、离线和分段模拟结果一致。": "Vein Utilization retains +10% solid mining speed per level and now also reduces vein depletion by 10% per level. At Lv.10, solid veins stop losing reserves. Fractional depletion uses a persisted integer remainder so online, offline, and chunked simulation remain equivalent.",
+  "建筑位置不再刷新漂移": "Building Positions No Longer Drift",
+  "拖动结束会立即提交世界坐标，页面隐藏或刷新前无需等待下一帧；加载、切换行星、字号和主题变化均以存档坐标为唯一来源，连续刷新不会累计偏移。": "World coordinates are committed immediately when dragging ends, without waiting for another frame before the page hides or reloads. Loading, planet switching, text size, and theme changes all use saved coordinates as the sole source of truth, so repeated reloads cannot accumulate drift.",
+  "Windows 与 Android 应用同步升级至 1.0.5。Android 保持包名和长期签名，Windows 保持应用标识；覆盖安装、网页升级和 v36→v37 迁移均不会主动删除本地存档。": "Windows and Android are updated together to 1.0.5. Android retains its package name and long-term signer, Windows retains its app identity, and in-place installation, web updates, and v36-to-v37 migration never proactively delete local saves.",
+  "2026年7月28日": "July 28, 2026",
+  "高容量产线与采矿蓝图": "High-Capacity Lines & Mining Blueprints",
+  "1.0.6 校正紫色矩阵配方，将传送带并联上限提高到 4096，修复建筑制造中心副产物卡死，并增加批量减堆和矿脉唯一的采矿布局蓝图。GameState 升级至 v38，旧存档会守恒迁移。": "Version 1.0.6 corrects the Information Matrix recipe, raises the belt bundle limit to 4,096, fixes Construction Center stalls caused by byproducts, and adds batch unstacking plus vein-safe mining blueprints. GameState advances to v38 with conservation-safe migration.",
+  "紫色矩阵配方校正": "Information Matrix Recipe Corrected",
+  "信息矩阵每周期现在统一消耗 1 个粒子宽带和 2 个处理器。制造面板、图鉴、缺料分析、递归制造、规划、统计与真实模拟全部读取同一配方目录。": "Each Information Matrix cycle now consistently consumes 1 Particle Broadband and 2 Processors. Manufacturing, encyclopedia, shortage analysis, recursive crafting, planning, statistics, and simulation all read the same recipe catalog.",
+  "传送带并联上限提高": "Belt Bundle Limit Raised",
+  "单条线路并联上限从 64 提高至 4096，检查器继续支持直接输入、增减、整网同步和蓝图参数。增加会原子消耗同级传送带，减少完整返还，线路设置与在途物资不变。": "The parallel lane limit for one belt rises from 64 to 4,096. Direct input, increment/decrement, network synchronization, and blueprint parameters remain supported. Adding lanes atomically consumes same-tier belts; removing lanes returns them while preserving settings and in-transit cargo.",
+  "制造中心副产物不再卡死": "Construction Center Byproducts No Longer Stall",
+  "递归制造会保留后续步骤必需的 WIP，额外产物优先进入当前行星托盘；托盘已满时只销毁任务不再需要的副产物，并显示当前 WIP 与累计销毁量。": "Recursive manufacturing retains WIP required by later steps and moves optional outputs to the current planet tray. When the tray is full, only byproducts no longer needed by the job are discarded; current WIP and cumulative discarded output are shown.",
+  "建筑批量减少堆叠": "Batch Building Unstacking",
+  "建筑检查器增加目标数量、-1、-10、-100 和减至 1。减少的建筑返还施工托盘，输入输出、燃料、进度、物流槽、载具、线路和在途物资均保持不变。": "The inspector adds a target count, -1, -10, -100, and Reduce to 1. Removed units return to construction inventory while buffers, fuel, progress, logistics slots, vehicles, belts, and in-transit cargo remain intact.",
+  "采矿布局进入蓝图库": "Mining Layouts in the Blueprint Library",
+  "已安装采集设备的资源点可以作为不可建造锚点收录。部署时只匹配附近同类型现有矿脉并补齐矿机及线路，不复制、移动、补充或修改矿脉储量；重复粘贴不会重复生成矿脉或采集设备。": "Resource nodes with installed extractors can be recorded as non-buildable anchors. Deployment matches only nearby existing veins of the same type and fills in extractors and belts. It never copies, moves, refills, or modifies vein reserves, and repeated pasting cannot duplicate veins or extractors.",
+  "Windows 与 Android 应用同步升级至 1.0.6。Android 保持包名和长期签名，Windows 保持应用标识；覆盖安装、网页升级和 v37→v38 迁移均不会主动删除本地存档。": "Windows and Android are updated together to 1.0.6. Android retains its package name and long-term signer, Windows retains its app identity, and in-place installation, web updates, and v37-to-v38 migration never proactively delete local saves.",
+  "制造中心 WIP 急救补丁": "Construction Center WIP Hotfix",
+  "1.0.7 移除建筑制造中心必要中间材料的固定 100 万 WIP 阻断。百万级递归链会完整保留任务所需材料，并在暂停、断电、重载和离线推进后继续运行。GameState 仍为 v38。": "Version 1.0.7 removes the fixed one-million WIP blocker for required Construction Center intermediates. Million-scale recursive chains retain every required material and resume after pauses, power loss, reloads, and offline progress. GameState remains v38.",
+  "必要 WIP 不再受固定上限阻断": "Required WIP Has No Fixed Blocker",
+  "递归任务按后续步骤的真实净需求保留全部必要中间材料，不再因 108 万/100 万或未来更高成本巨构而永久停机。": "Recursive jobs retain all required intermediates from the real net demand of later steps, so 1.08M/1M chains and future higher-cost megastructures no longer stall permanently.",
+  "任务可自动等待和恢复": "Jobs Wait and Resume Automatically",
+  "缺料、暂停或断电只会保留原任务并等待；条件恢复后从原阶段继续。存档重载、分段模拟和大时间步不会重复扣料或重复结算成品。": "Missing materials, pauses, or power loss retain the current job and wait. Processing resumes from the same stage when conditions recover, without duplicate consumption or output after reloads, chunked simulation, or large time steps.",
+  "WIP 与真实等待原因可查看": "Visible WIP and Real Wait Reasons",
+  "制造中心总览会列出各项 WIP、累计销毁的副产物和当前暂停、供电或缺料原因。非必要产物仍优先进入行星托盘，满仓时才销毁并记账。": "The Construction Center overview lists each WIP item, cumulative discarded byproducts, and the current pause, power, or material blocker. Optional outputs still enter the planet tray first and are discarded with accounting only when the tray is full.",
+  "存档完整性与性能诊断更新": "Save Integrity & Performance Diagnostics",
+  "1.0.8 增加保存前完整性自检、云端拒绝异常存档和受控救援入口，并补齐配送枢纽端口管理、亮色制造栏对比度与按需性能诊断。GameState 升级至 v39。": "Version 1.0.8 adds integrity checks before saving, server-side rejection of invalid cloud saves, and a controlled rescue flow. It also adds delivery-hub port controls, clearer light-theme fabrication text, and on-demand performance diagnostics. GameState advances to v39.",
+  "存档完整性自检与受控救援": "Save Integrity Checks & Controlled Rescue",
+  "本地保存、手动导出和云上传会立即复核校验值；云端拒绝异常载荷。结构完整的异常存档会显示真实进度，并提供先导出原件、再二次确认的救援流程。": "Local saves, manual exports, and cloud uploads immediately verify their checksums, while the server rejects invalid payloads. Structurally complete saves show their real progress and can be rescued only after exporting the original and confirming twice.",
+  "配送枢纽端口可独立配置": "Independent Delivery-Hub Ports",
+  "三个输入端口可以分别指定物资、恢复自动识别或清空。重置已连接端口前会确认并安全返还线路、施工件和缓存，不影响其他端口。": "Each of the three input ports can assign an item, return to automatic detection, or be cleared. Resetting a connected port requires confirmation and safely returns belts, construction stock, and buffered cargo without changing the other ports.",
+  "亮色制造栏更清晰": "Clearer Light-Theme Fabrication",
+  "建筑制造和物品手工制造的名称、选中、可制造、缺料与禁用状态使用更稳定的亮色主题对比度。": "Building fabrication and item handcrafting now keep readable light-theme contrast for names, selection, craftable, missing-material, and disabled states.",
+  "新增按需性能诊断": "On-Demand Performance Diagnostics",
+  "运营中心可按需采集 FPS、主线程、Worker、任务积压、存档和各模拟阶段耗时，并导出匿名报告。监控默认关闭且不进入存档。": "Operations Center can sample FPS, main-thread time, Worker time, backlog, save size, and simulation phases on demand, then export an anonymous report. Monitoring is off by default and never enters save data.",
+  "性能": "Performance",
+  "按需阶段计时": "On-Demand Phase Timing",
+  "性能监控与卡顿诊断": "Performance Monitor & Stutter Diagnostics",
+  "正在采样": "Sampling",
+  "监控已关闭": "Monitoring Off",
+  "停止采样": "Stop Sampling",
+  "开始采样": "Start Sampling",
+  "清空记录": "Clear Records",
+  "导出匿名报告": "Export Anonymous Report",
+  "浏览器不提供各玩法的真实 CPU 百分比；下方占比来自 Worker 内各模拟阶段的实际执行耗时。监控关闭时不启用阶段计时。": "Browsers do not expose real CPU percentages by gameplay system. The shares below come from measured Worker phase durations, and phase timing is disabled while monitoring is off.",
+  "正在建立首个 1 秒样本": "Building the First 1-Second Sample",
+  "尚未采样": "No Samples Yet",
+  "开启后保留最近 60 秒，不写入游戏状态或云存档。": "When enabled, the latest 60 seconds are retained without writing to GameState or cloud saves.",
+  "实时性能摘要": "Live Performance Summary",
+  "主线程峰值": "Main-Thread Peak",
+  "模拟 Worker": "Simulation Worker",
+  "任务积压": "Task Backlog",
+  "待处理模拟时间": "Pending Simulation Time",
+  "可用 JS 内存": "Available JS Memory",
+  "浏览器未公开设备内存": "Device Memory Not Exposed",
+  "状态 / 主存档": "State / Main Save",
+  "最近保存": "Latest Save",
+  "包括写入后校验": "Includes Post-Write Verification",
+  "最近离线结算": "Latest Offline Simulation",
+  "本次页面会话": "Current Page Session",
+  "模拟阶段耗时归因": "Simulation Phase Attribution",
+  "最近一个 Worker 批次": "Latest Worker Batch",
+  "等待下一次带阶段计时的 Worker 结果。": "Waiting for the next Worker result with phase timing.",
+  "行星规模与在途物流": "Planet Scale & In-Flight Logistics",
+  "当前真实状态": "Current Authoritative State",
+  "最近 60 秒卡顿峰值": "Stutter Peaks in the Last 60 Seconds",
+  "建筑生产与采集": "Production & Extraction",
+  "制造与施工": "Fabrication & Construction",
+  "统计历史": "Statistics History",
+  "状态复制": "State Copy",
+  "其他模拟开销": "Other Simulation Overhead",
+  "性能监控": "Performance Monitor",
+  "FPS、Worker、内存与卡顿归因": "FPS, Worker, Memory & Stutter Attribution",
+  "物资配送接口": "Material Delivery Ports",
+  "物资配送接口设置": "Material Delivery Port Settings",
+  "三个直送接口": "Three Direct-Delivery Ports",
+  "独立指定或自动识别": "Assign Independently or Auto-Detect",
+  "指定物资": "Assigned Item",
+  "已清空": "Cleared",
+  "自动识别已绑定": "Auto-Detected and Bound",
+  "等待自动识别": "Waiting for Auto-Detection",
+  "自动绑定": "Auto-Bound",
+  "等待识别": "Waiting for Detection",
+  "恢复自动识别": "Restore Auto-Detection",
+  "自动识别": "Auto-Detect",
+  "清空接口": "Clear Port",
+  "每个接口可独立指定、恢复自动识别或清空。重置已连接接口前会要求确认，送达物品直接进入本行星物资托盘。": "Each port can be assigned, returned to auto-detection, or cleared independently. Resetting a connected port requires confirmation, and delivered items enter this planet's material tray.",
+  "确认导入": "Confirm Import",
+  "救援此存档": "Rescue This Save",
+  "再次确认并救援": "Confirm Again and Rescue",
+  "无法导入": "Cannot Import",
+  "存档结构完整，可受控救援": "Save Is Structurally Complete and Can Be Rescued",
+  "存档校验失败，但结构完整。请先备份原文件，再连续确认两次执行救援。": "Save integrity failed, but the structure is complete. Back up the original file and confirm twice to rescue it.",
+  "二次确认：救援会重新签署可解析状态。原始异常文件将先自动导出备份。": "Second confirmation: rescue will re-sign the parsed state after exporting the original invalid file.",
+  "备份救援前的原始异常存档": "Back Up the Original Save Before Rescue",
+  "存档救援失败": "Save Rescue Failed",
+  "云端存档结构完整但校验失败，已转到受控救援入口。": "The cloud save is structurally complete but failed integrity verification. It has been routed to controlled rescue.",
+  "云端主存档结构完整但校验失败，已转到受控救援入口。": "The main cloud save is structurally complete but failed integrity verification. It has been routed to controlled rescue.",
+  "自动制造已暂停": "Automated manufacturing paused",
+  "游戏已暂停": "Game paused",
+  "等待供电": "Waiting for power",
+  "资源锚点": "Resource Anchors",
+  "矿脉保持唯一": "Veins Remain Unique",
+  "部署时只匹配附近同类型资源点，并补齐采集设备；不会复制、移动或补充矿脉储量。": "Deployment matches nearby resources of the same type and fills extractor units; it never copies, moves, or refills vein reserves.",
+  "保留数量": "Units to Keep",
+  "目标数量必须为正整数": "Target count must be a positive integer",
+  "减至 1": "Reduce to 1",
+  "减至1": "Reduce to 1",
+  "减少的建筑返还施工托盘；缓存、进度、线路和在途物资保持不变。": "Removed units return to construction inventory; buffers, progress, belts, and in-transit cargo remain intact.",
+  "只减少堆叠，最低保留 1 台；完整拆除使用独立回收操作。": "This only reduces the stack and keeps at least one unit. Use the separate recovery action for full removal.",
+  "任务 WIP": "Job WIP",
+  "销毁副产物": "Discarded Byproducts",
+  "收录采矿布局": "Record Mining Layout",
+  "并联线路数量": "Parallel Lane Count",
+  "并联线路": "Parallel Lanes",
+  "并联数量必须为整数": "The parallel lane count must be an integer",
+  "数量影响吞吐；调整不会改变等级、堆叠、路由、优先级或在途物资。上限 64。": "Lane count affects throughput. Adjusting it preserves tier, stacking, routing, priority, and in-transit cargo. Maximum: 64.",
+  "数量影响吞吐；调整不会改变等级、堆叠、路由、优先级或在途物资。上限 4096。": "Lane count affects throughput. Adjusting it preserves tier, stacking, routing, priority, and in-transit cargo. Maximum: 4,096.",
+  "白糖阶段 · 无限科技": "White Matrix Stage · Infinite Research",
+  "当前筛选下没有科技": "No technology matches the current filter",
+  "可清除筛选查看全部普通与无限科技": "Clear filters to view all finite and infinite research",
+  "无限科技前置：完成宇宙矩阵科技": "Infinite research prerequisite: complete Universe Matrix",
+  "清除筛选": "Clear Filters",
+  "完成宇宙矩阵科技": "Complete Universe Matrix technology",
+  "需要宇宙矩阵科技": "Requires Universe Matrix technology",
+  "开始无限研究": "Start Infinite Research",
+  "正在研究": "Researching",
+  "已达等级上限": "Maximum Level Reached",
+  "当前效果": "Current Effect",
+  "研究状态": "Research Status",
+  "关闭自动补足": "Disable Auto-Replenishment",
+  "物品手工": "Item Handcrafting",
+  "搜索建筑制造": "Search Building Manufacturing",
+  "搜索建筑或材料": "Search buildings or materials",
+  "批次": "Batches",
+  "建筑制造批次数量": "Building manufacturing batch count",
+  "实际产出": "Actual Output",
+  "缺口": "Missing",
+  "递归合成": "Recursive Crafting",
+  "实际消耗": "Actual Cost",
+  "搜索手工配方": "Search Handcraft Recipes",
+  "搜索物品、原料或设备": "Search items, materials, or facilities",
+  "手工制造批次数量": "Handcraft batch count",
+  "单批": "per batch",
+  "天然来源": "Natural Source",
+  "内容数据校验通过": "Content data validation passed",
+  "关闭生产资料库": "Close Production Library",
+  "资料库分类": "Library Categories",
+  "配方物品分类": "Recipe Item Categories",
+  "物品索引": "Item Index",
+  "固定生产链到主界面": "Pin Production Chain to Main View",
+  "关闭生产统计": "Close Production Statistics",
+  "统计视图": "Statistics Views",
+  "物品统计筛选": "Item Statistics Filters",
+  "继续模拟": "Resume Simulation",
+  "建造抽屉高度": "Build Drawer Height",
+  "展开建造": "Expand Build Panel",
+  "建造模式": "Build Mode",
+  "建造分类": "Build Categories",
+  "手机主导航": "Mobile Main Navigation",
+  "科技筛选": "Technology Filters",
+  "生产网络画布": "Production Network Canvas",
+  "无限等级": "Infinite Levels",
+  "关闭科技树": "Close Technology Tree",
+  "展开科研详情": "Expand Research Details",
+  "展开升级与无限科研": "Expand Upgrades & Infinite Research",
+  "数量": "Quantity",
+  "物资抽屉高度": "Materials Drawer Height",
+  "展开物资": "Expand Materials Panel",
+  "物资分类": "Material Categories",
+  "已勘探": "Explored",
+  "当前坐标": "Current Coordinates",
+  "最远航标": "Farthest Beacon",
+  "星区种子": "Sector Seed",
+  "星图探索": "Star Map Exploration",
+  "星际工业": "Interstellar Industry",
+  "当前": "Current",
+  "矿储": "Reserves",
+  "风": "Wind",
+  "光": "Solar",
+  "地热": "Geothermal",
+  "航程": "Travel",
+  "轨采": "Orbital Yield",
+  "未勘探": "Unexplored",
+  "开始勘探": "Start Exploration",
+  "先勘探": "Explore First",
+  "关闭星图": "Close Star Map",
+  "星图视图": "Star Map Views",
+  "恒星系航线": "Star System Routes",
+  "有限矿脉总储量": "Total Finite Resource Reserves",
+  "风力发电倍率": "Wind Power Multiplier",
+  "地热发电倍率": "Geothermal Power Multiplier",
+  "跨行星航程时间倍率": "Interplanetary Travel Time Multiplier",
+  "轨道采集产率": "Orbital Collection Yield",
+  "返回工厂，关闭科技树": "Return to Factory and Close Technology Tree",
+  "自动调节": "Automatic",
+  "运行 60 秒基准": "Run 60-second Benchmark",
+  "运营中心视图": "Operations Center Views",
+  "新建传送带默认货物堆叠": "Default Cargo Stacking for New Belts",
+  "新建传送带默认线路形状": "Default Route Shape for New Belts",
+  "同时执行 2/8/24/72 小时挂机检查": "Run 2/8/24/72-hour idle checks together",
+  "银河排行": "Galactic Rankings",
+  "账户": "Account",
+  "服务端真实玩家排行榜": "Live Server Player Leaderboard",
+  "公开排名": "Public Ranking",
+  "登录后刷新排名": "Sign In to Refresh Ranking",
+  "银河节点连接状态": "Galactic Node Connection Status",
+  "关闭银河网络": "Close Galactic Network",
+  "银河网络页面": "Galactic Network Pages",
+  "排行榜分类": "Leaderboard Categories",
+  "银河综合排行榜": "Galactic Composite Leaderboard",
+  "章节": "Chapters",
+  "任务": "Tasks",
+  "打开银河工业控制台": "Open Galactic Industry Console",
+  "关闭任务中心": "Close Campaign Center",
+  "主线任务完成度": "Campaign Completion",
+  "关闭运营中心": "Close Operations Center",
+  "恒星": "Star",
+  "结构": "Structure",
+  "壳面帆": "Shell Sails",
+  "本系功率": "Local System Power",
+  "空白层": "Blank Layer",
+  "标准层": "Standard Layer",
+  "新增太阳帆轨道": "Add Solar Sail Orbit",
+  "框架": "Frame",
+  "壳面": "Shell",
+  "施工": "Construction",
+  "在轨": "In Orbit",
+  "理论接收": "Theoretical Reception",
+  "轨道半径": "Orbit Radius",
+  "轨道倾角": "Orbit Inclination",
+  "升交点经度": "Longitude of Ascending Node",
+  "发射": "Launch",
+  "衰减": "Decay",
+  "删除轨道": "Delete Orbit",
+  "发射调度": "Launch Dispatch",
+  "单次成本": "Cost per Launch",
+  "结构点": "Structure Points",
+  "戴森球规划命令": "Dyson Sphere Planning Commands",
+  "复制当前壳层设计": "Copy Current Shell Design",
+  "粘贴壳层副本": "Paste Shell Design",
+  "保存主存档": "Save Main Save",
+  "关闭戴森球规划": "Close Dyson Sphere Planning",
+  "戴森球恒星系": "Dyson Sphere Star System",
+  "新建空白壳层": "Create Blank Shell Layer",
+  "新建八节点闭合标准壳层": "Create Standard Closed Eight-node Shell",
+  "太阳帆轨道参数": "Solar Sail Orbit Parameters",
+  "删除当前太阳帆轨道": "Delete Current Solar Sail Orbit",
+  "戴森发射调度": "Dyson Launch Dispatch",
+  "暂停戴森发射": "Pause Dyson Launches",
+  "发射优先级": "Launch Priority",
+  "发射节流": "Launch Throttle",
+  "总功率": "Total Power",
+  "累计发射": "Total Launched",
+  "已衰减": "Decayed",
+  "运载火箭": "Carrier Rockets",
+  "永久吸附": "Permanently Absorbed",
+  "均衡调度": "Balanced Dispatch",
+  "接收站利用": "Receiver Utilization",
+  "功率利用": "Power Utilization",
+  "戴森系统接收负载": "Dyson System Receiver Load",
+  "物资托盘单种物资上限": "Material Tray Per-item Limit",
+  "行星切换": "Planet Switcher",
+  "画布选择工具": "Canvas Selection Tools",
+  "节点与制造视图": "Node & Manufacturing Views",
+  "施工托盘分类": "Construction Tray Categories",
+  "批量部署数量": "Batch Deployment Count",
+  "打开基础制造": "Open Basic Manufacturing",
+  "全部设备": "All Facilities",
+  "最近使用": "Recently Used",
+  "开放周期": "Availability",
+  "长期开放": "Open Permanently",
+  "活动不再倒计时并长期开放；本版无需登录且不会上传贡献，奖励将在后续版本开放。": "This activity has no countdown and remains permanently open. Contributions are stored locally without login or upload in this version; rewards will be added later.",
+  "个人任务已完成，继续交付仍会保留在本地记录中。": "Your personal objective is complete. Further deliveries will remain in the local record.",
+  "四项物资全部达到目标后，个人任务才算完成。": "Complete the targets for all four materials to finish the personal objective.",
+  "仅实时前台模拟加速；离线收益与活动时钟始终使用真实时间。高倍率若无法实时追赶会保留时间债务。": "Only the active foreground simulation is accelerated. Offline gains and the activity clock always use real time. Simulation debt is retained when high multipliers cannot keep up in real time.",
+  "传送带转运额度上限": "Belt Transfer Credit Limit",
+  "传送带转运额度上限自定义值": "Custom Belt Transfer Credit Limit",
+  "限制大时间步内每条线路累计的转运额度，不改变每秒吞吐，也不是线路中的实际货物库存。": "Limits each belt's accumulated transfer credit during large simulation steps. It does not change per-second throughput and is not physical cargo stored on the belt.",
+  "删除所选": "Delete Selected",
+  "只删除明确勾选的恢复快照；主存档和三个手动槽位不会受影响": "Deletes only the selected recovery snapshots. The main save and three manual slots are not affected.",
+  "本地存储占用": "Local Storage Usage",
+  "存储占用": "Storage Usage",
+  "兼容存储": "Compatibility Storage",
+  "临时内存": "Temporary Memory",
+  "存档数据": "Save Data",
+  "浏览器总占用": "Total Browser Usage",
+  "可用配额": "Available Quota",
+  "正在恢复模块": "Recovering Module",
+  "页面资源需要恢复": "Page Resources Need Recovery",
+  "重新加载最新版": "Reload Latest Version",
+  "页面模块未能载入": "Page Module Failed to Load",
+  "本地存档仍保留在设备中。重新加载最新版即可继续。": "Your local saves remain on this device. Reload the latest version to continue.",
+  "跨端存档与高吞吐稳定性更新": "Cross-device Saves & High-throughput Stability",
+  "1.0.9 将本地存档迁移到 IndexedDB，修复多线路高吞吐分配和移动端组合输入，并升级声明式内容包。空间站收集任务改为长期开放，主页可直接切换中英文。GameState 升级至 v40。": "Version 1.0.9 migrates local saves to IndexedDB, fixes high-throughput multi-line distribution and mobile IME composition, and upgrades declarative content packs. The station collection activity is now permanently open, and language can be switched directly on the home screen. GameState advances to v40.",
+  "IndexedDB 可靠存档": "Reliable IndexedDB Saves",
+  "主档、备份、快照和三个槽位迁入大容量存储，写入后必须读回校验。旧 localStorage 副本验证迁移后才删除，并新增占用明细与快照批量管理。": "The main save, backup, snapshots, and three slots now use higher-capacity storage with mandatory read-back verification. Legacy localStorage copies are removed only after verified migration, with storage details and bulk snapshot management added.",
+  "高吞吐线路公平分配": "Fair High-throughput Belt Distribution",
+  "同优先级输出按确定性轮询公平分配，高、标准、低优先级继续生效。矿源和生产输出不再被单步缓存误限流，线路转运额度可配置到 1 亿。": "Equal-priority outputs are distributed by deterministic round robin while high, standard, and low priorities remain effective. Mining and production outputs are no longer falsely limited by one-step buffers, and belt transfer credit can be configured up to 100 million.",
+  "声明式内容包 v2": "Declarative Content Packs v2",
+  "内容包可新增物品、建筑、配方、科技和 4～32 级传送带，并通过白名单调整核心建筑数值。存档记录精确包版本，缺包会阻止加载，Mod 主档不进入官方排行。": "Content packs can add items, buildings, recipes, technologies, and belt tiers 4-32, with allowlisted core-building value overrides. Saves record exact pack versions, missing packs block loading, and modded main saves are excluded from official rankings.",
+  "移动输入与文字清晰度": "Mobile Input & Text Clarity",
+  "注册输入框正确保留中文输入法组合态和其他字段；静止抽屉移除长期 transform，拖动与画布视口按设备像素对齐，减少偶发文字模糊。": "Registration fields now preserve IME composition and sibling values. Resting drawers no longer retain transforms, while drag and canvas viewport coordinates align to device pixels to reduce intermittent text blur.",
+  "空间站收集任务长期开放": "Station Collection Activity Permanently Open",
+  "取消活动结束倒计时。原截止点之后仍可放置超大型物资出口并继续提交四项物资，本地贡献记录完整保留。": "The activity end countdown has been removed. Players can place the Galactic Material Exporter and continue delivering all four materials after the former deadline, with local contribution records preserved.",
+  "主页语言切换": "Home-screen Language Switch",
+  "主菜单首屏顶部常驻中文与 English 切换，无需进入设置；语言仍只保存在当前设备，不写入本地或云端游戏存档。": "A persistent Chinese / English switch now appears at the top of the main menu without opening Settings. Language remains device-local and is never written to local or cloud game saves.",
+  "终局工厂性能基础更新": "Endgame Factory Performance Foundation",
+  "1.0.10 为后期多星球工厂增加会话级运行时索引，并减少画布对其他行星的重复扫描。生产、物流、科研、离线收益和存档格式保持不变，GameState 继续为 v40。": "Version 1.0.10 adds session-scoped runtime indexes for late-game multi-planet factories and reduces unnecessary canvas scans across other planets. Production, logistics, research, offline gains, and the save format remain unchanged, with GameState staying at v40.",
+  "模拟会话运行时索引": "Simulation Session Runtime Indexes",
+  "实体、行星、电网、物流槽和线路端点在每次模拟会话中建立只读索引，减少后期工厂反复扫描完整状态的开销。": "Entities, planets, power grids, logistics slots, and belt endpoints receive read-only indexes for each simulation session, reducing repeated whole-state scans in late-game factories.",
+  "生产与供电按行星推进": "Planet-scoped Production and Power",
+  "供电、采矿、生产、施工、射线接收和容量统计直接读取当前行星集合，空行星不再重复遍历全部建筑。": "Power, mining, production, construction, ray reception, and capacity metrics now read the current planet set directly, so empty planets no longer rescan every building.",
+  "线路端点快速查找": "Fast Belt Endpoint Lookup",
+  "线路转运和输出容量预留复用实体 ID 与在途物流索引，不再为每条传送带反复搜索所有建筑。": "Belt transfers and output-capacity reservations reuse entity ID and in-flight logistics indexes instead of searching every building for every belt.",
+  "当前行星画布派生": "Active-planet Canvas Derivation",
+  "节点、线路、端口占用、并联分组和任务高亮只消费当前行星视图，多星球存档切换与画布发布减少无关扫描。": "Nodes, belts, port occupancy, bundle grouping, and task highlights now consume only the active-planet view, reducing unrelated scans during canvas updates and planet switches.",
+  "终局规模确定性门禁": "Endgame-scale Determinism Gate",
+  "新增 P50、P95 和 Max 匿名合成工厂基准；优化路径与旧路径必须得到完全一致的状态哈希才能通过测试。": "New anonymous P50, P95, and Max synthetic factory benchmarks require optimized and legacy paths to produce identical state hashes.",
+  "玩法与存档保持不变": "Gameplay and Saves Unchanged",
+  "本次不降低刷新档位、产量、物流速度、离线收益、堆叠或线路上限，也不升级 GameState、存档 envelope 或云存档 schema。": "This update does not reduce refresh profiles, production, logistics speed, offline gains, stacking, or belt limits, and does not upgrade GameState, the save envelope, or the cloud-save schema.",
+  "2026年7月29日": "July 29, 2026",
+  "终局性能与数据完整性更新": "Endgame Performance & Data Integrity Update",
+  "1.0.11 为终局物流和建筑制造中心增加确定性批量结算，降低大型工厂 Worker 积压。玩法数值、离线收益和存档格式保持不变，GameState 继续为 v40。": "Version 1.0.11 adds deterministic batch settlement for endgame logistics and Construction Centers, reducing Worker backlog in large factories. Gameplay values, offline gains, and the save format remain unchanged, with GameState staying at v40.",
+  "物流调度复用": "Logistics Dispatch Reuse",
+  "物流伙伴、路线经济、活动载具负载和拥堵诊断在同一模拟会话内复用，减少高密度物流站重复匹配。": "Logistics peers, route economics, active vehicle load, and congestion diagnostics are reused within a simulation session, reducing repeated matching in dense station networks.",
+  "递归制造批量结算": "Recursive Manufacturing Batch Settlement",
+  "复杂递归链、副产物、多目标和多制造中心保持原有轮询与物资守恒，同时避免按成品重复规划整条材料链。": "Complex recursive chains, byproducts, multiple targets, and multiple Construction Centers preserve their original round robin and material conservation while avoiding full material-chain replanning for every finished item.",
+  "燃料与蓄电批次处理": "Fuel and Accumulator Batching",
+  "大堆叠发电燃料和能量枢纽改用等价闭式结算，不再按每个燃料棒或蓄电单元循环。": "Large fuel-generator stacks and Energy Exchangers now use equivalent closed-form settlement instead of looping over every fuel rod or accumulator.",
+  "终局规模性能门禁": "Terminal-scale Performance Gate",
+  "新增玩家同形和 2 倍终局匿名夹具，覆盖 300 万并联线路、256 座物流站及 1x、4x、11x 状态哈希。": "New anonymous player-shaped and 2x terminal fixtures cover three million parallel belt lanes, 256 logistics stations, and state hashes at 1x, 4x, and 11x.",
+  "排行榜数据完整性": "Leaderboard Data Integrity",
+  "检测数据修改异常": "Detected anomalous save-data modification.",
+  "2026年7月30日": "July 30, 2026",
+  "太阳帆目标轨道": "Solar Sail Target Orbit",
+  "批量太阳帆轨道": "Batch Solar Sail Orbit",
+  "选择太阳帆目标轨道": "Select Solar Sail Target Orbit",
+  "批量选择太阳帆目标轨道": "Select Solar Sail Target Orbit in Batch",
+  "多个不同目标": "Multiple Targets",
+  "失效轨道（请重新选择）": "Invalid Orbit (Select Again)",
+  "未指定太阳帆目标轨道": "No solar sail target orbit selected",
+  "目标太阳帆轨道已删除或失效": "The target solar sail orbit was deleted or is invalid",
+  "目标太阳帆轨道不属于当前恒星系": "The target solar sail orbit belongs to another star system",
+  "轨道失效": "Orbit Invalid",
+  "模板": "Template",
+  "设为模板": "Set as Template",
+  "同步首条设置": "Sync Template Settings",
+  "确认同步": "Confirm Sync",
+  "当前选择没有明确顺序，请在下方所选线路中指定一条模板。": "This selection has no explicit order. Choose one selected belt below as the template.",
+  "累计运输量、实时流量、线路进度和在途物资不会改变。": "Total transferred, live flow, belt progress, and in-transit cargo will not change.",
+  "弹射器独立定轨": "Independent Ejector Orbit Targeting",
+  "每台电磁轨道弹射器可选择当前恒星系的太阳帆轨道，支持批量修改和蓝图；轨道失效时保留物资与进度并明确暂停。": "Each EM Rail Ejector can target a solar sail orbit in its current star system, including batch edits and blueprints. Invalid targets pause clearly while preserving materials and progress.",
+  "显式线路同步模板": "Explicit Belt Sync Template",
+  "玩家第一个点选的线路固定作为模板；框选需主动指定模板，并在执行前查看并联、堆叠、优先级、形态和监测摘要。": "The first belt clicked remains the template. Box selections require an explicit template and show lanes, stacking, priority, route shape, and monitoring before applying.",
+  "配送枢纽紧凑卡片": "Compact Delivery Hub Card",
+  "三个接口改用稳定紧凑分区和单行省略，80% 至 200% 字号下不再被文字异常撑大，真实连接点保持对齐。": "The three ports now use stable compact sections and single-line truncation, preventing text from expanding the card at 80% to 200% font sizes while keeping real handles aligned.",
+  "亮色物流选中状态": "Light-theme Logistics Selection States",
+  "物流槽位和设置项补齐悬停、按下、选中、焦点与禁用状态，亮色模式下可清楚识别当前配置。": "Logistics slots and settings now expose clear hover, pressed, selected, focus, and disabled states in the light theme.",
+  "v41 守恒迁移": "Conservative v41 Migration",
+  "旧弹射器自动绑定迁移时的活动轨道；库存、线路、在途物资、太阳帆、发射进度和蓝图施工数据均不重建、不删除。": "Existing ejectors bind to the active orbit during migration. Inventory, belts, in-transit cargo, solar sails, launch progress, and blueprint construction data are neither rebuilt nor deleted.",
+  "轨道与物流交互更新": "Orbit & Logistics Interaction Update",
+  "1.0.12 增加弹射器独立太阳帆轨道，修复线路模板选择、配送枢纽卡片和亮色物流站状态。GameState 升级至 v41，旧存档自动沿用所在恒星系的活动轨道。": "Version 1.0.12 adds per-ejector solar sail orbit targets and fixes belt template selection, Delivery Hub cards, and light-theme logistics states. GameState advances to v41; existing saves inherit each system's active orbit.",
+  "大型工厂画布缓存": "Large Factory Canvas Cache",
+  "建筑拓扑、线路几何与实时库存分开更新；没有移动或改线时不再重复计算整张工厂地图，300 个以上实体的大工厂会裁剪屏幕外节点和线路。": "Building topology, belt geometry, and live inventory now update separately. Unchanged maps are no longer recomputed, while factories above 300 entities clip off-screen nodes and belts.",
+  "放大恢复建筑细节": "Zoom Restores Building Detail",
+  "大工厂和低端设备仍会自动精简动画，但建筑细节只由真实画布缩放决定；放大后立即恢复文字、状态、缓存和操作区域。": "Large factories and low-end devices still reduce animation cost, but building detail now follows the actual canvas zoom and returns immediately when zoomed in.",
+  "跨星系路线复用": "Interstellar Route Reuse",
+  "同一对行星和路线策略只规划一次中转路径，后续物流塔直接复用；500 站合成压力档保持相同状态哈希并进一步降低调度耗时。": "Each planet pair and route policy plans its relay path once for reuse by later stations. The 500-station stress fixture keeps the same state hash with lower dispatch time.",
+  "排行榜不再提前封顶": "Leaderboard Values No Longer Cap Early",
+  "服务端移除每项 10^15 的人为上限；主云存档继续自动计算真实排名，下一次主档同步即可更新超过旧上限的记录。": "The service no longer imposes the previous 10^15 metric cap. Main cloud saves still calculate verified rankings automatically, and the next sync can raise records beyond the old limit.",
+  "更清楚的终局单位": "Clearer Endgame Units",
+  "数量显示扩展到兆、京、垓、秭、穰、沟、涧、正、载，功率扩展到 EW、ZW、YW、RW、QW；排行榜保留精确值悬停提示。": "Quantity displays now extend through larger Chinese units, while power supports EW, ZW, YW, RW, and QW. Leaderboards retain exact-value hover text.",
+  "终局画布与大数显示更新": "Endgame Canvas & Large-number Update",
+  "1.0.13 优化大型工厂画布和跨星系物流路径，修复放大后建筑仍保持灰色精简态的问题，并取消排行榜一千万亿的人为封顶。GameState 继续为 v41，存档格式不变。": "Version 1.0.13 optimizes large factory canvases and interstellar routing, restores full building detail after zooming in, and removes the leaderboard's artificial metric cap. GameState remains v41 with no save-format change.",
+  "2026年7月31日": "July 31, 2026",
+  "2026年8月1日": "August 1, 2026",
+  "量子物流塔与星图界面更新": "Quantum Logistics & Star Map Update",
+  "1.0.17 隐藏星图中已废止的空间站与太空电梯入口，量子物流塔升级不再消耗材料。GameState、云存档和已有生产进度保持兼容。": "Version 1.0.17 hides the deprecated space-station and orbital-elevator entry from the star map and makes quantum logistics tower upgrades free. GameState, cloud saves, and existing production progress remain compatible.",
+  "量子空间库存与采集网络更新": "Quantum Inventory & Collection Network Update",
+  "1.0.18 开放量子空间库存、轨道采集器接入和全星区共享带宽，同时保留行星运输机网络。GameState 升至 v45，旧存档自动守恒迁移。": "Version 1.0.18 adds quantum-space inventory, orbital-collector attachment, and galaxy-wide shared bandwidth while preserving local drone logistics. GameState advances to v45 with a conservative migration for existing saves.",
+  "独立量子空间库存": "Dedicated Quantum-space Inventory",
+  "星图新增量子库存页，逐物品显示精确数量、科学计数法、最近五秒上传、下载和净变化。": "The star map now includes a quantum inventory page showing exact and scientific values plus each item's latest five-second uploads, downloads, and net change.",
+  "全星区共享量子带宽": "Galaxy-wide Shared Quantum Bandwidth",
+  "上传和下载使用两个独立全局额度，按全部已接入量子塔堆叠和银河物流倍率统一计算，供需不再受单塔堆叠限制。": "Uploads and downloads use separate global budgets derived from every attached quantum tower stack and the Galactic Logistics multiplier, so supply and demand are no longer limited by one tower's stack.",
+  "轨道采集器接入量子网络": "Orbital Collectors Join the Quantum Network",
+  "轨道采集器可单独或全星图批量接入，作为只上传供应端共享量子塔带宽；旧存档不会自动切换。": "Orbital Collectors can attach individually or across the galaxy as upload-only suppliers sharing tower bandwidth; existing saves never switch them automatically.",
+  "保留行星运输机网络": "Local Drone Networks Preserved",
+  "量子模式只替代星际运输，本地供应、需求、运输机、槽位优先级和在途货物继续正常运行。": "Quantum mode replaces only interstellar transport; local supply, demand, drones, slot priorities, and in-transit cargo keep operating.",
+  "逐物品容量上限": "Per-item Capacity Limits",
+  "每项量子库存可在 1 万至 100 亿之间独立设置；调低上限保留已有超额库存，只暂停继续上传。": "Each quantum inventory item can be limited independently from 10,000 to 10 billion. Lowering a limit preserves existing excess stock and pauses only further uploads.",
+  "v45 守恒迁移": "Conservative v45 Migration",
+  "v44 及更早正式存档自动补齐量子容量和采集器传统模式；库存、线路、槽位、航线、载具和生产进度不重建、不删除。": "v44 and earlier production saves gain quantum capacities and legacy collector modes automatically; inventories, belts, slots, routes, vehicles, and production progress are neither rebuilt nor deleted.",
+  "蓝图施工与模拟一致性更新": "Blueprint Construction & Simulation Consistency Update",
+  "1.0.19 修复内容包 Worker、超大蓝图和递归制造问题，加入待建补料、统计窗口与游戏内确认框，并把量子基础吞吐提高到 5000 件/分钟。GameState 升至 v46，旧存档和旧蓝图守恒迁移。": "Version 1.0.19 fixes content-pack Workers, very large blueprints, and recursive manufacturing; adds pending construction, statistical windows, and in-game dialogs; and raises base quantum throughput to 5,000 items per minute. GameState advances to v46 with conservative save and blueprint migration.",
+  "内容包同步到模拟 Worker": "Content Packs Synced to Simulation Workers",
+  "实时、纯挂机和离线模拟使用同一份内容包注册表；启用、更新或关闭内容包后无需刷新页面，配方和建筑规则不会在 Worker 中失效。": "Live, pure-idle, and offline simulations now share the same content-pack registry. Enabling, updating, or disabling a pack no longer requires a page reload or leaves Worker recipes and building rules unavailable.",
+  "超大蓝图完整往返": "Very Large Blueprint Round Trips",
+  "单个建筑堆叠最高支持 1 亿，导入不再把超过 1 万的合法数量误判为损坏，也不会静默截断或免费建造。": "A blueprint building may now contain up to 100 million stacked units. Import no longer rejects valid counts above 10,000, silently truncates them, or builds them for free.",
+  "建筑拖动对齐辅助线": "Building Alignment Guides",
+  "单选和多选建筑接近其他建筑的中心或边缘时显示水平、垂直辅助线；松开后立即清除，不写入存档。": "Dragging one or several buildings near another building's center or edges shows horizontal and vertical guides. Guides clear immediately on release and never enter saves.",
+  "蓝图记忆量子网络目标": "Blueprints Remember Quantum Targets",
+  "复制量子物流塔时保留计划接入状态；科技和 Mk.II 条件满足后自动接入，同时保留本地运输机、槽位、缓存和载具。": "Copied quantum logistics towers retain their planned attachment state and attach automatically once technology and Mk.II requirements are met, while preserving local drones, slots, buffers, and vehicles.",
+  "递归制造不再被副产物卡死": "Recursive Manufacturing Survives Byproduct Overflow",
+  "轨道采集器等递归手搓在氢满仓时仍能原子完成，真实副产物允许暂时超过托盘软上限且不会被删除。": "Recursive crafting such as Orbital Collectors completes atomically even when hydrogen storage is full; real byproducts may temporarily exceed the tray soft limit and are never deleted.",
+  "统一游戏内确认框": "Unified In-game Dialogs",
+  "回收、拆卸和重置等确认不再调用原生阻塞弹窗；确认或取消后，数字输入、中文输入法、指针和键盘焦点均可继续使用。": "Recycling, removal, and reset confirmations no longer use blocking native dialogs. Numeric input, IME composition, pointers, and keyboard focus continue working after confirm or cancel.",
+  "生产统计排序与时间窗口": "Production Sorting & Time Windows",
+  "新增每秒、每分钟、每十分钟和每小时窗口，生产与消耗列可稳定排序，大数量统一使用万、亿及更高单位并保留精确值。": "Production statistics add per-second, per-minute, per-ten-minute, and hourly windows with stable production and consumption sorting, compact large-number units, and exact values.",
+  "生产统计时间范围": "Production Statistics Time Range",
+  "每秒": "Per Second",
+  "每分钟": "Per Minute",
+  "每十分钟": "Per 10 Minutes",
+  "每小时": "Per Hour",
+  "蓝图缺料预建设与多次补足": "Pending Blueprints & Incremental Funding",
+  "缺少建筑时仍可连续放置灰色待建蓝图，之后分批投入建筑、线路和载具；材料齐备后原子建成，取消会完整返还预留物资。": "Blueprint ghosts may be placed continuously without all buildings on hand, then funded with buildings, belts, and vehicles over time. Completion is atomic, and cancellation refunds every reservation.",
+  "量子网络基础吞吐提高": "Higher Base Quantum Throughput",
+  "全局上传和下载基础值从 400 提高到 5000 件/分钟，再乘银河物流无限科技倍率平方与全部量子塔堆叠总数。": "The base global upload and download rate rises from 400 to 5,000 items per minute, multiplied by the squared Galactic Logistics infinite-research multiplier and every quantum tower stack in the save.",
+  "量子物流塔零材料升级": "Zero-material Quantum Logistics Upgrades",
+  "星际物流站升级为 Mk.II 并接入量子物流网络时不再扣除钛合金、框架材料、量子芯片或宇宙矩阵；已有库存保持不变。": "Upgrading an interstellar logistics station to Mk.II and attaching it to the quantum network no longer consumes titanium alloy, frame material, quantum chips, or universe matrices; existing inventory is unchanged.",
+  "隐藏废止的空间站入口": "Deprecated Space-station Entry Hidden",
+  "星图不再显示“空间站与太空电梯”入口；旧存档字段和兼容代码仍保留，不会删除已有数据。": "The star map no longer shows the space-station and orbital-elevator entry; legacy save fields and compatibility code remain, so existing data is not deleted.",
+  "可按默认名、自定义名、备注或标签搜索": "Search by default names, custom names, notes, or tags",
+  "升级全部星际物流站": "Upgrade all interstellar logistics stations",
+  "一键切换全部量子物流站": "Switch all quantum logistics stations",
+  "自定义星球资料": "Custom planetary data",
+  "名称、备注与标签": "Names, notes, and tags",
+  "恒星系名称": "Star system name",
+  "恒星系": "Star system",
+  "自定义名称": "Custom name",
+  "保存星系名称": "Save star system name",
+  "行星资料": "Planet data",
+  "备注": "Notes",
+  "标签": "Tags",
+  "逗号分隔，最多": "Comma-separated, up to",
+  "个": "items",
+  "恢复默认名称": "Restore default name",
+  "保存行星资料": "Save planet data",
+  "搜索星球资料": "Search planet data",
+  "搜索名称、备注或标签": "Search names, notes, or tags",
+  "记录产线用途、物流计划或资源安排": "Record production purpose, logistics plans, or resource assignments",
+  "例如：绿糖，出口，缺电": "Example: Green Matrix, export, power shortage",
+  "存档稳定性与运行性能更新": "Save Stability & Runtime Performance Update",
+  "1.0.16 修复了小型新档每 5 秒周期性冻结和保存请求堆积问题，并让历史摘要校验移入 Worker。GameState 仍为 v42，旧存档、云存档和游戏进度无需迁移。": "Version 1.0.16 fixes the five-second freezes in small new games and merged overlapping save requests, while moving historical summary validation to a Worker. GameState remains v42; existing saves, cloud saves, and progress need no migration.",
+  "移除后台存档轮询卡顿": "Removed Background Save Polling Freezes",
+  "关闭存档管理页面时不再每 5 秒扫描三个本地槽位和全部历史快照，玩家在小型新档中不会再被旧大型存档周期性冻结。": "When Save Management is closed, the game no longer scans three local slots and every historical snapshot every five seconds, so small new games are not periodically frozen by old large saves.",
+  "存档摘要缓存与保存合并": "Cached Save Summaries & Merged Saves",
+  "未变化的存档摘要复用已有校验结果，自动保存、页面隐藏和生命周期保存请求会合并为单任务，不再并发堆积。": "Unchanged save summaries reuse their validation results, and autosave, page-hidden, and lifecycle requests merge into one task instead of piling up concurrently.",
+  "历史校验交给 Worker": "Historical Validation Runs in a Worker",
+  "历史快照首次需要完整解析、迁移和完整性校验时交由 Worker 处理，主线程只读取摘要结果，页面操作更稳定。": "First-time parsing, migration, and integrity validation of historical snapshots now run in a Worker; the main thread only applies summary results for smoother interaction.",
+  "保存阶段可观测": "Save-stage Observability",
+  "运营中心性能面板新增槽位数、快照数、总占用，以及序列化、快照扫描、IndexedDB 写入和读回校验的分阶段耗时。": "The Operations performance panel now shows slot and snapshot counts, total storage, and stage timings for serialization, snapshot scans, IndexedDB writes, and read-back validation.",
+  "物流与画布缓存继续复用": "Reused Logistics & Canvas Caches",
+  "稳定物流账本、画布拓扑和线路几何在没有配置变化时继续复用；模拟结果、产量、运输和状态哈希保持不变。": "Stable logistics ledgers, canvas topology, and belt geometry continue to be reused without configuration changes; simulation results, production, transport, and state hashes remain unchanged.",
+  "离线结算及时让出线程": "Offline Settlement Yields Promptly",
+  "离线 Worker 按小预算分段让出线程并报告进度，取消更快响应；无法证明安全快进时仍回退到精确模拟。": "The offline Worker yields in small time budgets and reports progress for faster cancellation; it still falls back to exact simulation whenever a safe fast-forward cannot be proven.",
+  "桌面云服务地址已校验": "Desktop Cloud Service URLs Verified",
+  "Windows 安装包内置官方云 API 和更新地址，并在发布门禁中读取 app.asar 元数据验证，避免安装后出现未配置云服务。": "Windows installers include the official cloud API and update URL, and the release gate verifies app.asar metadata to prevent an unconfigured cloud service after installation.",
+  "旧存档继续兼容": "Existing Saves Remain Compatible",
+  "本版不升级 GameState、存档 envelope、云 schema 或 SQLite layout；本地存档、云存档、账号、排行榜和生产进度保持原样。": "This release does not upgrade GameState, the save envelope, cloud schema, or SQLite layout; local saves, cloud saves, accounts, leaderboards, and production progress remain unchanged.",
+  "零基础教程": "Beginner Tutorial",
+  "桌面与手机通用": "For desktop and mobile",
+  "打开完整自然语言教程": "Open the complete natural-language tutorial",
+  "从采集、传送带到物流、戴森和存档": "From mining and belts to logistics, Dyson systems, and saves",
+  "打开新手教程": "Open beginner tutorial",
+};
+
+let catalogEnglish = new Map<string, string>();
+const registryListeners = new Set<() => void>();
+
+export function registerCatalogEnglish(entries: Iterable<readonly [string, string]>): void {
+  let changed = false;
+  for (const [source, translation] of entries) {
+    if (!source || !translation || catalogEnglish.get(source) === translation) continue;
+    catalogEnglish.set(source, translation);
+    changed = true;
+  }
+  if (changed) registryListeners.forEach((listener) => listener());
+}
+
+export function subscribeTranslationRegistry(listener: () => void): () => void {
+  registryListeners.add(listener);
+  return () => registryListeners.delete(listener);
+}
+
+function translatedTrimmed(source: string): string {
+  return UI_EN[source] ?? catalogEnglish.get(source) ?? source;
+}
+
+function translateCatalogName(source: string): string {
+  return catalogEnglish.get(source.trim()) ?? UI_EN[source.trim()] ?? source.trim();
+}
+
+function formatEnglishCompactNumber(value: number): string {
+  const units = [
+    { divisor: 1e33, suffix: "Dc" },
+    { divisor: 1e30, suffix: "No" },
+    { divisor: 1e27, suffix: "Oc" },
+    { divisor: 1e24, suffix: "Sp" },
+    { divisor: 1e21, suffix: "Sx" },
+    { divisor: 1e18, suffix: "Qi" },
+    { divisor: 1e15, suffix: "Qa" },
+    { divisor: 1e12, suffix: "T" },
+    { divisor: 1e9, suffix: "B" },
+    { divisor: 1e6, suffix: "M" },
+    { divisor: 1e3, suffix: "K" },
+  ] as const;
+  const unit = units.find((candidate) => value >= candidate.divisor);
+  if (unit) return `${Number((value / unit.divisor).toFixed(2))}${unit.suffix}`;
+  return String(value);
+}
+
+function translateChineseCompactNumbers(source: string): string {
+  const powers: Record<string, number> = {
+    千: 3, 万: 4, 亿: 8, 兆: 12, 京: 16, 垓: 20, 秭: 24, 穰: 28, 沟: 32, 涧: 36, 正: 40, 载: 44,
+  };
+  return source.replace(/(\d+(?:\.\d+)?)\s*(千|万|亿|兆|京|垓|秭|穰|沟|涧|正|载)/g, (_, value: string, unit: string) => {
+    const expanded = Number(value) * 10 ** powers[unit];
+    return Number.isFinite(expanded) ? formatEnglishCompactNumber(expanded) : `${value}e+${powers[unit]}`;
+  });
+}
+
+function translateMaterialList(source: string): string {
+  const translated = source.split(/、|，/).map((part) => {
+    const item = part.trim().match(/^(.+?)(×\s*[\d,.]+)$/);
+    return item ? `${translateCatalogName(item[1])} ${item[2]}` : translateCatalogName(part);
+  }).join(", ");
+  return translateChineseCompactNumbers(translated);
+}
+
+function translateNameList(source: string): string {
+  return source.split("、").map(translateCatalogName).join(", ");
+}
+
+function translateRequirementList(source: string): string {
+  return source.split(" · ").map((part) => {
+    const technology = part.match(/^科技：(.+)$/);
+    if (technology) return `Technology: ${translateCatalogName(technology[1])}`;
+    const shortage = part.match(/^(.+?)\s+([\d,.]+)\/([\d,.]+)（缺\s*([\d,.]+)）$/);
+    if (shortage) return `${translateCatalogName(shortage[1])} ${shortage[2]}/${shortage[3]} (missing ${shortage[4]})`;
+    return translateCatalogName(part);
+  }).join(" · ");
+}
+
+function translateDynamicSystemText(body: string): string {
+  let match = body.match(/^长按采集(.+)$/);
+  if (match) return `Hold to gather ${translateCatalogName(match[1])}`;
+  match = body.match(/^(.+)容量预设$/);
+  if (match) return `${translateCatalogName(match[1])} Capacity Presets`;
+  match = body.match(/^(.+)自定义量子容量$/);
+  if (match) return `Custom quantum capacity for ${translateCatalogName(match[1])}`;
+  match = body.match(/^最近结算\s+([\d,.]+)\s+秒$/);
+  if (match) return `Latest settlement at ${match[1]} seconds`;
+  match = body.match(/^(\d+)\s+台正在等待五秒边界或传统航线尾货$/);
+  if (match) return `${match[1]} collector${match[1] === "1" ? "" : "s"} waiting for the five-second boundary or legacy route cargo`;
+  match = body.match(/^等待传统航线尾货完成\s+·\s+(\d+)\s+条在途$/);
+  if (match) return `Waiting for legacy route cargo · ${match[1]} in transit`;
+  match = body.match(/^仅等待旧星际航线尾货\s+·\s+(\d+)\s+条桥接；本地运输机不中断。$/);
+  if (match) return `Waiting only for ${match[1]} legacy interstellar bridge${match[1] === "1" ? "" : "s"}; local drones continue.`;
+  match = body.match(/^接口 (\d+)$/);
+  if (match) return `Port ${match[1]}`;
+  match = body.match(/^接口 (\d+) 指定物资$/);
+  if (match) return `Assign Item to Port ${match[1]}`;
+  match = body.match(/^接口 (\d+) 已指定为(.+)$/);
+  if (match) return `Port ${match[1]} assigned to ${translateCatalogName(match[2])}`;
+  match = body.match(/^接口 (\d+) 已恢复自动识别$/);
+  if (match) return `Port ${match[1]} restored to auto-detection`;
+  match = body.match(/^接口 (\d+) 已清空$/);
+  if (match) return `Port ${match[1]} cleared`;
+  match = body.match(/^(.+) · (\d+) 条线路$/);
+  if (match) return `${translatedTrimmed(match[1])} · ${match[2]} belt${match[2] === "1" ? "" : "s"}`;
+  match = body.match(/^平均帧 ([\d.]+) ms$/);
+  if (match) return `Average Frame ${match[1]} ms`;
+  match = body.match(/^长帧 (\d+) 次$/);
+  if (match) return `Long Frames ${match[1]}`;
+  match = body.match(/^往返 ([\d.]+) ms$/);
+  if (match) return `Round Trip ${match[1]} ms`;
+  match = body.match(/^设备约 ([\d.]+) GiB$/);
+  if (match) return `Device Approx. ${match[1]} GiB`;
+  match = body.match(/^(实体|线路|在途) (\d+)$/);
+  if (match) return `${({ 实体: "Entities", 线路: "Belts", 在途: "In Flight" } as Record<string, string>)[match[1]]} ${match[2]}`;
+  match = body.match(/^主线程 ([\d.]+) ms · Worker ([\d.]+) ms · 积压 ([\d.]+) ms$/);
+  if (match) return `Main Thread ${match[1]} ms · Worker ${match[2]} ms · Backlog ${match[3]} ms`;
+  match = body.match(/^帧峰值 ([\d.]+) ms$/);
+  if (match) return `Frame Peak ${match[1]} ms`;
+  match = body.match(/^积压 ([\d.]+) ms$/);
+  if (match) return `Backlog ${match[1]} ms`;
+  match = body.match(/^(.+) ×([\d,.]+)$/);
+  if (match) {
+    const name = translateCatalogName(match[1]);
+    if (name !== match[1]) return `${name} ×${match[2]}`;
+  }
+  match = body.match(/^查看(.+)配方$/);
+  if (match) return `View ${translateCatalogName(match[1])} recipe`;
+  match = body.match(/^查看(.+)$/);
+  if (match) return `View ${translateCatalogName(match[1])}`;
+  match = body.match(/^定位当前行星\s+(\d+)\s+条产线$/);
+  if (match) return `Locate ${match[1]} production line${match[1] === "1" ? "" : "s"} on this planet`;
+  match = body.match(/^已定位(.+)的(.+)产线\s+·\s+(\d+)\s+个生产节点$/);
+  if (match) return `Located ${translateCatalogName(match[2])} production on ${translateCatalogName(match[1])} · ${match[3]} node${match[3] === "1" ? "" : "s"}`;
+  match = body.match(/^定位产线\s+·\s+(\d+)$/);
+  if (match) return `Locate Production Line · ${match[1]}`;
+  match = body.match(/^定位(.+)$/);
+  if (match) return `Locate ${translateCatalogName(match[1])}`;
+  match = body.match(/^(\d+)\s+个生产节点\s+·\s+(\d+)\s+条上游线路$/);
+  if (match) return `${match[1]} production node${match[1] === "1" ? "" : "s"} · ${match[2]} upstream belt${match[2] === "1" ? "" : "s"}`;
+  match = body.match(/^其他行星\s+(\d+)$/);
+  if (match) return `${match[1]} other planet${match[1] === "1" ? "" : "s"}`;
+  match = body.match(/^(\d+)\s+条产线$/);
+  if (match) return `${match[1]} production line${match[1] === "1" ? "" : "s"}`;
+  match = body.match(/^递归加工\s+(\d+)\s+段$/);
+  if (match) return `${match[1]} recursive stage${match[1] === "1" ? "" : "s"}`;
+  match = body.match(/^(.+)，施工库存\s+(\d+)$/);
+  if (match) return `${translateCatalogName(match[1])}, Construction Inventory ${match[2]}`;
+  match = body.match(/^返还模块\s+×(\d+)(?:\s+·\s+(.+)\s+×(\d+))?$/);
+  if (match) return `Returns module ×${match[1]}${match[2] ? ` · ${translateCatalogName(match[2])} ×${match[3]}` : ""}`;
+  match = body.match(/^(.+)全部执行中\s+·\s+舰队容量瓶颈\s+(\d+)\/(\d+)$/);
+  if (match) return `All ${translateCatalogName(match[1])} are active · Fleet bottleneck ${match[2]}/${match[3]}`;
+  match = body.match(/^当前获得功率仅支持\s+(\d+)x，(\d+)x\s+需要\s+(.+)$/);
+  if (match) return `Allocated power supports only ${match[1]}x; ${match[2]}x requires ${match[3]}`;
+  match = body.match(/^自动降档至\s+(\d+)x$/);
+  if (match) return `Automatically reduced to ${match[1]}x`;
+  match = body.match(/^全局模拟\s+(\d+)x$/);
+  if (match) return `Global simulation ${match[1]}x`;
+  match = body.match(/^入库\s+(.+)$/);
+  if (match) return `Store ${translateCatalogName(match[1])}`;
+  match = body.match(/^加工\s+(.+)$/);
+  if (match) return `Process ${translateCatalogName(match[1])}`;
+  match = body.match(/^递归检查\s+(.+)$/);
+  if (match) return `Checking recursive chain for ${translateCatalogName(match[1])}`;
+  match = body.match(/^已回退：(.+)$/);
+  if (match) return `Fallback: ${match[1]}`;
+  match = body.match(/^打开(.+)星图$/);
+  if (match) return `Open ${translateCatalogName(match[1])} on the star map`;
+  match = body.match(/^前往(.+)$/);
+  if (match) return `Travel to ${translateCatalogName(match[1])}`;
+  match = body.match(/^取出(.+)$/);
+  if (match) return `Take out ${translateCatalogName(match[1])}`;
+  match = body.match(/^切换行星，当前(.+)$/);
+  if (match) return `Switch planet; current: ${translateCatalogName(match[1])}`;
+  match = body.match(/^供电效率\s+(\d+)%$/);
+  if (match) return `Power efficiency ${match[1]}%`;
+  match = body.match(/^打开警报，当前\s+(\d+)\s+条$/);
+  if (match) return `Open alerts; ${match[1]} current`;
+  match = body.match(/^物流周期\s+(.+)$/);
+  if (match) return `Logistics cycle: ${translatedTrimmed(match[1])}`;
+  match = body.match(/^开始研究：(.+)$/);
+  if (match) return `Start research: ${translateCatalogName(match[1])}`;
+  match = body.match(/^(.+)预设$/);
+  if (match) return `${translatedTrimmed(match[1])} Presets`;
+  match = body.match(/^进入(.+)$/);
+  if (match) return `Enter ${translateCatalogName(match[1])}`;
+  match = body.match(/^(.+)工业环境$/);
+  if (match) return `${translateCatalogName(match[1])} industrial environment`;
+  match = body.match(/^太阳能综合倍率：行星\s+([\d.]+)\s+×\s+恒星\s+([\d.]+)(?:\s+×\s+潮汐锁定\s+([\d.]+))?$/);
+  if (match) return `Total solar multiplier: Planet ${match[1]} × Star ${match[2]}${match[3] ? ` × Tidally Locked ${match[3]}` : ""}`;
+  match = body.match(/^消耗当前行星托盘补给勘探(.+)$/);
+  if (match) return `Supply exploration of ${translateCatalogName(match[1])} from the current planet tray`;
+  match = body.match(/^规划(.+)戴森球$/);
+  if (match) return `Plan the ${translateCatalogName(match[1])} Dyson Sphere`;
+  match = body.match(/^(.+)戴森球轨道图$/);
+  if (match) return `${translateCatalogName(match[1])} Dyson Sphere Orbit Diagram`;
+  match = body.match(/^拿取(.+)$/);
+  if (match) return `Pick up ${translateCatalogName(match[1])}`;
+  match = body.match(/^切换到(.+)$/);
+  if (match) return `Switch to ${translateCatalogName(match[1])}`;
+  match = body.match(/^部署(.+)$/);
+  if (match) return `Deploy ${translateCatalogName(match[1])}`;
+  match = body.match(/^制造(.+)$/);
+  if (match) return `Craft ${translateCatalogName(match[1])}`;
+  match = body.match(/^选择(.+)连接节点端口$/);
+  if (match) return `Select ${translateCatalogName(match[1])} to connect node ports`;
+  match = body.match(/^自动使用现有库存中的最高等级传送带，当前\s*(.+)$/);
+  if (match) return `Automatically use the highest belt tier in inventory; current: ${translateCatalogName(match[1])}`;
+  match = body.match(/^一键合成上游材料并制造(.+) · 消耗(.+)$/);
+  if (match) return `Craft upstream materials and build ${translateCatalogName(match[1])} · Consumes ${translateMaterialList(match[2])}`;
+  match = body.match(/^缺口 (.+)$/);
+  if (match) return `Missing: ${translateMaterialList(match[1])}`;
+  match = body.match(/^递归合成 · 实际消耗 (.+)$/);
+  if (match) return `Recursive crafting · Actual cost: ${translateMaterialList(match[1])}`;
+  match = body.match(/^(\d+) 批 · 实际产出 ×(\d+)$/);
+  if (match) return `${match[1]} batch${match[1] === "1" ? "" : "es"} · Actual output ×${match[2]}`;
+  match = body.match(/^批次 · (.+)$/);
+  if (match) return `Batches · ${translateCatalogName(match[1])}`;
+  match = body.match(/^科技：(.+)$/);
+  if (match) return translateRequirementList(body);
+  match = body.match(/^储量\s+(.+)\s+\/\s+(.+)\s+·\s+(.+)$/);
+  if (match) return `Reserves ${translateChineseCompactNumbers(match[1])} / ${translateChineseCompactNumbers(match[2])} · ${match[3]}`;
+  match = body.match(/^(.+)单种物资上限$/);
+  if (match) return `${translateCatalogName(match[1])} Per-item Tray Limit`;
+  match = body.match(/^(.+)施工库存$/);
+  if (match) return `${translateCatalogName(match[1])} Construction Inventory`;
+  match = body.match(/^库存 ×(\d+)$/);
+  if (match) return `Inventory ×${match[1]}`;
+  match = body.match(/^(.+) · 母星工厂区$/);
+  if (match) return `${translateCatalogName(match[1])} · Homeworld Factory Zone`;
+  match = body.match(/^基础操作 · 渐进教学\s+(\d+)\/(\d+)$/);
+  if (match) return `Basic Controls · Guided Tutorial ${match[1]}/${match[2]}`;
+  match = body.match(/^需要科技：(.+)$/);
+  if (match) return `Requires technology: ${translateCatalogName(match[1])}`;
+  match = body.match(/^需要完成(.+)$/);
+  if (match) return `Requires ${translateCatalogName(match[1])}`;
+  match = body.match(/^(.+) · 稀有 (.+)$/);
+  if (match) return `${translateNameList(match[1])} · Rare: ${translateNameList(match[2])}`;
+  match = body.match(/^· 稀有 (.+)$/);
+  if (match) return `· Rare: ${translateNameList(match[1])}`;
+  match = body.match(/^(.+) · 宜 (.+)$/);
+  if (match) return `${translateCatalogName(match[1])} · Best for ${translatedTrimmed(match[2])}`;
+  match = body.match(/^(\d[\d,.]*)\s*设备$/);
+  if (match) return `${match[1]} facilities`;
+  match = body.match(/^(\d[\d,.]*)\s*颗殖民行星$/);
+  if (match) return `${match[1]} colonized planet${match[1] === "1" ? "" : "s"}`;
+  match = body.match(/^(\d[\d,.]*)\s*台可用$/);
+  if (match) return `${match[1]} available`;
+  match = body.match(/^(\d[\d,.]*)\s*帆$/);
+  if (match) return `${match[1]} sails`;
+  match = body.match(/^(\d+(?:\.\d+)?)\s*光年$/);
+  if (match) return `${match[1]} ly`;
+  match = body.match(/^(\d+)%\s*主线完成$/);
+  if (match) return `${match[1]}% campaign complete`;
+  match = body.match(/^(\d[\d,.]*)\/种$/);
+  if (match) return `${match[1]} per item`;
+  match = body.match(/^(.+)\s+([\d,.]+)$/);
+  if (match) {
+    const name = translateCatalogName(match[1]);
+    if (name !== match[1]) return `${name} ${match[2]}`;
+  }
+  match = body.match(/^(.+) · (\d+) 分钟 · 科技 (\d+)$/);
+  if (match) return `${translateCatalogName(match[1])} · ${match[2]} min · Technology ${match[3]}`;
+  match = body.match(/^(.+) · 科技 (\d+)$/);
+  if (match) return `${match[1]} · Technology ${match[2]}`;
+  match = body.match(/^(\d+) 个恢复点$/);
+  if (match) return `${match[1]} recovery points`;
+  match = body.match(/^层级\s+(\d+)$/);
+  if (match) return `Tier ${match[1]}`;
+  match = body.match(/^前置：(.+)$/);
+  if (match) return `Prerequisites: ${match[1].split("、").map(translateCatalogName).join(", ")}`;
+  match = body.match(/^(\d+)\s*\/\s*(\d+)\s*矩阵$/);
+  if (match) return `${match[1]} / ${match[2]} matrices`;
+  match = body.match(/^(\d+)\s*项$/);
+  if (match) return `${match[1]} entries`;
+  match = body.match(/^(\d+)\s*种生产方式$/);
+  if (match) return `${match[1]} production method${match[1] === "1" ? "" : "s"}`;
+  match = body.match(/^(.+)\s+\+1\s+高阶$/);
+  if (match) return `${translateCatalogName(match[1])} +1 advanced tier`;
+  match = body.match(/^(\d+(?:\.\d+)?)×\s*设备速度\s*·\s*(\d+(?:\.\d+)?)\s*批\/min$/);
+  if (match) return `${match[1]}× facility speed · ${match[2]} batches/min`;
+  if (body.includes("、")) {
+    const list = translateNameList(body);
+    if (!/[\u3400-\u9fff]/.test(list)) return list;
+  }
+  match = body.match(/^(.+)\s+\/\s+(.+)$/);
+  if (match) {
+    const left = translateCatalogName(match[1]);
+    const right = translateCatalogName(match[2]);
+    if (left !== match[1] || right !== match[2]) return `${left} / ${right}`;
+  }
+  match = body.match(/^(\d+)\s*\/\s*(\d+)\s*·\s*(.+)$/);
+  if (match) return `${match[1]} / ${match[2]} · ${translatedTrimmed(match[3])}`;
+  match = body.match(/^(.+)（Space）$/);
+  if (match) return `${translatedTrimmed(match[1])} (Space)`;
+  match = body.match(/^(\d+)\s*点$/);
+  if (match) return `${match[1]} pts`;
+  match = body.match(/^(\d+(?:\.\d+)?)\s*秒$/);
+  if (match) return `${match[1]} sec`;
+  match = body.match(/^(\d+(?:\.\d+)?)\s*项体验更新$/);
+  if (match) return `${match[1]} experience updates`;
+  match = body.match(/^([\d,.]+(?:e[+-]?\d+)?)\s*分$/i);
+  if (match) return `${match[1]} pts`;
+  match = body.match(/^([\d.]+(?:万|亿|兆|京|垓|秭|穰|沟|涧|正|载))\s*分$/);
+  if (match) return `${translateChineseCompactNumbers(match[1])} pts`;
+  const compact = translateChineseCompactNumbers(body);
+  return compact !== body && !/[\u3400-\u9fff]/.test(compact) ? compact : body;
+}
+
+export function translateLegacyText(source: string, locale: AppLocale): string {
+  if (locale !== "en" || !source) return source;
+  const leading = source.match(/^\s*/)?.[0] ?? "";
+  const trailing = source.match(/\s*$/)?.[0] ?? "";
+  const body = source.slice(leading.length, source.length - trailing.length);
+  const direct = translatedTrimmed(body);
+  if (direct !== body) return `${leading}${direct}${trailing}`;
+
+  const dynamic = translateDynamicSystemText(body);
+  if (dynamic !== body) return `${leading}${dynamic}${trailing}`;
+
+  const runtime = body.match(/^(\d+) 小时 (\d+) 分$/);
+  if (runtime) return `${leading}${runtime[1]} h ${runtime[2]} min${trailing}`;
+  const minutes = body.match(/^(\d+) 分钟$/);
+  if (minutes) return `${leading}${minutes[1]} min${trailing}`;
+  const simulation = body.match(/^(\d+(?:\.\d+)?)× 模拟$/);
+  if (simulation) return `${leading}${simulation[1]}× Simulation${trailing}`;
+  const countLabel = body.match(/^(物品|配方|建筑|科技|数据) (\d+)$/);
+  if (countLabel) {
+    const labels: Record<string, string> = { 物品: "Items", 配方: "Recipes", 建筑: "Buildings", 科技: "Technology", 数据: "Data" };
+    return `${leading}${labels[countLabel[1]]} ${countLabel[2]}${trailing}`;
+  }
+  const slot = body.match(/^本地槽位 (\d+)$/);
+  if (slot) return `${leading}Local Slot ${slot[1]}${trailing}`;
+  const tech = body.match(/^科技 (\d+)$/);
+  if (tech) return `${leading}Technology ${tech[1]}${trailing}`;
+  const pausedProgress = body.match(/^(\d+)% · 暂停$/);
+  if (pausedProgress) return `${leading}${pausedProgress[1]}% · Paused${trailing}`;
+  const belt = body.match(/^传送带 Mk\.(I|II|III)$/);
+  if (belt) return `${leading}Conveyor Belt Mk.${belt[1]}${trailing}`;
+  return source;
+}
+
+type StoredValue = { source: string; translated: string };
+
+function ignoredElement(element: Element | null): boolean {
+  return !element || element.closest("script, style, noscript, textarea, [contenteditable='true'], [data-no-auto-translate]") !== null;
+}
+
+function translateTextNode(node: Text, locale: AppLocale, originals: WeakMap<Text, StoredValue>): void {
+  if (ignoredElement(node.parentElement)) return;
+  const current = node.data;
+  const previous = originals.get(node);
+  const source = previous && current === previous.translated ? previous.source : current;
+  const translated = translateLegacyText(source, locale);
+  if (locale === "zh-CN") {
+    if (current !== source) node.data = source;
+    originals.delete(node);
+    return;
+  }
+  if (translated !== source) {
+    if (current !== translated) node.data = translated;
+    originals.set(node, { source, translated });
+  }
+}
+
+function translateAttribute(element: Element, name: "title" | "aria-label" | "placeholder", locale: AppLocale, originals: WeakMap<Element, Map<string, StoredValue>>): void {
+  if (ignoredElement(element) || !element.hasAttribute(name)) return;
+  const current = element.getAttribute(name) ?? "";
+  const prior = originals.get(element)?.get(name);
+  const source = prior && current === prior.translated ? prior.source : current;
+  const translated = translateLegacyText(source, locale);
+  if (locale === "zh-CN") {
+    if (current !== source) element.setAttribute(name, source);
+    originals.get(element)?.delete(name);
+    return;
+  }
+  if (translated === source) return;
+  if (current !== translated) element.setAttribute(name, translated);
+  const attributes = originals.get(element) ?? new Map<string, StoredValue>();
+  attributes.set(name, { source, translated });
+  originals.set(element, attributes);
+}
+
+function translateSubtree(root: Node, locale: AppLocale, textOriginals: WeakMap<Text, StoredValue>, attributeOriginals: WeakMap<Element, Map<string, StoredValue>>): void {
+  const elementRoot = root.nodeType === Node.ELEMENT_NODE ? root as Element : root.parentElement;
+  if (!elementRoot || ignoredElement(elementRoot)) return;
+  const walker = document.createTreeWalker(elementRoot, NodeFilter.SHOW_TEXT);
+  let current: Node | null = walker.nextNode();
+  while (current) {
+    translateTextNode(current as Text, locale, textOriginals);
+    current = walker.nextNode();
+  }
+  const elements = [elementRoot, ...elementRoot.querySelectorAll("[title], [aria-label], [placeholder]")];
+  for (const element of elements) {
+    translateAttribute(element, "title", locale, attributeOriginals);
+    translateAttribute(element, "aria-label", locale, attributeOriginals);
+    translateAttribute(element, "placeholder", locale, attributeOriginals);
+  }
+}
+
+/**
+ * Temporary bridge for the legacy Chinese-first component tree. New surfaces should
+ * prefer explicit localized content, while this keeps all existing controls usable
+ * without changing persisted game data or cloning component state.
+ */
+export function LegacyTextTranslationBridge({ locale }: { locale: AppLocale }) {
+  useEffect(() => {
+    const textOriginals = new WeakMap<Text, StoredValue>();
+    const attributeOriginals = new WeakMap<Element, Map<string, StoredValue>>();
+    const apply = (root: Node = document.body) => translateSubtree(root, locale, textOriginals, attributeOriginals);
+    apply();
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type === "characterData") translateTextNode(record.target as Text, locale, textOriginals);
+        if (record.type === "attributes" && record.target instanceof Element && record.attributeName && ["title", "aria-label", "placeholder"].includes(record.attributeName)) {
+          translateAttribute(record.target, record.attributeName as "title" | "aria-label" | "placeholder", locale, attributeOriginals);
+        }
+        for (const node of record.addedNodes) apply(node);
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["title", "aria-label", "placeholder"] });
+    const unsubscribe = subscribeTranslationRegistry(() => apply());
+    return () => {
+      observer.disconnect();
+      unsubscribe();
+      if (locale === "en") translateSubtree(document.body, "zh-CN", textOriginals, attributeOriginals);
+    };
+  }, [locale]);
+  return null;
+}

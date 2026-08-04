@@ -3,7 +3,11 @@ import { expect, test, type Page } from "@playwright/test";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v1.0.0");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-01-v1.0.19");
+  });
+  const offlineReport = page.getByRole("dialog", { name: "离线结算报告" });
+  await page.addLocatorHandler(offlineReport, async () => {
+    await offlineReport.getByRole("button", { name: "确认结算" }).click();
   });
 });
 
@@ -30,9 +34,12 @@ test("building buffer presets and custom validation persist independently", asyn
   const operations = await openSettings(page, "desktop");
   const production = operations.locator(".settings-buffer-limit").filter({ hasText: "生产建筑缓存上限" });
   const logistics = operations.locator(".settings-buffer-limit").filter({ hasText: "仓储与物流建筑缓存上限" });
+  const belts = operations.locator(".settings-buffer-limit").filter({ hasText: "传送带转运额度上限" });
 
   await expect(production.getByRole("button", { name: "100万" })).toHaveAttribute("aria-pressed", "true");
   await expect(logistics.getByRole("button", { name: "100万" })).toHaveAttribute("aria-pressed", "true");
+  await expect(belts.getByRole("button", { name: "自定义" })).toHaveAttribute("aria-pressed", "true");
+  await expect(belts.getByLabel("传送带转运额度上限自定义值")).toHaveValue("100000000");
   await production.getByRole("button", { name: "1万", exact: true }).click();
   await logistics.getByRole("button", { name: "10万", exact: true }).click();
   await expect(production).toContainText("10,000/种");
@@ -60,7 +67,7 @@ test("building buffer presets and custom validation persist independently", asyn
   await operations.getByRole("tab", { name: "存档" }).click();
   await operations.getByRole("button", { name: "立即保存" }).click();
   const persisted = await page.evaluate(() => JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1")!).state.settings);
-  expect(persisted).toMatchObject({ productionBufferLimit: 100_000_000, logisticsBufferLimit: 100_000 });
+  expect(persisted).toMatchObject({ productionBufferLimit: 100_000_000, logisticsBufferLimit: 100_000, beltBufferLimit: 100_000_000 });
 });
 
 test("buffer controls fit desktop and both mobile settings from 80 to 200 percent font", async ({ page }) => {
@@ -68,7 +75,7 @@ test("buffer controls fit desktop and both mobile settings from 80 to 200 percen
     const operations = await openSettings(page, mode);
     const fontScale = operations.getByLabel("字体大小");
     const sections = operations.locator(".settings-buffer-limit");
-    await expect(sections).toHaveCount(3);
+    await expect(sections).toHaveCount(4);
     for (const scale of [80, 100, 125, 150, 200] as const) {
       await fontScale.getByRole("button", { name: `${scale}%` }).click();
       await expect(sections.first().getByRole("button", { name: "1万", exact: true })).toBeVisible();

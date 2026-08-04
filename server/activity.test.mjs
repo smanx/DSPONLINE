@@ -18,7 +18,7 @@ test("activity stays disabled without an explicit valid configuration", () => {
   assert.equal(normalizeActivityConfig({ ...fixture, globalTargets: { ...fixture.globalTargets, universe_matrix: 0 } }).enabled, false);
 });
 
-test("activity curve is deterministic, monotonic and freezes at the deadline", () => {
+test("activity curve freezes after its simulation phase while participation stays open", () => {
   const config = normalizeActivityConfig(fixture);
   assert.equal(config.endsAtMs - config.startsAtMs, ACTIVITY_DURATION_MS);
   for (const itemId of ACTIVITY_MATERIAL_IDS) {
@@ -33,7 +33,9 @@ test("activity curve is deterministic, monotonic and freezes at the deadline", (
   const deadline = getActivityPublicStatus(config, config.endsAtMs);
   const later = getActivityPublicStatus(config, config.endsAtMs + ACTIVITY_DURATION_MS);
   assert.deepEqual(later.globalDelivered, deadline.globalDelivered);
-  assert.equal(later.status, "ended");
+  assert.equal(deadline.status, "active");
+  assert.equal(later.status, "active");
+  assert.equal(later.openEnded, true);
 });
 
 test("completion checkpoints reach every target before the activity ends", () => {

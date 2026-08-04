@@ -8,7 +8,7 @@
 
 - [ ] `git status --short` 只包含准备公开的修改。
 - [ ] `npm run licenses:check`、类型检查、测试和生产构建通过。
-- [ ] 对完整 Git 历史运行 Gitleaks 或等效工具，不只扫描当前目录。
+- [x] 对完整 Git 历史运行 Gitleaks 或等效工具，不只扫描当前目录。
 - [ ] 确认没有 `.env`、私钥、keystore、数据库、备份、日志、玩家存档和测试报告被 Git 跟踪。
 - [ ] 任何曾经进入 Git 历史的真实凭据已经轮换；仅删除文件不算完成。
 - [ ] README 中的版本、构建命令、许可证和官方/社区边界与当前代码一致。
@@ -16,12 +16,12 @@
 
 ## 创建仓库后
 
-- [ ] 设置准确的仓库描述和 topics，不勾选与实际许可证冲突的开源声明。
+- [x] 设置准确的仓库描述和 topics，不勾选与实际许可证冲突的开源声明。
 - [x] 在 `package.json` 增加真实 `repository`、`homepage` 和 `bugs` URL，并在应用内提供源码地址。
-- [ ] 启用 branch protection，要求 `CI` 通过后才能合并到 `main`。
-- [ ] 启用 Dependabot alerts、security updates、secret scanning 和 push protection。
-- [ ] 启用 GitHub Private vulnerability reporting。
-- [ ] 限制 GitHub Actions 默认 token 为只读，只向确实需要的发布 job 授予额外权限。
+- [x] 启用 branch protection，要求 `verify` 通过后才能合并到 `main`。
+- [x] 启用 Dependabot alerts、security updates、secret scanning 和 push protection。
+- [x] 启用 GitHub Private vulnerability reporting。
+- [x] 限制 GitHub Actions 默认 token 为只读，只向确实需要的发布 job 授予额外权限。
 - [ ] 检查 Actions secrets 中只存在签名和发布所必需的值，并设置 environment protection。
 - [ ] 创建首个源码公开标签和 release，附构建 SHA、测试结果和许可证说明。
 

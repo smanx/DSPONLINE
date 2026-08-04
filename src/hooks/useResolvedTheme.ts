@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import type { ThemeMode } from "../game/types";
 
 export type ResolvedTheme = "dark" | "light";
@@ -10,7 +10,7 @@ function systemTheme(): ResolvedTheme {
 export function useResolvedTheme(mode: ThemeMode): ResolvedTheme {
   const [resolved, setResolved] = useState<ResolvedTheme>(() => mode === "system" ? systemTheme() : mode);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const media = window.matchMedia?.("(prefers-color-scheme: light)");
     const apply = () => {
       const next = mode === "system" ? systemTheme() : mode;

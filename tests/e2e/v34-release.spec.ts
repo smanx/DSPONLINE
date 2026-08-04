@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-07-24-v1.0.0");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-01-v1.0.19");
   });
 });
 
@@ -58,14 +58,10 @@ test("desktop construction closes the micro-black-hole and time-warp interaction
   await expect(inspector).toContainText("输入物资将被永久销毁且无法找回");
   await expect(inspector.locator(".black-hole-port-list > div")).toHaveCount(3);
 
-  let confirmations = 0;
-  page.on("dialog", async (dialog) => {
-    confirmations += 1;
-    await dialog.accept();
-  });
   await inspector.getByRole("button", { name: "启动微型黑洞" }).click();
+  await page.locator(".game-dialog").getByRole("button", { name: "继续确认" }).click();
+  await page.locator(".game-dialog").getByRole("button", { name: "确认启动" }).click();
   await expect(inspector.getByRole("button", { name: "暂停销毁" })).toBeVisible();
-  expect(confirmations).toBe(2);
 
   await timeWarpDock.locator(".construction-item").click();
   await page.locator(".react-flow__pane").click({ position: { x: 1050, y: 360 } });
@@ -76,11 +72,12 @@ test("desktop construction closes the micro-black-hole and time-warp interaction
   const exactPower = inspector.locator(".power-value").first();
   await expect(exactPower).toHaveAttribute("aria-label", / kW$/);
   await exactPower.click();
-  await expect(exactPower.getByRole("tooltip")).toBeVisible();
+  const exactPowerTooltip = page.getByRole("tooltip").filter({ hasText: "kW" });
+  await expect(exactPowerTooltip).toBeVisible();
   await inspector.getByRole("button", { name: "倍率加一" }).click();
   await expect(inspector.getByLabel("时间扭曲请求倍率").locator("input")).toHaveValue("6");
-  await expect(exactPower.getByRole("tooltip")).toBeHidden();
-  await expect(inspector).toContainText("离线收益与活动倒计时始终使用真实时间");
+  await expect(exactPowerTooltip).toBeHidden();
+  await expect(inspector).toContainText("离线收益与活动时钟始终使用真实时间");
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.locator(".react-flow__pane").hover({ position: { x: 24, y: 24 } });
   const nodePower = timeWarp.locator(".power-value").first();
@@ -106,7 +103,7 @@ test("next mobile construction finds both v1.0 megastructures at 200 percent fon
     await search.fill("微型黑洞");
     await expect(build).toContainText("微型黑洞连接装置");
     await search.fill("时间扭曲");
-    const result = build.getByRole("button", { name: /时间扭曲装置.*部署/ });
+    const result = build.getByRole("button", { name: /时间扭曲装置.*施工库存/ });
     await result.scrollIntoViewIfNeeded();
     await expect(result).toBeVisible();
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);

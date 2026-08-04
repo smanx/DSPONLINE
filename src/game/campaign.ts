@@ -384,7 +384,7 @@ function canApplyRewards(state: GameState, rewards: CampaignReward[]): boolean {
     itemTotals.set(reward.itemId, (itemTotals.get(reward.itemId) ?? 0) + Math.max(0, Math.floor(reward.amount)));
   }
   const rawLimit = state.planetTrayItemLimits?.[state.activePlanetId];
-  const limit = Number.isFinite(rawLimit) ? Math.max(1_000, Math.min(1_000_000, Math.floor(rawLimit))) : 1_000_000;
+  const limit = Number.isFinite(rawLimit) ? Math.max(1_000, Math.min(100_000_000, Math.floor(rawLimit))) : 1_000_000;
   return [...itemTotals].every(([itemId, amount]) => Math.floor(state.tray[itemId] ?? 0) + amount <= limit);
 }
 

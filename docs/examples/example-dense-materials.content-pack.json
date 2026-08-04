@@ -1,0 +1,49 @@
+{
+  "formatVersion": 2,
+  "id": "example_dense_materials_pack",
+  "name": "致密材料示例包",
+  "version": "1.0.0",
+  "author": "你的名字",
+  "description": "新增致密合金板、对应科技和制造配方。",
+  "dependencies": [],
+  "items": [
+    {
+      "id": "example_dense_plate",
+      "name": "致密合金板",
+      "symbol": "DP",
+      "color": "#4cc9a8",
+      "kind": "solid",
+      "description": "由铁块和铜块压制成的高密度结构材料。"
+    }
+  ],
+  "buildings": [],
+  "recipes": [
+    {
+      "id": "example_dense_plate_recipe",
+      "name": "致密合金板",
+      "buildingId": "assembling_machine_mk1",
+      "duration": 4,
+      "requiredTechId": "example_dense_materials",
+      "inputs": [
+        { "itemId": "iron_ingot", "amount": 2 },
+        { "itemId": "copper_ingot", "amount": 1 }
+      ],
+      "outputs": [
+        { "itemId": "example_dense_plate", "amount": 1 }
+      ]
+    }
+  ],
+  "technologies": [
+    {
+      "id": "example_dense_materials",
+      "name": "致密材料学",
+      "prerequisites": ["electromagnetic_matrix"],
+      "tier": 2,
+      "summary": "研究基础金属的复合压制工艺。",
+      "costs": [
+        { "itemId": "electromagnetic_matrix", "amount": 10 }
+      ],
+      "unlocks": ["致密合金板配方"]
+    }
+  ]
+}

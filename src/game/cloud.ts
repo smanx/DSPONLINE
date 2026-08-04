@@ -1,5 +1,7 @@
 import type { LeaderboardCategoryId, LeaderboardMetrics } from "./leaderboard";
 import { apiFetch } from "./apiTransport";
+import { inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
+import { getDesktopBridge } from "../desktop";
 
 export const CLOUD_TOKEN_STORAGE_KEY = "dsp-idle-network.cloud-token.v1";
 export const CLOUD_SYNC_STORAGE_KEY = "dsp-idle-network.cloud-sync.v1";
@@ -7,6 +9,9 @@ export const CLOUD_AUTO_SYNC_STORAGE_KEY = "dsp-idle-network.cloud-auto-sync.v1"
 export const CLOUD_AUTO_SYNC_INTERVAL_MS = 10 * 60 * 1000;
 export const CLOUD_SAVE_SLOTS = ["main", "1", "2", "3"] as const;
 export type CloudSaveSlot = typeof CLOUD_SAVE_SLOTS[number];
+
+let inMemoryCloudToken: string | null = null;
+let preferInMemoryCloudToken = false;
 
 export interface CloudUser {
   id: string;
@@ -17,6 +22,7 @@ export interface CloudUser {
   emailVerified: boolean;
   emailVerifiedAt: number | null;
   passwordChangedAt: number;
+  leaderboardVisible: boolean;
 }
 
 export interface CloudAccountSession {
@@ -62,6 +68,8 @@ export interface CloudSaveSummary {
   structurePoints: number;
   uploadedWhiteMatrix: number;
   stateChecksum: string | null;
+  computedStateChecksum?: string | null;
+  integrity?: "valid" | "invalid";
 }
 
 export interface CloudSyncMarker {
@@ -139,6 +147,7 @@ export interface CloudPublicStatus {
     revision?: string | null;
     startsAtMs?: number;
     endsAtMs?: number;
+    openEnded?: boolean;
     personalTargets?: Record<"universe_matrix" | "solar_sail" | "small_carrier_rocket" | "antimatter_fuel_rod", number>;
     globalTargets?: Record<"universe_matrix" | "solar_sail" | "small_carrier_rocket" | "antimatter_fuel_rod", number>;
     globalDelivered?: Record<"universe_matrix" | "solar_sail" | "small_carrier_rocket" | "antimatter_fuel_rod", number>;
@@ -162,15 +171,29 @@ function apiBase(allowInsecurePublicRead = false): string | null {
 }
 
 export function getCloudToken(): string | null {
-  try { return window.localStorage.getItem(CLOUD_TOKEN_STORAGE_KEY); } catch { return null; }
+  try {
+    const storedToken = window.localStorage.getItem(CLOUD_TOKEN_STORAGE_KEY);
+    if (preferInMemoryCloudToken) {
+      if (storedToken === inMemoryCloudToken) preferInMemoryCloudToken = false;
+      return inMemoryCloudToken;
+    }
+    inMemoryCloudToken = storedToken;
+    return storedToken;
+  } catch {
+    return inMemoryCloudToken;
+  }
 }
 
 function setCloudToken(token: string | null): void {
+  inMemoryCloudToken = token;
   try {
     if (token) window.localStorage.setItem(CLOUD_TOKEN_STORAGE_KEY, token);
     else window.localStorage.removeItem(CLOUD_TOKEN_STORAGE_KEY);
+    preferInMemoryCloudToken = false;
   } catch {
-    // A non-persistent session can still be used until the page is closed.
+    // Keep the current session usable without allowing a stale persisted token
+    // to override an explicit login or logout while storage is unavailable.
+    preferInMemoryCloudToken = true;
   }
 }
 
@@ -207,6 +230,7 @@ function normalizedCloudSaveSlots(
 
 export function summarizeCloudPayload(payload: string): CloudSaveSummary | null {
   try {
+    const integrity = inspectSaveEnvelopeChecksum(payload);
     const parsed = JSON.parse(payload) as Record<string, any>;
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities)) return null;
@@ -220,6 +244,8 @@ export function summarizeCloudPayload(payload: string): CloudSaveSummary | null 
       structurePoints: typeof state.dysonSphere?.structurePoints === "number" ? Math.max(0, Math.floor(state.dysonSphere.structurePoints)) : 0,
       uploadedWhiteMatrix: typeof state.totalProduced?.universe_matrix === "number" ? Math.max(0, Math.floor(state.totalProduced.universe_matrix)) : 0,
       stateChecksum: typeof parsed.checksum === "string" ? parsed.checksum : null,
+      computedStateChecksum: integrity.computedChecksum,
+      integrity: integrity.status === "valid" ? "valid" : "invalid",
     };
   } catch {
     return null;
@@ -326,7 +352,7 @@ async function cloudRequest<T>(path: string, options: RequestInit = {}, authenti
 
 export async function resumeCloudSession(): Promise<CloudSession> {
   try {
-    const health = await cloudRequest<{ ok: boolean; mailProvider?: string }>("/health");
+    const health = await cloudRequest<{ ok: boolean; mailProvider?: string }>("/health", {}, false, true);
     const mailAvailable = Boolean(health.mailProvider && health.mailProvider !== "disabled");
     const token = getCloudToken();
     if (!token) return { status: "anonymous", user: null, cloudSave: null, mailAvailable, message: null };
@@ -432,8 +458,50 @@ function cloudSaveQuery(slot: CloudSaveSlot, revision?: number): string {
 }
 
 export async function uploadCloudSave(payload: string, expectedRevision: number, slot: CloudSaveSlot = "main"): Promise<CloudSaveMetadata> {
-  const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save${cloudSaveQuery(slot)}`, { method: "PUT", body: JSON.stringify({ payload, expectedRevision }) }, true);
+  const integrity = inspectSaveEnvelopeChecksum(payload);
+  if (integrity.status !== "valid") {
+    throw new CloudApiError("云存档上传前完整性自检失败，请先在存档管理中导出备份并使用救援入口", 0, {
+      code: "SAVE_INTEGRITY_INVALID",
+      recordedChecksum: integrity.recordedChecksum,
+      computedChecksum: integrity.computedChecksum,
+    });
+  }
+  const rawBody = JSON.stringify({ payload, expectedRevision });
+  const compressed = await compressCloudRequestBody(rawBody);
+  const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save${cloudSaveQuery(slot)}`, {
+    method: "PUT",
+    body: compressed?.body ?? rawBody,
+    ...(compressed ? { headers: compressed.headers } : {}),
+  }, true);
   return { ...result.cloudSave, slot };
+}
+
+async function compressCloudRequestBody(rawBody: string): Promise<{ body: Blob; headers: Record<string, string> } | null> {
+  // The Electron bridge accepts JSON strings only. Browser fetch can send the
+  // gzip stream directly, preserving compatibility with existing desktop
+  // clients while reducing large end-game uploads substantially.
+  if (getDesktopBridge() || typeof CompressionStream === "undefined" || typeof TextEncoder === "undefined") return null;
+  const encoder = new TextEncoder();
+  const rawBytes = encoder.encode(rawBody);
+  if (rawBytes.byteLength < 256 * 1024) return null;
+  try {
+    const compressor = new CompressionStream("gzip");
+    const writer = compressor.writable.getWriter();
+    await writer.write(rawBytes);
+    await writer.close();
+    const compressed = await new Response(compressor.readable).arrayBuffer();
+    if (compressed.byteLength >= rawBytes.byteLength) return null;
+    return {
+      body: new Blob([compressed], { type: "application/json" }),
+      headers: {
+        "content-encoding": "gzip",
+        "x-dsp-save-original-bytes": String(rawBytes.byteLength),
+        "x-dsp-save-compressed-bytes": String(compressed.byteLength),
+      },
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function downloadCloudSave(revision?: number, slot: CloudSaveSlot = "main"): Promise<CloudSave | null> {
@@ -452,7 +520,7 @@ export async function restoreCloudSaveRevision(revision: number, expectedRevisio
 }
 
 export async function fetchCloudLeaderboard(category: LeaderboardCategoryId, seasonId: string): Promise<CloudLeaderboardEntry[]> {
-  const result = await cloudRequest<{ entries: CloudLeaderboardEntry[] }>(`/leaderboard?category=${encodeURIComponent(category)}&seasonId=${encodeURIComponent(seasonId)}`);
+  const result = await cloudRequest<{ entries: CloudLeaderboardEntry[] }>(`/leaderboard?category=${encodeURIComponent(category)}&seasonId=${encodeURIComponent(seasonId)}`, {}, false, true);
   return result.entries;
 }
 
@@ -461,8 +529,16 @@ export async function fetchCloudPublicStatus(): Promise<CloudPublicStatus> {
   return cloudRequest<CloudPublicStatus>("/public-status", {}, false, true);
 }
 
-export async function submitCloudLeaderboard(metrics: LeaderboardMetrics, seasonId: string): Promise<void> {
-  await cloudRequest("/leaderboard", { method: "POST", body: JSON.stringify({ metrics, seasonId }) }, true);
+export async function submitCloudLeaderboard(seasonId: string): Promise<void> {
+  await cloudRequest("/leaderboard", { method: "POST", body: JSON.stringify({ seasonId }) }, true);
+}
+
+export async function setCloudLeaderboardVisibility(visible: boolean): Promise<CloudUser> {
+  const result = await cloudRequest<{ user: CloudUser }>("/leaderboard/visibility", {
+    method: "POST",
+    body: JSON.stringify({ visible }),
+  }, true);
+  return result.user;
 }
 
 export async function sendCloudFeedback(kind: string, message: string, diagnostics: Record<string, unknown>): Promise<string> {

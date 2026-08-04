@@ -1,4 +1,5 @@
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, getSmoothStepPath, type ConnectionLineComponentProps, type Edge, type EdgeProps } from "@xyflow/react";
+import { memo } from "react";
 import type { BeltRouteMode, ItemId } from "../game/types";
 import type { BeltHealth } from "../game/network";
 
@@ -57,11 +58,12 @@ function controlledOrthogonalPath(sourceX: number, sourceY: number, targetX: num
 }
 
 export interface FactoryEdgeData extends Record<string, unknown> {
+  visualSignature: string;
   itemId: ItemId;
   itemName: string;
   itemSymbol: string;
   color: string;
-  tier: 1 | 2 | 3;
+  tier: number;
   flow: number;
   capacity: number;
   stackSize: 1 | 2 | 4;
@@ -202,4 +204,14 @@ export function FactoryEdge({
   );
 }
 
-export const EDGE_TYPES = { factory: FactoryEdge };
+const MemoFactoryEdge = memo(FactoryEdge, (previous, next) =>
+  previous.id === next.id &&
+  previous.selected === next.selected &&
+  previous.sourceX === next.sourceX &&
+  previous.sourceY === next.sourceY &&
+  previous.targetX === next.targetX &&
+  previous.targetY === next.targetY &&
+  previous.data?.visualSignature === next.data?.visualSignature,
+);
+
+export const EDGE_TYPES = { factory: MemoFactoryEdge };

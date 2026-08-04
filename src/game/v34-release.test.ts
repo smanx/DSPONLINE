@@ -9,6 +9,7 @@ import {
   getMaximumStableTimeWarpMultiplier,
   getStationFleetDiagnostic,
   getTimeWarpRequiredPowerKw,
+  installMiner,
   placeBuilding,
   removeEntity,
   setBlackHolePaused,
@@ -167,6 +168,38 @@ describe("v34 gameplay release", () => {
     expect(state.timeWarp).toMatchObject({ controllerEntityId: null, enabled: false, effectiveMultiplier: 4 });
   });
 
+  it("applies 4x, 5x and 6x to real production for 60 wall seconds without accelerating activity time", () => {
+    const produced: number[] = [];
+    for (const multiplier of [4, 5, 6]) {
+      let state = createInitialState();
+      state.settings.resourceMode = "infinite";
+      state.settings.simulationSpeed = 4;
+      state.construction.mining_machine = 1;
+      state.construction.wind_turbine = 40_000;
+      state = installMiner(state, "vein_iron");
+      state = placeBuilding(state, "wind_turbine", { x: 0, y: -200 }, 40_000);
+      if (multiplier > 4) {
+        state = placeOne(state, "time_warp_device", 400);
+        state = setTimeWarpRequestedMultiplier(state, multiplier);
+        state = setTimeWarpEnabled(state, true);
+      }
+      configureActivity(state, 1_000, 0, 1_000_000);
+      state = advanceSimulationBudget(state, 0.1, 0.1);
+      expect(getEffectiveSimulationMultiplier(state)).toBe(multiplier);
+      const vein = state.entities.find((entity) => entity.id === "vein_iron")!;
+      vein.outputs.iron_ore = 0;
+      state.totalProduced.iron_ore = 0;
+      state.elapsedSeconds = 0;
+      state.endgame.constructionActivity.activityClockMs = 1_000;
+
+      state = advanceSimulationBudget(state, multiplier * 60, 60);
+      produced.push(state.entities.find((entity) => entity.id === "vein_iron")!.outputs.iron_ore ?? 0);
+      expect(state.elapsedSeconds).toBe(multiplier * 60);
+      expect(state.endgame.constructionActivity.activityClockMs).toBe(61_000);
+    }
+    expect(produced).toEqual([120, 150, 180]);
+  });
+
   it("skips an unavailable supply and fills one demand from multiple peers in the same step", () => {
     let state = createInitialState();
     state.construction.wind_turbine = 4;
@@ -220,7 +253,7 @@ describe("v34 gameplay release", () => {
     expect(diagnostic.vessels.blockerLabel).toContain("10 艘可出发");
   });
 
-  it("migrates a v33 state to v34 without changing activity, routes, inventory or Dyson progress", () => {
+  it("migrates a v33 state through v34 to current v35 without changing activity, routes, inventory or Dyson progress", () => {
     const current = createInitialState();
     current.tray.processor = 321;
     configureActivity(current, 5_000, 1_000, 10_000);
@@ -241,7 +274,7 @@ describe("v34 gameplay release", () => {
     }
 
     const migrated = migrateGame(legacy)!;
-    expect(migrated.version).toBe(34);
+    expect(migrated.version).toBe(46);
     expect(migrated.tray.processor).toBe(321);
     expect(migrated.dysonPlans.helios).toMatchObject({ structurePoints: 17, shellSails: 9 });
     expect(migrated.endgame.constructionActivity.personalDelivered.universe_matrix).toBe(12);

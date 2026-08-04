@@ -4,6 +4,7 @@ import { advanceSimulation, createInitialState } from "./engine";
 import {
   PRODUCTION_REFRESH_PROFILES,
   createAutomaticRefreshState,
+  getWorkDisplayProgress,
   interpolateProductionProgress,
   resolveProductionRefreshInterval,
   updateAutomaticRefreshState,
@@ -40,6 +41,15 @@ describe("production refresh policy", () => {
     expect(input.snapshotProgress).toBe(0.25);
     expect(interpolateProductionProgress({ ...input, active: false })).toBe(0.25);
     expect(interpolateProductionProgress({ snapshotProgress: 0.9, elapsedMs: 400, cyclesPerSecond: 0.5, active: true })).toBeCloseTo(0.1);
+  });
+
+  it("uses one display progress value for cycle, step, level and paused semantics", () => {
+    const base = { semanticKey: "machine:recipe", snapshotProgress: 0.25, publishedAtMs: 1_000, cyclesPerSecond: 0.5, effectiveSimulationMultiplier: 4, active: true };
+    expect(getWorkDisplayProgress({ ...base, mode: "cycle" }, 1_250)).toBeCloseTo(0.75);
+    expect(getWorkDisplayProgress({ ...base, mode: "step" }, 1_500)).toBeCloseTo(0.25);
+    expect(getWorkDisplayProgress({ ...base, mode: "level" }, 9_000)).toBe(0.25);
+    expect(getWorkDisplayProgress({ ...base, mode: "cycle", active: false }, 9_000)).toBe(0.25);
+    expect(getWorkDisplayProgress({ ...base, mode: "indeterminate" }, 9_000)).toBe(0.25);
   });
 
   it("keeps the one-hour simulation hash identical for every visual refresh profile", () => {

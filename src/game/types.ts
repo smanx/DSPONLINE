@@ -213,7 +213,15 @@ export type TechId =
   | "vertical_launching_silo"
   | "dyson_shell"
   | "micro_black_hole_containment"
-  | "time_warp_engineering";
+  | "time_warp_engineering"
+  | "orbital_elevator_engineering"
+  | "orbital_multi_cargo_bus"
+  | "orbital_energy_recovery"
+  | "system_space_station_engineering"
+  | "orbital_modular_assembly"
+  | "autonomous_station_construction"
+  | "unified_system_logistics_protocol"
+  | "quantum_logistics_network";
 
 export type BuildingId =
   | "wind_turbine"
@@ -252,15 +260,17 @@ export type BuildingId =
   | "construction_center"
   | "galactic_material_exporter"
   | "micro_black_hole_connector"
-  | "time_warp_device";
+  | "time_warp_device"
+  | "space_station_construction_launcher";
 
-export type BeltTier = 1 | 2 | 3;
+/** Core tiers are 1..3; declarative content packs may register tiers 4..32. */
+export type BeltTier = number;
 export type SorterTier = 1 | 2 | 3;
 export type BeltRouteMode = "bezier" | "auto" | "upper" | "lower" | "manual";
 export type DefaultBeltRouteMode = Exclude<BeltRouteMode, "manual">;
 export type ProliferatorTier = 1 | 2 | 3;
 export type ProliferatorMode = "normal" | "extra" | "speed";
-export type ConveyorBeltId = "conveyor_belt_mk1" | "conveyor_belt_mk2" | "conveyor_belt_mk3";
+export type ConveyorBeltId = string;
 export type SorterId = "sorter_mk1" | "sorter_mk2" | "sorter_mk3";
 export type ConstructionId = BuildingId | ConveyorBeltId | SorterId;
 
@@ -289,6 +299,7 @@ export type RecipeId =
   | "logistics_drone"
   | "logistics_vessel"
   | "space_warper"
+  | "space_warper_from_gravity_matrix"
   | "accumulator"
   | "accumulator_charge"
   | "accumulator_discharge"
@@ -350,6 +361,12 @@ export type StationMinimumLoad = 0.1 | 0.25 | 0.5 | 1;
 export type StationLogisticsMode = "supply" | "demand" | "storage";
 export type StationLogisticsScope = "local" | "remote";
 export type LogisticsPriority = 0 | 1 | 2;
+export type MaterialDeliverySlotMode = "auto" | "manual" | "disabled";
+
+export interface MaterialDeliverySlot {
+  itemId: ItemId | null;
+  mode: MaterialDeliverySlotMode;
+}
 export type CargoStackSize = 1 | 2 | 4;
 export type EnergyMode = "auto" | "charge" | "discharge";
 export type PowerGridId = "grid-a" | "grid-b" | "grid-c";
@@ -380,6 +397,107 @@ export type GalacticDispatchThrottle = 0.25 | 0.5 | 1;
 export type DecimalIntegerString = string;
 export type GalacticExportInputMode = "legacy-network" | "building";
 export type ActivityMaterialId = "universe_matrix" | "solar_sail" | "small_carrier_rocket" | "antimatter_fuel_rod";
+export type StationTier = 1 | 2;
+export type StationOperationMode = "legacy" | "elevator";
+export type StationModeTransition = "to-elevator" | "to-legacy" | null;
+export type SpaceStationStatus = "not-started" | "building" | "operational";
+export type SpaceStationOutputPortIndex = 0 | 1 | 2 | 3 | 4;
+
+/**
+ * Quantum logistics is deliberately independent from the deprecated space
+ * station/elevator mode. A tower is upgraded first, then explicitly attached
+ * to the shared network.
+ */
+export type QuantumStationMode = "legacy" | "transitioning" | "quantum";
+
+export interface QuantumBridgeContract {
+  id: string;
+  itemId: ItemId;
+  sourceStationId: string;
+  targetStationId: string;
+  cargo: DecimalIntegerString;
+  remainingCargo: DecimalIntegerString;
+  arriveAtSecond: number;
+}
+
+export interface QuantumStationTransition {
+  targetMode: "quantum" | "legacy";
+  startedAtSecond: number;
+  boundarySecond: number;
+  bridges: QuantumBridgeContract[];
+}
+
+export interface QuantumLogisticsNetworkState {
+  enabled: boolean;
+  inventory: Partial<Record<ItemId, DecimalIntegerString>>;
+  /** Missing entries use the default 10-billion per-item capacity. */
+  itemCapacities: Partial<Record<ItemId, DecimalIntegerString>>;
+  routingCursors: Partial<Record<ItemId, number>>;
+  uploadRoutingCursors: Partial<Record<ItemId, number>>;
+  /** Runtime-only diagnostics. Save serialization deliberately removes this. */
+  runtimeFlow?: QuantumLogisticsRuntimeFlow;
+}
+
+export interface QuantumLogisticsRuntimeFlow {
+  boundarySecond: number;
+  uploaded: Partial<Record<ItemId, DecimalIntegerString>>;
+  downloaded: Partial<Record<ItemId, DecimalIntegerString>>;
+  globalUploadPerMinute: number;
+  globalDownloadPerMinute: number;
+  quantumTowerStacks: number;
+  quantumCollectorStacks: number;
+}
+
+export interface SystemHubItemPolicy {
+  interstellarEnabled: boolean;
+  reserve: DecimalIntegerString;
+  target: DecimalIntegerString;
+}
+
+export interface SpaceStationModules {
+  backbone: number;
+  energy: number;
+  interstellar: number;
+}
+
+export interface SpaceStationDecoration {
+  id: string;
+  kind: "marker" | "label";
+  position: XYPosition;
+  text?: string;
+}
+
+export interface SystemSpaceStationState {
+  systemId: StarSystemId;
+  status: SpaceStationStatus;
+  costRevision: number;
+  costMultiplierBasisPoints: number;
+  phaseIndex: number;
+  delivered: Partial<Record<ItemId, DecimalIntegerString>>;
+  /** Materials that reached a construction launcher but are waiting for a later phase. */
+  constructionBuffer: Partial<Record<ItemId, DecimalIntegerString>>;
+  inventory: Partial<Record<ItemId, DecimalIntegerString>>;
+  itemPolicies: Partial<Record<ItemId, SystemHubItemPolicy>>;
+  modules: SpaceStationModules;
+  routingCursors: Record<string, number>;
+  viewport: CanvasViewport;
+  decorations: SpaceStationDecoration[];
+}
+
+export interface FleetReturnBucket {
+  routeKey: string;
+  returnAtSecond: number;
+  vesselCount: number;
+}
+
+export interface GalacticHubNetworkState {
+  fleetInstalled: number;
+  fleetBusy: number;
+  fleetReturns: FleetReturnBucket[];
+  warpers: DecimalIntegerString;
+  warperTarget: DecimalIntegerString;
+  routingCursors: Record<string, number>;
+}
 
 export interface BlackHolePortState {
   index: 0 | 1 | 2;
@@ -577,6 +695,8 @@ export interface RecipeDefinition {
   inputs: ItemAmount[];
   outputs: ItemAmount[];
   requiredTechId?: TechId;
+  /** Higher values are preferred by automatic recursive manufacturing. */
+  recursivePriority?: number;
 }
 
 export interface BuildingDefinition {
@@ -593,6 +713,7 @@ export interface BuildingDefinition {
   outputCapacity: number;
   accepts?: "solid" | "fluid" | "any";
   tier?: BeltTier;
+  stackLimit?: number;
   family?: "smelter" | "assembler" | "chemical";
   megastructure?: boolean;
   description: string;
@@ -621,13 +742,18 @@ export interface FactoryEntity {
   kind: EntityKind;
   planetId: PlanetId;
   position: XYPosition;
+  interactionLocked: boolean;
   resourceId?: ItemId;
   buildingId?: BuildingId;
   extractorBuildingId?: BuildingId;
   recipeId?: RecipeId;
+  /** Persisted Dyson swarm orbit target for electromagnetic rail ejectors. */
+  targetDysonOrbitId?: string;
   storedItemId?: ItemId;
   /** Up to three item types routed directly into this planet's material tray. */
   deliveryItemIds?: ItemId[];
+  /** Stable per-port configuration for the three material delivery inputs. */
+  deliverySlots?: MaterialDeliverySlot[];
   distributionMode?: "balanced" | "priority";
   fuelItemId?: ItemId;
   fuelRemainingMj?: number;
@@ -642,7 +768,19 @@ export interface FactoryEntity {
   generationPriority?: PowerPriority;
   resourceRemaining?: number;
   resourceCapacity?: number;
+  /** Tenths of one reserve unit already consumed; kept as an integer for deterministic depletion. */
+  resourceDepletionRemainder?: number;
   stationMode?: "supply" | "demand";
+  stationTier?: StationTier;
+  stationOperationMode?: StationOperationMode;
+  stationModeTransition?: StationModeTransition;
+  /** Explicit quantum network attachment for Mk.II towers and orbital collectors. */
+  quantumMode?: QuantumStationMode;
+  quantumTransition?: QuantumStationTransition | null;
+  /** Persisted blueprint intent; cleared after a safe quantum handoff starts. */
+  quantumTarget?: boolean;
+  /** Fixed five output assignments used only by Mk.II elevator mode. */
+  elevatorOutputItems?: Array<ItemId | null>;
   stationProgress?: number;
   stationTrips?: number;
   stationLastTransfer?: number;
@@ -696,9 +834,15 @@ export interface BeltConnection {
   totalTransferred?: number;
   congestion?: number;
   lastFlow: number;
+  /** UI-only recent observation fields. Storage migration intentionally drops them. */
+  recentFlowSampleSeconds?: number;
+  recentFlowTransferred?: number;
+  recentFlowSampling?: boolean;
   routeMode?: BeltRouteMode;
   routeOffsetY?: number;
   targetPortIndex?: 0 | 1 | 2;
+  /** Stable output port used by a Mk.II space elevator. */
+  elevatorOutputIndex?: SpaceStationOutputPortIndex;
 }
 
 export interface StationSlot {
@@ -923,13 +1067,16 @@ export interface EntityOperatingStatus {
     | "no-fuel-selected"
     | "grid-standby"
     | "missing-route"
+    | "fleet-busy"
     | "missing-vessel"
     | "missing-drone"
      | "missing-warper"
      | "missing-hub"
     | "waiting-load"
+    | "waiting-route"
     | "collecting"
     | "missing-dyson-swarm"
+    | "missing-dyson-orbit"
     | "launch-paused"
     | "unconfigured";
   label: string;
@@ -1005,11 +1152,23 @@ export interface StarSystemProfile {
   distanceFromOriginLy: number;
 }
 
+export interface PlanetDisplayMetadata {
+  customName: string;
+  note: string;
+  tags: string[];
+}
+
+export interface StarSystemDisplayMetadata {
+  customName: string;
+}
+
 export interface GalaxyState {
   seed: number;
   profiles: Record<PlanetId, PlanetIndustrialProfile>;
   systemProfiles: Record<StarSystemId, StarSystemProfile>;
   planetRoles: Record<PlanetId, PlanetIndustryRole>;
+  planetMetadata: Partial<Record<PlanetId, PlanetDisplayMetadata>>;
+  systemMetadata: Partial<Record<StarSystemId, StarSystemDisplayMetadata>>;
 }
 
 export interface RecipeFocusState {
@@ -1032,10 +1191,17 @@ export interface GameSettings {
   defaultBeltRouteMode: DefaultBeltRouteMode;
   productionBufferLimit: number;
   logisticsBufferLimit: number;
+  /** Maximum transient transport credit per belt; not cargo or throughput. */
+  beltBufferLimit: number;
   proliferatorBufferLimit: number;
   autosaveIntervalSeconds: AutosaveIntervalSeconds;
   resourceMode: ResourceMode;
   difficulty: DifficultyMode;
+}
+
+export interface GameContentPackReference {
+  id: string;
+  version: string;
 }
 
 export type ThemeMode = "dark" | "light" | "system";
@@ -1077,8 +1243,10 @@ export interface BlueprintEntityTemplate {
   offset: XYPosition;
   machineCount: number;
   recipeId?: RecipeId;
+  targetDysonOrbitId?: string;
   storedItemId?: ItemId;
   deliveryItemIds?: ItemId[];
+  deliverySlots?: MaterialDeliverySlot[];
   distributionMode?: "balanced" | "priority";
   fuelItemId?: ItemId;
   energyMode?: EnergyMode;
@@ -1086,10 +1254,19 @@ export interface BlueprintEntityTemplate {
   powerPriority?: PowerPriority;
   generationPriority?: PowerPriority;
   stationMode?: "supply" | "demand";
+  stationTier?: StationTier;
+  stationOperationMode?: StationOperationMode;
+  /** Request quantum attachment after the placed station satisfies its prerequisites. */
+  quantumTarget?: boolean;
+  /** Player intent for micro black hole connectors; runtime counters are never copied. */
+  operationEnabledOnDeploy?: boolean;
+  elevatorOutputItems?: Array<ItemId | null>;
   stationMinimumLoad?: StationMinimumLoad;
   stationWarpEnabled?: boolean;
   stationWarperAutoRefill?: boolean;
   stationWarperTarget?: number;
+  stationDroneTarget?: number;
+  stationVesselTarget?: number;
   stationHubEnabled?: boolean;
   stationHubPriority?: LogisticsPriority;
   stationSlots?: StationSlot[];
@@ -1112,6 +1289,20 @@ export interface BlueprintBeltTemplate {
   routeMode?: BeltRouteMode;
   routeOffsetY?: number;
   targetPortIndex?: 0 | 1 | 2;
+  elevatorOutputIndex?: SpaceStationOutputPortIndex;
+}
+
+/**
+ * A resource anchor describes an installed extractor layout without making the
+ * underlying resource node buildable. Reserve and depletion data deliberately
+ * stay on the destination planet's existing vein.
+ */
+export interface BlueprintResourceAnchor {
+  key: string;
+  resourceId: ItemId;
+  offset: XYPosition;
+  extractorBuildingId: BuildingId;
+  minerCount: number;
 }
 
 export type BlueprintRotation = 0 | 90 | 180 | 270;
@@ -1128,7 +1319,10 @@ export interface BlueprintExternalPort {
 export interface BlueprintDefinition {
   id: string;
   name: string;
+  /** Monotonic local revision used by immutable queued construction orders. */
+  revision?: number;
   entities: BlueprintEntityTemplate[];
+  resourceAnchors?: BlueprintResourceAnchor[];
   belts: BlueprintBeltTemplate[];
   externalPorts?: BlueprintExternalPort[];
   rotation?: BlueprintRotation;
@@ -1136,15 +1330,31 @@ export interface BlueprintDefinition {
   recipeOverrides?: Partial<Record<RecipeId, RecipeId>>;
 }
 
+export interface BlueprintVersionSnapshot {
+  id: string;
+  blueprintId: string;
+  revision: number;
+  definition: BlueprintDefinition;
+}
+
+export type BlueprintConstructionStatus = "pending-materials" | "waiting-fleet";
+
 export interface ConstructionQueueEntry {
   id: string;
   blueprintId: string;
+  blueprintVersionId?: string;
+  blueprintRevision?: number;
   blueprintName: string;
   planetId: PlanetId;
   position: XYPosition;
   rotation: BlueprintRotation;
   mirror: BlueprintMirror;
   queuedAt: number;
+  status?: BlueprintConstructionStatus;
+  reservedConstruction?: Partial<Record<ConstructionId, number>>;
+  reservedFleet?: Partial<Record<PortableFleetItemId, number>>;
+  placedEntityIdsByKey?: Record<string, string>;
+  buildingCompletedAt?: number;
 }
 
 export interface HandcraftQueueEntry {
@@ -1169,6 +1379,8 @@ export interface ProductionTargetPlan {
 
 export interface ProductionHistorySample {
   elapsedSeconds: number;
+  /** Simulated seconds represented by this rolling bucket. Legacy samples imply 10 seconds. */
+  sampleDurationSeconds?: number;
   productionPerMinute: Partial<Record<ItemId, number>>;
   consumptionPerMinute: Partial<Record<ItemId, number>>;
   inventory: Partial<Record<ItemId, number>>;
@@ -1181,13 +1393,22 @@ export interface ProductionHistorySample {
   blockedMachines?: number;
 }
 
+export type ConstructionAutomationTargetId = ConstructionId | PortableFleetItemId;
+
 export interface ConstructionAutomationState {
   enabled: boolean;
-  targetStock: Partial<Record<ConstructionId, number>>;
+  targetStock: Partial<Record<ConstructionAutomationTargetId, number>>;
   cursor: number;
   totalCrafted: number;
-  lastCraftedId: ConstructionId | null;
+  lastCraftedId: ConstructionAutomationTargetId | null;
+  destroyedByproducts: Partial<Record<ItemId, number>>;
   jobs: Record<string, ConstructionAutomationJob>;
+}
+
+export interface ConstructionAutomationRecipeDecision {
+  itemId: ItemId;
+  recipeId: RecipeId;
+  fallbackReason?: string;
 }
 
 export interface ConstructionAutomationRecipeStep {
@@ -1203,18 +1424,28 @@ export interface ConstructionAutomationBuildingStep {
   constructionId: ConstructionId;
 }
 
-export type ConstructionAutomationStep = ConstructionAutomationRecipeStep | ConstructionAutomationBuildingStep;
+export interface ConstructionAutomationFleetStep {
+  kind: "fleet";
+  itemId: PortableFleetItemId;
+  amount: number;
+}
+
+export type ConstructionAutomationStep = ConstructionAutomationRecipeStep | ConstructionAutomationBuildingStep | ConstructionAutomationFleetStep;
 
 export interface ConstructionAutomationJob {
-  constructionId: ConstructionId;
+  constructionId: ConstructionAutomationTargetId;
   steps: ConstructionAutomationStep[];
   stepIndex: number;
   elapsedSeconds: number;
   inventory: Partial<Record<ItemId, number>>;
+  recipeDecisions?: ConstructionAutomationRecipeDecision[];
 }
 
 export interface GameState {
-  version: 34;
+  /** v45 adds quantum item limits and collector endpoints; v46 adds immutable
+    * blueprint construction reservations. v43 is retained so
+    * old test fixtures can be inspected and rejected without unsafe casts. */
+  version: 43 | 44 | 45 | 46;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -1233,12 +1464,15 @@ export interface GameState {
   galaxy: GalaxyState;
   recipeFocus: RecipeFocusState;
   settings: GameSettings;
+  /** Enabled declarative content required to interpret extension IDs in this save. */
+  contentPacks: GameContentPackReference[];
   achievements: AchievementState;
   campaign: CampaignState;
   planetViewports: Record<PlanetId, CanvasViewport>;
   canvasBookmarks: CanvasBookmark[];
   canvasRegions: CanvasRegion[];
   blueprints: BlueprintDefinition[];
+  blueprintVersions: BlueprintVersionSnapshot[];
   constructionQueue: ConstructionQueueEntry[];
   handcraftQueue: HandcraftQueueEntry[];
   productionPlans: ProductionTargetPlan[];
@@ -1252,6 +1486,9 @@ export interface GameState {
   dysonSphere: DysonSphereState;
   dysonEngineering: DysonEngineeringState;
   dysonPlans: Record<StarSystemId, DysonSpherePlanState>;
+  systemSpaceStations: Partial<Record<StarSystemId, SystemSpaceStationState>>;
+  galacticHubNetwork: GalacticHubNetworkState;
+  quantumLogisticsNetwork: QuantumLogisticsNetworkState;
   timeWarp: TimeWarpState;
   endgame: EndgameState;
   paused: boolean;

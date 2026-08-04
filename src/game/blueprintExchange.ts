@@ -1,4 +1,5 @@
-import { BUILDINGS, ITEMS, RECIPES } from "./content";
+import { BUILDINGS, ITEMS, RECIPES, getExtractorBuildingId } from "./content";
+import { MAX_BELT_LANES, MAX_BUILDING_STACK_COUNT } from "./engine";
 import type {
   BlueprintDefinition,
   BlueprintExternalPort,
@@ -6,17 +7,18 @@ import type {
   BlueprintEntityTemplate,
   BlueprintMirror,
   BlueprintRotation,
+  BlueprintResourceAnchor,
   GameState,
   ItemId,
   RecipeId,
   StationSlot,
 } from "./types";
 
-export const BLUEPRINT_EXCHANGE_FORMAT_VERSION = 1;
+export const BLUEPRINT_EXCHANGE_FORMAT_VERSION = 2;
 
 export interface BlueprintExchangeEnvelope {
   type: "dsp-idle-blueprint";
-  formatVersion: typeof BLUEPRINT_EXCHANGE_FORMAT_VERSION;
+  formatVersion: 1 | typeof BLUEPRINT_EXCHANGE_FORMAT_VERSION;
   exportedAt: string;
   blueprint: BlueprintDefinition;
 }
@@ -46,11 +48,49 @@ function validPosition(value: unknown): value is { x: number; y: number } {
 function cloneBlueprint(blueprint: BlueprintDefinition): BlueprintDefinition {
   return {
     ...blueprint,
-    entities: blueprint.entities.map((entity) => ({ ...entity, offset: { ...entity.offset }, stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })) })),
+    entities: blueprint.entities.map((entity) => ({
+      ...entity,
+      offset: { ...entity.offset },
+      elevatorOutputItems: entity.elevatorOutputItems ? [...entity.elevatorOutputItems] : undefined,
+      stationSlots: entity.stationSlots?.map((slot) => ({ ...slot })),
+    })),
+    resourceAnchors: blueprint.resourceAnchors?.map((anchor) => ({ ...anchor, offset: { ...anchor.offset } })),
     belts: blueprint.belts.map((belt) => ({ ...belt })),
     externalPorts: blueprint.externalPorts?.map((port) => ({ ...port, offset: { ...port.offset } })),
     recipeOverrides: { ...blueprint.recipeOverrides },
   };
+}
+
+function parseResourceAnchors(value: unknown, issues: string[]): BlueprintResourceAnchor[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 256) {
+    issues.push("资源锚点必须是最多 256 项的数组");
+    return [];
+  }
+  const anchors: BlueprintResourceAnchor[] = [];
+  const keys = new Set<string>();
+  value.forEach((entry, index) => {
+    if (!isRecord(entry) || !validId(entry.key) || keys.has(entry.key) || typeof entry.resourceId !== "string" || !(entry.resourceId in ITEMS) ||
+      !validPosition(entry.offset) || !validNumber(entry.minerCount, 1, 10_000) || !Number.isInteger(entry.minerCount)) {
+      issues.push(`资源锚点 ${index + 1} 缺少合法的 key、资源、位置或采集设备数量`);
+      return;
+    }
+    const resourceId = entry.resourceId as ItemId;
+    const extractorBuildingId = getExtractorBuildingId(resourceId);
+    if (entry.extractorBuildingId !== extractorBuildingId) {
+      issues.push(`资源锚点 ${index + 1} 的采集设备与资源类型不兼容`);
+      return;
+    }
+    keys.add(entry.key);
+    anchors.push({
+      key: entry.key,
+      resourceId,
+      offset: { x: Math.round(entry.offset.x), y: Math.round(entry.offset.y) },
+      extractorBuildingId,
+      minerCount: Math.floor(entry.minerCount),
+    });
+  });
+  return anchors;
 }
 
 function parseStationSlots(value: unknown, entityIndex: number, issues: string[]): StationSlot[] | undefined {
@@ -86,8 +126,24 @@ function parseStationSlots(value: unknown, entityIndex: number, issues: string[]
 }
 
 function parseEntity(value: unknown, index: number, issues: string[]): BlueprintEntityTemplate | null {
-  if (!isRecord(value) || !validId(value.key) || typeof value.buildingId !== "string" || !(value.buildingId in BUILDINGS) || !validPosition(value.offset) || !validNumber(value.machineCount, 1, 10_000)) {
-    issues.push(`设备 ${index + 1} 缺少合法的 key、建筑、位置或数量`);
+  if (!isRecord(value)) {
+    issues.push(`设备 ${index + 1} 必须是对象`);
+    return null;
+  }
+  if (!validId(value.key)) {
+    issues.push(`设备 ${index + 1} 的 key 无效：${String(value.key)}`);
+    return null;
+  }
+  if (typeof value.buildingId !== "string" || !(value.buildingId in BUILDINGS)) {
+    issues.push(`设备 ${index + 1} 的 buildingId 无效：${String(value.buildingId)}`);
+    return null;
+  }
+  if (!validPosition(value.offset)) {
+    issues.push(`设备 ${index + 1} 的 offset 无效`);
+    return null;
+  }
+  if (!Number.isSafeInteger(value.machineCount) || Number(value.machineCount) < 1 || Number(value.machineCount) > MAX_BUILDING_STACK_COUNT) {
+    issues.push(`设备 ${index + 1} 的 machineCount=${String(value.machineCount)} 超出允许范围 1～${MAX_BUILDING_STACK_COUNT}`);
     return null;
   }
   if (value.recipeId !== undefined && (typeof value.recipeId !== "string" || !(value.recipeId in RECIPES))) {
@@ -104,13 +160,35 @@ function parseEntity(value: unknown, index: number, issues: string[]): Blueprint
     return null;
   }
   const stationSlots = parseStationSlots(value.stationSlots, index, issues);
+  if (value.operationEnabledOnDeploy !== undefined && value.buildingId !== "micro_black_hole_connector") {
+    issues.push(`设备 ${index + 1} 的 operationEnabledOnDeploy 只允许用于微型黑洞连接装置`);
+    return null;
+  }
+  const stationTier = value.buildingId === "interstellar_logistics_station" && (value.stationTier === 1 || value.stationTier === 2)
+    ? value.stationTier
+    : undefined;
+  const stationOperationMode = stationTier === 2 && (value.stationOperationMode === "legacy" || value.stationOperationMode === "elevator")
+    ? value.stationOperationMode
+    : undefined;
+  const rawElevatorOutputItems = Array.isArray(value.elevatorOutputItems) ? value.elevatorOutputItems : null;
+  const elevatorOutputItems = stationTier === 2 && rawElevatorOutputItems && rawElevatorOutputItems.length <= 5
+    ? Array.from({ length: 5 }, (_, portIndex) => {
+      const item = rawElevatorOutputItems[portIndex];
+      return typeof item === "string" && item in ITEMS ? item as ItemId : null;
+    })
+    : undefined;
   return {
     key: value.key,
     buildingId: value.buildingId as BlueprintEntityTemplate["buildingId"],
     offset: { x: Math.round(value.offset.x), y: Math.round(value.offset.y) },
-    machineCount: Math.floor(value.machineCount),
+    machineCount: Math.floor(Number(value.machineCount)),
     ...(recipeId ? { recipeId } : {}),
     ...(typeof value.storedItemId === "string" ? { storedItemId: value.storedItemId as ItemId } : {}),
+    ...(stationTier ? { stationTier } : {}),
+    ...(stationOperationMode ? { stationOperationMode } : {}),
+    ...(value.buildingId === "interstellar_logistics_station" && typeof value.quantumTarget === "boolean" ? { quantumTarget: value.quantumTarget } : {}),
+    ...(value.buildingId === "micro_black_hole_connector" && typeof value.operationEnabledOnDeploy === "boolean" ? { operationEnabledOnDeploy: value.operationEnabledOnDeploy } : {}),
+    ...(elevatorOutputItems ? { elevatorOutputItems } : {}),
     ...(value.distributionMode === "balanced" || value.distributionMode === "priority" ? { distributionMode: value.distributionMode } : {}),
     ...(typeof value.fuelItemId === "string" && value.fuelItemId in ITEMS ? { fuelItemId: value.fuelItemId as ItemId } : {}),
     ...(value.energyMode === "auto" || value.energyMode === "charge" || value.energyMode === "discharge" ? { energyMode: value.energyMode } : {}),
@@ -122,6 +200,8 @@ function parseEntity(value: unknown, index: number, issues: string[]): Blueprint
     ...(typeof value.stationWarpEnabled === "boolean" ? { stationWarpEnabled: value.stationWarpEnabled } : {}),
     ...(typeof value.stationWarperAutoRefill === "boolean" ? { stationWarperAutoRefill: value.stationWarperAutoRefill } : {}),
     ...(validNumber(value.stationWarperTarget, 1, 500_000) ? { stationWarperTarget: Math.floor(value.stationWarperTarget) } : {}),
+    ...(validNumber(value.stationDroneTarget, 0, 500_000) ? { stationDroneTarget: Math.floor(value.stationDroneTarget) } : {}),
+    ...(validNumber(value.stationVesselTarget, 0, 500_000) ? { stationVesselTarget: Math.floor(value.stationVesselTarget) } : {}),
     ...(typeof value.stationHubEnabled === "boolean" ? { stationHubEnabled: value.stationHubEnabled } : {}),
     ...([0, 1, 2].includes(Number(value.stationHubPriority)) ? { stationHubPriority: Number(value.stationHubPriority) as 0 | 1 | 2 } : {}),
     ...(stationSlots ? { stationSlots } : {}),
@@ -134,7 +214,7 @@ function parseEntity(value: unknown, index: number, issues: string[]): Blueprint
 function parseBelt(value: unknown, index: number, entityKeys: Set<string>, issues: string[]): BlueprintBeltTemplate | null {
   if (!isRecord(value) || !validId(value.key) || typeof value.sourceKey !== "string" || typeof value.targetKey !== "string" ||
     !entityKeys.has(value.sourceKey) || !entityKeys.has(value.targetKey) || value.sourceKey === value.targetKey ||
-    typeof value.itemId !== "string" || !(value.itemId in ITEMS) || !validNumber(value.lanes, 1, 64) ||
+    typeof value.itemId !== "string" || !(value.itemId in ITEMS) || !validNumber(value.lanes, 1, MAX_BELT_LANES) || !Number.isInteger(value.lanes) ||
     (value.tier !== 1 && value.tier !== 2 && value.tier !== 3) ||
     (value.priority !== 0 && value.priority !== 1 && value.priority !== 2)) {
     issues.push(`线路 ${index + 1} 包含未知端点、物品或等级`);
@@ -153,6 +233,12 @@ function parseBelt(value: unknown, index: number, entityKeys: Set<string>, issue
     ...(typeof value.monitorEnabled === "boolean" ? { monitorEnabled: value.monitorEnabled } : {}),
     ...(value.routeMode === "bezier" || value.routeMode === "auto" || value.routeMode === "upper" || value.routeMode === "lower" || value.routeMode === "manual" ? { routeMode: value.routeMode } : {}),
     ...(validNumber(value.routeOffsetY, -10_000, 10_000) ? { routeOffsetY: Math.round(value.routeOffsetY) } : {}),
+    ...(value.targetPortIndex !== undefined && [0, 1, 2].includes(Number(value.targetPortIndex))
+      ? { targetPortIndex: Number(value.targetPortIndex) as BlueprintBeltTemplate["targetPortIndex"] }
+      : {}),
+    ...(value.elevatorOutputIndex !== undefined && [0, 1, 2, 3, 4].includes(Number(value.elevatorOutputIndex))
+      ? { elevatorOutputIndex: Number(value.elevatorOutputIndex) as BlueprintBeltTemplate["elevatorOutputIndex"] }
+      : {}),
   };
 }
 
@@ -178,13 +264,14 @@ function parseExternalPorts(value: unknown, entityKeys: Set<string>, issues: str
 
 export function validateBlueprintExchange(value: unknown): BlueprintExchangeResult {
   const issues: string[] = [];
-  if (!isRecord(value) || value.type !== "dsp-idle-blueprint" || value.formatVersion !== BLUEPRINT_EXCHANGE_FORMAT_VERSION || !isRecord(value.blueprint)) {
+  if (!isRecord(value) || value.type !== "dsp-idle-blueprint" || (value.formatVersion !== 1 && value.formatVersion !== BLUEPRINT_EXCHANGE_FORMAT_VERSION) || !isRecord(value.blueprint)) {
     return { valid: false, blueprint: null, issues: ["不是支持的蓝图交换文件"] };
   }
   const source = value.blueprint;
-  if (typeof source.name !== "string" || !source.name.trim() || source.name.trim().length > 48 || !Array.isArray(source.entities) || source.entities.length < 1 || source.entities.length > 256 || !Array.isArray(source.belts) || source.belts.length > 512) {
+  if (typeof source.name !== "string" || !source.name.trim() || source.name.trim().length > 48 || !Array.isArray(source.entities) || source.entities.length > 256 || !Array.isArray(source.belts) || source.belts.length > 512) {
     return { valid: false, blueprint: null, issues: ["蓝图名称、设备数量或线路数量不合法"] };
   }
+  const declaredEntityKeys = new Set(source.entities.flatMap((entry) => isRecord(entry) && validId(entry.key) ? [entry.key] : []));
   const entities = source.entities.flatMap((entry, index) => {
     const entity = parseEntity(entry, index, issues);
     return entity ? [entity] : [];
@@ -194,7 +281,16 @@ export function validateBlueprintExchange(value: unknown): BlueprintExchangeResu
     if (entityKeys.has(entity.key)) issues.push(`设备 key 重复：${entity.key}`);
     entityKeys.add(entity.key);
   }
+  const resourceAnchors = value.formatVersion === 2 ? parseResourceAnchors(source.resourceAnchors, issues) : [];
+  for (const anchor of resourceAnchors) {
+    if (entityKeys.has(anchor.key)) issues.push(`资源锚点 key 重复：${anchor.key}`);
+    entityKeys.add(anchor.key);
+  }
+  if (entities.length === 0 && resourceAnchors.length === 0) issues.push("蓝图至少需要一个设备或资源锚点");
+  const rejectedEntityKeys = new Set([...declaredEntityKeys].filter((key) => !entityKeys.has(key)));
   const belts = source.belts.flatMap((entry, index) => {
+    if (isRecord(entry) && typeof entry.sourceKey === "string" && typeof entry.targetKey === "string" &&
+      (rejectedEntityKeys.has(entry.sourceKey) || rejectedEntityKeys.has(entry.targetKey))) return [];
     const belt = parseBelt(entry, index, entityKeys, issues);
     return belt ? [belt] : [];
   });
@@ -216,7 +312,9 @@ export function validateBlueprintExchange(value: unknown): BlueprintExchangeResu
     blueprint: {
       id: typeof source.id === "string" ? source.id : "imported_blueprint",
       name: source.name.trim().slice(0, 48),
+      revision: Number.isSafeInteger(source.revision) && Number(source.revision) >= 1 ? Number(source.revision) : 1,
       entities,
+      ...(resourceAnchors.length > 0 ? { resourceAnchors } : {}),
       belts,
       ...(externalPorts ? { externalPorts } : {}),
       rotation,
@@ -257,5 +355,6 @@ export function importBlueprintExchange(state: GameState, blueprint: BlueprintDe
   }
   imported.id = `blueprint_${state.nextId}`;
   imported.name = name;
+  imported.revision = 1;
   return { ...state, nextId: state.nextId + 1, blueprints: [...state.blueprints, imported].slice(-64) };
 }

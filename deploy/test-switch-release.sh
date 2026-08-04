@@ -7,7 +7,12 @@ web_root="$fixture/web"
 api_root="$fixture/api"
 state_root="$fixture/state"
 
-mkdir -p "$web_root/releases/a" "$web_root/releases/b" "$api_root/releases/a" "$api_root/releases/b"
+mkdir -p "$web_root/releases/a/assets" "$web_root/releases/b/assets" "$api_root/releases/a" "$api_root/releases/b"
+printf 'old chunk\n' >"$web_root/releases/a/assets/old.js"
+printf 'new chunk\n' >"$web_root/releases/b/assets/new.js"
+mkdir -p "$web_root/shared/assets"
+printf 'stale chunk\n' >"$web_root/shared/assets/stale.js"
+touch -d '40 days ago' "$web_root/shared/assets/stale.js"
 ln -s "$web_root/releases/a" "$web_root/current"
 ln -s "$api_root/releases/a" "$api_root/current"
 
@@ -22,6 +27,9 @@ run_switch() {
 run_switch --web-release b --api-release b >/dev/null
 [[ "$(readlink -f "$web_root/current")" == "$web_root/releases/b" ]]
 [[ "$(readlink -f "$api_root/current")" == "$api_root/releases/b" ]]
+[[ "$(cat "$web_root/shared/assets/old.js")" == "old chunk" ]]
+[[ "$(cat "$web_root/shared/assets/new.js")" == "new chunk" ]]
+[[ ! -e "$web_root/shared/assets/stale.js" ]]
 
 run_switch --rollback-last >/dev/null
 [[ "$(readlink -f "$web_root/current")" == "$web_root/releases/a" ]]

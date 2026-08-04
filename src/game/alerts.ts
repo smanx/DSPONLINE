@@ -38,8 +38,14 @@ function entityTitle(entity: FactoryEntity): string {
   return recipe ? `${building} · ${recipe.name}` : building;
 }
 
-export function getFactoryAlerts(state: GameState): FactoryAlert[] {
+export interface FactoryAlertOptions {
+  /** Build titles and locations only while the alert list is visible. */
+  details?: boolean;
+}
+
+export function getFactoryAlerts(state: GameState, options: FactoryAlertOptions = {}): FactoryAlert[] {
   if (state.paused) return [];
+  const details = options.details !== false;
   return state.entities.flatMap((entity): FactoryAlert[] => {
     if (entity.kind === "vein" && entity.minerCount < 1) return [];
     const status = getEntityOperatingStatus(state, entity);
@@ -50,9 +56,9 @@ export function getFactoryAlerts(state: GameState): FactoryAlert[] {
       statusCode: status.code,
       entityId: entity.id,
       planetId: entity.planetId,
-      title: entityTitle(entity),
-      reason: status.label,
-      location: `${getPlanet(entity.planetId).name} · ${getPlanet(entity.planetId).code}`,
+      title: details ? entityTitle(entity) : "",
+      reason: details ? status.label : "",
+      location: details ? `${getPlanet(entity.planetId).name} · ${getPlanet(entity.planetId).code}` : "",
     }];
   }).sort((left, right) => {
     if (left.severity !== right.severity) return left.severity === "critical" ? -1 : 1;

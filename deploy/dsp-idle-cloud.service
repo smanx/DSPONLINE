@@ -23,7 +23,7 @@ Environment=DSP_OFFSITE_BACKUP_STATUS_FILE=/var/lib/dsp-idle-cloud/offsite-backu
 Environment=DSP_RESTORE_DRILL_STATUS_FILE=/var/lib/dsp-idle-cloud/restore-drill-status.json
 Environment=DSP_NODE_HEALTH_STATUS_FILE=/var/lib/dsp-idle-cloud/node-health-status.json
 EnvironmentFile=-/etc/dsp-idle-cloud/admin.env
-Environment=DSP_ALLOWED_ORIGIN=https://111.229.128.211.nip.io,http://111.229.128.211.nip.io,http://111.229.128.211
+Environment=DSP_ALLOWED_ORIGIN=https://shanghai-node.example.invalid,http://shanghai-ip.example.invalid
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

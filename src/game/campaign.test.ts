@@ -93,6 +93,18 @@ describe("campaign progression", () => {
     expect(granted.tray.space_warper).toBe(1_000);
   });
 
+  it("uses the configured 100 million tray limit when granting item rewards", () => {
+    const state = createInitialState();
+    state.campaign.completedTaskIds = ["unlock_borealis"];
+    state.campaign.rewardedTaskIds = [];
+    state.planetTrayItemLimits.home = 100_000_000;
+    state.tray.space_warper = 1_000_000;
+
+    const granted = syncCampaignProgress(state);
+    expect(granted.campaign.rewardedTaskIds).toContain("unlock_borealis");
+    expect(granted.tray.space_warper).toBeGreaterThan(1_000_000);
+  });
+
   it("opens the galaxy endgame chapter after Dyson completion and tracks its milestones", () => {
     const state = createInitialState();
     const legacyTaskIds = CAMPAIGN_TASKS
