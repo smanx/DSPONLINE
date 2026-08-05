@@ -1,44 +1,50 @@
-import { Check, ChevronLeft, ChevronRight, Gauge, History, Info, Layers, MessageCircle, Route, Shield, X, type LucideIcon } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Flag, Gauge, History, Info, MessageCircle, Route, Shield, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-08-05-v1.0.29",
+  id: "2026-08-05-v1.0.30",
   date: "2026年8月5日",
-  version: "1.0.29",
-  title: "建筑制造与时间扭曲稳定性热修",
-  summary: "1.0.29 为高堆叠建筑制造中心增加确定性计算保护，限制 Worker 切片并改进时间扭曲停止恢复；GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+  version: "1.0.30",
+  title: "快速离线与速通模式更新",
+  summary: "1.0.30 默认尝试带严格回退的快速离线结算，并新增独立速通工厂与服务端验证榜；复杂存档不满足门禁时仍使用精确结算。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
   items: [
     {
-      id: "construction-guard",
-      title: "高堆叠计算保护",
-      description: "建筑制造中心按确定性迭代和递归计划预算分段处理；任务、WIP、材料、目标库存和进度继续保留，其他模拟阶段不被阻塞。",
+      id: "fast-offline",
+      title: "快速离线默认尝试",
+      description: "离线超过 30 秒时先执行三个 10 秒精确校准窗口，再按实测增量尝试批量结算；可在本机设置中关闭。",
     },
     {
-      id: "bounded-slices",
-      title: "有限 Worker 切片",
-      description: "普通模拟每次最多提交 2 个模拟秒，时间扭曲单片最多 12 秒；未提交的积压时间不会被静默丢弃。",
+      id: "strict-fallback",
+      title: "严格验证与精确回退",
+      description: "缓存、传送带、物流、量子和数值边界任一验证不通过，就丢弃内存副本并从原状态走精确 Worker 路径，不提交半成品。",
     },
     {
-      id: "stop-recovery",
-      title: "停止与 Worker 恢复",
-      description: "停止时间扭曲会立即阻止新切片，最多等待 750 毫秒；超时自动重建 Worker，明确提示未提交切片不计入收益。",
+      id: "speedrun-factory",
+      title: "独立速通工厂",
+      description: "新建游戏可选择速通模式，挑战全部有限科技、实际发射 10,000 枚火箭和累计生产 1,000,000 个宇宙矩阵。",
     },
     {
-      id: "deterministic-compatibility",
-      title: "确定性与存档兼容",
-      description: "计算预算和运行时缓存不进入 GameState、存档或云端；保存重载、递归任务、物流、库存和生产状态继续兼容。",
+      id: "speedrun-ranking",
+      title: "服务端验证速通榜",
+      description: "速通成绩使用独立排行榜，并由服务端核对主云档修订、摘要、工厂身份、目标计数和完成时间；普通排行榜保持不变。",
+    },
+    {
+      id: "release-compatibility",
+      title: "兼容边界保持不变",
+      description: "快速离线开关只保存在当前设备；普通存档不会自动转为速通。复杂终局仍可能精确回退，本版不承诺任意存档 30 秒完成。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "construction-guard": Shield,
-  "bounded-slices": Gauge,
-  "stop-recovery": MessageCircle,
-  "deterministic-compatibility": Check,
+  "fast-offline": Gauge,
+  "strict-fallback": Shield,
+  "speedrun-factory": Flag,
+  "speedrun-ranking": Route,
+  "release-compatibility": Check,
 };
 
 export interface ReleaseNotesRecord {
@@ -53,6 +59,16 @@ export interface ReleaseNotesRecord {
 /** Static, offline-readable history. Keep entries small; only one page is rendered. */
 export const RELEASE_NOTES_HISTORY: readonly ReleaseNotesRecord[] = [
   CURRENT_RELEASE_NOTES,
+  {
+    id: "2026-08-05-v1.0.29", date: "2026年8月5日", version: "1.0.29", title: "建筑制造与时间扭曲稳定性热修",
+    summary: "1.0.29 为高堆叠建筑制造中心增加确定性计算保护，限制 Worker 切片并改进时间扭曲停止恢复；GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+    items: [
+      { id: "construction-guard", title: "高堆叠计算保护", description: "建筑制造中心按确定性迭代和递归计划预算分段处理；任务、WIP、材料、目标库存和进度继续保留，其他模拟阶段不被阻塞。" },
+      { id: "bounded-slices", title: "有限 Worker 切片", description: "普通模拟每次最多提交 2 个模拟秒，时间扭曲单片最多 12 秒；未提交的积压时间不会被静默丢弃。" },
+      { id: "stop-recovery", title: "停止与 Worker 恢复", description: "停止时间扭曲会立即阻止新切片，最多等待 750 毫秒；超时自动重建 Worker，明确提示未提交切片不计入收益。" },
+      { id: "deterministic-compatibility", title: "确定性与存档兼容", description: "计算预算和运行时缓存不进入 GameState、存档或云端；保存重载、递归任务、物流、库存和生产状态继续兼容。" },
+    ],
+  },
   {
     id: "2026-08-05-v1.0.28", date: "2026年8月5日", version: "1.0.28", title: "亮色主题与工厂交互更新",
     summary: "1.0.28 统一亮色/深色主题、设置分类、版本历史、科技树滚轮和物品悬浮交互，并改进批量建造、科研喷涂、统计与重整精炼。GameState v46、存档 envelope v2 与云 schema v7 不变。",

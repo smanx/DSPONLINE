@@ -54,9 +54,9 @@ if (desktopSha !== String(desktopRecord.sha256).toLowerCase()) throw new Error("
 const humanSize = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 const escaped = (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 const notes = [
-  `${version.version} 主题、工厂管理与生产统计更新`,
-  "新增统一亮色主题、分类设置、版本历史、科研喷涂与重整精炼",
-  "优化堆叠目标、批量选区、物流槽位、时间扭曲和白糖速率榜，存档与在线协议不升级",
+  `${version.version} 快速离线与速通模式更新`,
+  "长时间离线默认尝试 30 秒精确校准后的批量外推，严格验证失败会自动回到精确结算",
+  "新增独立速通工厂和服务端验证排行榜；普通存档、普通排行榜与存档协议保持不变",
 ].join("；");
 const values = {
   __VERSION__: version.version,

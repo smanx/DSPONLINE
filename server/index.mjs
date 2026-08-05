@@ -40,6 +40,28 @@ const USERNAME_PATTERN = /^[A-Za-z0-9_]{4,24}$/;
 const VALID_CATEGORIES = new Set(["power", "upload", "white-rate", "dyson", "throughput", "galaxy"]);
 const VALID_SEASONS = new Set(["season_01", "season_00"]);
 const ACTIVE_LEADERBOARD_SEASON_ID = "season_01";
+const SPEEDRUN_RULESET_VERSION = "speedrun-v1";
+const SPEEDRUN_TARGETS = {
+  all_technologies: { category: "speedrun-all-technologies", target: 0 },
+  dyson_rockets_10000: { category: "speedrun-dyson-rockets-10000", target: 10_000 },
+  white_matrix_1m: { category: "speedrun-white-matrix-1m", target: 1_000_000 },
+};
+const SPEEDRUN_FINITE_TECH_IDS = [
+  "electromagnetic_matrix", "electromagnetism", "solar_energy", "basic_logistics", "thermal_power",
+  "high_efficiency_plasma_control", "energy_matrix", "energy_storage", "fractionation", "geothermal_power",
+  "high_speed_assembling", "high_speed_logistics", "mining_speed_1", "proliferator_1", "xray_cracking",
+  "reforming_refine", "high_strength_crystal", "basic_chemical_engineering", "polymer_chemistry", "structure_matrix",
+  "material_delivery_logistics", "proliferator_2", "titanium_alloy", "processor", "planetary_logistics",
+  "interstellar_logistics", "nanomaterials", "rare_resource_utilization", "quantum_chemical_engineering", "orbital_collection",
+  "information_matrix", "construction_automation", "proliferator_3", "research_speed_1", "miniature_particle_collider",
+  "fusion_power", "quantum_chip", "plane_smelting", "gravity_matrix", "construction_capacity_1", "space_warp",
+  "stellar_exploration", "quantum_printing", "super_magnetic_logistics", "research_speed_2", "dyson_swarm", "ray_receiver",
+  "antimatter", "artificial_star", "universe_matrix", "micro_black_hole_containment", "time_warp_engineering",
+  "construction_capacity_2", "research_speed_3", "dyson_sphere_program", "vertical_launching_silo", "dyson_shell",
+  "mining_speed_2", "mining_speed_3", "logistics_engine_1", "logistics_engine_2", "logistics_capacity_1", "logistics_capacity_2",
+  "solar_sail_life_1", "solar_sail_life_2", "ray_transmission_1", "ray_transmission_2", "dyson_absorption_1",
+  "quantum_logistics_network",
+];
 const WHITE_MATRIX_RATE_MIN_INTERVAL_SECONDS = 60;
 const METRIC_KEYS = [
   "energyGeneratedMj",
@@ -63,6 +85,7 @@ const DEFAULT_DATA = {
   cloudSaveSlots: {},
   cloudSaveSlotHistory: {},
   submissions: {},
+  speedrunSubmissions: {},
   leaderboardModeration: {},
   players: {},
   feedback: [],
@@ -222,6 +245,33 @@ function normalizeManualSaveSlotHistory(value) {
   }));
 }
 
+function normalizeSpeedrunSubmissions(value, users) {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([key, entry]) => {
+    if (!entry || typeof entry !== "object" || !users[entry.userId] || !Object.hasOwn(SPEEDRUN_TARGETS, entry.targetId) ||
+      entry.seasonId !== ACTIVE_LEADERBOARD_SEASON_ID || entry.rulesetVersion !== SPEEDRUN_RULESET_VERSION ||
+      typeof entry.factoryId !== "string" || !/^[A-Za-z0-9_-]{16,96}$/.test(entry.factoryId) ||
+      !Number.isFinite(entry.elapsedSeconds) || entry.elapsedSeconds < 0 || !Number.isFinite(entry.receivedAt)) return [];
+    return [[key, {
+      submissionId: typeof entry.submissionId === "string" ? entry.submissionId.slice(0, 120) : `speedrun_${randomUUID()}`,
+      userId: entry.userId,
+      displayName: typeof entry.displayName === "string" ? entry.displayName.slice(0, 24) : users[entry.userId].displayName,
+      avatar: typeof entry.avatar === "string" ? entry.avatar.slice(0, 8) : "A",
+      targetId: entry.targetId,
+      seasonId: entry.seasonId,
+      rulesetVersion: entry.rulesetVersion,
+      factoryId: entry.factoryId,
+      elapsedSeconds: Math.max(0, Number(entry.elapsedSeconds)),
+      completedAtSeconds: Math.max(0, Number(entry.completedAtSeconds ?? entry.elapsedSeconds)),
+      completedAt: Number.isFinite(entry.completedAt) ? Math.max(0, Math.floor(entry.completedAt)) : Math.max(0, Math.floor(entry.receivedAt)),
+      receivedAt: Math.max(0, Math.floor(entry.receivedAt)),
+      saveRevision: Number.isSafeInteger(entry.saveRevision) ? entry.saveRevision : 0,
+      saveHash: typeof entry.saveHash === "string" ? entry.saveHash.slice(0, 128) : "",
+      verified: entry.verified === true,
+    }]];
+  }));
+}
+
 function normalizeStoredData(parsed) {
   const source = parsed && typeof parsed === "object" ? parsed : {};
   const sourceSchemaVersion = Number.isInteger(source.schemaVersion) ? source.schemaVersion : 1;
@@ -254,6 +304,7 @@ function normalizeStoredData(parsed) {
     cloudSaveSlots: normalizeManualSaveSlots(source.cloudSaveSlots),
     cloudSaveSlotHistory: normalizeManualSaveSlotHistory(source.cloudSaveSlotHistory),
     submissions: source.submissions && typeof source.submissions === "object" ? source.submissions : {},
+    speedrunSubmissions: normalizeSpeedrunSubmissions(source.speedrunSubmissions, users),
     leaderboardModeration: normalizeLeaderboardModeration(source.leaderboardModeration, users),
     players: normalizePlayerRecords(source.players),
     feedback: Array.isArray(source.feedback) ? source.feedback.slice(-1000) : [],
@@ -391,6 +442,142 @@ function categoryValue(metrics, category) {
   if (category === "dyson") return metrics.peakDysonPowerKw;
   if (category === "throughput") return metrics.peakThroughputPerMinute;
   return metrics.galaxyScore;
+}
+
+function speedrunSubmissionKey(seasonId, targetId, userId, factoryId) {
+  return `${seasonId}:${targetId}:${userId}:${factoryId}`;
+}
+
+function speedrunEntryPublic(entry, rank = 0) {
+  return {
+    submissionId: entry.submissionId,
+    userId: entry.userId,
+    accountId: entry.userId,
+    displayName: entry.displayName,
+    avatar: entry.avatar,
+    targetId: entry.targetId,
+    seasonId: entry.seasonId,
+    rulesetVersion: entry.rulesetVersion,
+    factoryId: entry.factoryId,
+    elapsedSeconds: entry.elapsedSeconds,
+    completedAtSeconds: entry.completedAtSeconds,
+    completedAt: entry.completedAt,
+    receivedAt: entry.receivedAt,
+    verified: entry.verified === true,
+    rank,
+  };
+}
+
+function speedrunProgressFromState(state, targetId) {
+  const speedrun = state?.speedrun;
+  const baseline = speedrun?.baseline && typeof speedrun.baseline === "object" ? speedrun.baseline : {};
+  if (targetId === "all_technologies") {
+    const baselineIds = new Set(Array.isArray(baseline.completedTechIds) ? baseline.completedTechIds : []);
+    const completed = new Set(Array.isArray(state?.research?.completedTechIds) ? state.research.completedTechIds : []);
+    const current = SPEEDRUN_FINITE_TECH_IDS.filter((id) => completed.has(id) && !baselineIds.has(id)).length;
+    const target = SPEEDRUN_FINITE_TECH_IDS.filter((id) => !baselineIds.has(id)).length;
+    return { current, target, completed: current >= target };
+  }
+  if (targetId === "dyson_rockets_10000") {
+    const current = Math.max(0, Math.floor(numberAt(state?.dysonSphere?.totalRocketsLaunched) - numberAt(baseline.rocketsLaunched)));
+    return { current, target: 10_000, completed: current >= 10_000 };
+  }
+  const current = Math.max(0, Math.floor(numberAt(state?.totalProduced?.universe_matrix) - numberAt(baseline.whiteMatrixProduced)));
+  return { current, target: 1_000_000, completed: current >= 1_000_000 };
+}
+
+function validateSpeedrunSubmission(store, userId, body) {
+  const targetId = typeof body?.targetId === "string" && Object.hasOwn(SPEEDRUN_TARGETS, body.targetId) ? body.targetId : null;
+  if (!targetId) return { error: "速通目标无效", code: "SPEEDRUN_TARGET_INVALID", status: 400 };
+  if (body.seasonId !== ACTIVE_LEADERBOARD_SEASON_ID || body.rulesetVersion !== SPEEDRUN_RULESET_VERSION) {
+    return { error: "速通赛季或规则版本已封存", code: "SPEEDRUN_RULESET_INVALID", status: 409 };
+  }
+  const current = currentCloudSave(store, userId, "main");
+  if (!current) return { error: "请先上传速通工厂主云存档", code: "SPEEDRUN_SAVE_MISSING", status: 409 };
+  if (!Number.isInteger(body.saveRevision) || body.saveRevision !== current.revision) {
+    return { error: "速通提交必须使用当前云存档修订", code: "SPEEDRUN_REVISION_MISMATCH", status: 409, cloudSave: cloudSaveMetadata(current) };
+  }
+  const hashMatches = typeof body.saveHash === "string" && (body.saveHash === current.checksum || body.saveHash === current.summary?.stateChecksum);
+  if (!hashMatches) return { error: "速通存档摘要不匹配", code: "SPEEDRUN_HASH_MISMATCH", status: 409 };
+  const materialized = materializeCloudSave(store, userId, "main", current);
+  const state = parseSaveState(materialized?.payload);
+  const speedrun = state?.speedrun;
+  if (!state || !speedrun || speedrun.enabled !== true || speedrun.mode !== "speedrun") {
+    return { error: "普通存档不能提交速通成绩", code: "SPEEDRUN_SAVE_NOT_ENABLED", status: 422 };
+  }
+  if (speedrun.rulesetVersion !== SPEEDRUN_RULESET_VERSION || speedrun.seasonId !== ACTIVE_LEADERBOARD_SEASON_ID || speedrun.eligible !== true) {
+    return { error: speedrun.invalidReason || "速通存档未通过资格校验", code: "SPEEDRUN_SAVE_INELIGIBLE", status: 422 };
+  }
+  if (Array.isArray(state.contentPacks) && state.contentPacks.length > 0) {
+    return { error: "启用内容包的存档不能进入速通正式榜", code: "SPEEDRUN_MODDED_SAVE", status: 422 };
+  }
+  const factoryId = typeof speedrun.factoryId === "string" ? speedrun.factoryId : "";
+  if (!factoryId || body.factoryId !== factoryId) return { error: "速通工厂身份不匹配", code: "SPEEDRUN_FACTORY_MISMATCH", status: 422 };
+  if (!Number.isSafeInteger(speedrun.startedAt) || speedrun.startedAt <= 0 || !Number.isFinite(speedrun.elapsedActiveSeconds) || speedrun.elapsedActiveSeconds < 0) {
+    return { error: "速通计时字段异常", code: "SPEEDRUN_CLOCK_INVALID", status: 422 };
+  }
+  const elapsedSeconds = numberAt(speedrun.elapsedActiveSeconds);
+  if (speedrun.startedAt > Date.now() + 5 * 60_000) return { error: "速通开始时间异常", code: "SPEEDRUN_START_INVALID", status: 422 };
+  const wallAgeSeconds = Math.max(0, (Date.now() - speedrun.startedAt) / 1_000);
+  if (elapsedSeconds > wallAgeSeconds + 5 * 60) {
+    return { error: "速通有效计时超过可验证运行时间", code: "SPEEDRUN_CLOCK_INVALID", status: 422 };
+  }
+  const milestone = speedrun.milestones?.[targetId];
+  const progress = speedrunProgressFromState(state, targetId);
+  if (!progress.completed || milestone?.completed !== true) return { error: "速通目标尚未完成", code: "SPEEDRUN_TARGET_INCOMPLETE", status: 422 };
+  const completedAtSeconds = numberAt(milestone.completedAtSeconds);
+  if (!Number.isFinite(body.elapsedSeconds) || body.elapsedSeconds <= 0 || completedAtSeconds <= 0 || Math.abs(body.elapsedSeconds - completedAtSeconds) > 0.000001 || completedAtSeconds > elapsedSeconds + 0.000001) {
+    return { error: "客户端完成时间与存档不一致", code: "SPEEDRUN_TIME_INVALID", status: 422 };
+  }
+  return {
+    state,
+    current,
+    targetId,
+    factoryId,
+    elapsedSeconds: completedAtSeconds,
+    saveHash: current.checksum,
+  };
+}
+
+function submitSpeedrunResult(store, user, body, now = Date.now()) {
+  const validation = validateSpeedrunSubmission(store, user.id, body);
+  if (validation.error) return validation;
+  const key = speedrunSubmissionKey(validation.current ? body.seasonId : ACTIVE_LEADERBOARD_SEASON_ID, validation.targetId, user.id, validation.factoryId);
+  const previous = store.data.speedrunSubmissions[key];
+  if (previous && previous.saveRevision > validation.current.revision) {
+    return { error: "检测到云存档回滚，成绩不可验证", code: "SPEEDRUN_ROLLBACK", status: 409 };
+  }
+  if (previous && previous.saveRevision === validation.current.revision && previous.saveHash === validation.saveHash && previous.elapsedSeconds === validation.elapsedSeconds) {
+    return { entry: speedrunEntryPublic(previous), idempotent: true };
+  }
+  // A target is completed once per factory. A later revision may re-submit
+  // the same result, but it cannot make that factory's elapsed time shorter;
+  // accepting that would let a rolled-back or edited save rewrite its score.
+  if (previous && validation.elapsedSeconds < previous.elapsedSeconds) {
+    return { error: "检测到速通完成时间回退，成绩不可验证", code: "SPEEDRUN_ROLLBACK", status: 409 };
+  }
+  if (previous && previous.elapsedSeconds <= validation.elapsedSeconds) {
+    return { entry: speedrunEntryPublic(previous), idempotent: true };
+  }
+  const entry = {
+    submissionId: previous?.submissionId ?? `speedrun_${randomUUID()}`,
+    userId: user.id,
+    displayName: user.displayName,
+    avatar: user.displayName.trim().slice(0, 1).toUpperCase() || "A",
+    targetId: validation.targetId,
+    seasonId: body.seasonId,
+    rulesetVersion: body.rulesetVersion,
+    factoryId: validation.factoryId,
+    elapsedSeconds: validation.elapsedSeconds,
+    completedAtSeconds: validation.state.speedrun.milestones[validation.targetId].completedAtSeconds ?? validation.elapsedSeconds,
+    completedAt: now,
+    receivedAt: now,
+    saveRevision: validation.current.revision,
+    saveHash: validation.saveHash,
+    verified: true,
+  };
+  store.data.speedrunSubmissions[key] = entry;
+  return { entry: speedrunEntryPublic(entry), idempotent: false };
 }
 
 class JsonStore {
@@ -2066,6 +2253,36 @@ export async function createCloudServer({
         appendAudit(store, request, "cloud.revision_restored", auth.user.id);
         await store.persist();
         return send(response, 200, { cloudSave: cloudSaveMetadata(restored, slot) });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/speedrun/leaderboard") {
+        const targetId = url.searchParams.get("targetId");
+        const seasonId = url.searchParams.get("seasonId") || ACTIVE_LEADERBOARD_SEASON_ID;
+        if (!targetId || !Object.hasOwn(SPEEDRUN_TARGETS, targetId)) return send(response, 400, { error: "速通目标无效", code: "SPEEDRUN_TARGET_INVALID" });
+        if (seasonId !== ACTIVE_LEADERBOARD_SEASON_ID) return send(response, 409, { error: "历史速通赛季已封存", code: "SPEEDRUN_SEASON_CLOSED" });
+        const bestByUser = new Map();
+        for (const entry of Object.values(store.data.speedrunSubmissions)) {
+          if (entry.targetId !== targetId || entry.seasonId !== seasonId || entry.verified !== true || store.data.users[entry.userId]?.leaderboardVisible === false) continue;
+          const key = entry.userId;
+          const previous = bestByUser.get(key);
+          if (!previous || entry.elapsedSeconds < previous.elapsedSeconds || entry.elapsedSeconds === previous.elapsedSeconds && entry.receivedAt < previous.receivedAt) bestByUser.set(key, entry);
+        }
+        const entries = [...bestByUser.values()]
+          .sort((left, right) => left.elapsedSeconds - right.elapsedSeconds || left.receivedAt - right.receivedAt || left.submissionId.localeCompare(right.submissionId))
+          .slice(0, 100)
+          .map((entry, index) => speedrunEntryPublic(entry, index + 1));
+        return send(response, 200, { category: SPEEDRUN_TARGETS[targetId].category, targetId, seasonId, rulesetVersion: SPEEDRUN_RULESET_VERSION, entries, generatedAt: Date.now() });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/speedrun/submit") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        if (auth.user.leaderboardVisible === false) return send(response, 409, { error: "当前账号已退出公开排行榜", code: "SPEEDRUN_VISIBILITY_DISABLED" });
+        const body = await readJson(request);
+        const result = submitSpeedrunResult(store, auth.user, body);
+        if (result.error) return send(response, result.status ?? 422, { error: result.error, code: result.code, ...(result.cloudSave ? { cloudSave: result.cloudSave } : {}) });
+        await store.persist();
+        return send(response, 200, { entry: result.entry, verified: true, idempotent: result.idempotent === true, category: SPEEDRUN_TARGETS[result.entry.targetId].category });
       }
 
       if (request.method === "POST" && url.pathname === "/api/leaderboard/visibility") {

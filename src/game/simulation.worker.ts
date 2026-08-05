@@ -6,7 +6,6 @@ import { BrowserMulticoreExecutor, planMulticoreSimulation, type MulticoreSimula
 import type { GameState } from "./types";
 import { captureSimulationProjectionBaseline, createSimulationProjection, type SimulationProjection } from "./simulationProjection";
 import { createSimulationStateDelta, shouldUseSimulationDelta, type SimulationStateDelta } from "./simulationDelta";
-import { runOfflineApproximationAsync, type OfflineApproximationReport } from "./offlineApproximation";
 
 export interface SimulationWorkerRequest {
   id: number;
@@ -19,7 +18,7 @@ export interface SimulationWorkerRequest {
   protocol?: "full" | "delta";
   stateRevision?: number;
   multicore?: MulticoreSimulationOptions;
-  /** Device-only experiment; only stable contracts may use it. */
+  /** Kept for wire compatibility; fast settlement is offline-only. */
   approximate?: boolean;
 }
 
@@ -45,7 +44,6 @@ export interface SimulationWorkerResponse {
   delta?: SimulationStateDelta;
   deltaFallback?: "larger-than-full";
   multicore?: { enabled: boolean; workerCount: number; fallback?: boolean; reason?: string };
-  approximation?: OfflineApproximationReport;
 }
 
 let runtime: PersistentSimulationRuntime | null = null;
@@ -136,18 +134,7 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
   let multicoreUsed = false;
   let multicoreFallback = false;
   let result: { state: GameState; changed: boolean; cacheRebuilt: boolean };
-  let approximation: OfflineApproximationReport | undefined;
-  if (event.data.approximate === true && simulationSeconds >= 60) {
-    const experiment = await runOfflineApproximationAsync(runtime.state, simulationSeconds, { wallSeconds });
-    approximation = experiment.report;
-    if (experiment.status === "approximate") {
-      runtime.state = experiment.state;
-      runtime.lookup = runtime.state.paused ? undefined : createSimulationLookupContext(runtime.state, profiler);
-      result = { state: runtime.state, changed: true, cacheRebuilt: true };
-    } else {
-      result = advancePersistentSimulationRuntime(runtime, simulationSeconds, wallSeconds, profiler);
-    }
-  } else if (multicorePlan.enabled && multicorePlan.mode === "planet-phase") {
+  if (multicorePlan.enabled && multicorePlan.mode === "planet-phase") {
     const baseline = structuredClone(runtime.state);
     try {
       if (!multicoreExecutor || multicoreExecutorWorkerCount !== multicorePlan.workerCount) {
@@ -197,7 +184,6 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
       fallback: multicoreFallback,
       reason: multicorePlan.reason,
     } } : {}),
-    ...(approximation ? { approximation } : {}),
   };
   if (result.changed && event.data.protocol === "delta" && !suppliedState) {
     const delta = createSimulationStateDelta(previousState, result.state, previousRevision, runtimeRevision);

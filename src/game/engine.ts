@@ -143,6 +143,7 @@ import {
   type RecursiveCraftDecision,
   type RecursiveCraftPlan,
 } from "./recursiveCrafting";
+import { advanceSpeedrunClock, createSpeedrunState, evaluateSpeedrunMilestones } from "./speedrun";
 
 export const ACCUMULATOR_ENERGY_MJ = 90;
 export const SOLAR_SAIL_POWER_KW = 88;
@@ -442,6 +443,17 @@ function copyState(state: GameState): GameState {
         ])),
       },
     },
+    speedrun: state.speedrun ? {
+      ...state.speedrun,
+      baseline: {
+        ...state.speedrun.baseline,
+        completedTechIds: [...state.speedrun.baseline.completedTechIds],
+      },
+      milestones: Object.fromEntries(Object.entries(state.speedrun.milestones).map(([targetId, milestone]) => [
+        targetId,
+        milestone ? { ...milestone } : { completed: false },
+      ])) as NonNullable<GameState["speedrun"]>["milestones"],
+    } : undefined,
     campaign: {
       ...state.campaign,
       completedTaskIds: [...state.campaign.completedTaskIds],
@@ -772,6 +784,13 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
 
 export function createPlayerInitialState(): GameState {
   return createInitialState(createPlayerGalaxySeed(), false);
+}
+
+/** Create a fresh, isolated speedrun factory. Existing saves never call this path. */
+export function createSpeedrunInitialState(nowMs = Date.now(), factoryId?: string): GameState {
+  const state = createPlayerInitialState();
+  state.speedrun = createSpeedrunState(state, nowMs, factoryId);
+  return evaluateSpeedrunMilestones(state);
 }
 
 function remainingResearchCosts(state: GameState): Array<{ itemId: ItemId; amount: number }> {
@@ -5570,6 +5589,10 @@ export async function advanceSimulationSessionMulticore(
   if (session.remainingSeconds <= EPSILON && session.remainingWallSeconds > EPSILON && steps < stepLimit) {
     const activity = session.state.endgame.constructionActivity;
     session.advancedWallSeconds += session.remainingWallSeconds;
+    if (session.state.speedrun?.enabled) {
+      const advanced = advanceSpeedrunClock(session.state, session.remainingWallSeconds);
+      if (advanced !== session.state) session.state = advanced;
+    }
     if (activity.activityId) activity.activityClockMs = Math.max(0, Math.floor(session.initialActivityClockMs + session.advancedWallSeconds * 1_000));
     session.remainingWallSeconds = 0;
     return 1;
@@ -5597,6 +5620,10 @@ export async function advanceSimulationSessionMulticore(
     const powerByPlanet = mergeSimulationPlanetPhaseResults(session.state, results);
     completeSimulationStep(session.state, step, prepared, powerByPlanet, session.lookup, session.profiler, session.contractExperiment);
     const wallStep = Math.min(session.remainingWallSeconds, step * wallPerSimulationSecond);
+    if (session.state.speedrun?.enabled) {
+      const advanced = advanceSpeedrunClock(session.state, wallStep);
+      if (advanced !== session.state) session.state = advanced;
+    }
     if (activity.activityId && wallStep > 0) {
       session.advancedWallSeconds += wallStep;
       activity.activityClockMs = Math.max(0, Math.floor(session.initialActivityClockMs + session.advancedWallSeconds * 1_000));
@@ -5924,6 +5951,15 @@ function fastForwardQuiescentState(session: SimulationAdvanceSession): void {
   const elapsedBefore = state.elapsedSeconds;
   const elapsedAfter = round(elapsedBefore + session.remainingSeconds);
   state.elapsedSeconds = elapsedAfter;
+  const wallSeconds = session.remainingWallSeconds;
+  if (wallSeconds > EPSILON) {
+    if (state.speedrun?.enabled) {
+      const advanced = advanceSpeedrunClock(state, wallSeconds);
+      if (advanced !== state) session.state = advanced;
+    }
+    session.advancedWallSeconds += wallSeconds;
+    session.remainingWallSeconds = 0;
+  }
   if (state.endgame.exportWindowStartedAt <= 0) state.endgame.exportWindowStartedAt = elapsedBefore;
   const exportWindowSeconds = state.elapsedSeconds - state.endgame.exportWindowStartedAt;
   if (exportWindowSeconds >= 10 - EPSILON) {
@@ -5937,7 +5973,7 @@ function fastForwardQuiescentState(session: SimulationAdvanceSession): void {
       state.elapsedSeconds - Math.min(session.stepSize, session.remainingSeconds),
     );
   }
-  state.metrics = { ...state.planetMetrics[state.activePlanetId] };
+  session.state.metrics = { ...session.state.planetMetrics[session.state.activePlanetId] };
   session.remainingSeconds = 0;
 }
 
@@ -6039,6 +6075,10 @@ export function advanceSimulationSession(session: SimulationAdvanceSession, maxi
   if (session.remainingSeconds <= EPSILON && session.remainingWallSeconds > EPSILON && steps < stepLimit) {
     const activity = session.state.endgame.constructionActivity;
     session.advancedWallSeconds += session.remainingWallSeconds;
+    if (session.state.speedrun?.enabled) {
+      const advanced = advanceSpeedrunClock(session.state, session.remainingWallSeconds);
+      if (advanced !== session.state) session.state = advanced;
+    }
     if (activity.activityId) activity.activityClockMs = Math.max(0, Math.floor(session.initialActivityClockMs + session.advancedWallSeconds * 1_000));
     session.remainingWallSeconds = 0;
     return 1;
@@ -6072,6 +6112,10 @@ export function advanceSimulationSession(session: SimulationAdvanceSession, maxi
       session.contractExperiment,
     );
     const wallStep = Math.min(session.remainingWallSeconds, step * wallPerSimulationSecond);
+    if (session.state.speedrun?.enabled) {
+      const advanced = advanceSpeedrunClock(session.state, wallStep);
+      if (advanced !== session.state) session.state = advanced;
+    }
     if (activity.activityId && wallStep > 0) {
       session.advancedWallSeconds += wallStep;
       activity.activityClockMs = Math.max(0, Math.floor(session.initialActivityClockMs + session.advancedWallSeconds * 1_000));
@@ -6097,7 +6141,8 @@ export function completeSimulationAdvanceSession(session: SimulationAdvanceSessi
   // are deliberately absent from the per-step simulation hot path.
   const completed = syncCampaignProgress(session.state);
   if (session.profiler) session.profiler.constructionMs += profileNow() - startedAt;
-  return completed;
+  session.state = evaluateSpeedrunMilestones(completed);
+  return session.state;
 }
 
 export function advanceSimulation(state: GameState, seconds: number): GameState {

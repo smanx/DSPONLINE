@@ -29,6 +29,7 @@ import { computeSaveStateChecksum, inspectSaveEnvelopeChecksum } from "./saveEnv
 import { createEmptyGalacticHubNetwork, createEmptySystemSpaceStations } from "./systemSpaceStation";
 import { normalizeHubInteger, SYSTEM_HUB_MAX_DIGITS } from "./systemHubLogistics";
 import { createEmptyQuantumLogisticsNetworkState, normalizeQuantumInteger, normalizeQuantumLogisticsNetworkState, QUANTUM_MAX_INTEGER_DIGITS } from "./quantumLogisticsNetwork";
+import { normalizeSpeedrunState } from "./speedrun";
 import { getActiveContentPackReferences, getMissingContentPackRequirements, loadContentPackRegistry, type ContentPackRegistry } from "./contentPacks";
 import {
   clearPrimarySaveEmergencyMirror,
@@ -2040,6 +2041,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
       nonNegativeNumber(saved.historyRecordedAt),
       productionHistory.at(-1)?.elapsedSeconds ?? 0,
     ),
+    speedrun: normalizeSpeedrunState(saved.speedrun),
     metrics: { ...planetMetrics[activePlanetId] },
     planetMetrics,
     powerGridMetrics,

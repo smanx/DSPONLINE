@@ -9,6 +9,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  Flag,
   Factory,
   Gauge,
   Globe2,
@@ -33,7 +34,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { ACCOUNT_AVATARS, getActiveAccount, type AccountProfileChanges, type AccountState } from "../game/account";
-import { CloudApiError, compareCloudSave, downloadCloudSave, fetchCloudLeaderboard, fetchCloudSaveHistory, loginCloudAccount, logoutCloudAccount, markCloudSaveSynchronized, refreshCloudSaveMetadata, registerCloudAccount, restoreCloudSaveRevision, resumeCloudSession, setCloudLeaderboardVisibility, submitCloudLeaderboard, summarizeCloudPayload, uploadCloudSave, type CloudLeaderboardEntry, type CloudSave, type CloudSaveMetadata, type CloudSaveSlot, type CloudSession, type CloudSyncState, type CloudUploadStage } from "../game/cloud";
+import { CloudApiError, compareCloudSave, downloadCloudSave, fetchCloudLeaderboard, fetchCloudSaveHistory, fetchSpeedrunLeaderboard, loginCloudAccount, logoutCloudAccount, markCloudSaveSynchronized, refreshCloudSaveMetadata, registerCloudAccount, restoreCloudSaveRevision, resumeCloudSession, setCloudLeaderboardVisibility, submitCloudLeaderboard, submitSpeedrunResult, summarizeCloudPayload, uploadCloudSave, type CloudLeaderboardEntry, type CloudSave, type CloudSaveMetadata, type CloudSaveSlot, type CloudSession, type CloudSyncState, type CloudUploadStage, type SpeedrunLeaderboardEntry } from "../game/cloud";
 import { exportGame, exportGameSlot, getSaveSlotSummaries, inspectSave, saveGameSlotVerified, type SaveSlotId } from "../game/storage";
 import {
   LEADERBOARD_CATEGORIES,
@@ -46,13 +47,15 @@ import {
   type LeaderboardCategoryId,
 } from "../game/leaderboard";
 import type { GameState } from "../game/types";
+import type { SpeedrunTargetId } from "../game/types";
+import { SPEEDRUN_SEASON_ID, SPEEDRUN_TARGET_IDS, SPEEDRUN_TARGETS, getSpeedrunSummary, formatSpeedrunDuration } from "../game/speedrun";
 import { CloudAccountSecurity } from "./CloudAccountSecurity";
 import { CloudSaveConflictDialog } from "./CloudSaveConflictDialog";
 import { CloudSaveSlotsPanel } from "./CloudSaveSlotsPanel";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 import { PowerValue } from "./PowerValue";
 
-type GalaxyTab = "ranking" | "cloud" | "account";
+type GalaxyTab = "ranking" | "speedrun" | "cloud" | "account";
 
 interface GalaxyWorkspaceProps {
   open: boolean;
@@ -117,6 +120,10 @@ export function GalaxyWorkspace({
   onRestoreCloudSave,
 }: GalaxyWorkspaceProps) {
   const [tab, setTab] = useState<GalaxyTab>("ranking");
+  const [speedrunTarget, setSpeedrunTarget] = useState<SpeedrunTargetId>(SPEEDRUN_TARGET_IDS[0]);
+  const [speedrunEntries, setSpeedrunEntries] = useState<SpeedrunLeaderboardEntry[]>([]);
+  const [speedrunStatus, setSpeedrunStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [speedrunMessage, setSpeedrunMessage] = useState<string | null>(null);
   const [category, setCategory] = useState<LeaderboardCategoryId>("galaxy");
   const [seasonId, setSeasonId] = useState(LEADERBOARD_SEASONS[0].id);
   const [uploadRevision, setUploadRevision] = useState(0);
@@ -141,6 +148,7 @@ export function GalaxyWorkspace({
   const [localCloudPayload, setLocalCloudPayload] = useState<string | null>(null);
   const [localSaveSlots, setLocalSaveSlots] = useState(getSaveSlotSummaries);
   const account = getActiveAccount(accountState);
+  const speedrunSummary = useMemo(() => getSpeedrunSummary(game), [game]);
   const metrics = useMemo(() => getLeaderboardMetrics(account.ledger), [account.ledger]);
   const snapshot = useMemo(
     () => getLeaderboardSnapshot(account.profile, account.ledger, category, seasonId),
@@ -167,6 +175,15 @@ export function GalaxyWorkspace({
   useEffect(() => {
     if (open && focusTab) setTab(focusTab);
   }, [focusTab, open]);
+  useEffect(() => {
+    if (!open || tab !== "speedrun") return;
+    let cancelled = false;
+    setSpeedrunStatus("loading");
+    void fetchSpeedrunLeaderboard(speedrunTarget, SPEEDRUN_SEASON_ID)
+      .then((entries) => { if (!cancelled) { setSpeedrunEntries(entries); setSpeedrunStatus("ready"); setSpeedrunMessage(null); } })
+      .catch((error) => { if (!cancelled) { setSpeedrunStatus("error"); setSpeedrunMessage(error instanceof Error ? error.message : "速通排行榜暂时不可用"); } });
+    return () => { cancelled = true; };
+  }, [open, speedrunTarget, tab]);
   useEffect(() => setNameDraft(account.profile.displayName), [account.profile.displayName, account.profile.id]);
   useEffect(() => {
     if (cloudSession.status !== "authenticated" || !cloudSession.user) return;
@@ -506,6 +523,36 @@ export function GalaxyWorkspace({
     }
   };
 
+  const submitCurrentSpeedrun = async () => {
+    const progress = speedrunSummary?.progress[speedrunTarget];
+    const remote = cloudSession.cloudSave;
+    if (!speedrunSummary?.eligible || !progress?.completed || cloudSession.status !== "authenticated" || !remote) {
+      setSpeedrunMessage("请先完成目标并上传当前速通主云存档，再提交服务端校验");
+      return;
+    }
+    setCloudBusy(true);
+    setSpeedrunMessage(null);
+    try {
+      const result = await submitSpeedrunResult({
+        targetId: speedrunTarget,
+        seasonId: SPEEDRUN_SEASON_ID,
+        rulesetVersion: "speedrun-v1",
+        factoryId: game.speedrun?.factoryId ?? "",
+        elapsedSeconds: progress.completedAtSeconds ?? speedrunSummary.elapsedActiveSeconds,
+        saveRevision: remote.revision,
+        saveHash: remote.checksum,
+        clientVersion: __APP_VERSION__,
+      });
+      setSpeedrunEntries((entries) => [result.entry, ...entries.filter((entry) => entry.submissionId !== result.entry.submissionId)]);
+      setSpeedrunStatus("ready");
+      setSpeedrunMessage(result.idempotent ? "该成绩已提交过，服务端按幂等结果返回" : "速通成绩已通过服务端校验");
+    } catch (error) {
+      setSpeedrunMessage(error instanceof Error ? error.message : "速通成绩提交失败");
+    } finally {
+      setCloudBusy(false);
+    }
+  };
+
   return (
     <section className="galaxy-workspace" role="dialog" aria-modal="true" aria-label="银河网络">
       <header className="galaxy-header">
@@ -522,6 +569,7 @@ export function GalaxyWorkspace({
 
       <nav className="galaxy-tabs" aria-label="银河网络页面">
         <button type="button" role="tab" aria-selected={tab === "ranking"} className={tab === "ranking" ? "active" : ""} onClick={() => setTab("ranking")}><Trophy size={15} />银河排行</button>
+        <button type="button" role="tab" aria-selected={tab === "speedrun"} className={tab === "speedrun" ? "active" : ""} onClick={() => setTab("speedrun")}><Flag size={15} />速通排行</button>
         <button type="button" role="tab" aria-selected={tab === "cloud"} className={tab === "cloud" ? "active" : ""} onClick={() => setTab("cloud")}>{cloudSession.status === "offline" ? <CloudOff size={15} /> : <Cloud size={15} />}云存档</button>
         <button type="button" role="tab" aria-selected={tab === "account"} className={tab === "account" ? "active" : ""} onClick={() => setTab("account")}><UserRound size={15} />账户</button>
         <span><RadioTower size={13} />{leaderboardStatus === "ready" ? "服务端真实玩家排行榜" : leaderboardStatus === "loading" ? "正在读取真实排行榜" : "云端不可达 · 本地回退"}</span>
@@ -594,6 +642,40 @@ export function GalaxyWorkspace({
               {leaderboardError ? <p className="galaxy-leaderboard-error" role="alert"><CloudOff size={13} /><span>{leaderboardError}</span></p> : null}
               {category === "white-rate" && (displayedLocalEntry?.metrics.peakWhiteMatrixPerMinute ?? 0) <= 0 ? <p><Gauge size={13} /><span>至少需要两次相隔 60 个模拟秒的有效主云同步，服务端才会形成白糖产量区间。</span></p> : null}
               <p><RadioTower size={13} /><span>{cloudSession.status === "authenticated" ? cloudSession.cloudSave ? "主云存档上传和十分钟自动同步成功后，服务端会自动更新排名。" : "请先上传当前主云存档；手动槽位不会加入排行榜。" : "访客可查看真实玩家排名；登录并上传主云存档后自动参与。"}</span></p>
+            </aside>
+          </div>
+        </div>
+      ) : tab === "speedrun" ? (
+        <div className="galaxy-speedrun-view">
+          <section className="galaxy-ranking-toolbar">
+            <div className="galaxy-category-tabs" role="tablist" aria-label="速通目标">
+              {SPEEDRUN_TARGET_IDS.map((targetId) => {
+                const target = SPEEDRUN_TARGETS[targetId];
+                return <button type="button" role="tab" aria-selected={speedrunTarget === targetId} className={speedrunTarget === targetId ? "active" : ""} onClick={() => setSpeedrunTarget(targetId)} key={targetId}><Flag size={15} /><span><strong>{target.label}</strong><small>{target.description}</small></span></button>;
+              })}
+            </div>
+            <label className="galaxy-season-select"><span>速通赛季</span><select value={SPEEDRUN_SEASON_ID} disabled aria-label="速通赛季"><option value={SPEEDRUN_SEASON_ID}>{SPEEDRUN_SEASON_ID} · 规则 speedrun-v1</option></select></label>
+          </section>
+          <section className="galaxy-summary-band">
+            <div><span>当前工厂</span><strong>{speedrunSummary ? formatSpeedrunDuration(speedrunSummary.elapsedActiveSeconds) : "普通工厂"}</strong><small>{speedrunSummary?.eligible ? "可提交服务端校验" : "普通工厂不具备速通资格"}</small></div>
+            <div><span>目标进度</span><strong>{speedrunSummary ? `${speedrunSummary.progress[speedrunTarget].current.toLocaleString("zh-CN")}/${speedrunSummary.progress[speedrunTarget].target.toLocaleString("zh-CN")}` : "--"}</strong><small>{SPEEDRUN_TARGETS[speedrunTarget].label}</small></div>
+            <div><span>我的最好成绩</span><strong>{speedrunEntries.find((entry) => entry.userId === cloudSession.user?.id)?.elapsedSeconds ? formatSpeedrunDuration(speedrunEntries.find((entry) => entry.userId === cloudSession.user?.id)!.elapsedSeconds) : "未上榜"}</strong><small>仅显示已验证成绩</small></div>
+            <div><span>资格</span><strong className={speedrunSummary?.eligible ? "positive" : "preview"}>{speedrunSummary?.eligible ? "已具备" : "未验证"}</strong><small>{speedrunSummary?.invalidReason ?? "服务端提交后才会进入正式排名"}</small></div>
+          </section>
+          <div className="galaxy-ranking-layout">
+            <section className="galaxy-leaderboard" aria-label="速通排行榜">
+              <header><span>排名</span><span>工程师</span><span>完成用时</span><span>完成日期</span><span>状态</span></header>
+              <div className="galaxy-leaderboard-rows">
+                {speedrunStatus === "loading" ? <p className="galaxy-leaderboard-empty">正在读取速通排行榜…</p> : null}
+                {speedrunStatus === "ready" && speedrunEntries.length === 0 ? <p className="galaxy-leaderboard-empty">本赛季还没有已验证成绩</p> : null}
+                {speedrunEntries.map((entry) => <article className={entry.userId === cloudSession.user?.id ? "galaxy-rank-row--local" : ""} key={entry.submissionId}><strong className="galaxy-rank-number">{entry.rank}</strong><div className="galaxy-rank-identity"><span className="galaxy-avatar">{entry.avatar}</span><span><strong>{entry.displayName}</strong><small>{entry.userId === cloudSession.user?.id ? "当前账户" : "已验证玩家"}</small></span></div><strong className="galaxy-rank-value">{formatSpeedrunDuration(entry.elapsedSeconds)}</strong><span>{new Date(entry.completedAt).toLocaleDateString("zh-CN")}</span><span className="galaxy-rank-status"><ShieldCheck size={13} />已验证</span></article>)}
+              </div>
+            </section>
+            <aside className="galaxy-upload-panel">
+              <header><Trophy size={20} /><div><small>速通成绩</small><strong>{speedrunSummary ? SPEEDRUN_TARGETS[speedrunTarget].label : "普通工厂"}</strong></div></header>
+              <p>速通排行榜与普通银河排行完全隔离。客户端成绩仅在服务端核对云存档修订、工厂身份和真实生产统计后生效。</p>
+              <button className="galaxy-upload-command" type="button" disabled={cloudBusy || !speedrunSummary?.eligible || !speedrunSummary.progress[speedrunTarget].completed || cloudSession.status !== "authenticated" || !cloudSession.cloudSave} onClick={() => void submitCurrentSpeedrun()}><Send size={15} />提交当前成绩</button>
+              {speedrunMessage ? <p className="galaxy-leaderboard-error" role="status"><Activity size={13} /><span>{speedrunMessage}</span></p> : null}
             </aside>
           </div>
         </div>

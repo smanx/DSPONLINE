@@ -1449,6 +1449,36 @@ export interface ConstructionAutomationJob {
   recipeDecisions?: ConstructionAutomationRecipeDecision[];
 }
 
+/** Stable target identifiers for the opt-in speedrun mode. */
+export type SpeedrunTargetId = "all_technologies" | "dyson_rockets_10000" | "white_matrix_1m";
+
+export interface SpeedrunMilestone {
+  completed: boolean;
+  completedAtSeconds?: number;
+}
+
+export interface SpeedrunState {
+  enabled: boolean;
+  mode: "speedrun";
+  rulesetVersion: string;
+  seasonId: string;
+  /** Wall-clock timestamp used only as an audit anchor, never as the timer. */
+  startedAt: number;
+  /** Effective active wall seconds. Paused time and time-warp simulation time are excluded. */
+  elapsedActiveSeconds: number;
+  baseline: {
+    completedTechIds: TechId[];
+    rocketsLaunched: number;
+    whiteMatrixProduced: number;
+  };
+  milestones: Record<SpeedrunTargetId, SpeedrunMilestone>;
+  eligible: boolean;
+  invalidReason?: string;
+  lastValidatedRevision?: string;
+  /** Server-side anti-conversion identity, absent only in invalid legacy imports. */
+  factoryId?: string;
+}
+
 export interface GameState {
   /** v45 adds quantum item limits and collector endpoints; v46 adds immutable
     * blueprint construction reservations. v43 is retained so
@@ -1487,6 +1517,8 @@ export interface GameState {
   productionHistory: ProductionHistorySample[];
   historyRecordedAt: number;
   elapsedSeconds: number;
+  /** Optional so ordinary and legacy saves remain byte-compatible in shape. */
+  speedrun?: SpeedrunState;
   metrics: FactoryMetrics;
   planetMetrics: Record<PlanetId, FactoryMetrics>;
   powerGridMetrics: Record<PlanetId, Record<PowerGridId, PowerGridMetrics>>;

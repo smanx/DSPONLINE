@@ -2,10 +2,19 @@ import { describe, expect, it } from "vitest";
 import { advanceSimulation, createInitialState, createPlayerInitialState } from "./engine";
 import { hashGameState } from "./benchmark";
 import {
+  FAST_OFFLINE_ALGORITHM_VERSION,
+  FAST_OFFLINE_CALIBRATION_SECONDS,
+  OFFLINE_APPROXIMATION_KEY,
+  OFFLINE_APPROXIMATION_DEFAULT_ENABLED,
+  readOfflineApproximationEnabled,
   getOfflineApproximationBlocker,
+  runFastOfflineSettlement,
+  runFastOfflineSettlementAsync,
   runOfflineApproximation,
   runOfflineApproximationAsync,
+  writeOfflineApproximationEnabled,
 } from "./offlineApproximation";
+import { inspectSave, serializeEnvelope } from "./storage";
 
 function stableEmptyState() {
   const state = createInitialState(undefined, false);
@@ -16,6 +25,28 @@ function stableEmptyState() {
 }
 
 describe("offline macro contract experiment", () => {
+  it("enables the guarded fast path by default and persists an explicit opt-out", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+    } as Pick<Storage, "getItem" | "setItem">;
+    const originalWindow = globalThis.window;
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: storage } });
+    try {
+      expect(OFFLINE_APPROXIMATION_DEFAULT_ENABLED).toBe(true);
+      expect(readOfflineApproximationEnabled()).toBe(true);
+      writeOfflineApproximationEnabled(false);
+      expect(values.get(OFFLINE_APPROXIMATION_KEY)).toBe("false");
+      expect(readOfflineApproximationEnabled()).toBe(false);
+      writeOfflineApproximationEnabled(true);
+      expect(values.get(OFFLINE_APPROXIMATION_KEY)).toBe("true");
+      expect(readOfflineApproximationEnabled()).toBe(true);
+    } finally {
+      Object.defineProperty(globalThis, "window", { configurable: true, value: originalWindow });
+    }
+  });
+
   it("uses two exact calibration windows and keeps the result deterministic", () => {
     const source = stableEmptyState();
     const before = hashGameState(source);
@@ -160,6 +191,92 @@ describe("offline macro contract experiment", () => {
       shouldCancel: () => true,
     })).rejects.toMatchObject({ name: "AbortError" });
     expect(source.elapsedSeconds).toBe(0);
+  });
+
+  it("uses exactly thirty seconds of calibration before fast bulk settlement", () => {
+    const source = stableEmptyState();
+    const before = hashGameState(source);
+    const result = runFastOfflineSettlement(source, 3_600);
+    expect(result.status).toBe("approximate");
+    if (result.status !== "approximate") return;
+    expect(result.report.algorithmVersion).toBe(FAST_OFFLINE_ALGORITHM_VERSION);
+    expect(result.report.calibrationWindowSeconds).toBe(FAST_OFFLINE_CALIBRATION_SECONDS);
+    expect(result.report.approximatedSeconds).toBe(3_565);
+    expect(result.state.elapsedSeconds).toBe(3_600);
+    expect(hashGameState(source)).toBe(before);
+    expect(result.report.boundaryCorrections ?? 0).toBeGreaterThanOrEqual(0);
+  });
+
+  it("keeps the ten-minute fast path serializable and reloadable", () => {
+    const source = stableEmptyState();
+    const before = hashGameState(source);
+    const result = runFastOfflineSettlement(source, 10 * 60);
+    expect(result.status).toBe("approximate");
+    if (result.status !== "approximate") return;
+    const raw = serializeEnvelope(result.state, 1_753_000_000_000);
+    const inspection = inspectSave(raw);
+    expect(inspection.valid).toBe(true);
+    expect(inspection.state?.elapsedSeconds).toBe(10 * 60);
+    expect(hashGameState(source)).toBe(before);
+  });
+
+  it("cancels fast calibration without exposing a partial state", async () => {
+    const source = stableEmptyState();
+    source.entities = Array.from({ length: 100 }, (_, index) => ({
+      id: `fast-cancel-${index}`,
+      kind: "storage" as const,
+      planetId: "home" as const,
+      position: { x: index, y: 0 },
+      interactionLocked: false,
+      buildingId: "storage_mk1" as const,
+      machineCount: 1,
+      minerCount: 0,
+      inputs: {},
+      outputs: {},
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+    }));
+    const before = hashGameState(source);
+    let checks = 0;
+    await expect(runFastOfflineSettlementAsync(source, 30 * 24 * 60 * 60, {
+      shouldCancel: () => checks++ > 1,
+    })).rejects.toMatchObject({ name: "AbortError" });
+    expect(hashGameState(source)).toBe(before);
+  });
+
+  it("keeps short offline intervals on the exact path", () => {
+    const source = stableEmptyState();
+    const result = runFastOfflineSettlement(source, 30);
+    expect(result.status).not.toBe("approximate");
+    expect(result.report.algorithmVersion).toBe(FAST_OFFLINE_ALGORITHM_VERSION);
+    expect(result.report.calibrationWindowSeconds).toBe(30);
+    expect(result.report.approximatedSeconds).toBe(0);
+    expect(source.elapsedSeconds).toBe(0);
+  });
+
+  it("preserves speedrun wall-time when simulation seconds are accelerated", () => {
+    const source = stableEmptyState();
+    source.speedrun = {
+      enabled: true,
+      mode: "speedrun",
+      rulesetVersion: "speedrun-v1",
+      seasonId: "season_01",
+      startedAt: 1,
+      elapsedActiveSeconds: 0,
+      baseline: { completedTechIds: [], rocketsLaunched: 0, whiteMatrixProduced: 0 },
+      milestones: {
+        all_technologies: { completed: false },
+        dyson_rockets_10000: { completed: false },
+        white_matrix_1m: { completed: false },
+      },
+      eligible: true,
+      factoryId: "speedrun_test_factory_0001",
+    };
+    const result = runFastOfflineSettlement(source, 3_600, 60);
+    expect(result.status).toBe("approximate");
+    if (result.status === "approximate") expect(result.state.speedrun?.elapsedActiveSeconds).toBe(60);
   });
 
 });

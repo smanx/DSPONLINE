@@ -1,4 +1,5 @@
 import { normalizeLeaderboardMetrics, type LeaderboardCategoryId, type LeaderboardMetrics } from "./leaderboard";
+import type { SpeedrunTargetId } from "./types";
 import { apiFetch } from "./apiTransport";
 import { inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
 import { getDesktopBridge } from "../desktop";
@@ -137,6 +138,35 @@ export interface CloudLeaderboardEntry {
   value: number;
   verified: boolean;
   rank: number;
+}
+
+export interface SpeedrunLeaderboardEntry {
+  submissionId: string;
+  userId: string;
+  accountId: string;
+  displayName: string;
+  avatar: string;
+  targetId: SpeedrunTargetId;
+  seasonId: string;
+  rulesetVersion: string;
+  factoryId: string;
+  elapsedSeconds: number;
+  completedAtSeconds: number;
+  completedAt: number;
+  receivedAt: number;
+  verified: boolean;
+  rank: number;
+}
+
+export interface SpeedrunSubmissionPayload {
+  targetId: SpeedrunTargetId;
+  seasonId: string;
+  rulesetVersion: string;
+  factoryId: string;
+  elapsedSeconds: number;
+  saveRevision: number;
+  saveHash: string;
+  clientVersion: string;
 }
 
 export interface CloudPublicStatus {
@@ -738,6 +768,18 @@ export async function fetchCloudPublicStatus(): Promise<CloudPublicStatus> {
 
 export async function submitCloudLeaderboard(seasonId: string): Promise<void> {
   await cloudRequest("/leaderboard", { method: "POST", body: JSON.stringify({ seasonId }) }, true);
+}
+
+export async function fetchSpeedrunLeaderboard(targetId: SpeedrunTargetId, seasonId: string): Promise<SpeedrunLeaderboardEntry[]> {
+  const result = await cloudRequest<{ entries: SpeedrunLeaderboardEntry[] }>(`/speedrun/leaderboard?targetId=${encodeURIComponent(targetId)}&seasonId=${encodeURIComponent(seasonId)}`, {}, false, true);
+  return result.entries;
+}
+
+export async function submitSpeedrunResult(payload: SpeedrunSubmissionPayload): Promise<{ entry: SpeedrunLeaderboardEntry; idempotent: boolean }> {
+  return cloudRequest<{ entry: SpeedrunLeaderboardEntry; idempotent: boolean }>("/speedrun/submit", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }, true);
 }
 
 export async function setCloudLeaderboardVisibility(visible: boolean): Promise<CloudUser> {

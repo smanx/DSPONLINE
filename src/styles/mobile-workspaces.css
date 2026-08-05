@@ -378,7 +378,9 @@
 
 /* Remaining stage-3 workspaces share a single vertical page without exposing
    the frozen canvas or preserving desktop multi-column scroll regions. */
-.game-shell[data-mobile-shell="true"] :is(.operations-tabs, .galaxy-tabs) { position: sticky; z-index: 12; top: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; min-height: 52px; padding: 4px 6px; overflow: visible; background: var(--theme-canvas); }
+.game-shell[data-mobile-shell="true"] :is(.operations-tabs, .galaxy-tabs) { position: sticky; z-index: 12; top: 0; display: grid; gap: 4px; min-height: 52px; padding: 4px 6px; overflow: visible; background: var(--theme-canvas); }
+.game-shell[data-mobile-shell="true"] .operations-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.game-shell[data-mobile-shell="true"] .galaxy-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .game-shell[data-mobile-shell="true"] :is(.operations-tabs, .galaxy-tabs) button { min-height: 44px; font-size: calc(12px * var(--ui-font-scale, 1)); }
 .game-shell[data-mobile-shell="true"] :is(.operations-panel, .galaxy-panel, .campaign-chapter-list, .construction-center-list) { height: auto; max-height: none; overflow: visible !important; }
 .game-shell[data-mobile-shell="true"] :is(.operations-body, .galaxy-ranking-view, .galaxy-cloud-view, .galaxy-account-view) { height: auto; min-height: 0; overflow: visible !important; }

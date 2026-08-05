@@ -3,7 +3,7 @@
 import { completeSimulationAdvanceSession, createSimulationAdvanceSession } from "./engine";
 import { applyContentPackRuntimeSnapshot } from "./contentPacks";
 import { advanceOfflineSimulationChunk, type OfflineSimulationWorkerRequest, type OfflineSimulationWorkerResponse } from "./offlineSimulation";
-import { runOfflineApproximationAsync, type OfflineApproximationReport } from "./offlineApproximation";
+import { runFastOfflineSettlementAsync, type OfflineApproximationReport } from "./offlineApproximation";
 import { applyReturningRewardToState, inspectSave, serializeEnvelope } from "./storage";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
 import type { GameSettings, GameState } from "./types";
@@ -115,10 +115,10 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
     }
     let approximation: OfflineApproximationReport | undefined;
     if (request.approximate === true) {
-      // Do not create the exact session until the experiment declines. The
-      // approximation owns its isolated calibration copies and otherwise this
+      // Do not create the exact session until the fast path declines. The
+      // fast contract owns isolated calibration copies and otherwise this
       // would clone the entire save twice before any useful work starts.
-      const experiment = await runOfflineApproximationAsync(request.state, request.seconds, {
+      const experiment = await runFastOfflineSettlementAsync(request.state, request.seconds, {
         shouldCancel: () => activeId !== request.id || cancelled,
         onProgress: (completedSeconds, totalSeconds) => {
           if (activeId !== request.id || cancelled) return;
@@ -172,6 +172,11 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
     };
     runChunk();
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      post({ type: "cancelled", id: request.id });
+      activeId = null;
+      return;
+    }
     post({ type: "error", id: request.id, message: error instanceof Error ? error.message : "离线计算失败" });
     activeId = null;
   }

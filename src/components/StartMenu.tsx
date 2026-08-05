@@ -279,6 +279,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [slots, setSlots] = useState(getMenuSlotSummaries);
   const [snapshots, setSnapshots] = useState(getMenuSnapshotSummaries);
   const [settings, setSettings] = useState<GameSettings>(() => readMenuSettings(defaultSettings));
+  const [newFactoryMode, setNewFactoryMode] = useState<"normal" | "speedrun">("normal");
   const [showRunLog, setShowRunLog] = useState(readShowRunLogPreference);
   const [offlineApproximationEnabled, setOfflineApproximationEnabled] = useState(readOfflineApproximationEnabled);
   useResolvedTheme(settings.theme);
@@ -497,9 +498,9 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const startNewGame = async () => {
     setBusy(true);
     try {
-      const [storage, { createPlayerInitialState }] = await Promise.all([loadStorageModule(), importWithRecovery(() => import("../game/engine"), "模拟核心模块")]);
+      const [storage, { createPlayerInitialState, createSpeedrunInitialState }] = await Promise.all([loadStorageModule(), importWithRecovery(() => import("../game/engine"), "模拟核心模块")]);
       await preserveCurrentSave("开始新工厂前", storage);
-      const state = createPlayerInitialState();
+      const state = newFactoryMode === "speedrun" ? createSpeedrunInitialState() : createPlayerInitialState();
       state.settings = mergeMenuRuntimeSettings(state.settings, settings);
       const saveResult = await storage.saveGameVerified(state);
       if (!saveResult.success) throw new Error(saveResult.message);
@@ -513,8 +514,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     }
   };
 
-  const requestNewGame = () => {
-    if (continueSave) setView("new");
+  const requestNewGame = (forceModeSelection = false) => {
+    if (continueSave || forceModeSelection) setView("new");
     else void startNewGame();
   };
 
@@ -1034,14 +1035,14 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             <small>{summary ? `${summaryPlanet ?? "未知行星"} · ${formatRuntime(summary.elapsedSeconds)} · 科技 ${summary.completedTechCount}` : "初始建设物资已装载"}</small>
           </div>
 
-          <button className="start-menu-primary" type="button" disabled={busy} onClick={continueSave ? continueGame : requestNewGame}>
+          <button className="start-menu-primary" type="button" disabled={busy} onClick={continueSave ? continueGame : () => requestNewGame()}>
             {busy ? <Activity size={19} /> : <Play size={19} />}
             <span><small>{continueSave ? "恢复最近工厂" : "建立母星节点"}</small><strong>{continueSave ? "继续游戏" : "开始游戏"}</strong></span>
             <ArrowRight size={19} />
           </button>
 
           <nav className="start-menu-nav" aria-label="主菜单">
-            <button className={view === "new" ? "active" : ""} type="button" onClick={requestNewGame}><Plus size={17} /><span>新建游戏</span></button>
+            <button className={view === "new" ? "active" : ""} type="button" onClick={() => requestNewGame(true)}><Plus size={17} /><span>新建游戏</span></button>
             <button className={view === "saves" ? "active" : ""} type="button" onClick={() => { setView("saves"); setMessage(null); }}><HardDrive size={17} /><span>加载存档</span><em>{slots.length}</em></button>
             <button className={view === "cloud" ? "active" : ""} type="button" onClick={() => { setView("cloud"); setMessage(null); }}><Cloud size={17} /><span>登录与云存档</span></button>
             <button className={view === "import" ? "active" : ""} type="button" onClick={() => fileInputRef.current?.click()}><FileUp size={17} /><span>导入存档</span></button>
@@ -1073,14 +1074,19 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
               <p>强烈推荐您在体验本项目之前，购买并游玩《戴森球计划》，相信它会为您带来更加丰富而精彩的游戏体验。</p>
               <p>进入工厂后会使用本机生成的匿名标识统计游玩与在线人数，不采集完整存档或设备指纹。</p>
             </section>
-            <footer><button type="button" onClick={() => setView("saves")}><History size={15} />查看存档记录</button><button className="primary" type="button" disabled={busy} onClick={continueSave ? () => void continueGame() : requestNewGame}><Play size={15} />{continueSave ? "进入工厂" : "建立工厂"}</button></footer>
+            <footer><button type="button" onClick={() => setView("saves")}><History size={15} />查看存档记录</button><button className="primary" type="button" disabled={busy} onClick={continueSave ? () => void continueGame() : () => requestNewGame()}><Play size={15} />{continueSave ? "进入工厂" : "建立工厂"}</button></footer>
           </div> : null}
 
           {view === "new" ? <div className="start-menu-new">
             <header><Plus size={22} /><span><small>新工厂协议</small><strong>建立新的母星生产网络</strong></span></header>
+            <div className="start-menu-mode-options" role="radiogroup" aria-label="工厂模式">
+              <button type="button" role="radio" aria-checked={newFactoryMode === "normal"} className={newFactoryMode === "normal" ? "active" : ""} onClick={() => setNewFactoryMode("normal")}><strong>普通工厂</strong><small>沿用现有生产、存档和普通排行榜。</small></button>
+              <button type="button" role="radio" aria-checked={newFactoryMode === "speedrun"} className={newFactoryMode === "speedrun" ? "active" : ""} onClick={() => setNewFactoryMode("speedrun")}><strong>速通工厂</strong><small>新工厂独立计时，成绩需服务端校验后进入速通榜。</small></button>
+            </div>
+            {newFactoryMode === "speedrun" ? <section className="start-menu-speedrun-brief"><strong>速通规则 speedrun-v1 · 当前赛季 season_01</strong><p>目标：完成全部有限科技、实际发射 10,000 枚戴森火箭、累计生产 1,000,000 个宇宙矩阵。</p><small>暂停不计时；时间扭曲只加速生产，不倍速计时；离线有效时间只结算一次。无限科技不计入全科技目标，普通旧存档不能转换。</small></section> : null}
             <div className="start-menu-new-loadout"><span><small>风力涡轮机</small><strong>3</strong></span><span><small>采矿机</small><strong>2</strong></span><span><small>熔炉</small><strong>3</strong></span><span><small>制造台</small><strong>3</strong></span><span><small>研究站</small><strong>2</strong></span><span><small>传送带</small><strong>10</strong></span></div>
             {continueSave ? <p className="start-menu-warning"><ShieldCheck size={16} />当前工厂会先保存为自动快照。</p> : null}
-            <footer><button type="button" onClick={() => setView("overview")}>取消</button><button className="primary" type="button" disabled={busy} onClick={() => void startNewGame()}><Plus size={15} />{busy ? "正在建立" : "开始新游戏"}</button></footer>
+            <footer><button type="button" onClick={() => setView("overview")}>取消</button><button className="primary" type="button" disabled={busy} onClick={() => void startNewGame()}><Plus size={15} />{busy ? "正在建立" : newFactoryMode === "speedrun" ? "确认并开始速通" : "开始新游戏"}</button></footer>
           </div> : null}
 
           {view === "saves" ? <div className="start-menu-saves">
@@ -1142,8 +1148,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             <section><header><Factory size={15} /><strong>科技树布局</strong><small>{settings.technologyLayout === "compact" ? "精简" : "标准"}</small></header><div className="start-menu-segments">{(["standard", "compact"] as const).map((technologyLayout) => <button className={settings.technologyLayout === technologyLayout ? "active" : ""} type="button" key={technologyLayout} onClick={() => updateMenuSettings({ technologyLayout })}>{technologyLayout === "compact" ? "精简模式" : "标准模式"}</button>)}</div></section>
             <section><header><Zap size={15} /><strong>模拟速度</strong><small>{settings.simulationSpeed}×</small></header><div className="start-menu-segments">{SIMULATION_SPEEDS.map((speed) => <button className={settings.simulationSpeed === speed ? "active" : ""} type="button" key={speed} onClick={() => updateMenuSettings({ simulationSpeed: speed })}>{speed}×</button>)}</div></section>
             <section><header><Clock3 size={15} /><strong>自动保存</strong><small>{settings.autosaveIntervalSeconds === 0 ? "已关闭" : `${settings.autosaveIntervalSeconds} 秒`}</small></header><div className="start-menu-segments">{AUTOSAVE_INTERVALS.map((seconds) => <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => updateMenuSettings({ autosaveIntervalSeconds: seconds })}>{seconds === 0 ? "关闭" : seconds === 600 ? "10 分钟" : `${seconds} 秒`}</button>)}</div>{settings.autosaveIntervalSeconds === 0 ? <small className="settings-warning">关闭后，刷新页面或异常退出可能丢失未保存进度；手动保存和云同步不受影响。</small> : null}</section>
-            <section className="start-menu-setting-toggles"><ToggleRow checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "低频渲染" : "完整渲染"} icon={<Cpu size={16} />} onChange={(performanceMode) => updateMenuSettings({ performanceMode })} /><ToggleRow checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态已精简" : "完整动态"} icon={<Gauge size={16} />} onChange={(reducedMotion) => updateMenuSettings({ reducedMotion })} /><ToggleRow checked={settings.soundEnabled} label="操作音效" value={settings.soundEnabled ? "已开启" : "已关闭"} icon={settings.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />} onChange={(soundEnabled) => updateMenuSettings({ soundEnabled })} /><ToggleRow checked={settings.allowDoubleClickZoom} label="允许双击缩放" value={settings.allowDoubleClickZoom ? "双击聚焦画布" : "连续点击不缩放"} icon={<MousePointer2 size={16} />} onChange={(allowDoubleClickZoom) => updateMenuSettings({ allowDoubleClickZoom })} /><ToggleRow checked={showRunLog} label="显示运行记录" value={showRunLog ? "显示运行反馈浮条" : "仅保留错误、成就和诊断"} icon={<Activity size={16} />} onChange={updateRunLogPreference} /><ToggleRow checked={offlineApproximationEnabled} label="近似离线结算（实验）" value={offlineApproximationEnabled ? "仅稳定产线尝试，失败自动精确回退" : "关闭，使用精确结算"} icon={<Gauge size={16} />} onChange={(enabled) => { writeOfflineApproximationEnabled(enabled); setOfflineApproximationEnabled(enabled); }} /></section>
-            {offlineApproximationEnabled ? <p className="settings-warning">实验功能只在稳定固体产线尝试宏观跳算；涉及物流、量子、流体、戴森或缓存边界时会自动回到精确路径，不改变存档格式。</p> : null}
+            <section className="start-menu-setting-toggles"><ToggleRow checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "低频渲染" : "完整渲染"} icon={<Cpu size={16} />} onChange={(performanceMode) => updateMenuSettings({ performanceMode })} /><ToggleRow checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态已精简" : "完整动态"} icon={<Gauge size={16} />} onChange={(reducedMotion) => updateMenuSettings({ reducedMotion })} /><ToggleRow checked={settings.soundEnabled} label="操作音效" value={settings.soundEnabled ? "已开启" : "已关闭"} icon={settings.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />} onChange={(soundEnabled) => updateMenuSettings({ soundEnabled })} /><ToggleRow checked={settings.allowDoubleClickZoom} label="允许双击缩放" value={settings.allowDoubleClickZoom ? "双击聚焦画布" : "连续点击不缩放"} icon={<MousePointer2 size={16} />} onChange={(allowDoubleClickZoom) => updateMenuSettings({ allowDoubleClickZoom })} /><ToggleRow checked={showRunLog} label="显示运行记录" value={showRunLog ? "显示运行反馈浮条" : "仅保留错误、成就和诊断"} icon={<Activity size={16} />} onChange={updateRunLogPreference} /><ToggleRow checked={offlineApproximationEnabled} label="快速离线结算（实验）" value={offlineApproximationEnabled ? "30 秒校准后批量外推，失败自动精确回退" : "关闭，使用精确结算"} icon={<Gauge size={16} />} onChange={(enabled) => { writeOfflineApproximationEnabled(enabled); setOfflineApproximationEnabled(enabled); }} /></section>
+            {offlineApproximationEnabled ? <p className="settings-warning">长时间离线先执行 30 秒真实模拟，再按实测速率批量外推；遇到边界、误差或安全问题会自动回到精确路径，不改变存档格式。</p> : null}
             <NativeUpdateCard className="start-menu-native-update" />
             <section className="start-menu-release-notes"><header><History size={15} /><strong>版本更新记录</strong><small>{CURRENT_RELEASE_NOTES.date}</small></header><button type="button" onClick={onOpenReleaseNotes} aria-label={`查看${CURRENT_RELEASE_NOTES.date}版本更新记录`}><span><strong>{CURRENT_RELEASE_NOTES.title}</strong><small>{CURRENT_RELEASE_NOTES.items.length} 项体验更新</small></span><ArrowRight size={15} /></button></section>
             <section className="start-menu-community"><header><MessageCircle size={15} /><strong>QQ 交流群</strong><small>意见、建议与问题反馈</small></header><p>群号 <strong>1076757280</strong></p></section>

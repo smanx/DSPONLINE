@@ -1,0 +1,175 @@
+# DSPidle2 1.0.30 开发交接
+
+> 状态：Development handoff / 未生成独立发布提交 / 未发布
+> 日期：2026-08-05
+> 角色：Development Agent
+> 发布授权：未授予；本文不授权 VPS、下载页、生产数据库或安装包发布
+
+## 1. 交接结论
+
+本批将“速通模式 + 独立速通排行榜”和“30 秒精确校准 + 剩余时间批量外推”的快速离线结算实验纳入 `1.0.30` 开发候选。
+
+- 速通模式的代码、客户端面板、独立排行榜 API、服务端校验和专项测试已完成。
+- 快速离线结算 `fast-30s-v1` 已完成 Worker 路径、取消、结构安全校验、序列化重载和真实存档只读基准。
+- 快速模式在 1.0.30 中默认开启，不写入 GameState、存档 envelope、云 schema 或排行榜规则；玩家可在设置中显式关闭，失败时从原始状态走精确路径。
+- 在严格把输入/输出缓存和传送带累计运输量纳入误差检查后，现有 5.5MB、7.3MB、3.28MB 和 17.34MB 真实终局夹具均安全回退精确路径；没有任何一个复杂夹具被错误标记为近似成功。因此当前实现不能宣称已达到“任意复杂存档 30 秒内完成”，但不会把缓存/物流 100% 偏差误报成低误差成功。
+- 当前工作区仍是多 Agent dirty 工作区，没有独立 `1.0.30` commit、Build ID、不可变制品或签名；不得从当前工作区直接部署。
+
+### 1.1 本次追加变更：默认开启快速离线
+
+- `fast-30s-v1` 的设备级默认值已改为开启，首次使用 1.0.30 的设备会优先尝试 30 秒校准后的批量外推。
+- 玩家在设置中关闭后写入显式 `false`；关闭只改变本机 UI 偏好，不写入 GameState、存档、云端或排行榜。
+- 快速路径仍然只在 Worker 内存副本运行；校准、结构/数值安全检查和 5 秒精确验证任一失败，立即从原始状态回到精确 Worker 路径。
+- 本次变更不放宽 20% 误差门禁，不把复杂终局标记为近似成功，也不承诺 30 秒硬上限。
+
+兼容约束保持不变：GameState v46、存档 envelope v2、云 schema v7、SQLite layout v2。没有部署香港/上海 VPS，没有更新下载页，没有发布 Web、Android 或桌面安装包。
+
+## 2. 快速离线结算实现
+
+### 2.1 开关和边界
+
+- 设备级开关：`dsp-idle-network.experimental-approximate-offline.v1`。
+- 1.0.30 新设备默认开启；设置文案为“快速离线结算（实验）”。玩家关闭后写入显式 `false`，不会因重新进入菜单而自动重新开启。
+- 开关不进入 `GameState`、本地存档、云 payload、普通排行榜或速通规则。
+- 只有离线时长大于 30 秒才尝试快速路径；不超过 30 秒继续精确结算。
+- 所有工作在 `offlineSimulation.worker.ts` 的隔离副本执行；原始载入状态在成功前不变。
+
+### 2.2 `fast-30s-v1` 流程
+
+1. 克隆原始状态，执行 3 个 10 秒精确窗口，共 30 个模拟秒。
+2. 捕获实体输入/输出、累计生产、库存/缓存、传送带计数、物流/量子字段、戴森/速通计数、进度和电力相关数值的实测增量。
+3. 对连续校准窗口建立增量合同，按实测尾部速率批量应用剩余时间；不是按建筑理论产能推算。
+4. 对循环进度做取模，对非负数字/十进制库存做非负与容量规范化；负库存、非有限数字、非法大整数和无法写入字段均安全回退。
+5. 在批量结果上执行 5 秒精确验证；验证结果与预测值任一关键字段误差超过 20% 时丢弃近似结果并回到原始状态的精确 Worker 路径。默认开启不等于强制提交近似结果，严格门禁仍然有效。
+6. 成功报告算法版本、校准秒数、批量秒数、最大估计误差和边界修正数；回退报告原因。
+
+快速模式不会修改正式时间扭曲玩法。速通计时使用会话接收的有效墙钟秒，模拟倍率不会直接倍速计时。
+
+### 2.3 取消和失败
+
+- 异步校准每个精确切片都会检查取消；取消抛 `AbortError`，Worker 发出 `cancelled`，不发送精确回退请求。
+- Worker 崩溃、数值/结构校验失败或验证误差超限时，调用方可用同一原始状态继续精确结算。
+- 快速结果在 `serializeEnvelope()` 后通过 checksum 检查，再由 `inspectSave()` 重新读取；序列化失败不会提交半成品。
+- `StartMenu` 只有在 Worker 完成并经 `finalizeDeferredOfflineGame()` 后才保存；取消保留原存档并直接进入，不重复发放离线收益。
+
+## 3. 速通模式实现
+
+- 可选 `GameState.speedrun`，仅新建工厂选择“速通工厂”时创建；普通旧存档没有转换入口。
+- 固定 `speedrun-v1` / `season_01`，开始时记录 `factoryId`、有限科技基线、实际发射火箭基线和累计宇宙矩阵基线。
+- 三个稳定目标 ID：`all_technologies`、`dyson_rockets_10000`、`white_matrix_1m`。
+- 全科技排除无限/循环研究；戴森目标读取实际 `totalRocketsLaunched`；白糖目标读取累计 `totalProduced.universe_matrix`，不读取库存或上传量。
+- 暂停不计时；时间扭曲只影响生产模拟秒；离线有效墙钟时间只计入一次；目标完成时间写入 milestone 后不因继续生产降低。
+- 导入、回滚、时间异常、规则/赛季/工厂身份不合法时保留存档但标记不可上榜。
+- 新增独立服务端类别：`speedrun-all-technologies`、`speedrun-dyson-rockets-10000`、`speedrun-white-matrix-1m`。
+- `POST /api/speedrun/submit` 从当前主云档重新验证账号归属、规则/赛季、revision/hash、目标计数、时间窗口、内容包和重复提交；最快成绩幂等保留，普通排行榜接口不变。
+
+## 4. 真实存档基准
+
+基准只读加载并 `structuredClone` 存档，没有覆盖、保存或上传附件。初始基准使用以下两个真实夹具：
+
+| 夹具 | JSON 大小 | 实体 | 线路 |
+| --- | ---: | ---: | ---: |
+| `dsp-idle-save-2026-08-01 (2) (1).json` | 5,507,255 B | 2,906 | 6,340 |
+| `dsp-idle-save-2026-08-02 (1).json` | 7,297,536 B | 3,978 | 8,867 |
+
+### 4.1 快速结果
+
+| 夹具 / 离线时长 | 状态 | 耗时 | 快速覆盖 | 最大验证误差 | 边界/回退 |
+| --- | --- | ---: | ---: | ---: | --- |
+| 5.5MB / 10 分钟 | fallback | 3,651 ms | 0 | 100% | `inputs.proliferator_mk3` 预测 0，验证实际 925 |
+| 5.5MB / 1 小时 | fallback | 3,399 ms | 0 | 100% | `inputs.proliferator_mk3` 预测 0，验证实际 929 |
+| 5.5MB / 7 天 | fallback | 3,295 ms | 0 | 100% | 传送带 `totalTransferred` 预测 0，验证实际 39,604 |
+| 5.5MB / 30 天 | fallback | 3,368 ms | 0 | 100% | 同一传送带累计运输边界，回退精确 |
+| 7.3MB / 10 分钟 | fallback | 4,727 ms | 0 | 100% | `outputs.stone` 预测 1,800,000，验证实际 0 |
+| 7.3MB / 1 小时 | fallback | 4,766 ms | 0 | 100% | 同一输出缓存边界，回退精确 |
+| 7.3MB / 7 天 | fallback | 4,696 ms | 0 | 100% | 传送带 `totalTransferred` 预测 0，验证实际 1,543,648 |
+| 7.3MB / 30 天 | fallback | 4,781 ms | 0 | 100% | 传送带 `totalTransferred` 预测 0，验证实际 1,606,442 |
+
+上述耗时是 Node/Vitest 只读基准，不是浏览器 Worker 墙钟承诺。基准同时记录 CPU、堆变化和 RSS；大存档多次 `structuredClone` 会形成明显内存峰值，当前样本 RSS 约 0.95～2.41GB，不能把它当作移动端可接受值。`heapDeltaBytes` 受 GC 时机影响，发布前必须在目标桌面、Android Chrome/WebView 和 Electron 重新测量峰值。
+
+### 4.2 2026-08-05 新附件复测
+
+| 夹具 | JSON 大小 | 实体 | 线路 | 物流站 | 量子非零物品 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `dsp-idle-save-2026-08-05.json` | 3,280,426 B | 1,580 | 3,690 | 293 | 26 |
+| `dsp-idle-save-2026-08-05 (1).json` | 17,344,200 B | 10,250 | 23,640 | 1,755 | 24 |
+
+两份均为 GameState v46、envelope v2，未暂停，时间扭曲待处理预算为 0。
+
+| 夹具 / 时长 | 快速结果 | 快速检测耗时 | 内部 5 秒验证误差 | 与完整精确结果的核心字段差异 |
+| --- | --- | ---: | ---: | --- |
+| 3.28MB / 10 分钟 | fallback | 2,584 ms | 100% | 铁矿石输出缓存预测 1,000,000、验证 0，回退精确 |
+| 3.28MB / 1 小时 | fallback | 2,330 ms | 100% | 同一输出缓存边界，回退精确 |
+| 3.28MB / 7 天 | fallback | 2,290 ms | 100% | 水输出缓存预测 1,000,000、验证 0，回退精确 |
+| 3.28MB / 30 天 | fallback | 1,981 ms | 结构/数值校验失败 | 未提交近似结果，回退精确 |
+| 17.34MB / 10 分钟 | fallback | 13,873 ms | 100% | `inputs.plane_filter` 预测 0、验证 1，回退精确 |
+| 17.34MB / 1 小时 | fallback | 13,316 ms | 100% | 同一输入缓存边界，回退精确 |
+| 17.34MB / 7 天 | fallback | 14,163 ms | 100% | 同一输入缓存边界，回退精确 |
+| 17.34MB / 30 天 | fallback | 13,171 ms | 100% | 铁矿石输出缓存预测 0、验证 44,212，回退精确 |
+
+17.34MB 存档的优化精确路径在 10 分钟单独测得约 78,487 ms；legacy/optimized 双路径对照因为 180 秒测试门限超时而失败，不能把 78 秒解释成完整发布门禁通过。新附件基准 RSS 约 1.24GB（3.28MB）和 3.01GB（17.34MB），不代表移动端可以保证 30 秒完成；发布前仍需验证 Worker 内存门槛。
+
+严格缓存检查后，新附件没有近似成功结果；之前 0.88%/3.40% 只属于放宽缓存字段比较时的内部尾窗数字，不能作为全状态最终误差。当前严格验收应按缓存/物流字段 100% 偏差判定不通过并回退精确。
+
+### 4.3 精确对照边界
+
+现有 `offlinePerformance`/`offlineSimulation` 单测覆盖 1 小时、8 小时、9 小时、24 小时、7 天和 30 天的确定性精确会话（无实体/惰性夹具），并验证分段 Worker 与同步结果一致。当前没有对上述两个真实终局存档执行完整 7 天/30 天精确基线，因为该基线可能超过本地测试门限；因此不能给出真实存档的“快速相对精确加速倍数”。
+
+## 5. 已执行验证
+
+| 命令/场景 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过，0 个 TypeScript 错误 |
+| `npx vitest run src/game/offlineApproximation.test.ts --reporter=verbose` | 13/13 通过，包含默认开启、显式关闭持久化、Worker 取消和精确回退 |
+| `npm test -- --run` | 87 个文件通过、4 个跳过；758 项通过、15 项跳过 |
+| `npm run test:server` | 49/49 通过，含速通 API、幂等、伪造时间和普通存档拒绝 |
+| `npm run build` | 通过；Vite 转换 1,878 个模块；当前共享 package 版本仍为 1.0.25 |
+| `npm run test:native` | 8/8 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npx playwright test tests/e2e/speedrun.spec.ts --workers=1` | 2/2 通过，桌面新建/面板和 390×844 速通排行 |
+| `npx playwright test tests/e2e/game-flow.spec.ts --workers=1 --grep "abandon long offline|cloud upload can abandon offline|offline report summarizes"` | 3/3 通过 |
+| `npx playwright test tests/e2e/v123-cloud-upload.spec.ts --workers=1` | 3 个场景因未配置真实云上传夹具而跳过 |
+| `npx playwright test --workers=1` | 10 分钟门限未完成，未计为通过；无可归因于本批的失败结果 |
+| `git diff --check` | 通过；仅有既有 `src/theme.css` CRLF 转换警告 |
+
+专项单测还覆盖：30 秒以内精确路径、30 秒校准合同、速率不稳定回退、量子合同、确定性重复运行、速通计时/目标基线、暂停/时间扭曲、序列化重载、快速取消和原始状态哈希不变。
+
+## 6. 修改文件
+
+本批直接相关或需在发布候选中提取的文件：
+
+- 快速离线：`src/game/offlineApproximation.ts`、`src/game/offlineApproximation.test.ts`、`src/game/offlineFastSettlementBenchmark.test.ts`、`src/game/offlineSimulation.ts`、`src/game/offlineSimulation.worker.ts`、`src/components/StartMenu.tsx`、`src/components/OfflineReportWorkspace.tsx`、`src/App.tsx`
+- 速通核心：`src/game/speedrun.ts`、`src/game/speedrun.test.ts`、`src/game/types.ts`、`src/game/engine.ts`、`src/game/storage.ts`
+- 速通界面/API：`src/components/SpeedrunStatusPanel.tsx`、`src/components/GalaxyWorkspace.tsx`、`src/game/cloud.ts`、`server/index.mjs`、`server/package.json`、`server/speedrun.test.mjs`、`tests/e2e/speedrun.spec.ts`
+- 共同文档：`docs/ARCHITECTURE.md`、`docs/GAMEPLAY_SYSTEMS.md`、`docs/PROJECT_STATUS.md`
+
+以上文件同时包含之前 `1.0.27`～`1.0.29`、亮色 UI 和其他 Agent 的未提交修改；Release Agent 必须逐 hunk 审查，不能整文件覆盖、reset、checkout 或 clean。
+
+## 7. 未通过项目和剩余风险
+
+1. 真实 5.5MB/7.3MB/3.28MB/17.34MB 存档在严格缓存/传送带误差检查下均回退，说明当前快速合同还不能覆盖复杂终局；1.0.30 虽默认尝试快速路径，但当前行为仍是安全回退，不是性能目标通过。
+2. 大存档快速路径的 RSS 峰值达到约 3.01GB（Node 基准，非浏览器峰值）；需要在浏览器/Android 上验证 Worker 内存限制，必要时减少同时保留的校准副本或分块快照。
+3. 新的 3.28MB 存档在完整精确对照中暴露输出缓存约 100% 差异，说明当前快速验证窗口不足以保证全状态误差；必须修正缓存/边界模型或继续回退，不能放宽验收阈值。
+4. 17.34MB 存档 RSS 约 3.01GB，优化精确 10 分钟约 78 秒；需要降低副本驻留和精确路径成本后才能考虑移动端或 30 秒目标。
+5. 完整 Playwright 10 分钟超时，不能视为全量 E2E 通过；当前只确认速通、离线取消和离线报告专项。
+6. 未在真实 Android Chrome/WebView、Electron 和低性能设备上做长时间快速结算压力测试；未测真实 Worker 内存上限、切后台、浏览器崩溃恢复。
+7. 服务端速通测试使用临时 SQLite 和本地 HTTP；没有生产账号、生产数据库或 VPS smoke test。
+8. 当前没有独立 `1.0.30` commit、版本号、Build ID、Web/API/Android/桌面 immutable artifact、manifest 或签名证明；不能从共享 dirty 工作区直接打包。
+
+## 8. Release Agent 接手门禁
+
+1. 等待 `1.0.29`/当前发布 Agent 完成并确认生产基线；读取本文件、相关历史 handoff 和当前 `git status --short`。
+2. 在独立干净分支中只提取本批速通与快速离线相关 hunk，创建唯一 `1.0.30` commit；不得把共享工作区其他 UI/性能实验误带入发布。
+3. 使用 `dsp-idle-save-2026-08-05.json` 和 `dsp-idle-save-2026-08-05 (1).json` 在固定桌面设备、Chrome/Edge、Android Chrome/WebView 和 Electron 重新执行精确/快速对照；确认默认开启只改变尝试顺序，不改变严格回退。若 7 天/30 天仍回退，公告必须写“默认尝试、失败自动精确回退”，不能写成 30 秒硬保证。
+4. 评估 RSS 峰值和移动端 Worker 内存；若超过平台门限，先减少副本驻留或提供设备级关闭提示，不得通过截断时间、删除缓存或压低库存掩盖问题。
+5. 从干净提交提升到 `1.0.30`，生成版本公告、Web/API/Windows/Android 制品和 manifest，核验 GameState v46、envelope v2、云 schema v7、长期 Android 证书连续性和包内 API 地址。
+6. 重新执行 typecheck、Vitest、server/ops/native/licenses、完整 Playwright、真实存档矩阵和安装包 smoke test。所有失败回到 Development 修复，不在发布节点热改代码。
+7. 获得单独发布授权后，才按既有备份、健康检查、原子切换和回滚流程处理指定 VPS/下载页。本文不含任何秘钥、密码或证书私钥。
+
+## 9. 回滚边界
+
+- 快速离线实验默认开启，可通过设备开关关闭；精确 Worker 路径保持为正式回退，不需要存档迁移。关闭偏好写入 `false`，回滚代码时不得清理该本地偏好。
+- 速通字段是可选的；代码回滚不得删除普通工厂或已有速通本地记录。速通排行榜服务端回滚前必须保留数据库备份和独立 submission 数据。
+- 代码回滚目标应是发布时实际验证的 `1.0.29` immutable 目录和 commit；当前填 `unknown`，由 Release Agent 在制品生成后补齐。
+- 不允许以清空量子库存、删任务、截断离线时间或重写玩家存档作为回滚手段。

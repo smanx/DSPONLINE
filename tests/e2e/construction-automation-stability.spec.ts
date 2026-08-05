@@ -168,7 +168,7 @@ test("stopping pure idle terminates an unresponsive slice and restores interacti
   await page.addInitScript((raw) => {
     window.localStorage.setItem("dsp-idle-network.save.v1", raw);
     window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-05-v1.0.29");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-05-v1.0.30");
     const NativeWorker = window.Worker;
     const tracker = { delayTimeWarp: false, delayedRequests: 0, terminatedWorkers: 0, createdWorkers: 0 };
     Object.assign(window, { __timeWarpStopTracker: tracker });

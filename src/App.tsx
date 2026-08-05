@@ -37,6 +37,7 @@ import { GAME_DIALOG_CLOSED_EVENT, useGameDialog } from "./components/GameDialog
 import { RecipeFocusPanel } from "./components/RecipeFocusPanel";
 import { ItemReferenceActionsProvider } from "./components/ItemReference";
 import { OnboardingCoach } from "./components/OnboardingCoach";
+import { SpeedrunStatusPanel } from "./components/SpeedrunStatusPanel";
 import { MobileGameShell } from "./components/mobile/MobileGameShell";
 import { usePerformanceMonitor } from "./hooks/usePerformanceMonitor";
 import { MobilePlacementBar, MobileSelectionContextBar, type MobileCanvasMode } from "./components/mobile/MobileFactoryPanels";
@@ -282,7 +283,6 @@ import { applySimulationStateDelta, readExperimentalSimulationDeltaMode } from "
 import { readMulticoreSimulationOptions } from "./game/multicoreSimulation";
 import { getOnboardingFocusTarget, getOnboardingStep, recordBasicOnboardingEvent, type OnboardingActionId } from "./game/onboarding";
 import { accumulateSimulationBudget, NORMAL_SIMULATION_SLICE_SECONDS, takeSimulationBudgetSlice } from "./game/simulationBudget";
-import { readOfflineApproximationEnabled } from "./game/offlineApproximation";
 import {
   createTimeWarpComputeGovernor,
   markTimeWarpWorkerUnavailable,
@@ -739,7 +739,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [campaignOpen, setCampaignOpen] = useState(false);
   const [galaxyOpen, setGalaxyOpen] = useState(false);
-  const [galaxyFocusTab, setGalaxyFocusTab] = useState<"ranking" | "cloud" | "account" | null>(null);
+  const [galaxyFocusTab, setGalaxyFocusTab] = useState<"ranking" | "speedrun" | "cloud" | "account" | null>(null);
   const [constructionCenterOpen, setConstructionCenterOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [tutorialSectionId, setTutorialSectionId] = useState<string | undefined>();
@@ -1859,7 +1859,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           protocol: experimentalSimulationDeltaRef.current ? "delta" : "full",
           multicore: multicoreSimulationOptionsRef.current,
           ...(experimentalSimulationDeltaRef.current ? { stateRevision: simulationStateRevisionRef.current } : {}),
-          ...(simulationSeconds >= 60 && readOfflineApproximationEnabled() ? { approximate: true } : {}),
           ...(simulationWorkerRegistryFingerprintRef.current !== registrySnapshot.fingerprint ? { registry: registrySnapshot } : {}),
         };
         simulationRequestIdRef.current = request.id;
@@ -5246,7 +5245,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setOperationsTab(tab);
   };
 
-  const openMobileGalaxy = (tab: "ranking" | "cloud" | "account") => {
+  const openMobileGalaxy = (tab: "ranking" | "speedrun" | "cloud" | "account") => {
     setNotice(null);
     if (galaxyOpen && galaxyFocusTab === tab) {
       closeAllWorkspaces();
@@ -6700,6 +6699,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         connectionHint={connectionHint}
         onPointerPosition={handleCanvasPointerPosition}
       />
+      <SpeedrunStatusPanel game={observedGame} />
       {interactionBursts.map((burst) => <div className={`interaction-burst interaction-burst--${burst.tone}`} style={{ left: burst.x, top: burst.y }} key={burst.id}><i>{burst.tone === "warning" ? <Sparkles size={13} /> : <Check size={13} />}</i><span>{burst.label}</span></div>)}
       {saveFailure ? <aside className="save-emergency-warning" role="alert" aria-live="assertive">
         <AlertTriangle size={20} />
