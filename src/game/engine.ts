@@ -1674,6 +1674,8 @@ export interface SimulationProfiler {
   constructionJobsBatched: number;
   constructionPlanBuilds: number;
   constructionPlanCacheHits: number;
+  constructionGuardHits: number;
+  constructionIterations: number;
 }
 
 /**
@@ -1745,6 +1747,8 @@ export interface SimulationLookupContext {
   routeEnvironmentKey: string;
   /** Runtime-only dirty bit for the active-route ledger. */
   dynamicRouteLookupDirty: boolean;
+  /** Worker/session-owned recursive plans. Never serialised into GameState. */
+  constructionAutomationPlanCache: Map<string, CachedConstructionAutomationPlan>;
 }
 
 function profileNow(): number {
@@ -1797,7 +1801,11 @@ function stationDispatchSlotKey(stationId: string, slotIndex: number, scope: Sta
   return `${stationId}|${slotIndex}|${scope}`;
 }
 
-export function createSimulationLookupContext(state: GameState, profiler?: SimulationProfiler): SimulationLookupContext {
+export function createSimulationLookupContext(
+  state: GameState,
+  profiler?: SimulationProfiler,
+  constructionAutomationPlanCache = new Map<string, CachedConstructionAutomationPlan>(),
+): SimulationLookupContext {
   const startedAt = profileNow();
   const context: SimulationLookupContext = {
     entityById: new Map(state.entities.map((entity) => [entity.id, entity])),
@@ -1831,6 +1839,7 @@ export function createSimulationLookupContext(state: GameState, profiler?: Simul
     interstellarPaths: new Map(),
     routeEnvironmentKey: routeEnvironmentKey(state),
     dynamicRouteLookupDirty: true,
+    constructionAutomationPlanCache,
   };
   const addTo = <T>(map: Map<string, T[]>, key: string, value: T) => {
     const values = map.get(key);
@@ -5269,6 +5278,7 @@ export function runPlanetSimulationPhase(
     phaseLookup.entitiesByPlanet.get(planetId) ?? [],
     batchConstructionAutomation,
     profiler,
+    phaseLookup,
   );
   if (profiler) profiler.constructionMs += profileNow() - subsystemStartedAt;
   subsystemStartedAt = profiler ? profileNow() : 0;
@@ -5469,7 +5479,9 @@ export function completeSimulationStep(
     );
     if (profiler) profiler.quantumMs += profileNow() - quantumStartedAt;
   }
-  if (lookup && boundaryLookupDirty) Object.assign(lookup, createSimulationLookupContext(state, profiler));
+  if (lookup && boundaryLookupDirty) {
+    Object.assign(lookup, createSimulationLookupContext(state, profiler, lookup.constructionAutomationPlanCache));
+  }
   if (state.endgame.exportWindowStartedAt <= 0) state.endgame.exportWindowStartedAt = state.elapsedSeconds;
   const exportWindowSeconds = state.elapsedSeconds - state.endgame.exportWindowStartedAt;
   if (exportWindowSeconds >= 10 - EPSILON) {
@@ -5750,7 +5762,9 @@ function simulateStep(
     );
     if (profiler) profiler.quantumMs += profileNow() - quantumStartedAt;
   }
-  if (lookup && boundaryLookupDirty) Object.assign(lookup, createSimulationLookupContext(state, profiler));
+  if (lookup && boundaryLookupDirty) {
+    Object.assign(lookup, createSimulationLookupContext(state, profiler, lookup.constructionAutomationPlanCache));
+  }
   if (state.endgame.exportWindowStartedAt <= 0) state.endgame.exportWindowStartedAt = state.elapsedSeconds;
   const exportWindowSeconds = state.elapsedSeconds - state.endgame.exportWindowStartedAt;
   if (exportWindowSeconds >= 10 - EPSILON) {
@@ -5974,6 +5988,8 @@ export function createSimulationProfiler(): SimulationProfiler {
     constructionJobsBatched: 0,
     constructionPlanBuilds: 0,
     constructionPlanCacheHits: 0,
+    constructionGuardHits: 0,
+    constructionIterations: 0,
   };
 }
 
@@ -6145,7 +6161,12 @@ export function advancePersistentSimulationRuntime(
   const next = completeSimulationAdvanceSession(session);
   runtime.state = next;
   const cacheRebuilt = next !== before;
-  if (cacheRebuilt) runtime.lookup = next.paused ? undefined : createSimulationLookupContext(next, profiler);
+  if (cacheRebuilt) {
+    const constructionAutomationPlanCache = runtime.lookup?.constructionAutomationPlanCache;
+    runtime.lookup = next.paused
+      ? undefined
+      : createSimulationLookupContext(next, profiler, constructionAutomationPlanCache);
+  }
   return { state: next, changed: session.changed, cacheRebuilt };
 }
 
@@ -6168,7 +6189,12 @@ export async function advancePersistentSimulationRuntimeMulticore(
   const next = completeSimulationAdvanceSession(session);
   runtime.state = next;
   const cacheRebuilt = next !== before;
-  if (cacheRebuilt) runtime.lookup = next.paused ? undefined : createSimulationLookupContext(next, profiler);
+  if (cacheRebuilt) {
+    const constructionAutomationPlanCache = runtime.lookup?.constructionAutomationPlanCache;
+    runtime.lookup = next.paused
+      ? undefined
+      : createSimulationLookupContext(next, profiler, constructionAutomationPlanCache);
+  }
   return { state: next, changed: session.changed, cacheRebuilt };
 }
 
@@ -8941,6 +8967,18 @@ export interface ConstructionAutomationStatus {
   wipItems?: Array<{ itemId: ItemId; amount: number }>;
   destroyedByproductCount?: number;
   destroyedByproductItems?: Array<{ itemId: ItemId; amount: number }>;
+  protectionReason?: "high-stack";
+}
+
+export const CONSTRUCTION_AUTOMATION_PROTECTION_STACK_THRESHOLD = 10_000;
+export const CONSTRUCTION_AUTOMATION_MAX_ITERATIONS_PER_SIMULATION_SECOND = 256;
+export const CONSTRUCTION_AUTOMATION_MAX_PLAN_BUILDS_PER_SIMULATION_SECOND = 24;
+const CONSTRUCTION_AUTOMATION_MAX_FAIR_BATCH_JOBS = 4_096;
+
+function constructionAutomationProtectedStage(entity: FactoryEntity, stage: string): Pick<ConstructionAutomationStatus, "stage" | "protectionReason"> {
+  return entity.machineCount >= CONSTRUCTION_AUTOMATION_PROTECTION_STACK_THRESHOLD
+    ? { stage: `计算保护中 · 高堆叠分段 · ${stage}`, protectionReason: "high-stack" }
+    : { stage };
 }
 
 export interface ConstructionCenterTraceSample {
@@ -9027,10 +9065,11 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
       ? job.recipeDecisions?.find((decision) => decision.itemId === step.outputItemId && decision.recipeId === step.recipeId)
       : undefined;
     const wipItems = inventoryItems(job.inventory);
-    return {
-      stage: state.paused ? "游戏已暂停" : !state.constructionAutomation.enabled ? "自动制造已暂停" : noPower ? "等待供电" : blockedByMaterials ? "等待材料" : step.kind === "building"
+    const stage = state.paused ? "游戏已暂停" : !state.constructionAutomation.enabled ? "自动制造已暂停" : noPower ? "等待供电" : blockedByMaterials ? "等待材料" : step.kind === "building"
         ? `制造 ${getConstructionDefinition(step.constructionId)?.name ?? step.constructionId}`
-        : step.kind === "fleet" ? `入库 ${ITEMS[step.itemId].name}` : `加工 ${ITEMS[step.outputItemId].name}`,
+        : step.kind === "fleet" ? `入库 ${ITEMS[step.itemId].name}` : `加工 ${ITEMS[step.outputItemId].name}`;
+    return {
+      ...constructionAutomationProtectedStage(entity, stage),
       progress: Math.max(0, Math.min(1, job.elapsedSeconds / duration)),
       etaSeconds: Math.max(0, (duration - job.elapsedSeconds) + job.steps.slice(job.stepIndex + 1).reduce((sum, pending) => sum + constructionAutomationStepDuration(state, pending), 0)) /
         Math.max(1, entity.machineCount),
@@ -9060,7 +9099,7 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
   const plan = buildConstructionAutomationPlan(state, target.definition, entity.planetId);
   if (plan.blocker) {
     return {
-      stage: "等待材料",
+      ...constructionAutomationProtectedStage(entity, "等待材料"),
       progress: 0,
       etaSeconds: 0,
       missingItemId: plan.blocker.itemId,
@@ -9086,7 +9125,7 @@ export function getConstructionAutomationStatus(state: GameState, entityId: stri
   const lastDecision = plan.recipeDecisions?.at(-1);
   const recipeName = lastDecision ? getRecipe(lastDecision.recipeId)?.name : null;
   return {
-    stage: `准备 ${target.definition.name}${recipeName ? ` · ${recipeName}` : ""}`,
+    ...constructionAutomationProtectedStage(entity, `准备 ${target.definition.name}${recipeName ? ` · ${recipeName}` : ""}`),
     progress: 0,
     etaSeconds: plan.steps.reduce((sum, step) => sum + constructionAutomationStepDuration(state, step), 0) / Math.max(1, entity.machineCount),
     recipeName: recipeName ?? undefined,
@@ -9352,7 +9391,58 @@ function hasSingleConstructionAutomationTarget(state: GameState, targetId: Const
 interface CachedConstructionAutomationPlan {
   plan: ConstructionAutomationPlan;
   batch: RepeatableConstructionAutomationBatch | null;
-  relevantInventory: Partial<Record<ItemId, number>>;
+  inventorySnapshot: Partial<Record<ItemId, number>>;
+  materialInventoryVersion: string;
+}
+
+interface ConstructionAutomationComputeBudget {
+  remainingIterations: number;
+  remainingPlanBuilds: number;
+}
+
+function constructionAutomationInventorySnapshot(state: GameState, planetId: PlanetId): Partial<Record<ItemId, number>> {
+  return Object.fromEntries((Object.entries(trayForPlanet(state, planetId)) as Array<[ItemId, number]>)
+    .map(([itemId, amount]) => [itemId, Math.max(0, Math.floor(amount ?? 0))] as const)
+    .filter(([, amount]) => amount > 0)
+    .sort(([left], [right]) => left.localeCompare(right))) as Partial<Record<ItemId, number>>;
+}
+
+function constructionAutomationInventoryVersion(inventory: Partial<Record<ItemId, number>>): string {
+  return (Object.entries(inventory) as Array<[ItemId, number]>)
+    .map(([itemId, amount]) => `${itemId}:${amount}`)
+    .join("|");
+}
+
+function constructionAutomationPlanCacheKey(
+  state: GameState,
+  definition: ConstructionAutomationTargetDefinition,
+  planetId: PlanetId,
+): string {
+  const technologyVersion = [...state.research.completedTechIds].sort().join(",");
+  const contentVersion = state.contentPacks.map((pack) => `${pack.id}@${pack.version}`).sort().join(",");
+  return `${planetId}|${definition.id}|${definition.recipeId ?? "building"}|${technologyVersion}|${contentVersion}`;
+}
+
+function constructionAutomationPlanInputsAvailable(
+  state: GameState,
+  planetId: PlanetId,
+  plan: ConstructionAutomationPlan,
+): boolean {
+  let inventory: Partial<Record<ItemId, number>> = {};
+  let tray = { ...trayForPlanet(state, planetId) };
+  for (const step of plan.steps) {
+    const consumed = planConstructionAutomationConsumption(inventory, tray, constructionAutomationRequirements(step));
+    if (!consumed) return false;
+    inventory = consumed.inventory;
+    tray = consumed.tray;
+    if (step.kind !== "material") continue;
+    const recipe = getRecipe(step.recipeId);
+    if (!recipe) return false;
+    for (const output of recipe.outputs) {
+      inventory[output.itemId] = Math.floor((inventory[output.itemId] ?? 0) + output.amount * step.batches);
+    }
+  }
+  return true;
 }
 
 function constructionAutomationBatchInputsAvailable(
@@ -9371,36 +9461,44 @@ function constructionAutomationCachedPlanValid(
   planetId: PlanetId,
   cached: CachedConstructionAutomationPlan,
 ): boolean {
-  if (!cached.batch || !constructionAutomationBatchInputsAvailable(state, planetId, cached.batch)) return false;
-  const tray = trayForPlanet(state, planetId);
-  return cached.batch.relevantItems.every((itemId) =>
-    Math.max(0, Math.floor(tray[itemId] ?? 0)) <= Math.max(0, Math.floor(cached.relevantInventory[itemId] ?? 0)));
+  const inventorySnapshot = constructionAutomationInventorySnapshot(state, planetId);
+  const materialInventoryVersion = constructionAutomationInventoryVersion(inventorySnapshot);
+  if (materialInventoryVersion === cached.materialInventoryVersion) return true;
+  if (cached.plan.blocker) return false;
+  const materialAdded = (Object.entries(inventorySnapshot) as Array<[ItemId, number]>).some(([itemId, amount]) =>
+    amount > Math.max(0, Math.floor(cached.inventorySnapshot[itemId] ?? 0)));
+  if (materialAdded || !constructionAutomationPlanInputsAvailable(state, planetId, cached.plan)) return false;
+  cached.inventorySnapshot = inventorySnapshot;
+  cached.materialInventoryVersion = materialInventoryVersion;
+  return true;
 }
 
 function resolveConstructionAutomationPlan(
   state: GameState,
   definition: ConstructionAutomationTargetDefinition,
   planetId: PlanetId,
-  cache: Map<ConstructionAutomationTargetId, CachedConstructionAutomationPlan>,
+  cache: Map<string, CachedConstructionAutomationPlan>,
+  budget: ConstructionAutomationComputeBudget,
   profiler?: SimulationProfiler,
-): CachedConstructionAutomationPlan {
-  const cached = cache.get(definition.id);
+): CachedConstructionAutomationPlan | null {
+  const cacheKey = constructionAutomationPlanCacheKey(state, definition, planetId);
+  const cached = cache.get(cacheKey);
   if (cached && constructionAutomationCachedPlanValid(state, planetId, cached)) {
     if (profiler) profiler.constructionPlanCacheHits += 1;
     return cached;
   }
+  if (budget.remainingPlanBuilds < 1) return null;
+  budget.remainingPlanBuilds -= 1;
   const plan = buildConstructionAutomationPlan(state, definition, planetId);
   const batch = plan.blocker ? null : analyzeRepeatableConstructionAutomationPlan(state, definition, plan);
-  const tray = trayForPlanet(state, planetId);
+  const inventorySnapshot = constructionAutomationInventorySnapshot(state, planetId);
   const resolved = {
     plan,
     batch,
-    relevantInventory: Object.fromEntries((batch?.relevantItems ?? []).map((itemId) => [
-      itemId,
-      Math.max(0, Math.floor(tray[itemId] ?? 0)),
-    ])) as Partial<Record<ItemId, number>>,
+    inventorySnapshot,
+    materialInventoryVersion: constructionAutomationInventoryVersion(inventorySnapshot),
   };
-  cache.set(definition.id, resolved);
+  cache.set(cacheKey, resolved);
   if (profiler) profiler.constructionPlanBuilds += 1;
   return resolved;
 }
@@ -9480,6 +9578,8 @@ function tryRunConstructionAutomationBatch(
   definition: ConstructionAutomationTargetDefinition,
   repeatable: RepeatableConstructionAutomationBatch,
   remainingWork: number,
+  activeTargetCount: number,
+  highLoadProtection: boolean,
 ): { usedWork: number; completed: number; jobs: number } | null {
   if (repeatable.workSeconds <= EPSILON || definition.outputAmount < 1) return null;
   const target = Math.max(0, Math.floor(state.constructionAutomation.targetStock[definition.id] ?? 0));
@@ -9496,7 +9596,14 @@ function tryRunConstructionAutomationBatch(
   const canRepeat = hasSingleConstructionAutomationTarget(state, definition.id) &&
     Object.keys(state.constructionAutomation.jobs).length === 0 &&
     constructionAutomationBatchCanRepeat(state, entity.planetId, repeatable);
-  const jobs = canRepeat ? Math.min(jobsForTarget, jobsForWork, jobsForStock) : 1;
+  const canFairBatch = highLoadProtection && constructionAutomationBatchCanRepeat(state, entity.planetId, repeatable);
+  const fairShare = Math.max(1, Math.min(
+    CONSTRUCTION_AUTOMATION_MAX_FAIR_BATCH_JOBS,
+    Math.ceil(jobsForWork / Math.max(1, activeTargetCount)),
+  ));
+  const jobs = canRepeat
+    ? Math.min(jobsForTarget, jobsForWork, jobsForStock)
+    : canFairBatch ? Math.min(jobsForTarget, jobsForWork, jobsForStock, fairShare) : 1;
   const completed = applyConstructionAutomationBatch(state, entity, targetIndex, definition, repeatable, jobs);
   return { usedWork: repeatable.workSeconds * jobs, completed, jobs };
 }
@@ -9509,8 +9616,19 @@ function runConstructionCenters(
   entities = state.entities,
   batchConstructionAutomation = true,
   profiler?: SimulationProfiler,
+  lookup?: SimulationLookupContext,
 ): void {
-  const planCache = new Map<ConstructionAutomationTargetId, CachedConstructionAutomationPlan>();
+  const planCache = lookup?.constructionAutomationPlanCache ?? new Map<string, CachedConstructionAutomationPlan>();
+  const budget: ConstructionAutomationComputeBudget = {
+    // The unbatched path remains an exact deterministic oracle for tests.
+    // Production always uses the guarded batch path.
+    remainingIterations: batchConstructionAutomation
+      ? Math.max(1, Math.ceil(Math.max(0, seconds) * CONSTRUCTION_AUTOMATION_MAX_ITERATIONS_PER_SIMULATION_SECOND))
+      : Number.MAX_SAFE_INTEGER,
+    remainingPlanBuilds: batchConstructionAutomation
+      ? Math.max(1, Math.ceil(Math.max(0, seconds) * CONSTRUCTION_AUTOMATION_MAX_PLAN_BUILDS_PER_SIMULATION_SECOND))
+      : Number.MAX_SAFE_INTEGER,
+  };
   for (const entity of entities) {
     if (entity.planetId !== planetId || entity.buildingId !== "construction_center") continue;
     const powerFactor = powerFactorForEntity(power, entity);
@@ -9526,6 +9644,12 @@ function runConstructionCenters(
     let completed = 0;
     let worked = false;
     while (remainingWork > EPSILON) {
+      if (budget.remainingIterations < 1) {
+        if (profiler) profiler.constructionGuardHits += 1;
+        break;
+      }
+      budget.remainingIterations -= 1;
+      if (profiler) profiler.constructionIterations += 1;
       const remainingBeforeIteration = remainingWork;
       const jobBeforeIteration = job;
       const stepBeforeIteration = job?.stepIndex;
@@ -9533,12 +9657,32 @@ function runConstructionCenters(
         const target = constructionAutomationTarget(state);
         if (!target) break;
         const resolved = batchConstructionAutomation
-          ? resolveConstructionAutomationPlan(state, target.definition, entity.planetId, planCache, profiler)
+          ? resolveConstructionAutomationPlan(state, target.definition, entity.planetId, planCache, budget, profiler)
           : { plan: buildConstructionAutomationPlan(state, target.definition, entity.planetId), batch: null };
+        if (!resolved) {
+          if (profiler) profiler.constructionGuardHits += 1;
+          break;
+        }
         const plan = resolved.plan;
         if (plan.blocker) break;
+        const activeTargetCount = Math.max(1, getConstructionAutomationTargets().filter((candidate) => {
+          if (candidate.requiredTechId && !isTechnologyCompleted(state, candidate.requiredTechId)) return false;
+          return (state.constructionAutomation.targetStock[candidate.id] ?? 0) >
+            constructionAutomationCurrentStock(state, candidate.id) + constructionAutomationPending(state, candidate.id);
+        }).length);
+        const highLoadProtection = entity.machineCount >= CONSTRUCTION_AUTOMATION_PROTECTION_STACK_THRESHOLD ||
+          remainingWork > CONSTRUCTION_AUTOMATION_MAX_ITERATIONS_PER_SIMULATION_SECOND;
         const batched = batchConstructionAutomation && resolved.batch
-          ? tryRunConstructionAutomationBatch(state, entity, target.index, target.definition, resolved.batch, remainingWork)
+          ? tryRunConstructionAutomationBatch(
+            state,
+            entity,
+            target.index,
+            target.definition,
+            resolved.batch,
+            remainingWork,
+            activeTargetCount,
+            highLoadProtection,
+          )
           : null;
         if (batched) {
           remainingWork = Math.max(0, remainingWork - batched.usedWork);

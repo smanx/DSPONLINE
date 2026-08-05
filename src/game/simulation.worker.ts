@@ -27,7 +27,8 @@ export interface SimulationWorkerResponse {
   id: number;
   changed: boolean;
   state?: GameState;
-  durationMs?: number;
+  /** Lightweight request duration is always returned; detailed phases remain opt-in. */
+  durationMs: number;
   /** JSON-equivalent payload size, sampled only while the diagnostics panel is active. */
   transferBytes?: number;
   profiler?: SimulationProfiler;
@@ -59,12 +60,14 @@ let simulationMessageQueue: Promise<void> = Promise.resolve();
 // prevents an older awaited planet-phase response from racing a newer state or
 // registry update and overwriting the authoritative runtime.
 self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
+  const receivedAt = performance.now();
   simulationMessageQueue = simulationMessageQueue
-    .then(() => processSimulationRequest(event))
+    .then(() => processSimulationRequest(event, receivedAt))
     .catch((error) => {
       self.postMessage({
         id: event.data.id,
         changed: false,
+        durationMs: Math.max(0, performance.now() - receivedAt),
         needsState: true,
         registryFingerprint: activeRegistryFingerprint ?? undefined,
         registryError: error instanceof Error ? error.message : "模拟 Worker 处理失败，已请求安全重建",
@@ -72,7 +75,7 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
     });
 };
 
-async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequest>): Promise<void> {
+async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequest>, receivedAt: number): Promise<void> {
   const { id, state, simulationSeconds, wallSeconds, profile, registryFingerprint, registry, stateRevision } = event.data;
   const profiler = profile ? createSimulationProfiler() : undefined;
   const reusedState = !state && Boolean(runtime);
@@ -82,6 +85,7 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
       self.postMessage({
         id,
         changed: false,
+        durationMs: Math.max(0, performance.now() - receivedAt),
         needsRegistry: true,
         registryFingerprint: activeRegistryFingerprint ?? undefined,
         registryError: "内容包运行时注册表缺失或指纹不匹配",
@@ -94,6 +98,7 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
       self.postMessage({
         id,
         changed: false,
+        durationMs: Math.max(0, performance.now() - receivedAt),
         needsRegistry: true,
         registryFingerprint: activeRegistryFingerprint ?? undefined,
         registryError: error instanceof Error ? error.message : "内容包运行时目录校验失败",
@@ -114,10 +119,16 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
     runtimeRevision = Math.max(runtimeRevision + 1, stateRevision ?? 0);
   }
   if (!runtime) {
-    self.postMessage({ id, changed: false, needsState: true, registryFingerprint: activeRegistryFingerprint } satisfies SimulationWorkerResponse);
+    self.postMessage({
+      id,
+      changed: false,
+      durationMs: Math.max(0, performance.now() - receivedAt),
+      needsState: true,
+      registryFingerprint: activeRegistryFingerprint,
+    } satisfies SimulationWorkerResponse);
     return;
   }
-  const startedAt = profile ? performance.now() : 0;
+  const startedAt = performance.now();
   const previousState = runtime.state;
   const projectionBaseline = captureSimulationProjectionBaseline(previousState);
   const previousRevision = runtimeRevision;
@@ -171,10 +182,11 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
   const response: SimulationWorkerResponse = {
     id,
     changed: result.changed,
+    durationMs: Math.max(0, performance.now() - startedAt),
     protocol: event.data.protocol ?? "full",
     stateRevision: runtimeRevision,
     ...(result.changed && (event.data.protocol !== "delta" || suppliedState) ? { state: result.state } : {}),
-    ...(profile ? { durationMs: Math.max(0, performance.now() - startedAt), profiler } : {}),
+    ...(profile ? { profiler } : {}),
     reusedState,
     cacheRebuilt: result.cacheRebuilt,
     registryFingerprint: activeRegistryFingerprint ?? undefined,

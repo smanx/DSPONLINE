@@ -281,7 +281,7 @@ import { mergeSimulationProjections, type SimulationProjection } from "./game/si
 import { applySimulationStateDelta, readExperimentalSimulationDeltaMode } from "./game/simulationDelta";
 import { readMulticoreSimulationOptions } from "./game/multicoreSimulation";
 import { getOnboardingFocusTarget, getOnboardingStep, recordBasicOnboardingEvent, type OnboardingActionId } from "./game/onboarding";
-import { takeSimulationBudgetSlice } from "./game/simulationBudget";
+import { accumulateSimulationBudget, NORMAL_SIMULATION_SLICE_SECONDS, takeSimulationBudgetSlice } from "./game/simulationBudget";
 import { readOfflineApproximationEnabled } from "./game/offlineApproximation";
 import {
   createTimeWarpComputeGovernor,
@@ -790,6 +790,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [rewardFlights, setRewardFlights] = useState<RewardFlight[]>([]);
   const [planetTransition, setPlanetTransition] = useState<PlanetTransition | null>(null);
   const [simulationWorkerActive, setSimulationWorkerActive] = useState(false);
+  const [simulationWorkerGeneration, setSimulationWorkerGeneration] = useState(0);
   const [pageHidden, setPageHidden] = useState(document.visibilityState === "hidden");
   const [lowFrameRateMode, setLowFrameRateMode] = useState(false);
   const [automaticRefreshState, setAutomaticRefreshState] = useState(() => createAutomaticRefreshState(coarsePointer));
@@ -1444,9 +1445,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [publishTimeWarpComputeState]);
 
   const abortPureIdleForWorkerFailure = useCallback((message: string) => {
+    const canRebuildWorker = typeof Worker !== "undefined";
     simulationWorkerRef.current?.terminate();
     simulationWorkerRef.current = null;
-    simulationWorkerDisabledRef.current = true;
+    simulationWorkerDisabledRef.current = !canRebuildWorker;
     simulationSubmissionRef.current = null;
     lastSimulationResultRef.current = null;
     simulationPendingSecondsRef.current = 0;
@@ -1457,34 +1459,40 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       timeWarpComputeStateRef.current,
       gameRef.current.settings.simulationSpeed,
     ));
-    setGame((current) => {
-      const next = setPaused(setTimeWarpEnabled(current, false), true);
-      gameRef.current = next;
-      return next;
-    });
+    // Publish the stop boundary to the scheduler ref before React renders it.
+    // Otherwise the next timer tick can still observe time warp as enabled
+    // after the worker was terminated and overwrite the real failure reason.
+    const stoppedState = setPaused(setTimeWarpEnabled(gameRef.current, false), true);
+    gameRef.current = stoppedState;
+    setGame(stoppedState);
     pureIdleActiveRef.current = false;
     setPureIdleActive(false);
     setPureIdleStartedAt(null);
+    if (canRebuildWorker) setSimulationWorkerGeneration((generation) => generation + 1);
     setNotice(message);
   }, [publishTimeWarpComputeState]);
 
   const stopPureIdle = useCallback(async () => {
     pureIdleStoppingRef.current = true;
+    pureIdleActiveRef.current = false;
+    setPureIdleActive(false);
+    setNotice("正在停止纯挂机；未提交切片不会计入收益");
     // Let one already-running worker segment reach its safe boundary before
     // taking the final snapshot. The timer will not submit another segment.
     const waitStartedAt = performance.now();
-    while (simulationSubmissionRef.current && performance.now() - waitStartedAt < 5_000) {
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+    while (simulationSubmissionRef.current && performance.now() - waitStartedAt < 750) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 25));
     }
     let timedOut = false;
     if (simulationSubmissionRef.current) {
       timedOut = true;
       simulationWorkerRef.current?.terminate();
       simulationWorkerRef.current = null;
-      simulationWorkerDisabledRef.current = true;
+      simulationWorkerDisabledRef.current = false;
       setSimulationWorkerActive(false);
       simulationSubmissionRef.current = null;
       lastSimulationResultRef.current = null;
+      setSimulationWorkerGeneration((generation) => generation + 1);
     }
     // Pending acceleration is only a scheduler budget. It has not reached a
     // deterministic commit and must never be synchronously replayed on the
@@ -1497,8 +1505,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       : setTimeWarpEnabled(gameRef.current, false);
     gameRef.current = next;
     setGame(next);
-    pureIdleActiveRef.current = false;
-    setPureIdleActive(false);
     setPureIdleStartedAt(null);
     const result = await persistPrimarySave(next);
     if (!result.success) {
@@ -1624,6 +1630,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       }
       return;
     }
+    // A replacement Worker has no registry state even when the previous
+    // instance acknowledged the same fingerprint. Force the first request to
+    // carry the runtime registry and rebuild the authoritative cache safely.
+    simulationWorkerRegistryFingerprintRef.current = null;
     const worker = new Worker(new URL("./game/simulation.worker.ts", import.meta.url), { type: "module", name: "factory-simulation" });
     simulationWorkerRef.current = worker;
     setSimulationWorkerActive(true);
@@ -1757,7 +1767,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       simulationWorkerRef.current = null;
       simulationSubmissionRef.current = null;
     };
-  }, [abortPureIdleForWorkerFailure, publishTimeWarpComputeState]);
+  }, [abortPureIdleForWorkerFailure, publishTimeWarpComputeState, simulationWorkerGeneration]);
 
   useEffect(() => {
     let previous = performance.now();
@@ -1796,7 +1806,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         : null;
       const elapsedSimulationSeconds = wallSeconds * (timeWarpLimits?.actualMultiplier ?? powerLimitedMultiplier);
       previous = now;
-      const nextPendingSimulationSeconds = simulationPendingSecondsRef.current + elapsedSimulationSeconds;
+      const accumulatedBudget = accumulateSimulationBudget(
+        simulationPendingSecondsRef.current,
+        simulationPendingWallSecondsRef.current,
+        elapsedSimulationSeconds,
+        wallSeconds,
+      );
+      const nextPendingSimulationSeconds = accumulatedBudget.simulationSeconds;
       if (timeWarpLimits && nextPendingSimulationSeconds > timeWarpLimits.maximumPendingSimulationSeconds) {
         const governor = {
           ...timeWarpComputeStateRef.current,
@@ -1812,31 +1828,21 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           baseMultiplier,
         );
       }
-      simulationPendingSecondsRef.current = timeWarpLimits
-        ? Math.min(nextPendingSimulationSeconds, timeWarpLimits.maximumPendingSimulationSeconds)
-        : nextPendingSimulationSeconds;
-      simulationPendingWallSecondsRef.current = timeWarpLimits
-        ? Math.min(
-          simulationPendingWallSecondsRef.current + wallSeconds,
-          timeWarpLimits.maximumPendingSimulationSeconds / Math.max(1, timeWarpLimits.actualMultiplier),
-        )
-        : simulationPendingWallSecondsRef.current + wallSeconds;
+      // Backlog limits throttle future acceleration and request size; they do
+      // not erase simulation time that has already accumulated.
+      simulationPendingSecondsRef.current = nextPendingSimulationSeconds;
+      simulationPendingWallSecondsRef.current = accumulatedBudget.wallSeconds;
       if (timeWarpLimits) setTimeWarpPendingUi(simulationPendingSecondsRef.current);
       const worker = simulationWorkerRef.current;
       if (worker && !simulationWorkerDisabledRef.current) {
         if (simulationSubmissionRef.current) return;
-        const budget = currentState.timeWarp.enabled
-          ? takeSimulationBudgetSlice(
-            simulationPendingSecondsRef.current,
-            simulationPendingWallSecondsRef.current,
-            timeWarpLimits?.sliceSimulationSeconds ?? baseMultiplier,
-          )
-          : {
-            simulationSeconds: simulationPendingSecondsRef.current,
-            wallSeconds: simulationPendingWallSecondsRef.current,
-            remainingSimulationSeconds: 0,
-            remainingWallSeconds: 0,
-          };
+        const budget = takeSimulationBudgetSlice(
+          simulationPendingSecondsRef.current,
+          simulationPendingWallSecondsRef.current,
+          currentState.timeWarp.enabled
+            ? timeWarpLimits?.sliceSimulationSeconds ?? baseMultiplier
+            : NORMAL_SIMULATION_SLICE_SECONDS,
+        );
         const simulationSeconds = budget.simulationSeconds;
         const pendingWallSeconds = budget.wallSeconds;
         simulationPendingSecondsRef.current = budget.remainingSimulationSeconds;
@@ -1894,12 +1900,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         abortPureIdleForWorkerFailure("模拟 Worker 不可用，纯挂机已安全停止并暂停模拟");
         return;
       }
-      const budget = {
-          simulationSeconds: simulationPendingSecondsRef.current,
-          wallSeconds: simulationPendingWallSecondsRef.current,
-          remainingSimulationSeconds: 0,
-          remainingWallSeconds: 0,
-        };
+      const budget = takeSimulationBudgetSlice(
+        simulationPendingSecondsRef.current,
+        simulationPendingWallSecondsRef.current,
+        NORMAL_SIMULATION_SLICE_SECONDS,
+      );
       const simulationSeconds = budget.simulationSeconds;
       const pendingWallSeconds = budget.wallSeconds;
       simulationPendingSecondsRef.current = budget.remainingSimulationSeconds;

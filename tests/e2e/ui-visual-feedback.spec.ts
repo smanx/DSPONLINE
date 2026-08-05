@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-05-v1.0.28";
+const RELEASE_NOTE_ID = "2026-08-05-v1.0.29";
 
 async function seedVisualFactory(page: Page, options: { fontScale?: number; extreme?: boolean } = {}) {
   await page.addInitScript(({ fontScale, extreme, releaseNoteId }) => {
@@ -218,7 +218,7 @@ test("release history supports direct paging and technology wheel stays horizont
   const releaseDialog = page.locator(".release-notes-dialog");
   await releaseDialog.getByRole("button", { name: "查看历史版本" }).click();
   await expect(releaseDialog.locator(".release-notes-history-list > button")).toHaveCount(3);
-  await releaseDialog.getByLabel("跳转版本页").selectOption("8");
+  await releaseDialog.getByLabel("跳转版本页").selectOption("9");
   await expect(releaseDialog.locator(".release-notes-history-list")).toContainText("1.0.0");
   await releaseDialog.locator(".release-notes-history-list").getByRole("button", { name: /1\.0\.0/ }).click();
   const releaseHeading = releaseDialog.getByRole("heading", { name: "公开测试版首发" });
@@ -226,7 +226,7 @@ test("release history supports direct paging and technology wheel stays horizont
   expect(luminance(await releaseHeading.evaluate((element) => getComputedStyle(element).color))).toBeLessThan(160);
   await expectLightSurface(releaseDialog.locator(".release-notes-scroll li > i").first(), 205);
   await releaseDialog.getByRole("button", { name: "查看历史版本" }).click();
-  await expect(releaseDialog.getByLabel("跳转版本页")).toHaveValue("8");
+  await expect(releaseDialog.getByLabel("跳转版本页")).toHaveValue("9");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect.poll(() => releaseDialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   await page.screenshot({ path: "artifacts/qa/ui-2026-08-04/G1-release-history-pagination-after.png", fullPage: true });

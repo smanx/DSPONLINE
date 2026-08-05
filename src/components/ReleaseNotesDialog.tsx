@@ -5,58 +5,40 @@ import { NATIVE_BACK_EVENT } from "../nativeApp";
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-08-05-v1.0.28",
+  id: "2026-08-05-v1.0.29",
   date: "2026年8月5日",
-  version: "1.0.28",
-  title: "亮色主题与工厂交互更新",
-  summary: "1.0.28 统一亮色/深色主题、设置分类、版本历史、科技树滚轮和物品悬浮交互，并改进批量建造、科研喷涂、统计与重整精炼。GameState v46、存档 envelope v2 与云 schema v7 不变。",
+  version: "1.0.29",
+  title: "建筑制造与时间扭曲稳定性热修",
+  summary: "1.0.29 为高堆叠建筑制造中心增加确定性计算保护，限制 Worker 切片并改进时间扭曲停止恢复；GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
   items: [
     {
-      id: "semantic-themes",
-      title: "统一语义主题",
-      description: "亮色和深色主题覆盖工作区、节点、线路、弹窗、表单、禁用、选中和危险状态；主题偏好只保存在本机设备。",
+      id: "construction-guard",
+      title: "高堆叠计算保护",
+      description: "建筑制造中心按确定性迭代和递归计划预算分段处理；任务、WIP、材料、目标库存和进度继续保留，其他模拟阶段不被阻塞。",
     },
     {
-      id: "settings-history",
-      title: "设置与版本历史",
-      description: "设置页改为分类总览和二级页面；1.0.0 起的更新记录支持离线分页、详情返回、页码与滚动位置保持。",
+      id: "bounded-slices",
+      title: "有限 Worker 切片",
+      description: "普通模拟每次最多提交 2 个模拟秒，时间扭曲单片最多 12 秒；未提交的积压时间不会被静默丢弃。",
     },
     {
-      id: "technology-wheel",
-      title: "科技树滚轮",
-      description: "科技树区域消费鼠标和触控板滚轮并统一转换为横向移动，阻止页面纵向滚动穿透。",
+      id: "stop-recovery",
+      title: "停止与 Worker 恢复",
+      description: "停止时间扭曲会立即阻止新切片，最多等待 750 毫秒；超时自动重建 Worker，明确提示未提交切片不计入收益。",
     },
     {
-      id: "item-hover",
-      title: "物品悬浮交互",
-      description: "物品卡缩小触发范围，支持鼠标、键盘焦点、移动点击/长按，以及定位和打开图鉴。",
-    },
-    {
-      id: "batch-production",
-      title: "批量生产与科研",
-      description: "堆叠目标、建筑制造中心和混合选区保持原子守恒；矩阵科研支持喷涂加速，重整精炼接入科技、配方图和生产统计。",
-    },
-    {
-      id: "statistics-timewarp",
-      title: "统计与时间扭曲",
-      description: "统计首屏复用缓存和 Worker，时间扭曲按设备预算分段并在不足时降档；白糖 /min 排行榜由相邻主云修订服务端计算。",
-    },
-    {
-      id: "release-compatibility",
-      title: "存档与在线协议保持兼容",
-      description: "本版不改变 GameState v46、存档 envelope v2、云 schema v7 或 SQLite layout v2；新增 UI 偏好不进入存档、云端、排行榜或状态哈希。",
+      id: "deterministic-compatibility",
+      title: "确定性与存档兼容",
+      description: "计算预算和运行时缓存不进入 GameState、存档或云端；保存重载、递归任务、物流、库存和生产状态继续兼容。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "semantic-themes": Shield,
-  "settings-history": History,
-  "technology-wheel": Route,
-  "item-hover": Info,
-  "batch-production": Layers,
-  "statistics-timewarp": Gauge,
-  "release-compatibility": Check,
+  "construction-guard": Shield,
+  "bounded-slices": Gauge,
+  "stop-recovery": MessageCircle,
+  "deterministic-compatibility": Check,
 };
 
 export interface ReleaseNotesRecord {
@@ -71,6 +53,16 @@ export interface ReleaseNotesRecord {
 /** Static, offline-readable history. Keep entries small; only one page is rendered. */
 export const RELEASE_NOTES_HISTORY: readonly ReleaseNotesRecord[] = [
   CURRENT_RELEASE_NOTES,
+  {
+    id: "2026-08-05-v1.0.28", date: "2026年8月5日", version: "1.0.28", title: "亮色主题与工厂交互更新",
+    summary: "1.0.28 统一亮色/深色主题、设置分类、版本历史、科技树滚轮和物品悬浮交互，并改进批量建造、科研喷涂、统计与重整精炼。GameState v46、存档 envelope v2 与云 schema v7 不变。",
+    items: [
+      { id: "semantic-themes", title: "统一语义主题", description: "亮色和深色主题覆盖工作区、节点、线路、弹窗、表单、禁用、选中和危险状态；主题偏好只保存在本机设备。" },
+      { id: "settings-history", title: "设置与版本历史", description: "设置页改为分类总览和二级页面；1.0.0 起的更新记录支持离线分页、详情返回、页码与滚动位置保持。" },
+      { id: "technology-wheel", title: "科技树滚轮", description: "科技树区域消费鼠标和触控板滚轮并统一转换为横向移动，阻止页面纵向滚动穿透。" },
+      { id: "item-hover", title: "物品悬浮交互", description: "物品卡缩小触发范围，支持鼠标、键盘焦点、移动点击/长按，以及定位和打开图鉴。" },
+    ],
+  },
   {
     id: "2026-08-04-v1.0.27", date: "2026年8月4日", version: "1.0.27", title: "连接交互与批量建造",
     summary: "连接点偏好、建筑制造中心批量目标、混合选区和移动多选保持设备级交互与库存守恒。",

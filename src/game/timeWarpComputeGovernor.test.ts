@@ -5,6 +5,8 @@ import {
   recordTimeWarpComputeSample,
   resolveTimeWarpComputeLimits,
   shouldAbortTimeWarpWorker,
+  TIME_WARP_MAX_SLICE_SIMULATION_SECONDS,
+  TIME_WARP_WORKER_HARD_TIMEOUT_MS,
 } from "./timeWarpComputeGovernor";
 
 describe("time-warp compute governor", () => {
@@ -59,10 +61,11 @@ describe("time-warp compute governor", () => {
   });
 
   it("bounds pending work to a small number of dynamic slices", () => {
-    const governor = { ...createTimeWarpComputeGovernor(1), sampleCount: 4, computeLimitedMultiplier: 8, sliceSimulationSeconds: 10 };
+    const governor = { ...createTimeWarpComputeGovernor(1), sampleCount: 4, computeLimitedMultiplier: 8, sliceSimulationSeconds: 100 };
     const limits = resolveTimeWarpComputeLimits(governor, 12, 10, 1);
     expect(limits.actualMultiplier).toBe(8);
-    expect(limits.maximumPendingSimulationSeconds).toBe(25);
+    expect(limits.sliceSimulationSeconds).toBe(TIME_WARP_MAX_SLICE_SIMULATION_SECONDS);
+    expect(limits.maximumPendingSimulationSeconds).toBe(TIME_WARP_MAX_SLICE_SIMULATION_SECONDS * 2.5);
   });
 
   it("marks failures and detects a hard timeout without mutating game state", () => {
@@ -70,5 +73,7 @@ describe("time-warp compute governor", () => {
     expect(unavailable).toMatchObject({ computeLimitedMultiplier: 2, reason: "worker-unavailable" });
     expect(shouldAbortTimeWarpWorker(1_000, 5_999, 5_000)).toBe(false);
     expect(shouldAbortTimeWarpWorker(1_000, 6_000, 5_000)).toBe(true);
+    expect(shouldAbortTimeWarpWorker(1_000, 1_000 + TIME_WARP_WORKER_HARD_TIMEOUT_MS - 1)).toBe(false);
+    expect(shouldAbortTimeWarpWorker(1_000, 1_000 + TIME_WARP_WORKER_HARD_TIMEOUT_MS)).toBe(true);
   });
 });

@@ -38,9 +38,10 @@ export interface TimeWarpComputeSample {
   baseMultiplier: number;
 }
 
-const TARGET_SLICE_DURATION_SECONDS = 0.5;
-const SLOW_SLICE_DURATION_MS = 2_000;
-const MAX_SLICE_SIMULATION_SECONDS = 120;
+const TARGET_SLICE_DURATION_SECONDS = 0.35;
+const SLOW_SLICE_DURATION_MS = 1_000;
+export const TIME_WARP_MAX_SLICE_SIMULATION_SECONDS = 12;
+export const TIME_WARP_WORKER_HARD_TIMEOUT_MS = 2_000;
 const MIN_PENDING_SLICES = 2.5;
 
 function safeMultiplier(value: number, fallback: number): number {
@@ -80,7 +81,7 @@ export function resolveTimeWarpComputeLimits(
   const sliceSimulationSeconds = clamp(
     governor.sliceSimulationSeconds,
     base,
-    MAX_SLICE_SIMULATION_SECONDS,
+    TIME_WARP_MAX_SLICE_SIMULATION_SECONDS,
   );
   const maximumPendingSimulationSeconds = Math.max(
     sliceSimulationSeconds * MIN_PENDING_SLICES,
@@ -134,7 +135,7 @@ export function recordTimeWarpComputeSample(
   const targetSlice = clamp(
     throughputEma * TARGET_SLICE_DURATION_SECONDS,
     base,
-    MAX_SLICE_SIMULATION_SECONDS,
+    TIME_WARP_MAX_SLICE_SIMULATION_SECONDS,
   );
   const provisional = {
     ...governor,
@@ -193,6 +194,6 @@ export function markTimeWarpWorkerUnavailable(
   };
 }
 
-export function shouldAbortTimeWarpWorker(submittedAt: number, now: number, hardTimeoutMs = 5_000): boolean {
+export function shouldAbortTimeWarpWorker(submittedAt: number, now: number, hardTimeoutMs = TIME_WARP_WORKER_HARD_TIMEOUT_MS): boolean {
   return Number.isFinite(submittedAt) && Number.isFinite(now) && now - submittedAt >= Math.max(1_000, hardTimeoutMs);
 }

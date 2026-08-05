@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { takeSimulationBudgetSlice } from "./simulationBudget";
+import { accumulateSimulationBudget, NORMAL_SIMULATION_SLICE_SECONDS, takeSimulationBudgetSlice } from "./simulationBudget";
 
 describe("time-warp simulation budget slicing", () => {
   it("caps one worker request while preserving the clock ratio", () => {
@@ -34,6 +34,28 @@ describe("time-warp simulation budget slicing", () => {
       wallSeconds: 0.5,
       remainingSimulationSeconds: 0,
       remainingWallSeconds: 0,
+    });
+  });
+
+  it("bounds normal-play catch-up requests without dropping accumulated time", () => {
+    const slice = takeSimulationBudgetSlice(12, 6, NORMAL_SIMULATION_SLICE_SECONDS);
+    expect(slice).toEqual({
+      simulationSeconds: 2,
+      wallSeconds: 1,
+      remainingSimulationSeconds: 10,
+      remainingWallSeconds: 5,
+    });
+  });
+
+  it("preserves backlog above a governor threshold until bounded slices commit it", () => {
+    const accumulated = accumulateSimulationBudget(30, 3.75, 12, 1.5);
+    expect(accumulated).toEqual({ simulationSeconds: 42, wallSeconds: 5.25 });
+    const slice = takeSimulationBudgetSlice(accumulated.simulationSeconds, accumulated.wallSeconds, 12);
+    expect(slice).toEqual({
+      simulationSeconds: 12,
+      wallSeconds: 1.5,
+      remainingSimulationSeconds: 30,
+      remainingWallSeconds: 3.75,
     });
   });
 });

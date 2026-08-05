@@ -5,6 +5,26 @@ export interface SimulationBudgetSlice {
   remainingWallSeconds: number;
 }
 
+/** Normal play may catch up, but never submits an unbounded accumulated task. */
+export const NORMAL_SIMULATION_SLICE_SECONDS = 2;
+
+/** Add scheduler debt without applying request-size or throttle limits. */
+export function accumulateSimulationBudget(
+  pendingSimulationSeconds: number,
+  pendingWallSeconds: number,
+  elapsedSimulationSeconds: number,
+  elapsedWallSeconds: number,
+): { simulationSeconds: number; wallSeconds: number } {
+  const pendingSimulation = Number.isFinite(pendingSimulationSeconds) ? Math.max(0, pendingSimulationSeconds) : 0;
+  const pendingWall = Number.isFinite(pendingWallSeconds) ? Math.max(0, pendingWallSeconds) : 0;
+  const elapsedSimulation = Number.isFinite(elapsedSimulationSeconds) ? Math.max(0, elapsedSimulationSeconds) : 0;
+  const elapsedWall = Number.isFinite(elapsedWallSeconds) ? Math.max(0, elapsedWallSeconds) : 0;
+  return {
+    simulationSeconds: pendingSimulation + elapsedSimulation,
+    wallSeconds: pendingWall + elapsedWall,
+  };
+}
+
 /**
  * Take one bounded simulation slice while preserving the simulation/wall
  * clock ratio. This is a scheduling boundary only; the engine still performs
@@ -37,4 +57,3 @@ export function takeSimulationBudgetSlice(
     remainingWallSeconds: Math.max(0, wall - takenWall),
   };
 }
-
