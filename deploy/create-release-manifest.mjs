@@ -96,7 +96,9 @@ async function createManifest({ allowDirty, output, bundleRoot }) {
   if (dirty && !allowDirty) throw new Error("Refusing to create a release manifest from a dirty worktree; pass --allow-dirty only for diagnostics");
   const shortSha = gitSha.slice(0, 12);
   const releaseId = `${packageJson.version}-${shortSha}${dirty ? "-dirty" : ""}`;
-  const files = bundleRoot ? await collectFiles(bundleRoot) : await describeReleaseFiles();
+  const files = bundleRoot
+    ? await Promise.all((await collectFiles(bundleRoot)).map(describeFile))
+    : await describeReleaseFiles();
   const manifest = {
     formatVersion: 1,
     releaseId,
