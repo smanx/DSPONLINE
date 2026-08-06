@@ -33,6 +33,15 @@ describe("pure idle background grace", () => {
     });
   });
 
+  it("does not extend the grace window when background marking is repeated", () => {
+    const first = 1_000_000 + 60_000;
+    const repeated = first + 120_000;
+    const plan = getPureIdleBackgroundPlan(record(first), repeated + 5 * 60_000);
+    expect(plan.highWallSeconds).toBe(60 + PURE_IDLE_BACKGROUND_GRACE_SECONDS);
+    expect(plan.normalOfflineSeconds).toBe(120);
+    expect(plan.graceExpired).toBe(true);
+  });
+
   it("moves the remainder to ordinary offline time after the grace window", () => {
     const startedAt = 1_000_000 + 60_000;
     const plan = getPureIdleBackgroundPlan(

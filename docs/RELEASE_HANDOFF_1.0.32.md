@@ -1,13 +1,13 @@
 # DSPidle2 1.0.32 开发交接
 
 > 状态：Development handoff / 未发布
-> 日期：2026-08-06
+> 日期：2026-08-07
 > 角色：Development Agent
 > 发布授权：未授予；本文不授权香港/上海 VPS、下载页、生产数据库或安装包发布
 
 ## 1. 交接结论
 
-1.0.32 的补充开发已经在当前共享工作区完成代码、专项测试和生产构建验证。本批不改变 GameState v46、存档 envelope v2、云 schema v7 或排行榜服务端校验口径，也没有部署、上传玩家存档或生成可发布签名制品。
+1.0.32 的补充开发已在独立 `codex/release-1.0.32` worktree 完成，并进入本地发布门禁阶段。本批不改变 GameState v46、存档 envelope v2、云 schema v7 或排行榜服务端校验口径；没有连接 VPS、上传玩家存档、写入生产数据库或发布公网下载页。
 
 本批包含四项交接任务：
 
@@ -16,7 +16,7 @@
 - `V1032-OFFLINE-RESEARCH-COMPLETION`：修复离线/纯挂机跨科研完成边界后投入已满但科技不完成的问题；旧 v46 存档加载和模拟边界执行幂等自愈。
 - `V1032-RELEASE-HISTORY-PAGING`：修复公告详情态直接跳页无效，并保证历史版本详情渲染静态数据中的全部更新条目。
 
-同时完成方案 2 的宏观纯挂机实验原型：独立 Worker 执行 3×10 秒校准，使用 IndexedDB 检查点/心跳、Web Lock 与可过期租约防止重复结算；候选状态必须经过存档序列化、迁移和安全校验后才可提交。活动普通科研或无限科研时不进入宏观仿射合同，而使用精确 Worker；启动发现含活动科研的旧检查点时保留检查点，并提供“放弃未结算并继续普通模拟”操作。
+同时完成方案 2 的宏观纯挂机实验原型：独立 Worker 执行 3×10 秒校准，使用 IndexedDB 检查点/心跳、Web Lock 与可过期租约防止重复结算；候选状态必须经过存档序列化、迁移和安全校验后才可提交。页面进入后台后高倍率只保留 300 秒宽限；恢复时先重建这段宏观候选，超过部分交给普通离线 Worker。活动普通科研或无限科研时不进入宏观仿射合同，而使用精确 Worker；启动发现含活动科研的旧检查点时保留检查点，并提供“放弃未结算并继续普通模拟”操作。
 
 ## 2. 来源与基线
 
@@ -43,6 +43,7 @@
 - 速通面板展开态与旧行为一致；折叠态只显示计时、状态图标和展开按钮，刷新、返回主页、切换工作区后偏好保持。
 - 三条递归制造路径使用同一策略；原油不足时准确提示原油，氢分馏不得被用来伪造氢；规划失败原子不扣料，成功保留副产氢并与执行库存一致。
 - 离线、纯挂机、Worker 返回、命令切换和加载 v46 存档后，已满足成本的科技只完成一次、奖励只发一次、队列合法续接；取消或恢复不清空科研投入。
+- 页面隐藏或硬关闭后，高倍率宏观最多结算后台 5 分钟；剩余时间只能走普通离线结算，恢复/保存失败时原主存档和检查点保持不变。
 - 公告详情态直接跳到任意历史页立即打开对应列表，任意历史版本显示完整静态更新条目，桌面/手机/大字号均可用。
 
 ### Compatibility / data preservation
@@ -98,6 +99,8 @@ Chrome/Edge Web、Windows Electron、Android Chrome/WebView、PWA；桌面、手
 - 合同只允许可证明的累计/库存增量，冻结或拒绝航线 cargo、路线 progress、传送带流量、功率诊断等瞬时字段；候选最终执行非负、容量、有限数值、资源守恒、序列化重载门禁。
 - 纯挂机停止以墙钟边界为准，已提交预算只结算一次；未提交预算不会在主线程补算。开始前已暂停的工厂停止后恢复暂停，运行中的工厂正常停止后恢复运行。
 - 当前并非完整的行星/物品/量子/矿脉生产域账本。复杂物流、有限矿脉、流体循环、量子状态或建造中心出现未建模边界时，必须继续使用精确路径或明确阻止宏观会话；不得把当前实验宣称为任意存档的 30 秒硬保证。
+- 后台策略：`backgroundStartedAtMs` 只存在恢复日志；隐藏/`pagehide` 时记录一次边界，`getPureIdleBackgroundPlan()` 将 `startedAtMs → backgroundStartedAtMs + 300s` 归入宏观，其余归入普通离线秒数。新启动没有 `pagehide` 标记时使用最后一次持久心跳作为保守边界，避免硬关闭恢复无限高倍率时间。
+- `App` 使用运行时单飞互斥，避免可见性事件和 1 秒定时器并发重建/保存两个候选；普通离线 Worker 失败、取消或主存档写入失败都会保留原主档和恢复记录。
 
 ## 5. 当前验证结果
 
@@ -106,10 +109,14 @@ Chrome/Edge Web、Windows Electron、Android Chrome/WebView、PWA；桌面、手
 | 命令 | 当前结果 |
 | --- | --- |
 | `npm run typecheck` | 通过，0 个 TypeScript 错误 |
-| 专项 Vitest（7 个文件） | 348/348 通过 |
-| `npm test -- --run` | 88 个文件通过、5 个跳过；802 项通过、16 项跳过；0 失败 |
-| `npm run build` | 通过，Vite 转换 1,880 个模块；仅有常规大 chunk 警告 |
-| `git diff --check` | 通过（包含本交接文档；Release Agent 在提取 clean commit 后仍需复跑） |
+| 专项 Vitest（8 个文件） | 352/352 通过 |
+| `npm test -- --run` | 89 个文件通过、5 个跳过；806 项通过、16 项跳过；0 失败 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run test:server` | 49/49 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 8/8 通过 |
+| `npm run build` | 待 clean commit 后重跑 |
+| `git diff --check` | 通过 |
 
 ### 5.2 浏览器专项
 
@@ -125,7 +132,7 @@ Chrome/Edge Web、Windows Electron、Android Chrome/WebView、PWA；桌面、手
 
 ### 5.3 全量 Playwright
 
-`npx playwright test --workers=1 --reporter=dot` 完成 251 个场景：240 通过、11 项显式跳过、0 失败，单 worker 耗时约 11.7 分钟。默认 Vite API 代理目标仍为 `127.0.0.1:65534`，本次以静默 stderr 避免本地未启动 API 的拒绝日志淹没测试输出；页面断言与退出码均通过。Release Agent 仍必须在独立 clean commit 和其目标 API 配置下重跑完整发布矩阵。
+`npx playwright test --workers=1 --reporter=dot` 待 clean commit 后重跑；真实夹具专项仍覆盖 5 分钟宽限、普通离线尾段、取消/崩溃恢复和正式存档重载。
 
 ## 6. 修改文件
 
@@ -163,12 +170,11 @@ Chrome/Edge Web、Windows Electron、Android Chrome/WebView、PWA；桌面、手
 
 ### Commit / artifacts
 
-- Commit SHA：`unknown`；共享 dirty 基线提交为 `7d07618b9517ceb63aeb011dcad093a9c0db9b60`。
-- 独立 1.0.32 commit：未创建。
-- Build ID：未生成；当前 package 版本仍为开发基线 `1.0.31`。
-- 不可变 Web/API、Android、Windows 制品：未生成。
-- release manifest、聚合 SHA-256、签名连续性证明：`unknown`。
-- 本地 `dist/` 仅为验证构建输出，不能直接上传或部署。
+- 构建基线：`7d07618b9517ceb63aeb011dcad093a9c0db9b60`；隔离分支：`codex/release-1.0.32`。
+- 1.0.32 clean source commit：待最终门禁前创建；本文件会在制品生成后补写 SHA 和 Build ID。
+- package / Android：`1.0.32` / `1000032`；server package 保持独立版本规则 `0.4.0`。
+- Build ID、不可变 Web/API、Android、Windows 制品和 aggregate manifest：待 clean commit 后生成；不会覆盖 1.0.31 制品。
+- 当前没有部署 VPS、修改生产数据库或更新公网下载页；本地夹具均只读。
 
 ## 7. 未验证项目与剩余风险
 

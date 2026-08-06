@@ -911,6 +911,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const pureIdleOwnerTokenRef = useRef(getPureIdleOwnerToken());
   const pureIdleMacroRestartingRef = useRef(false);
   const pureIdleBackgroundOfflineAbortRef = useRef<AbortController | null>(null);
+  // Visibility and interval callbacks can race while a background recovery
+  // Worker is being rebuilt. Keep this boundary single-flight so a candidate
+  // is never finalized or saved twice.
+  const pureIdleBackgroundRecoveryRef = useRef(false);
   const pureIdleContinueAvailableRef = useRef(false);
   const pureIdleHeartbeatAtRef = useRef(0);
   const workerLatencyMsRef = useRef(0);
@@ -1486,7 +1490,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   ): Promise<"continued" | "completed" | "not-backgrounded"> => {
     const plan = getPureIdleBackgroundPlan(record, nowMs);
     if (!plan.backgrounded) return "not-backgrounded";
-    if (pureIdleStoppingRef.current) return "completed";
+    if (pureIdleStoppingRef.current || pureIdleBackgroundRecoveryRef.current) return "completed";
+    pureIdleBackgroundRecoveryRef.current = true;
 
     // Rebuild from the durable checkpoint for every visibility transition. The
     // in-memory candidate is deliberately disposable, so a backgrounded tab
@@ -1501,6 +1506,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         const summary = await client.advance(plan.highWallSeconds);
         if (!pureIdleMacroActiveRef.current || pureIdleRecoveryRef.current?.sessionId !== record.sessionId) {
           client.close();
+          pureIdleBackgroundRecoveryRef.current = false;
           return "completed";
         }
         pureIdleMacroClientRef.current = client;
@@ -1511,12 +1517,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           pureIdleRecoveryRef.current = withoutBackground;
         }
         setPureIdleRecoveryStatus(cleared ? "后台宽限内已恢复纯挂机" : "后台宽限已恢复；恢复日志仍在重试");
+        pureIdleBackgroundRecoveryRef.current = false;
         return "continued";
       } catch (error) {
         client.close();
         const message = error instanceof Error ? error.message : "后台纯挂机恢复失败";
         setPureIdleRecoveryStatus(`${message}；恢复日志与原主存档保持不变`);
         setNotice(`${message}；正在等待安全重建`);
+        pureIdleBackgroundRecoveryRef.current = false;
         return "completed";
       }
     }
@@ -1576,6 +1584,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       finalizer.close();
       pureIdleBackgroundOfflineAbortRef.current = null;
       pureIdleStoppingRef.current = false;
+      pureIdleBackgroundRecoveryRef.current = false;
     }
   }, [persistPrimarySave, publishPureIdleMacroSummary, setPureIdleRecoveryContinueState]);
 
