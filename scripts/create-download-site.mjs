@@ -54,9 +54,9 @@ if (desktopSha !== String(desktopRecord.sha256).toLowerCase()) throw new Error("
 const humanSize = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 const escaped = (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 const notes = [
-  `${version.version} 快速离线与速通模式更新`,
-  "长时间离线默认尝试 30 秒精确校准后的批量外推，严格验证失败会自动回到精确结算",
-  "新增独立速通工厂和服务端验证排行榜；普通存档、普通排行榜与存档协议保持不变",
+  `${version.version} 离线结算与高倍率挂机稳定性更新`,
+  "修复快速离线游标崩溃，增加生产历史曲线、施工库存删除与锁定配方拓扑保护",
+  "优化移动端统计滚动和 8x、12x、16x 纯挂机治理；GameState v46 与云协议保持不变",
 ].join("；");
 const values = {
   __VERSION__: version.version,
