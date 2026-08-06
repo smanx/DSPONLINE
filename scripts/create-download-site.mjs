@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, readFile, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,6 +16,7 @@ for (let index = 2; index < process.argv.length; index += 1) {
 
 const releaseDirectory = path.resolve(root, args.get("release") || "release/download-site");
 const templatePath = path.resolve(root, args.get("template") || "deploy/download-page-template.html");
+const iconPath = path.resolve(root, args.get("icon") || "public/icon.svg");
 const androidManifestPath = path.join(releaseDirectory, "downloads/android/stable.json");
 const desktopManifestPath = path.join(releaseDirectory, "downloads/desktop/stable/release.json");
 const desktopFeedPath = path.join(releaseDirectory, "downloads/desktop/stable/latest.yml");
@@ -75,5 +76,8 @@ const values = {
 let page = template;
 for (const [key, value] of Object.entries(values)) page = page.replaceAll(key, escaped(value));
 if (page.includes("__VERSION__") || page.includes("__ANDROID_") || page.includes("__DESKTOP_")) throw new Error("Download page contains unresolved placeholders");
-await writeFile(path.join(releaseDirectory, "index.html"), page, "utf8");
+await Promise.all([
+  writeFile(path.join(releaseDirectory, "index.html"), page, "utf8"),
+  copyFile(iconPath, path.join(releaseDirectory, "icon.svg")),
+]);
 console.log(`Download page generated for ${version.version} at ${path.relative(root, path.join(releaseDirectory, "index.html"))}`);

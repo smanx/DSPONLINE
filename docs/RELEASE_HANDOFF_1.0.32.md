@@ -1,13 +1,13 @@
-# DSPidle2 1.0.32 开发交接
+# DSPidle2 1.0.32 开发与发布交接
 
-> 状态：Development handoff / 未发布
+> 状态：Release complete / 已发布
 > 日期：2026-08-07
-> 角色：Development Agent
-> 发布授权：未授予；本文不授权香港/上海 VPS、下载页、生产数据库或安装包发布
+> 角色：Development Agent + Release Agent
+> 发布授权：用户已在本任务中明确授权香港/上海 VPS、下载页和安装包发布；按发布安全边界未使用生产账号执行写测试
 
 ## 1. 交接结论
 
-1.0.32 的补充开发已在独立 `codex/release-1.0.32` worktree 完成，并进入本地发布门禁阶段。本批不改变 GameState v46、存档 envelope v2、云 schema v7 或排行榜服务端校验口径；没有连接 VPS、上传玩家存档、写入生产数据库或发布公网下载页。
+1.0.32 的补充开发、最终门禁和生产发布均已完成。本批不改变 GameState v46、存档 envelope v2、云 schema v7 或排行榜服务端校验口径；真实夹具没有上传到生产账号，生产数据库没有恢复、替换或初始化。最终生产证据见 [1.0.32 发布记录](./releases/1.0.32.md)。
 
 本批包含四项交接任务：
 
@@ -59,7 +59,7 @@ Chrome/Edge Web、Windows Electron、Android Chrome/WebView、PWA；桌面、手
 
 ### Release target
 
-`1.0.32`。当前 `package.json`/构建元数据仍是开发基线 `1.0.31`，Release Agent 必须在独立 clean commit 中完成版本号、versionCode、Build ID 和制品生成；本文件不表示已发布。
+`1.0.32`。最终 clean source commit 为 `762bf693becb97a62d8c1ce8de60bf6e9083f0cc`，Build ID 为 `1.0.32+762bf693becb`，Android 为 `1.0.32 / 1000032`；香港、上海和下载页均已发布。
 
 ## 3. 已实现内容
 
@@ -115,7 +115,7 @@ Chrome/Edge Web、Windows Electron、Android Chrome/WebView、PWA；桌面、手
 | `npm run test:server` | 49/49 通过 |
 | `npm run test:ops` | 6/6 通过 |
 | `npm run test:native` | 8/8 通过 |
-| `npm run build` | 待 clean commit 后重跑 |
+| `npm run build` | 从最终 clean commit 重跑通过 |
 | `git diff --check` | 通过 |
 
 ### 5.2 浏览器专项
@@ -132,11 +132,11 @@ Chrome/Edge Web、Windows Electron、Android Chrome/WebView、PWA；桌面、手
 
 ### 5.3 全量 Playwright
 
-`npx playwright test --workers=1 --reporter=dot` 待 clean commit 后重跑；真实夹具专项仍覆盖 5 分钟宽限、普通离线尾段、取消/崩溃恢复和正式存档重载。
+最终 clean commit 的 `npm run test:e2e` 为 242 项通过、11 项显式可选夹具/故障注入跳过、0 失败。两份真实夹具各有 5/5 只读验证通过，覆盖 5 分钟宽限、普通离线尾段、取消/崩溃恢复和正式存档重载。
 
 ## 6. 修改文件
 
-本次共享工作区涉及的源代码、测试和文档文件如下。由于工作区包含先前批次未提交修改，Release Agent 必须逐 hunk 审查并提取 1.0.32 相关内容，不得整文件覆盖或 reset：
+开发阶段共享工作区涉及的源代码、测试和文档文件如下；当时因混有先前批次未提交修改，Release Agent 逐 hunk 审查后提取到独立 clean commit。该列表保留用于审计，主工作树没有被整文件覆盖、reset 或 clean：
 
 - `src/App.tsx`
 - `src/components/ReleaseNotesDialog.test.ts`
@@ -171,51 +171,51 @@ Chrome/Edge Web、Windows Electron、Android Chrome/WebView、PWA；桌面、手
 ### Commit / artifacts
 
 - 构建基线：`7d07618b9517ceb63aeb011dcad093a9c0db9b60`；隔离分支：`codex/release-1.0.32`。
-- 1.0.32 clean source commit：待最终门禁前创建；本文件会在制品生成后补写 SHA 和 Build ID。
+- 1.0.32 clean source commit：`762bf693becb97a62d8c1ce8de60bf6e9083f0cc`；Build ID：`1.0.32+762bf693becb`。
 - package / Android：`1.0.32` / `1000032`；server package 保持独立版本规则 `0.4.0`。
-- Build ID、不可变 Web/API、Android、Windows 制品和 aggregate manifest：待 clean commit 后生成；不会覆盖 1.0.31 制品。
-- 当前没有部署 VPS、修改生产数据库或更新公网下载页；本地夹具均只读。
+- Web/API、Android、Windows、稳定清单和下载页均从最终提交生成；149 文件清单聚合 SHA-256 为 `26f858bb95a6ba8f95fff8bbcfd81d0bb614dbfbf9f1cf3fd08906b186c18461`。
+- 香港、上海 Web/API 和上海下载页已发布；本地夹具保持只读，生产数据库只执行一致性备份，没有写入测试存档。
 
 ## 7. 未验证项目与剩余风险
 
 1. 宏观纯挂机仍是受保护的广义仿射合同，不是方案 2 的完整生产域账本；复杂流体/量子/有限矿脉/在途物流/建造中心场景可能回退精确或被资格门禁拒绝。
 2. 真实夹具当前在桌面 Chrome 验证；Android Chrome/WebView、Electron、低内存设备和后台挂起/崩溃恢复尚未完成长时压力验证。Node/RSS 内存峰值不能直接推断移动端安全。
 3. 本地 E2E 的 `/api/analytics`、`/api/health`、`/api/presence`、`/api/public-status` 等请求曾记录 `ECONNREFUSED 127.0.0.1:65534`；这不是生产节点故障，但说明本轮没有运行本地 API 服务。
-4. 没有执行 `npm run test:server`、`npm run test:ops`、`npm run test:native`、`npm run licenses:check`、原生签名、release manifest 或真实云/排行榜提交；本批没有写入生产数据库。
+4. 服务端 49/49、运维 6/6、原生工具 8/8、许可证、原生签名和 release manifest 已完成；仍未执行真实生产账号云写入或排行榜提交。
 
-## 8. Release Agent 接手门禁
+## 8. Release Agent 门禁执行结果
 
-1. 在干净分支从 `7d07618` 及已批准 hunk 建立唯一 1.0.32 commit；确认 `git status --short` 无未预期文件，不能从共享 dirty 工作区直接发布。
-2. 将 Web/API、Android versionCode、Windows/Android 包版本和 `version.json` 提升到 `1.0.32`，生成新的 Build ID；1.0.31 制品不得覆盖。
-3. 先跑 `npm run typecheck`、`npm test -- --run`、`npm run test:server`、`npm run test:ops`、`npm run test:native`、`npm run licenses:check`、`npm run build` 和完整 Playwright；失败必须回开发修复。
-4. 用 7.3 MB 与 17.34 MB 夹具在桌面 Chrome/Edge、Android Chrome/WebView 和 Electron 验证 30 天宏观纯挂机、科研精确回退、取消、正式重载和内存上限；不得上传真实玩家存档到生产账号。
-5. 生成并核验 immutable manifest、聚合 SHA-256、Android 长期证书连续性、Windows 未签名标识、Service Worker/version.json 和云 schema v7 兼容性。
-6. 取得单独的发布授权后，按既有备份、健康检查、原子切换和回滚流程分别处理香港/上海；本交接不包含任何密钥、密码或证书私钥，也不授权下载页更新。
+1. 已从独立 clean worktree 的唯一源码提交 `762bf693...` 构建；主工作树和 `stash@{0}` 未被修改。
+2. Web/API、Android、Windows、`version.json` 和稳定清单均绑定 `1.0.32+762bf693becb`；没有覆盖 1.0.31 制品。
+3. 类型、单元、服务端、运维、原生工具、许可证、生产构建和完整 Playwright 均通过，精确数量见第 5 节。
+4. 两份真实终局夹具在桌面 Chrome 各完成 5/5 只读验证；Edge、Android Chrome/WebView 和 Electron 长时夹具未执行，作为剩余风险保留。真实夹具未上传到生产账号。
+5. 149 文件 immutable manifest、聚合 SHA-256、Android 长期证书连续性、Windows `NotSigned`、Service Worker/`version.json` 缓存和云 schema v7 兼容性均已核验。
+6. 用户随后明确授予发布授权；香港、上海和下载页均按备份、新目录、原子切换、健康检查与回滚流程完成，未输出或写入任何密钥、密码或证书私钥。
 
 ## 9. 回滚边界
 
-- 代码回滚到发布时确认的 1.0.31 immutable release 目录和 commit；当前指针由 Release Agent 在发布前填写。
+- Web/API 代码回滚到 `1.0.31-19040a9d1e45`；上海下载页直接回滚到原 `download-site-1.0.32-762bf693becb`，更深一层保留 1.0.31。
 - 不删除或重写玩家 GameState、云存档、速通记录、递归 WIP、科研缓存或纯挂机 IndexedDB 恢复日志作为回滚手段。
 - 若宏观合同校验、科研边界或 Worker 恢复出现问题，关闭宏观尝试并保留原精确 Worker；活动科研始终可走精确路径。
 - 发布失败只切回旧代码目录，不恢复或替换生产数据库，除非按独立灾难恢复流程明确授权。
 
-## 10. 2026-08-07 开发停止检查点
+## 10. 2026-08-07 历史开发停止检查点
 
-本轮按用户要求停止在发布前边界，交给 Release Agent 继续。应用代码和发布工具的最后 clean source commit 为：
+以下内容记录开发角色停止时的发布前状态，仅供审计；后续 Release Agent 已完成最终制品、完整 E2E 和生产发布，当前状态以本文顶部及 [正式发布记录](./releases/1.0.32.md) 为准。应用代码和发布工具的最后 clean source commit 为：
 
 - `762bf693becb97a62d8c1ce8de60bf6e9083f0cc`（`codex/release-1.0.32`）
-- 其父提交 `cfe95fca96717f8baf23bf80252dfd83b976bd5c` 已生成过一轮临时制品；最终制品必须重新绑定 `1.0.32+762bf693becb`。
+- 其父提交 `cfe95fca96717f8baf23bf80252dfd83b976bd5c` 曾生成一轮临时制品；正式发布没有复用这些制品，而是重新绑定 `1.0.32+762bf693becb`。
 - `deploy/create-release-manifest.mjs` 已修复 bundle-root 清单写入路径字符串、导致 verifier 读取 undefined 的缺陷。
 
-从 `762bf693` 重新运行并通过：`npm ci`、`npm --prefix server ci`、`npm run licenses:check`（128 包）、`npm run typecheck`、`npm test -- --run`（89 文件：806 passed、16 skipped、0 failed）、`npm run test:server`（49/49）、`npm run test:ops`（6/6）、`npm run test:native`（8/8）、`npm run build`、`git diff --check`。最终 SHA 的全量 `npm run test:e2e` 已启动但按用户指示中断，不能记为通过。
+开发停止前从 `762bf693` 重新运行并通过：`npm ci`、`npm --prefix server ci`、`npm run licenses:check`（128 包）、`npm run typecheck`、`npm test -- --run`（89 文件：806 passed、16 skipped、0 failed）、`npm run test:server`（49/49）、`npm run test:ops`（6/6）、`npm run test:native`（8/8）、`npm run build`、`git diff --check`。当时最终 SHA 的全量 E2E 被中断；Release Agent 后续从同一 SHA 完整重跑 `npm run test:e2e`，结果为 242 项通过、11 项显式跳过、0 失败。
 
-此前在父提交上完成的 Chrome 只读真实夹具证据：两份夹具各完成 30 天纯挂机宏观、5 分钟后台宽限、普通离线尾段、租约/检查点、Worker 崩溃恢复、取消和序列化重载；7.3 MB 约 4.2～4.8 秒，17.34 MB 约 14～15 秒，源文件 hash 均未改变。活动有限科研在单元测试和临时浏览器验证中均明确拒绝宏观合同并保持源状态不变；未验证 Edge、Android Chrome/WebView、Electron 长时真实夹具。
+父提交上的 Chrome 只读真实夹具证据随后也在最终提交上复验：两份夹具各完成 30 天纯挂机宏观、5 分钟后台宽限、普通离线尾段、租约/检查点、Worker 崩溃恢复、取消和序列化重载；7.3 MB 约 4.2～4.8 秒，17.34 MB 约 14～15 秒，源文件 hash 均未改变。活动有限科研在单元测试和临时浏览器验证中均明确拒绝宏观合同并保持源状态不变；Edge、Android Chrome/WebView、Electron 长时真实夹具仍未验证。
 
-父提交临时制品仍在以下目录，不能直接当作最终 762bf69 制品：
+以下父提交临时制品没有用于生产，不能当作最终 762bf69 制品：
 
 - `D:\GameDev\DSPidle2-release-1.0.32\release\web-1.0.32-cfe95fca9671-clean.tar.gz`
 - `D:\GameDev\DSPidle2-release-1.0.32\release\api-1.0.32-cfe95fca9671-clean.tar.gz`
 - `D:\GameDev\DSPidle2-release-1.0.32\release\download-site-1.0.32-cfe95fca9671.tar.gz`
 - `D:\GameDev\DSPidle2-release-1.0.32\release\update-feed-1.0.32-cfe95fca9671\`
 
-父提交的 bundle manifest 曾因上述工具缺陷验证失败，不能复用。Release Agent 必须从 `762bf693...` 重新跑完整 E2E，设置新的 Build ID，重建 Web/API/APK/EXE/blockmap/稳定清单/本地下载页，运行 `npm run release:manifest -- --bundle-root ...` 与 `npm run release:verify -- ...`，并把最终文件哈希写回本文件后再申请发布。当前没有连接 VPS、生产数据库或公网下载页。
+父提交的 bundle manifest 曾因上述工具缺陷验证失败，因此没有复用。Release Agent 已从 `762bf693...` 重跑完整 E2E，重建并核验 Web/API/APK/EXE/blockmap/稳定清单/本地下载页，随后完成香港、上海和下载页发布；最终哈希、备份与回滚指针见 [正式发布记录](./releases/1.0.32.md)。
