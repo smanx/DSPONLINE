@@ -81,14 +81,14 @@ async function verifyManifest(manifestPath) {
   const mismatches = actualFiles.filter((file, index) => (
     file.size !== manifest.files[index].size || file.sha256 !== manifest.files[index].sha256
   ));
-  if (aggregateHash(actualFiles) !== manifest.aggregateSha256 || mismatches.length > 0) {
+  if ((manifest.fileCount != null && manifest.fileCount !== actualFiles.length) || aggregateHash(actualFiles) !== manifest.aggregateSha256 || mismatches.length > 0) {
     for (const mismatch of mismatches) console.error(`Mismatch: ${mismatch.path}`);
     throw new Error("Release manifest verification failed");
   }
   console.log(`Verified ${actualFiles.length} files for ${manifest.releaseId}`);
 }
 
-async function createManifest({ allowDirty, output }) {
+async function createManifest({ allowDirty, output, bundleRoot }) {
   const packageJson = JSON.parse(await readFile(path.join(repositoryRoot, "package.json"), "utf8"));
   const gitSha = gitText(["rev-parse", "HEAD"]);
   if (!gitSha) throw new Error("A Git checkout is required to create a release manifest");
@@ -96,7 +96,7 @@ async function createManifest({ allowDirty, output }) {
   if (dirty && !allowDirty) throw new Error("Refusing to create a release manifest from a dirty worktree; pass --allow-dirty only for diagnostics");
   const shortSha = gitSha.slice(0, 12);
   const releaseId = `${packageJson.version}-${shortSha}${dirty ? "-dirty" : ""}`;
-  const files = await describeReleaseFiles();
+  const files = bundleRoot ? await collectFiles(bundleRoot) : await describeReleaseFiles();
   const manifest = {
     formatVersion: 1,
     releaseId,
@@ -104,6 +104,7 @@ async function createManifest({ allowDirty, output }) {
     buildId: `${packageJson.version}+${shortSha}${dirty ? ".dirty" : ""}`,
     generatedAt: new Date().toISOString(),
     git: { sha: gitSha, clean: !dirty },
+    fileCount: files.length,
     aggregateSha256: aggregateHash(files),
     files,
   };
@@ -119,8 +120,10 @@ if (verifyIndex >= 0) {
   await verifyManifest(args[verifyIndex + 1]);
 } else {
   const outputIndex = args.indexOf("--output");
+  const bundleRootIndex = args.indexOf("--bundle-root");
   await createManifest({
     allowDirty: args.includes("--allow-dirty"),
     output: outputIndex >= 0 ? args[outputIndex + 1] : null,
+    bundleRoot: bundleRootIndex >= 0 ? args[bundleRootIndex + 1]?.replaceAll("\\", "/") : null,
   });
 }

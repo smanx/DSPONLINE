@@ -1,6 +1,7 @@
 # 原生应用构建与更新
 
 > 当前发布版本：Web/Windows `1.0.31`；Android 正式包 `1.0.31 / 1000031`
+> 1.0.32 本地开发候选：Windows/Electron 与 Android 元数据已同步为 `1.0.32 / 1000032`，尚未发布或写入公网更新清单。
 > 当前公开稳定版本：Windows `1.0.31` 未签名测试包；Android `1.0.31 / 1000031` 正式签名包
 > Windows 包名：`com.dspidle.network`
 > Android applicationId：`cn.dsponline.network`

@@ -1,74 +1,50 @@
-import { Activity, Check, ChevronLeft, ChevronRight, Gauge, History, Info, Layers, MessageCircle, RefreshCw, Route, Shield, ShieldCheck, X, type LucideIcon } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Gauge, History, Info, MessageCircle, RefreshCw, ShieldCheck, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-08-06-v1.0.31",
-  date: "2026年8月6日",
-  version: "1.0.31",
-  title: "离线结算与高倍率挂机稳定性更新",
-  summary: "1.0.31 修复快速离线结算崩溃，补齐统计历史曲线、施工库存删除、锁定配方拓扑保护、移动滚动和高倍率纯挂机治理。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+  id: "2026-08-07-v1.0.32",
+  date: "2026年8月7日",
+  version: "1.0.32",
+  title: "速通与宏观纯挂机稳定性更新",
+  summary: "1.0.32 补齐速通状态面板、递归制造与科研边界自愈，并增加带检查点恢复的宏观纯挂机；后台高倍率最多宽限 5 分钟，剩余时间自动按普通离线规则结算。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
   items: [
     {
-      id: "offline-settlement",
-      title: "快速离线安全回退",
-      description: "循环游标统一归一化，快速路径遇到异常或校验失败时回到精确结算，不会向玩家暴露 undefined 错误，也不会提交半成品状态。",
+      id: "speedrun-panel",
+      title: "速通面板可折叠",
+      description: "速通工厂的计时和三个目标保持可见，目标详情可以折叠；折叠状态只保存为设备级 UI 偏好，不进入存档或排行榜数据。",
     },
     {
-      id: "production-history",
-      title: "生产历史曲线",
-      description: "统计页支持 1 分钟、10 分钟、1 小时和累计总产量窗口，历史数据有界压缩并可按星球、物品和状态筛选。",
+      id: "recursive-research",
+      title: "递归制造与科研自愈",
+      description: "原油上游和净产出规划遵循统一的递归策略；离线、纯挂机或旧存档跨过科研完成边界时，奖励和队列只会幂等修复一次。",
     },
     {
-      id: "research-queue",
-      title: "取消科技自动续队列",
-      description: "取消当前科技后会按原顺序寻找下一项满足前置条件的研究，暂不可研究的项目保留在队列中。",
+      id: "pure-idle-background",
+      title: "纯挂机检查点与后台宽限",
+      description: "宏观纯挂机在 Worker 中运行并持续写入检查点、心跳和租约；页面进入后台后最多保留 5 分钟高倍率，超出部分使用普通离线 Worker，保存失败时保留原主存档。",
     },
     {
-      id: "construction-delete",
-      title: "施工库存删除",
-      description: "施工托盘改为单项删除并二次确认，只清除建筑库存，不拆除画布建筑、不返还材料，自动补货目标保持不变。",
+      id: "release-history",
+      title: "公告历史完整可查",
+      description: "公告详情支持直接跳转历史页，历史版本使用离线静态数据并保留完整条目；列表分页不会一次挂载全部正文。",
     },
     {
-      id: "topology-safety",
-      title: "锁定配方与线路拓扑保护",
-      description: "锁定建筑不会被自动识别改配方；连接数量直接来自权威拓扑，连接完成后无需等待运输 tick 即可显示。",
-    },
-    {
-      id: "mobile-statistics",
-      title: "移动统计可完整滚动",
-      description: "手机和平板统计主体拥有独立纵向滚动区域，并为固定底部导航和安全区预留空间。",
-    },
-    {
-      id: "item-hover",
-      title: "物品悬浮信息可关闭",
-      description: "新增设备级偏好关闭完整物品详情悬浮卡，点击、拖动、定位和图鉴入口仍保持可用。",
-    },
-    {
-      id: "time-warp",
-      title: "高倍率纯挂机治理",
-      description: "8x、12x、16x 纯挂机计算在 Worker 中使用短校准和有界近似，区分供电限制与计算限制，停止时丢弃未提交预算。",
-    },
-    {
-      id: "release-compatibility",
+      id: "save-compatibility",
       title: "存档与在线协议保持兼容",
-      description: "新增 UI 偏好只写入设备 localStorage，不进入 GameState、导入导出、云存档或状态哈希；GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 均不变。",
+      description: "本批不升级 GameState、存档封装、云服务或 SQLite 版本；候选宏观状态必须序列化、重载和安全校验通过后才会写入主存档。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "offline-settlement": Activity,
-  "production-history": Gauge,
-  "research-queue": RefreshCw,
-  "construction-delete": X,
-  "topology-safety": Route,
-  "mobile-statistics": Layers,
-  "item-hover": Info,
-  "time-warp": ShieldCheck,
-  "release-compatibility": Check,
+  "speedrun-panel": Gauge,
+  "recursive-research": RefreshCw,
+  "pure-idle-background": ShieldCheck,
+  "release-history": History,
+  "save-compatibility": Check,
 };
 
 export interface ReleaseNotesRecord {
@@ -83,6 +59,15 @@ export interface ReleaseNotesRecord {
 /** Static, offline-readable history. Keep entries small; only one page is rendered. */
 export const RELEASE_NOTES_HISTORY: readonly ReleaseNotesRecord[] = [
   CURRENT_RELEASE_NOTES,
+  {
+    id: "2026-08-06-v1.0.31", date: "2026年8月6日", version: "1.0.31", title: "离线结算与高倍率挂机稳定性更新",
+    summary: "1.0.31 修复快速离线结算崩溃，补齐统计历史曲线、施工库存删除、锁定配方拓扑保护、移动滚动和高倍率纯挂机治理。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+    items: [
+      { id: "offline-settlement", title: "快速离线安全回退", description: "循环游标统一归一化，快速路径遇到异常或校验失败时回到精确结算，不会提交半成品状态。" },
+      { id: "production-history", title: "生产历史曲线", description: "统计页支持多个时间窗口，历史数据有界压缩并可按星球、物品和状态筛选。" },
+      { id: "time-warp", title: "高倍率纯挂机治理", description: "Worker 使用短校准和有界近似，区分供电限制与计算限制，停止时丢弃未提交预算。" },
+    ],
+  },
   {
     id: "2026-08-05-v1.0.30", date: "2026年8月5日", version: "1.0.30", title: "速通与快速离线实验",
     summary: "新增独立速通工厂、服务端校验榜和带严格回退的快速离线结算实验。",

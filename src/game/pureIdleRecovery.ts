@@ -1,0 +1,466 @@
+import type { PureIdleMacroMode, PureIdleMacroPhase, PureIdleMacroSummary } from "./pureIdleMacro";
+import type { GameState } from "./types";
+
+const DATABASE_NAME = "dsp-idle-network.pure-idle-recovery";
+const DATABASE_VERSION = 1;
+const STORE_NAME = "records";
+const CHECKPOINT_KEY = "checkpoint";
+const HEARTBEAT_KEY = "heartbeat";
+const OWNER_SESSION_KEY = "dsp-idle-network.pure-idle-owner.v1";
+const RECOVERY_SCHEMA_VERSION = 1;
+const LEASE_DURATION_MS = 15_000;
+
+export const PURE_IDLE_BACKGROUND_GRACE_SECONDS = 5 * 60;
+
+interface PureIdleCheckpointRecord {
+  key: typeof CHECKPOINT_KEY;
+  schemaVersion: typeof RECOVERY_SCHEMA_VERSION;
+  sessionId: string;
+  createdAtMs: number;
+  startedAtMs: number;
+  /** UI/runtime state only; never changes the persisted GameState schema. */
+  startedPaused?: boolean;
+  mode: PureIdleMacroMode;
+  state: GameState;
+}
+
+interface PureIdleHeartbeatRecord {
+  key: typeof HEARTBEAT_KEY;
+  schemaVersion: typeof RECOVERY_SCHEMA_VERSION;
+  sessionId: string;
+  ownerToken: string;
+  heartbeatAtMs: number;
+  leaseExpiresAtMs: number;
+  settledWallSeconds: number;
+  phase: PureIdleMacroPhase;
+  backgroundStartedAtMs?: number;
+  summary?: PureIdleMacroSummary;
+  lastError?: string;
+}
+
+export interface PureIdleRecoveryRecord {
+  sessionId: string;
+  createdAtMs: number;
+  startedAtMs: number;
+  startedPaused: boolean;
+  mode: PureIdleMacroMode;
+  state: GameState;
+  ownerToken: string;
+  heartbeatAtMs: number;
+  leaseExpiresAtMs: number;
+  settledWallSeconds: number;
+  phase: PureIdleMacroPhase;
+  backgroundStartedAtMs?: number;
+  summary?: PureIdleMacroSummary;
+  lastError?: string;
+}
+
+export interface PureIdleBackgroundPlan {
+  backgrounded: boolean;
+  totalWallSeconds: number;
+  highWallSeconds: number;
+  normalOfflineSeconds: number;
+  graceExpired: boolean;
+}
+
+export type PureIdleRecoveryClaim =
+  | { ok: true; record: PureIdleRecoveryRecord }
+  | { ok: false; reason: "unavailable" | "missing" | "owned" | "invalid"; message: string };
+
+let databasePromise: Promise<IDBDatabase> | null = null;
+let heldBrowserLease: { ownerToken: string; release: () => void } | null = null;
+
+/**
+ * IndexedDB remains the durable source of truth. Web Locks adds a process
+ * lifetime guard where available, including duplicated tabs that can inherit
+ * the same sessionStorage token before the 15-second durable lease expires.
+ */
+async function acquireBrowserLease(ownerToken: string): Promise<boolean> {
+  if (heldBrowserLease?.ownerToken === ownerToken) return true;
+  if (heldBrowserLease) return false;
+  const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+  if (!locks) return true;
+  return new Promise<boolean>((resolve) => {
+    let resolved = false;
+    void locks.request("dsp-idle-network.pure-idle.v1", { mode: "exclusive", ifAvailable: true }, (lock) => {
+      if (!lock) {
+        resolved = true;
+        resolve(false);
+        return;
+      }
+      let release!: () => void;
+      const lifetime = new Promise<void>((finish) => { release = finish; });
+      heldBrowserLease = {
+        ownerToken,
+        release: () => {
+          if (heldBrowserLease?.ownerToken === ownerToken) heldBrowserLease = null;
+          release();
+        },
+      };
+      resolved = true;
+      resolve(true);
+      return lifetime;
+    }).catch(() => {
+      // Browser lock support is optional. The durable IndexedDB lease still
+      // provides cross-tab protection when a platform rejects Web Locks.
+      if (!resolved) resolve(true);
+    });
+  });
+}
+
+function releaseBrowserLease(ownerToken: string): void {
+  if (heldBrowserLease?.ownerToken === ownerToken) heldBrowserLease.release();
+}
+
+function randomToken(prefix: string): string {
+  try {
+    return `${prefix}_${crypto.randomUUID()}`;
+  } catch {
+    return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+export function getPureIdleOwnerToken(): string {
+  try {
+    const existing = window.sessionStorage.getItem(OWNER_SESSION_KEY);
+    if (existing) return existing;
+    const token = randomToken("owner");
+    window.sessionStorage.setItem(OWNER_SESSION_KEY, token);
+    return token;
+  } catch {
+    return randomToken("owner");
+  }
+}
+
+export function canUsePureIdleRecovery(): boolean {
+  return typeof window !== "undefined" && Boolean(window.indexedDB);
+}
+
+function openDatabase(): Promise<IDBDatabase> {
+  if (databasePromise) return databasePromise;
+  databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
+    if (!canUsePureIdleRecovery()) {
+      reject(new Error("当前环境不支持 IndexedDB 恢复日志"));
+      return;
+    }
+    const request = window.indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME, { keyPath: "key" });
+    };
+    request.onsuccess = () => {
+      request.result.onversionchange = () => request.result.close();
+      resolve(request.result);
+    };
+    request.onerror = () => reject(request.error ?? new Error("无法打开纯挂机恢复日志"));
+    request.onblocked = () => reject(new Error("纯挂机恢复日志升级被其他标签页阻塞"));
+  }).catch((error) => {
+    databasePromise = null;
+    throw error;
+  });
+  return databasePromise!;
+}
+
+function transactionDone(transaction: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error ?? new Error("恢复日志事务失败"));
+    transaction.onabort = () => reject(transaction.error ?? new Error("恢复日志事务已中止"));
+  });
+}
+
+function requestResult<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("恢复日志读取失败"));
+  });
+}
+
+function validCheckpoint(value: unknown): value is PureIdleCheckpointRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<PureIdleCheckpointRecord>;
+  return record.key === CHECKPOINT_KEY && record.schemaVersion === RECOVERY_SCHEMA_VERSION &&
+    typeof record.sessionId === "string" && record.sessionId.length > 0 &&
+    typeof record.startedAtMs === "number" && Number.isFinite(record.startedAtMs) &&
+    (record.startedPaused === undefined || typeof record.startedPaused === "boolean") &&
+    (record.mode === "stable" || record.mode === "extreme") && Boolean(record.state && typeof record.state === "object");
+}
+
+function validHeartbeat(value: unknown): value is PureIdleHeartbeatRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<PureIdleHeartbeatRecord>;
+  return record.key === HEARTBEAT_KEY && record.schemaVersion === RECOVERY_SCHEMA_VERSION &&
+    typeof record.sessionId === "string" && typeof record.ownerToken === "string" &&
+    typeof record.heartbeatAtMs === "number" && Number.isFinite(record.heartbeatAtMs) &&
+    typeof record.leaseExpiresAtMs === "number" && Number.isFinite(record.leaseExpiresAtMs) &&
+    typeof record.settledWallSeconds === "number" && Number.isFinite(record.settledWallSeconds) && record.settledWallSeconds >= 0 &&
+    (record.backgroundStartedAtMs === undefined || (typeof record.backgroundStartedAtMs === "number" && Number.isFinite(record.backgroundStartedAtMs)));
+}
+
+function combine(checkpoint: PureIdleCheckpointRecord, heartbeat: PureIdleHeartbeatRecord): PureIdleRecoveryRecord | null {
+  if (checkpoint.sessionId !== heartbeat.sessionId) return null;
+  return {
+    sessionId: checkpoint.sessionId,
+    createdAtMs: checkpoint.createdAtMs,
+    startedAtMs: checkpoint.startedAtMs,
+    startedPaused: checkpoint.startedPaused === true,
+    mode: checkpoint.mode,
+    state: checkpoint.state,
+    ownerToken: heartbeat.ownerToken,
+    heartbeatAtMs: heartbeat.heartbeatAtMs,
+    leaseExpiresAtMs: heartbeat.leaseExpiresAtMs,
+    settledWallSeconds: heartbeat.settledWallSeconds,
+    phase: heartbeat.phase,
+    ...(heartbeat.backgroundStartedAtMs !== undefined ? { backgroundStartedAtMs: heartbeat.backgroundStartedAtMs } : {}),
+    ...(heartbeat.summary ? { summary: heartbeat.summary } : {}),
+    ...(heartbeat.lastError ? { lastError: heartbeat.lastError } : {}),
+  };
+}
+
+export function getPureIdleBackgroundPlan(
+  record: Pick<PureIdleRecoveryRecord, "startedAtMs" | "backgroundStartedAtMs">,
+  nowMs = Date.now(),
+): PureIdleBackgroundPlan {
+  const totalWallSeconds = Math.max(0, (nowMs - record.startedAtMs) / 1_000);
+  const backgroundStartedAtMs = record.backgroundStartedAtMs;
+  if (backgroundStartedAtMs === undefined || !Number.isFinite(backgroundStartedAtMs)) {
+    return {
+      backgrounded: false,
+      totalWallSeconds,
+      highWallSeconds: totalWallSeconds,
+      normalOfflineSeconds: 0,
+      graceExpired: false,
+    };
+  }
+  const highWallBeforeBackground = Math.max(0, (backgroundStartedAtMs - record.startedAtMs) / 1_000);
+  const highWallSeconds = Math.min(
+    totalWallSeconds,
+    highWallBeforeBackground + PURE_IDLE_BACKGROUND_GRACE_SECONDS,
+  );
+  const normalOfflineSeconds = Math.max(0, totalWallSeconds - highWallSeconds);
+  return {
+    backgrounded: true,
+    totalWallSeconds,
+    highWallSeconds,
+    normalOfflineSeconds,
+    graceExpired: nowMs - backgroundStartedAtMs >= PURE_IDLE_BACKGROUND_GRACE_SECONDS * 1_000,
+  };
+}
+
+async function readPair(): Promise<{ checkpoint?: PureIdleCheckpointRecord; heartbeat?: PureIdleHeartbeatRecord }> {
+  const db = await openDatabase();
+  const transaction = db.transaction(STORE_NAME, "readonly");
+  const done = transactionDone(transaction);
+  const store = transaction.objectStore(STORE_NAME);
+  const [checkpoint, heartbeat] = await Promise.all([
+    requestResult(store.get(CHECKPOINT_KEY)),
+    requestResult(store.get(HEARTBEAT_KEY)),
+  ]);
+  await done;
+  return {
+    ...(validCheckpoint(checkpoint) ? { checkpoint } : {}),
+    ...(validHeartbeat(heartbeat) ? { heartbeat } : {}),
+  };
+}
+
+export async function readPureIdleRecovery(): Promise<PureIdleRecoveryRecord | null> {
+  if (!canUsePureIdleRecovery()) return null;
+  const { checkpoint, heartbeat } = await readPair();
+  return checkpoint && heartbeat ? combine(checkpoint, heartbeat) : null;
+}
+
+export async function createPureIdleRecovery(
+  state: GameState,
+  mode: PureIdleMacroMode,
+  startedAtMs: number,
+  ownerToken: string,
+  nowMs = Date.now(),
+  startedPaused = false,
+): Promise<PureIdleRecoveryClaim> {
+  if (!canUsePureIdleRecovery()) {
+    return { ok: false, reason: "unavailable", message: "当前环境无法建立 IndexedDB 恢复日志，已阻止纯挂机" };
+  }
+  if (!await acquireBrowserLease(ownerToken)) {
+    return { ok: false, reason: "owned", message: "另一个标签页正在运行纯挂机，请先在原标签页停止" };
+  }
+  const db = await openDatabase();
+  const sessionId = randomToken("idle");
+  const transaction = db.transaction(STORE_NAME, "readwrite");
+  const store = transaction.objectStore(STORE_NAME);
+  const existing = await requestResult(store.get(HEARTBEAT_KEY));
+  if (validHeartbeat(existing) && existing.ownerToken !== ownerToken && existing.leaseExpiresAtMs > nowMs) {
+    transaction.abort();
+    releaseBrowserLease(ownerToken);
+    return { ok: false, reason: "owned", message: "另一个标签页正在运行纯挂机，请先在原标签页停止" };
+  }
+  const checkpoint: PureIdleCheckpointRecord = {
+    key: CHECKPOINT_KEY,
+    schemaVersion: RECOVERY_SCHEMA_VERSION,
+    sessionId,
+    createdAtMs: nowMs,
+    startedAtMs,
+    startedPaused,
+    mode,
+    state,
+  };
+  const heartbeat: PureIdleHeartbeatRecord = {
+    key: HEARTBEAT_KEY,
+    schemaVersion: RECOVERY_SCHEMA_VERSION,
+    sessionId,
+    ownerToken,
+    heartbeatAtMs: nowMs,
+    leaseExpiresAtMs: nowMs + LEASE_DURATION_MS,
+    settledWallSeconds: 0,
+    phase: "calibrating",
+  };
+  store.put(checkpoint);
+  store.put(heartbeat);
+  await transactionDone(transaction);
+  return { ok: true, record: combine(checkpoint, heartbeat)! };
+}
+
+export async function claimPureIdleRecovery(
+  ownerToken: string,
+  nowMs = Date.now(),
+): Promise<PureIdleRecoveryClaim> {
+  if (!canUsePureIdleRecovery()) {
+    return { ok: false, reason: "unavailable", message: "当前环境无法读取 IndexedDB 恢复日志" };
+  }
+  if (!await acquireBrowserLease(ownerToken)) {
+    return { ok: false, reason: "owned", message: "另一个标签页仍持有纯挂机会话" };
+  }
+  const db = await openDatabase();
+  const transaction = db.transaction(STORE_NAME, "readwrite");
+  const store = transaction.objectStore(STORE_NAME);
+  const checkpointValue = await requestResult(store.get(CHECKPOINT_KEY));
+  const heartbeatValue = await requestResult(store.get(HEARTBEAT_KEY));
+  if (!checkpointValue && !heartbeatValue) {
+    transaction.abort();
+    releaseBrowserLease(ownerToken);
+    return { ok: false, reason: "missing", message: "没有待恢复的纯挂机会话" };
+  }
+  if (!validCheckpoint(checkpointValue) || !validHeartbeat(heartbeatValue) || checkpointValue.sessionId !== heartbeatValue.sessionId) {
+    transaction.abort();
+    releaseBrowserLease(ownerToken);
+    return { ok: false, reason: "invalid", message: "纯挂机恢复日志不完整，主存档未被修改" };
+  }
+  if (heartbeatValue.ownerToken !== ownerToken && heartbeatValue.leaseExpiresAtMs > nowMs) {
+    transaction.abort();
+    releaseBrowserLease(ownerToken);
+    return { ok: false, reason: "owned", message: "另一个标签页仍持有纯挂机会话" };
+  }
+  const heartbeat: PureIdleHeartbeatRecord = {
+    ...heartbeatValue,
+    ownerToken,
+    heartbeatAtMs: nowMs,
+    leaseExpiresAtMs: nowMs + LEASE_DURATION_MS,
+  };
+  store.put(heartbeat);
+  await transactionDone(transaction);
+  return { ok: true, record: combine(checkpointValue, heartbeat)! };
+}
+
+export async function heartbeatPureIdleRecovery(
+  sessionId: string,
+  ownerToken: string,
+  settledWallSeconds: number,
+  phase: PureIdleMacroPhase,
+  summary?: PureIdleMacroSummary,
+  lastError?: string,
+  nowMs = Date.now(),
+): Promise<boolean> {
+  const db = await openDatabase();
+  const transaction = db.transaction(STORE_NAME, "readwrite");
+  const store = transaction.objectStore(STORE_NAME);
+  const existing = await requestResult(store.get(HEARTBEAT_KEY));
+  if (!validHeartbeat(existing) || existing.sessionId !== sessionId || existing.ownerToken !== ownerToken) {
+    transaction.abort();
+    return false;
+  }
+  store.put({
+    ...existing,
+    heartbeatAtMs: nowMs,
+    leaseExpiresAtMs: nowMs + LEASE_DURATION_MS,
+    settledWallSeconds: Math.max(existing.settledWallSeconds, settledWallSeconds),
+    phase,
+    ...(summary ? { summary } : {}),
+    ...(lastError ? { lastError } : { lastError: undefined }),
+  } satisfies PureIdleHeartbeatRecord);
+  await transactionDone(transaction);
+  return true;
+}
+
+export async function markPureIdleBackground(
+  sessionId: string,
+  ownerToken: string,
+  backgroundStartedAtMs = Date.now(),
+): Promise<boolean> {
+  const db = await openDatabase();
+  const transaction = db.transaction(STORE_NAME, "readwrite");
+  const store = transaction.objectStore(STORE_NAME);
+  const heartbeat = await requestResult(store.get(HEARTBEAT_KEY));
+  if (!validHeartbeat(heartbeat) || heartbeat.sessionId !== sessionId || heartbeat.ownerToken !== ownerToken) {
+    transaction.abort();
+    return false;
+  }
+  store.put({
+    ...heartbeat,
+    backgroundStartedAtMs: heartbeat.backgroundStartedAtMs ?? backgroundStartedAtMs,
+    heartbeatAtMs: backgroundStartedAtMs,
+    leaseExpiresAtMs: backgroundStartedAtMs + LEASE_DURATION_MS,
+  } satisfies PureIdleHeartbeatRecord);
+  await transactionDone(transaction);
+  return true;
+}
+
+export async function clearPureIdleBackground(sessionId: string, ownerToken: string): Promise<boolean> {
+  const db = await openDatabase();
+  const transaction = db.transaction(STORE_NAME, "readwrite");
+  const store = transaction.objectStore(STORE_NAME);
+  const heartbeat = await requestResult(store.get(HEARTBEAT_KEY));
+  if (!validHeartbeat(heartbeat) || heartbeat.sessionId !== sessionId || heartbeat.ownerToken !== ownerToken) {
+    transaction.abort();
+    return false;
+  }
+  const { backgroundStartedAtMs: _backgroundStartedAtMs, ...rest } = heartbeat;
+  store.put(rest satisfies PureIdleHeartbeatRecord);
+  await transactionDone(transaction);
+  return true;
+}
+
+export async function clearPureIdleRecovery(sessionId: string, ownerToken: string): Promise<boolean> {
+  if (!canUsePureIdleRecovery()) return false;
+  const db = await openDatabase();
+  const transaction = db.transaction(STORE_NAME, "readwrite");
+  const store = transaction.objectStore(STORE_NAME);
+  const heartbeat = await requestResult(store.get(HEARTBEAT_KEY));
+  if (!validHeartbeat(heartbeat) || heartbeat.sessionId !== sessionId || heartbeat.ownerToken !== ownerToken) {
+    transaction.abort();
+    return false;
+  }
+  store.delete(CHECKPOINT_KEY);
+  store.delete(HEARTBEAT_KEY);
+  await transactionDone(transaction);
+  releaseBrowserLease(ownerToken);
+  return true;
+}
+
+export async function releasePureIdleRecoveryLease(sessionId: string, ownerToken: string, nowMs = Date.now()): Promise<void> {
+  if (!canUsePureIdleRecovery()) return;
+  try {
+    const db = await openDatabase();
+    const transaction = db.transaction(STORE_NAME, "readwrite");
+    const store = transaction.objectStore(STORE_NAME);
+    const heartbeat = await requestResult(store.get(HEARTBEAT_KEY));
+    if (!validHeartbeat(heartbeat) || heartbeat.sessionId !== sessionId || heartbeat.ownerToken !== ownerToken) {
+      transaction.abort();
+      return;
+    }
+    store.put({ ...heartbeat, heartbeatAtMs: nowMs, leaseExpiresAtMs: nowMs } satisfies PureIdleHeartbeatRecord);
+    await transactionDone(transaction);
+  } catch {
+    // The checkpoint remains authoritative; a stale lease expires naturally.
+  } finally {
+    releaseBrowserLease(ownerToken);
+  }
+}
