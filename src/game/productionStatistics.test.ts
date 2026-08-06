@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   calculateProductionWindowSnapshot,
   compactProductionHistory,
+  createProductionTrendSeries,
   formatProductionStatistic,
   getProductionHistorySampleDuration,
   PRODUCTION_HISTORY_SAMPLE_SECONDS,
@@ -59,6 +60,30 @@ describe("production statistics rolling buckets", () => {
     expect(history.some((entry) => getProductionHistorySampleDuration(entry) >= 60)).toBe(true);
   });
 
+  it("preserves planet-scoped rates while compacting historical buckets", () => {
+    let history: ProductionHistorySample[] = [];
+    for (let second = 1; second <= 180; second += 1) {
+      history.push({
+        ...sample(second, 90),
+        planetProductionPerMinute: {
+          home: { iron_ingot: 60 },
+          ashen: { iron_ingot: 30 },
+        },
+        planetConsumptionPerMinute: {
+          home: { iron_ore: 120 },
+          ashen: { iron_ore: 60 },
+        },
+      });
+      history = compactProductionHistory(history);
+    }
+
+    expect(history.some((entry) => getProductionHistorySampleDuration(entry) > 1)).toBe(true);
+    expect(history.every((entry) => entry.planetProductionPerMinute?.home?.iron_ingot === 60)).toBe(true);
+    expect(history.every((entry) => entry.planetProductionPerMinute?.ashen?.iron_ingot === 30)).toBe(true);
+    expect(history.every((entry) => entry.planetConsumptionPerMinute?.home?.iron_ore === 120)).toBe(true);
+    expect(history.every((entry) => entry.planetConsumptionPerMinute?.ashen?.iron_ore === 60)).toBe(true);
+  });
+
   it("uses the same rolling window for rows and totals", () => {
     const history = Array.from({ length: 120 }, (_, index) => sample(index + 1, index < 60 ? 60 : 120));
     const perSecond = calculateProductionWindowSnapshot(history, "second");
@@ -81,5 +106,29 @@ describe("production statistics rolling buckets", () => {
     expect(formatProductionStatistic(12)).toBe("12");
     expect(formatProductionStatistic(12.5)).toBe("12.5");
     expect(formatProductionStatistic(0)).toBe("0");
+  });
+
+  it("reads cumulative production from the authoritative total without fabricating consumption", () => {
+    const snapshot = calculateProductionWindowSnapshot(
+      [sample(1, 60)],
+      "total",
+      { iron_ingot: 999 },
+      { iron_ore: 999 },
+      { iron_ingot: 12_345, universe_matrix: 77 },
+    );
+    expect(snapshot.production).toMatchObject({ iron_ingot: 12_345, universe_matrix: 77 });
+    expect(snapshot.consumption).toEqual({});
+    expect(snapshot.totalProduction).toBe(12_422);
+    expect(snapshot.totalConsumption).toBe(0);
+  });
+
+  it("compresses a selected historical range to at most seventy-two trend points", () => {
+    const history = Array.from({ length: 3_600 }, (_, index) => sample(index + 1, index + 1));
+    const trend = createProductionTrendSeries(history, "hour", "iron_ingot");
+    expect(trend.length).toBeLessThanOrEqual(72);
+    expect(trend.length).toBeGreaterThan(1);
+    expect(trend.at(-1)?.elapsedSeconds).toBe(3_600);
+    expect(trend.at(-1)?.productionPerMinute).toBeGreaterThan(trend[0].productionPerMinute);
+    expect(trend.every((point) => point.consumptionPerMinute === 0)).toBe(true);
   });
 });

@@ -897,7 +897,7 @@ export const TECHNOLOGIES: Record<TechId, TechnologyDefinition> = {
     id: "reforming_refine", name: "重整精炼", tier: 6,
     costs: [{ itemId: "electromagnetic_matrix", amount: 15 }, { itemId: "energy_matrix", amount: 15 }],
     prerequisites: ["xray_cracking", "basic_chemical_engineering"],
-    summary: "以煤和氢重整精炼油，建立可控的油路循环增产路线。",
+    summary: "消耗 2 份精炼油、1 份煤和 1 份氢，重整产出 3 份精炼油，每轮额外获得 1 份精炼油。",
     unlocks: ["重整精炼配方", "精炼油循环增产"],
   },
   high_strength_crystal: {

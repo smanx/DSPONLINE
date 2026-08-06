@@ -56,4 +56,32 @@ describe("factory canvas topology", () => {
     const moved = [{ ...source, position: { x: 20, y: 0 } }, target, blocker];
     expect(reconcileFactoryCanvasTopology(topology, state.activePlanetId, moved, [belt])).not.toBe(topology);
   });
+
+  it("publishes connection counts immediately from topology before any cargo tick", () => {
+    const state = createInitialState();
+    const [source, target] = state.entities.slice(0, 2);
+    const empty = reconcileFactoryCanvasTopology(null, state.activePlanetId, [source, target], []);
+    expect(empty.occupancy.output.get(source.id)).toBeUndefined();
+
+    const belt = {
+      id: "zero-tick-line",
+      planetId: state.activePlanetId,
+      source: source.id,
+      target: target.id,
+      itemId: source.resourceId ?? "iron_ore" as const,
+      tier: 1 as const,
+      sorterTier: 1 as const,
+      lanes: 3,
+      priority: 1 as const,
+      progress: 0,
+      totalTransferred: 0,
+      lastFlow: 0,
+      congestion: 0,
+    };
+    const connected = reconcileFactoryCanvasTopology(empty, state.activePlanetId, [source, target], [belt]);
+
+    expect(connected.occupancy.output.get(source.id)?.[belt.itemId]).toBe(3);
+    expect(connected.occupancy.input.get(target.id)?.[belt.itemId]).toBe(3);
+    expect(connected.connectedInputsByTarget.get(target.id)).toEqual([belt.itemId]);
+  });
 });

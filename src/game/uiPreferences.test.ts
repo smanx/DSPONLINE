@@ -3,9 +3,11 @@ import {
   readSettingsCategoryPreference,
   readConnectionPointSize,
   readShowRunLogPreference,
+  readShowItemHoverPreference,
   readThemePreference,
   writeSettingsCategoryPreference,
   writeShowRunLogPreference,
+  writeShowItemHoverPreference,
   writeThemePreference,
   writeConnectionPointSize,
 } from "./uiPreferences";
@@ -30,14 +32,17 @@ describe("device-only UI preferences", () => {
     try {
       expect(readThemePreference()).toBeNull();
       expect(readShowRunLogPreference()).toBe(true);
+      expect(readShowItemHoverPreference()).toBe(true);
       expect(readSettingsCategoryPreference()).toBe("all");
       expect(readConnectionPointSize()).toBe("default");
       writeThemePreference("light");
       writeShowRunLogPreference(false);
+      writeShowItemHoverPreference(false);
       writeSettingsCategoryPreference("statistics");
       writeConnectionPointSize("large50");
       expect(readThemePreference()).toBe("light");
       expect(readShowRunLogPreference()).toBe(false);
+      expect(readShowItemHoverPreference()).toBe(false);
       expect(readSettingsCategoryPreference()).toBe("statistics");
       expect(readConnectionPointSize()).toBe("large50");
     } finally {
@@ -49,6 +54,7 @@ describe("device-only UI preferences", () => {
     const storage = memoryStorage();
     storage.setItem("dsp-idle-network.ui.theme.v1", "neon");
     storage.setItem("dsp-idle-network.ui.show-run-log.v1", "maybe");
+    storage.setItem("dsp-idle-network.ui.show-item-hover.v1", "maybe");
     storage.setItem("dsp-idle-network.ui.settings-category.v1", "unknown");
     storage.setItem("dsp-idle-network.ui.connection-point-size.v1", "huge");
     const original = globalThis.window;
@@ -56,6 +62,7 @@ describe("device-only UI preferences", () => {
     try {
       expect(readThemePreference()).toBeNull();
       expect(readShowRunLogPreference()).toBe(true);
+      expect(readShowItemHoverPreference()).toBe(true);
       expect(readSettingsCategoryPreference()).toBe("all");
       expect(readConnectionPointSize()).toBe("default");
     } finally {

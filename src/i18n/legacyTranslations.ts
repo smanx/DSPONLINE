@@ -876,6 +876,13 @@ const UI_EN: TranslationMap = {
   "停机设备": "Stopped Facilities",
   "缺料、堵塞或断电": "Shortage, blockage, or power loss",
   "生产效率曲线": "Production Efficiency Trend",
+  "生产历史趋势": "Production History Trend",
+  "历史产量趋势": "Historical Output Trend",
+  "选择趋势物品": "Select Trend Item",
+  "累计总产量": "Total Output",
+  "累计总产量仅记录全星区权威值；请选择“全部星球”查看。": "Total output records authoritative all-system values only. Select All Planets to view it.",
+  "暂无累计生产记录": "No Total Production Recorded",
+  "模拟运行后开始记录当前时间范围的趋势": "Trends for this time range begin recording after the simulation runs",
   "等待生产采样": "Waiting for Production Samples",
   "模拟运行 20 秒后会显示效率趋势": "Efficiency trends appear after 20 seconds of simulation",
   "当前判断": "Current Assessment",
@@ -1641,7 +1648,6 @@ const UI_EN: TranslationMap = {
   "Canvas 或小地图上下文不可用时会自动恢复完整 React Flow 线路和小地图，选中、命中、连接预览与视口保持可用。": "If the Canvas or minimap context is unavailable, the full React Flow belts and minimap return automatically while selection, hit testing, connection previews, and the viewport remain usable.",
   "多 Worker 继续保持生产关闭": "Multi-Worker Remains Disabled in Production",
   "多 Worker 确定性和守恒测试已通过，但真实终局模拟仍慢于单 Worker，因此正式构建继续使用单一权威 Worker。": "Multi-Worker determinism and conservation tests pass, but real endgame simulation remains slower than one Worker, so production builds continue to use one authoritative Worker.",
-  "存档与在线协议保持兼容": "Save & Online Protocol Compatibility",
   "2026年8月5日": "August 5, 2026",
   "2026年8月4日": "August 4, 2026",
   "查看历史版本": "View Release History",
@@ -1679,6 +1685,26 @@ const UI_EN: TranslationMap = {
   "亮色主题与工厂交互更新": "Light Theme & Factory Interaction Update",
   "建筑制造与时间扭曲稳定性热修": "Construction Automation & Time-Warp Stability Hotfix",
   "快速离线与速通模式更新": "Fast Offline & Speedrun Update",
+  "离线结算与高倍率挂机稳定性更新": "Offline Settlement & High-Multiplier Idle Stability Update",
+  "1.0.31 修复快速离线结算崩溃，补齐统计历史曲线、施工库存删除、锁定配方拓扑保护、移动滚动和高倍率纯挂机治理。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。": "Version 1.0.31 fixes fast offline settlement crashes and adds production history curves, construction inventory deletion, locked-recipe topology guards, mobile scrolling, and high-multiplier idle governance. GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 are unchanged.",
+  "快速离线安全回退": "Safe Fast Offline Fallback",
+  "循环游标统一归一化，快速路径遇到异常或校验失败时回到精确结算，不会向玩家暴露 undefined 错误，也不会提交半成品状态。": "Loop cursors are normalized, and invalid or failed fast-path validation returns to exact settlement without exposing undefined errors or committing partial state.",
+  "生产历史曲线": "Production History Curves",
+  "统计页支持 1 分钟、10 分钟、1 小时和累计总产量窗口，历史数据有界压缩并可按星球、物品和状态筛选。": "Statistics supports 1-minute, 10-minute, 1-hour, and total-output windows with bounded history and planet, item, and state filters.",
+  "取消科技自动续队列": "Automatic Research Queue Continuation",
+  "取消当前科技后会按原顺序寻找下一项满足前置条件的研究，暂不可研究的项目保留在队列中。": "Cancelling current research finds the next queued technology whose prerequisites are met while preserving temporarily blocked entries.",
+  "施工库存删除": "Construction Inventory Deletion",
+  "施工托盘改为单项删除并二次确认，只清除建筑库存，不拆除画布建筑、不返还材料，自动补货目标保持不变。": "Construction inventory deletion is single-item and confirmed, clearing only the stock without removing placed buildings or refunding materials.",
+  "锁定配方与线路拓扑保护": "Locked Recipes & Topology Guards",
+  "锁定建筑不会被自动识别改配方；连接数量直接来自权威拓扑，连接完成后无需等待运输 tick 即可显示。": "Locked buildings cannot be changed by recipe auto-detection, and belt counts come from authoritative topology immediately after connection.",
+  "移动统计可完整滚动": "Scrollable Mobile Statistics",
+  "手机和平板统计主体拥有独立纵向滚动区域，并为固定底部导航和安全区预留空间。": "Phone and tablet statistics use an independent vertical scroller with room for fixed navigation and safe areas.",
+  "物品悬浮信息可关闭": "Optional Item Hover Details",
+  "新增设备级偏好关闭完整物品详情悬浮卡，点击、拖动、定位和图鉴入口仍保持可用。": "A device preference can hide full item hover cards while clicks, dragging, locating, and codex actions remain available.",
+  "高倍率纯挂机治理": "High-Multiplier Idle Governance",
+  "8x、12x、16x 纯挂机计算在 Worker 中使用短校准和有界近似，区分供电限制与计算限制，停止时丢弃未提交预算。": "8x, 12x, and 16x pure-idle slices use short Worker calibration and bounded approximation, separating power limits from compute limits and discarding uncommitted work on stop.",
+  "存档与在线协议保持兼容": "Save and Online Protocol Compatibility",
+  "新增 UI 偏好只写入设备 localStorage，不进入 GameState、导入导出、云存档或状态哈希；GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 均不变。": "New UI preferences stay in device localStorage and never enter GameState, imports, exports, cloud saves, or state hashes; GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 remain unchanged.",
   "1.0.30 默认尝试带严格回退的快速离线结算，并新增独立速通工厂与服务端验证榜；复杂存档不满足门禁时仍使用精确结算。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。": "Version 1.0.30 tries fast offline settlement by default with strict fallback, and adds separate speedrun factories and server-verified leaderboards. Complex saves continue with exact settlement when validation fails. GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 are unchanged.",
   "快速离线默认尝试": "Fast Offline Attempted by Default",
   "离线超过 30 秒时先执行三个 10 秒精确校准窗口，再按实测增量尝试批量结算；可在本机设置中关闭。": "When offline time exceeds 30 seconds, three exact 10-second calibration windows run before a batched settlement is attempted from measured deltas. This can be disabled on the current device.",
@@ -1937,10 +1963,16 @@ function translateRequirementList(source: string): string {
 }
 
 function translateDynamicSystemText(body: string): string {
-  let match = body.match(/^长按采集(.+)$/);
+  let match = body.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
+  if (match) return `${new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))).toLocaleDateString("en-US", { timeZone: "UTC", year: "numeric", month: "long", day: "numeric" })}`;
+  match = body.match(/^长按采集(.+)$/);
   if (match) return `Hold to gather ${translateCatalogName(match[1])}`;
   match = body.match(/^采样于模拟 ([\d.]+) 秒 · 后台计算 ([\d.]+) ms · 最多每秒刷新一次$/);
   if (match) return `Sampled at ${match[1]} simulation seconds · Background compute ${match[2]} ms · Refreshed at most once per second`;
+  match = body.match(/^(.+)生产和消耗趋势$/);
+  if (match) return `${translateCatalogName(match[1])} Production and Consumption Trend`;
+  match = body.match(/^(\d+) 个压缩采样点 · 从新版本开始记录$/);
+  if (match) return `${match[1]} compressed sample point${match[1] === "1" ? "" : "s"} · Recorded since this version`;
   match = body.match(/^(.+)容量预设$/);
   if (match) return `${translateCatalogName(match[1])} Capacity Presets`;
   match = body.match(/^(.+)自定义量子容量$/);

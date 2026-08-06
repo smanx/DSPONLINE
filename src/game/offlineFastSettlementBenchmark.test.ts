@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { migrateGame } from "./storage";
+import { inspectSave, migrateGame, serializeEnvelope } from "./storage";
 import { runFastOfflineSettlement } from "./offlineApproximation";
 import { advanceOfflineSimulationChunk } from "./offlineSimulation";
 import { completeSimulationAdvanceSession, createSimulationAdvanceSession } from "./engine";
@@ -18,6 +18,45 @@ interface NumericDifference {
   path: Array<string | number>;
   actual: unknown;
   expected: unknown;
+}
+
+function criticalSnapshot(state: NonNullable<ReturnType<typeof migrateGame>>) {
+  return {
+    whiteMatrixProduced: state.totalProduced.universe_matrix ?? 0,
+    rocketsLaunched: state.dysonSphere.totalRocketsLaunched,
+    structurePoints: state.dysonSphere.structurePoints,
+    shellSails: state.dysonSphere.shellSails,
+    sailsAbsorbed: state.dysonSphere.totalSailsAbsorbed,
+    dysonGenerationKw: state.dysonSphere.generationKw + state.dysonSwarm.generationKw,
+  };
+}
+
+function relativeError(actual: number, expected: number): number {
+  return Math.abs(actual - expected) / Math.max(1, Math.abs(actual), Math.abs(expected));
+}
+
+function compareCriticalOutcomes(
+  source: NonNullable<ReturnType<typeof migrateGame>>,
+  actual: NonNullable<ReturnType<typeof migrateGame>>,
+  expected: NonNullable<ReturnType<typeof migrateGame>>,
+) {
+  const baseline = criticalSnapshot(source);
+  const left = criticalSnapshot(actual);
+  const right = criticalSnapshot(expected);
+  const deltaError = (key: Exclude<keyof typeof baseline, "dysonGenerationKw">) => relativeError(
+    left[key] - baseline[key],
+    right[key] - baseline[key],
+  );
+  return {
+    whiteMatrixProduced: deltaError("whiteMatrixProduced"),
+    rocketsLaunched: deltaError("rocketsLaunched"),
+    structurePoints: deltaError("structurePoints"),
+    shellSails: deltaError("shellSails"),
+    sailsAbsorbed: deltaError("sailsAbsorbed"),
+    dysonGenerationKw: relativeError(left.dysonGenerationKw, right.dysonGenerationKw),
+    actual: left,
+    expected: right,
+  };
 }
 
 const COMPARISON_IGNORED_KEYS = new Set([
@@ -88,7 +127,10 @@ function runExactSettlement(state: ReturnType<typeof migrateGame>, seconds: numb
 describe("fast offline settlement real-save benchmark", () => {
   it.skipIf(!environment?.DSP_FAST_OFFLINE_FIXTURES)("runs read-only qualification for each supplied fixture", () => {
     const fixtures = environment!.DSP_FAST_OFFLINE_FIXTURES!.split(";").map((entry) => entry.trim()).filter(Boolean);
-    const durations = [600, 3_600, 7 * 86_400, 30 * 86_400];
+    const durations = (environment?.DSP_FAST_OFFLINE_SECONDS ?? "600,3600,604800,2592000")
+      .split(",")
+      .map((value) => Math.floor(Number(value.trim())))
+      .filter((value) => Number.isFinite(value) && value > 0);
     const reports = fixtures.map((fixture) => {
       const raw = readFileSync(fixture, "utf8");
       const parsed = JSON.parse(raw);
@@ -107,6 +149,21 @@ describe("fast offline settlement real-save benchmark", () => {
           const result = runFastOfflineSettlement(structuredClone(state), seconds);
           const cpuAfter = nodeProcess?.cpuUsage(cpuBefore) ?? { user: 0, system: 0 };
           const heapAfter = nodeProcess?.memoryUsage().heapUsed ?? heapBefore;
+          let serializedBytes: number | null = null;
+          let reloadValid: boolean | null = null;
+          let reloadedCriticalMatches: boolean | null = null;
+          if (result.status === "approximate") {
+            const serialized = serializeEnvelope(result.state, 1_753_000_000_000 + seconds * 1_000);
+            serializedBytes = new TextEncoder().encode(serialized).byteLength;
+            const inspection = inspectSave(serialized);
+            reloadValid = inspection.valid;
+            const expectedCritical = criticalSnapshot(result.state);
+            const reloadedCritical = inspection.state ? criticalSnapshot(inspection.state) : null;
+            reloadedCriticalMatches = Boolean(reloadedCritical) &&
+              JSON.stringify(reloadedCritical) === JSON.stringify(expectedCritical);
+            expect(reloadValid).toBe(true);
+            expect(reloadedCritical).toEqual(expectedCritical);
+          }
           return {
             seconds,
             status: result.status,
@@ -120,6 +177,9 @@ describe("fast offline settlement real-save benchmark", () => {
             beltCount: state.belts.length,
             report: result.report,
             elapsedSeconds: result.status === "approximate" ? result.state.elapsedSeconds : null,
+            serializedBytes,
+            reloadValid,
+            reloadedCriticalMatches,
           };
         }),
       };
@@ -146,6 +206,9 @@ describe("fast offline settlement real-save benchmark", () => {
           const comparison = fast.status === "approximate"
             ? compareNumericState(fast.state, exact)
             : { error: null, path: [], actual: null, expected: null };
+          const criticalComparison = fast.status === "approximate"
+            ? compareCriticalOutcomes(state, fast.state, exact)
+            : null;
           return {
             seconds,
             exactElapsedMs: Math.round(exactElapsedMs * 100) / 100,
@@ -156,6 +219,7 @@ describe("fast offline settlement real-save benchmark", () => {
             fullStateMaxErrorPath: comparison.path,
             fullStateActual: comparison.actual,
             fullStateExpected: comparison.expected,
+            criticalComparison,
           };
         });
         return { fixture, exactReports };
@@ -163,5 +227,6 @@ describe("fast offline settlement real-save benchmark", () => {
       console.log(`FAST_OFFLINE_EXACT_COMPARISON ${JSON.stringify(exactComparisons)}`);
     }
     expect(reports).toHaveLength(fixtures.length);
+    expect(durations.length).toBeGreaterThan(0);
   }, 180_000);
 });

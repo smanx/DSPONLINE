@@ -85,6 +85,7 @@ import {
   createSimulationProfiler,
   createBlueprint,
   createStandardDysonLayer,
+  discardConstructionInventory,
   discardPlanetTrayItems,
   dropCargoToEntity,
   dropCargoToTray,
@@ -285,6 +286,7 @@ import { getOnboardingFocusTarget, getOnboardingStep, recordBasicOnboardingEvent
 import { accumulateSimulationBudget, NORMAL_SIMULATION_SLICE_SECONDS, takeSimulationBudgetSlice } from "./game/simulationBudget";
 import {
   createTimeWarpComputeGovernor,
+  forceTimeWarpApproximation,
   markTimeWarpWorkerUnavailable,
   recordTimeWarpComputeSample,
   resolveTimeWarpComputeLimits,
@@ -326,7 +328,7 @@ import {
   setCanvasPointerEdgeVelocity,
   stopCanvasPointerMotion as stopCanvasPointerMotionSession,
 } from "./hooks/canvasPointerMotion";
-import { readConnectionPointSize, readShowRunLogPreference, readThemePreference, writeConnectionPointSize, writeShowRunLogPreference, writeThemePreference, type ConnectionPointSize } from "./game/uiPreferences";
+import { readConnectionPointSize, readShowItemHoverPreference, readShowRunLogPreference, readThemePreference, writeConnectionPointSize, writeShowItemHoverPreference, writeShowRunLogPreference, writeThemePreference, type ConnectionPointSize } from "./game/uiPreferences";
 
 type InspectorTab = "inspect" | "fabricate";
 
@@ -689,6 +691,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [connectionPointSize, setConnectionPointSize] = useState<ConnectionPointSize>(readConnectionPointSize);
   useEffect(() => { writeConnectionPointSize(connectionPointSize); }, [connectionPointSize]);
   const [showRunLog, setShowRunLog] = useState(readShowRunLogPreference);
+  const [showItemHover, setShowItemHover] = useState(readShowItemHoverPreference);
+  useEffect(() => { writeShowItemHoverPreference(showItemHover); }, [showItemHover]);
   const resolvedTheme = useResolvedTheme(themeMode);
   const [canvasRenderSnapshot, setCanvasRenderSnapshot] = useState<CanvasRenderSnapshot>(() => createCanvasRenderSnapshot(loaded.state));
   const canvasGameSnapshot = canvasRenderSnapshot.game;
@@ -1693,6 +1697,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           requestedMultiplier: submission.state.timeWarp.requestedMultiplier,
           powerLimitedMultiplier,
           baseMultiplier,
+          approximation: event.data.timeWarpApproximation,
         });
         publishTimeWarpComputeState(governor);
         setTimeWarpPendingUi(simulationPendingSecondsRef.current);
@@ -1814,12 +1819,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       );
       const nextPendingSimulationSeconds = accumulatedBudget.simulationSeconds;
       if (timeWarpLimits && nextPendingSimulationSeconds > timeWarpLimits.maximumPendingSimulationSeconds) {
-        const governor = {
-          ...timeWarpComputeStateRef.current,
-          stableSampleCount: 0,
-          computeLimitedMultiplier: Math.max(baseMultiplier, Math.floor(timeWarpComputeStateRef.current.computeLimitedMultiplier * 0.7)),
-          reason: "backlog" as const,
-        };
+        const governor = forceTimeWarpApproximation(timeWarpComputeStateRef.current, "backlog");
         publishTimeWarpComputeState(governor);
         timeWarpLimits = resolveTimeWarpComputeLimits(
           governor,
@@ -1858,6 +1858,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           registryFingerprint: registrySnapshot.fingerprint,
           protocol: experimentalSimulationDeltaRef.current ? "delta" : "full",
           multicore: multicoreSimulationOptionsRef.current,
+          approximate: currentState.timeWarp.enabled && timeWarpLimits?.computeMode === "approximate",
           ...(experimentalSimulationDeltaRef.current ? { stateRevision: simulationStateRevisionRef.current } : {}),
           ...(simulationWorkerRegistryFingerprintRef.current !== registrySnapshot.fingerprint ? { registry: registrySnapshot } : {}),
         };
@@ -5050,6 +5051,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const changeRemoteStackTarget = useCallback((entityId: string, target: number) => {
     const before = gameRef.current;
+    const entity = before.entities.find((candidate) => candidate.id === entityId);
     const check = getEntityStackTargetCheck(before, entityId, target);
     if (!check.ok) {
       setNotice(check.label);
@@ -5064,7 +5066,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       return { ok: false, error };
     }
     if (next !== before) commitGame(() => next);
-    const entity = before.entities.find((candidate) => candidate.id === entityId);
     if (check.delta > 0 && entity?.kind !== "vein") recordBasicOnboardingEvent("building-stacked");
     setNotice(`${getBuilding(check.constructionId).name}堆叠已调整为 ×${target.toLocaleString("zh-CN")}`);
     return { ok: true };
@@ -5126,6 +5127,33 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setNotice(`${getConstructionDefinition(buildingId)?.name ?? "建筑"}已制造 ×${plan.outputAmount}（${plan.batches} 批）${consumedLabel ? ` · 已消耗${consumedLabel}` : ""}`);
     spawnInteractionBurst(pointerRef.current.x, pointerRef.current.y, consumedLabel ? `已消耗 ${consumedLabel}` : "制造完成", "positive");
     playTone("confirm");
+  };
+
+  const handleDeleteConstructionInventory = async (constructionId: ConstructionId): Promise<boolean> => {
+    const current = gameRef.current;
+    const amount = Math.max(0, Math.floor(current.construction[constructionId] ?? 0));
+    if (amount < 1) {
+      setNotice("该施工物品库存已经为 0");
+      return false;
+    }
+    const definition = getConstructionDefinition(constructionId);
+    const automationTarget = Math.max(0, Math.floor(
+      current.constructionAutomation.targetStock[constructionId as ConstructionAutomationTargetId] ?? 0,
+    ));
+    const confirmed = await gameDialog.confirm(
+      `确认永久删除施工托盘中的${definition?.name ?? constructionId} ×${amount.toLocaleString("zh-CN")}？此操作不返还材料且不可恢复。${automationTarget > 0 ? ` 建筑制造中心仍保留目标 ${automationTarget.toLocaleString("zh-CN")}，之后可能重新生产。` : ""}`,
+      { confirmLabel: "永久删除" },
+    );
+    if (!confirmed) return false;
+    const latest = Math.max(0, Math.floor(gameRef.current.construction[constructionId] ?? 0));
+    if (latest < 1) {
+      setNotice("确认期间库存已变为 0，未执行删除");
+      return false;
+    }
+    commitGame((state) => discardConstructionInventory(state, constructionId));
+    setNotice(`已删除${definition?.name ?? constructionId} ×${latest.toLocaleString("zh-CN")}；画布建筑和制造目标未改变`);
+    playTone("remove");
+    return true;
   };
 
   const handleQuickCraftFleet = (recipeId: RecipeId, batches = 1) => {
@@ -5290,7 +5318,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [game.timeWarp.enabled]);
 
   return (
-    <ItemReferenceActionsProvider actions={itemReferenceActions}>
+    <ItemReferenceActionsProvider actions={itemReferenceActions} enabled={showItemHover}>
     <main
       className={`game-shell${placement || blueprintPlacementId ? " game-shell--placing" : ""}${selectionMode ? " game-shell--selecting" : ""}${deleteMode ? " game-shell--deleting" : ""}${regionMode ? " game-shell--regioning" : ""}${mobilePanel ? ` mobile-panel--${mobilePanel} mobile-panel-stage--${mobilePanelStage}` : ""}${leftSidebarCollapsed ? " sidebar-left-collapsed" : ""}${rightSidebarCollapsed ? " sidebar-right-collapsed" : ""}${pureIdleActive ? " game-shell--pure-idle" : ""}`}
       onContextMenuCapture={(event) => {
@@ -5487,6 +5515,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onCraft: handleQuickCraftConstruction,
           onCraftFleet: handleQuickCraftFleet,
           onMissingCraft: handleMissingConstructionCraft,
+          onDeleteConstruction: handleDeleteConstructionInventory,
           onPickTray: (itemId) => setGame((current) => pickFromTray(current, itemId)),
           onDropCargo: handleStowCargo,
           onDiscardTrayItems: (requests) => commitGame((current) => discardPlanetTrayItems(current, current.activePlanetId, requests)),
@@ -6245,7 +6274,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       </div>
       <ConstructionDock
         game={observedGame}
-        deleteMode={deleteMode}
         placement={placement}
         beltTier={dockBeltTier}
         beltTierMode={beltTierMode}
@@ -6273,19 +6301,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         onCraftItem={handleQuickCraftFleet}
         onStowCargo={handleStowCargo}
         onMissingCraftNavigate={handleMissingConstructionCraft}
-        onDeleteModeChange={(enabled) => {
-          setDeleteMode(enabled);
-          setSelectionMode(enabled);
-          setRegionMode(false);
-          setRegionDraft(null);
-          setPlacement(null);
-          setBlueprintPlacementId(null);
-          setSelectedEntityIds([]);
-          setSelectedBeltIds([]);
-          setSelectedBeltId(null);
-          if (nextMobileShell) setMobileCanvasMode(enabled ? "select" : "browse");
-          setNotice(enabled ? "回收模式：单击、Shift 多选、框选或手机逐点选择建筑，再点击回收确认" : "已退出建筑回收模式");
-        }}
+        onDeleteConstruction={handleDeleteConstructionInventory}
       />
       <OnboardingCoach game={observedGame} onAction={runOnboardingAction} compact={nextMobileShell} />
       <BlueprintWorkspace
@@ -6571,11 +6587,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             lineFindMode={lineFindMode}
             connectionPointSize={connectionPointSize}
             showRunLog={showRunLog}
+            showItemHover={showItemHover}
             onEndgameExtremeModeChange={toggleEndgameExtremeMode}
             onCanvasPerformanceFeatureChange={updateCanvasPerformanceFeature}
             onLineFindModeChange={setLineFindMode}
             onConnectionPointSizeChange={setConnectionPointSize}
             onRunLogChange={updateRunLogPreference}
+            onItemHoverChange={setShowItemHover}
             onProductionRefreshPreferenceChange={setProductionRefreshPreference}
             onStartPerformanceMonitor={performanceMonitor.start}
             onStopPerformanceMonitor={performanceMonitor.stop}

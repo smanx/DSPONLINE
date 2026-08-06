@@ -780,7 +780,7 @@ function EntityManagementActions({ game, entity, onSetTarget, onRemove }: {
     <div className={`entity-management-actions${entity.kind === "vein" ? " entity-management-actions--extractor" : ""}`} data-inspector-section="stack" data-inspector-section-label="堆叠与回收" aria-label="堆叠与回收">
       {!singleEntity ? <div className="entity-stack-batch-remove entity-stack-target-control">
         <label><span>堆叠目标</span><input inputMode="numeric" pattern="[0-9]*" min={1} max={Math.max(MAX_BUILDING_STACK_COUNT, currentCount)} value={targetCountDraft} onChange={(event) => { setTargetCountDraft(event.target.value); setTargetCountError(null); }} onBlur={() => submitTargetCount()} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); submitTargetCount(); } else if (event.key === "Escape") { setTargetCountDraft(String(Math.max(1, currentCount))); setTargetCountError(null); } }} aria-label="建筑堆叠目标数量" aria-invalid={Boolean(targetCountError)} /></label>
-        <div className="entity-stack-target-shortcuts"><button type="button" disabled={available < 1 || currentCount >= MAX_BUILDING_STACK_COUNT} onClick={() => quickAdjust(1)}>+1</button><button type="button" disabled={available < 10 || currentCount >= MAX_BUILDING_STACK_COUNT} onClick={() => quickAdjust(10)}>+10</button><button type="button" disabled={available < 100 || currentCount >= MAX_BUILDING_STACK_COUNT} onClick={() => quickAdjust(100)}>+100</button><button type="button" disabled={currentCount <= 1} onClick={() => quickAdjust(-1)}>-1</button><button type="button" disabled={currentCount <= 1} onClick={() => quickAdjust(-10)}>-10</button><button type="button" disabled={currentCount <= 1} onClick={() => quickAdjust(-100)}>-100</button></div>
+        <div className="entity-stack-target-shortcuts"><button type="button" aria-label={`快速增加 1 台建筑，剩余 ${available}`} disabled={available < 1 || currentCount >= MAX_BUILDING_STACK_COUNT} onClick={() => quickAdjust(1)}>+1</button><button type="button" aria-label={`快速增加 10 台建筑，剩余 ${available}`} disabled={available < 10 || currentCount >= MAX_BUILDING_STACK_COUNT} onClick={() => quickAdjust(10)}>+10</button><button type="button" aria-label={`快速增加 100 台建筑，剩余 ${available}`} disabled={available < 100 || currentCount >= MAX_BUILDING_STACK_COUNT} onClick={() => quickAdjust(100)}>+100</button><button type="button" aria-label="减少 1 台建筑" disabled={currentCount <= 1} onClick={() => quickAdjust(-1)}>-1</button><button type="button" aria-label="减少 10 台建筑" disabled={currentCount <= 1} onClick={() => quickAdjust(-10)}>-10</button><button type="button" aria-label="减少 100 台建筑" disabled={currentCount <= 1} onClick={() => quickAdjust(-100)}>-100</button></div>
         {targetCountError ? <em role="alert">{targetCountError}</em> : <small>当前 ×{currentCount.toLocaleString("zh-CN")} · 托盘 {name} ×{available.toLocaleString("zh-CN")}；增减均一次校验并原子提交。</small>}
       </div> : null}
       {entity.kind === "vein" ? <button className="danger-command extractor-recovery-all" type="button" disabled={entity.minerCount < 1} onClick={() => onRemove(entity.id, entity.minerCount)}><Trash2 size={15} /> 回收全部采矿机 ×{entity.minerCount}</button> : <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}><Trash2 size={15} /> 回收设备</button>}
@@ -2060,8 +2060,7 @@ interface ConstructionDockProps {
   onCraftItem: (recipeId: RecipeId) => void;
   onStowCargo: () => void;
   onMissingCraftNavigate: (buildingId: ConstructionId) => void;
-  deleteMode: boolean;
-  onDeleteModeChange: (enabled: boolean) => void;
+  onDeleteConstruction: (constructionId: ConstructionId) => Promise<boolean>;
 }
 
 const PLACEMENT_COUNTS: PlacementCount[] = [1, 2, 5, 10];
@@ -2095,11 +2094,12 @@ const CONSTRUCTION_CATEGORY_IDS: Record<Exclude<ConstructionCategory, "all" | "r
   dyson: new Set(["em_rail_ejector", "vertical_launching_silo", "ray_receiver", "galactic_material_exporter", "micro_black_hole_connector", "time_warp_device"]),
 };
 
-export function ConstructionDock({ game, placement, beltTier, beltTierMode, placementCount, onPlacementChange, onBeltTierChange, onBeltTierModeChange, onPlacementCountChange, onOpenFabricator, onCraft, onCraftItem, onStowCargo, onMissingCraftNavigate, deleteMode, onDeleteModeChange }: ConstructionDockProps) {
+export function ConstructionDock({ game, placement, beltTier, beltTierMode, placementCount, onPlacementChange, onBeltTierChange, onBeltTierModeChange, onPlacementCountChange, onOpenFabricator, onCraft, onCraftItem, onStowCargo, onMissingCraftNavigate, onDeleteConstruction }: ConstructionDockProps) {
   const { isEnglish } = useAppLocale();
   const [category, setCategory] = useState<ConstructionCategory>("all");
   const [recent, setRecent] = useState<Array<BuildingId | ConveyorBeltId>>(loadRecentConstruction);
   const [compact, setCompact] = useState(loadCompactConstruction);
+  const [discardMode, setDiscardMode] = useState(false);
   const horizontalPan = useHorizontalPan<HTMLDivElement>();
   const unlockedBuildOrder = useMemo(() => CONSTRUCTION_BUILD_ORDER.filter((id) => {
     if ((game.construction[id] ?? 0) > 0) return true;
@@ -2160,7 +2160,7 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
         <div className="dock-mode-buttons">
           <button className="dock-compact-toggle" type="button" aria-pressed={compact} onClick={toggleCompact} title={compact ? "恢复标准施工托盘" : "使用两行精简施工托盘"} aria-label={compact ? "关闭施工托盘精简模式" : "开启施工托盘精简模式"}>{compact ? <Rows3 size={12} /> : <LayoutGrid size={12} />}<span>{compact ? "标准" : "精简"}</span></button>
           <button className={`dock-belt-auto${beltTierMode === "auto" ? " active" : ""}`} type="button" aria-pressed={beltTierMode === "auto"} onClick={() => onBeltTierModeChange("auto")} title={isEnglish ? `Automatically use the highest belt tier in inventory; current: Mk.${beltTierRoman(beltTier)}` : `自动使用现有库存中的最高等级传送带，当前 Mk.${beltTierRoman(beltTier)}`}><Route size={12} /><span>{isEnglish ? "Auto" : "自动"} Mk.{beltTierRoman(beltTier)}</span></button>
-          <button className={`dock-remove-mode${deleteMode ? " active" : ""}`} type="button" aria-pressed={deleteMode} onClick={() => onDeleteModeChange(!deleteMode)} title={deleteMode ? "退出建筑回收模式" : "选择并回收画布建筑"} aria-label={deleteMode ? "退出建筑回收模式" : "进入建筑回收模式"}><Trash2 size={12} /><span>{deleteMode ? "退出回收" : "回收"}</span></button>
+          <button className={`dock-remove-mode${discardMode ? " active" : ""}`} type="button" aria-pressed={discardMode} onClick={() => { setDiscardMode((enabled) => !enabled); onPlacementChange(null); }} title={discardMode ? "退出施工库存删除模式" : "选择一个施工托盘物品并删除全部库存"} aria-label={discardMode ? "退出施工库存删除模式" : "进入施工库存删除模式"}><Trash2 size={12} /><span>{discardMode ? "退出删除" : "删除"}</span></button>
         </div>
         <div className="placement-count" aria-label="批量部署数量">
           {PLACEMENT_COUNTS.map((count) => (
@@ -2173,7 +2173,7 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
           const count = game.construction[id] ?? 0;
           const isBelt = isConveyorBeltId(id);
           const itemBeltTier = isBelt ? getBeltTier(id) : null;
-          const active = isBelt ? beltTierMode === "manual" && beltTier === itemBeltTier : placement === id;
+          const active = !discardMode && (isBelt ? beltTierMode === "manual" && beltTier === itemBeltTier : placement === id);
           const label = isBelt ? `传送带 Mk.${beltTierRoman(itemBeltTier!)}` : getBuilding(id as BuildingId).name;
           const requiredCount = isBelt ? 1 : placementCount;
           const activePlanet = getPlanet(game.activePlanetId);
@@ -2197,9 +2197,14 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
               <button
                 className={`construction-item${active ? " construction-item--active" : ""}`}
                 type="button"
-                disabled={count < requiredCount || !compatiblePlanet}
-                draggable={count >= requiredCount && compatiblePlanet && !isBelt}
+                disabled={discardMode ? count < 1 : count < requiredCount || !compatiblePlanet}
+                draggable={!discardMode && count >= requiredCount && compatiblePlanet && !isBelt}
                 onClick={() => {
+                  if (discardMode) {
+                    if (count < 1) return;
+                    void onDeleteConstruction(id).finally(() => setDiscardMode(false));
+                    return;
+                  }
                   if (count < requiredCount || !compatiblePlanet) return;
                   remember(id);
                   if (isBelt) {
@@ -2217,7 +2222,7 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
                   onPlacementChange(id as BuildingId);
                 }}
                 onDragEnd={() => onPlacementChange(null)}
-                title={!compatiblePlanet ? id === "geothermal_power_station" ? `${label}只能部署在烬原 II` : activePlanet.kind === "gas-giant" ? `${label}不能部署在气态巨星` : `${label}只能部署在气态巨星` : isBelt ? `选择${label}连接节点端口` : `部署${label}${placementCount > 1 ? ` ×${placementCount}` : ""}`}
+                title={discardMode ? `删除施工托盘中的全部${label}，当前 ×${count}` : !compatiblePlanet ? id === "geothermal_power_station" ? `${label}只能部署在烬原 II` : activePlanet.kind === "gas-giant" ? `${label}不能部署在气态巨星` : `${label}只能部署在气态巨星` : isBelt ? `选择${label}连接节点端口` : `部署${label}${placementCount > 1 ? ` ×${placementCount}` : ""}`}
               >
                 <i>{constructionBuildIcon(id)}</i>
                 <span>{label}</span>
@@ -2226,6 +2231,7 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
               <button
                 className={`construction-item-craft construction-item-craft--${quickCraftState}${craftable ? "" : " construction-item-craft--disabled"}`}
                 type="button"
+                disabled={discardMode}
                 onClick={() => craftable ? onCraft(id) : onMissingCraftNavigate(id)}
                 title={craftHint}
                 aria-label={`制造${label}`}

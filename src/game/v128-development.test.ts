@@ -221,6 +221,8 @@ describe("1.0.28 reforming refine parity", () => {
       inputs: [{ itemId: "coal", amount: 1 }, { itemId: "hydrogen", amount: 1 }, { itemId: "refined_oil", amount: 2 }],
       outputs: [{ itemId: "refined_oil", amount: 3 }],
     });
+    expect(getTechnology("reforming_refine")?.summary).toContain("消耗 2 份精炼油、1 份煤和 1 份氢");
+    expect(getTechnology("reforming_refine")?.summary).toContain("每轮额外获得 1 份精炼油");
   });
 
   it("produces the exact net oil amount and records production and consumption separately", () => {

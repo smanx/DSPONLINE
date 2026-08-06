@@ -297,6 +297,12 @@
 .mobile-build-card.unavailable { border-color: var(--theme-danger-bg); color: var(--theme-text-muted); }
 .mobile-build-card.unavailable > i,
 .mobile-build-card.unavailable > b { color: var(--theme-text-muted); }
+.mobile-build-card--discard {
+  border-color: var(--theme-danger-border, var(--coral));
+  background: var(--theme-danger-bg);
+}
+.mobile-build-card--discard > i,
+.mobile-build-card--discard > b { color: var(--coral); }
 .mobile-build-card[aria-disabled="true"] { border-color: var(--theme-border); background: var(--theme-surface-soft); cursor: help; }
 .mobile-build-card[aria-disabled="true"] > b { color: var(--theme-text-muted); }
 .mobile-build-card:disabled { opacity: .44; cursor: not-allowed; }

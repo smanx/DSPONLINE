@@ -1,49 +1,73 @@
-import { Check, ChevronLeft, ChevronRight, Flag, Gauge, History, Info, MessageCircle, Route, Shield, X, type LucideIcon } from "lucide-react";
+import { Activity, Check, ChevronLeft, ChevronRight, Gauge, History, Info, Layers, MessageCircle, RefreshCw, Route, Shield, ShieldCheck, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-08-05-v1.0.30",
-  date: "2026年8月5日",
-  version: "1.0.30",
-  title: "快速离线与速通模式更新",
-  summary: "1.0.30 默认尝试带严格回退的快速离线结算，并新增独立速通工厂与服务端验证榜；复杂存档不满足门禁时仍使用精确结算。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+  id: "2026-08-06-v1.0.31",
+  date: "2026年8月6日",
+  version: "1.0.31",
+  title: "离线结算与高倍率挂机稳定性更新",
+  summary: "1.0.31 修复快速离线结算崩溃，补齐统计历史曲线、施工库存删除、锁定配方拓扑保护、移动滚动和高倍率纯挂机治理。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
   items: [
     {
-      id: "fast-offline",
-      title: "快速离线默认尝试",
-      description: "离线超过 30 秒时先执行三个 10 秒精确校准窗口，再按实测增量尝试批量结算；可在本机设置中关闭。",
+      id: "offline-settlement",
+      title: "快速离线安全回退",
+      description: "循环游标统一归一化，快速路径遇到异常或校验失败时回到精确结算，不会向玩家暴露 undefined 错误，也不会提交半成品状态。",
     },
     {
-      id: "strict-fallback",
-      title: "严格验证与精确回退",
-      description: "缓存、传送带、物流、量子和数值边界任一验证不通过，就丢弃内存副本并从原状态走精确 Worker 路径，不提交半成品。",
+      id: "production-history",
+      title: "生产历史曲线",
+      description: "统计页支持 1 分钟、10 分钟、1 小时和累计总产量窗口，历史数据有界压缩并可按星球、物品和状态筛选。",
     },
     {
-      id: "speedrun-factory",
-      title: "独立速通工厂",
-      description: "新建游戏可选择速通模式，挑战全部有限科技、实际发射 10,000 枚火箭和累计生产 1,000,000 个宇宙矩阵。",
+      id: "research-queue",
+      title: "取消科技自动续队列",
+      description: "取消当前科技后会按原顺序寻找下一项满足前置条件的研究，暂不可研究的项目保留在队列中。",
     },
     {
-      id: "speedrun-ranking",
-      title: "服务端验证速通榜",
-      description: "速通成绩使用独立排行榜，并由服务端核对主云档修订、摘要、工厂身份、目标计数和完成时间；普通排行榜保持不变。",
+      id: "construction-delete",
+      title: "施工库存删除",
+      description: "施工托盘改为单项删除并二次确认，只清除建筑库存，不拆除画布建筑、不返还材料，自动补货目标保持不变。",
+    },
+    {
+      id: "topology-safety",
+      title: "锁定配方与线路拓扑保护",
+      description: "锁定建筑不会被自动识别改配方；连接数量直接来自权威拓扑，连接完成后无需等待运输 tick 即可显示。",
+    },
+    {
+      id: "mobile-statistics",
+      title: "移动统计可完整滚动",
+      description: "手机和平板统计主体拥有独立纵向滚动区域，并为固定底部导航和安全区预留空间。",
+    },
+    {
+      id: "item-hover",
+      title: "物品悬浮信息可关闭",
+      description: "新增设备级偏好关闭完整物品详情悬浮卡，点击、拖动、定位和图鉴入口仍保持可用。",
+    },
+    {
+      id: "time-warp",
+      title: "高倍率纯挂机治理",
+      description: "8x、12x、16x 纯挂机计算在 Worker 中使用短校准和有界近似，区分供电限制与计算限制，停止时丢弃未提交预算。",
     },
     {
       id: "release-compatibility",
-      title: "兼容边界保持不变",
-      description: "快速离线开关只保存在当前设备；普通存档不会自动转为速通。复杂终局仍可能精确回退，本版不承诺任意存档 30 秒完成。",
+      title: "存档与在线协议保持兼容",
+      description: "新增 UI 偏好只写入设备 localStorage，不进入 GameState、导入导出、云存档或状态哈希；GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 均不变。",
     },
   ],
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "fast-offline": Gauge,
-  "strict-fallback": Shield,
-  "speedrun-factory": Flag,
-  "speedrun-ranking": Route,
+  "offline-settlement": Activity,
+  "production-history": Gauge,
+  "research-queue": RefreshCw,
+  "construction-delete": X,
+  "topology-safety": Route,
+  "mobile-statistics": Layers,
+  "item-hover": Info,
+  "time-warp": ShieldCheck,
   "release-compatibility": Check,
 };
 
@@ -60,33 +84,34 @@ export interface ReleaseNotesRecord {
 export const RELEASE_NOTES_HISTORY: readonly ReleaseNotesRecord[] = [
   CURRENT_RELEASE_NOTES,
   {
-    id: "2026-08-05-v1.0.29", date: "2026年8月5日", version: "1.0.29", title: "建筑制造与时间扭曲稳定性热修",
-    summary: "1.0.29 为高堆叠建筑制造中心增加确定性计算保护，限制 Worker 切片并改进时间扭曲停止恢复；GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
-    items: [
-      { id: "construction-guard", title: "高堆叠计算保护", description: "建筑制造中心按确定性迭代和递归计划预算分段处理；任务、WIP、材料、目标库存和进度继续保留，其他模拟阶段不被阻塞。" },
-      { id: "bounded-slices", title: "有限 Worker 切片", description: "普通模拟每次最多提交 2 个模拟秒，时间扭曲单片最多 12 秒；未提交的积压时间不会被静默丢弃。" },
-      { id: "stop-recovery", title: "停止与 Worker 恢复", description: "停止时间扭曲会立即阻止新切片，最多等待 750 毫秒；超时自动重建 Worker，明确提示未提交切片不计入收益。" },
-      { id: "deterministic-compatibility", title: "确定性与存档兼容", description: "计算预算和运行时缓存不进入 GameState、存档或云端；保存重载、递归任务、物流、库存和生产状态继续兼容。" },
-    ],
+    id: "2026-08-05-v1.0.30", date: "2026年8月5日", version: "1.0.30", title: "速通与快速离线实验",
+    summary: "新增独立速通工厂、服务端校验榜和带严格回退的快速离线结算实验。",
+    items: [{ id: "speedrun", title: "速通与快速离线", description: "快速路径只在内存副本运行，结构校验失败时回到精确结算。" }],
   },
   {
-    id: "2026-08-05-v1.0.28", date: "2026年8月5日", version: "1.0.28", title: "亮色主题与工厂交互更新",
-    summary: "1.0.28 统一亮色/深色主题、设置分类、版本历史、科技树滚轮和物品悬浮交互，并改进批量建造、科研喷涂、统计与重整精炼。GameState v46、存档 envelope v2 与云 schema v7 不变。",
-    items: [
-      { id: "semantic-themes", title: "统一语义主题", description: "亮色和深色主题覆盖工作区、节点、线路、弹窗、表单、禁用、选中和危险状态；主题偏好只保存在本机设备。" },
-      { id: "settings-history", title: "设置与版本历史", description: "设置页改为分类总览和二级页面；1.0.0 起的更新记录支持离线分页、详情返回、页码与滚动位置保持。" },
-      { id: "technology-wheel", title: "科技树滚轮", description: "科技树区域消费鼠标和触控板滚轮并统一转换为横向移动，阻止页面纵向滚动穿透。" },
-      { id: "item-hover", title: "物品悬浮交互", description: "物品卡缩小触发范围，支持鼠标、键盘焦点、移动点击/长按，以及定位和打开图鉴。" },
-    ],
+    id: "2026-08-05-v1.0.29", date: "2026年8月5日", version: "1.0.29", title: "稳定性与空间维护",
+    summary: "补齐高倍率挂机、云存档和生产运行稳定性，并完成下载节点保留策略。",
+    items: [{ id: "stability", title: "稳定性修复", description: "保持 v46 存档和云协议兼容，清理仅限已验证旧归档。" }],
   },
   {
-    id: "2026-08-04-v1.0.27", date: "2026年8月4日", version: "1.0.27", title: "连接交互与批量建造",
-    summary: "连接点偏好、建筑制造中心批量目标、混合选区和移动多选保持设备级交互与库存守恒。",
-    items: [
-      { id: "connection-size", title: "连接点偏好", description: "连接点和连线圆圈支持默认、放大 25% 和放大 50%，视觉与命中半径保持一致。" },
-      { id: "batch-build", title: "批量建造", description: "建筑制造中心和混合建筑/传送带选区支持批量目标与原子增加，材料不足时整批不变。" },
-      { id: "mobile-selection", title: "移动多选", description: "React Flow 刷新和触摸取消不会清掉 5/10/20/50 项选择或持续高亮。" },
-    ],
+    id: "2026-08-05-v1.0.28", date: "2026年8月5日", version: "1.0.28", title: "物流、科研与统计体验",
+    summary: "改进物流槽位、科研喷涂、白糖统计和重整精炼配方路径。",
+    items: [{ id: "systems", title: "系统体验", description: "设备级 UI 偏好和拓扑命令不改变 GameState v46。" }],
+  },
+  {
+    id: "2026-08-04-v1.0.27", date: "2026年8月4日", version: "1.0.27", title: "批量建造与连接点偏好",
+    summary: "增加连接点大小偏好、建筑批量目标和移动多选操作。",
+    items: [{ id: "batch", title: "批量操作", description: "批量命令保持原子守恒和既有线路上限。" }],
+  },
+  {
+    id: "2026-08-04-v1.0.26", date: "2026年8月4日", version: "1.0.26", title: "主题与设置分类",
+    summary: "统一亮色/深色主题、设置分类、版本历史分页、科技树横向滚轮和物品悬浮交互。",
+    items: [{ id: "theme", title: "设备级主题偏好", description: "主题和交互偏好仅保存于 localStorage，不进入存档或云端。" }],
+  },
+  {
+    id: "2026-08-03-v1.0.25", date: "2026年8月3日", version: "1.0.25", title: "画布交互与设置体验更新",
+    summary: "改进建筑选中、上下游寻线、星球统计、自动保存与侧栏布局，并补齐窄屏和大字号设置体验。",
+    items: [{ id: "canvas", title: "画布与统计", description: "设备级偏好和统计筛选保持 GameState v46、存档 envelope v2 与云 schema v7 兼容。" }],
   },
   {
     id: "2026-08-03-v1.0.24", date: "2026年8月3日", version: "1.0.24", title: "工厂管理与画布性能更新",

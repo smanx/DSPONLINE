@@ -19,6 +19,10 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
   const exported = report.exported ?? [];
   const galacticCreditsAdded = report.galacticCreditsAdded ?? 0;
   const returningReward = report.returningReward ?? [];
+  const approximation = report.approximation;
+  const settlementLabel = approximation?.fellBack
+    ? "安全回退"
+    : approximation?.mode === "approximate" ? "近似宏观结算（实验）" : "精确结算";
   const hasChanges = report.produced.length > 0 || report.completedTechIds.length > 0 ||
     report.structurePointsAdded > 0 || report.shellSailsAdded > 0 || infiniteResearchLevels.length > 0 ||
     exported.length > 0 || galacticCreditsAdded > 0 || returningReward.length > 0;
@@ -28,20 +32,22 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
         <div><i><Clock3 size={19} /></i><span><small>离线生产协议</small><strong>结算报告</strong></span></div>
         <button type="button" onClick={onClose} title="关闭离线结算报告" aria-label="关闭离线结算报告"><X size={18} /></button>
       </header>
-      <div className="offline-runtime">
-        <span>离线时长</span><strong>{formatDuration(report.seconds)}</strong>
+      <div className="offline-report-summary">
+        <div className="offline-runtime">
+          <span>离线时长</span><strong>{formatDuration(report.seconds)}</strong>
+        </div>
+        <section className={`offline-report-method offline-report-method--${approximation?.fellBack ? "fallback" : approximation?.mode ?? "exact"}`}>
+          <header><Clock3 size={15} /><span>结算方式</span><strong>{settlementLabel}</strong></header>
+          <dl>
+            <div><dt>精确校准</dt><dd>{approximation ? approximation.calibrationWindowSeconds > 0 ? `${approximation.calibrationWindowSeconds} 秒${approximation.algorithmVersion === "fast-30s-v1" ? "" : " × 2"}` : "未进入实验" : "全程精确"}</dd></div>
+            <div><dt>宏观覆盖</dt><dd>{approximation ? formatDuration(approximation.approximatedSeconds) : "未使用"}</dd></div>
+            <div><dt>估计最大误差</dt><dd>{approximation ? `${(approximation.maxEstimatedError * 100).toFixed(2)}%` : "0.00%"}</dd></div>
+            <div><dt>算法版本</dt><dd>{approximation?.algorithmVersion ?? "deterministic-exact"}</dd></div>
+            {approximation?.boundaryCorrections ? <div><dt>边界修正</dt><dd>{approximation.boundaryCorrections}</dd></div> : null}
+          </dl>
+          {approximation?.fellBack ? <p className="offline-report-warning">本次近似未满足安全条件，已自动使用精确结算：{approximation.fallbackReason ?? "未知原因"}</p> : null}
+        </section>
       </div>
-      {report.approximation ? <section className="offline-report-method">
-        <header><Clock3 size={15} /><span>结算方式</span><strong>{report.approximation.mode === "approximate" ? "近似宏观结算（实验）" : "精确结算"}</strong></header>
-        <dl>
-          <div><dt>精确校准</dt><dd>{report.approximation.calibrationWindowSeconds > 0 ? `${report.approximation.calibrationWindowSeconds} 秒${report.approximation.algorithmVersion === "fast-30s-v1" ? "" : " × 2"}` : "未进入实验"}</dd></div>
-          <div><dt>宏观覆盖</dt><dd>{formatDuration(report.approximation.approximatedSeconds)}</dd></div>
-          <div><dt>估计最大误差</dt><dd>{(report.approximation.maxEstimatedError * 100).toFixed(2)}%</dd></div>
-          {report.approximation.algorithmVersion ? <div><dt>算法版本</dt><dd>{report.approximation.algorithmVersion}</dd></div> : null}
-          {report.approximation.boundaryCorrections ? <div><dt>边界修正</dt><dd>{report.approximation.boundaryCorrections}</dd></div> : null}
-        </dl>
-        {report.approximation.fellBack ? <p className="offline-report-warning">本次近似未满足安全条件，已自动使用精确结算：{report.approximation.fallbackReason ?? "未知原因"}</p> : null}
-      </section> : null}
       {hasChanges ? (
         <div className="offline-report-body">
           {report.produced.length > 0 ? <section>

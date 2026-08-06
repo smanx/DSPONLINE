@@ -7,6 +7,7 @@ import {
   createPersistentSimulationRuntime,
   createSimulationProfiler,
   getConstructionAutomationStatus,
+  normalizeConstructionAutomationCursor,
   placeBuilding,
   setConstructionAutomationTarget,
   setConstructionAutomationTargetsForBuildings,
@@ -75,6 +76,18 @@ function expectSafeIntegerInventories(state: GameState): void {
 }
 
 describe("construction automation compute protection", () => {
+  it("normalizes negative, wrapped and oversized scheduler cursors", () => {
+    expect(normalizeConstructionAutomationCursor(-1)).toBeGreaterThanOrEqual(0);
+    expect(normalizeConstructionAutomationCursor(Number.MAX_SAFE_INTEGER)).toBeGreaterThanOrEqual(0);
+    expect(normalizeConstructionAutomationCursor(Number.POSITIVE_INFINITY)).toBe(0);
+
+    const initial = createProtectedConstructionState();
+    initial.constructionAutomation.cursor = -1;
+    const runtime = createPersistentSimulationRuntime(structuredClone(initial));
+    expect(() => advancePersistentSimulationRuntime(runtime, 1, 1)).not.toThrow();
+    expect(runtime.state.constructionAutomation.cursor).toBeGreaterThanOrEqual(0);
+  });
+
   it("keeps a 44,311-stack multi-target center bounded while other production advances", () => {
     const initial = createProtectedConstructionState();
     const runtime = createPersistentSimulationRuntime(structuredClone(initial));

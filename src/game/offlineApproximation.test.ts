@@ -12,6 +12,8 @@ import {
   runFastOfflineSettlementAsync,
   runOfflineApproximation,
   runOfflineApproximationAsync,
+  runTimeWarpApproximateSettlement,
+  TIME_WARP_APPROXIMATION_ALGORITHM_VERSION,
   writeOfflineApproximationEnabled,
 } from "./offlineApproximation";
 import { inspectSave, serializeEnvelope } from "./storage";
@@ -207,6 +209,19 @@ describe("offline macro contract experiment", () => {
     expect(result.report.boundaryCorrections ?? 0).toBeGreaterThanOrEqual(0);
   });
 
+  it("preserves an existing fractional simulation timestamp", () => {
+    const source = stableEmptyState();
+    source.elapsedSeconds = 123.7572;
+    const result = runFastOfflineSettlement(source, 3_600);
+
+    expect(result.status).toBe("approximate");
+    if (result.status !== "approximate") return;
+    expect(result.state.elapsedSeconds - source.elapsedSeconds).toBeCloseTo(3_600, 6);
+    const inspection = inspectSave(serializeEnvelope(result.state, 1_753_000_000_000));
+    expect(inspection.valid).toBe(true);
+    expect(inspection.state?.elapsedSeconds).toBeCloseTo(result.state.elapsedSeconds, 6);
+  });
+
   it("keeps the ten-minute fast path serializable and reloadable", () => {
     const source = stableEmptyState();
     const before = hashGameState(source);
@@ -217,6 +232,26 @@ describe("offline macro contract experiment", () => {
     const inspection = inspectSave(raw);
     expect(inspection.valid).toBe(true);
     expect(inspection.state?.elapsedSeconds).toBe(10 * 60);
+    expect(hashGameState(source)).toBe(before);
+  });
+
+  it("keeps circular scheduler cursors out of affine extrapolation", () => {
+    const source = stableEmptyState();
+    source.constructionAutomation.cursor = -7;
+    source.quantumLogisticsNetwork.routingCursors.iron_ore = -3;
+    source.quantumLogisticsNetwork.uploadRoutingCursors.copper_ore = -9;
+    source.galacticHubNetwork.routingCursors.test = -5;
+    const before = hashGameState(source);
+
+    const result = runFastOfflineSettlement(source, 3_600);
+
+    expect(result.status).toBe("approximate");
+    if (result.status !== "approximate") return;
+    expect(result.state.constructionAutomation.cursor).toBeGreaterThanOrEqual(0);
+    expect(result.state.quantumLogisticsNetwork.routingCursors.iron_ore).toBe(0);
+    expect(result.state.quantumLogisticsNetwork.uploadRoutingCursors.copper_ore).toBe(0);
+    expect(result.state.galacticHubNetwork.routingCursors.test).toBe(0);
+    expect(result.report.boundaryCorrections).toBeGreaterThanOrEqual(4);
     expect(hashGameState(source)).toBe(before);
   });
 
@@ -277,6 +312,78 @@ describe("offline macro contract experiment", () => {
     const result = runFastOfflineSettlement(source, 3_600, 60);
     expect(result.status).toBe("approximate");
     if (result.status === "approximate") expect(result.state.speedrun?.elapsedActiveSeconds).toBe(60);
+  });
+
+  it("advances a pure-idle time-warp slice with short calibration without mutating its source", () => {
+    const source = stableEmptyState();
+    source.entities.push({
+      id: "time-warp-test-device",
+      kind: "machine",
+      planetId: "home",
+      position: { x: 0, y: 0 },
+      interactionLocked: false,
+      buildingId: "time_warp_device",
+      machineCount: 1,
+      minerCount: 0,
+      inputs: {},
+      outputs: {},
+      progress: 0,
+      routingCursor: 0,
+      utilization: 0,
+      productionRate: 0,
+    });
+    source.timeWarp.controllerEntityId = "time-warp-test-device";
+    source.timeWarp.enabled = true;
+    source.timeWarp.requestedMultiplier = 16;
+    const before = hashGameState(source);
+
+    const first = runTimeWarpApproximateSettlement(source, 16, 1);
+    const second = runTimeWarpApproximateSettlement(source, 16, 1);
+
+    expect(first.report).toMatchObject({
+      mode: "approximate",
+      algorithmVersion: TIME_WARP_APPROXIMATION_ALGORITHM_VERSION,
+      requestedSimulationSeconds: 16,
+      exactCalibrationSeconds: 2,
+      approximatedSeconds: 14,
+    });
+    expect(first.state.elapsedSeconds).toBe(16);
+    expect(first.report.maxCriticalError).toBeLessThanOrEqual(0.2);
+    expect(hashGameState(first.state)).toBe(hashGameState(second.state));
+    expect(hashGameState(source)).toBe(before);
+  });
+
+  it("keeps the speedrun clock on wall time during approximate pure idle", () => {
+    const source = stableEmptyState();
+    source.entities.push({
+      id: "time-warp-speedrun-device", kind: "machine", planetId: "home", position: { x: 0, y: 0 },
+      interactionLocked: false, buildingId: "time_warp_device", machineCount: 1, minerCount: 0,
+      inputs: {}, outputs: {}, progress: 0, routingCursor: 0, utilization: 0, productionRate: 0,
+    });
+    source.timeWarp.controllerEntityId = "time-warp-speedrun-device";
+    source.timeWarp.enabled = true;
+    source.timeWarp.requestedMultiplier = 12;
+    source.speedrun = {
+      enabled: true, mode: "speedrun", rulesetVersion: "speedrun-v1", seasonId: "season_01", startedAt: 1,
+      elapsedActiveSeconds: 10, baseline: { completedTechIds: [], rocketsLaunched: 0, whiteMatrixProduced: 0 },
+      milestones: {
+        all_technologies: { completed: false }, dyson_rockets_10000: { completed: false }, white_matrix_1m: { completed: false },
+      },
+      eligible: true, factoryId: "speedrun_time_warp_factory",
+    };
+
+    const result = runTimeWarpApproximateSettlement(source, 12, 1);
+    expect(result.state.speedrun?.elapsedActiveSeconds).toBe(11);
+    expect(source.speedrun.elapsedActiveSeconds).toBe(10);
+  });
+
+  it("rejects a macro slice that already contains uncommitted time-warp debt", () => {
+    const source = stableEmptyState();
+    source.timeWarp.pendingSimulationSeconds = 8;
+    source.timeWarp.pendingWallSeconds = 1;
+    const before = hashGameState(source);
+    expect(() => runTimeWarpApproximateSettlement(source, 8, 1)).toThrow(/未提交预算/);
+    expect(hashGameState(source)).toBe(before);
   });
 
 });

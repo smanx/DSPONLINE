@@ -6,6 +6,7 @@ import { BrowserMulticoreExecutor, planMulticoreSimulation, type MulticoreSimula
 import type { GameState } from "./types";
 import { captureSimulationProjectionBaseline, createSimulationProjection, type SimulationProjection } from "./simulationProjection";
 import { createSimulationStateDelta, shouldUseSimulationDelta, type SimulationStateDelta } from "./simulationDelta";
+import { runTimeWarpApproximateSettlement, type TimeWarpApproximationReport } from "./offlineApproximation";
 
 export interface SimulationWorkerRequest {
   id: number;
@@ -18,7 +19,7 @@ export interface SimulationWorkerRequest {
   protocol?: "full" | "delta";
   stateRevision?: number;
   multicore?: MulticoreSimulationOptions;
-  /** Kept for wire compatibility; fast settlement is offline-only. */
+  /** Use the guarded short-calibration macro path for pure-idle time warp. */
   approximate?: boolean;
 }
 
@@ -44,6 +45,7 @@ export interface SimulationWorkerResponse {
   delta?: SimulationStateDelta;
   deltaFallback?: "larger-than-full";
   multicore?: { enabled: boolean; workerCount: number; fallback?: boolean; reason?: string };
+  timeWarpApproximation?: TimeWarpApproximationReport;
 }
 
 let runtime: PersistentSimulationRuntime | null = null;
@@ -133,8 +135,19 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
   const multicorePlan = requestMulticorePlan(runtime.state, event.data.multicore);
   let multicoreUsed = false;
   let multicoreFallback = false;
+  let timeWarpApproximation: TimeWarpApproximationReport | undefined;
   let result: { state: GameState; changed: boolean; cacheRebuilt: boolean };
-  if (multicorePlan.enabled && multicorePlan.mode === "planet-phase") {
+  if (event.data.approximate && runtime.state.timeWarp.enabled) {
+    if (multicoreExecutor) {
+      multicoreExecutor.terminate();
+      multicoreExecutor = null;
+      multicoreExecutorWorkerCount = 0;
+    }
+    const settled = runTimeWarpApproximateSettlement(runtime.state, simulationSeconds, wallSeconds);
+    timeWarpApproximation = settled.report;
+    replacePersistentSimulationRuntimeState(runtime, settled.state, profiler);
+    result = { state: runtime.state, changed: simulationSeconds > 0 || wallSeconds > 0, cacheRebuilt: true };
+  } else if (multicorePlan.enabled && multicorePlan.mode === "planet-phase") {
     const baseline = structuredClone(runtime.state);
     try {
       if (!multicoreExecutor || multicoreExecutorWorkerCount !== multicorePlan.workerCount) {
@@ -184,6 +197,7 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
       fallback: multicoreFallback,
       reason: multicorePlan.reason,
     } } : {}),
+    ...(timeWarpApproximation ? { timeWarpApproximation } : {}),
   };
   if (result.changed && event.data.protocol === "delta" && !suppliedState) {
     const delta = createSimulationStateDelta(previousState, result.state, previousRevision, runtimeRevision);

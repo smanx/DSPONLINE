@@ -23,10 +23,10 @@ export interface ItemReferenceActions {
   onOpenCodex: (itemId: ItemId) => void;
 }
 
-const ItemReferenceActionsContext = createContext<ItemReferenceActions | null>(null);
+const ItemReferenceActionsContext = createContext<{ actions: ItemReferenceActions; enabled: boolean } | null>(null);
 
-export function ItemReferenceActionsProvider({ actions, children }: { actions: ItemReferenceActions; children: ReactNode }) {
-  return <ItemReferenceActionsContext.Provider value={actions}>{children}</ItemReferenceActionsContext.Provider>;
+export function ItemReferenceActionsProvider({ actions, enabled = true, children }: { actions: ItemReferenceActions; enabled?: boolean; children: ReactNode }) {
+  return <ItemReferenceActionsContext.Provider value={{ actions, enabled }}>{children}</ItemReferenceActionsContext.Provider>;
 }
 
 export function ItemGlyph({ itemId, className = "" }: { itemId: ItemId; className?: string }) {
@@ -40,7 +40,9 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
   className?: string;
 }) {
   const [anchor, setAnchor] = useState<TooltipAnchor | null>(null);
-  const actions = useContext(ItemReferenceActionsContext);
+  const reference = useContext(ItemReferenceActionsContext);
+  const actions = reference?.actions ?? null;
+  const enabled = reference?.enabled ?? true;
   const closeTimerRef = useRef<number | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const item = getItem(itemId);
@@ -50,6 +52,10 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
     research: getResearchUses(itemId),
     sources: getResourceSources(itemId),
   }), [itemId]);
+
+  useEffect(() => {
+    if (!enabled) setAnchor(null);
+  }, [enabled]);
 
   useEffect(() => {
     if (!anchor) return;
@@ -78,6 +84,7 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
   };
 
   const open = (element: HTMLElement) => {
+    if (!enabled) return;
     cancelClose();
     const bounds = element.getBoundingClientRect();
     const width = Math.min(286, window.innerWidth - 16);
@@ -102,16 +109,16 @@ export function ItemHoverCard({ itemId, children, className = "" }: {
     <span
       className={`item-reference${className ? ` ${className}` : ""}`}
       aria-haspopup="dialog"
-      onMouseEnter={(event) => open(event.currentTarget)}
-      onMouseLeave={scheduleClose}
-      onFocus={(event) => open(event.currentTarget)}
-      onBlur={scheduleClose}
+      onMouseEnter={enabled ? (event) => open(event.currentTarget) : undefined}
+      onMouseLeave={enabled ? scheduleClose : undefined}
+      onFocus={enabled ? (event) => open(event.currentTarget) : undefined}
+      onBlur={enabled ? scheduleClose : undefined}
       onClick={(event) => {
-        if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable='true']")) return;
+        if (!enabled || event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable='true']")) return;
         if (window.matchMedia?.("(pointer: coarse)").matches) open(event.currentTarget);
       }}
       onPointerDown={(event) => {
-        if (event.pointerType === "mouse" || event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable='true']")) return;
+        if (!enabled || event.pointerType === "mouse" || event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable='true']")) return;
         if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
         const element = event.currentTarget;
         longPressTimerRef.current = window.setTimeout(() => open(element), 420);

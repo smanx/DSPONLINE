@@ -92,7 +92,7 @@ import type { WorkProgressMode } from "../../game/productionRefresh";
 
 export type MobileCanvasMode = "browse" | "place" | "connect" | "select" | "layout" | "region";
 
-type BuildMode = "deploy" | "craft" | "fleet";
+type BuildMode = "deploy" | "craft" | "fleet" | "discard";
 type BuildCategory = "all" | "recent" | "power" | "production" | "logistics" | "dyson";
 
 const BUILD_CATEGORIES: Record<Exclude<BuildCategory, "all" | "recent">, Set<ConstructionId>> = {
@@ -102,7 +102,7 @@ const BUILD_CATEGORIES: Record<Exclude<BuildCategory, "all" | "recent">, Set<Con
   dyson: new Set(["em_rail_ejector", "vertical_launching_silo", "ray_receiver", "galactic_material_exporter", "micro_black_hole_connector", "time_warp_device"]),
 };
 
-const BUILD_MODE_LABELS: Record<BuildMode, string> = { deploy: "部署", craft: "制造", fleet: "载具" };
+const BUILD_MODE_LABELS: Record<BuildMode, string> = { deploy: "部署", craft: "制造", fleet: "载具", discard: "删除" };
 const BUILD_CATEGORY_LABELS: Record<BuildCategory, string> = { all: "全部", recent: "最近", power: "能源", production: "生产", logistics: "物流", dyson: "戴森" };
 const PLACEMENT_COUNTS: PlacementCount[] = [1, 2, 5, 10];
 const MOBILE_RECENT_BUILD_KEY = "dsp-idle-network.mobile-recent-construction.v1";
@@ -139,7 +139,7 @@ export function mobileConstructionSearchText(id: ConstructionId): string {
   return `${constructionLabel(id)} ${definition?.name ?? ""} ${id} ${aliases}`.toLocaleLowerCase("zh-CN");
 }
 
-export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode, query, onQueryChange, onSnap, onClose, onPlacement, onBelt, onCraft, onCraftFleet, onMissingCraft }: {
+export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode, query, onQueryChange, onSnap, onClose, onPlacement, onBelt, onCraft, onCraftFleet, onMissingCraft, onDeleteConstruction }: {
   game: GameState;
   snap: MobileSheetSnap;
   placement: BuildingId | null;
@@ -154,6 +154,7 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
   onCraft: (constructionId: ConstructionId) => void;
   onCraftFleet: (recipeId: RecipeId) => void;
   onMissingCraft: (constructionId: ConstructionId) => void;
+  onDeleteConstruction: (constructionId: ConstructionId) => Promise<boolean>;
 }) {
   const [mode, setMode] = useState<BuildMode>("deploy");
   const [category, setCategory] = useState<BuildCategory>("all");
@@ -166,7 +167,7 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
     try { window.localStorage.setItem(MOBILE_RECENT_BUILD_KEY, JSON.stringify(next)); } catch { /* Recent build history is optional UI state. */ }
   };
   const visible = useMemo(() => {
-    const catalog: ConstructionId[] = mode === "deploy"
+    const catalog: ConstructionId[] = mode === "deploy" || mode === "discard"
       ? [...CONSTRUCTION_BUILD_ORDER]
       : CONSTRUCTION.map((definition) => definition.buildingId);
     return catalog.filter((id) => {
@@ -229,10 +230,17 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
           const plan = getConstructionQuickCraftPlan(game, id);
           const active = isBelt ? beltTierMode === "manual" && beltTier === getBeltTier(id) : placement === id;
           const consumption = plan.consumedItems.slice(0, 2).map((entry) => `${getItem(entry.itemId).name}×${formatQuantityCompact(entry.amount)}`).join("、");
-          const disabled = mode === "deploy" && (count < 1 || !compatible);
+          const deleting = mode === "discard";
+          const disabled = deleting ? count < 1 : mode === "deploy" && (count < 1 || !compatible);
           const craftUnavailable = mode === "craft" && !plan.possible;
-          const accessibleState = mode === "deploy" ? `${label}，施工库存 ${count}` : plan.possible ? `${label}，可以制造` : `${label}，当前不可制造，点击查看原因`;
-          return <button className={`mobile-build-card${active ? " active" : ""}${plan.usesUpstream ? " upstream" : ""}${craftUnavailable ? " unavailable" : ""}`} type="button" disabled={disabled} aria-disabled={craftUnavailable || undefined} aria-label={accessibleState} key={id} onClick={() => {
+          const accessibleState = deleting
+            ? `${label}，施工库存 ${count}，删除全部库存`
+            : mode === "deploy" ? `${label}，施工库存 ${count}` : plan.possible ? `${label}，可以制造` : `${label}，当前不可制造，点击查看原因`;
+          return <button className={`mobile-build-card${active && !deleting ? " active" : ""}${plan.usesUpstream && !deleting ? " upstream" : ""}${craftUnavailable ? " unavailable" : ""}${deleting ? " mobile-build-card--discard" : ""}`} type="button" disabled={disabled} aria-disabled={craftUnavailable || undefined} aria-label={accessibleState} key={id} onClick={() => {
+            if (deleting) {
+              void onDeleteConstruction(id);
+              return;
+            }
             if (mode === "deploy") {
               if (!CONSTRUCTION_BUILD_ORDER.includes(id as BuildingId | ConveyorBeltId)) return;
               remember(id as BuildingId | ConveyorBeltId);
@@ -242,10 +250,10 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
             }
             if (plan.possible) onCraft(id);
             else onMissingCraft(id);
-          }} title={mode === "deploy" ? compatible ? `部署${label}` : "当前行星无法部署" : plan.possible ? `制造${label}` : "查看缺失材料"}>
+          }} title={deleting ? `删除施工托盘中的全部${label}` : mode === "deploy" ? compatible ? `部署${label}` : "当前行星无法部署" : plan.possible ? `制造${label}` : "查看缺失材料"}>
             <i>{constructionBuildIcon(id as BuildingId | ConveyorBeltId)}</i>
-            <span><strong>{label}</strong><small>{mode === "deploy" ? `库存 ×${count}` : plan.possible ? consumption || "材料齐备" : plan.blocker ? `安全上限：${getItem(plan.blocker.itemId).name}` : plan.missingTechnology ? `缺科技：${plan.missingTechnology}` : `缺 ${plan.missingItems[0] ? getItem(plan.missingItems[0].itemId).name : "材料"}`}</small></span>
-            <b>{mode === "deploy" ? <><Pin size={15} />部署</> : <><Hammer size={15} />制造</>}</b>
+            <span><strong>{label}</strong><small>{deleting ? `当前 ×${count} · 不返还材料` : mode === "deploy" ? `库存 ×${count}` : plan.possible ? consumption || "材料齐备" : plan.blocker ? `安全上限：${getItem(plan.blocker.itemId).name}` : plan.missingTechnology ? `缺科技：${plan.missingTechnology}` : `缺 ${plan.missingItems[0] ? getItem(plan.missingItems[0].itemId).name : "材料"}`}</small></span>
+            <b>{deleting ? <><Trash2 size={15} />删除全部</> : mode === "deploy" ? <><Pin size={15} />部署</> : <><Hammer size={15} />制造</>}</b>
           </button>;
         })}
         {visible.length === 0 ? <div className="mobile-sheet-empty"><Box size={24} /><span>没有符合条件的项目</span></div> : null}

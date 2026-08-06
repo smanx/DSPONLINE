@@ -137,7 +137,7 @@ async function seedManagementFixture(page: Page, options: FixtureOptions = {}) {
       paused: true,
     };
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-05-v1.0.30");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-06-v1.0.31");
     window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     if (mobileUi) window.localStorage.setItem("dsp-idle-network.mobile-ui.v1", mobileUi);
@@ -195,7 +195,7 @@ test("one-hundred-million additions are blocked while a historical safe stack su
   const inspector = page.locator(".inspector-panel");
   const target = inspector.getByLabel("建筑堆叠目标数量");
   await expect(target).toHaveValue("100000000");
-  await expect(inspector.locator(".entity-stack-target-shortcuts").getByRole("button", { name: "+1", exact: true })).toBeDisabled();
+  await expect(inspector.locator(".entity-stack-target-shortcuts").getByRole("button", { name: /^快速增加 1 台建筑/ })).toBeDisabled();
   await target.fill("100000001");
   await target.blur();
   await expect(inspector.getByRole("alert")).toContainText("1 至 100,000,000");
@@ -271,12 +271,12 @@ test("new and parallel belt connections select the exact affected line in the in
   await expect(inspector.getByLabel("并联线路目标数量")).toHaveValue("2");
 });
 
-test("construction-dock recycle mode supports single and shift multi-select with exact refunds", async ({ page }) => {
+test("selection toolbar recycle mode supports single and shift multi-select with exact refunds", async ({ page }) => {
   await seedManagementFixture(page, { storageStock: 0 });
   await page.setViewportSize({ width: 1440, height: 900 });
   await openFixture(page);
   await page.locator(".react-flow__controls-fitview").click();
-  await page.getByLabel("进入建筑回收模式").click();
+  await page.getByLabel("框选模式").click();
 
   await page.locator('.react-flow__node[data-id="delete_source"] .factory-node__header').click();
   const toolbar = page.getByRole("toolbar", { name: "选区操作" });

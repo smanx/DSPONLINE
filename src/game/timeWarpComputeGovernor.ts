@@ -5,7 +5,12 @@ export type TimeWarpThrottleReason =
   | "compute-limit"
   | "worker-slow"
   | "backlog"
+  | "approximation-active"
+  | "approximation-fallback"
   | "worker-unavailable";
+
+export type TimeWarpComputeMode = "exact" | "approximate";
+export type TimeWarpApproximationStatus = "inactive" | "calibrating" | "active" | "fallback";
 
 export interface TimeWarpComputeGovernorState {
   sampleCount: number;
@@ -15,6 +20,13 @@ export interface TimeWarpComputeGovernorState {
   recentWorkerDurationMs: number;
   computeLimitedMultiplier: number;
   sliceSimulationSeconds: number;
+  computeMode: TimeWarpComputeMode;
+  approximationStatus: TimeWarpApproximationStatus;
+  approximationAlgorithmVersion?: string;
+  lastApproximatedSeconds: number;
+  maxCriticalError: number;
+  boundaryCorrections: number;
+  fallbackReason?: string;
   reason: TimeWarpThrottleReason;
 }
 
@@ -23,6 +35,8 @@ export interface TimeWarpComputeLimits {
   powerLimitedMultiplier: number;
   computeLimitedMultiplier: number;
   baseMultiplier: number;
+  computeMode: TimeWarpComputeMode;
+  approximationStatus: TimeWarpApproximationStatus;
   actualMultiplier: number;
   maximumPendingSimulationSeconds: number;
   sliceSimulationSeconds: number;
@@ -36,12 +50,26 @@ export interface TimeWarpComputeSample {
   requestedMultiplier: number;
   powerLimitedMultiplier: number;
   baseMultiplier: number;
+  approximation?: {
+    mode: TimeWarpComputeMode;
+    algorithmVersion: string;
+    approximatedSeconds: number;
+    maxCriticalError: number;
+    boundaryCorrections: number;
+    fallbackReason?: string;
+  };
 }
 
 const TARGET_SLICE_DURATION_SECONDS = 0.35;
-const SLOW_SLICE_DURATION_MS = 1_000;
-export const TIME_WARP_MAX_SLICE_SIMULATION_SECONDS = 12;
-export const TIME_WARP_WORKER_HARD_TIMEOUT_MS = 2_000;
+// Approximate slices have a fixed full-state calibration/copy cost. Give each
+// one roughly eight wall seconds of work so large saves do not repeat that
+// cost faster than the device can consume it. Stop still terminates an
+// uncommitted Worker slice and the five-second hard timeout remains unchanged.
+const APPROXIMATE_SLICE_WALL_SECONDS = 8;
+const SLOW_SLICE_DURATION_MS = 700;
+export const TIME_WARP_MAX_EXACT_SLICE_SIMULATION_SECONDS = 12;
+export const TIME_WARP_MAX_SLICE_SIMULATION_SECONDS = 128;
+export const TIME_WARP_WORKER_HARD_TIMEOUT_MS = 5_000;
 const MIN_PENDING_SLICES = 2.5;
 
 function safeMultiplier(value: number, fallback: number): number {
@@ -63,6 +91,11 @@ export function createTimeWarpComputeGovernor(baseMultiplier = 1): TimeWarpCompu
     recentWorkerDurationMs: 0,
     computeLimitedMultiplier: base,
     sliceSimulationSeconds: base,
+    computeMode: "exact",
+    approximationStatus: "inactive",
+    lastApproximatedSeconds: 0,
+    maxCriticalError: 0,
+    boundaryCorrections: 0,
     reason: "warming-up",
   };
 }
@@ -77,26 +110,37 @@ export function resolveTimeWarpComputeLimits(
   const requested = safeMultiplier(requestedMultiplier, base);
   const power = safeMultiplier(powerLimitedMultiplier, base);
   const compute = safeMultiplier(governor.computeLimitedMultiplier, base);
-  const actualMultiplier = Math.max(base, Math.min(requested, power, compute));
+  // Power is a gameplay limit. Compute capacity is diagnostic only: when the
+  // exact Worker cannot sustain this multiplier the governor changes compute
+  // mode instead of disguising CPU pressure as a lower gameplay multiplier.
+  const actualMultiplier = Math.max(base, Math.min(requested, power));
+  const maximumSlice = governor.computeMode === "approximate"
+    ? TIME_WARP_MAX_SLICE_SIMULATION_SECONDS
+    : TIME_WARP_MAX_EXACT_SLICE_SIMULATION_SECONDS;
   const sliceSimulationSeconds = clamp(
-    governor.sliceSimulationSeconds,
+    governor.computeMode === "approximate"
+      ? Math.max(governor.sliceSimulationSeconds, actualMultiplier * APPROXIMATE_SLICE_WALL_SECONDS)
+      : governor.sliceSimulationSeconds,
     base,
-    TIME_WARP_MAX_SLICE_SIMULATION_SECONDS,
+    maximumSlice,
   );
   const maximumPendingSimulationSeconds = Math.max(
-    sliceSimulationSeconds * MIN_PENDING_SLICES,
-    actualMultiplier * 2,
+    sliceSimulationSeconds * (governor.computeMode === "approximate" ? 3 : MIN_PENDING_SLICES),
+    actualMultiplier * (governor.computeMode === "approximate" ? 3 : 2),
   );
   let reason = governor.reason;
-  if (actualMultiplier >= requested) reason = "requested-limit";
-  else if (actualMultiplier >= power && power < requested) reason = "power-limit";
-  else if (governor.sampleCount < 2) reason = "warming-up";
-  else if (reason !== "worker-slow" && reason !== "backlog" && reason !== "worker-unavailable") reason = "compute-limit";
+  if (power < requested) reason = "power-limit";
+  else if (governor.computeMode === "approximate") {
+    reason = governor.approximationStatus === "fallback" ? "approximation-fallback" : "approximation-active";
+  } else if (governor.sampleCount < 2) reason = "warming-up";
+  else if (reason !== "worker-slow" && reason !== "backlog" && reason !== "worker-unavailable") reason = "requested-limit";
   return {
     requestedMultiplier: requested,
     powerLimitedMultiplier: power,
     computeLimitedMultiplier: compute,
     baseMultiplier: base,
+    computeMode: governor.computeMode,
+    approximationStatus: governor.approximationStatus,
     actualMultiplier,
     maximumPendingSimulationSeconds,
     sliceSimulationSeconds,
@@ -120,6 +164,8 @@ export function recordTimeWarpComputeSample(
       ...governor,
       computeLimitedMultiplier: base,
       stableSampleCount: 0,
+      computeMode: "approximate",
+      approximationStatus: "calibrating",
       reason: "worker-slow",
     };
   }
@@ -133,10 +179,20 @@ export function recordTimeWarpComputeSample(
   const sustainableMultiplier = Math.max(base, Math.floor(throughputEma * 0.75));
   const previousLimit = safeMultiplier(governor.computeLimitedMultiplier, base);
   const targetSlice = clamp(
-    throughputEma * TARGET_SLICE_DURATION_SECONDS,
+    governor.computeMode === "approximate"
+      ? Math.max(
+        sample.powerLimitedMultiplier * APPROXIMATE_SLICE_WALL_SECONDS,
+        throughputEma * TARGET_SLICE_DURATION_SECONDS,
+      )
+      : throughputEma * TARGET_SLICE_DURATION_SECONDS,
     base,
-    TIME_WARP_MAX_SLICE_SIMULATION_SECONDS,
+    governor.computeMode === "approximate"
+      ? TIME_WARP_MAX_SLICE_SIMULATION_SECONDS
+      : TIME_WARP_MAX_EXACT_SLICE_SIMULATION_SECONDS,
   );
+  const approximationStatus: TimeWarpApproximationStatus = sample.approximation
+    ? sample.approximation.mode === "approximate" ? "active" : "fallback"
+    : governor.computeMode === "approximate" ? "calibrating" : "inactive";
   const provisional = {
     ...governor,
     sampleCount: governor.sampleCount + 1,
@@ -144,6 +200,12 @@ export function recordTimeWarpComputeSample(
     durationEmaMs,
     recentWorkerDurationMs: sample.durationMs,
     sliceSimulationSeconds: targetSlice,
+    approximationStatus,
+    approximationAlgorithmVersion: sample.approximation?.algorithmVersion ?? governor.approximationAlgorithmVersion,
+    lastApproximatedSeconds: sample.approximation?.approximatedSeconds ?? 0,
+    maxCriticalError: sample.approximation?.maxCriticalError ?? 0,
+    boundaryCorrections: sample.approximation?.boundaryCorrections ?? 0,
+    fallbackReason: sample.approximation?.fallbackReason,
   };
   const limits = resolveTimeWarpComputeLimits(
     provisional,
@@ -153,16 +215,27 @@ export function recordTimeWarpComputeSample(
   );
   const backlogHigh = sample.pendingSimulationSeconds > limits.maximumPendingSimulationSeconds;
   const workerSlow = sample.durationMs >= SLOW_SLICE_DURATION_MS;
-  if (workerSlow || backlogHigh || sustainableMultiplier < previousLimit) {
-    const emergencyLimit = Math.max(
-      base,
-      Math.min(sustainableMultiplier, Math.floor(previousLimit * (workerSlow ? 0.5 : 0.7))),
-    );
+  const requiredMultiplier = Math.max(base, Math.min(
+    safeMultiplier(sample.requestedMultiplier, base),
+    safeMultiplier(sample.powerLimitedMultiplier, base),
+  ));
+  const computeInsufficient = sustainableMultiplier < requiredMultiplier;
+  if (governor.computeMode === "approximate" || sample.approximation || workerSlow || backlogHigh || computeInsufficient) {
     return {
       ...provisional,
       stableSampleCount: 0,
-      computeLimitedMultiplier: emergencyLimit,
-      reason: workerSlow ? "worker-slow" : backlogHigh ? "backlog" : "compute-limit",
+      computeLimitedMultiplier: sustainableMultiplier,
+      computeMode: "approximate",
+      approximationStatus,
+      reason: approximationStatus === "fallback"
+        ? "approximation-fallback"
+        : sample.approximation?.mode === "approximate"
+          ? "approximation-active"
+          : workerSlow
+            ? "worker-slow"
+            : backlogHigh
+              ? "backlog"
+              : "compute-limit",
     };
   }
   const stableSampleCount = governor.stableSampleCount + 1;
@@ -177,7 +250,22 @@ export function recordTimeWarpComputeSample(
     ...provisional,
     stableSampleCount: mayRaise ? 0 : stableSampleCount,
     computeLimitedMultiplier,
+    computeMode: "exact",
+    approximationStatus: "inactive",
     reason: provisional.sampleCount < 2 ? "warming-up" : "compute-limit",
+  };
+}
+
+export function forceTimeWarpApproximation(
+  governor: TimeWarpComputeGovernorState,
+  reason: "backlog" | "worker-slow" | "compute-limit" = "backlog",
+): TimeWarpComputeGovernorState {
+  return {
+    ...governor,
+    stableSampleCount: 0,
+    computeMode: "approximate",
+    approximationStatus: "calibrating",
+    reason,
   };
 }
 
@@ -190,6 +278,8 @@ export function markTimeWarpWorkerUnavailable(
     ...governor,
     stableSampleCount: 0,
     computeLimitedMultiplier: base,
+    computeMode: "exact",
+    approximationStatus: "inactive",
     reason: "worker-unavailable",
   };
 }

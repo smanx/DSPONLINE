@@ -3,6 +3,7 @@ import type { ThemeMode } from "./types";
 /** Device-only preferences. These values never belong in GameState or cloud payloads. */
 export const UI_THEME_PREFERENCE_KEY = "dsp-idle-network.ui.theme.v1";
 export const SHOW_RUN_LOG_PREFERENCE_KEY = "dsp-idle-network.ui.show-run-log.v1";
+export const SHOW_ITEM_HOVER_PREFERENCE_KEY = "dsp-idle-network.ui.show-item-hover.v1";
 export const SETTINGS_CATEGORY_PREFERENCE_KEY = "dsp-idle-network.ui.settings-category.v1";
 export const CONNECTION_POINT_SIZE_PREFERENCE_KEY = "dsp-idle-network.ui.connection-point-size.v1";
 
@@ -50,6 +51,23 @@ export function writeShowRunLogPreference(enabled: boolean): void {
   const storage = localStorageOrNull();
   if (!storage) return;
   try { storage.setItem(SHOW_RUN_LOG_PREFERENCE_KEY, String(enabled)); } catch { /* optional preference */ }
+}
+
+export function readShowItemHoverPreference(): boolean {
+  const storage = localStorageOrNull();
+  if (!storage) return true;
+  try {
+    const value = storage.getItem(SHOW_ITEM_HOVER_PREFERENCE_KEY);
+    return value == null ? true : value !== "false";
+  } catch {
+    return true;
+  }
+}
+
+export function writeShowItemHoverPreference(enabled: boolean): void {
+  const storage = localStorageOrNull();
+  if (!storage) return;
+  try { storage.setItem(SHOW_ITEM_HOVER_PREFERENCE_KEY, String(enabled)); } catch { /* optional preference */ }
 }
 
 export function readSettingsCategoryPreference(): SettingsCategory {

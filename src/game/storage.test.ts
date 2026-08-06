@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { addCanvasBookmark, addCanvasRegion, addDysonSwarmOrbit, advanceSimulation, connectBelt, createBlueprint, createInitialState, createStandardDysonLayer, fundConstructionQueueEntry, getMaterialDeliverySlots, installMiner, pauseCurrentResearch, placeBuilding, queueBlueprint, queueHandcraftRecipe, resizeCanvasRegion, selectTechnology, setActivePlanet, setBeltRouteOffsetY, setBlueprintTransform, setDysonLaunchMode, setDysonLaunchThrottle, setDysonSwarmOrbit, setFuelItem, setLogisticsItem, setPlanetTrayItemLimit, setStationHubConfiguration, setStationSlotMode, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
+import { addCanvasBookmark, addCanvasRegion, addDysonSwarmOrbit, advanceSimulation, cancelCurrentResearch, connectBelt, createBlueprint, createInitialState, createStandardDysonLayer, fundConstructionQueueEntry, getMaterialDeliverySlots, installMiner, pauseCurrentResearch, placeBuilding, queueBlueprint, queueHandcraftRecipe, resizeCanvasRegion, selectTechnology, setActivePlanet, setBeltRouteOffsetY, setBlueprintTransform, setDysonLaunchMode, setDysonLaunchThrottle, setDysonSwarmOrbit, setFuelItem, setLogisticsItem, setPlanetTrayItemLimit, setStationHubConfiguration, setStationSlotMode, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
 import { createProductionPlan } from "./planning";
 import { cancelDeferredOfflineGame, clearGameSlot, exportGame, exportGameSlot, finalizeDeferredOfflineGame, getSaveSlotSummaries, getSaveSnapshotSummaries, importGame, inspectSave, loadGame, loadGameDeferredOffline, loadGameSlot, loadGameSlotDeferredOffline, loadSaveSnapshot, migrateGame, repairSave, saveGame, saveGameSnapshot, saveGameSlot, saveGameVerified, saveVerifiedPayload } from "./storage";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
@@ -27,6 +27,25 @@ describe("game storage", () => {
     expect(migrated).toMatchObject({ version: 46, contentPacks: [], settings: { beltBufferLimit: 100_000_000 } });
     expect(migrated.entities[0].outputs.iron_ore).toBe(321);
     expect(migrated.endgame.constructionActivity.endsAtMs).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it("keeps the automatically resumed research queue stable after save and reload", () => {
+    let state = createInitialState();
+    state.paused = true;
+    state.research.completedTechIds = ["electromagnetic_matrix"];
+    state.research.selectedTechId = "thermal_power";
+    state.research.queuedTechIds = ["basic_logistics", "electromagnetism"];
+    state.research.progressByTech.thermal_power = { energy_matrix: 7 };
+
+    state = cancelCurrentResearch(state);
+    expect(state.research.selectedTechId).toBe("electromagnetism");
+    expect(state.research.queuedTechIds).toEqual(["basic_logistics"]);
+    saveGame(state);
+
+    const loaded = loadGame().state;
+    expect(loaded.research.selectedTechId).toBe("electromagnetism");
+    expect(loaded.research.queuedTechIds).toEqual(["basic_logistics"]);
+    expect(loaded.research.progressByTech.thermal_power).toEqual({ energy_matrix: 7 });
   });
 
   it("migrates v41 galaxy data to v42 display metadata without changing factory ids", () => {
@@ -1004,6 +1023,26 @@ describe("game storage", () => {
       inclination: -27,
       longitude: 213,
     });
+  });
+
+  it("preserves stellar-harnessing Dyson generation across save reload", () => {
+    let state = createInitialState();
+    state.endgame.infiniteResearch.stellar_harnessing.level = 5;
+    state.dysonPlans.helios.structurePoints = 120;
+    state.dysonPlans.helios.shellSails = 240;
+    state.dysonEngineering.orbitsBySystem.helios[0].sailsInOrbit = 80;
+    state = advanceSimulation(state, 1);
+
+    const before = {
+      sphere: state.dysonSphere.generationKw,
+      swarm: state.dysonSwarm.generationKw,
+    };
+    const inspection = inspectSave(exportGame(state));
+
+    expect(inspection.valid).toBe(true);
+    expect(inspection.state?.endgame.infiniteResearch.stellar_harnessing.level).toBe(5);
+    expect(inspection.state?.dysonSphere.generationKw).toBe(before.sphere);
+    expect(inspection.state?.dysonSwarm.generationKw).toBe(before.swarm);
   });
 
   it("migrates the aggregate v21 Dyson swarm into the first Helios orbit", () => {

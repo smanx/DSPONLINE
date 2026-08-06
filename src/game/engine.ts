@@ -1164,7 +1164,7 @@ export function getIndustrialEfficiencyMultiplier(state: GameState): number {
   return 1 + getInfiniteResearchLevel(state, "matrix_compression") * 0.04;
 }
 
-function getDysonPowerMultiplier(state: GameState): number {
+export function getDysonPowerMultiplier(state: Pick<GameState, "endgame">): number {
   return 1 + getInfiniteResearchLevel(state, "stellar_harnessing") * 0.05;
 }
 
@@ -7747,6 +7747,19 @@ export function discardPlanetTrayItems(state: GameState, planetId: PlanetId, req
     : { ...state, planetTrays };
 }
 
+/** Permanently remove one construction inventory stack without touching placed entities or automation targets. */
+export function discardConstructionInventory(state: GameState, constructionId: ConstructionId): GameState {
+  if (!(constructionId in state.construction) || !Number.isFinite(state.construction[constructionId]) ||
+    Math.floor(state.construction[constructionId] ?? 0) < 1) return state;
+  return {
+    ...state,
+    construction: {
+      ...state.construction,
+      [constructionId]: 0,
+    },
+  };
+}
+
 function storeInTray(state: GameState, itemId: ItemId, amount: number): number {
   const requested = Math.max(0, Math.floor(amount + EPSILON));
   if (requested < 1) return 0;
@@ -7956,12 +7969,25 @@ function hasBufferedItems(entity: FactoryEntity): boolean {
  * choices intact while removing the extra configuration step for first use.
  */
 function getAutoRecipeForInput(state: GameState, entity: FactoryEntity, itemId: ItemId): RecipeDefinition | undefined {
-  if (entity.kind !== "machine" || !entity.buildingId || hasBufferedItems(entity)) return undefined;
+  if (entity.kind !== "machine" || !entity.buildingId || entity.interactionLocked || hasBufferedItems(entity)) return undefined;
   const recipes = getRecipesForBuilding(entity.buildingId)
     .filter((recipe) => !recipe.requiredTechId || isTechnologyCompleted(state, recipe.requiredTechId));
   const defaultRecipe = recipes[0];
   if (!defaultRecipe || entity.recipeId !== defaultRecipe.id) return undefined;
-  return recipes.find((recipe) => recipe.inputs.some((input) => input.itemId === itemId));
+  return recipes.find((recipe) => {
+    if (!recipe.inputs.some((input) => input.itemId === itemId)) return false;
+    const acceptedInputs = new Set(recipe.id === "matrix_research"
+      ? MATRIX_ITEM_IDS
+      : recipe.inputs.map((input) => input.itemId));
+    const proliferatorItemId = entity.sprayCoaterInstalled ? getEntityProliferatorItemId(entity) : undefined;
+    if (proliferatorItemId) acceptedInputs.add(proliferatorItemId);
+    const producedOutputs = new Set(recipe.outputs.map((output) => output.itemId));
+    return state.belts.every((belt) => {
+      if (belt.target === entity.id && !acceptedInputs.has(belt.itemId)) return false;
+      if (belt.source === entity.id && !producedOutputs.has(belt.itemId)) return false;
+      return true;
+    });
+  });
 }
 
 function targetCanAcceptBeltItem(state: GameState, entity: FactoryEntity, itemId: ItemId, targetPortIndex?: 0 | 1 | 2): boolean {
@@ -8903,12 +8929,25 @@ function constructionAutomationPending(state: GameState, constructionId: Constru
   }, 0);
 }
 
+export function normalizeConstructionAutomationCursor(cursor: number): number {
+  const length = getConstructionAutomationTargets().length;
+  if (length < 1) return 0;
+  const integerCursor = Number.isFinite(cursor) && Number.isSafeInteger(Math.trunc(cursor))
+    ? Math.trunc(cursor)
+    : 0;
+  return ((integerCursor % length) + length) % length;
+}
+
 function constructionAutomationTarget(state: GameState, cursor = state.constructionAutomation.cursor): { index: number; definition: ConstructionAutomationTargetDefinition } | null {
   const definitions = getConstructionAutomationTargets();
   if (definitions.length === 0) return null;
+  const normalizedCursor = normalizeConstructionAutomationCursor(cursor);
   for (let offset = 0; offset < definitions.length; offset += 1) {
-    const index = (cursor + offset) % definitions.length;
+    const index = (normalizedCursor + offset) % definitions.length;
     const definition = definitions[index];
+    // Imported and experimental saves can carry a stale cursor. A scheduler
+    // cursor must never turn into a missing catalog definition.
+    if (!definition) continue;
     const target = state.constructionAutomation.targetStock[definition.id] ?? 0;
     const current = constructionAutomationCurrentStock(state, definition.id) + constructionAutomationPending(state, definition.id);
     if (target <= current || definition.requiredTechId && !isTechnologyCompleted(state, definition.requiredTechId)) continue;
@@ -11638,6 +11677,7 @@ export function cancelCurrentResearch(state: GameState): GameState {
   const next = copyState(state);
   next.research.selectedTechId = null;
   if (next.endgame?.activeInfiniteResearchId) next.endgame.activeInfiniteResearchId = null;
+  activateNextQueuedTechnology(next);
   for (const entity of next.entities) {
     if (entity.recipeId === "matrix_research") entity.progress = 0;
   }

@@ -5,7 +5,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-05-v1.0.30");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-06-v1.0.31");
     }
   });
 }
@@ -149,21 +149,21 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "快速离线与速通模式更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "离线结算与高倍率挂机稳定性更新" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(5);
-  await expect(releaseNotes).toContainText("快速离线默认尝试");
-  await expect(releaseNotes).toContainText("严格验证与精确回退");
-  await expect(releaseNotes).toContainText("独立速通工厂");
-  await expect(releaseNotes).toContainText("服务端验证速通榜");
-  await expect(releaseNotes).toContainText("兼容边界保持不变");
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(9);
+  await expect(releaseNotes).toContainText("快速离线安全回退");
+  await expect(releaseNotes).toContainText("生产历史曲线");
+  await expect(releaseNotes).toContainText("施工库存删除");
+  await expect(releaseNotes).toContainText("锁定配方与线路拓扑保护");
+  await expect(releaseNotes).toContainText("高倍率纯挂机治理");
   await expect(releaseNotes).not.toContainText("修复压缩流死锁");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-05-v130-1440.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-03-v125-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-05-v130-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-03-v125-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -186,7 +186,7 @@ test("dated release notes appear once and remain available from both settings sc
     return Boolean(scroll && summary && firstItem && footer && summary.bottom <= firstItem.top + 1 && scroll.bottom <= footer.top + 1);
   })).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-05-v130-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-03-v125-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -195,12 +195,12 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-05-v1.0.30");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-06-v1.0.31");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
   await page.getByRole("button", { name: "游戏设置" }).click();
-  await page.getByRole("button", { name: "查看2026年8月5日版本更新记录" }).click();
+  await page.getByRole("button", { name: "查看2026年8月6日版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
   await releaseNotes.getByLabel("关闭版本更新记录").click();
 
@@ -213,7 +213,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-05-v130-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-03-v125-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -661,8 +661,7 @@ async function enableCoarsePointer(page: Page) {
 
 async function createTouchPage(browser: Browser, viewport: { width: number; height: number }) {
   const context = await browser.newContext({
-    baseURL: process.env.PLAYWRIGHT_BASE_URL
-      ?? `http://127.0.0.1:${process.env.DSP_E2E_PORT ?? "4319"}`,
+    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:4319",
     hasTouch: true,
     isMobile: true,
     viewport,
@@ -2071,9 +2070,7 @@ test("five-step basic onboarding advances only after successful factory commands
   await placeOnCanvas(page, "部署风力涡轮机", Math.round(canvasBox!.width * 0.72), 180);
   const turbine = page.locator(".power-node").filter({ hasText: "风力涡轮机" }).first();
   await turbine.locator(".factory-node__header").click();
-  const stackTarget = page.locator(".inspector-panel").getByLabel("建筑堆叠目标数量");
-  await stackTarget.fill("2");
-  await stackTarget.press("Enter");
+  await page.getByLabel(/快速增加 1 台建筑/).click();
   await expect(coach).toContainText("连接第一条传送带");
   await expect(coach).toContainText("3/18");
 
@@ -2986,7 +2983,7 @@ test("basic fabrication handcrafts unlocked material recipes in a compact grid",
   await page.screenshot({ path: "artifacts/qa/fabricator-search-history-1440.png", fullPage: true });
   await handcraftSearch.press("Escape");
 
-  await page.getByTitle("拿取磁线圈").locator(".item-reference").first().hover();
+  await page.locator(".tray-row").filter({ hasText: "磁线圈" }).locator(".item-reference--tray").first().hover();
   await expect(page.locator(".item-hover-card")).toContainText("磁铁 ×2 + 铜块 ×1");
   await expect(page.locator(".item-hover-card")).toContainText("用途");
   await page.setViewportSize({ width: 390, height: 844 });
@@ -3458,9 +3455,7 @@ test("starter kit and logistics controls are available on the production canvas"
   await oilVein.click();
   await expect(oilVein).toContainText("×1");
   await oilVein.click();
-  const recoverAll = page.getByRole("button", { name: "回收全部采矿机 ×1" });
-  await expect(recoverAll).toBeVisible();
-  await recoverAll.click();
+  await page.locator(".inspector-panel").getByRole("button", { name: "回收全部采矿机 ×1" }).click();
   await expect(oilVein).toContainText("×0");
   await expect(page.getByTitle("部署原油萃取站")).toContainText("×1");
   await page.screenshot({ path: "artifacts/qa/logistics-oil-1440.png", fullPage: true });
@@ -4424,7 +4419,7 @@ test("stellar workspaces stay usable at 150 percent font scale on desktop and mo
   await page.screenshot({ path: "artifacts/qa/dyson-planner-150-844x390.png", fullPage: true });
 });
 
-test("interstellar station preserves hidden route fields and keeps compact slot controls reachable on mobile", async ({ page }) => {
+test("interstellar station exposes relay hub and compact per-slot controls on mobile", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openStellarExplorationGame(page);
   const station = page.locator(".station-node").filter({ hasText: "星际物流站" });
@@ -4432,22 +4427,18 @@ test("interstellar station preserves hidden route fields and keeps compact slot 
   const inspector = page.locator(".station-inspector");
   await inspector.getByLabel("中转物流枢纽").check();
   await inspector.getByLabel("枢纽优先级").selectOption("2");
-  const firstSlot = inspector.locator('[data-station-slot-index="0"]');
-  await firstSlot.getByLabel("槽位 1 优先级").selectOption("2");
-  await firstSlot.getByLabel("槽位 1 库存上限").fill("300");
-  await firstSlot.getByLabel("槽位 1 库存上限").blur();
+  const slot = inspector.locator('[data-station-slot-index="0"]');
+  await slot.locator(".station-slot-scope").first().getByRole("button", { name: "需求", exact: true }).click();
+  await slot.getByLabel("槽位 1 优先级").selectOption("2");
+  await slot.getByLabel("槽位 1 库存上限").fill("2500");
+  await slot.getByLabel("槽位 1 库存上限").blur();
   await expect(inspector.getByLabel("中转物流枢纽")).toBeChecked();
   await expect(inspector.getByLabel("枢纽优先级")).toHaveValue("2");
-  await expect(firstSlot.getByLabel("槽位 1 优先级")).toHaveValue("2");
-  await expect(firstSlot.getByLabel("槽位 1 库存上限")).toHaveValue("300");
-  await expect(firstSlot.getByText("航路", { exact: true })).toHaveCount(0);
-  await expect(firstSlot.getByText("翘曲预算", { exact: true })).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => {
-    const envelope = JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1") ?? "null");
-    const station = envelope?.state?.entities?.find((entity: { id?: string }) => entity.id === "stellar_demand");
-    const slot = station?.stationSlots?.[0];
-    return slot ? `${slot.routePolicy}:${slot.warperBudget}` : "missing";
-  })).toBe("relay-preferred:2");
+  await expect(slot.locator(".station-slot-scope").first().getByRole("button", { name: "需求", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(slot.getByLabel("槽位 1 优先级")).toHaveValue("2");
+  await expect(slot.getByLabel("槽位 1 库存上限")).toHaveValue("2500");
+  await expect(inspector.getByLabel("航路")).toHaveCount(0);
+  await expect(inspector.getByLabel("翘曲预算")).toHaveCount(0);
 
   await page.getByLabel("打开设置").click();
   const operations = page.getByRole("dialog", { name: "运营中心" });
@@ -4461,9 +4452,9 @@ test("interstellar station preserves hidden route fields and keeps compact slot 
   }
   await expect(inspector.getByLabel("中转物流枢纽")).toBeVisible();
   await expect.poll(async () => inspector.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await firstSlot.getByLabel("槽位 1 优先级").scrollIntoViewIfNeeded();
-  await expect(firstSlot.getByLabel("槽位 1 优先级")).toBeVisible();
-  await expect(firstSlot.getByLabel("槽位 1 库存上限")).toBeVisible();
+  await slot.getByLabel("槽位 1 优先级").scrollIntoViewIfNeeded();
+  await expect(slot.getByLabel("槽位 1 优先级")).toBeVisible();
+  await expect(slot.getByLabel("槽位 1 库存上限")).toBeVisible();
   await page.screenshot({ path: "artifacts/qa/interstellar-relay-controls-150-390.png", fullPage: true });
 });
 
@@ -4844,16 +4835,16 @@ test("construction cards craft in place and Ctrl-click chains building placement
   await expect(page.getByTitle("部署制造台 Mk.I", { exact: true })).not.toHaveClass(/construction-item--active/);
 
   await sourceAssembler.locator(".factory-node__header").click();
-  const quickAdd = page.locator(".inspector-panel .entity-stack-target-shortcuts").getByRole("button", { name: "+1", exact: true });
+  const quickAdd = page.getByRole("button", { name: /快速增加 1 台建筑，剩余 1/ });
   await expect(quickAdd).toBeEnabled();
   await quickAdd.click();
   await expect(sourceAssembler).toContainText("×3");
-  await expect(quickAdd).toBeDisabled();
+  await expect(page.getByRole("button", { name: /^快速增加 1 台建筑，剩余 0$/ })).toBeDisabled();
   const batchReduction = page.locator(".entity-stack-batch-remove");
-  await batchReduction.getByRole("button", { name: "-1", exact: true }).click();
+  await batchReduction.getByRole("button", { name: "减少 1 台建筑" }).click();
   await expect(sourceAssembler).toContainText("×2");
   await expect(quickAdd).toBeEnabled();
-  await batchReduction.getByRole("button", { name: "-1", exact: true }).click();
+  await batchReduction.getByRole("button", { name: "减少 1 台建筑" }).click();
   await expect(sourceAssembler).toContainText("×1");
   await page.locator(".inspector-panel").getByRole("button", { name: "回收设备" }).click();
   await page.locator(".game-dialog").getByRole("button", { name: "确认回收" }).click();
@@ -5886,20 +5877,34 @@ test("planet tray limits edit independently and small storage ports stay separat
     document.documentElement.style.setProperty("--ui-font-scale", "2");
   });
   const storage = page.locator('.react-flow__node[data-id="network_buffer"] .storage-buffer-node');
-  const lanesSeparated = () => storage.locator(".logistics-slot-row").evaluate((row) => {
+  const laneGeometry = () => storage.locator(".logistics-slot-row").evaluate((row) => {
     const columns = [...row.querySelectorAll<HTMLElement>(":scope > .node-io__column")];
-    if (columns.length !== 2) return false;
+    if (columns.length !== 2) return { columns: columns.length, separated: false, withinCard: false };
     const input = columns[0].getBoundingClientRect();
     const output = columns[1].getBoundingClientRect();
     const article = row.closest<HTMLElement>(".storage-buffer-node")?.getBoundingClientRect();
     const separated = input.right <= output.left + 1 || input.bottom <= output.top + 1;
-    return Boolean(article && separated && input.left >= article.left - 1 && input.right <= article.right + 1 && output.left >= article.left - 1 && output.right <= article.right + 1);
+    const withinCard = Boolean(article
+      && input.left >= article.left - 1
+      && input.right <= article.right + 1
+      && output.left >= article.left - 1
+      && output.right <= article.right + 1);
+    return {
+      columns: columns.length,
+      separated,
+      withinCard,
+      article: article && { left: article.left, right: article.right },
+      input: { left: input.left, right: input.right, top: input.top, bottom: input.bottom },
+      output: { left: output.left, right: output.right, top: output.top, bottom: output.bottom },
+    };
   });
-  await expect.poll(lanesSeparated).toBe(true);
+  await expect.poll(laneGeometry).toMatchObject({ columns: 2, separated: true, withinCard: true });
   await page.screenshot({ path: "artifacts/qa/storage-ports-font-200-desktop.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator(".react-flow__controls-fitview").click();
-  await expect.poll(lanesSeparated).toBe(true);
+  await expect.poll(async () => (await laneGeometry()).columns).toBe(2);
+  const portraitGeometry = await laneGeometry();
+  expect(portraitGeometry, JSON.stringify(portraitGeometry)).toMatchObject({ columns: 2, separated: true, withinCard: true });
   await page.screenshot({ path: "artifacts/qa/storage-ports-font-200-portrait.png", fullPage: true });
 });

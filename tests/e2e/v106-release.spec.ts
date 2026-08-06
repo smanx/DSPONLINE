@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-01-v1.0.19";
+const RELEASE_NOTE_ID = "2026-08-06-v1.0.31";
 
 async function seedV106Factory(page: Page, mobileUi: "legacy" | "next" = "legacy") {
   await page.addInitScript(({ releaseNoteId, selectedMobileUi }) => {
@@ -72,7 +72,7 @@ test("desktop exposes 4096 belt lanes, batch unstacking and vein-safe blueprint 
   await target.blur();
   await expect(target).toHaveValue("51");
   await expect(inspector).toContainText("电弧熔炉 ×51");
-  await inspector.locator(".entity-stack-batch-remove").getByRole("button", { name: "-10", exact: true }).click();
+  await inspector.locator(".entity-stack-batch-remove").getByRole("button", { name: "减少 10 台建筑", exact: true }).click();
   await expect(target).toHaveValue("41");
   await target.fill("1");
   await target.blur();

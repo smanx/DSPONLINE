@@ -15,6 +15,7 @@ import {
   STATION_WARPER_CAPACITY_PER_BUILDING,
   advanceSimulation,
   createInitialState,
+  getDysonPowerMultiplier,
 } from "./engine";
 import { BUILDINGS, ITEMS, PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, getBuilding, getExtractorBuildingId, getPlanet, getRecipe, getTechnology, isRegisteredBeltTier } from "./content";
 import { normalizeCampaignState, syncCampaignProgress } from "./campaign";
@@ -1150,6 +1151,11 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     const source = entities.find((entity) => entity.id === belt.source);
     const target = entities.find((entity) => entity.id === belt.target);
     if (!source || !target || source.planetId !== target.planetId || belt.planetId !== source.planetId) return false;
+    // Ordinary machine lines are intentionally preserved even when a loaded
+    // recipe currently does not accept their item. They may be a player-owned
+    // temporarily disconnected route and have no persisted numbered port to
+    // repair. Numbered delivery/black-hole ports below are authoritative and
+    // can be validated without guessing player intent.
     if (target.buildingId === "material_delivery_hub") {
       if (belt.targetPortIndex === undefined) return false;
       const slot = target.deliverySlots?.[belt.targetPortIndex];
@@ -1164,7 +1170,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
   });
   for (const belt of migratedBelts.filter((candidate) => !belts.includes(candidate))) {
     const constructionId = getBeltConstructionId(belt.tier);
-    construction[constructionId] = (construction[constructionId] ?? 0) + belt.lanes;
+    construction[constructionId] = Math.min(Number.MAX_SAFE_INTEGER, (construction[constructionId] ?? 0) + belt.lanes);
   }
 
   if (saved.version < 8) {
@@ -1666,6 +1672,8 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
       }];
     })
     : [];
+  const endgame = migrateEndgame(saved);
+  const dysonPowerMultiplier = getDysonPowerMultiplier({ endgame });
   const structurePoints = saved.version >= 7 ? nonNegativeInteger(saved.dysonSphere?.structurePoints) : 0;
   const shellCapacity = structurePoints * DYSON_SHELL_CAPACITY_PER_STRUCTURE;
   const shellSails = saved.version >= 7
@@ -1776,13 +1784,13 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
   dysonSphere.totalSailsAbsorbed = Math.max(dysonSphere.totalSailsAbsorbed, dysonSphere.shellSails);
   dysonSphere.generationKw = Math.floor(Object.values(dysonPlans).reduce((sum, plan) => sum +
     (plan.structurePoints * DYSON_STRUCTURE_POWER_KW + plan.shellSails * DYSON_SHELL_SAIL_POWER_KW) *
-    getStarLuminosity({ galaxy }, plan.systemId), 0));
+    dysonPowerMultiplier * getStarLuminosity({ galaxy }, plan.systemId), 0));
   const sailsInOrbit = saved.version >= 6 ? nonNegativeInteger(saved.dysonSwarm?.sailsInOrbit) : 0;
   const totalExpired = saved.version >= 6 ? nonNegativeInteger(saved.dysonSwarm?.totalExpired) : 0;
   const totalLaunched = saved.version >= 6
     ? Math.max(sailsInOrbit + totalExpired + dysonSphere.totalSailsAbsorbed, nonNegativeInteger(saved.dysonSwarm?.totalLaunched))
     : 0;
-  const swarmGenerationKw = sailsInOrbit * SOLAR_SAIL_POWER_KW * getStarLuminosity({ galaxy }, "helios");
+  const swarmGenerationKw = sailsInOrbit * SOLAR_SAIL_POWER_KW * dysonPowerMultiplier * getStarLuminosity({ galaxy }, "helios");
   const dysonSwarm: GameState["dysonSwarm"] = {
     sailsInOrbit,
     totalLaunched,
@@ -1820,7 +1828,7 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
         totalLaunched: nonNegativeInteger(orbit.totalLaunched),
         totalExpired: nonNegativeInteger(orbit.totalExpired),
         decayProgress: nonNegativeNumber(orbit.decayProgress) % 1,
-        generationKw: nonNegativeNumber(orbit.sailsInOrbit) * SOLAR_SAIL_POWER_KW * getStarLuminosity({ galaxy }, systemId),
+        generationKw: nonNegativeNumber(orbit.sailsInOrbit) * SOLAR_SAIL_POWER_KW * dysonPowerMultiplier * getStarLuminosity({ galaxy }, systemId),
       } satisfies DysonSwarmOrbitState];
     }) : [];
     const orbits = parsedOrbits.length > 0 ? parsedOrbits.slice(0, 8) : [defaultDysonOrbit(systemId)];
@@ -1960,7 +1968,6 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
   const unlockedAchievementIds = Array.isArray(saved.achievements?.unlockedIds)
     ? [...new Set(saved.achievements.unlockedIds.filter(isAchievementId))]
     : [];
-  const endgame = migrateEndgame(saved);
   const systemSpaceStations = normalizeSystemSpaceStations(saved);
   const galacticHubNetwork = normalizeGalacticHubNetwork(saved);
   const quantumLogisticsNetwork = saved.version >= 44

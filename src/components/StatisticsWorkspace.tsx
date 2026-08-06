@@ -20,10 +20,12 @@ import { PowerValue } from "./PowerValue";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 import {
   calculateProductionWindowSnapshot,
+  createProductionTrendSeries,
   formatProductionStatistic,
   formatProductionStatisticExact,
   PRODUCTION_STATISTICS_WINDOWS,
   type ProductionStatisticsWindow,
+  type ProductionTrendPoint,
 } from "../game/productionStatistics";
 import { ExactValue } from "./ExactValue";
 import { useAppLocale } from "../i18n/locale";
@@ -132,10 +134,20 @@ const NETWORK_HEALTH_LABELS: Record<BeltHealth, string> = {
 
 const PRODUCTION_STATISTICS_WINDOW_LABELS_EN: Record<ProductionStatisticsWindow, string> = {
   second: "Per second",
-  minute: "Per minute",
-  "ten-minutes": "Per 10 minutes",
-  hour: "Per hour",
+  minute: "Past minute",
+  "ten-minutes": "Past 10 minutes",
+  hour: "Past hour",
+  total: "Lifetime output",
 };
+
+function productionTrendPolyline(points: readonly ProductionTrendPoint[], field: "productionPerMinute" | "consumptionPerMinute", maximum: number): string {
+  if (points.length === 0 || maximum <= 0) return "";
+  return points.map((point, index) => {
+    const x = points.length === 1 ? 50 : index / (points.length - 1) * 100;
+    const y = 42 - Math.max(0, Math.min(1, point[field] / maximum)) * 36;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+}
 
 const EMPTY_FACTORY_STATISTICS: FactoryStatistics = {
   items: [],
@@ -259,6 +271,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
   const [filter, setFilter] = useState<ItemFilter>("all");
   const [sort, setSort] = useState<ItemSort>({ key: "catalog", direction: "asc" });
   const [productionWindowId, setProductionWindowId] = useState<ProductionStatisticsWindow>("minute");
+  const [trendItemId, setTrendItemId] = useState<ItemId | null>(null);
   const [query, setQuery] = useState("");
   const [planetScope, setPlanetScope] = useState<PlanetId | "all">("all");
   const [planItemId, setPlanItemId] = useState<ItemId>("electromagnetic_matrix");
@@ -362,21 +375,19 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
     };
   }, [contentPackRuntimeSnapshot.fingerprint, planetScope, statisticsRequired]);
   const galactic = useMemo(() => open && tab === "galaxy" ? getGalacticIndustrySnapshot(game) : null, [game, open, tab]);
+  const scopedProductionHistory = useMemo(() => planetScope === "all"
+    ? game.productionHistory
+    : game.productionHistory.map((sample) => ({
+      ...sample,
+      productionPerMinute: sample.planetProductionPerMinute?.[planetScope] ?? {},
+      consumptionPerMinute: sample.planetConsumptionPerMinute?.[planetScope] ?? {},
+    })), [game.productionHistory, planetScope]);
   const productionWindow = useMemo(() => {
     const fallbackProduction = Object.fromEntries(statistics.items.map((item) => [item.itemId, item.productionPerMinute])) as Partial<Record<ItemId, number>>;
     const fallbackConsumption = Object.fromEntries(statistics.items.map((item) => [item.itemId, item.consumptionPerMinute])) as Partial<Record<ItemId, number>>;
-    // History samples are global in v46. For a selected planet use the
-    // filtered, current production rates as a deterministic per-planet view;
-    // the all-planet view keeps the rolling history unchanged.
-    const history = planetScope === "all"
-      ? game.productionHistory
-      : game.productionHistory.map((sample) => ({
-        ...sample,
-        productionPerMinute: sample.planetProductionPerMinute?.[planetScope] ?? {},
-        consumptionPerMinute: sample.planetConsumptionPerMinute?.[planetScope] ?? {},
-      }));
-    return calculateProductionWindowSnapshot(history, productionWindowId, fallbackProduction, fallbackConsumption);
-  }, [game.productionHistory, planetScope, productionWindowId, statistics.items]);
+    return calculateProductionWindowSnapshot(scopedProductionHistory, productionWindowId, fallbackProduction, fallbackConsumption,
+      planetScope === "all" ? game.totalProduced : {});
+  }, [game.totalProduced, planetScope, productionWindowId, scopedProductionHistory, statistics.items]);
   const productionItems = useMemo(() => {
     const currentById = new Map(statistics.items.map((item) => [item.itemId, item]));
     const ids = new Set<ItemId>([
@@ -411,6 +422,14 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
     production: totals.production + item.productionPerMinute,
     consumption: totals.consumption + item.consumptionPerMinute,
   }), { production: 0, consumption: 0 }), [productionItems]);
+  const activeTrendItemId = useMemo(() => {
+    if (trendItemId && items.some((item) => item.itemId === trendItemId)) return trendItemId;
+    return items[0]?.itemId ?? null;
+  }, [items, trendItemId]);
+  const productionTrend = useMemo(() => activeTrendItemId && productionWindowId !== "total" && productionWindowId !== "second"
+    ? createProductionTrendSeries(scopedProductionHistory, productionWindowId, activeTrendItemId)
+    : [], [activeTrendItemId, productionWindowId, scopedProductionHistory]);
+  const productionTrendMaximum = useMemo(() => Math.max(1, ...productionTrend.flatMap((point) => [point.productionPerMinute, point.consumptionPerMinute])), [productionTrend]);
   const toggleColumnSort = (key: "production" | "consumption") => setSort((current) => ({
     key,
     direction: current.key === key && current.direction === "desc" ? "asc" : "desc",
@@ -514,11 +533,35 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
                 ? `采样于模拟 ${statisticsSample.elapsedSeconds.toFixed(1)} 秒 · 后台计算 ${statisticsSample.durationMs.toFixed(1)} ms · 最多每秒刷新一次`
                 : "等待统计采样"}
           </div>
+          <section className="production-history-trend" aria-label="生产历史趋势">
+            <header>
+              <div><TrendingUp size={15} /><span>{productionWindowId === "total" ? "累计总产量" : "历史产量趋势"}</span></div>
+              <label><span>物品</span><select value={activeTrendItemId ?? ""} onChange={(event) => setTrendItemId(event.target.value as ItemId)} disabled={items.length === 0} aria-label="选择趋势物品">
+                {items.map((item) => <option value={item.itemId} key={item.itemId}>{getItem(item.itemId).name}</option>)}
+              </select></label>
+            </header>
+            {productionWindowId === "total" ? <div className="production-history-total">
+              {planetScope !== "all" ? <span>累计总产量仅记录全星区权威值；请选择“全部星球”查看。</span> : activeTrendItemId ? <><ItemMark itemId={activeTrendItemId} /><span>{getItem(activeTrendItemId).name}</span><strong><QuantityValue value={game.totalProduced[activeTrendItemId] ?? 0} /></strong></> : <span>暂无累计生产记录</span>}
+            </div> : productionTrend.length > 0 && activeTrendItemId ? <>
+              <div className="production-history-chart">
+                <span className="production-history-axis production-history-axis--top">{formatProductionStatistic(productionTrendMaximum)}/min</span>
+                <span className="production-history-axis production-history-axis--bottom">0</span>
+                <svg viewBox="0 0 100 44" preserveAspectRatio="none" role="img" aria-label={`${getItem(activeTrendItemId).name}生产和消耗趋势`}>
+                  <line x1="0" x2="100" y1="42" y2="42" />
+                  <line x1="0" x2="100" y1="24" y2="24" />
+                  <line x1="0" x2="100" y1="6" y2="6" />
+                  <polyline className="production-history-line production" points={productionTrendPolyline(productionTrend, "productionPerMinute", productionTrendMaximum)} />
+                  <polyline className="production-history-line consumption" points={productionTrendPolyline(productionTrend, "consumptionPerMinute", productionTrendMaximum)} />
+                </svg>
+              </div>
+              <footer><span><i className="production" />生产</span><span><i className="consumption" />消耗</span><strong>{getItem(activeTrendItemId).name}</strong><small>{productionTrend.length} 个压缩采样点 · 从新版本开始记录</small></footer>
+            </> : <div className="production-history-empty"><TrendingUp size={20} /><span>模拟运行后开始记录当前时间范围的趋势</span></div>}
+          </section>
           <div className={`statistics-table${items.length === 0 ? " statistics-table--empty" : ""}`} data-planet-scope={planetScope}>
             <header><span>物品</span><button type="button" className={sort.key === "production" ? "active" : ""} onClick={() => toggleColumnSort("production")}>生产 {productionWindow.window.suffix}{sort.key === "production" ? sort.direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} /> : null}</button><button type="button" className={sort.key === "consumption" ? "active" : ""} onClick={() => toggleColumnSort("consumption")}>消耗 {productionWindow.window.suffix}{sort.key === "consumption" ? sort.direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} /> : null}</button><span>净增量 {productionWindow.window.suffix}</span><span>网络库存</span><span>节点</span></header>
             <div>
               {items.length === 0 ? <div className="statistics-empty"><Box size={20} /><span>没有符合条件的物品</span></div> : items.map((item) => (
-                <div className={`statistics-row${mobile && expandedItemId === item.itemId ? " statistics-row--expanded" : ""}`} key={item.itemId} role={mobile ? "button" : undefined} tabIndex={mobile ? 0 : undefined} onClick={mobile ? () => setExpandedItemId((current) => current === item.itemId ? null : item.itemId) : undefined} onKeyDown={mobile ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setExpandedItemId((current) => current === item.itemId ? null : item.itemId); } } : undefined}>
+                <div className={`statistics-row${mobile && expandedItemId === item.itemId ? " statistics-row--expanded" : ""}${activeTrendItemId === item.itemId ? " statistics-row--trend-selected" : ""}`} key={item.itemId} role="button" tabIndex={0} onClick={() => { setTrendItemId(item.itemId); if (mobile) setExpandedItemId((current) => current === item.itemId ? null : item.itemId); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setTrendItemId(item.itemId); if (mobile) setExpandedItemId((current) => current === item.itemId ? null : item.itemId); } }}>
                   <span className="statistics-item"><ItemMark itemId={item.itemId} /><strong>{getItem(item.itemId).name}</strong></span>
                   <span className="rate-positive"><ProductionStatisticValue value={item.productionPerMinute} suffix={productionWindow.window.suffix} sign="+" /></span>
                   <span className="rate-negative"><ProductionStatisticValue value={item.consumptionPerMinute} suffix={productionWindow.window.suffix} sign="-" /></span>

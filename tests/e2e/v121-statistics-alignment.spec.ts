@@ -22,6 +22,14 @@ function seedInteractionFixture() {
       sampleDurationSeconds: 1,
       productionPerMinute: { iron_ingot: 600, copper_ingot: 1_200 },
       consumptionPerMinute: { iron_ore: 300, copper_ore: 240 },
+      planetProductionPerMinute: {
+        home: { iron_ingot: 400, copper_ingot: 800 },
+        ashen: { iron_ingot: 200, copper_ingot: 400 },
+      },
+      planetConsumptionPerMinute: {
+        home: { iron_ore: 200, copper_ore: 160 },
+        ashen: { iron_ore: 100, copper_ore: 80 },
+      },
       inventory: {},
       generationKw: 0,
       demandKw: 0,
@@ -46,7 +54,7 @@ function seedInteractionFixture() {
       construction: {},
       constructionAutomation: { enabled: false, targetStock: {}, cursor: 0, totalCrafted: 0, lastCraftedId: null, destroyedByproducts: {}, jobs: {} },
       portableFleet: { logistics_drone: 0, logistics_vessel: 0 },
-      totalProduced: {},
+      totalProduced: { iron_ingot: 12_345, copper_ingot: 67_890 },
       research: { selectedTechId: null, pausedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["electromagnetism", "basic_smelting"] },
       settings: { theme: "dark", fontScale: 1, simulationSpeed: 1, autosaveIntervalSeconds: 30 },
       productionHistory,
@@ -55,7 +63,7 @@ function seedInteractionFixture() {
       paused: true,
     };
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-01-v1.0.19");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-06-v1.0.31");
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
   };
@@ -74,20 +82,39 @@ test("production statistics keep catalog order, sortable columns, and exact roll
   await expect(rows.nth(0)).toContainText("铁块");
   await expect(rows.nth(1)).toContainText("铜块");
 
-  await workspace.getByRole("button", { name: "生产 /min" }).click();
+  await workspace.getByRole("button", { name: "生产 /1min" }).click();
   await expect(rows.nth(0)).toContainText("铜块");
-  await workspace.getByRole("button", { name: "生产 /min" }).click();
+  await workspace.getByRole("button", { name: "生产 /1min" }).click();
   await expect(rows.nth(0)).toContainText("铁块");
 
-  await workspace.getByRole("button", { name: "每秒" }).click();
-  await expect(workspace.locator(".statistics-headline")).toContainText("30/s");
-  await expect(rows.nth(0)).toContainText("10");
-  await expect(rows.nth(1)).toContainText("20");
-
-  await workspace.getByRole("button", { name: "每十分钟" }).click();
+  await expect(workspace.getByRole("img", { name: "铁块生产和消耗趋势" })).toBeVisible();
+  await workspace.getByRole("button", { name: "过去 10 分钟" }).click();
   await expect(rows.nth(0)).toContainText("6,000");
   await expect(rows.nth(1)).toContainText("1.2万");
   await expect(rows.nth(0)).toContainText("铁块");
+
+  await workspace.getByRole("button", { name: "累计总产量" }).click();
+  await expect(workspace.locator(".production-history-total")).toContainText("1.23万");
+  await workspace.getByLabel("选择统计星球").selectOption("ashen");
+  await workspace.getByRole("button", { name: "过去 1 分钟" }).click();
+  await expect(rows.nth(0)).toContainText("200");
+  await expect(rows.nth(1)).toContainText("400");
+});
+
+test("mobile production history has a real vertical scroll container above navigation", async ({ page }) => {
+  await page.addInitScript(seedInteractionFixture());
+  await page.setViewportSize({ width: 390, height: 500 });
+  await page.goto("/");
+  await page.getByLabel("更多工作区").click();
+  await page.getByRole("menuitem", { name: "生产统计" }).click();
+
+  const workspace = page.getByRole("dialog", { name: "生产统计" });
+  const content = workspace.locator(".statistics-content");
+  await expect(workspace.getByRole("button", { name: "过去 1 分钟" })).toBeVisible();
+  await expect.poll(() => content.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  await content.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await expect.poll(() => content.evaluate((element) => element.scrollTop > 0)).toBe(true);
+  await expect.poll(() => workspace.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 });
 
 test("dragging near another building shows alignment guides and clears them on release", async ({ page }) => {

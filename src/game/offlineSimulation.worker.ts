@@ -3,7 +3,7 @@
 import { completeSimulationAdvanceSession, createSimulationAdvanceSession } from "./engine";
 import { applyContentPackRuntimeSnapshot } from "./contentPacks";
 import { advanceOfflineSimulationChunk, type OfflineSimulationWorkerRequest, type OfflineSimulationWorkerResponse } from "./offlineSimulation";
-import { runFastOfflineSettlementAsync, type OfflineApproximationReport } from "./offlineApproximation";
+import { FAST_OFFLINE_CALIBRATION_SECONDS, runFastOfflineSettlementAsync, type OfflineApproximationReport } from "./offlineApproximation";
 import { applyReturningRewardToState, inspectSave, serializeEnvelope } from "./storage";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
 import type { GameSettings, GameState } from "./types";
@@ -114,7 +114,7 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
       return;
     }
     let approximation: OfflineApproximationReport | undefined;
-    if (request.approximate === true) {
+    if (request.approximate === true && request.seconds > FAST_OFFLINE_CALIBRATION_SECONDS) {
       // Do not create the exact session until the fast path declines. The
       // fast contract owns isolated calibration copies and otherwise this
       // would clone the entire save twice before any useful work starts.

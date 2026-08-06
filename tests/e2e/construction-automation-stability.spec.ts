@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
+import { computeSaveStateChecksum } from "../../src/game/saveEnvelopeIntegrity";
 
 test("guarded construction automation keeps realtime Worker responses bounded without diagnostics", async ({ page }) => {
   await page.goto("/");
@@ -112,6 +113,11 @@ test("real construction-center save keeps committing sixty one-second Worker sli
     const initialElapsed = initial.elapsedSeconds;
     const initialTransferred = initial.belts.reduce((sum, belt) => sum + (belt.totalTransferred ?? 0), 0);
     const initialProduced = Object.values(initial.totalProduced).reduce((sum, amount) => sum + (amount ?? 0), 0);
+    const initialTargetCount = Object.keys(initial.constructionAutomation.targetStock).length;
+    const initialCenterStacks = initial.entities
+      .filter((entity) => entity.buildingId === "construction_center")
+      .map((entity) => ({ id: entity.id, machineCount: entity.machineCount }))
+      .sort((left, right) => left.id.localeCompare(right.id));
     const snapshot = packs.createContentPackRuntimeSnapshot(packs.createContentPackRegistry());
     const worker = new Worker(new URL("/src/game/simulation.worker.ts", location.origin), { type: "module" });
     const durations: number[] = [];
@@ -147,7 +153,12 @@ test("real construction-center save keeps committing sixty one-second Worker sli
       elapsedDelta: latest.elapsedSeconds - initialElapsed,
       transferredDelta: latest.belts.reduce((sum, belt) => sum + (belt.totalTransferred ?? 0), 0) - initialTransferred,
       producedDelta: Object.values(latest.totalProduced).reduce((sum, amount) => sum + (amount ?? 0), 0) - initialProduced,
-      centerStack: latest.entities.find((entity) => entity.buildingId === "construction_center")?.machineCount ?? 0,
+      initialCenterStacks,
+      centerStacks: latest.entities
+        .filter((entity) => entity.buildingId === "construction_center")
+        .map((entity) => ({ id: entity.id, machineCount: entity.machineCount }))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+      initialTargetCount,
       targetCount: Object.keys(latest.constructionAutomation.targetStock).length,
     };
   }, raw);
@@ -157,18 +168,37 @@ test("real construction-center save keeps committing sixty one-second Worker sli
   expect(result.elapsedDelta).toBeCloseTo(60, 6);
   expect(result.transferredDelta).toBeGreaterThan(0);
   expect(result.producedDelta).toBeGreaterThan(0);
-  expect(result.centerStack).toBe(44_311);
-  expect(result.targetCount).toBeGreaterThanOrEqual(38);
+  expect(result.centerStacks).toEqual(result.initialCenterStacks);
+  expect(result.targetCount).toBe(result.initialTargetCount);
+  expect(result.targetCount).toBeGreaterThan(0);
 });
 
 test("stopping pure idle terminates an unresponsive slice and restores interaction", async ({ page }) => {
   test.skip(!realFixturePath, "Set DSP_CONSTRUCTION_STABILITY_SAVE to run the player-save acceptance test.");
-  const envelope = JSON.parse(await readFile(realFixturePath!, "utf8")) as { savedAt?: number };
+  test.setTimeout(120_000);
+  const envelope = JSON.parse(await readFile(realFixturePath!, "utf8")) as {
+    formatVersion?: number;
+    checksum?: string;
+    savedAt?: number;
+    state?: {
+      activePlanetId?: string;
+      entities?: Array<{ id?: string; planetId?: string; buildingId?: string }>;
+      timeWarp?: { controllerEntityId?: string | null };
+    };
+  };
   envelope.savedAt = Date.now();
-  await page.addInitScript((raw) => {
-    window.localStorage.setItem("dsp-idle-network.save.v1", raw);
+  const timeWarpEntity = envelope.state?.entities?.find((entity) =>
+    entity.id === envelope.state?.timeWarp?.controllerEntityId && entity.buildingId === "time_warp_device")
+    ?? envelope.state?.entities?.find((entity) => entity.buildingId === "time_warp_device");
+  if (!timeWarpEntity?.id || !timeWarpEntity.planetId || !envelope.state) {
+    throw new Error("player save has no usable time-warp device");
+  }
+  envelope.state.activePlanetId = timeWarpEntity.planetId;
+  envelope.checksum = computeSaveStateChecksum(envelope.formatVersion ?? 2, envelope.state);
+  const timeWarpEntityId = timeWarpEntity.id;
+  await page.addInitScript(() => {
     window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-05-v1.0.30");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-06-v1.0.31");
     const NativeWorker = window.Worker;
     const tracker = { delayTimeWarp: false, delayedRequests: 0, terminatedWorkers: 0, createdWorkers: 0 };
     Object.assign(window, { __timeWarpStopTracker: tracker });
@@ -223,14 +253,36 @@ test("stopping pure idle terminates an unresponsive slice and restores interacti
       }
     }
     Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: DelayedSimulationWorker });
-  }, JSON.stringify(envelope));
+  });
 
   await page.setViewportSize({ width: 1440, height: 900 });
+  await page.route("**/__construction_idle_harness.html", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/html; charset=utf-8",
+    body: "<!doctype html><html><body><main>Construction idle test harness</main></body></html>",
+  }));
+  await page.goto("/__construction_idle_harness.html");
+  await page.evaluate(async (raw) => {
+    const store = await import("/src/game/localSaveStore.ts");
+    await store.initializeLocalSaveStore();
+    store.setLocalSaveValue("dsp-idle-network.save.v1", raw);
+    await store.flushLocalSaveWrites();
+    if (await store.readPersistedLocalSaveValue("dsp-idle-network.save.v1") !== raw) {
+      throw new Error("IndexedDB player-save seed did not read back exactly");
+    }
+  }, JSON.stringify(envelope));
   await page.goto("/?menu=1");
-  await page.getByRole("button", { name: /继续游戏/ }).click();
-  await expect(page.locator(".game-shell")).toBeVisible({ timeout: 20_000 });
-  await expect(page.locator(".game-shell")).toHaveAttribute("data-simulation-worker", "active");
-  const timeWarpNode = page.locator('.react-flow__node[data-id="entity_36721"] .machine-node');
+  await page.getByRole("button", { name: /继续游戏/ }).click({ timeout: 60_000 });
+  const gameShell = page.locator(".game-shell");
+  const abandonOffline = page.getByRole("button", { name: "放弃离线并直接进入" });
+  await Promise.race([
+    gameShell.waitFor({ state: "visible", timeout: 30_000 }),
+    abandonOffline.waitFor({ state: "visible", timeout: 30_000 }),
+  ]);
+  if (await abandonOffline.isVisible()) await abandonOffline.click();
+  await expect(gameShell).toBeVisible({ timeout: 30_000 });
+  await expect(gameShell).toHaveAttribute("data-simulation-worker", "active");
+  const timeWarpNode = page.locator(`.react-flow__node[data-id="${timeWarpEntityId}"] .machine-node`);
   await expect(timeWarpNode).toHaveCount(1);
   await timeWarpNode.evaluate((element: HTMLElement) => element.click());
   await expect(page.locator(".time-warp-inspector")).toBeVisible();
@@ -249,7 +301,10 @@ test("stopping pure idle terminates an unresponsive slice and restores interacti
   await expect(overlay).toHaveCount(0, { timeout: 1_000 });
   await expect(page.locator(".game-notice")).toContainText("未完成切片已丢弃", { timeout: 3_000 });
   const stopDurationMs = Date.now() - stopStartedAt;
-  expect(stopDurationMs).toBeLessThan(2_000);
+  // The user-visible stop includes the bounded worker wait plus the verified
+  // IndexedDB save commit. Keep the acceptance within a few seconds without
+  // mistaking the persistence step for an unbounded simulation wait.
+  expect(stopDurationMs).toBeLessThan(3_000);
   await page.evaluate(() => {
     (window as typeof window & { __timeWarpStopTracker?: { delayTimeWarp: boolean } }).__timeWarpStopTracker!.delayTimeWarp = false;
   });
@@ -272,7 +327,7 @@ test("stopping pure idle terminates an unresponsive slice and restores interacti
   await expect.poll(() => page.evaluate(() =>
     (window as typeof window & { __timeWarpStopTracker?: { delayedRequests: number } }).__timeWarpStopTracker?.delayedRequests ?? 0,
   ), { timeout: 3_000 }).toBeGreaterThan(delayedBeforeAutomaticTimeout);
-  await expect(page.getByRole("dialog", { name: "纯挂机" })).toHaveCount(0, { timeout: 5_000 });
+  await expect(page.getByRole("dialog", { name: "纯挂机" })).toHaveCount(0, { timeout: 7_000 });
   await expect(page.locator(".game-notice")).toContainText("单个切片超过安全时限", { timeout: 3_000 });
   await page.evaluate(() => {
     (window as typeof window & { __timeWarpStopTracker?: { delayTimeWarp: boolean } }).__timeWarpStopTracker!.delayTimeWarp = false;

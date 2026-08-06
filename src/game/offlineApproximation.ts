@@ -5,6 +5,7 @@ import {
   createSimulationAdvanceSession,
   getEntityInputCapacity,
   getEntityOutputCapacity,
+  normalizeConstructionAutomationCursor,
   type SimulationAdvanceSession,
 } from "./engine";
 import type { FactoryEntity, GameState, ItemId } from "./types";
@@ -30,12 +31,34 @@ export interface OfflineApproximationReport {
   algorithmVersion?: string;
   /** Number of non-fatal inventory/capacity corrections applied to the copy. */
   boundaryCorrections?: number;
+  /** Fast mode validates leaderboard-facing outcomes separately from ordinary cache drift. */
+  validationScope?: "all-state" | "leaderboard-critical";
+  /** Diagnostic only; ordinary inventory/cache drift does not reject fast-30s-v1. */
+  maxNonCriticalError?: number;
 }
 
 export type OfflineApproximationResult =
   | { status: "approximate"; state: GameState; report: OfflineApproximationReport }
   | { status: "fallback"; report: OfflineApproximationReport }
   | { status: "ineligible"; report: OfflineApproximationReport };
+
+export type TimeWarpComputationMode = "exact" | "approximate";
+
+export interface TimeWarpApproximationReport {
+  mode: TimeWarpComputationMode;
+  algorithmVersion: string;
+  requestedSimulationSeconds: number;
+  exactCalibrationSeconds: number;
+  approximatedSeconds: number;
+  maxCriticalError: number;
+  boundaryCorrections: number;
+  fallbackReason?: string;
+}
+
+export interface TimeWarpApproximationResult {
+  state: GameState;
+  report: TimeWarpApproximationReport;
+}
 
 interface NumericMap {
   [key: string]: number;
@@ -98,7 +121,11 @@ interface AffineContract {
 const EPSILON = 1e-6;
 const STABILITY_TOLERANCE = 0.05;
 const MAX_ERROR = 0.20;
-const FAST_MAX_ERROR = 0.20;
+// The product owner explicitly accepts up to 100% numerical drift for the
+// fast path. Structural validity remains a hard gate; ordinary cache drift is
+// diagnostic, while leaderboard-facing Dyson/white-matrix outcomes are tail
+// checked against this separate ceiling.
+const FAST_CRITICAL_MAX_ERROR = 1;
 const MIN_APPROXIMATION_SECONDS = 60;
 const MIN_CALIBRATION_SECONDS = 5;
 const MAX_CALIBRATION_SECONDS = 10;
@@ -108,6 +135,10 @@ export const FAST_OFFLINE_CALIBRATION_SECONDS = 30;
 const FAST_OFFLINE_CALIBRATION_SLICE_SECONDS = 10;
 const FAST_OFFLINE_VALIDATION_SECONDS = 5;
 export const FAST_OFFLINE_ALGORITHM_VERSION = "fast-30s-v1";
+export const TIME_WARP_APPROXIMATION_ALGORITHM_VERSION = "time-warp-short-calibration-v2";
+export const TIME_WARP_APPROXIMATION_CALIBRATION_SECONDS = 1;
+export const TIME_WARP_APPROXIMATION_VALIDATION_SECONDS = 1;
+const TIME_WARP_MAX_CRITICAL_ERROR = 1;
 const AFFINE_DECIMAL_KEYS = new Set([
   "cargo", "remainingCargo", "totalDestroyed", "warpers", "warperTarget",
 ]);
@@ -132,7 +163,8 @@ const AFFINE_IGNORED_KEYS = new Set([
   // false 20% failure.
   "decayProgress", "stationLastTransfer", "proliferatorPoints", "proliferatorBonusProgress", "fuelGenerationKw", "generationKw",
   "recentFlowSampleSeconds", "recentFlowTransferred",
-  "routingCursor", "uploadRoutingCursors", "dispatchProgress", "absorptionProgress", "activityClockMs", "stationDispatchCursor",
+  "cursor", "routingCursor", "routingCursors", "uploadRoutingCursors", "stationDispatchCursor",
+  "phaseIndex", "stepIndex", "dispatchProgress", "absorptionProgress", "activityClockMs",
 ]);
 
 function finiteNumber(value: unknown, fallback = 0): number {
@@ -804,6 +836,17 @@ const FAST_ERROR_IGNORED_KEYS = new Set([
   // validation tail, not cumulative resources that can be extrapolated.
   "powerOutputKw", "powerInputKw", "powerDemandKw", "powerGenerationKw", "totalDestroyed", "stationProgress",
 ]);
+const FAST_FINITE_FLOAT_KEYS = new Set([
+  // Power is a derived continuous measurement. At extreme Dyson scale it can
+  // legitimately exceed MAX_SAFE_INTEGER without becoming an item counter.
+  "generationKw", "powerOutputKw", "powerInputKw", "powerDemandKw", "powerGenerationKw",
+  "demandKw", "fuelGenerationKw", "storedEnergyMj",
+]);
+
+function isFastFiniteFloatPath(path: AffinePath): boolean {
+  return path.some((part) => typeof part === "string" &&
+    (FAST_FINITE_FLOAT_KEYS.has(part) || part.endsWith("Kw")));
+}
 
 function isFastSensitivePath(path: AffinePath): boolean {
   return pathHasString(path, FAST_SENSITIVE_KEYS);
@@ -916,8 +959,9 @@ function applyFastAffineContract(
       }
       const next = current + Number(delta.delta) * scaledSeconds / denominator;
       if (!Number.isFinite(next)) return { ok: false, failure: `预测结果非有限数值 ${pathLabel}` };
-      const normalized = delta.integer ? Math.floor(next + EPSILON) : next;
-      if (delta.integer && !Number.isSafeInteger(normalized)) {
+      const requiresSafeInteger = Boolean(delta.integer) && !isFastFiniteFloatPath(delta.path);
+      const normalized = requiresSafeInteger ? Math.floor(next + EPSILON) : next;
+      if (requiresSafeInteger && !Number.isSafeInteger(normalized)) {
         return { ok: false, failure: `预测结果超过安全整数 ${pathLabel}=${String(normalized)}` };
       }
       if (!writeAffinePath(state, delta.path, normalized)) return { ok: false, failure: `无法写入字段 ${pathLabel}` };
@@ -988,31 +1032,82 @@ function clampDecimalMap(
   return { ok: true, corrections };
 }
 
-function validateFastNumbers(value: unknown, path: AffinePath = [], seen = new Set<object>()): boolean {
+function findInvalidFastNumber(value: unknown, path: AffinePath = [], seen = new Set<object>()): string | null {
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) return false;
-    if (Number.isInteger(value) && !Number.isSafeInteger(value)) return false;
-    return true;
+    if (!Number.isFinite(value)) return `${JSON.stringify(path)}=${String(value)} 不是有限数值`;
+    if (Number.isInteger(value) && !Number.isSafeInteger(value) && !isFastFiniteFloatPath(path)) {
+      return `${JSON.stringify(path)}=${String(value)} 超过安全整数`;
+    }
+    return null;
   }
   if (typeof value === "string" && (isDecimalAffinePath(path) || pathHasString(path, new Set(["warpers", "totalDestroyed", "remainingCargo"])))) {
-    return /^\d+$/.test(value);
+    return /^\d+$/.test(value) ? null : `${JSON.stringify(path)} 不是合法非负十进制整数`;
   }
-  if (!value || typeof value !== "object") return true;
-  if (seen.has(value)) return true;
+  if (!value || typeof value !== "object") return null;
+  if (seen.has(value)) return null;
   seen.add(value);
-  if (Array.isArray(value)) return value.every((child, index) => validateFastNumbers(child, [...path, index], seen));
-  return Object.entries(value).every(([key, child]) => validateFastNumbers(child, [...path, key], seen));
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      const failure = findInvalidFastNumber(value[index], [...path, index], seen);
+      if (failure) return failure;
+    }
+    return null;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    const failure = findInvalidFastNumber(child, [...path, key], seen);
+    if (failure) return failure;
+  }
+  return null;
+}
+
+function validateFastNumbers(value: unknown): boolean {
+  return findInvalidFastNumber(value) === null;
 }
 
 /**
  * Normalize only the mutable counters touched by the fast contract. This is a
  * boundary correction, never a fallback to theoretical building throughput.
  */
-function normalizeFastSettlementState(state: GameState): { ok: boolean; corrections: number } {
-  if (!validateFastNumbers(state)) return { ok: false, corrections: 0 };
+interface FastSettlementNormalizationResult {
+  ok: boolean;
+  corrections: number;
+  failure?: string;
+}
+
+function normalizeFastSettlementState(state: GameState): FastSettlementNormalizationResult {
+  const initialFailure = findInvalidFastNumber(state);
+  if (initialFailure) return { ok: false, corrections: 0, failure: initialFailure };
   let corrections = 0;
   try {
+    const normalizeCursor = (raw: number | undefined, length?: number): number | null => {
+      if (raw === undefined) return 0;
+      if (!Number.isFinite(raw) || !Number.isSafeInteger(Math.trunc(raw))) return null;
+      const integer = Math.trunc(raw);
+      if (length !== undefined && length > 0) return ((integer % length) + length) % length;
+      return Math.max(0, integer);
+    };
+    const normalizeCursorMap = (record: Record<string, number>): boolean => {
+      for (const [key, raw] of Object.entries(record)) {
+        const normalized = normalizeCursor(raw);
+        if (normalized === null) return false;
+        if (normalized !== raw) corrections += 1;
+        record[key] = normalized;
+      }
+      return true;
+    };
+    if (!Number.isFinite(state.constructionAutomation.cursor) ||
+      !Number.isSafeInteger(Math.trunc(state.constructionAutomation.cursor))) return { ok: false, corrections };
+    const constructionCursor = normalizeConstructionAutomationCursor(state.constructionAutomation.cursor);
+    if (constructionCursor !== state.constructionAutomation.cursor) corrections += 1;
+    state.constructionAutomation.cursor = constructionCursor;
     for (const entity of state.entities) {
+      const routingCursor = normalizeCursor(entity.routingCursor);
+      const dispatchCursor = normalizeCursor(entity.stationDispatchCursor, entity.stationRoutes?.length);
+      if (routingCursor === null || dispatchCursor === null) return { ok: false, corrections };
+      if (routingCursor !== entity.routingCursor) corrections += 1;
+      if (entity.stationDispatchCursor !== undefined && dispatchCursor !== entity.stationDispatchCursor) corrections += 1;
+      entity.routingCursor = routingCursor;
+      if (entity.stationDispatchCursor !== undefined) entity.stationDispatchCursor = dispatchCursor;
       const inputCapacity = getEntityInputCapacity(state, entity);
       const outputCapacity = getEntityOutputCapacity(state, entity);
       const inputs = normalizeFastNumberMap(entity.inputs, inputCapacity > 0 ? inputCapacity : undefined);
@@ -1032,6 +1127,23 @@ function normalizeFastSettlementState(state: GameState): { ok: boolean; correcti
         if (entity.fuelRemainingMj < 0) { entity.fuelRemainingMj = 0; corrections += 1; }
         entity.fuelRemainingMj = Math.floor(entity.fuelRemainingMj + EPSILON);
         if (!Number.isSafeInteger(entity.fuelRemainingMj)) return { ok: false, corrections };
+      }
+      if (typeof entity.resourceRemaining === "number") {
+        if (!Number.isFinite(entity.resourceRemaining)) return { ok: false, corrections };
+        const capacity = typeof entity.resourceCapacity === "number" && Number.isFinite(entity.resourceCapacity)
+          ? Math.max(0, Math.floor(entity.resourceCapacity))
+          : undefined;
+        const normalizedRemaining = Math.max(0, Math.floor(entity.resourceRemaining + EPSILON));
+        const boundedRemaining = capacity === undefined ? normalizedRemaining : Math.min(normalizedRemaining, capacity);
+        if (!Number.isSafeInteger(boundedRemaining)) return { ok: false, corrections };
+        if (boundedRemaining !== entity.resourceRemaining) corrections += 1;
+        entity.resourceRemaining = boundedRemaining;
+      }
+      if (typeof entity.resourceDepletionRemainder === "number") {
+        if (!Number.isFinite(entity.resourceDepletionRemainder)) return { ok: false, corrections };
+        const normalizedRemainder = ((Math.floor(entity.resourceDepletionRemainder) % 10) + 10) % 10;
+        if (normalizedRemainder !== entity.resourceDepletionRemainder) corrections += 1;
+        entity.resourceDepletionRemainder = normalizedRemainder;
       }
       if (entity.proliferatorBonusProgress) {
         for (const [itemId, raw] of Object.entries(entity.proliferatorBonusProgress)) {
@@ -1068,8 +1180,9 @@ function normalizeFastSettlementState(state: GameState): { ok: boolean; correcti
     const fleet = normalizeFastNumberMap(state.portableFleet as Record<string, number>);
     if (!construction.ok || !fleet.ok) return { ok: false, corrections };
     corrections += construction.corrections + fleet.corrections;
-    if (!Number.isFinite(state.elapsedSeconds) || state.elapsedSeconds < 0 || !Number.isSafeInteger(Math.floor(state.elapsedSeconds))) return { ok: false, corrections };
-    state.elapsedSeconds = Math.floor(state.elapsedSeconds + EPSILON);
+    if (!Number.isFinite(state.elapsedSeconds) || state.elapsedSeconds < 0 || state.elapsedSeconds > Number.MAX_SAFE_INTEGER) {
+      return { ok: false, corrections };
+    }
     if (state.speedrun && (!Number.isFinite(state.speedrun.elapsedActiveSeconds) || state.speedrun.elapsedActiveSeconds < 0 || !Number.isSafeInteger(Math.floor(state.speedrun.elapsedActiveSeconds)))) return { ok: false, corrections };
     const quantum = state.quantumLogisticsNetwork?.inventory;
     if (quantum) {
@@ -1077,10 +1190,17 @@ function normalizeFastSettlementState(state: GameState): { ok: boolean; correcti
       if (!normalized.ok) return { ok: false, corrections };
       corrections += normalized.corrections;
     }
-    if (!validateFastNumbers(state)) return { ok: false, corrections };
+    if (!normalizeCursorMap(state.quantumLogisticsNetwork.routingCursors as Record<string, number>) ||
+      !normalizeCursorMap(state.quantumLogisticsNetwork.uploadRoutingCursors as Record<string, number>) ||
+      !normalizeCursorMap(state.galacticHubNetwork.routingCursors)) return { ok: false, corrections };
+    for (const station of Object.values(state.systemSpaceStations)) {
+      if (station && !normalizeCursorMap(station.routingCursors)) return { ok: false, corrections };
+    }
+    const finalFailure = findInvalidFastNumber(state);
+    if (finalFailure) return { ok: false, corrections, failure: finalFailure };
     return { ok: true, corrections };
-  } catch {
-    return { ok: false, corrections };
+  } catch (error) {
+    return { ok: false, corrections, failure: error instanceof Error ? error.message : "未知规范化异常" };
   }
 }
 
@@ -1136,6 +1256,210 @@ function normalizeFastSpeedrunClock(actual: GameState, source: GameState, wallSe
   return 1;
 }
 
+interface TimeWarpCriticalSnapshot {
+  whiteMatrixProduced: number;
+  rocketsLaunched: number;
+  structurePoints: number;
+  shellSails: number;
+  sailsAbsorbed: number;
+  sailsLaunched: number;
+  dysonGenerationKw: number;
+  planStructurePoints: Record<string, number>;
+  planShellSails: Record<string, number>;
+}
+
+function captureTimeWarpCriticalSnapshot(state: GameState): TimeWarpCriticalSnapshot {
+  const planStructurePoints: Record<string, number> = {};
+  const planShellSails: Record<string, number> = {};
+  for (const [systemId, plan] of Object.entries(state.dysonPlans)) {
+    planStructurePoints[systemId] = finiteNumber(plan.structurePoints);
+    planShellSails[systemId] = finiteNumber(plan.shellSails);
+  }
+  return {
+    whiteMatrixProduced: finiteNumber(state.totalProduced.universe_matrix),
+    rocketsLaunched: finiteNumber(state.dysonSphere.totalRocketsLaunched),
+    structurePoints: finiteNumber(state.dysonSphere.structurePoints),
+    shellSails: finiteNumber(state.dysonSphere.shellSails),
+    sailsAbsorbed: finiteNumber(state.dysonSphere.totalSailsAbsorbed),
+    sailsLaunched: finiteNumber(state.dysonSwarm.totalLaunched),
+    dysonGenerationKw: finiteNumber(state.dysonSphere.generationKw) + finiteNumber(state.dysonSwarm.generationKw),
+    planStructurePoints,
+    planShellSails,
+  };
+}
+
+function timeWarpCriticalValueMap(snapshot: TimeWarpCriticalSnapshot): Record<string, number> {
+  const result: Record<string, number> = {
+    whiteMatrixProduced: snapshot.whiteMatrixProduced,
+    rocketsLaunched: snapshot.rocketsLaunched,
+    structurePoints: snapshot.structurePoints,
+    shellSails: snapshot.shellSails,
+    sailsAbsorbed: snapshot.sailsAbsorbed,
+    sailsLaunched: snapshot.sailsLaunched,
+  };
+  for (const [systemId, value] of Object.entries(snapshot.planStructurePoints)) result[`plan:${systemId}:structure`] = value;
+  for (const [systemId, value] of Object.entries(snapshot.planShellSails)) result[`plan:${systemId}:shell`] = value;
+  return result;
+}
+
+function compareTimeWarpCriticalSnapshots(
+  baseline: TimeWarpCriticalSnapshot,
+  expected: TimeWarpCriticalSnapshot,
+  actual: TimeWarpCriticalSnapshot,
+): number {
+  const baselineValues = timeWarpCriticalValueMap(baseline);
+  const expectedValues = timeWarpCriticalValueMap(expected);
+  const actualValues = timeWarpCriticalValueMap(actual);
+  let maximum = relativeDifference(expected.dysonGenerationKw, actual.dysonGenerationKw);
+  const keys = new Set([...Object.keys(baselineValues), ...Object.keys(expectedValues), ...Object.keys(actualValues)]);
+  for (const key of keys) {
+    const predictedDelta = finiteNumber(expectedValues[key]) - finiteNumber(baselineValues[key]);
+    const actualDelta = finiteNumber(actualValues[key]) - finiteNumber(baselineValues[key]);
+    const absoluteDifference = Math.abs(predictedDelta - actualDelta);
+    // One whole item is the unavoidable quantisation error of a one-second
+    // verifier and must not turn a low-volume Dyson boundary into 100% noise.
+    if (absoluteDifference <= 1) continue;
+    maximum = Math.max(maximum, relativeDifference(predictedDelta, actualDelta));
+  }
+  return maximum;
+}
+
+function exactTimeWarpResult(
+  source: GameState,
+  simulationSeconds: number,
+  wallSeconds: number,
+  reason: string,
+  calibrationSeconds = 0,
+): TimeWarpApproximationResult {
+  return {
+    state: runExact(structuredClone(source), simulationSeconds, wallSeconds),
+    report: {
+      mode: "exact",
+      algorithmVersion: TIME_WARP_APPROXIMATION_ALGORITHM_VERSION,
+      requestedSimulationSeconds: simulationSeconds,
+      exactCalibrationSeconds: calibrationSeconds,
+      approximatedSeconds: 0,
+      maxCriticalError: 0,
+      boundaryCorrections: 0,
+      fallbackReason: reason,
+    },
+  };
+}
+
+function runTimeWarpApproximateSettlementUnsafe(
+  state: GameState,
+  simulationSeconds: number,
+  wallSeconds: number,
+): TimeWarpApproximationResult {
+  if (!Number.isFinite(simulationSeconds) || simulationSeconds <= 0 || !Number.isFinite(wallSeconds) || wallSeconds < 0) {
+    throw new Error("时间扭曲切片时间无效");
+  }
+  if (state.timeWarp.pendingSimulationSeconds > EPSILON || state.timeWarp.pendingWallSeconds > EPSILON) {
+    throw new Error("时间扭曲状态仍包含未提交预算");
+  }
+  if (!validateFastNumbers(state)) throw new Error("时间扭曲原始状态包含非法数值");
+  if (state.paused || !state.timeWarp.enabled ||
+    simulationSeconds <= TIME_WARP_APPROXIMATION_CALIBRATION_SECONDS + TIME_WARP_APPROXIMATION_VALIDATION_SECONDS) {
+    return exactTimeWarpResult(state, simulationSeconds, wallSeconds, state.paused
+      ? "模拟已暂停"
+      : !state.timeWarp.enabled
+        ? "时间扭曲未开启"
+        : "切片较短，直接精确推进");
+  }
+
+  const calibrationSeconds = TIME_WARP_APPROXIMATION_CALIBRATION_SECONDS;
+  const validationSeconds = TIME_WARP_APPROXIMATION_VALIDATION_SECONDS;
+  const wallPerSimulationSecond = simulationSeconds > EPSILON ? wallSeconds / simulationSeconds : 0;
+  const calibrationWallSeconds = wallPerSimulationSecond * calibrationSeconds;
+  const validationWallSeconds = wallPerSimulationSecond * validationSeconds;
+  const calibrated = runExact(structuredClone(state), calibrationSeconds, calibrationWallSeconds);
+  const contract = createFastAffineContract([state, calibrated], calibrationSeconds, calibrationWallSeconds);
+  if (!contract) {
+    return exactTimeWarpResult(state, simulationSeconds, wallSeconds, "短校准没有形成可用的状态增量", calibrationSeconds);
+  }
+
+  const macroSeconds = simulationSeconds - calibrationSeconds - validationSeconds;
+  const macroWallSeconds = Math.max(0, wallSeconds - calibrationWallSeconds - validationWallSeconds);
+  // `calibrated` is already an isolated clone of the authoritative input.
+  // Reuse it as the macro candidate so large pure-idle saves do not pay for a
+  // second full-state clone before every slice.
+  const macro = calibrated;
+  const macroApplication = applyFastAffineContract(macro, contract, macroSeconds, macroWallSeconds);
+  if (!macroApplication.ok) {
+    return exactTimeWarpResult(state, simulationSeconds, wallSeconds,
+      `宏观切片越过安全边界：${macroApplication.failure ?? "未知字段"}`, calibrationSeconds);
+  }
+  const normalizedMacro = normalizeFastSettlementState(macro);
+  if (!normalizedMacro.ok) {
+    return exactTimeWarpResult(state, simulationSeconds, wallSeconds,
+      `宏观切片未通过结构与数值校验${normalizedMacro.failure ? `：${normalizedMacro.failure}` : ""}`, calibrationSeconds);
+  }
+
+  const expected = structuredClone(macro);
+  const validationApplication = applyFastAffineContract(expected, contract, validationSeconds, validationWallSeconds);
+  const normalizedExpected: FastSettlementNormalizationResult = validationApplication.ok
+    ? normalizeFastSettlementState(expected)
+    : { ok: false, corrections: 0 };
+  if (!validationApplication.ok || !normalizedExpected.ok) {
+    return exactTimeWarpResult(state, simulationSeconds, wallSeconds,
+      `尾验预测越过安全边界：${validationApplication.failure ?? normalizedExpected.failure ?? "状态规范化失败"}`, calibrationSeconds);
+  }
+
+  const validationBaseline = captureTimeWarpCriticalSnapshot(macro);
+  // `expected` preserves the prediction branch; the macro candidate can be
+  // advanced in place for the exact tail without touching the source state.
+  const actual = runExact(macro, validationSeconds, validationWallSeconds);
+  const normalizedActual = normalizeFastSettlementState(actual);
+  if (!normalizedActual.ok) {
+    return exactTimeWarpResult(state, simulationSeconds, wallSeconds,
+      `尾验结果未通过结构与数值校验${normalizedActual.failure ? `：${normalizedActual.failure}` : ""}`, calibrationSeconds);
+  }
+  const speedrunCorrection = normalizeFastSpeedrunClock(actual, state, wallSeconds);
+  const maxCriticalError = compareTimeWarpCriticalSnapshots(
+    validationBaseline,
+    captureTimeWarpCriticalSnapshot(expected),
+    captureTimeWarpCriticalSnapshot(actual),
+  );
+  if (!Number.isFinite(maxCriticalError) || maxCriticalError > TIME_WARP_MAX_CRITICAL_ERROR) {
+    return exactTimeWarpResult(state, simulationSeconds, wallSeconds,
+      `白糖或戴森关键指标尾验误差 ${(maxCriticalError * 100).toFixed(2)}% 超过 100%`, calibrationSeconds);
+  }
+  return {
+    state: actual,
+    report: {
+      mode: "approximate",
+      algorithmVersion: TIME_WARP_APPROXIMATION_ALGORITHM_VERSION,
+      requestedSimulationSeconds: simulationSeconds,
+      exactCalibrationSeconds: calibrationSeconds + validationSeconds,
+      approximatedSeconds: macroSeconds,
+      maxCriticalError,
+      boundaryCorrections: (macroApplication.corrections ?? 0) + normalizedMacro.corrections +
+        (validationApplication.corrections ?? 0) + normalizedExpected.corrections + normalizedActual.corrections + speedrunCorrection,
+    },
+  };
+}
+
+/**
+ * Realtime pure-idle settlement. Unlike offline settlement, wall time is
+ * supplied explicitly by the scheduler and no save timestamp is read or
+ * written, so a cancelled Worker slice cannot become duplicate offline gain.
+ */
+export function runTimeWarpApproximateSettlement(
+  state: GameState,
+  simulationSeconds: number,
+  wallSeconds: number,
+): TimeWarpApproximationResult {
+  if (state.timeWarp.pendingSimulationSeconds > EPSILON || state.timeWarp.pendingWallSeconds > EPSILON) {
+    throw new Error("时间扭曲状态仍包含未提交预算，已拒绝宏观切片");
+  }
+  try {
+    return runTimeWarpApproximateSettlementUnsafe(state, simulationSeconds, wallSeconds);
+  } catch (error) {
+    const detail = error instanceof Error && error.message ? `：${error.message.slice(0, 160)}` : "";
+    return exactTimeWarpResult(state, simulationSeconds, wallSeconds, `宏观计算异常，已使用精确切片${detail}`);
+  }
+}
+
 function fastExactReport(windowSeconds: number, reason: string): OfflineApproximationReport {
   return exactReport(windowSeconds, reason, true, FAST_OFFLINE_ALGORITHM_VERSION);
 }
@@ -1145,7 +1469,7 @@ function fastExactReport(windowSeconds: number, reason: string): OfflineApproxim
  * current factory, then only the remaining interval is applied as a measured
  * state delta. It is intentionally isolated from the online simulation path.
  */
-export function runFastOfflineSettlement(state: GameState, seconds: number, wallSeconds = seconds): OfflineApproximationResult {
+function runFastOfflineSettlementUnsafe(state: GameState, seconds: number, wallSeconds = seconds): OfflineApproximationResult {
   if (state.paused) return { status: "ineligible", report: fastExactReport(0, "存档已暂停") };
   if (!Number.isFinite(seconds) || seconds <= 0) return { status: "ineligible", report: fastExactReport(0, "离线时长无效") };
   if (seconds <= FAST_OFFLINE_CALIBRATION_SECONDS) {
@@ -1163,17 +1487,19 @@ export function runFastOfflineSettlement(state: GameState, seconds: number, wall
     slices.push(structuredClone(current));
   }
   const contract = createFastAffineContract(slices, FAST_OFFLINE_CALIBRATION_SECONDS, wallCalibration);
+  slices.length = 0;
   if (!contract) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, "30 秒校准发现生产、物流或缓存速率不稳定") };
   const macroSeconds = seconds - FAST_OFFLINE_CALIBRATION_SECONDS - FAST_OFFLINE_VALIDATION_SECONDS;
   if (macroSeconds < 1) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, "校准后没有足够的批量外推时间") };
   const macroWallSeconds = Math.max(0, wallSeconds - wallCalibration - wallSeconds * FAST_OFFLINE_VALIDATION_SECONDS / seconds);
-  const macro = structuredClone(current);
+  const macro = current;
   const macroApplication = applyFastAffineContract(macro, contract, macroSeconds, macroWallSeconds);
   if (!macroApplication.ok) {
     return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, `批量外推超出安全数值范围：${macroApplication.failure ?? "未知字段"}`) };
   }
   const normalizedMacro = normalizeFastSettlementState(macro);
-  if (!normalizedMacro.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, "批量外推产生非法库存、缓存或大整数") };
+  if (!normalizedMacro.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
+    `批量外推产生非法库存、缓存或大整数${normalizedMacro.failure ? `：${normalizedMacro.failure}` : ""}`) };
   const expected = structuredClone(macro);
   const validationWallSeconds = wallSeconds * FAST_OFFLINE_VALIDATION_SECONDS / seconds;
   const validationApplication = applyFastAffineContract(expected, contract, FAST_OFFLINE_VALIDATION_SECONDS, validationWallSeconds);
@@ -1181,20 +1507,29 @@ export function runFastOfflineSettlement(state: GameState, seconds: number, wall
     return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, `验证窗口无法保持安全整数：${validationApplication.failure ?? "未知字段"}`) };
   }
   const normalizedExpected = normalizeFastSettlementState(expected);
-  if (!normalizedExpected.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, "验证预测越过容量或资源边界") };
-  const actual = runExact(structuredClone(macro), FAST_OFFLINE_VALIDATION_SECONDS, validationWallSeconds);
+  if (!normalizedExpected.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
+    `验证预测越过容量或资源边界${normalizedExpected.failure ? `：${normalizedExpected.failure}` : ""}`) };
+  const validationBaseline = captureTimeWarpCriticalSnapshot(macro);
+  const actual = runExact(macro, FAST_OFFLINE_VALIDATION_SECONDS, validationWallSeconds);
   const normalizedActual = normalizeFastSettlementState(actual);
-  if (!normalizedActual.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, "精确验证结果未通过结构或数值校验") };
+  if (!normalizedActual.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
+    `精确验证结果未通过结构或数值校验${normalizedActual.failure ? `：${normalizedActual.failure}` : ""}`) };
   const speedrunCorrection = normalizeFastSpeedrunClock(actual, state, wallSeconds);
   const comparison = compareFastNumericSnapshots(actual, expected);
-  const maxEstimatedError = comparison.maxError;
-  if (!Number.isFinite(maxEstimatedError) || maxEstimatedError > FAST_MAX_ERROR) {
+  const maxEstimatedError = compareTimeWarpCriticalSnapshots(
+    validationBaseline,
+    captureTimeWarpCriticalSnapshot(expected),
+    captureTimeWarpCriticalSnapshot(actual),
+  );
+  if (!Number.isFinite(maxEstimatedError) || maxEstimatedError > FAST_CRITICAL_MAX_ERROR) {
     return {
       status: "fallback",
       report: {
         ...fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
-          `精确验证误差 ${(maxEstimatedError * 100).toFixed(2)}% 超过 20%（字段 ${JSON.stringify(comparison.path ?? [])}，预测 ${String(comparison.expected ?? "?")}，实际 ${String(comparison.actual ?? "?")}）`),
+          `白糖或戴森关键指标尾验误差 ${(maxEstimatedError * 100).toFixed(2)}% 超过 100%`),
         maxEstimatedError,
+        maxNonCriticalError: comparison.maxError,
+        validationScope: "leaderboard-critical",
       },
     };
   }
@@ -1210,14 +1545,34 @@ export function runFastOfflineSettlement(state: GameState, seconds: number, wall
       algorithmVersion: FAST_OFFLINE_ALGORITHM_VERSION,
       boundaryCorrections: (macroApplication.corrections ?? 0) + (validationApplication.corrections ?? 0) +
         normalizedMacro.corrections + normalizedExpected.corrections + normalizedActual.corrections + speedrunCorrection,
+      validationScope: "leaderboard-critical",
+      maxNonCriticalError: comparison.maxError,
     },
   };
+}
+
+function fastSettlementExceptionReport(error: unknown): OfflineApproximationReport {
+  const detail = error instanceof Error && error.message
+    ? `：${error.message.slice(0, 160)}`
+    : "";
+  return fastExactReport(
+    FAST_OFFLINE_CALIBRATION_SECONDS,
+    `快速结算遇到无效循环状态，已从原始存档改用精确结算${detail}`,
+  );
+}
+
+export function runFastOfflineSettlement(state: GameState, seconds: number, wallSeconds = seconds): OfflineApproximationResult {
+  try {
+    return runFastOfflineSettlementUnsafe(state, seconds, wallSeconds);
+  } catch (error) {
+    return { status: "fallback", report: fastSettlementExceptionReport(error) };
+  }
 }
 
 /** Worker counterpart of {@link runFastOfflineSettlement}; yields between each
  * exact calibration slice and the final validation window so cancellation is
  * observable without ever exposing a partially mutated state. */
-export async function runFastOfflineSettlementAsync(
+async function runFastOfflineSettlementAsyncUnsafe(
   state: GameState,
   seconds: number,
   options: OfflineApproximationAsyncOptions = {},
@@ -1242,17 +1597,19 @@ export async function runFastOfflineSettlementAsync(
     options.onProgress?.((index + 1) * FAST_OFFLINE_CALIBRATION_SLICE_SECONDS, seconds);
   }
   const contract = createFastAffineContract(slices, FAST_OFFLINE_CALIBRATION_SECONDS, wallCalibration);
+  slices.length = 0;
   if (!contract) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, "30 秒校准发现生产、物流或缓存速率不稳定") };
   const macroSeconds = seconds - FAST_OFFLINE_CALIBRATION_SECONDS - FAST_OFFLINE_VALIDATION_SECONDS;
   if (macroSeconds < 1) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, "校准后没有足够的批量外推时间") };
   const macroWallSeconds = Math.max(0, wallSeconds - wallCalibration - wallSeconds * FAST_OFFLINE_VALIDATION_SECONDS / seconds);
-  const macro = structuredClone(current);
+  const macro = current;
   const macroApplication = applyFastAffineContract(macro, contract, macroSeconds, macroWallSeconds);
   if (!macroApplication.ok) {
     return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, `批量外推超出安全数值范围：${macroApplication.failure ?? "未知字段"}`) };
   }
   const normalizedMacro = normalizeFastSettlementState(macro);
-  if (!normalizedMacro.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, "批量外推产生非法库存、缓存或大整数") };
+  if (!normalizedMacro.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
+    `批量外推产生非法库存、缓存或大整数${normalizedMacro.failure ? `：${normalizedMacro.failure}` : ""}`) };
   const expected = structuredClone(macro);
   const validationWallSeconds = wallSeconds * FAST_OFFLINE_VALIDATION_SECONDS / seconds;
   const validationApplication = applyFastAffineContract(expected, contract, FAST_OFFLINE_VALIDATION_SECONDS, validationWallSeconds);
@@ -1260,21 +1617,30 @@ export async function runFastOfflineSettlementAsync(
     return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, `验证窗口无法保持安全整数：${validationApplication.failure ?? "未知字段"}`) };
   }
   const normalizedExpected = normalizeFastSettlementState(expected);
-  if (!normalizedExpected.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, "验证预测越过容量或资源边界") };
-  const actual = await runExactAsync(structuredClone(macro), FAST_OFFLINE_VALIDATION_SECONDS, options, validationWallSeconds);
+  if (!normalizedExpected.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
+    `验证预测越过容量或资源边界${normalizedExpected.failure ? `：${normalizedExpected.failure}` : ""}`) };
+  const validationBaseline = captureTimeWarpCriticalSnapshot(macro);
+  const actual = await runExactAsync(macro, FAST_OFFLINE_VALIDATION_SECONDS, options, validationWallSeconds);
   const normalizedActual = normalizeFastSettlementState(actual);
-  if (!normalizedActual.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, "精确验证结果未通过结构或数值校验") };
+  if (!normalizedActual.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
+    `精确验证结果未通过结构或数值校验${normalizedActual.failure ? `：${normalizedActual.failure}` : ""}`) };
   const speedrunCorrection = normalizeFastSpeedrunClock(actual, state, wallSeconds);
   const comparison = compareFastNumericSnapshots(actual, expected);
-  const maxEstimatedError = comparison.maxError;
+  const maxEstimatedError = compareTimeWarpCriticalSnapshots(
+    validationBaseline,
+    captureTimeWarpCriticalSnapshot(expected),
+    captureTimeWarpCriticalSnapshot(actual),
+  );
   options.onProgress?.(seconds, seconds);
-  if (!Number.isFinite(maxEstimatedError) || maxEstimatedError > FAST_MAX_ERROR) {
+  if (!Number.isFinite(maxEstimatedError) || maxEstimatedError > FAST_CRITICAL_MAX_ERROR) {
     return {
       status: "fallback",
       report: {
         ...fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
-          `精确验证误差 ${(maxEstimatedError * 100).toFixed(2)}% 超过 20%（字段 ${JSON.stringify(comparison.path ?? [])}，预测 ${String(comparison.expected ?? "?")}，实际 ${String(comparison.actual ?? "?")}）`),
+          `白糖或戴森关键指标尾验误差 ${(maxEstimatedError * 100).toFixed(2)}% 超过 100%`),
         maxEstimatedError,
+        maxNonCriticalError: comparison.maxError,
+        validationScope: "leaderboard-critical",
       },
     };
   }
@@ -1290,8 +1656,23 @@ export async function runFastOfflineSettlementAsync(
       algorithmVersion: FAST_OFFLINE_ALGORITHM_VERSION,
       boundaryCorrections: (macroApplication.corrections ?? 0) + (validationApplication.corrections ?? 0) +
         normalizedMacro.corrections + normalizedExpected.corrections + normalizedActual.corrections + speedrunCorrection,
+      validationScope: "leaderboard-critical",
+      maxNonCriticalError: comparison.maxError,
     },
   };
+}
+
+export async function runFastOfflineSettlementAsync(
+  state: GameState,
+  seconds: number,
+  options: OfflineApproximationAsyncOptions = {},
+): Promise<OfflineApproximationResult> {
+  try {
+    return await runFastOfflineSettlementAsyncUnsafe(state, seconds, options);
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw error;
+    return { status: "fallback", report: fastSettlementExceptionReport(error) };
+  }
 }
 
 export function advanceExactSessionChunk(session: SimulationAdvanceSession, maximumSteps = 256): number {

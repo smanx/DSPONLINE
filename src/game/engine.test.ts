@@ -44,6 +44,7 @@ import {
   advancePersistentSimulationRuntime,
   createStandardDysonLayer,
   dispatchGalacticExport,
+  discardConstructionInventory,
   dropCargoToEntity,
   dropCargoToTray,
   exploreStarSystem,
@@ -1368,6 +1369,59 @@ describe("factory simulation", () => {
     expect(canConnectBelt(state, "vein_iron", "vein_copper", "iron_ore")).toBe(false);
   });
 
+  it("never auto-detects a new recipe for a locked machine", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("high_efficiency_plasma_control", "reforming_refine");
+    state.construction.storage_mk1 = 1;
+    state.construction.oil_refinery = 1;
+    state.construction.conveyor_belt_mk1 = 1;
+    state = placeBuilding(state, "storage_mk1", { x: -200, y: 0 });
+    state = placeBuilding(state, "oil_refinery", { x: 200, y: 0 });
+    const source = state.entities.find((entity) => entity.buildingId === "storage_mk1")!;
+    const refinery = state.entities.find((entity) => entity.buildingId === "oil_refinery")!;
+    state = setLogisticsItem(state, source.id, "coal");
+    state.entities.find((entity) => entity.id === source.id)!.outputs.coal = 10;
+    state = setEntitiesInteractionLocked(state, [refinery.id], true);
+
+    const check = getBeltConnectionCheck(state, source.id, refinery.id, "coal");
+    const connected = connectBelt(state, source.id, refinery.id, "coal");
+
+    expect(check).toMatchObject({ ok: false, code: "invalid-target" });
+    expect(connected).toBe(state);
+    expect(state.entities.find((entity) => entity.id === refinery.id)?.recipeId).toBe("plasma_refining");
+  });
+
+  it("refuses auto recipe detection when an existing output line conflicts", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("high_efficiency_plasma_control", "reforming_refine");
+    state.construction.storage_mk1 = 2;
+    state.construction.oil_refinery = 1;
+    state.construction.conveyor_belt_mk1 = 2;
+    state = placeBuilding(state, "storage_mk1", { x: -200, y: 0 });
+    state = placeBuilding(state, "oil_refinery", { x: 100, y: 0 });
+    state = placeBuilding(state, "storage_mk1", { x: 400, y: 0 });
+    const [source, output] = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+    const refinery = state.entities.find((entity) => entity.buildingId === "oil_refinery")!;
+    state = setLogisticsItem(state, source.id, "coal");
+    state = setLogisticsItem(state, output.id, "hydrogen");
+    state.entities.find((entity) => entity.id === source.id)!.outputs.coal = 10;
+    const outputBeltId = "existing-hydrogen-output";
+    state.belts.push({
+      id: outputBeltId, planetId: "home", source: refinery.id, target: output.id, itemId: "hydrogen",
+      lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 1, lastFlow: 0, totalTransferred: 0, congestion: 0,
+    });
+
+    expect(getBeltConnectionCheck(state, source.id, refinery.id, "coal")).toMatchObject({ ok: false, code: "invalid-target" });
+    expect(connectBelt(state, source.id, refinery.id, "coal")).toBe(state);
+    expect(state.entities.find((entity) => entity.id === refinery.id)?.recipeId).toBe("plasma_refining");
+    expect(state.belts.map((belt) => belt.id)).toEqual([outputBeltId]);
+
+    state = removeBelt(state, outputBeltId);
+    state = connectBelt(state, source.id, refinery.id, "coal");
+    expect(state.entities.find((entity) => entity.id === refinery.id)?.recipeId).toBe("reforming_refine");
+    expect(state.belts).toHaveLength(1);
+  });
+
   it("connects every input line of a three-material chemical recipe", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("polymer_chemistry");
@@ -1827,6 +1881,25 @@ describe("factory simulation", () => {
     expect(addUnitToEntityGroup(withoutStock, assembler.id)).toBe(withoutStock);
   });
 
+  it("discards one construction stack without touching automation, tasks or placed entities", () => {
+    let state = createInitialState();
+    state = setConstructionAutomationTarget(state, "conveyor_belt_mk1", 100);
+    state.construction.conveyor_belt_mk1 = 99;
+    const original = state;
+    const entityIds = state.entities.map((entity) => entity.id);
+    const queue = structuredClone(state.constructionQueue);
+
+    state = discardConstructionInventory(state, "conveyor_belt_mk1");
+
+    expect(state).not.toBe(original);
+    expect(original.construction.conveyor_belt_mk1).toBe(99);
+    expect(state.construction.conveyor_belt_mk1).toBe(0);
+    expect(state.constructionAutomation.targetStock.conveyor_belt_mk1).toBe(100);
+    expect(state.constructionQueue).toEqual(queue);
+    expect(state.entities.map((entity) => entity.id)).toEqual(entityIds);
+    expect(discardConstructionInventory(state, "conveyor_belt_mk1")).toBe(state);
+  });
+
   it("queues a prerequisite chain and automatically advances research", () => {
     let state = createInitialState();
     state = placeBuilding(state, "wind_turbine", { x: 0, y: 0 });
@@ -1886,6 +1959,55 @@ describe("factory simulation", () => {
     state = selectTechnology(state, "electromagnetic_matrix");
     expect(state.research.selectedTechId).toBe("electromagnetic_matrix");
     expect(state.research.progressByTech.electromagnetic_matrix?.electromagnetic_matrix).toBe(invested);
+  });
+
+  it("starts the first currently researchable queued technology after cancellation", () => {
+    const source = createInitialState();
+    source.research.completedTechIds = ["electromagnetic_matrix"];
+    source.research.selectedTechId = "thermal_power";
+    source.research.queuedTechIds = ["electromagnetism", "basic_logistics"];
+
+    const next = cancelCurrentResearch(source);
+
+    expect(next.research.selectedTechId).toBe("electromagnetism");
+    expect(next.research.queuedTechIds).toEqual(["basic_logistics"]);
+    expect(source.research.selectedTechId).toBe("thermal_power");
+  });
+
+  it("keeps blocked queued research in order while starting a later valid item", () => {
+    const source = createInitialState();
+    source.research.completedTechIds = ["electromagnetic_matrix"];
+    source.research.selectedTechId = "thermal_power";
+    source.research.queuedTechIds = ["basic_logistics", "electromagnetism"];
+
+    const next = cancelCurrentResearch(source);
+
+    expect(next.research.selectedTechId).toBe("electromagnetism");
+    expect(next.research.queuedTechIds).toEqual(["basic_logistics"]);
+  });
+
+  it("stays idle only when every queued technology is currently blocked", () => {
+    const source = createInitialState();
+    source.research.selectedTechId = "electromagnetic_matrix";
+    source.research.queuedTechIds = ["basic_logistics"];
+
+    const next = cancelCurrentResearch(source);
+
+    expect(next.research.selectedTechId).toBeNull();
+    expect(next.research.queuedTechIds).toEqual(["basic_logistics"]);
+  });
+
+  it("can leave infinite research and start a valid finite queue item", () => {
+    const source = createInitialState();
+    source.research.completedTechIds = ["electromagnetic_matrix"];
+    source.research.queuedTechIds = ["electromagnetism"];
+    source.endgame.activeInfiniteResearchId = "matrix_compression";
+
+    const next = cancelCurrentResearch(source);
+
+    expect(next.endgame.activeInfiniteResearchId).toBeNull();
+    expect(next.research.selectedTechId).toBe("electromagnetism");
+    expect(next.research.queuedTechIds).toEqual([]);
   });
 
   it("removes queued technologies that lose a queued prerequisite", () => {

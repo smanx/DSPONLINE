@@ -347,8 +347,14 @@ function LightweightNodeHandles({ data }: { data: FactoryNodeData }) {
     : entity.buildingId === "micro_black_hole_connector"
       ? ([0, 1, 2] as const).map((index) => ({ id: `in:black-hole:${index}`, itemId: data.blackHolePortConnections[index] }))
       : [];
-  const inputItems = uniqueItemIds(data.acceptedInputItemIds, Object.keys(data.inputBeltCounts) as ItemId[]);
-  const outputItems = uniqueItemIds(data.producedOutputItemIds, Object.keys(data.outputBeltCounts) as ItemId[]);
+  // Machine ports are defined by the active recipe. A stale legacy line must
+  // not manufacture an extra visual port while storage migration repairs it.
+  const inputItems = entity.kind === "machine"
+    ? uniqueItemIds(data.acceptedInputItemIds)
+    : uniqueItemIds(data.acceptedInputItemIds, Object.keys(data.inputBeltCounts) as ItemId[]);
+  const outputItems = entity.kind === "machine"
+    ? uniqueItemIds(data.producedOutputItemIds)
+    : uniqueItemIds(data.producedOutputItemIds, Object.keys(data.outputBeltCounts) as ItemId[]);
   const showAutoInput = specialInputs.length === 0 && inputItems.length === 0;
   const inputCount = specialInputs.length || inputItems.length || (showAutoInput ? 1 : 0);
   const position = (index: number, count: number) => `${((index + 1) / (count + 1)) * 100}%`;
@@ -392,8 +398,12 @@ function FactoryNodeLodView({ data, selected }: NodeProps<FactoryFlowNode>) {
   const category = entity.kind === "vein" ? "资源矿脉" : entity.kind === "power" ? "电力设施" : entity.kind === "station" ? "物流设施" : entity.kind === "storage" ? "仓储设施" : entity.kind === "splitter" ? "分流设施" : "生产设施";
   const count = entity.kind === "vein" ? entity.minerCount : entity.machineCount;
   const icon = entity.kind === "vein" ? <Pickaxe size={18} /> : entity.kind === "power" ? <Zap size={18} /> : entity.kind === "station" ? <Orbit size={18} /> : entity.kind === "storage" ? <Database size={18} /> : entity.kind === "splitter" ? <GitFork size={18} /> : <Factory size={18} />;
-  const inputItems = uniqueItemIds(data.acceptedInputItemIds, Object.keys(data.inputBeltCounts) as ItemId[]);
-  const outputItems = uniqueItemIds(data.producedOutputItemIds, Object.keys(data.outputBeltCounts) as ItemId[]);
+  const inputItems = entity.kind === "machine"
+    ? uniqueItemIds(data.acceptedInputItemIds)
+    : uniqueItemIds(data.acceptedInputItemIds, Object.keys(data.inputBeltCounts) as ItemId[]);
+  const outputItems = entity.kind === "machine"
+    ? uniqueItemIds(data.producedOutputItemIds)
+    : uniqueItemIds(data.producedOutputItemIds, Object.keys(data.outputBeltCounts) as ItemId[]);
   return <article className={`factory-node factory-node-lod factory-node-lod--${lod} factory-node--status-${data.status.tone}${selected ? " factory-node--selected" : ""}${entity.interactionLocked ? " factory-node--locked" : ""}`} data-node-lod={lod}>
     <LightweightNodeHandles data={data} />
     <header className="factory-node__header">
