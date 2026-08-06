@@ -86,32 +86,58 @@ export const RELEASE_NOTES_HISTORY: readonly ReleaseNotesRecord[] = [
   {
     id: "2026-08-05-v1.0.30", date: "2026年8月5日", version: "1.0.30", title: "速通与快速离线实验",
     summary: "新增独立速通工厂、服务端校验榜和带严格回退的快速离线结算实验。",
-    items: [{ id: "speedrun", title: "速通与快速离线", description: "快速路径只在内存副本运行，结构校验失败时回到精确结算。" }],
+    items: [
+      { id: "speedrun", title: "独立速通工厂", description: "普通工厂与速通工厂从创建时隔离，三个目标分别进入独立榜单，服务端按赛季和规则版本校验成绩。" },
+      { id: "speedrun-targets", title: "三项挑战目标", description: "提供全科技、实际发射一万枚戴森火箭、累计生产一百万白矩阵三个目标，完成时间固定且重复提交幂等。" },
+      { id: "fast-offline", title: "快速离线实验", description: "30 秒精确校准后才允许批量外推；候选状态只在 Worker 副本中生成，任何安全门禁失败都会回退精确结算。" },
+    ],
   },
   {
     id: "2026-08-05-v1.0.29", date: "2026年8月5日", version: "1.0.29", title: "稳定性与空间维护",
     summary: "补齐高倍率挂机、云存档和生产运行稳定性，并完成下载节点保留策略。",
-    items: [{ id: "stability", title: "稳定性修复", description: "保持 v46 存档和云协议兼容，清理仅限已验证旧归档。" }],
+    items: [
+      { id: "recursive-simulation", title: "递归制造阻塞修复", description: "建筑制造中心递归任务遇到边界时分块处理并保留 WIP、材料和副产物，避免全局数字长时间不刷新。" },
+      { id: "time-warp-stop", title: "时间扭曲停止保护", description: "停止或 Worker 异常时保留最后有效状态和待结算预算，安全暂停并显示可恢复提示，不静默清空收益。" },
+      { id: "release-storage", title: "节点空间维护", description: "发布归档和数据库备份按保留策略整理，生产数据、回滚目标和云存档协议保持不变。" },
+    ],
   },
   {
     id: "2026-08-05-v1.0.28", date: "2026年8月5日", version: "1.0.28", title: "物流、科研与统计体验",
     summary: "改进物流槽位、科研喷涂、白糖统计和重整精炼配方路径。",
-    items: [{ id: "systems", title: "系统体验", description: "设备级 UI 偏好和拓扑命令不改变 GameState v46。" }],
+    items: [
+      { id: "logistics-density", title: "物流塔紧凑管理", description: "槽位、供需模式、优先级、库存上下限和载具设置在桌面与移动端保持清晰可编辑。" },
+      { id: "research-spraying", title: "科研喷涂约束", description: "矩阵研究只支持速度增产，输入、缓存和研究奖励继续走统一科研结算。" },
+      { id: "statistics-ranking", title: "统计与白糖榜", description: "生产统计按星球筛选，白糖每分钟口径由服务端校验，避免把不同星球或旧修订混入榜单。" },
+    ],
   },
   {
     id: "2026-08-04-v1.0.27", date: "2026年8月4日", version: "1.0.27", title: "批量建造与连接点偏好",
     summary: "增加连接点大小偏好、建筑批量目标和移动多选操作。",
-    items: [{ id: "batch", title: "批量操作", description: "批量命令保持原子守恒和既有线路上限。" }],
+    items: [
+      { id: "connection-points", title: "连接点尺寸", description: "建筑端口、连线圆圈和实际命中区域提供默认、放大 25% 与放大 50% 的设备级偏好。" },
+      { id: "batch-targets", title: "制造中心批量目标", description: "建筑制造中心可一次设置全部已解锁建筑的目标库存，最高一亿且不改变现有任务和材料扣除。" },
+      { id: "multi-select", title: "批量增加与移动多选", description: "建筑、传送带支持原子批量增加；手机选择 5～50 个对象时保持高亮、选择列表和触摸命中稳定。" },
+    ],
   },
   {
     id: "2026-08-04-v1.0.26", date: "2026年8月4日", version: "1.0.26", title: "主题与设置分类",
     summary: "统一亮色/深色主题、设置分类、版本历史分页、科技树横向滚轮和物品悬浮交互。",
-    items: [{ id: "theme", title: "设备级主题偏好", description: "主题和交互偏好仅保存于 localStorage，不进入存档或云端。" }],
+    items: [
+      { id: "theme", title: "亮色模式全面修复", description: "设置、存档、检查器、施工托盘、提示和弹窗统一浅色语义状态，深色主题和高字号布局保持兼容。" },
+      { id: "settings", title: "设置分类与运行记录", description: "设置按类别进入二级页面，运行记录显示可永久关闭，所有选择仍是设备级 UI 偏好。" },
+      { id: "technology-wheel", title: "科技树滚轮", description: "桌面滚轮在科技树区域转换为横向移动，阻止页面穿透，纵向滚动仍可由滚动条和键盘完成。" },
+      { id: "item-hover", title: "物品悬浮交互", description: "触发范围缩小到图标、名称和数量，移动到悬浮卡后可继续点击定位与图鉴按钮。" },
+    ],
   },
   {
     id: "2026-08-03-v1.0.25", date: "2026年8月3日", version: "1.0.25", title: "画布交互与设置体验更新",
     summary: "改进建筑选中、上下游寻线、星球统计、自动保存与侧栏布局，并补齐窄屏和大字号设置体验。",
-    items: [{ id: "canvas", title: "画布与统计", description: "设备级偏好和统计筛选保持 GameState v46、存档 envelope v2 与云 schema v7 兼容。" }],
+    items: [
+      { id: "selection", title: "稳定选中与寻线", description: "建筑选中反馈保持稳定，新增上下游寻线高亮和远程线路提示，画布刷新不会清空选择。" },
+      { id: "planet-statistics", title: "按星球生产统计", description: "生产量、消耗量、净产量和时间窗口可按星球筛选，切换不重置搜索、排序和范围。" },
+      { id: "autosave", title: "自动保存策略", description: "本地自动保存增加 10 分钟和关闭选项，并与云同步开关分离；手动保存、导出和上传继续可用。" },
+      { id: "sidebars", title: "左右侧栏收起", description: "左右面板可分别滑出画布，收起后只保留稳定箭头按钮，状态保存为设备级偏好。" },
+    ],
   },
   {
     id: "2026-08-03-v1.0.24", date: "2026年8月3日", version: "1.0.24", title: "工厂管理与画布性能更新",
@@ -338,6 +364,17 @@ export function getReleaseNotesPage(page: number, pageSize = RELEASE_HISTORY_PAG
   return RELEASE_NOTES_HISTORY.slice(safePage * safeSize, (safePage + 1) * safeSize) as ReleaseNotesRecord[];
 }
 
+export function getReleaseNotesPageCount(pageSize = RELEASE_HISTORY_PAGE_SIZE): number {
+  const safeSize = Math.max(1, Math.floor(pageSize));
+  return Math.max(1, Math.ceil(RELEASE_NOTES_HISTORY.length / safeSize));
+}
+
+export function getReleaseNotesPageForRelease(id: string, pageSize = RELEASE_HISTORY_PAGE_SIZE): number | null {
+  const index = RELEASE_NOTES_HISTORY.findIndex((release) => release.id === id);
+  if (index < 0) return null;
+  return Math.floor(index / Math.max(1, Math.floor(pageSize)));
+}
+
 export function hasSeenCurrentReleaseNotes(): boolean {
   try {
     if (window.localStorage.getItem(RELEASE_NOTES_SEEN_KEY) === CURRENT_RELEASE_NOTES.id) return true;
@@ -369,18 +406,38 @@ export function ReleaseNotesDialog({ open, onClose }: { open: boolean; onClose: 
   const [selectedReleaseId, setSelectedReleaseId] = useState<string>(CURRENT_RELEASE_NOTES.id);
   const [historyOpen, setHistoryOpen] = useState(false);
   const selectedRelease = RELEASE_NOTES_HISTORY.find((release) => release.id === selectedReleaseId) ?? CURRENT_RELEASE_NOTES;
-  const pageCount = Math.max(1, Math.ceil(RELEASE_NOTES_HISTORY.length / RELEASE_HISTORY_PAGE_SIZE));
+  const pageCount = getReleaseNotesPageCount();
   const pageEntries = getReleaseNotesPage(historyPage);
+
+  const openHistoryPage = (page: number) => {
+    const safePage = Math.max(0, Math.min(pageCount - 1, Math.floor(page)));
+    const entries = getReleaseNotesPage(safePage);
+    setHistoryPage(safePage);
+    // A direct page jump from detail must visibly change the preview instead
+    // of leaving the previous release selected behind a newly opened list.
+    if (entries.length > 0 && !entries.some((entry) => entry.id === selectedReleaseId)) {
+      setSelectedReleaseId(entries[0].id);
+    }
+    setHistoryOpen(true);
+  };
 
   const showHistory = () => {
     historyScrollTopRef.current = releaseScrollRef.current?.scrollTop ?? 0;
-    setHistoryOpen(true);
+    openHistoryPage(historyPage);
     window.requestAnimationFrame(() => {
       if (releaseScrollRef.current) releaseScrollRef.current.scrollTop = historyScrollTopRef.current;
     });
   };
   const showRelease = (id: string) => {
     historyScrollTopRef.current = releaseScrollRef.current?.scrollTop ?? 0;
+    const page = getReleaseNotesPageForRelease(id);
+    if (page === null) {
+      setSelectedReleaseId(CURRENT_RELEASE_NOTES.id);
+      setHistoryPage(0);
+      setHistoryOpen(false);
+      return;
+    }
+    setHistoryPage(page);
     setSelectedReleaseId(id);
     setHistoryOpen(false);
     window.requestAnimationFrame(() => {
@@ -448,12 +505,12 @@ export function ReleaseNotesDialog({ open, onClose }: { open: boolean; onClose: 
             <span>第 {historyPage + 1} / {pageCount} 页</span>
             <label>
               <span>跳转页码</span>
-              <select aria-label="跳转版本页" value={historyPage} onChange={(event) => setHistoryPage(Number(event.currentTarget.value))}>
+            <select aria-label="跳转版本页" value={historyPage} onChange={(event) => openHistoryPage(Number(event.currentTarget.value))}>
                 {Array.from({ length: pageCount }, (_, page) => <option value={page} key={page}>第 {page + 1} 页</option>)}
               </select>
             </label>
-            <button type="button" disabled={historyPage <= 0} onClick={() => setHistoryPage((page) => Math.max(0, page - 1))} aria-label="上一页版本"><ChevronLeft size={14} />上一页</button>
-            <button type="button" disabled={historyPage >= pageCount - 1} onClick={() => setHistoryPage((page) => Math.min(pageCount - 1, page + 1))} aria-label="下一页版本">下一页<ChevronRight size={14} /></button>
+            <button type="button" disabled={historyPage <= 0} onClick={() => openHistoryPage(historyPage - 1)} aria-label="上一页版本"><ChevronLeft size={14} />上一页</button>
+            <button type="button" disabled={historyPage >= pageCount - 1} onClick={() => openHistoryPage(historyPage + 1)} aria-label="下一页版本">下一页<ChevronRight size={14} /></button>
           </div>
           {historyOpen ? <nav className="release-notes-history-list" aria-label="版本列表">
             {pageEntries.map((release) => <button type="button" className={release.id === selectedRelease.id ? "active" : ""} key={release.id} onClick={() => showRelease(release.id)}><span><strong>{release.version} · {release.title}</strong><small>{release.date}</small></span><ChevronRight size={15} /></button>)}

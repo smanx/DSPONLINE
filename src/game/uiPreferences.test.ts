@@ -4,10 +4,12 @@ import {
   readConnectionPointSize,
   readShowRunLogPreference,
   readShowItemHoverPreference,
+  readSpeedrunPanelCollapsedPreference,
   readThemePreference,
   writeSettingsCategoryPreference,
   writeShowRunLogPreference,
   writeShowItemHoverPreference,
+  writeSpeedrunPanelCollapsedPreference,
   writeThemePreference,
   writeConnectionPointSize,
 } from "./uiPreferences";
@@ -35,16 +37,19 @@ describe("device-only UI preferences", () => {
       expect(readShowItemHoverPreference()).toBe(true);
       expect(readSettingsCategoryPreference()).toBe("all");
       expect(readConnectionPointSize()).toBe("default");
+      expect(readSpeedrunPanelCollapsedPreference()).toBe(false);
       writeThemePreference("light");
       writeShowRunLogPreference(false);
       writeShowItemHoverPreference(false);
       writeSettingsCategoryPreference("statistics");
       writeConnectionPointSize("large50");
+      writeSpeedrunPanelCollapsedPreference(true);
       expect(readThemePreference()).toBe("light");
       expect(readShowRunLogPreference()).toBe(false);
       expect(readShowItemHoverPreference()).toBe(false);
       expect(readSettingsCategoryPreference()).toBe("statistics");
       expect(readConnectionPointSize()).toBe("large50");
+      expect(readSpeedrunPanelCollapsedPreference()).toBe(true);
     } finally {
       Object.defineProperty(globalThis, "window", { configurable: true, value: original });
     }
@@ -57,6 +62,7 @@ describe("device-only UI preferences", () => {
     storage.setItem("dsp-idle-network.ui.show-item-hover.v1", "maybe");
     storage.setItem("dsp-idle-network.ui.settings-category.v1", "unknown");
     storage.setItem("dsp-idle-network.ui.connection-point-size.v1", "huge");
+    storage.setItem("dsp-idle-network.ui.speedrun-panel-collapsed.v1", "maybe");
     const original = globalThis.window;
     Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: storage, matchMedia: () => ({ matches: false }) } });
     try {
@@ -65,6 +71,7 @@ describe("device-only UI preferences", () => {
       expect(readShowItemHoverPreference()).toBe(true);
       expect(readSettingsCategoryPreference()).toBe("all");
       expect(readConnectionPointSize()).toBe("default");
+      expect(readSpeedrunPanelCollapsedPreference()).toBe(false);
     } finally {
       Object.defineProperty(globalThis, "window", { configurable: true, value: original });
     }

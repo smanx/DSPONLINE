@@ -91,6 +91,20 @@ describe("offline macro contract experiment", () => {
     if (result.status === "ineligible") expect(result.report.fellBack).toBe(true);
   });
 
+  it("never affine-extrapolates active finite research", () => {
+    const state = stableEmptyState();
+    state.research.selectedTechId = "electromagnetic_matrix";
+    state.timeWarp.enabled = true;
+    const blocker = getOfflineApproximationBlocker(state, 3_600);
+    expect(blocker).toContain("进行中的科研");
+    expect(runFastOfflineSettlement(state, 3_600).status).toBe("fallback");
+
+    const exact = runTimeWarpApproximateSettlement(state, 120, 10);
+    expect(exact.report.mode).toBe("exact");
+    expect(exact.report.fallbackReason).toContain("进行中的科研");
+    expect(exact.state.research.selectedTechId).toBe("electromagnetic_matrix");
+  });
+
   it("falls back when calibration is not stable instead of committing a partial state", () => {
     const state = stableEmptyState();
     state.entities.push({

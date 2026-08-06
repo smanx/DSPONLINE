@@ -6,6 +6,7 @@ export const SHOW_RUN_LOG_PREFERENCE_KEY = "dsp-idle-network.ui.show-run-log.v1"
 export const SHOW_ITEM_HOVER_PREFERENCE_KEY = "dsp-idle-network.ui.show-item-hover.v1";
 export const SETTINGS_CATEGORY_PREFERENCE_KEY = "dsp-idle-network.ui.settings-category.v1";
 export const CONNECTION_POINT_SIZE_PREFERENCE_KEY = "dsp-idle-network.ui.connection-point-size.v1";
+export const SPEEDRUN_PANEL_COLLAPSED_PREFERENCE_KEY = "dsp-idle-network.ui.speedrun-panel-collapsed.v1";
 
 export type SettingsCategory = "all" | "visual" | "performance" | "interaction" | "storage" | "statistics" | "other";
 export type ConnectionPointSize = "default" | "large25" | "large50";
@@ -108,6 +109,23 @@ export function writeConnectionPointSize(size: ConnectionPointSize): void {
   const storage = localStorageOrNull();
   if (!storage) return;
   try { storage.setItem(CONNECTION_POINT_SIZE_PREFERENCE_KEY, size); } catch { /* optional preference */ }
+}
+
+/** The speedrun panel is expanded by default and is never part of a save. */
+export function readSpeedrunPanelCollapsedPreference(): boolean {
+  const storage = localStorageOrNull();
+  if (!storage) return false;
+  try {
+    return storage.getItem(SPEEDRUN_PANEL_COLLAPSED_PREFERENCE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function writeSpeedrunPanelCollapsedPreference(collapsed: boolean): void {
+  const storage = localStorageOrNull();
+  if (!storage) return;
+  try { storage.setItem(SPEEDRUN_PANEL_COLLAPSED_PREFERENCE_KEY, String(collapsed)); } catch { /* optional preference */ }
 }
 
 /** Apply a saved theme before React mounts, preventing a dark flash on light-mode launches. */

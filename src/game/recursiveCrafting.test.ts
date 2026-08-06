@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { RECIPES } from "./content";
-import { planRecursiveRequirements, planSelectedRecipe } from "./recursiveCrafting";
-import type { TechId } from "./types";
+import { getRecipeNetOutput, planRecursiveRequirements, planSelectedRecipe } from "./recursiveCrafting";
+import type { RecipeDefinition, TechId } from "./types";
 
 const recipes = Object.values(RECIPES);
 
@@ -134,5 +134,75 @@ describe("recursive manufacturing planner", () => {
     expect(plan.possible).toBe(true);
     expect(plan.steps.at(-1)?.recipeId).toBe("logistics_drone");
     expect(plan.inventory.logistics_drone).toBe(1);
+  });
+
+  it("never treats hydrogen fractionation gross output as hydrogen production", () => {
+    const plan = planRecursiveRequirements({
+      inventory: { hydrogen: 10 },
+      requirements: [{ itemId: "hydrogen", amount: 11 }],
+      recipes: [RECIPES.deuterium_fractionation],
+      completedTechnologyIds: ["fractionation"],
+    });
+
+    expect(getRecipeNetOutput(RECIPES.deuterium_fractionation, "hydrogen")).toBe(-1);
+    expect(plan.possible).toBe(false);
+    expect(plan.steps).toEqual([]);
+    expect(plan.blocker).toMatchObject({ itemId: "hydrogen", current: 10, required: 11, reason: "raw-shortage" });
+  });
+
+  it("uses hydrogen fractionation for deuterium while preserving its net inventory", () => {
+    const plan = planRecursiveRequirements({
+      inventory: { hydrogen: 10 },
+      requirements: [{ itemId: "deuterium", amount: 1 }],
+      recipes: [RECIPES.deuterium_fractionation],
+      completedTechnologyIds: ["fractionation"],
+    });
+
+    expect(plan.possible).toBe(true);
+    expect(plan.steps).toEqual([expect.objectContaining({ recipeId: "deuterium_fractionation", batches: 1 })]);
+    expect(plan.inventory).toMatchObject({ hydrogen: 9, deuterium: 0 });
+  });
+
+  it("aggregates duplicate inputs and outputs before calculating net production", () => {
+    const recipe = {
+      id: "iron_ingot",
+      name: "重复字段测试",
+      buildingId: "arc_smelter",
+      duration: 1,
+      inputs: [{ itemId: "iron_ingot", amount: 1 }, { itemId: "iron_ingot", amount: 1 }],
+      outputs: [{ itemId: "iron_ingot", amount: 2 }, { itemId: "iron_ingot", amount: 2 }],
+    } satisfies RecipeDefinition;
+    const plan = planRecursiveRequirements({
+      inventory: { iron_ingot: 2 },
+      requirements: [{ itemId: "iron_ingot", amount: 4 }],
+      recipes: [recipe],
+      completedTechnologyIds: [],
+    });
+
+    expect(getRecipeNetOutput(recipe, "iron_ingot")).toBe(2);
+    expect(plan.possible).toBe(true);
+    expect(plan.steps[0]).toMatchObject({ batches: 1, outputAmount: 2 });
+    expect(plan.inventory.iron_ingot).toBe(0);
+  });
+
+  it("rejects a synthetic recipe whose target net output is zero", () => {
+    const recipe = {
+      id: "iron_ingot",
+      name: "零净产出测试",
+      buildingId: "arc_smelter",
+      duration: 1,
+      inputs: [{ itemId: "iron_ore", amount: 2 }],
+      outputs: [{ itemId: "iron_ore", amount: 2 }],
+    } satisfies RecipeDefinition;
+    const plan = planRecursiveRequirements({
+      inventory: { iron_ore: 1 },
+      requirements: [{ itemId: "iron_ore", amount: 2 }],
+      recipes: [recipe],
+      completedTechnologyIds: [],
+    });
+
+    expect(getRecipeNetOutput(recipe, "iron_ore")).toBe(0);
+    expect(plan.possible).toBe(false);
+    expect(plan.steps).toEqual([]);
   });
 });

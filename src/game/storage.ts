@@ -16,6 +16,7 @@ import {
   advanceSimulation,
   createInitialState,
   getDysonPowerMultiplier,
+  settleCompletedResearchBoundaries,
 } from "./engine";
 import { BUILDINGS, ITEMS, PLANET_LIST, STAR_SYSTEMS, getBeltConstructionId, getBuilding, getExtractorBuildingId, getPlanet, getRecipe, getTechnology, isRegisteredBeltTier } from "./content";
 import { normalizeCampaignState, syncCampaignProgress } from "./campaign";
@@ -2062,7 +2063,12 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     timeWarp,
     endgame,
   } as GameState;
-  return syncCampaignProgress(migrated, { grantRewards: saved.version >= 18 });
+  // Repair a v46 save that crossed a finite research boundary without the
+  // corresponding engine event.  The helper is idempotent and only clamps
+  // already-complete progress to its declared cost before granting the normal
+  // technology rewards and queue transition.
+  const repairedResearch = settleCompletedResearchBoundaries(migrated);
+  return syncCampaignProgress(repairedResearch, { grantRewards: saved.version >= 18 });
 }
 
 function persistentState(state: GameState, contentPackRegistry: ContentPackRegistry = loadContentPackRegistry()): GameState {

@@ -113,6 +113,8 @@ import {
   getTechnologyConstructionRewards,
   handcraftRecipe,
   handcraftRecipeWithUpstream,
+  isHandcraftableRecipe,
+  isRecursiveManufacturingRecipe,
   installSprayCoater,
   installSprayCoaters,
   installMiner,
@@ -147,6 +149,7 @@ import {
   refillStationWarpers,
   resumePausedResearch,
   selectInfiniteResearch,
+  settleCompletedResearchBoundaries,
   setGalacticDispatchAutomation,
   setGalacticExportEnabled,
   setGalacticMaterialExporterPaused,
@@ -363,6 +366,59 @@ describe("factory simulation", () => {
     const crafted = handcraftRecipe(handcraft, "gear", 17);
     expect(crafted.tray.iron_ingot).toBe(0);
     expect(crafted.tray.gear).toBe(17);
+  });
+
+  it("keeps refinery loops out of direct handcraft while allowing plasma refining upstream", () => {
+    expect(isHandcraftableRecipe("plasma_refining")).toBe(false);
+    expect(isRecursiveManufacturingRecipe("plasma_refining")).toBe(true);
+    expect(isRecursiveManufacturingRecipe("xray_cracking")).toBe(false);
+    expect(isRecursiveManufacturingRecipe("reforming_refine")).toBe(false);
+
+    const state = createInitialState();
+    state.research.completedTechIds.push("high_efficiency_plasma_control", "basic_chemical_engineering");
+    state.tray = { crude_oil: 2, energetic_graphite: 1 };
+    state.planetTrays.home = state.tray;
+    const directSnapshot = structuredClone(state);
+    expect(handcraftRecipe(state, "plasma_refining")).toBe(state);
+    expect(state).toEqual(directSnapshot);
+
+    const plan = getRecursiveHandcraftPlan(state, "plastic");
+    expect(plan.possible).toBe(true);
+    expect(plan.decisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ recipeId: "plasma_refining", itemId: "refined_oil" }),
+    ]));
+    const crafted = handcraftRecipeWithUpstream(state, "plastic");
+    expect(crafted.tray).toMatchObject({ crude_oil: 0, energetic_graphite: 0, hydrogen: 1, plastic: 1 });
+    expect(crafted.totalProduced).toMatchObject({ refined_oil: 2, hydrogen: 1, plastic: 1 });
+  });
+
+  it("quick-crafts an oil-chain building from crude oil and preserves refinery hydrogen", () => {
+    const state = createInitialState();
+    state.research.completedTechIds.push(
+      "high_efficiency_plasma_control",
+      "basic_chemical_engineering",
+      "titanium_alloy",
+      "geothermal_power",
+    );
+    state.tray = {
+      crude_oil: 24,
+      stone: 32,
+      water: 16,
+      titanium_ingot: 8,
+      steel: 23,
+      processor: 4,
+    };
+    state.planetTrays.home = state.tray;
+
+    const plan = getConstructionQuickCraftPlan(state, "geothermal_power_station");
+    expect(plan).toMatchObject({ possible: true, status: "upstream" });
+    expect(plan.recipeDecisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ recipeId: "plasma_refining", itemId: "refined_oil" }),
+    ]));
+    const crafted = craftConstructionWithUpstream(state, "geothermal_power_station");
+    expect(crafted.construction.geothermal_power_station).toBe(1);
+    expect(crafted.tray.crude_oil).toBe(0);
+    expect(crafted.tray.hydrogen).toBe(12);
   });
 
   it("classifies the quick-build hammer from only the active planet tray", () => {
@@ -899,6 +955,56 @@ describe("factory simulation", () => {
     expect(state.entities.find((entity) => entity.id === lab.id)?.inputs.electromagnetic_matrix).toBe(0);
     expect(state.construction.matrix_lab).toBe(3);
     expect(canSelectTechnology(state, "electromagnetism")).toBe(true);
+  });
+
+  it("repairs a full finite research boundary before a zero-cycle lab can deadlock", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("antimatter");
+    state.research.selectedTechId = "universe_matrix";
+    state.research.queuedTechIds = ["micro_black_hole_containment"];
+    state.research.progressByTech.universe_matrix = {
+      electromagnetic_matrix: 100,
+      energy_matrix: 100,
+      structure_matrix: 100,
+      information_matrix: 100,
+      gravity_matrix: 100,
+    };
+    const repaired = settleCompletedResearchBoundaries(state);
+    expect(repaired).not.toBe(state);
+    expect(repaired.research.completedTechIds).toContain("universe_matrix");
+    expect(repaired.research.selectedTechId).toBe("micro_black_hole_containment");
+    expect(repaired.research.progressByTech.universe_matrix).toEqual({
+      electromagnetic_matrix: 100,
+      energy_matrix: 100,
+      structure_matrix: 100,
+      information_matrix: 100,
+      gravity_matrix: 100,
+    });
+    const repeated = settleCompletedResearchBoundaries(repaired);
+    expect(repeated).toBe(repaired);
+    expect(repeated.construction.galactic_material_exporter).toBe(1);
+  });
+
+  it("normalizes an overfilled research boundary without granting twice", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push("antimatter");
+    state.research.selectedTechId = "universe_matrix";
+    state.research.progressByTech.universe_matrix = {
+      electromagnetic_matrix: 101,
+      energy_matrix: 101,
+      structure_matrix: 101,
+      information_matrix: 101,
+      gravity_matrix: 101,
+    };
+    state = settleCompletedResearchBoundaries(state);
+    expect(state.research.completedTechIds.filter((id) => id === "universe_matrix")).toHaveLength(1);
+    expect(state.research.progressByTech.universe_matrix).toEqual({
+      electromagnetic_matrix: 100,
+      energy_matrix: 100,
+      structure_matrix: 100,
+      information_matrix: 100,
+      gravity_matrix: 100,
+    });
   });
 
   it("extracts crude oil only after installing an oil extractor", () => {
@@ -4592,6 +4698,48 @@ describe("factory simulation", () => {
     expect(state.construction.oil_extractor).toBe(1);
     expect(state.tray.iron_ore).toBe(0);
     expect(state.totalProduced.steel).toBe(12);
+  });
+
+  it("invalidates a blocked construction-center oil plan when crude oil is added", () => {
+    let state = createInitialState();
+    state.research.completedTechIds.push(
+      "construction_automation",
+      "high_efficiency_plasma_control",
+      "basic_chemical_engineering",
+      "titanium_alloy",
+      "geothermal_power",
+    );
+    state.construction.wind_turbine = 80;
+    state.construction.construction_center = 1;
+    state.construction.geothermal_power_station = 0;
+    state = placeBuilding(state, "wind_turbine", { x: -200, y: -180 }, 80);
+    state = placeBuilding(state, "construction_center", { x: 120, y: 0 });
+    const centerId = state.entities.find((entity) => entity.buildingId === "construction_center")!.id;
+    state.tray = {
+      stone: 32,
+      water: 16,
+      titanium_ingot: 8,
+      steel: 23,
+      processor: 4,
+    };
+    state.planetTrays.home = state.tray;
+    state = setConstructionAutomationTarget(state, "geothermal_power_station", 1);
+
+    state = advanceSimulation(state, 1);
+    expect(getConstructionAutomationStatus(state, centerId)).toMatchObject({
+      stage: "等待材料",
+      blockerReason: "raw-shortage",
+      missingItemId: "crude_oil",
+    });
+    expect(state.construction.geothermal_power_station).toBe(0);
+
+    state.tray.crude_oil = 24;
+    state.planetTrays.home = state.tray;
+    state = advanceSimulation(state, 15);
+    expect(state.construction.geothermal_power_station).toBe(1);
+    expect(state.tray.crude_oil).toBe(0);
+    expect(state.tray.hydrogen).toBe(12);
+    expect(getConstructionAutomationStatus(state, centerId).stage).toBe("目标库存已满足");
   });
 
   it("settles optional construction-center WIP without blocking and refunds required WIP when cancelled", () => {

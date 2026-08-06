@@ -5,6 +5,7 @@ import {
   createSimulationAdvanceSession,
   getEntityInputCapacity,
   getEntityOutputCapacity,
+  hasActiveResearch,
   normalizeConstructionAutomationCursor,
   type SimulationAdvanceSession,
 } from "./engine";
@@ -165,6 +166,11 @@ const AFFINE_IGNORED_KEYS = new Set([
   "recentFlowSampleSeconds", "recentFlowTransferred",
   "cursor", "routingCursor", "routingCursors", "uploadRoutingCursors", "stationDispatchCursor",
   "phaseIndex", "stepIndex", "dispatchProgress", "absorptionProgress", "activityClockMs",
+  // In-flight cargo and the player's held stack are transient ownership
+  // records. Extrapolating either value as an unbounded rate can create
+  // negative routes or duplicate material when a trip crosses its arrival
+  // boundary. Only the exact engine may mutate these fields.
+  "cargo", "remainingCargo",
 ]);
 
 function finiteNumber(value: unknown, fallback = 0): number {
@@ -549,6 +555,9 @@ export function getOfflineApproximationBlocker(state: GameState, seconds: number
     (state.constructionAutomation.enabled && Object.keys(state.constructionAutomation.targetStock).length > 0)) return "存在建造或递归制造任务";
   if (state.exploration.missions.length > 0) return "存在探索任务边界";
   if (state.endgame.constructionActivity.activityId) return "存在活动时间边界";
+  // Research completion is a discrete event with rewards and queue changes;
+  // never extrapolate progressByTech without executing that event.
+  if (hasActiveResearch(state)) return "存在进行中的科研，近似路径回退精确结算";
   if (state.endgame.activeInfiniteResearchId || Object.values(state.endgame.exportProjects).some((project) => project.enabled)) return "存在终局科研或出口任务";
   if (state.entities.some((entity) => (entity.kind === "station" || (entity.stationRoutes?.length ?? 0) > 0) &&
     !(entity.quantumMode === "quantum" || entity.quantumTransition))) return "存在传统物流站或在途航线";
@@ -810,7 +819,7 @@ export function runOfflineApproximation(state: GameState, seconds: number, wallS
   };
 }
 
-interface FastAffineContract {
+export interface PureIdleAffineContract {
   deltas: AffineDelta[];
   calibrationSeconds: number;
   calibrationWallSeconds: number;
@@ -822,7 +831,7 @@ function pathHasString(path: AffinePath, values: ReadonlySet<string>): boolean {
 
 const FAST_SENSITIVE_KEYS = new Set([
   "elapsedSeconds", "elapsedActiveSeconds", "totalProduced", "totalConsumed", "inputs", "outputs",
-  "inventory", "planetTrays", "tray", "construction", "constructionBuffer", "delivered", "cargo",
+  "inventory", "planetTrays", "tray", "construction", "constructionBuffer", "delivered",
   "productionRate", "utilization", "powerFactor", "storedEnergyMj", "fuelReserveSeconds",
   "totalLaunched", "totalRocketsLaunched", "shellSails", "totalSailsAbsorbed", "structurePoints",
   "research", "progressByTech", "infiniteResearch", "exportProjects", "constructionAutomation",
@@ -842,6 +851,16 @@ const FAST_FINITE_FLOAT_KEYS = new Set([
   "generationKw", "powerOutputKw", "powerInputKw", "powerDemandKw", "powerGenerationKw",
   "demandKw", "fuelGenerationKw", "storedEnergyMj",
 ]);
+// A calibration delta for a periodic transport or visual field has no useful
+// long-term meaning.  These values must remain at the last exact checkpoint;
+// the macro ledger only models aggregate stores and cumulative outcomes.
+const PURE_IDLE_TRANSIENT_KEYS = new Set([
+  "cargo", "remainingCargo", "progress", "stationProgress", "routingCursor", "stationDispatchCursor",
+  "lastFlow", "congestion", "utilization", "productionRate", "powerFactor",
+  "powerOutputKw", "powerInputKw", "powerDemandKw", "powerGenerationKw",
+  "fuelRemainingMj", "storedEnergyMj", "pendingSimulationSeconds", "pendingWallSeconds",
+  "effectiveMultiplier", "requiredPowerKw", "allocatedPowerKw",
+]);
 
 function isFastFiniteFloatPath(path: AffinePath): boolean {
   return path.some((part) => typeof part === "string" &&
@@ -852,25 +871,45 @@ function isFastSensitivePath(path: AffinePath): boolean {
   return pathHasString(path, FAST_SENSITIVE_KEYS);
 }
 
-function createFastAffineContract(
-  states: GameState[],
+function isPureIdleTransientPath(path: AffinePath): boolean {
+  return pathHasString(path, PURE_IDLE_TRANSIENT_KEYS);
+}
+
+function isDynamicMapEntryPath(path: AffinePath): boolean {
+  return typeof path.at(-2) === "string" && AFFINE_DYNAMIC_MAP_KEYS.has(path.at(-2) as string);
+}
+
+function createFastAffineContractFromSnapshots(
+  snapshots: AffineSnapshot[],
   calibrationSeconds: number,
   calibrationWallSeconds: number,
-): FastAffineContract | null {
-  if (states.length < 2 || calibrationSeconds <= 0 || calibrationWallSeconds <= 0) return null;
-  const snapshots = states.map((state) => captureAffineSnapshot(state));
-  const keys = new Set<string>(snapshots[0].entries.keys());
-  for (const snapshot of snapshots.slice(1)) {
-    for (const key of [...keys]) if (!snapshot.entries.has(key)) keys.delete(key);
-  }
+  excludePureIdleTransientPaths = false,
+): PureIdleAffineContract | null {
+  if (snapshots.length < 2 || calibrationSeconds <= 0 || calibrationWallSeconds <= 0) return null;
+  const keys = new Set<string>(snapshots.flatMap((snapshot) => [...snapshot.entries.keys()]));
+  const pathFor = (key: string): AffinePath | undefined =>
+    snapshots.find((snapshot) => snapshot.paths.has(key))?.paths.get(key);
+  const resolveEntry = (snapshot: AffineSnapshot, key: string, fallback?: AffineEntry): AffineEntry | undefined => {
+    const current = snapshot.entries.get(key);
+    if (current) return current;
+    const path = pathFor(key);
+    if (!path || !fallback || (fallback.kind !== "number" && fallback.kind !== "decimal") ||
+      !path.some((part) => typeof part === "string" && AFFINE_DYNAMIC_MAP_KEYS.has(part))) return undefined;
+    return fallback.kind === "number"
+      ? { kind: "number", value: 0, integer: fallback.integer }
+      : { kind: "decimal", value: 0n };
+  };
   const deltas: AffineDelta[] = [];
-  const intervalSeconds = calibrationSeconds / (states.length - 1);
+  const intervalSeconds = calibrationSeconds / (snapshots.length - 1);
   for (const key of keys) {
-    const entries = snapshots.map((snapshot) => snapshot.entries.get(key));
+    const fallback = snapshots.map((snapshot) => snapshot.entries.get(key)).find((entry) =>
+      entry?.kind === "number" || entry?.kind === "decimal");
+    const entries = snapshots.map((snapshot) => resolveEntry(snapshot, key, fallback));
     if (entries.some((entry) => !entry || (entry.kind !== "number" && entry.kind !== "decimal"))) continue;
     const first = entries[0]!;
-    const path = snapshots[0].paths.get(key);
+    const path = pathFor(key);
     if (!path) continue;
+    if (excludePureIdleTransientPaths && isPureIdleTransientPath(path)) continue;
     if (first.kind === "number" && entries.every((entry) => entry?.kind === "number")) {
       const numericEntries = entries as Array<Extract<AffineEntry, { kind: "number" }>>;
       const intervalRates = numericEntries.slice(1).map((entry, index) => (entry.value - numericEntries[index].value) / intervalSeconds);
@@ -908,7 +947,7 @@ function createFastAffineContract(
       if (intervalRates.some((rate) => rate !== intervalRates[0])) {
         if (isFastSensitivePath(path)) {
           const tailRate = intervalRates.at(-1) ?? 0n;
-          deltas.push({ path, kind: "decimal", delta: tailRate * BigInt(states.length - 1) });
+          deltas.push({ path, kind: "decimal", delta: tailRate * BigInt(snapshots.length - 1) });
         }
         continue;
       }
@@ -917,6 +956,18 @@ function createFastAffineContract(
   }
   if (deltas.length === 0) return null;
   return { deltas, calibrationSeconds, calibrationWallSeconds };
+}
+
+function createFastAffineContract(
+  states: GameState[],
+  calibrationSeconds: number,
+  calibrationWallSeconds: number,
+): PureIdleAffineContract | null {
+  return createFastAffineContractFromSnapshots(
+    states.map((state) => captureAffineSnapshot(state)),
+    calibrationSeconds,
+    calibrationWallSeconds,
+  );
 }
 
 function divideBigIntTowardZero(value: bigint, divisor: bigint): bigint {
@@ -938,15 +989,19 @@ interface FastContractApplicationResult {
 
 function applyFastAffineContract(
   state: GameState,
-  contract: FastAffineContract,
+  contract: PureIdleAffineContract,
   simulationSeconds: number,
   wallSeconds: number,
+  rejectPureIdleTransientPaths = false,
 ): FastContractApplicationResult {
   if (!Number.isFinite(simulationSeconds) || simulationSeconds < 0 || !Number.isFinite(wallSeconds) || wallSeconds < 0) {
     return { ok: false, failure: "时间参数非法" };
   }
   let corrections = 0;
   for (const delta of contract.deltas) {
+    if (rejectPureIdleTransientPaths && isPureIdleTransientPath(delta.path)) {
+      return { ok: false, failure: `宏观合同包含不允许外推的瞬时字段 ${JSON.stringify(delta.path)}` };
+    }
     const current = readAffinePath(state, delta.path);
     const scaledSeconds = scaleFastSeconds(delta.path, simulationSeconds, wallSeconds);
     const denominator = pathHasString(delta.path, new Set(["elapsedActiveSeconds"]))
@@ -954,10 +1009,11 @@ function applyFastAffineContract(
       : contract.calibrationSeconds;
     const pathLabel = JSON.stringify(delta.path);
     if (delta.kind === "number") {
-      if (typeof current !== "number" || !Number.isFinite(current)) {
+      const base = current === undefined && isDynamicMapEntryPath(delta.path) ? 0 : current;
+      if (typeof base !== "number" || !Number.isFinite(base)) {
         return { ok: false, failure: `数值字段不可用 ${pathLabel}` };
       }
-      const next = current + Number(delta.delta) * scaledSeconds / denominator;
+      const next = base + Number(delta.delta) * scaledSeconds / denominator;
       if (!Number.isFinite(next)) return { ok: false, failure: `预测结果非有限数值 ${pathLabel}` };
       const requiresSafeInteger = Boolean(delta.integer) && !isFastFiniteFloatPath(delta.path);
       const normalized = requiresSafeInteger ? Math.floor(next + EPSILON) : next;
@@ -967,13 +1023,14 @@ function applyFastAffineContract(
       if (!writeAffinePath(state, delta.path, normalized)) return { ok: false, failure: `无法写入字段 ${pathLabel}` };
       continue;
     }
-    if (typeof current !== "string" || !/^\d+$/.test(current)) {
+    const base = current === undefined && isDynamicMapEntryPath(delta.path) ? "0" : current;
+    if (typeof base !== "string" || !/^\d+$/.test(base)) {
       return { ok: false, failure: `十进制字段不可用 ${pathLabel}` };
     }
     try {
       const numerator = BigInt(Math.max(0, Math.floor(scaledSeconds))) * (delta.delta as bigint);
       const scaled = divideBigIntTowardZero(numerator, BigInt(Math.max(1, Math.floor(denominator))));
-      const next = BigInt(current) + scaled;
+      const next = BigInt(base) + scaled;
       if (next < 0n) {
         // Decimal inventory fields are non-negative stores.  A linear tail
         // can overshoot after the store is exhausted; stop at zero and let
@@ -992,6 +1049,166 @@ function applyFastAffineContract(
     }
   }
   return { ok: true, corrections };
+}
+
+export interface PureIdleAffineCalibration {
+  contract: PureIdleAffineContract;
+  /** Temporary shadow result used only to derive diagnostics, then released. */
+  calibratedState: GameState;
+  calibrationSeconds: number;
+  calibrationWallSeconds: number;
+}
+
+export interface PureIdleAffineApplication {
+  ok: boolean;
+  boundaryCorrections: number;
+  failure?: string;
+}
+
+type ItemStore = Partial<Record<string, number | string>>;
+
+function addAggregateStore(
+  totals: Map<string, bigint>,
+  store: ItemStore | undefined,
+  seen: Set<object>,
+): void {
+  if (!store || typeof store !== "object" || seen.has(store)) return;
+  seen.add(store);
+  for (const [itemId, raw] of Object.entries(store)) {
+    try {
+      const amount = typeof raw === "number"
+        ? (Number.isSafeInteger(raw) && raw >= 0 ? BigInt(raw) : null)
+        : (typeof raw === "string" && /^\d+$/.test(raw) ? BigInt(raw) : null);
+      if (amount === null) continue;
+      totals.set(itemId, (totals.get(itemId) ?? 0n) + amount);
+    } catch {
+      // Formal numeric validation reports malformed values separately.
+    }
+  }
+}
+
+/**
+ * Aggregate every persisted item ownership location once. This is a safety
+ * invariant, not a production estimator: transfers between locations cancel
+ * out, while a net increase must be backed by a production counter delta.
+ */
+function captureAggregateItemStores(state: GameState): Map<string, bigint> {
+  const totals = new Map<string, bigint>();
+  const seen = new Set<object>();
+  addAggregateStore(totals, state.tray, seen);
+  for (const tray of Object.values(state.planetTrays)) addAggregateStore(totals, tray, seen);
+  for (const entity of state.entities) {
+    addAggregateStore(totals, entity.inputs, seen);
+    addAggregateStore(totals, entity.outputs, seen);
+    for (const route of entity.stationRoutes ?? []) {
+      if (Number.isSafeInteger(route.cargo) && route.cargo >= 0) {
+        totals.set(route.itemId, (totals.get(route.itemId) ?? 0n) + BigInt(route.cargo));
+      }
+    }
+  }
+  for (const job of Object.values(state.constructionAutomation.jobs)) addAggregateStore(totals, job.inventory, seen);
+  addAggregateStore(totals, state.portableFleet, seen);
+  if (state.cargo && Number.isSafeInteger(state.cargo.amount) && state.cargo.amount >= 0) {
+    totals.set(state.cargo.itemId, (totals.get(state.cargo.itemId) ?? 0n) + BigInt(state.cargo.amount));
+  }
+  addAggregateStore(totals, state.quantumLogisticsNetwork.inventory, seen);
+  for (const batch of Object.values(state.endgame.constructionActivity.pendingBatches)) {
+    if (batch && Number.isSafeInteger(batch.amount) && batch.amount >= 0) {
+      totals.set(batch.itemId, (totals.get(batch.itemId) ?? 0n) + BigInt(batch.amount));
+    }
+  }
+  return totals;
+}
+
+interface AggregateConservationBaseline {
+  totals: Map<string, bigint>;
+  totalProduced: Map<string, bigint>;
+}
+
+function captureAggregateConservationBaseline(state: GameState): AggregateConservationBaseline {
+  const totalProduced = new Map<string, bigint>();
+  for (const [itemId, raw] of Object.entries(state.totalProduced)) {
+    if (Number.isSafeInteger(raw) && raw >= 0) totalProduced.set(itemId, BigInt(raw));
+  }
+  return { totals: captureAggregateItemStores(state), totalProduced };
+}
+
+function validateAggregateConservation(before: AggregateConservationBaseline, after: GameState): string | null {
+  const afterTotals = captureAggregateItemStores(after);
+  const itemIds = new Set([...before.totals.keys(), ...afterTotals.keys(), ...before.totalProduced.keys(), ...Object.keys(after.totalProduced)]);
+  for (const itemId of itemIds) {
+    const stockDelta = (afterTotals.get(itemId) ?? 0n) - (before.totals.get(itemId) ?? 0n);
+    const producedDelta = BigInt(Math.max(0, Math.floor(finiteNumber(after.totalProduced[itemId as ItemId])))) -
+      (before.totalProduced.get(itemId) ?? 0n);
+    if (stockDelta > producedDelta) {
+      return `物资守恒失败：${itemId} 库存净增 ${stockDelta.toString()} 超过累计生产增量 ${producedDelta.toString()}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Build the pure-idle contract from exactly three ten-second exact windows.
+ * The supplied state remains untouched. Only one full shadow state is kept;
+ * calibration checkpoints are reduced to compact affine snapshots.
+ */
+export function createPureIdleAffineCalibration(
+  state: GameState,
+  calibrationWallSeconds: number,
+): PureIdleAffineCalibration | null {
+  if (!Number.isFinite(calibrationWallSeconds) || calibrationWallSeconds <= 0 || !validateFastNumbers(state)) return null;
+  const snapshots = [captureAffineSnapshot(state)];
+  let shadow = structuredClone(state);
+  for (let index = 0; index < FAST_OFFLINE_CALIBRATION_SECONDS / FAST_OFFLINE_CALIBRATION_SLICE_SECONDS; index += 1) {
+    shadow = runExact(shadow, FAST_OFFLINE_CALIBRATION_SLICE_SECONDS, calibrationWallSeconds / 3);
+    snapshots.push(captureAffineSnapshot(shadow));
+  }
+  const contract = createFastAffineContractFromSnapshots(
+    snapshots,
+    FAST_OFFLINE_CALIBRATION_SECONDS,
+    calibrationWallSeconds,
+    true,
+  );
+  snapshots.length = 0;
+  if (!contract) return null;
+  return {
+    contract,
+    calibratedState: shadow,
+    calibrationSeconds: FAST_OFFLINE_CALIBRATION_SECONDS,
+    calibrationWallSeconds,
+  };
+}
+
+/** Worker-only mutable application. The caller must discard the candidate on failure. */
+export function applyPureIdleAffineContract(
+  state: GameState,
+  contract: PureIdleAffineContract,
+  simulationSeconds: number,
+  wallSeconds: number,
+): PureIdleAffineApplication {
+  const before = captureAggregateConservationBaseline(state);
+  const applied = applyFastAffineContract(state, contract, simulationSeconds, wallSeconds, true);
+  if (!applied.ok) return { ok: false, boundaryCorrections: 0, failure: applied.failure };
+  const normalized = normalizeFastSettlementState(state);
+  if (!normalized.ok) {
+    return {
+      ok: false,
+      boundaryCorrections: (applied.corrections ?? 0) + normalized.corrections,
+      failure: normalized.failure ?? "宏观候选状态规范化失败",
+    };
+  }
+  const conservationFailure = validateAggregateConservation(before, state);
+  if (conservationFailure) {
+    return {
+      ok: false,
+      boundaryCorrections: (applied.corrections ?? 0) + normalized.corrections,
+      failure: conservationFailure,
+    };
+  }
+  return {
+    ok: true,
+    boundaryCorrections: (applied.corrections ?? 0) + normalized.corrections,
+  };
 }
 
 function normalizeFastNumberMap(
@@ -1035,6 +1252,10 @@ function clampDecimalMap(
 function findInvalidFastNumber(value: unknown, path: AffinePath = [], seen = new Set<object>()): string | null {
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return `${JSON.stringify(path)}=${String(value)} 不是有限数值`;
+    if (path.at(-1) === "cargo" && pathHasString(path, new Set(["stationRoutes"])) &&
+      (!Number.isSafeInteger(value) || value < 0)) {
+      return `${JSON.stringify(path)}=${String(value)} 不是合法非负航线货物`;
+    }
     if (Number.isInteger(value) && !Number.isSafeInteger(value) && !isFastFiniteFloatPath(path)) {
       return `${JSON.stringify(path)}=${String(value)} 超过安全整数`;
     }
@@ -1151,6 +1372,14 @@ function normalizeFastSettlementState(state: GameState): FastSettlementNormaliza
           const normalized = ((raw % 1) + 1) % 1;
           if (Math.abs(normalized - raw) > EPSILON) corrections += 1;
           entity.proliferatorBonusProgress[itemId as keyof typeof entity.proliferatorBonusProgress] = normalized;
+        }
+      }
+      for (const route of entity.stationRoutes ?? []) {
+        if (!Number.isFinite(route.cargo) || !Number.isSafeInteger(route.cargo) || route.cargo < 0) {
+          return { ok: false, corrections, failure: `航线 ${route.id} 的在途货物不是合法非负安全整数` };
+        }
+        if (!Number.isFinite(route.progress) || route.progress < 0 || route.progress > 1) {
+          return { ok: false, corrections, failure: `航线 ${route.id} 的进度超出 0～1` };
         }
       }
     }
@@ -1366,6 +1595,9 @@ function runTimeWarpApproximateSettlementUnsafe(
         ? "时间扭曲未开启"
         : "切片较短，直接精确推进");
   }
+  if (hasActiveResearch(state)) {
+    return exactTimeWarpResult(state, simulationSeconds, wallSeconds, "存在进行中的科研，已使用精确结算");
+  }
 
   const calibrationSeconds = TIME_WARP_APPROXIMATION_CALIBRATION_SECONDS;
   const validationSeconds = TIME_WARP_APPROXIMATION_VALIDATION_SECONDS;
@@ -1475,6 +1707,9 @@ function runFastOfflineSettlementUnsafe(state: GameState, seconds: number, wallS
   if (seconds <= FAST_OFFLINE_CALIBRATION_SECONDS) {
     return { status: "fallback", report: fastExactReport(Math.floor(seconds), "离线时长不超过 30 秒，使用精确结算") };
   }
+  if (hasActiveResearch(state)) {
+    return { status: "fallback", report: fastExactReport(0, "存在进行中的科研，已使用精确结算") };
+  }
   if (state.timeWarp.pendingSimulationSeconds > EPSILON || state.timeWarp.pendingWallSeconds > EPSILON) {
     return { status: "ineligible", report: fastExactReport(0, "存在未提交时间扭曲预算") };
   }
@@ -1582,6 +1817,9 @@ async function runFastOfflineSettlementAsyncUnsafe(
   if (!Number.isFinite(seconds) || seconds <= 0) return { status: "ineligible", report: fastExactReport(0, "离线时长无效") };
   if (seconds <= FAST_OFFLINE_CALIBRATION_SECONDS) {
     return { status: "fallback", report: fastExactReport(Math.floor(seconds), "离线时长不超过 30 秒，使用精确结算") };
+  }
+  if (hasActiveResearch(state)) {
+    return { status: "fallback", report: fastExactReport(0, "存在进行中的科研，已使用精确结算") };
   }
   if (state.timeWarp.pendingSimulationSeconds > EPSILON || state.timeWarp.pendingWallSeconds > EPSILON) {
     return { status: "ineligible", report: fastExactReport(0, "存在未提交时间扭曲预算") };

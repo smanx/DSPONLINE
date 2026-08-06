@@ -2558,6 +2558,37 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
 .speedrun-status-panel > header { justify-content: space-between; gap: 12px; }
 .speedrun-status-panel > header span,
 .speedrun-status-panel > header strong { display: inline-flex; align-items: center; gap: 6px; }
+.speedrun-status-panel > header strong { margin-left: auto; }
+.speedrun-status-toggle {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--panel-border, rgba(103, 199, 181, 0.35));
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+.speedrun-status-toggle:hover,
+.speedrun-status-toggle:focus-visible { color: var(--accent, #67c7b5); background: color-mix(in srgb, var(--accent, #67c7b5) 12%, transparent); }
+.speedrun-status-panel[data-collapsed="true"] { width: max-content; max-width: calc(100vw - 16px); padding: 4px 6px; }
+.speedrun-status-panel[data-collapsed="true"] > header { gap: 6px; }
+.speedrun-status-panel[data-collapsed="true"] .speedrun-status-identity { width: 24px; justify-content: center; }
+.speedrun-status-panel[data-collapsed="true"] .speedrun-status-toggle { flex-basis: 44px; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .speedrun-status-targets { display: grid; gap: 8px; margin: 10px 0; }
 .speedrun-status-targets article { justify-content: space-between; gap: 8px; }
 .speedrun-status-targets article > span { min-width: 0; justify-content: space-between; gap: 8px; width: 100%; }
@@ -2585,6 +2616,7 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
 @media (max-width: 720px) {
   .start-menu-mode-options { grid-template-columns: 1fr; }
   .speedrun-status-panel { top: calc(var(--mobile-header-height, 56px) + 8px); right: 8px; width: min(300px, calc(100vw - 16px)); }
+  .speedrun-status-panel[data-collapsed="true"] { width: max-content; }
 }
 
 .planet-navigator {
