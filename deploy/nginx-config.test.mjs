@@ -20,6 +20,7 @@ test("active Nginx templates compress static assets while preserving cache bound
     assert.match(config, /gzip_types[^;]*text\/css[^;]*application\/javascript[^;]*application\/json[^;]*image\/svg\+xml;/s);
     assert.match(config, /location \/assets\/[^}]*immutable/s);
     assert.match(config, /location @archived_immutable_asset[^}]*\/var\/www\/dsp-idle\/shared/s);
+    assert.match(config, /location = \/version\.json[^}]*no-cache, no-store/s);
     assert.match(config, /location = \/sw\.js[^}]*no-cache, no-store/s);
     assert.match(config, /proxy_pass http:\/\/127\.0\.0\.1:4320/);
   }
@@ -30,6 +31,7 @@ test("active Nginx templates compress static assets while preserving cache bound
   const download = await readFile(path.join(deployDirectory, "nginx-dsp-idle-download-shanghai.conf"), "utf8");
   assert.match(download, /server_name download\.dsponline\.cn;/);
   assert.match(download, /location \/downloads\/[^}]*try_files \$uri =404;[^}]*immutable/s);
+  assert.match(download, /location = \/version\.json[^}]*no-cache, no-store/s);
   assert.match(download, /location = \/downloads\/android\/stable\.json[^}]*no-cache, no-store/s);
 });
 

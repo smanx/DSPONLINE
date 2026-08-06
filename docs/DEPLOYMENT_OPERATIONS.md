@@ -15,7 +15,7 @@
 
 硬边界：上海节点必须继续由上海本机提供前端与 `/api`，不得改成香港反代或域名跳转。上海为 HTTP，前端必须继续拒绝云账号密码传输。
 
-> 当前生产状态（2026-08-06）：香港、上海 Web/API 与上海下载页均运行 `1.0.31-19040a9d1e45`，构建 ID 为 `1.0.31+19040a9d1e45`；三处代码/下载回滚目标均为 `1.0.30-c6d896ae6911`。两地数据库继续独立使用 schema v7 / SQLite layout v2。发布前备份、未激活目录复验、原子切换、公网健康、完整安装包哈希、Range 和缓存证据见 [releases/1.0.31.md](./releases/1.0.31.md)。
+> 当前生产状态（2026-08-07）：香港、上海 Web/API 均运行 `1.0.32-762bf693becb`，构建 ID 为 `1.0.32+762bf693becb`；上海下载页运行补齐图标资源的 `download-site-1.0.32-762bf693becb-r2`。Web/API 回滚目标为 `1.0.31-19040a9d1e45`，下载页直接回滚目标为原 `download-site-1.0.32-762bf693becb`。两地数据库继续独立使用 schema v7 / SQLite layout v2。发布前备份、未激活目录复验、原子切换、公网健康、完整安装包哈希、Range、缓存和浏览器证据见 [releases/1.0.32.md](./releases/1.0.32.md)。
 
 ## 2. 服务器布局
 
@@ -34,7 +34,7 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-香港、上海 Web/API 已切换到 `1.0.31-19040a9d1e45`，上海下载站切换到不可变目录 `download-site-1.0.31-19040a9d1e45`；构建 `1.0.31+19040a9d1e45` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍重定向上海。Android SHA-256 为 `e59e2c0d6d1e3042af35b2429d2a46ae5da592694b15f9210ac4ee79f72e0120`，Windows SHA-256 为 `5f5426115fbe3a128af25dd7737f43976e3569f872b3051088ef950186a23a7c`（Authenticode `NotSigned`），blockmap SHA-256 为 `8c1b999cd44b63fe1cddbd8e4ee1732766bf82f2e2bc2a3c5eba41afd48642c1`。香港发布前备份为 2,113,228,800 字节、上海为 176,128 字节，均为 `0600` 并通过 `quick_check`、完整性和 schema v7 验证；Web/API 与下载页回滚目标均为 `1.0.30-c6d896ae6911`。公网健康、完整下载哈希、Range、缓存头、hashed asset、未授权云读写边界和 CORS Origin 门禁均已复验。两地服务 active、`NRestarts=0`；发布后磁盘约为香港 76%、上海 81%，不得删除当前版、回滚版或有效备份。完整证据见 [releases/1.0.31.md](./releases/1.0.31.md)。
+香港、上海 Web/API 已切换到 `1.0.32-762bf693becb`，上海下载站切换到不可变目录 `download-site-1.0.32-762bf693becb-r2`；构建 `1.0.32+762bf693becb` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍重定向上海。Android SHA-256 为 `6eeb39b65975b456868aec6c4b1d10b4aafb7d21dcf27645f901f236ffaff429`，Windows SHA-256 为 `928c1ee1b57e66cec931f91be6597fcaa09d11efa3a0616506c5238779dc7e2b`（Authenticode `NotSigned`），blockmap SHA-256 为 `e24fb19c2fbd029968aed4253a4119258b787baded6cacedf71b6652484509aa`。香港发布前备份为 2,242,174,976 字节、上海为 184,320 字节，均为 `0600` 并通过 `quick_check`、完整性和 schema v7/layout v2 验证；Web/API 回滚目标为 1.0.31，下载页直接回滚目标为原 1.0.32 目录。公网健康、完整下载哈希、Range、缓存头、当前/历史 hashed asset、未授权云读写边界、CORS Origin 和浏览器 smoke 均已复验。两地服务 active、`NRestarts=0`；临时上传文件清理后磁盘约为香港 83%、上海 82%，不得删除当前版、回滚版或未证明已异地归档的有效备份。完整证据见 [releases/1.0.32.md](./releases/1.0.32.md)。
 
 `1.0.13` 两节点发布都只切换 Web/API 代码，未执行数据库迁移。香港发布前后 Backup API 快照均通过 `quick_check`；前备份为 887,271,424 字节，后备份为 888,795,136 字节。上海发布前后备份均为 122,880 字节并通过 `quick_check`；发布前 SHA-256 为 `a8af0eec173e6f8aad36af09b7e6d8c56b2b00014d76efd53124ddfb81b7e6a7`，发布后为 `8cb0c7bbbb270ac804b7c16909fc1b4274d0b2aed34a4ae7f379f333596cd737`。上海 0 个账号、0 个主云档、24 条玩家记录和 23 条错误记录均未减少，服务 `NRestarts=0`。受限备份传输账号仍只用于异地备份，代码发布使用独立的 `ubuntu` 授权。
 
@@ -295,8 +295,8 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港与上海 `1.0.31-19040a9d1e45` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html` 与 `sw.js` 保持 no-cache；1.0.30 入口资源已进入共享 hashed-asset 回退区。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港与上海 `1.0.32-762bf693becb` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html`、`version.json` 与 `sw.js` 保持 no-cache；1.0.31 入口资源已进入共享 hashed-asset 回退区。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 香港 layout v1 的 136.8 MB `app_state` 曾使每分钟持久化把 Node 推到约 1.6 GB并阻塞健康接口。layout v2 上线后 `app_state` 约 2.55 MB，云存档正文按修订独立写入；240 秒生产观察中健康接口最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB。监控若再次出现内存或延迟上升，应分别检查 `app_state` 大小、`cloud_save_payloads` 行数与历史元数据唯一键数，不能只调大健康超时。
 
-Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.31 发布后香港根盘约 76%、上海约 81%，只清除了明确的上传归档和失败候选临时文件；当前版、1.0.30 回滚版、有效备份和历史安装包均保留。后续仍按 80% 告警、90% 保护以及备份保留/异地归档规则运营。
+Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.32 发布并清理精确上传临时文件后，香港根盘约 83%、上海约 82%；当前版、1.0.31 回滚版、有效备份和历史安装包均保留。香港还清理了一个已确认属于隔离预检、持有删除后 2.24 GB 文件的泄漏进程，生产服务未受影响。后续仍按 80% 告警、90% 保护以及备份保留/异地归档规则运营；任何旧本地数据库备份只有在证明已完成加密异地归档与哈希校验后才能删除。
