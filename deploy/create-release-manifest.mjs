@@ -64,6 +64,7 @@ async function describeReleaseFiles() {
     "server/package-lock.json",
     "server/save-integrity.mjs",
     "server/server.test.mjs",
+    "server/speedrun.test.mjs",
   ];
   return Promise.all(paths.sort().map(describeFile));
 }
