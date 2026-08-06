@@ -1,6 +1,6 @@
 # 测试与发布基线
 
-> **当前发布基线（2026-08-05）**：当前正式版本使用 `1.0.28 / GameState v46`；有效资产的 v43 空间站实验存档拒绝加载。量子网络回归以 GameState v46 语义为基线，并保留传统物流站升级兼容测试。1.0.28 不升级存档 envelope、云 schema 或 SQLite layout。
+> **当前发布基线（2026-08-06）**：当前正式版本使用 `1.0.31 / GameState v46`；有效资产的 v43 空间站实验存档拒绝加载。量子网络回归以 GameState v46 语义为基线，并保留传统物流站升级兼容测试。1.0.31 不升级存档 envelope、云 schema 或 SQLite layout。
 
 ## 1. 当前自动化覆盖
 
@@ -1030,3 +1030,23 @@ Android `1.0.18 / 1000018` 使用历史长期证书，APK v2/v3 通过，SHA-256
 正式提交为 `471529b431b891f3de7e96340d590ec5ef809834`，release ID 为 `1.0.28-471529b431b8`。Android `1.0.28 / 1000028` 使用批准长期证书并通过 APK v2/v3；Windows Authenticode 继续明确为 `NotSigned`。香港、上海 Web/API 与上海下载页均完成原子切换，三处回滚目标均为 `1.0.27-b8e6c0f01ea3`。两地备份、生产依赖、备份副本隔离启动、公网 Build ID、健康接口、Android Origin、未登录云读写边界、完整 APK/EXE/blockmap 哈希、Range 206、immutable/no-cache、历史 1.0.27 hashed asset 和四个生产浏览器场景均完成；完整证据见 [releases/1.0.28.md](./releases/1.0.28.md)。
 
 生产 `page.mouse.wheel` 补充验收发现科技树会横向移动并阻止窗口页面穿透，但树自身仍同时纵向移动且 Chrome 报 passive-listener 警告。现有 `dispatchEvent` 用例不会触发浏览器默认滚动，不能单独证明“纯横向”；后续回归必须使用真实鼠标滚轮输入并断言 `scrollTop` 不变。
+
+## 44. `1.0.31` / v46 玩家反馈批次与高倍率稳定性
+
+本版修复快速离线循环游标崩溃、离线报告布局、科技取消续队列、锁定配方拓扑和零 tick 线路计数；增加有界生产历史曲线、施工库存删除、物品悬浮开关、移动统计滚动和高倍率纯挂机近似治理。GameState v46、存档 envelope v2、云 schema v7 和 SQLite layout v2 均未改变。
+
+| 检查 | 正式发布结果 |
+| --- | --- |
+| `npm ci` / `npm run typecheck` | 依赖安装通过；0 个 TypeScript 错误 |
+| `npm test -- --run` | 87 个文件通过、5 个跳过；778 项通过、16 项跳过、0 失败 |
+| `npm run test:server` | 本地及香港、上海未激活目录均为 49/49 |
+| `npm run test:ops` | 6/6 |
+| `npm run test:native` | 8/8 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run build` | 通过；Vite 转换 1,878 个模块 |
+| `npm run test:e2e` | 246 项通过、2 项显式可选夹具/故障注入跳过、0 失败 |
+| Release manifest | 本地及两地未激活目录均为 148/148；聚合 SHA-256 `26128cdc8490fac12f99e617d67ff3a8d27f1b4024fefb0c30d2761242c8603f` |
+
+正式提交为 `19040a9d1e453677fde0905d9576bb7b74ae0ec0`，release ID 为 `1.0.31-19040a9d1e45`。Android `1.0.31 / 1000031` 使用批准长期证书并通过 APK v2/v3；Windows Authenticode 继续明确为 `NotSigned`。香港、上海 Web/API 与上海下载页均完成原子切换，三处回滚目标均为 `1.0.30-c6d896ae6911`。
+
+两地备份、生产依赖、49/49 服务测试、备份副本隔离启动、公网 Build ID、健康接口、Android Origin、未登录云读写边界、完整 APK/EXE/blockmap 哈希、Range 206、immutable/no-cache、历史 1.0.30 hashed asset 和四个生产浏览器场景均完成。香港启动后的短时 API 超时在延长观察中恢复稳定，服务未重启；完整路径、耗时和残余风险见 [releases/1.0.31.md](./releases/1.0.31.md)。
