@@ -198,3 +198,24 @@ Chrome/Edge Web、Windows Electron、Android Chrome/WebView、PWA；桌面、手
 - 不删除或重写玩家 GameState、云存档、速通记录、递归 WIP、科研缓存或纯挂机 IndexedDB 恢复日志作为回滚手段。
 - 若宏观合同校验、科研边界或 Worker 恢复出现问题，关闭宏观尝试并保留原精确 Worker；活动科研始终可走精确路径。
 - 发布失败只切回旧代码目录，不恢复或替换生产数据库，除非按独立灾难恢复流程明确授权。
+
+## 10. 2026-08-07 开发停止检查点
+
+本轮按用户要求停止在发布前边界，交给 Release Agent 继续。应用代码和发布工具的最后 clean source commit 为：
+
+- `762bf693becb97a62d8c1ce8de60bf6e9083f0cc`（`codex/release-1.0.32`）
+- 其父提交 `cfe95fca96717f8baf23bf80252dfd83b976bd5c` 已生成过一轮临时制品；最终制品必须重新绑定 `1.0.32+762bf693becb`。
+- `deploy/create-release-manifest.mjs` 已修复 bundle-root 清单写入路径字符串、导致 verifier 读取 undefined 的缺陷。
+
+从 `762bf693` 重新运行并通过：`npm ci`、`npm --prefix server ci`、`npm run licenses:check`（128 包）、`npm run typecheck`、`npm test -- --run`（89 文件：806 passed、16 skipped、0 failed）、`npm run test:server`（49/49）、`npm run test:ops`（6/6）、`npm run test:native`（8/8）、`npm run build`、`git diff --check`。最终 SHA 的全量 `npm run test:e2e` 已启动但按用户指示中断，不能记为通过。
+
+此前在父提交上完成的 Chrome 只读真实夹具证据：两份夹具各完成 30 天纯挂机宏观、5 分钟后台宽限、普通离线尾段、租约/检查点、Worker 崩溃恢复、取消和序列化重载；7.3 MB 约 4.2～4.8 秒，17.34 MB 约 14～15 秒，源文件 hash 均未改变。活动有限科研在单元测试和临时浏览器验证中均明确拒绝宏观合同并保持源状态不变；未验证 Edge、Android Chrome/WebView、Electron 长时真实夹具。
+
+父提交临时制品仍在以下目录，不能直接当作最终 762bf69 制品：
+
+- `D:\GameDev\DSPidle2-release-1.0.32\release\web-1.0.32-cfe95fca9671-clean.tar.gz`
+- `D:\GameDev\DSPidle2-release-1.0.32\release\api-1.0.32-cfe95fca9671-clean.tar.gz`
+- `D:\GameDev\DSPidle2-release-1.0.32\release\download-site-1.0.32-cfe95fca9671.tar.gz`
+- `D:\GameDev\DSPidle2-release-1.0.32\release\update-feed-1.0.32-cfe95fca9671\`
+
+父提交的 bundle manifest 曾因上述工具缺陷验证失败，不能复用。Release Agent 必须从 `762bf693...` 重新跑完整 E2E，设置新的 Build ID，重建 Web/API/APK/EXE/blockmap/稳定清单/本地下载页，运行 `npm run release:manifest -- --bundle-root ...` 与 `npm run release:verify -- ...`，并把最终文件哈希写回本文件后再申请发布。当前没有连接 VPS、生产数据库或公网下载页。
