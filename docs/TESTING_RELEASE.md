@@ -1069,3 +1069,9 @@ Android `1.0.18 / 1000018` 使用历史长期证书，APK v2/v3 通过，SHA-256
 正式源码提交为 `762bf693becb97a62d8c1ce8de60bf6e9083f0cc`，Build ID 为 `1.0.32+762bf693becb`。Android `1.0.32 / 1000032` 使用批准长期证书并通过 APK v2/v3；Windows Authenticode 继续明确为 `NotSigned`。香港、上海 Web/API、上海下载页和两个稳定应用包均已发布；下载页在补齐 `icon.svg` 后原子切换到 `download-site-1.0.32-762bf693becb-r2`。
 
 两地发布前备份、未激活目录复验、原子切换、公网 Build ID/健康、完整 APK/EXE/blockmap 哈希、Range 206、缓存、当前/历史 hashed asset 和生产浏览器 smoke 均完成。真实生产账号云写入、Android 覆盖升级保档，以及 Edge、Android WebView、Electron 长时真实夹具仍未执行，不能描述为已通过；完整证据和回滚指针见 [releases/1.0.32.md](./releases/1.0.32.md)。
+
+## 46. `1.0.33` / v46 终局快速结算开发门禁
+
+`1.0.33` 将快速离线升级为 `fast-30s-v2`，将纯挂机升级为 `pure-idle-macro-v3`，并将实时模拟兼容近似路径升级为 `time-warp-short-calibration-v3`。专项门禁必须保留有限/无限科研、权威供电倍率、普通/保守宏观分支、30/60 秒现实 deadline、取消、普通离线单次有界重启、纯挂机持久重启上限、旧 v2 恢复记录迁移、正式序列化重载和源夹具 hash 不变。真实玩家存档只允许在本机只读副本中测试，不能提交、覆盖或上传生产账号。
+
+正式开发交接必须从最终 clean source commit 重新执行依赖、许可、类型、全量 Vitest、server/ops/native、构建和全量单 worker Playwright，并记录准确的通过/跳过/失败数量。Chrome 真实夹具结果不能替代 Edge、Electron 或 Android WebView；缺少设备时必须明确列为未验证。制品、签名、清单和聚合 SHA-256 见 [1.0.33 development handoff](./RELEASE_HANDOFF_1.0.33.md)，本节不授权部署生产。

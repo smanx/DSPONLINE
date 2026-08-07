@@ -10,6 +10,7 @@ import {
   getOfflineApproximationBlocker,
   runFastOfflineSettlement,
   runFastOfflineSettlementAsync,
+  runConservativeOfflineSettlement,
   runOfflineApproximation,
   runOfflineApproximationAsync,
   runTimeWarpApproximateSettlement,
@@ -91,18 +92,25 @@ describe("offline macro contract experiment", () => {
     if (result.status === "ineligible") expect(result.report.fellBack).toBe(true);
   });
 
-  it("never affine-extrapolates active finite research", () => {
+  it("keeps active finite research on the dedicated fast research ledger", () => {
     const state = stableEmptyState();
     state.research.selectedTechId = "electromagnetic_matrix";
     state.timeWarp.enabled = true;
     const blocker = getOfflineApproximationBlocker(state, 3_600);
     expect(blocker).toContain("进行中的科研");
-    expect(runFastOfflineSettlement(state, 3_600).status).toBe("fallback");
+    const fast = runFastOfflineSettlement(state, 3_600);
+    expect(["approximate", "conservative"]).toContain(fast.status);
+    if (fast.status === "approximate" || fast.status === "conservative") {
+      expect(fast.report.algorithmVersion).toBe("fast-30s-v2");
+      expect(fast.state.research.selectedTechId).toBe("electromagnetic_matrix");
+    }
 
-    const exact = runTimeWarpApproximateSettlement(state, 120, 10);
-    expect(exact.report.mode).toBe("exact");
-    expect(exact.report.fallbackReason).toContain("进行中的科研");
-    expect(exact.state.research.selectedTechId).toBe("electromagnetic_matrix");
+    const timeWarp = runTimeWarpApproximateSettlement(state, 120, 10);
+    expect(timeWarp.report).toMatchObject({
+      mode: "approximate",
+      algorithmVersion: TIME_WARP_APPROXIMATION_ALGORITHM_VERSION,
+    });
+    expect(timeWarp.state.research.selectedTechId).toBe("electromagnetic_matrix");
   });
 
   it("falls back when calibration is not stable instead of committing a partial state", () => {
@@ -305,7 +313,33 @@ describe("offline macro contract experiment", () => {
     expect(source.elapsedSeconds).toBe(0);
   });
 
-  it("preserves speedrun wall-time when simulation seconds are accelerated", () => {
+  it("discards an invalid calibration candidate and keeps the valid source on zero-calibration conservative settlement", () => {
+    const source = stableEmptyState();
+    source.tray.iron_ore = 25;
+    const sourceHash = hashGameState(source);
+    const invalidCalibration = structuredClone(source);
+    invalidCalibration.tray.iron_ore = Number.NaN;
+
+    const result = runConservativeOfflineSettlement(
+      source,
+      3_600,
+      3_600,
+      "injected calibration failure",
+      invalidCalibration,
+      30,
+    );
+
+    expect(result.status).toBe("conservative");
+    if (result.status === "conservative") {
+      expect(result.report.calibrationWindowSeconds).toBe(0);
+      expect(result.report.fallbackReason).toContain("零校准保守宏观");
+      expect(result.state.tray.iron_ore).toBe(25);
+      expect(result.state.elapsedSeconds - source.elapsedSeconds).toBe(3_600);
+    }
+    expect(hashGameState(source)).toBe(sourceHash);
+  });
+
+  it("keeps speedrun factories off the approximate settlement path", () => {
     const source = stableEmptyState();
     source.speedrun = {
       enabled: true,
@@ -324,8 +358,8 @@ describe("offline macro contract experiment", () => {
       factoryId: "speedrun_test_factory_0001",
     };
     const result = runFastOfflineSettlement(source, 3_600, 60);
-    expect(result.status).toBe("approximate");
-    if (result.status === "approximate") expect(result.state.speedrun?.elapsedActiveSeconds).toBe(60);
+    expect(result.status).toBe("ineligible");
+    expect(result.report.fallbackReason).toContain("速通工厂");
   });
 
   it("advances a pure-idle time-warp slice with short calibration without mutating its source", () => {

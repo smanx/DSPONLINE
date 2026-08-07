@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-07-v1.0.32";
+const RELEASE_NOTE_ID = "2026-08-07-v1.0.33";
 
 async function seedVisualFactory(page: Page, options: { fontScale?: number; extreme?: boolean } = {}) {
   await page.addInitScript(({ fontScale, extreme, releaseNoteId }) => {

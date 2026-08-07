@@ -1,20 +1,40 @@
 import type { ContentPackRegistry } from "./contentPacks";
-import { getEffectiveSimulationMultiplier, hasActiveResearch, refreshDysonGenerationSnapshot } from "./engine";
+import {
+  getEffectiveSimulationMultiplier,
+  refreshDysonGenerationSnapshot,
+  refreshTimeWarpPowerSnapshotInPlace,
+} from "./engine";
 import {
   applyPureIdleAffineContract,
   createPureIdleAffineCalibration,
   type PureIdleAffineContract,
 } from "./offlineApproximation";
+import {
+  advanceResearchMacroInPlace,
+  captureResearchMacroStatus,
+  type ResearchMacroLedger,
+  type ResearchMacroStatus,
+} from "./researchMacro";
 import { inspectSave, serializeEnvelope } from "./storage";
 import type { GameState, ItemId } from "./types";
 
-export const PURE_IDLE_MACRO_ALGORITHM_VERSION = "pure-idle-macro-v2";
+export const PURE_IDLE_MACRO_ALGORITHM_VERSION = "pure-idle-macro-v3";
 export const PURE_IDLE_MACRO_BUCKET_WALL_SECONDS = 30;
 export const PURE_IDLE_MACRO_VALIDATION_WALL_SECONDS = 10 * 60;
 export const PURE_IDLE_MACRO_CALIBRATION_SECONDS = 30;
+export const PURE_IDLE_MACRO_OPERATION_DEADLINE_MS = 30_000;
 
 export type PureIdleMacroMode = "stable" | "extreme";
-export type PureIdleMacroPhase = "calibrating" | "running" | "validating" | "finalizing" | "failed";
+export type PureIdleMacroPhase =
+  | "preparing-power"
+  | "calibrating"
+  | "running"
+  | "conservative"
+  | "research-boundary"
+  | "validating"
+  | "finalizing"
+  | "recovering"
+  | "failed";
 
 export interface PureIdleTerminalSnapshot {
   dysonGenerationKw: number;
@@ -54,6 +74,8 @@ export interface PureIdleMacroSummary {
   algorithmVersion: string;
   settledWallSeconds: number;
   settledSimulationSeconds: number;
+  requestedMultiplier: number;
+  powerLimitedMultiplier: number;
   actualMultiplier: number;
   calibrationWindowsCompleted: number;
   contractVersion: number;
@@ -70,6 +92,11 @@ export interface PureIdleMacroSummary {
   terminalLines: PureIdleLineStatus[];
   minimumEfficiency: number | null;
   limitingReason: string;
+  research: ResearchMacroStatus;
+  baselineResearch: ResearchMacroStatus;
+  degradedReason?: string;
+  computationDurationMs: number;
+  conservativeOnly: boolean;
 }
 
 export interface PureIdleMacroSession {
@@ -77,7 +104,11 @@ export interface PureIdleMacroSession {
   phase: PureIdleMacroPhase;
   candidate: GameState;
   contract: PureIdleAffineContract;
+  researchLedger: ResearchMacroLedger;
+  researchRemainder: bigint;
+  researchInflowRemainders: ResearchMacroApplicationRemainders;
   baseline: PureIdleTerminalSnapshot;
+  baselineResearch: ResearchMacroStatus;
   calibrationRate: PureIdleRateSnapshot;
   /** Latest measured rate used for interpolation and efficiency display. */
   currentRate: PureIdleRateSnapshot;
@@ -92,7 +123,37 @@ export interface PureIdleMacroSession {
   nextValidationAtWallSeconds: number | null;
   boundaryCorrections: number;
   calibrationWindowsCompleted: number;
+  actualMultiplier: number;
+  degradedReason?: string;
+  computationDurationMs: number;
+  conservativeOnly: boolean;
 }
+
+export interface PureIdleMacroOperationOptions {
+  deadlineAtMs?: number;
+  shouldCancel?: () => boolean;
+  forceConservativeReason?: string;
+}
+
+export class PureIdleMacroDeadlineError extends Error {
+  constructor() {
+    super("纯挂机计算达到现实时间上限");
+    this.name = "PureIdleMacroDeadlineError";
+  }
+}
+
+function macroNow(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+function throwIfMacroInterrupted(options: PureIdleMacroOperationOptions): void {
+  if (options.shouldCancel?.()) throw new DOMException("纯挂机计算已取消", "AbortError");
+  if (options.deadlineAtMs !== undefined && macroNow() >= options.deadlineAtMs) {
+    throw new PureIdleMacroDeadlineError();
+  }
+}
+
+type ResearchMacroApplicationRemainders = Parameters<typeof advanceResearchMacroInPlace>[4];
 
 export type PureIdleCandidateValidation =
   | { ok: true; state: GameState; rawBytes: number }
@@ -223,7 +284,9 @@ export function summarizePureIdleMacroSession(session: PureIdleMacroSession): Pu
     algorithmVersion: PURE_IDLE_MACRO_ALGORITHM_VERSION,
     settledWallSeconds: session.settledWallSeconds,
     settledSimulationSeconds: session.settledSimulationSeconds,
-    actualMultiplier: getEffectiveSimulationMultiplier(session.candidate),
+    requestedMultiplier: session.candidate.timeWarp.requestedMultiplier,
+    powerLimitedMultiplier: session.actualMultiplier,
+    actualMultiplier: session.actualMultiplier,
     calibrationWindowsCompleted: session.calibrationWindowsCompleted,
     contractVersion: session.contractVersion,
     validationCount: session.validationCount,
@@ -239,11 +302,17 @@ export function summarizePureIdleMacroSession(session: PureIdleMacroSession): Pu
     terminalLines: lines,
     minimumEfficiency: minimum,
     limitingReason: limiting,
+    research: captureResearchMacroStatus(session.candidate),
+    baselineResearch: session.baselineResearch,
+    ...(session.degradedReason ? { degradedReason: session.degradedReason } : {}),
+    computationDurationMs: session.computationDurationMs,
+    conservativeOnly: session.conservativeOnly,
   };
 }
 
 function calibrate(state: GameState): {
   contract: PureIdleAffineContract;
+  researchLedger: ResearchMacroLedger;
   rate: PureIdleRateSnapshot;
 } {
   const multiplier = Math.max(1, getEffectiveSimulationMultiplier(state));
@@ -252,6 +321,7 @@ function calibrate(state: GameState): {
   refreshDysonGenerationSnapshot(result.calibratedState);
   return {
     contract: result.contract,
+    researchLedger: result.researchLedger,
     rate: rateBetween(
       capturePureIdleTerminalSnapshot(state),
       capturePureIdleTerminalSnapshot(result.calibratedState),
@@ -261,21 +331,90 @@ function calibrate(state: GameState): {
 }
 
 /** Consumes an isolated Worker-owned state. The main-thread source is never mutated. */
-export function createPureIdleMacroSession(state: GameState, mode: PureIdleMacroMode): PureIdleMacroSession {
+export function createConservativePureIdleMacroSession(
+  state: GameState,
+  mode: PureIdleMacroMode,
+  reason: string,
+): PureIdleMacroSession {
+  if (!state.timeWarp.enabled || state.paused) throw new Error("纯挂机保守会话要求已启用且未暂停的时间扭曲状态");
+  if (state.speedrun?.enabled) throw new Error("速通工厂必须继续使用独立的精确时间规则");
+  refreshTimeWarpPowerSnapshotInPlace(state);
+  const baseline = capturePureIdleTerminalSnapshot(state);
+  const baselineResearch = captureResearchMacroStatus(state);
+  const actualMultiplier = Math.max(1, getEffectiveSimulationMultiplier(state));
+  const emptyRate: PureIdleRateSnapshot = {
+    dysonGenerationKw: 0,
+    whiteMatrixProduced: 0,
+    rocketsLaunched: 0,
+    sailsAbsorbed: 0,
+    structurePoints: 0,
+    shellSails: 0,
+    sailsInOrbit: 0,
+    activityDelivered: {},
+  };
+  return {
+    mode,
+    phase: "conservative",
+    candidate: state,
+    contract: {
+      deltas: [],
+      calibrationSeconds: PURE_IDLE_MACRO_CALIBRATION_SECONDS,
+      calibrationWallSeconds: PURE_IDLE_MACRO_CALIBRATION_SECONDS / actualMultiplier,
+    },
+    researchLedger: { unitsPerWindow: 0n, windowSeconds: PURE_IDLE_MACRO_CALIBRATION_SECONDS, observedUnits: 0n, inflowPerWindow: {} },
+    researchRemainder: 0n,
+    researchInflowRemainders: {},
+    baseline,
+    baselineResearch,
+    calibrationRate: cloneRate(emptyRate),
+    currentRate: cloneRate(emptyRate),
+    settledWallSeconds: 0,
+    settledSimulationSeconds: 0,
+    contractVersion: 0,
+    validationCount: 0,
+    validationFailures: 1,
+    lastValidationDurationMs: 0,
+    lastValidationDeviation: 1,
+    lastValidationReason: `已切换零校准保守宏观：${reason}`,
+    nextValidationAtWallSeconds: null,
+    boundaryCorrections: 0,
+    calibrationWindowsCompleted: 0,
+    actualMultiplier,
+    degradedReason: reason,
+    computationDurationMs: 0,
+    conservativeOnly: true,
+  };
+}
+
+export function createPureIdleMacroSession(
+  state: GameState,
+  mode: PureIdleMacroMode,
+  options: PureIdleMacroOperationOptions = {},
+): PureIdleMacroSession {
   if (!state.timeWarp.enabled || state.paused) throw new Error("纯挂机校准要求已启用且未暂停的时间扭曲状态");
   if (state.speedrun?.enabled) throw new Error("速通工厂必须继续使用独立的精确时间规则");
-  if (hasActiveResearch(state)) throw new Error("存在进行中的科研，纯挂机宏观模式已安全回退精确模拟");
   if (state.timeWarp.pendingSimulationSeconds > 1e-6 || state.timeWarp.pendingWallSeconds > 1e-6) {
     throw new Error("纯挂机检查点仍包含未提交模拟预算");
   }
+  throwIfMacroInterrupted(options);
+  if (options.forceConservativeReason) {
+    return createConservativePureIdleMacroSession(state, mode, options.forceConservativeReason);
+  }
+  refreshTimeWarpPowerSnapshotInPlace(state);
   const baseline = capturePureIdleTerminalSnapshot(state);
+  const baselineResearch = captureResearchMacroStatus(state);
   const calibrated = calibrate(state);
+  throwIfMacroInterrupted(options);
   return {
     mode,
     phase: "running",
     candidate: state,
     contract: calibrated.contract,
+    researchLedger: calibrated.researchLedger,
+    researchRemainder: 0n,
+    researchInflowRemainders: {},
     baseline,
+    baselineResearch,
     calibrationRate: cloneRate(calibrated.rate),
     currentRate: cloneRate(calibrated.rate),
     settledWallSeconds: 0,
@@ -288,16 +427,26 @@ export function createPureIdleMacroSession(state: GameState, mode: PureIdleMacro
     nextValidationAtWallSeconds: mode === "stable" ? PURE_IDLE_MACRO_VALIDATION_WALL_SECONDS : null,
     boundaryCorrections: 0,
     calibrationWindowsCompleted: 3,
+    actualMultiplier: Math.max(1, getEffectiveSimulationMultiplier(state)),
+    computationDurationMs: 0,
+    conservativeOnly: false,
   };
 }
 
-function runShadowValidation(session: PureIdleMacroSession): void {
+function runShadowValidation(session: PureIdleMacroSession, options: PureIdleMacroOperationOptions): void {
   const startedAt = performance.now();
   session.phase = "validating";
   try {
+    throwIfMacroInterrupted(options);
+    refreshTimeWarpPowerSnapshotInPlace(session.candidate);
+    session.actualMultiplier = Math.max(1, getEffectiveSimulationMultiplier(session.candidate));
     const next = calibrate(session.candidate);
+    throwIfMacroInterrupted(options);
     const deviation = maximumRateDeviation(session.currentRate, next.rate);
     session.currentRate = next.rate;
+    session.researchLedger = next.researchLedger;
+    session.researchRemainder = 0n;
+    session.researchInflowRemainders = {};
     session.lastValidationDeviation = deviation;
     session.validationCount += 1;
     if (deviation >= 0.15) {
@@ -310,44 +459,82 @@ function runShadowValidation(session: PureIdleMacroSession): void {
       session.lastValidationReason = "产线偏差低于 15%，继续使用当前合同";
     }
   } catch (error) {
+    if (error instanceof Error && (error.name === "AbortError" || error.name === "PureIdleMacroDeadlineError")) {
+      throw error;
+    }
     session.validationFailures += 1;
     session.lastValidationReason = error instanceof Error ? error.message : "影子校验失败，继续使用上一份合同";
   } finally {
     session.lastValidationDurationMs = Math.max(0, performance.now() - startedAt);
-    session.phase = "running";
+    session.computationDurationMs = session.lastValidationDurationMs;
+    session.phase = session.degradedReason ? "conservative" : "running";
   }
 }
 
 export function advancePureIdleMacroSession(
   session: PureIdleMacroSession,
   targetWallSeconds: number,
+  options: PureIdleMacroOperationOptions = {},
 ): PureIdleMacroSummary {
+  throwIfMacroInterrupted(options);
   if (!Number.isFinite(targetWallSeconds) || targetWallSeconds < session.settledWallSeconds) {
     throw new Error("纯挂机目标墙钟时间无效或发生倒退");
   }
   if (session.settledWallSeconds + 1e-9 < targetWallSeconds) {
+    const operationStartedAt = macroNow();
     // Live orchestration calls this at each 30-second boundary. A tab that
     // slept or reloaded can arrive with days of debt; applying one equivalent
     // affine window keeps recovery cost independent of wall-clock duration.
     const wallSeconds = targetWallSeconds - session.settledWallSeconds;
+    refreshTimeWarpPowerSnapshotInPlace(session.candidate);
     const multiplier = Math.max(1, getEffectiveSimulationMultiplier(session.candidate));
+    session.actualMultiplier = multiplier;
     const simulationSeconds = wallSeconds * multiplier;
-    const applied = applyPureIdleAffineContract(session.candidate, session.contract, simulationSeconds, wallSeconds);
+    const applied = session.conservativeOnly
+      ? { ok: false as const, boundaryCorrections: 0, failure: session.degradedReason ?? "零校准保守宏观" }
+      : applyPureIdleAffineContract(session.candidate, session.contract, simulationSeconds, wallSeconds);
+    throwIfMacroInterrupted(options);
     if (!applied.ok) {
-      session.phase = "failed";
-      throw new Error(applied.failure ?? "宏观守恒桶未通过安全校验");
+      // The last complete candidate remains intact because affine application
+      // is transactional. Freeze uncertain factory subsystems, advance time
+      // and the exact research ledger, and keep the session recoverable.
+      session.phase = "conservative";
+      session.degradedReason = applied.failure ?? "宏观守恒桶未通过安全校验";
+      session.lastValidationReason = `已切换保守宏观：${session.degradedReason}`;
+      if (!session.conservativeOnly) session.validationFailures += 1;
+      session.candidate.elapsedSeconds += simulationSeconds;
+    } else {
+      session.phase = "running";
+      session.degradedReason = undefined;
+      session.boundaryCorrections += applied.boundaryCorrections;
     }
-    session.boundaryCorrections += applied.boundaryCorrections;
+    const research = advanceResearchMacroInPlace(
+      session.candidate,
+      session.researchLedger,
+      simulationSeconds,
+      session.researchRemainder,
+      session.researchInflowRemainders,
+    );
+    session.researchRemainder = research.remainder;
+    session.researchInflowRemainders = research.inflowRemainders;
+    throwIfMacroInterrupted(options);
+    if (research.completedFiniteTechIds.length > 0 || research.completedInfiniteLevels.length > 0) {
+      session.lastValidationReason = `科研边界完成：有限科技 ${research.completedFiniteTechIds.length} 项，无限科技 ${research.completedInfiniteLevels.length} 级`;
+    }
     session.settledWallSeconds += wallSeconds;
     session.settledSimulationSeconds += simulationSeconds;
     refreshDysonGenerationSnapshot(session.candidate);
-    if (session.mode === "stable" && session.nextValidationAtWallSeconds !== null &&
+    refreshTimeWarpPowerSnapshotInPlace(session.candidate);
+    session.actualMultiplier = Math.max(1, getEffectiveSimulationMultiplier(session.candidate));
+    session.computationDurationMs = Math.max(0,
+      macroNow() - operationStartedAt);
+    if (!session.conservativeOnly && session.mode === "stable" && session.nextValidationAtWallSeconds !== null &&
       session.settledWallSeconds + 1e-9 >= session.nextValidationAtWallSeconds) {
       const crossedValidations = Math.floor(
         (session.settledWallSeconds - session.nextValidationAtWallSeconds) /
         PURE_IDLE_MACRO_VALIDATION_WALL_SECONDS,
       ) + 1;
-      runShadowValidation(session);
+      runShadowValidation(session, options);
       if (crossedValidations > 1) {
         session.lastValidationReason = `${session.lastValidationReason ?? "影子校验已完成"}；休眠期间 ${crossedValidations - 1} 次历史校验已合并`;
       }
@@ -385,8 +572,10 @@ export function finalizePureIdleMacroSession(
   session: PureIdleMacroSession,
   targetWallSeconds: number,
   contentPackRegistry: ContentPackRegistry,
+  options: PureIdleMacroOperationOptions = {},
 ): { state: GameState; summary: PureIdleMacroSummary; rawBytes: number } {
-  advancePureIdleMacroSession(session, targetWallSeconds);
+  throwIfMacroInterrupted(options);
+  advancePureIdleMacroSession(session, targetWallSeconds, options);
   session.phase = "finalizing";
   session.candidate.timeWarp = {
     ...session.candidate.timeWarp,
@@ -397,7 +586,9 @@ export function finalizePureIdleMacroSession(
     requiredPowerKw: 0,
     allocatedPowerKw: 0,
   };
+  throwIfMacroInterrupted(options);
   const validation = validatePureIdleCandidate(session.candidate, contentPackRegistry);
+  throwIfMacroInterrupted(options);
   if (!validation.ok) {
     session.phase = "failed";
     throw new Error(`纯挂机候选存档未通过重载校验：${validation.failure}`);

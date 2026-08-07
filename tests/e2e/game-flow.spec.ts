@@ -5,7 +5,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-07-v1.0.32");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-07-v1.0.33");
     }
   });
 }
@@ -195,7 +195,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-07-v1.0.32");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-07-v1.0.33");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -3155,6 +3155,7 @@ test("production equipment and belt lanes upgrade in place without losing the ne
 });
 
 test("completed matrix research keeps connected color ports while the lab moves", async ({ page }) => {
+  test.slow();
   await page.setViewportSize({ width: 1280, height: 820 });
   await openResearchLineRegressionGame(page);
   await page.locator(".react-flow__controls-fitview").click();

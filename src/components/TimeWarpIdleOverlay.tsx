@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   Square,
   Sun,
+  X,
   Zap,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -99,6 +100,7 @@ function efficiencyTone(value: number | null): string {
 
 export function TimeWarpIdleOverlay({
   game,
+  baselineGame,
   startedAt,
   saveFailure,
   workerActive,
@@ -112,6 +114,7 @@ export function TimeWarpIdleOverlay({
   onContinueNormally,
 }: {
   game: GameState;
+  baselineGame: GameState;
   startedAt: number | null;
   saveFailure: SaveGameResult | null;
   workerActive: boolean;
@@ -132,15 +135,21 @@ export function TimeWarpIdleOverlay({
   }, []);
   const elapsed = startedAt ? Math.max(0, (now - startedAt) / 1_000) : 0;
   const fallback = useMemo(() => stateSnapshot(game), [game]);
+  const persistentBaseline = useMemo(() => stateSnapshot(baselineGame), [baselineGame]);
   const projected = projectedSnapshot(macroSummary, fallback, elapsed);
-  const baseline = macroSummary?.baseline ?? fallback;
-  const modeLabel = macroSummary?.mode === "extreme" ? "终局极限模式" : "稳定宏观模式";
+  const baseline = macroSummary?.baseline ?? persistentBaseline;
+  const modeLabel = macroSummary?.mode === "extreme" ? "终局极限模式" : "宏观纯挂机";
   const phaseLabel = macroSummary
-    ? macroSummary.phase === "validating" ? "正在后台校验"
-      : macroSummary.phase === "finalizing" ? "正在结算并验证存档"
-        : macroSummary.phase === "failed" ? "正在等待安全恢复"
-          : "纯挂机运行中"
-    : continueAvailable ? "需要恢复普通模拟" : "正在校准产线";
+    ? macroSummary.phase === "preparing-power" ? "正在准备供电快照"
+      : macroSummary.phase === "calibrating" ? "正在执行有界精确校准"
+        : macroSummary.phase === "conservative" ? "保守宏观结算中"
+          : macroSummary.phase === "research-boundary" ? "正在处理科研边界"
+            : macroSummary.phase === "validating" ? "正在后台校验"
+              : macroSummary.phase === "finalizing" ? "正在结算并验证存档"
+                : macroSummary.phase === "recovering" ? "正在恢复 Worker"
+                  : macroSummary.phase === "failed" ? "正在等待安全恢复"
+                    : "正常宏观结算中"
+    : continueAvailable ? "源存档或恢复日志需要处理" : "正在准备供电快照";
   const nextValidationSeconds = macroSummary?.nextValidationAtWallSeconds == null
     ? null
     : Math.max(0, macroSummary.nextValidationAtWallSeconds - elapsed);
@@ -148,7 +157,10 @@ export function TimeWarpIdleOverlay({
     .filter(([, amount]) => amount > 0)
     .map(([itemId, amount]) => ({ itemId, amount, delta: amount - (baseline.activityDelivered[itemId] ?? 0) }));
   const stop = async () => {
-    if (stopping) return;
+    if (stopping) {
+      await onStop();
+      return;
+    }
     setStopping(true);
     try {
       await onStop();
@@ -173,11 +185,12 @@ export function TimeWarpIdleOverlay({
           <span className="time-warp-idle-lock"><ShieldCheck size={15} />画布已冻结</span>
         </header>
         <p className="time-warp-idle-lead">{continueAvailable
-          ? "当前恢复检查点包含需要精确处理的科研。为保护奖励和队列，宏观结果尚未提交；可明确放弃未结算时间后回到普通模拟。"
-          : "每 30 秒执行一次库存守恒宏观结算。页面进入后台后保留 5 分钟高倍率宽限，超出部分自动按普通离线规则结算。停止、刷新或 Worker 异常时会从恢复检查点重建，不改变生产规则或存档格式。"}</p>
+          ? "当前恢复记录未通过安全校验，未结算候选不会覆盖主存档。"
+          : "每 30 秒执行一次有界宏观结算，有限与无限科研由独立整数账本处理。页面进入后台后保留 5 分钟高倍率宽限，超出部分自动切换普通离线结算。"}</p>
 
         <section className="time-warp-idle-metrics" aria-label="运行摘要">
           <div><Gauge size={17} /><span>实际倍率</span><strong>{macroSummary?.actualMultiplier ?? computeLimits.actualMultiplier}x</strong></div>
+          <div><Zap size={17} /><span>请求 / 供电倍率</span><strong>{macroSummary?.requestedMultiplier ?? game.timeWarp.requestedMultiplier}x / {macroSummary?.powerLimitedMultiplier ?? computeLimits.powerLimitedMultiplier}x</strong></div>
           <div><Clock3 size={17} /><span>本次挂机</span><strong>{formatDuration(elapsed)}</strong></div>
           <div className={`efficiency-${efficiencyTone(macroSummary?.minimumEfficiency ?? null)}`}><Activity size={17} /><span>关键产线最低效率</span><strong>{efficiencyLabel(macroSummary?.minimumEfficiency ?? null)}</strong><small>{macroSummary?.limitingReason ?? "等待校准"}</small></div>
           <div><HardDrive size={17} /><span>保存与恢复</span><strong className={saveFailure ? "warning" : "ready"}>{saveFailure ? "需要处理" : "检查点正常"}</strong><small>{recoveryStatus}</small></div>
@@ -197,6 +210,10 @@ export function TimeWarpIdleOverlay({
             <span>当前壳面帆<strong>{formatQuantityCompact(projected.shellSails)}</strong><small>{signedQuantity(projected.shellSails - baseline.shellSails)}</small></span>
             <span>轨道太阳帆<strong>{formatQuantityCompact(projected.sailsInOrbit)}</strong><small>{signedQuantity(projected.sailsInOrbit - baseline.sailsInOrbit)}</small></span>
           </div>
+          {macroSummary ? <div className="time-warp-activity-output" aria-label="科研结算">
+            <strong>科研整数账本</strong>
+            <span>{macroSummary.research.label}<b>{macroSummary.research.level !== undefined ? `Lv.${macroSummary.research.level}` : macroSummary.research.kind === "none" ? "待命" : `${((macroSummary.research.completionBasisPoints ?? 0) / 100).toFixed(1)}%`}</b><small>启动时：{macroSummary.baselineResearch.label}</small></span>
+          </div> : null}
           {activityRows.length > 0 ? <div className="time-warp-activity-output"><strong>巨构活动实际交付</strong>{activityRows.map((row) => <span key={row.itemId}>{row.itemId}<b>{formatQuantityCompact(row.amount)}</b><small>{signedQuantity(row.delta)}</small></span>)}</div> : null}
         </section>
 
@@ -208,8 +225,8 @@ export function TimeWarpIdleOverlay({
         <details className="time-warp-idle-diagnostics">
           <summary>计算诊断</summary>
           <section className="time-warp-idle-status">
-            <div><span>请求倍率</span><strong>{game.timeWarp.requestedMultiplier}x</strong></div>
-            <div><span>供电上限</span><strong>{computeLimits.powerLimitedMultiplier}x</strong></div>
+            <div><span>请求倍率</span><strong>{macroSummary?.requestedMultiplier ?? game.timeWarp.requestedMultiplier}x</strong></div>
+            <div><span>供电上限</span><strong>{macroSummary?.powerLimitedMultiplier ?? computeLimits.powerLimitedMultiplier}x</strong></div>
             <div><span>精确计算能力</span><strong>约 {computeLimits.computeLimitedMultiplier}x</strong></div>
             <div><span>宏观算法</span><strong>{macroSummary?.algorithmVersion ?? "等待初始化"}</strong></div>
             <div><span>已结算墙钟</span><strong>{formatDuration(macroSummary?.settledWallSeconds ?? 0)}</strong></div>
@@ -219,13 +236,15 @@ export function TimeWarpIdleOverlay({
             <div><span>边界修正</span><strong>{macroSummary?.boundaryCorrections ?? 0}</strong></div>
             {!macroSummary ? <><div><span>旧调度积压</span><strong>{pendingSimulationSeconds.toFixed(1)} 秒</strong></div><div><span>旧 Worker 状态</span><strong>{workerActive ? "可用" : "不可用"}</strong></div><div><span>旧调度原因</span><strong>{THROTTLE_REASON_LABELS[computeLimits.reason]}</strong></div><div><span>最近耗时</span><strong>{computeState.sampleCount > 0 ? `${Math.round(computeState.recentWorkerDurationMs)} ms` : "测量中"}</strong></div></> : null}
             {macroSummary?.lastValidationReason ? <div><span>最近校验</span><strong>{macroSummary.lastValidationReason}</strong></div> : null}
+            {macroSummary?.degradedReason ? <div><span>降级原因</span><strong>{macroSummary.degradedReason}</strong></div> : null}
+            {macroSummary ? <div><span>最近现实耗时</span><strong>{Math.round(macroSummary.computationDurationMs)} ms</strong></div> : null}
           </section>
         </details>
 
         <footer>
           {saveFailure ? <span className="time-warp-idle-warning" role="alert"><AlertTriangle size={15} />本地存档尚未成功写入，恢复日志仍保留。</span> : continueAvailable ? <span className="time-warp-idle-warning" role="alert"><AlertTriangle size={15} />恢复普通模拟不会发放这段未结算时间。</span> : <span><CheckCircle2 size={15} />停止成功并确认主存档后才会清理恢复日志</span>}
           <div className="time-warp-idle-actions">
-            {continueAvailable ? <button className="time-warp-idle-continue" type="button" aria-label="放弃未结算并继续普通模拟" disabled={stopping} onClick={() => void continueNormally()}><Play size={16} />{stopping ? "正在恢复普通模拟" : "放弃未结算并继续模拟"}</button> : <button className="time-warp-idle-stop" type="button" aria-label="停止并结算纯挂机" disabled={stopping} onClick={() => void stop()}><Square size={16} />{stopping ? "正在结算并验证" : "停止并结算"}</button>}
+            {continueAvailable ? <button className="time-warp-idle-continue" type="button" aria-label="放弃未结算并继续普通模拟" disabled={stopping} onClick={() => void continueNormally()}><Play size={16} />{stopping ? "正在恢复普通模拟" : "放弃未结算并继续模拟"}</button> : <button className="time-warp-idle-stop" type="button" aria-label={stopping ? "取消结算并保留原存档" : "停止并结算纯挂机"} onClick={() => void stop()}>{stopping ? <X size={16} /> : <Square size={16} />}{stopping ? "取消并保留原档" : "停止并结算"}</button>}
           </div>
         </footer>
       </div>

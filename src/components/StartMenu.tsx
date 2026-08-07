@@ -80,11 +80,22 @@ import { exportTextFile } from "../game/fileExport";
 import { readOfflineApproximationEnabled, writeOfflineApproximationEnabled, type OfflineApproximationReport } from "../game/offlineApproximation";
 import { readShowRunLogPreference, readThemePreference, writeShowRunLogPreference, writeThemePreference } from "../game/uiPreferences";
 import { readPureIdleRecovery } from "../game/pureIdleRecovery";
+import type { OfflineSimulationPhase, OfflineSimulationProgress } from "../game/offlineSimulation";
 
 type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "new";
 type CloudAuthMode = "login" | "register" | "forgot" | "reset";
 type MenuMessage = { tone: "busy" | "ready" | "warning" | "error"; text: string } | null;
-type OfflineLoadProgress = { label: string; completedSeconds: number; totalSeconds: number; progress: number };
+type OfflineLoadProgress = OfflineSimulationProgress & { label: string };
+
+function offlineSimulationPhaseLabel(phase: OfflineSimulationPhase): string {
+  if (phase === "preparing") return "准备状态";
+  if (phase === "calibrating") return "精确校准";
+  if (phase === "macro") return "宏观结算";
+  if (phase === "conservative") return "保守宏观";
+  if (phase === "validating") return "安全验证";
+  if (phase === "saving") return "保存校验";
+  return "有界精确结算";
+}
 
 function cloudUploadStageLabel(stage: CloudUploadStage): string {
   if (stage === "compressing") return "压缩存档";
@@ -450,7 +461,14 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     if (loaded.offlineSeconds >= 1) {
       const controller = new AbortController();
       offlineAbortRef.current = controller;
-      setOfflineProgress({ label, completedSeconds: 0, totalSeconds: loaded.offlineSeconds, progress: 0 });
+      setOfflineProgress({
+        label,
+        completedSeconds: 0,
+        totalSeconds: loaded.offlineSeconds,
+        progress: 0,
+        phase: "preparing",
+        wallClockMs: 0,
+      });
       const { runOfflineSimulationInWorkerDetailed } = await importWithRecovery(() => import("../game/offlineSimulation"), "离线结算模块");
       try {
         const result = await runOfflineSimulationInWorkerDetailed(loaded.state, loaded.offlineSeconds, {
@@ -1023,7 +1041,9 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
           <Activity size={22} />
           <span>
             <strong id="offline-progress-title">正在进行离线运算</strong>
-            <small>{offlineProgress.label} · {Math.floor(offlineProgress.completedSeconds).toLocaleString("zh-CN")} / {Math.floor(offlineProgress.totalSeconds).toLocaleString("zh-CN")} 秒</small>
+             <small>{offlineProgress.label} · {offlineSimulationPhaseLabel(offlineProgress.phase)} · {Math.floor(offlineProgress.completedSeconds).toLocaleString("zh-CN")} / {Math.floor(offlineProgress.totalSeconds).toLocaleString("zh-CN")} 模拟秒</small>
+             <small>现实耗时 {(offlineProgress.wallClockMs / 1_000).toFixed(1)} 秒{offlineProgress.estimatedRemainingMs !== undefined ? ` · 预计剩余 ${(offlineProgress.estimatedRemainingMs / 1_000).toFixed(1)} 秒` : ""}</small>
+             {offlineProgress.degradedReason ? <small>降级原因：{offlineProgress.degradedReason}</small> : null}
           </span>
         </div>
         <progress max={1} value={Math.max(0, Math.min(1, offlineProgress.progress))} />

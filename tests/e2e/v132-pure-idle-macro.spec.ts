@@ -14,7 +14,7 @@ async function resetPureIdleRecoveryDatabase(page: import("@playwright/test").Pa
   }));
 }
 
-test.describe("1.0.32 pure-idle macro recovery", () => {
+test.describe("1.0.33 pure-idle macro recovery", () => {
   test.beforeEach(async ({ page }) => {
     await page.route(`**${harnessPath}`, (route) => route.fulfill({
       status: 200,
@@ -196,6 +196,505 @@ test.describe("1.0.32 pure-idle macro recovery", () => {
     expect(result.durationMs).toBeLessThan(30_000);
   });
 
+  test("migrates a pure-idle-macro-v2 recovery summary with active research to v3", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const contentPacks = await import("/src/game/contentPacks.ts");
+      const engine = await import("/src/game/engine.ts");
+      const macro = await import("/src/game/pureIdleMacroClient.ts");
+      const recovery = await import("/src/game/pureIdleRecovery.ts");
+      const state = engine.createInitialState(20_260_807, false);
+      state.research.selectedTechId = "electromagnetic_matrix";
+      state.paused = false;
+      state.entities = [{
+        id: "macro-controller",
+        kind: "machine",
+        planetId: "home",
+        position: { x: 0, y: 0 },
+        interactionLocked: false,
+        buildingId: "time_warp_device",
+        machineCount: 1,
+        minerCount: 0,
+        inputs: {},
+        outputs: {},
+        progress: 0,
+        routingCursor: 0,
+        utilization: 0,
+        productionRate: 0,
+      }];
+      state.belts = [];
+      state.timeWarp = { ...state.timeWarp, controllerEntityId: "macro-controller", enabled: true };
+      const created = await recovery.createPureIdleRecovery(state, "stable", 1_000, "owner-v2", 1_000);
+      if (!created.ok) throw new Error(created.message);
+
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("dsp-idle-network.pure-idle-recovery", 1);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const transaction = db.transaction("records", "readwrite");
+        const store = transaction.objectStore("records");
+        const get = store.get("heartbeat");
+        get.onsuccess = () => {
+          store.put({
+            ...get.result,
+            phase: "failed",
+            summary: {
+              phase: "failed",
+              mode: "stable",
+              algorithmVersion: "pure-idle-macro-v2",
+              settledWallSeconds: 30,
+            },
+          });
+        };
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+      db.close();
+      await recovery.releasePureIdleRecoveryLease(created.record.sessionId, "owner-v2", 1_001);
+      const claimed = await recovery.claimPureIdleRecovery("owner-v3", 1_002);
+      if (!claimed.ok) throw new Error(claimed.message);
+      const client = new macro.PureIdleMacroClient();
+      const summary = await client.initialize(
+        claimed.record.state,
+        claimed.record.mode,
+        contentPacks.createContentPackRuntimeSnapshot(contentPacks.createContentPackRegistry()),
+      );
+      client.close();
+      await recovery.clearPureIdleRecovery(claimed.record.sessionId, "owner-v3");
+      return {
+        oldAlgorithm: claimed.record.summary?.algorithmVersion,
+        newAlgorithm: summary.algorithmVersion,
+        researchKind: summary.research.kind,
+        researchId: summary.research.id,
+      };
+    });
+
+    expect(result.oldAlgorithm).toBe("pure-idle-macro-v2");
+    expect(result.newAlgorithm).toBe("pure-idle-macro-v3");
+    expect(result).toMatchObject({ researchKind: "finite", researchId: "electromagnetic_matrix" });
+  });
+
+  test("cancels a blocked macro Worker within one second and leaves the source unchanged", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const benchmark = await import("/src/game/benchmark.ts");
+      const contentPacks = await import("/src/game/contentPacks.ts");
+      const engine = await import("/src/game/engine.ts");
+      const macroModule = await import("/src/game/pureIdleMacroClient.ts");
+      const NativeWorker = window.Worker;
+      class BlockedMacroWorker extends NativeWorker {
+        constructor(url: string | URL, options?: WorkerOptions) {
+          super(url, options);
+          if (options?.name === "pure-idle-macro") this.terminate();
+        }
+      }
+      window.Worker = BlockedMacroWorker as typeof Worker;
+      const state = engine.createInitialState(20_260_807, false);
+      state.paused = false;
+      state.entities = [{
+        id: "macro-controller",
+        kind: "machine",
+        planetId: "home",
+        position: { x: 0, y: 0 },
+        interactionLocked: false,
+        buildingId: "time_warp_device",
+        machineCount: 1,
+        minerCount: 0,
+        inputs: {},
+        outputs: {},
+        progress: 0,
+        routingCursor: 0,
+        utilization: 0,
+        productionRate: 0,
+      }];
+      state.belts = [];
+      state.timeWarp = { ...state.timeWarp, controllerEntityId: "macro-controller", enabled: true };
+      const sourceHash = benchmark.hashGameState(state);
+      const client = new macroModule.PureIdleMacroClient({ operationDeadlineMs: 5_000 });
+      const startedAt = performance.now();
+      const pending = client.initialize(
+        state,
+        "stable",
+        contentPacks.createContentPackRuntimeSnapshot(contentPacks.createContentPackRegistry()),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      client.cancel("test cancellation");
+      let errorName = "";
+      try {
+        await pending;
+      } catch (error) {
+        errorName = error instanceof Error ? error.name : "unknown";
+      } finally {
+        window.Worker = NativeWorker;
+      }
+      return {
+        durationMs: performance.now() - startedAt,
+        errorName,
+        sourceUnchanged: benchmark.hashGameState(state) === sourceHash,
+      };
+    });
+
+    expect(result.errorName).toBe("AbortError");
+    expect(result.durationMs).toBeLessThan(1_000);
+    expect(result.sourceUnchanged).toBe(true);
+  });
+
+  test("keeps an ordinary fast-contract failure on the conservative Worker path", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const benchmark = await import("/src/game/benchmark.ts");
+      const engine = await import("/src/game/engine.ts");
+      const offline = await import("/src/game/offlineSimulation.ts");
+      const state = engine.createInitialState(20_260_807, false);
+      state.entities = [];
+      state.belts = [];
+      state.paused = false;
+      state.timeWarp.pendingSimulationSeconds = 1;
+      state.timeWarp.pendingWallSeconds = 1;
+      const sourceHash = benchmark.hashGameState(state);
+      const phases: string[] = [];
+      const startedAt = performance.now();
+      const settled = await offline.runOfflineSimulationInWorkerDetailed(state, 7 * 24 * 60 * 60, {
+        approximate: true,
+        deadlineMs: 5_000,
+        onProgress: (progress) => phases.push(progress.phase),
+      });
+      return {
+        durationMs: performance.now() - startedAt,
+        status: settled.approximation?.settlementStatus,
+        phases,
+        elapsedDelta: settled.state.elapsedSeconds - state.elapsedSeconds,
+        sourceUnchanged: benchmark.hashGameState(state) === sourceHash,
+      };
+    });
+
+    expect(result.status).toBe("conservative");
+    expect(result.phases).toContain("conservative");
+    expect(result.phases).not.toContain("bounded-exact");
+    expect(result.elapsedDelta).toBe(7 * 24 * 60 * 60);
+    expect(result.sourceUnchanged).toBe(true);
+    expect(result.durationMs).toBeLessThan(5_000);
+  });
+
+  test("terminates a hung fast Worker and performs only one bounded conservative restart", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const benchmark = await import("/src/game/benchmark.ts");
+      const engine = await import("/src/game/engine.ts");
+      const offline = await import("/src/game/offlineSimulation.ts");
+      const NativeWorker = window.Worker;
+      let offlineWorkerCount = 0;
+      class FirstOfflineWorkerHangs extends NativeWorker {
+        constructor(url: string | URL, options?: WorkerOptions) {
+          super(url, options);
+          if (options?.name === "offline-simulation" && ++offlineWorkerCount === 1) this.terminate();
+        }
+      }
+      window.Worker = FirstOfflineWorkerHangs as typeof Worker;
+      const state = engine.createInitialState(20_260_807, false);
+      state.entities = [];
+      state.belts = [];
+      state.paused = false;
+      const sourceHash = benchmark.hashGameState(state);
+      const startedAt = performance.now();
+      try {
+        const settled = await offline.runOfflineSimulationInWorkerDetailed(state, 30 * 24 * 60 * 60, {
+          approximate: true,
+          deadlineMs: 4_000,
+        });
+        return {
+          durationMs: performance.now() - startedAt,
+          offlineWorkerCount,
+          status: settled.approximation?.settlementStatus,
+          sourceUnchanged: benchmark.hashGameState(state) === sourceHash,
+        };
+      } finally {
+        window.Worker = NativeWorker;
+      }
+    });
+
+    expect(result.offlineWorkerCount).toBe(2);
+    expect(result.status).toBe("conservative");
+    expect(result.sourceUnchanged).toBe(true);
+    expect(result.durationMs).toBeLessThan(4_500);
+  });
+
+  test("handles worker.onerror with exactly one conservative restart", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const benchmark = await import("/src/game/benchmark.ts");
+      const engine = await import("/src/game/engine.ts");
+      const offline = await import("/src/game/offlineSimulation.ts");
+      const NativeWorker = window.Worker;
+      let offlineWorkerCount = 0;
+      class FirstOfflineWorkerErrors extends NativeWorker {
+        constructor(url: string | URL, options?: WorkerOptions) {
+          super(url, options);
+          if (options?.name !== "offline-simulation" || ++offlineWorkerCount !== 1) return;
+          this.terminate();
+          this.postMessage = ((message: { type?: string }) => {
+            if (message.type !== "start") return;
+            window.setTimeout(() => this.dispatchEvent(new ErrorEvent("error", {
+              message: "injected offline Worker crash",
+            })), 0);
+          }) as typeof this.postMessage;
+        }
+      }
+      window.Worker = FirstOfflineWorkerErrors as typeof Worker;
+      const state = engine.createInitialState(20_260_807, false);
+      state.entities = [];
+      state.belts = [];
+      state.paused = false;
+      const sourceHash = benchmark.hashGameState(state);
+      try {
+        const settled = await offline.runOfflineSimulationInWorkerDetailed(state, 30 * 24 * 60 * 60, {
+          approximate: true,
+          deadlineMs: 5_000,
+        });
+        return {
+          offlineWorkerCount,
+          status: settled.approximation?.settlementStatus,
+          sourceUnchanged: benchmark.hashGameState(state) === sourceHash,
+        };
+      } finally {
+        window.Worker = NativeWorker;
+      }
+    });
+
+    expect(result.offlineWorkerCount).toBe(2);
+    expect(result.status).toBe("conservative");
+    expect(result.sourceUnchanged).toBe(true);
+  });
+
+  test("ignores progress delivered by the retired Worker after conservative restart", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const engine = await import("/src/game/engine.ts");
+      const offline = await import("/src/game/offlineSimulation.ts");
+      const NativeWorker = window.Worker;
+      let offlineWorkerCount = 0;
+      class FirstOfflineWorkerReportsLate extends NativeWorker {
+        constructor(url: string | URL, options?: WorkerOptions) {
+          super(url, options);
+          if (options?.name !== "offline-simulation" || ++offlineWorkerCount !== 1) return;
+          this.terminate();
+          this.postMessage = ((message: { type?: string; id?: number }) => {
+            if (message.type !== "start" || typeof message.id !== "number") return;
+            const retiredOnMessage = this.onmessage;
+            window.setTimeout(() => this.dispatchEvent(new ErrorEvent("error", {
+              message: "retire first offline Worker",
+            })), 0);
+            window.setTimeout(() => retiredOnMessage?.call(this, new MessageEvent("message", {
+              data: {
+                type: "progress",
+                id: message.id,
+                completedSeconds: 1,
+                totalSeconds: 2,
+                progress: 0.5,
+                phase: "macro",
+                wallClockMs: 1,
+                algorithmVersion: "late-retired-worker",
+              },
+            })), 50);
+          }) as typeof this.postMessage;
+        }
+      }
+      window.Worker = FirstOfflineWorkerReportsLate as typeof Worker;
+      const state = engine.createInitialState(20_260_807, false);
+      state.entities = [];
+      state.belts = [];
+      state.paused = false;
+      const algorithms: string[] = [];
+      try {
+        const settled = await offline.runOfflineSimulationInWorkerDetailed(state, 7 * 24 * 60 * 60, {
+          approximate: true,
+          deadlineMs: 5_000,
+          onProgress: (progress) => algorithms.push(progress.algorithmVersion ?? "unknown"),
+        });
+        await new Promise((resolve) => window.setTimeout(resolve, 100));
+        return {
+          offlineWorkerCount,
+          algorithms,
+          status: settled.approximation?.settlementStatus,
+        };
+      } finally {
+        window.Worker = NativeWorker;
+      }
+    });
+
+    expect(result.offlineWorkerCount).toBe(2);
+    expect(result.status).toBe("conservative");
+    expect(result.algorithms).not.toContain("late-retired-worker");
+  });
+
+  test("retries a recoverable Worker error response exactly once", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const engine = await import("/src/game/engine.ts");
+      const offline = await import("/src/game/offlineSimulation.ts");
+      const NativeWorker = window.Worker;
+      let offlineWorkerCount = 0;
+      class FirstOfflineWorkerRespondsWithError extends NativeWorker {
+        constructor(url: string | URL, options?: WorkerOptions) {
+          super(url, options);
+          if (options?.name !== "offline-simulation" || ++offlineWorkerCount !== 1) return;
+          this.terminate();
+          this.postMessage = ((message: { type?: string; id?: number }) => {
+            if (message.type !== "start" || typeof message.id !== "number") return;
+            window.setTimeout(() => this.dispatchEvent(new MessageEvent("message", {
+              data: {
+                type: "error",
+                id: message.id,
+                code: "worker-failure",
+                message: "injected recoverable operation error",
+              },
+            })), 0);
+          }) as typeof this.postMessage;
+        }
+      }
+      window.Worker = FirstOfflineWorkerRespondsWithError as typeof Worker;
+      const state = engine.createInitialState(20_260_807, false);
+      state.entities = [];
+      state.belts = [];
+      state.paused = false;
+      try {
+        const settled = await offline.runOfflineSimulationInWorkerDetailed(state, 7 * 24 * 60 * 60, {
+          approximate: true,
+          deadlineMs: 5_000,
+        });
+        return {
+          offlineWorkerCount,
+          status: settled.approximation?.settlementStatus,
+        };
+      } finally {
+        window.Worker = NativeWorker;
+      }
+    });
+
+    expect(result.offlineWorkerCount).toBe(2);
+    expect(result.status).toBe("conservative");
+  });
+
+  test("does not retry a Worker response that classifies the source as invalid", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const engine = await import("/src/game/engine.ts");
+      const offline = await import("/src/game/offlineSimulation.ts");
+      const NativeWorker = window.Worker;
+      let offlineWorkerCount = 0;
+      class InvalidSourceOfflineWorker extends NativeWorker {
+        constructor(url: string | URL, options?: WorkerOptions) {
+          super(url, options);
+          if (options?.name !== "offline-simulation") return;
+          offlineWorkerCount += 1;
+          this.terminate();
+          this.postMessage = ((message: { type?: string; id?: number }) => {
+            if (message.type !== "start" || typeof message.id !== "number") return;
+            window.setTimeout(() => this.dispatchEvent(new MessageEvent("message", {
+              data: {
+                type: "error",
+                id: message.id,
+                code: "invalid-source",
+                message: "injected invalid source",
+              },
+            })), 0);
+          }) as typeof this.postMessage;
+        }
+      }
+      window.Worker = InvalidSourceOfflineWorker as typeof Worker;
+      const state = engine.createInitialState(20_260_807, false);
+      state.entities = [];
+      state.belts = [];
+      state.paused = false;
+      let message = "";
+      try {
+        await offline.runOfflineSimulationInWorkerDetailed(state, 7 * 24 * 60 * 60, {
+          approximate: true,
+          deadlineMs: 5_000,
+        });
+      } catch (error) {
+        message = error instanceof Error ? error.message : "unknown";
+      } finally {
+        window.Worker = NativeWorker;
+      }
+      return { offlineWorkerCount, message };
+    });
+
+    expect(result.offlineWorkerCount).toBe(1);
+    expect(result.message).toContain("injected invalid source");
+  });
+
+  test("persists two Worker failures across reload and keeps every macro operation zero-calibration", async ({ page }) => {
+    const created = await page.evaluate(async () => {
+      const engine = await import("/src/game/engine.ts");
+      const recovery = await import("/src/game/pureIdleRecovery.ts");
+      const state = engine.createInitialState(20_260_807, false);
+      state.entities = [{
+        id: "macro-controller",
+        kind: "machine",
+        planetId: "home",
+        position: { x: 0, y: 0 },
+        interactionLocked: false,
+        buildingId: "time_warp_device",
+        machineCount: 1,
+        minerCount: 0,
+        inputs: {},
+        outputs: {},
+        progress: 0,
+        routingCursor: 0,
+        utilization: 0,
+        productionRate: 0,
+      }];
+      state.belts = [];
+      state.paused = false;
+      state.timeWarp = { ...state.timeWarp, controllerEntityId: "macro-controller", enabled: true };
+      const claim = await recovery.createPureIdleRecovery(state, "stable", 1_000, "failure-owner-a", 1_000);
+      if (!claim.ok) throw new Error(claim.message);
+      const first = await recovery.recordPureIdleWorkerFailure(claim.record.sessionId, "failure-owner-a", "first", 1_001);
+      const second = await recovery.recordPureIdleWorkerFailure(claim.record.sessionId, "failure-owner-a", "second", 1_002);
+      await recovery.releasePureIdleRecoveryLease(claim.record.sessionId, "failure-owner-a", 1_003);
+      return { sessionId: claim.record.sessionId, first, second };
+    });
+
+    expect(created.first).toBe(1);
+    expect(created.second).toBe(2);
+    await page.reload();
+
+    const restored = await page.evaluate(async () => {
+      const contentPacks = await import("/src/game/contentPacks.ts");
+      const macro = await import("/src/game/pureIdleMacroClient.ts");
+      const recovery = await import("/src/game/pureIdleRecovery.ts");
+      const storage = await import("/src/game/storage.ts");
+      const claim = await recovery.claimPureIdleRecovery("failure-owner-b", 1_004);
+      if (!claim.ok) throw new Error(claim.message);
+      const forceConservativeReason = recovery.getPureIdleForceConservativeReason(claim.record);
+      const client = new macro.PureIdleMacroClient();
+      try {
+        const initialized = await client.initialize(
+          claim.record.state,
+          claim.record.mode,
+          contentPacks.createContentPackRuntimeSnapshot(contentPacks.createContentPackRegistry()),
+          { forceConservativeReason },
+        );
+        const advanced = await client.advance(60);
+        const finalized = await client.finalize(60);
+        const valid = storage.inspectSave(storage.serializeEnvelope(finalized.state)).valid;
+        await recovery.clearPureIdleRecovery(claim.record.sessionId, "failure-owner-b");
+        return {
+          persistedFailures: claim.record.workerRestartCount,
+          forceConservativeReason,
+          initialized,
+          advanced,
+          finalized: finalized.summary,
+          valid,
+        };
+      } finally {
+        client.close();
+      }
+    });
+
+    expect(restored.persistedFailures).toBe(2);
+    expect(restored.forceConservativeReason).toContain("连续 2 次 Worker 失败");
+    expect(restored.initialized).toMatchObject({ conservativeOnly: true, calibrationWindowsCompleted: 0 });
+    expect(restored.advanced).toMatchObject({ conservativeOnly: true, calibrationWindowsCompleted: 0 });
+    expect(restored.finalized).toMatchObject({ conservativeOnly: true, calibrationWindowsCompleted: 0 });
+    expect(restored.valid).toBe(true);
+  });
+
   test("30-day macro settlement of the configured real endgame save remains reloadable", async ({ page }) => {
     test.skip(!fixturePath, "set DSP_PURE_IDLE_MACRO_FIXTURE to a read-only endgame save");
     test.setTimeout(120_000);
@@ -217,13 +716,19 @@ test.describe("1.0.32 pure-idle macro recovery", () => {
       if (!controller?.id) throw new Error("fixture has no time-warp controller");
       state.paused = false;
       state.speedrun = undefined;
-      state.research.selectedTechId = null;
-      state.endgame.activeInfiniteResearchId = null;
       state.timeWarp.controllerEntityId = controller.id;
       state.timeWarp.enabled = true;
       state.timeWarp.pendingSimulationSeconds = 0;
       state.timeWarp.pendingWallSeconds = 0;
       const sourceHash = benchmark.hashGameState(state);
+      const researchBefore = state.research.selectedTechId ?? state.endgame.activeInfiniteResearchId;
+      const criticalBefore = {
+        whiteMatrix: state.totalProduced.universe_matrix ?? 0,
+        structurePoints: state.dysonSphere.structurePoints,
+        rockets: state.dysonSphere.totalRocketsLaunched,
+        sails: state.dysonSphere.totalSailsAbsorbed,
+        generationKw: state.dysonSphere.generationKw + state.dysonSwarm.generationKw,
+      };
       const entities = state.entities.length;
       const belts = state.belts.length;
       const registry = contentPacks.createContentPackRuntimeSnapshot(contentPacks.createContentPackRegistry());
@@ -247,6 +752,24 @@ test.describe("1.0.32 pure-idle macro recovery", () => {
         entityCountPreserved: finalized.state.entities.length === entities,
         beltCountPreserved: finalized.state.belts.length === belts,
         settledWallSeconds: finalized.summary.settledWallSeconds,
+        algorithmVersion: finalized.summary.algorithmVersion,
+        conservativeOnly: finalized.summary.conservativeOnly,
+        degradedReason: finalized.summary.degradedReason,
+        requestedMultiplier: finalized.summary.requestedMultiplier,
+        powerLimitedMultiplier: finalized.summary.powerLimitedMultiplier,
+        actualMultiplier: finalized.summary.actualMultiplier,
+        researchBefore,
+        researchAfter: finalized.summary.research.id,
+        researchKind: finalized.summary.research.kind,
+        baselineResearch: finalized.summary.baselineResearch,
+        finalResearch: finalized.summary.research,
+        criticalDelta: {
+          whiteMatrix: finalized.state.totalProduced.universe_matrix - criticalBefore.whiteMatrix,
+          structurePoints: finalized.state.dysonSphere.structurePoints - criticalBefore.structurePoints,
+          rockets: finalized.state.dysonSphere.totalRocketsLaunched - criticalBefore.rockets,
+          sails: finalized.state.dysonSphere.totalSailsAbsorbed - criticalBefore.sails,
+          generationKw: finalized.state.dysonSphere.generationKw + finalized.state.dysonSwarm.generationKw - criticalBefore.generationKw,
+        },
       };
     });
 
@@ -256,6 +779,15 @@ test.describe("1.0.32 pure-idle macro recovery", () => {
     expect(result.entityCountPreserved).toBe(true);
     expect(result.beltCountPreserved).toBe(true);
     expect(result.settledWallSeconds).toBe(30 * 24 * 60 * 60);
+    expect(result.algorithmVersion).toBe("pure-idle-macro-v3");
+    expect(result.requestedMultiplier).toBeGreaterThanOrEqual(1);
+    expect(result.powerLimitedMultiplier).toBeGreaterThanOrEqual(1);
+    expect(result.actualMultiplier).toBeGreaterThanOrEqual(1);
+    expect(Object.values(result.criticalDelta).every((value) => Number.isFinite(value))).toBe(true);
+    if (result.researchBefore) {
+      expect(result.researchKind).not.toBe("none");
+      expect(result.researchAfter).toBeTruthy();
+    }
     expect(result.durationMs).toBeLessThan(30_000);
     console.log(`PURE_IDLE_MACRO_REAL_SAVE ${JSON.stringify(result)}`);
   });

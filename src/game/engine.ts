@@ -116,6 +116,7 @@ import {
   getInfiniteResearchCostBigInt,
   getInfiniteResearchMaximumLevel,
   isInfiniteResearchComplete,
+  settleInfiniteResearchBudget,
 } from "./infiniteResearch";
 import { ACTIVITY_MATERIAL_IDS, ACTIVITY_PROJECT_BY_ITEM } from "./activity";
 import { formatPowerKw } from "./units";
@@ -4131,31 +4132,34 @@ function consumeProliferatorPoints(entity: FactoryEntity, recipe: RecipeDefiniti
   entity.proliferatorPoints = Math.max(0, points - requiredPoints);
 }
 
-function investInfiniteResearch(state: GameState, id: InfiniteResearchId, requested: number): number {
-  let remaining = Math.max(0, Math.floor(requested));
-  if (remaining < 1) return 0;
+export function investInfiniteResearchBudgetInPlace(
+  state: GameState,
+  id: InfiniteResearchId,
+  requested: bigint,
+): bigint {
   const progress = state.endgame.infiniteResearch[id];
-  let invested = 0;
-  let guard = 0;
-  while (remaining > 0 && progress.level < getInfiniteResearchMaximumLevel(id) && guard++ < 1_001) {
-    const cost = getInfiniteResearchCostBigInt(id, progress.level);
-    const current = BigInt(progress.progress);
-    const needed = cost > current ? cost - current : 0n;
-    const chunk = Number(needed > BigInt(remaining) ? BigInt(remaining) : needed);
-    progress.progress = (current + BigInt(chunk)).toString();
-    remaining -= chunk;
-    invested += chunk;
-    if (BigInt(progress.progress) < cost) break;
-    progress.level += 1;
-    progress.progress = "0";
-    state.endgame.galacticScore = Math.floor(state.endgame.galacticScore + 1_000 + progress.level * 250);
-    if (!state.endgame.autoResearch) {
-      state.endgame.activeInfiniteResearchId = null;
-      break;
-    }
+  const result = settleInfiniteResearchBudget(
+    id,
+    progress.level,
+    progress.progress,
+    requested,
+    state.endgame.autoResearch,
+  );
+  progress.level = result.level;
+  progress.progress = result.progress;
+  for (const completedLevel of result.completedLevels) {
+    state.endgame.galacticScore = Math.floor(state.endgame.galacticScore + 1_000 + completedLevel * 250);
   }
-  if (progress.level >= getInfiniteResearchMaximumLevel(id)) state.endgame.activeInfiniteResearchId = null;
-  return invested;
+  if (result.reachedMaximum || (result.completedLevels.length > 0 && !state.endgame.autoResearch)) {
+    state.endgame.activeInfiniteResearchId = null;
+  }
+  return result.consumed;
+}
+
+function investInfiniteResearch(state: GameState, id: InfiniteResearchId, requested: number): number {
+  const safe = Math.max(0, Math.floor(requested));
+  if (safe < 1) return 0;
+  return Number(investInfiniteResearchBudgetInPlace(state, id, BigInt(safe)));
 }
 
 function dysonLaunchFactor(state: GameState, recipeId: RecipeId | undefined): number {
@@ -6332,6 +6336,37 @@ export function setTimeWarpController(state: GameState, entityId: string): GameS
   };
 }
 
+/**
+ * Refresh the time-warp controller through the same power allocator used by
+ * a normal engine step, without advancing production or elapsed time.
+ */
+export function refreshTimeWarpPowerSnapshotInPlace(state: GameState): void {
+  if (!state.timeWarp.enabled) {
+    state.timeWarp.effectiveMultiplier = state.settings.simulationSpeed;
+    state.timeWarp.requiredPowerKw = 0;
+    state.timeWarp.allocatedPowerKw = 0;
+    return;
+  }
+  const controller = state.entities.find((entity) =>
+    entity.id === state.timeWarp.controllerEntityId &&
+    entity.buildingId === "time_warp_device");
+  if (!controller) {
+    state.timeWarp.effectiveMultiplier = state.settings.simulationSpeed;
+    state.timeWarp.requiredPowerKw = 0;
+    state.timeWarp.allocatedPowerKw = 0;
+    return;
+  }
+  const lookup = createSimulationLookupContext(state);
+  const reception = calculateDysonReception(state);
+  calculatePower(state, 1, controller.planetId, getEntityPowerGridId(controller), reception, lookup);
+}
+
+export function refreshTimeWarpPowerSnapshot(state: GameState): GameState {
+  const next = copyState(state);
+  refreshTimeWarpPowerSnapshotInPlace(next);
+  return next;
+}
+
 export function setTimeWarpEnabled(state: GameState, enabled: boolean): GameState {
   if (!state.timeWarp.controllerEntityId || !state.entities.some((entity) =>
     entity.id === state.timeWarp.controllerEntityId && entity.buildingId === "time_warp_device" && !entity.interactionLocked) || state.timeWarp.enabled === enabled) return state;
@@ -6340,9 +6375,12 @@ export function setTimeWarpEnabled(state: GameState, enabled: boolean): GameStat
     timeWarp: {
       ...state.timeWarp,
       enabled,
-      effectiveMultiplier: enabled ? state.timeWarp.effectiveMultiplier : state.settings.simulationSpeed,
-      requiredPowerKw: enabled ? state.timeWarp.requiredPowerKw : 0,
-      allocatedPowerKw: enabled ? state.timeWarp.allocatedPowerKw : 0,
+      // A stopped save contains a historical allocation. A new session starts
+      // from base speed until refreshTimeWarpPowerSnapshot() evaluates the
+      // current controller grid.
+      effectiveMultiplier: state.settings.simulationSpeed,
+      requiredPowerKw: 0,
+      allocatedPowerKw: 0,
     },
   };
 }
@@ -11636,7 +11674,7 @@ function completeTechnology(state: GameState, techId: TechId): void {
  * simulation, command, and save-migration boundaries so a skipped final
  * research cycle cannot leave a permanently stalled technology.
  */
-function settleCompletedResearchBoundariesInPlace(state: GameState): TechId[] {
+export function settleCompletedResearchBoundariesInPlace(state: GameState): TechId[] {
   const completed: TechId[] = [];
   const technologyLimit = Object.keys(RECIPES).length + state.research.queuedTechIds.length + 8;
   let guard = 0;

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-07-v1.0.32";
+const RELEASE_NOTE_ID = "2026-08-07-v1.0.33";
 
 async function seedBatchSave(page: Page, options: { offlineSeconds?: number; paused?: boolean; topology?: boolean; bypassMenu?: boolean } = {}) {
   await page.addInitScript(({ offlineSeconds, paused, topology, bypassMenu, releaseNoteId }) => {
@@ -65,7 +65,7 @@ async function seedBatchSave(page: Page, options: { offlineSeconds?: number; pau
 
 for (const scenario of [
   { name: "exact", seconds: 6, label: "精确结算", viewport: { width: 1280, height: 720 } },
-  { name: "fallback", seconds: 33, label: "安全回退", viewport: { width: 1024, height: 768 } },
+  { name: "fallback", seconds: 33, label: "保守宏观结算", viewport: { width: 1024, height: 768 } },
   { name: "approximate", seconds: 120, label: "近似宏观结算（实验）", viewport: { width: 390, height: 844 } },
 ] as const) {
   test(`offline report renders the ${scenario.name} settlement state without overflow`, async ({ page }) => {

@@ -41,6 +41,15 @@ function buildCurve(id: InfiniteResearchId): readonly bigint[] {
 const COSTS = Object.fromEntries((Object.keys(INFINITE_RESEARCH_CURVES) as InfiniteResearchId[])
   .map((id) => [id, buildCurve(id)])) as Record<InfiniteResearchId, readonly bigint[]>;
 
+const CUMULATIVE_COSTS = Object.fromEntries((Object.keys(INFINITE_RESEARCH_CURVES) as InfiniteResearchId[])
+  .map((id) => {
+    const prefix = Array<bigint>(COSTS[id].length).fill(0n);
+    for (let level = 1; level < COSTS[id].length; level += 1) {
+      prefix[level] = prefix[level - 1] + COSTS[id][level];
+    }
+    return [id, prefix] as const;
+  })) as unknown as Record<InfiniteResearchId, readonly bigint[]>;
+
 export function getInfiniteResearchMaximumLevel(id: InfiniteResearchId): number {
   return INFINITE_RESEARCH_CURVES[id].maximumLevel;
 }
@@ -52,6 +61,72 @@ export function getInfiniteResearchCostBigInt(id: InfiniteResearchId, currentLev
 
 export function getInfiniteResearchCostString(id: InfiniteResearchId, currentLevel: number): string {
   return getInfiniteResearchCostBigInt(id, currentLevel).toString();
+}
+
+export function getInfiniteResearchCumulativeInvestmentBigInt(
+  id: InfiniteResearchId,
+  level: number,
+  progress: string,
+): bigint {
+  const safeLevel = Math.max(0, Math.min(getInfiniteResearchMaximumLevel(id), Math.floor(level)));
+  const safeProgress = /^\d+$/.test(progress) ? BigInt(progress) : 0n;
+  if (safeLevel >= getInfiniteResearchMaximumLevel(id)) return CUMULATIVE_COSTS[id][safeLevel];
+  return CUMULATIVE_COSTS[id][safeLevel] +
+    (safeProgress > getInfiniteResearchCostBigInt(id, safeLevel)
+      ? getInfiniteResearchCostBigInt(id, safeLevel)
+      : safeProgress);
+}
+
+export interface InfiniteResearchBudgetResult {
+  level: number;
+  progress: string;
+  consumed: bigint;
+  completedLevels: number[];
+  reachedMaximum: boolean;
+}
+
+/**
+ * Applies an integer universe-matrix budget against the authoritative
+ * non-linear cost curve. The helper owns no GameState fields, which keeps it
+ * reusable by the exact engine and by bounded macro settlement.
+ */
+export function settleInfiniteResearchBudget(
+  id: InfiniteResearchId,
+  currentLevel: number,
+  currentProgress: string,
+  requested: bigint,
+  autoResearch: boolean,
+): InfiniteResearchBudgetResult {
+  const maximum = getInfiniteResearchMaximumLevel(id);
+  let level = Math.max(0, Math.min(maximum, Math.floor(currentLevel)));
+  let progress = /^\d+$/.test(currentProgress) ? BigInt(currentProgress) : 0n;
+  let remaining = requested > 0n ? requested : 0n;
+  const completedLevels: number[] = [];
+
+  while (level < maximum) {
+    const cost = getInfiniteResearchCostBigInt(id, level);
+    if (progress > cost) progress = cost;
+    if (progress >= cost) {
+      level += 1;
+      progress = 0n;
+      completedLevels.push(level);
+      if (!autoResearch) break;
+      continue;
+    }
+    if (remaining <= 0n) break;
+    const needed = cost - progress;
+    const invested = remaining < needed ? remaining : needed;
+    progress += invested;
+    remaining -= invested;
+  }
+
+  return {
+    level,
+    progress: progress.toString(),
+    consumed: (requested > 0n ? requested : 0n) - remaining,
+    completedLevels,
+    reachedMaximum: level >= maximum,
+  };
 }
 
 export function getInfiniteResearchCompletionBasisPoints(progress: string, id: InfiniteResearchId, currentLevel: number): number {

@@ -36,6 +36,8 @@ interface PureIdleHeartbeatRecord {
   backgroundStartedAtMs?: number;
   summary?: PureIdleMacroSummary;
   lastError?: string;
+  /** Session-only Worker supervision state; never enters GameState. */
+  workerRestartCount?: number;
 }
 
 export interface PureIdleRecoveryRecord {
@@ -53,6 +55,7 @@ export interface PureIdleRecoveryRecord {
   backgroundStartedAtMs?: number;
   summary?: PureIdleMacroSummary;
   lastError?: string;
+  workerRestartCount: number;
 }
 
 export interface PureIdleBackgroundPlan {
@@ -61,6 +64,21 @@ export interface PureIdleBackgroundPlan {
   highWallSeconds: number;
   normalOfflineSeconds: number;
   graceExpired: boolean;
+}
+
+export const PURE_IDLE_WORKER_RESTART_LIMIT = 2;
+
+export function getPureIdleForceConservativeReason(
+  record: Pick<PureIdleRecoveryRecord, "workerRestartCount" | "summary">,
+  observedRestartCount = record.workerRestartCount,
+): string | undefined {
+  if (record.summary?.conservativeOnly) {
+    return record.summary.degradedReason ?? "恢复记录已处于保守宏观模式";
+  }
+  const restartCount = Math.max(record.workerRestartCount, Math.max(0, Math.floor(observedRestartCount)));
+  return restartCount >= PURE_IDLE_WORKER_RESTART_LIMIT
+    ? `连续 ${PURE_IDLE_WORKER_RESTART_LIMIT} 次 Worker 失败，已停止精确重建`
+    : undefined;
 }
 
 export type PureIdleRecoveryClaim =
@@ -194,6 +212,7 @@ function validHeartbeat(value: unknown): value is PureIdleHeartbeatRecord {
     typeof record.heartbeatAtMs === "number" && Number.isFinite(record.heartbeatAtMs) &&
     typeof record.leaseExpiresAtMs === "number" && Number.isFinite(record.leaseExpiresAtMs) &&
     typeof record.settledWallSeconds === "number" && Number.isFinite(record.settledWallSeconds) && record.settledWallSeconds >= 0 &&
+    (record.workerRestartCount === undefined || (Number.isSafeInteger(record.workerRestartCount) && record.workerRestartCount >= 0)) &&
     (record.backgroundStartedAtMs === undefined || (typeof record.backgroundStartedAtMs === "number" && Number.isFinite(record.backgroundStartedAtMs)));
 }
 
@@ -214,6 +233,7 @@ function combine(checkpoint: PureIdleCheckpointRecord, heartbeat: PureIdleHeartb
     ...(heartbeat.backgroundStartedAtMs !== undefined ? { backgroundStartedAtMs: heartbeat.backgroundStartedAtMs } : {}),
     ...(heartbeat.summary ? { summary: heartbeat.summary } : {}),
     ...(heartbeat.lastError ? { lastError: heartbeat.lastError } : {}),
+    workerRestartCount: Math.max(0, Math.floor(heartbeat.workerRestartCount ?? 0)),
   };
 }
 
@@ -312,6 +332,7 @@ export async function createPureIdleRecovery(
     leaseExpiresAtMs: nowMs + LEASE_DURATION_MS,
     settledWallSeconds: 0,
     phase: "calibrating",
+    workerRestartCount: 0,
   };
   store.put(checkpoint);
   store.put(heartbeat);
@@ -385,6 +406,57 @@ export async function heartbeatPureIdleRecovery(
     phase,
     ...(summary ? { summary } : {}),
     ...(lastError ? { lastError } : { lastError: undefined }),
+  } satisfies PureIdleHeartbeatRecord);
+  await transactionDone(transaction);
+  return true;
+}
+
+export async function recordPureIdleWorkerFailure(
+  sessionId: string,
+  ownerToken: string,
+  lastError: string,
+  nowMs = Date.now(),
+): Promise<number | null> {
+  const db = await openDatabase();
+  const transaction = db.transaction(STORE_NAME, "readwrite");
+  const store = transaction.objectStore(STORE_NAME);
+  const existing = await requestResult(store.get(HEARTBEAT_KEY));
+  if (!validHeartbeat(existing) || existing.sessionId !== sessionId || existing.ownerToken !== ownerToken) {
+    transaction.abort();
+    return null;
+  }
+  const workerRestartCount = Math.min(1_000, Math.max(0, Math.floor(existing.workerRestartCount ?? 0)) + 1);
+  store.put({
+    ...existing,
+    heartbeatAtMs: nowMs,
+    leaseExpiresAtMs: nowMs + LEASE_DURATION_MS,
+    phase: "failed",
+    lastError,
+    workerRestartCount,
+  } satisfies PureIdleHeartbeatRecord);
+  await transactionDone(transaction);
+  return workerRestartCount;
+}
+
+export async function resetPureIdleWorkerFailures(
+  sessionId: string,
+  ownerToken: string,
+  nowMs = Date.now(),
+): Promise<boolean> {
+  const db = await openDatabase();
+  const transaction = db.transaction(STORE_NAME, "readwrite");
+  const store = transaction.objectStore(STORE_NAME);
+  const existing = await requestResult(store.get(HEARTBEAT_KEY));
+  if (!validHeartbeat(existing) || existing.sessionId !== sessionId || existing.ownerToken !== ownerToken) {
+    transaction.abort();
+    return false;
+  }
+  store.put({
+    ...existing,
+    heartbeatAtMs: nowMs,
+    leaseExpiresAtMs: nowMs + LEASE_DURATION_MS,
+    workerRestartCount: 0,
+    lastError: undefined,
   } satisfies PureIdleHeartbeatRecord);
   await transactionDone(transaction);
   return true;
