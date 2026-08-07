@@ -2,7 +2,7 @@
 
 > Role: develop
 >
-> 状态：开发候选；不授权连接 VPS、切换生产版本或更新公网下载页。
+> 状态：开发完成且不可变制品已就绪；不授权连接 VPS、切换生产版本或更新公网下载页。
 >
 > 生产基线：`1.0.32+762bf693becb`；目标：`1.0.33 / GameState v46 / envelope v2 / cloud schema v7 / SQLite layout v2`。
 
@@ -10,7 +10,9 @@
 
 `P0-ENDGAME-FAST-SETTLEMENT-NONBLOCKING` 已实现 `fast-30s-v2` 与 `pure-idle-macro-v3`。有限和无限科研不再阻断快速离线或时间扭曲纯挂机；启动、刷新恢复和旧恢复记录迁移都会重新计算权威供电倍率。普通合同、尾验、校准或 Worker 失败只能转入有界保守宏观，不再创建覆盖完整离线/挂机时长的精确重放。
 
-最终 clean source commit、Build ID、不可变制品、签名结果和完整门禁将在从最终提交重建后回填本文。当前代码仍只存在于隔离工作树 `D:\GameDev\DSPidle2-release-1.0.33`，没有修改主工作区、生产节点、生产数据库或公网下载页。
+不可变制品来自 clean source commit `2bd81de8d7f16040620378d37cb73649cf09dd17`，Build ID 为 `1.0.33+2bd81de8d7f1`。完整开发门禁、Chrome/Edge 真实存档、Android 覆盖升级、Electron 隔离启动、Android v2/v3 和 Windows `NotSigned` 均已复验；149 文件 source manifest、9 文件下载目录 manifest 和 10 文件最终 bundle manifest 全部通过。后续只允许提交本文等证据文档，不能从文档提交重建或替换已经绑定 `2bd81de8...` 的二进制。
+
+代码和制品只存在于隔离工作树 `D:\GameDev\DSPidle2-release-1.0.33`，没有修改主工作区、stash、生产节点、生产数据库或公网下载页。生产仍为 `1.0.32+762bf693becb`。
 
 ## 2. 共享交接字段
 
@@ -59,86 +61,169 @@
 - 离线报告和纯挂机覆盖层显示校准、宏观、保守宏观、验证、恢复等真实阶段，以及算法版本、科研、现实耗时、倍率和降级原因。
 - GameState、存档 envelope、云协议和 SQLite 均未迁移；快速/保守算法标记只用于诊断与会话恢复。
 
-## 4. 当前验证摘要
+## 4. 最终 clean commit 门禁
 
-以下是版本化前开发迭代结果，最终 clean commit 门禁完成后必须以第 7 节为准：
+所有正式制品均从 source commit `2bd81de8d7f16040620378d37cb73649cf09dd17` 生成。构建原生包后重新执行普通 Web 构建，source manifest 与 Web/API 归档使用同一份最终 `dist`；后续文档提交不进入制品。
 
-- 全量 Vitest：91 文件通过、5 文件跳过；825 项通过、16 项跳过。
-- server / ops / native：49/49、6/6、8/8。
-- 聚焦科研、离线、纯挂机与公告：6 文件、87/87。
-- 专项 Playwright：离线/纯挂机 13 项通过、3 项可选真实夹具跳过；离线报告回归 6/6。
-- 全量 Playwright 首轮：262 项中只有一个既有科研端口场景因全页截图超过默认 30 秒而超时；核心断言已完成，独立重复 3/3 约 4 秒通过，场景已标记慢速并等待最终全量复跑。
+| 命令或门禁 | 结果 |
+| --- | --- |
+| `npm ci` | 通过；npm audit 仍报告既有 1 个 moderate、4 个 high 依赖问题 |
+| `npm --prefix server ci` | 通过；0 个已知漏洞 |
+| `npm run licenses:check` | 通过；128 个运行时包一致 |
+| `npm run typecheck` | 通过；0 个 TypeScript 错误 |
+| `npm test -- --run` | 91 个文件通过、5 个跳过；825 项通过、16 项跳过、0 失败 |
+| `npm run test:server` | 49/49 通过 |
+| `npm run test:ops` | 6/6 通过 |
+| `npm run test:native` | 8/8 通过 |
+| `npm run build` | 通过；`dist/version.json` 为 `1.0.33+2bd81de8d7f1` |
+| `npm run test:e2e` | 251 项通过、11 项显式可选夹具/基准跳过、0 失败；262 项总计 |
+| Edge 真实终局专项 | 16/16 通过；`v130` 2 项 + `v132` 14 项 |
+| `git diff --check` | 通过 |
+| source / download / bundle manifest | 149/149、9/9、10/10 全部验证通过 |
 
-## 5. 真实存档只读结果
+全量 Playwright 中对 `127.0.0.1:65534` 的 API 代理连接失败是测试隔离配置，浏览器没有连接生产 API；这不是云 API 回归。首轮全量 E2E 暴露的 1.0.32 公告断言和慢速全页截图都已在最终 source commit 修复，以上 251/11/0 是修复后的完整复跑结果。
 
-源文件在测试前后 SHA-256 保持不变，未上传生产账号：
+## 5. 平台与真实存档结果
+
+### 5.1 平台矩阵
+
+| 平台 | 结果 |
+| --- | --- |
+| Google Chrome | 完整 262 项矩阵为 251 通过、11 预期跳过；两份真实存档各 16/16 通过 |
+| Microsoft Edge | 大型真实存档 16/16 通过；覆盖长离线、8x/12x/16x、取消、单次重启、迟到消息、恢复和 30 天纯挂机 |
+| Windows Electron | `1.0.33` 解包应用使用隔离 user-data 启动并连续运行 10 秒；包内版本、Build ID、API 和更新源正确 |
+| Android 36.1 模拟器 | `1.0.28 → 1.0.32 → 1.0.33` 连续 `install -r` 成功，`firstInstallTime` 保持不变；1.0.32/1.0.33 均启动且无 Fatal/ANR |
+
+### 5.2 只读夹具
 
 | 夹具 | 摘要 |
 | --- | --- |
-| 小档 | SHA-256 `F62454361555FCA88C96F398AA34A4BFAA482E1A90E3651ADF308ADE85334F58`；305,254 字节；225 实体；191 线路 |
-| 大档 | SHA-256 `0A251ADEFA5E467C6F4FDBBA2964623D295E499A9CB48EED814A10B37B18F4E7`；3,905,264 字节；1,910 实体；4,479 线路；`matrix_compression` 263 级 |
+| 小档 | `D:\360安全浏览器下载\dsp-idle-save-2026-08-07.json`；SHA-256 `F62454361555FCA88C96F398AA34A4BFAA482E1A90E3651ADF308ADE85334F58`；305,254 字节；225 实体；191 线路 |
+| 大档 | `C:\Users\WINDOWS\Downloads\dsp-idle-save-2026-08-07.json`；SHA-256 `0A251ADEFA5E467C6F4FDBBA2964623D295E499A9CB48EED814A10B37B18F4E7`；3,905,264 字节；1,910 实体；4,479 线路；无限科研 `matrix_compression` 263 级 |
 
-| 场景 | 小档 | 大档 |
-| --- | ---: | ---: |
-| 快速离线 6,984 秒 | 0.71s | 3.50s |
-| 快速离线 30,171 秒 | 0.49s | 3.08s |
-| 快速离线 7 天 | 0.41s | 4.36s |
-| 快速离线 30 天 | 0.42s | 5.08s |
-| 30 天纯挂机 | 0.59s，请求 9x / 实际 8x | 2.85s，请求 14x / 实际 13x |
+两份源文件在所有测试前后保持逐字节相同，没有保存、覆盖、提交到 Git 或上传生产账号。
 
-全部浏览器离线场景使用 `fast-30s-v2`，经过校准、宏观、验证并可序列化重载。大档观测主线程堆最高约 106 MB；Node 基准观测 RSS 最高约 1.08 GB。大档 30 天纯挂机中无限科研 `263 → 379`，白矩阵增加 `25,151,673,830,400`，结构点和火箭各增加 `2,258,786,649,600`，戴森发电增加约 `207,341,601,405,569,540 kW`。小档因物资守恒门禁冻结不确定产线并安全少发；两档均通过线路、实体和正式重载检查。
+### 5.3 快速离线与时间扭曲
 
-大档关键尾验估计误差按 6,984 秒、30,171 秒、7 天、30 天约为 `3.71% / 9.13% / 66.83% / 89.62%`。这是允许近似的诊断结果，不代表存档结构误差；负数、NaN/Infinity、非法整数、重复科研奖励和重复时间提交仍属于硬失败。
+| 大档离线时长 | Chrome 往返 | Edge 往返 | 关键尾验估计误差 |
+| --- | ---: | ---: | ---: |
+| 6,984 秒 | 约 3.38s | 3.44s | 3.71% |
+| 30,171 秒 | 约 2.92s | 3.04s | 9.13% |
+| 7 天 | 约 2.96s | 3.05s | 66.83% |
+| 30 天 | 约 2.94s | 3.08s | 89.62% |
 
-## 6. 修改范围
+小档四个离线窗口均约 `0.39～0.68s`。全部长窗口使用 `fast-30s-v2`，经过校准、宏观和验证，完整推进请求秒数并通过 envelope v2 序列化、`inspectSave()` 与 GameState v46 正式重载。上表是算法的关键尾验估计值，不是把 30 天完整精确模拟跑完后的逐字段误差；普通库存、缓存和瞬时物流允许更大偏差，结构安全与非负/有限整数仍是硬门禁。
 
-核心新增：
+Edge 大档实时兼容路径结果：8x / 12x / 16x 切片往返约 `0.93s / 0.61s / 0.61s`，使用 `time-warp-short-calibration-v3`；终止约 `256ms`，没有迟到 Worker 消息。Chrome 对应约 `0.96s / 0.61s / 0.61s`。
 
-- `src/game/offlineSettlementStrategy.ts` 及测试
-- `src/game/researchMacro.ts` 及测试
+### 5.4 30 天纯挂机
 
-核心修改：
+| 夹具 | 耗时 | 倍率 | 结果 |
+| --- | ---: | --- | --- |
+| 小档 | 约 0.57s | 请求 9x，实际 8x | 守恒门禁冻结不确定产线并安全少发，正式重载有效 |
+| 大档 | Chrome 约 2.77s；Edge 2.78s | 请求 14x，供电允许/实际 13x | `pure-idle-macro-v3`，完整推进 2,592,000 墙钟秒 |
 
-- `src/game/offlineApproximation.ts`
-- `src/game/offlineSimulation.ts`
-- `src/game/offlineSimulation.worker.ts`
-- `src/game/pureIdleMacro.ts`
-- `src/game/pureIdleMacro.worker.ts`
-- `src/game/pureIdleMacroClient.ts`
-- `src/game/pureIdleRecovery.ts`
-- `src/game/infiniteResearch.ts`
-- `src/game/engine.ts`
-- `src/App.tsx`
-- `src/components/StartMenu.tsx`
-- `src/components/OfflineReportWorkspace.tsx`
-- `src/components/TimeWarpIdleOverlay.tsx`
-- 对应 Vitest、Playwright、版本公告、版本元数据和规范文档
+大档无限科研从 263 级推进到 379 级；白矩阵增加 `25,151,673,830,400`，结构点和实际火箭各增加 `2,258,786,649,600`，戴森总发电增加 `207,341,601,405,569,540 kW`。实体和线路数量保持，航线 cargo/progress 合法，重复运行确定性和取消保留源状态均由自动化覆盖。
 
-## 7. 最终 clean commit、门禁与制品
+Chrome 大档观测主线程堆峰值约 106 MB；本轮 Edge 报告的最高 `usedJSHeapSize` 约 94.7 MB；Node 只读基准 RSS 峰值约 1.08 GB。RSS 是整个 Node 进程的观测值，不能直接等同于浏览器或手机内存。
 
-> 待最终 clean source commit 和不可变制品生成后回填。任何 `unknown` 项都阻止 Release Agent 发布。
+## 6. 修改文件
 
-| 项目 | 结果 |
-| --- | --- |
-| Clean source commit | `unknown` |
-| Build ID | `unknown` |
-| `npm ci` / `npm --prefix server ci` | `unknown` |
-| licenses / typecheck / Vitest | `unknown` |
-| server / ops / native | `unknown` |
-| build / full Playwright / diff-check | `unknown` |
-| Web / API / APK / EXE / blockmap | `unknown` |
-| Android v2/v3 与证书连续性 | `unknown` |
-| Windows Authenticode | 预期沿用历史 `NotSigned`，待复验 |
-| Release manifest / aggregate SHA-256 | `unknown` |
+`8653ca7..2bd81de` 共 65 个文件。精确列表可用 `git diff --name-status 8653ca7..2bd81de` 复验；主要所有权如下：
 
-## 8. 未验证平台与风险
+- 新增 `src/game/offlineSettlementStrategy.ts`、`src/game/offlineSettlementStrategy.test.ts`、`src/game/researchMacro.ts`、`src/game/researchMacro.test.ts`。
+- 修改 `src/game/offlineApproximation.ts`、`offlineSimulation.ts`、`offlineSimulation.worker.ts`、`pureIdleMacro.ts`、`pureIdleMacro.worker.ts`、`pureIdleMacroClient.ts`、`pureIdleRecovery.ts`、`infiniteResearch.ts`、`engine.ts` 及对应单测。
+- 修改 `src/App.tsx`、`src/components/StartMenu.tsx`、`OfflineReportWorkspace.tsx`、`TimeWarpIdleOverlay.tsx`、`ReleaseNotesDialog.tsx` 及公告/翻译测试。
+- 修改 `package.json`、`package-lock.json`、`android/native-version.properties`，产品版本为 `1.0.33`，Android 为 `1000033`；server package 继续使用独立版本规则。
+- 更新 `docs/ARCHITECTURE.md`、`GAMEPLAY_SYSTEMS.md`、`PROJECT_STATUS.md`、`TESTING_RELEASE.md` 和本开发交接。
+- 更新 `tests/e2e/v130-offline-timewarp-real-save.spec.ts`、`v132-pure-idle-macro.spec.ts`，并将既有 E2E 版本断言从 1.0.32 刷新到 1.0.33。
 
-- 当前真实存档浏览器基准使用 Chrome；Edge、Android Chrome/WebView、Electron 长时真实夹具尚未完成。
-- 30 天关键终局指标允许较大近似偏差；保守宏观可能为保护守恒而冻结不确定产线并少发收益。
-- Node RSS 是进程级观测，不能等同于浏览器或手机实际内存；移动端大存档仍需真机验证。
-- 真实生产账号云上传、生产数据库和排行榜没有测试，也不应由开发角色执行。
-- Windows 沿用历史未签名策略；Android 必须复用 1.0.32 的长期证书，缺少签名环境时必须阻塞而不能生成新证书。
+## 7. 不可变制品
 
-## 9. Release Agent 边界
+制品根目录：`D:\GameDev\DSPidle2-release-1.0.33\release\bundle-1.0.33-2bd81de8d7f1`。
 
-Release Agent 只能在第 7 节所有必要项均有精确值、manifest 可复验、Android 签名连续且最终工作树无未预期改动后开始。发布前仍需独立检查生产备份、未激活目录、健康窗口、回滚指针、磁盘空间和公网缓存。开发交接不包含 PEM、密码、token、keystore 或任何玩家存档正文。
+| bundle 相对路径 | 字节 | SHA-256 |
+| --- | ---: | --- |
+| `android/dsp-idle-1.0.33-1000033.apk` | 4,834,527 | `14232dd3273ad951acf36d0a97488912e978ae0cd6da3f5cf1104f82419bedeb` |
+| `android/stable.json` | 636 | `9c1b5c3f010e7f88cd58089d6409f0fbdbcfc4f4401a84481a0f501a29945897` |
+| `api-1.0.33-2bd81de8d7f1-clean.tar.gz` | 80,917 | `e2898587ed0387f448eadaa621ca018a227f175c52042a2dff779b917c96fbc8` |
+| `download-site-1.0.33-2bd81de8d7f1.tar.gz` | 116,004,444 | `066bf8ac15e690155f9c9296ac062f29802217e3face67045e87da1be65daba2` |
+| `version.json` | 94 | `25636045df43fe426785ca3f22a93bd9d2c05bdfde096eaedd0cc4f3e1fda15e` |
+| `web-1.0.33-2bd81de8d7f1-clean.tar.gz` | 1,314,779 | `3e9e514088e18fc292e20e8eb093426d2116107d7aa625ccaf0e5f1eaf906b98` |
+| `windows/dsp-idle-1.0.33-x64-setup.exe` | 112,324,182 | `1fa4e4c32a53fbac1ed1c91112b27455e2b8745d954e969671b98165d24c761f` |
+| `windows/dsp-idle-1.0.33-x64-setup.exe.blockmap` | 118,330 | `c8a1c66e95b4394b9c01eae8999847510fcae5bf8bd648e88afd424d9240ea7a` |
+| `windows/latest.yml` | 356 | `fae4dc4719465e0af8d29bd793fe7b160070462a5ec5089ddac936f7c9bf9e01` |
+| `windows/release.json` | 618 | `ecd933caebad3e9c1fd9d8850342258af7703d26200f93798759bfda95bf5019` |
+
+独立工作路径：
+
+- Web：`D:\GameDev\DSPidle2-release-1.0.33\release\web-1.0.33-2bd81de8d7f1-clean.tar.gz`
+- API：`D:\GameDev\DSPidle2-release-1.0.33\release\api-1.0.33-2bd81de8d7f1-clean.tar.gz`
+- Android/Windows 更新源：`D:\GameDev\DSPidle2-release-1.0.33\release\update-feed-1.0.33-2bd81de8d7f1`
+- 下载站目录：`D:\GameDev\DSPidle2-release-1.0.33\release\download-site-1.0.33-2bd81de8d7f1`
+- 下载站归档：`D:\GameDev\DSPidle2-release-1.0.33\release\download-site-1.0.33-2bd81de8d7f1.tar.gz`
+
+Web、API、下载站归档解包后分别与源目录逐文件比较，`126/126`、`23/23`、`9/9` 完全一致。API 归档使用明确白名单，不含 `node_modules`、SQLite、data、备份、环境文件或秘密材料；APK 和 bundle 同样未包含签名库或密码配置。
+
+## 8. Manifest 与原生签名
+
+| 清单 | 文件数 | 聚合 SHA-256 |
+| --- | ---: | --- |
+| `D:\GameDev\DSPidle2-release-1.0.33\artifacts\release-manifests\1.0.33-2bd81de8d7f1.json` | 149 | `0f80274b72d24aed0f3060253db7e990c0efe2468aaba1916a14a6f303d268ef` |
+| `D:\GameDev\DSPidle2-release-1.0.33\artifacts\release-manifests\1.0.33-2bd81de8d7f1-download.json` | 9 | `c835a413b0c30597c77abb29ff2ae39f6685a234c38416c65b908f5943167205` |
+| `D:\GameDev\DSPidle2-release-1.0.33\artifacts\release-manifests\1.0.33-2bd81de8d7f1-bundle.json` | 10 | `3a2f2161dc9918e040b7350a57f69110d296317a7e09ae19474e4abdeb2294ae` |
+
+三份清单均已执行 `node deploy/create-release-manifest.mjs --verify`。Android 包名为 `cn.dsponline.network`，版本 `1.0.33 / 1000033`，APK Signature Scheme v2/v3 均为 true，证书 SHA-256 与 1.0.32 的批准长期证书连续。没有创建、替换或输出 keystore。Windows FileVersion 为 `1.0.33`、ProductVersion 为 `1.0.33.0`，安装包和解包主程序 Authenticode 均为 `NotSigned`，符合现行公开测试包策略。
+
+稳定更新清单的 APK/EXE/blockmap 大小与 SHA-256 均已复算，Electron `latest.yml` 的 SHA-512 与安装包一致；下载页包含 1.0.33 两个下载入口、`icon.svg` 和 Windows 未签名提示。
+
+## 9. 未验证项目与剩余风险
+
+- 没有物理 Android 设备；模拟器覆盖安装和启动已通过，但 Android Chrome/WebView 上的 30 天真实存档、后台挂起、温度、耗电和低内存行为仍未验证。
+- Electron 只完成正式包元数据和隔离启动，没有在 Electron 生命周期中重新运行 30 天真实存档；Chrome 与 Edge 已覆盖相同 Worker 算法。
+- 没有单独采集整段 CPU 百分比和 Worker 消息总数；已采集墙钟耗时、浏览器堆、Node RSS、阶段、取消、重启和迟到消息结果。
+- 30 天误差是关键尾验估计值，不是完整精确 30 天基线。当前接受近似策略下可发布，但不能宣称所有资源或瞬时物流都接近精确结果。
+- 保守宏观会冻结无法证明守恒的产线并少发收益；这是存档安全策略，不是零误差结算。
+- 根项目 audit 仍有 1 个 moderate、4 个 high 的既有依赖告警；本批没有升级依赖以避免扩大 P0 热修范围。
+- 没有使用真实生产账号测试云上传、排行榜或生产数据库；这些不属于 development 角色权限。
+
+## 10. Release Agent 边界与回滚
+
+Release Agent 应只使用 `2bd81de8...` 对应的已验证 bundle，不得从后续文档提交重建或在服务器上修补游戏代码。发布前仍须独立复验三份 manifest、生产备份、未激活目录、数据库 schema v7/layout v2、磁盘空间、健康窗口、CORS、Service Worker、下载 Range/缓存和回滚指针。
+
+回滚目标为当前生产 `1.0.32+762bf693becb`。回滚只切换 Web/API/下载目录，不恢复旧数据库、不删除玩家存档、不清理纯挂机恢复记录。若原生制品门禁或生产健康失败，应停止对应平台发布并保留已验证的旧稳定清单。
+
+开发门禁与制品齐全，Release Agent 可以开始 1.0.33 发布流程；本句不替代用户对具体节点和下载页的发布授权。
+
+## 11. 给 Release Agent 的交接提示词
+
+```text
+Role: release
+
+任务：发布 DSPidle2 1.0.33。先阅读 .codex/skills/develop-dspidle/SKILL.md、
+docs/PROJECT_STATUS.md、docs/DEPLOYMENT_OPERATIONS.md、docs/TESTING_RELEASE.md 和
+docs/RELEASE_HANDOFF_1.0.33.md。
+
+生产基线是 1.0.32+762bf693becb。1.0.33 的唯一制品源码提交是
+2bd81de8d7f16040620378d37cb73649cf09dd17，Build ID 是
+1.0.33+2bd81de8d7f1。只能使用：
+D:\GameDev\DSPidle2-release-1.0.33\release\bundle-1.0.33-2bd81de8d7f1
+
+先验证以下清单，任何不匹配都停止：
+- artifacts/release-manifests/1.0.33-2bd81de8d7f1.json
+- artifacts/release-manifests/1.0.33-2bd81de8d7f1-download.json
+- artifacts/release-manifests/1.0.33-2bd81de8d7f1-bundle.json
+
+不要从后续文档提交重建二进制，不要在服务器编辑 gameplay/source 文件，不要创建新
+Android 证书。Android 必须复验 v2/v3 和 1.0.32 证书连续性；Windows 必须保持并明确
+标注 NotSigned。
+
+获得用户对目标节点的发布授权后，按 1.0.32 已验证流程：分别备份并验证香港/上海
+SQLite，上传到新的未激活目录，复验 149 文件 source manifest、生产依赖和隔离健康，
+先香港后上海原子切换；下载站使用新的 9 文件目录。不得代理或合并两地数据库。
+
+发布后验证 version.json、Service Worker、当前与 1.0.32 hashed assets、schema v7/layout v2、
+CORS/未登录 401、Android/Windows 稳定清单、完整下载 SHA-256、Range 206、缓存头、桌面与
+手机页面，并记录服务状态、NRestarts、磁盘、当前/回滚目录。失败时只回滚代码/下载指针
+到 1.0.32，不恢复旧数据库。不要输出 PEM、密码、token、keystore 或玩家存档正文。
+```

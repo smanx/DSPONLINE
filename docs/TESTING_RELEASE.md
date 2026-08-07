@@ -1075,3 +1075,5 @@ Android `1.0.18 / 1000018` 使用历史长期证书，APK v2/v3 通过，SHA-256
 `1.0.33` 将快速离线升级为 `fast-30s-v2`，将纯挂机升级为 `pure-idle-macro-v3`，并将实时模拟兼容近似路径升级为 `time-warp-short-calibration-v3`。专项门禁必须保留有限/无限科研、权威供电倍率、普通/保守宏观分支、30/60 秒现实 deadline、取消、普通离线单次有界重启、纯挂机持久重启上限、旧 v2 恢复记录迁移、正式序列化重载和源夹具 hash 不变。真实玩家存档只允许在本机只读副本中测试，不能提交、覆盖或上传生产账号。
 
 正式开发交接必须从最终 clean source commit 重新执行依赖、许可、类型、全量 Vitest、server/ops/native、构建和全量单 worker Playwright，并记录准确的通过/跳过/失败数量。Chrome 真实夹具结果不能替代 Edge、Electron 或 Android WebView；缺少设备时必须明确列为未验证。制品、签名、清单和聚合 SHA-256 见 [1.0.33 development handoff](./RELEASE_HANDOFF_1.0.33.md)，本节不授权部署生产。
+
+最终 source commit `2bd81de8d7f16040620378d37cb73649cf09dd17` 已通过：Vitest 91 个文件通过、5 个跳过，825 项通过、16 项跳过；server 49/49、ops 6/6、native 8/8；全量 Playwright 251 项通过、11 项显式跳过、0 失败。大型真实存档在 Chrome 和 Edge 的 16/16 专项均通过，30 天快速离线约 2.9～3.1 秒、30 天纯挂机约 2.8 秒；Android 36.1 模拟器完成 `1.0.28 → 1.0.32 → 1.0.33` 覆盖启动，Electron 正式包完成隔离启动。物理 Android/WebView 长时真实存档和 Electron 内 30 天真实存档仍列为未验证。149/9/10 三份 manifest、APK v2/v3 证书连续性、Windows `NotSigned` 和全部制品哈希见开发交接。
