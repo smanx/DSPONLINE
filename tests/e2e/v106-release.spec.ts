@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-07-v1.0.33";
+const RELEASE_NOTE_ID = "2026-08-08-v1.0.34";
 
 async function seedV106Factory(page: Page, mobileUi: "legacy" | "next" = "legacy") {
   await page.addInitScript(({ releaseNoteId, selectedMobileUi }) => {

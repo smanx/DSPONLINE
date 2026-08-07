@@ -59,6 +59,10 @@ function payloadForCurrentMainSave(data, userId, loadMainPayload) {
   return { save, payload: typeof payload === "string" ? payload : null };
 }
 
+function isMainCloudSaveVerification(value) {
+  return typeof value === "string" && /^main-cloud-save-v[12]$/.test(value);
+}
+
 function validateCandidateData(data, userId, submission, loadMainPayload) {
   const { save, payload } = payloadForCurrentMainSave(data, userId, loadMainPayload);
   const verification = submission?.verification;
@@ -71,7 +75,7 @@ function validateCandidateData(data, userId, submission, loadMainPayload) {
     payloadAvailable: Boolean(payload),
     envelopeIntegrityValid: integrity?.valid === true,
     payloadChecksumMatches: Boolean(payloadChecksum && save?.checksum === payloadChecksum),
-    verificationStrategyMatches: verification?.strategy === "main-cloud-save-v1",
+    verificationStrategyMatches: isMainCloudSaveVerification(verification?.strategy),
     revisionMatches: Number.isInteger(save?.revision) && verification?.cloudRevision === save.revision,
     verificationChecksumMatches: typeof save?.checksum === "string" && verification?.checksum === save.checksum,
     abnormalVeinMachineCount,
@@ -119,7 +123,7 @@ export function resolveLeaderboardModerationTarget(data, { displayName, loadMain
         candidateCount: 1,
         cloudRevision: currentSave.save?.revision,
         submissionRevision: submission?.verification?.cloudRevision,
-        verificationStrategyMatches: submission ? submission.verification?.strategy === "main-cloud-save-v1" : true,
+        verificationStrategyMatches: submission ? isMainCloudSaveVerification(submission.verification?.strategy) : true,
         revisionMatches: submission ? submission.verification?.cloudRevision === currentSave.save?.revision : true,
         checksumMatches: submission ? submission.verification?.checksum === currentSave.save?.checksum : true,
         payloadChecksumMatches: Boolean(payloadChecksum && payloadChecksum === currentSave.save?.checksum),

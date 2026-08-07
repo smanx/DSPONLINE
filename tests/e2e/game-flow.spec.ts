@@ -5,7 +5,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-07-v1.0.33");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-08-v1.0.34");
     }
   });
 }
@@ -195,7 +195,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-07-v1.0.33");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-08-v1.0.34");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -2500,7 +2500,16 @@ test("coarse-pointer connection preview snaps to a nearby target port", async ({
     await page.locator(".react-flow__controls-fitview").click();
     const source = page.locator('.react-flow__node[data-id="multi_station"] .node-port').filter({ hasText: "钛块" }).locator(".factory-handle--output");
     const target = page.locator('.react-flow__node[data-id="multi_alloy"] .node-port--input').filter({ hasText: "钛块" }).locator(".factory-handle--input");
+    const mobileBackdrop = page.getByRole("button", { name: "关闭侧栏" });
     await source.tap();
+    if (await mobileBackdrop.isVisible()) await mobileBackdrop.tap();
+    await expect(page.locator('.react-flow__node[data-id="multi_station"]')).toHaveClass(/factory-flow-node--connection-origin/);
+    await expect(page.locator('.react-flow__node[data-id="multi_alloy"]')).toHaveClass(/factory-flow-node--connection-candidate/);
+    await page.locator(".react-flow__controls-fitview").tap();
+    await expect(page.locator(".factory-flow-node--connection-origin, .factory-flow-node--connection-candidate")).toHaveCount(0);
+    await expect(page.locator(".react-flow__edge")).toHaveCount(0);
+    await source.tap();
+    if (await mobileBackdrop.isVisible()) await mobileBackdrop.tap();
     const targetBox = await target.boundingBox();
     const targetCenter = { x: targetBox!.x + targetBox!.width / 2, y: targetBox!.y + targetBox!.height / 2 };
     const nearPoint = { x: targetBox!.x - 40, y: targetCenter.y };
@@ -3761,6 +3770,9 @@ test("a single port click arms a live connection preview and reveals automatic t
   await expect(clickPreview).toBeVisible();
   await expect(clickPreview.locator(".factory-connection-preview")).toHaveClass(/factory-connection-preview--pending/);
   await expect(page.getByText("自动选择配方", { exact: true })).toHaveCount(2);
+  await expect(station).toHaveClass(/factory-flow-node--connection-origin/);
+  await expect(alloy).toHaveClass(/factory-flow-node--connection-candidate/);
+  await expect(chemical).not.toHaveClass(/factory-flow-node--connection-candidate/);
 
   const blankPoint = await page.evaluate(() => {
     const pane = document.querySelector<HTMLElement>(".react-flow__pane");
@@ -3776,6 +3788,7 @@ test("a single port click arms a live connection preview and reveals automatic t
   expect(blankPoint).not.toBeNull();
   await page.mouse.click(blankPoint!.x, blankPoint!.y);
   await expect(clickPreview).toHaveCount(0);
+  await expect(page.locator(".factory-flow-node--connection-origin, .factory-flow-node--connection-candidate")).toHaveCount(0);
   await expect(page.getByRole("status")).toContainText("已取消运输线连接");
 
   await source.click();
@@ -3796,8 +3809,29 @@ test("a single port click arms a live connection preview and reveals automatic t
 
   await expect(clickPreview).toHaveCount(0);
   await expect(page.locator(".factory-handle--auto")).toHaveCount(0);
+  await expect(page.locator(".factory-flow-node--connection-origin, .factory-flow-node--connection-candidate")).toHaveCount(0);
   await expect(page.locator(".react-flow__edge")).toHaveCount(1);
   await expect(page.getByRole("status")).toContainText(/钛块运输线已建立|成就解锁：物流脉搏/);
+});
+
+test("a reverse input connection highlights producing cards and Escape clears every candidate", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openMultiSlotStationRoutingGame(page);
+  await page.locator(".react-flow__controls-fitview").click();
+  const station = page.locator('.react-flow__node[data-id="multi_station"]');
+  const alloy = page.locator('.react-flow__node[data-id="multi_alloy"]');
+  const chemical = page.locator('.react-flow__node[data-id="multi_chemical"]');
+  const target = alloy.locator(".node-port--input").filter({ hasText: "钛块" }).locator(".factory-handle--input");
+
+  await target.click();
+  await expect(page.locator(".factory-click-connection-preview")).toBeVisible();
+  await expect(alloy).toHaveClass(/factory-flow-node--connection-origin/);
+  await expect(station).toHaveClass(/factory-flow-node--connection-candidate/);
+  await expect(chemical).not.toHaveClass(/factory-flow-node--connection-candidate/);
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".factory-click-connection-preview")).toHaveCount(0);
+  await expect(page.locator(".factory-flow-node--connection-origin, .factory-flow-node--connection-candidate")).toHaveCount(0);
 });
 
 test("a building card owns clicks where a belt passes behind it", async ({ page }) => {

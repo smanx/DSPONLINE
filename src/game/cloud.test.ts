@@ -205,6 +205,63 @@ describe("cloud save synchronization markers", () => {
     expect(typeof request.body).toBe("string");
   });
 
+  it.each([256 * 1024, 1024 * 1024, 7 * 1024 * 1024, 20 * 1024 * 1024])(
+    "disables gzip before Android native upload for a %i-byte request",
+    async (size) => {
+      vi.stubGlobal("CompressionStream", TestCompressionStream);
+      await expect(compressCloudRequestBody("x".repeat(size), undefined, "android")).resolves.toBeNull();
+    },
+  );
+
+  it("sends Android native cloud uploads as a raw JSON string without gzip headers", async () => {
+    vi.stubGlobal("CompressionStream", TestCompressionStream);
+    const source = largePayload();
+    const cloudSave = metadata(1, "server-checksum", source);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ cloudSave }));
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", {
+      verified: true,
+      runtimePlatform: "android",
+    })).resolves.toMatchObject({ revision: 1 });
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(typeof request.body).toBe("string");
+    expect((request.headers as Record<string, string>)?.["content-encoding"]).toBeUndefined();
+    expect(JSON.parse(String(request.body))).toMatchObject({ payload: source, expectedRevision: 0 });
+  });
+
+  it("retries exactly once as raw JSON after an actual gzip encoding rejection", async () => {
+    vi.stubGlobal("CompressionStream", TestCompressionStream);
+    const source = largePayload();
+    const cloudSave = metadata(1, "server-checksum", source);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ error: "请求压缩内容无效", code: "REQUEST_ENCODING_INVALID" }, 400))
+      .mockResolvedValueOnce(jsonResponse({ cloudSave }));
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).resolves.toMatchObject({ revision: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const compressedRequest = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const rawRequest = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect((compressedRequest.headers as Record<string, string>)["content-encoding"]).toBe("gzip");
+    expect(typeof rawRequest.body).toBe("string");
+    expect((rawRequest.headers as Record<string, string>)?.["content-encoding"]).toBeUndefined();
+    expect(JSON.parse(String(rawRequest.body))).toMatchObject({ payload: source, expectedRevision: 0 });
+  });
+
+  it("confirms a committed raw fallback after its response times out without sending a third upload", async () => {
+    vi.stubGlobal("CompressionStream", TestCompressionStream);
+    const source = largePayload();
+    const cloudSave = metadata(1, "server-checksum", source);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ error: "请求压缩内容无效", code: "REQUEST_ENCODING_INVALID" }, 400))
+      .mockRejectedValueOnce(new DOMException("timed out", "AbortError"))
+      .mockResolvedValueOnce(jsonResponse({ cloudSave }));
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).resolves.toMatchObject({ revision: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(typeof (fetchMock.mock.calls[1]?.[1] as RequestInit).body).toBe("string");
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain("/api/account");
+  });
+
   it("falls back to raw JSON when the compression reader exceeds its safety timeout", async () => {
     vi.stubGlobal("CompressionStream", TestCompressionStream);
     const descriptor = Object.getOwnPropertyDescriptor(Blob.prototype, "stream");
@@ -272,6 +329,23 @@ describe("cloud save synchronization markers", () => {
     const retry = fetchMock.mock.calls[2]?.[1] as RequestInit;
     expect(typeof retry.body).toBe("string");
     expect((retry.headers as Record<string, string>)?.["content-encoding"]).toBeUndefined();
+  });
+
+  it("does not send a raw retry above 30 MiB after a timed-out gzip request did not commit", async () => {
+    vi.stubGlobal("CompressionStream", TestCompressionStream);
+    const source = "x".repeat(30 * 1024 * 1024 + 1);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new DOMException("timed out", "AbortError"))
+      .mockResolvedValueOnce(jsonResponse({ cloudSave: null, cloudSaves: {} }));
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).rejects.toMatchObject({
+      status: 413,
+      payload: { code: "CLOUD_UPLOAD_RAW_FALLBACK_TOO_LARGE" },
+    } satisfies Partial<CloudApiError>);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const initialUpload = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect((initialUpload.headers as Record<string, string>)["content-encoding"]).toBe("gzip");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/api/account");
   });
 
   it("turns an unrelated newer cloud revision into a conflict after timeout", async () => {

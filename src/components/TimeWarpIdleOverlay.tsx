@@ -16,6 +16,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 import type { PureIdleMacroSummary, PureIdleTerminalSnapshot } from "../game/pureIdleMacro";
+import type { PureIdleRecoveryRecord, PureIdleStopReason } from "../game/pureIdleRecovery";
 import type { SaveGameResult } from "../game/storage";
 import type { GameState } from "../game/types";
 import type { TimeWarpComputeGovernorState, TimeWarpComputeLimits, TimeWarpThrottleReason } from "../game/timeWarpComputeGovernor";
@@ -98,6 +99,16 @@ function efficiencyTone(value: number | null): string {
   return "stopped";
 }
 
+const STOP_REASON_LABELS: Record<PureIdleStopReason, string> = {
+  "user-stop-requested": "玩家请求停止",
+  "background-grace-expired": "后台 5 分钟宽限结束",
+  "worker-timeout": "Worker 计算超时",
+  "worker-crash": "Worker 崩溃",
+  "worker-error": "Worker 运行错误",
+  "save-finalized": "主存档已验证提交",
+  "user-cancelled": "玩家取消或放弃",
+};
+
 export function TimeWarpIdleOverlay({
   game,
   baselineGame,
@@ -108,9 +119,12 @@ export function TimeWarpIdleOverlay({
   computeState,
   pendingSimulationSeconds,
   macroSummary,
+  recovery,
   recoveryStatus,
   onStop,
+  onCancelSettlement,
   continueAvailable,
+  onRetryRecovery,
   onContinueNormally,
 }: {
   game: GameState;
@@ -122,9 +136,12 @@ export function TimeWarpIdleOverlay({
   computeState: TimeWarpComputeGovernorState;
   pendingSimulationSeconds: number;
   macroSummary: PureIdleMacroSummary | null;
+  recovery: PureIdleRecoveryRecord | null;
   recoveryStatus: string;
   onStop: () => Promise<void>;
+  onCancelSettlement: () => Promise<void>;
   continueAvailable: boolean;
+  onRetryRecovery: () => Promise<void>;
   onContinueNormally: () => Promise<void>;
 }) {
   const [now, setNow] = useState(() => Date.now());
@@ -134,6 +151,10 @@ export function TimeWarpIdleOverlay({
     return () => window.clearInterval(timer);
   }, []);
   const elapsed = startedAt ? Math.max(0, (now - startedAt) / 1_000) : 0;
+  const uncommittedWallSeconds = Math.max(
+    0,
+    (recovery?.targetWallSeconds ?? elapsed) - (recovery?.summary?.settledWallSeconds ?? recovery?.settledWallSeconds ?? 0),
+  );
   const fallback = useMemo(() => stateSnapshot(game), [game]);
   const persistentBaseline = useMemo(() => stateSnapshot(baselineGame), [baselineGame]);
   const projected = projectedSnapshot(macroSummary, fallback, elapsed);
@@ -158,12 +179,21 @@ export function TimeWarpIdleOverlay({
     .map(([itemId, amount]) => ({ itemId, amount, delta: amount - (baseline.activityDelivered[itemId] ?? 0) }));
   const stop = async () => {
     if (stopping) {
-      await onStop();
+      await onCancelSettlement();
       return;
     }
     setStopping(true);
     try {
       await onStop();
+    } finally {
+      setStopping(false);
+    }
+  };
+  const retryRecovery = async () => {
+    if (stopping) return;
+    setStopping(true);
+    try {
+      await onRetryRecovery();
     } finally {
       setStopping(false);
     }
@@ -223,7 +253,7 @@ export function TimeWarpIdleOverlay({
         </section> : null}
 
         <details className="time-warp-idle-diagnostics">
-          <summary>计算诊断</summary>
+          <summary>查看计算与恢复详情</summary>
           <section className="time-warp-idle-status">
             <div><span>请求倍率</span><strong>{macroSummary?.requestedMultiplier ?? game.timeWarp.requestedMultiplier}x</strong></div>
             <div><span>供电上限</span><strong>{macroSummary?.powerLimitedMultiplier ?? computeLimits.powerLimitedMultiplier}x</strong></div>
@@ -238,13 +268,24 @@ export function TimeWarpIdleOverlay({
             {macroSummary?.lastValidationReason ? <div><span>最近校验</span><strong>{macroSummary.lastValidationReason}</strong></div> : null}
             {macroSummary?.degradedReason ? <div><span>降级原因</span><strong>{macroSummary.degradedReason}</strong></div> : null}
             {macroSummary ? <div><span>最近现实耗时</span><strong>{Math.round(macroSummary.computationDurationMs)} ms</strong></div> : null}
+            {recovery ? <>
+              <div><span>退出 / 恢复原因</span><strong>{recovery.stopReason ? STOP_REASON_LABELS[recovery.stopReason] : "正常运行"}</strong></div>
+              <div><span>结算会话</span><strong title={recovery.settlementId}>{recovery.settlementId.slice(-12)}</strong></div>
+              <div><span>检查点指纹</span><strong>{recovery.checkpointHash}</strong></div>
+              <div><span>冻结结算边界</span><strong>{recovery.targetWallSeconds === undefined ? "未冻结" : formatDuration(recovery.targetWallSeconds)}</strong></div>
+              <div><span>提交状态</span><strong>{recovery.committed ? "已验证提交" : "尚未提交"}</strong></div>
+              <div><span>Worker 重启</span><strong>{recovery.workerRestartCount} / 2</strong></div>
+            </> : null}
           </section>
         </details>
 
         <footer>
-          {saveFailure ? <span className="time-warp-idle-warning" role="alert"><AlertTriangle size={15} />本地存档尚未成功写入，恢复日志仍保留。</span> : continueAvailable ? <span className="time-warp-idle-warning" role="alert"><AlertTriangle size={15} />恢复普通模拟不会发放这段未结算时间。</span> : <span><CheckCircle2 size={15} />停止成功并确认主存档后才会清理恢复日志</span>}
+          {saveFailure ? <span className="time-warp-idle-warning" role="alert"><AlertTriangle size={15} />本地存档尚未成功写入，恢复日志仍保留。</span> : continueAvailable ? <span className="time-warp-idle-warning" role="alert"><AlertTriangle size={15} />放弃将不发放约 {formatDuration(uncommittedWallSeconds)} 的未结算收益。</span> : <span><CheckCircle2 size={15} />停止成功并确认主存档后才会清理恢复日志</span>}
           <div className="time-warp-idle-actions">
-            {continueAvailable ? <button className="time-warp-idle-continue" type="button" aria-label="放弃未结算并继续普通模拟" disabled={stopping} onClick={() => void continueNormally()}><Play size={16} />{stopping ? "正在恢复普通模拟" : "放弃未结算并继续模拟"}</button> : <button className="time-warp-idle-stop" type="button" aria-label={stopping ? "取消结算并保留原存档" : "停止并结算纯挂机"} onClick={() => void stop()}>{stopping ? <X size={16} /> : <Square size={16} />}{stopping ? "取消并保留原档" : "停止并结算"}</button>}
+            {continueAvailable ? <>
+              <button className="time-warp-idle-stop" type="button" aria-label="重试恢复纯挂机" disabled={stopping} onClick={() => void retryRecovery()}><ShieldCheck size={16} />{stopping ? "正在重试" : "重试恢复"}</button>
+              <button className="time-warp-idle-continue" type="button" aria-label={`放弃约 ${formatDuration(uncommittedWallSeconds)} 未结算时间并继续普通模拟`} disabled={stopping} onClick={() => void continueNormally()}><Play size={16} />放弃未结算并继续</button>
+            </> : <button className="time-warp-idle-stop" type="button" aria-label={stopping ? "取消结算并保留原存档" : "停止并结算纯挂机"} onClick={() => void stop()}>{stopping ? <X size={16} /> : <Square size={16} />}{stopping ? "取消并保留原档" : "停止并结算"}</button>}
           </div>
         </footer>
       </div>

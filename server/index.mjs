@@ -63,12 +63,15 @@ const SPEEDRUN_FINITE_TECH_IDS = [
   "quantum_logistics_network",
 ];
 const WHITE_MATRIX_RATE_MIN_INTERVAL_SECONDS = 60;
+const THROUGHPUT_RATE_MIN_INTERVAL_SECONDS = 60;
+const THROUGHPUT_METRIC_VERSION = "settled-total-produced-v1";
 const METRIC_KEYS = [
   "energyGeneratedMj",
   "uploadedWhiteMatrix",
   "peakWhiteMatrixPerMinute",
   "peakGenerationKw",
   "peakThroughputPerMinute",
+  "theoreticalPeakThroughputPerMinute",
   "peakDysonPowerKw",
   "exploredSystems",
   "colonizedPlanets",
@@ -427,12 +430,19 @@ function normalizeMetrics(value) {
     peakWhiteMatrixPerMinute: normalizeMetric(source.peakWhiteMatrixPerMinute),
     peakGenerationKw: normalizeMetric(source.peakGenerationKw),
     peakThroughputPerMinute: normalizeMetric(source.peakThroughputPerMinute),
+    theoreticalPeakThroughputPerMinute: normalizeMetric(source.theoreticalPeakThroughputPerMinute ?? source.peakThroughputPerMinute),
     peakDysonPowerKw: normalizeMetric(source.peakDysonPowerKw),
     exploredSystems: normalizeMetric(source.exploredSystems, true, 10_000),
     colonizedPlanets: normalizeMetric(source.colonizedPlanets, true, 100_000),
   };
   metrics.galaxyScore = calculateGalaxyScore(metrics);
-  return metrics;
+  return {
+    ...metrics,
+    throughputMetricVersion: source.throughputMetricVersion === THROUGHPUT_METRIC_VERSION
+      ? THROUGHPUT_METRIC_VERSION
+      : "legacy-nominal-v1",
+    throughputWindowSeconds: normalizeMetric(source.throughputWindowSeconds),
+  };
 }
 
 function categoryValue(metrics, category) {
@@ -1311,7 +1321,7 @@ function validateSavePayload(payload) {
         }
       }
       for (const entity of state.entities) {
-        if (entity?.buildingId === "time_warp_device" && (!Number.isInteger(entity.machineCount) || entity.machineCount !== 1)) return false;
+        if (entity?.buildingId === "time_warp_device" && (!Number.isSafeInteger(entity.machineCount) || entity.machineCount < 1)) return false;
         if (state.version >= 41 && entity?.buildingId === "em_rail_ejector" &&
           (typeof entity.targetDysonOrbitId !== "string" || entity.targetDysonOrbitId.length < 1 || entity.targetDysonOrbitId.length > 160)) return false;
         if (state.version >= 39 && entity?.buildingId === "material_delivery_hub") {
@@ -1322,7 +1332,7 @@ function validateSavePayload(payload) {
               : !(slot.itemId === null || typeof slot.itemId === "string" && /^[a-z][a-z0-9_]{1,80}$/.test(slot.itemId))))) return false;
         }
         if (entity?.buildingId !== "micro_black_hole_connector") continue;
-        if (!Number.isInteger(entity.machineCount) || entity.machineCount !== 1 ||
+        if (!Number.isSafeInteger(entity.machineCount) || entity.machineCount < 1 ||
           typeof entity.blackHolePaused !== "boolean" || typeof entity.blackHoleActivationConfirmed !== "boolean" ||
           !Array.isArray(entity.blackHolePorts) || entity.blackHolePorts.length !== 3 ||
           entity.blackHolePorts.some((port, index) => port?.index !== index ||
@@ -1386,7 +1396,45 @@ function whiteMatrixRateFromAdjacentRevision(store, userId, currentSave, current
   return Number.isFinite(scaled) ? normalizeMetric(scaled / elapsedDelta) : Number.MAX_VALUE;
 }
 
-function leaderboardMetricsFromSave(save, peakWhiteMatrixPerMinute = 0) {
+function throughputRateFromAdjacentRevision(store, userId, currentSave, currentState) {
+  const currentRevision = Number.isInteger(currentSave?.revision) ? currentSave.revision : 0;
+  const empty = { value: 0, valid: false, metricVersion: THROUGHPUT_METRIC_VERSION, windowSeconds: 0 };
+  if (currentRevision <= 1) return empty;
+  const previousMetadata = saveHistory(store, userId, "main").find((entry) => entry.revision === currentRevision - 1);
+  const previousSave = materializeCloudSave(store, userId, "main", previousMetadata);
+  const previousState = parseSaveState(previousSave?.payload);
+  if (!previousState || typeof previousState !== "object" || !currentState || typeof currentState !== "object") return empty;
+  if ((Array.isArray(previousState.contentPacks) && previousState.contentPacks.length > 0)
+    || (Array.isArray(currentState.contentPacks) && currentState.contentPacks.length > 0)) return empty;
+  const previousElapsed = numberAt(previousState.elapsedSeconds);
+  const currentElapsed = numberAt(currentState.elapsedSeconds);
+  const elapsedDelta = currentElapsed - previousElapsed;
+  if (elapsedDelta < THROUGHPUT_RATE_MIN_INTERVAL_SECONDS) return empty;
+  const previousProduced = previousState.totalProduced && typeof previousState.totalProduced === "object"
+    ? previousState.totalProduced
+    : {};
+  const currentProduced = currentState.totalProduced && typeof currentState.totalProduced === "object"
+    ? currentState.totalProduced
+    : {};
+  let producedDelta = 0;
+  for (const itemId of new Set([...Object.keys(previousProduced), ...Object.keys(currentProduced)])) {
+    const before = Math.floor(numberAt(previousProduced[itemId]));
+    const after = Math.floor(numberAt(currentProduced[itemId]));
+    if (after < before) return empty;
+    producedDelta = saturatingMetricAdd(producedDelta, after - before);
+  }
+  const scaled = saturatingMetricProduct(producedDelta, 60);
+  return {
+    value: normalizeMetric(scaled / elapsedDelta),
+    valid: true,
+    metricVersion: THROUGHPUT_METRIC_VERSION,
+    windowSeconds: elapsedDelta,
+    fromRevision: currentRevision - 1,
+    toRevision: currentRevision,
+  };
+}
+
+function leaderboardMetricsFromSave(save, peakWhiteMatrixPerMinute = 0, throughputWindow = null) {
   const state = parseSaveState(save?.payload);
   if (!state || typeof state !== "object") return null;
   const generationKw = numberAt(state.metrics?.generationKw);
@@ -1395,22 +1443,33 @@ function leaderboardMetricsFromSave(save, peakWhiteMatrixPerMinute = 0) {
   const exploredSystems = Array.isArray(state.exploration?.unlockedSystemIds) ? new Set(state.exploration.unlockedSystemIds).size : 1;
   const colonizedPlanets = Array.isArray(state.exploration?.colonizedPlanetIds) ? new Set(state.exploration.colonizedPlanetIds).size : 1;
   const dysonPowerKw = saturatingMetricAdd(state.dysonSwarm?.generationKw, state.dysonSphere?.generationKw);
-  const throughput = numberAt(state.metrics?.totalItemsPerMinute);
+  const theoreticalThroughput = numberAt(state.metrics?.totalItemsPerMinute);
   return normalizeMetrics({
     energyGeneratedMj: saturatingMetricProduct(generationKw, elapsedSeconds / 1000),
     uploadedWhiteMatrix: producedWhiteMatrix,
     peakWhiteMatrixPerMinute,
     peakGenerationKw: generationKw,
-    peakThroughputPerMinute: throughput,
+    peakThroughputPerMinute: throughputWindow?.valid ? throughputWindow.value : 0,
+    theoreticalPeakThroughputPerMinute: theoreticalThroughput,
+    throughputMetricVersion: THROUGHPUT_METRIC_VERSION,
+    throughputWindowSeconds: throughputWindow?.valid ? throughputWindow.windowSeconds : 0,
     peakDysonPowerKw: dysonPowerKw,
     exploredSystems,
     colonizedPlanets,
   });
 }
 
-function mergeLeaderboardMetrics(previous, current) {
+function mergeLeaderboardMetrics(previous, current, mergePreviousThroughput = true) {
   if (!previous) return current;
-  return normalizeMetrics(Object.fromEntries(METRIC_KEYS.map((key) => [key, Math.max(numberAt(previous[key]), numberAt(current[key]))])));
+  return normalizeMetrics({
+    ...Object.fromEntries(METRIC_KEYS.map((key) => [key,
+      key === "peakThroughputPerMinute" && !mergePreviousThroughput
+        ? numberAt(current[key])
+        : Math.max(numberAt(previous[key]), numberAt(current[key])),
+    ])),
+    throughputMetricVersion: THROUGHPUT_METRIC_VERSION,
+    throughputWindowSeconds: numberAt(current.throughputWindowSeconds),
+  });
 }
 
 function isServerLeaderboardSubmission(value) {
@@ -1444,12 +1503,18 @@ function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.
   if (Array.isArray(state?.contentPacks) && state.contentPacks.length > 0) {
     return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "modded-save" };
   }
-  const observed = leaderboardMetricsFromSave(materialized, whiteMatrixRateFromAdjacentRevision(store, userId, materialized, state));
+  const throughputWindow = throughputRateFromAdjacentRevision(store, userId, materialized, state);
+  const observed = leaderboardMetricsFromSave(
+    materialized,
+    whiteMatrixRateFromAdjacentRevision(store, userId, materialized, state),
+    throughputWindow,
+  );
   if (!observed) return { changed: false, submission: null, reason: "invalid-save" };
   const key = `${ACTIVE_LEADERBOARD_SEASON_ID}:${userId}`;
   const previous = store.data.submissions[key];
   const previousServerMetrics = isServerLeaderboardSubmission(previous) ? previous.metrics : null;
-  const metrics = mergeLeaderboardMetrics(previousServerMetrics, observed);
+  const previousUsesActualThroughput = previous?.verification?.strategy === "main-cloud-save-v2";
+  const metrics = mergeLeaderboardMetrics(previousServerMetrics, observed, previousUsesActualThroughput);
   const sameMetrics = previousServerMetrics
     && METRIC_KEYS.every((key) => numberAt(previousServerMetrics[key]) === numberAt(metrics[key]))
     && numberAt(previousServerMetrics.galaxyScore) === numberAt(metrics.galaxyScore);
@@ -1468,13 +1533,22 @@ function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.
     avatar: user.displayName.trim().slice(0, 1).toUpperCase() || "A",
     seasonId: ACTIVE_LEADERBOARD_SEASON_ID,
     metrics,
+    ...(previous && !previousUsesActualThroughput
+      ? { legacyMetrics: { strategy: previous.verification?.strategy ?? "client-legacy", peakThroughputPerMinute: numberAt(previous.metrics?.peakThroughputPerMinute) } }
+      : previous?.legacyMetrics ? { legacyMetrics: previous.legacyMetrics } : {}),
     submittedAt: Number.isFinite(materialized.updatedAt) ? materialized.updatedAt : now,
     visible: true,
     verification: {
-      strategy: "main-cloud-save-v1",
+      strategy: "main-cloud-save-v2",
       cloudRevision: materialized.revision,
       checksum: materialized.checksum,
       checkedAt: now,
+      throughputMetricVersion: THROUGHPUT_METRIC_VERSION,
+      throughputWindow: throughputWindow.valid ? {
+        fromRevision: throughputWindow.fromRevision,
+        toRevision: throughputWindow.toRevision,
+        elapsedSeconds: throughputWindow.windowSeconds,
+      } : null,
     },
   };
   store.data.submissions[key] = submission;

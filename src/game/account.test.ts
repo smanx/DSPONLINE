@@ -85,6 +85,34 @@ describe("local account state", () => {
     expect(getActiveAccount(account).ledger.energyGeneratedMj).toBe(2);
   });
 
+  it("keeps nominal capacity separate from a 60 simulated-second settled-production window", () => {
+    const game = createInitialState();
+    game.elapsedSeconds = 10;
+    game.totalProduced.iron_ingot = 100;
+    game.planetMetrics.home.totalItemsPerMinute = 9_999;
+    let account = recordAccountProgress(createAccountState(100), game, 100);
+    expect(getActiveAccount(account).ledger.peakActualThroughputPerMinute).toBe(0);
+
+    game.elapsedSeconds = 70;
+    game.totalProduced.iron_ingot = 700;
+    account = recordAccountProgress(account, game, 200);
+    expect(getActiveAccount(account).ledger).toMatchObject({
+      peakThroughputPerMinute: 9_999,
+      peakActualThroughputPerMinute: 600,
+      throughputWindowStartedAtSeconds: 70,
+      throughputWindowStartedProduced: 700,
+    });
+
+    game.elapsedSeconds = 5;
+    game.totalProduced.iron_ingot = 10;
+    account = recordAccountProgress(account, game, 300);
+    expect(getActiveAccount(account).ledger).toMatchObject({
+      peakActualThroughputPerMinute: 600,
+      throughputWindowStartedAtSeconds: 5,
+      throughputWindowStartedProduced: 10,
+    });
+  });
+
   it("saturates extreme ranking totals without producing Infinity", () => {
     const game = createInitialState();
     game.elapsedSeconds = Number.MAX_VALUE;

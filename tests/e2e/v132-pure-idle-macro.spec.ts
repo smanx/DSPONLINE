@@ -14,7 +14,7 @@ async function resetPureIdleRecoveryDatabase(page: import("@playwright/test").Pa
   }));
 }
 
-test.describe("1.0.33 pure-idle macro recovery", () => {
+test.describe("1.0.34 pure-idle macro recovery", () => {
   test.beforeEach(async ({ page }) => {
     await page.route(`**${harnessPath}`, (route) => route.fulfill({
       status: 200,
@@ -82,6 +82,79 @@ test.describe("1.0.33 pure-idle macro recovery", () => {
     expect(result.highWallSeconds).toBe(60 + 5 * 60);
     expect(result.normalOfflineSeconds).toBe(600);
     expect(result.graceExpired).toBe(true);
+  });
+
+  test("migrates a v1 recovery log and keeps a frozen settlement boundary across a new owner", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const engine = await import("/src/game/engine.ts");
+      const recovery = await import("/src/game/pureIdleRecovery.ts");
+      const created = await recovery.createPureIdleRecovery(
+        engine.createInitialState(20_260_808, false),
+        "stable",
+        1_000,
+        "owner-v1",
+        1_000,
+      );
+      if (!created.ok) throw new Error(created.message);
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("dsp-idle-network.pure-idle-recovery", 1);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const transaction = db.transaction("records", "readwrite");
+        const store = transaction.objectStore("records");
+        for (const key of ["checkpoint", "heartbeat"]) {
+          const request = store.get(key);
+          request.onsuccess = () => {
+            const legacy = { ...request.result, schemaVersion: 1 };
+            delete legacy.settlementId;
+            delete legacy.checkpointHash;
+            delete legacy.stopReason;
+            delete legacy.targetWallSeconds;
+            delete legacy.committed;
+            delete legacy.lastTransitionAtMs;
+            store.put(legacy);
+          };
+        }
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+      db.close();
+
+      const legacyRead = await recovery.readPureIdleRecovery();
+      await recovery.recordPureIdleRecoveryTransition(created.record.sessionId, "owner-v1", {
+        stopReason: "user-stop-requested",
+        phase: "finalizing",
+        stopRequestedAtMs: 1_100,
+        targetWallSeconds: 321,
+      }, 1_100);
+      await recovery.releasePureIdleRecoveryLease(created.record.sessionId, "owner-v1", 1_101);
+      const claimed = await recovery.claimPureIdleRecovery("owner-v2", 1_102);
+      if (!claimed.ok) throw new Error(claimed.message);
+      await recovery.clearPureIdleRecovery(claimed.record.sessionId, "owner-v2");
+      return {
+        legacySettlementId: legacyRead?.settlementId,
+        legacyCheckpointHash: legacyRead?.checkpointHash,
+        claimedSettlementId: claimed.record.settlementId,
+        claimedCheckpointHash: claimed.record.checkpointHash,
+        stopReason: claimed.record.stopReason,
+        phase: claimed.record.phase,
+        targetWallSeconds: claimed.record.targetWallSeconds,
+        committed: claimed.record.committed,
+      };
+    });
+
+    expect(result.legacySettlementId).toMatch(/^idle_/);
+    expect(result.legacyCheckpointHash).toMatch(/^checkpoint-[0-9a-f]{8}$/);
+    expect(result.claimedSettlementId).toBe(result.legacySettlementId);
+    expect(result.claimedCheckpointHash).toBe(result.legacyCheckpointHash);
+    expect(result).toMatchObject({
+      stopReason: "user-stop-requested",
+      phase: "finalizing",
+      targetWallSeconds: 321,
+      committed: false,
+    });
   });
 
   test("commits a grace-limited macro candidate before settling the ordinary offline remainder", async ({ page }) => {

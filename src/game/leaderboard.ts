@@ -27,7 +27,12 @@ export interface LeaderboardMetrics {
   uploadedWhiteMatrix: number;
   peakWhiteMatrixPerMinute: number;
   peakGenerationKw: number;
+  /** Actual settled totalProduced delta. */
   peakThroughputPerMinute: number;
+  /** Nominal machine capacity retained as a separate diagnostic. */
+  theoreticalPeakThroughputPerMinute?: number;
+  throughputMetricVersion?: "settled-total-produced-v1" | "legacy-nominal-v1";
+  throughputWindowSeconds?: number;
   peakDysonPowerKw: number;
   exploredSystems: number;
   colonizedPlanets: number;
@@ -64,7 +69,7 @@ export const LEADERBOARD_CATEGORIES: readonly LeaderboardCategoryDefinition[] = 
   { id: "upload", label: "白矩阵上传", unit: "份", description: "提交至银河档案的白矩阵", color: "#d9dedb" },
   { id: "white-rate", label: "白糖产量", unit: "/min", description: "相邻有效主云存档区间的实际产量峰值", color: "#8bc7b7" },
   { id: "dyson", label: "戴森功率", unit: "", description: "戴森云与戴森球当前功率", color: "#e7bd58" },
-  { id: "throughput", label: "生产吞吐", unit: "/min", description: "历史峰值生产通量", color: "#69cbb0" },
+  { id: "throughput", label: "实际结算吞吐", unit: "/min", description: "相邻主云修订或本地 60 秒窗口内的实际生产增量", color: "#69cbb0" },
   { id: "galaxy", label: "银河综合", unit: "分", description: "发电、上传、戴森与工业规模综合评分", color: "#b8a0e4" },
 ] as const;
 
@@ -123,6 +128,11 @@ export function normalizeLeaderboardMetrics(value: unknown): LeaderboardMetrics 
     peakWhiteMatrixPerMinute: nonNegative(source.peakWhiteMatrixPerMinute),
     peakGenerationKw: nonNegative(source.peakGenerationKw),
     peakThroughputPerMinute: nonNegative(source.peakThroughputPerMinute),
+    theoreticalPeakThroughputPerMinute: nonNegative(source.theoreticalPeakThroughputPerMinute ?? source.peakThroughputPerMinute),
+    throughputMetricVersion: (source.throughputMetricVersion === "settled-total-produced-v1"
+      ? "settled-total-produced-v1"
+      : "legacy-nominal-v1") as LeaderboardMetrics["throughputMetricVersion"],
+    throughputWindowSeconds: nonNegative(source.throughputWindowSeconds),
     peakDysonPowerKw: nonNegative(source.peakDysonPowerKw),
     exploredSystems: integer(source.exploredSystems),
     colonizedPlanets: integer(source.colonizedPlanets),
@@ -136,7 +146,10 @@ export function getLeaderboardMetrics(ledger: AccountLedger): LeaderboardMetrics
     uploadedWhiteMatrix: integer(ledger.uploadedWhiteMatrix),
     peakWhiteMatrixPerMinute: 0,
     peakGenerationKw: nonNegative(ledger.peakGenerationKw),
-    peakThroughputPerMinute: nonNegative(ledger.peakThroughputPerMinute),
+    peakThroughputPerMinute: nonNegative(ledger.peakActualThroughputPerMinute),
+    theoreticalPeakThroughputPerMinute: nonNegative(ledger.peakThroughputPerMinute),
+    throughputMetricVersion: "settled-total-produced-v1",
+    throughputWindowSeconds: 60,
     peakDysonPowerKw: nonNegative(ledger.peakDysonPowerKw),
     exploredSystems: integer(ledger.exploredSystems),
     colonizedPlanets: integer(ledger.colonizedPlanets),

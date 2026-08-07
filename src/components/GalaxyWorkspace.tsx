@@ -167,6 +167,7 @@ export function GalaxyWorkspace({
     } satisfies LeaderboardEntry));
   }, [cloudEntries, cloudSession.status, cloudSession.user?.id, leaderboardStatus, snapshot.entries]);
   const displayedLocalEntry = displayEntries.find((entry) => entry.isLocal);
+  const actualThroughputMetrics = displayedLocalEntry?.metrics ?? metrics;
   const leaderboardVisible = cloudSession.status === "authenticated"
     ? cloudSession.user?.leaderboardVisible !== false
     : account.profile.privacy === "public";
@@ -627,7 +628,8 @@ export function GalaxyWorkspace({
                 <div><dt>白矩阵上传</dt><dd>{formatMetric(metrics.uploadedWhiteMatrix)} <small>份</small></dd></div>
                 <div><dt>白糖产量峰值</dt><dd>{formatMetric(displayedLocalEntry?.metrics.peakWhiteMatrixPerMinute ?? 0, 1)} <small>/min</small></dd></div>
                 <div><dt>戴森峰值</dt><dd><PowerValue valueKw={metrics.peakDysonPowerKw} /></dd></div>
-                <div><dt>吞吐峰值</dt><dd>{formatMetric(metrics.peakThroughputPerMinute, 1)} <small>/min</small></dd></div>
+                <div><dt>实际结算吞吐</dt><dd>{formatMetric(actualThroughputMetrics.peakThroughputPerMinute, 1)} <small>/min</small></dd></div>
+                <div><dt>理论峰值产能</dt><dd>{formatMetric(metrics.theoreticalPeakThroughputPerMinute ?? 0, 1)} <small>/min</small></dd></div>
               </dl>
               <button
                 className={`galaxy-upload-command galaxy-upload-command--${uploadState}`}
@@ -641,6 +643,7 @@ export function GalaxyWorkspace({
               {cloudSession.status === "authenticated" ? <label className="galaxy-leaderboard-visibility"><span><strong>{leaderboardVisible ? "参与公开排行榜" : "已退出排行榜"}</strong><small>{leaderboardVisible ? "主云存档同步成功后自动更新排名" : "后续同步不会重新加入，可随时恢复"}</small></span><input type="checkbox" checked={leaderboardVisible} disabled={leaderboardVisibilityBusy} onChange={(event) => void updateLeaderboardVisibility(event.target.checked)} aria-label="参与公开排行榜" /></label> : null}
               {leaderboardError ? <p className="galaxy-leaderboard-error" role="alert"><CloudOff size={13} /><span>{leaderboardError}</span></p> : null}
               {category === "white-rate" && (displayedLocalEntry?.metrics.peakWhiteMatrixPerMinute ?? 0) <= 0 ? <p><Gauge size={13} /><span>至少需要两次相隔 60 个模拟秒的有效主云同步，服务端才会形成白糖产量区间。</span></p> : null}
+              {category === "throughput" && (displayedLocalEntry?.metrics.peakThroughputPerMinute ?? 0) <= 0 ? <p><Factory size={13} /><span>至少需要两次相隔 60 个模拟秒的有效主云同步，服务端才会形成实际结算吞吐窗口；旧理论峰值不会与新口径混排。</span></p> : null}
               <p><RadioTower size={13} /><span>{cloudSession.status === "authenticated" ? cloudSession.cloudSave ? "主云存档上传和十分钟自动同步成功后，服务端会自动更新排名。" : "请先上传当前主云存档；手动槽位不会加入排行榜。" : "访客可查看真实玩家排名；登录并上传主云存档后自动参与。"}</span></p>
             </aside>
           </div>
@@ -747,7 +750,8 @@ export function GalaxyWorkspace({
                 <article><Zap size={18} /><span>累计发电<strong>{formatMetric(metrics.energyGeneratedMj, 1)} <small>MJ</small></strong></span></article>
                 <article><Database size={18} /><span>白矩阵上传<strong>{formatMetric(metrics.uploadedWhiteMatrix)} <small>份</small></strong></span></article>
                 <article><Orbit size={18} /><span>戴森峰值<strong><PowerValue valueKw={metrics.peakDysonPowerKw} /></strong></span></article>
-                <article><Gauge size={18} /><span>吞吐峰值<strong>{formatMetric(metrics.peakThroughputPerMinute, 1)} <small>/min</small></strong></span></article>
+                <article><Gauge size={18} /><span>实际结算吞吐<strong>{formatMetric(actualThroughputMetrics.peakThroughputPerMinute, 1)} <small>/min</small></strong></span></article>
+                <article><Factory size={18} /><span>理论峰值产能<strong>{formatMetric(metrics.theoreticalPeakThroughputPerMinute ?? 0, 1)} <small>/min</small></strong></span></article>
                 <article><Globe2 size={18} /><span>星际版图<strong>{metrics.exploredSystems} <small>星系</small> · {metrics.colonizedPlanets} <small>行星</small></strong></span></article>
                 <article><Trophy size={18} /><span>银河综合<strong>{formatMetric(metrics.galaxyScore)} <small>分</small></strong></span></article>
               </div>

@@ -711,15 +711,29 @@ describe("game storage", () => {
 
   it("round-trips historical safe stacks above one hundred million without truncating blueprints or buffers", () => {
     let state = createInitialState();
-    state.construction.storage_mk1 = 1;
+    state.construction.storage_mk1 = 3;
     state = placeBuilding(state, "storage_mk1", { x: 120, y: 80 });
-    const storageId = state.entities.find((entity) => entity.buildingId === "storage_mk1")!.id;
+    state = placeBuilding(state, "storage_mk1", { x: 420, y: 80 });
+    state = placeBuilding(state, "storage_mk1", { x: 720, y: 80 });
+    const [storageSeed, historicalTimeWarpSeed, historicalBlackHoleSeed] = state.entities.filter((entity) => entity.buildingId === "storage_mk1");
+    const storageId = storageSeed.id;
+    const historicalTimeWarpId = historicalTimeWarpSeed.id;
+    const historicalBlackHoleId = historicalBlackHoleSeed.id;
     state = createBlueprint(state, [storageId], "历史超限堆叠");
-    state = queueBlueprint(state, state.blueprints[0].id, { x: 720, y: 80 });
+    state = queueBlueprint(state, state.blueprints[0].id, { x: 1_020, y: 80 });
 
     const storage = state.entities.find((entity) => entity.id === storageId)!;
+    const historicalTimeWarp = state.entities.find((entity) => entity.id === historicalTimeWarpId)!;
+    const historicalBlackHole = state.entities.find((entity) => entity.id === historicalBlackHoleId)!;
     storage.machineCount = 100_000_001;
     storage.inputs.iron_ingot = 100_000_002;
+    historicalTimeWarp.buildingId = "time_warp_device";
+    historicalTimeWarp.machineCount = 3;
+    historicalBlackHole.buildingId = "micro_black_hole_connector";
+    historicalBlackHole.machineCount = 2;
+    historicalBlackHole.blackHolePaused = true;
+    historicalBlackHole.blackHoleActivationConfirmed = false;
+    historicalBlackHole.blackHolePorts = [0, 1, 2].map((index) => ({ index: index as 0 | 1 | 2, totalDestroyed: "0" }));
     state.blueprints[0].entities[0].machineCount = 100_000_003;
     state.blueprintVersions[0].definition.entities[0].machineCount = 100_000_004;
 
@@ -731,6 +745,8 @@ describe("game storage", () => {
     });
     expect(loaded.blueprints[0].entities[0].machineCount).toBe(100_000_003);
     expect(loaded.blueprintVersions[0].definition.entities[0].machineCount).toBe(100_000_004);
+    expect(loaded.entities.find((entity) => entity.id === historicalTimeWarpId)?.machineCount).toBe(3);
+    expect(loaded.entities.find((entity) => entity.id === historicalBlackHoleId)?.machineCount).toBe(2);
 
     const exported = exportGame(loaded);
     const inspection = inspectSave(exported);
@@ -743,6 +759,8 @@ describe("game storage", () => {
     expect(imported.entities.find((entity) => entity.id === storageId)?.machineCount).toBe(100_000_001);
     expect(imported.blueprints[0].entities[0].machineCount).toBe(100_000_003);
     expect(imported.blueprintVersions[0].definition.entities[0].machineCount).toBe(100_000_004);
+    expect(imported.entities.find((entity) => entity.id === historicalTimeWarpId)?.machineCount).toBe(3);
+    expect(imported.entities.find((entity) => entity.id === historicalBlackHoleId)?.machineCount).toBe(2);
   });
 
   it("rejects unsafe, fractional and negative persisted stack counts with rescue guidance", () => {

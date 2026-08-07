@@ -159,6 +159,31 @@ const UI_EN: TranslationMap = {
   "模拟速度": "Simulation Speed",
   "请求倍率": "Requested Multiplier",
   "实际倍率": "Effective Multiplier",
+  "供电上限": "Power Limit",
+  "实际结算倍率": "Settled Multiplier",
+  "查看计算与恢复详情": "View Compute & Recovery Details",
+  "退出 / 恢复原因": "Stop / Recovery Reason",
+  "结算会话": "Settlement Session",
+  "检查点指纹": "Checkpoint Fingerprint",
+  "冻结结算边界": "Frozen Settlement Boundary",
+  "提交状态": "Commit Status",
+  "已验证提交": "Verified & Committed",
+  "尚未提交": "Not Committed",
+  "未冻结": "Not Frozen",
+  "正常运行": "Running Normally",
+  "Worker 重启": "Worker Restarts",
+  "玩家请求停止": "Player Requested Stop",
+  "后台 5 分钟宽限结束": "Five-minute Background Grace Expired",
+  "Worker 计算超时": "Worker Timed Out",
+  "Worker 崩溃": "Worker Crashed",
+  "Worker 运行错误": "Worker Error",
+  "主存档已验证提交": "Primary Save Verified & Committed",
+  "玩家取消或放弃": "Player Cancelled or Abandoned",
+  "重试恢复": "Retry Recovery",
+  "重试恢复纯挂机": "Retry Pure-idle Recovery",
+  "放弃未结算并继续": "Abandon Unsettled Time & Continue",
+  "放弃将不发放约": "Abandoning will forfeit about",
+  "的未结算收益。": "of unsettled gains.",
   "请求所需功率": "Power Required for Request",
   "当前档位需电": "Current Tier Power Demand",
   "获得功率": "Allocated Power",
@@ -625,6 +650,10 @@ const UI_EN: TranslationMap = {
   "戴森功率": "Dyson Power",
   "戴森云与戴森球当前功率": "Current Dyson Swarm and Sphere power",
   "生产吞吐": "Production Throughput",
+  "实际结算吞吐": "Actual Settled Throughput",
+  "理论峰值产能": "Theoretical Peak Capacity",
+  "相邻主云修订或本地 60 秒窗口内的实际生产增量": "Actual production delta across adjacent main-cloud revisions or a local 60-second window",
+  "至少需要两次相隔 60 个模拟秒的有效主云同步，服务端才会形成实际结算吞吐窗口；旧理论峰值不会与新口径混排。": "Two valid main-cloud syncs at least 60 simulated seconds apart are required for an actual throughput window. Legacy nominal peaks are not mixed into the new metric.",
   "历史峰值生产通量": "Historical peak production throughput",
   "银河综合": "Galactic Composite",
   "发电、上传、戴森与工业规模综合评分": "Composite score from power, uploads, Dyson output, and industrial scale",
@@ -1687,6 +1716,18 @@ const UI_EN: TranslationMap = {
   "快速离线与速通模式更新": "Fast Offline & Speedrun Update",
   "速通与宏观纯挂机稳定性更新": "Speedrun & Macro Pure-Idle Stability Update",
   "离线与时间扭曲终局快速结算更新": "Fast Endgame Offline & Time-Warp Settlement Update",
+  "云存档、纯挂机与排行榜可信度更新": "Cloud Save, Pure-Idle & Leaderboard Integrity Update",
+  "1.0.34 修复历史唯一巨构堆叠和 Android 云上传，纯挂机停止复用已校准 Worker 并保留可恢复冻结边界，排行榜拆分实际结算吞吐与理论峰值，同时增加拉线候选建筑高亮。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。": "Version 1.0.34 fixes historical unique-megastructure stacks and Android cloud uploads, reuses the calibrated Worker while stopping pure idle with a recoverable frozen boundary, separates actual settled throughput from nominal peaks, and highlights compatible building cards while connecting belts. GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 are unchanged.",
+  "历史唯一巨构可安全上传": "Historical Unique Megastructures Upload Safely",
+  "正式版本曾产生的时间扭曲装置或微型黑洞历史堆叠会原样保留并通过云端校验；新的批量增加会明确跳过唯一巨构且不扣施工库存。": "Historical stacks of time-warp devices or micro black-hole connectors created by official builds are preserved and accepted by cloud validation. New batch increases explicitly skip unique megastructures without charging construction inventory.",
+  "Android 云上传绕过损坏压缩桥接": "Android Cloud Upload Avoids the Broken Compression Bridge",
+  "Android 原生应用改用有大小上限的原始 JSON 上传；Web 遇到服务端明确拒绝 gzip 时只安全回退一次，取消、冲突和未知状态继续保护本地主存档。": "The native Android app now uses size-limited raw JSON uploads. Web clients retry raw JSON only once after an explicit gzip rejection, while cancellation, conflicts, and unknown outcomes continue to protect the local save.",
+  "纯挂机停止与恢复更清晰": "Clearer Pure-Idle Stop & Recovery",
+  "停止时复用当前已校准 Worker，冻结结算边界直到主存档验证写入成功；失败会保留检查点，并提供明确的原因、重试和放弃未结算操作。": "Stopping reuses the calibrated Worker and freezes the settlement boundary until the primary save is verified and written. Failures preserve the checkpoint with explicit reasons, retry, and abandon-unsettled actions.",
+  "排行榜使用实际结算吞吐": "Leaderboards Use Actual Settled Throughput",
+  "相邻主云修订按累计生产增量形成实际吞吐窗口，旧理论峰值只作为诊断保留，不再与新口径混排或抬高银河综合分。": "Adjacent primary-cloud revisions derive an actual throughput window from cumulative production deltas. Legacy nominal peaks remain diagnostic only and no longer mix with the new metric or inflate the galactic score.",
+  "拉线候选建筑同步高亮": "Compatible Buildings Highlight While Connecting",
+  "鼠标、点击和触摸拉线时，起点建筑与拥有兼容端口的目标卡片会显示静态边框；成功、取消、Escape 或切换页面后立即清除。": "Mouse, click, and touch belt connections show static outlines on the origin and compatible target cards. Highlights clear immediately after success, cancellation, Escape, or leaving the canvas.",
   "1.0.33 让有限与无限科研继续参与快速离线和时间扭曲纯挂机，修复陈旧供电倍率，并在普通合同不可用或 Worker 失败时改用有界的保守宏观结算。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。": "Version 1.0.33 keeps finite and infinite research active during fast offline settlement and time-warp pure idle, refreshes stale power multipliers, and uses bounded conservative macro settlement when a regular contract or Worker is unavailable. GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 are unchanged.",
   "科研不再阻断快速结算": "Research No Longer Blocks Fast Settlement",
   "有限科技和无限科技使用共享的整数科研账本，离线与纯挂机可跨越科研边界；成本、奖励、队列和等级仍按原有领域规则结算。": "Finite and infinite research share an integer macro ledger so offline settlement and pure idle can cross research boundaries while preserving existing cost, reward, queue, and level rules.",
@@ -1986,6 +2027,12 @@ function translateRequirementList(source: string): string {
 function translateDynamicSystemText(body: string): string {
   let match = body.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
   if (match) return `${new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))).toLocaleDateString("en-US", { timeZone: "UTC", year: "numeric", month: "long", day: "numeric" })}`;
+  match = body.match(/^放弃约 (.+) 未结算时间并继续普通模拟$/);
+  if (match) return `Abandon about ${translateLegacyText(match[1], "en")} of unsettled time and continue normal simulation`;
+  match = body.match(/^检测到未提交的冻结结算（(.+)），请重试或放弃$/);
+  if (match) return `Uncommitted frozen settlement detected (${translateLegacyText(match[1], "en")}); retry or abandon it`;
+  match = body.match(/^(\d+) 座唯一巨构已跳过$/);
+  if (match) return `${match[1]} unique megastructure${match[1] === "1" ? " was" : "s were"} skipped`;
   match = body.match(/^长按采集(.+)$/);
   if (match) return `Hold to gather ${translateCatalogName(match[1])}`;
   match = body.match(/^采样于模拟 ([\d.]+) 秒 · 后台计算 ([\d.]+) ms · 最多每秒刷新一次$/);

@@ -21,6 +21,7 @@ describe("local galaxy leaderboard", () => {
       uploadedWhiteMatrix: 10,
       peakGenerationKw: 5_000,
       peakThroughputPerMinute: 100,
+      peakActualThroughputPerMinute: 100,
       peakDysonPowerKw: 2_000,
       exploredSystems: 2,
       colonizedPlanets: 3,
@@ -42,9 +43,11 @@ describe("local galaxy leaderboard", () => {
     const account = getActiveAccount(createAccountState(100));
     account.ledger.energyGeneratedMj = 2_500_000_000_000_000;
     account.ledger.peakThroughputPerMinute = 1_500_000_000_000_000;
+    account.ledger.peakActualThroughputPerMinute = 1_250_000_000_000_000;
     const metrics = getLeaderboardMetrics(account.ledger);
     expect(metrics.energyGeneratedMj).toBe(2_500_000_000_000_000);
-    expect(metrics.peakThroughputPerMinute).toBe(1_500_000_000_000_000);
+    expect(metrics.peakThroughputPerMinute).toBe(1_250_000_000_000_000);
+    expect(metrics.theoreticalPeakThroughputPerMinute).toBe(1_500_000_000_000_000);
     expect(Number.isFinite(metrics.galaxyScore)).toBe(true);
   });
 

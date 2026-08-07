@@ -7,14 +7,14 @@ const STORE_NAME = "records";
 const CHECKPOINT_KEY = "checkpoint";
 const HEARTBEAT_KEY = "heartbeat";
 const OWNER_SESSION_KEY = "dsp-idle-network.pure-idle-owner.v1";
-const RECOVERY_SCHEMA_VERSION = 1;
+const RECOVERY_SCHEMA_VERSION = 2;
 const LEASE_DURATION_MS = 15_000;
 
 export const PURE_IDLE_BACKGROUND_GRACE_SECONDS = 5 * 60;
 
 interface PureIdleCheckpointRecord {
   key: typeof CHECKPOINT_KEY;
-  schemaVersion: typeof RECOVERY_SCHEMA_VERSION;
+  schemaVersion: 1 | typeof RECOVERY_SCHEMA_VERSION;
   sessionId: string;
   createdAtMs: number;
   startedAtMs: number;
@@ -26,7 +26,7 @@ interface PureIdleCheckpointRecord {
 
 interface PureIdleHeartbeatRecord {
   key: typeof HEARTBEAT_KEY;
-  schemaVersion: typeof RECOVERY_SCHEMA_VERSION;
+  schemaVersion: 1 | typeof RECOVERY_SCHEMA_VERSION;
   sessionId: string;
   ownerToken: string;
   heartbeatAtMs: number;
@@ -38,7 +38,27 @@ interface PureIdleHeartbeatRecord {
   lastError?: string;
   /** Session-only Worker supervision state; never enters GameState. */
   workerRestartCount?: number;
+  /** Diagnostics only. No save body or player content is stored here. */
+  settlementId?: string;
+  checkpointHash?: string;
+  stopReason?: PureIdleStopReason;
+  stopRequestedAtMs?: number;
+  targetWallSeconds?: number;
+  finalizedAtMs?: number;
+  committedAtMs?: number;
+  abandonedWallSeconds?: number;
+  committed?: boolean;
+  lastTransitionAtMs?: number;
 }
+
+export type PureIdleStopReason =
+  | "user-stop-requested"
+  | "background-grace-expired"
+  | "worker-timeout"
+  | "worker-crash"
+  | "worker-error"
+  | "save-finalized"
+  | "user-cancelled";
 
 export interface PureIdleRecoveryRecord {
   sessionId: string;
@@ -56,6 +76,28 @@ export interface PureIdleRecoveryRecord {
   summary?: PureIdleMacroSummary;
   lastError?: string;
   workerRestartCount: number;
+  settlementId: string;
+  checkpointHash: string;
+  stopReason?: PureIdleStopReason;
+  stopRequestedAtMs?: number;
+  targetWallSeconds?: number;
+  finalizedAtMs?: number;
+  committedAtMs?: number;
+  abandonedWallSeconds?: number;
+  committed: boolean;
+  lastTransitionAtMs: number;
+}
+
+export interface PureIdleRecoveryTransition {
+  stopReason: PureIdleStopReason;
+  phase?: PureIdleMacroPhase;
+  stopRequestedAtMs?: number;
+  targetWallSeconds?: number;
+  finalizedAtMs?: number;
+  committedAtMs?: number;
+  abandonedWallSeconds?: number;
+  committed?: boolean;
+  lastError?: string;
 }
 
 export interface PureIdleBackgroundPlan {
@@ -138,6 +180,32 @@ function randomToken(prefix: string): string {
   }
 }
 
+function checkpointFingerprint(state: GameState): string {
+  const firstEntity = state.entities[0]?.id ?? "";
+  const lastEntity = state.entities.at(-1)?.id ?? "";
+  const firstBelt = state.belts[0]?.id ?? "";
+  const lastBelt = state.belts.at(-1)?.id ?? "";
+  const source = [
+    state.version,
+    state.elapsedSeconds,
+    state.entities.length,
+    state.belts.length,
+    firstEntity,
+    lastEntity,
+    firstBelt,
+    lastBelt,
+    state.dysonSphere.structurePoints,
+    state.dysonSphere.totalRocketsLaunched,
+    state.totalProduced.universe_matrix ?? 0,
+  ].join("|");
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `checkpoint-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
 export function getPureIdleOwnerToken(): string {
   try {
     const existing = window.sessionStorage.getItem(OWNER_SESSION_KEY);
@@ -197,7 +265,7 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
 function validCheckpoint(value: unknown): value is PureIdleCheckpointRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as Partial<PureIdleCheckpointRecord>;
-  return record.key === CHECKPOINT_KEY && record.schemaVersion === RECOVERY_SCHEMA_VERSION &&
+  return record.key === CHECKPOINT_KEY && (record.schemaVersion === 1 || record.schemaVersion === RECOVERY_SCHEMA_VERSION) &&
     typeof record.sessionId === "string" && record.sessionId.length > 0 &&
     typeof record.startedAtMs === "number" && Number.isFinite(record.startedAtMs) &&
     (record.startedPaused === undefined || typeof record.startedPaused === "boolean") &&
@@ -207,13 +275,31 @@ function validCheckpoint(value: unknown): value is PureIdleCheckpointRecord {
 function validHeartbeat(value: unknown): value is PureIdleHeartbeatRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as Partial<PureIdleHeartbeatRecord>;
-  return record.key === HEARTBEAT_KEY && record.schemaVersion === RECOVERY_SCHEMA_VERSION &&
+  const validOptionalTimestamp = (value: unknown) => value === undefined || typeof value === "number" && Number.isFinite(value);
+  const validStopReason = record.stopReason === undefined || [
+    "user-stop-requested",
+    "background-grace-expired",
+    "worker-timeout",
+    "worker-crash",
+    "worker-error",
+    "save-finalized",
+    "user-cancelled",
+  ].includes(record.stopReason);
+  return record.key === HEARTBEAT_KEY && (record.schemaVersion === 1 || record.schemaVersion === RECOVERY_SCHEMA_VERSION) &&
     typeof record.sessionId === "string" && typeof record.ownerToken === "string" &&
     typeof record.heartbeatAtMs === "number" && Number.isFinite(record.heartbeatAtMs) &&
     typeof record.leaseExpiresAtMs === "number" && Number.isFinite(record.leaseExpiresAtMs) &&
     typeof record.settledWallSeconds === "number" && Number.isFinite(record.settledWallSeconds) && record.settledWallSeconds >= 0 &&
     (record.workerRestartCount === undefined || (Number.isSafeInteger(record.workerRestartCount) && record.workerRestartCount >= 0)) &&
-    (record.backgroundStartedAtMs === undefined || (typeof record.backgroundStartedAtMs === "number" && Number.isFinite(record.backgroundStartedAtMs)));
+    (record.backgroundStartedAtMs === undefined || (typeof record.backgroundStartedAtMs === "number" && Number.isFinite(record.backgroundStartedAtMs))) &&
+    (record.settlementId === undefined || typeof record.settlementId === "string" && record.settlementId.length > 0) &&
+    (record.checkpointHash === undefined || typeof record.checkpointHash === "string" && /^checkpoint-[0-9a-f]{8}$/.test(record.checkpointHash)) &&
+    validStopReason && validOptionalTimestamp(record.stopRequestedAtMs) &&
+    (record.targetWallSeconds === undefined || typeof record.targetWallSeconds === "number" && Number.isFinite(record.targetWallSeconds) && record.targetWallSeconds >= 0) &&
+    validOptionalTimestamp(record.finalizedAtMs) &&
+    validOptionalTimestamp(record.committedAtMs) && validOptionalTimestamp(record.lastTransitionAtMs) &&
+    (record.abandonedWallSeconds === undefined || typeof record.abandonedWallSeconds === "number" && Number.isFinite(record.abandonedWallSeconds) && record.abandonedWallSeconds >= 0) &&
+    (record.committed === undefined || typeof record.committed === "boolean");
 }
 
 function combine(checkpoint: PureIdleCheckpointRecord, heartbeat: PureIdleHeartbeatRecord): PureIdleRecoveryRecord | null {
@@ -234,6 +320,16 @@ function combine(checkpoint: PureIdleCheckpointRecord, heartbeat: PureIdleHeartb
     ...(heartbeat.summary ? { summary: heartbeat.summary } : {}),
     ...(heartbeat.lastError ? { lastError: heartbeat.lastError } : {}),
     workerRestartCount: Math.max(0, Math.floor(heartbeat.workerRestartCount ?? 0)),
+    settlementId: heartbeat.settlementId ?? checkpoint.sessionId,
+    checkpointHash: heartbeat.checkpointHash ?? checkpointFingerprint(checkpoint.state),
+    ...(heartbeat.stopReason ? { stopReason: heartbeat.stopReason } : {}),
+    ...(heartbeat.stopRequestedAtMs !== undefined ? { stopRequestedAtMs: heartbeat.stopRequestedAtMs } : {}),
+    ...(heartbeat.targetWallSeconds !== undefined ? { targetWallSeconds: heartbeat.targetWallSeconds } : {}),
+    ...(heartbeat.finalizedAtMs !== undefined ? { finalizedAtMs: heartbeat.finalizedAtMs } : {}),
+    ...(heartbeat.committedAtMs !== undefined ? { committedAtMs: heartbeat.committedAtMs } : {}),
+    ...(heartbeat.abandonedWallSeconds !== undefined ? { abandonedWallSeconds: heartbeat.abandonedWallSeconds } : {}),
+    committed: heartbeat.committed === true,
+    lastTransitionAtMs: heartbeat.lastTransitionAtMs ?? heartbeat.heartbeatAtMs,
   };
 }
 
@@ -333,6 +429,10 @@ export async function createPureIdleRecovery(
     settledWallSeconds: 0,
     phase: "calibrating",
     workerRestartCount: 0,
+    settlementId: randomToken("settlement"),
+    checkpointHash: checkpointFingerprint(state),
+    committed: false,
+    lastTransitionAtMs: nowMs,
   };
   store.put(checkpoint);
   store.put(heartbeat);
@@ -372,6 +472,11 @@ export async function claimPureIdleRecovery(
   }
   const heartbeat: PureIdleHeartbeatRecord = {
     ...heartbeatValue,
+    schemaVersion: RECOVERY_SCHEMA_VERSION,
+    settlementId: heartbeatValue.settlementId ?? checkpointValue.sessionId,
+    checkpointHash: heartbeatValue.checkpointHash ?? checkpointFingerprint(checkpointValue.state),
+    committed: heartbeatValue.committed === true,
+    lastTransitionAtMs: heartbeatValue.lastTransitionAtMs ?? heartbeatValue.heartbeatAtMs,
     ownerToken,
     heartbeatAtMs: nowMs,
     leaseExpiresAtMs: nowMs + LEASE_DURATION_MS,
@@ -400,6 +505,7 @@ export async function heartbeatPureIdleRecovery(
   }
   store.put({
     ...existing,
+    schemaVersion: RECOVERY_SCHEMA_VERSION,
     heartbeatAtMs: nowMs,
     leaseExpiresAtMs: nowMs + LEASE_DURATION_MS,
     settledWallSeconds: Math.max(existing.settledWallSeconds, settledWallSeconds),
@@ -428,6 +534,7 @@ export async function recordPureIdleWorkerFailure(
   const workerRestartCount = Math.min(1_000, Math.max(0, Math.floor(existing.workerRestartCount ?? 0)) + 1);
   store.put({
     ...existing,
+    schemaVersion: RECOVERY_SCHEMA_VERSION,
     heartbeatAtMs: nowMs,
     leaseExpiresAtMs: nowMs + LEASE_DURATION_MS,
     phase: "failed",
@@ -453,10 +560,46 @@ export async function resetPureIdleWorkerFailures(
   }
   store.put({
     ...existing,
+    schemaVersion: RECOVERY_SCHEMA_VERSION,
     heartbeatAtMs: nowMs,
     leaseExpiresAtMs: nowMs + LEASE_DURATION_MS,
     workerRestartCount: 0,
     lastError: undefined,
+  } satisfies PureIdleHeartbeatRecord);
+  await transactionDone(transaction);
+  return true;
+}
+
+export async function recordPureIdleRecoveryTransition(
+  sessionId: string,
+  ownerToken: string,
+  update: PureIdleRecoveryTransition,
+  nowMs = Date.now(),
+): Promise<boolean> {
+  const db = await openDatabase();
+  const transaction = db.transaction(STORE_NAME, "readwrite");
+  const store = transaction.objectStore(STORE_NAME);
+  const existing = await requestResult(store.get(HEARTBEAT_KEY));
+  if (!validHeartbeat(existing) || existing.sessionId !== sessionId || existing.ownerToken !== ownerToken) {
+    transaction.abort();
+    return false;
+  }
+  const committed = existing.committed === true || update.committed === true;
+  store.put({
+    ...existing,
+    schemaVersion: RECOVERY_SCHEMA_VERSION,
+    heartbeatAtMs: nowMs,
+    leaseExpiresAtMs: nowMs + LEASE_DURATION_MS,
+    stopReason: update.stopReason,
+    ...(update.phase ? { phase: update.phase } : {}),
+    ...(update.stopRequestedAtMs !== undefined ? { stopRequestedAtMs: update.stopRequestedAtMs } : {}),
+    ...(update.targetWallSeconds !== undefined ? { targetWallSeconds: update.targetWallSeconds } : {}),
+    ...(update.finalizedAtMs !== undefined ? { finalizedAtMs: update.finalizedAtMs } : {}),
+    ...(update.committedAtMs !== undefined ? { committedAtMs: update.committedAtMs } : {}),
+    ...(update.abandonedWallSeconds !== undefined ? { abandonedWallSeconds: update.abandonedWallSeconds } : {}),
+    ...(update.lastError !== undefined ? { lastError: update.lastError } : {}),
+    committed,
+    lastTransitionAtMs: nowMs,
   } satisfies PureIdleHeartbeatRecord);
   await transactionDone(transaction);
   return true;
@@ -477,6 +620,7 @@ export async function markPureIdleBackground(
   }
   store.put({
     ...heartbeat,
+    schemaVersion: RECOVERY_SCHEMA_VERSION,
     backgroundStartedAtMs: heartbeat.backgroundStartedAtMs ?? backgroundStartedAtMs,
     heartbeatAtMs: backgroundStartedAtMs,
     leaseExpiresAtMs: backgroundStartedAtMs + LEASE_DURATION_MS,
@@ -495,7 +639,7 @@ export async function clearPureIdleBackground(sessionId: string, ownerToken: str
     return false;
   }
   const { backgroundStartedAtMs: _backgroundStartedAtMs, ...rest } = heartbeat;
-  store.put(rest satisfies PureIdleHeartbeatRecord);
+  store.put({ ...rest, schemaVersion: RECOVERY_SCHEMA_VERSION } satisfies PureIdleHeartbeatRecord);
   await transactionDone(transaction);
   return true;
 }
@@ -528,7 +672,7 @@ export async function releasePureIdleRecoveryLease(sessionId: string, ownerToken
       transaction.abort();
       return;
     }
-    store.put({ ...heartbeat, heartbeatAtMs: nowMs, leaseExpiresAtMs: nowMs } satisfies PureIdleHeartbeatRecord);
+    store.put({ ...heartbeat, schemaVersion: RECOVERY_SCHEMA_VERSION, heartbeatAtMs: nowMs, leaseExpiresAtMs: nowMs } satisfies PureIdleHeartbeatRecord);
     await transactionDone(transaction);
   } catch {
     // The checkpoint remains authoritative; a stale lease expires naturally.

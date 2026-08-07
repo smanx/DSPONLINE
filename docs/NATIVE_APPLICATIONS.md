@@ -3,6 +3,7 @@
 > 当前发布版本：Web/Windows `1.0.33`；Android 正式包 `1.0.33 / 1000033`
 > 1.0.32 是当前代码与应用包的直接回滚版本；1.0.33 已写入两地 Web/API 和上海公网更新清单。
 > 当前公开稳定版本：Windows `1.0.33` 未签名测试包；Android `1.0.33 / 1000033` 正式签名包
+> 1.0.34 当前只在隔离开发分支准备候选制品，尚未进入稳定更新源或公网下载页。
 > Windows 包名：`com.dspidle.network`
 > Android applicationId：`cn.dsponline.network`
 > Web、Windows 与 Android 1.0.33 共用 `GameState` v46。两端存档 envelope v2 和云 schema v7 不变；旧存档通过连续守恒迁移载入。
@@ -16,6 +17,7 @@
 - 原生生命周期只触发既有保存流程，不修改模拟步长、GameState 或云存档格式。
 - Android 与 Windows 各自保留本机应用数据。覆盖安装和同签名升级不会清除本地存档；卸载应用仍会删除系统应用数据，因此正式发布前必须继续提供导出和云存档。
 - Android JSON 导出通过应用缓存目录与系统分享面板完成；Web/Electron 继续使用浏览器下载。
+- Android 原生 HTTP 桥不能可靠传输浏览器生成的 gzip Blob。1.0.34 起，Android 云存档上传预先发送原始 JSON 字符串并遵守 30 MiB 客户端安全上限；Web/PWA 的流式 gzip 和 `expectedRevision` 冲突保护不变。该兼容只作用于云存档请求，不关闭 CapacitorHttp，也不改变 GameState、envelope 或云 schema。
 - 社区构建默认不连接官方云 API、账号深链或更新源。官方地址只由受保护的发布 CI 显式注入；Electron 会把允许的 API 和更新基址写入包元数据，运行时不依赖玩家机器环境变量。
 
 ## 2. 开发环境

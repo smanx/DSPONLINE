@@ -42,8 +42,8 @@ flowchart LR
 - `src/game/onboarding.ts`、`src/components/OnboardingCoach.tsx`：独立于 `GameState` 的 5 步基础操作和 13 步渐进教学偏好、真实命令里程碑判定及设备/线路卡点诊断；教学关闭状态不会随存档或云同步改写。
 - `src/App.tsx`：顶层会话和工厂编排。它管理工作区、画布交互、连接、选中状态、存档定时器和模拟 Worker。
 - `src/game/simulationProjection.ts`、`src/game/simulationDelta.ts`：定义 P4 的版本化 UI 投影和实验性增量协议。实时 Worker 默认继续返回完整 `GameState` 兼容 oracle；设备级开发开关 `dsp-idle-network.experimental-simulation-delta.v1` 开启后，首次/命令边界仍传完整状态，连续模拟只传带 `baseRevision/nextRevision` 的变化实体、线路和顶层字段。Worker 会比较增量与完整状态的同编码序列化大小，增量不更小时自动回退完整状态并标记原因；主线程发现 revision 不匹配会暂存时间预算并要求完整重同步，不能用旧响应覆盖新状态。两条路径共享同一 `advancePersistentSimulationRuntime`，不改变存档格式。
-- `src/components/TimeWarpIdleOverlay.tsx`：时间扭曲纯挂机覆盖层。覆盖层是独立的交互边界，隐藏画布并只展示实际倍率、挂机时间、模拟积压、关键产量和保存状态；停止前由 `App` 等待 Worker 安全边界并校验主存档。
-- `src/game/pureIdleMacro.ts`、`pureIdleMacro.worker.ts`、`pureIdleMacroClient.ts`：`pure-idle-macro-v3` 终局宏观纯挂机的校准合同、候选状态、科研账本、验证摘要和正式重载门禁。启动及恢复从检查点重新计算时间扭曲供电倍率；普通合同不可用、影子尾验偏差或 Worker 失败时只切换有界保守宏观，不再创建覆盖完整挂机时长的精确会话。Worker 代次隔离迟到消息，连续两次失败后从原始合法检查点进入零校准保守模式。`pureIdleRecovery.ts` 将检查点、心跳、墙钟进度、失败次数和开始前暂停状态保存到独立 IndexedDB；Web Lock 与可过期租约防止重复结算，恢复日志不属于 `GameState`、存档 envelope 或云 payload。
+- `src/components/TimeWarpIdleOverlay.tsx`：时间扭曲纯挂机覆盖层。覆盖层是独立的交互边界，隐藏画布并展示实际倍率、挂机时间、模拟积压、关键产量、保存状态和退出原因。停止时冻结目标墙钟边界并复用当前已校准 Worker；只有主存档写入和读回验证成功后才退出。保存或 Worker 失败继续显示检查点、提交状态、重试和明确放弃未结算时间入口，不静默返回画布。
+- `src/game/pureIdleMacro.ts`、`pureIdleMacro.worker.ts`、`pureIdleMacroClient.ts`：`pure-idle-macro-v3` 终局宏观纯挂机的校准合同、候选状态、科研账本、验证摘要和正式重载门禁。启动及恢复从检查点重新计算时间扭曲供电倍率；普通合同不可用、影子尾验偏差或 Worker 失败时只切换有界保守宏观，不再创建覆盖完整挂机时长的精确会话。Worker 代次隔离迟到消息，连续两次失败后从原始合法检查点进入零校准保守模式。`pureIdleRecovery.ts` 将检查点、心跳、墙钟进度、失败次数、开始前暂停状态、结算 ID、检查点指纹、冻结边界、退出原因和提交标记保存到独立 IndexedDB；Web Lock 与可过期租约防止重复结算，旧 schema v1 记录按读取时默认值兼容，恢复日志不属于 `GameState`、存档 envelope 或云 payload。
 - 页面进入后台时，`pureIdleRecovery.ts` 记录设备级背景边界；高倍率宏观结算最多覆盖该边界后的 300 秒。恢复或重新打开页面时，超过宽限的剩余墙钟时间只交给普通离线 Worker，且通过运行时单飞锁避免可见性事件与心跳定时器重复提交；浏览器硬关闭没有 `pagehide` 时以最后一次持久心跳作为保守边界。
 - `src/components/TutorialWorkspace.tsx`：零基础教程工作区。内容是只读 UI 数据，搜索、目录和阅读进度使用设备级 `localStorage`，不写入 `GameState` 或云存档。
 - `src/components/SystemSpaceStationWorkspace.tsx`：空间站/太空电梯独立工作区；只通过领域命令管理施工、Mk.II 模式、共享仓库、模块和五路输出，不把空间站伪装成普通行星画布。
@@ -103,7 +103,7 @@ React Flow 的持久真相仍来自 `GameState`。`src/game/canvasLineBatch.ts` 
 - `src/game/systemHubLogistics.ts`：系统共享仓库的规范十进制大整数、五秒边界比例分配、跨星系舰队返回桶和电梯站输入/输出结算。运行时只保存聚合舰队桶，`bigint` 不进入 JSON。
 - `src/game/quantumLogisticsNetwork.ts`：全星区量子库存的规范十进制大整数、逐物品容量、上传/下载独立全局预算、公平游标，以及星际物流塔和轨道采集器的五秒接入桥。采集器不产生独立带宽；传统本地运输机仍由 `engine.ts` 的 `local` 调度路径处理。
 - `src/components/SystemSpaceStationWorkspace.tsx`：从星图进入的桌面/新版手机空间站工作区；阶段材料、共享库存、模块、物流站模式和五个输出口均调用领域命令。
-- `src/game/cloud.ts`：同源 `/api` 客户端、会话和 8 秒请求超时。账号与云存档只允许 HTTPS 或本地开发入口；匿名只读 `/health`、`/public-status` 和 `GET /leaderboard` 可在上海 HTTP 同源读取节点状态、活动时钟和公开排名，且不会附带 token。打包的 Electron/Android 只有在构建时显式配置 `VITE_API_BASE_URL` 才启用云功能，社区包默认离线。Capacitor 的内部页面 origin 固定为 `https://localhost`；生产 API 白名单需精确允许它，以覆盖原生 HTTP 补丁不可用时的标准 Fetch 回退，未知 origin 仍拒绝。
+- `src/game/cloud.ts`：同源 `/api` 客户端、会话和 8 秒请求超时。账号与云存档只允许 HTTPS 或本地开发入口；匿名只读 `/health`、`/public-status` 和 `GET /leaderboard` 可在上海 HTTP 同源读取节点状态、活动时钟和公开排名，且不会附带 token。打包的 Electron/Android 只有在构建时显式配置 `VITE_API_BASE_URL` 才启用云功能，社区包默认离线。Android 原生请求桥不接收 gzip Blob，因此云上传预先使用原始 JSON 并遵守 30 MiB 明文上限；Web 保留流式 gzip，只有首次 gzip 真正收到 `400 / REQUEST_ENCODING_INVALID` 时才使用同一 `expectedRevision` 明文重试一次。取消、409、网络超时确认和未知提交状态仍走原有幂等保护。Capacitor 的内部页面 origin 固定为 `https://localhost`；生产 API 白名单需精确允许它，以覆盖原生 HTTP 补丁不可用时的标准 Fetch 回退，未知 origin 仍拒绝。
 - `src/game/mods.ts`、`contentPacks.ts`：内容包格式校验、依赖和运行时目录注入。
 
 ## 3. 状态与模拟流
@@ -133,7 +133,7 @@ React Flow 的持久真相仍来自 `GameState`。`src/game/canvasLineBatch.ts` 
 
 模拟器应保持纯状态输入和确定性输出。新增随机机制必须从持久化 seed 派生，不能直接依赖 `Math.random()` 或墙上时钟，否则基准哈希、离线结算和云存档会分叉。
 
-1.0.33 的宏观纯挂机在 `pureIdleMacro.worker.ts` 内执行有界校准，并按模式选择普通或保守宏观合同；候选状态最终必须经过 `serializeEnvelope()`、`inspectSave()` 和线路/数值安全检查才可提交。宏观合同不以航线 cargo/progress、传送带瞬时流量或功率诊断的仿射增量伪造在途状态；这些不确定产线可冻结在安全边界并少发收益。有限/无限科研不再改变启动或恢复分支，而是由 `researchMacro.ts` 按实测投入、整数余数和原有领域完成函数推进；旧 `pure-idle-macro-v2` 记录即使包含科研也可迁移并重新求值供电倍率。纯挂机恢复日志单独持久化 Worker 失败次数，连续两次失败后从原始合法检查点进入零校准保守模式；实时模拟 Worker 的兼容近似路径使用 `time-warp-short-calibration-v3`，短校准同步建立科研账本，活动科研不再触发完整高倍率切片的精确重放。
+1.0.34 候选继续使用 `pure-idle-macro-v3`：`pureIdleMacro.worker.ts` 内执行有界校准，并按模式选择普通或保守宏观合同；候选状态最终必须经过 `serializeEnvelope()`、`inspectSave()` 和线路/数值安全检查才可提交。宏观合同不以航线 cargo/progress、传送带瞬时流量或功率诊断的仿射增量伪造在途状态；这些不确定产线可冻结在安全边界并少发收益。有限/无限科研不再改变启动或恢复分支，而是由 `researchMacro.ts` 按实测投入、整数余数和原有领域完成函数推进；旧 `pure-idle-macro-v2` 记录即使包含科研也可迁移并重新求值供电倍率。纯挂机停止不再新建第二个 finalizer，冻结目标后复用现有 Worker；若候选有效但写盘失败，原 Worker 与恢复日志保持可重试，`committed=true` 只能在 `saveGameVerified()` 成功之后写入。连续两次 Worker 失败后才从原始合法检查点进入零校准保守模式；实时模拟 Worker 的兼容近似路径继续使用 `time-warp-short-calibration-v3`。
 
 科研完成边界由 `engine.ts` 的领域函数统一处理。普通模拟会话开始/完成、命令切换、Worker 返回和 `storage.ts` v46 迁移都会修复“投入已满但未完成”的状态，执行一次奖励和队列切换；该修复不清空科研站缓存、不增加存档版本，也不允许组件直接改写科研字段。
 
@@ -199,7 +199,7 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 有限资源的唯一展示判定为 `engine.ts#getResourceReserveSnapshot()`。React Flow 节点通过派生 NodeData 接收快照，桌面/移动检查器直接调用同一 helper，`stellarIndustry.ts` 与生产统计也使用相同的 `infinite/exhausted/remaining/capacity/remainingPercent` 语义。
 
-节点卡片必须高于线路并拦截指针事件；连接虚影和成功/失败反馈属于临时 UI 状态，不写入存档。
+节点卡片必须高于线路并拦截指针事件；连接虚影和成功/失败反馈属于临时 UI 状态，不写入存档。拉线草稿存在时，节点 class 可从当前端口目录派生起点与兼容候选卡片高亮；该提示只复用 `getAcceptedInputs()`、`getProducedOutputs()` 和通用端口规则，不能代替 `isValidConnection()` 的行星、等级、库存、重复线路和端口容量最终校验，取消或切换工作区时必须随草稿清除。
 
 ## 6. 存档架构
 
@@ -267,6 +267,8 @@ v41→v42 只增加 `galaxy.planetMetadata` 与 `galaxy.systemMetadata`。旧存
 
 云端为每名用户保存 `main`、`1`、`2`、`3` 四个独立槽位，每个槽位分别维护完整导出 payload、元数据、修订号和最多 20 条历史。元数据包含 SHA-256、状态校验值、保存时间、状态版本、运行时长、设备/科技数量等安全摘要。上传前客户端先复核 envelope 内部校验；服务端再独立按 `formatVersion + state` 重算并拒绝不一致载荷，异常 payload 不写入修订、历史或排行榜。上传必须携带该槽位的 `expectedRevision`，版本冲突返回 409；前端通过按槽位同步标记区分本地更新、云端更新和双向分叉，只有玩家明确选择后才推进修订。恢复历史版本会在同一槽位生成一个新修订，不会原地覆盖历史。排行榜只读取 `main`；主槽上传或恢复成功后在同一持久化流程中 upsert 排名，手动槽不会触发排名。
 
+v46 历史存档可能包含正式批量操作曾生成的 `time_warp_device` 或 `micro_black_hole_connector` 安全整数堆叠。客户端加载、保存和服务端四槽校验均原样保留这些数量；运行能力仍按一个节点计算，新的混合批量增加会跳过唯一巨构且不扣施工库存。服务端仍拒绝零、负数、小数和 unsafe integer，不能把兼容解释为取消数值安全校验。
+
 已登录云账号的工厂运行时每 10 分钟比较并上传一次 `main`，不再把邮箱验证作为云存档门槛。相同状态不重复创建修订；云端更新或双向分叉会停止自动覆盖并留下可见冲突状态。注册、登录、退出与自动上传不会下载、替换或删除本地主存档、三个本地槽、备份和快照；云端下载与历史恢复仍只由玩家显式触发，并在替换当前工厂前创建本地回滚快照。网络、邮件或服务端错误不会改变本地存档。手动槽位只接受玩家显式上传，不参与自动同步。
 
 `src/game/cloud.ts` 的认证 token 使用“持久存储优先、当前页面内存回退”策略。正常情况下每次请求重新读取 `localStorage`，因此跨标签登录或退出可见；持久层拒绝写入或变为不可读时使用最后已知 token。显式清除失败时以内存空值作为权威状态，不能让残留旧 token 重新认证。
@@ -288,7 +290,7 @@ API 表面：
 - `POST /api/leaderboard/visibility`
 - `POST /api/feedback`、`POST /api/errors`
 
-密码使用 scrypt 派生并采用 timing-safe 比较；会话 token 和邮箱动作 token 只保存 SHA-256，登录会话默认有效期 30 天，邮箱动作链接有效期 30 分钟。注册与四槽云存档只要求安全入口和有效登录会话；排行榜匿名只读，加入要求有效登录会话和 `main` 存档，不要求邮箱验证。服务端忽略旧客户端携带的指标，统一从主云存档提取当前快照并保留由同一服务端策略观察到的历史峰值；启动时按用户 ID 排序幂等回填已有主存档。`leaderboardVisible=false` 会移除该账号的公开提交，后续主槽同步不会重新加入。
+密码使用 scrypt 派生并采用 timing-safe 比较；会话 token 和邮箱动作 token 只保存 SHA-256，登录会话默认有效期 30 天，邮箱动作链接有效期 30 分钟。注册与四槽云存档只要求安全入口和有效登录会话；排行榜匿名只读，加入要求有效登录会话和 `main` 存档，不要求邮箱验证。服务端忽略旧客户端携带的指标：发电、戴森等从主云快照提取，白糖和实际结算吞吐分别从相邻主云修订的累计量增量计算，窗口至少跨 60 个模拟秒。旧 `peakThroughputPerMinute` 理论峰值保存在独立诊断字段和 legacy 审计信息中，不得与 `settled-total-produced-v1` 排名值合并；启动时按用户 ID 排序幂等回填已有主存档。`leaderboardVisible=false` 会移除该账号的公开提交，后续主槽同步不会重新加入。
 
 `app_state.leaderboardModeration` 是只存在服务器的可选内部状态，不改变 GameState、存档 envelope、云 schema 或 SQLite layout。合法记录只允许固定的 `blocked / SAVE_DATA_INTEGRITY`、有界来源和时间戳，并且必须引用仍存在的账号。受限账号从五个公开榜单过滤，手动刷新和重新开启可见性返回 `LEADERBOARD_RESTRICTED`，主档上传、历史恢复和启动回填也不能重建提交；登录、云档读写、历史恢复和账号导出继续可用。账号注销才清理该内部标记。`server/moderate-leaderboard.mjs` 默认用只读/query-only SQLite dry-run，先按服务器综合榜排序锁定唯一第一名，再核对受保护显示名、主档 revision、SHA-256、envelope 和官方矿脉不变量；实际写入要求验证备份和服务已停止确认，并在单个事务中写标记、删除提交和追加不含 PII 的审计，云档正文表不参与该事务。
 

@@ -8056,6 +8056,15 @@ function targetCanAcceptBeltItem(state: GameState, entity: FactoryEntity, itemId
   return targetConsumes(state, entity, itemId, targetPortIndex) || Boolean(getAutoRecipeForInput(state, entity, itemId));
 }
 
+/**
+ * Read-only port compatibility used by connection previews. Final placement
+ * still goes through getBeltConnectionCheck(), which also validates stock,
+ * endpoints, lane limits and a concrete special-port index.
+ */
+export function canEntityAcceptBeltItem(state: GameState, entity: FactoryEntity, itemId: ItemId): boolean {
+  return targetCanAcceptBeltItem(state, entity, itemId);
+}
+
 function configureAutoTargetRecipe(state: GameState, entity: FactoryEntity, itemId: ItemId): void {
   const recipe = getAutoRecipeForInput(state, entity, itemId);
   if (!recipe || entity.recipeId === recipe.id) return;
@@ -10094,6 +10103,7 @@ export interface BatchSelectionIncreaseResult {
   changedBeltCount: number;
   buildingAtLimitCount: number;
   beltAtLimitCount: number;
+  uniqueBuildingSkippedCount: number;
   skippedLockedCount: number;
   requiredConstruction: Partial<Record<ConstructionId, number>>;
   missingConstruction: Partial<Record<ConstructionId, number>>;
@@ -10119,6 +10129,7 @@ export function batchIncreaseSelection(
     changedBeltCount: 0,
     buildingAtLimitCount: 0,
     beltAtLimitCount: 0,
+    uniqueBuildingSkippedCount: 0,
     skippedLockedCount: 0,
     requiredConstruction: {},
     missingConstruction: {},
@@ -10135,6 +10146,7 @@ export function batchIncreaseSelection(
   const requiredConstruction: Partial<Record<ConstructionId, number>> = {};
   const entityUpdates: Array<{ id: string; count: number; constructionId: ConstructionId }> = [];
   let buildingAtLimitCount = 0;
+  let uniqueBuildingSkippedCount = 0;
   let skippedLockedCount = 0;
   for (const entity of state.entities) {
     if (!selectedEntityIdSet.has(entity.id)) continue;
@@ -10145,6 +10157,10 @@ export function batchIncreaseSelection(
     if (!buildingId) { skippedLockedCount += 1; continue; }
     const definition = getBuilding(buildingId);
     if (definition.kind === "miner" && entity.kind !== "vein") { skippedLockedCount += 1; continue; }
+    if (buildingId === "micro_black_hole_connector" || buildingId === "time_warp_device") {
+      uniqueBuildingSkippedCount += 1;
+      continue;
+    }
     const current = entity.kind === "vein" ? entity.minerCount : entity.machineCount;
     const check = getBuildingStackAdditionCheck(current, amount, definition.name);
     if (!check.ok || (definition.stackLimit !== undefined && check.total > definition.stackLimit)) {
@@ -10184,6 +10200,7 @@ export function batchIncreaseSelection(
       changedBeltCount: 0,
       buildingAtLimitCount,
       beltAtLimitCount,
+      uniqueBuildingSkippedCount,
       skippedLockedCount,
       requiredConstruction,
       missingConstruction,
@@ -10199,10 +10216,13 @@ export function batchIncreaseSelection(
       changedBeltCount: 0,
       buildingAtLimitCount,
       beltAtLimitCount,
+      uniqueBuildingSkippedCount,
       skippedLockedCount,
       requiredConstruction,
       missingConstruction,
-      label: "所选项目均已达到上限或不可堆叠",
+      label: uniqueBuildingSkippedCount > 0
+        ? `所选项目均已达到上限或不可堆叠；${uniqueBuildingSkippedCount} 座唯一巨构已跳过`
+        : "所选项目均已达到上限或不可堆叠",
     };
   }
   const next = copyState(state);
@@ -10226,6 +10246,7 @@ export function batchIncreaseSelection(
     changedBeltCount: beltUpdates.length,
     buildingAtLimitCount,
     beltAtLimitCount,
+    uniqueBuildingSkippedCount,
     skippedLockedCount,
     requiredConstruction,
     missingConstruction,
