@@ -137,6 +137,7 @@ import {
 } from "./quantumLogisticsNetwork";
 import type { QuantumSettlementInput, QuantumSettlementOutput } from "./quantumLogisticsNetwork";
 import {
+  getRecipeNetOutput,
   planRecursiveRequirements,
   planSelectedRecipe,
   type RecursiveCraftBlocker,
@@ -810,7 +811,7 @@ function remainingResearchCosts(state: GameState): Array<{ itemId: ItemId; amoun
   return amount > 0 ? [{ itemId: "universe_matrix", amount }] : [];
 }
 
-function hasActiveResearch(state: GameState): boolean {
+export function hasActiveResearch(state: GameState): boolean {
   return Boolean(state.research.selectedTechId || (state.endgame?.activeInfiniteResearchId && isEndgameUnlocked(state)));
 }
 
@@ -3028,6 +3029,22 @@ function updateDysonSphereGeneration(state: GameState): void {
     return sum + (Math.floor(plan.structurePoints) * DYSON_STRUCTURE_POWER_KW +
       Math.floor(plan.shellSails) * DYSON_SHELL_SAIL_POWER_KW) * powerMultiplier * luminosity;
   }, 0));
+}
+
+/**
+ * Refresh derived Dyson power after a guarded macro settlement changes the
+ * persisted sail/structure counters without replaying every launch event.
+ */
+export function refreshDysonGenerationSnapshot(state: GameState): void {
+  syncLegacySwarmIntoOrbits(state);
+  for (const [systemId, orbits] of Object.entries(state.dysonEngineering.orbitsBySystem)) {
+    for (const orbit of orbits ?? []) {
+      orbit.generationKw = Math.max(0, Math.floor(orbit.sailsInOrbit)) *
+        getSolarSailPowerFor(state, systemId as StarSystemId);
+    }
+  }
+  aggregateDysonSwarm(state);
+  updateDysonSphereGeneration(state);
 }
 
 function consumeDysonOrbitSails(state: GameState, systemId: StarSystemId, amount: number): number {
@@ -6072,6 +6089,12 @@ export function createSimulationAdvanceSession(state: GameState, seconds: number
 export function advanceSimulationSession(session: SimulationAdvanceSession, maximumSteps: number): number {
   const stepLimit = Math.max(0, Math.floor(Number.isFinite(maximumSteps) ? maximumSteps : 0));
   let steps = 0;
+  // Repair a persisted full-progress boundary before the first machine pass.
+  // This is cheap when no research is active and prevents a zero-cycle lab
+  // from becoming a permanent state-machine deadlock.
+  if (session.remainingSeconds > EPSILON) {
+    settleCompletedResearchBoundariesInPlace(session.state);
+  }
   if (session.remainingSeconds <= EPSILON && session.remainingWallSeconds > EPSILON && steps < stepLimit) {
     const activity = session.state.endgame.constructionActivity;
     session.advancedWallSeconds += session.remainingWallSeconds;
@@ -6133,6 +6156,7 @@ export function completeSimulationAdvanceSession(session: SimulationAdvanceSessi
   if (session.remainingWallSeconds > EPSILON) advanceSimulationSession(session, Number.MAX_SAFE_INTEGER);
   session.state.timeWarp.pendingSimulationSeconds = 0;
   session.state.timeWarp.pendingWallSeconds = 0;
+  settleCompletedResearchBoundariesInPlace(session.state);
   let startedAt = session.profiler ? profileNow() : 0;
   recordProductionHistory(session.state);
   if (session.profiler) session.profiler.historyMs += profileNow() - startedAt;
@@ -8558,7 +8582,7 @@ interface InternalConstructionQuickCraftPlan extends ConstructionQuickCraftPlan 
 }
 
 const recursiveManufacturingRecipes = (): RecipeDefinition[] =>
-  Object.values(RECIPES).filter((recipe) => isHandcraftableRecipe(recipe.id));
+  Object.values(RECIPES).filter((recipe) => isRecursiveManufacturingRecipe(recipe.id));
 
 function recursiveManufacturingInventory(state: GameState): Partial<Record<ItemId, number>> {
   return {
@@ -8999,14 +9023,14 @@ function buildConstructionAutomationPlan(state: GameState, definition: Construct
       batches: 1,
       recipes,
       completedTechnologyIds: state.research.completedTechIds,
-      allowRecipe: (recipe) => isHandcraftableRecipe(recipe.id),
+      allowRecipe: (recipe) => isRecursiveManufacturingRecipe(recipe.id),
     })
     : planRecursiveRequirements({
       inventory,
       requirements: definition.costs,
       recipes,
       completedTechnologyIds: state.research.completedTechIds,
-      allowRecipe: (recipe) => isHandcraftableRecipe(recipe.id),
+      allowRecipe: (recipe) => isRecursiveManufacturingRecipe(recipe.id),
     });
   if (!plan.possible) return { steps: [], blocker: constructionAutomationBlocker(plan.blocker) };
   const steps: ConstructionAutomationStep[] = plan.steps.map((step) => ({
@@ -9448,7 +9472,7 @@ function analyzeRepeatableConstructionAutomationPlan(
     if (relevant.has(itemId)) continue;
     relevant.add(itemId);
     for (const recipe of recipes) {
-      if (!recipe.outputs.some((output) => output.itemId === itemId && output.amount > 0)) continue;
+      if (getRecipeNetOutput(recipe, itemId) <= 0) continue;
       for (const input of recipe.inputs) pending.push(input.itemId);
     }
   }
@@ -11346,6 +11370,17 @@ export function isHandcraftableRecipe(recipeId: RecipeId): boolean {
   return Boolean(recipe && recipe.inputs.length > 0 && recipe.outputs.length > 0 && !NON_HANDCRAFTABLE_RECIPE_IDS.has(recipe.id));
 }
 
+const RECURSIVE_UPSTREAM_ONLY_RECIPE_IDS = new Set<RecipeId>([
+  "plasma_refining",
+]);
+
+/** Facility recipes that may safely run as an internal recursive material step. */
+export function isRecursiveManufacturingRecipe(recipeId: RecipeId): boolean {
+  const recipe = getRecipe(recipeId);
+  return Boolean(recipe && recipe.inputs.length > 0 && recipe.outputs.length > 0 &&
+    (isHandcraftableRecipe(recipeId) || RECURSIVE_UPSTREAM_ONLY_RECIPE_IDS.has(recipeId)));
+}
+
 function canStoreRecipeOutputsInTray(state: GameState, recipe: RecipeDefinition, batches = 1): boolean {
   const requiredByItem = new Map<ItemId, number>();
   for (const output of recipe.outputs) {
@@ -11410,7 +11445,7 @@ function buildRecursiveHandcraftPlan(state: GameState, recipeId: RecipeId, batch
     batches: amount,
     recipes: recursiveManufacturingRecipes(),
     completedTechnologyIds: state.research.completedTechIds,
-    allowRecipe: (candidate) => isHandcraftableRecipe(candidate.id),
+    allowRecipe: (candidate) => isRecursiveManufacturingRecipe(candidate.id),
   });
   if (!plan.possible) return blocked(plan.blocker);
 
@@ -11595,6 +11630,58 @@ function completeTechnology(state: GameState, techId: TechId): void {
   }
 }
 
+/**
+ * Complete finite research whose persisted matrix progress already reached
+ * every cost boundary.  This is deliberately idempotent and is shared by
+ * simulation, command, and save-migration boundaries so a skipped final
+ * research cycle cannot leave a permanently stalled technology.
+ */
+function settleCompletedResearchBoundariesInPlace(state: GameState): TechId[] {
+  const completed: TechId[] = [];
+  const technologyLimit = Object.keys(RECIPES).length + state.research.queuedTechIds.length + 8;
+  let guard = 0;
+  while (state.research.selectedTechId && guard++ < technologyLimit) {
+    const techId = state.research.selectedTechId;
+    const technology = getTechnology(techId);
+    if (!technology || state.research.completedTechIds.includes(techId)) {
+      activateNextQueuedTechnology(state);
+      continue;
+    }
+    const progress = { ...(state.research.progressByTech[techId] ?? {}) };
+    const complete = technology.costs.every((cost) =>
+      Number.isFinite(progress[cost.itemId]) && Math.floor(progress[cost.itemId] ?? 0) >= cost.amount);
+    if (!complete) break;
+    // A malformed affine result may overshoot a cost.  The excess is not an
+    // input inventory and must not be carried into the next technology.
+    for (const cost of technology.costs) progress[cost.itemId] = cost.amount;
+    state.research.progressByTech[techId] = progress;
+    completeTechnology(state, techId);
+    completed.push(techId);
+    activateNextQueuedTechnology(state);
+    for (const entity of state.entities) {
+      if (entity.recipeId === "matrix_research") entity.progress = 0;
+    }
+  }
+  return completed;
+}
+
+/**
+ * Pure command-facing wrapper.  It returns the original object when no
+ * boundary is due, preserving the existing immutable command convention.
+ */
+export function settleCompletedResearchBoundaries(state: GameState): GameState {
+  const selected = state.research.selectedTechId;
+  if (!selected) return state;
+  const technology = getTechnology(selected);
+  if (!technology) return state;
+  const progress = state.research.progressByTech[selected] ?? {};
+  if (!technology.costs.every((cost) => Math.floor(progress[cost.itemId] ?? 0) >= cost.amount)) return state;
+  const next = copyState(state);
+  settleCompletedResearchBoundariesInPlace(next);
+  return next;
+}
+
+
 export function canSelectTechnology(state: GameState, techId: TechId): boolean {
   const technology = getTechnology(techId);
   return Boolean(technology && !isDeprecatedTechnology(techId) && !isTechnologyCompleted(state, techId) && state.research.selectedTechId !== techId &&
@@ -11634,6 +11721,7 @@ export function selectTechnology(state: GameState, techId: TechId): GameState {
     if (!canQueueTechnology(state, techId)) return state;
     const next = copyState(state);
     next.research.queuedTechIds.push(techId);
+    settleCompletedResearchBoundariesInPlace(next);
     return next;
   }
   if (!canSelectTechnology(state, techId)) return state;
@@ -11643,6 +11731,7 @@ export function selectTechnology(state: GameState, techId: TechId): GameState {
   for (const entity of next.entities) {
     if (entity.recipeId === "matrix_research") entity.progress = 0;
   }
+  settleCompletedResearchBoundariesInPlace(next);
   return next;
 }
 
@@ -11669,12 +11758,18 @@ export function resumePausedResearch(state: GameState): GameState {
   for (const entity of next.entities) {
     if (entity.recipeId === "matrix_research") entity.progress = 0;
   }
+  settleCompletedResearchBoundariesInPlace(next);
   return next;
 }
 
 export function cancelCurrentResearch(state: GameState): GameState {
   if (!state.research.selectedTechId && !state.endgame?.activeInfiniteResearchId) return state;
   const next = copyState(state);
+  const repaired = settleCompletedResearchBoundariesInPlace(next);
+  // If the current item was already complete, the repair is the requested
+  // state transition.  Do not immediately cancel the newly activated queue
+  // item in the same command.
+  if (repaired.length > 0) return next;
   next.research.selectedTechId = null;
   if (next.endgame?.activeInfiniteResearchId) next.endgame.activeInfiniteResearchId = null;
   activateNextQueuedTechnology(next);

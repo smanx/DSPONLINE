@@ -79,6 +79,7 @@ import { useAppLocale } from "../i18n/locale";
 import { exportTextFile } from "../game/fileExport";
 import { readOfflineApproximationEnabled, writeOfflineApproximationEnabled, type OfflineApproximationReport } from "../game/offlineApproximation";
 import { readShowRunLogPreference, readThemePreference, writeShowRunLogPreference, writeThemePreference } from "../game/uiPreferences";
+import { readPureIdleRecovery } from "../game/pureIdleRecovery";
 
 type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "new";
 type CloudAuthMode = "login" | "register" | "forgot" | "reset";
@@ -485,7 +486,15 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     try {
       const storage = await loadStorageModule();
       trackAnalyticsEvent("continue_game");
-      await completeDeferredLoad(storage.loadGameDeferredOffline(), "恢复最近工厂", undefined, storage);
+      const loaded = storage.loadGameDeferredOffline();
+      const pureIdleRecovery = await readPureIdleRecovery().catch(() => null);
+      // A live pure-idle checkpoint owns the elapsed interval. Let FactoryGame
+      // apply the five-minute background grace and ordinary-offline remainder;
+      // otherwise the menu would settle the same interval before recovery.
+      if (pureIdleRecovery && loaded.state.timeWarp.enabled && !loaded.state.speedrun?.enabled) {
+        loaded.offlineSeconds = 0;
+      }
+      await completeDeferredLoad(loaded, "恢复最近工厂", undefined, storage);
     } catch (error) {
       handleLoadError(error, "本地存档无法载入");
     } finally {

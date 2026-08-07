@@ -43,6 +43,7 @@ flowchart LR
 - `src/App.tsx`：顶层会话和工厂编排。它管理工作区、画布交互、连接、选中状态、存档定时器和模拟 Worker。
 - `src/game/simulationProjection.ts`、`src/game/simulationDelta.ts`：定义 P4 的版本化 UI 投影和实验性增量协议。实时 Worker 默认继续返回完整 `GameState` 兼容 oracle；设备级开发开关 `dsp-idle-network.experimental-simulation-delta.v1` 开启后，首次/命令边界仍传完整状态，连续模拟只传带 `baseRevision/nextRevision` 的变化实体、线路和顶层字段。Worker 会比较增量与完整状态的同编码序列化大小，增量不更小时自动回退完整状态并标记原因；主线程发现 revision 不匹配会暂存时间预算并要求完整重同步，不能用旧响应覆盖新状态。两条路径共享同一 `advancePersistentSimulationRuntime`，不改变存档格式。
 - `src/components/TimeWarpIdleOverlay.tsx`：时间扭曲纯挂机覆盖层。覆盖层是独立的交互边界，隐藏画布并只展示实际倍率、挂机时间、模拟积压、关键产量和保存状态；停止前由 `App` 等待 Worker 安全边界并校验主存档。
+- `src/game/pureIdleMacro.ts`、`pureIdleMacro.worker.ts`、`pureIdleMacroClient.ts`：终局宏观纯挂机的校准合同、候选状态、验证摘要和正式重载门禁。宏观路径只在独立内存副本上工作；活动普通/无限科研、未提交模拟预算和不合法航线瞬时字段会阻止宏观合同并回到精确 Worker。`pureIdleRecovery.ts` 将检查点、心跳、墙钟进度和开始前暂停状态保存到独立 IndexedDB；Web Lock 与可过期租约防止重复结算，恢复日志不属于 `GameState`、存档 envelope 或云 payload。
 - `src/components/TutorialWorkspace.tsx`：零基础教程工作区。内容是只读 UI 数据，搜索、目录和阅读进度使用设备级 `localStorage`，不写入 `GameState` 或云存档。
 - `src/components/SystemSpaceStationWorkspace.tsx`：空间站/太空电梯独立工作区；只通过领域命令管理施工、Mk.II 模式、共享仓库、模块和五路输出，不把空间站伪装成普通行星画布。
 
@@ -88,6 +89,7 @@ React Flow 的持久真相仍来自 `GameState`。`src/game/canvasLineBatch.ts` 
 - `src/game/engine.ts`：确定性生产、电网、运输、科研、手搓、戴森与状态变更命令。
 - `src/game/multicoreSimulation.ts`、`multicoreSimulation.worker.ts`：P6 多 Worker 星球阶段执行路径。协调 Worker 继续独占权威 `GameState`，先运行全局前置阶段，再按实体负载把 22 颗行星稳定分成最多 4 个批次；子 Worker 只接收本批行星实体、全局物流站只读上下文和屏障参数，不接收传送带，返回实体/电网/产量增量后由协调 Worker按固定行星顺序完整校验并合并。物流、量子、传送带、科研、戴森和建筑制造仍在权威 Worker 串行完成；任何分区缺失、重复、未知实体、注册表或 Worker 错误都会恢复请求前完整基线并只执行一次串行结算。真实终局档的完整路径慢于单 Worker，因此生产构建硬关闭，只有开发环境显式开关、完整模拟证明和超过 15% 的实测收益同时满足时才允许实验运行。
 - `src/game/recursiveCrafting.ts`：手工快制、施工快制和建筑制造中心共用的纯递归材料规划器；先证明完整链可完成，再返回原子库存结果、确定性步骤和高级配方回退原因。
+- 递归制造把“可直接手搓”与“允许作为递归上游”分开；`plasma_refining` 只作为原油到精炼油的内部上游，`xray_cracking`/`reforming_refine` 仍被循环保护。候选配方按目标物品净产出（总输出减总输入）过滤，施工托盘、物品手搓和建筑制造中心共享同一策略和批次数计算。
 - `src/game/productionLocator.ts`：按当前持久状态派生物品生产设备及完整上游线路集合；只生成定位结果，不修改选择、建筑或模拟状态。
 - `src/game/stellarIndustry.ts`：全星区物流快照、真实中转路径、枢纽供电诊断、行星分工与星系汇总。
 - `src/game/network.ts`：线路占用、吞吐预测、连续网络与瓶颈诊断。
@@ -129,6 +131,10 @@ React Flow 的持久真相仍来自 `GameState`。`src/game/canvasLineBatch.ts` 
 性能基准使用 `src/game/performanceFixtures.ts` 生成的匿名 P50/P95/Max、玩家同形和 2 倍终局合成状态，不包含线上玩家存档正文。后两档分别覆盖约 600/1,200 个实体、1,250/2,500 条线路、100/256 座物流站和 150/300 万并联。基准同时记录模拟阶段耗时、候选检查、状态字节数、状态哈希和未完成模拟债务；浏览器 FPS、真实 Worker 往返和设备温度必须通过独立的浏览器/真机测试确认，不能由 Node 基准推断。
 
 模拟器应保持纯状态输入和确定性输出。新增随机机制必须从持久化 seed 派生，不能直接依赖 `Math.random()` 或墙上时钟，否则基准哈希、离线结算和云存档会分叉。
+
+1.0.32 的宏观纯挂机在 `pureIdleMacro.worker.ts` 内执行 3×10 秒模拟秒校准，并按模式选择稳定窗口校验或终局极限宏观合同；候选状态最终必须经过 `serializeEnvelope()`、`inspectSave()` 和线路/数值安全检查才可提交。宏观合同拒绝航线 cargo/progress、传送带流量和功率诊断等瞬时字段，不能以这些字段的仿射增量伪造在途状态。`App` 在普通或无限科研活动时强制使用原精确 Worker；启动发现旧检查点包含活动科研时保留检查点并显示“放弃未结算并继续普通模拟”，恢复前先执行幂等科研边界自愈。
+
+科研完成边界由 `engine.ts` 的领域函数统一处理。普通模拟会话开始/完成、命令切换、Worker 返回和 `storage.ts` v46 迁移都会修复“投入已满但未完成”的状态，执行一次奖励和队列切换；该修复不清空科研站缓存、不增加存档版本，也不允许组件直接改写科研字段。
 
 行星矿储、能源、航程和专长倍率保存在 `GameState.galaxy.profiles`，恒星类型、亮度和二维坐标保存在 `GameState.galaxy.systemProfiles`。普通“开始新游戏”只生成一次随机 seed；之后所有生态与路线计算都从该 seed 和持久状态派生。`migrateGame()` 会验证并恢复已有倍率，而不是只用 seed 重抽，因此首次保存、云端往返和跨设备加载不会改变同一工厂。
 

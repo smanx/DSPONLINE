@@ -75,7 +75,7 @@ test("time warp starts a blocking pure-idle page and can stop safely", async ({ 
   await expect(idle).toContainText("画布已冻结");
   await idle.screenshot({ path: "artifacts/qa/v115-pure-idle-desktop.png", animations: "disabled" });
   await expect(page.locator(".construction-dock")).toBeHidden();
-  await idle.getByRole("button", { name: "停止挂机" }).click();
+  await idle.getByRole("button", { name: "停止并结算纯挂机" }).click();
   await expect(idle).toBeHidden();
 });
 

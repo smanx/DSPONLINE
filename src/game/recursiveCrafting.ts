@@ -75,9 +75,23 @@ function normalizedInventory(source: Partial<Record<ItemId, number>>): Partial<R
   ])) as Partial<Record<ItemId, number>>;
 }
 
+/**
+ * Return the amount one batch actually adds to the requested item. Recipes
+ * may consume and output the same item, so gross output is not sufficient for
+ * recursive planning.
+ */
+export function getRecipeNetOutput(recipe: RecipeDefinition, itemId: ItemId): number {
+  const output = recipe.outputs.reduce((sum, entry) =>
+    entry.itemId === itemId ? sum + Math.max(0, entry.amount) : sum, 0);
+  const input = recipe.inputs.reduce((sum, entry) =>
+    entry.itemId === itemId ? sum + Math.max(0, entry.amount) : sum, 0);
+  const net = output - input;
+  return Number.isFinite(net) ? net : 0;
+}
+
 function producingRecipes(context: PlannerContext, itemId: ItemId): RecipeDefinition[] {
   return context.recipes
-    .filter((recipe) => context.allowRecipe(recipe) && recipe.outputs.some((output) => output.itemId === itemId && output.amount > 0))
+    .filter((recipe) => context.allowRecipe(recipe) && getRecipeNetOutput(recipe, itemId) > 0)
     .sort((left, right) =>
       (right.recursivePriority ?? 0) - (left.recursivePriority ?? 0) ||
       left.id.localeCompare(right.id));
@@ -113,7 +127,8 @@ function ensureItemOptions(
 
   const recipes = producingRecipes(context, itemId);
   if (recipes.length === 0) {
-    const hasAnyRecipe = context.recipes.some((recipe) => recipe.outputs.some((output) => output.itemId === itemId && output.amount > 0));
+    const hasAnyRecipe = context.recipes.some((recipe) =>
+      context.allowRecipe(recipe) && getRecipeNetOutput(recipe, itemId) > 0);
     return {
       options: [],
       blockers: [{ itemId, current, required, reason: hasAnyRecipe ? "no-recipe" : "raw-shortage", depth }],
@@ -135,7 +150,8 @@ function ensureItemOptions(
     }
 
     const primary = recipe.outputs.find((output) => output.itemId === itemId && output.amount > 0)!;
-    const batches = Math.max(1, Math.ceil((required - current) / primary.amount));
+    const netOutput = getRecipeNetOutput(recipe, itemId);
+    const batches = Math.max(1, Math.ceil((required - current) / netOutput));
     let candidates: PlannerWork[] = [cloneWork(work)];
     const recipeBlockers: Array<RecursiveCraftBlocker & { depth: number }> = [];
     for (const input of recipe.inputs) {

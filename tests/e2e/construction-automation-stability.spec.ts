@@ -297,7 +297,7 @@ test("stopping pure idle terminates an unresponsive slice and restores interacti
   ), { timeout: 3_000 }).toBeGreaterThan(0);
 
   const stopStartedAt = Date.now();
-  await overlay.getByRole("button", { name: "停止挂机" }).click();
+  await overlay.getByRole("button", { name: "停止并结算纯挂机" }).click();
   await expect(overlay).toHaveCount(0, { timeout: 1_000 });
   await expect(page.locator(".game-notice")).toContainText("未完成切片已丢弃", { timeout: 3_000 });
   const stopDurationMs = Date.now() - stopStartedAt;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CURRENT_RELEASE_NOTES, RELEASE_NOTES_HISTORY, getReleaseNotesPage } from "./ReleaseNotesDialog";
+import { CURRENT_RELEASE_NOTES, RELEASE_NOTES_HISTORY, getReleaseNotesPage, getReleaseNotesPageCount, getReleaseNotesPageForRelease } from "./ReleaseNotesDialog";
 
 describe("release notes history", () => {
   it("keeps the newest release first and exposes bounded pages", () => {
@@ -13,5 +13,18 @@ describe("release notes history", () => {
   it("supports a small fixed page size without rendering the complete history", () => {
     expect(getReleaseNotesPage(0, 2).map((entry) => entry.version)).toEqual(["1.0.31", "1.0.30"]);
     expect(getReleaseNotesPage(15, 2).map((entry) => entry.version)).toEqual(["1.0.1", "1.0.0"]);
+  });
+
+  it("maps direct page jumps and historical details to the same page", () => {
+    expect(getReleaseNotesPageCount()).toBe(11);
+    expect(getReleaseNotesPageForRelease("2026-08-06-v1.0.31")).toBe(0);
+    expect(getReleaseNotesPageForRelease("2026-08-03-v1.0.24")).toBe(2);
+    expect(getReleaseNotesPageForRelease("missing-release")).toBeNull();
+  });
+
+  it("keeps the recent release records complete instead of one-line placeholders", () => {
+    for (const version of ["1.0.30", "1.0.29", "1.0.28", "1.0.27", "1.0.26", "1.0.25", "1.0.24"]) {
+      expect(RELEASE_NOTES_HISTORY.find((entry) => entry.version === version)?.items.length).toBeGreaterThan(1);
+    }
   });
 });

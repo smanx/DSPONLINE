@@ -48,6 +48,31 @@ describe("game storage", () => {
     expect(loaded.research.progressByTech.thermal_power).toEqual({ energy_matrix: 7 });
   });
 
+  it("self-heals a v46 save whose selected research reached the cost boundary", () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialState()));
+    legacy.version = 46;
+    legacy.research.completedTechIds = ["antimatter"];
+    legacy.research.selectedTechId = "universe_matrix";
+    legacy.research.queuedTechIds = ["micro_black_hole_containment"];
+    legacy.research.progressByTech.universe_matrix = {
+      electromagnetic_matrix: 100,
+      energy_matrix: 100,
+      structure_matrix: 100,
+      information_matrix: 100,
+      gravity_matrix: 100,
+    };
+
+    const migrated = migrateGame(legacy)!;
+    expect(migrated.research.completedTechIds).toContain("universe_matrix");
+    expect(migrated.research.selectedTechId).toBe("micro_black_hole_containment");
+    expect(migrated.construction.galactic_material_exporter).toBe(1);
+
+    const reloaded = migrateGame(JSON.parse(JSON.stringify(migrated)))!;
+    expect(reloaded.research.completedTechIds.filter((id) => id === "universe_matrix")).toHaveLength(1);
+    expect(reloaded.construction.galactic_material_exporter).toBe(1);
+    expect(reloaded.research.selectedTechId).toBe("micro_black_hole_containment");
+  });
+
   it("migrates v41 galaxy data to v42 display metadata without changing factory ids", () => {
     const legacy = JSON.parse(JSON.stringify(createInitialState())) as Record<string, any>;
     legacy.version = 41;
