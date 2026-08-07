@@ -87,6 +87,8 @@ Android `1.0.33` APK 已使用与 `1.0.0` 至 `1.0.32` 相同的长期发布密�
 
 使用该 vault 构建的 Android `1.0.33` APK 已验证包名 `cn.dsponline.network`、versionCode `1000033`、APK Signature Scheme v2/v3 和相同证书指纹；大小为 4,834,527 字节，SHA-256 为 `14232dd3273ad951acf36d0a97488912e978ae0cd6da3f5cf1104f82419bedeb`。该文件已进入上海稳定下载页与 Android stable 清单。
 
+`1.0.34 / 1000034` 候选 APK 使用同一长期证书生成，大小为 4,840,401 字节，SHA-256 为 `9ed932dba88806927925b721c0b0e96c33ce093b7f841758f9881220dda99b03`。APK v2/v3、证书连续性和 Android 36.1 模拟器 `1.0.33 -> 1.0.34` 的 `install -r` 覆盖升级均已通过，`firstInstallTime` 不变且启动无 Fatal/ANR；该候选尚未写入公网 stable 清单。
+
 本机发布前只在受保护 PowerShell 会话中从该 vault 读取配置，不把密码回显到终端：
 
 ```powershell
@@ -142,6 +144,7 @@ node scripts/create-native-update-manifests.mjs `
 ## 7. 当前原生发布状态
 
 - 已验证 Windows 解包版隔离启动、`file://` 加载、FileVersion 1.0.33、Stable 通道、受限 HTTPS API 和更新基址；隔离用户数据目录正常初始化。
+- 1.0.34 候选 Windows x64 安装程序为 112,418,530 字节，SHA-256 `ddda2bde0f3f649a16cb735a4661f11bebd081de8cc65c4028decfe237740f2a`；blockmap 为 118,414 字节，SHA-256 `ddfc1fcfadec3c8e7df7eff79eeefc094386b9baf8cd284e61d9e5e3c6101ce5`。FileVersion/ProductVersion、正式 API、稳定更新源和隔离启动通过，安装包与主程序 Authenticode 均为 `NotSigned`；候选尚未进入公网下载页。
 - Android 稳定 APK 为 `1.0.33 / 1000033`，大小 4,834,527 字节，SHA-256 为 `14232dd3273ad951acf36d0a97488912e978ae0cd6da3f5cf1104f82419bedeb`。APK v2/v3 和批准证书均通过；AAB 未进入下载站或应用商店。
 - Windows x64 安装程序版本为 `1.0.33`，大小 112,324,182 字节，SHA-256 为 `1fa4e4c32a53fbac1ed1c91112b27455e2b8745d954e969671b98165d24c761f`。Authenticode 状态为 `NotSigned`，下载页继续显示未知发布者警告；blockmap 为 118,330 字节，SHA-256 `c8a1c66e95b4394b9c01eae8999847510fcae5bf8bd648e88afd424d9240ea7a`。
 - 上海下载站当前目录为 `/var/www/dsp-idle-downloads/releases/download-site-1.0.33-2bd81de8d7f1-r2`，直接回滚目录为 `download-site-1.0.33-2bd81de8d7f1`，更深回滚状态指向 1.0.32-r2；历史安装包继续保留。二进制使用 immutable 缓存，更新清单使用 no-cache，Range 请求返回 `206`，香港 `/downloads/*` 重定向至上海下载域名。

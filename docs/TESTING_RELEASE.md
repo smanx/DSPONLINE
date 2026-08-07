@@ -2,7 +2,7 @@
 
 > **当前发布基线（2026-08-07）**：当前正式版本使用 `1.0.33 / GameState v46`；有效资产的 v43 空间站实验存档拒绝加载。量子网络回归以 GameState v46 语义为基线，并保留传统物流站升级兼容测试。1.0.33 不升级存档 envelope、云 schema 或 SQLite layout。
 
-> `1.0.34` 正在隔离开发候选中验证历史唯一巨构堆叠、Android raw 云上传、gzip 编码拒绝单次回退、纯挂机冻结停止/重试、实际吞吐榜和拉线卡片高亮。最终 clean commit 的完整数量与制品清单只记录在 `RELEASE_HANDOFF_1.0.34.md`，未完成全门禁前不得替换本页的 1.0.33 正式基线。
+> `1.0.34` 隔离开发候选已完成历史唯一巨构堆叠、Android raw 云上传、gzip 编码拒绝单次回退、纯挂机冻结停止/重试、实际吞吐榜和拉线卡片高亮的完整门禁。候选证据见 [1.0.34 开发交接](./RELEASE_HANDOFF_1.0.34.md)；生产仍为 1.0.33，独立 Release Agent 完成生产备份、切换和公网验收前不得修改本页正式基线。
 
 ## 1. 当前自动化覆盖
 
@@ -1090,3 +1090,24 @@ Android `1.0.18 / 1000018` 使用历史长期证书，APK v2/v3 通过，SHA-256
 正式 source commit 为 `2bd81de8d7f16040620378d37cb73649cf09dd17`，Build ID 为 `1.0.33+2bd81de8d7f1`。大型真实存档 30 天快速离线约 2.9～3.1 秒、30 天纯挂机约 2.8 秒；Android 36.1 模拟器完成 `1.0.28 → 1.0.32 → 1.0.33` 覆盖启动，Electron 正式包完成隔离启动。Android `1.0.33 / 1000033` 使用批准长期证书并通过 APK v2/v3；Windows Authenticode 继续明确为 `NotSigned`。
 
 香港、上海 Web/API、上海下载页和两个稳定应用包均已发布。最终下载页为 `download-site-1.0.33-2bd81de8d7f1-r2`；完整公网 APK/EXE/blockmap 哈希、Range 206、缓存、当前/1.0.32 hashed asset 和五个浏览器场景均通过。物理 Android/WebView 长时真实存档、Electron 内 30 天真实存档和真实生产账号云写入仍列为未验证；完整证据和回滚指针见 [releases/1.0.33.md](./releases/1.0.33.md)。
+
+## 47. `1.0.34` / v46 云上传、纯挂机与实际吞吐候选
+
+本候选兼容历史唯一巨构安全堆叠，修复 Android gzip Blob 上传失败和 Web 明确编码拒绝的单次 raw 回退；纯挂机停止冻结边界并复用已校准 Worker，保存失败保留检查点和重试；普通排行榜用相邻主云修订累计增量计算实际结算吞吐；拉线期间高亮起点与兼容候选建筑。GameState v46、存档 envelope v2、云 schema v7 和 SQLite layout v2 均未改变。
+
+| 检查 | 开发候选结果 |
+| --- | --- |
+| `npm ci` / `npm --prefix server ci` | 通过；根项目既有 1 moderate + 4 high，server 0 漏洞 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run typecheck` | 通过，0 个 TypeScript 错误 |
+| `npm test -- --run` | 836 项通过、16 项跳过、0 失败 |
+| `npm run test:server` | 51/51 |
+| `npm run test:ops` | 6/6 |
+| `npm run test:native` | 8/8 |
+| `npm run build` | 通过；Build ID `1.0.34+9f9714f973b0` |
+| `npm run test:e2e` | 254 项通过、11 项显式可选跳过、0 失败 |
+| Chrome / Edge 20 MB 真实档 | 30 天快速离线约 23.84s / 最终四段 24.26s～25.01s；30 天纯挂机约 21.29s / 20.96s |
+| 原生门禁 | Android `1.0.33 -> 1.0.34` 覆盖升级、APK v2/v3 与证书连续性通过；Electron 隔离启动通过；Windows `NotSigned` |
+| Release manifest | source 149/149、download 9/9、bundle 10/10 全部验证 |
+
+正式候选源码提交为 `9f9714f973b002c458c1f16ad0560f9ddd45dbce`。Edge 首轮在 Android 模拟器和 Gradle daemon 资源竞争时有一次 30.527 秒，关闭竞争负载后的相同断言全部通过；不能把 30 秒描述为任意设备硬保证。物理 Android 上的 1/2/7/20 MiB 隔离云上传、真实生产账号云写入和 Electron 内 20 MB 长时结算仍未验证。完整制品哈希、真实夹具 SHA-256、回滚边界和 Release Agent 提示词见 [1.0.34 开发交接](./RELEASE_HANDOFF_1.0.34.md)。
