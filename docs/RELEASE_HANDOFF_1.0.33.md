@@ -1,10 +1,18 @@
 # DSPidle2 1.0.33 开发交接
 
+> **发布状态（2026-08-07）**：1.0.33 已完成香港、上海 Web/API、上海下载页和 Android/Windows 稳定应用包发布。完整生产证据见 [1.0.33 发布记录](./releases/1.0.33.md)。
+>
+> 当前生产 Build ID 为 `1.0.33+2bd81de8d7f1`；两地 Web/API 回滚目标为 `1.0.32-762bf693becb`。上海下载页当前为 `download-site-1.0.33-2bd81de8d7f1-r2`，直接回滚目标为原 1.0.33 目录，更深一层状态文件指向 1.0.32-r2。
+>
+> 最终 r2 下载 manifest 为 9 个文件、聚合 SHA-256 `5a369e3d21181c5fb11635078a50889ecf0dcb6a28e68530d9b1a92102a78822`；最终 r2 bundle 为 10 个文件、聚合 SHA-256 `64a3a51c45b33c51f1c97aa5b08caae9c92696bb2bece57ee94d34bcf236eefc`。favicon 声明修复提交为 `262b4b43121b8435d6f095ed053a50fe352e7e35`，APK、EXE、blockmap、Web 和 API 制品未重建且哈希不变。
+>
+> 以下内容保留开发交接生成时的发布前语境；其中“未授权发布”和“生产仍为 1.0.32”不是当前线上状态。
+
 > Role: develop
 >
-> 状态：开发完成且不可变制品已就绪；不授权连接 VPS、切换生产版本或更新公网下载页。
+> 开发交接原始状态：开发完成且不可变制品已就绪；当时不授权连接 VPS、切换生产版本或更新公网下载页。
 >
-> 生产基线：`1.0.32+762bf693becb`；目标：`1.0.33 / GameState v46 / envelope v2 / cloud schema v7 / SQLite layout v2`。
+> 发布前生产基线：`1.0.32+762bf693becb`；目标：`1.0.33 / GameState v46 / envelope v2 / cloud schema v7 / SQLite layout v2`。
 
 ## 1. 交接结论
 
@@ -12,7 +20,7 @@
 
 不可变制品来自 clean source commit `2bd81de8d7f16040620378d37cb73649cf09dd17`，Build ID 为 `1.0.33+2bd81de8d7f1`。完整开发门禁、Chrome/Edge 真实存档、Android 覆盖升级、Electron 隔离启动、Android v2/v3 和 Windows `NotSigned` 均已复验；149 文件 source manifest、9 文件下载目录 manifest 和 10 文件最终 bundle manifest 全部通过。后续只允许提交本文等证据文档，不能从文档提交重建或替换已经绑定 `2bd81de8...` 的二进制。
 
-代码和制品只存在于隔离工作树 `D:\GameDev\DSPidle2-release-1.0.33`，没有修改主工作区、stash、生产节点、生产数据库或公网下载页。生产仍为 `1.0.32+762bf693becb`。
+开发交接生成时，代码和制品只存在于隔离工作树 `D:\GameDev\DSPidle2-release-1.0.33`，没有修改主工作区、stash、生产节点、生产数据库或公网下载页；当时生产仍为 `1.0.32+762bf693becb`。
 
 ## 2. 共享交接字段
 
@@ -189,13 +197,13 @@ Web、API、下载站归档解包后分别与源目录逐文件比较，`126/126
 
 ## 10. Release Agent 边界与回滚
 
-Release Agent 应只使用 `2bd81de8...` 对应的已验证 bundle，不得从后续文档提交重建或在服务器上修补游戏代码。发布前仍须独立复验三份 manifest、生产备份、未激活目录、数据库 schema v7/layout v2、磁盘空间、健康窗口、CORS、Service Worker、下载 Range/缓存和回滚指针。
+发布前 Release Agent 只使用 `2bd81de8...` 对应的已验证 bundle，不得从后续文档提交重建或在服务器上修补游戏代码；以上门禁已在本次发布中独立复验。
 
-回滚目标为当前生产 `1.0.32+762bf693becb`。回滚只切换 Web/API/下载目录，不恢复旧数据库、不删除玩家存档、不清理纯挂机恢复记录。若原生制品门禁或生产健康失败，应停止对应平台发布并保留已验证的旧稳定清单。
+发布前回滚基线为 `1.0.32+762bf693becb`；发布后该版本已成为两地 Web/API 的当前回滚目标。回滚只切换 Web/API/下载目录，不恢复旧数据库、不删除玩家存档、不清理纯挂机恢复记录。
 
-开发门禁与制品齐全，Release Agent 可以开始 1.0.33 发布流程；本句不替代用户对具体节点和下载页的发布授权。
+开发门禁与制品当时齐全，随后已按用户授权完成 1.0.33 发布；当前结果以本文顶部和 [1.0.33 发布记录](./releases/1.0.33.md) 为准。
 
-## 11. 给 Release Agent 的交接提示词
+## 11. 给 Release Agent 的历史交接提示词（已执行）
 
 ```text
 Role: release
