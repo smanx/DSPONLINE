@@ -149,21 +149,21 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "速通与宏观纯挂机稳定性更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "离线与时间扭曲终局快速结算更新" });
   await expect(releaseNotes).toBeVisible();
   await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(5);
-  await expect(releaseNotes).toContainText("速通面板可折叠");
-  await expect(releaseNotes).toContainText("递归制造与科研自愈");
-  await expect(releaseNotes).toContainText("纯挂机检查点与后台宽限");
-  await expect(releaseNotes).toContainText("公告历史完整可查");
+  await expect(releaseNotes).toContainText("科研不再阻断快速结算");
+  await expect(releaseNotes).toContainText("供电倍率使用权威快照");
+  await expect(releaseNotes).toContainText("有界保守宏观回退");
+  await expect(releaseNotes).toContainText("Worker 失败与恢复有界");
   await expect(releaseNotes).toContainText("存档与在线协议保持兼容");
   await expect(releaseNotes).not.toContainText("修复压缩流死锁");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-07-v132-1440.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-07-v133-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-07-v132-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-07-v133-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -186,7 +186,7 @@ test("dated release notes appear once and remain available from both settings sc
     return Boolean(scroll && summary && firstItem && footer && summary.bottom <= firstItem.top + 1 && scroll.bottom <= footer.top + 1);
   })).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-07-v132-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-07-v133-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -213,7 +213,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-07-v132-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-07-v133-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -3178,7 +3178,7 @@ test("completed matrix research keeps connected color ports while the lab moves"
   await expect(lab.getByTitle("投入能量矩阵")).toBeVisible();
   await page.locator(".react-flow__controls-fitview").click();
   await page.waitForTimeout(300);
-  await page.screenshot({ path: "artifacts/qa/research-lines-persist-1280.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/research-lines-persist-1280.png" });
 });
 
 test("production statistics exposes item flow, power demand and bottlenecks", async ({ page }) => {
