@@ -110,7 +110,7 @@ test("English light release notes are localized and persist dismissal", async ({
   });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/?menu=1&lang=en");
-  const dialog = page.getByRole("dialog", { name: "Fast Endgame Offline & Time-Warp Settlement Update" });
+  const dialog = page.getByRole("dialog", { name: "Cloud Save, Pure-Idle & Leaderboard Integrity Update" });
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("1.0.34");
   expect(await visibleHanStrings(dialog)).toEqual([]);
