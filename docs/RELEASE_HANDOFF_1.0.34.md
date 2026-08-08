@@ -2,19 +2,25 @@
 
 > Role: develop
 >
-> 状态：开发、完整门禁、真实存档只读验证和不可变制品均已完成；尚未连接 VPS、修改生产数据库、切换生产版本或更新公网下载页。
+> 状态：代码和完整开发门禁已完成；跨星球真实存档只读核验已完成；Web/API/Windows 诊断制品已重建。Android 长期签名凭据未加载，正式 Android、稳定下载页和可发布 bundle 尚未完成；尚未连接 VPS、修改生产数据库、切换生产版本或更新公网下载页。
 >
 > 当前生产基线：`1.0.33+2bd81de8d7f1`；目标候选：`1.0.34 / GameState v46 / envelope v2 / cloud schema v7 / SQLite layout v2`。
 
 ## 1. 交接结论
 
-本批六项需求已在隔离工作树 `D:\GameDev\DSPidle2-release-1.0.34` 完成。正式候选源码提交为 `9f9714f973b002c458c1f16ad0560f9ddd45dbce`，Build ID 为 `1.0.34+9f9714f973b0`。不可变 Web、API、Android、Windows 和下载页制品均绑定该 clean source commit；后续仅允许增加证据文档，不得从文档提交重新构建或替换二进制。
+本批需求已在隔离工作树 `D:\GameDev\DSPidle2-release-1.0.34` 完成。当前唯一有效源码提交为 `4a7d51241424f4289c629377e896ec70f41cbe54`，Build ID 为 `1.0.34+4a7d51241424`。此前 `9f9714f973b0` 的 Android/Web/API/Windows/下载页候选属于旧代码口径，必须作废，不得发布。当前 Web/API/Windows 诊断制品和 source manifest 已绑定新提交；Android 长期签名门禁未完成，因此不能宣称已有完整可发布不可变 bundle。
 
-完整开发门禁为 Vitest `836 passed / 16 skipped / 0 failed`、服务端 `51/51`、运维 `6/6`、原生工具 `8/8`、Playwright `254 passed / 11 optional skipped / 0 failed`。149 文件 source manifest、9 文件下载目录 manifest 和 10 文件 bundle manifest 均已验证。
+完整开发门禁（当前提交）为 Vitest `842 passed / 16 skipped / 0 failed`、服务端 `53 passed / 1 skipped / 0 failed`（设置 `DSP_GALACTIC_THROUGHPUT_FIXTURE` 后实际 19 MiB 夹具测试通过）、运维 `6/6`、原生工具 `8/8`、`npm run typecheck`、`npm run build` 和 `git diff --check` 通过。当前专项 Playwright `game-flow + v130 + v132` 为 `121 passed / 0 failed`；全量其他 E2E 的可选夹具跳过仍按前一轮记录，未伪报全量命令再次完成。150 文件 source manifest 已生成并验证；正式 9/10 文件下载/bundle manifest 因 Android 签名阻塞未生成，只有明确标记的 diagnostic/partial 清单。
 
 三份玩家存档只在内存副本和隔离临时服务中测试，测试前后 SHA-256 保持不变。没有将玩家存档提交到 Git、上传生产账号或写入生产数据库。
 
-开发证据、签名、制品和剩余风险齐全。Release Agent 可以开始 1.0.34 发布，但仍须先取得明确的目标节点与下载页发布授权，并独立完成备份、清单复验、隔离健康检查、原子切换和回滚记录。
+开发证据和代码制品路径已记录，但签名门禁未齐全。Release Agent 当前不得开始发布；只有加载并验证与 1.0.33 连续的长期 Android 签名凭据、重新生成 Android stable feed、下载页和完整 bundle/manifest 后，才可进入发布审核。本文不授权生产变更。
+
+## 0. 当前权威补充：跨星球吞吐修复
+
+后续提交 `4a7d51241424f4289c629377e896ec70f41cbe54` supersedes 文档中旧候选 `9f9714f973b0`。新增 `server/galactic-metrics.mjs` 与客户端同口径聚合器，完整 `planetMetrics` 使用饱和加法；非法、负数、非有限值按 0 处理，缺失 `planetMetrics` 的旧存档回退根 `state.metrics` 并标记 `legacy-active-planet-v1`。排行榜只将全星区理论值写入 `galacticThroughputPerMinute`，当前星球写入 `activePlanetThroughputPerMinute`，实际结算吞吐继续独立使用相邻主云修订 `totalProduced` 增量，避免理论值与实际值混用。
+
+19 MiB 夹具 `C:\Users\WINDOWS\Downloads\dsp-idle-save-2026-08-07 (1) (1).json` 以只读方式核验：20,164,029 字节；当前 `abyss` 理论值约 14,503,564,442.41/min；22 颗行星合计约 189,651,877,333.02/min；前后 SHA-256 一致。没有上传、写回或提交该存档。
 
 ## 2. 共享交接字段
 
@@ -137,7 +143,7 @@ Windows 首次联网下载 Electron 43.1.1 超时；最终使用 SHA-256 与官�
 - 公告与翻译：`src/components/ReleaseNotesDialog.tsx` 及测试、`src/i18n/legacyTranslations.ts` 及测试。
 - E2E 版本刷新与专项：`tests/e2e/v115-pure-idle-tutorial.spec.ts`、`v130-offline-timewarp-real-save.spec.ts`、`v132-pure-idle-macro.spec.ts` 以及既有版本断言文件。
 
-## 7. 不可变制品
+## 7. 历史旧候选制品（已作废，不得发布）
 
 制品根目录：`D:\GameDev\DSPidle2-release-1.0.34\release\bundle-1.0.34-9f9714f973b0`
 
@@ -164,7 +170,7 @@ Windows 首次联网下载 Electron 43.1.1 超时；最终使用 SHA-256 与官�
 
 Web、API、下载站归档解包后分别与源目录逐文件比较，`126/126`、`23/23`、`9/9` 完全一致。API 归档使用明确白名单，不含 `node_modules`、SQLite、data、备份、环境文件或秘密材料；APK、bundle 和文档均不含 keystore、密码、token 或私钥。
 
-## 8. Manifest 与签名
+## 8. 历史旧候选 Manifest 与签名（仅供审计，不得发布）
 
 | 清单 | 文件数 | 聚合 SHA-256 |
 | --- | ---: | --- |
@@ -186,7 +192,7 @@ Web、API、下载站归档解包后分别与源目录逐文件比较，`126/126
 
 ## 10. Release Agent 边界与回滚
 
-Release Agent 只能使用 source commit `9f9714f...` 对应的已验证 bundle。不得从本交接的后续 docs-only 提交重建二进制，不得在服务器上编辑源码，不得创建新 Android 证书。
+Release Agent 只能使用下方第 12 节列出的当前 source commit `4a7d51241424...` 制品；文档中旧 `9f9714f...` bundle 全部作废。不得从本交接的后续 docs-only 提交重建二进制，不得在服务器上编辑源码，不得创建新 Android 证书。当前 Android 签名门禁未完成，禁止发布。
 
 发布前生产基线和直接回滚目标均为 `1.0.33+2bd81de8d7f1`。发布需要分别备份香港与上海 SQLite 并验证，不得代理、复制或合并两地数据库。回滚只切换代码和下载指针，不恢复旧数据库，不删除新云修订，不改写玩家历史巨构堆叠，也不清理客户端纯挂机恢复记录。
 
@@ -203,22 +209,23 @@ Role: release
 - docs/NATIVE_APPLICATIONS.md
 - docs/RELEASE_HANDOFF_1.0.34.md
 
-当前生产基线是 1.0.33+2bd81de8d7f1。1.0.34 唯一允许发布的源码提交是
-9f9714f973b002c458c1f16ad0560f9ddd45dbce，Build ID 是
-1.0.34+9f9714f973b0。只能使用不可变目录：
-D:\GameDev\DSPidle2-release-1.0.34\release\bundle-1.0.34-9f9714f973b0
+当前生产基线是 1.0.33+2bd81de8d7f1。当前开发源码提交是
+4a7d51241424f4289c629377e896ec70f41cbe54，Build ID 是
+1.0.34+4a7d51241424。当前只有 partial/diagnostic 目录，不能发布：
+D:\GameDev\DSPidle2-release-1.0.34\release\bundle-1.0.34-4a7d51241424-partial
 
-发布前先独立验证三份清单，任一大小、SHA-256、文件数、聚合哈希或 Build ID
+在 Android 长期签名凭据加载前不得执行发布。凭据加载后必须从当前 clean source commit
+重新生成正式 APK、stable feed、下载页和完整 bundle，再独立验证三份清单，任一大小、SHA-256、文件数、聚合哈希或 Build ID
 不匹配都立即停止：
-- artifacts/release-manifests/1.0.34-9f9714f973b0.json
-- artifacts/release-manifests/1.0.34-9f9714f973b0-download.json
-- artifacts/release-manifests/1.0.34-9f9714f973b0-bundle.json
+- artifacts/release-manifests/1.0.34-4a7d51241424.json
+- 凭据加载后新生成的 `1.0.34-4a7d51241424-download.json`
+- 凭据加载后新生成的 `1.0.34-4a7d51241424-bundle.json`
 
 不要从后续文档提交重建二进制，不要在 VPS 热改 source/gameplay，不要创建新 Android
 证书。Android 必须复验 APK v2/v3、1.0.33 -> 1.0.34 长期证书连续性和覆盖升级保档；
 Windows 必须保持并明确标注 NotSigned。
 
-取得用户对目标节点和下载页的明确发布授权后，分别对香港和上海执行发布前 SQLite
+只有上述三份正式清单、Android v2/v3 和 1.0.33→1.0.34 证书连续性均通过，并取得用户对目标节点和下载页的明确发布授权后，才可分别对香港和上海执行发布前 SQLite
 Backup API 备份及 quick_check，记录账号、主云档、修订、正文、排行榜等摘要。上传到新的
 未激活目录，复验 149 文件 source manifest、生产依赖和备份副本隔离健康；先香港后上海
 原子切换。两地数据库必须保持独立，不得复制或合并。下载站使用新的 9 文件目录。
@@ -229,7 +236,21 @@ CORS、未登录 401、四槽云读取、Android raw 云上传、Web gzip 上传
 完整下载哈希、Range 206、immutable/no-cache、桌面和手机页面。不要上传玩家真实存档，
 不要覆盖已有主云档。
 
-记录服务 active/NRestarts、磁盘、当前目录、回滚目录、发布前后数据库摘要及下载目录。
+在此之前只记录阻塞，不连接 VPS。门禁齐全后记录服务 active/NRestarts、磁盘、当前目录、回滚目录、发布前后数据库摘要及下载目录。
 失败时只回滚代码和下载指针到 1.0.33，不恢复旧数据库。不得在日志、文档或回复中输出
 PEM、密码、token、keystore、证书私钥或玩家存档正文。
 ```
+
+## 12. 当前提交、制品与阻塞（权威，以本节为准）
+
+- Git：`4a7d51241424f4289c629377e896ec70f41cbe54`；Build ID：`1.0.34+4a7d51241424`；工作树代码在 `D:\GameDev\DSPidle2-release-1.0.34`。
+- Source manifest：`D:\GameDev\DSPidle2-release-1.0.34\artifacts\release-manifests\1.0.34-4a7d51241424.json`，150 文件，聚合 SHA-256 以该清单为准，已执行 verify。
+- Web 归档：`D:\GameDev\DSPidle2-release-1.0.34\release\web-1.0.34-4a7d51241424-clean.tar.gz`，1,321,163 字节，SHA-256 `3b496395bffffc69885212bdacdf04f64350aee7a0b712b801cc4932ba5cb7a6`。
+- API 归档：`D:\GameDev\DSPidle2-release-1.0.34\release\api-1.0.34-4a7d51241424-clean.tar.gz`，84,461 字节，SHA-256 `faf55d48265bdaeba71ccb503440346d4f74af64e1bfcf2c7dcbbc51bfc5f7f5`；白名单不含 node_modules、SQLite、data、备份、环境文件或秘密材料。
+- Windows 诊断包：`D:\GameDev\DSPidle2-release-1.0.34\release\build-1.0.34-4a7d51241424\dsp-idle-1.0.34-x64-setup.exe`，103,255,059 字节，SHA-256 `97c46f2de17539cc79886f10eeba0b3a9c94083671624b88f22970ab500f112f`；blockmap 110,926 字节，SHA-256 `40a5d812827a4343a816e766697277aaace9cb3d4ca5a461307f670d29eacaff`；Authenticode `NotSigned`，符合历史策略。
+- Android 诊断包（禁止发布）：`D:\GameDev\DSPidle2-release-1.0.34\release\bundle-1.0.34-4a7d51241424-partial\diagnostic\android\dsp-idle-1.0.34-1000034-unsigned.apk`，4,776,895 字节，SHA-256 `3e30d7b2e0e908178afb985b6f7814699ebf68e3e0f77fd59ae6299c2bb253f9`。它仅证明当前代码可构建，不满足长期证书、v2/v3 正式发布门禁。
+- Partial manifest：`D:\GameDev\DSPidle2-release-1.0.34\artifacts\release-manifests\1.0.34-4a7d51241424-partial.json`，8 文件，已 verify；diagnostic 下载页清单为 `...-diagnostic-download.json`，10 文件，已 verify。两者都不是发布清单。
+
+### Release Agent 阻塞
+
+当前环境没有加载 1.0.33 使用的 Android 长期签名凭据，故不能生成正式 `dsp-idle-1.0.34-1000034.apk`、稳定 Android JSON、正式下载页、9 文件下载清单和 10 文件 bundle 清单。不得使用 `1111.pem`（它是 VPS SSH 密钥）或创建新证书替代。取得授权的 Release Agent 应在安全签名环境中从当前 commit 重建 Android，验证 v2/v3、证书连续性和覆盖升级保档，再继续生成正式清单；在此之前 Release Agent 不得发布。
