@@ -17,6 +17,8 @@
 
 > 当前生产状态（2026-08-08）：香港、上海 Web/API 均运行 `1.0.34-4a7d51241424`，构建 ID 为 `1.0.34+4a7d51241424`；上海下载页运行 `download-site-1.0.34-4a7d51241424`。Web/API 回滚目标为 `1.0.33-2bd81de8d7f1`，下载页直接回滚目标为 `download-site-1.0.33-2bd81de8d7f1-r2`。两地数据库继续独立使用 schema v7 / SQLite layout v2。发布前备份、未激活目录复验、原子切换、启动观察、公网健康、完整安装包哈希、Range、缓存和浏览器证据见 [releases/1.0.34.md](./releases/1.0.34.md)。
 
+> 1.0.35 仅为开发候选，不授权切换生产。候选服务启动后仍保持 schema v7 / SQLite layout v2，但新增内部账号安全、治理指标和排行榜复核状态。发布前必须在两地分别创建并验证 SQLite Backup API 备份；未激活目录先检查 80% 告警/90% 写保护、备份窗口状态、裁剪预览幂等、旧服务端与新 Web 的滚动兼容，再原子切换。不得跨节点复制、合并或裁剪数据库。
+
 ## 2. 服务器布局
 
 两个 Linux 节点遵循同一目录约定：
@@ -210,6 +212,10 @@ sudo systemctl restart dsp-idle-cloud.service
 ```
 
 公开 `/api/public-status` 只提供玩家累计、今日、120 秒在线口径和匿名活动时钟/模拟进度；`/api/admin/metrics` 与兼容路径 `/api/metrics` 必须携带管理员 bearer token。后台入口为 `https://dsponline.cn/admin`。
+
+1.0.35 候选可配置 `DSP_CLOUD_BACKUP_WINDOW=HH:MM-HH:MM`、`DSP_CLOUD_PRUNE_INTERVAL_MS` 和 `DSP_CLOUD_REQUEST_TIMEOUT_MS`。部署前在生产备份副本上验证时间窗跨午夜、重复裁剪和中断恢复；正式节点先只读调用 `GET /api/admin/cloud-history/prune-preview`，确认保留最近 20 条及预览哈希。写入裁剪必须同时提交精确确认文字 `PRUNE_CLOUD_HISTORY` 和当前预览 ID；预览变化返回冲突后必须重新检查，不能复用旧确认。磁盘达到 80% 时停止非必要发布，达到 90% 时云存档 PUT 返回保护性 507，禁止通过删除数据库或未验证备份解除保护。
+
+账号处置先用 `GET /api/admin/account?accountId=...` 核对精确账号摘要，再向 `POST /api/admin/account/action` 提交 `CONFIRM:<action>:<accountId>`。彻底注销还要求最近 24 小时内的已验证本机备份时间戳；不得用显示名、邮箱模糊匹配或直接编辑 SQLite。速通历史恢复只能离线运行 `server/speedrun-recovery.mjs`：先 dry-run 核对最新主云 revision、元数据/正文哈希、v46 速通身份和百万白糖事实；apply 前停止服务，并提供匹配 `quick_check` 备份及 `RECOVER_SPEEDRUN:<account>:<revision>`。该工具只写内部提交和最小化审计，不改云存档正文；完成后重启并复核一次，重复执行必须无变化。
 
 ### 银河活动配置
 

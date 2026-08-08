@@ -254,7 +254,7 @@ import { planFactoryAutoLayout } from "./game/layout";
 import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
 import { getProductionLineLocations, type ProductionLineLocation } from "./game/productionLocator";
 import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
-import { clearGameSlotVerified, clearSaveSnapshotVerified, clearSaveSnapshotsVerified, exportGame, getSaveSummariesInWorker, getSaveSlotSummaries, getSaveSnapshotSummaries, inspectSave, loadGameSlot, loadSaveSnapshot, repairSave, saveGame, saveGameSnapshotVerified, saveGameSlotVerified, saveGameVerified, type LoadedGame, type OfflineReport, type SaveGameResult, type SaveInspection, type SaveSlotId, type SaveSnapshotSummary } from "./game/storage";
+import { clearGameSlotVerified, clearSaveSnapshotVerified, clearSaveSnapshotsVerified, exportGame, getSaveSummariesInWorker, getSaveSlotSummaries, getSaveSnapshotSummaries, inspectSave, loadGameSlot, loadSaveSnapshot, repairSave, saveGame, saveGameSnapshotVerified, saveGameSlotVerified, saveGameVerified, serializeEnvelopeInWorker, type LoadedGame, type OfflineReport, type SaveGameResult, type SaveInspection, type SaveSlotId, type SaveSnapshotSummary } from "./game/storage";
 import { runAutomaticPerformanceReport, type AutomaticPerformanceReport } from "./game/benchmark";
 import { importBlueprintExchange, parseBlueprintExchange, serializeBlueprintExchange } from "./game/blueprintExchange";
 import { exportTextFile } from "./game/fileExport";
@@ -280,11 +280,12 @@ import {
 import { baselineAccountProgress, createLocalAccount, getActiveAccount, loadAccountState, recordAccountProgress, saveAccountState, setActiveCloudBinding, switchLocalAccount, updateAccountProfile, type AccountProfileChanges } from "./game/account";
 import { removeLeaderboardData } from "./game/leaderboard";
 import { trackAnalyticsEvent } from "./game/analytics";
-import { CLOUD_AUTO_SYNC_INTERVAL_MS, CloudApiError, compareCloudSave, fetchCloudPublicStatus, getCloudToken, markCloudSaveSynchronized, readCloudAutoSyncStatus, refreshCloudSaveMetadata, resumeCloudSession, uploadCloudSave, writeCloudAutoSyncStatus } from "./game/cloud";
+import { CLOUD_AUTO_SYNC_INTERVAL_MS, CloudApiError, compareCloudSaveSummary, fetchCloudPublicStatus, getCloudToken, markCloudSaveSynchronized, readCloudAutoSyncStatus, refreshCloudSaveMetadata, resumeCloudSession, summarizeCloudPayload, uploadCloudSave, writeCloudAutoSyncStatus } from "./game/cloud";
 import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CanvasRegion, CanvasViewport, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad, StationSlotTemplate } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 import { PureIdleMacroClient, PureIdleMacroClientError, type PureIdleMacroProgress } from "./game/pureIdleMacroClient";
 import type { PureIdleMacroMode, PureIdleMacroSummary } from "./game/pureIdleMacro";
+import { classifyOfflineWorkload, offlineProfileLabel } from "./game/offlineComplexity";
 import {
   canUsePureIdleRecovery,
   claimPureIdleRecovery,
@@ -1577,11 +1578,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       pureIdleMacroForceConservativeRef.current = true;
     }
     pureIdleMacroClientRef.current?.close();
-    const forceConservativeReason = getPureIdleForceConservativeReason(
+    const complexity = classifyOfflineWorkload(record.state, 30 * 24 * 60 * 60);
+    const recoveryConservativeReason = getPureIdleForceConservativeReason(
       record,
       pureIdleMacroRestartCountRef.current,
     );
+    const forceConservativeReason = recoveryConservativeReason ?? (complexity.recommendedStrategy === "conservative"
+      ? `${complexity.warning ?? "当前设备无法安全容纳多份校准状态"}；${offlineProfileLabel(complexity.profile)}`
+      : undefined);
     const client = new PureIdleMacroClient({
+      operationDeadlineMs: complexity.recommendedDeadlineMs || undefined,
       onProgress: (progress) => {
         if (pureIdleMacroClientRef.current !== client || pureIdleRecoveryRef.current?.sessionId !== record.sessionId) return;
         setPureIdleRecoveryStatus(`${pureIdleProgressLabel(progress)} · 现实耗时 ${(progress.wallClockMs / 1_000).toFixed(1)} 秒`);
@@ -1589,8 +1595,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     });
     pureIdleMacroClientRef.current = client;
     setPureIdleRecoveryStatus(forceConservativeReason
-      ? "正在从权威检查点建立保守宏观会话"
-      : record.summary ? "正在从检查点重建宏观状态" : "正在执行 3 × 10 秒产线校准");
+      ? `正在从权威检查点建立保守宏观会话 · ${offlineProfileLabel(complexity.profile)}`
+      : record.summary ? `正在从检查点重建宏观状态 · ${offlineProfileLabel(complexity.profile)}` : `正在执行 3 × 10 秒产线校准 · ${offlineProfileLabel(complexity.profile)}`);
     try {
       const summary = await client.initialize(record.state, record.mode, contentPackRuntimeSnapshotRef.current, {
         forceConservativeReason,
@@ -2849,8 +2855,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         if (session.status !== "authenticated" || !session.user) return;
         syncUserId = session.user.id;
         syncRevision = session.cloudSave?.revision ?? null;
-        const payload = exportGame(gameRef.current);
-        const comparison = compareCloudSave(session.user.id, payload, session.cloudSave, "main");
+        const prepared = await serializeEnvelopeInWorker(stateWithSimulationDebt(gameRef.current));
+        const payload = prepared.raw;
+        const summary = prepared.summary ?? summarizeCloudPayload(payload);
+        const comparison = compareCloudSaveSummary(session.user.id, summary, session.cloudSave, "main");
         if (session.cloudSave && ["cloud-newer", "conflict", "unbound"].includes(comparison.state)) {
           writeCloudAutoSyncStatus({ userId: session.user.id, state: "conflict", attemptedAt, uploadedAt: null, revision: session.cloudSave.revision, message: "检测到版本冲突，等待玩家选择" });
           if (active) setNotice("自动云同步已暂停：本地与云端存档需要手动选择版本");
@@ -2885,7 +2893,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       active = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [stateWithSimulationDebt]);
 
   useEffect(() => {
     const syncAccount = () => {

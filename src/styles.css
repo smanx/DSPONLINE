@@ -562,6 +562,13 @@
 .cloud-account-sessions small { color: var(--muted); font-size: 7px; }
 .cloud-account-sessions button { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid var(--line); border-radius: 3px; background: var(--surface-raised); color: var(--muted); }
 .cloud-account-sessions > p { margin: 0; padding: 8px 14px; color: var(--muted); font-size: 8px; }
+.cloud-account-security-events { display: grid; padding-bottom: 8px; }
+.cloud-account-security-events > div { display: grid; min-height: 44px; grid-template-columns: 26px minmax(0, 1fr); align-items: center; gap: 7px; padding: 5px 14px; border-top: 1px solid rgba(43, 53, 49, .62); }
+.cloud-account-security-events > div > svg { color: var(--cyan); }
+.cloud-account-security-events > div > span { display: grid; min-width: 0; gap: 2px; }
+.cloud-account-security-events strong { color: var(--text-soft); font-size: 8px; }
+.cloud-account-security-events small { overflow-wrap: anywhere; color: var(--muted); font-size: 7px; }
+.cloud-account-security-events > p { margin: 0; padding: 8px 14px; color: var(--muted); font-size: 8px; }
 .cloud-account-data-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; padding: 11px 14px; border-top: 1px solid var(--line); }
 .cloud-account-data-actions button.danger,
 .cloud-account-delete button.danger { border-color: #774b45; background: #2a1715; color: #efa093; }
@@ -6642,7 +6649,7 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
 .entity-stack-batch-remove > label { display: grid; grid-template-columns: auto minmax(64px, 1fr); align-items: center; gap: 8px; color: var(--muted); font-size: 9px; }
 .entity-stack-batch-remove input { min-width: 0; height: 32px; padding: 0 7px; border: 1px solid var(--line-strong); border-radius: 3px; outline: 0; background: var(--surface); color: var(--text); font: inherit; text-align: center; }
 .entity-stack-batch-remove > div { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
-.entity-stack-target-shortcuts { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+.entity-stack-target-shortcuts { grid-template-columns: repeat(auto-fit, minmax(54px, 1fr)) !important; }
 .entity-stack-batch-remove button { min-width: 0; min-height: 32px; border: 1px solid var(--line); border-radius: 3px; background: var(--surface); color: var(--text-soft); cursor: pointer; font: inherit; font-size: 9px; }
 .entity-stack-batch-remove button:disabled { cursor: not-allowed; opacity: .4; }
 .entity-stack-batch-remove small,

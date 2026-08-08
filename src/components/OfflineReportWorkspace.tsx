@@ -1,6 +1,7 @@
 import { CheckCircle2, Clock3, Factory, FlaskConical, Gift, Orbit, Send, Sparkles, X } from "lucide-react";
 import { getItem, getTechnology } from "../game/content";
 import type { OfflineReport } from "../game/storage";
+import { offlineProfileLabel } from "../game/offlineComplexity";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { QuantityValue } from "./QuantityValue";
 
@@ -41,6 +42,12 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
         <section className={`offline-report-method offline-report-method--${approximation?.fellBack ? "fallback" : approximation?.mode ?? "exact"}`}>
           <header><Clock3 size={15} /><span>结算方式</span><strong>{settlementLabel}</strong></header>
           <dl>
+            {report.complexity ? <>
+              <div><dt>存档类型</dt><dd>{offlineProfileLabel(report.complexity.profile)}</dd></div>
+              <div><dt>设备预算</dt><dd>{report.complexity.device.deviceClass === "low-memory" ? "低内存" : report.complexity.device.deviceClass === "constrained" ? "受限" : "标准"} · {report.complexity.recommendedDeadlineMs > 0 ? `${Math.round(report.complexity.recommendedDeadlineMs / 1_000)} 秒` : "精确路径"}</dd></div>
+              <div><dt>规模</dt><dd>{report.complexity.entityCount.toLocaleString("zh-CN")} 建筑 · {report.complexity.beltCount.toLocaleString("zh-CN")} 线路</dd></div>
+              <div><dt>内存预估</dt><dd>{(report.complexity.estimatedPeakBytes / 1024 / 1024).toFixed(0)} MiB 峰值</dd></div>
+            </> : null}
             <div><dt>精确校准</dt><dd>{approximation ? approximation.calibrationWindowSeconds > 0 ? `${approximation.calibrationWindowSeconds} 秒${approximation.algorithmVersion?.startsWith("fast-30s-") ? "" : " × 2"}` : "未进入实验" : "全程精确"}</dd></div>
             <div><dt>宏观覆盖</dt><dd>{approximation ? formatDuration(approximation.approximatedSeconds) : "未使用"}</dd></div>
             <div><dt>估计最大误差</dt><dd>{approximation ? `${(approximation.maxEstimatedError * 100).toFixed(2)}%` : "0.00%"}</dd></div>
@@ -50,6 +57,7 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
             {approximation?.boundaryCorrections ? <div><dt>边界修正</dt><dd>{approximation.boundaryCorrections}</dd></div> : null}
           </dl>
           {approximation?.settlementStatus === "conservative" ? <p className="offline-report-warning">普通宏观合同未满足安全条件，已在现实时间上限内使用保守宏观结算：{approximation.fallbackReason ?? "未知原因"}</p> : approximation?.fellBack ? <p className="offline-report-warning">本次使用有界安全路径：{approximation.fallbackReason ?? "未知原因"}</p> : null}
+          {report.complexity?.warning ? <p className="offline-report-warning">{report.complexity.warning}</p> : null}
         </section>
       </div>
       {hasChanges ? (

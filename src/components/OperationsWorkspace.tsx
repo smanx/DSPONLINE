@@ -469,8 +469,8 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
       <section className="settings-group" data-settings-category="storage">
         <header><Clock3 size={14} /><span>自动保存间隔</span></header>
         <div className="settings-segmented" aria-label="自动保存间隔">
-          {([30, 60, 120, 600, 0] as AutosaveIntervalSeconds[]).map((seconds) => (
-            <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => onChange({ autosaveIntervalSeconds: seconds })}>{seconds === 0 ? "关闭" : seconds === 600 ? "10 分钟" : `${seconds} 秒`}</button>
+          {([30, 60, 120, 600, 1800, 0] as AutosaveIntervalSeconds[]).map((seconds) => (
+            <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => onChange({ autosaveIntervalSeconds: seconds })}>{seconds === 0 ? "关闭" : seconds >= 600 ? `${seconds / 60} 分钟` : `${seconds} 秒`}</button>
           ))}
         </div>
         {settings.autosaveIntervalSeconds === 0 ? <p className="settings-warning">关闭后，刷新、崩溃或异常退出可能丢失未保存进度；手动保存和云同步保持独立。</p> : null}

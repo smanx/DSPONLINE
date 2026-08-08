@@ -31,7 +31,7 @@ import { computeSaveStateChecksum, inspectSaveEnvelopeChecksum } from "./saveEnv
 import { createEmptyGalacticHubNetwork, createEmptySystemSpaceStations } from "./systemSpaceStation";
 import { normalizeHubInteger, SYSTEM_HUB_MAX_DIGITS } from "./systemHubLogistics";
 import { createEmptyQuantumLogisticsNetworkState, normalizeQuantumInteger, normalizeQuantumLogisticsNetworkState, QUANTUM_MAX_INTEGER_DIGITS } from "./quantumLogisticsNetwork";
-import { normalizeSpeedrunState } from "./speedrun";
+import { evaluateSpeedrunMilestones, normalizeSpeedrunState } from "./speedrun";
 import { getActiveContentPackReferences, getMissingContentPackRequirements, loadContentPackRegistry, type ContentPackRegistry } from "./contentPacks";
 import {
   clearPrimarySaveEmergencyMirror,
@@ -49,6 +49,8 @@ import {
 } from "./localSaveStore";
 import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, MaterialDeliverySlot, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, SorterTier, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId, SystemSpaceStationState, GalacticHubNetworkState } from "./types";
 import type { OfflineApproximationReport } from "./offlineApproximation";
+import type { OfflineComplexityReport } from "./offlineComplexity";
+import type { CloudSaveSummary } from "./cloud";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_SLOT_KEY_PREFIX = "dsp-idle-network.slot";
@@ -107,6 +109,8 @@ export interface OfflineReport {
   galacticCreditsAdded?: number;
   returningReward?: Array<{ itemId: ItemId; amount: number }>;
   approximation?: OfflineApproximationReport;
+  /** Runtime-only diagnosis for the just-completed calculation. */
+  complexity?: OfflineComplexityReport;
 }
 
 export interface SaveSlotSummary {
@@ -338,6 +342,7 @@ export interface BackgroundSaveResult {
   raw: string;
   durationMs: number;
   usedWorker: boolean;
+  summary?: CloudSaveSummary;
 }
 
 let backgroundSaveRequestId = 0;
@@ -375,7 +380,7 @@ export function serializeEnvelopeInWorker(state: GameState, savedAt = Date.now()
       finish({ raw: serializeEnvelope(state, savedAt, kind, reason), durationMs: Math.max(0, monotonicNow() - startedAt), usedWorker: false });
     };
     worker.onerror = fallback;
-    worker.onmessage = (event: MessageEvent<{ id: number; raw?: string; durationMs?: number; error?: string }>) => {
+    worker.onmessage = (event: MessageEvent<{ id: number; raw?: string; durationMs?: number; summary?: CloudSaveSummary; error?: string }>) => {
       if (event.data.id !== id || !event.data.raw || event.data.error) {
         fallback();
         return;
@@ -384,7 +389,7 @@ export function serializeEnvelopeInWorker(state: GameState, savedAt = Date.now()
         fallback();
         return;
       }
-      finish({ raw: event.data.raw, durationMs: Math.max(0, event.data.durationMs ?? 0), usedWorker: true });
+      finish({ raw: event.data.raw, durationMs: Math.max(0, event.data.durationMs ?? 0), usedWorker: true, ...(event.data.summary ? { summary: event.data.summary } : {}) });
     };
     try {
       worker.postMessage({ id, formatVersion: SAVE_FORMAT_VERSION, savedAt, kind, ...(reason ? { reason } : {}), state: persistent });
@@ -739,7 +744,7 @@ function validFontScale(value: unknown): value is GameState["settings"]["fontSca
 }
 
 function validAutosaveInterval(value: unknown): value is GameState["settings"]["autosaveIntervalSeconds"] {
-  return value === 0 || value === 30 || value === 60 || value === 120 || value === 600;
+  return value === 0 || value === 30 || value === 60 || value === 120 || value === 600 || value === 1800;
 }
 
 function validDefaultBeltRouteMode(value: unknown): value is GameState["settings"]["defaultBeltRouteMode"] {
@@ -2068,7 +2073,11 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
   // already-complete progress to its declared cost before granting the normal
   // technology rewards and queue transition.
   const repairedResearch = settleCompletedResearchBoundaries(migrated);
-  return syncCampaignProgress(repairedResearch, { grantRewards: saved.version >= 18 });
+  // A valid legacy run can contain the cumulative total before its derived
+  // speedrun milestone was persisted. Repair only that derived marker from
+  // the authoritative counters; ordinary saves and the v46 shape stay intact.
+  const repairedSpeedrun = evaluateSpeedrunMilestones(repairedResearch);
+  return syncCampaignProgress(repairedSpeedrun, { grantRewards: saved.version >= 18 });
 }
 
 function persistentState(state: GameState, contentPackRegistry: ContentPackRegistry = loadContentPackRegistry()): GameState {

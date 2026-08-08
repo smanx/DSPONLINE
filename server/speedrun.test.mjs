@@ -150,3 +150,74 @@ test("rejects forged times and ordinary saves without changing ordinary rankings
   const ordinaryRanking = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
   assert.equal(ordinaryRanking.response.status, 200);
 });
+
+test("recovers a missing million-white-matrix milestone conservatively and idempotently", async () => {
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "speedrecovery", password: "strong-pass-123", displayName: "速通恢复测试" }),
+  });
+  assert.equal(registered.response.status, 201);
+  const headers = { authorization: `Bearer ${registered.body.token}` };
+  const state = speedrunState("speedrun_recovery_factory_001");
+  state.totalProduced.universe_matrix = 1_000_000;
+  state.speedrun.elapsedActiveSeconds = 77;
+  state.speedrun.milestones.white_matrix_1m = { completed: false };
+  const uploaded = await request("/api/cloud-save", {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ payload: createSavePayload(state), expectedRevision: 0 }),
+  });
+  assert.equal(uploaded.response.status, 200);
+
+  const submission = {
+    targetId: "white_matrix_1m",
+    seasonId: "season_01",
+    rulesetVersion: "speedrun-v1",
+    factoryId: "speedrun_recovery_factory_001",
+    elapsedSeconds: 77,
+    saveRevision: uploaded.body.cloudSave.revision,
+    saveHash: uploaded.body.cloudSave.checksum,
+    clientVersion: "test",
+  };
+  const recovered = await request("/api/speedrun/submit", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(submission),
+  });
+  assert.equal(recovered.response.status, 200);
+  assert.equal(recovered.body.verified, true);
+  assert.equal(recovered.body.idempotent, false);
+  assert.equal(recovered.body.entry.elapsedSeconds, 77);
+
+  const duplicate = await request("/api/speedrun/submit", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(submission),
+  });
+  assert.equal(duplicate.response.status, 200);
+  assert.equal(duplicate.body.idempotent, true);
+
+  state.speedrun.elapsedActiveSeconds = 76;
+  state.speedrun.milestones.white_matrix_1m = { completed: true, completedAtSeconds: 76 };
+  const rollbackUpload = await request("/api/cloud-save", {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      payload: createSavePayload(state),
+      expectedRevision: uploaded.body.cloudSave.revision,
+    }),
+  });
+  assert.equal(rollbackUpload.response.status, 200);
+  const rollback = await request("/api/speedrun/submit", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      ...submission,
+      elapsedSeconds: 76,
+      saveRevision: rollbackUpload.body.cloudSave.revision,
+      saveHash: rollbackUpload.body.cloudSave.checksum,
+    }),
+  });
+  assert.equal(rollback.response.status, 409);
+  assert.equal(rollback.body.code, "SPEEDRUN_ROLLBACK");
+});

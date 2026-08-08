@@ -108,13 +108,17 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
   try {
     applyContentPackRuntimeSnapshot(request.registry);
     if (request.type === "prepare-upload") {
+      const sourceBytes = new TextEncoder().encode(request.raw).byteLength;
+      const inspectStartedAt = nowMs();
       const inspection = inspectSave(request.raw, request.registry.registry);
+      const inspectMs = Math.max(0, nowMs() - inspectStartedAt);
       if (!inspection.valid || !inspection.state) throw new Error(inspection.issues[0] ?? "本地存档格式或完整性无效");
       const savedAt = inspection.savedAt ?? request.now;
       const offlineSeconds = !request.skipOffline && !inspection.state.paused
         ? Math.min(getOfflineSimulationLimitSeconds(inspection.state), Math.max(0, (request.now - savedAt) / 1000))
         : 0;
       const session = createSimulationAdvanceSession(inspection.state, offlineSeconds);
+      const offlineStartedAt = nowMs();
       const runChunk = () => {
         if (activeId !== request.id || cancelled) {
           post({ type: "cancelled", id: request.id });
@@ -141,9 +145,12 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
         const advanced = completeSimulationAdvanceSession(session);
         const returning = applyReturningRewardToState(advanced, savedAt, offlineSeconds, request.returningRewardClaimed);
         const state = { ...returning.state, settings: mergeUploadSettings(returning.state.settings, request.menuSettings) };
+        const offlineMs = Math.max(0, nowMs() - offlineStartedAt);
         currentPhase = "saving";
         postProgress(offlineSeconds, offlineSeconds);
+        const serializeStartedAt = nowMs();
         const payload = serializeEnvelope(state, request.now, "primary", undefined, request.registry.registry);
+        const serializeMs = Math.max(0, nowMs() - serializeStartedAt);
         post({
           type: "upload-complete",
           id: request.id,
@@ -151,6 +158,16 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
           summary: uploadSummary(state, payload, request.now),
           offlineSeconds,
           returningReward: returning.reward.map((entry) => ({ itemId: entry.itemId, amount: entry.amount })),
+          diagnostics: {
+            sourceBytes,
+            payloadBytes: new TextEncoder().encode(payload).byteLength,
+            totalMs: Math.max(0, nowMs() - operationStartedAt),
+            inspectMs,
+            offlineMs,
+            serializeMs,
+            offlineSeconds,
+            skippedOffline: request.skipOffline === true,
+          },
         });
         activeId = null;
       };

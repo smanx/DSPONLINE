@@ -11,6 +11,7 @@ import {
   fetchCloudPublicStatus,
   getCloudSyncMarker,
   markCloudSaveSynchronized,
+  readLastCloudUploadDiagnostics,
   resumeCloudSession,
   summarizeCloudPayload,
   uploadCloudSave,
@@ -191,6 +192,11 @@ describe("cloud save synchronization markers", () => {
     expect((request.headers as Record<string, string>)["content-encoding"]).toBe("gzip");
     expect(typeof (request.body as Blob).size).toBe("number");
     expect((request.body as Blob).size).toBeGreaterThan(0);
+    expect(readLastCloudUploadDiagnostics()).toMatchObject({
+      status: "success",
+      attempts: 1,
+      usedCompression: true,
+    });
   });
 
   it("falls back to one raw JSON request when CompressionStream is unavailable", async () => {
@@ -245,6 +251,12 @@ describe("cloud save synchronization markers", () => {
     expect(typeof rawRequest.body).toBe("string");
     expect((rawRequest.headers as Record<string, string>)?.["content-encoding"]).toBeUndefined();
     expect(JSON.parse(String(rawRequest.body))).toMatchObject({ payload: source, expectedRevision: 0 });
+    expect(readLastCloudUploadDiagnostics()).toMatchObject({
+      status: "success",
+      attempts: 2,
+      usedRawFallback: true,
+      fallbackReason: "server-rejected-content-encoding",
+    });
   });
 
   it("confirms a committed raw fallback after its response times out without sending a third upload", async () => {

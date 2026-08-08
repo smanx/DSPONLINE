@@ -8,6 +8,8 @@
 > Web、Windows 与 Android 1.0.34 共用 `GameState` v46。两端存档 envelope v2 和云 schema v7 不变；旧存档通过连续守恒迁移载入。
 > 公开下载入口：`https://download.dsponline.cn/`，文件由上海节点提供，不消耗香港游戏节点流量。
 
+> 1.0.35 已写入开发候选元数据：Android `versionName=1.0.35`、`versionCode=1000035`。本开发交接尚未生成或签署稳定 APK/AAB，也未生成 Windows 安装程序；公开稳定包仍是 1.0.34。发布 Agent 必须使用既有 Android 长期证书验证覆盖升级，并明确复核 Windows Authenticode 状态，不能把未签名包描述为已签名。
+
 ## 1. 架构边界
 
 - Windows 使用 Electron，加载本地 `dist/`，启用 context isolation、sandbox、单实例和受限 IPC。

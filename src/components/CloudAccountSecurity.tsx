@@ -18,11 +18,13 @@ import {
   changeCloudPassword,
   deleteCloudAccount,
   exportCloudAccountData,
+  fetchCloudSecurityEvents,
   fetchCloudSessions,
   resendCloudVerification,
   readCloudAutoSyncStatus,
   revokeCloudSession,
   type CloudAccountSession,
+  type CloudLoginSecurityEvent,
   type CloudUser,
 } from "../game/cloud";
 import { exportTextFile } from "../game/fileExport";
@@ -46,6 +48,7 @@ function sessionIcon(session: CloudAccountSession) {
 
 export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLoggedOut }: CloudAccountSecurityProps) {
   const [sessions, setSessions] = useState<CloudAccountSession[]>([]);
+  const [securityEvents, setSecurityEvents] = useState<CloudLoginSecurityEvent[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
@@ -60,7 +63,16 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
   const refreshSessions = async () => {
     setSessionsLoading(true);
     try {
-      setSessions(await fetchCloudSessions());
+      const [nextSessions, nextEvents] = await Promise.all([
+        fetchCloudSessions(),
+        // The security-event ledger was added after the session endpoint. During
+        // a rolling deployment the web client can briefly talk to the previous
+        // server, so treat this optional panel as empty instead of hiding the
+        // still-valid session controls.
+        fetchCloudSecurityEvents().catch(() => []),
+      ]);
+      setSessions(nextSessions);
+      setSecurityEvents(nextEvents);
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "设备会话读取失败" });
     } finally {
@@ -233,6 +245,17 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
             <button type="button" title={`退出 ${session.deviceName}`} aria-label={`退出 ${session.deviceName}`} disabled={busyAction === session.id} onClick={() => void revokeSession(session)}>{busyAction === session.id ? <LoaderCircle size={13} /> : <LogOut size={13} />}</button>
           </div>)}
           {!sessionsLoading && sessions.length === 0 ? <p>没有可用的设备会话</p> : null}
+        </div>
+      </details>
+
+      <details className="cloud-account-section">
+        <summary><ShieldCheck size={15} /><span><strong>最近登录安全记录</strong><small>仅保存匿名设备与网络区域摘要，不记录原始 IP</small></span></summary>
+        <div className="cloud-account-security-events">
+          {securityEvents.map((entry, index) => <div key={`${entry.occurredAt}-${entry.deviceHash}-${index}`}>
+            <ShieldCheck size={14} />
+            <span><strong>{entry.clientType === "mobile-web" ? "移动设备" : entry.clientType === "desktop" ? "桌面应用" : "网页设备"}</strong><small>{formatSessionTime(entry.occurredAt)} · 设备 {entry.deviceHash.slice(0, 6)} · 区域 {entry.regionHash.slice(0, 6)}</small></span>
+          </div>)}
+          {!sessionsLoading && securityEvents.length === 0 ? <p>暂无登录安全记录</p> : null}
         </div>
       </details>
 

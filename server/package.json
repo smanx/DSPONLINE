@@ -15,8 +15,9 @@
   "type": "module",
   "scripts": {
     "start": "node index.mjs",
-    "test": "node --test server.test.mjs speedrun.test.mjs leaderboard-moderation.test.mjs analytics.test.mjs mail.test.mjs activity.test.mjs",
-    "leaderboard:moderate": "node moderate-leaderboard.mjs"
+    "test": "node --test server.test.mjs speedrun.test.mjs speedrun-recovery.test.mjs security-governance.integration.test.mjs leaderboard-moderation.test.mjs leaderboard-integrity.test.mjs account-security.test.mjs cloud-governance.test.mjs analytics.test.mjs mail.test.mjs activity.test.mjs",
+    "leaderboard:moderate": "node moderate-leaderboard.mjs",
+    "speedrun:recover": "node speedrun-recovery.mjs"
   },
   "engines": {
     "node": ">=20.20"

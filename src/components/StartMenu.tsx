@@ -78,14 +78,16 @@ import { isSecureCloudClient } from "../nativeApp";
 import { useAppLocale } from "../i18n/locale";
 import { exportTextFile } from "../game/fileExport";
 import { readOfflineApproximationEnabled, writeOfflineApproximationEnabled, type OfflineApproximationReport } from "../game/offlineApproximation";
+import { offlineProfileLabel, type OfflineComplexityReport } from "../game/offlineComplexity";
 import { readShowRunLogPreference, readThemePreference, writeShowRunLogPreference, writeThemePreference } from "../game/uiPreferences";
 import { readPureIdleRecovery } from "../game/pureIdleRecovery";
 import type { OfflineSimulationPhase, OfflineSimulationProgress } from "../game/offlineSimulation";
+import { assessSavePayloadSize, utf8Bytes } from "../game/saveSizePolicy";
 
 type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "new";
 type CloudAuthMode = "login" | "register" | "forgot" | "reset";
 type MenuMessage = { tone: "busy" | "ready" | "warning" | "error"; text: string } | null;
-type OfflineLoadProgress = OfflineSimulationProgress & { label: string };
+type OfflineLoadProgress = OfflineSimulationProgress & { label: string; complexity?: OfflineComplexityReport };
 
 function offlineSimulationPhaseLabel(phase: OfflineSimulationPhase): string {
   if (phase === "preparing") return "准备状态";
@@ -108,7 +110,7 @@ const REGISTRATION_DRAFT_KEY = "dsp-idle-network.registration-draft.v1";
 const NATIVE_DOWNLOAD_URL = "https://download.dsponline.cn/";
 const FONT_SCALES: FontScale[] = [0.8, 1, 1.25, 1.5, 2];
 const SIMULATION_SPEEDS: SimulationSpeed[] = [1, 2, 4];
-const AUTOSAVE_INTERVALS: AutosaveIntervalSeconds[] = [30, 60, 120, 600, 0];
+const AUTOSAVE_INTERVALS: AutosaveIntervalSeconds[] = [30, 60, 120, 600, 1800, 0];
 const DEFAULT_MENU_SETTINGS: GameSettings = {
   simulationSpeed: 1,
   fontScale: 1,
@@ -474,10 +476,22 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         const result = await runOfflineSimulationInWorkerDetailed(loaded.state, loaded.offlineSeconds, {
           signal: controller.signal,
           approximate: offlineApproximationEnabled,
-          onProgress: (progress) => setOfflineProgress({ label, ...progress }),
+          onComplexity: (complexity) => setOfflineProgress((current) => current
+            ? { ...current, complexity }
+            : {
+              label,
+              complexity,
+              completedSeconds: 0,
+              totalSeconds: loaded.offlineSeconds,
+              progress: 0,
+              phase: "preparing",
+              wallClockMs: 0,
+            }),
+          onProgress: (progress) => setOfflineProgress((current) => ({ label, ...progress, ...(current?.complexity ? { complexity: current.complexity } : {}) })),
         });
         completed = result.state;
         approximationReport = result.approximation;
+        loaded.offlineReport = loaded.offlineReport ? { ...loaded.offlineReport, complexity: result.complexity } : null;
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
         const skipped = storage.cancelDeferredOfflineGame(loaded);
@@ -487,6 +501,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     }
     const finalized = storage.finalizeDeferredOfflineGame(loaded, completed);
     if (approximationReport && finalized.offlineReport) finalized.offlineReport = { ...finalized.offlineReport, approximation: approximationReport };
+    if (loaded.offlineReport?.complexity && finalized.offlineReport) finalized.offlineReport = { ...finalized.offlineReport, complexity: loaded.offlineReport.complexity };
     await enterLoadedGame(finalized, preserveReason, storage);
   };
 
@@ -648,7 +663,9 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       if (cloudMode === "register") {
         try { window.sessionStorage.removeItem(REGISTRATION_DRAFT_KEY); } catch { /* optional draft */ }
       }
-      setMessage({ tone: "ready", text: cloudMode === "register" ? "云账户已创建，云存档与自动同步已开放" : "云账户登录成功，本地存档保持不变" });
+      setMessage(session.message
+        ? { tone: "warning", text: session.message }
+        : { tone: "ready", text: cloudMode === "register" ? "云账户已创建，云存档与自动同步已开放" : "云账户登录成功，本地存档保持不变" });
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "云账户登录失败" });
     } finally {
@@ -745,6 +762,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       setCloudUploadOfflineStage(false);
       setMessage({ tone: "busy", text: "生成校验" });
       attemptedPayload = prepared.payload;
+      const preparedSize = assessSavePayloadSize(prepared.diagnostics.payloadBytes);
+      if (preparedSize.warning) setMessage({ tone: "busy", text: `${preparedSize.warning} · 正在继续安全上传` });
       const comparison = compareCloudSaveSummary(userId, prepared.summary, cloudSession.cloudSave);
       if (cloudSession.cloudSave && ["cloud-newer", "conflict", "unbound"].includes(comparison.state)) {
         setCloudConflict({ slot: "main", localPayload: prepared.payload, remote: cloudSession.cloudSave, commitLocalAfterUpload: true });
@@ -1002,6 +1021,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   };
 
   const summary = continueSave?.summary;
+  const continueSaveSize = continueSave ? assessSavePayloadSize(utf8Bytes(continueSave.raw)) : null;
   const summaryPlanet = summary ? getMenuPlanetName(summary.activePlanetId) : null;
   const cloudStateLabel = cloudSession.status === "authenticated" ? "云端已登录" : cloudSession.status === "offline" ? "云端离线" : cloudSession.status === "checking" ? "连接云节点" : "云端未登录";
   const comparisonPayload = continueSave?.raw ?? null;
@@ -1044,10 +1064,11 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
              <small>{offlineProgress.label} · {offlineSimulationPhaseLabel(offlineProgress.phase)} · {Math.floor(offlineProgress.completedSeconds).toLocaleString("zh-CN")} / {Math.floor(offlineProgress.totalSeconds).toLocaleString("zh-CN")} 模拟秒</small>
              <small>现实耗时 {(offlineProgress.wallClockMs / 1_000).toFixed(1)} 秒{offlineProgress.estimatedRemainingMs !== undefined ? ` · 预计剩余 ${(offlineProgress.estimatedRemainingMs / 1_000).toFixed(1)} 秒` : ""}</small>
              {offlineProgress.degradedReason ? <small>降级原因：{offlineProgress.degradedReason}</small> : null}
+             {offlineProgress.complexity ? <small>档案分级：{offlineProfileLabel(offlineProgress.complexity.profile)} · {offlineProgress.complexity.device.deviceClass === "low-memory" ? "低内存设备" : offlineProgress.complexity.device.deviceClass === "constrained" ? "受限设备" : "标准设备"} · 建议 {offlineProgress.complexity.recommendedStrategy === "conservative" ? "保守宏观" : offlineProgress.complexity.recommendedStrategy === "fast" ? "快速校准" : "精确结算"}</small> : null}
           </span>
         </div>
         <progress max={1} value={Math.max(0, Math.min(1, offlineProgress.progress))} />
-        <p>完成后才会一次性保存并进入工厂；放弃后直接进入当前存档，不发放离线收益。</p>
+        <p>{offlineProgress.complexity?.warning ?? "完成后才会一次性保存并进入工厂；放弃后直接进入当前存档，不发放离线收益。"}</p>
         <button type="button" onClick={() => offlineAbortRef.current?.abort()}>放弃离线并直接进入</button>
       </section> : null}
 
@@ -1157,7 +1178,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             </form> : null}
             {cloudSession.status === "authenticated" && cloudSession.user ? <div className="start-menu-cloud-account">
               <section className="start-menu-cloud-user"><i>{cloudSession.user.displayName.slice(0, 1).toUpperCase()}</i><span><strong>{cloudSession.user.displayName}</strong><small>@{cloudSession.user.username}{cloudSession.user.email ? ` · ${cloudSession.user.email}` : ""}</small></span><button type="button" title="退出云账户" aria-label="退出云账户" onClick={() => { setBusy(true); void logoutCloudAccount().then(() => setCloudSession((current) => ({ status: "anonymous", user: null, cloudSave: null, mailAvailable: current.mailAvailable, message: null }))).finally(() => setBusy(false)); }}><LogOut size={15} /></button></section>
-              <section className="start-menu-cloud-save"><header><Cloud size={18} /><span><small>当前主存档</small><strong>{cloudSession.cloudSave ? `修订 ${cloudSession.cloudSave.revision}` : "尚未上传"}</strong></span><em>{cloudSession.cloudSave ? formatSavedAt(cloudSession.cloudSave.updatedAt) : "--"}</em></header>{cloudComparison ? <p className={`cloud-sync-state cloud-sync-state--${cloudComparison.state}`}>{cloudSyncLabel(cloudComparison.state)}</p> : null}<dl className="cloud-sync-summary"><div><dt>本地进度</dt><dd>{comparisonPayload ? `${formatRuntime(cloudComparison?.local?.elapsedSeconds ?? 0)} · 科技 ${cloudComparison?.local?.completedTechCount ?? 0}` : "无本地存档"}</dd></div><div><dt>云端进度</dt><dd>{cloudSession.cloudSave?.summary ? `${formatRuntime(cloudSession.cloudSave.summary.elapsedSeconds)} · 科技 ${cloudSession.cloudSave.summary.completedTechCount}` : cloudSession.cloudSave ? "旧版摘要待更新" : "无云存档"}</dd></div></dl><div><button type="button" disabled={busy || !continueSave} onClick={() => void uploadLocalSave()}><Upload size={14} />上传本地存档</button>{cloudUploadActive && cloudUploadOfflineStage ? <button type="button" onClick={skipCloudUploadOffline}><SkipForward size={14} />跳过离线并继续上传</button> : null}{cloudUploadActive ? <button type="button" onClick={cancelCloudUpload}><CloudOff size={14} />取消上传</button> : null}<button className="primary" type="button" disabled={busy || !cloudSession.cloudSave} onClick={() => void downloadAndEnterCloudSave()}><Download size={14} />下载并进入</button></div></section>
+              <section className="start-menu-cloud-save"><header><Cloud size={18} /><span><small>当前主存档</small><strong>{cloudSession.cloudSave ? `修订 ${cloudSession.cloudSave.revision}` : "尚未上传"}</strong></span><em>{cloudSession.cloudSave ? formatSavedAt(cloudSession.cloudSave.updatedAt) : "--"}</em></header>{cloudComparison ? <p className={`cloud-sync-state cloud-sync-state--${cloudComparison.state}`}>{cloudSyncLabel(cloudComparison.state)}</p> : null}{continueSaveSize?.warning ? <p className="settings-warning">{continueSaveSize.warning}（当前约 {continueSaveSize.mebibytes.toFixed(1)} MiB）</p> : null}<dl className="cloud-sync-summary"><div><dt>本地进度</dt><dd>{comparisonPayload ? `${formatRuntime(cloudComparison?.local?.elapsedSeconds ?? 0)} · 科技 ${cloudComparison?.local?.completedTechCount ?? 0}` : "无本地存档"}</dd></div><div><dt>云端进度</dt><dd>{cloudSession.cloudSave?.summary ? `${formatRuntime(cloudSession.cloudSave.summary.elapsedSeconds)} · 科技 ${cloudSession.cloudSave.summary.completedTechCount}` : cloudSession.cloudSave ? "旧版摘要待更新" : "无云存档"}</dd></div></dl><div><button type="button" disabled={busy || !continueSave} onClick={() => void uploadLocalSave()}><Upload size={14} />上传本地存档</button>{cloudUploadActive && cloudUploadOfflineStage ? <button type="button" onClick={skipCloudUploadOffline}><SkipForward size={14} />跳过离线并继续上传</button> : null}{cloudUploadActive ? <button type="button" onClick={cancelCloudUpload}><CloudOff size={14} />取消上传</button> : null}<button className="primary" type="button" disabled={busy || !cloudSession.cloudSave} onClick={() => void downloadAndEnterCloudSave()}><Download size={14} />下载并进入</button></div></section>
               <CloudSaveSlotsPanel cloudSaves={cloudSession.cloudSaves} localSlots={slots} busySlot={busy ? "main" : null} uploadDisabled={false} onUpload={(slot) => void uploadManualCloudSlot(slot)} onDownload={(slot) => void downloadManualCloudSlot(slot)} />
               <CloudAccountSecurity user={cloudSession.user} mailAvailable={cloudMailAvailable} onUserChange={(user) => setCloudSession((current) => ({ ...current, user }))} onLoggedOut={() => setCloudSession((current) => ({ status: "anonymous", user: null, cloudSave: null, mailAvailable: current.mailAvailable, message: null }))} />
             </div> : null}
@@ -1176,7 +1197,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             <section><header><Languages size={15} /><strong>语言</strong><small>{locale === "en" ? "English" : "简体中文"}</small></header><div className="start-menu-segments" aria-label="语言"><button className={locale === "zh-CN" ? "active" : ""} type="button" aria-pressed={locale === "zh-CN"} onClick={() => setLocale("zh-CN")}>简体中文</button><button className={locale === "en" ? "active" : ""} type="button" aria-pressed={locale === "en"} onClick={() => setLocale("en")}>English</button></div></section>
             <section><header><Factory size={15} /><strong>科技树布局</strong><small>{settings.technologyLayout === "compact" ? "精简" : "标准"}</small></header><div className="start-menu-segments">{(["standard", "compact"] as const).map((technologyLayout) => <button className={settings.technologyLayout === technologyLayout ? "active" : ""} type="button" key={technologyLayout} onClick={() => updateMenuSettings({ technologyLayout })}>{technologyLayout === "compact" ? "精简模式" : "标准模式"}</button>)}</div></section>
             <section><header><Zap size={15} /><strong>模拟速度</strong><small>{settings.simulationSpeed}×</small></header><div className="start-menu-segments">{SIMULATION_SPEEDS.map((speed) => <button className={settings.simulationSpeed === speed ? "active" : ""} type="button" key={speed} onClick={() => updateMenuSettings({ simulationSpeed: speed })}>{speed}×</button>)}</div></section>
-            <section><header><Clock3 size={15} /><strong>自动保存</strong><small>{settings.autosaveIntervalSeconds === 0 ? "已关闭" : `${settings.autosaveIntervalSeconds} 秒`}</small></header><div className="start-menu-segments">{AUTOSAVE_INTERVALS.map((seconds) => <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => updateMenuSettings({ autosaveIntervalSeconds: seconds })}>{seconds === 0 ? "关闭" : seconds === 600 ? "10 分钟" : `${seconds} 秒`}</button>)}</div>{settings.autosaveIntervalSeconds === 0 ? <small className="settings-warning">关闭后，刷新页面或异常退出可能丢失未保存进度；手动保存和云同步不受影响。</small> : null}</section>
+            <section><header><Clock3 size={15} /><strong>自动保存</strong><small>{settings.autosaveIntervalSeconds === 0 ? "已关闭" : settings.autosaveIntervalSeconds >= 600 ? `${settings.autosaveIntervalSeconds / 60} 分钟` : `${settings.autosaveIntervalSeconds} 秒`}</small></header><div className="start-menu-segments">{AUTOSAVE_INTERVALS.map((seconds) => <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => updateMenuSettings({ autosaveIntervalSeconds: seconds })}>{seconds === 0 ? "关闭" : seconds >= 600 ? `${seconds / 60} 分钟` : `${seconds} 秒`}</button>)}</div>{settings.autosaveIntervalSeconds === 0 ? <small className="settings-warning">关闭后，刷新页面或异常退出可能丢失未保存进度；手动保存和云同步不受影响。</small> : null}</section>
             <section className="start-menu-setting-toggles"><ToggleRow checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "低频渲染" : "完整渲染"} icon={<Cpu size={16} />} onChange={(performanceMode) => updateMenuSettings({ performanceMode })} /><ToggleRow checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态已精简" : "完整动态"} icon={<Gauge size={16} />} onChange={(reducedMotion) => updateMenuSettings({ reducedMotion })} /><ToggleRow checked={settings.soundEnabled} label="操作音效" value={settings.soundEnabled ? "已开启" : "已关闭"} icon={settings.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />} onChange={(soundEnabled) => updateMenuSettings({ soundEnabled })} /><ToggleRow checked={settings.allowDoubleClickZoom} label="允许双击缩放" value={settings.allowDoubleClickZoom ? "双击聚焦画布" : "连续点击不缩放"} icon={<MousePointer2 size={16} />} onChange={(allowDoubleClickZoom) => updateMenuSettings({ allowDoubleClickZoom })} /><ToggleRow checked={showRunLog} label="显示运行记录" value={showRunLog ? "显示运行反馈浮条" : "仅保留错误、成就和诊断"} icon={<Activity size={16} />} onChange={updateRunLogPreference} /><ToggleRow checked={offlineApproximationEnabled} label="快速离线结算（实验）" value={offlineApproximationEnabled ? "30 秒校准后批量外推，失败自动精确回退" : "关闭，使用精确结算"} icon={<Gauge size={16} />} onChange={(enabled) => { writeOfflineApproximationEnabled(enabled); setOfflineApproximationEnabled(enabled); }} /></section>
             {offlineApproximationEnabled ? <p className="settings-warning">长时间离线先执行 30 秒真实模拟，再按实测速率批量外推；遇到边界、误差或安全问题会自动回到精确路径，不改变存档格式。</p> : null}
             <NativeUpdateCard className="start-menu-native-update" />

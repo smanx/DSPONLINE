@@ -3839,6 +3839,23 @@ function targetFreeCapacity(state: GameState, target: FactoryEntity, itemId: Ite
   return Math.floor(Math.max(0, capacity - (target.inputs[itemId] ?? 0)) + EPSILON);
 }
 
+function createIndexedBeltRoutes(state: GameState, sorted = false): IndexedBeltRoute[] {
+  const entityById = new Map(state.entities.map((entity) => [entity.id, entity]));
+  const belts = sorted ? [...state.belts].sort((left, right) => left.id.localeCompare(right.id)) : state.belts;
+  return belts.map((belt) => {
+    const source = entityById.get(belt.source);
+    const target = entityById.get(belt.target);
+    return {
+      belt,
+      source,
+      target,
+      capacity: getBeltCapacity(belt),
+      compatible: Boolean(source && target && source.planetId === target.planetId && belt.planetId === source.planetId &&
+        sourceProduces(source, belt.itemId) && targetConsumes(state, target, belt.itemId, belt.targetPortIndex)),
+    } satisfies IndexedBeltRoute;
+  });
+}
+
 function transferBelts(
   state: GameState,
   seconds: number,
@@ -3874,18 +3891,7 @@ function transferBelts(
   const flowDecay = Math.pow(0.8, Math.max(0, seconds));
   const congestionDecay = Math.pow(0.85, Math.max(0, seconds));
 
-  const routes = lookup?.beltRoutes ?? state.belts.map((belt) => ({
-    belt,
-    source: state.entities.find((entity) => entity.id === belt.source),
-    target: state.entities.find((entity) => entity.id === belt.target),
-    capacity: getBeltCapacity(belt),
-    compatible: (() => {
-      const source = state.entities.find((entity) => entity.id === belt.source);
-      const target = state.entities.find((entity) => entity.id === belt.target);
-      return Boolean(source && target && source.planetId === target.planetId && belt.planetId === source.planetId &&
-        sourceProduces(source, belt.itemId) && targetConsumes(state, target, belt.itemId, belt.targetPortIndex));
-    })(),
-  } satisfies IndexedBeltRoute));
+  const routes = lookup?.beltRoutes ?? createIndexedBeltRoutes(state);
   for (const route of routes) {
     const belt = route.belt;
     if (skippedBeltIds?.has(belt.id)) continue;
@@ -4032,18 +4038,7 @@ function reserveBeltStepOutputCapacity(
   const allowanceByBelt = new Map<string, number>();
   const outputCredits = new Map<string, number>();
   const remainingTargetCapacity = new Map<string, number>();
-  const routes = lookup?.beltRoutes ?? [...state.belts].sort((left, right) => left.id.localeCompare(right.id)).map((belt) => {
-    const source = state.entities.find((entity) => entity.id === belt.source);
-    const target = state.entities.find((entity) => entity.id === belt.target);
-    return {
-      belt,
-      source,
-      target,
-      capacity: getBeltCapacity(belt),
-      compatible: Boolean(source && target && source.planetId === target.planetId && belt.planetId === source.planetId &&
-        sourceProduces(source, belt.itemId) && targetConsumes(state, target, belt.itemId, belt.targetPortIndex)),
-    } satisfies IndexedBeltRoute;
-  });
+  const routes = lookup?.beltRoutes ?? createIndexedBeltRoutes(state, true);
   for (const route of routes) {
     const belt = route.belt;
     if (skippedBeltIds?.has(belt.id)) continue;
@@ -4955,15 +4950,17 @@ export interface StationWarperRefillSnapshot {
   blocker: "technology-locked" | "disabled" | "target-met" | "capacity-full" | "stock-empty" | "ready";
 }
 
-export function getStationWarperRefillSnapshot(state: GameState, stationId: string): StationWarperRefillSnapshot | null {
-  const station = state.entities.find((entity) => entity.id === stationId && entity.buildingId === "interstellar_logistics_station");
-  if (!station) return null;
+function stationWarperRefillSnapshot(
+  state: GameState,
+  station: FactoryEntity,
+  lookup?: SimulationLookupContext,
+): StationWarperRefillSnapshot {
   const loaded = Math.max(0, Math.floor(station.stationWarpers ?? 0));
   const target = getStationWarperAutoRefillTarget(station);
   const capacity = getStationWarperCapacity(station);
   const inputAvailable = Math.max(0, Math.floor(station.inputs.space_warper ?? 0));
   const outputStored = Math.max(0, Math.floor(station.outputs.space_warper ?? 0));
-  const outputReserved = Math.min(outputStored, Math.max(0, Math.floor(stationReservedOutgoing(state, station.id, "space_warper"))));
+  const outputReserved = Math.min(outputStored, Math.max(0, Math.floor(stationReservedOutgoing(state, station.id, "space_warper", lookup))));
   const outputAvailable = Math.max(0, outputStored - outputReserved);
   const trayAvailable = Math.max(0, Math.floor(trayForPlanet(state, station.planetId).space_warper ?? 0));
   const blocker = !isTechnologyCompleted(state, "space_warp")
@@ -4978,12 +4975,18 @@ export function getStationWarperRefillSnapshot(state: GameState, stationId: stri
   return { loaded, target, capacity, inputAvailable, outputStored, outputReserved, outputAvailable, trayAvailable, blocker };
 }
 
-export function refillStationWarpers(state: GameState): void {
+export function getStationWarperRefillSnapshot(state: GameState, stationId: string): StationWarperRefillSnapshot | null {
+  const station = state.entities.find((entity) => entity.id === stationId && entity.buildingId === "interstellar_logistics_station");
+  return station ? stationWarperRefillSnapshot(state, station) : null;
+}
+
+export function refillStationWarpers(state: GameState, lookup?: SimulationLookupContext): void {
   if (!isTechnologyCompleted(state, "space_warp")) return;
-  for (const station of state.entities) {
+  if (lookup) ensureDynamicRouteLookup(state, lookup);
+  for (const station of lookup?.stations ?? state.entities) {
     if (station.buildingId !== "interstellar_logistics_station" ||
       isTraditionalStationScopeDisabled(station, "remote") || !station.stationWarperAutoRefill) continue;
-    const snapshot = getStationWarperRefillSnapshot(state, station.id)!;
+    const snapshot = stationWarperRefillSnapshot(state, station, lookup);
     let needed = Math.max(0, Math.min(snapshot.target, snapshot.capacity) - snapshot.loaded);
     if (needed < 1) continue;
     const fromInput = Math.min(needed, snapshot.inputAvailable);
@@ -5051,9 +5054,11 @@ function addQuantumBoundaryFlow(
   record[itemId] = addQuantumInteger(record[itemId], Math.floor(amount));
 }
 
-function createQuantumBoundaryFlow(state: GameState, boundarySecond: number): QuantumBoundaryFlow {
+function createQuantumBoundaryFlow(state: GameState, boundarySecond: number, lookup?: SimulationLookupContext): QuantumBoundaryFlow {
   const level = state.endgame.infiniteResearch.galactic_logistics?.level ?? 0;
-  const bandwidth = getQuantumBandwidthSummary(state.entities, level);
+  const stationEntities = lookup?.stations ?? state.entities;
+  const collectors = lookup?.orbitalCollectors ?? state.entities.filter((entity) => entity.buildingId === "orbital_collector");
+  const bandwidth = getQuantumBandwidthSummary(stationEntities, level);
   const existing = state.quantumLogisticsNetwork?.runtimeFlow;
   return {
     boundarySecond,
@@ -5062,7 +5067,7 @@ function createQuantumBoundaryFlow(state: GameState, boundarySecond: number): Qu
     globalUploadPerMinute: bandwidth.globalUploadPerMinute,
     globalDownloadPerMinute: bandwidth.globalDownloadPerMinute,
     quantumTowerStacks: bandwidth.activeTowerStacks,
-    quantumCollectorStacks: state.entities.reduce((sum, entity) =>
+    quantumCollectorStacks: collectors.reduce((sum, entity) =>
       sum + (isQuantumCollector(entity) ? Math.max(0, Math.floor(entity.machineCount)) : 0), 0),
   };
 }
@@ -5073,11 +5078,12 @@ function settleQuantumNetworkDownloads(
   credits: OutputCapacityCredits,
   boundarySecond: number,
   seconds = QUANTUM_SETTLEMENT_SECONDS,
+  lookup?: SimulationLookupContext,
   profiler?: SimulationProfiler,
 ): QuantumBoundaryFlow | null {
   if (!state.quantumLogisticsNetwork?.enabled) return null;
-  const flow = createQuantumBoundaryFlow(state, boundarySecond);
-  const stations = state.entities.filter(isQuantumStation);
+  const flow = createQuantumBoundaryFlow(state, boundarySecond, lookup);
+  const stations = (lookup?.stations ?? state.entities).filter(isQuantumStation);
   const stationById = new Map(stations.map((station) => [station.id, station]));
   const requestByStationItem = new Map<string, QuantumSettlementOutput>();
   for (const station of stations) {
@@ -5085,7 +5091,7 @@ function settleQuantumNetworkDownloads(
       if (!slot.itemId || slot.remoteMode !== "demand") continue;
       const current = Math.max(0, Math.floor(station.outputs[slot.itemId] ?? 0));
       const localCapacity = Math.max(0, Math.floor(getStationSlotCapacity(state, station, slot)));
-      const incoming = stationInFlightCargo(station, slot.itemId);
+      const incoming = stationInFlightCargo(station, slot.itemId, lookup);
       const localFree = Math.max(0, localCapacity - current - incoming);
       // Existing over-capacity stock must drain instead of being backfilled.
       const directThrough = current <= localCapacity ? outputCapacityCredit(credits, station, slot.itemId) : 0;
@@ -5141,7 +5147,7 @@ function settleQuantumNetworkUploads(
   profiler?: SimulationProfiler,
 ): void {
   if (!state.quantumLogisticsNetwork?.enabled) return;
-  const flow = previousFlow ?? createQuantumBoundaryFlow(state, boundarySecond);
+  const flow = previousFlow ?? createQuantumBoundaryFlow(state, boundarySecond, lookup);
   if (state.quantumLogisticsNetwork.runtimeFlow && state.quantumLogisticsNetwork.runtimeFlow !== flow) {
     for (const [itemId, amount] of Object.entries(state.quantumLogisticsNetwork.runtimeFlow.uploaded)) {
       addQuantumBoundaryFlow(flow.uploaded, itemId as ItemId, Number(amount));
@@ -5151,14 +5157,16 @@ function settleQuantumNetworkUploads(
   // Attachment may have completed after the download phase. Refresh the
   // shared budget before accepting supply, without granting collectors any
   // separate bandwidth of their own.
-  const bandwidth = getQuantumBandwidthSummary(state.entities, state.endgame.infiniteResearch.galactic_logistics?.level ?? 0);
+  const stationEntities = lookup?.stations ?? state.entities;
+  const collectors = lookup?.orbitalCollectors ?? state.entities.filter((entity) => entity.buildingId === "orbital_collector");
+  const bandwidth = getQuantumBandwidthSummary(stationEntities, state.endgame.infiniteResearch.galactic_logistics?.level ?? 0);
   flow.globalUploadPerMinute = bandwidth.globalUploadPerMinute;
   flow.globalDownloadPerMinute = bandwidth.globalDownloadPerMinute;
   flow.quantumTowerStacks = bandwidth.activeTowerStacks;
-  flow.quantumCollectorStacks = state.entities.reduce((sum, entity) =>
+  flow.quantumCollectorStacks = collectors.reduce((sum, entity) =>
     sum + (isQuantumCollector(entity) ? Math.max(0, Math.floor(entity.machineCount)) : 0), 0);
 
-  const endpoints = state.entities.filter((entity) => isQuantumStation(entity) || isQuantumCollector(entity));
+  const endpoints = stationEntities.filter((entity) => isQuantumStation(entity) || isQuantumCollector(entity));
   const endpointById = new Map(endpoints.map((endpoint) => [endpoint.id, endpoint]));
   // Existing tower buffers are an overflow path only. Drain them directly
   // before building the legacy boundary requests so newly freed inventory is
@@ -5182,7 +5190,7 @@ function settleQuantumNetworkUploads(
     }
     for (const slot of getStationSlots(endpoint)) {
       if (!slot.itemId || slot.remoteMode !== "supply") continue;
-      const reserved = stationReservedOutgoing(state, endpoint.id, slot.itemId);
+      const reserved = stationReservedOutgoing(state, endpoint.id, slot.itemId, lookup);
       const available = Math.max(0, Math.floor((endpoint.outputs[slot.itemId] ?? 0) - slot.minStock - reserved));
       if (available < 1) continue;
       const key = `${endpoint.id}:${slot.itemId}`;
@@ -5435,6 +5443,7 @@ export function completeSimulationStep(
       prepared.beltStepReservation.outputCredits,
       prepared.quantumBoundarySecond,
       QUANTUM_SETTLEMENT_SECONDS,
+      lookup,
       profiler,
     );
     if (profiler) profiler.quantumMs += profileNow() - quantumStartedAt;
@@ -5446,7 +5455,7 @@ export function completeSimulationStep(
   if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
   drainMaterialDeliveryHubs(state, seconds, lookup);
   subsystemStartedAt = profiler ? profileNow() : 0;
-  refillStationWarpers(state);
+  refillStationWarpers(state, lookup);
   let phaseStartedAt = profileNow();
   if (lookup) {
     refreshRouteEnvironment(state, lookup);
@@ -5458,7 +5467,7 @@ export function completeSimulationStep(
   phaseStartedAt = profileNow();
   advanceStationRoutes(state, "local", seconds, powerByPlanet, lookup);
   advanceStationRoutes(state, "remote", seconds, powerByPlanet, lookup);
-  refillStationWarpers(state);
+  refillStationWarpers(state, lookup);
   if (profiler) profiler.routeAdvanceMs += profileNow() - phaseStartedAt;
   if (lookup) ensureDynamicRouteLookup(state, lookup);
   phaseStartedAt = profileNow();
@@ -5723,6 +5732,7 @@ function simulateStep(
       beltStepReservation.outputCredits,
       quantumBoundarySecond,
       QUANTUM_SETTLEMENT_SECONDS,
+      lookup,
       profiler,
     );
     if (profiler) profiler.quantumMs += profileNow() - quantumStartedAt;
@@ -5734,7 +5744,7 @@ function simulateStep(
   if (profiler) profiler.beltsMs += profileNow() - subsystemStartedAt;
   drainMaterialDeliveryHubs(state, seconds, lookup);
   subsystemStartedAt = profiler ? profileNow() : 0;
-  refillStationWarpers(state);
+  refillStationWarpers(state, lookup);
   let phaseStartedAt = profileNow();
   if (lookup) {
     refreshRouteEnvironment(state, lookup);
@@ -5746,7 +5756,7 @@ function simulateStep(
   phaseStartedAt = profileNow();
   advanceStationRoutes(state, "local", seconds, powerByPlanet, lookup);
   advanceStationRoutes(state, "remote", seconds, powerByPlanet, lookup);
-  refillStationWarpers(state);
+  refillStationWarpers(state, lookup);
   if (profiler) profiler.routeAdvanceMs += profileNow() - phaseStartedAt;
   if (lookup) ensureDynamicRouteLookup(state, lookup);
   phaseStartedAt = profileNow();
@@ -6224,6 +6234,8 @@ export function advancePersistentSimulationRuntime(
 ): { state: GameState; changed: boolean; cacheRebuilt: boolean } {
   if (!runtime.lookup && !runtime.state.paused && simulationSeconds > 0) runtime.lookup = createSimulationLookupContext(runtime.state, profiler);
   const before = runtime.state;
+  const entitiesBefore = before.entities;
+  const beltsBefore = before.belts;
   const session = createSimulationAdvanceSession(before, simulationSeconds, {
     wallSeconds,
     profiler,
@@ -6233,7 +6245,12 @@ export function advancePersistentSimulationRuntime(
   advanceSimulationSession(session, Number.MAX_SAFE_INTEGER);
   const next = completeSimulationAdvanceSession(session);
   runtime.state = next;
-  const cacheRebuilt = next !== before;
+  // Campaign/speedrun synchronization can replace only the top-level state
+  // object after every request. The entity and belt objects remain the same,
+  // so rebuilding all simulation indexes in that case is wasted work. A real
+  // topology transition replaces one of these arrays and still rebuilds at the
+  // same atomic boundary.
+  const cacheRebuilt = next.entities !== entitiesBefore || next.belts !== beltsBefore;
   if (cacheRebuilt) {
     const constructionAutomationPlanCache = runtime.lookup?.constructionAutomationPlanCache;
     runtime.lookup = next.paused
@@ -6252,6 +6269,8 @@ export async function advancePersistentSimulationRuntimeMulticore(
 ): Promise<{ state: GameState; changed: boolean; cacheRebuilt: boolean }> {
   if (!runtime.lookup && !runtime.state.paused && simulationSeconds > 0) runtime.lookup = createSimulationLookupContext(runtime.state, profiler);
   const before = runtime.state;
+  const entitiesBefore = before.entities;
+  const beltsBefore = before.belts;
   const session = createSimulationAdvanceSession(before, simulationSeconds, {
     wallSeconds,
     profiler,
@@ -6261,7 +6280,7 @@ export async function advancePersistentSimulationRuntimeMulticore(
   await advanceSimulationSessionMulticore(session, Number.MAX_SAFE_INTEGER, execute);
   const next = completeSimulationAdvanceSession(session);
   runtime.state = next;
-  const cacheRebuilt = next !== before;
+  const cacheRebuilt = next.entities !== entitiesBefore || next.belts !== beltsBefore;
   if (cacheRebuilt) {
     const constructionAutomationPlanCache = runtime.lookup?.constructionAutomationPlanCache;
     runtime.lookup = next.paused

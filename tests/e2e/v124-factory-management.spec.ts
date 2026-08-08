@@ -137,7 +137,7 @@ async function seedManagementFixture(page: Page, options: FixtureOptions = {}) {
       paused: true,
     };
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-08-v1.0.34");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-09-v1.0.35");
     window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     if (mobileUi) window.localStorage.setItem("dsp-idle-network.mobile-ui.v1", mobileUi);
@@ -196,6 +196,7 @@ test("one-hundred-million additions are blocked while a historical safe stack su
   const target = inspector.getByLabel("建筑堆叠目标数量");
   await expect(target).toHaveValue("100000000");
   await expect(inspector.locator(".entity-stack-target-shortcuts").getByRole("button", { name: /^快速增加 1 台建筑/ })).toBeDisabled();
+  await expect(inspector.locator(".entity-stack-target-shortcuts").getByRole("button", { name: /^快速增加 100,000 台建筑/ })).toBeDisabled();
   await target.fill("100000001");
   await target.blur();
   await expect(inspector.getByRole("alert")).toContainText("1 至 100,000,000");

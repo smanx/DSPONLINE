@@ -5,7 +5,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-08-v1.0.34");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-09-v1.0.35");
     }
   });
 }
@@ -149,22 +149,22 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "云存档、纯挂机与排行榜可信度更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "终局结算、云端安全与速通恢复更新" });
   await expect(releaseNotes).toBeVisible();
   await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(6);
-  await expect(releaseNotes).toContainText("历史唯一巨构可安全上传");
-  await expect(releaseNotes).toContainText("Android 云上传绕过损坏压缩桥接");
-  await expect(releaseNotes).toContainText("纯挂机停止与恢复更清晰");
-  await expect(releaseNotes).toContainText("排行榜吞吐口径跨星球一致");
-  await expect(releaseNotes).toContainText("拉线候选建筑同步高亮");
+  await expect(releaseNotes).toContainText("终局离线按存档与设备分级");
+  await expect(releaseNotes).toContainText("大存档保存与上传可诊断");
+  await expect(releaseNotes).toContainText("云端治理与账号安全增强");
+  await expect(releaseNotes).toContainText("百万白糖里程碑可自愈");
+  await expect(releaseNotes).toContainText("终局建筑堆叠快捷调整");
   await expect(releaseNotes).toContainText("存档与在线协议保持兼容");
   await expect(releaseNotes).not.toContainText("科研不再阻断快速结算");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-08-v134-1440.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-09-v135-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-08-v134-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-09-v135-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -187,7 +187,7 @@ test("dated release notes appear once and remain available from both settings sc
     return Boolean(scroll && summary && firstItem && footer && summary.bottom <= firstItem.top + 1 && scroll.bottom <= footer.top + 1);
   })).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-08-v134-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-09-v135-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -196,12 +196,12 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-08-v1.0.34");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-09-v1.0.35");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
   await page.getByRole("button", { name: "游戏设置" }).click();
-  await page.getByRole("button", { name: "查看2026年8月8日版本更新记录" }).click();
+  await page.getByRole("button", { name: "查看2026年8月9日版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
   await releaseNotes.getByLabel("关闭版本更新记录").click();
 
@@ -214,7 +214,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-08-v134-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-09-v135-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -258,6 +258,8 @@ test("protected operations dashboard renders visit, event and service metrics", 
           configured: true,
           lastSuccessAt: generatedAt - 1000,
           lastErrorAt: null,
+          state: "ready",
+          dailyWindow: "02:00-03:00",
           offsite: { configured: true, ok: true, state: "ready", completedAt: generatedAt - 2000, transported: true, transport: "scp" },
           restoreDrill: { configured: true, ok: true, state: "ready", completedAt: generatedAt - 3000 },
         },
@@ -269,6 +271,11 @@ test("protected operations dashboard renders visit, event and service metrics", 
           endpoints: [{ url: "https://dsponline.cn/api/health", ok: true, status: 200, latencyMs: 18, contentEncoding: "gzip" }],
           disk: { ok: true, freeBytes: 20 * 1024 ** 3, totalBytes: 40 * 1024 ** 3, freeRatio: 0.5 },
           tls: { configured: true, ok: true, expiresAt: generatedAt + 60 * 86400000, daysRemaining: 60 },
+        },
+        governance: {
+          sqlite: { layoutVersion: 2, databaseBytes: 2 * 1024 ** 3, walBytes: 4 * 1024 ** 2, appStateBytes: 512 * 1024, cloudPayloadBytes: 1.5 * 1024 ** 3, cloudPayloadRows: 120, averageRevisionsPerAccount: 10 },
+          historyPrune: { runs: 2, payloadsRemoved: 9, metadataRemoved: 9, lastRunAt: generatedAt - 5000 },
+          disk: { warning80Percent: false, protection90Percent: false },
         },
         daily: [],
       }),
@@ -289,6 +296,8 @@ test("protected operations dashboard renders visit, event and service metrics", 
   await expect(page.locator(".admin-performance-panel")).toContainText("页面加载 P75");
   await expect(page.locator(".admin-performance-panel")).toContainText("1.5-3 秒");
   await expect(page.locator(".admin-audit-panel")).toContainText("修改密码");
+  await expect(page.locator(".admin-governance-panel")).toContainText("2.00 GiB");
+  await expect(page.locator(".admin-account-panel")).toContainText("精确账号 ID");
   await page.screenshot({ path: "artifacts/qa/admin-dashboard-1366.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -338,6 +347,9 @@ test("cloud account security exposes verification, password and device controls"
       { id: "session_current", deviceName: "Chrome 桌面浏览器", clientType: "desktop-web", createdAt: Date.now() - 1000, lastSeenAt: Date.now(), expiresAt: Date.now() + 100000, current: true },
       { id: "session_mobile", deviceName: "测试手机", clientType: "mobile-web", createdAt: Date.now() - 2000, lastSeenAt: Date.now() - 500, expiresAt: Date.now() + 100000, current: false },
     ] });
+    if (pathname === "/api/account/security-events") return fulfill({ events: [
+      { deviceHash: "1234567890abcdef", regionHash: "fedcba0987654321", occurredAt: Date.now(), clientType: "desktop-web" },
+    ] });
     if (pathname === "/api/auth/resend-verification") return fulfill({ sent: true }, 202);
     if (pathname === "/api/account/email") {
       const body = request.postDataJSON() as { email: string };
@@ -363,6 +375,8 @@ test("cloud account security exposes verification, password and device controls"
   await expect(security).toContainText("验证邮件已发送");
   await expect(security).toContainText("Chrome 桌面浏览器");
   await expect(security).toContainText("测试手机");
+  await security.getByText("最近登录安全记录", { exact: true }).click();
+  await expect(security).toContainText("设备 123456");
   await expect(page.getByRole("region", { name: "云端手动存档槽位" }).locator("article")).toHaveCount(3);
 
   await security.getByText("更换待验证邮箱", { exact: true }).click();

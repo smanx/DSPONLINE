@@ -77,6 +77,28 @@ describe("speedrun state", () => {
     expect(loaded?.speedrun?.eligible).toBe(true);
   });
 
+  it("repairs a missing million-white-matrix milestone from the authoritative cumulative counter", () => {
+    const state = createSpeedrunInitialState(1_700_000_000_000, "speedrun_test_factory_recovery");
+    state.speedrun!.elapsedActiveSeconds = 12_345;
+    state.totalProduced.universe_matrix = 1_000_000;
+    state.speedrun!.milestones.white_matrix_1m = { completed: false };
+
+    const raw = serializeEnvelope(state, 1_700_000_012_345);
+    const parsed = JSON.parse(raw) as { state: Record<string, unknown> };
+    const repaired = migrateGame(parsed.state);
+    expect(repaired?.speedrun?.milestones.white_matrix_1m).toEqual({
+      completed: true,
+      completedAtSeconds: 12_345,
+    });
+    expect(repaired?.totalProduced.universe_matrix).toBe(1_000_000);
+
+    const secondPass = migrateGame(repaired);
+    expect(secondPass?.speedrun?.milestones.white_matrix_1m).toEqual(
+      repaired?.speedrun?.milestones.white_matrix_1m,
+    );
+    expect(migrateGame(createPlayerInitialState())?.speedrun).toBeUndefined();
+  });
+
   it("marks imported rollback data ineligible without discarding it", () => {
     const state = createSpeedrunInitialState(1_700_000_000_000, "speedrun_test_factory_005");
     const invalid = markSpeedrunIneligible(state, "检测到导入回滚");

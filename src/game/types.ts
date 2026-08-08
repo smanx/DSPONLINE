@@ -379,7 +379,7 @@ export type DifficultyMode = "relaxed" | "standard" | "hard";
 export type RecipeFocusMode = "full" | "two-level";
 export type SimulationSpeed = 1 | 2 | 4;
 /** Local save cadence. Zero explicitly disables the periodic timer. */
-export type AutosaveIntervalSeconds = 0 | 30 | 60 | 120 | 600;
+export type AutosaveIntervalSeconds = 0 | 30 | 60 | 120 | 600 | 1800;
 export type FontScale = 0.8 | 1 | 1.25 | 1.5 | 2;
 
 /** Repeatable endgame research tracks unlocked after the universe matrix. */

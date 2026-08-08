@@ -50,6 +50,13 @@ interface AdminMetrics {
     cloudConflicts: number;
     p50LatencyMs: number;
     p95LatencyMs: number;
+    slowRequests?: number;
+    maxRequestMs?: number;
+    writeQueueDepth?: number;
+    maxWriteQueueDepth?: number;
+    slowWrites?: number;
+    lastWriteDurationMs?: number;
+    loginSecurity?: { failures: number; activeBuckets: number; activeLocks: number };
   };
   accounts: { users: number; activeSessions: number; cloudSaves: number; submissions: number };
   players: { total: number; today: number; online: number; onlineWindowSeconds: number };
@@ -73,6 +80,10 @@ interface AdminMetrics {
     configured: boolean;
     lastSuccessAt: number | null;
     lastErrorAt: number | null;
+    state?: "disabled" | "idle" | "running" | "ready" | "failed";
+    startedAt?: number | null;
+    durationMs?: number | null;
+    dailyWindow?: string | null;
     offsite?: OperationalStatus;
     restoreDrill?: OperationalStatus;
   };
@@ -85,6 +96,45 @@ interface AdminMetrics {
     disk: { ok: boolean; freeBytes: number | null; totalBytes: number | null; freeRatio: number | null } | null;
     tls: { configured: boolean; ok: boolean; expiresAt: number | null; daysRemaining: number | null } | null;
   };
+  governance?: {
+    sqlite: null | {
+      layoutVersion: number;
+      databaseBytes: number;
+      walBytes: number;
+      appStateBytes: number;
+      cloudPayloadBytes: number;
+      cloudPayloadRows: number;
+      averageRevisionsPerAccount: number;
+    };
+    historyPrune: { runs: number; payloadsRemoved: number; metadataRemoved: number; lastRunAt: number | null };
+    disk: { warning80Percent: boolean; protection90Percent: boolean };
+  };
+}
+
+type AdminAccountAction = "revoke-sessions" | "disable-login" | "enable-login" | "restrict-leaderboard" | "restore-leaderboard" | "delete-account";
+
+interface AdminAccountSummary {
+  accountId: string;
+  username: string;
+  displayName: string;
+  createdAt: number;
+  emailBound: boolean;
+  emailVerified: boolean;
+  leaderboardVisible: boolean;
+  sessionCount: number;
+  cloud: { bytes: number; slots: Record<string, { revision: number; size: number; historyCount: number }> };
+  loginDisabledUntil: number | null;
+  leaderboardRestricted: boolean;
+  leaderboardResumeAfterRevision: number | null;
+}
+
+interface CloudHistoryPrunePreview {
+  previewId: string;
+  generatedAt: number;
+  limit: number;
+  deletionCount: number;
+  reasons: { orphanAccount: number; invalidSlot: number; expiredRevision: number };
+  confirmation: string;
 }
 
 const ADMIN_TOKEN_KEY = "dsp-idle-network.admin-token.v1";
@@ -138,6 +188,14 @@ const AUDIT_LABELS: Record<string, string> = {
   "account.data_exported": "导出账号数据",
   "account.deleted": "注销账号",
   "cloud.revision_restored": "恢复云修订",
+  "cloud.history_pruned_confirmed": "确认裁剪云存档历史",
+  "admin.account_summary_viewed": "管理员查看账号摘要",
+  "admin.account_revoke_sessions": "管理员撤销全部会话",
+  "admin.account_disable_login": "管理员限制账号登录",
+  "admin.account_enable_login": "管理员恢复账号登录",
+  "admin.account_restrict_leaderboard": "管理员移除排行榜",
+  "admin.account_restore_leaderboard": "管理员批准排行榜复核",
+  "admin.account_delete_account": "管理员彻底注销账号",
 };
 
 function readToken(): string {
@@ -168,6 +226,15 @@ function formatBytes(value: number | null | undefined): string {
   return `${((value ?? 0) / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+function formatStorageBytes(value: number | null | undefined): string {
+  if (!Number.isFinite(value)) return "--";
+  const bytes = Math.max(0, value ?? 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+  return `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
+}
+
 function formatTime(timestamp: number | null): string {
   return timestamp ? new Date(timestamp).toLocaleString("zh-CN", { hour12: false }) : "暂无记录";
 }
@@ -190,6 +257,17 @@ async function fetchAdminMetrics(token: string, days: number): Promise<AdminMetr
   return payload as AdminMetrics;
 }
 
+async function adminRequest<T>(token: string, path: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(path, {
+    ...options,
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...(options.headers ?? {}) },
+    cache: "no-store",
+  });
+  const payload = await response.json().catch(() => ({})) as { error?: string };
+  if (!response.ok) throw new Error(payload.error ?? `后台返回 ${response.status}`);
+  return payload as T;
+}
+
 export function AdminDashboard() {
   const [token, setToken] = useState(readToken);
   const [draftToken, setDraftToken] = useState(readToken);
@@ -197,6 +275,14 @@ export function AdminDashboard() {
   const [metrics, setMetrics] = useState<AdminMetrics | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [accountIdDraft, setAccountIdDraft] = useState("");
+  const [account, setAccount] = useState<AdminAccountSummary | null>(null);
+  const [accountAction, setAccountAction] = useState<AdminAccountAction>("revoke-sessions");
+  const [accountConfirmation, setAccountConfirmation] = useState("");
+  const [operationsMessage, setOperationsMessage] = useState<string | null>(null);
+  const [operationBusy, setOperationBusy] = useState(false);
+  const [prunePreview, setPrunePreview] = useState<CloudHistoryPrunePreview | null>(null);
+  const [pruneConfirmation, setPruneConfirmation] = useState("");
 
   const refresh = useCallback(async (candidate = token, selectedDays = days) => {
     if (!candidate) return;
@@ -226,6 +312,83 @@ export function AdminDashboard() {
     event.preventDefault();
     const candidate = draftToken.trim();
     if (candidate) void refresh(candidate, days);
+  };
+
+  const lookupAccount = async (event?: FormEvent) => {
+    event?.preventDefault();
+    const accountId = accountIdDraft.trim();
+    if (!accountId) return;
+    setOperationBusy(true);
+    setOperationsMessage(null);
+    try {
+      const result = await adminRequest<{ account: AdminAccountSummary }>(token, `/api/admin/account?accountId=${encodeURIComponent(accountId)}`);
+      setAccount(result.account);
+      setAccountConfirmation("");
+    } catch (reason) {
+      setAccount(null);
+      setOperationsMessage(reason instanceof Error ? reason.message : "账号查询失败");
+    } finally {
+      setOperationBusy(false);
+    }
+  };
+
+  const applyAccountAction = async () => {
+    if (!account) return;
+    setOperationBusy(true);
+    setOperationsMessage(null);
+    try {
+      const result = await adminRequest<{ account: AdminAccountSummary | null }>(token, "/api/admin/account/action", {
+        method: "POST",
+        body: JSON.stringify({
+          accountId: account.accountId,
+          action: accountAction,
+          confirmation: accountConfirmation,
+          ...(accountAction === "delete-account" ? { verifiedBackupAt: metrics?.backups.lastSuccessAt ?? null } : {}),
+        }),
+      });
+      setAccount(result.account);
+      setAccountConfirmation("");
+      setOperationsMessage(result.account ? "管理员动作已应用并写入审计；排行榜恢复仍需新云修订重新验证" : "账号已彻底注销并写入审计");
+      await refresh();
+    } catch (reason) {
+      setOperationsMessage(reason instanceof Error ? reason.message : "管理员动作失败");
+    } finally {
+      setOperationBusy(false);
+    }
+  };
+
+  const previewCloudPrune = async () => {
+    setOperationBusy(true);
+    setOperationsMessage(null);
+    try {
+      const result = await adminRequest<{ preview: CloudHistoryPrunePreview }>(token, "/api/admin/cloud-history/prune-preview");
+      setPrunePreview(result.preview);
+      setPruneConfirmation("");
+    } catch (reason) {
+      setOperationsMessage(reason instanceof Error ? reason.message : "历史裁剪预览失败");
+    } finally {
+      setOperationBusy(false);
+    }
+  };
+
+  const applyCloudPrune = async () => {
+    if (!prunePreview) return;
+    setOperationBusy(true);
+    setOperationsMessage(null);
+    try {
+      await adminRequest(token, "/api/admin/cloud-history/prune", {
+        method: "POST",
+        body: JSON.stringify({ previewId: prunePreview.previewId, confirmation: pruneConfirmation }),
+      });
+      setOperationsMessage(`历史裁剪已完成：预览中的 ${prunePreview.deletionCount} 条过期正文已按事务处理`);
+      setPrunePreview(null);
+      setPruneConfirmation("");
+      await refresh();
+    } catch (reason) {
+      setOperationsMessage(reason instanceof Error ? reason.message : "历史裁剪失败");
+    } finally {
+      setOperationBusy(false);
+    }
   };
 
   const today = metrics?.analytics.daily.find((record) => record.day === metrics.analytics.today);
@@ -328,6 +491,48 @@ export function AdminDashboard() {
             <div><dt>反馈 / 客户端错误</dt><dd>{metrics.reports.feedback} / {metrics.reports.clientErrors}</dd></div>
             <div><dt>服务运行时间</dt><dd>{formatDuration(metrics.uptimeSeconds)}</dd></div>
           </dl>
+        </article>
+
+        <article className="admin-meta-panel admin-governance-panel">
+          <header><div><small>数据库治理</small><strong>增长、队列与备份窗口</strong></div><em>layout v{metrics.governance?.sqlite?.layoutVersion ?? "--"}</em></header>
+          <dl>
+            <div><dt>SQLite / WAL</dt><dd>{formatStorageBytes(metrics.governance?.sqlite?.databaseBytes)} / {formatStorageBytes(metrics.governance?.sqlite?.walBytes)}</dd></div>
+            <div><dt>app_state / 云正文</dt><dd>{formatStorageBytes(metrics.governance?.sqlite?.appStateBytes)} / {formatStorageBytes(metrics.governance?.sqlite?.cloudPayloadBytes)}</dd></div>
+            <div><dt>正文行 / 每账号修订</dt><dd>{formatNumber(metrics.governance?.sqlite?.cloudPayloadRows ?? 0)} / {metrics.governance?.sqlite?.averageRevisionsPerAccount ?? 0}</dd></div>
+            <div><dt>写入队列 当前 / 峰值</dt><dd>{metrics.runtime.writeQueueDepth ?? 0} / {metrics.runtime.maxWriteQueueDepth ?? 0}</dd></div>
+            <div><dt>慢请求 / 慢写入</dt><dd>{metrics.runtime.slowRequests ?? 0} / {metrics.runtime.slowWrites ?? 0}</dd></div>
+            <div><dt>备份状态 / 窗口</dt><dd>{metrics.backups.state ?? "--"} / {metrics.backups.dailyWindow ?? "未配置"}</dd></div>
+            <div><dt>磁盘保护</dt><dd className={metrics.governance?.disk.protection90Percent ? "warning" : "ready"}>{metrics.governance?.disk.protection90Percent ? "90% 保护已触发" : metrics.governance?.disk.warning80Percent ? "80% 告警" : "正常"}</dd></div>
+          </dl>
+          <div className="admin-operation-form">
+            <button type="button" disabled={operationBusy} onClick={() => void previewCloudPrune()}>生成裁剪预览</button>
+            {prunePreview ? <><small>保留每槽最近 {prunePreview.limit} 条；待删除 {prunePreview.deletionCount} 条。预览 ID {prunePreview.previewId.slice(0, 12)}</small><input value={pruneConfirmation} onChange={(event) => setPruneConfirmation(event.target.value)} placeholder={`输入 ${prunePreview.confirmation}`} /><button className="danger" type="button" disabled={operationBusy || pruneConfirmation !== prunePreview.confirmation} onClick={() => void applyCloudPrune()}>确认事务裁剪</button></> : null}
+          </div>
+        </article>
+
+        <article className="admin-meta-panel admin-account-panel">
+          <header><div><small>账号处置</small><strong>精确账号 ID、最小化摘要与审计</strong></div><em>不读取存档正文</em></header>
+          <form className="admin-operation-form" onSubmit={(event) => void lookupAccount(event)}>
+            <input value={accountIdDraft} onChange={(event) => setAccountIdDraft(event.target.value)} placeholder="精确 account ID" autoComplete="off" />
+            <button type="submit" disabled={operationBusy || !accountIdDraft.trim()}>只读查询</button>
+          </form>
+          {account ? <div className="admin-account-summary">
+            <dl>
+              <div><dt>账号</dt><dd>{account.username} / {account.displayName}</dd></div>
+              <div><dt>会话 / 云占用</dt><dd>{account.sessionCount} / {formatStorageBytes(account.cloud.bytes)}</dd></div>
+              <div><dt>登录限制</dt><dd>{account.loginDisabledUntil ? formatTime(account.loginDisabledUntil) : "无"}</dd></div>
+              <div><dt>排行榜限制</dt><dd>{account.leaderboardRestricted ? "已冻结" : account.leaderboardResumeAfterRevision ? `等待修订 > ${account.leaderboardResumeAfterRevision}` : "无"}</dd></div>
+            </dl>
+            <div className="admin-operation-form">
+              <select value={accountAction} onChange={(event) => { setAccountAction(event.target.value as AdminAccountAction); setAccountConfirmation(""); }}>
+                <option value="revoke-sessions">撤销全部会话</option><option value="disable-login">限制登录 24 小时</option><option value="enable-login">恢复登录</option><option value="restrict-leaderboard">移除排行榜</option><option value="restore-leaderboard">批准复核（需新修订）</option><option value="delete-account">彻底注销（需 24h 内备份）</option>
+              </select>
+              <small>二次确认：CONFIRM:{accountAction}:{account.accountId}</small>
+              <input value={accountConfirmation} onChange={(event) => setAccountConfirmation(event.target.value)} placeholder="输入完整二次确认文字" />
+              <button className="danger" type="button" disabled={operationBusy || accountConfirmation !== `CONFIRM:${accountAction}:${account.accountId}`} onClick={() => void applyAccountAction()}>应用并写审计</button>
+            </div>
+          </div> : null}
+          {operationsMessage ? <p className="admin-operation-message" role="status">{operationsMessage}</p> : null}
         </article>
 
         <article className="admin-audit-panel">

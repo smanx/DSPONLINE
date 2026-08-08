@@ -25,6 +25,28 @@ import {
   aggregateGalacticFactoryMetric,
   GALACTIC_NOMINAL_METRIC_VERSION,
 } from "./galactic-metrics.mjs";
+import {
+  CLOUD_HISTORY_LIMIT,
+  CLOUD_HISTORY_PRUNE_CONFIRMATION,
+  backupWindowState,
+  buildCloudHistoryPrunePlan,
+  collectSqliteGovernanceMetrics,
+  parseDailyBackupWindow,
+  publicCloudHistoryPrunePlan,
+  trimCloudHistoryMetadataInPlace,
+} from "./cloud-governance.mjs";
+import {
+  anonymousLoginContext,
+  clearLeaderboardRevalidationIfSatisfied,
+  createLoginFailureGuard,
+  leaderboardRevalidationRequired,
+  loginDisabled,
+  normalizeAccountControls,
+  normalizeAccountSecurity,
+  publicLoginSecurityEvents,
+  recordSuccessfulLogin,
+} from "./account-security.mjs";
+import { evaluateLeaderboardIntegrity, LEADERBOARD_INTEGRITY_VERSION } from "./leaderboard-integrity.mjs";
 
 const scrypt = promisify(scryptCallback);
 // The envelope remains v2, but end-game saves can exceed the historical 8 MiB
@@ -33,7 +55,6 @@ const scrypt = promisify(scryptCallback);
 const BODY_LIMIT_BYTES = 32 * 1024 * 1024;
 const SAVE_PAYLOAD_LIMIT_BYTES = BODY_LIMIT_BYTES - 1024;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const CLOUD_HISTORY_LIMIT = 20;
 const CLOUD_SAVE_SLOTS = ["main", "1", "2", "3"];
 const MANUAL_CLOUD_SAVE_SLOTS = CLOUD_SAVE_SLOTS.slice(1);
 const SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION = 2;
@@ -94,6 +115,8 @@ const DEFAULT_DATA = {
   submissions: {},
   speedrunSubmissions: {},
   leaderboardModeration: {},
+  accountSecurity: {},
+  accountControls: {},
   players: {},
   feedback: [],
   errors: [],
@@ -188,6 +211,8 @@ function normalizeSessionRecords(value, users) {
       deviceName: typeof record.deviceName === "string" ? record.deviceName.slice(0, 80) : "未知设备",
       clientType: typeof record.clientType === "string" ? record.clientType.slice(0, 32) : "unknown",
       ipHash: typeof record.ipHash === "string" && /^[a-f0-9]{16}$/.test(record.ipHash) ? record.ipHash : null,
+      deviceHash: typeof record.deviceHash === "string" && /^[a-f0-9]{16}$/.test(record.deviceHash) ? record.deviceHash : null,
+      regionHash: typeof record.regionHash === "string" && /^[a-f0-9]{16}$/.test(record.regionHash) ? record.regionHash : null,
     }]];
   }));
 }
@@ -313,6 +338,8 @@ function normalizeStoredData(parsed) {
     submissions: source.submissions && typeof source.submissions === "object" ? source.submissions : {},
     speedrunSubmissions: normalizeSpeedrunSubmissions(source.speedrunSubmissions, users),
     leaderboardModeration: normalizeLeaderboardModeration(source.leaderboardModeration, users),
+    accountSecurity: normalizeAccountSecurity(source.accountSecurity, users),
+    accountControls: normalizeAccountControls(source.accountControls, users),
     players: normalizePlayerRecords(source.players),
     feedback: Array.isArray(source.feedback) ? source.feedback.slice(-1000) : [],
     errors: Array.isArray(source.errors) ? source.errors.slice(-1000) : [],
@@ -546,8 +573,14 @@ function validateSpeedrunSubmission(store, userId, body) {
   }
   const milestone = speedrun.milestones?.[targetId];
   const progress = speedrunProgressFromState(state, targetId);
-  if (!progress.completed || milestone?.completed !== true) return { error: "速通目标尚未完成", code: "SPEEDRUN_TARGET_INCOMPLETE", status: 422 };
-  const completedAtSeconds = numberAt(milestone.completedAtSeconds);
+  if (!progress.completed) return { error: "速通目标尚未完成", code: "SPEEDRUN_TARGET_INCOMPLETE", status: 422 };
+  // Historical v46 saves can have the authoritative cumulative counter but
+  // lack the derived milestone write. Accept that monotonic fact only, using
+  // the current elapsed clock as a conservative time. The server never edits
+  // the cloud payload or grants a faster result through this recovery path.
+  const completedAtSeconds = milestone?.completed === true
+    ? numberAt(milestone.completedAtSeconds)
+    : elapsedSeconds;
   if (!Number.isFinite(body.elapsedSeconds) || body.elapsedSeconds <= 0 || completedAtSeconds <= 0 || Math.abs(body.elapsedSeconds - completedAtSeconds) > 0.000001 || completedAtSeconds > elapsedSeconds + 0.000001) {
     return { error: "客户端完成时间与存档不一致", code: "SPEEDRUN_TIME_INVALID", status: 422 };
   }
@@ -557,6 +590,7 @@ function validateSpeedrunSubmission(store, userId, body) {
     targetId,
     factoryId,
     elapsedSeconds: completedAtSeconds,
+    milestoneRecovered: milestone?.completed !== true,
     saveHash: current.checksum,
   };
 }
@@ -591,7 +625,7 @@ function submitSpeedrunResult(store, user, body, now = Date.now()) {
     rulesetVersion: body.rulesetVersion,
     factoryId: validation.factoryId,
     elapsedSeconds: validation.elapsedSeconds,
-    completedAtSeconds: validation.state.speedrun.milestones[validation.targetId].completedAtSeconds ?? validation.elapsedSeconds,
+    completedAtSeconds: validation.elapsedSeconds,
     completedAt: now,
     receivedAt: now,
     saveRevision: validation.current.revision,
@@ -607,6 +641,10 @@ class JsonStore {
     this.file = file;
     this.data = cloneDefaultData();
     this.writeQueue = Promise.resolve();
+    this.pendingWriteOperations = 0;
+    this.maxPendingWriteOperations = 0;
+    this.slowWriteCount = 0;
+    this.lastWriteDurationMs = 0;
   }
 
   async load() {
@@ -620,11 +658,18 @@ class JsonStore {
   }
 
   persist() {
+    this.pendingWriteOperations += 1;
+    this.maxPendingWriteOperations = Math.max(this.maxPendingWriteOperations, this.pendingWriteOperations);
+    const startedAt = performance.now();
     this.writeQueue = this.writeQueue.then(async () => {
       await fs.mkdir(path.dirname(this.file), { recursive: true });
       const temporary = `${this.file}.${process.pid}.tmp`;
       await fs.writeFile(temporary, JSON.stringify(this.data), { mode: 0o600 });
       await fs.rename(temporary, this.file);
+    }).finally(() => {
+      this.pendingWriteOperations = Math.max(0, this.pendingWriteOperations - 1);
+      this.lastWriteDurationMs = Math.max(0, performance.now() - startedAt);
+      if (this.lastWriteDurationMs >= 1_000) this.slowWriteCount += 1;
     });
     return this.writeQueue;
   }
@@ -678,6 +723,10 @@ class SqliteStore {
     this.queuedCloudSaveWrites = new Map();
     this.pendingCloudSaveDeletes = new Map();
     this.pendingCloudSaveUserDeletes = new Set();
+    this.pendingWriteOperations = 0;
+    this.maxPendingWriteOperations = 0;
+    this.slowWriteCount = 0;
+    this.lastWriteDurationMs = 0;
   }
 
   async load() {
@@ -759,6 +808,9 @@ class SqliteStore {
   }
 
   enqueuePersist(payload, writes, deletes, userDeletes) {
+    this.pendingWriteOperations += 1;
+    this.maxPendingWriteOperations = Math.max(this.maxPendingWriteOperations, this.pendingWriteOperations);
+    const startedAt = performance.now();
     this.writeQueue = this.writeQueue.catch(() => undefined).then(() => {
       const writeState = this.database.prepare("INSERT INTO app_state (id, payload, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at");
       const writeCloudPayload = this.database.prepare("INSERT INTO cloud_save_payloads (user_id, slot, revision, payload) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, slot, revision) DO UPDATE SET payload = excluded.payload");
@@ -785,7 +837,41 @@ class SqliteStore {
         for (const userId of userDeletes) this.pendingCloudSaveUserDeletes.add(userId);
         throw error;
       }
+    }).finally(() => {
+      this.pendingWriteOperations = Math.max(0, this.pendingWriteOperations - 1);
+      this.lastWriteDurationMs = Math.max(0, performance.now() - startedAt);
+      if (this.lastWriteDurationMs >= 1_000) this.slowWriteCount += 1;
     });
+  }
+
+  async previewCloudHistoryPrune() {
+    await this.writeQueue;
+    const rows = this.database.prepare("SELECT user_id AS userId, slot, revision FROM cloud_save_payloads ORDER BY user_id, slot, revision").all();
+    return buildCloudHistoryPrunePlan(this.data, rows);
+  }
+
+  async applyCloudHistoryPrune(expectedPreviewId) {
+    await this.writeQueue;
+    const plan = await this.previewCloudHistoryPrune();
+    if (plan.previewId !== expectedPreviewId) {
+      const error = new Error("裁剪预览已变化，请重新确认");
+      error.statusCode = 409;
+      error.code = "CLOUD_PRUNE_PREVIEW_CHANGED";
+      throw error;
+    }
+    const metadataRemoved = trimCloudHistoryMetadataInPlace(this.data);
+    const payload = JSON.stringify(this.data);
+    const deletePayload = this.database.prepare("DELETE FROM cloud_save_payloads WHERE user_id = ? AND slot = ? AND revision = ?");
+    const writeState = this.database.prepare("INSERT INTO app_state (id, payload, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at");
+    this.database.transaction(() => {
+      for (const deletion of plan.deletions) deletePayload.run(deletion.userId, deletion.slot, deletion.revision);
+      writeState.run(payload, Date.now());
+    })();
+    return { ...publicCloudHistoryPrunePlan(plan), metadataRemoved };
+  }
+
+  governanceMetrics(fileStats = {}) {
+    return collectSqliteGovernanceMetrics(this.database, this.data, fileStats);
   }
 
   async migrateLegacyPayloadLayout(source) {
@@ -899,6 +985,81 @@ function appendAudit(store, request, action, userId = null) {
   if (store.data.auditLog.length > 2000) store.data.auditLog.splice(0, store.data.auditLog.length - 2000);
 }
 
+function appendSystemAudit(store, action, userId = null, clientType = "operations") {
+  store.data.auditLog.push({
+    action: String(action).slice(0, 80),
+    occurredAt: Date.now(),
+    actorHash: userId ? sha256(`audit-user:${userId}`).slice(0, 16) : null,
+    ipHash: null,
+    clientType: String(clientType).slice(0, 32),
+  });
+  if (store.data.auditLog.length > 2000) store.data.auditLog.splice(0, store.data.auditLog.length - 2000);
+}
+
+function appendAdminAudit(store, request, action) {
+  const authorization = typeof request.headers.authorization === "string" ? request.headers.authorization : "";
+  store.data.auditLog.push({
+    action: String(action).slice(0, 80),
+    occurredAt: Date.now(),
+    actorHash: authorization ? sha256(`audit-admin:${authorization}`).slice(0, 16) : null,
+    ipHash: sha256(`audit-ip:${requestIp(request)}`).slice(0, 16),
+    clientType: "admin-api",
+  });
+  if (store.data.auditLog.length > 2000) store.data.auditLog.splice(0, store.data.auditLog.length - 2000);
+}
+
+function deleteAccountData(store, userId) {
+  revokeUserSessions(store, userId);
+  removeUserActionTokens(store, userId);
+  delete store.data.cloudSaves[userId];
+  delete store.data.cloudSaveHistory[userId];
+  delete store.data.cloudSaveSlots[userId];
+  delete store.data.cloudSaveSlotHistory[userId];
+  delete store.data.leaderboardModeration[userId];
+  delete store.data.accountSecurity[userId];
+  delete store.data.accountControls[userId];
+  store.discardUserCloudSavePayloads?.(userId);
+  for (const [key, submission] of Object.entries(store.data.submissions)) {
+    if (submission.userId === userId || submission.accountId === userId) delete store.data.submissions[key];
+  }
+  for (const [key, submission] of Object.entries(store.data.speedrunSubmissions)) {
+    if (submission.userId === userId) delete store.data.speedrunSubmissions[key];
+  }
+  store.data.feedback = store.data.feedback.filter((entry) => entry.userId !== userId);
+  store.data.errors = store.data.errors.filter((entry) => entry.userId !== userId);
+  delete store.data.users[userId];
+}
+
+function adminAccountSummary(store, userId) {
+  const user = store.data.users[userId];
+  if (!user) return null;
+  const saves = CLOUD_SAVE_SLOTS.map((slot) => ({ slot, save: currentCloudSave(store, userId, slot), history: saveHistory(store, userId, slot) }));
+  const cloudBytes = saves.reduce((sum, entry) => sum + (entry.history ?? []).reduce((historySum, save) => historySum + Math.max(0, Number(save.size) || 0), 0), 0);
+  const controls = store.data.accountControls[userId] ?? null;
+  return {
+    accountId: userId,
+    username: user.username,
+    displayName: user.displayName,
+    createdAt: user.createdAt,
+    emailBound: Boolean(user.email),
+    emailVerified: Number.isFinite(user.emailVerifiedAt),
+    leaderboardVisible: user.leaderboardVisible !== false,
+    sessionCount: Object.values(store.data.sessions).filter((session) => session.userId === userId && session.expiresAt > Date.now()).length,
+    recentLogins: publicLoginSecurityEvents(store.data, userId),
+    cloud: {
+      bytes: cloudBytes,
+      slots: Object.fromEntries(saves.map(({ slot, save, history }) => [slot, {
+        revision: save?.revision ?? 0,
+        size: save?.size ?? 0,
+        historyCount: history.length,
+      }])),
+    },
+    loginDisabledUntil: controls?.loginDisabledUntil ?? null,
+    leaderboardRestricted: isLeaderboardRestricted(store.data, userId),
+    leaderboardResumeAfterRevision: controls?.leaderboardResumeAfterRevision ?? null,
+  };
+}
+
 function send(response, status, payload, extraHeaders = {}) {
   const body = JSON.stringify(payload);
   response.writeHead(status, {
@@ -974,10 +1135,11 @@ async function passwordMatches(password, user) {
   return expected.length === derived.length && timingSafeEqual(expected, derived);
 }
 
-function issueSession(store, userId, request, deviceName) {
+function issueSession(store, userId, request, deviceName, deviceId) {
   const token = randomBytes(32).toString("base64url");
   const tokenHash = sha256(token);
   const now = Date.now();
+  const context = anonymousLoginContext(request, { deviceName, deviceId });
   store.data.sessions[tokenHash] = {
     id: `session_${randomUUID().replaceAll("-", "")}`,
     userId,
@@ -987,8 +1149,10 @@ function issueSession(store, userId, request, deviceName) {
     deviceName: normalizedDeviceName(deviceName, request),
     clientType: clientTypeForRequest(request),
     ipHash: sha256(`session-ip:${requestIp(request)}`).slice(0, 16),
+    deviceHash: context.deviceHash,
+    regionHash: context.regionHash,
   };
-  return token;
+  return { token, context };
 }
 
 function authenticatedUser(request, store) {
@@ -1504,6 +1668,32 @@ function removeUserLeaderboardSubmissions(store, userId) {
   return removed;
 }
 
+function applyLeaderboardIntegrityGate(store, userId, currentSave, currentState) {
+  // A restore created by this server is already protected by expectedRevision
+  // and an audit entry. Its cumulative counters can legitimately be lower than
+  // the immediately preceding revision, so it must not be treated as a forged
+  // client rollback. The restored revision is still excluded from producing a
+  // faster historical peak by the existing adjacent-window rules.
+  if (Number.isInteger(currentSave?.restoredFromRevision)) {
+    return { version: LEADERBOARD_INTEGRITY_VERSION, freeze: false, findings: [{ code: "SERVER_RESTORE", severity: "info" }] };
+  }
+  const previousMetadata = Number.isInteger(currentSave?.revision) && currentSave.revision > 1
+    ? saveHistory(store, userId, "main").find((entry) => entry.revision === currentSave.revision - 1)
+    : null;
+  const previous = previousMetadata ? materializeCloudSave(store, userId, "main", previousMetadata) : null;
+  const result = evaluateLeaderboardIntegrity(currentState, parseSaveState(previous?.payload));
+  if (!result.freeze) return result;
+  const alreadyRestricted = isLeaderboardRestricted(store.data, userId);
+  store.data.leaderboardModeration[userId] = {
+    status: "blocked",
+    reasonCode: "SAVE_DATA_INTEGRITY",
+    source: LEADERBOARD_INTEGRITY_VERSION,
+    createdAt: alreadyRestricted ? store.data.leaderboardModeration[userId].createdAt : Date.now(),
+  };
+  if (!alreadyRestricted) appendSystemAudit(store, "leaderboard.integrity_frozen", userId, "integrity-gate");
+  return result;
+}
+
 function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.now(), force = false } = {}) {
   const user = store.data.users[userId];
   if (!user) return { changed: false, submission: null, reason: "missing-user" };
@@ -1515,11 +1705,19 @@ function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.
   }
   const metadata = save ?? store.data.cloudSaves[userId];
   if (!metadata) return { changed: false, submission: null, reason: "missing-save" };
+  if (leaderboardRevalidationRequired(store.data, userId, metadata.revision)) {
+    return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "revalidation-required" };
+  }
+  clearLeaderboardRevalidationIfSatisfied(store.data, userId, metadata.revision);
   const materialized = typeof metadata.payload === "string" ? metadata : materializeCloudSave(store, userId, "main", metadata);
   if (!materialized) return { changed: false, submission: null, reason: "missing-payload" };
   const state = parseSaveState(materialized.payload);
   if (Array.isArray(state?.contentPacks) && state.contentPacks.length > 0) {
     return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "modded-save" };
+  }
+  const integrity = applyLeaderboardIntegrityGate(store, userId, materialized, state);
+  if (integrity.freeze) {
+    return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "integrity-frozen", integrity };
   }
   const throughputWindow = throughputRateFromAdjacentRevision(store, userId, materialized, state);
   const observed = leaderboardMetricsFromSave(
@@ -1762,6 +1960,9 @@ export async function createCloudServer({
   databaseFile = process.env.DSP_CLOUD_DATABASE_FILE || (dataFile ? "" : path.join(path.dirname(fileURLToPath(import.meta.url)), "data", "cloud.sqlite")),
   backupDirectory = process.env.DSP_CLOUD_BACKUP_DIRECTORY || "",
   backupIntervalMs = Number(process.env.DSP_CLOUD_BACKUP_INTERVAL_MS || 6 * 60 * 60 * 1000),
+  backupWindow = process.env.DSP_CLOUD_BACKUP_WINDOW || "",
+  historyPruneIntervalMs = Number(process.env.DSP_CLOUD_PRUNE_INTERVAL_MS || 6 * 60 * 60 * 1000),
+  requestTimeoutMs = Number(process.env.DSP_CLOUD_REQUEST_TIMEOUT_MS || 30_000),
   allowedOrigin = process.env.DSP_ALLOWED_ORIGIN || "",
   playerOnlineWindowMs = Number(process.env.DSP_PLAYER_ONLINE_WINDOW_MS || DEFAULT_PLAYER_ONLINE_WINDOW_MS),
   metricTimeZone = process.env.DSP_METRIC_TIME_ZONE || DEFAULT_METRIC_TIME_ZONE,
@@ -1804,6 +2005,7 @@ export async function createCloudServer({
   const galacticActivityConfig = activityConfig ? normalizeActivityConfig(activityConfig) : await loadActivityConfig(activityConfigFile);
   const rateLimit = createRateLimiter();
   const registrationRateLimit = createRateLimiter();
+  const loginFailureGuard = createLoginFailureGuard();
   const runtime = {
     requests: 0,
     errors: 0,
@@ -1812,6 +2014,14 @@ export async function createCloudServer({
     latencies: [],
     lastBackupAt: null,
     lastBackupErrorAt: null,
+    backup: { state: backupDirectory ? "idle" : "disabled", startedAt: null, completedAt: null, failedAt: null, durationMs: null },
+    lastBackupDayKey: null,
+    historyPruneRuns: 0,
+    historyPrunedPayloads: 0,
+    historyPrunedMetadata: 0,
+    lastHistoryPruneAt: null,
+    slowRequests: 0,
+    maxRequestMs: 0,
   };
   const onlineWindowMs = Number.isFinite(playerOnlineWindowMs)
     ? Math.max(50, Math.floor(playerOnlineWindowMs))
@@ -1846,6 +2056,8 @@ export async function createCloudServer({
   const accountMailProvider = typeof mailer === "function"
     ? "custom"
     : tencentSesMailer ? "tencent-ses" : webhookMailer ? "webhook" : "disabled";
+  const configuredBackupWindow = parseDailyBackupWindow(backupWindow);
+  if (backupWindow && !configuredBackupWindow) logger.error?.("DSP_CLOUD_BACKUP_WINDOW must use HH:MM-HH:MM; interval scheduling remains active");
 
   const flushMetrics = setInterval(() => {
     cleanupExpiredAuthRecords(store.data);
@@ -1855,6 +2067,9 @@ export async function createCloudServer({
   }, 60_000);
   flushMetrics.unref?.();
   const createBackup = async () => {
+    if (!backupDirectory || runtime.backup.state === "running") return false;
+    const started = Date.now();
+    runtime.backup = { state: "running", startedAt: started, completedAt: runtime.backup.completedAt, failedAt: runtime.backup.failedAt, durationMs: null };
     try {
       const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
       const extension = databaseFile ? ".sqlite" : ".json";
@@ -1862,16 +2077,50 @@ export async function createCloudServer({
       const files = (await fs.readdir(backupDirectory)).filter((file) => file.startsWith("cloud-") && file.endsWith(extension)).sort().reverse();
       await Promise.all(files.slice(30).map((file) => fs.unlink(path.join(backupDirectory, file))));
       runtime.lastBackupAt = Date.now();
+      runtime.backup = { state: "ready", startedAt: started, completedAt: runtime.lastBackupAt, failedAt: null, durationMs: runtime.lastBackupAt - started };
+      return true;
     } catch (error) {
       runtime.lastBackupErrorAt = Date.now();
+      runtime.backup = { state: "failed", startedAt: started, completedAt: runtime.backup.completedAt, failedAt: runtime.lastBackupErrorAt, durationMs: runtime.lastBackupErrorAt - started };
       throw error;
     }
   };
-  const backupTimer = backupDirectory && Number.isFinite(backupIntervalMs) && backupIntervalMs >= 60_000
-    ? setInterval(() => void createBackup().catch((error) => logger.error?.("cloud backup failed", error)), backupIntervalMs)
-    : null;
+  const scheduledBackupTick = () => {
+    if (!configuredBackupWindow) return void createBackup().catch((error) => logger.error?.("cloud backup failed", error));
+    const windowState = backupWindowState(configuredBackupWindow, new Date());
+    if (!windowState.withinWindow || runtime.lastBackupDayKey === windowState.dayKey) return;
+    runtime.lastBackupDayKey = windowState.dayKey;
+    void createBackup().catch((error) => {
+      runtime.lastBackupDayKey = null;
+      logger.error?.("cloud backup failed", error);
+    });
+  };
+  const backupTimer = backupDirectory && configuredBackupWindow
+    ? setInterval(scheduledBackupTick, 60_000)
+    : backupDirectory && Number.isFinite(backupIntervalMs) && backupIntervalMs >= 60_000
+      ? setInterval(scheduledBackupTick, backupIntervalMs)
+      : null;
   backupTimer?.unref?.();
-  if (backupDirectory) void createBackup().catch((error) => logger.error?.("initial cloud backup failed", error));
+  if (backupDirectory && !configuredBackupWindow) void createBackup().catch((error) => logger.error?.("initial cloud backup failed", error));
+  else if (backupDirectory) scheduledBackupTick();
+
+  const runPeriodicHistoryPrune = async () => {
+    if (typeof store.previewCloudHistoryPrune !== "function") return;
+    await store.persist();
+    const preview = await store.previewCloudHistoryPrune();
+    runtime.historyPruneRuns += 1;
+    runtime.lastHistoryPruneAt = Date.now();
+    if (preview.deletionCount < 1) return;
+    const result = await store.applyCloudHistoryPrune(preview.previewId);
+    runtime.historyPrunedPayloads += result.deletionCount;
+    runtime.historyPrunedMetadata += result.metadataRemoved;
+    appendSystemAudit(store, "cloud.history_pruned_periodic", null, "scheduled-governance");
+    await store.persist();
+  };
+  const historyPruneTimer = databaseFile && Number.isFinite(historyPruneIntervalMs) && historyPruneIntervalMs >= 60_000
+    ? setInterval(() => void runPeriodicHistoryPrune().catch((error) => logger.error?.("cloud history prune failed", error)), historyPruneIntervalMs)
+    : null;
+  historyPruneTimer?.unref?.();
 
   const server = http.createServer(async (request, response) => {
     const requestStartedAt = performance.now();
@@ -1880,6 +2129,8 @@ export async function createCloudServer({
       runtime.latencies.push(durationMs);
       if (runtime.latencies.length > 2000) runtime.latencies.splice(0, runtime.latencies.length - 2000);
       if (response.statusCode === 429) runtime.rateLimited += 1;
+      if (durationMs >= 1_000) runtime.slowRequests += 1;
+      runtime.maxRequestMs = Math.max(runtime.maxRequestMs, durationMs);
     });
     runtime.requests += 1;
     const day = metricDay(Date.now(), metricsTimeZone);
@@ -1912,7 +2163,7 @@ export async function createCloudServer({
 
     try {
       if (request.method === "GET" && url.pathname === "/api/health") {
-        return send(response, 200, { ok: true, service: "dsp-idle-cloud", schemaVersion: DEFAULT_DATA.schemaVersion, storage: databaseFile ? "sqlite" : "json", storageLayoutVersion: databaseFile ? store.data.storageLayoutVersion ?? 1 : 1, mailProvider: accountMailProvider, activity: { enabled: galacticActivityConfig.enabled, valid: galacticActivityConfig.valid, reason: galacticActivityConfig.reason }, uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), time: Date.now() });
+        return send(response, 200, { ok: true, service: "dsp-idle-cloud", schemaVersion: DEFAULT_DATA.schemaVersion, storage: databaseFile ? "sqlite" : "json", storageLayoutVersion: databaseFile ? store.data.storageLayoutVersion ?? 1 : 1, mailProvider: accountMailProvider, activity: { enabled: galacticActivityConfig.enabled, valid: galacticActivityConfig.valid, reason: galacticActivityConfig.reason }, maintenance: { backup: runtime.backup.state === "running", backupState: runtime.backup.state }, uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), time: Date.now() });
       }
       if (request.method === "GET" && url.pathname === "/api/public-status") {
         return send(response, 200, {
@@ -1940,6 +2191,17 @@ export async function createCloudServer({
           operationalStatus(restoreDrillStatusFile),
           nodeHealthStatus(nodeHealthStatusFile),
         ]);
+        const statSize = async (file) => {
+          try { return (await fs.stat(file)).size; } catch { return 0; }
+        };
+        const governance = databaseFile && typeof store.governanceMetrics === "function"
+          ? store.governanceMetrics({
+            databaseBytes: await statSize(databaseFile),
+            walBytes: await statSize(`${databaseFile}-wal`),
+            shmBytes: await statSize(`${databaseFile}-shm`),
+          })
+          : null;
+        const diskFreeRatio = infrastructure?.disk?.freeRatio;
         return send(response, 200, {
           generatedAt: now,
           timeZone: metricsTimeZone,
@@ -1952,6 +2214,13 @@ export async function createCloudServer({
             cloudConflicts: runtime.cloudConflicts,
             p50LatencyMs: percentile(runtime.latencies, 0.5),
             p95LatencyMs: percentile(runtime.latencies, 0.95),
+            slowRequests: runtime.slowRequests,
+            maxRequestMs: Math.round(runtime.maxRequestMs * 100) / 100,
+            writeQueueDepth: store.pendingWriteOperations ?? 0,
+            maxWriteQueueDepth: store.maxPendingWriteOperations ?? 0,
+            slowWrites: store.slowWriteCount ?? 0,
+            lastWriteDurationMs: Math.round((store.lastWriteDurationMs ?? 0) * 100) / 100,
+            loginSecurity: loginFailureGuard.metrics(),
           },
           accounts: {
             users: Object.keys(store.data.users).length,
@@ -1970,13 +2239,127 @@ export async function createCloudServer({
             configured: Boolean(backupDirectory),
             lastSuccessAt: runtime.lastBackupAt,
             lastErrorAt: runtime.lastBackupErrorAt,
+            state: runtime.backup.state,
+            startedAt: runtime.backup.startedAt,
+            durationMs: runtime.backup.durationMs,
+            dailyWindow: configuredBackupWindow?.source ?? null,
             offsite: offsiteBackup,
             restoreDrill,
+          },
+          governance: {
+            sqlite: governance,
+            historyPrune: {
+              runs: runtime.historyPruneRuns,
+              payloadsRemoved: runtime.historyPrunedPayloads,
+              metadataRemoved: runtime.historyPrunedMetadata,
+              lastRunAt: runtime.lastHistoryPruneAt,
+            },
+            disk: {
+              warning80Percent: typeof diskFreeRatio === "number" ? diskFreeRatio <= 0.2 : false,
+              protection90Percent: typeof diskFreeRatio === "number" ? diskFreeRatio <= 0.1 : false,
+            },
           },
           infrastructure,
           daily: serviceDaily,
           storage: databaseFile ? "sqlite" : "json",
         });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/admin/cloud-history/prune-preview") {
+        if (!secureAdminToken) return send(response, 503, { error: "管理员接口尚未配置" });
+        if (!adminAuthorized(request, secureAdminToken)) return send(response, 401, { error: "管理员凭据无效" });
+        if (typeof store.previewCloudHistoryPrune !== "function") return send(response, 501, { error: "当前存储后端不支持在线历史治理" });
+        await store.persist();
+        const preview = await store.previewCloudHistoryPrune();
+        return send(response, 200, { preview: publicCloudHistoryPrunePlan(preview) });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/admin/cloud-history/prune") {
+        if (!secureAdminToken) return send(response, 503, { error: "管理员接口尚未配置" });
+        if (!adminAuthorized(request, secureAdminToken)) return send(response, 401, { error: "管理员凭据无效" });
+        if (typeof store.applyCloudHistoryPrune !== "function") return send(response, 501, { error: "当前存储后端不支持在线历史治理" });
+        const body = await readJson(request);
+        if (body.confirmation !== CLOUD_HISTORY_PRUNE_CONFIRMATION || typeof body.previewId !== "string" || !/^[a-f0-9]{64}$/.test(body.previewId)) {
+          return send(response, 400, { error: "裁剪确认文字或预览标识无效", code: "CLOUD_PRUNE_CONFIRMATION_INVALID" });
+        }
+        const result = await store.applyCloudHistoryPrune(body.previewId);
+        runtime.historyPruneRuns += 1;
+        runtime.historyPrunedPayloads += result.deletionCount;
+        runtime.historyPrunedMetadata += result.metadataRemoved;
+        runtime.lastHistoryPruneAt = Date.now();
+        appendAdminAudit(store, request, "cloud.history_pruned_confirmed");
+        await store.persist();
+        return send(response, 200, { result });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/admin/account") {
+        if (!secureAdminToken) return send(response, 503, { error: "管理员接口尚未配置" });
+        if (!adminAuthorized(request, secureAdminToken)) return send(response, 401, { error: "管理员凭据无效" });
+        const accountId = url.searchParams.get("accountId");
+        const summary = typeof accountId === "string" ? adminAccountSummary(store, accountId) : null;
+        if (!summary) return send(response, 404, { error: "账号不存在；管理员查询只接受精确 account ID" });
+        appendAdminAudit(store, request, "admin.account_summary_viewed");
+        await store.persist();
+        return send(response, 200, { account: summary });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/admin/account/action") {
+        if (!secureAdminToken) return send(response, 503, { error: "管理员接口尚未配置" });
+        if (!adminAuthorized(request, secureAdminToken)) return send(response, 401, { error: "管理员凭据无效" });
+        const body = await readJson(request);
+        const accountId = typeof body.accountId === "string" && store.data.users[body.accountId] ? body.accountId : null;
+        const action = typeof body.action === "string" ? body.action : "";
+        const allowedActions = new Set(["revoke-sessions", "disable-login", "enable-login", "restrict-leaderboard", "restore-leaderboard", "delete-account"]);
+        if (!accountId || !allowedActions.has(action)) return send(response, 400, { error: "账号或管理员动作无效" });
+        if (body.confirmation !== `CONFIRM:${action}:${accountId}`) {
+          return send(response, 400, { error: "二次确认文字不匹配", code: "ADMIN_CONFIRMATION_INVALID" });
+        }
+        const currentRevision = currentCloudSave(store, accountId, "main")?.revision ?? 0;
+        store.data.accountControls ??= {};
+        if (action === "revoke-sessions") {
+          revokeUserSessions(store, accountId);
+        } else if (action === "disable-login") {
+          const durationSeconds = Number.isFinite(body.durationSeconds) ? Math.max(60, Math.min(30 * 24 * 60 * 60, Math.floor(body.durationSeconds))) : 24 * 60 * 60;
+          store.data.accountControls[accountId] = {
+            ...(store.data.accountControls[accountId] ?? {}),
+            source: "admin-account-action",
+            createdAt: Date.now(),
+            loginDisabledUntil: Date.now() + durationSeconds * 1_000,
+          };
+          revokeUserSessions(store, accountId);
+        } else if (action === "enable-login") {
+          const control = store.data.accountControls[accountId];
+          if (control) {
+            delete control.loginDisabledUntil;
+            if (!control.leaderboardResumeAfterRevision) delete store.data.accountControls[accountId];
+          }
+        } else if (action === "restrict-leaderboard") {
+          store.data.leaderboardModeration[accountId] = {
+            status: "blocked",
+            reasonCode: "SAVE_DATA_INTEGRITY",
+            source: "admin-manual-review",
+            createdAt: Date.now(),
+          };
+          removeUserLeaderboardSubmissions(store, accountId);
+        } else if (action === "restore-leaderboard") {
+          delete store.data.leaderboardModeration[accountId];
+          removeUserLeaderboardSubmissions(store, accountId);
+          store.data.accountControls[accountId] = {
+            ...(store.data.accountControls[accountId] ?? {}),
+            source: "admin-manual-review",
+            createdAt: Date.now(),
+            leaderboardResumeAfterRevision: currentRevision,
+          };
+        } else if (action === "delete-account") {
+          const verifiedAt = Number(body.verifiedBackupAt);
+          if (!runtime.lastBackupAt || verifiedAt !== runtime.lastBackupAt || Date.now() - runtime.lastBackupAt > 24 * 60 * 60 * 1_000) {
+            return send(response, 409, { error: "彻底注销要求 24 小时内的已验证本机备份时间戳", code: "ADMIN_BACKUP_REQUIRED", lastBackupAt: runtime.lastBackupAt });
+          }
+          deleteAccountData(store, accountId);
+        }
+        appendAdminAudit(store, request, `admin.account_${action.replaceAll("-", "_")}`);
+        await store.persist();
+        return send(response, 200, { applied: true, action, account: action === "delete-account" ? null : adminAccountSummary(store, accountId) });
       }
 
       if (request.method === "POST" && url.pathname === "/api/analytics") {
@@ -2037,10 +2420,11 @@ export async function createCloudServer({
           ...credentials,
         };
         store.data.users[user.id] = user;
-        const token = issueSession(store, user.id, request, body.deviceName);
+        const issued = issueSession(store, user.id, request, body.deviceName, body.deviceId);
+        recordSuccessfulLogin(store.data, user.id, issued.context, { clientType: clientTypeForRequest(request), now });
         appendAudit(store, request, "account.register", user.id);
         await store.persist();
-        return send(response, 201, { token, user: publicUser(user), verificationRequired: false, mailAvailable: Boolean(accountMailer) });
+        return send(response, 201, { token: issued.token, user: publicUser(user), verificationRequired: false, mailAvailable: Boolean(accountMailer) });
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/login") {
@@ -2049,12 +2433,31 @@ export async function createCloudServer({
         const email = normalizedEmail(identifier);
         const username = normalizedUsername(identifier);
         const password = typeof body.password === "string" ? body.password : "";
+        const networkHash = sha256(`login-network:${ip}`).slice(0, 16);
+        const guard = loginFailureGuard.check(identifier ?? "", networkHash);
+        if (guard.locked) {
+          appendAudit(store, request, "account.login_temporarily_locked");
+          return send(response, 429, { error: "登录失败次数过多，请稍后再试", code: "LOGIN_TEMPORARILY_LOCKED" }, { "retry-after": String(guard.retryAfterSeconds) });
+        }
         const user = Object.values(store.data.users).find((candidate) => (email && candidate.email === email) || (username && candidate.username === username));
-        if (!user || !(await passwordMatches(password, user))) return send(response, 401, { error: "用户名、邮箱或密码错误" });
-        const token = issueSession(store, user.id, request, body.deviceName);
+        if (!user || !(await passwordMatches(password, user))) {
+          const failure = loginFailureGuard.fail(identifier ?? "", networkHash);
+          appendAudit(store, request, failure.locked ? "account.login_temporarily_locked" : "account.login_failed", user?.id ?? null);
+          return send(response, failure.locked ? 429 : 401, {
+            error: failure.locked ? "登录失败次数过多，请稍后再试" : "用户名、邮箱或密码错误",
+            ...(failure.locked ? { code: "LOGIN_TEMPORARILY_LOCKED" } : {}),
+          }, failure.locked ? { "retry-after": String(failure.retryAfterSeconds) } : {});
+        }
+        if (loginDisabled(store.data, user.id)) {
+          appendAudit(store, request, "account.login_disabled", user.id);
+          return send(response, 423, { error: "该账号已被临时限制登录，请联系管理员复核", code: "ACCOUNT_LOGIN_DISABLED" });
+        }
+        loginFailureGuard.success(identifier ?? "", networkHash);
+        const issued = issueSession(store, user.id, request, body.deviceName, body.deviceId);
+        const security = recordSuccessfulLogin(store.data, user.id, issued.context, { clientType: clientTypeForRequest(request) });
         appendAudit(store, request, "account.login", user.id);
         await store.persist();
-        return send(response, 200, { token, user: publicUser(user) });
+        return send(response, 200, { token: issued.token, user: publicUser(user), security });
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/verify-email") {
@@ -2111,10 +2514,11 @@ export async function createCloudServer({
         Object.assign(user, await passwordRecord(password), { passwordChangedAt: Date.now() });
         revokeUserSessions(store, user.id);
         removeUserActionTokens(store, user.id);
-        const token = issueSession(store, user.id, request, body.deviceName);
+        const issued = issueSession(store, user.id, request, body.deviceName, body.deviceId);
+        const security = recordSuccessfulLogin(store.data, user.id, issued.context, { clientType: clientTypeForRequest(request) });
         appendAudit(store, request, "account.password_reset", user.id);
         await store.persist();
-        return send(response, 200, { token, user: publicUser(user) });
+        return send(response, 200, { token: issued.token, user: publicUser(user), security });
       }
 
       if (request.method === "GET" && url.pathname === "/api/account") {
@@ -2144,6 +2548,12 @@ export async function createCloudServer({
           .sort(([, left], [, right]) => right.lastSeenAt - left.lastSeenAt)
           .map(([tokenHash, session]) => publicSession(session, auth.tokenHash, tokenHash));
         return send(response, 200, { sessions });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/account/security-events") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        return send(response, 200, { events: publicLoginSecurityEvents(store.data, auth.user.id) });
       }
 
       if (request.method === "POST" && url.pathname === "/api/account/sessions/revoke") {
@@ -2235,21 +2645,8 @@ export async function createCloudServer({
           return send(response, 400, { error: "密码或注销确认文字不正确" });
         }
         const userId = auth.user.id;
-        revokeUserSessions(store, userId);
-        removeUserActionTokens(store, userId);
-        delete store.data.cloudSaves[userId];
-        delete store.data.cloudSaveHistory[userId];
-        delete store.data.cloudSaveSlots[userId];
-        delete store.data.cloudSaveSlotHistory[userId];
-        delete store.data.leaderboardModeration[userId];
-        store.discardUserCloudSavePayloads?.(userId);
-        for (const [key, submission] of Object.entries(store.data.submissions)) {
-          if (submission.userId === userId) delete store.data.submissions[key];
-        }
-        store.data.feedback = store.data.feedback.filter((entry) => entry.userId !== userId);
-        store.data.errors = store.data.errors.filter((entry) => entry.userId !== userId);
         appendAudit(store, request, "account.deleted", userId);
-        delete store.data.users[userId];
+        deleteAccountData(store, userId);
         await store.persist();
         return send(response, 200, { deleted: true });
       }
@@ -2282,6 +2679,12 @@ export async function createCloudServer({
         if (!auth) return send(response, 401, { error: "请先登录" });
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
         if (!slot) return send(response, 400, { error: "云存档槽位无效" });
+        if (nodeHealthStatusFile) {
+          const infrastructure = await nodeHealthStatus(nodeHealthStatusFile);
+          if (typeof infrastructure?.disk?.freeRatio === "number" && infrastructure.disk.freeRatio <= 0.1) {
+            return send(response, 507, { error: "云节点磁盘已达到 90% 保护阈值，上传暂时停止；本地存档未修改", code: "STORAGE_PROTECTION_ACTIVE" });
+          }
+        }
         const body = await readJson(request);
          if (!validateSavePayload(body.payload)) {
            const integrity = typeof body.payload === "string" ? inspectSavePayloadIntegrity(body.payload) : null;
@@ -2358,7 +2761,8 @@ export async function createCloudServer({
         if (seasonId !== ACTIVE_LEADERBOARD_SEASON_ID) return send(response, 409, { error: "历史速通赛季已封存", code: "SPEEDRUN_SEASON_CLOSED" });
         const bestByUser = new Map();
         for (const entry of Object.values(store.data.speedrunSubmissions)) {
-          if (entry.targetId !== targetId || entry.seasonId !== seasonId || entry.verified !== true || store.data.users[entry.userId]?.leaderboardVisible === false) continue;
+          if (entry.targetId !== targetId || entry.seasonId !== seasonId || entry.verified !== true ||
+            store.data.users[entry.userId]?.leaderboardVisible === false || isLeaderboardRestricted(store.data, entry.userId)) continue;
           const key = entry.userId;
           const previous = bestByUser.get(key);
           if (!previous || entry.elapsedSeconds < previous.elapsedSeconds || entry.elapsedSeconds === previous.elapsedSeconds && entry.receivedAt < previous.receivedAt) bestByUser.set(key, entry);
@@ -2373,6 +2777,9 @@ export async function createCloudServer({
       if (request.method === "POST" && url.pathname === "/api/speedrun/submit") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
+        if (isLeaderboardRestricted(store.data, auth.user.id) || leaderboardRevalidationRequired(store.data, auth.user.id, currentCloudSave(store, auth.user.id, "main")?.revision)) {
+          return send(response, 403, { error: "当前账号暂时不能加入官方排行榜", code: LEADERBOARD_RESTRICTED_CODE });
+        }
         if (auth.user.leaderboardVisible === false) return send(response, 409, { error: "当前账号已退出公开排行榜", code: "SPEEDRUN_VISIBILITY_DISABLED" });
         const body = await readJson(request);
         const result = submitSpeedrunResult(store, auth.user, body);
@@ -2475,9 +2882,13 @@ export async function createCloudServer({
 
   server.store = store;
   server.leaderboardBackfill = leaderboardBackfill;
+  server.requestTimeout = Number.isFinite(requestTimeoutMs) ? Math.max(5_000, Math.floor(requestTimeoutMs)) : 30_000;
+  server.headersTimeout = Math.min(server.requestTimeout, 15_000);
+  server.keepAliveTimeout = 5_000;
   server.on("close", () => {
     clearInterval(flushMetrics);
     if (backupTimer) clearInterval(backupTimer);
+    if (historyPruneTimer) clearInterval(historyPruneTimer);
     store.close?.();
   });
   return server;

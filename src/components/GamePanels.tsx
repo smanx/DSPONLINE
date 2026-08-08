@@ -772,15 +772,23 @@ function EntityManagementActions({ game, entity, onSetTarget, onRemove }: {
     return true;
   };
   const quickAdjust = (delta: number) => {
-    const target = Math.max(1, currentCount + delta);
+    const target = Math.max(1, Math.min(MAX_BUILDING_STACK_COUNT, currentCount + delta));
     setTargetCountDraft(String(target));
     submitTargetCount(String(target));
   };
+  const positiveShortcuts = [1, 10, 100, 10_000, 100_000] as const;
+  const negativeShortcuts = [1, 10, 100, 10_000, 100_000] as const;
   return (
     <div className={`entity-management-actions${entity.kind === "vein" ? " entity-management-actions--extractor" : ""}`} data-inspector-section="stack" data-inspector-section-label="堆叠与回收" aria-label="堆叠与回收">
       {!singleEntity ? <div className="entity-stack-batch-remove entity-stack-target-control">
         <label><span>堆叠目标</span><input inputMode="numeric" pattern="[0-9]*" min={1} max={Math.max(MAX_BUILDING_STACK_COUNT, currentCount)} value={targetCountDraft} onChange={(event) => { setTargetCountDraft(event.target.value); setTargetCountError(null); }} onBlur={() => submitTargetCount()} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); submitTargetCount(); } else if (event.key === "Escape") { setTargetCountDraft(String(Math.max(1, currentCount))); setTargetCountError(null); } }} aria-label="建筑堆叠目标数量" aria-invalid={Boolean(targetCountError)} /></label>
-        <div className="entity-stack-target-shortcuts"><button type="button" aria-label={`快速增加 1 台建筑，剩余 ${available}`} disabled={available < 1 || currentCount >= MAX_BUILDING_STACK_COUNT} onClick={() => quickAdjust(1)}>+1</button><button type="button" aria-label={`快速增加 10 台建筑，剩余 ${available}`} disabled={available < 10 || currentCount >= MAX_BUILDING_STACK_COUNT} onClick={() => quickAdjust(10)}>+10</button><button type="button" aria-label={`快速增加 100 台建筑，剩余 ${available}`} disabled={available < 100 || currentCount >= MAX_BUILDING_STACK_COUNT} onClick={() => quickAdjust(100)}>+100</button><button type="button" aria-label="减少 1 台建筑" disabled={currentCount <= 1} onClick={() => quickAdjust(-1)}>-1</button><button type="button" aria-label="减少 10 台建筑" disabled={currentCount <= 1} onClick={() => quickAdjust(-10)}>-10</button><button type="button" aria-label="减少 100 台建筑" disabled={currentCount <= 1} onClick={() => quickAdjust(-100)}>-100</button></div>
+        <div className="entity-stack-target-shortcuts" aria-label="建筑堆叠快捷调整">
+          {positiveShortcuts.map((delta) => {
+            const actual = Math.max(0, Math.min(delta, MAX_BUILDING_STACK_COUNT - currentCount));
+            return <button type="button" key={`plus-${delta}`} aria-label={`快速增加 ${delta.toLocaleString("zh-CN")} 台建筑，剩余 ${available}`} disabled={actual < 1 || available < actual} onClick={() => quickAdjust(delta)}>+{delta}</button>;
+          })}
+          {negativeShortcuts.map((delta) => <button type="button" key={`minus-${delta}`} aria-label={`减少 ${delta.toLocaleString("zh-CN")} 台建筑`} disabled={currentCount <= 1} onClick={() => quickAdjust(-delta)}>-{delta}</button>)}
+        </div>
         {targetCountError ? <em role="alert">{targetCountError}</em> : <small>当前 ×{currentCount.toLocaleString("zh-CN")} · 托盘 {name} ×{available.toLocaleString("zh-CN")}；增减均一次校验并原子提交。</small>}
       </div> : null}
       {entity.kind === "vein" ? <button className="danger-command extractor-recovery-all" type="button" disabled={entity.minerCount < 1} onClick={() => onRemove(entity.id, entity.minerCount)}><Trash2 size={15} /> 回收全部采矿机 ×{entity.minerCount}</button> : <button className="danger-command" type="button" onClick={() => onRemove(entity.id)}><Trash2 size={15} /> 回收设备</button>}

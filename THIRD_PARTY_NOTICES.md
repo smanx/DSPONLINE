@@ -2,7 +2,7 @@
 
 This inventory is generated from the locked npm runtime dependency trees. Third-party components remain under their own licenses; the project's PolyForm Noncommercial terms do not replace them.
 
-Inventory SHA-256: `ec6a7490383a8d4648409c55553ab6fdf6497f3a93ebadc170edc5e18dda64b6`
+Inventory SHA-256: `ab9ebc74714bd49983e9b80937ec43f405790278e0786818a974cafded801828`
 
 ## Direct Runtime Dependencies
 

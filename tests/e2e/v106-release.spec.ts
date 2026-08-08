@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-08-v1.0.34";
+const RELEASE_NOTE_ID = "2026-08-09-v1.0.35";
 
 async function seedV106Factory(page: Page, mobileUi: "legacy" | "next" = "legacy") {
   await page.addInitScript(({ releaseNoteId, selectedMobileUi }) => {
@@ -24,7 +24,7 @@ async function seedV106Factory(page: Page, mobileUi: "legacy" | "next" = "legacy
         { ...base, id: "v106_smelter", kind: "machine", position: { x: 260, y: 0 }, buildingId: "arc_smelter", recipeId: "iron_ingot", machineCount: 151, inputs: { iron_ore: 2_500 }, outputs: { iron_ingot: 1_200 }, progress: 0.625 },
       ],
       belts: [{ id: "v106_belt", planetId: "home", source: "v106_source", target: "v106_smelter", itemId: "iron_ore", lanes: 64, tier: 3, sorterTier: 3, progress: 0.75, priority: 2, stackSize: 4, monitorEnabled: true, totalTransferred: 12_345, congestion: 0.25, lastFlow: 900, routeMode: "manual", routeOffsetY: 160 }],
-      construction: { conveyor_belt_mk3: 5_000, arc_smelter: 0 },
+      construction: { conveyor_belt_mk3: 5_000, arc_smelter: 200_000 },
       constructionAutomation: { enabled: true, targetStock: {}, cursor: 0, totalCrafted: 0, lastCraftedId: null, destroyedByproducts: { hydrogen: 17 }, jobs: {} },
       blueprints: [{ id: "v106_mining_blueprint", name: "铁矿采集布局", entities: [], resourceAnchors: [{ key: "resource_1", resourceId: "iron_ore", offset: { x: 0, y: 0 }, extractorBuildingId: "mining_machine", minerCount: 3 }], belts: [], rotation: 0, mirror: "none", recipeOverrides: {} }],
       tray: {},
@@ -68,6 +68,10 @@ test("desktop exposes 4096 belt lanes, batch unstacking and vein-safe blueprint 
 
   await page.locator('.react-flow__node[data-id="v106_smelter"]').click();
   const target = inspector.getByLabel("建筑堆叠目标数量");
+  await inspector.getByRole("button", { name: /^快速增加 10,000 台建筑/ }).click();
+  await expect(target).toHaveValue("10151");
+  await inspector.getByRole("button", { name: "减少 100,000 台建筑", exact: true }).click();
+  await expect(target).toHaveValue("1");
   await target.fill("51");
   await target.blur();
   await expect(target).toHaveValue("51");
@@ -108,6 +112,10 @@ test("next mobile batch unstacking keeps 44px targets and fits 200 percent text"
     expect(box!.width).toBeGreaterThanOrEqual(44);
     expect(box!.height).toBeGreaterThanOrEqual(44);
   }
+  await mobile.getByRole("button", { name: "移动端快速增加 100,000 台建筑", exact: true }).click();
+  await expect(mobile.locator(".mobile-stack-batch-remove > header strong")).toContainText("100151");
+  await mobile.getByRole("button", { name: "移动端减少 100,000 台建筑", exact: true }).click();
+  await expect(mobile.locator(".mobile-stack-batch-remove > header strong")).toContainText("151");
   await target.fill("1");
   await target.blur();
   await expect(target).toHaveValue("1");

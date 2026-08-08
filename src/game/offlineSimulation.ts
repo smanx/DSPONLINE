@@ -7,6 +7,10 @@ import {
   runOfflineApproximation,
   type OfflineApproximationReport,
 } from "./offlineApproximation";
+import {
+  classifyOfflineWorkload,
+  type OfflineComplexityReport,
+} from "./offlineComplexity";
 
 export type OfflineSimulationWorkerRequest =
   | {
@@ -47,7 +51,7 @@ export type OfflineSimulationWorkerResponse =
     degradedReason?: string;
   }
   | { type: "complete"; id: number; state: GameState; totalSeconds: number; approximation?: OfflineApproximationReport }
-  | { type: "upload-complete"; id: number; payload: string; summary: CloudUploadSummary; offlineSeconds: number; returningReward: Array<{ itemId: string; amount: number }> }
+  | { type: "upload-complete"; id: number; payload: string; summary: CloudUploadSummary; offlineSeconds: number; returningReward: Array<{ itemId: string; amount: number }>; diagnostics?: CloudUploadPreparationDiagnostics }
   | { type: "cancelled"; id: number }
   | {
     type: "error";
@@ -79,6 +83,7 @@ export type OfflineSimulationPhase =
 export interface OfflineSimulationRunResult {
   state: GameState;
   approximation?: OfflineApproximationReport;
+  complexity: OfflineComplexityReport;
 }
 
 export interface OfflineSimulationChunkOptions {
@@ -121,6 +126,17 @@ export interface CloudUploadSummary {
   integrity?: "valid" | "invalid";
 }
 
+export interface CloudUploadPreparationDiagnostics {
+  sourceBytes: number;
+  payloadBytes: number;
+  totalMs: number;
+  inspectMs: number;
+  offlineMs: number;
+  serializeMs: number;
+  offlineSeconds: number;
+  skippedOffline: boolean;
+}
+
 export function runOfflineSimulationInWorker(
   state: GameState,
   seconds: number,
@@ -142,16 +158,25 @@ export function runOfflineSimulationInWorkerDetailed(
     wallSeconds?: number;
     deadlineMs?: number;
     onApproximationReport?: (report: OfflineApproximationReport) => void;
+    onComplexity?: (report: OfflineComplexityReport) => void;
+    complexity?: OfflineComplexityReport;
   } = {},
 ): Promise<OfflineSimulationRunResult> {
   if (typeof Worker === "undefined") return Promise.reject(new Error("当前浏览器不支持离线计算 Worker"));
+  const complexity = options.complexity ?? classifyOfflineWorkload(state, seconds);
+  options.onComplexity?.(complexity);
+  const classifierConservative = options.approximate === true && complexity.recommendedStrategy === "conservative";
+  const conservativeOnly = options.conservativeOnly === true || classifierConservative;
+  const conservativeReason = options.conservativeReason ?? (classifierConservative
+    ? `${complexity.warning ?? "当前设备资源不足以安全执行多份精确校准副本"}（${complexity.profile}）`
+    : undefined);
   const worker = new Worker(new URL("./offlineSimulation.worker.ts", import.meta.url), { type: "module", name: "offline-simulation" });
   const id = Date.now() + Math.floor(Math.random() * 1_000_000);
   const startedAt = performance.now();
   const deadlineMs = options.deadlineMs ?? (options.approximate === true
-    ? (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches ? 60_000 : 30_000)
+    ? complexity.recommendedDeadlineMs || (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches ? 60_000 : 30_000)
     : undefined);
-  const conservativeReserveMs = options.approximate === true && options.conservativeOnly !== true && deadlineMs !== undefined
+  const conservativeReserveMs = options.approximate === true && !conservativeOnly && deadlineMs !== undefined
     ? Math.min(5_000, Math.max(1_000, deadlineMs / 4))
     : 0;
   const workerDeadlineMs = deadlineMs === undefined ? undefined : Math.max(1_000, deadlineMs - conservativeReserveMs);
@@ -168,7 +193,7 @@ export function runOfflineSimulationInWorkerDetailed(
     };
     const failOrRetryConservative = (reason: string, terminalMessage: string) => {
       finish(() => {
-        if (options.approximate === true && options.conservativeOnly !== true && !options.signal?.aborted) {
+        if (options.approximate === true && !conservativeOnly && !options.signal?.aborted) {
           void runOfflineSimulationInWorkerDetailed(state, seconds, {
             ...options,
             conservativeOnly: true,
@@ -209,7 +234,7 @@ export function runOfflineSimulationInWorkerDetailed(
       if (message.type === "complete") {
         try { window.sessionStorage.setItem(OFFLINE_PERFORMANCE_SESSION_KEY, String(Math.max(0, performance.now() - startedAt))); } catch { /* optional diagnostics */ }
         if (message.approximation) options.onApproximationReport?.(message.approximation);
-        finish(() => resolve({ state: message.state, approximation: message.approximation }));
+        finish(() => resolve({ state: message.state, approximation: message.approximation, complexity }));
         return;
       }
       if (message.type === "cancelled") {
@@ -241,8 +266,8 @@ export function runOfflineSimulationInWorkerDetailed(
         wallSeconds: options.wallSeconds,
         registry,
         approximate: options.approximate === true,
-        conservativeOnly: options.conservativeOnly === true,
-        conservativeReason: options.conservativeReason,
+        conservativeOnly,
+        conservativeReason,
         deadlineMs: workerDeadlineMs,
       } satisfies OfflineSimulationWorkerRequest);
     } catch {
@@ -270,12 +295,13 @@ export function prepareCloudUploadInWorker(
     registry?: ContentPackRuntimeSnapshot;
     onProgress?: (progress: OfflineSimulationProgress) => void;
   } = {},
-): Promise<{ payload: string; summary: CloudUploadSummary; offlineSeconds: number; returningReward: Array<{ itemId: string; amount: number }> }> {
+): Promise<{ payload: string; summary: CloudUploadSummary; offlineSeconds: number; returningReward: Array<{ itemId: string; amount: number }>; diagnostics: CloudUploadPreparationDiagnostics }> {
   if (typeof Worker === "undefined") return Promise.reject(new Error("当前浏览器不支持云存档后台 Worker"));
   const worker = new Worker(new URL("./offlineSimulation.worker.ts", import.meta.url), { type: "module", name: "cloud-upload-preparation" });
   const id = Date.now() + Math.floor(Math.random() * 1_000_000);
   const registry = options.registry ?? createContentPackRuntimeSnapshot(loadContentPackRegistry());
   const now = options.now ?? Date.now();
+  const startedAt = performance.now();
   return new Promise((resolve, reject) => {
     let settled = false;
     const finish = (callback: () => void) => {
@@ -302,7 +328,17 @@ export function prepareCloudUploadInWorker(
         return;
       }
       if (message.type === "upload-complete") {
-        finish(() => resolve({ payload: message.payload, summary: message.summary, offlineSeconds: message.offlineSeconds, returningReward: message.returningReward }));
+        const diagnostics = message.diagnostics ?? {
+          sourceBytes: 0,
+          payloadBytes: typeof TextEncoder === "undefined" ? message.payload.length : new TextEncoder().encode(message.payload).byteLength,
+          totalMs: Math.max(0, performance.now() - startedAt),
+          inspectMs: 0,
+          offlineMs: 0,
+          serializeMs: 0,
+          offlineSeconds: message.offlineSeconds,
+          skippedOffline: options.skipOffline === true,
+        };
+        finish(() => resolve({ payload: message.payload, summary: message.summary, offlineSeconds: message.offlineSeconds, returningReward: message.returningReward, diagnostics }));
         return;
       }
       if (message.type === "cancelled") {

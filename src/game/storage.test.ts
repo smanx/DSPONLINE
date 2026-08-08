@@ -1037,6 +1037,8 @@ describe("game storage", () => {
     const loaded = importGame(exportGame(state));
     expect(loaded?.settings.autosaveIntervalSeconds).toBe(600);
     expect(loaded?.settings.autoShortageNavigation).toBe(true);
+    state.settings.autosaveIntervalSeconds = 1800;
+    expect(importGame(exportGame(state))?.settings.autosaveIntervalSeconds).toBe(1800);
     state.settings.autosaveIntervalSeconds = 0;
     expect(importGame(exportGame(state))?.settings.autosaveIntervalSeconds).toBe(0);
   });
