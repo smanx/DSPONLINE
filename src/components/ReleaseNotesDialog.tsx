@@ -9,7 +9,7 @@ export const CURRENT_RELEASE_NOTES = {
   date: "2026年8月8日",
   version: "1.0.34",
   title: "云存档、纯挂机与排行榜可信度更新",
-  summary: "1.0.34 修复历史唯一巨构堆叠和 Android 云上传，纯挂机停止复用已校准 Worker 并保留可恢复冻结边界，排行榜拆分实际结算吞吐与理论峰值，同时增加拉线候选建筑高亮。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+  summary: "1.0.34 修复历史唯一巨构堆叠和 Android 云上传，纯挂机停止复用已校准 Worker 并保留可恢复冻结边界；排行榜拆分实际结算吞吐、当前星球和全星区理论速率，同时增加拉线候选建筑高亮。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
   items: [
     {
       id: "cloud-stack",
@@ -28,8 +28,8 @@ export const CURRENT_RELEASE_NOTES = {
     },
     {
       id: "throughput",
-      title: "排行榜使用实际结算吞吐",
-      description: "相邻主云修订按累计生产增量形成实际吞吐窗口，旧理论峰值只作为诊断保留，不再与新口径混排或抬高银河综合分。",
+      title: "排行榜吞吐口径跨星球一致",
+      description: "相邻主云修订按累计生产增量形成实际吞吐窗口；当前星球与全星区理论速率分开显示，全星区速率按所有行星指标饱和求和，不再把当前星球快照误当全局。",
     },
     {
       id: "connection-highlight",

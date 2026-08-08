@@ -51,6 +51,39 @@ describe("local galaxy leaderboard", () => {
     expect(Number.isFinite(metrics.galaxyScore)).toBe(true);
   });
 
+  it("keeps modern galactic nominal metrics separate and marks old records as legacy", () => {
+    expect(normalizeLeaderboardMetrics({
+      peakThroughputPerMinute: 50,
+      theoreticalPeakThroughputPerMinute: 600,
+      activePlanetThroughputPerMinute: 100,
+      galacticThroughputPerMinute: 600,
+      nominalThroughputMetricVersion: "galactic-planet-sum-v1",
+    })).toMatchObject({
+      peakThroughputPerMinute: 50,
+      theoreticalPeakThroughputPerMinute: 600,
+      activePlanetThroughputPerMinute: 100,
+      galacticThroughputPerMinute: 600,
+      nominalThroughputMetricVersion: "galactic-planet-sum-v1",
+    });
+
+    expect(normalizeLeaderboardMetrics({
+      peakThroughputPerMinute: 75,
+      theoreticalPeakThroughputPerMinute: 450,
+    })).toMatchObject({
+      activePlanetThroughputPerMinute: 450,
+      galacticThroughputPerMinute: 450,
+      nominalThroughputMetricVersion: "legacy-active-planet-v1",
+    });
+    expect(normalizeLeaderboardMetrics({
+      peakThroughputPerMinute: 75,
+      galacticThroughputPerMinute: 600,
+    })).toMatchObject({
+      theoreticalPeakThroughputPerMinute: 600,
+      activePlanetThroughputPerMinute: 600,
+      galacticThroughputPerMinute: 600,
+    });
+  });
+
   it("shows a live local projection and marks it submitted after upload", () => {
     const account = getActiveAccount(createAccountState(100));
     account.ledger.uploadedWhiteMatrix = 400_000;

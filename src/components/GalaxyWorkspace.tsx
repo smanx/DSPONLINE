@@ -33,7 +33,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { ACCOUNT_AVATARS, getActiveAccount, type AccountProfileChanges, type AccountState } from "../game/account";
+import { ACCOUNT_AVATARS, getActiveAccount, getGalacticThroughputSnapshot, type AccountProfileChanges, type AccountState } from "../game/account";
 import { CloudApiError, compareCloudSave, downloadCloudSave, fetchCloudLeaderboard, fetchCloudSaveHistory, fetchSpeedrunLeaderboard, loginCloudAccount, logoutCloudAccount, markCloudSaveSynchronized, refreshCloudSaveMetadata, registerCloudAccount, restoreCloudSaveRevision, resumeCloudSession, setCloudLeaderboardVisibility, submitCloudLeaderboard, submitSpeedrunResult, summarizeCloudPayload, uploadCloudSave, type CloudLeaderboardEntry, type CloudSave, type CloudSaveMetadata, type CloudSaveSlot, type CloudSession, type CloudSyncState, type CloudUploadStage, type SpeedrunLeaderboardEntry } from "../game/cloud";
 import { exportGame, exportGameSlot, getSaveSlotSummaries, inspectSave, saveGameSlotVerified, type SaveSlotId } from "../game/storage";
 import {
@@ -150,6 +150,7 @@ export function GalaxyWorkspace({
   const account = getActiveAccount(accountState);
   const speedrunSummary = useMemo(() => getSpeedrunSummary(game), [game]);
   const metrics = useMemo(() => getLeaderboardMetrics(account.ledger), [account.ledger]);
+  const localNominalThroughput = useMemo(() => getGalacticThroughputSnapshot(game), [game]);
   const snapshot = useMemo(
     () => getLeaderboardSnapshot(account.profile, account.ledger, category, seasonId),
     [account.ledger, account.profile, category, seasonId, uploadRevision],
@@ -168,6 +169,12 @@ export function GalaxyWorkspace({
   }, [cloudEntries, cloudSession.status, cloudSession.user?.id, leaderboardStatus, snapshot.entries]);
   const displayedLocalEntry = displayEntries.find((entry) => entry.isLocal);
   const actualThroughputMetrics = displayedLocalEntry?.metrics ?? metrics;
+  const activePlanetThroughput = displayedLocalEntry?.metrics.activePlanetThroughputPerMinute
+    ?? localNominalThroughput.activePlanetValue;
+  const galacticThroughput = displayedLocalEntry?.metrics.galacticThroughputPerMinute
+    ?? localNominalThroughput.galacticValue;
+  const nominalThroughputMetricVersion = displayedLocalEntry?.metrics.nominalThroughputMetricVersion
+    ?? localNominalThroughput.metricVersion;
   const leaderboardVisible = cloudSession.status === "authenticated"
     ? cloudSession.user?.leaderboardVisible !== false
     : account.profile.privacy === "public";
@@ -629,7 +636,9 @@ export function GalaxyWorkspace({
                 <div><dt>白糖产量峰值</dt><dd>{formatMetric(displayedLocalEntry?.metrics.peakWhiteMatrixPerMinute ?? 0, 1)} <small>/min</small></dd></div>
                 <div><dt>戴森峰值</dt><dd><PowerValue valueKw={metrics.peakDysonPowerKw} /></dd></div>
                 <div><dt>实际结算吞吐</dt><dd>{formatMetric(actualThroughputMetrics.peakThroughputPerMinute, 1)} <small>/min</small></dd></div>
-                <div><dt>理论峰值产能</dt><dd>{formatMetric(metrics.theoreticalPeakThroughputPerMinute ?? 0, 1)} <small>/min</small></dd></div>
+                <div><dt>当前星球理论速率</dt><dd>{formatMetric(activePlanetThroughput, 1)} <small>/min</small></dd></div>
+                <div><dt>全星区理论速率</dt><dd>{formatMetric(galacticThroughput, 1)} <small>/min</small></dd></div>
+                <div><dt>全星区理论峰值</dt><dd>{formatMetric(displayedLocalEntry?.metrics.theoreticalPeakThroughputPerMinute ?? metrics.theoreticalPeakThroughputPerMinute ?? 0, 1)} <small>/min</small></dd></div>
               </dl>
               <button
                 className={`galaxy-upload-command galaxy-upload-command--${uploadState}`}
@@ -644,6 +653,7 @@ export function GalaxyWorkspace({
               {leaderboardError ? <p className="galaxy-leaderboard-error" role="alert"><CloudOff size={13} /><span>{leaderboardError}</span></p> : null}
               {category === "white-rate" && (displayedLocalEntry?.metrics.peakWhiteMatrixPerMinute ?? 0) <= 0 ? <p><Gauge size={13} /><span>至少需要两次相隔 60 个模拟秒的有效主云同步，服务端才会形成白糖产量区间。</span></p> : null}
               {category === "throughput" && (displayedLocalEntry?.metrics.peakThroughputPerMinute ?? 0) <= 0 ? <p><Factory size={13} /><span>至少需要两次相隔 60 个模拟秒的有效主云同步，服务端才会形成实际结算吞吐窗口；旧理论峰值不会与新口径混排。</span></p> : null}
+              {nominalThroughputMetricVersion === "legacy-active-planet-v1" ? <p><History size={13} /><span>该记录缺少完整行星指标，理论速率暂按旧存档的当前星球口径显示；实际结算吞吐不受此回退影响。</span></p> : null}
               <p><RadioTower size={13} /><span>{cloudSession.status === "authenticated" ? cloudSession.cloudSave ? "主云存档上传和十分钟自动同步成功后，服务端会自动更新排名。" : "请先上传当前主云存档；手动槽位不会加入排行榜。" : "访客可查看真实玩家排名；登录并上传主云存档后自动参与。"}</span></p>
             </aside>
           </div>
@@ -751,7 +761,7 @@ export function GalaxyWorkspace({
                 <article><Database size={18} /><span>白矩阵上传<strong>{formatMetric(metrics.uploadedWhiteMatrix)} <small>份</small></strong></span></article>
                 <article><Orbit size={18} /><span>戴森峰值<strong><PowerValue valueKw={metrics.peakDysonPowerKw} /></strong></span></article>
                 <article><Gauge size={18} /><span>实际结算吞吐<strong>{formatMetric(actualThroughputMetrics.peakThroughputPerMinute, 1)} <small>/min</small></strong></span></article>
-                <article><Factory size={18} /><span>理论峰值产能<strong>{formatMetric(metrics.theoreticalPeakThroughputPerMinute ?? 0, 1)} <small>/min</small></strong></span></article>
+                <article><Factory size={18} /><span>全星区理论峰值<strong>{formatMetric(metrics.theoreticalPeakThroughputPerMinute ?? 0, 1)} <small>/min</small></strong></span></article>
                 <article><Globe2 size={18} /><span>星际版图<strong>{metrics.exploredSystems} <small>星系</small> · {metrics.colonizedPlanets} <small>行星</small></strong></span></article>
                 <article><Trophy size={18} /><span>银河综合<strong>{formatMetric(metrics.galaxyScore)} <small>分</small></strong></span></article>
               </div>

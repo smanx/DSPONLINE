@@ -31,6 +31,11 @@ export interface LeaderboardMetrics {
   peakThroughputPerMinute: number;
   /** Nominal machine capacity retained as a separate diagnostic. */
   theoreticalPeakThroughputPerMinute?: number;
+  /** Nominal snapshot for the planet that was active when the save was uploaded. */
+  activePlanetThroughputPerMinute?: number;
+  /** Saturating sum of every explicit planetMetrics entry in the uploaded save. */
+  galacticThroughputPerMinute?: number;
+  nominalThroughputMetricVersion?: "galactic-planet-sum-v1" | "legacy-active-planet-v1";
   throughputMetricVersion?: "settled-total-produced-v1" | "legacy-nominal-v1";
   throughputWindowSeconds?: number;
   peakDysonPowerKw: number;
@@ -122,13 +127,21 @@ function calculateGalaxyScore(metrics: Omit<LeaderboardMetrics, "galaxyScore">):
 
 export function normalizeLeaderboardMetrics(value: unknown): LeaderboardMetrics {
   const source = value && typeof value === "object" ? value as Record<string, any> : {};
+  const nominalFallback = nonNegative(source.theoreticalPeakThroughputPerMinute
+    ?? source.galacticThroughputPerMinute
+    ?? source.peakThroughputPerMinute);
   const metrics = {
     energyGeneratedMj: nonNegative(source.energyGeneratedMj),
     uploadedWhiteMatrix: integer(source.uploadedWhiteMatrix),
     peakWhiteMatrixPerMinute: nonNegative(source.peakWhiteMatrixPerMinute),
     peakGenerationKw: nonNegative(source.peakGenerationKw),
     peakThroughputPerMinute: nonNegative(source.peakThroughputPerMinute),
-    theoreticalPeakThroughputPerMinute: nonNegative(source.theoreticalPeakThroughputPerMinute ?? source.peakThroughputPerMinute),
+    theoreticalPeakThroughputPerMinute: nominalFallback,
+    activePlanetThroughputPerMinute: nonNegative(source.activePlanetThroughputPerMinute ?? nominalFallback),
+    galacticThroughputPerMinute: nonNegative(source.galacticThroughputPerMinute ?? nominalFallback),
+    nominalThroughputMetricVersion: (source.nominalThroughputMetricVersion === "galactic-planet-sum-v1"
+      ? "galactic-planet-sum-v1"
+      : "legacy-active-planet-v1") as LeaderboardMetrics["nominalThroughputMetricVersion"],
     throughputMetricVersion: (source.throughputMetricVersion === "settled-total-produced-v1"
       ? "settled-total-produced-v1"
       : "legacy-nominal-v1") as LeaderboardMetrics["throughputMetricVersion"],

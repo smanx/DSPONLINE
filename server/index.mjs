@@ -21,6 +21,10 @@ import {
   LEADERBOARD_RESTRICTED_CODE,
   normalizeLeaderboardModeration,
 } from "./leaderboard-moderation.mjs";
+import {
+  aggregateGalacticFactoryMetric,
+  GALACTIC_NOMINAL_METRIC_VERSION,
+} from "./galactic-metrics.mjs";
 
 const scrypt = promisify(scryptCallback);
 // The envelope remains v2, but end-game saves can exceed the historical 8 MiB
@@ -424,13 +428,18 @@ function calculateGalaxyScore(metrics) {
 
 function normalizeMetrics(value) {
   const source = value && typeof value === "object" ? value : {};
+  const nominalFallback = normalizeMetric(source.theoreticalPeakThroughputPerMinute
+    ?? source.galacticThroughputPerMinute
+    ?? source.peakThroughputPerMinute);
   const metrics = {
     energyGeneratedMj: normalizeMetric(source.energyGeneratedMj),
     uploadedWhiteMatrix: normalizeMetric(source.uploadedWhiteMatrix, true),
     peakWhiteMatrixPerMinute: normalizeMetric(source.peakWhiteMatrixPerMinute),
     peakGenerationKw: normalizeMetric(source.peakGenerationKw),
     peakThroughputPerMinute: normalizeMetric(source.peakThroughputPerMinute),
-    theoreticalPeakThroughputPerMinute: normalizeMetric(source.theoreticalPeakThroughputPerMinute ?? source.peakThroughputPerMinute),
+    theoreticalPeakThroughputPerMinute: nominalFallback,
+    activePlanetThroughputPerMinute: normalizeMetric(source.activePlanetThroughputPerMinute ?? nominalFallback),
+    galacticThroughputPerMinute: normalizeMetric(source.galacticThroughputPerMinute ?? nominalFallback),
     peakDysonPowerKw: normalizeMetric(source.peakDysonPowerKw),
     exploredSystems: normalizeMetric(source.exploredSystems, true, 10_000),
     colonizedPlanets: normalizeMetric(source.colonizedPlanets, true, 100_000),
@@ -438,6 +447,9 @@ function normalizeMetrics(value) {
   metrics.galaxyScore = calculateGalaxyScore(metrics);
   return {
     ...metrics,
+    nominalThroughputMetricVersion: source.nominalThroughputMetricVersion === GALACTIC_NOMINAL_METRIC_VERSION
+      ? GALACTIC_NOMINAL_METRIC_VERSION
+      : "legacy-active-planet-v1",
     throughputMetricVersion: source.throughputMetricVersion === THROUGHPUT_METRIC_VERSION
       ? THROUGHPUT_METRIC_VERSION
       : "legacy-nominal-v1",
@@ -1443,14 +1455,17 @@ function leaderboardMetricsFromSave(save, peakWhiteMatrixPerMinute = 0, throughp
   const exploredSystems = Array.isArray(state.exploration?.unlockedSystemIds) ? new Set(state.exploration.unlockedSystemIds).size : 1;
   const colonizedPlanets = Array.isArray(state.exploration?.colonizedPlanetIds) ? new Set(state.exploration.colonizedPlanetIds).size : 1;
   const dysonPowerKw = saturatingMetricAdd(state.dysonSwarm?.generationKw, state.dysonSphere?.generationKw);
-  const theoreticalThroughput = numberAt(state.metrics?.totalItemsPerMinute);
+  const nominalThroughput = aggregateGalacticFactoryMetric(state, "totalItemsPerMinute");
   return normalizeMetrics({
     energyGeneratedMj: saturatingMetricProduct(generationKw, elapsedSeconds / 1000),
     uploadedWhiteMatrix: producedWhiteMatrix,
     peakWhiteMatrixPerMinute,
     peakGenerationKw: generationKw,
     peakThroughputPerMinute: throughputWindow?.valid ? throughputWindow.value : 0,
-    theoreticalPeakThroughputPerMinute: theoreticalThroughput,
+    theoreticalPeakThroughputPerMinute: nominalThroughput.galacticValue,
+    activePlanetThroughputPerMinute: nominalThroughput.activePlanetValue,
+    galacticThroughputPerMinute: nominalThroughput.galacticValue,
+    nominalThroughputMetricVersion: nominalThroughput.metricVersion,
     throughputMetricVersion: THROUGHPUT_METRIC_VERSION,
     throughputWindowSeconds: throughputWindow?.valid ? throughputWindow.windowSeconds : 0,
     peakDysonPowerKw: dysonPowerKw,
@@ -1467,6 +1482,9 @@ function mergeLeaderboardMetrics(previous, current, mergePreviousThroughput = tr
         ? numberAt(current[key])
         : Math.max(numberAt(previous[key]), numberAt(current[key])),
     ])),
+    activePlanetThroughputPerMinute: numberAt(current.activePlanetThroughputPerMinute),
+    galacticThroughputPerMinute: numberAt(current.galacticThroughputPerMinute),
+    nominalThroughputMetricVersion: current.nominalThroughputMetricVersion,
     throughputMetricVersion: THROUGHPUT_METRIC_VERSION,
     throughputWindowSeconds: numberAt(current.throughputWindowSeconds),
   });
@@ -1517,6 +1535,9 @@ function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.
   const metrics = mergeLeaderboardMetrics(previousServerMetrics, observed, previousUsesActualThroughput);
   const sameMetrics = previousServerMetrics
     && METRIC_KEYS.every((key) => numberAt(previousServerMetrics[key]) === numberAt(metrics[key]))
+    && numberAt(previousServerMetrics.activePlanetThroughputPerMinute) === numberAt(metrics.activePlanetThroughputPerMinute)
+    && numberAt(previousServerMetrics.galacticThroughputPerMinute) === numberAt(metrics.galacticThroughputPerMinute)
+    && previousServerMetrics.nominalThroughputMetricVersion === metrics.nominalThroughputMetricVersion
     && numberAt(previousServerMetrics.galaxyScore) === numberAt(metrics.galaxyScore);
   if (!force
     && isServerLeaderboardSubmission(previous)
@@ -1544,6 +1565,7 @@ function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.
       checksum: materialized.checksum,
       checkedAt: now,
       throughputMetricVersion: THROUGHPUT_METRIC_VERSION,
+      nominalThroughputMetricVersion: metrics.nominalThroughputMetricVersion,
       throughputWindow: throughputWindow.valid ? {
         fromRevision: throughputWindow.fromRevision,
         toRevision: throughputWindow.toRevision,

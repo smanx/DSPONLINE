@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { scryptSync } from "node:crypto";
+import { createHash, scryptSync } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ import Database from "better-sqlite3";
 import { cleanupExpiredAuthRecords, createCloudServer, createRateLimiter } from "./index.mjs";
 import { metricDay } from "./analytics.mjs";
 import { computeSaveStateChecksum } from "./save-integrity.mjs";
+import { aggregateGalacticFactoryMetric } from "./galactic-metrics.mjs";
 
 let directory;
 let server;
@@ -20,6 +21,7 @@ let restoreDrillStatusFile;
 let nodeHealthStatusFile;
 const adminToken = "test-admin-secret-1234567890-abcdef";
 const historicalUniqueMegastructureFixturePath = process.env.DSP_HISTORICAL_UNIQUE_MEGASTRUCTURE_FIXTURE;
+const galacticThroughputFixturePath = process.env.DSP_GALACTIC_THROUGHPUT_FIXTURE;
 function createSavePayload(state, savedAt = 123456) {
   const envelope = { formatVersion: 2, savedAt, state };
   return JSON.stringify({ ...envelope, checksum: computeSaveStateChecksum(envelope.formatVersion, state) });
@@ -1604,6 +1606,115 @@ test("keeps server-derived leaderboard values above the former metric cap", asyn
   assert.equal(entry.metrics.peakThroughputPerMinute, 1_500_000_000_000_000);
   assert.equal(entry.metrics.theoreticalPeakThroughputPerMinute, 1_500_000_000_000_000);
   assert.deepEqual(entry.verification.throughputWindow, { fromRevision: 1, toRevision: 2, elapsedSeconds: 60 });
+});
+
+test("uses all explicit planet metrics for nominal throughput regardless of the active planet", async () => {
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "galactic_nominal", password: "rank-pass-123", displayName: "全星区口径" }),
+  });
+  const headers = { authorization: `Bearer ${registered.body.token}` };
+  const payload = createSavePayload({
+    version: 24,
+    elapsedSeconds: 1_000,
+    activePlanetId: "home",
+    entities: [],
+    totalProduced: { iron_ingot: 1_000 },
+    metrics: { generationKw: 1_000, totalItemsPerMinute: 100, rayGenerationKw: 0 },
+    planetMetrics: {
+      home: { generationKw: 1_000, totalItemsPerMinute: 100, rayGenerationKw: 0 },
+      ashen: { generationKw: 2_000, totalItemsPerMinute: 200, rayGenerationKw: 0 },
+      abyss: { generationKw: 3_000, totalItemsPerMinute: 300, rayGenerationKw: 0 },
+    },
+    exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home", "ashen", "abyss"] },
+  });
+  assert.equal((await request("/api/cloud-save", {
+    method: "PUT", headers, body: JSON.stringify({ payload, expectedRevision: 0 }),
+  })).response.status, 200);
+
+  let ranking = await request("/api/leaderboard?category=throughput&seasonId=season_01");
+  let entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.id);
+  assert.equal(entry.metrics.peakThroughputPerMinute, 0);
+  assert.equal(entry.metrics.theoreticalPeakThroughputPerMinute, 600);
+  assert.equal(entry.metrics.activePlanetThroughputPerMinute, 100);
+  assert.equal(entry.metrics.galacticThroughputPerMinute, 600);
+  assert.equal(entry.metrics.nominalThroughputMetricVersion, "galactic-planet-sum-v1");
+  assert.equal(entry.verification.nominalThroughputMetricVersion, "galactic-planet-sum-v1");
+
+  const switchedPayload = mutateSavePayload(payload, (state) => {
+    state.elapsedSeconds += 60;
+    state.activePlanetId = "abyss";
+    state.metrics = { ...state.planetMetrics.abyss };
+  });
+  assert.equal((await request("/api/cloud-save", {
+    method: "PUT", headers, body: JSON.stringify({ payload: switchedPayload, expectedRevision: 1 }),
+  })).response.status, 200);
+  ranking = await request("/api/leaderboard?category=throughput&seasonId=season_01");
+  entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.id);
+  assert.equal(entry.metrics.peakThroughputPerMinute, 0);
+  assert.equal(entry.metrics.theoreticalPeakThroughputPerMinute, 600);
+  assert.equal(entry.metrics.activePlanetThroughputPerMinute, 300);
+  assert.equal(entry.metrics.galacticThroughputPerMinute, 600);
+});
+
+test("marks root-only nominal throughput as a legacy active-planet fallback", async () => {
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "legacy_nominal", password: "rank-pass-123", displayName: "旧口径存档" }),
+  });
+  const payload = createSavePayload({
+    version: 24,
+    elapsedSeconds: 1_000,
+    entities: [],
+    totalProduced: {},
+    metrics: { generationKw: 1_000, totalItemsPerMinute: 450, rayGenerationKw: 0 },
+    exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
+  });
+  assert.equal((await request("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.body.token}` },
+    body: JSON.stringify({ payload, expectedRevision: 0 }),
+  })).response.status, 200);
+  const ranking = await request("/api/leaderboard?category=throughput&seasonId=season_01");
+  const entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.id);
+  assert.equal(entry.metrics.theoreticalPeakThroughputPerMinute, 450);
+  assert.equal(entry.metrics.activePlanetThroughputPerMinute, 450);
+  assert.equal(entry.metrics.galacticThroughputPerMinute, 450);
+  assert.equal(entry.metrics.nominalThroughputMetricVersion, "legacy-active-planet-v1");
+  assert.equal(entry.verification.nominalThroughputMetricVersion, "legacy-active-planet-v1");
+});
+
+test("verifies the optional 19 MiB galactic-throughput fixture without modifying it", {
+  skip: !galacticThroughputFixturePath,
+}, async () => {
+  const sourceBefore = await readFile(galacticThroughputFixturePath);
+  const sourceHash = createHash("sha256").update(sourceBefore).digest("hex");
+  const payload = sourceBefore.toString("utf8");
+  const parsed = JSON.parse(payload);
+  const nominal = aggregateGalacticFactoryMetric(parsed.state, "totalItemsPerMinute");
+  assert.ok(Math.abs(nominal.activePlanetValue - 14_503_564_442.41) < 1);
+  assert.ok(Math.abs(nominal.galacticValue - 189_651_877_333.02) < 1);
+  assert.equal(nominal.metricVersion, "galactic-planet-sum-v1");
+  assert.equal(nominal.planetCount, 22);
+
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "fixture_nominal", password: "rank-pass-123", displayName: "真实夹具口径" }),
+  });
+  assert.equal((await request("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.body.token}` },
+    body: JSON.stringify({ payload, expectedRevision: 0 }),
+  })).response.status, 200);
+  const ranking = await request("/api/leaderboard?category=throughput&seasonId=season_01");
+  const entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.id);
+  assert.ok(Math.abs(entry.metrics.activePlanetThroughputPerMinute - nominal.activePlanetValue) < 1);
+  assert.ok(Math.abs(entry.metrics.galacticThroughputPerMinute - nominal.galacticValue) < 1);
+  assert.ok(Math.abs(entry.metrics.theoreticalPeakThroughputPerMinute - nominal.galacticValue) < 1);
+  assert.equal(entry.metrics.peakThroughputPerMinute, 0);
+
+  const sourceAfter = await readFile(galacticThroughputFixturePath);
+  assert.equal(createHash("sha256").update(sourceAfter).digest("hex"), sourceHash);
 });
 
 test("does not merge a legacy nominal throughput peak into the v2 settled-production metric", async () => {

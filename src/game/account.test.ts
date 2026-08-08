@@ -8,6 +8,7 @@ import {
   createAccountState,
   createLocalAccount,
   getActiveAccount,
+  getGalacticThroughputSnapshot,
   loadAccountState,
   recordAccountProgress,
   setActiveCloudBinding,
@@ -111,6 +112,32 @@ describe("local account state", () => {
       throughputWindowStartedAtSeconds: 5,
       throughputWindowStartedProduced: 10,
     });
+  });
+
+  it("uses the shared all-planet throughput rule regardless of the active planet", () => {
+    const game = createInitialState();
+    game.planetMetrics.home.totalItemsPerMinute = 100;
+    game.planetMetrics.ashen.totalItemsPerMinute = 200;
+    game.planetMetrics.abyss.totalItemsPerMinute = 300;
+    game.activePlanetId = "home";
+    game.metrics.totalItemsPerMinute = 100;
+
+    expect(getGalacticThroughputSnapshot(game)).toMatchObject({
+      activePlanetValue: 100,
+      galacticValue: 600,
+      metricVersion: "galactic-planet-sum-v1",
+    });
+    let account = recordAccountProgress(createAccountState(100), game, 100);
+    expect(getActiveAccount(account).ledger.peakThroughputPerMinute).toBe(600);
+
+    game.activePlanetId = "abyss";
+    game.metrics.totalItemsPerMinute = 300;
+    expect(getGalacticThroughputSnapshot(game)).toMatchObject({
+      activePlanetValue: 300,
+      galacticValue: 600,
+    });
+    account = recordAccountProgress(account, game, 200);
+    expect(getActiveAccount(account).ledger.peakThroughputPerMinute).toBe(600);
   });
 
   it("saturates extreme ranking totals without producing Infinity", () => {

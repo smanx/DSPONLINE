@@ -1,4 +1,5 @@
 import type { GameState } from "./types";
+import { aggregateGalacticFactoryMetric } from "../../server/galactic-metrics.mjs";
 
 export const ACCOUNT_STORAGE_KEY = "dsp-idle-network.account.v1";
 export const ACCOUNT_SCHEMA_VERSION = 2;
@@ -300,13 +301,15 @@ export function baselineAccountProgress(state: AccountState, game: GameState, ti
 }
 
 function getGenerationKw(game: GameState): number {
-  const metrics = Object.values(game.planetMetrics ?? {}).reduce((sum, metric) => saturatingAdd(sum, metric.generationKw), 0);
-  return Math.max(0, metrics);
+  return aggregateGalacticFactoryMetric(game, "generationKw").galacticValue;
 }
 
 function getThroughput(game: GameState): number {
-  const metrics = Object.values(game.planetMetrics ?? {}).reduce((sum, metric) => saturatingAdd(sum, metric.totalItemsPerMinute), 0);
-  return Math.max(0, metrics);
+  return getGalacticThroughputSnapshot(game).galacticValue;
+}
+
+export function getGalacticThroughputSnapshot(game: GameState) {
+  return aggregateGalacticFactoryMetric(game, "totalItemsPerMinute");
 }
 
 export const ACTUAL_THROUGHPUT_WINDOW_SECONDS = 60;

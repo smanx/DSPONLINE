@@ -290,7 +290,7 @@ API 表面：
 - `POST /api/leaderboard/visibility`
 - `POST /api/feedback`、`POST /api/errors`
 
-密码使用 scrypt 派生并采用 timing-safe 比较；会话 token 和邮箱动作 token 只保存 SHA-256，登录会话默认有效期 30 天，邮箱动作链接有效期 30 分钟。注册与四槽云存档只要求安全入口和有效登录会话；排行榜匿名只读，加入要求有效登录会话和 `main` 存档，不要求邮箱验证。服务端忽略旧客户端携带的指标：发电、戴森等从主云快照提取，白糖和实际结算吞吐分别从相邻主云修订的累计量增量计算，窗口至少跨 60 个模拟秒。旧 `peakThroughputPerMinute` 理论峰值保存在独立诊断字段和 legacy 审计信息中，不得与 `settled-total-produced-v1` 排名值合并；启动时按用户 ID 排序幂等回填已有主存档。`leaderboardVisible=false` 会移除该账号的公开提交，后续主槽同步不会重新加入。
+密码使用 scrypt 派生并采用 timing-safe 比较；会话 token 和邮箱动作 token 只保存 SHA-256，登录会话默认有效期 30 天，邮箱动作链接有效期 30 分钟。注册与四槽云存档只要求安全入口和有效登录会话；排行榜匿名只读，加入要求有效登录会话和 `main` 存档，不要求邮箱验证。服务端忽略旧客户端携带的指标：发电、戴森等从主云快照提取，白糖和实际结算吞吐分别从相邻主云修订的累计量增量计算，窗口至少跨 60 个模拟秒。实际吞吐固定为 `settled-total-produced-v1`，绝不从机器标称速率补数；名义吞吐另由共享 `aggregateGalacticFactoryMetric()` 处理，显式 `planetMetrics` 存在时以所有唯一行星键的同名非负有限指标做饱和和，并同时返回 `activePlanetThroughputPerMinute`、`galacticThroughputPerMinute` 与 `galactic-planet-sum-v1`。根 `state.metrics` 只是当前星球 UI 快照，只有旧存档缺少或为空 `planetMetrics` 时才能作为 `legacy-active-planet-v1` 回退。非法、负数、非有限或字符串行星值按零忽略并计数；JSON 重复键遵循解析器的最后键值语义。历史 `peakThroughputPerMinute` 理论峰值保存在独立诊断字段和 legacy 审计信息中，不得与实际排名值合并；启动时按用户 ID 排序幂等回填已有主存档。`leaderboardVisible=false` 会移除该账号的公开提交，后续主槽同步不会重新加入。
 
 `app_state.leaderboardModeration` 是只存在服务器的可选内部状态，不改变 GameState、存档 envelope、云 schema 或 SQLite layout。合法记录只允许固定的 `blocked / SAVE_DATA_INTEGRITY`、有界来源和时间戳，并且必须引用仍存在的账号。受限账号从五个公开榜单过滤，手动刷新和重新开启可见性返回 `LEADERBOARD_RESTRICTED`，主档上传、历史恢复和启动回填也不能重建提交；登录、云档读写、历史恢复和账号导出继续可用。账号注销才清理该内部标记。`server/moderate-leaderboard.mjs` 默认用只读/query-only SQLite dry-run，先按服务器综合榜排序锁定唯一第一名，再核对受保护显示名、主档 revision、SHA-256、envelope 和官方矿脉不变量；实际写入要求验证备份和服务已停止确认，并在单个事务中写标记、删除提交和追加不含 PII 的审计，云档正文表不参与该事务。
 

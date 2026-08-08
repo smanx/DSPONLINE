@@ -155,7 +155,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toContainText("历史唯一巨构可安全上传");
   await expect(releaseNotes).toContainText("Android 云上传绕过损坏压缩桥接");
   await expect(releaseNotes).toContainText("纯挂机停止与恢复更清晰");
-  await expect(releaseNotes).toContainText("排行榜使用实际结算吞吐");
+  await expect(releaseNotes).toContainText("排行榜吞吐口径跨星球一致");
   await expect(releaseNotes).toContainText("拉线候选建筑同步高亮");
   await expect(releaseNotes).toContainText("存档与在线协议保持兼容");
   await expect(releaseNotes).not.toContainText("科研不再阻断快速结算");
@@ -5642,6 +5642,12 @@ test("galaxy rankings are public to visitors and refresh from the main cloud sav
     peakWhiteMatrixPerMinute: 12_000,
     peakGenerationKw: 2_300_000,
     peakThroughputPerMinute: 150_000,
+    theoreticalPeakThroughputPerMinute: 700_000,
+    activePlanetThroughputPerMinute: 50_000,
+    galacticThroughputPerMinute: 600_000,
+    nominalThroughputMetricVersion: "galactic-planet-sum-v1",
+    throughputMetricVersion: "settled-total-produced-v1",
+    throughputWindowSeconds: 60,
     peakDysonPowerKw: 1_500_000,
     exploredSystems: 2,
     colonizedPlanets: 4,
@@ -5737,6 +5743,10 @@ test("galaxy rankings are public to visitors and refresh from the main cloud sav
   await galaxy.getByRole("tab", { name: /白糖产量/ }).click();
   await expect(localRow.locator(".galaxy-rank-value")).toContainText("1.2万");
   await expect(galaxy).toContainText("白糖产量峰值");
+  await expect(galaxy.locator(".galaxy-upload-panel")).toContainText("实际结算吞吐15万");
+  await expect(galaxy.locator(".galaxy-upload-panel")).toContainText("当前星球理论速率5万");
+  await expect(galaxy.locator(".galaxy-upload-panel")).toContainText("全星区理论速率60万");
+  await expect(galaxy.locator(".galaxy-upload-panel")).toContainText("全星区理论峰值70万");
 
   await galaxy.getByRole("tab", { name: /累计发电/ }).click();
   await expect(localRow.locator(".galaxy-rank-value")).toContainText("15亿");
