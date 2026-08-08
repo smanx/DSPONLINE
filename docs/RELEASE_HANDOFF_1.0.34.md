@@ -1,20 +1,20 @@
 # DSPidle2 1.0.34 开发交接
 
-> Role: develop
+> Role: develop → release complete
 >
-> 状态：代码和完整开发门禁已完成；跨星球真实存档只读核验已完成；Web/API/Windows 诊断制品已重建。Android 长期签名凭据未加载，正式 Android、稳定下载页和可发布 bundle 尚未完成；尚未连接 VPS、修改生产数据库、切换生产版本或更新公网下载页。
+> 最终状态（2026-08-08）：Release Agent 已加载受保护的既有 Android 长期签名材料并完成全部正式门禁；香港、上海 Web/API、上海下载页及 Android/Windows 稳定应用包均已发布。当前 Build ID 为 `1.0.34+4a7d51241424`，完整证据和回滚指针见 [releases/1.0.34.md](./releases/1.0.34.md)。本文后续“阻塞”“不得发布”文字保留为开发交接时的历史条件，已由第 13 节完成记录取代。
 >
-> 当前生产基线：`1.0.33+2bd81de8d7f1`；目标候选：`1.0.34 / GameState v46 / envelope v2 / cloud schema v7 / SQLite layout v2`。
+> 当前生产基线：`1.0.34+4a7d51241424 / GameState v46 / envelope v2 / cloud schema v7 / SQLite layout v2`；直接代码回滚为 `1.0.33+2bd81de8d7f1`。
 
 ## 1. 交接结论
 
-本批需求已在隔离工作树 `D:\GameDev\DSPidle2-release-1.0.34` 完成。当前唯一有效源码提交为 `4a7d51241424f4289c629377e896ec70f41cbe54`，Build ID 为 `1.0.34+4a7d51241424`。此前 `9f9714f973b0` 的 Android/Web/API/Windows/下载页候选属于旧代码口径，必须作废，不得发布。当前 Web/API/Windows 诊断制品和 source manifest 已绑定新提交；Android 长期签名门禁未完成，因此不能宣称已有完整可发布不可变 bundle。
+本批需求已在隔离工作树 `D:\GameDev\DSPidle2-release-1.0.34` 完成。当前唯一有效源码提交为 `4a7d51241424f4289c629377e896ec70f41cbe54`，Build ID 为 `1.0.34+4a7d51241424`。此前 `9f9714f973b0` 的 Android/Web/API/Windows/下载页候选属于旧代码口径，必须作废，不得发布。开发交接当时 Web/API/Windows 诊断制品和 source manifest 已绑定新提交，但 Android 长期签名门禁尚未完成；Release Agent 后续已在授权签名环境中补齐正式 Android、下载页和不可变 bundle，并完成生产发布。
 
 完整开发门禁（当前提交）为 Vitest `842 passed / 16 skipped / 0 failed`、服务端 `53 passed / 1 skipped / 0 failed`（设置 `DSP_GALACTIC_THROUGHPUT_FIXTURE` 后实际 19 MiB 夹具测试通过）、运维 `6/6`、原生工具 `8/8`、`npm run typecheck`、`npm run build` 和 `git diff --check` 通过。当前专项 Playwright `game-flow + v130 + v132` 为 `121 passed / 0 failed`；全量其他 E2E 的可选夹具跳过仍按前一轮记录，未伪报全量命令再次完成。150 文件 source manifest 已生成并验证；正式 9/10 文件下载/bundle manifest 因 Android 签名阻塞未生成，只有明确标记的 diagnostic/partial 清单。
 
 三份玩家存档只在内存副本和隔离临时服务中测试，测试前后 SHA-256 保持不变。没有将玩家存档提交到 Git、上传生产账号或写入生产数据库。
 
-开发证据和代码制品路径已记录，但签名门禁未齐全。Release Agent 当前不得开始发布；只有加载并验证与 1.0.33 连续的长期 Android 签名凭据、重新生成 Android stable feed、下载页和完整 bundle/manifest 后，才可进入发布审核。本文不授权生产变更。
+以上为开发角色交接时的门禁状态。Release Agent 后续已验证与 1.0.33 连续的长期 Android 证书，重新生成正式 APK、stable feed、下载页和完整 bundle/manifest，并在用户明确授权下完成生产发布；最终结果以第 13 节和 [正式发布记录](./releases/1.0.34.md) 为准。
 
 ## 0. 当前权威补充：跨星球吞吐修复
 
@@ -34,7 +34,7 @@
 | Compatibility | GameState v46、envelope v2、cloud schema v7、SQLite layout v2 不变；本地存档、云冲突、速通和普通排行榜身份规则保持 |
 | Target platforms | Chrome、Edge、PWA、Windows Electron、Android Chrome/WebView；桌面和手机横竖屏 |
 | Required tests | 全量单元/server/ops/native/build/E2E；三份真实存档；四槽云、gzip/raw、冲突、取消、恢复、Android 覆盖升级和原生签名 |
-| Release target | `1.0.34`，由独立 Release Agent 执行；本文不授权生产变更 |
+| Release target | `1.0.34`，独立 Release Agent 已于 2026-08-08 完成 |
 | Rollback | 只回滚 Web/API/下载目录和应用更新指针到 1.0.33；不得恢复旧数据库、删除云修订、改写历史堆叠或清理未提交纯挂机检查点 |
 
 ## 3. 已实现内容
@@ -190,13 +190,13 @@ Web、API、下载站归档解包后分别与源目录逐文件比较，`126/126
 - 实际结算吞吐需要两次至少相隔 60 个模拟秒的主云修订。新口径上线初期部分玩家会显示尚无有效窗口，榜单数字也可能显著低于旧理论峰值；这是口径修复，不应通过回填理论值掩盖。
 - 根项目 audit 仍有 1 个 moderate、4 个 high 的既有依赖告警；本批没有在 P0 热修中升级依赖。
 
-## 10. Release Agent 边界与回滚
+## 10. Release Agent 边界与回滚（发布前历史要求）
 
 Release Agent 只能使用下方第 12 节列出的当前 source commit `4a7d51241424...` 制品；文档中旧 `9f9714f...` bundle 全部作废。不得从本交接的后续 docs-only 提交重建二进制，不得在服务器上编辑源码，不得创建新 Android 证书。当前 Android 签名门禁未完成，禁止发布。
 
 发布前生产基线和直接回滚目标均为 `1.0.33+2bd81de8d7f1`。发布需要分别备份香港与上海 SQLite 并验证，不得代理、复制或合并两地数据库。回滚只切换代码和下载指针，不恢复旧数据库，不删除新云修订，不改写玩家历史巨构堆叠，也不清理客户端纯挂机恢复记录。
 
-## 11. 给 Release Agent 的交接提示词
+## 11. 给 Release Agent 的交接提示词（已执行）
 
 ```text
 Role: release
@@ -241,7 +241,7 @@ CORS、未登录 401、四槽云读取、Android raw 云上传、Web gzip 上传
 PEM、密码、token、keystore、证书私钥或玩家存档正文。
 ```
 
-## 12. 当前提交、制品与阻塞（权威，以本节为准）
+## 12. 开发交接时的提交、制品与阻塞（历史）
 
 - Git：`4a7d51241424f4289c629377e896ec70f41cbe54`；Build ID：`1.0.34+4a7d51241424`；工作树代码在 `D:\GameDev\DSPidle2-release-1.0.34`。
 - Source manifest：`D:\GameDev\DSPidle2-release-1.0.34\artifacts\release-manifests\1.0.34-4a7d51241424.json`，150 文件，聚合 SHA-256 以该清单为准，已执行 verify。
@@ -251,6 +251,16 @@ PEM、密码、token、keystore、证书私钥或玩家存档正文。
 - Android 诊断包（禁止发布）：`D:\GameDev\DSPidle2-release-1.0.34\release\bundle-1.0.34-4a7d51241424-partial\diagnostic\android\dsp-idle-1.0.34-1000034-unsigned.apk`，4,776,895 字节，SHA-256 `3e30d7b2e0e908178afb985b6f7814699ebf68e3e0f77fd59ae6299c2bb253f9`。它仅证明当前代码可构建，不满足长期证书、v2/v3 正式发布门禁。
 - Partial manifest：`D:\GameDev\DSPidle2-release-1.0.34\artifacts\release-manifests\1.0.34-4a7d51241424-partial.json`，8 文件，已 verify；diagnostic 下载页清单为 `...-diagnostic-download.json`，10 文件，已 verify。两者都不是发布清单。
 
-### Release Agent 阻塞
+### Release Agent 阻塞（历史，已解除）
 
-当前环境没有加载 1.0.33 使用的 Android 长期签名凭据，故不能生成正式 `dsp-idle-1.0.34-1000034.apk`、稳定 Android JSON、正式下载页、9 文件下载清单和 10 文件 bundle 清单。不得使用 `1111.pem`（它是 VPS SSH 密钥）或创建新证书替代。取得授权的 Release Agent 应在安全签名环境中从当前 commit 重建 Android，验证 v2/v3、证书连续性和覆盖升级保档，再继续生成正式清单；在此之前 Release Agent 不得发布。
+开发交接当时的环境没有加载 1.0.33 使用的 Android 长期签名凭据，因此该阶段不能生成正式 `dsp-idle-1.0.34-1000034.apk`、稳定 Android JSON、正式下载页、9 文件下载清单和 10 文件 bundle 清单。发布阶段未使用 VPS SSH 密钥或新建证书替代；Release Agent 已在授权签名环境中从当前 commit 重建 Android，验证 v2/v3、证书连续性与覆盖升级保档，并补齐正式清单后完成发布。
+
+## 13. Release Agent 完成记录（最终权威）
+
+- 最终源码仍为 clean commit `4a7d51241424f4289c629377e896ec70f41cbe54`；发布目录和 Build ID 为 `1.0.34-4a7d51241424` / `1.0.34+4a7d51241424`。
+- 正式 source/download/bundle manifests 分别为 150、9、10 文件，聚合 SHA-256 为 `fe8844da07294e91f8938715fb8c1b861c5785129854a653c8c0e8f1c3da6581`、`e1d215eeea62374439a28d24081852b40a80f8231464a81f12e092d169b414d6`、`701d73f20dbd5c589d4a1ca827e8f039e511b78f806c5fc50a704a5c0f6fd370`。
+- 正式 Android APK 为 4,841,083 字节、SHA-256 `d556e6f3690cbe709d0f493019b55fdadc20658ef865bef9cbc71b1b1511a49e`；v2/v3、zipalign、批准证书连续性和 1.0.33→1.0.34 覆盖升级通过。没有创建新证书，也没有使用 VPS PEM 签名应用。
+- 正式 Windows installer 为 103,255,059 字节、SHA-256 `97c46f2de17539cc79886f10eeba0b3a9c94083671624b88f22970ab500f112f`；blockmap SHA-256 为 `40a5d812827a4343a816e766697277aaace9cb3d4ca5a461307f670d29eacaff`。两者按历史策略保持 `NotSigned`。
+- 香港、上海 Web/API 当前均为 `1.0.34-4a7d51241424`，直接回滚为 `1.0.33-2bd81de8d7f1`；上海下载页当前为 `download-site-1.0.34-4a7d51241424`，直接回滚为 `download-site-1.0.33-2bd81de8d7f1-r2`。
+- 两地发布前 Backup API 快照、未激活目录、生产依赖、隔离启动、原子切换、公网 9 文件完整哈希、Range/cache、当前/历史资源和五场 Chrome smoke 均通过。香港大库启动窗口的 502/504 已收敛，最近 15 分钟为 0；两地服务 active、`NRestarts=0`。
+- 最终、可审计且包含备份路径、制品哈希、观察窗口和回滚命令的记录见 [1.0.34 正式发布记录](./releases/1.0.34.md)。
