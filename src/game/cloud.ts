@@ -121,11 +121,27 @@ export interface CloudUploadOptions {
   verified?: boolean;
   signal?: AbortSignal;
   onStage?: (stage: CloudUploadStage) => void;
+  /** Build-selected in production; injectable so native transport contracts can be unit tested. */
+  runtimePlatform?: CloudUploadRuntimePlatform;
 }
 
 const CLOUD_COMPRESSION_MIN_BYTES = 256 * 1024;
 const CLOUD_COMPRESSION_TIMEOUT_MS = 5_000;
 const CLOUD_UPLOAD_RAW_FALLBACK_LIMIT_BYTES = 30 * 1024 * 1024;
+
+function assertRawCloudRetryAllowed(rawBodyBytes: number): void {
+  if (rawBodyBytes <= CLOUD_UPLOAD_RAW_FALLBACK_LIMIT_BYTES) return;
+  throw new CloudApiError("压缩失败且原始请求超过安全上限（30 MiB），本地存档未修改", 413, {
+    code: "CLOUD_UPLOAD_RAW_FALLBACK_TOO_LARGE",
+    originalBytes: rawBodyBytes,
+  });
+}
+
+type CloudUploadRuntimePlatform = "web" | "desktop" | "android";
+
+function cloudUploadRuntimePlatform(): CloudUploadRuntimePlatform {
+  return typeof __APP_PLATFORM__ === "undefined" ? "web" : __APP_PLATFORM__;
+}
 
 export interface CloudLeaderboardEntry {
   userId: string;
@@ -610,14 +626,9 @@ export async function uploadCloudSaveWithOptions(
   const rawBody = JSON.stringify({ payload, expectedRevision });
   const rawBodyBytes = typeof Blob !== "undefined" ? new Blob([rawBody]).size : new TextEncoder().encode(rawBody).byteLength;
   options.onStage?.("compressing");
-  const compressed = await compressCloudRequestBody(rawBody, options.signal);
+  const compressed = await compressCloudRequestBody(rawBody, options.signal, options.runtimePlatform);
   if (options.signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
-  if (!compressed && rawBodyBytes > CLOUD_UPLOAD_RAW_FALLBACK_LIMIT_BYTES) {
-    throw new CloudApiError("压缩失败且原始请求超过安全上限（30 MiB），本地存档未修改", 413, {
-      code: "CLOUD_UPLOAD_RAW_FALLBACK_TOO_LARGE",
-      originalBytes: rawBodyBytes,
-    });
-  }
+  if (!compressed) assertRawCloudRetryAllowed(rawBodyBytes);
 
   const send = async (body: BodyInit, headers?: Record<string, string>): Promise<CloudSaveMetadata> => {
     options.onStage?.("sending");
@@ -631,24 +642,37 @@ export async function uploadCloudSaveWithOptions(
     return { ...result.cloudSave, slot };
   };
 
+  const resolveRawRetryFailure = async (retryError: unknown): Promise<CloudSaveMetadata> => {
+    if (retryError instanceof CloudApiError && retryError.status === 409) {
+      const finalConfirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, options.signal);
+      if (finalConfirmation.state === "confirmed" && finalConfirmation.cloudSave) return finalConfirmation.cloudSave;
+      throw retryError;
+    }
+    if (!isUncertainCloudRequestError(retryError)) throw retryError;
+    const finalConfirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, options.signal);
+    if (finalConfirmation.state === "confirmed" && finalConfirmation.cloudSave) return finalConfirmation.cloudSave;
+    throw unknownCloudUploadState();
+  };
+
   try {
     return await send(compressed?.body ?? rawBody, compressed?.headers);
   } catch (error) {
+    if (compressed && error instanceof CloudApiError && error.status === 400 && error.payload.code === "REQUEST_ENCODING_INVALID") {
+      assertRawCloudRetryAllowed(rawBodyBytes);
+      try {
+        return await send(rawBody);
+      } catch (retryError) {
+        return resolveRawRetryFailure(retryError);
+      }
+    }
     if (!isUncertainCloudRequestError(error)) throw error;
     const confirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, options.signal);
     if (confirmation.state === "confirmed" && confirmation.cloudSave) return confirmation.cloudSave;
+    assertRawCloudRetryAllowed(rawBodyBytes);
     try {
       return await send(rawBody);
     } catch (retryError) {
-      if (retryError instanceof CloudApiError && retryError.status === 409) {
-        const finalConfirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, options.signal);
-        if (finalConfirmation.state === "confirmed" && finalConfirmation.cloudSave) return finalConfirmation.cloudSave;
-        throw retryError;
-      }
-      if (!isUncertainCloudRequestError(retryError)) throw retryError;
-      const finalConfirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, options.signal);
-      if (finalConfirmation.state === "confirmed" && finalConfirmation.cloudSave) return finalConfirmation.cloudSave;
-      throw unknownCloudUploadState();
+      return resolveRawRetryFailure(retryError);
     }
   }
 }
@@ -657,10 +681,15 @@ export async function uploadCloudSaveWithOptions(
  * Compress a request while continuously consuming the output stream. Starting
  * the writer before the reader can deadlock on browser stream backpressure.
  */
-export async function compressCloudRequestBody(rawBody: string, signal?: AbortSignal): Promise<{ body: Blob; headers: Record<string, string> } | null> {
+export async function compressCloudRequestBody(
+  rawBody: string,
+  signal?: AbortSignal,
+  runtimePlatform: CloudUploadRuntimePlatform = cloudUploadRuntimePlatform(),
+): Promise<{ body: Blob; headers: Record<string, string> } | null> {
   if (signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
   if (
-    getDesktopBridge()
+    runtimePlatform === "android"
+    || getDesktopBridge()
     || typeof CompressionStream === "undefined"
     || typeof TextEncoder === "undefined"
     || typeof Blob === "undefined"

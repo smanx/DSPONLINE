@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { getInfiniteResearchCompletionBasisPoints, getInfiniteResearchCostString, isInfiniteResearchComplete } from "./infiniteResearch";
+import {
+  getInfiniteResearchCompletionBasisPoints,
+  getInfiniteResearchCostBigInt,
+  getInfiniteResearchCostString,
+  isInfiniteResearchComplete,
+  settleInfiniteResearchBudget,
+} from "./infiniteResearch";
 import type { InfiniteResearchId } from "./types";
 
 const EXPECTED: Record<Exclude<InfiniteResearchId, "continuum_simulation">, Record<number, string>> = {
@@ -29,5 +35,53 @@ describe("infinite research cost curves", () => {
     const cost = getInfiniteResearchCostString("galactic_logistics", 999);
     expect(getInfiniteResearchCompletionBasisPoints(cost, "galactic_logistics", 999)).toBe(10_000);
     expect(getInfiniteResearchCompletionBasisPoints((BigInt(cost) / 2n).toString(), "galactic_logistics", 999)).toBe(5_000);
+  });
+
+  it("settles matrix compression from Lv.263 across exact BigInt costs", () => {
+    const first = getInfiniteResearchCostBigInt("matrix_compression", 263);
+    const second = getInfiniteResearchCostBigInt("matrix_compression", 264);
+    const result = settleInfiniteResearchBudget(
+      "matrix_compression",
+      263,
+      "0",
+      first + second,
+      true,
+    );
+
+    expect(result).toMatchObject({ level: 265, progress: "0", completedLevels: [264, 265] });
+    expect(result.consumed).toBe(first + second);
+  });
+
+  it("stops after one exact level when automatic infinite research is disabled", () => {
+    const first = getInfiniteResearchCostBigInt("matrix_compression", 263);
+    const second = getInfiniteResearchCostBigInt("matrix_compression", 264);
+    const result = settleInfiniteResearchBudget(
+      "matrix_compression",
+      263,
+      "0",
+      first + second,
+      false,
+    );
+
+    expect(result).toMatchObject({ level: 264, progress: "0", completedLevels: [264] });
+    expect(result.consumed).toBe(first);
+  });
+
+  it("settles an already-funded level without requiring one extra matrix", () => {
+    const cost = getInfiniteResearchCostBigInt("matrix_compression", 263);
+    const result = settleInfiniteResearchBudget(
+      "matrix_compression",
+      263,
+      cost.toString(),
+      0n,
+      true,
+    );
+
+    expect(result).toMatchObject({
+      level: 264,
+      progress: "0",
+      consumed: 0n,
+      completedLevels: [264],
+    });
   });
 });

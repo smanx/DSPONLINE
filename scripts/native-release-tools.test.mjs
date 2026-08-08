@@ -122,6 +122,7 @@ test("static download page generator validates manifests and renders current pac
     assert.match(page, new RegExp(`下载 Android ${packageVersion}`));
     assert.match(page, new RegExp(sha256(installer)));
     assert.match(page, new RegExp(sha256(apk)));
+    assert.match(page, /<link rel="icon" href="\/icon\.svg" type="image\/svg\+xml" \/>/);
     assert.deepEqual(
       await readFile(path.join(temporary, "icon.svg")),
       await readFile(path.join(root, "public", "icon.svg")),

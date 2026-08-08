@@ -68,7 +68,7 @@ function fixtureData() {
           seasonId: "season_01",
           visible: true,
           metrics: { galaxyScore: 1000 },
-          verification: { strategy: "main-cloud-save-v1", cloudRevision: 4, checksum },
+          verification: { strategy: "main-cloud-save-v2", cloudRevision: 4, checksum },
         },
         [`season_00:${userId}`]: {
           userId,

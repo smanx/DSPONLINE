@@ -10,6 +10,13 @@ import {
   type SimulationAdvanceSession,
 } from "./engine";
 import type { FactoryEntity, GameState, ItemId } from "./types";
+import {
+  advanceResearchMacroInPlace,
+  captureResearchMacroCalibrationSnapshot,
+  createResearchMacroLedger,
+  createResearchMacroLedgerFromSnapshots,
+  type ResearchMacroLedger,
+} from "./researchMacro";
 
 /**
  * This flag is deliberately a device preference.  It is not part of
@@ -36,10 +43,21 @@ export interface OfflineApproximationReport {
   validationScope?: "all-state" | "leaderboard-critical";
   /** Diagnostic only; ordinary inventory/cache drift does not reject fast-30s-v1. */
   maxNonCriticalError?: number;
+  /** Explicit v2 completion semantics; fallback no longer implies unbounded replay. */
+  settlementStatus?: "approximate" | "conservative" | "bounded-exact" | "invalid-source" | "cancelled";
+  /** Real Worker computation time, separate from simulated duration. */
+  wallClockMs?: number;
+  /** True when the real-time calibration budget forced a conservative result. */
+  deadlineReached?: boolean;
+  researchInvested?: string;
 }
 
 export type OfflineApproximationResult =
   | { status: "approximate"; state: GameState; report: OfflineApproximationReport }
+  | { status: "conservative"; state: GameState; report: OfflineApproximationReport }
+  | { status: "bounded-exact"; state: GameState; report: OfflineApproximationReport }
+  | { status: "invalid-source"; report: OfflineApproximationReport }
+  | { status: "cancelled"; report: OfflineApproximationReport }
   | { status: "fallback"; report: OfflineApproximationReport }
   | { status: "ineligible"; report: OfflineApproximationReport };
 
@@ -135,8 +153,10 @@ const VALIDATION_SECONDS = 5;
 export const FAST_OFFLINE_CALIBRATION_SECONDS = 30;
 const FAST_OFFLINE_CALIBRATION_SLICE_SECONDS = 10;
 const FAST_OFFLINE_VALIDATION_SECONDS = 5;
-export const FAST_OFFLINE_ALGORITHM_VERSION = "fast-30s-v1";
-export const TIME_WARP_APPROXIMATION_ALGORITHM_VERSION = "time-warp-short-calibration-v2";
+export const FAST_OFFLINE_ALGORITHM_VERSION = "fast-30s-v2";
+export const FAST_OFFLINE_DESKTOP_DEADLINE_MS = 30_000;
+export const FAST_OFFLINE_MOBILE_DEADLINE_MS = 60_000;
+export const TIME_WARP_APPROXIMATION_ALGORITHM_VERSION = "time-warp-short-calibration-v3";
 export const TIME_WARP_APPROXIMATION_CALIBRATION_SECONDS = 1;
 export const TIME_WARP_APPROXIMATION_VALIDATION_SECONDS = 1;
 const TIME_WARP_MAX_CRITICAL_ERROR = 1;
@@ -171,6 +191,9 @@ const AFFINE_IGNORED_KEYS = new Set([
   // negative routes or duplicate material when a trip crosses its arrival
   // boundary. Only the exact engine may mutate these fields.
   "cargo", "remainingCargo",
+  // Research is a discrete cost/reward ledger. Generic affine deltas must
+  // never write progress, levels, queue selection, rewards, or score.
+  "research", "infiniteResearch", "activeInfiniteResearchId", "galacticScore",
 ]);
 
 function finiteNumber(value: unknown, fallback = 0): number {
@@ -963,11 +986,31 @@ function createFastAffineContract(
   calibrationSeconds: number,
   calibrationWallSeconds: number,
 ): PureIdleAffineContract | null {
-  return createFastAffineContractFromSnapshots(
+  const contract = createFastAffineContractFromSnapshots(
     states.map((state) => captureAffineSnapshot(state)),
     calibrationSeconds,
     calibrationWallSeconds,
   );
+  return contract ? removeResearchInputDeltas(contract, states[0]) : null;
+}
+
+function removeResearchInputDeltas(
+  contract: PureIdleAffineContract,
+  state: GameState,
+): PureIdleAffineContract {
+  const researchIndexes = new Set(state.entities
+    .map((entity, index) => entity.recipeId === "matrix_research" ? index : -1)
+    .filter((index) => index >= 0));
+  if (researchIndexes.size === 0) return contract;
+  return {
+    ...contract,
+    deltas: contract.deltas.filter((delta) => !(
+      delta.path[0] === "entities" &&
+      typeof delta.path[1] === "number" &&
+      researchIndexes.has(delta.path[1]) &&
+      delta.path[2] === "inputs"
+    )),
+  };
 }
 
 function divideBigIntTowardZero(value: bigint, divisor: bigint): bigint {
@@ -1053,6 +1096,7 @@ function applyFastAffineContract(
 
 export interface PureIdleAffineCalibration {
   contract: PureIdleAffineContract;
+  researchLedger: ResearchMacroLedger;
   /** Temporary shadow result used only to derive diagnostics, then released. */
   calibratedState: GameState;
   calibrationSeconds: number;
@@ -1158,10 +1202,12 @@ export function createPureIdleAffineCalibration(
 ): PureIdleAffineCalibration | null {
   if (!Number.isFinite(calibrationWallSeconds) || calibrationWallSeconds <= 0 || !validateFastNumbers(state)) return null;
   const snapshots = [captureAffineSnapshot(state)];
+  const researchSnapshots = [captureResearchMacroCalibrationSnapshot(state)];
   let shadow = structuredClone(state);
   for (let index = 0; index < FAST_OFFLINE_CALIBRATION_SECONDS / FAST_OFFLINE_CALIBRATION_SLICE_SECONDS; index += 1) {
     shadow = runExact(shadow, FAST_OFFLINE_CALIBRATION_SLICE_SECONDS, calibrationWallSeconds / 3);
     snapshots.push(captureAffineSnapshot(shadow));
+    researchSnapshots.push(captureResearchMacroCalibrationSnapshot(shadow));
   }
   const contract = createFastAffineContractFromSnapshots(
     snapshots,
@@ -1170,9 +1216,14 @@ export function createPureIdleAffineCalibration(
     true,
   );
   snapshots.length = 0;
-  if (!contract) return null;
+  const researchLedger = createResearchMacroLedgerFromSnapshots(
+    researchSnapshots,
+    FAST_OFFLINE_CALIBRATION_SLICE_SECONDS,
+  );
+  if (!contract || !researchLedger) return null;
   return {
-    contract,
+    contract: removeResearchInputDeltas(contract, state),
+    researchLedger,
     calibratedState: shadow,
     calibrationSeconds: FAST_OFFLINE_CALIBRATION_SECONDS,
     calibrationWallSeconds,
@@ -1187,9 +1238,10 @@ export function applyPureIdleAffineContract(
   wallSeconds: number,
 ): PureIdleAffineApplication {
   const before = captureAggregateConservationBaseline(state);
-  const applied = applyFastAffineContract(state, contract, simulationSeconds, wallSeconds, true);
+  const candidate = structuredClone(state);
+  const applied = applyFastAffineContract(candidate, contract, simulationSeconds, wallSeconds, true);
   if (!applied.ok) return { ok: false, boundaryCorrections: 0, failure: applied.failure };
-  const normalized = normalizeFastSettlementState(state);
+  const normalized = normalizeFastSettlementState(candidate);
   if (!normalized.ok) {
     return {
       ok: false,
@@ -1197,7 +1249,7 @@ export function applyPureIdleAffineContract(
       failure: normalized.failure ?? "宏观候选状态规范化失败",
     };
   }
-  const conservationFailure = validateAggregateConservation(before, state);
+  const conservationFailure = validateAggregateConservation(before, candidate);
   if (conservationFailure) {
     return {
       ok: false,
@@ -1205,6 +1257,7 @@ export function applyPureIdleAffineContract(
       failure: conservationFailure,
     };
   }
+  Object.assign(state, candidate);
   return {
     ok: true,
     boundaryCorrections: (applied.corrections ?? 0) + normalized.corrections,
@@ -1595,10 +1648,6 @@ function runTimeWarpApproximateSettlementUnsafe(
         ? "时间扭曲未开启"
         : "切片较短，直接精确推进");
   }
-  if (hasActiveResearch(state)) {
-    return exactTimeWarpResult(state, simulationSeconds, wallSeconds, "存在进行中的科研，已使用精确结算");
-  }
-
   const calibrationSeconds = TIME_WARP_APPROXIMATION_CALIBRATION_SECONDS;
   const validationSeconds = TIME_WARP_APPROXIMATION_VALIDATION_SECONDS;
   const wallPerSimulationSecond = simulationSeconds > EPSILON ? wallSeconds / simulationSeconds : 0;
@@ -1606,7 +1655,8 @@ function runTimeWarpApproximateSettlementUnsafe(
   const validationWallSeconds = wallPerSimulationSecond * validationSeconds;
   const calibrated = runExact(structuredClone(state), calibrationSeconds, calibrationWallSeconds);
   const contract = createFastAffineContract([state, calibrated], calibrationSeconds, calibrationWallSeconds);
-  if (!contract) {
+  const researchLedger = createResearchMacroLedger([state, calibrated], calibrationSeconds);
+  if (!contract || !researchLedger) {
     return exactTimeWarpResult(state, simulationSeconds, wallSeconds, "短校准没有形成可用的状态增量", calibrationSeconds);
   }
 
@@ -1621,6 +1671,7 @@ function runTimeWarpApproximateSettlementUnsafe(
     return exactTimeWarpResult(state, simulationSeconds, wallSeconds,
       `宏观切片越过安全边界：${macroApplication.failure ?? "未知字段"}`, calibrationSeconds);
   }
+  const macroResearch = advanceResearchMacroInPlace(macro, researchLedger, macroSeconds);
   const normalizedMacro = normalizeFastSettlementState(macro);
   if (!normalizedMacro.ok) {
     return exactTimeWarpResult(state, simulationSeconds, wallSeconds,
@@ -1629,6 +1680,13 @@ function runTimeWarpApproximateSettlementUnsafe(
 
   const expected = structuredClone(macro);
   const validationApplication = applyFastAffineContract(expected, contract, validationSeconds, validationWallSeconds);
+  advanceResearchMacroInPlace(
+    expected,
+    researchLedger,
+    validationSeconds,
+    macroResearch.remainder,
+    macroResearch.inflowRemainders,
+  );
   const normalizedExpected: FastSettlementNormalizationResult = validationApplication.ok
     ? normalizeFastSettlementState(expected)
     : { ok: false, corrections: 0 };
@@ -1693,7 +1751,85 @@ export function runTimeWarpApproximateSettlement(
 }
 
 function fastExactReport(windowSeconds: number, reason: string): OfflineApproximationReport {
-  return exactReport(windowSeconds, reason, true, FAST_OFFLINE_ALGORITHM_VERSION);
+  return {
+    ...exactReport(windowSeconds, reason, true, FAST_OFFLINE_ALGORITHM_VERSION),
+    settlementStatus: "bounded-exact",
+  };
+}
+
+export function runConservativeOfflineSettlement(
+  source: GameState,
+  seconds: number,
+  wallSeconds = seconds,
+  reason = "普通宏观合同不可用，已使用保守宏观结算",
+  calibratedState?: GameState,
+  calibrationSeconds = 0,
+  researchLedger?: ResearchMacroLedger,
+  deadlineReached = false,
+): OfflineApproximationResult {
+  if (!validateFastNumbers(source)) {
+    return {
+      status: "invalid-source",
+      report: {
+        ...fastExactReport(0, "原始状态包含非法数值，未修改主存档"),
+        settlementStatus: "invalid-source",
+      },
+    };
+  }
+  const candidate = calibratedState ?? structuredClone(source);
+  const remainingSeconds = Math.max(0, seconds - calibrationSeconds);
+  let researchInvested = 0n;
+  if (researchLedger && remainingSeconds > 0) {
+    researchInvested = advanceResearchMacroInPlace(candidate, researchLedger, remainingSeconds).consumed;
+  }
+  candidate.elapsedSeconds = source.elapsedSeconds + seconds;
+  if (candidate.speedrun?.enabled) {
+    candidate.speedrun.elapsedActiveSeconds = Math.max(
+      candidate.speedrun.elapsedActiveSeconds,
+      source.speedrun!.elapsedActiveSeconds + wallSeconds,
+    );
+  }
+  const normalized = normalizeFastSettlementState(candidate);
+  if (!normalized.ok) {
+    if (calibratedState) {
+      return runConservativeOfflineSettlement(
+        source,
+        seconds,
+        wallSeconds,
+        `${reason}；校准候选未通过数值校验，已从原始检查点切换零校准保守宏观`,
+        undefined,
+        0,
+        undefined,
+        deadlineReached,
+      );
+    }
+    return {
+      status: "invalid-source",
+      report: {
+        ...fastExactReport(calibrationSeconds, normalized.failure ?? "保守候选未通过数值校验"),
+        settlementStatus: "invalid-source",
+      },
+    };
+  }
+  return {
+    status: "conservative",
+    state: candidate,
+    report: {
+      mode: "approximate",
+      calibrationWindowSeconds: calibrationSeconds,
+      approximatedSeconds: remainingSeconds,
+      maxEstimatedError: 1,
+      fellBack: true,
+      fallbackReason: reason,
+      algorithmVersion: FAST_OFFLINE_ALGORITHM_VERSION,
+      boundaryCorrections: normalized.corrections,
+      validationScope: "leaderboard-critical",
+      maxNonCriticalError: 1,
+      settlementStatus: "conservative",
+      deadlineReached,
+      researchInvested: researchInvested.toString(),
+    },
+  };
 }
 
 /**
@@ -1704,11 +1840,11 @@ function fastExactReport(windowSeconds: number, reason: string): OfflineApproxim
 function runFastOfflineSettlementUnsafe(state: GameState, seconds: number, wallSeconds = seconds): OfflineApproximationResult {
   if (state.paused) return { status: "ineligible", report: fastExactReport(0, "存档已暂停") };
   if (!Number.isFinite(seconds) || seconds <= 0) return { status: "ineligible", report: fastExactReport(0, "离线时长无效") };
+  if (state.speedrun?.enabled) {
+    return { status: "ineligible", report: fastExactReport(0, "速通工厂必须使用有界精确结算") };
+  }
   if (seconds <= FAST_OFFLINE_CALIBRATION_SECONDS) {
     return { status: "fallback", report: fastExactReport(Math.floor(seconds), "离线时长不超过 30 秒，使用精确结算") };
-  }
-  if (hasActiveResearch(state)) {
-    return { status: "fallback", report: fastExactReport(0, "存在进行中的科研，已使用精确结算") };
   }
   if (state.timeWarp.pendingSimulationSeconds > EPSILON || state.timeWarp.pendingWallSeconds > EPSILON) {
     return { status: "ineligible", report: fastExactReport(0, "存在未提交时间扭曲预算") };
@@ -1722,33 +1858,57 @@ function runFastOfflineSettlementUnsafe(state: GameState, seconds: number, wallS
     slices.push(structuredClone(current));
   }
   const contract = createFastAffineContract(slices, FAST_OFFLINE_CALIBRATION_SECONDS, wallCalibration);
+  const researchLedger = createResearchMacroLedger(slices, FAST_OFFLINE_CALIBRATION_SLICE_SECONDS);
   slices.length = 0;
-  if (!contract) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, "30 秒校准发现生产、物流或缓存速率不稳定") };
+  if (!researchLedger) {
+    return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+      "科研校准账本无效，已冻结科研并使用保守宏观结算", current, FAST_OFFLINE_CALIBRATION_SECONDS);
+  }
+  if (!contract) {
+    return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+      "30 秒校准未形成普通合同，已使用保守宏观结算", current, FAST_OFFLINE_CALIBRATION_SECONDS, researchLedger);
+  }
   const macroSeconds = seconds - FAST_OFFLINE_CALIBRATION_SECONDS - FAST_OFFLINE_VALIDATION_SECONDS;
   if (macroSeconds < 1) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, "校准后没有足够的批量外推时间") };
   const macroWallSeconds = Math.max(0, wallSeconds - wallCalibration - wallSeconds * FAST_OFFLINE_VALIDATION_SECONDS / seconds);
-  const macro = current;
+  const macroBase = current;
+  const macro = structuredClone(macroBase);
   const macroApplication = applyFastAffineContract(macro, contract, macroSeconds, macroWallSeconds);
   if (!macroApplication.ok) {
-    return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, `批量外推超出安全数值范围：${macroApplication.failure ?? "未知字段"}`) };
+    return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+      `普通合同越过安全边界：${macroApplication.failure ?? "未知字段"}`, macroBase,
+      FAST_OFFLINE_CALIBRATION_SECONDS, researchLedger);
   }
+  const macroResearch = advanceResearchMacroInPlace(macro, researchLedger, macroSeconds);
   const normalizedMacro = normalizeFastSettlementState(macro);
-  if (!normalizedMacro.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
-    `批量外推产生非法库存、缓存或大整数${normalizedMacro.failure ? `：${normalizedMacro.failure}` : ""}`) };
+  if (!normalizedMacro.ok) return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+    `普通合同产生非法库存或大整数${normalizedMacro.failure ? `：${normalizedMacro.failure}` : ""}`,
+    macroBase, FAST_OFFLINE_CALIBRATION_SECONDS, researchLedger);
   const expected = structuredClone(macro);
   const validationWallSeconds = wallSeconds * FAST_OFFLINE_VALIDATION_SECONDS / seconds;
   const validationApplication = applyFastAffineContract(expected, contract, FAST_OFFLINE_VALIDATION_SECONDS, validationWallSeconds);
   if (!validationApplication.ok) {
-    return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, `验证窗口无法保持安全整数：${validationApplication.failure ?? "未知字段"}`) };
+    return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+      `验证预测越过安全边界：${validationApplication.failure ?? "未知字段"}`,
+      macroBase, FAST_OFFLINE_CALIBRATION_SECONDS, researchLedger);
   }
+  advanceResearchMacroInPlace(
+    expected,
+    researchLedger,
+    FAST_OFFLINE_VALIDATION_SECONDS,
+    macroResearch.remainder,
+    macroResearch.inflowRemainders,
+  );
   const normalizedExpected = normalizeFastSettlementState(expected);
-  if (!normalizedExpected.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
-    `验证预测越过容量或资源边界${normalizedExpected.failure ? `：${normalizedExpected.failure}` : ""}`) };
+  if (!normalizedExpected.ok) return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+    `验证预测越过容量边界${normalizedExpected.failure ? `：${normalizedExpected.failure}` : ""}`,
+    macroBase, FAST_OFFLINE_CALIBRATION_SECONDS, researchLedger);
   const validationBaseline = captureTimeWarpCriticalSnapshot(macro);
   const actual = runExact(macro, FAST_OFFLINE_VALIDATION_SECONDS, validationWallSeconds);
   const normalizedActual = normalizeFastSettlementState(actual);
-  if (!normalizedActual.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
-    `精确验证结果未通过结构或数值校验${normalizedActual.failure ? `：${normalizedActual.failure}` : ""}`) };
+  if (!normalizedActual.ok) return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+    `精确尾验未通过结构校验${normalizedActual.failure ? `：${normalizedActual.failure}` : ""}`,
+    macroBase, FAST_OFFLINE_CALIBRATION_SECONDS, researchLedger);
   const speedrunCorrection = normalizeFastSpeedrunClock(actual, state, wallSeconds);
   const comparison = compareFastNumericSnapshots(actual, expected);
   const maxEstimatedError = compareTimeWarpCriticalSnapshots(
@@ -1757,16 +1917,9 @@ function runFastOfflineSettlementUnsafe(state: GameState, seconds: number, wallS
     captureTimeWarpCriticalSnapshot(actual),
   );
   if (!Number.isFinite(maxEstimatedError) || maxEstimatedError > FAST_CRITICAL_MAX_ERROR) {
-    return {
-      status: "fallback",
-      report: {
-        ...fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
-          `白糖或戴森关键指标尾验误差 ${(maxEstimatedError * 100).toFixed(2)}% 超过 100%`),
-        maxEstimatedError,
-        maxNonCriticalError: comparison.maxError,
-        validationScope: "leaderboard-critical",
-      },
-    };
+    return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+      `白糖或戴森尾验误差 ${(maxEstimatedError * 100).toFixed(2)}%，已使用保守宏观结算`,
+      macroBase, FAST_OFFLINE_CALIBRATION_SECONDS, researchLedger);
   }
   return {
     status: "approximate",
@@ -1782,6 +1935,8 @@ function runFastOfflineSettlementUnsafe(state: GameState, seconds: number, wallS
         normalizedMacro.corrections + normalizedExpected.corrections + normalizedActual.corrections + speedrunCorrection,
       validationScope: "leaderboard-critical",
       maxNonCriticalError: comparison.maxError,
+      settlementStatus: "approximate",
+      researchInvested: macroResearch.consumed.toString(),
     },
   };
 }
@@ -1792,7 +1947,7 @@ function fastSettlementExceptionReport(error: unknown): OfflineApproximationRepo
     : "";
   return fastExactReport(
     FAST_OFFLINE_CALIBRATION_SECONDS,
-    `快速结算遇到无效循环状态，已从原始存档改用精确结算${detail}`,
+    `快速结算遇到无效循环状态，已从原始存档改用保守宏观结算${detail}`,
   );
 }
 
@@ -1800,6 +1955,14 @@ export function runFastOfflineSettlement(state: GameState, seconds: number, wall
   try {
     return runFastOfflineSettlementUnsafe(state, seconds, wallSeconds);
   } catch (error) {
+    if (seconds > FAST_OFFLINE_CALIBRATION_SECONDS && !state.speedrun?.enabled) {
+      return runConservativeOfflineSettlement(
+        state,
+        seconds,
+        wallSeconds,
+        fastSettlementExceptionReport(error).fallbackReason,
+      );
+    }
     return { status: "fallback", report: fastSettlementExceptionReport(error) };
   }
 }
@@ -1815,17 +1978,19 @@ async function runFastOfflineSettlementAsyncUnsafe(
   const wallSeconds = options.wallSeconds ?? seconds;
   if (state.paused) return { status: "ineligible", report: fastExactReport(0, "存档已暂停") };
   if (!Number.isFinite(seconds) || seconds <= 0) return { status: "ineligible", report: fastExactReport(0, "离线时长无效") };
+  if (state.speedrun?.enabled) {
+    return { status: "ineligible", report: fastExactReport(0, "速通工厂必须使用有界精确结算") };
+  }
   if (seconds <= FAST_OFFLINE_CALIBRATION_SECONDS) {
     return { status: "fallback", report: fastExactReport(Math.floor(seconds), "离线时长不超过 30 秒，使用精确结算") };
-  }
-  if (hasActiveResearch(state)) {
-    return { status: "fallback", report: fastExactReport(0, "存在进行中的科研，已使用精确结算") };
   }
   if (state.timeWarp.pendingSimulationSeconds > EPSILON || state.timeWarp.pendingWallSeconds > EPSILON) {
     return { status: "ineligible", report: fastExactReport(0, "存在未提交时间扭曲预算") };
   }
   if (!validateFastNumbers(state)) return { status: "ineligible", report: fastExactReport(0, "原始状态包含非法数值") };
   throwIfApproximationCancelled(options);
+  throwIfApproximationDeadlineReached(options);
+  options.onPhase?.("calibrating");
   const wallCalibration = wallSeconds * FAST_OFFLINE_CALIBRATION_SECONDS / seconds;
   const slices: GameState[] = [state];
   let current = structuredClone(state);
@@ -1835,33 +2000,74 @@ async function runFastOfflineSettlementAsyncUnsafe(
     options.onProgress?.((index + 1) * FAST_OFFLINE_CALIBRATION_SLICE_SECONDS, seconds);
   }
   const contract = createFastAffineContract(slices, FAST_OFFLINE_CALIBRATION_SECONDS, wallCalibration);
+  const researchLedger = createResearchMacroLedger(slices, FAST_OFFLINE_CALIBRATION_SLICE_SECONDS);
   slices.length = 0;
-  if (!contract) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, "30 秒校准发现生产、物流或缓存速率不稳定") };
+  if (!researchLedger) {
+    options.onPhase?.("conservative");
+    return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+      "科研校准账本无效，已冻结科研并使用保守宏观结算", current, FAST_OFFLINE_CALIBRATION_SECONDS);
+  }
+  if (!contract) {
+    options.onPhase?.("conservative");
+    return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+      "30 秒校准未形成普通合同，已使用保守宏观结算", current,
+      FAST_OFFLINE_CALIBRATION_SECONDS, researchLedger);
+  }
   const macroSeconds = seconds - FAST_OFFLINE_CALIBRATION_SECONDS - FAST_OFFLINE_VALIDATION_SECONDS;
   if (macroSeconds < 1) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, "校准后没有足够的批量外推时间") };
   const macroWallSeconds = Math.max(0, wallSeconds - wallCalibration - wallSeconds * FAST_OFFLINE_VALIDATION_SECONDS / seconds);
-  const macro = current;
+  options.onPhase?.("macro");
+  throwIfApproximationDeadlineReached(options);
+  const macroBase = current;
+  const macro = structuredClone(macroBase);
   const macroApplication = applyFastAffineContract(macro, contract, macroSeconds, macroWallSeconds);
   if (!macroApplication.ok) {
-    return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, `批量外推超出安全数值范围：${macroApplication.failure ?? "未知字段"}`) };
+    options.onPhase?.("conservative");
+    return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+      `普通合同越过安全边界：${macroApplication.failure ?? "未知字段"}`,
+      macroBase, FAST_OFFLINE_CALIBRATION_SECONDS, researchLedger);
   }
+  const macroResearch = advanceResearchMacroInPlace(macro, researchLedger, macroSeconds);
   const normalizedMacro = normalizeFastSettlementState(macro);
-  if (!normalizedMacro.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
-    `批量外推产生非法库存、缓存或大整数${normalizedMacro.failure ? `：${normalizedMacro.failure}` : ""}`) };
+  if (!normalizedMacro.ok) {
+    options.onPhase?.("conservative");
+    return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+      `普通合同产生非法库存或大整数${normalizedMacro.failure ? `：${normalizedMacro.failure}` : ""}`,
+      macroBase, FAST_OFFLINE_CALIBRATION_SECONDS, researchLedger);
+  }
   const expected = structuredClone(macro);
   const validationWallSeconds = wallSeconds * FAST_OFFLINE_VALIDATION_SECONDS / seconds;
+  options.onPhase?.("validating");
   const validationApplication = applyFastAffineContract(expected, contract, FAST_OFFLINE_VALIDATION_SECONDS, validationWallSeconds);
   if (!validationApplication.ok) {
-    return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS, `验证窗口无法保持安全整数：${validationApplication.failure ?? "未知字段"}`) };
+    options.onPhase?.("conservative");
+    return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+      `验证预测越过安全边界：${validationApplication.failure ?? "未知字段"}`,
+      macroBase, FAST_OFFLINE_CALIBRATION_SECONDS, researchLedger);
   }
+  advanceResearchMacroInPlace(
+    expected,
+    researchLedger,
+    FAST_OFFLINE_VALIDATION_SECONDS,
+    macroResearch.remainder,
+    macroResearch.inflowRemainders,
+  );
   const normalizedExpected = normalizeFastSettlementState(expected);
-  if (!normalizedExpected.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
-    `验证预测越过容量或资源边界${normalizedExpected.failure ? `：${normalizedExpected.failure}` : ""}`) };
+  if (!normalizedExpected.ok) {
+    options.onPhase?.("conservative");
+    return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+      `验证预测越过容量边界${normalizedExpected.failure ? `：${normalizedExpected.failure}` : ""}`,
+      macroBase, FAST_OFFLINE_CALIBRATION_SECONDS, researchLedger);
+  }
   const validationBaseline = captureTimeWarpCriticalSnapshot(macro);
   const actual = await runExactAsync(macro, FAST_OFFLINE_VALIDATION_SECONDS, options, validationWallSeconds);
   const normalizedActual = normalizeFastSettlementState(actual);
-  if (!normalizedActual.ok) return { status: "fallback", report: fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
-    `精确验证结果未通过结构或数值校验${normalizedActual.failure ? `：${normalizedActual.failure}` : ""}`) };
+  if (!normalizedActual.ok) {
+    options.onPhase?.("conservative");
+    return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+      `精确尾验未通过结构校验${normalizedActual.failure ? `：${normalizedActual.failure}` : ""}`,
+      macroBase, FAST_OFFLINE_CALIBRATION_SECONDS, researchLedger);
+  }
   const speedrunCorrection = normalizeFastSpeedrunClock(actual, state, wallSeconds);
   const comparison = compareFastNumericSnapshots(actual, expected);
   const maxEstimatedError = compareTimeWarpCriticalSnapshots(
@@ -1871,16 +2077,10 @@ async function runFastOfflineSettlementAsyncUnsafe(
   );
   options.onProgress?.(seconds, seconds);
   if (!Number.isFinite(maxEstimatedError) || maxEstimatedError > FAST_CRITICAL_MAX_ERROR) {
-    return {
-      status: "fallback",
-      report: {
-        ...fastExactReport(FAST_OFFLINE_CALIBRATION_SECONDS,
-          `白糖或戴森关键指标尾验误差 ${(maxEstimatedError * 100).toFixed(2)}% 超过 100%`),
-        maxEstimatedError,
-        maxNonCriticalError: comparison.maxError,
-        validationScope: "leaderboard-critical",
-      },
-    };
+    options.onPhase?.("conservative");
+    return runConservativeOfflineSettlement(state, seconds, wallSeconds,
+      `白糖或戴森尾验误差 ${(maxEstimatedError * 100).toFixed(2)}%，已使用保守宏观结算`,
+      macroBase, FAST_OFFLINE_CALIBRATION_SECONDS, researchLedger);
   }
   return {
     status: "approximate",
@@ -1896,6 +2096,8 @@ async function runFastOfflineSettlementAsyncUnsafe(
         normalizedMacro.corrections + normalizedExpected.corrections + normalizedActual.corrections + speedrunCorrection,
       validationScope: "leaderboard-critical",
       maxNonCriticalError: comparison.maxError,
+      settlementStatus: "approximate",
+      researchInvested: macroResearch.consumed.toString(),
     },
   };
 }
@@ -1905,10 +2107,29 @@ export async function runFastOfflineSettlementAsync(
   seconds: number,
   options: OfflineApproximationAsyncOptions = {},
 ): Promise<OfflineApproximationResult> {
+  const startedAt = approximationNow();
   try {
-    return await runFastOfflineSettlementAsyncUnsafe(state, seconds, options);
+    const result = await runFastOfflineSettlementAsyncUnsafe(state, seconds, options);
+    result.report.wallClockMs = Math.max(0, approximationNow() - startedAt);
+    return result;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw error;
+    if (seconds > FAST_OFFLINE_CALIBRATION_SECONDS && !state.speedrun?.enabled) {
+      const result = runConservativeOfflineSettlement(
+        state,
+        seconds,
+        options.wallSeconds ?? seconds,
+        error instanceof OfflineApproximationDeadlineError
+          ? "精确校准达到现实时间上限，已使用保守宏观结算"
+          : fastSettlementExceptionReport(error).fallbackReason,
+        undefined,
+        0,
+        undefined,
+        error instanceof OfflineApproximationDeadlineError,
+      );
+      result.report.wallClockMs = Math.max(0, approximationNow() - startedAt);
+      return result;
+    }
     return { status: "fallback", report: fastSettlementExceptionReport(error) };
   }
 }
@@ -1926,6 +2147,26 @@ export interface OfflineApproximationAsyncOptions {
   yieldAfterMs?: number;
   /** Wall-clock budget paired with the simulation budget (time-warp aware). */
   wallSeconds?: number;
+  /** Absolute performance.now()/Date.now() deadline for all exact work. */
+  deadlineAtMs?: number;
+  onPhase?: (phase: "calibrating" | "macro" | "conservative" | "validating") => void;
+}
+
+class OfflineApproximationDeadlineError extends Error {
+  constructor() {
+    super("快速离线精确校准达到现实时间上限");
+    this.name = "OfflineApproximationDeadlineError";
+  }
+}
+
+function approximationNow(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+function throwIfApproximationDeadlineReached(options: OfflineApproximationAsyncOptions): void {
+  if (options.deadlineAtMs !== undefined && approximationNow() >= options.deadlineAtMs) {
+    throw new OfflineApproximationDeadlineError();
+  }
 }
 
 function throwIfApproximationCancelled(options: OfflineApproximationAsyncOptions): void {
@@ -1955,6 +2196,7 @@ async function runExactAsync(
   let sliceStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
   while (session.remainingSeconds > EPSILON) {
     throwIfApproximationCancelled(options);
+    throwIfApproximationDeadlineReached(options);
     advanceSimulationSession(session, 256);
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     if (now - sliceStartedAt >= yieldAfterMs) {
@@ -1963,6 +2205,7 @@ async function runExactAsync(
     }
   }
   throwIfApproximationCancelled(options);
+  throwIfApproximationDeadlineReached(options);
   return completeSimulationAdvanceSession(session);
 }
 

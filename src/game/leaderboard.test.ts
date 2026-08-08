@@ -21,6 +21,7 @@ describe("local galaxy leaderboard", () => {
       uploadedWhiteMatrix: 10,
       peakGenerationKw: 5_000,
       peakThroughputPerMinute: 100,
+      peakActualThroughputPerMinute: 100,
       peakDysonPowerKw: 2_000,
       exploredSystems: 2,
       colonizedPlanets: 3,
@@ -42,10 +43,45 @@ describe("local galaxy leaderboard", () => {
     const account = getActiveAccount(createAccountState(100));
     account.ledger.energyGeneratedMj = 2_500_000_000_000_000;
     account.ledger.peakThroughputPerMinute = 1_500_000_000_000_000;
+    account.ledger.peakActualThroughputPerMinute = 1_250_000_000_000_000;
     const metrics = getLeaderboardMetrics(account.ledger);
     expect(metrics.energyGeneratedMj).toBe(2_500_000_000_000_000);
-    expect(metrics.peakThroughputPerMinute).toBe(1_500_000_000_000_000);
+    expect(metrics.peakThroughputPerMinute).toBe(1_250_000_000_000_000);
+    expect(metrics.theoreticalPeakThroughputPerMinute).toBe(1_500_000_000_000_000);
     expect(Number.isFinite(metrics.galaxyScore)).toBe(true);
+  });
+
+  it("keeps modern galactic nominal metrics separate and marks old records as legacy", () => {
+    expect(normalizeLeaderboardMetrics({
+      peakThroughputPerMinute: 50,
+      theoreticalPeakThroughputPerMinute: 600,
+      activePlanetThroughputPerMinute: 100,
+      galacticThroughputPerMinute: 600,
+      nominalThroughputMetricVersion: "galactic-planet-sum-v1",
+    })).toMatchObject({
+      peakThroughputPerMinute: 50,
+      theoreticalPeakThroughputPerMinute: 600,
+      activePlanetThroughputPerMinute: 100,
+      galacticThroughputPerMinute: 600,
+      nominalThroughputMetricVersion: "galactic-planet-sum-v1",
+    });
+
+    expect(normalizeLeaderboardMetrics({
+      peakThroughputPerMinute: 75,
+      theoreticalPeakThroughputPerMinute: 450,
+    })).toMatchObject({
+      activePlanetThroughputPerMinute: 450,
+      galacticThroughputPerMinute: 450,
+      nominalThroughputMetricVersion: "legacy-active-planet-v1",
+    });
+    expect(normalizeLeaderboardMetrics({
+      peakThroughputPerMinute: 75,
+      galacticThroughputPerMinute: 600,
+    })).toMatchObject({
+      theoreticalPeakThroughputPerMinute: 600,
+      activePlanetThroughputPerMinute: 600,
+      galacticThroughputPerMinute: 600,
+    });
   });
 
   it("shows a live local projection and marks it submitted after upload", () => {

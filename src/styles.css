@@ -5287,6 +5287,34 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
   box-shadow: 0 0 0 2px rgba(215, 184, 93, 0.18), 0 0 20px rgba(215, 184, 93, 0.2);
 }
 
+.react-flow__node.factory-flow-node--connection-candidate .factory-node {
+  border-color: #79d9ca !important;
+  box-shadow: 0 0 0 2px rgba(121, 217, 202, 0.34), 0 0 16px rgba(77, 184, 166, 0.25) !important;
+}
+
+.react-flow__node.factory-flow-node--connection-origin .factory-node {
+  border-color: #f0c96b !important;
+  box-shadow: 0 0 0 2px rgba(240, 201, 107, 0.58), 0 0 18px rgba(224, 169, 65, 0.3) !important;
+}
+
+[data-theme="light"] .react-flow__node.factory-flow-node--connection-candidate .factory-node {
+  background: color-mix(in srgb, #dff7ef 58%, var(--surface)) !important;
+  border-color: #238b75 !important;
+  box-shadow: 0 0 0 2px rgba(35, 139, 117, 0.28), 0 0 12px rgba(35, 139, 117, 0.16) !important;
+}
+
+[data-theme="light"] .react-flow__node.factory-flow-node--connection-origin .factory-node {
+  border-color: #ad7613 !important;
+  box-shadow: 0 0 0 2px rgba(173, 118, 19, 0.38), 0 0 12px rgba(173, 118, 19, 0.16) !important;
+}
+
+.game-shell[data-endgame-extreme="true"] .react-flow__node.factory-flow-node--connection-candidate .factory-node,
+.game-shell[data-endgame-extreme="true"] .react-flow__node.factory-flow-node--connection-origin .factory-node,
+.game-shell[data-reduced-motion="true"] .react-flow__node.factory-flow-node--connection-candidate .factory-node,
+.game-shell[data-reduced-motion="true"] .react-flow__node.factory-flow-node--connection-origin .factory-node {
+  animation: none !important;
+}
+
 .vein-node--depleted {
   border-color: var(--coral);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--coral) 30%, transparent), 0 0 18px color-mix(in srgb, var(--coral) 26%, transparent);

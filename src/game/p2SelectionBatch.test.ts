@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_BUILDING_STACK_COUNT,
   batchIncreaseSelection,
+  canEntityAcceptBeltItem,
   createInitialState,
   setConstructionAutomationTargetsForBuildings,
 } from "./engine";
@@ -86,6 +87,51 @@ describe("P2 batch selection operations", () => {
     expect(result.buildingAtLimitCount).toBe(1);
     expect(result.beltAtLimitCount).toBe(1);
     expect(result.state).toBe(state);
+  });
+
+  it("skips unique megastructures in mixed batch previews and commits without charging them", () => {
+    const state = baseSelectionState();
+    state.entities.push(
+      entity("warp", "time_warp_device", 1),
+      entity("black-hole", "micro_black_hole_connector", 1),
+    );
+    state.construction.time_warp_device = 100;
+    state.construction.micro_black_hole_connector = 100;
+    const beforeWarpInventory = state.construction.time_warp_device;
+    const beforeBlackHoleInventory = state.construction.micro_black_hole_connector;
+
+    const result = batchIncreaseSelection(state, ["e1", "warp", "black-hole"], ["b1"], 1);
+
+    expect(result).toMatchObject({
+      ok: true,
+      changedBuildingCount: 1,
+      changedBeltCount: 1,
+      uniqueBuildingSkippedCount: 2,
+    });
+    expect(result.requiredConstruction).not.toHaveProperty("time_warp_device");
+    expect(result.requiredConstruction).not.toHaveProperty("micro_black_hole_connector");
+    expect(result.state.entities.find((candidate) => candidate.id === "warp")?.machineCount).toBe(1);
+    expect(result.state.entities.find((candidate) => candidate.id === "black-hole")?.machineCount).toBe(1);
+    expect(result.state.construction.time_warp_device).toBe(beforeWarpInventory);
+    expect(result.state.construction.micro_black_hole_connector).toBe(beforeBlackHoleInventory);
+  });
+
+  it("uses the established universal-port rules for connection-card candidates", () => {
+    const state = createInitialState(27_003);
+    const hub = entity("hub", "material_delivery_hub");
+    hub.kind = "storage";
+    hub.deliverySlots = [
+      { itemId: null, mode: "auto" },
+      { itemId: "copper_ingot", mode: "manual" },
+      { itemId: null, mode: "disabled" },
+    ];
+    const blackHole = entity("black-hole", "micro_black_hole_connector");
+
+    expect(canEntityAcceptBeltItem(state, hub, "iron_ingot")).toBe(true);
+    expect(canEntityAcceptBeltItem(state, hub, "copper_ingot")).toBe(true);
+    hub.deliverySlots[0] = { itemId: null, mode: "disabled" };
+    expect(canEntityAcceptBeltItem(state, hub, "iron_ingot")).toBe(false);
+    expect(canEntityAcceptBeltItem(state, blackHole, "universe_matrix")).toBe(true);
   });
 
   it("sets one target for all unlocked buildings without cancelling jobs", () => {

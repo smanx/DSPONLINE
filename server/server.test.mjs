@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { scryptSync } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash, scryptSync } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -9,6 +9,7 @@ import Database from "better-sqlite3";
 import { cleanupExpiredAuthRecords, createCloudServer, createRateLimiter } from "./index.mjs";
 import { metricDay } from "./analytics.mjs";
 import { computeSaveStateChecksum } from "./save-integrity.mjs";
+import { aggregateGalacticFactoryMetric } from "./galactic-metrics.mjs";
 
 let directory;
 let server;
@@ -19,6 +20,8 @@ let offsiteBackupStatusFile;
 let restoreDrillStatusFile;
 let nodeHealthStatusFile;
 const adminToken = "test-admin-secret-1234567890-abcdef";
+const historicalUniqueMegastructureFixturePath = process.env.DSP_HISTORICAL_UNIQUE_MEGASTRUCTURE_FIXTURE;
+const galacticThroughputFixturePath = process.env.DSP_GALACTIC_THROUGHPUT_FIXTURE;
 function createSavePayload(state, savedAt = 123456) {
   const envelope = { formatVersion: 2, savedAt, state };
   return JSON.stringify({ ...envelope, checksum: computeSaveStateChecksum(envelope.formatVersion, state) });
@@ -923,8 +926,16 @@ test("accepts gzip cloud saves and rejects invalid or expanded gzip bodies", asy
   assert.equal(invalidEncoding.response.status, 400);
   assert.equal(invalidEncoding.body.code, "REQUEST_ENCODING_INVALID");
 
+  const rawFallback = await isolatedRequest("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.token}` },
+    body: JSON.stringify({ payload: largePayload, expectedRevision: 1 }),
+  });
+  assert.equal(rawFallback.response.status, 200);
+  assert.equal(rawFallback.body.cloudSave.revision, 2);
+
   const expandedState = { ...base.state, padding: "x".repeat(32 * 1024 * 1024 + 1) };
-  const expandedBody = gzipSync(Buffer.from(JSON.stringify({ payload: createSavePayload(expandedState), expectedRevision: 1 })));
+  const expandedBody = gzipSync(Buffer.from(JSON.stringify({ payload: createSavePayload(expandedState), expectedRevision: 2 })));
   const expanded = await isolatedRequest("/api/cloud-save", {
     method: "PUT",
     headers: { authorization: `Bearer ${registered.token}`, "content-encoding": "gzip", "content-type": "application/json" },
@@ -993,6 +1004,45 @@ test("keeps main and three manual cloud slots revisioned independently", async (
   assert.equal(main.body.cloudSave.revision, 3);
   const invalid = await request("/api/cloud-save?slot=invalid", { headers: { authorization: `Bearer ${token}` } });
   assert.equal(invalid.response.status, 400);
+});
+
+test("round-trips a historical stacked unique megastructure through raw and gzip cloud slots", {
+  skip: !historicalUniqueMegastructureFixturePath,
+}, async () => {
+  const payload = await readFile(historicalUniqueMegastructureFixturePath, "utf8");
+  const source = JSON.parse(payload);
+  const sourceStack = source.state?.entities?.find((entity) =>
+    entity.buildingId === "time_warp_device" && entity.machineCount === 3);
+  assert.ok(sourceStack, "fixture must contain the historical three-device time-warp stack");
+
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "historical_stack", password: "strong-pass-123", displayName: "历史堆叠测试" }),
+  });
+  assert.equal(registered.response.status, 201);
+  const headers = { authorization: `Bearer ${registered.body.token}` };
+  const slots = [
+    { route: "/api/cloud-save", gzip: false },
+    { route: "/api/cloud-save?slot=1", gzip: true },
+    { route: "/api/cloud-save?slot=2", gzip: false },
+    { route: "/api/cloud-save?slot=3", gzip: true },
+  ];
+  for (const slot of slots) {
+    const body = JSON.stringify({ payload, expectedRevision: 0 });
+    const uploaded = await request(slot.route, {
+      method: "PUT",
+      headers: { ...headers, ...(slot.gzip ? { "content-encoding": "gzip" } : {}) },
+      body: slot.gzip ? gzipSync(Buffer.from(body)) : body,
+    });
+    assert.equal(uploaded.response.status, 200, JSON.stringify(uploaded.body));
+    assert.equal(uploaded.body.cloudSave.revision, 1);
+
+    const downloaded = await request(slot.route, { headers });
+    assert.equal(downloaded.response.status, 200);
+    assert.equal(downloaded.body.cloudSave.payload, payload);
+    const roundTripped = JSON.parse(downloaded.body.cloudSave.payload);
+    assert.equal(roundTripped.state.entities.find((entity) => entity.id === sourceStack.id)?.machineCount, 3);
+  }
 });
 
 test("validates v32 gameplay buffer limits before accepting cloud saves", async () => {
@@ -1078,7 +1128,10 @@ test("validates v34 time warp and accepts Android v35 through current v46 saves"
     payloadFor((state) => { state.timeWarp.controllerEntityId = "missing"; }),
     payloadFor((state) => { state.dysonPlans.helios.layers[0].structureAllocationFloor = -1; }),
     payloadFor((state) => { state.entities[0].blackHolePorts[0].totalDestroyed = "01"; }),
-    payloadFor((state) => { state.entities[0].machineCount = 2; }),
+    payloadFor((state) => { state.entities[0].machineCount = 0; }),
+    payloadFor((state) => { state.entities[1].machineCount = 0; }),
+    payloadFor((state) => { state.entities[0].machineCount = 1.5; }),
+    payloadFor((state) => { state.entities[1].machineCount = Number.MAX_SAFE_INTEGER + 1; }),
     payloadFor((state) => { state.belts.push({ id: "belt-2", source: "source", target: "black-hole", targetPortIndex: 0 }); }),
     payloadFor((state) => { state.belts[0].targetPortIndex = 3; }),
   ];
@@ -1086,7 +1139,11 @@ test("validates v34 time warp and accepts Android v35 through current v46 saves"
     const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload, expectedRevision: 2 }) });
     assert.equal(rejected.response.status, 400);
   }
-  const accepted = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: payloadFor(), expectedRevision: 2 }) });
+  const historicalStackPayload = payloadFor((state) => {
+    state.entities[0].machineCount = 2;
+    state.entities[1].machineCount = 3;
+  });
+  const accepted = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: historicalStackPayload, expectedRevision: 2 }) });
   assert.equal(accepted.response.status, 200);
 
   const v35Payload = payloadFor((state) => {
@@ -1528,10 +1585,168 @@ test("keeps server-derived leaderboard values above the former metric cap", asyn
     body: JSON.stringify({ payload, expectedRevision: 0 }),
   });
   assert.equal(uploaded.response.status, 200);
-  const ranking = await request("/api/leaderboard?category=power&seasonId=season_01");
-  const entry = ranking.body.entries.find((candidate) => candidate.displayName === "超大工厂");
+  let ranking = await request("/api/leaderboard?category=throughput&seasonId=season_01");
+  let entry = ranking.body.entries.find((candidate) => candidate.displayName === "超大工厂");
   assert.equal(entry.metrics.energyGeneratedMj, 2_500_000_000_000_000);
+  assert.equal(entry.metrics.peakThroughputPerMinute, 0);
+  assert.equal(entry.metrics.theoreticalPeakThroughputPerMinute, 1_500_000_000_000_000);
+  assert.equal(entry.verification.strategy, "main-cloud-save-v2");
+
+  const nextPayload = mutateSavePayload(payload, (state) => {
+    state.elapsedSeconds += 60;
+    state.totalProduced.iron_ingot = 1_500_000_000_000_000;
+  });
+  assert.equal((await request("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.body.token}` },
+    body: JSON.stringify({ payload: nextPayload, expectedRevision: 1 }),
+  })).response.status, 200);
+  ranking = await request("/api/leaderboard?category=throughput&seasonId=season_01");
+  entry = ranking.body.entries.find((candidate) => candidate.displayName === "超大工厂");
   assert.equal(entry.metrics.peakThroughputPerMinute, 1_500_000_000_000_000);
+  assert.equal(entry.metrics.theoreticalPeakThroughputPerMinute, 1_500_000_000_000_000);
+  assert.deepEqual(entry.verification.throughputWindow, { fromRevision: 1, toRevision: 2, elapsedSeconds: 60 });
+});
+
+test("uses all explicit planet metrics for nominal throughput regardless of the active planet", async () => {
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "galactic_nominal", password: "rank-pass-123", displayName: "全星区口径" }),
+  });
+  const headers = { authorization: `Bearer ${registered.body.token}` };
+  const payload = createSavePayload({
+    version: 24,
+    elapsedSeconds: 1_000,
+    activePlanetId: "home",
+    entities: [],
+    totalProduced: { iron_ingot: 1_000 },
+    metrics: { generationKw: 1_000, totalItemsPerMinute: 100, rayGenerationKw: 0 },
+    planetMetrics: {
+      home: { generationKw: 1_000, totalItemsPerMinute: 100, rayGenerationKw: 0 },
+      ashen: { generationKw: 2_000, totalItemsPerMinute: 200, rayGenerationKw: 0 },
+      abyss: { generationKw: 3_000, totalItemsPerMinute: 300, rayGenerationKw: 0 },
+    },
+    exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home", "ashen", "abyss"] },
+  });
+  assert.equal((await request("/api/cloud-save", {
+    method: "PUT", headers, body: JSON.stringify({ payload, expectedRevision: 0 }),
+  })).response.status, 200);
+
+  let ranking = await request("/api/leaderboard?category=throughput&seasonId=season_01");
+  let entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.id);
+  assert.equal(entry.metrics.peakThroughputPerMinute, 0);
+  assert.equal(entry.metrics.theoreticalPeakThroughputPerMinute, 600);
+  assert.equal(entry.metrics.activePlanetThroughputPerMinute, 100);
+  assert.equal(entry.metrics.galacticThroughputPerMinute, 600);
+  assert.equal(entry.metrics.nominalThroughputMetricVersion, "galactic-planet-sum-v1");
+  assert.equal(entry.verification.nominalThroughputMetricVersion, "galactic-planet-sum-v1");
+
+  const switchedPayload = mutateSavePayload(payload, (state) => {
+    state.elapsedSeconds += 60;
+    state.activePlanetId = "abyss";
+    state.metrics = { ...state.planetMetrics.abyss };
+  });
+  assert.equal((await request("/api/cloud-save", {
+    method: "PUT", headers, body: JSON.stringify({ payload: switchedPayload, expectedRevision: 1 }),
+  })).response.status, 200);
+  ranking = await request("/api/leaderboard?category=throughput&seasonId=season_01");
+  entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.id);
+  assert.equal(entry.metrics.peakThroughputPerMinute, 0);
+  assert.equal(entry.metrics.theoreticalPeakThroughputPerMinute, 600);
+  assert.equal(entry.metrics.activePlanetThroughputPerMinute, 300);
+  assert.equal(entry.metrics.galacticThroughputPerMinute, 600);
+});
+
+test("marks root-only nominal throughput as a legacy active-planet fallback", async () => {
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "legacy_nominal", password: "rank-pass-123", displayName: "旧口径存档" }),
+  });
+  const payload = createSavePayload({
+    version: 24,
+    elapsedSeconds: 1_000,
+    entities: [],
+    totalProduced: {},
+    metrics: { generationKw: 1_000, totalItemsPerMinute: 450, rayGenerationKw: 0 },
+    exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
+  });
+  assert.equal((await request("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.body.token}` },
+    body: JSON.stringify({ payload, expectedRevision: 0 }),
+  })).response.status, 200);
+  const ranking = await request("/api/leaderboard?category=throughput&seasonId=season_01");
+  const entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.id);
+  assert.equal(entry.metrics.theoreticalPeakThroughputPerMinute, 450);
+  assert.equal(entry.metrics.activePlanetThroughputPerMinute, 450);
+  assert.equal(entry.metrics.galacticThroughputPerMinute, 450);
+  assert.equal(entry.metrics.nominalThroughputMetricVersion, "legacy-active-planet-v1");
+  assert.equal(entry.verification.nominalThroughputMetricVersion, "legacy-active-planet-v1");
+});
+
+test("verifies the optional 19 MiB galactic-throughput fixture without modifying it", {
+  skip: !galacticThroughputFixturePath,
+}, async () => {
+  const sourceBefore = await readFile(galacticThroughputFixturePath);
+  const sourceHash = createHash("sha256").update(sourceBefore).digest("hex");
+  const payload = sourceBefore.toString("utf8");
+  const parsed = JSON.parse(payload);
+  const nominal = aggregateGalacticFactoryMetric(parsed.state, "totalItemsPerMinute");
+  assert.ok(Math.abs(nominal.activePlanetValue - 14_503_564_442.41) < 1);
+  assert.ok(Math.abs(nominal.galacticValue - 189_651_877_333.02) < 1);
+  assert.equal(nominal.metricVersion, "galactic-planet-sum-v1");
+  assert.equal(nominal.planetCount, 22);
+
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "fixture_nominal", password: "rank-pass-123", displayName: "真实夹具口径" }),
+  });
+  assert.equal((await request("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.body.token}` },
+    body: JSON.stringify({ payload, expectedRevision: 0 }),
+  })).response.status, 200);
+  const ranking = await request("/api/leaderboard?category=throughput&seasonId=season_01");
+  const entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.id);
+  assert.ok(Math.abs(entry.metrics.activePlanetThroughputPerMinute - nominal.activePlanetValue) < 1);
+  assert.ok(Math.abs(entry.metrics.galacticThroughputPerMinute - nominal.galacticValue) < 1);
+  assert.ok(Math.abs(entry.metrics.theoreticalPeakThroughputPerMinute - nominal.galacticValue) < 1);
+  assert.equal(entry.metrics.peakThroughputPerMinute, 0);
+
+  const sourceAfter = await readFile(galacticThroughputFixturePath);
+  assert.equal(createHash("sha256").update(sourceAfter).digest("hex"), sourceHash);
+});
+
+test("does not merge a legacy nominal throughput peak into the v2 settled-production metric", async () => {
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "throughput_v2_rank", password: "rank-pass-123", displayName: "实际吞吐测试" }),
+  });
+  const headers = { authorization: `Bearer ${registered.body.token}` };
+  const first = createSavePayload({
+    version: 24,
+    elapsedSeconds: 1_000,
+    entities: [],
+    totalProduced: { iron_ingot: 1_000 },
+    metrics: { generationKw: 1_000, totalItemsPerMinute: 9_000_000, rayGenerationKw: 0 },
+    exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
+  });
+  assert.equal((await request("/api/cloud-save", { method: "PUT", headers, body: JSON.stringify({ payload: first, expectedRevision: 0 }) })).response.status, 200);
+  const key = `season_01:${registered.body.user.id}`;
+  server.store.data.submissions[key].metrics.peakThroughputPerMinute = 8_000_000;
+  server.store.data.submissions[key].verification.strategy = "main-cloud-save-v1";
+  await server.store.persist();
+
+  const second = mutateSavePayload(first, (state) => {
+    state.elapsedSeconds = 1_060;
+    state.totalProduced.iron_ingot = 1_600;
+  });
+  assert.equal((await request("/api/cloud-save", { method: "PUT", headers, body: JSON.stringify({ payload: second, expectedRevision: 1 }) })).response.status, 200);
+  const submission = server.store.data.submissions[key];
+  assert.equal(submission.verification.strategy, "main-cloud-save-v2");
+  assert.equal(submission.metrics.peakThroughputPerMinute, 600);
+  assert.equal(submission.metrics.theoreticalPeakThroughputPerMinute, 9_000_000);
+  assert.equal(submission.legacyMetrics.peakThroughputPerMinute, 8_000_000);
 });
 
 test("saturates extreme leaderboard totals instead of wrapping them to zero", async () => {

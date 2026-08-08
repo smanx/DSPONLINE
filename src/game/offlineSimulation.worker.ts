@@ -3,13 +3,35 @@
 import { completeSimulationAdvanceSession, createSimulationAdvanceSession } from "./engine";
 import { applyContentPackRuntimeSnapshot } from "./contentPacks";
 import { advanceOfflineSimulationChunk, type OfflineSimulationWorkerRequest, type OfflineSimulationWorkerResponse } from "./offlineSimulation";
-import { FAST_OFFLINE_CALIBRATION_SECONDS, runFastOfflineSettlementAsync, type OfflineApproximationReport } from "./offlineApproximation";
+import {
+  FAST_OFFLINE_CALIBRATION_SECONDS,
+  FAST_OFFLINE_DESKTOP_DEADLINE_MS,
+  runConservativeOfflineSettlement,
+  runFastOfflineSettlementAsync,
+  type OfflineApproximationReport,
+} from "./offlineApproximation";
+import {
+  selectInitialOfflineWorkerStrategy,
+  selectOfflineWorkerStrategyAfterFastResult,
+  type OfflineWorkerSettlementRequestShape,
+} from "./offlineSettlementStrategy";
 import { applyReturningRewardToState, inspectSave, serializeEnvelope } from "./storage";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
 import type { GameSettings, GameState } from "./types";
 
 let activeId: number | null = null;
 let cancelled = false;
+
+class InvalidOfflineSourceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidOfflineSourceError";
+  }
+}
+
+function nowMs(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
 
 function post(message: OfflineSimulationWorkerResponse): void {
   self.postMessage(message);
@@ -58,6 +80,31 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
   }
   activeId = request.id;
   cancelled = false;
+  const operationStartedAt = nowMs();
+  let currentPhase: Extract<OfflineSimulationWorkerResponse, { type: "progress" }>["phase"] = "preparing";
+  const postProgress = (
+    completedSeconds: number,
+    totalSeconds: number,
+    extra: { algorithmVersion?: string; degradedReason?: string } = {},
+  ) => {
+    if (activeId !== request.id || cancelled) return;
+    const wallClockMs = Math.max(0, nowMs() - operationStartedAt);
+    const progress = totalSeconds > 0 ? Math.max(0, Math.min(1, completedSeconds / totalSeconds)) : 1;
+    const estimatedRemainingMs = completedSeconds > 0 && completedSeconds < totalSeconds
+      ? wallClockMs * (totalSeconds - completedSeconds) / completedSeconds
+      : undefined;
+    post({
+      type: "progress",
+      id: request.id,
+      completedSeconds,
+      totalSeconds,
+      progress,
+      phase: currentPhase,
+      wallClockMs,
+      ...(estimatedRemainingMs !== undefined ? { estimatedRemainingMs } : {}),
+      ...extra,
+    });
+  };
   try {
     applyContentPackRuntimeSnapshot(request.registry);
     if (request.type === "prepare-upload") {
@@ -73,7 +120,8 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
           post({ type: "cancelled", id: request.id });
           return;
         }
-        const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+        currentPhase = "bounded-exact";
+        const startedAt = nowMs();
         if (session.remainingSeconds > 0) {
           do {
             advanceOfflineSimulationChunk(session, { maximumWindowSeconds: 256 });
@@ -82,15 +130,9 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
               return;
             }
           } while (session.remainingSeconds > 0 &&
-            (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt < 75);
+            nowMs() - startedAt < 75);
           const completedSeconds = session.totalSeconds - session.remainingSeconds;
-          post({
-            type: "progress",
-            id: request.id,
-            completedSeconds,
-            totalSeconds: session.totalSeconds,
-            progress: session.totalSeconds > 0 ? completedSeconds / session.totalSeconds : 1,
-          });
+          postProgress(completedSeconds, session.totalSeconds);
           if (session.remainingSeconds > 0) {
             setTimeout(runChunk, 0);
             return;
@@ -99,6 +141,8 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
         const advanced = completeSimulationAdvanceSession(session);
         const returning = applyReturningRewardToState(advanced, savedAt, offlineSeconds, request.returningRewardClaimed);
         const state = { ...returning.state, settings: mergeUploadSettings(returning.state.settings, request.menuSettings) };
+        currentPhase = "saving";
+        postProgress(offlineSeconds, offlineSeconds);
         const payload = serializeEnvelope(state, request.now, "primary", undefined, request.registry.registry);
         post({
           type: "upload-complete",
@@ -114,37 +158,115 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
       return;
     }
     let approximation: OfflineApproximationReport | undefined;
-    if (request.approximate === true && request.seconds > FAST_OFFLINE_CALIBRATION_SECONDS) {
+    const strategyRequest: OfflineWorkerSettlementRequestShape = {
+      approximate: request.approximate === true,
+      conservativeOnly: request.conservativeOnly === true,
+      speedrun: request.state.speedrun?.enabled === true,
+      seconds: request.seconds,
+    };
+    let strategy = selectInitialOfflineWorkerStrategy(strategyRequest);
+    if (strategy === "conservative") {
+      const conservativeReason = request.conservativeReason ??
+        "Worker 达到现实时间上限后使用零校准保守宏观";
+      currentPhase = "conservative";
+      postProgress(0, request.seconds, {
+        algorithmVersion: "fast-30s-v2",
+        degradedReason: conservativeReason,
+      });
+      const conservative = runConservativeOfflineSettlement(
+        request.state,
+        request.seconds,
+        request.wallSeconds ?? request.seconds,
+        conservativeReason,
+        undefined,
+        0,
+        undefined,
+        true,
+      );
+      if (conservative.status !== "conservative") {
+        if (conservative.status === "invalid-source") {
+          throw new InvalidOfflineSourceError(conservative.report.fallbackReason ?? "源存档未通过保守宏观安全校验");
+        }
+        throw new Error(conservative.report.fallbackReason ?? "保守宏观候选无效");
+      }
+      postProgress(request.seconds, request.seconds, {
+        algorithmVersion: conservative.report.algorithmVersion,
+        degradedReason: conservative.report.fallbackReason,
+      });
+      post({ type: "complete", id: request.id, state: conservative.state, totalSeconds: request.seconds, approximation: conservative.report });
+      activeId = null;
+      return;
+    }
+    if (strategy === "fast") {
       // Do not create the exact session until the fast path declines. The
       // fast contract owns isolated calibration copies and otherwise this
       // would clone the entire save twice before any useful work starts.
       const experiment = await runFastOfflineSettlementAsync(request.state, request.seconds, {
+        wallSeconds: request.wallSeconds ?? request.seconds,
+        deadlineAtMs: nowMs() + Math.max(1_000, request.deadlineMs ?? FAST_OFFLINE_DESKTOP_DEADLINE_MS),
         shouldCancel: () => activeId !== request.id || cancelled,
+        onPhase: (phase) => {
+          currentPhase = phase === "calibrating" ? "calibrating"
+            : phase === "macro" ? "macro"
+              : phase === "validating" ? "validating"
+                : "conservative";
+          postProgress(0, request.seconds, { algorithmVersion: "fast-30s-v2" });
+        },
         onProgress: (completedSeconds, totalSeconds) => {
-          if (activeId !== request.id || cancelled) return;
-          post({
-            type: "progress",
-            id: request.id,
-            completedSeconds,
-            totalSeconds,
-            progress: totalSeconds > 0 ? completedSeconds / totalSeconds : 1,
-          });
+          postProgress(completedSeconds, totalSeconds, { algorithmVersion: "fast-30s-v2" });
         },
       });
       approximation = experiment.report;
-      if (experiment.status === "approximate") {
+      strategy = selectOfflineWorkerStrategyAfterFastResult(strategyRequest, experiment);
+      if (experiment.status === "approximate" || experiment.status === "conservative" || experiment.status === "bounded-exact") {
+        currentPhase = experiment.status === "conservative" ? "conservative"
+          : experiment.status === "bounded-exact" ? "bounded-exact" : "macro";
+        postProgress(request.seconds, request.seconds, {
+          algorithmVersion: experiment.report.algorithmVersion,
+          degradedReason: experiment.report.fallbackReason,
+        });
         post({ type: "complete", id: request.id, state: experiment.state, totalSeconds: request.seconds, approximation });
         activeId = null;
         return;
       }
+      if (strategy === "invalid-source") {
+        throw new InvalidOfflineSourceError(experiment.report.fallbackReason ?? "源存档未通过快速结算安全校验");
+      }
+      if (strategy === "conservative") {
+        currentPhase = "conservative";
+        postProgress(FAST_OFFLINE_CALIBRATION_SECONDS, request.seconds, {
+          algorithmVersion: experiment.report.algorithmVersion,
+          degradedReason: experiment.report.fallbackReason,
+        });
+        const conservative = runConservativeOfflineSettlement(
+          request.state,
+          request.seconds,
+          request.wallSeconds ?? request.seconds,
+          experiment.report.fallbackReason ?? "普通合同不可用，已使用保守宏观结算",
+        );
+        if (conservative.status === "conservative") {
+          postProgress(request.seconds, request.seconds, {
+            algorithmVersion: conservative.report.algorithmVersion,
+            degradedReason: conservative.report.fallbackReason,
+          });
+          post({ type: "complete", id: request.id, state: conservative.state, totalSeconds: request.seconds, approximation: conservative.report });
+          activeId = null;
+          return;
+        }
+        if (conservative.status === "invalid-source") {
+          throw new InvalidOfflineSourceError(conservative.report.fallbackReason ?? "源存档未通过保守宏观安全校验");
+        }
+        throw new Error(conservative.report.fallbackReason ?? "保守宏观候选无效");
+      }
     }
+    currentPhase = "bounded-exact";
     const session = createSimulationAdvanceSession(request.state, request.seconds);
     const runChunk = () => {
       if (activeId !== request.id || cancelled) {
         post({ type: "cancelled", id: request.id });
         return;
       }
-      const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+      const startedAt = nowMs();
       do {
         // The helper only changes scheduling overhead. Every engine step and
         // settlement boundary remains the same deterministic path.
@@ -154,15 +276,9 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
           return;
         }
       } while (session.remainingSeconds > 0 &&
-        (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt < 75);
+        nowMs() - startedAt < 75);
       const completedSeconds = session.totalSeconds - session.remainingSeconds;
-      post({
-        type: "progress",
-        id: request.id,
-        completedSeconds,
-        totalSeconds: session.totalSeconds,
-        progress: session.totalSeconds > 0 ? completedSeconds / session.totalSeconds : 1,
-      });
+      postProgress(completedSeconds, session.totalSeconds, { algorithmVersion: "deterministic-exact" });
       if (session.remainingSeconds > 0) {
         setTimeout(runChunk, 0);
         return;
@@ -177,7 +293,12 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
       activeId = null;
       return;
     }
-    post({ type: "error", id: request.id, message: error instanceof Error ? error.message : "离线计算失败" });
+    post({
+      type: "error",
+      id: request.id,
+      message: error instanceof Error ? error.message : "离线计算失败",
+      code: error instanceof InvalidOfflineSourceError ? "invalid-source" : "worker-failure",
+    });
     activeId = null;
   }
 };

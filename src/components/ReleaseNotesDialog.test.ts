@@ -4,23 +4,26 @@ import { CURRENT_RELEASE_NOTES, RELEASE_NOTES_HISTORY, getReleaseNotesPage, getR
 describe("release notes history", () => {
   it("keeps the newest release first and exposes bounded pages", () => {
     expect(RELEASE_NOTES_HISTORY[0].id).toBe(CURRENT_RELEASE_NOTES.id);
-    expect(RELEASE_NOTES_HISTORY.map((entry) => Number(entry.version.split(".")[2]))).toEqual(Array.from({ length: 33 }, (_, index) => 32 - index));
+    expect(RELEASE_NOTES_HISTORY.map((entry) => Number(entry.version.split(".")[2]))).toEqual(Array.from({ length: 35 }, (_, index) => 34 - index));
     expect(getReleaseNotesPage(0)).toHaveLength(3);
     expect(getReleaseNotesPage(1)).toHaveLength(3);
     expect(getReleaseNotesPage(99)).toEqual([]);
   });
 
   it("supports a small fixed page size without rendering the complete history", () => {
-    expect(getReleaseNotesPage(0, 2).map((entry) => entry.version)).toEqual(["1.0.32", "1.0.31"]);
-    expect(getReleaseNotesPage(15, 2).map((entry) => entry.version)).toEqual(["1.0.2", "1.0.1"]);
-    expect(getReleaseNotesPage(16, 2).map((entry) => entry.version)).toEqual(["1.0.0"]);
+    expect(getReleaseNotesPage(0, 2).map((entry) => entry.version)).toEqual(["1.0.34", "1.0.33"]);
+    expect(getReleaseNotesPage(15, 2).map((entry) => entry.version)).toEqual(["1.0.4", "1.0.3"]);
+    expect(getReleaseNotesPage(16, 2).map((entry) => entry.version)).toEqual(["1.0.2", "1.0.1"]);
+    expect(getReleaseNotesPage(17, 2).map((entry) => entry.version)).toEqual(["1.0.0"]);
   });
 
   it("maps direct page jumps and historical details to the same page", () => {
-    expect(getReleaseNotesPageCount()).toBe(11);
+    expect(getReleaseNotesPageCount()).toBe(12);
+    expect(getReleaseNotesPageForRelease("2026-08-08-v1.0.34")).toBe(0);
+    expect(getReleaseNotesPageForRelease("2026-08-07-v1.0.33")).toBe(0);
     expect(getReleaseNotesPageForRelease("2026-08-07-v1.0.32")).toBe(0);
-    expect(getReleaseNotesPageForRelease("2026-08-06-v1.0.31")).toBe(0);
-    expect(getReleaseNotesPageForRelease("2026-08-03-v1.0.24")).toBe(2);
+    expect(getReleaseNotesPageForRelease("2026-08-06-v1.0.31")).toBe(1);
+    expect(getReleaseNotesPageForRelease("2026-08-03-v1.0.24")).toBe(3);
     expect(getReleaseNotesPageForRelease("missing-release")).toBeNull();
   });
 

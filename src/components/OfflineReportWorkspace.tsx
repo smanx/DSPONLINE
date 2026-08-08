@@ -20,8 +20,10 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
   const galacticCreditsAdded = report.galacticCreditsAdded ?? 0;
   const returningReward = report.returningReward ?? [];
   const approximation = report.approximation;
-  const settlementLabel = approximation?.fellBack
-    ? "安全回退"
+  const settlementLabel = approximation?.settlementStatus === "conservative"
+    ? "保守宏观结算"
+    : approximation?.settlementStatus === "bounded-exact"
+      ? "有界精确结算"
     : approximation?.mode === "approximate" ? "近似宏观结算（实验）" : "精确结算";
   const hasChanges = report.produced.length > 0 || report.completedTechIds.length > 0 ||
     report.structurePointsAdded > 0 || report.shellSailsAdded > 0 || infiniteResearchLevels.length > 0 ||
@@ -39,13 +41,15 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
         <section className={`offline-report-method offline-report-method--${approximation?.fellBack ? "fallback" : approximation?.mode ?? "exact"}`}>
           <header><Clock3 size={15} /><span>结算方式</span><strong>{settlementLabel}</strong></header>
           <dl>
-            <div><dt>精确校准</dt><dd>{approximation ? approximation.calibrationWindowSeconds > 0 ? `${approximation.calibrationWindowSeconds} 秒${approximation.algorithmVersion === "fast-30s-v1" ? "" : " × 2"}` : "未进入实验" : "全程精确"}</dd></div>
+            <div><dt>精确校准</dt><dd>{approximation ? approximation.calibrationWindowSeconds > 0 ? `${approximation.calibrationWindowSeconds} 秒${approximation.algorithmVersion?.startsWith("fast-30s-") ? "" : " × 2"}` : "未进入实验" : "全程精确"}</dd></div>
             <div><dt>宏观覆盖</dt><dd>{approximation ? formatDuration(approximation.approximatedSeconds) : "未使用"}</dd></div>
             <div><dt>估计最大误差</dt><dd>{approximation ? `${(approximation.maxEstimatedError * 100).toFixed(2)}%` : "0.00%"}</dd></div>
             <div><dt>算法版本</dt><dd>{approximation?.algorithmVersion ?? "deterministic-exact"}</dd></div>
+            {approximation?.wallClockMs !== undefined ? <div><dt>现实耗时</dt><dd>{(approximation.wallClockMs / 1_000).toFixed(2)} 秒</dd></div> : null}
+            {approximation?.researchInvested !== undefined ? <div><dt>科研投入</dt><dd>{approximation.researchInvested}</dd></div> : null}
             {approximation?.boundaryCorrections ? <div><dt>边界修正</dt><dd>{approximation.boundaryCorrections}</dd></div> : null}
           </dl>
-          {approximation?.fellBack ? <p className="offline-report-warning">本次近似未满足安全条件，已自动使用精确结算：{approximation.fallbackReason ?? "未知原因"}</p> : null}
+          {approximation?.settlementStatus === "conservative" ? <p className="offline-report-warning">普通宏观合同未满足安全条件，已在现实时间上限内使用保守宏观结算：{approximation.fallbackReason ?? "未知原因"}</p> : approximation?.fellBack ? <p className="offline-report-warning">本次使用有界安全路径：{approximation.fallbackReason ?? "未知原因"}</p> : null}
         </section>
       </div>
       {hasChanges ? (

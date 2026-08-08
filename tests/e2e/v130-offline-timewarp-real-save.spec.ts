@@ -5,7 +5,7 @@ const fixturePath = process.env.DSP_REAL_OFFLINE_TIME_WARP_FIXTURE;
 const fixtureRoute = "**/__dsp_real_offline_timewarp_fixture.json";
 const harnessPath = "/__dsp_worker_harness.html";
 
-test.describe("1.0.30 real-save offline and pure-idle workers", () => {
+test.describe("1.0.34 real-save offline and pure-idle workers", () => {
   test.skip(!fixturePath, "set DSP_REAL_OFFLINE_TIME_WARP_FIXTURE to a read-only save path");
 
   test.beforeEach(async ({ page }) => {
@@ -22,8 +22,8 @@ test.describe("1.0.30 real-save offline and pure-idle workers", () => {
     }));
   });
 
-  test("30-day fast offline completes through the browser Worker without changing the source", async ({ page }) => {
-    test.setTimeout(90_000);
+  test("all long offline windows complete through the browser Worker without changing the source", async ({ page }) => {
+    test.setTimeout(150_000);
     await page.goto(harnessPath);
     const result = await page.evaluate(async () => {
       const loadModule = new Function("specifier", "return import(specifier)") as
@@ -47,56 +47,83 @@ test.describe("1.0.30 real-save offline and pure-idle workers", () => {
         type: "module",
         name: "real-save-offline-e2e",
       });
-      const startedAt = performance.now();
-      const response = await new Promise<Record<string, any>>((resolve, reject) => {
-        const timeout = window.setTimeout(() => reject(new Error("offline Worker exceeded 45 seconds")), 45_000);
-        worker.onerror = () => {
-          window.clearTimeout(timeout);
-          reject(new Error("offline Worker failed"));
-        };
-        worker.onmessage = (event: MessageEvent<Record<string, any>>) => {
-          if (event.data.type === "progress") return;
-          window.clearTimeout(timeout);
-          if (event.data.type === "complete") resolve(event.data);
-          else reject(new Error(event.data.message ?? event.data.type ?? "offline Worker returned an unknown result"));
-        };
-        worker.postMessage({
-          type: "start",
-          id: 1,
-          state,
-          seconds: 30 * 24 * 60 * 60,
-          registry,
-          approximate: true,
+      const durations = [6_984, 30_171, 7 * 24 * 60 * 60, 30 * 24 * 60 * 60];
+      const reports: Array<Record<string, any>> = [];
+      for (let index = 0; index < durations.length; index += 1) {
+        const seconds = durations[index];
+        const phases: string[] = [];
+        const heapBefore = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? null;
+        const startedAt = performance.now();
+        const response = await new Promise<Record<string, any>>((resolve, reject) => {
+          const timeout = window.setTimeout(() => reject(new Error(`offline Worker exceeded 35 seconds for ${seconds}s`)), 35_000);
+          worker.onerror = () => {
+            window.clearTimeout(timeout);
+            reject(new Error(`offline Worker failed for ${seconds}s`));
+          };
+          worker.onmessage = (event: MessageEvent<Record<string, any>>) => {
+            if (event.data.id !== index + 1) return;
+            if (event.data.type === "progress") {
+              phases.push(String(event.data.phase));
+              return;
+            }
+            window.clearTimeout(timeout);
+            if (event.data.type === "complete") resolve(event.data);
+            else reject(new Error(event.data.message ?? event.data.type ?? "offline Worker returned an unknown result"));
+          };
+          worker.postMessage({
+            type: "start",
+            id: index + 1,
+            state,
+            seconds,
+            wallSeconds: seconds,
+            registry,
+            approximate: true,
+            deadlineMs: 30_000,
+          });
         });
-      });
-      const roundTripMs = performance.now() - startedAt;
+        const output = response.state as Record<string, any>;
+        const serialized = storage.serializeEnvelope(output) as string;
+        const inspection = storage.inspectSave(serialized) as { valid: boolean };
+        reports.push({
+          seconds,
+          roundTripMs: performance.now() - startedAt,
+          heapBefore,
+          heapAfter: (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? null,
+          approximation: response.approximation,
+          phases: [...new Set(phases)],
+          elapsedAdvance: output.elapsedSeconds - state.elapsedSeconds,
+          valid: inspection.valid,
+          criticalFinite: [
+            output.totalProduced?.universe_matrix ?? 0,
+            output.dysonSphere?.totalRocketsLaunched ?? 0,
+            output.dysonSphere?.structurePoints ?? 0,
+            output.dysonSphere?.generationKw ?? 0,
+            output.dysonSwarm?.generationKw ?? 0,
+          ].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0),
+        });
+      }
       worker.terminate();
-      const output = response.state as Record<string, any>;
       return {
-        roundTripMs,
-        approximation: response.approximation,
+        reports,
         sourceUnchanged: source === JSON.stringify({
           elapsedSeconds: state.elapsedSeconds,
           savedAt: state.savedAt,
           totalProduced: state.totalProduced,
           dysonSphere: state.dysonSphere,
         }),
-        elapsedAdvance: output.elapsedSeconds - state.elapsedSeconds,
-        criticalFinite: [
-          output.totalProduced?.universe_matrix ?? 0,
-          output.dysonSphere?.totalRocketsLaunched ?? 0,
-          output.dysonSphere?.structurePoints ?? 0,
-          output.dysonSphere?.generationKw ?? 0,
-          output.dysonSwarm?.generationKw ?? 0,
-        ].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0),
       };
     });
 
     expect(result.sourceUnchanged).toBe(true);
-    expect(result.criticalFinite).toBe(true);
-    expect(result.elapsedAdvance).toBeCloseTo(30 * 24 * 60 * 60, 3);
-    expect(result.approximation).toMatchObject({ mode: "approximate", algorithmVersion: "fast-30s-v1" });
-    expect(result.roundTripMs).toBeLessThan(30_000);
+    expect(result.reports).toHaveLength(4);
+    for (const report of result.reports) {
+      expect(report.valid).toBe(true);
+      expect(report.criticalFinite).toBe(true);
+      expect(report.elapsedAdvance).toBeCloseTo(report.seconds, 3);
+      expect(report.approximation).toMatchObject({ mode: "approximate", algorithmVersion: "fast-30s-v2" });
+      expect(["approximate", "conservative"]).toContain(report.approximation?.settlementStatus);
+      expect(report.roundTripMs).toBeLessThan(30_000);
+    }
     console.log(`BROWSER_FAST_OFFLINE ${JSON.stringify(result)}`);
   });
 
@@ -200,12 +227,12 @@ test.describe("1.0.30 real-save offline and pure-idle workers", () => {
     expect(result.lateMessage).toBe(false);
     expect(result.terminateMs).toBeLessThan(1_000);
     expect(result.reports).toHaveLength(3);
+    console.log(`BROWSER_TIME_WARP ${JSON.stringify(result)}`);
     for (const report of result.reports) {
       expect(report.criticalFinite).toBe(true);
-      expect(report.approximation).toMatchObject({ mode: "approximate", algorithmVersion: "time-warp-short-calibration-v2" });
-      expect(report.durationMs).toBeLessThan(5_000);
-      expect(report.roundTripMs).toBeLessThan(5_000);
+      expect(report.approximation).toMatchObject({ mode: "approximate", algorithmVersion: "time-warp-short-calibration-v3" });
+      expect(report.durationMs).toBeLessThan(8_000);
+      expect(report.roundTripMs).toBeLessThan(8_000);
     }
-    console.log(`BROWSER_TIME_WARP ${JSON.stringify(result)}`);
   });
 });

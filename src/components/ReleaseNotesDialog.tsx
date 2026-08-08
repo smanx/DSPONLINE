@@ -1,35 +1,40 @@
-import { Check, ChevronLeft, ChevronRight, Gauge, History, Info, MessageCircle, RefreshCw, ShieldCheck, X, type LucideIcon } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, CloudUpload, Gauge, History, Info, Link2, MessageCircle, Smartphone, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-08-07-v1.0.32",
-  date: "2026年8月7日",
-  version: "1.0.32",
-  title: "速通与宏观纯挂机稳定性更新",
-  summary: "1.0.32 补齐速通状态面板、递归制造与科研边界自愈，并增加带检查点恢复的宏观纯挂机；后台高倍率最多宽限 5 分钟，剩余时间自动按普通离线规则结算。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+  id: "2026-08-08-v1.0.34",
+  date: "2026年8月8日",
+  version: "1.0.34",
+  title: "云存档、纯挂机与排行榜可信度更新",
+  summary: "1.0.34 修复历史唯一巨构堆叠和 Android 云上传，纯挂机停止复用已校准 Worker 并保留可恢复冻结边界；排行榜拆分实际结算吞吐、当前星球和全星区理论速率，同时增加拉线候选建筑高亮。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
   items: [
     {
-      id: "speedrun-panel",
-      title: "速通面板可折叠",
-      description: "速通工厂的计时和三个目标保持可见，目标详情可以折叠；折叠状态只保存为设备级 UI 偏好，不进入存档或排行榜数据。",
+      id: "cloud-stack",
+      title: "历史唯一巨构可安全上传",
+      description: "正式版本曾产生的时间扭曲装置或微型黑洞历史堆叠会原样保留并通过云端校验；新的批量增加会明确跳过唯一巨构且不扣施工库存。",
     },
     {
-      id: "recursive-research",
-      title: "递归制造与科研自愈",
-      description: "原油上游和净产出规划遵循统一的递归策略；离线、纯挂机或旧存档跨过科研完成边界时，奖励和队列只会幂等修复一次。",
+      id: "android-cloud",
+      title: "Android 云上传绕过损坏压缩桥接",
+      description: "Android 原生应用改用有大小上限的原始 JSON 上传；Web 遇到服务端明确拒绝 gzip 时只安全回退一次，取消、冲突和未知状态继续保护本地主存档。",
     },
     {
-      id: "pure-idle-background",
-      title: "纯挂机检查点与后台宽限",
-      description: "宏观纯挂机在 Worker 中运行并持续写入检查点、心跳和租约；页面进入后台后最多保留 5 分钟高倍率，超出部分使用普通离线 Worker，保存失败时保留原主存档。",
+      id: "pure-idle-stop",
+      title: "纯挂机停止与恢复更清晰",
+      description: "停止时复用当前已校准 Worker，冻结结算边界直到主存档验证写入成功；失败会保留检查点，并提供明确的原因、重试和放弃未结算操作。",
     },
     {
-      id: "release-history",
-      title: "公告历史完整可查",
-      description: "公告详情支持直接跳转历史页，历史版本使用离线静态数据并保留完整条目；列表分页不会一次挂载全部正文。",
+      id: "throughput",
+      title: "排行榜吞吐口径跨星球一致",
+      description: "相邻主云修订按累计生产增量形成实际吞吐窗口；当前星球与全星区理论速率分开显示，全星区速率按所有行星指标饱和求和，不再把当前星球快照误当全局。",
+    },
+    {
+      id: "connection-highlight",
+      title: "拉线候选建筑同步高亮",
+      description: "鼠标、点击和触摸拉线时，起点建筑与拥有兼容端口的目标卡片会显示静态边框；成功、取消、Escape 或切换页面后立即清除。",
     },
     {
       id: "save-compatibility",
@@ -40,10 +45,11 @@ export const CURRENT_RELEASE_NOTES = {
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "speedrun-panel": Gauge,
-  "recursive-research": RefreshCw,
-  "pure-idle-background": ShieldCheck,
-  "release-history": History,
+  "cloud-stack": CloudUpload,
+  "android-cloud": Smartphone,
+  "pure-idle-stop": History,
+  "throughput": Gauge,
+  "connection-highlight": Link2,
   "save-compatibility": Check,
 };
 
@@ -59,6 +65,28 @@ export interface ReleaseNotesRecord {
 /** Static, offline-readable history. Keep entries small; only one page is rendered. */
 export const RELEASE_NOTES_HISTORY: readonly ReleaseNotesRecord[] = [
   CURRENT_RELEASE_NOTES,
+  {
+    id: "2026-08-07-v1.0.33", date: "2026年8月7日", version: "1.0.33", title: "离线与时间扭曲终局快速结算更新",
+    summary: "1.0.33 让有限与无限科研继续参与快速离线和时间扭曲纯挂机，修复陈旧供电倍率，并在普通合同不可用或 Worker 失败时改用有界的保守宏观结算。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+    items: [
+      { id: "offline-research", title: "科研不再阻断快速结算", description: "有限科技和无限科技使用共享的整数科研账本，离线与纯挂机可跨越科研边界；成本、奖励、队列和等级仍按原有领域规则结算。" },
+      { id: "power-multiplier", title: "供电倍率使用权威快照", description: "纯挂机启动和恢复时重新计算时间扭曲供电，界面同时显示请求倍率、供电允许倍率和实际结算倍率，不再继承陈旧的 1x 状态。" },
+      { id: "bounded-settlement", title: "有界保守宏观回退", description: "普通宏观合同、尾验或校准未满足条件时，结算会在现实时间预算内降级为保守宏观，不再对整段离线时间执行无上限精确重放。" },
+      { id: "worker-recovery", title: "Worker 失败与恢复有界", description: "取消、迟到消息和重复 Worker 会话相互隔离；普通离线只进行一次有界保守重试，纯挂机连续失败后从原始合法检查点进入零校准保守模式。" },
+      { id: "save-compatibility", title: "存档与在线协议保持兼容", description: "本批不升级 GameState、存档封装、云服务或 SQLite 版本；候选宏观状态必须序列化、重载和安全校验通过后才会写入主存档。" },
+    ],
+  },
+  {
+    id: "2026-08-07-v1.0.32", date: "2026年8月7日", version: "1.0.32", title: "速通与宏观纯挂机稳定性更新",
+    summary: "1.0.32 补齐速通状态面板、递归制造与科研边界自愈，并增加带检查点恢复的宏观纯挂机；后台高倍率最多宽限 5 分钟，剩余时间自动按普通离线规则结算。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+    items: [
+      { id: "speedrun-panel", title: "速通面板可折叠", description: "速通工厂的计时和三个目标保持可见，目标详情可以折叠；折叠状态只保存为设备级 UI 偏好，不进入存档或排行榜数据。" },
+      { id: "recursive-research", title: "递归制造与科研自愈", description: "原油上游和净产出规划遵循统一的递归策略；离线、纯挂机或旧存档跨过科研完成边界时，奖励和队列只会幂等修复一次。" },
+      { id: "pure-idle-background", title: "纯挂机检查点与后台宽限", description: "宏观纯挂机在 Worker 中运行并持续写入检查点、心跳和租约；页面进入后台后最多保留 5 分钟高倍率，超出部分使用普通离线 Worker，保存失败时保留原主存档。" },
+      { id: "release-history", title: "公告历史完整可查", description: "公告详情支持直接跳转历史页，历史版本使用离线静态数据并保留完整条目；列表分页不会一次挂载全部正文。" },
+      { id: "save-compatibility", title: "存档与在线协议保持兼容", description: "本批不升级 GameState、存档封装、云服务或 SQLite 版本；候选宏观状态必须序列化、重载和安全校验通过后才会写入主存档。" },
+    ],
+  },
   {
     id: "2026-08-06-v1.0.31", date: "2026年8月6日", version: "1.0.31", title: "离线结算与高倍率挂机稳定性更新",
     summary: "1.0.31 修复快速离线结算崩溃，补齐统计历史曲线、施工库存删除、锁定配方拓扑保护、移动滚动和高倍率纯挂机治理。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",

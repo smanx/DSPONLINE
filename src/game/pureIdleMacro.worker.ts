@@ -8,7 +8,10 @@ import {
   advancePureIdleMacroSession,
   createPureIdleMacroSession,
   finalizePureIdleMacroSession,
+  PURE_IDLE_MACRO_ALGORITHM_VERSION,
+  PURE_IDLE_MACRO_OPERATION_DEADLINE_MS,
   type PureIdleMacroMode,
+  type PureIdleMacroPhase,
   type PureIdleMacroSession,
   type PureIdleMacroSummary,
 } from "./pureIdleMacro";
@@ -21,15 +24,32 @@ export type PureIdleMacroWorkerRequest =
     state: GameState;
     mode: PureIdleMacroMode;
     registry: ContentPackRuntimeSnapshot;
+    deadlineMs?: number;
+    forceConservativeReason?: string;
   }
-  | { id: number; type: "advance"; targetWallSeconds: number }
-  | { id: number; type: "finalize"; targetWallSeconds: number };
+  | { id: number; type: "advance"; targetWallSeconds: number; deadlineMs?: number }
+  | { id: number; type: "finalize"; targetWallSeconds: number; deadlineMs?: number }
+  | { id: number; type: "cancel"; targetId?: number };
 
 export type PureIdleMacroWorkerResponse =
   | {
     id: number;
     type: "ready" | "advanced";
     summary: PureIdleMacroSummary;
+    durationMs: number;
+  }
+  | {
+    id: number;
+    type: "progress";
+    operation: Exclude<PureIdleMacroWorkerRequest["type"], "cancel">;
+    phase: PureIdleMacroPhase;
+    wallClockMs: number;
+    algorithmVersion: string;
+  }
+  | {
+    id: number;
+    type: "cancelled";
+    operation: Exclude<PureIdleMacroWorkerRequest["type"], "cancel">;
     durationMs: number;
   }
   | {
@@ -43,7 +63,7 @@ export type PureIdleMacroWorkerResponse =
   | {
     id: number;
     type: "error";
-    operation: PureIdleMacroWorkerRequest["type"];
+    operation: Exclude<PureIdleMacroWorkerRequest["type"], "cancel">;
     message: string;
     recoverable: true;
     durationMs: number;
@@ -52,13 +72,21 @@ export type PureIdleMacroWorkerResponse =
 let session: PureIdleMacroSession | null = null;
 let registry: ContentPackRuntimeSnapshot | null = null;
 let queue: Promise<void> = Promise.resolve();
+let activeRequestId: number | null = null;
+const cancelledRequestIds = new Set<number>();
 
 self.onmessage = (event: MessageEvent<PureIdleMacroWorkerRequest>) => {
-  queue = queue.then(() => processRequest(event.data)).catch((error) => {
+  const request = event.data;
+  if (request.type === "cancel") {
+    const targetId = request.targetId ?? activeRequestId;
+    if (targetId !== null) cancelledRequestIds.add(targetId);
+    return;
+  }
+  queue = queue.then(() => processRequest(request)).catch((error) => {
     self.postMessage({
-      id: event.data.id,
+      id: request.id,
       type: "error",
-      operation: event.data.type,
+      operation: request.type,
       message: error instanceof Error ? error.message : "纯挂机 Worker 发生未知错误",
       recoverable: true,
       durationMs: 0,
@@ -67,12 +95,33 @@ self.onmessage = (event: MessageEvent<PureIdleMacroWorkerRequest>) => {
 };
 
 async function processRequest(request: PureIdleMacroWorkerRequest): Promise<void> {
+  if (request.type === "cancel") return;
   const startedAt = performance.now();
+  activeRequestId = request.id;
+  const deadlineAtMs = startedAt + Math.max(1_000, request.deadlineMs ?? PURE_IDLE_MACRO_OPERATION_DEADLINE_MS);
+  const operation = request.type;
+  const interrupted = () => cancelledRequestIds.has(request.id);
+  const postProgress = (phase: PureIdleMacroPhase) => {
+    self.postMessage({
+      id: request.id,
+      type: "progress",
+      operation,
+      phase,
+      wallClockMs: Math.max(0, performance.now() - startedAt),
+      algorithmVersion: PURE_IDLE_MACRO_ALGORITHM_VERSION,
+    } satisfies PureIdleMacroWorkerResponse);
+  };
   try {
     if (request.type === "initialize") {
+      postProgress(request.forceConservativeReason ? "conservative" : "preparing-power");
       applyContentPackRuntimeSnapshot(request.registry);
       registry = request.registry;
-      session = createPureIdleMacroSession(request.state, request.mode);
+      postProgress(request.forceConservativeReason ? "conservative" : "calibrating");
+      session = createPureIdleMacroSession(request.state, request.mode, {
+        deadlineAtMs,
+        shouldCancel: interrupted,
+        forceConservativeReason: request.forceConservativeReason,
+      });
       self.postMessage({
         id: request.id,
         type: "ready",
@@ -83,15 +132,20 @@ async function processRequest(request: PureIdleMacroWorkerRequest): Promise<void
     }
     if (!session || !registry) throw new Error("纯挂机 Worker 尚未完成校准");
     if (request.type === "advance") {
+      postProgress(session.conservativeOnly ? "conservative" : "running");
       self.postMessage({
         id: request.id,
         type: "advanced",
-        summary: advancePureIdleMacroSession(session, request.targetWallSeconds),
+        summary: advancePureIdleMacroSession(session, request.targetWallSeconds, { deadlineAtMs, shouldCancel: interrupted }),
         durationMs: Math.max(0, performance.now() - startedAt),
       } satisfies PureIdleMacroWorkerResponse);
       return;
     }
-    const result = finalizePureIdleMacroSession(session, request.targetWallSeconds, registry.registry);
+    postProgress("finalizing");
+    const result = finalizePureIdleMacroSession(session, request.targetWallSeconds, registry.registry, {
+      deadlineAtMs,
+      shouldCancel: interrupted,
+    });
     self.postMessage({
       id: request.id,
       type: "finalized",
@@ -101,6 +155,15 @@ async function processRequest(request: PureIdleMacroWorkerRequest): Promise<void
       durationMs: Math.max(0, performance.now() - startedAt),
     } satisfies PureIdleMacroWorkerResponse);
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      self.postMessage({
+        id: request.id,
+        type: "cancelled",
+        operation,
+        durationMs: Math.max(0, performance.now() - startedAt),
+      } satisfies PureIdleMacroWorkerResponse);
+      return;
+    }
     self.postMessage({
       id: request.id,
       type: "error",
@@ -109,6 +172,9 @@ async function processRequest(request: PureIdleMacroWorkerRequest): Promise<void
       recoverable: true,
       durationMs: Math.max(0, performance.now() - startedAt),
     } satisfies PureIdleMacroWorkerResponse);
+  } finally {
+    cancelledRequestIds.delete(request.id);
+    if (activeRequestId === request.id) activeRequestId = null;
   }
 }
 

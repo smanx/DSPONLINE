@@ -9,7 +9,18 @@ import {
 } from "./offlineApproximation";
 
 export type OfflineSimulationWorkerRequest =
-  | { type: "start"; id: number; state: GameState; seconds: number; registry: ContentPackRuntimeSnapshot; approximate?: boolean }
+  | {
+    type: "start";
+    id: number;
+    state: GameState;
+    seconds: number;
+    wallSeconds?: number;
+    registry: ContentPackRuntimeSnapshot;
+    approximate?: boolean;
+    conservativeOnly?: boolean;
+    conservativeReason?: string;
+    deadlineMs?: number;
+  }
   | {
     type: "prepare-upload";
     id: number;
@@ -23,17 +34,47 @@ export type OfflineSimulationWorkerRequest =
   | { type: "cancel"; id: number };
 
 export type OfflineSimulationWorkerResponse =
-  | { type: "progress"; id: number; completedSeconds: number; totalSeconds: number; progress: number }
+  | {
+    type: "progress";
+    id: number;
+    completedSeconds: number;
+    totalSeconds: number;
+    progress: number;
+    phase: OfflineSimulationPhase;
+    wallClockMs: number;
+    estimatedRemainingMs?: number;
+    algorithmVersion?: string;
+    degradedReason?: string;
+  }
   | { type: "complete"; id: number; state: GameState; totalSeconds: number; approximation?: OfflineApproximationReport }
   | { type: "upload-complete"; id: number; payload: string; summary: CloudUploadSummary; offlineSeconds: number; returningReward: Array<{ itemId: string; amount: number }> }
   | { type: "cancelled"; id: number }
-  | { type: "error"; id: number; message: string };
+  | {
+    type: "error";
+    id: number;
+    message: string;
+    code: "invalid-source" | "worker-failure";
+  };
 
 export interface OfflineSimulationProgress {
   completedSeconds: number;
   totalSeconds: number;
   progress: number;
+  phase: OfflineSimulationPhase;
+  wallClockMs: number;
+  estimatedRemainingMs?: number;
+  algorithmVersion?: string;
+  degradedReason?: string;
 }
+
+export type OfflineSimulationPhase =
+  | "preparing"
+  | "calibrating"
+  | "macro"
+  | "conservative"
+  | "validating"
+  | "bounded-exact"
+  | "saving";
 
 export interface OfflineSimulationRunResult {
   state: GameState;
@@ -91,20 +132,53 @@ export function runOfflineSimulationInWorker(
 export function runOfflineSimulationInWorkerDetailed(
   state: GameState,
   seconds: number,
-  options: { signal?: AbortSignal; onProgress?: (progress: OfflineSimulationProgress) => void; registry?: ContentPackRuntimeSnapshot; approximate?: boolean; onApproximationReport?: (report: OfflineApproximationReport) => void } = {},
+  options: {
+    signal?: AbortSignal;
+    onProgress?: (progress: OfflineSimulationProgress) => void;
+    registry?: ContentPackRuntimeSnapshot;
+    approximate?: boolean;
+    conservativeOnly?: boolean;
+    conservativeReason?: string;
+    wallSeconds?: number;
+    deadlineMs?: number;
+    onApproximationReport?: (report: OfflineApproximationReport) => void;
+  } = {},
 ): Promise<OfflineSimulationRunResult> {
   if (typeof Worker === "undefined") return Promise.reject(new Error("当前浏览器不支持离线计算 Worker"));
   const worker = new Worker(new URL("./offlineSimulation.worker.ts", import.meta.url), { type: "module", name: "offline-simulation" });
   const id = Date.now() + Math.floor(Math.random() * 1_000_000);
   const startedAt = performance.now();
+  const deadlineMs = options.deadlineMs ?? (options.approximate === true
+    ? (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches ? 60_000 : 30_000)
+    : undefined);
+  const conservativeReserveMs = options.approximate === true && options.conservativeOnly !== true && deadlineMs !== undefined
+    ? Math.min(5_000, Math.max(1_000, deadlineMs / 4))
+    : 0;
+  const workerDeadlineMs = deadlineMs === undefined ? undefined : Math.max(1_000, deadlineMs - conservativeReserveMs);
   return new Promise<OfflineSimulationRunResult>((resolve, reject) => {
     let settled = false;
+    let deadlineTimer: number | null = null;
     const finish = (callback: () => void) => {
       if (settled) return;
       settled = true;
+      if (deadlineTimer !== null) window.clearTimeout(deadlineTimer);
       options.signal?.removeEventListener("abort", abort);
       worker.terminate();
       callback();
+    };
+    const failOrRetryConservative = (reason: string, terminalMessage: string) => {
+      finish(() => {
+        if (options.approximate === true && options.conservativeOnly !== true && !options.signal?.aborted) {
+          void runOfflineSimulationInWorkerDetailed(state, seconds, {
+            ...options,
+            conservativeOnly: true,
+            conservativeReason: reason,
+            deadlineMs: conservativeReserveMs > 0 ? conservativeReserveMs : 5_000,
+          }).then(resolve, reject);
+          return;
+        }
+        reject(new Error(terminalMessage));
+      });
     };
     const abort = () => {
       try { worker.postMessage({ type: "cancel", id } satisfies OfflineSimulationWorkerRequest); } catch { /* worker may already be gone */ }
@@ -115,7 +189,17 @@ export function runOfflineSimulationInWorkerDetailed(
       return;
     }
     options.signal?.addEventListener("abort", abort, { once: true });
+    if (workerDeadlineMs !== undefined) {
+      deadlineTimer = window.setTimeout(() => {
+        try { worker.postMessage({ type: "cancel", id } satisfies OfflineSimulationWorkerRequest); } catch { /* worker may be blocked */ }
+        failOrRetryConservative(
+          "快速 Worker 达到现实时间上限，已使用零校准保守宏观",
+          "离线计算达到现实时间上限，临时候选已丢弃，原存档保持不变",
+        );
+      }, workerDeadlineMs + 250);
+    }
     worker.onmessage = (event: MessageEvent<OfflineSimulationWorkerResponse>) => {
+      if (settled) return;
       const message = event.data;
       if (message.id !== id) return;
       if (message.type === "progress") {
@@ -132,11 +216,41 @@ export function runOfflineSimulationInWorkerDetailed(
         finish(() => reject(new DOMException("离线计算已取消", "AbortError")));
         return;
       }
-      if (message.type === "error") finish(() => reject(new Error(message.message)));
+      if (message.type === "error") {
+        if (message.code === "worker-failure") {
+          failOrRetryConservative(
+            `快速 Worker 返回异常，已使用一次零校准保守宏观恢复：${message.message}`,
+            `${message.message}；未保存任何半成品`,
+          );
+        } else {
+          finish(() => reject(new Error(message.message)));
+        }
+      }
     };
-    worker.onerror = () => finish(() => reject(new Error("离线计算 Worker 运行失败，未保存任何半成品")));
+    worker.onerror = () => failOrRetryConservative(
+      "快速 Worker 运行失败，已使用一次零校准保守宏观恢复",
+      "离线计算 Worker 运行失败，未保存任何半成品",
+    );
     const registry = options.registry ?? createContentPackRuntimeSnapshot(loadContentPackRegistry());
-    worker.postMessage({ type: "start", id, state, seconds, registry, approximate: options.approximate === true } satisfies OfflineSimulationWorkerRequest);
+    try {
+      worker.postMessage({
+        type: "start",
+        id,
+        state,
+        seconds,
+        wallSeconds: options.wallSeconds,
+        registry,
+        approximate: options.approximate === true,
+        conservativeOnly: options.conservativeOnly === true,
+        conservativeReason: options.conservativeReason,
+        deadlineMs: workerDeadlineMs,
+      } satisfies OfflineSimulationWorkerRequest);
+    } catch {
+      failOrRetryConservative(
+        "快速 Worker 无法启动，已使用一次零校准保守宏观恢复",
+        "无法启动离线计算 Worker，未保存任何半成品",
+      );
+    }
   });
 }
 

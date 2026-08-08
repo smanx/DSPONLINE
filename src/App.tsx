@@ -66,6 +66,7 @@ import {
   attachInterstellarStationToQuantumNetwork,
   applyBeltConfigurationToNetworkResult,
   canConnectBelt,
+  canEntityAcceptBeltItem,
   getBeltConnectionCheck,
   connectBeltWithResult,
   canPlaceBlueprint,
@@ -116,7 +117,6 @@ import {
   getEntityStackTargetCheck,
   getStationSlots,
   getTechnologyConstructionRewards,
-  hasActiveResearch,
   handcraftRecipeWithUpstream,
   installSprayCoater,
   installSprayCoaters,
@@ -234,6 +234,7 @@ import {
   setBlackHolePaused,
   setTimeWarpController,
   setTimeWarpEnabled,
+  refreshTimeWarpPowerSnapshot,
   setTimeWarpRequestedMultiplier,
   setInfiniteResearchAutomation,
   autoConnectDysonLayer,
@@ -282,7 +283,7 @@ import { trackAnalyticsEvent } from "./game/analytics";
 import { CLOUD_AUTO_SYNC_INTERVAL_MS, CloudApiError, compareCloudSave, fetchCloudPublicStatus, getCloudToken, markCloudSaveSynchronized, readCloudAutoSyncStatus, refreshCloudSaveMetadata, resumeCloudSession, uploadCloudSave, writeCloudAutoSyncStatus } from "./game/cloud";
 import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CanvasRegion, CanvasViewport, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad, StationSlotTemplate } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
-import { PureIdleMacroClient } from "./game/pureIdleMacroClient";
+import { PureIdleMacroClient, PureIdleMacroClientError, type PureIdleMacroProgress } from "./game/pureIdleMacroClient";
 import type { PureIdleMacroMode, PureIdleMacroSummary } from "./game/pureIdleMacro";
 import {
   canUsePureIdleRecovery,
@@ -290,12 +291,19 @@ import {
   clearPureIdleBackground,
   clearPureIdleRecovery,
   createPureIdleRecovery,
+  getPureIdleForceConservativeReason,
   getPureIdleBackgroundPlan,
   getPureIdleOwnerToken,
   heartbeatPureIdleRecovery,
   markPureIdleBackground,
+  PURE_IDLE_WORKER_RESTART_LIMIT,
+  recordPureIdleRecoveryTransition,
+  recordPureIdleWorkerFailure,
   releasePureIdleRecoveryLease,
+  resetPureIdleWorkerFailures,
+  type PureIdleRecoveryTransition,
   type PureIdleRecoveryRecord,
+  type PureIdleStopReason,
 } from "./game/pureIdleRecovery";
 import { mergeSimulationProjections, type SimulationProjection } from "./game/simulationProjection";
 import { applySimulationStateDelta, readExperimentalSimulationDeltaMode } from "./game/simulationDelta";
@@ -422,6 +430,27 @@ interface InteractionBurst {
 
 const FLOW_GRID = 20;
 const HISTORY_LIMIT = 40;
+
+function pureIdleProgressLabel(progress: PureIdleMacroProgress): string {
+  if (progress.phase === "preparing-power") return "正在准备权威供电快照";
+  if (progress.phase === "calibrating") return "正在执行有界精确校准";
+  if (progress.phase === "conservative") return "正在执行保守宏观结算";
+  if (progress.phase === "validating") return "正在验证宏观候选";
+  if (progress.phase === "finalizing") return "正在序列化、重载并验证存档";
+  if (progress.phase === "recovering") return "正在恢复 Worker";
+  return "正在执行宏观结算";
+}
+
+function isCountedPureIdleWorkerFailure(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === "AbortError") return false;
+  return !(error instanceof PureIdleMacroClientError && error.code === "closed");
+}
+
+function pureIdleStopReasonForError(error: unknown): PureIdleStopReason {
+  if (error instanceof PureIdleMacroClientError && error.code === "deadline") return "worker-timeout";
+  if (error instanceof PureIdleMacroClientError && error.code === "worker-crash") return "worker-crash";
+  return "worker-error";
+}
 function beltTierIsAvailable(state: GameState, tier: BeltTier): boolean {
   const constructionId = getBeltConstructionId(tier);
   const requiredTechId = getConstructionDefinition(constructionId)?.requiredTechId;
@@ -910,7 +939,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const pureIdleRecoveryRef = useRef<PureIdleRecoveryRecord | null>(null);
   const pureIdleOwnerTokenRef = useRef(getPureIdleOwnerToken());
   const pureIdleMacroRestartingRef = useRef(false);
+  const pureIdleMacroRestartCountRef = useRef(0);
+  const pureIdleMacroForceConservativeRef = useRef(false);
   const pureIdleBackgroundOfflineAbortRef = useRef<AbortController | null>(null);
+  const pureIdleStopTargetRef = useRef<{ sessionId: string; targetWallSeconds: number } | null>(null);
   // Visibility and interval callbacks can race while a background recovery
   // Worker is being rebuilt. Keep this boundary single-flight so a candidate
   // is never finalized or saved twice.
@@ -1051,15 +1083,28 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
                       : null;
   const mobilePerformanceMode = coarsePointer;
   const constrainedMobile = coarsePointer && lowEndMobile;
-  const canvasWorkspacePaused = pageHidden || technologyOpen || statisticsOpen || recipesOpen || starMapOpen ||
+  const canvasWorkspaceHidden = pageHidden || technologyOpen || statisticsOpen || recipesOpen || starMapOpen ||
     systemSpaceStationOpen ||
     blueprintsOpen || dysonPlannerOpen || operationsOpen || campaignOpen || galaxyOpen || constructionCenterOpen ||
     (nextMobileShell && mobileNavigation.route.kind === "hub");
+  const canvasWorkspacePaused = canvasWorkspaceHidden;
   const canvasRefreshPaused = canvasWorkspacePaused || game.paused;
   const updateConnectionDraft = useCallback((draft: ConnectionDraft | null) => {
     connectionDraftRef.current = draft;
     setConnectionDraft(draft);
   }, []);
+  useEffect(() => {
+    if (!canvasWorkspaceHidden || (!connectionDraftRef.current && !clickConnectionPreviewRef.current)) return;
+    flowStore.getState().cancelConnection();
+    flowStore.setState({ connectionClickStartHandle: null });
+    clickConnectionPreviewRef.current = null;
+    clickConnectionSucceededRef.current = false;
+    setClickConnectionPreview(null);
+    setClickConnectionTone("pending");
+    setClickConnectionSnapPoint(null);
+    updateConnectionDraft(null);
+    setConnectionHint(null);
+  }, [canvasWorkspaceHidden, flowStore, updateConnectionDraft]);
   const mobilePanelSwipe = useSwipeDismiss<HTMLButtonElement>({
     axis: "y",
     direction: 1,
@@ -1429,10 +1474,80 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setPureIdleContinueAvailable(available);
   }, []);
 
-  const publishPureIdleMacroSummary = useCallback((record: PureIdleRecoveryRecord, summary: PureIdleMacroSummary) => {
-    if (!pureIdleMacroActiveRef.current || pureIdleRecoveryRef.current?.sessionId !== record.sessionId) return;
+  const persistPureIdleTransition = useCallback(async (
+    record: PureIdleRecoveryRecord,
+    update: PureIdleRecoveryTransition,
+    nowMs = Date.now(),
+  ): Promise<void> => {
+    try {
+      await recordPureIdleRecoveryTransition(
+        record.sessionId,
+        pureIdleOwnerTokenRef.current,
+        update,
+        nowMs,
+      );
+    } catch {
+      // The checkpoint remains authoritative if diagnostic metadata cannot be written.
+    }
+    const current = pureIdleRecoveryRef.current;
+    if (current?.sessionId !== record.sessionId) return;
     pureIdleRecoveryRef.current = {
-      ...record,
+      ...current,
+      stopReason: update.stopReason,
+      ...(update.phase ? { phase: update.phase } : {}),
+      ...(update.stopRequestedAtMs !== undefined ? { stopRequestedAtMs: update.stopRequestedAtMs } : {}),
+      ...(update.targetWallSeconds !== undefined ? { targetWallSeconds: update.targetWallSeconds } : {}),
+      ...(update.finalizedAtMs !== undefined ? { finalizedAtMs: update.finalizedAtMs } : {}),
+      ...(update.committedAtMs !== undefined ? { committedAtMs: update.committedAtMs } : {}),
+      ...(update.abandonedWallSeconds !== undefined ? { abandonedWallSeconds: update.abandonedWallSeconds } : {}),
+      ...(update.lastError !== undefined ? { lastError: update.lastError } : {}),
+      committed: current.committed || update.committed === true,
+      lastTransitionAtMs: nowMs,
+    };
+  }, []);
+
+  const persistPureIdleWorkerFailure = useCallback(async (
+    record: PureIdleRecoveryRecord,
+    message: string,
+    stopReason: PureIdleStopReason = "worker-error",
+  ): Promise<number> => {
+    const localFallback = pureIdleMacroRestartCountRef.current + 1;
+    let persisted: number | null = null;
+    try {
+      persisted = await recordPureIdleWorkerFailure(
+        record.sessionId,
+        pureIdleOwnerTokenRef.current,
+        message,
+      );
+    } catch {
+      // The durable checkpoint remains authoritative even if this diagnostic
+      // transaction is temporarily unavailable.
+    }
+    const restartCount = persisted ?? localFallback;
+    pureIdleMacroRestartCountRef.current = restartCount;
+    pureIdleMacroForceConservativeRef.current = restartCount >= PURE_IDLE_WORKER_RESTART_LIMIT;
+    const current = pureIdleRecoveryRef.current;
+    if (current?.sessionId === record.sessionId) {
+      pureIdleRecoveryRef.current = {
+        ...current,
+        workerRestartCount: restartCount,
+        phase: "failed",
+        lastError: message,
+      };
+    }
+    await persistPureIdleTransition(record, {
+      stopReason,
+      phase: "failed",
+      lastError: message,
+    });
+    return restartCount;
+  }, [persistPureIdleTransition]);
+
+  const publishPureIdleMacroSummary = useCallback((record: PureIdleRecoveryRecord, summary: PureIdleMacroSummary) => {
+    const current = pureIdleRecoveryRef.current;
+    if (!pureIdleMacroActiveRef.current || current?.sessionId !== record.sessionId) return;
+    pureIdleRecoveryRef.current = {
+      ...current,
       settledWallSeconds: summary.settledWallSeconds,
       phase: summary.phase,
       summary,
@@ -1453,36 +1568,63 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     );
   }, [setPureIdleRecoveryContinueState]);
 
-  const initializePureIdleMacroClient = useCallback(async (record: PureIdleRecoveryRecord): Promise<void> => {
+  const initializePureIdleMacroClient = useCallback(async (record: PureIdleRecoveryRecord): Promise<PureIdleMacroClient | null> => {
+    pureIdleMacroRestartCountRef.current = Math.max(
+      pureIdleMacroRestartCountRef.current,
+      record.workerRestartCount,
+    );
+    if (pureIdleMacroRestartCountRef.current >= PURE_IDLE_WORKER_RESTART_LIMIT) {
+      pureIdleMacroForceConservativeRef.current = true;
+    }
     pureIdleMacroClientRef.current?.close();
-    const client = new PureIdleMacroClient();
+    const forceConservativeReason = getPureIdleForceConservativeReason(
+      record,
+      pureIdleMacroRestartCountRef.current,
+    );
+    const client = new PureIdleMacroClient({
+      onProgress: (progress) => {
+        if (pureIdleMacroClientRef.current !== client || pureIdleRecoveryRef.current?.sessionId !== record.sessionId) return;
+        setPureIdleRecoveryStatus(`${pureIdleProgressLabel(progress)} · 现实耗时 ${(progress.wallClockMs / 1_000).toFixed(1)} 秒`);
+      },
+    });
     pureIdleMacroClientRef.current = client;
-    setPureIdleRecoveryStatus(record.summary ? "正在从检查点重建宏观状态" : "正在执行 3 × 10 秒产线校准");
+    setPureIdleRecoveryStatus(forceConservativeReason
+      ? "正在从权威检查点建立保守宏观会话"
+      : record.summary ? "正在从检查点重建宏观状态" : "正在执行 3 × 10 秒产线校准");
     try {
-      const summary = await client.initialize(record.state, record.mode, contentPackRuntimeSnapshotRef.current);
+      const summary = await client.initialize(record.state, record.mode, contentPackRuntimeSnapshotRef.current, {
+        forceConservativeReason,
+      });
       if (!pureIdleMacroActiveRef.current || pureIdleRecoveryRef.current?.sessionId !== record.sessionId) {
         client.close();
-        return;
+        return null;
       }
       publishPureIdleMacroSummary(record, summary);
+      if (summary.settledWallSeconds > 0) pureIdleMacroRestartCountRef.current = 0;
       setPureIdleRecoveryContinueState(false);
-      setNotice(record.summary ? "纯挂机已从恢复日志继续，未结算墙钟时间保持不变" : "纯挂机校准完成，宏观守恒结算已开始");
+      setNotice(summary.conservativeOnly
+        ? "精确 Worker 连续失败，已切换保守宏观；原存档和恢复日志保持有效"
+        : record.summary ? "纯挂机已从恢复日志继续，未结算墙钟时间保持不变" : "纯挂机校准完成，宏观守恒结算已开始");
+      return client;
     } catch (error) {
       client.close();
       if (pureIdleMacroClientRef.current === client) pureIdleMacroClientRef.current = null;
+      if (!isCountedPureIdleWorkerFailure(error)) return null;
       const message = error instanceof Error ? error.message : "纯挂机 Worker 初始化失败";
-      setPureIdleRecoveryStatus(`Worker 暂不可用：${message}`);
-      setNotice(`${message}；恢复日志已保留，正在等待安全重建`);
-      void heartbeatPureIdleRecovery(
-        record.sessionId,
-        pureIdleOwnerTokenRef.current,
-        record.summary?.settledWallSeconds ?? 0,
-        "failed",
-        record.summary,
-        message,
-      );
+      const restartCount = await persistPureIdleWorkerFailure(record, message, pureIdleStopReasonForError(error));
+      if (forceConservativeReason) {
+        setPureIdleRecoveryContinueState(true);
+        setPureIdleRecoveryStatus(`保守 Worker 仍不可用：${message}`);
+        setNotice(`${message}；已停止自动重建，恢复日志和原主存档保持不变`);
+      } else {
+        setPureIdleRecoveryStatus(`Worker 暂不可用（${restartCount}/${PURE_IDLE_WORKER_RESTART_LIMIT}）：${message}`);
+        setNotice(pureIdleMacroForceConservativeRef.current
+          ? `${message}；精确重建已达上限，正在切换保守宏观`
+          : `${message}；恢复日志已保留，正在等待安全重建`);
+      }
+      return null;
     }
-  }, [publishPureIdleMacroSummary, setPureIdleRecoveryContinueState]);
+  }, [persistPureIdleWorkerFailure, publishPureIdleMacroSummary, setPureIdleRecoveryContinueState]);
 
   const settlePureIdleBackgroundRecovery = useCallback(async (
     record: PureIdleRecoveryRecord,
@@ -1493,16 +1635,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     if (pureIdleStoppingRef.current || pureIdleBackgroundRecoveryRef.current) return "completed";
     pureIdleBackgroundRecoveryRef.current = true;
 
-    // Rebuild from the durable checkpoint for every visibility transition. The
-    // in-memory candidate is deliberately disposable, so a backgrounded tab
-    // can never double-apply a partially committed macro result.
-    pureIdleMacroClientRef.current?.close();
-    pureIdleMacroClientRef.current = null;
-
     if (!plan.graceExpired) {
-      const client = new PureIdleMacroClient();
+      const client = pureIdleMacroClientRef.current ?? await initializePureIdleMacroClient(record);
+      if (!client) {
+        pureIdleBackgroundRecoveryRef.current = false;
+        return "completed";
+      }
       try {
-        await client.initialize(record.state, record.mode, contentPackRuntimeSnapshotRef.current);
         const summary = await client.advance(plan.highWallSeconds);
         if (!pureIdleMacroActiveRef.current || pureIdleRecoveryRef.current?.sessionId !== record.sessionId) {
           client.close();
@@ -1521,8 +1660,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         return "continued";
       } catch (error) {
         client.close();
+        const restartCount = isCountedPureIdleWorkerFailure(error)
+          ? await persistPureIdleWorkerFailure(record, error instanceof Error ? error.message : "后台纯挂机恢复失败", pureIdleStopReasonForError(error))
+          : pureIdleMacroRestartCountRef.current;
         const message = error instanceof Error ? error.message : "后台纯挂机恢复失败";
-        setPureIdleRecoveryStatus(`${message}；恢复日志与原主存档保持不变`);
+        setPureIdleRecoveryStatus(`${message}；恢复日志与原主存档保持不变（${restartCount}/${PURE_IDLE_WORKER_RESTART_LIMIT}）`);
         setNotice(`${message}；正在等待安全重建`);
         pureIdleBackgroundRecoveryRef.current = false;
         return "completed";
@@ -1530,14 +1672,33 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }
 
     pureIdleStoppingRef.current = true;
+    pureIdleStopTargetRef.current = { sessionId: record.sessionId, targetWallSeconds: plan.highWallSeconds };
+    await persistPureIdleTransition(record, {
+      stopReason: "background-grace-expired",
+      phase: "finalizing",
+      stopRequestedAtMs: nowMs,
+      targetWallSeconds: plan.highWallSeconds,
+    }, nowMs);
     setPureIdleRecoveryStatus("后台宽限已结束，正在切换普通离线结算");
     setNotice("后台超过 5 分钟，剩余时间将按普通离线规则结算");
-    const finalizer = new PureIdleMacroClient();
+    const finalizer = pureIdleMacroClientRef.current ?? await initializePureIdleMacroClient(record);
+    if (!finalizer) {
+      pureIdleStoppingRef.current = false;
+      pureIdleBackgroundRecoveryRef.current = false;
+      return "completed";
+    }
     const abortController = new AbortController();
     pureIdleBackgroundOfflineAbortRef.current = abortController;
+    let macroFinalized = false;
     try {
-      await finalizer.initialize(record.state, record.mode, contentPackRuntimeSnapshotRef.current);
+      setPureIdleRecoveryStatus("正在复用已校准会话推进后台宽限边界");
       const finalized = await finalizer.finalize(plan.highWallSeconds);
+      macroFinalized = true;
+      await persistPureIdleTransition(record, {
+        stopReason: "background-grace-expired",
+        phase: "validating",
+        finalizedAtMs: Date.now(),
+      });
       let restored = finalized.state;
       if (plan.normalOfflineSeconds >= 1) {
         const { runOfflineSimulationInWorkerDetailed } = await importWithRecovery(
@@ -1554,16 +1715,25 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         settleCompletedResearchBoundaries(setTimeWarpEnabled(restored, false)),
         record.startedPaused,
       );
+      setPureIdleRecoveryStatus("后台候选已验证，正在写入并重新读取主存档");
       const saved = await persistPrimarySave(restored);
       if (!saved.success) {
+        setPureIdleRecoveryContinueState(true);
         setPureIdleRecoveryStatus("后台普通离线候选有效，但主存档写入失败；恢复日志已保留");
         setNotice("后台离线结算未完成保存，请重试；原主存档保持不变");
         return "completed";
       }
+      await persistPureIdleTransition(record, {
+        stopReason: "save-finalized",
+        phase: "finalizing",
+        committed: true,
+        committedAtMs: Date.now(),
+      });
       const cleared = await clearPureIdleRecovery(record.sessionId, pureIdleOwnerTokenRef.current);
       pureIdleMacroActiveRef.current = false;
       pureIdleActiveRef.current = false;
       pureIdleRecoveryRef.current = null;
+      pureIdleStopTargetRef.current = null;
       setPureIdleActive(false);
       setPureIdleStartedAt(null);
       setPureIdleRecoveryContinueState(false);
@@ -1572,8 +1742,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       gameRef.current = restored;
       setGame(restored);
       setNotice(`后台宽限结束，已按普通离线规则结算 ${Math.floor(plan.normalOfflineSeconds)} 秒`);
+      finalizer.close();
+      if (pureIdleMacroClientRef.current === finalizer) pureIdleMacroClientRef.current = null;
       return "completed";
     } catch (error) {
+      if (!macroFinalized && isCountedPureIdleWorkerFailure(error)) {
+        const restartCount = await persistPureIdleWorkerFailure(record, error instanceof Error ? error.message : "后台纯挂机恢复失败", pureIdleStopReasonForError(error));
+        if (restartCount >= PURE_IDLE_WORKER_RESTART_LIMIT) setPureIdleRecoveryContinueState(true);
+        finalizer.close();
+        if (pureIdleMacroClientRef.current === finalizer) pureIdleMacroClientRef.current = null;
+      }
       const message = error instanceof DOMException && error.name === "AbortError"
         ? "后台普通离线结算已取消"
         : error instanceof Error ? error.message : "后台普通离线结算失败";
@@ -1581,12 +1759,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       setNotice(`${message}；未提交后台候选时间，原主存档保持不变`);
       return "completed";
     } finally {
-      finalizer.close();
       pureIdleBackgroundOfflineAbortRef.current = null;
       pureIdleStoppingRef.current = false;
       pureIdleBackgroundRecoveryRef.current = false;
     }
-  }, [persistPrimarySave, publishPureIdleMacroSummary, setPureIdleRecoveryContinueState]);
+  }, [initializePureIdleMacroClient, persistPrimarySave, persistPureIdleTransition, persistPureIdleWorkerFailure, publishPureIdleMacroSummary, setPureIdleRecoveryContinueState]);
 
   const markPureIdleBackgrounded = useCallback(() => {
     if (!pureIdleMacroActiveRef.current) return;
@@ -1627,14 +1804,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const handleTimeWarpEnabledChange = useCallback((enabled: boolean) => {
     if (enabled) {
-      const requiresExactResearchPath = hasActiveResearch(gameRef.current);
       if (typeof Worker === "undefined" ||
-        (!gameRef.current.speedrun?.enabled && !requiresExactResearchPath && !canUsePureIdleRecovery())) {
+        (!gameRef.current.speedrun?.enabled && !canUsePureIdleRecovery())) {
         setNotice("当前环境缺少 Worker 或 IndexedDB 恢复日志，已阻止纯挂机以保护存档");
         return;
       }
-      if (!gameRef.current.speedrun?.enabled && !requiresExactResearchPath) {
+      if (!gameRef.current.speedrun?.enabled) {
         pureIdleMacroActiveRef.current = true;
+        pureIdleStopTargetRef.current = null;
+        pureIdleMacroRestartCountRef.current = 0;
+        pureIdleMacroForceConservativeRef.current = false;
         setPureIdleRecoveryContinueState(false);
         void (async () => {
           const waitStartedAt = performance.now();
@@ -1653,7 +1832,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           setTimeWarpPendingUi(0);
           const startedAtMs = Date.now() - pendingWallSeconds * 1_000;
           const mode: PureIdleMacroMode = endgameExtremeMode ? "extreme" : "stable";
-          const checkpoint = setTimeWarpEnabled(setPaused(gameRef.current, false), true);
+          const checkpoint = refreshTimeWarpPowerSnapshot(
+            setTimeWarpEnabled(setPaused(gameRef.current, false), true),
+          );
           checkpoint.timeWarp = {
             ...checkpoint.timeWarp,
             pendingSimulationSeconds: 0,
@@ -1709,9 +1890,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         gameRef.current = next;
         return next;
       });
-      setNotice(requiresExactResearchPath
-        ? "当前存在进行中的科研，纯挂机已使用精确 Worker 以保护科研奖励和队列"
-        : "速通工厂纯挂机已开始，工厂画布已冻结");
+      setNotice("速通工厂纯挂机已开始，工厂画布已冻结");
       return;
     }
     setGame((current) => {
@@ -1768,10 +1947,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const stopPureIdle = useCallback(async () => {
     if (pureIdleMacroActiveRef.current) {
-      if (pureIdleStoppingRef.current) {
-        pureIdleBackgroundOfflineAbortRef.current?.abort();
-        return;
-      }
+      if (pureIdleStoppingRef.current) return;
       pureIdleStoppingRef.current = true;
       const record = pureIdleRecoveryRef.current;
       if (!record) {
@@ -1789,28 +1965,55 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const targetWallSeconds = backgroundPlan.backgrounded
         ? backgroundPlan.highWallSeconds
         : Math.max(0, (stoppedAtMs - record.startedAtMs) / 1_000);
-      setPureIdleRecoveryStatus("正在按冻结时间结算并重载候选存档");
+      const frozenTarget = pureIdleStopTargetRef.current?.sessionId === record.sessionId
+        ? pureIdleStopTargetRef.current.targetWallSeconds
+        : targetWallSeconds;
+      pureIdleStopTargetRef.current = { sessionId: record.sessionId, targetWallSeconds: frozenTarget };
+      await persistPureIdleTransition(record, {
+        stopReason: "user-stop-requested",
+        phase: "finalizing",
+        stopRequestedAtMs: stoppedAtMs,
+        targetWallSeconds: frozenTarget,
+      }, stoppedAtMs);
+      setPureIdleRecoveryStatus("正在复用已校准会话推进最后结算边界");
       setNotice("正在停止纯挂机；恢复日志会保留到主存档验证成功");
-      pureIdleMacroClientRef.current?.close();
-      pureIdleMacroClientRef.current = null;
-      const finalizer = new PureIdleMacroClient();
+      const finalizer = pureIdleMacroClientRef.current ?? await initializePureIdleMacroClient(record);
+      if (!finalizer) {
+        pureIdleStoppingRef.current = false;
+        return;
+      }
+      let macroFinalized = false;
       try {
-        await finalizer.initialize(record.state, record.mode, contentPackRuntimeSnapshotRef.current);
-        const finalized = await finalizer.finalize(targetWallSeconds);
+        const finalized = await finalizer.finalize(frozenTarget);
+        macroFinalized = true;
+        await persistPureIdleTransition(record, {
+          stopReason: "user-stop-requested",
+          phase: "validating",
+          finalizedAtMs: Date.now(),
+        });
         const restored = setPaused(
           settleCompletedResearchBoundaries(finalized.state),
           record.startedPaused,
         );
+        setPureIdleRecoveryStatus("候选已序列化验证，正在写入并重新读取主存档");
         const saved = await persistPrimarySave(restored);
         if (!saved.success) {
+          setPureIdleRecoveryContinueState(true);
           setPureIdleRecoveryStatus("候选状态有效，但主存档写入失败；恢复日志已保留");
           setNotice("挂机结果尚未完成保存，请重试停止或先导出当前主存档");
           return;
         }
+        await persistPureIdleTransition(record, {
+          stopReason: "save-finalized",
+          phase: "finalizing",
+          committed: true,
+          committedAtMs: Date.now(),
+        });
         const cleared = await clearPureIdleRecovery(record.sessionId, pureIdleOwnerTokenRef.current);
         pureIdleMacroActiveRef.current = false;
         pureIdleActiveRef.current = false;
         pureIdleRecoveryRef.current = null;
+        pureIdleStopTargetRef.current = null;
         setPureIdleActive(false);
         setPureIdleStartedAt(null);
         setPureIdleRecoveryContinueState(false);
@@ -1818,13 +2021,20 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         setPureIdleRecoveryStatus(cleared ? "主存档已验证，恢复日志已清理" : "主存档已验证；旧恢复日志将在下次启动时覆盖");
         gameRef.current = restored;
         setGame(restored);
-        setNotice(`纯挂机已停止，${Math.floor(targetWallSeconds)} 秒墙钟收益已校验保存`);
+        setNotice(`纯挂机已停止，${Math.floor(frozenTarget)} 秒墙钟收益已校验保存`);
+        finalizer.close();
+        if (pureIdleMacroClientRef.current === finalizer) pureIdleMacroClientRef.current = null;
       } catch (error) {
+        if (!macroFinalized && isCountedPureIdleWorkerFailure(error)) {
+          const restartCount = await persistPureIdleWorkerFailure(record, error instanceof Error ? error.message : "纯挂机停止结算失败", pureIdleStopReasonForError(error));
+          if (restartCount >= PURE_IDLE_WORKER_RESTART_LIMIT) setPureIdleRecoveryContinueState(true);
+          finalizer.close();
+          if (pureIdleMacroClientRef.current === finalizer) pureIdleMacroClientRef.current = null;
+        }
         const message = error instanceof Error ? error.message : "纯挂机停止结算失败";
         setPureIdleRecoveryStatus(`${message}；恢复日志和原主存档保持不变`);
         setNotice(`${message}；可以重试停止，未结算时间没有被清空`);
       } finally {
-        finalizer.close();
         pureIdleStoppingRef.current = false;
       }
       return;
@@ -1873,7 +2083,44 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       ? "纯挂机 Worker 未在安全窗口响应；未完成切片已丢弃，模拟已暂停且已完成存档校验"
       : "纯挂机已停止，进度已校验保存");
     pureIdleStoppingRef.current = false;
-  }, [persistPrimarySave, setPureIdleRecoveryContinueState, settlePureIdleBackgroundRecovery]);
+  }, [initializePureIdleMacroClient, persistPrimarySave, persistPureIdleTransition, persistPureIdleWorkerFailure, setPureIdleRecoveryContinueState, settlePureIdleBackgroundRecovery]);
+
+  const cancelPureIdleSettlement = useCallback(async () => {
+    if (!pureIdleStoppingRef.current) return;
+    const record = pureIdleRecoveryRef.current;
+    pureIdleStopTargetRef.current = null;
+    pureIdleBackgroundOfflineAbortRef.current?.abort();
+    const client = pureIdleMacroClientRef.current;
+    if (client) {
+      client.cancel("玩家已取消停止结算");
+      if (pureIdleMacroClientRef.current === client) pureIdleMacroClientRef.current = null;
+    }
+    if (record) {
+      await persistPureIdleTransition(record, {
+        stopReason: "user-cancelled",
+        lastError: "玩家取消了本次停止结算；候选未提交",
+      });
+    }
+    setPureIdleRecoveryStatus("停止结算已取消；恢复日志和原主存档保持不变");
+    setNotice("停止结算已取消；纯挂机会话将从权威检查点安全恢复");
+  }, [persistPureIdleTransition]);
+
+  const retryPureIdleRecovery = useCallback(async () => {
+    if (!pureIdleMacroActiveRef.current || pureIdleStoppingRef.current) return;
+    const record = pureIdleRecoveryRef.current;
+    if (!record) {
+      setNotice("找不到纯挂机恢复检查点，主存档未改变");
+      return;
+    }
+    setPureIdleRecoveryContinueState(false);
+    setPureIdleRecoveryStatus("正在从权威检查点重试恢复 Worker");
+    const client = pureIdleMacroClientRef.current ?? await initializePureIdleMacroClient(record);
+    if (!client) {
+      setPureIdleRecoveryContinueState(true);
+      return;
+    }
+    if (pureIdleStopTargetRef.current?.sessionId === record.sessionId) await stopPureIdle();
+  }, [initializePureIdleMacroClient, setPureIdleRecoveryContinueState, stopPureIdle]);
 
   const continueFromPureIdleCheckpoint = useCallback(async () => {
     if (!pureIdleMacroActiveRef.current || pureIdleStoppingRef.current) return;
@@ -1883,6 +2130,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       return;
     }
     pureIdleStoppingRef.current = true;
+    const abandonedWallSeconds = Math.max(
+      0,
+      (Date.now() - record.startedAtMs) / 1_000 - (record.summary?.settledWallSeconds ?? record.settledWallSeconds),
+    );
+    await persistPureIdleTransition(record, {
+      stopReason: "user-cancelled",
+      abandonedWallSeconds,
+      lastError: `玩家确认放弃 ${Math.floor(abandonedWallSeconds)} 秒未结算时间`,
+    });
     setPureIdleRecoveryStatus("正在恢复检查点并验证主存档");
     setNotice("正在放弃未结算纯挂机时间，并恢复普通模拟");
     pureIdleMacroClientRef.current?.close();
@@ -1904,6 +2160,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       pureIdleMacroActiveRef.current = false;
       pureIdleActiveRef.current = false;
       pureIdleRecoveryRef.current = null;
+      pureIdleStopTargetRef.current = null;
       setPureIdleActive(false);
       setPureIdleStartedAt(null);
       setPureIdleMacroSummary(null);
@@ -1921,7 +2178,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     } finally {
       pureIdleStoppingRef.current = false;
     }
-  }, [persistPrimarySave, setPureIdleRecoveryContinueState]);
+  }, [persistPrimarySave, persistPureIdleTransition, setPureIdleRecoveryContinueState]);
 
   const openCommandPalette = useCallback(() => {
     if (nextMobileShell) mobileNavigation.openModal("command");
@@ -2183,6 +2440,17 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     let cancelled = false;
     void (async () => {
       let claim = await claimPureIdleRecovery(pureIdleOwnerTokenRef.current);
+      // A same-tab reload can briefly leave the previous document's Web Lock
+      // visible after its IndexedDB lease has already been released. Retry only
+      // this bounded boot race; a genuinely active tab remains authoritative.
+      if (!claim.ok && claim.reason === "owned") {
+        for (const delayMs of [50, 150, 300]) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, delayMs));
+          if (cancelled) return;
+          claim = await claimPureIdleRecovery(pureIdleOwnerTokenRef.current);
+          if (claim.ok || claim.reason !== "owned") break;
+        }
+      }
       if (!claim.ok && claim.reason === "missing") {
         const checkpoint = structuredClone(gameRef.current);
         const pendingWallSeconds = Math.max(0, checkpoint.timeWarp.pendingWallSeconds);
@@ -2222,7 +2490,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       // A hard browser kill can bypass pagehide. On a new application boot the
       // most recent durable heartbeat is the conservative background boundary,
       // so an interrupted session cannot regain unlimited high-rate time.
-      if (recoveryRecord.backgroundStartedAtMs === undefined) {
+      const pendingFrozenSettlement = recoveryRecord.committed !== true &&
+        recoveryRecord.targetWallSeconds !== undefined &&
+        (recoveryRecord.stopReason === "user-stop-requested" || recoveryRecord.stopReason === "background-grace-expired");
+      if (!pendingFrozenSettlement && recoveryRecord.backgroundStartedAtMs === undefined) {
         const backgroundStartedAtMs = Math.min(
           Date.now(),
           Math.max(recoveryRecord.startedAtMs, recoveryRecord.heartbeatAtMs),
@@ -2235,15 +2506,22 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         if (marked) recoveryRecord = { ...recoveryRecord, backgroundStartedAtMs };
       }
       pureIdleRecoveryRef.current = recoveryRecord;
+      pureIdleMacroRestartCountRef.current = recoveryRecord.workerRestartCount;
+      pureIdleMacroForceConservativeRef.current = recoveryRecord.workerRestartCount >= PURE_IDLE_WORKER_RESTART_LIMIT ||
+        recoveryRecord.summary?.conservativeOnly === true;
       pureIdleMacroActiveRef.current = true;
       pureIdleActiveRef.current = true;
       setPureIdleActive(true);
       setPureIdleStartedAt(recoveryRecord.startedAtMs);
       if (recoveryRecord.summary) setPureIdleMacroSummary(recoveryRecord.summary);
-      if (hasActiveResearch(recoveryRecord.state)) {
+      if (pendingFrozenSettlement) {
+        pureIdleStopTargetRef.current = {
+          sessionId: recoveryRecord.sessionId,
+          targetWallSeconds: recoveryRecord.targetWallSeconds!,
+        };
         setPureIdleRecoveryContinueState(true);
-        setPureIdleRecoveryStatus("恢复检查点包含进行中的科研，宏观会话未结算");
-        setNotice("为保护科研奖励和队列，纯挂机已保留在检查点；可放弃未结算时间并继续普通模拟");
+        setPureIdleRecoveryStatus(`检测到未提交的冻结结算（${Math.floor(recoveryRecord.targetWallSeconds!)} 秒），请重试或放弃`);
+        setNotice("上次停止结算未提交；原主存档保持不变，等待安全恢复");
         return;
       }
       const backgroundRecovery = await settlePureIdleBackgroundRecovery(recoveryRecord);
@@ -2265,7 +2543,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     let cancelled = false;
     const tick = async () => {
       const record = pureIdleRecoveryRef.current;
-      if (!record || cancelled || pureIdleStoppingRef.current) return;
+      if (!record || cancelled || pureIdleStoppingRef.current || pureIdleStopTargetRef.current?.sessionId === record.sessionId) return;
       let client = pureIdleMacroClientRef.current;
       if (pureIdleContinueAvailableRef.current) {
         if (Date.now() - pureIdleHeartbeatAtRef.current >= 5_000) {
@@ -2276,7 +2554,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             record.summary?.settledWallSeconds ?? record.settledWallSeconds,
             "failed",
             record.summary,
-            "进行中的科研需要精确模拟，等待玩家恢复普通模拟",
+            "Worker 连续失败，自动重建已停止，等待玩家选择恢复或重试",
           );
         }
         return;
@@ -2287,6 +2565,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           const claim = await claimPureIdleRecovery(pureIdleOwnerTokenRef.current);
           if (claim.ok && !cancelled && pureIdleMacroActiveRef.current) {
             pureIdleRecoveryRef.current = claim.record;
+            pureIdleMacroRestartCountRef.current = Math.max(
+              pureIdleMacroRestartCountRef.current,
+              claim.record.workerRestartCount,
+            );
             await initializePureIdleMacroClient(claim.record);
           } else if (!claim.ok) {
             setPureIdleRecoveryStatus(claim.message);
@@ -2313,20 +2595,24 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         try {
           const summary = await client.advance(targetBoundary);
           publishPureIdleMacroSummary(record, summary);
+          if (await resetPureIdleWorkerFailures(record.sessionId, pureIdleOwnerTokenRef.current)) {
+            pureIdleMacroRestartCountRef.current = 0;
+            pureIdleMacroForceConservativeRef.current = summary.conservativeOnly;
+            const current = pureIdleRecoveryRef.current;
+            if (current?.sessionId === record.sessionId) {
+              pureIdleRecoveryRef.current = { ...current, workerRestartCount: 0, lastError: undefined };
+            }
+          }
         } catch (error) {
           client.close();
           if (pureIdleMacroClientRef.current === client) pureIdleMacroClientRef.current = null;
+          if (!isCountedPureIdleWorkerFailure(error)) return;
           const message = error instanceof Error ? error.message : "宏观结算 Worker 失败";
-          setPureIdleRecoveryStatus(`${message}；墙钟时间与检查点已保留`);
-          setNotice(`${message}；正在从恢复日志重建，不会停止纯挂机`);
-          void heartbeatPureIdleRecovery(
-            record.sessionId,
-            pureIdleOwnerTokenRef.current,
-            settled,
-            "failed",
-            record.summary,
-            message,
-          );
+          const restartCount = await persistPureIdleWorkerFailure(record, message, pureIdleStopReasonForError(error));
+          setPureIdleRecoveryStatus(`${message}；墙钟时间与检查点已保留（${restartCount}/${PURE_IDLE_WORKER_RESTART_LIMIT}）`);
+          setNotice(pureIdleMacroForceConservativeRef.current
+            ? `${message}；精确重建已达上限，下一次只建立保守宏观会话`
+            : `${message}；正在从恢复日志重建，不会停止纯挂机`);
         }
         return;
       }
@@ -2347,7 +2633,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [initializePureIdleMacroClient, publishPureIdleMacroSummary, pureIdleActive, settlePureIdleBackgroundRecovery]);
+  }, [initializePureIdleMacroClient, persistPureIdleWorkerFailure, publishPureIdleMacroSummary, pureIdleActive, settlePureIdleBackgroundRecovery]);
 
   useEffect(() => () => {
     pureIdleMacroClientRef.current?.close();
@@ -3047,6 +3333,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const cargo = gameRef.current.cargo;
     const previousPlanetId = gameRef.current.activePlanetId;
     if (previousPlanetId === planetId) return;
+    flowStore.getState().cancelConnection();
+    flowStore.setState({ connectionClickStartHandle: null });
+    clickConnectionPreviewRef.current = null;
+    clickConnectionSucceededRef.current = false;
+    setClickConnectionPreview(null);
+    setClickConnectionTone("pending");
+    setClickConnectionSnapPoint(null);
+    updateConnectionDraft(null);
+    setConnectionHint(null);
     const leavingViewport = { ...viewportRef.current };
     const destinationViewport = gameRef.current.planetViewports[planetId] ?? { x: 510, y: 250, zoom: 0.84 };
     if (!gameRef.current.settings.reducedMotion) setPlanetTransition({ id: Date.now(), from: previousPlanetId, to: planetId });
@@ -3087,7 +3382,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     } else {
       setNotice(`已切换至${getPlanetDisplayName(gameRef.current, planetId)}`);
     }
-  }, [onMiningStop, playTone, setNodes, setViewport]);
+  }, [flowStore, onMiningStop, playTone, setNodes, setViewport, updateConnectionDraft]);
 
   const onExploreSystem = useCallback((systemId: StarSystemId) => {
     setGame((current) => exploreStarSystem(current, systemId));
@@ -4392,7 +4687,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           const acceptedInputItemIds = getAcceptedInputs(entity, canvasGame);
           const producedOutputItemIds = getProducedOutputs(entity);
           const lineTraceActive = Boolean(lineFindTrace && lineFindTrace.planetId === canvasGame.activePlanetId);
-          const className = lineTraceActive
+          const focusClassName = lineTraceActive
             ? entity.id === lineFindTrace?.entityId
               ? "factory-flow-node--line-find-center"
               : lineFindUpstreamEntityIds.has(entity.id)
@@ -4407,6 +4702,20 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             : focusedBeltNetwork
               ? focusedNetworkEntityIds.has(entity.id) ? "factory-flow-node--network-focus" : "factory-flow-node--network-dim"
               : undefined;
+          const connectionClassName = connectionDraft
+            ? entity.id === connectionDraft.nodeId
+              ? "factory-flow-node--connection-origin"
+              : connectionDraft.handleType === "source"
+                ? connectionDraft.itemId && canEntityAcceptBeltItem(canvasGame, entity, connectionDraft.itemId)
+                  ? "factory-flow-node--connection-candidate"
+                  : undefined
+                : connectionDraft.itemId === null
+                  ? producedOutputItemIds.length > 0 ? "factory-flow-node--connection-candidate" : undefined
+                  : producedOutputItemIds.includes(connectionDraft.itemId)
+                    ? "factory-flow-node--connection-candidate"
+                    : undefined
+            : undefined;
+          const className = [focusClassName, connectionClassName].filter(Boolean).join(" ") || undefined;
           const draggable = !placement && !blueprintPlacementId && !entity.interactionLocked;
           const visualSignature = [
             visualEntitySignature(entity),
@@ -5577,7 +5886,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       return;
     }
     if (preview.changedBuildingCount === 0 && preview.changedBeltCount === 0) {
-      setNotice(`没有可增加的项目${preview.buildingAtLimitCount + preview.beltAtLimitCount > 0 ? ` · ${preview.buildingAtLimitCount + preview.beltAtLimitCount} 项已达到上限` : ""}`);
+      setNotice(`没有可增加的项目${preview.buildingAtLimitCount + preview.beltAtLimitCount > 0 ? ` · ${preview.buildingAtLimitCount + preview.beltAtLimitCount} 项已达到上限` : ""}${preview.uniqueBuildingSkippedCount > 0 ? ` · ${preview.uniqueBuildingSkippedCount} 座唯一巨构已跳过` : ""}`);
       playTone("alert");
       return;
     }
@@ -5585,7 +5894,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       .map(([id, count]) => `${getConstructionDefinition(id as ConstructionId)?.name ?? id} ×${formatQuantityCompact(count ?? 0)}`)
       .join("、");
     const confirmed = await gameDialog.confirm(
-      `将为 ${preview.changedBuildingCount} 个建筑和 ${preview.changedBeltCount} 条传送带各增加 ${formatQuantityCompact(amount)}。预计消耗：${required || "无"}${preview.buildingAtLimitCount + preview.beltAtLimitCount > 0 ? `。另有 ${preview.buildingAtLimitCount + preview.beltAtLimitCount} 项达到上限，将保持不变` : ""}。确认执行？`,
+      `将为 ${preview.changedBuildingCount} 个建筑和 ${preview.changedBeltCount} 条传送带各增加 ${formatQuantityCompact(amount)}。预计消耗：${required || "无"}${preview.buildingAtLimitCount + preview.beltAtLimitCount > 0 ? `。另有 ${preview.buildingAtLimitCount + preview.beltAtLimitCount} 项达到上限，将保持不变` : ""}${preview.uniqueBuildingSkippedCount > 0 ? `。${preview.uniqueBuildingSkippedCount} 座唯一巨构不会增加，也不会扣除库存` : ""}。确认执行？`,
       { confirmLabel: "批量增加" },
     );
     if (!confirmed) return;
@@ -5597,7 +5906,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }
     if (result.state !== gameRef.current) commitGame(() => result.state);
     const limitCount = result.buildingAtLimitCount + result.beltAtLimitCount;
-    setNotice(`已批量增加 ${result.changedBuildingCount} 个建筑、${result.changedBeltCount} 条传送带${limitCount > 0 ? ` · ${limitCount} 项达到上限` : ""}`);
+    setNotice(`已批量增加 ${result.changedBuildingCount} 个建筑、${result.changedBeltCount} 条传送带${limitCount > 0 ? ` · ${limitCount} 项达到上限` : ""}${result.uniqueBuildingSkippedCount > 0 ? ` · ${result.uniqueBuildingSkippedCount} 座唯一巨构已跳过` : ""}`);
     playTone("confirm");
   }, [commitGame, gameDialog, playTone]);
 
@@ -7335,6 +7644,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       {notice && (showRunLog || isPersistentNotice(notice)) ? <div className={`game-notice game-notice--${getNoticeTone(notice)}`} role="status" data-notice-tone={getNoticeTone(notice)}>{notice}</div> : null}
       {pureIdleActive ? <TimeWarpIdleOverlay
         game={observedGame}
+        baselineGame={pureIdleRecoveryRef.current?.state ?? observedGame}
         startedAt={pureIdleStartedAt}
         saveFailure={saveFailure}
         workerActive={simulationWorkerActive}
@@ -7342,9 +7652,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         computeState={timeWarpComputeState}
         pendingSimulationSeconds={timeWarpPendingUi}
         macroSummary={pureIdleMacroSummary}
+        recovery={pureIdleRecoveryRef.current}
         recoveryStatus={pureIdleRecoveryStatus}
         onStop={stopPureIdle}
+        onCancelSettlement={cancelPureIdleSettlement}
         continueAvailable={pureIdleContinueAvailable}
+        onRetryRecovery={retryPureIdleRecovery}
         onContinueNormally={continueFromPureIdleCheckpoint}
       /> : null}
     </main>

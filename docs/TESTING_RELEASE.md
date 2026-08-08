@@ -1,24 +1,26 @@
 # 测试与发布基线
 
-> **当前发布基线（2026-08-07）**：当前正式版本使用 `1.0.32 / GameState v46`；有效资产的 v43 空间站实验存档拒绝加载。量子网络回归以 GameState v46 语义为基线，并保留传统物流站升级兼容测试。1.0.32 不升级存档 envelope、云 schema 或 SQLite layout。
+> **当前发布基线（2026-08-08）**：当前正式版本使用 `1.0.34 / GameState v46`；有效资产的 v43 空间站实验存档拒绝加载。量子网络回归以 GameState v46 语义为基线，并保留传统物流站升级兼容测试。1.0.34 不升级存档 envelope、云 schema 或 SQLite layout。
+
+> `1.0.34` 已完成历史唯一巨构堆叠、Android raw 云上传、gzip 编码拒绝单次回退、纯挂机冻结停止/重试、实际吞吐榜、全星区名义吞吐聚合和拉线卡片高亮的完整门禁，并完成双节点、下载页和原生应用正式发布。吞吐回归覆盖三星球切换、旧根指标回退、非法/溢出数值、名义与实际结算隔离，以及 20,164,029 字节真实存档的只读本地服务核验。开发证据见 [1.0.34 开发交接](./RELEASE_HANDOFF_1.0.34.md)，生产证据见 [releases/1.0.34.md](./releases/1.0.34.md)。
 
 ## 1. 当前自动化覆盖
 
 | 层级 | 命令 | 当前规模 | 覆盖重点 |
 | --- | --- | ---: | --- |
 | 类型检查 | `npm run typecheck` | 全部前端 TS | 严格类型、Vite 配置 |
-| 单元/领域 | `npm test` | `1.0.32`：89 个文件通过、5 个跳过；806 项通过、16 项跳过 | 引擎暂停边界、递归制造守恒、科研完成边界、宏观纯挂机恢复、历史安全超限堆叠、物流远程编辑、云存档兼容、v1-v46 存档、多 Worker 守恒和云同步等 |
-| 浏览器 E2E | `npm run test:e2e` | `1.0.32`：242 项通过、11 项显式可选夹具/故障注入跳过、0 失败 | 版本公告/历史、速通面板、纯挂机宏观恢复、开局到银河终局、亮色语义主题、分类设置、新旧手机壳、390×844 与 200% 字号、IndexedDB 存档保护和横竖屏回归 |
-| 云服务 | `npm run test:server` | `1.0.32`：49/49 | 用户名注册、四槽云存档、schema v3→v7、SQLite layout v1→v2、v35-v46 存档边界、白糖 `/min` 修订计算、历史安全超限实体/蓝图兼容、完整性/格式/体积错误、内部排行榜限制和管理员保护 |
+| 单元/领域 | `npm test` | `1.0.34`：92 个文件通过、5 个跳过；842 项通过、16 项跳过 | 引擎暂停边界、递归制造守恒、科研宏观账本、普通/保守离线、纯挂机恢复、历史安全超限堆叠、物流远程编辑、云存档兼容、v1-v46 存档、多 Worker 守恒和云同步等 |
+| 浏览器 E2E | `npm run test:e2e` | `1.0.34`：254 项通过、11 项显式可选夹具跳过、0 失败 | 版本公告/历史、速通面板、快速离线、纯挂机宏观恢复、开局到银河终局、亮色语义主题、分类设置、新旧手机壳、390×844 与 200% 字号、IndexedDB 存档保护和横竖屏回归 |
+| 云服务 | `npm run test:server` | `1.0.34`：本地带只读真实吞吐夹具 53 项通过、1 项跳过；两地未激活目录 52 项通过、2 项跳过 | 用户名注册、四槽云存档、schema v3→v7、SQLite layout v1→v2、v35-v46 存档边界、白糖 `/min`、全星区理论/实际吞吐、历史安全超限实体/蓝图兼容、完整性/格式/体积错误、内部排行榜限制和管理员保护 |
 | 运维工具 | `npm run test:ops` | 6 项 | SQLite 一致性快照、认证加密、异地复制、隔离恢复、篡改拒绝、Nginx 压缩与缓存边界、Android origin 模板、端点/磁盘探针和告警载荷 |
 | 原生配置与发布工具 | `npm run test:native` | 8/8 | 社区更新源默认关闭、HTTPS 通道、Android/桌面更新清单、调试 APK 拒绝、显式发布基址、桌面包内元数据和静态下载页清单门禁 |
 | 第三方许可证 | `npm run licenses:check` | 128 个运行时包 | 根项目/云服务 lockfile、直接依赖通知、完整许可证文本和 public 法律文件一致性 |
-| 生产构建 | `npm run build` | `1.0.32+762bf693becb` 构建通过 | `tsc -b`、Vite chunk、普通离线/宏观 Worker 和 PWA 资源；生产多 Worker 入口硬关闭 |
+| 生产构建 | `npm run build` | `1.0.34+4a7d51241424` 构建通过 | `tsc -b`、Vite chunk、普通离线/宏观 Worker 和 PWA 资源；生产多 Worker 入口硬关闭 |
 | 桌面目录包 | `npm run desktop:pack` | 按需 | Electron 启动与 Windows 解包 |
 
 1.0.18 专项回归覆盖量子上传/下载独立全局预算、轨道采集器供应端、无量子塔时零额度、本地运输机兼容、逐物品 1 万至 100 亿容量、调低容量保留超额库存、五秒流量摘要、v44→v45 守恒迁移，以及英文、390×844 和 200% 字号量子库存界面。完整门禁和线上证据见 [releases/1.0.18.md](./releases/1.0.18.md)。
 
-1.0.32 的完整 clean 提交、不可变制品、原生签名、双节点隔离启动、备份、原子切换、下载哈希、Range、缓存和回滚证据见 [releases/1.0.32.md](./releases/1.0.32.md)。
+1.0.34 的完整 clean 提交、不可变制品、原生签名、双节点隔离启动、备份、原子切换、下载哈希、Range、缓存和回滚证据见 [releases/1.0.34.md](./releases/1.0.34.md)。
 
 Playwright 使用本机 Google Chrome，串行执行，并在隔离的 `127.0.0.1:4319` 自动启动临时 Vite 服务，避免复用玩家正在试玩的 `4318` 进程或其旧模块缓存。失败时保留截图和 trace；GitHub CI 对单个失败用例最多重试 1 次，本地开发保持 0 次重试，持续性回归仍会使门禁失败。
 
@@ -1069,3 +1071,44 @@ Android `1.0.18 / 1000018` 使用历史长期证书，APK v2/v3 通过，SHA-256
 正式源码提交为 `762bf693becb97a62d8c1ce8de60bf6e9083f0cc`，Build ID 为 `1.0.32+762bf693becb`。Android `1.0.32 / 1000032` 使用批准长期证书并通过 APK v2/v3；Windows Authenticode 继续明确为 `NotSigned`。香港、上海 Web/API、上海下载页和两个稳定应用包均已发布；下载页在补齐 `icon.svg` 后原子切换到 `download-site-1.0.32-762bf693becb-r2`。
 
 两地发布前备份、未激活目录复验、原子切换、公网 Build ID/健康、完整 APK/EXE/blockmap 哈希、Range 206、缓存、当前/历史 hashed asset 和生产浏览器 smoke 均完成。真实生产账号云写入、Android 覆盖升级保档，以及 Edge、Android WebView、Electron 长时真实夹具仍未执行，不能描述为已通过；完整证据和回滚指针见 [releases/1.0.32.md](./releases/1.0.32.md)。
+
+## 46. `1.0.33` / v46 终局快速结算正式发布
+
+`1.0.33` 将快速离线升级为 `fast-30s-v2`，将纯挂机升级为 `pure-idle-macro-v3`，并将实时模拟兼容近似路径升级为 `time-warp-short-calibration-v3`。专项门禁保留有限/无限科研、权威供电倍率、普通/保守宏观分支、30/60 秒现实 deadline、取消、普通离线单次有界重启、纯挂机持久重启上限、旧 v2 恢复记录迁移、正式序列化重载和源夹具 hash 不变。真实玩家存档只在本机只读副本中测试，没有提交、覆盖或上传生产账号。
+
+| 检查 | 正式发布结果 |
+| --- | --- |
+| `npm ci` / `npm --prefix server ci` | 通过；服务端 0 个已知漏洞 |
+| `npm run licenses:check` / `npm run typecheck` | 128 个运行时包一致；0 个 TypeScript 错误 |
+| `npm test -- --run` | 91 个文件通过、5 个跳过；825 项通过、16 项跳过、0 失败 |
+| `npm run test:server` / `npm run test:ops` / `npm run test:native` | 49/49；6/6；8/8 |
+| `npm run build` | 从最终 clean source commit 构建通过 |
+| `npm run test:e2e` | 251 项通过、11 项显式可选夹具/故障注入跳过、0 失败 |
+| Chrome / Edge 真实终局专项 | 两份只读夹具各 16/16 通过；源文件 SHA-256 未改变 |
+| Source / download r2 / bundle r2 manifest | 149/149、9/9、10/10；聚合 SHA-256 分别为 `0f80274b72d24aed0f3060253db7e990c0efe2468aaba1916a14a6f303d268ef`、`5a369e3d21181c5fb11635078a50889ecf0dcb6a28e68530d9b1a92102a78822`、`64a3a51c45b33c51f1c97aa5b08caae9c92696bb2bece57ee94d34bcf236eefc` |
+
+正式 source commit 为 `2bd81de8d7f16040620378d37cb73649cf09dd17`，Build ID 为 `1.0.33+2bd81de8d7f1`。大型真实存档 30 天快速离线约 2.9～3.1 秒、30 天纯挂机约 2.8 秒；Android 36.1 模拟器完成 `1.0.28 → 1.0.32 → 1.0.33` 覆盖启动，Electron 正式包完成隔离启动。Android `1.0.33 / 1000033` 使用批准长期证书并通过 APK v2/v3；Windows Authenticode 继续明确为 `NotSigned`。
+
+香港、上海 Web/API、上海下载页和两个稳定应用包均已发布。最终下载页为 `download-site-1.0.33-2bd81de8d7f1-r2`；完整公网 APK/EXE/blockmap 哈希、Range 206、缓存、当前/1.0.32 hashed asset 和五个浏览器场景均通过。物理 Android/WebView 长时真实存档、Electron 内 30 天真实存档和真实生产账号云写入仍列为未验证；完整证据和回滚指针见 [releases/1.0.33.md](./releases/1.0.33.md)。
+
+## 47. `1.0.34` / v46 云上传、纯挂机与实际吞吐正式发布
+
+本候选兼容历史唯一巨构安全堆叠，修复 Android gzip Blob 上传失败和 Web 明确编码拒绝的单次 raw 回退；纯挂机停止冻结边界并复用已校准 Worker，保存失败保留检查点和重试；普通排行榜用相邻主云修订累计增量计算实际结算吞吐；拉线期间高亮起点与兼容候选建筑。GameState v46、存档 envelope v2、云 schema v7 和 SQLite layout v2 均未改变。
+
+| 检查 | 最终发布结果 |
+| --- | --- |
+| `npm ci` / `npm --prefix server ci` | 通过；server 生产依赖 0 漏洞；根打包工具链当前有 1 个 high `js-yaml` 审计告警，保留风险记录 |
+| `npm run licenses:check` | 128 个运行时包一致 |
+| `npm run typecheck` | 通过，0 个 TypeScript 错误 |
+| `npm test -- --run` | 842 项通过、16 项跳过、0 失败 |
+| `npm run test:server` | 带只读 19 MiB 吞吐夹具为 53 项通过、1 项跳过；两地未激活目录为 52 项通过、2 项跳过 |
+| `npm run test:ops` | 6/6 |
+| `npm run test:native` | 8/8 |
+| `npm run build` | 通过；Build ID `1.0.34+4a7d51241424` |
+| `npm run test:e2e` | 254 项通过、11 项显式可选跳过、0 失败 |
+| Chrome / Edge 20 MB 真实档 | 30 天快速离线约 23.84s / 最终四段 24.26s～25.01s；30 天纯挂机约 21.29s / 20.96s |
+| 原生门禁 | Android `1.0.33 -> 1.0.34` 覆盖升级、APK v2/v3 与证书连续性通过；Electron 隔离启动通过；Windows `NotSigned` |
+| Release manifest | source 150/150、download 9/9、bundle 10/10 全部验证 |
+| 生产发布 | 两地备份、未激活目录、隔离启动、原子切换、9 文件完整公网哈希、Range/cache、当前/历史资源和 5 场 Chrome smoke 通过 |
+
+正式源码提交为 `4a7d51241424f4289c629377e896ec70f41cbe54`。旧 `9f9714f973b0` 和 partial/diagnostic 制品均未发布。香港启动大库时出现短时 502/504，但最近 15 分钟 5xx 收敛为 0，服务始终 `NRestarts=0`；后续大库发布应继续使用低流量短维护备份并扩大 health 等待。Edge 首轮在 Android 模拟器和 Gradle daemon 资源竞争时有一次 30.527 秒，关闭竞争负载后的相同断言全部通过；不能把 30 秒描述为任意设备硬保证。物理 Android 上的 1/2/7/20 MiB 隔离云上传、真实生产账号云写入和 Electron 内 20 MB 长时结算仍未验证。完整制品、备份、线上验收和回滚证据见 [releases/1.0.34.md](./releases/1.0.34.md)。

@@ -1,4 +1,5 @@
 import type { GameState } from "./types";
+import { aggregateGalacticFactoryMetric } from "../../server/galactic-metrics.mjs";
 
 export const ACCOUNT_STORAGE_KEY = "dsp-idle-network.account.v1";
 export const ACCOUNT_SCHEMA_VERSION = 2;
@@ -21,7 +22,12 @@ export interface AccountLedger {
   energyGeneratedMj: number;
   uploadedWhiteMatrix: number;
   peakGenerationKw: number;
+  /** Historical nominal capacity retained for local diagnostics. */
   peakThroughputPerMinute: number;
+  /** 60 simulated-second totalProduced delta; never mixed with the nominal peak. */
+  peakActualThroughputPerMinute?: number;
+  throughputWindowStartedAtSeconds?: number;
+  throughputWindowStartedProduced?: number;
   peakDysonPowerKw: number;
   exploredSystems: number;
   colonizedPlanets: number;
@@ -100,6 +106,9 @@ function createLedger(): AccountLedger {
     uploadedWhiteMatrix: 0,
     peakGenerationKw: 0,
     peakThroughputPerMinute: 0,
+    peakActualThroughputPerMinute: 0,
+    throughputWindowStartedAtSeconds: 0,
+    throughputWindowStartedProduced: 0,
     peakDysonPowerKw: 0,
     exploredSystems: 0,
     colonizedPlanets: 0,
@@ -161,6 +170,13 @@ function normalizeRecord(value: unknown, fallbackName: string, fallbackAvatar: s
     uploadedWhiteMatrix: integer(ledgerSource.uploadedWhiteMatrix),
     peakGenerationKw: nonNegative(ledgerSource.peakGenerationKw),
     peakThroughputPerMinute: nonNegative(ledgerSource.peakThroughputPerMinute),
+    peakActualThroughputPerMinute: nonNegative(ledgerSource.peakActualThroughputPerMinute),
+    ...(Number.isFinite(ledgerSource.throughputWindowStartedAtSeconds)
+      ? { throughputWindowStartedAtSeconds: nonNegative(ledgerSource.throughputWindowStartedAtSeconds) }
+      : {}),
+    ...(Number.isFinite(ledgerSource.throughputWindowStartedProduced)
+      ? { throughputWindowStartedProduced: nonNegative(ledgerSource.throughputWindowStartedProduced) }
+      : {}),
     peakDysonPowerKw: nonNegative(ledgerSource.peakDysonPowerKw),
     exploredSystems: integer(ledgerSource.exploredSystems),
     colonizedPlanets: integer(ledgerSource.colonizedPlanets),
@@ -269,6 +285,9 @@ export function baselineAccountProgress(state: AccountState, game: GameState, ti
     ...active.ledger,
     peakGenerationKw: Math.max(active.ledger.peakGenerationKw, generationKw),
     peakThroughputPerMinute: Math.max(active.ledger.peakThroughputPerMinute, getThroughput(game)),
+    peakActualThroughputPerMinute: nonNegative(active.ledger.peakActualThroughputPerMinute),
+    throughputWindowStartedAtSeconds: nonNegative(game.elapsedSeconds),
+    throughputWindowStartedProduced: getTotalProduced(game),
     peakDysonPowerKw: Math.max(active.ledger.peakDysonPowerKw, dysonPowerKw),
     exploredSystems: Math.max(active.ledger.exploredSystems, game.exploration.unlockedSystemIds.length),
     colonizedPlanets: Math.max(active.ledger.colonizedPlanets, game.exploration.colonizedPlanetIds.length),
@@ -282,13 +301,21 @@ export function baselineAccountProgress(state: AccountState, game: GameState, ti
 }
 
 function getGenerationKw(game: GameState): number {
-  const metrics = Object.values(game.planetMetrics ?? {}).reduce((sum, metric) => saturatingAdd(sum, metric.generationKw), 0);
-  return Math.max(0, metrics);
+  return aggregateGalacticFactoryMetric(game, "generationKw").galacticValue;
 }
 
 function getThroughput(game: GameState): number {
-  const metrics = Object.values(game.planetMetrics ?? {}).reduce((sum, metric) => saturatingAdd(sum, metric.totalItemsPerMinute), 0);
-  return Math.max(0, metrics);
+  return getGalacticThroughputSnapshot(game).galacticValue;
+}
+
+export function getGalacticThroughputSnapshot(game: GameState) {
+  return aggregateGalacticFactoryMetric(game, "totalItemsPerMinute");
+}
+
+export const ACTUAL_THROUGHPUT_WINDOW_SECONDS = 60;
+
+function getTotalProduced(game: GameState): number {
+  return Object.values(game.totalProduced).reduce((sum, amount) => saturatingAdd(sum, integer(amount)), 0);
 }
 
 /** Accumulate account-only ranking stats without changing the game save schema. */
@@ -303,12 +330,38 @@ export function recordAccountProgress(state: AccountState, game: GameState, time
     ? whiteMatrixTotal - ledger.lastWhiteMatrixTotal
     : whiteMatrixTotal;
   const dysonPowerKw = saturatingAdd(game.dysonSwarm?.generationKw ?? 0, game.dysonSphere?.generationKw ?? 0);
+  const totalProduced = getTotalProduced(game);
+  const hasThroughputBaseline = Number.isFinite(ledger.throughputWindowStartedAtSeconds) &&
+    Number.isFinite(ledger.throughputWindowStartedProduced);
+  let throughputWindowStartedAtSeconds = hasThroughputBaseline
+    ? nonNegative(ledger.throughputWindowStartedAtSeconds)
+    : elapsed;
+  let throughputWindowStartedProduced = hasThroughputBaseline
+    ? nonNegative(ledger.throughputWindowStartedProduced)
+    : totalProduced;
+  let peakActualThroughputPerMinute = nonNegative(ledger.peakActualThroughputPerMinute);
+  if (elapsed < throughputWindowStartedAtSeconds || totalProduced < throughputWindowStartedProduced) {
+    throughputWindowStartedAtSeconds = elapsed;
+    throughputWindowStartedProduced = totalProduced;
+  } else {
+    const windowSeconds = elapsed - throughputWindowStartedAtSeconds;
+    if (windowSeconds >= ACTUAL_THROUGHPUT_WINDOW_SECONDS) {
+      const producedDelta = totalProduced - throughputWindowStartedProduced;
+      const scaled = saturatingProduct(producedDelta, 60 / windowSeconds);
+      peakActualThroughputPerMinute = Math.max(peakActualThroughputPerMinute, scaled);
+      throughputWindowStartedAtSeconds = elapsed;
+      throughputWindowStartedProduced = totalProduced;
+    }
+  }
   const nextLedger: AccountLedger = {
     ...ledger,
     energyGeneratedMj: saturatingAdd(ledger.energyGeneratedMj, saturatingProduct(generationKw, elapsedDelta / 1000)),
     uploadedWhiteMatrix: saturatingAdd(ledger.uploadedWhiteMatrix, whiteMatrixDelta),
     peakGenerationKw: Math.max(ledger.peakGenerationKw, generationKw),
     peakThroughputPerMinute: Math.max(ledger.peakThroughputPerMinute, getThroughput(game)),
+    peakActualThroughputPerMinute,
+    throughputWindowStartedAtSeconds,
+    throughputWindowStartedProduced,
     peakDysonPowerKw: Math.max(ledger.peakDysonPowerKw, dysonPowerKw),
     exploredSystems: Math.max(ledger.exploredSystems, game.exploration.unlockedSystemIds.length),
     colonizedPlanets: Math.max(ledger.colonizedPlanets, game.exploration.colonizedPlanetIds.length),

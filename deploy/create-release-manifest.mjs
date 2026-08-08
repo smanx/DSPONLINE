@@ -55,6 +55,7 @@ async function describeReleaseFiles() {
     "server/analytics.mjs",
     "server/analytics.test.mjs",
     "server/index.mjs",
+    "server/galactic-metrics.mjs",
     "server/leaderboard-moderation.mjs",
     "server/leaderboard-moderation.test.mjs",
     "server/mail.mjs",

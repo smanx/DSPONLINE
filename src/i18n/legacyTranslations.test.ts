@@ -27,6 +27,10 @@ describe("device-local English translations", () => {
     expect(translateLegacyText("长按采集铁矿石", "en")).toBe("Hold to gather Iron Ore");
     expect(translateLegacyText("缺口 铁矿石×10、铜矿石×2", "en")).toBe("Missing: Iron Ore ×10, Copper Ore ×2");
     expect(translateLegacyText("1 批 · 实际产出 ×3", "en")).toBe("1 batch · Actual output ×3");
+    expect(translateLegacyText("实际结算吞吐", "en")).toBe("Actual Settled Throughput");
+    expect(translateLegacyText("玩家请求停止", "en")).toBe("Player Requested Stop");
+    expect(translateLegacyText("放弃约 2 分钟 未结算时间并继续普通模拟", "en")).toBe("Abandon about 2 min of unsettled time and continue normal simulation");
+    expect(translateLegacyText("拉线候选建筑同步高亮", "en")).toBe("Compatible Buildings Highlight While Connecting");
   });
 
   it("accepts late translations for lazy content", () => {

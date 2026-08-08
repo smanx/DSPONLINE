@@ -4,6 +4,7 @@ import { createInitialState } from "./engine";
 import { hashGameState } from "./benchmark";
 import {
   advancePureIdleMacroSession,
+  createConservativePureIdleMacroSession,
   createPureIdleMacroSession,
   finalizePureIdleMacroSession,
   PURE_IDLE_MACRO_ALGORITHM_VERSION,
@@ -41,6 +42,25 @@ function pureIdleState(): GameState {
   return state;
 }
 
+function addWindGeneration(state: GameState, machineCount: number): void {
+  state.entities.push({
+    id: `pure-idle-wind-${machineCount}`,
+    kind: "power",
+    planetId: "home",
+    position: { x: -100, y: 0 },
+    interactionLocked: false,
+    buildingId: "wind_turbine",
+    machineCount,
+    minerCount: 0,
+    inputs: {},
+    outputs: {},
+    progress: 0,
+    routingCursor: 0,
+    utilization: 0,
+    productionRate: 0,
+  });
+}
+
 describe("pure idle macro session", () => {
   it("uses three fixed calibration windows and advances only committed wall time", () => {
     const source = pureIdleState();
@@ -55,6 +75,57 @@ describe("pure idle macro session", () => {
     expect(summary.settledSimulationSeconds).toBe(90 * source.settings.simulationSpeed);
     expect(session.candidate.elapsedSeconds - source.elapsedSeconds).toBeCloseTo(summary.settledSimulationSeconds, 6);
     expect(hashGameState(source)).toBe(before);
+  });
+
+  it("refreshes a stale stopped multiplier to the requested 9x power allocation", () => {
+    const source = pureIdleState();
+    source.settings.simulationSpeed = 4;
+    source.timeWarp.requestedMultiplier = 9;
+    source.timeWarp.effectiveMultiplier = 1;
+    addWindGeneration(source, 50_000_000);
+
+    const session = createPureIdleMacroSession(structuredClone(source), "extreme");
+    const summary = advancePureIdleMacroSession(session, 30);
+
+    expect(summary.requestedMultiplier).toBe(9);
+    expect(summary.powerLimitedMultiplier).toBe(9);
+    expect(summary.actualMultiplier).toBe(9);
+    expect(summary.settledSimulationSeconds).toBe(270);
+  });
+
+  it("keeps an interaction-locked controller powered during macro startup", () => {
+    const source = pureIdleState();
+    source.settings.simulationSpeed = 4;
+    source.timeWarp.requestedMultiplier = 9;
+    source.timeWarp.effectiveMultiplier = 1;
+    const controller = source.entities.find((entity) => entity.id === source.timeWarp.controllerEntityId)!;
+    controller.interactionLocked = true;
+    addWindGeneration(source, 50_000_000);
+
+    const summary = advancePureIdleMacroSession(
+      createPureIdleMacroSession(structuredClone(source), "extreme"),
+      30,
+    );
+
+    expect(summary.powerLimitedMultiplier).toBe(9);
+    expect(summary.actualMultiplier).toBe(9);
+    expect(summary.settledSimulationSeconds).toBe(270);
+  });
+
+  it("uses the highest power-supported 7x multiplier instead of the stale value", () => {
+    const source = pureIdleState();
+    source.settings.simulationSpeed = 4;
+    source.timeWarp.requestedMultiplier = 9;
+    source.timeWarp.effectiveMultiplier = 1;
+    addWindGeneration(source, 1_000_000);
+
+    const summary = advancePureIdleMacroSession(
+      createPureIdleMacroSession(structuredClone(source), "extreme"),
+      30,
+    );
+
+    expect(summary.powerLimitedMultiplier).toBe(7);
+    expect(summary.settledSimulationSeconds).toBe(210);
   });
 
   it("is deterministic across incremental and one-target settlement", () => {
@@ -177,15 +248,23 @@ describe("pure idle macro session", () => {
     expect(source.entities[0].stationRoutes?.[0].cargo).toBe(-1);
   });
 
-  it("does not start a macro session while finite or infinite research is active", () => {
+  it("starts macro sessions while finite or infinite research is active", () => {
     const finite = pureIdleState();
     finite.research.selectedTechId = "electromagnetic_matrix";
-    expect(() => createPureIdleMacroSession(structuredClone(finite), "stable")).toThrow(/进行中的科研/);
+    const finiteSummary = advancePureIdleMacroSession(
+      createPureIdleMacroSession(structuredClone(finite), "stable"),
+      0,
+    );
+    expect(finiteSummary.research).toMatchObject({ kind: "finite", id: "electromagnetic_matrix" });
 
     const infinite = pureIdleState();
     infinite.research.completedTechIds.push("universe_matrix");
     infinite.endgame.activeInfiniteResearchId = "matrix_compression";
-    expect(() => createPureIdleMacroSession(structuredClone(infinite), "stable")).toThrow(/进行中的科研/);
+    const infiniteSummary = advancePureIdleMacroSession(
+      createPureIdleMacroSession(structuredClone(infinite), "stable"),
+      0,
+    );
+    expect(infiniteSummary.research).toMatchObject({ kind: "infinite", id: "matrix_compression", level: 0 });
   });
 
   it("rejects a macro bucket that creates inventory without matching production", () => {
@@ -216,5 +295,58 @@ describe("pure idle macro session", () => {
     expect(result).toMatchObject({ ok: true });
     expect(state.tray.iron_ore).toBe(110);
     expect(state.totalProduced.iron_ore).toBe(10);
+  });
+
+  it("uses a zero-calibration conservative session after repeated Worker failures", () => {
+    const source = pureIdleState();
+    source.settings.simulationSpeed = 4;
+    source.timeWarp.requestedMultiplier = 9;
+    addWindGeneration(source, 50_000_000);
+    const sourceHash = hashGameState(source);
+    const session = createConservativePureIdleMacroSession(
+      structuredClone(source),
+      "stable",
+      "injected repeated Worker crash",
+    );
+
+    const summary = advancePureIdleMacroSession(session, 30 * 24 * 60 * 60);
+    const finalized = finalizePureIdleMacroSession(session, 30 * 24 * 60 * 60, createContentPackRegistry());
+
+    expect(summary).toMatchObject({
+      phase: "conservative",
+      conservativeOnly: true,
+      calibrationWindowsCompleted: 0,
+      settledWallSeconds: 30 * 24 * 60 * 60,
+      settledSimulationSeconds: 9 * 30 * 24 * 60 * 60,
+    });
+    expect(summary.degradedReason).toContain("injected repeated Worker crash");
+    expect(finalized.state.elapsedSeconds - source.elapsedSeconds).toBe(9 * 30 * 24 * 60 * 60);
+    expect(finalized.state.tray).toEqual(source.tray);
+    expect(finalized.state.entities.find((entity) => entity.id === "pure-idle-controller")).toMatchObject({
+      buildingId: "time_warp_device",
+      machineCount: 1,
+    });
+    expect(finalized.state.entities.find((entity) => entity.id === "pure-idle-wind-50000000")).toMatchObject({
+      buildingId: "wind_turbine",
+      machineCount: 50_000_000,
+    });
+    expect(hashGameState(source)).toBe(sourceHash);
+  });
+
+  it("honours cancellation before mutating a macro boundary", () => {
+    const session = createPureIdleMacroSession(structuredClone(pureIdleState()), "extreme");
+    const before = hashGameState(session.candidate);
+
+    expect(() => advancePureIdleMacroSession(session, 24 * 60 * 60, {
+      shouldCancel: () => true,
+    })).toThrowError(/取消/);
+    expect(hashGameState(session.candidate)).toBe(before);
+    expect(session.settledWallSeconds).toBe(0);
+  });
+
+  it("honours an expired deadline before calibration starts", () => {
+    expect(() => createPureIdleMacroSession(structuredClone(pureIdleState()), "stable", {
+      deadlineAtMs: -1,
+    })).toThrowError(/现实时间上限/);
   });
 });
