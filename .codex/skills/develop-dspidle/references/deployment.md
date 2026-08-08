@@ -35,6 +35,18 @@ These addresses are operational identifiers, not authorization. Never infer perm
 - Never combine code rollback with data rollback by default.
 - Never use a production account for automated write tests.
 
+## VPN Or TUN Egress
+
+If a VPN/TUN closes VPS SSH before key exchange, keep the VPN enabled and first identify the physical IPv4 interface that owns the real default gateway. Bind each VPS command to that source address only for the life of the process:
+
+- Git OpenSSH: `ssh -b <physical-ip> ...`
+- SCP: `scp -o BindAddress=<physical-ip> ...`
+- Direct HTTPS probes: `curl --interface <physical-ip> --resolve <host>:443:<secured-origin-ip> ...`
+
+Use `--resolve` only with the protected deployment target so TLS still validates the public hostname while bypassing fake-IP DNS. Never commit the physical address, origin address, username, or key path. Do not add persistent routes, disable the VPN globally, turn off TLS or host-key verification, or reuse a VPS SSH key for application signing.
+
+GitHub may require the opposite path: when direct port 22/443 is blocked but the VPN can reach GitHub, leave Git traffic on the VPN and use GitHub's official `ssh.github.com:443` endpoint through a one-shot `GIT_SSH_COMMAND`. Clear that environment variable after fetch or push; do not rewrite the repository remote or global SSH configuration merely for one release.
+
 ## Release Pattern
 
 Upload into a new release directory, validate it, atomically switch `current`, then reload or restart. Do not overwrite the active directory in place. Verify local health first and public health second. Keep the previous release until the observation window ends.
@@ -52,6 +64,8 @@ For backend rollback, switch code back and preserve the current database. For fr
 - Cloud metadata can be read using a dedicated test account when write validation is required.
 - Mobile portrait/landscape and all five font scales remain usable.
 
-## Current Known Optimization
+## Current Production Baseline
 
-Hong Kong and Shanghai both run `1.0.12-4f149409f433` with GameState v41, cloud schema v7 and SQLite layout v2; both code rollback targets are `1.0.11-f88462df5326`. Shanghai's public native packages and download release are also 1.0.12, with 1.0.11 retained for rollback. Main-slot upload, automatic sync and history restore update the leaderboard from server-derived save metrics; startup backfill is idempotent, manual slots do not participate, and accounts can opt out. Hong Kong also has one verified internal leaderboard data-integrity restriction; it filters five public categories and prevents upload, restore, visibility and startup backfill from recreating the submission while preserving the account and cloud-save history. Shanghai did not receive that data operation. Production checks confirmed gzip for hashed JS/CSS, immutable asset caching, no-cache HTML/service-worker behavior, active services and `NRestarts=0`. Hong Kong authorizes the packaged Android `https://localhost` origin while rejecting unknown origins. Layout v2 keeps cloud-save payloads in independent revision rows, and code rollback never restores the database. The 1.0.12 Hong Kong switch initially exceeded the default health window and automatically rolled back; after logs confirmed normal startup, a 30-second window completed the same release without any data restore. Brotli remains optional. After the 1.0.12 release and verified backups, Shanghai has roughly 4.4 GiB free and Hong Kong roughly 9.0 GiB free; release directories, native binaries, logs and backup retention still need monitoring without deleting the current release, rollback release or valid backups.
+Hong Kong and Shanghai Web/API run `1.0.34-4a7d51241424` with GameState v46, save envelope v2, cloud schema v7 and SQLite layout v2. Their direct code rollback is `1.0.33-2bd81de8d7f1`; Shanghai serves `download-site-1.0.34-4a7d51241424` with the 1.0.33-r2 download directory retained. Android 1.0.34 uses the approved long-term certificate; Windows 1.0.34 remains explicitly `NotSigned`. Production checks confirmed gzip and immutable hashed assets, no-cache entry points and feeds, exact full-download hashes, Range 206, active services/timers and `NRestarts=0`.
+
+The Hong Kong database is large enough that an online Backup API run can fail to converge under active writes. Use a low-traffic maintenance window, stop the health timer and service writes, allow at least three minutes for startup health, and verify `quick_check`, schema/layout, mode and hash before mutation. Current disk usage is approximately 69% in Hong Kong and 83% in Shanghai; keep current, direct rollback and valid backups. Read `docs/releases/1.0.34.md` for exact evidence and `docs/DEPLOYMENT_OPERATIONS.md` for the current procedure.

@@ -42,7 +42,7 @@
 
 真实测试存档：
 
-`C:\Users\WINDOWS\Downloads\dsp-idle-save-2026-08-01 (2) (1).json`
+本机受保护存档附件（实际路径和原始文件不进入仓库）。
 
 该文件只能以只读方式打开。不得把它复制到生产目录、上传云端、写回磁盘或提交到 Git。
 
@@ -257,8 +257,8 @@ npm run test:ops
 npm run test:native
 npm run build
 npm run test:e2e
-npm run benchmark:canvas -- --fixture="C:\Users\WINDOWS\Downloads\dsp-idle-save-2026-08-01 (2) (1).json"
-npm run benchmark:multicore -- --fixture="C:\Users\WINDOWS\Downloads\dsp-idle-save-2026-08-01 (2) (1).json"
+npm run benchmark:canvas -- --fixture="<LOCAL_PROTECTED_SAVE>"
+npm run benchmark:multicore -- --fixture="<LOCAL_PROTECTED_SAVE>"
 ```
 
 真实存档基准、P3 保存、P4 协议、P5 页面和 P6 完整模拟需要额外命令或临时测试脚本时，脚本必须在测试后删除，不得把玩家存档、测试输出或私密数据提交到仓库。

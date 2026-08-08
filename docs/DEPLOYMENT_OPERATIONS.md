@@ -90,6 +90,39 @@ npm run test:e2e
 - 香港和上海的 Nginx 配置分别选择正确模板。
 - 发布窗口内没有正在进行的数据恢复或数据库维护。
 
+### 4.1 VPN/TUN 开启时的临时出口绑定
+
+发布终端若启用 Clash、企业 VPN 或其他 TUN，VPS SSH 可能在密钥交换前被 fake-IP 或代理规则关闭。无需关闭 VPN，也不要添加永久主机路由；先找出拥有真实默认网关的物理 IPv4 地址，并只对本次进程绑定出口：
+
+```powershell
+$physical = Get-NetIPConfiguration |
+  Where-Object {
+    $_.IPv4DefaultGateway -and
+    $_.NetAdapter.Status -eq 'Up' -and
+    $_.IPv4Address.IPAddress -notlike '198.18.*'
+  } |
+  Select-Object -First 1
+$bindIp = $physical.IPv4Address.IPAddress
+```
+
+- Git OpenSSH 使用 `ssh -b <physical-ip> ...`。
+- SCP 使用 `scp -o BindAddress=<physical-ip> ...`。
+- 公网探针使用 `curl --interface <physical-ip> ...`；若 TUN DNS 返回 fake IP，再增加 `--resolve <public-host>:443:<secured-origin-ip>`，仍由 TLS 校验公开域名。
+- 先执行 SSH 只读命令和 HTTPS health；确认来源、Host/SNI、当前指针和服务都正确后，才允许进入备份或切换阶段。
+
+真实服务器地址、账号和 key 路径只从受保护运维环境解析，不写入命令模板、Git 或发布记录。不得关闭 host-key/TLS 校验，不得把 VPS SSH key 当作应用签名证书，也不得通过持久路由把其他流量长期绕过 VPN。
+
+GitHub 与 VPS 可能需要不同出口：若物理直连无法访问 GitHub 22/443，但 VPN 可以访问，则 Git 操作保留 VPN 路径，并临时使用 GitHub 官方 SSH-over-443 入口：
+
+```powershell
+$env:GIT_SSH_COMMAND = '"C:/Program Files/Git/usr/bin/ssh.exe" -o Hostname=ssh.github.com -p 443 -o BatchMode=yes'
+git fetch origin main
+# 完成 fetch/push 后清除本次进程变量
+Remove-Item Env:GIT_SSH_COMMAND
+```
+
+不要为一次发布修改全局 SSH 配置或远端 URL。出口绑定只解决本地网络路径，不改变服务器权限、发布门禁、备份顺序或回滚要求。
+
 ## 5. 推荐的安全发布流程
 
 ### 5.1 备份和预检

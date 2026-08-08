@@ -189,7 +189,7 @@ P2，移动端和窄检查器高频操作优化。
 
 ### Source and attachments
 
-- 原始截图：`C:\Users\WINDOWS\Documents\Tencent Files\782671004\nt_qq\nt_data\Pic\2026-08\Ori\86e2c57783b71f23571a5cb916c31af9.png`
+- 原始截图保留在本机受保护附件区，实际路径不进入仓库。
 - 仓库副本：`docs/feedback-assets/development-batch-2026-08-04/logistics-station-slot-density.png`
 - 尺寸：`401 x 849`
 - SHA-256：`E4641293038474D968EFB40682760B0FBCD0AC13387F6C63B7E3E5D4600056A0`

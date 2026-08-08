@@ -107,7 +107,7 @@
 
 ### 复现附件
 
-- 玩家存档：`D:/360安全浏览器下载/dsp-idle-save-2026-08-05 (1).json`
+- 玩家存档保留在本机受保护附件区，实际路径和原始文件不进入仓库。
 - 仅允许在内存副本上读取和测试，不得覆盖附件。
 
 ### 玩家看到的错误
@@ -126,7 +126,7 @@ Cannot read properties of undefined (reading 'id')
 复现命令：
 
 ```powershell
-$env:DSP_FAST_OFFLINE_FIXTURES='D:\360安全浏览器下载\dsp-idle-save-2026-08-05 (1).json'
+$env:DSP_FAST_OFFLINE_FIXTURES='<LOCAL_PROTECTED_SAVE>'
 npm test -- --run src/game/offlineFastSettlementBenchmark.test.ts --reporter=verbose
 ```
 

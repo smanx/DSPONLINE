@@ -20,7 +20,7 @@
 
 后续提交 `4a7d51241424f4289c629377e896ec70f41cbe54` supersedes 文档中旧候选 `9f9714f973b0`。新增 `server/galactic-metrics.mjs` 与客户端同口径聚合器，完整 `planetMetrics` 使用饱和加法；非法、负数、非有限值按 0 处理，缺失 `planetMetrics` 的旧存档回退根 `state.metrics` 并标记 `legacy-active-planet-v1`。排行榜只将全星区理论值写入 `galacticThroughputPerMinute`，当前星球写入 `activePlanetThroughputPerMinute`，实际结算吞吐继续独立使用相邻主云修订 `totalProduced` 增量，避免理论值与实际值混用。
 
-19 MiB 夹具 `C:\Users\WINDOWS\Downloads\dsp-idle-save-2026-08-07 (1) (1).json` 以只读方式核验：20,164,029 字节；当前 `abyss` 理论值约 14,503,564,442.41/min；22 颗行星合计约 189,651,877,333.02/min；前后 SHA-256 一致。没有上传、写回或提交该存档。
+19 MiB 本机受保护夹具以只读方式核验：20,164,029 字节；当前 `abyss` 理论值约 14,503,564,442.41/min；22 颗行星合计约 189,651,877,333.02/min；前后 SHA-256 一致。实际路径和原始文件不进入仓库，也没有上传或写回该存档。
 
 ## 2. 共享交接字段
 
@@ -102,9 +102,9 @@
 
 | 夹具 | 字节 | SHA-256 | 用途 |
 | --- | ---: | --- | --- |
-| `D:\360安全浏览器下载\dsp-idle-save-2026-08-07 (2).json` | 304,662 | `6573FE78573E45FD29854DF69BCAE2A4FD8F3EE9D6FFCB9F87112BD4AF5C55D7` | 历史时间扭曲装置 `x3`、四槽云兼容 |
-| `C:\Users\WINDOWS\Downloads\dsp-idle-save-2026-08-07 (1) (1).json` | 20,164,029 | `37848F48FA3764CDED937560765A6B0F91048CB22867A24BD4AADB8D2414A148` | 11,604 实体、27,669 线路终局离线/纯挂机/云准备 |
-| `C:\Users\WINDOWS\Downloads\dsp-idle-save-2026-08-07 (2).json` | 886,038 | `0D313BB2096C4D99CD281C968C9E9D8AD8E3B9FB12C22D450A0ACE707C965872` | 小号吞吐与 8x/12x/16x 回归 |
+| 本机受保护小档附件 | 304,662 | `6573FE78573E45FD29854DF69BCAE2A4FD8F3EE9D6FFCB9F87112BD4AF5C55D7` | 历史时间扭曲装置 `x3`、四槽云兼容 |
+| 本机受保护终局附件 | 20,164,029 | `37848F48FA3764CDED937560765A6B0F91048CB22867A24BD4AADB8D2414A148` | 11,604 实体、27,669 线路终局离线/纯挂机/云准备 |
+| 本机受保护小号附件 | 886,038 | `0D313BB2096C4D99CD281C968C9E9D8AD8E3B9FB12C22D450A0ACE707C965872` | 小号吞吐与 8x/12x/16x 回归 |
 
 三份文件在最终核验后仍保持上述大小和 SHA-256。
 

@@ -16,8 +16,7 @@
 - **Release target and version：** `1.0.29`，等待 Release Agent 从干净、可追踪的 `1.0.28` 后继基线创建候选版
 - **Source and attachments：**
 
-- 原始需求：`C:/Users/WINDOWS/.codex/attachments/95d85f4d-0447-49b2-b9c8-bf3c6a37c512/pasted-text.txt`
-- 只读真实存档夹具：`D:/360安全浏览器下载/dsp-idle-save-2026-08-04.json`
+- 原始需求与只读真实存档夹具均保留在本机受保护附件区，实际路径和原始文件不进入仓库。
 - 夹具信息：GameState v46、221 个实体、186 条传送带、13 个物流站、建筑制造中心堆叠 44,311、38 种递归目标，多个目标为 100,000,000
 
 本批只修复精确模拟的计算预算、Worker 调度和时间扭曲停止流程。没有启用近似结算，没有改变配方、产能、库存、物流、量子网络、离线收益或时间扭曲倍率规则。
@@ -117,8 +116,8 @@ Worker 响应总是带 `durationMs`，但只在性能诊断开启时计算详细
 | --- | --- |
 | `npm run typecheck` | 通过；TypeScript 0 错误 |
 | `npm test -- --run` | 86 个测试文件通过、3 个跳过；744 项通过、14 项跳过、0 失败 |
-| `$env:DSP_REAL_FIXTURE='D:/360安全浏览器下载/dsp-idle-save-2026-08-04.json'; $env:DSP_CONSTRUCTION_STABILITY_PROFILE='1'; npm test -- --run src/game/offlinePerformance.test.ts` | 2 项通过、2 项可选基准跳过；真实夹具性能、确定性和保存重载通过 |
-| `$env:DSP_CONSTRUCTION_STABILITY_SAVE='D:/360安全浏览器下载/dsp-idle-save-2026-08-04.json'; npx playwright test tests/e2e/construction-automation-stability.spec.ts --workers=1` | 3/3 通过、0 失败 |
+| `$env:DSP_REAL_FIXTURE='<LOCAL_PROTECTED_SAVE>'; $env:DSP_CONSTRUCTION_STABILITY_PROFILE='1'; npm test -- --run src/game/offlinePerformance.test.ts` | 2 项通过、2 项可选基准跳过；真实夹具性能、确定性和保存重载通过 |
+| `$env:DSP_CONSTRUCTION_STABILITY_SAVE='<LOCAL_PROTECTED_SAVE>'; npx playwright test tests/e2e/construction-automation-stability.spec.ts --workers=1` | 3/3 通过、0 失败 |
 | `npm run build` | 通过；Vite 转换 1,876 个模块 |
 | `git diff --check` | 通过；仅有无关 `src/theme.css` CRLF 转换提示 |
 

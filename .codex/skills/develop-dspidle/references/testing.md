@@ -9,12 +9,14 @@ npm run typecheck
 npm test
 npm run test:server
 npm run test:ops
+npm run test:native
+npm run licenses:check
 npm run build
 npm run test:e2e
 npm run desktop:pack
 ```
 
-Current production baseline: 1.0.12 with 548 passing Vitest tests plus 3 optional benchmark skips, 176 Playwright scenarios, 42 cloud-service tests, 6 operations tests and 6 native configuration/release-tool tests on GameState v41. Hong Kong and Shanghai Web/API both run `1.0.12-4f149409f433` with save envelope v2, cloud schema v7 and SQLite storage layout v2. Public Windows and Android stable packages are also 1.0.12, with Android versionCode `1000012`, from the Shanghai download node. The common code and download rollback target is `1.0.11-f88462df5326`.
+Current production baseline: 1.0.34 on GameState v46, save envelope v2, cloud schema v7 and SQLite layout v2. The clean source passed 842 Vitest tests with 16 explicit skips and 254 Playwright scenarios with 11 explicit skips. Local server verification with the read-only large fixture passed 53 with 1 optional skip; each inactive production directory passed 52 with 2 optional skips. Operations are 6/6, native tools 8/8, and 128 runtime licenses are consistent. Hong Kong and Shanghai Web/API run `1.0.34-4a7d51241424`; Android is `1.0.34 / 1000034`, Windows is 1.0.34 `NotSigned`, and the direct code/download rollback baseline is 1.0.33.
 
 ## Choose By Change
 

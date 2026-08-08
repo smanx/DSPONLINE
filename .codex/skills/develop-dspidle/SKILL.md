@@ -101,6 +101,8 @@ Follow the backup, release-directory, atomic switch, health-check, smoke-test, a
 
 The release role must deploy from a clean, traceable development commit and an immutable manifest. Build or test in an isolated directory before touching production; never copy a working tree, player save, SQLite database, secret, or private key into a release. Update `docs/PROJECT_STATUS.md` and `docs/releases/<version>.md` only after the live checks actually pass.
 
+When a VPN or TUN intercepts release traffic, use only the transient per-command egress methods in [references/deployment.md](references/deployment.md). Do not add persistent host routes, weaken TLS or host-key checks, or expose secured targets and key paths. Treat GitHub transport separately from VPS transport: GitHub's official SSH-over-443 endpoint may remain on the VPN path when direct physical egress is unavailable.
+
 ## Validate Proportionally
 
 Read [references/testing.md](references/testing.md), choose the smallest sufficient matrix, and report exactly what ran. A production release requires the full matrix. Documentation-only changes require link checks, Skill validation, and `git diff --check`, not an unnecessary browser suite.
