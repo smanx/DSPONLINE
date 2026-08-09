@@ -66,6 +66,20 @@ A root-scoped production service worker controls every path on the same HTTPS or
 
 Removing this kind of canary means restoring the recorded Nginx configuration and reloading it. It does not require code-pointer rollback or database restore.
 
+### Previous-Stable Web Fallback
+
+After a stable rollout and its observation window pass, preserve the just-replaced Hong Kong Web release as a user-visible fallback for client-side regressions. This is a distinct operation from a candidate canary:
+
+- Confirm the chosen Web directory is the exact direct rollback release, its immutable files are complete, and it remains compatible with the current API, cloud schema and save boundary. If compatibility is uncertain, publish no fallback.
+- Serve it at `/canary/<previous-release-id>/`. Keep `/canary/previous/` as a `302` with `Cache-Control: no-store` and `Vary: *` to that immutable route; do not implement it as a drifting filesystem symlink. A historical compatibility URL may redirect to `/canary/previous/`, but an immutable version URL must never silently serve another build.
+- Reject only the exposed previous build's root `/sw.js?v=<build-id>` request. The current stable worker URL must stay `200`. Return `no-store`, `Vary: *` and `X-Robots-Tag: noindex, nofollow, noarchive` throughout the fallback route.
+- Back up and hash the exact active Nginx snippet, syntax-test the candidate independently, install it atomically, run the active `nginx -t`, reload, and retain the backup as the fallback-specific rollback pointer. Do not switch Web/API/download `current` or create unrelated database I/O.
+- Verify the public fallback HTML is byte-identical to the immutable previous release, every referenced asset is reachable, the displayed/build version is the previous stable version, the legacy and stable redirects are uncached, the old worker is `404`, and the current worker and API health remain good.
+- In a fresh public Chrome context, activate current stable first, record its cached `/index.html`, visit both the stable redirect and immutable fallback, and require exactly the current worker to remain active with no waiting/installing worker. The cached current HTML must be byte-identical before and after, and an offline reload of the current root must still work.
+- State the boundary publicly: this fallback can help when new Web code regresses while Hong Kong Nginx and the current API remain available and compatible. It is not protection from an origin, API, database or network outage, and it must not be described as such.
+
+For every later stable release, update `/canary/previous/` only after the new stable observation passes. Point it to the stable Web directory that was just replaced, update the exact previous-build worker rejection, rerun all HTTP and browser checks, and record the new Nginx backup and immutable URL in the release document. Roll back this fallback by restoring its Nginx backup only; leave the current code and database untouched.
+
 ### Exceptional Historical Speedrun Recovery
 
 The standard offline recovery tool intentionally accepts only the latest primary cloud revision. Do not weaken that contract for convenience. A non-latest revision may be handled only when the user explicitly authorizes one identified player and displayed time, read-only inspection proves one exact account and one exact eligible revision, and all of these controls are present:
@@ -95,6 +109,6 @@ Keep the sanitized evidence and rollback boundary in a release/operations record
 
 Hong Kong and Shanghai Web/API run `1.0.35-080844f55852` with GameState v46, save envelope v2, cloud schema v7 and SQLite layout v2. Their direct code rollback is `1.0.34-4a7d51241424`; Shanghai serves `download-site-1.0.35-080844f55852` with the 1.0.34 download directory retained. Android 1.0.35 uses the approved long-term certificate; Windows 1.0.35 remains explicitly `NotSigned`. Production checks confirmed gzip and immutable current/rollback assets, no-cache entry points and feeds, exact full-download hashes, Range 206, five Chrome smoke scenarios, active services/timers and `NRestarts=0`.
 
-The former Hong Kong Web-only canary `1.0.35+48c74b7100dc` is no longer routed. The pre-canary Nginx state was restored before the formal stable switch; the immutable static directory is retained only for audit. Do not re-enable it or its candidate-worker exception as part of a routine rollback.
+Hong Kong now exposes the direct Web rollback `1.0.34-4a7d51241424` through immutable `/canary/1.0.34-4a7d51241424/`; `/canary/previous/` redirects there, and the former `1.0.35+48c74b7100dc` compatibility URL redirects to `/canary/previous/`. The current Web/API pointers remain `1.0.35-080844f55852`. This route is Web-only, uses the current API, and has an independent Nginx rollback backup; do not re-enable the former candidate directory or worker exception.
 
 The Hong Kong database is large enough that an online Backup API run can fail to converge under active writes. Use a low-traffic maintenance window, stop the health timer and service writes, allow at least three minutes for startup health, and verify `quick_check`, schema/layout, mode and hash before mutation. A service restart also triggers an immediate large COS snapshot under the current no-window configuration; keep health timers paused until its state is `ready`, or configure and validate an explicit low-traffic backup window. Current disk usage is approximately 76% in Hong Kong and 83% in Shanghai; keep current, direct rollback and valid backups. Read `docs/releases/1.0.35.md` for exact evidence and `docs/DEPLOYMENT_OPERATIONS.md` for the current procedure.

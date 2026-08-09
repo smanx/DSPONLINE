@@ -101,6 +101,8 @@ Follow the backup, release-directory, atomic switch, health-check, smoke-test, a
 
 The release role must deploy from a clean, traceable development commit and an immutable manifest. Build or test in an isolated directory before touching production; never copy a working tree, player save, SQLite database, secret, or private key into a release. Update `docs/PROJECT_STATUS.md` and `docs/releases/<version>.md` only after the live checks actually pass.
 
+After each successful stable rollout and observation window, keep the just-replaced Hong Kong Web release available as the previous-stable fallback described in [references/deployment.md](references/deployment.md). Expose only an immutable versioned route plus the controlled `/canary/previous/` redirect, preserve the current root worker and caches, require current-API compatibility and public browser isolation evidence, and record the independent Nginx rollback pointer. This fallback never authorizes an API, database, native-feed, or download-page rollback.
+
 When a VPN or TUN intercepts release traffic, use only the transient per-command egress methods in [references/deployment.md](references/deployment.md). Do not add persistent host routes, weaken TLS or host-key checks, or expose secured targets and key paths. Treat GitHub transport separately from VPS transport: GitHub's official SSH-over-443 endpoint may remain on the VPN path when direct physical egress is unavailable.
 
 ## Validate Proportionally

@@ -15,7 +15,7 @@
 
 硬边界：上海节点必须继续由上海本机提供前端与 `/api`，不得改成香港反代或域名跳转。上海为 HTTP，前端必须继续拒绝云账号密码传输。
 
-> 当前生产状态（2026-08-09）：香港、上海 Web/API 均运行 `1.0.35-080844f55852`，构建 ID 为 `1.0.35+080844f55852`；上海下载页运行 `download-site-1.0.35-080844f55852`。Web/API 和下载页直接回滚均为 1.0.34。两地数据库继续独立使用 schema v7 / SQLite layout v2。旧香港 Web-only Canary 路由已移除，目录仅保留审计。发布前备份、未激活目录复验、原子切换、启动观察、公网完整哈希、Range、缓存和五场 Chrome 证据见 [releases/1.0.35.md](./releases/1.0.35.md)。
+> 当前生产状态（2026-08-09）：香港、上海 Web/API 均运行 `1.0.35-080844f55852`，构建 ID 为 `1.0.35+080844f55852`；上海下载页运行 `download-site-1.0.35-080844f55852`。Web/API 和下载页直接回滚均为 1.0.34。两地数据库继续独立使用 schema v7 / SQLite layout v2。香港 `/canary/previous/` 现在 302 到不可变上一稳定版 `/canary/1.0.34-4a7d51241424/`；旧 1.0.35 测试地址只作兼容重定向，不再暴露候选目录。发布前备份、未激活目录复验、原子切换、启动观察、公网完整哈希、Range、缓存、五场 stable Chrome 证据和回退入口证据见 [releases/1.0.35.md](./releases/1.0.35.md)。
 
 > 1.0.35 新增内部账号安全、治理指标和排行榜复核状态，但没有升级 schema/layout。两地发布前备份均通过 SQLite Backup API、`quick_check` 和哈希验证；未激活 API 已在各自备份副本上隔离启动。不得跨节点复制、合并或裁剪数据库。用户只豁免精确候选的物理真机 stable 门禁，不豁免后续版本或其他发布门禁。
 
@@ -36,7 +36,7 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-香港、上海 Web/API 已切换到 `1.0.35-080844f55852`，上海下载站切换到不可变目录 `download-site-1.0.35-080844f55852`；构建 `1.0.35+080844f55852` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍 302 到上海下载域名。Android SHA-256 为 `56598fecf674c05141535a4fa99b868c16b4c6ccc6acdf7358a6f305a3c8e88a`，Windows SHA-256 为 `ea4ceb1625b69347a0207dac86d10cb0314b63738f84d5d3379481d55a67d322`（Authenticode `NotSigned`），blockmap SHA-256 为 `1641d9c7bdf0901f2b0923715e5a50fac931a0adfc0de29283c2f670fc4d2cdf`。香港发布前备份为 2,776,186,880 字节、上海为 200,704 字节，均为 `0600` 并通过 `quick_check`、完整性和 schema v7/layout v2 验证；Web/API 与下载页回滚目标均为 1.0.34。公网健康、9 文件完整下载哈希、Range、缓存头、当前/历史 hashed asset、CORS Origin 和五场浏览器 smoke 均已复验。两地服务 active、`NRestarts=0`；发布收口磁盘约为香港 76%、上海 83%，不得删除当前版、回滚版或未证明已异地归档的有效备份。完整证据见 [releases/1.0.35.md](./releases/1.0.35.md)。
+香港、上海 Web/API 已切换到 `1.0.35-080844f55852`，上海下载站切换到不可变目录 `download-site-1.0.35-080844f55852`；构建 `1.0.35+080844f55852` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍 302 到上海下载域名。香港另以 Web-only 方式暴露不可变回滚目录 `web-1.0.34-4a7d51241424`，稳定入口为 `/canary/previous/`，继续使用当前 1.0.35 API。Android SHA-256 为 `56598fecf674c05141535a4fa99b868c16b4c6ccc6acdf7358a6f305a3c8e88a`，Windows SHA-256 为 `ea4ceb1625b69347a0207dac86d10cb0314b63738f84d5d3379481d55a67d322`（Authenticode `NotSigned`），blockmap SHA-256 为 `1641d9c7bdf0901f2b0923715e5a50fac931a0adfc0de29283c2f670fc4d2cdf`。香港发布前备份为 2,776,186,880 字节、上海为 200,704 字节，均为 `0600` 并通过 `quick_check`、完整性和 schema v7/layout v2 验证；Web/API 与下载页回滚目标均为 1.0.34。公网健康、9 文件完整下载哈希、Range、缓存头、当前/历史 hashed asset、CORS Origin 和五场浏览器 smoke 均已复验。两地服务 active、`NRestarts=0`；发布收口磁盘约为香港 76%、上海 83%，不得删除当前版、回滚版或未证明已异地归档的有效备份。完整证据见 [releases/1.0.35.md](./releases/1.0.35.md)。
 
 `1.0.13` 两节点发布都只切换 Web/API 代码，未执行数据库迁移。香港发布前后 Backup API 快照均通过 `quick_check`；前备份为 887,271,424 字节，后备份为 888,795,136 字节。上海发布前后备份均为 122,880 字节并通过 `quick_check`；发布前 SHA-256 为 `a8af0eec173e6f8aad36af09b7e6d8c56b2b00014d76efd53124ddfb81b7e6a7`，发布后为 `8cb0c7bbbb270ac804b7c16909fc1b4274d0b2aed34a4ae7f379f333596cd737`。上海 0 个账号、0 个主云档、24 条玩家记录和 23 条错误记录均未减少，服务 `NRestarts=0`。受限备份传输账号仍只用于异地备份，代码发布使用独立的 `ubuntu` 授权。
 
@@ -147,7 +147,7 @@ node /path/to/backup-sqlite.mjs \
 4. 执行 `nginx -t`，只有成功后才 reload。
 5. 验证根页面、service worker、manifest 和一个静态 chunk。
 
-#### 同域 Web-only 测试入口
+#### 同域 Web-only 测试与上一稳定版回退入口
 
 同一 HTTPS origin 下的根 Service Worker 会控制所有子路径，不能把普通生产 Web 归档直接挂到 `/canary/*` 后就宣称与正式 PWA 隔离。只有用户明确要求 Web-only 并存测试、候选 Web 与当前 API 保持滚动兼容、且不切换 Web/API/download `current` 时，才可采用版本化测试路径；至少满足：
 
@@ -159,6 +159,15 @@ node /path/to/backup-sqlite.mjs \
 6. 测试入口不得进入 Android/Windows stable feed 或正式下载页；若真机门禁被豁免，文档必须把豁免范围限制在 Web 测试入口。
 
 移除测试入口时只恢复已记录的 Nginx 配置备份并 reload；正式代码回滚、数据库恢复和下载指针切换都不属于该操作。当前 1.0.35 实例和浏览器证据见 [1.0.35 香港 Web 测试版发布记录](./releases/1.0.35.md)。
+
+正式 stable 发布及观察窗口通过后，香港还必须把刚被替换的 Web 版保留为上一稳定版回退入口。该机制只处理“新 Web 代码回归而 Nginx 与当前 API 仍正常”的情况，不能承诺覆盖 API、数据库、服务器或网络故障：
+
+1. 只选择与当前 API/schema/存档边界滚动兼容的直接 Web 回滚目录；不确定时不公开入口。
+2. 使用不可变 `/canary/<previous-release-id>/`，并让固定用户入口 `/canary/previous/` 以带 `no-store`、`Vary: *` 的 302 指向它；该固定入口不是文件系统软链接。历史兼容地址可以 302 到固定入口，但不可变版本地址不得偷换目录。
+3. 精确拒绝上一稳定版 Build ID 对根 `/sw.js` 的注册，同时保证当前 stable worker 仍为 200；回退响应还必须带 `no-store`、`Vary: *` 和 `noindex`。
+4. 变更前备份并哈希活动 Nginx snippet，候选独立 `nginx -t` 后原子安装，再执行正式 `nginx -t` 和 reload；不切换 Web/API/download `current`，不触碰数据库。
+5. 公网逐字核对回退 HTML 与不可变目录，验证全部入口资源、版本、重定向、当前 API 和新旧 worker；随后在全新 Chrome 上先激活当前 stable，再访问固定入口与不可变入口，确认只有当前 worker active、没有 waiting/installing、访问前后当前 `/index.html` 缓存逐字不变，并能离线重开正式根站。
+6. 每次后续 stable 发布都在新版本观察通过后，把该入口更新为刚被替换的版本，记录新的 Nginx 回滚副本和不可变 URL。回退此入口只恢复 Nginx 副本，不切换当前代码或数据库。
 
 上海客户端下载页是独立的静态发布目录，不依赖游戏 `assets/*` 或运行时 JavaScript。准备好 APK、Windows 安装包、`stable.json`、`latest.yml` 和 `release.json` 后，在发布目录生成页面并复验包清单：
 
