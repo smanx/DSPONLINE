@@ -56,6 +56,7 @@ const BODY_LIMIT_BYTES = 32 * 1024 * 1024;
 const SAVE_PAYLOAD_LIMIT_BYTES = BODY_LIMIT_BYTES - 1024;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CLOUD_SAVE_SLOTS = ["main", "1", "2", "3"];
+const SAVE_MODES = ["normal", "speedrun"];
 const MANUAL_CLOUD_SAVE_SLOTS = CLOUD_SAVE_SLOTS.slice(1);
 const SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION = 2;
 const EMAIL_ACTION_TTL_MS = 30 * 60 * 1000;
@@ -112,6 +113,13 @@ const DEFAULT_DATA = {
   cloudSaveHistory: {},
   cloudSaveSlots: {},
   cloudSaveSlotHistory: {},
+  // Normal-mode records keep their historical keys for backward compatibility.
+  // Speedrun records live in these mode-qualified maps so the same slot name
+  // can never overwrite a normal save.
+  cloudSavesByMode: {},
+  cloudSaveHistoryByMode: {},
+  cloudSaveSlotsByMode: {},
+  cloudSaveSlotHistoryByMode: {},
   submissions: {},
   speedrunSubmissions: {},
   leaderboardModeration: {},
@@ -226,6 +234,42 @@ function normalizeActionTokens(value, users) {
   )));
 }
 
+function normalizedCloudSaveMode(value) {
+  return value === "speedrun" ? "speedrun" : value === "normal" || value === null || value === undefined ? "normal" : null;
+}
+
+function savePayloadMode(payload) {
+  try {
+    const parsed = JSON.parse(payload);
+    const state = parsed?.state ?? parsed;
+    const envelopeMode = parsed?.mode;
+    const stateMode = state?.mode;
+    if (envelopeMode !== undefined && !SAVE_MODES.includes(envelopeMode)) return null;
+    if (stateMode !== undefined && !SAVE_MODES.includes(stateMode)) return null;
+    if (envelopeMode !== undefined && stateMode !== undefined && envelopeMode !== stateMode) return null;
+    if (envelopeMode !== undefined || stateMode !== undefined) return normalizedCloudSaveMode(envelopeMode ?? stateMode);
+    // v2 speedrun saves predate the top-level mode marker. Their complete,
+    // server-verifiable run identity is an unambiguous legacy marker; plain
+    // legacy saves without this structure remain normal.
+    const legacySpeedrun = state?.speedrun;
+    if (legacySpeedrun?.enabled === true && legacySpeedrun.mode === "speedrun" &&
+      typeof legacySpeedrun.factoryId === "string" && legacySpeedrun.factoryId.length > 0) return "speedrun";
+    return "normal";
+  } catch {
+    return null;
+  }
+}
+
+function isLegacyImplicitSpeedrunPayload(payload) {
+  try {
+    const parsed = JSON.parse(payload);
+    const state = parsed?.state ?? parsed;
+    return parsed?.mode === undefined && state?.mode === undefined && savePayloadMode(payload) === "speedrun";
+  } catch {
+    return false;
+  }
+}
+
 function summarizeSavePayload(payload) {
   if (typeof payload !== "string") return null;
   try {
@@ -234,6 +278,7 @@ function summarizeSavePayload(payload) {
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities)) return null;
     return {
+      mode: savePayloadMode(payload) ?? "normal",
       stateVersion: Number.isFinite(state.version) ? Math.max(0, Math.floor(state.version)) : 0,
       savedAt: Number.isFinite(parsed?.savedAt) ? Math.max(0, Math.floor(parsed.savedAt)) : 0,
       elapsedSeconds: Number.isFinite(state.elapsedSeconds) ? Math.max(0, Math.floor(state.elapsedSeconds)) : 0,
@@ -273,6 +318,40 @@ function normalizeManualSaveSlotHistory(value) {
     if (!slots || typeof slots !== "object") return [];
     const normalized = Object.fromEntries(MANUAL_CLOUD_SAVE_SLOTS.flatMap((slot) =>
       Array.isArray(slots[slot]) ? [[slot, slots[slot].map(normalizeSaveRecord)]] : []));
+    return Object.keys(normalized).length > 0 ? [[userId, normalized]] : [];
+  }));
+}
+
+function normalizeModeCloudSaves(value) {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([userId, modes]) => {
+    if (!modes || typeof modes !== "object") return [];
+    const normalized = Object.fromEntries(SAVE_MODES.flatMap((mode) =>
+      modes[mode] && typeof modes[mode] === "object" ? [[mode, normalizeSaveRecord(modes[mode])]] : []));
+    return Object.keys(normalized).length > 0 ? [[userId, normalized]] : [];
+  }));
+}
+
+function normalizeModeCloudHistory(value) {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([userId, modes]) => {
+    if (!modes || typeof modes !== "object") return [];
+    const normalized = Object.fromEntries(SAVE_MODES.flatMap((mode) =>
+      Array.isArray(modes[mode]) ? [[mode, modes[mode].map(normalizeSaveRecord)]] : []));
+    return Object.keys(normalized).length > 0 ? [[userId, normalized]] : [];
+  }));
+}
+
+function normalizeModeCloudSlots(value, history = false) {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([userId, modes]) => {
+    if (!modes || typeof modes !== "object") return [];
+    const normalized = Object.fromEntries(SAVE_MODES.flatMap((mode) => {
+      const slots = modes[mode];
+      if (!slots || typeof slots !== "object") return [];
+      const clean = history ? normalizeManualSaveSlotHistory({ [userId]: slots })[userId] : normalizeManualSaveSlots({ [userId]: slots })[userId];
+      return clean && Object.keys(clean).length > 0 ? [[mode, clean]] : [];
+    }));
     return Object.keys(normalized).length > 0 ? [[userId, normalized]] : [];
   }));
 }
@@ -335,6 +414,10 @@ function normalizeStoredData(parsed) {
       : {},
     cloudSaveSlots: normalizeManualSaveSlots(source.cloudSaveSlots),
     cloudSaveSlotHistory: normalizeManualSaveSlotHistory(source.cloudSaveSlotHistory),
+    cloudSavesByMode: normalizeModeCloudSaves(source.cloudSavesByMode),
+    cloudSaveHistoryByMode: normalizeModeCloudHistory(source.cloudSaveHistoryByMode),
+    cloudSaveSlotsByMode: normalizeModeCloudSlots(source.cloudSaveSlotsByMode),
+    cloudSaveSlotHistoryByMode: normalizeModeCloudSlots(source.cloudSaveSlotHistoryByMode, true),
     submissions: source.submissions && typeof source.submissions === "object" ? source.submissions : {},
     speedrunSubmissions: normalizeSpeedrunSubmissions(source.speedrunSubmissions, users),
     leaderboardModeration: normalizeLeaderboardModeration(source.leaderboardModeration, users),
@@ -361,6 +444,37 @@ function normalizeStoredData(parsed) {
       data.cloudSaveSlotHistory[userId][slot] = history
         .sort((left, right) => left.revision - right.revision)
         .slice(-CLOUD_HISTORY_LIMIT);
+    }
+  }
+  for (const [userId, modes] of Object.entries(data.cloudSavesByMode)) {
+    data.cloudSaveHistoryByMode[userId] ??= {};
+    for (const mode of SAVE_MODES) {
+      const save = modes?.[mode];
+      if (!save) continue;
+      const history = Array.isArray(data.cloudSaveHistoryByMode[userId][mode]) ? data.cloudSaveHistoryByMode[userId][mode] : [];
+      if (!history.some((entry) => entry.revision === save.revision)) history.push(save);
+      data.cloudSaveHistoryByMode[userId][mode] = history
+        .sort((left, right) => left.revision - right.revision)
+        .slice(-CLOUD_HISTORY_LIMIT);
+    }
+  }
+  for (const [userId, modes] of Object.entries(data.cloudSaveSlotsByMode)) {
+    data.cloudSaveSlotHistoryByMode[userId] ??= {};
+    for (const mode of SAVE_MODES) {
+      const slots = modes?.[mode];
+      if (!slots) continue;
+      data.cloudSaveSlotHistoryByMode[userId][mode] ??= {};
+      for (const slot of MANUAL_CLOUD_SAVE_SLOTS) {
+        const save = slots[slot];
+        if (!save) continue;
+        const history = Array.isArray(data.cloudSaveSlotHistoryByMode[userId][mode][slot])
+          ? data.cloudSaveSlotHistoryByMode[userId][mode][slot]
+          : [];
+        if (!history.some((entry) => entry.revision === save.revision)) history.push(save);
+        data.cloudSaveSlotHistoryByMode[userId][mode][slot] = history
+          .sort((left, right) => left.revision - right.revision)
+          .slice(-CLOUD_HISTORY_LIMIT);
+      }
     }
   }
   return data;
@@ -535,23 +649,48 @@ function speedrunProgressFromState(state, targetId) {
   return { current, target: 1_000_000, completed: current >= 1_000_000 };
 }
 
+function speedrunForbiddenStateReason(state) {
+  if (state?.settings?.resourceMode === "infinite") return "无限资源模式不能进入速通正式榜";
+  if (state?.settings?.difficulty && state.settings.difficulty !== "standard") return "非标准难度不能进入速通正式榜";
+  if (state?.extremeMode === true || state?.endgameExtremeMode === true || state?.settings?.endgameExtremeMode === true ||
+    state?.speedrun?.extremeMode === true) return "极限模式状态不能进入速通正式榜";
+  if (state?.experimentalSettlement === true || state?.approximateSettlement === true ||
+    state?.speedrun?.experimentalSettlement === true || state?.speedrun?.approximateSettlement === true) {
+    return "实验结算标记不能进入速通正式榜";
+  }
+  return null;
+}
+
 function validateSpeedrunSubmission(store, userId, body) {
   const targetId = typeof body?.targetId === "string" && Object.hasOwn(SPEEDRUN_TARGETS, body.targetId) ? body.targetId : null;
   if (!targetId) return { error: "速通目标无效", code: "SPEEDRUN_TARGET_INVALID", status: 400 };
   if (body.seasonId !== ACTIVE_LEADERBOARD_SEASON_ID || body.rulesetVersion !== SPEEDRUN_RULESET_VERSION) {
     return { error: "速通赛季或规则版本已封存", code: "SPEEDRUN_RULESET_INVALID", status: 409 };
   }
-  const current = currentCloudSave(store, userId, "main");
+  let current = currentCloudSave(store, userId, "main", "speedrun");
+  let currentMode = "speedrun";
   if (!current) return { error: "请先上传速通工厂主云存档", code: "SPEEDRUN_SAVE_MISSING", status: 409 };
+  // Compatibility for pre-marker clients: if they subsequently uploaded an
+  // ordinary save through the old unqualified endpoint, let the validator
+  // inspect that ordinary payload and reject it as ordinary rather than
+  // treating the revision mismatch as a valid speedrun submission.
+  if (current.legacyMode === true && body.saveRevision !== current.revision) {
+    const legacyNormal = currentCloudSave(store, userId, "main", "normal");
+    if (legacyNormal?.revision === body.saveRevision) {
+      current = legacyNormal;
+      currentMode = "normal";
+    }
+  }
   if (!Number.isInteger(body.saveRevision) || body.saveRevision !== current.revision) {
-    return { error: "速通提交必须使用当前云存档修订", code: "SPEEDRUN_REVISION_MISMATCH", status: 409, cloudSave: cloudSaveMetadata(current) };
+    return { error: "速通提交必须使用当前速通云存档修订", code: "SPEEDRUN_REVISION_MISMATCH", status: 409, cloudSave: cloudSaveMetadata(current, "main", "speedrun") };
   }
   const hashMatches = typeof body.saveHash === "string" && (body.saveHash === current.checksum || body.saveHash === current.summary?.stateChecksum);
   if (!hashMatches) return { error: "速通存档摘要不匹配", code: "SPEEDRUN_HASH_MISMATCH", status: 409 };
-  const materialized = materializeCloudSave(store, userId, "main", current);
+  const materialized = materializeCloudSave(store, userId, "main", current, currentMode);
   const state = parseSaveState(materialized?.payload);
   const speedrun = state?.speedrun;
-  if (!state || !speedrun || speedrun.enabled !== true || speedrun.mode !== "speedrun") {
+  const verifiedLegacySpeedrunMode = current.legacyMode === true && state?.mode === undefined;
+  if (!state || (state.mode !== "speedrun" && !verifiedLegacySpeedrunMode) || !speedrun || speedrun.enabled !== true || speedrun.mode !== "speedrun") {
     return { error: "普通存档不能提交速通成绩", code: "SPEEDRUN_SAVE_NOT_ENABLED", status: 422 };
   }
   if (speedrun.rulesetVersion !== SPEEDRUN_RULESET_VERSION || speedrun.seasonId !== ACTIVE_LEADERBOARD_SEASON_ID || speedrun.eligible !== true) {
@@ -560,6 +699,8 @@ function validateSpeedrunSubmission(store, userId, body) {
   if (Array.isArray(state.contentPacks) && state.contentPacks.length > 0) {
     return { error: "启用内容包的存档不能进入速通正式榜", code: "SPEEDRUN_MODDED_SAVE", status: 422 };
   }
+  const forbiddenStateReason = speedrunForbiddenStateReason(state);
+  if (forbiddenStateReason) return { error: forbiddenStateReason, code: "SPEEDRUN_FORBIDDEN_STATE", status: 422 };
   const factoryId = typeof speedrun.factoryId === "string" ? speedrun.factoryId : "";
   if (!factoryId || body.factoryId !== factoryId) return { error: "速通工厂身份不匹配", code: "SPEEDRUN_FACTORY_MISMATCH", status: 422 };
   if (!Number.isSafeInteger(speedrun.startedAt) || speedrun.startedAt <= 0 || !Number.isFinite(speedrun.elapsedActiveSeconds) || speedrun.elapsedActiveSeconds < 0) {
@@ -702,6 +843,34 @@ function forEachCloudSaveRecord(source, visit) {
       if (!slots || typeof slots !== "object") continue;
       for (const slot of MANUAL_CLOUD_SAVE_SLOTS) {
         if (Array.isArray(slots[slot])) for (const save of slots[slot]) visit(userId, slot, save);
+      }
+    }
+  }
+  for (const [userId, modes] of Object.entries(source.cloudSavesByMode ?? {})) {
+    if (!modes || typeof modes !== "object") continue;
+    for (const mode of SAVE_MODES) visit(userId, "main", modes[mode], mode);
+  }
+  for (const [userId, modes] of Object.entries(source.cloudSaveHistoryByMode ?? {})) {
+    if (!modes || typeof modes !== "object") continue;
+    for (const mode of SAVE_MODES) {
+      if (Array.isArray(modes[mode])) for (const save of modes[mode]) visit(userId, "main", save, mode);
+    }
+  }
+  for (const [userId, modes] of Object.entries(source.cloudSaveSlotsByMode ?? {})) {
+    if (!modes || typeof modes !== "object") continue;
+    for (const mode of SAVE_MODES) {
+      const slots = modes[mode];
+      if (!slots || typeof slots !== "object") continue;
+      for (const slot of MANUAL_CLOUD_SAVE_SLOTS) visit(userId, slot, slots[slot], mode);
+    }
+  }
+  for (const [userId, modes] of Object.entries(source.cloudSaveSlotHistoryByMode ?? {})) {
+    if (!modes || typeof modes !== "object") continue;
+    for (const mode of SAVE_MODES) {
+      const slots = modes[mode];
+      if (!slots || typeof slots !== "object") continue;
+      for (const slot of MANUAL_CLOUD_SAVE_SLOTS) {
+        if (Array.isArray(slots[slot])) for (const save of slots[slot]) visit(userId, slot, save, mode);
       }
     }
   }
@@ -877,12 +1046,13 @@ class SqliteStore {
   async migrateLegacyPayloadLayout(source) {
     source = source && typeof source === "object" ? source : cloneDefaultData();
     const writes = new Map();
-    forEachCloudSaveRecord(source, (userId, slot, save) => {
+    forEachCloudSaveRecord(source, (userId, slot, save, mode = "normal") => {
       if (!save || typeof save !== "object") return;
       const revision = Number.isInteger(save.revision) && save.revision > 0 ? save.revision : null;
       if (revision && typeof save.payload === "string") {
-        const key = `${userId}\u0000${slot}\u0000${revision}`;
-        if (!writes.has(key)) writes.set(key, { userId, slot, revision, payload: save.payload });
+        const storageSlot = cloudStorageSlot(mode, slot);
+        const key = `${userId}\u0000${storageSlot}\u0000${revision}`;
+        if (!writes.has(key)) writes.set(key, { userId, slot: storageSlot, revision, payload: save.payload });
       }
       if (save.summary === undefined) save.summary = summarizeSavePayload(save.payload);
       delete save.payload;
@@ -890,8 +1060,8 @@ class SqliteStore {
     source.storageLayoutVersion = SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION;
     this.data = normalizeStoredData(source);
     const retainedKeys = new Set();
-    forEachCloudSaveRecord(this.data, (userId, slot, save) => {
-      if (Number.isInteger(save?.revision) && save.revision > 0) retainedKeys.add(`${userId}\u0000${slot}\u0000${save.revision}`);
+    forEachCloudSaveRecord(this.data, (userId, slot, save, mode = "normal") => {
+      if (Number.isInteger(save?.revision) && save.revision > 0) retainedKeys.add(`${userId}\u0000${cloudStorageSlot(mode, slot)}\u0000${save.revision}`);
     });
     const payload = JSON.stringify(this.data);
     this.writeQueue = this.writeQueue.then(() => {
@@ -1015,6 +1185,10 @@ function deleteAccountData(store, userId) {
   delete store.data.cloudSaveHistory[userId];
   delete store.data.cloudSaveSlots[userId];
   delete store.data.cloudSaveSlotHistory[userId];
+  delete store.data.cloudSavesByMode[userId];
+  delete store.data.cloudSaveHistoryByMode[userId];
+  delete store.data.cloudSaveSlotsByMode[userId];
+  delete store.data.cloudSaveSlotHistoryByMode[userId];
   delete store.data.leaderboardModeration[userId];
   delete store.data.accountSecurity[userId];
   delete store.data.accountControls[userId];
@@ -1033,8 +1207,11 @@ function deleteAccountData(store, userId) {
 function adminAccountSummary(store, userId) {
   const user = store.data.users[userId];
   if (!user) return null;
-  const saves = CLOUD_SAVE_SLOTS.map((slot) => ({ slot, save: currentCloudSave(store, userId, slot), history: saveHistory(store, userId, slot) }));
-  const cloudBytes = saves.reduce((sum, entry) => sum + (entry.history ?? []).reduce((historySum, save) => historySum + Math.max(0, Number(save.size) || 0), 0), 0);
+  const savesByMode = Object.fromEntries(SAVE_MODES.map((mode) => [mode,
+    CLOUD_SAVE_SLOTS.map((slot) => ({ slot, save: currentCloudSave(store, userId, slot, mode), history: saveHistory(store, userId, slot, mode) })),
+  ]));
+  const cloudBytes = Object.values(savesByMode).flat().reduce((sum, entry) =>
+    sum + (entry.history ?? []).reduce((historySum, save) => historySum + Math.max(0, Number(save.size) || 0), 0), 0);
   const controls = store.data.accountControls[userId] ?? null;
   return {
     accountId: userId,
@@ -1048,7 +1225,15 @@ function adminAccountSummary(store, userId) {
     recentLogins: publicLoginSecurityEvents(store.data, userId),
     cloud: {
       bytes: cloudBytes,
-      slots: Object.fromEntries(saves.map(({ slot, save, history }) => [slot, {
+      modes: Object.fromEntries(SAVE_MODES.map((mode) => [mode,
+        Object.fromEntries(savesByMode[mode].map(({ slot, save, history }) => [slot, {
+          revision: save?.revision ?? 0,
+          size: save?.size ?? 0,
+          historyCount: history.length,
+        }])),
+      ])),
+      // Keep the pre-v7 ordinary-mode shape for existing operations clients.
+      slots: Object.fromEntries(savesByMode.normal.map(({ slot, save, history }) => [slot, {
         revision: save?.revision ?? 0,
         size: save?.size ?? 0,
         historyCount: history.length,
@@ -1217,8 +1402,9 @@ function publicSession(session, currentTokenHash, tokenHash) {
   };
 }
 
-function cloudSaveMetadata(save, slot = "main") {
+function cloudSaveMetadata(save, slot = "main", mode = "normal") {
   return save ? {
+    mode,
     slot,
     revision: save.revision,
     updatedAt: save.updatedAt,
@@ -1238,6 +1424,7 @@ function validateSavePayload(payload) {
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities) ||
       !Number.isInteger(state.version) || state.version < 1 || state.version > 46) return false;
+    if (savePayloadMode(payload) === null) return false;
     if (state.entities.some((entity) => !entity || typeof entity !== "object" ||
       (entity.machineCount !== undefined && (!Number.isSafeInteger(entity.machineCount) || entity.machineCount < 0)) ||
       (entity.minerCount !== undefined && (!Number.isSafeInteger(entity.minerCount) || entity.minerCount < 0)))) return false;
@@ -1792,31 +1979,48 @@ function normalizedCloudSaveSlot(value) {
   return typeof value === "string" && CLOUD_SAVE_SLOTS.includes(value) ? value : null;
 }
 
-function currentCloudSave(store, userId, slot = "main") {
-  return slot === "main" ? store.data.cloudSaves[userId] : store.data.cloudSaveSlots[userId]?.[slot];
+function cloudStorageSlot(mode, slot) {
+  return mode === "normal" ? slot : `${mode}:${slot}`;
 }
 
-function saveHistory(store, userId, slot = "main") {
-  if (slot === "main") return Array.isArray(store.data.cloudSaveHistory[userId]) ? store.data.cloudSaveHistory[userId] : [];
-  return Array.isArray(store.data.cloudSaveSlotHistory[userId]?.[slot]) ? store.data.cloudSaveSlotHistory[userId][slot] : [];
+function currentCloudSave(store, userId, slot = "main", mode = "normal") {
+  if (mode === "normal") return slot === "main" ? store.data.cloudSaves[userId] : store.data.cloudSaveSlots[userId]?.[slot];
+  return slot === "main"
+    ? store.data.cloudSavesByMode[userId]?.[mode]
+    : store.data.cloudSaveSlotsByMode[userId]?.[mode]?.[slot];
 }
 
-function cloudSavePayload(store, userId, slot, revision, save = null) {
-  if (typeof store.readCloudSavePayload === "function") return store.readCloudSavePayload(userId, slot, revision);
-  const candidate = save ?? saveHistory(store, userId, slot).find((entry) => entry.revision === revision) ?? currentCloudSave(store, userId, slot);
+function legacyCloudSaveFallback(store, userId, slot = "main") {
+  const save = currentCloudSave(store, userId, slot, "speedrun");
+  return save?.legacyMode === true ? save : null;
+}
+
+function saveHistory(store, userId, slot = "main", mode = "normal") {
+  if (mode === "normal") {
+    if (slot === "main") return Array.isArray(store.data.cloudSaveHistory[userId]) ? store.data.cloudSaveHistory[userId] : [];
+    return Array.isArray(store.data.cloudSaveSlotHistory[userId]?.[slot]) ? store.data.cloudSaveSlotHistory[userId][slot] : [];
+  }
+  if (slot === "main") return Array.isArray(store.data.cloudSaveHistoryByMode[userId]?.[mode]) ? store.data.cloudSaveHistoryByMode[userId][mode] : [];
+  return Array.isArray(store.data.cloudSaveSlotHistoryByMode[userId]?.[mode]?.[slot]) ? store.data.cloudSaveSlotHistoryByMode[userId][mode][slot] : [];
+}
+
+function cloudSavePayload(store, userId, slot, revision, save = null, mode = "normal") {
+  if (typeof store.readCloudSavePayload === "function") return store.readCloudSavePayload(userId, cloudStorageSlot(mode, slot), revision);
+  const candidate = save ?? saveHistory(store, userId, slot, mode).find((entry) => entry.revision === revision) ?? currentCloudSave(store, userId, slot, mode);
   return typeof candidate?.payload === "string" ? candidate.payload : null;
 }
 
-function materializeCloudSave(store, userId, slot, save) {
+function materializeCloudSave(store, userId, slot, save, mode = "normal") {
   if (!save) return null;
-  const payload = cloudSavePayload(store, userId, slot, save.revision, save);
+  const payload = cloudSavePayload(store, userId, slot, save.revision, save, mode);
   return typeof payload === "string" ? { ...save, payload } : null;
 }
 
-function appendSaveRevision(store, userId, save, slot = "main") {
-  const previousHistory = saveHistory(store, userId, slot);
+function appendSaveRevision(store, userId, save, slot = "main", mode = "normal") {
+  const previousHistory = saveHistory(store, userId, slot, mode);
+  const storageSlot = cloudStorageSlot(mode, slot);
   const storedSave = typeof store.stageCloudSavePayload === "function"
-    ? store.stageCloudSavePayload(userId, slot, save)
+    ? store.stageCloudSavePayload(userId, storageSlot, save)
     : save;
   const history = [...previousHistory.filter((entry) => entry.revision !== save.revision), storedSave]
     .sort((left, right) => left.revision - right.revision)
@@ -1824,36 +2028,85 @@ function appendSaveRevision(store, userId, save, slot = "main") {
   if (typeof store.discardCloudSavePayload === "function") {
     const retainedRevisions = new Set(history.map((entry) => entry.revision));
     for (const entry of previousHistory) {
-      if (!retainedRevisions.has(entry.revision)) store.discardCloudSavePayload(userId, slot, entry.revision);
+      if (!retainedRevisions.has(entry.revision)) store.discardCloudSavePayload(userId, storageSlot, entry.revision);
     }
   }
-  if (slot === "main") {
+  if (mode === "normal" && slot === "main") {
     store.data.cloudSaveHistory[userId] = history;
     store.data.cloudSaves[userId] = storedSave;
     return;
   }
-  store.data.cloudSaveSlots[userId] ??= {};
-  store.data.cloudSaveSlotHistory[userId] ??= {};
-  store.data.cloudSaveSlots[userId][slot] = storedSave;
-  store.data.cloudSaveSlotHistory[userId][slot] = history;
+  if (mode === "normal") {
+    store.data.cloudSaveSlots[userId] ??= {};
+    store.data.cloudSaveSlotHistory[userId] ??= {};
+    store.data.cloudSaveSlots[userId][slot] = storedSave;
+    store.data.cloudSaveSlotHistory[userId][slot] = history;
+    return;
+  }
+  store.data.cloudSavesByMode[userId] ??= {};
+  store.data.cloudSaveHistoryByMode[userId] ??= {};
+  if (slot === "main") {
+    store.data.cloudSavesByMode[userId][mode] = storedSave;
+    store.data.cloudSaveHistoryByMode[userId][mode] = history;
+    return;
+  }
+  store.data.cloudSaveSlotsByMode[userId] ??= {};
+  store.data.cloudSaveSlotHistoryByMode[userId] ??= {};
+  store.data.cloudSaveSlotsByMode[userId][mode] ??= {};
+  store.data.cloudSaveSlotHistoryByMode[userId][mode] ??= {};
+  store.data.cloudSaveSlotsByMode[userId][mode][slot] = storedSave;
+  store.data.cloudSaveSlotHistoryByMode[userId][mode][slot] = history;
 }
 
-function cloudSaveSlotMetadata(store, userId) {
-  return Object.fromEntries(CLOUD_SAVE_SLOTS.map((slot) => [slot, cloudSaveMetadata(currentCloudSave(store, userId, slot), slot)]));
+function deleteCloudSaveData(store, userId, slot = "main", mode = "normal") {
+  const current = currentCloudSave(store, userId, slot, mode);
+  const revisions = new Set(saveHistory(store, userId, slot, mode).map((entry) => entry?.revision));
+  if (current?.revision) revisions.add(current.revision);
+  if (typeof store.discardCloudSavePayload === "function") {
+    const storageSlot = cloudStorageSlot(mode, slot);
+    for (const revision of revisions) store.discardCloudSavePayload(userId, storageSlot, revision);
+  }
+  if (mode === "normal" && slot === "main") {
+    delete store.data.cloudSaves[userId];
+    delete store.data.cloudSaveHistory[userId];
+    removeUserLeaderboardSubmissions(store, userId);
+  } else if (mode === "normal") {
+    delete store.data.cloudSaveSlots[userId]?.[slot];
+    delete store.data.cloudSaveSlotHistory[userId]?.[slot];
+    if (store.data.cloudSaveSlots[userId] && Object.keys(store.data.cloudSaveSlots[userId]).length === 0) delete store.data.cloudSaveSlots[userId];
+    if (store.data.cloudSaveSlotHistory[userId] && Object.keys(store.data.cloudSaveSlotHistory[userId]).length === 0) delete store.data.cloudSaveSlotHistory[userId];
+  } else if (slot === "main") {
+    delete store.data.cloudSavesByMode[userId]?.[mode];
+    delete store.data.cloudSaveHistoryByMode[userId]?.[mode];
+    if (store.data.cloudSavesByMode[userId] && Object.keys(store.data.cloudSavesByMode[userId]).length === 0) delete store.data.cloudSavesByMode[userId];
+    if (store.data.cloudSaveHistoryByMode[userId] && Object.keys(store.data.cloudSaveHistoryByMode[userId]).length === 0) delete store.data.cloudSaveHistoryByMode[userId];
+  } else {
+    delete store.data.cloudSaveSlotsByMode[userId]?.[mode]?.[slot];
+    delete store.data.cloudSaveSlotHistoryByMode[userId]?.[mode]?.[slot];
+    if (store.data.cloudSaveSlotsByMode[userId]?.[mode] && Object.keys(store.data.cloudSaveSlotsByMode[userId][mode]).length === 0) delete store.data.cloudSaveSlotsByMode[userId][mode];
+    if (store.data.cloudSaveSlotHistoryByMode[userId]?.[mode] && Object.keys(store.data.cloudSaveSlotHistoryByMode[userId][mode]).length === 0) delete store.data.cloudSaveSlotHistoryByMode[userId][mode];
+    if (store.data.cloudSaveSlotsByMode[userId] && Object.keys(store.data.cloudSaveSlotsByMode[userId]).length === 0) delete store.data.cloudSaveSlotsByMode[userId];
+    if (store.data.cloudSaveSlotHistoryByMode[userId] && Object.keys(store.data.cloudSaveSlotHistoryByMode[userId]).length === 0) delete store.data.cloudSaveSlotHistoryByMode[userId];
+  }
+  return { current, deletedRevisions: revisions.size };
 }
 
-function materializeManualCloudSaveSlots(store, userId) {
+function cloudSaveSlotMetadata(store, userId, mode = "normal") {
+  return Object.fromEntries(CLOUD_SAVE_SLOTS.map((slot) => [slot, cloudSaveMetadata(currentCloudSave(store, userId, slot, mode), slot, mode)]));
+}
+
+function materializeManualCloudSaveSlots(store, userId, mode = "normal") {
   return Object.fromEntries(MANUAL_CLOUD_SAVE_SLOTS.flatMap((slot) => {
-    const save = currentCloudSave(store, userId, slot);
-    return save ? [[slot, materializeCloudSave(store, userId, slot, save)]] : [];
+    const save = currentCloudSave(store, userId, slot, mode);
+    return save ? [[slot, materializeCloudSave(store, userId, slot, save, mode)]] : [];
   }));
 }
 
-function materializeManualCloudSaveHistory(store, userId) {
+function materializeManualCloudSaveHistory(store, userId, mode = "normal") {
   return Object.fromEntries(MANUAL_CLOUD_SAVE_SLOTS.flatMap((slot) => {
-    const history = saveHistory(store, userId, slot);
+    const history = saveHistory(store, userId, slot, mode);
     return history.length > 0
-      ? [[slot, history.map((save) => materializeCloudSave(store, userId, slot, save))]]
+      ? [[slot, history.map((save) => materializeCloudSave(store, userId, slot, save, mode))]]
       : [];
   }));
 }
@@ -2525,8 +2778,12 @@ export async function createCloudServer({
         const auth = authenticatedUser(request, store);
         return auth ? send(response, 200, {
           user: publicUser(auth.user),
-          cloudSave: cloudSaveMetadata(store.data.cloudSaves[auth.user.id], "main"),
-          cloudSaves: cloudSaveSlotMetadata(store, auth.user.id),
+          cloudSave: cloudSaveMetadata(currentCloudSave(store, auth.user.id, "main", "normal"), "main", "normal"),
+          cloudSaves: cloudSaveSlotMetadata(store, auth.user.id, "normal"),
+          cloudSavesByMode: {
+            normal: cloudSaveSlotMetadata(store, auth.user.id, "normal"),
+            speedrun: cloudSaveSlotMetadata(store, auth.user.id, "speedrun"),
+          },
         }) : send(response, 401, { error: "登录已过期" });
       }
 
@@ -2609,13 +2866,20 @@ export async function createCloudServer({
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const userId = auth.user.id;
-        const currentMainSave = currentCloudSave(store, userId, "main");
-        const materializedMainSave = materializeCloudSave(store, userId, "main", currentMainSave);
-        const manualSlots = materializeManualCloudSaveSlots(store, userId);
-        const manualHistory = materializeManualCloudSaveHistory(store, userId);
+        const currentMainSave = currentCloudSave(store, userId, "main", "normal");
+        const materializedMainSave = materializeCloudSave(store, userId, "main", currentMainSave, "normal");
+        const manualSlots = materializeManualCloudSaveSlots(store, userId, "normal");
+        const manualHistory = materializeManualCloudSaveHistory(store, userId, "normal");
+        const currentSpeedrunSave = currentCloudSave(store, userId, "main", "speedrun");
+        const materializedSpeedrunSave = materializeCloudSave(store, userId, "main", currentSpeedrunSave, "speedrun");
+        const speedrunSlots = materializeManualCloudSaveSlots(store, userId, "speedrun");
+        const speedrunHistory = materializeManualCloudSaveHistory(store, userId, "speedrun");
         if ((currentMainSave && !materializedMainSave)
+          || (currentSpeedrunSave && !materializedSpeedrunSave)
           || Object.values(manualSlots).some((save) => !save)
-          || Object.values(manualHistory).some((history) => history.some((save) => !save))) {
+          || Object.values(manualHistory).some((history) => history.some((save) => !save))
+          || Object.values(speedrunSlots).some((save) => !save)
+          || Object.values(speedrunHistory).some((history) => history.some((save) => !save))) {
           return send(response, 500, { error: "云存档正文缺失，账号数据导出已停止", code: "CLOUD_SAVE_PAYLOAD_MISSING" });
         }
         const submissions = Object.values(store.data.submissions).filter((entry) => entry.userId === userId);
@@ -2628,9 +2892,17 @@ export async function createCloudServer({
           schemaVersion: DEFAULT_DATA.schemaVersion,
           user: publicUser(auth.user),
           cloudSave: materializedMainSave,
-          cloudSaveHistory: [...saveHistory(store, userId)].reverse().map((save) => cloudSaveMetadata(save, "main")),
+          cloudSaveHistory: [...saveHistory(store, userId, "main", "normal")].reverse().map((save) => cloudSaveMetadata(save, "main", "normal")),
           cloudSaveSlots: manualSlots,
           cloudSaveSlotHistory: manualHistory,
+          cloudSavesByMode: {
+            normal: { main: materializedMainSave, slots: manualSlots },
+            speedrun: { main: materializedSpeedrunSave, slots: speedrunSlots },
+          },
+          cloudSaveHistoriesByMode: {
+            normal: { main: [...saveHistory(store, userId, "main", "normal")].reverse().map((save) => cloudSaveMetadata(save, "main", "normal")), slots: manualHistory },
+            speedrun: { main: [...saveHistory(store, userId, "main", "speedrun")].reverse().map((save) => cloudSaveMetadata(save, "main", "speedrun")), slots: speedrunHistory },
+          },
           submissions,
           feedback,
           errors,
@@ -2655,30 +2927,66 @@ export async function createCloudServer({
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
+        const requestedMode = normalizedCloudSaveMode(url.searchParams.get("mode") ?? "normal");
+        const mode = requestedMode;
         if (!slot) return send(response, 400, { error: "云存档槽位无效" });
-        const history = [...saveHistory(store, auth.user.id, slot)].reverse().map((save) => cloudSaveMetadata(save, slot));
-        return send(response, 200, { history });
+        if (!mode) return send(response, 400, { error: "云存档模式无效", code: "SAVE_MODE_INVALID" });
+        const history = [...saveHistory(store, auth.user.id, slot, mode)].reverse().map((save) => cloudSaveMetadata(save, slot, mode));
+        return send(response, 200, { history, mode, slot });
       }
 
       if (request.method === "GET" && url.pathname === "/api/cloud-save") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
+        const mode = normalizedCloudSaveMode(url.searchParams.get("mode") ?? "normal");
         if (!slot) return send(response, 400, { error: "云存档槽位无效" });
+        if (!mode) return send(response, 400, { error: "云存档模式无效", code: "SAVE_MODE_INVALID" });
         const requestedRevision = Number(url.searchParams.get("revision"));
-        const save = Number.isInteger(requestedRevision) && requestedRevision > 0
-          ? saveHistory(store, auth.user.id, slot).find((entry) => entry.revision === requestedRevision)
-          : currentCloudSave(store, auth.user.id, slot);
-        const materialized = materializeCloudSave(store, auth.user.id, slot, save);
+        let effectiveMode = mode;
+        let save = Number.isInteger(requestedRevision) && requestedRevision > 0
+          ? saveHistory(store, auth.user.id, slot, mode).find((entry) => entry.revision === requestedRevision)
+          : currentCloudSave(store, auth.user.id, slot, mode);
+        if (!save && mode === "normal" && url.searchParams.get("mode") === null) {
+          save = legacyCloudSaveFallback(store, auth.user.id, slot);
+          if (save) effectiveMode = "speedrun";
+        }
+        const materialized = materializeCloudSave(store, auth.user.id, slot, save, effectiveMode);
         if (save && !materialized) return send(response, 500, { error: "云存档正文缺失，请联系管理员恢复备份", code: "CLOUD_SAVE_PAYLOAD_MISSING" });
-        return send(response, 200, { cloudSave: materialized ? { ...cloudSaveMetadata(materialized, slot), payload: materialized.payload } : null });
+        return send(response, 200, { cloudSave: materialized ? { ...cloudSaveMetadata(materialized, slot, effectiveMode), payload: materialized.payload } : null, mode: effectiveMode, slot });
+      }
+
+      if (request.method === "DELETE" && url.pathname === "/api/cloud-save") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
+        const mode = normalizedCloudSaveMode(url.searchParams.get("mode") ?? "normal");
+        if (!slot) return send(response, 400, { error: "云存档槽位无效" });
+        if (!mode) return send(response, 400, { error: "云存档模式无效", code: "SAVE_MODE_INVALID" });
+        const body = await readJson(request);
+        if (body.confirmation !== `DELETE_CLOUD_SAVE:${mode}:${slot}`) {
+          return send(response, 400, { error: "云存档删除确认文字不正确", code: "CLOUD_SAVE_DELETE_CONFIRMATION_INVALID" });
+        }
+        const current = currentCloudSave(store, auth.user.id, slot, mode);
+        if (!current) return send(response, 404, { error: "目标云存档不存在", code: "CLOUD_SAVE_NOT_FOUND", mode, slot });
+        const expectedRevision = Number.isInteger(body.expectedRevision) ? body.expectedRevision : 0;
+        if (current.revision !== expectedRevision) {
+          runtime.cloudConflicts += 1;
+          return send(response, 409, { error: "云端已有更新版本，请刷新后再删除", code: "CLOUD_SAVE_REVISION_CONFLICT", cloudSave: cloudSaveMetadata(current, slot, mode) });
+        }
+        const deleted = deleteCloudSaveData(store, auth.user.id, slot, mode);
+        appendAudit(store, request, "cloud.save_deleted", auth.user.id);
+        await store.persist();
+        return send(response, 200, { deleted: true, mode, slot, revision: current.revision, deletedRevisions: deleted.deletedRevisions });
       }
 
       if (request.method === "PUT" && url.pathname === "/api/cloud-save") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
+        const mode = normalizedCloudSaveMode(url.searchParams.get("mode") ?? "normal");
         if (!slot) return send(response, 400, { error: "云存档槽位无效" });
+        if (!mode) return send(response, 400, { error: "云存档模式无效", code: "SAVE_MODE_INVALID" });
         if (nodeHealthStatusFile) {
           const infrastructure = await nodeHealthStatus(nodeHealthStatusFile);
           if (typeof infrastructure?.disk?.freeRatio === "number" && infrastructure.disk.freeRatio <= 0.1) {
@@ -2686,7 +2994,11 @@ export async function createCloudServer({
           }
         }
         const body = await readJson(request);
-         if (!validateSavePayload(body.payload)) {
+        const payloadMode = typeof body.payload === "string" ? savePayloadMode(body.payload) : null;
+        const validPayload = validateSavePayload(body.payload);
+        const legacyImplicitSpeedrun = url.searchParams.get("mode") === null && typeof body.payload === "string" && isLegacyImplicitSpeedrunPayload(body.payload);
+        const effectiveMode = legacyImplicitSpeedrun ? "speedrun" : mode;
+        if (!validPayload || payloadMode !== effectiveMode) {
            const integrity = typeof body.payload === "string" ? inspectSavePayloadIntegrity(body.payload) : null;
            const summary = typeof body.payload === "string" ? summarizeSavePayload(body.payload) : null;
            const tooLarge = typeof body.payload === "string" && Buffer.byteLength(body.payload) > SAVE_PAYLOAD_LIMIT_BYTES;
@@ -2698,15 +3010,20 @@ export async function createCloudServer({
                  : "云存档格式无效，服务器已拒绝上传",
              code: tooLarge
                ? "SAVE_SIZE_TOO_LARGE"
-               : integrity && !integrity.valid && integrity.state ? "SAVE_INTEGRITY_INVALID" : "SAVE_FORMAT_INVALID",
+               : validPayload && payloadMode !== effectiveMode ? "SAVE_MODE_MISMATCH"
+                 : integrity && !integrity.valid && integrity.state ? "SAVE_INTEGRITY_INVALID" : "SAVE_FORMAT_INVALID",
+             ...(validPayload && payloadMode !== effectiveMode ? { expectedMode: effectiveMode, receivedMode: payloadMode } : {}),
              ...(summary ? { summary } : {}),
            });
         }
-        const current = currentCloudSave(store, auth.user.id, slot);
+        const currentModeSave = currentCloudSave(store, auth.user.id, slot, effectiveMode);
+        const current = currentModeSave ?? (effectiveMode === "normal" && url.searchParams.get("mode") === null
+          ? legacyCloudSaveFallback(store, auth.user.id, slot)
+          : null);
         const expectedRevision = Number.isInteger(body.expectedRevision) ? body.expectedRevision : 0;
         if ((current?.revision ?? 0) !== expectedRevision) {
           runtime.cloudConflicts += 1;
-          return send(response, 409, { error: "云端已有更新版本，请先下载或确认覆盖", cloudSave: cloudSaveMetadata(current, slot) });
+          return send(response, 409, { error: "云端已有更新版本，请先下载或确认覆盖", cloudSave: cloudSaveMetadata(current, slot, effectiveMode) });
         }
         const next = {
           revision: (current?.revision ?? 0) + 1,
@@ -2715,30 +3032,33 @@ export async function createCloudServer({
           size: Buffer.byteLength(body.payload),
           updatedAt: Date.now(),
           summary: summarizeSavePayload(body.payload),
+          ...(legacyImplicitSpeedrun ? { legacyMode: true } : {}),
         };
-        appendSaveRevision(store, auth.user.id, next, slot);
-        if (slot === "main") updateLeaderboardFromMainSave(store, auth.user.id, { save: next });
+        appendSaveRevision(store, auth.user.id, next, slot, effectiveMode);
+        if (effectiveMode === "normal" && slot === "main") updateLeaderboardFromMainSave(store, auth.user.id, { save: next });
         dayMetric.cloudUploads += 1;
         await store.persist();
-        return send(response, 200, { cloudSave: cloudSaveMetadata(next, slot) });
+        return send(response, 200, { cloudSave: cloudSaveMetadata(next, slot, effectiveMode) });
       }
 
       if (request.method === "POST" && url.pathname === "/api/cloud-save/restore") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
+        const mode = normalizedCloudSaveMode(url.searchParams.get("mode") ?? "normal");
         if (!slot) return send(response, 400, { error: "云存档槽位无效" });
+        if (!mode) return send(response, 400, { error: "云存档模式无效", code: "SAVE_MODE_INVALID" });
         const body = await readJson(request);
-        const current = currentCloudSave(store, auth.user.id, slot);
+        const current = currentCloudSave(store, auth.user.id, slot, mode);
         const expectedRevision = Number.isInteger(body.expectedRevision) ? body.expectedRevision : 0;
         if ((current?.revision ?? 0) !== expectedRevision) {
           runtime.cloudConflicts += 1;
-          return send(response, 409, { error: "云端已有更新版本，请刷新历史记录", cloudSave: cloudSaveMetadata(current, slot) });
+          return send(response, 409, { error: "云端已有更新版本，请刷新历史记录", cloudSave: cloudSaveMetadata(current, slot, mode) });
         }
         const sourceRevision = Number(body.revision);
-        const source = saveHistory(store, auth.user.id, slot).find((entry) => entry.revision === sourceRevision);
+        const source = saveHistory(store, auth.user.id, slot, mode).find((entry) => entry.revision === sourceRevision);
         if (!source) return send(response, 404, { error: "历史修订不存在或已过期" });
-        const materializedSource = materializeCloudSave(store, auth.user.id, slot, source);
+        const materializedSource = materializeCloudSave(store, auth.user.id, slot, source, mode);
         if (!materializedSource) return send(response, 500, { error: "历史云存档正文缺失，无法恢复", code: "CLOUD_SAVE_PAYLOAD_MISSING" });
         const restored = {
           ...materializedSource,
@@ -2746,12 +3066,12 @@ export async function createCloudServer({
           updatedAt: Date.now(),
           restoredFromRevision: sourceRevision,
         };
-        appendSaveRevision(store, auth.user.id, restored, slot);
-        if (slot === "main") updateLeaderboardFromMainSave(store, auth.user.id, { save: restored });
+        appendSaveRevision(store, auth.user.id, restored, slot, mode);
+        if (mode === "normal" && slot === "main") updateLeaderboardFromMainSave(store, auth.user.id, { save: restored });
         dayMetric.cloudUploads += 1;
         appendAudit(store, request, "cloud.revision_restored", auth.user.id);
         await store.persist();
-        return send(response, 200, { cloudSave: cloudSaveMetadata(restored, slot) });
+        return send(response, 200, { cloudSave: cloudSaveMetadata(restored, slot, mode) });
       }
 
       if (request.method === "GET" && url.pathname === "/api/speedrun/leaderboard") {
@@ -2777,7 +3097,7 @@ export async function createCloudServer({
       if (request.method === "POST" && url.pathname === "/api/speedrun/submit") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
-        if (isLeaderboardRestricted(store.data, auth.user.id) || leaderboardRevalidationRequired(store.data, auth.user.id, currentCloudSave(store, auth.user.id, "main")?.revision)) {
+        if (isLeaderboardRestricted(store.data, auth.user.id) || leaderboardRevalidationRequired(store.data, auth.user.id, currentCloudSave(store, auth.user.id, "main", "speedrun")?.revision)) {
           return send(response, 403, { error: "当前账号暂时不能加入官方排行榜", code: LEADERBOARD_RESTRICTED_CODE });
         }
         if (auth.user.leaderboardVisible === false) return send(response, 409, { error: "当前账号已退出公开排行榜", code: "SPEEDRUN_VISIBILITY_DISABLED" });

@@ -2,7 +2,7 @@
 
 import { completeSimulationAdvanceSession, createSimulationAdvanceSession } from "./engine";
 import { applyContentPackRuntimeSnapshot } from "./contentPacks";
-import { advanceOfflineSimulationChunk, type OfflineSimulationWorkerRequest, type OfflineSimulationWorkerResponse } from "./offlineSimulation";
+import { advanceOfflineSimulationChunk, type CloudUploadSummary, type OfflineSimulationWorkerRequest, type OfflineSimulationWorkerResponse } from "./offlineSimulation";
 import {
   FAST_OFFLINE_CALIBRATION_SECONDS,
   FAST_OFFLINE_DESKTOP_DEADLINE_MS,
@@ -54,10 +54,11 @@ function mergeUploadSettings(saved: GameSettings, menu?: Partial<GameSettings>):
   };
 }
 
-function uploadSummary(state: GameState, payload: string, savedAt: number) {
+function uploadSummary(state: GameState, payload: string, savedAt: number): CloudUploadSummary {
   const envelope = JSON.parse(payload) as { checksum?: unknown };
   const stateChecksum = typeof envelope.checksum === "string" ? envelope.checksum : null;
   return {
+    mode: state.mode === "speedrun" ? "speedrun" : "normal",
     stateVersion: state.version,
     savedAt,
     elapsedSeconds: Math.max(0, Math.floor(state.elapsedSeconds)),

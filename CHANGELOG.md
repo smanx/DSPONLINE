@@ -4,6 +4,10 @@ All notable player-facing changes are recorded here. Game-state migration versio
 
 ## [Unreleased]
 
+- Separated normal and speedrun saves across primary saves, backups, manual slots, snapshots, imports/exports, cloud revisions, restore/delete operations, and leaderboard validation. Legacy saves without a mode remain ordinary saves; speedrun saves can only be copied one way into a new ordinary slot.
+- Made pure-idle wall-clock settlement cursor-based and idempotent, with separate current-run and historical time/production fields. Finite veins now deplete only for traceable output, including full caches, blocked belts, full quantum inventory, and long time-warp boundaries.
+- Preserved GameState v46, save envelope v2, cloud schema v7, and SQLite payload layout v2; added a one-time raw pre-migration backup for the legacy ordinary primary save.
+
 ## [1.0.21] - 2026-08-02
 
 - Raised the cloud-save raw request boundary from 8 MiB to 32 MiB, bounded compressed and expanded payloads, and separated format, integrity, compression, and size errors without replacing the last valid cloud save.

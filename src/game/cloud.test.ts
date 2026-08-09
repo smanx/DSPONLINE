@@ -8,6 +8,8 @@ import {
   compareCloudSave,
   compareCloudSaveSummary,
   compressCloudRequestBody,
+  deleteCloudSave,
+  downloadCloudSave,
   fetchCloudPublicStatus,
   getCloudSyncMarker,
   markCloudSaveSynchronized,
@@ -18,7 +20,7 @@ import {
   uploadCloudSaveWithOptions,
   type CloudSaveMetadata,
 } from "./cloud";
-import { createInitialState, placeBuilding } from "./engine";
+import { createInitialState, createSpeedrunInitialState, placeBuilding } from "./engine";
 import { exportGame, importGame } from "./storage";
 import { computeSaveStateChecksum } from "./saveEnvelopeIntegrity";
 
@@ -152,6 +154,49 @@ describe("cloud save synchronization markers", () => {
     }));
     expect(getCloudSyncMarker("legacy_user", "main")).toMatchObject({ revision: 4, slot: "main" });
     expect(getCloudSyncMarker("legacy_user", "1")).toBeNull();
+  });
+
+  it("keeps normal and speedrun synchronization markers independent for the same slot", () => {
+    const normalPayload = exportGame(createInitialState());
+    const speedrunPayload = exportGame(createSpeedrunInitialState(1_700_000_000_000, "cloud_mode_marker_factory"));
+    const normal = { ...metadata(2, "normal-cloud", normalPayload), mode: "normal" as const, slot: "1" as const };
+    const speedrun = { ...metadata(5, "speedrun-cloud", speedrunPayload), mode: "speedrun" as const, slot: "1" as const };
+    markCloudSaveSynchronized("mode_user", normal, normalPayload, "1", "normal");
+    markCloudSaveSynchronized("mode_user", speedrun, speedrunPayload, "1", "speedrun");
+
+    expect(getCloudSyncMarker("mode_user", "1", "normal")?.revision).toBe(2);
+    expect(getCloudSyncMarker("mode_user", "1", "speedrun")?.revision).toBe(5);
+    expect(compareCloudSave("mode_user", normalPayload, normal, "1", "normal").state).toBe("synced");
+    expect(compareCloudSave("mode_user", speedrunPayload, speedrun, "1", "speedrun").state).toBe("synced");
+    expect(compareCloudSave("mode_user", normalPayload, speedrun, "1", "normal").state).toBe("unbound");
+  });
+
+  it("rejects a downloaded payload whose mode differs from the requested cloud namespace", async () => {
+    const normalPayload = exportGame(createInitialState());
+    const cloudSave = { ...metadata(1, "normal-cloud", normalPayload), mode: "normal" as const, payload: normalPayload };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ cloudSave }));
+    await expect(downloadCloudSave(undefined, "main", "speedrun")).rejects.toMatchObject({
+      status: 409,
+      payload: { code: "SAVE_MODE_MISMATCH", expectedMode: "speedrun", receivedMode: "normal" },
+    });
+  });
+
+  it("downloads and deletes only the requested speedrun cloud slot", async () => {
+    const speedrunPayload = exportGame(createSpeedrunInitialState(1_700_000_000_000, "cloud_mode_download_factory"));
+    const cloudSave = { ...metadata(4, "speedrun-cloud", speedrunPayload), mode: "speedrun" as const, slot: "2" as const, payload: speedrunPayload };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ cloudSave }))
+      .mockResolvedValueOnce(jsonResponse({ deleted: true, mode: "speedrun", slot: "2" }));
+
+    await expect(downloadCloudSave(undefined, "2", "speedrun")).resolves.toMatchObject({ mode: "speedrun", slot: "2", revision: 4 });
+    await expect(deleteCloudSave("2", 4, "speedrun")).resolves.toBeUndefined();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("slot=2&mode=speedrun");
+    const deletion = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(deletion.method).toBe("DELETE");
+    expect(JSON.parse(String(deletion.body))).toEqual({
+      expectedRevision: 4,
+      confirmation: "DELETE_CLOUD_SAVE:speedrun:2",
+    });
   });
 
   it("reads once, re-saves, and uploads a legacy ordinary-building quantumTarget save", async () => {

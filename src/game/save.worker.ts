@@ -41,6 +41,8 @@ self.onmessage = (event: MessageEvent<SaveWorkerRequest>) => {
       formatVersion: request.formatVersion,
       kind: request.kind,
       ...(request.reason ? { reason: request.reason } : {}),
+      mode: state.mode === "speedrun" ? "speedrun" : "normal",
+      slot: "main" as const,
       savedAt: request.savedAt,
       state: request.state,
       checksum,

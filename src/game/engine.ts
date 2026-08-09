@@ -146,6 +146,7 @@ import {
   type RecursiveCraftPlan,
 } from "./recursiveCrafting";
 import { advanceSpeedrunClock, createSpeedrunState, evaluateSpeedrunMilestones } from "./speedrun";
+import { createIdleSettlementState } from "./idleSettlement";
 
 export const ACCUMULATOR_ENERGY_MJ = 90;
 export const SOLAR_SAIL_POWER_KW = 88;
@@ -424,6 +425,11 @@ function copyState(state: GameState): GameState {
       } : {}),
     },
     timeWarp: { ...state.timeWarp },
+    idleSettlement: {
+      ...state.idleSettlement,
+      currentRunProduction: { ...state.idleSettlement.currentRunProduction },
+      totalProduction: { ...state.idleSettlement.totalProduction },
+    },
     endgame: {
       ...sourceEndgame,
       exportProjects: Object.fromEntries(Object.entries(sourceEndgame.exportProjects).map(([projectId, project]) => [
@@ -615,6 +621,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
   });
   return {
     version: 46,
+    mode: "normal",
     nextId: 1,
     activePlanetId: "home",
     entities,
@@ -745,6 +752,7 @@ export function createInitialState(seed = DEFAULT_GALAXY_SEED, preserveBaseline 
     productionHistory: [],
     historyRecordedAt: 0,
     elapsedSeconds: 0,
+    idleSettlement: createIdleSettlementState(),
     metrics: { ...planetMetrics.home },
     planetMetrics,
     powerGridMetrics: createEmptyPowerGridMetrics(),
@@ -791,6 +799,7 @@ export function createPlayerInitialState(): GameState {
 /** Create a fresh, isolated speedrun factory. Existing saves never call this path. */
 export function createSpeedrunInitialState(nowMs = Date.now(), factoryId?: string): GameState {
   const state = createPlayerInitialState();
+  state.mode = "speedrun";
   state.speedrun = createSpeedrunState(state, nowMs, factoryId);
   return evaluateSpeedrunMilestones(state);
 }

@@ -222,6 +222,7 @@ export function TimeWarpIdleOverlay({
           <div><Gauge size={17} /><span>实际倍率</span><strong>{macroSummary?.actualMultiplier ?? computeLimits.actualMultiplier}x</strong></div>
           <div><Zap size={17} /><span>请求 / 供电倍率</span><strong>{macroSummary?.requestedMultiplier ?? game.timeWarp.requestedMultiplier}x / {macroSummary?.powerLimitedMultiplier ?? computeLimits.powerLimitedMultiplier}x</strong></div>
           <div><Clock3 size={17} /><span>本次挂机</span><strong>{formatDuration(elapsed)}</strong></div>
+          <div><Clock3 size={17} /><span>历史累计挂机</span><strong>{formatDuration(game.idleSettlement.totalIdleTime)}</strong><small>仅统计已验证提交的时间段</small></div>
           <div className={`efficiency-${efficiencyTone(macroSummary?.minimumEfficiency ?? null)}`}><Activity size={17} /><span>关键产线最低效率</span><strong>{efficiencyLabel(macroSummary?.minimumEfficiency ?? null)}</strong><small>{macroSummary?.limitingReason ?? "等待校准"}</small></div>
           <div><HardDrive size={17} /><span>保存与恢复</span><strong className={saveFailure ? "warning" : "ready"}>{saveFailure ? "需要处理" : "检查点正常"}</strong><small>{recoveryStatus}</small></div>
           <div><ShieldCheck size={17} /><span>下次真实校验</span><strong>{macroSummary?.mode === "extreme" ? "仅宏观结算" : nextValidationSeconds === null ? "校准后开始" : formatDuration(nextValidationSeconds)}</strong></div>

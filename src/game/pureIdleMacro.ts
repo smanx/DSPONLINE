@@ -5,6 +5,7 @@ import {
   refreshTimeWarpPowerSnapshotInPlace,
 } from "./engine";
 import {
+  advanceExactSimulationWindow,
   applyPureIdleAffineContract,
   createPureIdleAffineCalibration,
   type PureIdleAffineContract,
@@ -127,6 +128,17 @@ export interface PureIdleMacroSession {
   degradedReason?: string;
   computationDurationMs: number;
   conservativeOnly: boolean;
+  /**
+   * Exact one-shot prefix produced by calibration. It is consumed when the
+   * wall clock crosses the calibration boundary and then released.
+   */
+  calibrationCheckpoint?: {
+    baseWallSeconds: number;
+    baseSimulationSeconds: number;
+    wallSeconds: number;
+    simulationSeconds: number;
+    candidate: GameState;
+  };
 }
 
 export interface PureIdleMacroOperationOptions {
@@ -314,6 +326,8 @@ function calibrate(state: GameState): {
   contract: PureIdleAffineContract;
   researchLedger: ResearchMacroLedger;
   rate: PureIdleRateSnapshot;
+  calibratedState: GameState;
+  calibrationWallSeconds: number;
 } {
   const multiplier = Math.max(1, getEffectiveSimulationMultiplier(state));
   const result = createPureIdleAffineCalibration(state, PURE_IDLE_MACRO_CALIBRATION_SECONDS / multiplier);
@@ -327,6 +341,8 @@ function calibrate(state: GameState): {
       capturePureIdleTerminalSnapshot(result.calibratedState),
       PURE_IDLE_MACRO_CALIBRATION_SECONDS,
     ),
+    calibratedState: result.calibratedState,
+    calibrationWallSeconds: result.calibrationWallSeconds,
   };
 }
 
@@ -430,6 +446,13 @@ export function createPureIdleMacroSession(
     actualMultiplier: Math.max(1, getEffectiveSimulationMultiplier(state)),
     computationDurationMs: 0,
     conservativeOnly: false,
+    calibrationCheckpoint: {
+      baseWallSeconds: 0,
+      baseSimulationSeconds: 0,
+      wallSeconds: calibrated.calibrationWallSeconds,
+      simulationSeconds: PURE_IDLE_MACRO_CALIBRATION_SECONDS,
+      candidate: calibrated.calibratedState,
+    },
   };
 }
 
@@ -449,6 +472,13 @@ function runShadowValidation(session: PureIdleMacroSession, options: PureIdleMac
     session.researchInflowRemainders = {};
     session.lastValidationDeviation = deviation;
     session.validationCount += 1;
+    session.calibrationCheckpoint = {
+      baseWallSeconds: session.settledWallSeconds,
+      baseSimulationSeconds: session.settledSimulationSeconds,
+      wallSeconds: next.calibrationWallSeconds,
+      simulationSeconds: PURE_IDLE_MACRO_CALIBRATION_SECONDS,
+      candidate: next.calibratedState,
+    };
     if (deviation >= 0.15) {
       session.contract = next.contract;
       session.contractVersion += 1;
@@ -485,14 +515,45 @@ export function advancePureIdleMacroSession(
     // Live orchestration calls this at each 30-second boundary. A tab that
     // slept or reloaded can arrive with days of debt; applying one equivalent
     // affine window keeps recovery cost independent of wall-clock duration.
-    const wallSeconds = targetWallSeconds - session.settledWallSeconds;
+    let exactSimulationSeconds = 0;
+    let macroWallSeconds = targetWallSeconds - session.settledWallSeconds;
+    const checkpoint = session.calibrationCheckpoint;
+    if (checkpoint && checkpoint.baseWallSeconds <= session.settledWallSeconds + 1e-9) {
+      const checkpointEndWallSeconds = checkpoint.baseWallSeconds + checkpoint.wallSeconds;
+      const checkpointEndSimulationSeconds = checkpoint.baseSimulationSeconds + checkpoint.simulationSeconds;
+      if (session.settledWallSeconds < checkpointEndWallSeconds - 1e-9) {
+        if (targetWallSeconds < checkpointEndWallSeconds - 1e-9) {
+          const exactWallSeconds = targetWallSeconds - session.settledWallSeconds;
+          exactSimulationSeconds = exactWallSeconds * checkpoint.simulationSeconds / checkpoint.wallSeconds;
+          session.candidate = advanceExactSimulationWindow(
+            session.candidate,
+            exactSimulationSeconds,
+            exactWallSeconds,
+          );
+          macroWallSeconds = 0;
+        } else {
+          exactSimulationSeconds = Math.max(
+            0,
+            checkpointEndSimulationSeconds - session.settledSimulationSeconds,
+          );
+          session.candidate = checkpoint.candidate;
+          macroWallSeconds = Math.max(0, targetWallSeconds - checkpointEndWallSeconds);
+          session.calibrationCheckpoint = undefined;
+        }
+      } else {
+        session.calibrationCheckpoint = undefined;
+      }
+    }
+    throwIfMacroInterrupted(options);
     refreshTimeWarpPowerSnapshotInPlace(session.candidate);
     const multiplier = Math.max(1, getEffectiveSimulationMultiplier(session.candidate));
     session.actualMultiplier = multiplier;
-    const simulationSeconds = wallSeconds * multiplier;
-    const applied = session.conservativeOnly
-      ? { ok: false as const, boundaryCorrections: 0, failure: session.degradedReason ?? "零校准保守宏观" }
-      : applyPureIdleAffineContract(session.candidate, session.contract, simulationSeconds, wallSeconds);
+    const macroSimulationSeconds = macroWallSeconds * multiplier;
+    const applied = macroWallSeconds <= 1e-9
+      ? { ok: true as const, boundaryCorrections: 0 }
+      : session.conservativeOnly
+        ? { ok: false as const, boundaryCorrections: 0, failure: session.degradedReason ?? "零校准保守宏观" }
+        : applyPureIdleAffineContract(session.candidate, session.contract, macroSimulationSeconds, macroWallSeconds);
     throwIfMacroInterrupted(options);
     if (!applied.ok) {
       // The last complete candidate remains intact because affine application
@@ -502,27 +563,58 @@ export function advancePureIdleMacroSession(
       session.degradedReason = applied.failure ?? "宏观守恒桶未通过安全校验";
       session.lastValidationReason = `已切换保守宏观：${session.degradedReason}`;
       if (!session.conservativeOnly) session.validationFailures += 1;
-      session.candidate.elapsedSeconds += simulationSeconds;
+      session.candidate.elapsedSeconds += macroSimulationSeconds;
     } else {
       session.phase = "running";
       session.degradedReason = undefined;
       session.boundaryCorrections += applied.boundaryCorrections;
     }
-    const research = advanceResearchMacroInPlace(
-      session.candidate,
-      session.researchLedger,
-      simulationSeconds,
-      session.researchRemainder,
-      session.researchInflowRemainders,
-    );
+    const macroResearchSeconds = Math.max(0, macroSimulationSeconds - (applied.exactSimulationSeconds ?? 0));
+    const research = macroResearchSeconds > 1e-9
+      ? advanceResearchMacroInPlace(
+        session.candidate,
+        session.researchLedger,
+        macroResearchSeconds,
+        session.researchRemainder,
+        session.researchInflowRemainders,
+      )
+      : { remainder: session.researchRemainder, inflowRemainders: session.researchInflowRemainders,
+        completedFiniteTechIds: [], completedInfiniteLevels: [] };
     session.researchRemainder = research.remainder;
     session.researchInflowRemainders = research.inflowRemainders;
     throwIfMacroInterrupted(options);
     if (research.completedFiniteTechIds.length > 0 || research.completedInfiniteLevels.length > 0) {
       session.lastValidationReason = `科研边界完成：有限科技 ${research.completedFiniteTechIds.length} 项，无限科技 ${research.completedInfiniteLevels.length} 级`;
     }
-    session.settledWallSeconds += wallSeconds;
-    session.settledSimulationSeconds += simulationSeconds;
+    session.settledWallSeconds = targetWallSeconds;
+    session.settledSimulationSeconds += exactSimulationSeconds + macroSimulationSeconds;
+    if (applied.exactSimulationSeconds && !session.conservativeOnly) {
+      // A finite-resource or transport boundary changed the sustainable tail.
+      // Recalibrate once from the exact committed state so future calls do not
+      // repeatedly replay an already-crossed boundary.
+      try {
+        const recalibrated = calibrate(session.candidate);
+        session.contract = recalibrated.contract;
+        session.researchLedger = recalibrated.researchLedger;
+        session.researchRemainder = 0n;
+        session.researchInflowRemainders = {};
+        session.currentRate = recalibrated.rate;
+        session.contractVersion += 1;
+        session.calibrationWindowsCompleted += 3;
+        session.calibrationCheckpoint = {
+          baseWallSeconds: session.settledWallSeconds,
+          baseSimulationSeconds: session.settledSimulationSeconds,
+          wallSeconds: recalibrated.calibrationWallSeconds,
+          simulationSeconds: PURE_IDLE_MACRO_CALIBRATION_SECONDS,
+          candidate: recalibrated.calibratedState,
+        };
+        session.lastValidationReason = "有限资源或物流边界已由普通模拟跨越，后续宏观合同已重建";
+      } catch (error) {
+        session.lastValidationReason = error instanceof Error
+          ? `边界后重校准失败：${error.message}`
+          : "边界后重校准失败，下一结算段将继续使用精确保护";
+      }
+    }
     refreshDysonGenerationSnapshot(session.candidate);
     refreshTimeWarpPowerSnapshotInPlace(session.candidate);
     session.actualMultiplier = Math.max(1, getEffectiveSimulationMultiplier(session.candidate));

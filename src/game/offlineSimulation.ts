@@ -113,6 +113,7 @@ export function advanceOfflineSimulationChunk(
 }
 
 export interface CloudUploadSummary {
+  mode: "normal" | "speedrun";
   stateVersion: number;
   savedAt: number;
   elapsedSeconds: number;

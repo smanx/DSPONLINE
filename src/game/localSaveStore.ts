@@ -40,7 +40,10 @@ function ensureSynchronousFallback(): void {
 }
 
 function isSaveKey(key: string): boolean {
-  return key === SAVE_KEY || key === `${SAVE_KEY}.backup` || key.startsWith(`${SAVE_KEY}.snapshot.`) || key.startsWith(SLOT_KEY_PREFIX);
+  return key === SAVE_KEY || key === `${SAVE_KEY}.backup` || key === `${SAVE_KEY}.backup.speedrun` ||
+    key.startsWith(`${SAVE_KEY}.migration-backup.`) ||
+    key.startsWith(`${SAVE_KEY}.normal`) || key.startsWith(`${SAVE_KEY}.speedrun`) ||
+    key.startsWith(`${SAVE_KEY}.snapshot.`) || key.startsWith(SLOT_KEY_PREFIX);
 }
 
 function byteLength(value: string): number {
@@ -249,8 +252,14 @@ export function writePrimarySaveEmergencyMirror(value: string): boolean {
   ensureSynchronousFallback();
   if (backend !== "indexeddb") return false;
   try {
-    window.localStorage.setItem(SAVE_KEY, value);
-    return window.localStorage.getItem(SAVE_KEY) === value;
+    let mode = "normal";
+    try {
+      const parsed = JSON.parse(value) as { mode?: unknown; state?: { mode?: unknown } };
+      mode = parsed.mode === "speedrun" || parsed.state?.mode === "speedrun" ? "speedrun" : "normal";
+    } catch { /* checksum validation happens at commit */ }
+    const key = mode === "normal" ? SAVE_KEY : `${SAVE_KEY}.${mode}.emergency`;
+    window.localStorage.setItem(key, value);
+    return window.localStorage.getItem(key) === value;
   } catch {
     return false;
   }
@@ -260,8 +269,18 @@ export function clearPrimarySaveEmergencyMirror(committedValue: string): void {
   ensureSynchronousFallback();
   if (backend !== "indexeddb" || preserveDevelopmentMirror()) return;
   try {
-    const mirrored = window.localStorage.getItem(SAVE_KEY);
-    if (mirrored !== null && savedAt(mirrored) <= savedAt(committedValue)) window.localStorage.removeItem(SAVE_KEY);
+    let mode = "normal";
+    try {
+      const parsed = JSON.parse(committedValue) as { mode?: unknown; state?: { mode?: unknown } };
+      mode = parsed.mode === "speedrun" || parsed.state?.mode === "speedrun" ? "speedrun" : "normal";
+    } catch { /* keep normal fallback */ }
+    const key = mode === "normal" ? SAVE_KEY : `${SAVE_KEY}.${mode}.emergency`;
+    if (mode === "speedrun") {
+      const cached = getLocalSaveValue(key);
+      if (cached !== null && savedAt(cached) <= savedAt(committedValue)) removeLocalSaveValue(key);
+    }
+    const mirrored = window.localStorage.getItem(key);
+    if (mirrored !== null && savedAt(mirrored) <= savedAt(committedValue)) window.localStorage.removeItem(key);
   } catch {
     // A stale mirror is harmless and will be reconciled on the next startup.
   }
@@ -290,7 +309,14 @@ export async function reloadLocalSaveCache(): Promise<void> {
 function entryLabel(key: string, value: string): string {
   if (key === SAVE_KEY) return "主存档";
   if (key === `${SAVE_KEY}.backup`) return "上一版本备份";
-  if (key.startsWith(SLOT_KEY_PREFIX)) return `手动槽位 ${key.slice(SLOT_KEY_PREFIX.length)}`;
+  if (key === `${SAVE_KEY}.backup.speedrun`) return "速通模式上一版本备份";
+  if (key.startsWith(`${SAVE_KEY}.migration-backup.`)) return "模式迁移前原始备份";
+  if (key === `${SAVE_KEY}.normal`) return "普通模式主存档";
+  if (key === `${SAVE_KEY}.speedrun`) return "速通模式主存档";
+  if (key.startsWith(SLOT_KEY_PREFIX)) {
+    const parts = key.slice(SLOT_KEY_PREFIX.length).split(".");
+    return parts.length >= 2 ? `${parts[0] === "speedrun" ? "速通" : "普通"}模式手动槽位 ${parts[1]}` : `手动槽位 ${key.slice(SLOT_KEY_PREFIX.length)}`;
+  }
   if (key.includes(".snapshot.")) {
     try {
       const parsed = JSON.parse(value) as { reason?: unknown };

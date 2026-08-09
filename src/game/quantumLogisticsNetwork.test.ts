@@ -14,6 +14,7 @@ import {
   settleQuantumLogisticsNetwork,
 } from "./quantumLogisticsNetwork";
 import { advanceSimulation, attachAllInterstellarStationsToQuantumNetwork, createPlayerInitialState } from "./engine";
+import { advancePureIdleMacroSession, createPureIdleMacroSession } from "./pureIdleMacro";
 import type { FactoryEntity, StationSlot } from "./types";
 
 describe("quantum logistics network", () => {
@@ -37,6 +38,64 @@ describe("quantum logistics network", () => {
     expect(blocked.accepted).toBe("0");
     expect(blocked.remainder).toBe("1");
     expect(blocked.state.inventory.iron_ore).toBe("10000");
+  });
+
+  it("量子仓库已满时保留塔内物资，不会静默删除上传缓存", () => {
+    const state = createPlayerInitialState();
+    state.quantumLogisticsNetwork.enabled = true;
+    state.quantumLogisticsNetwork.itemCapacities.iron_ore = "10000";
+    state.quantumLogisticsNetwork.inventory.iron_ore = "10000";
+    state.entities.push({
+      id: "full-quantum-upload",
+      kind: "station",
+      planetId: "home",
+      position: { x: 0, y: 0 },
+      interactionLocked: false,
+      buildingId: "interstellar_logistics_station",
+      stationTier: 2,
+      quantumMode: "quantum",
+      stationSlots: [{ itemId: "iron_ore", localMode: "storage", remoteMode: "supply", minimumLoad: 0.1, minStock: 0, maxStock: 0, priority: 1, routePolicy: "direct", warperBudget: 2 }],
+      stationRoutes: [],
+      stationDrones: 0,
+      stationVessels: 0,
+      inputs: {},
+      outputs: { iron_ore: 100 },
+      progress: 0,
+      utilization: 0,
+      productionRate: 0,
+      routingCursor: 0,
+      machineCount: 1,
+      minerCount: 0,
+    });
+
+    const advanced = advanceSimulation(state, 30);
+
+    expect(advanced.quantumLogisticsNetwork.inventory.iron_ore).toBe("10000");
+    expect(advanced.entities.find((entity) => entity.id === "full-quantum-upload")?.outputs.iron_ore).toBe(100);
+
+    const pureIdle = structuredClone(state);
+    pureIdle.entities.push({
+      id: "full-quantum-wind", kind: "power", planetId: "home", position: { x: -100, y: 0 }, interactionLocked: false,
+      buildingId: "wind_turbine", inputs: {}, outputs: {}, progress: 0, utilization: 0, productionRate: 0,
+      routingCursor: 0, machineCount: 100_000_000_000, minerCount: 0,
+    }, {
+      id: "full-quantum-time-warp", kind: "machine", planetId: "home", position: { x: -50, y: 0 }, interactionLocked: false,
+      buildingId: "time_warp_device", inputs: {}, outputs: {}, progress: 0, utilization: 0, productionRate: 0,
+      routingCursor: 0, machineCount: 1, minerCount: 0,
+    });
+    pureIdle.timeWarp = {
+      ...pureIdle.timeWarp,
+      enabled: true,
+      controllerEntityId: "full-quantum-time-warp",
+      requestedMultiplier: 12,
+      effectiveMultiplier: 12,
+      pendingSimulationSeconds: 0,
+      pendingWallSeconds: 0,
+    };
+    const session = createPureIdleMacroSession(pureIdle, "extreme");
+    advancePureIdleMacroSession(session, 300);
+    expect(session.candidate.quantumLogisticsNetwork.inventory.iron_ore).toBe("10000");
+    expect(session.candidate.entities.find((entity) => entity.id === "full-quantum-upload")?.outputs.iron_ore).toBe(100);
   });
 
   it("lets a quantum supply belt bypass tower input capacity while preserving minStock", () => {

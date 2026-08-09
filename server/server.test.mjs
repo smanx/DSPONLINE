@@ -27,6 +27,12 @@ function createSavePayload(state, savedAt = 123456) {
   return JSON.stringify({ ...envelope, checksum: computeSaveStateChecksum(envelope.formatVersion, state) });
 }
 
+function createModeSavePayload(state, mode, savedAt = 123456) {
+  const markedState = { ...state, mode };
+  const envelope = { formatVersion: 2, savedAt, mode, state: markedState };
+  return JSON.stringify({ ...envelope, checksum: computeSaveStateChecksum(envelope.formatVersion, markedState) });
+}
+
 function mutateSavePayload(payload, mutate) {
   const parsed = JSON.parse(payload);
   mutate(parsed.state);
@@ -122,6 +128,268 @@ test("rate limiter reclaims expired buckets without resetting active keys", () =
   now = 2_001;
   assert.equal(rateLimit.cleanup(), 2);
   assert.equal(rateLimit("long", 1, 1_000), true);
+});
+
+test("isolates normal and speedrun cloud saves by mode and slot", async () => {
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "ModePilot", password: "strong-pass-123", displayName: "模式测试员" }),
+  });
+  assert.equal(registered.response.status, 201);
+  const headers = { authorization: `Bearer ${registered.body.token}` };
+  const baseState = {
+    version: 24,
+    elapsedSeconds: 100,
+    entities: [],
+    totalProduced: { universe_matrix: 10 },
+    metrics: { generationKw: 1_000, totalItemsPerMinute: 0, rayGenerationKw: 0 },
+    exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
+  };
+  const normalPayload = createModeSavePayload(baseState, "normal", 1);
+  const speedrunPayload = createModeSavePayload(baseState, "speedrun", 2);
+  const normal = await request("/api/cloud-save?slot=1", { method: "PUT", headers, body: JSON.stringify({ payload: normalPayload, expectedRevision: 0 }) });
+  const speedrun = await request("/api/cloud-save?slot=1&mode=speedrun", { method: "PUT", headers, body: JSON.stringify({ payload: speedrunPayload, expectedRevision: 0 }) });
+  assert.equal(normal.response.status, 200);
+  assert.equal(speedrun.response.status, 200);
+  assert.equal(normal.body.cloudSave.revision, 1);
+  assert.equal(speedrun.body.cloudSave.revision, 1);
+  assert.equal(speedrun.body.cloudSave.mode, "speedrun");
+
+  const normalLoaded = await request("/api/cloud-save?slot=1", { headers });
+  const speedrunLoaded = await request("/api/cloud-save?slot=1&mode=speedrun", { headers });
+  assert.equal(normalLoaded.body.cloudSave.payload, normalPayload);
+  assert.equal(speedrunLoaded.body.cloudSave.payload, speedrunPayload);
+  const account = await request("/api/account", { headers });
+  assert.equal(account.body.cloudSavesByMode.normal["1"].revision, 1);
+  assert.equal(account.body.cloudSavesByMode.speedrun["1"].revision, 1);
+
+  const normalPayload2 = createModeSavePayload({ ...baseState, elapsedSeconds: 200 }, "normal", 3);
+  const speedrunPayload2 = createModeSavePayload({ ...baseState, elapsedSeconds: 300 }, "speedrun", 4);
+  assert.equal((await request("/api/cloud-save?slot=1", { method: "PUT", headers, body: JSON.stringify({ payload: normalPayload2, expectedRevision: 1 }) })).body.cloudSave.revision, 2);
+  assert.equal((await request("/api/cloud-save?slot=1&mode=speedrun", { method: "PUT", headers, body: JSON.stringify({ payload: speedrunPayload2, expectedRevision: 1 }) })).body.cloudSave.revision, 2);
+  const normalHistory = await request("/api/cloud-save/history?slot=1", { headers });
+  const speedrunHistory = await request("/api/cloud-save/history?slot=1&mode=speedrun", { headers });
+  assert.deepEqual(normalHistory.body.history.map((entry) => entry.revision), [2, 1]);
+  assert.deepEqual(speedrunHistory.body.history.map((entry) => entry.revision), [2, 1]);
+  assert.ok(normalHistory.body.history.every((entry) => entry.mode === "normal"));
+  assert.ok(speedrunHistory.body.history.every((entry) => entry.mode === "speedrun"));
+
+  const restoredSpeedrun = await request("/api/cloud-save/restore?slot=1&mode=speedrun", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ revision: 1, expectedRevision: 2 }),
+  });
+  assert.equal(restoredSpeedrun.body.cloudSave.revision, 3);
+  assert.equal((await request("/api/cloud-save?slot=1", { headers })).body.cloudSave.revision, 2);
+  const staleNormalDevice = await request("/api/cloud-save?slot=1", {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ payload: normalPayload, expectedRevision: 1 }),
+  });
+  assert.equal(staleNormalDevice.response.status, 409);
+  assert.equal((await request("/api/cloud-save?slot=1&mode=speedrun", { headers })).body.cloudSave.revision, 3);
+
+  const mismatch = await request("/api/cloud-save?slot=2&mode=speedrun", {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ payload: normalPayload, expectedRevision: 0 }),
+  });
+  assert.equal(mismatch.response.status, 400);
+  assert.equal(mismatch.body.code, "SAVE_MODE_MISMATCH");
+
+  const wrongDelete = await request("/api/cloud-save?slot=1", {
+    method: "DELETE",
+    headers,
+    body: JSON.stringify({ expectedRevision: 2, confirmation: "DELETE_CLOUD_SAVE:speedrun:1" }),
+  });
+  assert.equal(wrongDelete.response.status, 400);
+  const deletedNormal = await request("/api/cloud-save?slot=1", {
+    method: "DELETE",
+    headers,
+    body: JSON.stringify({ expectedRevision: 2, confirmation: "DELETE_CLOUD_SAVE:normal:1" }),
+  });
+  assert.equal(deletedNormal.response.status, 200);
+  assert.equal((await request("/api/cloud-save?slot=1", { headers })).body.cloudSave, null);
+  assert.equal((await request("/api/cloud-save?slot=1&mode=speedrun", { headers })).body.cloudSave.revision, 3);
+
+  const recreatedNormal = await request("/api/cloud-save?slot=1", {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ payload: normalPayload, expectedRevision: 0 }),
+  });
+  assert.equal(recreatedNormal.body.cloudSave.revision, 1);
+  const deletedSpeedrun = await request("/api/cloud-save?slot=1&mode=speedrun", {
+    method: "DELETE",
+    headers,
+    body: JSON.stringify({ expectedRevision: 3, confirmation: "DELETE_CLOUD_SAVE:speedrun:1" }),
+  });
+  assert.equal(deletedSpeedrun.response.status, 200);
+  assert.equal((await request("/api/cloud-save?slot=1&mode=speedrun", { headers })).body.cloudSave, null);
+  assert.equal((await request("/api/cloud-save?slot=1", { headers })).body.cloudSave.payload, normalPayload);
+  const rows = server.store.database.prepare("SELECT slot, count(*) AS count FROM cloud_save_payloads WHERE user_id = ? AND slot IN ('1', 'speedrun:1') GROUP BY slot ORDER BY slot").all(registered.body.user.id);
+  assert.deepEqual(rows, [{ slot: "1", count: 1 }]);
+});
+
+test("migrates and reopens same-revision normal and speedrun payload rows without collision", async () => {
+  const migrationDirectory = await mkdtemp(path.join(tmpdir(), "dsp-cloud-mode-migration-"));
+  const dataFile = path.join(migrationDirectory, "cloud.json");
+  const databaseFile = path.join(migrationDirectory, "cloud.sqlite");
+  const userId = "mode_migration_user";
+  const baseState = {
+    version: 24,
+    elapsedSeconds: 10,
+    entities: [],
+    totalProduced: { universe_matrix: 0 },
+    metrics: { generationKw: 0, totalItemsPerMinute: 0, rayGenerationKw: 0 },
+    exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
+  };
+  const normalPayload = createModeSavePayload(baseState, "normal", 10);
+  const speedrunPayload = createModeSavePayload({ ...baseState, elapsedSeconds: 20 }, "speedrun", 20);
+  const saveRecord = (payload, updatedAt) => ({
+    revision: 1,
+    payload,
+    checksum: createHash("sha256").update(payload).digest("hex"),
+    size: Buffer.byteLength(payload),
+    updatedAt,
+  });
+  const normal = saveRecord(normalPayload, 10);
+  const speedrun = saveRecord(speedrunPayload, 20);
+  await writeFile(dataFile, JSON.stringify({
+    schemaVersion: 7,
+    users: { [userId]: { id: userId, username: "mode_migration", displayName: "模式迁移", createdAt: 1 } },
+    cloudSaves: { [userId]: normal },
+    cloudSaveHistory: { [userId]: [normal] },
+    cloudSavesByMode: { [userId]: { speedrun } },
+    cloudSaveHistoryByMode: { [userId]: { speedrun: [speedrun] } },
+  }));
+
+  let migratedServer;
+  let reopenedServer;
+  try {
+    migratedServer = await createCloudServer({ dataFile, databaseFile, historyPruneIntervalMs: 0, logger: { error() {} } });
+    await new Promise((resolve) => migratedServer.listen(0, "127.0.0.1", resolve));
+    assert.equal(migratedServer.store.readCloudSavePayload(userId, "main", 1), normalPayload);
+    assert.equal(migratedServer.store.readCloudSavePayload(userId, "speedrun:main", 1), speedrunPayload);
+    await new Promise((resolve) => migratedServer.close(resolve));
+    migratedServer = null;
+
+    reopenedServer = await createCloudServer({ databaseFile, historyPruneIntervalMs: 0, logger: { error() {} } });
+    await new Promise((resolve) => reopenedServer.listen(0, "127.0.0.1", resolve));
+    assert.equal(reopenedServer.store.readCloudSavePayload(userId, "main", 1), normalPayload);
+    assert.equal(reopenedServer.store.readCloudSavePayload(userId, "speedrun:main", 1), speedrunPayload);
+    const rows = reopenedServer.store.database.prepare("SELECT slot, payload FROM cloud_save_payloads WHERE user_id = ? ORDER BY slot").all(userId);
+    assert.deepEqual(rows, [
+      { slot: "main", payload: normalPayload },
+      { slot: "speedrun:main", payload: speedrunPayload },
+    ]);
+  } finally {
+    if (migratedServer) await new Promise((resolve) => migratedServer.close(resolve));
+    if (reopenedServer) await new Promise((resolve) => reopenedServer.close(resolve));
+    await rm(migrationDirectory, { recursive: true, force: true });
+  }
+});
+
+test("rejects ordinary and forbidden saves while accepting an eligible speedrun submission", async () => {
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username: "speedrun_guard", password: "strong-pass-789", displayName: "速通校验员" }),
+  });
+  assert.equal(registered.response.status, 201);
+  const headers = { authorization: `Bearer ${registered.body.token}` };
+  const baseState = {
+    version: 24,
+    elapsedSeconds: 300,
+    entities: [],
+    settings: { resourceMode: "finite", difficulty: "standard" },
+    research: { completedTechIds: [] },
+    dysonSphere: { totalRocketsLaunched: 0 },
+    totalProduced: { universe_matrix: 1_000_000 },
+    metrics: { generationKw: 1_000, totalItemsPerMinute: 0, rayGenerationKw: 0 },
+    exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
+  };
+  const normalPayload = createModeSavePayload(baseState, "normal", Date.now() - 1_000);
+  const normalUpload = await request("/api/cloud-save", {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ payload: normalPayload, expectedRevision: 0 }),
+  });
+  assert.equal(normalUpload.response.status, 200);
+  const ordinaryAttempt = await request("/api/speedrun/submit", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      targetId: "white_matrix_1m",
+      seasonId: "season_01",
+      rulesetVersion: "speedrun-v1",
+      factoryId: "ordinary_factory_cannot_rank",
+      elapsedSeconds: 300,
+      saveRevision: normalUpload.body.cloudSave.revision,
+      saveHash: normalUpload.body.cloudSave.checksum,
+      clientVersion: "1.0.35",
+    }),
+  });
+  assert.equal(ordinaryAttempt.response.status, 409);
+  assert.equal(ordinaryAttempt.body.code, "SPEEDRUN_SAVE_MISSING");
+
+  const factoryId = "speedrun_guard_factory_0001";
+  const speedrunState = {
+    ...baseState,
+    speedrun: {
+      enabled: true,
+      mode: "speedrun",
+      rulesetVersion: "speedrun-v1",
+      seasonId: "season_01",
+      startedAt: Date.now() - 10 * 60_000,
+      elapsedActiveSeconds: 300,
+      baseline: { completedTechIds: [], rocketsLaunched: 0, whiteMatrixProduced: 0 },
+      milestones: {
+        all_technologies: { completed: false },
+        dyson_rockets_10000: { completed: false },
+        white_matrix_1m: { completed: true, completedAtSeconds: 300 },
+      },
+      eligible: true,
+      factoryId,
+    },
+  };
+  const speedrunPayload = createModeSavePayload(speedrunState, "speedrun", Date.now());
+  const speedrunUpload = await request("/api/cloud-save?mode=speedrun", {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ payload: speedrunPayload, expectedRevision: 0 }),
+  });
+  assert.equal(speedrunUpload.response.status, 200, JSON.stringify(speedrunUpload.body));
+  const submissionBody = {
+    targetId: "white_matrix_1m",
+    seasonId: "season_01",
+    rulesetVersion: "speedrun-v1",
+    factoryId,
+    elapsedSeconds: 300,
+    saveRevision: speedrunUpload.body.cloudSave.revision,
+    saveHash: speedrunUpload.body.cloudSave.checksum,
+    clientVersion: "1.0.35",
+  };
+  const accepted = await request("/api/speedrun/submit", { method: "POST", headers, body: JSON.stringify(submissionBody) });
+  assert.equal(accepted.response.status, 200, JSON.stringify(accepted.body));
+  assert.equal(accepted.body.verified, true);
+  assert.equal(accepted.body.entry.factoryId, factoryId);
+  const repeated = await request("/api/speedrun/submit", { method: "POST", headers, body: JSON.stringify(submissionBody) });
+  assert.equal(repeated.response.status, 200);
+  assert.equal(repeated.body.idempotent, true);
+
+  const forbiddenPayload = createModeSavePayload({ ...speedrunState, experimentalSettlement: true }, "speedrun", Date.now() + 1);
+  const forbiddenUpload = await request("/api/cloud-save?mode=speedrun", {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ payload: forbiddenPayload, expectedRevision: 1 }),
+  });
+  assert.equal(forbiddenUpload.response.status, 200);
+  const forbidden = await request("/api/speedrun/submit", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ ...submissionBody, saveRevision: 2, saveHash: forbiddenUpload.body.cloudSave.checksum }),
+  });
+  assert.equal(forbidden.response.status, 422);
+  assert.equal(forbidden.body.code, "SPEEDRUN_FORBIDDEN_STATE");
 });
 
 test("authorizes the Android WebView origin and rejects unknown origins", async () => {

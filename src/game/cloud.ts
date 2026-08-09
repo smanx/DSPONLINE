@@ -1,5 +1,5 @@
 import { normalizeLeaderboardMetrics, type LeaderboardCategoryId, type LeaderboardMetrics } from "./leaderboard";
-import type { SpeedrunTargetId } from "./types";
+import type { SaveMode, SpeedrunTargetId } from "./types";
 import {
   assessSavePayloadSize,
   CLOUD_SAVE_RAW_SAFE_LIMIT_BYTES,
@@ -17,6 +17,7 @@ export const CLOUD_DEVICE_ID_STORAGE_KEY = "dsp-idle-network.cloud-device-id.v1"
 export const CLOUD_AUTO_SYNC_INTERVAL_MS = 10 * 60 * 1000;
 export const CLOUD_SAVE_SLOTS = ["main", "1", "2", "3"] as const;
 export type CloudSaveSlot = typeof CLOUD_SAVE_SLOTS[number];
+export type CloudSaveMode = SaveMode;
 
 let inMemoryCloudToken: string | null = null;
 let preferInMemoryCloudToken = false;
@@ -58,12 +59,15 @@ export interface CloudAccountExport {
   cloudSaveHistory: CloudSaveMetadata[];
   cloudSaveSlots?: Partial<Record<Exclude<CloudSaveSlot, "main">, CloudSave>>;
   cloudSaveSlotHistory?: Partial<Record<Exclude<CloudSaveSlot, "main">, CloudSaveMetadata[]>>;
+  cloudSavesByMode?: Partial<Record<CloudSaveMode, unknown>>;
+  cloudSaveHistoriesByMode?: Partial<Record<CloudSaveMode, unknown>>;
   submissions: unknown[];
   feedback: unknown[];
   errors: unknown[];
 }
 
 export interface CloudSaveMetadata {
+  mode?: CloudSaveMode;
   slot?: CloudSaveSlot;
   revision: number;
   updatedAt: number;
@@ -74,6 +78,7 @@ export interface CloudSaveMetadata {
 }
 
 export interface CloudSaveSummary {
+  mode?: CloudSaveMode;
   stateVersion: number;
   savedAt: number;
   elapsedSeconds: number;
@@ -116,6 +121,8 @@ export interface CloudSession {
   user: CloudUser | null;
   cloudSave: CloudSaveMetadata | null;
   cloudSaves?: Record<CloudSaveSlot, CloudSaveMetadata | null>;
+  mode?: CloudSaveMode;
+  cloudSavesByMode?: Partial<Record<CloudSaveMode, Record<CloudSaveSlot, CloudSaveMetadata | null>>>;
   mailAvailable: boolean;
   message: string | null;
 }
@@ -132,6 +139,7 @@ export interface CloudAutoSyncStatus {
 export type CloudUploadStage = "compressing" | "sending" | "waiting";
 
 export interface CloudUploadOptions {
+  mode?: CloudSaveMode;
   verified?: boolean;
   signal?: AbortSignal;
   onStage?: (stage: CloudUploadStage) => void;
@@ -329,8 +337,8 @@ function writeCloudSyncMarkers(markers: Record<string, CloudSyncMarker>): void {
   try { window.localStorage.setItem(CLOUD_SYNC_STORAGE_KEY, JSON.stringify(markers)); } catch { /* optional sync metadata */ }
 }
 
-function cloudMarkerKey(userId: string, slot: CloudSaveSlot): string {
-  return `${userId}:${slot}`;
+function cloudMarkerKey(userId: string, slot: CloudSaveSlot, mode: CloudSaveMode = "normal"): string {
+  return mode === "normal" ? `${userId}:${slot}` : `${userId}:${mode}:${slot}`;
 }
 
 export function emptyCloudSaveSlots(main: CloudSaveMetadata | null = null): Record<CloudSaveSlot, CloudSaveMetadata | null> {
@@ -347,6 +355,10 @@ function normalizedCloudSaveSlots(
   })) as Record<CloudSaveSlot, CloudSaveMetadata | null>;
 }
 
+function normalizeCloudSaveMode(value: unknown): CloudSaveMode {
+  return value === "speedrun" ? "speedrun" : "normal";
+}
+
 export function summarizeCloudPayload(payload: string): CloudSaveSummary | null {
   try {
     const integrity = inspectSaveEnvelopeChecksum(payload);
@@ -354,6 +366,7 @@ export function summarizeCloudPayload(payload: string): CloudSaveSummary | null 
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities)) return null;
     return {
+      mode: normalizeCloudSaveMode(parsed.mode ?? state.mode),
       stateVersion: typeof state.version === "number" ? Math.max(0, Math.floor(state.version)) : 0,
       savedAt: typeof parsed.savedAt === "number" ? Math.max(0, Math.floor(parsed.savedAt)) : 0,
       elapsedSeconds: typeof state.elapsedSeconds === "number" ? Math.max(0, Math.floor(state.elapsedSeconds)) : 0,
@@ -371,16 +384,17 @@ export function summarizeCloudPayload(payload: string): CloudSaveSummary | null 
   }
 }
 
-export function getCloudSyncMarker(userId: string, slot: CloudSaveSlot = "main"): CloudSyncMarker | null {
+export function getCloudSyncMarker(userId: string, slot: CloudSaveSlot = "main", mode: CloudSaveMode = "normal"): CloudSyncMarker | null {
   const markers = readCloudSyncMarkers();
-  const marker = markers[cloudMarkerKey(userId, slot)] ?? (slot === "main" ? markers[userId] : undefined);
+  const marker = markers[cloudMarkerKey(userId, slot, mode)] ?? (mode === "normal" && slot === "main" ? markers[userId] : undefined);
   return marker && marker.userId === userId && (!marker.slot || marker.slot === slot) ? { ...marker, slot } : null;
 }
 
-export function markCloudSaveSynchronized(userId: string, cloudSave: CloudSaveMetadata, payload?: string, requestedSlot?: CloudSaveSlot): void {
+export function markCloudSaveSynchronized(userId: string, cloudSave: CloudSaveMetadata, payload?: string, requestedSlot?: CloudSaveSlot, requestedMode?: CloudSaveMode): void {
   const slot = requestedSlot ?? cloudSave.slot ?? "main";
+  const mode = requestedMode ?? cloudSave.mode ?? "normal";
   const markers = readCloudSyncMarkers();
-  markers[cloudMarkerKey(userId, slot)] = {
+  markers[cloudMarkerKey(userId, slot, mode)] = {
     userId,
     slot,
     revision: cloudSave.revision,
@@ -391,26 +405,31 @@ export function markCloudSaveSynchronized(userId: string, cloudSave: CloudSaveMe
   writeCloudSyncMarkers(markers);
 }
 
-export function clearCloudSyncMarker(userId: string, slot?: CloudSaveSlot): void {
+export function clearCloudSyncMarker(userId: string, slot?: CloudSaveSlot, mode: CloudSaveMode = "normal"): void {
   const markers = readCloudSyncMarkers();
   if (slot) {
-    delete markers[cloudMarkerKey(userId, slot)];
-    if (slot === "main") delete markers[userId];
+    delete markers[cloudMarkerKey(userId, slot, mode)];
+    if (mode === "normal" && slot === "main") delete markers[userId];
   } else {
     delete markers[userId];
-    for (const candidate of CLOUD_SAVE_SLOTS) delete markers[cloudMarkerKey(userId, candidate)];
+    for (const candidate of CLOUD_SAVE_SLOTS) {
+      for (const candidateMode of ["normal", "speedrun"] as const) delete markers[cloudMarkerKey(userId, candidate, candidateMode)];
+    }
   }
   writeCloudSyncMarkers(markers);
 }
 
-export function compareCloudSave(userId: string, localPayload: string | null, cloudSave: CloudSaveMetadata | null, slot: CloudSaveSlot = "main"): CloudSyncComparison {
+export function compareCloudSave(userId: string, localPayload: string | null, cloudSave: CloudSaveMetadata | null, slot: CloudSaveSlot = "main", mode: CloudSaveMode = "normal"): CloudSyncComparison {
   const local = localPayload ? summarizeCloudPayload(localPayload) : null;
-  return compareCloudSaveSummary(userId, local, cloudSave, slot);
+  return compareCloudSaveSummary(userId, local, cloudSave, slot, mode);
 }
 
 /** Compare a payload using a summary produced by the upload Worker. */
-export function compareCloudSaveSummary(userId: string, local: CloudSaveSummary | null, cloudSave: CloudSaveMetadata | null, slot: CloudSaveSlot = "main"): CloudSyncComparison {
-  const marker = getCloudSyncMarker(userId, slot);
+export function compareCloudSaveSummary(userId: string, local: CloudSaveSummary | null, cloudSave: CloudSaveMetadata | null, slot: CloudSaveSlot = "main", mode: CloudSaveMode = "normal"): CloudSyncComparison {
+  const marker = getCloudSyncMarker(userId, slot, mode);
+  if (local?.mode && local.mode !== mode || cloudSave?.mode && cloudSave.mode !== mode) {
+    return { state: "unbound", marker, local, cloud: cloudSave, localChanged: true, cloudChanged: true };
+  }
   if (!local && !cloudSave) return { state: "empty", marker, local, cloud: cloudSave, localChanged: false, cloudChanged: false };
   if (local && !cloudSave) return { state: "local-only", marker, local, cloud: cloudSave, localChanged: true, cloudChanged: false };
   if (!local && cloudSave) return { state: "cloud-only", marker, local, cloud: cloudSave, localChanged: false, cloudChanged: true };
@@ -486,22 +505,26 @@ async function cloudRequest<T>(path: string, options: RequestInit = {}, authenti
   }
 }
 
-export async function resumeCloudSession(): Promise<CloudSession> {
+export async function resumeCloudSession(mode: CloudSaveMode = "normal"): Promise<CloudSession> {
   try {
     const health = await cloudRequest<{ ok: boolean; mailProvider?: string }>("/health", {}, false, true);
     const mailAvailable = Boolean(health.mailProvider && health.mailProvider !== "disabled");
     const token = getCloudToken();
-    if (!token) return { status: "anonymous", user: null, cloudSave: null, mailAvailable, message: null };
+    if (!token) return { status: "anonymous", user: null, cloudSave: null, mode, mailAvailable, message: null };
     try {
-      const account = await cloudRequest<{ user: CloudUser; cloudSave: CloudSaveMetadata | null; cloudSaves?: Partial<Record<CloudSaveSlot, CloudSaveMetadata | null>> }>("/account", {}, true);
-      const cloudSaves = normalizedCloudSaveSlots(account.cloudSave, account.cloudSaves);
-      return { status: "authenticated", user: account.user, cloudSave: cloudSaves.main, cloudSaves, mailAvailable, message: null };
+      const account = await cloudRequest<{ user: CloudUser; cloudSave: CloudSaveMetadata | null; cloudSaves?: Partial<Record<CloudSaveSlot, CloudSaveMetadata | null>>; cloudSavesByMode?: Partial<Record<CloudSaveMode, Partial<Record<CloudSaveSlot, CloudSaveMetadata | null>>>> }>("/account", {}, true);
+      const selected = account.cloudSavesByMode?.[mode];
+      const cloudSaves = normalizedCloudSaveSlots(
+        mode === "normal" ? account.cloudSave : selected?.main ?? null,
+        selected ?? (mode === "normal" ? account.cloudSaves : undefined),
+      );
+      return { status: "authenticated", user: account.user, cloudSave: cloudSaves.main, cloudSaves, mode, cloudSavesByMode: account.cloudSavesByMode as CloudSession["cloudSavesByMode"], mailAvailable, message: null };
     } catch (error) {
       if (error instanceof CloudApiError && error.status === 401) setCloudToken(null);
-      return { status: "anonymous", user: null, cloudSave: null, mailAvailable, message: error instanceof Error ? error.message : null };
+      return { status: "anonymous", user: null, cloudSave: null, mode, mailAvailable, message: error instanceof Error ? error.message : null };
     }
   } catch (error) {
-    return { status: "offline", user: null, cloudSave: null, mailAvailable: false, message: error instanceof Error ? error.message : "云服务离线" };
+    return { status: "offline", user: null, cloudSave: null, mode, mailAvailable: false, message: error instanceof Error ? error.message : "云服务离线" };
   }
 }
 
@@ -597,9 +620,10 @@ export async function deleteCloudAccount(password: string): Promise<void> {
   setCloudToken(null);
 }
 
-function cloudSaveQuery(slot: CloudSaveSlot, revision?: number): string {
+function cloudSaveQuery(slot: CloudSaveSlot, revision?: number, mode: CloudSaveMode = "normal"): string {
   const parameters = new URLSearchParams();
   if (slot !== "main") parameters.set("slot", slot);
+  if (mode !== "normal") parameters.set("mode", mode);
   if (revision) parameters.set("revision", String(revision));
   const query = parameters.toString();
   return query ? `?${query}` : "";
@@ -638,13 +662,15 @@ function cloudSummaryMatchesPayload(remote: CloudSaveMetadata, payloadSummary: C
 }
 
 /** Re-read only the current cloud metadata after an uncertain upload response. */
-export async function refreshCloudSaveMetadata(slot: CloudSaveSlot = "main", signal?: AbortSignal): Promise<CloudSaveMetadata | null> {
+export async function refreshCloudSaveMetadata(slot: CloudSaveSlot = "main", signal?: AbortSignal, mode: CloudSaveMode = "normal"): Promise<CloudSaveMetadata | null> {
   const result = await cloudRequest<{
     cloudSave: CloudSaveMetadata | null;
     cloudSaves?: Partial<Record<CloudSaveSlot, CloudSaveMetadata | null>>;
-  }>("/account", { signal }, true);
-  const save = result.cloudSaves?.[slot] ?? (slot === "main" ? result.cloudSave : null);
-  return save ? { ...save, slot } : null;
+    cloudSavesByMode?: Partial<Record<CloudSaveMode, Partial<Record<CloudSaveSlot, CloudSaveMetadata | null>>>>;
+  }>("/account", { signal, ...(mode !== "normal" ? { headers: { "x-dsp-save-mode": mode } } : {}) }, true);
+  const modeSlots = result.cloudSavesByMode?.[mode];
+  const save = modeSlots?.[slot] ?? (mode === "normal" ? result.cloudSaves?.[slot] ?? (slot === "main" ? result.cloudSave : null) : null);
+  return save ? { ...save, slot, mode } : null;
 }
 
 function unknownCloudUploadState(): CloudApiError {
@@ -661,11 +687,12 @@ async function confirmTimedOutUpload(
   payload: string,
   expectedRevision: number,
   slot: CloudSaveSlot,
+  mode: CloudSaveMode,
   signal?: AbortSignal,
 ): Promise<{ state: "confirmed" | "retry"; cloudSave?: CloudSaveMetadata }> {
   let cloudSave: CloudSaveMetadata | null;
   try {
-    cloudSave = await refreshCloudSaveMetadata(slot, signal);
+    cloudSave = await refreshCloudSaveMetadata(slot, signal, mode);
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw unknownCloudUploadState();
@@ -685,6 +712,7 @@ export async function uploadCloudSaveWithOptions(
   slot: CloudSaveSlot = "main",
   options: CloudUploadOptions = {},
 ): Promise<CloudSaveMetadata> {
+  const mode = options.mode ?? summarizeCloudPayload(payload)?.mode ?? "normal";
   const uploadStartedAt = performance.now();
   if (!options.verified) {
     const integrity = inspectSaveEnvelopeChecksum(payload);
@@ -749,7 +777,7 @@ export async function uploadCloudSaveWithOptions(
       stage("waiting");
       const requestStartedAt = performance.now();
       try {
-        const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save${cloudSaveQuery(slot)}`, {
+        const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save${cloudSaveQuery(slot, undefined, mode)}`, {
           method: "PUT",
           body,
           ...(headers ? { headers } : {}),
@@ -759,7 +787,7 @@ export async function uploadCloudSaveWithOptions(
           status: "success",
           networkMs: diagnostics.networkMs + Math.max(0, performance.now() - requestStartedAt),
         });
-        return { ...result.cloudSave, slot };
+        return { ...result.cloudSave, slot, mode };
       } catch (error) {
         const cancelled = options.signal?.aborted || error instanceof DOMException && error.name === "AbortError";
         emitDiagnostics({
@@ -775,7 +803,7 @@ export async function uploadCloudSaveWithOptions(
 
     const resolveRawRetryFailure = async (retryError: unknown): Promise<CloudSaveMetadata> => {
       if (retryError instanceof CloudApiError && retryError.status === 409) {
-        const finalConfirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, options.signal);
+        const finalConfirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, mode, options.signal);
         if (finalConfirmation.state === "confirmed" && finalConfirmation.cloudSave) {
           emitDiagnostics({ status: "success", fallbackReason: "retry-response-lost-server-confirmed" });
           return finalConfirmation.cloudSave;
@@ -783,7 +811,7 @@ export async function uploadCloudSaveWithOptions(
         throw retryError;
       }
       if (!isUncertainCloudRequestError(retryError)) throw retryError;
-      const finalConfirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, options.signal);
+      const finalConfirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, mode, options.signal);
       if (finalConfirmation.state === "confirmed" && finalConfirmation.cloudSave) {
         emitDiagnostics({ status: "success", fallbackReason: "retry-timeout-server-confirmed" });
         return finalConfirmation.cloudSave;
@@ -804,7 +832,7 @@ export async function uploadCloudSaveWithOptions(
         }
       }
       if (!isUncertainCloudRequestError(error)) throw error;
-      const confirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, options.signal);
+      const confirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, mode, options.signal);
       if (confirmation.state === "confirmed" && confirmation.cloudSave) {
         emitDiagnostics({ status: "success", fallbackReason: "network-timeout-server-confirmed" });
         return confirmation.cloudSave;
@@ -924,19 +952,39 @@ export async function compressCloudRequestBody(
   }
 }
 
-export async function downloadCloudSave(revision?: number, slot: CloudSaveSlot = "main"): Promise<CloudSave | null> {
-  const result = await cloudRequest<{ cloudSave: CloudSave | null }>(`/cloud-save${cloudSaveQuery(slot, revision)}`, {}, true);
-  return result.cloudSave ? { ...result.cloudSave, slot } : null;
+export async function downloadCloudSave(revision?: number, slot: CloudSaveSlot = "main", mode: CloudSaveMode = "normal"): Promise<CloudSave | null> {
+  const result = await cloudRequest<{ cloudSave: CloudSave | null }>(`/cloud-save${cloudSaveQuery(slot, revision, mode)}`, {}, true);
+  if (!result.cloudSave) return null;
+  const payloadMode = summarizeCloudPayload(result.cloudSave.payload)?.mode;
+  const metadataMode = result.cloudSave.mode === undefined ? mode : normalizeCloudSaveMode(result.cloudSave.mode);
+  if (payloadMode !== mode || metadataMode !== mode) {
+    throw new CloudApiError("云存档模式与当前工厂不匹配，已阻止恢复", 409, {
+      code: "SAVE_MODE_MISMATCH",
+      expectedMode: mode,
+      receivedMode: payloadMode ?? metadataMode,
+    });
+  }
+  return { ...result.cloudSave, slot, mode };
 }
 
-export async function fetchCloudSaveHistory(slot: CloudSaveSlot = "main"): Promise<CloudSaveMetadata[]> {
-  const result = await cloudRequest<{ history: CloudSaveMetadata[] }>(`/cloud-save/history${cloudSaveQuery(slot)}`, {}, true);
-  return result.history.map((save) => ({ ...save, slot }));
+export async function fetchCloudSaveHistory(slot: CloudSaveSlot = "main", mode: CloudSaveMode = "normal"): Promise<CloudSaveMetadata[]> {
+  const result = await cloudRequest<{ history: CloudSaveMetadata[] }>(`/cloud-save/history${cloudSaveQuery(slot, undefined, mode)}`, {}, true);
+  return result.history.map((save) => ({ ...save, slot, mode }));
 }
 
-export async function restoreCloudSaveRevision(revision: number, expectedRevision: number, slot: CloudSaveSlot = "main"): Promise<CloudSaveMetadata> {
-  const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save/restore${cloudSaveQuery(slot)}`, { method: "POST", body: JSON.stringify({ revision, expectedRevision }) }, true);
-  return { ...result.cloudSave, slot };
+export async function restoreCloudSaveRevision(revision: number, expectedRevision: number, slot: CloudSaveSlot = "main", mode: CloudSaveMode = "normal"): Promise<CloudSaveMetadata> {
+  const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save/restore${cloudSaveQuery(slot, undefined, mode)}`, { method: "POST", body: JSON.stringify({ revision, expectedRevision }) }, true);
+  return { ...result.cloudSave, slot, mode };
+}
+
+export async function deleteCloudSave(slot: CloudSaveSlot, expectedRevision: number, mode: CloudSaveMode = "normal"): Promise<void> {
+  await cloudRequest(`/cloud-save${cloudSaveQuery(slot, undefined, mode)}`, {
+    method: "DELETE",
+    body: JSON.stringify({
+      expectedRevision,
+      confirmation: `DELETE_CLOUD_SAVE:${mode}:${slot}`,
+    }),
+  }, true);
 }
 
 export async function fetchCloudLeaderboard(category: LeaderboardCategoryId, seasonId: string): Promise<CloudLeaderboardEntry[]> {

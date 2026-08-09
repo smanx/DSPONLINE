@@ -285,6 +285,7 @@ import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmar
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 import { PureIdleMacroClient, PureIdleMacroClientError, type PureIdleMacroProgress } from "./game/pureIdleMacroClient";
 import type { PureIdleMacroMode, PureIdleMacroSummary } from "./game/pureIdleMacro";
+import { beginIdleRun, finishIdleRun, settleIdleRun } from "./game/idleSettlement";
 import { classifyOfflineWorkload, offlineProfileLabel } from "./game/offlineComplexity";
 import {
   canUsePureIdleRecovery,
@@ -809,8 +810,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [campaignFocusTechId, setCampaignFocusTechId] = useState<GameState["research"]["selectedTechId"]>(null);
   const [operationsTab, setOperationsTab] = useState<OperationsTab>("alerts");
   const [offlineReport, setOfflineReport] = useState<OfflineReport | null>(loaded.offlineReport);
-  const [saveSlots, setSaveSlots] = useState(getSaveSlotSummaries);
-  const [saveSnapshots, setSaveSnapshots] = useState<SaveSnapshotSummary[]>(getSaveSnapshotSummaries);
+  const [saveSlots, setSaveSlots] = useState(() => getSaveSlotSummaries(loaded.state.mode));
+  const [saveSnapshots, setSaveSnapshots] = useState<SaveSnapshotSummary[]>(() => getSaveSnapshotSummaries(loaded.state.mode));
   const [importPreview, setImportPreview] = useState<SaveInspection | null>(null);
   const [pendingImportState, setPendingImportState] = useState<GameState | null>(null);
   const [pendingImportRaw, setPendingImportRaw] = useState<string | null>(null);
@@ -1717,8 +1718,17 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         });
         restored = offline.state;
       }
+      const settledIdle = settleIdleRun(
+        record.state.idleSettlement,
+        plan.highWallSeconds + plan.normalOfflineSeconds,
+        record.state.totalProduced,
+        restored.totalProduced,
+      );
       restored = setPaused(
-        settleCompletedResearchBoundaries(setTimeWarpEnabled(restored, false)),
+        {
+          ...settleCompletedResearchBoundaries(setTimeWarpEnabled(restored, false)),
+          idleSettlement: finishIdleRun(settledIdle),
+        },
         record.startedPaused,
       );
       setPureIdleRecoveryStatus("后台候选已验证，正在写入并重新读取主存档");
@@ -1846,6 +1856,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             pendingSimulationSeconds: 0,
             pendingWallSeconds: 0,
           };
+          checkpoint.idleSettlement = beginIdleRun(checkpoint.idleSettlement, startedAtMs);
           const claim = await createPureIdleRecovery(
             checkpoint,
             mode,
@@ -1997,8 +2008,17 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           phase: "validating",
           finalizedAtMs: Date.now(),
         });
+        const settledIdle = settleIdleRun(
+          record.state.idleSettlement,
+          frozenTarget,
+          record.state.totalProduced,
+          finalized.state.totalProduced,
+        );
         const restored = setPaused(
-          settleCompletedResearchBoundaries(finalized.state),
+          {
+            ...settleCompletedResearchBoundaries(finalized.state),
+            idleSettlement: finishIdleRun(settledIdle),
+          },
           record.startedPaused,
         );
         setPureIdleRecoveryStatus("候选已序列化验证，正在写入并重新读取主存档");
@@ -2155,7 +2175,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       // boundary before returning control to the normal simulation loop.
       const checkpoint = structuredClone(record.state);
       const repaired = settleCompletedResearchBoundaries(checkpoint);
-      const restored = setPaused(setTimeWarpEnabled(repaired, false), record.startedPaused);
+      const restored = setPaused(
+        { ...setTimeWarpEnabled(repaired, false), idleSettlement: finishIdleRun(repaired.idleSettlement) },
+        record.startedPaused,
+      );
       const saved = await persistPrimarySave(restored);
       if (!saved.success) {
         setPureIdleRecoveryStatus("检查点有效，但主存档写入失败；恢复日志已保留");
@@ -2461,6 +2484,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         const checkpoint = structuredClone(gameRef.current);
         const pendingWallSeconds = Math.max(0, checkpoint.timeWarp.pendingWallSeconds);
         const startedPaused = checkpoint.paused;
+        checkpoint.idleSettlement = beginIdleRun(checkpoint.idleSettlement, Date.now() - pendingWallSeconds * 1_000);
         checkpoint.timeWarp.pendingSimulationSeconds = 0;
         checkpoint.timeWarp.pendingWallSeconds = 0;
         const mode: PureIdleMacroMode = endgameExtremeMode ? "extreme" : "stable";
@@ -2851,14 +2875,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       let syncUserId = readCloudAutoSyncStatus()?.userId ?? null;
       let syncRevision: number | null = null;
       try {
-        const session = await resumeCloudSession();
+        const mode = gameRef.current.mode;
+        const session = await resumeCloudSession(mode);
         if (session.status !== "authenticated" || !session.user) return;
         syncUserId = session.user.id;
         syncRevision = session.cloudSave?.revision ?? null;
         const prepared = await serializeEnvelopeInWorker(stateWithSimulationDebt(gameRef.current));
         const payload = prepared.raw;
         const summary = prepared.summary ?? summarizeCloudPayload(payload);
-        const comparison = compareCloudSaveSummary(session.user.id, summary, session.cloudSave, "main");
+        const comparison = compareCloudSaveSummary(session.user.id, summary, session.cloudSave, "main", mode);
         if (session.cloudSave && ["cloud-newer", "conflict", "unbound"].includes(comparison.state)) {
           writeCloudAutoSyncStatus({ userId: session.user.id, state: "conflict", attemptedAt, uploadedAt: null, revision: session.cloudSave.revision, message: "检测到版本冲突，等待玩家选择" });
           if (active) setNotice("自动云同步已暂停：本地与云端存档需要手动选择版本");
@@ -2868,9 +2893,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           writeCloudAutoSyncStatus({ userId: session.user.id, state: "skipped", attemptedAt, uploadedAt: session.cloudSave?.updatedAt ?? null, revision: session.cloudSave?.revision ?? null, message: "本地与云端已一致" });
           return;
         }
-        const uploaded = await uploadCloudSave(payload, session.cloudSave?.revision ?? 0, "main");
-        const cloudSave = await refreshCloudSaveMetadata("main").catch(() => uploaded) ?? uploaded;
-        markCloudSaveSynchronized(session.user.id, cloudSave, payload, "main");
+        const uploaded = await uploadCloudSave(payload, session.cloudSave?.revision ?? 0, "main", { mode });
+        const cloudSave = await refreshCloudSaveMetadata("main", undefined, mode).catch(() => uploaded) ?? uploaded;
+        markCloudSaveSynchronized(session.user.id, cloudSave, payload, "main", mode);
         writeCloudAutoSyncStatus({ userId: session.user.id, state: "success", attemptedAt, uploadedAt: cloudSave.updatedAt, revision: cloudSave.revision, message: "主存档自动上传成功" });
         if (active) setNotice(`主存档已自动同步到云端修订 ${cloudSave.revision}`);
       } catch (error) {
@@ -4037,7 +4062,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const saveSummaryRefreshIdRef = useRef(0);
   const refreshSaveData = useCallback(async () => {
     const refreshId = ++saveSummaryRefreshIdRef.current;
-    const summaries = await getSaveSummariesInWorker();
+    const summaries = await getSaveSummariesInWorker(gameRef.current.mode);
     if (refreshId !== saveSummaryRefreshIdRef.current) return;
     setSaveSlots(summaries.slots);
     setSaveSnapshots(summaries.snapshots);
@@ -4094,6 +4119,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const confirmImport = useCallback(async () => {
     if (!pendingImportState) return;
+    if (pendingImportState.mode !== gameRef.current.mode) {
+      setNotice(`模式不匹配：当前是${gameRef.current.mode === "speedrun" ? "速通" : "普通"}模式，不能直接导入${pendingImportState.mode === "speedrun" ? "速通" : "普通"}存档`);
+      playTone("alert");
+      return;
+    }
     await saveGameSnapshotVerified(gameRef.current, "导入外部存档前");
     const result = await persistPrimarySave(pendingImportState);
     if (!result.success) {
@@ -4121,6 +4151,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const repaired = repairSave(pendingImportRaw);
     if (!repaired.success || !repaired.inspection.state) {
       setNotice(repaired.message);
+      playTone("alert");
+      return;
+    }
+    if (repaired.inspection.mode !== gameRef.current.mode) {
+      setNotice(`模式不匹配：不能把${repaired.inspection.mode === "speedrun" ? "速通" : "普通"}存档救援到当前模式`);
       playTone("alert");
       return;
     }
@@ -4165,6 +4200,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       playTone("alert");
       return { success: false, message: `云存档无效：${inspection.issues[0] ?? "格式或版本无法识别"}` };
     }
+    if (inspection.mode !== gameRef.current.mode) {
+      playTone("alert");
+      return {
+        success: false,
+        message: `云存档属于${inspection.mode === "speedrun" ? "速通" : "普通"}模式，不能覆盖当前${gameRef.current.mode === "speedrun" ? "速通" : "普通"}工厂`,
+      };
+    }
     await saveGameSnapshotVerified(gameRef.current, "恢复云存档前");
     const result = await persistPrimarySave(inspection.state);
     if (!result.success) {
@@ -4185,7 +4227,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [playTone, refreshSaveData]);
 
   const loadFromSlot = useCallback(async (slotId: SaveSlotId) => {
-    const slot = loadGameSlot(slotId);
+    const slot = loadGameSlot(slotId, gameRef.current.mode);
     if (!slot) {
       setNotice(`槽位 ${slotId} 没有可用存档`);
       return;
@@ -4203,7 +4245,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [persistPrimarySave, playTone, refreshSaveData, restoreGame]);
 
   const deleteSlot = useCallback(async (slotId: SaveSlotId) => {
-    const removed = await clearGameSlotVerified(slotId);
+    const removed = await clearGameSlotVerified(slotId, gameRef.current.mode);
     refreshSaveData();
     setNotice(removed ? `本地槽位 ${slotId} 已清空` : `本地槽位 ${slotId} 删除失败`);
   }, [refreshSaveData]);
@@ -4216,7 +4258,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [playTone, refreshSaveData]);
 
   const loadSnapshot = useCallback(async (snapshotId: string) => {
-    const state = loadSaveSnapshot(snapshotId);
+    const state = loadSaveSnapshot(snapshotId, gameRef.current.mode);
     if (!state) {
       setNotice("快照不可用，可能已损坏");
       playTone("alert");
@@ -4235,13 +4277,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [persistPrimarySave, playTone, refreshSaveData, restoreGame]);
 
   const deleteSnapshot = useCallback(async (snapshotId: string) => {
-    const removed = await clearSaveSnapshotVerified(snapshotId);
+    const removed = await clearSaveSnapshotVerified(snapshotId, gameRef.current.mode);
     refreshSaveData();
     setNotice(removed ? "快照已删除" : "快照删除失败");
   }, [refreshSaveData]);
 
   const deleteSnapshots = useCallback(async (snapshotIds: string[]) => {
-    const result = await clearSaveSnapshotsVerified(snapshotIds);
+    const result = await clearSaveSnapshotsVerified(snapshotIds, gameRef.current.mode);
     refreshSaveData();
     setNotice(result.failed.length === 0
       ? `已删除 ${result.removed} 份所选快照`

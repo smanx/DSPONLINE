@@ -7,6 +7,8 @@ import {
   getEntityOutputCapacity,
   hasActiveResearch,
   normalizeConstructionAutomationCursor,
+  getResourceReserveSnapshot,
+  getVeinConsumptionMultiplier,
   type SimulationAdvanceSession,
 } from "./engine";
 import type { FactoryEntity, GameState, ItemId } from "./types";
@@ -620,9 +622,47 @@ function runExact(source: GameState, seconds: number, wallSeconds = seconds): Ga
   // Callers provide an isolated clone. Mutating it avoids a second full-state
   // copy during each calibration/validation window while keeping the original
   // authoritative state untouched.
-  const session = createSimulationAdvanceSession(source, seconds, { mutateState: true, wallSeconds });
-  while (session.remainingSeconds > EPSILON) advanceSimulationSession(session, 256);
-  return completeSimulationAdvanceSession(session);
+  // The ordinary engine intentionally caps one session at 30 days. A high
+  // time-warp multiplier can exceed that simulation span inside a shorter
+  // wall-clock interval, so cover the whole requested range with proportional
+  // bounded sessions instead of silently accepting a truncated replay.
+  const maximumChunkSeconds = 30 * 24 * 60 * 60;
+  let remainingSeconds = Math.max(0, seconds);
+  let remainingWallSeconds = Math.max(0, wallSeconds);
+  let state = source;
+  while (remainingSeconds > EPSILON || remainingWallSeconds > EPSILON) {
+    const simulationFraction = remainingSeconds > maximumChunkSeconds
+      ? maximumChunkSeconds / remainingSeconds
+      : 1;
+    const wallFraction = remainingWallSeconds > maximumChunkSeconds
+      ? maximumChunkSeconds / remainingWallSeconds
+      : 1;
+    const fraction = Math.min(1, simulationFraction, wallFraction);
+    const chunkSeconds = remainingSeconds * fraction;
+    const chunkWallSeconds = remainingWallSeconds * fraction;
+    const session = createSimulationAdvanceSession(state, chunkSeconds, { mutateState: true, wallSeconds: chunkWallSeconds });
+    while (session.remainingSeconds > EPSILON || session.remainingWallSeconds > EPSILON) {
+      advanceSimulationSession(session, 256);
+    }
+    state = completeSimulationAdvanceSession(session);
+    remainingSeconds = Math.max(0, remainingSeconds - chunkSeconds);
+    remainingWallSeconds = Math.max(0, remainingWallSeconds - chunkWallSeconds);
+  }
+  return state;
+}
+
+/**
+ * Advance a Worker-owned state through a short exact window. Pure-idle keeps
+ * this bounded to its 30-second calibration prefix, so crossing a cache or
+ * finite-resource boundary does not turn a multi-day settlement into a
+ * multi-day replay.
+ */
+export function advanceExactSimulationWindow(
+  source: GameState,
+  seconds: number,
+  wallSeconds = seconds,
+): GameState {
+  return runExact(source, seconds, wallSeconds);
 }
 
 function applyRates(state: GameState, rates: MacroRates, seconds: number): boolean {
@@ -1107,6 +1147,8 @@ export interface PureIdleAffineApplication {
   ok: boolean;
   boundaryCorrections: number;
   failure?: string;
+  /** Simulation time already advanced by the ordinary exact engine. */
+  exactSimulationSeconds?: number;
 }
 
 type ItemStore = Partial<Record<string, number | string>>;
@@ -1191,6 +1233,151 @@ function validateAggregateConservation(before: AggregateConservationBaseline, af
   return null;
 }
 
+function veinConsumptionTenths(state: GameState, itemId: ItemId): number {
+  return ITEMS[itemId]?.kind === "solid"
+    ? Math.max(0, Math.round(getVeinConsumptionMultiplier(state) * 10))
+    : 10;
+}
+
+function hasAlternativeResourceProducer(state: GameState, itemId: ItemId): boolean {
+  return state.entities.some((entity) => {
+    if (entity.kind === "vein" && entity.resourceId === itemId && entity.minerCount > 0) {
+      return getResourceReserveSnapshot(state, entity)?.infinite === true;
+    }
+    if (entity.buildingId === "orbital_collector" && entity.storedItemId === itemId && entity.machineCount > 0) return true;
+    const recipe = entity.recipeId ? getRecipe(entity.recipeId) : undefined;
+    return entity.machineCount > 0 && Boolean(recipe?.outputs.some((output) => output.itemId === itemId));
+  });
+}
+
+/**
+ * Couple each finite miner to material that the affine candidate can still
+ * trace at its output or across one of its outgoing belts. A capacity boundary
+ * can clamp a cache while a cumulative counter keeps growing; that interval is
+ * unsafe for extrapolation and must be replayed by the ordinary exact engine.
+ */
+function reconcilePureIdleFiniteResources(before: GameState, candidate: GameState): string | null {
+  const beforeBelts = new Map(before.belts.map((belt) => [belt.id, belt]));
+  const tracedByItem = new Map<ItemId, number>();
+  const finiteItems = new Set<ItemId>();
+  const itemsWithOutgoingBelts = new Set<ItemId>();
+
+  for (const beforeEntity of before.entities) {
+    if (beforeEntity.kind !== "vein" || !beforeEntity.resourceId || beforeEntity.minerCount < 1) continue;
+    const reserve = getResourceReserveSnapshot(before, beforeEntity);
+    if (!reserve || reserve.infinite) continue;
+    const afterEntity = candidate.entities.find((entity) => entity.id === beforeEntity.id);
+    if (!afterEntity || afterEntity.kind !== "vein" || afterEntity.resourceId !== beforeEntity.resourceId) {
+      return `矿脉实体 ${beforeEntity.id} 在纯挂机结算中丢失`;
+    }
+    const itemId = beforeEntity.resourceId;
+    const beforeConsumption = veinConsumptionTenths(before, itemId);
+    const afterConsumption = veinConsumptionTenths(candidate, itemId);
+    if (beforeConsumption !== afterConsumption) return `矿脉 ${beforeEntity.id} 的采集消耗倍率跨越了结算边界`;
+    if (beforeConsumption <= 0) continue;
+
+    const beforeOutput = Math.floor(beforeEntity.outputs[itemId] ?? 0);
+    const outputDelta = Math.floor(afterEntity.outputs[itemId] ?? 0) - beforeOutput;
+    let transferredDelta = 0;
+    for (const afterBelt of candidate.belts) {
+      if (afterBelt.source !== beforeEntity.id || afterBelt.itemId !== itemId) continue;
+      const beforeBelt = beforeBelts.get(afterBelt.id);
+      if (!beforeBelt || beforeBelt.source !== afterBelt.source || beforeBelt.itemId !== afterBelt.itemId) {
+        return `矿脉 ${beforeEntity.id} 的输出传送带结构发生变化`;
+      }
+      itemsWithOutgoingBelts.add(itemId);
+      const delta = Math.floor(afterBelt.totalTransferred ?? 0) - Math.floor(beforeBelt.totalTransferred ?? 0);
+      if (delta < 0) return `矿脉 ${beforeEntity.id} 的传送带累计量发生回退`;
+      transferredDelta += delta;
+    }
+    let tracedProduction = Math.max(0, outputDelta + transferredDelta);
+    const beforeRemaining = Math.max(0, Math.floor(beforeEntity.resourceRemaining ?? 0));
+    const beforeRemainder = Math.max(0, Math.min(9, Math.floor(beforeEntity.resourceDepletionRemainder ?? 0)));
+    const availableTenths = Math.max(0, beforeRemaining * 10 - beforeRemainder);
+    if (tracedProduction * beforeConsumption > availableTenths) {
+      if (itemsWithOutgoingBelts.has(itemId)) return `矿脉 ${beforeEntity.id} 的宏观产量越过有限储量边界`;
+      tracedProduction = Math.floor(availableTenths / beforeConsumption);
+      afterEntity.outputs[itemId] = beforeOutput + tracedProduction;
+    }
+    const remainingTenths = availableTenths - tracedProduction * beforeConsumption;
+    const remaining = Math.ceil(remainingTenths / 10);
+    afterEntity.resourceRemaining = remaining;
+    afterEntity.resourceDepletionRemainder = remaining * 10 - remainingTenths;
+    finiteItems.add(itemId);
+    tracedByItem.set(itemId, (tracedByItem.get(itemId) ?? 0) + tracedProduction);
+  }
+
+  for (const itemId of finiteItems) {
+    if (hasAlternativeResourceProducer(before, itemId) || hasAlternativeResourceProducer(candidate, itemId)) continue;
+    const producedDelta = Math.floor(candidate.totalProduced[itemId] ?? 0) - Math.floor(before.totalProduced[itemId] ?? 0);
+    const tracedProduction = tracedByItem.get(itemId) ?? 0;
+    if (producedDelta !== tracedProduction) {
+      if (!itemsWithOutgoingBelts.has(itemId)) {
+        candidate.totalProduced[itemId] = Math.floor(before.totalProduced[itemId] ?? 0) + tracedProduction;
+        continue;
+      }
+      return `矿脉 ${itemId} 累计产量 ${producedDelta} 与可追踪产物 ${tracedProduction} 不一致`;
+    }
+  }
+  return null;
+}
+
+/**
+ * A miner reserve is an input to production, never an independent source of
+ * loss.  The affine pure-idle path can extrapolate persisted numeric fields,
+ * so keep a second invariant specifically for finite veins: every tenth of a
+ * reserve unit removed must be backed by a successfully recorded production
+ * delta.  This is intentionally aggregate by item because several miners can
+ * share the same item counter.
+ */
+export function validatePureIdleResourceAccounting(before: GameState, after: GameState): string | null {
+  const depletedTenthsByItem = new Map<ItemId, number>();
+  const finiteItemIds = new Set<ItemId>();
+  for (const beforeEntity of before.entities) {
+    if (beforeEntity.kind !== "vein" || !beforeEntity.resourceId) continue;
+    const reserve = getResourceReserveSnapshot(before, beforeEntity);
+    if (!reserve || reserve.infinite) continue;
+    const afterEntity = after.entities.find((entity) => entity.id === beforeEntity.id);
+    if (!afterEntity || afterEntity.kind !== "vein" || afterEntity.resourceId !== beforeEntity.resourceId) {
+      return `矿脉实体 ${beforeEntity.id} 在纯挂机结算中丢失`;
+    }
+    const beforeRemaining = Math.max(0, Math.floor(beforeEntity.resourceRemaining ?? 0));
+    const afterRemaining = Math.max(0, Math.floor(afterEntity.resourceRemaining ?? 0));
+    const beforeRemainder = Math.max(0, Math.min(9, Math.floor(beforeEntity.resourceDepletionRemainder ?? 0)));
+    const afterRemainder = Math.max(0, Math.min(9, Math.floor(afterEntity.resourceDepletionRemainder ?? 0)));
+    const depletionTenths = beforeRemaining * 10 - beforeRemainder - (afterRemaining * 10 - afterRemainder);
+    finiteItemIds.add(beforeEntity.resourceId);
+    if (depletionTenths < 0) return `矿脉 ${beforeEntity.id} 储量出现回退`;
+    if (depletionTenths > 0) {
+      depletedTenthsByItem.set(beforeEntity.resourceId, (depletedTenthsByItem.get(beforeEntity.resourceId) ?? 0) + depletionTenths);
+    }
+  }
+
+  for (const itemId of finiteItemIds) {
+    const depletedTenths = depletedTenthsByItem.get(itemId) ?? 0;
+    const beforeProduced = Math.max(0, Math.floor(before.totalProduced[itemId] ?? 0));
+    const afterProduced = Math.max(0, Math.floor(after.totalProduced[itemId] ?? 0));
+    const producedDelta = afterProduced - beforeProduced;
+    if (producedDelta < 0) return `累计产量 ${itemId} 在纯挂机结算中回退`;
+    const beforeConsumptionTenths = veinConsumptionTenths(before, itemId);
+    const consumptionTenths = veinConsumptionTenths(after, itemId);
+    // The exact consumption multiplier is represented in the reserve
+    // remainder; derive the allowed bound from the observed finite reserve
+    // rather than assuming the default 1:1 rule.  A finite resource mode with
+    // zero effective depletion is treated as unlimited by the engine.
+    const effectiveConsumptionTenths = Math.max(1, beforeConsumptionTenths, consumptionTenths);
+    if (beforeConsumptionTenths === consumptionTenths &&
+      !hasAlternativeResourceProducer(before, itemId) && !hasAlternativeResourceProducer(after, itemId) &&
+      depletedTenths !== producedDelta * effectiveConsumptionTenths) {
+      return `矿脉 ${itemId} 减少 ${depletedTenths} 个十分之一，但可归属累计产量为 ${producedDelta}`;
+    }
+    if (depletedTenths > producedDelta * effectiveConsumptionTenths) {
+      return `矿脉 ${itemId} 减少 ${depletedTenths} 个十分之一，但累计产量仅增加 ${producedDelta}`;
+    }
+  }
+  return null;
+}
+
 /**
  * Build the pure-idle contract from exactly three ten-second exact windows.
  * The supplied state remains untouched. Only one full shadow state is kept;
@@ -1247,6 +1434,44 @@ export function applyPureIdleAffineContract(
       ok: false,
       boundaryCorrections: (applied.corrections ?? 0) + normalized.corrections,
       failure: normalized.failure ?? "宏观候选状态规范化失败",
+    };
+  }
+  const reconciliationFailure = reconcilePureIdleFiniteResources(state, candidate);
+  if (reconciliationFailure) {
+    // Capacity, transport and depletion boundaries are deterministic gameplay
+    // events. Reuse the ordinary simulation for this interval instead of
+    // dropping production or accepting an untraceable affine counter.
+    const exact = runExact(structuredClone(state), simulationSeconds, wallSeconds);
+    const exactNormalized = normalizeFastSettlementState(exact);
+    if (!exactNormalized.ok) {
+      return {
+        ok: false,
+        boundaryCorrections: (applied.corrections ?? 0) + normalized.corrections + exactNormalized.corrections,
+        failure: exactNormalized.failure ?? reconciliationFailure,
+      };
+    }
+    const exactResourceFailure = validatePureIdleResourceAccounting(state, exact);
+    const exactConservationFailure = validateAggregateConservation(before, exact);
+    if (exactResourceFailure || exactConservationFailure) {
+      return {
+        ok: false,
+        boundaryCorrections: (applied.corrections ?? 0) + normalized.corrections + exactNormalized.corrections,
+        failure: exactResourceFailure ?? exactConservationFailure ?? reconciliationFailure,
+      };
+    }
+    Object.assign(state, exact);
+    return {
+      ok: true,
+      boundaryCorrections: (applied.corrections ?? 0) + normalized.corrections + exactNormalized.corrections + 1,
+      exactSimulationSeconds: simulationSeconds,
+    };
+  }
+  const resourceFailure = validatePureIdleResourceAccounting(state, candidate);
+  if (resourceFailure) {
+    return {
+      ok: false,
+      boundaryCorrections: (applied.corrections ?? 0) + normalized.corrections,
+      failure: resourceFailure,
     };
   }
   const conservationFailure = validateAggregateConservation(before, candidate);

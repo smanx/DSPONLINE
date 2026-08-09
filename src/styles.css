@@ -23654,6 +23654,10 @@ input:focus-visible,
   color: #f2b4a7;
 }
 
+.speedrun-copy-dialog > footer {
+  flex-wrap: wrap;
+}
+
 .start-menu-save-actions {
   display: flex;
   align-items: stretch;
@@ -23880,6 +23884,10 @@ html[data-ui-font-scale="200"] .release-notes-footer {
 
   .save-delete-dialog > footer button {
     min-height: 44px;
+  }
+
+  .speedrun-copy-dialog > footer button {
+    flex: 1 1 calc(50% - 8px);
   }
 
   html[data-ui-font-scale="200"] .release-notes-header {

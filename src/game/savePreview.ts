@@ -1,4 +1,4 @@
-import type { GameSettings, PlanetId } from "./types";
+import type { GameSettings, PlanetId, SaveMode } from "./types";
 import { getLocalSaveValue, listLocalSaveKeys } from "./localSaveStore";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
@@ -9,6 +9,7 @@ const SAVE_SNAPSHOT_KEY_PREFIX = `${SAVE_KEY}.snapshot`;
 export type MenuSaveSource = "primary" | "backup" | "snapshot";
 
 export interface MenuSaveSummary {
+  mode: SaveMode;
   savedAt: number;
   elapsedSeconds: number;
   completedTechCount: number;
@@ -71,23 +72,32 @@ function isPlanetId(value: unknown): value is PlanetId {
   return typeof value === "string" && value in PLANET_NAMES;
 }
 
-function snapshotKeys(): string[] {
-  const sequenceKey = `${SAVE_SNAPSHOT_KEY_PREFIX}.sequence`;
+function snapshotKeys(mode: SaveMode = "normal"): string[] {
+  const prefix = mode === "normal" ? SAVE_SNAPSHOT_KEY_PREFIX : `${SAVE_SNAPSHOT_KEY_PREFIX}.${mode}`;
+  const sequenceKey = `${prefix}.sequence`;
   return listLocalSaveKeys()
-    .filter((key) => key.startsWith(`${SAVE_SNAPSHOT_KEY_PREFIX}.`) && key !== sequenceKey)
+    .filter((key) => mode === "speedrun"
+      ? key.startsWith(`${prefix}.`) && key !== sequenceKey
+      : key.startsWith(`${prefix}.`) && !key.startsWith(`${SAVE_SNAPSHOT_KEY_PREFIX}.speedrun.`) && key !== sequenceKey)
     .sort((left, right) => right.localeCompare(left));
 }
 
-function parsePreview(raw: string): { summary: MenuSaveSummary; settings: Partial<GameSettings> | null; reason: string } | null {
+function parsePreview(raw: string, fallbackMode: SaveMode = "normal"): { summary: MenuSaveSummary; settings: Partial<GameSettings> | null; reason: string } | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!isRecord(parsed)) return null;
     const state = isRecord(parsed.state) ? parsed.state : parsed;
     if (!Array.isArray(state.entities) || !isRecord(state.research)) return null;
+    const envelopeMode = parsed.mode === "speedrun" ? "speedrun" : parsed.mode === "normal" ? "normal" : null;
+    const stateMode = state.mode === "speedrun" ? "speedrun" : state.mode === "normal" ? "normal" : null;
+    if (envelopeMode && stateMode && envelopeMode !== stateMode) return null;
+    const explicitMode = stateMode ?? envelopeMode;
+    if (fallbackMode === "speedrun" ? explicitMode !== "speedrun" : explicitMode === "speedrun") return null;
     const completedTechIds = Array.isArray(state.research.completedTechIds) ? state.research.completedTechIds : [];
     const dysonSphere = isRecord(state.dysonSphere) ? state.dysonSphere : null;
     return {
       summary: {
+        mode: explicitMode ?? fallbackMode,
         savedAt: nonNegativeInteger(parsed.savedAt),
         elapsedSeconds: nonNegativeInteger(state.elapsedSeconds),
         completedTechCount: completedTechIds.length,
@@ -102,42 +112,46 @@ function parsePreview(raw: string): { summary: MenuSaveSummary; settings: Partia
   }
 }
 
-function readPreview(key: string): ({ raw: string } & NonNullable<ReturnType<typeof parsePreview>>) | null {
+function readPreview(key: string, mode: SaveMode = "normal"): ({ raw: string } & NonNullable<ReturnType<typeof parsePreview>>) | null {
   try {
     const raw = getLocalSaveValue(key);
-    const preview = raw ? parsePreview(raw) : null;
+    const preview = raw ? parsePreview(raw, mode) : null;
     return raw && preview ? { raw, ...preview } : null;
   } catch {
     return null;
   }
 }
 
-export function getMenuContinueSave(): MenuContinueSave | null {
+export function getMenuContinueSave(mode: SaveMode = "normal"): MenuContinueSave | null {
   const candidates: Array<{ source: MenuSaveSource; key: string }> = [
-    { source: "primary", key: SAVE_KEY },
-    { source: "backup", key: SAVE_BACKUP_KEY },
-    ...snapshotKeys().map((key) => ({ source: "snapshot" as const, key })),
+    { source: "primary", key: mode === "normal" ? SAVE_KEY : `${SAVE_KEY}.${mode}` },
+    ...(mode === "speedrun" ? [{ source: "primary" as const, key: `${SAVE_KEY}.${mode}.emergency` }] : []),
+    { source: "backup", key: mode === "normal" ? SAVE_BACKUP_KEY : `${SAVE_BACKUP_KEY}.${mode}` },
+    ...snapshotKeys(mode).map((key) => ({ source: "snapshot" as const, key })),
   ];
   for (const candidate of candidates) {
-    const preview = readPreview(candidate.key);
+    const preview = readPreview(candidate.key, mode);
     if (preview) return { source: candidate.source, raw: preview.raw, summary: preview.summary, settings: preview.settings };
   }
   return null;
 }
 
-export function getMenuSlotSummaries(): MenuSlotSummary[] {
+export function getMenuSlotSummaries(mode: SaveMode = "normal"): MenuSlotSummary[] {
   return ([1, 2, 3] as const).flatMap((slotId) => {
-    const preview = readPreview(`${SAVE_SLOT_KEY_PREFIX}.${slotId}`);
+    const modeKey = mode === "normal" ? `${SAVE_SLOT_KEY_PREFIX}.${slotId}` : `${SAVE_SLOT_KEY_PREFIX}.${mode}.${slotId}`;
+    const preview = readPreview(modeKey, mode);
     return preview ? [{ slotId, ...preview.summary, valid: true as const }] : [];
   });
 }
 
-export function getMenuSnapshotSummaries(): MenuSnapshotSummary[] {
-  return snapshotKeys().flatMap((key) => {
-    const preview = readPreview(key);
+export function getMenuSnapshotSummaries(mode: SaveMode = "normal"): MenuSnapshotSummary[] {
+  return snapshotKeys(mode).flatMap((key) => {
+    const preview = readPreview(key, mode);
     if (!preview) return [];
     return [{
-      id: key.slice(`${SAVE_SNAPSHOT_KEY_PREFIX}.`.length),
+      id: key.includes(`${SAVE_SNAPSHOT_KEY_PREFIX}.${mode}.`) && mode !== "normal"
+        ? key.slice(`${SAVE_SNAPSHOT_KEY_PREFIX}.${mode}.`.length)
+        : key.slice(`${SAVE_SNAPSHOT_KEY_PREFIX}.`.length),
       ...preview.summary,
       reason: preview.reason,
       valid: true as const,

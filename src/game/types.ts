@@ -378,6 +378,8 @@ export type ResourceMode = "finite" | "infinite";
 export type DifficultyMode = "relaxed" | "standard" | "hard";
 export type RecipeFocusMode = "full" | "two-level";
 export type SimulationSpeed = 1 | 2 | 4;
+/** Persisted save ownership. Missing legacy values migrate to normal. */
+export type SaveMode = "normal" | "speedrun";
 /** Local save cadence. Zero explicitly disables the periodic timer. */
 export type AutosaveIntervalSeconds = 0 | 30 | 60 | 120 | 600 | 1800;
 export type FontScale = 0.8 | 1 | 1.25 | 1.5 | 2;
@@ -517,6 +519,20 @@ export interface TimeWarpState {
   pendingWallSeconds: number;
   requiredPowerKw: number;
   allocatedPowerKw: number;
+}
+
+/**
+ * Pure-idle accounting is deliberately separate from elapsedSeconds and the
+ * speedrun clock. All time values here are wall-clock seconds except the
+ * optional run start timestamp, which is an epoch millisecond anchor.
+ */
+export interface IdleSettlementState {
+  currentRunStartedAt: number | null;
+  currentRunElapsed: number;
+  lastSettledAt: number;
+  totalIdleTime: number;
+  currentRunProduction: Partial<Record<ItemId, number>>;
+  totalProduction: Partial<Record<ItemId, number>>;
 }
 
 export interface InfiniteResearchProgress {
@@ -1484,6 +1500,8 @@ export interface GameState {
     * blueprint construction reservations. v43 is retained so
     * old test fixtures can be inspected and rejected without unsafe casts. */
   version: 43 | 44 | 45 | 46;
+  /** Explicitly separates ordinary and ranked factory saves. */
+  mode: SaveMode;
   nextId: number;
   activePlanetId: PlanetId;
   entities: FactoryEntity[];
@@ -1517,6 +1535,7 @@ export interface GameState {
   productionHistory: ProductionHistorySample[];
   historyRecordedAt: number;
   elapsedSeconds: number;
+  idleSettlement: IdleSettlementState;
   /** Optional so ordinary and legacy saves remain byte-compatible in shape. */
   speedrun?: SpeedrunState;
   metrics: FactoryMetrics;

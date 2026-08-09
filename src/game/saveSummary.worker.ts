@@ -40,11 +40,18 @@ self.onmessage = (event: MessageEvent<SaveSummaryWorkerRequest>) => {
       try {
         const inspection = inspectSave(entry.raw, request.registry);
         const base = fallbackSummary(inspection);
+        const expectedMode = entry.key.includes(".slot.speedrun.") || entry.key.includes(".snapshot.speedrun.") ? "speedrun" : "normal";
+        const modeIssues = inspection.mode === expectedMode ? inspection.issues : [...inspection.issues, "存档模式与命名空间不一致"];
         const summary = entry.kind === "slot"
-          ? { slotId: entry.slotId!, ...base, integrity: inspection.integrity, valid: inspection.valid, issues: inspection.issues } satisfies SaveSlotSummary
+          ? { slotId: entry.slotId!, ...base, mode: expectedMode, integrity: inspection.integrity, valid: inspection.valid && inspection.mode === expectedMode, issues: modeIssues } satisfies SaveSlotSummary
           : {
-            id: entry.key.slice("dsp-idle-network.save.v1.snapshot.".length),
+            id: entry.key.includes(".snapshot.normal.")
+              ? entry.key.slice("dsp-idle-network.save.v1.snapshot.normal.".length)
+              : entry.key.includes(".snapshot.speedrun.")
+                ? entry.key.slice("dsp-idle-network.save.v1.snapshot.speedrun.".length)
+                : entry.key.slice("dsp-idle-network.save.v1.snapshot.".length),
             ...base,
+            mode: expectedMode,
             reason: (() => {
               try {
                 const parsed = JSON.parse(entry.raw) as { reason?: unknown };
@@ -54,8 +61,8 @@ self.onmessage = (event: MessageEvent<SaveSummaryWorkerRequest>) => {
               }
             })(),
             integrity: inspection.integrity,
-            valid: inspection.valid,
-            issues: inspection.issues,
+            valid: inspection.valid && inspection.mode === expectedMode,
+            issues: modeIssues,
           } satisfies SaveSnapshotSummary;
         return [{ key: entry.key, summary }];
       } catch {

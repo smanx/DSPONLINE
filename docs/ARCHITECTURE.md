@@ -345,3 +345,10 @@ API 表面：
 - `engine.ts` 包含多个领域，应按“模拟内核、实体命令、电力、物流、科研、戴森”分模块，但保持公共确定性入口。
 - `styles.css` 超过一万行，应按 shell、canvas、workspace、responsive 分层，并保留加载顺序测试。
 - 云存档正文已经拆为独立 SQLite 行，消除了主要写放大；账号、会话和聚合指标元数据仍集中在一个紧凑 `app_state`，规模继续增长后再按观测结果拆表。
+
+### 1.0.35 补充：纯挂机游标与模式隔离
+
+- `GameState.mode` 是 `normal | speedrun` 的持久模式标记；`SaveEnvelope.mode` 与状态字段必须一致。普通模式继续使用旧主键作为兼容入口，速通模式使用独立主档、备份、槽位和快照键；因此没有升级 envelope v2、GameState v46 或 SQLite layout v2。
+- `idleSettlement` 将 `currentRunStartedAt`、`currentRunElapsed`、`lastSettledAt`、`totalIdleTime`、`currentRunProduction` 和 `totalProduction` 分开保存。纯挂机恢复日志仍是未提交时间段的权威检查点，提交时只处理游标之后的区间。
+- 宏观纯挂机先消费 30 个模拟秒的精确校准检查点，再外推稳定尾段；有限矿脉、缓存或运输边界不满足守恒时，按普通模拟的 30 日单次上限分块完整重放，并把已精确处理的科研区间从宏观科研账本中扣除。跨界后重新校准合同，不能通过裁剪矿脉、跳过生产或增加虚构库存来通过校验。
+- 云端普通记录保留既有 v7 JSON 字段；速通记录使用模式限定的逻辑槽位并映射到 SQLite `cloud_save_payloads` 的复合 slot，不改变既有表结构。云 API 的 `mode` 参与账户摘要、上传、下载、历史、恢复和冲突检查。
