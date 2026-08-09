@@ -15,7 +15,7 @@
 
 硬边界：上海节点必须继续由上海本机提供前端与 `/api`，不得改成香港反代或域名跳转。上海为 HTTP，前端必须继续拒绝云账号密码传输。
 
-> 当前生产状态（2026-08-08）：香港、上海 Web/API 均运行 `1.0.34-4a7d51241424`，构建 ID 为 `1.0.34+4a7d51241424`；上海下载页运行 `download-site-1.0.34-4a7d51241424`。Web/API 回滚目标为 `1.0.33-2bd81de8d7f1`，下载页直接回滚目标为 `download-site-1.0.33-2bd81de8d7f1-r2`。两地数据库继续独立使用 schema v7 / SQLite layout v2。发布前备份、未激活目录复验、原子切换、启动观察、公网健康、完整安装包哈希、Range、缓存和浏览器证据见 [releases/1.0.34.md](./releases/1.0.34.md)。
+> 当前生产状态（2026-08-09）：香港、上海 Web/API 均运行 `1.0.34-4a7d51241424`，构建 ID 为 `1.0.34+4a7d51241424`；上海下载页运行 `download-site-1.0.34-4a7d51241424`。Web/API 回滚目标为 `1.0.33-2bd81de8d7f1`，下载页直接回滚目标为 `download-site-1.0.33-2bd81de8d7f1-r2`。两地数据库继续独立使用 schema v7 / SQLite layout v2。香港另有不切 `current` 的 1.0.35 Web-only 版本化测试入口；它复用 1.0.34 API，未改变稳定下载源，完整隔离和回滚证据见 [releases/1.0.35.md](./releases/1.0.35.md)。1.0.34 的发布前备份、未激活目录复验、原子切换、启动观察、公网健康、完整安装包哈希、Range、缓存和浏览器证据仍见 [releases/1.0.34.md](./releases/1.0.34.md)。
 
 > 1.0.35 仅为开发候选，不授权切换生产。候选服务启动后仍保持 schema v7 / SQLite layout v2，但新增内部账号安全、治理指标和排行榜复核状态。发布前必须在两地分别创建并验证 SQLite Backup API 备份；未激活目录先检查 80% 告警/90% 写保护、备份窗口状态、裁剪预览幂等、旧服务端与新 Web 的滚动兼容，再原子切换。不得跨节点复制、合并或裁剪数据库。
 
@@ -146,6 +146,19 @@ node /path/to/backup-sqlite.mjs \
 3. 原子切换 `current` 指向新目录。
 4. 执行 `nginx -t`，只有成功后才 reload。
 5. 验证根页面、service worker、manifest 和一个静态 chunk。
+
+#### 同域 Web-only 测试入口
+
+同一 HTTPS origin 下的根 Service Worker 会控制所有子路径，不能把普通生产 Web 归档直接挂到 `/canary/*` 后就宣称与正式 PWA 隔离。只有用户明确要求 Web-only 并存测试、候选 Web 与当前 API 保持滚动兼容、且不切换 Web/API/download `current` 时，才可采用版本化测试路径；至少满足：
+
+1. 使用不可变路径和全新目录，不建立会漂移的 `latest` 别名。
+2. 精确拒绝候选 Build ID 对根 `/sw.js` 的注册，不影响正式 Build ID 的 worker 更新。
+3. 测试导航和静态响应返回 `Cache-Control: no-store` 与 `Vary: *`；后者使既有根 worker 的 Cache API 写入失败，避免把测试 HTML 覆盖到正式 `/index.html`。
+4. 修改前备份活动 Nginx 配置；候选配置先独立语法检查，再原子替换、正式 `nginx -t` 和 reload。仅 Web 静态目录/Nginx 变更且完全不接触 API、数据库或 `current` 时，备份对应配置状态，不为形式门禁额外制造大型数据库 I/O；一旦涉及 API 切换、数据写入或迁移，SQLite 一致性备份仍是强制项。
+5. 公网 Chrome 必须先建立正式 worker，再访问测试入口，核对浏览器只保留正式 active worker、没有 waiting/installing worker、访问前后 `/index.html` 缓存逐字不变，并在断网后重新打开正式根站。
+6. 测试入口不得进入 Android/Windows stable feed 或正式下载页；若真机门禁被豁免，文档必须把豁免范围限制在 Web 测试入口。
+
+移除测试入口时只恢复已记录的 Nginx 配置备份并 reload；正式代码回滚、数据库恢复和下载指针切换都不属于该操作。当前 1.0.35 实例和浏览器证据见 [1.0.35 香港 Web 测试版发布记录](./releases/1.0.35.md)。
 
 上海客户端下载页是独立的静态发布目录，不依赖游戏 `assets/*` 或运行时 JavaScript。准备好 APK、Windows 安装包、`stable.json`、`latest.yml` 和 `release.json` 后，在发布目录生成页面并复验包清单：
 

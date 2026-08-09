@@ -22,7 +22,7 @@ These addresses are operational identifiers, not authorization. Never infer perm
 2. Identify the target node explicitly.
 3. Read the live Nginx, systemd, symlink, and service state before changing it.
 4. Run local tests and build from a traceable commit.
-5. Create a verified SQLite backup through the backup API.
+5. Create a verified SQLite backup through the backup API before any API switch, database write, migration or data-affecting operation. For a Web-only immutable directory plus Nginx-only canary that does not change `current`, API or data, back up and verify the exact Nginx state instead of creating unrelated large-database I/O.
 6. Record the current frontend/backend release targets for rollback.
 
 ## Never Do
@@ -53,6 +53,19 @@ Upload into a new release directory, validate it, atomically switch `current`, t
 
 For backend rollback, switch code back and preserve the current database. For frontend rollback, switch the web symlink only.
 
+### Same-Origin Web Canary
+
+A root-scoped production service worker controls every path on the same HTTPS origin. Do not expose an ordinary candidate archive under `/canary/*` unless the rollout explicitly preserves the production PWA contract:
+
+- Use a versioned immutable path and a new directory; do not switch Web/API/download `current` or create a drifting `latest` alias.
+- Reject only the candidate Build ID's root `/sw.js` registration while leaving the production worker URL available.
+- Return `Cache-Control: no-store` and `Vary: *` for canary responses. `Vary: *` makes Cache API writes reject, preventing the existing root worker from replacing cached production `/index.html` with a canary navigation response.
+- Back up the active Nginx configuration, syntax-test the candidate independently, install it atomically, run the active `nginx -t`, and reload only after success.
+- In a public Chrome context, first activate the production worker, then visit the canary. Require exactly the production active worker, no waiting/installing worker, byte-identical cached production HTML before and after, and a successful offline production-root reload.
+- Never publish unsigned diagnostic native packages or change stable feeds under a Web-only gate waiver.
+
+Removing this kind of canary means restoring the recorded Nginx configuration and reloading it. It does not require code-pointer rollback or database restore.
+
 ## Smoke Checks
 
 - Hong Kong root returns 200 over HTTPS.
@@ -67,5 +80,7 @@ For backend rollback, switch code back and preserve the current database. For fr
 ## Current Production Baseline
 
 Hong Kong and Shanghai Web/API run `1.0.34-4a7d51241424` with GameState v46, save envelope v2, cloud schema v7 and SQLite layout v2. Their direct code rollback is `1.0.33-2bd81de8d7f1`; Shanghai serves `download-site-1.0.34-4a7d51241424` with the 1.0.33-r2 download directory retained. Android 1.0.34 uses the approved long-term certificate; Windows 1.0.34 remains explicitly `NotSigned`. Production checks confirmed gzip and immutable hashed assets, no-cache entry points and feeds, exact full-download hashes, Range 206, active services/timers and `NRestarts=0`.
+
+Hong Kong also exposes the immutable Web-only canary `1.0.35+48c74b7100dc` under a versioned path without switching production pointers. It deliberately cannot install its own PWA, reuses the 1.0.34 API, and is isolated with candidate-worker rejection plus `Vary: *`. Read `docs/releases/1.0.35.md` before changing or removing it.
 
 The Hong Kong database is large enough that an online Backup API run can fail to converge under active writes. Use a low-traffic maintenance window, stop the health timer and service writes, allow at least three minutes for startup health, and verify `quick_check`, schema/layout, mode and hash before mutation. Current disk usage is approximately 69% in Hong Kong and 83% in Shanghai; keep current, direct rollback and valid backups. Read `docs/releases/1.0.34.md` for exact evidence and `docs/DEPLOYMENT_OPERATIONS.md` for the current procedure.
