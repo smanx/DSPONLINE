@@ -66,6 +66,20 @@ A root-scoped production service worker controls every path on the same HTTPS or
 
 Removing this kind of canary means restoring the recorded Nginx configuration and reloading it. It does not require code-pointer rollback or database restore.
 
+### Exceptional Historical Speedrun Recovery
+
+The standard offline recovery tool intentionally accepts only the latest primary cloud revision. Do not weaken that contract for convenience. A non-latest revision may be handled only when the user explicitly authorizes one identified player and displayed time, read-only inspection proves one exact account and one exact eligible revision, and all of these controls are present:
+
+- Resolve the target with a display-name hash and keep the display name, account ID, factory ID, payload and save hash out of public logs and Git.
+- Lock the revision, full payload SHA-256, envelope v2 integrity, GameState v46, official season/ruleset, eligible speedrun identity, empty content-pack set, authoritative cumulative progress, milestone seconds and existing submission count.
+- Treat a displayed `mm:ss` only as `Math.floor` UI evidence. Store the authoritative fractional milestone seconds; never round it down into a faster result.
+- Stop the service and health restart timer, create and verify a full SQLite Backup API snapshot, and preserve the exact historical revision in a separate mode-`0600` evidence database.
+- Derive a minimal matching guard from the verified full snapshot, run the exact transaction and an idempotent second pass on a guard copy, then require an optimistic-lock production transaction.
+- Permit only one verified speedrun submission plus one privacy-minimized audit action. Assert that cloud payload rows, current revision, target history and payload bytes do not change.
+- Restart services and timers, verify local/public health and all speedrun targets, and remove the one-off tool from the server. Do not roll back the full database merely to reverse a ranking entry after normal traffic resumes; use a new backed-up, stopped-service inverse transaction.
+
+Keep the sanitized evidence and rollback boundary in a release/operations record. The verified 2026-08-09 instance is documented in `docs/releases/1.0.34-speedrun-recovery-2026-08-09.md`.
+
 ## Smoke Checks
 
 - Hong Kong root returns 200 over HTTPS.

@@ -230,6 +230,8 @@ sudo systemctl restart dsp-idle-cloud.service
 
 账号处置先用 `GET /api/admin/account?accountId=...` 核对精确账号摘要，再向 `POST /api/admin/account/action` 提交 `CONFIRM:<action>:<accountId>`。彻底注销还要求最近 24 小时内的已验证本机备份时间戳；不得用显示名、邮箱模糊匹配或直接编辑 SQLite。速通历史恢复只能离线运行 `server/speedrun-recovery.mjs`：先 dry-run 核对最新主云 revision、元数据/正文哈希、v46 速通身份和百万白糖事实；apply 前停止服务，并提供匹配 `quick_check` 备份及 `RECOVER_SPEEDRUN:<account>:<revision>`。该工具只写内部提交和最小化审计，不改云存档正文；完成后重启并复核一次，重复执行必须无变化。
 
+标准恢复工具禁止从非最新历史修订写榜，该限制不得为方便运营而放宽。只有用户明确提供目标显示名和展示时间、单独授权历史恢复，且只读检查证明唯一账号与唯一修订时，才可走例外审计流程：使用显示名哈希而非明文锁定目标；同时锁定 revision、完整正文 SHA-256、工厂身份、赛季、规则、v46、内容包为空、累计事实、权威小数秒和当前成绩数量；先创建完整 SQLite Backup API 快照和目标修订独立 `0600` 证据库，再在完整备份派生 guard 上执行同一离线事务与幂等复跑。生产 apply 必须停服务、使用乐观锁，且只允许增加目标 submission 和最小审计。人工口述的 `mm:ss` 只用于核对客户端 `Math.floor` 展示，数据库必须保存历史里程碑的权威小数秒，不能人为取整成更快成绩。公开运维记录不得包含显示名、账号 ID、工厂 ID、正文或存档哈希；已验证实例见 [2026-08-09 香港历史速通恢复记录](./releases/1.0.34-speedrun-recovery-2026-08-09.md)。
+
 ### 银河活动配置
 
 活动配置保存在发布目录之外的 `/etc/dsp-idle-cloud/activity.json`，由 `/etc/dsp-idle-cloud/admin.env` 中的 `DSP_ACTIVITY_CONFIG_FILE` 指向。建议权限为 `0640 root:ubuntu`，配置文件不得放入 Web 静态目录。代码发布与活动启用必须分开：先在活动关闭状态完成备份、制品验证、原子切换和公网烟测，再安装经过 `server/activity.mjs` 规则校验的配置并重启服务。
