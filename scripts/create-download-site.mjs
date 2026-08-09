@@ -54,11 +54,12 @@ if (desktopSha !== String(desktopRecord.sha256).toLowerCase()) throw new Error("
 
 const humanSize = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 const escaped = (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
-const notes = [
-  `${version.version} 离线结算与高倍率挂机稳定性更新`,
-  "修复快速离线游标崩溃，增加生产历史曲线、施工库存删除与锁定配方拓扑保护",
-  "优化移动端统计滚动和 8x、12x、16x 纯挂机治理；GameState v46 与云协议保持不变",
-].join("；");
+const requestedSummary = args.get("summary")?.trim();
+if (requestedSummary && (requestedSummary.length < 8 || requestedSummary.length > 600)) {
+  throw new Error("--summary must contain between 8 and 600 characters");
+}
+const notes = requestedSummary
+  || `${version.version} 稳定版更新；完整改动与兼容性说明请查看应用内版本公告`;
 const values = {
   __VERSION__: version.version,
   __BUILD_ID__: version.buildId,

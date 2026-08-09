@@ -113,15 +113,18 @@ test("static download page generator validates manifests and renders current pac
         { name: installerName, sha256: sha256(installer), size: installer.byteLength }],
     }));
 
+    const releaseSummary = `${packageVersion} 测试摘要：普通与速通存档保持隔离`;
     await execFileAsync(process.execPath, [
       path.join(root, "scripts", "create-download-site.mjs"),
       "--release", temporary,
+      "--summary", releaseSummary,
     ], { cwd: root });
     const page = await readFile(path.join(temporary, "index.html"), "utf8");
     assert.match(page, new RegExp(`下载 Windows ${packageVersion}`));
     assert.match(page, new RegExp(`下载 Android ${packageVersion}`));
     assert.match(page, new RegExp(sha256(installer)));
     assert.match(page, new RegExp(sha256(apk)));
+    assert.match(page, new RegExp(releaseSummary));
     assert.match(page, /<link rel="icon" href="\/icon\.svg" type="image\/svg\+xml" \/>/);
     assert.deepEqual(
       await readFile(path.join(temporary, "icon.svg")),
