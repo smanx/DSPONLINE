@@ -2,7 +2,7 @@
 
 > Role: develop
 >
-> 状态：功能与自动化已完成，等待从干净源码提交生成不可变制品。本文件中的提交、清单和制品字段会在源码提交后补齐。
+> 状态：功能、自动化、干净源码提交和不可变诊断制品均已完成；等待 Release Agent 在隔离环境复验、补正式签名与真机门槛。本交接没有授权生产发布。
 >
 > 本交接续接既有 `1.0.35` 候选与香港 Web-only Canary。旧 Canary `1.0.35+48c74b7100dc` 不包含本补充，不能直接晋升为稳定版。
 
@@ -18,8 +18,8 @@
 | Compatibility | 不清缓存、不覆盖玩家存档；缺少模式的旧存档只迁移为普通；迁移前保留原始普通主档；GameState v46 / envelope v2 / cloud schema v7 / SQLite layout v2 保持不变 |
 | Target platforms | Web/PWA、Electron、Capacitor Android、Node/SQLite 云服务 |
 | Release target | `1.0.35` 集成候选；本交接不授权部署、切换 stable、修改下载页或写排行榜历史 |
-| Candidate source commit | `PENDING_SOURCE_COMMIT` |
-| Build ID | `PENDING_BUILD_ID` |
+| Candidate source commit | `1ea722641f4d413f61b98cc7da7b6d33b9216ccb` |
+| Build ID | `1.0.35+1ea722641f4d` |
 
 开发期间没有连接生产 VPS，没有修改香港或上海数据库，没有上传测试存档，没有修改任何排行榜历史成绩，也没有部署生产环境。
 
@@ -166,7 +166,7 @@ slot: "main" | 1 | 2 | 3
 - 普通存档拒绝速通榜；合格速通提交通过；MOD/无限/极限/实验标记拒绝。
 - 浏览器同时显示两模式、复制提示、源档不变、删除不跨模式。
 
-### 8.2 最终开发矩阵（源码提交前）
+### 8.2 最终开发矩阵（不可变源码提交后）
 
 | 命令 | 结果 |
 | --- | --- |
@@ -179,11 +179,19 @@ slot: "main" | 1 | 2 | 3
 | 根 `npm audit --omit=dev` | 0 vulnerabilities |
 | server `npm audit --omit=dev` | 0 vulnerabilities |
 | `npm run test:e2e` | 255 通过、11 条条件夹具跳过、0 失败（266 总数，756.2 秒）；`.last-run.json` 为 `passed` 且 `failedTests=[]` |
+| `npm run build` | 通过；1,887 模块；`dist/version.json` 为 `1.0.35+1ea722641f4d`；本地预览 `/`、`sw.js`、`manifest.webmanifest`、`version.json` 均为 200 |
+| `npm run desktop:pack` | 通过；EXE `FileVersion=1.0.35`、`ProductVersion=1.0.35.0`、Authenticode `NotSigned` |
+| 打包 EXE 启动 smoke | 通过；独立临时用户目录启动，首窗标题正确、`file://...app.asar/dist/index.html` 加载、React 根节点非空并正常关闭 |
+| `npm run android:release:unsigned` | 通过；Gradle 413 项任务完成，APK/AAB 为 `1.0.35 (1000035)`、targetSdk 36；均未签名 |
+| `npm run release:verify -- artifacts/release-manifests/1.0.35-1ea722641f4d.json` | 160/160 通过 |
+| Web/API 归档逐文件流式复验 | 160/160；0 缺失、0 多余、0 禁止 API 条目；聚合哈希一致 |
+| `npm run benchmark:logistics` | 7/7；10/50/100/128/300/500 站优化与旧路径状态哈希全部一致；中位耗时改善 68.1%–79.5% |
+| `npm run benchmark:v106-belts` | 1/1；64/256/1024/4096 lane 均保持单一 belt 对象，2,000 步约 0.78–0.86 秒 |
 | `git diff --check` | 通过 |
 
 Playwright 中 `127.0.0.1:65534` 的 API 连接拒绝是测试配置故意验证离线降级，不是生产 API 健康检查。本轮没有连接生产服务。
 
-构建、PWA、桌面和 Android 结果将在不可变源码提交后补入本文件。
+根目录与 `server/` 的生产依赖审计均为 0 漏洞；根完整依赖审计仍有 5 条仅开发/构建链警告（1 moderate、4 high），不能误写为生产运行时漏洞为 0 之外的“全依赖无警告”。Android 构建存在 Capacitor Filesystem 弃用提示和 Gradle 9 兼容性提示；本次构建与 lintVital 均成功，但应在后续依赖升级单独处理。
 
 ## 9. 性能影响评估
 
@@ -214,20 +222,21 @@ Playwright 中 `127.0.0.1:65534` 的 API 连接拒绝是测试配置故意验证
 - 保留 `migration-backup.v46`、普通/速通主档、备份、快照和云历史。任何数据库恢复都必须是另行授权的灾难恢复，并先备份当前数据库。
 - 排行榜历史成绩不属于代码回滚对象；本批未修改历史数据。
 
-## 12. 不可变制品（提交后补齐）
+## 12. 不可变制品
 
 | 项目 | 路径 / 值 |
 | --- | --- |
-| Source manifest | `PENDING_SOURCE_MANIFEST` |
-| Source file count | `PENDING_SOURCE_FILE_COUNT` |
-| Source aggregate SHA-256 | `PENDING_SOURCE_AGGREGATE_SHA256` |
-| Web archive | `PENDING_WEB_ARCHIVE` |
-| API archive | `PENDING_API_ARCHIVE` |
-| Desktop diagnostic | `PENDING_DESKTOP_ARTIFACT` |
-| Android unsigned APK/AAB | `PENDING_ANDROID_ARTIFACTS` |
-| Candidate artifact manifest | `PENDING_CANDIDATE_MANIFEST` |
+| Source manifest | [`artifacts/release-manifests/1.0.35-1ea722641f4d.json`](../artifacts/release-manifests/1.0.35-1ea722641f4d.json)，SHA-256 `85770cd33a4636657b03eab742b2a60a6db03dd24e825fac3ef4d131e49ee8f6` |
+| Source file count | 160 |
+| Source aggregate SHA-256 | `6e2926881909d5d4dbb115252140bce57972615aecee3cdf417a06d6cdc52b61` |
+| Web archive | `1.0.35-1ea722641f4d-web.tar.gz`；1,341,709 bytes；SHA-256 `2e5128f9a82e31fcb2af8723d0122767d09523b3128a51269b257670ada5fd97` |
+| API archive | `1.0.35-1ea722641f4d-api.tar.gz`；106,598 bytes；SHA-256 `51c6b49d56ca65764bde73683fcf1149057a6bb02537c98b0bb7ffb4688840db` |
+| Desktop diagnostic | `1.0.35-1ea722641f4d-windows-unpacked-diagnostic-unsigned.tar.gz`；150,085,728 bytes；SHA-256 `388d87947492feb27f2d54683afb5738538cda8a95865bbf3e798f82036a6adf`；仅诊断、未签名 |
+| Android unsigned APK | `1.0.35-1ea722641f4d-android-unsigned.apk`；4,797,391 bytes；SHA-256 `c51c147f7397950b12c4508c4bfff1b64323f3fb665be074770d5bf8ffac853b`；仅诊断 |
+| Android unsigned AAB | `1.0.35-1ea722641f4d-android-unsigned.aab`；4,612,682 bytes；SHA-256 `4ae6b9fbbeb052b05156c2fafd2e38062e0b211e55f2d7ca56b8e3f902ebc468`；仅诊断 |
+| Candidate artifact manifest | [`candidate-artifacts.json`](../artifacts/release-packages/1.0.35-1ea722641f4d/candidate-artifacts.json)，SHA-256 `d0b62a26eeddab698cb33f1fbaed16add47051df22e79c25c91dc85238d94d04` |
 
-所有归档必须排除 `node_modules`、数据库、`server/data`、备份、环境文件、玩家存档、PEM、keystore、密码和 token。未签名原生制品只能用于构建诊断。
+候选目录为 [`artifacts/release-packages/1.0.35-1ea722641f4d`](../artifacts/release-packages/1.0.35-1ea722641f4d)。Web/API 归档已按 source manifest 逐项复验；API 禁止内容扫描为 0，不含 `node_modules`、数据库、`server/data`、备份、环境文件、玩家存档、PEM、keystore、密码或 token。Windows EXE 为 225,485,824 bytes，包内 `app.asar` 为 40,292,684 bytes（SHA-256 `92a9aeff25dc0da365b1b8ed9553a543e75c7ba722ccff28e4f805f84a3d3c66`）。未签名原生制品只能用于构建诊断。
 
 ## 13. Release Agent 操作边界
 
@@ -239,3 +248,40 @@ Playwright 中 `127.0.0.1:65534` 的 API 连接拒绝是测试配置故意验证
 6. 用户未明确授权具体节点、下载页和 stable feed 前，不执行生产切换。
 7. 不运行排行榜历史恢复脚本；本需求的速通公平修复只影响未来提交校验。
 8. 回滚只切代码/下载指针，不恢复数据库、不删除玩家存档。
+
+源码回滚边界为父提交 `5fac95846edaec39bf3a2dfd3936e3f7bb9a3966`；不能以旧香港 Canary `48c74b7` 代替本候选做增量覆盖。
+
+## 14. 给 Release Agent 的直接交接
+
+```text
+Role: release
+
+验收 DSPidle2 1.0.35 纯挂机守恒与普通/速通存档隔离补充候选。先完整阅读：
+- .codex/skills/develop-dspidle/SKILL.md
+- docs/PROJECT_STATUS.md
+- docs/TESTING_RELEASE.md
+- docs/DEPLOYMENT_OPERATIONS.md
+- docs/NATIVE_APPLICATIONS.md
+- docs/RELEASE_HANDOFF_1.0.35.md
+- docs/RELEASE_HANDOFF_1.0.35-idle-mode-isolation.md
+
+不可变源码提交：1ea722641f4d413f61b98cc7da7b6d33b9216ccb
+Build ID：1.0.35+1ea722641f4d
+Source manifest：artifacts/release-manifests/1.0.35-1ea722641f4d.json
+候选制品目录：artifacts/release-packages/1.0.35-1ea722641f4d
+
+先复核 candidate-artifacts.json、160/160 source manifest、所有 SHA-256 和 API 禁止内容。
+Web/API 只可解包到未激活目录；未获用户明确授权，不得连接生产写入、切换 current/stable、
+更新下载页或部署。目录内 Windows/Android 文件均未签名，只能诊断，禁止进入 stable feed。
+
+在生产候选构建前必须完成：
+1. 香港/上海分别备份并验证各自 SQLite，不合并、不覆盖；
+2. 未激活 API + 数据库副本验证两模式同槽隔离、旧档迁移、revision 冲突和回滚；
+3. 两台不同档位 Android + 一台低配 Windows 的长时纯挂机、离线、后台/锁屏、内存/温度；
+4. 使用既有长期 Android 证书和正式 HTTPS 配置重建，验证 1.0.34→1.0.35 覆盖升级保留
+   普通/速通 IndexedDB、本地槽位和快照；不得新建或替换证书；
+5. 验证正式 Windows Authenticode、Android v2/v3 证书连续性及下载清单哈希。
+
+不得运行排行榜历史恢复脚本，不得改历史成绩。回滚只切版本目录/下载指针，
+不回滚数据库、不清缓存、不删新模式记录、不覆盖玩家存档。
+```

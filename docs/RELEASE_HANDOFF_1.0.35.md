@@ -1,6 +1,6 @@
 # DSPidle2 1.0.35 开发交接
 
-> **后续集成候选提示（2026-08-09）**：本文件主体记录 `48c74b7` 候选及其香港 Web-only Canary，均不包含后续“纯挂机守恒 + 普通/速通存档隔离”补充。未来稳定发布必须改用 [1.0.35 补充开发交接](./RELEASE_HANDOFF_1.0.35-idle-mode-isolation.md) 中的新源码提交、清单和制品；不得把旧 Canary 直接提升为稳定版。旧 Canary 与生产状态记录保留，不在开发交接中回写。
+> **后续集成候选提示（2026-08-09）**：本文件主体记录 `48c74b7` 候选及其香港 Web-only Canary，均不包含后续“纯挂机守恒 + 普通/速通存档隔离”补充。未来稳定发布必须改用 [1.0.35 补充开发交接](./RELEASE_HANDOFF_1.0.35-idle-mode-isolation.md) 中的不可变源码 `1ea722641f4d413f61b98cc7da7b6d33b9216ccb`、Build ID `1.0.35+1ea722641f4d`、清单和制品；不得把旧 Canary 直接提升为稳定版。旧 Canary 与生产状态记录保留，不在开发交接中回写。
 
 > Role: develop → release pending
 >
