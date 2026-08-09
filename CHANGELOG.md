@@ -4,6 +4,16 @@ All notable player-facing changes are recorded here. Game-state migration versio
 
 ## [Unreleased]
 
+## [1.0.36] - 2026-08-10
+
+- Added a device-level default for 1, 2, 4, or custom 1–4,096 parallel lanes on newly created belts, including direct, touch, and blueprint placement, with atomic construction-inventory checks.
+- Added fire ice to the existing thermal-power fuel path at 4.8 MJ per item without changing generator efficiency, fuel conservation, power statistics, offline settlement, or time-warp rules.
+- Added reconstructable per-planet belt, production, cache, and logistics indexes, deterministic dormant-route wake-up, and stable dispatch planning; authoritative save fields and exact simulation results remain unchanged.
+- Switched dense planets automatically to Canvas belt drawing plus spatial hit testing while retaining React Flow detail edges for active interactions and a safe full-edge fallback when Canvas is unavailable.
+- Kept GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 unchanged; no runtime performance index is serialized.
+
+## [1.0.35] - 2026-08-09
+
 - Separated normal and speedrun saves across primary saves, backups, manual slots, snapshots, imports/exports, cloud revisions, restore/delete operations, and leaderboard validation. Legacy saves without a mode remain ordinary saves; speedrun saves can only be copied one way into a new ordinary slot.
 - Made pure-idle wall-clock settlement cursor-based and idempotent, with separate current-run and historical time/production fields. Finite veins now deplete only for traceable output, including full caches, blocked belts, full quantum inventory, and long time-warp boundaries.
 - Preserved GameState v46, save envelope v2, cloud schema v7, and SQLite payload layout v2; added a one-time raw pre-migration backup for the legacy ordinary primary save.

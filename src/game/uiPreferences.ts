@@ -7,6 +7,7 @@ export const SHOW_ITEM_HOVER_PREFERENCE_KEY = "dsp-idle-network.ui.show-item-hov
 export const SETTINGS_CATEGORY_PREFERENCE_KEY = "dsp-idle-network.ui.settings-category.v1";
 export const CONNECTION_POINT_SIZE_PREFERENCE_KEY = "dsp-idle-network.ui.connection-point-size.v1";
 export const SPEEDRUN_PANEL_COLLAPSED_PREFERENCE_KEY = "dsp-idle-network.ui.speedrun-panel-collapsed.v1";
+export const DEFAULT_BELT_LANES_PREFERENCE_KEY = "dsp-idle-network.ui.default-belt-lanes.v1";
 
 export type SettingsCategory = "all" | "visual" | "performance" | "interaction" | "storage" | "statistics" | "other";
 export type ConnectionPointSize = "default" | "large25" | "large50";
@@ -109,6 +110,24 @@ export function writeConnectionPointSize(size: ConnectionPointSize): void {
   const storage = localStorageOrNull();
   if (!storage) return;
   try { storage.setItem(CONNECTION_POINT_SIZE_PREFERENCE_KEY, size); } catch { /* optional preference */ }
+}
+
+/** Device-only construction preference; validation is repeated at the domain boundary. */
+export function readDefaultBeltLanesPreference(): number {
+  const storage = localStorageOrNull();
+  if (!storage) return 1;
+  try {
+    const value = Number(storage.getItem(DEFAULT_BELT_LANES_PREFERENCE_KEY));
+    return Number.isSafeInteger(value) && value >= 1 && value <= 4_096 ? value : 1;
+  } catch {
+    return 1;
+  }
+}
+
+export function writeDefaultBeltLanesPreference(lanes: number): void {
+  const storage = localStorageOrNull();
+  if (!storage || !Number.isSafeInteger(lanes) || lanes < 1 || lanes > 4_096) return;
+  try { storage.setItem(DEFAULT_BELT_LANES_PREFERENCE_KEY, String(lanes)); } catch { /* optional preference */ }
 }
 
 /** The speedrun panel is expanded by default and is never part of a save. */

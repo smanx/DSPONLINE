@@ -6,6 +6,9 @@ if (!Number.isSafeInteger(requestedPort) || requestedPort < 1024 || requestedPor
 }
 const baseURL = `http://127.0.0.1:${requestedPort}`;
 const apiProxyTarget = process.env.DSP_E2E_API_PROXY_TARGET?.trim() || "http://127.0.0.1:65534";
+const webCommand = process.env.DSP_E2E_USE_PREVIEW === "1"
+  ? `npm run preview -- --port ${requestedPort}`
+  : `npm run dev -- --port ${requestedPort}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -22,7 +25,7 @@ export default defineConfig({
     { name: "chromium", use: { ...devices["Desktop Chrome"], channel: "chrome" } },
   ],
   webServer: {
-    command: `npm run dev -- --port ${requestedPort}`,
+    command: webCommand,
     url: baseURL,
     reuseExistingServer: false,
     timeout: 120_000,

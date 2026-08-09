@@ -1606,6 +1606,7 @@ export const TECHNOLOGY_LIST = Object.values(TECHNOLOGIES).filter((technology) =
 
 export const FUEL_ENERGY_MJ: Partial<Record<ItemId, number>> = {
   coal: 2.7,
+  fire_ice: 4.8,
   crude_oil: 4,
   energetic_graphite: 6.3,
   refined_oil: 4.4,

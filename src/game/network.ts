@@ -110,11 +110,12 @@ export function predictBeltConnection(
   targetId: string,
   itemId: ItemId,
   tier: BeltTier,
+  lanes = 1,
 ): ConnectionThroughputForecast | null {
   const source = state.entities.find((entity) => entity.id === sourceId);
   const target = state.entities.find((entity) => entity.id === targetId);
   if (!source || !target) return null;
-  const capacityPerSecond = getBeltCapacity({ tier, lanes: 1, stackSize: 1 } as BeltConnection);
+  const capacityPerSecond = getBeltCapacity({ tier, lanes: Math.max(1, Math.min(4_096, Math.floor(lanes))), stackSize: 1 } as BeltConnection);
   const rawSource = entityItemRatePerSecond(state, source, itemId, "output");
   const rawDemand = entityItemRatePerSecond(state, target, itemId, "input");
   const sourcePerSecond = rawSource === Number.POSITIVE_INFINITY ? capacityPerSecond : rawSource;

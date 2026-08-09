@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import { ITEMS } from "../game/content";
 import { buildCanvasLineBatchFromGeometry, type CanvasLineNodeGeometry } from "../game/canvasLineBatch";
+import { buildCanvasBeltHitIndex, findNearestCanvasBelt, type CanvasBeltHit } from "../game/canvasBeltSpatialIndex";
 import type { BeltConnection, CanvasViewport, PlanetId } from "../game/types";
 
 const CANVAS_PAN_OVERSCAN = 384;
@@ -9,28 +10,33 @@ interface CanvasBeltLayerProps {
   belts: readonly BeltConnection[];
   nodes: readonly CanvasLineNodeGeometry[];
   routeCenters: ReadonlyMap<string, number | undefined>;
+  topologyRevision: number;
   planetId: PlanetId;
   viewport: CanvasViewport;
   width: number;
   height: number;
   selectedBeltIds: ReadonlySet<string>;
-  detailedBeltIds?: ReadonlySet<string>;
   onUnavailable: () => void;
 }
 
 export interface CanvasBeltLayerHandle {
   setViewport: (viewport: CanvasViewport) => void;
+  findNearestBelt: (point: { x: number; y: number }, maximumDistance: number) => CanvasBeltHit | null;
 }
 
-/** Optional P5 renderer. DOM edges remain the hit-test layer underneath. */
-export const CanvasBeltLayer = forwardRef<CanvasBeltLayerHandle, CanvasBeltLayerProps>(function CanvasBeltLayer({ belts, nodes, routeCenters, planetId, viewport, width, height, selectedBeltIds, detailedBeltIds = selectedBeltIds, onUnavailable }, ref) {
+/** Dense renderer with its own spatial hit index; detailed React Flow edges are promoted by the parent on demand. */
+export const CanvasBeltLayer = forwardRef<CanvasBeltLayerHandle, CanvasBeltLayerProps>(function CanvasBeltLayer({ belts, nodes, routeCenters, topologyRevision, planetId, viewport, width, height, selectedBeltIds, onUnavailable }, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewportRef = useRef(viewport);
   const drawnViewportRef = useRef(viewport);
   const drawFrameRef = useRef<number | null>(null);
   const drawCountRef = useRef(0);
   const drawTotalMsRef = useRef(0);
-  const batch = useMemo(() => buildCanvasLineBatchFromGeometry(belts, planetId, nodes, routeCenters, detailedBeltIds), [belts, detailedBeltIds, nodes, planetId, routeCenters]);
+  // Runtime belt observations do not change geometry. Repack only on an
+  // explicit topology/geometry revision so hover and production refreshes do
+  // not rebuild a multi-thousand-line spatial index.
+  const batch = useMemo(() => buildCanvasLineBatchFromGeometry(belts, planetId, nodes, routeCenters), [nodes, planetId, routeCenters, topologyRevision]);
+  const hitIndex = useMemo(() => buildCanvasBeltHitIndex(batch), [batch]);
   const beltById = useMemo(() => new Map(belts.map((belt) => [belt.id, belt])), [belts]);
   const lineGroups = useMemo(() => {
     const groups = new Map<string, { color: string; selected: boolean; indexes: number[] }>();
@@ -140,7 +146,10 @@ export const CanvasBeltLayer = forwardRef<CanvasBeltLayerHandle, CanvasBeltLayer
     setViewport(nextViewport) {
       updateViewport(nextViewport);
     },
-  }), [updateViewport]);
+    findNearestBelt(point, maximumDistance) {
+      return findNearestCanvasBelt(hitIndex, point, maximumDistance);
+    },
+  }), [hitIndex, updateViewport]);
 
   useEffect(() => {
     updateViewport(viewport);

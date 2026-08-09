@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_BELT_LANES_PREFERENCE_KEY,
+  readDefaultBeltLanesPreference,
   readSettingsCategoryPreference,
   readConnectionPointSize,
   readShowRunLogPreference,
@@ -12,6 +14,7 @@ import {
   writeSpeedrunPanelCollapsedPreference,
   writeThemePreference,
   writeConnectionPointSize,
+  writeDefaultBeltLanesPreference,
 } from "./uiPreferences";
 
 function memoryStorage(): Storage {
@@ -38,18 +41,22 @@ describe("device-only UI preferences", () => {
       expect(readSettingsCategoryPreference()).toBe("all");
       expect(readConnectionPointSize()).toBe("default");
       expect(readSpeedrunPanelCollapsedPreference()).toBe(false);
+      expect(readDefaultBeltLanesPreference()).toBe(1);
       writeThemePreference("light");
       writeShowRunLogPreference(false);
       writeShowItemHoverPreference(false);
       writeSettingsCategoryPreference("statistics");
       writeConnectionPointSize("large50");
       writeSpeedrunPanelCollapsedPreference(true);
+      writeDefaultBeltLanesPreference(4_096);
       expect(readThemePreference()).toBe("light");
       expect(readShowRunLogPreference()).toBe(false);
       expect(readShowItemHoverPreference()).toBe(false);
       expect(readSettingsCategoryPreference()).toBe("statistics");
       expect(readConnectionPointSize()).toBe("large50");
       expect(readSpeedrunPanelCollapsedPreference()).toBe(true);
+      expect(readDefaultBeltLanesPreference()).toBe(4_096);
+      expect(storage.getItem(DEFAULT_BELT_LANES_PREFERENCE_KEY)).toBe("4096");
     } finally {
       Object.defineProperty(globalThis, "window", { configurable: true, value: original });
     }
@@ -63,6 +70,7 @@ describe("device-only UI preferences", () => {
     storage.setItem("dsp-idle-network.ui.settings-category.v1", "unknown");
     storage.setItem("dsp-idle-network.ui.connection-point-size.v1", "huge");
     storage.setItem("dsp-idle-network.ui.speedrun-panel-collapsed.v1", "maybe");
+    storage.setItem(DEFAULT_BELT_LANES_PREFERENCE_KEY, "4097");
     const original = globalThis.window;
     Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: storage, matchMedia: () => ({ matches: false }) } });
     try {
@@ -72,6 +80,7 @@ describe("device-only UI preferences", () => {
       expect(readSettingsCategoryPreference()).toBe("all");
       expect(readConnectionPointSize()).toBe("default");
       expect(readSpeedrunPanelCollapsedPreference()).toBe(false);
+      expect(readDefaultBeltLanesPreference()).toBe(1);
     } finally {
       Object.defineProperty(globalThis, "window", { configurable: true, value: original });
     }

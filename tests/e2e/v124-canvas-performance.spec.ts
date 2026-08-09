@@ -52,7 +52,7 @@ function seedDensePausedFactory() {
       paused: true,
     };
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-09-v1.0.35");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-10-v1.0.36");
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     window.localStorage.setItem("dsp-idle-network.endgame-extreme.v1", "true");
     window.localStorage.setItem("dsp-idle-network.endgame-extreme-ack.v1", "true");
@@ -98,8 +98,8 @@ test("extreme canvas uses true node LOD, batch lines and independent SVG fallbac
   });
   expect(batch.segments).toBeGreaterThan(100);
   expect(batch.coloredPixels).toBeGreaterThan(50);
-  expect(await page.locator(".react-flow__edge").count()).toBeGreaterThan(100);
-  expect(await page.locator(".factory-edge-visual-layer").count()).toBeLessThan(await page.locator(".react-flow__edge").count());
+  expect(await page.locator(".react-flow__edge").count()).toBeLessThan(20);
+  expect(batch.segments).toBeGreaterThan(await page.locator(".react-flow__edge").count());
 
   const firstNode = page.locator(".react-flow__node").first();
   await firstNode.click();

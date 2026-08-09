@@ -5,36 +5,36 @@ import { NATIVE_BACK_EVENT } from "../nativeApp";
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
-  id: "2026-08-09-v1.0.35",
-  date: "2026年8月9日",
-  version: "1.0.35",
-  title: "终局结算、云端安全与速通恢复更新",
-  summary: "1.0.35 为终局离线和纯挂机增加设备感知分级与内存预警，补齐大存档上传诊断、云数据库治理、匿名新设备登录提醒和排行榜复核；历史百万白糖里程碑可安全自愈，建筑堆叠快捷档扩展到 ±10000 与 ±100000。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+  id: "2026-08-10-v1.0.36",
+  date: "2026年8月10日",
+  version: "1.0.36",
+  title: "传送带、燃料与终局性能更新",
+  summary: "1.0.36 增加新建传送带默认并联数量与可燃冰火力发电支持，并以可重建运行时索引优化传送带、物流、生产缓存和高密度画布。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
   items: [
     {
-      id: "offline-device-budget",
-      title: "终局离线按存档与设备分级",
-      description: "结算前评估实体、线路、物流、缓存、流体、戴森和施工边界，并结合设备内存与核心数选择精确、快速或保守宏观路径；高内存风险会提前提示，取消仍保留原存档。",
+      id: "belt-lane-default",
+      title: "新建线路可预设并联数量",
+      description: "设置中可选择 1、2、4 或自定义 1～4096 条并联线路；桌面、触摸和蓝图新建线路按实际数量原子扣除施工托盘，既有线路和货物堆叠不变。",
     },
     {
-      id: "large-save-governance",
-      title: "大存档保存与上传可诊断",
-      description: "1、7、20、28 和 30 MiB 档位会给出明确体积提示；上传记录准备、压缩、网络、回退和取消阶段耗时，30 MiB 原始回退与 32 MiB 服务端展开边界保持不变。",
+      id: "fire-ice-fuel",
+      title: "火力发电站支持可燃冰",
+      description: "可燃冰按 4.8 MJ/个接入既有火电燃料、耗尽提示、供电和统计路径；煤、石墨、氢、氘与燃料棒规则不变。",
     },
     {
-      id: "cloud-security",
-      title: "云端治理与账号安全增强",
-      description: "后台增加 SQLite/WAL、修订增长、备份窗口、写队列和磁盘水位指标；新设备或匿名区域登录会提醒，管理员动作要求精确账号、二次确认并写入最小化审计。",
+      id: "active-belt-runtime",
+      title: "终局线路按运行状态调度",
+      description: "星球级线路、源端、目标端和物品索引复用稳定容量与路由计划；已证明休眠的线路只在库存、配方、供电或拓扑变化时唤醒，结算顺序与状态哈希保持一致。",
     },
     {
-      id: "speedrun-recovery",
-      title: "百万白糖里程碑可自愈",
-      description: "合法 v46 速通存档按累计生产事实补齐漏写里程碑；服务端使用当前有效计时保守验榜，并提供要求最新主云修订、匹配备份和停服确认的一次性恢复工具。",
+      id: "dense-canvas",
+      title: "高密度星球画布更轻量",
+      description: "普通线路由 Canvas 批量绘制并通过空间索引命中，React Flow 只保留选中、悬浮、寻线和生产相关细节；Canvas 不可用时自动回退完整线路。",
     },
     {
-      id: "stack-shortcuts",
-      title: "终局建筑堆叠快捷调整",
-      description: "桌面与移动检查器增加 ±10000、±100000，继续使用既有原子增减、施工件守恒和 1～100,000,000 上下限。",
+      id: "production-logistics-runtime",
+      title: "生产缓存与物流调度复用",
+      description: "配方静态量、矿脉列表、物流容量和稳定槽位排序改为运行时缓存；每座建筑缓存、量子库存、运输载荷和翘曲器仍独立守恒。",
     },
     {
       id: "save-compatibility",
@@ -45,11 +45,11 @@ export const CURRENT_RELEASE_NOTES = {
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "offline-device-budget": Gauge,
-  "large-save-governance": CloudUpload,
-  "cloud-security": Smartphone,
-  "speedrun-recovery": History,
-  "stack-shortcuts": Link2,
+  "belt-lane-default": Link2,
+  "fire-ice-fuel": CloudUpload,
+  "active-belt-runtime": Gauge,
+  "dense-canvas": Smartphone,
+  "production-logistics-runtime": History,
   "save-compatibility": Check,
 };
 
@@ -65,6 +65,18 @@ export interface ReleaseNotesRecord {
 /** Static, offline-readable history. Keep entries small; only one page is rendered. */
 export const RELEASE_NOTES_HISTORY: readonly ReleaseNotesRecord[] = [
   CURRENT_RELEASE_NOTES,
+  {
+    id: "2026-08-09-v1.0.35", date: "2026年8月9日", version: "1.0.35", title: "终局结算、云端安全与速通恢复更新",
+    summary: "1.0.35 为终局离线和纯挂机增加设备感知分级与内存预警，补齐大存档上传诊断、云数据库治理、匿名新设备登录提醒和排行榜复核；历史百万白糖里程碑可安全自愈，建筑堆叠快捷档扩展到 ±10000 与 ±100000。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+    items: [
+      { id: "offline-device-budget", title: "终局离线按存档与设备分级", description: "结算前评估实体、线路、物流、缓存、流体、戴森和施工边界，并结合设备内存与核心数选择精确、快速或保守宏观路径；高内存风险会提前提示，取消仍保留原存档。" },
+      { id: "large-save-governance", title: "大存档保存与上传可诊断", description: "1、7、20、28 和 30 MiB 档位会给出明确体积提示；上传记录准备、压缩、网络、回退和取消阶段耗时，30 MiB 原始回退与 32 MiB 服务端展开边界保持不变。" },
+      { id: "cloud-security", title: "云端治理与账号安全增强", description: "后台增加 SQLite/WAL、修订增长、备份窗口、写队列和磁盘水位指标；新设备或匿名区域登录会提醒，管理员动作要求精确账号、二次确认并写入最小化审计。" },
+      { id: "speedrun-recovery", title: "百万白糖里程碑可自愈", description: "合法 v46 速通存档按累计生产事实补齐漏写里程碑；服务端使用当前有效计时保守验榜，并提供要求最新主云修订、匹配备份和停服确认的一次性恢复工具。" },
+      { id: "stack-shortcuts", title: "终局建筑堆叠快捷调整", description: "桌面与移动检查器增加 ±10000、±100000，继续使用既有原子增减、施工件守恒和 1～100,000,000 上下限。" },
+      { id: "save-compatibility", title: "存档与在线协议保持兼容", description: "本批不升级 GameState、存档封装、云服务或 SQLite 版本；候选宏观状态必须序列化、重载和安全校验通过后才会写入主存档。" },
+    ],
+  },
   {
     id: "2026-08-08-v1.0.34", date: "2026年8月8日", version: "1.0.34", title: "云存档、纯挂机与排行榜可信度更新",
     summary: "1.0.34 修复历史唯一巨构堆叠和 Android 云上传，纯挂机停止复用已校准 Worker 并保留可恢复冻结边界；排行榜拆分实际结算吞吐、当前星球和全星区理论速率，同时增加拉线候选建筑高亮。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",

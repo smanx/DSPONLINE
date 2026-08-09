@@ -541,6 +541,7 @@ html[data-theme="light"] :is(
 
 html[data-theme="light"] :is(
   .settings-buffer-custom,
+  .settings-reset-inline,
   .production-refresh-options,
   .content-pack-actions button,
   .support-feedback-kind button,

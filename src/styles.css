@@ -18212,6 +18212,43 @@ select {
 .settings-belt-defaults .settings-segmented { grid-auto-columns: minmax(0, 1fr); }
 .settings-segmented button:disabled { opacity: .38; cursor: not-allowed; }
 
+.settings-belt-lanes {
+  display: grid;
+  grid-column: 2;
+  min-width: 0;
+  gap: 7px;
+  padding-bottom: 3px;
+}
+
+.settings-belt-lanes > label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.settings-belt-lanes > label strong { color: var(--text); font-size: 10px; font-weight: 600; }
+.settings-belt-lanes .settings-buffer-custom,
+.settings-belt-lanes .settings-buffer-error { grid-column: 1; margin-top: 0; }
+.settings-reset-inline {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 30px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  padding: 5px 9px;
+  font: inherit;
+  font-size: 9px;
+}
+.settings-reset-inline:not(:disabled):hover { border-color: var(--green); color: var(--green); }
+.settings-reset-inline:disabled { opacity: .42; cursor: not-allowed; }
+
 .settings-buffer-presets { grid-auto-columns: minmax(0, 1fr); }
 
 .settings-buffer-custom {
@@ -18426,6 +18463,9 @@ html[data-ui-font-scale="150"] .operations-settings .settings-belt-defaults > la
 html[data-ui-font-scale="200"] .operations-settings .settings-belt-defaults > label {
   grid-template-columns: minmax(112px, auto) minmax(0, 1fr);
 }
+
+html[data-ui-font-scale="150"] .operations-settings .settings-belt-lanes,
+html[data-ui-font-scale="200"] .operations-settings .settings-belt-lanes { grid-column: 1; }
 
 html[data-ui-font-scale="150"] .operations-settings .settings-segmented button,
 html[data-ui-font-scale="200"] .operations-settings .settings-segmented button {
@@ -19719,6 +19759,7 @@ html[data-ui-font-scale="200"] .operations-settings .setting-row > span {
 
   .settings-belt-defaults > label,
   .settings-belt-defaults > label + label,
+  .settings-belt-lanes,
   .settings-buffer-custom,
   .settings-buffer-error,
   .settings-production-refresh .production-refresh-options { grid-column: 1; }
@@ -19726,6 +19767,7 @@ html[data-ui-font-scale="200"] .operations-settings .setting-row > span {
   .settings-buffer-custom label { grid-template-columns: 1fr; gap: 4px; }
 
   .settings-segmented button,
+  .settings-reset-inline,
   .settings-buffer-custom input,
   .settings-buffer-custom > button,
   .production-refresh-options > button { min-height: 44px; height: auto; }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateBuildingBufferLimitInput, validateProliferatorBufferLimitInput } from "./settings";
+import { validateBuildingBufferLimitInput, validateDefaultBeltLanesInput, validateProliferatorBufferLimitInput } from "./settings";
 
 describe("building buffer limit input", () => {
   it.each([
@@ -35,5 +35,26 @@ describe("proliferator buffer limit input", () => {
 
   it.each(["", "0", "100001", "-1", "1.5", "1e3", "abc"])("rejects %s", (raw) => {
     expect(validateProliferatorBufferLimitInput(raw).ok).toBe(false);
+  });
+});
+
+describe("default belt lane input", () => {
+  it.each([["1", 1], ["2", 2], ["4", 4], ["128", 128], ["4096", 4_096]])(
+    "accepts %s",
+    (raw, expected) => expect(validateDefaultBeltLanesInput(raw)).toEqual({ ok: true, value: expected }),
+  );
+
+  it.each([
+    ["", "请输入"],
+    ["0", "不能低于"],
+    ["4097", "不能高于"],
+    ["-1", "不能为负数"],
+    ["1.5", "只接受整数"],
+    ["1e3", "不接受指数格式"],
+    ["四", "只能包含数字"],
+  ])("rejects %s with an explicit reason", (raw, reason) => {
+    const result = validateDefaultBeltLanesInput(raw);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain(reason);
   });
 });
