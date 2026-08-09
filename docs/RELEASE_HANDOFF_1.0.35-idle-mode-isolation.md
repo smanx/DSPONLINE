@@ -1,8 +1,10 @@
 # DSPidle2 1.0.35 集成补充开发交接
 
-> Role: develop
+> **最终 stable 状态（2026-08-09）**：本交接的功能后续合并到 clean source `080844f55852995341a5f251d8f91bf090b9403f`，Build ID `1.0.35+080844f55852`。Release Agent 使用既有 Android 长期证书重建正式原生包，并在用户只豁免该候选物理真机门禁、明确授权香港/上海/下载页后完成发布。本文后续“等待”“未授权”和旧 `1ea7226` 诊断制品描述保留为开发交接时的历史条件；最终值见 [1.0.35 正式发布记录](./releases/1.0.35.md)。
+
+> Role: develop → release complete
 >
-> 状态：功能、自动化、干净源码提交和不可变诊断制品均已完成；等待 Release Agent 在隔离环境复验、补正式签名与真机门槛。本交接没有授权生产发布。
+> 状态：开发交接已由 Release Agent 完成；物理真机门槛由用户只对精确 stable 候选明确豁免，不能沿用到后续版本。
 >
 > 本交接续接既有 `1.0.35` 候选与香港 Web-only Canary。旧 Canary `1.0.35+48c74b7100dc` 不包含本补充，不能直接晋升为稳定版。
 
@@ -17,9 +19,9 @@
 | Acceptance | 同一区间只结算一次；当前运行与历史累计分离；矿脉扣除等于可追踪产出；满缓存不丢物；两模式本地、云端、导入导出、删除和排行榜完全隔离 |
 | Compatibility | 不清缓存、不覆盖玩家存档；缺少模式的旧存档只迁移为普通；迁移前保留原始普通主档；GameState v46 / envelope v2 / cloud schema v7 / SQLite layout v2 保持不变 |
 | Target platforms | Web/PWA、Electron、Capacitor Android、Node/SQLite 云服务 |
-| Release target | `1.0.35` 集成候选；本交接不授权部署、切换 stable、修改下载页或写排行榜历史 |
-| Candidate source commit | `1ea722641f4d413f61b98cc7da7b6d33b9216ccb` |
-| Build ID | `1.0.35+1ea722641f4d` |
+| Release target | `1.0.35` stable（已发布；历史成绩恢复仍不属于自动发布） |
+| Candidate source commit | `080844f55852995341a5f251d8f91bf090b9403f` |
+| Build ID | `1.0.35+080844f55852` |
 
 开发期间没有连接生产 VPS，没有修改香港或上海数据库，没有上传测试存档，没有修改任何排行榜历史成绩，也没有部署生产环境。
 
@@ -285,3 +287,11 @@ Web/API 只可解包到未激活目录；未获用户明确授权，不得连接
 不得运行排行榜历史恢复脚本，不得改历史成绩。回滚只切版本目录/下载指针，
 不回滚数据库、不清缓存、不删新模式记录、不覆盖玩家存档。
 ```
+
+## 15. Release Agent 最终收口
+
+- Source manifest：`artifacts/release-manifests/1.0.35-080844f55852.json`，160/160，聚合 SHA-256 `1179f0cfd561628d7779ab407a7bf0c65dba3b7094133fe5fc9d9d65821f5fe7`。
+- 正式 APK：4,861,729 字节，SHA-256 `56598fecf674c05141535a4fa99b868c16b4c6ccc6acdf7358a6f305a3c8e88a`，v2/v3 与批准证书连续；AAB 只归档。
+- 正式 Windows setup：112,440,871 字节，SHA-256 `ea4ceb1625b69347a0207dac86d10cb0314b63738f84d5d3379481d55a67d322`，Authenticode `NotSigned`。
+- 香港、上海 Web/API 与上海下载页均为 `1.0.35-080844f55852`；三处直接回滚均为 1.0.34。
+- 两地 Backup API、生产依赖、70/2 服务测试、备份副本隔离启动、完整公网安装包哈希、Range/cache、历史资源和 5 场 Chrome smoke 均通过；完整脱敏证据见正式发布记录。

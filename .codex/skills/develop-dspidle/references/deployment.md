@@ -7,7 +7,7 @@ Read `docs/DEPLOYMENT_OPERATIONS.md` in full before any server mutation.
 The hostnames below are sanitized repository placeholders. Resolve real deployment targets only from the secured operations environment.
 
 - Hong Kong production: `https://dsponline.cn`, host `hk-origin.example.invalid`.
-- Shanghai legacy: `https://shanghai-node.example.invalid`, independently serves its local frontend and local API.
+- Shanghai legacy: `http://shanghai-node.example.invalid`, independently serves its local frontend and local API; public HTTP must not expose account-password input.
 - Frontend root: `/var/www/dsp-idle/current`.
 - Backend root: `/opt/dsp-idle-cloud/current`.
 - Production database: `/var/lib/dsp-idle-cloud/cloud.sqlite`.
@@ -93,8 +93,8 @@ Keep the sanitized evidence and rollback boundary in a release/operations record
 
 ## Current Production Baseline
 
-Hong Kong and Shanghai Web/API run `1.0.34-4a7d51241424` with GameState v46, save envelope v2, cloud schema v7 and SQLite layout v2. Their direct code rollback is `1.0.33-2bd81de8d7f1`; Shanghai serves `download-site-1.0.34-4a7d51241424` with the 1.0.33-r2 download directory retained. Android 1.0.34 uses the approved long-term certificate; Windows 1.0.34 remains explicitly `NotSigned`. Production checks confirmed gzip and immutable hashed assets, no-cache entry points and feeds, exact full-download hashes, Range 206, active services/timers and `NRestarts=0`.
+Hong Kong and Shanghai Web/API run `1.0.35-080844f55852` with GameState v46, save envelope v2, cloud schema v7 and SQLite layout v2. Their direct code rollback is `1.0.34-4a7d51241424`; Shanghai serves `download-site-1.0.35-080844f55852` with the 1.0.34 download directory retained. Android 1.0.35 uses the approved long-term certificate; Windows 1.0.35 remains explicitly `NotSigned`. Production checks confirmed gzip and immutable current/rollback assets, no-cache entry points and feeds, exact full-download hashes, Range 206, five Chrome smoke scenarios, active services/timers and `NRestarts=0`.
 
-Hong Kong also exposes the immutable Web-only canary `1.0.35+48c74b7100dc` under a versioned path without switching production pointers. It deliberately cannot install its own PWA, reuses the 1.0.34 API, and is isolated with candidate-worker rejection plus `Vary: *`. Read `docs/releases/1.0.35.md` before changing or removing it.
+The former Hong Kong Web-only canary `1.0.35+48c74b7100dc` is no longer routed. The pre-canary Nginx state was restored before the formal stable switch; the immutable static directory is retained only for audit. Do not re-enable it or its candidate-worker exception as part of a routine rollback.
 
-The Hong Kong database is large enough that an online Backup API run can fail to converge under active writes. Use a low-traffic maintenance window, stop the health timer and service writes, allow at least three minutes for startup health, and verify `quick_check`, schema/layout, mode and hash before mutation. Current disk usage is approximately 69% in Hong Kong and 83% in Shanghai; keep current, direct rollback and valid backups. Read `docs/releases/1.0.34.md` for exact evidence and `docs/DEPLOYMENT_OPERATIONS.md` for the current procedure.
+The Hong Kong database is large enough that an online Backup API run can fail to converge under active writes. Use a low-traffic maintenance window, stop the health timer and service writes, allow at least three minutes for startup health, and verify `quick_check`, schema/layout, mode and hash before mutation. A service restart also triggers an immediate large COS snapshot under the current no-window configuration; keep health timers paused until its state is `ready`, or configure and validate an explicit low-traffic backup window. Current disk usage is approximately 76% in Hong Kong and 83% in Shanghai; keep current, direct rollback and valid backups. Read `docs/releases/1.0.35.md` for exact evidence and `docs/DEPLOYMENT_OPERATIONS.md` for the current procedure.

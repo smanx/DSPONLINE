@@ -1,12 +1,14 @@
 # DSPidle2 1.0.35 开发交接
 
+> **最终 stable 状态（2026-08-09）**：Release Agent 后续以 clean source `080844f55852995341a5f251d8f91bf090b9403f` / Build ID `1.0.35+080844f55852` 完成正式签名、两地备份、未激活目录、生产切换、上海下载页与公网验收。用户只对该精确候选豁免物理真机门禁；其余门禁通过。旧 `48c74b7` Canary 路由已移除。本文主体保留开发阶段历史，最终制品、风险和回滚以 [1.0.35 正式发布记录](./releases/1.0.35.md) 为准。
+
 > **后续集成候选提示（2026-08-09）**：本文件主体记录 `48c74b7` 候选及其香港 Web-only Canary，均不包含后续“纯挂机守恒 + 普通/速通存档隔离”补充。未来稳定发布必须改用 [1.0.35 补充开发交接](./RELEASE_HANDOFF_1.0.35-idle-mode-isolation.md) 中的不可变源码 `1ea722641f4d413f61b98cc7da7b6d33b9216ccb`、Build ID `1.0.35+1ea722641f4d`、清单和制品；不得把旧 Canary 直接提升为稳定版。旧 Canary 与生产状态记录保留，不在开发交接中回写。
 
 > Role: develop → release pending
 >
 > 交接日期：2026-08-09
 >
-> 当前生产基线：`1.0.34+4a7d51241424 / GameState v46 / envelope v2 / cloud schema v7 / SQLite layout v2`
+> 开发交接时生产基线：`1.0.34+4a7d51241424 / GameState v46 / envelope v2 / cloud schema v7 / SQLite layout v2`
 >
 > 1.0.35 候选源码：`48c74b7100dc41cea06a076255036f9b5610cda9`
 >
@@ -226,7 +228,7 @@ Role: release
 - docs/NATIVE_APPLICATIONS.md
 - docs/RELEASE_HANDOFF_1.0.35.md
 
-当前生产仍为 1.0.34+4a7d51241424。候选源码提交：
+开发交接当时生产仍为 1.0.34+4a7d51241424。候选源码提交：
 48c74b7100dc41cea06a076255036f9b5610cda9
 候选 Build ID：1.0.35+48c74b7100dc
 
@@ -256,7 +258,7 @@ API 仍使用 cloud schema v7 / SQLite layout v2，但新增内部账号安全�
 server/speedrun-recovery.mjs 的 dry-run→匹配备份→停服→精确确认→apply 流程执行；
 不得凭截图或显示名直接写榜。
 
-只有用户明确授权目标节点和下载页后才原子发布。回滚只切回 1.0.34 代码/下载指针，
+用户随后已明确授权精确候选、香港、上海和下载页，Release Agent 已完成原子发布。回滚只切回 1.0.34 代码/下载指针，
 不恢复旧数据库。最终报告备份、旧/新目录、原子切换、公网健康、安装包签名与哈希、
 下载 Range/cache、回滚指针和未验证风险；不得输出 PEM、密码、token、证书私钥或存档正文。
 ```
