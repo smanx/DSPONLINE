@@ -10,6 +10,8 @@
 
 > 1.0.35 已使用既有 Android 长期证书生成 stable APK/AAB，并生成 Windows 安装程序；APK 与 Windows setup 已进入上海公网更新清单。用户只豁免本候选的物理真机门禁，模拟器覆盖升级与签名连续性不能描述为真机长时通过。
 
+> `1.0.36` 当前仅有来自 clean source `e0ad49062fa329040b379375b595ba74b7d23daf` 的发布前诊断制品。Windows unpacked 包内 Build ID 为 `1.0.36+e0ad49062fa3`，隔离 profile 启动 10 秒正常，但 Authenticode 为 `NotSigned`；Android APK/AAB 为 `1.0.36 / 1000036`、`cn.dsponline.network`，Release 编译与 lintVital 通过，但两个制品都未签名，本机也没有连接真机。它们禁止写入 stable feed 或交付玩家。Release Agent 必须使用既有长期 Android 证书重建并验证 v2/v3、证书连续性和 `1.0.35 → 1.0.36` 覆盖升级；不得创建新证书。候选哈希见 [1.0.36 发布交接](./RELEASE_HANDOFF_1.0.36.md)。
+
 ## 1. 架构边界
 
 - Windows 使用 Electron，加载本地 `dist/`，启用 context isolation、sandbox、单实例和受限 IPC。
