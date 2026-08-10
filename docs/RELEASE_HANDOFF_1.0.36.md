@@ -1,11 +1,12 @@
 # DSPidle2 1.0.36 发布 Agent 交接
 
-> Role：develop → release pending
+> Role：develop → release complete
 > 交接日期：2026-08-10
-> 当前生产：`1.0.35+080844f55852`
+> 当前生产：`1.0.36+e0ad49062fa3`
 > 候选源码：`e0ad49062fa329040b379375b595ba74b7d23daf`
 > 候选 Build ID：`1.0.36+e0ad49062fa3`
 > 候选分支：`codex/1.0.36-belt-endgame-performance`
+> 正式发布完成：2026-08-10；直接回滚为 `1.0.35-080844f55852`
 
 ## 1. 交接结论
 
@@ -158,3 +159,11 @@ GameState v46、envelope v2、cloud schema v7、SQLite layout v2 不变。
 不要修改排行榜历史；速通人工恢复不是发布步骤。回滚只切回 1.0.35 代码和
 下载指针，不恢复数据库、不删除玩家缓存、不重写存档。
 ```
+
+## 11. Release Agent 收口
+
+用户明确豁免 `1.0.36-e0ad49062fa3` 的 Android 真机、低配 Windows 与覆盖升级门禁，接受本交接记录的 12.19 秒和约 407MB 残余风险，并授权香港、上海和下载页发布。该豁免没有被记录为测试通过，也不适用于后续版本。
+
+Release Agent 使用既有长期 Android 证书从同一 clean source 重建正式 APK/AAB，生成 Windows `NotSigned` setup、stable feeds 和下载页；两地分别完成 Backup API、未激活目录、70/2 服务测试、备份副本隔离启动、原子切换和稳定观察。香港/上海 Web/API 与上海下载页均为 `1.0.36-e0ad49062fa3`，直接回滚均为完整 1.0.35。
+
+香港上一稳定版 Web 已更新为不可变 `/canary/1.0.35-080844f55852/`，`/canary/previous/` 302 指向它；当前 1.0.36 worker、Cache Storage 和离线根页在访问回退入口前后保持。完整制品哈希、备份、在线证据、独立 Nginx 回滚指针和残余风险见 [1.0.36 正式发布记录](./releases/1.0.36.md)。

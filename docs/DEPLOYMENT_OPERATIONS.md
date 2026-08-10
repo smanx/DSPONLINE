@@ -15,9 +15,9 @@
 
 硬边界：上海节点必须继续由上海本机提供前端与 `/api`，不得改成香港反代或域名跳转。上海为 HTTP，前端必须继续拒绝云账号密码传输。
 
-> 当前生产状态（2026-08-09）：香港、上海 Web/API 均运行 `1.0.35-080844f55852`，构建 ID 为 `1.0.35+080844f55852`；上海下载页运行 `download-site-1.0.35-080844f55852`。Web/API 和下载页直接回滚均为 1.0.34。两地数据库继续独立使用 schema v7 / SQLite layout v2。香港 `/canary/previous/` 现在 302 到不可变上一稳定版 `/canary/1.0.34-4a7d51241424/`；旧 1.0.35 测试地址只作兼容重定向，不再暴露候选目录。发布前备份、未激活目录复验、原子切换、启动观察、公网完整哈希、Range、缓存、五场 stable Chrome 证据和回退入口证据见 [releases/1.0.35.md](./releases/1.0.35.md)。
+> 当前生产状态（2026-08-10）：香港、上海 Web/API 均运行 `1.0.36-e0ad49062fa3`，构建 ID 为 `1.0.36+e0ad49062fa3`；上海下载页运行 `download-site-1.0.36-e0ad49062fa3`。Web/API 和下载页直接回滚均为完整 1.0.35。两地数据库继续独立使用 schema v7 / SQLite layout v2。香港 `/canary/previous/` 现在 302 到不可变上一稳定版 `/canary/1.0.35-080844f55852/`；旧测试地址只作兼容重定向，已退役 1.0.34 公网路径返回 `410`。发布前备份、未激活目录复验、原子切换、启动观察、公网完整哈希、Range、缓存、五场 stable Chrome 和回退 PWA 隔离证据见 [releases/1.0.36.md](./releases/1.0.36.md)。
 
-> 1.0.35 新增内部账号安全、治理指标和排行榜复核状态，但没有升级 schema/layout。两地发布前备份均通过 SQLite Backup API、`quick_check` 和哈希验证；未激活 API 已在各自备份副本上隔离启动。不得跨节点复制、合并或裁剪数据库。用户只豁免精确候选的物理真机 stable 门禁，不豁免后续版本或其他发布门禁。
+> 1.0.36 没有升级 schema/layout 或修改排行榜协议。两地发布前备份均通过 SQLite Backup API、`quick_check` 和哈希验证；未激活 API 已在各自备份副本上隔离启动。不得跨节点复制、合并或裁剪数据库。用户只豁免精确候选 `1.0.36-e0ad49062fa3` 的 Android 真机、低配 Windows 和覆盖升级门禁，并接受交接中的性能残余风险；不豁免后续版本、备份、签名、健康或回滚门禁。
 
 ## 2. 服务器布局
 
@@ -36,7 +36,7 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-香港、上海 Web/API 已切换到 `1.0.35-080844f55852`，上海下载站切换到不可变目录 `download-site-1.0.35-080844f55852`；构建 `1.0.35+080844f55852` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍 302 到上海下载域名。香港另以 Web-only 方式暴露不可变回滚目录 `web-1.0.34-4a7d51241424`，稳定入口为 `/canary/previous/`，继续使用当前 1.0.35 API。Android SHA-256 为 `56598fecf674c05141535a4fa99b868c16b4c6ccc6acdf7358a6f305a3c8e88a`，Windows SHA-256 为 `ea4ceb1625b69347a0207dac86d10cb0314b63738f84d5d3379481d55a67d322`（Authenticode `NotSigned`），blockmap SHA-256 为 `1641d9c7bdf0901f2b0923715e5a50fac931a0adfc0de29283c2f670fc4d2cdf`。香港发布前备份为 2,776,186,880 字节、上海为 200,704 字节，均为 `0600` 并通过 `quick_check`、完整性和 schema v7/layout v2 验证；Web/API 与下载页回滚目标均为 1.0.34。公网健康、9 文件完整下载哈希、Range、缓存头、当前/历史 hashed asset、CORS Origin 和五场浏览器 smoke 均已复验。两地服务 active、`NRestarts=0`；发布收口磁盘约为香港 76%、上海 83%，不得删除当前版、回滚版或未证明已异地归档的有效备份。完整证据见 [releases/1.0.35.md](./releases/1.0.35.md)。
+香港、上海 Web/API 已切换到 `1.0.36-e0ad49062fa3`，上海下载站切换到不可变目录 `download-site-1.0.36-e0ad49062fa3`；构建 `1.0.36+e0ad49062fa3` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍 302 到上海下载域名。香港另以 Web-only 方式暴露直接 Web 回滚目录 `web-1.0.35-080844f55852`，稳定入口为 `/canary/previous/`，继续使用当前 1.0.36 API。Android SHA-256 为 `38d5c72e814782303ba884cca96ef0219a9b8d67bb1906f99d18de9a2c467a6b`，Windows SHA-256 为 `6cf0cf5dbec5729f2acdd35bf17482380ee27b6edf2a0d10efb6540947486d0f`（Authenticode `NotSigned`），blockmap SHA-256 为 `eef71d2565349d227ec1add5bc6e485f5c468b665c06b0206499c48dcfeb105c`。香港发布前备份为 2,959,642,624 字节、上海为 208,896 字节，均为 `0600` 并通过 `quick_check`、完整性和 schema v7/layout v2 验证；Web/API 与下载页回滚目标均为 1.0.35。公网健康、9 文件完整下载哈希、Range、缓存头、当前/上一版 hashed asset、CORS Origin、五场浏览器 smoke 和回退 PWA 隔离均已复验。两地服务 active、`NRestarts=0`；发布收口磁盘约为香港 85%、上海 83%，不得删除当前版、回滚版或未证明已异地归档的有效备份。完整证据见 [releases/1.0.36.md](./releases/1.0.36.md)。
 
 `1.0.13` 两节点发布都只切换 Web/API 代码，未执行数据库迁移。香港发布前后 Backup API 快照均通过 `quick_check`；前备份为 887,271,424 字节，后备份为 888,795,136 字节。上海发布前后备份均为 122,880 字节并通过 `quick_check`；发布前 SHA-256 为 `a8af0eec173e6f8aad36af09b7e6d8c56b2b00014d76efd53124ddfb81b7e6a7`，发布后为 `8cb0c7bbbb270ac804b7c16909fc1b4274d0b2aed34a4ae7f379f333596cd737`。上海 0 个账号、0 个主云档、24 条玩家记录和 23 条错误记录均未减少，服务 `NRestarts=0`。受限备份传输账号仍只用于异地备份，代码发布使用独立的 `ubuntu` 授权。
 
@@ -158,7 +158,7 @@ node /path/to/backup-sqlite.mjs \
 5. 公网 Chrome 必须先建立正式 worker，再访问测试入口，核对浏览器只保留正式 active worker、没有 waiting/installing worker、访问前后 `/index.html` 缓存逐字不变，并在断网后重新打开正式根站。
 6. 测试入口不得进入 Android/Windows stable feed 或正式下载页；若真机门禁被豁免，文档必须把豁免范围限制在 Web 测试入口。
 
-移除测试入口时只恢复已记录的 Nginx 配置备份并 reload；正式代码回滚、数据库恢复和下载指针切换都不属于该操作。当前 1.0.35 实例和浏览器证据见 [1.0.35 香港 Web 测试版发布记录](./releases/1.0.35.md)。
+移除测试入口时只恢复已记录的 Nginx 配置备份并 reload；正式代码回滚、数据库恢复和下载指针切换都不属于该操作。历史 1.0.35 测试实例和浏览器证据见 [1.0.35 香港 Web 测试版发布记录](./releases/1.0.35.md)。
 
 正式 stable 发布及观察窗口通过后，香港还必须把刚被替换的 Web 版保留为上一稳定版回退入口。该机制只处理“新 Web 代码回归而 Nginx 与当前 API 仍正常”的情况，不能承诺覆盖 API、数据库、服务器或网络故障：
 
@@ -358,8 +358,8 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港与上海 `1.0.34-4a7d51241424` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html`、`version.json` 与 `sw.js` 保持 no-cache；1.0.33 入口资源已进入共享 hashed-asset 回退区。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港与上海 `1.0.36-e0ad49062fa3` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html`、`version.json` 与 `sw.js` 保持 no-cache；1.0.35 入口资源已进入共享 hashed-asset 回退区。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 香港 layout v1 的 136.8 MB `app_state` 曾使每分钟持久化把 Node 推到约 1.6 GB并阻塞健康接口。layout v2 上线后 `app_state` 约 2.55 MB，云存档正文按修订独立写入；240 秒生产观察中健康接口最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB。监控若再次出现内存或延迟上升，应分别检查 `app_state` 大小、`cloud_save_payloads` 行数与历史元数据唯一键数，不能只调大健康超时。
 
-Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.35 发布前，香港在停止健康定时器与云服务写入的短维护窗口完成 2,776,186,880 字节一致性备份；启动后的既有“立即备份”配置又触发一次 COS `auto` 快照和短时本机 health 超时，快照最终收敛为 `ready`，服务未重启。后续大库发布必须继续选择低流量窗口，停止健康定时器、避免并发备份，并为服务重启保留至少 3 分钟 health 等待；还应评估显式 `DSP_CLOUD_BACKUP_WINDOW`，避免每次重启立即执行大备份。当前香港根盘约 76%、上海约 83%；后续仍按 80% 告警、90% 保护以及备份保留/异地归档规则运营，任何旧本地数据库备份只有在证明已完成加密异地归档与哈希校验后才能删除。
+Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.36 发布前，香港在停止健康定时器与云服务写入的短维护窗口完成 2,959,642,624 字节一致性备份；启动后的既有“立即备份”配置再次触发 COS `auto` 快照，快照收敛为 `ready` 后才恢复 timers。后续大库发布必须继续选择低流量窗口，停止健康定时器、避免并发备份，并为服务重启保留至少 3 分钟 health 等待；还应评估显式 `DSP_CLOUD_BACKUP_WINDOW`，避免每次重启立即执行大备份。当前香港根盘约 85%、上海约 83%；后续仍按 80% 告警、90% 保护以及备份保留/异地归档规则运营，任何旧本地数据库备份只有在证明已完成加密异地归档与哈希校验后才能删除。若香港需要对大备份副本隔离启动，不得在根盘直接复制到 90% 以上；1.0.36 已验证可用受保护对象存储作临时哈希托管、在本机复用同一实体文件 smoke、再从托管副本恢复并复验原哈希的流程，且必须在恢复成功后才清理托管副本。

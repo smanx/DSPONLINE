@@ -16,7 +16,7 @@ npm run test:e2e
 npm run desktop:pack
 ```
 
-Current production baseline: 1.0.35 on GameState v46, save envelope v2, cloud schema v7 and SQLite layout v2. The clean source passed 887 Vitest tests with 16 explicit skips and 255 Playwright scenarios with 11 explicit conditional fixture skips. Local and inactive production server verification passed 70 with 2 optional skips. Operations are 6/6, native tools 8/8, and 128 runtime licenses are consistent. Hong Kong and Shanghai Web/API run `1.0.35-080844f55852`; Android is `1.0.35 / 1000035`, Windows is 1.0.35 `NotSigned`, and the direct code/download rollback baseline is 1.0.34. The user waived only this candidate's physical-device stable gate; do not turn that waiver into a passing test result or reuse it for later releases.
+Current production baseline: 1.0.36 on GameState v46, save envelope v2, cloud schema v7 and SQLite layout v2. The clean source passed 918 Vitest tests with 17 explicit skips and 259 Playwright scenarios with 11 explicit conditional fixture skips. Local and inactive production server verification passed 70 with 2 optional skips. Operations are 6/6, native tools 8/8, and 128 runtime licenses are consistent. Hong Kong and Shanghai Web/API run `1.0.36-e0ad49062fa3`; Android is `1.0.36 / 1000036`, Windows is 1.0.36 `NotSigned`, and the direct code/download rollback baseline is 1.0.35. Five public Chrome scenarios, current PWA cache/offline behavior and the 1.0.35 previous-stable worker/Cache Storage isolation passed. The user waived only this candidate's Android physical-device, low-spec Windows and upgrade-retention gates; do not turn that waiver into a passing test result or reuse it for later releases.
 
 ## Choose By Change
 
