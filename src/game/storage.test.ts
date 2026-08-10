@@ -1,9 +1,9 @@
 /** @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { addCanvasBookmark, addCanvasRegion, addDysonSwarmOrbit, advanceSimulation, cancelCurrentResearch, connectBelt, createBlueprint, createInitialState, createStandardDysonLayer, fundConstructionQueueEntry, getMaterialDeliverySlots, installMiner, pauseCurrentResearch, placeBuilding, queueBlueprint, queueHandcraftRecipe, resizeCanvasRegion, selectTechnology, setActivePlanet, setBeltRouteOffsetY, setBlueprintTransform, setDysonLaunchMode, setDysonLaunchThrottle, setDysonSwarmOrbit, setFuelItem, setLogisticsItem, setPlanetTrayItemLimit, setStationHubConfiguration, setStationSlotMode, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
+import { addCanvasBookmark, addCanvasRegion, addDysonSwarmOrbit, advanceSimulation, cancelCurrentResearch, connectBelt, createBlueprint, createInitialState, createSpeedrunInitialState, createStandardDysonLayer, fundConstructionQueueEntry, getMaterialDeliverySlots, installMiner, pauseCurrentResearch, placeBuilding, queueBlueprint, queueHandcraftRecipe, resizeCanvasRegion, selectTechnology, setActivePlanet, setBeltRouteOffsetY, setBlueprintTransform, setDysonLaunchMode, setDysonLaunchThrottle, setDysonSwarmOrbit, setFuelItem, setLogisticsItem, setPlanetTrayItemLimit, setStationHubConfiguration, setStationSlotMode, setStationSlotRoutePolicy, setStationSlotWarperBudget, setStationWarperAutoRefill, setStationWarperTarget } from "./engine";
 import { createProductionPlan } from "./planning";
-import { cancelDeferredOfflineGame, clearGameSlot, exportGame, exportGameSlot, finalizeDeferredOfflineGame, getSaveSlotSummaries, getSaveSnapshotSummaries, importGame, inspectSave, loadGame, loadGameDeferredOffline, loadGameSlot, loadGameSlotDeferredOffline, loadSaveSnapshot, migrateGame, repairSave, saveGame, saveGameSnapshot, saveGameSlot, saveGameVerified, saveVerifiedPayload } from "./storage";
+import { cancelDeferredOfflineGame, clearGameSlot, exportGame, exportGameSlot, finalizeDeferredOfflineGame, getSaveSlotSummaries, getSaveSnapshotSummaries, importGame, inspectSave, loadGame, loadGameDeferredOffline, loadGameSlot, loadGameSlotDeferredOffline, loadSaveSnapshot, migrateGame, repairSave, saveGame, saveGameSnapshot, saveGameSlot, saveGameVerified, saveVerifiedPayload, skipDeferredOfflineGame } from "./storage";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
@@ -206,6 +206,60 @@ describe("game storage", () => {
     expect(cancelled.offlineSeconds).toBe(0);
     expect(cancelled.offlineReport).toBeNull();
     expect(cancelled.state.elapsedSeconds).toBe(120);
+  });
+
+  it("records an explicitly confirmed zero-reward skip without mutating the deferred source", () => {
+    vi.useFakeTimers();
+    const savedAt = new Date("2026-07-23T00:00:00.000Z");
+    vi.setSystemTime(savedAt);
+    const state = createInitialState();
+    state.elapsedSeconds = 120;
+    state.tray.iron_ore = 321;
+    expect(saveGame(state).success).toBe(true);
+
+    vi.setSystemTime(savedAt.getTime() + 2 * 60 * 60 * 1_000);
+    const deferred = loadGameDeferredOffline();
+    const sourceBefore = JSON.stringify(deferred.state);
+    const skipped = skipDeferredOfflineGame(
+      deferred,
+      "测试注入的快速结算失败",
+      "worker-error",
+      {
+        mode: "approximate",
+        calibrationWindowSeconds: 0,
+        approximatedSeconds: deferred.offlineSeconds,
+        maxEstimatedError: 1,
+        fellBack: true,
+        algorithmVersion: "fast-30s-v2",
+        settlementStatus: "conservative-preview",
+        fallbackReason: "测试注入的快速结算失败",
+      },
+    );
+
+    expect(JSON.stringify(deferred.state)).toBe(sourceBefore);
+    expect(skipped.state).not.toBe(deferred.state);
+    expect(skipped.state.elapsedSeconds).toBe(120 + 2 * 60 * 60);
+    expect(skipped.state.tray.iron_ore).toBe(321);
+    expect(skipped.offlineSeconds).toBe(2 * 60 * 60);
+    expect(skipped.offlineReport?.settlement).toEqual(expect.objectContaining({
+      status: "conservative-skipped",
+      committed: true,
+      rewardsSubmitted: false,
+      originalSeconds: 2 * 60 * 60,
+      submittedSeconds: 2 * 60 * 60,
+      failureKind: "worker-error",
+    }));
+    expect(skipped.offlineReport?.approximation?.settlementStatus).toBe("conservative-skipped");
+    expect(skipped.offlineReport?.produced).toEqual([]);
+    expect(skipped.offlineReport?.structurePointsAdded).toBe(0);
+    expect(skipped.offlineReport?.shellSailsAdded).toBe(0);
+  });
+
+  it("does not expose the clock-only skip path to speedrun saves", () => {
+    const state = createSpeedrunInitialState();
+    const loaded = { state, savedAt: 1_000, offlineSeconds: 600, offlineReport: null };
+    expect(() => skipDeferredOfflineGame(loaded, "test", "unknown")).toThrow(/速通存档必须完成精确离线结算/);
+    expect(state.elapsedSeconds).toBe(0);
   });
 
   it("migrates v32 endgame state to v33 without losing legacy export or historical research", () => {

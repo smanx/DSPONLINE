@@ -7,7 +7,8 @@ import { INFINITE_RESEARCH_DEFINITIONS, getInfiniteResearchCompletion, getInfini
 import { getInfiniteResearchCostString, isInfiniteResearchComplete } from "../game/infiniteResearch";
 import type { GameState, InfiniteResearchId, ItemId, TechnologyLayoutMode, TechId } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
-import { useHorizontalPan } from "../hooks/useHorizontalPan";
+import { horizontalFocusScrollLeft, useHorizontalPan } from "../hooks/useHorizontalPan";
+import { getTechnologyTierGrid } from "../game/technologyTreeLayout";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 import { QuantityValue } from "./QuantityValue";
 import { PowerValue } from "./PowerValue";
@@ -47,18 +48,49 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
   const mobileListScrollRef = useRef(0);
   const previousMobileSubviewRef = useRef<string | null>(null);
   const horizontalPan = useHorizontalPan<HTMLDivElement>({ wheelMode: "horizontal" });
+  const [treeViewportHeight, setTreeViewportHeight] = useState(560);
   useEffect(() => {
     if (!open || !focusTechId) return;
     setFocusedTechId(focusTechId);
     const timer = window.setTimeout(() => {
-      document.querySelector(`[data-tech-id="${focusTechId}"]`)?.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+      const tree = horizontalPan.surfaceRef.current;
+      const node = tree?.querySelector<HTMLElement>(`[data-tech-id="${focusTechId}"]`);
+      if (!tree || !node) return;
+      const treeRect = tree.getBoundingClientRect();
+      const nodeRect = node.getBoundingClientRect();
+      tree.scrollTo({
+        left: horizontalFocusScrollLeft(
+          tree.scrollLeft,
+          treeRect.left,
+          tree.clientWidth,
+          nodeRect.left,
+          nodeRect.width,
+          tree.scrollWidth,
+        ),
+        behavior: "smooth",
+      });
+      tree.scrollTop = 0;
     }, 40);
     const clear = window.setTimeout(() => setFocusedTechId(null), 1800);
     return () => {
       window.clearTimeout(timer);
       window.clearTimeout(clear);
     };
-  }, [focusTechId, open]);
+  }, [focusTechId, horizontalPan.surfaceRef, open]);
+  useEffect(() => {
+    if (!open || mobile) return;
+    const tree = horizontalPan.surfaceRef.current;
+    if (!tree) return;
+    const measure = () => setTreeViewportHeight((current) => {
+      const next = Math.max(1, Math.floor(tree.clientHeight));
+      return current === next ? current : next;
+    });
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(tree);
+    return () => observer.disconnect();
+  }, [game.settings.fontScale, game.settings.technologyLayout, horizontalPan.surfaceRef, mobile, open]);
   useEffect(() => {
     if (!mobile || !open) return;
     if (previousMobileSubviewRef.current && !mobileSubview) {
@@ -268,12 +300,20 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
         </div> : null}
       </div>
 
-      <div className={`technology-tree technology-tree--${game.settings.technologyLayout}${horizontalPan.isPanning ? " horizontal-pan--active" : ""}`} style={{ "--technology-tier-count": maximumTier + 1 } as CSSProperties} {...horizontalPan.bindings}>
-        {Array.from({ length: maximumTier + 1 }, (_, tier) => (
-          <section className="technology-tier" key={tier}>
+      <div ref={horizontalPan.surfaceRef} className={`technology-tree technology-tree--${game.settings.technologyLayout}${horizontalPan.isPanning ? " horizontal-pan--active" : ""}`} tabIndex={0} role="region" aria-label="科技树横向视口" {...horizontalPan.bindings}>
+        {Array.from({ length: maximumTier + 1 }, (_, tier) => {
+          const tierTechnologies = TECHNOLOGY_LIST.filter((technology) => technology.tier === tier);
+          const grid = getTechnologyTierGrid(tierTechnologies.length, game.settings.technologyLayout, game.settings.fontScale, treeViewportHeight);
+          return (
+          <section className="technology-tier" key={tier} style={{
+            "--technology-tier-columns": grid.columns,
+            "--technology-tier-rows": grid.rows,
+            "--technology-tier-column-width": `${grid.columnWidth}px`,
+            "--technology-node-estimated-height": `${grid.estimatedCardHeight}px`,
+          } as CSSProperties} data-tier={tier + 1} data-tier-columns={grid.columns} data-tier-rows={grid.rows}>
             <header><span>层级 {String(tier + 1).padStart(2, "0")}</span></header>
             <div>
-              {TECHNOLOGY_LIST.filter((technology) => technology.tier === tier).map((technology) => {
+              {tierTechnologies.map((technology) => {
                 const complete = isTechnologyCompleted(game, technology.id);
                 const active = game.research.selectedTechId === technology.id;
                 const isPaused = game.research.pausedTechId === technology.id;
@@ -314,7 +354,8 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
               })}
             </div>
           </section>
-        ))}
+          );
+        })}
       </div>
     </section>
   );

@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-10-v1.0.36";
+const RELEASE_NOTE_ID = "2026-08-10-v1.0.37";
 
 function seedStationUpgradeFixture() {
   return () => {
-    const releaseNoteId = "2026-08-10-v1.0.36";
+    const releaseNoteId = "2026-08-10-v1.0.37";
     const entityBase = {
       interactionLocked: false,
       minerCount: 0,
@@ -73,13 +73,16 @@ test("selected interstellar station exposes a working Mk.II upgrade and star map
   await expect(starMap.getByRole("button", { name: "升级全部星际物流站" })).toBeVisible();
   await expect(starMap.getByRole("button", { name: /一键升级本系物流站/ }).first()).toBeVisible();
   await starMap.getByRole("button", { name: "升级全部星际物流站" }).click({ force: true });
-  await expect(page.getByRole("status")).toContainText("已升级 1 座");
+  const confirmation = page.getByRole("alertdialog", { name: "确认批量升级物流站" });
+  await expect(confirmation).toContainText("可成功 1 座，跳过 1 座");
+  await confirmation.getByRole("button", { name: "确认升级" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "批量升级完成" })).toContainText("成功 1 座，跳过 1 座");
 });
 
 test("missing technology and materials are shown instead of a silent no-op", async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-10-v1.0.36");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-10-v1.0.37");
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state: {
       version: 43, nextId: 2, activePlanetId: "home",

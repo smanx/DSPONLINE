@@ -384,6 +384,7 @@ html[data-theme="light"] :is(
   .start-menu-import-drop,
   .start-menu-message,
   .start-menu-offline-progress,
+  .start-menu-offline-decision,
   .cloud-account-security,
   .cloud-account-section,
   .cloud-manual-slots,

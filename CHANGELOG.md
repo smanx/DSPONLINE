@@ -4,6 +4,14 @@ All notable player-facing changes are recorded here. Game-state migration versio
 
 ## [Unreleased]
 
+## [1.0.37] - 2026-08-10
+
+- Fixed legacy resource migration so it only restores stable resource entities declared by the persisted planet profile; legal one-node unipolar-magnet saves remain unchanged, and manual repair requires preview, backup hashes, an explicit token, rollback data, and speedrun review.
+- Reworked the desktop technology tree into a horizontal-only viewport with wheel, trackpad, Shift-wheel, drag, and keyboard navigation across standard/compact layouts and 100%–200% font scales; mobile keeps its vertical list.
+- Changed unsafe offline fallbacks into a non-committing decision flow. Players can retry exactly from the original state, cancel without changing the source save, or explicitly double-confirm a clock-only zero-reward skip in normal mode; speedrun remains exact-only.
+- Compacted star-map batch logistics controls, kept the station upgrade and quantum-switch actions on one row, and added a confirmed global orbital-collector quantum-network action with success, skip, and grouped-reason reporting.
+- Kept GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 unchanged; no leaderboard history, production deployment, or player save is modified by this candidate.
+
 ## [1.0.36] - 2026-08-10
 
 - Added a device-level default for 1, 2, 4, or custom 1–4,096 parallel lanes on newly created belts, including direct, touch, and blueprint placement, with atomic construction-inventory checks.

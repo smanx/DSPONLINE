@@ -1,57 +1,67 @@
-import { Check, ChevronLeft, ChevronRight, CloudUpload, Gauge, History, Info, Link2, MessageCircle, Smartphone, X, type LucideIcon } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, CloudUpload, Gauge, History, Info, Link2, MessageCircle, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
 export const CURRENT_RELEASE_NOTES = {
+  id: "2026-08-10-v1.0.37",
+  date: "2026年8月10日",
+  version: "1.0.37",
+  title: "单极磁石、离线决策与星图批量操作更新",
+  summary: "1.0.37 修复旧存档资源目录迁移边界，重排横向科技树导航，并让不可靠的离线近似先由玩家决策；星图批量物流操作同步收紧布局并支持轨道收集器一键接入量子网络。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+  items: [
+    {
+      id: "unipolar-integrity",
+      title: "单极磁石资源边界可审计",
+      description: "旧存档迁移只恢复其星球资源目录明确声明的稳定资源点，不再从重新生成的目录引入幽灵矿脉；人工修复工具提供预览、备份摘要、确认令牌、回滚和速通复核门禁。",
+    },
+    {
+      id: "technology-navigation",
+      title: "科技树横向浏览更稳定",
+      description: "桌面科技树按层级横向排列，滚轮、触控板、Shift 滚轮、拖动与键盘均只移动科技区域；100%～200% 字号和紧凑布局不会带动页面纵向跳动，手机仍使用纵向列表。",
+    },
+    {
+      id: "offline-decision",
+      title: "不可靠离线近似不再自动落盘",
+      description: "零校准、Worker 异常、内存风险和边界失败会保留原存档并进入决策界面；可从原状态精确重试、返回菜单，或在普通模式双重确认后按零收益推进时钟，速通模式只允许精确结算。",
+    },
+    {
+      id: "star-map-batch",
+      title: "星图批量物流操作更集中",
+      description: "升级全部星际物流站与切换全部量子物流站保持同排，并新增轨道收集器一键接入量子网络；批量操作会确认影响范围并显示成功数、跳过数和分组原因。",
+    },
+    {
+      id: "save-compatibility",
+      title: "存档与在线协议保持兼容",
+      description: "本批不升级 GameState、存档封装、云服务或 SQLite 版本；不会自动修改排行榜历史、批量增加资源或提交未确认的离线候选状态。",
+    },
+  ],
+} as const;
+
+const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
+  "unipolar-integrity": Check,
+  "technology-navigation": Link2,
+  "offline-decision": Gauge,
+  "star-map-batch": CloudUpload,
+  "save-compatibility": Check,
+};
+
+const RELEASE_NOTES_1_0_36 = {
   id: "2026-08-10-v1.0.36",
   date: "2026年8月10日",
   version: "1.0.36",
   title: "传送带、燃料与终局性能更新",
   summary: "1.0.36 增加新建传送带默认并联数量与可燃冰火力发电支持，并以可重建运行时索引优化传送带、物流、生产缓存和高密度画布。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
   items: [
-    {
-      id: "belt-lane-default",
-      title: "新建线路可预设并联数量",
-      description: "设置中可选择 1、2、4 或自定义 1～4096 条并联线路；桌面、触摸和蓝图新建线路按实际数量原子扣除施工托盘，既有线路和货物堆叠不变。",
-    },
-    {
-      id: "fire-ice-fuel",
-      title: "火力发电站支持可燃冰",
-      description: "可燃冰按 4.8 MJ/个接入既有火电燃料、耗尽提示、供电和统计路径；煤、石墨、氢、氘与燃料棒规则不变。",
-    },
-    {
-      id: "active-belt-runtime",
-      title: "终局线路按运行状态调度",
-      description: "星球级线路、源端、目标端和物品索引复用稳定容量与路由计划；已证明休眠的线路只在库存、配方、供电或拓扑变化时唤醒，结算顺序与状态哈希保持一致。",
-    },
-    {
-      id: "dense-canvas",
-      title: "高密度星球画布更轻量",
-      description: "普通线路由 Canvas 批量绘制并通过空间索引命中，React Flow 只保留选中、悬浮、寻线和生产相关细节；Canvas 不可用时自动回退完整线路。",
-    },
-    {
-      id: "production-logistics-runtime",
-      title: "生产缓存与物流调度复用",
-      description: "配方静态量、矿脉列表、物流容量和稳定槽位排序改为运行时缓存；每座建筑缓存、量子库存、运输载荷和翘曲器仍独立守恒。",
-    },
-    {
-      id: "save-compatibility",
-      title: "存档与在线协议保持兼容",
-      description: "本批不升级 GameState、存档封装、云服务或 SQLite 版本；候选宏观状态必须序列化、重载和安全校验通过后才会写入主存档。",
-    },
+    { id: "belt-lane-default", title: "新建线路可预设并联数量", description: "设置中可选择 1、2、4 或自定义 1～4096 条并联线路；桌面、触摸和蓝图新建线路按实际数量原子扣除施工托盘，既有线路和货物堆叠不变。" },
+    { id: "fire-ice-fuel", title: "火力发电站支持可燃冰", description: "可燃冰按 4.8 MJ/个接入既有火电燃料、耗尽提示、供电和统计路径；煤、石墨、氢、氘与燃料棒规则不变。" },
+    { id: "active-belt-runtime", title: "终局线路按运行状态调度", description: "星球级线路、源端、目标端和物品索引复用稳定容量与路由计划；已证明休眠的线路只在库存、配方、供电或拓扑变化时唤醒，结算顺序与状态哈希保持一致。" },
+    { id: "dense-canvas", title: "高密度星球画布更轻量", description: "普通线路由 Canvas 批量绘制并通过空间索引命中，React Flow 只保留选中、悬浮、寻线和生产相关细节；Canvas 不可用时自动回退完整线路。" },
+    { id: "production-logistics-runtime", title: "生产缓存与物流调度复用", description: "配方静态量、矿脉列表、物流容量和稳定槽位排序改为运行时缓存；每座建筑缓存、量子库存、运输载荷和翘曲器仍独立守恒。" },
+    { id: "save-compatibility", title: "存档与在线协议保持兼容", description: "本批不升级 GameState、存档封装、云服务或 SQLite 版本；候选宏观状态必须序列化、重载和安全校验通过后才会写入主存档。" },
   ],
 } as const;
-
-const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
-  "belt-lane-default": Link2,
-  "fire-ice-fuel": CloudUpload,
-  "active-belt-runtime": Gauge,
-  "dense-canvas": Smartphone,
-  "production-logistics-runtime": History,
-  "save-compatibility": Check,
-};
 
 export interface ReleaseNotesRecord {
   id: string;
@@ -65,6 +75,7 @@ export interface ReleaseNotesRecord {
 /** Static, offline-readable history. Keep entries small; only one page is rendered. */
 export const RELEASE_NOTES_HISTORY: readonly ReleaseNotesRecord[] = [
   CURRENT_RELEASE_NOTES,
+  RELEASE_NOTES_1_0_36,
   {
     id: "2026-08-09-v1.0.35", date: "2026年8月9日", version: "1.0.35", title: "终局结算、云端安全与速通恢复更新",
     summary: "1.0.35 为终局离线和纯挂机增加设备感知分级与内存预警，补齐大存档上传诊断、云数据库治理、匿名新设备登录提醒和排行榜复核；历史百万白糖里程碑可安全自愈，建筑堆叠快捷档扩展到 ±10000 与 ±100000。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",

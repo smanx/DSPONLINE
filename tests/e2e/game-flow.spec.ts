@@ -5,7 +5,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-10-v1.0.36");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-10-v1.0.37");
     }
   });
 }
@@ -90,7 +90,7 @@ test("start menu gates simulation and exposes saves, cloud, import and settings"
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.player-id.v1"))).toBe(presenceIds[0]);
 });
 
-test("start menu can abandon long offline advancement and enter the unchanged save", async ({ page }) => {
+test("cancelling long offline advancement returns to the menu and preserves the pending interval", async ({ page }) => {
   await page.addInitScript(() => {
     const entities = Array.from({ length: 500 }, (_, index) => ({
       id: `offline_storage_${index}`,
@@ -130,41 +130,55 @@ test("start menu can abandon long offline advancement and enter the unchanged sa
     const state = (JSON.parse(raw) as { state: { elapsedSeconds?: number; totalProduced?: Record<string, number> } }).state;
     return { elapsedSeconds: state.elapsedSeconds ?? 0, totalProduced: state.totalProduced ?? {} };
   });
+  await page.evaluate(() => {
+    class HangingOfflineWorker extends EventTarget {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: ((event: ErrorEvent) => void) | null = null;
+      postMessage() { /* wait until the user cancels */ }
+      terminate() { /* no process was spawned */ }
+    }
+    window.Worker = HangingOfflineWorker as unknown as typeof Worker;
+  });
   await page.getByRole("button", { name: /继续游戏/ }).click();
   const progress = page.getByRole("dialog", { name: "正在进行离线运算" });
   await expect(progress).toBeVisible();
-  await expect(progress).toContainText("完成后才会一次性保存");
-  await progress.getByRole("button", { name: "放弃离线并直接进入" }).click();
+  await expect(progress).toContainText("完成并验证后才会一次性保存");
+  await progress.getByRole("button", { name: "取消计算并返回" }).click();
   await expect(progress).toHaveCount(0);
-  await expect(page.locator(".game-shell")).toBeVisible();
+  await expect(page.locator(".start-menu")).toBeVisible();
+  await expect(page.locator(".game-shell")).toHaveCount(0);
+  await expect(page.getByText(/原存档、savedAt 和离线时长均未修改/)).toBeVisible();
   await expect.poll(() => page.evaluate(() => {
     const raw = window.localStorage.getItem("dsp-idle-network.save.v1");
     if (!raw) return null;
     const state = (JSON.parse(raw) as { state: { elapsedSeconds?: number; totalProduced?: Record<string, number> } }).state;
     return { elapsedSeconds: state.elapsedSeconds ?? 0, totalProduced: state.totalProduced ?? {} };
   })).toEqual(original);
+  await page.getByRole("button", { name: /继续游戏/ }).click();
+  await expect(progress).toContainText("604,800 模拟秒");
+  await progress.getByRole("button", { name: "取消计算并返回" }).click();
+  await expect(page.locator(".start-menu")).toBeVisible();
 });
 
 test("dated release notes appear once and remain available from both settings screens", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "传送带、燃料与终局性能更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "单极磁石、离线决策与星图批量操作更新" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(6);
-  await expect(releaseNotes).toContainText("新建线路可预设并联数量");
-  await expect(releaseNotes).toContainText("火力发电站支持可燃冰");
-  await expect(releaseNotes).toContainText("终局线路按运行状态调度");
-  await expect(releaseNotes).toContainText("高密度星球画布更轻量");
-  await expect(releaseNotes).toContainText("生产缓存与物流调度复用");
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(5);
+  await expect(releaseNotes).toContainText("单极磁石资源边界可审计");
+  await expect(releaseNotes).toContainText("科技树横向浏览更稳定");
+  await expect(releaseNotes).toContainText("不可靠离线近似不再自动落盘");
+  await expect(releaseNotes).toContainText("星图批量物流操作更集中");
   await expect(releaseNotes).toContainText("存档与在线协议保持兼容");
-  await expect(releaseNotes).not.toContainText("终局离线按存档与设备分级");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-10-v136-1440.png", fullPage: true });
+  await expect(releaseNotes).not.toContainText("新建线路可预设并联数量");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-10-v137-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-10-v136-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-10-v137-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -187,7 +201,7 @@ test("dated release notes appear once and remain available from both settings sc
     return Boolean(scroll && summary && firstItem && footer && summary.bottom <= firstItem.top + 1 && scroll.bottom <= footer.top + 1);
   })).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-10-v136-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-10-v137-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -196,7 +210,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-10-v1.0.36");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-10-v1.0.37");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -214,7 +228,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-10-v136-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-10-v137-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });

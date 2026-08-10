@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-10-v1.0.36";
+const RELEASE_NOTE_ID = "2026-08-10-v1.0.37";
 
 async function seedBatchSave(page: Page, options: { offlineSeconds?: number; paused?: boolean; topology?: boolean; bypassMenu?: boolean } = {}) {
   await page.addInitScript(({ offlineSeconds, paused, topology, bypassMenu, releaseNoteId }) => {
@@ -65,7 +65,7 @@ async function seedBatchSave(page: Page, options: { offlineSeconds?: number; pau
 
 for (const scenario of [
   { name: "exact", seconds: 6, label: "精确结算", viewport: { width: 1280, height: 720 } },
-  { name: "fallback", seconds: 33, label: "保守宏观结算", viewport: { width: 1024, height: 768 } },
+  { name: "fallback", seconds: 33, label: "已确认跳过收益", viewport: { width: 1024, height: 768 } },
   { name: "approximate", seconds: 120, label: "近似宏观结算（实验）", viewport: { width: 390, height: 844 } },
 ] as const) {
   test(`offline report renders the ${scenario.name} settlement state without overflow`, async ({ page }) => {
@@ -74,13 +74,25 @@ for (const scenario of [
     await page.goto("/?menu=1");
     await page.getByRole("button", { name: /继续游戏/ }).click();
 
+    if (scenario.name === "fallback") {
+      const decision = page.getByRole("dialog", { name: "快速结算需要玩家选择" });
+      await expect(decision).toBeVisible({ timeout: 20_000 });
+      await expect(decision).toContainText("实际提交时间0 秒");
+      await decision.getByRole("button", { name: "保守跳过本次收益" }).click();
+      await decision.getByRole("button", { name: "再次确认：收益为 0" }).click();
+    }
+
     const report = page.getByRole("dialog", { name: "离线结算报告" });
     await expect(report).toBeVisible({ timeout: 20_000 });
     await expect(report.locator(".offline-report-method > header strong")).toHaveText(scenario.label);
     await expect(report.locator(".offline-report-method")).toContainText("精确校准");
     await expect(report.locator(".offline-report-method")).toContainText("宏观覆盖");
     await expect(report.locator(".offline-report-method")).toContainText("估计最大误差");
-    if (scenario.name === "fallback") await expect(report.locator(".offline-report-warning")).toBeVisible();
+    if (scenario.name === "fallback") {
+      await expect(report.locator(".offline-report-warning")).toBeVisible();
+      await expect(report).toContainText("实际提交 33 秒");
+      await expect(report).toContainText("收益为 0");
+    }
     else await expect(report.locator(".offline-report-warning")).toHaveCount(0);
     await expect.poll(() => report.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     await expect(report.getByRole("button", { name: "确认结算" })).toBeVisible();

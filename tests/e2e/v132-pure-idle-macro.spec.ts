@@ -190,6 +190,7 @@ test.describe("1.0.34 pure-idle macro recovery", () => {
       const grace = await client.finalize(5 * 60);
       client.close();
       const ordinary = await offline.runOfflineSimulationInWorkerDetailed(grace.state, 600);
+      if (ordinary.status !== "complete") throw new Error("exact ordinary remainder unexpectedly requested a decision");
       const inspection = storage.inspectSave(storage.serializeEnvelope(ordinary.state));
       return {
         highWallSeconds: grace.summary.settledWallSeconds,
@@ -412,7 +413,7 @@ test.describe("1.0.34 pure-idle macro recovery", () => {
     expect(result.sourceUnchanged).toBe(true);
   });
 
-  test("keeps an ordinary fast-contract failure on the conservative Worker path", async ({ page }) => {
+  test("returns an uncommitted decision when an ordinary fast contract needs the conservative Worker path", async ({ page }) => {
     const result = await page.evaluate(async () => {
       const benchmark = await import("/src/game/benchmark.ts");
       const engine = await import("/src/game/engine.ts");
@@ -433,17 +434,17 @@ test.describe("1.0.34 pure-idle macro recovery", () => {
       });
       return {
         durationMs: performance.now() - startedAt,
-        status: settled.approximation?.settlementStatus,
+        resultStatus: settled.status,
+        settlementStatus: settled.approximation?.settlementStatus,
         phases,
-        elapsedDelta: settled.state.elapsedSeconds - state.elapsedSeconds,
         sourceUnchanged: benchmark.hashGameState(state) === sourceHash,
       };
     });
 
-    expect(result.status).toBe("conservative");
+    expect(result.resultStatus).toBe("decision-required");
+    expect(result.settlementStatus).toBe("conservative-preview");
     expect(result.phases).toContain("conservative");
     expect(result.phases).not.toContain("bounded-exact");
-    expect(result.elapsedDelta).toBe(7 * 24 * 60 * 60);
     expect(result.sourceUnchanged).toBe(true);
     expect(result.durationMs).toBeLessThan(5_000);
   });
@@ -476,7 +477,8 @@ test.describe("1.0.34 pure-idle macro recovery", () => {
         return {
           durationMs: performance.now() - startedAt,
           offlineWorkerCount,
-          status: settled.approximation?.settlementStatus,
+          resultStatus: settled.status,
+          settlementStatus: settled.approximation?.settlementStatus,
           sourceUnchanged: benchmark.hashGameState(state) === sourceHash,
         };
       } finally {
@@ -485,7 +487,8 @@ test.describe("1.0.34 pure-idle macro recovery", () => {
     });
 
     expect(result.offlineWorkerCount).toBe(2);
-    expect(result.status).toBe("conservative");
+    expect(result.resultStatus).toBe("decision-required");
+    expect(result.settlementStatus).toBe("conservative-preview");
     expect(result.sourceUnchanged).toBe(true);
     expect(result.durationMs).toBeLessThan(4_500);
   });
@@ -523,7 +526,8 @@ test.describe("1.0.34 pure-idle macro recovery", () => {
         });
         return {
           offlineWorkerCount,
-          status: settled.approximation?.settlementStatus,
+          resultStatus: settled.status,
+          settlementStatus: settled.approximation?.settlementStatus,
           sourceUnchanged: benchmark.hashGameState(state) === sourceHash,
         };
       } finally {
@@ -532,7 +536,8 @@ test.describe("1.0.34 pure-idle macro recovery", () => {
     });
 
     expect(result.offlineWorkerCount).toBe(2);
-    expect(result.status).toBe("conservative");
+    expect(result.resultStatus).toBe("decision-required");
+    expect(result.settlementStatus).toBe("conservative-preview");
     expect(result.sourceUnchanged).toBe(true);
   });
 
@@ -584,7 +589,8 @@ test.describe("1.0.34 pure-idle macro recovery", () => {
         return {
           offlineWorkerCount,
           algorithms,
-          status: settled.approximation?.settlementStatus,
+          resultStatus: settled.status,
+          settlementStatus: settled.approximation?.settlementStatus,
         };
       } finally {
         window.Worker = NativeWorker;
@@ -592,7 +598,8 @@ test.describe("1.0.34 pure-idle macro recovery", () => {
     });
 
     expect(result.offlineWorkerCount).toBe(2);
-    expect(result.status).toBe("conservative");
+    expect(result.resultStatus).toBe("decision-required");
+    expect(result.settlementStatus).toBe("conservative-preview");
     expect(result.algorithms).not.toContain("late-retired-worker");
   });
 
@@ -632,7 +639,8 @@ test.describe("1.0.34 pure-idle macro recovery", () => {
         });
         return {
           offlineWorkerCount,
-          status: settled.approximation?.settlementStatus,
+          resultStatus: settled.status,
+          settlementStatus: settled.approximation?.settlementStatus,
         };
       } finally {
         window.Worker = NativeWorker;
@@ -640,7 +648,8 @@ test.describe("1.0.34 pure-idle macro recovery", () => {
     });
 
     expect(result.offlineWorkerCount).toBe(2);
-    expect(result.status).toBe("conservative");
+    expect(result.resultStatus).toBe("decision-required");
+    expect(result.settlementStatus).toBe("conservative-preview");
   });
 
   test("does not retry a Worker response that classifies the source as invalid", async ({ page }) => {

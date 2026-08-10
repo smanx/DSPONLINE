@@ -35,6 +35,7 @@ import {
   UserPlus,
   Volume2,
   VolumeX,
+  X,
   Zap,
 } from "lucide-react";
 import { QuantityValue } from "./QuantityValue";
@@ -81,8 +82,15 @@ import { useResolvedTheme } from "../hooks/useResolvedTheme";
 import { isSecureCloudClient } from "../nativeApp";
 import { useAppLocale } from "../i18n/locale";
 import { exportTextFile } from "../game/fileExport";
-import { readOfflineApproximationEnabled, writeOfflineApproximationEnabled, type OfflineApproximationReport } from "../game/offlineApproximation";
+import type { OfflineApproximationReport } from "../game/offlineApproximation";
 import { offlineProfileLabel, type OfflineComplexityReport } from "../game/offlineComplexity";
+import {
+  classifyOfflineSettlementFailure,
+  readOfflineSettlementPreference,
+  writeOfflineSettlementPreference,
+  type OfflineSettlementFailureKind,
+  type OfflineSettlementPreference,
+} from "../game/offlineSettlementStrategy";
 import { readShowRunLogPreference, readThemePreference, writeShowRunLogPreference, writeThemePreference } from "../game/uiPreferences";
 import { readPureIdleRecovery } from "../game/pureIdleRecovery";
 import type { OfflineSimulationPhase, OfflineSimulationProgress } from "../game/offlineSimulation";
@@ -92,6 +100,28 @@ type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "n
 type CloudAuthMode = "login" | "register" | "forgot" | "reset";
 type MenuMessage = { tone: "busy" | "ready" | "warning" | "error"; text: string } | null;
 type OfflineLoadProgress = OfflineSimulationProgress & { label: string; complexity?: OfflineComplexityReport };
+type OfflineSettlementDecision = {
+  loaded: DeferredLoadedGame;
+  label: string;
+  preserveReason?: string;
+  approximation?: OfflineApproximationReport;
+  complexity?: OfflineComplexityReport;
+  failureKind: OfflineSettlementFailureKind;
+  reason: string;
+  exactAttempted: boolean;
+};
+
+function offlineFailureKindLabel(kind: OfflineSettlementFailureKind): string {
+  if (kind === "timeout") return "现实时间上限";
+  if (kind === "worker-error") return "Worker 错误";
+  if (kind === "memory-risk") return "内存风险";
+  if (kind === "calibration-unstable") return "校准不稳定";
+  if (kind === "boundary-validation") return "边界验证失败";
+  if (kind === "invalid-source") return "源状态校验失败";
+  if (kind === "cancelled") return "玩家取消";
+  if (kind === "contract-rejected") return "快速合同不成立";
+  return "未知失败";
+}
 
 function offlineSimulationPhaseLabel(phase: OfflineSimulationPhase): string {
   if (phase === "preparing") return "准备状态";
@@ -301,7 +331,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [settings, setSettings] = useState<GameSettings>(() => readMenuSettings(defaultSettings));
   const [newFactoryMode, setNewFactoryMode] = useState<"normal" | "speedrun">("normal");
   const [showRunLog, setShowRunLog] = useState(readShowRunLogPreference);
-  const [offlineApproximationEnabled, setOfflineApproximationEnabled] = useState(readOfflineApproximationEnabled);
+  const [offlineSettlementPreference, setOfflineSettlementPreference] = useState<OfflineSettlementPreference>(readOfflineSettlementPreference);
   useResolvedTheme(settings.theme);
   const [cloudSession, setCloudSession] = useState<CloudSession>({ status: "checking", user: null, cloudSave: null, mailAvailable: false, message: null });
   const initialCloudAction = useMemo(() => {
@@ -323,6 +353,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [cloudUploadActive, setCloudUploadActive] = useState(false);
   const [cloudUploadOfflineStage, setCloudUploadOfflineStage] = useState(false);
   const [offlineProgress, setOfflineProgress] = useState<OfflineLoadProgress | null>(null);
+  const [offlineDecision, setOfflineDecision] = useState<OfflineSettlementDecision | null>(null);
+  const [offlineSkipConfirmed, setOfflineSkipConfirmed] = useState(false);
   const [message, setMessage] = useState<MenuMessage>(null);
   const [importInspection, setImportInspection] = useState<SaveInspection | null>(null);
   const [importRaw, setImportRaw] = useState<string | null>(null);
@@ -348,6 +380,13 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
 
   useEffect(() => {
     const onNativeBack = (event: Event) => {
+      if (offlineDecision) {
+        event.preventDefault();
+        setOfflineDecision(null);
+        setOfflineSkipConfirmed(false);
+        setMessage({ tone: "warning", text: "已取消离线结算；原存档保持不变" });
+        return;
+      }
       if (speedrunCopyRequest) {
         event.preventDefault();
         setSpeedrunCopyRequest(null);
@@ -376,7 +415,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     };
     window.addEventListener(NATIVE_BACK_EVENT, onNativeBack);
     return () => window.removeEventListener(NATIVE_BACK_EVENT, onNativeBack);
-  }, [cloudConflict, cloudDeleteRequest, deleteRequest, speedrunCopyRequest, view]);
+  }, [cloudConflict, cloudDeleteRequest, deleteRequest, offlineDecision, speedrunCopyRequest, view]);
 
   const refreshLocalSaves = () => {
     setContinueSave(getMenuContinueSave("normal"));
@@ -477,9 +516,11 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     label: string,
     preserveReason: string | undefined,
     storage: StorageModule,
+    options: { forceExact?: boolean } = {},
   ) => {
     let completed = loaded.state;
     let approximationReport: OfflineApproximationReport | undefined;
+    let complexityReport: OfflineComplexityReport | undefined;
     if (loaded.offlineSeconds >= 1) {
       const controller = new AbortController();
       offlineAbortRef.current = controller;
@@ -495,10 +536,10 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       try {
         const result = await runOfflineSimulationInWorkerDetailed(loaded.state, loaded.offlineSeconds, {
           signal: controller.signal,
-          approximate: offlineApproximationEnabled,
-          onComplexity: (complexity) => setOfflineProgress((current) => current
-            ? { ...current, complexity }
-            : {
+          approximate: options.forceExact !== true && offlineSettlementPreference !== "exact",
+          onComplexity: (complexity) => {
+            complexityReport = complexity;
+            setOfflineProgress((current) => current ? { ...current, complexity } : {
               label,
               complexity,
               completedSeconds: 0,
@@ -506,23 +547,110 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
               progress: 0,
               phase: "preparing",
               wallClockMs: 0,
-            }),
+            });
+          },
           onProgress: (progress) => setOfflineProgress((current) => ({ label, ...progress, ...(current?.complexity ? { complexity: current.complexity } : {}) })),
         });
+        complexityReport = result.complexity;
+        if (result.status === "decision-required") {
+          const reason = result.approximation.fallbackReason ?? "快速离线结算未完成，本次尚未提交离线收益";
+          setOfflineDecision({
+            loaded,
+            label,
+            ...(preserveReason ? { preserveReason } : {}),
+            approximation: result.approximation,
+            complexity: result.complexity,
+            failureKind: classifyOfflineSettlementFailure(reason),
+            reason,
+            exactAttempted: options.forceExact === true,
+          });
+          setOfflineSkipConfirmed(false);
+          setOfflineProgress(null);
+          setMessage({ tone: "warning", text: "快速结算未完成，原存档和离线时长尚未提交" });
+          return;
+        }
         completed = result.state;
         approximationReport = result.approximation;
-        loaded.offlineReport = loaded.offlineReport ? { ...loaded.offlineReport, complexity: result.complexity } : null;
       } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
-        const skipped = storage.cancelDeferredOfflineGame(loaded);
-        await enterLoadedGame(skipped, preserveReason, storage);
+        if (error instanceof DOMException && error.name === "AbortError") {
+          setOfflineProgress(null);
+          setMessage({ tone: "warning", text: "离线计算已取消；原存档、savedAt 和离线时长均未修改" });
+          return;
+        }
+        const reason = error instanceof Error ? error.message : "离线 Worker 运行失败";
+        setOfflineDecision({
+          loaded,
+          label,
+          ...(preserveReason ? { preserveReason } : {}),
+          ...(complexityReport ? { complexity: complexityReport } : {}),
+          failureKind: classifyOfflineSettlementFailure(reason),
+          reason,
+          exactAttempted: options.forceExact === true,
+        });
+        setOfflineSkipConfirmed(false);
+        setOfflineProgress(null);
+        setMessage({ tone: "warning", text: "离线结算失败，原存档保持不变" });
         return;
       }
     }
-    const finalized = storage.finalizeDeferredOfflineGame(loaded, completed);
-    if (approximationReport && finalized.offlineReport) finalized.offlineReport = { ...finalized.offlineReport, approximation: approximationReport };
-    if (loaded.offlineReport?.complexity && finalized.offlineReport) finalized.offlineReport = { ...finalized.offlineReport, complexity: loaded.offlineReport.complexity };
+    const finalized = storage.finalizeDeferredOfflineGame(loaded, completed, {
+      ...(approximationReport ? { approximation: approximationReport } : {}),
+      ...(complexityReport ? { complexity: complexityReport } : {}),
+    });
     await enterLoadedGame(finalized, preserveReason, storage);
+  };
+
+  const retryOfflineExactly = async () => {
+    const decision = offlineDecision;
+    if (!decision) return;
+    setBusy(true);
+    setMessage(null);
+    setOfflineDecision(null);
+    setOfflineSkipConfirmed(false);
+    try {
+      const storage = await loadStorageModule();
+      await completeDeferredLoad(decision.loaded, `${decision.label} · 精确重试`, decision.preserveReason, storage, { forceExact: true });
+    } catch (error) {
+      handleLoadError(error, "精确离线结算失败，原存档保持不变");
+    } finally {
+      offlineAbortRef.current = null;
+      setOfflineProgress(null);
+      setBusy(false);
+    }
+  };
+
+  const confirmOfflineSkip = async () => {
+    const decision = offlineDecision;
+    if (!decision) return;
+    if (!offlineSkipConfirmed) {
+      setOfflineSkipConfirmed(true);
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const storage = await loadStorageModule();
+      const skipped = storage.skipDeferredOfflineGame(
+        decision.loaded,
+        decision.reason,
+        decision.failureKind,
+        decision.approximation,
+        decision.complexity,
+      );
+      await enterLoadedGame(skipped, decision.preserveReason, storage);
+      setOfflineDecision(null);
+      setOfflineSkipConfirmed(false);
+    } catch (error) {
+      handleLoadError(error, "跳过离线收益失败；原存档保持不变");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelOfflineDecision = () => {
+    setOfflineDecision(null);
+    setOfflineSkipConfirmed(false);
+    setMessage({ tone: "warning", text: "已取消离线结算并返回主菜单；原存档、savedAt 和离线时长保持不变" });
   };
 
   const handleLoadError = (error: unknown, fallback: string) => {
@@ -1137,8 +1265,27 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
           </span>
         </div>
         <progress max={1} value={Math.max(0, Math.min(1, offlineProgress.progress))} />
-        <p>{offlineProgress.complexity?.warning ?? "完成后才会一次性保存并进入工厂；放弃后直接进入当前存档，不发放离线收益。"}</p>
-        <button type="button" onClick={() => offlineAbortRef.current?.abort()}>放弃离线并直接进入</button>
+        <p>{offlineProgress.complexity?.warning ?? "完成并验证后才会一次性保存；取消不会推进 savedAt，也不会消费本次离线时长。"}</p>
+        <button type="button" onClick={() => offlineAbortRef.current?.abort()}>取消计算并返回</button>
+      </section> : null}
+
+      {offlineDecision ? <section className="start-menu-offline-decision" role="dialog" aria-modal="true" aria-labelledby="offline-decision-title">
+        <header><Clock3 size={22} /><span><small>离线收益尚未提交</small><strong id="offline-decision-title">{offlineDecision.exactAttempted ? "精确结算未完成" : "快速结算需要玩家选择"}</strong></span></header>
+        <div className="start-menu-offline-decision__summary">
+          <span><small>原始离线时间</small><strong>{Math.floor(offlineDecision.loaded.offlineSeconds).toLocaleString("zh-CN")} 秒</strong></span>
+          <span><small>实际提交时间</small><strong>0 秒</strong></span>
+          <span><small>当前状态</small><strong>{offlineDecision.approximation ? "保守预览" : "失败"}</strong></span>
+          <span><small>失败分类</small><strong>{offlineFailureKindLabel(offlineDecision.failureKind)}</strong></span>
+        </div>
+        <p>快速结算未完成，本次尚未产生或提交离线生产收益。原始存档、savedAt、库存、建筑缓存和累计产量均保持不变。</p>
+        <small className="start-menu-offline-decision__reason">原因：{offlineDecision.reason}</small>
+        {offlineDecision.complexity?.warning ? <small className="start-menu-offline-decision__reason">设备提示：{offlineDecision.complexity.warning}</small> : null}
+        {offlineSkipConfirmed ? <div className="start-menu-offline-decision__confirm"><ShieldCheck size={17} /><span><strong>再次确认跳过本次收益</strong><small>将只推进本次离线时间，生产、库存、缓存、科研和戴森收益均为 0；该操作不会凭空补发物资。</small></span></div> : null}
+        <footer>
+          <button className="primary" type="button" disabled={busy} onClick={() => void retryOfflineExactly()}><RefreshCw size={15} />使用精确结算（推荐）</button>
+          {offlineDecision.loaded.state.mode !== "speedrun" && !offlineDecision.loaded.state.speedrun?.enabled ? <button className={offlineSkipConfirmed ? "danger" : offlineSettlementPreference === "skip" ? "warning" : ""} type="button" disabled={busy} onClick={() => void confirmOfflineSkip()}><SkipForward size={15} />{offlineSkipConfirmed ? "再次确认：收益为 0" : "保守跳过本次收益"}</button> : null}
+          <button type="button" disabled={busy} onClick={cancelOfflineDecision}><X size={15} />取消并返回</button>
+        </footer>
       </section> : null}
 
       <section className="start-menu-layout">
@@ -1269,8 +1416,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             <section><header><Factory size={15} /><strong>科技树布局</strong><small>{settings.technologyLayout === "compact" ? "精简" : "标准"}</small></header><div className="start-menu-segments">{(["standard", "compact"] as const).map((technologyLayout) => <button className={settings.technologyLayout === technologyLayout ? "active" : ""} type="button" key={technologyLayout} onClick={() => updateMenuSettings({ technologyLayout })}>{technologyLayout === "compact" ? "精简模式" : "标准模式"}</button>)}</div></section>
             <section><header><Zap size={15} /><strong>模拟速度</strong><small>{settings.simulationSpeed}×</small></header><div className="start-menu-segments">{SIMULATION_SPEEDS.map((speed) => <button className={settings.simulationSpeed === speed ? "active" : ""} type="button" key={speed} onClick={() => updateMenuSettings({ simulationSpeed: speed })}>{speed}×</button>)}</div></section>
             <section><header><Clock3 size={15} /><strong>自动保存</strong><small>{settings.autosaveIntervalSeconds === 0 ? "已关闭" : settings.autosaveIntervalSeconds >= 600 ? `${settings.autosaveIntervalSeconds / 60} 分钟` : `${settings.autosaveIntervalSeconds} 秒`}</small></header><div className="start-menu-segments">{AUTOSAVE_INTERVALS.map((seconds) => <button className={settings.autosaveIntervalSeconds === seconds ? "active" : ""} type="button" key={seconds} onClick={() => updateMenuSettings({ autosaveIntervalSeconds: seconds })}>{seconds === 0 ? "关闭" : seconds >= 600 ? `${seconds / 60} 分钟` : `${seconds} 秒`}</button>)}</div>{settings.autosaveIntervalSeconds === 0 ? <small className="settings-warning">关闭后，刷新页面或异常退出可能丢失未保存进度；手动保存和云同步不受影响。</small> : null}</section>
-            <section className="start-menu-setting-toggles"><ToggleRow checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "低频渲染" : "完整渲染"} icon={<Cpu size={16} />} onChange={(performanceMode) => updateMenuSettings({ performanceMode })} /><ToggleRow checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态已精简" : "完整动态"} icon={<Gauge size={16} />} onChange={(reducedMotion) => updateMenuSettings({ reducedMotion })} /><ToggleRow checked={settings.soundEnabled} label="操作音效" value={settings.soundEnabled ? "已开启" : "已关闭"} icon={settings.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />} onChange={(soundEnabled) => updateMenuSettings({ soundEnabled })} /><ToggleRow checked={settings.allowDoubleClickZoom} label="允许双击缩放" value={settings.allowDoubleClickZoom ? "双击聚焦画布" : "连续点击不缩放"} icon={<MousePointer2 size={16} />} onChange={(allowDoubleClickZoom) => updateMenuSettings({ allowDoubleClickZoom })} /><ToggleRow checked={showRunLog} label="显示运行记录" value={showRunLog ? "显示运行反馈浮条" : "仅保留错误、成就和诊断"} icon={<Activity size={16} />} onChange={updateRunLogPreference} /><ToggleRow checked={offlineApproximationEnabled} label="快速离线结算（实验）" value={offlineApproximationEnabled ? "30 秒校准后批量外推，失败自动精确回退" : "关闭，使用精确结算"} icon={<Gauge size={16} />} onChange={(enabled) => { writeOfflineApproximationEnabled(enabled); setOfflineApproximationEnabled(enabled); }} /></section>
-            {offlineApproximationEnabled ? <p className="settings-warning">长时间离线先执行 30 秒真实模拟，再按实测速率批量外推；遇到边界、误差或安全问题会自动回到精确路径，不改变存档格式。</p> : null}
+            <section className="start-menu-offline-strategy"><header><Gauge size={15} /><strong>离线结算策略</strong><small>仅保存在当前设备</small></header><div className="start-menu-segments" role="radiogroup" aria-label="离线结算策略">{(["ask", "exact", "skip"] as OfflineSettlementPreference[]).map((preference) => <button className={offlineSettlementPreference === preference ? "active" : ""} type="button" role="radio" aria-checked={offlineSettlementPreference === preference} key={preference} onClick={() => { writeOfflineSettlementPreference(preference); setOfflineSettlementPreference(preference); }}>{preference === "ask" ? "自动：失败后询问" : preference === "exact" ? "始终精确" : "失败后优先跳过"}</button>)}</div><small className="settings-warning">默认先尝试受校验的快速结算；失败、超时或低内存降级只生成保守预览，不会自动写入。即使选择“优先跳过”，每次仍须二次确认收益为 0。</small></section>
+            <section className="start-menu-setting-toggles"><ToggleRow checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "低频渲染" : "完整渲染"} icon={<Cpu size={16} />} onChange={(performanceMode) => updateMenuSettings({ performanceMode })} /><ToggleRow checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态已精简" : "完整动态"} icon={<Gauge size={16} />} onChange={(reducedMotion) => updateMenuSettings({ reducedMotion })} /><ToggleRow checked={settings.soundEnabled} label="操作音效" value={settings.soundEnabled ? "已开启" : "已关闭"} icon={settings.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />} onChange={(soundEnabled) => updateMenuSettings({ soundEnabled })} /><ToggleRow checked={settings.allowDoubleClickZoom} label="允许双击缩放" value={settings.allowDoubleClickZoom ? "双击聚焦画布" : "连续点击不缩放"} icon={<MousePointer2 size={16} />} onChange={(allowDoubleClickZoom) => updateMenuSettings({ allowDoubleClickZoom })} /><ToggleRow checked={showRunLog} label="显示运行记录" value={showRunLog ? "显示运行反馈浮条" : "仅保留错误、成就和诊断"} icon={<Activity size={16} />} onChange={updateRunLogPreference} /></section>
             <NativeUpdateCard className="start-menu-native-update" />
             <section className="start-menu-release-notes"><header><History size={15} /><strong>版本更新记录</strong><small>{CURRENT_RELEASE_NOTES.date}</small></header><button type="button" onClick={onOpenReleaseNotes} aria-label={`查看${CURRENT_RELEASE_NOTES.date}版本更新记录`}><span><strong>{CURRENT_RELEASE_NOTES.title}</strong><small>{CURRENT_RELEASE_NOTES.items.length} 项体验更新</small></span><ArrowRight size={15} /></button></section>
             <section className="start-menu-community"><header><MessageCircle size={15} /><strong>QQ 交流群</strong><small>意见、建议与问题反馈</small></header><p>群号 <strong>1076757280</strong></p></section>

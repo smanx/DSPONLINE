@@ -34,6 +34,7 @@ import { CanvasMiniMap } from "./components/CanvasMiniMap";
 import { BlueprintWorkspace, CanvasRegionEditor, CanvasRegionLayer, CanvasSelectionTools, PendingBlueprintLayer, SelectionToolbar, type CanvasRegionRectangle, type CanvasRegionResizeHandle } from "./components/BlueprintWorkspace";
 import { CanvasInteractionOverlay, type CanvasClickConnectionPreview, type CanvasConnectionPreviewTone } from "./components/CanvasInteractionOverlay";
 import { GAME_DIALOG_CLOSED_EVENT, useGameDialog } from "./components/GameDialogProvider";
+import type { StarMapBatchActionResult } from "./components/StarMapWorkspace";
 import { RecipeFocusPanel } from "./components/RecipeFocusPanel";
 import { ItemReferenceActionsProvider } from "./components/ItemReference";
 import { OnboardingCoach } from "./components/OnboardingCoach";
@@ -1720,10 +1721,19 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           () => import("./game/offlineSimulation"),
           "后台普通离线结算模块",
         );
-        const offline = await runOfflineSimulationInWorkerDetailed(restored, plan.normalOfflineSeconds, {
+        let offline = await runOfflineSimulationInWorkerDetailed(restored, plan.normalOfflineSeconds, {
           signal: abortController.signal,
           approximate: readOfflineApproximationEnabled(),
         });
+        if (offline.status === "decision-required") {
+          setPureIdleRecoveryStatus("后台快速结算未通过，正在从原始尾段状态执行精确结算");
+          setNotice("后台普通离线快速路径未提交，已自动切换精确结算");
+          offline = await runOfflineSimulationInWorkerDetailed(restored, plan.normalOfflineSeconds, {
+            signal: abortController.signal,
+            approximate: false,
+          });
+        }
+        if (offline.status !== "complete") throw new Error("后台普通离线结算仍需玩家选择，恢复日志已保留");
         restored = offline.state;
       }
       const settledIdle = settleIdleRun(
@@ -3588,52 +3598,85 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     playTone("upgrade");
   }, [commitGame, playTone]);
 
-  const handleUpgradeAllInterstellarStations = useCallback((systemId?: StarSystemId) => {
-    const result = upgradeAllInterstellarStationsToMk2(gameRef.current, systemId);
-    if (result.upgradedIds.length > 0) commitGame((current) => upgradeAllInterstellarStationsToMk2(current, systemId).state);
+  const summarizeBatchSkipReasons = useCallback((entries: Array<{ reason: string }>) => {
+    const grouped = new Map<string, number>();
+    for (const entry of entries) grouped.set(entry.reason, (grouped.get(entry.reason) ?? 0) + 1);
+    return [...grouped.entries()].map(([reason, count]) => count > 1 ? `${reason} ×${count}` : reason);
+  }, []);
+
+  const handleUpgradeAllInterstellarStations = useCallback(async (systemId?: StarSystemId): Promise<StarMapBatchActionResult | null> => {
+    let result = upgradeAllInterstellarStationsToMk2(gameRef.current, systemId);
     const scope = systemId ? `${getStarSystem(systemId).name}内` : "全星区";
     if (result.upgradedIds.length === 0) {
       const firstReason = result.skipped[0]?.reason ?? "没有找到待升级的星际物流站";
-      setNotice(`${scope}升级未执行：${firstReason}`);
+      const skipReasons = summarizeBatchSkipReasons(result.skipped);
+      const report = { actionLabel: "升级星际物流站", scopeLabel: scope, successCount: 0, skippedCount: result.skipped.length, skipReasons: skipReasons.length > 0 ? skipReasons : [firstReason] };
+      setNotice(`${scope}升级未执行：成功 0，跳过 ${result.skipped.length}；${firstReason}`);
       playTone("alert");
-      return;
+      return report;
     }
-    const skippedText = result.skipped.length > 0 ? `，跳过 ${result.skipped.length} 座（${result.skipped.slice(0, 2).map((entry) => entry.reason).join("；")}${result.skipped.length > 2 ? "…" : ""}）` : "";
-    setNotice(`${scope}已升级 ${result.upgradedIds.length} 座星际物流站${skippedText}`);
+    const previewReasons = summarizeBatchSkipReasons(result.skipped);
+    if (result.upgradedIds.length + result.skipped.length > 1 && !await gameDialog.confirm(
+      `${scope}批量升级预览：可成功 ${result.upgradedIds.length} 座，跳过 ${result.skipped.length} 座${previewReasons.length > 0 ? `。跳过原因：${previewReasons.join("；")}` : ""}。升级不可逆，是否继续？`,
+      { title: "确认批量升级物流站", confirmLabel: "确认升级" },
+    )) return null;
+    result = upgradeAllInterstellarStationsToMk2(gameRef.current, systemId);
+    if (result.upgradedIds.length > 0) commitGame((current) => upgradeAllInterstellarStationsToMk2(current, systemId).state);
+    const skipReasons = summarizeBatchSkipReasons(result.skipped);
+    const skippedText = result.skipped.length > 0 ? `，跳过 ${result.skipped.length} 座（${skipReasons.join("；")}）` : "，跳过 0 座";
+    setNotice(`${scope}批量升级完成：成功 ${result.upgradedIds.length} 座${skippedText}`);
     playTone("upgrade");
-  }, [commitGame, playTone]);
+    return { actionLabel: "升级星际物流站", scopeLabel: scope, successCount: result.upgradedIds.length, skippedCount: result.skipped.length, skipReasons };
+  }, [commitGame, gameDialog, playTone, summarizeBatchSkipReasons]);
 
-  const handleAttachAllQuantumStations = useCallback((systemId?: StarSystemId) => {
-    const preview = attachAllInterstellarStationsToQuantumNetwork(gameRef.current, systemId);
+  const handleAttachAllQuantumStations = useCallback(async (systemId?: StarSystemId): Promise<StarMapBatchActionResult | null> => {
+    let result = attachAllInterstellarStationsToQuantumNetwork(gameRef.current, systemId);
     const scope = systemId ? `${getStarSystem(systemId).name}内` : "全星区";
-    if (preview.startedIds.length === 0) {
-      const firstReason = preview.skipped[0]?.reason ?? "没有找到可切换的 Mk.II 星际物流站";
-      setNotice(`${scope}量子切换未执行：${firstReason}`);
+    if (result.startedIds.length === 0) {
+      const firstReason = result.skipped[0]?.reason ?? "没有找到可切换的 Mk.II 星际物流站";
+      const skipReasons = summarizeBatchSkipReasons(result.skipped);
+      setNotice(`${scope}量子切换未执行：成功 0，跳过 ${result.skipped.length}；${firstReason}`);
       playTone("alert");
-      return;
+      return { actionLabel: "接入量子物流站", scopeLabel: scope, successCount: 0, skippedCount: result.skipped.length, skipReasons: skipReasons.length > 0 ? skipReasons : [firstReason] };
     }
-    commitGame((current) => attachAllInterstellarStationsToQuantumNetwork(current, systemId).state);
-    const skippedText = preview.skipped.length > 0
-      ? `，跳过 ${preview.skipped.length} 座（${preview.skipped.slice(0, 2).map((entry) => entry.reason).join("；")}${preview.skipped.length > 2 ? "…" : ""}）`
-      : "";
-    setNotice(`${scope}已提交 ${preview.startedIds.length} 座物流站接入量子网络，仅等待旧星际航线和五秒边界；本地运输机继续运行${skippedText}`);
+    const previewReasons = summarizeBatchSkipReasons(result.skipped);
+    if (result.startedIds.length + result.skipped.length > 1 && !await gameDialog.confirm(
+      `${scope}量子物流切换预览：可成功 ${result.startedIds.length} 座，跳过 ${result.skipped.length} 座${previewReasons.length > 0 ? `。跳过原因：${previewReasons.join("；")}` : ""}。接入会等待旧航线尾货和五秒边界，是否继续？`,
+      { title: "确认批量接入量子物流", confirmLabel: "确认接入" },
+    )) return null;
+    result = attachAllInterstellarStationsToQuantumNetwork(gameRef.current, systemId);
+    if (result.startedIds.length > 0) commitGame((current) => attachAllInterstellarStationsToQuantumNetwork(current, systemId).state);
+    const skipReasons = summarizeBatchSkipReasons(result.skipped);
+    const skippedText = result.skipped.length > 0 ? `，跳过 ${result.skipped.length} 座（${skipReasons.join("；")}）` : "，跳过 0 座";
+    setNotice(`${scope}量子物流切换完成：成功 ${result.startedIds.length} 座${skippedText}；已等待旧星际航线和五秒边界，本地运输机继续运行`);
     playTone("confirm");
-  }, [commitGame, playTone]);
+    return { actionLabel: "接入量子物流站", scopeLabel: scope, successCount: result.startedIds.length, skippedCount: result.skipped.length, skipReasons };
+  }, [commitGame, gameDialog, playTone, summarizeBatchSkipReasons]);
 
-  const handleAllOrbitalCollectorsQuantumMode = useCallback((enabled: boolean, systemId?: StarSystemId) => {
-    const preview = setAllOrbitalCollectorsQuantumMode(gameRef.current, enabled, systemId);
+  const handleAllOrbitalCollectorsQuantumMode = useCallback(async (enabled: boolean, systemId?: StarSystemId): Promise<StarMapBatchActionResult | null> => {
+    let result = setAllOrbitalCollectorsQuantumMode(gameRef.current, enabled, systemId);
     const scope = systemId ? `${getStarSystem(systemId).name}内` : "全星区";
-    if (preview.startedIds.length === 0) {
-      const firstReason = preview.skipped[0]?.reason ?? "没有找到可切换的轨道采集器";
-      setNotice(`${scope}量子采集切换未执行：${firstReason}`);
+    const actionLabel = enabled ? "轨道收集器接入量子网络" : "关闭轨道收集器量子网络";
+    if (result.startedIds.length === 0) {
+      const firstReason = result.skipped[0]?.reason ?? "没有找到可切换的轨道采集器";
+      const skipReasons = summarizeBatchSkipReasons(result.skipped);
+      setNotice(`${scope}量子采集切换未执行：成功 0，跳过 ${result.skipped.length}；${firstReason}`);
       playTone("alert");
-      return;
+      return { actionLabel, scopeLabel: scope, successCount: 0, skippedCount: result.skipped.length, skipReasons: skipReasons.length > 0 ? skipReasons : [firstReason] };
     }
-    commitGame((current) => setAllOrbitalCollectorsQuantumMode(current, enabled, systemId).state);
-    const skippedText = preview.skipped.length > 0 ? `，跳过 ${preview.skipped.length} 台` : "";
-    setNotice(`${scope}已提交 ${preview.startedIds.length} 台轨道采集器${enabled ? "接入" : "关闭"}量子采集网络${skippedText}`);
+    const previewReasons = summarizeBatchSkipReasons(result.skipped);
+    if (result.startedIds.length + result.skipped.length > 1 && !await gameDialog.confirm(
+      `${scope}${enabled ? "接入" : "关闭"}量子采集预览：可成功 ${result.startedIds.length} 台，跳过 ${result.skipped.length} 台${previewReasons.length > 0 ? `。跳过原因：${previewReasons.join("；")}` : ""}。只会提交符合单采集器安全校验的目标，是否继续？`,
+      { title: enabled ? "确认批量接入轨道收集器" : "确认批量关闭量子采集", confirmLabel: enabled ? "确认接入" : "确认关闭" },
+    )) return null;
+    result = setAllOrbitalCollectorsQuantumMode(gameRef.current, enabled, systemId);
+    if (result.startedIds.length > 0) commitGame((current) => setAllOrbitalCollectorsQuantumMode(current, enabled, systemId).state);
+    const skipReasons = summarizeBatchSkipReasons(result.skipped);
+    const skippedText = result.skipped.length > 0 ? `，跳过 ${result.skipped.length} 台（${skipReasons.join("；")}）` : "，跳过 0 台";
+    setNotice(`${scope}量子采集切换完成：成功 ${result.startedIds.length} 台${skippedText}`);
     playTone("confirm");
-  }, [commitGame, playTone]);
+    return { actionLabel, scopeLabel: scope, successCount: result.startedIds.length, skippedCount: result.skipped.length, skipReasons };
+  }, [commitGame, gameDialog, playTone, summarizeBatchSkipReasons]);
 
   const restoreGame = useCallback((state: GameState, report: OfflineReport | null = null) => {
     onMiningStop();

@@ -13,7 +13,7 @@ import {
   settleQuantumAttachment,
   settleQuantumLogisticsNetwork,
 } from "./quantumLogisticsNetwork";
-import { advanceSimulation, attachAllInterstellarStationsToQuantumNetwork, createPlayerInitialState } from "./engine";
+import { advanceSimulation, attachAllInterstellarStationsToQuantumNetwork, createPlayerInitialState, setAllOrbitalCollectorsQuantumMode } from "./engine";
 import { advancePureIdleMacroSession, createPureIdleMacroSession } from "./pureIdleMacro";
 import type { FactoryEntity, StationSlot } from "./types";
 
@@ -569,5 +569,59 @@ describe("quantum logistics network", () => {
     outside.research.completedTechIds.push("quantum_logistics_network");
     outside.entities.push({ id: "outside", kind: "station", planetId: "home", position: { x: 0, y: 0 }, interactionLocked: false, buildingId: "interstellar_logistics_station", stationTier: 2, quantumMode: "legacy", stationSlots: [], stationRoutes: [], inputs: {}, outputs: {}, progress: 0, utilization: 0, productionRate: 0, routingCursor: 0, machineCount: 1, minerCount: 0 });
     expect(attachAllInterstellarStationsToQuantumNetwork(outside, "helios").startedIds).toEqual(["outside"]);
+  });
+
+  it("connects every eligible orbital collector in stable order and reports every skipped reason", () => {
+    const state = createPlayerInitialState();
+    const collector = (id: string, options: { locked?: boolean; mode?: "legacy" | "quantum" } = {}): FactoryEntity => ({
+      id,
+      kind: "station",
+      planetId: "giant",
+      position: { x: 0, y: 0 },
+      interactionLocked: options.locked ?? false,
+      buildingId: "orbital_collector",
+      quantumMode: options.mode ?? "legacy",
+      storedItemId: "hydrogen",
+      stationRoutes: [],
+      inputs: {},
+      outputs: { hydrogen: 100 },
+      progress: 0,
+      utilization: 0,
+      productionRate: 0,
+      routingCursor: 0,
+      machineCount: 1,
+      minerCount: 0,
+    });
+    state.entities.push(
+      collector("collector-b"),
+      collector("collector-a"),
+      collector("collector-locked", { locked: true }),
+      collector("collector-connected", { mode: "quantum" }),
+    );
+    const source = structuredClone(state);
+
+    const blockedByTechnology = setAllOrbitalCollectorsQuantumMode(state, true);
+    expect(blockedByTechnology.startedIds).toEqual([]);
+    expect(blockedByTechnology.skipped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entityId: "collector-a", blocker: "technology" }),
+      expect.objectContaining({ entityId: "collector-locked", blocker: "locked" }),
+      expect.objectContaining({ entityId: "collector-connected", blocker: "technology" }),
+    ]));
+    expect(state).toEqual(source);
+
+    state.research.completedTechIds.push("quantum_logistics_network");
+    const result = setAllOrbitalCollectorsQuantumMode(state, true);
+    expect(result.startedIds).toEqual(["collector-a", "collector-b"]);
+    expect(result.skipped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entityId: "collector-locked", blocker: "locked", reason: "轨道采集器已锁定" }),
+      expect.objectContaining({ entityId: "collector-connected", blocker: "already-quantum", reason: "已经接入量子采集网络" }),
+    ]));
+    expect(result.state.entities.find((entity) => entity.id === "collector-a")?.quantumMode).toBe("transitioning");
+    expect(state.entities.find((entity) => entity.id === "collector-a")?.quantumMode).toBe("legacy");
+
+    const repeated = setAllOrbitalCollectorsQuantumMode(result.state, true);
+    expect(repeated.startedIds).toEqual([]);
+    expect(repeated.state).toBe(result.state);
+    expect(repeated.skipped).toHaveLength(4);
   });
 });

@@ -286,6 +286,12 @@
 .mobile-star-system-list { padding: 8px 10px 22px; }
 .mobile-star-system-list > header { display: flex; min-height: 40px; align-items: center; justify-content: space-between; color: var(--theme-text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); }
 .game-shell[data-mobile-shell="true"] .mobile-star-map .star-map-search { flex: 0 0 auto; margin: 4px 0 8px; background: var(--theme-surface-raised); }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .star-map-batch-actions { margin: 4px 0 8px; gap: 6px; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .star-map-batch-actions > button { min-height: 44px; padding: 7px 8px; background: var(--theme-control-hover); font-size: calc(11px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .star-map-batch-report { grid-template-columns: minmax(0, 1fr) 24px; padding: 8px; font-size: calc(10px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .star-map-batch-report span,
+.game-shell[data-mobile-shell="true"] .mobile-star-map .star-map-batch-report small { grid-column: 1; }
+.game-shell[data-mobile-shell="true"] .mobile-star-map .star-map-batch-report > button { grid-column: 2; grid-row: 1 / 4; }
 .game-shell[data-mobile-shell="true"] .mobile-star-map .stellar-metadata-manager { position: static; min-width: 0; margin: 4px 0 8px; }
 .game-shell[data-mobile-shell="true"] .mobile-star-map .stellar-metadata-manager > summary { min-height: 48px; background: var(--theme-surface-raised); }
 .game-shell[data-mobile-shell="true"] .mobile-star-map .stellar-metadata-manager > div { position: static; width: 100%; max-height: none; grid-template-columns: 1fr; margin-top: 6px; overflow: visible; box-shadow: none; }

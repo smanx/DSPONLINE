@@ -50,7 +50,7 @@ flowchart LR
 - `src/game/localSaveStore.ts`、`savePreview.ts`：IndexedDB 是主档、备份、快照和三个槽位的权威存储，主菜单只读内存索引解析摘要；首次启动把旧 localStorage 副本读回验证后迁入并删除。正式 envelope 校验仍由 `storage.ts` 在载入时执行。存档迁移和持久化序列化会剔除普通建筑及普通蓝图模板的历史 `quantumTarget` 字段，只允许星际物流站保留它；服务端对遗留 `false` 做向后兼容，避免一次升级锁死旧云存档。
 - `src/game/localSaveStore.ts`、`savePreview.ts`：IndexedDB 是主档、备份、快照和三个槽位的权威存储，主菜单只读内存索引解析摘要；首次启动把旧 localStorage 副本读回验证后迁入并删除。正式 envelope 校验仍由 `storage.ts` 在载入时执行。自动主档保存会先生成去除运行时字段的持久投影，再把校验和与 JSON 序列化交给短生命周期 `src/game/save.worker.ts`；Worker 不可用、异常或校验失败时回退同步路径，revision 合并和读回校验仍由主线程/IndexedDB 控制。相同不可变状态在最近一次校验成功且主键仍存在时跳过重复序列化/写入，失败或状态变化会自动解除跳过。存档迁移和持久化序列化会剔除普通建筑及普通蓝图模板的历史 `quantumTarget` 字段，只允许星际物流站保留它；服务端对遗留 `false` 做向后兼容，避免一次升级锁死旧云存档。
 - `src/components/AdminDashboard.tsx`：独立 `/admin` 路由，只使用浏览器会话中的管理员 token 读取聚合运营数据。
-- `src/components/StartMenu.tsx`：开始/继续、槽位、导入、云账号、邮箱验证/密码重置链接、主菜单设置和首屏常驻的设备级中英文切换。
+- `src/components/StartMenu.tsx`：开始/继续、槽位、导入、云账号、邮箱验证/密码重置链接、主菜单设置和首屏常驻的设备级中英文切换。普通离线快速路径无法形成合格候选时，它保留原始 `DeferredLoadedGame` 并显示决策界面；精确重试始终从该原状态开始，取消不写盘，普通模式零收益跳过必须二次确认，速通不提供跳过入口。
 - `src/components/CloudAccountSecurity.tsx`、`CloudSaveConflictDialog.tsx`、`CloudSaveSlotsPanel.tsx`：主菜单与银河工作区共用的账号安全、邮箱绑定、设备会话、数据导出、四槽云存档和云冲突选择界面。
 - `src/components/ReleaseNotesDialog.tsx`：版本公告单一数据源、首次展示偏好和主菜单/游戏内设置共用弹窗。
 - `src/game/onboarding.ts`、`src/components/OnboardingCoach.tsx`：独立于 `GameState` 的 5 步基础操作和 13 步渐进教学偏好、真实命令里程碑判定及设备/线路卡点诊断；教学关闭状态不会随存档或云同步改写。
@@ -76,7 +76,7 @@ flowchart LR
 - `src/hooks/useResolvedTheme.ts` 与 `src/theme.css`：把 `dark / light / system` 解析为根节点主题并集中覆盖桌面、React Flow、工作区和新版手机壳；主题模式属于 `GameSettings`，不复制玩法规则。
 - `src/game/uiPreferences.ts`：设备级 UI 偏好边界。主题、运行记录可见性和设置分类使用独立版本化 `localStorage` 键；它们只影响展示，不进入 `GameState`、存档 envelope、云 payload 或状态哈希。`src/main.tsx` 在 React 首次挂载前应用主题，避免亮色首屏闪烁。
 - `src/theme.css` 以语义主题变量统一开始菜单、账号、云存档、排行榜、工作区、模态和两套手机壳；异步加载的工作区样式也消费同一变量层，避免亮色模式回落到硬编码深色。
-- `src/components/ReleaseNotesDialog.tsx`：离线静态版本历史。列表按版本和日期倒序分页，只挂载当前页；详情返回会保留页码和滚动位置。`src/hooks/useHorizontalPan.ts` 为科技树把鼠标/触控板滚轮转换为横向滚动并消费事件；`src/components/ItemReference.tsx` 通过应用行为上下文提供定位/图鉴操作，Portal 卡片保留焦点和指针过渡。
+- `src/components/ReleaseNotesDialog.tsx`：离线静态版本历史。列表按版本和日期倒序分页，只挂载当前页；详情返回会保留页码和滚动位置。`src/hooks/useHorizontalPan.ts` 使用原生非 passive 监听把科技树鼠标/触控板滚轮转换为纯横向滚动，支持中键/右键拖动和键盘；`src/game/technologyTreeLayout.ts` 依据真实视口高度、字号和标准/精简模式把高密度层级分入相邻横向子列。`src/components/ItemReference.tsx` 通过应用行为上下文提供定位/图鉴操作，Portal 卡片保留焦点和指针过渡。
 - `src/styles/mobile-shell.css`：新版手机壳、顶栏、底栏和路由边界；`mobile-factory.css`：阶段 2 的三档抽屉、建造/物资/检查器和画布模式；`mobile-workspaces.css`：阶段 3 的单滚动工作区、移动列表/详情和大字适配；`codex.css`：生产资料库桌面主从布局及限定在新版壳层下的移动列表/详情规则。
 
 React Flow 的持久真相仍来自 `GameState`。`src/game/canvasLineBatch.ts` 提供当前行星线路的预分配端点批数据，`CanvasBeltLayer` 在终局极限模式且线路达到 600 条时以可选 Canvas 层绘制线路；React Flow DOM 仍保留边命中路径、建筑节点、选中态和连接预览。该实验层不改变线路对象和存档，关闭极限模式或线路低于阈值自动回到旧 SVG 路径。P0 性能监控只在玩家主动开始采样时附带阶段计时和画布指标，普通运行不承担持续采样成本；P1/P2 的投影、拓扑和空间索引缓存只服务当前画布派生，不能反向写入 `GameState`。手机横竖屏切换只重新计算视口平移以保持原世界中心；触摸端的扩大吸附、连接虚影和低性能 LOD 都是瞬时展示状态，不写入存档。第二根触摸指针由画布捕获层接管，先取消第一指未提交的节点拖动、连线、采矿、放置、区域草稿和长按，再以双指中心与距离直接更新 React Flow 视口。生产区域的矩形、名称与颜色保存在 `GameState.canvasRegions`，但区域草稿和编辑器选择仍是瞬时 UI 状态。
@@ -131,7 +131,7 @@ React Flow 的持久真相仍来自 `GameState`。`src/game/canvasLineBatch.ts` 
 7. 返回的新状态驱动 React UI；全屏工作区或页面后台期间冻结底层画布快照，关闭后追上最新状态。
 8. 按设置中的 30/60/120 秒间隔自动保存；切后台、`pagehide`、卸载和返回主菜单立即保存。旧 2/10 秒偏好在 v29 迁移为 30 秒。
 
-启动和云同步的离线边界必须保持可中止且不产生半成品：`loadGameDeferredOffline()` 只解析并校验当前存档，`offlineSimulation.worker` 负责真正推进；玩家选择“放弃离线并直接进入”时，`cancelDeferredOfflineGame()` 原样保留状态、清零待结算秒数并立即保存新的当前时间戳，因此不会发放离线收益，也不会在下一次启动重复提示同一段时间。云上传准备同样支持 `skipOffline`，只使用当前有效状态生成 payload。
+启动离线边界必须保持可中止且不产生半成品：`loadGameDeferredOffline()` 只解析并校验当前存档，`offlineSimulation.worker` 负责真正推进。精确或经校准/尾验的合格近似才返回 `complete`；零校准保守、Worker 超时/异常、内存风险或边界失败只返回不含候选状态的 `decision-required`。取消会丢弃载入副本并留在菜单，不修改原 `savedAt` 或待结算区间；精确重试从原状态重新运行。普通模式只有玩家二次确认后才能调用 `skipDeferredOfflineGame()`，只推进 `elapsedSeconds` 并生成零收益回执；速通存档拒绝该路径。云上传准备仍保留其既有显式 `skipOffline` 协议，只使用当前有效状态生成 payload，不反向修改本地主档。
 
 云上传的请求体先由 Worker 生成一份已校验 payload，再由 `cloud.ts` 处理传输：浏览器用持续消费的 `ReadableStream → CompressionStream("gzip")`，压缩阶段最多等待 5 秒；不支持压缩、流异常或压缩超时时，只要原始请求不超过 30 MiB 才回退明文，主动取消始终抛出 `AbortError`，不能静默回退。网络请求超时不等同于压缩失败：客户端先读取 `/account` 的当前云端元数据，若新 revision 的 `stateChecksum`、`savedAt` 和完整摘要与本次 payload 一致则视为已提交；revision 未变化时使用同一 `expectedRevision` 最多重试一次明文请求；revision 变化但摘要不匹配进入 409 冲突，无法确认时显示状态未知，绝不显示成功或静默覆盖。所有主档、自动同步、手动槽位和银河页面上传共用该协议。
 

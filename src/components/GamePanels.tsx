@@ -2176,7 +2176,7 @@ export function ConstructionDock({ game, placement, beltTier, beltTierMode, plac
           ))}
         </div>
       </div>
-      <div className={`construction-items${horizontalPan.isPanning ? " horizontal-pan--active" : ""}`} {...horizontalPan.bindings}>
+      <div ref={horizontalPan.surfaceRef} className={`construction-items${horizontalPan.isPanning ? " horizontal-pan--active" : ""}`} {...horizontalPan.bindings}>
         {visibleBuildOrder.map((id) => {
           const count = game.construction[id] ?? 0;
           const isBelt = isConveyorBeltId(id);

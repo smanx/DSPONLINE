@@ -12,6 +12,8 @@
 
 > `1.0.36` 正式制品来自 clean source `e0ad49062fa329040b379375b595ba74b7d23daf`。发布前 unsigned APK/AAB 与 Windows unpacked 诊断包均未进入 stable feed；Release Agent 从同一源码使用既有长期 Android 证书重建并验证 APK v2/v3、zipalign、证书连续性和内置正式 URL。Windows 继续按历史策略为 `NotSigned`，没有创建新证书。完整哈希、下载和豁免边界见 [1.0.36 正式发布记录](./releases/1.0.36.md)。
 
+> `1.0.37 / 1000037` 目前只同步了候选版本元数据。开发阶段不得覆盖 1.0.36 stable APK/EXE、更新清单或下载页；如生成 unsigned APK/AAB 与 Windows unpacked 包，只能标记为诊断制品并交由 Release Agent 从同一 clean source 复验、签名和决定是否发布。
+
 ## 1. 架构边界
 
 - Windows 使用 Electron，加载本地 `dist/`，启用 context isolation、sandbox、单实例和受限 IPC。

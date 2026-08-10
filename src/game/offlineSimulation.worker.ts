@@ -183,7 +183,7 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
       seconds: request.seconds,
     };
     let strategy = selectInitialOfflineWorkerStrategy(strategyRequest);
-    if (strategy === "conservative") {
+    if (strategy === "conservative-preview") {
       const conservativeReason = request.conservativeReason ??
         "Worker 达到现实时间上限后使用零校准保守宏观";
       currentPhase = "conservative";
@@ -211,7 +211,7 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
         algorithmVersion: conservative.report.algorithmVersion,
         degradedReason: conservative.report.fallbackReason,
       });
-      post({ type: "complete", id: request.id, state: conservative.state, totalSeconds: request.seconds, approximation: conservative.report });
+      post({ type: "decision-required", id: request.id, totalSeconds: request.seconds, approximation: { ...conservative.report, settlementStatus: "conservative-preview" } });
       activeId = null;
       return;
     }
@@ -236,9 +236,8 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
       });
       approximation = experiment.report;
       strategy = selectOfflineWorkerStrategyAfterFastResult(strategyRequest, experiment);
-      if (experiment.status === "approximate" || experiment.status === "conservative" || experiment.status === "bounded-exact") {
-        currentPhase = experiment.status === "conservative" ? "conservative"
-          : experiment.status === "bounded-exact" ? "bounded-exact" : "macro";
+      if (experiment.status === "approximate" || experiment.status === "bounded-exact") {
+        currentPhase = experiment.status === "bounded-exact" ? "bounded-exact" : "macro";
         postProgress(request.seconds, request.seconds, {
           algorithmVersion: experiment.report.algorithmVersion,
           degradedReason: experiment.report.fallbackReason,
@@ -247,10 +246,20 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
         activeId = null;
         return;
       }
+      if (experiment.status === "conservative") {
+        currentPhase = "conservative";
+        postProgress(request.seconds, request.seconds, {
+          algorithmVersion: experiment.report.algorithmVersion,
+          degradedReason: experiment.report.fallbackReason,
+        });
+        post({ type: "decision-required", id: request.id, totalSeconds: request.seconds, approximation: { ...experiment.report, settlementStatus: "conservative-preview" } });
+        activeId = null;
+        return;
+      }
       if (strategy === "invalid-source") {
         throw new InvalidOfflineSourceError(experiment.report.fallbackReason ?? "源存档未通过快速结算安全校验");
       }
-      if (strategy === "conservative") {
+      if (strategy === "conservative-preview") {
         currentPhase = "conservative";
         postProgress(FAST_OFFLINE_CALIBRATION_SECONDS, request.seconds, {
           algorithmVersion: experiment.report.algorithmVersion,
@@ -267,7 +276,7 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
             algorithmVersion: conservative.report.algorithmVersion,
             degradedReason: conservative.report.fallbackReason,
           });
-          post({ type: "complete", id: request.id, state: conservative.state, totalSeconds: request.seconds, approximation: conservative.report });
+          post({ type: "decision-required", id: request.id, totalSeconds: request.seconds, approximation: { ...conservative.report, settlementStatus: "conservative-preview" } });
           activeId = null;
           return;
         }

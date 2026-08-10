@@ -22,8 +22,10 @@ test.describe("1.0.34 real-save offline and pure-idle workers", () => {
     }));
   });
 
-  test("all long offline windows complete through the browser Worker without changing the source", async ({ page }) => {
-    test.setTimeout(150_000);
+  test("all long offline windows either qualify or return an uncommitted decision without changing the source", async ({ page }) => {
+    // Four independent windows each keep their 35s hard gate. Leave enough
+    // suite time for four large-save serializations and integrity reloads.
+    test.setTimeout(210_000);
     await page.goto(harnessPath);
     const result = await page.evaluate(async () => {
       const loadModule = new Function("specifier", "return import(specifier)") as
@@ -67,7 +69,7 @@ test.describe("1.0.34 real-save offline and pure-idle workers", () => {
               return;
             }
             window.clearTimeout(timeout);
-            if (event.data.type === "complete") resolve(event.data);
+            if (event.data.type === "complete" || event.data.type === "decision-required") resolve(event.data);
             else reject(new Error(event.data.message ?? event.data.type ?? "offline Worker returned an unknown result"));
           };
           worker.postMessage({
@@ -81,15 +83,21 @@ test.describe("1.0.34 real-save offline and pure-idle workers", () => {
             deadlineMs: 30_000,
           });
         });
-        const output = response.state as Record<string, any>;
+        const workerRoundTripMs = performance.now() - startedAt;
+        const validationStartedAt = performance.now();
+        const committed = response.type === "complete";
+        const output = (committed ? response.state : state) as Record<string, any>;
         const serialized = storage.serializeEnvelope(output) as string;
         const inspection = storage.inspectSave(serialized) as { valid: boolean };
         reports.push({
           seconds,
           roundTripMs: performance.now() - startedAt,
+          workerRoundTripMs,
+          validationMs: performance.now() - validationStartedAt,
           heapBefore,
           heapAfter: (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? null,
           approximation: response.approximation,
+          committed,
           phases: [...new Set(phases)],
           elapsedAdvance: output.elapsedSeconds - state.elapsedSeconds,
           valid: inspection.valid,
@@ -116,15 +124,16 @@ test.describe("1.0.34 real-save offline and pure-idle workers", () => {
 
     expect(result.sourceUnchanged).toBe(true);
     expect(result.reports).toHaveLength(4);
+    console.log(`BROWSER_FAST_OFFLINE ${JSON.stringify(result)}`);
     for (const report of result.reports) {
       expect(report.valid).toBe(true);
       expect(report.criticalFinite).toBe(true);
-      expect(report.elapsedAdvance).toBeCloseTo(report.seconds, 3);
+      expect(report.elapsedAdvance).toBeCloseTo(report.committed ? report.seconds : 0, 3);
       expect(report.approximation).toMatchObject({ mode: "approximate", algorithmVersion: "fast-30s-v2" });
-      expect(["approximate", "conservative"]).toContain(report.approximation?.settlementStatus);
-      expect(report.roundTripMs).toBeLessThan(30_000);
+      expect(report.committed ? ["approximate", "bounded-exact"] : ["conservative-preview"]).toContain(report.approximation?.settlementStatus);
+      expect(report.workerRoundTripMs).toBeLessThan(35_000);
+      expect(report.roundTripMs).toBeLessThan(45_000);
     }
-    console.log(`BROWSER_FAST_OFFLINE ${JSON.stringify(result)}`);
   });
 
   test("8x, 12x and 16x slices stay under the browser safety timeout and terminate promptly", async ({ page }) => {

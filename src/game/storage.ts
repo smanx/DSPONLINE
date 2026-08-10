@@ -51,6 +51,7 @@ import {
 import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, MaterialDeliverySlot, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, SaveMode, SorterTier, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId, SystemSpaceStationState, GalacticHubNetworkState } from "./types";
 import type { OfflineApproximationReport } from "./offlineApproximation";
 import type { OfflineComplexityReport } from "./offlineComplexity";
+import type { OfflineSettlementFailureKind } from "./offlineSettlementStrategy";
 import type { CloudSaveSummary } from "./cloud";
 
 export const SAVE_KEY = "dsp-idle-network.save.v1";
@@ -198,6 +199,7 @@ export interface SaveRecovery {
 
 export interface OfflineReport {
   seconds: number;
+  settlement?: OfflineSettlementReceipt;
   produced: Array<{ itemId: ItemId; amount: number }>;
   completedTechIds: TechId[];
   structurePointsAdded: number;
@@ -209,6 +211,16 @@ export interface OfflineReport {
   approximation?: OfflineApproximationReport;
   /** Runtime-only diagnosis for the just-completed calculation. */
   complexity?: OfflineComplexityReport;
+}
+
+export interface OfflineSettlementReceipt {
+  status: "exact" | "approximate" | "conservative-skipped";
+  committed: boolean;
+  rewardsSubmitted: boolean;
+  originalSeconds: number;
+  submittedSeconds: number;
+  failureKind?: OfflineSettlementFailureKind;
+  failureReason?: string;
 }
 
 export interface SaveSlotSummary {
@@ -1180,6 +1192,14 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
   }) as FactoryEntity[];
 
   for (const resource of initial.entities.filter((entity) => entity.kind === "vein")) {
+    // A v20+ save already owns an immutable galaxy resource catalogue. Rebuilding
+    // the baseline with the same seed can legitimately produce a different
+    // generated catalogue (notably for the legacy default seed), so only restore
+    // stable resource entities that the persisted planet profile still declares.
+    // This prevents load/import/cloud restore from silently adding a rare vein.
+    const declaredBySavedGalaxy = resource.resourceId !== undefined &&
+      galaxy.profiles[resource.planetId]?.resourceIds.includes(resource.resourceId);
+    if (saved.version >= 20 && !declaredBySavedGalaxy) continue;
     const equivalentGuaranteedOil = resource.resourceId === "crude_oil" &&
       GUARANTEED_CRUDE_OIL_PLANETS.includes(resource.planetId as typeof GUARANTEED_CRUDE_OIL_PLANETS[number]) &&
       entities.some((entity) => entity.kind === "vein" && entity.planetId === resource.planetId && entity.resourceId === "crude_oil");
@@ -2257,6 +2277,13 @@ function buildOfflineReport(before: GameState, after: GameState, seconds: number
   });
   return {
     seconds,
+    settlement: {
+      status: "exact",
+      committed: true,
+      rewardsSubmitted: true,
+      originalSeconds: seconds,
+      submittedSeconds: seconds,
+    },
     produced,
     completedTechIds: after.research.completedTechIds.filter((techId) => !beforeTechIds.has(techId)),
     structurePointsAdded: Math.max(0, after.dysonSphere.structurePoints - before.dysonSphere.structurePoints),
@@ -2551,20 +2578,65 @@ function parseDeferredEnvelope(raw: string): DeferredLoadedGame | null {
   return { state, savedAt, offlineSeconds, offlineReport: null };
 }
 
-export function finalizeDeferredOfflineGame(loaded: DeferredLoadedGame, advancedState: GameState): LoadedGame {
+export function finalizeDeferredOfflineGame(
+  loaded: DeferredLoadedGame,
+  advancedState: GameState,
+  details: { approximation?: OfflineApproximationReport; complexity?: OfflineComplexityReport } = {},
+): LoadedGame {
   if (loaded.offlineSeconds < 1) {
     return { state: loaded.state, offlineSeconds: 0, offlineReport: null, recovery: loaded.recovery };
   }
   const returning = applyReturningReward(advancedState, loaded.savedAt, loaded.offlineSeconds);
   const report = buildOfflineReport(loaded.state, returning.state, loaded.offlineSeconds);
+  if (details.approximation) report.approximation = details.approximation;
+  if (details.complexity) report.complexity = details.complexity;
+  report.settlement = {
+    status: details.approximation?.settlementStatus === "approximate" ? "approximate" : "exact",
+    committed: true,
+    rewardsSubmitted: true,
+    originalSeconds: loaded.offlineSeconds,
+    submittedSeconds: loaded.offlineSeconds,
+  };
   if (returning.reward.length > 0) report.returningReward = returning.reward;
   return { state: returning.state, offlineSeconds: loaded.offlineSeconds, offlineReport: report, recovery: loaded.recovery };
 }
 
+export function skipDeferredOfflineGame(
+  loaded: DeferredLoadedGame,
+  reason: string,
+  failureKind: OfflineSettlementFailureKind,
+  preview?: OfflineApproximationReport,
+  complexity?: OfflineComplexityReport,
+): LoadedGame {
+  if (loaded.state.mode === "speedrun" || loaded.state.speedrun?.enabled) {
+    throw new Error("速通存档必须完成精确离线结算，不能跳过收益并推进计时");
+  }
+  // Explicitly confirmed skip is the sole clock-only settlement path. It
+  // consumes the pending interval while preserving every production,
+  // inventory, cache, research and Dyson field byte-for-byte.
+  const skippedState = {
+    ...loaded.state,
+    elapsedSeconds: loaded.state.elapsedSeconds + loaded.offlineSeconds,
+  };
+  const report = buildOfflineReport(loaded.state, skippedState, loaded.offlineSeconds);
+  report.settlement = {
+    status: "conservative-skipped",
+    committed: true,
+    rewardsSubmitted: false,
+    originalSeconds: loaded.offlineSeconds,
+    submittedSeconds: loaded.offlineSeconds,
+    failureKind,
+    failureReason: reason,
+  };
+  if (preview) report.approximation = { ...preview, settlementStatus: "conservative-skipped" };
+  if (complexity) report.complexity = complexity;
+  return { state: skippedState, offlineSeconds: loaded.offlineSeconds, offlineReport: report, recovery: loaded.recovery };
+}
+
 /**
- * Discard a pending offline interval without applying simulation or rewards.
- * The caller must persist this unchanged state before entering the game so a
- * later reload does not immediately offer the same abandoned interval again.
+ * Return a transient view of the source state without applying simulation or
+ * rewards. Do not persist or enter this result: menu cancellation must discard
+ * the loaded copy so savedAt and the pending offline interval remain intact.
  */
 export function cancelDeferredOfflineGame(loaded: DeferredLoadedGame): LoadedGame {
   return { state: loaded.state, offlineSeconds: 0, offlineReport: null, recovery: loaded.recovery };

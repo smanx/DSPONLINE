@@ -51,6 +51,7 @@ export type OfflineSimulationWorkerResponse =
     degradedReason?: string;
   }
   | { type: "complete"; id: number; state: GameState; totalSeconds: number; approximation?: OfflineApproximationReport }
+  | { type: "decision-required"; id: number; totalSeconds: number; approximation: OfflineApproximationReport }
   | { type: "upload-complete"; id: number; payload: string; summary: CloudUploadSummary; offlineSeconds: number; returningReward: Array<{ itemId: string; amount: number }>; diagnostics?: CloudUploadPreparationDiagnostics }
   | { type: "cancelled"; id: number }
   | {
@@ -80,10 +81,26 @@ export type OfflineSimulationPhase =
   | "bounded-exact"
   | "saving";
 
-export interface OfflineSimulationRunResult {
+export interface OfflineSimulationCompletedResult {
+  status: "complete";
   state: GameState;
   approximation?: OfflineApproximationReport;
   complexity: OfflineComplexityReport;
+}
+
+export interface OfflineSimulationDecisionResult {
+  status: "decision-required";
+  approximation: OfflineApproximationReport;
+  complexity: OfflineComplexityReport;
+}
+
+export type OfflineSimulationRunResult = OfflineSimulationCompletedResult | OfflineSimulationDecisionResult;
+
+export class OfflineSettlementDecisionRequiredError extends Error {
+  constructor(readonly approximation: OfflineApproximationReport, readonly complexity: OfflineComplexityReport) {
+    super(approximation.fallbackReason ?? "快速离线结算未完成，需要玩家选择后续操作");
+    this.name = "OfflineSettlementDecisionRequiredError";
+  }
 }
 
 export interface OfflineSimulationChunkOptions {
@@ -143,7 +160,10 @@ export function runOfflineSimulationInWorker(
   seconds: number,
   options: { signal?: AbortSignal; onProgress?: (progress: OfflineSimulationProgress) => void; registry?: ContentPackRuntimeSnapshot; approximate?: boolean; onApproximationReport?: (report: OfflineApproximationReport) => void } = {},
 ): Promise<GameState> {
-  return runOfflineSimulationInWorkerDetailed(state, seconds, options).then((result) => result.state);
+  return runOfflineSimulationInWorkerDetailed(state, seconds, options).then((result) => {
+    if (result.status === "decision-required") throw new OfflineSettlementDecisionRequiredError(result.approximation, result.complexity);
+    return result.state;
+  });
 }
 
 export function runOfflineSimulationInWorkerDetailed(
@@ -235,7 +255,13 @@ export function runOfflineSimulationInWorkerDetailed(
       if (message.type === "complete") {
         try { window.sessionStorage.setItem(OFFLINE_PERFORMANCE_SESSION_KEY, String(Math.max(0, performance.now() - startedAt))); } catch { /* optional diagnostics */ }
         if (message.approximation) options.onApproximationReport?.(message.approximation);
-        finish(() => resolve({ state: message.state, approximation: message.approximation, complexity }));
+        finish(() => resolve({ status: "complete", state: message.state, approximation: message.approximation, complexity }));
+        return;
+      }
+      if (message.type === "decision-required") {
+        const approximation = { ...message.approximation, settlementStatus: "conservative-preview" as const };
+        options.onApproximationReport?.(approximation);
+        finish(() => resolve({ status: "decision-required", approximation, complexity }));
         return;
       }
       if (message.type === "cancelled") {

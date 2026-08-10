@@ -46,7 +46,7 @@ export interface OfflineApproximationReport {
   /** Diagnostic only; ordinary inventory/cache drift does not reject fast-30s-v1. */
   maxNonCriticalError?: number;
   /** Explicit v2 completion semantics; fallback no longer implies unbounded replay. */
-  settlementStatus?: "approximate" | "conservative" | "bounded-exact" | "invalid-source" | "cancelled";
+  settlementStatus?: "approximate" | "conservative" | "conservative-preview" | "conservative-skipped" | "bounded-exact" | "invalid-source" | "cancelled" | "failed";
   /** Real Worker computation time, separate from simulated duration. */
   wallClockMs?: number;
   /** True when the real-time calibration budget forced a conservative result. */
