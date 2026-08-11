@@ -18,6 +18,7 @@ async function dismissOnboarding(page: Page) {
 const testsManagingOfflineReport = new Set([
   "offline report summarizes production before entering the factory",
   "running equipment uses semantic animation and reduced motion disables it",
+  "command palette navigates workspaces, focuses recipes and preserves keyboard flow",
 ]);
 
 const testsManagingOnboarding = new Set([
@@ -4934,6 +4935,12 @@ test("auto layout has a dedicated one-step position undo", async ({ page }) => {
 test("command palette navigates workspaces, focuses recipes and preserves keyboard flow", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openSeededGame(page);
+  const offlineReport = page.getByRole("dialog", { name: "离线结算报告" });
+  await offlineReport.waitFor({ state: "visible", timeout: 1_000 }).catch(() => undefined);
+  if (await offlineReport.isVisible()) {
+    await offlineReport.getByRole("button", { name: "确认结算" }).click();
+    await expect(offlineReport).toBeHidden();
+  }
   await page.keyboard.press("Control+K");
   const palette = page.getByRole("dialog", { name: "命令面板" });
   await expect(palette).toBeVisible({ timeout: 15_000 });

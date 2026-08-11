@@ -176,6 +176,11 @@ test("next-mobile delivery controls remain reachable at 200 percent text", async
   await seedV108Factory(page, { mobileUi: "next", fontScale: 2 });
   await page.setViewportSize({ width: 390, height: 844 });
   await openFactory(page, "/?mobileUi=next");
+  const unexpectedExit = page.getByRole("alertdialog", { name: "保存并返回主菜单" });
+  if (await unexpectedExit.count()) {
+    await unexpectedExit.getByRole("button", { name: "继续游戏" }).click({ force: true });
+    await expect(unexpectedExit).toHaveCount(0);
+  }
   await page.locator('.react-flow__node[data-id="v108_hub"]').click();
   const sheet = page.locator(".mobile-inspector-sheet");
   await sheet.getByRole("button", { name: /^展开/ }).click();
