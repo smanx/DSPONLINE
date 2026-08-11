@@ -40,6 +40,7 @@ import {
   clearLeaderboardRevalidationIfSatisfied,
   createLoginFailureGuard,
   leaderboardRevalidationRequired,
+  leaderboardRevalidationThresholds,
   loginDisabled,
   normalizeAccountControls,
   normalizeAccountSecurity,
@@ -1213,6 +1214,7 @@ function adminAccountSummary(store, userId) {
   const cloudBytes = Object.values(savesByMode).flat().reduce((sum, entry) =>
     sum + (entry.history ?? []).reduce((historySum, save) => historySum + Math.max(0, Number(save.size) || 0), 0), 0);
   const controls = store.data.accountControls[userId] ?? null;
+  const reviewRevisions = leaderboardRevalidationThresholds(store.data, userId);
   return {
     accountId: userId,
     username: user.username,
@@ -1241,7 +1243,11 @@ function adminAccountSummary(store, userId) {
     },
     loginDisabledUntil: controls?.loginDisabledUntil ?? null,
     leaderboardRestricted: isLeaderboardRestricted(store.data, userId),
-    leaderboardResumeAfterRevision: controls?.leaderboardResumeAfterRevision ?? null,
+    leaderboardResumeAfterRevision: reviewRevisions.normal || null,
+    leaderboardResumeAfterRevisionByMode: {
+      normal: reviewRevisions.normal || null,
+      speedrun: reviewRevisions.speedrun || null,
+    },
   };
 }
 
@@ -2578,7 +2584,6 @@ export async function createCloudServer({
         if (body.confirmation !== `CONFIRM:${action}:${accountId}`) {
           return send(response, 400, { error: "二次确认文字不匹配", code: "ADMIN_CONFIRMATION_INVALID" });
         }
-        const currentRevision = currentCloudSave(store, accountId, "main")?.revision ?? 0;
         store.data.accountControls ??= {};
         if (action === "revoke-sessions") {
           revokeUserSessions(store, accountId);
@@ -2595,7 +2600,8 @@ export async function createCloudServer({
           const control = store.data.accountControls[accountId];
           if (control) {
             delete control.loginDisabledUntil;
-            if (!control.leaderboardResumeAfterRevision) delete store.data.accountControls[accountId];
+            const reviewRevisions = leaderboardRevalidationThresholds(store.data, accountId);
+            if (reviewRevisions.normal <= 0 && reviewRevisions.speedrun <= 0) delete store.data.accountControls[accountId];
           }
         } else if (action === "restrict-leaderboard") {
           store.data.leaderboardModeration[accountId] = {
@@ -2608,12 +2614,21 @@ export async function createCloudServer({
         } else if (action === "restore-leaderboard") {
           delete store.data.leaderboardModeration[accountId];
           removeUserLeaderboardSubmissions(store, accountId);
-          store.data.accountControls[accountId] = {
+          const reviewRevisions = Object.fromEntries(SAVE_MODES.flatMap((mode) => {
+            const revision = currentCloudSave(store, accountId, "main", mode)?.revision ?? 0;
+            return revision > 0 ? [[mode, revision]] : [];
+          }));
+          const control = {
             ...(store.data.accountControls[accountId] ?? {}),
             source: "admin-manual-review",
             createdAt: Date.now(),
-            leaderboardResumeAfterRevision: currentRevision,
           };
+          delete control.leaderboardResumeAfterRevision;
+          delete control.leaderboardResumeAfterRevisionByMode;
+          if (reviewRevisions.normal > 0) control.leaderboardResumeAfterRevision = reviewRevisions.normal;
+          if (Object.keys(reviewRevisions).length > 0) control.leaderboardResumeAfterRevisionByMode = reviewRevisions;
+          if (control.loginDisabledUntil || Object.keys(reviewRevisions).length > 0) store.data.accountControls[accountId] = control;
+          else delete store.data.accountControls[accountId];
         } else if (action === "delete-account") {
           const verifiedAt = Number(body.verifiedBackupAt);
           if (!runtime.lastBackupAt || verifiedAt !== runtime.lastBackupAt || Date.now() - runtime.lastBackupAt > 24 * 60 * 60 * 1_000) {
@@ -3046,7 +3061,10 @@ export async function createCloudServer({
           ...(legacyImplicitSpeedrun ? { legacyMode: true } : {}),
         };
         appendSaveRevision(store, auth.user.id, next, slot, effectiveMode);
-        if (effectiveMode === "normal" && slot === "main") updateLeaderboardFromMainSave(store, auth.user.id, { save: next });
+        if (slot === "main") {
+          clearLeaderboardRevalidationIfSatisfied(store.data, auth.user.id, next.revision, effectiveMode);
+          if (effectiveMode === "normal") updateLeaderboardFromMainSave(store, auth.user.id, { save: next });
+        }
         dayMetric.cloudUploads += 1;
         await store.persist();
         return send(response, 200, { cloudSave: cloudSaveMetadata(next, slot, effectiveMode) });
@@ -3078,7 +3096,10 @@ export async function createCloudServer({
           restoredFromRevision: sourceRevision,
         };
         appendSaveRevision(store, auth.user.id, restored, slot, mode);
-        if (mode === "normal" && slot === "main") updateLeaderboardFromMainSave(store, auth.user.id, { save: restored });
+        if (slot === "main") {
+          clearLeaderboardRevalidationIfSatisfied(store.data, auth.user.id, restored.revision, mode);
+          if (mode === "normal") updateLeaderboardFromMainSave(store, auth.user.id, { save: restored });
+        }
         dayMetric.cloudUploads += 1;
         appendAudit(store, request, "cloud.revision_restored", auth.user.id);
         await store.persist();
@@ -3108,7 +3129,12 @@ export async function createCloudServer({
       if (request.method === "POST" && url.pathname === "/api/speedrun/submit") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
-        if (isLeaderboardRestricted(store.data, auth.user.id) || leaderboardRevalidationRequired(store.data, auth.user.id, currentCloudSave(store, auth.user.id, "main", "speedrun")?.revision)) {
+        if (isLeaderboardRestricted(store.data, auth.user.id) || leaderboardRevalidationRequired(
+          store.data,
+          auth.user.id,
+          currentCloudSave(store, auth.user.id, "main", "speedrun")?.revision,
+          "speedrun",
+        )) {
           return send(response, 403, { error: "当前账号暂时不能加入官方排行榜", code: LEADERBOARD_RESTRICTED_CODE });
         }
         if (auth.user.leaderboardVisible === false) return send(response, 409, { error: "当前账号已退出公开排行榜", code: "SPEEDRUN_VISIBILITY_DISABLED" });

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 const HASH_PATTERN = /^[a-f0-9]{16}$/;
 const SOURCE_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,79}$/;
+const LEADERBOARD_REVALIDATION_MODES = ["normal", "speedrun"];
 
 function hash16(namespace, value) {
   return createHash("sha256").update(`${namespace}:${String(value)}`).digest("hex").slice(0, 16);
@@ -49,15 +50,32 @@ export function normalizeAccountControls(value, users) {
     const source = normalizedSource(record.source);
     if (!source) return [];
     const loginDisabledUntil = boundedTimestamp(record.loginDisabledUntil);
-    const leaderboardResumeAfterRevision = Number.isInteger(record.leaderboardResumeAfterRevision) && record.leaderboardResumeAfterRevision >= 0
+    const legacyNormalRevision = Number.isInteger(record.leaderboardResumeAfterRevision) && record.leaderboardResumeAfterRevision >= 0
       ? record.leaderboardResumeAfterRevision
       : 0;
-    if (loginDisabledUntil <= 0 && leaderboardResumeAfterRevision <= 0) return [];
+    const sourceRevisions = record.leaderboardResumeAfterRevisionByMode &&
+      typeof record.leaderboardResumeAfterRevisionByMode === "object" &&
+      !Array.isArray(record.leaderboardResumeAfterRevisionByMode)
+      ? record.leaderboardResumeAfterRevisionByMode
+      : {};
+    const leaderboardResumeAfterRevisionByMode = Object.fromEntries(LEADERBOARD_REVALIDATION_MODES.flatMap((mode) => {
+      const candidate = mode === "normal" && sourceRevisions[mode] === undefined
+        ? legacyNormalRevision
+        : sourceRevisions[mode];
+      return Number.isInteger(candidate) && candidate > 0 ? [[mode, candidate]] : [];
+    }));
+    const normalRevision = leaderboardResumeAfterRevisionByMode.normal ?? 0;
+    if (loginDisabledUntil <= 0 && Object.keys(leaderboardResumeAfterRevisionByMode).length === 0) return [];
     return [[userId, {
       source,
       createdAt: boundedTimestamp(record.createdAt),
       ...(loginDisabledUntil > 0 ? { loginDisabledUntil } : {}),
-      ...(leaderboardResumeAfterRevision > 0 ? { leaderboardResumeAfterRevision } : {}),
+      // Preserve the scalar normal-mode alias so a code-only rollback can still
+      // enforce the historical accountControls contract.
+      ...(normalRevision > 0 ? { leaderboardResumeAfterRevision: normalRevision } : {}),
+      ...(Object.keys(leaderboardResumeAfterRevisionByMode).length > 0
+        ? { leaderboardResumeAfterRevisionByMode }
+        : {}),
     }]];
   }));
 }
@@ -131,16 +149,36 @@ export function loginDisabled(data, userId, now = Date.now()) {
   return Number(data?.accountControls?.[userId]?.loginDisabledUntil ?? 0) > now;
 }
 
-export function leaderboardRevalidationRequired(data, userId, revision) {
-  const threshold = Number(data?.accountControls?.[userId]?.leaderboardResumeAfterRevision ?? 0);
+export function leaderboardRevalidationThresholds(data, userId) {
+  const control = data?.accountControls?.[userId];
+  const revisions = control?.leaderboardResumeAfterRevisionByMode;
+  const normal = revisions?.normal ?? control?.leaderboardResumeAfterRevision ?? 0;
+  const speedrun = revisions?.speedrun ?? 0;
+  return {
+    normal: Number.isInteger(normal) && normal > 0 ? normal : 0,
+    speedrun: Number.isInteger(speedrun) && speedrun > 0 ? speedrun : 0,
+  };
+}
+
+export function leaderboardRevalidationRequired(data, userId, revision, mode = "normal") {
+  const threshold = leaderboardRevalidationThresholds(data, userId)[mode] ?? 0;
   return threshold > 0 && (!Number.isInteger(revision) || revision <= threshold);
 }
 
-export function clearLeaderboardRevalidationIfSatisfied(data, userId, revision) {
-  if (leaderboardRevalidationRequired(data, userId, revision)) return false;
+export function clearLeaderboardRevalidationIfSatisfied(data, userId, revision, mode = "normal") {
+  const thresholds = leaderboardRevalidationThresholds(data, userId);
+  if (!LEADERBOARD_REVALIDATION_MODES.includes(mode) || thresholds[mode] <= 0 ||
+    leaderboardRevalidationRequired(data, userId, revision, mode)) return false;
   const control = data?.accountControls?.[userId];
-  if (!control?.leaderboardResumeAfterRevision) return false;
-  delete control.leaderboardResumeAfterRevision;
-  if (!control.loginDisabledUntil) delete data.accountControls[userId];
+  if (!control) return false;
+  if (mode === "normal") delete control.leaderboardResumeAfterRevision;
+  if (control.leaderboardResumeAfterRevisionByMode && typeof control.leaderboardResumeAfterRevisionByMode === "object") {
+    delete control.leaderboardResumeAfterRevisionByMode[mode];
+    if (Object.keys(control.leaderboardResumeAfterRevisionByMode).length === 0) {
+      delete control.leaderboardResumeAfterRevisionByMode;
+    }
+  }
+  const remaining = leaderboardRevalidationThresholds(data, userId);
+  if (!control.loginDisabledUntil && remaining.normal <= 0 && remaining.speedrun <= 0) delete data.accountControls[userId];
   return true;
 }

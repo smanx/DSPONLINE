@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   anonymousLoginContext,
+  clearLeaderboardRevalidationIfSatisfied,
   createLoginFailureGuard,
   leaderboardRevalidationRequired,
   normalizeAccountControls,
@@ -47,4 +48,24 @@ test("normalizes internal controls without changing the public cloud schema", ()
   const controls = normalizeAccountControls({ user_a: { source: "admin-test", createdAt: 1, loginDisabledUntil: 100, leaderboardResumeAfterRevision: 4 } }, users);
   assert.equal(leaderboardRevalidationRequired({ accountControls: controls }, "user_a", 4), true);
   assert.equal(leaderboardRevalidationRequired({ accountControls: controls }, "user_a", 5), false);
+  assert.equal(leaderboardRevalidationRequired({ accountControls: controls }, "user_a", 1, "speedrun"), false);
+});
+
+test("tracks and clears normal and speedrun leaderboard review revisions independently", () => {
+  const users = { user_a: { id: "user_a" } };
+  const controls = normalizeAccountControls({
+    user_a: {
+      source: "admin-test",
+      createdAt: 1,
+      leaderboardResumeAfterRevision: 4,
+      leaderboardResumeAfterRevisionByMode: { normal: 4, speedrun: 2 },
+    },
+  }, users);
+  const data = { accountControls: controls };
+  assert.equal(leaderboardRevalidationRequired(data, "user_a", 5, "normal"), false);
+  assert.equal(leaderboardRevalidationRequired(data, "user_a", 2, "speedrun"), true);
+  assert.equal(clearLeaderboardRevalidationIfSatisfied(data, "user_a", 5, "normal"), true);
+  assert.equal(leaderboardRevalidationRequired(data, "user_a", 2, "speedrun"), true);
+  assert.equal(clearLeaderboardRevalidationIfSatisfied(data, "user_a", 3, "speedrun"), true);
+  assert.equal(data.accountControls.user_a, undefined);
 });
