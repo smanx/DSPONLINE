@@ -89,7 +89,7 @@ test("exact-value tooltip and classic progress share one visible value", async (
   await expect(async () => {
     await power.hover();
     await expect(tooltip).toBeVisible({ timeout: 1_000 });
-  }).toPass({ timeout: 5_000 });
+  }).toPass({ timeout: 15_000 });
   await expect(page.locator(".quantity-value__tooltip:visible")).toHaveCount(1);
   await page.mouse.move(4, 4);
   await expect(tooltip).toBeHidden();

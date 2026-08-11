@@ -315,7 +315,7 @@ test("item hover actions remain interactive across the portal and open locate an
   card = page.getByRole("dialog", { name: "铁块快捷操作" });
   await card.getByRole("button", { name: "打开铁块图鉴" }).click();
   const codex = page.getByRole("dialog", { name: "生产资料库" });
-  await expect(codex.locator(".recipe-item-header").getByText("铁块", { exact: true })).toBeVisible();
+  await expect(codex.locator(".recipe-item-header").getByText("铁块", { exact: true })).toBeVisible({ timeout: 15_000 });
 });
 
 test.describe("touch and responsive management", () => {

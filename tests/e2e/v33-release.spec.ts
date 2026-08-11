@@ -8,6 +8,10 @@ test.beforeEach(async ({ page }) => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-11-v1.0.38");
   });
+  const offlineReport = page.getByRole("dialog", { name: "离线结算报告" });
+  await page.addLocatorHandler(offlineReport, async () => {
+    await offlineReport.getByRole("button", { name: "确认结算" }).click({ force: true });
+  });
 });
 
 async function dismissOnboarding(page: Page) {

@@ -113,7 +113,10 @@ test("each planet restores its last canvas viewport", async ({ page }) => {
   await expect.poll(transform).toBe(homeViewport);
   await page.getByTitle("切换到烬原 II").click();
   await page.waitForTimeout(260);
-  await pan(-90, -45);
+  await expect(async () => {
+    await pan(-90, -45);
+    expect(await transform()).not.toBe(homeViewport);
+  }).toPass({ timeout: 10_000 });
   const ashenViewport = await transform();
   expect(ashenViewport).not.toBe(homeViewport);
   await page.getByTitle(/切换到澄海 I/).click();

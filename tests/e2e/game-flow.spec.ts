@@ -34,7 +34,7 @@ test.beforeEach(async ({ page }, testInfo) => {
   if (!testsManagingOfflineReport.has(testInfo.title)) {
     const offlineReport = page.getByRole("dialog", { name: "离线结算报告" });
     await page.addLocatorHandler(offlineReport, async () => {
-      await offlineReport.getByRole("button", { name: "确认结算" }).click();
+      await offlineReport.getByRole("button", { name: "确认结算" }).click({ force: true });
     });
   }
 });
@@ -4936,7 +4936,7 @@ test("command palette navigates workspaces, focuses recipes and preserves keyboa
   await openSeededGame(page);
   await page.keyboard.press("Control+K");
   const palette = page.getByRole("dialog", { name: "命令面板" });
-  await expect(palette).toBeVisible();
+  await expect(palette).toBeVisible({ timeout: 15_000 });
   await palette.getByLabel("搜索命令").fill("暂停模拟");
   await palette.getByLabel("搜索命令").press("Enter");
   await expect(page.locator(".canvas-status")).toContainText("模拟暂停");

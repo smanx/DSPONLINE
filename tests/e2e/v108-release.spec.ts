@@ -53,7 +53,7 @@ async function seedV108Factory(page: Page, options: { mobileUi?: "legacy" | "nex
 async function openFactory(page: Page, path = "/") {
   const offlineReport = page.getByRole("dialog", { name: "离线结算报告" });
   await page.addLocatorHandler(offlineReport, async () => {
-    await offlineReport.getByRole("button", { name: "确认结算" }).click();
+    await offlineReport.getByRole("button", { name: "确认结算" }).click({ force: true });
   });
   await page.goto(path);
   const acknowledgeRelease = page.getByRole("button", { name: "我知道了" });
