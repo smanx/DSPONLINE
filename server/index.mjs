@@ -92,6 +92,7 @@ const SPEEDRUN_FINITE_TECH_IDS = [
 const WHITE_MATRIX_RATE_MIN_INTERVAL_SECONDS = 60;
 const THROUGHPUT_RATE_MIN_INTERVAL_SECONDS = 60;
 const THROUGHPUT_METRIC_VERSION = "settled-total-produced-v1";
+const LEADERBOARD_WINDOW_DIAGNOSTICS_VERSION = 1;
 const METRIC_KEYS = [
   "energyGeneratedMj",
   "uploadedWhiteMatrix",
@@ -1757,39 +1758,109 @@ function numberAt(value, fallback = 0) {
 
 function whiteMatrixRateFromAdjacentRevision(store, userId, currentSave, currentState) {
   const currentRevision = Number.isInteger(currentSave?.revision) ? currentSave.revision : 0;
-  if (currentRevision <= 1) return 0;
+  const unavailable = (status, details = {}) => ({
+    value: 0,
+    valid: false,
+    status,
+    metricVersion: "settled-universe-matrix-v1",
+    windowSeconds: 0,
+    ...details,
+  });
+  if (currentRevision <= 1) return unavailable("waiting-for-second-sync", { toRevision: currentRevision || null });
   const previousMetadata = saveHistory(store, userId, "main").find((entry) => entry.revision === currentRevision - 1);
+  if (!previousMetadata) return unavailable("previous-revision-missing", { fromRevision: currentRevision - 1, toRevision: currentRevision });
   const previousSave = materializeCloudSave(store, userId, "main", previousMetadata);
   const previousState = parseSaveState(previousSave?.payload);
-  if (!previousState || typeof previousState !== "object" || !currentState || typeof currentState !== "object") return 0;
+  if (!previousState || typeof previousState !== "object" || !currentState || typeof currentState !== "object") {
+    return unavailable("invalid-revision", { fromRevision: currentRevision - 1, toRevision: currentRevision });
+  }
   if ((Array.isArray(previousState.contentPacks) && previousState.contentPacks.length > 0)
-    || (Array.isArray(currentState.contentPacks) && currentState.contentPacks.length > 0)) return 0;
+    || (Array.isArray(currentState.contentPacks) && currentState.contentPacks.length > 0)) {
+    return unavailable("modded-revision", { fromRevision: currentRevision - 1, toRevision: currentRevision });
+  }
   const previousElapsed = numberAt(previousState.elapsedSeconds);
   const currentElapsed = numberAt(currentState.elapsedSeconds);
   const elapsedDelta = currentElapsed - previousElapsed;
-  if (elapsedDelta < WHITE_MATRIX_RATE_MIN_INTERVAL_SECONDS) return 0;
+  if (elapsedDelta < 0) {
+    return unavailable("elapsed-counter-reset", { fromRevision: currentRevision - 1, toRevision: currentRevision });
+  }
+  if (elapsedDelta < WHITE_MATRIX_RATE_MIN_INTERVAL_SECONDS) {
+    return unavailable("interval-too-short", {
+      fromRevision: currentRevision - 1,
+      toRevision: currentRevision,
+      windowSeconds: elapsedDelta,
+      remainingSeconds: WHITE_MATRIX_RATE_MIN_INTERVAL_SECONDS - elapsedDelta,
+    });
+  }
   const previousProduced = Math.floor(numberAt(previousState.totalProduced?.universe_matrix));
   const currentProduced = Math.floor(numberAt(currentState.totalProduced?.universe_matrix));
   const producedDelta = currentProduced - previousProduced;
-  if (producedDelta <= 0) return 0;
+  if (producedDelta < 0) {
+    return unavailable("production-counter-reset", {
+      fromRevision: currentRevision - 1,
+      toRevision: currentRevision,
+      windowSeconds: elapsedDelta,
+    });
+  }
+  if (producedDelta === 0) {
+    return {
+      value: 0,
+      valid: true,
+      status: "ready-zero",
+      metricVersion: "settled-universe-matrix-v1",
+      windowSeconds: elapsedDelta,
+      fromRevision: currentRevision - 1,
+      toRevision: currentRevision,
+    };
+  }
   const scaled = producedDelta > Number.MAX_VALUE / 60 ? Number.MAX_VALUE : producedDelta * 60;
-  return Number.isFinite(scaled) ? normalizeMetric(scaled / elapsedDelta) : Number.MAX_VALUE;
+  return {
+    value: Number.isFinite(scaled) ? normalizeMetric(scaled / elapsedDelta) : Number.MAX_VALUE,
+    valid: true,
+    status: "ready",
+    metricVersion: "settled-universe-matrix-v1",
+    windowSeconds: elapsedDelta,
+    fromRevision: currentRevision - 1,
+    toRevision: currentRevision,
+  };
 }
 
 function throughputRateFromAdjacentRevision(store, userId, currentSave, currentState) {
   const currentRevision = Number.isInteger(currentSave?.revision) ? currentSave.revision : 0;
-  const empty = { value: 0, valid: false, metricVersion: THROUGHPUT_METRIC_VERSION, windowSeconds: 0 };
-  if (currentRevision <= 1) return empty;
+  const unavailable = (status, details = {}) => ({
+    value: 0,
+    valid: false,
+    status,
+    metricVersion: THROUGHPUT_METRIC_VERSION,
+    windowSeconds: 0,
+    ...details,
+  });
+  if (currentRevision <= 1) return unavailable("waiting-for-second-sync", { toRevision: currentRevision || null });
   const previousMetadata = saveHistory(store, userId, "main").find((entry) => entry.revision === currentRevision - 1);
+  if (!previousMetadata) return unavailable("previous-revision-missing", { fromRevision: currentRevision - 1, toRevision: currentRevision });
   const previousSave = materializeCloudSave(store, userId, "main", previousMetadata);
   const previousState = parseSaveState(previousSave?.payload);
-  if (!previousState || typeof previousState !== "object" || !currentState || typeof currentState !== "object") return empty;
+  if (!previousState || typeof previousState !== "object" || !currentState || typeof currentState !== "object") {
+    return unavailable("invalid-revision", { fromRevision: currentRevision - 1, toRevision: currentRevision });
+  }
   if ((Array.isArray(previousState.contentPacks) && previousState.contentPacks.length > 0)
-    || (Array.isArray(currentState.contentPacks) && currentState.contentPacks.length > 0)) return empty;
+    || (Array.isArray(currentState.contentPacks) && currentState.contentPacks.length > 0)) {
+    return unavailable("modded-revision", { fromRevision: currentRevision - 1, toRevision: currentRevision });
+  }
   const previousElapsed = numberAt(previousState.elapsedSeconds);
   const currentElapsed = numberAt(currentState.elapsedSeconds);
   const elapsedDelta = currentElapsed - previousElapsed;
-  if (elapsedDelta < THROUGHPUT_RATE_MIN_INTERVAL_SECONDS) return empty;
+  if (elapsedDelta < 0) {
+    return unavailable("elapsed-counter-reset", { fromRevision: currentRevision - 1, toRevision: currentRevision });
+  }
+  if (elapsedDelta < THROUGHPUT_RATE_MIN_INTERVAL_SECONDS) {
+    return unavailable("interval-too-short", {
+      fromRevision: currentRevision - 1,
+      toRevision: currentRevision,
+      windowSeconds: elapsedDelta,
+      remainingSeconds: THROUGHPUT_RATE_MIN_INTERVAL_SECONDS - elapsedDelta,
+    });
+  }
   const previousProduced = previousState.totalProduced && typeof previousState.totalProduced === "object"
     ? previousState.totalProduced
     : {};
@@ -1800,13 +1871,20 @@ function throughputRateFromAdjacentRevision(store, userId, currentSave, currentS
   for (const itemId of new Set([...Object.keys(previousProduced), ...Object.keys(currentProduced)])) {
     const before = Math.floor(numberAt(previousProduced[itemId]));
     const after = Math.floor(numberAt(currentProduced[itemId]));
-    if (after < before) return empty;
+    if (after < before) {
+      return unavailable("production-counter-reset", {
+        fromRevision: currentRevision - 1,
+        toRevision: currentRevision,
+        windowSeconds: elapsedDelta,
+      });
+    }
     producedDelta = saturatingMetricAdd(producedDelta, after - before);
   }
   const scaled = saturatingMetricProduct(producedDelta, 60);
   return {
     value: normalizeMetric(scaled / elapsedDelta),
     valid: true,
+    status: producedDelta > 0 ? "ready" : "ready-zero",
     metricVersion: THROUGHPUT_METRIC_VERSION,
     windowSeconds: elapsedDelta,
     fromRevision: currentRevision - 1,
@@ -1814,7 +1892,7 @@ function throughputRateFromAdjacentRevision(store, userId, currentSave, currentS
   };
 }
 
-function leaderboardMetricsFromSave(save, peakWhiteMatrixPerMinute = 0, throughputWindow = null) {
+function leaderboardMetricsFromSave(save, whiteMatrixWindow = null, throughputWindow = null) {
   const state = parseSaveState(save?.payload);
   if (!state || typeof state !== "object") return null;
   const generationKw = numberAt(state.metrics?.generationKw);
@@ -1827,7 +1905,7 @@ function leaderboardMetricsFromSave(save, peakWhiteMatrixPerMinute = 0, throughp
   return normalizeMetrics({
     energyGeneratedMj: saturatingMetricProduct(generationKw, elapsedSeconds / 1000),
     uploadedWhiteMatrix: producedWhiteMatrix,
-    peakWhiteMatrixPerMinute,
+    peakWhiteMatrixPerMinute: whiteMatrixWindow?.valid ? whiteMatrixWindow.value : 0,
     peakGenerationKw: generationKw,
     peakThroughputPerMinute: throughputWindow?.valid ? throughputWindow.value : 0,
     theoreticalPeakThroughputPerMinute: nominalThroughput.galacticValue,
@@ -1923,10 +2001,11 @@ function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.
   if (integrity.freeze) {
     return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "integrity-frozen", integrity };
   }
+  const whiteMatrixWindow = whiteMatrixRateFromAdjacentRevision(store, userId, materialized, state);
   const throughputWindow = throughputRateFromAdjacentRevision(store, userId, materialized, state);
   const observed = leaderboardMetricsFromSave(
     materialized,
-    whiteMatrixRateFromAdjacentRevision(store, userId, materialized, state),
+    whiteMatrixWindow,
     throughputWindow,
   );
   if (!observed) return { changed: false, submission: null, reason: "invalid-save" };
@@ -1946,6 +2025,7 @@ function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.
     && previous.verification.cloudRevision === materialized.revision
     && previous.displayName === user.displayName
     && previous.visible !== false
+    && previous.verification?.windowDiagnosticsVersion === LEADERBOARD_WINDOW_DIAGNOSTICS_VERSION
     && sameMetrics) {
     return { changed: false, submission: previous, reason: "current" };
   }
@@ -1968,6 +2048,16 @@ function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.
       checkedAt: now,
       throughputMetricVersion: THROUGHPUT_METRIC_VERSION,
       nominalThroughputMetricVersion: metrics.nominalThroughputMetricVersion,
+      windowDiagnosticsVersion: LEADERBOARD_WINDOW_DIAGNOSTICS_VERSION,
+      windows: {
+        whiteRate: publicLeaderboardWindow(whiteMatrixWindow),
+        throughput: publicLeaderboardWindow(throughputWindow),
+      },
+      whiteMatrixWindow: whiteMatrixWindow.valid ? {
+        fromRevision: whiteMatrixWindow.fromRevision,
+        toRevision: whiteMatrixWindow.toRevision,
+        elapsedSeconds: whiteMatrixWindow.windowSeconds,
+      } : null,
       throughputWindow: throughputWindow.valid ? {
         fromRevision: throughputWindow.fromRevision,
         toRevision: throughputWindow.toRevision,
@@ -1977,6 +2067,72 @@ function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.
   };
   store.data.submissions[key] = submission;
   return { changed: true, submission, reason: previous ? "updated" : "created" };
+}
+
+function publicLeaderboardWindow(window) {
+  if (!window) return null;
+  return {
+    status: window.status,
+    valid: window.valid === true,
+    value: numberAt(window.value),
+    metricVersion: window.metricVersion,
+    windowSeconds: numberAt(window.windowSeconds),
+    remainingSeconds: numberAt(window.remainingSeconds),
+    fromRevision: Number.isInteger(window.fromRevision) ? window.fromRevision : null,
+    toRevision: Number.isInteger(window.toRevision) ? window.toRevision : null,
+  };
+}
+
+function leaderboardSelfSnapshot(store, userId, sortedEntries) {
+  const user = store.data.users[userId];
+  if (!user) return null;
+  const save = currentCloudSave(store, userId, "main", "normal");
+  const entryIndex = sortedEntries.findIndex((candidate) => candidate.userId === userId);
+  const entry = entryIndex >= 0 ? { ...sortedEntries[entryIndex], rank: entryIndex + 1 } : null;
+  const submission = store.data.submissions[`${ACTIVE_LEADERBOARD_SEASON_ID}:${userId}`] ?? null;
+  const reviewResumeAfterRevision = leaderboardRevalidationThresholds(store.data, userId).normal;
+  let eligibility = "ranked";
+  if (isLeaderboardRestricted(store.data, userId)) eligibility = "restricted";
+  else if (user.leaderboardVisible === false) eligibility = "hidden";
+  else if (!save) eligibility = "waiting-main-save";
+  else if (leaderboardRevalidationRequired(store.data, userId, save.revision, "normal")) eligibility = "revalidation-required";
+  else if (!entry) eligibility = "not-submitted";
+
+  const diagnosticsCurrent = submission?.verification?.windowDiagnosticsVersion === LEADERBOARD_WINDOW_DIAGNOSTICS_VERSION
+    && submission.verification.cloudRevision === save?.revision;
+  const pendingWindow = (metricVersion) => save ? {
+    status: save.revision <= 1 ? "waiting-for-second-sync" : "diagnostics-pending",
+    valid: false,
+    value: 0,
+    metricVersion,
+    windowSeconds: 0,
+    remainingSeconds: save.revision <= 1 ? 60 : 0,
+    fromRevision: save.revision > 1 ? save.revision - 1 : null,
+    toRevision: save.revision,
+  } : null;
+  const windows = diagnosticsCurrent
+    ? submission.verification.windows
+    : {
+        whiteRate: pendingWindow("settled-universe-matrix-v1"),
+        throughput: pendingWindow(THROUGHPUT_METRIC_VERSION),
+      };
+  return {
+    userId,
+    mode: "normal",
+    slot: "main",
+    eligibility,
+    entry,
+    publicPageContainsSelf: entryIndex >= 0 && entryIndex < 100,
+    latestCloudRevision: Number.isInteger(save?.revision) ? save.revision : null,
+    submissionRevision: Number.isInteger(submission?.verification?.cloudRevision)
+      ? submission.verification.cloudRevision
+      : null,
+    reviewResumeAfterRevision: reviewResumeAfterRevision > 0 ? reviewResumeAfterRevision : null,
+    windows: {
+      whiteRate: windows?.whiteRate ?? null,
+      throughput: windows?.throughput ?? null,
+    },
+  };
 }
 
 function backfillLeaderboardFromMainSaves(store) {
@@ -3170,17 +3326,25 @@ export async function createCloudServer({
       if (request.method === "GET" && url.pathname === "/api/leaderboard") {
         const category = VALID_CATEGORIES.has(url.searchParams.get("category")) ? url.searchParams.get("category") : "galaxy";
         const seasonId = VALID_SEASONS.has(url.searchParams.get("seasonId")) ? url.searchParams.get("seasonId") : ACTIVE_LEADERBOARD_SEASON_ID;
-        const entries = Object.values(store.data.submissions)
+        const sortedEntries = Object.values(store.data.submissions)
           .filter((entry) => entry.seasonId === seasonId && entry.visible !== false &&
             store.data.users[entry.userId]?.leaderboardVisible !== false && !isLeaderboardRestricted(store.data, entry.userId))
           .map((entry) => {
             const metrics = normalizeMetrics(entry.metrics);
             return { ...entry, metrics, value: categoryValue(metrics, category), verified: Boolean(entry.verification?.cloudRevision) };
           })
-          .sort((left, right) => right.value - left.value || left.userId.localeCompare(right.userId))
-          .slice(0, 100)
-          .map((entry, index) => ({ ...entry, rank: index + 1 }));
-        return send(response, 200, { category, seasonId, entries, generatedAt: Date.now() });
+          .sort((left, right) => right.value - left.value || left.userId.localeCompare(right.userId));
+        const auth = authenticatedUser(request, store);
+        const self = auth && seasonId === ACTIVE_LEADERBOARD_SEASON_ID
+          ? leaderboardSelfSnapshot(store, auth.user.id, sortedEntries)
+          : null;
+        return send(response, 200, {
+          category,
+          seasonId,
+          entries: sortedEntries.slice(0, 100).map((entry, index) => ({ ...entry, rank: index + 1 })),
+          ...(self ? { self } : {}),
+          generatedAt: Date.now(),
+        });
       }
 
       if (request.method === "POST" && url.pathname === "/api/leaderboard") {

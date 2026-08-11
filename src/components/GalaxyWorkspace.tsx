@@ -35,7 +35,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { ACCOUNT_AVATARS, getActiveAccount, getGalacticThroughputSnapshot, type AccountProfileChanges, type AccountState } from "../game/account";
-import { CloudApiError, clearCloudSyncMarker, compareCloudSave, deleteCloudSave, downloadCloudSave, fetchCloudLeaderboard, fetchCloudSaveHistory, fetchSpeedrunLeaderboard, loginCloudAccount, logoutCloudAccount, markCloudSaveSynchronized, refreshCloudSaveMetadata, registerCloudAccount, restoreCloudSaveRevision, resumeCloudSession, setCloudLeaderboardVisibility, submitCloudLeaderboard, submitSpeedrunResult, summarizeCloudPayload, uploadCloudSave, type CloudLeaderboardEntry, type CloudSave, type CloudSaveMetadata, type CloudSaveSlot, type CloudSession, type CloudSyncState, type CloudUploadStage, type SpeedrunLeaderboardEntry } from "../game/cloud";
+import { CloudApiError, clearCloudSyncMarker, compareCloudSave, deleteCloudSave, downloadCloudSave, fetchCloudLeaderboard, fetchCloudSaveHistory, fetchSpeedrunLeaderboard, loginCloudAccount, logoutCloudAccount, markCloudSaveSynchronized, refreshCloudSaveMetadata, registerCloudAccount, restoreCloudSaveRevision, resumeCloudSession, setCloudLeaderboardVisibility, submitCloudLeaderboard, submitSpeedrunResult, summarizeCloudPayload, uploadCloudSave, type CloudLeaderboardEntry, type CloudLeaderboardMetricWindow, type CloudLeaderboardSelf, type CloudSave, type CloudSaveMetadata, type CloudSaveSlot, type CloudSession, type CloudSyncState, type CloudUploadStage, type SpeedrunLeaderboardEntry } from "../game/cloud";
 import { exportGame, exportGameSlot, getSaveSlotSummaries, inspectSave, saveGameSlotVerified, type SaveSlotId } from "../game/storage";
 import {
   LEADERBOARD_CATEGORIES,
@@ -109,6 +109,41 @@ function cloudUploadStageLabel(stage: CloudUploadStage): string {
   return "等待服务器确认";
 }
 
+function leaderboardMetricWindow(self: CloudLeaderboardSelf | null, category: LeaderboardCategoryId): CloudLeaderboardMetricWindow | null {
+  if (category === "white-rate") return self?.windows.whiteRate ?? null;
+  if (category === "throughput") return self?.windows.throughput ?? null;
+  return null;
+}
+
+function leaderboardWindowMessage(window: CloudLeaderboardMetricWindow | null, category: LeaderboardCategoryId, hasHistoricalPeak: boolean): string | null {
+  if (!window) return null;
+  const metric = category === "white-rate" ? "白糖产量" : "实际结算吞吐";
+  const retained = hasHistoricalPeak ? "；已验证的历史峰值仍会保留" : "";
+  if (window.status === "waiting-for-second-sync") return `等待第二次有效云同步：两次普通模式主云同步需相隔至少 60 个模拟秒${retained}`;
+  if (window.status === "diagnostics-pending") return `当前排行榜记录来自旧诊断格式；下一次普通模式主云同步后会显示具体统计窗口${retained}`;
+  if (window.status === "interval-too-short") return `两次普通模式主云同步仅相隔 ${Math.floor(window.windowSeconds)} 个模拟秒，还需 ${Math.ceil(window.remainingSeconds)} 秒才能统计${retained}`;
+  if (window.status === "ready-zero") return `有效的 ${Math.floor(window.windowSeconds)} 秒统计窗口已经形成，本窗口${metric}确实为 0`;
+  if (window.status === "ready") return `服务端已采用主云修订 ${window.fromRevision ?? "?"} → ${window.toRevision ?? "?"} 的 ${Math.floor(window.windowSeconds)} 秒窗口统计${metric}`;
+  if (window.status === "production-counter-reset") return `累计生产计数发生回退，本次窗口未用于${metric}排名；下一次有效同步会重新建立窗口${retained}`;
+  if (window.status === "elapsed-counter-reset") return `模拟时间计数发生回退，本次窗口未用于${metric}排名；下一次有效同步会重新建立窗口${retained}`;
+  if (window.status === "previous-revision-missing") return `上一份相邻主云修订不可用，暂时无法形成${metric}窗口${retained}`;
+  if (window.status === "modded-revision") return `统计区间包含内容包状态，不能用于官方${metric}排名${retained}`;
+  return `相邻主云修订无法通过${metric}统计校验，请保留存档并在下一次同步后重试${retained}`;
+}
+
+function leaderboardEligibilityMessage(self: CloudLeaderboardSelf | null): string | null {
+  if (!self) return null;
+  if (self.eligibility === "waiting-main-save") return "尚未上传普通模式主云存档；手动槽位和速通存档不会参与银河排行";
+  if (self.eligibility === "revalidation-required") return `排行榜正在等待新的普通模式主云修订完成复核${self.reviewResumeAfterRevision ? `（需高于修订 ${self.reviewResumeAfterRevision}）` : ""}`;
+  if (self.eligibility === "restricted") return "当前账号受到排行榜限制；本地与云存档仍保持正常，不会因此被修改";
+  if (self.eligibility === "hidden") return "当前账号已退出公开排行榜；云存档仍正常同步";
+  if (self.eligibility === "modded-save") return "当前普通模式主云存档包含内容包状态，不参与官方排行榜";
+  if (self.eligibility === "missing-payload") return "主云存档正文暂时不可读取，排行榜未更新；原存档不会被改写";
+  if (self.eligibility === "invalid-save") return "主云存档未通过排行榜只读解析，排行榜未更新；原存档不会被改写";
+  if (self.eligibility === "not-submitted") return "普通模式主云存档尚未生成排行榜记录，请刷新排名；存档与生产数据不受影响";
+  return null;
+}
+
 export function GalaxyWorkspace({
   open,
   focusTab,
@@ -140,6 +175,7 @@ export function GalaxyWorkspace({
   const [cloudBusy, setCloudBusy] = useState(false);
   const [cloudMessage, setCloudMessage] = useState<string | null>(null);
   const [cloudEntries, setCloudEntries] = useState<CloudLeaderboardEntry[]>([]);
+  const [cloudLeaderboardSelf, setCloudLeaderboardSelf] = useState<CloudLeaderboardSelf | null>(null);
   const [leaderboardStatus, setLeaderboardStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [leaderboardError, setLeaderboardError] = useState<string | null>(null);
   const [leaderboardVisibilityBusy, setLeaderboardVisibilityBusy] = useState(false);
@@ -164,24 +200,81 @@ export function GalaxyWorkspace({
   const displayEntries = useMemo<LeaderboardEntry[]>(() => {
     if (leaderboardStatus === "error") return snapshot.entries;
     if (leaderboardStatus !== "ready") return [];
-    return cloudEntries.map((entry) => ({
+    const currentUserId = cloudLeaderboardSelf?.userId ?? cloudSession.user?.id;
+    const entries = cloudEntries.map((entry) => ({
       ...entry,
-      isLocal: cloudSession.status === "authenticated" && entry.userId === cloudSession.user?.id,
+      isLocal: cloudSession.status === "authenticated" && entry.userId === currentUserId,
       submitted: true,
     } satisfies LeaderboardEntry));
-  }, [cloudEntries, cloudSession.status, cloudSession.user?.id, leaderboardStatus, snapshot.entries]);
+    if (cloudSession.status === "authenticated" && cloudLeaderboardSelf?.entry && !entries.some((entry) => entry.isLocal)) {
+      entries.push({ ...cloudLeaderboardSelf.entry, isLocal: true, submitted: true });
+    }
+    return entries;
+  }, [cloudEntries, cloudLeaderboardSelf, cloudSession.status, cloudSession.user?.id, leaderboardStatus, snapshot.entries]);
   const displayedLocalEntry = displayEntries.find((entry) => entry.isLocal);
-  const actualThroughputMetrics = displayedLocalEntry?.metrics ?? metrics;
-  const activePlanetThroughput = displayedLocalEntry?.metrics.activePlanetThroughputPerMinute
+  const serverLocalEntry = leaderboardStatus === "ready" ? displayedLocalEntry : undefined;
+  const actualThroughputMetrics = serverLocalEntry?.metrics ?? metrics;
+  const activePlanetThroughput = serverLocalEntry?.metrics.activePlanetThroughputPerMinute
     ?? localNominalThroughput.activePlanetValue;
-  const galacticThroughput = displayedLocalEntry?.metrics.galacticThroughputPerMinute
+  const galacticThroughput = serverLocalEntry?.metrics.galacticThroughputPerMinute
     ?? localNominalThroughput.galacticValue;
-  const nominalThroughputMetricVersion = displayedLocalEntry?.metrics.nominalThroughputMetricVersion
+  const nominalThroughputMetricVersion = serverLocalEntry?.metrics.nominalThroughputMetricVersion
     ?? localNominalThroughput.metricVersion;
   const leaderboardVisible = cloudSession.status === "authenticated"
     ? cloudSession.user?.leaderboardVisible !== false
     : account.profile.privacy === "public";
   const cloudLeaderboardEligible = game.mode === "normal" && cloudSession.status === "authenticated" && Boolean(cloudSession.cloudSave) && leaderboardVisible;
+  const selectedMetricWindow = leaderboardMetricWindow(cloudLeaderboardSelf, category);
+  const serverCategoryValue = serverLocalEntry?.value ?? null;
+  const localCategoryValue = getLeaderboardValue(metrics, category);
+  const categoryValueForDisplay = serverCategoryValue
+    ?? (cloudSession.status === "authenticated" && (category === "white-rate" || category === "throughput") ? 0 : localCategoryValue);
+  const hasHistoricalPeak = (serverCategoryValue ?? 0) > 0;
+  const metricWindowMessage = leaderboardWindowMessage(selectedMetricWindow, category, hasHistoricalPeak);
+  const eligibilityMessage = leaderboardEligibilityMessage(cloudLeaderboardSelf);
+  const serverMetricPending = Boolean(selectedMetricWindow && !selectedMetricWindow.valid && !hasHistoricalPeak);
+  const whiteMetricPending = Boolean(cloudLeaderboardSelf?.windows.whiteRate && !cloudLeaderboardSelf.windows.whiteRate.valid && (serverLocalEntry?.metrics.peakWhiteMatrixPerMinute ?? 0) <= 0);
+  const throughputMetricPending = Boolean(cloudLeaderboardSelf?.windows.throughput && !cloudLeaderboardSelf.windows.throughput.valid && (serverLocalEntry?.metrics.peakThroughputPerMinute ?? 0) <= 0);
+  const canCompareLocalAndServer = !cloudLeaderboardSelf || ["ranked", "waiting-main-save", "not-submitted"].includes(cloudLeaderboardSelf.eligibility);
+  const localServerMetricMessage = cloudSession.status === "authenticated" && canCompareLocalAndServer && (category === "white-rate" || category === "throughput")
+    ? (serverCategoryValue === null || serverMetricPending) && localCategoryValue > 0
+      ? `本地个人档案记录为 ${formatLeaderboardValue(localCategoryValue, category)}/min，但该值尚未通过服务端有效主云窗口校验，因此不会直接写入排行榜。`
+      : serverCategoryValue !== null && Math.abs(serverCategoryValue - localCategoryValue) > Math.max(1, Math.abs(serverCategoryValue) * 0.000001)
+        ? `本地个人档案为 ${formatLeaderboardValue(localCategoryValue, category)}/min，服务端已验证峰值为 ${formatLeaderboardValue(serverCategoryValue, category)}/min；排行榜只采用普通模式主云存档的有效统计窗口。`
+        : null
+    : null;
+  const rankLabel = cloudSession.status !== "authenticated"
+    ? "未登录"
+    : !leaderboardVisible || cloudLeaderboardSelf?.eligibility === "hidden"
+      ? "已退出"
+      : leaderboardStatus === "loading"
+        ? "读取中"
+        : leaderboardStatus === "error"
+          ? "本地预览"
+      : cloudLeaderboardSelf?.eligibility === "restricted"
+        ? "已限制"
+        : cloudLeaderboardSelf?.eligibility === "revalidation-required"
+          ? "等待复核"
+          : cloudLeaderboardSelf && ["modded-save", "missing-payload", "invalid-save", "not-submitted"].includes(cloudLeaderboardSelf.eligibility)
+            ? cloudLeaderboardSelf.eligibility === "modded-save" ? "不具资格" : "未生成"
+          : selectedMetricWindow && !selectedMetricWindow.valid && !hasHistoricalPeak
+            ? "等待统计"
+            : serverLocalEntry?.rank
+              ? `#${serverLocalEntry.rank}`
+              : cloudLeaderboardSelf?.eligibility === "waiting-main-save"
+                ? "待同步"
+                : "未上榜";
+  const rankDetail = leaderboardStatus === "loading"
+    ? "正在读取当前账户的服务端排名"
+    : leaderboardStatus === "error"
+      ? "排行榜暂时不可达，当前只显示本地预览数据"
+      : eligibilityMessage
+    ?? metricWindowMessage
+    ?? (serverLocalEntry?.submitted
+      ? cloudLeaderboardSelf?.publicPageContainsSelf === false
+        ? "主云存档已计入；当前名次在公开榜前 100 名以外"
+        : "主云存档已计入"
+      : cloudSession.status === "authenticated" ? "上传主云存档后自动加入" : "访客可查看真实排名");
 
   useEffect(() => {
     if (open && focusTab) setTab(focusTab);
@@ -218,6 +311,7 @@ export function GalaxyWorkspace({
   useEffect(() => {
     if (!open || cloudSession.status === "checking") return;
     if (cloudSession.status === "offline") {
+      setCloudLeaderboardSelf(null);
       setLeaderboardStatus("error");
       setLeaderboardError(cloudSession.message ?? "排行榜节点暂时不可达，当前显示本地回退数据");
       return;
@@ -225,20 +319,23 @@ export function GalaxyWorkspace({
     let active = true;
     setLeaderboardStatus("loading");
     setLeaderboardError(null);
-    void fetchCloudLeaderboard(category, seasonId)
-      .then((entries) => {
+    setCloudLeaderboardSelf(null);
+    void fetchCloudLeaderboard(category, seasonId, cloudSession.status === "authenticated")
+      .then((result) => {
         if (!active) return;
-        setCloudEntries(entries);
+        setCloudEntries(result.entries);
+        setCloudLeaderboardSelf(result.self);
         setLeaderboardStatus("ready");
       })
       .catch((error) => {
         if (!active) return;
         setCloudEntries([]);
+        setCloudLeaderboardSelf(null);
         setLeaderboardStatus("error");
         setLeaderboardError(error instanceof Error ? error.message : "排行榜读取失败");
       });
     return () => { active = false; };
-  }, [category, cloudSession.status, open, seasonId, uploadRevision]);
+  }, [category, cloudSession.status, cloudSession.user?.id, open, seasonId, uploadRevision]);
   useEffect(() => {
     if (!open || cloudSession.status !== "authenticated") {
       setCloudHistory([]);
@@ -269,8 +366,9 @@ export function GalaxyWorkspace({
     }
     try {
       await submitCloudLeaderboard(seasonId);
-      const entries = await fetchCloudLeaderboard(category, seasonId);
-      setCloudEntries(entries);
+      const result = await fetchCloudLeaderboard(category, seasonId, true);
+      setCloudEntries(result.entries);
+      setCloudLeaderboardSelf(result.self);
       setLeaderboardStatus("ready");
       setLeaderboardError(null);
     } catch (error) {
@@ -634,8 +732,8 @@ export function GalaxyWorkspace({
           </section>
 
           <section className="galaxy-summary-band">
-            <div><span>我的排名</span><strong>{cloudSession.status !== "authenticated" ? "未登录" : displayedLocalEntry?.rank ? `#${displayedLocalEntry.rank}` : !leaderboardVisible ? "已退出" : "未上榜"}</strong><small>{displayedLocalEntry?.submitted ? "主云存档已计入" : cloudSession.status === "authenticated" ? "上传主云存档后自动加入" : "访客可查看真实排名"}</small></div>
-            <div><span>{snapshot.category.label}</span><strong>{formatLeaderboardValue(displayedLocalEntry?.value ?? getLeaderboardValue(metrics, category), category)}<small>{snapshot.category.unit}</small></strong><small>{snapshot.category.description}</small></div>
+            <div><span>我的排名</span><strong>{rankLabel}</strong><small title={rankDetail}>{rankDetail}</small></div>
+            <div><span>{snapshot.category.label}</span><strong>{formatLeaderboardValue(categoryValueForDisplay, category)}<small>{snapshot.category.unit}</small></strong><small>{serverMetricPending ? "服务端等待有效窗口" : serverCategoryValue !== null ? "服务端已验证指标" : cloudSession.status === "authenticated" && (category === "white-rate" || category === "throughput") ? "服务端尚无有效指标" : snapshot.category.description}</small></div>
             <div><span>银河规模</span><strong>{metrics.exploredSystems}<small>星系</small></strong><small>{metrics.colonizedPlanets} 颗殖民行星</small></div>
             <div><span>节点状态</span><strong className={leaderboardStatus === "ready" ? "positive" : "preview"}>{leaderboardStatus === "ready" ? "真实排行" : leaderboardStatus === "loading" ? "读取中" : "本地回退"}</strong><small>{displayedLocalEntry ? formatTimestamp(displayedLocalEntry.submittedAt) : "--"}</small></div>
           </section>
@@ -662,12 +760,12 @@ export function GalaxyWorkspace({
               <dl>
                 <div><dt>累计发电</dt><dd>{formatMetric(metrics.energyGeneratedMj, 1)} <small>MJ</small></dd></div>
                 <div><dt>白矩阵上传</dt><dd>{formatMetric(metrics.uploadedWhiteMatrix)} <small>份</small></dd></div>
-                <div><dt>白糖产量峰值</dt><dd>{formatMetric(displayedLocalEntry?.metrics.peakWhiteMatrixPerMinute ?? 0, 1)} <small>/min</small></dd></div>
+                <div><dt>白糖产量峰值</dt><dd>{formatMetric(serverLocalEntry?.metrics.peakWhiteMatrixPerMinute ?? 0, 1)} <small>/min · {serverLocalEntry && !whiteMetricPending ? "服务端" : "待统计"}</small></dd></div>
                 <div><dt>戴森峰值</dt><dd><PowerValue valueKw={metrics.peakDysonPowerKw} /></dd></div>
-                <div><dt>实际结算吞吐</dt><dd>{formatMetric(actualThroughputMetrics.peakThroughputPerMinute, 1)} <small>/min</small></dd></div>
+                <div><dt>实际结算吞吐</dt><dd>{formatMetric(actualThroughputMetrics.peakThroughputPerMinute, 1)} <small>/min · {throughputMetricPending ? "待统计" : serverLocalEntry ? "服务端" : "本地"}</small></dd></div>
                 <div><dt>当前星球理论速率</dt><dd>{formatMetric(activePlanetThroughput, 1)} <small>/min</small></dd></div>
                 <div><dt>全星区理论速率</dt><dd>{formatMetric(galacticThroughput, 1)} <small>/min</small></dd></div>
-                <div><dt>全星区理论峰值</dt><dd>{formatMetric(displayedLocalEntry?.metrics.theoreticalPeakThroughputPerMinute ?? metrics.theoreticalPeakThroughputPerMinute ?? 0, 1)} <small>/min</small></dd></div>
+                <div><dt>全星区理论峰值</dt><dd>{formatMetric(serverLocalEntry?.metrics.theoreticalPeakThroughputPerMinute ?? metrics.theoreticalPeakThroughputPerMinute ?? 0, 1)} <small>/min</small></dd></div>
               </dl>
               <button
                 className={`galaxy-upload-command galaxy-upload-command--${uploadState}`}
@@ -680,8 +778,11 @@ export function GalaxyWorkspace({
               </button>
               {cloudSession.status === "authenticated" ? <label className="galaxy-leaderboard-visibility"><span><strong>{leaderboardVisible ? "参与公开排行榜" : "已退出排行榜"}</strong><small>{leaderboardVisible ? "主云存档同步成功后自动更新排名" : "后续同步不会重新加入，可随时恢复"}</small></span><input type="checkbox" checked={leaderboardVisible} disabled={leaderboardVisibilityBusy} onChange={(event) => void updateLeaderboardVisibility(event.target.checked)} aria-label="参与公开排行榜" /></label> : null}
               {leaderboardError ? <p className="galaxy-leaderboard-error" role="alert"><CloudOff size={13} /><span>{leaderboardError}</span></p> : null}
-              {category === "white-rate" && (displayedLocalEntry?.metrics.peakWhiteMatrixPerMinute ?? 0) <= 0 ? <p><Gauge size={13} /><span>至少需要两次相隔 60 个模拟秒的有效主云同步，服务端才会形成白糖产量区间。</span></p> : null}
-              {category === "throughput" && (displayedLocalEntry?.metrics.peakThroughputPerMinute ?? 0) <= 0 ? <p><Factory size={13} /><span>至少需要两次相隔 60 个模拟秒的有效主云同步，服务端才会形成实际结算吞吐窗口；旧理论峰值不会与新口径混排。</span></p> : null}
+              {eligibilityMessage ? <p><LockKeyhole size={13} /><span>{eligibilityMessage}</span></p> : null}
+              {metricWindowMessage ? <p>{category === "white-rate" ? <Gauge size={13} /> : <Factory size={13} />}<span>{metricWindowMessage}</span></p> : null}
+              {!cloudLeaderboardSelf && category === "white-rate" && (displayedLocalEntry?.metrics.peakWhiteMatrixPerMinute ?? 0) <= 0 ? <p><Gauge size={13} /><span>至少需要两次相隔 60 个模拟秒的有效主云同步，服务端才会形成白糖产量区间。</span></p> : null}
+              {!cloudLeaderboardSelf && category === "throughput" && (displayedLocalEntry?.metrics.peakThroughputPerMinute ?? 0) <= 0 ? <p><Factory size={13} /><span>至少需要两次相隔 60 个模拟秒的有效主云同步，服务端才会形成实际结算吞吐窗口；旧理论峰值不会与新口径混排。</span></p> : null}
+              {localServerMetricMessage ? <p><History size={13} /><span>{localServerMetricMessage}</span></p> : null}
               {nominalThroughputMetricVersion === "legacy-active-planet-v1" ? <p><History size={13} /><span>该记录缺少完整行星指标，理论速率暂按旧存档的当前星球口径显示；实际结算吞吐不受此回退影响。</span></p> : null}
               <p><RadioTower size={13} /><span>{cloudSession.status === "authenticated" ? cloudSession.cloudSave ? "主云存档上传和十分钟自动同步成功后，服务端会自动更新排名。" : "请先上传当前主云存档；手动槽位不会加入排行榜。" : "访客可查看真实玩家排名；登录并上传主云存档后自动参与。"}</span></p>
             </aside>

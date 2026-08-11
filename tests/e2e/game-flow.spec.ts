@@ -5796,6 +5796,131 @@ test("galaxy rankings are public to visitors and refresh from the main cloud sav
   await page.screenshot({ path: "artifacts/qa/galaxy-power-1440.png", fullPage: true });
 });
 
+test("galaxy ranking identifies the signed-in account outside the top 100 and explains zero or pending server windows", async ({ page }) => {
+  const cloudUser = {
+    id: "user_leaderboard_self_1040",
+    username: "leaderboard_self_1040",
+    email: "",
+    displayName: "作者",
+    createdAt: 1,
+    emailVerified: false,
+    emailVerifiedAt: null,
+    passwordChangedAt: 1,
+    leaderboardVisible: true,
+  };
+  const cloudSave = {
+    revision: 2,
+    updatedAt: Date.now(),
+    size: 2048,
+    checksum: "leaderboard-self-cloud-save",
+    summary: { stateVersion: 46, savedAt: Date.now(), elapsedSeconds: 1_059, activePlanetId: "home", entityCount: 1, completedTechCount: 1, structurePoints: 0, uploadedWhiteMatrix: 0, stateChecksum: "leaderboard-self-state" },
+  };
+  const baseMetrics = {
+    energyGeneratedMj: 1_000,
+    uploadedWhiteMatrix: 0,
+    peakWhiteMatrixPerMinute: 0,
+    peakGenerationKw: 1_000,
+    peakThroughputPerMinute: 0,
+    theoreticalPeakThroughputPerMinute: 20_000_000_000,
+    activePlanetThroughputPerMinute: 10_000_000_000,
+    galacticThroughputPerMinute: 20_000_000_000,
+    nominalThroughputMetricVersion: "galactic-planet-sum-v1",
+    throughputMetricVersion: "settled-total-produced-v1",
+    throughputWindowSeconds: 0,
+    peakDysonPowerKw: 0,
+    exploredSystems: 1,
+    colonizedPlanets: 1,
+    galaxyScore: 1_000,
+  };
+  const leaderboardAuthorization: Array<string | null> = [];
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const pathname = url.pathname;
+    const fulfill = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (pathname === "/api/health") return fulfill({ ok: true, schemaVersion: 7, mailProvider: "disabled" });
+    if (pathname === "/api/account") return fulfill({ user: cloudUser, cloudSave, cloudSaves: { main: cloudSave, "1": null, "2": null, "3": null } });
+    if (pathname === "/api/leaderboard") {
+      leaderboardAuthorization.push(request.headers().authorization ?? null);
+      const category = url.searchParams.get("category");
+      const selfValue = category === "throughput" || category === "white-rate" ? 0 : baseMetrics.galaxyScore;
+      const selfEntry = { userId: cloudUser.id, accountId: cloudUser.id, displayName: cloudUser.displayName, avatar: "作", seasonId: "season_01", metrics: baseMetrics, submittedAt: Date.now(), value: selfValue, verified: true, rank: 137 };
+      const publicEntry = { ...selfEntry, userId: "other-player", accountId: "other-player", displayName: "其他工程师", avatar: "其", rank: 1, value: selfValue + 10_000 };
+      return fulfill({
+        entries: [publicEntry],
+        self: {
+          userId: cloudUser.id,
+          mode: "normal",
+          slot: "main",
+          eligibility: "ranked",
+          entry: selfEntry,
+          publicPageContainsSelf: false,
+          latestCloudRevision: 2,
+          submissionRevision: 2,
+          reviewResumeAfterRevision: null,
+          windows: {
+            whiteRate: { status: "ready-zero", valid: true, value: 0, metricVersion: "settled-universe-matrix-v1", windowSeconds: 60, remainingSeconds: 0, fromRevision: 1, toRevision: 2 },
+            throughput: { status: "interval-too-short", valid: false, value: 0, metricVersion: "settled-total-produced-v1", windowSeconds: 59, remainingSeconds: 1, fromRevision: 1, toRevision: 2 },
+          },
+        },
+      });
+    }
+    if (pathname === "/api/public-status") return fulfill({ players: { total: 2, today: 2, online: 1, onlineWindowSeconds: 120 }, serverTime: Date.now() });
+    if (pathname === "/api/analytics") return fulfill({ accepted: true }, 202);
+    return fulfill({ error: `unmocked ${pathname}` }, 404);
+  });
+  await page.addInitScript(() => {
+    const accountId = "local-profile-id-differs-from-cloud-user";
+    window.localStorage.setItem("dsp-idle-network.cloud-token.v1", "leaderboard-self-token");
+    window.localStorage.setItem("dsp-idle-network.account.v1", JSON.stringify({
+      version: 1,
+      activeAccountId: accountId,
+      accounts: {
+        [accountId]: {
+          profile: { id: accountId, displayName: "本地作者档案", avatar: "本", privacy: "public", createdAt: 1, updatedAt: 1 },
+          ledger: {
+            energyGeneratedMj: 1_000,
+            uploadedWhiteMatrix: 0,
+            peakWhiteMatrixPerMinute: 0,
+            peakGenerationKw: 1_000,
+            peakThroughputPerMinute: 20_000_000_000,
+            peakActualThroughputPerMinute: 19_600_000_000,
+            peakDysonPowerKw: 0,
+            exploredSystems: 1,
+            colonizedPlanets: 1,
+            lastGameElapsedSeconds: 0,
+            lastWhiteMatrixTotal: 0,
+            lastSyncedAt: Date.now(),
+          },
+        },
+      },
+    }));
+  });
+
+  await page.goto("/");
+  await page.getByLabel("打开银河网络").click();
+  const galaxy = page.getByRole("dialog", { name: "银河网络" });
+  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("#137");
+  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("当前名次在公开榜前 100 名以外");
+  await expect(galaxy.locator(".galaxy-rank-row--local")).toContainText("作者");
+  await expect(galaxy.locator(".galaxy-rank-row--local")).toContainText("当前账户");
+
+  await galaxy.getByRole("tab", { name: /实际结算吞吐/ }).click();
+  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("等待统计");
+  await expect(galaxy).toContainText("仅相隔 59 个模拟秒，还需 1 秒");
+  await expect(galaxy).toContainText("本地个人档案记录为 196亿/min");
+  await expect(galaxy).toContainText("不会直接写入排行榜");
+
+  await galaxy.getByRole("tab", { name: /白糖产量/ }).click();
+  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("#137");
+  await expect(galaxy).toContainText("本窗口白糖产量确实为 0");
+  expect(leaderboardAuthorization.length).toBeGreaterThan(0);
+  expect(leaderboardAuthorization.every((value) => value === "Bearer leaderboard-self-token")).toBe(true);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(async () => galaxy.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("#137");
+});
+
 test("star map yields immediately to every primary workspace on desktop and mobile", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await freshGame(page);

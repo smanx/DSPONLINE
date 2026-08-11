@@ -666,6 +666,36 @@ const UI_EN: TranslationMap = {
   "排行榜赛季": "Leaderboard Season",
   "我的排名": "My Rank",
   "未登录": "Signed Out",
+  "已限制": "Restricted",
+  "等待复核": "Awaiting Review",
+  "等待统计": "Awaiting Metrics",
+  "待同步": "Awaiting Sync",
+  "不具资格": "Ineligible",
+  "未生成": "Not Generated",
+  "本地预览": "Local Preview",
+  "正在读取当前账户的服务端排名": "Loading the current account's server ranking",
+  "排行榜暂时不可达，当前只显示本地预览数据": "The leaderboard is temporarily unavailable; only local preview data is shown.",
+  "服务端已验证指标": "Server-verified metric",
+  "服务端等待有效窗口": "Server awaiting a valid window",
+  "服务端尚无有效指标": "No valid server metric yet",
+  "服务端": "Server",
+  "待统计": "Pending",
+  "/min · 服务端": "/min · Server",
+  "/min · 待统计": "/min · Pending",
+  "/min · 本地": "/min · Local",
+  "主云存档已计入；当前名次在公开榜前 100 名以外": "Primary cloud save counted; current rank is outside the public top 100",
+  "尚未上传普通模式主云存档；手动槽位和速通存档不会参与银河排行": "No normal-mode primary cloud save has been uploaded. Manual slots and speedrun saves do not enter the galaxy leaderboard.",
+  "当前账号受到排行榜限制；本地与云存档仍保持正常，不会因此被修改": "This account is leaderboard-restricted. Local and cloud saves remain available and are not modified by this restriction.",
+  "当前账号已退出公开排行榜；云存档仍正常同步": "This account has left the public leaderboard; cloud saves continue to sync normally.",
+  "当前普通模式主云存档包含内容包状态，不参与官方排行榜": "The current normal-mode primary cloud save contains content-pack state and is not eligible for the official leaderboard.",
+  "主云存档正文暂时不可读取，排行榜未更新；原存档不会被改写": "The primary cloud-save payload is temporarily unavailable, so the leaderboard was not updated. The original save is not rewritten.",
+  "主云存档未通过排行榜只读解析，排行榜未更新；原存档不会被改写": "The primary cloud save failed read-only leaderboard parsing, so the leaderboard was not updated. The original save is not rewritten.",
+  "普通模式主云存档尚未生成排行榜记录，请刷新排名；存档与生产数据不受影响": "The normal-mode primary cloud save has not produced a leaderboard record yet. Refresh the ranking; save and production data are unaffected.",
+  "排行榜正在等待新的普通模式主云修订完成复核": "The leaderboard is waiting for a new normal-mode primary cloud revision to complete review.",
+  "等待第二次有效云同步：两次普通模式主云同步需相隔至少 60 个模拟秒": "Waiting for the second valid cloud sync. Two normal-mode primary syncs must be at least 60 simulated seconds apart.",
+  "等待第二次有效云同步：两次普通模式主云同步需相隔至少 60 个模拟秒；已验证的历史峰值仍会保留": "Waiting for the second valid cloud sync. Two normal-mode primary syncs must be at least 60 simulated seconds apart; the verified historical peak remains intact.",
+  "当前排行榜记录来自旧诊断格式；下一次普通模式主云同步后会显示具体统计窗口": "This leaderboard record uses the legacy diagnostics format. The next normal-mode primary cloud sync will provide the exact metric window.",
+  "当前排行榜记录来自旧诊断格式；下一次普通模式主云同步后会显示具体统计窗口；已验证的历史峰值仍会保留": "This leaderboard record uses the legacy diagnostics format. The next normal-mode primary cloud sync will provide the exact metric window; the verified historical peak remains intact.",
   "访客可查看真实排名": "Guests can view the live leaderboard",
   "分": "pts",
   "银河规模": "Galactic Scale",
@@ -2096,6 +2126,18 @@ function translateRequirementList(source: string): string {
 function translateDynamicSystemText(body: string): string {
   let match = body.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
   if (match) return `${new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))).toLocaleDateString("en-US", { timeZone: "UTC", year: "numeric", month: "long", day: "numeric" })}`;
+  match = body.match(/^排行榜正在等待新的普通模式主云修订完成复核（需高于修订 (\d+)）$/);
+  if (match) return `The leaderboard is waiting for a new normal-mode primary cloud revision above revision ${match[1]} to complete review.`;
+  match = body.match(/^两次普通模式主云同步仅相隔 ([\d.]+) 个模拟秒，还需 ([\d.]+) 秒才能统计(；已验证的历史峰值仍会保留)?$/);
+  if (match) return `The two normal-mode primary cloud syncs are only ${match[1]} simulated seconds apart; ${match[2]} more seconds are required${match[3] ? "; the verified historical peak remains intact" : ""}.`;
+  match = body.match(/^有效的 ([\d.]+) 秒统计窗口已经形成，本窗口(白糖产量|实际结算吞吐)确实为 0$/);
+  if (match) return `A valid ${match[1]}-second window exists, and this window's ${match[2] === "白糖产量" ? "White Matrix output" : "actual settled throughput"} is genuinely zero.`;
+  match = body.match(/^服务端已采用主云修订 (\d+|\?) → (\d+|\?) 的 ([\d.]+) 秒窗口统计(白糖产量|实际结算吞吐)$/);
+  if (match) return `The server measured ${match[4] === "白糖产量" ? "White Matrix output" : "actual settled throughput"} from the ${match[3]}-second window between primary cloud revisions ${match[1]} and ${match[2]}.`;
+  match = body.match(/^本地个人档案记录为 (.+)\/min，但该值尚未通过服务端有效主云窗口校验，因此不会直接写入排行榜。$/);
+  if (match) return `The local profile records ${translateChineseCompactNumbers(match[1])}/min, but it has not passed validation in a valid server-side primary-cloud window and is not written directly to the leaderboard.`;
+  match = body.match(/^本地个人档案为 (.+)\/min，服务端已验证峰值为 (.+)\/min；排行榜只采用普通模式主云存档的有效统计窗口。$/);
+  if (match) return `Local profile: ${translateChineseCompactNumbers(match[1])}/min; server-verified peak: ${translateChineseCompactNumbers(match[2])}/min. The leaderboard only uses valid windows from normal-mode primary cloud saves.`;
   match = body.match(/^放弃约 (.+) 未结算时间并继续普通模拟$/);
   if (match) return `Abandon about ${translateLegacyText(match[1], "en")} of unsettled time and continue normal simulation`;
   match = body.match(/^检测到未提交的冻结结算（(.+)），请重试或放弃$/);

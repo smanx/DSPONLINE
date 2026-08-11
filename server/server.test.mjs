@@ -626,6 +626,126 @@ test("calculates a verified white-matrix per-minute peak from adjacent main save
   }
 });
 
+test("returns an authenticated leaderboard self snapshot outside the public top 100 and explains adjacent windows", async () => {
+  const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-leaderboard-self-"));
+  let isolatedServer;
+  try {
+    isolatedServer = await createCloudServer({ databaseFile: path.join(isolatedDirectory, "cloud.sqlite"), registrationLimit: 2, mailer: null, logger: { error() {} } });
+    await new Promise((resolve) => isolatedServer.listen(0, "127.0.0.1", resolve));
+    const isolatedBaseUrl = `http://127.0.0.1:${isolatedServer.address().port}`;
+    const isolatedRequest = async (route, options = {}) => {
+      const response = await fetch(`${isolatedBaseUrl}${route}`, {
+        ...options,
+        headers: { "content-type": "application/json", ...(options.headers || {}) },
+      });
+      return { response, body: await response.json() };
+    };
+    const registered = await isolatedRequest("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ username: "self_rank_pilot", password: "strong-pass-123", displayName: "本人排名测试" }),
+    });
+    assert.equal(registered.response.status, 201);
+    const userId = registered.body.user.id;
+    const headers = { authorization: `Bearer ${registered.body.token}` };
+    const saveAt = (elapsedSeconds, whiteMatrix, ironIngot) => createSavePayload({
+      version: 24,
+      elapsedSeconds,
+      entities: [],
+      totalProduced: { universe_matrix: whiteMatrix, iron_ingot: ironIngot },
+      metrics: { generationKw: 1_000, totalItemsPerMinute: 2_000, rayGenerationKw: 0 },
+      exploration: { unlockedSystemIds: ["helios"], colonizedPlanetIds: ["home"] },
+    }, elapsedSeconds * 10);
+    const put = (payload, expectedRevision) => isolatedRequest("/api/cloud-save", {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ payload, expectedRevision }),
+    });
+    const ranking = (category, authenticated = true) => isolatedRequest(`/api/leaderboard?category=${category}&seasonId=season_01`, {
+      headers: authenticated ? headers : {},
+    });
+
+    assert.equal((await put(saveAt(1_000, 100, 100), 0)).response.status, 200);
+    const anonymous = await ranking("throughput", false);
+    assert.equal(Object.hasOwn(anonymous.body, "self"), false, "anonymous leaderboard reads must not expose private account status");
+    let own = (await ranking("throughput")).body.self;
+    assert.equal(own.eligibility, "ranked");
+    assert.equal(own.mode, "normal");
+    assert.equal(own.slot, "main");
+    assert.equal(own.latestCloudRevision, 1);
+    assert.equal(own.windows.whiteRate.status, "waiting-for-second-sync");
+    assert.equal(own.windows.throughput.status, "waiting-for-second-sync");
+
+    assert.equal((await put(saveAt(1_059, 200, 200), 1)).response.status, 200);
+    own = (await ranking("white-rate")).body.self;
+    assert.equal(own.windows.whiteRate.status, "interval-too-short");
+    assert.equal(own.windows.whiteRate.windowSeconds, 59);
+    assert.equal(own.windows.whiteRate.remainingSeconds, 1);
+    assert.equal(own.entry.metrics.peakWhiteMatrixPerMinute, 0);
+
+    assert.equal((await put(saveAt(1_119, 200, 200), 2)).response.status, 200);
+    own = (await ranking("throughput")).body.self;
+    assert.equal(own.windows.whiteRate.status, "ready-zero");
+    assert.equal(own.windows.whiteRate.valid, true);
+    assert.equal(own.windows.throughput.status, "ready-zero");
+    assert.equal(own.windows.throughput.valid, true);
+    assert.equal(own.entry.metrics.peakThroughputPerMinute, 0);
+
+    assert.equal((await put(saveAt(1_179, 800, 1_400), 3)).response.status, 200);
+    own = (await ranking("throughput")).body.self;
+    assert.equal(own.windows.whiteRate.status, "ready");
+    assert.equal(own.windows.whiteRate.value, 600);
+    assert.equal(own.windows.throughput.status, "ready");
+    assert.equal(own.windows.throughput.value, 1_800);
+    assert.equal(own.entry.metrics.peakThroughputPerMinute, 1_800);
+
+    const ownSubmissionKey = `season_01:${userId}`;
+    const ownSubmission = isolatedServer.store.data.submissions[ownSubmissionKey];
+    for (let index = 0; index < 100; index += 1) {
+      const syntheticUserId = `synthetic_rank_${String(index).padStart(3, "0")}`;
+      isolatedServer.store.data.users[syntheticUserId] = {
+        ...registered.body.user,
+        id: syntheticUserId,
+        username: syntheticUserId,
+        displayName: `合成排名 ${index}`,
+        leaderboardVisible: true,
+      };
+      isolatedServer.store.data.submissions[`season_01:${syntheticUserId}`] = {
+        ...ownSubmission,
+        userId: syntheticUserId,
+        accountId: syntheticUserId,
+        displayName: `合成排名 ${index}`,
+        metrics: { ...ownSubmission.metrics, peakThroughputPerMinute: 10_000 + index },
+      };
+    }
+    const cloudSaveBeforeRead = structuredClone(isolatedServer.store.data.cloudSaves[userId]);
+    const submissionBeforeRead = structuredClone(isolatedServer.store.data.submissions[ownSubmissionKey]);
+    const readCloudSavePayload = isolatedServer.store.readCloudSavePayload.bind(isolatedServer.store);
+    let payloadReads = 0;
+    isolatedServer.store.readCloudSavePayload = (...args) => {
+      payloadReads += 1;
+      return readCloudSavePayload(...args);
+    };
+    const outsideTop = await ranking("throughput");
+    assert.equal(outsideTop.response.status, 200);
+    assert.equal(outsideTop.body.entries.length, 100);
+    assert.equal(outsideTop.body.entries.some((entry) => entry.userId === userId), false);
+    assert.equal(outsideTop.body.self.entry.userId, userId);
+    assert.equal(outsideTop.body.self.entry.rank, 101);
+    assert.equal(outsideTop.body.self.publicPageContainsSelf, false);
+    assert.equal(payloadReads, 0, "leaderboard reads must reuse compact upload-time diagnostics instead of reparsing large save payloads");
+    assert.deepEqual(isolatedServer.store.data.cloudSaves[userId], cloudSaveBeforeRead, "leaderboard diagnostics must not rewrite the cloud save");
+    assert.deepEqual(isolatedServer.store.data.submissions[ownSubmissionKey], submissionBeforeRead, "leaderboard diagnostics must not rewrite ranking history");
+
+    isolatedServer.store.data.accountControls[userId] = { leaderboardResumeAfterRevisionByMode: { normal: 4 } };
+    const awaitingReview = await ranking("throughput");
+    assert.equal(awaitingReview.body.self.eligibility, "revalidation-required");
+    assert.equal(awaitingReview.body.self.reviewResumeAfterRevision, 4);
+  } finally {
+    if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
+    await rm(isolatedDirectory, { recursive: true, force: true });
+  }
+});
+
 test("backfills existing main cloud saves when the service starts", async () => {
   const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-leaderboard-backfill-"));
   const databaseFile = path.join(isolatedDirectory, "cloud.sqlite");

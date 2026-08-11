@@ -6,6 +6,8 @@
 > 产品阶段：首个公网版本已上线，当前更准确的定位是“公开测试版”。
 > 事实来源：当前工作区代码、自动化测试、部署配置和线上只读检查。
 
+> `1.0.40` 开发批次第 1 项已在隔离分支完成实现：银河排行榜已登录读取新增只读 `self` 状态，使公开前 100 名以外的本人仍能显示真实名次，并区分等待第二次同步、间隔不足 60 个模拟秒、有效零产量、复核等待和账号限制。本项不改变存档、云 revision、排行榜历史、GameState v46、envelope v2、云 schema v7 或 SQLite layout v2，尚未部署生产环境；开发证据见 [1.0.40 银河排行榜“未上榜”状态修复](./feedback/2026-08-12-1.0.40-银河排行榜未上榜-Bug.md)。
+
 > `1.0.39` 云存档 P0 热修已完成香港、上海 Web/API 正式发布，固定源码为 `fb54f2148dd64268ee2c2f39c6774b348e6ea437`，Build ID 为 `1.0.39+fb54f2148dd6`。服务端对 GameState v46 稀疏正文只在结构校验的局部读取中将缺失的 `belt.lanes/tier/progress` 解释为 `1/1/0`，并兼容同一客户端投影省略的 `interactionLocked=false`；显式 `null`、字符串、非法范围及损坏 checksum 仍拒绝。原始 payload、envelope checksum、云 SHA-256、revision、历史和下载正文均不改写。排行榜人工复核阈值改为普通/速通独立，旧单值 `accountControls` 继续作为普通模式兼容别名。GameState v46、envelope v2、云 schema v7、SQLite layout v2 均不升级。
 
 > 1.0.39 最终门禁为 source 163/163、candidate 2/2、Web 128/128、API 35/35、Vitest 950/18、Playwright 282/11、server 75/2、ops 6/6、native 8/8、128 个运行时许可证和根/server 生产依赖审计 0。两地发布前备份、各自备份副本隔离、原子切换、真实云 PUT 观察、完整公网字节、Range/cache、6 场 Chrome 和 1.0.37 previous-stable PWA 隔离均通过。上海下载页与 Android/Windows stable 按交接保持 1.0.38；完整证据见 [1.0.39 正式发布记录](./releases/1.0.39.md)。

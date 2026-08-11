@@ -211,6 +211,61 @@ export interface CloudLeaderboardEntry {
   rank: number;
 }
 
+export type CloudLeaderboardEligibility =
+  | "ranked"
+  | "waiting-main-save"
+  | "revalidation-required"
+  | "restricted"
+  | "hidden"
+  | "missing-payload"
+  | "invalid-save"
+  | "modded-save"
+  | "not-submitted";
+
+export type CloudLeaderboardWindowStatus =
+  | "waiting-for-second-sync"
+  | "diagnostics-pending"
+  | "previous-revision-missing"
+  | "invalid-revision"
+  | "modded-revision"
+  | "elapsed-counter-reset"
+  | "interval-too-short"
+  | "production-counter-reset"
+  | "ready-zero"
+  | "ready";
+
+export interface CloudLeaderboardMetricWindow {
+  status: CloudLeaderboardWindowStatus;
+  valid: boolean;
+  value: number;
+  metricVersion: string;
+  windowSeconds: number;
+  remainingSeconds: number;
+  fromRevision: number | null;
+  toRevision: number | null;
+}
+
+export interface CloudLeaderboardSelf {
+  userId: string;
+  mode: "normal";
+  slot: "main";
+  eligibility: CloudLeaderboardEligibility;
+  entry: CloudLeaderboardEntry | null;
+  publicPageContainsSelf: boolean;
+  latestCloudRevision: number | null;
+  submissionRevision: number | null;
+  reviewResumeAfterRevision: number | null;
+  windows: {
+    whiteRate: CloudLeaderboardMetricWindow | null;
+    throughput: CloudLeaderboardMetricWindow | null;
+  };
+}
+
+export interface CloudLeaderboardSnapshot {
+  entries: CloudLeaderboardEntry[];
+  self: CloudLeaderboardSelf | null;
+}
+
 export interface SpeedrunLeaderboardEntry {
   submissionId: string;
   userId: string;
@@ -987,9 +1042,24 @@ export async function deleteCloudSave(slot: CloudSaveSlot, expectedRevision: num
   }, true);
 }
 
-export async function fetchCloudLeaderboard(category: LeaderboardCategoryId, seasonId: string): Promise<CloudLeaderboardEntry[]> {
-  const result = await cloudRequest<{ entries: CloudLeaderboardEntry[] }>(`/leaderboard?category=${encodeURIComponent(category)}&seasonId=${encodeURIComponent(seasonId)}`, {}, false, true);
-  return result.entries.map((entry) => ({ ...entry, metrics: normalizeLeaderboardMetrics(entry.metrics) }));
+export async function fetchCloudLeaderboard(category: LeaderboardCategoryId, seasonId: string, includeSelf = false): Promise<CloudLeaderboardSnapshot> {
+  const result = await cloudRequest<{ entries: CloudLeaderboardEntry[]; self?: CloudLeaderboardSelf }>(
+    `/leaderboard?category=${encodeURIComponent(category)}&seasonId=${encodeURIComponent(seasonId)}`,
+    {},
+    includeSelf,
+    !includeSelf,
+  );
+  const normalizeEntry = (entry: CloudLeaderboardEntry): CloudLeaderboardEntry => ({
+    ...entry,
+    metrics: normalizeLeaderboardMetrics(entry.metrics),
+  });
+  return {
+    entries: result.entries.map(normalizeEntry),
+    self: result.self ? {
+      ...result.self,
+      entry: result.self.entry ? normalizeEntry(result.self.entry) : null,
+    } : null,
+  };
 }
 
 export async function fetchCloudPublicStatus(): Promise<CloudPublicStatus> {
