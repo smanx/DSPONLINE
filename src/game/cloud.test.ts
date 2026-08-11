@@ -12,6 +12,7 @@ import {
   deleteCloudSave,
   downloadCloudSave,
   fetchCloudLeaderboard,
+  fetchCloudLeaderboardMe,
   fetchCloudPublicStatus,
   getCloudSyncMarker,
   markCloudSaveSynchronized,
@@ -99,7 +100,7 @@ describe("cloud save synchronization markers", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/health", expect.any(Object));
   });
 
-  it("requests the private leaderboard self snapshot only for an authenticated read and keeps old responses compatible", async () => {
+  it("keeps the public Top 100 read anonymous and requests /leaderboard/me with authentication", async () => {
     const entry = {
       userId: "cloud-user",
       accountId: "cloud-user",
@@ -115,35 +116,31 @@ describe("cloud save synchronization markers", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ entries: [] }))
       .mockResolvedValueOnce(jsonResponse({
-        entries: [],
-        self: {
-          userId: "cloud-user",
-          mode: "normal",
-          slot: "main",
-          eligibility: "ranked",
-          entry,
-          publicPageContainsSelf: false,
-          latestCloudRevision: 2,
-          submissionRevision: 2,
-          reviewResumeAfterRevision: null,
-          windows: {
-            whiteRate: { status: "ready-zero", valid: true, value: 0, metricVersion: "settled-universe-matrix-v1", windowSeconds: 60, remainingSeconds: 0, fromRevision: 1, toRevision: 2 },
-            throughput: { status: "ready", valid: true, value: 123, metricVersion: "settled-total-produced-v1", windowSeconds: 60, remainingSeconds: 0, fromRevision: 1, toRevision: 2 },
-          },
-        },
+        status: "ranked",
+        entry,
+        rank: 137,
+        totalEntries: 150,
+        serverMetrics: entry.metrics,
+        latestWindowState: { status: "ranked", valid: true, value: 123, metricVersion: "settled-total-produced-v1", requiredSeconds: 60, observedSeconds: 60, remainingSeconds: 0, productionDelta: 123, fromRevision: 1, toRevision: 2 },
+        mode: "normal",
+        slot: "main",
+        latestCloudRevision: 2,
+        reviewResumeAfterRevision: null,
       }));
 
-    await expect(fetchCloudLeaderboard("throughput", "season_01")).resolves.toEqual({ entries: [], self: null });
+    await expect(fetchCloudLeaderboard("throughput", "season_01")).resolves.toEqual([]);
     expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get("authorization")).toBeNull();
 
     window.localStorage.setItem(CLOUD_TOKEN_STORAGE_KEY, "leaderboard-self-token");
-    const result = await fetchCloudLeaderboard("throughput", "season_01", true);
+    const result = await fetchCloudLeaderboardMe("throughput", "season_01");
     expect(new Headers(fetchMock.mock.calls[1][1]?.headers).get("authorization")).toBe("Bearer leaderboard-self-token");
-    expect(result.self).toMatchObject({
-      eligibility: "ranked",
-      publicPageContainsSelf: false,
+    expect(result).toMatchObject({
+      status: "ranked",
+      rank: 137,
+      totalEntries: 150,
       entry: { rank: 137, metrics: { peakThroughputPerMinute: 123, uploadedWhiteMatrix: 0 } },
-      windows: { whiteRate: { status: "ready-zero" }, throughput: { status: "ready" } },
+      serverMetrics: { peakThroughputPerMinute: 123, uploadedWhiteMatrix: 0 },
+      latestWindowState: { status: "ranked", observedSeconds: 60 },
     });
   });
 

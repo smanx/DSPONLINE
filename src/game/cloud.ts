@@ -211,59 +211,50 @@ export interface CloudLeaderboardEntry {
   rank: number;
 }
 
-export type CloudLeaderboardEligibility =
+export type CloudLeaderboardMeStatus =
   | "ranked"
-  | "waiting-main-save"
-  | "revalidation-required"
-  | "restricted"
   | "hidden"
-  | "missing-payload"
-  | "invalid-save"
-  | "modded-save"
-  | "not-submitted";
+  | "restricted"
+  | "revalidation_required"
+  | "missing_main_save"
+  | "missing_adjacent_revision"
+  | "interval_too_short"
+  | "elapsed_not_increasing"
+  | "valid_zero_production"
+  | "unavailable";
 
 export type CloudLeaderboardWindowStatus =
-  | "waiting-for-second-sync"
-  | "diagnostics-pending"
-  | "previous-revision-missing"
-  | "invalid-revision"
-  | "modded-revision"
-  | "elapsed-counter-reset"
-  | "interval-too-short"
-  | "production-counter-reset"
-  | "ready-zero"
-  | "ready";
+  | "ranked"
+  | "missing_adjacent_revision"
+  | "interval_too_short"
+  | "elapsed_not_increasing"
+  | "valid_zero_production"
+  | "unavailable";
 
 export interface CloudLeaderboardMetricWindow {
   status: CloudLeaderboardWindowStatus;
   valid: boolean;
-  value: number;
+  value: number | null;
   metricVersion: string;
-  windowSeconds: number;
+  requiredSeconds: number;
+  observedSeconds: number;
   remainingSeconds: number;
+  productionDelta: number | null;
   fromRevision: number | null;
   toRevision: number | null;
 }
 
-export interface CloudLeaderboardSelf {
-  userId: string;
+export interface CloudLeaderboardMe {
+  status: CloudLeaderboardMeStatus;
+  entry: CloudLeaderboardEntry | null;
+  rank: number | null;
+  totalEntries: number;
+  serverMetrics: LeaderboardMetrics | null;
+  latestWindowState: CloudLeaderboardMetricWindow | null;
   mode: "normal";
   slot: "main";
-  eligibility: CloudLeaderboardEligibility;
-  entry: CloudLeaderboardEntry | null;
-  publicPageContainsSelf: boolean;
   latestCloudRevision: number | null;
-  submissionRevision: number | null;
   reviewResumeAfterRevision: number | null;
-  windows: {
-    whiteRate: CloudLeaderboardMetricWindow | null;
-    throughput: CloudLeaderboardMetricWindow | null;
-  };
-}
-
-export interface CloudLeaderboardSnapshot {
-  entries: CloudLeaderboardEntry[];
-  self: CloudLeaderboardSelf | null;
 }
 
 export interface SpeedrunLeaderboardEntry {
@@ -1042,23 +1033,21 @@ export async function deleteCloudSave(slot: CloudSaveSlot, expectedRevision: num
   }, true);
 }
 
-export async function fetchCloudLeaderboard(category: LeaderboardCategoryId, seasonId: string, includeSelf = false): Promise<CloudLeaderboardSnapshot> {
-  const result = await cloudRequest<{ entries: CloudLeaderboardEntry[]; self?: CloudLeaderboardSelf }>(
-    `/leaderboard?category=${encodeURIComponent(category)}&seasonId=${encodeURIComponent(seasonId)}`,
-    {},
-    includeSelf,
-    !includeSelf,
-  );
+export async function fetchCloudLeaderboard(category: LeaderboardCategoryId, seasonId: string): Promise<CloudLeaderboardEntry[]> {
+  const result = await cloudRequest<{ entries: CloudLeaderboardEntry[] }>(`/leaderboard?category=${encodeURIComponent(category)}&seasonId=${encodeURIComponent(seasonId)}`, {}, false, true);
   const normalizeEntry = (entry: CloudLeaderboardEntry): CloudLeaderboardEntry => ({
     ...entry,
     metrics: normalizeLeaderboardMetrics(entry.metrics),
   });
+  return result.entries.map(normalizeEntry);
+}
+
+export async function fetchCloudLeaderboardMe(category: LeaderboardCategoryId, seasonId: string): Promise<CloudLeaderboardMe> {
+  const result = await cloudRequest<CloudLeaderboardMe>(`/leaderboard/me?category=${encodeURIComponent(category)}&seasonId=${encodeURIComponent(seasonId)}`, {}, true);
   return {
-    entries: result.entries.map(normalizeEntry),
-    self: result.self ? {
-      ...result.self,
-      entry: result.self.entry ? normalizeEntry(result.self.entry) : null,
-    } : null,
+    ...result,
+    entry: result.entry ? { ...result.entry, metrics: normalizeLeaderboardMetrics(result.entry.metrics) } : null,
+    serverMetrics: result.serverMetrics ? normalizeLeaderboardMetrics(result.serverMetrics) : null,
   };
 }
 

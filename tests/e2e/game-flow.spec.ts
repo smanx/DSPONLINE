@@ -5717,6 +5717,15 @@ test("galaxy rankings are public to visitors and refresh from the main cloud sav
       cloudUser.leaderboardVisible = leaderboardVisible;
       return fulfill({ visible: leaderboardVisible, user: cloudUser, autoJoined: leaderboardVisible });
     }
+    if (pathname === "/api/leaderboard/me") {
+      const category = new URL(request.url()).searchParams.get("category");
+      const value = category === "power" ? serverMetrics.energyGeneratedMj : category === "upload" ? serverMetrics.uploadedWhiteMatrix : category === "white-rate" ? serverMetrics.peakWhiteMatrixPerMinute : category === "dyson" ? serverMetrics.peakDysonPowerKw : category === "throughput" ? serverMetrics.peakThroughputPerMinute : serverMetrics.galaxyScore;
+      const entry = { userId: cloudUser.id, accountId: cloudUser.id, displayName: cloudUser.displayName, avatar: "矩", seasonId: "season_01", metrics: serverMetrics, submittedAt: Date.now(), value, verified: true, rank: 1 };
+      const latestWindowState = category === "white-rate" || category === "throughput"
+        ? { status: "ranked", valid: true, value, metricVersion: category === "white-rate" ? "settled-universe-matrix-v1" : "settled-total-produced-v1", requiredSeconds: 60, observedSeconds: 60, remainingSeconds: 0, productionDelta: value, fromRevision: 1, toRevision: 2 }
+        : null;
+      return fulfill({ status: leaderboardVisible ? "ranked" : "hidden", entry: leaderboardVisible ? entry : null, rank: leaderboardVisible ? 1 : null, totalEntries: leaderboardVisible ? 1 : 0, serverMetrics: leaderboardVisible ? serverMetrics : null, latestWindowState: leaderboardVisible ? latestWindowState : null, mode: "normal", slot: "main", latestCloudRevision: 2, reviewResumeAfterRevision: null });
+    }
     if (pathname === "/api/leaderboard" && request.method() === "POST") {
       refreshRequest = request.postDataJSON() as Record<string, unknown>;
       return fulfill({ verified: true });
@@ -5832,7 +5841,9 @@ test("galaxy ranking identifies the signed-in account outside the top 100 and ex
     colonizedPlanets: 1,
     galaxyScore: 1_000,
   };
-  const leaderboardAuthorization: Array<string | null> = [];
+  const publicLeaderboardAuthorization: Array<string | null> = [];
+  const privateLeaderboardAuthorization: Array<string | null> = [];
+  let whiteWindowReady = false;
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -5840,30 +5851,27 @@ test("galaxy ranking identifies the signed-in account outside the top 100 and ex
     const fulfill = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
     if (pathname === "/api/health") return fulfill({ ok: true, schemaVersion: 7, mailProvider: "disabled" });
     if (pathname === "/api/account") return fulfill({ user: cloudUser, cloudSave, cloudSaves: { main: cloudSave, "1": null, "2": null, "3": null } });
+    if (pathname === "/api/leaderboard/me") {
+      privateLeaderboardAuthorization.push(request.headers().authorization ?? null);
+      const category = url.searchParams.get("category");
+      const selfValue = category === "throughput" || category === "white-rate" ? 0 : baseMetrics.galaxyScore;
+      const selfEntry = { userId: cloudUser.id, accountId: cloudUser.id, displayName: cloudUser.displayName, avatar: "作", seasonId: "season_01", metrics: baseMetrics, submittedAt: Date.now(), value: selfValue, verified: true, rank: 137 };
+      const latestWindowState = category === "throughput"
+        ? { status: "interval_too_short", valid: false, value: null, metricVersion: "settled-total-produced-v1", requiredSeconds: 60, observedSeconds: 59, remainingSeconds: 1, productionDelta: null, fromRevision: 1, toRevision: 2 }
+        : category === "white-rate"
+          ? whiteWindowReady
+            ? { status: "valid_zero_production", valid: true, value: 0, metricVersion: "settled-universe-matrix-v1", requiredSeconds: 60, observedSeconds: 60, remainingSeconds: 0, productionDelta: 0, fromRevision: 1, toRevision: 2 }
+            : { status: "missing_adjacent_revision", valid: false, value: null, metricVersion: "settled-universe-matrix-v1", requiredSeconds: 60, observedSeconds: 0, remainingSeconds: 60, productionDelta: null, fromRevision: null, toRevision: 2 }
+          : null;
+      return fulfill({ status: latestWindowState?.status ?? "ranked", entry: selfEntry, rank: 137, totalEntries: 200, serverMetrics: baseMetrics, latestWindowState, mode: "normal", slot: "main", latestCloudRevision: 2, reviewResumeAfterRevision: null });
+    }
     if (pathname === "/api/leaderboard") {
-      leaderboardAuthorization.push(request.headers().authorization ?? null);
+      publicLeaderboardAuthorization.push(request.headers().authorization ?? null);
       const category = url.searchParams.get("category");
       const selfValue = category === "throughput" || category === "white-rate" ? 0 : baseMetrics.galaxyScore;
       const selfEntry = { userId: cloudUser.id, accountId: cloudUser.id, displayName: cloudUser.displayName, avatar: "作", seasonId: "season_01", metrics: baseMetrics, submittedAt: Date.now(), value: selfValue, verified: true, rank: 137 };
       const publicEntry = { ...selfEntry, userId: "other-player", accountId: "other-player", displayName: "其他工程师", avatar: "其", rank: 1, value: selfValue + 10_000 };
-      return fulfill({
-        entries: [publicEntry],
-        self: {
-          userId: cloudUser.id,
-          mode: "normal",
-          slot: "main",
-          eligibility: "ranked",
-          entry: selfEntry,
-          publicPageContainsSelf: false,
-          latestCloudRevision: 2,
-          submissionRevision: 2,
-          reviewResumeAfterRevision: null,
-          windows: {
-            whiteRate: { status: "ready-zero", valid: true, value: 0, metricVersion: "settled-universe-matrix-v1", windowSeconds: 60, remainingSeconds: 0, fromRevision: 1, toRevision: 2 },
-            throughput: { status: "interval-too-short", valid: false, value: 0, metricVersion: "settled-total-produced-v1", windowSeconds: 59, remainingSeconds: 1, fromRevision: 1, toRevision: 2 },
-          },
-        },
-      });
+      return fulfill({ entries: [publicEntry] });
     }
     if (pathname === "/api/public-status") return fulfill({ players: { total: 2, today: 2, online: 1, onlineWindowSeconds: 120 }, serverTime: Date.now() });
     if (pathname === "/api/analytics") return fulfill({ accepted: true }, 202);
@@ -5900,25 +5908,40 @@ test("galaxy ranking identifies the signed-in account outside the top 100 and ex
   await page.goto("/");
   await page.getByLabel("打开银河网络").click();
   const galaxy = page.getByRole("dialog", { name: "银河网络" });
-  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("#137");
-  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("当前名次在公开榜前 100 名以外");
+  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("#137 · Top 100 外");
+  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("完整榜共 200 条");
   await expect(galaxy.locator(".galaxy-rank-row--local")).toContainText("作者");
   await expect(galaxy.locator(".galaxy-rank-row--local")).toContainText("当前账户");
 
   await galaxy.getByRole("tab", { name: /实际结算吞吐/ }).click();
-  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("等待统计");
-  await expect(galaxy).toContainText("仅相隔 59 个模拟秒，还需 1 秒");
-  await expect(galaxy).toContainText("本地个人档案记录为 196亿/min");
-  await expect(galaxy).toContainText("不会直接写入排行榜");
+  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("#137 · Top 100 外");
+  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("实际结算吞吐--");
+  await expect(galaxy).toContainText("统计窗口已观察 59 个模拟秒，还需 1 秒");
+  await expect(galaxy).toContainText("本地 60 秒最佳为 196亿/min");
+  await expect(galaxy).toContainText("本地值不会计入服务器排行榜");
+  await expect(galaxy.locator(".galaxy-upload-panel")).toContainText("服务器实际结算吞吐--");
+  await expect(galaxy.locator(".galaxy-upload-panel")).toContainText(/本地 60 秒实际结算吞吐最佳196亿\s*\/min/);
 
   await galaxy.getByRole("tab", { name: /白糖产量/ }).click();
-  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("#137");
-  await expect(galaxy).toContainText("本窗口白糖产量确实为 0");
-  expect(leaderboardAuthorization.length).toBeGreaterThan(0);
-  expect(leaderboardAuthorization.every((value) => value === "Bearer leaderboard-self-token")).toBe(true);
+  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("#137 · Top 100 外");
+  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("白糖产量--");
+  await expect(galaxy).toContainText("缺少相邻普通主云修订");
+  await expect(galaxy.locator(".galaxy-upload-panel")).toContainText("服务器白糖产量峰值--");
+
+  whiteWindowReady = true;
+  await galaxy.getByRole("tab", { name: /银河综合/ }).click();
+  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("银河综合");
+  await galaxy.getByRole("tab", { name: /白糖产量/ }).click();
+  await expect(galaxy).toContainText("有效窗口，当前无产出");
+  await expect(galaxy.locator(".galaxy-upload-panel")).toContainText("服务器白糖产量峰值0.0 /min");
+  await expect(galaxy.locator(".galaxy-upload-panel")).toContainText("本地 60 秒白糖最佳-- 本地尚未记录");
+  expect(publicLeaderboardAuthorization.length).toBeGreaterThan(0);
+  expect(publicLeaderboardAuthorization.every((value) => value === null)).toBe(true);
+  expect(privateLeaderboardAuthorization.length).toBeGreaterThan(0);
+  expect(privateLeaderboardAuthorization.every((value) => value === "Bearer leaderboard-self-token")).toBe(true);
   await page.setViewportSize({ width: 390, height: 844 });
   await expect.poll(async () => galaxy.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("#137");
+  await expect(galaxy.locator(".galaxy-summary-band")).toContainText("#137 · Top 100 外");
 });
 
 test("star map yields immediately to every primary workspace on desktop and mobile", async ({ page }) => {
