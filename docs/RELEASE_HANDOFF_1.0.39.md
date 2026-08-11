@@ -7,8 +7,14 @@
 > Build ID：`1.0.39+fb54f2148dd6`
 > Release ID：`1.0.39-fb54f2148dd6`
 > 开发分支：`codex/1.0.39-cloud-save-p0`
-> 当前生产：`1.0.38+351c649af9ee`，本开发任务未连接或修改生产
-> 状态：开发与本地发布前门禁完成；尚未部署，仍需 Release Agent 备份副本隔离验收和明确发布授权
+> 当前生产：香港、上海 Web/API 均为 `1.0.39+fb54f2148dd6`；上海下载页与原生 stable 保持 1.0.38
+> 状态：Release Agent 已完成两地备份、副本隔离、原子切换、公网/Chrome/PWA 验收；正式证据见 [1.0.39 发布记录](./releases/1.0.39.md)
+
+## 0. Release Agent 执行结果
+
+用户于 2026-08-11 明确授权发布 1.0.39，并要求香港公开 previous-stable 继续保持 1.0.37。Release Agent 从固定 clean source `fb54f2148dd64268ee2c2f39c6774b348e6ea437` 复验 source 163/163、candidate 2/2、Web 128/128、API 35/35 与全部 SHA-256，在香港和上海各自的发布前备份副本上完成稀疏/稠密、非法值、模式槽位、历史恢复和重启验证后，依次切换两地 Web/API。
+
+两地 current 均为 `1.0.39-fb54f2148dd6`，代码-only 回滚目标为 1.0.38；数据库、下载页和 native feeds 没有回滚、恢复或替换。上海下载页、Android/Windows stable 继续为 1.0.38，香港 `/canary/previous/` 继续 302 到不可变 1.0.37。稳定观察时两地服务 active、`NRestarts=0`、backup `ready`、journal error 0；香港 ready 后 26 次真实云 PUT 均为 2xx、5xx 为 0。完整备份哈希、切换空窗、公网字节、Range/cache、6 场 Chrome、PWA 与回滚指针见正式发布记录。
 
 ## 1. 交接结论
 
@@ -293,7 +299,7 @@ Playwright 首次全量有一条既有“矩阵研究线路移动”用例在 90
 
 ## 16. Go / No-Go
 
-在以下条件全部满足前保持 No-Go：
+以下条件已全部满足，1.0.39 已由 No-Go 转为 Go 并完成发布：
 
 - 两节点备份及备份副本隔离启动通过。
 - 固定源码、Build ID、163 文件和两候选归档哈希全部匹配。
@@ -302,9 +308,11 @@ Playwright 首次全量有一条既有“矩阵研究线路移动”用例在 90
 - 发布监控与代码-only 回滚路径准备完成。
 - 用户明确授权生产灰度。
 
-任何 payload 被改写、revision/checksum 变化、普通/速通串档、永久冻结失效、数据库异常或进程不稳定都必须停止发布。
+未观察到 payload 改写、revision/checksum 异常、普通/速通串档、永久冻结失效、数据库异常或进程重启。发布后的代码回滚边界仍按第 15 节执行。
 
-## 17. 可直接交给 Release Agent 的提示词
+## 17. 历史 Release Agent 提示词（已完成）
+
+以下提示词只保留作发布审计；两地已按第 0 节完成，不得据此重复创建备份或再次切流。
 
 ```text
 请按 DSPidle2 1.0.39 API P0 热修交接执行发布前复验；没有用户明确授权前不要部署。

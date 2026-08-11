@@ -15,9 +15,9 @@
 
 硬边界：上海节点必须继续由上海本机提供前端与 `/api`，不得改成香港反代或域名跳转。上海为 HTTP，前端必须继续拒绝云账号密码传输。
 
-> 当前生产状态（2026-08-11）：香港、上海 Web/API 均运行 `1.0.38-351c649af9ee`，构建 ID 为 `1.0.38+351c649af9ee`；上海下载页运行 `download-site-1.0.38-351c649af9ee`。Web/API 和下载页直接回滚均为完整 1.0.37。两地数据库继续独立使用 schema v7 / SQLite layout v2。香港 `/canary/previous/` 现在 302 到不可变上一稳定版 `/canary/1.0.37-853ecdb12795/`，退役 1.0.36 固定路径返回 `410`。发布前备份、未激活目录复验、原子切换、启动观察、公网完整哈希、Range、缓存、6 场 stable Chrome 和回退 PWA 隔离证据见 [releases/1.0.38.md](./releases/1.0.38.md)。
+> 当前生产状态（2026-08-11）：香港、上海 Web/API 均运行 `1.0.39-fb54f2148dd6`，构建 ID 为 `1.0.39+fb54f2148dd6`；上海下载页和 Android/Windows stable 保持 `1.0.38`。Web/API 直接代码回滚为 1.0.38；下载页直接回滚和香港公开 previous-stable 仍为完整 1.0.37。两地数据库继续独立使用 schema v7 / SQLite layout v2。香港 `/canary/previous/` 302 到不可变 `/canary/1.0.37-853ecdb12795/`，退役 1.0.36 固定路径返回 `410`。发布前备份、未激活目录复验、原子切换、真实云 PUT 观察、公网完整哈希、Range、缓存、6 场 Chrome 和回退 PWA 隔离证据见 [releases/1.0.39.md](./releases/1.0.39.md)。
 
-> 1.0.39 是未部署的 API 优先 P0 候选。恢复 1.0.38 Web/Android/Windows 上传只要求更新 API，不能要求玩家清缓存或重装客户端。Release Agent 必须分别在两节点创建并验证 SQLite Backup API 快照，用各自备份副本隔离启动候选，合成验证 v46 稀疏普通/速通的 main 与手动槽、原始正文/校验/revision、历史恢复和服务重启，并检查 v45 稠密兼容与非法值拒绝。排行榜复核需额外验证普通/速通阈值独立、隐藏状态和永久冻结。该候选没有 schema/layout migration；回滚只切回旧 API 代码并重启，绝不恢复生产数据库。当前开发阶段禁止连接节点或使用真实玩家数据写测试。
+> 1.0.39 API 优先 P0 已发布，1.0.38 Web/Android/Windows 无需清缓存或重装即可恢复上传。Release Agent 已分别创建并验证两节点快照，用各自备份副本合成验证 v46 稀疏普通/速通 main 与手动槽、原始正文/校验/revision、历史恢复、服务重启、v45 稠密兼容与非法值拒绝；普通/速通复核阈值独立、隐藏状态和永久冻结由完整远端服务测试与香港隔离副本覆盖。本版没有 schema/layout migration；回滚只切回 1.0.38 代码并重启，绝不恢复生产数据库。
 
 > 1.0.38 没有升级 schema/layout 或修改排行榜协议。两地发布前备份均通过 SQLite Backup API、`quick_check` 和哈希验证；未激活 API 已在各自备份副本上隔离启动。不得跨节点复制、合并或裁剪数据库。用户只豁免精确候选 `1.0.38-351c649af9ee` 的 Android 真机、低配 Windows、`1.0.37 → 1.0.38` Windows 覆盖升级和约一小时后台/锁屏门禁，并接受已列明性能残余风险；不豁免后续版本、备份、签名、健康或回滚门禁。
 
@@ -38,7 +38,7 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-香港、上海 Web/API 已切换到 `1.0.38-351c649af9ee`，上海下载站切换到不可变目录 `download-site-1.0.38-351c649af9ee`；构建 `1.0.38+351c649af9ee` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍 302 到上海下载域名。香港另以 Web-only 方式暴露直接 Web 回滚目录 `web-1.0.37-853ecdb12795`，稳定入口为 `/canary/previous/`，继续使用当前 1.0.38 API。Android SHA-256 为 `9e04137021c90400ed6b547fce0e982c2f3a737b58439ad27618b47841c825c6`，Windows SHA-256 为 `79162042993d9f37445516a6e4cd46dbb1a7b837fc7df4b97ea21f2a3ecfd8e4`（Authenticode `NotSigned`），blockmap SHA-256 为 `f9d2d8192f5ad0337a4bf60904a0d582e0a3ead7a2d66c7ae6fed4be56d17156`。香港发布前备份为 3,165,528,064 字节、上海为 217,088 字节，均为 `0600` 并通过 `quick_check`、完整性和 schema v7/layout v2 验证；Web/API 与下载页回滚目标均为 1.0.37。公网健康、9 文件完整下载哈希、Range、缓存头、当前/上一版 hashed asset、CORS Origin、6 场浏览器 smoke 和回退 PWA 隔离均已复验。两地服务 active、`NRestarts=0`；发布收口磁盘约为香港 79%、上海 84%，不得删除当前版、回滚版或未证明已异地归档的有效备份。完整证据见 [releases/1.0.38.md](./releases/1.0.38.md)。
+香港、上海 Web/API 已切换到 `1.0.39-fb54f2148dd6`，上海下载站保持不可变目录 `download-site-1.0.38-351c649af9ee`；Web/API 构建为 `1.0.39+fb54f2148dd6` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍 302 到上海下载域名。香港 Web-only 稳定入口 `/canary/previous/` 按用户要求继续指向 `web-1.0.37-853ecdb12795`，使用当前 1.0.39 API。Android 1.0.38 SHA-256 为 `9e04137021c90400ed6b547fce0e982c2f3a737b58439ad27618b47841c825c6`，Windows 1.0.38 SHA-256 为 `79162042993d9f37445516a6e4cd46dbb1a7b837fc7df4b97ea21f2a3ecfd8e4`（Authenticode `NotSigned`），blockmap SHA-256 为 `f9d2d8192f5ad0337a4bf60904a0d582e0a3ead7a2d66c7ae6fed4be56d17156`。1.0.39 香港发布前备份为 3,174,580,224 字节、上海为 217,088 字节，均为 `0600` 并通过 `quick_check`、完整性和 schema v7/layout v2；Web/API 代码回滚目标为 1.0.38，下载页直接回滚为 1.0.37。公网健康、下载 9/9、Range、缓存头、当前/上一版 hashed asset、CORS、6 场浏览器 smoke 和 1.0.37 回退 PWA 隔离均已复验。两地服务 active、`NRestarts=0`；发布收口磁盘约为香港 79%、上海 85%，不得删除当前版、回滚版或未证明已异地归档的有效备份。完整证据见 [releases/1.0.39.md](./releases/1.0.39.md)。
 
 `1.0.13` 两节点发布都只切换 Web/API 代码，未执行数据库迁移。香港发布前后 Backup API 快照均通过 `quick_check`；前备份为 887,271,424 字节，后备份为 888,795,136 字节。上海发布前后备份均为 122,880 字节并通过 `quick_check`；发布前 SHA-256 为 `a8af0eec173e6f8aad36af09b7e6d8c56b2b00014d76efd53124ddfb81b7e6a7`，发布后为 `8cb0c7bbbb270ac804b7c16909fc1b4274d0b2aed34a4ae7f379f333596cd737`。上海 0 个账号、0 个主云档、24 条玩家记录和 23 条错误记录均未减少，服务 `NRestarts=0`。受限备份传输账号仍只用于异地备份，代码发布使用独立的 `ubuntu` 授权。
 
@@ -360,8 +360,8 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港与上海 `1.0.38-351c649af9ee` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html`、`version.json` 与 `sw.js` 保持 no-cache；1.0.37 入口资源已进入共享 hashed-asset 回退区。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港与上海 `1.0.39-fb54f2148dd6` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html`、`version.json` 与 `sw.js` 保持 no-cache；1.0.38 与 1.0.37 入口资源已进入共享 hashed-asset 回退区。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 香港 layout v1 的 136.8 MB `app_state` 曾使每分钟持久化把 Node 推到约 1.6 GB并阻塞健康接口。layout v2 上线后 `app_state` 约 2.55 MB，云存档正文按修订独立写入；240 秒生产观察中健康接口最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB。监控若再次出现内存或延迟上升，应分别检查 `app_state` 大小、`cloud_save_payloads` 行数与历史元数据唯一键数，不能只调大健康超时。
 
-Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.38 发布前，香港在停止健康定时器与云服务写入的短维护窗口完成 3,165,528,064 字节一致性备份；启动后的既有“立即备份”配置再次触发 COS 快照，快照收敛为 `ready` 后才恢复 timers。大对象写入或完整回读会让 COSFS 在根盘产生约 3 GB 临时缓存，本轮两次短暂达到 92%；发布立即暂停，等待回落到 84%，并在把两份已验证旧快照完整转存且解除本地实体后把切换前水位降到 79%。后续大库发布必须在 COS 传输前同时预算源文件、目标对象缓存和即刻启动快照，不能只按最终净空间计算；超过 90% 时不得继续隔离启动或切换。临时 pristine 对象必须使用 `sudo` 按 0600 权限回读，确认主备份哈希与 `quick_check` 后清理；备份旁 WAL/SHM 只在确认没有进程占用且主文件哈希匹配后才能移除。当前收口磁盘约为香港 79%、上海 84%；任何旧本地数据库备份只有在受保护异地对象完整哈希匹配后才能解除，代码回滚仍不得恢复数据库。完整证据见 [releases/1.0.38.md](./releases/1.0.38.md)。
+Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.39 发布前，香港把 3,174,580,224 字节一致性备份直接写入受保护对象存储，完整 SHA 与 `quick_check` 通过；隔离副本把根盘推到 87%，低于 90% 停止线，测试后删除并回到 79%。切换后的既有立即备份收敛为 `ready` 后才恢复 timers，没有在高流量下追加第二份手工大备份。后续大库发布仍必须在 COS 传输前同时预算源文件、目标对象缓存和即刻启动快照，不能只按最终净空间计算；超过 90% 时不得继续隔离启动或切换。当前收口磁盘约为香港 79%、上海 85%；任何旧本地数据库备份只有在受保护异地对象完整哈希匹配后才能解除，代码回滚仍不得恢复数据库。完整证据见 [releases/1.0.39.md](./releases/1.0.39.md)。
