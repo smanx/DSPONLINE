@@ -4,6 +4,12 @@ All notable player-facing changes are recorded here. Game-state migration versio
 
 ## [Unreleased]
 
+## [1.0.39] - 2026-08-11
+
+- 服务端接受 1.0.38 合法 v46 稀疏传送带默认值和实体默认交互锁字段，同时继续拒绝显式空值、错误类型、非法范围与损坏 checksum；上传正文、云 revision、历史和下载内容不被规范化或改写。
+- 排行榜人工复核分别记录普通与速通主云存档 revision；对应模式的新上传或历史恢复只解除本模式等待，隐藏状态不被改变，永久冻结仍只能由明确的管理员复核动作解除。
+- GameState v46、save envelope v2、云 schema v7 与 SQLite layout v2 均不升级；现有 1.0.38 Web、Android 和 Windows 客户端无需重新安装即可在 API 热修后恢复上传。
+
 ## [1.0.37] - 2026-08-10
 
 - Fixed legacy resource migration so it only restores stable resource entities declared by the persisted planet profile; legal one-node unipolar-magnet saves remain unchanged, and manual repair requires preview, backup hashes, an explicit token, rollback data, and speedrun review.

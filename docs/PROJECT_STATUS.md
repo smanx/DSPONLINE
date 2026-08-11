@@ -6,6 +6,10 @@
 > 产品阶段：首个公网版本已上线，当前更准确的定位是“公开测试版”。
 > 事实来源：当前工作区代码、自动化测试、部署配置和线上只读检查。
 
+> `1.0.39` 云存档 P0 热修候选已在隔离开发工作树完成，但尚未部署。服务端对 GameState v46 稀疏正文只在结构校验的局部读取中将缺失的 `belt.lanes/tier/progress` 解释为 `1/1/0`，并兼容同一客户端投影省略的 `interactionLocked=false`；显式 `null`、字符串、非法范围及损坏 checksum 仍拒绝。原始 payload、envelope checksum、云 SHA-256、revision、历史和下载正文均不改写。排行榜人工复核阈值改为普通/速通独立，旧单值 `accountControls` 继续作为普通模式兼容别名。GameState v46、envelope v2、云 schema v7、SQLite layout v2 均不升级；当前生产仍为下述 1.0.38。
+
+> 1.0.39 本地门禁为 Vitest 950/18、Playwright 282/11（293 总项，首次一条既有用例 90 秒瞬时超时，目标 4.0 秒通过，随后完整全量 0 失败）、server 75/2、ops 6/6、native 8/8、128 个运行时许可证和根/server 生产依赖审计 0。专项只使用合成账号、临时 SQLite 和本机随机端口；没有连接生产、读取签名材料、修改排行榜历史或写入玩家存档。固定源码、Build ID 和制品哈希见待生成的 [1.0.39 Release Agent 交接](./RELEASE_HANDOFF_1.0.39.md)。
+
 > `1.0.38` 已完成香港、上海 Web/API、上海下载页及 Android/Windows stable 正式发布。权威源码为 clean commit `351c649af9eedb22f56f47a6cd06c14cedce6221`，Build ID 为 `1.0.38+351c649af9ee`。本版把保存、云上传、离线和纯挂机结果改为 Worker 权威序列化、哈希和可转移缓冲区，复用传送带、生产、电力与量子物流 Worker 索引，并以兼容的稀疏 v46 JSON 降低存档体积；普通模式单极磁石一→二仍受快照、双重确认、零物资和硬上限保护。GameState v46、envelope v2、云 schema v7、SQLite layout v2 和排行榜协议均不变。
 
 > 1.0.38 最终门禁为 Vitest 950/18、Playwright 280/11、server 70/2、ops 6/6、native 8/8、生产依赖审计 0，source/Web/API 161/161，下载 9/9、bundle 10/10。Android 使用批准长期证书并完成 API 36.1 模拟器 `1.0.37 → 1.0.38` 覆盖升级；Windows 继续 `NotSigned`。用户只对本候选明确豁免 Android 真机、低配 Windows、Windows 覆盖升级和约一小时后台/锁屏门禁，并接受 60 秒精确模拟 13.5～13.8 秒、移动 Canvas 最大帧 139ms、既有长窗口近似误差和 30 MiB 云上传上限的残余风险。生产备份、隔离启动、原子切换、完整下载哈希、Range/cache、6 场 Chrome、PWA、COSFS 缓存处置和回滚证据见 [1.0.38 正式发布记录](./releases/1.0.38.md)。
