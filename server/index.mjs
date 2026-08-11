@@ -1429,12 +1429,17 @@ function validateSavePayload(payload) {
       (entity.machineCount !== undefined && (!Number.isSafeInteger(entity.machineCount) || entity.machineCount < 0)) ||
       (entity.minerCount !== undefined && (!Number.isSafeInteger(entity.minerCount) || entity.minerCount < 0)))) return false;
     if (state.version >= 38 && !Array.isArray(state.belts)) return false;
-    if (state.belts !== undefined && (!Array.isArray(state.belts) || state.belts.some((belt) =>
-      state.version >= 38
-        ? !Number.isInteger(belt?.lanes) || belt.lanes < 1 || belt.lanes > 4_096 || state.version >= 40 && (
-          !Number.isInteger(belt?.tier) || belt.tier < 1 || belt.tier > 32 ||
-          !Number.isFinite(belt?.progress) || belt.progress < 0 || belt.progress > 100_000_000)
-        : belt?.lanes !== undefined && (!Number.isInteger(belt.lanes) || belt.lanes < 1 || belt.lanes > 4_096)))) return false;
+    if (state.belts !== undefined && (!Array.isArray(state.belts) || state.belts.some((belt) => {
+      if (!belt || typeof belt !== "object" || Array.isArray(belt)) return true;
+      const lanes = state.version === 46 && belt.lanes === undefined ? 1 : belt.lanes;
+      const tier = state.version === 46 && belt.tier === undefined ? 1 : belt.tier;
+      const progress = state.version === 46 && belt.progress === undefined ? 0 : belt.progress;
+      return state.version >= 38
+        ? !Number.isInteger(lanes) || lanes < 1 || lanes > 4_096 || state.version >= 40 && (
+          !Number.isInteger(tier) || tier < 1 || tier > 32 ||
+          !Number.isFinite(progress) || progress < 0 || progress > 100_000_000)
+        : belt.lanes !== undefined && (!Number.isInteger(belt.lanes) || belt.lanes < 1 || belt.lanes > 4_096);
+    }))) return false;
     const validBufferLimit = (value) => Number.isInteger(value) && value >= 1_000 && value <= 100_000_000;
     const productionLimit = state.settings?.productionBufferLimit;
     const logisticsLimit = state.settings?.logisticsBufferLimit;
@@ -1718,7 +1723,13 @@ function validateSavePayload(payload) {
         }
       }
     }
-    if (state.version >= 35 && state.entities.some((entity) => typeof entity?.interactionLocked !== "boolean")) return false;
+    if (state.version >= 35 && state.entities.some((entity) => {
+      if (!entity || typeof entity !== "object" || Array.isArray(entity)) return true;
+      const interactionLocked = state.version === 46 && entity.interactionLocked === undefined
+        ? false
+        : entity.interactionLocked;
+      return typeof interactionLocked !== "boolean";
+    })) return false;
     return true;
   } catch {
     return false;
