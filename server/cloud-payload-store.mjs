@@ -273,10 +273,47 @@ function ensureBlob(database, descriptor) {
   return "inserted";
 }
 
+function inspectedPayloadDescriptor(payload, checksum, sizeBytes) {
+  if (typeof payload !== "string" || isAliasCandidate(payload)) {
+    fail("CLOUD_PAYLOAD_BODY_INVALID", "Inspected cloud payload body must be original text");
+  }
+  assertChecksum(checksum);
+  assertSizeBytes(sizeBytes);
+  return { payload, checksum, sizeBytes };
+}
+
 export function writeCloudPayload(database, input) {
   requireOuterTransaction(database, "writeCloudPayload");
   const identity = validateIdentity(input ?? {});
   const descriptor = describePayload(input?.payload, input?.checksum);
+  const blob = ensureBlob(database, descriptor);
+  const alias = createCloudPayloadAlias(descriptor.checksum, descriptor.sizeBytes);
+  const result = database.prepare(`
+    INSERT INTO ${CLOUD_PAYLOAD_TABLE} (user_id, slot, revision, payload)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, slot, revision) DO UPDATE SET payload = excluded.payload
+  `).run(identity.userId, identity.slot, identity.revision, alias);
+  return {
+    checksum: descriptor.checksum,
+    sizeBytes: descriptor.sizeBytes,
+    blob,
+    rowChanges: result.changes,
+  };
+}
+
+/**
+ * Persist a body whose exact UTF-8 size and SHA-256 were already produced by
+ * the authoritative upload inspector. This deliberately avoids hashing a
+ * second 30 MiB string while the SQLite mutation queue is held. The blob-table
+ * CHECK constraint still enforces the supplied byte size, and an existing
+ * address is compared byte-for-byte so a checksum collision cannot overwrite
+ * stored content. Callers outside that inspected boundary must use
+ * writeCloudPayload(), which computes both values itself.
+ */
+export function writeInspectedCloudPayload(database, input) {
+  requireOuterTransaction(database, "writeInspectedCloudPayload");
+  const identity = validateIdentity(input ?? {});
+  const descriptor = inspectedPayloadDescriptor(input?.payload, input?.checksum, input?.sizeBytes);
   const blob = ensureBlob(database, descriptor);
   const alias = createCloudPayloadAlias(descriptor.checksum, descriptor.sizeBytes);
   const result = database.prepare(`

@@ -20,6 +20,7 @@ import {
   parseCloudPayloadAlias,
   readCloudPayload,
   writeCloudPayload,
+  writeInspectedCloudPayload,
 } from "./cloud-payload-store.mjs";
 
 function sha256(payload) {
@@ -106,6 +107,30 @@ test("deduplicates identical content across normal and speedrun slots while pres
     assert.equal(stats.bytes.deduplicated, Buffer.byteLength(body) * 2);
     assert.equal(JSON.stringify(stats).includes(body), false, "aggregate statistics must not expose save text");
     assert.equal(JSON.stringify(stats).includes(digest), false, "aggregate statistics must not expose content addresses");
+  } finally {
+    database.close();
+  }
+});
+
+test("writes an inspector-verified body without weakening size or collision constraints", () => {
+  const database = createLegacyDatabase();
+  try {
+    initializeCloudPayloadStore(database);
+    const payload = JSON.stringify({ formatVersion: 2, state: { version: 46, mode: "normal" }, inspected: true });
+    const checksum = sha256(payload);
+    const sizeBytes = Buffer.byteLength(payload);
+    database.transaction(() => {
+      writeInspectedCloudPayload(database, { userId: "user_a", slot: "main", revision: 1, payload, checksum, sizeBytes });
+      writeInspectedCloudPayload(database, { userId: "user_a", slot: "speedrun:main", revision: 1, payload, checksum, sizeBytes });
+    })();
+    assert.equal(readCloudPayload(database, { userId: "user_a", slot: "main", revision: 1 }), payload);
+    assert.equal(database.prepare(`SELECT count(*) AS count FROM ${CLOUD_PAYLOAD_BLOB_TABLE}`).get().count, 1);
+    assert.throws(() => database.transaction(() => writeInspectedCloudPayload(database, {
+      userId: "user_a", slot: "1", revision: 1, payload, checksum, sizeBytes: sizeBytes + 1,
+    }))(), /constraint|size/i);
+    assert.throws(() => database.transaction(() => writeInspectedCloudPayload(database, {
+      userId: "user_a", slot: "2", revision: 1, payload: `${payload}x`, checksum, sizeBytes: sizeBytes + 1,
+    }))(), expectCode("CLOUD_PAYLOAD_CHECKSUM_COLLISION"));
   } finally {
     database.close();
   }
