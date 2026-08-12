@@ -71,6 +71,7 @@ import { useGameDialog } from "./GameDialogProvider";
 import { LogisticsManagementPanel, type LogisticsManagementPanelProps } from "./LogisticsManagementPanel";
 import type { CanvasPerformanceFeatureId, CanvasPerformanceFeatures } from "../game/endgamePerformance";
 import { readSettingsCategoryPreference, writeSettingsCategoryPreference, type ConnectionPointSize, type SettingsCategory } from "../game/uiPreferences";
+import { deleteLocalSaveManagedEntries, dismissLocalSaveRecoveryPrompt, requestLocalSavePersistentStorage, subscribeLocalSaveStorageStatus } from "../game/localSaveStore";
 
 export type OperationsTab = "alerts" | "achievements" | "logistics" | "settings" | "performance" | "saves" | "packs" | "support";
 
@@ -683,12 +684,19 @@ function SavesPanel({
   "game" | "slots" | "snapshots" | "importPreview" | "modValidation" | "onManualSave" | "onExport" | "onImport" | "onConfirmImport" | "onConfirmImportRescue" | "importRescueArmed" | "onCancelImport" | "onSaveSlot" | "onLoadSlot" | "onDeleteSlot" | "onCreateSnapshot" | "onAddSecondUnipolarVein" | "unipolarExpansionBusy" | "onLoadSnapshot" | "onDeleteSnapshot" | "onDeleteSnapshots" | "onValidateMod" | "onExportModTemplate">) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modInputRef = useRef<HTMLInputElement>(null);
-  const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & ({ kind: "slot"; slotId: SaveSlotId } | { kind: "snapshot"; snapshotId: string } | { kind: "snapshots"; snapshotIds: string[] })) | null>(null);
+  const [deleteRequest, setDeleteRequest] = useState<(SaveDeleteTarget & ({ kind: "slot"; slotId: SaveSlotId } | { kind: "snapshot"; snapshotId: string } | { kind: "snapshots"; snapshotIds: string[] } | { kind: "managed-storage"; keys: string[] })) | null>(null);
   const [selectedSnapshotIds, setSelectedSnapshotIds] = useState<string[]>([]);
+  const [selectedStorageKeys, setSelectedStorageKeys] = useState<string[]>([]);
   const [storageEstimate, setStorageEstimate] = useState<LocalSaveStorageEstimate | null>(null);
+  const [persistenceRequestPending, setPersistenceRequestPending] = useState(false);
   const summaryBySlot = new Map(slots.map((slot) => [slot.slotId, slot]));
   const automaticSnapshotCount = snapshots.filter((snapshot) => snapshot.reason === "自动快照").length;
   const manualSnapshotCount = snapshots.length - automaticSnapshotCount;
+  const protectedSnapshotIds = new Set((storageEstimate?.entries ?? []).flatMap((entry) => {
+    if (!entry.protected || !entry.key.includes(".snapshot.")) return [];
+    const prefix = entry.mode === "speedrun" ? "dsp-idle-network.save.v1.snapshot.speedrun." : "dsp-idle-network.save.v1.snapshot.";
+    return entry.key.startsWith(prefix) ? [entry.key.slice(prefix.length)] : [];
+  }));
   const unipolarCount = game.entities.filter((entity) => entity.kind === "vein" && entity.resourceId === "unipolar_magnet").length;
   const unipolarEligible = game.mode !== "speedrun" && game.speedrun?.enabled !== true && unipolarCount === 1 && game.paused;
   const unipolarStatus = game.mode === "speedrun" || game.speedrun?.enabled === true
@@ -698,11 +706,24 @@ function SavesPanel({
         : unipolarCount === 1 ? "符合一次性扩容条件" : `当前 ${unipolarCount} 个，需先通过资源审计`;
   useEffect(() => {
     let active = true;
-    void getLocalSaveStorageEstimate().then((estimate) => { if (active) setStorageEstimate(estimate); });
-    return () => { active = false; };
+    const refresh = () => void getLocalSaveStorageEstimate().then((estimate) => { if (active) setStorageEstimate(estimate); });
+    refresh();
+    const unsubscribe = subscribeLocalSaveStorageStatus(refresh);
+    return () => { active = false; unsubscribe(); };
   }, [slots, snapshots]);
   useEffect(() => setSelectedSnapshotIds((current) => current.filter((id) => snapshots.some((snapshot) => snapshot.id === id))), [snapshots]);
+  useEffect(() => setSelectedStorageKeys((current) => current.filter((key) => storageEstimate?.entries.some((entry) => entry.key === key) ?? false)), [storageEstimate]);
   const formatBytes = (bytes: number | null) => bytes === null ? "不可用" : bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(2)} MiB` : `${Math.max(0, Math.round(bytes / 1024))} KiB`;
+  const persistenceLabel = storageEstimate?.persistenceStatus === "granted" ? "已受持久保护"
+    : storageEstimate?.persistenceStatus === "denied" ? "浏览器未授予"
+      : storageEstimate?.persistenceStatus === "unsupported" ? "当前环境不支持"
+        : "尚未请求";
+  const requestPersistence = async () => {
+    setPersistenceRequestPending(true);
+    await requestLocalSavePersistentStorage();
+    setStorageEstimate(await getLocalSaveStorageEstimate());
+    setPersistenceRequestPending(false);
+  };
   return (
     <div className="operations-panel operations-saves">
       <header className="operations-section-header">
@@ -769,10 +790,10 @@ function SavesPanel({
       <section className="save-snapshot-section">
         <header><div><History size={14} /><strong>恢复快照</strong><small>自动 {automaticSnapshotCount}/2 · 手动 {manualSnapshotCount}</small></div>{selectedSnapshotIds.length > 0 ? <button className="save-batch-delete" type="button" onClick={() => setDeleteRequest({ kind: "snapshots", snapshotIds: selectedSnapshotIds, label: `${selectedSnapshotIds.length} 份所选快照`, details: "只删除明确勾选的恢复快照；主存档和三个手动槽位不会受影响" })}><Trash2 size={13} />删除所选</button> : <span>可回滚</span>}</header>
         {snapshots.length === 0 ? <p className="save-empty-note">模拟运行后会自动保留最近快照</p> : <div className="save-snapshot-list">
-          {snapshots.map((snapshot) => <article className={`save-snapshot-row${snapshot.valid ? "" : " save-snapshot-row--invalid"}`} key={snapshot.id}>
+          {snapshots.map((snapshot) => <article className={`save-snapshot-row${snapshot.valid ? "" : " save-snapshot-row--invalid"}${protectedSnapshotIds.has(snapshot.id) ? " save-snapshot-row--protected" : ""}`} key={snapshot.id}>
             <input type="checkbox" checked={selectedSnapshotIds.includes(snapshot.id)} onChange={(event) => setSelectedSnapshotIds((current) => event.target.checked ? [...current, snapshot.id] : current.filter((id) => id !== snapshot.id))} aria-label={`选择快照 ${snapshot.reason}`} />
             <i>{snapshot.valid ? <ShieldCheck size={14} /> : <FileCheck2 size={14} />}</i>
-            <div><strong>{snapshot.reason}</strong><span>{new Date(snapshot.savedAt).toLocaleTimeString("zh-CN")} · {formatRuntime(snapshot.elapsedSeconds)} · 科技 {snapshot.completedTechCount}</span></div>
+            <div><strong>{snapshot.reason}{protectedSnapshotIds.has(snapshot.id) ? <em>保护</em> : null}</strong><span>{new Date(snapshot.savedAt).toLocaleTimeString("zh-CN")} · {formatRuntime(snapshot.elapsedSeconds)} · 科技 {snapshot.completedTechCount}</span></div>
             <button type="button" disabled={!snapshot.valid} onClick={() => onLoadSnapshot(snapshot.id)} title="回滚到此快照" aria-label={`回滚到快照 ${snapshot.id}`}><RotateCcw size={13} /></button>
             <button type="button" onClick={() => setDeleteRequest({ kind: "snapshot", snapshotId: snapshot.id, label: `快照：${snapshot.reason}`, details: `${new Date(snapshot.savedAt).toLocaleString("zh-CN")} · 运行 ${formatRuntime(snapshot.elapsedSeconds)} · 科技 ${snapshot.completedTechCount}` })} title="删除快照" aria-label={`删除快照 ${snapshot.id}`}><Trash2 size={13} /></button>
           </article>)}
@@ -781,7 +802,31 @@ function SavesPanel({
       {storageEstimate ? <section className="save-storage-usage" aria-label="本地存储占用">
         <header><div><Database size={14} /><strong>存储占用</strong></div><small>{storageEstimate.backend === "indexeddb" ? "IndexedDB" : storageEstimate.backend === "local-storage" ? "兼容存储" : "临时内存"}</small></header>
         <div className="save-storage-kpis"><span><small>存档数据</small><strong>{formatBytes(storageEstimate.payloadBytes)}</strong></span><span><small>浏览器总占用</small><strong>{formatBytes(storageEstimate.browserUsageBytes)}</strong></span><span><small>可用配额</small><strong>{storageEstimate.browserQuotaBytes === null || storageEstimate.browserUsageBytes === null ? "不可用" : formatBytes(Math.max(0, storageEstimate.browserQuotaBytes - storageEstimate.browserUsageBytes))}</strong></span></div>
-        <div className="save-storage-entries">{storageEstimate.entries.map((entry) => <div key={entry.key}><span>{entry.label}</span><strong>{formatBytes(entry.bytes)}</strong></div>)}</div>
+        <div className={`save-persistence-state save-persistence-state--${storageEstimate.persistenceStatus}`} role="status">
+          <ShieldCheck size={15} />
+          <span><strong>浏览器持久存储：{persistenceLabel}</strong><small>{storageEstimate.persistenceStatus === "granted" ? "浏览器会尽量避免在空间回收时移除本地存档。" : "拒绝或不支持不会影响游玩；仍建议定期导出重要存档。"}</small></span>
+          {storageEstimate.persistenceStatus !== "granted" && storageEstimate.persistenceRequestSupported ? <button type="button" disabled={persistenceRequestPending} onClick={() => void requestPersistence()}>{persistenceRequestPending ? "请求中" : storageEstimate.persistenceStatus === "denied" ? "重新请求" : "请求保护"}</button> : null}
+        </div>
+        <div className="save-storage-mode-grid" aria-label="按模式存储占用">
+          {storageEstimate.modes.map((usage) => <article key={usage.mode} data-mode={usage.mode}>
+            <header><strong>{usage.mode === "speedrun" ? "速通模式" : "普通模式"}</strong><em>{formatBytes(usage.totalBytes)}</em></header>
+            <dl>
+              <div><dt>主档 / 备份</dt><dd>{formatBytes(usage.primaryBytes + usage.backupBytes)}</dd></div>
+              <div><dt>手动槽位</dt><dd>{usage.slotCount} · {formatBytes(usage.slotBytes)}</dd></div>
+              <div><dt>自动快照</dt><dd>{usage.automaticSnapshotCount}/2 · {formatBytes(usage.automaticSnapshotBytes)}</dd></div>
+              <div><dt>手动快照</dt><dd>{usage.manualSnapshotCount} · {formatBytes(usage.manualSnapshotBytes)}</dd></div>
+              <div><dt>保护快照</dt><dd>{usage.protectedCount} · {formatBytes(usage.protectedBytes)}</dd></div>
+              <div><dt>导入缓存</dt><dd>{usage.importCacheCount} · {formatBytes(usage.importCacheBytes)}</dd></div>
+            </dl>
+          </article>)}
+        </div>
+        {storageEstimate.recoveryPrompt ? <div className="save-storage-recovery" role="alert"><AlertTriangle size={16} /><span><strong>{storageEstimate.recoveryPrompt.preservedChecksummedMain ? "旧主档已保留" : "需要立即恢复"}</strong><small>{storageEstimate.recoveryPrompt.message}</small></span><div><button type="button" onClick={onExport}>立即导出</button><button type="button" onClick={() => { dismissLocalSaveRecoveryPrompt(); setStorageEstimate((current) => current ? { ...current, recoveryPrompt: null } : current); }}>知道了</button></div></div> : null}
+        {storageEstimate.warnings.length > 0 ? <div className="save-storage-warnings">{storageEstimate.warnings.map((warning) => <p key={warning}><AlertTriangle size={13} />{warning}</p>)}</div> : null}
+        <div className="save-storage-list-header"><span>清理只作用于明确勾选的手动/保护快照或导入缓存，保护项默认不勾选。</span>{selectedStorageKeys.length > 0 ? <button type="button" className="save-batch-delete" onClick={() => setDeleteRequest({ kind: "managed-storage", keys: selectedStorageKeys, label: `${selectedStorageKeys.length} 份本地恢复数据`, details: "只删除当前容量清单中明确勾选的数据；主档、备份、手动槽位和自动快照不会受影响" })}><Trash2 size={13} />删除所选</button> : null}</div>
+        <div className="save-storage-entries">{storageEstimate.entries.map((entry) => {
+          const selectable = entry.category === "manual-snapshot" || entry.category === "import-cache" || entry.category === "protected" && entry.key.includes(".snapshot.");
+          return <div className={entry.protected ? "protected" : ""} key={entry.key}>{selectable ? <input type="checkbox" checked={selectedStorageKeys.includes(entry.key)} onChange={(event) => setSelectedStorageKeys((current) => event.target.checked ? [...current, entry.key] : current.filter((key) => key !== entry.key))} aria-label={`选择清理 ${entry.label}`} /> : <i aria-hidden="true" />}<span><strong>{entry.label}</strong><small>{entry.source}{entry.savedAt > 0 ? ` · ${new Date(entry.savedAt).toLocaleString("zh-CN")}` : ""}</small></span><em>{entry.protected ? "保护" : entry.automatic ? "自动" : "玩家管理"}</em><b>{formatBytes(entry.bytes)}</b></div>;
+        })}</div>
       </section> : null}
       <section className="content-pack-section">
         <header><div><FileCheck2 size={14} /><strong>内容包校验</strong></div><small>只读检查，不会修改核心目录</small></header>
@@ -793,7 +838,8 @@ function SavesPanel({
         if (!deleteRequest) return;
         if (deleteRequest.kind === "slot") onDeleteSlot(deleteRequest.slotId);
         else if (deleteRequest.kind === "snapshot") onDeleteSnapshot(deleteRequest.snapshotId);
-        else { onDeleteSnapshots(deleteRequest.snapshotIds); setSelectedSnapshotIds([]); }
+        else if (deleteRequest.kind === "snapshots") { onDeleteSnapshots(deleteRequest.snapshotIds); setSelectedSnapshotIds([]); }
+        else { void deleteLocalSaveManagedEntries(deleteRequest.keys).then(() => getLocalSaveStorageEstimate()).then(setStorageEstimate); setSelectedStorageKeys([]); }
         setDeleteRequest(null);
       }} />
     </div>

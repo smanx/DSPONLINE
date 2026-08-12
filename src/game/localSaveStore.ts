@@ -34,12 +34,41 @@ const DATABASE_VERSION = 2;
 const RECORD_STORE = "records";
 const SAVE_KEY = "dsp-idle-network.save.v1";
 const SLOT_KEY_PREFIX = "dsp-idle-network.slot.";
+const IMPORT_CACHE_KEY_PREFIX = `${SAVE_KEY}.import-cache.`;
+export const LOCAL_AUTOMATIC_SNAPSHOT_LIMIT = 2;
+const MANAGED_SNAPSHOT_WARNING_COUNT = 8;
+const MANAGED_SNAPSHOT_WARNING_BYTES = 64 * 1024 * 1024;
+
+export type LocalSaveMode = "normal" | "speedrun";
+export type LocalSaveStorageCategory =
+  | "primary"
+  | "backup"
+  | "slot"
+  | "automatic-snapshot"
+  | "manual-snapshot"
+  | "protected"
+  | "import-cache";
+export type LocalSavePersistenceStatus = "granted" | "not-granted" | "denied" | "unsupported";
+export type LocalSaveStoragePressure = "normal" | "high" | "critical" | "unknown";
+
+interface StoredSaveSummary {
+  schemaVersion: 1;
+  mode: LocalSaveMode;
+  category: LocalSaveStorageCategory;
+  savedAt: number;
+  slot: "main" | 1 | 2 | 3 | null;
+  reason: string | null;
+  automatic: boolean;
+  protected: boolean;
+  checksum: string | null;
+}
 
 interface StoredSaveRecord {
   key: string;
   value: string;
   updatedAt: number;
   bytes: number;
+  summary?: StoredSaveSummary;
 }
 
 export type LocalSaveBackend = "indexeddb" | "local-storage" | "memory";
@@ -48,6 +77,40 @@ export interface LocalSaveStorageEntry {
   key: string;
   label: string;
   bytes: number;
+  updatedAt: number;
+  savedAt: number;
+  mode: LocalSaveMode;
+  category: LocalSaveStorageCategory;
+  slot: "main" | 1 | 2 | 3 | null;
+  source: string;
+  reason: string | null;
+  automatic: boolean;
+  protected: boolean;
+}
+
+export interface LocalSaveModeStorageUsage {
+  mode: LocalSaveMode;
+  totalBytes: number;
+  primaryBytes: number;
+  backupBytes: number;
+  slotBytes: number;
+  automaticSnapshotBytes: number;
+  manualSnapshotBytes: number;
+  protectedBytes: number;
+  importCacheBytes: number;
+  slotCount: number;
+  automaticSnapshotCount: number;
+  manualSnapshotCount: number;
+  protectedCount: number;
+  importCacheCount: number;
+}
+
+export interface LocalSaveRecoveryPrompt {
+  mode: LocalSaveMode;
+  key: string;
+  occurredAt: number;
+  preservedChecksummedMain: boolean;
+  message: string;
 }
 
 export interface LocalSaveStorageEstimate {
@@ -55,6 +118,12 @@ export interface LocalSaveStorageEstimate {
   payloadBytes: number;
   browserUsageBytes: number | null;
   browserQuotaBytes: number | null;
+  persistenceStatus: LocalSavePersistenceStatus;
+  persistenceRequestSupported: boolean;
+  pressure: LocalSaveStoragePressure;
+  modes: LocalSaveModeStorageUsage[];
+  warnings: string[];
+  recoveryPrompt: LocalSaveRecoveryPrompt | null;
   entries: LocalSaveStorageEntry[];
 }
 
@@ -68,6 +137,7 @@ export interface LocalSaveConflictSummary {
 
 const cache = new Map<string, string>();
 const revisionCache = new Map<string, number>();
+const storageEntryCache = new Map<string, LocalSaveStorageEntry & { checksum: string | null }>();
 let backend: LocalSaveBackend = "memory";
 let database: IDBDatabase | null = null;
 let initialization: Promise<void> | null = null;
@@ -87,6 +157,9 @@ let writerHeartbeat: number | null = null;
 let broadcastChannel: BroadcastChannel | null = null;
 const writerStatusListeners = new Set<(status: LocalSaveWriterStatus) => void>();
 const saveChangeListeners = new Set<(message: LocalSaveBroadcastMessage) => void>();
+const storageStatusListeners = new Set<() => void>();
+let recoveryPrompt: LocalSaveRecoveryPrompt | null = null;
+let lastPersistenceStatus: LocalSavePersistenceStatus | null = null;
 
 function ensureSynchronousFallback(): void {
   if (initialization || backend !== "memory" || typeof window === "undefined") return;
@@ -97,7 +170,8 @@ function isSaveKey(key: string): boolean {
   return key === SAVE_KEY || key === `${SAVE_KEY}.backup` || key === `${SAVE_KEY}.backup.speedrun` ||
     key.startsWith(`${SAVE_KEY}.migration-backup.`) ||
     key.startsWith(`${SAVE_KEY}.normal`) || key.startsWith(`${SAVE_KEY}.speedrun`) ||
-    key.startsWith(`${SAVE_KEY}.snapshot.`) || key.startsWith(LOCAL_SAVE_CONFLICT_KEY_PREFIX) || key.startsWith(SLOT_KEY_PREFIX);
+    key.startsWith(`${SAVE_KEY}.snapshot.`) || key.startsWith(IMPORT_CACHE_KEY_PREFIX) ||
+    key.startsWith(LOCAL_SAVE_CONFLICT_KEY_PREFIX) || key.startsWith(SLOT_KEY_PREFIX);
 }
 
 function byteLength(value: string): number {
@@ -109,12 +183,189 @@ function byteLength(value: string): number {
 }
 
 function savedAt(value: string): number {
+  return inspectLocalSaveIdentity(value).savedAt;
+}
+
+function modeFromKey(key: string, valuePrefix = ""): LocalSaveMode {
+  if (key === `${SAVE_KEY}.speedrun` || key === `${SAVE_KEY}.backup.speedrun` ||
+    key.startsWith(`${SAVE_KEY}.speedrun.`) || key.startsWith(`${SAVE_KEY}.snapshot.speedrun.`) ||
+    key.startsWith(`${SLOT_KEY_PREFIX}speedrun.`) || key.startsWith(`${IMPORT_CACHE_KEY_PREFIX}speedrun.`)) return "speedrun";
+  // Save keys own mode isolation. Only conflict copies lack a mode namespace,
+  // so their already-preserved payload header is used for display grouping.
+  return key.startsWith(LOCAL_SAVE_CONFLICT_KEY_PREFIX) && /"mode"\s*:\s*"speedrun"/.test(valuePrefix) ? "speedrun" : "normal";
+}
+
+function snapshotReasonFromPrefix(valuePrefix: string): string | null {
+  const match = /"reason"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(valuePrefix);
+  if (!match) return null;
   try {
-    const parsed = JSON.parse(value) as { savedAt?: unknown };
-    return typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt) ? parsed.savedAt : 0;
+    const decoded = JSON.parse(match[1]) as unknown;
+    return typeof decoded === "string" && decoded.length > 0 ? decoded : null;
   } catch {
-    return 0;
+    return null;
   }
+}
+
+function isProtectedSnapshotReason(reason: string | null): boolean {
+  if (!reason) return false;
+  return /(?:前|迁移|恢复|回滚|救援|扩容|云存档|外部存档|新工厂|槽位)/u.test(reason) && reason !== "手动快照";
+}
+
+function slotFromKey(key: string): "main" | 1 | 2 | 3 | null {
+  if (key === SAVE_KEY || key.startsWith(`${SAVE_KEY}.normal`) || key.startsWith(`${SAVE_KEY}.speedrun`)) return "main";
+  const slotMatch = /^dsp-idle-network\.slot\.(?:speedrun\.)?([123])$/.exec(key);
+  return slotMatch ? Number(slotMatch[1]) as 1 | 2 | 3 : null;
+}
+
+function classifySaveRecord(key: string, value: string): StoredSaveSummary {
+  const prefix = value.slice(0, Math.min(value.length, 4_096));
+  const mode = modeFromKey(key, prefix);
+  const snapshot = key.includes(".snapshot.");
+  const reason = snapshot ? snapshotReasonFromPrefix(prefix) : null;
+  const recognizableSnapshot = /"kind"\s*:\s*"snapshot"/.test(prefix);
+  const automatic = snapshot && reason === "自动快照";
+  const protectedSnapshot = snapshot && !automatic && (reason === null || !recognizableSnapshot || isProtectedSnapshotReason(reason));
+  let category: LocalSaveStorageCategory;
+  if (key.startsWith(IMPORT_CACHE_KEY_PREFIX)) category = "import-cache";
+  else if (key.startsWith(`${SAVE_KEY}.migration-backup.`) || key.startsWith(LOCAL_SAVE_CONFLICT_KEY_PREFIX) || protectedSnapshot) category = "protected";
+  else if (key === `${SAVE_KEY}.backup` || key === `${SAVE_KEY}.backup.speedrun`) category = "backup";
+  else if (key.startsWith(SLOT_KEY_PREFIX)) category = "slot";
+  else if (key.includes(".snapshot.")) category = automatic ? "automatic-snapshot" : "manual-snapshot";
+  else category = "primary";
+  const identity = inspectLocalSaveIdentity(value);
+  return {
+    schemaVersion: 1,
+    mode,
+    category,
+    savedAt: identity.savedAt,
+    slot: slotFromKey(key),
+    reason,
+    automatic,
+    protected: category === "protected",
+    checksum: identity.checksum,
+  };
+}
+
+function validStoredSummary(value: unknown): value is StoredSaveSummary {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<StoredSaveSummary>;
+  return candidate.schemaVersion === 1 && (candidate.mode === "normal" || candidate.mode === "speedrun") &&
+    ["primary", "backup", "slot", "automatic-snapshot", "manual-snapshot", "protected", "import-cache"].includes(candidate.category ?? "") &&
+    typeof candidate.savedAt === "number" && Number.isFinite(candidate.savedAt) &&
+    (candidate.slot === null || candidate.slot === "main" || candidate.slot === 1 || candidate.slot === 2 || candidate.slot === 3) &&
+    (candidate.reason === null || typeof candidate.reason === "string") && typeof candidate.automatic === "boolean" &&
+    typeof candidate.protected === "boolean" && (candidate.checksum === null || typeof candidate.checksum === "string");
+}
+
+function entrySource(summary: StoredSaveSummary): string {
+  if (summary.category === "primary") return "主存档";
+  if (summary.category === "backup") return "上一版本备份";
+  if (summary.category === "slot") return `手动槽位 ${summary.slot ?? "--"}`;
+  if (summary.category === "automatic-snapshot") return "自动快照";
+  if (summary.category === "manual-snapshot") return "手动快照";
+  if (summary.category === "import-cache") return "导入缓存";
+  return "保护副本";
+}
+
+function updateStorageEntry(record: StoredSaveRecord): void {
+  if (!isSaveKey(record.key) || record.key.endsWith(".snapshot.sequence") || record.key.endsWith(".snapshot.speedrun.sequence")) return;
+  const identity = inspectLocalSaveIdentity(record.value);
+  const derived = classifySaveRecord(record.key, record.value);
+  const summary = validStoredSummary(record.summary) && record.summary.savedAt === identity.savedAt && record.summary.checksum === identity.checksum &&
+    record.summary.mode === derived.mode && record.summary.category === derived.category && record.summary.slot === derived.slot &&
+    record.summary.reason === derived.reason && record.summary.automatic === derived.automatic && record.summary.protected === derived.protected
+    ? record.summary
+    : derived;
+  storageEntryCache.set(record.key, {
+    key: record.key,
+    label: entryLabel(record.key, summary),
+    bytes: Number.isFinite(record.bytes) && record.bytes >= 0 ? record.bytes : byteLength(record.value),
+    updatedAt: Number.isFinite(record.updatedAt) ? record.updatedAt : summary.savedAt,
+    savedAt: summary.savedAt,
+    mode: summary.mode,
+    category: summary.category,
+    slot: summary.slot,
+    source: entrySource(summary),
+    reason: summary.reason,
+    automatic: summary.automatic,
+    protected: summary.protected,
+    checksum: summary.checksum,
+  });
+}
+
+function notifyStorageStatus(): void {
+  storageStatusListeners.forEach((listener) => listener());
+}
+
+function removeStorageEntry(key: string): void {
+  if (storageEntryCache.delete(key)) notifyStorageStatus();
+}
+
+function putCacheValue(key: string, value: string, now = Date.now()): void {
+  cache.set(key, value);
+  updateStorageEntry({ key, value, updatedAt: now, bytes: byteLength(value), summary: classifySaveRecord(key, value) });
+  notifyStorageStatus();
+}
+
+function isQuotaExceededError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { name?: unknown; code?: unknown };
+  return candidate.name === "QuotaExceededError" || candidate.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+    candidate.code === 22 || candidate.code === 1014;
+}
+
+function primaryKeyForMode(mode: LocalSaveMode): string {
+  return mode === "speedrun" ? `${SAVE_KEY}.speedrun` : SAVE_KEY;
+}
+
+function recordQuotaRecoveryPrompt(key: string): void {
+  const mode = modeFromKey(key, cache.get(key)?.slice(0, 4_096) ?? "");
+  const main = storageEntryCache.get(primaryKeyForMode(mode));
+  const preservedChecksummedMain = Boolean(main?.checksum && main.category === "primary");
+  recoveryPrompt = {
+    mode,
+    key,
+    occurredAt: Date.now(),
+    preservedChecksummedMain,
+    message: preservedChecksummedMain
+      ? `空间不足，本次${entrySource(classifySaveRecord(key, cache.get(key) ?? ""))}未写入；上一次带校验值的${mode === "speedrun" ? "速通" : "普通"}主存档仍原样保留。请管理快照或立即导出当前进度。`
+      : `空间不足且未确认到可校验的${mode === "speedrun" ? "速通" : "普通"}主存档。请不要关闭页面，立即导出当前进度。`,
+  };
+  notifyStorageStatus();
+}
+
+function clearRecoveredQuotaPrompt(key: string): void {
+  if (!recoveryPrompt || key !== primaryKeyForMode(recoveryPrompt.mode)) return;
+  recoveryPrompt = null;
+  notifyStorageStatus();
+}
+
+function automaticSnapshotOverflow(mode: LocalSaveMode): Array<LocalSaveStorageEntry & { checksum: string | null }> {
+  return [...storageEntryCache.values()]
+    .filter((entry) => entry.mode === mode && entry.category === "automatic-snapshot")
+    .sort((left, right) => right.savedAt - left.savedAt || right.key.localeCompare(left.key))
+    .slice(LOCAL_AUTOMATIC_SNAPSHOT_LIMIT);
+}
+
+function enforceAutomaticSnapshotLimit(mode: LocalSaveMode): void {
+  for (const entry of automaticSnapshotOverflow(mode)) {
+    try {
+      removeLocalSaveValue(entry.key);
+    } catch {
+      // The new recovery point is already committed. Cleanup remains best
+      // effort and is retried by the existing storage-layer snapshot trim.
+    }
+  }
+}
+
+function restoreCachedValueAfterFailedCommit(key: string, baseValue: string | null, expectedRevision: number): void {
+  revisionCache.set(key, expectedRevision);
+  if (baseValue === null) {
+    cache.delete(key);
+    removeStorageEntry(key);
+    return;
+  }
+  cache.set(key, baseValue);
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -173,16 +424,19 @@ async function readCoordinationValue(db: IDBDatabase, key: string): Promise<stri
 }
 
 function putStoredValue(store: IDBObjectStore, key: string, value: string, now = Date.now()): void {
-  store.put({ key, value, updatedAt: now, bytes: byteLength(value) } satisfies StoredSaveRecord);
+  store.put({ key, value, updatedAt: now, bytes: byteLength(value), ...(isSaveKey(key) ? { summary: classifySaveRecord(key, value) } : {}) } satisfies StoredSaveRecord);
 }
 
 async function writeRecord(db: IDBDatabase, key: string, value: string): Promise<void> {
   const transaction = db.transaction(RECORD_STORE, "readwrite");
   const done = transactionDone(transaction);
-  transaction.objectStore(RECORD_STORE).put({ key, value, updatedAt: Date.now(), bytes: byteLength(value) } satisfies StoredSaveRecord);
+  const now = Date.now();
+  transaction.objectStore(RECORD_STORE).put({ key, value, updatedAt: now, bytes: byteLength(value), ...(isSaveKey(key) ? { summary: classifySaveRecord(key, value) } : {}) } satisfies StoredSaveRecord);
   await done;
   const stored = await readRecord(db, key);
   if (!stored || stored.value !== value) throw new DOMException("IndexedDB read-back verification failed", "DataError");
+  updateStorageEntry(stored);
+  notifyStorageStatus();
 }
 
 function publishWriterStatus(next: LocalSaveWriterStatus): void {
@@ -375,7 +629,8 @@ async function commitCoordinatedRecord(
     const conflictId = preserveWriteConflict(store, key, value, persisted, writerStatus.fencingToken, now);
     await done;
     cache.delete(key);
-    if (persisted !== null) cache.set(key, persisted);
+    removeStorageEntry(key);
+    if (persisted !== null) putCacheValue(key, persisted, currentRecord?.updatedAt ?? now);
     revisionCache.set(key, revision?.revision ?? 0);
     publishWriterStatus({
       role: "conflict",
@@ -402,6 +657,9 @@ async function commitCoordinatedRecord(
   await done;
   const stored = await readRecord(db, key);
   if ((stored?.value ?? null) !== value) throw new DOMException("IndexedDB coordinated read-back verification failed", "DataError");
+  if (stored) updateStorageEntry(stored);
+  else removeStorageEntry(key);
+  notifyStorageStatus();
   revisionCache.set(key, Math.max(revisionCache.get(key) ?? 0, nextRevision.revision));
   postCoordinationMessage({
     schemaVersion: 1,
@@ -485,7 +743,10 @@ async function initializeIndexedDb(): Promise<void> {
   backend = "indexeddb";
   const records = await readAllStoredRecords(db);
   for (const record of records) {
-    if (isSaveKey(record.key)) cache.set(record.key, record.value);
+    if (isSaveKey(record.key)) {
+      cache.set(record.key, record.value);
+      updateStorageEntry(record);
+    }
     if (record.key.startsWith(LOCAL_SAVE_REVISION_KEY_PREFIX)) {
       const revision = parseLocalSaveRevision(record.value);
       if (revision) revisionCache.set(revision.saveKey, revision.revision);
@@ -520,8 +781,10 @@ async function initializeIndexedDb(): Promise<void> {
     } else if (existing !== selected) {
       await writeRecord(db, key, selected);
     }
-    if (selected === null) cache.delete(key);
-    else cache.set(key, selected);
+    if (selected === null) {
+      cache.delete(key);
+      removeStorageEntry(key);
+    } else putCacheValue(key, selected);
     const verified = await readRecord(db, key);
     if (!preserveDevelopmentMirror() && (verified?.value ?? null) === selected) {
       try {
@@ -535,7 +798,7 @@ async function initializeIndexedDb(): Promise<void> {
 
 function initializeFallback(): void {
   const entries = legacyEntries();
-  for (const [key, value] of entries) cache.set(key, value);
+  for (const [key, value] of entries) putCacheValue(key, value);
   try {
     const probe = `${SAVE_KEY}.storage-probe`;
     window.localStorage.setItem(probe, "1");
@@ -675,8 +938,10 @@ export async function resolveLocalSaveConflict(
     putStoredValue(store, localSaveConflictMetadataKey(conflictId), JSON.stringify({ ...conflict, resolvedAt: now, resolution }), now);
     await done;
     revisionCache.set(conflict.saveKey, nextRevision.revision);
-    if (selected === null) cache.delete(conflict.saveKey);
-    else cache.set(conflict.saveKey, selected);
+    if (selected === null) {
+      cache.delete(conflict.saveKey);
+      removeStorageEntry(conflict.saveKey);
+    } else putCacheValue(conflict.saveKey, selected, now);
     postCoordinationMessage({ schemaVersion: 1, type: selected === null ? "deleted" : "saved", writerId, sentAt: now, key: conflict.saveKey, revision: nextRevision.revision, fencingToken: nextRevision.fencingToken });
   } catch {
     try { transaction.abort(); } catch { /* transaction may already be complete */ }
@@ -707,9 +972,10 @@ export function listLocalSaveKeys(): string[] {
   return [...cache.keys()].filter(isSaveKey);
 }
 
-function enqueue(operation: () => Promise<void>): void {
+function enqueue(operation: () => Promise<void>, key?: string): void {
   writeQueue = writeQueue.catch(() => undefined).then(operation).catch((error) => {
     pendingWriteError ??= error;
+    if (key && isQuotaExceededError(error)) recordQuotaRecoveryPrompt(key);
   });
 }
 
@@ -722,14 +988,31 @@ export function setLocalSaveValue(key: string, value: string): void {
     const expectedRevision = revisionCache.get(key) ?? 0;
     cache.set(key, value);
     revisionCache.set(key, expectedRevision + 1);
-    enqueue(() => commitCoordinatedRecord(database!, key, value, baseValue, expectedRevision).then(() => undefined));
+    enqueue(() => commitCoordinatedRecord(database!, key, value, baseValue, expectedRevision).then(() => {
+      clearRecoveredQuotaPrompt(key);
+      const summary = classifySaveRecord(key, value);
+      if (summary.category === "automatic-snapshot") enforceAutomaticSnapshotLimit(summary.mode);
+    }).catch((error) => {
+      if (!(error instanceof LocalSaveConflictError)) restoreCachedValueAfterFailedCommit(key, baseValue, expectedRevision);
+      throw error;
+    }), key);
     if (preserveDevelopmentMirror()) {
       try { window.localStorage.setItem(key, value); } catch { /* test-only mirror */ }
     }
     return;
   }
-  cache.set(key, value);
-  if (backend === "local-storage") window.localStorage.setItem(key, value);
+  if (backend === "local-storage") {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (error) {
+      if (isQuotaExceededError(error)) recordQuotaRecoveryPrompt(key);
+      throw error;
+    }
+  }
+  putCacheValue(key, value);
+  const summary = classifySaveRecord(key, value);
+  if (summary.category === "automatic-snapshot") enforceAutomaticSnapshotLimit(summary.mode);
+  clearRecoveredQuotaPrompt(key);
 }
 
 export function removeLocalSaveValue(key: string): void {
@@ -741,13 +1024,17 @@ export function removeLocalSaveValue(key: string): void {
     const expectedRevision = revisionCache.get(key) ?? 0;
     cache.delete(key);
     revisionCache.set(key, expectedRevision + 1);
-    enqueue(() => commitCoordinatedRecord(database!, key, null, baseValue, expectedRevision).then(() => undefined));
+    enqueue(() => commitCoordinatedRecord(database!, key, null, baseValue, expectedRevision).then(() => undefined).catch((error) => {
+      if (!(error instanceof LocalSaveConflictError)) restoreCachedValueAfterFailedCommit(key, baseValue, expectedRevision);
+      throw error;
+    }), key);
     if (preserveDevelopmentMirror()) {
       try { window.localStorage.removeItem(key); } catch { /* test-only mirror */ }
     }
     return;
   }
   cache.delete(key);
+  removeStorageEntry(key);
   if (backend === "local-storage") window.localStorage.removeItem(key);
 }
 
@@ -793,7 +1080,12 @@ export async function flushLocalSaveWrites(): Promise<void> {
   await writeQueue;
   const error = pendingWriteError;
   pendingWriteError = null;
-  if (error) throw error;
+  if (error) {
+    if (isQuotaExceededError(error)) {
+      if (!recoveryPrompt) recordQuotaRecoveryPrompt(primaryKeyForMode("normal"));
+    }
+    throw error;
+  }
 }
 
 export async function readPersistedLocalSaveValue(key: string): Promise<string | null> {
@@ -807,36 +1099,166 @@ export async function reloadLocalSaveCache(): Promise<void> {
   if (backend !== "indexeddb" || !database) return;
   cache.clear();
   revisionCache.clear();
+  storageEntryCache.clear();
   for (const record of await readAllStoredRecords(database)) {
-    if (isSaveKey(record.key)) cache.set(record.key, record.value);
+    if (isSaveKey(record.key)) {
+      cache.set(record.key, record.value);
+      updateStorageEntry(record);
+    }
     if (record.key.startsWith(LOCAL_SAVE_REVISION_KEY_PREFIX)) {
       const revision = parseLocalSaveRevision(record.value);
       if (revision) revisionCache.set(revision.saveKey, revision.revision);
     }
   }
+  notifyStorageStatus();
 }
 
-function entryLabel(key: string, value: string): string {
-  if (key.startsWith(LOCAL_SAVE_CONFLICT_KEY_PREFIX)) return key.endsWith(".candidate") ? "跨标签冲突：本页候选" : "跨标签冲突：原持久版本";
-  if (key === SAVE_KEY) return "主存档";
-  if (key === `${SAVE_KEY}.backup`) return "上一版本备份";
-  if (key === `${SAVE_KEY}.backup.speedrun`) return "速通模式上一版本备份";
-  if (key.startsWith(`${SAVE_KEY}.migration-backup.`)) return "模式迁移前原始备份";
-  if (key === `${SAVE_KEY}.normal`) return "普通模式主存档";
-  if (key === `${SAVE_KEY}.speedrun`) return "速通模式主存档";
+function entryLabel(key: string, summary: StoredSaveSummary): string {
+  const modeLabel = summary.mode === "speedrun" ? "速通模式" : "普通模式";
+  if (key.startsWith(LOCAL_SAVE_CONFLICT_KEY_PREFIX)) return key.endsWith(".candidate") ? `${modeLabel}跨标签冲突：本页候选` : `${modeLabel}跨标签冲突：原持久版本`;
+  if (key === SAVE_KEY || key === `${SAVE_KEY}.normal` || key === `${SAVE_KEY}.speedrun`) return `${modeLabel}主存档`;
+  if (key === `${SAVE_KEY}.backup` || key === `${SAVE_KEY}.backup.speedrun`) return `${modeLabel}上一版本备份`;
+  if (key.startsWith(`${SAVE_KEY}.migration-backup.`)) return "普通模式迁移前原始备份";
+  if (key.startsWith(IMPORT_CACHE_KEY_PREFIX)) return `${modeLabel}导入缓存`;
   if (key.startsWith(SLOT_KEY_PREFIX)) {
-    const parts = key.slice(SLOT_KEY_PREFIX.length).split(".");
-    return parts.length >= 2 ? `${parts[0] === "speedrun" ? "速通" : "普通"}模式手动槽位 ${parts[1]}` : `手动槽位 ${key.slice(SLOT_KEY_PREFIX.length)}`;
+    return `${modeLabel}手动槽位 ${summary.slot ?? "--"}`;
   }
   if (key.includes(".snapshot.")) {
-    try {
-      const parsed = JSON.parse(value) as { reason?: unknown };
-      return typeof parsed.reason === "string" && parsed.reason ? `快照：${parsed.reason}` : "自动恢复快照";
-    } catch {
-      return "恢复快照（无法解析）";
-    }
+    if (summary.category === "protected") return `${modeLabel}保护快照：${summary.reason ?? "来源无法识别"}`;
+    return `${modeLabel}${summary.automatic ? "自动恢复快照" : `手动快照：${summary.reason ?? "未命名"}`}`;
   }
   return key;
+}
+
+function emptyModeUsage(mode: LocalSaveMode): LocalSaveModeStorageUsage {
+  return {
+    mode,
+    totalBytes: 0,
+    primaryBytes: 0,
+    backupBytes: 0,
+    slotBytes: 0,
+    automaticSnapshotBytes: 0,
+    manualSnapshotBytes: 0,
+    protectedBytes: 0,
+    importCacheBytes: 0,
+    slotCount: 0,
+    automaticSnapshotCount: 0,
+    manualSnapshotCount: 0,
+    protectedCount: 0,
+    importCacheCount: 0,
+  };
+}
+
+function summarizeModes(entries: LocalSaveStorageEntry[]): LocalSaveModeStorageUsage[] {
+  const modes = new Map<LocalSaveMode, LocalSaveModeStorageUsage>([
+    ["normal", emptyModeUsage("normal")],
+    ["speedrun", emptyModeUsage("speedrun")],
+  ]);
+  for (const entry of entries) {
+    const usage = modes.get(entry.mode)!;
+    usage.totalBytes += entry.bytes;
+    if (entry.category === "primary") usage.primaryBytes += entry.bytes;
+    else if (entry.category === "backup") usage.backupBytes += entry.bytes;
+    else if (entry.category === "slot") { usage.slotBytes += entry.bytes; usage.slotCount += 1; }
+    else if (entry.category === "automatic-snapshot") { usage.automaticSnapshotBytes += entry.bytes; usage.automaticSnapshotCount += 1; }
+    else if (entry.category === "manual-snapshot") { usage.manualSnapshotBytes += entry.bytes; usage.manualSnapshotCount += 1; }
+    else if (entry.category === "protected") { usage.protectedBytes += entry.bytes; usage.protectedCount += 1; }
+    else if (entry.category === "import-cache") { usage.importCacheBytes += entry.bytes; usage.importCacheCount += 1; }
+  }
+  return [...modes.values()];
+}
+
+async function inspectPersistenceStatus(): Promise<{ status: LocalSavePersistenceStatus; requestSupported: boolean }> {
+  const storage = typeof navigator === "undefined" ? undefined : navigator.storage;
+  if (!storage || typeof storage.persisted !== "function") {
+    lastPersistenceStatus = "unsupported";
+    return { status: "unsupported", requestSupported: false };
+  }
+  try {
+    const granted = await storage.persisted();
+    if (granted) lastPersistenceStatus = "granted";
+    return {
+      status: granted ? "granted" : lastPersistenceStatus === "denied" ? "denied" : "not-granted",
+      requestSupported: typeof storage.persist === "function",
+    };
+  } catch {
+    lastPersistenceStatus = "unsupported";
+    return { status: "unsupported", requestSupported: false };
+  }
+}
+
+function pressureFor(usage: number | null, quota: number | null): LocalSaveStoragePressure {
+  if (usage === null || quota === null || quota <= 0) return "unknown";
+  const ratio = usage / quota;
+  return ratio >= 0.95 ? "critical" : ratio >= 0.8 ? "high" : "normal";
+}
+
+export function subscribeLocalSaveStorageStatus(listener: () => void): () => void {
+  storageStatusListeners.add(listener);
+  return () => storageStatusListeners.delete(listener);
+}
+
+export async function requestLocalSavePersistentStorage(): Promise<LocalSavePersistenceStatus> {
+  await initializeLocalSaveStore();
+  if (backend === "memory") {
+    lastPersistenceStatus = "unsupported";
+    return "unsupported";
+  }
+  const storage = typeof navigator === "undefined" ? undefined : navigator.storage;
+  if (!storage || typeof storage.persist !== "function") {
+    lastPersistenceStatus = "unsupported";
+    return "unsupported";
+  }
+  try {
+    const granted = await storage.persist();
+    lastPersistenceStatus = granted ? "granted" : "denied";
+    notifyStorageStatus();
+    return granted ? "granted" : "denied";
+  } catch {
+    lastPersistenceStatus = "denied";
+    notifyStorageStatus();
+    return "denied";
+  }
+}
+
+export function dismissLocalSaveRecoveryPrompt(): void {
+  recoveryPrompt = null;
+  notifyStorageStatus();
+}
+
+export async function deleteLocalSaveManagedEntries(keys: string[]): Promise<{ removed: string[]; failed: string[]; blocked: string[] }> {
+  await initializeLocalSaveStore();
+  const removed: string[] = [];
+  const failed: string[] = [];
+  const blocked: string[] = [];
+  const uniqueKeys = [...new Set(keys)];
+  for (const key of uniqueKeys) {
+    const entry = storageEntryCache.get(key);
+    const deletable = entry?.category === "manual-snapshot" || entry?.category === "import-cache" ||
+      entry?.category === "protected" && entry.key.includes(".snapshot.");
+    if (!entry || !deletable) {
+      blocked.push(key);
+      continue;
+    }
+    try {
+      removeLocalSaveValue(key);
+    } catch {
+      failed.push(key);
+    }
+  }
+  try {
+    await flushLocalSaveWrites();
+  } catch {
+    // Exact per-key persistence checks below determine the result.
+  }
+  for (const key of uniqueKeys) {
+    if (blocked.includes(key) || failed.includes(key)) continue;
+    if (await readPersistedLocalSaveValue(key) === null) removed.push(key);
+    else failed.push(key);
+  }
+  if (failed.length > 0) await reloadLocalSaveCache().catch(() => undefined);
+  notifyStorageStatus();
+  return { removed, failed, blocked };
 }
 
 export async function getLocalSaveStorageEstimate(): Promise<LocalSaveStorageEstimate> {
@@ -850,22 +1272,44 @@ export async function getLocalSaveStorageEstimate(): Promise<LocalSaveStorageEst
   } catch {
     // Some embedded browsers do not expose quota estimates.
   }
-  const entries = [...cache.entries()].filter(([key]) => isSaveKey(key)).map(([key, value]) => ({
-    key,
-    label: entryLabel(key, value),
-    bytes: byteLength(value),
-  })).sort((left, right) => right.bytes - left.bytes || left.key.localeCompare(right.key));
+  const persistence = backend === "memory"
+    ? { status: "unsupported" as const, requestSupported: false }
+    : await inspectPersistenceStatus();
+  const entries = [...storageEntryCache.values()]
+    .map(({ checksum: _checksum, ...entry }) => entry)
+    .sort((left, right) => left.mode.localeCompare(right.mode) || Number(right.protected) - Number(left.protected) || right.savedAt - left.savedAt || left.key.localeCompare(right.key));
+  const modes = summarizeModes(entries);
+  const warnings: string[] = [];
+  for (const usage of modes) {
+    const managedCount = usage.manualSnapshotCount + usage.protectedCount;
+    const managedBytes = usage.manualSnapshotBytes + usage.protectedBytes;
+    if (managedCount >= MANAGED_SNAPSHOT_WARNING_COUNT || managedBytes >= MANAGED_SNAPSHOT_WARNING_BYTES) {
+      warnings.push(`${usage.mode === "speedrun" ? "速通" : "普通"}模式有 ${managedCount} 份手动/保护快照（${Math.ceil(managedBytes / 1024 / 1024)} MiB），请由玩家选择是否清理；系统不会自动删除。`);
+    }
+    if (usage.automaticSnapshotCount > LOCAL_AUTOMATIC_SNAPSHOT_LIMIT) {
+      warnings.push(`${usage.mode === "speedrun" ? "速通" : "普通"}模式自动快照超过 ${LOCAL_AUTOMATIC_SNAPSHOT_LIMIT} 份，下一次写入会只清理该模式的旧自动快照。`);
+    }
+  }
+  const pressure = pressureFor(browserUsageBytes, browserQuotaBytes);
+  if (pressure === "high") warnings.push("浏览器存储占用已超过 80%，建议导出存档并检查快照占用。");
+  if (pressure === "critical") warnings.push("浏览器存储占用已超过 95%，请立即导出存档并释放空间。");
   return {
     backend,
     payloadBytes: entries.reduce((sum, entry) => sum + entry.bytes, 0),
     browserUsageBytes,
     browserQuotaBytes,
+    persistenceStatus: persistence.status,
+    persistenceRequestSupported: persistence.requestSupported,
+    pressure,
+    modes,
+    warnings,
+    recoveryPrompt,
     entries,
   };
 }
 
 export async function hasLocalSaveCapacity(key: string, nextValue: string): Promise<{ ok: boolean; requiredBytes: number; availableBytes: number | null }> {
-  const requiredBytes = Math.max(0, byteLength(nextValue) - byteLength(cache.get(key) ?? ""));
+  const requiredBytes = Math.max(0, byteLength(nextValue) - (storageEntryCache.get(key)?.bytes ?? 0));
   try {
     const estimate = await navigator.storage?.estimate?.();
     if (typeof estimate?.quota !== "number" || typeof estimate.usage !== "number") return { ok: true, requiredBytes, availableBytes: null };
