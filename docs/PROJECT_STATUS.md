@@ -8,6 +8,8 @@
 
 > `1.0.40` 开发批次第 1 项已在隔离分支完成实现并通过完整门禁：匿名 `GET /api/leaderboard` 继续只返回公开 Top 100，新增认证只读 `GET /api/leaderboard/me` 在完整公开 submission 集合中返回当前账号真实名次，并区分缺普通主云档、缺相邻修订、59 秒窗口、计时不增长、有效零产出、复核等待、隐藏和限制。UI 将服务器认证成绩与本地 60 秒最佳值分栏，白糖未知显示 `--`，Top 100 外显示真实 `#N`。本项不改变存档、云 revision、submission、排行榜历史、GameState v46、envelope v2、云 schema v7 或 SQLite layout v2，尚未部署生产环境；开发证据见 [1.0.40 银河排行榜“未上榜”状态修复](./feedback/2026-08-12-1.0.40-银河排行榜未上榜-Bug.md)。
 
+> 2026-08-13 已将 1.0.39 全项目复盘确认的 P0/P1/P2/P3 项纳入 [1.0.40 大版本开发总纲](./1.0.40_MAJOR_DEVELOPMENT_PLAN.md)，覆盖全端大存档云传输、多标签页防覆盖、SQLite 原子持久化、容量与流式导出、API/会话安全、PWA、首屏与可访问性、服务端规模化、共享存档契约、合成大夹具、CI 和有界架构拆分。除上述已完成的排行榜第 1 项外，其余内容仍是开发 Goal，不得写成已上线能力；当前没有生产部署、生产数据库写入、玩家存档覆盖或排行榜历史修改。
+
 > `1.0.39` 云存档 P0 热修已完成香港、上海 Web/API 正式发布，固定源码为 `fb54f2148dd64268ee2c2f39c6774b348e6ea437`，Build ID 为 `1.0.39+fb54f2148dd6`。服务端对 GameState v46 稀疏正文只在结构校验的局部读取中将缺失的 `belt.lanes/tier/progress` 解释为 `1/1/0`，并兼容同一客户端投影省略的 `interactionLocked=false`；显式 `null`、字符串、非法范围及损坏 checksum 仍拒绝。原始 payload、envelope checksum、云 SHA-256、revision、历史和下载正文均不改写。排行榜人工复核阈值改为普通/速通独立，旧单值 `accountControls` 继续作为普通模式兼容别名。GameState v46、envelope v2、云 schema v7、SQLite layout v2 均不升级。
 
 > 1.0.39 最终门禁为 source 163/163、candidate 2/2、Web 128/128、API 35/35、Vitest 950/18、Playwright 282/11、server 75/2、ops 6/6、native 8/8、128 个运行时许可证和根/server 生产依赖审计 0。两地发布前备份、各自备份副本隔离、原子切换、真实云 PUT 观察、完整公网字节、Range/cache、6 场 Chrome 和 1.0.37 previous-stable PWA 隔离均通过。上海下载页与 Android/Windows stable 按交接保持 1.0.38；完整证据见 [1.0.39 正式发布记录](./releases/1.0.39.md)。
