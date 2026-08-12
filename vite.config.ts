@@ -67,6 +67,9 @@ export default defineConfig({
     __RELEASE_CHANNEL__: JSON.stringify(releaseChannel),
   },
   build: {
+    // The release gate consumes Vite's authoritative static/dynamic module
+    // graph instead of guessing startup cost from hashed filenames.
+    manifest: true,
     rolldownOptions: {
       output: {
         codeSplitting: {

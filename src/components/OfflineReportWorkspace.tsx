@@ -1,7 +1,7 @@
 import { CheckCircle2, Clock3, Factory, FlaskConical, Gift, Orbit, Send, Sparkles, X } from "lucide-react";
 import { getItem, getTechnology } from "../game/content";
 import type { OfflineReport } from "../game/storage";
-import { offlineProfileLabel } from "../game/offlineComplexity";
+import { offlineProfileLabel } from "../game/offlineComplexityTypes";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { QuantityValue } from "./QuantityValue";
 

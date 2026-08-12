@@ -19,6 +19,9 @@ import {
   createResearchMacroLedgerFromSnapshots,
   type ResearchMacroLedger,
 } from "./researchMacro";
+import { FAST_OFFLINE_CALIBRATION_SECONDS } from "./offlineSettlementConstants";
+
+export { FAST_OFFLINE_CALIBRATION_SECONDS } from "./offlineSettlementConstants";
 
 /**
  * This flag is deliberately a device preference.  It is not part of
@@ -152,7 +155,6 @@ const MIN_CALIBRATION_SECONDS = 5;
 const MAX_CALIBRATION_SECONDS = 10;
 const VALIDATION_SECONDS = 5;
 /** The fast offline contract deliberately spends exactly thirty simulation seconds on calibration. */
-export const FAST_OFFLINE_CALIBRATION_SECONDS = 30;
 const FAST_OFFLINE_CALIBRATION_SLICE_SECONDS = 10;
 const FAST_OFFLINE_VALIDATION_SECONDS = 5;
 export const FAST_OFFLINE_ALGORITHM_VERSION = "fast-30s-v2";

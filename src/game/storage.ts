@@ -58,7 +58,7 @@ import {
 import { LocalSaveConflictError, LocalSaveReadOnlyError } from "./localSaveCoordination";
 import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, MaterialDeliverySlot, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, SaveMode, SorterTier, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId, SystemSpaceStationState, GalacticHubNetworkState } from "./types";
 import type { OfflineApproximationReport } from "./offlineApproximation";
-import type { OfflineComplexityReport } from "./offlineComplexity";
+import type { OfflineComplexityReport } from "./offlineComplexityTypes";
 import type { OfflineSettlementFailureKind } from "./offlineSettlementStrategy";
 import type { CloudSaveSummary } from "./cloud";
 

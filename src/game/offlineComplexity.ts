@@ -1,43 +1,20 @@
 import { ITEMS } from "./content";
 import type { FactoryEntity, GameState, ItemId } from "./types";
+import type {
+  OfflineComplexityReport,
+  OfflineDeviceCapability,
+  OfflineDeviceClass,
+  OfflineRecommendedStrategy,
+  OfflineSaveProfile,
+} from "./offlineComplexityTypes";
 
-export type OfflineSaveProfile = "simple" | "stable-endgame" | "volatile-endgame" | "complex";
-export type OfflineDeviceClass = "standard" | "constrained" | "low-memory";
-export type OfflineRecommendedStrategy = "exact" | "fast" | "conservative";
-
-export interface OfflineDeviceCapability {
-  deviceClass: OfflineDeviceClass;
-  deviceMemoryGb: number | null;
-  hardwareConcurrency: number | null;
-  coarsePointer: boolean;
-  workerSupported: boolean;
-}
-
-/**
- * Runtime-only workload diagnosis. It is deliberately not part of GameState,
- * the save envelope, cloud payloads or leaderboard inputs.
- */
-export interface OfflineComplexityReport {
-  profile: OfflineSaveProfile;
-  recommendedStrategy: OfflineRecommendedStrategy;
-  score: number;
-  entityCount: number;
-  beltCount: number;
-  stationCount: number;
-  quantumStationCount: number;
-  routeCount: number;
-  activeConstructionJobs: number;
-  fluidOrGasConnections: number;
-  nearCacheBoundaryCount: number;
-  activeDysonSystems: number;
-  finiteResourceBoundaryCount: number;
-  estimatedSerializedBytes: number;
-  estimatedPeakBytes: number;
-  device: OfflineDeviceCapability;
-  recommendedDeadlineMs: number;
-  reasons: string[];
-  warning?: string;
-}
+export type {
+  OfflineComplexityReport,
+  OfflineDeviceCapability,
+  OfflineDeviceClass,
+  OfflineRecommendedStrategy,
+  OfflineSaveProfile,
+} from "./offlineComplexityTypes";
 
 const MIB = 1024 * 1024;
 
@@ -217,11 +194,4 @@ export function classifyOfflineWorkload(
     reasons,
     ...(warning ? { warning } : {}),
   };
-}
-
-export function offlineProfileLabel(profile: OfflineSaveProfile): string {
-  if (profile === "simple") return "简单存档";
-  if (profile === "stable-endgame") return "稳定终局档";
-  if (profile === "volatile-endgame") return "物流波动终局档";
-  return "复杂边界终局档";
 }

@@ -289,7 +289,8 @@ import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/s
 import { PureIdleMacroClient, PureIdleMacroClientError, type PureIdleMacroProgress } from "./game/pureIdleMacroClient";
 import type { PureIdleMacroMode, PureIdleMacroSummary } from "./game/pureIdleMacro";
 import { beginIdleRun, finishIdleRun, settleIdleRun } from "./game/idleSettlement";
-import { classifyOfflineWorkload, offlineProfileLabel } from "./game/offlineComplexity";
+import { classifyOfflineWorkload } from "./game/offlineComplexity";
+import { offlineProfileLabel } from "./game/offlineComplexityTypes";
 import {
   canUsePureIdleRecovery,
   claimPureIdleRecovery,

@@ -1,4 +1,5 @@
-import { FAST_OFFLINE_CALIBRATION_SECONDS, type OfflineApproximationResult } from "./offlineApproximation";
+import type { OfflineApproximationResult } from "./offlineApproximation";
+import { FAST_OFFLINE_CALIBRATION_SECONDS } from "./offlineSettlementConstants";
 
 export const OFFLINE_SETTLEMENT_PREFERENCE_KEY = "dsp-idle-network.offline-settlement-preference.v1";
 const LEGACY_OFFLINE_APPROXIMATION_KEY = "dsp-idle-network.experimental-approximate-offline.v1";

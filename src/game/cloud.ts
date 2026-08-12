@@ -1,4 +1,4 @@
-import { normalizeLeaderboardMetrics, type LeaderboardCategoryId, type LeaderboardMetrics } from "./leaderboard";
+import { normalizeLeaderboardMetrics, type LeaderboardCategoryId, type LeaderboardMetrics } from "./leaderboardContract";
 import type { SaveMode, SpeedrunTargetId } from "./types";
 import {
   assessSavePayloadSize,

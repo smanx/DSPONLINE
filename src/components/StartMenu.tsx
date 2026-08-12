@@ -83,7 +83,7 @@ import { isSecureCloudClient } from "../nativeApp";
 import { useAppLocale } from "../i18n/locale";
 import { exportTextFile } from "../game/fileExport";
 import type { OfflineApproximationReport } from "../game/offlineApproximation";
-import { offlineProfileLabel, type OfflineComplexityReport } from "../game/offlineComplexity";
+import { offlineProfileLabel, type OfflineComplexityReport } from "../game/offlineComplexityTypes";
 import {
   classifyOfflineSettlementFailure,
   readOfflineSettlementPreference,
