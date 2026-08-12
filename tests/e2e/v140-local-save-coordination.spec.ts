@@ -1,0 +1,321 @@
+import { expect, test, type Page } from "@playwright/test";
+
+const SAVE_KEY = "dsp-idle-network.save.v1";
+const RELEASE_NOTE_ID = "2026-08-11-v1.0.38";
+
+async function preparePage(page: Page, disableCoordinationApis = false) {
+  await page.addInitScript(({ releaseNoteId, disable }) => {
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", releaseNoteId);
+    window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
+    if (disable) {
+      try { Object.defineProperty(navigator, "locks", { configurable: true, value: undefined }); } catch { /* fallback test */ }
+      try { Object.defineProperty(window, "BroadcastChannel", { configurable: true, value: undefined }); } catch { /* fallback test */ }
+    }
+  }, { releaseNoteId: RELEASE_NOTE_ID, disable: disableCoordinationApis });
+  await page.goto("/?menu=1&storageMigration=production");
+  await expect(page.locator(".start-menu")).toBeVisible();
+}
+
+async function readRecord(page: Page, key: string): Promise<string | null> {
+  return page.evaluate(async (recordKey) => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("dsp-idle-network.local-saves");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return new Promise<string | null>((resolve, reject) => {
+      const request = database.transaction("records", "readonly").objectStore("records").get(recordKey);
+      request.onsuccess = () => resolve(request.result?.value ?? null);
+      request.onerror = () => reject(request.error);
+    });
+  }, key);
+}
+
+async function writeLegacyRecord(page: Page, key: string, value: string): Promise<void> {
+  await page.evaluate(async ({ recordKey, recordValue }) => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("dsp-idle-network.local-saves");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction("records", "readwrite");
+      transaction.objectStore("records").put({ key: recordKey, value: recordValue, updatedAt: Date.now(), bytes: recordValue.length });
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  }, { recordKey: key, recordValue: value });
+}
+
+test("upgrades an existing IndexedDB v1 in place without changing save bytes", async ({ page }) => {
+  const original = JSON.stringify({ savedAt: 1_777_777_777_000, state: { version: 1 }, checksum: "legacy-bytes" });
+  await page.goto("about:blank");
+  await page.goto("/?storageMigration=production", { waitUntil: "commit" });
+  await page.evaluate(async ({ key, value }) => {
+    await new Promise<void>((resolve, reject) => {
+      const remove = indexedDB.deleteDatabase("dsp-idle-network.local-saves");
+      remove.onsuccess = () => resolve();
+      remove.onerror = () => reject(remove.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open("dsp-idle-network.local-saves", 1);
+      request.onupgradeneeded = () => request.result.createObjectStore("records", { keyPath: "key" });
+      request.onsuccess = () => {
+        const database = request.result;
+        const transaction = database.transaction("records", "readwrite");
+        transaction.objectStore("records").put({ key, value, updatedAt: 1, bytes: value.length });
+        transaction.oncomplete = () => { database.close(); resolve(); };
+        transaction.onerror = () => reject(transaction.error);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }, { key: SAVE_KEY, value: original });
+  await page.reload();
+  await expect(page.locator(".start-menu")).toBeVisible();
+  expect(await readRecord(page, SAVE_KEY)).toBe(original);
+  const version = await page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("dsp-idle-network.local-saves");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return database.version;
+  });
+  expect(version).toBe(2);
+});
+
+test("a future IndexedDB upgrade closes the old connection and blocks memory-only writes", async ({ page }) => {
+  await preparePage(page);
+  await page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("dsp-idle-network.local-saves", 3);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    database.close();
+  });
+  await expect(page.getByRole("alert").filter({ hasText: "本地存档连接已更新" })).toBeVisible();
+  const result = await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    return storage.saveGame(engine.createInitialState());
+  });
+  expect(result).toMatchObject({ success: false, code: "read-only" });
+});
+
+test("a second tab is read-only when Web Locks and BroadcastChannel are unavailable", async ({ context }) => {
+  const primary = await context.newPage();
+  const secondary = await context.newPage();
+  await preparePage(primary, true);
+  await preparePage(secondary, true);
+
+  await expect(secondary.getByRole("alert").filter({ hasText: "本页面为只读" })).toBeVisible();
+  const result = await secondary.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    return storage.saveGameVerified(engine.createInitialState());
+  });
+  expect(result).toMatchObject({ success: false, code: "read-only" });
+  expect(await readRecord(primary, SAVE_KEY)).toBeNull();
+});
+
+test("BroadcastChannel refreshes a secondary tab after the primary commits", async ({ context }) => {
+  const primary = await context.newPage();
+  const secondary = await context.newPage();
+  await preparePage(primary);
+  await preparePage(secondary);
+  await expect(secondary.getByRole("alert").filter({ hasText: "本页面为只读" })).toBeVisible();
+  const saved = await primary.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    const state = engine.createInitialState();
+    state.elapsedSeconds = 444;
+    return storage.saveGameVerified(state);
+  });
+  expect(saved.success).toBe(true);
+  await expect.poll(() => secondary.evaluate(async () => {
+    const store = await import("/src/game/localSaveStore.ts");
+    const raw = store.getLocalSaveValue("dsp-idle-network.save.v1");
+    return raw ? JSON.parse(raw).state.elapsedSeconds : null;
+  })).toBe(444);
+});
+
+test("a stale tab cannot overwrite a coordinated save and both versions are preserved", async ({ page }) => {
+  await preparePage(page);
+  const first = await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    const state = engine.createInitialState();
+    state.elapsedSeconds = 200;
+    return storage.saveGameVerified(state);
+  });
+  expect(first.success).toBe(true);
+  const coordinated = await readRecord(page, SAVE_KEY);
+  expect(coordinated).not.toBeNull();
+
+  const legacy = JSON.stringify({ savedAt: 100, state: { elapsedSeconds: 100 }, checksum: "legacy" });
+  await writeLegacyRecord(page, SAVE_KEY, legacy);
+  const result = await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    const state = engine.createInitialState();
+    state.elapsedSeconds = 300;
+    return storage.saveGameVerified(state);
+  });
+  expect(result).toMatchObject({ success: false, code: "conflict" });
+  expect(await readRecord(page, SAVE_KEY)).toBe(legacy);
+  const conflicts = await page.evaluate(async () => (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts());
+  expect(conflicts).toHaveLength(1);
+  expect(conflicts[0]).toMatchObject({
+    saveKey: SAVE_KEY,
+    candidate: { available: true },
+    persisted: { available: true, checksum: "legacy" },
+  });
+  const conflictKeys = await page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("dsp-idle-network.local-saves");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return new Promise<string[]>((resolve, reject) => {
+      const request = database.transaction("records", "readonly").objectStore("records").getAllKeys();
+      request.onsuccess = () => resolve(request.result.map(String).filter((key) => key.includes(".conflict.")));
+      request.onerror = () => reject(request.error);
+    });
+  });
+  expect(conflictKeys.some((key) => key.endsWith(".candidate"))).toBe(true);
+  expect(conflictKeys.some((key) => key.endsWith(".persisted"))).toBe(true);
+});
+
+test("normal and speedrun slots keep independent coordinated revisions and tombstones", async ({ page }) => {
+  await preparePage(page);
+  const result = await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    const normal = engine.createInitialState();
+    normal.elapsedSeconds = 111;
+    const speedrun = engine.createSpeedrunInitialState(1_700_000_000_000, "v140-coordination-speedrun");
+    speedrun.elapsedSeconds = 222;
+    const normalSave = await storage.saveGameSlotVerified(1, normal);
+    const speedrunSave = await storage.saveGameSlotVerified(1, speedrun);
+    const normalDelete = await storage.clearGameSlotVerified(1, "normal");
+    return {
+      normalSave,
+      speedrunSave,
+      normalDelete,
+      normal: storage.loadGameSlot(1, "normal")?.state.elapsedSeconds ?? null,
+      speedrun: storage.loadGameSlot(1, "speedrun")?.state.elapsedSeconds ?? null,
+    };
+  });
+  expect(result).toMatchObject({
+    normalSave: { success: true },
+    speedrunSave: { success: true },
+    normalDelete: true,
+    normal: null,
+    speedrun: 222,
+  });
+  const revisions = await page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("dsp-idle-network.local-saves");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return new Promise<Array<{ saveKey: string; revision: number; deleted: boolean }>>((resolve, reject) => {
+      const request = database.transaction("records", "readonly").objectStore("records").getAll();
+      request.onsuccess = () => resolve(request.result
+        .filter((record) => String(record.key).includes(".revision."))
+        .map((record) => JSON.parse(record.value)));
+      request.onerror = () => reject(request.error);
+    });
+  });
+  expect(revisions).toEqual(expect.arrayContaining([
+    expect.objectContaining({ saveKey: "dsp-idle-network.slot.1", revision: 2, deleted: true }),
+    expect.objectContaining({ saveKey: "dsp-idle-network.slot.speedrun.1", revision: 1, deleted: false }),
+  ]));
+});
+
+test("a conflict can keep the persisted version without rewriting its payload", async ({ page }) => {
+  await preparePage(page);
+  await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    const state = engine.createInitialState();
+    state.elapsedSeconds = 50;
+    await storage.saveGameVerified(state);
+  });
+  const legacy = JSON.stringify({ savedAt: 75, state: { elapsedSeconds: 75 }, checksum: "persisted_75" });
+  await writeLegacyRecord(page, SAVE_KEY, legacy);
+  await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    const state = engine.createInitialState();
+    state.elapsedSeconds = 100;
+    await storage.saveGameVerified(state);
+  });
+  const conflictId = await page.evaluate(async () => (await (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts())[0].conflictId);
+  const resolved = await page.evaluate(async (id) => (await import("/src/game/localSaveStore.ts")).resolveLocalSaveConflict(id, "persisted"), conflictId);
+  expect(resolved).toBe(true);
+  expect(await readRecord(page, SAVE_KEY)).toBe(legacy);
+  expect(await page.evaluate(async () => (await (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts()).length)).toBe(0);
+});
+
+test("a conflict can atomically apply the candidate only while the persisted base is unchanged", async ({ page }) => {
+  await preparePage(page);
+  await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    const state = engine.createInitialState();
+    state.elapsedSeconds = 10;
+    await storage.saveGameVerified(state);
+  });
+  const external = JSON.stringify({ savedAt: 20, state: { elapsedSeconds: 20 }, checksum: "persisted_20" });
+  await writeLegacyRecord(page, SAVE_KEY, external);
+  const conflictResult = await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    const state = engine.createInitialState();
+    state.elapsedSeconds = 30;
+    return storage.saveGameVerified(state);
+  });
+  expect(conflictResult).toMatchObject({ success: false, code: "conflict" });
+  const conflict = await page.evaluate(async () => (await (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts())[0]);
+  const applied = await page.evaluate(async (id) => (await import("/src/game/localSaveStore.ts")).resolveLocalSaveConflict(id, "candidate"), conflict.conflictId);
+  expect(applied).toBe(true);
+  const selected = await readRecord(page, SAVE_KEY);
+  expect(selected).not.toBe(external);
+  expect(JSON.parse(selected!).state.elapsedSeconds).toBe(30);
+  expect(await page.evaluate(async () => (await (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts()).length)).toBe(0);
+});
+
+test("an expired secondary lease requires explicit takeover and reload", async ({ context }) => {
+  const primary = await context.newPage();
+  const secondary = await context.newPage();
+  await preparePage(primary, true);
+  await preparePage(secondary, true);
+  await expect(secondary.getByRole("alert").filter({ hasText: "本页面为只读" })).toBeVisible();
+
+  await primary.close();
+  await secondary.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("dsp-idle-network.local-saves");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction("records", "readwrite");
+      const store = transaction.objectStore("records");
+      const request = store.get("dsp-idle-network.local-save-coordination.v1.writer-lease");
+      request.onsuccess = () => {
+        const lease = JSON.parse(request.result.value);
+        const value = JSON.stringify({ ...lease, heartbeatAt: Date.now() - 20_000, expiresAt: Date.now() - 1 });
+        store.put({ ...request.result, value, updatedAt: Date.now(), bytes: value.length });
+      };
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+  });
+  await secondary.getByRole("button", { name: "接管保存" }).click();
+  await expect(secondary.locator(".start-menu")).toBeVisible();
+  await expect(secondary.getByRole("alert").filter({ hasText: "本页面为只读" })).toHaveCount(0);
+});

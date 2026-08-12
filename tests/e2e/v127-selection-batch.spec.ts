@@ -24,7 +24,7 @@ async function seedFactory(page: Page) {
     state = placeBuilding(state, "arc_smelter", { x: 80, y: -100 });
     const raw = JSON.stringify({ savedAt: Date.now(), state });
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("dsp-idle-network.local-saves", 1);
+      const request = indexedDB.open("dsp-idle-network.local-saves");
       request.onupgradeneeded = () => {
         if (!request.result.objectStoreNames.contains("records")) request.result.createObjectStore("records", { keyPath: "key" });
       };

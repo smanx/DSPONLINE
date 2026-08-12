@@ -47,7 +47,7 @@ flowchart LR
 - `src/FactoryRuntime.tsx`：按需加载 React Flow Provider 与 `FactoryGame`，避免主菜单提前下载画布 JavaScript 和模拟器。React Flow 基础 CSS 在 `styles.css` 最前合并，以保留自定义端口覆盖的稳定级联顺序。
 - `src/hooks/usePlayerPresence.ts`、`src/game/presence.ts`：进入工厂后的匿名心跳、可见性节流与本机稳定 ID；不读取游戏存档。
 - `src/game/analytics.ts`：页面访问、活跃时长和白名单关键事件的会话级批处理；页面加载、LCP 和静态传输量只上传隐私分桶，不上传原始时序、URL 参数或游戏存档。
-- `src/game/localSaveStore.ts`、`savePreview.ts`：IndexedDB 是主档、备份、快照和三个槽位的权威存储，主菜单只读内存索引解析摘要；首次启动把旧 localStorage 副本读回验证后迁入并删除。正式 envelope 校验仍由 `storage.ts` 在载入时执行。存档迁移和持久化序列化会剔除普通建筑及普通蓝图模板的历史 `quantumTarget` 字段，只允许星际物流站保留它；服务端对遗留 `false` 做向后兼容，避免一次升级锁死旧云存档。
+- `src/game/localSaveStore.ts`、`localSaveCoordination.ts`、`savePreview.ts`：IndexedDB 是主档、备份、快照和三个槽位的权威存储，主菜单只读内存索引解析摘要；首次启动把旧 localStorage 副本读回验证后迁入并删除。1.0.40 将本地数据库内部版本从 1 提升到 2，但不新增/删除 object store，也不改变任一存档正文；升级只用于关闭仍运行旧代码的连接。一个可过期 writer lease、单调 fencing token 和逐键 revision/tombstone 保护所有写入，Web Locks 只串行化抢占/续租，BroadcastChannel 配合 storage event 传播提交。次标签页明确只读；正文、revision、lease 或实际持久值任一不一致时，事务拒绝覆盖并保存 candidate/persisted 两份冲突副本。正式 envelope 校验仍由 `storage.ts` 在载入时执行。存档迁移和持久化序列化会剔除普通建筑及普通蓝图模板的历史 `quantumTarget` 字段，只允许星际物流站保留它；服务端对遗留 `false` 做向后兼容，避免一次升级锁死旧云存档。
 - `src/game/localSaveStore.ts`、`savePreview.ts`：IndexedDB 是主档、备份、快照和三个槽位的权威存储，主菜单只读内存索引解析摘要；首次启动把旧 localStorage 副本读回验证后迁入并删除。正式 envelope 校验仍由 `storage.ts` 在载入时执行。自动主档保存会先生成去除运行时字段的持久投影，再把校验和与 JSON 序列化交给短生命周期 `src/game/save.worker.ts`；Worker 不可用、异常或校验失败时回退同步路径，revision 合并和读回校验仍由主线程/IndexedDB 控制。相同不可变状态在最近一次校验成功且主键仍存在时跳过重复序列化/写入，失败或状态变化会自动解除跳过。存档迁移和持久化序列化会剔除普通建筑及普通蓝图模板的历史 `quantumTarget` 字段，只允许星际物流站保留它；服务端对遗留 `false` 做向后兼容，避免一次升级锁死旧云存档。
 - `src/components/AdminDashboard.tsx`：独立 `/admin` 路由，只使用浏览器会话中的管理员 token 读取聚合运营数据。
 - `src/components/StartMenu.tsx`：开始/继续、槽位、导入、云账号、邮箱验证/密码重置链接、主菜单设置和首屏常驻的设备级中英文切换。普通离线快速路径无法形成合格候选时，它保留原始 `DeferredLoadedGame` 并显示决策界面；精确重试始终从该原状态开始，取消不写盘，普通模式零收益跳过必须二次确认，速通不提供跳过入口。
@@ -265,7 +265,7 @@ v41→v42 只增加 `galaxy.planetMetadata` 与 `galaxy.systemMetadata`。旧存
 
 `saveGame()` 先深度分离一次确切的可序列化状态，再用该对象生成轻量 envelope 和校验值；生成 JSON 后立即重算校验，随后才清理过期自动快照、写主存档并读回复核。只有生成前后和写入读回都一致才返回成功。配额错误只会从最旧自动快照开始清理并重试一次，绝不自动删除手动槽位或手动快照。最终失败不会中止模拟，但运行时必须持续显示导出提示，不能把“界面继续运行”误报成“已保存”。
 
-页面正常运行时所有可见成功路径等待 IndexedDB 事务和读回复核。`pagehide/beforeunload` 无法等待异步事务，因此只额外写一份主档急救镜像到 localStorage；下一次启动比较 `savedAt`，将较新副本写入并读回 IndexedDB 后立即删除镜像。急救路径不复制备份、快照或三个手动槽，也不会让普通 StrictMode 清理留下重复主档。
+页面正常运行时所有可见成功路径等待 IndexedDB 事务和读回复核。`pagehide/beforeunload` 无法等待异步事务，因此只有持有 writer lease 的主标签页能额外写一份主档急救镜像到 localStorage。尚无协调 revision 的旧数据库仍按 `savedAt` 完成一次兼容迁移；已经存在 revision 时，差异急救镜像一律作为冲突候选保存，不能依靠墙钟覆盖持久主档。急救路径不复制备份、快照或三个手动槽，也不会让普通 StrictMode 清理留下重复主档。
 
 校验失败不会再用零值伪造预览；只要 JSON、envelope 和 `GameState` 结构可迁移，`inspectSave()` 会保留解析后的真实运行时间、实体、线路和科技摘要并标记 `repairable`。救援必须先导出原始异常文件并连续确认两次，已有工厂还会先创建回滚快照；`repairSave()` 只迁移并重签结构完整状态，再次复核通过后才允许进入游戏。结构损坏的文件没有救援入口。
 

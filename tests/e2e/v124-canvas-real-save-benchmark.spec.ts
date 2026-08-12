@@ -210,7 +210,7 @@ async function runStage(browser: Browser, source: SourceState, planetId: string,
     await page.goto("/version.json");
     await page.evaluate(async ({ saveRaw }) => {
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open("dsp-idle-network.local-saves", 1);
+        const request = indexedDB.open("dsp-idle-network.local-saves");
         request.onupgradeneeded = () => {
           if (!request.result.objectStoreNames.contains("records")) request.result.createObjectStore("records", { keyPath: "key" });
         };
@@ -291,7 +291,7 @@ async function runStagesOnOnePage(browser: Browser, source: SourceState, planetI
     await page.goto("/version.json");
     await page.evaluate(async ({ saveRaw }) => {
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open("dsp-idle-network.local-saves", 1);
+        const request = indexedDB.open("dsp-idle-network.local-saves");
         request.onupgradeneeded = () => {
           if (!request.result.objectStoreNames.contains("records")) request.result.createObjectStore("records", { keyPath: "key" });
         };

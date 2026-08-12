@@ -16,7 +16,7 @@ test("verified IndexedDB migration removes the legacy localStorage save copy", a
 
   const persisted = await page.evaluate(async ({ databaseName, storeName, key }) => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open(databaseName, 1);
+      const request = indexedDB.open(databaseName);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -89,7 +89,7 @@ test("verified primary saves use IndexedDB and selected snapshots can be managed
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.save.v1"))).toBeNull();
   await expect.poll(() => page.evaluate(async () => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("dsp-idle-network.local-saves", 1);
+      const request = indexedDB.open("dsp-idle-network.local-saves");
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });

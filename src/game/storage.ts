@@ -55,6 +55,7 @@ import {
   writePrimarySaveEmergencyMirror,
   type LocalSaveStorageEstimate,
 } from "./localSaveStore";
+import { LocalSaveConflictError, LocalSaveReadOnlyError } from "./localSaveCoordination";
 import type { ActivityMaterialId, BeltConnection, BeltRouteMode, BeltTier, BlueprintDefinition, BlueprintMirror, BlueprintRotation, BuildingId, CanvasRegion, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DysonEngineeringState, DysonLayerState, DysonLaunchMode, DysonLaunchThrottle, DysonSpherePlanState, DysonSwarmOrbitState, EnergyMode, EndgameState, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameState, InfiniteResearchId, InterstellarRoutePolicy, ItemId, LogisticsPriority, MaterialDeliverySlot, PlanetId, PortableFleetItemId, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, SaveMode, SorterTier, StarSystemId, StationLogisticsMode, StationMinimumLoad, StationRoute, StationSlot, TechId, SystemSpaceStationState, GalacticHubNetworkState } from "./types";
 import type { OfflineApproximationReport } from "./offlineApproximation";
 import type { OfflineComplexityReport } from "./offlineComplexity";
@@ -257,7 +258,7 @@ export interface SaveSnapshotSummary {
   issues: string[];
 }
 
-export type SaveGameFailureCode = "quota" | "verification" | "unavailable";
+export type SaveGameFailureCode = "quota" | "verification" | "unavailable" | "read-only" | "conflict";
 
 export interface SaveGameResult {
   success: boolean;
@@ -2816,6 +2817,16 @@ function failedSave(
   return { success: false, code, message, bytes, removedAutomaticSnapshots };
 }
 
+function localCoordinationFailure(error: unknown, bytes?: number, removedAutomaticSnapshots = 0): SaveGameResult | null {
+  if (error instanceof LocalSaveConflictError) {
+    return failedSave("conflict", `${error.message}（冲突 ${error.conflictId}）`, bytes, removedAutomaticSnapshots);
+  }
+  if (error instanceof LocalSaveReadOnlyError) {
+    return failedSave("read-only", error.message, bytes, removedAutomaticSnapshots);
+  }
+  return null;
+}
+
 export function saveGame(state: GameState, options: { emergencyMirror?: boolean } = {}): SaveGameResult {
   const savedAt = Date.now();
   const mode = saveModeForState(state);
@@ -2837,8 +2848,8 @@ export function saveGame(state: GameState, options: { emergencyMirror?: boolean 
       return failedSave("unavailable", "无法保留模式迁移前的原始存档，已取消写入", bytes, removedAutomaticSnapshots);
     }
     removedAutomaticSnapshots += prepareAutomaticSnapshotsForPrimarySave(mode);
-  } catch {
-    return failedSave("unavailable", "本地存储当前不可用，请立即导出当前进度", bytes, removedAutomaticSnapshots);
+  } catch (error) {
+    return localCoordinationFailure(error, bytes, removedAutomaticSnapshots) ?? failedSave("unavailable", "本地存储当前不可用，请立即导出当前进度", bytes, removedAutomaticSnapshots);
   }
 
   const writeAndVerify = (): boolean => {
@@ -2854,12 +2865,14 @@ export function saveGame(state: GameState, options: { emergencyMirror?: boolean 
     verified = writeAndVerify();
   } catch (error) {
     if (!isQuotaExceededError(error)) {
-      return failedSave("unavailable", "本地主存档写入失败，请立即导出当前进度", bytes, removedAutomaticSnapshots);
+      return localCoordinationFailure(error, bytes, removedAutomaticSnapshots) ?? failedSave("unavailable", "本地主存档写入失败，请立即导出当前进度", bytes, removedAutomaticSnapshots);
     }
     try {
       removedAutomaticSnapshots += removeAutomaticSnapshotsForQuotaRetry(mode);
       verified = writeAndVerify();
     } catch (retryError) {
+      const coordination = localCoordinationFailure(retryError, bytes, removedAutomaticSnapshots);
+      if (coordination) return coordination;
       const code: SaveGameFailureCode = isQuotaExceededError(retryError) ? "quota" : "unavailable";
       const message = code === "quota"
         ? "本地存储空间不足，当前进度尚未保存。请立即导出存档。"
@@ -3006,6 +3019,8 @@ export async function saveVerifiedPayload(
     };
   } catch (error) {
     await recoverLocalSaveCache();
+    const coordination = localCoordinationFailure(error, bytes);
+    if (coordination) return coordination;
     return failedSave(
       isQuotaExceededError(error) ? "quota" : "unavailable",
       isQuotaExceededError(error) ? "本地存储空间不足，当前进度尚未保存。请立即导出存档。" : "本地主存档写入失败，请立即导出当前进度",
@@ -3086,7 +3101,7 @@ async function saveGameVerifiedOnce(state: GameState): Promise<SaveGameResult> {
   } catch (error) {
     if (!isQuotaExceededError(error)) {
       await recoverLocalSaveCache();
-      return failedSave("unavailable", "本地主存档写入失败，请立即导出当前进度", bytes, removedAutomaticSnapshots);
+      return localCoordinationFailure(error, bytes, removedAutomaticSnapshots) ?? failedSave("unavailable", "本地主存档写入失败，请立即导出当前进度", bytes, removedAutomaticSnapshots);
     }
     try {
       removedAutomaticSnapshots += removeAutomaticSnapshotsForQuotaRetry(mode);
@@ -3094,6 +3109,8 @@ async function saveGameVerifiedOnce(state: GameState): Promise<SaveGameResult> {
       verified = await commitPrimary();
     } catch (retryError) {
       await recoverLocalSaveCache();
+      const coordination = localCoordinationFailure(retryError, bytes, removedAutomaticSnapshots);
+      if (coordination) return coordination;
       const code: SaveGameFailureCode = isQuotaExceededError(retryError) ? "quota" : "unavailable";
       return failedSave(
         code,
@@ -3249,7 +3266,7 @@ export async function saveGameSlotVerified(slotId: SaveSlotId, state: GameState)
   const savedAt = Date.now();
   const mode = saveModeForState(state);
   const key = saveSlotKey(slotId, mode);
-  let raw: string;
+  let raw: string | undefined;
   try {
     const serialized = await serializeEnvelopeInWorker(state, savedAt, "slot", undefined, slotId);
     raw = serialized.raw;
@@ -3266,6 +3283,8 @@ export async function saveGameSlotVerified(slotId: SaveSlotId, state: GameState)
     return { success: true, message: `本地槽位 ${slotId} 已保存`, savedAt, bytes: utf8ByteLength(raw) };
   } catch (error) {
     await recoverLocalSaveCache();
+    const coordination = localCoordinationFailure(error, typeof raw === "string" ? utf8ByteLength(raw) : undefined);
+    if (coordination) return coordination;
     return failedSave(
       isQuotaExceededError(error) ? "quota" : "unavailable",
       isQuotaExceededError(error) ? "本地存储空间不足，槽位尚未保存。" : `本地槽位 ${slotId} 写入失败`,

@@ -9,6 +9,7 @@ import { registerPwa } from "./pwa";
 import "./styles/native-app.css";
 import "./styles/dynamic-import-recovery.css";
 import "./styles/save-storage.css";
+import "./styles/local-save-writer.css";
 import "./styles/ui-clarity.css";
 import { AppLocaleProvider, initializeDocumentLocale } from "./i18n/locale";
 import { initializeLocalSaveStore } from "./game/localSaveStore";

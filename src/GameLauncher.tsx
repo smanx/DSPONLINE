@@ -5,6 +5,7 @@ import { DynamicImportBoundary, DynamicImportRecoveryNotice } from "./components
 import { importWithRecovery } from "./game/dynamicImportRecovery";
 import type { LoadedGame } from "./game/storage";
 import { GameDialogProvider } from "./components/GameDialogProvider";
+import { LocalSaveWriterBanner } from "./components/LocalSaveWriterBanner";
 
 const FactoryRuntime = lazy(() => importWithRecovery(() => import("./FactoryRuntime"), "行星工厂模块"));
 
@@ -53,6 +54,7 @@ export function App() {
           </Suspense>
         )}
       </DynamicImportBoundary>
+      <LocalSaveWriterBanner />
       <DynamicImportRecoveryNotice />
       <ReleaseNotesDialog open={releaseNotesOpen} onClose={closeReleaseNotes} />
     </GameDialogProvider>

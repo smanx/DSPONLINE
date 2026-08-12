@@ -7832,7 +7832,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       {interactionBursts.map((burst) => <div className={`interaction-burst interaction-burst--${burst.tone}`} style={{ left: burst.x, top: burst.y }} key={burst.id}><i>{burst.tone === "warning" ? <Sparkles size={13} /> : <Check size={13} />}</i><span>{burst.label}</span></div>)}
       {saveFailure ? <aside className="save-emergency-warning" role="alert" aria-live="assertive">
         <AlertTriangle size={20} />
-        <span><strong>{saveFailure.code === "quota" ? "本地存储空间不足，当前进度尚未保存。请立即导出存档。" : saveFailure.message}</strong><small>自动保存会继续重试，导出文件不会删除或覆盖现有存档。</small></span>
+        <span><strong>{saveFailure.code === "quota" ? "本地存储空间不足，当前进度尚未保存。请立即导出存档。" : saveFailure.message}</strong><small>{saveFailure.code === "read-only" ? "本页不会自动保存；关闭其他标签页后使用顶部接管按钮，或立即导出当前进度。" : saveFailure.code === "conflict" ? "双方版本都已保存；请先在顶部冲突提示中选择，不会静默覆盖。" : "自动保存会继续重试，导出文件不会删除或覆盖现有存档。"}</small></span>
         <button type="button" onClick={downloadSave}><Download size={15} /><span>立即导出当前进度</span></button>
       </aside> : null}
       {showRunLog && eventHistory.length > 0 ? <aside className="interaction-event-feed" role="log" aria-label="运行事件" aria-live="polite">
