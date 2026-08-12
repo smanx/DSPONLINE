@@ -10,6 +10,7 @@ WorkingDirectory=/opt/dsp-idle-cloud/current
 ExecStart=/usr/bin/node /opt/dsp-idle-cloud/current/index.mjs
 Restart=on-failure
 RestartSec=3
+TimeoutStopSec=80
 Environment=NODE_ENV=production
 Environment=HOST=127.0.0.1
 Environment=PORT=4320

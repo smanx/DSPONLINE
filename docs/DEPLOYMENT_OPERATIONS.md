@@ -206,6 +206,8 @@ SQLite layout v2 将云存档正文从 `app_state` 拆到 `cloud_save_payloads`�
 4. 检查 `systemctl status`、journal 和本机 `/api/health`。
 5. 再从公网入口验证同源 `/api/health`、登录页面和云存档元数据读取。
 
+1.0.40 起 `/api/health` 是进程 liveness；发布切换、反向代理接流量和持久化故障告警还必须检查 `/api/ready`。readiness 只返回 `writable/lastSuccessAt/lastErrorAt/lastErrorCategory/pendingWrites/shuttingDown`：正常为 200，最近 SQLite 写入失败且尚未有成功写恢复、或进程正在优雅关闭时为 503。收到 SIGTERM/SIGINT 后服务拒绝新的 mutation，并等待在途请求、备份、历史裁剪和持久化队列完成；仓库两套 systemd unit 使用 `TimeoutStopSec=80`，不得缩短到 75 秒以下。不得把 liveness 200 当作数据库仍可写的证明。
+
 后端失败时切回上一代码目录并重启；除非新代码已执行不可逆数据迁移，否则不要回滚数据库。
 
 ### 5.4 排行榜数据完整性处置

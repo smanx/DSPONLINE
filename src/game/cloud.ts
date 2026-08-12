@@ -736,24 +736,58 @@ function conflictFromCloudSave(cloudSave: CloudSaveMetadata): CloudApiError {
   return new CloudApiError("云端已有更新版本，请先下载或确认覆盖", 409, { cloudSave });
 }
 
+async function fetchCloudOperationReceipt(requestId: string): Promise<CloudSaveMetadata | null> {
+  try {
+    const result = await cloudRequest<{
+      receipt?: {
+        status?: string;
+        result?: { cloudSave?: CloudSaveMetadata };
+      };
+    }>(`/operations/${encodeURIComponent(requestId)}`, {}, true);
+    const receipt = result.receipt;
+    return receipt?.status === "succeeded" && receipt.result?.cloudSave
+      ? receipt.result.cloudSave
+      : null;
+  } catch (error) {
+    // 1.0.39 APIs do not expose operation receipts. Preserve rolling-upgrade
+    // compatibility and let exact revision/checksum confirmation remain the
+    // fallback instead of converting an old-server 404 into an upload error.
+    if (error instanceof CloudApiError && error.status === 404) return null;
+    return null;
+  }
+}
+
 async function confirmTimedOutUpload(
   expectedRevision: number,
   slot: CloudSaveSlot,
   mode: CloudSaveMode,
   payloadChecksum: string,
   payloadBytes: number,
+  requestId?: string,
 ): Promise<{ state: "confirmed" | "unobserved"; cloudSave?: CloudSaveMetadata }> {
   let cloudSave: CloudSaveMetadata | null;
   try {
     cloudSave = await refreshCloudSaveMetadata(slot, undefined, mode);
   } catch (error) {
+    const receiptSave = requestId ? await fetchCloudOperationReceipt(requestId) : null;
+    if (receiptSave && cloudMetadataMatchesPayload(receiptSave, expectedRevision, payloadChecksum, payloadBytes)) {
+      return { state: "confirmed", cloudSave: { ...receiptSave, slot, mode } };
+    }
     throw unknownCloudUploadState();
   }
   if (cloudSave && cloudSave.revision > expectedRevision) {
     if (cloudMetadataMatchesPayload(cloudSave, expectedRevision, payloadChecksum, payloadBytes)) return { state: "confirmed", cloudSave };
+    const receiptSave = requestId ? await fetchCloudOperationReceipt(requestId) : null;
+    if (receiptSave && cloudMetadataMatchesPayload(receiptSave, expectedRevision, payloadChecksum, payloadBytes)) {
+      return { state: "confirmed", cloudSave: { ...receiptSave, slot, mode } };
+    }
     throw conflictFromCloudSave(cloudSave);
   }
   if ((cloudSave?.revision ?? 0) !== expectedRevision) throw unknownCloudUploadState();
+  const receiptSave = requestId ? await fetchCloudOperationReceipt(requestId) : null;
+  if (receiptSave && cloudMetadataMatchesPayload(receiptSave, expectedRevision, payloadChecksum, payloadBytes)) {
+    return { state: "confirmed", cloudSave: { ...receiptSave, slot, mode } };
+  }
   return { state: "unobserved" };
 }
 
@@ -838,6 +872,10 @@ export async function uploadCloudSaveWithOptions(
     if (!compressed) assertRawCloudRetryAllowed(rawBodyBytes);
 
     const legacyBody = () => JSON.stringify({ payload, expectedRevision });
+    // A gzip/raw compatibility retry is still the same logical upload. Reuse
+    // one operation id so a lost response cannot create a second revision.
+    // The legacy JSON fallback intentionally carries no protocol-specific id.
+    const requestId = createCloudRequestId();
 
     const send = async (
       body: BodyInit,
@@ -850,7 +888,6 @@ export async function uploadCloudSaveWithOptions(
       stage("waiting");
       const requestStartedAt = performance.now();
       try {
-        const requestId = createCloudRequestId();
         const requestBytes = body instanceof Blob ? body.size : typeof body === "string" ? rawBodyBytes : payloadBytes;
         const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save${cloudSaveQuery(slot, undefined, mode)}`, {
           method: "PUT",
@@ -888,7 +925,7 @@ export async function uploadCloudSaveWithOptions(
     const resolveRawRetryFailure = async (retryError: unknown): Promise<CloudSaveMetadata> => {
       if (retryError instanceof CloudApiError && retryError.status === 409) {
         stage("confirming");
-        const finalConfirmation = await confirmTimedOutUpload(expectedRevision, slot, mode, payloadChecksum, payloadBytes);
+        const finalConfirmation = await confirmTimedOutUpload(expectedRevision, slot, mode, payloadChecksum, payloadBytes, requestId);
         if (finalConfirmation.state === "confirmed" && finalConfirmation.cloudSave) {
           emitDiagnostics({ status: "success", fallbackReason: "retry-response-lost-server-confirmed" });
           return finalConfirmation.cloudSave;
@@ -897,7 +934,7 @@ export async function uploadCloudSaveWithOptions(
       }
       if (!isUncertainCloudRequestError(retryError)) throw retryError;
       stage("confirming");
-      const finalConfirmation = await confirmTimedOutUpload(expectedRevision, slot, mode, payloadChecksum, payloadBytes);
+      const finalConfirmation = await confirmTimedOutUpload(expectedRevision, slot, mode, payloadChecksum, payloadBytes, requestId);
       if (finalConfirmation.state === "confirmed" && finalConfirmation.cloudSave) {
         emitDiagnostics({ status: "success", fallbackReason: "retry-timeout-server-confirmed" });
         return finalConfirmation.cloudSave;
@@ -931,7 +968,7 @@ export async function uploadCloudSaveWithOptions(
       const sentRequestWasCancelled = options.signal?.aborted || error instanceof DOMException && error.name === "AbortError";
       if (!isUncertainCloudRequestError(error) && !sentRequestWasCancelled) throw error;
       stage("confirming");
-      const confirmation = await confirmTimedOutUpload(expectedRevision, slot, mode, payloadChecksum, payloadBytes);
+      const confirmation = await confirmTimedOutUpload(expectedRevision, slot, mode, payloadChecksum, payloadBytes, requestId);
       if (confirmation.state === "confirmed" && confirmation.cloudSave) {
         emitDiagnostics({ status: "success", fallbackReason: sentRequestWasCancelled ? "cancelled-server-confirmed" : "network-timeout-server-confirmed" });
         return confirmation.cloudSave;

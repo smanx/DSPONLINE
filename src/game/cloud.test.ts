@@ -428,6 +428,9 @@ describe("cloud save synchronization markers", () => {
     await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).resolves.toMatchObject({ revision: 1 });
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(typeof (fetchMock.mock.calls[1]?.[1] as RequestInit).body).toBe("string");
+    const compressedHeaders = (fetchMock.mock.calls[0]?.[1] as RequestInit).headers as Record<string, string>;
+    const rawHeaders = (fetchMock.mock.calls[1]?.[1] as RequestInit).headers as Record<string, string>;
+    expect(rawHeaders["x-dsp-request-id"]).toBe(compressedHeaders["x-dsp-request-id"]);
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain("/api/account");
   });
 
@@ -489,13 +492,36 @@ describe("cloud save synchronization markers", () => {
     const source = largePayload();
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockRejectedValueOnce(new DOMException("timed out", "AbortError"))
-      .mockResolvedValueOnce(jsonResponse({ cloudSave: null, cloudSaves: {} }));
+      .mockResolvedValueOnce(jsonResponse({ cloudSave: null, cloudSaves: {} }))
+      .mockResolvedValueOnce(jsonResponse({ error: "接口不存在" }, 404));
 
     await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).rejects.toMatchObject({
       payload: { code: "CLOUD_UPLOAD_STATUS_UNKNOWN" },
     } satisfies Partial<CloudApiError>);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/api/account");
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain("/api/operations/");
+  });
+
+  it("confirms a timed-out upload from its persisted operation receipt before any retry", async () => {
+    const source = largePayload();
+    const cloudSave = await exactMetadata(1, source);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new DOMException("timed out", "AbortError"))
+      .mockResolvedValueOnce(jsonResponse({ cloudSave: null, cloudSaves: {} }))
+      .mockResolvedValueOnce(jsonResponse({
+        receipt: {
+          requestId: "cloud_synthetic_receipt",
+          status: "succeeded",
+          result: { cloudSave },
+        },
+      }));
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).resolves.toMatchObject({ revision: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe("PUT");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/api/account");
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain("/api/operations/");
   });
 
   it("does not send a raw retry above 30 MiB after a timed-out gzip request is not observed", async () => {
@@ -503,15 +529,17 @@ describe("cloud save synchronization markers", () => {
     const source = "x".repeat(30 * 1024 * 1024 + 1);
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockRejectedValueOnce(new DOMException("timed out", "AbortError"))
-      .mockResolvedValueOnce(jsonResponse({ cloudSave: null, cloudSaves: {} }));
+      .mockResolvedValueOnce(jsonResponse({ cloudSave: null, cloudSaves: {} }))
+      .mockResolvedValueOnce(jsonResponse({ error: "接口不存在" }, 404));
 
     await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).rejects.toMatchObject({
       payload: { code: "CLOUD_UPLOAD_STATUS_UNKNOWN" },
     } satisfies Partial<CloudApiError>);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     const initialUpload = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect((initialUpload.headers as Record<string, string>)["content-encoding"]).toBe("gzip");
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/api/account");
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain("/api/operations/");
   });
 
   it("uses an independent confirmation read after cancellation once sending has started", async () => {
@@ -537,13 +565,14 @@ describe("cloud save synchronization markers", () => {
     const other = { ...metadata(1, "f".repeat(64), source), summary: summarizeCloudPayload(source) };
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockRejectedValueOnce(new DOMException("timed out", "AbortError"))
-      .mockResolvedValueOnce(jsonResponse({ cloudSave: other }));
+      .mockResolvedValueOnce(jsonResponse({ cloudSave: other }))
+      .mockResolvedValueOnce(jsonResponse({ error: "操作记录不存在", code: "OPERATION_NOT_FOUND" }, 404));
 
     await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).rejects.toMatchObject({
       status: 409,
       payload: { cloudSave: other },
     } satisfies Partial<CloudApiError>);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("turns an unrelated newer cloud revision into a conflict after timeout", async () => {
@@ -551,13 +580,14 @@ describe("cloud save synchronization markers", () => {
     const other = metadata(1, "other-checksum", payload("different", 900));
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockRejectedValueOnce(new DOMException("timed out", "AbortError"))
-      .mockResolvedValueOnce(jsonResponse({ cloudSave: other }));
+      .mockResolvedValueOnce(jsonResponse({ cloudSave: other }))
+      .mockResolvedValueOnce(jsonResponse({ error: "操作记录不存在", code: "OPERATION_NOT_FOUND" }, 404));
 
     await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).rejects.toMatchObject({
       status: 409,
       payload: { cloudSave: other },
     } satisfies Partial<CloudApiError>);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("honors cancellation before compression and never sends a fallback request", async () => {

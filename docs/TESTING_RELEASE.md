@@ -10,6 +10,8 @@
 
 > `1.0.40` 模式感知历史裁剪专项（2026-08-13）：4/4 通过，覆盖 normal/speedrun × main/1/2/3 的当前 revision、最近 20 条历史、过期正文分类和容量统计；`speedrun:*` 不再进入 `invalidSlot`。完整 server 门禁为 79 项通过、2 项可选真实夹具跳过、0 失败。
 
+> `1.0.40` P1-01 原子持久化开发门禁（2026-08-13）：专项 15/15，完整 server 94 项通过/2 项可选夹具跳过，ops 10/10，云客户端与传输 33/33，typecheck 和生产 build 通过。专项覆盖 `SQLITE_FULL/IOERR/BUSY/READONLY`、真实 SQLite `query_only`、五个 transaction failpoint、失败后同进程/重启不可见、后续写不复活、显式重试单 revision、并发 expectedRevision 一次 200/一次 409、注册/改密/删除/恢复/排行榜/管理员/邮件副作用回滚、readiness 失败与恢复、operation receipt 重启后幂等重放，以及 `server.close()` 等待暂停事务。全部使用合成 v46 存档、合成账号和临时 SQLite。
+
 > `1.0.38` clean source `351c649af9eedb22f56f47a6cd06c14cedce6221` 在 2026-08-11 完成正式门禁并发布：typecheck、Vitest 107 文件通过/6 文件跳过且 950 项通过/18 项跳过、服务端 70/2、运维 6/6、原生工具 8/8、128 个运行时许可证，以及最终 Playwright 280 项通过/11 条显式条件跳过/0 失败（291 总数）。首次全量有一条 90 秒瞬时超时，目标用例与随后完整全量重跑均通过。根项目与服务端生产依赖审计均为 0。专项覆盖 Worker 可转移保存/槽位/快照、可信信封拒绝、生产 Worker 导入边界、稀疏 v46 往返、持久传送带账本复用、量子原地/不可变等价、单极磁石一→二硬上限与零物资、200% 桌面/移动 Canvas 有界矩阵；1.0.37 客户端读取候选普通/速通稀疏档 2/2 通过。
 
 > 1.0.39 没有构建或发布新原生包。当前 stable 原生证据继续来自 1.0.38：Android 长期证书 v2/v3、API 36.1 模拟器 `1.0.37 → 1.0.38` 原地升级和 Windows `NotSigned` setup 隔离启动。1.0.39 发布重新复验下载 9/9 完整公开哈希、APK/EXE Range 206、香港/上海/下载页桌面与手机 6 场 Chrome，以及访问固定 1.0.37 previous-stable 前后只有当前 1.0.39 worker active、缓存 HTML 哈希不变和正式根页离线重开。正式证据见 [1.0.39 发布记录](./releases/1.0.39.md)。

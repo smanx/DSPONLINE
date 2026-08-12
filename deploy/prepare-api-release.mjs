@@ -45,6 +45,7 @@ export const API_SERVER_RELEASE_FILES = Object.freeze([
   "server/moderate-leaderboard.mjs",
   "server/package.json",
   "server/package-lock.json",
+  "server/persistence-atomicity.integration.test.mjs",
   "server/save-integrity.mjs",
   "server/server.test.mjs",
   "server/security-governance.integration.test.mjs",

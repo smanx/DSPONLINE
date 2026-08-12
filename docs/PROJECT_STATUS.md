@@ -16,6 +16,8 @@
 
 > `1.0.40` 服务端历史治理审计补齐了模式感知：SQLite 中 `speedrun:main/1/2/3` 正文槽位不再被普通槽位裁剪器误判为非法记录；普通/速通四槽分别保留当前 revision 和最近 20 条历史，治理容量指标也纳入速通槽位。该修复不更改云 schema v7、SQLite layout v2、存档正文或历史成绩，尚未部署。
 
+> `1.0.40` P1-01 SQLite 原子可见性已完成开发：每个写请求只在独立候选状态中验证和变更，SQLite metadata/正文事务成功后才发布给同进程读取；`SQLITE_FULL/IOERR/BUSY/READONLY`、真实 SQLite `query_only` 与五个事务中断点均不会留下内存幽灵 revision、历史、排行榜、账号控制或审计。直接正文云 PUT 以有界七日 operation receipt 将 requestId 绑定到账号、模式、槽位、expectedRevision、正文 SHA-256 和大小；同请求幂等重放不新增 revision，冲突指纹返回 409，认证查询不返回正文或 token。`/api/ready` 只公开可写状态、最近成功/失败类别、等待写入数与关闭状态；SIGTERM/SIGINT 和测试中的 `server.close()` 会停止新 mutation、等待请求/备份/裁剪/写队列后再关闭 SQLite。当前专项 15/15、完整 server 94/2、ops 10/10、云客户端 33/33、typecheck 和 build 通过；仍未部署，GameState v46、envelope v2、云 schema v7、SQLite layout v2 均不变。
+
 > `1.0.39` 云存档 P0 热修已完成香港、上海 Web/API 正式发布，固定源码为 `fb54f2148dd64268ee2c2f39c6774b348e6ea437`，Build ID 为 `1.0.39+fb54f2148dd6`。服务端对 GameState v46 稀疏正文只在结构校验的局部读取中将缺失的 `belt.lanes/tier/progress` 解释为 `1/1/0`，并兼容同一客户端投影省略的 `interactionLocked=false`；显式 `null`、字符串、非法范围及损坏 checksum 仍拒绝。原始 payload、envelope checksum、云 SHA-256、revision、历史和下载正文均不改写。排行榜人工复核阈值改为普通/速通独立，旧单值 `accountControls` 继续作为普通模式兼容别名。GameState v46、envelope v2、云 schema v7、SQLite layout v2 均不升级。
 
 > 1.0.39 最终门禁为 source 163/163、candidate 2/2、Web 128/128、API 35/35、Vitest 950/18、Playwright 282/11、server 75/2、ops 6/6、native 8/8、128 个运行时许可证和根/server 生产依赖审计 0。两地发布前备份、各自备份副本隔离、原子切换、真实云 PUT 观察、完整公网字节、Range/cache、6 场 Chrome 和 1.0.37 previous-stable PWA 隔离均通过。上海下载页与 Android/Windows stable 按交接保持 1.0.38；完整证据见 [1.0.39 正式发布记录](./releases/1.0.39.md)。
