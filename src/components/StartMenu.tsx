@@ -136,6 +136,7 @@ function offlineSimulationPhaseLabel(phase: OfflineSimulationPhase): string {
 function cloudUploadStageLabel(stage: CloudUploadStage): string {
   if (stage === "compressing") return "压缩存档";
   if (stage === "sending") return "发送云端";
+  if (stage === "confirming") return "正在核对云端是否已保存";
   return "等待服务器确认";
 }
 
@@ -947,6 +948,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       setMessage({ tone: "busy", text: "上传云端" });
       const uploaded = await uploadCloudSaveWithOptions(prepared.payload, cloudSession.cloudSave?.revision ?? 0, "main", {
         verified: true,
+        payloadSha256: prepared.payloadSha256,
+        payloadByteLength: prepared.verification.byteLength,
         signal: controller.signal,
         onStage: (stage) => setMessage({ tone: "busy", text: cloudUploadStageLabel(stage) }),
       });

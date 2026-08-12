@@ -13,6 +13,7 @@
 - [x] 银河排行榜当前账号真实名次与窗口状态修复；这是已完成并通过门禁的第 1 项，尚未部署。
 - [ ] P0：Windows/全端 30 MiB 内大存档云传输契约统一。
 - [x] P0：浏览器多标签页本地存档 lease/fencing 防覆盖。IndexedDB v2 内部协调元数据、Web Lock 串行化、BroadcastChannel/storage 通知、逐键 revision/tombstone、冲突双副本与只读/接管 UI 已完成；GameState/envelope 和存档正文不变。
+- [x] P0：Web/Windows/Android/API 的 30 MiB 云传输契约统一。直接正文与旧 JSON 包装边界分离，gzip、动态超时、Windows 分片、Worker SHA-256 和不确定提交只读确认已完成；最终候选仍需完整复验与原生制品门禁。
 - [ ] P1：SQLite 持久化原子可见性、云容量/流式导出、上传单次解析、API/会话安全、低中断发布、本地快照容量和速通云恢复入口。
 - [ ] P2：PWA 更新回退、首屏和内存、字体/弹窗可访问性、服务端规模化、共享存档字段契约、大型合成夹具、CI/供应链和文档/监控。
 - [ ] P3：仅对本版触达的大模块做有界拆分，新文案使用稳定 i18n key，不进行无边界重写。

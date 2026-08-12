@@ -402,12 +402,15 @@ test("authorizes the Android WebView origin and rejects unknown origins", async 
     headers: {
       origin: "https://localhost",
       "access-control-request-method": "PUT",
-      "access-control-request-headers": "authorization,content-type",
+      "access-control-request-headers": "authorization,content-type,content-encoding,x-dsp-expected-revision,x-dsp-request-id,x-dsp-save-original-bytes,x-dsp-save-compressed-bytes",
     },
   });
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get("access-control-allow-origin"), "https://localhost");
   assert.match(preflight.headers.get("access-control-allow-methods") ?? "", /PUT/);
+  assert.match(preflight.headers.get("access-control-allow-methods") ?? "", /DELETE/);
+  assert.match(preflight.headers.get("access-control-allow-headers") ?? "", /x-dsp-expected-revision/i);
+  assert.match(preflight.headers.get("vary") ?? "", /Origin/);
 
   const unknown = await request("/api/health", { headers: { origin: "https://attacker.invalid" } });
   assert.equal(unknown.response.status, 403);
@@ -1395,7 +1398,202 @@ test("accepts gzip cloud saves and rejects invalid or expanded gzip bodies", asy
     body: expandedBody,
   });
   assert.equal(expanded.response.status, 413);
-  assert.equal(expanded.body.code, "REQUEST_EXPANDED_BODY_TOO_LARGE");
+  assert.equal(expanded.body.code, "SAVE_SIZE_TOO_LARGE");
+
+  const decompressionBomb = await isolatedRequest("/api/cloud-save", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${registered.token}`, "content-encoding": "gzip", "content-type": "application/json" },
+    body: gzipSync(Buffer.alloc(65 * 1024 * 1024 + 1, 0x78)),
+  });
+  assert.equal(decompressionBomb.response.status, 413);
+  assert.equal(decompressionBomb.body.code, "REQUEST_EXPANDED_BODY_TOO_LARGE");
+  } finally {
+    if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
+    await rm(isolatedDirectory, { recursive: true, force: true });
+  }
+});
+
+test("accepts direct cloud payload bodies across modes and slots without rewriting bytes", async () => {
+  const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-cloud-direct-body-"));
+  const databaseFile = path.join(isolatedDirectory, "cloud.sqlite");
+  let directServer;
+  let directBaseUrl;
+  const start = async () => {
+    directServer = await createCloudServer({ databaseFile, registrationLimit: 10, mailer: null, logger: { error() {} } });
+    await new Promise((resolve) => directServer.listen(0, "127.0.0.1", resolve));
+    directBaseUrl = `http://127.0.0.1:${directServer.address().port}`;
+  };
+  try {
+    await start();
+    const registeredResponse = await fetch(`${directBaseUrl}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "direct_body_pilot", password: "strong-pass-123", displayName: "正文上传测试" }),
+    });
+    const registered = await registeredResponse.json();
+    const normal = createModeSavePayload({ ...JSON.parse(cloudPayload).state, elapsedSeconds: 111 }, "normal", 111_000);
+    const speedrun = createModeSavePayload({ ...JSON.parse(cloudPayload).state, elapsedSeconds: 222, speedrun: { rulesetVersion: "speedrun-v1", factoryId: "direct-speedrun", startedAtMs: 1, activeElapsedSeconds: 222, pausedAtMs: null, completedAtSeconds: null, milestones: { all_technologies: null, dyson_rockets_10000: null, white_matrix_1m: null } } }, "speedrun", 222_000);
+    const upload = async (payload, route, expectedRevision, gzip = false) => {
+      const body = gzip ? gzipSync(Buffer.from(payload)) : payload;
+      const response = await fetch(`${directBaseUrl}${route}`, {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${registered.token}`,
+          "content-type": "application/vnd.dspidle.save+json",
+          "x-dsp-expected-revision": String(expectedRevision),
+          "x-dsp-request-id": `direct-${expectedRevision}-${gzip}`,
+          ...(gzip ? { "content-encoding": "gzip" } : {}),
+        },
+        body,
+      });
+      return { response, body: await response.json() };
+    };
+    assert.equal((await upload(normal, "/api/cloud-save?mode=normal", 0)).response.status, 200);
+    assert.equal((await upload(speedrun, "/api/cloud-save?slot=2&mode=speedrun", 0, true)).response.status, 200);
+    const badRevision = await fetch(`${directBaseUrl}/api/cloud-save?mode=normal`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${registered.token}`, "content-type": "application/vnd.dspidle.save+json", "x-dsp-expected-revision": "-1" },
+      body: normal,
+    });
+    assert.equal(badRevision.status, 400);
+    assert.equal((await badRevision.json()).code, "EXPECTED_REVISION_INVALID");
+    const invalidUtf8 = await fetch(`${directBaseUrl}/api/cloud-save?mode=normal`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${registered.token}`, "content-type": "application/vnd.dspidle.save+json", "x-dsp-expected-revision": "1" },
+      body: Buffer.from([0xc3, 0x28]),
+    });
+    assert.equal(invalidUtf8.status, 400);
+    assert.equal((await invalidUtf8.json()).code, "REQUEST_FORMAT_INVALID");
+
+    const revisionBeforeInvalidBodies = (await (await fetch(`${directBaseUrl}/api/cloud-save?mode=normal`, {
+      headers: { authorization: `Bearer ${registered.token}` },
+    })).json()).cloudSave.revision;
+    const historyBeforeInvalidBodies = (await (await fetch(`${directBaseUrl}/api/cloud-save/history?mode=normal`, {
+      headers: { authorization: `Bearer ${registered.token}` },
+    })).json()).history.length;
+    const directHeaders = {
+      authorization: `Bearer ${registered.token}`,
+      "content-type": "application/vnd.dspidle.save+json",
+      "x-dsp-expected-revision": String(revisionBeforeInvalidBodies),
+    };
+    const bomPayload = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(normal)]);
+    for (const body of [bomPayload, gzipSync(bomPayload)]) {
+      const response = await fetch(`${directBaseUrl}/api/cloud-save?mode=normal`, {
+        method: "PUT",
+        headers: { ...directHeaders, ...(body === bomPayload ? {} : { "content-encoding": "gzip" }) },
+        body,
+      });
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).code, "REQUEST_FORMAT_INVALID");
+    }
+    const legacyPrefix = Buffer.from(`{"payload":${JSON.stringify(normal)},"expectedRevision":${revisionBeforeInvalidBodies},"note":"`);
+    const invalidLegacy = Buffer.concat([legacyPrefix, Buffer.from([0xc3, 0x28]), Buffer.from('"}')]);
+    for (const body of [invalidLegacy, gzipSync(invalidLegacy)]) {
+      const response = await fetch(`${directBaseUrl}/api/cloud-save?mode=normal`, {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${registered.token}`,
+          "content-type": "application/json",
+          ...(body === invalidLegacy ? {} : { "content-encoding": "gzip" }),
+        },
+        body,
+      });
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).code, "REQUEST_FORMAT_INVALID");
+    }
+    const unchangedAfterInvalidBodies = await (await fetch(`${directBaseUrl}/api/cloud-save?mode=normal`, {
+      headers: { authorization: `Bearer ${registered.token}` },
+    })).json();
+    const historyAfterInvalidBodies = await (await fetch(`${directBaseUrl}/api/cloud-save/history?mode=normal`, {
+      headers: { authorization: `Bearer ${registered.token}` },
+    })).json();
+    assert.equal(unchangedAfterInvalidBodies.cloudSave.revision, revisionBeforeInvalidBodies);
+    assert.equal(unchangedAfterInvalidBodies.cloudSave.payload, normal);
+    assert.equal(historyAfterInvalidBodies.history.length, historyBeforeInvalidBodies);
+
+    for (const [route, expected] of [["/api/cloud-save?mode=normal", normal], ["/api/cloud-save?slot=2&mode=speedrun", speedrun]]) {
+      const downloaded = await fetch(`${directBaseUrl}${route}`, { headers: { authorization: `Bearer ${registered.token}` } });
+      assert.equal((await downloaded.json()).cloudSave.payload, expected);
+    }
+    await new Promise((resolve) => directServer.close(resolve));
+    await start();
+    const downloadedAfterRestart = await fetch(`${directBaseUrl}/api/cloud-save?slot=2&mode=speedrun`, { headers: { authorization: `Bearer ${registered.token}` } });
+    assert.equal((await downloadedAfterRestart.json()).cloudSave.payload, speedrun);
+  } finally {
+    if (directServer?.listening) await new Promise((resolve) => directServer.close(resolve));
+    await rm(isolatedDirectory, { recursive: true, force: true });
+  }
+});
+
+test("accepts 30 MiB direct raw, direct gzip, and worst-case escaped legacy uploads", async () => {
+  const isolatedDirectory = await mkdtemp(path.join(tmpdir(), "dsp-cloud-legacy-30m-"));
+  let isolatedServer;
+  try {
+    isolatedServer = await createCloudServer({ databaseFile: path.join(isolatedDirectory, "cloud.sqlite"), registrationLimit: 10, mailer: null, logger: { error() {} } });
+    await new Promise((resolve) => isolatedServer.listen(0, "127.0.0.1", resolve));
+    const isolatedBaseUrl = `http://127.0.0.1:${isolatedServer.address().port}`;
+    const registeredResponse = await fetch(`${isolatedBaseUrl}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "legacy_30m_pilot", password: "strong-pass-123", displayName: "旧协议极限测试" }),
+    });
+    const registered = await registeredResponse.json();
+    const base = JSON.parse(cloudPayload).state;
+    const targetPayloadBytes = 30 * 1024 * 1024;
+    let padding = "\\\"".repeat(Math.ceil((targetPayloadBytes - cloudPayload.length) / 4));
+    let payload = createSavePayload({ ...base, padding });
+    while (Buffer.byteLength(payload) > targetPayloadBytes) {
+      padding = padding.slice(0, Math.max(0, padding.length - Math.ceil((Buffer.byteLength(payload) - targetPayloadBytes) / 2)));
+      payload = createSavePayload({ ...base, padding });
+    }
+    while (Buffer.byteLength(payload) < targetPayloadBytes - 16) {
+      padding += "x";
+      payload = createSavePayload({ ...base, padding });
+    }
+    assert.ok(Buffer.byteLength(payload) <= targetPayloadBytes);
+    assert.ok(Buffer.byteLength(payload) >= targetPayloadBytes - 16);
+    const expectedChecksum = createHash("sha256").update(payload).digest("hex");
+    const directUpload = async (slot, body, gzip = false) => {
+      const response = await fetch(`${isolatedBaseUrl}/api/cloud-save?slot=${slot}`, {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${registered.token}`,
+          "content-type": "application/vnd.dspidle.save+json",
+          "x-dsp-expected-revision": "0",
+          "x-dsp-save-original-bytes": String(Buffer.byteLength(payload)),
+          ...(gzip ? { "content-encoding": "gzip" } : {}),
+        },
+        body,
+      });
+      const result = await response.json();
+      assert.equal(response.status, 200, JSON.stringify(result));
+      assert.equal(result.cloudSave.revision, 1);
+      assert.equal(result.cloudSave.size, Buffer.byteLength(payload));
+      assert.equal(result.cloudSave.checksum, expectedChecksum);
+    };
+    await directUpload("1", payload);
+    await directUpload("2", gzipSync(Buffer.from(payload)), true);
+    const legacyRequest = JSON.stringify({ payload, expectedRevision: 0 });
+    assert.ok(Buffer.byteLength(legacyRequest) > 32 * 1024 * 1024);
+    assert.ok(Buffer.byteLength(legacyRequest) <= 65 * 1024 * 1024);
+    const response = await fetch(`${isolatedBaseUrl}/api/cloud-save`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${registered.token}`, "content-type": "application/json" },
+      body: legacyRequest,
+    });
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.cloudSave.size, Buffer.byteLength(payload));
+    assert.equal(body.cloudSave.checksum, expectedChecksum);
+    for (const slot of ["main", "1", "2"]) {
+      const route = slot === "main" ? "/api/cloud-save" : `/api/cloud-save?slot=${slot}`;
+      const downloaded = await fetch(`${isolatedBaseUrl}${route}`, { headers: { authorization: `Bearer ${registered.token}` } });
+      const downloadedBody = await downloaded.json();
+      assert.equal(downloaded.status, 200);
+      assert.equal(downloadedBody.cloudSave.payload, payload);
+      assert.equal(downloadedBody.cloudSave.checksum, expectedChecksum);
+      assert.equal(downloadedBody.cloudSave.size, Buffer.byteLength(payload));
+    }
   } finally {
     if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
     await rm(isolatedDirectory, { recursive: true, force: true });

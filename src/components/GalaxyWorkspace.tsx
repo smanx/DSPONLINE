@@ -106,6 +106,7 @@ function cloudSyncLabel(state: CloudSyncState): string {
 function cloudUploadStageLabel(stage: CloudUploadStage): string {
   if (stage === "compressing") return "压缩存档";
   if (stage === "sending") return "发送云端";
+  if (stage === "confirming") return "正在核对云端是否已保存";
   return "等待服务器确认";
 }
 

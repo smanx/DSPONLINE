@@ -1,5 +1,7 @@
+import { CLOUD_TRANSFER_CONTRACT } from "./cloudTransferContract";
+
 export const MIB_BYTES = 1024 * 1024;
-export const CLOUD_SAVE_RAW_SAFE_LIMIT_BYTES = 30 * MIB_BYTES;
+export const CLOUD_SAVE_RAW_SAFE_LIMIT_BYTES = CLOUD_TRANSFER_CONTRACT.rawFallbackSafeLimitBytes;
 export const CLOUD_SAVE_NEAR_LIMIT_BYTES = 28 * MIB_BYTES;
 export const CLOUD_SAVE_ENDGAME_WARNING_BYTES = 20 * MIB_BYTES;
 

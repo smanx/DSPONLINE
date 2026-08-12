@@ -18,6 +18,7 @@ import {
 import { applyReturningRewardToState, inspectSave, prepareSaveStateForBackground } from "./storage";
 import { serializeSaveEnvelopeToTransfer } from "./saveTransfer";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
+import { sha256Bytes } from "./payloadDigest";
 import type { GameSettings, GameState } from "./types";
 
 let activeId: number | null = null;
@@ -162,7 +163,7 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
         : 0;
       const session = createSimulationAdvanceSession(inspection.state, offlineSeconds);
       const offlineStartedAt = nowMs();
-      const runChunk = () => {
+      const runChunk = async () => {
         if (activeId !== request.id || cancelled) {
           post({ type: "cancelled", id: request.id });
           return;
@@ -181,7 +182,7 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
           const completedSeconds = session.totalSeconds - session.remainingSeconds;
           postProgress(completedSeconds, session.totalSeconds);
           if (session.remainingSeconds > 0) {
-            setTimeout(runChunk, 0);
+            setTimeout(() => void runChunk(), 0);
             return;
           }
         }
@@ -194,11 +195,13 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
         const serializeStartedAt = nowMs();
         const { serialized, summary } = serializeWorkerState(state, request.now, true, request.registry.registry);
         const serializeMs = Math.max(0, nowMs() - serializeStartedAt);
+        const payloadSha256 = await sha256Bytes(serialized.bytes);
         post({
           type: "upload-complete",
           id: request.id,
           payloadBytes: serialized.bytes,
           payloadChecksum: serialized.payloadChecksum,
+          payloadSha256,
           byteLength: serialized.byteLength,
           summary,
           offlineSeconds,
@@ -216,7 +219,7 @@ self.onmessage = async (event: MessageEvent<OfflineSimulationWorkerRequest>) => 
         }, [serialized.bytes]);
         activeId = null;
       };
-      runChunk();
+      void runChunk();
       return;
     }
     let approximation: OfflineApproximationReport | undefined;

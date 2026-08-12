@@ -2,6 +2,7 @@
 
 import { serializeSaveEnvelopeToTransfer } from "./saveTransfer";
 import { projectPersistentSaveState } from "./saveProjection";
+import { sha256Bytes } from "./payloadDigest";
 import type { ContentPackRegistry } from "./contentPacks";
 import type { GameState } from "./types";
 
@@ -14,12 +15,14 @@ interface SaveWorkerRequest {
   reason?: string;
   state: unknown;
   contentPackRegistry: ContentPackRegistry;
+  includePayloadSha256?: boolean;
 }
 
 interface SaveWorkerResponse {
   id: number;
   bytes?: ArrayBuffer;
   payloadChecksum?: string;
+  payloadSha256?: string;
   byteLength?: number;
   durationMs?: number;
   summary?: {
@@ -38,7 +41,7 @@ interface SaveWorkerResponse {
   error?: string;
 }
 
-self.onmessage = (event: MessageEvent<SaveWorkerRequest>) => {
+self.onmessage = async (event: MessageEvent<SaveWorkerRequest>) => {
   const startedAt = performance.now();
   try {
     const request = event.data;
@@ -56,6 +59,7 @@ self.onmessage = (event: MessageEvent<SaveWorkerRequest>) => {
       id: request.id,
       bytes: serialized.bytes,
       payloadChecksum: serialized.payloadChecksum,
+      ...(request.includePayloadSha256 ? { payloadSha256: await sha256Bytes(serialized.bytes) } : {}),
       byteLength: serialized.byteLength,
       durationMs: Math.max(0, performance.now() - startedAt),
       summary: {

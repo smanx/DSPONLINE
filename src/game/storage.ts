@@ -466,6 +466,7 @@ export interface BackgroundSaveResult {
   usedWorker: boolean;
   summary?: CloudSaveSummary;
   verification: SaveTransferVerification;
+  payloadSha256?: string;
 }
 
 let backgroundSaveRequestId = 0;
@@ -481,6 +482,7 @@ export function serializeEnvelopeInWorker(
   kind: SaveEnvelope["kind"] = "primary",
   reason?: string,
   slot: SaveSlotId | "main" = "main",
+  includePayloadSha256 = false,
 ): Promise<BackgroundSaveResult> {
   if (typeof Worker === "undefined") {
     const startedAt = monotonicNow();
@@ -512,9 +514,10 @@ export function serializeEnvelopeInWorker(
       finish({ ...serialized, durationMs: Math.max(0, monotonicNow() - startedAt), usedWorker: false });
     };
     worker.onerror = fallback;
-    worker.onmessage = (event: MessageEvent<{ id: number; bytes?: ArrayBuffer; payloadChecksum?: string; byteLength?: number; durationMs?: number; summary?: CloudSaveSummary; error?: string }>) => {
-      const { bytes, payloadChecksum, byteLength, summary } = event.data;
-      if (event.data.id !== id || !(bytes instanceof ArrayBuffer) || !payloadChecksum || !summary?.stateChecksum ||
+    worker.onmessage = (event: MessageEvent<{ id: number; bytes?: ArrayBuffer; payloadChecksum?: string; payloadSha256?: string; byteLength?: number; durationMs?: number; summary?: CloudSaveSummary; error?: string }>) => {
+      const { bytes, payloadChecksum, payloadSha256, byteLength, summary } = event.data;
+      if (event.data.id !== id || !(bytes instanceof ArrayBuffer) || !payloadChecksum ||
+        (includePayloadSha256 && !/^[a-f0-9]{64}$/.test(payloadSha256 ?? "")) || !summary?.stateChecksum ||
         summary.integrity !== "valid" || byteLength !== bytes.byteLength || event.data.error) {
         fallback();
         return;
@@ -532,7 +535,7 @@ export function serializeEnvelopeInWorker(
         fallback();
         return;
       }
-      finish({ raw, verification, durationMs: Math.max(0, event.data.durationMs ?? 0), usedWorker: true, summary });
+      finish({ raw, verification, ...(payloadSha256 ? { payloadSha256 } : {}), durationMs: Math.max(0, event.data.durationMs ?? 0), usedWorker: true, summary });
     };
     try {
       worker.postMessage({
@@ -544,6 +547,7 @@ export function serializeEnvelopeInWorker(
         ...(reason ? { reason } : {}),
         state,
         contentPackRegistry,
+        includePayloadSha256,
       });
     } catch {
       fallback();

@@ -26,6 +26,7 @@ import {
 import { createInitialState, createSpeedrunInitialState, placeBuilding } from "./engine";
 import { exportGame, importGame } from "./storage";
 import { computeSaveStateChecksum } from "./saveEnvelopeIntegrity";
+import { sha256Text } from "./payloadDigest";
 
 function payload(checksum: string, elapsedSeconds: number): string {
   return JSON.stringify({
@@ -48,10 +49,14 @@ function metadata(revision: number, cloudChecksum: string, source: string): Clou
   return {
     revision,
     updatedAt: 2000 + revision,
-    size: source.length,
+    size: new TextEncoder().encode(source).byteLength,
     checksum: cloudChecksum,
     summary: summarizeCloudPayload(source),
   };
+}
+
+async function exactMetadata(revision: number, source: string): Promise<CloudSaveMetadata> {
+  return metadata(revision, await sha256Text(source), source);
 }
 
 function largePayload(targetPaddingBytes = 320_000): string {
@@ -270,13 +275,15 @@ describe("cloud save synchronization markers", () => {
     await expect(uploadCloudSave(payload, 0)).resolves.toMatchObject({ revision: 1 });
     expect(fetchMock).toHaveBeenCalledWith("/api/cloud-save", expect.objectContaining({ method: "PUT" }));
     const request = fetchMock.mock.calls.at(-1)?.[1] as RequestInit;
-    expect(JSON.parse(String(request.body)).payload).toBe(payload);
+    expect(request.body).toBe(payload);
+    expect((request.headers as Record<string, string>)["content-type"]).toBe("application/vnd.dspidle.save+json");
+    expect((request.headers as Record<string, string>)["x-dsp-expected-revision"]).toBe("0");
   });
 
   it("streams gzip output before waiting for the compressed body", async () => {
     vi.stubGlobal("CompressionStream", TestCompressionStream);
     const source = largePayload();
-    const cloudSave = metadata(1, "server-checksum", source);
+    const cloudSave = await exactMetadata(1, source);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ cloudSave }));
 
     await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).resolves.toMatchObject({ revision: 1 });
@@ -291,10 +298,10 @@ describe("cloud save synchronization markers", () => {
     });
   });
 
-  it("falls back to one raw JSON request when CompressionStream is unavailable", async () => {
+  it("falls back to one raw payload request when CompressionStream is unavailable", async () => {
     vi.stubGlobal("CompressionStream", undefined);
     const source = largePayload();
-    const cloudSave = metadata(1, "server-checksum", source);
+    const cloudSave = await exactMetadata(1, source);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ cloudSave }));
 
     await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).resolves.toMatchObject({ revision: 1 });
@@ -304,33 +311,37 @@ describe("cloud save synchronization markers", () => {
   });
 
   it.each([256 * 1024, 1024 * 1024, 7 * 1024 * 1024, 20 * 1024 * 1024])(
-    "disables gzip before Android native upload for a %i-byte request",
+    "produces bounded gzip for an Android native %i-byte request",
     async (size) => {
       vi.stubGlobal("CompressionStream", TestCompressionStream);
-      await expect(compressCloudRequestBody("x".repeat(size), undefined, "android")).resolves.toBeNull();
+      const compressed = await compressCloudRequestBody("x".repeat(size), undefined, "android", true);
+      expect(compressed?.headers["content-encoding"]).toBe("gzip");
+      expect(compressed?.body.size).toBeGreaterThan(0);
+      expect(compressed?.body.size).toBeLessThan(size);
     },
   );
 
-  it("sends Android native cloud uploads as a raw JSON string without gzip headers", async () => {
+  it("sends Android native cloud uploads with gzip when available", async () => {
     vi.stubGlobal("CompressionStream", TestCompressionStream);
     const source = largePayload();
-    const cloudSave = metadata(1, "server-checksum", source);
+    const cloudSave = await exactMetadata(1, source);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ cloudSave }));
 
     await expect(uploadCloudSaveWithOptions(source, 0, "main", {
       verified: true,
       runtimePlatform: "android",
+      androidGzipSupported: true,
     })).resolves.toMatchObject({ revision: 1 });
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
-    expect(typeof request.body).toBe("string");
-    expect((request.headers as Record<string, string>)?.["content-encoding"]).toBeUndefined();
-    expect(JSON.parse(String(request.body))).toMatchObject({ payload: source, expectedRevision: 0 });
+    expect(request.body).toBeInstanceOf(Blob);
+    expect((request.headers as Record<string, string>)?.["content-encoding"]).toBe("gzip");
+    expect((request.headers as Record<string, string>)["x-dsp-expected-revision"]).toBe("0");
   });
 
-  it("retries exactly once as raw JSON after an actual gzip encoding rejection", async () => {
+  it("retries exactly once as a raw payload after an actual gzip encoding rejection", async () => {
     vi.stubGlobal("CompressionStream", TestCompressionStream);
     const source = largePayload();
-    const cloudSave = metadata(1, "server-checksum", source);
+    const cloudSave = await exactMetadata(1, source);
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ error: "请求压缩内容无效", code: "REQUEST_ENCODING_INVALID" }, 400))
       .mockResolvedValueOnce(jsonResponse({ cloudSave }));
@@ -342,7 +353,8 @@ describe("cloud save synchronization markers", () => {
     expect((compressedRequest.headers as Record<string, string>)["content-encoding"]).toBe("gzip");
     expect(typeof rawRequest.body).toBe("string");
     expect((rawRequest.headers as Record<string, string>)?.["content-encoding"]).toBeUndefined();
-    expect(JSON.parse(String(rawRequest.body))).toMatchObject({ payload: source, expectedRevision: 0 });
+    expect(rawRequest.body).toBe(source);
+    expect((rawRequest.headers as Record<string, string>)["x-dsp-expected-revision"]).toBe("0");
     expect(readLastCloudUploadDiagnostics()).toMatchObject({
       status: "success",
       attempts: 2,
@@ -351,10 +363,63 @@ describe("cloud save synchronization markers", () => {
     });
   });
 
+  it("falls back once to the legacy JSON envelope when an older API rejects direct payloads", async () => {
+    vi.stubGlobal("CompressionStream", undefined);
+    const source = largePayload();
+    const cloudSave = await exactMetadata(1, source);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ error: "云存档格式无效，服务器已拒绝上传", code: "SAVE_FORMAT_INVALID" }, 400))
+      .mockResolvedValueOnce(jsonResponse({ cloudSave }));
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).resolves.toMatchObject({ revision: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const direct = fetchMock.mock.calls[0][1] as RequestInit;
+    const legacy = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(direct.body).toBe(source);
+    expect((direct.headers as Record<string, string>)["content-type"]).toBe("application/vnd.dspidle.save+json");
+    expect((legacy.headers as Record<string, string>)["content-type"]).toBe("application/json");
+    expect((legacy.headers as Record<string, string>)["x-dsp-expected-revision"]).toBeUndefined();
+    expect((legacy.headers as Record<string, string>)["x-dsp-request-id"]).toBeUndefined();
+    expect(JSON.parse(String(legacy.body))).toEqual({ payload: source, expectedRevision: 0 });
+    expect(readLastCloudUploadDiagnostics()).toMatchObject({
+      status: "success",
+      attempts: 2,
+      usedRawFallback: true,
+      fallbackReason: "legacy-api-direct-payload-unsupported",
+    });
+  });
+
+  it("does not legacy-retry a non-format server rejection", async () => {
+    vi.stubGlobal("CompressionStream", undefined);
+    const source = largePayload();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({ error: "内部完整性校验失败", code: "SAVE_INTEGRITY_INVALID" }, 400),
+    );
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).rejects.toMatchObject({
+      status: 400,
+      payload: { code: "SAVE_INTEGRITY_INVALID" },
+    } satisfies Partial<CloudApiError>);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not legacy-retry a format rejection from an API that advertises direct payload support", async () => {
+    vi.stubGlobal("CompressionStream", undefined);
+    const source = largePayload();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({ error: "云存档格式无效", code: "SAVE_FORMAT_INVALID", directPayloadSupported: true }, 400),
+    );
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).rejects.toMatchObject({
+      status: 400,
+      payload: { code: "SAVE_FORMAT_INVALID", directPayloadSupported: true },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("confirms a committed raw fallback after its response times out without sending a third upload", async () => {
     vi.stubGlobal("CompressionStream", TestCompressionStream);
     const source = largePayload();
-    const cloudSave = metadata(1, "server-checksum", source);
+    const cloudSave = await exactMetadata(1, source);
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ error: "请求压缩内容无效", code: "REQUEST_ENCODING_INVALID" }, 400))
       .mockRejectedValueOnce(new DOMException("timed out", "AbortError"))
@@ -366,7 +431,7 @@ describe("cloud save synchronization markers", () => {
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain("/api/account");
   });
 
-  it("falls back to raw JSON when the compression reader exceeds its safety timeout", async () => {
+  it("falls back to a raw payload when the compression reader exceeds its safety timeout", async () => {
     vi.stubGlobal("CompressionStream", TestCompressionStream);
     const descriptor = Object.getOwnPropertyDescriptor(Blob.prototype, "stream");
     Object.defineProperty(Blob.prototype, "stream", {
@@ -374,7 +439,7 @@ describe("cloud save synchronization markers", () => {
       value: () => new ReadableStream<Uint8Array>({ pull: () => new Promise<void>(() => undefined) }),
     });
     const source = largePayload();
-    const cloudSave = metadata(1, "server-checksum", source);
+    const cloudSave = await exactMetadata(1, source);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ cloudSave }));
     const startedAt = Date.now();
     try {
@@ -383,10 +448,10 @@ describe("cloud save synchronization markers", () => {
       if (descriptor) Object.defineProperty(Blob.prototype, "stream", descriptor);
       else delete (Blob.prototype as unknown as { stream?: unknown }).stream;
     }
-    expect(Date.now() - startedAt).toBeLessThan(7_000);
+    expect(Date.now() - startedAt).toBeLessThan(12_000);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(typeof (fetchMock.mock.calls[0]?.[1] as RequestInit).body).toBe("string");
-  }, 12_000);
+  }, 15_000);
 
   it("honors cancellation during compression without sending a raw fallback", async () => {
     vi.stubGlobal("CompressionStream", TestCompressionStream);
@@ -410,7 +475,7 @@ describe("cloud save synchronization markers", () => {
 
   it("confirms a committed request after a network timeout without creating a second revision", async () => {
     const source = largePayload();
-    const cloudSave = metadata(1, "server-checksum", source);
+    const cloudSave = await exactMetadata(1, source);
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockRejectedValueOnce(new DOMException("timed out", "AbortError"))
       .mockResolvedValueOnce(jsonResponse({ cloudSave }));
@@ -420,22 +485,20 @@ describe("cloud save synchronization markers", () => {
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/api/account");
   });
 
-  it("retries once as raw JSON when the timed-out request did not commit", async () => {
+  it("returns an unknown status without a second PUT when a timed-out request is not yet observed", async () => {
     const source = largePayload();
-    const cloudSave = metadata(1, "server-checksum", source);
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockRejectedValueOnce(new DOMException("timed out", "AbortError"))
-      .mockResolvedValueOnce(jsonResponse({ cloudSave: null, cloudSaves: {} }))
-      .mockResolvedValueOnce(jsonResponse({ cloudSave }));
+      .mockResolvedValueOnce(jsonResponse({ cloudSave: null, cloudSaves: {} }));
 
-    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).resolves.toMatchObject({ revision: 1 });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    const retry = fetchMock.mock.calls[2]?.[1] as RequestInit;
-    expect(typeof retry.body).toBe("string");
-    expect((retry.headers as Record<string, string>)?.["content-encoding"]).toBeUndefined();
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).rejects.toMatchObject({
+      payload: { code: "CLOUD_UPLOAD_STATUS_UNKNOWN" },
+    } satisfies Partial<CloudApiError>);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/api/account");
   });
 
-  it("does not send a raw retry above 30 MiB after a timed-out gzip request did not commit", async () => {
+  it("does not send a raw retry above 30 MiB after a timed-out gzip request is not observed", async () => {
     vi.stubGlobal("CompressionStream", TestCompressionStream);
     const source = "x".repeat(30 * 1024 * 1024 + 1);
     const fetchMock = vi.spyOn(globalThis, "fetch")
@@ -443,13 +506,44 @@ describe("cloud save synchronization markers", () => {
       .mockResolvedValueOnce(jsonResponse({ cloudSave: null, cloudSaves: {} }));
 
     await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).rejects.toMatchObject({
-      status: 413,
-      payload: { code: "CLOUD_UPLOAD_RAW_FALLBACK_TOO_LARGE" },
+      payload: { code: "CLOUD_UPLOAD_STATUS_UNKNOWN" },
     } satisfies Partial<CloudApiError>);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const initialUpload = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect((initialUpload.headers as Record<string, string>)["content-encoding"]).toBe("gzip");
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/api/account");
+  });
+
+  it("uses an independent confirmation read after cancellation once sending has started", async () => {
+    const source = largePayload();
+    const cloudSave = await exactMetadata(1, source);
+    const controller = new AbortController();
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce((_input, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true });
+        setTimeout(() => controller.abort(), 0);
+      }))
+      .mockImplementationOnce((_input, init) => {
+        expect(init?.signal?.aborted).toBe(false);
+        return Promise.resolve(jsonResponse({ cloudSave }));
+      });
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true, signal: controller.signal })).resolves.toMatchObject({ revision: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects an adjacent revision with the same summary but a different exact payload checksum", async () => {
+    const source = largePayload();
+    const other = { ...metadata(1, "f".repeat(64), source), summary: summarizeCloudPayload(source) };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new DOMException("timed out", "AbortError"))
+      .mockResolvedValueOnce(jsonResponse({ cloudSave: other }));
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).rejects.toMatchObject({
+      status: 409,
+      payload: { cloudSave: other },
+    } satisfies Partial<CloudApiError>);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("turns an unrelated newer cloud revision into a conflict after timeout", async () => {

@@ -7,8 +7,10 @@ import {
   type SavePayloadSizeTier,
 } from "./saveSizePolicy";
 import { apiFetch } from "./apiTransport";
+import { androidBase64RequestSupported } from "./androidApiTransport";
+import { CLOUD_TRANSFER_CONTRACT, cloudRequestTimeoutMs, createCloudRequestId, validCloudExpectedRevision } from "./cloudTransferContract";
 import { inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
-import { getDesktopBridge } from "../desktop";
+import { sha256Text } from "./payloadDigest";
 
 export const CLOUD_TOKEN_STORAGE_KEY = "dsp-idle-network.cloud-token.v1";
 export const CLOUD_SYNC_STORAGE_KEY = "dsp-idle-network.cloud-sync.v1";
@@ -136,7 +138,7 @@ export interface CloudAutoSyncStatus {
   message: string;
 }
 
-export type CloudUploadStage = "compressing" | "sending" | "waiting";
+export type CloudUploadStage = "compressing" | "sending" | "waiting" | "confirming";
 
 export interface CloudUploadOptions {
   mode?: CloudSaveMode;
@@ -146,6 +148,12 @@ export interface CloudUploadOptions {
   onDiagnostics?: (diagnostics: CloudUploadDiagnostics) => void;
   /** Build-selected in production; injectable so native transport contracts can be unit tested. */
   runtimePlatform?: CloudUploadRuntimePlatform;
+  /** Injectable Android capability probe for native bridge tests. */
+  androidGzipSupported?: boolean;
+  /** Exact SHA-256 produced by an upstream save Worker, when already available. */
+  payloadSha256?: string;
+  /** Exact UTF-8 byte length paired with payloadSha256 by an upstream Worker. */
+  payloadByteLength?: number;
 }
 
 export interface CloudUploadDiagnostics {
@@ -167,7 +175,7 @@ export interface CloudUploadDiagnostics {
 }
 
 const CLOUD_COMPRESSION_MIN_BYTES = 256 * 1024;
-const CLOUD_COMPRESSION_TIMEOUT_MS = 5_000;
+const CLOUD_COMPRESSION_TIMEOUT_MS = CLOUD_TRANSFER_CONTRACT.compressionTimeoutMs;
 const CLOUD_UPLOAD_RAW_FALLBACK_LIMIT_BYTES = CLOUD_SAVE_RAW_SAFE_LIMIT_BYTES;
 const CLOUD_UPLOAD_DIAGNOSTICS_SESSION_KEY = "dsp-idle-network.cloud-upload-diagnostics.v1";
 
@@ -507,7 +515,14 @@ export function writeCloudAutoSyncStatus(status: CloudAutoSyncStatus): void {
   try { window.localStorage.setItem(CLOUD_AUTO_SYNC_STORAGE_KEY, JSON.stringify(status)); } catch { /* optional status */ }
 }
 
-async function cloudRequest<T>(path: string, options: RequestInit = {}, authenticated = false, allowInsecurePublicRead = false): Promise<T> {
+async function cloudRequest<T>(
+  path: string,
+  options: RequestInit = {},
+  authenticated = false,
+  allowInsecurePublicRead = false,
+  transferBytes = 0,
+  expectedResponseBytes = 0,
+): Promise<T> {
   const base = apiBase(allowInsecurePublicRead);
   if (!base) throw new CloudApiError(
     typeof window !== "undefined" && window.location.protocol === "http:"
@@ -516,7 +531,7 @@ async function cloudRequest<T>(path: string, options: RequestInit = {}, authenti
     0,
   );
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 8_000);
+  const timer = window.setTimeout(() => controller.abort(), cloudRequestTimeoutMs(transferBytes, expectedResponseBytes));
   const token = authenticated ? getCloudToken() : null;
   const externalSignal = options.signal;
   if (externalSignal?.aborted) {
@@ -690,21 +705,13 @@ function isUncertainCloudRequestError(error: unknown): error is CloudApiError {
     && (error.payload.code === "CLOUD_REQUEST_TIMEOUT" || error.payload.code === "CLOUD_REQUEST_NETWORK");
 }
 
-function cloudSummaryMatchesPayload(remote: CloudSaveMetadata, payloadSummary: CloudSaveSummary | null): boolean {
-  const summary = remote.summary;
-  if (!summary || !payloadSummary) return false;
-  const keys: Array<keyof CloudSaveSummary> = [
-    "stateVersion",
-    "savedAt",
-    "elapsedSeconds",
-    "activePlanetId",
-    "entityCount",
-    "completedTechCount",
-    "structurePoints",
-    "uploadedWhiteMatrix",
-    "stateChecksum",
-  ];
-  return keys.every((key) => summary[key] === payloadSummary[key]);
+function cloudMetadataMatchesPayload(
+  remote: CloudSaveMetadata,
+  expectedRevision: number,
+  payloadChecksum: string,
+  payloadBytes: number,
+): boolean {
+  return remote.revision === expectedRevision + 1 && remote.checksum === payloadChecksum && remote.size === payloadBytes;
 }
 
 /** Re-read only the current cloud metadata after an uncertain upload response. */
@@ -730,26 +737,24 @@ function conflictFromCloudSave(cloudSave: CloudSaveMetadata): CloudApiError {
 }
 
 async function confirmTimedOutUpload(
-  payload: string,
   expectedRevision: number,
   slot: CloudSaveSlot,
   mode: CloudSaveMode,
-  signal?: AbortSignal,
-): Promise<{ state: "confirmed" | "retry"; cloudSave?: CloudSaveMetadata }> {
+  payloadChecksum: string,
+  payloadBytes: number,
+): Promise<{ state: "confirmed" | "unobserved"; cloudSave?: CloudSaveMetadata }> {
   let cloudSave: CloudSaveMetadata | null;
   try {
-    cloudSave = await refreshCloudSaveMetadata(slot, signal, mode);
+    cloudSave = await refreshCloudSaveMetadata(slot, undefined, mode);
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw unknownCloudUploadState();
   }
-  const payloadSummary = summarizeCloudPayload(payload);
   if (cloudSave && cloudSave.revision > expectedRevision) {
-    if (cloudSummaryMatchesPayload(cloudSave, payloadSummary)) return { state: "confirmed", cloudSave };
+    if (cloudMetadataMatchesPayload(cloudSave, expectedRevision, payloadChecksum, payloadBytes)) return { state: "confirmed", cloudSave };
     throw conflictFromCloudSave(cloudSave);
   }
   if ((cloudSave?.revision ?? 0) !== expectedRevision) throw unknownCloudUploadState();
-  return { state: "retry" };
+  return { state: "unobserved" };
 }
 
 export async function uploadCloudSaveWithOptions(
@@ -759,6 +764,9 @@ export async function uploadCloudSaveWithOptions(
   options: CloudUploadOptions = {},
 ): Promise<CloudSaveMetadata> {
   const mode = options.mode ?? summarizeCloudPayload(payload)?.mode ?? "normal";
+  if (!validCloudExpectedRevision(expectedRevision)) {
+    throw new CloudApiError("云存档预期修订无效", 400, { code: "EXPECTED_REVISION_INVALID" });
+  }
   const uploadStartedAt = performance.now();
   if (!options.verified) {
     const integrity = inspectSaveEnvelopeChecksum(payload);
@@ -771,10 +779,25 @@ export async function uploadCloudSaveWithOptions(
     }
   }
   if (options.signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
-  const rawBody = JSON.stringify({ payload, expectedRevision });
-  const rawBodyBytes = typeof Blob !== "undefined" ? new Blob([rawBody]).size : new TextEncoder().encode(rawBody).byteLength;
-  const payloadBytes = utf8Bytes(payload);
+  const hasWorkerProof = /^[a-f0-9]{64}$/.test(options.payloadSha256 ?? "") &&
+    Number.isSafeInteger(options.payloadByteLength) && options.payloadByteLength! > 0;
+  const payloadBytes = hasWorkerProof ? options.payloadByteLength! : utf8Bytes(payload);
+  if (hasWorkerProof && payload.length > payloadBytes) {
+    throw new CloudApiError("云存档 Worker 字节证明无效", 0, { code: "SAVE_TRANSFER_PROOF_INVALID" });
+  }
+  if (payloadBytes > CLOUD_TRANSFER_CONTRACT.savePayloadLimitBytes) {
+    throw new CloudApiError("云存档体积超过服务器单存档上限，本地存档未修改", 413, {
+      code: "SAVE_SIZE_TOO_LARGE",
+      payloadBytes,
+    });
+  }
+  const rawBody = payload;
+  const rawBodyBytes = payloadBytes;
   const size = assessSavePayloadSize(payloadBytes);
+  const payloadChecksum = hasWorkerProof
+    ? options.payloadSha256!
+    : await sha256Text(payload);
+  if (options.signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
   let diagnostics: CloudUploadDiagnostics = {
     status: "running",
     stage: "compressing",
@@ -802,33 +825,48 @@ export async function uploadCloudSaveWithOptions(
   try {
     stage("compressing");
     const compressionStartedAt = performance.now();
-    const compressed = await compressCloudRequestBody(rawBody, options.signal, options.runtimePlatform);
+    const compressed = await compressCloudRequestBody(rawBody, options.signal, options.runtimePlatform, options.androidGzipSupported);
     emitDiagnostics({
       compressionMs: Math.max(0, performance.now() - compressionStartedAt),
       compressedBytes: compressed?.body.size ?? null,
       usedCompression: Boolean(compressed),
       ...(compressed ? {} : {
-        fallbackReason: options.runtimePlatform === "android"
-          ? "android-raw-transport"
-          : "compression-unavailable-timeout-or-not-beneficial",
+        fallbackReason: "compression-unavailable-timeout-or-not-beneficial",
       }),
     });
     if (options.signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
     if (!compressed) assertRawCloudRetryAllowed(rawBodyBytes);
 
-    const send = async (body: BodyInit, headers?: Record<string, string>): Promise<CloudSaveMetadata> => {
+    const legacyBody = () => JSON.stringify({ payload, expectedRevision });
+
+    const send = async (
+      body: BodyInit,
+      headers?: Record<string, string>,
+      protocol: "direct" | "legacy" = "direct",
+    ): Promise<CloudSaveMetadata> => {
       const rawAttempt = !headers?.["content-encoding"];
       stage("sending");
       emitDiagnostics({ attempts: diagnostics.attempts + 1, usedRawFallback: diagnostics.usedRawFallback || rawAttempt && diagnostics.attempts > 0 });
       stage("waiting");
       const requestStartedAt = performance.now();
       try {
+        const requestId = createCloudRequestId();
+        const requestBytes = body instanceof Blob ? body.size : typeof body === "string" ? rawBodyBytes : payloadBytes;
         const result = await cloudRequest<{ cloudSave: CloudSaveMetadata }>(`/cloud-save${cloudSaveQuery(slot, undefined, mode)}`, {
           method: "PUT",
           body,
-          ...(headers ? { headers } : {}),
+          headers: protocol === "legacy" ? {
+            "content-type": "application/json",
+            ...(headers ?? {}),
+          } : {
+              "content-type": CLOUD_TRANSFER_CONTRACT.directPayloadContentType,
+              [CLOUD_TRANSFER_CONTRACT.expectedRevisionHeader]: String(expectedRevision),
+              [CLOUD_TRANSFER_CONTRACT.requestIdHeader]: requestId,
+              [CLOUD_TRANSFER_CONTRACT.originalBytesHeader]: String(rawBodyBytes),
+              ...(headers ?? {}),
+            },
           signal: options.signal,
-        }, true);
+        }, true, false, Math.max(requestBytes, rawBodyBytes));
         emitDiagnostics({
           status: "success",
           networkMs: diagnostics.networkMs + Math.max(0, performance.now() - requestStartedAt),
@@ -849,7 +887,8 @@ export async function uploadCloudSaveWithOptions(
 
     const resolveRawRetryFailure = async (retryError: unknown): Promise<CloudSaveMetadata> => {
       if (retryError instanceof CloudApiError && retryError.status === 409) {
-        const finalConfirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, mode, options.signal);
+        stage("confirming");
+        const finalConfirmation = await confirmTimedOutUpload(expectedRevision, slot, mode, payloadChecksum, payloadBytes);
         if (finalConfirmation.state === "confirmed" && finalConfirmation.cloudSave) {
           emitDiagnostics({ status: "success", fallbackReason: "retry-response-lost-server-confirmed" });
           return finalConfirmation.cloudSave;
@@ -857,7 +896,8 @@ export async function uploadCloudSaveWithOptions(
         throw retryError;
       }
       if (!isUncertainCloudRequestError(retryError)) throw retryError;
-      const finalConfirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, mode, options.signal);
+      stage("confirming");
+      const finalConfirmation = await confirmTimedOutUpload(expectedRevision, slot, mode, payloadChecksum, payloadBytes);
       if (finalConfirmation.state === "confirmed" && finalConfirmation.cloudSave) {
         emitDiagnostics({ status: "success", fallbackReason: "retry-timeout-server-confirmed" });
         return finalConfirmation.cloudSave;
@@ -868,6 +908,17 @@ export async function uploadCloudSaveWithOptions(
     try {
       return await send(compressed?.body ?? rawBody, compressed?.headers);
     } catch (error) {
+      if (error instanceof CloudApiError && error.status === 400 && error.payload.code === "SAVE_FORMAT_INVALID" && error.payload.directPayloadSupported !== true) {
+        const wrapped = legacyBody();
+        const wrappedBytes = utf8Bytes(wrapped);
+        if (wrappedBytes > CLOUD_TRANSFER_CONTRACT.legacyJsonRequestLimitBytes) throw error;
+        emitDiagnostics({ usedRawFallback: true, fallbackReason: "legacy-api-direct-payload-unsupported" });
+        try {
+          return await send(wrapped, undefined, "legacy");
+        } catch (retryError) {
+          return resolveRawRetryFailure(retryError);
+        }
+      }
       if (compressed && error instanceof CloudApiError && error.status === 400 && error.payload.code === "REQUEST_ENCODING_INVALID") {
         assertRawCloudRetryAllowed(rawBodyBytes);
         emitDiagnostics({ usedRawFallback: true, fallbackReason: "server-rejected-content-encoding" });
@@ -877,19 +928,16 @@ export async function uploadCloudSaveWithOptions(
           return resolveRawRetryFailure(retryError);
         }
       }
-      if (!isUncertainCloudRequestError(error)) throw error;
-      const confirmation = await confirmTimedOutUpload(payload, expectedRevision, slot, mode, options.signal);
+      const sentRequestWasCancelled = options.signal?.aborted || error instanceof DOMException && error.name === "AbortError";
+      if (!isUncertainCloudRequestError(error) && !sentRequestWasCancelled) throw error;
+      stage("confirming");
+      const confirmation = await confirmTimedOutUpload(expectedRevision, slot, mode, payloadChecksum, payloadBytes);
       if (confirmation.state === "confirmed" && confirmation.cloudSave) {
-        emitDiagnostics({ status: "success", fallbackReason: "network-timeout-server-confirmed" });
+        emitDiagnostics({ status: "success", fallbackReason: sentRequestWasCancelled ? "cancelled-server-confirmed" : "network-timeout-server-confirmed" });
         return confirmation.cloudSave;
       }
-      assertRawCloudRetryAllowed(rawBodyBytes);
-      emitDiagnostics({ usedRawFallback: true, fallbackReason: "network-timeout-uncommitted" });
-      try {
-        return await send(rawBody);
-      } catch (retryError) {
-        return resolveRawRetryFailure(retryError);
-      }
+      emitDiagnostics({ fallbackReason: sentRequestWasCancelled ? "cancelled-status-unconfirmed" : "network-status-unconfirmed" });
+      throw unknownCloudUploadState();
     }
   } catch (error) {
     if (diagnostics.status !== "success") {
@@ -913,11 +961,11 @@ export async function compressCloudRequestBody(
   rawBody: string,
   signal?: AbortSignal,
   runtimePlatform: CloudUploadRuntimePlatform = cloudUploadRuntimePlatform(),
+  androidGzipSupported = androidBase64RequestSupported(),
 ): Promise<{ body: Blob; headers: Record<string, string> } | null> {
   if (signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
   if (
-    runtimePlatform === "android"
-    || getDesktopBridge()
+    runtimePlatform === "android" && !androidGzipSupported
     || typeof CompressionStream === "undefined"
     || typeof TextEncoder === "undefined"
     || typeof Blob === "undefined"
@@ -977,6 +1025,7 @@ export async function compressCloudRequestBody(
       offset += chunk.byteLength;
     }
     if (compressed.byteLength >= rawBytes.byteLength) return null;
+    if (runtimePlatform === "android" && Math.ceil(compressed.byteLength * 4 / 3) >= rawBytes.byteLength) return null;
     return {
       body: new Blob([compressed.buffer], { type: "application/json" }),
       headers: {
@@ -999,7 +1048,14 @@ export async function compressCloudRequestBody(
 }
 
 export async function downloadCloudSave(revision?: number, slot: CloudSaveSlot = "main", mode: CloudSaveMode = "normal"): Promise<CloudSave | null> {
-  const result = await cloudRequest<{ cloudSave: CloudSave | null }>(`/cloud-save${cloudSaveQuery(slot, revision, mode)}`, {}, true);
+  const result = await cloudRequest<{ cloudSave: CloudSave | null }>(
+    `/cloud-save${cloudSaveQuery(slot, revision, mode)}`,
+    {},
+    true,
+    false,
+    0,
+    CLOUD_TRANSFER_CONTRACT.singleSaveResponseLimitBytes,
+  );
   if (!result.cloudSave) return null;
   const payloadMode = summarizeCloudPayload(result.cloudSave.payload)?.mode;
   const metadataMode = result.cloudSave.mode === undefined ? mode : normalizeCloudSaveMode(result.cloudSave.mode);

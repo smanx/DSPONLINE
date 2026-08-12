@@ -1,6 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { expect, test } from "@playwright/test";
+import { createSyntheticCloudSave } from "./fixtures/syntheticCloudSave";
 
 const FIXTURE = process.env.DSP_CLOUD_UPLOAD_FIXTURE;
 const OFFLINE_SECONDS = Math.max(0, Number(process.env.DSP_CLOUD_UPLOAD_OFFLINE_SECONDS ?? 164));
@@ -9,10 +10,9 @@ test.use({ serviceWorkers: "block" });
 
 test("cloud upload preparation keeps a large save off the main thread", async ({ page }) => {
   test.setTimeout(Math.max(180_000, OFFLINE_SECONDS * 250));
-  test.skip(!FIXTURE || !existsSync(FIXTURE), "设置 DSP_CLOUD_UPLOAD_FIXTURE 后运行真实大存档夹具");
   await page.addInitScript(() => window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-11-v1.0.38"));
   await page.goto("/?menu=1");
-  const raw = readFileSync(FIXTURE!, "utf8");
+  const raw = FIXTURE ? readFileSync(FIXTURE, "utf8") : createSyntheticCloudSave({ targetBytes: 8 * 1024 * 1024 });
   const fixtureSavedAt = (JSON.parse(raw) as { savedAt?: number }).savedAt ?? Date.now();
   const result = await page.evaluate(async ({ raw, fixtureSavedAt, offlineSeconds }) => {
     const longTasks: number[] = [];
@@ -46,21 +46,22 @@ test("cloud upload preparation keeps a large save off the main thread", async ({
 
 test("cloud upload preparation can skip offline settlement without changing the saved factory", async ({ page }) => {
   test.setTimeout(120_000);
-  test.skip(!FIXTURE || !existsSync(FIXTURE), "设置 DSP_CLOUD_UPLOAD_FIXTURE 后运行真实大存档夹具");
   await page.goto("/?menu=1");
-  const raw = readFileSync(FIXTURE!, "utf8");
-  const fixture = JSON.parse(raw) as { savedAt?: number; state?: { elapsedSeconds?: number; totalProduced?: Record<string, number>; entities?: unknown[] } };
-  const before = {
-    elapsedSeconds: fixture.state?.elapsedSeconds ?? 0,
-    totalProduced: fixture.state?.totalProduced ?? {},
-    entityCount: fixture.state?.entities?.length ?? 0,
-  };
+  const raw = FIXTURE ? readFileSync(FIXTURE, "utf8") : createSyntheticCloudSave({ targetBytes: 8 * 1024 * 1024 });
+  const fixture = JSON.parse(raw) as { savedAt?: number };
   const result = await page.evaluate(async ({ raw, savedAt }) => {
     const { prepareCloudUploadInWorker } = await import("/src/game/offlineSimulation.ts");
+    const baseline = await prepareCloudUploadInWorker(raw, { now: savedAt ?? Date.now(), skipOffline: true });
     const prepared = await prepareCloudUploadInWorker(raw, { now: (savedAt ?? Date.now()) + 7 * 24 * 60 * 60 * 1_000, skipOffline: true });
+    const baselineEnvelope = JSON.parse(baseline.payload) as { state?: { elapsedSeconds?: number; totalProduced?: Record<string, number>; entities?: unknown[] } };
     const envelope = JSON.parse(prepared.payload) as { state?: { elapsedSeconds?: number; totalProduced?: Record<string, number>; entities?: unknown[] } };
     return {
       offlineSeconds: prepared.offlineSeconds,
+      baseline: {
+        elapsedSeconds: baselineEnvelope.state?.elapsedSeconds ?? 0,
+        totalProduced: baselineEnvelope.state?.totalProduced ?? {},
+        entityCount: baselineEnvelope.state?.entities?.length ?? 0,
+      },
       state: {
         elapsedSeconds: envelope.state?.elapsedSeconds ?? 0,
         totalProduced: envelope.state?.totalProduced ?? {},
@@ -71,14 +72,13 @@ test("cloud upload preparation can skip offline settlement without changing the 
   }, { raw, savedAt: fixture.savedAt });
 
   expect(result.offlineSeconds).toBe(0);
-  expect(result.state).toEqual(before);
+  expect(result.state).toEqual(result.baseline);
   expect(result.integrity).toBe("valid");
 });
 
 test("browser upload sends real gzip bodies for 1 MB, 2 MB and 7 MB saves", async ({ page }) => {
   test.setTimeout(120_000);
-  test.skip(!FIXTURE || !existsSync(FIXTURE), "设置 DSP_CLOUD_UPLOAD_FIXTURE 后运行真实大存档夹具");
-  const raw = readFileSync(FIXTURE!, "utf8");
+  const raw = FIXTURE ? readFileSync(FIXTURE, "utf8") : createSyntheticCloudSave({ targetBytes: 7 * 1024 * 1024 });
   const fixture = JSON.parse(raw) as { formatVersion: number; savedAt?: number; state: Record<string, unknown> };
   const checksum = (formatVersion: number, state: unknown) => {
     const source = JSON.stringify({ formatVersion, state });
@@ -111,13 +111,15 @@ test("browser upload sends real gzip bodies for 1 MB, 2 MB and 7 MB saves", asyn
     const compressed = request.headers()["content-encoding"] === "gzip";
     const body = request.postDataBuffer() ?? Buffer.alloc(0);
     const decoded = compressed ? gunzipSync(body) : body;
-    const parsed = JSON.parse(decoded.toString("utf8")) as { payload: string; expectedRevision: number };
+    const payload = decoded.toString("utf8");
+    const expectedRevision = Number(request.headers()["x-dsp-expected-revision"]);
     expect(compressed).toBe(true);
-    requests.push({ compressed, payload: parsed.payload, expectedRevision: parsed.expectedRevision });
+    expect(request.headers()["content-type"]).toContain("application/vnd.dspidle.save+json");
+    requests.push({ compressed, payload, expectedRevision });
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ cloudSave: { revision: parsed.expectedRevision + 1, updatedAt: Date.now(), size: parsed.payload.length, checksum: "server-checksum", summary: null } }),
+      body: JSON.stringify({ cloudSave: { revision: expectedRevision + 1, updatedAt: Date.now(), size: new TextEncoder().encode(payload).byteLength, checksum: "server-checksum", summary: null } }),
     });
   });
   await page.goto("/?menu=1");

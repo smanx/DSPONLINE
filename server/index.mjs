@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
+import cloudTransferContract from "./cloud-transfer-contract.json" with { type: "json" };
 import Database from "better-sqlite3";
 import {
   DEFAULT_METRIC_TIME_ZONE,
@@ -35,6 +36,7 @@ import {
   publicCloudHistoryPrunePlan,
   trimCloudHistoryMetadataInPlace,
 } from "./cloud-governance.mjs";
+
 import {
   anonymousLoginContext,
   clearLeaderboardRevalidationIfSatisfied,
@@ -49,12 +51,25 @@ import {
 } from "./account-security.mjs";
 import { evaluateLeaderboardIntegrity, LEADERBOARD_INTEGRITY_VERSION } from "./leaderboard-integrity.mjs";
 
+const cloudTransferNumericKeys = [
+  "version", "mibBytes", "guaranteedSavePayloadBytes", "savePayloadLimitBytes", "rawFallbackSafeLimitBytes",
+  "requestCompressedLimitBytes", "requestExpandedLimitBytes", "legacyJsonRequestLimitBytes", "singleSaveResponseLimitBytes",
+  "baseTimeoutMs", "timeoutPerMibMs", "maximumTimeoutMs", "compressionTimeoutMs", "ipcChunkBytes",
+];
+if (!cloudTransferNumericKeys.every((key) => Number.isSafeInteger(cloudTransferContract[key]) && cloudTransferContract[key] > 0) ||
+  cloudTransferContract.guaranteedSavePayloadBytes > cloudTransferContract.savePayloadLimitBytes ||
+  cloudTransferContract.savePayloadLimitBytes > cloudTransferContract.requestExpandedLimitBytes ||
+  cloudTransferContract.baseTimeoutMs > cloudTransferContract.maximumTimeoutMs) {
+  throw new Error("Invalid cloud transfer contract");
+}
+
 const scrypt = promisify(scryptCallback);
 // The envelope remains v2, but end-game saves can exceed the historical 8 MiB
 // request boundary. Keep a finite compressed and expanded limit so increasing
 // the boundary cannot turn the endpoint into an unbounded decompression sink.
-const BODY_LIMIT_BYTES = 32 * 1024 * 1024;
-const SAVE_PAYLOAD_LIMIT_BYTES = BODY_LIMIT_BYTES - 1024;
+const BODY_LIMIT_BYTES = cloudTransferContract.requestCompressedLimitBytes;
+const EXPANDED_BODY_LIMIT_BYTES = cloudTransferContract.requestExpandedLimitBytes;
+const SAVE_PAYLOAD_LIMIT_BYTES = cloudTransferContract.savePayloadLimitBytes;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CLOUD_SAVE_SLOTS = ["main", "1", "2", "3"];
 const SAVE_MODES = ["normal", "speedrun"];
@@ -1261,6 +1276,7 @@ function send(response, status, payload, extraHeaders = {}) {
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     "referrer-policy": "no-referrer",
+    "x-dsp-api-capabilities": "direct-cloud-payload-v1",
     ...extraHeaders,
   });
   response.end(body);
@@ -1290,16 +1306,16 @@ async function readJson(request) {
       throw error;
     }
     try {
-      raw = gunzipSync(raw, { maxOutputLength: BODY_LIMIT_BYTES });
+      raw = gunzipSync(raw, { maxOutputLength: EXPANDED_BODY_LIMIT_BYTES });
     } catch (cause) {
       const tooLarge = cause && typeof cause === "object" && "code" in cause && cause.code === "ERR_BUFFER_TOO_LARGE";
-      const error = new Error(tooLarge ? "解压后的请求内容超过 32 MB" : "请求压缩内容无效");
+      const error = new Error(tooLarge ? "解压后的请求内容超过允许上限" : "请求压缩内容无效");
       error.statusCode = tooLarge ? 413 : 400;
       error.code = tooLarge ? "REQUEST_EXPANDED_BODY_TOO_LARGE" : "REQUEST_ENCODING_INVALID";
       throw error;
     }
   }
-  if (raw.byteLength > BODY_LIMIT_BYTES) {
+  if (raw.byteLength > EXPANDED_BODY_LIMIT_BYTES) {
     const error = new Error("解压后的请求内容超过 32 MB");
     error.statusCode = 413;
     error.code = "REQUEST_EXPANDED_BODY_TOO_LARGE";
@@ -1308,6 +1324,114 @@ async function readJson(request) {
   try {
     return JSON.parse(raw.toString("utf8"));
   } catch {
+    const error = new Error("JSON 格式无效");
+    error.statusCode = 400;
+    error.code = "REQUEST_FORMAT_INVALID";
+    throw error;
+  }
+}
+
+function decodeStrictRequestUtf8(rawBody) {
+  let text;
+  try {
+    // Preserve a leading BOM long enough to reject it explicitly. The default
+    // TextDecoder behavior consumes it, which would silently change the exact
+    // cloud payload, its byte length and its SHA-256.
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(rawBody);
+  } catch {
+    const error = new Error("请求正文不是有效 UTF-8");
+    error.statusCode = 400;
+    error.code = "REQUEST_FORMAT_INVALID";
+    throw error;
+  }
+  if (text.charCodeAt(0) === 0xfeff) {
+    const error = new Error("请求正文不能包含 UTF-8 BOM");
+    error.statusCode = 400;
+    error.code = "REQUEST_FORMAT_INVALID";
+    throw error;
+  }
+  return text;
+}
+
+function directCloudSaveBody(request, rawBody) {
+  const contentType = String(request.headers["content-type"] ?? "").split(";", 1)[0].trim().toLowerCase();
+  if (contentType !== cloudTransferContract.directPayloadContentType) return null;
+  const declaredOriginalBytes = request.headers[cloudTransferContract.originalBytesHeader];
+  if (declaredOriginalBytes !== undefined && (
+    Array.isArray(declaredOriginalBytes) || typeof declaredOriginalBytes !== "string" || !/^\d{1,10}$/.test(declaredOriginalBytes) ||
+    Number(declaredOriginalBytes) !== rawBody.byteLength
+  )) {
+    const error = new Error("云存档原始字节数无效");
+    error.statusCode = 400;
+    error.code = "REQUEST_SIZE_INVALID";
+    throw error;
+  }
+  const revisionHeader = request.headers[cloudTransferContract.expectedRevisionHeader];
+  if (Array.isArray(revisionHeader) || typeof revisionHeader !== "string" || !/^\d{1,16}$/.test(revisionHeader)) {
+    const error = new Error("云存档预期修订无效");
+    error.statusCode = 400;
+    error.code = "EXPECTED_REVISION_INVALID";
+    throw error;
+  }
+  const expectedRevision = Number(revisionHeader);
+  if (!Number.isSafeInteger(expectedRevision)) {
+    const error = new Error("云存档预期修订无效");
+    error.statusCode = 400;
+    error.code = "EXPECTED_REVISION_INVALID";
+    throw error;
+  }
+  const payload = decodeStrictRequestUtf8(rawBody);
+  return { payload, expectedRevision };
+}
+
+async function readCloudSaveUpload(request) {
+  const directContentType = String(request.headers["content-type"] ?? "").split(";", 1)[0].trim().toLowerCase() === cloudTransferContract.directPayloadContentType;
+  const encoding = String(request.headers["content-encoding"] ?? "").toLowerCase();
+  const inputLimit = directContentType ? BODY_LIMIT_BYTES : cloudTransferContract.legacyJsonRequestLimitBytes;
+  const expandedLimit = directContentType
+    ? EXPANDED_BODY_LIMIT_BYTES
+    : cloudTransferContract.legacyJsonRequestLimitBytes;
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > inputLimit) {
+      const error = new Error("请求内容超过允许上限");
+      error.statusCode = 413;
+      error.code = "REQUEST_BODY_TOO_LARGE";
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  let raw = chunks.length > 0 ? Buffer.concat(chunks) : Buffer.alloc(0);
+  if (encoding && encoding !== "identity") {
+    if (encoding !== "gzip") {
+      const error = new Error("请求压缩格式不受支持");
+      error.statusCode = 415;
+      error.code = "REQUEST_ENCODING_UNSUPPORTED";
+      throw error;
+    }
+    try {
+      raw = gunzipSync(raw, { maxOutputLength: expandedLimit });
+    } catch (cause) {
+      const tooLarge = cause && typeof cause === "object" && "code" in cause && cause.code === "ERR_BUFFER_TOO_LARGE";
+      const error = new Error(tooLarge ? "解压后的请求内容超过 32 MB" : "请求压缩内容无效");
+      error.statusCode = tooLarge ? 413 : 400;
+      error.code = tooLarge ? "REQUEST_EXPANDED_BODY_TOO_LARGE" : "REQUEST_ENCODING_INVALID";
+      throw error;
+    }
+  }
+  if (raw.byteLength > expandedLimit) {
+    const error = new Error("解压后的请求内容超过允许上限");
+    error.statusCode = 413;
+    error.code = "REQUEST_EXPANDED_BODY_TOO_LARGE";
+    throw error;
+  }
+  const direct = directCloudSaveBody(request, raw);
+  if (direct) return direct;
+  if (raw.byteLength === 0) return {};
+  const text = decodeStrictRequestUtf8(raw);
+  try { return JSON.parse(text); } catch {
     const error = new Error("JSON 格式无效");
     error.statusCode = 400;
     error.code = "REQUEST_FORMAT_INVALID";
@@ -2436,7 +2560,7 @@ export async function createCloudServer({
   backupIntervalMs = Number(process.env.DSP_CLOUD_BACKUP_INTERVAL_MS || 6 * 60 * 60 * 1000),
   backupWindow = process.env.DSP_CLOUD_BACKUP_WINDOW || "",
   historyPruneIntervalMs = Number(process.env.DSP_CLOUD_PRUNE_INTERVAL_MS || 6 * 60 * 60 * 1000),
-  requestTimeoutMs = Number(process.env.DSP_CLOUD_REQUEST_TIMEOUT_MS || 30_000),
+  requestTimeoutMs = Number(process.env.DSP_CLOUD_REQUEST_TIMEOUT_MS || cloudTransferContract.maximumTimeoutMs + 10_000),
   allowedOrigin = process.env.DSP_ALLOWED_ORIGIN || "",
   playerOnlineWindowMs = Number(process.env.DSP_PLAYER_ONLINE_WINDOW_MS || DEFAULT_PLAYER_ONLINE_WINDOW_MS),
   metricTimeZone = process.env.DSP_METRIC_TIME_ZONE || DEFAULT_METRIC_TIME_ZONE,
@@ -2615,10 +2739,21 @@ export async function createCloudServer({
     dayMetric.requests += 1;
     store.data.dailyMetrics[day] = dayMetric;
     const origin = request.headers.origin;
+    if (origin) response.setHeader("vary", "Origin");
     if (origin && allowedOrigins.has(origin)) response.setHeader("access-control-allow-origin", origin);
     if (origin && allowedOrigins.size > 0 && !allowedOrigins.has(origin)) return send(response, 403, { error: "来源未获授权" });
-    response.setHeader("access-control-allow-headers", "authorization, content-type");
-    response.setHeader("access-control-allow-methods", "GET, POST, PUT, OPTIONS");
+    response.setHeader("access-control-allow-headers", [
+      "authorization",
+      "content-type",
+      "content-encoding",
+      "content-transfer-encoding",
+      cloudTransferContract.expectedRevisionHeader,
+      cloudTransferContract.requestIdHeader,
+      cloudTransferContract.originalBytesHeader,
+      cloudTransferContract.compressedBytesHeader,
+      "x-dsp-save-mode",
+    ].join(", "));
+    response.setHeader("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS");
     if (request.method === "OPTIONS") return send(response, 204, {});
 
     const url = new URL(request.url || "/", "http://localhost");
@@ -3223,7 +3358,7 @@ export async function createCloudServer({
             return send(response, 507, { error: "云节点磁盘已达到 90% 保护阈值，上传暂时停止；本地存档未修改", code: "STORAGE_PROTECTION_ACTIVE" });
           }
         }
-        const body = await readJson(request);
+        const body = await readCloudSaveUpload(request);
         const payloadMode = typeof body.payload === "string" ? savePayloadMode(body.payload) : null;
         const validPayload = validateSavePayload(body.payload);
         const legacyImplicitSpeedrun = url.searchParams.get("mode") === null && typeof body.payload === "string" && isLegacyImplicitSpeedrunPayload(body.payload);
@@ -3242,6 +3377,7 @@ export async function createCloudServer({
                ? "SAVE_SIZE_TOO_LARGE"
                : validPayload && payloadMode !== effectiveMode ? "SAVE_MODE_MISMATCH"
                  : integrity && !integrity.valid && integrity.state ? "SAVE_INTEGRITY_INVALID" : "SAVE_FORMAT_INVALID",
+             directPayloadSupported: true,
              ...(validPayload && payloadMode !== effectiveMode ? { expectedMode: effectiveMode, receivedMode: payloadMode } : {}),
              ...(summary ? { summary } : {}),
            });
@@ -3450,7 +3586,9 @@ export async function createCloudServer({
 
   server.store = store;
   server.leaderboardBackfill = leaderboardBackfill;
-  server.requestTimeout = Number.isFinite(requestTimeoutMs) ? Math.max(5_000, Math.floor(requestTimeoutMs)) : 30_000;
+  server.requestTimeout = Number.isFinite(requestTimeoutMs)
+    ? Math.max(cloudTransferContract.maximumTimeoutMs + 10_000, Math.floor(requestTimeoutMs))
+    : cloudTransferContract.maximumTimeoutMs + 10_000;
   server.headersTimeout = Math.min(server.requestTimeout, 15_000);
   server.keepAliveTimeout = 5_000;
   server.on("close", () => {

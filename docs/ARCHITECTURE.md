@@ -118,7 +118,7 @@ React Flow 的持久真相仍来自 `GameState`。`src/game/canvasLineBatch.ts` 
 - `src/game/systemHubLogistics.ts`：系统共享仓库的规范十进制大整数、五秒边界比例分配、跨星系舰队返回桶和电梯站输入/输出结算。运行时只保存聚合舰队桶，`bigint` 不进入 JSON。
 - `src/game/quantumLogisticsNetwork.ts`：全星区量子库存的规范十进制大整数、逐物品容量、上传/下载独立全局预算、公平游标，以及星际物流塔和轨道采集器的五秒接入桥。采集器不产生独立带宽；传统本地运输机仍由 `engine.ts` 的 `local` 调度路径处理。
 - `src/components/SystemSpaceStationWorkspace.tsx`：从星图进入的桌面/新版手机空间站工作区；阶段材料、共享库存、模块、物流站模式和五个输出口均调用领域命令。
-- `src/game/cloud.ts`：同源 `/api` 客户端、会话和 8 秒请求超时。账号与云存档只允许 HTTPS 或本地开发入口；匿名只读 `/health`、`/public-status` 和 `GET /leaderboard` 可在上海 HTTP 同源读取节点状态、活动时钟和公开排名，且不会附带 token。打包的 Electron/Android 只有在构建时显式配置 `VITE_API_BASE_URL` 才启用云功能，社区包默认离线。Android 原生请求桥不接收 gzip Blob，因此云上传预先使用原始 JSON 并遵守 30 MiB 明文上限；Web 保留流式 gzip，只有首次 gzip 真正收到 `400 / REQUEST_ENCODING_INVALID` 时才使用同一 `expectedRevision` 明文重试一次。取消、409、网络超时确认和未知提交状态仍走原有幂等保护。Capacitor 的内部页面 origin 固定为 `https://localhost`；生产 API 白名单需精确允许它，以覆盖原生 HTTP 补丁不可用时的标准 Fetch 回退，未知 origin 仍拒绝。
+- `src/game/cloud.ts`、`cloudTransferContract.ts`、`androidApiTransport.ts` 与根/API 包内的 `cloud-transfer-contract.json`：统一同源 `/api`、会话和大存档传输。新上传正文就是原始存档 envelope，`expectedRevision` 进入有界请求头；Web/Windows 优先 gzip，Android 用原生插件支持的 base64 file 输入把 gzip 字节交给系统 HTTP。Windows 的 `desktop/main.cjs`/`preload.cjs` 使用 1 MiB 有背压 MessagePort 分片，避免 Electron IPC 同时保留多份大字符串。客户端超时按原始正文和响应规模在 15～60 秒间计算，Nginx/API 为 70 秒；发送后取消或网络超时只比较相邻 revision、完整 SHA-256 和 UTF-8 size，未确认时返回状态未知且不重传。旧 `{payload, expectedRevision}` raw/gzip 协议继续接受；只有明确编码拒绝或旧 API 不识别直接正文时允许一次兼容回退。账号与云存档仍只允许 HTTPS 或本地开发入口，匿名只读接口不会附带 token，未知 origin 拒绝。
 - `src/game/mods.ts`、`contentPacks.ts`：内容包格式校验、依赖和运行时目录注入。
 
 ## 3. 状态与模拟流

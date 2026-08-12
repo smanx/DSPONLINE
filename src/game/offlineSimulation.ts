@@ -67,6 +67,7 @@ export type OfflineSimulationWorkerResponse =
     id: number;
     payloadBytes: ArrayBuffer;
     payloadChecksum: string;
+    payloadSha256: string;
     byteLength: number;
     summary: CloudUploadSummary;
     offlineSeconds: number;
@@ -381,6 +382,7 @@ export function prepareCloudUploadInWorker(
   payload: string;
   summary: CloudUploadSummary;
   verification: SaveTransferVerification;
+  payloadSha256: string;
   offlineSeconds: number;
   returningReward: Array<{ itemId: string; amount: number }>;
   diagnostics: CloudUploadPreparationDiagnostics;
@@ -440,7 +442,7 @@ export function prepareCloudUploadInWorker(
           offlineSeconds: message.offlineSeconds,
           skippedOffline: options.skipOffline === true,
         };
-        finish(() => resolve({ payload, summary: message.summary, verification, offlineSeconds: message.offlineSeconds, returningReward: message.returningReward, diagnostics }));
+        finish(() => resolve({ payload, summary: message.summary, verification, payloadSha256: message.payloadSha256, offlineSeconds: message.offlineSeconds, returningReward: message.returningReward, diagnostics }));
         return;
       }
       if (message.type === "cancelled") {

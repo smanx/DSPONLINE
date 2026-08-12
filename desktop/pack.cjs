@@ -45,6 +45,10 @@ function verifyPackagedMetadata(outputDirectory) {
   if (!/^https:\/\//.test(metadata.cloudApiBaseUrl) || !/^https:\/\//.test(metadata.updateBaseUrl)) {
     throw new Error("桌面安装包元数据必须包含 HTTPS 云 API 和更新地址");
   }
+  const transferContract = JSON.parse(extractFile(asarPath, "cloud-transfer-contract.json").toString("utf8"));
+  if (transferContract.guaranteedSavePayloadBytes !== 30 * 1024 * 1024 || transferContract.maximumTimeoutMs < 60_000) {
+    throw new Error("桌面安装包缺少当前大存档云传输契约");
+  }
 }
 
 async function main() {

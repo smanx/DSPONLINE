@@ -2900,7 +2900,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         if (session.status !== "authenticated" || !session.user) return;
         syncUserId = session.user.id;
         syncRevision = session.cloudSave?.revision ?? null;
-        const prepared = await serializeEnvelopeInWorker(stateWithSimulationDebt(gameRef.current));
+        const prepared = await serializeEnvelopeInWorker(
+          stateWithSimulationDebt(gameRef.current),
+          Date.now(),
+          "primary",
+          undefined,
+          "main",
+          true,
+        );
         const payload = prepared.raw;
         const summary = prepared.summary ?? summarizeCloudPayload(payload);
         const comparison = compareCloudSaveSummary(session.user.id, summary, session.cloudSave, "main", mode);
@@ -2913,7 +2920,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           writeCloudAutoSyncStatus({ userId: session.user.id, state: "skipped", attemptedAt, uploadedAt: session.cloudSave?.updatedAt ?? null, revision: session.cloudSave?.revision ?? null, message: "本地与云端已一致" });
           return;
         }
-        const uploaded = await uploadCloudSave(payload, session.cloudSave?.revision ?? 0, "main", { mode });
+        const uploaded = await uploadCloudSave(payload, session.cloudSave?.revision ?? 0, "main", {
+          mode,
+          payloadSha256: prepared.payloadSha256,
+          payloadByteLength: prepared.verification.byteLength,
+        });
         const cloudSave = await refreshCloudSaveMetadata("main", undefined, mode).catch(() => uploaded) ?? uploaded;
         markCloudSaveSynchronized(session.user.id, cloudSave, payload, "main", mode);
         writeCloudAutoSyncStatus({ userId: session.user.id, state: "success", attemptedAt, uploadedAt: cloudSave.updatedAt, revision: cloudSave.revision, message: "主存档自动上传成功" });

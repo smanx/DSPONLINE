@@ -22,6 +22,8 @@ export interface DesktopBridge {
   setFontScale: (scale: number) => Promise<{ scale: number; zoomFactor: number }>;
   getReleaseInfo: () => Promise<DesktopReleaseInfo>;
   requestApi: (request: DesktopApiRequest) => Promise<DesktopApiResponse>;
+  requestApiTransfer: (request: DesktopApiTransferRequest, body: ArrayBuffer) => Promise<DesktopApiTransferResponse>;
+  cancelApiRequest: (requestId: string) => void;
   checkForUpdates: () => Promise<DesktopUpdateStatus>;
   downloadUpdate: () => Promise<DesktopUpdateStatus>;
   installUpdate: () => Promise<{ accepted: boolean }>;
@@ -35,6 +37,14 @@ export interface DesktopApiRequest {
   method?: string;
   headers?: Record<string, string>;
   body?: string;
+  requestId?: string;
+  timeoutMs?: number;
+  expectedResponseBytes?: number;
+}
+
+export interface DesktopApiTransferRequest extends Omit<DesktopApiRequest, "body"> {
+  requestId: string;
+  bodyByteLength: number;
 }
 
 export interface DesktopApiResponse {
@@ -42,6 +52,10 @@ export interface DesktopApiResponse {
   status: number;
   body: string;
   headers: Record<string, string>;
+}
+
+export interface DesktopApiTransferResponse extends Omit<DesktopApiResponse, "body"> {
+  bodyBuffer: ArrayBuffer;
 }
 
 export function getDesktopBridge(): DesktopBridge | null {

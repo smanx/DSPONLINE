@@ -6,6 +6,8 @@
 
 > `1.0.40` P0-02 开发门禁（2026-08-13）：全量 Vitest 为 108 文件通过/6 文件条件跳过、957 项通过/18 项跳过；多标签页专项 Chromium 9/9，和既有 IndexedDB 恢复套件联合运行 13/13；typecheck 与生产 build 通过。专项覆盖 IndexedDB v1→v2 原地升级且正文逐字节不变、未来版本关闭旧连接、Web Locks/BroadcastChannel 双双不可用、BroadcastChannel 实时刷新、CAS 拦截旧客户端式无 revision 写入、普通/速通槽位、删除 tombstone、保留持久版本、采用候选和租约过期后的显式接管。测试只使用合成状态与浏览器临时 IndexedDB。
 
+> `1.0.40` P0-01 开发门禁（2026-08-13）：typecheck、Web/Windows/Android 生产 build、许可证检查通过；全量 Vitest 112 文件通过/6 文件条件跳过、989 项通过/18 项跳过；server 78/2、ops 10/10、native 13/13。客户端 1/7/8/20/28/30 MiB 矩阵 7/7，云上传 Playwright 3/3，多标签页与旧存储联合串行回归 13/13；真实临时 SQLite API 完成约 30 MiB direct raw、direct gzip、最坏转义旧包装上传与下载逐字节核对。严格 UTF-8/BOM 拒绝不产生 revision/历史；30 MiB Electron MessagePort 使用真实 Electron 43 按 1 MiB 分片和 ACK 背压双向测试；API 使用真实扁平发布目录和临时 SQLite 启动。最终 1.0.40 候选仍会重跑完整原生制品门禁。所有数据为确定性合成内容，不含玩家账号、玩家存档或生产数据库。
+
 > `1.0.38` clean source `351c649af9eedb22f56f47a6cd06c14cedce6221` 在 2026-08-11 完成正式门禁并发布：typecheck、Vitest 107 文件通过/6 文件跳过且 950 项通过/18 项跳过、服务端 70/2、运维 6/6、原生工具 8/8、128 个运行时许可证，以及最终 Playwright 280 项通过/11 条显式条件跳过/0 失败（291 总数）。首次全量有一条 90 秒瞬时超时，目标用例与随后完整全量重跑均通过。根项目与服务端生产依赖审计均为 0。专项覆盖 Worker 可转移保存/槽位/快照、可信信封拒绝、生产 Worker 导入边界、稀疏 v46 往返、持久传送带账本复用、量子原地/不可变等价、单极磁石一→二硬上限与零物资、200% 桌面/移动 Canvas 有界矩阵；1.0.37 客户端读取候选普通/速通稀疏档 2/2 通过。
 
 > 1.0.39 没有构建或发布新原生包。当前 stable 原生证据继续来自 1.0.38：Android 长期证书 v2/v3、API 36.1 模拟器 `1.0.37 → 1.0.38` 原地升级和 Windows `NotSigned` setup 隔离启动。1.0.39 发布重新复验下载 9/9 完整公开哈希、APK/EXE Range 206、香港/上海/下载页桌面与手机 6 场 Chrome，以及访问固定 1.0.37 previous-stable 前后只有当前 1.0.39 worker active、缓存 HTML 哈希不变和正式根页离线重开。正式证据见 [1.0.39 发布记录](./releases/1.0.39.md)。

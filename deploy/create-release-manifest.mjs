@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { API_ARCHIVE_SOURCE_FILES } from "./prepare-api-release.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -43,40 +44,7 @@ async function describeFile(relativePath) {
 async function describeReleaseFiles() {
   const paths = [
     ...await collectFiles("dist"),
-    ...await collectFiles("deploy/mail-templates"),
-    "deploy/backup-crypto.mjs",
-    "deploy/backup-sqlite.mjs",
-    "deploy/create-offsite-backup.mjs",
-    "deploy/probe-node-health.mjs",
-    "deploy/restore-drill.mjs",
-    "deploy/sqlite-snapshot.mjs",
-    "server/activity.mjs",
-    "server/activity.test.mjs",
-    "server/account-security.mjs",
-    "server/account-security.test.mjs",
-    "server/analytics.mjs",
-    "server/analytics.test.mjs",
-    "server/cloud-governance.mjs",
-    "server/cloud-governance.test.mjs",
-    "server/cloud-save-v46-sparse.test.mjs",
-    "server/index.mjs",
-    "server/galactic-metrics.mjs",
-    "server/leaderboard-integrity.mjs",
-    "server/leaderboard-integrity.test.mjs",
-    "server/leaderboard-revalidation.integration.test.mjs",
-    "server/leaderboard-moderation.mjs",
-    "server/leaderboard-moderation.test.mjs",
-    "server/mail.mjs",
-    "server/mail.test.mjs",
-    "server/moderate-leaderboard.mjs",
-    "server/package.json",
-    "server/package-lock.json",
-    "server/save-integrity.mjs",
-    "server/server.test.mjs",
-    "server/security-governance.integration.test.mjs",
-    "server/speedrun-recovery.mjs",
-    "server/speedrun-recovery.test.mjs",
-    "server/speedrun.test.mjs",
+    ...API_ARCHIVE_SOURCE_FILES,
   ];
   return Promise.all(paths.sort().map(describeFile));
 }
