@@ -18,6 +18,10 @@ function fixtureData() {
     cloudSaveHistory: { user_a: Array.from({ length: 25 }, (_, index) => ({ revision: index + 1 })) },
     cloudSaveSlots: {},
     cloudSaveSlotHistory: {},
+    cloudSavesByMode: {},
+    cloudSaveHistoryByMode: {},
+    cloudSaveSlotsByMode: {},
+    cloudSaveSlotHistoryByMode: {},
   };
 }
 
@@ -34,6 +38,38 @@ test("builds an auditable and stable cloud-history prune preview", () => {
   assert.equal(first.deletionCount, 6);
   assert.deepEqual(first.reasons, { orphanAccount: 1, invalidSlot: 0, expiredRevision: 5 });
   assert.equal(Object.hasOwn(publicCloudHistoryPrunePlan(first), "deletions"), false);
+});
+
+test("retains and trims normal and speedrun histories independently in all four slots", () => {
+  const data = fixtureData();
+  data.cloudSavesByMode.user_a = { speedrun: { revision: 25 } };
+  data.cloudSaveHistoryByMode.user_a = {
+    speedrun: Array.from({ length: 25 }, (_, index) => ({ revision: index + 1 })),
+  };
+  data.cloudSaveSlots.user_a = {};
+  data.cloudSaveSlotHistory.user_a = {};
+  data.cloudSaveSlotsByMode.user_a = { speedrun: {} };
+  data.cloudSaveSlotHistoryByMode.user_a = { speedrun: {} };
+  for (const slot of ["1", "2", "3"]) {
+    data.cloudSaveSlots.user_a[slot] = { revision: 25 };
+    data.cloudSaveSlotHistory.user_a[slot] = Array.from({ length: 25 }, (_, index) => ({ revision: index + 1 }));
+    data.cloudSaveSlotsByMode.user_a.speedrun[slot] = { revision: 25 };
+    data.cloudSaveSlotHistoryByMode.user_a.speedrun[slot] = Array.from({ length: 25 }, (_, index) => ({ revision: index + 1 }));
+  }
+
+  assert.equal(trimCloudHistoryMetadataInPlace(data, 20), 40);
+  const rows = [];
+  for (const slot of ["main", "1", "2", "3"]) {
+    for (let revision = 1; revision <= 25; revision += 1) {
+      rows.push({ userId: "user_a", slot, revision });
+      rows.push({ userId: "user_a", slot: `speedrun:${slot}`, revision });
+    }
+  }
+  const plan = buildCloudHistoryPrunePlan(data, rows, 20);
+  assert.equal(plan.deletionCount, 40);
+  assert.deepEqual(plan.reasons, { orphanAccount: 0, invalidSlot: 0, expiredRevision: 40 });
+  assert.equal(plan.deletions.some((entry) => entry.slot.startsWith("speedrun:") && entry.revision > 5), false);
+  assert.equal(plan.deletions.some((entry) => !entry.slot.startsWith("speedrun:") && entry.revision > 5), false);
 });
 
 test("reports SQLite table, page and revision sizes without exposing payloads", () => {

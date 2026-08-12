@@ -14,6 +14,8 @@
 
 > `1.0.40` P0-01 全端大存档云传输已完成开发：30 MiB 合法正文使用共享契约、直接正文上传、gzip、动态超时、精确 SHA-256 超时确认和 Windows 1 MiB 有背压分片；旧 1.0.39 JSON/raw/gzip 协议继续兼容，旧包装可在 65 MiB 请求边界内承载最坏转义的 30 MiB 存档，但单存档本身仍受约 32 MiB 限制。取消/超时后不再自动重传，只有服务端明确拒绝 gzip 或旧 API 明确不识别直接正文时才进行一次安全兼容回退。专项已通过 1/7/8/20/28/30 MiB 客户端矩阵、真实临时 SQLite 的约 30 MiB direct raw/gzip/最坏旧包装往返、30 MiB Electron 分片 ACK 双向烟测、Android/Windows 平台构建、真实 API 发布目录启动、v46 稀疏兼容、严格 UTF-8/BOM 拒绝和 gzip 炸弹测试；该项尚未部署，最终候选仍须重跑完整门禁。
 
+> `1.0.40` 服务端历史治理审计补齐了模式感知：SQLite 中 `speedrun:main/1/2/3` 正文槽位不再被普通槽位裁剪器误判为非法记录；普通/速通四槽分别保留当前 revision 和最近 20 条历史，治理容量指标也纳入速通槽位。该修复不更改云 schema v7、SQLite layout v2、存档正文或历史成绩，尚未部署。
+
 > `1.0.39` 云存档 P0 热修已完成香港、上海 Web/API 正式发布，固定源码为 `fb54f2148dd64268ee2c2f39c6774b348e6ea437`，Build ID 为 `1.0.39+fb54f2148dd6`。服务端对 GameState v46 稀疏正文只在结构校验的局部读取中将缺失的 `belt.lanes/tier/progress` 解释为 `1/1/0`，并兼容同一客户端投影省略的 `interactionLocked=false`；显式 `null`、字符串、非法范围及损坏 checksum 仍拒绝。原始 payload、envelope checksum、云 SHA-256、revision、历史和下载正文均不改写。排行榜人工复核阈值改为普通/速通独立，旧单值 `accountControls` 继续作为普通模式兼容别名。GameState v46、envelope v2、云 schema v7、SQLite layout v2 均不升级。
 
 > 1.0.39 最终门禁为 source 163/163、candidate 2/2、Web 128/128、API 35/35、Vitest 950/18、Playwright 282/11、server 75/2、ops 6/6、native 8/8、128 个运行时许可证和根/server 生产依赖审计 0。两地发布前备份、各自备份副本隔离、原子切换、真实云 PUT 观察、完整公网字节、Range/cache、6 场 Chrome 和 1.0.37 previous-stable PWA 隔离均通过。上海下载页与 Android/Windows stable 按交接保持 1.0.38；完整证据见 [1.0.39 正式发布记录](./releases/1.0.39.md)。
