@@ -17,7 +17,8 @@ import {
 } from "./analytics.mjs";
 import { createTencentSesMailer, createWebhookMailer } from "./mail.mjs";
 import { getActivityPublicStatus, loadActivityConfig, normalizeActivityConfig } from "./activity.mjs";
-import { inspectSavePayloadIntegrity } from "./save-integrity.mjs";
+import { inspectParsedSavePayloadIntegrity, inspectSavePayloadIntegrity } from "./save-integrity.mjs";
+import { UploadInspectionScheduler } from "./upload-inspection-scheduler.mjs";
 import {
   isLeaderboardRestricted,
   LEADERBOARD_RESTRICTED_CODE,
@@ -261,59 +262,52 @@ function normalizedCloudSaveMode(value) {
   return value === "speedrun" ? "speedrun" : value === "normal" || value === null || value === undefined ? "normal" : null;
 }
 
-function savePayloadMode(payload) {
-  try {
-    const parsed = JSON.parse(payload);
-    const state = parsed?.state ?? parsed;
-    const envelopeMode = parsed?.mode;
-    const stateMode = state?.mode;
-    if (envelopeMode !== undefined && !SAVE_MODES.includes(envelopeMode)) return null;
-    if (stateMode !== undefined && !SAVE_MODES.includes(stateMode)) return null;
-    if (envelopeMode !== undefined && stateMode !== undefined && envelopeMode !== stateMode) return null;
-    if (envelopeMode !== undefined || stateMode !== undefined) return normalizedCloudSaveMode(envelopeMode ?? stateMode);
-    // v2 speedrun saves predate the top-level mode marker. Their complete,
-    // server-verifiable run identity is an unambiguous legacy marker; plain
-    // legacy saves without this structure remain normal.
-    const legacySpeedrun = state?.speedrun;
-    if (legacySpeedrun?.enabled === true && legacySpeedrun.mode === "speedrun" &&
-      typeof legacySpeedrun.factoryId === "string" && legacySpeedrun.factoryId.length > 0) return "speedrun";
-    return "normal";
-  } catch {
-    return null;
-  }
+function savePayloadModeFromParsed(parsed) {
+  const state = parsed?.state ?? parsed;
+  const envelopeMode = parsed?.mode;
+  const stateMode = state?.mode;
+  if (envelopeMode !== undefined && !SAVE_MODES.includes(envelopeMode)) return null;
+  if (stateMode !== undefined && !SAVE_MODES.includes(stateMode)) return null;
+  if (envelopeMode !== undefined && stateMode !== undefined && envelopeMode !== stateMode) return null;
+  if (envelopeMode !== undefined || stateMode !== undefined) return normalizedCloudSaveMode(envelopeMode ?? stateMode);
+  // v2 speedrun saves predate the top-level mode marker. Their complete,
+  // server-verifiable run identity is an unambiguous legacy marker; plain
+  // legacy saves without this structure remain normal.
+  const legacySpeedrun = state?.speedrun;
+  if (legacySpeedrun?.enabled === true && legacySpeedrun.mode === "speedrun" &&
+    typeof legacySpeedrun.factoryId === "string" && legacySpeedrun.factoryId.length > 0) return "speedrun";
+  return "normal";
 }
 
-function isLegacyImplicitSpeedrunPayload(payload) {
-  try {
-    const parsed = JSON.parse(payload);
-    const state = parsed?.state ?? parsed;
-    return parsed?.mode === undefined && state?.mode === undefined && savePayloadMode(payload) === "speedrun";
-  } catch {
-    return false;
-  }
+function isLegacyImplicitSpeedrunParsed(parsed) {
+  const state = parsed?.state ?? parsed;
+  return parsed?.mode === undefined && state?.mode === undefined && savePayloadModeFromParsed(parsed) === "speedrun";
+}
+
+function summarizeParsedSavePayload(parsed, integrity = inspectParsedSavePayloadIntegrity(parsed), mode = savePayloadModeFromParsed(parsed)) {
+  const state = parsed?.state ?? parsed;
+  if (!state || typeof state !== "object" || !Array.isArray(state.entities)) return null;
+  return {
+    mode: mode ?? "normal",
+    stateVersion: Number.isFinite(state.version) ? Math.max(0, Math.floor(state.version)) : 0,
+    savedAt: Number.isFinite(parsed?.savedAt) ? Math.max(0, Math.floor(parsed.savedAt)) : 0,
+    elapsedSeconds: Number.isFinite(state.elapsedSeconds) ? Math.max(0, Math.floor(state.elapsedSeconds)) : 0,
+    activePlanetId: typeof state.activePlanetId === "string" ? state.activePlanetId.slice(0, 80) : "home",
+    entityCount: state.entities.length,
+    completedTechCount: Array.isArray(state.research?.completedTechIds) ? state.research.completedTechIds.length : 0,
+    structurePoints: Number.isFinite(state.dysonSphere?.structurePoints) ? Math.max(0, Math.floor(state.dysonSphere.structurePoints)) : 0,
+    uploadedWhiteMatrix: Number.isFinite(state.totalProduced?.universe_matrix) ? Math.max(0, Math.floor(state.totalProduced.universe_matrix)) : 0,
+    stateChecksum: typeof parsed?.checksum === "string" ? parsed.checksum.slice(0, 128) : null,
+    computedStateChecksum: integrity.computedChecksum,
+    integrity: integrity.valid ? "valid" : "invalid",
+  };
 }
 
 function summarizeSavePayload(payload) {
   if (typeof payload !== "string") return null;
   try {
     const integrity = inspectSavePayloadIntegrity(payload);
-    const parsed = integrity.parsed;
-    const state = parsed?.state ?? parsed;
-    if (!state || typeof state !== "object" || !Array.isArray(state.entities)) return null;
-    return {
-      mode: savePayloadMode(payload) ?? "normal",
-      stateVersion: Number.isFinite(state.version) ? Math.max(0, Math.floor(state.version)) : 0,
-      savedAt: Number.isFinite(parsed?.savedAt) ? Math.max(0, Math.floor(parsed.savedAt)) : 0,
-      elapsedSeconds: Number.isFinite(state.elapsedSeconds) ? Math.max(0, Math.floor(state.elapsedSeconds)) : 0,
-      activePlanetId: typeof state.activePlanetId === "string" ? state.activePlanetId.slice(0, 80) : "home",
-      entityCount: state.entities.length,
-      completedTechCount: Array.isArray(state.research?.completedTechIds) ? state.research.completedTechIds.length : 0,
-      structurePoints: Number.isFinite(state.dysonSphere?.structurePoints) ? Math.max(0, Math.floor(state.dysonSphere.structurePoints)) : 0,
-      uploadedWhiteMatrix: Number.isFinite(state.totalProduced?.universe_matrix) ? Math.max(0, Math.floor(state.totalProduced.universe_matrix)) : 0,
-      stateChecksum: typeof parsed?.checksum === "string" ? parsed.checksum.slice(0, 128) : null,
-      computedStateChecksum: integrity.computedChecksum,
-      integrity: integrity.valid ? "valid" : "invalid",
-    };
+    return summarizeParsedSavePayload(integrity.parsed, integrity, savePayloadModeFromParsed(integrity.parsed));
   } catch {
     return null;
   }
@@ -1582,6 +1576,66 @@ function send(response, status, payload, extraHeaders = {}) {
   response.end(body);
 }
 
+function cloudUploadCancelledError(signal) {
+  if (signal?.reason?.code === "SERVER_SHUTTING_DOWN") return signal.reason;
+  const error = new Error("云存档上传已取消，本地存档未修改");
+  error.statusCode = 499;
+  error.code = "UPLOAD_CANCELLED";
+  return error;
+}
+
+function writeResponseChunk(response, chunk) {
+  if (response.destroyed || response.writableEnded) {
+    const error = new Error("云存档下载已取消");
+    error.code = "DOWNLOAD_CANCELLED";
+    return Promise.reject(error);
+  }
+  if (response.write(chunk)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      response.removeListener("drain", onDrain);
+      response.removeListener("close", onClose);
+      response.removeListener("error", onError);
+    };
+    const onDrain = () => { cleanup(); resolve(); };
+    const onClose = () => {
+      cleanup();
+      const error = new Error("云存档下载已取消");
+      error.code = "DOWNLOAD_CANCELLED";
+      reject(error);
+    };
+    const onError = (error) => { cleanup(); reject(error); };
+    response.once("drain", onDrain);
+    response.once("close", onClose);
+    response.once("error", onError);
+  });
+}
+
+async function sendCloudSaveDownload(response, save, mode, slot) {
+  if (!save) return send(response, 200, { cloudSave: null, mode, slot });
+  const metadata = cloudSaveMetadata(save, slot, mode);
+  const metadataJson = JSON.stringify(metadata);
+  response.writeHead(200, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer",
+    "x-dsp-api-capabilities": "direct-cloud-payload-v1",
+  });
+  await writeResponseChunk(response, `{"cloudSave":${metadataJson.slice(0, -1)},"payload":"`);
+  const chunkCharacters = 64 * 1024;
+  for (let offset = 0; offset < save.payload.length; offset += chunkCharacters) {
+    // JSON.stringify performs the exact escaping expected by old clients. A
+    // split surrogate pair is emitted as two \uXXXX escapes and parses back to
+    // the same JavaScript string, so bounded chunks preserve every payload.
+    const escaped = JSON.stringify(save.payload.slice(offset, offset + chunkCharacters));
+    await writeResponseChunk(response, escaped.slice(1, -1));
+  }
+  await writeResponseChunk(response, `"},"mode":${JSON.stringify(mode)},"slot":${JSON.stringify(slot)}}`);
+  response.end();
+}
+
 async function readJson(request) {
   const chunks = [];
   let size = 0;
@@ -1653,13 +1707,12 @@ function decodeStrictRequestUtf8(rawBody) {
   return text;
 }
 
-function directCloudSaveBody(request, rawBody) {
+function directCloudSaveDescriptor(request) {
   const contentType = String(request.headers["content-type"] ?? "").split(";", 1)[0].trim().toLowerCase();
   if (contentType !== cloudTransferContract.directPayloadContentType) return null;
   const declaredOriginalBytes = request.headers[cloudTransferContract.originalBytesHeader];
   if (declaredOriginalBytes !== undefined && (
-    Array.isArray(declaredOriginalBytes) || typeof declaredOriginalBytes !== "string" || !/^\d{1,10}$/.test(declaredOriginalBytes) ||
-    Number(declaredOriginalBytes) !== rawBody.byteLength
+    Array.isArray(declaredOriginalBytes) || typeof declaredOriginalBytes !== "string" || !/^\d{1,10}$/.test(declaredOriginalBytes)
   )) {
     const error = new Error("云存档原始字节数无效");
     error.statusCode = 400;
@@ -1689,68 +1742,61 @@ function directCloudSaveBody(request, rawBody) {
     error.code = "OPERATION_ID_INVALID";
     throw error;
   }
-  const payload = decodeStrictRequestUtf8(rawBody);
-  return { payload, expectedRevision, requestId: requestIdHeader ?? null };
+  return {
+    direct: true,
+    expectedRevision,
+    requestId: requestIdHeader ?? null,
+    declaredOriginalBytes: declaredOriginalBytes === undefined ? null : Number(declaredOriginalBytes),
+  };
 }
 
-async function readCloudSaveUpload(request) {
+function cloudSaveUploadDescriptor(request) {
   const directContentType = String(request.headers["content-type"] ?? "").split(";", 1)[0].trim().toLowerCase() === cloudTransferContract.directPayloadContentType;
   const encoding = String(request.headers["content-encoding"] ?? "").toLowerCase();
+  if (encoding && encoding !== "identity" && encoding !== "gzip") {
+    const error = new Error("请求压缩格式不受支持");
+    error.statusCode = 415;
+    error.code = "REQUEST_ENCODING_UNSUPPORTED";
+    throw error;
+  }
+  const direct = directContentType ? directCloudSaveDescriptor(request) : null;
   const inputLimit = directContentType ? BODY_LIMIT_BYTES : cloudTransferContract.legacyJsonRequestLimitBytes;
   const expandedLimit = directContentType
     ? EXPANDED_BODY_LIMIT_BYTES
     : cloudTransferContract.legacyJsonRequestLimitBytes;
+  return {
+    ...direct,
+    direct: Boolean(direct),
+    encoding: encoding === "gzip" ? "gzip" : "",
+    inputLimit,
+    expandedLimit,
+    payloadLimit: SAVE_PAYLOAD_LIMIT_BYTES,
+  };
+}
+
+async function readCloudSaveUpload(request, inspect, descriptor, signal = null) {
   const chunks = [];
   let size = 0;
-  for await (const chunk of request) {
-    size += chunk.length;
-    if (size > inputLimit) {
-      const error = new Error("请求内容超过允许上限");
-      error.statusCode = 413;
-      error.code = "REQUEST_BODY_TOO_LARGE";
-      throw error;
-    }
-    chunks.push(chunk);
-  }
-  let raw = chunks.length > 0 ? Buffer.concat(chunks) : Buffer.alloc(0);
-  if (encoding && encoding !== "identity") {
-    if (encoding !== "gzip") {
-      const error = new Error("请求压缩格式不受支持");
-      error.statusCode = 415;
-      error.code = "REQUEST_ENCODING_UNSUPPORTED";
-      throw error;
-    }
-    try {
-      raw = gunzipSync(raw, { maxOutputLength: expandedLimit });
-    } catch (cause) {
-      const tooLarge = cause && typeof cause === "object" && "code" in cause && cause.code === "ERR_BUFFER_TOO_LARGE";
-      const error = new Error(tooLarge ? "解压后的请求内容超过 32 MB" : "请求压缩内容无效");
-      error.statusCode = tooLarge ? 413 : 400;
-      error.code = tooLarge ? "REQUEST_EXPANDED_BODY_TOO_LARGE" : "REQUEST_ENCODING_INVALID";
-      throw error;
-    }
-  }
-  if (raw.byteLength > expandedLimit) {
-    const error = new Error("解压后的请求内容超过允许上限");
-    error.statusCode = 413;
-    error.code = "REQUEST_EXPANDED_BODY_TOO_LARGE";
-    throw error;
-  }
-  const direct = directCloudSaveBody(request, raw);
-  if (direct) return direct;
-  if (raw.byteLength === 0) return {};
-  const text = decodeStrictRequestUtf8(raw);
   try {
-    const parsed = JSON.parse(text);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? { ...parsed, requestId: null }
-      : parsed;
-  } catch {
-    const error = new Error("JSON 格式无效");
-    error.statusCode = 400;
-    error.code = "REQUEST_FORMAT_INVALID";
+    for await (const chunk of request) {
+      if (signal?.aborted) throw cloudUploadCancelledError(signal);
+      size += chunk.length;
+      if (size > descriptor.inputLimit) {
+        const error = new Error("请求内容超过允许上限");
+        error.statusCode = 413;
+        error.code = "REQUEST_BODY_TOO_LARGE";
+        throw error;
+      }
+      chunks.push(chunk);
+    }
+  } catch (error) {
+    if (signal?.aborted) throw cloudUploadCancelledError(signal);
     throw error;
   }
+  if (signal?.aborted) throw cloudUploadCancelledError(signal);
+  const raw = chunks.length > 0 ? Buffer.concat(chunks, size) : Buffer.alloc(0);
+  chunks.length = 0;
+  return inspect(raw, descriptor);
 }
 
 async function passwordRecord(password) {
@@ -1859,16 +1905,60 @@ function cloudSaveMetadata(save, slot = "main", mode = "normal") {
   } : null;
 }
 
-function validateSavePayload(payload) {
-  if (typeof payload !== "string" || payload.length < 10 || Buffer.byteLength(payload) > SAVE_PAYLOAD_LIMIT_BYTES) return false;
+function publicUploadInspection(inspection) {
+  if (!inspection) return null;
+  return {
+    payloadMode: inspection.payloadMode,
+    validPayload: inspection.validPayload,
+    legacyImplicitSpeedrun: inspection.legacyImplicitSpeedrun,
+    tooLarge: inspection.tooLarge,
+    payloadChecksum: inspection.payloadChecksum,
+    payloadSize: inspection.payloadSize,
+    summary: inspection.summary,
+    leaderboardProjection: inspection.leaderboardProjection,
+    integrity: inspection.integrity,
+    payloadParseCount: inspection.payloadParseCount,
+  };
+}
+
+function cloudUploadValidationFailure(inspection, effectiveMode) {
+  if (inspection.validPayload && inspection.payloadMode === effectiveMode) return null;
+  const integrityFailure = inspection.integrity && !inspection.integrity.valid && inspection.integrity.hasState;
+  const code = inspection.tooLarge
+    ? "SAVE_SIZE_TOO_LARGE"
+    : inspection.validPayload && inspection.payloadMode !== effectiveMode
+      ? "SAVE_MODE_MISMATCH"
+      : integrityFailure ? "SAVE_INTEGRITY_INVALID" : "SAVE_FORMAT_INVALID";
+  return {
+    status: inspection.tooLarge ? 413 : 400,
+    code,
+    error: inspection.tooLarge
+      ? `云存档体积过大，单个存档不能超过 ${Math.floor(SAVE_PAYLOAD_LIMIT_BYTES / 1024 / 1024 * 100) / 100} MB`
+      : integrityFailure
+        ? "云存档内部完整性校验失败，服务器已拒绝上传"
+        : "云存档格式无效，服务器已拒绝上传",
+    ...(code === "SAVE_MODE_MISMATCH" ? { expectedMode: effectiveMode, receivedMode: inspection.payloadMode } : {}),
+    ...(inspection.summary ? { summary: inspection.summary } : {}),
+  };
+}
+
+function sendCloudUploadValidationFailure(response, failure) {
+  return send(response, failure.status, {
+    error: failure.error,
+    code: failure.code,
+    directPayloadSupported: true,
+    ...(failure.expectedMode ? { expectedMode: failure.expectedMode, receivedMode: failure.receivedMode } : {}),
+    ...(failure.summary ? { summary: failure.summary } : {}),
+  });
+}
+
+function validateParsedSavePayload(parsed, integrity = inspectParsedSavePayloadIntegrity(parsed)) {
   try {
-    const integrity = inspectSavePayloadIntegrity(payload);
     if (!integrity.valid) return false;
-    const parsed = integrity.parsed;
     const state = parsed?.state ?? parsed;
     if (!state || typeof state !== "object" || !Array.isArray(state.entities) ||
       !Number.isInteger(state.version) || state.version < 1 || state.version > 46) return false;
-    if (savePayloadMode(payload) === null) return false;
+    if (savePayloadModeFromParsed(parsed) === null) return false;
     if (state.entities.some((entity) => !entity || typeof entity !== "object" ||
       (entity.machineCount !== undefined && (!Number.isSafeInteger(entity.machineCount) || entity.machineCount < 0)) ||
       (entity.minerCount !== undefined && (!Number.isSafeInteger(entity.minerCount) || entity.minerCount < 0)))) return false;
@@ -2180,6 +2270,133 @@ function validateSavePayload(payload) {
   }
 }
 
+function leaderboardProjectionFromState(state) {
+  if (!state || typeof state !== "object") return null;
+  const metrics = state.metrics && typeof state.metrics === "object" ? {
+    generationKw: state.metrics.generationKw,
+    totalItemsPerMinute: state.metrics.totalItemsPerMinute,
+  } : null;
+  const planetMetrics = state.planetMetrics && typeof state.planetMetrics === "object" && !Array.isArray(state.planetMetrics)
+    ? Object.fromEntries(Object.entries(state.planetMetrics).map(([planetId, value]) => [planetId, {
+      totalItemsPerMinute: value?.totalItemsPerMinute,
+    }]))
+    : null;
+  return {
+    version: state.version,
+    elapsedSeconds: state.elapsedSeconds,
+    totalProduced: state.totalProduced,
+    contentPacks: state.contentPacks,
+    // The integrity gate only needs to distinguish an empty factory from a
+    // non-empty one; never clone the full entity array back from the worker.
+    entities: Array.isArray(state.entities) && state.entities.length > 0 ? [true] : [],
+    metrics,
+    planetMetrics,
+    activePlanetId: state.activePlanetId,
+    exploration: state.exploration,
+    dysonSwarm: { generationKw: state.dysonSwarm?.generationKw },
+    dysonSphere: { generationKw: state.dysonSphere?.generationKw },
+  };
+}
+
+export function inspectDecodedCloudSaveUpload(rawBody, descriptor, { returnPayloadBuffer = false, parseJson = JSON.parse } = {}) {
+  const raw = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(rawBody ?? []);
+  let decoded = decodeStrictRequestUtf8(raw);
+  let payload = decoded;
+  let expectedRevision = descriptor.direct ? descriptor.expectedRevision : 0;
+  let requestId = descriptor.direct ? descriptor.requestId : null;
+  if (descriptor.direct) {
+    if (Number.isSafeInteger(descriptor.declaredOriginalBytes) && descriptor.declaredOriginalBytes !== raw.byteLength) {
+      const error = new Error("云存档原始字节数无效");
+      error.statusCode = 400;
+      error.code = "REQUEST_SIZE_INVALID";
+      throw error;
+    }
+  } else {
+    if (raw.byteLength === 0) {
+      const error = new Error("JSON 格式无效");
+      error.statusCode = 400;
+      error.code = "REQUEST_FORMAT_INVALID";
+      throw error;
+    }
+    let wrapper;
+    try {
+      wrapper = parseJson(decoded);
+    } catch {
+      const error = new Error("JSON 格式无效");
+      error.statusCode = 400;
+      error.code = "REQUEST_FORMAT_INVALID";
+      throw error;
+    }
+    if (!wrapper || typeof wrapper !== "object" || Array.isArray(wrapper)) {
+      const error = new Error("JSON 格式无效");
+      error.statusCode = 400;
+      error.code = "REQUEST_FORMAT_INVALID";
+      throw error;
+    }
+    payload = wrapper.payload;
+    expectedRevision = wrapper.expectedRevision;
+    requestId = null;
+    wrapper = null;
+    decoded = "";
+  }
+  const payloadSize = typeof payload === "string"
+    ? descriptor.direct ? raw.byteLength : Buffer.byteLength(payload)
+    : 0;
+  const tooLarge = typeof payload === "string" && payloadSize > descriptor.payloadLimit;
+  let parsed = null;
+  let parseSucceeded = false;
+  if (typeof payload === "string" && !tooLarge) {
+    try {
+      parsed = parseJson(payload);
+      parseSucceeded = true;
+    } catch {
+      parsed = null;
+    }
+  }
+  const integrity = parseSucceeded
+    ? inspectParsedSavePayloadIntegrity(parsed)
+    : { parsed: null, formatVersion: null, state: null, recordedChecksum: null, computedChecksum: null, valid: false };
+  const payloadMode = parseSucceeded ? savePayloadModeFromParsed(parsed) : null;
+  const validPayload = typeof payload === "string" && payload.length >= 10 && !tooLarge &&
+    validateParsedSavePayload(parsed, integrity);
+  const summary = parseSucceeded ? summarizeParsedSavePayload(parsed, integrity, payloadMode) : null;
+  const legacyImplicitSpeedrun = parseSucceeded && isLegacyImplicitSpeedrunParsed(parsed);
+  const payloadChecksum = validPayload ? sha256(descriptor.direct ? raw : payload) : null;
+  const leaderboardProjection = validPayload ? leaderboardProjectionFromState(integrity.state ?? parsed?.state ?? parsed) : null;
+  let payloadBuffer;
+  if (returnPayloadBuffer && validPayload) {
+    if (descriptor.direct) {
+      payloadBuffer = raw.byteOffset === 0 && raw.byteLength === raw.buffer.byteLength
+        ? raw.buffer
+        : raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
+    } else {
+      payloadBuffer = new TextEncoder().encode(payload).buffer;
+    }
+  }
+  parsed = null;
+  return {
+    payload: returnPayloadBuffer ? undefined : payload,
+    ...(returnPayloadBuffer ? { payloadBuffer } : {}),
+    expectedRevision,
+    requestId,
+    payloadMode,
+    validPayload,
+    legacyImplicitSpeedrun,
+    tooLarge,
+    payloadChecksum,
+    payloadSize,
+    summary,
+    leaderboardProjection,
+    integrity: {
+      valid: integrity.valid,
+      hasState: Boolean(integrity.state),
+      recordedChecksum: integrity.recordedChecksum,
+      computedChecksum: integrity.computedChecksum,
+    },
+    payloadParseCount: parseSucceeded ? 1 : 0,
+  };
+}
+
 function parseSaveState(payload) {
   try {
     const parsed = JSON.parse(payload);
@@ -2225,13 +2442,17 @@ function validAdjacentWindow(status, metricVersion, value, observedSeconds, prod
   };
 }
 
-function whiteMatrixRateFromAdjacentRevision(store, userId, currentSave, currentState) {
+function whiteMatrixRateFromAdjacentRevision(store, userId, currentSave, currentState, previousStateOverride = undefined) {
   const currentRevision = Number.isInteger(currentSave?.revision) ? currentSave.revision : 0;
   if (currentRevision <= 1) return unavailableAdjacentWindow("missing_adjacent_revision", WHITE_MATRIX_METRIC_VERSION, { toRevision: currentRevision || null });
   const previousMetadata = saveHistory(store, userId, "main").find((entry) => entry.revision === currentRevision - 1);
   if (!previousMetadata) return unavailableAdjacentWindow("missing_adjacent_revision", WHITE_MATRIX_METRIC_VERSION, { fromRevision: currentRevision - 1, toRevision: currentRevision });
-  const previousSave = materializeCloudSave(store, userId, "main", previousMetadata);
-  const previousState = parseSaveState(previousSave?.payload);
+  const previousSave = previousStateOverride === undefined
+    ? materializeCloudSave(store, userId, "main", previousMetadata)
+    : null;
+  const previousState = previousStateOverride === undefined
+    ? parseSaveState(previousSave?.payload)
+    : previousStateOverride;
   if (!previousState || typeof previousState !== "object" || !currentState || typeof currentState !== "object") {
     return unavailableAdjacentWindow("unavailable", WHITE_MATRIX_METRIC_VERSION, { fromRevision: currentRevision - 1, toRevision: currentRevision });
   }
@@ -2281,13 +2502,17 @@ function whiteMatrixRateFromAdjacentRevision(store, userId, currentSave, current
   );
 }
 
-function throughputRateFromAdjacentRevision(store, userId, currentSave, currentState) {
+function throughputRateFromAdjacentRevision(store, userId, currentSave, currentState, previousStateOverride = undefined) {
   const currentRevision = Number.isInteger(currentSave?.revision) ? currentSave.revision : 0;
   if (currentRevision <= 1) return unavailableAdjacentWindow("missing_adjacent_revision", THROUGHPUT_METRIC_VERSION, { toRevision: currentRevision || null });
   const previousMetadata = saveHistory(store, userId, "main").find((entry) => entry.revision === currentRevision - 1);
   if (!previousMetadata) return unavailableAdjacentWindow("missing_adjacent_revision", THROUGHPUT_METRIC_VERSION, { fromRevision: currentRevision - 1, toRevision: currentRevision });
-  const previousSave = materializeCloudSave(store, userId, "main", previousMetadata);
-  const previousState = parseSaveState(previousSave?.payload);
+  const previousSave = previousStateOverride === undefined
+    ? materializeCloudSave(store, userId, "main", previousMetadata)
+    : null;
+  const previousState = previousStateOverride === undefined
+    ? parseSaveState(previousSave?.payload)
+    : previousStateOverride;
   if (!previousState || typeof previousState !== "object" || !currentState || typeof currentState !== "object") {
     return unavailableAdjacentWindow("unavailable", THROUGHPUT_METRIC_VERSION, { fromRevision: currentRevision - 1, toRevision: currentRevision });
   }
@@ -2343,8 +2568,7 @@ function throughputRateFromAdjacentRevision(store, userId, currentSave, currentS
   );
 }
 
-function leaderboardMetricsFromSave(save, whiteMatrixWindow = null, throughputWindow = null) {
-  const state = parseSaveState(save?.payload);
+function leaderboardMetricsFromState(state, whiteMatrixWindow = null, throughputWindow = null) {
   if (!state || typeof state !== "object") return null;
   const generationKw = numberAt(state.metrics?.generationKw);
   const elapsedSeconds = numberAt(state.elapsedSeconds);
@@ -2369,6 +2593,10 @@ function leaderboardMetricsFromSave(save, whiteMatrixWindow = null, throughputWi
     exploredSystems,
     colonizedPlanets,
   });
+}
+
+function leaderboardMetricsFromSave(save, whiteMatrixWindow = null, throughputWindow = null) {
+  return leaderboardMetricsFromState(parseSaveState(save?.payload), whiteMatrixWindow, throughputWindow);
 }
 
 function mergeLeaderboardMetrics(previous, current, mergePreviousThroughput = true) {
@@ -2401,7 +2629,7 @@ function removeUserLeaderboardSubmissions(store, userId) {
   return removed;
 }
 
-function applyLeaderboardIntegrityGate(store, userId, currentSave, currentState) {
+function applyLeaderboardIntegrityGate(store, userId, currentSave, currentState, previousStateOverride = undefined) {
   // A restore created by this server is already protected by expectedRevision
   // and an audit entry. Its cumulative counters can legitimately be lower than
   // the immediately preceding revision, so it must not be treated as a forged
@@ -2410,11 +2638,15 @@ function applyLeaderboardIntegrityGate(store, userId, currentSave, currentState)
   if (Number.isInteger(currentSave?.restoredFromRevision)) {
     return { version: LEADERBOARD_INTEGRITY_VERSION, freeze: false, findings: [{ code: "SERVER_RESTORE", severity: "info" }] };
   }
-  const previousMetadata = Number.isInteger(currentSave?.revision) && currentSave.revision > 1
-    ? saveHistory(store, userId, "main").find((entry) => entry.revision === currentSave.revision - 1)
-    : null;
-  const previous = previousMetadata ? materializeCloudSave(store, userId, "main", previousMetadata) : null;
-  const result = evaluateLeaderboardIntegrity(currentState, parseSaveState(previous?.payload));
+  let previousState = previousStateOverride;
+  if (previousState === undefined) {
+    const previousMetadata = Number.isInteger(currentSave?.revision) && currentSave.revision > 1
+      ? saveHistory(store, userId, "main").find((entry) => entry.revision === currentSave.revision - 1)
+      : null;
+    const previous = previousMetadata ? materializeCloudSave(store, userId, "main", previousMetadata) : null;
+    previousState = parseSaveState(previous?.payload);
+  }
+  const result = evaluateLeaderboardIntegrity(currentState, previousState);
   if (!result.freeze) return result;
   const alreadyRestricted = isLeaderboardRestricted(store.data, userId);
   store.data.leaderboardModeration[userId] = {
@@ -2427,7 +2659,7 @@ function applyLeaderboardIntegrityGate(store, userId, currentSave, currentState)
   return result;
 }
 
-function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.now(), force = false } = {}) {
+function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.now(), force = false, inspection = null } = {}) {
   const user = store.data.users[userId];
   if (!user) return { changed: false, submission: null, reason: "missing-user" };
   if (isLeaderboardRestricted(store.data, userId)) {
@@ -2444,22 +2676,25 @@ function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.
   clearLeaderboardRevalidationIfSatisfied(store.data, userId, metadata.revision);
   const materialized = typeof metadata.payload === "string" ? metadata : materializeCloudSave(store, userId, "main", metadata);
   if (!materialized) return { changed: false, submission: null, reason: "missing-payload" };
-  const state = parseSaveState(materialized.payload);
+  const state = inspection?.leaderboardProjection ?? parseSaveState(materialized.payload);
   if (Array.isArray(state?.contentPacks) && state.contentPacks.length > 0) {
     return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "modded-save" };
   }
-  const integrity = applyLeaderboardIntegrityGate(store, userId, materialized, state);
+  const previousMetadata = Number.isInteger(materialized.revision) && materialized.revision > 1
+    ? saveHistory(store, userId, "main").find((entry) => entry.revision === materialized.revision - 1)
+    : null;
+  const previousMaterialized = previousMetadata ? materializeCloudSave(store, userId, "main", previousMetadata) : null;
+  const previousState = parseSaveState(previousMaterialized?.payload);
+  const integrity = applyLeaderboardIntegrityGate(store, userId, materialized, state, previousState);
   if (integrity.freeze) {
     return { changed: removeUserLeaderboardSubmissions(store, userId) > 0, submission: null, reason: "integrity-frozen", integrity };
   }
-  const whiteMatrixWindow = whiteMatrixRateFromAdjacentRevision(store, userId, materialized, state);
-  const throughputWindow = throughputRateFromAdjacentRevision(store, userId, materialized, state);
+  const whiteMatrixWindow = whiteMatrixRateFromAdjacentRevision(store, userId, materialized, state, previousState);
+  const throughputWindow = throughputRateFromAdjacentRevision(store, userId, materialized, state, previousState);
   rememberLeaderboardWindows(store, userId, materialized.revision, whiteMatrixWindow, throughputWindow);
-  const observed = leaderboardMetricsFromSave(
-    materialized,
-    whiteMatrixWindow,
-    throughputWindow,
-  );
+  const observed = inspection?.leaderboardProjection
+    ? leaderboardMetricsFromState(state, whiteMatrixWindow, throughputWindow)
+    : leaderboardMetricsFromSave(materialized, whiteMatrixWindow, throughputWindow);
   if (!observed) return { changed: false, submission: null, reason: "invalid-save" };
   const key = `${ACTIVE_LEADERBOARD_SEASON_ID}:${userId}`;
   const previous = store.data.submissions[key];
@@ -2901,6 +3136,9 @@ export async function createCloudServer({
   activityConfigFile = process.env.DSP_ACTIVITY_CONFIG_FILE || "",
   activityConfig = null,
   persistenceFaultInjector = null,
+  uploadInspectionConcurrency = Number(process.env.DSP_UPLOAD_INSPECTION_CONCURRENCY || 2),
+  uploadInspectionQueueLimit = Number(process.env.DSP_UPLOAD_INSPECTION_QUEUE_LIMIT || 16),
+  uploadInspectionWorkerThresholdBytes = Number(process.env.DSP_UPLOAD_INSPECTION_WORKER_THRESHOLD_BYTES || 1024 * 1024),
   logger = console,
 } = {}) {
   const store = databaseFile
@@ -2936,6 +3174,12 @@ export async function createCloudServer({
   const rateLimit = createRateLimiter();
   const registrationRateLimit = createRateLimiter();
   const loginFailureGuard = createLoginFailureGuard();
+  const uploadInspections = new UploadInspectionScheduler({
+    inspectInline: inspectDecodedCloudSaveUpload,
+    concurrency: uploadInspectionConcurrency,
+    queueLimit: uploadInspectionQueueLimit,
+    workerThresholdBytes: uploadInspectionWorkerThresholdBytes,
+  });
   const runtime = {
     requests: 0,
     errors: 0,
@@ -3072,17 +3316,19 @@ export async function createCloudServer({
     : null;
   historyPruneTimer?.unref?.();
 
-  const handleRequest = async (request, response, atomicRequest) => {
-    const requestStartedAt = performance.now();
-    response.once("finish", () => {
-      const durationMs = Math.max(0, performance.now() - requestStartedAt);
-      runtime.latencies.push(durationMs);
-      if (runtime.latencies.length > 2000) runtime.latencies.splice(0, runtime.latencies.length - 2000);
-      if (response.statusCode === 429) runtime.rateLimited += 1;
-      if (durationMs >= 1_000) runtime.slowRequests += 1;
-      runtime.maxRequestMs = Math.max(runtime.maxRequestMs, durationMs);
-    });
-    runtime.requests += 1;
+  const handleRequest = async (request, response, atomicRequest, { preludeProcessed = false } = {}) => {
+    if (!preludeProcessed) {
+      const requestStartedAt = performance.now();
+      response.once("finish", () => {
+        const durationMs = Math.max(0, performance.now() - requestStartedAt);
+        runtime.latencies.push(durationMs);
+        if (runtime.latencies.length > 2000) runtime.latencies.splice(0, runtime.latencies.length - 2000);
+        if (response.statusCode === 429) runtime.rateLimited += 1;
+        if (durationMs >= 1_000) runtime.slowRequests += 1;
+        runtime.maxRequestMs = Math.max(runtime.maxRequestMs, durationMs);
+      });
+      runtime.requests += 1;
+    }
     const day = metricDay(Date.now(), metricsTimeZone);
     const storedDayMetric = store.data.dailyMetrics[day] ?? { requests: 0, errors: 0, feedback: 0, leaderboardSubmissions: 0, cloudUploads: 0, players: 0 };
     const dayMetric = atomicRequest ? storedDayMetric : { ...storedDayMetric };
@@ -3091,36 +3337,37 @@ export async function createCloudServer({
     }
     dayMetric.requests += 1;
     if (atomicRequest) store.data.dailyMetrics[day] = dayMetric;
-    const origin = request.headers.origin;
-    if (origin) response.setHeader("vary", "Origin");
-    if (origin && allowedOrigins.has(origin)) response.setHeader("access-control-allow-origin", origin);
-    if (origin && allowedOrigins.size > 0 && !allowedOrigins.has(origin)) return send(response, 403, { error: "来源未获授权" });
-    response.setHeader("access-control-allow-headers", [
-      "authorization",
-      "content-type",
-      "content-encoding",
-      "content-transfer-encoding",
-      cloudTransferContract.expectedRevisionHeader,
-      cloudTransferContract.requestIdHeader,
-      cloudTransferContract.originalBytesHeader,
-      cloudTransferContract.compressedBytesHeader,
-      "x-dsp-save-mode",
-    ].join(", "));
-    response.setHeader("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS");
-    if (request.method === "OPTIONS") return send(response, 204, {});
-
     const url = new URL(request.url || "/", "http://localhost");
     const ip = requestIp(request);
-    const routeKey = `${ip}:${request.method}:${url.pathname}`;
-    const routeLimit = url.pathname.startsWith("/api/auth/")
-      ? 12
-      : url.pathname === "/api/presence"
-        ? 10
-        : url.pathname === "/api/analytics"
-          ? 30
-          : 120;
-    if (!rateLimit(routeKey, routeLimit, 60_000)) {
-      return send(response, 429, { error: "请求过于频繁，请稍后再试" }, { "retry-after": "60" });
+    if (!preludeProcessed) {
+      const origin = request.headers.origin;
+      if (origin) response.setHeader("vary", "Origin");
+      if (origin && allowedOrigins.has(origin)) response.setHeader("access-control-allow-origin", origin);
+      if (origin && allowedOrigins.size > 0 && !allowedOrigins.has(origin)) return send(response, 403, { error: "来源未获授权" });
+      response.setHeader("access-control-allow-headers", [
+        "authorization",
+        "content-type",
+        "content-encoding",
+        "content-transfer-encoding",
+        cloudTransferContract.expectedRevisionHeader,
+        cloudTransferContract.requestIdHeader,
+        cloudTransferContract.originalBytesHeader,
+        cloudTransferContract.compressedBytesHeader,
+        "x-dsp-save-mode",
+      ].join(", "));
+      response.setHeader("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS");
+      if (request.method === "OPTIONS") return send(response, 204, {});
+      const routeKey = `${ip}:${request.method}:${url.pathname}`;
+      const routeLimit = url.pathname.startsWith("/api/auth/")
+        ? 12
+        : url.pathname === "/api/presence"
+          ? 10
+          : url.pathname === "/api/analytics"
+            ? 30
+            : 120;
+      if (!rateLimit(routeKey, routeLimit, 60_000)) {
+        return send(response, 429, { error: "请求过于频繁，请稍后再试" }, { "retry-after": "60" });
+      }
     }
 
     try {
@@ -3194,6 +3441,7 @@ export async function createCloudServer({
             maxWriteQueueDepth: store.maxPendingWriteOperations ?? 0,
             slowWrites: store.slowWriteCount ?? 0,
             lastWriteDurationMs: Math.round((store.lastWriteDurationMs ?? 0) * 100) / 100,
+            uploadInspections: uploadInspections.snapshot(),
             loginSecurity: loginFailureGuard.metrics(),
           },
           accounts: {
@@ -3700,7 +3948,7 @@ export async function createCloudServer({
         }
         const materialized = materializeCloudSave(store, auth.user.id, slot, save, effectiveMode);
         if (save && !materialized) return send(response, 500, { error: "云存档正文缺失，请联系管理员恢复备份", code: "CLOUD_SAVE_PAYLOAD_MISSING" });
-        return send(response, 200, { cloudSave: materialized ? { ...cloudSaveMetadata(materialized, slot, effectiveMode), payload: materialized.payload } : null, mode: effectiveMode, slot });
+        return sendCloudSaveDownload(response, materialized, effectiveMode, slot);
       }
 
       if (request.method === "DELETE" && url.pathname === "/api/cloud-save") {
@@ -3728,6 +3976,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "PUT" && url.pathname === "/api/cloud-save") {
+        const preparedUpload = request.preparedCloudUpload;
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
@@ -3740,32 +3989,26 @@ export async function createCloudServer({
             return send(response, 507, { error: "云节点磁盘已达到 90% 保护阈值，上传暂时停止；本地存档未修改", code: "STORAGE_PROTECTION_ACTIVE" });
           }
         }
-        const body = await readCloudSaveUpload(request);
-        const payloadMode = typeof body.payload === "string" ? savePayloadMode(body.payload) : null;
-        const validPayload = validateSavePayload(body.payload);
-        const legacyImplicitSpeedrun = url.searchParams.get("mode") === null && typeof body.payload === "string" && isLegacyImplicitSpeedrunPayload(body.payload);
-        const effectiveMode = legacyImplicitSpeedrun ? "speedrun" : mode;
-        if (!validPayload || payloadMode !== effectiveMode) {
-           const integrity = typeof body.payload === "string" ? inspectSavePayloadIntegrity(body.payload) : null;
-           const summary = typeof body.payload === "string" ? summarizeSavePayload(body.payload) : null;
-           const tooLarge = typeof body.payload === "string" && Buffer.byteLength(body.payload) > SAVE_PAYLOAD_LIMIT_BYTES;
-           return send(response, tooLarge ? 413 : 400, {
-             error: tooLarge
-               ? `云存档体积过大，单个存档不能超过 ${Math.floor(SAVE_PAYLOAD_LIMIT_BYTES / 1024 / 1024 * 100) / 100} MB`
-               : integrity && !integrity.valid && integrity.state
-                 ? "云存档内部完整性校验失败，服务器已拒绝上传"
-                 : "云存档格式无效，服务器已拒绝上传",
-             code: tooLarge
-               ? "SAVE_SIZE_TOO_LARGE"
-               : validPayload && payloadMode !== effectiveMode ? "SAVE_MODE_MISMATCH"
-                 : integrity && !integrity.valid && integrity.state ? "SAVE_INTEGRITY_INVALID" : "SAVE_FORMAT_INVALID",
-             directPayloadSupported: true,
-             ...(validPayload && payloadMode !== effectiveMode ? { expectedMode: effectiveMode, receivedMode: payloadMode } : {}),
-             ...(summary ? { summary } : {}),
-           });
+        if (!preparedUpload) return { deferredCloudUpload: true };
+        const body = preparedUpload?.body;
+        if (!body) {
+          const error = new Error("云存档上传尚未完成检查");
+          error.statusCode = 503;
+          error.code = "UPLOAD_INSPECTION_FAILED";
+          error.retryAfterSeconds = 1;
+          throw error;
         }
-        const payloadChecksum = sha256(body.payload);
-        const payloadSize = Buffer.byteLength(body.payload);
+        const payloadMode = body.payloadMode;
+        const validPayload = body.validPayload;
+        const legacyImplicitSpeedrun = url.searchParams.get("mode") === null && body.legacyImplicitSpeedrun;
+        const effectiveMode = legacyImplicitSpeedrun ? "speedrun" : mode;
+        const validationFailure = cloudUploadValidationFailure(body, effectiveMode);
+        if (validationFailure) {
+          uploadInspections.recordRejection(validationFailure.code);
+          return sendCloudUploadValidationFailure(response, validationFailure);
+        }
+        const payloadChecksum = body.payloadChecksum;
+        const payloadSize = body.payloadSize;
         const operationFingerprint = body.requestId ? cloudPutOperationFingerprint({
           userId: auth.user.id,
           mode: effectiveMode,
@@ -3800,13 +4043,16 @@ export async function createCloudServer({
           checksum: payloadChecksum,
           size: payloadSize,
           updatedAt: Date.now(),
-          summary: summarizeSavePayload(body.payload),
+          summary: body.summary,
           ...(legacyImplicitSpeedrun ? { legacyMode: true } : {}),
         };
         appendSaveRevision(store, auth.user.id, next, slot, effectiveMode);
         if (slot === "main") {
           clearLeaderboardRevalidationIfSatisfied(store.data, auth.user.id, next.revision, effectiveMode);
-          if (effectiveMode === "normal") updateLeaderboardFromMainSave(store, auth.user.id, { save: next });
+          if (effectiveMode === "normal") updateLeaderboardFromMainSave(store, auth.user.id, {
+            save: next,
+            inspection: publicUploadInspection(body),
+          });
         }
         dayMetric.cloudUploads += 1;
         const metadata = cloudSaveMetadata(next, slot, effectiveMode);
@@ -3987,13 +4233,15 @@ export async function createCloudServer({
 
       return send(response, 404, { error: "接口不存在" });
     } catch (error) {
+      if (error?.code === "DOWNLOAD_CANCELLED") return undefined;
+      if (response.headersSent) throw error;
       runtime.errors += 1;
       dayMetric.errors += 1;
       logger.error?.("cloud request failed", error);
       return send(response, error?.statusCode || 500, {
         error: error?.statusCode ? error.message : "服务暂时不可用",
         ...(error?.code ? { code: error.code } : {}),
-      });
+      }, Number.isInteger(error?.retryAfterSeconds) ? { "retry-after": String(error.retryAfterSeconds) } : {});
     }
   };
   const server = http.createServer((request, response) => {
@@ -4008,21 +4256,83 @@ export async function createCloudServer({
       response.setHeader("connection", "close");
       return send(response, 503, { error: "服务正在安全关闭，请稍后重试", code: "SERVER_SHUTTING_DOWN" }, { "retry-after": "1" });
     }
-    const operation = () => handleRequest(request, response, atomicRequest);
-    const handled = atomicRequest ? store.runAtomic(operation) : operation();
+    const cloudUpload = request.method === "PUT" && requestUrl.pathname === "/api/cloud-save";
+    const operation = async () => {
+      if (!cloudUpload) return handleRequest(request, response, atomicRequest);
+      const preliminary = await handleRequest(request, response, false);
+      if (!preliminary?.deferredCloudUpload || response.writableEnded) return preliminary;
+      const contentLengthHeader = request.headers["content-length"];
+      const contentLength = typeof contentLengthHeader === "string" && /^\d{1,12}$/.test(contentLengthHeader)
+        ? Number(contentLengthHeader)
+        : null;
+      let uploadDescriptor;
+      try {
+        uploadDescriptor = cloudSaveUploadDescriptor(request);
+      } catch (error) {
+        uploadInspections.recordRejection(error?.code);
+        throw error;
+      }
+      if (Number.isSafeInteger(contentLength) && contentLength > uploadDescriptor.inputLimit) {
+        uploadInspections.recordRejection("REQUEST_BODY_TOO_LARGE");
+        return send(response, 413, { error: "请求内容超过允许上限", code: "REQUEST_BODY_TOO_LARGE" });
+      }
+      const scheduled = uploadInspections.shouldSchedule({
+        encoding: uploadDescriptor.encoding,
+        contentLength,
+        declaredOriginalBytes: uploadDescriptor.declaredOriginalBytes,
+      });
+      const disconnect = new AbortController();
+      const onAborted = () => disconnect.abort();
+      const onResponseClose = () => {
+        if (!response.writableEnded) disconnect.abort();
+      };
+      request.once("aborted", onAborted);
+      response.once("close", onResponseClose);
+      try {
+        return await uploadInspections.run(
+          async ({ inspect, signal }) => {
+            const body = await readCloudSaveUpload(request, inspect, uploadDescriptor, signal);
+            const requestedMode = normalizedCloudSaveMode(requestUrl.searchParams.get("mode") ?? "normal");
+            const effectiveMode = requestUrl.searchParams.get("mode") === null && body.legacyImplicitSpeedrun
+              ? "speedrun"
+              : requestedMode;
+            const validationFailure = effectiveMode ? cloudUploadValidationFailure(body, effectiveMode) : null;
+            if (validationFailure) {
+              uploadInspections.recordRejection(validationFailure.code);
+              return sendCloudUploadValidationFailure(response, validationFailure);
+            }
+            request.preparedCloudUpload = { body };
+            try {
+              return await store.runAtomic(() => {
+                if (signal.aborted) throw cloudUploadCancelledError(signal);
+                return handleRequest(request, response, true, { preludeProcessed: true });
+              });
+            } finally {
+              request.preparedCloudUpload = null;
+            }
+          },
+          { scheduled, signal: disconnect.signal },
+        );
+      } finally {
+        request.removeListener("aborted", onAborted);
+        response.removeListener("close", onResponseClose);
+      }
+    };
+    const handled = cloudUpload ? operation() : atomicRequest ? store.runAtomic(operation) : operation();
     void handled.catch((error) => {
       logger.error?.("cloud request transaction failed", error);
       if (!response.headersSent) {
         send(response, error?.statusCode || 500, {
           error: error?.statusCode ? error.message : "服务暂时不可用",
           ...(error?.code ? { code: error.code } : {}),
-        });
+        }, Number.isInteger(error?.retryAfterSeconds) ? { "retry-after": String(error.retryAfterSeconds) } : {});
       } else if (!response.writableEnded) response.destroy(error);
     });
   });
 
   server.store = store;
   server.leaderboardBackfill = leaderboardBackfill;
+  server.uploadInspections = uploadInspections;
   server.requestTimeout = Number.isFinite(requestTimeoutMs)
     ? Math.max(cloudTransferContract.maximumTimeoutMs + 10_000, Math.floor(requestTimeoutMs))
     : cloudTransferContract.maximumTimeoutMs + 10_000;
@@ -4041,6 +4351,7 @@ export async function createCloudServer({
     if (!runtime.shuttingDown) {
       runtime.shuttingDown = true;
       store.beginShutdown();
+      uploadInspections.close();
       clearInterval(flushMetrics);
       if (backupTimer) clearInterval(backupTimer);
       if (historyPruneTimer) clearInterval(historyPruneTimer);
