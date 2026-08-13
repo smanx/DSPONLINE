@@ -1,0 +1,98 @@
+{
+  "contractVersion": 1,
+  "generatorVersion": "p2-06-v1",
+  "gameStateVersion": 46,
+  "envelopeVersion": 2,
+  "seed": 1040406,
+  "savedAt": 1767225600000,
+  "profiles": {
+    "1m": {
+      "targetBytes": 1048576,
+      "normalResourceMode": "finite",
+      "normal": {
+        "sha256": "99a58b5c9eee41cd2cef2173f30d40cbd1b5b761b58d4ca77418296030b5eb67",
+        "stateChecksum": "3eb1c8c9",
+        "entityCount": 963,
+        "beltCount": 1699,
+        "paddingBytes": 24
+      },
+      "speedrun": {
+        "sha256": "9f56df536aa3d4398c6367b1ab31c700d537bb12379ad9f0d69ea23a0055bb62",
+        "stateChecksum": "fe60be7d",
+        "entityCount": 963,
+        "beltCount": 1697,
+        "paddingBytes": 249
+      }
+    },
+    "8m": {
+      "targetBytes": 8388608,
+      "normalResourceMode": "infinite",
+      "normal": {
+        "sha256": "4a30118aa0977dc700f61eebfb98376946dc8a2718a03ec78c3e49aa8ebbd6c1",
+        "stateChecksum": "bb34c921",
+        "entityCount": 7727,
+        "beltCount": 13909,
+        "paddingBytes": 113
+      },
+      "speedrun": {
+        "sha256": "dc642d4751927440513417bf398a69230f976865159c7164078dba41483c2f87",
+        "stateChecksum": "03e7506d",
+        "entityCount": 7727,
+        "beltCount": 13907,
+        "paddingBytes": 216
+      }
+    },
+    "20m": {
+      "targetBytes": 20971520,
+      "normalResourceMode": "finite",
+      "normal": {
+        "sha256": "158d4d41773c6076f35dd1f9b3196d54532ab31b2a8ae9793d09bafc2149f7ae",
+        "stateChecksum": "b3fe8a52",
+        "entityCount": 19299,
+        "beltCount": 34838,
+        "paddingBytes": 256
+      },
+      "speedrun": {
+        "sha256": "ebb1d2f13b963a278c930aa8e2e8659f974d5d5fa4e2070aa2ca0aad4d4ca0ad",
+        "stateChecksum": "e89ed319",
+        "entityCount": 19298,
+        "beltCount": 34838,
+        "paddingBytes": 300
+      }
+    },
+    "29m": {
+      "targetBytes": 30408704,
+      "normalResourceMode": "infinite",
+      "normal": {
+        "sha256": "26456571f55bd4e7afef15556318839254e3156d83286e331d5d0e38d8e893e7",
+        "stateChecksum": "b59fec7f",
+        "entityCount": 27977,
+        "beltCount": 50538,
+        "paddingBytes": 138
+      },
+      "speedrun": {
+        "sha256": "59e7f03cc43e45790c2eb87818c15550d61f41a72d624285d1a114f63f36ec6c",
+        "stateChecksum": "ed16ca0e",
+        "entityCount": 27976,
+        "beltCount": 50538,
+        "paddingBytes": 134
+      }
+    }
+  },
+  "coverage": [
+    "entities",
+    "belts",
+    "building-stacks",
+    "power",
+    "traditional-logistics",
+    "quantum-logistics",
+    "dyson",
+    "research",
+    "fluids",
+    "byproducts",
+    "recursive-manufacturing",
+    "finite-veins",
+    "infinite-veins",
+    "cache-boundaries"
+  ]
+}
