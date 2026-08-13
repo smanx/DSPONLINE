@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
+    <!-- Player-authored normal/speedrun saves live in this IndexedDB tree. -->
+    <include domain="root" path="app_webview/Default/IndexedDB" />
+
+    <!-- Never copy cloud credentials, cookies, or legacy localStorage tokens. -->
+    <exclude domain="sharedpref" path="dsp_secure_session_v1.xml" />
+    <exclude domain="file" path="private-exports" />
+    <exclude domain="root" path="app_webview/Default/Local Storage" />
+    <exclude domain="root" path="app_webview/Default/Cookies" />
+    <exclude domain="root" path="app_webview/Default/Cookies-journal" />
     <exclude domain="root" path="app_webview/Default/Cache" />
     <exclude domain="root" path="app_webview/Default/Code Cache" />
     <exclude domain="root" path="app_webview/Default/GPUCache" />

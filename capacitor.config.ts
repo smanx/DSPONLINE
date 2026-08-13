@@ -17,6 +17,16 @@ const config: CapacitorConfig = {
     captureInput: true,
     webContentsDebuggingEnabled: androidDebug,
     minWebViewVersion: 119,
+    // Keep generic native file readers out of the WebView. Android exports
+    // use narrow, write-only project plugins so account archives cannot be
+    // enumerated through @capacitor/filesystem after an injected script.
+    includePlugins: [
+      "@capacitor/app",
+      "@capacitor/browser",
+      "@capacitor/network",
+      "@capacitor/splash-screen",
+      "@capacitor/status-bar",
+    ],
   },
   server: {
     hostname: "localhost",
