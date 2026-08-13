@@ -33,9 +33,6 @@ export interface OfflineComplexityReport {
   warning?: string;
 }
 
-export function offlineProfileLabel(profile: OfflineSaveProfile): string {
-  if (profile === "simple") return "简单存档";
-  if (profile === "stable-endgame") return "稳定终局档";
-  if (profile === "volatile-endgame") return "物流波动终局档";
-  return "复杂边界终局档";
-}
+// Compatibility re-export for factory modules that already import the label
+// from this contract. Start-menu code imports the presentation module directly.
+export { offlineProfileLabel } from "./offlineComplexityLabels";
