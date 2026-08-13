@@ -1,23 +1,23 @@
 # 公开测试版后续路线图
 
-> **方向变更（2026-07-31）**：终局物流性能工作改为量子物流网络，当前本地开发状态为 GameState v44；有效资产的 v43 空间站实验存档不迁入共享池。传统物流站升级入口仍作为兼容面维护。详见 [量子物流网络开发 Agent 提示词](./QUANTUM_LOGISTICS_NETWORK_AGENT_PROMPT.md)。
+> **方向变更（2026-07-31，历史决策）**：终局物流性能工作改为量子物流网络；当时开发状态为 GameState v44。当前 1.0.40 候选继续使用 GameState v46，有效资产的 v43 空间站实验存档仍不迁入共享池，传统物流站升级入口继续作为兼容面维护。详见 [量子物流网络开发 Agent 提示词](./QUANTUM_LOGISTICS_NETWORK_AGENT_PROMPT.md)。
 
 ## 决策原则
 
 首个版本已经上线。下一阶段应从“继续增加功能”切换到“让现有版本能被可靠发布、长期保存、诊断和恢复”。下面按依赖顺序安排，不把尚未实现的内容写入项目现状。
 
-## 1.0.40 大版本总计划（功能实现完成，FINAL 候选门禁中）
+## 1.0.40 大版本总计划（开发与候选交接完成，未部署）
 
 > 2026-08-13 已确认把 1.0.39 全项目复盘事项作为 1.0.40 大版本统一开发。权威范围、验收标准、实施顺序、兼容矩阵和回滚边界见 [1.0.40 大版本开发总纲](./1.0.40_MAJOR_DEVELOPMENT_PLAN.md)。
 
 - [x] 银河排行榜当前账号真实名次与窗口状态修复；这是已完成并通过门禁的第 1 项，尚未部署。
 - [x] P0：Windows/全端 30 MiB 内大存档云传输契约统一。
 - [x] P0：浏览器多标签页本地存档 lease/fencing 防覆盖。IndexedDB v2 内部协调元数据、Web Lock 串行化、BroadcastChannel/storage 通知、逐键 revision/tombstone、冲突双副本与只读/接管 UI 已完成；GameState/envelope 和存档正文不变。
-- [x] P0：Web/Windows/Android/API 的 30 MiB 云传输契约统一。直接正文与旧 JSON 包装边界分离，gzip、动态超时、Windows 分片、Worker SHA-256 和不确定提交只读确认已完成；最终候选仍需完整复验与原生制品门禁。
+- [x] P0：Web/Windows/Android/API 的 30 MiB 云传输契约统一。直接正文与旧 JSON 包装边界分离，gzip、动态超时、Windows 分片、Worker SHA-256 和不确定提交只读确认已完成；固定候选完整复验通过，正式签名与实体设备仍为 Release Agent 门禁。
 - [x] P1：SQLite 持久化原子可见性、云容量/流式导出、上传单次解析、API/会话安全、低中断发布、本地快照容量和速通云恢复入口。
 - [x] P2：PWA 更新回退、首屏和内存、字体/弹窗可访问性、服务端规模化、共享存档字段契约、大型合成夹具、CI/供应链和文档/监控。
 - [x] P3：仅对本版触达的大模块做有界拆分，新文案使用稳定 i18n key，不进行无边界重写；上传检查、归档、配额、会话、运行索引/持久化、本地协调、共享弹窗和工作区 CSS 均已有窄模块与测试。
-- [ ] 全量 Web/API/Windows/Android 候选验证，生成 clean SHA、唯一 Build ID、不可变 SHA-256 清单和 Release Agent 交接；开发阶段不部署生产。
+- [x] 全量 Web/API/Windows/Android 候选验证完成；固定运行时 SHA `58d3e6f986ec…`、Build ID `1.0.40+58d3e6f986ec`、6 个制品 SHA-256、SBOM、provenance 和 Release Agent 交接已生成。Android/Windows 为未签名诊断制品，正式证书、实体设备、隔离 Linux 与生产备份副本仍是发布门禁；开发阶段未部署生产。
 
 ## 2026-08-02 紧急稳定性、云存档与蓝图界面专项（待开发）
 

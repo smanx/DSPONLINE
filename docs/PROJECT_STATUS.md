@@ -8,15 +8,15 @@
 
 > `1.0.40` 开发批次第 1 项已在隔离分支完成实现并通过完整门禁：匿名 `GET /api/leaderboard` 继续只返回公开 Top 100，新增认证只读 `GET /api/leaderboard/me` 在完整公开 submission 集合中返回当前账号真实名次，并区分缺普通主云档、缺相邻修订、59 秒窗口、计时不增长、有效零产出、复核等待、隐藏和限制。UI 将服务器认证成绩与本地 60 秒最佳值分栏，白糖未知显示 `--`，Top 100 外显示真实 `#N`。本项不改变存档、云 revision、submission、排行榜历史、GameState v46、envelope v2、云 schema v7 或 SQLite layout v2，尚未部署生产环境；开发证据见 [1.0.40 银河排行榜“未上榜”状态修复](./feedback/2026-08-12-1.0.40-银河排行榜未上榜-Bug.md)。
 
-> 2026-08-13 的 1.0.40 隔离开发分支已完成 [大版本开发总纲](./1.0.40_MAJOR_DEVELOPMENT_PLAN.md) 中 BASE、P0、P1、P2 与 P3 的运行时代码、专项回归和有界拆分：包括全端大存档传输、多标签页防覆盖、SQLite 原子持久化、容量与流式归档、API/会话安全、PWA、首屏与可访问性、服务端规模化、共享存档契约、合成大夹具和可验证 CI。当前只剩 FINAL-01：从固定 clean SHA 重跑全量门禁、生成唯一 Build ID、候选制品/SBOM/provenance 和 Release Agent 交接。这里描述的是尚未部署的开发候选；线上 Web/API 仍为 1.0.39，开发过程没有连接生产写入、覆盖玩家存档或修改排行榜历史。
+> 2026-08-13 的 1.0.40 隔离开发分支已完成 [大版本开发总纲](./1.0.40_MAJOR_DEVELOPMENT_PLAN.md) 中 BASE、P0、P1、P2、P3 与开发侧 FINAL-01。固定运行时源码为 `58d3e6f986ec098061a0a2109e149e1065a12c48`，Build ID 为 `1.0.40+58d3e6f986ec`；Vitest 1180/18、server 343/2、ops 34/34、native 24/24、Chromium 327/2、Firefox/WebKit 2/2、生产预览 PWA 1/1，均 0 失败。Web/API/source、6 个候选制品、206 文件 manifest、SBOM 和 provenance 已复验；Android/Windows 仅为未签名诊断制品。这里描述的是尚未部署的开发候选；线上 Web/API 仍为 1.0.39，开发过程没有连接生产写入、覆盖玩家存档或修改排行榜历史。完整证据见 [1.0.40 候选记录](./releases/1.0.40-candidate.md) 和 [Release Agent 交接](./RELEASE_HANDOFF_1.0.40.md)。
 
 > 1.0.40 本地急救保存补充了刷新写入链证明：页面生命周期的同步镜像使用独立 payload/metadata 键，只有 writerId、fencing token、逐键 revision、模式、savedAt、checksum 与持久租约全部连续时才自动提交；崩溃在两次 localStorage 写入之间、元数据损坏、其他标签页来源或候选 checksum/模式不一致时均保留 candidate/persisted 两份原文并要求玩家选择。可信刷新、半写崩溃、损坏候选、普通/速通槽位和租约接管 Chromium 13/13 通过；不会凭时间戳静默删除未知镜像。
 
-> 1.0.40 当前 UI 版本元数据统一为 1.0.40，Android versionCode 为 1000040；新发布说明使用 `src/i18n/releaseNotes.ts` 稳定中英键，1.0.39 稀疏云档热修作为独立历史条目保留。发布说明、设置、存档/云冲突、命令面板、托盘和离线决策复用共享焦点/inert/危险确认边界；Chromium axe 关键页面与 Firefox/WebKit 核心键盘旅程专项通过。版本号不代表已经生成或发布正式原生制品。
+> 1.0.40 UI 版本元数据统一为 1.0.40，Android versionCode 为 1000040；新发布说明使用 `src/i18n/releaseNotes.ts` 稳定中英键，1.0.39 稀疏云档热修作为独立历史条目保留。发布说明、设置、存档/云冲突、命令面板、托盘和离线决策复用共享焦点/inert/危险确认边界；Chromium axe 关键页面与 Firefox/WebKit 核心键盘旅程通过。开发侧 Windows unpacked 与 Android APK/AAB 已生成但未签名、禁止进入 stable；正式原生制品仍须 Release Agent 使用批准证书/既有策略重建。
 
 > `1.0.40` P0-02 多标签页本地存档防覆盖已完成开发：同一浏览器只有 writer lease 持有页可写，逐键 revision/tombstone 与 fencing token 在同一 IndexedDB 事务中核对正文，分叉时保留 candidate/persisted 双副本并明确提示玩家选择；Web Locks/BroadcastChannel 不可用时仍由 IndexedDB lease 和 storage 事件保护。内部数据库版本从 1 原地提升到 2，只关闭旧连接，不改变 object store、GameState v46、envelope v2 或任何已有存档字节。当前门禁为全量 Vitest 957/18、P0-02 Chromium 9/9、旧恢复与新协调联合 E2E 13/13、typecheck 和 build 通过；该项尚未部署。
 
-> `1.0.40` P0-01 全端大存档云传输已完成开发：30 MiB 合法正文使用共享契约、直接正文上传、gzip、动态超时、精确 SHA-256 超时确认和 Windows 1 MiB 有背压分片；旧 1.0.39 JSON/raw/gzip 协议继续兼容，旧包装可在 65 MiB 请求边界内承载最坏转义的 30 MiB 存档，但单存档本身仍受约 32 MiB 限制。取消/超时后不再自动重传，只有服务端明确拒绝 gzip 或旧 API 明确不识别直接正文时才进行一次安全兼容回退。专项已通过 1/7/8/20/28/30 MiB 客户端矩阵、真实临时 SQLite 的约 30 MiB direct raw/gzip/最坏旧包装往返、30 MiB Electron 分片 ACK 双向烟测、Android/Windows 平台构建、真实 API 发布目录启动、v46 稀疏兼容、严格 UTF-8/BOM 拒绝和 gzip 炸弹测试；该项尚未部署，最终候选仍须重跑完整门禁。
+> `1.0.40` P0-01 全端大存档云传输已完成开发与固定候选全量复验：30 MiB 合法正文使用共享契约、直接正文上传、gzip、动态超时、精确 SHA-256 超时确认和 Windows 1 MiB 有背压分片；旧 1.0.39 JSON/raw/gzip 协议继续兼容，旧包装可在 65 MiB 请求边界内承载最坏转义的 30 MiB 存档，但单存档本身仍受约 32 MiB 限制。取消/超时后不再自动重传，只有服务端明确拒绝 gzip 或旧 API 明确不识别直接正文时才进行一次安全兼容回退。1/7/8/20/28/30 MiB 客户端矩阵、临时 SQLite 的约 30 MiB direct raw/gzip/最坏旧包装往返、30 MiB Electron 分片 ACK、Android/Windows 候选构建、API 发布目录启动、v46 稀疏兼容、严格 UTF-8/BOM 拒绝和 gzip 炸弹均通过；尚未部署，正式原生签名和实体设备由 Release Agent 复核。
 
 > `1.0.40` 服务端历史治理审计补齐了模式感知：SQLite 中 `speedrun:main/1/2/3` 正文槽位不再被普通槽位裁剪器误判为非法记录；普通/速通四槽分别保留当前 revision 和最近 20 条历史，治理容量指标也纳入速通槽位。该修复不更改云 schema v7、SQLite layout v2、存档正文或历史成绩，尚未部署。
 
@@ -469,6 +469,7 @@
 
 | 检查 | 基线结果 |
 | --- | --- |
+| `1.0.40` / v46 开发候选 | 固定运行时 SHA `58d3e6f986ec…`；129 个 Vitest 文件通过/6 跳过，1180 项通过/18 项跳过；Chromium 327/2、Firefox/WebKit 2/2、生产预览 PWA 1/1；server 343/2、ops 34/34、native 24/24；206 文件 source manifest、6 个候选制品、CycloneDX 1.5 SBOM、3-subject provenance、类型检查、125 个运行时许可证、生产构建和根/server 生产依赖审计 0 通过。尚未部署；原生正式签名、实体设备、隔离 Linux 和生产备份副本仍是 Release Agent 门禁 |
 | `1.0.39` / v46 Web/API 正式发布 | 107 个测试文件通过、6 个跳过；950 项 Vitest 通过、18 项跳过；Playwright 282 项通过、11 项条件夹具跳过；服务端 75/2、运维 6/6、原生工具 8/8、163 文件 source manifest、2 文件 candidate manifest、Web 128、API 35、类型检查、128 个运行时许可证和生产构建通过；双节点备份、独立副本隔离、原子切换、真实云 PUT 观察、完整下载 9/9、Range/cache、当前/历史资源、6 场 Chrome 和 1.0.37 PWA 隔离通过；下载与 native stable 保持 1.0.38 |
 | `1.0.38` / v46 正式发布 | 107 个测试文件通过、6 个跳过；950 项 Vitest 通过、18 项跳过；Playwright 280 项通过、11 项条件夹具跳过；服务端 70/2、运维 6/6、原生工具 8/8、161 文件 source manifest、9 文件下载 manifest、10 文件 bundle、类型检查、128 个运行时许可证和生产构建通过；双节点、Android/Windows、下载页、备份、完整哈希、Range、缓存、上一版 chunk、6 场 Chrome smoke 和上一稳定版 PWA 隔离均通过；真机/低配 Windows/Windows 覆盖升级/后台门禁与交接性能残余风险由用户只对本候选明确豁免/接受 |
 | Android `1.0.38 / 1000038` | APK v2/v3、zipalign、批准长期证书连续性、模拟器 `1.0.37 → 1.0.38` 覆盖升级、stable feed、immutable/Range 206 和公网 SHA-256 通过；最低支持代码仍为 `1000002`，未声称物理真机或约一小时后台通过 |
