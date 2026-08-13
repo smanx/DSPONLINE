@@ -91,6 +91,17 @@ contextBridge.exposeInMainWorld("dspDesktop", {
     sendNextChunk();
   }),
   cancelApiRequest: (requestId) => ipcRenderer.send("desktop:api-request-cancel", requestId),
+  downloadAccountArchive: async (request) => {
+    const result = await ipcRenderer.invoke("desktop:download-account-archive", request);
+    if (result?.ok) return result.value;
+    const error = new Error(result?.error?.message || "账号归档下载失败");
+    error.name = result?.error?.name || "Error";
+    error.code = result?.error?.code || "ACCOUNT_ARCHIVE_DOWNLOAD_FAILED";
+    if (Number.isSafeInteger(result?.error?.status)) error.status = result.error.status;
+    if (typeof result?.error?.serverCode === "string") error.serverCode = result.error.serverCode;
+    throw error;
+  },
+  cancelAccountArchiveDownload: (requestId) => ipcRenderer.send("desktop:cancel-account-archive-download", requestId),
   checkForUpdates: () => ipcRenderer.invoke("desktop:check-for-updates"),
   downloadUpdate: () => ipcRenderer.invoke("desktop:download-update"),
   installUpdate: () => ipcRenderer.invoke("desktop:install-update"),

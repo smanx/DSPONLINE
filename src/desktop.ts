@@ -24,6 +24,8 @@ export interface DesktopBridge {
   requestApi: (request: DesktopApiRequest) => Promise<DesktopApiResponse>;
   requestApiTransfer: (request: DesktopApiTransferRequest, body: ArrayBuffer) => Promise<DesktopApiTransferResponse>;
   cancelApiRequest: (requestId: string) => void;
+  downloadAccountArchive: (request: DesktopAccountArchiveDownloadRequest) => Promise<DesktopAccountArchiveDownloadResult>;
+  cancelAccountArchiveDownload: (requestId: string) => void;
   checkForUpdates: () => Promise<DesktopUpdateStatus>;
   downloadUpdate: () => Promise<DesktopUpdateStatus>;
   installUpdate: () => Promise<{ accepted: boolean }>;
@@ -57,6 +59,16 @@ export interface DesktopApiResponse {
 export interface DesktopApiTransferResponse extends Omit<DesktopApiResponse, "body"> {
   bodyBuffer: ArrayBuffer;
 }
+
+export interface DesktopAccountArchiveDownloadRequest {
+  authorization: string;
+  suggestedName?: string;
+  requestId?: string;
+}
+
+export type DesktopAccountArchiveDownloadResult =
+  | { cancelled: true; requestId: string }
+  | { cancelled: false; requestId: string; byteLength: number; fileName: string };
 
 export function getDesktopBridge(): DesktopBridge | null {
   if (typeof window === "undefined") return null;

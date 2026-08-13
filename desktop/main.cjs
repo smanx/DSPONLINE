@@ -11,6 +11,14 @@ const {
   requestTimeoutMs,
   validRequestId,
 } = require("./cloud-transport.cjs");
+const {
+  AccountArchiveDownloadRegistry,
+  downloadAccountArchiveToFile,
+  normalizeBearerAuthorization,
+  normalizeRequestId: normalizeAccountArchiveRequestId,
+  sanitizeArchiveFileName,
+  serializeAccountArchiveDownloadError,
+} = require("./account-archive-download.cjs");
 const packageMetadata = require("../package.json");
 
 const isDevelopment = Boolean(process.env.DSP_DESKTOP_DEV_URL);
@@ -45,6 +53,10 @@ let updateShutdownResolve = null;
 let updateShutdownRequested = false;
 let fontScale = 1;
 const activeApiRequests = new Map();
+const activeAccountArchiveDownloads = new AccountArchiveDownloadRegistry(1);
+const activeAccountArchiveDownloadCompletions = new Set();
+let accountArchiveQuitDrainPromise = null;
+let accountArchiveQuitDrainComplete = false;
 let updateState = {
   state: isDevelopment ? "development" : "idle",
   message: isDevelopment ? "开发环境不检查更新" : channel.url ? "尚未检查" : "此构建未配置更新源",
@@ -284,6 +296,10 @@ function cancelAllApiRequests() {
   activeApiRequests.clear();
 }
 
+function cancelAllAccountArchiveDownloads() {
+  activeAccountArchiveDownloads.cancelAll();
+}
+
 function allowLoadedNavigation(url) {
   if (isDevelopment) {
     try { return new URL(url).origin === new URL(process.env.DSP_DESKTOP_DEV_URL).origin; } catch { return false; }
@@ -347,6 +363,7 @@ function createWindow() {
   mainWindow.on("close", persistWindowState);
   mainWindow.on("closed", () => {
     cancelAllApiRequests();
+    cancelAllAccountArchiveDownloads();
     mainWindow = null;
   });
 
@@ -405,6 +422,61 @@ ipcMain.handle("desktop:set-font-scale", (_event, requestedScale) => {
 });
 
 ipcMain.handle("desktop:api-request", requestCloudApi);
+
+ipcMain.handle("desktop:download-account-archive", async (event, request) => {
+  let requestId = null;
+  let record = null;
+  let completion = null;
+  let resolveCompletion = null;
+  try {
+    if (!trustedSender(event)) throw new Error("账号归档下载来源无效");
+    requestId = normalizeAccountArchiveRequestId(request?.requestId);
+    const headers = normalizeRequestHeaders({ authorization: request?.authorization });
+    const authorization = normalizeBearerAuthorization(headers.authorization);
+    record = activeAccountArchiveDownloads.begin(requestId);
+
+    const suggestedName = sanitizeArchiveFileName(request?.suggestedName);
+    const selection = await dialog.showSaveDialog(mainWindow, {
+      title: "导出 DSP极简网络账号归档",
+      defaultPath: path.join(app.getPath("downloads"), suggestedName),
+      buttonLabel: "保存账号归档",
+      filters: [{ name: "DSP极简网络账号归档", extensions: ["dspaccount.zip"] }],
+      properties: ["showOverwriteConfirmation", "createDirectory"],
+    });
+    if (selection.canceled || !selection.filePath) {
+      return { ok: true, value: { cancelled: true, requestId } };
+    }
+    completion = new Promise((resolve) => { resolveCompletion = resolve; });
+    activeAccountArchiveDownloadCompletions.add(completion);
+    const target = resolveApiRequestUrl("/account/export/archive");
+    const result = await downloadAccountArchiveToFile({
+      url: target,
+      targetPath: selection.filePath,
+      authorization,
+      signal: record.controller.signal,
+    });
+    return {
+      ok: true,
+      value: {
+        cancelled: false,
+        requestId,
+        byteLength: result.byteLength,
+        fileName: result.fileName,
+      },
+    };
+  } catch (error) {
+    return { ok: false, error: serializeAccountArchiveDownloadError(error) };
+  } finally {
+    if (requestId && record) activeAccountArchiveDownloads.finish(requestId, record);
+    resolveCompletion?.();
+    if (completion) activeAccountArchiveDownloadCompletions.delete(completion);
+  }
+});
+
+ipcMain.on("desktop:cancel-account-archive-download", (event, requestId) => {
+  if (!trustedSender(event) || !validRequestId(requestId)) return;
+  activeAccountArchiveDownloads.cancel(requestId);
+});
 
 ipcMain.on("desktop:api-request-transfer", (event, request) => {
   const port = event.ports?.[0];
@@ -631,9 +703,18 @@ if (!hasSingleInstanceLock) {
   });
 }
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
   persistWindowState();
+  cancelAllAccountArchiveDownloads();
   if (updateTimer) clearInterval(updateTimer);
+  if (accountArchiveQuitDrainComplete || activeAccountArchiveDownloadCompletions.size === 0) return;
+  event.preventDefault();
+  if (accountArchiveQuitDrainPromise) return;
+  const pending = [...activeAccountArchiveDownloadCompletions];
+  accountArchiveQuitDrainPromise = Promise.allSettled(pending).finally(() => {
+    accountArchiveQuitDrainComplete = true;
+    app.quit();
+  });
 });
 
 app.on("window-all-closed", () => {
