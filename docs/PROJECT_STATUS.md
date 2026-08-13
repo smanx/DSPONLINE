@@ -6,7 +6,7 @@
 > 产品阶段：首个公网版本已上线，当前更准确的定位是“公开测试版”。
 > 事实来源：当前工作区代码、自动化测试、部署配置和线上只读检查。
 
-> `1.0.41` 开发侧已在 2026-08-14 固定为运行时源码 `59f37d18feb90b38822ebfd83b76baa19215ccce` / Build ID `1.0.41+59f37d18feb9`。本版完成 48 MiB 保证云正文、云同步状态中心、快速/精确/放弃离线选择、排行榜窗口说明、端口自适应命中与原子连续拉线、中文输入保护，并完整修复 1.0.40 No-Go 暴露的软链接入口、持久 pending journal、writer lock、旧 API readiness、启动备份和 ext4 大库预检问题。Vitest 1206/18、server 347/2、ops 55/6、native 24/24、Chromium 334/2、Firefox/WebKit 2/2、生产预览 PWA 1/1，均 0 失败；GameState v46、envelope v2、云 schema v7、SQLite layout v2 不变。真实 Linux systemd/Nginx 隔离演练和实体设备仍未完成，因此候选仍是发布侧 No-Go，未部署。详见 [1.0.41 大版本总纲](./1.0.41_MAJOR_DEVELOPMENT_PLAN.md) 与 [候选记录](./releases/1.0.41-candidate.md)。
+> `1.0.41` 开发侧已在 2026-08-14 固定为运行时源码 `32daa4f9438095308e3e6be7a0055268abe01e66` / Build ID `1.0.41+32daa4f94380`。本版完成 48 MiB 保证云正文、云同步状态中心、快速/精确/放弃离线选择、排行榜窗口说明、端口自适应命中与原子连续拉线、中文输入保护，并完整修复 1.0.40 No-Go 暴露的软链接入口、持久 pending journal、writer lock、旧 API readiness、启动备份和 ext4 大库预检问题。Vitest 1208/18、server 347/2、ops 55/6、native 24/24、Chromium 333/9、Firefox/WebKit 2/2、生产预览 PWA 1/1，均 0 失败；GameState v46、envelope v2、云 schema v7、SQLite layout v2 不变。真实 Linux systemd/Nginx 隔离演练和实体设备仍未完成，因此候选仍是发布侧 No-Go，未部署。详见 [1.0.41 大版本总纲](./1.0.41_MAJOR_DEVELOPMENT_PLAN.md) 与 [候选记录](./releases/1.0.41-candidate.md)。
 
 > `1.0.40-58d3e6f986ec` 已在真实发布门禁中永久判定 No-Go，从未成为生产 current；不得复用该 Build ID 或它的制品。线上 Web/API 保持 1.0.39，Android/Windows stable 保持 1.0.38。完整失败事实见 [1.0.40 No-Go 记录](./releases/1.0.40-no-go-2026-08-13.md)。
 
