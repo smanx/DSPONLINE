@@ -373,36 +373,50 @@ export function inspectAccountArchivePayloadFile(input) {
     }
     const worker = new Worker(new URL("./account-archive-import-worker.mjs", import.meta.url));
     let settled = false;
+    let resultMessage = null;
+    let terminalError = null;
     const finish = (operation) => {
       if (settled) return;
       settled = true;
       input.signal?.removeEventListener("abort", onAbort);
       operation();
     };
-    const onAbort = () => finish(() => {
+    const onAbort = () => {
+      if (settled || terminalError) return;
+      terminalError = new AccountArchiveImportError("ACCOUNT_ARCHIVE_IMPORT_ABORTED", "账号归档导入已取消，现有云存档未修改", 499);
+      // `exit` is the settlement checkpoint. The caller cannot close or
+      // replace SQLite while this worker still has native modules loaded.
       void worker.terminate();
-      reject(new AccountArchiveImportError("ACCOUNT_ARCHIVE_IMPORT_ABORTED", "账号归档导入已取消，现有云存档未修改", 499));
-    });
+    };
     input.signal?.addEventListener("abort", onAbort, { once: true });
-    worker.once("message", (message) => finish(() => {
-      void worker.terminate();
-      if (!message?.ok) reject(payloadWorkerError(message?.error));
-      else resolve(message.result);
-    }));
-    worker.once("error", (error) => finish(() => {
-      reject(new AccountArchiveImportError(
+    worker.once("message", (message) => {
+      resultMessage = message;
+    });
+    worker.once("error", (error) => {
+      terminalError = new AccountArchiveImportError(
         "ACCOUNT_ARCHIVE_IMPORT_INSPECTION_FAILED",
         "账号归档正文后台检查失败，现有云存档未修改",
         500,
         { cause: error },
-      ));
-    }));
+      );
+    });
     worker.once("exit", (code) => {
-      if (!settled) finish(() => reject(new AccountArchiveImportError(
-        "ACCOUNT_ARCHIVE_IMPORT_INSPECTION_FAILED",
-        `账号归档正文后台检查在返回结果前退出（${code}）`,
-        500,
-      )));
+      finish(() => {
+        if (terminalError) {
+          reject(terminalError);
+          return;
+        }
+        if (!resultMessage) {
+          reject(new AccountArchiveImportError(
+            "ACCOUNT_ARCHIVE_IMPORT_INSPECTION_FAILED",
+            `账号归档正文后台检查在返回结果前退出（${code}）`,
+            500,
+          ));
+          return;
+        }
+        if (!resultMessage.ok) reject(payloadWorkerError(resultMessage.error));
+        else resolve(resultMessage.result);
+      });
     });
     worker.postMessage({
       file: input.file,

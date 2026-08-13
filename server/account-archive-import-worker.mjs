@@ -13,6 +13,7 @@ function publicError(error) {
 }
 
 parentPort?.once("message", async ({ file, checksum, size, mode }) => {
+  let message;
   try {
     const raw = await readFile(file);
     if (raw.byteLength !== size) {
@@ -43,8 +44,14 @@ parentPort?.once("message", async ({ file, checksum, size, mode }) => {
       error.code = "ACCOUNT_ARCHIVE_SAVE_FORMAT_INVALID";
       throw error;
     }
-    parentPort.postMessage({ ok: true, result: publicResult });
+    message = { ok: true, result: publicResult };
   } catch (error) {
-    parentPort.postMessage({ ok: false, error: publicError(error) });
+    message = { ok: false, error: publicError(error) };
+  } finally {
+    // Let the worker leave naturally after its result has entered the message
+    // queue. Force-terminating immediately after `message` can race native
+    // module teardown on Windows when an account archive contains many saves.
+    parentPort?.postMessage(message);
+    parentPort?.close();
   }
 });
