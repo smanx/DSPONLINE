@@ -60,6 +60,7 @@ test("stages the historical API archive and expands server files byte-for-byte i
     "http-security.mjs",
     "http-route-policy.mjs",
     "account-archive-legacy-json.mjs",
+    "runtime-state-persistence.mjs",
   ]) {
     assert.deepEqual(
       await readFile(path.join(releaseRoot, file)),

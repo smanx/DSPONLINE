@@ -101,6 +101,11 @@ import {
   RuntimeMetricsAggregator,
 } from "./runtime-indexes.mjs";
 import {
+  SqliteRuntimeStatePersistence,
+  createRuntimeStatePersistencePlan,
+  runtimeAppStateFingerprint,
+} from "./runtime-state-persistence.mjs";
+import {
   ACCOUNT_JSON_SCHEMAS,
   accountArchiveBodyCapability,
   cloudSaveBodyCapability,
@@ -1373,6 +1378,7 @@ class SqliteStore extends AtomicStoreBase {
     this.pendingCloudSaveWrites = new Map();
     this.pendingCloudSaveDeletes = new Map();
     this.pendingCloudSaveUserDeletes = new Set();
+    this.runtimeStatePersistence = null;
   }
 
   async load() {
@@ -1383,23 +1389,48 @@ class SqliteStore extends AtomicStoreBase {
     this.database.exec("CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY CHECK (id = 1), payload TEXT NOT NULL, updated_at INTEGER NOT NULL)");
     this.database.exec("CREATE TABLE IF NOT EXISTS cloud_save_payloads (user_id TEXT NOT NULL, slot TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (user_id, slot, revision)) WITHOUT ROWID");
     initializeCloudPayloadStore(this.database);
-    const row = this.database.prepare("SELECT payload FROM app_state WHERE id = 1").get();
+    const row = this.database.prepare("SELECT payload, updated_at AS updatedAt FROM app_state WHERE id = 1").get();
     if (!row?.payload) {
       this.data.storageLayoutVersion = SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION;
       await this.persist();
+      const initialized = this.database.prepare("SELECT payload, updated_at AS updatedAt FROM app_state WHERE id = 1").get();
+      this.runtimeStatePersistence = new SqliteRuntimeStatePersistence(this.database, { faultInjector: this.faultInjector });
+      this.runtimeStatePersistence.initialize(this._data, {
+        appStateUpdatedAt: initialized.updatedAt,
+        appStateFingerprint: runtimeAppStateFingerprint(initialized.payload),
+      });
       return;
     }
     const parsed = JSON.parse(row.payload);
-    row.payload = null;
     if (parsed?.storageLayoutVersion === SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION) {
-      this.data = normalizeStoredData(parsed);
+      const normalized = normalizeStoredData(parsed);
+      this.runtimeStatePersistence = new SqliteRuntimeStatePersistence(this.database, { faultInjector: this.faultInjector });
+      this.runtimeStatePersistence.initialize(normalized, {
+        appStateUpdatedAt: row.updatedAt,
+        appStateFingerprint: runtimeAppStateFingerprint(row.payload),
+      });
+      this.data = this.runtimeStatePersistence.hydrateState(normalized);
+      row.payload = null;
       return;
     }
+    row.payload = null;
     await this.migrateLegacyPayloadLayout(parsed);
+    const migrated = this.database.prepare("SELECT payload, updated_at AS updatedAt FROM app_state WHERE id = 1").get();
+    this.runtimeStatePersistence = new SqliteRuntimeStatePersistence(this.database, { faultInjector: this.faultInjector });
+    this.runtimeStatePersistence.initialize(this._data, {
+      appStateUpdatedAt: migrated.updatedAt,
+      appStateFingerprint: runtimeAppStateFingerprint(migrated.payload),
+    });
   }
 
   async importLegacyData(source) {
     await this.migrateLegacyPayloadLayout(source);
+    const migrated = this.database.prepare("SELECT payload, updated_at AS updatedAt FROM app_state WHERE id = 1").get();
+    this.runtimeStatePersistence ??= new SqliteRuntimeStatePersistence(this.database, { faultInjector: this.faultInjector });
+    this.runtimeStatePersistence.initialize(this._data, {
+      appStateUpdatedAt: migrated.updatedAt,
+      appStateFingerprint: runtimeAppStateFingerprint(migrated.payload),
+    });
   }
 
   createStandaloneMutation() {
@@ -1580,8 +1611,20 @@ class SqliteStore extends AtomicStoreBase {
 
   async commitCandidate(candidate, mutation, context = {}) {
     candidate.storageLayoutVersion = SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION;
-    const payload = JSON.stringify(candidate);
+    const operation = typeof context.operation === "string" ? context.operation : "store.persist";
+    const runtimePlan = this.runtimeStatePersistence
+      ? createRuntimeStatePersistencePlan(this._data, candidate, {
+        operation,
+        runtimeIndexEvents: mutation.runtimeIndexEvents,
+        dirtyServiceDays: Object.keys(candidate.dailyMetrics ?? {}).filter((day) =>
+          !Object.is(candidate.dailyMetrics?.[day], this._data.dailyMetrics?.[day]) ||
+          JSON.stringify(candidate.dailyMetrics?.[day]) !== JSON.stringify(this._data.dailyMetrics?.[day])),
+      })
+      : null;
+    const skipAppState = runtimePlan?.canSkipAppState === true;
+    const payload = skipAppState ? null : JSON.stringify(candidate);
     const writeState = this.database.prepare("INSERT INTO app_state (id, payload, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at");
+    let runtimeCommitResult = null;
     this.database.transaction(() => {
       this.maybeInjectPersistenceFault("before-sqlite-transaction", context);
       for (const userId of mutation.replaceUserPayloads) deleteCloudPayloadsForUser(this.database, userId);
@@ -1611,12 +1654,14 @@ class SqliteStore extends AtomicStoreBase {
         importedChecksums.add(write.checksum);
       }
       this.maybeInjectPersistenceFault("after-payload-writes", context);
-      writeState.run(payload, Date.now());
+      if (!skipAppState) writeState.run(payload, Date.now());
+      if (runtimePlan) runtimeCommitResult = this.runtimeStatePersistence.applyPlanInTransaction(runtimePlan, { operation, synchronizeAppState: !skipAppState });
       this.maybeInjectPersistenceFault("after-app-state-write", context);
       if (mutation.replaceUserPayloads.size > 0 || mutation.userDeletes.size > 0 || mutation.deletes.size > 0) {
         garbageCollectCloudPayloadBlobs(this.database);
       }
     })();
+    if (runtimePlan) this.runtimeStatePersistence.observeCommitted(runtimePlan, runtimeCommitResult);
   }
 
   async previewCloudHistoryPrune() {
@@ -4079,6 +4124,7 @@ export async function createCloudServer({
             loginSecurity: loginFailureGuard.metrics(),
             scale: runtimeMetrics.snapshot(),
             presenceIndex: presenceIndex.diagnostics(),
+            runtimeStatePersistence: store.runtimeStatePersistence?.diagnostics({ includeRowCounts: true }) ?? null,
           },
           accounts: {
             users: Object.keys(store.data.users).length,
