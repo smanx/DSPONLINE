@@ -283,7 +283,7 @@ import { baselineAccountProgress, createLocalAccount, getActiveAccount, loadAcco
 import { removeLeaderboardData } from "./game/leaderboard";
 import { createSecondUnipolarVeinPackage, previewSecondUnipolarVein } from "./game/resourceIntegrity";
 import { trackAnalyticsEvent } from "./game/analytics";
-import { CLOUD_AUTO_SYNC_INTERVAL_MS, CloudApiError, compareCloudSaveSummary, fetchCloudPublicStatus, getCloudToken, markCloudSaveSynchronized, readCloudAutoSyncStatus, refreshCloudSaveMetadata, resumeCloudSession, summarizeCloudPayload, uploadCloudSave, writeCloudAutoSyncStatus } from "./game/cloud";
+import { CLOUD_AUTO_SYNC_INTERVAL_MS, CloudApiError, compareCloudSaveSummary, fetchCloudPublicStatus, hasCloudAuthentication, markCloudSaveSynchronized, readCloudAutoSyncStatus, refreshCloudSaveMetadata, resumeCloudSession, summarizeCloudPayload, uploadCloudSave, writeCloudAutoSyncStatus } from "./game/cloud";
 import type { BeltRouteMode, BeltTier, BuildingId, CampaignTaskId, CanvasBookmark, CanvasRegion, CanvasViewport, CargoStackSize, ConstructionAutomationTargetId, ConstructionId, DraggedItemSourceKind, DysonLaunchMode, DysonLaunchThrottle, EnergyMode, FactoryEntity, GalacticDispatchThrottle, GalacticExportProjectId, GameSettings, GameState, InfiniteResearchId, ItemId, LogisticsPriority, PlacementCount, PlanetId, PlanetIndustryRole, PowerGridId, PowerPriority, ProliferatorMode, ProliferatorTier, RecipeId, StarSystemId, StationLogisticsMode, StationLogisticsScope, StationMinimumLoad, StationSlotTemplate } from "./game/types";
 import type { SimulationWorkerRequest, SimulationWorkerResponse } from "./game/simulation.worker";
 import { PureIdleMacroClient, PureIdleMacroClientError, type PureIdleMacroProgress } from "./game/pureIdleMacroClient";
@@ -2890,7 +2890,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     let active = true;
     let syncing = false;
     const synchronizeMainSave = async () => {
-      if (syncing || !getCloudToken() || pureIdleMacroActiveRef.current) return;
+      if (syncing || !hasCloudAuthentication() || pureIdleMacroActiveRef.current) return;
       syncing = true;
       const attemptedAt = Date.now();
       let syncUserId = readCloudAutoSyncStatus()?.userId ?? null;

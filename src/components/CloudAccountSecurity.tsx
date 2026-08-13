@@ -28,6 +28,9 @@ import {
   type CloudUser,
   cloudApiBase,
   getCloudToken,
+  getWebCookieSession,
+  hasCloudAuthentication,
+  prepareCloudAuthenticatedRequest,
 } from "../game/cloud";
 import { exportTextFile } from "../game/fileExport";
 import {
@@ -79,6 +82,14 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
   const [archiveImportFile, setArchiveImportFile] = useState<File | null>(null);
   const [archiveImportPreview, setArchiveImportPreview] = useState<CloudAccountArchiveImportPreview | null>(null);
   const [legacyExportAvailable, setLegacyExportAvailable] = useState(false);
+
+  const archiveClientOptions = () => {
+    const base = cloudApiBase();
+    if (!base || !hasCloudAuthentication()) throw new Error("当前环境未配置可用的安全云服务");
+    return getWebCookieSession()
+      ? { apiBase: base, prepareAuthenticatedRequest: prepareCloudAuthenticatedRequest }
+      : { apiBase: base, authToken: getCloudToken() };
+  };
 
   const refreshSessions = async () => {
     setSessionsLoading(true);
@@ -196,9 +207,10 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
     try {
       const token = getCloudToken();
       const base = cloudApiBase();
-      if (!token || !base) throw new Error("当前环境未配置可用的安全云服务");
+      if (!base || !hasCloudAuthentication()) throw new Error("当前环境未配置可用的安全云服务");
       const desktop = getDesktopBridge();
       if (desktop) {
+        if (!token) throw new Error("桌面账号归档需要有效的安全会话句柄");
         const result = await desktop.downloadAccountArchive({
           authorization: `Bearer ${token}`,
           suggestedName: `dsp-account-${user.id}.dspaccount.zip`,
@@ -209,15 +221,15 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
         }
         setNotice({ tone: "ready", text: `账号归档已保存：${result.fileName}` });
       } else {
-        const androidResult = await downloadAndroidAccountArchive({
+        const androidResult = token ? await downloadAndroidAccountArchive({
           apiBase: new URL(base, window.location.href).toString(),
           sessionHandle: token,
           suggestedName: `dsp-account-${user.id}.dspaccount.zip`,
-        });
+        }) : null;
         if (androidResult) {
           setNotice({ tone: "ready", text: `账号归档已通过 Android 分享面板导出：${androidResult.fileName}` });
         } else {
-          const result = await downloadCloudAccountArchive({ apiBase: base, authToken: token });
+          const result = await downloadCloudAccountArchive(archiveClientOptions());
           setNotice({ tone: "ready", text: `账号归档已导出（${Math.ceil(result.bytesWritten / 1024)} KiB）` });
         }
       }
@@ -265,10 +277,7 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
     setBusyAction("import-preview");
     setNotice(null);
     try {
-      const token = getCloudToken();
-      const base = cloudApiBase();
-      if (!token || !base) throw new Error("当前环境未配置可用的安全云服务");
-      setArchiveImportPreview(await fetchCloudAccountArchiveImportPreview({ apiBase: base, authToken: token }));
+      setArchiveImportPreview(await fetchCloudAccountArchiveImportPreview(archiveClientOptions()));
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "账号归档导入预检失败，现有云存档未修改" });
     } finally {
@@ -283,13 +292,10 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
     setBusyAction("import");
     setNotice(null);
     try {
-      const token = getCloudToken();
-      const base = cloudApiBase();
-      if (!token || !base) throw new Error("当前环境未配置可用的安全云服务");
       const result = await importCloudAccountArchive(
         archiveImportFile,
         archiveImportPreview,
-        { apiBase: base, authToken: token },
+        archiveClientOptions(),
       );
       setArchiveImportFile(null);
       setArchiveImportPreview(null);

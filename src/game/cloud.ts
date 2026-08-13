@@ -11,6 +11,15 @@ import { androidBase64RequestSupported } from "./androidApiTransport";
 import { CLOUD_TRANSFER_CONTRACT, cloudRequestTimeoutMs, createCloudRequestId, validCloudExpectedRevision } from "./cloudTransferContract";
 import { inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
 import { sha256Text } from "./payloadDigest";
+import {
+  clearWebCookieSessionState,
+  createWebSessionMigrationCoordinator,
+  parseWebCookieSessionPayload,
+  webCookieSessionRequest,
+  webSessionIssuanceHeaders,
+  type WebCookieSession,
+  type WebSessionMigrationState,
+} from "./webSessionMigration";
 
 export const CLOUD_TOKEN_STORAGE_KEY = "dsp-idle-network.cloud-token.v1";
 export const CLOUD_SYNC_STORAGE_KEY = "dsp-idle-network.cloud-sync.v1";
@@ -23,6 +32,9 @@ export type CloudSaveMode = SaveMode;
 
 let inMemoryCloudToken: string | null = null;
 let preferInMemoryCloudToken = false;
+let inMemoryWebCookieSession: WebCookieSession | null = null;
+let webSessionMigrationState: WebSessionMigrationState = clearWebCookieSessionState();
+const webSessionMigrationCoordinator = createWebSessionMigrationCoordinator();
 
 export interface CloudUser {
   id: string;
@@ -351,6 +363,98 @@ export function getCloudToken(): string | null {
   }
 }
 
+function isWebCloudRuntime(): boolean {
+  return typeof window !== "undefined"
+    && (typeof __APP_PLATFORM__ === "undefined" || __APP_PLATFORM__ === "web");
+}
+
+function webCookieSessionEligible(base = cloudApiBase()): boolean {
+  if (!isWebCloudRuntime() || !base) return false;
+  try {
+    const page = new URL(window.location.href);
+    const target = new URL(base, page);
+    const localDevelopment = page.protocol === "http:"
+      && (page.hostname === "localhost" || page.hostname === "127.0.0.1");
+    return (page.protocol === "https:" || localDevelopment)
+      && target.origin === page.origin
+      && target.pathname.replace(/\/+$/, "") === "/api"
+      && !target.username
+      && !target.password
+      && !target.search
+      && !target.hash;
+  } catch {
+    return false;
+  }
+}
+
+function activeWebCookieSession(): WebCookieSession | null {
+  if (!isWebCloudRuntime() || !inMemoryWebCookieSession) return null;
+  if (inMemoryWebCookieSession.expiresAt > Date.now()) return inMemoryWebCookieSession;
+  inMemoryWebCookieSession = null;
+  webSessionMigrationState = clearWebCookieSessionState();
+  return null;
+}
+
+function applyWebSessionMigrationState(next: WebSessionMigrationState): WebSessionMigrationState {
+  webSessionMigrationState = next;
+  inMemoryWebCookieSession = next.phase === "ready" || next.phase === "cleanup_pending"
+    ? next.session
+    : null;
+  return next;
+}
+
+function clearCloudAuthenticationState(clearBearer = true): void {
+  applyWebSessionMigrationState(clearWebCookieSessionState());
+  if (clearBearer) setCloudToken(null);
+}
+
+/**
+ * Attempts the one-way legacy Web Bearer -> HttpOnly Cookie migration.
+ * A failed or unsupported migration deliberately leaves the legacy token in
+ * place so 1.0.39 APIs and interrupted rolling upgrades remain usable.
+ */
+export async function initializeCloudAuthentication(): Promise<WebSessionMigrationState> {
+  if (!webCookieSessionEligible()) return webSessionMigrationState;
+  const existing = activeWebCookieSession();
+  if (existing) return applyWebSessionMigrationState({
+    ...webSessionMigrationState,
+    phase: "ready",
+    session: existing,
+    legacyTokenPresent: Boolean(getCloudToken()),
+    reason: null,
+    retryable: false,
+  });
+  const base = cloudApiBase();
+  if (!base) return webSessionMigrationState;
+  const next = await webSessionMigrationCoordinator.run({
+    apiBase: base,
+    pageUrl: window.location.href,
+    storage: window.localStorage,
+  });
+  return applyWebSessionMigrationState(next);
+}
+
+export function hasCloudAuthentication(): boolean {
+  return Boolean(activeWebCookieSession() || getCloudToken());
+}
+
+export function getWebCookieSession(): WebCookieSession | null {
+  return activeWebCookieSession();
+}
+
+export function prepareCloudAuthenticatedRequest(init: RequestInit = {}): RequestInit {
+  const cookieSession = activeWebCookieSession();
+  if (cookieSession) return webCookieSessionRequest(cookieSession, init);
+  const token = getCloudToken();
+  const headers: Record<string, string> = {};
+  new Headers(init.headers).forEach((value, key) => { headers[key] = value; });
+  // Preserve the historical request contract when no local credential is
+  // present: the server remains authoritative and returns its stable 401.
+  // Callers that must avoid an anonymous request use hasCloudAuthentication().
+  if (token) headers.authorization = `Bearer ${token}`;
+  return { ...init, headers };
+}
+
 function setCloudToken(token: string | null): void {
   inMemoryCloudToken = token;
   try {
@@ -522,6 +626,8 @@ async function cloudRequest<T>(
   allowInsecurePublicRead = false,
   transferBytes = 0,
   expectedResponseBytes = 0,
+  sessionIssuance = false,
+  preserveAuthenticationOnSessionFailure = false,
 ): Promise<T> {
   const base = cloudApiBase(allowInsecurePublicRead);
   if (!base) throw new CloudApiError(
@@ -532,7 +638,6 @@ async function cloudRequest<T>(
   );
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), cloudRequestTimeoutMs(transferBytes, expectedResponseBytes));
-  const token = authenticated ? getCloudToken() : null;
   const externalSignal = options.signal;
   if (externalSignal?.aborted) {
     window.clearTimeout(timer);
@@ -541,17 +646,32 @@ async function cloudRequest<T>(
   const abortFromCaller = () => controller.abort();
   externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
   try {
-    const response = await apiFetch(`${base}${path}`, {
+    const headers = new Headers(options.headers);
+    if (!headers.has("content-type")) headers.set("content-type", "application/json");
+    let requestInit: RequestInit = {
       ...options,
       signal: controller.signal,
-      headers: {
-        "content-type": "application/json",
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-        ...(options.headers ?? {}),
-      },
-    });
+      headers,
+    };
+    if (authenticated) requestInit = prepareCloudAuthenticatedRequest(requestInit);
+    else if (sessionIssuance && webCookieSessionEligible(base)) {
+      requestInit = {
+        ...requestInit,
+        headers: webSessionIssuanceHeaders(requestInit.headers),
+        credentials: "include",
+      };
+    }
+    const response = await apiFetch(`${base}${path}`, requestInit);
     const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
-    if (!response.ok) throw new CloudApiError(typeof payload.error === "string" ? payload.error : `云服务返回 ${response.status}`, response.status, payload);
+    if (!response.ok) {
+      const code = payload.code;
+      if (!preserveAuthenticationOnSessionFailure
+        && response.status === 401
+        && (code === "SESSION_EXPIRED" || code === "SESSION_REVOKED" || code === "AUTH_REQUIRED")) {
+        clearCloudAuthenticationState();
+      }
+      throw new CloudApiError(typeof payload.error === "string" ? payload.error : `云服务返回 ${response.status}`, response.status, payload);
+    }
     return payload as T;
   } catch (error) {
     if (error instanceof CloudApiError) throw error;
@@ -570,8 +690,12 @@ export async function resumeCloudSession(mode: CloudSaveMode = "normal"): Promis
   try {
     const health = await cloudRequest<{ ok: boolean; mailProvider?: string }>("/health", {}, false, true);
     const mailAvailable = Boolean(health.mailProvider && health.mailProvider !== "disabled");
-    const token = getCloudToken();
-    if (!token) return { status: "anonymous", user: null, cloudSave: null, mode, mailAvailable, message: null };
+    if (isWebCloudRuntime()) {
+      // Migration is opportunistic. Unsupported/temporarily unavailable new
+      // endpoints must never prevent the retained legacy Bearer from working.
+      await initializeCloudAuthentication().catch(() => webSessionMigrationState);
+    }
+    if (!hasCloudAuthentication()) return { status: "anonymous", user: null, cloudSave: null, mode, mailAvailable, message: null };
     try {
       const account = await cloudRequest<{ user: CloudUser; cloudSave: CloudSaveMetadata | null; cloudSaves?: Partial<Record<CloudSaveSlot, CloudSaveMetadata | null>>; cloudSavesByMode?: Partial<Record<CloudSaveMode, Partial<Record<CloudSaveSlot, CloudSaveMetadata | null>>>> }>("/account", {}, true);
       const selected = account.cloudSavesByMode?.[mode];
@@ -581,7 +705,6 @@ export async function resumeCloudSession(mode: CloudSaveMode = "normal"): Promis
       );
       return { status: "authenticated", user: account.user, cloudSave: cloudSaves.main, cloudSaves, mode, cloudSavesByMode: account.cloudSavesByMode as CloudSession["cloudSavesByMode"], mailAvailable, message: null };
     } catch (error) {
-      if (error instanceof CloudApiError && error.status === 401) setCloudToken(null);
       return { status: "anonymous", user: null, cloudSave: null, mode, mailAvailable, message: error instanceof Error ? error.message : null };
     }
   } catch (error) {
@@ -589,15 +712,56 @@ export async function resumeCloudSession(mode: CloudSaveMode = "normal"): Promis
   }
 }
 
-export async function registerCloudAccount(username: string, password: string, displayName: string): Promise<CloudSession> {
-  const result = await cloudRequest<{ token: string; user: CloudUser; mailAvailable?: boolean }>("/auth/register", { method: "POST", body: JSON.stringify({ username, password, displayName, deviceId: cloudDeviceId() }) });
+interface CloudSessionIssuanceResponse {
+  token?: unknown;
+  session?: unknown;
+}
+
+async function acceptCloudSessionIssuance(result: CloudSessionIssuanceResponse): Promise<"cookie" | "bearer"> {
+  const cookieSession = parseWebCookieSessionPayload(result);
+  if (cookieSession && isWebCloudRuntime()) {
+    const confirmation = await cloudRequest<CloudSessionIssuanceResponse>("/auth/web-session", {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: webSessionIssuanceHeaders(),
+    }, false, false, 0, 0, false, true);
+    const confirmed = parseWebCookieSessionPayload(confirmation);
+    if (!confirmed || confirmed.csrfToken !== cookieSession.csrfToken || confirmed.expiresAt !== cookieSession.expiresAt) {
+      throw new CloudApiError("浏览器未能确认安全云会话，请重试登录", 0, {
+        code: "CLOUD_COOKIE_SESSION_CONFIRMATION_FAILED",
+      });
+    }
+    applyWebSessionMigrationState({
+      phase: "ready",
+      session: confirmed,
+      legacyTokenPresent: false,
+      attempt: webSessionMigrationState.attempt,
+      reason: null,
+      retryable: false,
+    });
+    // The secret is now HttpOnly. Remove any previous JS-readable credential
+    // only after a structurally valid Cookie response was received.
+    setCloudToken(null);
+    return "cookie";
+  }
+  if (typeof result.token !== "string" || result.token.length < 1 || result.token.length > 4_096 || /[\r\n]/.test(result.token)) {
+    throw new CloudApiError("云服务返回的会话凭据无效", 0, { code: "CLOUD_SESSION_RESPONSE_INVALID" });
+  }
+  applyWebSessionMigrationState(clearWebCookieSessionState());
   setCloudToken(result.token);
+  return "bearer";
+}
+
+export async function registerCloudAccount(username: string, password: string, displayName: string): Promise<CloudSession> {
+  const result = await cloudRequest<CloudSessionIssuanceResponse & { user: CloudUser; mailAvailable?: boolean }>("/auth/register", { method: "POST", body: JSON.stringify({ username, password, displayName, deviceId: cloudDeviceId() }) }, false, false, 0, 0, true);
+  await acceptCloudSessionIssuance(result);
   return { status: "authenticated", user: result.user, cloudSave: null, cloudSaves: emptyCloudSaveSlots(), mailAvailable: result.mailAvailable === true, message: null };
 }
 
 export async function loginCloudAccount(identifier: string, password: string): Promise<CloudSession> {
-  const result = await cloudRequest<{ token: string; user: CloudUser; security?: { newDevice: boolean; newRegion: boolean; message: string | null } }>("/auth/login", { method: "POST", body: JSON.stringify({ identifier, password, deviceId: cloudDeviceId() }) });
-  setCloudToken(result.token);
+  const result = await cloudRequest<CloudSessionIssuanceResponse & { user: CloudUser; security?: { newDevice: boolean; newRegion: boolean; message: string | null } }>("/auth/login", { method: "POST", body: JSON.stringify({ identifier, password, deviceId: cloudDeviceId() }) }, false, false, 0, 0, true);
+  await acceptCloudSessionIssuance(result);
   const resumed = await resumeCloudSession();
   return resumed.status === "authenticated"
     ? { ...resumed, message: result.security?.message ?? null }
@@ -605,7 +769,7 @@ export async function loginCloudAccount(identifier: string, password: string): P
 }
 
 export async function logoutCloudAccount(): Promise<void> {
-  try { await cloudRequest("/auth/logout", { method: "POST" }, true); } finally { setCloudToken(null); }
+  try { await cloudRequest("/auth/logout", { method: "POST" }, true); } finally { clearCloudAuthenticationState(); }
 }
 
 export async function verifyCloudEmail(token: string): Promise<CloudUser> {
@@ -631,8 +795,8 @@ export async function requestCloudPasswordReset(email: string): Promise<string> 
 }
 
 export async function resetCloudPassword(token: string, password: string): Promise<CloudSession> {
-  const result = await cloudRequest<{ token: string; user: CloudUser; security?: { message: string | null } }>("/auth/reset-password", { method: "POST", body: JSON.stringify({ token, password, deviceId: cloudDeviceId() }) });
-  setCloudToken(result.token);
+  const result = await cloudRequest<CloudSessionIssuanceResponse & { user: CloudUser; security?: { message: string | null } }>("/auth/reset-password", { method: "POST", body: JSON.stringify({ token, password, deviceId: cloudDeviceId() }) }, false, false, 0, 0, true);
+  await acceptCloudSessionIssuance(result);
   const resumed = await resumeCloudSession();
   return resumed.status === "authenticated"
     ? { ...resumed, message: result.security?.message ?? null }
@@ -665,7 +829,16 @@ export async function revokeCloudSession(sessionId: string): Promise<{ currentSe
     method: "POST",
     body: JSON.stringify({ sessionId }),
   }, true);
-  if (result.currentSessionRevoked) setCloudToken(null);
+  if (result.currentSessionRevoked) clearCloudAuthenticationState();
+  return result;
+}
+
+export async function revokeAllCloudSessions(): Promise<{ currentSessionRevoked: boolean; revokedCount: number }> {
+  const result = await cloudRequest<{ currentSessionRevoked: boolean; revokedCount: number }>("/account/sessions/revoke-all", {
+    method: "POST",
+    body: "{}",
+  }, true);
+  if (result.currentSessionRevoked) clearCloudAuthenticationState();
   return result;
 }
 
@@ -678,7 +851,7 @@ export async function deleteCloudAccount(password: string): Promise<void> {
     method: "POST",
     body: JSON.stringify({ password, confirmation: "DELETE" }),
   }, true);
-  setCloudToken(null);
+  clearCloudAuthenticationState();
 }
 
 function cloudSaveQuery(slot: CloudSaveSlot, revision?: number, mode: CloudSaveMode = "normal"): string {
@@ -1174,13 +1347,13 @@ export async function setCloudLeaderboardVisibility(visible: boolean): Promise<C
 }
 
 export async function sendCloudFeedback(kind: string, message: string, diagnostics: Record<string, unknown>): Promise<string> {
-  const result = await cloudRequest<{ id: string }>("/feedback", { method: "POST", body: JSON.stringify({ kind, message, diagnostics }) }, Boolean(getCloudToken()));
+  const result = await cloudRequest<{ id: string }>("/feedback", { method: "POST", body: JSON.stringify({ kind, message, diagnostics }) }, hasCloudAuthentication());
   return result.id;
 }
 
 export async function reportCloudError(message: string, diagnostics: Record<string, unknown>): Promise<void> {
   try {
-    await cloudRequest("/errors", { method: "POST", body: JSON.stringify({ kind: "client-error", message, diagnostics }) }, Boolean(getCloudToken()));
+    await cloudRequest("/errors", { method: "POST", body: JSON.stringify({ kind: "client-error", message, diagnostics }) }, hasCloudAuthentication());
   } catch {
     // Error reporting must never cause another user-facing error.
   }

@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
   revokeCloudSession: vi.fn(),
   cloudApiBase: vi.fn(),
   getCloudToken: vi.fn(),
+  getWebCookieSession: vi.fn(),
+  hasCloudAuthentication: vi.fn(),
+  prepareCloudAuthenticatedRequest: vi.fn(),
   exportTextFile: vi.fn(),
   downloadCloudAccountArchive: vi.fn(),
   fetchCloudAccountArchiveImportPreview: vi.fn(),
@@ -39,6 +42,9 @@ vi.mock("../game/cloud", () => ({
   revokeCloudSession: mocks.revokeCloudSession,
   cloudApiBase: mocks.cloudApiBase,
   getCloudToken: mocks.getCloudToken,
+  getWebCookieSession: mocks.getWebCookieSession,
+  hasCloudAuthentication: mocks.hasCloudAuthentication,
+  prepareCloudAuthenticatedRequest: mocks.prepareCloudAuthenticatedRequest,
 }));
 
 vi.mock("../game/fileExport", () => ({ exportTextFile: mocks.exportTextFile }));
@@ -178,6 +184,9 @@ beforeEach(() => {
   mocks.readCloudAutoSyncStatus.mockReturnValue(null);
   mocks.cloudApiBase.mockReturnValue("/api");
   mocks.getCloudToken.mockReturnValue("synthetic-token");
+  mocks.getWebCookieSession.mockReturnValue(null);
+  mocks.hasCloudAuthentication.mockReturnValue(true);
+  mocks.prepareCloudAuthenticatedRequest.mockImplementation((init) => init);
   mocks.getDesktopBridge.mockReturnValue(null);
   mocks.downloadAndroidAccountArchive.mockResolvedValue(null);
   mocks.exportTextFile.mockResolvedValue(undefined);
@@ -200,6 +209,40 @@ afterEach(() => {
 });
 
 describe("CloudAccountSecurity account archives", () => {
+  it("uses the Cookie request preparer for Web archive export and import without a fake Bearer token", async () => {
+    const session = {
+      transport: "cookie",
+      csrfToken: "csrf_abcdefghijklmnopqrstuvwxyz_",
+      expiresAt: Date.now() + 60_000,
+    };
+    mocks.getCloudToken.mockReturnValue(null);
+    mocks.getWebCookieSession.mockReturnValue(session);
+    mount();
+    await settle();
+
+    click(buttonNamed("导出账号归档"));
+    await settle();
+    expect(mocks.downloadCloudAccountArchive).toHaveBeenCalledWith({
+      apiBase: "/api",
+      prepareAuthenticatedRequest: mocks.prepareCloudAuthenticatedRequest,
+    });
+    expect(mocks.downloadAndroidAccountArchive).not.toHaveBeenCalled();
+
+    chooseArchive();
+    click(buttonNamed("检查并导入账号归档"));
+    await settle();
+    expect(mocks.fetchCloudAccountArchiveImportPreview).toHaveBeenCalledWith({
+      apiBase: "/api",
+      prepareAuthenticatedRequest: mocks.prepareCloudAuthenticatedRequest,
+    });
+    click(buttonNamed("确认替换并导入"));
+    await settle();
+    expect(mocks.importCloudAccountArchive.mock.calls.at(-1)?.[2]).toEqual({
+      apiBase: "/api",
+      prepareAuthenticatedRequest: mocks.prepareCloudAuthenticatedRequest,
+    });
+  });
+
   it("never starts the high-memory legacy JSON export until the player explicitly chooses it", async () => {
     mocks.downloadCloudAccountArchive.mockRejectedValue({ code: "ARCHIVE_UNSUPPORTED" });
     mocks.exportCloudAccountData.mockResolvedValue({ exportedAt: 1, marker: "legacy" });

@@ -1,3 +1,9 @@
+import {
+  WEB_SESSION_CSRF_HEADER,
+  WEB_SESSION_MODE_COOKIE,
+  WEB_SESSION_MODE_HEADER,
+} from "./webSessionMigration";
+
 export const CLOUD_QUOTA_VERSION = "cloud-quota-v1" as const;
 export const CLOUD_ACCOUNT_ARCHIVE_VERSION = 2 as const;
 export const CLOUD_ACCOUNT_ARCHIVE_CONTENT_TYPE = "application/vnd.dspidle.account-archive+zip";
@@ -74,10 +80,15 @@ export interface CloudQuotaPreflightInput {
   checksum?: string | null;
 }
 
+export type CloudAccountRequestPreparer = (
+  init: RequestInit,
+) => RequestInit | Promise<RequestInit>;
+
 export interface CloudAccountClientOptions {
   apiBase: string;
   authToken?: string | null;
   getAuthToken?: () => string | null | Promise<string | null>;
+  prepareAuthenticatedRequest?: CloudAccountRequestPreparer;
   fetch?: typeof globalThis.fetch;
   signal?: AbortSignal;
 }
@@ -291,20 +302,134 @@ function normalizeApiBase(value: string): string {
   return normalized;
 }
 
+type CloudAccountAuthentication =
+  | { kind: "bearer"; token: string }
+  | { kind: "prepared"; prepare: CloudAccountRequestPreparer };
+
 async function requestContext(options: CloudAccountClientOptions): Promise<{
   base: string;
-  token: string;
   fetch: typeof globalThis.fetch;
+  authentication: CloudAccountAuthentication;
 }> {
-  const token = options.getAuthToken ? await options.getAuthToken() : options.authToken;
-  if (typeof token !== "string" || token.length === 0 || token.length > 4096 || /[\r\n]/.test(token)) {
-    throw new CloudAccountArchiveError("请先登录云账户", "CLOUD_AUTH_REQUIRED", 401);
+  const prepare = options.prepareAuthenticatedRequest;
+  let authentication: CloudAccountAuthentication;
+  if (prepare !== undefined) {
+    if (typeof prepare !== "function") {
+      throw new CloudAccountArchiveError("云账户请求准备器无效", "CLOUD_CLIENT_CONFIGURATION_INVALID");
+    }
+    if (options.getAuthToken !== undefined || options.authToken !== undefined && options.authToken !== null) {
+      throw new CloudAccountArchiveError(
+        "Cookie 会话不得与 Bearer 认证同时配置",
+        "CLOUD_CLIENT_CONFIGURATION_INVALID",
+      );
+    }
+    authentication = { kind: "prepared", prepare };
+  } else {
+    const token = options.getAuthToken ? await options.getAuthToken() : options.authToken;
+    if (typeof token !== "string" || token.length === 0 || token.length > 4096 || /[\r\n]/.test(token)) {
+      throw new CloudAccountArchiveError("请先登录云账户", "CLOUD_AUTH_REQUIRED", 401);
+    }
+    authentication = { kind: "bearer", token };
   }
   const fetchImplementation = options.fetch ?? globalThis.fetch;
   if (typeof fetchImplementation !== "function") {
     throw new CloudAccountArchiveError("当前环境不支持云服务请求", "CLOUD_FETCH_UNAVAILABLE");
   }
-  return { base: normalizeApiBase(options.apiBase), token, fetch: fetchImplementation };
+  return { base: normalizeApiBase(options.apiBase), fetch: fetchImplementation, authentication };
+}
+
+function requestMethod(init: RequestInit): string {
+  const method = (init.method ?? "GET").toUpperCase();
+  if (!/^[A-Z]{3,16}$/.test(method)) {
+    throw new CloudAccountArchiveError("云账户请求方法无效", "CLOUD_CLIENT_CONFIGURATION_INVALID");
+  }
+  return method;
+}
+
+function isSameOriginRequest(url: string): boolean {
+  try {
+    const location = globalThis.location;
+    if (!location?.href || !location.origin || location.origin === "null") return false;
+    return new URL(url, location.href).origin === location.origin;
+  } catch {
+    return false;
+  }
+}
+
+function configurationError(message: string): CloudAccountArchiveError {
+  return new CloudAccountArchiveError(message, "CLOUD_CLIENT_CONFIGURATION_INVALID");
+}
+
+function headersRecord(headers: Headers): Record<string, string> {
+  const result: Record<string, string> = {};
+  headers.forEach((value, name) => { result[name] = value; });
+  return result;
+}
+
+async function authenticatedRequestInit(
+  context: Awaited<ReturnType<typeof requestContext>>,
+  url: string,
+  init: RequestInit,
+): Promise<RequestInit> {
+  const method = requestMethod(init);
+  const requiredHeaders = new Headers(init.headers);
+  if (context.authentication.kind === "bearer") {
+    requiredHeaders.set("authorization", `Bearer ${context.authentication.token}`);
+    // Preserve the legacy fetch-init shape as well as its Bearer semantics.
+    return { ...init, method, headers: headersRecord(requiredHeaders) };
+  }
+
+  if (!isSameOriginRequest(url)) {
+    throw configurationError("Web Cookie 会话只能用于同源云服务请求");
+  }
+  const candidate = await context.authentication.prepare({
+    ...init,
+    method,
+    headers: new Headers(requiredHeaders),
+  });
+  if (!candidate || typeof candidate !== "object") {
+    throw configurationError("云账户请求准备器没有返回有效的 RequestInit");
+  }
+  const preparedMethod = requestMethod(candidate);
+  if (preparedMethod !== method) throw configurationError("云账户请求准备器不得修改请求方法");
+  if (candidate.body !== undefined && candidate.body !== init.body) {
+    throw configurationError("云账户请求准备器不得修改请求正文");
+  }
+  if (candidate.signal !== undefined && candidate.signal !== init.signal) {
+    throw configurationError("云账户请求准备器不得替换取消信号");
+  }
+
+  const headers = new Headers(candidate.headers ?? requiredHeaders);
+  let requiredHeaderChanged = false;
+  requiredHeaders.forEach((value, name) => {
+    if (headers.get(name) !== value) requiredHeaderChanged = true;
+  });
+  if (requiredHeaderChanged) throw configurationError("云账户请求准备器不得删除或修改业务请求头");
+  if (headers.has("authorization")) {
+    throw configurationError("Web Cookie 会话不得混用 Authorization");
+  }
+  if (headers.has("cookie")) {
+    throw configurationError("Web Cookie 会话必须由浏览器凭据策略发送，不能手工设置 Cookie");
+  }
+  if (candidate.credentials !== "include" || headers.get(WEB_SESSION_MODE_HEADER) !== WEB_SESSION_MODE_COOKIE) {
+    throw configurationError("Web Cookie 会话缺少安全凭据或会话模式标记");
+  }
+  const csrfToken = headers.get(WEB_SESSION_CSRF_HEADER);
+  const safeMethod = method === "GET" || method === "HEAD" || method === "OPTIONS";
+  if (safeMethod && csrfToken !== null) {
+    throw configurationError("只读 Web Cookie 请求不得携带 CSRF token");
+  }
+  if (!safeMethod && (csrfToken === null || !/^[A-Za-z0-9_-]{32}$/.test(csrfToken))) {
+    throw configurationError("Web Cookie 写请求缺少有效的 CSRF token");
+  }
+  return {
+    ...init,
+    ...candidate,
+    method,
+    body: init.body,
+    signal: init.signal,
+    headers,
+  };
 }
 
 function abortError(message = "账号归档下载已取消"): DOMException {
@@ -380,17 +505,19 @@ async function throwHttpError(response: Response, unsupportedArchive = false): P
 async function fetchJson(options: CloudAccountClientOptions, path: string, init: RequestInit): Promise<unknown> {
   const context = await requestContext(options);
   if (options.signal?.aborted) throw abortError("云容量请求已取消");
+  const url = `${context.base}${path}`;
+  const request = await authenticatedRequestInit(context, url, {
+    ...init,
+    signal: options.signal,
+    headers: {
+      ...(init.body === undefined ? {} : { "content-type": "application/json" }),
+      ...(init.headers ?? {}),
+    },
+  });
+  if (options.signal?.aborted) throw abortError("云容量请求已取消");
   let response: Response;
   try {
-    response = await context.fetch(`${context.base}${path}`, {
-      ...init,
-      signal: options.signal,
-      headers: {
-        authorization: `Bearer ${context.token}`,
-        ...(init.body === undefined ? {} : { "content-type": "application/json" }),
-        ...(init.headers ?? {}),
-      },
-    });
+    response = await context.fetch(url, request);
   } catch (error) {
     if (options.signal?.aborted || error instanceof DOMException && error.name === "AbortError") throw abortError("云容量请求已取消");
     throw new CloudAccountArchiveError("无法连接云服务", "CLOUD_NETWORK_ERROR");
@@ -464,19 +591,21 @@ export async function importCloudAccountArchive(
   }
   const context = await requestContext(options);
   if (options.signal?.aborted) throw abortError("账号归档导入已取消");
+  const url = `${context.base}/account/import/archive`;
+  const request = await authenticatedRequestInit(context, url, {
+    method: "POST",
+    signal: options.signal,
+    headers: {
+      "content-type": CLOUD_ACCOUNT_ARCHIVE_CONTENT_TYPE,
+      "x-dsp-account-import-guard": preview.guard,
+      "x-dsp-account-import-confirmation": preview.confirmation,
+    },
+    body: archive,
+  });
+  if (options.signal?.aborted) throw abortError("账号归档导入已取消");
   let response: Response;
   try {
-    response = await context.fetch(`${context.base}/account/import/archive`, {
-      method: "POST",
-      signal: options.signal,
-      headers: {
-        authorization: `Bearer ${context.token}`,
-        "content-type": CLOUD_ACCOUNT_ARCHIVE_CONTENT_TYPE,
-        "x-dsp-account-import-guard": preview.guard,
-        "x-dsp-account-import-confirmation": preview.confirmation,
-      },
-      body: archive,
-    });
+    response = await context.fetch(url, request);
   } catch (error) {
     if (options.signal?.aborted || error instanceof DOMException && error.name === "AbortError") throw abortError("账号归档导入已取消");
     throw new CloudAccountArchiveError("无法连接云服务", "ARCHIVE_IMPORT_NETWORK_ERROR");
@@ -624,16 +753,16 @@ export async function downloadCloudAccountArchive(
   let writable: FileSystemWritableFileStreamLike | null = null;
   let completed = false;
   try {
+    const url = `${context.base}/account/export/archive`;
+    const request = await authenticatedRequestInit(context, url, {
+      method: "GET",
+      signal: requestController.signal,
+      headers: { accept: CLOUD_ACCOUNT_ARCHIVE_CONTENT_TYPE },
+    });
+    if (options.signal?.aborted || requestController.signal.aborted) throw abortError();
     let response: Response;
     try {
-      response = await context.fetch(`${context.base}/account/export/archive`, {
-        method: "GET",
-        signal: requestController.signal,
-        headers: {
-          authorization: `Bearer ${context.token}`,
-          accept: CLOUD_ACCOUNT_ARCHIVE_CONTENT_TYPE,
-        },
-      });
+      response = await context.fetch(url, request);
     } catch (error) {
       if (options.signal?.aborted || requestController.signal.aborted || error instanceof DOMException && error.name === "AbortError") {
         throw abortError();

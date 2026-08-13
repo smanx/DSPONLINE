@@ -15,11 +15,18 @@ import {
   type CloudQuotaMode,
   type CloudQuotaSlot,
 } from "./cloudAccountArchive";
+import {
+  WEB_SESSION_CSRF_HEADER,
+  WEB_SESSION_MODE_COOKIE,
+  WEB_SESSION_MODE_HEADER,
+  webCookieSessionRequest,
+} from "./webSessionMigration";
 
 const TOKEN = "synthetic-secret-token";
 const CHECKSUM = "a".repeat(64);
 const MODES = ["normal", "speedrun"] as const;
 const SLOTS = ["main", "1", "2", "3"] as const;
+const COOKIE_CSRF = "csrf_abcdefghijklmnopqrstuvwxyz_";
 
 function usage(logicalBytes = 0) {
   return {
@@ -127,6 +134,50 @@ function client(fetchImplementation: typeof fetch, signal?: AbortSignal) {
   };
 }
 
+function cookieClient(fetchImplementation: typeof fetch, signal?: AbortSignal) {
+  const prepareAuthenticatedRequest = vi.fn((init: RequestInit) => webCookieSessionRequest({
+    transport: "cookie",
+    csrfToken: COOKIE_CSRF,
+    expiresAt: Date.now() + 60_000,
+  }, init));
+  return {
+    options: {
+      apiBase: "/api/",
+      prepareAuthenticatedRequest,
+      fetch: fetchImplementation,
+      signal,
+    },
+    prepareAuthenticatedRequest,
+  };
+}
+
+function importPreviewPayload(guard = "b".repeat(64)) {
+  return {
+    import: {
+      version: 1,
+      guard,
+      confirmation: `REPLACE_CLOUD_SAVES:${guard}`,
+      replaces: { modes: MODES, slots: SLOTS },
+      preserves: ["account_identity", "sessions", "leaderboard_submissions"],
+    },
+    cloudQuota: quotaSnapshot(),
+  };
+}
+
+function importResultPayload(guard = "c".repeat(64)) {
+  return {
+    imported: true,
+    revisionCount: 16,
+    logicalBytes: 1234,
+    guard,
+    modes: {
+      normal: Object.fromEntries(SLOTS.map((slot) => [slot, null])),
+      speedrun: Object.fromEntries(SLOTS.map((slot) => [slot, null])),
+    },
+    leaderboardRevalidationRequired: { normal: true, speedrun: true },
+  };
+}
+
 function transactionalWritable() {
   const chunks: Uint8Array[] = [];
   let committed = false;
@@ -183,6 +234,20 @@ describe("cloud account quota client", () => {
     expect((init?.headers as Record<string, string>).authorization).toBe(`Bearer ${TOKEN}`);
   });
 
+  it("keeps the asynchronous getAuthToken Bearer path compatible", async () => {
+    const getAuthToken = vi.fn().mockResolvedValue(TOKEN);
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ cloudQuota: quotaSnapshot() }));
+
+    await fetchCloudQuota({ apiBase: "/api/", getAuthToken, fetch: fetchMock });
+
+    expect(getAuthToken).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("/api/cloud-save/quota");
+    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${TOKEN}`);
+    expect(init?.credentials).toBeUndefined();
+  });
+
   it("does not copy the bearer token into a server error or its diagnostics", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       jsonResponse({ error: "容量服务暂不可用", code: "QUOTA_UNAVAILABLE" }, 503),
@@ -218,6 +283,169 @@ describe("cloud account quota client", () => {
     await expect(fetchCloudQuota(client(fetchMock))).rejects.toMatchObject({
       code: "CLOUD_RESPONSE_INVALID",
     } satisfies Partial<CloudAccountArchiveError>);
+  });
+});
+
+describe("cloud account Cookie request preparation", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("reuses one Cookie preparer for quota, preview, Blob download and ZIP import", async () => {
+    const guard = "b".repeat(64);
+    const archive = new Blob([new Uint8Array([7, 8, 9])], {
+      type: CLOUD_ACCOUNT_ARCHIVE_CONTENT_TYPE,
+    });
+    const saveBlob = vi.fn();
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ cloudQuota: quotaSnapshot() }))
+      .mockResolvedValueOnce(jsonResponse({ plan: quotaPlan("speedrun", "2") }))
+      .mockResolvedValueOnce(jsonResponse(importPreviewPayload(guard)))
+      .mockResolvedValueOnce(archiveResponse([new Uint8Array([1, 2, 3, 4])]))
+      .mockResolvedValueOnce(jsonResponse(importResultPayload()));
+    const { options, prepareAuthenticatedRequest } = cookieClient(fetchMock);
+
+    await fetchCloudQuota(options);
+    await preflightCloudQuota({ mode: "speedrun", slot: "2", size: 123, checksum: CHECKSUM }, options);
+    const preview = await fetchCloudAccountArchiveImportPreview(options);
+    await downloadCloudAccountArchive({ ...options, showSaveFilePicker: null, saveBlob });
+    await importCloudAccountArchive(archive, preview, options);
+
+    expect(prepareAuthenticatedRequest).toHaveBeenCalledTimes(5);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(saveBlob).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "/api/cloud-save/quota",
+      "/api/cloud-save/quota",
+      "/api/account/import/archive",
+      "/api/account/export/archive",
+      "/api/account/import/archive",
+    ]);
+
+    for (const index of [0, 2, 3]) {
+      const init = fetchMock.mock.calls[index]?.[1];
+      const headers = new Headers(init?.headers);
+      expect(init?.method).toBe("GET");
+      expect(init?.credentials).toBe("include");
+      expect(headers.get(WEB_SESSION_MODE_HEADER)).toBe(WEB_SESSION_MODE_COOKIE);
+      expect(headers.has(WEB_SESSION_CSRF_HEADER)).toBe(false);
+      expect(headers.has("authorization")).toBe(false);
+    }
+
+    for (const index of [1, 4]) {
+      const init = fetchMock.mock.calls[index]?.[1];
+      const headers = new Headers(init?.headers);
+      expect(init?.method).toBe("POST");
+      expect(init?.credentials).toBe("include");
+      expect(headers.get(WEB_SESSION_MODE_HEADER)).toBe(WEB_SESSION_MODE_COOKIE);
+      expect(headers.get(WEB_SESSION_CSRF_HEADER)).toBe(COOKIE_CSRF);
+      expect(headers.has("authorization")).toBe(false);
+    }
+    expect(fetchMock.mock.calls[4]?.[1]?.body).toBe(archive);
+    expect(new Headers(fetchMock.mock.calls[4]?.[1]?.headers).get("content-type"))
+      .toBe(CLOUD_ACCOUNT_ARCHIVE_CONTENT_TYPE);
+  });
+
+  it.each([
+    ["quota GET", (options: Parameters<typeof fetchCloudQuota>[0]) => fetchCloudQuota(options)],
+    ["quota POST", (options: Parameters<typeof fetchCloudQuota>[0]) => preflightCloudQuota({
+      mode: "normal", slot: "main", size: 1,
+    }, options)],
+    ["import preview GET", (options: Parameters<typeof fetchCloudQuota>[0]) => fetchCloudAccountArchiveImportPreview(options)],
+    ["archive download GET", (options: Parameters<typeof fetchCloudQuota>[0]) => downloadCloudAccountArchive({
+      ...options, showSaveFilePicker: null, saveBlob: vi.fn(),
+    })],
+    ["archive import POST", (options: Parameters<typeof fetchCloudQuota>[0]) => importCloudAccountArchive(
+      new Blob(["archive"]),
+      {
+        version: 1,
+        guard: "d".repeat(64),
+        confirmation: `REPLACE_CLOUD_SAVES:${"d".repeat(64)}`,
+        replaces: { modes: [...MODES], slots: [...SLOTS] },
+        preserves: [],
+        cloudQuota: normalizeCloudQuotaSnapshot(quotaSnapshot()),
+      },
+      options,
+    )],
+  ] as const)("rejects unauthenticated %s before issuing a request", async (_label, operation) => {
+    const fetchMock = vi.fn<typeof fetch>();
+
+    await expect(operation({ apiBase: "/api/", fetch: fetchMock })).rejects.toMatchObject({
+      code: "CLOUD_AUTH_REQUIRED",
+      status: 401,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["quota GET", (options: Parameters<typeof fetchCloudQuota>[0]) => fetchCloudQuota(options)],
+    ["quota POST", (options: Parameters<typeof fetchCloudQuota>[0]) => preflightCloudQuota({
+      mode: "normal", slot: "main", size: 1,
+    }, options)],
+    ["import preview GET", (options: Parameters<typeof fetchCloudQuota>[0]) => fetchCloudAccountArchiveImportPreview(options)],
+    ["archive download GET", (options: Parameters<typeof fetchCloudQuota>[0]) => downloadCloudAccountArchive({
+      ...options, showSaveFilePicker: null, saveBlob: vi.fn(),
+    })],
+    ["archive import POST", (options: Parameters<typeof fetchCloudQuota>[0]) => importCloudAccountArchive(
+      new Blob(["archive"]),
+      {
+        version: 1,
+        guard: "e".repeat(64),
+        confirmation: `REPLACE_CLOUD_SAVES:${"e".repeat(64)}`,
+        replaces: { modes: [...MODES], slots: [...SLOTS] },
+        preserves: [],
+        cloudQuota: normalizeCloudQuotaSnapshot(quotaSnapshot()),
+      },
+      options,
+    )],
+  ] as const)("does not issue %s when the authentication preparer throws", async (_label, operation) => {
+    const preparationError = new Error("synthetic authentication preparation failure");
+    const prepareAuthenticatedRequest = vi.fn(() => { throw preparationError; });
+    const fetchMock = vi.fn<typeof fetch>();
+
+    await expect(operation({
+      apiBase: "/api/",
+      prepareAuthenticatedRequest,
+      fetch: fetchMock,
+    })).rejects.toBe(preparationError);
+    expect(prepareAuthenticatedRequest).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects mixed Cookie and Authorization authentication before fetch", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const prepareAuthenticatedRequest = vi.fn((init: RequestInit) => ({
+      ...init,
+      credentials: "include" as const,
+      headers: {
+        ...(init.headers as Record<string, string>),
+        [WEB_SESSION_MODE_HEADER]: WEB_SESSION_MODE_COOKIE,
+      },
+    }));
+
+    await expect(fetchCloudQuota({
+      apiBase: "/api/",
+      authToken: TOKEN,
+      prepareAuthenticatedRequest,
+      fetch: fetchMock,
+    })).rejects.toMatchObject({ code: "CLOUD_CLIENT_CONFIGURATION_INVALID" });
+    expect(prepareAuthenticatedRequest).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await expect(fetchCloudQuota({
+      apiBase: "/api/",
+      prepareAuthenticatedRequest: (init) => ({
+        ...webCookieSessionRequest({
+          transport: "cookie",
+          csrfToken: COOKIE_CSRF,
+          expiresAt: Date.now() + 60_000,
+        }, init),
+        headers: { authorization: `Bearer ${TOKEN}` },
+      }),
+      fetch: fetchMock,
+    })).rejects.toMatchObject({ code: "CLOUD_CLIENT_CONFIGURATION_INVALID" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -443,27 +671,8 @@ describe("cloud account archive import", () => {
   it("reads an authenticated guard preview and submits the exact replacement guard", async () => {
     const guard = "b".repeat(64);
     const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({
-        import: {
-          version: 1,
-          guard,
-          confirmation: `REPLACE_CLOUD_SAVES:${guard}`,
-          replaces: { modes: MODES, slots: SLOTS },
-          preserves: ["account_identity", "sessions", "leaderboard_submissions"],
-        },
-        cloudQuota: quotaSnapshot(),
-      }))
-      .mockResolvedValueOnce(jsonResponse({
-        imported: true,
-        revisionCount: 16,
-        logicalBytes: 1234,
-        guard: "c".repeat(64),
-        modes: {
-          normal: Object.fromEntries(SLOTS.map((slot) => [slot, null])),
-          speedrun: Object.fromEntries(SLOTS.map((slot) => [slot, null])),
-        },
-        leaderboardRevalidationRequired: { normal: true, speedrun: true },
-      }));
+      .mockResolvedValueOnce(jsonResponse(importPreviewPayload(guard)))
+      .mockResolvedValueOnce(jsonResponse(importResultPayload()));
     const options = client(fetchMock);
     const preview = await fetchCloudAccountArchiveImportPreview(options);
     expect(preview.guard).toBe(guard);
