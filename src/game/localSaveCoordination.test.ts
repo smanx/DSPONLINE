@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  canApplyLocalSaveEmergencyMirror,
   LOCAL_SAVE_LEASE_DURATION_MS,
   canClaimLocalSaveWriterLease,
   createLocalSaveRevision,
   createLocalSaveWriterLease,
   inspectLocalSaveIdentity,
   localSaveConflictKeys,
+  localSaveEmergencyMirrorKeys,
   localSaveRevisionKey,
   parseLocalSaveConflictRecord,
+  parseLocalSaveEmergencyMirrorMetadata,
   parseLocalSaveRevision,
   parseLocalSaveWriterLease,
 } from "./localSaveCoordination";
@@ -70,5 +73,46 @@ describe("local save cross-tab coordination", () => {
     expect(parseLocalSaveWriterLease(JSON.stringify({ schemaVersion: 1, ownerId: "x", fencingToken: 0, heartbeatAt: 1, expiresAt: 2 }))).toBeNull();
     expect(parseLocalSaveWriterLease("{broken")).toBeNull();
     expect(parseLocalSaveConflictRecord(JSON.stringify({ schemaVersion: 1, conflictId: "x" }))).toBeNull();
+  });
+
+  it("accepts only an emergency mirror proven to continue the durable writer chain", () => {
+    const lease = createLocalSaveWriterLease("tab-a", null, 100);
+    const revision = createLocalSaveRevision({
+      saveKey: "dsp-idle-network.save.v1",
+      previousRevision: 2,
+      value: '{"savedAt":200,"state":{},"checksum":"old"}',
+      writerId: "tab-a",
+      fencingToken: lease.fencingToken,
+      now: 200,
+    });
+    const metadata = parseLocalSaveEmergencyMirrorMetadata(JSON.stringify({
+      schemaVersion: 1,
+      mode: "normal",
+      saveKey: "dsp-idle-network.save.v1",
+      writerId: "tab-a",
+      fencingToken: lease.fencingToken,
+      candidateRevision: revision.revision + 1,
+      savedAt: 300,
+      checksum: "next",
+      createdAt: 301,
+    }));
+    expect(metadata).not.toBeNull();
+    const options = {
+      metadata: metadata!,
+      expectedWriterId: "tab-a",
+      expectedMode: "normal" as const,
+      expectedSaveKey: "dsp-idle-network.save.v1",
+      payloadIdentity: { savedAt: 300, checksum: "next" },
+      durableRevision: revision,
+      durableLease: lease,
+    };
+    expect(canApplyLocalSaveEmergencyMirror(options)).toBe(true);
+    expect(canApplyLocalSaveEmergencyMirror({ ...options, expectedWriterId: "tab-b" })).toBe(false);
+    expect(canApplyLocalSaveEmergencyMirror({ ...options, durableLease: { ...lease, ownerId: "tab-b" } })).toBe(false);
+    expect(canApplyLocalSaveEmergencyMirror({ ...options, durableRevision: { ...revision, writerId: "tab-b" } })).toBe(false);
+    expect(canApplyLocalSaveEmergencyMirror({ ...options, payloadIdentity: { savedAt: 300, checksum: "tampered" } })).toBe(false);
+    expect(canApplyLocalSaveEmergencyMirror({ ...options, metadata: { ...metadata!, candidateRevision: revision.revision } })).toBe(false);
+    expect(localSaveEmergencyMirrorKeys("normal").payload).not.toBe(localSaveEmergencyMirrorKeys("speedrun").payload);
+    expect(parseLocalSaveEmergencyMirrorMetadata("{broken")).toBeNull();
   });
 });

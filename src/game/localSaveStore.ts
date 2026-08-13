@@ -8,18 +8,22 @@ import {
   LOCAL_SAVE_STORAGE_EVENT_KEY,
   LOCAL_SAVE_WRITER_LEASE_KEY,
   LOCAL_SAVE_WRITER_LOCK,
+  LOCAL_SAVE_WRITER_SESSION_KEY,
   LocalSaveConflictError,
   LocalSaveReadOnlyError,
+  canApplyLocalSaveEmergencyMirror,
   canClaimLocalSaveWriterLease,
   createLocalSaveConflictId,
   createLocalSaveRevision,
   createLocalSaveWriterId,
   createLocalSaveWriterLease,
   inspectLocalSaveIdentity,
+  localSaveEmergencyMirrorKeys,
   localSaveConflictKeys,
   localSaveConflictMetadataKey,
   localSaveRevisionKey,
   parseLocalSaveConflictRecord,
+  parseLocalSaveEmergencyMirrorMetadata,
   parseLocalSaveRevision,
   parseLocalSaveWriterLease,
   type LocalSaveBroadcastMessage,
@@ -28,6 +32,7 @@ import {
   type LocalSaveWriterLease,
   type LocalSaveWriterStatus,
 } from "./localSaveCoordination";
+import { inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
 
 const DATABASE_NAME = "dsp-idle-network.local-saves";
 const DATABASE_VERSION = 2;
@@ -145,7 +150,21 @@ let writeQueue: Promise<void> = Promise.resolve();
 let pendingWriteError: unknown = null;
 let startupConflictId: string | null = null;
 let startupConflictCreatedAt = -1;
-const writerId = createLocalSaveWriterId();
+function resolveLocalSaveWriterId(): string {
+  if (typeof window === "undefined") return createLocalSaveWriterId();
+  try {
+    const navigationType = (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined)?.type;
+    const existing = window.sessionStorage.getItem(LOCAL_SAVE_WRITER_SESSION_KEY);
+    if ((navigationType === "reload" || navigationType === "back_forward") && existing?.startsWith("tab_") && existing.length <= 200) return existing;
+    const created = createLocalSaveWriterId();
+    window.sessionStorage.setItem(LOCAL_SAVE_WRITER_SESSION_KEY, created);
+    return created;
+  } catch {
+    return createLocalSaveWriterId();
+  }
+}
+
+const writerId = resolveLocalSaveWriterId();
 let writerStatus: LocalSaveWriterStatus = {
   role: "initializing",
   writerId,
@@ -184,6 +203,15 @@ function byteLength(value: string): number {
 
 function savedAt(value: string): number {
   return inspectLocalSaveIdentity(value).savedAt;
+}
+
+function inspectedEnvelopeMode(inspection: ReturnType<typeof inspectSaveEnvelopeChecksum>): LocalSaveMode | null {
+  const envelopeMode = inspection.parsed?.mode;
+  const stateMode = inspection.state?.mode;
+  if (envelopeMode !== undefined && envelopeMode !== "normal" && envelopeMode !== "speedrun") return null;
+  if (stateMode !== undefined && stateMode !== "normal" && stateMode !== "speedrun") return null;
+  if (envelopeMode && stateMode && envelopeMode !== stateMode) return null;
+  return (envelopeMode ?? stateMode ?? "normal") as LocalSaveMode;
 }
 
 function modeFromKey(key: string, valuePrefix = ""): LocalSaveMode {
@@ -737,6 +765,41 @@ function preserveDevelopmentMirror(): boolean {
     new URLSearchParams(window.location.search).get("storageMigration") !== "production";
 }
 
+interface EmergencyMirror {
+  payload: string;
+  metadata: ReturnType<typeof parseLocalSaveEmergencyMirrorMetadata>;
+}
+
+function readEmergencyMirror(mode: LocalSaveMode): EmergencyMirror | null {
+  try {
+    const keys = localSaveEmergencyMirrorKeys(mode);
+    const payload = window.localStorage.getItem(keys.payload);
+    const metadata = parseLocalSaveEmergencyMirrorMetadata(window.localStorage.getItem(keys.metadata));
+    if (payload === null) {
+      // Metadata without a payload cannot recover any data. Removing only the
+      // orphan metadata is safe and prevents retrying it on every startup.
+      if (window.localStorage.getItem(keys.metadata) !== null) window.localStorage.removeItem(keys.metadata);
+      return null;
+    }
+    // Keep a payload even when metadata is missing or malformed. It cannot be
+    // applied automatically, but it may be the only copy left after a crash
+    // between the two synchronous localStorage writes.
+    return { payload, metadata };
+  } catch {
+    return null;
+  }
+}
+
+function clearEmergencyMirror(mode: LocalSaveMode): void {
+  try {
+    const keys = localSaveEmergencyMirrorKeys(mode);
+    window.localStorage.removeItem(keys.payload);
+    window.localStorage.removeItem(keys.metadata);
+  } catch {
+    // A stale mirror is reconciled on a later startup and never overwrites silently.
+  }
+}
+
 async function initializeIndexedDb(): Promise<void> {
   const db = await openDatabase();
   database = db;
@@ -758,6 +821,70 @@ async function initializeIndexedDb(): Promise<void> {
         startupConflictCreatedAt = conflict.createdAt;
       }
     }
+  }
+
+  const durableLease = parseLocalSaveWriterLease(await readCoordinationValue(db, LOCAL_SAVE_WRITER_LEASE_KEY));
+  for (const mode of ["normal", "speedrun"] as const) {
+    const mirror = readEmergencyMirror(mode);
+    if (!mirror) continue;
+    const key = primaryKeyForMode(mode);
+    const existing = cache.get(key) ?? null;
+    const revision = parseLocalSaveRevision(await readCoordinationValue(db, localSaveRevisionKey(key)));
+    const payloadIdentity = inspectLocalSaveIdentity(mirror.payload);
+    const integrity = inspectSaveEnvelopeChecksum(mirror.payload);
+    const payloadMode = inspectedEnvelopeMode(integrity);
+    if (mirror.metadata && integrity.status === "valid" && payloadMode === mode && canApplyLocalSaveEmergencyMirror({
+      metadata: mirror.metadata,
+      expectedWriterId: writerId,
+      expectedMode: mode,
+      expectedSaveKey: key,
+      payloadIdentity,
+      durableRevision: revision,
+      durableLease,
+    })) {
+      const now = Date.now();
+      const transaction = db.transaction(RECORD_STORE, "readwrite");
+      const done = transactionDone(transaction);
+      const store = transaction.objectStore(RECORD_STORE);
+      putStoredValue(store, key, mirror.payload, now);
+      const nextRevision = createLocalSaveRevision({
+        saveKey: key,
+        previousRevision: revision?.revision ?? 0,
+        value: mirror.payload,
+        writerId,
+        fencingToken: mirror.metadata.fencingToken,
+        now,
+      });
+      putStoredValue(store, localSaveRevisionKey(key), JSON.stringify(nextRevision), now);
+      await done;
+      putCacheValue(key, mirror.payload, now);
+      revisionCache.set(key, nextRevision.revision);
+      clearEmergencyMirror(mode);
+      // A legacy same-name normal mirror may remain from older code. Remove it
+      // only when it is byte-identical to the proven mirror just committed.
+      if (mode === "normal") {
+        try { if (window.localStorage.getItem(key) === mirror.payload) window.localStorage.removeItem(key); } catch { /* optional cleanup */ }
+      }
+      continue;
+    }
+    if (existing !== mirror.payload) {
+      const now = Date.now();
+      const transaction = db.transaction(RECORD_STORE, "readwrite");
+      const done = transactionDone(transaction);
+      const store = transaction.objectStore(RECORD_STORE);
+      const conflictId = preserveWriteConflict(
+        store,
+        key,
+        mirror.payload,
+        existing,
+        mirror.metadata?.fencingToken ?? revision?.fencingToken ?? durableLease?.fencingToken ?? 1,
+        now,
+      );
+      await done;
+      startupConflictId = conflictId;
+      startupConflictCreatedAt = now;
+    }
+    clearEmergencyMirror(mode);
   }
 
   const legacy = legacyEntries();
@@ -921,6 +1048,12 @@ export async function resolveLocalSaveConflict(
     if (!conflict.candidateDeleted && candidate === null) throw new Error("冲突候选副本缺失");
     if (!conflict.persistedMissing && persistedAtConflict === null) throw new Error("冲突持久副本缺失");
     if (current !== persistedAtConflict) throw new Error("当前存档在确认期间再次发生变化");
+    if (resolution === "candidate" && candidate !== null) {
+      const candidateIntegrity = inspectSaveEnvelopeChecksum(candidate);
+      if (candidateIntegrity.status === "invalid" || inspectedEnvelopeMode(candidateIntegrity) !== modeFromKey(conflict.saveKey)) {
+        throw new Error("冲突候选存档完整性或模式校验失败");
+      }
+    }
     const selected = resolution === "candidate" ? candidate : current;
     const revisionRecord = await requestResult(store.get(localSaveRevisionKey(conflict.saveKey)) as IDBRequest<StoredSaveRecord | undefined>);
     const revision = parseLocalSaveRevision(revisionRecord?.value);
@@ -1042,14 +1175,29 @@ export function writePrimarySaveEmergencyMirror(value: string): boolean {
   ensureSynchronousFallback();
   if (backend !== "indexeddb" || writerStatus.role !== "primary") return false;
   try {
-    let mode = "normal";
+    let mode: LocalSaveMode = "normal";
     try {
       const parsed = JSON.parse(value) as { mode?: unknown; state?: { mode?: unknown } };
       mode = parsed.mode === "speedrun" || parsed.state?.mode === "speedrun" ? "speedrun" : "normal";
     } catch { /* checksum validation happens at commit */ }
-    const key = mode === "normal" ? SAVE_KEY : `${SAVE_KEY}.${mode}.emergency`;
-    window.localStorage.setItem(key, value);
-    return window.localStorage.getItem(key) === value;
+    const key = primaryKeyForMode(mode);
+    const keys = localSaveEmergencyMirrorKeys(mode);
+    const identity = inspectLocalSaveIdentity(value);
+    const metadata = {
+      schemaVersion: 1,
+      mode,
+      saveKey: key,
+      writerId,
+      fencingToken: writerStatus.fencingToken,
+      candidateRevision: revisionCache.get(key) ?? 1,
+      savedAt: identity.savedAt,
+      checksum: identity.checksum,
+      createdAt: Date.now(),
+    } as const;
+    window.localStorage.setItem(keys.payload, value);
+    window.localStorage.setItem(keys.metadata, JSON.stringify(metadata));
+    return window.localStorage.getItem(keys.payload) === value &&
+      parseLocalSaveEmergencyMirrorMetadata(window.localStorage.getItem(keys.metadata)) !== null;
   } catch {
     return false;
   }
@@ -1059,18 +1207,27 @@ export function clearPrimarySaveEmergencyMirror(committedValue: string): void {
   ensureSynchronousFallback();
   if (backend !== "indexeddb" || preserveDevelopmentMirror()) return;
   try {
-    let mode = "normal";
+    let mode: LocalSaveMode = "normal";
     try {
       const parsed = JSON.parse(committedValue) as { mode?: unknown; state?: { mode?: unknown } };
       mode = parsed.mode === "speedrun" || parsed.state?.mode === "speedrun" ? "speedrun" : "normal";
     } catch { /* keep normal fallback */ }
-    const key = mode === "normal" ? SAVE_KEY : `${SAVE_KEY}.${mode}.emergency`;
-    if (mode === "speedrun") {
-      const cached = getLocalSaveValue(key);
-      if (cached !== null && savedAt(cached) <= savedAt(committedValue)) removeLocalSaveValue(key);
+    const mirror = readEmergencyMirror(mode);
+    if (mirror) {
+      const samePayload = mirror.payload === committedValue;
+      const sameWriterChain = mirror.metadata?.writerId === writerId &&
+        mirror.metadata.fencingToken === writerStatus.fencingToken;
+      if (samePayload || sameWriterChain && savedAt(mirror.payload) <= savedAt(committedValue)) {
+        clearEmergencyMirror(mode);
+      }
     }
-    const mirrored = window.localStorage.getItem(key);
-    if (mirrored !== null && savedAt(mirrored) <= savedAt(committedValue)) window.localStorage.removeItem(key);
+    // Remove the pre-1.0.40 speedrun emergency key after its content is known
+    // to be no newer than the committed primary. Old readers remain supported.
+    if (mode === "speedrun") {
+      const legacyKey = `${SAVE_KEY}.speedrun.emergency`;
+      const legacy = getLocalSaveValue(legacyKey);
+      if (legacy !== null && savedAt(legacy) <= savedAt(committedValue)) removeLocalSaveValue(legacyKey);
+    }
   } catch {
     // A stale mirror is harmless and will be reconciled on the next startup.
   }

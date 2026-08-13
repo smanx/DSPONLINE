@@ -6,6 +6,8 @@ export const LOCAL_SAVE_CONFLICT_METADATA_KEY_PREFIX = `${LOCAL_SAVE_COORDINATIO
 export const LOCAL_SAVE_BROADCAST_CHANNEL = "dsp-idle-network.local-save-writes.v1";
 export const LOCAL_SAVE_STORAGE_EVENT_KEY = `${LOCAL_SAVE_COORDINATION_PREFIX}.event`;
 export const LOCAL_SAVE_WRITER_LOCK = "dsp-idle-network.local-save-writer.v1";
+export const LOCAL_SAVE_WRITER_SESSION_KEY = `${LOCAL_SAVE_COORDINATION_PREFIX}.tab-id`;
+export const LOCAL_SAVE_EMERGENCY_MIRROR_PREFIX = `${LOCAL_SAVE_COORDINATION_PREFIX}.emergency-mirror`;
 export const LOCAL_SAVE_LEASE_DURATION_MS = 15_000;
 export const LOCAL_SAVE_HEARTBEAT_INTERVAL_MS = 5_000;
 
@@ -38,6 +40,18 @@ export interface LocalSaveRevision {
   writerId: string;
   fencingToken: number;
   updatedAt: number;
+}
+
+export interface LocalSaveEmergencyMirrorMetadata {
+  schemaVersion: 1;
+  mode: "normal" | "speedrun";
+  saveKey: string;
+  writerId: string;
+  fencingToken: number;
+  candidateRevision: number;
+  savedAt: number;
+  checksum: string | null;
+  createdAt: number;
 }
 
 export interface LocalSaveBroadcastMessage {
@@ -92,6 +106,13 @@ export function localSaveConflictMetadataKey(conflictId: string): string {
   return `${LOCAL_SAVE_CONFLICT_METADATA_KEY_PREFIX}${conflictId}`;
 }
 
+export function localSaveEmergencyMirrorKeys(mode: "normal" | "speedrun"): { payload: string; metadata: string } {
+  return {
+    payload: `${LOCAL_SAVE_EMERGENCY_MIRROR_PREFIX}.${mode}.payload`,
+    metadata: `${LOCAL_SAVE_EMERGENCY_MIRROR_PREFIX}.${mode}.metadata`,
+  };
+}
+
 export function createLocalSaveWriterId(now = Date.now()): string {
   try {
     return `tab_${crypto.randomUUID()}`;
@@ -131,6 +152,42 @@ export function parseLocalSaveRevision(raw: string | null | undefined): LocalSav
   } catch {
     return null;
   }
+}
+
+export function parseLocalSaveEmergencyMirrorMetadata(raw: string | null | undefined): LocalSaveEmergencyMirrorMetadata | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Partial<LocalSaveEmergencyMirrorMetadata>;
+    return value.schemaVersion === 1 && (value.mode === "normal" || value.mode === "speedrun") &&
+      typeof value.saveKey === "string" && value.saveKey.length > 0 &&
+      typeof value.writerId === "string" && value.writerId.length > 0 &&
+      Number.isSafeInteger(value.fencingToken) && value.fencingToken! >= 1 &&
+      Number.isSafeInteger(value.candidateRevision) && value.candidateRevision! >= 1 &&
+      typeof value.savedAt === "number" && Number.isFinite(value.savedAt) &&
+      (value.checksum === null || typeof value.checksum === "string") &&
+      typeof value.createdAt === "number" && Number.isFinite(value.createdAt)
+      ? value as LocalSaveEmergencyMirrorMetadata
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function canApplyLocalSaveEmergencyMirror(options: {
+  metadata: LocalSaveEmergencyMirrorMetadata;
+  expectedWriterId: string;
+  expectedMode: "normal" | "speedrun";
+  expectedSaveKey: string;
+  payloadIdentity: { savedAt: number; checksum: string | null };
+  durableRevision: LocalSaveRevision | null;
+  durableLease: LocalSaveWriterLease | null;
+}): boolean {
+  const { metadata, expectedWriterId, expectedMode, expectedSaveKey, payloadIdentity, durableRevision, durableLease } = options;
+  return metadata.writerId === expectedWriterId && metadata.mode === expectedMode && metadata.saveKey === expectedSaveKey &&
+    metadata.savedAt === payloadIdentity.savedAt && metadata.checksum === payloadIdentity.checksum &&
+    metadata.candidateRevision > (durableRevision?.revision ?? 0) &&
+    (!durableRevision || durableRevision.writerId === metadata.writerId && durableRevision.fencingToken === metadata.fencingToken) &&
+    durableLease?.ownerId === metadata.writerId && durableLease.fencingToken === metadata.fencingToken;
 }
 
 export function parseLocalSaveConflictRecord(raw: string | null | undefined): LocalSaveConflictRecord | null {

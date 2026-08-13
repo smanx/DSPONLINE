@@ -48,6 +48,41 @@ async function writeLegacyRecord(page: Page, key: string, value: string): Promis
   }, { recordKey: key, recordValue: value });
 }
 
+async function seedEmergencyMirror(
+  page: Page,
+  metadataWriter: string | null,
+): Promise<{ originalSavedAt: number; candidateSavedAt: number }> {
+  return page.evaluate(async ({ writer }) => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    const state = engine.createInitialState();
+    state.elapsedSeconds = 321;
+    const saved = await storage.saveGameVerified(state);
+    if (!saved.success) throw new Error(saved.message);
+    const store = await import("/src/game/localSaveStore.ts");
+    const raw = store.getLocalSaveValue("dsp-idle-network.save.v1");
+    if (!raw) throw new Error("missing seeded primary save");
+    const candidate = JSON.parse(raw);
+    candidate.savedAt += 1_000;
+    const candidateRaw = JSON.stringify(candidate);
+    localStorage.setItem("dsp-idle-network.local-save-coordination.v1.emergency-mirror.normal.payload", candidateRaw);
+    if (writer !== null) {
+      localStorage.setItem("dsp-idle-network.local-save-coordination.v1.emergency-mirror.normal.metadata", JSON.stringify({
+        schemaVersion: 1,
+        mode: "normal",
+        saveKey: "dsp-idle-network.save.v1",
+        writerId: writer,
+        fencingToken: 1,
+        candidateRevision: 999,
+        savedAt: candidate.savedAt,
+        checksum: candidate.checksum,
+        createdAt: Date.now(),
+      }));
+    }
+    return { originalSavedAt: JSON.parse(raw).savedAt, candidateSavedAt: candidate.savedAt };
+  }, { writer: metadataWriter });
+}
+
 test("upgrades an existing IndexedDB v1 in place without changing save bytes", async ({ page }) => {
   const original = JSON.stringify({ savedAt: 1_777_777_777_000, state: { version: 1 }, checksum: "legacy-bytes" });
   await page.goto("about:blank");
@@ -188,6 +223,73 @@ test("a stale tab cannot overwrite a coordinated save and both versions are pres
   expect(conflictKeys.some((key) => key.endsWith(".persisted"))).toBe(true);
 });
 
+test("an integrity-valid emergency mirror from another writer remains an explicit conflict", async ({ page }) => {
+  await preparePage(page);
+  const seeded = await seedEmergencyMirror(page, "tab_untrusted_external_writer");
+
+  await page.reload();
+  await expect(page.getByRole("alert").filter({ hasText: "已阻止跨标签页覆盖" })).toBeVisible();
+  const conflicts = await page.evaluate(async () => (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts());
+  expect(conflicts).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      candidate: expect.objectContaining({ available: true, savedAt: seeded.candidateSavedAt }),
+      persisted: expect.objectContaining({ available: true, savedAt: seeded.originalSavedAt }),
+    }),
+  ]));
+});
+
+test("a crash between emergency payload and metadata writes preserves both versions", async ({ page }) => {
+  await preparePage(page);
+  const seeded = await seedEmergencyMirror(page, null);
+
+  await page.reload();
+  await expect(page.getByRole("alert").filter({ hasText: "已阻止跨标签页覆盖" })).toBeVisible();
+  const conflicts = await page.evaluate(async () => (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts());
+  expect(conflicts).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      candidate: expect.objectContaining({ available: true, savedAt: seeded.candidateSavedAt }),
+      persisted: expect.objectContaining({ available: true, savedAt: seeded.originalSavedAt }),
+    }),
+  ]));
+});
+
+test("a reload applies a verified emergency mirror only from its own durable writer chain", async ({ page }) => {
+  await preparePage(page);
+  const expected = await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    const store = await import("/src/game/localSaveStore.ts");
+    const state = engine.createInitialState();
+    state.elapsedSeconds = 700;
+    const first = await storage.saveGameVerified(state);
+    if (!first.success) throw new Error(first.message);
+    const persisted = store.getLocalSaveValue("dsp-idle-network.save.v1");
+    if (!persisted) throw new Error("missing durable base save");
+    state.elapsedSeconds = 701;
+    const candidate = storage.serializeEnvelope(state, JSON.parse(persisted).savedAt + 1_000);
+    const identity = JSON.parse(candidate);
+    const status = store.getLocalSaveWriterStatus();
+    localStorage.setItem("dsp-idle-network.local-save-coordination.v1.emergency-mirror.normal.payload", candidate);
+    localStorage.setItem("dsp-idle-network.local-save-coordination.v1.emergency-mirror.normal.metadata", JSON.stringify({
+      schemaVersion: 1,
+      mode: "normal",
+      saveKey: "dsp-idle-network.save.v1",
+      writerId: status.writerId,
+      fencingToken: status.fencingToken,
+      candidateRevision: 2,
+      savedAt: identity.savedAt,
+      checksum: identity.checksum,
+      createdAt: Date.now(),
+    }));
+    return candidate;
+  });
+
+  await page.reload();
+  await expect(page.locator(".local-save-writer-banner--conflict")).toHaveCount(0);
+  expect(await readRecord(page, SAVE_KEY)).toBe(expected);
+  expect(await page.evaluate(() => localStorage.getItem("dsp-idle-network.local-save-coordination.v1.emergency-mirror.normal.payload"))).toBeNull();
+});
+
 test("normal and speedrun slots keep independent coordinated revisions and tombstones", async ({ page }) => {
   await preparePage(page);
   const result = await page.evaluate(async () => {
@@ -286,6 +388,40 @@ test("a conflict can atomically apply the candidate only while the persisted bas
   expect(selected).not.toBe(external);
   expect(JSON.parse(selected!).state.elapsedSeconds).toBe(30);
   expect(await page.evaluate(async () => (await (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts()).length)).toBe(0);
+});
+
+test("a corrupted conflict candidate is preserved but cannot become the primary save", async ({ page }) => {
+  await preparePage(page);
+  const persisted = await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    const state = engine.createInitialState();
+    state.elapsedSeconds = 10;
+    const result = await storage.saveGameVerified(state);
+    if (!result.success) throw new Error(result.message);
+    return (await import("/src/game/localSaveStore.ts")).getLocalSaveValue("dsp-idle-network.save.v1");
+  });
+  const external = JSON.stringify({ formatVersion: 2, savedAt: 20, mode: "normal", state: { version: 46, mode: "normal", entities: [] }, checksum: "invalid" });
+  await writeLegacyRecord(page, SAVE_KEY, external);
+  await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    const state = engine.createInitialState();
+    state.elapsedSeconds = 30;
+    await storage.saveGameVerified(state);
+  });
+  const conflict = await page.evaluate(async () => (await (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts())[0]);
+  const candidateKey = `dsp-idle-network.save.v1.conflict.${conflict.conflictId}.candidate`;
+  const candidate = JSON.parse((await readRecord(page, candidateKey))!);
+  candidate.checksum = "tampered";
+  await writeLegacyRecord(page, candidateKey, JSON.stringify(candidate));
+
+  const applied = await page.evaluate(async (id) => (await import("/src/game/localSaveStore.ts")).resolveLocalSaveConflict(id, "candidate"), conflict.conflictId);
+  expect(applied).toBe(false);
+  expect(await readRecord(page, SAVE_KEY)).toBe(external);
+  expect(await readRecord(page, candidateKey)).not.toBeNull();
+  expect(await page.evaluate(async () => (await (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts()).length)).toBe(1);
+  expect(persisted).not.toBeNull();
 });
 
 test("an expired secondary lease requires explicit takeover and reload", async ({ context }) => {

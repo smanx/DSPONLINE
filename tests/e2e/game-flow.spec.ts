@@ -1761,8 +1761,11 @@ async function openStressStageGame(page: Page) {
   await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible();
 }
 
-async function openOperationsStageGame(page: Page) {
+async function openOperationsStageGame(page: Page, route = "/") {
   await page.addInitScript(() => {
+    const seedMarker = "dsp-idle-network.e2e.operations-stage-seeded.v1";
+    if (window.sessionStorage.getItem(seedMarker) === "1") return;
+    window.sessionStorage.setItem(seedMarker, "1");
     if (window.localStorage.getItem("dsp-idle-network.save.v1")) return;
     const state = {
       version: 16,
@@ -1795,7 +1798,7 @@ async function openOperationsStageGame(page: Page) {
     };
     window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now() + 60_000, state }));
   });
-  await page.goto("/");
+  await page.goto(route);
   await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible();
 }
 
@@ -5035,7 +5038,7 @@ test("operations center diagnoses equipment and records achievement progress", a
 
 test("operations settings and local save slots persist across reload", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await openOperationsStageGame(page);
+  await openOperationsStageGame(page, "/?storageMigration=production");
   await page.getByLabel("打开设置").click();
   let operations = page.getByRole("dialog", { name: "运营中心" });
   await operations.locator(".operations-tabs").getByRole("tab", { name: "设置" }).click();
@@ -5072,7 +5075,12 @@ test("operations settings and local save slots persist across reload", async ({ 
   await page.waitForTimeout(2_000);
   await operations.locator(".operations-tabs").getByRole("tab", { name: "存档" }).click();
   await operations.getByRole("button", { name: "立即保存" }).click();
-  const elapsedSeconds = await page.evaluate(() => JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1")!).state.elapsedSeconds as number);
+  const elapsedSeconds = await page.evaluate(async () => {
+    const store = await import("/src/game/localSaveStore.ts");
+    const raw = store.getLocalSaveValue("dsp-idle-network.save.v1");
+    if (!raw) throw new Error("authoritative primary save is missing");
+    return JSON.parse(raw).state.elapsedSeconds as number;
+  });
   expect(elapsedSeconds).toBeGreaterThan(1.5);
 
   await operations.getByLabel("保存到槽位 1").click();
@@ -5086,13 +5094,16 @@ test("operations settings and local save slots persist across reload", async ({ 
   const deleteDialog = page.getByRole("dialog", { name: "删除本地槽位 1" });
   await expect(deleteDialog).toContainText("第一次确认");
   await deleteDialog.getByRole("button", { name: /继续确认/ }).click();
-  await expect(deleteDialog).toContainText("第二次确认");
-  await expect(operations.locator(".save-slot").filter({ hasText: "本地槽位 1" })).toHaveClass(/save-slot--occupied/);
-  await deleteDialog.getByRole("button", { name: /确认永久删除/ }).click();
-  await expect(deleteDialog).toHaveCount(0);
-  await expect(operations.locator(".save-slot").filter({ hasText: "本地槽位 1" })).not.toHaveClass(/save-slot--occupied/);
+  const finalDeleteDialog = page.getByRole("alertdialog", { name: "删除本地槽位 1" });
+  await expect(finalDeleteDialog).toContainText("第二次确认");
+  const backgroundSlot = page.locator(".operations-workspace .save-slot").filter({ hasText: "本地槽位 1" });
+  await expect(backgroundSlot).toHaveClass(/save-slot--occupied/);
+  await finalDeleteDialog.getByRole("button", { name: /确认永久删除/ }).click();
+  await expect(finalDeleteDialog).toHaveCount(0);
+  await expect(backgroundSlot).not.toHaveClass(/save-slot--occupied/);
 
   await page.reload();
+  await expect(page.locator(".local-save-writer-banner--conflict")).toHaveCount(0);
   await expect(page.locator(".game-shell")).toHaveAttribute("data-performance-mode", "true");
   await expect(page.locator(".game-shell")).toHaveAttribute("data-reduced-motion", "true");
   await page.getByLabel("打开设置").click();
