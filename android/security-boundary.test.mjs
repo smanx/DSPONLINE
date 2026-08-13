@@ -18,19 +18,20 @@ test("Android manifest retains player backup support with explicit rule files", 
   assert.match(manifest, /android:fullBackupContent="@xml\/backup_rules"/);
 });
 
-test("cloud backup and device transfer include IndexedDB saves but exclude every credential surface", async () => {
-  for (const file of ["res/xml/backup_rules.xml", "res/xml/data_extraction_rules.xml"]) {
-    const rules = await source(file);
-    assert.match(rules, /<include domain="root" path="app_webview\/Default\/IndexedDB"\s*\/>/);
-    assert.match(rules, /<exclude domain="sharedpref" path="dsp_secure_session_v1\.xml"\s*\/>/);
-    assert.match(rules, /<exclude domain="file" path="private-exports"\s*\/>/);
-    assert.match(rules, /<exclude domain="root" path="app_webview\/Default\/Local Storage"\s*\/>/);
-    assert.match(rules, /<exclude domain="root" path="app_webview\/Default\/Cookies"\s*\/>/);
-  }
+test("cloud backup and device transfer use an IndexedDB-only allowlist", async () => {
+  const legacyRules = await source("res/xml/backup_rules.xml");
   const modernRules = await source("res/xml/data_extraction_rules.xml");
+  for (const [rules, expectedIncludes] of [[legacyRules, 1], [modernRules, 2]]) {
+    const includes = [...rules.matchAll(/<include domain="([^"]+)" path="([^"]+)"\s*\/>/g)]
+      .map((match) => ({ domain: match[1], path: match[2] }));
+    assert.equal(includes.length, expectedIncludes);
+    assert.deepEqual([...new Set(includes.map(({ domain, path }) => `${domain}:${path}`))], ["root:app_webview/Default/IndexedDB"]);
+    assert.doesNotMatch(rules, /<exclude\b/);
+    assert.doesNotMatch(rules, /<include[^>]+domain="(?:sharedpref|file|database|external|device_[^"]+)"/);
+    assert.doesNotMatch(rules, /<include[^>]+path="[^"]*(?:Local Storage|Cookies|Cache|private-exports|dsp_secure_session)/);
+  }
   assert.match(modernRules, /<cloud-backup disableIfNoEncryptionCapabilities="true">/);
   assert.equal((modernRules.match(/app_webview\/Default\/IndexedDB/g) ?? []).length, 2);
-  assert.equal((modernRules.match(/dsp_secure_session_v1\.xml/g) ?? []).length, 2);
 });
 
 test("native bridge registers before WebView creation and stores sessions with Android Keystore AES-GCM", async () => {
