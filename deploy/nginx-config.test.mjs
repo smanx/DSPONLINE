@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -17,6 +18,24 @@ const activeCloudProxyTemplates = [
   "nginx-dsp-idle-app.conf",
   ...standaloneConfigs,
 ];
+const allNginxTemplates = [
+  ...new Set([
+    ...activeCloudProxyTemplates,
+    "nginx-dsp-idle-domain.conf",
+    "nginx-dsp-idle-download-shanghai.conf",
+    "nginx-dsp-idle-download-shanghai-bootstrap.conf",
+    "nginx-dsp-idle-old-bridge.conf",
+    "nginx-dsp-idle-old-redirect.conf",
+  ]),
+];
+
+const baselineHeaderNames = [
+  "x-content-type-options",
+  "x-frame-options",
+  "content-security-policy",
+  "referrer-policy",
+  "permissions-policy",
+];
 
 const readDeployFile = (file) => readFile(path.join(deployDirectory, file), "utf8");
 
@@ -27,6 +46,105 @@ function readNginxDurationMs(value, unit) {
     m: 60_000,
   };
   return Number(value) * multipliers[unit];
+}
+
+function findClosingBrace(source, openingIndex) {
+  let depth = 1;
+  let quote = null;
+  for (let index = openingIndex + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (character === "\\") index += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "\"" || character === "'") quote = character;
+    else if (character === "{") depth += 1;
+    else if (character === "}" && --depth === 0) return index;
+  }
+  throw new Error(`unclosed Nginx block at byte ${openingIndex}`);
+}
+
+function parseNginxScope(source, start = 0, end = source.length, header = "root") {
+  const children = [];
+  const directParts = [];
+  let cursor = start;
+  let segmentStart = start;
+  let quote = null;
+  for (let index = start; index < end; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (character === "\\") index += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "\"" || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === ";") {
+      segmentStart = index + 1;
+      continue;
+    }
+    if (character !== "{") continue;
+    const closingIndex = findClosingBrace(source, index);
+    directParts.push(source.slice(cursor, segmentStart));
+    children.push(parseNginxScope(source, index + 1, closingIndex, source.slice(segmentStart, index).trim()));
+    cursor = closingIndex + 1;
+    segmentStart = cursor;
+    index = closingIndex;
+  }
+  directParts.push(source.slice(cursor, end));
+  return { header, direct: directParts.join("\n"), children };
+}
+
+function directAddHeaders(scope) {
+  const headers = new Map();
+  const matches = [...scope.direct.matchAll(/add_header\s+([^\s;]+)\s+("[^"]*"|[^\s;]+)(?:\s+(always))?\s*;/gi)];
+  for (const match of matches) {
+    const name = match[1].toLowerCase();
+    assert.equal(headers.has(name), false, `${scope.header} repeats add_header ${match[1]}`);
+    assert.equal(match[3], "always", `${scope.header} add_header ${match[1]} must cover error responses with always`);
+    headers.set(name, match[2].startsWith("\"") ? match[2].slice(1, -1) : match[2]);
+  }
+  const declaredCount = [...scope.direct.matchAll(/\badd_header\b/g)].length;
+  assert.equal(matches.length, declaredCount, `${scope.header} contains an unparsed add_header directive`);
+  return headers;
+}
+
+function walkResponseScopes(scope, inheritedHeaders = new Map(), tls = false, path = []) {
+  const ownHeaders = directAddHeaders(scope);
+  const effectiveHeaders = ownHeaders.size > 0 ? ownHeaders : inheritedHeaders;
+  const ownTls = tls || (scope.header === "server" && /\blisten\s+(?:\[::\]:)?443\b/.test(scope.direct));
+  const ownPath = [...path, scope.header];
+  const responseScope = scope.header === "server" || scope.header.startsWith("location ");
+  const result = responseScope ? [{ scope, effectiveHeaders, tls: ownTls, path: ownPath.join(" > ") }] : [];
+  for (const child of scope.children) result.push(...walkResponseScopes(child, effectiveHeaders, ownTls, ownPath));
+  return result;
+}
+
+function assertSafeCsp(value, label) {
+  assert.match(value, /(?:^|;)\s*frame-ancestors\s+'none'(?:;|$)/, `${label} CSP must deny framing`);
+  assert.match(value, /(?:^|;)\s*object-src\s+'none'(?:;|$)/, `${label} CSP must deny plugins`);
+  const unsafeDirectives = value
+    .split(";")
+    .map((directive) => directive.trim())
+    .filter((directive) => /(?:^|\s)'unsafe-[^']+'(?:\s|$)/.test(directive));
+  assert.ok(
+    unsafeDirectives.length === 0 ||
+      (unsafeDirectives.length === 1 && /^style-src-attr\s+'unsafe-inline'$/.test(unsafeDirectives[0])),
+    `${label} may only use the scoped style-src-attr compatibility allowance`,
+  );
+  assert.doesNotMatch(value, /(?:^|;)\s*(?:default|script|style|connect|worker|frame)-src\s+[^;]*\*/, `${label} CSP must not use wildcard sources`);
+}
+
+async function expandedNginxTemplate(file) {
+  let source = await readDeployFile(file);
+  if (source.includes("include /etc/nginx/snippets/dsp-idle-app.conf;")) {
+    const app = await readDeployFile("nginx-dsp-idle-app.conf");
+    source = source.replaceAll("include /etc/nginx/snippets/dsp-idle-app.conf;", app);
+  }
+  return source;
 }
 
 test("active Nginx templates compress static assets while preserving cache boundaries", async () => {
@@ -50,6 +168,83 @@ test("active Nginx templates compress static assets while preserving cache bound
   assert.match(download, /location \/downloads\/[^}]*try_files \$uri =404;[^}]*immutable/s);
   assert.match(download, /location = \/version\.json[^}]*no-cache, no-store/s);
   assert.match(download, /location = \/downloads\/android\/stable\.json[^}]*no-cache, no-store/s);
+});
+
+test("every Nginx response scope retains the complete security-header baseline", async () => {
+  for (const file of allNginxTemplates) {
+    const config = await expandedNginxTemplate(file);
+    const scopes = walkResponseScopes(parseNginxScope(config));
+    assert.ok(scopes.length > 0, `${file} must contain a response scope`);
+    for (const { effectiveHeaders, tls, path: scopePath } of scopes) {
+      const label = `${file}: ${scopePath}`;
+      for (const header of baselineHeaderNames) {
+        assert.ok(effectiveHeaders.has(header), `${label} is missing ${header} after Nginx add_header inheritance`);
+      }
+      assert.equal(effectiveHeaders.get("x-content-type-options"), "nosniff", `${label} must prevent MIME sniffing`);
+      assert.equal(effectiveHeaders.get("x-frame-options"), "DENY", `${label} must deny legacy framing`);
+      assert.match(effectiveHeaders.get("permissions-policy"), /camera=\(\).*microphone=\(\).*geolocation=\(\)/, `${label} must deny unused device capabilities`);
+      assertSafeCsp(effectiveHeaders.get("content-security-policy"), label);
+      if (tls) {
+        assert.match(
+          effectiveHeaders.get("strict-transport-security") ?? "",
+          /^max-age=(?:[3-9]\d{7}|[1-9]\d{8,})(?:;|$)/,
+          `${label} must retain production HSTS`,
+        );
+      }
+    }
+  }
+});
+
+test("security-header audit enumerates every shipped Nginx template", async () => {
+  const shippedTemplates = (await readdir(deployDirectory))
+    .filter((file) => /^nginx.*\.conf$/.test(file))
+    .sort();
+  assert.deepEqual([...allNginxTemplates].sort(), shippedTemplates);
+});
+
+test("application CSP preserves runtime requirements without broad unsafe bypasses", async () => {
+  const config = await readDeployFile("nginx-dsp-idle-app.conf");
+  const appScope = parseNginxScope(config);
+  const csp = directAddHeaders(appScope).get("content-security-policy");
+  assert.ok(csp);
+  assert.match(csp, /script-src\s+'self'(?:;|$)/);
+  assert.match(csp, /worker-src\s+'self'(?:;|$)/);
+  assert.match(csp, /connect-src\s+'self'\s+https:\/\/download\.dsponline\.cn(?:;|$)/);
+  assert.match(csp, /style-src-attr\s+'unsafe-inline'(?:;|$)/);
+  assert.doesNotMatch(csp, /script-src[^;]*'unsafe-inline'/);
+  assert.doesNotMatch(csp, /style-src(?:\s|$)[^;]*'unsafe-inline'/);
+});
+
+test("download-page CSP pins the exact inline stylesheet and keeps downloads cacheable", async () => {
+  const [config, template] = await Promise.all([
+    readDeployFile("nginx-dsp-idle-download-shanghai.conf"),
+    readDeployFile("download-page-template.html"),
+  ]);
+  const inlineStyle = template.match(/<style>(?<style>[\s\S]*?)<\/style>/)?.groups?.style;
+  assert.ok(inlineStyle, "download page must contain the expected inline stylesheet");
+  const styleHash = createHash("sha256").update(inlineStyle).digest("base64");
+  assert.match(config, new RegExp(`style-src 'self' 'sha256-${styleHash.replaceAll("/", "\\/")}'`));
+  assert.match(config, /location \/downloads\/[^}]*try_files \$uri =404;[^}]*default_type application\/octet-stream;[^}]*immutable/s);
+  assert.doesNotMatch(config, /proxy_buffering\s+off|slice\s+|max_ranges\s+0/);
+});
+
+test("cache, worker scope, gzip and API transfer semantics survive security-header hardening", async () => {
+  for (const file of activeCloudProxyTemplates) {
+    const config = await readDeployFile(file);
+    assert.match(config, /location = \/index\.html[^}]*Cache-Control "no-cache, no-store, must-revalidate" always;/s);
+    assert.match(config, /location = \/version\.json[^}]*Cache-Control "no-cache, no-store, must-revalidate" always;/s);
+    assert.match(config, /location = \/sw\.js[^}]*Cache-Control "no-cache, no-store, must-revalidate" always;[^}]*Service-Worker-Allowed "\/" always;/s);
+    assert.match(config, /location = \/manifest\.webmanifest[^}]*Cache-Control "no-cache" always;/s);
+    assert.match(config, /location \/assets\/[^}]*expires 1y;[^}]*Cache-Control "public, max-age=31536000, immutable" always;/s);
+    assert.match(config, /location @archived_immutable_asset[^}]*expires 1y;[^}]*Cache-Control "public, max-age=31536000, immutable" always;/s);
+    assert.match(config, /location \/api\/[^}]*proxy_pass http:\/\/127\.0\.0\.1:4330;[^}]*proxy_read_timeout 300s;[^}]*client_max_body_size 70m;/s);
+  }
+});
+
+test("legacy bridge keeps version and worker cache boundaries with executable worker policy", async () => {
+  const config = await readDeployFile("nginx-dsp-idle-old-bridge.conf");
+  assert.match(config, /location = \/version\.json[^}]*Cache-Control "no-cache, no-store, must-revalidate" always;/s);
+  assert.match(config, /location = \/sw\.js[^}]*script-src 'self'; connect-src 'self'[^}]*Service-Worker-Allowed "\/" always;/s);
 });
 
 test("active Nginx cloud proxies cover the shared maximum transfer timeout", async () => {
