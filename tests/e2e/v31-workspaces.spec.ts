@@ -81,15 +81,18 @@ test("settings opens a category overview and returns without changing the select
 
 test("each planet restores its last canvas viewport", async ({ page }) => {
   await openFactory(page);
-  await page.addInitScript(() => {
-    const key = "dsp-idle-network.save.v1";
-    const envelope = JSON.parse(window.localStorage.getItem(key)!);
-    const state = envelope.state;
+  await page.getByTitle("保存并返回主菜单").click();
+  await expect(page.locator(".start-menu")).toBeVisible();
+  await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const state = storage.loadGame().state;
     if (!state.research.completedTechIds.includes("interstellar_logistics")) state.research.completedTechIds.push("interstellar_logistics");
+    if (!state.exploration.unlockedSystemIds.includes("helios")) state.exploration.unlockedSystemIds.push("helios");
     for (const planetId of ["ashen", "giant"]) {
       if (!state.exploration.colonizedPlanetIds.includes(planetId)) state.exploration.colonizedPlanetIds.push(planetId);
     }
-    window.localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), state }));
+    const result = await storage.saveGameVerified(state);
+    if (!result.success) throw new Error(result.message);
   });
   await page.reload();
   await expect(page.getByTitle("切换到烬原 II")).toBeEnabled();
@@ -122,10 +125,7 @@ test("each planet restores its last canvas viewport", async ({ page }) => {
 
   await page.getByTitle("保存并返回主菜单").click();
   await expect(page.locator(".start-menu")).toBeVisible();
-  const savedViewport = await page.evaluate(() => {
-    const envelope = JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1")!);
-    return envelope.state.planetViewports.home;
-  });
+  const savedViewport = await page.evaluate(async () => (await import("/src/game/storage.ts")).loadGame().state.planetViewports.home);
   expect(savedViewport.zoom).toBeGreaterThanOrEqual(0.25);
   expect(Math.abs(savedViewport.x - 510) + Math.abs(savedViewport.y - 250)).toBeGreaterThan(10);
 });

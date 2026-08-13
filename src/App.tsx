@@ -2866,8 +2866,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const timer = game.settings.autosaveIntervalSeconds > 0
       ? window.setInterval(() => void persistPrimarySave(), game.settings.autosaveIntervalSeconds * 1000)
       : null;
+    let lifecycleSaveStarted = false;
     const saveNow = () => { void persistPrimarySave(); };
-    const saveBeforeUnload = () => { saveGame(stateWithSimulationDebt(gameRef.current), { emergencyMirror: true }); };
+    const saveBeforeUnload = () => {
+      if (lifecycleSaveStarted) return;
+      lifecycleSaveStarted = true;
+      saveGame(stateWithSimulationDebt(gameRef.current), { emergencyMirror: true });
+    };
     const saveWhenHidden = () => { if (document.visibilityState === "hidden") saveNow(); };
     const saveWhenNativeInactive = (event: Event) => {
       if ((event as CustomEvent<{ isActive?: boolean }>).detail?.isActive === false) saveNow();
@@ -2882,7 +2887,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       window.removeEventListener("pagehide", saveBeforeUnload);
       document.removeEventListener("visibilitychange", saveWhenHidden);
       window.removeEventListener(NATIVE_APP_STATE_EVENT, saveWhenNativeInactive);
-      saveGame(stateWithSimulationDebt(gameRef.current));
+      // Dependency changes and in-app unmounts still save. During a real page
+      // exit the lifecycle handler already wrote the one authoritative
+      // emergency candidate, so a second, newer cleanup save must not leave
+      // that mirror stale and manufacture a conflict on reload.
+      if (!lifecycleSaveStarted) saveGame(stateWithSimulationDebt(gameRef.current));
     };
   }, [game.settings.autosaveIntervalSeconds, persistPrimarySave, stateWithSimulationDebt]);
 

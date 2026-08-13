@@ -7,6 +7,7 @@ export const LOCAL_SAVE_BROADCAST_CHANNEL = "dsp-idle-network.local-save-writes.
 export const LOCAL_SAVE_STORAGE_EVENT_KEY = `${LOCAL_SAVE_COORDINATION_PREFIX}.event`;
 export const LOCAL_SAVE_WRITER_LOCK = "dsp-idle-network.local-save-writer.v1";
 export const LOCAL_SAVE_WRITER_SESSION_KEY = `${LOCAL_SAVE_COORDINATION_PREFIX}.tab-id`;
+export const LOCAL_SAVE_WRITER_CONTINUATION_KEY = `${LOCAL_SAVE_COORDINATION_PREFIX}.same-tab-continuation`;
 export const LOCAL_SAVE_EMERGENCY_MIRROR_PREFIX = `${LOCAL_SAVE_COORDINATION_PREFIX}.emergency-mirror`;
 export const LOCAL_SAVE_LEASE_DURATION_MS = 15_000;
 export const LOCAL_SAVE_HEARTBEAT_INTERVAL_MS = 5_000;

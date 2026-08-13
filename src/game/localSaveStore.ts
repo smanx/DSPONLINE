@@ -8,6 +8,7 @@ import {
   LOCAL_SAVE_STORAGE_EVENT_KEY,
   LOCAL_SAVE_WRITER_LEASE_KEY,
   LOCAL_SAVE_WRITER_LOCK,
+  LOCAL_SAVE_WRITER_CONTINUATION_KEY,
   LOCAL_SAVE_WRITER_SESSION_KEY,
   LocalSaveConflictError,
   LocalSaveReadOnlyError,
@@ -150,12 +151,33 @@ let writeQueue: Promise<void> = Promise.resolve();
 let pendingWriteError: unknown = null;
 let startupConflictId: string | null = null;
 let startupConflictCreatedAt = -1;
+const LOCAL_SAVE_WRITER_CONTINUATION_MAX_AGE_MS = 120_000;
+
+function validLocalSaveWriterId(value: string | null): value is string {
+  return Boolean(value?.startsWith("tab_") && value.length <= 200);
+}
+
+function consumeSameTabWriterContinuation(existing: string | null, now = Date.now()): boolean {
+  if (!validLocalSaveWriterId(existing)) return false;
+  try {
+    const raw = window.sessionStorage.getItem(LOCAL_SAVE_WRITER_CONTINUATION_KEY);
+    window.sessionStorage.removeItem(LOCAL_SAVE_WRITER_CONTINUATION_KEY);
+    if (!raw) return false;
+    const marker = JSON.parse(raw) as { writerId?: unknown; createdAt?: unknown };
+    return marker.writerId === existing && typeof marker.createdAt === "number" && Number.isFinite(marker.createdAt) &&
+      marker.createdAt <= now && now - marker.createdAt <= LOCAL_SAVE_WRITER_CONTINUATION_MAX_AGE_MS;
+  } catch {
+    return false;
+  }
+}
+
 function resolveLocalSaveWriterId(): string {
   if (typeof window === "undefined") return createLocalSaveWriterId();
   try {
     const navigationType = (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined)?.type;
     const existing = window.sessionStorage.getItem(LOCAL_SAVE_WRITER_SESSION_KEY);
-    if ((navigationType === "reload" || navigationType === "back_forward") && existing?.startsWith("tab_") && existing.length <= 200) return existing;
+    const continuedByPreviousDocument = consumeSameTabWriterContinuation(existing);
+    if (validLocalSaveWriterId(existing) && (navigationType === "reload" || navigationType === "back_forward" || continuedByPreviousDocument)) return existing;
     const created = createLocalSaveWriterId();
     window.sessionStorage.setItem(LOCAL_SAVE_WRITER_SESSION_KEY, created);
     return created;
@@ -179,6 +201,27 @@ const saveChangeListeners = new Set<(message: LocalSaveBroadcastMessage) => void
 const storageStatusListeners = new Set<() => void>();
 let recoveryPrompt: LocalSaveRecoveryPrompt | null = null;
 let lastPersistenceStatus: LocalSavePersistenceStatus | null = null;
+
+function markSameTabWriterContinuation(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(LOCAL_SAVE_WRITER_CONTINUATION_KEY, JSON.stringify({ writerId, createdAt: Date.now() }));
+  } catch {
+    // A reload still falls back to PerformanceNavigationTiming when session
+    // storage is unavailable.
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", markSameTabWriterContinuation);
+  window.addEventListener("pagehide", (event) => {
+    if (!(event as PageTransitionEvent).persisted) markSameTabWriterContinuation();
+  });
+  window.addEventListener("pageshow", (event) => {
+    if (!(event as PageTransitionEvent).persisted) return;
+    try { window.sessionStorage.removeItem(LOCAL_SAVE_WRITER_CONTINUATION_KEY); } catch { /* optional continuity marker */ }
+  });
+}
 
 function ensureSynchronousFallback(): void {
   if (initialization || backend !== "memory" || typeof window === "undefined") return;
@@ -892,7 +935,18 @@ async function initializeIndexedDb(): Promise<void> {
     const existing = cache.get(key) ?? null;
     const revision = parseLocalSaveRevision(await readCoordinationValue(db, localSaveRevisionKey(key)));
     let selected: string | null = existing && savedAt(existing) >= savedAt(value) ? existing : value;
-    if (revision && existing !== value) {
+    if (revision && existing !== value && preserveDevelopmentMirror()) {
+      // localhost development builds keep a compatibility mirror so legacy UI
+      // automation can inspect saves. Once a coordinated IDB revision exists,
+      // that mirror is never authoritative and may lag an unload-time commit.
+      // Production builds do not enter this branch and still preserve any
+      // divergent legacy value as an explicit conflict.
+      selected = existing;
+      try {
+        if (existing === null) window.localStorage.removeItem(key);
+        else window.localStorage.setItem(key, existing);
+      } catch { /* the coordinated IndexedDB copy remains authoritative */ }
+    } else if (revision && existing !== value) {
       // Once coordinated revisions exist, a localStorage emergency mirror may
       // have come from a stale pagehide handler. Preserve both copies instead
       // of letting wall-clock savedAt choose a winner.

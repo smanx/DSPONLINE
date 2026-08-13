@@ -393,7 +393,7 @@ test("cloud account security exposes verification, password and device controls"
   await expect(security).toContainText("测试手机");
   await security.getByText("最近登录安全记录", { exact: true }).click();
   await expect(security).toContainText("设备 123456");
-  await expect(page.getByRole("region", { name: "云端手动存档槽位" }).locator("article")).toHaveCount(3);
+  await expect(page.getByRole("region", { name: "按模式管理云存档" }).locator("article")).toHaveCount(3);
 
   await security.getByText("更换待验证邮箱", { exact: true }).click();
   await security.getByLabel("邮箱地址").fill("new-pilot@example.com");
@@ -521,13 +521,15 @@ test("cloud upload can abandon offline settlement and continue with the saved fa
     if (pathname === "/api/account" && request.method() === "GET") return fulfill({ user, cloudSave: null, cloudSaves: { main: null, "1": null, "2": null, "3": null } });
     if (pathname === "/api/account/sessions") return fulfill({ sessions: [] });
     if (pathname === "/api/cloud-save" && request.method() === "PUT") {
-      const body = request.postDataJSON() as { payload: string };
-      uploadedPayload = body.payload;
-      const envelope = JSON.parse(body.payload) as { checksum?: string; savedAt?: number; state?: { elapsedSeconds?: number; entities?: unknown[]; research?: { completedTechIds?: unknown[] } } };
+      const contentType = request.headers()["content-type"]?.split(";", 1)[0];
+      const directPayload = contentType === "application/vnd.dspidle.save+json";
+      const legacyBody = directPayload ? null : request.postDataJSON() as { payload: string };
+      uploadedPayload = directPayload ? request.postData() ?? "" : legacyBody!.payload;
+      const envelope = JSON.parse(uploadedPayload) as { checksum?: string; savedAt?: number; state?: { elapsedSeconds?: number; entities?: unknown[]; research?: { completedTechIds?: unknown[] } } };
       return fulfill({ cloudSave: {
         revision: 1,
         updatedAt: Date.now(),
-        size: body.payload.length,
+        size: uploadedPayload.length,
         checksum: envelope.checksum ?? "upload-skip-checksum",
         summary: {
           stateVersion: 46,
@@ -697,8 +699,9 @@ async function enableCoarsePointer(page: Page) {
 }
 
 async function createTouchPage(browser: Browser, viewport: { width: number; height: number }) {
+  const requestedPort = process.env.DSP_E2E_PORT ?? "4319";
   const context = await browser.newContext({
-    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:4319",
+    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${requestedPort}`,
     hasTouch: true,
     isMobile: true,
     viewport,
@@ -1672,38 +1675,48 @@ async function openStellarExplorationGame(page: Page, advancedOnboarding = false
 }
 
 async function openBlueprintStageGame(page: Page) {
-  await page.addInitScript(() => {
-    const entityBase = {
-      planetId: "home",
-      machineCount: 1,
-      minerCount: 0,
-      inputs: {},
-      outputs: {},
-      progress: 0,
-      routingCursor: 0,
-      utilization: 0,
-      productionRate: 0,
-    };
-    const state = {
-      version: 14,
-      nextId: 4,
-      activePlanetId: "home",
-      entities: [
-        { ...entityBase, id: "blueprint_source", kind: "machine", position: { x: -300, y: -120 }, buildingId: "assembling_machine_mk1", recipeId: "circuit_board", outputs: { circuit_board: 12 } },
-        { ...entityBase, id: "blueprint_target", kind: "machine", position: { x: 80, y: -120 }, buildingId: "assembling_machine_mk1", recipeId: "processor" },
-      ],
-      belts: [{ id: "blueprint_line", planetId: "home", source: "blueprint_source", target: "blueprint_target", itemId: "circuit_board", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 0, lastFlow: 0 }],
-      construction: { assembling_machine_mk1: 2, assembling_machine_mk2: 2, conveyor_belt_mk1: 1, conveyor_belt_mk2: 2 },
-      tray: {},
-      planetTrays: { home: {}, ashen: {}, giant: {}, frost: {}, boreal_giant: {}, magnetar: {} },
-      totalProduced: {},
-      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["processor", "high_speed_assembling", "high_speed_logistics"] },
-      exploration: { unlockedSystemIds: ["helios"] },
-      blueprints: [],
-      paused: true,
-    };
-    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
-  });
+  const entityBase = {
+    planetId: "home",
+    machineCount: 1,
+    minerCount: 0,
+    inputs: {},
+    outputs: {},
+    progress: 0,
+    routingCursor: 0,
+    utilization: 0,
+    productionRate: 0,
+  };
+  const state = {
+    version: 14,
+    nextId: 4,
+    activePlanetId: "home",
+    entities: [
+      { ...entityBase, id: "blueprint_source", kind: "machine", position: { x: -300, y: -120 }, buildingId: "assembling_machine_mk1", recipeId: "circuit_board", outputs: { circuit_board: 12 } },
+      { ...entityBase, id: "blueprint_target", kind: "machine", position: { x: 80, y: -120 }, buildingId: "assembling_machine_mk1", recipeId: "processor" },
+    ],
+    belts: [{ id: "blueprint_line", planetId: "home", source: "blueprint_source", target: "blueprint_target", itemId: "circuit_board", lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 0, lastFlow: 0 }],
+    construction: { assembling_machine_mk1: 2, assembling_machine_mk2: 2, conveyor_belt_mk1: 1, conveyor_belt_mk2: 2 },
+    tray: {},
+    planetTrays: { home: {}, ashen: {}, giant: {}, frost: {}, boreal_giant: {}, magnetar: {} },
+    totalProduced: {},
+    research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["processor", "high_speed_assembling", "high_speed_logistics"] },
+    exploration: { unlockedSystemIds: ["helios"] },
+    blueprints: [],
+    paused: true,
+  };
+  // This helper is reused several times in one browser context. IndexedDB is
+  // authoritative after the first navigation, so persist the normalized legacy
+  // fixture through the same verified path used by the game instead of relying
+  // on a later localStorage init script.
+  await page.goto("/?menu=1");
+  await expect(page.locator(".start-menu")).toBeVisible();
+  await page.evaluate(async (legacyState) => {
+    const storage = await import("/src/game/storage.ts");
+    const normalized = storage.importGame(JSON.stringify({ savedAt: Date.now(), state: legacyState }));
+    if (!normalized) throw new Error("failed to normalize blueprint fixture");
+    const result = await storage.saveGameVerified(normalized);
+    if (!result.success) throw new Error(result.message);
+  }, state);
   await page.goto("/");
   await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible();
   await expect(page.locator(".machine-node")).toHaveCount(2);
@@ -1988,55 +2001,61 @@ async function openEdgeOverlapGame(page: Page) {
 }
 
 async function openBeltNetworkGame(page: Page) {
-  await page.addInitScript(() => {
-    const base = { planetId: "home", machineCount: 1, minerCount: 0, inputs: {}, outputs: {}, progress: 0, routingCursor: 0, utilization: 0, productionRate: 0 };
-    const storage = (id: string, x: number, outputs: Record<string, number> = {}) => ({
-      ...base,
-      id,
-      kind: "storage",
-      position: { x, y: 0 },
-      buildingId: "storage_mk1",
-      storedItemId: "iron_ingot",
-      outputs,
-    });
-    const belt = (id: string, source: string, target: string) => ({
-      id,
-      planetId: "home",
-      source,
-      target,
-      itemId: "iron_ingot",
-      lanes: 1,
-      tier: 1,
-      sorterTier: 1,
-      progress: 0,
-      priority: 0,
-      stackSize: 1,
-      monitorEnabled: false,
-      totalTransferred: 0,
-      congestion: 0,
-      lastFlow: 0,
-      routeMode: "auto",
-    });
-    const state = {
-      version: 23,
-      nextId: 8,
-      activePlanetId: "home",
-      entities: [
-        storage("network_source", -420, { iron_ingot: 40 }),
-        storage("network_buffer", 0, { iron_ingot: 10 }),
-        storage("network_sink", 420),
-        { ...base, id: "network_unrelated", kind: "power", position: { x: 0, y: 360 }, buildingId: "wind_turbine", powerOutputKw: 0 },
-      ],
-      belts: [belt("network_belt_1", "network_source", "network_buffer"), belt("network_belt_2", "network_buffer", "network_sink")],
-      construction: { conveyor_belt_mk1: 0 },
-      tray: {},
-      planetTrays: { home: {} },
-      totalProduced: {},
-      research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["basic_logistics"] },
-      paused: true,
-    };
-    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+  const base = { planetId: "home", machineCount: 1, minerCount: 0, inputs: {}, outputs: {}, progress: 0, routingCursor: 0, utilization: 0, productionRate: 0 };
+  const storageEntity = (id: string, x: number, outputs: Record<string, number> = {}) => ({
+    ...base,
+    id,
+    kind: "storage",
+    position: { x, y: 0 },
+    buildingId: "storage_mk1",
+    storedItemId: "iron_ingot",
+    outputs,
   });
+  const belt = (id: string, source: string, target: string) => ({
+    id,
+    planetId: "home",
+    source,
+    target,
+    itemId: "iron_ingot",
+    lanes: 1,
+    tier: 1,
+    sorterTier: 1,
+    progress: 0,
+    priority: 0,
+    stackSize: 1,
+    monitorEnabled: false,
+    totalTransferred: 0,
+    congestion: 0,
+    lastFlow: 0,
+    routeMode: "auto",
+  });
+  const state = {
+    version: 23,
+    nextId: 8,
+    activePlanetId: "home",
+    entities: [
+      storageEntity("network_source", -420, { iron_ingot: 40 }),
+      storageEntity("network_buffer", 0, { iron_ingot: 10 }),
+      storageEntity("network_sink", 420),
+      { ...base, id: "network_unrelated", kind: "power", position: { x: 0, y: 360 }, buildingId: "wind_turbine", powerOutputKw: 0 },
+    ],
+    belts: [belt("network_belt_1", "network_source", "network_buffer"), belt("network_belt_2", "network_buffer", "network_sink")],
+    construction: { conveyor_belt_mk1: 0 },
+    tray: {},
+    planetTrays: { home: {} },
+    totalProduced: {},
+    research: { selectedTechId: null, queuedTechIds: [], progressByTech: {}, completedTechIds: ["basic_logistics"] },
+    paused: true,
+  };
+  await page.goto("/?menu=1");
+  await expect(page.locator(".start-menu")).toBeVisible();
+  await page.evaluate(async (legacyState) => {
+    const storage = await import("/src/game/storage.ts");
+    const normalized = storage.importGame(JSON.stringify({ savedAt: Date.now(), state: legacyState }));
+    if (!normalized) throw new Error("failed to normalize belt network fixture");
+    const result = await storage.saveGameVerified(normalized);
+    if (!result.success) throw new Error(result.message);
+  }, state);
   await page.goto("/");
   await expect(page.getByText("DSP极简网络", { exact: true })).toBeVisible();
 }
@@ -4831,16 +4850,17 @@ test("double-click canvas zoom is disabled by default and follows the settings t
 test("construction cards craft in place and Ctrl-click chains building placement", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openSeededGame(page);
-  await page.addInitScript(() => {
-    const raw = window.localStorage.getItem("dsp-idle-network.save.v1");
-    const envelope = JSON.parse(raw!);
-    envelope.state.tray = { iron_ingot: 20, stone_brick: 10, gear: 10, magnetic_coil: 10 };
-    envelope.state.planetTrays = { ...(envelope.state.planetTrays ?? {}), home: envelope.state.tray };
-    envelope.state.research.completedTechIds = [...new Set([...(envelope.state.research.completedTechIds ?? []), "thermal_power"])]
-    envelope.state.construction.thermal_power_plant = 0;
-    delete envelope.checksum;
-    delete envelope.formatVersion;
-    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify(envelope));
+  await page.getByTitle("保存并返回主菜单").click();
+  await expect(page.locator(".start-menu")).toBeVisible();
+  await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const state = storage.loadGame().state;
+    state.tray = { iron_ingot: 20, stone_brick: 10, gear: 10, magnetic_coil: 10 };
+    state.planetTrays = { ...state.planetTrays, home: state.tray };
+    state.research.completedTechIds = [...new Set([...state.research.completedTechIds, "thermal_power"])] as typeof state.research.completedTechIds;
+    state.construction.thermal_power_plant = 0;
+    const result = await storage.saveGameVerified(state);
+    if (!result.success) throw new Error(result.message);
   });
   await page.reload();
   const craftButton = page.getByLabel("制造火力发电厂");
@@ -5376,16 +5396,14 @@ test("construction dock hides locked equipment until its technology is completed
   await expect(page.getByTitle("部署位面熔炉")).toHaveCount(0);
   await expect(page.getByTitle("部署制造台 Mk.II", { exact: true })).toHaveCount(0);
 
-  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.save.v1")), { timeout: 5_000 }).not.toBeNull();
-  await page.addInitScript(() => {
-    const raw = window.localStorage.getItem("dsp-idle-network.save.v1");
-    if (!raw) throw new Error("missing save");
-    const envelope = JSON.parse(raw);
-    envelope.state.research.completedTechIds = [...new Set([...(envelope.state.research.completedTechIds ?? []), "solar_energy"])];
-    delete envelope.checksum;
-    delete envelope.formatVersion;
-    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify(envelope));
+  await page.getByTitle("保存并返回主菜单").click();
+  await expect(page.locator(".start-menu")).toBeVisible();
+  await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const state = storage.loadGame().state;
+    state.research.completedTechIds = [...new Set([...state.research.completedTechIds, "solar_energy"])] as typeof state.research.completedTechIds;
+    const result = await storage.saveGameVerified(state);
+    if (!result.success) throw new Error(result.message);
   });
   await page.reload();
   await expect(page.getByTitle("部署太阳能板")).toBeVisible();
@@ -5597,16 +5615,23 @@ test("campaign center shows chapter progress, deficits and direct recipe navigat
 
 test("campaign migration preserves legacy inventory while restoring task progress", async ({ page }) => {
   await freshGame(page);
-  await page.reload();
-  await page.evaluate(() => window.dispatchEvent(new Event("beforeunload")));
-  await page.evaluate(() => {
-    const raw = window.localStorage.getItem("dsp-idle-network.save.v1");
-    const envelope = JSON.parse(raw!);
+  await page.getByTitle("保存并返回主菜单").click();
+  await expect(page.locator(".start-menu")).toBeVisible();
+  await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const localStore = await import("/src/game/localSaveStore.ts");
+    const raw = localStore.getLocalSaveValue("dsp-idle-network.save.v1");
+    if (!raw) throw new Error("missing primary save");
+    const envelope = JSON.parse(raw);
     envelope.state.version = 17;
     envelope.state.paused = true;
     envelope.state.manualMined = 1;
     delete envelope.state.campaign;
-    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify(envelope));
+    delete envelope.checksum;
+    delete envelope.formatVersion;
+    localStore.setLocalSaveValue("dsp-idle-network.save.v1", JSON.stringify(envelope));
+    await localStore.flushLocalSaveWrites();
+    if (!storage.loadGame().state) throw new Error("legacy migration failed");
   });
   await page.reload();
   await page.getByLabel("打开主线任务中心").first().click();
@@ -6145,7 +6170,9 @@ test("planet tray limits edit independently and small storage ports stay separat
       output: { left: output.left, right: output.right, top: output.top, bottom: output.bottom },
     };
   });
-  await expect.poll(laneGeometry).toMatchObject({ columns: 2, separated: true, withinCard: true });
+  await expect.poll(async () => (await laneGeometry()).columns).toBe(2);
+  const desktopGeometry = await laneGeometry();
+  expect(desktopGeometry, JSON.stringify(desktopGeometry)).toMatchObject({ columns: 2, separated: true, withinCard: true });
   await page.screenshot({ path: "artifacts/qa/storage-ports-font-200-desktop.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });

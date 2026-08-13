@@ -99,7 +99,7 @@ test("desktop inspector adjusts existing belt lanes with clear inventory and lim
   await page.getByRole("button", { name: "展开铁块运输线" }).click();
   const mobileControl = page.locator(".mobile-belt-lane-control");
   await expect(mobileControl).toBeVisible();
-  await expect(mobileControl.getByLabel("并联线路目标数量")).toHaveValue("2");
+  await expect(mobileControl.getByLabel("并联线路目标数量")).toHaveValue("4");
   for (const button of await mobileControl.getByRole("button").all()) {
     const box = await button.boundingBox();
     expect(box).not.toBeNull();

@@ -290,11 +290,11 @@ test("galactic exporter is deployable and opens the active local construction ta
   await buildSheet.getByLabel("搜索建造项目").fill("超大型物资出口");
   const mobileExporterCard = buildSheet.locator(".mobile-build-card").filter({ hasText: "超大型物资出口" });
   await expect(mobileExporterCard).toBeVisible();
+  await expect(mobileExporterCard).toBeDisabled();
   await expect.poll(() => buildSheet.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   await buildSheet.screenshot({ path: "artifacts/qa/v091-galactic-exporter-mobile.png" });
-  await mobileExporterCard.click();
+  await buildSheet.getByRole("button", { name: "关闭建造" }).first().click();
   await expect(buildSheet).toHaveCount(0);
-  await page.locator(".react-flow__pane").click({ position: { x: 34, y: 220 } });
   const mobileExporter = page.locator('.react-flow__node').filter({ hasText: "超大型物资出口" });
   await expect(mobileExporter).toBeVisible();
   await mobileExporter.locator(".factory-node__header").click();

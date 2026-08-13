@@ -84,11 +84,22 @@ export function ExactValue({ className = "", compact, label, interactive = true 
   };
 
   if (!interactive) {
-    return <span
-      className={`quantity-value quantity-value--passive${className ? ` ${className}` : ""}`}
-      aria-label={label}
-      title={label}
-    ><span>{compact}</span></span>;
+    return <>
+      <span
+        ref={rootRef}
+        className={`quantity-value quantity-value--passive${expanded ? " quantity-value--expanded" : ""}${hovered ? " quantity-value--hovered" : ""}${className ? ` ${className}` : ""}`}
+        aria-label={label}
+        aria-describedby={visible ? tooltipId : undefined}
+        title={label}
+        onClick={toggle}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      ><span>{compact}</span></span>
+      {visible && typeof document !== "undefined" ? createPortal(
+        <span className="quantity-value__tooltip" style={tooltipStyle} id={tooltipId} role="tooltip">{label}</span>,
+        document.body,
+      ) : null}
+    </>;
   }
 
   return <>

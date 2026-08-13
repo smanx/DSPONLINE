@@ -34,4 +34,12 @@ describe("ExactValue", () => {
     expect(value?.getAttribute("aria-label")).toBe("1,234,567");
     expect(value?.getAttribute("title")).toBe("1,234,567");
   });
+
+  it("keeps passive exact values visible on hover without adding a nested widget", () => {
+    act(() => root.render(<button type="button"><ExactValue compact="1.2M" label="1,234,567" interactive={false} /></button>));
+    const value = host.querySelector<HTMLElement>(".quantity-value--passive")!;
+    act(() => value.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe("1,234,567");
+    expect(host.querySelectorAll("button, [role='button']")).toHaveLength(1);
+  });
 });

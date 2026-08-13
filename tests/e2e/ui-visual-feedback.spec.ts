@@ -218,7 +218,7 @@ test("release history supports direct paging and technology wheel stays horizont
   const releaseDialog = page.locator(".release-notes-dialog");
   await releaseDialog.getByRole("button", { name: "查看历史版本" }).click();
   await expect(releaseDialog.locator(".release-notes-history-list > button")).toHaveCount(3);
-  const pageSelect = releaseDialog.getByLabel("跳转版本页");
+  const pageSelect = releaseDialog.getByLabel("跳转页码");
   const oldestPage = await pageSelect.locator("option").last().getAttribute("value");
   expect(oldestPage).not.toBeNull();
   await pageSelect.selectOption(oldestPage!);

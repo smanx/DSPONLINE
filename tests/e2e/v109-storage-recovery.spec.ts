@@ -116,10 +116,10 @@ test("verified primary saves use IndexedDB and selected snapshots can be managed
   await expect(manualRows).toHaveCount(0);
 
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.save.v1") !== null)).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.local-save-coordination.v1.emergency-mirror.normal.payload") !== null)).toBe(true);
   await page.reload();
   await expect(page.locator(".start-menu")).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.save.v1"))).toBeNull();
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.local-save-coordination.v1.emergency-mirror.normal.payload"))).toBeNull();
 });
 
 test("prominent home language controls fit desktop and 200 percent mobile text", async ({ page }) => {

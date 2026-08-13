@@ -291,9 +291,10 @@ test("cancel keeps the pending interval and confirmed skip commits zero rewards"
   await page.getByRole("button", { name: "继续游戏" }).first().click();
   const secondDecision = page.getByRole("dialog", { name: "快速结算需要玩家选择" });
   await secondDecision.getByRole("button", { name: "保守跳过本次收益" }).click();
-  await expect(secondDecision).toContainText("再次确认跳过本次收益");
+  const skipConfirmation = page.getByRole("alertdialog", { name: "快速结算需要玩家选择" });
+  await expect(skipConfirmation).toContainText("再次确认跳过本次收益");
   expect(await page.evaluate((key) => window.localStorage.getItem(key), SAVE_KEY)).toBe(sourceRaw);
-  await secondDecision.getByRole("button", { name: "再次确认：收益为 0" }).click();
+  await skipConfirmation.getByRole("button", { name: "再次确认：收益为 0" }).click();
 
   await expect(page.locator(".game-shell")).toBeVisible({ timeout: 15_000 });
   const report = page.getByRole("dialog", { name: "离线结算报告" });

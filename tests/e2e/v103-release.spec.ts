@@ -299,7 +299,7 @@ test("storage ports and tray deletion controls stay reachable across font and mo
   await page.getByRole("dialog", { name: "物资" }).getByRole("button", { name: "管理", exact: true }).click();
   const tray = page.getByRole("dialog", { name: "管理当前行星物资托盘" });
   await tray.getByRole("button", { name: "全选" }).click();
-  const actions = tray.locator(":scope > section > footer button");
+  const actions = tray.locator(":scope > footer button");
   await expect(actions).toHaveCount(3);
   for (const action of await actions.all()) {
     await expect(action).toBeVisible();

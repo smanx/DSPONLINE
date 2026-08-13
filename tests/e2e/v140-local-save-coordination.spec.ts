@@ -176,6 +176,43 @@ test("BroadcastChannel refreshes a secondary tab after the primary commits", asy
   })).toBe(444);
 });
 
+test("same-tab navigation keeps its writer chain while an opened copy becomes secondary", async ({ page, context }) => {
+  await preparePage(page);
+  const originalWriter = await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    const store = await import("/src/game/localSaveStore.ts");
+    const state = engine.createInitialState();
+    state.elapsedSeconds = 550;
+    const saved = await storage.saveGameVerified(state);
+    if (!saved.success) throw new Error(saved.message);
+    return store.getLocalSaveWriterStatus().writerId;
+  });
+
+  await page.goto("/?menu=1&storageMigration=production&sameTabNavigation=1");
+  await expect(page.locator(".start-menu")).toBeVisible();
+  const continued = await page.evaluate(async () => {
+    const storage = await import("/src/game/storage.ts");
+    const store = await import("/src/game/localSaveStore.ts");
+    const state = storage.loadGame().state;
+    state.elapsedSeconds = 551;
+    const saved = await storage.saveGameVerified(state);
+    return { saved, status: store.getLocalSaveWriterStatus() };
+  });
+  expect(continued).toMatchObject({ saved: { success: true }, status: { role: "primary", writerId: originalWriter } });
+
+  const opened = context.waitForEvent("page");
+  await page.evaluate(() => { window.open(window.location.href, "_blank"); });
+  const copy = await opened;
+  await copy.waitForLoadState("domcontentloaded");
+  await expect(copy.locator(".start-menu")).toBeVisible();
+  const copyStatus = await copy.evaluate(async () => (await import("/src/game/localSaveStore.ts")).getLocalSaveWriterStatus());
+  expect(copyStatus.writerId).not.toBe(originalWriter);
+  expect(copyStatus.role).toBe("secondary");
+  await expect(copy.getByRole("alert").filter({ hasText: "本页面为只读" })).toBeVisible();
+  await copy.close();
+});
+
 test("a stale tab cannot overwrite a coordinated save and both versions are preserved", async ({ page }) => {
   await preparePage(page);
   const first = await page.evaluate(async () => {
