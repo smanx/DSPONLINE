@@ -208,7 +208,7 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
             <>
               <ItemMark itemId={game.cargo.itemId} />
               <span>{ITEMS[game.cargo.itemId].name}</span>
-              <strong>×<QuantityValue value={game.cargo.amount} /></strong>
+              <strong>×<QuantityValue value={game.cargo.amount} interactive={false} /></strong>
               <ChevronRight size={14} />
             </>
           ) : <><PackageOpen size={18} /><span>空载</span></>}
@@ -231,8 +231,8 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
         </div>
         <div className="dyson-load" role="progressbar" aria-label="戴森系统接收负载" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(swarmLoad)}>
           <i><b style={{ width: `${swarmLoad}%` }} /></i>
-          <span><PowerValue valueKw={dysonGenerationKw} /> 总功率</span>
-          <strong><PowerValue valueKw={game.dysonSwarm.receiverLoadKw} /> 接收</strong>
+          <span><PowerValue valueKw={dysonGenerationKw} interactive={false} /> 总功率</span>
+          <strong><PowerValue valueKw={game.dysonSwarm.receiverLoadKw} interactive={false} /> 接收</strong>
         </div>
         <div className="dyson-counts">
           <span>累计发射 <strong><QuantityValue value={game.dysonSwarm.totalLaunched} /></strong></span>
@@ -308,7 +308,7 @@ export function ResourceRail({ game, onOpenCampaign, onOpenDysonPlanner, onPickT
             >
               <ItemMark itemId={itemId} />
               <ItemHoverCard itemId={itemId} className="item-reference--tray"><span>{ITEMS[itemId].name}</span></ItemHoverCard>
-              <ItemHoverCard itemId={itemId} className="item-reference--tray"><strong><QuantityValue value={amount} /></strong></ItemHoverCard>
+              <ItemHoverCard itemId={itemId} className="item-reference--tray"><strong><QuantityValue value={amount} interactive={false} /></strong></ItemHoverCard>
             </button>
           ))}
         </div>
@@ -2381,7 +2381,7 @@ export function HeaderControls({
         <button className={`header-action--overflowable${activeWorkspace === "statistics" ? " active" : ""}`} type="button" onClick={onOpenStatistics} title={activeWorkspace === "statistics" ? "生产统计已打开，再次点击返回工厂" : "打开生产统计"} aria-label={activeWorkspace === "statistics" ? "生产统计已打开，再次点击返回工厂" : "打开生产统计"} aria-pressed={activeWorkspace === "statistics"}><BarChart3 size={17} /></button>
         <button className={`header-action--overflowable${activeWorkspace === "recipes" ? " active" : ""}`} type="button" onClick={onOpenRecipes} title={activeWorkspace === "recipes" ? "生产资料库已打开，再次点击返回工厂" : "打开生产资料库"} aria-label={activeWorkspace === "recipes" ? "生产资料库已打开，再次点击返回工厂" : "打开生产资料库"} aria-pressed={activeWorkspace === "recipes"}><BookOpen size={17} /></button>
         <button className={`header-action--overflowable${activeWorkspace === "technology" ? " active" : ""}`} type="button" onClick={onOpenTechnology} title={activeWorkspace === "technology" ? "科技树已打开，再次点击返回工厂" : "打开科技树"} aria-label={activeWorkspace === "technology" ? "科技树已打开，再次点击返回工厂" : "打开科技树"} aria-pressed={activeWorkspace === "technology"}><FlaskConical size={17} /></button>
-        <button className="header-action--overflowable header-command-action" type="button" onClick={onOpenCommandPalette} title="打开命令面板（Ctrl/⌘+K）" aria-label="打开命令面板" aria-keyshortcuts="Control+K Meta+K"><Command size={17} /></button>
+        <button className="header-action--overflowable header-command-action" type="button" onClick={(event) => { event.currentTarget.focus({ preventScroll: true }); onOpenCommandPalette(); }} title="打开命令面板（Ctrl/⌘+K）" aria-label="打开命令面板" aria-keyshortcuts="Control+K Meta+K"><Command size={17} /></button>
         {showMobileUiSwitch && onMobileUiSwitch ? <button className="header-mobile-ui-command" type="button" onClick={onMobileUiSwitch} title="体验新版手机界面" aria-label="体验新版手机界面"><Sparkles size={17} /></button> : null}
         <button className="header-overflow-command" type="button" onClick={() => setOverflowOpen((open) => !open)} aria-expanded={overflowOpen} title="更多工作区" aria-label="更多工作区"><MoreHorizontal size={18} /></button>
         {overflowOpen ? <div className="header-overflow-menu" role="menu">

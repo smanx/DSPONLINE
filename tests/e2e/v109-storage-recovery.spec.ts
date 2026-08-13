@@ -112,7 +112,7 @@ test("verified primary saves use IndexedDB and selected snapshots can be managed
   await operations.getByRole("button", { name: "删除所选" }).click();
   const confirmation = page.getByRole("dialog", { name: /删除2 份所选快照/ });
   await confirmation.getByRole("button", { name: /继续确认/ }).click();
-  await confirmation.getByRole("button", { name: /确认永久删除/ }).click();
+  await page.getByRole("alertdialog", { name: /删除2 份所选快照/ }).getByRole("button", { name: /确认永久删除/ }).click();
   await expect(manualRows).toHaveCount(0);
 
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));

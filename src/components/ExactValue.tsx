@@ -5,13 +5,15 @@ interface ExactValueProps {
   className?: string;
   compact: ReactNode;
   label: string;
+  /** Avoid a nested widget when the value is rendered inside a button or progressbar. */
+  interactive?: boolean;
 }
 
 function hasCoarsePointer(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches === true;
 }
 
-export function ExactValue({ className = "", compact, label }: ExactValueProps) {
+export function ExactValue({ className = "", compact, label, interactive = true }: ExactValueProps) {
   const [expanded, setExpanded] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -80,6 +82,14 @@ export function ExactValue({ className = "", compact, label }: ExactValueProps) 
       event.currentTarget.blur();
     }
   };
+
+  if (!interactive) {
+    return <span
+      className={`quantity-value quantity-value--passive${className ? ` ${className}` : ""}`}
+      aria-label={label}
+      title={label}
+    ><span>{compact}</span></span>;
+  }
 
   return <>
     <span

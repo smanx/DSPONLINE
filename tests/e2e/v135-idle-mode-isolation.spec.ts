@@ -56,7 +56,7 @@ test("普通与速通本地槽位同时存在，速通只能单向复制到空�
   await normalOne.getByRole("button", { name: "删除普通模式槽位 1" }).click();
   const deleteDialog = page.getByRole("dialog", { name: "删除普通模式槽位 1" });
   await deleteDialog.getByRole("button", { name: /继续确认/ }).click();
-  await deleteDialog.getByRole("button", { name: /确认永久删除/ }).click();
+  await page.getByRole("alertdialog", { name: "删除普通模式槽位 1" }).getByRole("button", { name: /确认永久删除/ }).click();
   await expect(page.locator(".start-menu-message")).toContainText("其他存档未受影响");
 
   const persisted = await page.evaluate(async () => {

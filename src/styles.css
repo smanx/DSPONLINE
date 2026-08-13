@@ -3429,7 +3429,7 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
 .manual-mine--locked:hover {
   border-color: #3a4641;
   background: #151a18;
-  color: #6f7b76;
+  color: #a8b6b0;
   cursor: default;
 }
 
@@ -3502,6 +3502,8 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
 .power-value {
   min-inline-size: 6ch;
 }
+
+.quantity-value--passive { cursor: inherit; }
 
 .quantity-value > span:first-child {
   display: inline-flex;
@@ -9537,7 +9539,7 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
 }
 
 .research-queue__empty {
-  color: #65716c;
+  color: #8e9d96;
   font-size: 9px;
 }
 
@@ -12077,7 +12079,7 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
   grid-template-columns: minmax(24px, 1fr) 18px auto;
   align-items: center;
   gap: 6px;
-  color: #626f69;
+  color: #899991;
 }
 
 .star-route-link i {
@@ -22399,7 +22401,7 @@ input:focus-visible,
   position: absolute;
   right: 3px;
   bottom: 2px;
-  color: #6f827a;
+  color: #a7b8b0;
   font-size: 6px;
   font-style: normal;
 }
