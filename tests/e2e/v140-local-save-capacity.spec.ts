@@ -61,7 +61,8 @@ test("managed cleanup starts unselected and deletes only the confirmed recovery 
   await usage.getByRole("button", { name: "删除所选" }).click();
   const confirmation = page.getByRole("dialog", { name: "删除1 份本地恢复数据" });
   await confirmation.getByRole("button", { name: /继续确认/ }).click();
-  await confirmation.getByRole("button", { name: /确认永久删除/ }).click();
+  const finalConfirmation = page.getByRole("alertdialog", { name: "删除1 份本地恢复数据" });
+  await finalConfirmation.getByRole("button", { name: /确认永久删除/ }).click();
   await expect(manualEntry).toHaveCount(0);
   expect(await page.evaluate(async () => {
     const store = await import("/src/game/localSaveStore.ts");
