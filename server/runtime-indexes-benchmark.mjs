@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { realpathSync } from "node:fs";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { LeaderboardSnapshotIndex, PresenceIndex } from "./runtime-indexes.mjs";
@@ -133,7 +135,10 @@ export function runRuntimeIndexesBenchmark({ log = console.log } = {}) {
   return rows;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === fileURLToPath(new URL(`file:///${process.argv[1].replaceAll("\\", "/")}`))) {
+let isCli = false;
+try { isCli = Boolean(process.argv[1]) && realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); }
+catch { isCli = false; }
+if (isCli) {
   console.log("runtime-indexes synthetic benchmark (median milliseconds; anonymous deterministic fixtures)");
   runRuntimeIndexesBenchmark();
   console.log("complexity: presence heartbeat O(log n), steady read O(k log n) expired; leaderboard cache hit/me O(1), invalidation rebuild O(n log n)");

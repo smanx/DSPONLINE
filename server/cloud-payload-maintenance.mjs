@@ -1,4 +1,5 @@
 import path from "node:path";
+import { realpathSync } from "node:fs";
 import { open, rm, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
@@ -696,5 +697,7 @@ export async function mainCloudPayloadMaintenance(values = process.argv.slice(2)
   }
 }
 
-const isCli = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+let isCli = false;
+try { isCli = Boolean(process.argv[1]) && realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); }
+catch { isCli = false; }
 if (isCli) process.exitCode = await mainCloudPayloadMaintenance();

@@ -1,5 +1,6 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -98,6 +99,7 @@ async function writeFileAtomically(file, text, mode = 0o640) {
   try {
     handle = await open(temporary, "wx", mode);
     await handle.writeFile(text, "utf8");
+    await handle.chmod(mode);
     await handle.sync();
     await handle.close();
     handle = null;
@@ -453,7 +455,11 @@ export function createApiHandoffProxy({
 
 function directInvocation() {
   if (!process.argv[1]) return false;
-  return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
 }
 
 if (directInvocation()) {
@@ -479,6 +485,6 @@ if (directInvocation()) {
     console.log(`DSP API handoff proxy listening on ${typeof address === "object" ? `${address.address}:${address.port}` : address}`);
   }).catch((error) => {
     console.error("DSP API handoff proxy failed to start", error);
-    process.exit(1);
+    process.exit(78);
   });
 }

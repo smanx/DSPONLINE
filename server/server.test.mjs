@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, scryptSync } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -1132,6 +1132,29 @@ test("persists player totals across a restart and expires stale online players",
     const expired = await fetch(`${restartBaseUrl}/api/public-status`).then((response) => response.json());
     assert.equal(expired.players.total, 1);
     assert.equal(expired.players.online, 0);
+  } finally {
+    if (restartServer?.listening) await new Promise((resolve) => restartServer.close(resolve));
+    await rm(restartDirectory, { recursive: true, force: true });
+  }
+});
+
+test("backup startup grace prevents a recovered API from immediately copying its database", async () => {
+  const restartDirectory = await mkdtemp(path.join(tmpdir(), "dsp-backup-startup-grace-"));
+  const backupDirectory = path.join(restartDirectory, "backups");
+  await mkdir(backupDirectory, { recursive: true });
+  let restartServer;
+  try {
+    restartServer = await createCloudServer({
+      databaseFile: path.join(restartDirectory, "cloud.sqlite"),
+      backupDirectory,
+      backupIntervalMs: 0,
+      backupStartupGraceMs: 60_000,
+      historyPruneIntervalMs: 0,
+      logger: { error() {} },
+    });
+    await new Promise((resolve) => restartServer.listen(0, "127.0.0.1", resolve));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.deepEqual(await readdir(backupDirectory), []);
   } finally {
     if (restartServer?.listening) await new Promise((resolve) => restartServer.close(resolve));
     await rm(restartDirectory, { recursive: true, force: true });

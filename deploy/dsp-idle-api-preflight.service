@@ -1,6 +1,8 @@
 [Unit]
 Description=DSP Idle API release preflight against a verified backup clone
 After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -15,6 +17,9 @@ Environment=NODE_ENV=production
 Environment=DSP_ALLOWED_ORIGIN=
 Environment=DSP_PLAYER_ONLINE_WINDOW_MS=120000
 Environment=DSP_METRIC_TIME_ZONE=Asia/Shanghai
+RuntimeDirectory=dsp-idle-cloud
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

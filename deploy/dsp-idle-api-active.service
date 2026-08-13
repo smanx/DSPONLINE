@@ -2,6 +2,8 @@
 Description=DSP Idle active cloud API writer
 After=network.target dsp-idle-api-handoff-proxy.service
 Requires=dsp-idle-api-handoff-proxy.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -10,7 +12,7 @@ Group=ubuntu
 Environment=NODE_ENV=production
 Environment=DSP_RELEASE_CONTROL_ROOT=/usr/local/lib/dsp-idle-release/current
 Environment=DSP_RELEASE_SWITCH_STATE_FILE=/var/lib/dsp-idle-cloud/release-state/switch-state.json
-Environment=DSP_RELEASE_ACTIVE_START_FILE=/run/dsp-idle-cloud/active-start.json
+Environment=DSP_RELEASE_ACTIVE_START_FILE=/var/lib/dsp-idle-cloud/release-state/pending-switch.json
 Environment=DSP_API_ROOT=/opt/dsp-idle-cloud
 Environment=DSP_API_WRITER_LOCK_FILE=/run/dsp-idle-cloud/writer.lock
 Environment=DSP_CLOUD_DATA_FILE=/var/lib/dsp-idle-cloud/cloud.json
@@ -31,6 +33,7 @@ RestartPreventExitStatus=75 78
 TimeoutStopSec=90
 RuntimeDirectory=dsp-idle-cloud
 RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

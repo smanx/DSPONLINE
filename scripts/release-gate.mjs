@@ -2,6 +2,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -265,7 +266,9 @@ async function runCli(args) {
   throw new Error(usage());
 }
 
-const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+let isMain = false;
+try { isMain = Boolean(process.argv[1]) && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); }
+catch { isMain = false; }
 if (isMain) {
   runCli(process.argv.slice(2)).catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));

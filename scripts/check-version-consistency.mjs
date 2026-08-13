@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -123,7 +124,8 @@ function parseArgs(argv) {
 
 function isMainModule() {
   if (!process.argv[1]) return false;
-  return path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+  try { return realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
 }
 
 if (isMainModule()) {

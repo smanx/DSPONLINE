@@ -3,10 +3,31 @@ set -Eeuo pipefail
 
 control_root="${DSP_RELEASE_CONTROL_ROOT:-/usr/local/lib/dsp-idle-release/current}"
 state_file="${DSP_RELEASE_SWITCH_STATE_FILE:-/var/lib/dsp-idle-cloud/release-state/switch-state.json}"
-start_state_file="${DSP_RELEASE_ACTIVE_START_FILE:-/run/dsp-idle-cloud/active-start.json}"
+start_state_file="${DSP_RELEASE_ACTIVE_START_FILE:-/var/lib/dsp-idle-cloud/release-state/pending-switch.json}"
 api_root="${DSP_API_ROOT:-/opt/dsp-idle-cloud}"
 
 if [[ -s "$start_state_file" ]]; then
+  state_file="$start_state_file"
+fi
+
+if ! active_environment="$(/usr/bin/node "$control_root/active-api-environment.mjs" "$state_file" "$api_root")"; then
+  printf 'active DSP Idle API release state could not be read\n' >&2
+  exit 78
+fi
+IFS=$'\t' read -r release_directory active_port pending_phase <<<"$active_environment"
+
+if [[ "$pending_phase" == "recovering" ]]; then
+  # A failed handoff must restore the old writer without an immediate
+  # multi-gigabyte snapshot. 1.0.39 already honors the configured daily
+  # window, while 1.0.41 additionally enforces startup grace. Refuse recovery
+  # if that shared protection is absent instead of silently disabling backups.
+  [[ -n "${DSP_CLOUD_BACKUP_WINDOW:-}" ]] || {
+    printf 'DSP_CLOUD_BACKUP_WINDOW must protect an interrupted recovery\n' >&2
+    exit 78
+  }
+fi
+
+if [[ "$pending_phase" == "prepared" || "$pending_phase" == "publishing" || "$pending_phase" == "recovering" ]]; then
   backup_window="${DSP_CLOUD_BACKUP_WINDOW:-}"
   if [[ ! "$backup_window" =~ ^([0-9]{2}):([0-9]{2})-([0-9]{2}):([0-9]{2})$ ]]; then
     printf 'DSP_CLOUD_BACKUP_WINDOW must be configured before a release handoff starts\n' >&2
@@ -36,12 +57,8 @@ if [[ -s "$start_state_file" ]]; then
     printf 'release handoff is blocked during the configured backup window\n' >&2
     exit 78
   fi
-  state_file="$start_state_file"
 fi
 
-IFS=$'\t' read -r release_directory active_port < <(
-  /usr/bin/node "$control_root/active-api-environment.mjs" "$state_file" "$api_root"
-)
 [[ -n "$release_directory" && "$active_port" =~ ^[0-9]+$ ]] || {
   printf 'active DSP Idle API release state is incomplete\n' >&2
   exit 78

@@ -67,6 +67,8 @@ jobs:
         run: npm run test:server
       - name: Operations suite
         run: npm run test:ops
+      - name: Linux release control plane as root
+        run: sudo --preserve-env=PATH,NODE_PATH env DSP_REQUIRE_LINUX_RELEASE_GATE=1 node --test deploy/linux-release-control.test.mjs
       - name: Native configuration suite
         run: npm run test:native
       - name: License inventory

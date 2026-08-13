@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
@@ -195,7 +196,10 @@ async function runCli() {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+let isCli = false;
+try { isCli = Boolean(process.argv[1]) && realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); }
+catch { isCli = false; }
+if (isCli) {
   runCli().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

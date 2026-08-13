@@ -68,6 +68,23 @@ test("stages the historical API archive and expands server files byte-for-byte i
       `${file} must be present byte-for-byte in the expanded API entry root`,
     );
   }
+  for (const file of [
+    "api-handoff-proxy.mjs",
+    "api-active-entry.sh",
+    "api-writer-lock.sh",
+    "probe-api-readiness.mjs",
+    "dsp-idle-api-handoff-proxy.service",
+    "dsp-idle-api-active.service",
+    "dsp-idle-api-preflight.service",
+    "dsp-idle-healthcheck.service",
+    "dsp-idle-runtime.env.example",
+  ]) {
+    assert.deepEqual(
+      await readFile(path.join(releaseRoot, "deploy", file)),
+      await readFile(path.join(repositoryRoot, "deploy", file)),
+      `${file} must be packaged byte-for-byte with the release control plane`,
+    );
+  }
 });
 
 test("refuses to expand an archive when its two transfer-contract copies differ", async () => {

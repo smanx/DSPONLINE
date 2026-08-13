@@ -1,6 +1,8 @@
 [Unit]
 Description=DSP Idle cloud account, save and leaderboard service
 After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -10,6 +12,7 @@ WorkingDirectory=/opt/dsp-idle-cloud/current
 ExecStart=/usr/local/lib/dsp-idle-release/current/api-writer-lock.sh /usr/bin/node /opt/dsp-idle-cloud/current/index.mjs
 Restart=on-failure
 RestartSec=3
+RestartPreventExitStatus=75 78
 TimeoutStopSec=90
 Environment=NODE_ENV=production
 Environment=HOST=127.0.0.1
@@ -25,6 +28,7 @@ Environment=DSP_PUBLIC_BASE_URL=https://dsponline.cn
 Environment=DSP_OFFSITE_BACKUP_STATUS_FILE=/var/lib/dsp-idle-cloud/offsite-backup-status.json
 Environment=DSP_RESTORE_DRILL_STATUS_FILE=/var/lib/dsp-idle-cloud/restore-drill-status.json
 Environment=DSP_NODE_HEALTH_STATUS_FILE=/var/lib/dsp-idle-cloud/node-health-status.json
+EnvironmentFile=/etc/dsp-idle-cloud/runtime.env
 EnvironmentFile=-/etc/dsp-idle-cloud/admin.env
 Environment=DSP_ALLOWED_ORIGIN=https://dsponline.cn,https://www.dsponline.cn,https://localhost,http://dsponline.cn,http://www.dsponline.cn,http://hk-origin.example.invalid,http://shanghai-ip.example.invalid,http://shanghai-node.example.invalid
 NoNewPrivileges=true
@@ -34,6 +38,7 @@ ProtectHome=true
 ReadWritePaths=/var/lib/dsp-idle-cloud
 RuntimeDirectory=dsp-idle-cloud
 RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
 
 [Install]
 WantedBy=multi-user.target

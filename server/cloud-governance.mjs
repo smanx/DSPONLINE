@@ -233,3 +233,14 @@ export function backupWindowState(window, date = new Date()) {
   const dayKey = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
   return { configured: true, withinWindow, dayKey };
 }
+
+export function normalizeBackupStartupGraceMs(value, fallback = 15 * 60 * 1000) {
+  return Number.isFinite(value)
+    ? Math.max(0, Math.min(60 * 60 * 1000, Math.floor(value)))
+    : fallback;
+}
+
+export function backupStartupGraceElapsed(startedAt, now, graceMs) {
+  return Number.isFinite(startedAt) && Number.isFinite(now)
+    && now >= startedAt + normalizeBackupStartupGraceMs(graceMs);
+}

@@ -32,6 +32,8 @@ import {
   CLOUD_HISTORY_LIMIT,
   CLOUD_HISTORY_PRUNE_CONFIRMATION,
   backupWindowState,
+  backupStartupGraceElapsed,
+  normalizeBackupStartupGraceMs,
   buildCloudHistoryPrunePlan,
   collectSqliteGovernanceMetrics,
   parseDailyBackupWindow,
@@ -3750,6 +3752,7 @@ export async function createCloudServer({
   backupDirectory = process.env.DSP_CLOUD_BACKUP_DIRECTORY || "",
   backupIntervalMs = Number(process.env.DSP_CLOUD_BACKUP_INTERVAL_MS || 6 * 60 * 60 * 1000),
   backupWindow = process.env.DSP_CLOUD_BACKUP_WINDOW || "",
+  backupStartupGraceMs = Number(process.env.DSP_CLOUD_BACKUP_STARTUP_GRACE_MS || 15 * 60 * 1000),
   historyPruneIntervalMs = Number(process.env.DSP_CLOUD_PRUNE_INTERVAL_MS || 6 * 60 * 60 * 1000),
   requestTimeoutMs = Number(process.env.DSP_CLOUD_REQUEST_TIMEOUT_MS || cloudTransferContract.maximumTimeoutMs + 10_000),
   allowedOrigin = process.env.DSP_ALLOWED_ORIGIN || "",
@@ -3946,6 +3949,8 @@ export async function createCloudServer({
     : tencentSesMailer ? "tencent-ses" : webhookMailer ? "webhook" : "disabled";
   const configuredBackupWindow = parseDailyBackupWindow(backupWindow);
   if (backupWindow && !configuredBackupWindow) logger.error?.("DSP_CLOUD_BACKUP_WINDOW must use HH:MM-HH:MM; interval scheduling remains active");
+  const normalizedBackupStartupGraceMs = normalizeBackupStartupGraceMs(backupStartupGraceMs);
+  const backupStartedAt = nowProvider();
 
   const flushMetrics = setInterval(() => {
     if (runtime.shuttingDown) return;
@@ -3999,6 +4004,7 @@ export async function createCloudServer({
   };
   const scheduledBackupTick = () => {
     if (runtime.shuttingDown) return;
+    if (!backupStartupGraceElapsed(backupStartedAt, nowProvider(), normalizedBackupStartupGraceMs)) return;
     if (!configuredBackupWindow) return void startBackup().catch((error) => logger.error?.("cloud backup failed", error));
     const windowState = backupWindowState(configuredBackupWindow, new Date());
     if (!windowState.withinWindow || runtime.lastBackupDayKey === windowState.dayKey) return;
@@ -4014,7 +4020,11 @@ export async function createCloudServer({
       ? setInterval(scheduledBackupTick, backupIntervalMs)
       : null;
   backupTimer?.unref?.();
-  if (backupDirectory && !configuredBackupWindow) void startBackup().catch((error) => logger.error?.("initial cloud backup failed", error));
+  const backupStartupTimer = backupDirectory && normalizedBackupStartupGraceMs > 0
+    ? setTimeout(scheduledBackupTick, normalizedBackupStartupGraceMs)
+    : null;
+  backupStartupTimer?.unref?.();
+  if (backupDirectory && !configuredBackupWindow && normalizedBackupStartupGraceMs === 0) void startBackup().catch((error) => logger.error?.("initial cloud backup failed", error));
   else if (backupDirectory) scheduledBackupTick();
 
   const runPeriodicHistoryPrune = async () => {
@@ -5535,6 +5545,7 @@ export async function createCloudServer({
       clearInterval(flushMetrics);
       clearInterval(runtimeSampleTimer);
       if (backupTimer) clearInterval(backupTimer);
+      if (backupStartupTimer) clearTimeout(backupStartupTimer);
       if (historyPruneTimer) clearInterval(historyPruneTimer);
     }
     return nativeClose((error) => {
@@ -5549,6 +5560,7 @@ export async function createCloudServer({
     clearInterval(runtimeSampleTimer);
     unsubscribeStoreCommit();
     if (backupTimer) clearInterval(backupTimer);
+    if (backupStartupTimer) clearTimeout(backupStartupTimer);
     if (historyPruneTimer) clearInterval(historyPruneTimer);
   });
   server.shutdown = () => new Promise((resolve, reject) => {
@@ -5583,7 +5595,7 @@ function isDirectInvocation() {
   try {
     return realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
   } catch {
-    return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+    return false;
   }
 }
 

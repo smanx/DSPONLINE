@@ -3,6 +3,8 @@ import { test } from "node:test";
 import Database from "better-sqlite3";
 import {
   backupWindowState,
+  backupStartupGraceElapsed,
+  normalizeBackupStartupGraceMs,
   buildCloudHistoryPrunePlan,
   collectSqliteGovernanceMetrics,
   parseDailyBackupWindow,
@@ -125,4 +127,16 @@ test("supports a daily low-traffic backup window including midnight rollover", (
   assert.equal(state.withinWindow, true);
   assert.equal(state.dayKey, "2026-08-09");
   assert.equal(parseDailyBackupWindow("25:00-26:00"), null);
+});
+
+test("delays restart-time backups until the bounded startup grace has elapsed", () => {
+  const startedAt = Date.parse("2026-08-13T03:00:00+08:00");
+  const grace = normalizeBackupStartupGraceMs(15 * 60 * 1000);
+  assert.equal(backupStartupGraceElapsed(startedAt, startedAt, grace), false);
+  assert.equal(backupStartupGraceElapsed(startedAt, startedAt + grace - 1, grace), false);
+  assert.equal(backupStartupGraceElapsed(startedAt, startedAt + grace, grace), true);
+  assert.equal(backupStartupGraceElapsed(startedAt, startedAt, 0), true);
+  assert.equal(normalizeBackupStartupGraceMs(-1), 0);
+  assert.equal(normalizeBackupStartupGraceMs(10 * 60 * 60 * 1000), 60 * 60 * 1000);
+  assert.equal(normalizeBackupStartupGraceMs(Number.NaN), 15 * 60 * 1000);
 });

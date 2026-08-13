@@ -1,4 +1,5 @@
 import path from "node:path";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { readCloudPayload } from "./cloud-payload-store.mjs";
@@ -133,7 +134,9 @@ export function runLeaderboardModeration(options) {
   }
 }
 
-const isCli = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+let isCli = false;
+try { isCli = Boolean(process.argv[1]) && realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); }
+catch { isCli = false; }
 if (isCli) {
   try {
     console.log(JSON.stringify(runLeaderboardModeration(parseArguments(process.argv.slice(2)))));

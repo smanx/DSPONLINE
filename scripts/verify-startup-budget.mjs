@@ -1,4 +1,5 @@
 import { gzipSync } from "node:zlib";
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -214,6 +215,9 @@ async function main() {
   console.log(`Startup budget passed: ${JSON.stringify(summary)}`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+let isMain = false;
+try { isMain = Boolean(process.argv[1]) && realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); }
+catch { isMain = false; }
+if (isMain) {
   await main();
 }
