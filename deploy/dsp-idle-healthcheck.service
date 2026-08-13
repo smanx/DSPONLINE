@@ -1,8 +1,8 @@
 [Unit]
-Description=Verify DSP Idle cloud API health
-After=dsp-idle-cloud.service
+Description=Verify DSP Idle cloud API liveness and write readiness through the stable proxy
+After=dsp-idle-api-handoff-proxy.service
 
 [Service]
 Type=oneshot
 User=root
-ExecStart=/bin/sh -c '/usr/bin/curl --fail --silent --show-error --max-time 60 http://127.0.0.1:4320/api/health >/dev/null || { /usr/bin/systemctl restart dsp-idle-cloud.service; exit 1; }'
+ExecStart=/bin/sh -c '/usr/bin/curl --fail --silent --show-error --max-time 60 http://127.0.0.1:4330/api/health >/dev/null && /usr/bin/curl --fail --silent --show-error --max-time 60 http://127.0.0.1:4330/api/ready >/dev/null'

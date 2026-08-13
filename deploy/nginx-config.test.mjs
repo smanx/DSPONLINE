@@ -3,6 +3,9 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import "./api-handoff-proxy.test.mjs";
+import "./release-backup-evidence.test.mjs";
+import "./release-switch.test.mjs";
 
 const deployDirectory = path.dirname(fileURLToPath(import.meta.url));
 const standaloneConfigs = [
@@ -36,7 +39,7 @@ test("active Nginx templates compress static assets while preserving cache bound
     assert.match(config, /location @archived_immutable_asset[^}]*\/var\/www\/dsp-idle\/shared/s);
     assert.match(config, /location = \/version\.json[^}]*no-cache, no-store/s);
     assert.match(config, /location = \/sw\.js[^}]*no-cache, no-store/s);
-    assert.match(config, /proxy_pass http:\/\/127\.0\.0\.1:4320/);
+    assert.match(config, /proxy_pass http:\/\/127\.0\.0\.1:4330/);
   }
   const domain = await readFile(path.join(deployDirectory, "nginx-dsp-idle-domain.conf"), "utf8");
   assert.match(domain, /include \/etc\/nginx\/snippets\/dsp-idle-app\.conf;/);
@@ -72,7 +75,7 @@ test("active Nginx cloud proxies cover the shared maximum transfer timeout", asy
     assert.match(apiLocation, /client_max_body_size\s+70m;/);
   }
 
-  assert.deepEqual([...configuredTimeouts], [70_000]);
+  assert.deepEqual([...configuredTimeouts], [300_000]);
 });
 
 test("Hong Kong cloud service authorizes the packaged Android WebView origin", async () => {
@@ -83,4 +86,35 @@ test("Hong Kong cloud service authorizes the packaged Android WebView origin", a
   assert.equal(allowedOrigins.has("https://dsponline.cn"), true);
   assert.equal(allowedOrigins.has("https://localhost"), true);
   assert.equal(allowedOrigins.has("https://attacker.invalid"), false);
+});
+
+test("release templates keep one writer and route public traffic through the handoff proxy", async () => {
+  const [legacy, hongKong, active, proxy, preflight, health] = await Promise.all([
+    readDeployFile("dsp-idle-cloud.service"),
+    readDeployFile("dsp-idle-cloud-hk.service"),
+    readDeployFile("dsp-idle-api-active.service"),
+    readDeployFile("dsp-idle-api-handoff-proxy.service"),
+    readDeployFile("dsp-idle-api-preflight.service"),
+    readDeployFile("dsp-idle-healthcheck.service"),
+  ]);
+  for (const service of [legacy, hongKong]) {
+    assert.match(service, /api-writer-lock\.sh/);
+    assert.match(service, /TimeoutStopSec=90/);
+    assert.match(service, /DSP_API_WRITER_LOCK_FILE=\/run\/dsp-idle-cloud\/writer\.lock/);
+  }
+  assert.match(active, /api-active-entry\.sh/);
+  assert.match(active, /TimeoutStopSec=90/);
+  assert.match(active, /DSP_API_WRITER_LOCK_FILE=\/run\/dsp-idle-cloud\/writer\.lock/);
+  assert.match(active, /dsp-idle-api-active\.service|active cloud API writer/);
+  assert.match(proxy, /PORT=4330/);
+  assert.match(proxy, /Restart=always/);
+  assert.match(proxy, /DSP_API_PROXY_MAX_HOLD_MS=300000/);
+  assert.match(proxy, /TimeoutStopSec=90/);
+  assert.match(preflight, /TimeoutStopSec=90/);
+  assert.match(preflight, /EnvironmentFile=\/run\/dsp-idle-cloud\/preflight\.env/);
+  assert.match(preflight, /release-preflight/);
+  assert.doesNotMatch(preflight, /writer\.lock/);
+  assert.match(health, /127\.0\.0\.1:4330\/api\/health/);
+  assert.match(health, /127\.0\.0\.1:4330\/api\/ready/);
+  assert.doesNotMatch(health, /systemctl restart/);
 });

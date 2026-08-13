@@ -1,0 +1,22 @@
+[Unit]
+Description=DSP Idle API release preflight against a verified backup clone
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+EnvironmentFile=/run/dsp-idle-cloud/preflight.env
+WorkingDirectory=/var/lib/dsp-idle-cloud/release-preflight
+ExecStart=/usr/bin/node ${DSP_API_RELEASE_DIR}/index.mjs
+Restart=no
+TimeoutStopSec=90
+Environment=NODE_ENV=production
+Environment=DSP_ALLOWED_ORIGIN=
+Environment=DSP_PLAYER_ONLINE_WINDOW_MS=120000
+Environment=DSP_METRIC_TIME_ZONE=Asia/Shanghai
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dsp-idle-cloud/release-preflight /run/dsp-idle-cloud

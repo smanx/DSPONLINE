@@ -12,6 +12,8 @@
 
 > `1.0.40` P1-01 原子持久化开发门禁（2026-08-13）：专项 15/15，完整 server 94 项通过/2 项可选夹具跳过，ops 10/10，云客户端与传输 33/33，typecheck 和生产 build 通过。专项覆盖 `SQLITE_FULL/IOERR/BUSY/READONLY`、真实 SQLite `query_only`、五个 transaction failpoint、失败后同进程/重启不可见、后续写不复活、显式重试单 revision、并发 expectedRevision 一次 200/一次 409、注册/改密/删除/恢复/排行榜/管理员/邮件副作用回滚、readiness 失败与恢复、operation receipt 重启后幂等重放，以及 `server.close()` 等待暂停事务。全部使用合成 v46 存档、合成账号和临时 SQLite。
 
+> `1.0.40` P1-06 发布切换专项（2026-08-13）：本地合成门禁 17/17 通过，覆盖备份证据与篡改拒绝、dry-run、幂等、候选启动/health/readiness、Nginx test/reload、单写锁、新实例启动、显式故障注入和代码回滚。一个在途 PUT、一个排队 PUT 与连续 30 次 GET 穿越 `drain/hold/forward` 时只观察到 200，502/504 为 0。API 发布目录 3/3、Node 与 Bash 语法通过。所有数据均为本地合成夹具；Linux systemd/Nginx 实例级演练仍是 Release Agent 安装模板前的强制门禁，不能用 Windows 控制器测试冒充生产通过。
+
 > `1.0.38` clean source `351c649af9eedb22f56f47a6cd06c14cedce6221` 在 2026-08-11 完成正式门禁并发布：typecheck、Vitest 107 文件通过/6 文件跳过且 950 项通过/18 项跳过、服务端 70/2、运维 6/6、原生工具 8/8、128 个运行时许可证，以及最终 Playwright 280 项通过/11 条显式条件跳过/0 失败（291 总数）。首次全量有一条 90 秒瞬时超时，目标用例与随后完整全量重跑均通过。根项目与服务端生产依赖审计均为 0。专项覆盖 Worker 可转移保存/槽位/快照、可信信封拒绝、生产 Worker 导入边界、稀疏 v46 往返、持久传送带账本复用、量子原地/不可变等价、单极磁石一→二硬上限与零物资、200% 桌面/移动 Canvas 有界矩阵；1.0.37 客户端读取候选普通/速通稀疏档 2/2 通过。
 
 > 1.0.39 没有构建或发布新原生包。当前 stable 原生证据继续来自 1.0.38：Android 长期证书 v2/v3、API 36.1 模拟器 `1.0.37 → 1.0.38` 原地升级和 Windows `NotSigned` setup 隔离启动。1.0.39 发布重新复验下载 9/9 完整公开哈希、APK/EXE Range 206、香港/上海/下载页桌面与手机 6 场 Chrome，以及访问固定 1.0.37 previous-stable 前后只有当前 1.0.39 worker active、缓存 HTML 哈希不变和正式根页离线重开。正式证据见 [1.0.39 发布记录](./releases/1.0.39.md)。
@@ -36,7 +38,7 @@
 | 单元/领域 | `npm test` | `1.0.39`：107 个文件通过、6 个跳过；950 项通过、18 项跳过 | 引擎暂停边界、递归制造守恒、Worker/稀疏存档与导入边界、单极磁石扩容、科研宏观账本、离线决策、纯挂机幂等与守恒、模式存档隔离、v1-v46 存档、传送带/物流索引 oracle 和云同步等 |
 | 浏览器 E2E | `npm run test:e2e` | `1.0.39`：282 项通过、11 项显式条件夹具跳过、0 失败 | Worker 槽位/快照、矿脉扩容、Canvas 有界矩阵、科技树横向输入/多字号、星图批量物流、离线决策、版本公告、速通、纯挂机恢复、v46 稀疏协议、模式隔离、新旧手机壳和 IndexedDB 回归 |
 | 云服务 | `npm run test:server` | `1.0.39`：75 项通过、2 项可选夹具跳过 | 用户名注册、模式化云槽、schema v3→v7、SQLite layout v1→v2、v35-v46 稀疏/稠密边界、治理指标、账号安全、模式化复核 revision、历史恢复保护、排行榜完整性和管理员保护 |
-| 运维工具 | `npm run test:ops` | 6 项 | SQLite 一致性快照、认证加密、异地复制、隔离恢复、篡改拒绝、Nginx 压缩与缓存边界、Android origin 模板、端点/磁盘探针和告警载荷 |
+| 运维工具 | `npm run test:ops` | 随 1.0.40 集成增长 | SQLite 一致性快照、异地恢复、Nginx、节点探针、发布备份证据、稳定交接代理、单写锁和切换故障回滚 |
 | 原生配置与发布工具 | `npm run test:native` | 8/8 | 社区更新源默认关闭、HTTPS 通道、Android/桌面更新清单、调试 APK 拒绝、显式发布基址、桌面包内元数据和静态下载页清单门禁 |
 | 第三方许可证 | `npm run licenses:check` | 128 个运行时包 | 根项目/云服务 lockfile、直接依赖通知、完整许可证文本和 public 法律文件一致性 |
 | 生产构建 | `npm run build` | clean `1.0.39+fb54f2148dd6` 构建通过 | `tsc -b`、Vite chunk、普通离线/宏观 Worker 和 PWA 资源；生产多 Worker 入口硬关闭 |

@@ -7,9 +7,11 @@ import { fileURLToPath } from "node:url";
 function loadDatabaseConstructor() {
   const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
   const packageFiles = [
+    process.env.DSP_API_PACKAGE_FILE,
     path.join(process.cwd(), "package.json"),
+    path.join(process.env.DSP_API_ROOT || "/opt/dsp-idle-cloud", "current", "package.json"),
     path.join(scriptDirectory, "..", "server", "package.json"),
-  ];
+  ].filter(Boolean);
   for (const packageFile of packageFiles) {
     if (!existsSync(packageFile)) continue;
     try {
@@ -56,6 +58,7 @@ export function inspectCloudDatabase(file) {
     return {
       integrity: "ok",
       schemaVersion: Number.isInteger(data.schemaVersion) ? data.schemaVersion : 1,
+      storageLayoutVersion: Number.isInteger(data.storageLayoutVersion) ? data.storageLayoutVersion : 1,
       updatedAt: Number.isFinite(row.updatedAt) ? row.updatedAt : 0,
       records: {
         users: objectCount(data.users),

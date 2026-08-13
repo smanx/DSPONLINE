@@ -183,14 +183,25 @@ Get-FileHash release/download-site-<build-id>/downloads/desktop/stable/*.exe -Al
 
 前端回滚只需把 `current` 切回上一发布目录，不触碰数据库。
 
-仓库提供 `deploy/switch-release.sh` 原子切换前端与后端代码，并保存上一次代码指向。两台正式节点已将同一脚本安装为 `/usr/local/sbin/dsp-idle-switch-release`；发布或回滚后都会验证 Nginx、云服务和本机健康接口：
+仓库提供 `deploy/switch-release.sh` 切换前端与后端代码并保存上一次代码指向。1.0.40 候选增加稳定交接代理：Nginx 固定指向 `127.0.0.1:4330`；代理先让已有上传和导出完成并排队新写请求，再短暂排队全部请求。旧写实例释放共享 `flock` 后，新实例才可在 4321/4322 之一接触生产 SQLite。候选预热只允许使用已经验证的发布前备份克隆，不允许两个写实例同时打开生产库。正式安装时须把控制文件放入不可变 `/usr/local/lib/dsp-idle-release/<build-id>/`，再原子更新 `/usr/local/lib/dsp-idle-release/current`，不得覆盖正在运行的控制文件。
+
+API 切换必须提供与不可变 SQLite Backup API 快照绑定的证据。证据锁定绝对路径、大小、mtime、SHA-256、`quick_check`、schema 和 SQLite layout；切换器会再次计算 SHA-256。`--dry-run` 执行同样的证据与目标校验，但不启动服务、不 reload Nginx、不改软链。节点级非密钥配置从 `deploy/dsp-idle-runtime.env.example` 安装到 `/etc/dsp-idle-cloud/runtime.env`；真实凭据仍只放 `admin.env`。
 
 ```bash
-sudo dsp-idle-switch-release --web-release <web-id> --api-release <api-id>
-sudo dsp-idle-switch-release --rollback-last
+node /usr/local/lib/dsp-idle-release/current/release-backup-evidence.mjs \
+  --database /var/lib/dsp-idle-cloud/backups/<verified-snapshot>.sqlite \
+  --output /var/lib/dsp-idle-cloud/release-state/<build-id>-backup-evidence.json
+sudo dsp-idle-switch-release --web-release <web-id> --api-release <api-id> \
+  --backup-evidence /var/lib/dsp-idle-cloud/release-state/<build-id>-backup-evidence.json --dry-run
+sudo dsp-idle-switch-release --web-release <web-id> --api-release <api-id> \
+  --backup-evidence /var/lib/dsp-idle-cloud/release-state/<build-id>-backup-evidence.json
+sudo dsp-idle-switch-release --rollback-last \
+  --backup-evidence /var/lib/dsp-idle-cloud/release-state/<verified-current>-backup-evidence.json
 ```
 
-`--rollback-last` 只切换 `/var/www/dsp-idle/current` 与 `/opt/dsp-idle-cloud/current`，绝不恢复、替换或初始化数据库。
+`--rollback-last` 走同一备份证据、预热、单写锁、readiness、排队和优雅关闭流程，只回滚代码，绝不恢复、替换或初始化数据库。重复执行同一目标为 no-op，`switch.lock` 阻止两个切换器并行。测试故障注入只有显式设置 `DSP_ENABLE_RELEASE_FAULT_INJECTION=1` 才能启用，生产禁止设置。
+
+固定顺序为：验证备份证据 → 候选在备份克隆和 4390 端口达到 health/ready → `drain` 并等待在途写归零 → `hold` 并等待全部请求归零 → 停旧实例 → 验证单写锁空闲 → 启动新实例并等待 readiness → 发布软链与代理 generation。启动、readiness、Nginx reload 或 SQLite 锁失败时恢复旧 unit/upstream 和软链。代理队列默认 512，保护窗口和 Nginx API `proxy_read_timeout` 均为 300 秒；systemd `TimeoutStopSec` 为 90 秒。超过有界窗口时返回明确 503 与 `Retry-After`，不会无限占用内存。
 
 执行 `--rollback-last` 前必须读取 `/var/lib/dsp-idle-cloud/release-state/previous-release`，确认两个目录存在且后端能读取当前 schema。数据库升级后不能把旧 schema 后端继续留作“一键回滚”目标；应先在当前数据库的一致性备份副本上用隔离端口完成兼容验证。
 
@@ -206,7 +217,7 @@ SQLite layout v2 将云存档正文从 `app_state` 拆到 `cloud_save_payloads`�
 4. 检查 `systemctl status`、journal 和本机 `/api/health`。
 5. 再从公网入口验证同源 `/api/health`、登录页面和云存档元数据读取。
 
-1.0.40 起 `/api/health` 是进程 liveness；发布切换、反向代理接流量和持久化故障告警还必须检查 `/api/ready`。readiness 只返回 `writable/lastSuccessAt/lastErrorAt/lastErrorCategory/pendingWrites/shuttingDown`：正常为 200，最近 SQLite 写入失败且尚未有成功写恢复、或进程正在优雅关闭时为 503。收到 SIGTERM/SIGINT 后服务拒绝新的 mutation，并等待在途请求、备份、历史裁剪和持久化队列完成；仓库两套 systemd unit 使用 `TimeoutStopSec=80`，不得缩短到 75 秒以下。不得把 liveness 200 当作数据库仍可写的证明。
+1.0.40 起 `/api/health` 是进程 liveness；发布切换、反向代理接流量和持久化故障告警还必须检查 `/api/ready`。readiness 正常为 200，最近 SQLite 写入失败且尚未恢复、或进程正在关闭时为 503。收到 SIGTERM/SIGINT 后服务拒绝新的 mutation，并等待在途请求、备份、历史裁剪和持久化队列完成；API/proxy/preflight unit 使用 `TimeoutStopSec=90`，不得短于服务端 75 秒强制退出边界。健康定时器只检查稳定代理上的 health 与 readiness，不在切换中擅自 restart 某个槽位。
 
 后端失败时切回上一代码目录并重启；除非新代码已执行不可逆数据迁移，否则不要回滚数据库。
 

@@ -29,8 +29,18 @@ export const API_SERVER_RELEASE_FILES = Object.freeze([
   "server/account-security.test.mjs",
   "server/analytics.mjs",
   "server/analytics.test.mjs",
+  "server/account-archive.mjs",
+  "server/account-archive.test.mjs",
+  "server/account-archive.integration.test.mjs",
   "server/cloud-governance.mjs",
   "server/cloud-governance.test.mjs",
+  "server/cloud-payload-maintenance.mjs",
+  "server/cloud-payload-maintenance.test.mjs",
+  "server/cloud-payload-store.mjs",
+  "server/cloud-payload-store.test.mjs",
+  "server/cloud-quota.integration.test.mjs",
+  "server/cloud-quota.mjs",
+  "server/cloud-quota.test.mjs",
   "server/cloud-transfer-contract.json",
   "server/cloud-save-v46-sparse.test.mjs",
   "server/upload-inspection-scheduler.mjs",
@@ -59,14 +69,21 @@ export const API_SERVER_RELEASE_FILES = Object.freeze([
 ]);
 
 export const API_DEPLOY_RELEASE_FILES = Object.freeze([
+  "deploy/active-api-environment.mjs",
+  "deploy/api-active-entry.sh",
+  "deploy/api-handoff-proxy.mjs",
+  "deploy/api-writer-lock.sh",
   "deploy/mail-templates/account-verification.html",
   "deploy/mail-templates/password-reset.html",
   "deploy/backup-crypto.mjs",
   "deploy/backup-sqlite.mjs",
   "deploy/create-offsite-backup.mjs",
   "deploy/probe-node-health.mjs",
+  "deploy/release-backup-evidence.mjs",
+  "deploy/release-switch.mjs",
   "deploy/restore-drill.mjs",
   "deploy/sqlite-snapshot.mjs",
+  "deploy/switch-release.sh",
 ]);
 
 export const API_ARCHIVE_SOURCE_FILES = Object.freeze([

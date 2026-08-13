@@ -7,13 +7,14 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/dsp-idle-cloud/current
-ExecStart=/usr/bin/node /opt/dsp-idle-cloud/current/index.mjs
+ExecStart=/usr/local/lib/dsp-idle-release/current/api-writer-lock.sh /usr/bin/node /opt/dsp-idle-cloud/current/index.mjs
 Restart=on-failure
 RestartSec=3
-TimeoutStopSec=80
+TimeoutStopSec=90
 Environment=NODE_ENV=production
 Environment=HOST=127.0.0.1
 Environment=PORT=4320
+Environment=DSP_API_WRITER_LOCK_FILE=/run/dsp-idle-cloud/writer.lock
 Environment=DSP_CLOUD_DATA_FILE=/var/lib/dsp-idle-cloud/cloud.json
 Environment=DSP_CLOUD_DATABASE_FILE=/var/lib/dsp-idle-cloud/cloud.sqlite
 Environment=DSP_CLOUD_BACKUP_DIRECTORY=/var/lib/dsp-idle-cloud/backups
@@ -31,6 +32,8 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/dsp-idle-cloud
+RuntimeDirectory=dsp-idle-cloud
+RuntimeDirectoryMode=0750
 
 [Install]
 WantedBy=multi-user.target
