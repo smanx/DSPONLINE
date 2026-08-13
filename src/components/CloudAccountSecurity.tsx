@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Check,
   Download,
@@ -26,8 +26,20 @@ import {
   type CloudAccountSession,
   type CloudLoginSecurityEvent,
   type CloudUser,
+  cloudApiBase,
+  getCloudToken,
 } from "../game/cloud";
 import { exportTextFile } from "../game/fileExport";
+import {
+  CLOUD_ACCOUNT_ARCHIVE_CONTENT_TYPE,
+  downloadCloudAccountArchive,
+  fetchCloudAccountArchiveImportPreview,
+  importCloudAccountArchive,
+  type CloudAccountArchiveImportPreview,
+} from "../game/cloudAccountArchive";
+import { getDesktopBridge } from "../desktop";
+import { downloadAndroidAccountArchive } from "../game/androidAccountArchive";
+import { AccessibleDialog } from "./AccessibleDialog";
 
 interface CloudAccountSecurityProps {
   user: CloudUser;
@@ -59,6 +71,14 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [bindingEmail, setBindingEmail] = useState(user.email);
   const [autoSyncStatus, setAutoSyncStatus] = useState(() => readCloudAutoSyncStatus(user.id));
+  const archiveImportInputRef = useRef<HTMLInputElement>(null);
+  const archiveImportButtonRef = useRef<HTMLButtonElement>(null);
+  const archiveImportCancelButtonRef = useRef<HTMLButtonElement>(null);
+  const archiveImportPreviewInFlightRef = useRef(false);
+  const archiveImportInFlightRef = useRef(false);
+  const [archiveImportFile, setArchiveImportFile] = useState<File | null>(null);
+  const [archiveImportPreview, setArchiveImportPreview] = useState<CloudAccountArchiveImportPreview | null>(null);
+  const [legacyExportAvailable, setLegacyExportAvailable] = useState(false);
 
   const refreshSessions = async () => {
     setSessionsLoading(true);
@@ -172,13 +192,117 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
   const exportData = async () => {
     setBusyAction("export");
     setNotice(null);
+    setLegacyExportAvailable(false);
+    try {
+      const token = getCloudToken();
+      const base = cloudApiBase();
+      if (!token || !base) throw new Error("当前环境未配置可用的安全云服务");
+      const desktop = getDesktopBridge();
+      if (desktop) {
+        const result = await desktop.downloadAccountArchive({
+          authorization: `Bearer ${token}`,
+          suggestedName: `dsp-account-${user.id}.dspaccount.zip`,
+        });
+        if (result.cancelled) {
+          setNotice({ tone: "warning", text: "已取消账号归档导出" });
+          return;
+        }
+        setNotice({ tone: "ready", text: `账号归档已保存：${result.fileName}` });
+      } else {
+        const androidResult = await downloadAndroidAccountArchive({
+          apiBase: new URL(base, window.location.href).toString(),
+          sessionHandle: token,
+          suggestedName: `dsp-account-${user.id}.dspaccount.zip`,
+        });
+        if (androidResult) {
+          setNotice({ tone: "ready", text: `账号归档已通过 Android 分享面板导出：${androidResult.fileName}` });
+        } else {
+          const result = await downloadCloudAccountArchive({ apiBase: base, authToken: token });
+          setNotice({ tone: "ready", text: `账号归档已导出（${Math.ceil(result.bytesWritten / 1024)} KiB）` });
+        }
+      }
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ARCHIVE_UNSUPPORTED") {
+        setLegacyExportAvailable(true);
+        setNotice({
+          tone: "warning",
+          text: "当前云节点不支持流式账号归档。若确需兼容旧节点，请单独选择“导出旧版 JSON”；该方式可能占用较多内存，不会自动执行。",
+        });
+        return;
+      }
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "账号归档导出失败" });
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const exportLegacyData = async () => {
+    setBusyAction("legacy-export");
+    setNotice(null);
     try {
       const data = await exportCloudAccountData();
-      await exportTextFile({ contents: JSON.stringify(data, null, 2), fileName: `dsp-account-${user.id}.json`, title: "导出云账号数据" });
-      setNotice({ tone: "ready", text: "账号数据已导出" });
+      await exportTextFile({
+        contents: JSON.stringify(data, null, 2),
+        fileName: `dsp-account-${user.id}.json`,
+        title: "导出兼容版云账号数据",
+      });
+      setLegacyExportAvailable(false);
+      setNotice({ tone: "warning", text: "旧版 JSON 已按你的明确选择导出；建议优先保留流式账号归档作为完整备份" });
     } catch (error) {
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "账号数据导出失败" });
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "兼容版账号数据导出失败" });
     } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const prepareArchiveImport = async () => {
+    if (!archiveImportFile) {
+      archiveImportInputRef.current?.click();
+      return;
+    }
+    if (archiveImportPreviewInFlightRef.current || archiveImportInFlightRef.current) return;
+    archiveImportPreviewInFlightRef.current = true;
+    setBusyAction("import-preview");
+    setNotice(null);
+    try {
+      const token = getCloudToken();
+      const base = cloudApiBase();
+      if (!token || !base) throw new Error("当前环境未配置可用的安全云服务");
+      setArchiveImportPreview(await fetchCloudAccountArchiveImportPreview({ apiBase: base, authToken: token }));
+    } catch (error) {
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "账号归档导入预检失败，现有云存档未修改" });
+    } finally {
+      archiveImportPreviewInFlightRef.current = false;
+      setBusyAction(null);
+    }
+  };
+
+  const confirmArchiveImport = async () => {
+    if (!archiveImportFile || !archiveImportPreview || archiveImportInFlightRef.current) return;
+    archiveImportInFlightRef.current = true;
+    setBusyAction("import");
+    setNotice(null);
+    try {
+      const token = getCloudToken();
+      const base = cloudApiBase();
+      if (!token || !base) throw new Error("当前环境未配置可用的安全云服务");
+      const result = await importCloudAccountArchive(
+        archiveImportFile,
+        archiveImportPreview,
+        { apiBase: base, authToken: token },
+      );
+      setArchiveImportFile(null);
+      setArchiveImportPreview(null);
+      if (archiveImportInputRef.current) archiveImportInputRef.current.value = "";
+      setNotice({
+        tone: "ready",
+        text: `账号归档已原子导入 ${result.revisionCount} 个修订；普通/速通排行榜需各自上传一个新主修订后重新生效`,
+      });
+    } catch (error) {
+      setArchiveImportPreview(null);
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "账号归档导入失败，现有云存档未修改" });
+    } finally {
+      archiveImportInFlightRef.current = false;
       setBusyAction(null);
     }
   };
@@ -260,9 +384,70 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
       </details>
 
       <div className="cloud-account-data-actions">
-        <button type="button" disabled={busyAction === "export"} onClick={() => void exportData()}>{busyAction === "export" ? <LoaderCircle size={13} /> : <Download size={13} />}导出账号数据</button>
+        <button type="button" disabled={busyAction === "export"} onClick={() => void exportData()}>{busyAction === "export" ? <LoaderCircle size={13} /> : <Download size={13} />}导出账号归档</button>
+        {legacyExportAvailable ? <button
+          type="button"
+          className="warning"
+          disabled={busyAction === "legacy-export"}
+          onClick={() => void exportLegacyData()}
+        >{busyAction === "legacy-export" ? <LoaderCircle size={13} /> : <Download size={13} />}导出旧版 JSON（高内存兼容）</button> : null}
+        <input
+          ref={archiveImportInputRef}
+          type="file"
+          hidden
+          accept={`${CLOUD_ACCOUNT_ARCHIVE_CONTENT_TYPE},.dspaccount.zip`}
+          onChange={(event) => {
+            const file = event.target.files?.[0] ?? null;
+            setArchiveImportFile(file);
+            setArchiveImportPreview(null);
+            setNotice(file ? { tone: "warning", text: `已选择 ${file.name}；点击“检查并导入账号归档”后会先读取替换范围，不会立即写入` } : null);
+          }}
+        />
+        <button
+          ref={archiveImportButtonRef}
+          type="button"
+          disabled={busyAction === "import-preview" || busyAction === "import"}
+          onClick={() => void prepareArchiveImport()}
+        >
+          {busyAction === "import-preview" ? <LoaderCircle size={13} /> : <RefreshCw size={13} />}
+          {archiveImportFile ? "检查并导入账号归档" : "选择账号归档"}
+        </button>
+        {archiveImportFile ? <button type="button" onClick={() => {
+          setArchiveImportFile(null);
+          setArchiveImportPreview(null);
+          if (archiveImportInputRef.current) archiveImportInputRef.current.value = "";
+        }}>取消导入</button> : null}
         <button className="danger" type="button" onClick={() => setDeleteArmed((current) => !current)}><Trash2 size={13} />注销账号</button>
       </div>
+
+      <AccessibleDialog
+        open={Boolean(archiveImportFile && archiveImportPreview)}
+        role="alertdialog"
+        riskPolicy="explicit"
+        title="替换全部云存档槽位"
+        description="最后确认 · 服务器 guard 已锁定当前云状态"
+        initialFocusRef={archiveImportCancelButtonRef}
+        returnFocusRef={archiveImportButtonRef}
+        onRequestClose={() => undefined}
+        actions={<>
+          <button ref={archiveImportCancelButtonRef} type="button" onClick={() => setArchiveImportPreview(null)}>取消，不修改云存档</button>
+          <button className="danger" type="button" disabled={busyAction === "import"} onClick={() => void confirmArchiveImport()}>
+            {busyAction === "import" ? <LoaderCircle size={13} /> : <RefreshCw size={13} />}
+            确认替换并导入
+          </button>
+        </>}
+      >
+        <div className="save-delete-content">
+          <div className="save-delete-target">
+            <span>待导入归档</span>
+            <strong>{archiveImportFile?.name ?? "--"}</strong>
+            <small>{archiveImportFile ? `${Math.ceil(archiveImportFile.size / 1024)} KiB` : "--"}</small>
+          </div>
+          <p>将原子替换普通模式与速通模式各自的 main、1、2、3 云槽及其归档内修订；两种模式仍保持隔离。</p>
+          <p>账号身份、当前登录会话、账号限制和已有排行榜历史不会从归档写回。导入完成后，普通/速通排行榜需各自再上传一个新的主修订通过复核。</p>
+          <p>服务器会先完整校验 ZIP、CRC、SHA-256、存档模式、schema、配额和当前 guard；任一步失败都不会修改现有云存档。</p>
+        </div>
+      </AccessibleDialog>
 
       {deleteArmed ? <form className="cloud-account-delete" onSubmit={deleteAccount}>
         <strong>永久注销云账号</strong>

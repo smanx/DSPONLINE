@@ -102,6 +102,24 @@ export interface CloudAccountArchiveDownloadOptions extends CloudAccountClientOp
   saveBlob?: (blob: Blob, fileName: string) => void | Promise<void>;
 }
 
+export interface CloudAccountArchiveImportPreview {
+  version: 1;
+  guard: string;
+  confirmation: string;
+  replaces: { modes: CloudQuotaMode[]; slots: CloudQuotaSlot[] };
+  preserves: string[];
+  cloudQuota: CloudQuotaSnapshot;
+}
+
+export interface CloudAccountArchiveImportResult {
+  imported: true;
+  revisionCount: number;
+  logicalBytes: number;
+  guard: string;
+  modes: Record<CloudQuotaMode, Record<CloudQuotaSlot, unknown>>;
+  leaderboardRevalidationRequired: Record<CloudQuotaMode, boolean>;
+}
+
 export interface CloudAccountArchiveDownloadResult {
   method: "file-system" | "blob";
   fileName: string;
@@ -403,6 +421,86 @@ export async function preflightCloudQuota(
     body: JSON.stringify({ mode, slot, size, ...(checksum ? { checksum } : {}) }),
   }), "云容量预检响应");
   return normalizeCloudQuotaPlan(payload.plan);
+}
+
+function normalizedImportPreview(value: unknown): CloudAccountArchiveImportPreview {
+  const response = record(value, "账号归档导入预检响应");
+  const source = record(response.import, "账号归档导入预检");
+  if (source.version !== 1) throw invalidResponse("账号归档导入预检版本无效");
+  const guard = nonEmptyString(source.guard, "账号归档导入 guard");
+  if (!/^[a-f0-9]{64}$/.test(guard)) throw invalidResponse("账号归档导入 guard 无效");
+  const confirmation = nonEmptyString(source.confirmation, "账号归档导入确认文字");
+  if (confirmation !== `REPLACE_CLOUD_SAVES:${guard}`) throw invalidResponse("账号归档导入确认文字无效");
+  const replaces = record(source.replaces, "账号归档替换范围");
+  if (!Array.isArray(replaces.modes) || !Array.isArray(replaces.slots) || !Array.isArray(source.preserves)) {
+    throw invalidResponse("账号归档导入范围无效");
+  }
+  return {
+    version: 1,
+    guard,
+    confirmation,
+    replaces: {
+      modes: replaces.modes.map((mode) => normalizeMode(mode, "账号归档模式")),
+      slots: replaces.slots.map((slot) => normalizeSlot(slot, "账号归档槽位")),
+    },
+    preserves: source.preserves.map((entry) => nonEmptyString(entry, "账号归档保留项")),
+    cloudQuota: normalizeCloudQuotaSnapshot(response.cloudQuota),
+  };
+}
+
+export async function fetchCloudAccountArchiveImportPreview(
+  options: CloudAccountClientOptions,
+): Promise<CloudAccountArchiveImportPreview> {
+  return normalizedImportPreview(await fetchJson(options, "/account/import/archive", { method: "GET" }));
+}
+
+export async function importCloudAccountArchive(
+  archive: Blob,
+  preview: CloudAccountArchiveImportPreview,
+  options: CloudAccountClientOptions,
+): Promise<CloudAccountArchiveImportResult> {
+  if (!(archive instanceof Blob) || archive.size < 1) {
+    throw new CloudAccountArchiveError("请选择有效的 DSP 账号归档", "ACCOUNT_ARCHIVE_IMPORT_FILE_INVALID");
+  }
+  const context = await requestContext(options);
+  if (options.signal?.aborted) throw abortError("账号归档导入已取消");
+  let response: Response;
+  try {
+    response = await context.fetch(`${context.base}/account/import/archive`, {
+      method: "POST",
+      signal: options.signal,
+      headers: {
+        authorization: `Bearer ${context.token}`,
+        "content-type": CLOUD_ACCOUNT_ARCHIVE_CONTENT_TYPE,
+        "x-dsp-account-import-guard": preview.guard,
+        "x-dsp-account-import-confirmation": preview.confirmation,
+      },
+      body: archive,
+    });
+  } catch (error) {
+    if (options.signal?.aborted || error instanceof DOMException && error.name === "AbortError") throw abortError("账号归档导入已取消");
+    throw new CloudAccountArchiveError("无法连接云服务", "ARCHIVE_IMPORT_NETWORK_ERROR");
+  }
+  if (!response.ok) return throwHttpError(response);
+  let value: unknown;
+  try { value = await response.json(); } catch { throw invalidResponse("账号归档导入响应不是有效 JSON"); }
+  const source = record(value, "账号归档导入响应");
+  if (source.imported !== true) throw invalidResponse("账号归档导入响应缺少成功标记");
+  const guard = nonEmptyString(source.guard, "导入后 guard");
+  if (!/^[a-f0-9]{64}$/.test(guard)) throw invalidResponse("导入后 guard 无效");
+  const revalidation = record(source.leaderboardRevalidationRequired, "排行榜复核状态");
+  const modes = record(source.modes, "导入后模式槽位");
+  return {
+    imported: true,
+    revisionCount: safeInteger(source.revisionCount, "revisionCount"),
+    logicalBytes: safeInteger(source.logicalBytes, "logicalBytes"),
+    guard,
+    modes: Object.fromEntries(CLOUD_SAVE_MODES.map((mode) => [mode, record(modes[mode], `${mode} 模式槽位`)])) as CloudAccountArchiveImportResult["modes"],
+    leaderboardRevalidationRequired: Object.fromEntries(CLOUD_SAVE_MODES.map((mode) => {
+      if (typeof revalidation[mode] !== "boolean") throw invalidResponse(`${mode} 复核状态无效`);
+      return [mode, revalidation[mode]];
+    })) as Record<CloudQuotaMode, boolean>,
+  };
 }
 
 function positiveContentLength(response: Response): number {

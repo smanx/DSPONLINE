@@ -327,7 +327,7 @@ export class CloudApiError extends Error {
   }
 }
 
-function apiBase(allowInsecurePublicRead = false): string | null {
+export function cloudApiBase(allowInsecurePublicRead = false): string | null {
   const configured = import.meta.env.VITE_API_BASE_URL?.trim();
   if (configured) return configured.replace(/\/$/, "");
   if (typeof __APP_PLATFORM__ !== "undefined" && __APP_PLATFORM__ !== "web") return null;
@@ -523,7 +523,7 @@ async function cloudRequest<T>(
   transferBytes = 0,
   expectedResponseBytes = 0,
 ): Promise<T> {
-  const base = apiBase(allowInsecurePublicRead);
+  const base = cloudApiBase(allowInsecurePublicRead);
   if (!base) throw new CloudApiError(
     typeof window !== "undefined" && window.location.protocol === "http:"
       ? "云账户仅在 HTTPS 安全入口开放"

@@ -6,7 +6,9 @@ import {
   CLOUD_ACCOUNT_ARCHIVE_CONTENT_TYPE,
   CloudAccountArchiveError,
   downloadCloudAccountArchive,
+  fetchCloudAccountArchiveImportPreview,
   fetchCloudQuota,
+  importCloudAccountArchive,
   normalizeCloudQuotaSnapshot,
   preflightCloudQuota,
   safeAccountArchiveFileName,
@@ -434,5 +436,131 @@ describe("cloud account archive download", () => {
     expect(safeAccountArchiveFileName('attachment; filename="valid.DSPACCOUNT.ZIP"'))
       .toBe("valid.dspaccount.zip");
     expect(safeAccountArchiveFileName(null)).toBe("dsp-account-export.dspaccount.zip");
+  });
+});
+
+describe("cloud account archive import", () => {
+  it("reads an authenticated guard preview and submits the exact replacement guard", async () => {
+    const guard = "b".repeat(64);
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({
+        import: {
+          version: 1,
+          guard,
+          confirmation: `REPLACE_CLOUD_SAVES:${guard}`,
+          replaces: { modes: MODES, slots: SLOTS },
+          preserves: ["account_identity", "sessions", "leaderboard_submissions"],
+        },
+        cloudQuota: quotaSnapshot(),
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        imported: true,
+        revisionCount: 16,
+        logicalBytes: 1234,
+        guard: "c".repeat(64),
+        modes: {
+          normal: Object.fromEntries(SLOTS.map((slot) => [slot, null])),
+          speedrun: Object.fromEntries(SLOTS.map((slot) => [slot, null])),
+        },
+        leaderboardRevalidationRequired: { normal: true, speedrun: true },
+      }));
+    const options = client(fetchMock);
+    const preview = await fetchCloudAccountArchiveImportPreview(options);
+    expect(preview.guard).toBe(guard);
+    expect(preview.replaces).toEqual({ modes: MODES, slots: SLOTS });
+
+    const result = await importCloudAccountArchive(
+      new Blob([new Uint8Array([1, 2, 3])], { type: CLOUD_ACCOUNT_ARCHIVE_CONTENT_TYPE }),
+      preview,
+      options,
+    );
+    expect(result).toMatchObject({ imported: true, revisionCount: 16, logicalBytes: 1234 });
+    const [, init] = fetchMock.mock.calls[1];
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${TOKEN}`);
+    expect(new Headers(init?.headers).get("x-dsp-account-import-guard")).toBe(guard);
+    expect(new Headers(init?.headers).get("x-dsp-account-import-confirmation")).toBe(`REPLACE_CLOUD_SAVES:${guard}`);
+    expect(init?.body).toBeInstanceOf(Blob);
+  });
+
+  it("rejects malformed previews and empty archives before mutation", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      import: {
+        version: 1,
+        guard: "b".repeat(64),
+        confirmation: "WRONG",
+        replaces: { modes: MODES, slots: SLOTS },
+        preserves: [],
+      },
+      cloudQuota: quotaSnapshot(),
+    }));
+    await expect(fetchCloudAccountArchiveImportPreview(client(fetchMock))).rejects.toMatchObject({ code: "CLOUD_RESPONSE_INVALID" });
+    const preview = {
+      version: 1 as const,
+      guard: "b".repeat(64),
+      confirmation: `REPLACE_CLOUD_SAVES:${"b".repeat(64)}`,
+      replaces: { modes: [...MODES], slots: [...SLOTS] },
+      preserves: [],
+      cloudQuota: normalizeCloudQuotaSnapshot(quotaSnapshot()),
+    };
+    await expect(importCloudAccountArchive(new Blob([]), preview, client(vi.fn<typeof fetch>())))
+      .rejects.toMatchObject({ code: "ACCOUNT_ARCHIVE_IMPORT_FILE_INVALID" });
+  });
+
+  it("surfaces guard conflicts without retrying or hiding the server code", async () => {
+    const guard = "d".repeat(64);
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      error: "云存档已变化",
+      code: "ACCOUNT_ARCHIVE_IMPORT_GUARD_CONFLICT",
+      guard: "e".repeat(64),
+    }, 409));
+    const preview = {
+      version: 1 as const,
+      guard,
+      confirmation: `REPLACE_CLOUD_SAVES:${guard}`,
+      replaces: { modes: [...MODES], slots: [...SLOTS] },
+      preserves: [],
+      cloudQuota: normalizeCloudQuotaSnapshot(quotaSnapshot()),
+    };
+    await expect(importCloudAccountArchive(new Blob(["archive"]), preview, client(fetchMock)))
+      .rejects.toMatchObject({ code: "ACCOUNT_ARCHIVE_IMPORT_GUARD_CONFLICT", status: 409 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes a large Blob through as the request body without materializing another ArrayBuffer", async () => {
+    const guard = "f".repeat(64);
+    const preview = {
+      version: 1 as const,
+      guard,
+      confirmation: `REPLACE_CLOUD_SAVES:${guard}`,
+      replaces: { modes: [...MODES], slots: [...SLOTS] },
+      preserves: [],
+      cloudQuota: normalizeCloudQuotaSnapshot(quotaSnapshot()),
+    };
+    class SyntheticLargeArchive extends Blob {
+      override get size(): number { return 30 * 1024 * 1024; }
+    }
+    const archive = new SyntheticLargeArchive([new Uint8Array([1, 2, 3])], {
+      type: CLOUD_ACCOUNT_ARCHIVE_CONTENT_TYPE,
+    });
+    const arrayBuffer = vi.fn<() => Promise<ArrayBuffer>>().mockRejectedValue(new Error("must not materialize"));
+    Object.defineProperty(archive, "arrayBuffer", { configurable: true, value: arrayBuffer });
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      imported: true,
+      revisionCount: 1,
+      logicalBytes: 3,
+      guard: "a".repeat(64),
+      modes: {
+        normal: Object.fromEntries(SLOTS.map((slot) => [slot, null])),
+        speedrun: Object.fromEntries(SLOTS.map((slot) => [slot, null])),
+      },
+      leaderboardRevalidationRequired: { normal: true, speedrun: true },
+    }));
+
+    await importCloudAccountArchive(archive, preview, client(fetchMock));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(archive);
+    expect(arrayBuffer).not.toHaveBeenCalled();
   });
 });
