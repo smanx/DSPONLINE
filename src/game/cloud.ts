@@ -11,6 +11,10 @@ import { androidBase64RequestSupported } from "./androidApiTransport";
 import { CLOUD_TRANSFER_CONTRACT, cloudRequestTimeoutMs, createCloudRequestId, validCloudExpectedRevision } from "./cloudTransferContract";
 import { inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
 import { sha256Text } from "./payloadDigest";
+import type {
+  CloudAccountArchiveImportPreview,
+  CloudAccountArchiveImportResult,
+} from "./cloudAccountArchive";
 import {
   clearWebCookieSessionState,
   createWebSessionMigrationCoordinator,
@@ -26,6 +30,7 @@ export const CLOUD_SYNC_STORAGE_KEY = "dsp-idle-network.cloud-sync.v1";
 export const CLOUD_AUTO_SYNC_STORAGE_KEY = "dsp-idle-network.cloud-auto-sync.v1";
 export const CLOUD_DEVICE_ID_STORAGE_KEY = "dsp-idle-network.cloud-device-id.v1";
 export const CLOUD_AUTO_SYNC_INTERVAL_MS = 10 * 60 * 1000;
+export const CLOUD_ACCOUNT_LEGACY_JSON_CONTENT_TYPE = "application/vnd.dspidle.account-export+json";
 export const CLOUD_SAVE_SLOTS = ["main", "1", "2", "3"] as const;
 export type CloudSaveSlot = typeof CLOUD_SAVE_SLOTS[number];
 export type CloudSaveMode = SaveMode;
@@ -844,6 +849,119 @@ export async function revokeAllCloudSessions(): Promise<{ currentSessionRevoked:
 
 export async function exportCloudAccountData(): Promise<CloudAccountExport> {
   return cloudRequest<CloudAccountExport>("/account/export", {}, true);
+}
+
+function legacyJsonImportResponseRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new CloudApiError(`${label}格式无效`, 0, { code: "CLOUD_RESPONSE_INVALID" });
+  }
+  return value as Record<string, unknown>;
+}
+
+function legacyJsonImportSafeInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new CloudApiError(`${label}格式无效`, 0, { code: "CLOUD_RESPONSE_INVALID" });
+  }
+  return value as number;
+}
+
+function normalizeLegacyJsonImportResult(value: unknown): CloudAccountArchiveImportResult {
+  const source = legacyJsonImportResponseRecord(value, "旧版 JSON 账号导入响应");
+  if (source.imported !== true) {
+    throw new CloudApiError("旧版 JSON 账号导入响应缺少成功标记", 0, { code: "CLOUD_RESPONSE_INVALID" });
+  }
+  if (typeof source.guard !== "string" || !/^[a-f0-9]{64}$/.test(source.guard)) {
+    throw new CloudApiError("旧版 JSON 账号导入响应 guard 无效", 0, { code: "CLOUD_RESPONSE_INVALID" });
+  }
+  const modes = legacyJsonImportResponseRecord(source.modes, "旧版 JSON 导入后模式槽位");
+  const revalidation = legacyJsonImportResponseRecord(
+    source.leaderboardRevalidationRequired,
+    "旧版 JSON 排行榜复核状态",
+  );
+  const normalizedModes = Object.fromEntries((["normal", "speedrun"] as const).map((mode) => [
+    mode,
+    legacyJsonImportResponseRecord(modes[mode], `${mode} 模式槽位`),
+  ])) as CloudAccountArchiveImportResult["modes"];
+  const normalizedRevalidation = Object.fromEntries((["normal", "speedrun"] as const).map((mode) => {
+    if (typeof revalidation[mode] !== "boolean") {
+      throw new CloudApiError(`${mode} 排行榜复核状态无效`, 0, { code: "CLOUD_RESPONSE_INVALID" });
+    }
+    return [mode, revalidation[mode]];
+  })) as CloudAccountArchiveImportResult["leaderboardRevalidationRequired"];
+  return {
+    imported: true,
+    revisionCount: legacyJsonImportSafeInteger(source.revisionCount, "旧版 JSON 导入修订数"),
+    logicalBytes: legacyJsonImportSafeInteger(source.logicalBytes, "旧版 JSON 导入逻辑字节数"),
+    guard: source.guard,
+    modes: normalizedModes,
+    leaderboardRevalidationRequired: normalizedRevalidation,
+  };
+}
+
+function rethrowLegacyJsonImportError(error: unknown): never {
+  if (!(error instanceof CloudApiError)) throw error;
+  const code = typeof error.payload.code === "string" ? error.payload.code : "";
+  if (code === "ACCOUNT_ARCHIVE_LEGACY_JSON_HISTORY_UNRESTORABLE") {
+    throw new CloudApiError(
+      "旧版 JSON 含有缺少正文、无法安全恢复的独立历史修订；请改用 ZIP 账号归档。现有云存档未修改。",
+      error.status,
+      error.payload,
+    );
+  }
+  if (code === "ACCOUNT_ARCHIVE_MODE_MISMATCH") {
+    throw new CloudApiError(
+      "旧版 JSON 的普通/速通模式标记不匹配；缺少模式不会被推断为速通。现有云存档未修改。",
+      error.status,
+      error.payload,
+    );
+  }
+  if (error.status === 404 || error.status === 501) {
+    throw new CloudApiError(
+      "当前云节点尚不支持旧版 JSON 账号导入；请优先使用 ZIP 账号归档。现有云存档未修改。",
+      error.status,
+      { ...error.payload, code: "LEGACY_JSON_IMPORT_UNSUPPORTED" },
+    );
+  }
+  if (!/现有云存档未修改/.test(error.message)) {
+    throw new CloudApiError(`${error.message}；现有云存档未修改`, error.status, error.payload);
+  }
+  throw error;
+}
+
+/**
+ * Imports a player-selected pre-ZIP account export without parsing or rewriting
+ * it on the client. The server remains authoritative for UTF-8, identity,
+ * schema, checksum, mode and quota validation before its atomic replacement.
+ */
+export async function importLegacyJsonCloudAccountArchive(
+  archive: Blob,
+  preview: CloudAccountArchiveImportPreview,
+): Promise<CloudAccountArchiveImportResult> {
+  if (typeof Blob === "undefined" || !(archive instanceof Blob) || archive.size < 1) {
+    throw new CloudApiError("请选择有效的旧版 JSON 账号导出文件", 0, {
+      code: "ACCOUNT_ARCHIVE_IMPORT_FILE_INVALID",
+    });
+  }
+  if (!preview || !/^[a-f0-9]{64}$/.test(preview.guard)
+    || preview.confirmation !== `REPLACE_CLOUD_SAVES:${preview.guard}`) {
+    throw new CloudApiError("账号归档导入确认信息无效，请重新预检", 0, {
+      code: "ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_INVALID",
+    });
+  }
+  try {
+    const response = await cloudRequest<unknown>("/account/import/legacy-json", {
+      method: "POST",
+      headers: {
+        "content-type": CLOUD_ACCOUNT_LEGACY_JSON_CONTENT_TYPE,
+        "x-dsp-account-import-guard": preview.guard,
+        "x-dsp-account-import-confirmation": preview.confirmation,
+      },
+      body: archive,
+    }, true, false, archive.size);
+    return normalizeLegacyJsonImportResult(response);
+  } catch (error) {
+    return rethrowLegacyJsonImportError(error);
+  }
 }
 
 export async function deleteCloudAccount(password: string): Promise<void> {

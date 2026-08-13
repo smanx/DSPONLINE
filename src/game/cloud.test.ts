@@ -15,6 +15,7 @@ import {
   fetchCloudLeaderboardMe,
   fetchCloudPublicStatus,
   getCloudSyncMarker,
+  importLegacyJsonCloudAccountArchive,
   markCloudSaveSynchronized,
   readLastCloudUploadDiagnostics,
   resumeCloudSession,
@@ -23,6 +24,7 @@ import {
   uploadCloudSaveWithOptions,
   type CloudSaveMetadata,
 } from "./cloud";
+import type { CloudAccountArchiveImportPreview } from "./cloudAccountArchive";
 import { createInitialState, createSpeedrunInitialState, placeBuilding } from "./engine";
 import { exportGame, importGame } from "./storage";
 import { computeSaveStateChecksum } from "./saveEnvelopeIntegrity";
@@ -69,6 +71,12 @@ function largePayload(targetPaddingBytes = 320_000): string {
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
+
+const LEGACY_IMPORT_PREVIEW = {
+  version: 1,
+  guard: "b".repeat(64),
+  confirmation: `REPLACE_CLOUD_SAVES:${"b".repeat(64)}`,
+} as CloudAccountArchiveImportPreview;
 
 class TestCompressionStream {
   readonly readable: ReadableStream<Uint8Array>;
@@ -147,6 +155,93 @@ describe("cloud save synchronization markers", () => {
       serverMetrics: { peakThroughputPerMinute: 123, uploadedWhiteMatrix: 0 },
       latestWindowState: { status: "ranked", observedSeconds: 60 },
     });
+  });
+
+  it("posts the original legacy JSON Blob with Bearer auth and the guarded replacement contract", async () => {
+    window.localStorage.setItem(CLOUD_TOKEN_STORAGE_KEY, "legacy-json-import-token");
+    const archive = new Blob(["{\"schemaVersion\":7}"], { type: "application/json" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({
+      imported: true,
+      revisionCount: 2,
+      logicalBytes: archive.size,
+      guard: "c".repeat(64),
+      modes: { normal: { main: { revision: 1 } }, speedrun: { main: { revision: 2 } } },
+      leaderboardRevalidationRequired: { normal: true, speedrun: false },
+    }));
+
+    await expect(importLegacyJsonCloudAccountArchive(archive, LEGACY_IMPORT_PREVIEW)).resolves.toMatchObject({
+      imported: true,
+      revisionCount: 2,
+      leaderboardRevalidationRequired: { normal: true, speedrun: false },
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/account/import/legacy-json");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const headers = new Headers(request.headers);
+    expect(request.method).toBe("POST");
+    expect(request.body).toBe(archive);
+    expect(headers.get("content-type")).toBe("application/vnd.dspidle.account-export+json");
+    expect(headers.get("authorization")).toBe("Bearer legacy-json-import-token");
+    expect(headers.get("x-dsp-account-import-guard")).toBe(LEGACY_IMPORT_PREVIEW.guard);
+    expect(headers.get("x-dsp-account-import-confirmation")).toBe(LEGACY_IMPORT_PREVIEW.confirmation);
+    // Browser fetch generates Content-Length from Blob.size when the transport
+    // supports it; script code must not try to set this forbidden header.
+    expect(headers.has("content-length")).toBe(false);
+  });
+
+  it("explains unrecoverable legacy histories and never retries or rewrites the selected body", async () => {
+    window.localStorage.setItem(CLOUD_TOKEN_STORAGE_KEY, "legacy-json-import-token");
+    const archive = new Blob(["{\"history\":true}"], { type: "application/json" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({
+      error: "history metadata has no payload",
+      code: "ACCOUNT_ARCHIVE_LEGACY_JSON_HISTORY_UNRESTORABLE",
+    }, 409));
+
+    await expect(importLegacyJsonCloudAccountArchive(archive, LEGACY_IMPORT_PREVIEW)).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining("请改用 ZIP 账号归档"),
+      payload: { code: "ACCOUNT_ARCHIVE_LEGACY_JSON_HISTORY_UNRESTORABLE" },
+    } satisfies Partial<CloudApiError>);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).body).toBe(archive);
+  });
+
+  it("does not infer speedrun for a legacy JSON mode mismatch and reports old-server incompatibility", async () => {
+    window.localStorage.setItem(CLOUD_TOKEN_STORAGE_KEY, "legacy-json-import-token");
+    const archive = new Blob(["{}"], { type: "application/json" });
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({
+        error: "mode mismatch",
+        code: "ACCOUNT_ARCHIVE_MODE_MISMATCH",
+      }, 400))
+      .mockResolvedValueOnce(jsonResponse({ error: "接口不存在" }, 404));
+
+    await expect(importLegacyJsonCloudAccountArchive(archive, LEGACY_IMPORT_PREVIEW)).rejects.toMatchObject({
+      message: expect.stringContaining("缺少模式不会被推断为速通"),
+      payload: { code: "ACCOUNT_ARCHIVE_MODE_MISMATCH" },
+    } satisfies Partial<CloudApiError>);
+    await expect(importLegacyJsonCloudAccountArchive(archive, LEGACY_IMPORT_PREVIEW)).rejects.toMatchObject({
+      message: expect.stringContaining("当前云节点尚不支持"),
+      payload: { code: "LEGACY_JSON_IMPORT_UNSUPPORTED" },
+    } satisfies Partial<CloudApiError>);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects an empty legacy JSON file or stale confirmation before any request", async () => {
+    window.localStorage.setItem(CLOUD_TOKEN_STORAGE_KEY, "legacy-json-import-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    await expect(importLegacyJsonCloudAccountArchive(new Blob([]), LEGACY_IMPORT_PREVIEW)).rejects.toMatchObject({
+      payload: { code: "ACCOUNT_ARCHIVE_IMPORT_FILE_INVALID" },
+    } satisfies Partial<CloudApiError>);
+    await expect(importLegacyJsonCloudAccountArchive(new Blob(["{}"]), {
+      ...LEGACY_IMPORT_PREVIEW,
+      confirmation: "REPLACE_CLOUD_SAVES:stale",
+    })).rejects.toMatchObject({
+      payload: { code: "ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_INVALID" },
+    } satisfies Partial<CloudApiError>);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("compares unbound, synchronized and one-sided changes", () => {

@@ -121,6 +121,14 @@ describe("cloud authentication token resilience", () => {
       if (path.endsWith("/health")) return jsonResponse({ ok: true, mailProvider: "disabled" });
       if (path.endsWith("/account")) return jsonResponse({ user: cloudUser, cloudSave: null, cloudSaves: {} });
       if (path.endsWith("/account/password")) return jsonResponse({ user: cloudUser });
+      if (path.endsWith("/account/import/legacy-json")) return jsonResponse({
+        imported: true,
+        revisionCount: 0,
+        logicalBytes: 0,
+        guard: "c".repeat(64),
+        modes: { normal: {}, speedrun: {} },
+        leaderboardRevalidationRequired: { normal: false, speedrun: false },
+      });
       throw new Error(`unexpected cloud request: ${path}`);
     });
 
@@ -147,6 +155,24 @@ describe("cloud authentication token resilience", () => {
     expect(password.credentials).toBe("include");
     expect(new Headers(password.headers).get("x-dsp-csrf-token")).toBe(cookieSession.csrfToken);
     expect(new Headers(password.headers).has("authorization")).toBe(false);
+
+    const legacyJson = new Blob(["{}"], { type: "application/json" });
+    const preview = {
+      version: 1 as const,
+      guard: "b".repeat(64),
+      confirmation: `REPLACE_CLOUD_SAVES:${"b".repeat(64)}`,
+    } as import("./cloudAccountArchive").CloudAccountArchiveImportPreview;
+    await expect(cloud.importLegacyJsonCloudAccountArchive(legacyJson, preview)).resolves.toMatchObject({
+      imported: true,
+      revisionCount: 0,
+    });
+    const legacyImport = calls.find((call) => call.path.endsWith("/account/import/legacy-json"))!.init;
+    const legacyHeaders = new Headers(legacyImport.headers);
+    expect(legacyImport.credentials).toBe("include");
+    expect(legacyImport.body).toBe(legacyJson);
+    expect(legacyHeaders.get("content-type")).toBe("application/vnd.dspidle.account-export+json");
+    expect(legacyHeaders.get("x-dsp-csrf-token")).toBe(cookieSession.csrfToken);
+    expect(legacyHeaders.has("authorization")).toBe(false);
   });
 
   it("migrates a legacy Web token only after cookie-only confirmation", async () => {

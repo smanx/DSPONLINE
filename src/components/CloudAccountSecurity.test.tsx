@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   getCloudToken: vi.fn(),
   getWebCookieSession: vi.fn(),
   hasCloudAuthentication: vi.fn(),
+  importLegacyJsonCloudAccountArchive: vi.fn(),
   prepareCloudAuthenticatedRequest: vi.fn(),
   exportTextFile: vi.fn(),
   downloadCloudAccountArchive: vi.fn(),
@@ -44,6 +45,7 @@ vi.mock("../game/cloud", () => ({
   getCloudToken: mocks.getCloudToken,
   getWebCookieSession: mocks.getWebCookieSession,
   hasCloudAuthentication: mocks.hasCloudAuthentication,
+  importLegacyJsonCloudAccountArchive: mocks.importLegacyJsonCloudAccountArchive,
   prepareCloudAuthenticatedRequest: mocks.prepareCloudAuthenticatedRequest,
 }));
 
@@ -163,6 +165,16 @@ function chooseArchive(file = new File([new Uint8Array([1, 2, 3])], "synthetic.d
   return file;
 }
 
+function chooseLegacyJson(file = new File(["{\"schemaVersion\":7}"], "legacy-account.json", {
+  type: "application/json",
+})): File {
+  const inputs = Array.from(host.querySelectorAll<HTMLInputElement>("input[type='file']"));
+  const input = inputs.find((candidate) => candidate.accept.includes("application/json"))!;
+  Object.defineProperty(input, "files", { configurable: true, value: [file] });
+  act(() => input.dispatchEvent(new Event("change", { bubbles: true })));
+  return file;
+}
+
 function mount(): void {
   render(<CloudAccountSecurity
     user={USER}
@@ -199,6 +211,14 @@ beforeEach(() => {
     modes: { normal: {}, speedrun: {} },
     leaderboardRevalidationRequired: { normal: true, speedrun: true },
   });
+  mocks.importLegacyJsonCloudAccountArchive.mockResolvedValue({
+    imported: true,
+    revisionCount: 2,
+    logicalBytes: 512,
+    guard: "d".repeat(64),
+    modes: { normal: {}, speedrun: {} },
+    leaderboardRevalidationRequired: { normal: true, speedrun: false },
+  });
 });
 
 afterEach(() => {
@@ -225,6 +245,7 @@ describe("CloudAccountSecurity account archives", () => {
     expect(mocks.downloadCloudAccountArchive).toHaveBeenCalledWith({
       apiBase: "/api",
       prepareAuthenticatedRequest: mocks.prepareCloudAuthenticatedRequest,
+      fetch: expect.any(Function),
     });
     expect(mocks.downloadAndroidAccountArchive).not.toHaveBeenCalled();
 
@@ -234,12 +255,14 @@ describe("CloudAccountSecurity account archives", () => {
     expect(mocks.fetchCloudAccountArchiveImportPreview).toHaveBeenCalledWith({
       apiBase: "/api",
       prepareAuthenticatedRequest: mocks.prepareCloudAuthenticatedRequest,
+      fetch: expect.any(Function),
     });
     click(buttonNamed("确认替换并导入"));
     await settle();
     expect(mocks.importCloudAccountArchive.mock.calls.at(-1)?.[2]).toEqual({
       apiBase: "/api",
       prepareAuthenticatedRequest: mocks.prepareCloudAuthenticatedRequest,
+      fetch: expect.any(Function),
     });
   });
 
@@ -323,5 +346,76 @@ describe("CloudAccountSecurity account archives", () => {
     await settle();
     expect(document.querySelector("[role='alertdialog']")).toBeNull();
     expect(document.body.textContent).toContain("原子导入 16 个修订");
+  });
+
+  it("offers legacy JSON only as an explicit separate choice and explains its compatibility limits", async () => {
+    mount();
+    await settle();
+
+    expect(buttonNamed("选择旧版 JSON（兼容）")).toBeTruthy();
+    expect(mocks.fetchCloudAccountArchiveImportPreview).not.toHaveBeenCalled();
+    expect(mocks.importLegacyJsonCloudAccountArchive).not.toHaveBeenCalled();
+    const archive = chooseLegacyJson();
+    expect(document.body.textContent).toContain("ZIP 账号归档更完整");
+    expect(document.body.textContent).toContain("无法恢复的独立历史修订会被拒绝");
+
+    click(buttonNamed("检查并导入账号归档"));
+    await settle();
+    const dialog = document.querySelector<HTMLElement>("[role='alertdialog']")!;
+    expect(dialog.textContent).toContain("从旧版 JSON 替换云存档");
+    expect(dialog.textContent).toContain("缺少模式字段不会推断为速通");
+    expect(dialog.textContent).toContain("请改用 ZIP 账号归档");
+    expect(mocks.importLegacyJsonCloudAccountArchive).not.toHaveBeenCalled();
+
+    click(buttonNamed("确认替换并导入"));
+    await settle();
+    expect(mocks.importLegacyJsonCloudAccountArchive).toHaveBeenCalledOnce();
+    expect(mocks.importLegacyJsonCloudAccountArchive).toHaveBeenCalledWith(archive, PREVIEW);
+    expect(mocks.importCloudAccountArchive).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("旧版 JSON 账号数据已原子导入 2 个修订");
+  });
+
+  it("submits legacy JSON once and keeps the selected file after a rejected import", async () => {
+    let rejectImport!: (reason: unknown) => void;
+    mocks.importLegacyJsonCloudAccountArchive.mockImplementation(() => new Promise((_resolve, reject) => {
+      rejectImport = reject;
+    }));
+    mount();
+    await settle();
+    const archive = chooseLegacyJson();
+    click(buttonNamed("检查并导入账号归档"));
+    await settle();
+
+    const confirm = buttonNamed("确认替换并导入");
+    act(() => {
+      confirm.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      confirm.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    expect(mocks.importLegacyJsonCloudAccountArchive).toHaveBeenCalledOnce();
+    expect(mocks.importLegacyJsonCloudAccountArchive.mock.calls[0]?.[0]).toBe(archive);
+
+    rejectImport(new Error("独立历史无法恢复；请改用 ZIP 账号归档。现有云存档未修改。"));
+    await settle();
+    expect(document.querySelector("[role='alertdialog']")).toBeNull();
+    expect(document.body.textContent).toContain("现有云存档未修改");
+    expect(buttonNamed("检查并导入账号归档")).toBeTruthy();
+  });
+
+  it("discards a late preview after the player cancels the selected legacy JSON", async () => {
+    let resolvePreview!: (value: CloudAccountArchiveImportPreview) => void;
+    mocks.fetchCloudAccountArchiveImportPreview.mockImplementation(() => new Promise((resolve) => {
+      resolvePreview = resolve;
+    }));
+    mount();
+    await settle();
+    chooseLegacyJson();
+    click(buttonNamed("检查并导入账号归档"));
+    click(buttonNamed("取消导入"));
+
+    resolvePreview(PREVIEW);
+    await settle();
+    expect(document.querySelector("[role='alertdialog']")).toBeNull();
+    expect(mocks.importLegacyJsonCloudAccountArchive).not.toHaveBeenCalled();
+    expect(buttonNamed("选择旧版 JSON（兼容）")).toBeTruthy();
   });
 });

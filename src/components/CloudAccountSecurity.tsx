@@ -30,6 +30,7 @@ import {
   getCloudToken,
   getWebCookieSession,
   hasCloudAuthentication,
+  importLegacyJsonCloudAccountArchive,
   prepareCloudAuthenticatedRequest,
 } from "../game/cloud";
 import { exportTextFile } from "../game/fileExport";
@@ -75,20 +76,27 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
   const [bindingEmail, setBindingEmail] = useState(user.email);
   const [autoSyncStatus, setAutoSyncStatus] = useState(() => readCloudAutoSyncStatus(user.id));
   const archiveImportInputRef = useRef<HTMLInputElement>(null);
+  const legacyJsonImportInputRef = useRef<HTMLInputElement>(null);
   const archiveImportButtonRef = useRef<HTMLButtonElement>(null);
   const archiveImportCancelButtonRef = useRef<HTMLButtonElement>(null);
   const archiveImportPreviewInFlightRef = useRef(false);
   const archiveImportInFlightRef = useRef(false);
+  const archiveImportSelectionVersionRef = useRef(0);
   const [archiveImportFile, setArchiveImportFile] = useState<File | null>(null);
+  const [archiveImportKind, setArchiveImportKind] = useState<"zip" | "legacy-json" | null>(null);
   const [archiveImportPreview, setArchiveImportPreview] = useState<CloudAccountArchiveImportPreview | null>(null);
   const [legacyExportAvailable, setLegacyExportAvailable] = useState(false);
 
   const archiveClientOptions = () => {
     const base = cloudApiBase();
     if (!base || !hasCloudAuthentication()) throw new Error("当前环境未配置可用的安全云服务");
+    // cloudAccountArchive stores the injected transport on a request context;
+    // bind the browser primitive so Chrome never receives that context as the
+    // illegal WebIDL receiver. Native archive export has its own bridge path.
+    const fetchArchive = globalThis.fetch.bind(globalThis);
     return getWebCookieSession()
-      ? { apiBase: base, prepareAuthenticatedRequest: prepareCloudAuthenticatedRequest }
-      : { apiBase: base, authToken: getCloudToken() };
+      ? { apiBase: base, prepareAuthenticatedRequest: prepareCloudAuthenticatedRequest, fetch: fetchArchive }
+      : { apiBase: base, authToken: getCloudToken(), fetch: fetchArchive };
   };
 
   const refreshSessions = async () => {
@@ -273,11 +281,17 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
       return;
     }
     if (archiveImportPreviewInFlightRef.current || archiveImportInFlightRef.current) return;
+    const selectionVersion = archiveImportSelectionVersionRef.current;
     archiveImportPreviewInFlightRef.current = true;
     setBusyAction("import-preview");
     setNotice(null);
     try {
-      setArchiveImportPreview(await fetchCloudAccountArchiveImportPreview(archiveClientOptions()));
+      const preview = await fetchCloudAccountArchiveImportPreview(archiveClientOptions());
+      // A second file selection may finish while the remote guard is being
+      // fetched. Never apply a preview to a different source or protocol.
+      if (archiveImportSelectionVersionRef.current === selectionVersion) {
+        setArchiveImportPreview(preview);
+      }
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "账号归档导入预检失败，现有云存档未修改" });
     } finally {
@@ -292,21 +306,29 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
     setBusyAction("import");
     setNotice(null);
     try {
-      const result = await importCloudAccountArchive(
-        archiveImportFile,
-        archiveImportPreview,
-        archiveClientOptions(),
-      );
+      const result = archiveImportKind === "legacy-json"
+        ? await importLegacyJsonCloudAccountArchive(archiveImportFile, archiveImportPreview)
+        : await importCloudAccountArchive(
+          archiveImportFile,
+          archiveImportPreview,
+          archiveClientOptions(),
+        );
       setArchiveImportFile(null);
+      setArchiveImportKind(null);
       setArchiveImportPreview(null);
       if (archiveImportInputRef.current) archiveImportInputRef.current.value = "";
+      if (legacyJsonImportInputRef.current) legacyJsonImportInputRef.current.value = "";
       setNotice({
         tone: "ready",
-        text: `账号归档已原子导入 ${result.revisionCount} 个修订；普通/速通排行榜需各自上传一个新主修订后重新生效`,
+        text: `${archiveImportKind === "legacy-json" ? "旧版 JSON 账号数据" : "账号归档"}已原子导入 ${result.revisionCount} 个修订；普通/速通排行榜需各自上传一个新主修订后重新生效`,
       });
     } catch (error) {
       setArchiveImportPreview(null);
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "账号归档导入失败，现有云存档未修改" });
+      const baseMessage = error instanceof Error ? error.message : "账号归档导入失败";
+      setNotice({
+        tone: "error",
+        text: /现有云存档未修改/.test(baseMessage) ? baseMessage : `${baseMessage}；现有云存档未修改`,
+      });
     } finally {
       archiveImportInFlightRef.current = false;
       setBusyAction(null);
@@ -404,7 +426,9 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
           accept={`${CLOUD_ACCOUNT_ARCHIVE_CONTENT_TYPE},.dspaccount.zip`}
           onChange={(event) => {
             const file = event.target.files?.[0] ?? null;
+            archiveImportSelectionVersionRef.current += 1;
             setArchiveImportFile(file);
+            setArchiveImportKind(file ? "zip" : null);
             setArchiveImportPreview(null);
             setNotice(file ? { tone: "warning", text: `已选择 ${file.name}；点击“检查并导入账号归档”后会先读取替换范围，不会立即写入` } : null);
           }}
@@ -418,10 +442,35 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
           {busyAction === "import-preview" ? <LoaderCircle size={13} /> : <RefreshCw size={13} />}
           {archiveImportFile ? "检查并导入账号归档" : "选择账号归档"}
         </button>
+        <input
+          ref={legacyJsonImportInputRef}
+          type="file"
+          hidden
+          accept="application/vnd.dspidle.account-export+json,application/json,.json"
+          onChange={(event) => {
+            const file = event.target.files?.[0] ?? null;
+            archiveImportSelectionVersionRef.current += 1;
+            setArchiveImportFile(file);
+            setArchiveImportKind(file ? "legacy-json" : null);
+            setArchiveImportPreview(null);
+            setNotice(file ? {
+              tone: "warning",
+              text: `已明确选择旧版 JSON：${file.name}。ZIP 账号归档更完整；旧 JSON 若含无法恢复的独立历史修订会被拒绝，检查阶段不会写入。`,
+            } : null);
+          }}
+        />
+        {!archiveImportFile ? <button
+          type="button"
+          disabled={busyAction === "import-preview" || busyAction === "import"}
+          onClick={() => legacyJsonImportInputRef.current?.click()}
+        ><RefreshCw size={13} />选择旧版 JSON（兼容）</button> : null}
         {archiveImportFile ? <button type="button" onClick={() => {
+          archiveImportSelectionVersionRef.current += 1;
           setArchiveImportFile(null);
+          setArchiveImportKind(null);
           setArchiveImportPreview(null);
           if (archiveImportInputRef.current) archiveImportInputRef.current.value = "";
+          if (legacyJsonImportInputRef.current) legacyJsonImportInputRef.current.value = "";
         }}>取消导入</button> : null}
         <button className="danger" type="button" onClick={() => setDeleteArmed((current) => !current)}><Trash2 size={13} />注销账号</button>
       </div>
@@ -430,7 +479,7 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
         open={Boolean(archiveImportFile && archiveImportPreview)}
         role="alertdialog"
         riskPolicy="explicit"
-        title="替换全部云存档槽位"
+        title={archiveImportKind === "legacy-json" ? "从旧版 JSON 替换云存档" : "替换全部云存档槽位"}
         description="最后确认 · 服务器 guard 已锁定当前云状态"
         initialFocusRef={archiveImportCancelButtonRef}
         returnFocusRef={archiveImportButtonRef}
@@ -445,13 +494,16 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
       >
         <div className="save-delete-content">
           <div className="save-delete-target">
-            <span>待导入归档</span>
+            <span>{archiveImportKind === "legacy-json" ? "待导入旧版 JSON" : "待导入归档"}</span>
             <strong>{archiveImportFile?.name ?? "--"}</strong>
             <small>{archiveImportFile ? `${Math.ceil(archiveImportFile.size / 1024)} KiB` : "--"}</small>
           </div>
-          <p>将原子替换普通模式与速通模式各自的 main、1、2、3 云槽及其归档内修订；两种模式仍保持隔离。</p>
+          <p>{archiveImportKind === "legacy-json"
+            ? "旧版 JSON 只恢复其中带完整正文且能权威校验的云存档；缺少模式字段不会推断为速通，普通/速通与各槽位继续隔离。"
+            : "将原子替换普通模式与速通模式各自的 main、1、2、3 云槽及其归档内修订；两种模式仍保持隔离。"}</p>
           <p>账号身份、当前登录会话、账号限制和已有排行榜历史不会从归档写回。导入完成后，普通/速通排行榜需各自再上传一个新的主修订通过复核。</p>
-          <p>服务器会先完整校验 ZIP、CRC、SHA-256、存档模式、schema、配额和当前 guard；任一步失败都不会修改现有云存档。</p>
+          {archiveImportKind === "legacy-json" ? <p>旧版 JSON 通常不保存独立历史修订正文；检测到无法安全恢复的历史时会拒绝整个导入，请改用 ZIP 账号归档。任何失败都不会修改现有云存档。</p> : null}
+          <p>服务器会先完整校验{archiveImportKind === "legacy-json" ? " UTF-8、账号、SHA-256、存档模式" : " ZIP、CRC、SHA-256、存档模式"}、schema、配额和当前 guard；任一步失败都不会修改现有云存档。</p>
         </div>
       </AccessibleDialog>
 
