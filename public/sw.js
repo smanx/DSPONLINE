@@ -169,9 +169,15 @@ async function writeRegistry(current, previous) {
 }
 
 async function hasCompletedMarker(cacheName) {
-  if (isLegacyRootShell(cacheName)) return true;
   try {
     const cache = await caches.open(cacheName);
+    // Legacy workers did not write completion markers. Their install used an
+    // atomic addAll for the fixed shell, so index.html is the compatibility
+    // proof that distinguishes an active/installed cache from an empty cache
+    // left behind by an interrupted legacy install.
+    if (isLegacyRootShell(cacheName)) {
+      return Boolean(await cache.match(INDEX_URL, { ignoreVary: true }));
+    }
     const response = await cache.match(CACHE_MARKER_URL);
     if (!response) return false;
     const marker = await response.json();
@@ -182,15 +188,27 @@ async function hasCompletedMarker(cacheName) {
 }
 
 async function findPreviousStableCache(cacheNames, registry) {
-  if (registry?.current && registry.current !== SHELL_CACHE_NAME && cacheNames.includes(registry.current)) {
+  if (
+    registry?.current
+    && registry.current !== SHELL_CACHE_NAME
+    && cacheNames.includes(registry.current)
+    && await hasCompletedMarker(registry.current)
+  ) {
     return registry.current;
   }
-  if (registry?.current === SHELL_CACHE_NAME && registry.previous && cacheNames.includes(registry.previous)) {
+  if (
+    registry?.current === SHELL_CACHE_NAME
+    && registry.previous
+    && cacheNames.includes(registry.previous)
+    && await hasCompletedMarker(registry.previous)
+  ) {
     return registry.previous;
   }
 
   const legacy = cacheNames.filter((cacheName) => isLegacyRootShell(cacheName));
-  if (legacy.length > 0) return legacy[legacy.length - 1];
+  for (let index = legacy.length - 1; index >= 0; index -= 1) {
+    if (await hasCompletedMarker(legacy[index])) return legacy[index];
+  }
 
   const candidates = cacheNames.filter((cacheName) => cacheName !== SHELL_CACHE_NAME && cacheName.startsWith(SHELL_CACHE_PREFIX));
   for (let index = candidates.length - 1; index >= 0; index -= 1) {

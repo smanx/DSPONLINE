@@ -66,8 +66,11 @@ let state: PwaRuntimeState = {
 const listeners = new Set<(value: PwaRuntimeState) => void>();
 let updateReloadPending = false;
 let runtimeListenersInstalled = false;
+let installPromptListenersInstalled = false;
 let registrationPromise: Promise<void> | null = null;
 let updateTimer: number | null = null;
+const observedRegistrations = new WeakSet<ServiceWorkerRegistration>();
+const observedWorkers = new WeakSet<ServiceWorker>();
 
 function publish(changes: Partial<PwaRuntimeState>): void {
   state = { ...state, ...changes };
@@ -119,14 +122,77 @@ function parseVersionMetadata(value: unknown): VersionMetadata | null {
   return { version: record.version, buildId: record.buildId };
 }
 
+function awaitingRestartWorker(registration: ServiceWorkerRegistration | null): ServiceWorker | null {
+  if (!registration) return null;
+  if (registration.waiting) return registration.waiting;
+  if (registration.installing?.state === "installed" && navigator.serviceWorker.controller) {
+    return registration.installing;
+  }
+  return null;
+}
+
 function downloadedStatus(registration: ServiceWorkerRegistration | null): Partial<PwaRuntimeState> | null {
-  if (!registration?.waiting) return null;
+  if (!awaitingRestartWorker(registration)) return null;
   return {
     registration,
     updateAvailable: true,
     updateStatus: "downloaded-await-restart",
     networkAvailable: typeof navigator.onLine === "boolean" ? navigator.onLine : null,
   };
+}
+
+function workerRegistrationOptions(context: PwaRouteContext): RegistrationOptions {
+  return {
+    scope: context.basePath,
+    updateViaCache: "none",
+  };
+}
+
+function absoluteWorkerUrl(buildId: string, context: PwaRouteContext): string {
+  return new URL(createPwaWorkerUrl(buildId, context), window.location.origin).href;
+}
+
+function workerUsesUrl(worker: ServiceWorker | null, expectedUrl: string): boolean {
+  if (!worker) return false;
+  try {
+    return new URL(worker.scriptURL, window.location.origin).href === expectedUrl;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureBuildRegistration(
+  registration: ServiceWorkerRegistration,
+  buildId: string,
+): Promise<ServiceWorkerRegistration> {
+  const context = resolvePwaRouteContext(document.baseURI);
+  if (!context.register) return registration;
+  const expectedUrl = absoluteWorkerUrl(buildId, context);
+
+  // A waiting/installing worker with the requested immutable URL is already
+  // the authoritative candidate. Calling register/update again can make an
+  // in-progress installation redundant and turn a slow download into a false
+  // update failure.
+  if (
+    workerUsesUrl(registration.waiting, expectedUrl)
+    || workerUsesUrl(registration.installing, expectedUrl)
+  ) return registration;
+
+  if (workerUsesUrl(registration.active, expectedUrl)) {
+    await registration.update();
+    return registration;
+  }
+
+  // The build ID is part of the worker URL. registration.update() only checks
+  // the URL already stored in the registration, so an old page must register
+  // the new deterministic URL explicitly or it can remain on the old worker
+  // forever even after version.json announces a new release.
+  const nextRegistration = await navigator.serviceWorker.register(
+    createPwaWorkerUrl(buildId, context),
+    workerRegistrationOptions(context),
+  );
+  observeRegistration(nextRegistration);
+  return nextRegistration;
 }
 
 function pwaVersionUrl(): URL {
@@ -196,9 +262,10 @@ export async function checkPwaVersion(
       return "version-check-failed";
     }
 
-    if (registration) {
-      await registration.update();
-      const afterUpdate = downloadedStatus(registration);
+    let checkedRegistration = registration;
+    if (checkedRegistration) {
+      checkedRegistration = await ensureBuildRegistration(checkedRegistration, metadata.buildId);
+      const afterUpdate = downloadedStatus(checkedRegistration);
       if (afterUpdate) {
         publish({ ...afterUpdate, latestBuildId: metadata.buildId, lastCheckedAt: Date.now() });
         return "downloaded-await-restart";
@@ -210,6 +277,8 @@ export async function checkPwaVersion(
       latestBuildId: metadata.buildId,
       lastCheckedAt: Date.now(),
       networkAvailable: true,
+      registration: checkedRegistration,
+      updateAvailable: false,
       updateStatus: nextStatus,
       usingStableFallback: false,
     });
@@ -221,6 +290,8 @@ export async function checkPwaVersion(
       ? "network-unavailable"
       : "version-check-failed";
     publish({
+      registration: registration ?? state.registration,
+      updateAvailable: Boolean(registration?.waiting ?? state.registration?.waiting),
       lastCheckedAt: Date.now(),
       networkAvailable: nextStatus === "network-unavailable" || nextStatus === "stable-fallback" ? false : state.networkAvailable,
       updateStatus: nextStatus,
@@ -265,26 +336,63 @@ function installRuntimeListeners(): void {
   });
   window.addEventListener("online", () => {
     publish({ networkAvailable: true, usingStableFallback: false });
-    void checkPwaVersion();
+    if (state.registration) void checkPwaVersion();
+    else {
+      registrationPromise = null;
+      void registerPwa();
+    }
   });
   navigator.serviceWorker.controller?.postMessage({ type: "GET_PWA_STATUS" });
 }
 
 function observeRegistration(registration: ServiceWorkerRegistration): void {
-  registration.addEventListener("updatefound", () => {
-    const worker = registration.installing;
-    if (!worker) return;
-    worker.addEventListener("statechange", () => {
+  const observeWorker = (worker: ServiceWorker | null): void => {
+    if (!worker || observedWorkers.has(worker)) return;
+    observedWorkers.add(worker);
+    const handleState = (): void => {
       if (worker.state === "installed" && navigator.serviceWorker.controller) {
         publish({
           registration,
           updateAvailable: true,
           updateStatus: "downloaded-await-restart",
         });
-      } else if (worker.state === "redundant" && !registration.waiting && state.updateStatus === "checking") {
-        publish({ updateStatus: isNetworkUnavailable() ? "network-unavailable" : "version-check-failed" });
+      } else if (
+        worker.state === "redundant"
+        && !registration.waiting
+        && (!registration.installing || registration.installing === worker)
+        && state.updateStatus === "checking"
+      ) {
+        publish({
+          registration,
+          updateAvailable: false,
+          updateStatus: isNetworkUnavailable() ? "network-unavailable" : "version-check-failed",
+        });
       }
-    });
+    };
+    worker.addEventListener("statechange", handleState);
+    handleState();
+  };
+
+  // register() may resolve after updatefound has already fired. Observe the
+  // current installing worker as well as all future candidates so a completed
+  // download never waits for the next 30-minute version poll to become visible.
+  observeWorker(registration.installing);
+  if (observedRegistrations.has(registration)) return;
+  observedRegistrations.add(registration);
+  registration.addEventListener("updatefound", () => observeWorker(registration.installing));
+}
+
+function installPromptListeners(): void {
+  if (installPromptListenersInstalled) return;
+  installPromptListenersInstalled = true;
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    installPrompt = event as InstallPromptEvent;
+    publish({ installAvailable: true });
+  });
+  window.addEventListener("appinstalled", () => {
+    installPrompt = null;
+    publish({ installed: true, installAvailable: false });
   });
 }
 
@@ -295,33 +403,26 @@ async function registerPwaOnce(): Promise<void> {
   // /canary/* requests, keeping all three route families isolated.
   if (!shouldRegisterPwa(CURRENT_APP_PLATFORM, import.meta.env.PROD, state.supported, context)) return;
 
-  window.addEventListener("beforeinstallprompt", (event) => {
-    event.preventDefault();
-    installPrompt = event as InstallPromptEvent;
-    publish({ installAvailable: true });
-  });
-  window.addEventListener("appinstalled", () => {
-    installPrompt = null;
-    publish({ installed: true, installAvailable: false });
-  });
+  installPromptListeners();
   installRuntimeListeners();
 
   try {
-    const registration = await navigator.serviceWorker.register(createPwaWorkerUrl(CURRENT_BUILD_ID, context), {
-      scope: context.basePath,
-      updateViaCache: "none",
-    });
+    const registration = await navigator.serviceWorker.register(
+      createPwaWorkerUrl(CURRENT_BUILD_ID, context),
+      workerRegistrationOptions(context),
+    );
     const waiting = downloadedStatus(registration);
     publish({
       registration,
-      updateAvailable: Boolean(registration.waiting),
+      updateAvailable: Boolean(waiting),
       updateStatus: waiting ? "downloaded-await-restart" : "checking",
     });
     observeRegistration(registration);
     await checkPwaVersion(registration);
     if (updateTimer != null) window.clearInterval(updateTimer);
-    updateTimer = window.setInterval(() => void checkPwaVersion(registration), 30 * 60 * 1000);
+    updateTimer = window.setInterval(() => void checkPwaVersion(), 30 * 60 * 1000);
   } catch {
+    registrationPromise = null;
     publish({
       registration: null,
       updateStatus: isNetworkUnavailable() ? "network-unavailable" : "version-check-failed",
@@ -363,6 +464,6 @@ export function activateWaitingPwaWorker(
 }
 
 export function applyPwaUpdate(): boolean {
-  const worker = state.registration?.waiting;
+  const worker = awaitingRestartWorker(state.registration);
   return worker ? activateWaitingPwaWorker(worker) : false;
 }

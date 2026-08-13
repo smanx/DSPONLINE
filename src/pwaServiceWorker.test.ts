@@ -34,6 +34,7 @@ function createHarness(options: {
   workerUrl?: string;
   scope?: string;
   caches?: Map<string, CacheRecord>;
+  failCachePut?: (cacheName: string, requestUrl: string) => boolean;
 } = {}): WorkerHarness {
   const listeners = new Map<string, (event: Record<string, unknown>) => void>();
   const cacheRecords = options.caches ?? new Map<string, CacheRecord>();
@@ -72,7 +73,9 @@ function createHarness(options: {
           staged.forEach(([key, response]) => record!.requests.set(key, response));
         },
         put: async (request: RequestInfo, response: Response) => {
-          record!.requests.set(requestKey(request), cloneResponse(response));
+          const key = requestKey(request);
+          if (options.failCachePut?.(name, key)) throw new Error(`cache put failed: ${name}`);
+          record!.requests.set(key, cloneResponse(response));
         },
         match: async (request: RequestInfo, matchOptions?: CacheQueryOptions) => {
           if (matchOptions) (record!.matchOptions ??= []).push(matchOptions);
@@ -239,6 +242,50 @@ describe("DSPidle service worker cache ownership", () => {
     expect(await caches.get("dsp-idle-pwa-v2::shell::root::stable")!.requests.get("https://game.example/index.html")!.text()).toBe("stable-shell");
     expect(caches.has("dsp-idle-pwa-v2::shell::root::build-new")).toBe(false);
     expect(caches.has("unrelated-app-cache")).toBe(true);
+  });
+
+  it("keeps the active shell authoritative when candidate activation metadata cannot commit", async () => {
+    const caches = new Map<string, CacheRecord>();
+    const stable = createHarness({
+      caches,
+      workerUrl: "https://game.example/sw.js?v=stable-old&route=root&base=%2F",
+    });
+    await dispatchWait(stable, "install");
+    await dispatchWait(stable, "activate");
+
+    const candidate = createHarness({
+      caches,
+      failCachePut: (cacheName) => cacheName === "dsp-idle-pwa-v2::meta::root",
+    });
+    await dispatchWait(candidate, "install");
+    await expect(dispatchWait(candidate, "activate")).rejects.toThrow("cache put failed");
+
+    expect(caches.has("dsp-idle-pwa-v2::shell::root::stable-old")).toBe(true);
+    expect(caches.has("dsp-idle-pwa-v2::shell::root::build-new")).toBe(true);
+    expect(candidate.claimed()).toBe(0);
+    const stableIndex = caches.get("dsp-idle-pwa-v2::shell::root::stable-old")!
+      .requests.get("https://game.example/index.html")!;
+    await expect(stableIndex.clone().text()).resolves.toBe("network:/index.html");
+  });
+
+  it("ignores an incomplete legacy cache left by an interrupted old-worker install", async () => {
+    const caches = new Map<string, CacheRecord>([
+      ["dsp-idle-shell-1.0.39-complete", makeCache({
+        "https://game.example/index.html": "legacy-stable-shell",
+        "https://game.example/assets/legacy-abcdef.js": "legacy-startup-asset",
+      })],
+      ["dsp-idle-shell-1.0.40-incomplete", makeCache({})],
+    ]);
+    const harness = createHarness({ caches });
+
+    await dispatchWait(harness, "install");
+    await dispatchWait(harness, "activate");
+
+    expect(caches.has("dsp-idle-shell-1.0.39-complete")).toBe(true);
+    expect(caches.has("dsp-idle-shell-1.0.40-incomplete")).toBe(false);
+    harness.setFetch(async () => { throw new TypeError("offline"); });
+    const oldAsset = await dispatchFetch(harness, new Request("https://game.example/assets/legacy-abcdef.js"));
+    await expect(oldAsset!.text()).resolves.toBe("legacy-startup-asset");
   });
 
   it("never mutates a completed shell when the same immutable build is registered again", async () => {

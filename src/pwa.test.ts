@@ -59,6 +59,121 @@ describe("PWA route and lifecycle isolation", () => {
     expect(waitingWorker.postMessage).toHaveBeenCalledTimes(2);
     expect(waitingWorker.postMessage).toHaveBeenLastCalledWith({ type: "SKIP_WAITING" });
   });
+
+  it("registers the immutable URL announced by version.json instead of rechecking the old worker URL", async () => {
+    const workerOrigin = window.location.origin;
+    const candidate = {
+      scriptURL: `${workerOrigin}/sw.js?v=1.0.40%2Bnext&route=root&base=%2F`,
+      state: "installing",
+      addEventListener: vi.fn(),
+    } as unknown as ServiceWorker;
+    const registration = {
+      active: { scriptURL: `${workerOrigin}/sw.js?v=1.0.39%2Bold&route=root&base=%2F` },
+      installing: null,
+      waiting: null,
+      update: vi.fn(),
+      addEventListener: vi.fn(),
+    } as unknown as ServiceWorkerRegistration;
+    const register = vi.fn().mockImplementation(async () => {
+      Object.defineProperty(registration, "installing", { configurable: true, value: candidate });
+      return registration;
+    });
+    Object.defineProperty(navigator, "serviceWorker", {
+      configurable: true,
+      value: { register },
+    });
+    const fetchVersion = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: responseHeaders(),
+      json: vi.fn().mockResolvedValue({ version: "1.0.40", buildId: "1.0.40+next" }),
+    });
+    const { checkPwaVersion, getPwaRuntimeState } = await import("./pwa");
+
+    await expect(checkPwaVersion(registration, fetchVersion)).resolves.toBe("checking");
+    await expect(checkPwaVersion(registration, fetchVersion)).resolves.toBe("checking");
+
+    expect(registration.update).not.toHaveBeenCalled();
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(register).toHaveBeenCalledWith(
+      "/sw.js?v=1.0.40%2Bnext&route=root&base=%2F",
+      { scope: "/", updateViaCache: "none" },
+    );
+    expect(getPwaRuntimeState()).toMatchObject({
+      registration,
+      latestBuildId: "1.0.40+next",
+      updateAvailable: false,
+      updateStatus: "checking",
+    });
+  });
+
+  it("keeps the active registration usable when the announced candidate cannot be registered", async () => {
+    const workerOrigin = window.location.origin;
+    const registration = {
+      active: { scriptURL: `${workerOrigin}/sw.js?v=1.0.39%2Bold&route=root&base=%2F` },
+      installing: null,
+      waiting: null,
+      update: vi.fn(),
+      addEventListener: vi.fn(),
+    } as unknown as ServiceWorkerRegistration;
+    const register = vi.fn().mockRejectedValue(new Error("candidate download failed"));
+    Object.defineProperty(navigator, "serviceWorker", {
+      configurable: true,
+      value: { register },
+    });
+    const fetchVersion = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: responseHeaders(),
+      json: vi.fn().mockResolvedValue({ version: "1.0.40", buildId: "1.0.40+next" }),
+    });
+    const { checkPwaVersion, getPwaRuntimeState } = await import("./pwa");
+
+    await expect(checkPwaVersion(registration, fetchVersion)).resolves.toBe("version-check-failed");
+    expect(getPwaRuntimeState()).toMatchObject({
+      registration,
+      updateAvailable: false,
+      updateStatus: "version-check-failed",
+    });
+    expect(registration.update).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a candidate that finished installing before register() resolved", async () => {
+    const workerOrigin = window.location.origin;
+    const candidate = {
+      scriptURL: `${workerOrigin}/sw.js?v=1.0.40%2Bnext&route=root&base=%2F`,
+      state: "installed",
+      addEventListener: vi.fn(),
+    } as unknown as ServiceWorker;
+    const registration = {
+      active: { scriptURL: `${workerOrigin}/sw.js?v=1.0.39%2Bold&route=root&base=%2F` },
+      installing: candidate,
+      waiting: null,
+      update: vi.fn(),
+      addEventListener: vi.fn(),
+    } as unknown as ServiceWorkerRegistration;
+    Object.defineProperty(navigator, "serviceWorker", {
+      configurable: true,
+      value: {
+        controller: {},
+        register: vi.fn(),
+      },
+    });
+    const fetchVersion = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: responseHeaders(),
+      json: vi.fn().mockResolvedValue({ version: "1.0.40", buildId: "1.0.40+next" }),
+    });
+    const { checkPwaVersion, getPwaRuntimeState } = await import("./pwa");
+
+    await expect(checkPwaVersion(registration, fetchVersion)).resolves.toBe("downloaded-await-restart");
+    expect(getPwaRuntimeState()).toMatchObject({
+      registration,
+      updateAvailable: true,
+      updateStatus: "downloaded-await-restart",
+    });
+  });
 });
 
 describe("PWA update status", () => {
