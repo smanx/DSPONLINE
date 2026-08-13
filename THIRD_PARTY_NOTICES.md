@@ -2,7 +2,7 @@
 
 This inventory is generated from the locked npm runtime dependency trees. Third-party components remain under their own licenses; the project's PolyForm Noncommercial terms do not replace them.
 
-Inventory SHA-256: `ab9ebc74714bd49983e9b80937ec43f405790278e0786818a974cafded801828`
+Inventory SHA-256: `8b31fd790ea359665132c0c707c3154a0ce890652f95c494f0af510c4bd20d72`
 
 ## Direct Runtime Dependencies
 
@@ -12,9 +12,7 @@ Inventory SHA-256: `ab9ebc74714bd49983e9b80937ec43f405790278e0786818a974cafded80
 | `@capacitor/app` | `8.1.1` | `MIT` | client/runtime |
 | `@capacitor/browser` | `8.0.4` | `MIT` | client/runtime |
 | `@capacitor/core` | `8.4.2` | `MIT` | client/runtime |
-| `@capacitor/filesystem` | `8.1.2` | `MIT` | client/runtime |
 | `@capacitor/network` | `8.0.1` | `MIT` | client/runtime |
-| `@capacitor/share` | `8.0.1` | `MIT` | client/runtime |
 | `@capacitor/splash-screen` | `8.0.2` | `MIT` | client/runtime |
 | `@capacitor/status-bar` | `8.0.3` | `MIT` | client/runtime |
 | `@xyflow/react` | `12.11.2` | `MIT` | client/runtime |
@@ -37,8 +35,8 @@ Inventory SHA-256: `ab9ebc74714bd49983e9b80937ec43f405790278e0786818a974cafded80
 | `BlueOak-1.0.0` | 1 |
 | `BSD-2-Clause` | 1 |
 | `BSD-3-Clause` | 2 |
-| `ISC` | 19 |
-| `MIT` | 96 |
+| `ISC` | 18 |
+| `MIT` | 94 |
 | `Python-2.0` | 1 |
 
 Complete npm runtime license and notice texts are in [`public/THIRD_PARTY_LICENSES.txt`](./public/THIRD_PARTY_LICENSES.txt), which is copied into Web, desktop, and Android builds.
