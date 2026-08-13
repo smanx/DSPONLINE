@@ -56,6 +56,17 @@ test("stages the historical API archive and expands server files byte-for-byte i
     await readFile(path.join(releaseRoot, "server", "save-field-contract.mjs")),
     await readFile(path.join(repositoryRoot, "server", "save-field-contract.mjs")),
   );
+  for (const file of [
+    "http-security.mjs",
+    "http-route-policy.mjs",
+    "account-archive-legacy-json.mjs",
+  ]) {
+    assert.deepEqual(
+      await readFile(path.join(releaseRoot, file)),
+      await readFile(path.join(repositoryRoot, "server", file)),
+      `${file} must be present byte-for-byte in the expanded API entry root`,
+    );
+  }
 });
 
 test("refuses to expand an archive when its two transfer-contract copies differ", async () => {

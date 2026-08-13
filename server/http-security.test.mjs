@@ -127,7 +127,7 @@ test("strictly parses legacy Bearer auth and every current cloud upload header",
   assert.equal(inspected.body.contentLength, 1024);
   assert.equal(inspected.body.maximumBytes, CLOUD_CONTRACT.requestCompressedLimitBytes);
   assert.deepEqual(inspected.customHeaders, {
-    "x-dsp-expected-revision": 0,
+    "x-dsp-expected-revision": "0",
     "x-dsp-request-id": "request_12345678",
     "x-dsp-save-original-bytes": 2048,
     "x-dsp-save-compressed-bytes": 1024,

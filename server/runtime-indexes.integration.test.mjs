@@ -148,8 +148,8 @@ test("public Top 100 and authenticated /me share one snapshot across committed i
     await running.server.store.persist({ operation: "runtime-indexes.synthetic-seed" });
     const publicBefore = await running.call("/api/leaderboard?category=throughput&seasonId=season_01");
     assert.equal(publicBefore.body.entries.length, 100);
-    assert.deepEqual(publicBefore.body.entries[0].verification, ownSubmission.verification,
-      "the cached public projection must preserve the established verification object");
+    assert.equal(Object.hasOwn(publicBefore.body.entries[0], "verification"), false,
+      "the cached public projection must omit private revision/checksum verification internals");
     const metricsAfterColdBuild = running.server.leaderboardIndex.metrics();
     const publicCached = await running.call("/api/leaderboard?category=throughput&seasonId=season_01");
     assert.deepEqual(publicCached.body.entries, publicBefore.body.entries,
@@ -249,7 +249,7 @@ test("failed SQLite mutations never publish presence or leaderboard cache events
     assert.equal(refresh.response.status, 500);
     assert.equal(running.server.leaderboardIndex.metrics().invalidations, cacheBefore.invalidations);
     const publicAfter = await running.call("/api/leaderboard?category=galaxy&seasonId=season_01");
-    assert.equal(publicAfter.body.entries.some((entry) => entry.userId === account.id), true);
+    assert.equal(publicAfter.body.entries.some((entry) => entry.displayName === account.displayName), true);
   } finally {
     await stopServer(running?.server);
     await rm(directory, { recursive: true, force: true });

@@ -9,11 +9,15 @@ const CONTROL_OR_BIDI_PATTERN = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-
 
 const DEFAULT_ALLOWED_METHODS = Object.freeze(["GET", "POST", "PUT", "DELETE", "OPTIONS"]);
 const CURRENT_DSP_HEADER_RULES = Object.freeze({
-  "x-dsp-expected-revision": "non-negative-integer",
+  // The cloud upload parser owns this field's endpoint-specific error code
+  // and legacy compatibility. Header security only bounds its ASCII shape.
+  "x-dsp-expected-revision": "bounded-decimal-text",
   "x-dsp-request-id": "operation-id",
   "x-dsp-save-original-bytes": "non-negative-integer",
   "x-dsp-save-compressed-bytes": "non-negative-integer",
   "x-dsp-save-mode": "save-mode",
+  "x-dsp-session-mode": "session-mode",
+  "x-dsp-csrf-token": "csrf-token",
   "x-dsp-account-import-guard": "sha256",
   "x-dsp-account-import-confirmation": "archive-confirmation",
 });
@@ -225,6 +229,10 @@ function parseSafeDecimal(value, code) {
 
 function parseDspHeader(name, value) {
   const rule = CURRENT_DSP_HEADER_RULES[name];
+  if (rule === "bounded-decimal-text") {
+    if (!/^-?[0-9]{1,16}$/.test(value)) fail("EXPECTED_REVISION_INVALID", "预期云修订格式无效");
+    return value;
+  }
   if (rule === "non-negative-integer") return parseSafeDecimal(value, "DSP_HEADER_NUMBER_INVALID");
   if (rule === "operation-id") {
     if (!OPERATION_ID_PATTERN.test(value)) fail("DSP_REQUEST_ID_INVALID", "DSP 操作标识无效");
@@ -232,6 +240,18 @@ function parseDspHeader(name, value) {
   }
   if (rule === "save-mode") {
     if (value !== "normal" && value !== "speedrun") fail("DSP_SAVE_MODE_INVALID", "DSP 存档模式请求头无效");
+    return value;
+  }
+  if (rule === "session-mode") {
+    // Keep this value aligned with web-session.mjs and the already shipped
+    // 1.0.39/1.0.40 clients.  It is a protocol version, not a free-form flag.
+    if (value !== "cookie-v1") fail("DSP_SESSION_MODE_INVALID", "DSP 会话模式请求头无效");
+    return value;
+  }
+  if (rule === "csrf-token") {
+    // Bound hostile input here; the Web session layer performs the exact
+    // cryptographic token comparison and returns its established 403 codes.
+    if (!/^[A-Za-z0-9_-]{16,256}$/.test(value)) fail("DSP_CSRF_TOKEN_INVALID", "DSP CSRF 请求头无效");
     return value;
   }
   if (rule === "sha256") {
@@ -500,6 +520,9 @@ export function cloudSaveBodyCapability(contract) {
       contract.requestIdHeader,
       contract.originalBytesHeader,
       contract.compressedBytesHeader,
+      "x-dsp-save-mode",
+      "x-dsp-session-mode",
+      "x-dsp-csrf-token",
     ],
   });
 }
@@ -510,7 +533,12 @@ export function accountArchiveBodyCapability(maximumBytes) {
     mediaTypeLimits: { "application/vnd.dspidle.account-archive+zip": maximumBytes },
     contentEncodings: ["identity"],
     requireContentLength: true,
-    allowedCustomHeaders: ["x-dsp-account-import-guard", "x-dsp-account-import-confirmation"],
+    allowedCustomHeaders: [
+      "x-dsp-account-import-guard",
+      "x-dsp-account-import-confirmation",
+      "x-dsp-session-mode",
+      "x-dsp-csrf-token",
+    ],
     // This parameter is already covered by the account archive import tests
     // and therefore remains part of the compatibility boundary.
     contentTypeParameters: {
@@ -834,7 +862,204 @@ export const ACCOUNT_JSON_SCHEMAS = Object.freeze({
       newPassword: { type: "string", minimumBytes: 8, maximumBytes: 512 },
     }),
   }),
+  tokenOnly: Object.freeze({
+    type: "object",
+    required: Object.freeze(["token"]),
+    fields: Object.freeze({
+      token: { type: "string", minimumBytes: 32, maximumBytes: 256 },
+    }),
+  }),
+  emailOnly: Object.freeze({
+    type: "object",
+    required: Object.freeze(["email"]),
+    fields: Object.freeze({
+      email: { type: "string", trim: true, minimumBytes: 3, maximumBytes: 254 },
+    }),
+  }),
+  revokeSession: Object.freeze({
+    type: "object",
+    required: Object.freeze(["sessionId"]),
+    fields: Object.freeze({
+      sessionId: { type: "string", minimumBytes: 8, maximumBytes: 192, pattern: /^[A-Za-z0-9_-]{8,192}$/ },
+    }),
+  }),
+  deleteAccount: Object.freeze({
+    type: "object",
+    required: Object.freeze(["confirmation", "password"]),
+    fields: Object.freeze({
+      confirmation: { type: "literal", values: Object.freeze(["DELETE"]) },
+      password: { type: "string", minimumBytes: 1, maximumBytes: 512 },
+    }),
+  }),
 });
+
+const CLIENT_DIAGNOSTICS_SCHEMA = Object.freeze({
+  type: "object",
+  fields: Object.freeze({
+    generatedAt: { type: "number", minimum: 0 },
+    application: {
+      type: "object",
+      fields: {
+        name: { type: "string", maximumBytes: 96 },
+        version: { type: "string", maximumBytes: 64 },
+        build: { type: "string", maximumBytes: 128 },
+        displayMode: { type: "string", maximumBytes: 32 },
+      },
+    },
+    environment: {
+      type: "object",
+      fields: {
+        userAgent: { type: "string", maximumBytes: 512 },
+        language: { type: "string", maximumBytes: 64 },
+        online: { type: "boolean" },
+        viewport: {
+          type: "object",
+          fields: {
+            width: { type: "number", minimum: 0, maximum: 100_000 },
+            height: { type: "number", minimum: 0, maximum: 100_000 },
+            devicePixelRatio: { type: "number", minimum: 0, maximum: 100 },
+          },
+        },
+        coarsePointer: { type: "boolean" },
+        reducedMotion: { type: "boolean" },
+        memory: {
+          type: "object",
+          nullable: true,
+          fields: {
+            used: { type: "number", minimum: 0 },
+            limit: { type: "number", minimum: 0 },
+          },
+        },
+      },
+    },
+    factory: {
+      type: "object",
+      nullable: true,
+      fields: {
+        stateVersion: { type: "number", integer: true, minimum: 0, maximum: 10_000 },
+        elapsedSeconds: { type: "number", minimum: 0 },
+        activePlanetId: { type: "string", maximumBytes: 192 },
+        entities: { type: "number", integer: true, minimum: 0 },
+        belts: { type: "number", integer: true, minimum: 0 },
+        completedTechnologies: { type: "number", integer: true, minimum: 0 },
+        paused: { type: "boolean" },
+      },
+    },
+    performanceReport: {
+      type: "object",
+      nullable: true,
+      fields: {
+        generatedAt: { type: "number", minimum: 0 },
+        deterministic: { type: "boolean" },
+        benchmarkMs: { type: "number", minimum: 0 },
+        idleSuiteMs: { type: "number", minimum: 0 },
+        idleIntegrity: { type: "boolean" },
+        recommendedPerformanceMode: { type: "string", maximumBytes: 64 },
+      },
+    },
+    recentErrors: {
+      type: "array",
+      maximumItems: 20,
+      items: {
+        type: "object",
+        fields: {
+          kind: { type: "string", maximumBytes: 40 },
+          message: { type: "string", maximumBytes: 2_048 },
+          stack: { type: "string", maximumBytes: 8_192 },
+          occurredAt: { type: "number", minimum: 0 },
+          location: { type: "string", maximumBytes: 1_024 },
+        },
+      },
+    },
+  }),
+});
+
+const CLIENT_REPORT_HEADER_SCHEMA = Object.freeze({
+  type: "object",
+  required: Object.freeze(["kind", "message"]),
+  fields: Object.freeze({
+    kind: { type: "string", trim: true, minimumBytes: 1, maximumBytes: 40, pattern: /^[A-Za-z0-9_-]{1,40}$/ },
+    message: { type: "string", trim: true, maximumBytes: 16_000 },
+  }),
+});
+
+function assertJsonShapeBounds(value, {
+  maximumDepth = 8,
+  maximumNodes = 1_024,
+  maximumArrayItems = 100,
+} = {}) {
+  const seen = new WeakSet();
+  let nodes = 0;
+  const visit = (candidate, depth) => {
+    nodes += 1;
+    if (nodes > maximumNodes) fail("JSON_NODE_LIMIT_EXCEEDED", "JSON 对象包含过多字段或元素");
+    if (depth > maximumDepth) fail("JSON_DEPTH_EXCEEDED", "JSON 对象嵌套过深");
+    if (!candidate || typeof candidate !== "object") return;
+    if (seen.has(candidate)) fail("JSON_CYCLE_INVALID", "JSON 对象不能包含循环引用");
+    let prototype;
+    try { prototype = Object.getPrototypeOf(candidate); } catch { fail("JSON_OBJECT_INVALID", "JSON 对象结构无效"); }
+    if (Array.isArray(candidate)) {
+      if (candidate.length > maximumArrayItems) fail("JSON_ARRAY_LENGTH_INVALID", "JSON 数组长度超出允许范围");
+    } else if (prototype !== Object.prototype && prototype !== null) {
+      fail("JSON_OBJECT_INVALID", "JSON 对象结构无效");
+    }
+    seen.add(candidate);
+    try {
+      for (const key of ownEnumerableKeys(candidate)) {
+        const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+        if (!descriptor || !Object.hasOwn(descriptor, "value")) fail("JSON_OBJECT_INVALID", "JSON 对象结构无效");
+        visit(descriptor.value, depth + 1);
+      }
+    } finally {
+      seen.delete(candidate);
+    }
+  };
+  visit(value, 0);
+}
+
+function redactDiagnosticText(value, maximumBytes) {
+  const normalized = publicString(value, maximumBytes);
+  if (normalized === null) return "";
+  return truncateUtf8(normalized
+    .replace(/\bBearer\s+[!-~]{8,}/giu, "Bearer [REDACTED]")
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/gu, "[REDACTED_EMAIL]")
+    .replace(/\b(?:user|account|session|factory)_[A-Za-z0-9_-]{8,}\b/giu, "[REDACTED_ID]")
+    .replace(/\b[a-f0-9]{64}\b/giu, "[REDACTED_DIGEST]")
+    .replace(/(?:[A-Za-z]:\\|\/)(?:[^\s<>:"|?*]+[\\/]){1,}[^\s<>:"|?*]*/gu, "[REDACTED_PATH]")
+    .replace(/("(?:payload|state|cloudSave)"\s*:\s*")[^"]{16,}/giu, "$1[REDACTED_SAVE]"), maximumBytes);
+}
+
+function redactProjectedDiagnostics(value) {
+  if (!value || typeof value !== "object") return value;
+  const clone = structuredClone(value);
+  for (const error of Array.isArray(clone.recentErrors) ? clone.recentErrors : []) {
+    if (typeof error.message === "string") error.message = redactDiagnosticText(error.message, 2_048);
+    if (typeof error.stack === "string") error.stack = redactDiagnosticText(error.stack, 8_192);
+    if (typeof error.location === "string") error.location = redactDiagnosticText(error.location, 1_024);
+  }
+  return clone;
+}
+
+/** Validate and sanitize feedback/error telemetry before it reaches storage. */
+export function validateClientReport(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail("JSON_FIELD_TYPE_INVALID", "反馈正文格式无效");
+  const allowed = new Set(["kind", "message", "diagnostics"]);
+  if (ownEnumerableKeys(value).some((key) => !allowed.has(key))) fail("JSON_UNKNOWN_FIELD", "反馈正文包含当前接口不支持的字段");
+  assertJsonShapeBounds(value, { maximumDepth: 8, maximumNodes: 1_024, maximumArrayItems: 100 });
+  const header = validateJsonDto({ kind: ownDataValue(value, "kind"), message: ownDataValue(value, "message") }, CLIENT_REPORT_HEADER_SCHEMA);
+  const rawDiagnostics = ownDataValue(value, "diagnostics");
+  if (rawDiagnostics !== undefined && rawDiagnostics !== null && (typeof rawDiagnostics !== "object" || Array.isArray(rawDiagnostics))) {
+    fail("JSON_FIELD_TYPE_INVALID", "诊断摘要格式无效");
+  }
+  const projected = rawDiagnostics == null
+    ? null
+    : projectPublicDto(rawDiagnostics, CLIENT_DIAGNOSTICS_SCHEMA, { maximumDepth: 8, maximumBytes: 48 * 1024 });
+  return Object.freeze({
+    kind: header.kind,
+    message: redactDiagnosticText(header.message, 16_000),
+    diagnostics: projected == null ? null : redactProjectedDiagnostics(projected),
+  });
+}
 
 function projectValue(value, schema, state, depth) {
   if (!schema || typeof schema !== "object" || depth > state.maximumDepth) return undefined;

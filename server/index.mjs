@@ -100,6 +100,23 @@ import {
   PresenceIndex,
   RuntimeMetricsAggregator,
 } from "./runtime-indexes.mjs";
+import {
+  ACCOUNT_JSON_SCHEMAS,
+  accountArchiveBodyCapability,
+  cloudSaveBodyCapability,
+  createBodyCapability,
+  createCorsPolicy,
+  HttpSecurityError,
+  inspectHttpRequest,
+  noBodyCapability,
+  securityResponseHeaders,
+  projectPublicLeaderboard,
+  projectPublicSpeedrunLeaderboard,
+  validateClientReport,
+  validateJsonDto,
+} from "./http-security.mjs";
+import { bodyCapabilityForRoute } from "./http-route-policy.mjs";
+import { prepareLegacyJsonAccountImport } from "./account-archive-legacy-json.mjs";
 
 const cloudTransferNumericKeys = [
   "version", "mibBytes", "guaranteedSavePayloadBytes", "savePayloadLimitBytes", "rawFallbackSafeLimitBytes",
@@ -698,6 +715,8 @@ function publicUser(user) {
     emailVerifiedAt: Number.isFinite(user.emailVerifiedAt) ? user.emailVerifiedAt : null,
     passwordChangedAt: user.passwordChangedAt,
     leaderboardVisible: user.leaderboardVisible !== false,
+    leaderboardPublicId: leaderboardPublicId(user.id, "galaxy"),
+    speedrunPublicId: leaderboardPublicId(user.id, "speedrun"),
   };
 }
 
@@ -802,24 +821,19 @@ function speedrunSubmissionKey(seasonId, targetId, userId, factoryId) {
   return `${seasonId}:${targetId}:${userId}:${factoryId}`;
 }
 
+function leaderboardPublicId(identity, kind = "galaxy") {
+  return `public_${sha256(`dspidle-public-leaderboard-v1:${kind}:${identity}`).slice(0, 32)}`;
+}
+
 function speedrunEntryPublic(entry, rank = 0) {
-  return {
-    submissionId: entry.submissionId,
-    userId: entry.userId,
-    accountId: entry.userId,
-    displayName: entry.displayName,
-    avatar: entry.avatar,
+  return projectPublicSpeedrunLeaderboard({
+    category: SPEEDRUN_TARGETS[entry.targetId]?.category ?? "speedrun",
     targetId: entry.targetId,
     seasonId: entry.seasonId,
     rulesetVersion: entry.rulesetVersion,
-    factoryId: entry.factoryId,
-    elapsedSeconds: entry.elapsedSeconds,
-    completedAtSeconds: entry.completedAtSeconds,
-    completedAt: entry.completedAt,
-    receivedAt: entry.receivedAt,
-    verified: entry.verified === true,
-    rank,
-  };
+    entries: [{ ...entry, rank: rank > 0 ? rank : 1 }],
+    generatedAt: Date.now(),
+  }, { publicIdFor: leaderboardPublicId, maximumEntries: 1 }).entries[0] ?? null;
 }
 
 function speedrunProgressFromState(state, targetId) {
@@ -1851,7 +1865,7 @@ function send(response, status, payload, extraHeaders = {}) {
     && (payload.error === "请先登录" || payload.error === "登录已过期")
       ? { ...payload, code: "SESSION_EXPIRED" }
       : payload;
-  const body = JSON.stringify(normalizedPayload);
+  const body = status === 204 ? "" : JSON.stringify(normalizedPayload);
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
@@ -1860,6 +1874,12 @@ function send(response, status, payload, extraHeaders = {}) {
     "x-frame-options": "DENY",
     "referrer-policy": "no-referrer",
     "x-dsp-api-capabilities": "direct-cloud-payload-v1",
+    ...securityResponseHeaders({
+      privacy: "private",
+      responseKind: status >= 400 ? "error" : "api",
+      cors: response.httpSecurityCors ?? null,
+      secureTransport: response.httpSecuritySecureTransport === true,
+    }),
     ...extraHeaders,
   });
   response.end(body);
@@ -1906,11 +1926,13 @@ async function sendCloudSaveDownload(response, save, mode, slot) {
   const metadataJson = JSON.stringify(metadata);
   response.writeHead(200, {
     "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store",
-    "x-content-type-options": "nosniff",
-    "x-frame-options": "DENY",
-    "referrer-policy": "no-referrer",
     "x-dsp-api-capabilities": "direct-cloud-payload-v1",
+    ...securityResponseHeaders({
+      privacy: "private",
+      responseKind: "download",
+      cors: response.httpSecurityCors ?? null,
+      secureTransport: response.httpSecuritySecureTransport === true,
+    }),
   });
   await writeResponseChunk(response, `{"cloudSave":${metadataJson.slice(0, -1)},"payload":"`);
   const chunkCharacters = 64 * 1024;
@@ -1925,13 +1947,18 @@ async function sendCloudSaveDownload(response, save, mode, slot) {
   response.end();
 }
 
-async function readJson(request) {
+async function readJson(request, options = {}) {
+  const inspectedLimit = Number.isSafeInteger(request.httpSecurity?.body?.maximumBytes)
+    ? request.httpSecurity.body.maximumBytes
+    : BODY_LIMIT_BYTES;
+  const maximumBytes = options.maximumBytes ?? inspectedLimit;
+  const maximumExpandedBytes = options.maximumExpandedBytes ?? maximumBytes;
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > BODY_LIMIT_BYTES) {
-      const error = new Error("请求内容超过 32 MB");
+    if (size > maximumBytes) {
+      const error = new Error("请求内容超过当前接口允许上限");
       error.statusCode = 413;
       error.code = "REQUEST_BODY_TOO_LARGE";
       throw error;
@@ -1949,7 +1976,7 @@ async function readJson(request) {
       throw error;
     }
     try {
-      raw = gunzipSync(raw, { maxOutputLength: EXPANDED_BODY_LIMIT_BYTES });
+      raw = gunzipSync(raw, { maxOutputLength: maximumExpandedBytes });
     } catch (cause) {
       const tooLarge = cause && typeof cause === "object" && "code" in cause && cause.code === "ERR_BUFFER_TOO_LARGE";
       const error = new Error(tooLarge ? "解压后的请求内容超过允许上限" : "请求压缩内容无效");
@@ -1958,8 +1985,8 @@ async function readJson(request) {
       throw error;
     }
   }
-  if (raw.byteLength > EXPANDED_BODY_LIMIT_BYTES) {
-    const error = new Error("解压后的请求内容超过 32 MB");
+  if (raw.byteLength > maximumExpandedBytes) {
+    const error = new Error("解压后的请求内容超过当前接口允许上限");
     error.statusCode = 413;
     error.code = "REQUEST_EXPANDED_BODY_TOO_LARGE";
     throw error;
@@ -1972,6 +1999,22 @@ async function readJson(request) {
     error.code = "REQUEST_FORMAT_INVALID";
     throw error;
   }
+}
+
+async function readRawRequest(request, maximumBytes = request.httpSecurity?.body?.maximumBytes ?? BODY_LIMIT_BYTES) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > maximumBytes) {
+      const error = new Error("请求内容超过当前接口允许上限");
+      error.statusCode = 413;
+      error.code = "REQUEST_BODY_TOO_LARGE";
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, size);
 }
 
 function decodeStrictRequestUtf8(rawBody) {
@@ -3092,7 +3135,7 @@ function leaderboardMeSnapshot(store, userId, category, seasonId, leaderboardSna
   const reviewResumeAfterRevision = leaderboardRevalidationThresholds(store.data, userId).normal;
   let status = "unavailable";
   let latestWindowState = null;
-  let entry = rankedEntry;
+  let entry = rankedEntry ? anonymousPublicLeaderboardEntry(rankedEntry, rankedEntry.rank) : null;
   if (isLeaderboardRestricted(store.data, userId)) {
     status = "restricted";
     entry = null;
@@ -3127,11 +3170,17 @@ function leaderboardMeSnapshot(store, userId, category, seasonId, leaderboardSna
   };
 }
 
+function anonymousPublicLeaderboardEntry(entry, rank) {
+  return projectPublicLeaderboard({
+    category: entry?.category ?? "galaxy",
+    seasonId: entry?.seasonId ?? ACTIVE_LEADERBOARD_SEASON_ID,
+    entries: [{ ...entry, rank }],
+    generatedAt: Date.now(),
+  }, { publicIdFor: leaderboardPublicId, maximumEntries: 1 }).entries[0] ?? null;
+}
+
 function publicLeaderboardEntry(entry, rank) {
-  // Preserve the pre-index public DTO byte-for-byte at the field level. The
-  // cache changes how entries are found and sorted, not which established
-  // submission fields (including verification) the endpoint returns.
-  return { ...entry, rank };
+  return anonymousPublicLeaderboardEntry(entry, rank);
 }
 
 function backfillLeaderboardFromMainSaves(store) {
@@ -3290,7 +3339,9 @@ function installAccountArchiveCloudSaves(store, userId, records) {
       for (const record of group) {
         appendSaveRevision(store, userId, {
           revision: record.revision,
-          payloadFile: record.payloadFile,
+          ...(typeof record.payloadFile === "string"
+            ? { payloadFile: record.payloadFile }
+            : { payload: record.payload }),
           checksum: record.checksum,
           size: record.size,
           updatedAt: record.updatedAt,
@@ -3520,11 +3571,13 @@ async function sendAccountArchive(response, request, archiveInput, fileName, sna
       "content-type": "application/vnd.dspidle.account-archive+zip",
       "content-length": String(archive.byteLength),
       "content-disposition": `attachment; filename="${fileName}"`,
-      "cache-control": "private, no-store",
-      "x-content-type-options": "nosniff",
-      "x-frame-options": "DENY",
-      "referrer-policy": "no-referrer",
       "x-dsp-account-archive-version": "2",
+      ...securityResponseHeaders({
+        privacy: "private",
+        responseKind: "download",
+        cors: response.httpSecurityCors ?? null,
+        secureTransport: response.httpSecuritySecureTransport === true,
+      }),
     });
     for await (const chunk of archive.stream) {
       if (abort.signal.aborted) {
@@ -3789,6 +3842,7 @@ export async function createCloudServer({
   const secureAdminToken = typeof adminToken === "string" && adminToken.length >= 32 ? adminToken : "";
   if (adminToken && !secureAdminToken) logger.error?.("DSP_ADMIN_TOKEN must contain at least 32 characters; admin metrics remain disabled");
   const allowedOrigins = new Set(allowedOrigin.split(",").map((origin) => origin.trim()).filter(Boolean));
+  const corsPolicy = createCorsPolicy({ allowedOrigins: [...allowedOrigins], allowCredentials: true });
   const webSessionPolicy = allowedOrigins.size > 0
     ? createWebSessionPolicy({ allowedOrigins: [...allowedOrigins] })
     : null;
@@ -3947,43 +4001,6 @@ export async function createCloudServer({
     if (atomicRequest) store.data.dailyMetrics[day] = dayMetric;
     const url = new URL(request.url || "/", "http://localhost");
     const ip = requestIp(request);
-    if (!preludeProcessed) {
-      const origin = request.headers.origin;
-      if (origin) response.setHeader("vary", "Origin");
-      if (origin && allowedOrigins.has(origin)) {
-        response.setHeader("access-control-allow-origin", origin);
-        response.setHeader("access-control-allow-credentials", "true");
-      }
-      if (origin && allowedOrigins.size > 0 && !allowedOrigins.has(origin)) return send(response, 403, { error: "来源未获授权" });
-      response.setHeader("access-control-allow-headers", [
-        "authorization",
-        "content-type",
-        "content-encoding",
-        "content-transfer-encoding",
-        cloudTransferContract.expectedRevisionHeader,
-        cloudTransferContract.requestIdHeader,
-        cloudTransferContract.originalBytesHeader,
-        cloudTransferContract.compressedBytesHeader,
-        "x-dsp-save-mode",
-        ACCOUNT_ARCHIVE_IMPORT_GUARD_HEADER,
-        ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_HEADER,
-        "x-dsp-session-mode",
-        "x-dsp-csrf-token",
-      ].join(", "));
-      response.setHeader("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS");
-      if (request.method === "OPTIONS") return send(response, 204, {});
-      const routeKey = `${ip}:${request.method}:${url.pathname}`;
-      const routeLimit = url.pathname.startsWith("/api/auth/")
-        ? 12
-        : url.pathname === "/api/presence"
-          ? 10
-          : url.pathname === "/api/analytics"
-            ? 30
-            : 120;
-      if (!rateLimit(routeKey, routeLimit, 60_000)) {
-        return send(response, 429, { error: "请求过于频繁，请稍后再试" }, { "retry-after": "60" });
-      }
-    }
 
     try {
       if (request.method === "GET" && url.pathname === "/api/health") {
@@ -4251,7 +4268,7 @@ export async function createCloudServer({
 
       if (request.method === "POST" && url.pathname === "/api/auth/register") {
         inspectSessionIssuance(request);
-        const body = await readJson(request);
+        const body = validateJsonDto(await readJson(request), ACCOUNT_JSON_SCHEMAS.register);
         const username = normalizedUsername(body.username);
         const displayName = normalizedName(body.displayName);
         const password = typeof body.password === "string" ? body.password : "";
@@ -4291,8 +4308,21 @@ export async function createCloudServer({
 
       if (request.method === "POST" && url.pathname === "/api/auth/login") {
         inspectSessionIssuance(request);
-        const body = await readJson(request);
-        const identifier = typeof body.identifier === "string" ? body.identifier : body.email;
+        const rawLogin = await readJson(request);
+        // A few pre-1.0 clients used `email`; normalize that one compatibility
+        // alias, then apply the same strict allow-list before scrypt work.
+        const loginKeys = rawLogin && typeof rawLogin === "object" && !Array.isArray(rawLogin) ? Object.keys(rawLogin) : [];
+        if (loginKeys.some((key) => !["identifier", "email", "password", "deviceName", "deviceId"].includes(key))
+          || rawLogin?.identifier !== undefined && rawLogin?.email !== undefined) {
+          throw new HttpSecurityError("JSON_UNKNOWN_FIELD", "登录正文包含当前接口不支持或相互冲突的字段");
+        }
+        const body = validateJsonDto({
+          identifier: rawLogin?.identifier ?? rawLogin?.email,
+          password: rawLogin?.password,
+          ...(rawLogin?.deviceName !== undefined ? { deviceName: rawLogin.deviceName } : {}),
+          ...(rawLogin?.deviceId !== undefined ? { deviceId: rawLogin.deviceId } : {}),
+        }, ACCOUNT_JSON_SCHEMAS.login);
+        const identifier = body.identifier;
         const email = normalizedEmail(identifier);
         const username = normalizedUsername(identifier);
         const password = typeof body.password === "string" ? body.password : "";
@@ -4328,7 +4358,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/verify-email") {
-        const body = await readJson(request);
+        const body = validateJsonDto(await readJson(request), ACCOUNT_JSON_SCHEMAS.tokenOnly);
         const action = validActionToken(store.data.emailVerifications, body.token);
         if (!action) return send(response, 400, { error: "验证链接无效或已过期", code: "EMAIL_TOKEN_INVALID" });
         const user = store.data.users[action.record.userId];
@@ -4356,7 +4386,7 @@ export async function createCloudServer({
 
       if (request.method === "POST" && url.pathname === "/api/auth/forgot-password") {
         if (!accountMailer) return send(response, 503, { error: "密码重置邮件服务尚未配置", code: "EMAIL_SERVICE_UNAVAILABLE" });
-        const body = await readJson(request);
+        const body = validateJsonDto(await readJson(request), ACCOUNT_JSON_SCHEMAS.emailOnly);
         const email = normalizedEmail(body.email);
         if (!email) return send(response, 400, { error: "邮箱格式无效" });
         const user = Object.values(store.data.users).find((candidate) => candidate.email === email);
@@ -4372,7 +4402,7 @@ export async function createCloudServer({
 
       if (request.method === "POST" && url.pathname === "/api/auth/reset-password") {
         inspectSessionIssuance(request);
-        const body = await readJson(request);
+        const body = validateJsonDto(await readJson(request), ACCOUNT_JSON_SCHEMAS.resetPassword);
         const password = typeof body.password === "string" ? body.password : "";
         if (password.length < 8 || password.length > 128) return send(response, 400, { error: "新密码必须为 8 至 128 位" });
         const action = validActionToken(store.data.passwordResets, body.token);
@@ -4475,7 +4505,7 @@ export async function createCloudServer({
       if (request.method === "POST" && url.pathname === "/api/account/sessions/revoke") {
         const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
-        const body = await readJson(request);
+        const body = validateJsonDto(await readJson(request), ACCOUNT_JSON_SCHEMAS.revokeSession);
         const target = Object.entries(store.data.sessions).find(([, session]) => session.userId === auth.user.id && session.id === body.sessionId);
         if (!target) return send(response, 404, { error: "会话不存在或已结束" });
         delete store.data.sessions[target[0]];
@@ -4504,7 +4534,7 @@ export async function createCloudServer({
       if (request.method === "POST" && url.pathname === "/api/account/password") {
         const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
-        const body = await readJson(request);
+        const body = validateJsonDto(await readJson(request), ACCOUNT_JSON_SCHEMAS.changePassword);
         const currentPassword = typeof body.currentPassword === "string" ? body.currentPassword : "";
         const newPassword = typeof body.newPassword === "string" ? body.newPassword : "";
         if (!(await passwordMatches(currentPassword, auth.user))) return send(response, 401, { error: "当前密码错误", code: "CURRENT_PASSWORD_INVALID" });
@@ -4521,7 +4551,7 @@ export async function createCloudServer({
         if (!auth) return send(response, 401, { error: "请先登录" });
         if (!accountMailer) return send(response, 503, { error: "邮件验证服务尚未配置", code: "EMAIL_SERVICE_UNAVAILABLE" });
         if (Number.isFinite(auth.user.emailVerifiedAt)) return send(response, 409, { error: "当前账号已经绑定并验证邮箱" });
-        const body = await readJson(request);
+        const body = validateJsonDto(await readJson(request), ACCOUNT_JSON_SCHEMAS.emailOnly);
         const email = normalizedEmail(body.email);
         if (!email) return send(response, 400, { error: "邮箱格式无效" });
         if (Object.values(store.data.users).some((user) => user.id !== auth.user.id && user.email === email)) {
@@ -4737,10 +4767,86 @@ export async function createCloudServer({
         }
       }
 
+      if (request.method === "POST" && url.pathname === "/api/account/import/legacy-json") {
+        const initialAuth = authenticateRequest(request);
+        if (!initialAuth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
+        const expectedGuard = typeof request.headers[ACCOUNT_ARCHIVE_IMPORT_GUARD_HEADER] === "string"
+          ? request.headers[ACCOUNT_ARCHIVE_IMPORT_GUARD_HEADER]
+          : "";
+        const confirmation = typeof request.headers[ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_HEADER] === "string"
+          ? request.headers[ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_HEADER]
+          : "";
+        if (!/^[a-f0-9]{64}$/.test(expectedGuard) || confirmation !== accountArchiveImportConfirmation(expectedGuard)) {
+          return send(response, 400, {
+            error: "旧版 JSON 账号导入确认文字或云状态 guard 无效",
+            code: "ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_INVALID",
+          });
+        }
+        const openingGuard = currentAccountArchiveImportGuard(store, initialAuth.user.id);
+        if (openingGuard !== expectedGuard) {
+          runtime.cloudConflicts += 1;
+          return send(response, 409, {
+            error: "云存档在导入开始前已变化，请重新确认；现有云存档未修改",
+            code: "ACCOUNT_ARCHIVE_IMPORT_GUARD_CONFLICT",
+            guard: openingGuard,
+          });
+        }
+        const raw = await readRawRequest(request);
+        const prepared = await prepareLegacyJsonAccountImport(raw, {
+          expectedAccountId: initialAuth.user.id,
+          maximumBytes: request.httpSecurity.body.maximumBytes,
+          quotaPolicy,
+          inspectPayload: async (record) => {
+            const descriptor = {
+              direct: true,
+              expectedRevision: 0,
+              requestId: null,
+              declaredOriginalBytes: record.size,
+              payloadLimit: quotaPolicy.revisionBytes,
+            };
+            return inspectDecodedCloudSaveUpload(Buffer.from(record.payload, "utf8"), descriptor);
+          },
+        });
+        const result = await store.runAtomic(async () => {
+          const auth = authenticateRequest(request);
+          if (!auth || auth.user.id !== initialAuth.user.id) {
+            const error = new Error("登录已过期，现有云存档未修改");
+            error.statusCode = 401;
+            error.code = "ACCOUNT_ARCHIVE_IMPORT_AUTH_CHANGED";
+            throw error;
+          }
+          const actualGuard = currentAccountArchiveImportGuard(store, auth.user.id);
+          if (actualGuard !== expectedGuard) {
+            const error = new Error("旧版 JSON 校验期间云存档已变化，服务器保留双方；请重新确认");
+            error.statusCode = 409;
+            error.code = "ACCOUNT_ARCHIVE_IMPORT_GUARD_CONFLICT";
+            error.guard = actualGuard;
+            throw error;
+          }
+          installAccountArchiveCloudSaves(store, auth.user.id, prepared.refs);
+          appendAudit(store, request, "account.legacy_json_imported", auth.user.id);
+          await store.persist({ operation: "account.legacy-json-import" });
+          return {
+            imported: true,
+            format: prepared.format,
+            revisionCount: prepared.refs.length,
+            logicalBytes: prepared.quota.logicalBytes,
+            ignoredMetadataOnlyHistoryRevisions: prepared.redundantHistoryRevisions,
+            guard: currentAccountArchiveImportGuard(store, auth.user.id),
+            modes: Object.fromEntries(SAVE_MODES.map((mode) => [mode, cloudSaveSlotMetadata(store, auth.user.id, mode)])),
+            leaderboardRevalidationRequired: {
+              normal: leaderboardRevalidationThresholds(store.data, auth.user.id).normal > 0,
+              speedrun: leaderboardRevalidationThresholds(store.data, auth.user.id).speedrun > 0,
+            },
+          };
+        });
+        return send(response, 200, result);
+      }
+
       if (request.method === "POST" && url.pathname === "/api/account/delete") {
         const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
-        const body = await readJson(request);
+        const body = validateJsonDto(await readJson(request), ACCOUNT_JSON_SCHEMAS.deleteAccount);
         if (body.confirmation !== "DELETE" || !(await passwordMatches(typeof body.password === "string" ? body.password : "", auth.user))) {
           return send(response, 400, { error: "密码或注销确认文字不正确" });
         }
@@ -5011,8 +5117,15 @@ export async function createCloudServer({
         const entries = [...bestByUser.values()]
           .sort((left, right) => left.elapsedSeconds - right.elapsedSeconds || left.receivedAt - right.receivedAt || left.submissionId.localeCompare(right.submissionId))
           .slice(0, 100)
-          .map((entry, index) => speedrunEntryPublic(entry, index + 1));
-        return send(response, 200, { category: SPEEDRUN_TARGETS[targetId].category, targetId, seasonId, rulesetVersion: SPEEDRUN_RULESET_VERSION, entries, generatedAt: Date.now() });
+          .map((entry, index) => ({ ...entry, rank: index + 1 }));
+        return send(response, 200, projectPublicSpeedrunLeaderboard({
+          category: SPEEDRUN_TARGETS[targetId].category,
+          targetId,
+          seasonId,
+          rulesetVersion: SPEEDRUN_RULESET_VERSION,
+          entries,
+          generatedAt: Date.now(),
+        }, { publicIdFor: leaderboardPublicId }));
       }
 
       if (request.method === "POST" && url.pathname === "/api/speedrun/submit") {
@@ -5104,14 +5217,14 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && (url.pathname === "/api/feedback" || url.pathname === "/api/errors")) {
-        const body = await readJson(request);
+        const body = validateClientReport(await readJson(request));
         const auth = authenticateRequest(request);
         const record = {
           id: randomUUID(),
           userId: auth?.user.id ?? null,
-          kind: typeof body.kind === "string" ? body.kind.slice(0, 40) : url.pathname === "/api/errors" ? "client-error" : "feedback",
-          message: typeof body.message === "string" ? body.message.slice(0, 4000) : "",
-          diagnostics: body.diagnostics && typeof body.diagnostics === "object" ? body.diagnostics : null,
+          kind: body.kind,
+          message: body.message,
+          diagnostics: body.diagnostics,
           receivedAt: Date.now(),
           ipHash: sha256(ip).slice(0, 16),
         };
@@ -5139,13 +5252,47 @@ export async function createCloudServer({
   };
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", "http://localhost");
+    const routeKey = `${requestIp(request)}:${request.method}:${requestUrl.pathname}`;
+    const routeLimit = requestUrl.pathname.startsWith("/api/auth/")
+      ? 12
+      : requestUrl.pathname === "/api/presence"
+        ? 10
+        : requestUrl.pathname === "/api/analytics"
+          ? 30
+          : 120;
+    const rateAllowed = rateLimit(routeKey, routeLimit, 60_000);
+    response.httpSecuritySecureTransport = request.socket?.encrypted === true
+      || String(request.headers["x-forwarded-proto"] ?? "").toLowerCase() === "https";
+    try {
+      const httpSecurity = inspectHttpRequest(request, {
+        corsPolicy,
+        bodyCapability: bodyCapabilityForRoute(request.method, requestUrl.pathname, {
+          cloudTransferContract,
+          maximumArchiveBytes: maximumAccountArchiveImportBytes(quotaPolicy),
+          maximumLegacyJsonBytes: maximumAccountArchiveImportBytes(quotaPolicy),
+        }),
+      });
+      request.httpSecurity = httpSecurity;
+      response.httpSecurityCors = httpSecurity.cors;
+      if (httpSecurity.preflight) return send(response, 204, null);
+    } catch (error) {
+      const statusCode = error instanceof HttpSecurityError ? error.statusCode : 400;
+      return send(response, statusCode, {
+        error: error instanceof HttpSecurityError ? error.publicMessage : "请求安全检查失败",
+        ...(error?.code ? { code: error.code } : {}),
+      });
+    }
+    if (!rateAllowed) {
+      return send(response, 429, { error: "请求过于频繁，请稍后再试" }, { "retry-after": "60" });
+    }
     const atomicGetRoutes = new Set([
       "/api/admin/cloud-history/prune-preview",
       "/api/admin/account",
       "/api/account/export",
     ]);
     const mutatingRequest = !["GET", "HEAD", "OPTIONS"].includes(request.method ?? "GET") || atomicGetRoutes.has(requestUrl.pathname);
-    const streamedAccountImport = request.method === "POST" && requestUrl.pathname === "/api/account/import/archive";
+    const streamedAccountImport = request.method === "POST"
+      && (requestUrl.pathname === "/api/account/import/archive" || requestUrl.pathname === "/api/account/import/legacy-json");
     const atomicRequest = mutatingRequest && !streamedAccountImport;
     if (runtime.shuttingDown && mutatingRequest) {
       response.setHeader("connection", "close");

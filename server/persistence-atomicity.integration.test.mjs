@@ -569,7 +569,7 @@ test("failed leaderboard visibility and administrator restriction leave public s
     const payload = createSavePayload("normal", 801);
     assert.equal((await uploadJson(running.baseUrl, "/api/cloud-save?mode=normal", account.headers, payload, 0)).response.status, 200);
     const publicBefore = await request(running.baseUrl, "/api/leaderboard?category=galaxy&seasonId=season_01");
-    assert.equal(publicBefore.body.entries.some((entry) => entry.userId === account.accountId), true);
+    assert.equal(publicBefore.body.entries.some((entry) => entry.displayName === "原子持久化合成账号"), true);
     const auditBefore = running.server.store.data.auditLog.length;
 
     faults.arm("after-app-state-write", "SQLITE_IOERR");
@@ -582,7 +582,7 @@ test("failed leaderboard visibility and administrator restriction leave public s
     assert.equal(hidden.response.status, 500, JSON.stringify(hidden.body));
     const accountAfterHiddenFailure = await request(running.baseUrl, "/api/account", { headers: account.headers });
     assert.equal(accountAfterHiddenFailure.body.user.leaderboardVisible, true);
-    assert.equal((await request(running.baseUrl, "/api/leaderboard?category=galaxy&seasonId=season_01")).body.entries.some((entry) => entry.userId === account.accountId), true);
+    assert.equal((await request(running.baseUrl, "/api/leaderboard?category=galaxy&seasonId=season_01")).body.entries.some((entry) => entry.displayName === "原子持久化合成账号"), true);
     assert.equal(running.server.store.data.auditLog.length, auditBefore);
 
     faults.arm("after-app-state-write", "SQLITE_FULL");
@@ -601,7 +601,7 @@ test("failed leaderboard visibility and administrator restriction leave public s
       headers: { authorization: `Bearer ${TEST_ADMIN_TOKEN}` },
     });
     assert.equal(summary.body.account.leaderboardRestricted, false);
-    assert.equal((await request(running.baseUrl, "/api/leaderboard?category=galaxy&seasonId=season_01")).body.entries.some((entry) => entry.userId === account.accountId), true);
+    assert.equal((await request(running.baseUrl, "/api/leaderboard?category=galaxy&seasonId=season_01")).body.entries.some((entry) => entry.displayName === "原子持久化合成账号"), true);
 
     await closeServer(running.server);
     running = await startServer(databaseFile, { adminToken: TEST_ADMIN_TOKEN, persistenceFaultInjector: faults.injector });

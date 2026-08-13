@@ -353,7 +353,7 @@ test("archive import refuses another account and invalid confirmation without mo
       "x-dsp-account-import-confirmation": "WRONG",
     });
     assert.equal(badConfirmation.response.status, 400);
-    assert.equal(badConfirmation.body.code, "ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_INVALID");
+    assert.equal(badConfirmation.body.code, "DSP_IMPORT_CONFIRMATION_INVALID");
     const mismatch = await importArchive(running, second, archive, preview);
     assert.equal(mismatch.response.status, 409, JSON.stringify(mismatch.body));
     assert.equal(mismatch.body.code, "ACCOUNT_ARCHIVE_ACCOUNT_MISMATCH");
@@ -503,7 +503,7 @@ test("archive import enforces authentication, content type, length and quota bef
     assert.equal(unauthorized.response.status, 401);
     const wrongType = await importArchive(running, account, archive, preview, { "content-type": "application/zip" });
     assert.equal(wrongType.response.status, 415);
-    assert.equal(wrongType.body.code, "ACCOUNT_ARCHIVE_IMPORT_CONTENT_TYPE_INVALID");
+    assert.equal(wrongType.body.code, "CONTENT_TYPE_NOT_ALLOWED");
     assert.deepEqual(durableFingerprint(running.server, account.id), before);
     assert.equal(await temporaryDirectoryEmpty(temporaryRoot), true);
   }, {

@@ -178,6 +178,7 @@ export function GalaxyWorkspace({
   const [localSaveSlots, setLocalSaveSlots] = useState(() => getSaveSlotSummaries(game.mode));
   const account = getActiveAccount(accountState);
   const speedrunSummary = useMemo(() => getSpeedrunSummary(game), [game]);
+  const ownSpeedrunPublicId = cloudSession.user?.speedrunPublicId ?? cloudSession.user?.id;
   const metrics = useMemo(() => getLeaderboardMetrics(account.ledger), [account.ledger]);
   const localNominalThroughput = useMemo(() => getGalacticThroughputSnapshot(game), [game]);
   const snapshot = useMemo(
@@ -824,7 +825,7 @@ export function GalaxyWorkspace({
           <section className="galaxy-summary-band">
             <div><span>当前工厂</span><strong>{speedrunSummary ? formatSpeedrunDuration(speedrunSummary.elapsedActiveSeconds) : "普通工厂"}</strong><small>{speedrunSummary?.eligible ? "可提交服务端校验" : "普通工厂不具备速通资格"}</small></div>
             <div><span>目标进度</span><strong>{speedrunSummary ? `${speedrunSummary.progress[speedrunTarget].current.toLocaleString("zh-CN")}/${speedrunSummary.progress[speedrunTarget].target.toLocaleString("zh-CN")}` : "--"}</strong><small>{SPEEDRUN_TARGETS[speedrunTarget].label}</small></div>
-            <div><span>我的最好成绩</span><strong>{speedrunEntries.find((entry) => entry.userId === cloudSession.user?.id)?.elapsedSeconds ? formatSpeedrunDuration(speedrunEntries.find((entry) => entry.userId === cloudSession.user?.id)!.elapsedSeconds) : "未上榜"}</strong><small>仅显示已验证成绩</small></div>
+            <div><span>我的最好成绩</span><strong>{speedrunEntries.find((entry) => entry.userId === ownSpeedrunPublicId)?.elapsedSeconds ? formatSpeedrunDuration(speedrunEntries.find((entry) => entry.userId === ownSpeedrunPublicId)!.elapsedSeconds) : "未上榜"}</strong><small>仅显示已验证成绩</small></div>
             <div><span>资格</span><strong className={speedrunSummary?.eligible ? "positive" : "preview"}>{speedrunSummary?.eligible ? "已具备" : "未验证"}</strong><small>{speedrunSummary?.invalidReason ?? "服务端提交后才会进入正式排名"}</small></div>
           </section>
           <div className="galaxy-ranking-layout">
@@ -833,7 +834,7 @@ export function GalaxyWorkspace({
               <div className="galaxy-leaderboard-rows">
                 {speedrunStatus === "loading" ? <p className="galaxy-leaderboard-empty">正在读取速通排行榜…</p> : null}
                 {speedrunStatus === "ready" && speedrunEntries.length === 0 ? <p className="galaxy-leaderboard-empty">本赛季还没有已验证成绩</p> : null}
-                {speedrunEntries.map((entry) => <article className={entry.userId === cloudSession.user?.id ? "galaxy-rank-row--local" : ""} key={entry.submissionId}><strong className="galaxy-rank-number">{entry.rank}</strong><div className="galaxy-rank-identity"><span className="galaxy-avatar">{entry.avatar}</span><span><strong>{entry.displayName}</strong><small>{entry.userId === cloudSession.user?.id ? "当前账户" : "已验证玩家"}</small></span></div><strong className="galaxy-rank-value">{formatSpeedrunDuration(entry.elapsedSeconds)}</strong><span>{new Date(entry.completedAt).toLocaleDateString("zh-CN")}</span><span className="galaxy-rank-status"><ShieldCheck size={13} />已验证</span></article>)}
+                {speedrunEntries.map((entry) => <article className={entry.userId === ownSpeedrunPublicId ? "galaxy-rank-row--local" : ""} key={entry.submissionId}><strong className="galaxy-rank-number">{entry.rank}</strong><div className="galaxy-rank-identity"><span className="galaxy-avatar">{entry.avatar}</span><span><strong>{entry.displayName}</strong><small>{entry.userId === ownSpeedrunPublicId ? "当前账户" : "已验证玩家"}</small></span></div><strong className="galaxy-rank-value">{formatSpeedrunDuration(entry.elapsedSeconds)}</strong><span>{new Date(entry.completedAt).toLocaleDateString("zh-CN")}</span><span className="galaxy-rank-status"><ShieldCheck size={13} />已验证</span></article>)}
               </div>
             </section>
             <aside className="galaxy-upload-panel">

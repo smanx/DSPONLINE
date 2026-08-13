@@ -371,7 +371,8 @@ test("rejects ordinary and forbidden saves while accepting an eligible speedrun 
   const accepted = await request("/api/speedrun/submit", { method: "POST", headers, body: JSON.stringify(submissionBody) });
   assert.equal(accepted.response.status, 200, JSON.stringify(accepted.body));
   assert.equal(accepted.body.verified, true);
-  assert.equal(accepted.body.entry.factoryId, factoryId);
+  assert.equal(Object.hasOwn(accepted.body.entry, "factoryId"), false, "public submit response must not expose the private factory identity");
+  assert.equal(accepted.body.entry.userId, accepted.body.entry.publicId);
   const repeated = await request("/api/speedrun/submit", { method: "POST", headers, body: JSON.stringify(submissionBody) });
   assert.equal(repeated.response.status, 200);
   assert.equal(repeated.body.idempotent, true);
@@ -592,7 +593,7 @@ test("calculates a verified white-matrix per-minute peak from adjacent main save
     });
     const rate = async () => {
       const ranking = await isolatedRequest("/api/leaderboard?category=white-rate&seasonId=season_01");
-      return ranking.body.entries.find((entry) => entry.userId === registered.body.user.id)?.metrics.peakWhiteMatrixPerMinute ?? 0;
+      return ranking.body.entries.find((entry) => entry.userId === registered.body.user.leaderboardPublicId)?.metrics.peakWhiteMatrixPerMinute ?? 0;
     };
 
     assert.equal((await put(saveAt(1_000, 1_000), 0)).response.status, 200);
@@ -778,7 +779,8 @@ test("keeps the public Top 100 compatible while /leaderboard/me returns private 
     assert.equal(own.response.status, 200);
     assert.match(own.response.headers.get("cache-control") ?? "", /no-store/);
     assert.equal(own.body.status, "ranked");
-    assert.equal(own.body.entry.userId, userId);
+    assert.equal(own.body.entry.userId, registered.body.user.leaderboardPublicId);
+    assert.notEqual(own.body.entry.userId, userId, "authenticated leaderboard responses also use the stable public alias");
     assert.equal(own.body.rank, 150);
     assert.equal(own.body.entry.rank, 150);
     assert.equal(own.body.totalEntries, 150);
@@ -911,7 +913,7 @@ test("keeps leaderboard-restricted accounts out of every ranking path without to
     for (const category of ["galaxy", "power", "upload", "dyson", "throughput"]) {
       const ranking = await runtime.call(`/api/leaderboard?category=${category}&seasonId=season_01`);
       assert.equal(ranking.body.entries.some((entry) => entry.userId === restrictedUserId), false);
-      assert.equal(ranking.body.entries.some((entry) => entry.userId === ordinary.body.user.id), true);
+      assert.equal(ranking.body.entries.some((entry) => entry.userId === ordinary.body.user.leaderboardPublicId), true);
     }
     const refresh = await runtime.call("/api/leaderboard", {
       method: "POST",
@@ -2206,7 +2208,7 @@ test("recalculates leaderboard score on the server", async () => {
   assert.equal(hidden.response.status, 200);
   assert.equal(hidden.body.user.leaderboardVisible, false);
   let ranking = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
-  assert.equal(ranking.body.entries.some((entry) => entry.userId === hidden.body.user.id), false);
+  assert.equal(ranking.body.entries.some((entry) => entry.userId === hidden.body.user.leaderboardPublicId), false);
 
   const fourthPayload = mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = 20; });
   const uploadedWhileHidden = await request("/api/cloud-save", {
@@ -2216,7 +2218,7 @@ test("recalculates leaderboard score on the server", async () => {
   });
   assert.equal(uploadedWhileHidden.response.status, 200);
   ranking = await request("/api/leaderboard?category=galaxy&seasonId=season_01");
-  assert.equal(ranking.body.entries.some((entry) => entry.userId === hidden.body.user.id), false);
+  assert.equal(ranking.body.entries.some((entry) => entry.userId === hidden.body.user.leaderboardPublicId), false);
 
   const visible = await request("/api/leaderboard/visibility", {
     method: "POST",
@@ -2255,7 +2257,7 @@ test("keeps server-derived leaderboard values above the former metric cap", asyn
   assert.equal(entry.metrics.energyGeneratedMj, 2_500_000_000_000_000);
   assert.equal(entry.metrics.peakThroughputPerMinute, 0);
   assert.equal(entry.metrics.theoreticalPeakThroughputPerMinute, 1_500_000_000_000_000);
-  assert.equal(entry.verification.strategy, "main-cloud-save-v2");
+  assert.equal(Object.hasOwn(entry, "verification"), false, "public leaderboard must omit private verification internals");
 
   const nextPayload = mutateSavePayload(payload, (state) => {
     state.elapsedSeconds += 60;
@@ -2270,7 +2272,7 @@ test("keeps server-derived leaderboard values above the former metric cap", asyn
   entry = ranking.body.entries.find((candidate) => candidate.displayName === "超大工厂");
   assert.equal(entry.metrics.peakThroughputPerMinute, 1_500_000_000_000_000);
   assert.equal(entry.metrics.theoreticalPeakThroughputPerMinute, 1_500_000_000_000_000);
-  assert.deepEqual(entry.verification.throughputWindow, { fromRevision: 1, toRevision: 2, elapsedSeconds: 60 });
+  assert.equal(Object.hasOwn(entry, "verification"), false);
 });
 
 test("uses all explicit planet metrics for nominal throughput regardless of the active planet", async () => {
@@ -2298,13 +2300,13 @@ test("uses all explicit planet metrics for nominal throughput regardless of the 
   })).response.status, 200);
 
   let ranking = await request("/api/leaderboard?category=throughput&seasonId=season_01");
-  let entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.id);
+  let entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.leaderboardPublicId);
   assert.equal(entry.metrics.peakThroughputPerMinute, 0);
   assert.equal(entry.metrics.theoreticalPeakThroughputPerMinute, 600);
   assert.equal(entry.metrics.activePlanetThroughputPerMinute, 100);
   assert.equal(entry.metrics.galacticThroughputPerMinute, 600);
   assert.equal(entry.metrics.nominalThroughputMetricVersion, "galactic-planet-sum-v1");
-  assert.equal(entry.verification.nominalThroughputMetricVersion, "galactic-planet-sum-v1");
+  assert.equal(Object.hasOwn(entry, "verification"), false);
 
   const switchedPayload = mutateSavePayload(payload, (state) => {
     state.elapsedSeconds += 60;
@@ -2315,7 +2317,7 @@ test("uses all explicit planet metrics for nominal throughput regardless of the 
     method: "PUT", headers, body: JSON.stringify({ payload: switchedPayload, expectedRevision: 1 }),
   })).response.status, 200);
   ranking = await request("/api/leaderboard?category=throughput&seasonId=season_01");
-  entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.id);
+  entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.leaderboardPublicId);
   assert.equal(entry.metrics.peakThroughputPerMinute, 0);
   assert.equal(entry.metrics.theoreticalPeakThroughputPerMinute, 600);
   assert.equal(entry.metrics.activePlanetThroughputPerMinute, 300);
@@ -2341,12 +2343,12 @@ test("marks root-only nominal throughput as a legacy active-planet fallback", as
     body: JSON.stringify({ payload, expectedRevision: 0 }),
   })).response.status, 200);
   const ranking = await request("/api/leaderboard?category=throughput&seasonId=season_01");
-  const entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.id);
+  const entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.leaderboardPublicId);
   assert.equal(entry.metrics.theoreticalPeakThroughputPerMinute, 450);
   assert.equal(entry.metrics.activePlanetThroughputPerMinute, 450);
   assert.equal(entry.metrics.galacticThroughputPerMinute, 450);
   assert.equal(entry.metrics.nominalThroughputMetricVersion, "legacy-active-planet-v1");
-  assert.equal(entry.verification.nominalThroughputMetricVersion, "legacy-active-planet-v1");
+  assert.equal(Object.hasOwn(entry, "verification"), false);
 });
 
 test("verifies the optional 19 MiB galactic-throughput fixture without modifying it", {
@@ -2372,7 +2374,7 @@ test("verifies the optional 19 MiB galactic-throughput fixture without modifying
     body: JSON.stringify({ payload, expectedRevision: 0 }),
   })).response.status, 200);
   const ranking = await request("/api/leaderboard?category=throughput&seasonId=season_01");
-  const entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.id);
+  const entry = ranking.body.entries.find((candidate) => candidate.userId === registered.body.user.leaderboardPublicId);
   assert.ok(Math.abs(entry.metrics.activePlanetThroughputPerMinute - nominal.activePlanetValue) < 1);
   assert.ok(Math.abs(entry.metrics.galacticThroughputPerMinute - nominal.galacticValue) < 1);
   assert.ok(Math.abs(entry.metrics.theoreticalPeakThroughputPerMinute - nominal.galacticValue) < 1);

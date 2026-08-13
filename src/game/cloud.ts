@@ -51,6 +51,9 @@ export interface CloudUser {
   emailVerifiedAt: number | null;
   passwordChangedAt: number;
   leaderboardVisible: boolean;
+  /** Stable anonymous aliases used only to identify this account in public lists. */
+  leaderboardPublicId?: string;
+  speedrunPublicId?: string;
 }
 
 export interface CloudAccountSession {
