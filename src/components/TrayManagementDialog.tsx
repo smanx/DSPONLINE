@@ -4,6 +4,7 @@ import { ITEMS, getPlanet } from "../game/content";
 import type { GameState, ItemId } from "../game/types";
 import { MAX_PLANET_TRAY_ITEM_LIMIT, MIN_PLANET_TRAY_ITEM_LIMIT, getPlanetTrayItemLimit, type PlanetTrayDiscardRequest } from "../game/engine";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
+import "../styles/tray-management.css";
 import { AccessibleDialog } from "./AccessibleDialog";
 import { ItemGlyph } from "./ItemReference";
 

@@ -2,6 +2,7 @@ import { BarChart3, BookOpen, Check, Command, Factory, Flag, FlaskConical, Focus
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ITEMS, getBuilding, getPlanet } from "../game/content";
 import type { GameState, ItemId } from "../game/types";
+import "../styles/command-palette.css";
 import { AccessibleDialog } from "./AccessibleDialog";
 
 export type CommandWorkspace = "operations" | "campaign" | "galaxy" | "star-map" | "statistics" | "recipes" | "technology" | "blueprints" | "dyson" | "inspector" | "resources";

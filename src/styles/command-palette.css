@@ -1,0 +1,86 @@
+.command-palette-backdrop {
+  position: fixed;
+  z-index: 220;
+  inset: 0;
+  display: grid;
+  align-items: start;
+  justify-items: center;
+  padding-top: max(74px, 10vh);
+  background: rgba(4, 7, 6, 0.68);
+  backdrop-filter: blur(3px);
+  animation: command-backdrop-enter 120ms ease-out both;
+}
+
+.command-palette {
+  display: grid;
+  width: min(620px, calc(100vw - 28px));
+  max-height: min(680px, calc(100vh - 112px));
+  grid-template-rows: 54px 48px minmax(0, 1fr) 34px;
+  overflow: hidden;
+  border: 1px solid #49635b;
+  border-radius: 7px;
+  background: #101613;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.62);
+  animation: command-palette-enter 150ms cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
+
+.command-palette > header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.command-palette-title { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.command-palette-title > i { display: grid; width: 31px; height: 31px; place-items: center; border: 1px solid var(--cyan-deep); border-radius: 4px; color: var(--cyan); font-style: normal; }
+.command-palette-title > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.command-palette-title strong { font-size: 12px; }
+.command-palette-title small { color: var(--muted); font-size: 8px; }
+
+.command-palette > header > button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.command-palette-search { display: grid; min-width: 0; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 4px; padding: 7px 11px; border-bottom: 1px solid var(--line); color: var(--muted); }
+.command-palette-search svg { justify-self: center; }
+.command-palette-search input { min-width: 0; height: 32px; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 11px; }
+
+.command-palette kbd { min-width: 22px; padding: 3px 5px; border: 1px solid var(--line-strong); border-radius: 3px; background: #181f1c; color: var(--muted); font-family: inherit; font-size: 7px; text-align: center; }
+.command-palette-list { min-width: 0; min-height: 0; overflow: auto; padding: 7px; }
+.command-palette-list > button { display: grid; width: 100%; min-height: 46px; grid-template-columns: 32px minmax(0, 1fr) 20px; align-items: center; gap: 8px; padding: 5px 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--text-soft); cursor: pointer; text-align: left; }
+.command-palette-list > button.active { border-color: #3e6258; background: #182821; color: var(--text); }
+.command-palette-list > button > i { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid var(--line); border-radius: 4px; color: var(--cyan); font-style: normal; }
+.command-palette-list > button > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.command-palette-list strong,
+.command-palette-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-palette-list strong { font-size: 10px; }
+.command-palette-list small { color: var(--muted); font-size: 8px; }
+.command-palette-list > button > svg { color: var(--green); }
+.command-item-swatch { display: grid; width: 23px; height: 23px; place-items: center; border-radius: 3px; color: #0b100e; font-size: 7px; font-weight: 800; }
+.command-palette-empty { display: grid; min-height: 160px; place-items: center; color: var(--muted); font-size: 9px; }
+
+.command-palette > footer { display: flex; align-items: center; justify-content: flex-end; gap: 13px; padding: 0 12px; border-top: 1px solid var(--line); background: #0d1210; color: var(--muted); font-size: 7px; }
+.command-palette > footer span { display: flex; align-items: center; gap: 3px; }
+
+@keyframes command-backdrop-enter { from { opacity: 0; } to { opacity: 1; } }
+@keyframes command-palette-enter { from { opacity: 0; transform: translateY(-8px) scale(0.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+@media (max-width: 760px) {
+  .command-palette-backdrop { align-items: end; padding: 0; }
+  .command-palette { width: 100%; max-height: min(78vh, 620px); grid-template-rows: 54px 48px minmax(0, 1fr); border-right: 0; border-bottom: 0; border-left: 0; border-radius: 7px 7px 0 0; }
+  .command-palette > footer { display: none; }
+}
+
+@media (pointer: coarse) {
+  .command-palette-list > button { min-height: 52px; }
+}
