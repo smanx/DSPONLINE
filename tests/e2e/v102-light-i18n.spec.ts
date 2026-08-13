@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { selectSettingsCategory } from "./settings-helpers";
 
-const RELEASE_NOTE_ID = "2026-08-13-v1.0.41";
+const RELEASE_NOTE_ID = "2026-08-14-v1.0.42";
 
 async function seedEnglishFactory(page: Page, mobileUi: "legacy" | "next" = "next") {
   await page.addInitScript(({ releaseNoteId, mobileUi }) => {
@@ -110,10 +110,10 @@ test("English light release notes are localized and persist dismissal", async ({
   });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/?menu=1&lang=en");
-  const dialog = page.getByRole("dialog", { name: "Large Saves, Offline Choices, and Continuous Connections" });
+  const dialog = page.getByRole("dialog", { name: "Responsive UI, Mobile Navigation, and Accessibility" });
   await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText("1.0.41");
-  await expect(dialog).toContainText("Cloud-save status center");
+  await expect(dialog).toContainText("1.0.42");
+  await expect(dialog).toContainText("Workspaces follow the real shell bounds");
   expect(await visibleHanStrings(dialog)).toEqual([]);
   await dialog.getByRole("button", { name: "Got it" }).click();
   await expect(dialog).toHaveCount(0);

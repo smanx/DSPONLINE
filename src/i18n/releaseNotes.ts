@@ -27,6 +27,45 @@ export interface LocalizedReleaseNotesUiCopy {
   acknowledge: string;
 }
 
+const currentCopy = {
+  date: { "zh-CN": "2026年8月14日", en: "August 14, 2026" },
+  title: { "zh-CN": "界面适配、移动导航与无障碍更新", en: "Responsive UI, Mobile Navigation, and Accessibility" },
+  summary: {
+    "zh-CN": "1.0.42 统一桌面和手机工作区的动态安全区、模态焦点与高字号布局，修复命令面板跳转竞态、亮色文字对比度、统计交互语义和中文输入草稿，并让教程、PWA 与原生制品读取同一应用版本。玩法平衡、结算规则、GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+    en: "Version 1.0.42 unifies dynamic safe areas, modal focus, and large-text layouts across desktop and mobile workspaces; fixes command-palette navigation races, light-theme contrast, statistics semantics, and IME drafts; and aligns tutorial, PWA, and native version metadata. Game balance, settlement rules, GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 remain unchanged.",
+  },
+  shellTitle: { "zh-CN": "工作区跟随真实顶栏与托盘", en: "Workspaces follow the real shell bounds" },
+  shellDescription: {
+    "zh-CN": "主线、资料库、科技、蓝图、星图、统计、银河、运营和制造中心统一读取壳层动态高度；80%～200% 字号和常见桌面分辨率不再遮住关闭按钮、标签或内容。",
+    en: "Campaign, codex, technology, blueprints, star map, statistics, Galaxy, operations, and construction center now read dynamic shell heights, preventing controls and content from being covered at 80%–200% text scale and common desktop resolutions.",
+  },
+  navigationTitle: { "zh-CN": "手机命令跳转一次完成", en: "Mobile command navigation completes atomically" },
+  navigationDescription: {
+    "zh-CN": "命令面板切换到工作区、物资抽屉或检查器时使用一次 history 替换；关闭面板不会再追加返回动作，浏览器返回、页面返回和实体定位保持同一导航栈。",
+    en: "Moving from the command palette to a workspace, inventory sheet, or inspector now uses one history replacement. Closing the palette no longer adds a second back action, while browser back, UI back, and entity focus share the same stack.",
+  },
+  accessibilityTitle: { "zh-CN": "背景失活与焦点边界统一", en: "Unified inert background and focus boundaries" },
+  accessibilityDescription: {
+    "zh-CN": "全屏工作区使用共享模态框架：被覆盖的工厂画布会 inert 并从无障碍树隐藏，Tab 保持在当前工作区，嵌套确认框和悬浮 Portal 可正常使用，关闭后恢复原焦点。",
+    en: "Full-screen workspaces use a shared modal frame: the covered factory becomes inert and hidden from assistive technology, Tab stays within the active workspace, nested confirmations and tooltip portals remain usable, and focus returns on close.",
+  },
+  responsiveTitle: { "zh-CN": "窄屏、高字号和触控操作收口", en: "Narrow, large-text, and touch layouts refined" },
+  responsiveDescription: {
+    "zh-CN": "统计时间范围、资料库分类、蓝图操作、戴森横屏、更新公告和制造中心在窄屏下改为可滚动或重排；手机主要操作保持至少 44×44px 命中区。",
+    en: "Statistics ranges, codex categories, blueprint actions, Dyson landscape layouts, release notes, and construction-center controls now scroll or reflow on narrow screens, with primary mobile targets kept at least 44×44 px.",
+  },
+  inputTitle: { "zh-CN": "中文输入与页面草稿更稳定", en: "More stable IME input and in-page drafts" },
+  inputDescription: {
+    "zh-CN": "蓝图名称、统计书签与规划、账号资料和搜索输入在组合输入、失焦、横竖屏与全屏变化期间保留页面内草稿；提交、取消或主动清空后才移除，密码不进入共享草稿或日志。",
+    en: "Blueprint names, statistics bookmarks and plans, account details, and search fields retain in-page drafts through IME composition, blur, orientation, and fullscreen changes. Drafts clear only on submit, cancel, or explicit reset; passwords never enter shared drafts or logs.",
+  },
+  versionTitle: { "zh-CN": "版本信息与回归夹具一致", en: "Version metadata and QA fixtures aligned" },
+  versionDescription: {
+    "zh-CN": "教程展示真实应用版本，阅读进度按独立内容修订保存；Web version.json、PWA、Android 与 Windows 构建使用同一版本源。预览测试改为一次性正式存储注入，刷新不再制造多写入者冲突。",
+    en: "The tutorial displays the real app version while progress uses an independent content revision. Web version.json, PWA, Android, and Windows builds share one version source, and preview fixtures seed official storage once so reloads no longer create false multi-writer conflicts.",
+  },
+} as const;
+
 const copy = {
   date: {
     "zh-CN": "2026年8月13日",
@@ -132,8 +171,30 @@ function message(locale: AppLocale, key: CopyKey): string {
   return copy[key][locale];
 }
 
-/** Stable-key release copy; new 1.0.41 text does not use the legacy DOM translation bridge. */
+function currentMessage(locale: AppLocale, key: keyof typeof currentCopy): string {
+  return currentCopy[key][locale];
+}
+
+/** Stable-key release copy; current text does not use the legacy DOM translation bridge. */
 export function getCurrentReleaseNotes(locale: AppLocale): LocalizedReleaseNoteRecord {
+  return {
+    id: "2026-08-14-v1.0.42",
+    date: currentMessage(locale, "date"),
+    version: "1.0.42",
+    title: currentMessage(locale, "title"),
+    summary: currentMessage(locale, "summary"),
+    items: [
+      { id: "dynamic-shell-safe-area", title: currentMessage(locale, "shellTitle"), description: currentMessage(locale, "shellDescription") },
+      { id: "atomic-mobile-navigation", title: currentMessage(locale, "navigationTitle"), description: currentMessage(locale, "navigationDescription") },
+      { id: "workspace-accessibility", title: currentMessage(locale, "accessibilityTitle"), description: currentMessage(locale, "accessibilityDescription") },
+      { id: "responsive-large-text", title: currentMessage(locale, "responsiveTitle"), description: currentMessage(locale, "responsiveDescription") },
+      { id: "stable-form-drafts", title: currentMessage(locale, "inputTitle"), description: currentMessage(locale, "inputDescription") },
+      { id: "version-and-preview-integrity", title: currentMessage(locale, "versionTitle"), description: currentMessage(locale, "versionDescription") },
+    ],
+  };
+}
+
+export function getReleaseNotes1041(locale: AppLocale): LocalizedReleaseNoteRecord {
   return {
     id: "2026-08-13-v1.0.41",
     date: message(locale, "date"),

@@ -25,6 +25,7 @@ import {
 } from "../game/campaign";
 import type { CampaignTaskId, GameState, ItemId } from "../game/types";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
+import { WorkspaceFrame } from "./WorkspaceFrame";
 import { formatQuantityCompact } from "../game/quantityFormat";
 
 function ItemMark({ itemId }: { itemId: ItemId }) {
@@ -79,7 +80,7 @@ export function CampaignWorkspace({
   const completion = snapshot.totalCount > 0 ? snapshot.completedCount / snapshot.totalCount * 100 : 0;
 
   return (
-    <section className="campaign-workspace" role="dialog" aria-modal="true" aria-label="主线任务中心">
+    <WorkspaceFrame className="campaign-workspace" ariaLabel="主线任务中心" onRequestClose={onClose}>
       <header className="campaign-header">
         <div className="campaign-title">
           <i><Flag size={20} /></i>
@@ -156,6 +157,6 @@ export function CampaignWorkspace({
           </section>
         ))}
       </div>
-    </section>
+    </WorkspaceFrame>
   );
 }

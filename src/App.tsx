@@ -1048,6 +1048,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [flowStore]);
   const lowEndMobile = useLowEndMobile();
   const nextMobileShell = mobileUiPreference === "next";
+  const canvasMinimumZoom = nextMobileShell && game.settings.fontScale >= 2 ? 0.35 : 0.25;
   const productionRefreshIntervalMs = endgameExtremeMode
     ? Math.max(5_000, resolveProductionRefreshInterval(productionRefreshPreference, automaticRefreshState))
     : resolveProductionRefreshInterval(productionRefreshPreference, automaticRefreshState);
@@ -2264,10 +2265,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const closeCommandPalette = useCallback(() => {
     setCommandPaletteOpen(false);
-    if (nextMobileShell && mobileNavigation.overlay?.kind === "modal" && mobileNavigation.overlay.id === "command") {
-      mobileNavigation.requestBack();
-    }
-  }, [mobileNavigation.overlay, mobileNavigation.requestBack, nextMobileShell]);
+    if (nextMobileShell) mobileNavigation.dismissModal("command");
+  }, [mobileNavigation.dismissModal, nextMobileShell]);
 
   const returnToMenuSafely = useCallback(async () => {
     const result = await persistPrimarySave();
@@ -3207,24 +3206,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [closeCommandPalette, commandPaletteOpen, commitGame, flowStore, mobileNavigation.overlay, mobileNavigation.requestBack, mobileNavigation.route.kind, nextMobileShell, openCommandPalette, playTone, redoGame, togglePause, undoGame]);
 
-  // Move keyboard focus into a newly opened workspace so keyboard and screen
-  // reader users do not remain behind a modal overlay.
-  useEffect(() => {
-    if (!technologyOpen && !statisticsOpen && !recipesOpen && !starMapOpen && !blueprintsOpen &&
-      !dysonPlannerOpen && !operationsOpen && !campaignOpen && !galaxyOpen && !constructionCenterOpen && !offlineReport) return;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const timer = window.setTimeout(() => {
-      const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
-      if (!dialog) return;
-      if (!dialog.hasAttribute("tabindex")) dialog.tabIndex = -1;
-      dialog.focus({ preventScroll: true });
-    }, 0);
-    return () => {
-      window.clearTimeout(timer);
-      if (previous?.isConnected && !previous.closest('[role="dialog"]')) previous.focus({ preventScroll: true });
-    };
-  }, [blueprintsOpen, campaignOpen, constructionCenterOpen, dysonPlannerOpen, galaxyOpen, offlineReport, operationsOpen, recipesOpen, starMapOpen, statisticsOpen, technologyOpen]);
-
   const onMiningStop = useCallback(() => {
     if (miningTimerRef.current != null) window.clearInterval(miningTimerRef.current);
     miningTimerRef.current = null;
@@ -3410,8 +3391,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setRecipesOpen(true);
     setMobilePanel(null);
     setNotice(null);
-    mobileNavigation.openWorkspace("recipes");
-  }, [closeAllWorkspaces, mobileNavigation.openWorkspace]);
+    if (nextMobileShell) mobileNavigation.replaceModalWithWorkspace("recipes");
+    else mobileNavigation.openWorkspace("recipes");
+  }, [closeAllWorkspaces, mobileNavigation.openWorkspace, mobileNavigation.replaceModalWithWorkspace, nextMobileShell]);
 
   const onFuelChange = useCallback((entityId: string, itemId: ItemId) => {
     commitGame((current) => setFuelItem(current, entityId, itemId));
@@ -3600,38 +3582,49 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     closeAllWorkspaces();
     setMobilePanel(null);
     if (workspace === "inspector" || workspace === "resources") {
-      mobileNavigation.openSheet(workspace === "resources" ? "inventory" : "inspector");
+      const sheet = workspace === "resources" ? "inventory" : "inspector";
+      if (nextMobileShell) mobileNavigation.replaceModalWithSheet(sheet);
+      else mobileNavigation.openSheet(sheet);
       if (!nextMobileShell) setMobilePanel(workspace);
     } else if (workspace === "technology") {
       setTechnologyOpen(true);
-      mobileNavigation.openWorkspace("technology");
+      if (nextMobileShell) mobileNavigation.replaceModalWithWorkspace("technology");
+      else mobileNavigation.openWorkspace("technology");
     } else if (workspace === "statistics") {
       setStatisticsOpen(true);
-      mobileNavigation.openWorkspace("statistics");
+      if (nextMobileShell) mobileNavigation.replaceModalWithWorkspace("statistics");
+      else mobileNavigation.openWorkspace("statistics");
     } else if (workspace === "recipes") {
       setRecipesOpen(true);
-      mobileNavigation.openWorkspace("recipes");
+      if (nextMobileShell) mobileNavigation.replaceModalWithWorkspace("recipes");
+      else mobileNavigation.openWorkspace("recipes");
     } else if (workspace === "star-map") {
       setStarMapOpen(true);
-      mobileNavigation.openWorkspace("star-map");
+      if (nextMobileShell) mobileNavigation.replaceModalWithWorkspace("star-map");
+      else mobileNavigation.openWorkspace("star-map");
     } else if (workspace === "blueprints") {
       setBlueprintsOpen(true);
-      mobileNavigation.openWorkspace("blueprints");
+      if (nextMobileShell) mobileNavigation.replaceModalWithWorkspace("blueprints");
+      else mobileNavigation.openWorkspace("blueprints");
     } else if (workspace === "dyson") {
       setDysonPlannerOpen(true);
-      mobileNavigation.openWorkspace("dyson");
+      if (nextMobileShell) mobileNavigation.replaceModalWithWorkspace("dyson");
+      else mobileNavigation.openWorkspace("dyson");
     } else if (workspace === "campaign") {
       setCampaignOpen(true);
-      mobileNavigation.openWorkspace("campaign");
+      if (nextMobileShell) mobileNavigation.replaceModalWithWorkspace("campaign");
+      else mobileNavigation.openWorkspace("campaign");
     } else if (workspace === "operations") {
       setOperationsOpen(true);
       setOperationsTab("alerts");
-      mobileNavigation.openWorkspace("operations");
+      if (nextMobileShell) mobileNavigation.replaceModalWithWorkspace("operations");
+      else mobileNavigation.openWorkspace("operations");
     } else if (workspace === "galaxy") {
       setGalaxyOpen(true);
-      mobileNavigation.openWorkspace("galaxy");
+      if (nextMobileShell) mobileNavigation.replaceModalWithWorkspace("galaxy");
+      else mobileNavigation.openWorkspace("galaxy");
     }
-  }, [closeAllWorkspaces, mobileNavigation.openSheet, mobileNavigation.openWorkspace, nextMobileShell]);
+  }, [closeAllWorkspaces, mobileNavigation.openSheet, mobileNavigation.openWorkspace, mobileNavigation.replaceModalWithSheet, mobileNavigation.replaceModalWithWorkspace, nextMobileShell]);
 
   const openSystemSpaceStation = useCallback((systemId: StarSystemId) => {
     closeAllWorkspaces();
@@ -3798,9 +3791,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setSelectedBeltIds([]);
     setInspectorTab("inspect");
     setMobilePanel("inspector");
+    if (nextMobileShell) mobileNavigation.replaceModalWithSheet("inspector");
     window.setTimeout(() => focusEntityIds([entityId]), gameRef.current.settings.reducedMotion ? 0 : 50);
     setNotice(`已定位：${entity.buildingId ? getBuilding(entity.buildingId).name : entity.resourceId ? ITEMS[entity.resourceId].name : entity.id}`);
-  }, [focusEntityIds, onPlanetChange]);
+  }, [focusEntityIds, mobileNavigation.replaceModalWithSheet, nextMobileShell, onPlanetChange]);
 
   const locateProductionLine = useCallback((itemId: ItemId, planetId: PlanetId) => {
     const location = getProductionLineLocations(gameRef.current, itemId).find((candidate) => candidate.planetId === planetId);
@@ -3904,8 +3898,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }));
     commitGame((current) => moveEntities(current, moves));
     setNotice(`已按物流上下游整理 ${moves.length} 个设备`);
-    window.requestAnimationFrame(() => void fitView({ padding: 0.2, duration: gameRef.current.settings.reducedMotion ? 0 : 280 }));
-  }, [commitGame, fitView, setNodes]);
+    window.requestAnimationFrame(() => void fitView({ padding: 0.2, minZoom: canvasMinimumZoom, duration: gameRef.current.settings.reducedMotion ? 0 : 280 }));
+  }, [canvasMinimumZoom, commitGame, fitView, setNodes]);
 
   const undoAutoLayout = useCallback(() => {
     if (!autoLayoutUndo || autoLayoutUndo.planetId !== gameRef.current.activePlanetId) return;
@@ -3923,8 +3917,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }));
     commitGame((current) => moveEntities(current, positions));
     setNotice(`已撤销最近一次自动整理 · 恢复 ${positions.length} 个设备`);
-    window.requestAnimationFrame(() => void fitView({ padding: 0.2, duration: gameRef.current.settings.reducedMotion ? 0 : 280 }));
-  }, [autoLayoutUndo, commitGame, fitView, setNodes]);
+    window.requestAnimationFrame(() => void fitView({ padding: 0.2, minZoom: canvasMinimumZoom, duration: gameRef.current.settings.reducedMotion ? 0 : 280 }));
+  }, [autoLayoutUndo, canvasMinimumZoom, commitGame, fitView, setNodes]);
 
   const focusBeltNetwork = useCallback((beltId: string, planetId?: PlanetId) => {
     const snapshot = analyzeBeltNetwork(gameRef.current, beltId);
@@ -4894,7 +4888,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           const outputCapacity = getEntityOutputCapacity(canvasGame, entity);
           const cycleRatePerSecond = getEntityCycleRatePerSimulationSecond(canvasGame, entity, canvasDisplayLookup);
           const selected = selectedEntityIds.includes(entity.id);
-          const interactionNeedsFullNode = selected || !denseNodeLodActive || Boolean(placement || blueprintPlacementId || connectionDraft);
+          const preserveMobileConstructionCenterDetail = nextMobileShell && game.settings.fontScale >= 2 && entity.buildingId === "construction_center";
+          const interactionNeedsFullNode = selected || preserveMobileConstructionCenterDetail || !denseNodeLodActive || Boolean(placement || blueprintPlacementId || connectionDraft);
           const zoomLod = getCanvasLod(viewportZoom);
           const lod: CanvasLod = interactionNeedsFullNode ? "full" : zoomLod === "full" ? "medium" : zoomLod;
           const acceptedInputItemIds = getAcceptedInputs(entity, canvasGame);
@@ -4972,7 +4967,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             id: entity.id,
             type: entity.kind,
             position: { ...entity.position },
-            measured: previous?.measured,
+            measured: previous?.data.lod === lod ? previous.measured : undefined,
             data: {
               ...commonNodeData,
               visualSignature,
@@ -5006,7 +5001,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeLogisticsEntityIdSet, activePlanetEntities, beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasDisplayLookup, canvasGame, canvasTopology.targetPortItemsByEntity, commonNodeData, connectionDraft, denseNodeLodActive, focusedBeltNetwork, focusedNetworkEntityIds, highlightedTaskId, lineFindDownstreamEntityIds, lineFindTrace, lineFindUpstreamEntityIds, locatedProductionEntityIds, performanceMonitor.isActive, performanceMonitor.recordCanvas, placement, productionLineFocus, selectedEntityIds, setNodes, taskHighlight.entityIds, viewportZoom]);
+  }, [activeLogisticsEntityIdSet, activePlanetEntities, beltNodeIndex.connectedInputsByTarget, beltNodeIndex.occupancy.input, beltNodeIndex.occupancy.output, blueprintPlacementId, canvasDisplayLookup, canvasGame, canvasTopology.targetPortItemsByEntity, commonNodeData, connectionDraft, denseNodeLodActive, focusedBeltNetwork, focusedNetworkEntityIds, game.settings.fontScale, highlightedTaskId, lineFindDownstreamEntityIds, lineFindTrace, lineFindUpstreamEntityIds, locatedProductionEntityIds, nextMobileShell, performanceMonitor.isActive, performanceMonitor.recordCanvas, placement, productionLineFocus, selectedEntityIds, setNodes, taskHighlight.entityIds, viewportZoom]);
 
   const handleNodesChange = useCallback((changes: Parameters<typeof onNodesChange>[0]) => {
     onNodesChange(changes);
@@ -6064,7 +6059,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     if (!first || !second) return true;
     const center = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
     const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
-    const zoom = Math.max(0.25, Math.min(1.8, gesture.initialViewport.zoom * distance / gesture.initialDistance));
+    const zoom = Math.max(canvasMinimumZoom, Math.min(1.8, gesture.initialViewport.zoom * distance / gesture.initialDistance));
     const worldCenter = {
       x: (gesture.initialCenter.x - gesture.initialViewport.x) / gesture.initialViewport.zoom,
       y: (gesture.initialCenter.y - gesture.initialViewport.y) / gesture.initialViewport.zoom,
@@ -6084,7 +6079,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     event.preventDefault();
     event.stopPropagation();
     return true;
-  }, [setViewport]);
+  }, [canvasMinimumZoom, setViewport]);
 
   const endCanvasMultiTouch = useCallback((event: React.PointerEvent<HTMLElement>): boolean => {
     if (event.pointerType !== "touch") return false;
@@ -6862,7 +6857,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onRedo: redoGame,
           onZoomIn: () => void zoomIn({ duration: game.settings.reducedMotion ? 0 : 140 }),
           onZoomOut: () => void zoomOut({ duration: game.settings.reducedMotion ? 0 : 140 }),
-          onFitView: () => void fitView({ padding: .18, duration: game.settings.reducedMotion ? 0 : 220 }),
+          onFitView: () => void fitView({ padding: .18, minZoom: canvasMinimumZoom, duration: game.settings.reducedMotion ? 0 : 220 }),
           onToggleMinimap: () => setMinimapCollapsed((collapsed) => !collapsed),
         }}
         factory={{
@@ -6955,7 +6950,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         }}
         onFactory={() => {
           if (mobileNavigation.route.kind === "factory" && !mobileNavigation.overlay) {
-            void fitView({ padding: .18, duration: game.settings.reducedMotion ? 0 : 220 });
+            void fitView({ padding: .18, minZoom: canvasMinimumZoom, duration: game.settings.reducedMotion ? 0 : 220 });
           } else {
             mobileNavigation.goFactory();
           }
@@ -7135,7 +7130,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               }
             }
             if (game.settings.allowDoubleClickZoom && !regionMode && event.target instanceof Element && event.target.classList.contains("react-flow__pane") && !placement && !blueprintPlacementId) {
-              void fitView({ padding: 0.18, duration: game.settings.reducedMotion ? 0 : 260 });
+              void fitView({ padding: 0.18, minZoom: canvasMinimumZoom, duration: game.settings.reducedMotion ? 0 : 260 });
             }
           }}
         >
@@ -7208,7 +7203,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onPaneClick={onPaneClick}
             onDrop={onCanvasDrop}
             onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
-            minZoom={0.25}
+            minZoom={canvasMinimumZoom}
             maxZoom={1.8}
             connectionRadius={connectionFlowRadius}
             snapToGrid
@@ -7249,7 +7244,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             nodesDraggable={nextMobileShell ? mobileCanvasMode === "layout" : !(coarsePointer && selectionMode)}
             zoomOnDoubleClick={false}
             deleteKeyCode={null}
-            fitViewOptions={{ padding: 0.18 }}
+            fitViewOptions={{ padding: 0.18, minZoom: canvasMinimumZoom }}
             onlyRenderVisibleElements={denseViewportCullingActive || shouldVirtualizeCanvas(activePlanetEntityCount, activePlanetBelts.length)}
             proOptions={{ hideAttribution: true }}
           >

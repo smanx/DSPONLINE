@@ -65,6 +65,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { useHorizontalPan } from "../hooks/useHorizontalPan";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { ItemCatalogPicker, RecipeCatalogPicker } from "./CatalogPicker";
+import { StableTextInput } from "./CompositionSafeInput";
 import { QuantityStepper } from "./QuantityStepper";
 import { getCampaignSnapshot, getCampaignTaskDeficits } from "../game/campaign";
 import { CONSTRUCTION, FUEL_ENERGY_MJ, ITEMS, PLANET_LIST, RECIPES, getBeltConstructionId, getBeltTier, getBuilding, getBuildingUpgradeTarget, getConstructionDefinition, getExtractorBuildingId, getFuelItemIdsForBuilding, getItem, getNextBeltTier, getPlanet, getProliferator, getRecipe, getRecipesForBuilding, getTechnology, isConveyorBeltId } from "../game/content";
@@ -1772,7 +1773,8 @@ function Fabricator({ game, focusItemId, onCraft, onCraftItem, onQueueCraftItem,
                 setSearchHistoryOpen(false);
               }}
             >
-              <label><Search size={13} /><input
+              <label><Search size={13} /><StableTextInput
+                draftId={`fabricator-search:${mode}`}
                 value={query}
                 maxLength={60}
                 autoComplete="off"
@@ -1780,7 +1782,7 @@ function Fabricator({ game, focusItemId, onCraft, onCraftItem, onQueueCraftItem,
                 aria-controls={searchHistoryOpen && recentSearches.length > 0 ? searchHistoryId : undefined}
                 onFocus={() => setSearchHistoryOpen(true)}
                 onClick={() => setSearchHistoryOpen(true)}
-                onChange={(event) => { setQuery(event.target.value); setFocusedHandcraftItemId(null); setSearchHistoryOpen(false); }}
+                onValueChange={(value) => { setQuery(value); setFocusedHandcraftItemId(null); setSearchHistoryOpen(false); }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                     rememberSearch(mode, query);

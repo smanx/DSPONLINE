@@ -70,6 +70,8 @@ import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 import { useAppLocale } from "../i18n/locale";
 import { useGameDialog } from "./GameDialogProvider";
 import { LogisticsManagementPanel, type LogisticsManagementPanelProps } from "./LogisticsManagementPanel";
+import { WorkspaceFrame } from "./WorkspaceFrame";
+import { StableTextArea, clearStableTextDraft } from "./CompositionSafeInput";
 import type { CanvasPerformanceFeatureId, CanvasPerformanceFeatures } from "../game/endgamePerformance";
 import { readSettingsCategoryPreference, writeSettingsCategoryPreference, type ConnectionHitArea, type ConnectionPointSize, type SettingsCategory } from "../game/uiPreferences";
 import { deleteLocalSaveManagedEntries, dismissLocalSaveRecoveryPrompt, requestLocalSavePersistentStorage, subscribeLocalSaveStorageStatus } from "../game/localSaveStore";
@@ -966,6 +968,7 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
     setFeedbackMessage(null);
     try {
       const id = await sendCloudFeedback(feedbackKind, feedback.trim(), diagnostics());
+      clearStableTextDraft("operations-feedback");
       setFeedback("");
       setFeedbackState("sent");
       setFeedbackMessage(`反馈已提交 · ${id.slice(0, 8)}`);
@@ -1001,7 +1004,7 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
       <section className="support-feedback-form">
         <header><MessageSquare size={15} /><span><strong>提交反馈</strong><small>会附带同一份匿名诊断摘要</small></span></header>
         <div className="support-feedback-kind" role="group" aria-label="反馈类型">{[["experience", "体验"], ["bug", "故障"], ["balance", "数值"], ["mobile", "手机端"]].map(([id, label]) => <button className={feedbackKind === id ? "active" : ""} type="button" onClick={() => setFeedbackKind(id)} key={id}>{label}</button>)}</div>
-        <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} maxLength={4000} placeholder="描述出现的问题或建议" aria-label="反馈内容" />
+        <StableTextArea draftId="operations-feedback" value={feedback} onValueChange={setFeedback} maxLength={4000} placeholder="描述出现的问题或建议" aria-label="反馈内容" />
         <footer><span className={feedbackState === "failed" ? "warning" : feedbackState === "sent" ? "ready" : ""}>{feedbackMessage ?? `${feedback.length}/4000`}</span><button className="primary" type="button" disabled={!feedback.trim() || feedbackState === "sending" || cloudState === "offline"} onClick={() => void submitFeedback()}>{feedbackState === "sending" ? <Activity size={14} /> : <Upload size={14} />}{feedbackState === "sending" ? "提交中" : "提交反馈"}</button></footer>
       </section>
       <section className="support-onboarding-reset"><GraduationCap size={16} /><span><strong>渐进教学</strong><small>重新打开 5 步基础操作和从手动采矿到白糖、跨星物流与戴森云的 13 步进阶教学。</small></span><button type="button" onClick={() => { resetOnboarding(); window.location.reload(); }}>重新开始教学</button></section>
@@ -1013,7 +1016,7 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
   if (!props.open) return null;
   const unlockedCount = props.game.achievements.unlockedIds.length;
   return (
-    <section className="operations-workspace" role="dialog" aria-modal="true" aria-label="运营中心">
+    <WorkspaceFrame className="operations-workspace" ariaLabel="运营中心" onRequestClose={props.onClose}>
       <header className="operations-header">
         <div className="operations-title">
           <i><Gauge size={20} /></i>
@@ -1046,6 +1049,6 @@ export function OperationsWorkspace(props: OperationsWorkspaceProps) {
         {props.tab === "packs" ? <ContentPacksPanel game={props.game} registry={props.contentPackRegistry} validation={props.modValidation} onValidate={props.onValidateMod} onExportTemplate={props.onExportModTemplate} onRegister={props.onRegisterContentPack} onSetEnabled={props.onSetContentPackEnabled} onRemove={props.onRemoveContentPack} /> : null}
         {props.tab === "support" ? <SupportPanel game={props.game} report={props.performanceReport} /> : null}
       </div>
-    </section>
+    </WorkspaceFrame>
   );
 }

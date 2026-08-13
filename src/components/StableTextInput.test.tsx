@@ -17,6 +17,14 @@ function TextAreaHarness({ draftId = "notes" }: { draftId?: string }) {
   return <StableTextArea aria-label="测试备注" draftId={draftId} value={value} onValueChange={setValue} />;
 }
 
+function ControlledHarness({ value, onValueChange }: { value: string; onValueChange: (value: string) => void }) {
+  return <StableTextInput aria-label="受控输入" draftId="controlled-reset" value={value} onValueChange={onValueChange} />;
+}
+
+function BlurCommitHarness({ value, onValueChange }: { value: string; onValueChange: (value: string) => void }) {
+  return <StableTextInput commitOnBlur aria-label={`${value || "未命名"}名称`} draftId="blur-commit" value={value} onValueChange={onValueChange} />;
+}
+
 function inputValue(input: HTMLInputElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
   act(() => {
@@ -114,5 +122,54 @@ describe("StableTextInput", () => {
     act(() => root.render(<TextAreaHarness draftId="planet-notes" />));
     expect(host.querySelector("textarea")!.value).toBe("绿糖出口");
     clearStableTextDraft("planet-notes");
+  });
+
+  it("survives parent refresh, viewport events, blur and a late compositionend", () => {
+    act(() => root.render(<Harness draftId="mobile-ime-sequence" />));
+    const input = host.querySelector("input")!;
+    act(() => {
+      input.focus();
+      input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    });
+    inputValue(input, "量子物");
+    act(() => {
+      root.render(<Harness draftId="mobile-ime-sequence" />);
+      window.dispatchEvent(new Event("resize"));
+      window.dispatchEvent(new Event("orientationchange"));
+      document.dispatchEvent(new Event("fullscreenchange"));
+      input.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+      input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "量子物流" }));
+    });
+    expect(input.value).toBe("量子物");
+    expect(readStableTextDraft("mobile-ime-sequence")).toBe("量子物");
+    clearStableTextDraft("mobile-ime-sequence");
+  });
+
+  it("accepts an intentional external clear while focused after ordinary input", () => {
+    const onValueChange = (next: string) => {
+      act(() => root.render(<ControlledHarness value={next} onValueChange={onValueChange} />));
+    };
+    act(() => root.render(<ControlledHarness value="" onValueChange={onValueChange} />));
+    const input = host.querySelector("input")!;
+    act(() => input.focus());
+    inputValue(input, "提交后的反馈");
+    expect(input.value).toBe("提交后的反馈");
+    act(() => root.render(<ControlledHarness value="" onValueChange={onValueChange} />));
+    expect(input.value).toBe("");
+    clearStableTextDraft("controlled-reset");
+  });
+
+  it("keeps a rename label stable while editing and commits once on blur", () => {
+    const changes: string[] = [];
+    const onValueChange = (next: string) => changes.push(next);
+    act(() => root.render(<BlurCommitHarness value="原名称" onValueChange={onValueChange} />));
+    const input = host.querySelector("input")!;
+    act(() => input.focus());
+    inputValue(input, "新名称");
+    expect(input.getAttribute("aria-label")).toBe("原名称名称");
+    expect(changes).toEqual([]);
+    act(() => input.blur());
+    expect(changes).toEqual(["新名称"]);
+    clearStableTextDraft("blur-commit");
   });
 });

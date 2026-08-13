@@ -4,6 +4,12 @@ import { registerGameCatalogEnglish } from "./catalogEnglish";
 import { registerCatalogEnglish, translateLegacyText } from "./legacyTranslations";
 
 describe("device-local English translations", () => {
+  it("translates the explicit statistics trend command without leaving mixed Han text", () => {
+    registerGameCatalogEnglish();
+    expect(translateLegacyText("趋势", "en")).toBe("Trend");
+    expect(translateLegacyText("查看铁矿石趋势", "en")).toBe("View Iron Ore trend");
+    expect(translateLegacyText("收起铁矿石趋势和详情", "en")).toBe("Collapse Iron Ore trend and details");
+  });
   it("keeps Chinese unchanged and translates core UI labels", () => {
     expect(translateLegacyText("生产资料库", "zh-CN")).toBe("生产资料库");
     expect(translateLegacyText("生产资料库", "en")).toBe("Production Library");

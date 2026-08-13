@@ -24,12 +24,18 @@ export function getTechnologyTierGrid(
   // tiers contain longer prerequisite and unlock labels; an average lets the
   // grid choose an extra row that only becomes too tall after the distant
   // `content-visibility:auto` card is materialized.
-  const estimatedCardHeight = compact
+  const naturalCardHeight = compact
     ? 120 + 60 * scale
     : 70 + 140 * scale;
   const gap = compact ? 6 : 10;
   const verticalChrome = compact ? 46 : 56;
-  const usableHeight = Math.max(estimatedCardHeight, viewportHeight - verticalChrome);
+  // A reduced shell-safe workspace can be shorter than the conservative card
+  // estimate at 150%/200%. Cap the CSS minimum to the real row budget; card
+  // width still grows with the font scale so text remains readable without
+  // introducing a hidden vertical scroll range below the construction dock.
+  const viewportCardBudget = Math.max(1, Math.floor(viewportHeight) - verticalChrome);
+  const estimatedCardHeight = Math.min(naturalCardHeight, viewportCardBudget);
+  const usableHeight = Math.max(estimatedCardHeight, viewportCardBudget);
   const rows = Math.max(1, Math.min(Math.max(1, count), Math.floor((usableHeight + gap) / (estimatedCardHeight + gap))));
   const columns = count === 0 ? 1 : Math.max(1, Math.ceil(count / rows));
   // Keep roughly the same characters per line as text scales up. More width is

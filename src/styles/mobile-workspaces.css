@@ -243,8 +243,8 @@
 .game-shell[data-mobile-shell="true"] .mobile-statistics-overview strong { font-size: calc(13px * var(--ui-font-scale, 1)); }
 .game-shell[data-mobile-shell="true"] .mobile-statistics-overview .warning strong { color: var(--coral); }
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs button strong { font-size: calc(12px * var(--ui-font-scale, 1)) !important; }
-.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs { position: sticky; z-index: 12; top: 0; display: grid; min-height: 92px; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 4px 6px; overflow: hidden; border-bottom: 1px solid var(--theme-border); background: var(--theme-canvas); }
-.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs button { display: flex; min-width: 0; min-height: 40px; align-items: center; justify-content: center; gap: 3px; padding: 2px 3px; overflow: hidden; font-size: calc(12px * var(--ui-font-scale, 1)); text-overflow: ellipsis; white-space: nowrap; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs { position: sticky; z-index: 12; top: 0; display: flex; min-height: 52px; gap: 4px; padding: 4px 6px; overflow: auto hidden; border-bottom: 1px solid var(--theme-border); background: var(--theme-canvas); scrollbar-width: thin; -webkit-mask-image: linear-gradient(90deg, transparent, #000 10px, #000 calc(100% - 10px), transparent); mask-image: linear-gradient(90deg, transparent, #000 10px, #000 calc(100% - 10px), transparent); }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs button { display: flex; min-width: 88px; min-height: 44px; flex: 0 0 auto; align-items: center; justify-content: center; gap: 3px; padding: 2px 8px; overflow: visible; font-size: calc(12px * var(--ui-font-scale, 1)); white-space: nowrap; }
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs button > svg { display: none; }
 .game-shell[data-mobile-shell="true"] .mobile-statistics :is(.statistics-content, .production-management, .network-overview) { height: auto; min-height: 0; overflow: visible !important; }
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-toolbar { position: sticky; z-index: 10; top: 92px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; padding: 7px 8px; background: var(--theme-surface); }
@@ -265,6 +265,8 @@
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row > span:nth-child(5)::before { content: "库存 "; color: var(--theme-text-muted); }
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row > .statistics-item { grid-row: 1 / span 3; align-self: center; text-align: left; }
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row > .statistics-item strong { font-size: calc(14px * var(--ui-font-scale, 1)); }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row .statistics-trend-command { min-width: 44px; min-height: 44px; margin-top: 6px; margin-left: 0; }
+.game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row .statistics-trend-command > span { font-size: calc(12px * var(--ui-font-scale, 1)) !important; }
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row > .node-count { grid-column: 1 / -1; text-align: left; }
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row > .node-count::before { content: "节点 "; color: var(--theme-text-muted); }
 .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-row-detail { grid-column: 1 / -1; padding-top: 7px; border-top: 1px solid var(--theme-border); color: var(--theme-text-muted); line-height: 1.5; }
@@ -411,6 +413,25 @@
 .game-shell[data-mobile-shell="true"] .dyson-planner-layout > * { width: auto; height: auto; max-height: none; overflow: visible; }
 .game-shell[data-mobile-shell="true"] .dyson-system-tabs { position: sticky; z-index: 8; top: 0; display: flex; min-height: 48px; overflow: auto hidden; background: var(--theme-canvas); }
 .game-shell[data-mobile-shell="true"] .dyson-system-tabs button { min-width: 110px; min-height: 44px; }
+.game-shell[data-mobile-shell="true"] .dyson-orbit-stage { grid-template-rows: auto minmax(320px, 1fr); }
+.game-shell[data-mobile-shell="true"] .dyson-stage-summary {
+  display: flex;
+  min-height: 48px;
+  justify-content: flex-start;
+  gap: 12px;
+  overflow: auto hidden;
+  padding: 0 10px;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+.game-shell[data-mobile-shell="true"] .dyson-stage-summary span {
+  min-width: max-content;
+  flex: 0 0 auto;
+  font-size: calc(12px * var(--ui-font-scale, 1));
+  overflow-wrap: normal;
+  white-space: nowrap;
+  word-break: keep-all;
+}
 .game-shell[data-mobile-shell="true"] .galaxy-ranking-layout,
 .game-shell[data-mobile-shell="true"] .galaxy-account-layout { display: grid; grid-template-columns: 1fr; height: auto; overflow: visible; }
 .game-shell[data-mobile-shell="true"] .galaxy-ranking-toolbar { display: grid; grid-template-columns: 1fr; height: auto; padding: 8px; }
@@ -426,18 +447,34 @@
 .game-shell[data-mobile-shell="true"] .galaxy-account-list { width: auto; max-height: none; overflow: visible; }
 
 html:not([data-native-ui-scale])[data-ui-font-scale="150"] .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs,
-html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); min-height: 180px; }
+html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs { min-height: 60px; }
 html:not([data-native-ui-scale])[data-ui-font-scale="150"] .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-toolbar,
-html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-toolbar { top: 180px; }
+html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-toolbar { top: 60px; }
 html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobile-shell="true"] :is(.mobile-planet-environment, .mobile-statistics .efficiency-summary-band, .mobile-statistics .power-summary-band, .mobile-statistics .planning-summary-band) { grid-template-columns: 1fr; }
 html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobile-shell="true"] :is(.operations-tabs, .galaxy-tabs) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 @media (max-width: 350px) {
-  .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); min-height: 180px; }
-  .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-toolbar { top: 180px; }
+  .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-tabs { min-height: 52px; }
+  .game-shell[data-mobile-shell="true"] .mobile-statistics .statistics-toolbar { top: 52px; }
   .game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-toolbar { grid-template-columns: 1fr; }
   .game-shell[data-mobile-shell="true"] .mobile-recipe .recipe-result-count { display: none; }
 }
+
+.game-shell[data-mobile-shell="true"] .mobile-blueprints.mobile-workspace--detail .blueprint-card > footer {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) 52px;
+}
+.game-shell[data-mobile-shell="true"] .mobile-blueprints.mobile-workspace--detail .blueprint-card > footer button {
+  min-height: 48px;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobile-shell="true"] .mobile-blueprints.mobile-workspace--detail .blueprint-card > footer button:not(.danger) > span {
+  display: none;
+}
+
+.game-shell[data-mobile-shell="true"] .construction-center-row { min-height: 132px; }
 
 .game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"] .mobile-workspace-scroll,
 .game-shell[data-mobile-shell="true"][data-compact-layout="compact-landscape"] .mobile-recipe,

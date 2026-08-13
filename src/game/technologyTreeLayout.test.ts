@@ -15,4 +15,14 @@ describe("technology tier horizontal layout", () => {
   it("never produces an empty or zero-width grid", () => {
     expect(getTechnologyTierGrid(0, "standard", 1.5, 0)).toMatchObject({ rows: 1, columns: 1, columnWidth: 375 });
   });
+
+  it("caps high-font card minimums to the actual shell-safe viewport", () => {
+    expect(getTechnologyTierGrid(1, "standard", 2, 326)).toMatchObject({
+      rows: 1,
+      columns: 1,
+      columnWidth: 500,
+      estimatedCardHeight: 270,
+    });
+    expect(getTechnologyTierGrid(1, "compact", 2, 240)).toMatchObject({ estimatedCardHeight: 194 });
+  });
 });

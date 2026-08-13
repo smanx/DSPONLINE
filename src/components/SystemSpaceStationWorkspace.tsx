@@ -5,6 +5,7 @@ import { canStartSystemSpaceStation, getInterstellarStationUpgradeStatus, getSpa
 import { formatQuantityCompact } from "../game/quantityFormat";
 import type { GameState, ItemId, SpaceStationOutputPortIndex, StarSystemId } from "../game/types";
 import { useGameDialog } from "./GameDialogProvider";
+import { WorkspaceFrame } from "./WorkspaceFrame";
 
 function quantity(value: string | number | undefined): string {
   if (typeof value === "number") return formatQuantityCompact(Math.max(0, Math.floor(value)));
@@ -55,7 +56,7 @@ export function SystemSpaceStationWorkspace({
   const readyUpgradeCount = stations.filter((entity) => getInterstellarStationUpgradeStatus(game, entity.id).blocker === "ready").length;
   if (!open) return null;
 
-  return <section className={`system-space-station-workspace${mobile ? " system-space-station-workspace--mobile" : ""}`} role="dialog" aria-modal="true" aria-label={`${system.name}空间站`}>
+  return <WorkspaceFrame className={`system-space-station-workspace${mobile ? " system-space-station-workspace--mobile" : ""}`} ariaLabel={`${system.name}空间站`} onRequestClose={onClose}>
     <header className="system-space-station-header">
       <div className="system-space-station-title"><i><Sparkles size={20} /></i><span><small>恒星系空间站</small><strong>{system.name}</strong></span><b>{statusLabel(station.status)}</b></div>
       <button type="button" className="system-space-station-close" onClick={onClose} aria-label="关闭空间站"><X size={18} /></button>
@@ -100,5 +101,5 @@ export function SystemSpaceStationWorkspace({
         </section>
     </div>
     <footer className="system-space-station-footer"><span><CircleOff size={14} />状态写入 GameState v44，旧物流路线不会被覆盖{isSpaceStationFreeBuildTestMode() ? " · 本地测试：升级与施工材料为 0" : ""}</span><button type="button" onClick={onClose}><ArrowLeft size={15} />返回工厂</button></footer>
-  </section>;
+  </WorkspaceFrame>;
 }

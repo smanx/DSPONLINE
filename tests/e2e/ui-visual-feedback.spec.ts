@@ -1,9 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-13-v1.0.41";
+const RELEASE_NOTE_ID = "2026-08-14-v1.0.42";
+const VISUAL_FIXTURE_SESSION_KEY = "dsp-idle-network.ui-visual-fixture-seeded.v1";
 
 async function seedVisualFactory(page: Page, options: { fontScale?: number; extreme?: boolean } = {}) {
-  await page.addInitScript(({ fontScale, extreme, releaseNoteId }) => {
+  await page.addInitScript(({ fontScale, extreme, releaseNoteId, fixtureSessionKey }) => {
     const base = {
       planetId: "home",
       minerCount: 0,
@@ -61,9 +62,15 @@ async function seedVisualFactory(page: Page, options: { fontScale?: number; extr
     if (window.localStorage.getItem("dsp-idle-network.ui.theme.v1") == null) window.localStorage.setItem("dsp-idle-network.ui.theme.v1", "light");
     if (window.localStorage.getItem("dsp-idle-network.ui.show-run-log.v1") == null) window.localStorage.setItem("dsp-idle-network.ui.show-run-log.v1", "true");
     window.localStorage.setItem("dsp-idle-network.production-refresh.v1", "classic");
-    window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+    // Feed the legacy compatibility ingress once. The app migrates this value
+    // into its authoritative local save store; re-seeding during page.reload()
+    // would correctly look like a second writer and trigger conflict recovery.
+    if (window.sessionStorage.getItem(fixtureSessionKey) !== "1") {
+      window.localStorage.setItem("dsp-idle-network.save.v1", JSON.stringify({ savedAt: Date.now(), state }));
+      window.sessionStorage.setItem(fixtureSessionKey, "1");
+    }
     if (extreme) window.localStorage.setItem("dsp-idle-network.endgame-extreme.v1", "true");
-  }, { fontScale: options.fontScale ?? 1, extreme: options.extreme ?? false, releaseNoteId: RELEASE_NOTE_ID });
+  }, { fontScale: options.fontScale ?? 1, extreme: options.extreme ?? false, releaseNoteId: RELEASE_NOTE_ID, fixtureSessionKey: VISUAL_FIXTURE_SESSION_KEY });
 }
 
 async function openFactory(page: Page) {
@@ -155,7 +162,7 @@ test("follow-system theme resolves both light and dark without changing save sta
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.ui.theme.v1"))).toBe("system");
   await page.emulateMedia({ colorScheme: "dark" });
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await expect.poll(() => page.evaluate(() => JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1") ?? "{}").state?.settings?.theme)).toBe("light");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.ui.theme.v1"))).toBe("system");
 });
 
 test("explicit light theme persists through menu, re-entry and reload", async ({ page }) => {

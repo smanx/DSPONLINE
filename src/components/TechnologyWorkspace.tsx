@@ -12,6 +12,7 @@ import { getTechnologyTierGrid } from "../game/technologyTreeLayout";
 import { formatQuantityCompact, formatQuantityExact } from "../game/quantityFormat";
 import { QuantityValue } from "./QuantityValue";
 import { PowerValue } from "./PowerValue";
+import { WorkspaceFrame } from "./WorkspaceFrame";
 
 interface TechnologyWorkspaceProps {
   open: boolean;
@@ -47,6 +48,7 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
   const mobileListRef = useRef<HTMLDivElement | null>(null);
   const mobileListScrollRef = useRef(0);
   const previousMobileSubviewRef = useRef<string | null>(null);
+  const autoFocusedMobileSubviewRef = useRef<string | null>(null);
   const horizontalPan = useHorizontalPan<HTMLDivElement>({ wheelMode: "horizontal" });
   const [treeViewportHeight, setTreeViewportHeight] = useState(560);
   useEffect(() => {
@@ -102,9 +104,12 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
   }, [mobile, mobileSubview, open]);
   useEffect(() => {
     if (!mobile || !open || !focusTechId || !onMobileOpenDetail) return;
+    const targetSubview = `tech:${focusTechId}`;
+    if (mobileSubview === targetSubview || autoFocusedMobileSubviewRef.current === targetSubview) return;
+    autoFocusedMobileSubviewRef.current = targetSubview;
     if (mobileListRef.current) mobileListRef.current.scrollTop = 0;
-    onMobileOpenDetail(`tech:${focusTechId}`);
-  }, [focusTechId, mobile, onMobileOpenDetail, open]);
+    onMobileOpenDetail(targetSubview);
+  }, [focusTechId, mobile, mobileSubview, onMobileOpenDetail, open]);
   if (!open) return null;
   const selected = getTechnology(game.research.selectedTechId);
   const paused = getTechnology(game.research.pausedTechId);
@@ -148,7 +153,7 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
     });
     const mobileProgressPercent = selectedProgressPercent;
     return (
-      <section className={`technology-workspace mobile-workspace mobile-technology${detailTechnology || detailInfinite ? " mobile-workspace--detail" : ""}`} role="dialog" aria-modal="true" aria-label="科技树">
+      <WorkspaceFrame className={`technology-workspace mobile-workspace mobile-technology${detailTechnology || detailInfinite ? " mobile-workspace--detail" : ""}`} ariaLabel="科技树" onRequestClose={onClose}>
         {detailInfinite ? <div className="mobile-workspace-scroll mobile-technology-detail mobile-infinite-research-detail">
           <header className="mobile-detail-heading"><i style={{ color: detailInfinite.color }}><Rocket size={20} /></i><span><small>白糖阶段 · 无限科技</small><strong>{detailInfinite.name}</strong></span></header>
           <p className="mobile-detail-summary">{detailInfinite.summary}</p>
@@ -208,12 +213,12 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
           })}</div></section> : null}
           {visibleTechnologies.length === 0 && visibleInfiniteResearch.length === 0 ? <div className="mobile-workspace-empty"><FlaskConical size={24} /><span>当前筛选下没有科技</span><small>{mobileFilter === "available" && !endgameUnlocked ? "无限科技前置：完成宇宙矩阵科技" : "可清除筛选查看全部普通与无限科技"}</small><button type="button" onClick={() => setMobileFilter("all")}>清除筛选</button></div> : null}</div>
         </div>}
-      </section>
+      </WorkspaceFrame>
     );
   }
 
   return (
-    <section className="technology-workspace" role="dialog" aria-modal="true" aria-label="科技树">
+    <WorkspaceFrame className="technology-workspace" ariaLabel="科技树" onRequestClose={onClose}>
       <header className="technology-header">
         <div className="technology-title">
           <i><FlaskConical size={20} /></i>
@@ -357,6 +362,6 @@ export function TechnologyWorkspace({ open, game, onClose, onSelect, onPauseRese
           );
         })}
       </div>
-    </section>
+    </WorkspaceFrame>
   );
 }

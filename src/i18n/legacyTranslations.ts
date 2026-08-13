@@ -960,6 +960,7 @@ const UI_EN: TranslationMap = {
   "生产历史趋势": "Production History Trend",
   "历史产量趋势": "Historical Output Trend",
   "选择趋势物品": "Select Trend Item",
+  "趋势": "Trend",
   "累计总产量": "Total Output",
   "累计总产量仅记录全星区权威值；请选择“全部星球”查看。": "Total output records authoritative all-system values only. Select All Planets to view it.",
   "暂无累计生产记录": "No Total Production Recorded",
@@ -2233,6 +2234,10 @@ function translateDynamicSystemText(body: string): string {
     const name = translateCatalogName(match[1]);
     if (name !== match[1]) return `${name} ×${match[2]}`;
   }
+  match = body.match(/^查看(.+)趋势(和详情)?$/);
+  if (match) return `View ${translateCatalogName(match[1])} trend${match[2] ? " and details" : ""}`;
+  match = body.match(/^收起(.+)趋势(和详情)?$/);
+  if (match) return `Collapse ${translateCatalogName(match[1])} trend${match[2] ? " and details" : ""}`;
   match = body.match(/^查看(.+)配方$/);
   if (match) return `View ${translateCatalogName(match[1])} recipe`;
   match = body.match(/^查看(.+)$/);

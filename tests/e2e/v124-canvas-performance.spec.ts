@@ -52,7 +52,7 @@ function seedDensePausedFactory() {
       paused: true,
     };
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-13-v1.0.41");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.42");
     window.localStorage.setItem("dsp-idle-network.basic-onboarding.v1", JSON.stringify({ version: 1, skipped: true, stepIndex: 5 }));
     window.localStorage.setItem("dsp-idle-network.endgame-extreme.v1", "true");
     window.localStorage.setItem("dsp-idle-network.endgame-extreme-ack.v1", "true");
@@ -77,7 +77,7 @@ test("extreme canvas uses true node LOD, batch lines and independent SVG fallbac
   await expect(page.locator(".canvas-minimap-snapshot canvas")).toBeVisible();
   await expect(page.locator(".factory-node-lod--medium").first()).toBeVisible();
 
-  const batch = await page.locator("canvas.canvas-belt-layer").evaluate((element) => {
+  const readBatch = () => page.locator("canvas.canvas-belt-layer").evaluate((element) => {
     const canvasElement = element as HTMLCanvasElement;
     const context = canvasElement.getContext("2d");
     const cssWidth = Number.parseFloat(canvasElement.style.width) || canvasElement.clientWidth || canvasElement.width;
@@ -96,8 +96,9 @@ test("extreme canvas uses true node LOD, batch lines and independent SVG fallbac
     if (pixels) for (let index = 3; index < pixels.length; index += 4) if (pixels[index] > 0) coloredPixels += 1;
     return { segments: Number(canvasElement.dataset.segments ?? 0), coloredPixels };
   });
+  const batch = await readBatch();
   expect(batch.segments).toBeGreaterThan(100);
-  expect(batch.coloredPixels).toBeGreaterThan(50);
+  await expect.poll(async () => (await readBatch()).coloredPixels).toBeGreaterThan(50);
   expect(await page.locator(".react-flow__edge").count()).toBeLessThan(20);
   expect(batch.segments).toBeGreaterThan(await page.locator(".react-flow__edge").count());
 

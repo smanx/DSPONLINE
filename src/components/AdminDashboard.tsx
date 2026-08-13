@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import "../admin.css";
+import { StableTextInput } from "./CompositionSafeInput";
 
 interface AnalyticsDay {
   day: string;
@@ -400,7 +401,7 @@ export function AdminDashboard() {
       <main className="admin-login-shell">
         <form className="admin-login" onSubmit={authenticate}>
           <span className="admin-brand"><ShieldCheck size={24} /><strong>DSP极简网络</strong><small>运营数据后台</small></span>
-          <label><span>管理员凭据</span><div><KeyRound size={17} /><input type="password" value={draftToken} onChange={(event) => setDraftToken(event.target.value)} autoComplete="current-password" autoFocus /></div></label>
+          <label><span>管理员凭据</span><div><KeyRound size={17} /><StableTextInput sensitive draftId="admin-credential" type="password" value={draftToken} onValueChange={setDraftToken} autoComplete="current-password" autoFocus /></div></label>
           {error ? <p role="alert">{error}</p> : null}
           <button type="submit" disabled={!draftToken.trim() || loading}>{loading ? <RefreshCw className="spin" size={17} /> : <ShieldCheck size={17} />}{loading ? "正在验证" : "进入后台"}</button>
           <a href="/">返回游戏</a>
@@ -506,14 +507,14 @@ export function AdminDashboard() {
           </dl>
           <div className="admin-operation-form">
             <button type="button" disabled={operationBusy} onClick={() => void previewCloudPrune()}>生成裁剪预览</button>
-            {prunePreview ? <><small>保留每槽最近 {prunePreview.limit} 条；待删除 {prunePreview.deletionCount} 条。预览 ID {prunePreview.previewId.slice(0, 12)}</small><input value={pruneConfirmation} onChange={(event) => setPruneConfirmation(event.target.value)} placeholder={`输入 ${prunePreview.confirmation}`} /><button className="danger" type="button" disabled={operationBusy || pruneConfirmation !== prunePreview.confirmation} onClick={() => void applyCloudPrune()}>确认事务裁剪</button></> : null}
+            {prunePreview ? <><small>保留每槽最近 {prunePreview.limit} 条；待删除 {prunePreview.deletionCount} 条。预览 ID {prunePreview.previewId.slice(0, 12)}</small><StableTextInput sensitive draftId="admin-prune-confirmation" value={pruneConfirmation} onValueChange={setPruneConfirmation} placeholder={`输入 ${prunePreview.confirmation}`} /><button className="danger" type="button" disabled={operationBusy || pruneConfirmation !== prunePreview.confirmation} onClick={() => void applyCloudPrune()}>确认事务裁剪</button></> : null}
           </div>
         </article>
 
         <article className="admin-meta-panel admin-account-panel">
           <header><div><small>账号处置</small><strong>精确账号 ID、最小化摘要与审计</strong></div><em>不读取存档正文</em></header>
           <form className="admin-operation-form" onSubmit={(event) => void lookupAccount(event)}>
-            <input value={accountIdDraft} onChange={(event) => setAccountIdDraft(event.target.value)} placeholder="精确 account ID" autoComplete="off" />
+            <StableTextInput draftId="admin-account-id" value={accountIdDraft} onValueChange={setAccountIdDraft} placeholder="精确 account ID" autoComplete="off" />
             <button type="submit" disabled={operationBusy || !accountIdDraft.trim()}>只读查询</button>
           </form>
           {account ? <div className="admin-account-summary">
@@ -528,7 +529,7 @@ export function AdminDashboard() {
                 <option value="revoke-sessions">撤销全部会话</option><option value="disable-login">限制登录 24 小时</option><option value="enable-login">恢复登录</option><option value="restrict-leaderboard">移除排行榜</option><option value="restore-leaderboard">批准复核（需新修订）</option><option value="delete-account">彻底注销（需 24h 内备份）</option>
               </select>
               <small>二次确认：CONFIRM:{accountAction}:{account.accountId}</small>
-              <input value={accountConfirmation} onChange={(event) => setAccountConfirmation(event.target.value)} placeholder="输入完整二次确认文字" />
+              <StableTextInput sensitive draftId="admin-account-confirmation" value={accountConfirmation} onValueChange={setAccountConfirmation} placeholder="输入完整二次确认文字" />
               <button className="danger" type="button" disabled={operationBusy || accountConfirmation !== `CONFIRM:${accountAction}:${account.accountId}`} onClick={() => void applyAccountAction()}>应用并写审计</button>
             </div>
           </div> : null}

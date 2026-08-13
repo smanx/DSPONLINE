@@ -5,6 +5,8 @@ import { formatQuantityCompact, formatQuantityExact } from "../game/quantityForm
 import type { BlueprintDefinition, BlueprintMirror, BlueprintRotation, CanvasRegion, CanvasViewport, GameState, PlanetId, RecipeId } from "../game/types";
 import { Fragment, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { useGameDialog } from "./GameDialogProvider";
+import { WorkspaceFrame } from "./WorkspaceFrame";
+import { StableTextArea, StableTextInput, clearStableTextDraft } from "./CompositionSafeInput";
 
 function blueprintBuildingSummary(blueprint: BlueprintDefinition): string[] {
   const counts = new Map<string, number>();
@@ -159,7 +161,7 @@ export function CanvasRegionEditor({ region, onChange, onRemove, onClose }: {
   return (
     <section className="canvas-region-editor nodrag nopan" aria-label="生产区域设置">
       <Palette size={15} />
-      <label><span>区域名称</span><input key={region.id} defaultValue={region.name} maxLength={28} onBlur={(event) => onChange({ name: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
+      <label><span>区域名称</span><StableTextInput commitOnBlur draftId={`canvas-region-name:${region.id}`} value={region.name} onValueChange={(name) => onChange({ name })} maxLength={28} onBlur={() => clearStableTextDraft(`canvas-region-name:${region.id}`)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
       <label className="canvas-region-editor__color"><span>背景</span><input type="color" value={region.fillColor} onChange={(event) => onChange({ fillColor: event.target.value })} /></label>
       <label className="canvas-region-editor__color"><span>边框</span><input type="color" value={region.borderColor} onChange={(event) => onChange({ borderColor: event.target.value })} /></label>
       <button className="danger" type="button" onClick={onRemove} title="删除生产区域" aria-label="删除生产区域"><Trash2 size={14} /></button>
@@ -498,7 +500,7 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
   const visibleBlueprints = detailBlueprintId ? game.blueprints.filter((blueprint) => blueprint.id === detailBlueprintId) : game.blueprints;
   const pendingCount = game.constructionQueue.length;
   return (
-    <section className={`blueprint-workspace${mobile ? ` mobile-workspace mobile-blueprints${detailBlueprintId ? " mobile-workspace--detail" : ""}` : ""}`} role="dialog" aria-modal="true" aria-label="蓝图与待建施工">
+    <WorkspaceFrame className={`blueprint-workspace${mobile ? ` mobile-workspace mobile-blueprints${detailBlueprintId ? " mobile-workspace--detail" : ""}` : ""}`} ariaLabel="蓝图与待建施工" onRequestClose={onClose}>
       <header className="blueprint-header">
         <div className="blueprint-title"><i><Layers3 size={20} /></i><div><span>生产网络模板</span><strong>{activeTab === "library" ? "蓝图库" : "待建与补足"}</strong></div></div>
         <div className="blueprint-headline"><span>模板 <strong>{game.blueprints.length}</strong></span><span>施工队列 <strong>{game.constructionQueue.length}</strong></span><span>部署行星 <strong>{getPlanet(game.activePlanetId).name}</strong></span></div>
@@ -530,7 +532,7 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
       <div className="blueprint-library-shell">
       {importOpen ? <section className="blueprint-import-panel" aria-label="蓝图导入">
         <header><div><Upload size={15} /><span><strong>导入蓝图</strong><small>交换文件会校验当前内容目录中的设备、物品和配方。</small></span></div><button type="button" onClick={() => fileInputRef.current?.click()}><Upload size={13} />选择文件</button></header>
-        <textarea value={importText} onChange={(event) => setImportText(event.target.value)} placeholder="粘贴蓝图交换 JSON" aria-label="粘贴蓝图交换 JSON" />
+        <StableTextArea draftId="blueprint-import-json" value={importText} onValueChange={setImportText} placeholder="粘贴蓝图交换 JSON" aria-label="粘贴蓝图交换 JSON" />
         <footer><span className={importMessage?.startsWith("已导入") ? "ready" : ""}>{importMessage ?? "导出的蓝图可以直接在此粘贴。"}</span><button type="button" disabled={!importText.trim()} onClick={() => importRaw(importText)}><Check size={13} />导入到蓝图库</button></footer>
       </section> : null}
       <div className="blueprint-library">
@@ -547,7 +549,7 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
             <article className={`blueprint-card${viewMode === "compact" && !detailBlueprintId ? " blueprint-card--compact" : ""}`} key={blueprint.id}>
               <header>
                 <i><Layers3 size={18} /></i>
-                <label><span>蓝图名称</span><input defaultValue={blueprint.name} aria-label={`${blueprint.name}名称`} onBlur={(event) => onRename(blueprint.id, event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
+                <label><span>蓝图名称</span><StableTextInput commitOnBlur draftId={`blueprint-name:${blueprint.id}`} value={blueprint.name} onValueChange={(name) => onRename(blueprint.id, name)} aria-label={`${blueprint.name}名称`} onBlur={() => clearStableTextDraft(`blueprint-name:${blueprint.id}`)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
                 <em>{blueprint.entities.length} 设备 · {blueprint.resourceAnchors?.length ?? 0} 资源锚点 · {blueprint.belts.length} 线路 · {blueprint.externalPorts?.length ?? 0} 外部端口</em>
               </header>
               <div className="blueprint-composition">
@@ -657,6 +659,6 @@ export function BlueprintWorkspace({ open, game, onClose, onDeploy, onRemove, on
           })}
         </div>}
       </section>}
-    </section>
+    </WorkspaceFrame>
   );
 }

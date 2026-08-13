@@ -56,6 +56,22 @@ export interface AccessibleDialogProps {
   ariaDescribedBy?: string;
 }
 
+export interface AccessibleModalSurfaceOptions {
+  open: boolean;
+  boundaryRef: RefObject<HTMLElement | null>;
+  surfaceRef: RefObject<HTMLElement | null>;
+  riskPolicy?: AccessibleDialogRiskPolicy;
+  onRequestClose: (reason: AccessibleDialogCloseReason) => void;
+  initialFocusRef?: RefObject<HTMLElement | null>;
+  returnFocusRef?: RefObject<HTMLElement | null>;
+  getBackgroundElements?: AccessibleDialogBackgroundResolver;
+  /** Extra chrome that belongs to the modal interaction even when it is not a DOM child. */
+  getAdditionalFocusRoots?: (surface: HTMLElement) => Iterable<HTMLElement>;
+  externalCloseEventName?: string;
+  /** Rebuilds the lifecycle when an inline host or portal target changes. */
+  lifecycleKey?: unknown;
+}
+
 interface InertSnapshot {
   count: number;
   inertAttribute: string | null;
@@ -272,58 +288,37 @@ function sanitizedReactId(value: string): string {
   return sanitized || "dialog";
 }
 
-export function AccessibleDialog({
+export function useAccessibleModalSurface({
   open,
-  title,
-  description,
-  children,
-  actions,
-  role = "dialog",
+  boundaryRef,
+  surfaceRef,
   riskPolicy = "dismissible",
-  dismissOnBackdrop,
   onRequestClose,
   initialFocusRef,
   returnFocusRef,
-  portalTarget,
   getBackgroundElements,
+  getAdditionalFocusRoots,
   externalCloseEventName,
-  id,
-  className = "",
-  backdropClassName = "",
-  layout = "structured",
-  ariaLabel,
-  ariaLabelledBy,
-  ariaDescribedBy,
-}: AccessibleDialogProps) {
-  const generatedId = useId();
-  const boundaryRef = useRef<HTMLDivElement>(null);
-  const surfaceRef = useRef<HTMLElement>(null);
+  lifecycleKey,
+}: AccessibleModalSurfaceOptions): void {
   const lastFocusedInsideRef = useRef<HTMLElement | null>(null);
-  const backdropGestureRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
-  const modalTokenRef = useRef(Symbol("accessible-dialog"));
+  const modalTokenRef = useRef(Symbol("accessible-modal-surface"));
   const latestRef = useRef({
-    dismissOnBackdrop,
     getBackgroundElements,
+    getAdditionalFocusRoots,
     initialFocusRef,
     onRequestClose,
     returnFocusRef,
     riskPolicy,
   });
   latestRef.current = {
-    dismissOnBackdrop,
     getBackgroundElements,
+    getAdditionalFocusRoots,
     initialFocusRef,
     onRequestClose,
     returnFocusRef,
     riskPolicy,
   };
-
-  const resolvedId = id ?? `accessible-dialog-${sanitizedReactId(generatedId)}`;
-  const titleId = `${resolvedId}-title`;
-  const descriptionId = `${resolvedId}-description`;
-  const isBareLayout = layout === "bare";
-  const canUseDom = typeof document !== "undefined";
-  const resolvedPortalTarget = canUseDom ? (portalTarget ?? document.body) : null;
 
   useLayoutEffect(() => {
     const boundary = boundaryRef.current;
@@ -341,6 +336,26 @@ export function AccessibleDialog({
       boundary,
       latestRef.current.getBackgroundElements,
     );
+    const resolveAdditionalFocusRoots = (): HTMLElement[] => [...new Set(
+      latestRef.current.getAdditionalFocusRoots
+        ? Array.from(latestRef.current.getAdditionalFocusRoots(surface))
+        : [],
+    )].filter((element) => (
+      element instanceof HTMLElement
+      && element.ownerDocument === ownerDocument
+      && element.isConnected
+      && element !== surface
+      && !surface.contains(element)
+    ));
+    const modalContains = (element: HTMLElement | null): boolean => Boolean(
+      element && (surface.contains(element) || resolveAdditionalFocusRoots().some((root) => root.contains(element))),
+    );
+    const modalTabbables = (): HTMLElement[] => [surface, ...resolveAdditionalFocusRoots()]
+      .flatMap((root) => getTabbableElements(root))
+      .sort((left, right) => {
+        if (left === right) return 0;
+        return left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+      });
     let redirectingFocus = false;
     let escapeRequested = false;
 
@@ -359,7 +374,11 @@ export function AccessibleDialog({
       ? ownerDocument.activeElement
       : surface;
 
-    for (const element of backgroundElements) acquireInert(element);
+    const initialAdditionalFocusRoots = resolveAdditionalFocusRoots();
+    const inertElements = backgroundElements.filter((element) => !initialAdditionalFocusRoots.some((root) => (
+      element === root || element.contains(root) || root.contains(element)
+    )));
+    for (const element of inertElements) acquireInert(element);
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isTopModal(token, ownerDocument)) return;
@@ -375,7 +394,7 @@ export function AccessibleDialog({
       }
       if (event.key !== "Tab" || event.altKey || event.ctrlKey || event.metaKey) return;
 
-      const tabbable = getTabbableElements(surface);
+      const tabbable = modalTabbables();
       if (tabbable.length === 0) {
         event.preventDefault();
         event.stopPropagation();
@@ -402,13 +421,13 @@ export function AccessibleDialog({
     const onFocusIn = (event: FocusEvent) => {
       if (!isTopModal(token, ownerDocument) || redirectingFocus) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
-      if (target && surface.contains(target)) {
+      if (modalContains(target)) {
         lastFocusedInsideRef.current = target;
         return;
       }
       redirectingFocus = true;
       const lastFocused = lastFocusedInsideRef.current;
-      if (!lastFocused || !surface.contains(lastFocused) || !focusWithoutScrolling(lastFocused)) {
+      if (!lastFocused || !modalContains(lastFocused) || !focusWithoutScrolling(lastFocused)) {
         focusWithoutScrolling(getTabbableElements(surface)[0] ?? surface);
       }
       redirectingFocus = false;
@@ -432,7 +451,7 @@ export function AccessibleDialog({
       ownerDocument.removeEventListener("focusin", onFocusIn, true);
       if (externalCloseEventName) ownerDocument.defaultView?.removeEventListener(externalCloseEventName, onExternalClose, true);
       unregisterModal(token);
-      for (const element of backgroundElements.reverse()) releaseInert(element);
+      for (const element of inertElements.reverse()) releaseInert(element);
       unlockDocumentScroll(ownerDocument);
       lastFocusedInsideRef.current = null;
       if (
@@ -444,13 +463,72 @@ export function AccessibleDialog({
         focusWithoutScrolling(returnTarget);
       }
     };
-  }, [externalCloseEventName, open, resolvedPortalTarget]);
+  }, [boundaryRef, externalCloseEventName, lifecycleKey, open, surfaceRef]);
+}
+
+export function AccessibleDialog({
+  open,
+  title,
+  description,
+  children,
+  actions,
+  role = "dialog",
+  riskPolicy = "dismissible",
+  dismissOnBackdrop,
+  onRequestClose,
+  initialFocusRef,
+  returnFocusRef,
+  portalTarget,
+  getBackgroundElements,
+  externalCloseEventName,
+  id,
+  className = "",
+  backdropClassName = "",
+  layout = "structured",
+  ariaLabel,
+  ariaLabelledBy,
+  ariaDescribedBy,
+}: AccessibleDialogProps) {
+  const generatedId = useId();
+  const boundaryRef = useRef<HTMLDivElement>(null);
+  const surfaceRef = useRef<HTMLElement>(null);
+  const backdropGestureRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const requestRef = useRef({
+    dismissOnBackdrop,
+    onRequestClose,
+    riskPolicy,
+  });
+  requestRef.current = {
+    dismissOnBackdrop,
+    onRequestClose,
+    riskPolicy,
+  };
+
+  const resolvedId = id ?? `accessible-dialog-${sanitizedReactId(generatedId)}`;
+  const titleId = `${resolvedId}-title`;
+  const descriptionId = `${resolvedId}-description`;
+  const isBareLayout = layout === "bare";
+  const canUseDom = typeof document !== "undefined";
+  const resolvedPortalTarget = canUseDom ? (portalTarget ?? document.body) : null;
+
+  useAccessibleModalSurface({
+    open,
+    boundaryRef,
+    surfaceRef,
+    riskPolicy,
+    onRequestClose,
+    initialFocusRef,
+    returnFocusRef,
+    getBackgroundElements,
+    externalCloseEventName,
+    lifecycleKey: resolvedPortalTarget,
+  });
 
   if (!open || !resolvedPortalTarget) return null;
 
   const shouldDismissOnBackdrop = dismissOnBackdrop ?? riskPolicy === "dismissible";
   const requestBackdropClose = () => {
-    if (shouldDismissOnBackdrop) latestRef.current.onRequestClose("backdrop");
+    if (shouldDismissOnBackdrop) requestRef.current.onRequestClose("backdrop");
   };
 
   return createPortal(

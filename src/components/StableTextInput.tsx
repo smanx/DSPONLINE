@@ -22,9 +22,10 @@ export function readStableTextDraft(draftId: string): string | null {
 export const StableTextInput = forwardRef<HTMLInputElement, Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange"> & {
   draftId: string;
   sensitive?: boolean;
+  commitOnBlur?: boolean;
   value: string;
   onValueChange: (value: string) => void;
-}>(function StableTextInput({ draftId, sensitive = false, value, onValueChange, onBlur, onFocus, ...props }, forwardedRef) {
+}>(function StableTextInput({ draftId, sensitive = false, commitOnBlur = false, value, onValueChange, onBlur, onFocus, ...props }, forwardedRef) {
   const restoredDraftRef = useRef<string | null | undefined>(undefined);
   if (restoredDraftRef.current === undefined) {
     restoredDraftRef.current = sensitive ? null : volatileDrafts.get(draftId) ?? null;
@@ -35,28 +36,24 @@ export const StableTextInput = forwardRef<HTMLInputElement, Omit<InputHTMLAttrib
   const latestExternalRef = useRef(value);
   const initializedFromDraftRef = useRef(restoredDraftRef.current !== null);
   useEffect(() => {
+    const previousExternal = latestExternalRef.current;
     latestExternalRef.current = value;
     if (initializedFromDraftRef.current) {
       initializedFromDraftRef.current = false;
       return;
     }
-    if (!composingRef.current && !focusedRef.current) setDraft(value);
+    if (!composingRef.current && (!focusedRef.current || value !== previousExternal)) setDraft(value);
   }, [value]);
   useEffect(() => {
     if (!sensitive) volatileDrafts.set(draftId, draft);
   }, [draft, draftId, sensitive]);
   useEffect(() => {
     const restored = restoredDraftRef.current;
-    if (typeof restored === "string" && restored !== value) onValueChange(restored);
+    if (!commitOnBlur && typeof restored === "string" && restored !== value) onValueChange(restored);
     // A page-lifetime draft is consumed only to restore this mount. Later
     // external updates are handled by the focused/composition guards above.
     restoredDraftRef.current = null;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const commit = (next: string) => {
-    setDraft(next);
-    if (!sensitive) volatileDrafts.set(draftId, next);
-    onValueChange(next);
-  };
   return <input
     ref={forwardedRef}
     {...props}
@@ -66,18 +63,24 @@ export const StableTextInput = forwardRef<HTMLInputElement, Omit<InputHTMLAttrib
       const next = event.currentTarget.value;
       setDraft(next);
       if (!sensitive) volatileDrafts.set(draftId, next);
-      if (!composingRef.current) onValueChange(next);
+      if (!composingRef.current && !commitOnBlur) onValueChange(next);
     }}
     onCompositionStart={() => { composingRef.current = true; }}
     onCompositionEnd={(event) => {
       composingRef.current = false;
-      commit(event.currentTarget.value);
+      const next = event.currentTarget.value;
+      setDraft(next);
+      if (!sensitive) volatileDrafts.set(draftId, next);
+      if (!commitOnBlur) onValueChange(next);
     }}
     onBlur={(event) => {
       focusedRef.current = false;
-      if (composingRef.current || event.currentTarget.value !== latestExternalRef.current) {
+      const next = event.currentTarget.value;
+      if (composingRef.current || next !== latestExternalRef.current) {
         composingRef.current = false;
-        commit(event.currentTarget.value);
+        setDraft(next);
+        if (!sensitive) volatileDrafts.set(draftId, next);
+        if (commitOnBlur || next !== latestExternalRef.current) onValueChange(next);
       }
       onBlur?.(event);
     }}
@@ -101,12 +104,13 @@ export const StableTextArea = forwardRef<HTMLTextAreaElement, Omit<TextareaHTMLA
   const latestExternalRef = useRef(value);
   const initializedFromDraftRef = useRef(restoredDraftRef.current !== null);
   useEffect(() => {
+    const previousExternal = latestExternalRef.current;
     latestExternalRef.current = value;
     if (initializedFromDraftRef.current) {
       initializedFromDraftRef.current = false;
       return;
     }
-    if (!composingRef.current && !focusedRef.current) setDraft(value);
+    if (!composingRef.current && (!focusedRef.current || value !== previousExternal)) setDraft(value);
   }, [value]);
   useEffect(() => {
     if (!sensitive) volatileDrafts.set(draftId, draft);

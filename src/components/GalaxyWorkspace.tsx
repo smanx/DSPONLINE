@@ -58,6 +58,7 @@ import { formatQuantityCompact, formatQuantityExact } from "../game/quantityForm
 import { PowerValue } from "./PowerValue";
 import { StableTextInput, clearStableTextDraft } from "./CompositionSafeInput";
 import { CloudSaveStatusCenter } from "./CloudSaveStatusCenter";
+import { WorkspaceFrame } from "./WorkspaceFrame";
 import { cloudSaveCapacityDetails, type CloudSaveCapacityDetails } from "../game/cloudSaveCapacity";
 import { cloudSyncStatusFromUpload, writeCloudSyncStatus } from "../game/cloudSyncStatus";
 import { exportTextFile } from "../game/fileExport";
@@ -763,7 +764,7 @@ export function GalaxyWorkspace({
   };
 
   return (
-    <section className="galaxy-workspace" role="dialog" aria-modal="true" aria-label="银河网络">
+    <WorkspaceFrame className="galaxy-workspace" ariaLabel="银河网络" onRequestClose={onClose}>
       <header className="galaxy-header">
         <div className="galaxy-title">
           <i><Globe2 size={20} /></i>
@@ -979,6 +980,6 @@ export function GalaxyWorkspace({
           </section>
         </div>
       )}
-    </section>
+    </WorkspaceFrame>
   );
 }

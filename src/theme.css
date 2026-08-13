@@ -13,7 +13,13 @@ html[data-theme="light"] {
   --theme-overlay: rgba(42, 55, 49, .34);
   --theme-text: #17201c;
   --theme-text-soft: #3e4c45;
-  --theme-text-muted: #65766d;
+  --theme-text-muted: #52645b;
+  --text-secondary: #52645b;
+  --text-tertiary: #586961;
+  --text-disabled: #64766d;
+  --accent-text: #126b67;
+  --status-success-text: #225f3b;
+  --status-warning-text: #805800;
   --theme-text-on-accent: #ffffff;
   --theme-border: #c9d2cd;
   --theme-border-subtle: #dbe3df;
@@ -42,7 +48,7 @@ html[data-theme="light"] {
   --cyan-deep: #0b625e;
   --yellow: #9a6a08;
   --coral: #b24736;
-  --green: #27854b;
+  --green: #225f3b;
   --blue: #28799f;
 }
 

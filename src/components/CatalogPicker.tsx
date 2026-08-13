@@ -1,38 +1,22 @@
 import { ArrowRight, Check, ChevronDown, Clock3, PackageOpen, Search, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useRef, useState } from "react";
 import { getItem } from "../game/content";
 import type { ItemDefinition, ItemId, RecipeDefinition, RecipeId } from "../game/types";
 import { ItemGlyph } from "./ItemReference";
 import { StableTextInput, clearStableTextDraft } from "./CompositionSafeInput";
+import { AccessibleDialog } from "./AccessibleDialog";
 
 const RECIPE_CATALOG_DRAFT_ID = "catalog-picker-recipe-search";
 
-function usePicker(open: boolean, onClose: () => void) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const width = Math.max(1, Math.round(window.visualViewport?.width ?? window.innerWidth));
-    const height = Math.max(1, Math.round(window.visualViewport?.height ?? window.innerHeight));
-    const compactLayout = width < 900 || (height < 560 && width < 1100);
-    const timer = compactLayout ? 0 : window.setTimeout(() => inputRef.current?.focus(), 0);
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      if (timer) window.clearTimeout(timer);
-      window.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [onClose, open]);
-  return inputRef;
+function usePickerInputRef() {
+  return useRef<HTMLInputElement>(null);
 }
 
-function PickerPortal({ children }: { children: React.ReactNode }) {
-  return typeof document === "undefined" ? children : createPortal(children, document.body);
+function shouldAutoFocusCatalogSearch(): boolean {
+  if (typeof window === "undefined") return false;
+  const width = Math.max(1, Math.round(window.visualViewport?.width ?? window.innerWidth));
+  const height = Math.max(1, Math.round(window.visualViewport?.height ?? window.innerHeight));
+  return width >= 900 && !(height < 560 && width < 1100);
 }
 
 export function RecipeCatalogPicker({ value, recipes, onChange, compact = false }: {
@@ -44,7 +28,7 @@ export function RecipeCatalogPicker({ value, recipes, onChange, compact = false 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const close = () => { setOpen(false); setQuery(""); clearStableTextDraft(RECIPE_CATALOG_DRAFT_ID); };
-  const inputRef = usePicker(open, close);
+  const inputRef = usePickerInputRef();
   const current = recipes.find((recipe) => recipe.id === value) ?? recipes[0];
   const term = query.trim().toLocaleLowerCase("zh-CN");
   const filtered = recipes.filter((recipe) => {
@@ -57,8 +41,7 @@ export function RecipeCatalogPicker({ value, recipes, onChange, compact = false 
       <button className={`catalog-picker-trigger${compact ? " catalog-picker-trigger--compact" : ""}`} type="button" onClick={() => setOpen(true)} aria-haspopup="dialog" aria-label="选择当前配方">
         <span>{current?.name ?? "选择配方"}</span><ChevronDown size={13} />
       </button>
-      {open ? <PickerPortal><div className="catalog-picker-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
-        <section className="catalog-picker" role="dialog" aria-modal="true" aria-label="配方选择面板">
+      <AccessibleDialog open={open} title="配方选择面板" layout="bare" ariaLabel="配方选择面板" className="catalog-picker" backdropClassName="catalog-picker-backdrop" initialFocusRef={shouldAutoFocusCatalogSearch() ? inputRef : undefined} onRequestClose={close}>
           <header><div><span>生产目录</span><strong>选择配方</strong></div><button type="button" onClick={close} title="关闭配方选择" aria-label="关闭配方选择"><X size={16} /></button></header>
           <label className="catalog-picker-search"><Search size={15} /><StableTextInput ref={inputRef} draftId={RECIPE_CATALOG_DRAFT_ID} value={query} onValueChange={setQuery} placeholder="搜索配方、原料或产物" aria-label="搜索配方" /></label>
           <div className="recipe-catalog-grid">
@@ -68,8 +51,7 @@ export function RecipeCatalogPicker({ value, recipes, onChange, compact = false 
             </button>)}
             {filtered.length === 0 ? <p className="catalog-picker-empty"><PackageOpen size={20} />没有匹配的配方</p> : null}
           </div>
-        </section>
-      </div></PickerPortal> : null}
+      </AccessibleDialog>
     </>
   );
 }
@@ -86,7 +68,7 @@ export function ItemCatalogPicker({ value, items, disabledIds, onChange, allowCl
   const [query, setQuery] = useState("");
   const itemDraftId = `catalog-picker-item-search:${label}`;
   const close = () => { setOpen(false); setQuery(""); clearStableTextDraft(itemDraftId); };
-  const inputRef = usePicker(open, close);
+  const inputRef = usePickerInputRef();
   const current = items.find((item) => item.id === value);
   const term = query.trim().toLocaleLowerCase("zh-CN");
   const filtered = items.filter((item) => !term || `${item.name} ${item.symbol} ${item.description}`.toLocaleLowerCase("zh-CN").includes(term));
@@ -95,8 +77,7 @@ export function ItemCatalogPicker({ value, items, disabledIds, onChange, allowCl
       <button className="catalog-picker-trigger catalog-picker-trigger--item" type="button" onClick={() => setOpen(true)} aria-haspopup="dialog" aria-label={label}>
         {current ? <><ItemGlyph itemId={current.id} /><span>{current.name}</span></> : <span>{label}</span>}<ChevronDown size={13} />
       </button>
-      {open ? <PickerPortal><div className="catalog-picker-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
-        <section className="catalog-picker catalog-picker--items" role="dialog" aria-modal="true" aria-label="物品选择面板">
+      <AccessibleDialog open={open} title="物品选择面板" layout="bare" ariaLabel="物品选择面板" className="catalog-picker catalog-picker--items" backdropClassName="catalog-picker-backdrop" initialFocusRef={shouldAutoFocusCatalogSearch() ? inputRef : undefined} onRequestClose={close}>
           <header><div><span>物流目录</span><strong>{label}</strong></div><button type="button" onClick={close} title="关闭物品选择" aria-label="关闭物品选择"><X size={16} /></button></header>
           <label className="catalog-picker-search"><Search size={15} /><StableTextInput ref={inputRef} draftId={itemDraftId} value={query} onValueChange={setQuery} placeholder="搜索物品名称、符号或说明" aria-label="搜索物品" /></label>
           <div className="item-catalog-grid">
@@ -107,8 +88,7 @@ export function ItemCatalogPicker({ value, items, disabledIds, onChange, allowCl
             })}
             {filtered.length === 0 ? <p className="catalog-picker-empty"><PackageOpen size={20} />没有匹配的物品</p> : null}
           </div>
-        </section>
-      </div></PickerPortal> : null}
+      </AccessibleDialog>
     </>
   );
 }

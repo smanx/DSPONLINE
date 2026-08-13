@@ -49,6 +49,15 @@
   background: var(--theme-surface);
 }
 
+.codex-section-nav {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-color: var(--theme-border-strong) transparent;
+  scrollbar-width: thin;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+}
+
 .codex-section-nav button {
   min-width: 0;
   min-height: 36px;
@@ -66,7 +75,7 @@
 .codex-section-nav button.active {
   border-color: var(--theme-accent-border);
   background: var(--theme-accent-soft);
-  color: var(--cyan);
+  color: var(--accent-text);
 }
 
 .codex-master-detail {
@@ -475,5 +484,15 @@
 
 html:not([data-native-ui-scale])[data-ui-font-scale="150"] .game-shell[data-mobile-shell="true"] .codex-section-nav,
 html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobile-shell="true"] .codex-section-nav {
-  grid-template-columns: 1fr;
+  display: flex;
+  grid-template-columns: none;
+  overflow-x: auto;
+}
+
+html:not([data-native-ui-scale])[data-ui-font-scale="150"] .game-shell[data-mobile-shell="true"] .codex-section-nav button,
+html:not([data-native-ui-scale])[data-ui-font-scale="200"] .game-shell[data-mobile-shell="true"] .codex-section-nav button {
+  width: max-content;
+  min-width: 132px;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }

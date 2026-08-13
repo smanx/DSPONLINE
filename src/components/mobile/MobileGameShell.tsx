@@ -67,7 +67,7 @@ export function MobileGameShell({ enabled, layout, game, alerts, route, overlay,
   return (
     <>
       <MobileTopBar game={game} route={route} alertCount={alerts.length} onBack={onBack} onOpenPlanet={() => openSheet("planet")} onTogglePause={onTogglePause} onOpenAlerts={() => openOperations("alerts")} />
-      {route.kind === "hub" ? <MobileWorkspaceHub hasConstructionCenter={hasConstructionCenter} onOpenWorkspace={openWorkspace} onOpenStatistics={openStatistics} onOpenOperations={openOperations} onOpenGalaxy={openGalaxy} onOpenCommandPalette={onOpenCommandPalette} onSwitchLegacy={onSwitchLegacy} onRequestExit={onRequestExit} /> : null}
+      {route.kind === "hub" ? <MobileWorkspaceHub hasConstructionCenter={hasConstructionCenter} onOpenWorkspace={openWorkspace} onOpenStatistics={openStatistics} onOpenOperations={openOperations} onOpenGalaxy={openGalaxy} onOpenCommandPalette={onOpenCommandPalette} onSwitchLegacy={onSwitchLegacy} onRequestExit={onRequestExit} onClose={onBack} /> : null}
       {route.kind === "factory" && !overlay ? <button className="mobile-next-tools-command" type="button" onClick={() => openSheet("tools")} title="画布工具" aria-label="打开画布工具"><Wrench size={22} /></button> : null}
       <MobileSheets game={game} alerts={alerts} overlay={overlay} tools={tools} toolActions={toolActions} factory={factory} factoryActions={factoryActions} onSheetSnap={onSheetSnap} onClose={close} onPlanetChange={onPlanetChange} onOpenStarMap={() => openWorkspace("star-map")} onConfirmExit={onConfirmExit} onDismissExit={onDismissExit} />
       <MobileBottomNav

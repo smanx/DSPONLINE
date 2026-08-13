@@ -3,6 +3,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import type { OperationsTab } from "../OperationsWorkspace";
 import type { StatisticsTab } from "../StatisticsWorkspace";
 import type { MobileWorkspaceId } from "../../hooks/useMobileNavigation";
+import { WorkspaceFrame } from "../WorkspaceFrame";
 
 const RECENT_WORKSPACES_KEY = "dsp-idle-network.mobile-recent-workspaces.v1";
 
@@ -25,7 +26,7 @@ function readRecentWorkspaces(): string[] {
   }
 }
 
-export function MobileWorkspaceHub({ hasConstructionCenter, onOpenWorkspace, onOpenStatistics, onOpenOperations, onOpenGalaxy, onOpenCommandPalette, onSwitchLegacy, onRequestExit }: {
+export function MobileWorkspaceHub({ hasConstructionCenter, onOpenWorkspace, onOpenStatistics, onOpenOperations, onOpenGalaxy, onOpenCommandPalette, onSwitchLegacy, onRequestExit, onClose }: {
   hasConstructionCenter: boolean;
   onOpenWorkspace: (id: MobileWorkspaceId) => void;
   onOpenStatistics: (tab: StatisticsTab) => void;
@@ -34,6 +35,7 @@ export function MobileWorkspaceHub({ hasConstructionCenter, onOpenWorkspace, onO
   onOpenCommandPalette: () => void;
   onSwitchLegacy: () => void;
   onRequestExit: () => void;
+  onClose: () => void;
 }) {
   const [recentIds, setRecentIds] = useState(readRecentWorkspaces);
   const groups = useMemo(() => {
@@ -93,11 +95,11 @@ export function MobileWorkspaceHub({ hasConstructionCenter, onOpenWorkspace, onO
   );
 
   return (
-    <section className="mobile-next-workspace-hub" role="dialog" aria-modal="true" aria-label="更多工作区">
+    <WorkspaceFrame className="mobile-next-workspace-hub" ariaLabel="更多工作区" onRequestClose={onClose}>
       <div className="mobile-next-workspace-hub__scroll">
         {recentActions.length > 0 ? <section><header><Trophy size={17} /><strong>最近使用</strong></header><div>{recentActions.map(actionButton)}</div></section> : null}
         {groups.map((group) => <section key={group.id}><header>{group.icon}<strong>{group.label}</strong></header><div>{group.actions.map(actionButton)}</div></section>)}
       </div>
-    </section>
+    </WorkspaceFrame>
   );
 }

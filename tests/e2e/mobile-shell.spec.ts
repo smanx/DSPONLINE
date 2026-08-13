@@ -5,7 +5,7 @@ const MOBILE_UI_KEY = "dsp-idle-network.mobile-ui.v1";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
-    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-13-v1.0.41");
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.42");
   });
 });
 
@@ -207,6 +207,55 @@ test("browser back, interface back and root exit confirmation share one mobile s
   await expect(exit).toBeVisible();
   await exit.getByRole("button", { name: "继续游戏" }).click();
   await expect(exit).toHaveCount(0);
+});
+
+test("command palette atomically replaces its modal for workspaces, sheets and entity focus", async ({ page }) => {
+  await openNextMobile(page);
+
+  const runCommand = async (query: string, name: RegExp) => {
+    await page.keyboard.press("Control+K");
+    const palette = page.getByRole("dialog", { name: "命令面板" });
+    await expect(palette).toBeVisible();
+    await palette.getByRole("combobox", { name: "搜索命令" }).fill(query);
+    await palette.getByRole("option", { name }).first().click();
+    await expect(palette).toHaveCount(0);
+  };
+
+  await runCommand("生产资料库", /打开生产资料库/);
+  await expect(page.getByRole("dialog", { name: "生产资料库" })).toBeVisible();
+  await expect(page.locator('.game-shell[data-mobile-route="workspace"]')).toBeVisible();
+  await page.evaluate(() => window.history.back());
+  await expect(page.locator('.game-shell[data-mobile-route="factory"][data-mobile-overlay="none"]')).toBeVisible();
+  await expect(page.getByRole("alertdialog", { name: "保存并返回主菜单" })).toHaveCount(0);
+
+  await runCommand("打开物资托盘", /打开物资托盘/);
+  await expect(page.getByRole("dialog", { name: "物资" })).toBeVisible();
+  await page.evaluate(() => window.history.back());
+  await expect(page.locator('.game-shell[data-mobile-overlay="none"]')).toBeVisible();
+
+  await runCommand("聚焦配方", /聚焦配方/);
+  await expect(page.getByRole("dialog", { name: "生产资料库" })).toBeVisible();
+  await expect(page.locator('.game-shell[data-mobile-subview^="item:"]')).toBeVisible();
+  await page.evaluate(() => window.history.back());
+  await expect(page.locator('.game-shell[data-mobile-route="workspace"][data-mobile-subview="none"]')).toBeVisible();
+  await page.evaluate(() => window.history.back());
+  await expect(page.locator('.game-shell[data-mobile-route="factory"]')).toBeVisible();
+
+  await runCommand("定位：", /定位：/);
+  await expect(page.locator('.game-shell[data-mobile-overlay="inspector"]')).toBeVisible();
+  await expect(page.locator(".react-flow__node .factory-node--selected").first()).toBeVisible();
+  await page.evaluate(() => window.history.back());
+  await expect(page.locator('.game-shell[data-mobile-overlay="none"]')).toBeVisible();
+
+  const pausedBefore = await page.locator(".game-shell").getAttribute("data-simulation-paused");
+  await runCommand(pausedBefore === "true" ? "继续模拟" : "暂停模拟", pausedBefore === "true" ? /继续模拟/ : /暂停模拟/);
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-simulation-paused", pausedBefore === "true" ? "false" : "true");
+  await expect(page.locator('.game-shell[data-mobile-route="factory"][data-mobile-overlay="none"]')).toBeVisible();
+
+  const performanceBefore = await page.locator(".game-shell").getAttribute("data-performance-mode");
+  await runCommand(performanceBefore === "true" ? "关闭性能模式" : "开启性能模式", performanceBefore === "true" ? /关闭性能模式/ : /开启性能模式/);
+  await expect(page.locator(".game-shell")).toHaveAttribute("data-performance-mode", performanceBefore === "true" ? "false" : "true");
+  await expect(page.locator('.game-shell[data-mobile-route="factory"][data-mobile-overlay="none"]')).toBeVisible();
 });
 
 test("orientation changes preserve world center, selection, inspector sheet and workspace route", async ({ page }) => {

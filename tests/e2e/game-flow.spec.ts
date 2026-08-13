@@ -5,7 +5,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-13-v1.0.41");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.42");
     }
   });
 }
@@ -170,21 +170,21 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "大存档、离线选择与连续拉线体验更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "界面适配、移动导航与无障碍更新" });
   await expect(releaseNotes).toBeVisible();
   await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(6);
-  await expect(releaseNotes).toContainText("云存档状态中心");
-  await expect(releaseNotes).toContainText("32 MiB 以上大存档可安全上传");
-  await expect(releaseNotes).toContainText("离线收益由玩家明确选择");
-  await expect(releaseNotes).toContainText("传送带端口更容易点中");
-  await expect(releaseNotes).toContainText("连续拉线整批原子提交");
-  await expect(releaseNotes).toContainText("手机输入不再被重绘清空");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-13-v141-1440.png", fullPage: true });
+  await expect(releaseNotes).toContainText("工作区跟随真实顶栏与托盘");
+  await expect(releaseNotes).toContainText("手机命令跳转一次完成");
+  await expect(releaseNotes).toContainText("背景失活与焦点边界统一");
+  await expect(releaseNotes).toContainText("窄屏、高字号和触控操作收口");
+  await expect(releaseNotes).toContainText("中文输入与页面草稿更稳定");
+  await expect(releaseNotes).toContainText("版本信息与回归夹具一致");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v142-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-13-v141-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v142-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -207,7 +207,7 @@ test("dated release notes appear once and remain available from both settings sc
     return Boolean(scroll && summary && firstItem && footer && summary.bottom <= firstItem.top + 1 && scroll.bottom <= footer.top + 1);
   })).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-13-v140-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v142-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -216,12 +216,12 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-13-v1.0.41");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-14-v1.0.42");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
   await page.getByRole("button", { name: "游戏设置" }).click();
-  await page.getByRole("button", { name: "查看2026年8月13日版本更新记录" }).click();
+  await page.getByRole("button", { name: "查看2026年8月14日版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
   await releaseNotes.getByLabel("关闭版本更新记录").click();
 
@@ -234,7 +234,7 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-13-v140-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v142-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
@@ -2375,7 +2375,8 @@ test("phone portrait and landscape preserve a usable factory canvas", async ({ p
   await expect(page.getByTitle("部署风力涡轮机").locator("span")).toHaveText("风力涡轮机");
   await page.getByTitle("部署风力涡轮机").click();
   await expect(page.getByTitle("部署风力涡轮机")).toHaveClass(/construction-item--active/);
-  await page.locator(".react-flow__pane").click({ position: { x: 32, y: 250 } });
+  // Keep the placement point clear of the 44 px mobile sidebar hit target.
+  await page.locator(".react-flow__pane").click({ position: { x: 72, y: 250 } });
   await expect(page.locator(".power-node")).toHaveCount(1);
   await page.getByLabel("更多工作区").click();
   await expect(page.getByRole("menuitem", { name: "科技树" })).toBeVisible();

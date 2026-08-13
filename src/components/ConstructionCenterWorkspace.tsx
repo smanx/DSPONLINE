@@ -7,6 +7,7 @@ import { formatQuantityCompact } from "../game/quantityFormat";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { QuantityValue } from "./QuantityValue";
 import { StableTextInput } from "./CompositionSafeInput";
+import { WorkspaceFrame } from "./WorkspaceFrame";
 
 type CenterCategory = "all" | "power" | "production" | "logistics" | "dyson";
 
@@ -163,7 +164,7 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
 
   if (!open) return null;
   return (
-    <section className="construction-center-workspace" role="dialog" aria-modal="true" aria-label="建筑制造中心">
+    <WorkspaceFrame className="construction-center-workspace" ariaLabel="建筑制造中心" onRequestClose={onClose}>
       <header className="construction-center-header">
         <div><i><Factory size={20} /></i><span><small>巨构自动补给协议</small><strong>建筑制造中心</strong></span></div>
         <dl>
@@ -226,6 +227,6 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
         })}
         {definitions.length === 0 ? <div className="construction-center-empty"><Search size={22} /><strong>没有符合条件的建筑</strong></div> : null}
       </div>
-    </section>
+    </WorkspaceFrame>
   );
 }

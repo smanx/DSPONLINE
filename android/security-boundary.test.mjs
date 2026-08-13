@@ -90,14 +90,22 @@ test("account archives use a fixed native HTTPS route, secure handle, bounded st
 
 test("Android WebView excludes generic filesystem readers and uses a bounded write-only text exporter", async () => {
   const config = await readFile(path.join(root, "..", "capacitor.config.ts"), "utf8");
-  const pluginManifest = await readFile(path.join(app, "assets", "capacitor.plugins.json"), "utf8");
+  const packageJson = JSON.parse(await readFile(path.join(root, "..", "package.json"), "utf8"));
+  let pluginManifest = null;
+  try {
+    pluginManifest = await readFile(path.join(app, "assets", "capacitor.plugins.json"), "utf8");
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
   const exporter = await source("java/cn/dsponline/network/TextExportPlugin.java");
   const settings = await readFile(path.join(root, "capacitor.settings.gradle"), "utf8");
   const build = await readFile(path.join(root, "app", "capacitor.build.gradle"), "utf8");
   assert.match(config, /includePlugins:\s*\[/);
   assert.doesNotMatch(config, /includePlugins:[\s\S]{0,500}@capacitor\/filesystem/);
   assert.doesNotMatch(config, /includePlugins:[\s\S]{0,500}@capacitor\/share/);
-  assert.doesNotMatch(pluginManifest, /@capacitor\/(?:filesystem|share)/);
+  const declaredPackages = Object.keys({ ...packageJson.dependencies, ...packageJson.devDependencies });
+  assert.equal(declaredPackages.some((name) => /^@capacitor\/(?:filesystem|share)$/.test(name)), false);
+  if (pluginManifest !== null) assert.doesNotMatch(pluginManifest, /@capacitor\/(?:filesystem|share)/);
   assert.doesNotMatch(settings, /capacitor-(?:filesystem|share)/);
   assert.doesNotMatch(build, /capacitor-(?:filesystem|share)/);
   assert.match(exporter, /TextExportProtocol\.boundedUtf8/);

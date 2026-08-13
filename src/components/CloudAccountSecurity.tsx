@@ -44,6 +44,7 @@ import {
 import { getDesktopBridge } from "../desktop";
 import { downloadAndroidAccountArchive } from "../game/androidAccountArchive";
 import { AccessibleDialog } from "./AccessibleDialog";
+import { StableTextInput, clearStableTextDraft } from "./CompositionSafeInput";
 
 interface CloudAccountSecurityProps {
   user: CloudUser;
@@ -142,6 +143,7 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
       const updated = await bindCloudEmail(bindingEmail);
       onUserChange(updated);
       setBindingEmail(updated.email);
+      clearStableTextDraft(`cloud-security-email:${user.id}`);
       setNotice({ tone: "ready", text: "验证邮件已发送；完成验证后可使用邮箱找回密码" });
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "邮箱绑定失败" });
@@ -365,7 +367,7 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
       {!user.emailVerified ? <details className="cloud-account-section" open={!user.email}>
         <summary><MailWarning size={15} /><span><strong>{mailAvailable ? user.email ? "更换待验证邮箱" : "绑定邮箱" : "绑定邮箱 · 等待开放"}</strong><small>{mailAvailable ? "验证后可使用邮箱找回密码；云存档与排行榜已经开放" : "邮件系统开放后可绑定验证，不影响云存档与排行榜"}</small></span></summary>
         <form className="cloud-account-email-form" onSubmit={bindEmail}>
-          <label><span>邮箱地址</span><input type="email" value={bindingEmail} onChange={(event) => setBindingEmail(event.target.value)} maxLength={254} required autoComplete="email" disabled={!mailAvailable} /></label>
+          <label><span>邮箱地址</span><StableTextInput draftId={`cloud-security-email:${user.id}`} type="email" value={bindingEmail} onValueChange={setBindingEmail} maxLength={254} required autoComplete="email" disabled={!mailAvailable} /></label>
           <button className="primary" type="submit" disabled={!mailAvailable || busyAction === "email"}>{busyAction === "email" ? <LoaderCircle size={13} /> : <MailCheck size={13} />}{mailAvailable ? "绑定并发送验证邮件" : "邮件功能开发中"}</button>
         </form>
       </details> : null}
@@ -381,9 +383,9 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
       <details className="cloud-account-section">
         <summary><KeyRound size={15} /><span><strong>修改密码</strong><small>保留当前设备，退出其他会话</small></span></summary>
         <form onSubmit={changePassword}>
-          <label><span>当前密码</span><input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} minLength={8} maxLength={128} required autoComplete="current-password" /></label>
-          <label><span>新密码</span><input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={8} maxLength={128} required autoComplete="new-password" /></label>
-          <label><span>确认新密码</span><input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={8} maxLength={128} required autoComplete="new-password" /></label>
+          <label><span>当前密码</span><StableTextInput sensitive draftId={`cloud-password-current:${user.id}`} type="password" value={currentPassword} onValueChange={setCurrentPassword} minLength={8} maxLength={128} required autoComplete="current-password" /></label>
+          <label><span>新密码</span><StableTextInput sensitive draftId={`cloud-password-new:${user.id}`} type="password" value={newPassword} onValueChange={setNewPassword} minLength={8} maxLength={128} required autoComplete="new-password" /></label>
+          <label><span>确认新密码</span><StableTextInput sensitive draftId={`cloud-password-confirm:${user.id}`} type="password" value={confirmPassword} onValueChange={setConfirmPassword} minLength={8} maxLength={128} required autoComplete="new-password" /></label>
           <button className="primary" type="submit" disabled={busyAction === "password"}>{busyAction === "password" ? <LoaderCircle size={13} /> : <KeyRound size={13} />}确认修改</button>
         </form>
       </details>
@@ -510,7 +512,7 @@ export function CloudAccountSecurity({ user, mailAvailable, onUserChange, onLogg
       {deleteArmed ? <form className="cloud-account-delete" onSubmit={deleteAccount}>
         <strong>永久注销云账号</strong>
         <small>云存档、修订历史和排行榜成绩将一并删除。本机存档不受影响。</small>
-        <label><span>当前密码</span><input type="password" value={deletePassword} onChange={(event) => setDeletePassword(event.target.value)} minLength={8} maxLength={128} required autoComplete="current-password" /></label>
+        <label><span>当前密码</span><StableTextInput sensitive draftId={`cloud-delete-password:${user.id}`} type="password" value={deletePassword} onValueChange={setDeletePassword} minLength={8} maxLength={128} required autoComplete="current-password" /></label>
         <div><button type="button" onClick={() => { setDeleteArmed(false); setDeletePassword(""); }}>取消</button><button className="danger" type="submit" disabled={busyAction === "delete"}>{busyAction === "delete" ? <LoaderCircle size={13} /> : <Trash2 size={13} />}永久注销</button></div>
       </form> : null}
     </section>
