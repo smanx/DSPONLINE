@@ -94,6 +94,12 @@ import {
   readCloudPayload,
   writeInspectedCloudPayload,
 } from "./cloud-payload-store.mjs";
+import {
+  applyRuntimeRetentionPolicy,
+  LeaderboardSnapshotIndex,
+  PresenceIndex,
+  RuntimeMetricsAggregator,
+} from "./runtime-indexes.mjs";
 
 const cloudTransferNumericKeys = [
   "version", "mibBytes", "guaranteedSavePayloadBytes", "savePayloadLimitBytes", "rawFallbackSafeLimitBytes",
@@ -1000,10 +1006,33 @@ class AtomicStoreBase {
     this.persistenceWritable = true;
     this.acceptingMutations = true;
     this.faultInjector = typeof faultInjector === "function" ? faultInjector : null;
+    this.commitObservers = new Set();
+    this.externalMutationObserver = null;
+    this.externalCollectionProxies = new Map();
+    this.externalDataView = new Proxy({}, {
+      get: (_target, property) => this.externalValue(property),
+      set: (_target, property, value) => {
+        const previous = this._data[property];
+        this._data[property] = value;
+        this.externalMutationObserver?.({ collection: property, key: null, previous, value, operation: "set" });
+        return true;
+      },
+      deleteProperty: (_target, property) => {
+        const previous = this._data[property];
+        const deleted = delete this._data[property];
+        if (deleted) this.externalMutationObserver?.({ collection: property, key: null, previous, value: undefined, operation: "delete" });
+        return deleted;
+      },
+      ownKeys: () => Reflect.ownKeys(this._data),
+      getOwnPropertyDescriptor: (_target, property) => {
+        if (!Reflect.has(this._data, property)) return undefined;
+        return { configurable: true, enumerable: true, writable: true, value: this.externalValue(property) };
+      },
+    });
   }
 
   get data() {
-    return this.mutationStorage.getStore()?.data ?? this._data;
+    return this.mutationStorage.getStore()?.data ?? this.externalDataView;
   }
 
   set data(value) {
@@ -1055,6 +1084,7 @@ class AtomicStoreBase {
     const observed = result.then((value) => {
       this.lastPersistenceSuccessAt = Date.now();
       this.persistenceWritable = true;
+      this.observePersistence?.({ durationMs: Math.max(0, performance.now() - startedAt), ok: true, queueDepth: this.pendingWriteOperations });
       return value;
     }, (error) => {
       if (error?.persistenceFailure !== false) {
@@ -1062,6 +1092,12 @@ class AtomicStoreBase {
         this.lastPersistenceErrorCategory = persistenceErrorCategory(error);
         this.persistenceWritable = false;
       }
+      this.observePersistence?.({
+        durationMs: Math.max(0, performance.now() - startedAt),
+        ok: false,
+        errorCategory: persistenceErrorCategory(error),
+        queueDepth: this.pendingWriteOperations,
+      });
       throw error;
     }).finally(() => {
       this.pendingWriteOperations = Math.max(0, this.pendingWriteOperations - 1);
@@ -1084,10 +1120,14 @@ class AtomicStoreBase {
       this._data = published;
       this.commitGeneration += 1;
       mutation.baseGeneration = this.commitGeneration;
+      const runtimeIndexEvents = mutation.runtimeIndexEvents.splice(0);
       // SQLite is already committed at this point. Runtime cache publication
       // and legacy staging cleanup are deliberately best-effort and must never
       // turn a durable success into a failed HTTP response.
       try { this.afterMutationCommitted(mutation); } catch { /* durable state remains authoritative */ }
+      for (const observer of this.commitObservers) {
+        try { observer({ data: this._data, context, runtimeIndexEvents }); } catch { /* durable state remains authoritative */ }
+      }
       mutation.writes.clear();
       mutation.fileWrites?.clear();
       mutation.deletes.clear();
@@ -1100,6 +1140,7 @@ class AtomicStoreBase {
   persist(context = {}) {
     const active = this.currentMutation();
     const mutation = active ?? this.createStandaloneMutation();
+    if (!active) mutation.runtimeIndexEvents.push({ type: "rebuild" });
     return this.commitMutation(mutation, context);
   }
 
@@ -1111,12 +1152,57 @@ class AtomicStoreBase {
       deletes: new Map(),
       userDeletes: new Set(),
       leaderboardWindowCache: new Map(this.leaderboardWindowCache instanceof Map ? this.leaderboardWindowCache : []),
+      runtimeIndexEvents: [],
       commitPromise: null,
     };
   }
 
   afterMutationCommitted(_mutation) {
     if (_mutation.leaderboardWindowCache instanceof Map) this.leaderboardWindowCache = new Map(_mutation.leaderboardWindowCache);
+  }
+
+  onCommitted(observer) {
+    if (typeof observer !== "function") throw new TypeError("commit observer must be a function");
+    this.commitObservers.add(observer);
+    return () => this.commitObservers.delete(observer);
+  }
+
+  setPersistenceObserver(observer) {
+    this.observePersistence = typeof observer === "function" ? observer : null;
+  }
+
+  setExternalMutationObserver(observer) {
+    this.externalMutationObserver = typeof observer === "function" ? observer : null;
+  }
+
+  externalValue(property) {
+    const value = this._data[property];
+    if (!this.externalMutationObserver || !["submissions", "users", "leaderboardModeration", "accountControls"].includes(property) || !value || typeof value !== "object") return value;
+    const cached = this.externalCollectionProxies.get(property);
+    if (cached?.target === value) return cached.proxy;
+    const proxy = new Proxy(value, {
+      set: (target, key, next) => {
+        const previous = target[key];
+        const updated = Reflect.set(target, key, next);
+        if (updated && previous !== next) this.externalMutationObserver?.({ collection: property, key, previous, value: next, operation: "set" });
+        return updated;
+      },
+      deleteProperty: (target, key) => {
+        const previous = target[key];
+        const deleted = Reflect.deleteProperty(target, key);
+        if (deleted && previous !== undefined) this.externalMutationObserver?.({ collection: property, key, previous, value: undefined, operation: "delete" });
+        return deleted;
+      },
+    });
+    this.externalCollectionProxies.set(property, { target: value, proxy });
+    return proxy;
+  }
+
+  recordRuntimeIndexEvent(event) {
+    const mutation = this.currentMutation();
+    if (!mutation || !event || typeof event !== "object") return false;
+    mutation.runtimeIndexEvents.push(event);
+    return true;
   }
 
   mutate(mutator, context = {}) {
@@ -1701,15 +1787,14 @@ function deleteAccountData(store, userId) {
     if (receipt?.userId === userId) delete store.data.operationReceipts[requestId];
   }
   store.discardUserCloudSavePayloads?.(userId);
-  for (const [key, submission] of Object.entries(store.data.submissions)) {
-    if (submission.userId === userId || submission.accountId === userId) delete store.data.submissions[key];
-  }
+  removeUserLeaderboardSubmissions(store, userId);
   for (const [key, submission] of Object.entries(store.data.speedrunSubmissions)) {
     if (submission.userId === userId) delete store.data.speedrunSubmissions[key];
   }
   store.data.feedback = store.data.feedback.filter((entry) => entry.userId !== userId);
   store.data.errors = store.data.errors.filter((entry) => entry.userId !== userId);
   delete store.data.users[userId];
+  store.recordRuntimeIndexEvent?.({ type: "leaderboard-account", userId });
 }
 
 function adminAccountSummary(store, userId) {
@@ -2811,11 +2896,14 @@ function isServerLeaderboardSubmission(value) {
 
 function removeUserLeaderboardSubmissions(store, userId) {
   let removed = 0;
+  const seasons = new Set();
   for (const [key, submission] of Object.entries(store.data.submissions)) {
     if (submission.userId !== userId && submission.accountId !== userId) continue;
+    if (typeof submission.seasonId === "string") seasons.add(submission.seasonId);
     delete store.data.submissions[key];
     removed += 1;
   }
+  for (const seasonId of seasons) store.recordRuntimeIndexEvent?.({ type: "leaderboard-submission", userId, seasonId });
   return removed;
 }
 
@@ -2845,6 +2933,7 @@ function applyLeaderboardIntegrityGate(store, userId, currentSave, currentState,
     source: LEADERBOARD_INTEGRITY_VERSION,
     createdAt: alreadyRestricted ? store.data.leaderboardModeration[userId].createdAt : Date.now(),
   };
+  store.recordRuntimeIndexEvent?.({ type: "leaderboard-restriction", userId });
   if (!alreadyRestricted) appendSystemAudit(store, "leaderboard.integrity_frozen", userId, "integrity-gate");
   return result;
 }
@@ -2932,6 +3021,7 @@ function updateLeaderboardFromMainSave(store, userId, { save = null, now = Date.
     },
   };
   store.data.submissions[key] = submission;
+  store.recordRuntimeIndexEvent?.({ type: "leaderboard-submission", userId, seasonId: ACTIVE_LEADERBOARD_SEASON_ID });
   return { changed: true, submission, reason: previous ? "updated" : "created" };
 }
 
@@ -2995,12 +3085,10 @@ function readLeaderboardWindows(store, userId, save) {
   return cache.get(key);
 }
 
-function leaderboardMeSnapshot(store, userId, category, seasonId, sortedEntries) {
+function leaderboardMeSnapshot(store, userId, category, seasonId, leaderboardSnapshot, rankedEntry = null) {
   const user = store.data.users[userId];
   if (!user) return null;
   const save = currentCloudSave(store, userId, "main", "normal");
-  const entryIndex = sortedEntries.findIndex((candidate) => candidate.userId === userId);
-  const rankedEntry = entryIndex >= 0 ? { ...sortedEntries[entryIndex], rank: entryIndex + 1 } : null;
   const reviewResumeAfterRevision = leaderboardRevalidationThresholds(store.data, userId).normal;
   let status = "unavailable";
   let latestWindowState = null;
@@ -3029,7 +3117,7 @@ function leaderboardMeSnapshot(store, userId, category, seasonId, sortedEntries)
     status,
     entry,
     rank: entry?.rank ?? null,
-    totalEntries: sortedEntries.length,
+    totalEntries: leaderboardSnapshot.totalEntries,
     serverMetrics: entry?.metrics ?? null,
     latestWindowState,
     mode: "normal",
@@ -3039,15 +3127,11 @@ function leaderboardMeSnapshot(store, userId, category, seasonId, sortedEntries)
   };
 }
 
-function sortedLeaderboardEntries(store, category, seasonId) {
-  return Object.values(store.data.submissions)
-    .filter((entry) => entry.seasonId === seasonId && entry.visible !== false &&
-      store.data.users[entry.userId]?.leaderboardVisible !== false && !isLeaderboardRestricted(store.data, entry.userId))
-    .map((entry) => {
-      const metrics = normalizeMetrics(entry.metrics);
-      return { ...entry, metrics, value: categoryValue(metrics, category), verified: Boolean(entry.verification?.cloudRevision) };
-    })
-    .sort((left, right) => right.value - left.value || left.userId.localeCompare(right.userId));
+function publicLeaderboardEntry(entry, rank) {
+  // Preserve the pre-index public DTO byte-for-byte at the field level. The
+  // cache changes how entries are found and sorted, not which established
+  // submission fields (including verification) the endpoint returns.
+  return { ...entry, rank };
 }
 
 function backfillLeaderboardFromMainSaves(store) {
@@ -3233,6 +3317,7 @@ function installAccountArchiveCloudSaves(store, userId, records) {
       leaderboardResumeAfterRevisionByMode: thresholds,
     };
   }
+  if ((thresholds.normal ?? 0) > 0) store.recordRuntimeIndexEvent?.({ type: "leaderboard-revalidation", userId });
   // Existing public records remain byte-for-byte untouched. Revalidation
   // hides the imported cloud state from future refreshes until a new revision.
   const cache = leaderboardWindowCache(store);
@@ -3284,6 +3369,7 @@ function deleteCloudSaveData(store, userId, slot = "main", mode = "normal") {
     delete store.data.cloudSaves[userId];
     delete store.data.cloudSaveHistory[userId];
     removeUserLeaderboardSubmissions(store, userId);
+    store.recordRuntimeIndexEvent?.({ type: "leaderboard-revalidation", userId });
   } else if (mode === "normal") {
     delete store.data.cloudSaveSlots[userId]?.[slot];
     delete store.data.cloudSaveSlotHistory[userId]?.[slot];
@@ -3460,18 +3546,6 @@ function normalizedPlayerId(value) {
   return typeof value === "string" && PLAYER_ID_PATTERN.test(value) ? value : null;
 }
 
-function playerMetrics(data, onlineWindowMs, now = Date.now(), timeZone = DEFAULT_METRIC_TIME_ZONE) {
-  const records = Object.values(data.players);
-  const onlineSince = now - onlineWindowMs;
-  const today = metricDay(now, timeZone);
-  return {
-    total: records.length,
-    today: records.filter((record) => record.lastActiveDay === today).length,
-    online: records.filter((record) => Number.isFinite(record.lastSeenAt) && record.lastSeenAt >= onlineSince).length,
-    onlineWindowSeconds: Math.floor(onlineWindowMs / 1000),
-  };
-}
-
 function adminAuthorized(request, adminToken) {
   if (!adminToken) return false;
   const authorization = request.headers.authorization;
@@ -3589,6 +3663,8 @@ export async function createCloudServer({
   cloudQuotaPolicy = null,
   accountArchivePayloadInspector = inspectAccountArchivePayloadFile,
   accountArchiveTemporaryRoot = "",
+  nowProvider = Date.now,
+  runtimeRetentionPolicy = null,
   logger = console,
 } = {}) {
   const store = databaseFile
@@ -3619,7 +3695,7 @@ export async function createCloudServer({
     leaderboardBackfill: backfillLeaderboardFromMainSaves(draftStore),
   }), { operation: "startup.normalize" });
   const leaderboardBackfill = startupResult.leaderboardBackfill;
-  const startedAt = Date.now();
+  const startedAt = nowProvider();
   const galacticActivityConfig = activityConfig ? normalizeActivityConfig(activityConfig) : await loadActivityConfig(activityConfigFile);
   const rateLimit = createRateLimiter();
   const registrationRateLimit = createRateLimiter();
@@ -3655,6 +3731,7 @@ export async function createCloudServer({
     maxRequestMs: 0,
     shuttingDown: false,
   };
+  const activeRequests = new Set();
   const onlineWindowMs = Number.isFinite(playerOnlineWindowMs)
     ? Math.max(50, Math.floor(playerOnlineWindowMs))
     : DEFAULT_PLAYER_ONLINE_WINDOW_MS;
@@ -3665,6 +3742,50 @@ export async function createCloudServer({
   } catch {
     logger.error?.(`invalid metric time zone ${metricTimeZone}; using ${DEFAULT_METRIC_TIME_ZONE}`);
   }
+  const presenceIndex = new PresenceIndex({ onlineWindowMs, timeZone: metricsTimeZone });
+  presenceIndex.rebuild(store.data.players, nowProvider());
+  const leaderboardIndex = new LeaderboardSnapshotIndex({
+    getAuthoritativeData: () => store._data,
+    categories: [...VALID_CATEGORIES],
+    normalizeMetrics,
+    categoryValue,
+    isRestricted: (data, userId) => isLeaderboardRestricted(data, userId),
+  });
+  const runtimeMetrics = new RuntimeMetricsAggregator();
+  store.setPersistenceObserver((sample) => runtimeMetrics.observeSqliteCommit(sample));
+  store.setExternalMutationObserver(({ collection, key, previous, value }) => {
+    if (collection === "submissions") {
+      const entry = value ?? previous;
+      if (typeof entry?.seasonId === "string") leaderboardIndex.markSubmissionChanged({ userId: entry.userId ?? String(key).split(":").at(-1), seasonId: entry.seasonId });
+    } else if (collection === "users" && typeof key === "string") leaderboardIndex.markAccountChanged(key);
+    else if (collection === "leaderboardModeration" && typeof key === "string") leaderboardIndex.markRestrictionChanged(key);
+    else if (collection === "accountControls" && typeof key === "string") leaderboardIndex.markRevalidationChanged(key);
+    else if (["submissions", "users", "leaderboardModeration", "accountControls"].includes(collection)) leaderboardIndex.rebuild();
+  });
+  let eventLoopExpectedAt = performance.now() + 1_000;
+  const runtimeSampleTimer = setInterval(() => {
+    const sampledAt = performance.now();
+    runtimeMetrics.observeEventLoopDelay(Math.max(0, sampledAt - eventLoopExpectedAt));
+    eventLoopExpectedAt = sampledAt + 1_000;
+    runtimeMetrics.sampleMemory(process.memoryUsage());
+    runtimeMetrics.observeUploadSnapshot(uploadInspections.snapshot());
+    runtimeMetrics.observeLeaderboardCache(leaderboardIndex.metrics());
+  }, 1_000);
+  runtimeSampleTimer.unref?.();
+  const unsubscribeStoreCommit = store.onCommitted(({ data, runtimeIndexEvents }) => {
+    for (const event of runtimeIndexEvents) {
+      if (event.type === "presence") presenceIndex.heartbeat(event.playerHash, event.seenAt);
+      else if (event.type === "leaderboard-submission") leaderboardIndex.markSubmissionChanged({ userId: event.userId, seasonId: event.seasonId });
+      else if (event.type === "leaderboard-visibility") leaderboardIndex.markVisibilityChanged(event.userId);
+      else if (event.type === "leaderboard-restriction") leaderboardIndex.markRestrictionChanged(event.userId);
+      else if (event.type === "leaderboard-revalidation") leaderboardIndex.markRevalidationChanged(event.userId);
+      else if (event.type === "leaderboard-account") leaderboardIndex.markAccountChanged(event.userId);
+      else if (event.type === "rebuild") {
+        presenceIndex.rebuild(data.players, nowProvider());
+        leaderboardIndex.rebuild();
+      }
+    }
+  });
   const secureAdminToken = typeof adminToken === "string" && adminToken.length >= 32 ? adminToken : "";
   if (adminToken && !secureAdminToken) logger.error?.("DSP_ADMIN_TOKEN must contain at least 32 characters; admin metrics remain disabled");
   const allowedOrigins = new Set(allowedOrigin.split(",").map((origin) => origin.trim()).filter(Boolean));
@@ -3711,10 +3832,23 @@ export async function createCloudServer({
     if (runtime.shuttingDown) return;
     rateLimit.cleanup();
     registrationRateLimit.cleanup();
-    void store.mutate((draftStore) => ({
-      auth: cleanupExpiredAuthRecords(draftStore.data),
-      operationReceipts: pruneOperationReceipts(draftStore.data),
-    }), { operation: "periodic.cleanup" })
+    void store.mutate((draftStore) => {
+      const retention = applyRuntimeRetentionPolicy(draftStore.data, {
+        now: nowProvider(),
+        timeZone: metricsTimeZone,
+        ...(runtimeRetentionPolicy ? { policy: runtimeRetentionPolicy } : {}),
+      });
+      draftStore.data.dailyMetrics = retention.retained.dailyMetrics;
+      draftStore.data.analytics = retention.retained.analytics;
+      draftStore.data.errors = retention.retained.errors;
+      draftStore.data.errorSummaries = retention.retained.errorSummaries;
+      draftStore.data.auditLog = retention.retained.auditLog;
+      return {
+        auth: cleanupExpiredAuthRecords(draftStore.data),
+        operationReceipts: pruneOperationReceipts(draftStore.data),
+        retention: retention.report,
+      };
+    }, { operation: "periodic.cleanup" })
       .catch((error) => logger.error?.("cloud metrics persistence failed", error));
   }, 60_000);
   flushMetrics.unref?.();
@@ -3794,6 +3928,7 @@ export async function createCloudServer({
       const requestStartedAt = performance.now();
       response.once("finish", () => {
         const durationMs = Math.max(0, performance.now() - requestStartedAt);
+        runtimeMetrics.observeRequest({ durationMs, statusCode: response.statusCode });
         runtime.latencies.push(durationMs);
         if (runtime.latencies.length > 2000) runtime.latencies.splice(0, runtime.latencies.length - 2000);
         if (response.statusCode === 429) runtime.rateLimited += 1;
@@ -3872,7 +4007,7 @@ export async function createCloudServer({
           timeZone: metricsTimeZone,
           today: metricDay(Date.now(), metricsTimeZone),
           uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
-          players: playerMetrics(store.data, onlineWindowMs, Date.now(), metricsTimeZone),
+          players: presenceIndex.metrics(Date.now()),
           activity: getActivityPublicStatus(galacticActivityConfig, Date.now()),
         });
       }
@@ -3903,6 +4038,8 @@ export async function createCloudServer({
           })
           : null;
         const diskFreeRatio = infrastructure?.disk?.freeRatio;
+        runtimeMetrics.observeUploadSnapshot(uploadInspections.snapshot());
+        runtimeMetrics.observeLeaderboardCache(leaderboardIndex.metrics());
         return send(response, 200, {
           generatedAt: now,
           timeZone: metricsTimeZone,
@@ -3923,6 +4060,8 @@ export async function createCloudServer({
             lastWriteDurationMs: Math.round((store.lastWriteDurationMs ?? 0) * 100) / 100,
             uploadInspections: uploadInspections.snapshot(),
             loginSecurity: loginFailureGuard.metrics(),
+            scale: runtimeMetrics.snapshot(),
+            presenceIndex: presenceIndex.diagnostics(),
           },
           accounts: {
             users: Object.keys(store.data.users).length,
@@ -3930,7 +4069,7 @@ export async function createCloudServer({
             cloudSaves: Object.keys(store.data.cloudSaves).length,
             submissions: Object.keys(store.data.submissions).length,
           },
-          players: playerMetrics(store.data, onlineWindowMs, now, metricsTimeZone),
+          players: presenceIndex.metrics(now),
           analytics: analyticsSummary(store.data.analytics, { now, timeZone: metricsTimeZone, days }),
           reports: { feedback: store.data.feedback.length, clientErrors: store.data.errors.length },
           audit: {
@@ -4043,6 +4182,7 @@ export async function createCloudServer({
             createdAt: Date.now(),
           };
           removeUserLeaderboardSubmissions(store, accountId);
+          store.recordRuntimeIndexEvent?.({ type: "leaderboard-restriction", userId: accountId });
         } else if (action === "restore-leaderboard") {
           delete store.data.leaderboardModeration[accountId];
           removeUserLeaderboardSubmissions(store, accountId);
@@ -4061,6 +4201,8 @@ export async function createCloudServer({
           if (Object.keys(reviewRevisions).length > 0) control.leaderboardResumeAfterRevisionByMode = reviewRevisions;
           if (control.loginDisabledUntil || Object.keys(reviewRevisions).length > 0) store.data.accountControls[accountId] = control;
           else delete store.data.accountControls[accountId];
+          store.recordRuntimeIndexEvent?.({ type: "leaderboard-restriction", userId: accountId });
+          store.recordRuntimeIndexEvent?.({ type: "leaderboard-revalidation", userId: accountId });
         } else if (action === "delete-account") {
           const verifiedAt = Number(body.verifiedBackupAt);
           if (!runtime.lastBackupAt || verifiedAt !== runtime.lastBackupAt || Date.now() - runtime.lastBackupAt > 24 * 60 * 60 * 1_000) {
@@ -4102,8 +4244,9 @@ export async function createCloudServer({
             persistRequired = true;
           }
         }
+        store.recordRuntimeIndexEvent?.({ type: "presence", playerHash, seenAt: now });
         await store.persist({ operation: persistRequired ? "presence.update" : "presence.touch" });
-        return send(response, 202, { accepted: true, players: playerMetrics(store.data, onlineWindowMs, now, metricsTimeZone) });
+        return send(response, 202, { accepted: true, players: presenceIndex.metrics(now) });
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/register") {
@@ -4777,7 +4920,8 @@ export async function createCloudServer({
         };
         appendSaveRevision(store, auth.user.id, next, slot, effectiveMode);
         if (slot === "main") {
-          clearLeaderboardRevalidationIfSatisfied(store.data, auth.user.id, next.revision, effectiveMode);
+          const revalidationCleared = clearLeaderboardRevalidationIfSatisfied(store.data, auth.user.id, next.revision, effectiveMode);
+          if (revalidationCleared && effectiveMode === "normal") store.recordRuntimeIndexEvent?.({ type: "leaderboard-revalidation", userId: auth.user.id });
           if (effectiveMode === "normal") updateLeaderboardFromMainSave(store, auth.user.id, {
             save: next,
             inspection: publicUploadInspection(body),
@@ -4840,7 +4984,8 @@ export async function createCloudServer({
         };
         appendSaveRevision(store, auth.user.id, restored, slot, mode);
         if (slot === "main") {
-          clearLeaderboardRevalidationIfSatisfied(store.data, auth.user.id, restored.revision, mode);
+          const revalidationCleared = clearLeaderboardRevalidationIfSatisfied(store.data, auth.user.id, restored.revision, mode);
+          if (revalidationCleared && mode === "normal") store.recordRuntimeIndexEvent?.({ type: "leaderboard-revalidation", userId: auth.user.id });
           if (mode === "normal") updateLeaderboardFromMainSave(store, auth.user.id, { save: restored });
         }
         dayMetric.cloudUploads += 1;
@@ -4898,6 +5043,7 @@ export async function createCloudServer({
           return send(response, 403, { error: "当前账号暂时不能加入官方排行榜", code: LEADERBOARD_RESTRICTED_CODE });
         }
         auth.user.leaderboardVisible = body.visible;
+        store.recordRuntimeIndexEvent?.({ type: "leaderboard-visibility", userId: auth.user.id });
         const result = body.visible
           ? updateLeaderboardFromMainSave(store, auth.user.id, { force: true })
           : { changed: removeUserLeaderboardSubmissions(store, auth.user.id) > 0, submission: null, reason: "hidden" };
@@ -4914,11 +5060,11 @@ export async function createCloudServer({
       if (request.method === "GET" && url.pathname === "/api/leaderboard") {
         const category = VALID_CATEGORIES.has(url.searchParams.get("category")) ? url.searchParams.get("category") : "galaxy";
         const seasonId = VALID_SEASONS.has(url.searchParams.get("seasonId")) ? url.searchParams.get("seasonId") : ACTIVE_LEADERBOARD_SEASON_ID;
-        const sortedEntries = sortedLeaderboardEntries(store, category, seasonId);
+        const page = leaderboardIndex.getPublicPage(category, seasonId, { limit: 100, project: publicLeaderboardEntry });
         return send(response, 200, {
           category,
           seasonId,
-          entries: sortedEntries.slice(0, 100).map((entry, index) => ({ ...entry, rank: index + 1 })),
+          entries: page.entries,
           generatedAt: Date.now(),
         });
       }
@@ -4928,8 +5074,9 @@ export async function createCloudServer({
         if (!auth) return send(response, 401, { error: "请先登录" });
         const category = VALID_CATEGORIES.has(url.searchParams.get("category")) ? url.searchParams.get("category") : "galaxy";
         const seasonId = VALID_SEASONS.has(url.searchParams.get("seasonId")) ? url.searchParams.get("seasonId") : ACTIVE_LEADERBOARD_SEASON_ID;
-        const sortedEntries = sortedLeaderboardEntries(store, category, seasonId);
-        const snapshot = leaderboardMeSnapshot(store, auth.user.id, category, seasonId, sortedEntries);
+        const leaderboardSnapshot = leaderboardIndex.getSnapshot(category, seasonId);
+        const rankedEntry = leaderboardIndex.getUserEntry(category, seasonId, auth.user.id);
+        const snapshot = leaderboardMeSnapshot(store, auth.user.id, category, seasonId, leaderboardSnapshot, rankedEntry);
         response.setHeader("cache-control", "private, no-store");
         return send(response, 200, { category, seasonId, ...snapshot, generatedAt: Date.now() });
       }
@@ -5067,7 +5214,7 @@ export async function createCloudServer({
       }
     };
     const handled = cloudUpload ? operation() : atomicRequest ? store.runAtomic(operation) : operation();
-    void handled.catch((error) => {
+    const observedRequest = handled.catch((error) => {
       logger.error?.("cloud request transaction failed", error);
       if (!response.headersSent) {
         send(response, error?.statusCode || 500, {
@@ -5076,10 +5223,15 @@ export async function createCloudServer({
         }, Number.isInteger(error?.retryAfterSeconds) ? { "retry-after": String(error.retryAfterSeconds) } : {});
       } else if (!response.writableEnded) response.destroy(error);
     });
+    activeRequests.add(observedRequest);
+    void observedRequest.finally(() => activeRequests.delete(observedRequest));
   });
 
   server.store = store;
   server.leaderboardBackfill = leaderboardBackfill;
+  server.presenceIndex = presenceIndex;
+  server.leaderboardIndex = leaderboardIndex;
+  server.runtimeMetrics = runtimeMetrics;
   server.uploadInspections = uploadInspections;
   server.requestTimeout = Number.isFinite(requestTimeoutMs)
     ? Math.max(cloudTransferContract.maximumTimeoutMs + 10_000, Math.floor(requestTimeoutMs))
@@ -5091,6 +5243,11 @@ export async function createCloudServer({
     if (closeFinalized) return;
     closeFinalized = true;
     await Promise.allSettled([activeBackupPromise, activeHistoryPrunePromise].filter(Boolean));
+    // http.Server.close() waits for sockets, not async request-listener
+    // promises. A streamed response can reach the client while its snapshot or
+    // temporary-file cleanup is still running, so SQLite must remain open
+    // until every accepted request has completed its server-side tail.
+    await Promise.allSettled([...activeRequests]);
     await store.drain();
     store.close?.();
   };
@@ -5101,6 +5258,7 @@ export async function createCloudServer({
       store.beginShutdown();
       uploadInspections.close();
       clearInterval(flushMetrics);
+      clearInterval(runtimeSampleTimer);
       if (backupTimer) clearInterval(backupTimer);
       if (historyPruneTimer) clearInterval(historyPruneTimer);
     }
@@ -5113,6 +5271,8 @@ export async function createCloudServer({
   };
   server.on("close", () => {
     clearInterval(flushMetrics);
+    clearInterval(runtimeSampleTimer);
+    unsubscribeStoreCommit();
     if (backupTimer) clearInterval(backupTimer);
     if (historyPruneTimer) clearInterval(historyPruneTimer);
   });
