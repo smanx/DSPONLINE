@@ -46,6 +46,19 @@ import {
   publicCloudQuotaPlan,
 } from "./cloud-quota.mjs";
 import { inspectSaveContractRecord } from "./save-field-contract.mjs";
+import {
+  WEB_SESSION_MODE_HEADER,
+  WebSessionError,
+  assertLegacyWebSessionMigrationRequest,
+  clearWebSessionCookie,
+  createSessionDelivery,
+  createWebSessionPolicy,
+  inspectSessionCredential,
+  inspectSessionIssuanceRequest,
+  protectSessionRequest,
+  publicCookieSession,
+  requireCookieSessionCredential,
+} from "./web-session.mjs";
 
 import {
   anonymousLoginContext,
@@ -2007,7 +2020,7 @@ function issueSession(store, userId, request, deviceName, deviceId) {
   const tokenHash = sha256(token);
   const now = Date.now();
   const context = anonymousLoginContext(request, { deviceName, deviceId });
-  store.data.sessions[tokenHash] = {
+  const session = {
     id: `session_${randomUUID().replaceAll("-", "")}`,
     userId,
     createdAt: now,
@@ -2019,12 +2032,16 @@ function issueSession(store, userId, request, deviceName, deviceId) {
     deviceHash: context.deviceHash,
     regionHash: context.regionHash,
   };
-  return { token, context };
+  store.data.sessions[tokenHash] = session;
+  return { token, tokenHash, session, context };
 }
 
-function authenticatedUser(request, store) {
+function authenticatedUser(request, store, webSessionPolicy = null) {
+  const credential = webSessionPolicy
+    ? protectSessionRequest(request, undefined, webSessionPolicy).credential
+    : null;
   const authorization = request.headers.authorization;
-  const token = typeof authorization === "string" && authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+  const token = credential?.token ?? (typeof authorization === "string" && authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "");
   if (!token) return null;
   const tokenHash = sha256(token);
   const session = store.data.sessions[tokenHash];
@@ -2034,7 +2051,7 @@ function authenticatedUser(request, store) {
   const user = store.data.users[session.userId];
   if (!user) return null;
   if (store.currentMutation?.()) session.lastSeenAt = Date.now();
-  return { user, tokenHash, session };
+  return { user, tokenHash, session, credentialKind: credential?.kind ?? "bearer" };
 }
 
 function issueActionToken(collection, userId) {
@@ -3651,6 +3668,22 @@ export async function createCloudServer({
   const secureAdminToken = typeof adminToken === "string" && adminToken.length >= 32 ? adminToken : "";
   if (adminToken && !secureAdminToken) logger.error?.("DSP_ADMIN_TOKEN must contain at least 32 characters; admin metrics remain disabled");
   const allowedOrigins = new Set(allowedOrigin.split(",").map((origin) => origin.trim()).filter(Boolean));
+  const webSessionPolicy = allowedOrigins.size > 0
+    ? createWebSessionPolicy({ allowedOrigins: [...allowedOrigins] })
+    : null;
+  const authenticateRequest = (request) => authenticatedUser(request, store, webSessionPolicy);
+  const requireWebSessionPolicy = () => {
+    if (webSessionPolicy) return webSessionPolicy;
+    throw new WebSessionError("WEB_SESSION_UNAVAILABLE", "当前云节点未配置 Web Cookie 会话", 501);
+  };
+  const inspectSessionIssuance = (request) => {
+    if (request.headers[WEB_SESSION_MODE_HEADER] !== undefined && !webSessionPolicy) requireWebSessionPolicy();
+    return inspectSessionIssuanceRequest(request, webSessionPolicy);
+  };
+  const deliverIssuedSession = (request, issued) => createSessionDelivery(request, {
+    sessionToken: issued.token,
+    sessionExpiresAt: issued.session.expiresAt,
+  }, webSessionPolicy);
   const tencentSesMailer = mailer === undefined ? createTencentSesMailer({
     secretId: mailTencentSecretId,
     secretKey: mailTencentSecretKey,
@@ -3782,7 +3815,10 @@ export async function createCloudServer({
     if (!preludeProcessed) {
       const origin = request.headers.origin;
       if (origin) response.setHeader("vary", "Origin");
-      if (origin && allowedOrigins.has(origin)) response.setHeader("access-control-allow-origin", origin);
+      if (origin && allowedOrigins.has(origin)) {
+        response.setHeader("access-control-allow-origin", origin);
+        response.setHeader("access-control-allow-credentials", "true");
+      }
       if (origin && allowedOrigins.size > 0 && !allowedOrigins.has(origin)) return send(response, 403, { error: "来源未获授权" });
       response.setHeader("access-control-allow-headers", [
         "authorization",
@@ -3796,6 +3832,8 @@ export async function createCloudServer({
         "x-dsp-save-mode",
         ACCOUNT_ARCHIVE_IMPORT_GUARD_HEADER,
         ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_HEADER,
+        "x-dsp-session-mode",
+        "x-dsp-csrf-token",
       ].join(", "));
       response.setHeader("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS");
       if (request.method === "OPTIONS") return send(response, 204, {});
@@ -4069,6 +4107,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/register") {
+        inspectSessionIssuance(request);
         const body = await readJson(request);
         const username = normalizedUsername(body.username);
         const displayName = normalizedName(body.displayName);
@@ -4098,10 +4137,17 @@ export async function createCloudServer({
         recordSuccessfulLogin(store.data, user.id, issued.context, { clientType: clientTypeForRequest(request), now });
         appendAudit(store, request, "account.register", user.id);
         await store.persist();
-        return send(response, 201, { token: issued.token, user: publicUser(user), verificationRequired: false, mailAvailable: Boolean(accountMailer) });
+        const delivery = deliverIssuedSession(request, issued);
+        return send(response, 201, {
+          ...delivery.publicCredentials,
+          user: publicUser(user),
+          verificationRequired: false,
+          mailAvailable: Boolean(accountMailer),
+        }, delivery.headers);
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/login") {
+        inspectSessionIssuance(request);
         const body = await readJson(request);
         const identifier = typeof body.identifier === "string" ? body.identifier : body.email;
         const email = normalizedEmail(identifier);
@@ -4134,7 +4180,8 @@ export async function createCloudServer({
         const security = recordSuccessfulLogin(store.data, user.id, issued.context, { clientType: clientTypeForRequest(request) });
         appendAudit(store, request, "account.login", user.id);
         await store.persist();
-        return send(response, 200, { token: issued.token, user: publicUser(user), security });
+        const delivery = deliverIssuedSession(request, issued);
+        return send(response, 200, { ...delivery.publicCredentials, user: publicUser(user), security }, delivery.headers);
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/verify-email") {
@@ -4151,7 +4198,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/resend-verification") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
         if (Number.isFinite(auth.user.emailVerifiedAt)) return send(response, 200, { verified: true, user: publicUser(auth.user) });
         if (!normalizedEmail(auth.user.email)) return send(response, 400, { error: "请先绑定邮箱", code: "EMAIL_NOT_BOUND" });
@@ -4181,6 +4228,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/reset-password") {
+        inspectSessionIssuance(request);
         const body = await readJson(request);
         const password = typeof body.password === "string" ? body.password : "";
         if (password.length < 8 || password.length > 128) return send(response, 400, { error: "新密码必须为 8 至 128 位" });
@@ -4195,11 +4243,36 @@ export async function createCloudServer({
         const security = recordSuccessfulLogin(store.data, user.id, issued.context, { clientType: clientTypeForRequest(request) });
         appendAudit(store, request, "account.password_reset", user.id);
         await store.persist();
-        return send(response, 200, { token: issued.token, user: publicUser(user), security });
+        const delivery = deliverIssuedSession(request, issued);
+        return send(response, 200, { ...delivery.publicCredentials, user: publicUser(user), security }, delivery.headers);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/auth/web-session/migrate") {
+        const policy = requireWebSessionPolicy();
+        const credential = assertLegacyWebSessionMigrationRequest(request, policy);
+        const auth = authenticateRequest(request);
+        if (!auth || auth.credentialKind !== "bearer" || sha256(credential.token) !== auth.tokenHash) {
+          return send(response, 401, { error: "旧 Web 会话已过期，请重新登录", code: "SESSION_EXPIRED" });
+        }
+        const delivery = createSessionDelivery(request, {
+          sessionToken: credential.token,
+          sessionExpiresAt: auth.session.expiresAt,
+        }, policy);
+        return send(response, 200, delivery.publicCredentials, delivery.headers);
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/auth/web-session") {
+        const policy = requireWebSessionPolicy();
+        const credential = requireCookieSessionCredential(request, policy);
+        const auth = authenticateRequest(request);
+        if (!auth || auth.credentialKind !== "cookie") {
+          return send(response, 401, { error: "Web 会话已过期", code: "SESSION_EXPIRED" });
+        }
+        return send(response, 200, { session: publicCookieSession(credential, auth.session.expiresAt) });
       }
 
       if (request.method === "GET" && url.pathname === "/api/account") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         return auth ? send(response, 200, {
           user: publicUser(auth.user),
           cloudSave: cloudSaveMetadata(currentCloudSave(store, auth.user.id, "main", "normal"), "main", "normal"),
@@ -4213,17 +4286,22 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/logout") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
+        const credentialKind = webSessionPolicy
+          ? inspectSessionCredential(request, webSessionPolicy).kind
+          : "none";
         if (auth) {
           delete store.data.sessions[auth.tokenHash];
           appendAudit(store, request, "account.logout", auth.user.id);
           await store.persist();
         }
-        return send(response, 200, { ok: true });
+        return send(response, 200, { ok: true }, credentialKind === "cookie"
+          ? { "set-cookie": clearWebSessionCookie(webSessionPolicy) }
+          : {});
       }
 
       if (request.method === "GET" && url.pathname === "/api/account/sessions") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
         const sessions = Object.entries(store.data.sessions)
           .filter(([, session]) => session.userId === auth.user.id && session.expiresAt > Date.now())
@@ -4233,13 +4311,13 @@ export async function createCloudServer({
       }
 
       if (request.method === "GET" && url.pathname === "/api/account/security-events") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
         return send(response, 200, { events: publicLoginSecurityEvents(store.data, auth.user.id) });
       }
 
       if (request.method === "GET" && url.pathname.startsWith("/api/operations/")) {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
         let requestId = "";
         try { requestId = decodeURIComponent(url.pathname.slice("/api/operations/".length)); } catch { /* handled below */ }
@@ -4252,7 +4330,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/account/sessions/revoke") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
         const body = await readJson(request);
         const target = Object.entries(store.data.sessions).find(([, session]) => session.userId === auth.user.id && session.id === body.sessionId);
@@ -4260,11 +4338,28 @@ export async function createCloudServer({
         delete store.data.sessions[target[0]];
         appendAudit(store, request, "account.session_revoked", auth.user.id);
         await store.persist();
-        return send(response, 200, { revoked: true, currentSessionRevoked: target[0] === auth.tokenHash });
+        const currentSessionRevoked = target[0] === auth.tokenHash;
+        return send(response, 200, { revoked: true, currentSessionRevoked }, currentSessionRevoked && auth.credentialKind === "cookie"
+          ? { "set-cookie": clearWebSessionCookie(webSessionPolicy) }
+          : {});
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/account/sessions/revoke-all") {
+        const auth = authenticateRequest(request);
+        if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
+        const revokedCount = Object.values(store.data.sessions)
+          .filter((session) => session.userId === auth.user.id)
+          .length;
+        revokeUserSessions(store, auth.user.id);
+        appendAudit(store, request, "account.sessions_revoked_all", auth.user.id);
+        await store.persist();
+        return send(response, 200, { revoked: true, revokedCount, currentSessionRevoked: true }, auth.credentialKind === "cookie"
+          ? { "set-cookie": clearWebSessionCookie(webSessionPolicy) }
+          : {});
       }
 
       if (request.method === "POST" && url.pathname === "/api/account/password") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
         const body = await readJson(request);
         const currentPassword = typeof body.currentPassword === "string" ? body.currentPassword : "";
@@ -4279,7 +4374,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/account/email") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         if (!accountMailer) return send(response, 503, { error: "邮件验证服务尚未配置", code: "EMAIL_SERVICE_UNAVAILABLE" });
         if (Number.isFinite(auth.user.emailVerifiedAt)) return send(response, 409, { error: "当前账号已经绑定并验证邮箱" });
@@ -4301,7 +4396,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "GET" && url.pathname === "/api/account/export") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const userId = auth.user.id;
         const currentMainSave = currentCloudSave(store, userId, "main", "normal");
@@ -4348,10 +4443,10 @@ export async function createCloudServer({
       }
 
       if (request.method === "GET" && url.pathname === "/api/account/export/archive") {
-        const initialAuth = authenticatedUser(request, store);
+        const initialAuth = authenticateRequest(request);
         if (!initialAuth) return send(response, 401, { error: "请先登录" });
         const prepared = await store.runAtomic(async () => {
-          const auth = authenticatedUser(request, store);
+          const auth = authenticateRequest(request);
           if (!auth || auth.user.id !== initialAuth.user.id) {
             const error = new Error("登录已过期");
             error.statusCode = 401;
@@ -4385,7 +4480,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "GET" && url.pathname === "/api/account/import/archive") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const guard = currentAccountArchiveImportGuard(store, auth.user.id);
         response.setHeader("cache-control", "private, no-store");
@@ -4402,7 +4497,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/account/import/archive") {
-        const initialAuth = authenticatedUser(request, store);
+        const initialAuth = authenticateRequest(request);
         if (!initialAuth) return send(response, 401, { error: "请先登录" });
         const expectedGuard = typeof request.headers[ACCOUNT_ARCHIVE_IMPORT_GUARD_HEADER] === "string"
           ? request.headers[ACCOUNT_ARCHIVE_IMPORT_GUARD_HEADER]
@@ -4453,7 +4548,7 @@ export async function createCloudServer({
             });
           }
           const result = await store.runAtomic(async () => {
-            const auth = authenticatedUser(request, store);
+            const auth = authenticateRequest(request);
             if (!auth || auth.user.id !== initialAuth.user.id) {
               const error = new Error("登录已过期，现有云存档未修改");
               error.statusCode = 401;
@@ -4500,7 +4595,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/account/delete") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const body = await readJson(request);
         if (body.confirmation !== "DELETE" || !(await passwordMatches(typeof body.password === "string" ? body.password : "", auth.user))) {
@@ -4510,11 +4605,13 @@ export async function createCloudServer({
         appendAudit(store, request, "account.deleted", userId);
         deleteAccountData(store, userId);
         await store.persist();
-        return send(response, 200, { deleted: true });
+        return send(response, 200, { deleted: true }, auth.credentialKind === "cookie"
+          ? { "set-cookie": clearWebSessionCookie(webSessionPolicy) }
+          : {});
       }
 
       if (request.method === "GET" && url.pathname === "/api/cloud-save/history") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
         const requestedMode = normalizedCloudSaveMode(url.searchParams.get("mode") ?? "normal");
@@ -4526,13 +4623,13 @@ export async function createCloudServer({
       }
 
       if (request.method === "GET" && url.pathname === "/api/cloud-save/quota") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         return send(response, 200, { cloudQuota: cloudQuotaSnapshot(store.data, auth.user.id, quotaPolicy) });
       }
 
       if (request.method === "POST" && url.pathname === "/api/cloud-save/quota") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const body = await readJson(request);
         const slot = normalizedCloudSaveSlot(body.slot ?? "main");
@@ -4549,7 +4646,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "GET" && url.pathname === "/api/cloud-save") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
         const mode = normalizedCloudSaveMode(url.searchParams.get("mode") ?? "normal");
@@ -4570,7 +4667,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "DELETE" && url.pathname === "/api/cloud-save") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
         const mode = normalizedCloudSaveMode(url.searchParams.get("mode") ?? "normal");
@@ -4595,7 +4692,7 @@ export async function createCloudServer({
 
       if (request.method === "PUT" && url.pathname === "/api/cloud-save") {
         const preparedUpload = request.preparedCloudUpload;
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
         const mode = normalizedCloudSaveMode(url.searchParams.get("mode") ?? "normal");
@@ -4703,7 +4800,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/cloud-save/restore") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const slot = normalizedCloudSaveSlot(url.searchParams.get("slot") ?? "main");
         const mode = normalizedCloudSaveMode(url.searchParams.get("mode") ?? "normal");
@@ -4774,7 +4871,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/speedrun/submit") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         if (isLeaderboardRestricted(store.data, auth.user.id) || leaderboardRevalidationRequired(
           store.data,
@@ -4793,7 +4890,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/leaderboard/visibility") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const body = await readJson(request);
         if (typeof body.visible !== "boolean") return send(response, 400, { error: "排行榜可见性设置无效" });
@@ -4827,7 +4924,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "GET" && url.pathname === "/api/leaderboard/me") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         const category = VALID_CATEGORIES.has(url.searchParams.get("category")) ? url.searchParams.get("category") : "galaxy";
         const seasonId = VALID_SEASONS.has(url.searchParams.get("seasonId")) ? url.searchParams.get("seasonId") : ACTIVE_LEADERBOARD_SEASON_ID;
@@ -4838,7 +4935,7 @@ export async function createCloudServer({
       }
 
       if (request.method === "POST" && url.pathname === "/api/leaderboard") {
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
         if (isLeaderboardRestricted(store.data, auth.user.id)) {
           removeUserLeaderboardSubmissions(store, auth.user.id);
@@ -4861,7 +4958,7 @@ export async function createCloudServer({
 
       if (request.method === "POST" && (url.pathname === "/api/feedback" || url.pathname === "/api/errors")) {
         const body = await readJson(request);
-        const auth = authenticatedUser(request, store);
+        const auth = authenticateRequest(request);
         const record = {
           id: randomUUID(),
           userId: auth?.user.id ?? null,
