@@ -185,7 +185,13 @@ Get-FileHash release/download-site-<build-id>/downloads/desktop/stable/*.exe -Al
 
 仓库提供 `deploy/switch-release.sh` 切换前端与后端代码并保存上一次代码指向。1.0.40 候选增加稳定交接代理：Nginx 固定指向 `127.0.0.1:4330`；代理先让已有上传和导出完成并排队新写请求，再短暂排队全部请求。旧写实例释放共享 `flock` 后，新实例才可在 4321/4322 之一接触生产 SQLite。候选预热只允许使用已经验证的发布前备份克隆，不允许两个写实例同时打开生产库。正式安装时须把控制文件放入不可变 `/usr/local/lib/dsp-idle-release/<build-id>/`，再原子更新 `/usr/local/lib/dsp-idle-release/current`，不得覆盖正在运行的控制文件。
 
-API 切换必须提供与不可变 SQLite Backup API 快照绑定的证据。证据锁定绝对路径、大小、mtime、SHA-256、`quick_check`、schema 和 SQLite layout；切换器会再次计算 SHA-256。`--dry-run` 执行同样的证据与目标校验，但不启动服务、不 reload Nginx、不改软链。节点级非密钥配置从 `deploy/dsp-idle-runtime.env.example` 安装到 `/etc/dsp-idle-cloud/runtime.env`；真实凭据仍只放 `admin.env`。
+API 切换必须提供与不可变 SQLite Backup API 快照绑定的证据。证据锁定绝对路径、大小、mtime、dev/inode、SHA-256、`quick_check`、schema 和 SQLite layout；切换关键路径只复核身份和元数据，避免重新顺序读取多 GiB 快照。快照创建和独立预置副本生成时完成完整 SHA-256。`--dry-run` 执行同样的证据与目标校验，但不启动服务、不 reload Nginx、不改软链。节点级非密钥配置从 `deploy/dsp-idle-runtime.env.example` 安装到 `/etc/dsp-idle-cloud/runtime.env`；真实凭据仍只放 `admin.env`。
+
+1.0.41 起 pending journal 固定为 `/var/lib/dsp-idle-cloud/release-state/pending-switch.json`，不得放回 `/run`。状态目录必须是 `root:<service-group> 2750`，状态文件是 `root:<service-group> 0640`；active API 只读。阶段依次为 `prepared → publishing → published`，失败或不一致时进入 `recovering`。任何恢复失败都保留 journal 和 proxy hold，禁止手工删除后强行启动 writer。所有参与 unit 保留共享 RuntimeDirectory，并对配置错误 78、锁占用 75 使用 `RestartPreventExitStatus` 和 StartLimit。
+
+ext4 无 reflink 且备份超过 `DSP_RELEASE_PREFLIGHT_INLINE_COPY_LIMIT_BYTES`（默认 512 MiB）时，切换器必须在停止旧 writer 之前立即拒绝。Release Agent 应在低流量窗口提前运行 `release-backup-evidence.mjs --prepare-preflight`，以有界带宽生成独立副本及证据，再通过 `--preflight-evidence` 原子采用。不得在 handoff 关键路径无上限复制多 GiB 数据库，也不得删除或手动处理生产 WAL/SHM。
+
+旧 API 没有 `/api/ready` 时，只有明确 HTTP 404 才可把通过的 `/api/health` 作为兼容 readiness；503、连接错误或 `writable=false` 仍失败。`DSP_CLOUD_BACKUP_WINDOW` 是 interrupted recovery 的必需配置，1.0.41 还默认使用 900000 ms 启动宽限，避免服务恢复时立即生成大备份，同时保留后续低流量窗口备份。
 
 ```bash
 node /usr/local/lib/dsp-idle-release/current/release-backup-evidence.mjs \

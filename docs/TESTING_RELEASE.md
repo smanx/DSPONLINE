@@ -1,5 +1,7 @@
 # 测试与发布基线
 
+> `1.0.41` 固定源码 `59f37d18feb90b38822ebfd83b76baa19215ccce` 的开发侧最终门禁：typecheck；Vitest 136 文件通过/6 条件跳过、1206/18；server 347/2；ops 55/6（6 项仅真实 Linux）；native 24/24；Chromium 334/2；Firefox/WebKit 2/2；生产预览 PWA 1/1；production audit 根/server 均 0；125 个运行时包许可证；Web、162 文件 API 展开包、Windows unpacked、Android unsigned APK/AAB 均构建通过。所有写入测试使用合成账号和临时 SQLite。由于本机没有 WSL/Docker，真实 systemd/Nginx、UID/GID、flock 和故障切换矩阵没有执行，不能把 Windows 结果记为发布通过。
+
 > **当前发布基线（2026-08-11）**：香港、上海正式 Web/API 使用 `1.0.39 / GameState v46`，上海下载页与 Android/Windows stable 保持 1.0.38；有效资产的 v43 空间站实验存档拒绝加载。量子网络回归以 GameState v46 语义为基线，并保留传统物流站升级兼容测试。1.0.39 不升级存档 envelope、云 schema 或 SQLite layout。
 
 > `1.0.39` API 热修在 2026-08-11 完成开发与正式发布门禁：typecheck、clean Vite build、Vitest 107 文件通过/6 文件跳过且 950 项通过/18 项跳过、服务端 75/2、运维 6/6、原生工具 8/8、128 个运行时许可证、根与 server 生产依赖审计 0。Playwright 最终完整全量为 282 通过/11 条显式条件夹具跳过/0 失败（293 总项）；首次既有用例瞬时超时后，目标与随后完整全量均通过。source 163/163、candidate 2/2、Web 128/128、API 35/35，以及两地发布前备份、各自副本隔离、原子切换、真实云 PUT、完整公网字节、Range/cache、6 场 Chrome 和 PWA 均通过。所有写入 smoke 仅使用合成账号与临时/备份副本 SQLite，不使用生产或玩家数据。
