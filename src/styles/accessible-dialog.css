@@ -1,0 +1,131 @@
+.accessible-dialog-portal {
+  --accessible-dialog-backdrop: rgba(3, 7, 6, 0.82);
+  --accessible-dialog-border: var(--theme-border-strong, var(--line-strong, #40534c));
+  --accessible-dialog-surface: var(--theme-surface-raised, var(--surface-raised, #111a17));
+  --accessible-dialog-text: var(--theme-text, var(--text, #e7f2ed));
+  --accessible-dialog-muted: var(--theme-text-muted, var(--muted, #91a49c));
+  --accessible-dialog-focus: var(--theme-accent, var(--cyan, #70d8c1));
+  --accessible-dialog-max-inline-size: 42rem;
+  position: fixed;
+  z-index: var(--accessible-dialog-z-index, 20000);
+  inset: 0;
+  isolation: isolate;
+  pointer-events: none;
+}
+
+.accessible-dialog__backdrop {
+  position: absolute;
+  display: grid;
+  overflow: auto;
+  overscroll-behavior: contain;
+  place-items: center;
+  inset: 0;
+  padding:
+    max(1rem, env(safe-area-inset-top, 0rem))
+    max(1rem, env(safe-area-inset-right, 0rem))
+    max(1rem, env(safe-area-inset-bottom, 0rem))
+    max(1rem, env(safe-area-inset-left, 0rem));
+  background: var(--accessible-dialog-backdrop);
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.accessible-dialog__surface {
+  box-sizing: border-box;
+  display: grid;
+  inline-size: min(var(--accessible-dialog-max-inline-size), 100%);
+  max-block-size: calc(100dvh - 2rem - env(safe-area-inset-top, 0rem) - env(safe-area-inset-bottom, 0rem));
+  overflow: hidden auto;
+  border: 0.0625rem solid var(--accessible-dialog-border);
+  border-radius: 0.5rem;
+  outline: none;
+  background: var(--accessible-dialog-surface);
+  box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.55);
+  color: var(--accessible-dialog-text);
+  font-size: calc(1rem * var(--ui-font-scale, 1));
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.accessible-dialog__surface:focus-visible {
+  box-shadow:
+    0 0 0 0.1875rem color-mix(in srgb, var(--accessible-dialog-focus) 50%, transparent),
+    0 1.5rem 4rem rgba(0, 0, 0, 0.55);
+}
+
+.accessible-dialog__header {
+  display: grid;
+  gap: 0.375em;
+  padding: 1em 1.125em;
+  border-block-end: 0.0625rem solid var(--accessible-dialog-border);
+}
+
+.accessible-dialog__header h2,
+.accessible-dialog__header p {
+  margin: 0;
+}
+
+.accessible-dialog__header h2 {
+  font-size: 1.125em;
+  line-height: 1.3;
+}
+
+.accessible-dialog__header p {
+  color: var(--accessible-dialog-muted);
+  font-size: 0.875em;
+  line-height: 1.55;
+}
+
+.accessible-dialog__body {
+  min-inline-size: 0;
+  padding: 1.125em;
+}
+
+.accessible-dialog__actions {
+  display: flex;
+  min-inline-size: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.625em;
+  padding: 0.875em 1.125em;
+  border-block-start: 0.0625rem solid var(--accessible-dialog-border);
+}
+
+.accessible-dialog__surface :is(button, input, select, textarea, [role="button"]):focus-visible {
+  outline: 0.1875rem solid color-mix(in srgb, var(--accessible-dialog-focus) 65%, transparent);
+  outline-offset: 0.125rem;
+}
+
+@media (max-width: 40rem), (pointer: coarse) {
+  .accessible-dialog__backdrop {
+    align-items: end;
+    padding:
+      max(0.5rem, env(safe-area-inset-top, 0rem))
+      max(0.5rem, env(safe-area-inset-right, 0rem))
+      max(0.5rem, env(safe-area-inset-bottom, 0rem))
+      max(0.5rem, env(safe-area-inset-left, 0rem));
+  }
+
+  .accessible-dialog__surface {
+    inline-size: 100%;
+    max-block-size: calc(100dvh - 1rem - env(safe-area-inset-top, 0rem) - env(safe-area-inset-bottom, 0rem));
+  }
+
+  .accessible-dialog__surface :is(button, input, select, textarea, [role="button"]) {
+    min-block-size: max(2.75rem, 2.75em);
+    touch-action: manipulation;
+  }
+
+  .accessible-dialog__actions > button {
+    min-inline-size: min(8rem, 100%);
+    flex: 1 1 auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .accessible-dialog-portal,
+  .accessible-dialog-portal * {
+    scroll-behavior: auto !important;
+  }
+}
