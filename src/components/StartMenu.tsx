@@ -78,6 +78,7 @@ import { CloudSaveConflictDialog } from "./CloudSaveConflictDialog";
 import { CloudSaveSlotsPanel } from "./CloudSaveSlotsPanel";
 import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 import { SpeedrunCopyDialog } from "./SpeedrunCopyDialog";
+import { AccessibleDialog } from "./AccessibleDialog";
 import { useResolvedTheme } from "../hooks/useResolvedTheme";
 import { isSecureCloudClient } from "../nativeApp";
 import { useAppLocale } from "../i18n/locale";
@@ -365,6 +366,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [speedrunCopyRequest, setSpeedrunCopyRequest] = useState<{ source: "main" | SaveSlotId; label: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const offlineAbortRef = useRef<AbortController | null>(null);
+  const offlineDecisionCancelRef = useRef<HTMLButtonElement>(null);
   const cloudUploadAbortRef = useRef<AbortController | null>(null);
   const cloudUploadSkipOfflineRef = useRef(false);
   const cloudAuthAllowed = isSecureCloudClient();
@@ -1276,7 +1278,20 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         <button type="button" onClick={() => offlineAbortRef.current?.abort()}>取消计算并返回</button>
       </section> : null}
 
-      {offlineDecision ? <section className="start-menu-offline-decision" role="dialog" aria-modal="true" aria-labelledby="offline-decision-title">
+      {offlineDecision ? <AccessibleDialog
+        open
+        className="start-menu-offline-decision"
+        layout="bare"
+        role={offlineSkipConfirmed ? "alertdialog" : "dialog"}
+        riskPolicy={offlineSkipConfirmed ? "explicit" : "dismissible"}
+        ariaLabelledBy="offline-decision-title"
+        ariaDescribedBy="offline-decision-description"
+        title={offlineDecision.exactAttempted ? "精确结算未完成" : "快速结算需要玩家选择"}
+        description="离线收益尚未提交"
+        initialFocusRef={offlineDecisionCancelRef}
+        portalTarget={document.querySelector<HTMLElement>(".start-menu")}
+        onRequestClose={cancelOfflineDecision}
+      >
         <header><Clock3 size={22} /><span><small>离线收益尚未提交</small><strong id="offline-decision-title">{offlineDecision.exactAttempted ? "精确结算未完成" : "快速结算需要玩家选择"}</strong></span></header>
         <div className="start-menu-offline-decision__summary">
           <span><small>原始离线时间</small><strong>{Math.floor(offlineDecision.loaded.offlineSeconds).toLocaleString("zh-CN")} 秒</strong></span>
@@ -1284,16 +1299,16 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
           <span><small>当前状态</small><strong>{offlineDecision.approximation ? "保守预览" : "失败"}</strong></span>
           <span><small>失败分类</small><strong>{offlineFailureKindLabel(offlineDecision.failureKind)}</strong></span>
         </div>
-        <p>快速结算未完成，本次尚未产生或提交离线生产收益。原始存档、savedAt、库存、建筑缓存和累计产量均保持不变。</p>
+        <p id="offline-decision-description">快速结算未完成，本次尚未产生或提交离线生产收益。原始存档、savedAt、库存、建筑缓存和累计产量均保持不变。</p>
         <small className="start-menu-offline-decision__reason">原因：{offlineDecision.reason}</small>
         {offlineDecision.complexity?.warning ? <small className="start-menu-offline-decision__reason">设备提示：{offlineDecision.complexity.warning}</small> : null}
-        {offlineSkipConfirmed ? <div className="start-menu-offline-decision__confirm"><ShieldCheck size={17} /><span><strong>再次确认跳过本次收益</strong><small>将只推进本次离线时间，生产、库存、缓存、科研和戴森收益均为 0；该操作不会凭空补发物资。</small></span></div> : null}
+        {offlineSkipConfirmed ? <div className="start-menu-offline-decision__confirm" role="status" aria-live="assertive"><ShieldCheck size={17} /><span><strong>再次确认跳过本次收益</strong><small>将只推进本次离线时间，生产、库存、缓存、科研和戴森收益均为 0；该操作不会凭空补发物资。</small></span></div> : null}
         <footer>
           <button className="primary" type="button" disabled={busy} onClick={() => void retryOfflineExactly()}><RefreshCw size={15} />使用精确结算（推荐）</button>
           {offlineDecision.loaded.state.mode !== "speedrun" && !offlineDecision.loaded.state.speedrun?.enabled ? <button className={offlineSkipConfirmed ? "danger" : offlineSettlementPreference === "skip" ? "warning" : ""} type="button" disabled={busy} onClick={() => void confirmOfflineSkip()}><SkipForward size={15} />{offlineSkipConfirmed ? "再次确认：收益为 0" : "保守跳过本次收益"}</button> : null}
-          <button type="button" disabled={busy} onClick={cancelOfflineDecision}><X size={15} />取消并返回</button>
+          <button ref={offlineDecisionCancelRef} type="button" disabled={busy} onClick={cancelOfflineDecision}><X size={15} />取消并返回</button>
         </footer>
-      </section> : null}
+      </AccessibleDialog> : null}
 
       <section className="start-menu-layout">
         <aside className="start-menu-command">

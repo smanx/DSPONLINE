@@ -79,7 +79,7 @@ for (const scenario of [
       await expect(decision).toBeVisible({ timeout: 20_000 });
       await expect(decision).toContainText("实际提交时间0 秒");
       await decision.getByRole("button", { name: "保守跳过本次收益" }).click();
-      await decision.getByRole("button", { name: "再次确认：收益为 0" }).click();
+      await page.getByRole("alertdialog", { name: "快速结算需要玩家选择" }).getByRole("button", { name: "再次确认：收益为 0" }).click();
     }
 
     const report = page.getByRole("dialog", { name: "离线结算报告" });
@@ -127,6 +127,56 @@ test("mobile construction inventory deletion reuses the guarded confirmation", a
   await expect(build.locator(".mobile-build-card--discard").filter({ hasText: "传送带 Mk.I" }).first()).toContainText("当前 ×0");
   await expect(page.locator(".game-notice")).toContainText("画布建筑和制造目标未改变");
   await context.close();
+});
+
+test("offline settlement choice traps keyboard focus and keeps its explicit zero-reward confirmation visible across target viewports and font scales", async ({ page }) => {
+  await seedBatchSave(page, { offlineSeconds: 33, bypassMenu: false });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: /继续游戏/ }).click();
+
+  const initialDecision = page.getByRole("dialog", { name: "快速结算需要玩家选择" });
+  await expect(initialDecision).toBeVisible({ timeout: 20_000 });
+  await expect(initialDecision).toHaveAttribute("aria-modal", "true");
+  await expect(page.locator(".start-menu-layout")).toHaveAttribute("inert", "");
+
+  await initialDecision.getByRole("button", { name: "取消并返回" }).focus();
+  await page.keyboard.press("Tab");
+  await expect.poll(() => page.evaluate(() => document.activeElement?.textContent?.replace(/\s+/g, " ").trim())).toBe("使用精确结算（推荐）");
+  await page.keyboard.press("Escape");
+  await expect(initialDecision).toHaveCount(0);
+  await expect(page.locator(".start-menu-layout")).not.toHaveAttribute("inert", "");
+
+  await page.getByRole("button", { name: /继续游戏/ }).click();
+  const decision = page.getByRole("dialog", { name: "快速结算需要玩家选择" });
+  await expect(decision).toBeVisible({ timeout: 20_000 });
+  await decision.getByRole("button", { name: "保守跳过本次收益" }).click();
+
+  const finalConfirmation = page.getByRole("alertdialog", { name: "快速结算需要玩家选择" });
+  await expect(finalConfirmation).toBeVisible();
+  await expect(finalConfirmation.getByRole("status")).toContainText("再次确认跳过本次收益");
+  await page.keyboard.press("Escape");
+  await expect(finalConfirmation).toBeVisible();
+
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 844, height: 390 },
+  ]) {
+    await page.setViewportSize(viewport);
+    for (const scale of [0.8, 1, 1.25, 1.5, 2]) {
+      await page.evaluate((value) => {
+        document.documentElement.dataset.uiFontScale = String(Math.round(value * 100));
+        document.documentElement.style.setProperty("--ui-font-scale", String(value));
+      }, scale);
+      const bounds = await finalConfirmation.boundingBox();
+      expect(bounds, `${viewport.width}x${viewport.height} at ${scale * 100}%`).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.y).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width + 1);
+      expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height + 1);
+      await expect(finalConfirmation.getByRole("button", { name: "再次确认：收益为 0" })).toBeVisible();
+    }
+  }
 });
 
 test("zero-tick belt counts and locked machine ports come from topology", async ({ page }) => {

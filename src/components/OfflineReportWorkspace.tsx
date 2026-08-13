@@ -1,6 +1,8 @@
 import { CheckCircle2, Clock3, Factory, FlaskConical, Gift, Orbit, Send, Sparkles, X } from "lucide-react";
+import { useRef } from "react";
 import { getItem, getTechnology } from "../game/content";
 import type { OfflineReport } from "../game/storage";
+import { AccessibleDialog } from "./AccessibleDialog";
 import { offlineProfileLabel } from "../game/offlineComplexityTypes";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { QuantityValue } from "./QuantityValue";
@@ -15,7 +17,11 @@ function formatDuration(seconds: number): string {
 }
 
 export function OfflineReportWorkspace({ report, onClose }: { report: OfflineReport | null; onClose: () => void }) {
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   if (!report) return null;
+  const portalTarget = typeof document === "undefined"
+    ? null
+    : document.querySelector<HTMLElement>(".game-shell");
   const infiniteResearchLevels = report.infiniteResearchLevels ?? [];
   const exported = report.exported ?? [];
   const galacticCreditsAdded = report.galacticCreditsAdded ?? 0;
@@ -39,10 +45,20 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
     report.structurePointsAdded > 0 || report.shellSailsAdded > 0 || infiniteResearchLevels.length > 0 ||
     exported.length > 0 || galacticCreditsAdded > 0 || returningReward.length > 0;
   return (
-    <section className="offline-report" role="dialog" aria-modal="true" aria-label="离线结算报告">
+    <AccessibleDialog
+      open
+      className="offline-report"
+      layout="bare"
+      ariaLabel="离线结算报告"
+      title="离线结算报告"
+      description="已完成的离线结算结果"
+      initialFocusRef={closeButtonRef}
+      portalTarget={portalTarget}
+      onRequestClose={onClose}
+    >
       <header>
         <div><i><Clock3 size={19} /></i><span><small>离线生产协议</small><strong>结算报告</strong></span></div>
-        <button type="button" onClick={onClose} title="关闭离线结算报告" aria-label="关闭离线结算报告"><X size={18} /></button>
+        <button ref={closeButtonRef} type="button" onClick={onClose} title="关闭离线结算报告" aria-label="关闭离线结算报告"><X size={18} /></button>
       </header>
       <div className="offline-report-summary">
         <div className="offline-runtime">
@@ -124,6 +140,6 @@ export function OfflineReportWorkspace({ report, onClose }: { report: OfflineRep
         <div className={`offline-report-empty${settlement.status === "conservative-skipped" ? " offline-report-empty--skipped" : ""}`}><CheckCircle2 size={26} /><strong>{settlement.status === "conservative-skipped" ? "本次离线收益已明确跳过" : "离线期间网络保持稳定"}</strong><span>{settlement.status === "conservative-skipped" ? "收益为 0；这是玩家二次确认后的结果，不是成功生产结算" : "没有新增物资、科技或戴森结构"}</span></div>
       )}
       <footer><button type="button" onClick={onClose}><CheckCircle2 size={15} />确认结算</button></footer>
-    </section>
+    </AccessibleDialog>
   );
 }

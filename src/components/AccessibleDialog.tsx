@@ -42,6 +42,15 @@ export interface AccessibleDialogProps {
   getBackgroundElements?: AccessibleDialogBackgroundResolver;
   id?: string;
   className?: string;
+  /**
+   * `bare` keeps a consumer's established internal layout while retaining the
+   * modal, focus and inert-background contract supplied by this component.
+   */
+  layout?: "structured" | "bare";
+  /** Required by bare layouts because no generated heading is rendered. */
+  ariaLabel?: string;
+  ariaLabelledBy?: string;
+  ariaDescribedBy?: string;
 }
 
 interface InertSnapshot {
@@ -276,6 +285,10 @@ export function AccessibleDialog({
   getBackgroundElements,
   id,
   className = "",
+  layout = "structured",
+  ariaLabel,
+  ariaLabelledBy,
+  ariaDescribedBy,
 }: AccessibleDialogProps) {
   const generatedId = useId();
   const boundaryRef = useRef<HTMLDivElement>(null);
@@ -303,6 +316,7 @@ export function AccessibleDialog({
   const resolvedId = id ?? `accessible-dialog-${sanitizedReactId(generatedId)}`;
   const titleId = `${resolvedId}-title`;
   const descriptionId = `${resolvedId}-description`;
+  const isBareLayout = layout === "bare";
   const canUseDom = typeof document !== "undefined";
   const resolvedPortalTarget = canUseDom ? (portalTarget ?? document.body) : null;
 
@@ -467,19 +481,22 @@ export function AccessibleDialog({
           className={`accessible-dialog__surface${className ? ` ${className}` : ""}`}
           role={role}
           aria-modal="true"
-          aria-labelledby={titleId}
-          aria-describedby={description === undefined ? undefined : descriptionId}
+          aria-label={ariaLabel}
+          aria-labelledby={ariaLabelledBy ?? (isBareLayout ? undefined : titleId)}
+          aria-describedby={ariaDescribedBy ?? (isBareLayout || description === undefined ? undefined : descriptionId)}
           data-risk-policy={riskPolicy}
           tabIndex={-1}
         >
-          <header className="accessible-dialog__header">
-            <h2 id={titleId}>{title}</h2>
-            {description === undefined
-              ? null
-              : <p id={descriptionId}>{description}</p>}
-          </header>
-          {children === undefined ? null : <div className="accessible-dialog__body">{children}</div>}
-          {actions === undefined ? null : <footer className="accessible-dialog__actions">{actions}</footer>}
+          {isBareLayout ? children : <>
+            <header className="accessible-dialog__header">
+              <h2 id={titleId}>{title}</h2>
+              {description === undefined
+                ? null
+                : <p id={descriptionId}>{description}</p>}
+            </header>
+            {children === undefined ? null : <div className="accessible-dialog__body">{children}</div>}
+            {actions === undefined ? null : <footer className="accessible-dialog__actions">{actions}</footer>}
+          </>}
         </section>
       </div>
     </div>,
