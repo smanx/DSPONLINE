@@ -449,13 +449,18 @@ test("cloud save divergence requires an explicit keep-local or use-cloud choice"
     if (pathname === "/api/account" && request.method() === "GET") return fulfill({ user, cloudSave });
     if (pathname === "/api/account/sessions") return fulfill({ sessions: [] });
     if (pathname === "/api/cloud-save" && request.method() === "PUT") {
-      const body = request.postDataJSON() as { payload: string; expectedRevision: number };
-      overwriteExpectedRevision = body.expectedRevision;
-      const envelope = JSON.parse(body.payload) as { checksum?: string; savedAt?: number; state?: { elapsedSeconds?: number; entities?: unknown[]; research?: { completedTechIds?: unknown[] } } };
+      const contentType = request.headers()["content-type"]?.split(";", 1)[0];
+      const directPayload = contentType === "application/vnd.dspidle.save+json";
+      const legacyBody = directPayload ? null : request.postDataJSON() as { payload: string; expectedRevision: number };
+      const uploadedPayload = directPayload ? request.postData() ?? "" : legacyBody!.payload;
+      overwriteExpectedRevision = directPayload
+        ? Number(request.headers()["x-dsp-expected-revision"])
+        : legacyBody!.expectedRevision;
+      const envelope = JSON.parse(uploadedPayload) as { checksum?: string; savedAt?: number; state?: { elapsedSeconds?: number; entities?: unknown[]; research?: { completedTechIds?: unknown[] } } };
       cloudSave = {
         revision: 3,
         updatedAt: Date.now(),
-        size: body.payload.length,
+        size: uploadedPayload.length,
         checksum: "local-cloud",
         summary: {
           ...remoteSummary,
@@ -482,10 +487,11 @@ test("cloud save divergence requires an explicit keep-local or use-cloud choice"
   await expect(page.getByText("需要选择保留版本", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "上传本地存档" }).click();
-  const dialog = page.getByRole("alertdialog", { name: "云存档冲突" });
+  const dialog = page.getByRole("alertdialog", { name: /本地与云端都有不同进度/ });
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("当前本地工厂");
   await expect(dialog).toContainText("云端工厂");
+  await expect(dialog).toContainText("普通模式 · 主存档");
   await expect(dialog).toContainText("42");
   await dialog.getByRole("button", { name: "保留本地并新建云修订" }).click();
   await expect(dialog).toHaveCount(0);

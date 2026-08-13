@@ -184,6 +184,7 @@ describe("critical dialog consumers", () => {
         {open ? <CloudSaveConflictDialog
           local={local}
           cloud={cloud}
+          slot="2"
           onUseCloud={onUseCloud}
           onKeepLocal={onKeepLocal}
           onCancel={() => setOpen(false)}
@@ -198,6 +199,7 @@ describe("critical dialog consumers", () => {
 
     const dialog = document.querySelector<HTMLElement>("[role='alertdialog']")!;
     expect(labelledByText(dialog)).toContain("本地与云端都有不同进度");
+    expect(dialog.textContent).toContain("普通模式 · 槽位 2");
     expect(dialog.textContent).toContain("修订 23");
     expect(dialog.textContent).toContain("普通模式");
     expect(host.hasAttribute("inert")).toBe(true);
@@ -246,6 +248,7 @@ describe("critical dialog consumers", () => {
       <CloudSaveConflictDialog
         local={null}
         cloud={cloud}
+        slot="main"
         busy
         onUseCloud={() => undefined}
         onKeepLocal={() => undefined}

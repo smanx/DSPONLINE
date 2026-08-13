@@ -1,11 +1,12 @@
 import { CloudDownload, CloudUpload, GitCompareArrows, LoaderCircle, X } from "lucide-react";
 import { useRef } from "react";
-import type { CloudSaveMetadata, CloudSaveSummary } from "../game/cloud";
+import type { CloudSaveMetadata, CloudSaveSlot, CloudSaveSummary } from "../game/cloud";
 import { AccessibleDialog } from "./AccessibleDialog";
 
 interface CloudSaveConflictDialogProps {
   local: CloudSaveSummary | null;
   cloud: CloudSaveMetadata;
+  slot: CloudSaveSlot;
   busy?: boolean;
   onUseCloud: () => void;
   onKeepLocal: () => void;
@@ -26,6 +27,10 @@ function modeLabel(mode: CloudSaveSummary["mode"]): string {
   return mode === "speedrun" ? "速通模式" : "普通模式";
 }
 
+function slotLabel(slot: CloudSaveSlot): string {
+  return slot === "main" ? "主存档" : `槽位 ${slot}`;
+}
+
 function Summary({ title, summary, revision, mode }: { title: string; summary: CloudSaveSummary | null; revision?: number; mode?: CloudSaveSummary["mode"] }) {
   return <section aria-label={title}>
     <header><strong>{title}</strong><small>{revision ? `修订 ${revision}` : "本地"}</small></header>
@@ -39,14 +44,16 @@ function Summary({ title, summary, revision, mode }: { title: string; summary: C
   </section>;
 }
 
-export function CloudSaveConflictDialog({ local, cloud, busy = false, onUseCloud, onKeepLocal, onCancel }: CloudSaveConflictDialogProps) {
+export function CloudSaveConflictDialog({ local, cloud, slot, busy = false, onUseCloud, onKeepLocal, onCancel }: CloudSaveConflictDialogProps) {
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const targetMode = cloud.mode ?? local?.mode ?? "normal";
+  const targetLabel = `${modeLabel(targetMode)} · ${slotLabel(slot)}`;
   return <AccessibleDialog
     open
     role="alertdialog"
     riskPolicy="explicit"
     title={<><GitCompareArrows aria-hidden="true" size={19} /> 本地与云端都有不同进度</>}
-    description="请选择本次保留方向，另一份会保留为恢复点"
+    description={`${targetLabel}：请选择本次保留方向，另一份会保留为恢复点`}
     initialFocusRef={cancelButtonRef}
     onRequestClose={onCancel}
     actions={<>
@@ -55,6 +62,7 @@ export function CloudSaveConflictDialog({ local, cloud, busy = false, onUseCloud
       <button className="primary" type="button" disabled={busy} onClick={onKeepLocal}>{busy ? <LoaderCircle aria-hidden="true" size={14} /> : <CloudUpload aria-hidden="true" size={14} />}保留本地并新建云修订</button>
     </>}
   >
+    <p className="cloud-save-conflict-target"><strong>本次唯一目标</strong><span>{targetLabel}</span></p>
     <div className="cloud-save-conflict-comparison">
       <Summary title="当前本地工厂" summary={local} />
       <Summary title="云端工厂" summary={cloud.summary} revision={cloud.revision} mode={cloud.mode} />
