@@ -64,6 +64,7 @@ import { clearClientErrors, collectClientDiagnostics, downloadDiagnostics, getCl
 import { fetchCloudPublicStatus, resumeCloudSession, sendCloudFeedback, type CloudPublicStatus } from "../game/cloud";
 import { resetOnboarding } from "../game/onboarding";
 import { applyPwaUpdate, getPwaRuntimeState, requestPwaInstall, subscribePwaRuntime, type PwaRuntimeState } from "../pwa";
+import { pwaUpdateStatusCopy } from "../pwaStatusCopy";
 import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
 import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 import { useAppLocale } from "../i18n/locale";
@@ -928,6 +929,7 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   const [errorRevision, setErrorRevision] = useState(0);
   const errors = getClientErrors();
+  const pwaUpdateCopy = pwaUpdateStatusCopy(pwa.updateStatus);
   void errorRevision;
 
   useEffect(() => subscribePwaRuntime(setPwa), []);
@@ -977,7 +979,7 @@ function SupportPanel({ game, report }: { game: GameState; report: AutomaticPerf
         <article><Users size={18} /><span><small>累计游玩玩家</small><strong>{cloudStatus?.players.total.toLocaleString("zh-CN") ?? "--"}</strong></span><em>匿名标识去重</em></article>
         <article className="support-player-online"><Radio size={18} /><span><small>当前在线游玩</small><strong>{cloudStatus?.players.online.toLocaleString("zh-CN") ?? "--"}</strong></span><em>{cloudStatus ? `${cloudStatus.players.onlineWindowSeconds} 秒内活跃` : "等待云节点"}</em></article>
         <article><Smartphone size={18} /><span><small>PWA 状态</small><strong>{pwa.installed ? "已安装" : pwa.supported ? "浏览器运行" : "不可用"}</strong></span>{pwa.installAvailable ? <button type="button" onClick={() => void requestPwaInstall()}>安装</button> : null}</article>
-        <article><RotateCcw size={18} /><span><small>网页版本</small><strong>v{__APP_VERSION__}</strong></span>{pwa.updateAvailable ? <button className="ready" type="button" onClick={applyPwaUpdate}>立即更新</button> : <em>已是最新</em>}</article>
+        <article data-pwa-update-status={pwa.updateStatus}><RotateCcw size={18} /><span><small>网页版本</small><strong>v{__APP_VERSION__}</strong></span>{pwa.updateStatus === "downloaded-await-restart" && pwa.updateAvailable ? <button className="ready" type="button" onClick={applyPwaUpdate}>重启并更新</button> : <em className={`settings-state settings-state--${pwaUpdateCopy.tone}`} role="status" data-copy-key={pwaUpdateCopy.key}>{pwaUpdateCopy.text}</em>}</article>
       </section>
       <section className="support-diagnostics-export">
         <div><ShieldCheck size={16} /><span><strong>匿名诊断包</strong><small>环境、工厂规模、性能结果和最近错误，不包含密码与完整存档。</small></span></div>
