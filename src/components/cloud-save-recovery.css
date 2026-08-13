@@ -44,8 +44,17 @@
 .cloud-save-recovery-history article strong { color: var(--text-soft); font-size: calc(8px * var(--ui-font-scale, 1)); overflow-wrap: anywhere; }
 .cloud-save-recovery-history article small,
 .cloud-save-recovery-history article em { color: var(--muted); font-size: calc(7px * var(--ui-font-scale, 1)); font-style: normal; overflow-wrap: anywhere; }
-.cloud-save-recovery-confirm .save-delete-dialog > header > i { color: var(--cyan); }
-.cloud-save-recovery-confirm .save-delete-dialog > footer button.primary { border-color: #477a6d; background: #19332a; color: #c8e3da; }
+.cloud-save-recovery-confirm { --accessible-dialog-max-inline-size: 34rem; }
+.cloud-save-recovery-confirm > .accessible-dialog__body { display: grid; gap: .8rem; }
+.cloud-save-recovery-confirm-target { display: grid; gap: .3rem; padding: .75rem; border: .0625rem solid var(--line-strong); border-radius: .25rem; background: #0d1411; }
+.cloud-save-recovery-confirm-target span,
+.cloud-save-recovery-confirm-target small { color: var(--muted); font-size: .75em; overflow-wrap: anywhere; }
+.cloud-save-recovery-confirm-target strong { color: var(--text-soft); font-size: .95em; overflow-wrap: anywhere; }
+.cloud-save-recovery-confirm > .accessible-dialog__body > p { margin: 0; color: var(--text-soft); font-size: .875em; line-height: 1.65; overflow-wrap: anywhere; }
+.cloud-save-recovery-confirm > .accessible-dialog__actions button { display: inline-flex; min-height: 2.5rem; align-items: center; justify-content: center; gap: .35rem; padding: 0 .85rem; border: .0625rem solid var(--line-strong); border-radius: .25rem; background: var(--surface-raised); color: var(--text-soft); cursor: pointer; font: inherit; font-size: .8em; }
+.cloud-save-recovery-confirm > .accessible-dialog__actions button.primary { border-color: #477a6d; background: #19332a; color: #c8e3da; }
+.cloud-save-recovery-confirm > .accessible-dialog__actions button.danger { border-color: #8a4f45; background: #381d18; color: #f2b4a7; }
+.cloud-save-recovery-confirm > .accessible-dialog__actions button:disabled { cursor: default; opacity: .45; }
 
 html[data-ui-font-scale="150"] .cloud-save-recovery > div,
 html[data-ui-font-scale="200"] .cloud-save-recovery > div { grid-template-columns: minmax(0, 1fr); }

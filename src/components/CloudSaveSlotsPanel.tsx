@@ -20,6 +20,7 @@ import {
   cloudSaveModeLabel,
   cloudSaveSlotLabel,
 } from "./cloudSaveRecovery";
+import { AccessibleDialog } from "./AccessibleDialog";
 import "./cloud-save-recovery.css";
 
 interface LocalCloudSlotSummary {
@@ -45,7 +46,7 @@ interface CloudSaveSlotsPanelProps {
 const MANUAL_SLOTS = ["1", "2", "3"] as const;
 
 type PendingCloudAction =
-  | { kind: "download"; mode: CloudSaveMode; slot: CloudSaveSlot; metadata: CloudSaveMetadata; revision?: number }
+  | { kind: "download"; mode: CloudSaveMode; slot: CloudSaveSlot; metadata: CloudSaveMetadata; revision?: number; localExists: boolean }
   | { kind: "restore-history"; mode: CloudSaveMode; slot: CloudSaveSlot; metadata: CloudSaveMetadata; revision: number }
   | { kind: "delete"; mode: CloudSaveMode; slot: CloudSaveSlot; metadata: CloudSaveMetadata };
 
@@ -75,8 +76,8 @@ function normalizeModeSaves(
   return Object.fromEntries(Object.entries(selected).map(([slot, metadata]) => [slot, metadata ? { ...metadata, mode, slot } : null]));
 }
 
-function localSummary(mode: CloudSaveMode, slot: CloudSaveSlot, currentMode: CloudSaveMode, localSlots: LocalCloudSlotSummary[]) {
-  if (mode !== currentMode) {
+function localSummary(mode: CloudSaveMode, slot: CloudSaveSlot, currentMode: CloudSaveMode, localSlots: LocalCloudSlotSummary[], forcePreview = false) {
+  if (forcePreview || mode !== currentMode) {
     if (slot === "main") return getMenuContinueSave(mode)?.summary ?? null;
     return getMenuSlotSummaries(mode).find((candidate) => candidate.slotId === Number(slot)) ?? null;
   }
@@ -86,6 +87,8 @@ function localSummary(mode: CloudSaveMode, slot: CloudSaveSlot, currentMode: Clo
 
 export function CloudSaveSlotsPanel({ mode = "normal", cloudSaves, cloudSavesByMode, localSlots, busySlot = null, uploadDisabled = false, onUpload, onDownload, onDelete }: CloudSaveSlotsPanelProps) {
   const rootRef = useRef<HTMLElement | null>(null);
+  const confirmationCancelRef = useRef<HTMLButtonElement | null>(null);
+  const discoveryRequestRef = useRef(0);
   const [recoverySurface, setRecoverySurface] = useState(false);
   const [selectedMode, setSelectedMode] = useState<CloudSaveMode>(mode);
   const [discoveredByMode, setDiscoveredByMode] = useState<Partial<Record<CloudSaveMode, Partial<Record<CloudSaveSlot, CloudSaveMetadata | null>>>>>(() => ({
@@ -130,15 +133,15 @@ export function CloudSaveSlotsPanel({ mode = "normal", cloudSaves, cloudSavesByM
   const externallyBusy = Boolean(busySlot);
 
   const discoverMode = async (nextMode: CloudSaveMode) => {
+    const requestId = ++discoveryRequestRef.current;
     setSelectedMode(nextMode);
     setHistorySlot(null);
     setHistory([]);
     setNotice(null);
-    const cached = discoveredByMode[nextMode];
-    if (cached && selectedSlots.every((slot) => Object.prototype.hasOwnProperty.call(cached, slot))) return;
     setLoadingMode(nextMode);
     try {
       const session = await resumeCloudSession(nextMode);
+      if (requestId !== discoveryRequestRef.current) return;
       if (session.status !== "authenticated" || !session.user) {
         throw new Error(session.message ?? "云账户登录已失效，请重新登录");
       }
@@ -150,9 +153,11 @@ export function CloudSaveSlotsPanel({ mode = "normal", cloudSaves, cloudSavesByM
         [nextMode]: Object.fromEntries(selectedSlots.map((slot) => [slot, metadata[slot] ?? null])),
       }));
     } catch (error) {
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : `${cloudSaveModeLabel(nextMode)}云存档发现失败` });
+      if (requestId === discoveryRequestRef.current) {
+        setNotice({ tone: "error", text: error instanceof Error ? error.message : `${cloudSaveModeLabel(nextMode)}云存档发现失败` });
+      }
     } finally {
-      setLoadingMode(null);
+      if (requestId === discoveryRequestRef.current) setLoadingMode(null);
     }
   };
 
@@ -219,7 +224,13 @@ export function CloudSaveSlotsPanel({ mode = "normal", cloudSaves, cloudSavesByM
       onDownload(slot);
       return;
     }
-    setPendingAction({ kind: "download", mode: activeMode, slot, metadata: cloud });
+    setPendingAction({
+      kind: "download",
+      mode: activeMode,
+      slot,
+      metadata: cloud,
+      localExists: Boolean(localSummary(activeMode, slot, mode, localSlots)),
+    });
   };
 
   const requestDelete = (slot: Exclude<CloudSaveSlot, "main">, cloud: CloudSaveMetadata) => {
@@ -255,6 +266,7 @@ export function CloudSaveSlotsPanel({ mode = "normal", cloudSaves, cloudSavesByM
       setPendingAction(null);
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : `${cloudSaveSlotLabel(action.mode, action.slot)}操作失败` });
+      setPendingAction(null);
     } finally {
       setPanelBusy(false);
     }
@@ -273,19 +285,19 @@ export function CloudSaveSlotsPanel({ mode = "normal", cloudSaves, cloudSavesByM
     {recoverySurface ? <section className="cloud-save-primary-recovery" data-cloud-slot="main">
       {(() => {
         const cloud = selectedSaves.main ?? null;
-        const local = localSummary(activeMode, "main", mode, localSlots);
+        const local = localSummary(activeMode, "main", mode, localSlots, recoverySurface);
         return <>
           <header><i>M</i><span><strong>{cloudSaveSlotLabel(activeMode, "main")}</strong><small>{formatTime(cloud?.updatedAt)}</small></span><em>{cloud ? `修订 ${cloud.revision}` : "云端为空"}</em></header>
           <dl><div><dt>本机主档</dt><dd>{local ? `${formatTime(local.savedAt)} · ${formatProgress(local.elapsedSeconds, local.completedTechCount)}` : "本机没有该模式主档"}</dd></div><div><dt>云端进度</dt><dd>{cloud?.summary ? formatProgress(cloud.summary.elapsedSeconds, cloud.summary.completedTechCount) : cloud ? "旧存档摘要待刷新" : "尚未建立"}</dd></div></dl>
           {activeMode === "speedrun" && cloud && !local ? <p className="cloud-save-discovery-callout"><ShieldCheck size={14} /><span><strong>发现新设备可恢复的速通主档</strong><small>明确确认后只写入速通模式主档，不创建普通工厂。</small></span></p> : null}
-          <footer><button className="primary" type="button" disabled={panelBusy || externallyBusy || !cloud} onClick={() => cloud && setPendingAction({ kind: "download", mode: activeMode, slot: "main", metadata: cloud })}><CloudDownload size={13} />{local ? "恢复到本机" : activeMode === "speedrun" ? "恢复速通主档" : "恢复普通主档"}</button><button type="button" disabled={panelBusy || externallyBusy || !cloud} onClick={() => void openHistory("main")}><History size={13} />历史</button><button className="danger" type="button" disabled={panelBusy || externallyBusy || !cloud} onClick={() => cloud && setPendingAction({ kind: "delete", mode: activeMode, slot: "main", metadata: cloud })}><Trash2 size={13} />删除</button></footer>
+          <footer><button className="primary" type="button" disabled={panelBusy || externallyBusy || !cloud} onClick={() => cloud && requestDownload("main", cloud)}><CloudDownload size={13} />{local ? "恢复到本机" : activeMode === "speedrun" ? "恢复速通主档" : "恢复普通主档"}</button><button type="button" disabled={panelBusy || externallyBusy || !cloud} onClick={() => void openHistory("main")}><History size={13} />历史</button><button className="danger" type="button" disabled={panelBusy || externallyBusy || !cloud} onClick={() => cloud && setPendingAction({ kind: "delete", mode: activeMode, slot: "main", metadata: cloud })}><Trash2 size={13} />删除</button></footer>
         </>;
       })()}
     </section> : null}
     {recoverySurface ? <header className="cloud-save-manual-heading"><HardDrive size={15} /><span><strong>{modeLabel} · 手动云存档</strong><small>槽位 1–3 与主存档及另一模式完全独立</small></span></header> : null}
     <div>
       {MANUAL_SLOTS.map((slot) => {
-        const local = localSummary(activeMode, slot, mode, localSlots);
+        const local = localSummary(activeMode, slot, mode, localSlots, recoverySurface);
         const cloud = selectedSaves[slot] ?? null;
         const useParentActions = activeMode === mode;
         const localSlotValid = Boolean(local && "valid" in local && local.valid);
@@ -301,7 +313,23 @@ export function CloudSaveSlotsPanel({ mode = "normal", cloudSaves, cloudSavesByM
         </article>;
       })}
     </div>
-    {recoverySurface && historySlot && history.length > 0 ? <section className="cloud-save-recovery-history" aria-label={`${cloudSaveSlotLabel(activeMode, historySlot)}历史修订`}><header><History size={14} /><span><strong>{cloudSaveSlotLabel(activeMode, historySlot)} · 历史修订</strong><small>下载到本机或恢复为云端当前版本前均需明确确认</small></span><button type="button" aria-label="关闭云存档历史" onClick={() => { setHistorySlot(null); setHistory([]); }}><X size={13} /></button></header><div>{history.map((entry) => <article key={entry.revision}><span><strong>{cloudSaveSlotLabel(activeMode, historySlot)} · 修订 {entry.revision}</strong><small>{formatTime(entry.updatedAt)}</small></span><em>{entry.revision === selectedSaves[historySlot]?.revision ? "当前" : `${Math.max(0, entry.size / 1024).toFixed(1)} KB`}</em><button type="button" disabled={panelBusy} onClick={() => setPendingAction({ kind: "download", mode: activeMode, slot: historySlot, metadata: entry, revision: entry.revision })}><CloudDownload size={13} />下载</button><button type="button" disabled={panelBusy || entry.revision === selectedSaves[historySlot]?.revision} onClick={() => setPendingAction({ kind: "restore-history", mode: activeMode, slot: historySlot, metadata: selectedSaves[historySlot] ?? entry, revision: entry.revision })}><RotateCcw size={13} />恢复云端</button></article>)}</div></section> : null}
-    {recoverySurface && pendingAction ? <div className="save-delete-backdrop cloud-save-recovery-confirm" role="presentation"><section className="save-delete-dialog" role="alertdialog" aria-modal="true" aria-label={`确认${cloudSaveSlotLabel(pendingAction.mode, pendingAction.slot)}${pendingAction.kind === "delete" ? "删除" : "恢复"}`}><header><i>{pendingAction.kind === "delete" ? <Trash2 size={20} /> : <CloudDownload size={20} />}</i><span><small>模式与槽位核对</small><strong>{pendingAction.kind === "delete" ? "删除" : pendingAction.kind === "restore-history" ? "恢复云端历史" : "下载并恢复"}{cloudSaveSlotLabel(pendingAction.mode, pendingAction.slot)}</strong></span><button type="button" aria-label="取消云存档操作" disabled={panelBusy} onClick={() => setPendingAction(null)}><X size={16} /></button></header><div className="save-delete-target"><span>本次唯一目标</span><strong>{cloudSaveSlotLabel(pendingAction.mode, pendingAction.slot)}</strong><small>修订 {pendingAction.kind === "restore-history" || pendingAction.kind === "download" && pendingAction.revision !== undefined ? pendingAction.revision : pendingAction.metadata.revision} · {formatTime(pendingAction.metadata.updatedAt)}</small></div><p>{pendingAction.kind === "delete" ? "只删除上方模式和槽位的云存档；另一模式、本机存档及其他槽位不会受到影响。" : pendingAction.kind === "restore-history" ? "只在上方模式与槽位创建一个新的云端修订；不会写入另一模式。" : `只写入本机${cloudSaveSlotLabel(pendingAction.mode, pendingAction.slot)}；${pendingAction.mode === "speedrun" ? "不会创建普通存档，也不会把普通存档转换为速通。" : "速通存档不会受到影响。"}`}</p><footer><button type="button" disabled={panelBusy} onClick={() => setPendingAction(null)}>取消</button><button className={pendingAction.kind === "delete" ? "danger" : "primary"} type="button" disabled={panelBusy} onClick={() => void executePendingAction()}>{panelBusy ? <LoaderCircle size={14} /> : pendingAction.kind === "delete" ? <Trash2 size={14} /> : <ShieldCheck size={14} />}确认{pendingAction.kind === "delete" ? "删除" : "恢复"}</button></footer></section></div> : null}
+    {recoverySurface && historySlot && history.length > 0 ? <section className="cloud-save-recovery-history" aria-label={`${cloudSaveSlotLabel(activeMode, historySlot)}历史修订`}><header><History size={14} /><span><strong>{cloudSaveSlotLabel(activeMode, historySlot)} · 历史修订</strong><small>下载到本机或恢复为云端当前版本前均需明确确认</small></span><button type="button" aria-label="关闭云存档历史" onClick={() => { setHistorySlot(null); setHistory([]); }}><X size={13} /></button></header><div>{history.map((entry) => <article key={entry.revision}><span><strong>{cloudSaveSlotLabel(activeMode, historySlot)} · 修订 {entry.revision}</strong><small>{formatTime(entry.updatedAt)}</small></span><em>{entry.revision === selectedSaves[historySlot]?.revision ? "当前" : `${Math.max(0, entry.size / 1024).toFixed(1)} KB`}</em><button type="button" disabled={panelBusy} onClick={() => setPendingAction({ kind: "download", mode: activeMode, slot: historySlot, metadata: entry, revision: entry.revision, localExists: Boolean(localSummary(activeMode, historySlot, mode, localSlots, true)) })}><CloudDownload size={13} />下载</button><button type="button" disabled={panelBusy || entry.revision === selectedSaves[historySlot]?.revision} onClick={() => setPendingAction({ kind: "restore-history", mode: activeMode, slot: historySlot, metadata: selectedSaves[historySlot] ?? entry, revision: entry.revision })}><RotateCcw size={13} />恢复云端</button></article>)}</div></section> : null}
+    {recoverySurface && pendingAction ? <AccessibleDialog
+      open
+      role="alertdialog"
+      riskPolicy="explicit"
+      className="cloud-save-recovery-confirm"
+      title={`确认${cloudSaveSlotLabel(pendingAction.mode, pendingAction.slot)}${pendingAction.kind === "delete" ? "删除" : pendingAction.kind === "download" && pendingAction.localExists ? "覆盖" : "恢复"}`}
+      description="请核对本次唯一目标；操作不会跨模式或跨槽位。"
+      initialFocusRef={confirmationCancelRef}
+      onRequestClose={() => { if (!panelBusy) setPendingAction(null); }}
+      actions={<>
+        <button ref={confirmationCancelRef} type="button" disabled={panelBusy} onClick={() => setPendingAction(null)}>取消</button>
+        <button className={pendingAction.kind === "delete" ? "danger" : "primary"} type="button" disabled={panelBusy} onClick={() => void executePendingAction()}>{panelBusy ? <LoaderCircle size={14} /> : pendingAction.kind === "delete" ? <Trash2 size={14} /> : <ShieldCheck size={14} />}确认{pendingAction.kind === "delete" ? "删除" : pendingAction.kind === "download" && pendingAction.localExists ? "覆盖" : "恢复"}</button>
+      </>}
+    >
+      <div className="cloud-save-recovery-confirm-target"><span>本次唯一目标</span><strong>{cloudSaveSlotLabel(pendingAction.mode, pendingAction.slot)}</strong><small>修订 {pendingAction.kind === "restore-history" || pendingAction.kind === "download" && pendingAction.revision !== undefined ? pendingAction.revision : pendingAction.metadata.revision} · {formatTime(pendingAction.metadata.updatedAt)}</small></div>
+      <p>{pendingAction.kind === "delete" ? "只删除上方模式和槽位的云存档；另一模式、本机存档及其他槽位不会受到影响。" : pendingAction.kind === "restore-history" ? "只在上方模式与槽位创建一个新的云端修订；不会写入另一模式。" : pendingAction.localExists ? `本机${cloudSaveSlotLabel(pendingAction.mode, pendingAction.slot)}已有存档；确认后会先创建同模式恢复快照，再只覆盖这个本机目标。${pendingAction.mode === "speedrun" ? "普通存档不会受到影响。" : "速通存档不会受到影响。"}` : `只写入本机${cloudSaveSlotLabel(pendingAction.mode, pendingAction.slot)}；${pendingAction.mode === "speedrun" ? "不会创建普通存档，也不会把普通存档转换为速通。" : "速通存档不会受到影响。"}`}</p>
+    </AccessibleDialog> : null}
   </section>;
 }
