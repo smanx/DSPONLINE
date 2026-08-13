@@ -10,7 +10,7 @@ import "../styles/accessible-dialog.css";
 
 export type AccessibleDialogRole = "dialog" | "alertdialog";
 export type AccessibleDialogRiskPolicy = "dismissible" | "explicit";
-export type AccessibleDialogCloseReason = "escape" | "backdrop";
+export type AccessibleDialogCloseReason = "escape" | "backdrop" | "external";
 
 export type AccessibleDialogBackgroundResolver = (
   portalBoundary: HTMLElement,
@@ -40,6 +40,8 @@ export interface AccessibleDialogProps {
    * inert. Use collectAccessibleDialogBackgroundElements() to compose extras.
    */
   getBackgroundElements?: AccessibleDialogBackgroundResolver;
+  /** Optional platform event (for example a native back action) that requests a safe close. */
+  externalCloseEventName?: string;
   id?: string;
   className?: string;
   backdropClassName?: string;
@@ -284,6 +286,7 @@ export function AccessibleDialog({
   returnFocusRef,
   portalTarget,
   getBackgroundElements,
+  externalCloseEventName,
   id,
   className = "",
   backdropClassName = "",
@@ -411,14 +414,23 @@ export function AccessibleDialog({
       redirectingFocus = false;
     };
 
+    const onExternalClose = (event: Event) => {
+      if (!isTopModal(token, ownerDocument)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (latestRef.current.riskPolicy === "dismissible") latestRef.current.onRequestClose("external");
+    };
+
     ownerDocument.addEventListener("keydown", onKeyDown, true);
     ownerDocument.addEventListener("keyup", onKeyUp, true);
     ownerDocument.addEventListener("focusin", onFocusIn, true);
+    if (externalCloseEventName) ownerDocument.defaultView?.addEventListener(externalCloseEventName, onExternalClose, true);
 
     return () => {
       ownerDocument.removeEventListener("keydown", onKeyDown, true);
       ownerDocument.removeEventListener("keyup", onKeyUp, true);
       ownerDocument.removeEventListener("focusin", onFocusIn, true);
+      if (externalCloseEventName) ownerDocument.defaultView?.removeEventListener(externalCloseEventName, onExternalClose, true);
       unregisterModal(token);
       for (const element of backgroundElements.reverse()) releaseInert(element);
       unlockDocumentScroll(ownerDocument);
@@ -432,7 +444,7 @@ export function AccessibleDialog({
         focusWithoutScrolling(returnTarget);
       }
     };
-  }, [open, resolvedPortalTarget]);
+  }, [externalCloseEventName, open, resolvedPortalTarget]);
 
   if (!open || !resolvedPortalTarget) return null;
 

@@ -1,7 +1,7 @@
 {
   "name": "dsp-idle-network",
   "private": true,
-  "version": "1.0.39",
+  "version": "1.0.40",
   "releaseChannel": "stable",
   "updateBaseUrl": "",
   "cloudApiBaseUrl": "",

@@ -1,10 +1,17 @@
-import { Check, ChevronLeft, ChevronRight, CloudUpload, Gauge, History, Info, Link2, MessageCircle, X, type LucideIcon } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, CloudUpload, Database, Gauge, History, Info, Link2, LockKeyhole, MessageCircle, ShieldCheck, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useAppLocale } from "../i18n/locale";
+import { getCurrentReleaseNotes, getReleaseNotes1039, getReleaseNotesUiCopy } from "../i18n/releaseNotes";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
+import { AccessibleDialog } from "./AccessibleDialog";
 
 export const RELEASE_NOTES_SEEN_KEY = "dsp-idle-network.release-notes.seen.v1";
 
-export const CURRENT_RELEASE_NOTES = {
+export const CURRENT_RELEASE_NOTES = getCurrentReleaseNotes("zh-CN");
+
+const RELEASE_NOTES_1_0_39 = getReleaseNotes1039("zh-CN");
+
+const RELEASE_NOTES_1_0_38 = {
   id: "2026-08-11-v1.0.38",
   date: "2026年8月11日",
   version: "1.0.38",
@@ -39,7 +46,16 @@ export const CURRENT_RELEASE_NOTES = {
   ],
 } as const;
 
-const RELEASE_NOTE_ICONS: Record<(typeof CURRENT_RELEASE_NOTES.items)[number]["id"], LucideIcon> = {
+const RELEASE_NOTE_ICONS: Record<string, LucideIcon> = {
+  "leaderboard-self-rank": Gauge,
+  "cross-platform-save-transfer": CloudUpload,
+  "local-save-fencing": LockKeyhole,
+  "atomic-cloud-archives": Database,
+  "secure-session-speedrun-recovery": ShieldCheck,
+  "startup-pwa-accessibility": Check,
+  "sparse-save-validation": ShieldCheck,
+  "payload-identity": Database,
+  "review-mode-isolation": LockKeyhole,
   "worker-transfer": CloudUpload,
   "exact-batching": Gauge,
   "save-compaction": History,
@@ -90,6 +106,8 @@ export interface ReleaseNotesRecord {
 /** Static, offline-readable history. Keep entries small; only one page is rendered. */
 export const RELEASE_NOTES_HISTORY: readonly ReleaseNotesRecord[] = [
   CURRENT_RELEASE_NOTES,
+  RELEASE_NOTES_1_0_39,
+  RELEASE_NOTES_1_0_38,
   RELEASE_NOTES_1_0_37,
   RELEASE_NOTES_1_0_36,
   {
@@ -461,15 +479,20 @@ export function markCurrentReleaseNotesSeen(): void {
 }
 
 export function ReleaseNotesDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const backdropRef = useRef<HTMLDivElement>(null);
+  const { locale } = useAppLocale();
+  const localizedCurrentRelease = getCurrentReleaseNotes(locale);
+  const localizedRelease1039 = getReleaseNotes1039(locale);
+  const uiCopy = getReleaseNotesUiCopy(locale);
   const releaseScrollRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
   const historyScrollTopRef = useRef(0);
   const [historyPage, setHistoryPage] = useState(0);
   const [selectedReleaseId, setSelectedReleaseId] = useState<string>(CURRENT_RELEASE_NOTES.id);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const selectedRelease = RELEASE_NOTES_HISTORY.find((release) => release.id === selectedReleaseId) ?? CURRENT_RELEASE_NOTES;
+  const selectedReleaseRecord = RELEASE_NOTES_HISTORY.find((release) => release.id === selectedReleaseId) ?? CURRENT_RELEASE_NOTES;
+  const selectedRelease = selectedReleaseRecord.id === CURRENT_RELEASE_NOTES.id
+    ? localizedCurrentRelease
+    : selectedReleaseRecord.id === RELEASE_NOTES_1_0_39.id ? localizedRelease1039 : selectedReleaseRecord;
   const pageCount = getReleaseNotesPageCount();
   const pageEntries = getReleaseNotesPage(historyPage);
 
@@ -511,72 +534,54 @@ export function ReleaseNotesDialog({ open, onClose }: { open: boolean; onClose: 
 
   useEffect(() => {
     if (!open) return;
-    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const previousBodyOverflow = document.body.style.overflow;
-    const previousRootOverflow = document.documentElement.style.overflow;
-    document.body.style.overflow = "hidden";
-    document.documentElement.style.overflow = "hidden";
-
     const syncVisualViewport = () => {
       const viewport = window.visualViewport;
       const height = Math.max(240, viewport?.height ?? window.innerHeight);
-      backdropRef.current?.style.setProperty("--release-notes-viewport-height", `${Math.round(height)}px`);
+      document.documentElement.style.setProperty("--release-notes-viewport-height", `${Math.round(height)}px`);
     };
     syncVisualViewport();
     window.addEventListener("resize", syncVisualViewport);
     window.visualViewport?.addEventListener("resize", syncVisualViewport);
     window.visualViewport?.addEventListener("scroll", syncVisualViewport);
-    const frame = window.requestAnimationFrame(() => closeButtonRef.current?.focus({ preventScroll: true }));
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-    };
-    const onNativeBack = (event: Event) => {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      onClose();
-    };
-    document.addEventListener("keydown", onKeyDown, true);
-    window.addEventListener(NATIVE_BACK_EVENT, onNativeBack, true);
     return () => {
-      window.cancelAnimationFrame(frame);
-      document.removeEventListener("keydown", onKeyDown, true);
-      window.removeEventListener(NATIVE_BACK_EVENT, onNativeBack, true);
       window.removeEventListener("resize", syncVisualViewport);
       window.visualViewport?.removeEventListener("resize", syncVisualViewport);
       window.visualViewport?.removeEventListener("scroll", syncVisualViewport);
-      document.body.style.overflow = previousBodyOverflow;
-      document.documentElement.style.overflow = previousRootOverflow;
-      previousFocusRef.current?.focus({ preventScroll: true });
+      document.documentElement.style.removeProperty("--release-notes-viewport-height");
     };
-  }, [onClose, open]);
-
-  if (!open) return null;
+  }, [open]);
 
   return (
-    <div ref={backdropRef} className="release-notes-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="release-notes-dialog" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
+    <AccessibleDialog
+      open={open}
+      title={selectedRelease.title}
+      layout="bare"
+      ariaLabel={selectedRelease.title}
+      className="release-notes-dialog"
+      backdropClassName="release-notes-backdrop"
+      initialFocusRef={closeButtonRef}
+      externalCloseEventName={NATIVE_BACK_EVENT}
+      onRequestClose={onClose}
+    >
         <header className="release-notes-header">
           <span className="release-notes-version"><small>VERSION</small><strong>{selectedRelease.version}</strong></span>
-          <div><small>{selectedRelease.date} · 公开测试版</small><h2 id="release-notes-title">{selectedRelease.title}</h2></div>
-          <button ref={closeButtonRef} type="button" onClick={onClose} title="关闭版本更新记录" aria-label="关闭版本更新记录"><X size={18} /></button>
+          <div><small>{selectedRelease.date} · {uiCopy.publicBeta}</small><h2 id="release-notes-title">{selectedRelease.title}</h2></div>
+          <button ref={closeButtonRef} type="button" onClick={onClose} title={uiCopy.close} aria-label={uiCopy.close}><X size={18} /></button>
         </header>
         <div className="release-notes-body">
-          <div className="release-notes-history-toolbar" aria-label="版本历史分页">
-            <button type="button" onClick={historyOpen ? () => showRelease(CURRENT_RELEASE_NOTES.id) : showHistory}>{historyOpen ? <><ChevronLeft size={14} />返回当前版本</> : <><History size={14} />查看历史版本</>}</button>
-            <span>第 {historyPage + 1} / {pageCount} 页</span>
+          <div className="release-notes-history-toolbar" aria-label={uiCopy.historyPagination}>
+            <button type="button" onClick={historyOpen ? () => showRelease(CURRENT_RELEASE_NOTES.id) : showHistory}>{historyOpen ? <><ChevronLeft size={14} />{uiCopy.returnCurrent}</> : <><History size={14} />{uiCopy.viewHistory}</>}</button>
+            <span>{uiCopy.page(historyPage + 1, pageCount)}</span>
             <label>
-              <span>跳转页码</span>
-            <select aria-label="跳转版本页" value={historyPage} onChange={(event) => openHistoryPage(Number(event.currentTarget.value))}>
-                {Array.from({ length: pageCount }, (_, page) => <option value={page} key={page}>第 {page + 1} 页</option>)}
+              <span>{uiCopy.jumpPageLabel}</span>
+            <select aria-label={uiCopy.jumpPageLabel} value={historyPage} onChange={(event) => openHistoryPage(Number(event.currentTarget.value))}>
+                {Array.from({ length: pageCount }, (_, page) => <option value={page} key={page}>{uiCopy.jumpPageOption(page + 1)}</option>)}
               </select>
             </label>
-            <button type="button" disabled={historyPage <= 0} onClick={() => openHistoryPage(historyPage - 1)} aria-label="上一页版本"><ChevronLeft size={14} />上一页</button>
-            <button type="button" disabled={historyPage >= pageCount - 1} onClick={() => openHistoryPage(historyPage + 1)} aria-label="下一页版本">下一页<ChevronRight size={14} /></button>
+            <button type="button" disabled={historyPage <= 0} onClick={() => openHistoryPage(historyPage - 1)} aria-label={uiCopy.previousAria}><ChevronLeft size={14} />{uiCopy.previous}</button>
+            <button type="button" disabled={historyPage >= pageCount - 1} onClick={() => openHistoryPage(historyPage + 1)} aria-label={uiCopy.nextAria}>{uiCopy.next}<ChevronRight size={14} /></button>
           </div>
-          {historyOpen ? <nav className="release-notes-history-list" aria-label="版本列表">
+          {historyOpen ? <nav className="release-notes-history-list" aria-label={uiCopy.releaseList}>
             {pageEntries.map((release) => <button type="button" className={release.id === selectedRelease.id ? "active" : ""} key={release.id} onClick={() => showRelease(release.id)}><span><strong>{release.version} · {release.title}</strong><small>{release.date}</small></span><ChevronRight size={15} /></button>)}
           </nav> : null}
           <div className="release-notes-scroll" ref={releaseScrollRef} onScroll={(event) => { historyScrollTopRef.current = event.currentTarget.scrollTop; }}>
@@ -595,10 +600,9 @@ export function ReleaseNotesDialog({ open, onClose }: { open: boolean; onClose: 
           </div>
         </div>
         <footer className="release-notes-footer">
-          <span><MessageCircle size={15} /><small>QQ 交流群</small><strong>1076757280</strong></span>
-          <button type="button" onClick={onClose}><Check size={16} />我知道了</button>
+          <span><MessageCircle size={15} /><small>{uiCopy.community}</small><strong>1076757280</strong></span>
+          <button type="button" onClick={onClose}><Check size={16} />{uiCopy.acknowledge}</button>
         </footer>
-      </section>
-    </div>
+    </AccessibleDialog>
   );
 }

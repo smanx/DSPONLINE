@@ -65,7 +65,7 @@ import { fetchCloudPublicStatus, resumeCloudSession, sendCloudFeedback, type Clo
 import { resetOnboarding } from "../game/onboarding";
 import { applyPwaUpdate, getPwaRuntimeState, requestPwaInstall, subscribePwaRuntime, type PwaRuntimeState } from "../pwa";
 import { pwaUpdateStatusCopy } from "../pwaStatusCopy";
-import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
+import { getCurrentReleaseNotes } from "../i18n/releaseNotes";
 import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 import { useAppLocale } from "../i18n/locale";
 import { useGameDialog } from "./GameDialogProvider";
@@ -324,6 +324,7 @@ function DefaultBeltLanesSetting({ value, onChange }: { value: number; onChange:
 function SettingsPanel({ game, report, productionRefreshPreference, productionRefreshIntervalMs, endgameExtremeMode, canvasPerformanceFeatures, onEndgameExtremeModeChange, onCanvasPerformanceFeatureChange, lineFindMode, onLineFindModeChange, connectionPointSize, onConnectionPointSizeChange, defaultBeltLanes, onDefaultBeltLanesChange, showRunLog, onRunLogChange, showItemHover, onItemHoverChange, onProductionRefreshPreferenceChange, onChange, onRunBenchmark, onOpenReleaseNotes, onOpenTutorial }: { game: GameState; report: AutomaticPerformanceReport | null; productionRefreshPreference: ProductionRefreshPreference; productionRefreshIntervalMs: number; endgameExtremeMode: boolean; canvasPerformanceFeatures: CanvasPerformanceFeatures; onEndgameExtremeModeChange: (enabled: boolean) => void; onCanvasPerformanceFeatureChange: (id: CanvasPerformanceFeatureId, enabled: boolean) => void; lineFindMode: boolean; onLineFindModeChange: (enabled: boolean) => void; connectionPointSize: ConnectionPointSize; onConnectionPointSizeChange: (size: ConnectionPointSize) => void; defaultBeltLanes: number; onDefaultBeltLanesChange: (lanes: number) => void; showRunLog: boolean; onRunLogChange: (enabled: boolean) => void; showItemHover: boolean; onItemHoverChange: (enabled: boolean) => void; onProductionRefreshPreferenceChange: (preference: ProductionRefreshPreference) => void; onChange: (settings: Partial<GameSettings>) => void; onRunBenchmark: () => void; onOpenReleaseNotes: () => void; onOpenTutorial: () => void }) {
   const { settings } = game;
   const { locale, setLocale } = useAppLocale();
+  const currentReleaseNotes = getCurrentReleaseNotes(locale);
   const gameDialog = useGameDialog();
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>(readSettingsCategoryPreference);
   useEffect(() => { writeSettingsCategoryPreference(settingsCategory); }, [settingsCategory]);
@@ -573,8 +574,8 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         <button type="button" onClick={onOpenTutorial} aria-label="打开新手教程"><GraduationCap size={15} /><span><strong>打开完整自然语言教程</strong><small>从采集、传送带到物流、戴森和存档</small></span><ChevronRight size={15} /></button>
       </section>
       <section className="settings-group settings-release-notes" data-settings-category="other">
-        <header><History size={14} /><span>版本更新记录</span><small>{CURRENT_RELEASE_NOTES.date}</small></header>
-        <button type="button" onClick={onOpenReleaseNotes} aria-label="查看版本更新记录"><History size={15} /><span><strong>{CURRENT_RELEASE_NOTES.title}</strong><small>{CURRENT_RELEASE_NOTES.items.length} 项体验更新</small></span></button>
+        <header><History size={14} /><span>版本更新记录</span><small>{currentReleaseNotes.date}</small></header>
+        <button type="button" onClick={onOpenReleaseNotes} aria-label="查看版本更新记录"><History size={15} /><span><strong>{currentReleaseNotes.title}</strong><small>{currentReleaseNotes.items.length} 项体验更新</small></span></button>
       </section>
       <section className="settings-group settings-community" data-settings-category="other">
         <header><MessageSquare size={14} /><span>QQ 交流群</span><small>意见、建议与问题反馈</small></header>

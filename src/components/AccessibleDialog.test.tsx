@@ -313,6 +313,24 @@ describe("AccessibleDialog", () => {
     expect(onRequestClose).toHaveBeenCalledWith("backdrop");
   });
 
+  it("maps an optional platform back event to an external close request", () => {
+    const onRequestClose = vi.fn();
+    render(
+      <AccessibleDialog
+        open
+        title="平台返回"
+        externalCloseEventName="dsp-test-native-back"
+        onRequestClose={onRequestClose}
+      >
+        <button type="button">完成</button>
+      </AccessibleDialog>,
+    );
+
+    act(() => window.dispatchEvent(new CustomEvent("dsp-test-native-back", { cancelable: true })));
+    expect(onRequestClose).toHaveBeenCalledOnce();
+    expect(onRequestClose).toHaveBeenCalledWith("external");
+  });
+
   it("places a consumer backdrop class on the backdrop without changing surface semantics", () => {
     render(
       <AccessibleDialog

@@ -22142,15 +22142,10 @@ input:focus-visible,
 }
 
 .release-notes-backdrop {
-  position: fixed;
-  z-index: 260;
-  inset: 0;
   box-sizing: border-box;
   height: 100vh;
   height: 100dvh;
   height: var(--release-notes-viewport-height, 100dvh);
-  display: grid;
-  place-items: center;
   padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   overflow: hidden;
   overscroll-behavior: contain;
@@ -22160,6 +22155,7 @@ input:focus-visible,
 
 .release-notes-dialog {
   display: grid;
+  inline-size: min(720px, 100%);
   width: min(720px, 100%);
   max-height: min(720px, calc(100vh - 32px));
   max-height: min(720px, calc(100dvh - 32px));

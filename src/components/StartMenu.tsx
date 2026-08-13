@@ -69,7 +69,7 @@ import { getMenuContinueSave, getMenuPlanetName, getMenuSlotSummaries, getMenuSn
 import type { DeferredLoadedGame, LoadedGame, SaveInspection, SaveSlotId } from "../game/storage";
 import type { AutosaveIntervalSeconds, FontScale, GameSettings, SaveMode, SimulationSpeed } from "../game/types";
 import { getDesktopBridge } from "../desktop";
-import { CURRENT_RELEASE_NOTES } from "./ReleaseNotesDialog";
+import { getCurrentReleaseNotes } from "../i18n/releaseNotes";
 import { importWithRecovery } from "../game/dynamicImportRecovery";
 import { NativeUpdateCard } from "./NativeUpdateCard";
 import { NATIVE_BACK_EVENT } from "../nativeApp";
@@ -322,6 +322,7 @@ function readRegistrationDraft(): { identifier: string; displayName: string } {
 
 export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const { locale, setLocale } = useAppLocale();
+  const currentReleaseNotes = getCurrentReleaseNotes(locale);
   const initialContinueSave = useMemo(() => getMenuContinueSave("normal"), []);
   const initialSpeedrunContinueSave = useMemo(() => getMenuContinueSave("speedrun"), []);
   const defaultSettings = { ...DEFAULT_MENU_SETTINGS, ...initialContinueSave?.settings };
@@ -1441,7 +1442,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             <section className="start-menu-offline-strategy"><header><Gauge size={15} /><strong>离线结算策略</strong><small>仅保存在当前设备</small></header><div className="start-menu-segments" role="radiogroup" aria-label="离线结算策略">{(["ask", "exact", "skip"] as OfflineSettlementPreference[]).map((preference) => <button className={offlineSettlementPreference === preference ? "active" : ""} type="button" role="radio" aria-checked={offlineSettlementPreference === preference} key={preference} onClick={() => { writeOfflineSettlementPreference(preference); setOfflineSettlementPreference(preference); }}>{preference === "ask" ? "自动：失败后询问" : preference === "exact" ? "始终精确" : "失败后优先跳过"}</button>)}</div><small className="settings-warning">默认先尝试受校验的快速结算；失败、超时或低内存降级只生成保守预览，不会自动写入。即使选择“优先跳过”，每次仍须二次确认收益为 0。</small></section>
             <section className="start-menu-setting-toggles"><ToggleRow checked={settings.performanceMode} label="性能模式" value={settings.performanceMode ? "低频渲染" : "完整渲染"} icon={<Cpu size={16} />} onChange={(performanceMode) => updateMenuSettings({ performanceMode })} /><ToggleRow checked={settings.reducedMotion} label="减少动态效果" value={settings.reducedMotion ? "动态已精简" : "完整动态"} icon={<Gauge size={16} />} onChange={(reducedMotion) => updateMenuSettings({ reducedMotion })} /><ToggleRow checked={settings.soundEnabled} label="操作音效" value={settings.soundEnabled ? "已开启" : "已关闭"} icon={settings.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />} onChange={(soundEnabled) => updateMenuSettings({ soundEnabled })} /><ToggleRow checked={settings.allowDoubleClickZoom} label="允许双击缩放" value={settings.allowDoubleClickZoom ? "双击聚焦画布" : "连续点击不缩放"} icon={<MousePointer2 size={16} />} onChange={(allowDoubleClickZoom) => updateMenuSettings({ allowDoubleClickZoom })} /><ToggleRow checked={showRunLog} label="显示运行记录" value={showRunLog ? "显示运行反馈浮条" : "仅保留错误、成就和诊断"} icon={<Activity size={16} />} onChange={updateRunLogPreference} /></section>
             <NativeUpdateCard className="start-menu-native-update" />
-            <section className="start-menu-release-notes"><header><History size={15} /><strong>版本更新记录</strong><small>{CURRENT_RELEASE_NOTES.date}</small></header><button type="button" onClick={onOpenReleaseNotes} aria-label={`查看${CURRENT_RELEASE_NOTES.date}版本更新记录`}><span><strong>{CURRENT_RELEASE_NOTES.title}</strong><small>{CURRENT_RELEASE_NOTES.items.length} 项体验更新</small></span><ArrowRight size={15} /></button></section>
+            <section className="start-menu-release-notes"><header><History size={15} /><strong>版本更新记录</strong><small>{currentReleaseNotes.date}</small></header><button type="button" onClick={onOpenReleaseNotes} aria-label={`查看${currentReleaseNotes.date}版本更新记录`}><span><strong>{currentReleaseNotes.title}</strong><small>{currentReleaseNotes.items.length} 项体验更新</small></span><ArrowRight size={15} /></button></section>
             <section className="start-menu-community"><header><MessageCircle size={15} /><strong>QQ 交流群</strong><small>意见、建议与问题反馈</small></header><p>群号 <strong>1076757280</strong></p></section>
           </div> : null}
 

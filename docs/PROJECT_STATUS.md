@@ -2,13 +2,17 @@
 
 > **方向变更（2026-07-31）**：量子物流网络当前以 `1.0.39 / GameState v46` 为 Web/API 发布基线。旧 v43 空间站实验存档若包含有效空间站资产会被拒绝加载，不能合并到量子共享库存；代码仍保留传统物流站 Mk.I→Mk.II 的兼容升级入口，供现有站点和本地批量升级测试使用。
 
-> 基线日期：2026-08-11
+> 基线日期：2026-08-13
 > 产品阶段：首个公网版本已上线，当前更准确的定位是“公开测试版”。
 > 事实来源：当前工作区代码、自动化测试、部署配置和线上只读检查。
 
 > `1.0.40` 开发批次第 1 项已在隔离分支完成实现并通过完整门禁：匿名 `GET /api/leaderboard` 继续只返回公开 Top 100，新增认证只读 `GET /api/leaderboard/me` 在完整公开 submission 集合中返回当前账号真实名次，并区分缺普通主云档、缺相邻修订、59 秒窗口、计时不增长、有效零产出、复核等待、隐藏和限制。UI 将服务器认证成绩与本地 60 秒最佳值分栏，白糖未知显示 `--`，Top 100 外显示真实 `#N`。本项不改变存档、云 revision、submission、排行榜历史、GameState v46、envelope v2、云 schema v7 或 SQLite layout v2，尚未部署生产环境；开发证据见 [1.0.40 银河排行榜“未上榜”状态修复](./feedback/2026-08-12-1.0.40-银河排行榜未上榜-Bug.md)。
 
-> 2026-08-13 已将 1.0.39 全项目复盘确认的 P0/P1/P2/P3 项纳入 [1.0.40 大版本开发总纲](./1.0.40_MAJOR_DEVELOPMENT_PLAN.md)，覆盖全端大存档云传输、多标签页防覆盖、SQLite 原子持久化、容量与流式导出、API/会话安全、PWA、首屏与可访问性、服务端规模化、共享存档契约、合成大夹具、CI 和有界架构拆分。除上述已完成的排行榜第 1 项外，其余内容仍是开发 Goal，不得写成已上线能力；当前没有生产部署、生产数据库写入、玩家存档覆盖或排行榜历史修改。
+> 2026-08-13 的 1.0.40 隔离开发分支已完成 [大版本开发总纲](./1.0.40_MAJOR_DEVELOPMENT_PLAN.md) 中 BASE、P0、P1、P2 与 P3 的运行时代码、专项回归和有界拆分：包括全端大存档传输、多标签页防覆盖、SQLite 原子持久化、容量与流式归档、API/会话安全、PWA、首屏与可访问性、服务端规模化、共享存档契约、合成大夹具和可验证 CI。当前只剩 FINAL-01：从固定 clean SHA 重跑全量门禁、生成唯一 Build ID、候选制品/SBOM/provenance 和 Release Agent 交接。这里描述的是尚未部署的开发候选；线上 Web/API 仍为 1.0.39，开发过程没有连接生产写入、覆盖玩家存档或修改排行榜历史。
+
+> 1.0.40 本地急救保存补充了刷新写入链证明：页面生命周期的同步镜像使用独立 payload/metadata 键，只有 writerId、fencing token、逐键 revision、模式、savedAt、checksum 与持久租约全部连续时才自动提交；崩溃在两次 localStorage 写入之间、元数据损坏、其他标签页来源或候选 checksum/模式不一致时均保留 candidate/persisted 两份原文并要求玩家选择。可信刷新、半写崩溃、损坏候选、普通/速通槽位和租约接管 Chromium 13/13 通过；不会凭时间戳静默删除未知镜像。
+
+> 1.0.40 当前 UI 版本元数据统一为 1.0.40，Android versionCode 为 1000040；新发布说明使用 `src/i18n/releaseNotes.ts` 稳定中英键，1.0.39 稀疏云档热修作为独立历史条目保留。发布说明、设置、存档/云冲突、命令面板、托盘和离线决策复用共享焦点/inert/危险确认边界；Chromium axe 关键页面与 Firefox/WebKit 核心键盘旅程专项通过。版本号不代表已经生成或发布正式原生制品。
 
 > `1.0.40` P0-02 多标签页本地存档防覆盖已完成开发：同一浏览器只有 writer lease 持有页可写，逐键 revision/tombstone 与 fencing token 在同一 IndexedDB 事务中核对正文，分叉时保留 candidate/persisted 双副本并明确提示玩家选择；Web Locks/BroadcastChannel 不可用时仍由 IndexedDB lease 和 storage 事件保护。内部数据库版本从 1 原地提升到 2，只关闭旧连接，不改变 object store、GameState v46、envelope v2 或任何已有存档字节。当前门禁为全量 Vitest 957/18、P0-02 Chromium 9/9、旧恢复与新协调联合 E2E 13/13、typecheck 和 build 通过；该项尚未部署。
 
