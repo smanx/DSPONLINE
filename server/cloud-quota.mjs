@@ -5,10 +5,10 @@ const SAVE_MODES = ["normal", "speedrun"];
 const CLOUD_SLOTS = ["main", "1", "2", "3"];
 
 export const DEFAULT_CLOUD_QUOTA_POLICY = Object.freeze({
-  revisionBytes: 33_553_408,
-  slotBytes: 256 * MIB,
-  modeBytes: 512 * MIB,
-  accountBytes: 1024 * MIB,
+  revisionBytes: 67_107_840,
+  slotBytes: 512 * MIB,
+  modeBytes: 1024 * MIB,
+  accountBytes: 2 * 1024 * MIB,
   historyRevisions: 20,
 });
 
@@ -18,12 +18,12 @@ function positiveInteger(value, fallback, minimum = 1, maximum = Number.MAX_SAFE
 
 export function normalizeCloudQuotaPolicy(value = {}) {
   // Small positive policies are useful for deterministic boundary tests and
-  // private deployments. The production defaults remain sized for 30 MiB
-  // saves; callers cannot configure zero, negative or unsafe values.
-  const revisionBytes = positiveInteger(value.revisionBytes, DEFAULT_CLOUD_QUOTA_POLICY.revisionBytes, 1, 64 * MIB);
-  const slotBytes = positiveInteger(value.slotBytes, DEFAULT_CLOUD_QUOTA_POLICY.slotBytes, revisionBytes, 2 * 1024 * MIB);
-  const modeBytes = positiveInteger(value.modeBytes, DEFAULT_CLOUD_QUOTA_POLICY.modeBytes, slotBytes, 3 * 1024 * MIB);
-  const accountBytes = positiveInteger(value.accountBytes, DEFAULT_CLOUD_QUOTA_POLICY.accountBytes, modeBytes, 3 * 1024 * MIB);
+  // private deployments. The production defaults remain bounded for 64 MiB
+  // revisions; callers cannot configure zero, negative or unsafe values.
+  const revisionBytes = positiveInteger(value.revisionBytes, DEFAULT_CLOUD_QUOTA_POLICY.revisionBytes, 1, 96 * MIB);
+  const slotBytes = positiveInteger(value.slotBytes, DEFAULT_CLOUD_QUOTA_POLICY.slotBytes, revisionBytes, 4 * 1024 * MIB);
+  const modeBytes = positiveInteger(value.modeBytes, DEFAULT_CLOUD_QUOTA_POLICY.modeBytes, slotBytes, 6 * 1024 * MIB);
+  const accountBytes = positiveInteger(value.accountBytes, DEFAULT_CLOUD_QUOTA_POLICY.accountBytes, modeBytes, 8 * 1024 * MIB);
   // The public cloud history contract retains at most twenty revisions. A
   // deployment may choose a smaller window, but advertising a larger quota
   // would be misleading because the canonical metadata normalizer still

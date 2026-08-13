@@ -9,9 +9,9 @@ import { computeSaveStateChecksum } from "./save-integrity.mjs";
 
 const targetMiB = Number(process.argv[2] ?? 28);
 const concurrentUploads = Number(process.argv[3] ?? 8);
-if (!Number.isFinite(targetMiB) || targetMiB < 1 || targetMiB > 30 ||
+if (!Number.isFinite(targetMiB) || targetMiB < 1 || targetMiB > 48 ||
   ![1, 2, 4, 8].includes(concurrentUploads)) {
-  throw new Error("usage: node upload-inspection-benchmark.mjs <1..30 MiB> <1|2|4|8 uploads>");
+  throw new Error("usage: node upload-inspection-benchmark.mjs <1..48 MiB> <1|2|4|8 uploads>");
 }
 
 function payloadAtLeast(bytes, seed) {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopBridge } from "../desktop";
 import { apiFetch } from "./apiTransport";
+import { CLOUD_TRANSFER_CONTRACT, cloudRequestTimeoutMs } from "./cloudTransferContract";
 
 const originalWindow = globalThis.window;
 const originalFetch = globalThis.fetch;
@@ -93,8 +94,8 @@ describe("apiFetch", () => {
     expect(requestApiTransfer.mock.calls[0][0]).toMatchObject({
       path: "/cloud-save?slot=2&mode=speedrun",
       bodyByteLength: 0,
-      expectedResponseBytes: 65 * 1024 * 1024,
-      timeoutMs: 60_000,
+      expectedResponseBytes: CLOUD_TRANSFER_CONTRACT.singleSaveResponseLimitBytes,
+      timeoutMs: cloudRequestTimeoutMs(0, CLOUD_TRANSFER_CONTRACT.singleSaveResponseLimitBytes),
     });
     await expect(response.json()).resolves.toEqual({ cloudSave: { payload: "large-save" } });
   });

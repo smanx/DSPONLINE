@@ -33,60 +33,60 @@ const copy = {
     en: "August 13, 2026",
   },
   title: {
-    "zh-CN": "云存档可靠性、排行榜与跨端体验更新",
-    en: "Cloud Reliability, Rankings, and Cross-platform Experience",
+    "zh-CN": "大存档、离线选择与连续拉线体验更新",
+    en: "Large Saves, Offline Choices, and Continuous Connections",
   },
   summary: {
-    "zh-CN": "1.0.40 让银河排行榜显示当前账号的真实名次和统计窗口状态，统一 30 MiB 大存档的跨端传输，并为多标签页、本地/云持久化、账号会话、PWA 更新和关键弹窗增加可恢复保护。玩法平衡、GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
-    en: "Version 1.0.40 reports the signed-in account's real Galaxy rank and metric-window status, unifies cross-platform transfer for saves up to 30 MiB, and adds recoverable safeguards for multiple tabs, local and cloud persistence, account sessions, PWA updates, and critical dialogs. Game balance, GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 remain unchanged.",
+    "zh-CN": "1.0.41 让合法 32 MiB 以上大存档通过有界 gzip 上传并显示完整同步诊断，进入游戏前可明确选择快速、精确或放弃离线收益，同时加入自适应端口命中、原子连续拉线和移动输入草稿保护。纯挂机五分钟后台规则、玩法平衡、GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+    en: "Version 1.0.41 adds bounded gzip upload and complete sync diagnostics for valid saves above 32 MiB, an explicit fast/exact/forfeit offline choice before entering the game, adaptive port hit targets, atomic continuous connections, and safer mobile text drafts. The five-minute background rule for time-warp idle, game balance, GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 remain unchanged.",
   },
   leaderboardTitle: {
-    "zh-CN": "银河榜显示本人真实名次",
-    en: "Your real Galaxy rank is visible",
+    "zh-CN": "云存档状态中心",
+    en: "Cloud-save status center",
   },
   leaderboardDescription: {
-    "zh-CN": "公开榜仍只展示 Top 100；登录后会从完整公开成绩中计算本人排名。缺少主云档、相邻修订不足 60 秒、计时未增长、有效零产出、复核、隐藏或限制状态都会显示具体原因，本地 60 秒最佳值不再冒充服务器成绩。",
-    en: "The public board remains Top 100, while a signed-in player receives their true rank across all public submissions. Missing main saves, windows below 60 seconds, non-increasing time, valid zero production, review, hidden, and restricted states are explained explicitly. Local 60-second bests never impersonate server scores.",
+    "zh-CN": "主菜单和银河网络显示当前模式与槽位、本地/云端修订、最近成功时间、上传/确认/冲突/失败/恢复状态，并可安全重试、取消、分别导出本地和云端副本或复制不含正文与凭据的诊断。",
+    en: "The start menu and Galaxy network now show mode and slot, local/cloud revisions, last success, upload/confirmation/conflict/failure/recovery states, safe retry and cancel, separate local/cloud exports, and a redacted diagnostic with no payload or credentials.",
   },
   transferTitle: {
-    "zh-CN": "大存档跨端上传口径统一",
-    en: "Large-save transfer is consistent across platforms",
+    "zh-CN": "32 MiB 以上大存档可安全上传",
+    en: "Saves above 32 MiB upload safely",
   },
   transferDescription: {
-    "zh-CN": "Web、Windows 与 Android 共用 30 MiB 明文边界、gzip、动态超时和精确 SHA-256 确认；Windows 采用有背压分片。取消或结果未知时先核对 revision 与正文摘要，不盲目重复上传，1.0.39 旧协议继续兼容。",
-    en: "Web, Windows, and Android share a 30 MiB plaintext limit, gzip, adaptive timeouts, and exact SHA-256 confirmation; Windows uses backpressured chunks. Cancelled or uncertain requests verify revision and payload identity before any retry, while the 1.0.39 protocol remains supported.",
+    "zh-CN": "Web、Windows 与 Android 共用 48 MiB 保证档位、约 64 MiB 单修订硬边界、gzip 预检和动态超时。服务端按请求数和解压后字节双重限流，失败会列出原始、压缩、解压、上限和差值，旧云修订与本地存档不变。",
+    en: "Web, Windows, and Android share a 48 MiB guaranteed tier, an approximately 64 MiB hard revision boundary, gzip preflight, and adaptive timeouts. The server bounds both request count and expanded bytes; failures report original, compressed, expanded, limit, and delta while preserving the local save and previous cloud revision.",
   },
   localSaveTitle: {
-    "zh-CN": "多标签页不再静默覆盖存档",
-    en: "Multiple tabs cannot silently overwrite saves",
+    "zh-CN": "离线收益由玩家明确选择",
+    en: "Players choose how offline rewards settle",
   },
   localSaveDescription: {
-    "zh-CN": "同一浏览器只允许一个主写入页，其他页面明确只读。逐键 revision、租约和 fencing token 阻止陈旧写入；真正分叉、刷新急救镜像或崩溃半写入都会保留双方原文，由玩家选择，不自动拼接或删除。",
-    en: "Only one tab writes in a browser profile; others are visibly read-only. Per-key revisions, leases, and fencing tokens block stale writes. Real forks, reload emergency mirrors, and interrupted mirror writes preserve both original payloads for an explicit player choice.",
+    "zh-CN": "普通模式超过一分钟的离线区间在载入前提供快速（推荐）、精确和放弃收益三种选择。快速失败会说明原因并允许再次快速尝试；取消不消费区间，放弃收益必须二次确认，精确结算可安全取消。",
+    en: "Normal-mode offline intervals over one minute offer Fast (recommended), Exact, or Forfeit before loading. A failed fast run explains why and can be retried; cancel preserves the interval, forfeiting requires a second confirmation, and exact settlement remains safely cancellable.",
   },
   persistenceTitle: {
-    "zh-CN": "云端提交、容量与账号归档可恢复",
-    en: "Cloud commits, quotas, and account archives are recoverable",
+    "zh-CN": "传送带端口更容易点中",
+    en: "Belt ports are easier to target",
   },
   persistenceDescription: {
-    "zh-CN": "云正文与元数据在 SQLite 事务成功后才对外可见；失败不会产生内存幽灵修订。配额、历史保留、正文去重、流式 ZIP 导出和原子导入均保留 checksum、revision、模式与槽位，旧 JSON 账号归档仍可校验导入。",
-    en: "Cloud payloads and metadata become visible only after their SQLite transaction commits, so failures cannot expose phantom revisions. Quotas, history retention, payload deduplication, streaming ZIP exports, and atomic imports preserve checksum, revision, mode, and slot; legacy JSON account archives remain importable after validation.",
+    "zh-CN": "连接点视觉大小和透明命中范围分开设置；自动档随画布缩放扩大，触控至少提供 56px 命中直径。悬停与拉线提示仍按物品和输入/输出类型校验，不遮挡建筑文字。",
+    en: "Visible port size and transparent hit targets are separate settings. Auto mode grows with canvas zoom and guarantees a 56 px touch diameter. Hover and connection hints remain item- and direction-aware without covering building labels.",
   },
   securityTitle: {
-    "zh-CN": "账号会话和速通恢复保持隔离",
-    en: "Account sessions and speedrun recovery stay isolated",
+    "zh-CN": "连续拉线整批原子提交",
+    en: "Continuous connections commit atomically",
   },
   securityDescription: {
-    "zh-CN": "网页账号逐步迁移到 HttpOnly 同源会话，Android 令牌使用系统安全存储并排除备份；API 增加请求边界、来源和安全头。新设备可直接发现速通主云档，普通/速通、main/手动槽及排行榜资格继续互不转换。",
-    en: "Web accounts migrate to same-origin HttpOnly sessions, while Android tokens use platform secure storage and are excluded from backups. API request bounds, origin checks, and security headers are stricter. A new device can discover a speedrun main save directly, without crossing normal/speedrun, main/manual-slot, or ranking boundaries.",
+    "zh-CN": "选择一个输出后可连续点选多个兼容输入，Enter 或按钮统一确认，Esc 取消；预览显示线路与材料。任一候选非法或材料不足时整批不创建、不扣料，也不会改目标配方或物流槽。",
+    en: "Choose one output, then select multiple compatible inputs and confirm once with Enter or the button; Escape cancels. The preview reports lines and material. If any candidate is invalid or stock is insufficient, nothing is created or consumed, and target recipes or logistics slots are never rewritten.",
   },
   experienceTitle: {
-    "zh-CN": "启动、更新与关键操作更稳",
-    en: "Startup, updates, and critical actions are steadier",
+    "zh-CN": "手机输入不再被重绘清空",
+    en: "Mobile text survives responsive redraws",
   },
   experienceDescription: {
-    "zh-CN": "首屏不再提前加载游戏核心与英文大词典，运行遥测按增量持久化；PWA 保留当前与上一稳定壳层。设置、存档、云冲突、离线决策和批量操作使用统一焦点/危险确认语义，并加入 axe、Chromium、Firefox 与 WebKit 门禁。",
-    en: "Startup no longer preloads the game core or the full English dictionary, and runtime telemetry persists incrementally. The PWA keeps current and previous-stable shells. Settings, saves, cloud conflicts, offline decisions, and batch actions share focus and dangerous-confirmation semantics, backed by axe, Chromium, Firefox, and WebKit gates.",
+    "zh-CN": "搜索、注册和档案输入在中文输入法组合、父组件刷新、横竖屏与新版/经典手机界面切换时保留页面内草稿；只有提交、取消或主动清空才移除。密码始终不进入普通草稿或诊断。",
+    en: "Search, registration, and profile fields keep in-page drafts through IME composition, parent refreshes, orientation changes, and classic/new mobile layouts. Drafts clear only on submit, cancel, or explicit reset. Passwords never enter shared drafts or diagnostics.",
   },
   v1039Date: {
     "zh-CN": "2026年8月11日",
@@ -132,21 +132,21 @@ function message(locale: AppLocale, key: CopyKey): string {
   return copy[key][locale];
 }
 
-/** Stable-key release copy; new 1.0.40 text does not use the legacy DOM translation bridge. */
+/** Stable-key release copy; new 1.0.41 text does not use the legacy DOM translation bridge. */
 export function getCurrentReleaseNotes(locale: AppLocale): LocalizedReleaseNoteRecord {
   return {
-    id: "2026-08-13-v1.0.40",
+    id: "2026-08-13-v1.0.41",
     date: message(locale, "date"),
-    version: "1.0.40",
+    version: "1.0.41",
     title: message(locale, "title"),
     summary: message(locale, "summary"),
     items: [
-      { id: "leaderboard-self-rank", title: message(locale, "leaderboardTitle"), description: message(locale, "leaderboardDescription") },
-      { id: "cross-platform-save-transfer", title: message(locale, "transferTitle"), description: message(locale, "transferDescription") },
-      { id: "local-save-fencing", title: message(locale, "localSaveTitle"), description: message(locale, "localSaveDescription") },
-      { id: "atomic-cloud-archives", title: message(locale, "persistenceTitle"), description: message(locale, "persistenceDescription") },
-      { id: "secure-session-speedrun-recovery", title: message(locale, "securityTitle"), description: message(locale, "securityDescription") },
-      { id: "startup-pwa-accessibility", title: message(locale, "experienceTitle"), description: message(locale, "experienceDescription") },
+      { id: "cloud-status-center", title: message(locale, "leaderboardTitle"), description: message(locale, "leaderboardDescription") },
+      { id: "large-save-upload", title: message(locale, "transferTitle"), description: message(locale, "transferDescription") },
+      { id: "offline-settlement-choice", title: message(locale, "localSaveTitle"), description: message(locale, "localSaveDescription") },
+      { id: "adaptive-connection-ports", title: message(locale, "persistenceTitle"), description: message(locale, "persistenceDescription") },
+      { id: "atomic-continuous-connections", title: message(locale, "securityTitle"), description: message(locale, "securityDescription") },
+      { id: "stable-mobile-input", title: message(locale, "experienceTitle"), description: message(locale, "experienceDescription") },
     ],
   };
 }

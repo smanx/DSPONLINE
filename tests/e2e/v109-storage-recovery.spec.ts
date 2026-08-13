@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 const SNAPSHOT_KEY = "dsp-idle-network.save.v1.snapshot.manual.idb-migration";
-const RELEASE_NOTE_ID = "2026-08-13-v1.0.40";
+const RELEASE_NOTE_ID = "2026-08-13-v1.0.41";
 
 test("verified IndexedDB migration removes the legacy localStorage save copy", async ({ page }) => {
   const legacyValue = JSON.stringify({ savedAt: 1_777_777_777_000, kind: "snapshot", reason: "迁移验证" });
@@ -74,6 +74,31 @@ test("mobile registration preserves sibling fields during IME composition and or
     identifier: "pilot_2026",
     displayName: "中文玩家",
   });
+});
+
+test("production-library search preserves IME composition across responsive redraws", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript((releaseNoteId) => {
+    window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", releaseNoteId);
+    window.localStorage.setItem("dsp-idle-network.onboarding.v1", "dismissed");
+    window.localStorage.setItem("dsp-idle-network.mobile-ui.v1", "next");
+  }, RELEASE_NOTE_ID);
+  await page.goto("/?menu=1");
+  await page.getByRole("button", { name: /开始游戏/ }).click();
+  await page.getByRole("button", { name: "更多", exact: true }).click();
+  await page.getByRole("button", { name: /生产资料库/ }).click();
+  const library = page.getByRole("dialog", { name: "生产资料库" });
+  const search = library.getByLabel("搜索配方物品");
+  await search.evaluate((node) => {
+    const input = node as HTMLInputElement;
+    input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "量子" }));
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "量子");
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: "量子", inputType: "insertCompositionText", isComposing: true }));
+  });
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(search).toHaveValue("量子");
+  await search.dispatchEvent("compositionend", { data: "量子" });
+  await expect(search).toHaveValue("量子");
 });
 
 test("verified primary saves use IndexedDB and selected snapshots can be managed in bulk", async ({ page }) => {

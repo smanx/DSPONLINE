@@ -389,6 +389,12 @@ function primaryKeyForMode(mode: LocalSaveMode): string {
   return mode === "speedrun" ? `${SAVE_KEY}.speedrun` : SAVE_KEY;
 }
 
+/** Cached monotonic local-write revision for diagnostics only. */
+export function getPrimaryLocalSaveRevision(mode: LocalSaveMode = "normal"): number {
+  ensureSynchronousFallback();
+  return revisionCache.get(primaryKeyForMode(mode)) ?? 0;
+}
+
 function recordQuotaRecoveryPrompt(key: string): void {
   const mode = modeFromKey(key, cache.get(key)?.slice(0, 4_096) ?? "");
   const main = storageEntryCache.get(primaryKeyForMode(mode));

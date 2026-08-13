@@ -116,13 +116,19 @@ export class UploadInspectionScheduler {
     concurrency = 2,
     queueLimit = 16,
     workerThresholdBytes = 1024 * 1024,
+    maximumConcurrentExpandedBytes = 96 * 1024 * 1024,
   } = {}) {
     if (typeof inspectInline !== "function") throw new TypeError("inspectInline is required");
     this.inspectInline = inspectInline;
     this.concurrency = Math.max(1, Math.min(8, Math.floor(concurrency) || 2));
     this.queueLimit = Math.max(this.concurrency, Math.min(64, Math.floor(queueLimit) || 16));
     this.workerThresholdBytes = Math.max(64 * 1024, Math.floor(workerThresholdBytes) || 1024 * 1024);
+    this.maximumConcurrentExpandedBytes = Math.max(
+      1024 * 1024,
+      Math.floor(maximumConcurrentExpandedBytes) || 96 * 1024 * 1024,
+    );
     this.active = 0;
+    this.activeExpandedBytes = 0;
     this.queue = [];
     this.closed = false;
     this.activeControllers = new Set();
@@ -136,6 +142,7 @@ export class UploadInspectionScheduler {
       inlineRuns: 0,
       maxQueued: 0,
       maxExpandedBytes: 0,
+      maxActiveExpandedBytes: 0,
       maxWorkerHeapBytes: 0,
       lastTotalMs: 0,
       lastDecompressionMs: 0,
@@ -150,6 +157,8 @@ export class UploadInspectionScheduler {
       queued: this.queue.length,
       concurrency: this.concurrency,
       queueLimit: this.queueLimit,
+      activeExpandedBytes: this.activeExpandedBytes,
+      maximumConcurrentExpandedBytes: this.maximumConcurrentExpandedBytes,
       ...this.metrics,
       rejectionReasons: { ...this.metrics.rejectionReasons },
     };
@@ -165,7 +174,7 @@ export class UploadInspectionScheduler {
       Number.isSafeInteger(declaredOriginalBytes) && declaredOriginalBytes >= this.workerThresholdBytes;
   }
 
-  async run(task, { scheduled = true, signal = null } = {}) {
+  async run(task, { scheduled = true, signal = null, expandedBytes = 0 } = {}) {
     if (typeof task !== "function") throw new TypeError("task is required");
     const controller = new AbortController();
     const forwardAbort = () => controller.abort(signal?.reason);
@@ -181,7 +190,7 @@ export class UploadInspectionScheduler {
         this.recordRejection("UPLOAD_CANCELLED");
         throw abortedUploadError(controller.signal.reason);
       }
-      if (scheduled) release = await this.acquire(controller.signal);
+      if (scheduled) release = await this.acquire(controller.signal, expandedBytes);
       return await task({
         signal: controller.signal,
         inspect: (raw, descriptor) => this.inspect(raw, descriptor, controller.signal),
@@ -193,13 +202,16 @@ export class UploadInspectionScheduler {
     }
   }
 
-  acquire(signal) {
+  acquire(signal, expandedBytes = 0) {
     if (this.closed) return Promise.reject(uploadError("服务正在安全关闭，请稍后重试", 503, "SERVER_SHUTTING_DOWN", 1));
     if (signal?.aborted) return Promise.reject(abortedUploadError(signal.reason));
-    if (this.active < this.concurrency && this.queue.length === 0) {
+    const reservedBytes = Math.max(0, Math.min(this.maximumConcurrentExpandedBytes, Math.floor(expandedBytes) || 0));
+    if (this.active < this.concurrency && this.queue.length === 0 && this.activeExpandedBytes + reservedBytes <= this.maximumConcurrentExpandedBytes) {
       this.active += 1;
+      this.activeExpandedBytes += reservedBytes;
+      this.metrics.maxActiveExpandedBytes = Math.max(this.metrics.maxActiveExpandedBytes, this.activeExpandedBytes);
       this.metrics.accepted += 1;
-      return Promise.resolve(this.releaseFactory());
+      return Promise.resolve(this.releaseFactory(reservedBytes));
     }
     if (this.queue.length >= this.queueLimit) {
       this.metrics.rejectedBusy += 1;
@@ -207,7 +219,7 @@ export class UploadInspectionScheduler {
       return Promise.reject(uploadError("云存档检查队列繁忙，请稍后重试；本地存档未修改", 503, "UPLOAD_INSPECTION_BUSY", 1));
     }
     return new Promise((resolve, reject) => {
-      const entry = { resolve, reject, signal, onAbort: null };
+      const entry = { resolve, reject, signal, reservedBytes, onAbort: null };
       entry.onAbort = () => {
         const index = this.queue.indexOf(entry);
         if (index >= 0) this.queue.splice(index, 1);
@@ -218,22 +230,29 @@ export class UploadInspectionScheduler {
       signal?.addEventListener("abort", entry.onAbort, { once: true });
       this.queue.push(entry);
       this.metrics.maxQueued = Math.max(this.metrics.maxQueued, this.queue.length);
+      // A smaller request may fit the byte budget while an earlier large
+      // request is waiting. Re-evaluate immediately instead of waiting for an
+      // unrelated active upload to finish.
+      this.dispatch();
     });
   }
 
-  releaseFactory() {
+  releaseFactory(reservedBytes = 0) {
     let released = false;
     return () => {
       if (released) return;
       released = true;
       this.active = Math.max(0, this.active - 1);
+      this.activeExpandedBytes = Math.max(0, this.activeExpandedBytes - reservedBytes);
       this.dispatch();
     };
   }
 
   dispatch() {
     while (!this.closed && this.active < this.concurrency && this.queue.length > 0) {
-      const entry = this.queue.shift();
+      const nextIndex = this.queue.findIndex((candidate) => this.activeExpandedBytes + candidate.reservedBytes <= this.maximumConcurrentExpandedBytes);
+      if (nextIndex < 0) return;
+      const [entry] = this.queue.splice(nextIndex, 1);
       entry.signal?.removeEventListener("abort", entry.onAbort);
       if (entry.signal?.aborted) {
         this.metrics.cancelled += 1;
@@ -242,8 +261,10 @@ export class UploadInspectionScheduler {
         continue;
       }
       this.active += 1;
+      this.activeExpandedBytes += entry.reservedBytes;
+      this.metrics.maxActiveExpandedBytes = Math.max(this.metrics.maxActiveExpandedBytes, this.activeExpandedBytes);
       this.metrics.accepted += 1;
-      entry.resolve(this.releaseFactory());
+      entry.resolve(this.releaseFactory(entry.reservedBytes));
     }
   }
 
@@ -259,17 +280,35 @@ export class UploadInspectionScheduler {
           raw = await gunzip(raw, { maxOutputLength: descriptor.expandedLimit });
         } catch (cause) {
           const tooLarge = cause && typeof cause === "object" && "code" in cause && cause.code === "ERR_BUFFER_TOO_LARGE";
-          throw uploadError(
+          const error = uploadError(
             tooLarge ? "解压后的请求内容超过允许上限" : "请求压缩内容无效",
             tooLarge ? 413 : 400,
             tooLarge ? "REQUEST_EXPANDED_BODY_TOO_LARGE" : "REQUEST_ENCODING_INVALID",
           );
+          if (tooLarge) {
+            error.originalBytes = descriptor.declaredOriginalBytes;
+            error.compressedBytes = raw.byteLength;
+            error.expandedBytes = Number.isSafeInteger(descriptor.declaredOriginalBytes)
+              ? descriptor.declaredOriginalBytes
+              : descriptor.expandedLimit + 1;
+            error.expandedBytesAtLeast = !Number.isSafeInteger(descriptor.declaredOriginalBytes);
+            error.expandedLimitBytes = descriptor.expandedLimit;
+            error.payloadLimitBytes = descriptor.payloadLimit;
+            error.overBytes = Math.max(1, error.expandedBytes - descriptor.expandedLimit);
+          }
+          throw error;
         }
         decompressionMs = Math.max(0, performance.now() - decompressionStartedAt);
       }
       if (externalSignal?.aborted) throw abortedUploadError(externalSignal.reason);
       if (raw.byteLength > descriptor.expandedLimit) {
-        throw uploadError("解压后的请求内容超过允许上限", 413, "REQUEST_EXPANDED_BODY_TOO_LARGE");
+        const error = uploadError("解压后的请求内容超过允许上限", 413, "REQUEST_EXPANDED_BODY_TOO_LARGE");
+        error.originalBytes = descriptor.declaredOriginalBytes ?? raw.byteLength;
+        error.compressedBytes = descriptor.encoding === "gzip" ? null : raw.byteLength;
+        error.expandedBytes = raw.byteLength;
+        error.expandedLimitBytes = descriptor.expandedLimit;
+        error.payloadLimitBytes = descriptor.payloadLimit;
+        throw error;
       }
       this.metrics.maxExpandedBytes = Math.max(this.metrics.maxExpandedBytes, raw.byteLength);
       const useWorker = raw.byteLength >= this.workerThresholdBytes;

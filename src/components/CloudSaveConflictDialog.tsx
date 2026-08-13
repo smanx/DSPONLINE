@@ -1,4 +1,4 @@
-import { CloudDownload, CloudUpload, GitCompareArrows, LoaderCircle, X } from "lucide-react";
+import { CloudDownload, CloudUpload, Download, GitCompareArrows, LoaderCircle, X } from "lucide-react";
 import { useRef } from "react";
 import type { CloudSaveMetadata, CloudSaveSlot, CloudSaveSummary } from "../game/cloud";
 import { AccessibleDialog } from "./AccessibleDialog";
@@ -10,6 +10,8 @@ interface CloudSaveConflictDialogProps {
   busy?: boolean;
   onUseCloud: () => void;
   onKeepLocal: () => void;
+  onExportLocal?: () => void;
+  onExportCloud?: () => void;
   onCancel: () => void;
 }
 
@@ -44,7 +46,7 @@ function Summary({ title, summary, revision, mode }: { title: string; summary: C
   </section>;
 }
 
-export function CloudSaveConflictDialog({ local, cloud, slot, busy = false, onUseCloud, onKeepLocal, onCancel }: CloudSaveConflictDialogProps) {
+export function CloudSaveConflictDialog({ local, cloud, slot, busy = false, onUseCloud, onKeepLocal, onExportLocal, onExportCloud, onCancel }: CloudSaveConflictDialogProps) {
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const targetMode = cloud.mode ?? local?.mode ?? "normal";
   const targetLabel = `${modeLabel(targetMode)} · ${slotLabel(slot)}`;
@@ -58,6 +60,8 @@ export function CloudSaveConflictDialog({ local, cloud, slot, busy = false, onUs
     onRequestClose={onCancel}
     actions={<>
       <button ref={cancelButtonRef} type="button" disabled={busy} onClick={onCancel}><X aria-hidden="true" size={14} />稍后处理</button>
+      {onExportLocal ? <button type="button" disabled={busy} onClick={onExportLocal}><Download aria-hidden="true" size={14} />导出本地副本</button> : null}
+      {onExportCloud ? <button type="button" disabled={busy} onClick={onExportCloud}><Download aria-hidden="true" size={14} />导出云端副本</button> : null}
       <button type="button" disabled={busy} onClick={onUseCloud}>{busy ? <LoaderCircle aria-hidden="true" size={14} /> : <CloudDownload aria-hidden="true" size={14} />}使用云端版本</button>
       <button className="primary" type="button" disabled={busy} onClick={onKeepLocal}>{busy ? <LoaderCircle aria-hidden="true" size={14} /> : <CloudUpload aria-hidden="true" size={14} />}保留本地并新建云修订</button>
     </>}

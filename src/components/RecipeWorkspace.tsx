@@ -30,6 +30,7 @@ import type { BuildingId, GameState, ItemId, PlanetId, RecipeDefinition, TechId 
 import { CODEX_SECTION_LABELS, CodexSections, type CodexSection } from "./CodexSections";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { QuantityValue } from "./QuantityValue";
+import { StableTextInput, clearStableTextDraft } from "./CompositionSafeInput";
 
 type ItemFilter = "all" | "raw" | "solid" | "fluid" | "matrix";
 
@@ -143,6 +144,7 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, onL
     setSection("items");
     setSelectedItemId(focusItemId);
     setQuery("");
+    clearStableTextDraft("recipe-workspace-search");
     setFilter("all");
   }, [focusItemId]);
   useEffect(() => {
@@ -240,7 +242,7 @@ export function RecipeWorkspace({ open, game, onClose, focusItemId, onFocus, onL
       {!mobileDetail ? <nav className="codex-section-nav" aria-label="资料库分类">{(Object.keys(CODEX_SECTION_LABELS) as CodexSection[]).map((candidate) => <button className={section === candidate ? "active" : ""} type="button" key={candidate} onClick={() => setSection(candidate)}>{CODEX_SECTION_LABELS[candidate]}</button>)}</nav> : null}
 
       {section === "items" && !mobileDetail ? <div className="recipe-toolbar mobile-workspace-sticky">
-        <label className="recipe-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索物品、缩写或说明" aria-label="搜索配方物品" /></label>
+        <label className="recipe-search"><Search size={15} /><StableTextInput draftId="recipe-workspace-search" value={query} onValueChange={setQuery} placeholder="搜索物品、缩写或说明" aria-label="搜索配方物品" /></label>
         <div className="recipe-filters" aria-label="配方物品分类">
           {(["all", "raw", "solid", "fluid", "matrix"] as ItemFilter[]).map((option) => (
             <button className={filter === option ? "active" : ""} type="button" key={option} onClick={() => setFilter(option)}>

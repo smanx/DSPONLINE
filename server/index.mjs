@@ -126,11 +126,14 @@ import { prepareLegacyJsonAccountImport } from "./account-archive-legacy-json.mj
 const cloudTransferNumericKeys = [
   "version", "mibBytes", "guaranteedSavePayloadBytes", "savePayloadLimitBytes", "rawFallbackSafeLimitBytes",
   "requestCompressedLimitBytes", "requestExpandedLimitBytes", "legacyJsonRequestLimitBytes", "singleSaveResponseLimitBytes",
+  "maximumConcurrentExpandedBytes",
   "baseTimeoutMs", "timeoutPerMibMs", "maximumTimeoutMs", "compressionTimeoutMs", "ipcChunkBytes",
 ];
 if (!cloudTransferNumericKeys.every((key) => Number.isSafeInteger(cloudTransferContract[key]) && cloudTransferContract[key] > 0) ||
   cloudTransferContract.guaranteedSavePayloadBytes > cloudTransferContract.savePayloadLimitBytes ||
   cloudTransferContract.savePayloadLimitBytes > cloudTransferContract.requestExpandedLimitBytes ||
+  cloudTransferContract.requestCompressedLimitBytes > cloudTransferContract.requestExpandedLimitBytes ||
+  cloudTransferContract.requestExpandedLimitBytes > cloudTransferContract.maximumConcurrentExpandedBytes ||
   cloudTransferContract.baseTimeoutMs > cloudTransferContract.maximumTimeoutMs) {
   throw new Error("Invalid cloud transfer contract");
 }
@@ -1648,7 +1651,7 @@ class SqliteStore extends AtomicStoreBase {
         const payload = raw.toString("utf8");
         // The extraction pass and authoritative worker already proved strict
         // UTF-8. Matching the same SHA-256 here proves the temporary bytes did
-        // not change, so avoid allocating another 30 MiB re-encoded Buffer.
+        // not change, so avoid allocating another large re-encoded Buffer.
         raw = Buffer.alloc(0);
         writeInspectedCloudPayload(this.database, { ...write, payload });
         importedChecksums.add(write.checksum);
@@ -2318,6 +2321,14 @@ function cloudUploadValidationFailure(inspection, effectiveMode) {
       : integrityFailure
         ? "云存档内部完整性校验失败，服务器已拒绝上传"
         : "云存档格式无效，服务器已拒绝上传",
+    ...(inspection.tooLarge ? {
+      originalBytes: inspection.payloadSize,
+      expandedBytes: inspection.payloadSize,
+      payloadLimitBytes: SAVE_PAYLOAD_LIMIT_BYTES,
+      expandedLimitBytes: EXPANDED_BODY_LIMIT_BYTES,
+      compressedLimitBytes: BODY_LIMIT_BYTES,
+      overBytes: Math.max(0, inspection.payloadSize - SAVE_PAYLOAD_LIMIT_BYTES),
+    } : {}),
     ...(code === "SAVE_MODE_MISMATCH" ? { expectedMode: effectiveMode, receivedMode: inspection.payloadMode } : {}),
     ...(inspection.summary ? { summary: inspection.summary } : {}),
   };
@@ -2330,6 +2341,14 @@ function sendCloudUploadValidationFailure(response, failure) {
     directPayloadSupported: true,
     ...(failure.expectedMode ? { expectedMode: failure.expectedMode, receivedMode: failure.receivedMode } : {}),
     ...(failure.summary ? { summary: failure.summary } : {}),
+    ...(failure.originalBytes !== undefined ? {
+      originalBytes: failure.originalBytes,
+      expandedBytes: failure.expandedBytes,
+      payloadLimitBytes: failure.payloadLimitBytes,
+      expandedLimitBytes: failure.expandedLimitBytes,
+      compressedLimitBytes: failure.compressedLimitBytes,
+      overBytes: failure.overBytes,
+    } : {}),
   });
 }
 
@@ -3803,6 +3822,7 @@ export async function createCloudServer({
     concurrency: uploadInspectionConcurrency,
     queueLimit: uploadInspectionQueueLimit,
     workerThresholdBytes: uploadInspectionWorkerThresholdBytes,
+    maximumConcurrentExpandedBytes: cloudTransferContract.maximumConcurrentExpandedBytes,
   });
   const quotaPolicy = normalizeCloudQuotaPolicy(cloudQuotaPolicy ?? {
     revisionBytes: Number(process.env.DSP_CLOUD_REVISION_QUOTA_BYTES || DEFAULT_CLOUD_QUOTA_POLICY.revisionBytes),
@@ -4920,7 +4940,18 @@ export async function createCloudServer({
       if (request.method === "GET" && url.pathname === "/api/cloud-save/quota") {
         const auth = authenticateRequest(request);
         if (!auth) return send(response, 401, { error: "请先登录" });
-        return send(response, 200, { cloudQuota: cloudQuotaSnapshot(store.data, auth.user.id, quotaPolicy) });
+        return send(response, 200, {
+          cloudQuota: cloudQuotaSnapshot(store.data, auth.user.id, quotaPolicy),
+          transferLimits: {
+            guaranteedSavePayloadBytes: cloudTransferContract.guaranteedSavePayloadBytes,
+            savePayloadLimitBytes: cloudTransferContract.savePayloadLimitBytes,
+            rawFallbackSafeLimitBytes: cloudTransferContract.rawFallbackSafeLimitBytes,
+            requestCompressedLimitBytes: cloudTransferContract.requestCompressedLimitBytes,
+            requestExpandedLimitBytes: cloudTransferContract.requestExpandedLimitBytes,
+            compression: ["gzip"],
+            chunkedUpload: false,
+          },
+        });
       }
 
       if (request.method === "POST" && url.pathname === "/api/cloud-save/quota") {
@@ -4934,7 +4965,20 @@ export async function createCloudServer({
         if (!slot) return send(response, 400, { error: "云存档槽位无效", code: "CLOUD_QUOTA_TARGET_INVALID" });
         if (!mode) return send(response, 400, { error: "云存档模式无效", code: "SAVE_MODE_INVALID" });
         if (!Number.isSafeInteger(size) || size < 0 || size > cloudTransferContract.savePayloadLimitBytes || (body.checksum != null && !checksum)) {
-          return send(response, 400, { error: "云存档容量预检参数无效", code: "CLOUD_QUOTA_INPUT_INVALID" });
+          return send(response, size > cloudTransferContract.savePayloadLimitBytes ? 413 : 400, {
+            error: size > cloudTransferContract.savePayloadLimitBytes
+              ? "云存档容量预检发现单修订超过服务端上限；正文尚未发送"
+              : "云存档容量预检参数无效",
+            code: size > cloudTransferContract.savePayloadLimitBytes ? "SAVE_SIZE_TOO_LARGE" : "CLOUD_QUOTA_INPUT_INVALID",
+            ...(Number.isSafeInteger(size) && size >= 0 ? {
+              originalBytes: size,
+              expandedBytes: size,
+              payloadLimitBytes: cloudTransferContract.savePayloadLimitBytes,
+              expandedLimitBytes: cloudTransferContract.requestExpandedLimitBytes,
+              compressedLimitBytes: cloudTransferContract.requestCompressedLimitBytes,
+              overBytes: Math.max(0, size - cloudTransferContract.savePayloadLimitBytes),
+            } : {}),
+          });
         }
         const plan = planCloudSaveUpload(store.data, auth.user.id, mode, slot, { size, checksum }, quotaPolicy);
         return send(response, 200, { plan: publicCloudQuotaPlan(plan) });
@@ -5058,6 +5102,12 @@ export async function createCloudServer({
               : "当前云存档配额不足；服务器没有删除其他模式或槽位，本地存档未修改",
             code: quotaPlan.code,
             plan: publicCloudQuotaPlan(quotaPlan),
+            originalBytes: payloadSize,
+            expandedBytes: payloadSize,
+            payloadLimitBytes: quotaPolicy.revisionBytes,
+            expandedLimitBytes: cloudTransferContract.requestExpandedLimitBytes,
+            compressedLimitBytes: cloudTransferContract.requestCompressedLimitBytes,
+            overBytes: Math.max(0, payloadSize - quotaPolicy.revisionBytes),
           });
         }
         const pruned = pruneCloudSaveRevisions(store, auth.user.id, slot, effectiveMode, quotaPlan.prune.revisions);
@@ -5293,6 +5343,13 @@ export async function createCloudServer({
       return send(response, error?.statusCode || 500, {
         error: error?.statusCode || error instanceof AccountArchiveError ? error.message : "服务暂时不可用",
         ...(error?.code ? { code: error.code } : {}),
+        ...(Number.isSafeInteger(error?.originalBytes) ? { originalBytes: error.originalBytes } : {}),
+        ...(Number.isSafeInteger(error?.compressedBytes) ? { compressedBytes: error.compressedBytes } : {}),
+        ...(Number.isSafeInteger(error?.expandedBytes) ? { expandedBytes: error.expandedBytes } : {}),
+        ...(Number.isSafeInteger(error?.expandedLimitBytes) ? { expandedLimitBytes: error.expandedLimitBytes } : {}),
+        ...(Number.isSafeInteger(error?.payloadLimitBytes) ? { payloadLimitBytes: error.payloadLimitBytes } : {}),
+        ...(Number.isSafeInteger(error?.overBytes) ? { overBytes: error.overBytes } : {}),
+        ...(error?.expandedBytesAtLeast === true ? { expandedBytesAtLeast: true } : {}),
       }, Number.isInteger(error?.retryAfterSeconds) ? { "retry-after": String(error.retryAfterSeconds) } : {});
     }
   };
@@ -5362,7 +5419,15 @@ export async function createCloudServer({
       }
       if (Number.isSafeInteger(contentLength) && contentLength > uploadDescriptor.inputLimit) {
         uploadInspections.recordRejection("REQUEST_BODY_TOO_LARGE");
-        return send(response, 413, { error: "请求内容超过允许上限", code: "REQUEST_BODY_TOO_LARGE" });
+        return send(response, 413, {
+          error: "请求内容超过允许上限",
+          code: "REQUEST_BODY_TOO_LARGE",
+          originalBytes: uploadDescriptor.declaredOriginalBytes,
+          compressedBytes: contentLength,
+          compressedLimitBytes: uploadDescriptor.inputLimit,
+          expandedLimitBytes: uploadDescriptor.expandedLimit,
+          payloadLimitBytes: uploadDescriptor.payloadLimit,
+        });
       }
       const scheduled = uploadInspections.shouldSchedule({
         encoding: uploadDescriptor.encoding,
@@ -5399,7 +5464,17 @@ export async function createCloudServer({
               request.preparedCloudUpload = null;
             }
           },
-          { scheduled, signal: disconnect.signal },
+          {
+            scheduled,
+            signal: disconnect.signal,
+            expandedBytes: uploadDescriptor.encoding === "gzip"
+              ? uploadDescriptor.expandedLimit
+              : Number.isSafeInteger(contentLength)
+                ? Math.min(contentLength, uploadDescriptor.expandedLimit)
+                : Number.isSafeInteger(uploadDescriptor.declaredOriginalBytes)
+                  ? Math.min(uploadDescriptor.declaredOriginalBytes, uploadDescriptor.expandedLimit)
+                : uploadDescriptor.expandedLimit,
+          },
         );
       } finally {
         request.removeListener("aborted", onAborted);
@@ -5413,6 +5488,13 @@ export async function createCloudServer({
         send(response, error?.statusCode || 500, {
           error: error?.statusCode ? error.message : "服务暂时不可用",
           ...(error?.code ? { code: error.code } : {}),
+          ...(Number.isSafeInteger(error?.originalBytes) ? { originalBytes: error.originalBytes } : {}),
+          ...(Number.isSafeInteger(error?.compressedBytes) ? { compressedBytes: error.compressedBytes } : {}),
+          ...(Number.isSafeInteger(error?.expandedBytes) ? { expandedBytes: error.expandedBytes } : {}),
+          ...(Number.isSafeInteger(error?.expandedLimitBytes) ? { expandedLimitBytes: error.expandedLimitBytes } : {}),
+          ...(Number.isSafeInteger(error?.payloadLimitBytes) ? { payloadLimitBytes: error.payloadLimitBytes } : {}),
+          ...(Number.isSafeInteger(error?.overBytes) ? { overBytes: error.overBytes } : {}),
+          ...(error?.expandedBytesAtLeast === true ? { expandedBytesAtLeast: true } : {}),
         }, Number.isInteger(error?.retryAfterSeconds) ? { "retry-after": String(error.retryAfterSeconds) } : {});
       } else if (!response.writableEnded) response.destroy(error);
     });

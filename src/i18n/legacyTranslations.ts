@@ -35,6 +35,9 @@ const UI_EN: TranslationMap = {
   "星图批量物流操作": "Star-map Batch Logistics Operations",
   "可按名称、备注或标签搜索": "Search by name, note, or label",
   "银河网络": "Galactic Network",
+  "当前认证数据源：": "Current authenticated source: ",
+  "普通模式 · 主存档": "Normal mode · Primary save",
+  "。速通主槽和手动槽不会更新银河榜。": ". The speedrun primary slot and manual slots never update the Galaxy leaderboard.",
   "戴森规划": "Dyson Planning",
   "戴森球规划": "Dyson Sphere Planning",
   "主线任务": "Campaign",
@@ -2139,6 +2142,8 @@ function translateRequirementList(source: string): string {
 function translateDynamicSystemText(body: string): string {
   let match = body.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
   if (match) return `${new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))).toLocaleDateString("en-US", { timeZone: "UTC", year: "numeric", month: "long", day: "numeric" })}`;
+  match = body.match(/^普通模式 · 主存档 · 修订 (\d+)$/);
+  if (match) return `Normal mode · Primary save · Revision ${match[1]}`;
   match = body.match(/^排行榜正在等待新的普通模式主云修订完成复核（需高于修订 (\d+)）$/);
   if (match) return `The leaderboard is waiting for a new normal-mode primary cloud revision above revision ${match[1]} to complete review.`;
   match = body.match(/^服务器认证成绩已计入；完整榜共 (\d+) 条$/);

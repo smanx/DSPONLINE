@@ -6,11 +6,13 @@ export const SHOW_RUN_LOG_PREFERENCE_KEY = "dsp-idle-network.ui.show-run-log.v1"
 export const SHOW_ITEM_HOVER_PREFERENCE_KEY = "dsp-idle-network.ui.show-item-hover.v1";
 export const SETTINGS_CATEGORY_PREFERENCE_KEY = "dsp-idle-network.ui.settings-category.v1";
 export const CONNECTION_POINT_SIZE_PREFERENCE_KEY = "dsp-idle-network.ui.connection-point-size.v1";
+export const CONNECTION_HIT_AREA_PREFERENCE_KEY = "dsp-idle-network.ui.connection-hit-area.v1";
 export const SPEEDRUN_PANEL_COLLAPSED_PREFERENCE_KEY = "dsp-idle-network.ui.speedrun-panel-collapsed.v1";
 export const DEFAULT_BELT_LANES_PREFERENCE_KEY = "dsp-idle-network.ui.default-belt-lanes.v1";
 
 export type SettingsCategory = "all" | "visual" | "performance" | "interaction" | "storage" | "statistics" | "other";
 export type ConnectionPointSize = "default" | "large25" | "large50";
+export type ConnectionHitArea = "standard" | "large" | "huge" | "auto";
 
 function localStorageOrNull(): Storage | null {
   if (typeof window === "undefined") return null;
@@ -110,6 +112,27 @@ export function writeConnectionPointSize(size: ConnectionPointSize): void {
   const storage = localStorageOrNull();
   if (!storage) return;
   try { storage.setItem(CONNECTION_POINT_SIZE_PREFERENCE_KEY, size); } catch { /* optional preference */ }
+}
+
+export function isConnectionHitArea(value: unknown): value is ConnectionHitArea {
+  return value === "standard" || value === "large" || value === "huge" || value === "auto";
+}
+
+export function readConnectionHitArea(): ConnectionHitArea {
+  const storage = localStorageOrNull();
+  if (!storage) return "auto";
+  try {
+    const value = storage.getItem(CONNECTION_HIT_AREA_PREFERENCE_KEY);
+    return isConnectionHitArea(value) ? value : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+export function writeConnectionHitArea(size: ConnectionHitArea): void {
+  const storage = localStorageOrNull();
+  if (!storage) return;
+  try { storage.setItem(CONNECTION_HIT_AREA_PREFERENCE_KEY, size); } catch { /* optional preference */ }
 }
 
 /** Device-only construction preference; validation is repeated at the domain boundary. */

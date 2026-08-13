@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const RELEASE_NOTE_ID = "2026-08-13-v1.0.40";
+const RELEASE_NOTE_ID = "2026-08-13-v1.0.41";
 
 async function seedBatchSave(page: Page, options: { offlineSeconds?: number; paused?: boolean; topology?: boolean; bypassMenu?: boolean } = {}) {
   await page.addInitScript(({ offlineSeconds, paused, topology, bypassMenu, releaseNoteId }) => {
@@ -74,6 +74,12 @@ for (const scenario of [
     await page.goto("/?menu=1");
     await page.getByRole("button", { name: /继续游戏/ }).click();
 
+    if (scenario.name === "approximate") {
+      const choice = page.getByRole("dialog", { name: "选择离线结算方式" });
+      await expect(choice).toBeVisible();
+      await choice.getByRole("button", { name: /快速结算（推荐）/ }).click();
+    }
+
     if (scenario.name === "fallback") {
       const decision = page.getByRole("dialog", { name: "快速结算需要玩家选择" });
       await expect(decision).toBeVisible({ timeout: 20_000 });
@@ -142,7 +148,7 @@ test("offline settlement choice traps keyboard focus and keeps its explicit zero
 
   await initialDecision.getByRole("button", { name: "取消并返回" }).focus();
   await page.keyboard.press("Tab");
-  await expect.poll(() => page.evaluate(() => document.activeElement?.textContent?.replace(/\s+/g, " ").trim())).toBe("使用精确结算（推荐）");
+  await expect.poll(() => page.evaluate(() => document.activeElement?.textContent?.replace(/\s+/g, " ").trim())).toBe("再次尝试快速结算");
   await page.keyboard.press("Escape");
   await expect(initialDecision).toHaveCount(0);
   await expect(page.locator(".start-menu-layout")).not.toHaveAttribute("inert", "");

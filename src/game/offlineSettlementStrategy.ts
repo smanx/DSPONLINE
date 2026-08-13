@@ -5,6 +5,7 @@ export const OFFLINE_SETTLEMENT_PREFERENCE_KEY = "dsp-idle-network.offline-settl
 const LEGACY_OFFLINE_APPROXIMATION_KEY = "dsp-idle-network.experimental-approximate-offline.v1";
 
 export type OfflineSettlementPreference = "ask" | "exact" | "skip";
+export type OfflineSettlementChoice = "fast" | "exact" | "skip";
 export type OfflineSettlementFailureKind =
   | "timeout"
   | "worker-error"
@@ -41,6 +42,13 @@ export function writeOfflineSettlementPreference(preference: OfflineSettlementPr
     window.localStorage.setItem(OFFLINE_SETTLEMENT_PREFERENCE_KEY, normalized);
     window.localStorage.setItem(LEGACY_OFFLINE_APPROXIMATION_KEY, String(normalized !== "exact"));
   } catch { /* device preference */ }
+}
+
+export function offlineSettlementChoiceDescription(choice: OfflineSettlementChoice, seconds: number): string {
+  const duration = Math.max(0, Math.floor(seconds)).toLocaleString("zh-CN");
+  if (choice === "fast") return `快速结算 ${duration} 个模拟秒；目标约 30 秒，受限设备最多约 60 秒，失败后仍可再次快速尝试。`;
+  if (choice === "exact") return `逐步执行 ${duration} 个模拟秒；结果最接近前台模拟，耗时可能明显超过 60 秒，可随时安全取消。`;
+  return `放弃这 ${duration} 秒的生产、科研与戴森收益；需要二次确认，同一区间之后不会重复结算。`;
 }
 
 export function classifyOfflineSettlementFailure(reason: string | undefined): OfflineSettlementFailureKind {

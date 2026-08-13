@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { gzipSync } from "node:zlib";
 import { createCloudServer } from "./index.mjs";
 import { computeSaveStateChecksum } from "./save-integrity.mjs";
 
@@ -180,6 +181,72 @@ test("v46 sparse defaults upload unchanged across modes, slots, history, restore
       (await request(running.baseUrl, "/api/cloud-save/history", { headers })).body.history.map((entry) => entry.revision),
       [3, 2, 1],
     );
+  } finally {
+    await stopServer(running?.server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a sparse v46 payload above the old 32 MiB ceiling round-trips, restores, and survives restart", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "dsp-v46-large-33m-"));
+  const databaseFile = path.join(directory, "cloud.sqlite");
+  let running;
+  try {
+    running = await startServer(databaseFile);
+    const { headers } = await register(running.baseUrl, "sparse_v46_large_33m");
+    const state = createV46State("normal");
+    state.padding = "large-v46-save-".repeat(2_360_000);
+    const payload = createPayload(state, 201);
+    const payloadBytes = Buffer.byteLength(payload);
+    assert.ok(payloadBytes > 32 * 1024 * 1024, `expected >32 MiB, got ${payloadBytes}`);
+    assert.ok(payloadBytes < 48 * 1024 * 1024, `expected <48 MiB, got ${payloadBytes}`);
+    const checksum = createHash("sha256").update(payload).digest("hex");
+    const upload = await fetch(`${running.baseUrl}/api/cloud-save`, {
+      method: "PUT",
+      headers: {
+        ...headers,
+        "content-type": "application/vnd.dspidle.save+json",
+        "content-encoding": "gzip",
+        "x-dsp-expected-revision": "0",
+        "x-dsp-save-original-bytes": String(payloadBytes),
+      },
+      body: gzipSync(Buffer.from(payload)),
+    });
+    const uploaded = await upload.json();
+    assert.equal(upload.status, 200, JSON.stringify(uploaded));
+    assert.equal(uploaded.cloudSave.size, payloadBytes);
+    assert.equal(uploaded.cloudSave.checksum, checksum);
+
+    const secondPayload = createPayload({ ...state, elapsedSeconds: 660 }, 202);
+    const second = await fetch(`${running.baseUrl}/api/cloud-save`, {
+      method: "PUT",
+      headers: {
+        ...headers,
+        "content-type": "application/vnd.dspidle.save+json",
+        "content-encoding": "gzip",
+        "x-dsp-expected-revision": "1",
+        "x-dsp-save-original-bytes": String(Buffer.byteLength(secondPayload)),
+      },
+      body: gzipSync(Buffer.from(secondPayload)),
+    });
+    assert.equal(second.status, 200, await second.text());
+    const restored = await request(running.baseUrl, "/api/cloud-save/restore", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ revision: 1, expectedRevision: 2 }),
+    });
+    assert.equal(restored.response.status, 200, JSON.stringify(restored.body));
+    assert.equal(restored.body.cloudSave.revision, 3);
+    const downloaded = await request(running.baseUrl, "/api/cloud-save", { headers });
+    assert.equal(downloaded.body.cloudSave.payload, payload);
+    assert.equal(downloaded.body.cloudSave.checksum, checksum);
+
+    await stopServer(running.server);
+    running = await startServer(databaseFile);
+    const afterRestart = await request(running.baseUrl, "/api/cloud-save", { headers });
+    assert.equal(afterRestart.body.cloudSave.payload, payload);
+    assert.equal(afterRestart.body.cloudSave.checksum, checksum);
+    assert.deepEqual((await request(running.baseUrl, "/api/cloud-save/history", { headers })).body.history.map((entry) => entry.revision), [3, 2, 1]);
   } finally {
     await stopServer(running?.server);
     await rm(directory, { recursive: true, force: true });

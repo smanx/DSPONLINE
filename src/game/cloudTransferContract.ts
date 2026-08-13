@@ -11,6 +11,7 @@ function assertCloudTransferContract(value: typeof contract): void {
     value.requestExpandedLimitBytes,
     value.legacyJsonRequestLimitBytes,
     value.singleSaveResponseLimitBytes,
+    value.maximumConcurrentExpandedBytes,
     value.baseTimeoutMs,
     value.timeoutPerMibMs,
     value.maximumTimeoutMs,
@@ -21,6 +22,8 @@ function assertCloudTransferContract(value: typeof contract): void {
     value.guaranteedSavePayloadBytes > value.savePayloadLimitBytes ||
     value.savePayloadLimitBytes > value.requestExpandedLimitBytes ||
     value.rawFallbackSafeLimitBytes > value.savePayloadLimitBytes ||
+    value.requestCompressedLimitBytes > value.requestExpandedLimitBytes ||
+    value.requestExpandedLimitBytes > value.maximumConcurrentExpandedBytes ||
     value.baseTimeoutMs > value.maximumTimeoutMs ||
     ![value.directPayloadContentType, value.expectedRevisionHeader, value.requestIdHeader, value.originalBytesHeader, value.compressedBytesHeader]
       .every((entry) => typeof entry === "string" && entry.length > 0)) {

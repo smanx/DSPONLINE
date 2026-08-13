@@ -5,7 +5,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-13-v1.0.40");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-13-v1.0.41");
     }
   });
 }
@@ -141,6 +141,9 @@ test("cancelling long offline advancement returns to the menu and preserves the 
     window.Worker = HangingOfflineWorker as unknown as typeof Worker;
   });
   await page.getByRole("button", { name: /继续游戏/ }).click();
+  const choice = page.getByRole("dialog", { name: "选择离线结算方式" });
+  await expect(choice).toBeVisible();
+  await choice.getByRole("button", { name: /精确结算/ }).click();
   const progress = page.getByRole("dialog", { name: "正在进行离线运算" });
   await expect(progress).toBeVisible();
   await expect(progress).toContainText("完成并验证后才会一次性保存");
@@ -156,6 +159,8 @@ test("cancelling long offline advancement returns to the menu and preserves the 
     return { elapsedSeconds: state.elapsedSeconds ?? 0, totalProduced: state.totalProduced ?? {} };
   })).toEqual(original);
   await page.getByRole("button", { name: /继续游戏/ }).click();
+  await expect(choice).toBeVisible();
+  await choice.getByRole("button", { name: /精确结算/ }).click();
   await expect(progress).toContainText("604,800 模拟秒");
   await progress.getByRole("button", { name: "取消计算并返回" }).click();
   await expect(page.locator(".start-menu")).toBeVisible();
@@ -165,22 +170,21 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "云存档可靠性、排行榜与跨端体验更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "大存档、离线选择与连续拉线体验更新" });
   await expect(releaseNotes).toBeVisible();
   await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(6);
-  await expect(releaseNotes).toContainText("银河榜显示本人真实名次");
-  await expect(releaseNotes).toContainText("大存档跨端上传口径统一");
-  await expect(releaseNotes).toContainText("多标签页不再静默覆盖存档");
-  await expect(releaseNotes).toContainText("云端提交、容量与账号归档可恢复");
-  await expect(releaseNotes).toContainText("账号会话和速通恢复保持隔离");
-  await expect(releaseNotes).toContainText("启动、更新与关键操作更稳");
-  await expect(releaseNotes).not.toContainText("大存档只做一次权威序列化");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-13-v140-1440.png", fullPage: true });
+  await expect(releaseNotes).toContainText("云存档状态中心");
+  await expect(releaseNotes).toContainText("32 MiB 以上大存档可安全上传");
+  await expect(releaseNotes).toContainText("离线收益由玩家明确选择");
+  await expect(releaseNotes).toContainText("传送带端口更容易点中");
+  await expect(releaseNotes).toContainText("连续拉线整批原子提交");
+  await expect(releaseNotes).toContainText("手机输入不再被重绘清空");
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-13-v141-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-13-v140-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-13-v141-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -212,7 +216,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-13-v1.0.40");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-13-v1.0.41");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -493,6 +497,8 @@ test("cloud save divergence requires an explicit keep-local or use-cloud choice"
   await expect(dialog).toContainText("当前本地工厂");
   await expect(dialog).toContainText("云端工厂");
   await expect(dialog).toContainText("普通模式 · 主存档");
+  await expect(dialog.getByRole("button", { name: "导出本地副本" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "导出云端副本" })).toBeVisible();
   await expect(dialog).toContainText("42");
   await dialog.getByRole("button", { name: "保留本地并新建云修订" }).click();
   await expect(dialog).toHaveCount(0);

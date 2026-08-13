@@ -391,7 +391,6 @@ test("POST quota preflight accepts byte boundaries and rejects invalid inputs", 
       [{ mode: "sandbox", slot: "main", size: 100 }, "SAVE_MODE_INVALID"],
       [{ mode: "normal", slot: "main", size: -1 }, "CLOUD_QUOTA_INPUT_INVALID"],
       [{ mode: "normal", slot: "main", size: 1.5 }, "CLOUD_QUOTA_INPUT_INVALID"],
-      [{ mode: "normal", slot: "main", size: Number.MAX_SAFE_INTEGER }, "CLOUD_QUOTA_INPUT_INVALID"],
       [{ mode: "normal", slot: "main", size: 100, checksum: "not-a-checksum" }, "CLOUD_QUOTA_INPUT_INVALID"],
     ];
     for (const [body, code] of invalidCases) {
@@ -399,6 +398,13 @@ test("POST quota preflight accepts byte boundaries and rejects invalid inputs", 
       assert.equal(result.response.status, 400, JSON.stringify(result.body));
       assert.equal(result.body.code, code);
     }
+    const oversized = await preflight({ mode: "normal", slot: "main", size: Number.MAX_SAFE_INTEGER });
+    assert.equal(oversized.response.status, 413, JSON.stringify(oversized.body));
+    assert.equal(oversized.body.code, "SAVE_SIZE_TOO_LARGE");
+    assert.equal(oversized.body.originalBytes, Number.MAX_SAFE_INTEGER);
+    assert.equal(oversized.body.expandedBytes, Number.MAX_SAFE_INTEGER);
+    assert.ok(oversized.body.originalBytes > oversized.body.payloadLimitBytes);
+    assert.equal(oversized.body.overBytes, oversized.body.originalBytes - oversized.body.payloadLimitBytes);
     assert.equal((await preflight({ mode: "normal", slot: "main", size: 100 }, {})).response.status, 401);
 
     const snapshot = await quotaSnapshot(running, account);

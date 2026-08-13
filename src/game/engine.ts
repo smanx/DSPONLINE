@@ -10987,6 +10987,75 @@ export function connectBelt(state: GameState, sourceId: string, targetId: string
   return connectBeltWithResult(state, sourceId, targetId, itemId, tier, targetPortIndex, lanes).state;
 }
 
+export interface BatchBeltConnectionRequest {
+  sourceId: string;
+  targetId: string;
+  itemId: ItemId;
+  tier?: BeltTier;
+  targetPortIndex?: 0 | 1 | 2;
+  lanes?: number;
+}
+
+export interface BatchBeltConnectionResult {
+  state: GameState;
+  committed: boolean;
+  created: number;
+  skipped: number;
+  beltIds: string[];
+  failures: Array<{ index: number; code: BeltConnectionCheck["code"] | "duplicate" | "atomic-abort"; label: string }>;
+}
+
+/**
+ * Preview and commit use the same sequential draft, so shared stock, special
+ * ports and line limits are validated exactly once before the original state
+ * can change. Any invalid request aborts the whole batch and returns the
+ * original object; no construction item or recipe setting can be partially
+ * consumed.
+ */
+export function connectBeltsAtomically(state: GameState, requests: readonly BatchBeltConnectionRequest[]): BatchBeltConnectionResult {
+  if (requests.length < 1) return { state, committed: false, created: 0, skipped: 0, beltIds: [], failures: [] };
+  let draft = state;
+  const beltIds: string[] = [];
+  const failures: BatchBeltConnectionResult["failures"] = [];
+  const seen = new Set<string>();
+  for (const [index, request] of requests.entries()) {
+    const tier = request.tier ?? 1;
+    const lanes = request.lanes ?? 1;
+    const key = `${request.sourceId}\u0000${request.targetId}\u0000${request.itemId}\u0000${request.targetPortIndex ?? "auto"}\u0000${tier}`;
+    if (seen.has(key)) {
+      failures.push({ index, code: "duplicate", label: "批量预览包含重复线路" });
+      continue;
+    }
+    seen.add(key);
+    const targetEntity = draft.entities.find((entity) => entity.id === request.targetId);
+    const existingRoute = draft.belts.some((belt) => belt.source === request.sourceId && belt.target === request.targetId && belt.itemId === request.itemId && (
+      targetEntity?.buildingId === "micro_black_hole_connector" || targetEntity?.buildingId === "material_delivery_hub"
+        ? request.targetPortIndex !== undefined && belt.targetPortIndex === request.targetPortIndex
+        : belt.targetPortIndex === undefined
+    ));
+    if (existingRoute) {
+      failures.push({ index, code: "duplicate", label: "目标接口已存在相同物品的运输线" });
+      continue;
+    }
+    const check = getBeltConnectionCheck(draft, request.sourceId, request.targetId, request.itemId, tier, request.targetPortIndex, lanes);
+    if (!check.ok) {
+      failures.push({ index, code: check.code, label: check.label });
+      continue;
+    }
+    const result = connectBeltWithResult(draft, request.sourceId, request.targetId, request.itemId, tier, request.targetPortIndex, lanes);
+    if (!result.beltId || result.state === draft) {
+      failures.push({ index, code: "atomic-abort", label: "线路在最终原子校验中未创建" });
+      continue;
+    }
+    draft = result.state;
+    beltIds.push(result.beltId);
+  }
+  if (failures.length > 0) {
+    return { state, committed: false, created: 0, skipped: requests.length, beltIds: [], failures };
+  }
+  return { state: draft, committed: true, created: beltIds.length, skipped: 0, beltIds, failures: [] };
+}
+
 export function removeBelt(state: GameState, beltId: string): GameState {
   const belt = state.belts.find((item) => item.id === beltId);
   if (!belt) return state;

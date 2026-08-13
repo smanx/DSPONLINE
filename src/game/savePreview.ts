@@ -1,5 +1,5 @@
 import type { GameSettings, PlanetId, SaveMode } from "./types";
-import { getLocalSaveValue, listLocalSaveKeys } from "./localSaveStore";
+import { getLocalSaveValue, getPrimaryLocalSaveRevision, listLocalSaveKeys } from "./localSaveStore";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
 const SAVE_BACKUP_KEY = `${SAVE_KEY}.backup`;
@@ -22,6 +22,7 @@ export interface MenuContinueSave {
   raw: string;
   summary: MenuSaveSummary;
   settings: Partial<GameSettings> | null;
+  localRevision: number;
 }
 
 export interface MenuSlotSummary extends MenuSaveSummary {
@@ -131,7 +132,7 @@ export function getMenuContinueSave(mode: SaveMode = "normal"): MenuContinueSave
   ];
   for (const candidate of candidates) {
     const preview = readPreview(candidate.key, mode);
-    if (preview) return { source: candidate.source, raw: preview.raw, summary: preview.summary, settings: preview.settings };
+    if (preview) return { source: candidate.source, raw: preview.raw, summary: preview.summary, settings: preview.settings, localRevision: getPrimaryLocalSaveRevision(mode) };
   }
   return null;
 }

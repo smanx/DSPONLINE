@@ -6,7 +6,7 @@ import { uploadCloudSaveWithOptions } from "./cloud";
 import { computeSaveStateChecksum } from "./saveEnvelopeIntegrity";
 import { sha256Text } from "./payloadDigest";
 
-const sizesMiB = [1, 7, 8, 20, 28, 30] as const;
+const rawSizesMiB = [1, 7, 8, 20, 28, 30] as const;
 
 function payloadNearSize(mebibytes: number, mode: "normal" | "speedrun"): string {
   const target = mebibytes * 1024 * 1024;
@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe("cloud transfer size matrix", () => {
-  it.each(sizesMiB)("uploads a %i MiB direct payload without legacy JSON wrapping", async (mebibytes) => {
+  it.each(rawSizesMiB)("keeps the established %i MiB raw direct-upload path unchanged", async (mebibytes) => {
     vi.stubGlobal("CompressionStream", undefined);
     const mode = mebibytes % 2 === 0 ? "speedrun" as const : "normal" as const;
     const slot = (["main", "1", "2", "3"] as const)[mebibytes % 4];
@@ -56,13 +56,39 @@ describe("cloud transfer size matrix", () => {
     expect((request.headers as Record<string, string>)["x-dsp-save-original-bytes"]).toBe(String(new TextEncoder().encode(source).byteLength));
   }, 30_000);
 
-  it("rejects a direct payload above the server save boundary before fetch", async () => {
-    const source = payloadNearSize(33, "normal");
+  it.each([33, 40, 48] as const)("preflights and gzip-uploads a %i MiB endgame save", async (mebibytes) => {
+    vi.stubGlobal("CompressionStream", class {
+      readonly readable: ReadableStream<Uint8Array>;
+      readonly writable: WritableStream<Uint8Array>;
+      constructor() {
+        const transform = new TransformStream<Uint8Array, Uint8Array>({
+          transform(_chunk, controller) { controller.enqueue(new Uint8Array([31, 139, 8, 0])); },
+        });
+        this.readable = transform.readable;
+        this.writable = transform.writable;
+      }
+    });
+    const mode = mebibytes === 40 ? "speedrun" as const : "normal" as const;
+    const source = payloadNearSize(mebibytes, mode);
+    const checksum = await sha256Text(source);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ plan: { accepted: true, reason: null, code: null } }), { status: 200, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ cloudSave: { mode, slot: "main", revision: 1, updatedAt: 2, size: new TextEncoder().encode(source).byteLength, checksum, summary: null } }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    await expect(uploadCloudSaveWithOptions(source, 0, "main", { mode, verified: true, payloadSha256: checksum })).resolves.toMatchObject({ revision: 1, mode });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/cloud-save/quota");
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe("POST");
+    expect((fetchMock.mock.calls[1]?.[1] as RequestInit).body).toBeInstanceOf(Blob);
+    expect(((fetchMock.mock.calls[1]?.[1] as RequestInit).headers as Record<string, string>)["content-encoding"]).toBe("gzip");
+  }, 60_000);
+
+  it("rejects a direct payload above the 64 MiB server save boundary before fetch", async () => {
+    const source = payloadNearSize(65, "normal");
     const fetchMock = vi.spyOn(globalThis, "fetch");
     await expect(uploadCloudSaveWithOptions(source, 0, "main", { verified: true })).rejects.toMatchObject({
       status: 413,
       payload: { code: "SAVE_SIZE_TOO_LARGE" },
     });
     expect(fetchMock).not.toHaveBeenCalled();
-  }, 30_000);
+  }, 60_000);
 });

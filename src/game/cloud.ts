@@ -2,6 +2,7 @@ import { normalizeLeaderboardMetrics, type LeaderboardCategoryId, type Leaderboa
 import type { SaveMode, SpeedrunTargetId } from "./types";
 import {
   assessSavePayloadSize,
+  CLOUD_SAVE_LARGE_ENDGAME_BYTES,
   CLOUD_SAVE_RAW_SAFE_LIMIT_BYTES,
   utf8Bytes,
   type SavePayloadSizeTier,
@@ -11,6 +12,12 @@ import { androidBase64RequestSupported } from "./androidApiTransport";
 import { CLOUD_TRANSFER_CONTRACT, cloudRequestTimeoutMs, createCloudRequestId, validCloudExpectedRevision } from "./cloudTransferContract";
 import { inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
 import { sha256Text } from "./payloadDigest";
+import {
+  capacityDetailsFromCloudError,
+  cloudSaveCapacityDetails,
+  cloudSaveSizeErrorMessage,
+  type CloudSaveCapacityDetails,
+} from "./cloudSaveCapacity";
 import type {
   CloudAccountArchiveImportPreview,
   CloudAccountArchiveImportResult,
@@ -149,6 +156,27 @@ export interface CloudSession {
   message: string | null;
 }
 
+export interface CloudTransferLimits {
+  guaranteedSavePayloadBytes: number;
+  savePayloadLimitBytes: number;
+  rawFallbackSafeLimitBytes: number;
+  requestCompressedLimitBytes: number;
+  requestExpandedLimitBytes: number;
+  compression: string[];
+  chunkedUpload: boolean;
+}
+
+export interface CloudQuotaPreflightPlan {
+  accepted: boolean;
+  reason: string | null;
+  code: string | null;
+  incoming?: { bytes?: number; checksum?: string | null };
+  limits?: Record<string, number>;
+  usage?: Record<string, unknown>;
+  prune?: { revisionCount?: number; logicalBytes?: number; revisions?: number[] };
+  projected?: Record<string, number>;
+}
+
 export interface CloudAutoSyncStatus {
   userId: string;
   state: "success" | "error" | "conflict" | "skipped";
@@ -192,6 +220,7 @@ export interface CloudUploadDiagnostics {
   usedRawFallback: boolean;
   fallbackReason?: string;
   lastErrorCode?: string;
+  capacity: CloudSaveCapacityDetails;
 }
 
 const CLOUD_COMPRESSION_MIN_BYTES = 256 * 1024;
@@ -214,10 +243,45 @@ export function readLastCloudUploadDiagnostics(): CloudUploadDiagnostics | null 
 
 function assertRawCloudRetryAllowed(rawBodyBytes: number): void {
   if (rawBodyBytes <= CLOUD_UPLOAD_RAW_FALLBACK_LIMIT_BYTES) return;
-  throw new CloudApiError("压缩失败且原始请求超过安全上限（30 MiB），本地存档未修改", 413, {
+  const capacity = cloudSaveCapacityDetails(rawBodyBytes);
+  throw new CloudApiError(`${cloudSaveSizeErrorMessage(capacity)} 当前存档超过 30 MiB 明文回退边界，需要可用的 gzip 压缩。`, 413, {
     code: "CLOUD_UPLOAD_RAW_FALLBACK_TOO_LARGE",
-    originalBytes: rawBodyBytes,
+    ...capacity,
   });
+}
+
+const CLOUD_SIZE_ERROR_CODES = new Set([
+  "SAVE_SIZE_TOO_LARGE",
+  "CLOUD_REVISION_QUOTA_EXCEEDED",
+  "CLOUD_SLOT_BYTES_QUOTA_EXCEEDED",
+  "CLOUD_MODE_BYTES_QUOTA_EXCEEDED",
+  "CLOUD_ACCOUNT_BYTES_QUOTA_EXCEEDED",
+  "CLOUD_HISTORY_REVISIONS_QUOTA_EXCEEDED",
+  "CLOUD_QUOTA_EXCEEDED",
+  "REQUEST_BODY_TOO_LARGE",
+  "REQUEST_EXPANDED_BODY_TOO_LARGE",
+  "CLOUD_UPLOAD_RAW_FALLBACK_TOO_LARGE",
+]);
+
+export function describeCloudUploadError(
+  error: unknown,
+  fallbackOriginalBytes = 0,
+  fallbackCompressedBytes: number | null = null,
+): { message: string; code: string | null; capacity: CloudSaveCapacityDetails | null } {
+  if (!(error instanceof CloudApiError)) {
+    return { message: error instanceof Error ? error.message : "云存档上传失败", code: null, capacity: null };
+  }
+  const code = typeof error.payload.code === "string" ? error.payload.code : null;
+  if (!code || !CLOUD_SIZE_ERROR_CODES.has(code)) return { message: error.message, code, capacity: null };
+  const capacity = capacityDetailsFromCloudError(error.payload, fallbackOriginalBytes, fallbackCompressedBytes);
+  const suggestion = capacity.overPayloadBytes > 0
+    ? "请先导出本地备份并使用存档瘦身；分块上传尚未启用，不能绕过完整性校验。"
+    : capacity.compressionAvailable
+      ? "压缩体积在请求边界内，可安全重试；若仍失败请复制脱敏诊断。"
+      : capacity.originalBytes > CLOUD_TRANSFER_CONTRACT.rawFallbackSafeLimitBytes
+        ? "该存档必须使用 gzip；当前环境无法安全回退明文上传。"
+        : "可以重试 gzip 或明文兼容路径。";
+  return { message: `${cloudSaveSizeErrorMessage(capacity)} ${suggestion}`, code, capacity };
 }
 
 type CloudUploadRuntimePlatform = "web" | "desktop" | "android";
@@ -1114,9 +1178,11 @@ export async function uploadCloudSaveWithOptions(
     throw new CloudApiError("云存档 Worker 字节证明无效", 0, { code: "SAVE_TRANSFER_PROOF_INVALID" });
   }
   if (payloadBytes > CLOUD_TRANSFER_CONTRACT.savePayloadLimitBytes) {
-    throw new CloudApiError("云存档体积超过服务器单存档上限，本地存档未修改", 413, {
+    const capacity = cloudSaveCapacityDetails(payloadBytes);
+    throw new CloudApiError(cloudSaveSizeErrorMessage(capacity), 413, {
       code: "SAVE_SIZE_TOO_LARGE",
       payloadBytes,
+      ...capacity,
     });
   }
   const rawBody = payload;
@@ -1125,6 +1191,32 @@ export async function uploadCloudSaveWithOptions(
   const payloadChecksum = hasWorkerProof
     ? options.payloadSha256!
     : await sha256Text(payload);
+  if (payloadBytes > CLOUD_SAVE_LARGE_ENDGAME_BYTES) {
+    try {
+      const plan = await preflightCloudSaveUpload(payloadBytes, payloadChecksum, slot, mode);
+      if (!plan.accepted) {
+        const payloadLimitBytes = typeof plan.limits?.revisionBytes === "number"
+          ? plan.limits.revisionBytes
+          : CLOUD_TRANSFER_CONTRACT.savePayloadLimitBytes;
+        throw new CloudApiError("云存档容量预检未通过；大文件正文尚未发送，本地和云端旧修订均未修改", plan.reason === "revisionBytes" ? 413 : 507, {
+          code: plan.code ?? "CLOUD_QUOTA_EXCEEDED",
+          payloadBytes,
+          originalBytes: payloadBytes,
+          expandedBytes: payloadBytes,
+          payloadLimitBytes,
+          ...(plan.reason && typeof plan.limits?.[plan.reason] === "number"
+            ? { quotaLimitBytes: plan.limits[plan.reason] }
+            : {}),
+          plan,
+        });
+      }
+    } catch (error) {
+      // During API-first rolling upgrades an older server may not expose the
+      // small quota-preflight endpoint yet. Keep its established upload path;
+      // all other preflight failures are authoritative and stop before PUT.
+      if (!(error instanceof CloudApiError && error.status === 404)) throw error;
+    }
+  }
   if (options.signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
   let diagnostics: CloudUploadDiagnostics = {
     status: "running",
@@ -1140,6 +1232,7 @@ export async function uploadCloudSaveWithOptions(
     attempts: 0,
     usedCompression: false,
     usedRawFallback: false,
+    capacity: cloudSaveCapacityDetails(payloadBytes),
   };
   const emitDiagnostics = (changes: Partial<CloudUploadDiagnostics> = {}) => {
     diagnostics = { ...diagnostics, ...changes, totalMs: Math.max(0, performance.now() - uploadStartedAt) };
@@ -1153,10 +1246,11 @@ export async function uploadCloudSaveWithOptions(
   try {
     stage("compressing");
     const compressionStartedAt = performance.now();
-    const compressed = await compressCloudRequestBody(rawBody, options.signal, options.runtimePlatform, options.androidGzipSupported);
+    const compressed = await compressCloudRequestBody(rawBody, options.signal, options.runtimePlatform, options.androidGzipSupported, rawBodyBytes);
     emitDiagnostics({
       compressionMs: Math.max(0, performance.now() - compressionStartedAt),
       compressedBytes: compressed?.body.size ?? null,
+      capacity: cloudSaveCapacityDetails(payloadBytes, compressed?.body.size ?? null),
       usedCompression: Boolean(compressed),
       ...(compressed ? {} : {
         fallbackReason: "compression-unavailable-timeout-or-not-beneficial",
@@ -1280,6 +1374,10 @@ export async function uploadCloudSaveWithOptions(
           : cancelled ? "ABORTED" : diagnostics.lastErrorCode ?? "CLOUD_UPLOAD_FAILED",
       });
     }
+    if (error instanceof CloudApiError) {
+      const described = describeCloudUploadError(error, payloadBytes, diagnostics.compressedBytes);
+      if (described.capacity) throw new CloudApiError(described.message, error.status, { ...error.payload, ...described.capacity });
+    }
     throw error;
   }
 }
@@ -1293,6 +1391,7 @@ export async function compressCloudRequestBody(
   signal?: AbortSignal,
   runtimePlatform: CloudUploadRuntimePlatform = cloudUploadRuntimePlatform(),
   androidGzipSupported = androidBase64RequestSupported(),
+  knownRawBodyBytes?: number,
 ): Promise<{ body: Blob; headers: Record<string, string> } | null> {
   if (signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
   if (
@@ -1302,8 +1401,10 @@ export async function compressCloudRequestBody(
     || typeof Blob === "undefined"
     || typeof ReadableStream === "undefined"
   ) return null;
-  const rawBytes = new TextEncoder().encode(rawBody);
-  if (rawBytes.byteLength < CLOUD_COMPRESSION_MIN_BYTES) return null;
+  const rawBodyBytes = Number.isSafeInteger(knownRawBodyBytes) && knownRawBodyBytes! >= 0
+    ? knownRawBodyBytes!
+    : utf8Bytes(rawBody);
+  if (rawBodyBytes < CLOUD_COMPRESSION_MIN_BYTES) return null;
 
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   let rejectControl: (reason?: unknown) => void = () => undefined;
@@ -1317,10 +1418,10 @@ export async function compressCloudRequestBody(
   try {
     const compressor = new CompressionStream("gzip");
     const source = typeof Blob.prototype.stream === "function"
-      ? new Blob([rawBytes]).stream()
+      ? new Blob([rawBody]).stream()
       : new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(rawBytes);
+          controller.enqueue(new TextEncoder().encode(rawBody));
           controller.close();
         },
       });
@@ -1349,20 +1450,18 @@ export async function compressCloudRequestBody(
     signal?.addEventListener("abort", onAbort, { once: true });
     await Promise.race([readAll, control]);
     if (signal?.aborted) throw new DOMException("云存档上传已取消", "AbortError");
-    const compressed = new Uint8Array(compressedBytes);
-    let offset = 0;
-    for (const chunk of chunks) {
-      compressed.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    if (compressed.byteLength >= rawBytes.byteLength) return null;
-    if (runtimePlatform === "android" && Math.ceil(compressed.byteLength * 4 / 3) >= rawBytes.byteLength) return null;
+    if (compressedBytes >= rawBodyBytes) return null;
+    if (
+      runtimePlatform === "android"
+      && rawBodyBytes <= CLOUD_UPLOAD_RAW_FALLBACK_LIMIT_BYTES
+      && Math.ceil(compressedBytes * 4 / 3) >= rawBodyBytes
+    ) return null;
     return {
-      body: new Blob([compressed.buffer], { type: "application/json" }),
+      body: new Blob(chunks.map((chunk) => chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer), { type: "application/json" }),
       headers: {
         "content-encoding": "gzip",
-        "x-dsp-save-original-bytes": String(rawBytes.byteLength),
-        "x-dsp-save-compressed-bytes": String(compressed.byteLength),
+        "x-dsp-save-original-bytes": String(rawBodyBytes),
+        "x-dsp-save-compressed-bytes": String(compressedBytes),
       },
     };
   } catch (error) {
@@ -1398,6 +1497,26 @@ export async function downloadCloudSave(revision?: number, slot: CloudSaveSlot =
     });
   }
   return { ...result.cloudSave, slot, mode };
+}
+
+export async function fetchCloudTransferLimits(): Promise<{
+  cloudQuota: Record<string, unknown>;
+  transferLimits: CloudTransferLimits;
+}> {
+  return cloudRequest("/cloud-save/quota", {}, true);
+}
+
+export async function preflightCloudSaveUpload(
+  size: number,
+  checksum: string,
+  slot: CloudSaveSlot = "main",
+  mode: CloudSaveMode = "normal",
+): Promise<CloudQuotaPreflightPlan> {
+  const result = await cloudRequest<{ plan: CloudQuotaPreflightPlan }>("/cloud-save/quota", {
+    method: "POST",
+    body: JSON.stringify({ size, checksum, slot, mode }),
+  }, true);
+  return result.plan;
 }
 
 export async function fetchCloudSaveHistory(slot: CloudSaveSlot = "main", mode: CloudSaveMode = "normal"): Promise<CloudSaveMetadata[]> {

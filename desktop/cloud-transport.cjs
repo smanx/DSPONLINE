@@ -3,11 +3,14 @@ const contract = require("../cloud-transfer-contract.json");
 const numericContractKeys = [
   "version", "mibBytes", "guaranteedSavePayloadBytes", "savePayloadLimitBytes", "rawFallbackSafeLimitBytes",
   "requestCompressedLimitBytes", "requestExpandedLimitBytes", "legacyJsonRequestLimitBytes", "singleSaveResponseLimitBytes",
+  "maximumConcurrentExpandedBytes",
   "baseTimeoutMs", "timeoutPerMibMs", "maximumTimeoutMs", "compressionTimeoutMs", "ipcChunkBytes",
 ];
 if (!numericContractKeys.every((key) => Number.isSafeInteger(contract[key]) && contract[key] > 0) ||
   contract.guaranteedSavePayloadBytes > contract.savePayloadLimitBytes ||
   contract.savePayloadLimitBytes > contract.requestExpandedLimitBytes ||
+  contract.requestCompressedLimitBytes > contract.requestExpandedLimitBytes ||
+  contract.requestExpandedLimitBytes > contract.maximumConcurrentExpandedBytes ||
   contract.baseTimeoutMs > contract.maximumTimeoutMs) {
   throw new Error("Invalid desktop cloud transfer contract");
 }

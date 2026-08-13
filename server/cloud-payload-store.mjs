@@ -304,7 +304,7 @@ export function writeCloudPayload(database, input) {
 /**
  * Persist a body whose exact UTF-8 size and SHA-256 were already produced by
  * the authoritative upload inspector. This deliberately avoids hashing a
- * second 30 MiB string while the SQLite mutation queue is held. The blob-table
+ * second large-save string while the SQLite mutation queue is held. The blob-table
  * CHECK constraint still enforces the supplied byte size, and an existing
  * address is compared byte-for-byte so a checksum collision cannot overwrite
  * stored content. Callers outside that inspected boundary must use

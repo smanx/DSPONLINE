@@ -90,7 +90,7 @@ async function openIsolatedPage(page: Page): Promise<void> {
   await page.addInitScript(() => {
     localStorage.clear();
     sessionStorage.clear();
-    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-13-v1.0.40-cookie-test");
+    localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-13-v1.0.41-cookie-test");
   });
   await page.goto(`${pageOrigin}/?menu=1`);
 }

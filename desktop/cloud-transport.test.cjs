@@ -10,20 +10,22 @@ const {
   validRequestId,
 } = require("./cloud-transport.cjs");
 
-test("desktop cloud transport covers guaranteed 30 MiB saves", () => {
-  assert.equal(contract.guaranteedSavePayloadBytes, 30 * 1024 * 1024);
+test("desktop cloud transport covers legacy 30 MiB raw and guaranteed 48 MiB compressed saves", () => {
+  assert.equal(contract.guaranteedSavePayloadBytes, 48 * 1024 * 1024);
+  assert.equal(contract.rawFallbackSafeLimitBytes, 30 * 1024 * 1024);
   assert.equal(requestBodyLimit({ "content-type": contract.directPayloadContentType }), contract.requestCompressedLimitBytes);
   assert.equal(requestBodyLimit({ "content-type": "application/json" }), contract.legacyJsonRequestLimitBytes);
   assert.ok(contract.singleSaveResponseLimitBytes > contract.guaranteedSavePayloadBytes * 2);
-  assert.ok(contract.legacyJsonRequestLimitBytes > contract.guaranteedSavePayloadBytes * 2);
+  assert.ok(contract.requestCompressedLimitBytes > contract.guaranteedSavePayloadBytes);
 });
 
 test("desktop cloud transport scales and caps timeouts", () => {
   assert.equal(requestTimeoutMs(0, 0), contract.baseTimeoutMs);
-  assert.equal(requestTimeoutMs(30 * 1024 * 1024, 0), contract.maximumTimeoutMs);
+  assert.equal(requestTimeoutMs(30 * 1024 * 1024, 0), 60_000);
+  assert.equal(requestTimeoutMs(48 * 1024 * 1024, 0), 87_000);
   assert.equal(requestTimeoutMs(1, 1, 1), contract.baseTimeoutMs + contract.timeoutPerMibMs);
   assert.equal(requestTimeoutMs(1, 1, 999_999), contract.maximumTimeoutMs);
-  assert.equal(requestTimeoutMs(30 * 1024 * 1024, 0, 1), contract.maximumTimeoutMs);
+  assert.equal(requestTimeoutMs(80 * 1024 * 1024, 0, 1), contract.maximumTimeoutMs);
 });
 
 test("desktop cloud transport allows only bounded cloud headers", () => {

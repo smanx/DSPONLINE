@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   assessSavePayloadSize,
+  CLOUD_SAVE_EXTREME_WARNING_BYTES,
+  CLOUD_SAVE_NEAR_LIMIT_BYTES,
   CLOUD_SAVE_RAW_SAFE_LIMIT_BYTES,
   MIB_BYTES,
 } from "./saveSizePolicy";
@@ -10,8 +12,11 @@ describe("save payload size policy", () => {
     [1 * MIB_BYTES, "medium"],
     [7 * MIB_BYTES, "large"],
     [20 * MIB_BYTES, "endgame"],
-    [28 * MIB_BYTES, "near-limit"],
-    [CLOUD_SAVE_RAW_SAFE_LIMIT_BYTES + 1, "over-raw-limit"],
+    [28 * MIB_BYTES, "endgame"],
+    [CLOUD_SAVE_RAW_SAFE_LIMIT_BYTES + 1, "large-endgame"],
+    [CLOUD_SAVE_NEAR_LIMIT_BYTES, "near-limit"],
+    [CLOUD_SAVE_EXTREME_WARNING_BYTES, "extreme"],
+    [64 * MIB_BYTES, "over-server-limit"],
   ] as const)("classifies %i bytes as %s", (bytes, tier) => {
     expect(assessSavePayloadSize(bytes).tier).toBe(tier);
   });

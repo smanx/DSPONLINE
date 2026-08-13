@@ -11,6 +11,22 @@ export const CURRENT_RELEASE_NOTES = getCurrentReleaseNotes("zh-CN");
 
 const RELEASE_NOTES_1_0_39 = getReleaseNotes1039("zh-CN");
 
+const RELEASE_NOTES_1_0_40 = {
+  ...getCurrentReleaseNotes("zh-CN"),
+  id: "2026-08-13-v1.0.40",
+  version: "1.0.40",
+  title: "云存档可靠性、排行榜与跨端体验更新",
+  summary: "1.0.40 让银河排行榜显示当前账号的真实名次和统计窗口状态，统一 30 MiB 大存档的跨端传输，并为多标签页、本地/云持久化、账号会话、PWA 更新和关键弹窗增加可恢复保护。玩法平衡、GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+  items: [
+    { id: "leaderboard-self-rank", title: "银河榜显示本人真实名次", description: "公开榜仍只展示 Top 100；登录后从完整公开成绩中计算本人排名，并明确区分统计窗口、复核、隐藏和限制状态。" },
+    { id: "cross-platform-save-transfer", title: "30 MiB 大存档跨端传输", description: "Web、Windows 与 Android 共用直接正文、gzip、动态超时和精确 SHA-256 确认；取消或结果未知时不盲目重传。" },
+    { id: "local-save-fencing", title: "多标签页本地存档防覆盖", description: "writer lease、逐键 revision 与 fencing token 阻止陈旧页面覆盖；分叉双方原文由玩家选择。" },
+    { id: "atomic-cloud-archives", title: "云端原子持久化与账号归档", description: "SQLite 事务成功后才发布修订；容量、历史、流式 ZIP 与原子导入保留正文、模式、槽位和 checksum。" },
+    { id: "secure-session-speedrun-recovery", title: "账号会话与速通恢复隔离", description: "同源 HttpOnly 会话、Android 安全存储和普通/速通模式边界共同保护账号与排行榜资格。" },
+    { id: "startup-pwa-accessibility", title: "启动、PWA 与关键弹窗收口", description: "启动包按需加载，PWA 保留前一稳定壳；关键操作使用共享焦点、危险确认和跨浏览器门禁。" },
+  ],
+} as const;
+
 const RELEASE_NOTES_1_0_38 = {
   id: "2026-08-11-v1.0.38",
   date: "2026年8月11日",
@@ -47,6 +63,12 @@ const RELEASE_NOTES_1_0_38 = {
 } as const;
 
 const RELEASE_NOTE_ICONS: Record<string, LucideIcon> = {
+  "cloud-status-center": CloudUpload,
+  "large-save-upload": Database,
+  "offline-settlement-choice": Gauge,
+  "adaptive-connection-ports": Link2,
+  "atomic-continuous-connections": ShieldCheck,
+  "stable-mobile-input": Check,
   "leaderboard-self-rank": Gauge,
   "cross-platform-save-transfer": CloudUpload,
   "local-save-fencing": LockKeyhole,
@@ -106,6 +128,7 @@ export interface ReleaseNotesRecord {
 /** Static, offline-readable history. Keep entries small; only one page is rendered. */
 export const RELEASE_NOTES_HISTORY: readonly ReleaseNotesRecord[] = [
   CURRENT_RELEASE_NOTES,
+  RELEASE_NOTES_1_0_40,
   RELEASE_NOTES_1_0_39,
   RELEASE_NOTES_1_0_38,
   RELEASE_NOTES_1_0_37,

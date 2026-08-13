@@ -214,6 +214,33 @@ test("scheduler is FIFO, bounded, cancellable, and returns Retry-After when satu
   scheduler.close();
 });
 
+test("scheduler bounds concurrent expanded bytes independently from request count", async () => {
+  const scheduler = new UploadInspectionScheduler({
+    inspectInline: () => ({}),
+    concurrency: 3,
+    queueLimit: 4,
+    workerThresholdBytes: 64 * 1024,
+    maximumConcurrentExpandedBytes: 96 * 1024 * 1024,
+  });
+  const order = [];
+  let releaseFirst;
+  const first = scheduler.run(async () => {
+    order.push("64-start");
+    await new Promise((resolve) => { releaseFirst = resolve; });
+    order.push("64-end");
+  }, { expandedBytes: 64 * 1024 * 1024 });
+  const second = scheduler.run(async () => { order.push("64-second"); }, { expandedBytes: 64 * 1024 * 1024 });
+  const small = scheduler.run(async () => { order.push("32-small"); }, { expandedBytes: 32 * 1024 * 1024 });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(order, ["64-start", "32-small"], "a fitting request may run without exceeding the byte budget");
+  assert.equal(scheduler.snapshot().maxActiveExpandedBytes, 96 * 1024 * 1024);
+  releaseFirst();
+  await Promise.all([first, second, small]);
+  assert.deepEqual(order, ["64-start", "32-small", "64-end", "64-second"]);
+  assert.equal(scheduler.snapshot().activeExpandedBytes, 0);
+  scheduler.close();
+});
+
 test("large direct raw and gzip uploads use workers and preserve payload, checksum, revision, mode, and slot", async (t) => {
   const running = await startServer({ uploadInspectionWorkerThresholdBytes: 64 * 1024 });
   t.after(() => running.close());

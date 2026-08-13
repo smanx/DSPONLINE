@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyOfflineSettlementFailure,
   normalizeOfflineSettlementPreference,
+  offlineSettlementChoiceDescription,
   selectInitialOfflineWorkerStrategy,
   selectOfflineWorkerStrategyAfterFastResult,
 } from "./offlineSettlementStrategy";
@@ -65,5 +66,13 @@ describe("offline Worker bounded fallback policy", () => {
     expect(classifyOfflineSettlementFailure("低内存设备风险")).toBe("memory-risk");
     expect(classifyOfflineSettlementFailure("白糖尾验误差过高")).toBe("boundary-validation");
     expect(classifyOfflineSettlementFailure("30 秒校准未形成普通合同")).toBe("calibration-unstable");
+  });
+
+  it("explains all three player choices without implying a silent fallback", () => {
+    expect(offlineSettlementChoiceDescription("fast", 3_600)).toContain("目标约 30 秒");
+    expect(offlineSettlementChoiceDescription("fast", 3_600)).toContain("再次快速尝试");
+    expect(offlineSettlementChoiceDescription("exact", 3_600)).toContain("可随时安全取消");
+    expect(offlineSettlementChoiceDescription("skip", 3_600)).toContain("二次确认");
+    expect(offlineSettlementChoiceDescription("skip", 3_600)).toContain("不会重复结算");
   });
 });

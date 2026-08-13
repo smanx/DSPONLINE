@@ -269,6 +269,13 @@ test("cancel keeps the pending interval and confirmed skip commits zero rewards"
   const sourceRaw = await page.evaluate((key) => window.localStorage.getItem(key), SAVE_KEY);
   await injectOneConservativeDecision(page);
   await page.getByRole("button", { name: "继续游戏" }).first().click();
+  const initialChoice = page.getByRole("dialog", { name: "选择离线结算方式" });
+  await expect(initialChoice).toBeVisible();
+  await expect(initialChoice).toContainText("快速结算（推荐）");
+  await expect(initialChoice).toContainText("精确结算");
+  await expect(initialChoice).toContainText("放弃离线收益");
+  expect(await page.evaluate((key) => window.localStorage.getItem(key), SAVE_KEY)).toBe(sourceRaw);
+  await initialChoice.getByRole("button", { name: /快速结算（推荐）/ }).click();
   const decision = page.getByRole("dialog", { name: "快速结算需要玩家选择" });
   await expect(decision).toBeVisible();
   await expect(decision).toContainText("实际提交时间0 秒");
@@ -281,6 +288,7 @@ test("cancel keeps the pending interval and confirmed skip commits zero rewards"
 
   await injectOneConservativeDecision(page);
   await page.getByRole("button", { name: "继续游戏" }).first().click();
+  await page.getByRole("dialog", { name: "选择离线结算方式" }).getByRole("button", { name: /快速结算（推荐）/ }).click();
   await expect(decision).toBeVisible();
   await decision.getByRole("button", { name: "取消并返回" }).click();
   await expect(decision).toHaveCount(0);
@@ -289,6 +297,7 @@ test("cancel keeps the pending interval and confirmed skip commits zero rewards"
 
   await injectOneConservativeDecision(page);
   await page.getByRole("button", { name: "继续游戏" }).first().click();
+  await page.getByRole("dialog", { name: "选择离线结算方式" }).getByRole("button", { name: /快速结算（推荐）/ }).click();
   const secondDecision = page.getByRole("dialog", { name: "快速结算需要玩家选择" });
   await secondDecision.getByRole("button", { name: "保守跳过本次收益" }).click();
   const skipConfirmation = page.getByRole("alertdialog", { name: "快速结算需要玩家选择" });
@@ -315,6 +324,7 @@ test("the recommended exact retry restarts from the unchanged original state", a
   const sourceRaw = await page.evaluate((key) => window.localStorage.getItem(key), SAVE_KEY);
   await injectOneConservativeDecision(page);
   await page.getByRole("button", { name: "继续游戏" }).first().click();
+  await page.getByRole("dialog", { name: "选择离线结算方式" }).getByRole("button", { name: /快速结算（推荐）/ }).click();
   const decision = page.getByRole("dialog", { name: "快速结算需要玩家选择" });
   await expect(decision).toBeVisible();
   expect(await page.evaluate((key) => window.localStorage.getItem(key), SAVE_KEY)).toBe(sourceRaw);

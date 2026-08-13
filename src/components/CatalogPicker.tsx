@@ -4,6 +4,9 @@ import { createPortal } from "react-dom";
 import { getItem } from "../game/content";
 import type { ItemDefinition, ItemId, RecipeDefinition, RecipeId } from "../game/types";
 import { ItemGlyph } from "./ItemReference";
+import { StableTextInput, clearStableTextDraft } from "./CompositionSafeInput";
+
+const RECIPE_CATALOG_DRAFT_ID = "catalog-picker-recipe-search";
 
 function usePicker(open: boolean, onClose: () => void) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -40,7 +43,7 @@ export function RecipeCatalogPicker({ value, recipes, onChange, compact = false 
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const close = () => { setOpen(false); setQuery(""); };
+  const close = () => { setOpen(false); setQuery(""); clearStableTextDraft(RECIPE_CATALOG_DRAFT_ID); };
   const inputRef = usePicker(open, close);
   const current = recipes.find((recipe) => recipe.id === value) ?? recipes[0];
   const term = query.trim().toLocaleLowerCase("zh-CN");
@@ -57,7 +60,7 @@ export function RecipeCatalogPicker({ value, recipes, onChange, compact = false 
       {open ? <PickerPortal><div className="catalog-picker-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
         <section className="catalog-picker" role="dialog" aria-modal="true" aria-label="配方选择面板">
           <header><div><span>生产目录</span><strong>选择配方</strong></div><button type="button" onClick={close} title="关闭配方选择" aria-label="关闭配方选择"><X size={16} /></button></header>
-          <label className="catalog-picker-search"><Search size={15} /><input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索配方、原料或产物" aria-label="搜索配方" /></label>
+          <label className="catalog-picker-search"><Search size={15} /><StableTextInput ref={inputRef} draftId={RECIPE_CATALOG_DRAFT_ID} value={query} onValueChange={setQuery} placeholder="搜索配方、原料或产物" aria-label="搜索配方" /></label>
           <div className="recipe-catalog-grid">
             {filtered.map((recipe) => <button type="button" className={recipe.id === value ? "active" : ""} onClick={() => { onChange(recipe.id); close(); }} key={recipe.id}>
               <header><span><strong>{recipe.name}</strong><small><Clock3 size={11} />{recipe.duration}s</small></span>{recipe.id === value ? <Check size={14} /> : null}</header>
@@ -81,7 +84,8 @@ export function ItemCatalogPicker({ value, items, disabledIds, onChange, allowCl
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const close = () => { setOpen(false); setQuery(""); };
+  const itemDraftId = `catalog-picker-item-search:${label}`;
+  const close = () => { setOpen(false); setQuery(""); clearStableTextDraft(itemDraftId); };
   const inputRef = usePicker(open, close);
   const current = items.find((item) => item.id === value);
   const term = query.trim().toLocaleLowerCase("zh-CN");
@@ -94,7 +98,7 @@ export function ItemCatalogPicker({ value, items, disabledIds, onChange, allowCl
       {open ? <PickerPortal><div className="catalog-picker-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
         <section className="catalog-picker catalog-picker--items" role="dialog" aria-modal="true" aria-label="物品选择面板">
           <header><div><span>物流目录</span><strong>{label}</strong></div><button type="button" onClick={close} title="关闭物品选择" aria-label="关闭物品选择"><X size={16} /></button></header>
-          <label className="catalog-picker-search"><Search size={15} /><input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索物品名称、符号或说明" aria-label="搜索物品" /></label>
+          <label className="catalog-picker-search"><Search size={15} /><StableTextInput ref={inputRef} draftId={itemDraftId} value={query} onValueChange={setQuery} placeholder="搜索物品名称、符号或说明" aria-label="搜索物品" /></label>
           <div className="item-catalog-grid">
             {allowClear ? <button type="button" className={!value ? "active" : ""} onClick={() => { onChange(null); close(); }}><i><X size={14} /></i><span><strong>未配置</strong><small>释放当前槽位</small></span></button> : null}
             {filtered.map((item) => {

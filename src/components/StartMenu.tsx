@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity,
   ArrowRight,
@@ -44,6 +44,7 @@ import {
   clearCloudSyncMarker,
   compareCloudSave,
   compareCloudSaveSummary,
+  describeCloudUploadError,
   downloadCloudSave,
   deleteCloudSave,
   loginCloudAccount,
@@ -76,6 +77,8 @@ import { NATIVE_BACK_EVENT } from "../nativeApp";
 import { CloudAccountSecurity } from "./CloudAccountSecurity";
 import { CloudSaveConflictDialog } from "./CloudSaveConflictDialog";
 import { CloudSaveSlotsPanel } from "./CloudSaveSlotsPanel";
+import { CloudSaveStatusCenter } from "./CloudSaveStatusCenter";
+import { StableTextInput } from "./CompositionSafeInput";
 import { SaveDeleteDialog, type SaveDeleteTarget } from "./SaveDeleteDialog";
 import { SpeedrunCopyDialog } from "./SpeedrunCopyDialog";
 import { AccessibleDialog } from "./AccessibleDialog";
@@ -89,6 +92,8 @@ import {
   classifyOfflineSettlementFailure,
   readOfflineSettlementPreference,
   writeOfflineSettlementPreference,
+  offlineSettlementChoiceDescription,
+  type OfflineSettlementChoice,
   type OfflineSettlementFailureKind,
   type OfflineSettlementPreference,
 } from "../game/offlineSettlementStrategy";
@@ -96,6 +101,8 @@ import { readShowRunLogPreference, readThemePreference, writeShowRunLogPreferenc
 import { readPureIdleRecovery } from "../game/pureIdleRecovery";
 import type { OfflineSimulationPhase, OfflineSimulationProgress } from "../game/offlineSimulation";
 import { assessSavePayloadSize, utf8Bytes } from "../game/saveSizePolicy";
+import { cloudSaveCapacityDetails, type CloudSaveCapacityDetails } from "../game/cloudSaveCapacity";
+import { cloudSyncStatusFromUpload, writeCloudSyncStatus } from "../game/cloudSyncStatus";
 
 type StartMenuView = "overview" | "saves" | "cloud" | "import" | "settings" | "new";
 type CloudAuthMode = "login" | "register" | "forgot" | "reset";
@@ -110,6 +117,12 @@ type OfflineSettlementDecision = {
   failureKind: OfflineSettlementFailureKind;
   reason: string;
   exactAttempted: boolean;
+};
+type OfflineSettlementPrompt = {
+  loaded: DeferredLoadedGame;
+  label: string;
+  preserveReason?: string;
+  complexity: OfflineComplexityReport;
 };
 
 function offlineFailureKindLabel(kind: OfflineSettlementFailureKind): string {
@@ -271,42 +284,6 @@ function ToggleRow({ checked, label, value, icon, onChange }: {
   );
 }
 
-function CompositionSafeInput({ value, onValueChange, onBlur, ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange"> & {
-  value: string;
-  onValueChange: (value: string) => void;
-}) {
-  const [draft, setDraft] = useState(value);
-  const composingRef = useRef(false);
-  useEffect(() => {
-    if (!composingRef.current) setDraft(value);
-  }, [value]);
-  const commit = (next: string) => {
-    setDraft(next);
-    onValueChange(next);
-  };
-  return <input
-    {...props}
-    value={draft}
-    onChange={(event) => {
-      const next = event.currentTarget.value;
-      setDraft(next);
-      if (!composingRef.current) onValueChange(next);
-    }}
-    onCompositionStart={() => { composingRef.current = true; }}
-    onCompositionEnd={(event) => {
-      composingRef.current = false;
-      commit(event.currentTarget.value);
-    }}
-    onBlur={(event) => {
-      if (composingRef.current || event.currentTarget.value !== value) {
-        composingRef.current = false;
-        commit(event.currentTarget.value);
-      }
-      onBlur?.(event);
-    }}
-  />;
-}
-
 function readRegistrationDraft(): { identifier: string; displayName: string } {
   try {
     const parsed = JSON.parse(window.sessionStorage.getItem(REGISTRATION_DRAFT_KEY) ?? "null") as unknown;
@@ -355,8 +332,11 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [busy, setBusy] = useState(false);
   const [cloudUploadActive, setCloudUploadActive] = useState(false);
   const [cloudUploadOfflineStage, setCloudUploadOfflineStage] = useState(false);
+  const [cloudUploadCapacity, setCloudUploadCapacity] = useState<CloudSaveCapacityDetails | null>(null);
+  const [cloudUploadErrorCode, setCloudUploadErrorCode] = useState<string | null>(null);
   const [offlineProgress, setOfflineProgress] = useState<OfflineLoadProgress | null>(null);
   const [offlineDecision, setOfflineDecision] = useState<OfflineSettlementDecision | null>(null);
+  const [offlinePrompt, setOfflinePrompt] = useState<OfflineSettlementPrompt | null>(null);
   const [offlineSkipConfirmed, setOfflineSkipConfirmed] = useState(false);
   const [message, setMessage] = useState<MenuMessage>(null);
   const [importInspection, setImportInspection] = useState<SaveInspection | null>(null);
@@ -604,6 +584,56 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     await enterLoadedGame(finalized, preserveReason, storage);
   };
 
+  const runOfflineChoice = async (choice: OfflineSettlementChoice) => {
+    const prompt = offlinePrompt;
+    if (!prompt) return;
+    setOfflinePrompt(null);
+    setBusy(true);
+    setMessage(null);
+    try {
+      const storage = await loadStorageModule();
+      if (choice === "skip") {
+        setOfflineDecision({
+          loaded: prompt.loaded,
+          label: prompt.label,
+          ...(prompt.preserveReason ? { preserveReason: prompt.preserveReason } : {}),
+          complexity: prompt.complexity,
+          failureKind: "cancelled",
+          reason: "玩家在结算前主动选择放弃本次离线收益",
+          exactAttempted: false,
+        });
+        setOfflineSkipConfirmed(true);
+        return;
+      }
+      await completeDeferredLoad(prompt.loaded, `${prompt.label} · ${choice === "exact" ? "精确结算" : "快速结算"}`, prompt.preserveReason, storage, { forceExact: choice === "exact" });
+    } catch (error) {
+      handleLoadError(error, choice === "exact" ? "精确离线结算失败，原存档保持不变" : "快速离线结算失败，原存档保持不变");
+    } finally {
+      offlineAbortRef.current = null;
+      setOfflineProgress(null);
+      setBusy(false);
+    }
+  };
+
+  const retryOfflineFast = async () => {
+    const decision = offlineDecision;
+    if (!decision) return;
+    setBusy(true);
+    setMessage(null);
+    setOfflineDecision(null);
+    setOfflineSkipConfirmed(false);
+    try {
+      const storage = await loadStorageModule();
+      await completeDeferredLoad(decision.loaded, `${decision.label} · 快速重试`, decision.preserveReason, storage);
+    } catch (error) {
+      handleLoadError(error, "快速离线结算再次失败，原存档保持不变");
+    } finally {
+      offlineAbortRef.current = null;
+      setOfflineProgress(null);
+      setBusy(false);
+    }
+  };
+
   const retryOfflineExactly = async () => {
     const decision = offlineDecision;
     if (!decision) return;
@@ -679,7 +709,14 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       if (mode === "normal" && pureIdleRecovery && loaded.state.timeWarp.enabled && !loaded.state.speedrun?.enabled) {
         loaded.offlineSeconds = 0;
       }
-      await completeDeferredLoad(loaded, mode === "speedrun" ? "恢复速通工厂" : "恢复最近工厂", undefined, storage);
+      const label = mode === "speedrun" ? "恢复速通工厂" : "恢复最近工厂";
+      if (loaded.offlineSeconds >= 60 && mode !== "speedrun" && !loaded.state.speedrun?.enabled) {
+        const { classifyOfflineWorkload } = await importWithRecovery(() => import("../game/offlineComplexity"), "离线工作量分析");
+        setOfflinePrompt({ loaded, label, complexity: classifyOfflineWorkload(loaded.state, loaded.offlineSeconds) });
+        setMessage({ tone: "warning", text: "请选择本次离线收益的处理方式；选择前原存档保持不变" });
+        return;
+      }
+      await completeDeferredLoad(loaded, label, undefined, storage);
     } catch (error) {
       handleLoadError(error, "本地存档无法载入");
     } finally {
@@ -724,7 +761,15 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         return;
       }
       trackAnalyticsEvent("load_save");
-      await completeDeferredLoad(loaded, `${mode === "speedrun" ? "速通" : "普通"}模式槽位 ${slotId}`, `${mode === "speedrun" ? "速通" : "普通"}槽位 ${slotId} 前`, storage);
+      const label = `${mode === "speedrun" ? "速通" : "普通"}模式槽位 ${slotId}`;
+      const preserveReason = `${mode === "speedrun" ? "速通" : "普通"}槽位 ${slotId} 前`;
+      if (loaded.offlineSeconds >= 60 && mode !== "speedrun" && !loaded.state.speedrun?.enabled) {
+        const { classifyOfflineWorkload } = await importWithRecovery(() => import("../game/offlineComplexity"), "离线工作量分析");
+        setOfflinePrompt({ loaded, label, preserveReason, complexity: classifyOfflineWorkload(loaded.state, loaded.offlineSeconds) });
+        setMessage({ tone: "warning", text: "请选择本次离线收益的处理方式；选择前原存档保持不变" });
+        return;
+      }
+      await completeDeferredLoad(loaded, label, preserveReason, storage);
     } catch (error) {
       handleLoadError(error, `${mode === "speedrun" ? "速通" : "普通"}模式槽位 ${slotId} 无法载入`);
     } finally {
@@ -905,6 +950,13 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     setCloudUploadOfflineStage(true);
     setBusy(true);
     setMessage({ tone: "busy", text: "准备上传" });
+    setCloudUploadErrorCode(null);
+    setCloudUploadCapacity(null);
+    writeCloudSyncStatus(cloudSyncStatusFromUpload("normal", "main", "preparing", {
+      comparison: cloudComparison?.state ?? null,
+      cloud: cloudSession.cloudSave,
+      message: "正在从本地权威存档生成上传候选",
+    }));
     try {
       // Let React paint the stage before any module loading or Worker message
       // transfers begin. This is important for multi-megabyte local saves.
@@ -939,6 +991,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       setMessage({ tone: "busy", text: "生成校验" });
       attemptedPayload = prepared.payload;
       const preparedSize = assessSavePayloadSize(prepared.diagnostics.payloadBytes);
+      const initialCapacity = cloudSaveCapacityDetails(prepared.diagnostics.payloadBytes);
+      setCloudUploadCapacity(initialCapacity);
       if (preparedSize.warning) setMessage({ tone: "busy", text: `${preparedSize.warning} · 正在继续安全上传` });
       const comparison = compareCloudSaveSummary(userId, prepared.summary, cloudSession.cloudSave);
       if (cloudSession.cloudSave && ["cloud-newer", "conflict", "unbound"].includes(comparison.state)) {
@@ -954,7 +1008,19 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         payloadSha256: prepared.payloadSha256,
         payloadByteLength: prepared.verification.byteLength,
         signal: controller.signal,
-        onStage: (stage) => setMessage({ tone: "busy", text: cloudUploadStageLabel(stage) }),
+        onStage: (stage) => {
+          const text = cloudUploadStageLabel(stage);
+          setMessage({ tone: "busy", text });
+          writeCloudSyncStatus(cloudSyncStatusFromUpload("normal", "main", stage === "compressing" ? "compressing" : stage === "confirming" ? "confirming" : "uploading", {
+            comparison: cloudComparison?.state ?? null,
+            cloud: cloudSession.cloudSave,
+            message: text,
+            sizes: initialCapacity,
+          }));
+        },
+        onDiagnostics: (diagnostics) => {
+          setCloudUploadCapacity(diagnostics.capacity);
+        },
       });
       let cloudSave = uploaded;
       try {
@@ -977,6 +1043,13 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       }
       if (prepared.returningReward.length > 0) storage.markReturningRewardClaimed(continueSave.summary.savedAt);
       markCloudSaveSynchronized(userId, cloudSave);
+      writeCloudSyncStatus(cloudSyncStatusFromUpload("normal", "main", "success", {
+        comparison: "synced",
+        cloud: cloudSave,
+        lastSuccessfulSyncAt: Date.now(),
+        message: `云存档已原子提交到修订 ${cloudSave.revision}`,
+        sizes: cloudUploadCapacity ?? initialCapacity,
+      }));
       trackAnalyticsEvent("cloud_upload");
       updateCloudSlot("main", cloudSave);
       setContinueSave((current) => current ? {
@@ -994,13 +1067,24 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       setMessage({ tone: "ready", text: `云存档已更新到修订 ${cloudSave.revision}` });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
+        writeCloudSyncStatus(cloudSyncStatusFromUpload("normal", "main", "cancelled", { cloud: cloudSession.cloudSave, message: "玩家取消上传；本地和云端旧修订保持不变", sizes: cloudUploadCapacity }));
         setMessage({ tone: "warning", text: "云存档上传已取消，本地有效存档未删除" });
         return;
       }
       if (error instanceof CloudApiError && error.status === 409 && error.payload.cloudSave) {
         if (attemptedPayload) setCloudConflict({ slot: "main", localPayload: attemptedPayload, remote: error.payload.cloudSave as CloudSaveMetadata, commitLocalAfterUpload: true });
       }
-      setMessage({ tone: "error", text: error instanceof Error ? error.message : "云存档上传失败" });
+      const described = describeCloudUploadError(error, cloudUploadCapacity?.originalBytes ?? 0, cloudUploadCapacity?.compressedBytes ?? null);
+      setCloudUploadCapacity(described.capacity ?? cloudUploadCapacity);
+      setCloudUploadErrorCode(described.code);
+      writeCloudSyncStatus(cloudSyncStatusFromUpload("normal", "main", error instanceof CloudApiError && error.status === 409 ? "conflict" : "failed", {
+        comparison: error instanceof CloudApiError && error.status === 409 ? "conflict" : cloudComparison?.state ?? null,
+        cloud: cloudSession.cloudSave,
+        message: described.message,
+        errorCode: described.code,
+        sizes: described.capacity ?? cloudUploadCapacity,
+      }));
+      setMessage({ tone: "error", text: described.message });
     } finally {
       cloudUploadAbortRef.current = null;
       cloudUploadSkipOfflineRef.current = false;
@@ -1279,6 +1363,15 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         <button type="button" onClick={() => offlineAbortRef.current?.abort()}>取消计算并返回</button>
       </section> : null}
 
+      {offlinePrompt ? <AccessibleDialog open title="选择离线结算方式" description="选择前原存档保持不变" className="start-menu-offline-decision start-menu-offline-choice" layout="bare" role="dialog" riskPolicy="explicit" ariaLabelledBy="offline-choice-title" ariaDescribedBy="offline-choice-description" portalTarget={document.querySelector<HTMLElement>(".start-menu")} onRequestClose={() => { setOfflinePrompt(null); setMessage({ tone: "warning", text: "已返回主菜单；原存档和离线时长保持不变" }); }}>
+        <header><Clock3 size={22} /><span><small>进入游戏前的离线收益</small><strong id="offline-choice-title">选择离线结算方式</strong></span></header>
+        <div className="start-menu-offline-decision__summary"><span><small>离线时长</small><strong>{Math.floor(offlinePrompt.loaded.offlineSeconds).toLocaleString("zh-CN")} 秒</strong></span><span><small>档案分级</small><strong>{offlineProfileLabel(offlinePrompt.complexity.profile)}</strong></span><span><small>推荐方式</small><strong>{offlinePrompt.complexity.recommendedStrategy === "exact" ? "精确" : offlinePrompt.complexity.recommendedStrategy === "conservative" ? "快速（低内存保护）" : "快速"}</strong></span><span><small>快速预算</small><strong>{Math.ceil(offlinePrompt.complexity.recommendedDeadlineMs / 1_000 || 30)} 秒</strong></span></div>
+        <p id="offline-choice-description">选择前不会推进 savedAt，也不会消费离线区间。快速或精确结算完成并通过完整性校验后才会一次性保存。</p>
+        {offlinePrompt.complexity.warning ? <small className="start-menu-offline-decision__reason">设备提示：{offlinePrompt.complexity.warning}</small> : null}
+        <div className="start-menu-offline-choice__options"><button className="primary" type="button" onClick={() => void runOfflineChoice("fast")}><Gauge size={16} /><span><strong>快速结算（推荐）</strong><small>{offlineSettlementChoiceDescription("fast", offlinePrompt.loaded.offlineSeconds)}</small></span></button><button type="button" onClick={() => void runOfflineChoice("exact")}><Clock3 size={16} /><span><strong>精确结算</strong><small>{offlineSettlementChoiceDescription("exact", offlinePrompt.loaded.offlineSeconds)}</small></span></button><button className="warning" type="button" onClick={() => void runOfflineChoice("skip")}><SkipForward size={16} /><span><strong>放弃离线收益</strong><small>{offlineSettlementChoiceDescription("skip", offlinePrompt.loaded.offlineSeconds)}</small></span></button></div>
+        <footer><button type="button" onClick={() => { setOfflinePrompt(null); setMessage({ tone: "warning", text: "已返回主菜单；原存档和离线时长保持不变" }); }}><X size={15} />暂不进入</button></footer>
+      </AccessibleDialog> : null}
+
       {offlineDecision ? <AccessibleDialog
         open
         className="start-menu-offline-decision"
@@ -1305,7 +1398,8 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         {offlineDecision.complexity?.warning ? <small className="start-menu-offline-decision__reason">设备提示：{offlineDecision.complexity.warning}</small> : null}
         {offlineSkipConfirmed ? <div className="start-menu-offline-decision__confirm" role="status" aria-live="assertive"><ShieldCheck size={17} /><span><strong>再次确认跳过本次收益</strong><small>将只推进本次离线时间，生产、库存、缓存、科研和戴森收益均为 0；该操作不会凭空补发物资。</small></span></div> : null}
         <footer>
-          <button className="primary" type="button" disabled={busy} onClick={() => void retryOfflineExactly()}><RefreshCw size={15} />使用精确结算（推荐）</button>
+          {!offlineDecision.exactAttempted ? <button className="primary" type="button" disabled={busy} onClick={() => void retryOfflineFast()}><Gauge size={15} />再次尝试快速结算</button> : null}
+          <button type="button" disabled={busy} onClick={() => void retryOfflineExactly()}><RefreshCw size={15} />使用精确结算</button>
           {offlineDecision.loaded.state.mode !== "speedrun" && !offlineDecision.loaded.state.speedrun?.enabled ? <button className={offlineSkipConfirmed ? "danger" : offlineSettlementPreference === "skip" ? "warning" : ""} type="button" disabled={busy} onClick={() => void confirmOfflineSkip()}><SkipForward size={15} />{offlineSkipConfirmed ? "再次确认：收益为 0" : "保守跳过本次收益"}</button> : null}
           <button ref={offlineDecisionCancelRef} type="button" disabled={busy} onClick={cancelOfflineDecision}><X size={15} />取消并返回</button>
         </footer>
@@ -1400,9 +1494,9 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             {cloudSession.status === "anonymous" && (cloudMode === "login" || cloudMode === "register") ? <form className="start-menu-auth" onSubmit={authenticateCloud}>
               <div className="start-menu-auth-mode"><button className={cloudMode === "login" ? "active" : ""} type="button" onClick={() => setCloudMode("login")}><LogIn size={14} />登录</button><button className={cloudMode === "register" ? "active" : ""} type="button" onClick={() => setCloudMode("register")}><UserPlus size={14} />注册</button></div>
               {!cloudMailAvailable ? <p className="start-menu-auth-development"><MailWarning size={14} /><span><strong>邮件系统尚未开放</strong><small>用户名密码注册、主云存档、三个手动槽、自动同步和排行榜均可使用；未绑定邮箱暂时无法找回密码。</small></span></p> : null}
-              {cloudMode === "register" ? <label><span>显示名称</span><CompositionSafeInput name="displayName" value={cloudDisplayName} onValueChange={setCloudDisplayName} minLength={2} maxLength={24} required autoComplete="nickname" /></label> : null}
-              <label><span>{cloudMode === "register" ? "用户名" : "用户名或邮箱"}</span><CompositionSafeInput name="username" type="text" value={cloudIdentifier} onValueChange={setCloudIdentifier} required minLength={cloudMode === "register" ? 4 : undefined} maxLength={cloudMode === "register" ? 24 : 254} pattern={cloudMode === "register" ? "[A-Za-z0-9_]{4,24}" : undefined} title={cloudMode === "register" ? "4 至 24 位英文字母、数字或下划线" : undefined} autoComplete="username" placeholder={cloudMode === "register" ? "4-24 位字母、数字或下划线" : "用户名或已绑定邮箱"} /></label>
-              <label><span>密码</span><input type="password" value={cloudPassword} onChange={(event) => setCloudPassword(event.target.value)} required minLength={8} maxLength={128} autoComplete={cloudMode === "register" ? "new-password" : "current-password"} /></label>
+              {cloudMode === "register" ? <label><span>显示名称</span><StableTextInput draftId="start-menu-cloud-display-name" name="displayName" value={cloudDisplayName} onValueChange={setCloudDisplayName} minLength={2} maxLength={24} required autoComplete="nickname" /></label> : null}
+              <label><span>{cloudMode === "register" ? "用户名" : "用户名或邮箱"}</span><StableTextInput draftId="start-menu-cloud-identifier" name="username" type="text" value={cloudIdentifier} onValueChange={setCloudIdentifier} required minLength={cloudMode === "register" ? 4 : undefined} maxLength={cloudMode === "register" ? 24 : 254} pattern={cloudMode === "register" ? "[A-Za-z0-9_]{4,24}" : undefined} title={cloudMode === "register" ? "4 至 24 位英文字母、数字或下划线" : undefined} autoComplete="username" placeholder={cloudMode === "register" ? "4-24 位字母、数字或下划线" : "用户名或已绑定邮箱"} /></label>
+              <label><span>密码</span><StableTextInput draftId="start-menu-cloud-password" sensitive type="password" value={cloudPassword} onValueChange={setCloudPassword} required minLength={8} maxLength={128} autoComplete={cloudMode === "register" ? "new-password" : "current-password"} /></label>
               {cloudMode === "login" ? <button className="start-menu-auth-link" type="button" disabled={!cloudMailAvailable} title={!cloudMailAvailable ? "邮箱找回密码正在开发中" : undefined} onClick={() => setCloudMode("forgot")}>{cloudMailAvailable ? "忘记密码" : "忘记密码 · 开发中"}</button> : null}
               <button className="primary" type="submit" disabled={busy}>{busy ? <Activity size={15} /> : cloudMode === "register" ? <UserPlus size={15} /> : <LogIn size={15} />}{cloudMode === "register" ? "创建云账户" : "登录云账户"}</button>
             </form> : null}
@@ -1419,11 +1513,11 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
             </form> : null}
             {cloudSession.status === "authenticated" && cloudSession.user ? <div className="start-menu-cloud-account">
               <section className="start-menu-cloud-user"><i>{cloudSession.user.displayName.slice(0, 1).toUpperCase()}</i><span><strong>{cloudSession.user.displayName}</strong><small>@{cloudSession.user.username}{cloudSession.user.email ? ` · ${cloudSession.user.email}` : ""}</small></span><button type="button" title="退出云账户" aria-label="退出云账户" onClick={() => { setBusy(true); void logoutCloudAccount().then(() => setCloudSession((current) => ({ status: "anonymous", user: null, cloudSave: null, mailAvailable: current.mailAvailable, message: null }))).finally(() => setBusy(false)); }}><LogOut size={15} /></button></section>
-              <section className="start-menu-cloud-save"><header><Cloud size={18} /><span><small>普通模式 · 当前主存档</small><strong>{cloudSession.cloudSave ? `修订 ${cloudSession.cloudSave.revision}` : "尚未上传"}</strong></span><em>{cloudSession.cloudSave ? formatSavedAt(cloudSession.cloudSave.updatedAt) : "--"}</em></header>{cloudComparison ? <p className={`cloud-sync-state cloud-sync-state--${cloudComparison.state}`}>{cloudSyncLabel(cloudComparison.state)}</p> : null}{continueSaveSize?.warning ? <p className="settings-warning">{continueSaveSize.warning}（当前约 {continueSaveSize.mebibytes.toFixed(1)} MiB）</p> : null}<dl className="cloud-sync-summary"><div><dt>本地进度</dt><dd>{comparisonPayload ? `${formatRuntime(cloudComparison?.local?.elapsedSeconds ?? 0)} · 科技 ${cloudComparison?.local?.completedTechCount ?? 0}` : "无本地存档"}</dd></div><div><dt>云端进度</dt><dd>{cloudSession.cloudSave?.summary ? `${formatRuntime(cloudSession.cloudSave.summary.elapsedSeconds)} · 科技 ${cloudSession.cloudSave.summary.completedTechCount}` : cloudSession.cloudSave ? "旧版摘要待更新" : "无云存档"}</dd></div></dl><div><button type="button" disabled={busy || !continueSave} onClick={() => void uploadLocalSave()}><Upload size={14} />上传本地存档</button>{cloudUploadActive && cloudUploadOfflineStage ? <button type="button" onClick={skipCloudUploadOffline}><SkipForward size={14} />跳过离线并继续上传</button> : null}{cloudUploadActive ? <button type="button" onClick={cancelCloudUpload}><CloudOff size={14} />取消上传</button> : null}<button className="primary" type="button" disabled={busy || !cloudSession.cloudSave} onClick={() => void downloadAndEnterCloudSave()}><Download size={14} />下载并进入</button><button className="danger" type="button" disabled={busy || !cloudSession.cloudSave} onClick={() => cloudSession.cloudSave && setCloudDeleteRequest({ slot: "main", metadata: cloudSession.cloudSave, scope: "cloud", label: "普通模式云端主存档", details: `修订 ${cloudSession.cloudSave.revision} · ${formatSavedAt(cloudSession.cloudSave.updatedAt)}` })}><Trash2 size={14} />删除云存档</button></div></section>
+              <section className="start-menu-cloud-save"><header><Cloud size={18} /><span><small>普通模式 · 当前主存档</small><strong>{cloudSession.cloudSave ? `修订 ${cloudSession.cloudSave.revision}` : "尚未上传"}</strong></span><em>{cloudSession.cloudSave ? formatSavedAt(cloudSession.cloudSave.updatedAt) : "--"}</em></header>{cloudComparison ? <p className={`cloud-sync-state cloud-sync-state--${cloudComparison.state}`}>{cloudSyncLabel(cloudComparison.state)}</p> : null}{continueSaveSize?.warning ? <p className="settings-warning">{continueSaveSize.warning}（当前约 {continueSaveSize.mebibytes.toFixed(1)} MiB）</p> : null}<dl className="cloud-sync-summary"><div><dt>本地进度</dt><dd>{comparisonPayload ? `${formatRuntime(cloudComparison?.local?.elapsedSeconds ?? 0)} · 科技 ${cloudComparison?.local?.completedTechCount ?? 0}` : "无本地存档"}</dd></div><div><dt>云端进度</dt><dd>{cloudSession.cloudSave?.summary ? `${formatRuntime(cloudSession.cloudSave.summary.elapsedSeconds)} · 科技 ${cloudSession.cloudSave.summary.completedTechCount}` : cloudSession.cloudSave ? "旧版摘要待更新" : "无云存档"}</dd></div></dl><div><button type="button" disabled={busy || !continueSave} onClick={() => void uploadLocalSave()}><Upload size={14} />上传本地存档</button>{cloudUploadActive && cloudUploadOfflineStage ? <button type="button" onClick={skipCloudUploadOffline}><SkipForward size={14} />跳过离线并继续上传</button> : null}{cloudUploadActive ? <button type="button" onClick={cancelCloudUpload}><CloudOff size={14} />取消上传</button> : null}<button className="primary" type="button" disabled={busy || !cloudSession.cloudSave} onClick={() => void downloadAndEnterCloudSave()}><Download size={14} />下载并进入</button><button className="danger" type="button" disabled={busy || !cloudSession.cloudSave} onClick={() => cloudSession.cloudSave && setCloudDeleteRequest({ slot: "main", metadata: cloudSession.cloudSave, scope: "cloud", label: "普通模式云端主存档", details: `修订 ${cloudSession.cloudSave.revision} · ${formatSavedAt(cloudSession.cloudSave.updatedAt)}` })}><Trash2 size={14} />删除云存档</button></div><CloudSaveStatusCenter userId={cloudSession.user.id} mode="normal" slot="main" localRevision={continueSave?.localRevision ?? null} cloud={cloudSession.cloudSave} comparison={cloudComparison?.state ?? null} active={cloudUploadActive} message={message?.text ?? null} errorCode={cloudUploadErrorCode} capacity={cloudUploadCapacity} onRetry={continueSave ? () => void uploadLocalSave() : undefined} onCancel={cloudUploadActive ? cancelCloudUpload : undefined} onExportLocal={continueSave ? () => void exportTextFile({ contents: continueSave.raw, fileName: `dsp-idle-local-backup-${new Date().toISOString().slice(0, 10)}.json`, title: "导出本地云同步前备份" }) : undefined} onExportCloud={cloudSession.cloudSave ? () => void downloadCloudSave(undefined, "main", "normal").then((save) => save && exportTextFile({ contents: save.payload, fileName: `dsp-idle-cloud-r${save.revision}-${new Date().toISOString().slice(0, 10)}.json`, title: "导出云端存档副本" })).catch((error) => setMessage({ tone: "error", text: error instanceof Error ? error.message : "云端副本导出失败" })) : undefined} /></section>
               <CloudSaveSlotsPanel mode="normal" cloudSaves={cloudSession.cloudSaves} localSlots={slots.filter((slot) => slot.mode === "normal")} busySlot={busy ? "main" : null} uploadDisabled={false} onUpload={(slot) => void uploadManualCloudSlot(slot)} onDownload={(slot) => void downloadManualCloudSlot(slot)} onDelete={(slot, metadata) => setCloudDeleteRequest({ slot, metadata, scope: "cloud", label: `普通模式云端槽位 ${slot}`, details: `修订 ${metadata.revision} · ${formatSavedAt(metadata.updatedAt)}` })} />
               <CloudAccountSecurity user={cloudSession.user} mailAvailable={cloudMailAvailable} onUserChange={(user) => setCloudSession((current) => ({ ...current, user }))} onLoggedOut={() => setCloudSession((current) => ({ status: "anonymous", user: null, cloudSave: null, mailAvailable: current.mailAvailable, message: null }))} />
             </div> : null}
-            {cloudConflict ? <CloudSaveConflictDialog local={summarizeCloudPayload(cloudConflict.localPayload)} cloud={cloudConflict.remote} slot={cloudConflict.slot} busy={busy} onUseCloud={() => void useCloudConflictVersion()} onKeepLocal={() => void keepLocalConflictVersion()} onCancel={() => setCloudConflict(null)} /> : null}
+            {cloudConflict ? <CloudSaveConflictDialog local={summarizeCloudPayload(cloudConflict.localPayload)} cloud={cloudConflict.remote} slot={cloudConflict.slot} busy={busy} onUseCloud={() => void useCloudConflictVersion()} onKeepLocal={() => void keepLocalConflictVersion()} onExportLocal={() => void exportTextFile({ contents: cloudConflict.localPayload, fileName: `dsp-idle-${cloudConflict.remote.mode ?? "normal"}-${cloudConflict.slot}-local-conflict.json`, title: "导出冲突本地副本" })} onExportCloud={() => void downloadCloudSave(cloudConflict.remote.revision, cloudConflict.slot, cloudConflict.remote.mode ?? "normal").then((save) => save && exportTextFile({ contents: save.payload, fileName: `dsp-idle-${save.mode}-${save.slot}-cloud-r${save.revision}.json`, title: "导出冲突云端副本" })).catch((error) => setMessage({ tone: "error", text: error instanceof Error ? error.message : "冲突云端副本导出失败" }))} onCancel={() => setCloudConflict(null)} /> : null}
           </div> : null}
 
           {view === "import" ? <div className="start-menu-import">
