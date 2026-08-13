@@ -1,5 +1,7 @@
 # 测试与发布基线
 
+> `1.0.42` 固定运行时源码 `8056d2cb0e1b46757676b490c08f28a1e66fd0a6` 的开发侧最终门禁：clean root/server install、typecheck；Vitest 139 文件通过/6 条件跳过、1222/18；server 347/2；ops 55/6（6 项仅真实 Linux）；native 24/24；Chromium 344/9（353 总项）；Firefox/WebKit 2/2；生产预览 PWA 1/1；production audit 根/server 均 0；125 个运行时包许可证；通用 Web、162 文件 API 展开包、Windows unpacked 诊断包、Android unsigned APK/AAB 均构建并校验通过。最终通用 Web 候选首屏 184,570 B gzip、菜单 273,830 B、禁止首屏模块为空。Windows 诊断包隔离 profile 启动观察到 4 个候选进程并全部结束；Android `bundleRelease`、`assembleRelease`、`lintVitalRelease`、zipalign 通过，`apksigner` 按预期拒绝 unsigned APK。Chromium 9 条跳过均来自未提供的真实玩家/终局只读夹具或开发服务器模式 PWA；PWA 已在生产预览单独通过，本轮没有读取玩家存档。真实 systemd/Nginx、正式签名、覆盖升级和实体设备仍由 Release Agent 执行。
+
 > `1.0.41` 固定源码 `32daa4f9438095308e3e6be7a0055268abe01e66` 的开发侧最终门禁：typecheck；Vitest 136 文件通过/6 条件跳过、1208/18；server 347/2；ops 55/6（6 项仅真实 Linux）；native 24/24；Chromium 333/9；Firefox/WebKit 2/2；生产预览 PWA 1/1；production audit 根/server 均 0；125 个运行时包许可证；Web、162 文件 API 展开包、Windows unpacked、Android unsigned APK/AAB 均构建通过。Chromium 的 9 条跳过均为未提供真实玩家/终局夹具或开发服务器模式下的 PWA 条件项，PWA 已用生产预览单独 1/1 通过；本轮没有读取玩家存档。所有写入测试使用合成账号和临时 SQLite。由于本机没有 WSL/Docker，真实 systemd/Nginx、UID/GID、flock 和故障切换矩阵没有执行，不能把 Windows 结果记为发布通过。
 
 > **当前发布基线（2026-08-11）**：香港、上海正式 Web/API 使用 `1.0.39 / GameState v46`，上海下载页与 Android/Windows stable 保持 1.0.38；有效资产的 v43 空间站实验存档拒绝加载。量子网络回归以 GameState v46 语义为基线，并保留传统物流站升级兼容测试。1.0.39 不升级存档 envelope、云 schema 或 SQLite layout。
