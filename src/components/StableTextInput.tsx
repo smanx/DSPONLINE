@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useRef, useState, type InputHTMLAttributes } from "react";
+import { forwardRef, useEffect, useRef, useState, type InputHTMLAttributes, type TextareaHTMLAttributes } from "react";
 
 const volatileDrafts = new Map<string, string>();
 
@@ -58,6 +58,70 @@ export const StableTextInput = forwardRef<HTMLInputElement, Omit<InputHTMLAttrib
     onValueChange(next);
   };
   return <input
+    ref={forwardedRef}
+    {...props}
+    value={draft}
+    onFocus={(event) => { focusedRef.current = true; onFocus?.(event); }}
+    onChange={(event) => {
+      const next = event.currentTarget.value;
+      setDraft(next);
+      if (!sensitive) volatileDrafts.set(draftId, next);
+      if (!composingRef.current) onValueChange(next);
+    }}
+    onCompositionStart={() => { composingRef.current = true; }}
+    onCompositionEnd={(event) => {
+      composingRef.current = false;
+      commit(event.currentTarget.value);
+    }}
+    onBlur={(event) => {
+      focusedRef.current = false;
+      if (composingRef.current || event.currentTarget.value !== latestExternalRef.current) {
+        composingRef.current = false;
+        commit(event.currentTarget.value);
+      }
+      onBlur?.(event);
+    }}
+  />;
+});
+
+/** Textarea companion with the same page-lifetime and IME guarantees. */
+export const StableTextArea = forwardRef<HTMLTextAreaElement, Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "onChange"> & {
+  draftId: string;
+  sensitive?: boolean;
+  value: string;
+  onValueChange: (value: string) => void;
+}>(function StableTextArea({ draftId, sensitive = false, value, onValueChange, onBlur, onFocus, ...props }, forwardedRef) {
+  const restoredDraftRef = useRef<string | null | undefined>(undefined);
+  if (restoredDraftRef.current === undefined) {
+    restoredDraftRef.current = sensitive ? null : volatileDrafts.get(draftId) ?? null;
+  }
+  const [draft, setDraft] = useState(() => restoredDraftRef.current ?? value);
+  const composingRef = useRef(false);
+  const focusedRef = useRef(false);
+  const latestExternalRef = useRef(value);
+  const initializedFromDraftRef = useRef(restoredDraftRef.current !== null);
+  useEffect(() => {
+    latestExternalRef.current = value;
+    if (initializedFromDraftRef.current) {
+      initializedFromDraftRef.current = false;
+      return;
+    }
+    if (!composingRef.current && !focusedRef.current) setDraft(value);
+  }, [value]);
+  useEffect(() => {
+    if (!sensitive) volatileDrafts.set(draftId, draft);
+  }, [draft, draftId, sensitive]);
+  useEffect(() => {
+    const restored = restoredDraftRef.current;
+    if (typeof restored === "string" && restored !== value) onValueChange(restored);
+    restoredDraftRef.current = null;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const commit = (next: string) => {
+    setDraft(next);
+    if (!sensitive) volatileDrafts.set(draftId, next);
+    onValueChange(next);
+  };
+  return <textarea
     ref={forwardedRef}
     {...props}
     value={draft}

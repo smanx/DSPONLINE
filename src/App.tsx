@@ -601,6 +601,23 @@ function getConnectionHandleTarget(target: EventTarget | null): ConnectionHandle
   return element && nodeId && handleId && handleType ? { element, nodeId, handleId, handleType } : null;
 }
 
+const LONG_PRESS_CONNECTION_PREFIX = "belt-source:";
+
+function encodeLongPressConnectionTarget(handle: ConnectionHandleTarget): string {
+  return `${LONG_PRESS_CONNECTION_PREFIX}${encodeURIComponent(handle.nodeId)}|${encodeURIComponent(handle.handleId)}`;
+}
+
+function decodeLongPressConnectionTarget(value: string): { nodeId: string; handleId: string } | null {
+  if (!value.startsWith(LONG_PRESS_CONNECTION_PREFIX)) return null;
+  const [nodeId, handleId, ...extra] = value.slice(LONG_PRESS_CONNECTION_PREFIX.length).split("|");
+  if (!nodeId || !handleId || extra.length > 0) return null;
+  try {
+    return { nodeId: decodeURIComponent(nodeId), handleId: decodeURIComponent(handleId) };
+  } catch {
+    return null;
+  }
+}
+
 interface ConnectionHandleSpatialEntry {
   target: ConnectionHandleTarget;
   left: number;
@@ -1150,21 +1167,6 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       else setMobilePanel(null);
     },
   });
-  const longPressBindings = useLongPress<HTMLElement>({
-    getTarget: (event) => {
-      if (!coarsePointer || placement || blueprintPlacementId) return null;
-      const element = event.target instanceof Element ? event.target.closest<HTMLElement>(".react-flow__node") : null;
-      return element?.dataset.id ?? null;
-    },
-    onLongPress: (entityId) => {
-      setSelectedEntityIds([entityId]);
-      setSelectedBeltId(null);
-      setSelectedBeltIds([]);
-      setMobileActionEntityId(entityId);
-      setMobilePanel(null);
-    },
-  });
-
   useEffect(() => {
     const canvas = factoryCanvasRef.current;
     const flow = canvas?.querySelector<HTMLElement>(".react-flow") ?? canvas;
@@ -5227,16 +5229,18 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     beginConnectionDraft(params);
   }, [beginConnectionDraft]);
 
-  const onClickConnectStart = useCallback((event: MouseEvent | TouchEvent, params: OnConnectStartParams) => {
-    const activePreview = clickConnectionPreviewRef.current;
-    const selectedHandle = getConnectionHandleTarget(event.target);
-    // React Flow reports every handle click as a possible new connection
-    // start. In continuous mode, a compatible opposite handle is another
-    // target for the existing source and must not replace that source draft.
-    if (activePreview && batchConnectionModeRef.current && selectedHandle && selectedHandle.handleType !== activePreview.draft.handleType) return;
-    const draft = beginConnectionDraft(params);
-    const handle = selectedHandle;
-    if (!draft || !handle) return;
+  const activateBatchConnectionMode = useCallback(() => {
+    if (batchConnectionModeRef.current) return;
+    batchConnectionModeRef.current = true;
+    setBatchConnectionMode(true);
+    setBatchConnectionFailure(null);
+    setSelectionMode(false);
+    setRegionMode(false);
+    setPlacement(null);
+    setBlueprintPlacementId(null);
+  }, []);
+
+  const startClickConnectionPreview = useCallback((draft: ConnectionDraft, handle: ConnectionHandleTarget) => {
     const bounds = handle.element.getBoundingClientRect();
     const preview = {
       originX: bounds.left + bounds.width / 2,
@@ -5249,7 +5253,65 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setClickConnectionTone("pending");
     setClickConnectionSnapPoint(null);
     setClickConnectionPreview(preview);
-  }, [beginConnectionDraft]);
+  }, []);
+
+  const onClickConnectStart = useCallback((event: MouseEvent | TouchEvent, params: OnConnectStartParams) => {
+    const activePreview = clickConnectionPreviewRef.current;
+    const selectedHandle = getConnectionHandleTarget(event.target);
+    const modifierContinuous = event instanceof MouseEvent && (event.ctrlKey || event.shiftKey);
+    // React Flow reports every handle click as a possible new connection
+    // start. In continuous mode, a compatible opposite handle is another
+    // target for the existing source and must not replace that source draft.
+    if (activePreview && (batchConnectionModeRef.current || modifierContinuous)
+      && selectedHandle && selectedHandle.handleType !== activePreview.draft.handleType) {
+      if (modifierContinuous) activateBatchConnectionMode();
+      return;
+    }
+    const draft = beginConnectionDraft(params);
+    const handle = selectedHandle;
+    if (!draft || !handle) return;
+    startClickConnectionPreview(draft, handle);
+  }, [activateBatchConnectionMode, beginConnectionDraft, startClickConnectionPreview]);
+
+  const longPressBindings = useLongPress<HTMLElement>({
+    getTarget: (event) => {
+      if (!coarsePointer || placement || blueprintPlacementId) return null;
+      const handle = getConnectionHandleTarget(event.target);
+      if (handle?.handleType === "source") return encodeLongPressConnectionTarget(handle);
+      const element = event.target instanceof Element ? event.target.closest<HTMLElement>(".react-flow__node") : null;
+      return element?.dataset.id ?? null;
+    },
+    onLongPress: (targetId) => {
+      const connectionTarget = decodeLongPressConnectionTarget(targetId);
+      if (connectionTarget) {
+        const element = [...document.querySelectorAll<HTMLElement>(".factory-canvas .react-flow__handle.source")]
+          .find((candidate) => candidate.dataset.nodeid === connectionTarget.nodeId && candidate.dataset.handleid === connectionTarget.handleId);
+        const handle = getConnectionHandleTarget(element ?? null);
+        if (!handle) return;
+        // Mobile browsers commonly synthesize a click immediately after a
+        // completed long press. Consume it so it cannot restart/cancel the
+        // source that was just selected for continuous connection mode.
+        suppressConnectionClickRef.current = true;
+        window.clearTimeout(suppressConnectionClickTimerRef.current);
+        suppressConnectionClickTimerRef.current = window.setTimeout(() => {
+          suppressConnectionClickRef.current = false;
+        }, 350);
+        activateBatchConnectionMode();
+        const draft = beginConnectionDraft({ nodeId: handle.nodeId, handleId: handle.handleId, handleType: "source" });
+        if (!draft) return;
+        startClickConnectionPreview(draft, handle);
+        setMobileActionEntityId(null);
+        setMobilePanel(null);
+        setNotice("已从输出接口进入连续拉线：继续点选多个兼容输入，再使用底部按钮确认");
+        return;
+      }
+      setSelectedEntityIds([targetId]);
+      setSelectedBeltId(null);
+      setSelectedBeltIds([]);
+      setMobileActionEntityId(targetId);
+      setMobilePanel(null);
+    },
+  });
 
   const clearConnectionPreview = useCallback((keepBatchMode = batchConnectionModeRef.current) => {
     flowStore.getState().cancelConnection();
@@ -5281,6 +5343,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       setBatchConnectionFailure("尚未选择下游输入接口");
       return;
     }
+    if (batchConnectionFailure) {
+      setNotice(`整批未提交：仍有未解决的跳过原因（${batchConnectionFailure}）。请清空后重新选择，库存、端口和存档均未改变`);
+      playTone("alert");
+      return;
+    }
     const before = gameRef.current;
     const result = connectBeltsAtomically(before, selections.map((selection) => ({
       sourceId: selection.connection.source!,
@@ -5310,26 +5377,49 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     trackAnalyticsEvent("belt_connect");
     setNotice(`连续拉线已原子提交：成功 ${result.created}，跳过 0，消耗传送带 ${consumed}`);
     playTone("connect");
-  }, [clearConnectionPreview, commitGame, playTone]);
+  }, [batchConnectionFailure, clearConnectionPreview, commitGame, playTone]);
 
   useEffect(() => { confirmBatchConnectionRef.current = confirmBatchConnection; }, [confirmBatchConnection]);
   useEffect(() => { cancelBatchConnectionRef.current = cancelBatchConnection; }, [cancelBatchConnection]);
 
   const addBatchConnection = useCallback((connection: Connection, draft: ConnectionDraft): boolean => {
     const itemId = parseHandleItem(connection.sourceHandle) ?? draft.itemId;
-    if (!connection.source || !connection.target || !itemId || !isValidConnection(connection)) return false;
+    const reject = (label: string) => {
+      setBatchConnectionFailure(label);
+      setConnectionHint({ label, tone: "blocked" });
+      return true;
+    };
+    if (!connection.source || !connection.target || !itemId) return reject("连接端点或物品信息不完整");
+    if (connection.source === connection.target) return reject("线路不能连接到同一建筑");
+    if (!connection.sourceHandle?.startsWith("out:") || !connection.targetHandle?.startsWith("in:")) {
+      return reject("输出端口必须连接输入端口");
+    }
+    const targetItemId = parseHandleItem(connection.targetHandle);
+    if (!isUniversalInputHandle(connection.targetHandle) && targetItemId !== itemId) {
+      return reject(`物品不兼容：目标需要${targetItemId ? ITEMS[targetItemId].name : "其他物品"}`);
+    }
     const targetPortIndex = parseTargetPortIndex(connection.targetHandle);
     const key = `${connection.source}:${connection.target}:${itemId}:${targetPortIndex ?? "auto"}:${draft.tier}`;
     const duplicate = batchConnectionsRef.current.some((selection) =>
       `${selection.connection.source}:${selection.connection.target}:${selection.itemId}:${selection.targetPortIndex ?? "auto"}:${selection.tier}` === key);
     if (duplicate) {
-      setBatchConnectionFailure("该目标接口已在预览列表中，未重复加入");
-      return true;
+      return reject("该目标接口已在预览列表中，未重复加入");
     }
     const check = getBeltConnectionCheck(gameRef.current, connection.source, connection.target, itemId, draft.tier, targetPortIndex, defaultBeltLanesRef.current);
-    if (!check.ok) {
-      setBatchConnectionFailure(check.label);
-      return true;
+    if (!check.ok) return reject(check.label);
+    if (!isValidConnection(connection)) return reject("当前端口、线路等级或并联设置不兼容");
+    const requests = [...batchConnectionsRef.current, { connection, itemId, tier: draft.tier, targetPortIndex }].map((selection) => ({
+      sourceId: selection.connection.source!,
+      targetId: selection.connection.target!,
+      itemId: selection.itemId,
+      tier: selection.tier,
+      targetPortIndex: selection.targetPortIndex,
+      lanes: defaultBeltLanesRef.current,
+    }));
+    const cumulativePreview = connectBeltsAtomically(gameRef.current, requests);
+    if (!cumulativePreview.committed) {
+      const reasons = [...new Set(cumulativePreview.failures.map((failure) => failure.label))];
+      return reject(reasons.join("；") || "累计候选无法整批建立");
     }
     const next = [...batchConnectionsRef.current, { connection, itemId, tier: draft.tier, targetPortIndex }];
     batchConnectionsRef.current = next;
@@ -5462,8 +5552,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       connectionHandleSpatialIndexRef.current,
     ) : null);
     const connection = targetHandle ? connectionFromDraft(preview.draft, targetHandle) : null;
-    const continuous = batchConnectionModeRef.current || event instanceof MouseEvent && (event.ctrlKey || event.shiftKey);
+    const modifierContinuous = event instanceof MouseEvent && (event.ctrlKey || event.shiftKey);
+    const continuous = batchConnectionModeRef.current || modifierContinuous;
     if (continuous) {
+      if (modifierContinuous) activateBatchConnectionMode();
       if (connection && addBatchConnection(connection, preview.draft)) {
         clickConnectionSucceededRef.current = false;
         setClickConnectionTone("pending");
@@ -5526,7 +5618,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setConnectionHint({ label, tone: "blocked" });
     spawnInteractionBurst(pointerRef.current.x, pointerRef.current.y, "连接失败", "warning");
     playTone("alert");
-  }, [addBatchConnection, coarsePointer, isValidConnection, playTone, spawnInteractionBurst, updateConnectionDraft]);
+  }, [activateBatchConnectionMode, addBatchConnection, coarsePointer, isValidConnection, playTone, spawnInteractionBurst, updateConnectionDraft]);
 
   const onConnect = useCallback((connection: Connection, lockedTier?: BeltTier) => {
     const sourceItem = parseHandleItem(connection.sourceHandle);
@@ -5608,6 +5700,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const connection = targetHandle ? connectionFromDraft(preview.draft, targetHandle) : null;
     if (!connection || !isValidConnection(connection)) return false;
     if (continuous) {
+      activateBatchConnectionMode();
       const added = addBatchConnection(connection, preview.draft);
       if (added) {
         clickConnectionSucceededRef.current = false;
@@ -5626,7 +5719,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setClickConnectionSnapPoint(null);
     updateConnectionDraft(null);
     return true;
-  }, [addBatchConnection, connectionHitRadius, flowStore, isValidConnection, updateConnectionDraft]);
+  }, [activateBatchConnectionMode, addBatchConnection, connectionHitRadius, flowStore, isValidConnection, updateConnectionDraft]);
 
   useEffect(() => {
     const completeSnappedConnection = (event: PointerEvent) => {
@@ -5739,6 +5832,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const onNodeClick: NodeMouseHandler<FactoryFlowNode> = useCallback((event, node) => {
     if (blueprintPlacementId) return;
     if (!placement && completeClickConnectionAtPoint(event.clientX, event.clientY, batchConnectionModeRef.current || event.ctrlKey || event.shiftKey)) return;
+    // Continuous connection owns node/port interaction until the batch is
+    // confirmed or cancelled. A bubbled node click must not replace its
+    // mobile action bar with the building inspector.
+    if (!placement && batchConnectionModeRef.current) return;
     if (nextMobileShell && mobileCanvasMode === "layout" && !placement) return;
     if (placement) {
       const entity = gameRef.current.entities.find((candidate) => candidate.id === node.id);
@@ -6708,6 +6805,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           canRedo: redoStackRef.current.length > 0,
           canUndoAutoLayout: Boolean(autoLayoutUndo && autoLayoutUndo.planetId === game.activePlanetId),
           minimapOpen: !minimapCollapsed,
+          batchConnectionMode,
         }}
         toolActions={{
           onBrowse: () => {
@@ -6749,6 +6847,15 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           },
           onOpenBlueprints: () => openMobileWorkspace("blueprints"),
           onOpenNetworks: () => openMobileStatistics("networks"),
+          onBatchConnectionModeChange: (enabled) => {
+            if (!enabled) {
+              cancelBatchConnection();
+              return;
+            }
+            activateBatchConnectionMode();
+            setMobileCanvasMode("browse");
+            setNotice("连续拉线已开启：先点一个输出接口，再连续点选多个兼容输入；使用底部按钮确认或撤销");
+          },
           onAutoLayout: () => autoLayoutEntities(),
           onUndoAutoLayout: undoAutoLayout,
           onUndo: undoGame,
@@ -6905,10 +7012,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         }}
         onOpenInspector={() => mobileNavigation.openSheet("inspector", "half")}
       /> : null}
-      {nextMobileShell && mobileNavigation.route.kind === "factory" && !mobileNavigation.overlay && batchConnectionMode ? <section className="mobile-batch-connection-actions" aria-label="移动端连续拉线操作">
-        <span><strong>{batchConnections.length}</strong> 条候选 · 材料 {(batchConnections.length * defaultBeltLanes).toLocaleString("zh-CN")}</span>
-        <button className="primary" type="button" disabled={batchConnections.length < 1} onClick={confirmBatchConnection}><Check size={17} />确认</button>
-        <button type="button" disabled={batchConnections.length < 1} onClick={() => { batchConnectionsRef.current = []; setBatchConnections([]); setBatchConnectionFailure(null); }}><Trash2 size={17} />清空</button>
+      {nextMobileShell && mobileNavigation.route.kind === "factory" && !mobileNavigation.overlay && batchConnectionMode ? <section className="mobile-batch-connection-actions" aria-label="移动端连续拉线操作" aria-live="polite">
+        <span className={batchConnectionFailure ? "is-error" : ""}><strong>{batchConnections.length}</strong> 条候选 · 材料 {(batchConnections.length * defaultBeltLanes).toLocaleString("zh-CN")}{batchConnectionFailure ? ` · 未加入：${batchConnectionFailure}` : ""}</span>
+        <button className="primary" type="button" disabled={batchConnections.length < 1 || Boolean(batchConnectionFailure)} onClick={confirmBatchConnection}><Check size={17} />确认</button>
+        <button type="button" disabled={batchConnections.length < 1 && !batchConnectionFailure} onClick={() => { batchConnectionsRef.current = []; setBatchConnections([]); setBatchConnectionFailure(null); }}><Trash2 size={17} />清空</button>
         <button type="button" onClick={cancelBatchConnection}><X size={17} />撤销</button>
       </section> : null}
       {nextMobileShell && mobileNavigation.route.kind === "factory" && !mobileNavigation.overlay && activeMobileCanvasMode === "select" ? <MobileSelectionContextBar
@@ -7227,13 +7334,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
                 cancelBatchConnection();
                 return;
               }
-              batchConnectionModeRef.current = true;
-              setBatchConnectionMode(true);
-              setBatchConnectionFailure(null);
-              setSelectionMode(false);
-              setRegionMode(false);
-              setPlacement(null);
-              setBlueprintPlacementId(null);
+              activateBatchConnectionMode();
               setNotice("连续拉线已开启：先点一个输出接口，再连续点选多个兼容输入；Enter 确认，Esc 取消");
             }}
             onModeChange={(enabled) => {
@@ -7287,9 +7388,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           {batchConnectionMode ? <section className="batch-connection-panel nodrag nopan" aria-label="连续拉线预览" aria-live="polite">
             <header><Route size={16} /><span><small>连续拉线 / 批量连接</small><strong>{clickConnectionPreview ? "选择下游输入接口" : "选择一个输出接口"}</strong></span><em>{batchConnections.length} 条</em></header>
             <dl><div><dt>预计线路</dt><dd>{batchConnections.length}</dd></div><div><dt>每条并联</dt><dd>×{defaultBeltLanes}</dd></div><div><dt>预计材料</dt><dd>{(batchConnections.length * defaultBeltLanes).toLocaleString("zh-CN")}</dd></div><div><dt>非法/重复</dt><dd>{batchConnectionFailure ? 1 : 0}</dd></div></dl>
-            {batchConnections.length > 0 ? <ol>{batchConnections.slice(0, 5).map((selection, index) => <li key={`${selection.connection.target}:${selection.targetPortIndex ?? "auto"}`}><span>{ITEMS[selection.itemId].name}</span><strong>{selection.connection.source} → {selection.connection.target}</strong><button type="button" onClick={() => { const next = batchConnectionsRef.current.filter((_, candidate) => candidate !== index); batchConnectionsRef.current = next; setBatchConnections(next); setBatchConnectionFailure(null); }} aria-label={`移除第 ${index + 1} 条候选`}><X size={13} /></button></li>)}</ol> : <p>点击输出接口作为起点；之后可连续点击多个高亮输入接口。所有候选只预览，不会立即扣料。</p>}
+            {batchConnections.length > 0 ? <ol>{batchConnections.slice(0, 5).map((selection, index) => {
+              const source = selection.connection.source ? activeEntityById.get(selection.connection.source) : undefined;
+              const target = selection.connection.target ? activeEntityById.get(selection.connection.target) : undefined;
+              const endpointLabel = (entity: FactoryEntity | undefined, fallback: string | null | undefined) => entity
+                ? `${entity.buildingId ? getBuilding(entity.buildingId).name : entity.resourceId ? ITEMS[entity.resourceId].name : "生产节点"} · ${entity.id}`
+                : fallback ?? "未知节点";
+              return <li key={`${selection.connection.target}:${selection.targetPortIndex ?? "auto"}`}><span>{ITEMS[selection.itemId].name}</span><strong>{endpointLabel(source, selection.connection.source)} → {endpointLabel(target, selection.connection.target)}</strong><button type="button" onClick={() => { const next = batchConnectionsRef.current.filter((_, candidate) => candidate !== index); batchConnectionsRef.current = next; setBatchConnections(next); setBatchConnectionFailure(null); }} aria-label={`移除第 ${index + 1} 条候选`}><X size={13} /></button></li>;
+            })}</ol> : <p>点击输出接口作为起点；之后可连续点击多个高亮输入接口。所有候选只预览，不会立即扣料。</p>}
             {batchConnectionFailure ? <p className="batch-connection-panel__error" role="alert">跳过原因：{batchConnectionFailure}</p> : null}
-            <footer><button className="primary" type="button" disabled={batchConnections.length < 1} onClick={confirmBatchConnection}><Check size={14} />确认连接</button><button type="button" disabled={batchConnections.length < 1} onClick={() => { batchConnectionsRef.current = []; setBatchConnections([]); setBatchConnectionFailure(null); }}><Trash2 size={14} />清空选择</button><button type="button" onClick={cancelBatchConnection}><X size={14} />取消</button></footer>
+            <footer><button className="primary" type="button" disabled={batchConnections.length < 1 || Boolean(batchConnectionFailure)} onClick={confirmBatchConnection}><Check size={14} />确认连接</button><button type="button" disabled={batchConnections.length < 1 && !batchConnectionFailure} onClick={() => { batchConnectionsRef.current = []; setBatchConnections([]); setBatchConnectionFailure(null); }}><Trash2 size={14} />清空选择</button><button type="button" onClick={cancelBatchConnection}><X size={14} />取消</button></footer>
             <small>整批原子提交：任一线路非法或材料不足时全部不创建、全部不扣料。Ctrl/Shift 可临时保持连续拉线。</small>
           </section> : null}
           {game.canvasRegions.find((region) => region.id === selectedRegionId && region.planetId === game.activePlanetId) ? <CanvasRegionEditor

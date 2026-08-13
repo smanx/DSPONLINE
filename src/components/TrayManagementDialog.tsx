@@ -7,6 +7,9 @@ import { formatQuantityCompact, formatQuantityExact } from "../game/quantityForm
 import "../styles/tray-management.css";
 import { AccessibleDialog } from "./AccessibleDialog";
 import { ItemGlyph } from "./ItemReference";
+import { StableTextInput, clearStableTextDraft } from "./CompositionSafeInput";
+
+const TRAY_SEARCH_DRAFT_ID = "tray-management-search";
 
 type DiscardMode = "half" | "all";
 
@@ -62,6 +65,10 @@ export function TrayManagementDialog({ game, onDiscard, onSetItemLimit, onClose 
     else next.add(itemId);
     return next;
   });
+  const close = () => {
+    clearStableTextDraft(TRAY_SEARCH_DRAFT_ID);
+    onClose();
+  };
   return <>
     <AccessibleDialog
       open
@@ -70,15 +77,15 @@ export function TrayManagementDialog({ game, onDiscard, onSetItemLimit, onClose 
       ariaLabel="管理当前行星物资托盘"
       backdropClassName="tray-management"
       initialFocusRef={searchInputRef}
-      onRequestClose={onClose}
+      onRequestClose={close}
     >
       <header>
         <div><span>{getPlanet(game.activePlanetId).name}</span><strong>物资托盘管理</strong></div>
-        <button type="button" onClick={onClose} title="关闭物资管理" aria-label="关闭物资管理"><X size={19} /></button>
+        <button type="button" onClick={close} title="关闭物资管理" aria-label="关闭物资管理"><X size={19} /></button>
       </header>
       {onSetItemLimit ? <div className="tray-management__limit"><span>每种物资库存上限</span><div>{([10_000, 100_000, 1_000_000, 100_000_000] as const).map((value) => <button type="button" className={itemLimit === value ? "active" : ""} key={value} onClick={() => { setLimitDraft(String(value)); setLimitError(null); onSetItemLimit(value); }}>{value === 10_000 ? "1万" : value === 100_000 ? "10万" : value === 1_000_000 ? "100万" : "1亿"}</button>)}</div><label><input inputMode="numeric" value={limitDraft} onChange={(event) => setLimitDraft(event.target.value)} onBlur={commitLimit} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} aria-label="自定义每种物资库存上限" /><button type="button" onClick={commitLimit}>应用</button></label>{limitError ? <p role="alert">{limitError}</p> : null}</div> : null}
       <div className="tray-management__toolbar">
-        <label><Search size={17} /><input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索物资" aria-label="搜索托盘物资" /></label>
+        <label><Search size={17} /><StableTextInput draftId={TRAY_SEARCH_DRAFT_ID} ref={searchInputRef} value={query} onValueChange={setQuery} placeholder="搜索物资" aria-label="搜索托盘物资" /></label>
         <button type="button" onClick={() => setSelected(selected.size === allItems.length ? new Set() : new Set(allItems.map(([itemId]) => itemId)))}>
           {selected.size === allItems.length && allItems.length > 0 ? <CheckSquare size={17} /> : <Square size={17} />}全选
         </button>
@@ -93,7 +100,7 @@ export function TrayManagementDialog({ game, onDiscard, onSetItemLimit, onClose 
         {visibleItems.length === 0 ? <div className="tray-management__empty">没有符合条件的库存</div> : null}
       </div>
       <footer>
-        <button type="button" onClick={onClose}>取消</button>
+        <button type="button" onClick={close}>取消</button>
         <button type="button" disabled={!selectedItems.some(([, amount]) => amount >= 2)} onClick={() => buildConfirmation("half")}>删除一半</button>
         <button className="danger" type="button" disabled={selected.size === 0} onClick={() => buildConfirmation("all")}><Trash2 size={17} />全部删除</button>
       </footer>

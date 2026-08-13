@@ -1,1 +1,1 @@
-export { StableTextInput, clearStableTextDraft, readStableTextDraft, updateStableTextDraft } from "./StableTextInput";
+export { StableTextArea, StableTextInput, clearStableTextDraft, readStableTextDraft, updateStableTextDraft } from "./StableTextInput";

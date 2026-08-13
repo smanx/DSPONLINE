@@ -10,6 +10,7 @@ import { PowerValue } from "./PowerValue";
 import { formatQuantityCompact, formatQuantityExact, formatQuantityScientific } from "../game/quantityFormat";
 import { useAppLocale } from "../i18n/locale";
 import { getQuantumBandwidthSummary, getQuantumItemCapacity, QUANTUM_ITEM_CAPACITY_MAX, QUANTUM_ITEM_CAPACITY_MIN, QUANTUM_ITEM_CAPACITY_PRESETS } from "../game/quantumLogisticsNetwork";
+import { StableTextArea, StableTextInput, clearStableTextDraft, readStableTextDraft } from "./CompositionSafeInput";
 
 function formatDistance(distanceLy: number): string {
   return distanceLy <= 0 ? "本地" : `${distanceLy.toFixed(1)} 光年`;
@@ -60,36 +61,36 @@ function StellarMetadataManager({ game, compact = false, onPlanetMetadataChange,
   const [systemId, setSystemId] = useState<StarSystemId>(getPlanet(game.activePlanetId).systemId);
   const metadata = game.galaxy.planetMetadata?.[planetId];
   const systemMetadata = game.galaxy.systemMetadata?.[systemId];
-  const [planetName, setPlanetName] = useState(metadata?.customName ?? "");
-  const [systemName, setSystemName] = useState(systemMetadata?.customName ?? "");
-  const [note, setNote] = useState(metadata?.note ?? "");
-  const [tags, setTags] = useState((metadata?.tags ?? []).join("，"));
+  const [planetName, setPlanetName] = useState(readStableTextDraft(`star-planet-name-${planetId}`) ?? metadata?.customName ?? "");
+  const [systemName, setSystemName] = useState(readStableTextDraft(`star-system-name-${systemId}`) ?? systemMetadata?.customName ?? "");
+  const [note, setNote] = useState(readStableTextDraft(`star-planet-note-${planetId}`) ?? metadata?.note ?? "");
+  const [tags, setTags] = useState(readStableTextDraft(`star-planet-tags-${planetId}`) ?? (metadata?.tags ?? []).join("，"));
 
   useEffect(() => {
     const current = game.galaxy.planetMetadata?.[planetId];
-    setPlanetName(current?.customName ?? "");
-    setNote(current?.note ?? "");
-    setTags((current?.tags ?? []).join("，"));
+    setPlanetName(readStableTextDraft(`star-planet-name-${planetId}`) ?? current?.customName ?? "");
+    setNote(readStableTextDraft(`star-planet-note-${planetId}`) ?? current?.note ?? "");
+    setTags(readStableTextDraft(`star-planet-tags-${planetId}`) ?? (current?.tags ?? []).join("，"));
   }, [game.galaxy.planetMetadata, planetId]);
-  useEffect(() => setSystemName(game.galaxy.systemMetadata?.[systemId]?.customName ?? ""), [game.galaxy.systemMetadata, systemId]);
+  useEffect(() => setSystemName(readStableTextDraft(`star-system-name-${systemId}`) ?? game.galaxy.systemMetadata?.[systemId]?.customName ?? ""), [game.galaxy.systemMetadata, systemId]);
 
   const parsedTags = [...new Set(tags.split(/[，,\n]/).map((tag) => tag.trim().slice(0, PLANET_TAG_MAX_LENGTH)).filter(Boolean))].slice(0, PLANET_TAG_MAX_COUNT);
   return <details className={`stellar-metadata-manager${compact ? " stellar-metadata-manager--compact" : ""}`}>
     <summary><Pencil size={15} /><span>自定义星球资料</span><small>名称、备注与标签</small></summary>
     <div>
-      <form onSubmit={(event) => { event.preventDefault(); onSystemNameChange(systemId, systemName); }}>
+      <form onSubmit={(event) => { event.preventDefault(); onSystemNameChange(systemId, systemName); clearStableTextDraft(`star-system-name-${systemId}`); }}>
         <header><Sparkles size={15} /><strong>恒星系名称</strong></header>
         <label><span>恒星系</span><select value={systemId} onChange={(event) => setSystemId(event.target.value as StarSystemId)}>{STAR_SYSTEM_LIST.map((system) => <option value={system.id} key={system.id}>{getStarSystemDisplayName(game, system.id)}</option>)}</select></label>
-        <label><span>自定义名称</span><input value={systemName} maxLength={STAR_SYSTEM_CUSTOM_NAME_MAX_LENGTH} placeholder={getStarSystem(systemId).name} onChange={(event) => setSystemName(event.target.value)} /></label>
-        <footer><button type="button" onClick={() => { setSystemName(""); onSystemNameChange(systemId, ""); }}><RotateCcw size={14} />恢复默认</button><button className="primary" type="submit"><Save size={14} />保存星系名称</button></footer>
+        <label><span>自定义名称</span><StableTextInput key={systemId} draftId={`star-system-name-${systemId}`} value={systemName} maxLength={STAR_SYSTEM_CUSTOM_NAME_MAX_LENGTH} placeholder={getStarSystem(systemId).name} onValueChange={setSystemName} /></label>
+        <footer><button type="button" onClick={() => { setSystemName(""); clearStableTextDraft(`star-system-name-${systemId}`); onSystemNameChange(systemId, ""); }}><RotateCcw size={14} />恢复默认</button><button className="primary" type="submit"><Save size={14} />保存星系名称</button></footer>
       </form>
-      <form onSubmit={(event) => { event.preventDefault(); onPlanetMetadataChange(planetId, { customName: planetName, note, tags: parsedTags }); }}>
+      <form onSubmit={(event) => { event.preventDefault(); onPlanetMetadataChange(planetId, { customName: planetName, note, tags: parsedTags }); clearStableTextDraft(`star-planet-name-${planetId}`); clearStableTextDraft(`star-planet-note-${planetId}`); clearStableTextDraft(`star-planet-tags-${planetId}`); }}>
         <header><Orbit size={15} /><strong>行星资料</strong></header>
         <label><span>行星</span><select value={planetId} onChange={(event) => setPlanetId(event.target.value as PlanetId)}>{STAR_SYSTEM_LIST.flatMap((system) => system.planetIds).map((id) => <option value={id} key={id}>{getPlanetDisplayName(game, id)} · {getStarSystemDisplayName(game, getPlanet(id).systemId)}</option>)}</select></label>
-        <label><span>自定义名称</span><input value={planetName} maxLength={PLANET_CUSTOM_NAME_MAX_LENGTH} placeholder={getPlanet(planetId).name} onChange={(event) => setPlanetName(event.target.value)} /></label>
-        <label><span>备注</span><textarea value={note} maxLength={PLANET_NOTE_MAX_LENGTH} rows={compact ? 2 : 3} placeholder={isEnglish ? "Record production purpose, logistics plans, or resource assignments" : "记录产线用途、物流计划或资源安排"} onChange={(event) => setNote(event.target.value)} /></label>
-        <label><span><Tags size={13} />标签</span><input value={tags} placeholder="例如：绿糖，出口，缺电" onChange={(event) => setTags(event.target.value)} /><small>逗号分隔，最多 {PLANET_TAG_MAX_COUNT} 个</small></label>
-        <footer><button type="button" onClick={() => { setPlanetName(""); onPlanetMetadataChange(planetId, { customName: "", note, tags: parsedTags }); }}><RotateCcw size={14} />恢复默认名称</button><button className="primary" type="submit"><Save size={14} />保存行星资料</button></footer>
+        <label><span>自定义名称</span><StableTextInput key={`name-${planetId}`} draftId={`star-planet-name-${planetId}`} value={planetName} maxLength={PLANET_CUSTOM_NAME_MAX_LENGTH} placeholder={getPlanet(planetId).name} onValueChange={setPlanetName} /></label>
+        <label><span>备注</span><StableTextArea key={`note-${planetId}`} draftId={`star-planet-note-${planetId}`} value={note} maxLength={PLANET_NOTE_MAX_LENGTH} rows={compact ? 2 : 3} placeholder={isEnglish ? "Record production purpose, logistics plans, or resource assignments" : "记录产线用途、物流计划或资源安排"} onValueChange={setNote} /></label>
+        <label><span><Tags size={13} />标签</span><StableTextInput key={`tags-${planetId}`} draftId={`star-planet-tags-${planetId}`} value={tags} placeholder="例如：绿糖，出口，缺电" onValueChange={setTags} /><small>逗号分隔，最多 {PLANET_TAG_MAX_COUNT} 个</small></label>
+        <footer><button type="button" onClick={() => { setPlanetName(""); clearStableTextDraft(`star-planet-name-${planetId}`); onPlanetMetadataChange(planetId, { customName: "", note, tags: parsedTags }); }}><RotateCcw size={14} />恢复默认名称</button><button className="primary" type="submit"><Save size={14} />保存行星资料</button></footer>
       </form>
     </div>
   </details>;
@@ -187,7 +188,7 @@ function IndustryConsole({ game, onTravel, onRoleChange, onStationPriorityChange
       <section className="stellar-route-console" aria-label="全局物流航线表">
         <header>
           <div><span>全星区调度</span><strong>全局航线表</strong></div>
-          <label className="stellar-route-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索物品或行星" aria-label="搜索全局航线" /></label>
+          <label className="stellar-route-search"><Search size={14} /><StableTextInput draftId="stellar-route-search" value={query} onValueChange={setQuery} placeholder="搜索物品或行星" aria-label="搜索全局航线" /></label>
           <div className="stellar-route-filters" role="group" aria-label="航线筛选">
             <button type="button" className={routeFilter === "all" ? "active" : ""} onClick={() => setRouteFilter("all")}>全部</button>
             <button type="button" className={routeFilter === "remote" ? "active" : ""} onClick={() => setRouteFilter("remote")}>星际</button>
@@ -314,7 +315,7 @@ function QuantumInventoryConsole({ game, onCollectorModeChange, onItemCapacityCh
       </div>
     </header>
     <div className="quantum-inventory-toolbar">
-      <label className="star-map-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索量子库存物品" aria-label="搜索量子库存物品" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="清除量子库存搜索"><X size={14} /></button> : null}</label>
+      <label className="star-map-search"><Search size={15} /><StableTextInput draftId="quantum-inventory-search" value={query} onValueChange={setQuery} placeholder="搜索量子库存物品" aria-label="搜索量子库存物品" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="清除量子库存搜索"><X size={14} /></button> : null}</label>
       <span>{runtime ? `最近结算 ${formatQuantityExact(runtime.boundarySecond)} 秒` : "等待首个五秒结算边界"}</span>
     </div>
     <div className="quantum-inventory-list">
@@ -429,7 +430,7 @@ export function StarMapWorkspace({
     const colonized = detailPlanet ? isPlanetColonized(game, detailPlanet.id) : false;
     const colonyRequirements = detailPlanet ? getColonizationRequirements(game, detailPlanet.id) : null;
     return <section className={`star-map-workspace star-map-workspace--${view} mobile-workspace mobile-star-map${mobileSubview ? " mobile-workspace--detail" : ""}`} role="dialog" aria-modal="true" aria-label="星图">
-      {!mobileSubview ? <><nav className="star-map-tabs mobile-workspace-sticky" role="tablist" aria-label="星图视图"><button type="button" role="tab" aria-selected={view === "map"} className={view === "map" ? "active" : ""} onClick={() => setView("map")}><Telescope size={14} />星图探索</button><button type="button" role="tab" aria-selected={view === "industry"} className={view === "industry" ? "active" : ""} onClick={() => setView("industry")}><Factory size={14} />星际工业</button><button type="button" role="tab" aria-selected={view === "quantum"} className={view === "quantum" ? "active" : ""} onClick={() => setView("quantum")}><Atom size={14} />量子库存</button></nav>{view === "industry" ? <div className="mobile-workspace-scroll"><IndustryConsole game={game} onTravel={onTravel} onRoleChange={onRoleChange} onStationPriorityChange={onStationPriorityChange} onStationMinimumLoadChange={onStationMinimumLoadChange} onStationLimitsChange={onStationLimitsChange} onFocusStation={onFocusStation} /></div> : view === "quantum" ? <div className="mobile-workspace-scroll"><QuantumInventoryConsole game={game} onCollectorModeChange={onCollectorQuantumModeChange} onItemCapacityChange={onQuantumItemCapacityChange} /></div> : <div className="mobile-workspace-scroll mobile-star-system-list"><header><span>已勘探 {unlockedCount}/{STAR_SYSTEM_LIST.length}</span><strong>星区种子 #{game.galaxy.seed}</strong></header><label className="star-map-search"><Search size={15} /><input value={mapQuery} onChange={(event) => setMapQuery(event.target.value)} placeholder="搜索名称、备注或标签" aria-label="搜索星球资料" />{mapQuery ? <button type="button" onClick={() => setMapQuery("")} aria-label="清除星图搜索"><X size={14} /></button> : null}</label>{bulkActions}<StellarMetadataManager game={game} compact onPlanetMetadataChange={onPlanetMetadataChange} onSystemNameChange={onSystemNameChange} />{visibleSystems.map((system) => {
+      {!mobileSubview ? <><nav className="star-map-tabs mobile-workspace-sticky" role="tablist" aria-label="星图视图"><button type="button" role="tab" aria-selected={view === "map"} className={view === "map" ? "active" : ""} onClick={() => setView("map")}><Telescope size={14} />星图探索</button><button type="button" role="tab" aria-selected={view === "industry"} className={view === "industry" ? "active" : ""} onClick={() => setView("industry")}><Factory size={14} />星际工业</button><button type="button" role="tab" aria-selected={view === "quantum"} className={view === "quantum" ? "active" : ""} onClick={() => setView("quantum")}><Atom size={14} />量子库存</button></nav>{view === "industry" ? <div className="mobile-workspace-scroll"><IndustryConsole game={game} onTravel={onTravel} onRoleChange={onRoleChange} onStationPriorityChange={onStationPriorityChange} onStationMinimumLoadChange={onStationMinimumLoadChange} onStationLimitsChange={onStationLimitsChange} onFocusStation={onFocusStation} /></div> : view === "quantum" ? <div className="mobile-workspace-scroll"><QuantumInventoryConsole game={game} onCollectorModeChange={onCollectorQuantumModeChange} onItemCapacityChange={onQuantumItemCapacityChange} /></div> : <div className="mobile-workspace-scroll mobile-star-system-list"><header><span>已勘探 {unlockedCount}/{STAR_SYSTEM_LIST.length}</span><strong>星区种子 #{game.galaxy.seed}</strong></header><label className="star-map-search"><Search size={15} /><StableTextInput draftId="star-map-search" value={mapQuery} onValueChange={setMapQuery} placeholder="搜索名称、备注或标签" aria-label="搜索星球资料" />{mapQuery ? <button type="button" onClick={() => setMapQuery("")} aria-label="清除星图搜索"><X size={14} /></button> : null}</label>{bulkActions}<StellarMetadataManager game={game} compact onPlanetMetadataChange={onPlanetMetadataChange} onSystemNameChange={onSystemNameChange} />{visibleSystems.map((system) => {
         const profile = getStarSystemProfile(game, system.id);
         const unlocked = isStarSystemUnlocked(game, system.id);
         const mission = game.exploration.missions.find((candidate) => candidate.systemId === system.id);
@@ -475,7 +476,7 @@ export function StarMapWorkspace({
       </nav>
 
       {view === "map" ? <div className="star-map-controls">
-        <div className="star-map-controls__search"><label className="star-map-search"><Search size={15} /><input value={mapQuery} onChange={(event) => setMapQuery(event.target.value)} placeholder="搜索名称、备注或标签" aria-label="搜索星球资料" />{mapQuery ? <button type="button" onClick={() => setMapQuery("")} aria-label="清除星图搜索"><X size={14} /></button> : null}</label><small>{normalizedMapQuery ? `${visibleSystems.length} 个匹配星系` : "可按名称、备注或标签搜索"}</small></div>
+        <div className="star-map-controls__search"><label className="star-map-search"><Search size={15} /><StableTextInput draftId="star-map-search" value={mapQuery} onValueChange={setMapQuery} placeholder="搜索名称、备注或标签" aria-label="搜索星球资料" />{mapQuery ? <button type="button" onClick={() => setMapQuery("")} aria-label="清除星图搜索"><X size={14} /></button> : null}</label><small>{normalizedMapQuery ? `${visibleSystems.length} 个匹配星系` : "可按名称、备注或标签搜索"}</small></div>
         {bulkActions}
         <StellarMetadataManager game={game} onPlanetMetadataChange={onPlanetMetadataChange} onSystemNameChange={onSystemNameChange} />
       </div> : null}

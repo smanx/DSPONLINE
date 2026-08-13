@@ -1,4 +1,4 @@
-import { BoxSelect, ChevronRight, Focus, Layers3, LayoutTemplate, LockKeyhole, Map, MapPin, MousePointer2, Orbit, Palette, Redo2, Route, Undo2, WandSparkles, ZoomIn, ZoomOut } from "lucide-react";
+import { BoxSelect, ChevronRight, Focus, Layers3, LayoutTemplate, LockKeyhole, Map, MapPin, MousePointer2, Orbit, Palette, Redo2, Route, Truck, Undo2, WandSparkles, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useState } from "react";
 import { PLANET_LIST, getPlanet } from "../../game/content";
 import { getPlanetMetrics, isPlanetColonized, type PlanetTrayDiscardRequest } from "../../game/engine";
@@ -8,6 +8,7 @@ import type { BeltConnection, BeltTier, BuildingId, ConstructionId, FactoryEntit
 import type { MobileOverlay, MobileSheetSnap } from "../../hooks/useMobileNavigation";
 import { MobileBuildSheet, MobileInspectorSheet, MobileInventorySheet, type MobileCanvasMode } from "./MobileFactoryPanels";
 import { MobileSheetFrame } from "./MobileSheetFrame";
+import { clearStableTextDraft } from "../CompositionSafeInput";
 
 export interface MobileCanvasToolState {
   mode: MobileCanvasMode;
@@ -18,6 +19,7 @@ export interface MobileCanvasToolState {
   canRedo: boolean;
   canUndoAutoLayout: boolean;
   minimapOpen: boolean;
+  batchConnectionMode: boolean;
 }
 
 export interface MobileCanvasToolActions {
@@ -27,6 +29,7 @@ export interface MobileCanvasToolActions {
   onLayout: () => void;
   onOpenBlueprints: () => void;
   onOpenNetworks: () => void;
+  onBatchConnectionModeChange: (enabled: boolean) => void;
   onAutoLayout: () => void;
   onUndoAutoLayout: () => void;
   onUndo: () => void;
@@ -119,6 +122,7 @@ function ToolsSheet({ state, actions, snap, onSnap, onClose }: { state: MobileCa
         <section><header>生产网络</header><div>
           <button type="button" onClick={() => runAndClose(actions.onOpenBlueprints)}><Layers3 size={20} /><span>蓝图库</span><b>{state.blueprintCount}</b></button>
           <button type="button" onClick={() => runAndClose(actions.onOpenNetworks)}><Route size={20} /><span>连续网络</span><b>{state.beltCount}</b></button>
+          <button className={state.batchConnectionMode ? "active" : ""} type="button" aria-label="连续拉线模式" aria-pressed={state.batchConnectionMode} onClick={() => runAndClose(() => actions.onBatchConnectionModeChange(!state.batchConnectionMode))}><Truck size={20} /><span>连续拉线</span></button>
           <button type="button" onClick={() => runAndClose(actions.onAutoLayout)}><WandSparkles size={20} /><span>自动整理</span></button>
           <button type="button" disabled={!state.canUndoAutoLayout} onClick={() => runAndClose(actions.onUndoAutoLayout)}><Undo2 size={20} /><span>撤销整理</span></button>
         </div></section>
@@ -152,7 +156,11 @@ export function MobileSheets({ game, alerts, overlay, tools, toolActions, factor
 }) {
   const [buildQuery, setBuildQuery] = useState("");
   useEffect(() => {
-    if (overlay?.kind !== "sheet" || overlay.id !== "build") setBuildQuery("");
+    if (overlay?.kind !== "sheet" || overlay.id !== "build") {
+      setBuildQuery("");
+      clearStableTextDraft("mobile-build-search");
+    }
+    if (overlay?.kind !== "sheet" || overlay.id !== "inventory") clearStableTextDraft("mobile-inventory-search");
   }, [overlay]);
   if (!overlay) return null;
   if (overlay.kind === "modal") {

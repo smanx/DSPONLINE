@@ -3,13 +3,18 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { StableTextInput, clearStableTextDraft, readStableTextDraft, updateStableTextDraft } from "./StableTextInput";
+import { StableTextArea, StableTextInput, clearStableTextDraft, readStableTextDraft, updateStableTextDraft } from "./StableTextInput";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function Harness({ draftId = "search", sensitive = false }: { draftId?: string; sensitive?: boolean }) {
   const [value, setValue] = useState("");
   return <StableTextInput aria-label="测试输入" draftId={draftId} sensitive={sensitive} value={value} onValueChange={setValue} />;
+}
+
+function TextAreaHarness({ draftId = "notes" }: { draftId?: string }) {
+  const [value, setValue] = useState("");
+  return <StableTextArea aria-label="测试备注" draftId={draftId} value={value} onValueChange={setValue} />;
 }
 
 function inputValue(input: HTMLInputElement, value: string): void {
@@ -87,5 +92,27 @@ describe("StableTextInput", () => {
     expect(readStableTextDraft("recipe-search")).toBeNull();
     expect(readStableTextDraft("item-picker")).toBe("量子芯片");
     clearStableTextDraft("item-picker");
+  });
+
+  it("keeps textarea composition and restores its page-lifetime draft after a remount", () => {
+    act(() => root.render(<TextAreaHarness draftId="planet-notes" />));
+    const area = host.querySelector("textarea")!;
+    act(() => area.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true })));
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    act(() => {
+      setter?.call(area, "绿糖出口");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => root.render(<TextAreaHarness draftId="planet-notes" />));
+    expect(area.value).toBe("绿糖出口");
+    act(() => area.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "绿糖出口" })));
+    act(() => root.unmount());
+    host.remove();
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root.render(<TextAreaHarness draftId="planet-notes" />));
+    expect(host.querySelector("textarea")!.value).toBe("绿糖出口");
+    clearStableTextDraft("planet-notes");
   });
 });

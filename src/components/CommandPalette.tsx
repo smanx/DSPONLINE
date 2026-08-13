@@ -4,6 +4,9 @@ import { ITEMS, getBuilding, getPlanet } from "../game/content";
 import type { GameState, ItemId } from "../game/types";
 import "../styles/command-palette.css";
 import { AccessibleDialog } from "./AccessibleDialog";
+import { StableTextInput, clearStableTextDraft } from "./CompositionSafeInput";
+
+const COMMAND_PALETTE_DRAFT_ID = "command-palette-search";
 
 export type CommandWorkspace = "operations" | "campaign" | "galaxy" | "star-map" | "statistics" | "recipes" | "technology" | "blueprints" | "dyson" | "inspector" | "resources";
 
@@ -32,9 +35,14 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const close = () => {
+    clearStableTextDraft(COMMAND_PALETTE_DRAFT_ID);
+    setQuery("");
+    onClose();
+  };
   const run = (action: () => void) => {
     action();
-    onClose();
+    close();
   };
   const commands = useMemo<PaletteCommand[]>(() => {
     const workspace = (id: string, label: string, detail: string, icon: ReactNode, target: CommandWorkspace): PaletteCommand => ({
@@ -108,13 +116,13 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
       className="command-palette"
       backdropClassName="command-palette-backdrop"
       initialFocusRef={inputRef}
-      onRequestClose={onClose}
+      onRequestClose={close}
     >
         <header>
           <div className="command-palette-title"><i><Command size={17} /></i><span><strong>命令面板</strong><small>搜索设备、工作区、设置或物品</small></span></div>
-          <button type="button" onClick={onClose} title="关闭命令面板" aria-label="关闭命令面板"><X size={16} /></button>
+          <button type="button" onClick={close} title="关闭命令面板" aria-label="关闭命令面板"><X size={16} /></button>
         </header>
-        <label className="command-palette-search"><Search size={16} /><input ref={inputRef} role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="command-palette-results" aria-activedescendant={activeCommand ? `command-palette-option-${activeCommand.id.replace(/[^a-zA-Z0-9_-]/g, "-")}` : undefined} value={query} onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }} onKeyDown={(event) => {
+        <label className="command-palette-search"><Search size={16} /><StableTextInput draftId={COMMAND_PALETTE_DRAFT_ID} ref={inputRef} role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="command-palette-results" aria-activedescendant={activeCommand ? `command-palette-option-${activeCommand.id.replace(/[^a-zA-Z0-9_-]/g, "-")}` : undefined} value={query} onValueChange={(value) => { setQuery(value); setActiveIndex(0); }} onKeyDown={(event) => {
           if (event.key === "ArrowDown") { event.preventDefault(); setActiveIndex((index) => Math.min(index + 1, Math.max(0, filtered.length - 1))); }
           else if (event.key === "ArrowUp") { event.preventDefault(); setActiveIndex((index) => Math.max(0, index - 1)); }
           else if (event.key === "Enter") { event.preventDefault(); filtered[activeIndex]?.run(); }

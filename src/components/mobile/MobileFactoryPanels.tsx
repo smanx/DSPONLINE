@@ -24,7 +24,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CONSTRUCTION,
   ITEMS,
@@ -90,6 +90,7 @@ import { getInterstellarStationUpgradeStatus } from "../../game/systemSpaceStati
 import { MobileSheetFrame } from "./MobileSheetFrame";
 import { useWorkDisplayProgress } from "../../hooks/useProductionVisualClock";
 import type { WorkProgressMode } from "../../game/productionRefresh";
+import { StableTextInput } from "../CompositionSafeInput";
 
 export type MobileCanvasMode = "browse" | "place" | "connect" | "select" | "layout" | "region";
 
@@ -159,8 +160,6 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
 }) {
   const [mode, setMode] = useState<BuildMode>("deploy");
   const [category, setCategory] = useState<BuildCategory>("all");
-  const composingQueryRef = useRef(false);
-  const compositionValueRef = useRef("");
   const [recent, setRecent] = useState<Array<BuildingId | ConveyorBeltId>>(loadMobileRecentBuilds);
   const remember = (id: BuildingId | ConveyorBeltId) => {
     const next = [id, ...recent.filter((candidate) => candidate !== id)].slice(0, 12);
@@ -186,24 +185,10 @@ export function MobileBuildSheet({ game, snap, placement, beltTier, beltTierMode
         <div className="mobile-segmented" role="tablist" aria-label="建造模式">
           {(Object.keys(BUILD_MODE_LABELS) as BuildMode[]).map((id) => <button className={mode === id ? "active" : ""} type="button" role="tab" aria-selected={mode === id} key={id} onClick={() => setMode(id)}>{BUILD_MODE_LABELS[id]}</button>)}
         </div>
-        <label><Search size={18} /><input
+        <label><Search size={18} /><StableTextInput
+          draftId="mobile-build-search"
           value={query}
-          onCompositionStart={(event) => {
-            composingQueryRef.current = true;
-            compositionValueRef.current = event.currentTarget.value;
-          }}
-          onCompositionUpdate={(event) => { compositionValueRef.current = event.currentTarget.value; }}
-          onCompositionEnd={(event) => {
-            composingQueryRef.current = false;
-            compositionValueRef.current = event.currentTarget.value;
-            onQueryChange(event.currentTarget.value);
-          }}
-          onChange={(event) => {
-            const value = event.target.value;
-            if (composingQueryRef.current && value === "" && compositionValueRef.current !== "") return;
-            compositionValueRef.current = value;
-            onQueryChange(value);
-          }}
+          onValueChange={onQueryChange}
           placeholder={mode === "fleet" ? "搜索载具" : "搜索建筑或设备"}
           aria-label="搜索建造项目"
         /></label>
@@ -299,7 +284,7 @@ export function MobileInventorySheet({ game, snap, onSnap, onClose, onPickTray, 
         <button className={tab === "dyson" ? "active" : ""} type="button" role="tab" aria-selected={tab === "dyson"} onClick={() => setTab("dyson")}>戴森摘要</button>
       </div>
       {tab === "tray" ? <>
-        <div className="mobile-inventory-toolbar"><label><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索当前行星物资" aria-label="搜索物资" /></label><button type="button" onClick={() => setSort((current) => current === "amount" ? "name" : current === "name" ? "kind" : "amount")}><ArrowDownUp size={17} />{{ amount: "数量", name: "名称", kind: "类别" }[sort]}</button><button type="button" onClick={() => setManagementOpen(true)}><Settings size={17} />管理</button></div>
+        <div className="mobile-inventory-toolbar"><label><Search size={18} /><StableTextInput draftId="mobile-inventory-search" value={query} onValueChange={setQuery} placeholder="搜索当前行星物资" aria-label="搜索物资" /></label><button type="button" onClick={() => setSort((current) => current === "amount" ? "name" : current === "name" ? "kind" : "amount")}><ArrowDownUp size={17} />{{ amount: "数量", name: "名称", kind: "类别" }[sort]}</button><button type="button" onClick={() => setManagementOpen(true)}><Settings size={17} />管理</button></div>
         <div className="mobile-inventory-list">{trayItems.map(([itemId, amount]) => <button type="button" key={itemId} onClick={() => onPickTray(itemId)} disabled={Boolean(game.cargo && game.cargo.itemId !== itemId)}><ItemGlyph itemId={itemId} /><span><strong>{getItem(itemId).name}</strong><small>{getItem(itemId).kind === "fluid" ? "流体" : getItem(itemId).kind === "matrix" ? "矩阵" : "物品"}</small></span><b><QuantityValue value={amount} /></b><ChevronRight size={18} /></button>)}{trayItems.length === 0 ? <div className="mobile-sheet-empty"><Box size={24} /><span>没有符合条件的库存</span></div> : null}</div>
         {managementOpen ? <TrayManagementDialog game={game} onDiscard={onDiscardTrayItems} onSetItemLimit={onSetTrayItemLimit} onClose={() => setManagementOpen(false)} /> : null}
       </> : tab === "fleet" ? <div className="mobile-inventory-list">{PORTABLE_FLEET_ITEM_IDS.map((itemId) => <div className="mobile-inventory-row" key={itemId}><ItemGlyph itemId={itemId} /><span><strong>{getItem(itemId).name}</strong><small>跨星球随身携带</small></span><b><QuantityValue value={game.portableFleet?.[itemId] ?? 0} /></b></div>)}</div> : <div className="mobile-dyson-summary"><div><span>在轨太阳帆</span><strong><QuantityValue value={game.dysonSwarm.sailsInOrbit} /></strong></div><div><span>永久结构点</span><strong><QuantityValue value={game.dysonSphere.structurePoints} /></strong></div><div><span>戴森云功率</span><strong><PowerValue valueKw={game.dysonSwarm.generationKw} /></strong></div><div><span>戴森球功率</span><strong><PowerValue valueKw={game.dysonSphere.generationKw} /></strong></div><div><span>理论接收率</span><strong>{Math.round(dyson.theoreticalReceptionRate * 100)}%</strong></div><div><span>接收站实际利用率</span><strong>{Math.round(dyson.receiverUtilization * 100)}%</strong></div><div><span>戴森功率利用率</span><strong>{Math.round(dyson.dysonPowerUtilization * 100)}%</strong></div>{dyson.blockedReceiverCount > 0 ? <div className="warning"><span>受阻接收站</span><strong>{dyson.blockedReceiverCount}/{dyson.configuredReceiverCount}</strong></div> : null}</div>}

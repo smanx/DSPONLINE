@@ -4841,6 +4841,7 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
 
 .mobile-batch-connection-actions { position: fixed; z-index: 70; right: 8px; bottom: calc(72px + env(safe-area-inset-bottom)); left: 8px; display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, auto); align-items: center; gap: 6px; min-height: 56px; padding: 7px; border: 1px solid #4d756c; border-radius: 8px; background: #111a17; }
 .mobile-batch-connection-actions span { padding-left: 6px; color: var(--text-soft); font-size: 10px; }
+.mobile-batch-connection-actions span.is-error { color: var(--coral); }
 .mobile-batch-connection-actions button { display: inline-flex; min-width: 56px; min-height: 44px; align-items: center; justify-content: center; gap: 4px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text-soft); font-size: 9px; }
 .mobile-batch-connection-actions button.primary { color: var(--green); }
 

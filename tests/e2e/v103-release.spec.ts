@@ -221,6 +221,38 @@ test("Harmony-style IME composition survives simulation refreshes and orientatio
   await expect(page.getByRole("dialog", { name: "建造" }).getByLabel("搜索建造项目")).toHaveValue("");
 });
 
+test("star-map search and metadata drafts survive simulation refresh, responsive remounts and workspace reopen", async ({ page }) => {
+  await seedReleaseFactory(page, { paused: false });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openGame(page);
+  await page.getByLabel("打开星图").click();
+  let starMap = page.getByRole("dialog", { name: "星图" });
+  const search = starMap.getByLabel("搜索星球资料");
+  await search.dispatchEvent("compositionstart", { data: "" });
+  await search.fill("绿糖出口");
+  await search.dispatchEvent("compositionupdate", { data: "绿糖出口" });
+  const metadata = starMap.locator(".stellar-metadata-manager");
+  await metadata.locator("summary").click();
+  const note = metadata.getByLabel("备注");
+  await note.dispatchEvent("compositionstart", { data: "" });
+  await note.fill("量子物流中转与绿糖出口");
+  await note.dispatchEvent("compositionupdate", { data: "量子物流中转与绿糖出口" });
+
+  await page.waitForTimeout(1_200);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(search).toHaveValue("绿糖出口");
+  await expect(note).toHaveValue("量子物流中转与绿糖出口");
+  await search.dispatchEvent("compositionend", { data: "绿糖出口" });
+  await note.dispatchEvent("compositionend", { data: "量子物流中转与绿糖出口" });
+
+  await starMap.getByLabel("关闭星图").click();
+  await openHeaderWorkspace(page, "打开星图", /^星图$/);
+  starMap = page.getByRole("dialog", { name: "星图" });
+  await expect(starMap.getByLabel("搜索星球资料")).toHaveValue("绿糖出口");
+  await starMap.locator(".stellar-metadata-manager summary").click();
+  await expect(starMap.locator(".stellar-metadata-manager").getByLabel("备注")).toHaveValue("量子物流中转与绿糖出口");
+});
+
 test("production codex locates every producer, highlights upstream belts and clears cleanly", async ({ page }) => {
   await seedReleaseFactory(page);
   await page.setViewportSize({ width: 1920, height: 1080 });

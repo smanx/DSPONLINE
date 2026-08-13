@@ -109,6 +109,10 @@ test("continuous connection mode previews multiple targets and commits them atom
   const preview = page.getByLabel("连续拉线预览");
   await page.locator(`.react-flow__node[data-id="${seeded[1].id}"] .factory-handle--input`).first().click({ force: true });
   await expect(preview).toContainText("1 条");
+  await expect(preview).toContainText(`小型储物仓 · ${seeded[0].id} → 小型储物仓 · ${seeded[1].id}`);
+  await page.locator(`.react-flow__node[data-id="${seeded[1].id}"] .factory-handle--input`).first().click({ force: true });
+  await expect(preview.getByRole("alert")).toContainText("已在预览列表中");
+  await expect(preview.getByRole("button", { name: "确认连接" })).toBeDisabled();
   await expect(page.locator(`.react-flow__node[data-id="${seeded[2].id}"] .factory-handle--input`).first()).toBeVisible();
   const secondTarget = page.locator(`.react-flow__node[data-id="${seeded[2].id}"] .factory-handle--input`).first();
   const secondBox = await secondTarget.boundingBox();
@@ -126,6 +130,132 @@ test("continuous connection mode previews multiple targets and commits them atom
     return { belts: state.belts.length, construction: state.construction.conveyor_belt_mk1 };
   });
   expect(after).toEqual({ belts: 2, construction: before - 2 });
+});
+
+test("cumulative material shortage blocks the whole preview before any belt or stock changes", async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("dsp-idle-network.ui.default-belt-lanes.v1", "10"));
+  await seedFactory(page, "storage-network");
+  const ids = await page.evaluate(async () => (await import("/src/game/storage.ts")).loadGame().state.entities
+    .filter((entity) => entity.buildingId === "storage_mk1")
+    .map((entity) => entity.id));
+  const before = await page.evaluate(async () => {
+    const state = (await import("/src/game/storage.ts")).loadGame().state;
+    return { belts: state.belts, construction: state.construction.conveyor_belt_mk1 };
+  });
+  await page.getByLabel("连续拉线模式").click();
+  await page.locator(`.react-flow__node[data-id="${ids[0]}"] .factory-handle--output`).first().click({ force: true });
+  await page.locator(`.react-flow__node[data-id="${ids[1]}"] .factory-handle--input`).first().click({ force: true });
+  const preview = page.getByLabel("连续拉线预览");
+  await expect(preview).toContainText("1 条");
+  await page.locator(`.react-flow__node[data-id="${ids[2]}"] .factory-handle--input`).first().click({ force: true });
+  await expect(preview.getByRole("alert")).toContainText(/缺少.*传送带/);
+  await expect(preview.getByRole("button", { name: "确认连接" })).toBeDisabled();
+  await expect(page.locator(".react-flow__edge")).toHaveCount(0);
+  await preview.getByRole("button", { name: "取消" }).click();
+  await expect.poll(() => page.evaluate(async () => {
+    const state = (await import("/src/game/storage.ts")).loadGame().state;
+    return { belts: state.belts, construction: state.construction.conveyor_belt_mk1 };
+  })).toEqual(before);
+});
+
+test("Ctrl starts a continuous preview and Enter commits without holding the modifier", async ({ page }) => {
+  await seedFactory(page, "storage-network");
+  const ids = await page.evaluate(async () => (await import("/src/game/storage.ts")).loadGame().state.entities
+    .filter((entity) => entity.buildingId === "storage_mk1")
+    .map((entity) => entity.id));
+  const before = await page.evaluate(async () => {
+    const state = (await import("/src/game/storage.ts")).loadGame().state;
+    return { belts: state.belts.length, construction: state.construction.conveyor_belt_mk1 };
+  });
+
+  await page.locator(`.react-flow__node[data-id="${ids[0]}"] .factory-handle--output`).first().click({ force: true });
+  await page.locator(`.react-flow__node[data-id="${ids[1]}"] .factory-handle--input`).first().click({ force: true, modifiers: ["Control"] });
+  const preview = page.getByLabel("连续拉线预览");
+  await expect(preview).toContainText("1 条");
+  await expect(page.getByLabel("连续拉线模式")).toHaveAttribute("aria-pressed", "true");
+
+  // Once Ctrl has promoted the interaction to continuous mode, subsequent
+  // targets no longer require a held modifier.
+  await page.locator(`.react-flow__node[data-id="${ids[2]}"] .factory-handle--input`).first().click({ force: true });
+  await expect(preview).toContainText("2 条");
+  await page.keyboard.press("Enter");
+  await expect(preview).toHaveCount(0);
+  await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+  await page.getByLabel("保存并返回主菜单").click();
+  await expect(page.locator(".start-menu")).toBeVisible();
+  const after = await page.evaluate(async () => {
+    const state = (await import("/src/game/storage.ts")).loadGame().state;
+    return { belts: state.belts.length, construction: state.construction.conveyor_belt_mk1 };
+  });
+  expect(after).toEqual({ belts: before.belts + 2, construction: before.construction - 2 });
+});
+
+test("Escape cancels the whole continuous preview without changing belts or materials", async ({ page }) => {
+  await seedFactory(page, "storage-network");
+  const ids = await page.evaluate(async () => (await import("/src/game/storage.ts")).loadGame().state.entities
+    .filter((entity) => entity.buildingId === "storage_mk1")
+    .map((entity) => entity.id));
+  const before = await page.evaluate(async () => {
+    const state = (await import("/src/game/storage.ts")).loadGame().state;
+    return { belts: state.belts, construction: state.construction.conveyor_belt_mk1 };
+  });
+
+  await page.getByLabel("连续拉线模式").click();
+  await page.locator(`.react-flow__node[data-id="${ids[0]}"] .factory-handle--output`).first().click({ force: true });
+  await page.locator(`.react-flow__node[data-id="${ids[1]}"] .factory-handle--input`).first().click({ force: true });
+  await expect(page.getByLabel("连续拉线预览")).toContainText("1 条");
+  await page.keyboard.press("Escape");
+  await expect(page.getByLabel("连续拉线预览")).toHaveCount(0);
+  await expect(page.locator(".react-flow__edge")).toHaveCount(0);
+  await expect.poll(() => page.evaluate(async () => {
+    const state = (await import("/src/game/storage.ts")).loadGame().state;
+    return { belts: state.belts, construction: state.construction.conveyor_belt_mk1 };
+  })).toEqual(before);
+});
+
+test("next mobile UI exposes equivalent confirm, clear, and undo controls", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => window.localStorage.setItem("dsp-idle-network.mobile-ui.v1", "next"));
+  await seedFactory(page, "storage-network");
+  await page.getByLabel("打开画布工具").click();
+  await page.locator(".mobile-tools-sheet").getByLabel("连续拉线模式").click();
+  // Port geometry and coarse-pointer snapping are covered independently in
+  // game-flow.spec.ts. This case keeps the mobile control contract isolated
+  // from the generated resource-vein layout.
+  const actions = page.getByLabel("移动端连续拉线操作");
+  await expect(actions).toContainText("0 条候选");
+  await expect(actions.getByRole("button", { name: "确认" })).toBeVisible();
+  await expect(actions.getByRole("button", { name: "清空" })).toBeVisible();
+  await expect(actions.getByRole("button", { name: "撤销" })).toBeVisible();
+  await expect(actions.getByRole("button", { name: "确认" })).toBeDisabled();
+  await expect(actions.getByRole("button", { name: "清空" })).toBeDisabled();
+  await expect(page.locator(".react-flow__edge")).toHaveCount(0);
+  await actions.getByRole("button", { name: "撤销" }).click();
+  await expect(actions).toHaveCount(0);
+});
+
+test("a mobile long press on an output port enters continuous connection without opening the inspector", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => window.localStorage.setItem("dsp-idle-network.mobile-ui.v1", "next"));
+  await seedFactory(page, "storage-network");
+  const sourceId = await page.evaluate(async () => (await import("/src/game/storage.ts")).loadGame().state.entities
+    .find((entity) => entity.buildingId === "storage_mk1" && entity.storedItemId === "iron_ore")?.id ?? null);
+  expect(sourceId).not.toBeNull();
+  const source = page.locator(`.react-flow__node[data-id="${sourceId}"] .factory-handle--output`).first();
+  const bounds = await source.boundingBox();
+  if (!bounds) throw new Error("mobile source port has no geometry");
+  const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  await source.dispatchEvent("pointerdown", { pointerId: 141, pointerType: "touch", isPrimary: true, button: 0, clientX: point.x, clientY: point.y });
+  await page.waitForTimeout(560);
+  await source.dispatchEvent("pointerup", { pointerId: 141, pointerType: "touch", isPrimary: true, button: 0, clientX: point.x, clientY: point.y });
+  // Reproduce the synthetic click emitted by mobile browsers after a long
+  // press; it must be consumed instead of replacing the selected source.
+  await source.dispatchEvent("click", { clientX: point.x, clientY: point.y });
+
+  await expect(page.getByLabel("移动端连续拉线操作")).toContainText("0 条候选");
+  await expect(page.locator(`.react-flow__node[data-id="${sourceId}"]`)).toHaveClass(/factory-flow-node--connection-origin/);
+  await expect(page.getByRole("dialog", { name: "设备快捷操作" })).toHaveCount(0);
+  await expect(page.locator(".mobile-inspector-sheet")).toHaveCount(0);
 });
 
 test("desktop mixed selection exposes atomic batch increase controls", async ({ page }) => {

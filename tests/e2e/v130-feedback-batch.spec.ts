@@ -77,6 +77,9 @@ for (const scenario of [
     if (scenario.name === "approximate") {
       const choice = page.getByRole("dialog", { name: "选择离线结算方式" });
       await expect(choice).toBeVisible();
+      await expect(choice.getByRole("button", { name: /快速结算（推荐）/ })).toContainText("目标约 30 秒");
+      await expect(choice.getByRole("button", { name: /精确结算/ })).toContainText(/粗略预计.*运行后动态校正/);
+      await expect(choice.getByRole("button", { name: /放弃离线收益/ })).toContainText("不会重复结算");
       await choice.getByRole("button", { name: /快速结算（推荐）/ }).click();
     }
 

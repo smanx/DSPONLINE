@@ -6,6 +6,7 @@ import type { ConstructionAutomationTargetId, ConstructionId, GameState, ItemId,
 import { formatQuantityCompact } from "../game/quantityFormat";
 import { ItemGlyph, ItemHoverCard } from "./ItemReference";
 import { QuantityValue } from "./QuantityValue";
+import { StableTextInput } from "./CompositionSafeInput";
 
 type CenterCategory = "all" | "power" | "production" | "logistics" | "dyson";
 
@@ -177,7 +178,7 @@ export function ConstructionCenterWorkspace({ open, game, onClose, onEnabledChan
 
       <div className="construction-center-toolbar">
         <label className="construction-center-toggle"><input type="checkbox" checked={game.constructionAutomation.enabled} onChange={(event) => onEnabledChange(event.target.checked)} /><i /><span><strong>自动补足</strong><small>{game.constructionAutomation.enabled ? "制造协议运行" : "制造协议暂停"}</small></span></label>
-        <label className="construction-center-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索建筑或材料" aria-label="搜索自动制造建筑" /></label>
+        <label className="construction-center-search"><Search size={14} /><StableTextInput draftId="construction-center-search" value={query} onValueChange={setQuery} placeholder="搜索建筑或材料" aria-label="搜索自动制造建筑" /></label>
         <div className="construction-center-categories" role="group" aria-label="建筑制造分类">
           {(["all", "power", "production", "logistics", "dyson"] as CenterCategory[]).map((id) => <button className={category === id ? "active" : ""} type="button" key={id} onClick={() => setCategory(id)}>{{ all: "全部", power: "能源", production: "生产", logistics: "物流", dyson: "戴森" }[id]}</button>)}
         </div>

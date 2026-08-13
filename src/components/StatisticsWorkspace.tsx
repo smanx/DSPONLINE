@@ -29,6 +29,7 @@ import {
 } from "../game/productionStatistics";
 import { ExactValue } from "./ExactValue";
 import { useAppLocale } from "../i18n/locale";
+import { StableTextInput, clearStableTextDraft } from "./CompositionSafeInput";
 
 export type StatisticsTab = "management" | "production" | "efficiency" | "networks" | "planning" | "power" | "issues" | "galaxy";
 type ItemFilter = "all" | "producing" | "deficit" | "blocked";
@@ -213,7 +214,7 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
         <label className="network-heatmap-toggle"><input type="checkbox" checked={game.settings.beltHeatmapEnabled} onChange={(event) => onBeltHeatmapChange(event.target.checked)} /><span>吞吐热力图</span><strong>{game.settings.beltHeatmapEnabled ? "显示中" : "关闭"}</strong></label>
       </section>
       <div className="network-toolbar">
-        <label className="statistics-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="物品、行星或状态" aria-label="筛选运输网络" /></label>
+        <label className="statistics-search"><Search size={14} /><StableTextInput draftId="network-overview-search" value={query} onValueChange={setQuery} placeholder="物品、行星或状态" aria-label="筛选运输网络" /></label>
         <div className="statistics-filter network-scope" aria-label="网络范围"><button type="button" className={scope === "active" ? "active" : ""} onClick={() => setScope("active")}>当前行星</button><button type="button" className={scope === "all" ? "active" : ""} onClick={() => setScope("all")}>全星区</button></div>
         <label className="statistics-sort"><span>状态</span><select value={health} onChange={(event) => setHealth(event.target.value as BeltHealth | "all")}><option value="all">全部</option>{Object.entries(NETWORK_HEALTH_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
       </div>
@@ -257,7 +258,7 @@ function NetworkOverview({ game, onFocusBeltNetwork, onBulkBeltUpgrade, onBulkBe
         </section>
         <aside className="canvas-bookmarks">
           <header><Bookmark size={15} /><span>画布书签</span><strong>{game.canvasBookmarks.length}/24</strong></header>
-          <form onSubmit={(event) => { event.preventDefault(); onAddCanvasBookmark(bookmarkName); setBookmarkName(""); }}><input value={bookmarkName} onChange={(event) => setBookmarkName(event.target.value)} maxLength={28} placeholder={`${getPlanetDisplayName(game, game.activePlanetId)}视角`} aria-label="画布书签名称" /><button type="submit" title="保存当前画布视角" aria-label="保存当前画布视角"><BookmarkPlus size={14} /></button></form>
+          <form onSubmit={(event) => { event.preventDefault(); (event.currentTarget.elements.namedItem("bookmarkName") as HTMLInputElement | null)?.blur(); onAddCanvasBookmark(bookmarkName); setBookmarkName(""); clearStableTextDraft("canvas-bookmark-name"); }}><StableTextInput draftId="canvas-bookmark-name" name="bookmarkName" value={bookmarkName} onValueChange={setBookmarkName} maxLength={28} placeholder={`${getPlanetDisplayName(game, game.activePlanetId)}视角`} aria-label="画布书签名称" /><button type="submit" title="保存当前画布视角" aria-label="保存当前画布视角"><BookmarkPlus size={14} /></button></form>
           <div>{game.canvasBookmarks.length === 0 ? <p><MapPin size={18} /><span>尚未保存视角</span></p> : game.canvasBookmarks.map((bookmark) => <article key={bookmark.id}><MapPin size={13} /><span><input defaultValue={bookmark.name} aria-label={`${bookmark.name}名称`} onBlur={(event) => onRenameCanvasBookmark(bookmark.id, event.target.value)} /><small>{getPlanetDisplayName(game, bookmark.planetId)} · {Math.round(bookmark.viewport.zoom * 100)}%</small></span><button type="button" onClick={() => onOpenCanvasBookmark(bookmark)} title={`打开${bookmark.name}`} aria-label={`打开${bookmark.name}`}><Focus size={13} /></button><button className="danger" type="button" onClick={() => onRemoveCanvasBookmark(bookmark.id)} title={`删除${bookmark.name}`} aria-label={`删除${bookmark.name}`}><Trash2 size={13} /></button></article>)}</div>
         </aside>
       </div>
@@ -508,7 +509,7 @@ export function StatisticsWorkspace({ open, game, onClose, onCreatePlan, onUpdat
         <div className="statistics-content statistics-production">
           <div className="statistics-toolbar">
             <label className="statistics-planet-filter"><span>统计星球</span><select value={planetScope} onChange={(event) => setPlanetScope(event.target.value as PlanetId | "all")} aria-label="选择统计星球"><option value="all">全部星球</option><option value={game.activePlanetId}>当前星球：{getPlanetDisplayName(game, game.activePlanetId)} · {getStarSystem(activeStatisticsPlanet.systemId).name}</option>{PLANET_LIST.filter((planet) => planet.id !== game.activePlanetId).map((planet) => <option value={planet.id} key={planet.id}>{getPlanetDisplayName(game, planet.id)} · {getStarSystem(planet.systemId).name}</option>)}</select></label>
-            <label className="statistics-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="筛选物品" aria-label="筛选统计物品" /></label>
+            <label className="statistics-search"><Search size={14} /><StableTextInput draftId="production-statistics-search" value={query} onValueChange={setQuery} placeholder="筛选物品" aria-label="筛选统计物品" /></label>
             <div className="statistics-filter" aria-label="物品统计筛选">
               {(["all", "producing", "deficit", "blocked"] as ItemFilter[]).map((option) => (
                 <button type="button" className={filter === option ? "active" : ""} key={option} onClick={() => setFilter(option)}>
