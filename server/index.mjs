@@ -1745,7 +1745,14 @@ function adminAccountSummary(store, userId) {
 }
 
 function send(response, status, payload, extraHeaders = {}) {
-  const body = JSON.stringify(payload);
+  const normalizedPayload = status === 401
+    && payload
+    && typeof payload === "object"
+    && !("code" in payload)
+    && (payload.error === "请先登录" || payload.error === "登录已过期")
+      ? { ...payload, code: "SESSION_EXPIRED" }
+      : payload;
+  const body = JSON.stringify(normalizedPayload);
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
@@ -4162,7 +4169,7 @@ export async function createCloudServer({
 
       if (request.method === "POST" && url.pathname === "/api/auth/resend-verification") {
         const auth = authenticatedUser(request, store);
-        if (!auth) return send(response, 401, { error: "请先登录" });
+        if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
         if (Number.isFinite(auth.user.emailVerifiedAt)) return send(response, 200, { verified: true, user: publicUser(auth.user) });
         if (!normalizedEmail(auth.user.email)) return send(response, 400, { error: "请先绑定邮箱", code: "EMAIL_NOT_BOUND" });
         if (!accountMailer) return send(response, 503, { error: "邮件验证服务尚未配置", code: "EMAIL_SERVICE_UNAVAILABLE" });
@@ -4219,7 +4226,7 @@ export async function createCloudServer({
             speedrun: cloudSaveSlotMetadata(store, auth.user.id, "speedrun"),
           },
           cloudQuota: cloudQuotaSnapshot(store.data, auth.user.id, quotaPolicy),
-        }) : send(response, 401, { error: "登录已过期" });
+        }) : send(response, 401, { error: "登录已过期", code: "SESSION_EXPIRED" });
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/logout") {
@@ -4234,7 +4241,7 @@ export async function createCloudServer({
 
       if (request.method === "GET" && url.pathname === "/api/account/sessions") {
         const auth = authenticatedUser(request, store);
-        if (!auth) return send(response, 401, { error: "请先登录" });
+        if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
         const sessions = Object.entries(store.data.sessions)
           .filter(([, session]) => session.userId === auth.user.id && session.expiresAt > Date.now())
           .sort(([, left], [, right]) => right.lastSeenAt - left.lastSeenAt)
@@ -4244,13 +4251,13 @@ export async function createCloudServer({
 
       if (request.method === "GET" && url.pathname === "/api/account/security-events") {
         const auth = authenticatedUser(request, store);
-        if (!auth) return send(response, 401, { error: "请先登录" });
+        if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
         return send(response, 200, { events: publicLoginSecurityEvents(store.data, auth.user.id) });
       }
 
       if (request.method === "GET" && url.pathname.startsWith("/api/operations/")) {
         const auth = authenticatedUser(request, store);
-        if (!auth) return send(response, 401, { error: "请先登录" });
+        if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
         let requestId = "";
         try { requestId = decodeURIComponent(url.pathname.slice("/api/operations/".length)); } catch { /* handled below */ }
         if (!OPERATION_ID_PATTERN.test(requestId)) return send(response, 400, { error: "操作标识无效", code: "OPERATION_ID_INVALID" });
@@ -4263,7 +4270,7 @@ export async function createCloudServer({
 
       if (request.method === "POST" && url.pathname === "/api/account/sessions/revoke") {
         const auth = authenticatedUser(request, store);
-        if (!auth) return send(response, 401, { error: "请先登录" });
+        if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
         const body = await readJson(request);
         const target = Object.entries(store.data.sessions).find(([, session]) => session.userId === auth.user.id && session.id === body.sessionId);
         if (!target) return send(response, 404, { error: "会话不存在或已结束" });
@@ -4275,11 +4282,11 @@ export async function createCloudServer({
 
       if (request.method === "POST" && url.pathname === "/api/account/password") {
         const auth = authenticatedUser(request, store);
-        if (!auth) return send(response, 401, { error: "请先登录" });
+        if (!auth) return send(response, 401, { error: "请先登录", code: "SESSION_EXPIRED" });
         const body = await readJson(request);
         const currentPassword = typeof body.currentPassword === "string" ? body.currentPassword : "";
         const newPassword = typeof body.newPassword === "string" ? body.newPassword : "";
-        if (!(await passwordMatches(currentPassword, auth.user))) return send(response, 401, { error: "当前密码错误" });
+        if (!(await passwordMatches(currentPassword, auth.user))) return send(response, 401, { error: "当前密码错误", code: "CURRENT_PASSWORD_INVALID" });
         if (newPassword.length < 8 || newPassword.length > 128) return send(response, 400, { error: "新密码必须为 8 至 128 位" });
         Object.assign(auth.user, await passwordRecord(newPassword), { passwordChangedAt: Date.now() });
         revokeUserSessions(store, auth.user.id, auth.tokenHash);

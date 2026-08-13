@@ -979,6 +979,20 @@ test("manages sessions and supports password change and reset", async () => {
   });
   assert.equal(secondLogin.response.status, 200);
   const secondToken = secondLogin.body.token;
+  const invalidCurrentPassword = await request("/api/account/password", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ currentPassword: "definitely-wrong", newPassword: "new-password-value" }),
+  });
+  assert.equal(invalidCurrentPassword.response.status, 401);
+  assert.equal(invalidCurrentPassword.body.code, "CURRENT_PASSWORD_INVALID");
+  const sessionStillValid = await request("/api/account", { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(sessionStillValid.response.status, 200);
+
+  const expiredSession = await request("/api/account", { headers: { authorization: "Bearer synthetic_expired_session_token_value_000000" } });
+  assert.equal(expiredSession.response.status, 401);
+  assert.equal(expiredSession.body.code, "SESSION_EXPIRED");
+
   const sessions = await request("/api/account/sessions", { headers: { authorization: `Bearer ${token}` } });
   assert.equal(sessions.response.status, 200);
   assert.equal(sessions.body.sessions.length, 2);
