@@ -67,6 +67,8 @@ export const API_SERVER_RELEASE_FILES = Object.freeze([
   "server/package-lock.json",
   "server/persistence-atomicity.integration.test.mjs",
   "server/save-integrity.mjs",
+  "server/save-field-contract.mjs",
+  "server/save-field-contract.test.mjs",
   "server/server.test.mjs",
   "server/security-governance.integration.test.mjs",
   "server/speedrun-recovery.mjs",
@@ -94,6 +96,8 @@ export const API_DEPLOY_RELEASE_FILES = Object.freeze([
 
 export const API_ARCHIVE_SOURCE_FILES = Object.freeze([
   "cloud-transfer-contract.json",
+  "save-field-contract.json",
+  "save-field-contract.mjs",
   ...API_DEPLOY_RELEASE_FILES,
   ...API_SERVER_RELEASE_FILES,
 ].sort());
@@ -111,6 +115,15 @@ function expectedExpandedFiles() {
     ...API_ARCHIVE_SOURCE_FILES,
     ...API_SERVER_RELEASE_FILES.map((file) => path.posix.basename(normalizeRelativePath(file))),
   ])].sort();
+}
+
+function flattenedServerSource(sourceFile) {
+  // The source-tree wrapper imports the root contract through `../`. The
+  // flattened systemd runtime must receive the root implementation itself;
+  // copying the wrapper over it would leave an invalid parent-directory import.
+  return sourceFile === "server/save-field-contract.mjs"
+    ? "save-field-contract.mjs"
+    : sourceFile;
 }
 
 async function listFiles(directory, prefix = "") {
@@ -241,7 +254,7 @@ export async function verifyExpandedApiReleaseLayout({
   for (const sourceFile of API_SERVER_RELEASE_FILES) {
     const entryName = path.posix.basename(normalizeRelativePath(sourceFile));
     await assertByteEqual(
-      path.join(candidateRoot, sourceFile),
+      path.join(candidateRoot, flattenedServerSource(sourceFile)),
       path.join(candidateRoot, entryName),
       `expanded API entry differs from packaged server source: ${entryName}`,
     );
@@ -250,6 +263,16 @@ export async function verifyExpandedApiReleaseLayout({
     path.join(sourceRoot, "cloud-transfer-contract.json"),
     path.join(candidateRoot, "cloud-transfer-contract.json"),
     "expanded API transfer contract differs from the shared source contract",
+  );
+  await assertByteEqual(
+    path.join(sourceRoot, "save-field-contract.mjs"),
+    path.join(candidateRoot, "save-field-contract.mjs"),
+    "expanded API save-field contract differs from the shared source implementation",
+  );
+  await assertByteEqual(
+    path.join(sourceRoot, "save-field-contract.json"),
+    path.join(candidateRoot, "save-field-contract.json"),
+    "expanded API save-field declaration differs from the shared source contract",
   );
 
   return {
@@ -270,8 +293,12 @@ export async function expandApiReleaseLayout({
 
   for (const sourceFile of API_SERVER_RELEASE_FILES) {
     const entryName = path.basename(sourceFile);
-    const source = path.join(candidateRoot, sourceFile);
+    const source = path.join(candidateRoot, flattenedServerSource(sourceFile));
     const destination = path.join(candidateRoot, entryName);
+    if (source === destination) {
+      await assertByteEqual(source, destination, `cannot flatten missing shared API source: ${entryName}`);
+      continue;
+    }
     if (entryName === "cloud-transfer-contract.json") {
       await assertByteEqual(source, destination, "cannot flatten mismatched API transfer contracts");
     }

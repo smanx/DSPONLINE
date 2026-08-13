@@ -1,13 +1,164 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { hashGameState } from "./benchmark";
+import { createContentPackRegistry } from "./contentPacks";
 import { advanceSimulation, createInitialState } from "./engine";
 import { computeSaveStateChecksum } from "./saveEnvelopeIntegrity";
+import { projectPersistentSaveState } from "./saveProjection";
 import { inspectSave, migrateGame, serializeEnvelope } from "./storage";
 
 const environment = (globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } }).process?.env;
 
 describe("v46 sparse save projection", () => {
+  it("consumes the shared contract for every projected entity and belt default", () => {
+    const state = createInitialState(1, false);
+    const station = structuredClone(state.entities[0]);
+    Object.assign(station, {
+      id: "contract-station",
+      kind: "station",
+      buildingId: "interstellar_logistics_station",
+      interactionLocked: false,
+      powerGridId: "grid-a",
+      powerPriority: 2,
+      machineCount: 0,
+      minerCount: 0,
+      progress: 0,
+      routingCursor: 0,
+      powerInputKw: 0,
+      powerOutputKw: 0,
+      stationProgress: 0,
+      stationTrips: 0,
+      stationLastTransfer: 0,
+      stationCongestion: 0,
+      stationDispatchCursor: 0,
+      proliferatorPoints: 0,
+      resourceDepletionRemainder: 0,
+      stationWarperAutoRefill: false,
+      stationHubEnabled: false,
+      quantumTarget: false,
+      stationWarpEnabled: true,
+      proliferatorBonusProgress: {},
+      inputs: {},
+      outputs: {},
+      stationLastSupplyPeerBySlot: {},
+      stationRoutes: [],
+    });
+    state.entities = [station];
+    state.belts = [{
+      id: "contract-line",
+      planetId: station.planetId,
+      source: station.id,
+      target: station.id,
+      itemId: "iron_ore",
+      lanes: 1,
+      tier: 1,
+      sorterTier: 1,
+      progress: 0,
+      priority: 0,
+      stackSize: 1,
+      monitorEnabled: false,
+      totalTransferred: 0,
+      congestion: 0,
+      lastFlow: 0,
+      routeMode: "auto",
+    }];
+    const original = structuredClone(state);
+    const projected = projectPersistentSaveState(state, createContentPackRegistry());
+    const projectedEntity = projected.entities[0] as unknown as Record<string, unknown>;
+    const projectedBelt = projected.belts[0] as unknown as Record<string, unknown>;
+    for (const key of [
+      "interactionLocked", "powerGridId", "powerPriority", "machineCount", "minerCount", "progress", "routingCursor",
+      "powerInputKw", "powerOutputKw", "stationProgress", "stationTrips", "stationLastTransfer", "stationCongestion",
+      "stationDispatchCursor", "proliferatorPoints", "resourceDepletionRemainder", "stationWarperAutoRefill", "stationHubEnabled",
+      "quantumTarget", "stationWarpEnabled", "proliferatorBonusProgress", "inputs", "outputs", "stationLastSupplyPeerBySlot", "stationRoutes",
+    ]) expect(projectedEntity).not.toHaveProperty(key);
+    for (const key of [
+      "lanes", "tier", "sorterTier", "progress", "priority", "stackSize", "monitorEnabled", "totalTransferred", "congestion", "lastFlow", "routeMode",
+    ]) expect(projectedBelt).not.toHaveProperty(key);
+    expect(state).toEqual(original);
+  });
+
+  it("preserves nondefault and explicit invalid values for authoritative validation instead of silently normalizing them", () => {
+    const state = createInitialState(1, false);
+    const entity = state.entities[0] as unknown as Record<string, unknown>;
+    entity.interactionLocked = null;
+    entity.powerPriority = 3;
+    entity.inputs = { iron_ore: 1 };
+    state.belts = [{
+      id: "invalid-line",
+      planetId: state.entities[0].planetId,
+      source: state.entities[0].id,
+      target: state.entities[1].id,
+      itemId: "iron_ore",
+      lanes: 0,
+      tier: 4,
+      sorterTier: 3,
+      progress: -1,
+      priority: 2,
+      stackSize: 4,
+      monitorEnabled: true,
+      totalTransferred: 5,
+      congestion: 0.5,
+      lastFlow: 2,
+      routeMode: "upper",
+    }];
+    const projected = projectPersistentSaveState(state, createContentPackRegistry());
+    expect(projected.entities[0]).toMatchObject({ interactionLocked: null, powerPriority: 3, inputs: { iron_ore: 1 } });
+    expect(projected.belts[0]).toMatchObject({
+      lanes: 0,
+      tier: 4,
+      progress: -1,
+      priority: 2,
+      stackSize: 4,
+      monitorEnabled: true,
+      totalTransferred: 5,
+      congestion: 0.5,
+      lastFlow: 2,
+      routeMode: "upper",
+    });
+  });
+
+  it("does not apply v46 sparse projection rules to a v45 dense state", () => {
+    const state = createInitialState(1, false);
+    state.version = 45;
+    state.entities = [state.entities[0]];
+    state.belts = [{
+      id: "v45-dense-line",
+      planetId: state.entities[0].planetId,
+      source: state.entities[0].id,
+      target: state.entities[0].id,
+      itemId: "iron_ore",
+      lanes: 1,
+      tier: 1,
+      sorterTier: 1,
+      progress: 0,
+      priority: 0,
+      stackSize: 1,
+      monitorEnabled: false,
+      totalTransferred: 0,
+      congestion: 0,
+      lastFlow: 0,
+      routeMode: "auto",
+    }];
+    const projected = projectPersistentSaveState(state, createContentPackRegistry());
+    expect(projected.entities[0]).toHaveProperty("interactionLocked", false);
+    expect(projected.entities[0]).toHaveProperty("inputs");
+    expect(projected.entities[0]).toHaveProperty("outputs");
+    expect(projected.belts[0]).toMatchObject({
+      lanes: 1,
+      tier: 1,
+      sorterTier: 1,
+      progress: 0,
+      priority: 0,
+      stackSize: 1,
+      monitorEnabled: false,
+      totalTransferred: 0,
+      congestion: 0,
+      lastFlow: 0,
+      routeMode: "auto",
+    });
+  });
+
   it("omits only default/zero runtime fields while preserving authoritative nonzero state", () => {
     const state = createInitialState(1, false);
     const primary = state.entities[0];

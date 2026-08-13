@@ -44,6 +44,18 @@ test("stages the historical API archive and expands server files byte-for-byte i
     await readFile(path.join(releaseRoot, "cloud-transfer-contract.json")),
     await readFile(path.join(releaseRoot, "server", "cloud-transfer-contract.json")),
   );
+  assert.deepEqual(
+    await readFile(path.join(releaseRoot, "save-field-contract.mjs")),
+    await readFile(path.join(repositoryRoot, "save-field-contract.mjs")),
+  );
+  assert.deepEqual(
+    await readFile(path.join(releaseRoot, "save-field-contract.json")),
+    await readFile(path.join(repositoryRoot, "save-field-contract.json")),
+  );
+  assert.deepEqual(
+    await readFile(path.join(releaseRoot, "server", "save-field-contract.mjs")),
+    await readFile(path.join(repositoryRoot, "server", "save-field-contract.mjs")),
+  );
 });
 
 test("refuses to expand an archive when its two transfer-contract copies differ", async () => {
