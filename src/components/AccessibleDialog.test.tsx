@@ -312,4 +312,23 @@ describe("AccessibleDialog", () => {
     expect(onRequestClose).toHaveBeenCalledOnce();
     expect(onRequestClose).toHaveBeenCalledWith("backdrop");
   });
+
+  it("places a consumer backdrop class on the backdrop without changing surface semantics", () => {
+    render(
+      <AccessibleDialog
+        open
+        title="兼容布局"
+        layout="bare"
+        ariaLabel="兼容布局"
+        className="legacy-surface"
+        backdropClassName="legacy-backdrop"
+        onRequestClose={() => undefined}
+      >
+        <button type="button">完成</button>
+      </AccessibleDialog>,
+    );
+    expect(document.querySelector(".accessible-dialog__backdrop.legacy-backdrop")).not.toBeNull();
+    expect(document.querySelector("section.accessible-dialog__surface.legacy-surface[role='dialog']")).not.toBeNull();
+    expect(document.querySelector(".legacy-backdrop > section.legacy-surface")).not.toBeNull();
+  });
 });

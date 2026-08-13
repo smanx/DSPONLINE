@@ -42,6 +42,7 @@ export interface AccessibleDialogProps {
   getBackgroundElements?: AccessibleDialogBackgroundResolver;
   id?: string;
   className?: string;
+  backdropClassName?: string;
   /**
    * `bare` keeps a consumer's established internal layout while retaining the
    * modal, focus and inert-background contract supplied by this component.
@@ -285,6 +286,7 @@ export function AccessibleDialog({
   getBackgroundElements,
   id,
   className = "",
+  backdropClassName = "",
   layout = "structured",
   ariaLabel,
   ariaLabelledBy,
@@ -446,7 +448,7 @@ export function AccessibleDialog({
       data-accessible-dialog-boundary="true"
     >
       <div
-        className="accessible-dialog__backdrop"
+        className={`accessible-dialog__backdrop${backdropClassName ? ` ${backdropClassName}` : ""}`}
         role="presentation"
         onPointerDown={(event) => {
           if (

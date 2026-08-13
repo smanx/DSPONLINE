@@ -2,6 +2,7 @@ import { BarChart3, BookOpen, Check, Command, Factory, Flag, FlaskConical, Focus
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ITEMS, getBuilding, getPlanet } from "../game/content";
 import type { GameState, ItemId } from "../game/types";
+import { AccessibleDialog } from "./AccessibleDialog";
 
 export type CommandWorkspace = "operations" | "campaign" | "galaxy" | "star-map" | "statistics" | "recipes" | "technology" | "blueprints" | "dyson" | "inspector" | "resources";
 
@@ -30,8 +31,6 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const paletteRef = useRef<HTMLElement>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
   const run = (action: () => void) => {
     action();
     onClose();
@@ -89,14 +88,8 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
 
   useEffect(() => {
     if (!open) return;
-    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setQuery("");
     setActiveIndex(0);
-    const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
-    return () => {
-      window.clearTimeout(timer);
-      if (previousFocusRef.current?.isConnected) previousFocusRef.current.focus({ preventScroll: true });
-    };
   }, [open]);
 
   useEffect(() => {
@@ -104,35 +97,32 @@ export function CommandPalette({ open, game, onClose, onOpenWorkspace, onFocusRe
   }, [filtered.length]);
 
   if (!open) return null;
+  const activeCommand = filtered[activeIndex];
   return (
-    <div className="command-palette-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section ref={paletteRef} className="command-palette" role="dialog" aria-modal="true" aria-label="命令面板" onKeyDown={(event) => {
-        if (event.key !== "Tab") return;
-        const focusable = [...(paletteRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])') ?? [])];
-        if (focusable.length === 0) return;
-        const current = focusable.indexOf(document.activeElement as HTMLElement);
-        const next = event.shiftKey
-          ? current <= 0 ? focusable.length - 1 : current - 1
-          : current >= focusable.length - 1 ? 0 : current + 1;
-        event.preventDefault();
-        focusable[next].focus();
-      }}>
+    <AccessibleDialog
+      open
+      title="命令面板"
+      layout="bare"
+      ariaLabel="命令面板"
+      className="command-palette"
+      backdropClassName="command-palette-backdrop"
+      initialFocusRef={inputRef}
+      onRequestClose={onClose}
+    >
         <header>
           <div className="command-palette-title"><i><Command size={17} /></i><span><strong>命令面板</strong><small>搜索设备、工作区、设置或物品</small></span></div>
           <button type="button" onClick={onClose} title="关闭命令面板" aria-label="关闭命令面板"><X size={16} /></button>
         </header>
-        <label className="command-palette-search"><Search size={16} /><input ref={inputRef} value={query} onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }} onKeyDown={(event) => {
+        <label className="command-palette-search"><Search size={16} /><input ref={inputRef} role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="command-palette-results" aria-activedescendant={activeCommand ? `command-palette-option-${activeCommand.id.replace(/[^a-zA-Z0-9_-]/g, "-")}` : undefined} value={query} onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }} onKeyDown={(event) => {
           if (event.key === "ArrowDown") { event.preventDefault(); setActiveIndex((index) => Math.min(index + 1, Math.max(0, filtered.length - 1))); }
           else if (event.key === "ArrowUp") { event.preventDefault(); setActiveIndex((index) => Math.max(0, index - 1)); }
           else if (event.key === "Enter") { event.preventDefault(); filtered[activeIndex]?.run(); }
-          else if (event.key === "Escape") { event.preventDefault(); onClose(); }
         }} placeholder="输入设备、物品、工作区或动作" aria-label="搜索命令" autoComplete="off" /><kbd>Esc</kbd></label>
-        <div className="command-palette-list" role="listbox" aria-label="命令结果">
-          {filtered.map((command, index) => <button type="button" role="option" aria-selected={index === activeIndex} className={index === activeIndex ? "active" : ""} key={command.id} onMouseEnter={() => setActiveIndex(index)} onClick={command.run}><i>{command.icon}</i><span><strong>{command.label}</strong><small>{command.detail}</small></span>{index === activeIndex ? <Check size={14} /> : null}</button>)}
+        <div id="command-palette-results" className="command-palette-list" role="listbox" aria-label="命令结果">
+          {filtered.map((command, index) => <button id={`command-palette-option-${command.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`} type="button" role="option" aria-selected={index === activeIndex} className={index === activeIndex ? "active" : ""} key={command.id} onMouseEnter={() => setActiveIndex(index)} onClick={command.run}><i>{command.icon}</i><span><strong>{command.label}</strong><small>{command.detail}</small></span>{index === activeIndex ? <Check size={14} /> : null}</button>)}
           {filtered.length === 0 ? <div className="command-palette-empty">没有匹配的命令或物品</div> : null}
         </div>
         <footer><span><kbd>↑</kbd><kbd>↓</kbd>选择</span><span><kbd>Enter</kbd>执行</span><span><kbd>Esc</kbd>关闭</span></footer>
-      </section>
-    </div>
+    </AccessibleDialog>
   );
 }
