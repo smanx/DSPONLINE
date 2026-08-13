@@ -16,6 +16,7 @@ import {
   deleteCloudPayloadsForUser,
   garbageCollectCloudPayloadBlobs,
   initializeCloudPayloadStore,
+  linkVerifiedCloudPayload,
   materializeCloudPayloadAliases,
   parseCloudPayloadAlias,
   readCloudPayload,
@@ -435,6 +436,53 @@ test("deletes individual and per-user rows while orphan GC preserves referenced 
     });
     assert.deepEqual(third, { referencedBlobs: 0, orphanBlobs: 1, deletedBlobs: 1 });
     assert.equal(database.prepare(`SELECT count(*) AS count FROM ${CLOUD_PAYLOAD_BLOB_TABLE}`).get().count, 0);
+  } finally {
+    database.close();
+  }
+});
+
+test("links repeated imported revisions to one already verified blob without accepting missing metadata", () => {
+  const database = createLegacyDatabase();
+  try {
+    initializeCloudPayloadStore(database);
+    const payload = JSON.stringify({ formatVersion: 2, state: { version: 46 }, repeated: true });
+    const checksum = sha256(payload);
+    const sizeBytes = Buffer.byteLength(payload);
+    runTransaction(database, () => {
+      writeInspectedCloudPayload(database, {
+        userId: "synthetic_user",
+        slot: "main",
+        revision: 1,
+        payload,
+        checksum,
+        sizeBytes,
+      });
+      assert.deepEqual(linkVerifiedCloudPayload(database, {
+        userId: "synthetic_user",
+        slot: "1",
+        revision: 9,
+        checksum,
+        sizeBytes,
+      }), { checksum, sizeBytes, blob: "linked", rowChanges: 1 });
+    });
+    assert.equal(readCloudPayload(database, { userId: "synthetic_user", slot: "main", revision: 1 }), payload);
+    assert.equal(readCloudPayload(database, { userId: "synthetic_user", slot: "1", revision: 9 }), payload);
+    assert.equal(database.prepare(`SELECT count(*) AS count FROM ${CLOUD_PAYLOAD_BLOB_TABLE}`).get().count, 1);
+
+    assert.throws(() => runTransaction(database, () => linkVerifiedCloudPayload(database, {
+      userId: "synthetic_user",
+      slot: "2",
+      revision: 2,
+      checksum: "f".repeat(64),
+      sizeBytes,
+    })), (error) => error instanceof CloudPayloadStoreError && error.code === "CLOUD_PAYLOAD_BLOB_MISSING");
+    assert.throws(() => runTransaction(database, () => linkVerifiedCloudPayload(database, {
+      userId: "synthetic_user",
+      slot: "2",
+      revision: 2,
+      checksum,
+      sizeBytes: sizeBytes + 1,
+    })), (error) => error instanceof CloudPayloadStoreError && error.code === "CLOUD_PAYLOAD_BLOB_SIZE_MISMATCH");
   } finally {
     database.close();
   }

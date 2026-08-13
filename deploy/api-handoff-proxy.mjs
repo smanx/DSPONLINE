@@ -22,6 +22,7 @@ const HOP_BY_HOP_HEADERS = new Set([
 
 const ATOMIC_GET_PATHS = new Set([
   "/api/account/export",
+  "/api/account/import/archive",
   "/api/admin/account",
   "/api/admin/cloud-history/prune-preview",
 ]);

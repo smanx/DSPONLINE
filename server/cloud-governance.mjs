@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { collectCloudPayloadStoreStats } from "./cloud-payload-store.mjs";
 
 export const CLOUD_HISTORY_LIMIT = 20;
 export const CLOUD_HISTORY_PRUNE_CONFIRMATION = "PRUNE_CLOUD_HISTORY";
@@ -161,7 +162,11 @@ export function collectSqliteGovernanceMetrics(database, data, { databaseBytes =
   const pageCount = pragmaNumber(database, "page_count");
   const freePages = pragmaNumber(database, "freelist_count");
   const payloadRows = scalar(database, "SELECT count(*) AS value FROM cloud_save_payloads");
-  const payloadBytes = scalar(database, "SELECT coalesce(sum(length(payload)), 0) AS value FROM cloud_save_payloads");
+  let payloadStore = null;
+  try { payloadStore = collectCloudPayloadStoreStats(database); } catch { /* legacy test/diagnostic database without the internal blob table */ }
+  const payloadBytes = payloadStore
+    ? payloadStore.bytes.mainStored + payloadStore.bytes.blobStored
+    : scalar(database, "SELECT coalesce(sum(length(CAST(payload AS BLOB))), 0) AS value FROM cloud_save_payloads");
   const appStateBytes = scalar(database, "SELECT coalesce(length(payload), 0) AS value FROM app_state WHERE id = 1");
   const users = Math.max(0, Object.keys(data?.users ?? {}).length);
   const slotsWithHistory = new Set();
@@ -191,8 +196,17 @@ export function collectSqliteGovernanceMetrics(database, data, { databaseBytes =
     reclaimablePageBytes: pageSize * freePages,
     appStateBytes,
     cloudPayloadBytes: payloadBytes,
+    cloudPayloadLogicalBytes: payloadStore?.bytes.logical ?? payloadBytes,
+    cloudPayloadMainTableBytes: payloadStore?.bytes.mainStored ?? payloadBytes,
+    cloudPayloadBlobBytes: payloadStore?.bytes.blobStored ?? 0,
+    cloudPayloadDeduplicatedBytes: payloadStore?.bytes.deduplicated ?? 0,
+    cloudPayloadAliasRows: payloadStore?.rows.aliases ?? 0,
+    cloudPayloadLegacyRows: payloadStore?.rows.legacy ?? payloadRows,
+    cloudPayloadInvalidAliasRows: payloadStore?.rows.invalidAliases ?? 0,
+    cloudPayloadOrphanBlobs: payloadStore?.blobs.orphan ?? 0,
+    cloudPayloadMissingBlobReferences: payloadStore?.blobs.missingReferences ?? 0,
     cloudPayloadRows: payloadRows,
-    averagePayloadBytes: payloadRows > 0 ? Math.round(payloadBytes / payloadRows) : 0,
+    averagePayloadBytes: payloadRows > 0 ? Math.round((payloadStore?.bytes.logical ?? payloadBytes) / payloadRows) : 0,
     averageRevisionsPerAccount: users > 0 ? Math.round(payloadRows / users * 100) / 100 : 0,
     averageRevisionsPerActiveSlot: slotsWithHistory.size > 0 ? Math.round(payloadRows / slotsWithHistory.size * 100) / 100 : 0,
   };

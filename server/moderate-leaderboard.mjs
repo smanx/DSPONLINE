@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
+import { readCloudPayload } from "./cloud-payload-store.mjs";
 import {
   applyLeaderboardModerationToData,
   publicLeaderboardModerationResolution,
@@ -39,8 +40,7 @@ function readState(database) {
 }
 
 function payloadLoader(database) {
-  const query = database.prepare("SELECT payload FROM cloud_save_payloads WHERE user_id = ? AND slot = 'main' AND revision = ?");
-  return (userId, revision) => query.get(userId, revision)?.payload ?? null;
+  return (userId, revision) => readCloudPayload(database, { userId, slot: "main", revision });
 }
 
 function resolveDatabase(database, displayName) {

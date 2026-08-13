@@ -329,6 +329,34 @@ export function writeInspectedCloudPayload(database, input) {
   };
 }
 
+/**
+ * Link another logical revision to a blob that the caller already verified by
+ * calling writeCloudPayload/writeInspectedCloudPayload in the same outer
+ * transaction. Only fixed-size metadata is read here, so duplicate revisions
+ * do not materialize the same large payload again.
+ */
+export function linkVerifiedCloudPayload(database, input) {
+  requireOuterTransaction(database, "linkVerifiedCloudPayload");
+  const identity = validateIdentity(input ?? {});
+  const checksum = assertChecksum(input?.checksum);
+  const sizeBytes = assertSizeBytes(input?.sizeBytes);
+  const row = database.prepare(`
+    SELECT checksum, size_bytes AS sizeBytes
+    FROM ${CLOUD_PAYLOAD_BLOB_TABLE}
+    WHERE checksum = ?
+  `).get(checksum);
+  if (!row) fail("CLOUD_PAYLOAD_BLOB_MISSING", "Verified cloud payload blob is missing before alias linking");
+  if (row.checksum !== checksum || row.sizeBytes !== sizeBytes) {
+    fail("CLOUD_PAYLOAD_BLOB_SIZE_MISMATCH", "Verified cloud payload blob metadata changed before alias linking");
+  }
+  const result = database.prepare(`
+    INSERT INTO ${CLOUD_PAYLOAD_TABLE} (user_id, slot, revision, payload)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, slot, revision) DO UPDATE SET payload = excluded.payload
+  `).run(identity.userId, identity.slot, identity.revision, createCloudPayloadAlias(checksum, sizeBytes));
+  return { checksum, sizeBytes, blob: "linked", rowChanges: result.changes };
+}
+
 export function readCloudPayload(database, input) {
   assertDatabase(database);
   const identity = validateIdentity(input ?? {});

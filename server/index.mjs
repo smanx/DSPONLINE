@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { promises as fs, realpathSync } from "node:fs";
+import { promises as fs, readFileSync, realpathSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -38,6 +38,13 @@ import {
   publicCloudHistoryPrunePlan,
   trimCloudHistoryMetadataInPlace,
 } from "./cloud-governance.mjs";
+import {
+  DEFAULT_CLOUD_QUOTA_POLICY,
+  cloudQuotaSnapshot,
+  normalizeCloudQuotaPolicy,
+  planCloudSaveUpload,
+  publicCloudQuotaPlan,
+} from "./cloud-quota.mjs";
 
 import {
   anonymousLoginContext,
@@ -52,6 +59,27 @@ import {
   recordSuccessfulLogin,
 } from "./account-security.mjs";
 import { evaluateLeaderboardIntegrity, LEADERBOARD_INTEGRITY_VERSION } from "./leaderboard-integrity.mjs";
+import { AccountArchiveError, createAccountArchiveZipStream } from "./account-archive.mjs";
+import {
+  ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_HEADER,
+  ACCOUNT_ARCHIVE_IMPORT_GUARD_HEADER,
+  AccountArchiveImportError,
+  accountArchiveImportConfirmation,
+  accountArchiveImportGuard,
+  inspectAccountArchivePayloadFile,
+  maximumAccountArchiveImportBytes,
+  prepareAccountArchiveImport,
+  receiveAccountArchiveRequest,
+} from "./account-archive-import.mjs";
+import {
+  deleteCloudPayload,
+  deleteCloudPayloadsForUser,
+  garbageCollectCloudPayloadBlobs,
+  initializeCloudPayloadStore,
+  linkVerifiedCloudPayload,
+  readCloudPayload,
+  writeInspectedCloudPayload,
+} from "./cloud-payload-store.mjs";
 
 const cloudTransferNumericKeys = [
   "version", "mibBytes", "guaranteedSavePayloadBytes", "savePayloadLimitBytes", "rawFallbackSafeLimitBytes",
@@ -1047,8 +1075,10 @@ class AtomicStoreBase {
       // turn a durable success into a failed HTTP response.
       try { this.afterMutationCommitted(mutation); } catch { /* durable state remains authoritative */ }
       mutation.writes.clear();
+      mutation.fileWrites?.clear();
       mutation.deletes.clear();
       mutation.userDeletes.clear();
+      mutation.replaceUserPayloads?.clear();
     }).finally(() => { mutation.commitPromise = null; });
     return mutation.commitPromise;
   }
@@ -1129,6 +1159,35 @@ class JsonStore extends AtomicStoreBase {
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.copyFile(this.file, destination);
   }
+
+  replaceUserCloudSavePayloads(userId) {
+    this.discardUserCloudSavePayloads?.(userId);
+  }
+
+  stageCloudSavePayloadFile(userId, slot, save) {
+    const raw = readFileSync(save.payloadFile);
+    const payload = raw.toString("utf8");
+    if (raw.byteLength !== save.size || Buffer.from(payload, "utf8").compare(raw) !== 0 || sha256(payload) !== save.checksum) {
+      const error = new Error("账号归档临时正文在提交前发生变化");
+      error.code = "ACCOUNT_ARCHIVE_IMPORT_TEMP_CHANGED";
+      throw error;
+    }
+    return { ...metadataOnlySaveRecord(save), payload };
+  }
+
+  createCloudArchiveSnapshot() {
+    const payloads = new Map();
+    forEachCloudSaveRecord(this._data, (userId, slot, save, mode = "normal") => {
+      if (!Number.isInteger(save?.revision) || typeof save?.payload !== "string") return;
+      payloads.set(`${userId}\u0000${cloudStorageSlot(mode, slot)}\u0000${save.revision}`, save.payload);
+    });
+    return {
+      readPayload(userId, storageSlot, revision) {
+        return payloads.get(`${userId}\u0000${storageSlot}\u0000${revision}`) ?? null;
+      },
+      close() { payloads.clear(); },
+    };
+  }
 }
 
 function forEachCloudSaveRecord(source, visit) {
@@ -1187,7 +1246,7 @@ function forEachCloudSaveRecord(source, visit) {
 
 function metadataOnlySaveRecord(save) {
   if (!save || typeof save !== "object") return save;
-  const { payload: _payload, ...metadata } = save;
+  const { payload: _payload, payloadFile: _payloadFile, ...metadata } = save;
   return metadata;
 }
 
@@ -1209,6 +1268,7 @@ class SqliteStore extends AtomicStoreBase {
     this.database.pragma("synchronous = NORMAL");
     this.database.exec("CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY CHECK (id = 1), payload TEXT NOT NULL, updated_at INTEGER NOT NULL)");
     this.database.exec("CREATE TABLE IF NOT EXISTS cloud_save_payloads (user_id TEXT NOT NULL, slot TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (user_id, slot, revision)) WITHOUT ROWID");
+    initializeCloudPayloadStore(this.database);
     const row = this.database.prepare("SELECT payload FROM app_state WHERE id = 1").get();
     if (!row?.payload) {
       this.data.storageLayoutVersion = SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION;
@@ -1232,8 +1292,10 @@ class SqliteStore extends AtomicStoreBase {
     return {
       ...super.createStandaloneMutation(),
       writes: new Map(this.pendingCloudSaveWrites),
+      fileWrites: new Map(),
       deletes: new Map(this.pendingCloudSaveDeletes),
       userDeletes: new Set(this.pendingCloudSaveUserDeletes),
+      replaceUserPayloads: new Set(),
       legacyPending: true,
     };
   }
@@ -1258,12 +1320,68 @@ class SqliteStore extends AtomicStoreBase {
     const key = `${userId}\u0000${slot}\u0000${revision}`;
     const mutation = this.currentMutation();
     const writes = mutation?.writes ?? this.pendingCloudSaveWrites;
+    const fileWrites = mutation?.fileWrites;
     const deletes = mutation?.deletes ?? this.pendingCloudSaveDeletes;
     const userDeletes = mutation?.userDeletes ?? this.pendingCloudSaveUserDeletes;
-    writes.set(key, { userId, slot, revision, payload: save.payload });
+    writes.set(key, {
+      userId,
+      slot,
+      revision,
+      payload: save.payload,
+      ...(typeof save.checksum === "string" ? { checksum: save.checksum } : {}),
+      ...(Number.isSafeInteger(save.size) ? { sizeBytes: save.size } : {}),
+    });
+    fileWrites?.delete(key);
     deletes.delete(key);
     userDeletes.delete(userId);
     return metadata;
+  }
+
+  stageCloudSavePayloadFile(userId, slot, save) {
+    const metadata = metadataOnlySaveRecord(save);
+    const revision = Number.isInteger(save?.revision) && save.revision > 0 ? save.revision : null;
+    if (!revision || typeof save?.payloadFile !== "string" || !path.isAbsolute(save.payloadFile) ||
+      typeof save?.checksum !== "string" || !/^[a-f0-9]{64}$/.test(save.checksum) ||
+      !Number.isSafeInteger(save?.size) || save.size < 1) {
+      const error = new Error("账号归档导入正文暂存描述无效");
+      error.statusCode = 500;
+      error.code = "ACCOUNT_ARCHIVE_IMPORT_STAGING_INVALID";
+      throw error;
+    }
+    const mutation = this.currentMutation();
+    if (!mutation) {
+      const error = new Error("账号归档导入正文只能在原子事务中暂存");
+      error.statusCode = 500;
+      error.code = "ACCOUNT_ARCHIVE_IMPORT_TRANSACTION_REQUIRED";
+      throw error;
+    }
+    const key = `${userId}\u0000${slot}\u0000${revision}`;
+    mutation.writes.delete(key);
+    mutation.deletes.delete(key);
+    mutation.fileWrites.set(key, {
+      userId,
+      slot,
+      revision,
+      payloadFile: save.payloadFile,
+      checksum: save.checksum,
+      sizeBytes: save.size,
+    });
+    return metadata;
+  }
+
+  replaceUserCloudSavePayloads(userId) {
+    const mutation = this.currentMutation();
+    if (!mutation) {
+      const error = new Error("账号归档导入替换只能在原子事务中执行");
+      error.statusCode = 500;
+      error.code = "ACCOUNT_ARCHIVE_IMPORT_TRANSACTION_REQUIRED";
+      throw error;
+    }
+    mutation.replaceUserPayloads.add(userId);
+    mutation.userDeletes.delete(userId);
+    for (const [key, write] of mutation.writes) if (write.userId === userId) mutation.writes.delete(key);
+    for (const [key, write] of mutation.fileWrites) if (write.userId === userId) mutation.fileWrites.delete(key);
+    for (const [key, deletion] of mutation.deletes) if (deletion.userId === userId) mutation.deletes.delete(key);
   }
 
   discardCloudSavePayload(userId, slot, revision) {
@@ -1271,19 +1389,25 @@ class SqliteStore extends AtomicStoreBase {
     const key = `${userId}\u0000${slot}\u0000${revision}`;
     const mutation = this.currentMutation();
     const writes = mutation?.writes ?? this.pendingCloudSaveWrites;
+    const fileWrites = mutation?.fileWrites;
     const deletes = mutation?.deletes ?? this.pendingCloudSaveDeletes;
     writes.delete(key);
+    fileWrites?.delete(key);
     deletes.set(key, { userId, slot, revision });
   }
 
   discardUserCloudSavePayloads(userId) {
     const mutation = this.currentMutation();
     const writes = mutation?.writes ?? this.pendingCloudSaveWrites;
+    const fileWrites = mutation?.fileWrites;
     const deletes = mutation?.deletes ?? this.pendingCloudSaveDeletes;
     const userDeletes = mutation?.userDeletes ?? this.pendingCloudSaveUserDeletes;
     userDeletes.add(userId);
     for (const [key, write] of writes) {
       if (write.userId === userId) writes.delete(key);
+    }
+    if (fileWrites) for (const [key, write] of fileWrites) {
+      if (write.userId === userId) fileWrites.delete(key);
     }
     for (const [key, deletion] of deletes) {
       if (deletion.userId === userId) deletes.delete(key);
@@ -1298,27 +1422,86 @@ class SqliteStore extends AtomicStoreBase {
     if (mutation?.deletes.has(key)) return null;
     const drafted = mutation?.writes.get(key);
     if (drafted) return drafted.payload;
-    const row = this.database.prepare("SELECT payload FROM cloud_save_payloads WHERE user_id = ? AND slot = ? AND revision = ?").get(userId, slot, revision);
-    return typeof row?.payload === "string" ? row.payload : null;
+    const fileDraft = mutation?.fileWrites?.get(key);
+    if (fileDraft) {
+      const raw = readFileSync(fileDraft.payloadFile);
+      if (raw.byteLength !== fileDraft.sizeBytes || createHash("sha256").update(raw).digest("hex") !== fileDraft.checksum) {
+        const error = new Error("账号归档临时正文在事务内发生变化");
+        error.code = "ACCOUNT_ARCHIVE_IMPORT_TEMP_CHANGED";
+        throw error;
+      }
+      return raw.toString("utf8");
+    }
+    if (mutation?.replaceUserPayloads?.has(userId)) return null;
+    return readCloudPayload(this.database, { userId, slot, revision });
+  }
+
+  createCloudArchiveSnapshot() {
+    const snapshot = new Database(this.file, { readonly: true, fileMustExist: true });
+    let closed = false;
+    try {
+      snapshot.pragma("query_only = ON");
+      snapshot.exec("BEGIN");
+      // Force SQLite to establish the WAL snapshot while this request still
+      // owns the mutation fence. Subsequent uploads can commit without
+      // changing the revision rows observed by this archive stream.
+      snapshot.prepare("SELECT updated_at FROM app_state WHERE id = 1").get();
+      return {
+        readPayload(userId, storageSlot, revision) {
+          if (closed) return null;
+          return readCloudPayload(snapshot, { userId, slot: storageSlot, revision });
+        },
+        close() {
+          if (closed) return;
+          closed = true;
+          try { snapshot.exec("ROLLBACK"); } catch { /* snapshot already ended */ }
+          snapshot.close();
+        },
+      };
+    } catch (error) {
+      try { snapshot.close(); } catch { /* initialization already failed */ }
+      throw error;
+    }
   }
 
   async commitCandidate(candidate, mutation, context = {}) {
     candidate.storageLayoutVersion = SQLITE_CLOUD_PAYLOAD_LAYOUT_VERSION;
     const payload = JSON.stringify(candidate);
     const writeState = this.database.prepare("INSERT INTO app_state (id, payload, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at");
-    const writeCloudPayload = this.database.prepare("INSERT INTO cloud_save_payloads (user_id, slot, revision, payload) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, slot, revision) DO UPDATE SET payload = excluded.payload");
-    const deleteCloudPayload = this.database.prepare("DELETE FROM cloud_save_payloads WHERE user_id = ? AND slot = ? AND revision = ?");
-    const deleteUserCloudPayloads = this.database.prepare("DELETE FROM cloud_save_payloads WHERE user_id = ?");
     this.database.transaction(() => {
       this.maybeInjectPersistenceFault("before-sqlite-transaction", context);
-      for (const userId of mutation.userDeletes) deleteUserCloudPayloads.run(userId);
+      for (const userId of mutation.replaceUserPayloads) deleteCloudPayloadsForUser(this.database, userId);
+      for (const userId of mutation.userDeletes) deleteCloudPayloadsForUser(this.database, userId);
       this.maybeInjectPersistenceFault("after-user-payload-deletes", context);
-      for (const deletion of mutation.deletes.values()) deleteCloudPayload.run(deletion.userId, deletion.slot, deletion.revision);
+      for (const deletion of mutation.deletes.values()) deleteCloudPayload(this.database, deletion);
       this.maybeInjectPersistenceFault("after-payload-deletes", context);
-      for (const write of mutation.writes.values()) writeCloudPayload.run(write.userId, write.slot, write.revision, write.payload);
+      for (const write of mutation.writes.values()) writeInspectedCloudPayload(this.database, write);
+      const importedChecksums = new Set();
+      for (const write of mutation.fileWrites.values()) {
+        if (importedChecksums.has(write.checksum)) {
+          linkVerifiedCloudPayload(this.database, write);
+          continue;
+        }
+        let raw = readFileSync(write.payloadFile);
+        if (raw.byteLength !== write.sizeBytes || createHash("sha256").update(raw).digest("hex") !== write.checksum) {
+          const error = new Error("账号归档临时正文在 SQLite 提交前发生变化");
+          error.code = "ACCOUNT_ARCHIVE_IMPORT_TEMP_CHANGED";
+          throw error;
+        }
+        const payload = raw.toString("utf8");
+        // The extraction pass and authoritative worker already proved strict
+        // UTF-8. Matching the same SHA-256 here proves the temporary bytes did
+        // not change, so avoid allocating another 30 MiB re-encoded Buffer.
+        raw = Buffer.alloc(0);
+        writeInspectedCloudPayload(this.database, { ...write, payload });
+        importedChecksums.add(write.checksum);
+      }
       this.maybeInjectPersistenceFault("after-payload-writes", context);
       writeState.run(payload, Date.now());
       this.maybeInjectPersistenceFault("after-app-state-write", context);
+      if (mutation.replaceUserPayloads.size > 0 || mutation.userDeletes.size > 0 || mutation.deletes.size > 0) {
+        garbageCollectCloudPayloadBlobs(this.database);
+      }
     })();
   }
 
@@ -2917,9 +3100,11 @@ function materializeCloudSave(store, userId, slot, save, mode = "normal") {
 function appendSaveRevision(store, userId, save, slot = "main", mode = "normal") {
   const previousHistory = saveHistory(store, userId, slot, mode);
   const storageSlot = cloudStorageSlot(mode, slot);
-  const storedSave = typeof store.stageCloudSavePayload === "function"
-    ? store.stageCloudSavePayload(userId, storageSlot, save)
-    : save;
+  const storedSave = typeof save?.payloadFile === "string" && typeof store.stageCloudSavePayloadFile === "function"
+    ? store.stageCloudSavePayloadFile(userId, storageSlot, save)
+    : typeof store.stageCloudSavePayload === "function"
+      ? store.stageCloudSavePayload(userId, storageSlot, save)
+      : save;
   const history = [...previousHistory.filter((entry) => entry.revision !== save.revision), storedSave]
     .sort((left, right) => left.revision - right.revision)
     .slice(-CLOUD_HISTORY_LIMIT);
@@ -2954,6 +3139,130 @@ function appendSaveRevision(store, userId, save, slot = "main", mode = "normal")
   store.data.cloudSaveSlotHistoryByMode[userId][mode] ??= {};
   store.data.cloudSaveSlotsByMode[userId][mode][slot] = storedSave;
   store.data.cloudSaveSlotHistoryByMode[userId][mode][slot] = history;
+}
+
+function accountCloudRevisionRecords(store, userId) {
+  const records = [];
+  for (const mode of SAVE_MODES) {
+    for (const slot of CLOUD_SAVE_SLOTS) {
+      const byRevision = new Map();
+      for (const save of saveHistory(store, userId, slot, mode)) {
+        if (Number.isInteger(save?.revision) && save.revision > 0) byRevision.set(save.revision, save);
+      }
+      const current = currentCloudSave(store, userId, slot, mode);
+      if (Number.isInteger(current?.revision) && current.revision > 0) byRevision.set(current.revision, current);
+      for (const save of byRevision.values()) {
+        records.push({
+          mode,
+          slot,
+          revision: save.revision,
+          updatedAt: Number.isSafeInteger(save.updatedAt) ? Math.max(0, save.updatedAt) : 0,
+          size: Number.isSafeInteger(save.size) ? save.size : 0,
+          checksum: save.checksum,
+        });
+      }
+    }
+  }
+  return records;
+}
+
+function currentAccountArchiveImportGuard(store, userId) {
+  return accountArchiveImportGuard(accountCloudRevisionRecords(store, userId));
+}
+
+function clearAccountCloudSaveMetadata(store, userId) {
+  delete store.data.cloudSaves[userId];
+  delete store.data.cloudSaveHistory[userId];
+  delete store.data.cloudSaveSlots[userId];
+  delete store.data.cloudSaveSlotHistory[userId];
+  delete store.data.cloudSavesByMode[userId];
+  delete store.data.cloudSaveHistoryByMode[userId];
+  delete store.data.cloudSaveSlotsByMode[userId];
+  delete store.data.cloudSaveSlotHistoryByMode[userId];
+  if (typeof store.replaceUserCloudSavePayloads === "function") store.replaceUserCloudSavePayloads(userId);
+  else store.discardUserCloudSavePayloads?.(userId);
+}
+
+function installAccountArchiveCloudSaves(store, userId, records) {
+  clearAccountCloudSaveMetadata(store, userId);
+  const grouped = new Map();
+  for (const record of records) {
+    const key = `${record.mode}:${record.slot}`;
+    const group = grouped.get(key) ?? [];
+    group.push(record);
+    grouped.set(key, group);
+  }
+  const reviewRevisions = {};
+  for (const mode of SAVE_MODES) {
+    for (const slot of CLOUD_SAVE_SLOTS) {
+      const group = (grouped.get(`${mode}:${slot}`) ?? []).sort((left, right) => left.revision - right.revision);
+      for (const record of group) {
+        appendSaveRevision(store, userId, {
+          revision: record.revision,
+          payloadFile: record.payloadFile,
+          checksum: record.checksum,
+          size: record.size,
+          updatedAt: record.updatedAt,
+          summary: record.summary,
+          ...(record.legacyMode ? { legacyMode: true } : {}),
+        }, slot, mode);
+      }
+      const latest = group.at(-1);
+      if (slot === "main" && latest) reviewRevisions[mode] = latest.revision;
+    }
+  }
+  const previousControl = store.data.accountControls[userId] ?? null;
+  const existingThresholds = leaderboardRevalidationThresholds(store.data, userId);
+  const thresholds = Object.fromEntries(SAVE_MODES.flatMap((mode) => {
+    const threshold = Math.max(existingThresholds[mode] ?? 0, reviewRevisions[mode] ?? 0);
+    return threshold > 0 ? [[mode, threshold]] : [];
+  }));
+  if (Object.keys(thresholds).length > 0 || previousControl?.loginDisabledUntil) {
+    store.data.accountControls[userId] = {
+      ...(previousControl ?? {}),
+      source: previousControl?.source ?? "account-archive-import",
+      createdAt: previousControl?.createdAt ?? Date.now(),
+      ...(thresholds.normal ? { leaderboardResumeAfterRevision: thresholds.normal } : {}),
+      leaderboardResumeAfterRevisionByMode: thresholds,
+    };
+  }
+  // Existing public records remain byte-for-byte untouched. Revalidation
+  // hides the imported cloud state from future refreshes until a new revision.
+  const cache = leaderboardWindowCache(store);
+  for (const key of [...cache.keys()]) if (key.startsWith(`${userId}:`)) cache.delete(key);
+}
+
+function pruneCloudSaveRevisions(store, userId, slot, mode, revisions) {
+  const requested = new Set((revisions ?? []).filter((revision) => Number.isInteger(revision) && revision > 0));
+  if (requested.size === 0) return { revisionCount: 0, logicalBytes: 0, revisions: [] };
+  const current = currentCloudSave(store, userId, slot, mode);
+  if (Number.isInteger(current?.revision)) requested.delete(current.revision);
+  const history = saveHistory(store, userId, slot, mode);
+  const removed = history.filter((entry) => requested.has(entry?.revision));
+  if (removed.length === 0) return { revisionCount: 0, logicalBytes: 0, revisions: [] };
+  const retained = history.filter((entry) => !requested.has(entry?.revision));
+  if (mode === "normal" && slot === "main") {
+    store.data.cloudSaveHistory[userId] = retained;
+  } else if (mode === "normal") {
+    store.data.cloudSaveSlotHistory[userId] ??= {};
+    store.data.cloudSaveSlotHistory[userId][slot] = retained;
+  } else if (slot === "main") {
+    store.data.cloudSaveHistoryByMode[userId] ??= {};
+    store.data.cloudSaveHistoryByMode[userId][mode] = retained;
+  } else {
+    store.data.cloudSaveSlotHistoryByMode[userId] ??= {};
+    store.data.cloudSaveSlotHistoryByMode[userId][mode] ??= {};
+    store.data.cloudSaveSlotHistoryByMode[userId][mode][slot] = retained;
+  }
+  if (typeof store.discardCloudSavePayload === "function") {
+    const storageSlot = cloudStorageSlot(mode, slot);
+    for (const entry of removed) store.discardCloudSavePayload(userId, storageSlot, entry.revision);
+  }
+  return {
+    revisionCount: removed.length,
+    logicalBytes: removed.reduce((sum, entry) => sum + Math.max(0, Number(entry?.size) || 0), 0),
+    revisions: removed.map((entry) => entry.revision).sort((left, right) => left - right),
+  };
 }
 
 function deleteCloudSaveData(store, userId, slot = "main", mode = "normal") {
@@ -3007,6 +3316,137 @@ function materializeManualCloudSaveHistory(store, userId, mode = "normal") {
       ? [[slot, history.map((save) => materializeCloudSave(store, userId, slot, save, mode))]]
       : [];
   }));
+}
+
+function accountArchiveSaveEntries(store, userId, snapshot) {
+  const entries = [];
+  for (const mode of SAVE_MODES) {
+    for (const slot of CLOUD_SAVE_SLOTS) {
+      const byRevision = new Map();
+      for (const save of saveHistory(store, userId, slot, mode)) {
+        if (Number.isInteger(save?.revision) && save.revision > 0) byRevision.set(save.revision, save);
+      }
+      const current = currentCloudSave(store, userId, slot, mode);
+      if (Number.isInteger(current?.revision) && current.revision > 0) byRevision.set(current.revision, current);
+      for (const save of [...byRevision.values()].sort((left, right) => left.revision - right.revision)) {
+        if (!Number.isSafeInteger(save.size) || save.size < 1 || typeof save.checksum !== "string" || !/^[a-f0-9]{64}$/.test(save.checksum)) {
+          const error = new Error("云存档修订元数据不完整，账号归档已停止；现有数据未修改");
+          error.statusCode = 409;
+          error.code = "ACCOUNT_ARCHIVE_SAVE_METADATA_INVALID";
+          throw error;
+        }
+        entries.push({
+          mode,
+          slot,
+          revision: save.revision,
+          updatedAt: Number.isSafeInteger(save.updatedAt) ? Math.max(0, save.updatedAt) : 0,
+          size: save.size,
+          checksum: save.checksum,
+          payload: () => {
+            const payload = snapshot.readPayload(userId, cloudStorageSlot(mode, slot), save.revision);
+            if (typeof payload !== "string") {
+              const error = new Error("账号归档期间云存档正文不可用");
+              error.code = "CLOUD_SAVE_PAYLOAD_MISSING";
+              throw error;
+            }
+            return payload;
+          },
+        });
+      }
+    }
+  }
+  return entries;
+}
+
+function accountArchiveMetadata(store, userId, exportedAt) {
+  const submissions = Object.values(store.data.submissions).filter((entry) => entry.userId === userId);
+  const speedrunSubmissions = Object.values(store.data.speedrunSubmissions).filter((entry) => entry.userId === userId);
+  const feedback = store.data.feedback.filter((entry) => entry.userId === userId).map(({ ipHash: _ipHash, ...entry }) => entry);
+  const errors = store.data.errors.filter((entry) => entry.userId === userId).map(({ ipHash: _ipHash, ...entry }) => entry);
+  return structuredClone({
+    format: "dspidle-account-data",
+    version: 2,
+    exportedAt,
+    accountId: userId,
+    user: publicUser(store.data.users[userId]),
+    submissions,
+    speedrunSubmissions,
+    feedback,
+    errors,
+  });
+}
+
+function preflightAccountArchiveSources(archiveInput, signal) {
+  const verified = new Set();
+  for (const save of archiveInput.saves) {
+    if (signal?.aborted) {
+      const error = new Error("账号归档下载已取消");
+      error.code = "ACCOUNT_ARCHIVE_ABORTED";
+      throw error;
+    }
+    if (verified.has(save.checksum)) continue;
+    const payload = typeof save.payload === "function" ? save.payload() : save.payload;
+    if (typeof payload !== "string") {
+      const error = new Error("账号归档期间云存档正文不可用");
+      error.statusCode = 500;
+      error.code = "CLOUD_SAVE_PAYLOAD_MISSING";
+      throw error;
+    }
+    if (Buffer.byteLength(payload, "utf8") !== save.size) {
+      const error = new Error("云存档正文大小与修订元数据不一致，账号归档已停止");
+      error.statusCode = 409;
+      error.code = "ACCOUNT_ARCHIVE_PAYLOAD_SIZE_MISMATCH";
+      throw error;
+    }
+    if (sha256(payload) !== save.checksum) {
+      const error = new Error("云存档正文与修订校验值不一致，账号归档已停止");
+      error.statusCode = 409;
+      error.code = "ACCOUNT_ARCHIVE_PAYLOAD_CHECKSUM_MISMATCH";
+      throw error;
+    }
+    verified.add(save.checksum);
+  }
+}
+
+async function sendAccountArchive(response, request, archiveInput, fileName, snapshot) {
+  const abort = new AbortController();
+  const onRequestAborted = () => abort.abort();
+  const onResponseClose = () => {
+    if (!response.writableEnded) abort.abort();
+  };
+  request.once("aborted", onRequestAborted);
+  response.once("close", onResponseClose);
+  try {
+    // A streaming response cannot change its status after headers are sent.
+    // Validate one unique payload at a time from the stable SQLite snapshot so
+    // corruption returns an explicit JSON error instead of a misleading 200
+    // followed by a reset. No payload is retained after its digest is checked.
+    preflightAccountArchiveSources(archiveInput, abort.signal);
+    const archive = createAccountArchiveZipStream(archiveInput, { signal: abort.signal });
+    response.writeHead(200, {
+      "content-type": "application/vnd.dspidle.account-archive+zip",
+      "content-length": String(archive.byteLength),
+      "content-disposition": `attachment; filename="${fileName}"`,
+      "cache-control": "private, no-store",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+      "referrer-policy": "no-referrer",
+      "x-dsp-account-archive-version": "2",
+    });
+    for await (const chunk of archive.stream) {
+      if (abort.signal.aborted) {
+        const error = new Error("账号归档下载已取消");
+        error.code = "ACCOUNT_ARCHIVE_ABORTED";
+        throw error;
+      }
+      await writeResponseChunk(response, chunk);
+    }
+    response.end();
+  } finally {
+    request.removeListener("aborted", onRequestAborted);
+    response.removeListener("close", onResponseClose);
+    snapshot.close();
+  }
 }
 
 function normalizedPlayerId(value) {
@@ -3139,6 +3579,9 @@ export async function createCloudServer({
   uploadInspectionConcurrency = Number(process.env.DSP_UPLOAD_INSPECTION_CONCURRENCY || 2),
   uploadInspectionQueueLimit = Number(process.env.DSP_UPLOAD_INSPECTION_QUEUE_LIMIT || 16),
   uploadInspectionWorkerThresholdBytes = Number(process.env.DSP_UPLOAD_INSPECTION_WORKER_THRESHOLD_BYTES || 1024 * 1024),
+  cloudQuotaPolicy = null,
+  accountArchivePayloadInspector = inspectAccountArchivePayloadFile,
+  accountArchiveTemporaryRoot = "",
   logger = console,
 } = {}) {
   const store = databaseFile
@@ -3179,6 +3622,13 @@ export async function createCloudServer({
     concurrency: uploadInspectionConcurrency,
     queueLimit: uploadInspectionQueueLimit,
     workerThresholdBytes: uploadInspectionWorkerThresholdBytes,
+  });
+  const quotaPolicy = normalizeCloudQuotaPolicy(cloudQuotaPolicy ?? {
+    revisionBytes: Number(process.env.DSP_CLOUD_REVISION_QUOTA_BYTES || DEFAULT_CLOUD_QUOTA_POLICY.revisionBytes),
+    slotBytes: Number(process.env.DSP_CLOUD_SLOT_QUOTA_BYTES || DEFAULT_CLOUD_QUOTA_POLICY.slotBytes),
+    modeBytes: Number(process.env.DSP_CLOUD_MODE_QUOTA_BYTES || DEFAULT_CLOUD_QUOTA_POLICY.modeBytes),
+    accountBytes: Number(process.env.DSP_CLOUD_ACCOUNT_QUOTA_BYTES || DEFAULT_CLOUD_QUOTA_POLICY.accountBytes),
+    historyRevisions: Number(process.env.DSP_CLOUD_HISTORY_REVISIONS || DEFAULT_CLOUD_QUOTA_POLICY.historyRevisions),
   });
   const runtime = {
     requests: 0,
@@ -3354,6 +3804,8 @@ export async function createCloudServer({
         cloudTransferContract.originalBytesHeader,
         cloudTransferContract.compressedBytesHeader,
         "x-dsp-save-mode",
+        ACCOUNT_ARCHIVE_IMPORT_GUARD_HEADER,
+        ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_HEADER,
       ].join(", "));
       response.setHeader("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS");
       if (request.method === "OPTIONS") return send(response, 204, {});
@@ -3766,6 +4218,7 @@ export async function createCloudServer({
             normal: cloudSaveSlotMetadata(store, auth.user.id, "normal"),
             speedrun: cloudSaveSlotMetadata(store, auth.user.id, "speedrun"),
           },
+          cloudQuota: cloudQuotaSnapshot(store.data, auth.user.id, quotaPolicy),
         }) : send(response, 401, { error: "登录已过期" });
       }
 
@@ -3904,6 +4357,158 @@ export async function createCloudServer({
         }, { "content-disposition": `attachment; filename="dsp-account-${userId}.json"` });
       }
 
+      if (request.method === "GET" && url.pathname === "/api/account/export/archive") {
+        const initialAuth = authenticatedUser(request, store);
+        if (!initialAuth) return send(response, 401, { error: "请先登录" });
+        const prepared = await store.runAtomic(async () => {
+          const auth = authenticatedUser(request, store);
+          if (!auth || auth.user.id !== initialAuth.user.id) {
+            const error = new Error("登录已过期");
+            error.statusCode = 401;
+            throw error;
+          }
+          const userId = auth.user.id;
+          const exportedAt = Date.now();
+          const snapshot = store.createCloudArchiveSnapshot();
+          try {
+            const archiveInput = {
+              exportedAt,
+              schemaVersion: DEFAULT_DATA.schemaVersion,
+              accountData: accountArchiveMetadata(store, userId, exportedAt),
+              saves: accountArchiveSaveEntries(store, userId, snapshot),
+            };
+            appendAudit(store, request, "account.archive_exported", userId);
+            await store.persist({ operation: "account.archive-export" });
+            return { userId, exportedAt, snapshot, archiveInput };
+          } catch (error) {
+            snapshot.close();
+            throw error;
+          }
+        });
+        return sendAccountArchive(
+          response,
+          request,
+          prepared.archiveInput,
+          `dsp-account-${prepared.userId}-${prepared.exportedAt}.dspaccount.zip`,
+          prepared.snapshot,
+        );
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/account/import/archive") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        const guard = currentAccountArchiveImportGuard(store, auth.user.id);
+        response.setHeader("cache-control", "private, no-store");
+        return send(response, 200, {
+          import: {
+            version: 1,
+            guard,
+            confirmation: accountArchiveImportConfirmation(guard),
+            replaces: { modes: [...SAVE_MODES], slots: [...CLOUD_SAVE_SLOTS] },
+            preserves: ["account_identity", "sessions", "account_controls", "leaderboard_submissions", "speedrun_submissions"],
+          },
+          cloudQuota: cloudQuotaSnapshot(store.data, auth.user.id, quotaPolicy),
+        });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/account/import/archive") {
+        const initialAuth = authenticatedUser(request, store);
+        if (!initialAuth) return send(response, 401, { error: "请先登录" });
+        const expectedGuard = typeof request.headers[ACCOUNT_ARCHIVE_IMPORT_GUARD_HEADER] === "string"
+          ? request.headers[ACCOUNT_ARCHIVE_IMPORT_GUARD_HEADER]
+          : "";
+        const confirmation = typeof request.headers[ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_HEADER] === "string"
+          ? request.headers[ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_HEADER]
+          : "";
+        if (!/^[a-f0-9]{64}$/.test(expectedGuard) || confirmation !== accountArchiveImportConfirmation(expectedGuard)) {
+          return send(response, 400, { error: "账号归档导入确认文字或云状态 guard 无效", code: "ACCOUNT_ARCHIVE_IMPORT_CONFIRMATION_INVALID" });
+        }
+        const openingGuard = currentAccountArchiveImportGuard(store, initialAuth.user.id);
+        if (openingGuard !== expectedGuard) {
+          runtime.cloudConflicts += 1;
+          return send(response, 409, {
+            error: "云存档在导入开始前已变化，请重新确认；现有云存档未修改",
+            code: "ACCOUNT_ARCHIVE_IMPORT_GUARD_CONFLICT",
+            guard: openingGuard,
+          });
+        }
+        const disconnect = new AbortController();
+        const onAborted = () => disconnect.abort();
+        const onResponseClose = () => {
+          if (!response.writableEnded) disconnect.abort();
+        };
+        request.once("aborted", onAborted);
+        response.once("close", onResponseClose);
+        let received;
+        try {
+          received = await receiveAccountArchiveRequest(request, {
+            signal: disconnect.signal,
+            maximumBytes: maximumAccountArchiveImportBytes(quotaPolicy),
+            ...(accountArchiveTemporaryRoot ? { temporaryRoot: accountArchiveTemporaryRoot } : {}),
+          });
+          const prepared = await prepareAccountArchiveImport(received.archiveFile, {
+            signal: disconnect.signal,
+            workspaceDirectory: received.directory,
+            maximumArchiveBytes: maximumAccountArchiveImportBytes(quotaPolicy),
+            maximumPayloadBytes: quotaPolicy.revisionBytes,
+            quotaPolicy,
+            inspectPayload: accountArchivePayloadInspector,
+          });
+          if (prepared.source.accountId !== initialAuth.user.id) {
+            await received.cleanup();
+            received = null;
+            return send(response, 409, {
+              error: "账号归档属于其他账号；不能导入当前账号，现有云存档未修改",
+              code: "ACCOUNT_ARCHIVE_ACCOUNT_MISMATCH",
+            });
+          }
+          const result = await store.runAtomic(async () => {
+            const auth = authenticatedUser(request, store);
+            if (!auth || auth.user.id !== initialAuth.user.id) {
+              const error = new Error("登录已过期，现有云存档未修改");
+              error.statusCode = 401;
+              error.code = "ACCOUNT_ARCHIVE_IMPORT_AUTH_CHANGED";
+              throw error;
+            }
+            const actualGuard = currentAccountArchiveImportGuard(store, auth.user.id);
+            if (actualGuard !== expectedGuard) {
+              const error = new Error("归档校验期间云存档已变化，服务器保留双方；请重新确认");
+              error.statusCode = 409;
+              error.code = "ACCOUNT_ARCHIVE_IMPORT_GUARD_CONFLICT";
+              error.guard = actualGuard;
+              throw error;
+            }
+            if (disconnect.signal.aborted) {
+              const error = new Error("账号归档导入已取消，现有云存档未修改");
+              error.statusCode = 499;
+              error.code = "ACCOUNT_ARCHIVE_IMPORT_ABORTED";
+              throw error;
+            }
+            installAccountArchiveCloudSaves(store, auth.user.id, prepared.refs);
+            appendAudit(store, request, "account.archive_imported", auth.user.id);
+            await store.persist({ operation: "account.archive-import" });
+            return {
+              imported: true,
+              revisionCount: prepared.refs.length,
+              logicalBytes: prepared.quota.logicalBytes,
+              guard: currentAccountArchiveImportGuard(store, auth.user.id),
+              modes: Object.fromEntries(SAVE_MODES.map((mode) => [mode, cloudSaveSlotMetadata(store, auth.user.id, mode)])),
+              leaderboardRevalidationRequired: {
+                normal: leaderboardRevalidationThresholds(store.data, auth.user.id).normal > 0,
+                speedrun: leaderboardRevalidationThresholds(store.data, auth.user.id).speedrun > 0,
+              },
+            };
+          });
+          await received.cleanup();
+          received = null;
+          return send(response, 200, result);
+        } finally {
+          request.removeListener("aborted", onAborted);
+          response.removeListener("close", onResponseClose);
+          await received?.cleanup().catch(() => undefined);
+        }
+      }
+
       if (request.method === "POST" && url.pathname === "/api/account/delete") {
         const auth = authenticatedUser(request, store);
         if (!auth) return send(response, 401, { error: "请先登录" });
@@ -3928,6 +4533,29 @@ export async function createCloudServer({
         if (!mode) return send(response, 400, { error: "云存档模式无效", code: "SAVE_MODE_INVALID" });
         const history = [...saveHistory(store, auth.user.id, slot, mode)].reverse().map((save) => cloudSaveMetadata(save, slot, mode));
         return send(response, 200, { history, mode, slot });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/cloud-save/quota") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        return send(response, 200, { cloudQuota: cloudQuotaSnapshot(store.data, auth.user.id, quotaPolicy) });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/cloud-save/quota") {
+        const auth = authenticatedUser(request, store);
+        if (!auth) return send(response, 401, { error: "请先登录" });
+        const body = await readJson(request);
+        const slot = normalizedCloudSaveSlot(body.slot ?? "main");
+        const mode = normalizedCloudSaveMode(body.mode ?? "normal");
+        const size = Number(body.size);
+        const checksum = typeof body.checksum === "string" && /^[a-f0-9]{64}$/.test(body.checksum) ? body.checksum : null;
+        if (!slot) return send(response, 400, { error: "云存档槽位无效", code: "CLOUD_QUOTA_TARGET_INVALID" });
+        if (!mode) return send(response, 400, { error: "云存档模式无效", code: "SAVE_MODE_INVALID" });
+        if (!Number.isSafeInteger(size) || size < 0 || size > cloudTransferContract.savePayloadLimitBytes || (body.checksum != null && !checksum)) {
+          return send(response, 400, { error: "云存档容量预检参数无效", code: "CLOUD_QUOTA_INPUT_INVALID" });
+        }
+        const plan = planCloudSaveUpload(store.data, auth.user.id, mode, slot, { size, checksum }, quotaPolicy);
+        return send(response, 200, { plan: publicCloudQuotaPlan(plan) });
       }
 
       if (request.method === "GET" && url.pathname === "/api/cloud-save") {
@@ -4037,6 +4665,20 @@ export async function createCloudServer({
           runtime.cloudConflicts += 1;
           return send(response, 409, { error: "云端已有更新版本，请先下载或确认覆盖", cloudSave: cloudSaveMetadata(current, slot, effectiveMode) });
         }
+        const quotaPlan = planCloudSaveUpload(store.data, auth.user.id, effectiveMode, slot, {
+          size: payloadSize,
+          checksum: payloadChecksum,
+        }, quotaPolicy);
+        if (!quotaPlan.accepted) {
+          return send(response, quotaPlan.reason === "revisionBytes" ? 413 : 507, {
+            error: quotaPlan.reason === "revisionBytes"
+              ? "单个云存档修订超过容量上限，本地存档未修改"
+              : "当前云存档配额不足；服务器没有删除其他模式或槽位，本地存档未修改",
+            code: quotaPlan.code,
+            plan: publicCloudQuotaPlan(quotaPlan),
+          });
+        }
+        const pruned = pruneCloudSaveRevisions(store, auth.user.id, slot, effectiveMode, quotaPlan.prune.revisions);
         const next = {
           revision: (current?.revision ?? 0) + 1,
           payload: body.payload,
@@ -4065,6 +4707,7 @@ export async function createCloudServer({
           fingerprint: operationFingerprint,
           cloudSave: metadata,
         });
+        if (pruned.revisionCount > 0) appendAudit(store, request, "cloud.history_pruned_for_quota", auth.user.id);
         await store.persist();
         return send(response, 200, { cloudSave: metadata });
       }
@@ -4088,6 +4731,20 @@ export async function createCloudServer({
         if (!source) return send(response, 404, { error: "历史修订不存在或已过期" });
         const materializedSource = materializeCloudSave(store, auth.user.id, slot, source, mode);
         if (!materializedSource) return send(response, 500, { error: "历史云存档正文缺失，无法恢复", code: "CLOUD_SAVE_PAYLOAD_MISSING" });
+        const quotaPlan = planCloudSaveUpload(store.data, auth.user.id, mode, slot, {
+          size: materializedSource.size,
+          checksum: materializedSource.checksum,
+        }, quotaPolicy);
+        if (!quotaPlan.accepted) {
+          return send(response, quotaPlan.reason === "revisionBytes" ? 413 : 507, {
+            error: quotaPlan.reason === "revisionBytes"
+              ? "待恢复的云存档修订超过容量上限，现有云存档未修改"
+              : "当前云存档配额不足；历史恢复未执行，其他模式和槽位未修改",
+            code: quotaPlan.code,
+            plan: publicCloudQuotaPlan(quotaPlan),
+          });
+        }
+        const pruned = pruneCloudSaveRevisions(store, auth.user.id, slot, mode, quotaPlan.prune.revisions);
         const restored = {
           ...materializedSource,
           revision: (current?.revision ?? 0) + 1,
@@ -4101,6 +4758,7 @@ export async function createCloudServer({
         }
         dayMetric.cloudUploads += 1;
         appendAudit(store, request, "cloud.revision_restored", auth.user.id);
+        if (pruned.revisionCount > 0) appendAudit(store, request, "cloud.history_pruned_for_quota", auth.user.id);
         await store.persist();
         return send(response, 200, { cloudSave: cloudSaveMetadata(restored, slot, mode) });
       }
@@ -4234,12 +4892,13 @@ export async function createCloudServer({
       return send(response, 404, { error: "接口不存在" });
     } catch (error) {
       if (error?.code === "DOWNLOAD_CANCELLED") return undefined;
+      if (error?.code === "ACCOUNT_ARCHIVE_ABORTED") return undefined;
       if (response.headersSent) throw error;
       runtime.errors += 1;
       dayMetric.errors += 1;
       logger.error?.("cloud request failed", error);
       return send(response, error?.statusCode || 500, {
-        error: error?.statusCode ? error.message : "服务暂时不可用",
+        error: error?.statusCode || error instanceof AccountArchiveError ? error.message : "服务暂时不可用",
         ...(error?.code ? { code: error.code } : {}),
       }, Number.isInteger(error?.retryAfterSeconds) ? { "retry-after": String(error.retryAfterSeconds) } : {});
     }
@@ -4251,8 +4910,10 @@ export async function createCloudServer({
       "/api/admin/account",
       "/api/account/export",
     ]);
-    const atomicRequest = !["GET", "HEAD", "OPTIONS"].includes(request.method ?? "GET") || atomicGetRoutes.has(requestUrl.pathname);
-    if (runtime.shuttingDown && atomicRequest) {
+    const mutatingRequest = !["GET", "HEAD", "OPTIONS"].includes(request.method ?? "GET") || atomicGetRoutes.has(requestUrl.pathname);
+    const streamedAccountImport = request.method === "POST" && requestUrl.pathname === "/api/account/import/archive";
+    const atomicRequest = mutatingRequest && !streamedAccountImport;
+    if (runtime.shuttingDown && mutatingRequest) {
       response.setHeader("connection", "close");
       return send(response, 503, { error: "服务正在安全关闭，请稍后重试", code: "SERVER_SHUTTING_DOWN" }, { "retry-after": "1" });
     }

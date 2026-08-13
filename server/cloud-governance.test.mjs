@@ -9,6 +9,7 @@ import {
   publicCloudHistoryPrunePlan,
   trimCloudHistoryMetadataInPlace,
 } from "./cloud-governance.mjs";
+import { initializeCloudPayloadStore, writeCloudPayload } from "./cloud-payload-store.mjs";
 
 function fixtureData() {
   return {
@@ -86,6 +87,30 @@ test("reports SQLite table, page and revision sizes without exposing payloads", 
     assert.equal(metrics.databaseBytes, 4096);
     assert.equal(metrics.walBytes, 512);
     assert.equal(JSON.stringify(metrics).includes("payload-one"), false);
+  } finally {
+    database.close();
+  }
+});
+
+test("reports logical and physical payload bytes after content-addressed deduplication", () => {
+  const database = new Database(":memory:");
+  try {
+    database.exec("CREATE TABLE app_state (id INTEGER PRIMARY KEY, payload TEXT); CREATE TABLE cloud_save_payloads (user_id TEXT NOT NULL, slot TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (user_id, slot, revision)) WITHOUT ROWID");
+    initializeCloudPayloadStore(database);
+    database.prepare("INSERT INTO app_state VALUES (1, ?)").run(JSON.stringify(fixtureData()));
+    const payload = JSON.stringify({ state: { version: 46, mode: "normal" } });
+    database.transaction(() => {
+      writeCloudPayload(database, { userId: "user_a", slot: "main", revision: 1, payload });
+      writeCloudPayload(database, { userId: "user_a", slot: "1", revision: 1, payload });
+    })();
+    const metrics = collectSqliteGovernanceMetrics(database, fixtureData());
+    assert.equal(metrics.cloudPayloadRows, 2);
+    assert.equal(metrics.cloudPayloadAliasRows, 2);
+    assert.equal(metrics.cloudPayloadBlobBytes, Buffer.byteLength(payload));
+    assert.equal(metrics.cloudPayloadLogicalBytes, Buffer.byteLength(payload) * 2);
+    assert.equal(metrics.cloudPayloadDeduplicatedBytes, Buffer.byteLength(payload));
+    assert.equal(metrics.cloudPayloadOrphanBlobs, 0);
+    assert.equal(JSON.stringify(metrics).includes(payload), false);
   } finally {
     database.close();
   }

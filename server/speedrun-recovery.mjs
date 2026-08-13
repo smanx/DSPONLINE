@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { inspectSavePayloadIntegrity } from "./save-integrity.mjs";
+import { readCloudPayload } from "./cloud-payload-store.mjs";
 
 export const SPEEDRUN_RECOVERY_CONFIRMATION_PREFIX = "RECOVER_SPEEDRUN";
 const TARGET_ID = "white_matrix_1m";
@@ -33,8 +34,7 @@ function currentMainSave(data, accountId) {
 }
 
 function readMainPayload(database, accountId, revision) {
-  const row = database.prepare("SELECT payload FROM cloud_save_payloads WHERE user_id = ? AND slot = 'main' AND revision = ?").get(accountId, revision);
-  return typeof row?.payload === "string" ? row.payload : null;
+  return readCloudPayload(database, { userId: accountId, slot: "main", revision });
 }
 
 function validateCandidate(database, accountId, now = Date.now()) {

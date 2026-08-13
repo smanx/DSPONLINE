@@ -97,6 +97,7 @@ test("classifies writer routes without treating ordinary reads as mutations", ()
   assert.equal(requestRequiresWriter("HEAD", "/api/leaderboard"), false);
   assert.equal(requestRequiresWriter("OPTIONS", "/api/cloud-save"), false);
   assert.equal(requestRequiresWriter("GET", "/api/account/export"), true);
+  assert.equal(requestRequiresWriter("POST", "/api/account/import/archive"), true);
   assert.equal(requestRequiresWriter("PUT", "/api/cloud-save"), true);
 });
 

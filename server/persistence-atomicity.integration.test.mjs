@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { createCloudServer } from "./index.mjs";
+import { collectCloudPayloadStoreStats, readCloudPayload } from "./cloud-payload-store.mjs";
 import { computeSaveStateChecksum } from "./save-integrity.mjs";
 
 const DIRECT_SAVE_CONTENT_TYPE = "application/vnd.dspidle.save+json";
@@ -227,12 +228,20 @@ async function assertCurrentSave(running, route, headers, expectedPayload, expec
 }
 
 function payloadRows(server, accountId, storageSlot) {
-  return server.store.database.prepare(`
-    SELECT revision, payload
+  const rows = server.store.database.prepare(`
+    SELECT revision
     FROM cloud_save_payloads
     WHERE user_id = ? AND slot = ?
     ORDER BY revision ASC
   `).all(accountId, storageSlot);
+  return rows.map(({ revision }) => ({
+    revision,
+    payload: readCloudPayload(server.store.database, { userId: accountId, slot: storageSlot, revision }),
+  }));
+}
+
+function payloadStoreStats(server) {
+  return collectCloudPayloadStoreStats(server.store.database);
 }
 
 const SQLITE_FAILURE_SCENARIOS = [
@@ -265,6 +274,7 @@ for (const [index, scenario] of SQLITE_FAILURE_SCENARIOS.entries()) {
       );
       assert.equal(baseline.response.status, 200, JSON.stringify(baseline.body));
       assert.equal(baseline.body.cloudSave.revision, 1);
+      const storageBeforeFailure = payloadStoreStats(running.server);
 
       faults.arm(scenario.phase, scenario.code);
       const failed = await uploadJson(
@@ -294,6 +304,7 @@ for (const [index, scenario] of SQLITE_FAILURE_SCENARIOS.entries()) {
       assert.deepEqual(payloadRows(running.server, account.accountId, "1"), [
         { revision: 1, payload: baselinePayload },
       ]);
+      assert.deepEqual(payloadStoreStats(running.server), storageBeforeFailure, "failed transaction must not leave an alias or orphan blob");
 
       const recovery = await uploadJson(
         running.baseUrl,
@@ -408,6 +419,10 @@ test("same expectedRevision concurrent PUTs produce one commit and one conflict"
     assert.deepEqual(payloadRows(running.server, account.accountId, "3"), [
       { revision: 1, payload: payloads[winnerIndex] },
     ]);
+    const storage = payloadStoreStats(running.server);
+    assert.equal(storage.rows.aliases, 1);
+    assert.equal(storage.blobs.referenced, 1);
+    assert.equal(storage.blobs.orphan, 0);
     const readiness = await request(running.baseUrl, "/api/ready");
     assert.equal(readiness.response.status, 200, JSON.stringify(readiness.body));
     assert.equal(readiness.body.writable, true);
@@ -810,6 +825,10 @@ test("requestId receipt replays one committed cloud PUT, rejects conflicts, and 
     assert.deepEqual(payloadRows(running.server, account.accountId, "2"), [
       { revision: 1, payload },
     ]);
+    const storage = payloadStoreStats(running.server);
+    assert.equal(storage.rows.aliases, 1);
+    assert.equal(storage.blobs.referenced, 1);
+    assert.equal(storage.blobs.orphan, 0);
 
     const queriedAgain = await request(
       running.baseUrl,
