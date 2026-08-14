@@ -55,6 +55,9 @@ export interface SimulationRuntimeStartupRecoveryBinding {
 export interface SimulationRuntimeStartupRecoveryCandidate {
   sourceBaseIdentity: SimulationRuntimeRecoveryBaseIdentity;
   sourceRecovery: SimulationRuntimeDurableRecoveryReadRecord | null;
+  /** Revision/sequence after every finalized and pending T0 operation replayed. */
+  replayedSequence: number;
+  replayedStateRevision: number;
   replayedWallSeconds: number;
   replayedSimulationSeconds: number;
   registryFingerprint: string;
@@ -119,6 +122,8 @@ export async function prepareSimulationRuntimeStartupRecovery(input: {
     throw new Error("durable recovery 已隔离损坏记录；请重试恢复，原主存档未修改");
   }
   let state = input.state;
+  let replayedSequence = 0;
+  let replayedStateRevision = 0;
   let replayedWallSeconds = 0;
   let replayedSimulationSeconds = 0;
   if (read.recovery) {
@@ -133,6 +138,8 @@ export async function prepareSimulationRuntimeStartupRecovery(input: {
       }),
     });
     state = replay.state;
+    replayedSequence = replay.replay.finalSequence;
+    replayedStateRevision = replay.replay.finalStateRevision;
     replayedWallSeconds = replay.replay.totalWallSeconds;
     replayedSimulationSeconds = replay.replay.totalSimulationSeconds;
   }
@@ -149,6 +156,8 @@ export async function prepareSimulationRuntimeStartupRecovery(input: {
     candidate: {
       sourceBaseIdentity: baseIdentity,
       sourceRecovery: read.recovery,
+      replayedSequence,
+      replayedStateRevision,
       replayedWallSeconds,
       replayedSimulationSeconds,
       registryFingerprint: input.registry.fingerprint,
@@ -190,7 +199,11 @@ export async function finalizeSimulationRuntimeStartupRecovery(input: {
   const checkpoint = createSimulationRuntimeDurablePrimaryCheckpoint({
     baseIdentity: t1Identity,
     sessionId: createStartupSessionId(),
-    stateRevision: 1,
+    // T1 absorbs the replayed journal into its primary payload, but the
+    // monotonic runtime revision must not reset to 1. Keeping the replay
+    // result revision prevents stale commands from an already-replayed tab
+    // from being accepted after startup rebase.
+    stateRevision: input.candidate.replayedStateRevision,
     registry: input.registry,
     committedAtMs: t1Identity.savedAt,
   });
