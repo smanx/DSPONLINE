@@ -71,6 +71,12 @@ test("settings opens the complete tutorial and keeps independent reading progres
 
 test("time warp starts a blocking pure-idle page and can stop safely", async ({ page }) => {
   await page.addInitScript(() => {
+    (window as typeof window & { __DSP_RUNTIME_TRANSITIONS__?: unknown }).__DSP_RUNTIME_TRANSITIONS__ = {
+      enabled: true,
+      events: [],
+      active: {},
+      counters: {},
+    };
     const envelope = JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1") ?? "{}");
     envelope.state.entities = [{
       id: "warp", kind: "machine", planetId: "home", position: { x: 0, y: 0 }, buildingId: "time_warp_device", machineCount: 1,
@@ -108,6 +114,15 @@ test("time warp starts a blocking pure-idle page and can stop safely", async ({ 
   expect(await page.evaluate(() =>
     (window as typeof window & { __pureIdleReuseTracker?: { initializes: number } }).__pureIdleReuseTracker?.initializes ?? 0,
   )).toBe(1);
+  const persistencePhases = await page.evaluate(() => {
+    const events = (window as typeof window & {
+      __DSP_RUNTIME_TRANSITIONS__?: { events: Array<{ phase: string; detail?: { kind?: string; phase?: string } }> };
+    }).__DSP_RUNTIME_TRANSITIONS__?.events ?? [];
+    return events
+      .filter((event) => event.phase === "persistence-phase" && event.detail?.kind === "pure-idle-stop")
+      .map((event) => event.detail?.phase);
+  });
+  expect(persistencePhases).toEqual(["checkpoint", "serialize-write-readback", "complete"]);
 });
 
 test("an interrupted frozen settlement exposes retry and explicit abandon actions", async ({ page }) => {

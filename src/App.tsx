@@ -1833,6 +1833,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     if (kind === "autosave") beginRuntimeTransition("autosave");
     else if (kind === "pure-idle-stop") beginRuntimeTransition("pure-idle-stop");
     setRuntimePersistenceProgress({ id: progressId, kind, phase: "checkpoint", startedAt, message: "正在取得模拟检查点…" });
+    recordRuntimeTransitionPhase("persistence-phase", startedAt, 0, { kind, phase: "checkpoint" });
     const ownsBarrier = state === undefined;
     if (ownsBarrier) {
       simulationSaveBarrierDepthRef.current += 1;
@@ -1842,6 +1843,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       const saveState = state ?? await requestAuthoritativeSimulationCheckpoint();
       recordRuntimeTransitionPhase("save-authoritative-checkpoint", startedAt, performance.now() - startedAt, { kind });
       setRuntimePersistenceProgress({ id: progressId, kind, phase: "serialize-write-readback", startedAt, message: "正在序列化、写入并逐字复核存档…" });
+      recordRuntimeTransitionPhase("persistence-phase", performance.now(), 0, { kind, phase: "serialize-write-readback" });
       const result = await saveGameVerified(saveState);
       const durationMs = performance.now() - startedAt;
       if (monitorSave) performanceMonitor.recordSave({ durationMs, bytes: result.bytes ?? 0, stages: result.timings ?? null });
@@ -1860,6 +1862,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         startedAt,
         message: result.success ? `存档已验证完成（${Math.round(durationMs)} ms）` : result.message,
       });
+      recordRuntimeTransitionPhase("persistence-phase", performance.now(), 0, { kind, phase: result.success ? "complete" : "failed" });
       if (kind === "autosave") completeRuntimeTransition("autosave", result.success ? "save-complete" : "save-failed", { durationMs });
       else if (kind === "pure-idle-stop") completeRuntimeTransition("pure-idle-stop", result.success ? "save-complete" : "save-failed", { durationMs });
       window.setTimeout(() => setRuntimePersistenceProgress((current) => current?.id === progressId ? null : current), result.success ? 2_000 : 8_000);
@@ -1867,6 +1870,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     } catch (error) {
       const message = error instanceof Error ? error.message : "存档流程失败";
       setRuntimePersistenceProgress({ id: progressId, kind, phase: "failed", startedAt, message });
+      recordRuntimeTransitionPhase("persistence-phase", performance.now(), 0, { kind, phase: "failed" });
       if (kind === "autosave") completeRuntimeTransition("autosave", "save-failed");
       else if (kind === "pure-idle-stop") completeRuntimeTransition("pure-idle-stop", "save-failed");
       window.setTimeout(() => setRuntimePersistenceProgress((current) => current?.id === progressId ? null : current), 8_000);
