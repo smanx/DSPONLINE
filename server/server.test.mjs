@@ -334,6 +334,7 @@ test("rejects ordinary and forbidden saves while accepting an eligible speedrun 
   const factoryId = "speedrun_guard_factory_0001";
   const speedrunState = {
     ...baseState,
+    settings: { ...baseState.settings, resourceMode: "infinite" },
     speedrun: {
       enabled: true,
       mode: "speedrun",
@@ -371,11 +372,15 @@ test("rejects ordinary and forbidden saves while accepting an eligible speedrun 
   const accepted = await request("/api/speedrun/submit", { method: "POST", headers, body: JSON.stringify(submissionBody) });
   assert.equal(accepted.response.status, 200, JSON.stringify(accepted.body));
   assert.equal(accepted.body.verified, true);
+  assert.equal(accepted.body.entry.resourceMode, "infinite");
   assert.equal(Object.hasOwn(accepted.body.entry, "factoryId"), false, "public submit response must not expose the private factory identity");
   assert.equal(accepted.body.entry.userId, accepted.body.entry.publicId);
   const repeated = await request("/api/speedrun/submit", { method: "POST", headers, body: JSON.stringify(submissionBody) });
   assert.equal(repeated.response.status, 200);
   assert.equal(repeated.body.idempotent, true);
+  const publicInfiniteBoard = await request("/api/speedrun/leaderboard?targetId=white_matrix_1m&seasonId=season_01");
+  assert.equal(publicInfiniteBoard.response.status, 200);
+  assert.equal(publicInfiniteBoard.body.entries.find((entry) => entry.publicId === accepted.body.entry.publicId)?.resourceMode, "infinite");
 
   const forbiddenPayload = createModeSavePayload({ ...speedrunState, experimentalSettlement: true }, "speedrun", Date.now() + 1);
   const forbiddenUpload = await request("/api/cloud-save?mode=speedrun", {
@@ -1796,7 +1801,7 @@ test("validates v33 proliferator and exact infinite research fields while accept
   });
   const invalidPayloads = [
     payloadFor({ proliferatorBufferLimit: 0 }),
-    payloadFor({ proliferatorBufferLimit: 100_001 }),
+    payloadFor({ proliferatorBufferLimit: 100_000_001 }),
     payloadFor({ infiniteResearch: research({ matrix_compression: { level: 1_001 } }) }),
     payloadFor({ infiniteResearch: research({ continuum_simulation: { level: 24 } }) }),
     payloadFor({ infiniteResearch: research({ matrix_compression: { progress: "01" } }) }),
@@ -1807,7 +1812,10 @@ test("validates v33 proliferator and exact infinite research fields while accept
     const rejected = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload, expectedRevision: 1 }) });
     assert.equal(rejected.response.status, 400);
   }
-  const valid = payloadFor({ infiniteResearch: research({ matrix_compression: { level: 1_000, historicalLevel: 1_125, progress: "31441647386989570364354250" } }) });
+  const valid = payloadFor({
+    proliferatorBufferLimit: 100_000_000,
+    infiniteResearch: research({ matrix_compression: { level: 1_000, historicalLevel: 1_125, progress: "31441647386989570364354250" } }),
+  });
   const accepted = await request("/api/cloud-save?slot=3", { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ payload: valid, expectedRevision: 1 }) });
   assert.equal(accepted.response.status, 200);
 });

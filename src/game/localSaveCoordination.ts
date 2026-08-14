@@ -238,6 +238,28 @@ export function canClaimLocalSaveWriterLease(
 }
 
 /**
+ * Renew an expired lease only when the durable owner and fencing token still
+ * identify this exact writer. A long parse, structured clone, or IndexedDB
+ * preparation can delay the heartbeat beyond 15 seconds without creating a
+ * competing writer. Treating that delay as a cross-tab fork creates a false
+ * conflict for large first-time imports. A real takeover always changes the
+ * owner or fencing token and therefore remains rejected.
+ */
+export function renewOwnedLocalSaveWriterLease(
+  lease: LocalSaveWriterLease | null,
+  writerId: string,
+  fencingToken: number,
+  now = Date.now(),
+): LocalSaveWriterLease | null {
+  if (!lease || lease.ownerId !== writerId || lease.fencingToken !== fencingToken) return null;
+  return {
+    ...lease,
+    heartbeatAt: now,
+    expiresAt: now + LOCAL_SAVE_LEASE_DURATION_MS,
+  };
+}
+
+/**
  * Read the envelope identity without JSON.parse of a multi-megabyte state.
  * savedAt is emitted before state and checksum is the final envelope field.
  */

@@ -1,6 +1,6 @@
 # 测试与发布基线
 
-> `1.0.42` 固定运行时源码 `8056d2cb0e1b46757676b490c08f28a1e66fd0a6` 的开发侧最终门禁：clean root/server install、typecheck；Vitest 139 文件通过/6 条件跳过、1222/18；server 347/2；ops 55/6（6 项仅真实 Linux）；native 24/24；Chromium 344/9（353 总项）；Firefox/WebKit 2/2；生产预览 PWA 1/1；production audit 根/server 均 0；125 个运行时包许可证；通用 Web、162 文件 API 展开包、Windows unpacked 诊断包、Android unsigned APK/AAB 均构建并校验通过。最终通用 Web 候选首屏 184,570 B gzip、菜单 273,830 B、禁止首屏模块为空。Windows 诊断包隔离 profile 启动观察到 4 个候选进程并全部结束；Android `bundleRelease`、`assembleRelease`、`lintVitalRelease`、zipalign 通过，`apksigner` 按预期拒绝 unsigned APK。Chromium 9 条跳过均来自未提供的真实玩家/终局只读夹具或开发服务器模式 PWA；PWA 已在生产预览单独通过，本轮没有读取玩家存档。真实 systemd/Nginx、正式签名、覆盖升级和实体设备仍由 Release Agent 执行。
+> `1.0.42` 正在基于香港最终 1.0.41 热修重新固定候选。旧 `8056d2cb… / 1.0.42+8056d2cb0e1b` 的完整门禁与制品只作为历史诊断，不再满足当前运行时范围且不得发布。当前聚焦门禁为 typecheck、相关 Vitest 273/273、server/security 60/2、Chromium 150/1，均 0 失败；新的全量计数、构建预算、生产依赖审计、原生诊断件与不可变制品必须在新的 clean SHA 上从头生成，见本文第 51 节。
 
 > `DSPIDLE-1041-HK-GC-HOTFIX` + `DSPIDLE-1041-BLACK-HOLE-STATE` 开发候选（2026-08-14）：根 `npm ci` 安装 456 包并报告 1 moderate/4 high 的全依赖审计项，server `npm ci` 安装 75 包且 0 漏洞；随后根/server `npm audit --omit=dev` 均为 0。typecheck、125 个运行时包许可证和 production build 通过，构建 1925 模块且 startup/menu 预算通过。Vitest 为 136 文件通过/6 文件跳过、1209/18；server 为 355/2；ops 为 55/6（6 条 Linux 专属）；完整 Chromium E2E 为 334/9（343 总项、909.7 秒）；全部 0 失败、0 超时。native clean 首轮因未生成 `android/app/src/main/assets/capacitor.plugins.json` 得到 22 通过/1 跳过/1 失败，先 build 再 `cap sync android` 后复跑为 23/1、0 失败；Android/Windows 不发布。所有服务端写测试使用合成账号与临时 SQLite，没有生产访问。
 
@@ -8,7 +8,7 @@
 
 > `1.0.41` 固定源码 `32daa4f9438095308e3e6be7a0055268abe01e66` 的开发侧最终门禁：typecheck；Vitest 136 文件通过/6 条件跳过、1208/18；server 347/2；ops 55/6（6 项仅真实 Linux）；native 24/24；Chromium 333/9；Firefox/WebKit 2/2；生产预览 PWA 1/1；production audit 根/server 均 0；125 个运行时包许可证；Web、162 文件 API 展开包、Windows unpacked、Android unsigned APK/AAB 均构建通过。Chromium 的 9 条跳过均为未提供真实玩家/终局夹具或开发服务器模式下的 PWA 条件项，PWA 已用生产预览单独 1/1 通过；本轮没有读取玩家存档。所有写入测试使用合成账号和临时 SQLite。由于本机没有 WSL/Docker，真实 systemd/Nginx、UID/GID、flock 和故障切换矩阵没有执行，不能把 Windows 结果记为发布通过。
 
-> **当前发布基线（2026-08-11）**：香港、上海正式 Web/API 使用 `1.0.39 / GameState v46`，上海下载页与 Android/Windows stable 保持 1.0.38；有效资产的 v43 空间站实验存档拒绝加载。量子网络回归以 GameState v46 语义为基线，并保留传统物流站升级兼容测试。1.0.39 不升级存档 envelope、云 schema 或 SQLite layout。
+> **当前发布基线（2026-08-14）**：香港 Web/API 使用 `1.0.41+2e43f5644241`，上海 Web/API 使用原始 `1.0.41+32daa4f94380`；下载页与 Android/Windows stable 未随香港热修改变。两端仍使用 GameState v46、envelope v2、cloud schema v7 和 SQLite layout v2。完整香港生产记录见 [releases/1.0.41.md](./releases/1.0.41.md)。
 
 > `1.0.39` API 热修在 2026-08-11 完成开发与正式发布门禁：typecheck、clean Vite build、Vitest 107 文件通过/6 文件跳过且 950 项通过/18 项跳过、服务端 75/2、运维 6/6、原生工具 8/8、128 个运行时许可证、根与 server 生产依赖审计 0。Playwright 最终完整全量为 282 通过/11 条显式条件夹具跳过/0 失败（293 总项）；首次既有用例瞬时超时后，目标与随后完整全量均通过。source 163/163、candidate 2/2、Web 128/128、API 35/35，以及两地发布前备份、各自副本隔离、原子切换、真实云 PUT、完整公网字节、Range/cache、6 场 Chrome 和 PWA 均通过。所有写入 smoke 仅使用合成账号与临时/备份副本 SQLite，不使用生产或玩家数据。
 
@@ -1187,3 +1187,25 @@ Android `1.0.18 / 1000018` 使用历史长期证书，APK v2/v3 通过，SHA-256
 | PWA / previous stable | 当前 1.0.37 worker 唯一 active；缓存 HTML 哈希与归档一致；离线根页重开；访问 1.0.36 回退前后 Cache Storage 不变 |
 
 用户只对 `1.0.37-853ecdb12795` 明确豁免 Android 真机、低配 Windows、`1.0.36 → 1.0.37` 覆盖升级和约一小时后台门禁，并接受端到端离线约 36.8 秒、30 天非关键估计误差约 81.5%、16x 关键误差上界 1.0、60 秒精确模拟约 12.75 秒的残余风险。不得把这些门禁记为通过，也不得沿用到后续候选。香港灰度时一次只读管理员大库聚合造成 106 条短暂 502/504；受控重启后 20/20 健康通过、`NRestarts=0`，确认稳定后才继续上海。完整生产证据见 [releases/1.0.37.md](./releases/1.0.37.md)。
+
+## 50. `1.0.41` 最终热修基线
+
+香港当前运行 `1.0.41+2e43f5644241`。该热修把云 revision 裁剪的同步全库正文 GC 改为定向 orphan cleanup，并强制微型黑洞两个运行布尔字段进入 v46 稀疏正文。1.0.42 的测试和制品必须以该提交为父级；原始 `32daa4f…` 不能继续作为最终基线。生产证据、备份与回滚边界见 [1.0.41 发布记录](./releases/1.0.41.md)。
+
+## 51. `1.0.42` UI、恢复与规则补充回归
+
+本版不升级 GameState v46、envelope v2、cloud schema v7 或 SQLite layout v2。旧 `8056d2cb…` 候选已作废；新的固定 SHA 和 Build ID 必须在完整门禁后生成。
+
+附件只读诊断确认玩家文件为 36,704,109 bytes（35.004 MiB），envelope v2、GameState v46 和 checksum 有效，含 27,153 个实体、48,917 条线路，无重复实体/线路 ID 或缺失端点；正式检查约 35.9 秒，足以超过 15 秒租约。附件不得提交仓库或用于写入测试，自动化必须运行时生成脱敏 35 MiB 状态。
+
+新增专项至少覆盖：
+
+- 同一 writer 租约过期仍可提交 35 MiB 正文；owner/fencing token 改变时继续拒绝。
+- persisted missing + candidate available 的两个选择、进行中/失败/重试/成功提示、逐字读回和 checksum 校验。
+- 候选已写入但清理阶段丢失租约后，副本保留且新租约重试可以完成；真实双标签分叉仍保留双方版本。
+- 未提交时间扭曲预算在 journal missing/committed/invalid/unavailable/matching 下的时间线归属；真实 wall time 只结算一次，高倍率 debt 不提交，取消保持原正文。
+- 增产剂 1、1,000,000、100,000,000 边界和非法输入；服务端 v33+ 同步校验，旧 v32/v33 存档继续读取。
+- 有限/无限矿物速通提交和公开标签；普通模式、手动槽、实验/极限状态仍拒绝，历史缺标签条目按 finite 展示。
+- 原 1.0.42 UI 的动态安全区、移动原子导航、焦点/inert、Axe、80%～200% 字号、44px 触控、中文输入和教程 revision 全量回归。
+
+开发侧聚焦证据：typecheck 通过；相关 Vitest 273/273；server/security 60/2；Chromium 聚焦批次 150/1（151 总项），均 0 失败。最终全量计数、构建预算、生产依赖审计、原生诊断件和不可变制品哈希将在固定 clean SHA 后写入候选记录。

@@ -3505,19 +3505,22 @@ describe("factory simulation", () => {
     let state = createInitialState();
     state.research.completedTechIds.push("proliferator_1");
     state.construction.spray_coater = 1;
-    state.construction.assembling_machine_mk1 = 100;
-    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 }, 100);
+    state.construction.assembling_machine_mk1 = 1_000_000;
+    state = placeBuilding(state, "assembling_machine_mk1", { x: 0, y: 0 }, 1_000_000);
     const assembler = state.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
     state = installSprayCoater(state, assembler.id);
+    state.settings.productionBufferLimit = 100_000_000;
     state.settings.proliferatorBufferLimit = 120;
     const installed = state.entities.find((entity) => entity.id === assembler.id)!;
+    const ordinaryInputCapacity = getEntityItemInputCapacity(state, installed, "iron_ingot");
 
     expect(getEntityItemInputCapacity(state, installed, "proliferator_mk1")).toBe(120);
     expect(getEntityItemInputCapacity(state, installed, "iron_ingot")).toBeGreaterThan(120);
     installed.inputs.proliferator_mk1 = 200;
-    state.settings.proliferatorBufferLimit = 3_000;
-    expect(getEntityItemInputCapacity(state, installed, "proliferator_mk1")).toBe(3_000);
+    state.settings.proliferatorBufferLimit = 100_000_000;
+    expect(getEntityItemInputCapacity(state, installed, "proliferator_mk1")).toBe(100_000_000);
     expect(installed.inputs.proliferator_mk1).toBe(200);
+    expect(getEntityItemInputCapacity(state, installed, "iron_ingot")).toBe(ordinaryInputCapacity);
   });
 
   it("applies Mk.III speed and power multipliers to an active production node", () => {

@@ -13,6 +13,7 @@ import {
   parseLocalSaveEmergencyMirrorMetadata,
   parseLocalSaveRevision,
   parseLocalSaveWriterLease,
+  renewOwnedLocalSaveWriterLease,
 } from "./localSaveCoordination";
 
 describe("local save cross-tab coordination", () => {
@@ -36,6 +37,18 @@ describe("local save cross-tab coordination", () => {
     expect(canClaimLocalSaveWriterLease(lease, "tab-a", 10_001)).toBe(true);
     expect(canClaimLocalSaveWriterLease(lease, "tab-b", lease.expiresAt - 1)).toBe(false);
     expect(canClaimLocalSaveWriterLease(lease, "tab-b", lease.expiresAt)).toBe(true);
+  });
+
+  it("renews an expired lease only for the same durable writer and fencing token", () => {
+    const lease = createLocalSaveWriterLease("tab-a", null, 10_000);
+    const afterLongImport = lease.expiresAt + 20_000;
+    expect(renewOwnedLocalSaveWriterLease(lease, "tab-a", lease.fencingToken, afterLongImport)).toEqual({
+      ...lease,
+      heartbeatAt: afterLongImport,
+      expiresAt: afterLongImport + LOCAL_SAVE_LEASE_DURATION_MS,
+    });
+    expect(renewOwnedLocalSaveWriterLease(lease, "tab-b", lease.fencingToken, afterLongImport)).toBeNull();
+    expect(renewOwnedLocalSaveWriterLease(lease, "tab-a", lease.fencingToken + 1, afterLongImport)).toBeNull();
   });
 
   it("reads envelope identity without parsing its large state body", () => {

@@ -28,13 +28,23 @@ describe("building buffer limit input", () => {
 });
 
 describe("proliferator buffer limit input", () => {
-  it.each([["1", 1], ["120", 120], ["600", 600], ["3000", 3_000], ["100000", 100_000]])(
+  it.each([["1", 1], ["120", 120], ["600", 600], ["3000", 3_000], ["1000000", 1_000_000], ["100000000", 100_000_000]])(
     "accepts %s",
     (raw, expected) => expect(validateProliferatorBufferLimitInput(raw)).toEqual({ ok: true, value: expected }),
   );
 
-  it.each(["", "0", "100001", "-1", "1.5", "1e3", "abc"])("rejects %s", (raw) => {
-    expect(validateProliferatorBufferLimitInput(raw).ok).toBe(false);
+  it.each([
+    ["", "请输入"],
+    ["0", "不能低于"],
+    ["100000001", "不能高于"],
+    ["-1", "不能为负数"],
+    ["1.5", "只接受整数"],
+    ["1e3", "不接受指数格式"],
+    ["abc", "只能包含数字"],
+  ])("rejects %s with an explicit reason", (raw, reason) => {
+    const result = validateProliferatorBufferLimitInput(raw);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain(reason);
   });
 });
 

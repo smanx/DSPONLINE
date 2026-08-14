@@ -170,15 +170,19 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "界面适配、移动导航与无障碍更新" });
+  const releaseNotes = page.getByRole("dialog", { name: "界面适配、存档恢复与规则更新" });
   await expect(releaseNotes).toBeVisible();
-  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(6);
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(10);
   await expect(releaseNotes).toContainText("工作区跟随真实顶栏与托盘");
   await expect(releaseNotes).toContainText("手机命令跳转一次完成");
   await expect(releaseNotes).toContainText("背景失活与焦点边界统一");
   await expect(releaseNotes).toContainText("窄屏、高字号和触控操作收口");
   await expect(releaseNotes).toContainText("中文输入与页面草稿更稳定");
   await expect(releaseNotes).toContainText("版本信息与回归夹具一致");
+  await expect(releaseNotes).toContainText("35 MiB 首存不再误判跨标签冲突");
+  await expect(releaseNotes).toContainText("未提交时间扭曲预算可安全恢复");
+  await expect(releaseNotes).toContainText("增产剂缓存上限扩展");
+  await expect(releaseNotes).toContainText("无限矿物速通可进入正式榜");
   await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v142-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });

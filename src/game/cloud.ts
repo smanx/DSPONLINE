@@ -363,6 +363,7 @@ export interface SpeedrunLeaderboardEntry {
   completedAtSeconds: number;
   completedAt: number;
   receivedAt: number;
+  resourceMode: "finite" | "infinite";
   verified: boolean;
   rank: number;
 }

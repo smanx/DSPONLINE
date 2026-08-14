@@ -492,6 +492,7 @@ test("projects speedrun display fields while removing factory and save identitie
       receivedAt: 1001,
       saveRevision: 8,
       saveHash: "b".repeat(64),
+      resourceMode: "infinite",
       verified: true,
       rank: 1,
     }],
@@ -499,10 +500,31 @@ test("projects speedrun display fields while removing factory and save identitie
   assert.equal(result.entries[0].userId, "public_speedrun_0001");
   assert.equal(result.entries[0].accountId, "public_speedrun_0001");
   assert.match(result.entries[0].submissionId, /^speedrun_season_01_white_matrix_1m_public_/);
+  assert.equal(result.entries[0].resourceMode, "infinite");
   const serialized = JSON.stringify(result);
   for (const secret of ["user_private_speedrun", "submission_private", "factory_private", "saveRevision", "saveHash", "factoryId"]) {
     assert.equal(serialized.includes(secret), false);
   }
+});
+
+test("defaults historical speedrun rows without a resource label to finite", () => {
+  const result = projectPublicSpeedrunLeaderboard({
+    entries: [{
+      userId: "legacy_speedrun_user",
+      displayName: "旧成绩",
+      avatar: "旧",
+      targetId: "white_matrix_1m",
+      seasonId: "season_01",
+      rulesetVersion: "speedrun-v1",
+      elapsedSeconds: 900,
+      completedAtSeconds: 900,
+      completedAt: 1,
+      receivedAt: 1,
+      verified: true,
+      rank: 1,
+    }],
+  }, { publicIdFor: () => "public_speedrun_legacy" });
+  assert.equal(result.entries[0].resourceMode, "finite");
 });
 
 test("publishes only trusted error codes and static messages, never exception internals", () => {

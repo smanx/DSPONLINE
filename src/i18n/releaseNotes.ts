@@ -29,10 +29,10 @@ export interface LocalizedReleaseNotesUiCopy {
 
 const currentCopy = {
   date: { "zh-CN": "2026年8月14日", en: "August 14, 2026" },
-  title: { "zh-CN": "界面适配、移动导航与无障碍更新", en: "Responsive UI, Mobile Navigation, and Accessibility" },
+  title: { "zh-CN": "界面适配、存档恢复与规则更新", en: "Responsive UI, Save Recovery, and Rules Update" },
   summary: {
-    "zh-CN": "1.0.42 统一桌面和手机工作区的动态安全区、模态焦点与高字号布局，修复命令面板跳转竞态、亮色文字对比度、统计交互语义和中文输入草稿，并让教程、PWA 与原生制品读取同一应用版本。玩法平衡、结算规则、GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
-    en: "Version 1.0.42 unifies dynamic safe areas, modal focus, and large-text layouts across desktop and mobile workspaces; fixes command-palette navigation races, light-theme contrast, statistics semantics, and IME drafts; and aligns tutorial, PWA, and native version metadata. Game balance, settlement rules, GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 remain unchanged.",
+    "zh-CN": "1.0.42 在界面适配、移动导航、无障碍和中文输入优化之外，修复大存档首存误判跨标签冲突与未提交时间扭曲预算阻塞离线结算；增产剂缓存支持 100 万预设和最高 1 亿自定义值，无限矿物速通成绩可提交并带明确标签。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+    en: "Version 1.0.42 combines responsive UI, mobile navigation, accessibility, and IME improvements with fixes for false cross-tab conflicts during large first saves and orphaned time-warp debt blocking offline settlement. Proliferator buffers gain a one-million preset and custom limits up to 100 million, while infinite-resource speedruns can be submitted with an explicit label. GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 remain unchanged.",
   },
   shellTitle: { "zh-CN": "工作区跟随真实顶栏与托盘", en: "Workspaces follow the real shell bounds" },
   shellDescription: {
@@ -63,6 +63,26 @@ const currentCopy = {
   versionDescription: {
     "zh-CN": "教程展示真实应用版本，阅读进度按独立内容修订保存；Web version.json、PWA、Android 与 Windows 构建使用同一版本源。预览测试改为一次性正式存储注入，刷新不再制造多写入者冲突。",
     en: "The tutorial displays the real app version while progress uses an independent content revision. Web version.json, PWA, Android, and Windows builds share one version source, and preview fixtures seed official storage once so reloads no longer create false multi-writer conflicts.",
+  },
+  largeSaveRecoveryTitle: { "zh-CN": "35 MiB 首存不再误判跨标签冲突", en: "35 MiB first saves no longer look like cross-tab conflicts" },
+  largeSaveRecoveryDescription: {
+    "zh-CN": "同一写入者因解析、结构化复制或 IndexedDB 写入超过 15 秒时可安全续租；真实其他标签页仍会阻止覆盖。冲突恢复按钮显示处理中、成功或具体失败原因，候选只有在逐字读回和 checksum 验证后才提交并清理副本。",
+    en: "The same writer can safely renew its lease after parsing, structured cloning, or IndexedDB work exceeds 15 seconds, while a real second tab still blocks overwrites. Recovery actions now show progress, success, or a concrete failure, and candidate copies are removed only after exact read-back and checksum verification.",
+  },
+  timeWarpRecoveryTitle: { "zh-CN": "未提交时间扭曲预算可安全恢复", en: "Orphaned time-warp debt recovers safely" },
+  timeWarpRecoveryDescription: {
+    "zh-CN": "有效纯挂机日志继续独占原时间线；日志缺失或失效时回到最后有效主档，只把真实墙钟时间交给一次普通离线结算，未提交高倍率预算不会重复发放。自动核对失败时可明确选择“恢复检查点并快速结算”。",
+    en: "A valid pure-idle journal continues to own its timeline. If that journal is missing or stale, the game returns to the last valid main-save checkpoint and submits real wall time to ordinary offline settlement exactly once without replaying uncommitted acceleration. If automatic inspection fails, an explicit Restore Checkpoint and Fast Settle action is offered.",
+  },
+  proliferatorBufferTitle: { "zh-CN": "增产剂缓存上限扩展", en: "Expanded proliferator buffer limits" },
+  proliferatorBufferDescription: {
+    "zh-CN": "设置新增 100 万预设，并支持 1～100,000,000 的正整数自定义上限和明确错误提示；只改变已安装增产剂槽的容量，不改变倍率、消耗或补充逻辑。",
+    en: "Settings now include a one-million preset and validated positive-integer custom limits from 1 to 100,000,000. Only installed proliferator-slot capacity changes; multipliers, consumption, and refill behavior do not.",
+  },
+  infiniteSpeedrunTitle: { "zh-CN": "无限矿物速通可进入正式榜", en: "Infinite-resource speedruns can enter the official board" },
+  infiniteSpeedrunDescription: {
+    "zh-CN": "客户端与服务端取消无限矿物禁入规则，服务器从权威速通主云档读取资源模式并给成绩显示“无限矿物”标签；普通银河榜、普通/速通存档隔离和其他公平性校验保持不变。",
+    en: "Client and server no longer reject infinite-resource speedruns. The server derives resource mode from the authoritative speedrun main cloud save and labels those results as Infinite Resources, without changing the normal Galaxy board, mode isolation, or other integrity checks.",
   },
 } as const;
 
@@ -190,6 +210,10 @@ export function getCurrentReleaseNotes(locale: AppLocale): LocalizedReleaseNoteR
       { id: "responsive-large-text", title: currentMessage(locale, "responsiveTitle"), description: currentMessage(locale, "responsiveDescription") },
       { id: "stable-form-drafts", title: currentMessage(locale, "inputTitle"), description: currentMessage(locale, "inputDescription") },
       { id: "version-and-preview-integrity", title: currentMessage(locale, "versionTitle"), description: currentMessage(locale, "versionDescription") },
+      { id: "large-local-save-recovery", title: currentMessage(locale, "largeSaveRecoveryTitle"), description: currentMessage(locale, "largeSaveRecoveryDescription") },
+      { id: "orphaned-time-warp-recovery", title: currentMessage(locale, "timeWarpRecoveryTitle"), description: currentMessage(locale, "timeWarpRecoveryDescription") },
+      { id: "proliferator-buffer-limit", title: currentMessage(locale, "proliferatorBufferTitle"), description: currentMessage(locale, "proliferatorBufferDescription") },
+      { id: "infinite-resource-speedrun", title: currentMessage(locale, "infiniteSpeedrunTitle"), description: currentMessage(locale, "infiniteSpeedrunDescription") },
     ],
   };
 }

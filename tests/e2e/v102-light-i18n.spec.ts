@@ -110,7 +110,7 @@ test("English light release notes are localized and persist dismissal", async ({
   });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/?menu=1&lang=en");
-  const dialog = page.getByRole("dialog", { name: "Responsive UI, Mobile Navigation, and Accessibility" });
+  const dialog = page.getByRole("dialog", { name: "Responsive UI, Save Recovery, and Rules Update" });
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("1.0.42");
   await expect(dialog).toContainText("Workspaces follow the real shell bounds");

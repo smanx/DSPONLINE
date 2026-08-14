@@ -467,9 +467,9 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
         label="增产剂缓存上限"
         value={settings.proliferatorBufferLimit}
         onChange={(proliferatorBufferLimit) => onChange({ proliferatorBufferLimit })}
-        presets={[120, 600, 3_000]}
-        labels={{ 120: "120", 600: "600", 3_000: "3,000" }}
-        rangeLabel="1～100,000"
+        presets={[120, 600, 3_000, 1_000_000]}
+        labels={{ 120: "120", 600: "600", 3_000: "3,000", 1_000_000: "100万" }}
+        rangeLabel="1～100,000,000"
         validate={validateProliferatorBufferLimitInput}
         help="只限制已安装喷涂机当前等级的增产剂物品；内部喷涂点和既有超额库存不会被删除。"
       />

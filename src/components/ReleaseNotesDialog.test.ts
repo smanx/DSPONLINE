@@ -41,7 +41,7 @@ describe("release notes history", () => {
     const english = getCurrentReleaseNotes("en");
     expect(chinese).toMatchObject({ id: CURRENT_RELEASE_NOTES.id, version: "1.0.42" });
     expect(english).toMatchObject({ id: CURRENT_RELEASE_NOTES.id, version: "1.0.42" });
-    expect(chinese.items).toHaveLength(6);
+    expect(chinese.items).toHaveLength(10);
     expect(english.items.map((item) => item.id)).toEqual(chinese.items.map((item) => item.id));
     expect(english.summary).toContain("GameState v46");
     expect(getReleaseNotes1041("en")).toMatchObject({ id: "2026-08-13-v1.0.41", version: "1.0.41" });

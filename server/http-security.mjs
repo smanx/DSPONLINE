@@ -1229,6 +1229,7 @@ const SPEEDRUN_ENTRY_SCHEMA = Object.freeze({
     completedAtSeconds: { type: "number", minimum: 0 },
     completedAt: { type: "number", minimum: 0 },
     receivedAt: { type: "number", minimum: 0 },
+    resourceMode: { type: "literal", values: ["finite", "infinite"] },
     verified: { type: "boolean" },
     rank: { type: "number", minimum: 1, integer: true },
   }),
@@ -1256,6 +1257,7 @@ export function projectPublicSpeedrunLeaderboard(value, { publicIdFor, maximumEn
       completedAtSeconds: ownDataValue(entry, "completedAtSeconds") ?? ownDataValue(entry, "elapsedSeconds"),
       completedAt: ownDataValue(entry, "completedAt"),
       receivedAt: ownDataValue(entry, "receivedAt"),
+      resourceMode: ownDataValue(entry, "resourceMode") === "infinite" ? "infinite" : "finite",
       verified: ownDataValue(entry, "verified") === true,
       rank: Number.isSafeInteger(ownDataValue(entry, "rank")) && ownDataValue(entry, "rank") > 0
         ? ownDataValue(entry, "rank")

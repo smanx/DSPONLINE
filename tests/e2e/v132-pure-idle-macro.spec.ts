@@ -54,6 +54,29 @@ test.describe("1.0.34 pure-idle macro recovery", () => {
     expect(result.remaining).toBeNull();
   });
 
+  test("classifies missing, live matching, and already-committed recovery journals", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const engine = await import("/src/game/engine.ts");
+      const recovery = await import("/src/game/pureIdleRecovery.ts");
+      const missing = await recovery.inspectPureIdleRecovery();
+      const state = engine.createInitialState(20_260_806, false);
+      const created = await recovery.createPureIdleRecovery(state, "stable", 1_000, "inspection-owner", 1_000);
+      if (!created.ok) throw new Error(created.message);
+      const live = await recovery.inspectPureIdleRecovery();
+      const matches = live.status === "valid" && recovery.matchesPureIdleRecoveryCheckpoint(live.record, state);
+      await recovery.recordPureIdleRecoveryTransition(created.record.sessionId, "inspection-owner", {
+        stopReason: "save-finalized",
+        phase: "finalizing",
+        committed: true,
+        committedAtMs: 1_100,
+      }, 1_100);
+      const committed = await recovery.inspectPureIdleRecovery();
+      await recovery.clearPureIdleRecovery(created.record.sessionId, "inspection-owner");
+      return { missing: missing.status, live: live.status, matches, committed: committed.status };
+    });
+    expect(result).toEqual({ missing: "missing", live: "valid", matches: true, committed: "committed" });
+  });
+
   test("limits closed-page high-multiplier settlement to five minutes before ordinary offline time", async ({ page }) => {
     const result = await page.evaluate(async () => {
       const engine = await import("/src/game/engine.ts");

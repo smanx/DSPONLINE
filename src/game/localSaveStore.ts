@@ -27,6 +27,7 @@ import {
   parseLocalSaveEmergencyMirrorMetadata,
   parseLocalSaveRevision,
   parseLocalSaveWriterLease,
+  renewOwnedLocalSaveWriterLease,
   type LocalSaveBroadcastMessage,
   type LocalSaveConflictRecord,
   type LocalSaveRevision,
@@ -139,6 +140,47 @@ export interface LocalSaveConflictSummary {
   createdAt: number;
   candidate: { available: boolean; deleted: boolean; savedAt: number; checksum: string | null };
   persisted: { available: boolean; missing: boolean; savedAt: number; checksum: string | null };
+}
+
+export type LocalSaveConflictResolutionFailureCode =
+  | "storage-unavailable"
+  | "active-writer"
+  | "conflict-missing"
+  | "candidate-missing"
+  | "persisted-missing"
+  | "base-changed"
+  | "candidate-invalid"
+  | "lease-lost"
+  | "verification-failed"
+  | "storage-error";
+
+export type LocalSaveConflictResolutionResult =
+  | {
+      ok: true;
+      resolution: "candidate" | "persisted";
+      elapsedMs: number;
+      savedAt: number;
+      checksum: string | null;
+    }
+  | {
+      ok: false;
+      code: LocalSaveConflictResolutionFailureCode;
+      message: string;
+      retryable: boolean;
+      elapsedMs: number;
+      leaseExpiresAt?: number;
+    };
+
+class LocalSaveConflictResolutionError extends Error {
+  constructor(
+    readonly code: LocalSaveConflictResolutionFailureCode,
+    message: string,
+    readonly retryable: boolean,
+    readonly leaseExpiresAt?: number,
+  ) {
+    super(message);
+    this.name = "LocalSaveConflictResolutionError";
+  }
 }
 
 const cache = new Map<string, string>();
@@ -691,6 +733,8 @@ async function commitCoordinatedRecord(
   const store = transaction.objectStore(RECORD_STORE);
   const leaseRecord = await requestResult(store.get(LOCAL_SAVE_WRITER_LEASE_KEY) as IDBRequest<StoredSaveRecord | undefined>);
   const lease = parseLocalSaveWriterLease(leaseRecord?.value);
+  const renewedLease = renewOwnedLocalSaveWriterLease(lease, writerId, writerStatus.fencingToken, now);
+  if (renewedLease) putStoredValue(store, LOCAL_SAVE_WRITER_LEASE_KEY, JSON.stringify(renewedLease), now);
   const revisionRecord = await requestResult(store.get(localSaveRevisionKey(key)) as IDBRequest<StoredSaveRecord | undefined>);
   const revision = parseLocalSaveRevision(revisionRecord?.value);
   const currentRecord = await requestResult(store.get(key) as IDBRequest<StoredSaveRecord | undefined>);
@@ -699,7 +743,7 @@ async function commitCoordinatedRecord(
   const revisionMatches = (revision?.revision ?? 0) === expectedRevision &&
     (!revision || revision.saveKey === key && revision.deleted === (baseValue === null) &&
       revision.savedAt === baseIdentity.savedAt && revision.checksum === baseIdentity.checksum);
-  const leaseMatches = lease?.ownerId === writerId && lease.fencingToken === writerStatus.fencingToken && lease.expiresAt > now;
+  const leaseMatches = renewedLease !== null;
   const legacyBaseMatches = !revision && expectedRevision === 0 && persisted === baseValue;
   const persistedMatches = persisted === baseValue;
   if (!leaseMatches || !persistedMatches || !(revisionMatches && (revision !== null || legacyBaseMatches))) {
@@ -725,13 +769,16 @@ async function commitCoordinatedRecord(
     previousRevision: expectedRevision,
     value,
     writerId,
-    fencingToken: lease!.fencingToken,
+    fencingToken: renewedLease!.fencingToken,
     now,
   });
   if (value === null) store.delete(key);
   else putStoredValue(store, key, value, now);
   putStoredValue(store, localSaveRevisionKey(key), JSON.stringify(nextRevision), now);
   await done;
+  if (writerStatus.role === "primary" && writerStatus.fencingToken === renewedLease!.fencingToken) {
+    publishWriterStatus({ ...writerStatus, leaseExpiresAt: renewedLease!.expiresAt, reason: "当前标签页负责本地存档" });
+  }
   const stored = await readRecord(db, key);
   if ((stored?.value ?? null) !== value) throw new DOMException("IndexedDB coordinated read-back verification failed", "DataError");
   if (stored) updateStorageEntry(stored);
@@ -1075,26 +1122,103 @@ export async function getLocalSaveConflicts(): Promise<LocalSaveConflictSummary[
     .sort((left, right) => right.createdAt - left.createdAt);
 }
 
-export async function resolveLocalSaveConflict(
+function conflictResolutionFailure(
+  startedAt: number,
+  error: unknown,
+): LocalSaveConflictResolutionResult {
+  const elapsedMs = Math.max(0, Date.now() - startedAt);
+  if (error instanceof LocalSaveConflictResolutionError) {
+    return {
+      ok: false,
+      code: error.code,
+      message: error.message,
+      retryable: error.retryable,
+      elapsedMs,
+      ...(error.leaseExpiresAt !== undefined ? { leaseExpiresAt: error.leaseExpiresAt } : {}),
+    };
+  }
+  if (error instanceof LocalSaveReadOnlyError) {
+    return {
+      ok: false,
+      code: "active-writer",
+      message: "另一个页面仍持有本地存档写入权。请关闭其他同源标签页或 PWA 页面，等待租约到期后重试。",
+      retryable: true,
+      elapsedMs,
+      ...(writerStatus.leaseExpiresAt > 0 ? { leaseExpiresAt: writerStatus.leaseExpiresAt } : {}),
+    };
+  }
+  return {
+    ok: false,
+    code: error instanceof DOMException && error.name === "DataError" ? "verification-failed" : "storage-error",
+    message: error instanceof Error && error.message ? error.message : "本地存档恢复失败，候选副本仍已保留",
+    retryable: true,
+    elapsedMs,
+  };
+}
+
+async function requireConflictResolutionLease(startedAt: number): Promise<LocalSaveConflictResolutionResult | null> {
+  if (writerStatus.role === "primary") return null;
+  if (await claimWriterLease()) return null;
+  const durable = database
+    ? parseLocalSaveWriterLease(await readCoordinationValue(database, LOCAL_SAVE_WRITER_LEASE_KEY))
+    : null;
+  const remainingMs = Math.max(0, (durable?.expiresAt ?? writerStatus.leaseExpiresAt) - Date.now());
+  return {
+    ok: false,
+    code: "active-writer",
+    message: remainingMs > 0
+      ? `另一个页面仍持有本地存档写入权，约 ${Math.max(1, Math.ceil(remainingMs / 1_000))} 秒后可重试。请先关闭其他同源标签页或 PWA 页面。`
+      : "暂时无法取得本地存档写入权，请关闭其他同源标签页或 PWA 页面后重试。",
+    retryable: true,
+    elapsedMs: Math.max(0, Date.now() - startedAt),
+    ...((durable?.expiresAt ?? 0) > 0 ? { leaseExpiresAt: durable!.expiresAt } : {}),
+  };
+}
+
+export async function resolveLocalSaveConflictDetailed(
   conflictId: string,
   resolution: "candidate" | "persisted",
-): Promise<boolean> {
+): Promise<LocalSaveConflictResolutionResult> {
+  const startedAt = Date.now();
   await initializeLocalSaveStore();
-  if (backend !== "indexeddb" || !database) return false;
-  if (writerStatus.role !== "primary" && !await claimWriterLease()) return false;
-  const now = Date.now();
-  const transaction = database.transaction(RECORD_STORE, "readwrite");
-  const done = transactionDone(transaction);
-  const store = transaction.objectStore(RECORD_STORE);
+  if (backend !== "indexeddb" || !database) {
+    return {
+      ok: false,
+      code: "storage-unavailable",
+      message: "当前浏览器的 IndexedDB 不可用，无法安全处理冲突；候选副本保持不变。",
+      retryable: false,
+      elapsedMs: Math.max(0, Date.now() - startedAt),
+    };
+  }
+  const leaseFailure = await requireConflictResolutionLease(startedAt);
+  if (leaseFailure) return leaseFailure;
+
+  let transaction: IDBTransaction | null = null;
+  let done: Promise<void> | null = null;
   try {
+    const now = Date.now();
+    transaction = database.transaction(RECORD_STORE, "readwrite");
+    done = transactionDone(transaction);
+    const store = transaction.objectStore(RECORD_STORE);
     const conflictRecord = await requestResult(store.get(localSaveConflictMetadataKey(conflictId)) as IDBRequest<StoredSaveRecord | undefined>);
     const conflict = parseLocalSaveConflictRecord(conflictRecord?.value);
-    if (!conflict || conflict.resolvedAt !== undefined) throw new Error("冲突记录不存在或已经处理");
+    if (!conflict || conflict.resolvedAt !== undefined) {
+      throw new LocalSaveConflictResolutionError("conflict-missing", "冲突记录不存在或已经处理，请刷新后重新检查。", false);
+    }
     const leaseRecord = await requestResult(store.get(LOCAL_SAVE_WRITER_LEASE_KEY) as IDBRequest<StoredSaveRecord | undefined>);
     const lease = parseLocalSaveWriterLease(leaseRecord?.value);
-    if (!lease || lease.ownerId !== writerId || lease.fencingToken !== writerStatus.fencingToken || lease.expiresAt <= now) {
-      throw new LocalSaveReadOnlyError();
+    const renewedLease = renewOwnedLocalSaveWriterLease(lease, writerId, writerStatus.fencingToken, now);
+    if (!renewedLease) {
+      throw new LocalSaveConflictResolutionError(
+        lease?.ownerId && lease.ownerId !== writerId ? "active-writer" : "lease-lost",
+        lease?.ownerId && lease.ownerId !== writerId
+          ? "另一个页面已取得本地存档写入权。请关闭其他页面或等待租约到期后重试。"
+          : "本页写入租约已经失效且无法安全续期，请重新取得写入权后重试。",
+        true,
+        lease?.expiresAt,
+      );
     }
+    putStoredValue(store, LOCAL_SAVE_WRITER_LEASE_KEY, JSON.stringify(renewedLease), now);
     const candidateRecord = conflict.candidateDeleted
       ? undefined
       : await requestResult(store.get(conflict.candidateKey) as IDBRequest<StoredSaveRecord | undefined>);
@@ -1102,51 +1226,147 @@ export async function resolveLocalSaveConflict(
       ? undefined
       : await requestResult(store.get(conflict.persistedKey) as IDBRequest<StoredSaveRecord | undefined>);
     const currentRecord = await requestResult(store.get(conflict.saveKey) as IDBRequest<StoredSaveRecord | undefined>);
+    const revisionRecord = await requestResult(store.get(localSaveRevisionKey(conflict.saveKey)) as IDBRequest<StoredSaveRecord | undefined>);
     const candidate = conflict.candidateDeleted ? null : candidateRecord?.value ?? null;
     const persistedAtConflict = conflict.persistedMissing ? null : persistedRecord?.value ?? null;
     const current = currentRecord?.value ?? null;
-    if (!conflict.candidateDeleted && candidate === null) throw new Error("冲突候选副本缺失");
-    if (!conflict.persistedMissing && persistedAtConflict === null) throw new Error("冲突持久副本缺失");
-    if (current !== persistedAtConflict) throw new Error("当前存档在确认期间再次发生变化");
+    let revision = parseLocalSaveRevision(revisionRecord?.value);
+    if (!conflict.candidateDeleted && candidate === null) {
+      throw new LocalSaveConflictResolutionError("candidate-missing", "冲突候选副本缺失，当前存档没有被修改。", false);
+    }
+    if (!conflict.persistedMissing && persistedAtConflict === null) {
+      throw new LocalSaveConflictResolutionError("persisted-missing", "冲突发生时的持久副本缺失，当前存档没有被修改。", false);
+    }
     if (resolution === "candidate" && candidate !== null) {
       const candidateIntegrity = inspectSaveEnvelopeChecksum(candidate);
       if (candidateIntegrity.status === "invalid" || inspectedEnvelopeMode(candidateIntegrity) !== modeFromKey(conflict.saveKey)) {
-        throw new Error("冲突候选存档完整性或模式校验失败");
+        throw new LocalSaveConflictResolutionError("candidate-invalid", "冲突候选存档完整性或模式校验失败，候选原文已保留。", false);
       }
     }
-    const selected = resolution === "candidate" ? candidate : current;
-    const revisionRecord = await requestResult(store.get(localSaveRevisionKey(conflict.saveKey)) as IDBRequest<StoredSaveRecord | undefined>);
-    const revision = parseLocalSaveRevision(revisionRecord?.value);
-    const nextRevision = createLocalSaveRevision({
-      saveKey: conflict.saveKey,
-      previousRevision: revision?.revision ?? 0,
-      value: selected,
-      writerId,
-      fencingToken: lease.fencingToken,
-      now,
-    });
-    if (selected === null) store.delete(conflict.saveKey);
-    else putStoredValue(store, conflict.saveKey, selected, now);
-    putStoredValue(store, localSaveRevisionKey(conflict.saveKey), JSON.stringify(nextRevision), now);
-    putStoredValue(store, localSaveConflictMetadataKey(conflictId), JSON.stringify({ ...conflict, resolvedAt: now, resolution }), now);
+    const selected = resolution === "candidate" ? candidate : persistedAtConflict;
+    const selectedIdentity = inspectLocalSaveIdentity(selected);
+    const selectedAlreadyApplied = current === selected && revision?.deleted === (selected === null) &&
+      revision.savedAt === selectedIdentity.savedAt && revision.checksum === selectedIdentity.checksum;
+    const selectedOwnedByThisLease = selectedAlreadyApplied && revision?.writerId === writerId &&
+      revision.fencingToken === renewedLease.fencingToken;
+    if (current !== persistedAtConflict && !selectedAlreadyApplied) {
+      throw new LocalSaveConflictResolutionError("base-changed", "当前存档在确认期间再次发生变化，双方副本均已保留，请刷新后重新选择。", true);
+    }
+    if (!selectedOwnedByThisLease) {
+      revision = createLocalSaveRevision({
+        saveKey: conflict.saveKey,
+        previousRevision: revision?.revision ?? 0,
+        value: selected,
+        writerId,
+        fencingToken: renewedLease.fencingToken,
+        now,
+      });
+      if (selected === null) store.delete(conflict.saveKey);
+      else putStoredValue(store, conflict.saveKey, selected, now);
+      putStoredValue(store, localSaveRevisionKey(conflict.saveKey), JSON.stringify(revision), now);
+    }
     await done;
-    revisionCache.set(conflict.saveKey, nextRevision.revision);
+    transaction = null;
+    done = null;
+    publishWriterStatus({ ...writerStatus, leaseExpiresAt: renewedLease.expiresAt, reason: "正在验证所选本地存档" });
+
+    const [verifiedRecord, verifiedRevisionRaw] = await Promise.all([
+      readRecord(database, conflict.saveKey),
+      readCoordinationValue(database, localSaveRevisionKey(conflict.saveKey)),
+    ]);
+    const verifiedValue = verifiedRecord?.value ?? null;
+    const verifiedRevision = parseLocalSaveRevision(verifiedRevisionRaw);
+    if (verifiedValue !== selected || !verifiedRevision || !revision ||
+      verifiedRevision.revision !== revision.revision || verifiedRevision.writerId !== writerId ||
+      verifiedRevision.fencingToken !== renewedLease.fencingToken || verifiedRevision.deleted !== (selected === null)) {
+      throw new LocalSaveConflictResolutionError("verification-failed", "所选版本写入后的逐字读回校验失败；冲突副本未清理，可以安全重试。", true);
+    }
+    if (resolution === "candidate" && selected !== null) {
+      const verifiedIntegrity = inspectSaveEnvelopeChecksum(verifiedValue as string);
+      if (verifiedIntegrity.status === "invalid" || inspectedEnvelopeMode(verifiedIntegrity) !== modeFromKey(conflict.saveKey)) {
+        throw new LocalSaveConflictResolutionError("verification-failed", "所选版本读回后的 checksum 或模式校验失败；冲突副本未清理。", true);
+      }
+    }
+
+    const finalizedAt = Date.now();
+    transaction = database.transaction(RECORD_STORE, "readwrite");
+    done = transactionDone(transaction);
+    const cleanupStore = transaction.objectStore(RECORD_STORE);
+    const cleanupLeaseRecord = await requestResult(cleanupStore.get(LOCAL_SAVE_WRITER_LEASE_KEY) as IDBRequest<StoredSaveRecord | undefined>);
+    const cleanupLease = renewOwnedLocalSaveWriterLease(
+      parseLocalSaveWriterLease(cleanupLeaseRecord?.value),
+      writerId,
+      renewedLease.fencingToken,
+      finalizedAt,
+    );
+    if (!cleanupLease) {
+      throw new LocalSaveConflictResolutionError("lease-lost", "读回校验已经通过，但清理冲突副本前写入权发生变化；副本保持不变，请重试。", true);
+    }
+    putStoredValue(cleanupStore, LOCAL_SAVE_WRITER_LEASE_KEY, JSON.stringify(cleanupLease), finalizedAt);
+    const latestConflictRecord = await requestResult(cleanupStore.get(localSaveConflictMetadataKey(conflictId)) as IDBRequest<StoredSaveRecord | undefined>);
+    const latestConflict = parseLocalSaveConflictRecord(latestConflictRecord?.value);
+    const latestPrimary = await requestResult(cleanupStore.get(conflict.saveKey) as IDBRequest<StoredSaveRecord | undefined>);
+    const latestRevisionRecord = await requestResult(cleanupStore.get(localSaveRevisionKey(conflict.saveKey)) as IDBRequest<StoredSaveRecord | undefined>);
+    const latestRevision = parseLocalSaveRevision(latestRevisionRecord?.value);
+    if (!latestConflict || latestConflict.resolvedAt !== undefined || (latestPrimary?.value ?? null) !== selected ||
+      !latestRevision || latestRevision.revision !== verifiedRevision.revision || latestRevision.writerId !== writerId ||
+      latestRevision.fencingToken !== cleanupLease.fencingToken) {
+      throw new LocalSaveConflictResolutionError("verification-failed", "最终提交检查发现存档状态已经变化；冲突副本保持不变。", true);
+    }
+    cleanupStore.delete(conflict.candidateKey);
+    cleanupStore.delete(conflict.persistedKey);
+    putStoredValue(cleanupStore, localSaveConflictMetadataKey(conflictId), JSON.stringify({ ...latestConflict, resolvedAt: finalizedAt, resolution }), finalizedAt);
+    await done;
+    transaction = null;
+    done = null;
+
+    revisionCache.set(conflict.saveKey, verifiedRevision.revision);
     if (selected === null) {
       cache.delete(conflict.saveKey);
       removeStorageEntry(conflict.saveKey);
-    } else putCacheValue(conflict.saveKey, selected, now);
-    postCoordinationMessage({ schemaVersion: 1, type: selected === null ? "deleted" : "saved", writerId, sentAt: now, key: conflict.saveKey, revision: nextRevision.revision, fencingToken: nextRevision.fencingToken });
-  } catch {
-    try { transaction.abort(); } catch { /* transaction may already be complete */ }
-    void done.catch(() => undefined);
-    return false;
+    } else putCacheValue(conflict.saveKey, selected, verifiedRecord?.updatedAt ?? finalizedAt);
+    startupConflictId = null;
+    startupConflictCreatedAt = -1;
+    await reloadLocalSaveCache();
+    publishWriterStatus({
+      role: "primary",
+      writerId,
+      fencingToken: cleanupLease.fencingToken,
+      leaseExpiresAt: cleanupLease.expiresAt,
+      reason: resolution === "candidate" ? "候选存档已逐字验证并采用" : "当前持久存档已逐字验证并保留",
+    });
+    postCoordinationMessage({
+      schemaVersion: 1,
+      type: selected === null ? "deleted" : "saved",
+      writerId,
+      sentAt: finalizedAt,
+      key: conflict.saveKey,
+      revision: verifiedRevision.revision,
+      fencingToken: verifiedRevision.fencingToken,
+    });
+    const identity = inspectLocalSaveIdentity(selected);
+    await releaseWriterLeaseForReload();
+    return {
+      ok: true,
+      resolution,
+      elapsedMs: Math.max(0, Date.now() - startedAt),
+      savedAt: identity.savedAt,
+      checksum: identity.checksum,
+    };
+  } catch (error) {
+    if (transaction) {
+      try { transaction.abort(); } catch { /* transaction may already be complete */ }
+    }
+    if (done) void done.catch(() => undefined);
+    return conflictResolutionFailure(startedAt, error);
   }
-  startupConflictId = null;
-  startupConflictCreatedAt = -1;
-  await reloadLocalSaveCache();
-  publishWriterStatus({ role: "primary", writerId, fencingToken: writerStatus.fencingToken, leaseExpiresAt: writerStatus.leaseExpiresAt, reason: resolution === "candidate" ? "已采用本标签页的冲突候选存档" : "已保留当前持久存档" });
-  await releaseWriterLeaseForReload();
-  return true;
+}
+
+export async function resolveLocalSaveConflict(
+  conflictId: string,
+  resolution: "candidate" | "persisted",
+): Promise<boolean> {
+  return (await resolveLocalSaveConflictDetailed(conflictId, resolution)).ok;
 }
 
 export function getLocalSaveBackend(): LocalSaveBackend {

@@ -264,7 +264,7 @@ sudo systemctl restart dsp-idle-cloud.service
 
 如果启动审计发现 malformed alias 或 SQLite `typeof(payload) != 'text'`，自动 cleanup 会 fail-closed 并暂留 orphan；不得用手工 SQL 改成“完整”或直接删除 blob。Release 应在只读备份副本/临时 SQLite 上运行维护审计定位问题，再另行取得数据维护授权。`app_state` metadata checksum 与实际 alias 不一致时，以实际 alias 计入在线引用，metadata 不会被本热修改写。
 
-香港现有 `PUT /api/cloud-save` 维护锁必须保持到以下条件全部满足：不可变 Web/API 制品和 aggregate manifest 复算一致；未激活 API 使用临时 SQLite 通过 health/ready、共享 blob、21 次裁剪和故障回滚 smoke；正式切换后 readiness、backlog、WAL/磁盘、延迟和错误率完成约定观察；Release 明确解除锁。开发完成本身不是解锁授权。边缘可选 telemetry 熔断不改云存档正文，建议在解除锁后继续保留为可逆保护；只有观测证明误触发或另有批准时才移除。代码回滚只切回已验证 API/Web 制品，绝不恢复数据库。上海、下载页、Android 和 Windows 不在本热修发布范围。
+香港 `PUT /api/cloud-save` 维护锁已在 2026-08-14 热修切换、观察和真实上传验证后由 Release 明确解除；当前 telemetry 202 熔断与云存档维护锁相互独立。若后续故障重新启用维护锁，必须保持到以下条件全部满足：不可变 Web/API 制品和 aggregate manifest 复算一致；未激活 API 使用临时 SQLite 通过 health/ready、共享 blob、21 次裁剪和故障回滚 smoke；正式切换后 readiness、backlog、WAL/磁盘、延迟和错误率完成约定观察；Release 再次明确解除。开发完成本身不是解锁授权。代码回滚只切回已验证 API/Web 制品，绝不恢复数据库。上海、下载页、Android 和 Windows 不在该香港热修发布范围；完整状态见 [1.0.41 发布记录](./releases/1.0.41.md)。
 
 账号处置先用 `GET /api/admin/account?accountId=...` 核对精确账号摘要，再向 `POST /api/admin/account/action` 提交 `CONFIRM:<action>:<accountId>`。彻底注销还要求最近 24 小时内的已验证本机备份时间戳；不得用显示名、邮箱模糊匹配或直接编辑 SQLite。速通历史恢复只能离线运行 `server/speedrun-recovery.mjs`：先 dry-run 核对最新主云 revision、元数据/正文哈希、v46 速通身份和百万白糖事实；apply 前停止服务，并提供匹配 `quick_check` 备份及 `RECOVER_SPEEDRUN:<account>:<revision>`。该工具只写内部提交和最小化审计，不改云存档正文；完成后重启并复核一次，重复执行必须无变化。
 

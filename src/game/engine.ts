@@ -1495,7 +1495,7 @@ export const MAX_BUILDING_BUFFER_LIMIT = 100_000_000;
 export const MAX_BUILDING_STACK_COUNT = 100_000_000;
 export const MIN_PROLIFERATOR_BUFFER_LIMIT = 1;
 export const DEFAULT_PROLIFERATOR_BUFFER_LIMIT = 600;
-export const MAX_PROLIFERATOR_BUFFER_LIMIT = 100_000;
+export const MAX_PROLIFERATOR_BUFFER_LIMIT = 100_000_000;
 /** Maximum target inventory for the construction center after capacity II. */
 export const MAX_CONSTRUCTION_AUTOMATION_TARGET = 100_000_000;
 

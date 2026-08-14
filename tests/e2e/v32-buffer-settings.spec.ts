@@ -37,11 +37,23 @@ test("building buffer presets and custom validation persist independently", asyn
   const production = operations.locator(".settings-buffer-limit").filter({ hasText: "生产建筑缓存上限" });
   const logistics = operations.locator(".settings-buffer-limit").filter({ hasText: "仓储与物流建筑缓存上限" });
   const belts = operations.locator(".settings-buffer-limit").filter({ hasText: "传送带转运额度上限" });
+  const proliferator = operations.locator(".settings-buffer-limit").filter({ hasText: "增产剂缓存上限" });
 
   await expect(production.getByRole("button", { name: "100万" })).toHaveAttribute("aria-pressed", "true");
   await expect(logistics.getByRole("button", { name: "100万" })).toHaveAttribute("aria-pressed", "true");
   await expect(belts.getByRole("button", { name: "自定义" })).toHaveAttribute("aria-pressed", "true");
   await expect(belts.getByLabel("传送带转运额度上限自定义值")).toHaveValue("100000000");
+  await expect(proliferator.getByRole("button", { name: "100万" })).toBeVisible();
+  await proliferator.getByRole("button", { name: "100万" }).click();
+  await expect(proliferator).toContainText("1,000,000/种");
+  await proliferator.getByRole("button", { name: "自定义" }).click();
+  const proliferatorInput = proliferator.getByLabel("增产剂缓存上限自定义值");
+  await proliferatorInput.fill("100000001");
+  await proliferator.getByRole("button", { name: "应用" }).click();
+  await expect(proliferator.getByRole("alert")).toContainText("不能高于 100,000,000");
+  await proliferatorInput.fill("100000000");
+  await proliferator.getByRole("button", { name: "应用" }).click();
+  await expect(proliferator).toContainText("100,000,000/种");
   await production.getByRole("button", { name: "1万", exact: true }).click();
   await logistics.getByRole("button", { name: "10万", exact: true }).click();
   await expect(production).toContainText("10,000/种");
@@ -69,7 +81,12 @@ test("building buffer presets and custom validation persist independently", asyn
   await operations.getByRole("tab", { name: "存档" }).click();
   await operations.getByRole("button", { name: "立即保存" }).click();
   const persisted = await page.evaluate(() => JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1")!).state.settings);
-  expect(persisted).toMatchObject({ productionBufferLimit: 100_000_000, logisticsBufferLimit: 100_000, beltBufferLimit: 100_000_000 });
+  expect(persisted).toMatchObject({
+    productionBufferLimit: 100_000_000,
+    logisticsBufferLimit: 100_000,
+    beltBufferLimit: 100_000_000,
+    proliferatorBufferLimit: 100_000_000,
+  });
 });
 
 test("buffer controls fit desktop and both mobile settings from 80 to 200 percent font", async ({ page }) => {

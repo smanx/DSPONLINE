@@ -127,6 +127,11 @@ export type PureIdleRecoveryClaim =
   | { ok: true; record: PureIdleRecoveryRecord }
   | { ok: false; reason: "unavailable" | "missing" | "owned" | "invalid"; message: string };
 
+export type PureIdleRecoveryInspection =
+  | { status: "valid"; record: PureIdleRecoveryRecord; message: string }
+  | { status: "committed"; record: PureIdleRecoveryRecord; message: string }
+  | { status: "missing" | "invalid" | "unavailable"; record: null; message: string };
+
 let databasePromise: Promise<IDBDatabase> | null = null;
 let heldBrowserLease: { ownerToken: string; release: () => void } | null = null;
 
@@ -204,6 +209,13 @@ function checkpointFingerprint(state: GameState): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return `checkpoint-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+export function matchesPureIdleRecoveryCheckpoint(
+  record: Pick<PureIdleRecoveryRecord, "checkpointHash">,
+  state: GameState,
+): boolean {
+  return record.checkpointHash === checkpointFingerprint(state);
 }
 
 export function getPureIdleOwnerToken(): string {
@@ -363,7 +375,7 @@ export function getPureIdleBackgroundPlan(
   };
 }
 
-async function readPair(): Promise<{ checkpoint?: PureIdleCheckpointRecord; heartbeat?: PureIdleHeartbeatRecord }> {
+async function readRawPair(): Promise<{ checkpoint: unknown; heartbeat: unknown }> {
   const db = await openDatabase();
   const transaction = db.transaction(STORE_NAME, "readonly");
   const done = transactionDone(transaction);
@@ -373,16 +385,46 @@ async function readPair(): Promise<{ checkpoint?: PureIdleCheckpointRecord; hear
     requestResult(store.get(HEARTBEAT_KEY)),
   ]);
   await done;
-  return {
-    ...(validCheckpoint(checkpoint) ? { checkpoint } : {}),
-    ...(validHeartbeat(heartbeat) ? { heartbeat } : {}),
-  };
+  return { checkpoint, heartbeat };
 }
 
 export async function readPureIdleRecovery(): Promise<PureIdleRecoveryRecord | null> {
   if (!canUsePureIdleRecovery()) return null;
-  const { checkpoint, heartbeat } = await readPair();
-  return checkpoint && heartbeat ? combine(checkpoint, heartbeat) : null;
+  const { checkpoint, heartbeat } = await readRawPair();
+  return validCheckpoint(checkpoint) && validHeartbeat(heartbeat) ? combine(checkpoint, heartbeat) : null;
+}
+
+/**
+ * Distinguish an absent or malformed recovery journal from a browser/storage
+ * failure. The menu uses this before touching pending time-warp debt: a valid
+ * uncommitted journal keeps owning its timeline, while an unavailable journal
+ * requires an explicit player decision instead of silently discarding it.
+ */
+export async function inspectPureIdleRecovery(): Promise<PureIdleRecoveryInspection> {
+  if (!canUsePureIdleRecovery()) {
+    return { status: "unavailable", record: null, message: "当前环境不支持读取纯挂机恢复日志" };
+  }
+  try {
+    const { checkpoint, heartbeat } = await readRawPair();
+    if (checkpoint === undefined && heartbeat === undefined) {
+      return { status: "missing", record: null, message: "没有仍然有效的纯挂机恢复会话" };
+    }
+    if (!validCheckpoint(checkpoint) || !validHeartbeat(heartbeat)) {
+      return { status: "invalid", record: null, message: "纯挂机恢复日志不完整或格式无效" };
+    }
+    const record = combine(checkpoint, heartbeat);
+    if (!record) return { status: "invalid", record: null, message: "纯挂机检查点与事务日志不属于同一会话" };
+    if (record.committed) {
+      return { status: "committed", record, message: "纯挂机恢复事务已经提交，不会再次结算" };
+    }
+    return { status: "valid", record, message: "检测到仍可恢复的纯挂机会话" };
+  } catch (error) {
+    return {
+      status: "unavailable",
+      record: null,
+      message: error instanceof Error && error.message ? `无法读取纯挂机恢复日志：${error.message}` : "无法读取纯挂机恢复日志",
+    };
+  }
 }
 
 export async function createPureIdleRecovery(
@@ -404,7 +446,7 @@ export async function createPureIdleRecovery(
   const transaction = db.transaction(STORE_NAME, "readwrite");
   const store = transaction.objectStore(STORE_NAME);
   const existing = await requestResult(store.get(HEARTBEAT_KEY));
-  if (validHeartbeat(existing) && existing.ownerToken !== ownerToken && existing.leaseExpiresAtMs > nowMs) {
+  if (validHeartbeat(existing) && existing.committed !== true && existing.ownerToken !== ownerToken && existing.leaseExpiresAtMs > nowMs) {
     transaction.abort();
     releaseBrowserLease(ownerToken);
     return { ok: false, reason: "owned", message: "另一个标签页正在运行纯挂机，请先在原标签页停止" };

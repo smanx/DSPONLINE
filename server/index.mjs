@@ -471,6 +471,7 @@ function normalizeSpeedrunSubmissions(value, users) {
       receivedAt: Math.max(0, Math.floor(entry.receivedAt)),
       saveRevision: Number.isSafeInteger(entry.saveRevision) ? entry.saveRevision : 0,
       saveHash: typeof entry.saveHash === "string" ? entry.saveHash.slice(0, 128) : "",
+      resourceMode: entry.resourceMode === "infinite" ? "infinite" : "finite",
       verified: entry.verified === true,
     }]];
   }));
@@ -866,7 +867,6 @@ function speedrunProgressFromState(state, targetId) {
 }
 
 function speedrunForbiddenStateReason(state) {
-  if (state?.settings?.resourceMode === "infinite") return "无限资源模式不能进入速通正式榜";
   if (state?.settings?.difficulty && state.settings.difficulty !== "standard") return "非标准难度不能进入速通正式榜";
   if (state?.extremeMode === true || state?.endgameExtremeMode === true || state?.settings?.endgameExtremeMode === true ||
     state?.speedrun?.extremeMode === true) return "极限模式状态不能进入速通正式榜";
@@ -947,6 +947,7 @@ function validateSpeedrunSubmission(store, userId, body) {
     targetId,
     factoryId,
     elapsedSeconds: completedAtSeconds,
+    resourceMode: state?.settings?.resourceMode === "infinite" ? "infinite" : "finite",
     milestoneRecovered: milestone?.completed !== true,
     saveHash: current.checksum,
   };
@@ -987,6 +988,7 @@ function submitSpeedrunResult(store, user, body, now = Date.now()) {
     receivedAt: now,
     saveRevision: validation.current.revision,
     saveHash: validation.saveHash,
+    resourceMode: validation.resourceMode,
     verified: true,
   };
   store.data.speedrunSubmissions[key] = entry;
@@ -2626,7 +2628,7 @@ function validateParsedSavePayload(parsed, integrity = inspectParsedSavePayloadI
     }
     if (state.version >= 33) {
       const proliferatorLimit = state.settings?.proliferatorBufferLimit;
-      if (!Number.isInteger(proliferatorLimit) || proliferatorLimit < 1 || proliferatorLimit > 100_000) return false;
+      if (!Number.isInteger(proliferatorLimit) || proliferatorLimit < 1 || proliferatorLimit > 100_000_000) return false;
       const infiniteResearch = state.endgame?.infiniteResearch;
       if (!infiniteResearch || typeof infiniteResearch !== "object") return false;
       const maximumLevels = {

@@ -98,7 +98,8 @@ import {
   type OfflineSettlementPreference,
 } from "../game/offlineSettlementStrategy";
 import { readShowRunLogPreference, readThemePreference, writeShowRunLogPreference, writeThemePreference } from "../game/uiPreferences";
-import { readPureIdleRecovery } from "../game/pureIdleRecovery";
+import { inspectPureIdleRecovery, matchesPureIdleRecoveryCheckpoint } from "../game/pureIdleRecovery";
+import { hasUncommittedTimeWarpTransaction, recoverOrphanedTimeWarpForOffline } from "../game/offlineTimeWarpRecovery";
 import type { OfflineSimulationPhase, OfflineSimulationProgress } from "../game/offlineSimulation";
 import { assessSavePayloadSize, utf8Bytes } from "../game/saveSizePolicy";
 import { cloudSaveCapacityDetails, type CloudSaveCapacityDetails } from "../game/cloudSaveCapacity";
@@ -123,6 +124,12 @@ type OfflineSettlementPrompt = {
   label: string;
   preserveReason?: string;
   complexity: OfflineComplexityReport;
+};
+type TimeWarpRecoveryPrompt = {
+  loaded: DeferredLoadedGame;
+  label: string;
+  preserveReason?: string;
+  reason: string;
 };
 
 function offlineFailureKindLabel(kind: OfflineSettlementFailureKind): string {
@@ -337,6 +344,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [offlineProgress, setOfflineProgress] = useState<OfflineLoadProgress | null>(null);
   const [offlineDecision, setOfflineDecision] = useState<OfflineSettlementDecision | null>(null);
   const [offlinePrompt, setOfflinePrompt] = useState<OfflineSettlementPrompt | null>(null);
+  const [timeWarpRecoveryPrompt, setTimeWarpRecoveryPrompt] = useState<TimeWarpRecoveryPrompt | null>(null);
   const [offlineSkipConfirmed, setOfflineSkipConfirmed] = useState(false);
   const [message, setMessage] = useState<MenuMessage>(null);
   const [importInspection, setImportInspection] = useState<SaveInspection | null>(null);
@@ -364,6 +372,12 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
 
   useEffect(() => {
     const onNativeBack = (event: Event) => {
+      if (timeWarpRecoveryPrompt) {
+        event.preventDefault();
+        setTimeWarpRecoveryPrompt(null);
+        setMessage({ tone: "warning", text: "已取消时间扭曲检查点恢复；原存档和离线时长保持不变" });
+        return;
+      }
       if (offlineDecision) {
         event.preventDefault();
         setOfflineDecision(null);
@@ -399,7 +413,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     };
     window.addEventListener(NATIVE_BACK_EVENT, onNativeBack);
     return () => window.removeEventListener(NATIVE_BACK_EVENT, onNativeBack);
-  }, [cloudConflict, cloudDeleteRequest, deleteRequest, offlineDecision, speedrunCopyRequest, view]);
+  }, [cloudConflict, cloudDeleteRequest, deleteRequest, offlineDecision, speedrunCopyRequest, timeWarpRecoveryPrompt, view]);
 
   const refreshLocalSaves = () => {
     setContinueSave(getMenuContinueSave("normal"));
@@ -584,6 +598,80 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     await enterLoadedGame(finalized, preserveReason, storage);
   };
 
+  const prepareTimeWarpDeferredLoad = async (
+    loaded: DeferredLoadedGame,
+    label: string,
+    preserveReason: string | undefined,
+    allowLiveMainRecovery: boolean,
+  ): Promise<DeferredLoadedGame | null> => {
+    if (loaded.state.mode === "speedrun" || loaded.state.speedrun?.enabled || !hasUncommittedTimeWarpTransaction(loaded.state)) return loaded;
+    const inspection = await inspectPureIdleRecovery();
+    if (allowLiveMainRecovery && inspection.status === "valid" && matchesPureIdleRecoveryCheckpoint(inspection.record, loaded.state)) {
+      // The durable pure-idle journal exclusively owns this interval. FactoryGame
+      // will claim it and apply the foreground/background split once.
+      return { ...loaded, offlineSeconds: 0 };
+    }
+    if (inspection.status === "unavailable") {
+      setTimeWarpRecoveryPrompt({ loaded, label, ...(preserveReason ? { preserveReason } : {}), reason: inspection.message });
+      setMessage({ tone: "warning", text: "无法自动核对时间扭曲恢复日志；原存档和离线时长尚未修改" });
+      return null;
+    }
+    const recovered = recoverOrphanedTimeWarpForOffline(loaded);
+    if (!recovered.ok) {
+      setTimeWarpRecoveryPrompt({ loaded, label, ...(preserveReason ? { preserveReason } : {}), reason: recovered.reason });
+      setMessage({ tone: "warning", text: "时间扭曲检查点自动恢复失败；原存档和离线时长尚未修改" });
+      return null;
+    }
+    if (recovered.summary.recovered) {
+      setMessage({
+        tone: "ready",
+        text: `已解除未提交时间扭曲预算：保留 ${Math.floor(recovered.summary.recoveredPendingWallSeconds)} 秒真实时间，未提交的加速预算不会重复发放`,
+      });
+    }
+    return recovered.loaded;
+  };
+
+  const beginDeferredLoad = async (
+    loaded: DeferredLoadedGame,
+    label: string,
+    preserveReason: string | undefined,
+    storage: StorageModule,
+  ) => {
+    if (loaded.offlineSeconds >= 60 && loaded.state.mode !== "speedrun" && !loaded.state.speedrun?.enabled) {
+      const { classifyOfflineWorkload } = await importWithRecovery(() => import("../game/offlineComplexity"), "离线工作量分析");
+      setOfflinePrompt({ loaded, label, ...(preserveReason ? { preserveReason } : {}), complexity: classifyOfflineWorkload(loaded.state, loaded.offlineSeconds) });
+      setMessage({ tone: "warning", text: "请选择本次离线收益的处理方式；选择前原存档保持不变" });
+      return;
+    }
+    await completeDeferredLoad(loaded, label, preserveReason, storage);
+  };
+
+  const recoverTimeWarpCheckpointAndFastSettle = async () => {
+    const prompt = timeWarpRecoveryPrompt;
+    if (!prompt) return;
+    setTimeWarpRecoveryPrompt(null);
+    setBusy(true);
+    setMessage({ tone: "busy", text: "正在恢复最后有效检查点并准备快速结算…" });
+    try {
+      const storage = await loadStorageModule();
+      const recovered = recoverOrphanedTimeWarpForOffline(prompt.loaded, { force: true });
+      if (!recovered.ok) throw new Error(recovered.reason);
+      await completeDeferredLoad(
+        recovered.loaded,
+        `${prompt.label} · 恢复检查点并快速结算`,
+        prompt.preserveReason,
+        storage,
+      );
+    } catch (error) {
+      setTimeWarpRecoveryPrompt(prompt);
+      handleLoadError(error, "恢复检查点并快速结算失败；原存档保持不变");
+    } finally {
+      offlineAbortRef.current = null;
+      setOfflineProgress(null);
+      setBusy(false);
+    }
+  };
+
   const runOfflineChoice = async (choice: OfflineSettlementChoice) => {
     const prompt = offlinePrompt;
     if (!prompt) return;
@@ -702,21 +790,10 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       const storage = await loadStorageModule();
       trackAnalyticsEvent("continue_game");
       const loaded = storage.loadGameDeferredOffline(mode);
-      const pureIdleRecovery = mode === "normal" ? await readPureIdleRecovery().catch(() => null) : null;
-      // A live pure-idle checkpoint owns the elapsed interval. Let FactoryGame
-      // apply the five-minute background grace and ordinary-offline remainder;
-      // otherwise the menu would settle the same interval before recovery.
-      if (mode === "normal" && pureIdleRecovery && loaded.state.timeWarp.enabled && !loaded.state.speedrun?.enabled) {
-        loaded.offlineSeconds = 0;
-      }
       const label = mode === "speedrun" ? "恢复速通工厂" : "恢复最近工厂";
-      if (loaded.offlineSeconds >= 60 && mode !== "speedrun" && !loaded.state.speedrun?.enabled) {
-        const { classifyOfflineWorkload } = await importWithRecovery(() => import("../game/offlineComplexity"), "离线工作量分析");
-        setOfflinePrompt({ loaded, label, complexity: classifyOfflineWorkload(loaded.state, loaded.offlineSeconds) });
-        setMessage({ tone: "warning", text: "请选择本次离线收益的处理方式；选择前原存档保持不变" });
-        return;
-      }
-      await completeDeferredLoad(loaded, label, undefined, storage);
+      const prepared = await prepareTimeWarpDeferredLoad(loaded, label, undefined, mode === "normal");
+      if (!prepared) return;
+      await beginDeferredLoad(prepared, label, undefined, storage);
     } catch (error) {
       handleLoadError(error, "本地存档无法载入");
     } finally {
@@ -763,13 +840,9 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       trackAnalyticsEvent("load_save");
       const label = `${mode === "speedrun" ? "速通" : "普通"}模式槽位 ${slotId}`;
       const preserveReason = `${mode === "speedrun" ? "速通" : "普通"}槽位 ${slotId} 前`;
-      if (loaded.offlineSeconds >= 60 && mode !== "speedrun" && !loaded.state.speedrun?.enabled) {
-        const { classifyOfflineWorkload } = await importWithRecovery(() => import("../game/offlineComplexity"), "离线工作量分析");
-        setOfflinePrompt({ loaded, label, preserveReason, complexity: classifyOfflineWorkload(loaded.state, loaded.offlineSeconds) });
-        setMessage({ tone: "warning", text: "请选择本次离线收益的处理方式；选择前原存档保持不变" });
-        return;
-      }
-      await completeDeferredLoad(loaded, label, preserveReason, storage);
+      const prepared = await prepareTimeWarpDeferredLoad(loaded, label, preserveReason, false);
+      if (!prepared) return;
+      await beginDeferredLoad(prepared, label, preserveReason, storage);
     } catch (error) {
       handleLoadError(error, `${mode === "speedrun" ? "速通" : "普通"}模式槽位 ${slotId} 无法载入`);
     } finally {
@@ -789,7 +862,15 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         return;
       }
       trackAnalyticsEvent("load_save");
-      await enterLoadedGame({ state, offlineSeconds: 0, offlineReport: null }, "回滚自动快照前", storage);
+      const loaded: DeferredLoadedGame = {
+        state,
+        savedAt: snapshots.find((snapshot) => snapshot.id === snapshotId)?.savedAt ?? Date.now(),
+        offlineSeconds: 0,
+        offlineReport: null,
+      };
+      const prepared = await prepareTimeWarpDeferredLoad(loaded, "恢复自动快照", "回滚自动快照前", false);
+      if (!prepared) return;
+      await beginDeferredLoad(prepared, "恢复自动快照", "回滚自动快照前", storage);
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "自动快照无法载入" });
     } finally {
@@ -840,7 +921,15 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     if (!importInspection?.valid || !importInspection.state) return;
     const storage = await loadStorageModule();
     trackAnalyticsEvent("import_save");
-    await enterLoadedGame({ state: importInspection.state, offlineSeconds: 0, offlineReport: null }, "导入外部存档前", storage);
+    const loaded: DeferredLoadedGame = {
+      state: importInspection.state,
+      savedAt: importInspection.savedAt ?? Date.now(),
+      offlineSeconds: 0,
+      offlineReport: null,
+    };
+    const prepared = await prepareTimeWarpDeferredLoad(loaded, "导入外部存档", "导入外部存档前", false);
+    if (!prepared) return;
+    await beginDeferredLoad(prepared, "导入外部存档", "导入外部存档前", storage);
   };
 
   const confirmSaveRescue = async () => {
@@ -1229,7 +1318,15 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       }
       markCloudSaveSynchronized(userId, cloudSave, cloudSave.payload);
       trackAnalyticsEvent("cloud_download");
-      await enterLoadedGame({ state: inspection.state, offlineSeconds: 0, offlineReport: null }, "下载云存档前", storage);
+      const loaded: DeferredLoadedGame = {
+        state: inspection.state,
+        savedAt: inspection.savedAt ?? Date.now(),
+        offlineSeconds: 0,
+        offlineReport: null,
+      };
+      const prepared = await prepareTimeWarpDeferredLoad(loaded, "下载普通主云存档", "下载云存档前", false);
+      if (!prepared) return;
+      await beginDeferredLoad(prepared, "下载普通主云存档", "下载云存档前", storage);
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "云存档下载失败" });
     } finally {
@@ -1263,7 +1360,15 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       setCloudConflict(null);
       trackAnalyticsEvent("cloud_download");
       if (cloudConflict.slot === "main") {
-        await enterLoadedGame({ state: inspection.state, offlineSeconds: 0, offlineReport: null }, "解决云存档冲突前", storage);
+        const loaded: DeferredLoadedGame = {
+          state: inspection.state,
+          savedAt: inspection.savedAt ?? Date.now(),
+          offlineSeconds: 0,
+          offlineReport: null,
+        };
+        const prepared = await prepareTimeWarpDeferredLoad(loaded, "恢复冲突云主存档", "解决云存档冲突前", false);
+        if (!prepared) return;
+        await beginDeferredLoad(prepared, "恢复冲突云主存档", "解决云存档冲突前", storage);
       } else {
         const saveResult = await storage.saveGameSlotVerified(Number(cloudConflict.slot) as SaveSlotId, inspection.state);
         if (!saveResult.success) throw new Error(saveResult.message);
@@ -1362,6 +1467,37 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         <p>{offlineProgress.complexity?.warning ?? "完成并验证后才会一次性保存；取消不会推进 savedAt，也不会消费本次离线时长。"}</p>
         <button type="button" onClick={() => offlineAbortRef.current?.abort()}>取消计算并返回</button>
       </section> : null}
+
+      {timeWarpRecoveryPrompt ? <AccessibleDialog
+        open
+        title="时间扭曲检查点需要确认"
+        description="自动恢复未完成，原存档尚未修改"
+        className="start-menu-offline-decision"
+        layout="bare"
+        role="dialog"
+        riskPolicy="explicit"
+        ariaLabelledBy="time-warp-recovery-title"
+        ariaDescribedBy="time-warp-recovery-description"
+        portalTarget={document.querySelector<HTMLElement>(".start-menu")}
+        onRequestClose={() => {
+          setTimeWarpRecoveryPrompt(null);
+          setMessage({ tone: "warning", text: "已取消检查点恢复；原存档、savedAt 和离线时长保持不变" });
+        }}
+      >
+        <header><ShieldCheck size={22} /><span><small>未提交时间扭曲预算</small><strong id="time-warp-recovery-title">时间扭曲检查点需要确认</strong></span></header>
+        <div className="start-menu-offline-decision__summary">
+          <span><small>存档后离线时间</small><strong>{Math.floor(timeWarpRecoveryPrompt.loaded.offlineSeconds).toLocaleString("zh-CN")} 秒</strong></span>
+          <span><small>待恢复真实时间</small><strong>{Math.floor(timeWarpRecoveryPrompt.loaded.state.timeWarp.pendingWallSeconds).toLocaleString("zh-CN")} 秒</strong></span>
+          <span><small>未提交加速预算</small><strong>{Math.floor(timeWarpRecoveryPrompt.loaded.state.timeWarp.pendingSimulationSeconds).toLocaleString("zh-CN")} 秒</strong></span>
+          <span><small>当前处理</small><strong>尚未提交</strong></span>
+        </div>
+        <p id="time-warp-recovery-description">恢复会回到主存档中的最后有效状态，把真实墙钟时间交给普通快速离线结算；未提交的高倍率模拟预算会丢弃，不能与普通离线结算重复生效。</p>
+        <small className="start-menu-offline-decision__reason">自动恢复失败原因：{timeWarpRecoveryPrompt.reason}</small>
+        <footer>
+          <button className="primary" type="button" disabled={busy} onClick={() => void recoverTimeWarpCheckpointAndFastSettle()}><Gauge size={15} />恢复检查点并快速结算</button>
+          <button type="button" disabled={busy} onClick={() => { setTimeWarpRecoveryPrompt(null); setMessage({ tone: "warning", text: "已暂不恢复；原存档和完整离线区间保持不变" }); }}><X size={15} />暂不处理</button>
+        </footer>
+      </AccessibleDialog> : null}
 
       {offlinePrompt ? <AccessibleDialog open title="选择离线结算方式" description="选择前原存档保持不变" className="start-menu-offline-decision start-menu-offline-choice" layout="bare" role="dialog" riskPolicy="explicit" ariaLabelledBy="offline-choice-title" ariaDescribedBy="offline-choice-description" portalTarget={document.querySelector<HTMLElement>(".start-menu")} onRequestClose={() => { setOfflinePrompt(null); setMessage({ tone: "warning", text: "已返回主菜单；原存档和离线时长保持不变" }); }}>
         <header><Clock3 size={22} /><span><small>进入游戏前的离线收益</small><strong id="offline-choice-title">选择离线结算方式</strong></span></header>

@@ -83,6 +83,81 @@ async function seedEmergencyMirror(
   }, { writer: metadataWriter });
 }
 
+async function seedMissingPrimaryConflict(page: Page, activeLeaseMs = 30_000): Promise<{
+  conflictId: string;
+  candidateRaw: string;
+  candidateKey: string;
+}> {
+  return page.evaluate(async ({ saveKey, leaseMs }) => {
+    const storage = await import("/src/game/storage.ts");
+    const engine = await import("/src/game/engine.ts");
+    const store = await import("/src/game/localSaveStore.ts");
+    const coordination = await import("/src/game/localSaveCoordination.ts");
+    const state = engine.createInitialState();
+    state.elapsedSeconds = 918;
+    const candidateRaw = storage.serializeEnvelope(state, Date.now());
+    const writer = store.getLocalSaveWriterStatus();
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("dsp-idle-network.local-saves");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction("records", "readwrite");
+      const value = JSON.stringify({
+        schemaVersion: 1,
+        ownerId: "tab_external_active_writer",
+        fencingToken: writer.fencingToken + 1,
+        acquiredAt: Date.now(),
+        heartbeatAt: Date.now(),
+        expiresAt: Date.now() + leaseMs,
+      });
+      transaction.objectStore("records").put({
+        key: coordination.LOCAL_SAVE_WRITER_LEASE_KEY,
+        value,
+        updatedAt: Date.now(),
+        bytes: value.length,
+      });
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+    store.setLocalSaveValue(saveKey, candidateRaw);
+    try { await store.flushLocalSaveWrites(); } catch { /* expected conflict */ }
+    const conflict = (await store.getLocalSaveConflicts())[0];
+    if (!conflict) throw new Error("missing generated conflict");
+    return {
+      conflictId: conflict.conflictId,
+      candidateRaw,
+      candidateKey: `${saveKey}.conflict.${conflict.conflictId}.candidate`,
+    };
+  }, { saveKey: SAVE_KEY, leaseMs: activeLeaseMs });
+}
+
+async function expireDurableWriterLease(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const coordination = await import("/src/game/localSaveCoordination.ts");
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("dsp-idle-network.local-saves");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction("records", "readwrite");
+      const objectStore = transaction.objectStore("records");
+      const request = objectStore.get(coordination.LOCAL_SAVE_WRITER_LEASE_KEY);
+      request.onsuccess = () => {
+        const lease = JSON.parse(request.result.value);
+        const value = JSON.stringify({ ...lease, heartbeatAt: Date.now() - 20_000, expiresAt: Date.now() - 1 });
+        objectStore.put({ ...request.result, value, updatedAt: Date.now(), bytes: value.length });
+      };
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  });
+}
+
 test("upgrades an existing IndexedDB v1 in place without changing save bytes", async ({ page }) => {
   const original = JSON.stringify({ savedAt: 1_777_777_777_000, state: { version: 1 }, checksum: "legacy-bytes" });
   await page.goto("about:blank");
@@ -491,4 +566,187 @@ test("an expired secondary lease requires explicit takeover and reload", async (
   await secondary.getByRole("button", { name: "接管保存" }).click();
   await expect(secondary.locator(".start-menu")).toBeVisible();
   await expect(secondary.getByRole("alert").filter({ hasText: "本页面为只读" })).toHaveCount(0);
+});
+
+test("a single writer can commit a runtime-generated 35 MiB save after its own lease expires", async ({ page }) => {
+  test.setTimeout(180_000);
+  await preparePage(page);
+  const result = await page.evaluate(async ({ saveKey }) => {
+    const engine = await import("/src/game/engine.ts");
+    const storage = await import("/src/game/storage.ts");
+    const store = await import("/src/game/localSaveStore.ts");
+    const coordination = await import("/src/game/localSaveCoordination.ts");
+    let state = engine.createInitialState();
+    state.construction.storage_mk1 = 1;
+    state = engine.placeBuilding(state, "storage_mk1", { x: 0, y: 0 });
+    const template = state.entities.at(-1)!;
+    const entities = state.entities.slice(0, -1);
+    for (let index = 0; index < 220_000; index += 1) {
+      entities.push({
+        ...template,
+        id: `synthetic_large_storage_${index}`,
+        position: { x: index % 1_000, y: Math.floor(index / 1_000) },
+      });
+    }
+    state.entities = entities;
+    state.elapsedSeconds = 35 * 60;
+    const raw = storage.serializeEnvelope(state, Date.now());
+    const bytes = new TextEncoder().encode(raw).byteLength;
+    if (bytes <= 35 * 1024 * 1024) throw new Error(`synthetic fixture is only ${bytes} bytes`);
+
+    const status = store.getLocalSaveWriterStatus();
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("dsp-idle-network.local-saves");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction("records", "readwrite");
+      const objectStore = transaction.objectStore("records");
+      const request = objectStore.get(coordination.LOCAL_SAVE_WRITER_LEASE_KEY);
+      request.onsuccess = () => {
+        const lease = JSON.parse(request.result.value);
+        if (lease.ownerId !== status.writerId || lease.fencingToken !== status.fencingToken) {
+          throw new Error("test page no longer owns the durable lease");
+        }
+        const value = JSON.stringify({ ...lease, heartbeatAt: Date.now() - 20_000, expiresAt: Date.now() - 1 });
+        objectStore.put({ ...request.result, value, updatedAt: Date.now(), bytes: value.length });
+      };
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+
+    store.setLocalSaveValue(saveKey, raw);
+    await store.flushLocalSaveWrites();
+    const persisted = await store.readPersistedLocalSaveValue(saveKey);
+    const integrity = persisted ? (await import("/src/game/saveEnvelopeIntegrity.ts")).inspectSaveEnvelopeChecksum(persisted) : null;
+    return {
+      bytes,
+      exactReadBack: persisted === raw,
+      checksum: integrity?.status,
+      conflicts: (await store.getLocalSaveConflicts()).length,
+      writer: store.getLocalSaveWriterStatus(),
+    };
+  }, { saveKey: SAVE_KEY });
+  expect(result.bytes).toBeGreaterThan(35 * 1024 * 1024);
+  expect(result).toMatchObject({
+    exactReadBack: true,
+    checksum: "valid",
+    conflicts: 0,
+    writer: { role: "primary" },
+  });
+});
+
+test("missing-primary conflict actions expose active-writer failures, retry, and verified candidate recovery", async ({ page }) => {
+  await preparePage(page);
+  const seeded = await seedMissingPrimaryConflict(page);
+  const banner = page.getByRole("alert").filter({ hasText: "已阻止跨标签页覆盖" });
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText("空（保留后没有主存档）");
+  await expect(banner).toContainText("推荐：采用有效候选存档");
+
+  const keepEmpty = banner.getByRole("button", { name: "保留空的当前状态" });
+  await keepEmpty.click();
+  await expect(banner.getByRole("status")).toContainText("另一个页面仍持有本地存档写入权");
+  expect(await readRecord(page, seeded.candidateKey)).toBe(seeded.candidateRaw);
+
+  const useCandidate = banner.getByRole("button", { name: "采用本页候选" });
+  await useCandidate.click();
+  await expect(banner.getByRole("status")).toContainText("另一个页面仍持有本地存档写入权");
+  expect(await readRecord(page, seeded.candidateKey)).toBe(seeded.candidateRaw);
+
+  await expireDurableWriterLease(page);
+  await useCandidate.click();
+  await expect(banner.getByRole("button", { name: "处理中…" })).toBeDisabled();
+  await expect(banner.getByRole("status")).toContainText("逐字读回验证");
+  await page.waitForLoadState("domcontentloaded");
+  await expect(page.locator(".start-menu")).toBeVisible();
+  expect(await readRecord(page, SAVE_KEY)).toBe(seeded.candidateRaw);
+  expect(await readRecord(page, seeded.candidateKey)).toBeNull();
+  expect(await page.evaluate(async () => (await (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts()).length)).toBe(0);
+});
+
+test("candidate recovery can retry after the selected bytes were committed but cleanup lost its lease", async ({ page }) => {
+  await preparePage(page);
+  const seeded = await seedMissingPrimaryConflict(page);
+  const staged = await page.evaluate(async ({ saveKey, conflictId, candidateRaw }) => {
+    const coordination = await import("/src/game/localSaveCoordination.ts");
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("dsp-idle-network.local-saves");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const identity = JSON.parse(candidateRaw) as { savedAt: number; checksum: string };
+    const now = Date.now();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction("records", "readwrite");
+      const store = transaction.objectStore("records");
+      const priorWriterId = "tab_previous_cleanup_attempt";
+      const priorFencingToken = 41;
+      const revision = coordination.createLocalSaveRevision({
+        saveKey,
+        previousRevision: 1,
+        value: candidateRaw,
+        writerId: priorWriterId,
+        fencingToken: priorFencingToken,
+        now,
+      });
+      const lease = {
+        schemaVersion: 1,
+        ownerId: priorWriterId,
+        fencingToken: priorFencingToken,
+        acquiredAt: now - 20_000,
+        heartbeatAt: now - 20_000,
+        expiresAt: now - 1,
+      };
+      const put = (key: string, value: string) => store.put({ key, value, updatedAt: now, bytes: value.length });
+      put(saveKey, candidateRaw);
+      put(coordination.localSaveRevisionKey(saveKey), JSON.stringify(revision));
+      put(coordination.LOCAL_SAVE_WRITER_LEASE_KEY, JSON.stringify(lease));
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+    return {
+      identity,
+      conflictStillPresent: Boolean(await new Promise((resolve, reject) => {
+        const request = database.transaction("records", "readonly").objectStore("records")
+          .get(coordination.localSaveConflictMetadataKey(conflictId));
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      })),
+    };
+  }, { saveKey: SAVE_KEY, conflictId: seeded.conflictId, candidateRaw: seeded.candidateRaw });
+  expect(staged.conflictStillPresent).toBe(true);
+
+  const result = await page.evaluate(async ({ conflictId }) => {
+    const store = await import("/src/game/localSaveStore.ts");
+    return store.resolveLocalSaveConflictDetailed(conflictId, "candidate");
+  }, { conflictId: seeded.conflictId });
+
+  expect(result).toMatchObject({
+    ok: true,
+    resolution: "candidate",
+    savedAt: staged.identity.savedAt,
+    checksum: staged.identity.checksum,
+  });
+  expect(await readRecord(page, SAVE_KEY)).toBe(seeded.candidateRaw);
+  expect(await readRecord(page, seeded.candidateKey)).toBeNull();
+  expect(await page.evaluate(async () => (await (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts()).length)).toBe(0);
+});
+
+test("missing-primary conflict can intentionally keep the clearly labelled empty current state", async ({ page }) => {
+  await preparePage(page);
+  const seeded = await seedMissingPrimaryConflict(page);
+  await expireDurableWriterLease(page);
+  const banner = page.getByRole("alert").filter({ hasText: "已阻止跨标签页覆盖" });
+  await expect(banner).toContainText("保留后没有主存档");
+  await banner.getByRole("button", { name: "保留空的当前状态" }).click();
+  await expect(banner.getByRole("status")).toContainText("当前状态已验证");
+  await page.waitForLoadState("domcontentloaded");
+  await expect(page.locator(".start-menu")).toBeVisible();
+  expect(await readRecord(page, SAVE_KEY)).toBeNull();
+  expect(await readRecord(page, seeded.candidateKey)).toBeNull();
+  expect(await page.evaluate(async () => (await (await import("/src/game/localSaveStore.ts")).getLocalSaveConflicts()).length)).toBe(0);
 });
