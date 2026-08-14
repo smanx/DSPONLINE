@@ -341,7 +341,6 @@ import {
   createSimulationRuntimeDurableUnsignedIntent,
 } from "./game/simulationRuntimeDurableAppState";
 import {
-  clearSimulationRuntimeRecoveryInPersistenceWorker,
   finalizeSimulationRuntimeRecoveryIntentInPersistenceWorker,
   initializeSimulationRuntimeRecoveryInPersistenceWorker,
   stageUnsignedSimulationRuntimeRecoveryIntentInPersistenceWorker,
@@ -2102,9 +2101,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       }
       if (head.baseIdentity.mode !== mode) throw new Error("durable mode 与主存档不匹配");
       const fence = { ownerId: status.writerId, fencingToken: status.fencingToken };
-      setRuntimePersistenceProgress({ id: progressId, kind, phase: "serialize-write-readback", startedAt, message: "正在清理旧 recovery head…" });
-      const cleared = await clearSimulationRuntimeRecoveryInPersistenceWorker({ mode, sessionId: head.sessionId }, fence);
-      if (!cleared.ok) throw new Error(cleared.message);
+      // The persistence Worker performs a fenced stale-base replacement as a
+      // single stage/publish/readback operation. Never clear the old head
+      // first: a quota, lease, or readback failure must leave T0 available for
+      // an exact retry.
+      setRuntimePersistenceProgress({ id: progressId, kind, phase: "serialize-write-readback", startedAt, message: "正在以原子事务滚动 recovery head…" });
       const checkpoint = createSimulationRuntimeDurablePrimaryCheckpoint({
         baseIdentity: identity,
         sessionId: `roll_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`,

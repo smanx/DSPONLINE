@@ -5,7 +5,6 @@ import type { SimulationRuntimeDurableRecoveryReadRecord } from "./simulationRun
 import type { SaveInspection, SaveGameResult } from "./storage";
 import { getLocalSaveWriterStatus, getPrimaryLocalSaveRecoveryIdentity, initializeLocalSaveStore } from "./localSaveStore";
 import {
-  clearSimulationRuntimeRecoveryInPersistenceWorker,
   initializeSimulationRuntimeRecoveryInPersistenceWorker,
   readSimulationRuntimeRecoveryInPersistenceWorker,
 } from "./simulationRuntimeRecoveryPersistenceClient";
@@ -179,13 +178,13 @@ export async function finalizeSimulationRuntimeStartupRecovery(input: {
     throw new Error("T1 主存档已写入但未取得逐字校验身份；已阻止进入游戏");
   }
   const fence = writerFenceOrThrow();
+  // `initializeSimulationRuntimeRecovery` performs a fenced stale-base
+  // replacement itself.  Do not clear T0 first: if staging, verification, or
+  // the publish transaction fails, the old checkpoint and pending intent must
+  // remain available for an exact retry.  The store publishes T1 only after
+  // its readback succeeds and then garbage-collects the old generation.
   if (input.candidate.sourceRecovery) {
-    input.onProgress?.({ phase: "clear", message: "正在清理已被 T1 吸收的旧 recovery…" });
-    const cleared = await clearSimulationRuntimeRecoveryInPersistenceWorker({
-      mode: input.mode,
-      sessionId: input.candidate.sourceRecovery.checkpoint.sessionId,
-    }, fence);
-    if (!cleared.ok) throw new Error(`${cleared.message}；T1 已保存，重试将安全替换旧 recovery`);
+    input.onProgress?.({ phase: "clear", message: "正在以原子事务替换已被 T1 吸收的旧 recovery…" });
   }
   input.onProgress?.({ phase: "initialize", message: "正在为 T1 建立新的 durable recovery 基线…" });
   const checkpoint = createSimulationRuntimeDurablePrimaryCheckpoint({
