@@ -3,50 +3,9 @@
 import { serializeSaveEnvelopeToTransfer } from "./saveTransfer";
 import { projectPersistentSaveState } from "./saveProjection";
 import { sha256Bytes } from "./payloadDigest";
-import { deserializeSimulationStateTransfer, type SimulationStateTransfer } from "./simulationRuntimeProtocol";
-import type { ContentPackRegistry } from "./contentPacks";
+import { deserializeSimulationStateTransfer } from "./simulationRuntimeProtocol";
+import type { SaveWorkerRequest, SaveWorkerResponse } from "./saveWorkerProtocol";
 import type { GameState } from "./types";
-
-interface SaveWorkerRequest {
-  id: number;
-  formatVersion: number;
-  savedAt: number;
-  kind: "primary" | "slot" | "snapshot";
-  slot: "main" | 1 | 2 | 3;
-  reason?: string;
-  state?: unknown;
-  /** Authoritative runtime checkpoint; transferred without cloning GameState on the UI thread. */
-  stateTransfer?: SimulationStateTransfer;
-  sourceStateRevision?: number;
-  contentPackRegistry: ContentPackRegistry;
-  includePayloadSha256?: boolean;
-}
-
-interface SaveWorkerResponse {
-  id: number;
-  bytes?: ArrayBuffer;
-  payloadChecksum?: string;
-  payloadSha256?: string;
-  byteLength?: number;
-  durationMs?: number;
-  sourceStateRevision?: number;
-  /** Returned to the coordinator so the same owned buffer can roll recovery. */
-  sourceStateTransfer?: SimulationStateTransfer;
-  summary?: {
-    stateVersion: number;
-    savedAt: number;
-    elapsedSeconds: number;
-    activePlanetId: string;
-    entityCount: number;
-    completedTechCount: number;
-    structurePoints: number;
-    uploadedWhiteMatrix: number;
-    stateChecksum: string;
-    computedStateChecksum: string;
-    integrity: "valid";
-  };
-  error?: string;
-}
 
 self.onmessage = async (event: MessageEvent<SaveWorkerRequest>) => {
   const startedAt = performance.now();
