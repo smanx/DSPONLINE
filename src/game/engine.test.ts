@@ -62,6 +62,7 @@ import {
   getBeltNetworkIds,
   getBlueprintRequirements,
   getBlueprintFleetLoadPreview,
+  getBlueprintPlacementPreview,
   getConstructionQueueDeficits,
   getConstructionQueueDetails,
   getConstructionCraftNavigation,
@@ -3945,6 +3946,47 @@ describe("factory simulation", () => {
       { id: source.id, position: { x: 400, y: 0 } },
       { id: secondId, position: { x: 400.4, y: 0 } },
     ])).toBe(true);
+  });
+
+  it("rejects duplicate rounded positions inside captured blueprints unless the command explicitly opts in", () => {
+    let captured = createInitialState();
+    captured.construction.assembling_machine_mk1 = 3;
+    captured = placeBuilding(captured, "assembling_machine_mk1", { x: 0, y: 0 });
+    const first = captured.entities.find((entity) => entity.buildingId === "assembling_machine_mk1")!;
+    captured = createBlueprint(captured, [first.id], "重叠来源");
+    captured = placeBlueprint(captured, captured.blueprints[0].id, { x: 0, y: 0 }, { allowExactOverlap: true });
+    const stackedIds = captured.entities
+      .filter((entity) => entity.buildingId === "assembling_machine_mk1" && Math.round(entity.position.x) === 0 && Math.round(entity.position.y) === 0)
+      .map((entity) => entity.id);
+    expect(stackedIds).toHaveLength(2);
+    captured = createBlueprint(captured, stackedIds, "内部重复蓝图");
+    const duplicateBlueprint = structuredClone(captured.blueprints.at(-1)!);
+
+    let empty = createInitialState();
+    empty.blueprints = [duplicateBlueprint];
+    empty.construction.assembling_machine_mk1 = 2;
+    const before = structuredClone(empty);
+    expect(getBlueprintPlacementPreview(empty, duplicateBlueprint.id, { x: 900, y: 600 }).compatible).toBe(false);
+    expect(canQueueBlueprint(empty, duplicateBlueprint.id, empty.activePlanetId, { x: 900, y: 600 })).toBe(false);
+    expect(placeBlueprint(empty, duplicateBlueprint.id, { x: 900, y: 600 })).toEqual(before);
+    expect(queueBlueprint(empty, duplicateBlueprint.id, { x: 900, y: 600 })).toEqual(before);
+
+    const immediate = placeBlueprint(empty, duplicateBlueprint.id, { x: 900, y: 600 }, { allowExactOverlap: true });
+    expect(immediate.entities.filter((entity) => Math.round(entity.position.x) === 900 && Math.round(entity.position.y) === 600)).toHaveLength(2);
+
+    empty.construction.assembling_machine_mk1 = 0;
+    let queued = queueBlueprint(empty, duplicateBlueprint.id, { x: 900, y: 600 }, { allowExactOverlap: true });
+    expect(queued.constructionQueue).toHaveLength(1);
+    const entry = queued.constructionQueue[0];
+    entry.allowExactOverlap = undefined;
+    entry.reservedConstruction ??= {};
+    entry.reservedConstruction.assembling_machine_mk1 = 2;
+    const conserved = (queued.construction.assembling_machine_mk1 ?? 0) + entry.reservedConstruction.assembling_machine_mk1;
+    const rollbackEntities = structuredClone(queued.entities);
+    expect(getConstructionQueueDetails(queued, entry.id).compatible).toBe(false);
+    queued = cancelConstructionQueueEntry(queued, entry.id);
+    expect(queued.entities).toEqual(rollbackEntities);
+    expect(queued.construction.assembling_machine_mk1).toBe(conserved);
   });
 
   it("reserves blueprint materials across repeated funding and refunds them exactly on cancellation", () => {

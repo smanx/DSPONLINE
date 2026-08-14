@@ -7858,7 +7858,16 @@ function createBlueprintDeploymentPlan(
     options.minimumBeltLanes,
   );
   if (!requirements) return null;
+  const candidatePositions = new Set<string>();
+  const hasInternalExactOverlap = options.allowExactOverlap === true ? false : blueprint.entities.some((entity) => {
+    const offset = transformBlueprintOffset(entity.offset, rotation, mirror);
+    const key = `${Math.round(position.x + offset.x)}:${Math.round(position.y + offset.y)}`;
+    if (candidatePositions.has(key)) return true;
+    candidatePositions.add(key);
+    return false;
+  });
   const compatible = (blueprint.entities.length > 0 || matches.resolved.length > 0) &&
+    !hasInternalExactOverlap &&
     blueprint.entities.every((entity) => canPlaceBuildingOnPlanet(entity.buildingId, planetId, state)) &&
     blueprint.entities.filter((entity) => entity.buildingId === "space_station_construction_launcher").length <= 1 &&
     !(blueprint.entities.some((entity) => entity.buildingId === "space_station_construction_launcher") &&
@@ -8230,9 +8239,13 @@ function hasQueuedBlueprintOverlap(
       occupied.add(positionKey({ x: entry.position.x + offset.x, y: entry.position.y + offset.y }));
     }
   }
+  const candidatePositions = new Set<string>();
   return blueprint.entities.some((template) => {
     const offset = transformBlueprintOffset(template.offset, rotation, mirror);
-    return occupied.has(positionKey({ x: position.x + offset.x, y: position.y + offset.y }));
+    const key = positionKey({ x: position.x + offset.x, y: position.y + offset.y });
+    if (occupied.has(key) || candidatePositions.has(key)) return true;
+    candidatePositions.add(key);
+    return false;
   });
 }
 
