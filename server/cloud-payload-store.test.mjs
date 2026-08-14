@@ -9,11 +9,13 @@ import {
   CLOUD_PAYLOAD_ALIAS_PREFIX,
   CLOUD_PAYLOAD_BLOB_TABLE,
   CloudPayloadStoreError,
+  auditCloudPayloadAliasReferences,
   backfillCloudPayloadAliases,
   collectCloudPayloadStoreStats,
   createCloudPayloadAlias,
   deleteCloudPayload,
   deleteCloudPayloadsForUser,
+  garbageCollectCloudPayloadBlobCandidates,
   garbageCollectCloudPayloadBlobs,
   initializeCloudPayloadStore,
   linkVerifiedCloudPayload,
@@ -148,6 +150,7 @@ test("requires caller-owned transactions and never commits a blob independently"
     );
     assert.throws(() => backfillCloudPayloadAliases(database), expectCode("CLOUD_PAYLOAD_TRANSACTION_REQUIRED"));
     assert.throws(() => materializeCloudPayloadAliases(database), expectCode("CLOUD_PAYLOAD_TRANSACTION_REQUIRED"));
+    assert.throws(() => garbageCollectCloudPayloadBlobCandidates(database, new Map()), expectCode("CLOUD_PAYLOAD_TRANSACTION_REQUIRED"));
     assert.throws(() => garbageCollectCloudPayloadBlobs(database), expectCode("CLOUD_PAYLOAD_TRANSACTION_REQUIRED"));
     assert.throws(() => deleteCloudPayloadsForUser(database, "user_a"), expectCode("CLOUD_PAYLOAD_TRANSACTION_REQUIRED"));
     assert.throws(() => runTransaction(database, () => {
@@ -436,6 +439,156 @@ test("deletes individual and per-user rows while orphan GC preserves referenced 
     });
     assert.deepEqual(third, { referencedBlobs: 0, orphanBlobs: 1, deletedBlobs: 1 });
     assert.equal(database.prepare(`SELECT count(*) AS count FROM ${CLOUD_PAYLOAD_BLOB_TABLE}`).get().count, 0);
+  } finally {
+    database.close();
+  }
+});
+
+test("targeted orphan cleanup touches only deleted aliases and preserves shared blobs without auditing unrelated rows", () => {
+  const database = createLegacyDatabase();
+  try {
+    initializeCloudPayloadStore(database);
+    const shared = JSON.stringify({ payload: "targeted-shared" });
+    const sharedChecksum = sha256(shared);
+    const direct = JSON.stringify({ payload: "x".repeat(8 * 1024 * 1024) });
+    const corruptChecksum = sha256("original");
+    runTransaction(database, () => {
+      writeCloudPayload(database, { userId: "user_a", slot: "main", revision: 1, payload: shared });
+      writeCloudPayload(database, { userId: "user_b", slot: "speedrun:main", revision: 9, payload: shared });
+      database.prepare("INSERT INTO cloud_save_payloads VALUES (?, ?, ?, ?)")
+        .run("unrelated_direct", "main", 1, direct);
+      database.prepare("INSERT INTO cloud_save_payloads VALUES (?, ?, ?, ?)")
+        .run("unrelated_corrupt", "main", 1, `${CLOUD_PAYLOAD_ALIAS_PREFIX}malformed`);
+      database.prepare(`INSERT INTO ${CLOUD_PAYLOAD_BLOB_TABLE} (checksum, size_bytes, payload) VALUES (?, ?, ?)`)
+        .run(corruptChecksum, Buffer.byteLength("tampered"), "tampered");
+    });
+
+    const firstCandidates = new Map();
+    const first = runTransaction(database, () => {
+      assert.equal(deleteCloudPayload(database, { userId: "user_a", slot: "main", revision: 1 }, {
+        blobCleanupCandidates: firstCandidates,
+      }), 1);
+      return garbageCollectCloudPayloadBlobCandidates(database, firstCandidates, new Map([[sharedChecksum, 1]]));
+    });
+    assert.deepEqual(first, { candidateBlobs: 1, referencedBlobs: 1, missingBlobs: 0, deletedBlobs: 0 });
+    assert.equal(readCloudPayload(database, { userId: "user_b", slot: "speedrun:main", revision: 9 }), shared);
+
+    const secondCandidates = new Map();
+    const second = runTransaction(database, () => {
+      assert.equal(deleteCloudPayloadsForUser(database, "user_b", { blobCleanupCandidates: secondCandidates }), 1);
+      return garbageCollectCloudPayloadBlobCandidates(database, secondCandidates, new Map([[sharedChecksum, 0]]));
+    });
+    assert.deepEqual(second, { candidateBlobs: 1, referencedBlobs: 0, missingBlobs: 0, deletedBlobs: 1 });
+    assert.equal(database.prepare(`SELECT count(*) AS count FROM ${CLOUD_PAYLOAD_BLOB_TABLE} WHERE checksum = ?`).get(sharedChecksum).count, 0);
+    assert.equal(database.prepare(`SELECT payload FROM ${CLOUD_PAYLOAD_BLOB_TABLE} WHERE checksum = ?`).get(corruptChecksum).payload, "tampered");
+    assert.equal(database.prepare("SELECT length(payload) AS size FROM cloud_save_payloads WHERE user_id = 'unrelated_direct'").get().size, direct.length);
+    assert.equal(database.prepare("SELECT payload FROM cloud_save_payloads WHERE user_id = 'unrelated_corrupt'").get().payload, `${CLOUD_PAYLOAD_ALIAS_PREFIX}malformed`);
+
+    const directCandidates = new Map();
+    const directCleanup = runTransaction(database, () => {
+      assert.equal(deleteCloudPayload(database, { userId: "unrelated_direct", slot: "main", revision: 1 }, {
+        blobCleanupCandidates: directCandidates,
+      }), 1);
+      return garbageCollectCloudPayloadBlobCandidates(database, directCandidates);
+    });
+    assert.deepEqual(directCleanup, { candidateBlobs: 0, referencedBlobs: 0, missingBlobs: 0, deletedBlobs: 0 });
+    assert.equal(database.prepare(`SELECT payload FROM ${CLOUD_PAYLOAD_BLOB_TABLE} WHERE checksum = ?`).get(corruptChecksum).payload, "tampered");
+  } finally {
+    database.close();
+  }
+});
+
+test("startup alias audit indexes actual fixed prefixes and fails closed on malformed aliases", () => {
+  const database = createLegacyDatabase();
+  try {
+    initializeCloudPayloadStore(database);
+    const body = JSON.stringify({ payload: "audited-alias" });
+    runTransaction(database, () => {
+      writeCloudPayload(database, { userId: "aliased", slot: "main", revision: 1, payload: body });
+      database.prepare("INSERT INTO cloud_save_payloads VALUES (?, ?, ?, ?)")
+        .run("legacy_direct", "main", 1, JSON.stringify({ padding: "x".repeat(2 * 1024 * 1024) }));
+      database.prepare("INSERT INTO cloud_save_payloads VALUES (?, ?, ?, ?)")
+        .run("malformed", "main", 1, `${CLOUD_PAYLOAD_ALIAS_PREFIX}${"z".repeat(2 * 1024 * 1024)}`);
+    });
+
+    const result = auditCloudPayloadAliasReferences(database);
+    assert.deepEqual(result.audit, {
+      complete: false,
+      scannedRows: 3,
+      aliasRows: 1,
+      directRows: 1,
+      invalidAliasRows: 1,
+      invalidStorageTypeRows: 0,
+      maximumProjectedCharacters: 161,
+    });
+    assert.deepEqual(result.references, [{
+      userId: "aliased",
+      slot: "main",
+      revision: 1,
+      checksum: sha256(body),
+      sizeBytes: Buffer.byteLength(body),
+    }]);
+  } finally {
+    database.close();
+  }
+});
+
+test("targeted single-row cleanup stays primary-key bounded at the observed 8,287-row production scale", () => {
+  const database = createLegacyDatabase();
+  try {
+    initializeCloudPayloadStore(database);
+    const insert = database.prepare("INSERT INTO cloud_save_payloads VALUES (?, ?, ?, ?)");
+    runTransaction(database, () => {
+      for (let index = 0; index < 8_285; index += 1) {
+        insert.run(`legacy_${String(index).padStart(5, "0")}`, "main", 1, JSON.stringify({ index }));
+      }
+      insert.run("legacy_oversized", "main", 1, JSON.stringify({ padding: "x".repeat(32 * 1024 * 1024) }));
+      writeCloudPayload(database, {
+        userId: "target_user",
+        slot: "main",
+        revision: 21,
+        payload: JSON.stringify({ bounded: true }),
+      });
+    });
+    assert.equal(database.prepare("SELECT count(*) AS count FROM cloud_save_payloads").get().count, 8_287);
+    const databaseBytes = database.pragma("page_count", { simple: true }) * database.pragma("page_size", { simple: true });
+    assert.ok(databaseBytes > 32 * 1024 * 1024, `expected a multi-page large database, received ${databaseBytes} bytes`);
+    const startupAudit = auditCloudPayloadAliasReferences(database);
+    assert.deepEqual(startupAudit.audit, {
+      complete: true,
+      scannedRows: 8_287,
+      aliasRows: 1,
+      directRows: 8_286,
+      invalidAliasRows: 0,
+      invalidStorageTypeRows: 0,
+      maximumProjectedCharacters: 161,
+    });
+    assert.equal(startupAudit.references.length, 1);
+    assert.equal(startupAudit.references[0].userId, "target_user");
+    const plan = database.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT
+        typeof(payload),
+        CASE
+          WHEN typeof(payload) <> 'text' THEN NULL
+          WHEN substr(payload, 1, 1) = ? THEN substr(payload, 1, 161)
+          ELSE NULL
+        END
+      FROM cloud_save_payloads
+      WHERE user_id = ? AND slot = ? AND revision = ?
+    `).all(CLOUD_PAYLOAD_ALIAS_PREFIX[0], "target_user", "main", 21);
+    assert.match(plan.map((entry) => entry.detail).join("\n"), /SEARCH cloud_save_payloads USING PRIMARY KEY \(user_id=\? AND slot=\? AND revision=\?\)/);
+
+    const candidates = new Map();
+    const result = runTransaction(database, () => {
+      assert.equal(deleteCloudPayload(database, { userId: "target_user", slot: "main", revision: 21 }, {
+        blobCleanupCandidates: candidates,
+      }), 1);
+      return garbageCollectCloudPayloadBlobCandidates(database, candidates);
+    });
+    assert.deepEqual(result, { candidateBlobs: 1, referencedBlobs: 0, missingBlobs: 0, deletedBlobs: 1 });
+    assert.equal(database.prepare("SELECT count(*) AS count FROM cloud_save_payloads").get().count, 8_286);
+    assert.equal(database.prepare("SELECT length(payload) AS size FROM cloud_save_payloads WHERE user_id = 'legacy_oversized'").get().size, 32 * 1024 * 1024 + JSON.stringify({ padding: "" }).length);
   } finally {
     database.close();
   }

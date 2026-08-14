@@ -1,6 +1,6 @@
 # 系统架构
 
-> **1.0.41 开发候选（未部署）**：云传输保证正文提升到 48 MiB，并以请求数、解压后字节、gzip 上限和超时共同限流；玩家侧增加同步状态中心。发布控制改为稳定代理 + 单 writer + `/var/lib` 持久两阶段 journal，状态目录 `root:服务组 2750`、文件 `0640`，旧 `/ready` 只对 404 走 health 兼容，大备份在无 reflink 时使用事先有界复制并校验的独立 preflight 副本。GameState v46、envelope v2、云 schema v7 和 SQLite layout v2 均不变。真实 Linux 门禁未完成，生产仍为 1.0.39。
+> **1.0.41 香港 P0 组合热修候选（未部署）**：云存档自动删除从同步全库 GC 改为事务内定向 orphan cleanup；启动时只审计 `cloud_save_payloads` 每行的 SQLite 类型和最多 161 字符 alias 投影，以实际 alias 维护逻辑行索引和 checksum 引用计数。损坏 alias 或非 TEXT 动态类型令索引不完整，在线回收一律保留候选；显式离线维护 GC 仍全量解析 alias、解析正文并核对大小/SHA-256。固定 `32daa4f` 未复现微型黑洞运行意图丢失，Web 侧仅在稀疏投影后强制保留两个显式布尔字段并拒绝保存缺失字段的当前态。GameState v46、envelope v2、云 schema v7 和 SQLite layout v2 均不变；香港维护锁和发布状态由 Release 任务控制。
 
 > **当前发布基线（2026-08-11）**：正式环境当前使用 `1.0.38 / GameState v46`。有效资产的 v43 空间站实验存档不迁入量子共享池，传统物流站升级入口仍作为兼容域命令保留；普通与速通存档按模式隔离。
 
@@ -249,6 +249,8 @@ React Flow 只负责可视节点、边、视口和交互；真实生产库存与
 
 v33→v34 集中增加戴森壳层分配起点、微型黑洞三端口统计、传送带目标端口、时间扭曲主控与待处理时间预算，以及物流需求槽公平游标。旧壳层分配起点为 0；旧线路不重排；时间扭曲默认关闭且不改变原 1x/2x/4x 设置；新巨构不补发。迁移逐字段保留活动贡献、库存、实体、线路、载具、在途航线、科研、递归制造和戴森建设进度，并保持重复加载幂等。
 
+微型黑洞只有 `blackHolePaused === false` 且 `blackHoleActivationConfirmed === true` 时运行；新建设备继续使用 `true/false` 的安全默认值，真正缺字段的旧档在加载时同样归一为 `true/false`。1.0.41 热修不从 `confirmed` 或其他派生事实猜测玩家意图：当前 v46 状态保存前必须已有两个布尔字段，稀疏默认省略完成后再把二者写回投影。因此运行态 `false/true` 和玩家主动暂停 `true/true` 都以 own properties 持久化；已经持久化为 `true/true` 的状态不能判断是玩家选择还是假设中的回归结果，不做批量自动启用。
+
 v34→v35 只增加实体交互锁。所有旧实体迁移为 `interactionLocked=false`；已有 v35 的布尔值原样保留，非法值归一为 false。迁移不改变库存、缓存、线路、载具、航线、生产进度、科研、活动或戴森状态；云 schema 和 SQLite layout 不升级，服务端只补充字段类型与托盘 1 亿范围校验。
 
 v35→v36 扩展建筑制造中心目标和任务，使 `logistics_drone` / `logistics_vessel` 可作为持久目标，并允许任务保存 `fleet` 入库步骤与实际递归配方决策。旧 v35 建筑目标和 WIP 原样保留；新字段缺失时使用空值。迁移器同时区分“有限资源显式剩余 0”与“旧存档没有储量字段”，避免枯竭矿脉重载后恢复。云 schema 与 SQLite layout 仍不升级，服务端只把合法客户端状态上限扩展到 v36。
@@ -303,6 +305,8 @@ v46 历史存档可能包含正式批量操作曾生成的 `time_warp_device` �
 `server/index.mjs` 是无框架 Node HTTP 服务，生产使用 `better-sqlite3`、WAL 和 `synchronous=NORMAL`。SQLite layout v2 在紧凑 `app_state` 中保存账号、会话、指标和云存档元数据，每个 `(user_id, slot, revision)` 的完整正文独立保存在 `cloud_save_payloads`。上传、恢复、历史裁剪和账号删除会把元数据与正文放在同一事务中；普通心跳和指标写入不再序列化全部历史正文。旧单行库首次加载时先提取并校验全部正文，再事务性写入 layout v2；`/api/health` 暴露 `storageLayoutVersion` 供运维确认。云 API schema 仍为 v7，在 v6 四槽结构之上增加忽略大小写的唯一用户名：新账号以用户名、显示名称和密码注册，邮箱初始为空；v1-v6 旧账号按用户 ID 确定性补充不暴露邮箱的唯一用户名，原邮箱、验证状态、密码、会话、主存档、三个手动槽、历史和排行榜记录保持原位。旧账号继续支持原邮箱登录。
 
 1.0.40 的写入边界使用 AsyncLocal 候选状态和全局 mutation 队列：请求先从最新已提交 `_data` 克隆草稿，所有正文写入/删除只进入请求本地 staging，随后在一个 SQLite transaction 中提交 `cloud_save_payloads + app_state`；只有提交成功才原子发布新的内存快照。失败草稿被丢弃，普通 GET 继续读取旧快照，后续 flush 不能复活失败操作。直接正文 PUT 的 requestId receipt 属于 `app_state` 内部有界运维状态，不存正文、不改变 schema/layout，并与目标 revision 同事务提交；认证 `/api/operations/<requestId>` 可在网络结果不确定时确认。`/api/health` 继续只做 liveness，`/api/ready` 在最近持久化错误尚未被成功写入恢复或服务关闭中返回 503。优雅关闭先拒绝新 mutation，再等待 HTTP、备份、历史裁剪、mutation/write 队列，最后关闭数据库。
+
+1.0.41 P0 热修把引用发现分成启动审计和在线维护两个阶段。启动查询遍历每个逻辑 payload 行，但只读取主键、`typeof(payload)` 和一个最多 161 字符的条件 `substr`；direct legacy 正文不进入返回列、不计算长度，alias 索引也不依赖 `app_state` checksum 或 blob 表是否完整。有效 alias 同时进入 `(user, slot, revision) → alias` 和 `checksum → refcount` 两个内存映射。普通单 revision 裁剪只按主键读取被删行的固定 alias 投影，并对该 checksum 做常数次计数增减和 blob 主键删除；账号删除/归档 replace 的数据库查询只选择目标用户行，内存侧只筛选目标用户引用且不读取任何正文。事务失败时 SQLite、metadata、alias、blob 与两份内存索引都不发布。启动发现 malformed alias 或非 TEXT 动态类型时，无法证明完整性，所有在线候选均按仍有引用保留；允许暂留 orphan，禁止误删可能被损坏行引用的 blob。`server/cloud-payload-maintenance.mjs gc` 继续调用原有全量 `garbageCollectCloudPayloadBlobs()`，扫描并解析全部引用、读取 blob 正文并验证大小/SHA-256，不能用在线路径替代维护审计。
 
 大云上传不会占着全局 mutation 队列读取、解压或解析正文。请求先通过 CORS、路由限流、会话、模式/槽位、磁盘保护、Content-Length 和直接正文头校验，再进入 `UploadInspectionScheduler` 的 FIFO 大请求边界；默认同时处理两个、最多等待十六个，饱和时带 `Retry-After` 返回且不读入另一份大正文。异步 zlib 维持压缩/展开硬上限；1 MiB 以上正文将可转移 `ArrayBuffer` 交给短生命周期 Worker，Worker 对 payload 只执行一次权威 `JSON.parse`，在不规范化正文的前提下完成 envelope/FNV、结构、模式、摘要和排行榜紧凑投影。主线程拿回一份原始正文与紧凑结果，重新核对 expectedRevision 后才进入上述原子事务；断连或关闭在提交前取消，数据库失败仍由原子草稿回滚。受保护管理员指标只暴露数量、阶段耗时、最大展开字节和 Worker heap，不记录 payload、token、账号或路径。GET 云正文按 64 KiB 字符片段进行等价 JSON 转义并遵守响应背压，避免先创建第二份完整响应字符串；旧客户端仍使用同一 JSON 字段和 `response.json()`。该边界不提升 GameState、envelope、云 schema 或 SQLite layout。
 

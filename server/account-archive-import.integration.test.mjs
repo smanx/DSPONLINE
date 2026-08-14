@@ -417,7 +417,7 @@ function faultController() {
   };
 }
 
-for (const phase of ["before-sqlite-transaction", "after-user-payload-deletes", "after-payload-writes", "after-app-state-write"]) {
+for (const phase of ["before-sqlite-transaction", "after-user-payload-deletes", "after-payload-writes", "after-app-state-write", "after-payload-blob-cleanup"]) {
   test(`archive import ${phase} failure leaves memory and SQLite byte-for-byte unchanged`, async () => {
     const faults = faultController();
     await withHarness(`fault-${phase}`, async (harness) => {
@@ -465,7 +465,8 @@ test("archive import deduplicates repeated payload bodies while keeping independ
     await upload(running, account, "normal", "main", repeated, 0);
     await upload(running, account, "normal", "main", repeated, 1);
     const archive = await exportArchive(running, account);
-    await upload(running, account, "normal", "main", savePayload("normal", 501), 2);
+    const replaced = savePayload("normal", 501);
+    await upload(running, account, "normal", "main", replaced, 2);
     const preview = await previewImport(running, account);
     const result = await importArchive(running, account, archive, preview);
     assert.equal(result.response.status, 200, JSON.stringify(result.body));
@@ -474,6 +475,7 @@ test("archive import deduplicates repeated payload bodies while keeping independ
     assert.equal(new Set(rows.map((entry) => entry.payload)).size, 1, "both revisions should store the same small alias");
     const blobs = running.server.store.database.prepare("SELECT checksum FROM cloud_save_payload_blobs").all();
     assert.equal(blobs.filter((entry) => entry.checksum === sha256(repeated)).length, 1);
+    assert.equal(blobs.filter((entry) => entry.checksum === sha256(replaced)).length, 0, "replace must remove the last reference to the displaced blob");
     assert.equal((await download(running, account, "normal", "main", 1)).payload, repeated);
     assert.equal((await download(running, account, "normal", "main", 2)).payload, repeated);
 

@@ -1,5 +1,9 @@
 # 测试与发布基线
 
+> `DSPIDLE-1041-HK-GC-HOTFIX` + `DSPIDLE-1041-BLACK-HOLE-STATE` 开发候选（2026-08-14）：根 `npm ci` 安装 456 包并报告 1 moderate/4 high 的全依赖审计项，server `npm ci` 安装 75 包且 0 漏洞；随后根/server `npm audit --omit=dev` 均为 0。typecheck、125 个运行时包许可证和 production build 通过，构建 1925 模块且 startup/menu 预算通过。Vitest 为 136 文件通过/6 文件跳过、1209/18；server 为 355/2；ops 为 55/6（6 条 Linux 专属）；完整 Chromium E2E 为 334/9（343 总项、909.7 秒）；全部 0 失败、0 超时。native clean 首轮因未生成 `android/app/src/main/assets/capacitor.plugins.json` 得到 22 通过/1 跳过/1 失败，先 build 再 `cap sync android` 后复跑为 23/1、0 失败；Android/Windows 不发布。所有服务端写测试使用合成账号与临时 SQLite，没有生产访问。
+
+> 黑洞基线证据来自独立 detached worktree，HEAD 精确为 `32daa4f9438095308e3e6be7a0055268abe01e66`；重新 `npm ci` 后同一 Chromium 保存链 1/1 通过，覆盖运行态 `false/true`、玩家暂停 `true/true`、缺字段安全态 `true/false` 的同步保存、Worker、IndexedDB、导入导出和云正文准备。因此没有复现 1.0.41 投影导致统一暂停，当前改动是 fail-closed 防回归，不是存量修复。云 GC 专项另以 8,287 个逻辑行、32 MiB 无关 direct 行证明启动只返回固定 161 字符投影、单行删除使用 SQLite 复合主键且候选工作量为 1；元数据错配、malformed alias、非 TEXT/BLOB alias、共享引用、最后引用、legacy direct、账号 delete、归档 replace 和 blob cleanup 后故障回滚均进入完整 server 门禁。
+
 > `1.0.41` 固定源码 `32daa4f9438095308e3e6be7a0055268abe01e66` 的开发侧最终门禁：typecheck；Vitest 136 文件通过/6 条件跳过、1208/18；server 347/2；ops 55/6（6 项仅真实 Linux）；native 24/24；Chromium 333/9；Firefox/WebKit 2/2；生产预览 PWA 1/1；production audit 根/server 均 0；125 个运行时包许可证；Web、162 文件 API 展开包、Windows unpacked、Android unsigned APK/AAB 均构建通过。Chromium 的 9 条跳过均为未提供真实玩家/终局夹具或开发服务器模式下的 PWA 条件项，PWA 已用生产预览单独 1/1 通过；本轮没有读取玩家存档。所有写入测试使用合成账号和临时 SQLite。由于本机没有 WSL/Docker，真实 systemd/Nginx、UID/GID、flock 和故障切换矩阵没有执行，不能把 Windows 结果记为发布通过。
 
 > **当前发布基线（2026-08-11）**：香港、上海正式 Web/API 使用 `1.0.39 / GameState v46`，上海下载页与 Android/Windows stable 保持 1.0.38；有效资产的 v43 空间站实验存档拒绝加载。量子网络回归以 GameState v46 语义为基线，并保留传统物流站升级兼容测试。1.0.39 不升级存档 envelope、云 schema 或 SQLite layout。

@@ -52,6 +52,92 @@ test("save Worker returns a transferable verified sparse envelope", async ({ pag
   expect(result.snapshot).toMatchObject({ reason: "1.0.38 Worker 快照测试", integrity: "valid", valid: true });
 });
 
+test("micro black hole operation intent survives Worker, IndexedDB, export, and cloud preparation", async ({ page }) => {
+  await page.goto("/?menu=1");
+  const result = await page.evaluate(async () => {
+    const engine = await import("/src/game/engine.ts");
+    const offline = await import("/src/game/offlineSimulation.ts");
+    const integrity = await import("/src/game/saveEnvelopeIntegrity.ts");
+    const storage = await import("/src/game/storage.ts");
+    const state = engine.createInitialState(1, false);
+    const makeBlackHole = (index: number, id: string, flags?: { paused: boolean; confirmed: boolean }) => {
+      const entity = structuredClone(state.entities[index]) as Record<string, any>;
+      Object.assign(entity, {
+        id,
+        kind: "machine",
+        buildingId: "micro_black_hole_connector",
+        blackHolePorts: [0, 1, 2].map((portIndex) => ({ index: portIndex, totalDestroyed: "0" })),
+      });
+      if (flags) {
+        entity.blackHolePaused = flags.paused;
+        entity.blackHoleActivationConfirmed = flags.confirmed;
+      } else {
+        delete entity.blackHolePaused;
+        delete entity.blackHoleActivationConfirmed;
+      }
+      return entity;
+    };
+    state.entities = [
+      makeBlackHole(0, "black-hole-running", { paused: false, confirmed: true }),
+      makeBlackHole(1, "black-hole-player-paused", { paused: true, confirmed: true }),
+      makeBlackHole(2, "black-hole-legacy-missing"),
+    ];
+    state.belts = [];
+    const savedAt = 1_786_377_600_000;
+    const legacyEnvelope = {
+      formatVersion: 2,
+      kind: "primary",
+      mode: "normal",
+      slot: "main",
+      savedAt,
+      state,
+      checksum: integrity.computeSaveStateChecksum(2, state),
+    };
+    const legacyLoaded = storage.inspectSave(JSON.stringify(legacyEnvelope));
+    if (!legacyLoaded.valid || !legacyLoaded.state) throw new Error("legacy black-hole fixture did not load");
+    const normalizedState = legacyLoaded.state;
+    normalizedState.paused = false;
+    const syncRaw = storage.serializeEnvelope(normalizedState, savedAt);
+    const worker = await storage.serializeEnvelopeInWorker(normalizedState, savedAt + 1);
+    const indexedDb = await storage.saveGameVerified(normalizedState);
+    const indexedDbState = storage.loadGame("normal").state;
+    const exported = storage.exportGame(normalizedState);
+    const imported = storage.importGame(exported)!;
+    const cloud = await offline.prepareCloudUploadInWorker(syncRaw, { now: savedAt + 2_000 });
+    const flags = (candidate: typeof normalizedState) => Object.fromEntries(candidate.entities
+      .filter((entity) => entity.buildingId === "micro_black_hole_connector")
+      .map((entity) => [entity.id, {
+        paused: entity.blackHolePaused,
+        confirmed: entity.blackHoleActivationConfirmed,
+      }]));
+    return {
+      sync: flags(storage.inspectSave(syncRaw).state!),
+      legacy: flags(normalizedState),
+      workerUsed: worker.usedWorker,
+      worker: flags(storage.inspectSave(worker.raw).state!),
+      indexedDbSuccess: indexedDb.success,
+      indexedDb: flags(indexedDbState),
+      imported: flags(imported),
+      cloud: flags(storage.inspectSave(cloud.payload).state!),
+      cloudOfflineSeconds: cloud.offlineSeconds,
+    };
+  });
+  const expected = {
+    "black-hole-running": { paused: false, confirmed: true },
+    "black-hole-player-paused": { paused: true, confirmed: true },
+    "black-hole-legacy-missing": { paused: true, confirmed: false },
+  };
+  expect(result.workerUsed).toBe(true);
+  expect(result.indexedDbSuccess).toBe(true);
+  expect(result.cloudOfflineSeconds).toBe(2);
+  expect(result.legacy).toEqual(expected);
+  expect(result.sync).toEqual(expected);
+  expect(result.worker).toEqual(expected);
+  expect(result.indexedDb).toEqual(expected);
+  expect(result.imported).toEqual(expected);
+  expect(result.cloud).toEqual(expected);
+});
+
 test("paused normal save can add exactly one second unipolar vein after snapshot and double confirmation", async ({ page }) => {
   test.setTimeout(90_000);
   await page.goto("/?menu=1");

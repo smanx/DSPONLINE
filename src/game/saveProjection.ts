@@ -20,10 +20,22 @@ export function projectPersistentSaveState(state: GameState, contentPackRegistry
         ? { proliferatorBonusProgress: compactRecord(entity.proliferatorBonusProgress) }
         : {}),
     } as Record<string, any>;
+    if (entity.buildingId === "micro_black_hole_connector" && state.version >= 46) {
+      if (typeof entity.blackHolePaused !== "boolean" || typeof entity.blackHoleActivationConfirmed !== "boolean") {
+        throw new TypeError("A current micro black hole must have explicit pause and activation-confirmation state before saving");
+      }
+    }
     // Older clients briefly wrote quantumTarget to every entity. It remains a
     // persisted field only for the interstellar station where it is meaningful.
     if (entity.buildingId !== "interstellar_logistics_station") delete compact.quantumTarget;
     omitSaveContractDefaults(compact, "entity", state.version);
+    if (entity.buildingId === "micro_black_hole_connector" && state.version >= 46) {
+      // This final assignment deliberately runs after sparse-default omission.
+      // A future shared-contract entry cannot silently turn an active,
+      // player-confirmed sink into the fail-closed load default.
+      compact.blackHolePaused = entity.blackHolePaused;
+      compact.blackHoleActivationConfirmed = entity.blackHoleActivationConfirmed;
+    }
     return compact as FactoryEntity;
   };
   const compactBelt = (belt: BeltConnection): BeltConnection => {
