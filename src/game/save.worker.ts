@@ -3,6 +3,7 @@
 import { serializeSaveEnvelopeToTransfer } from "./saveTransfer";
 import { projectPersistentSaveState } from "./saveProjection";
 import { sha256Bytes } from "./payloadDigest";
+import { deserializeSimulationStateTransfer, type SimulationStateTransfer } from "./simulationRuntimeProtocol";
 import type { ContentPackRegistry } from "./contentPacks";
 import type { GameState } from "./types";
 
@@ -13,7 +14,10 @@ interface SaveWorkerRequest {
   kind: "primary" | "slot" | "snapshot";
   slot: "main" | 1 | 2 | 3;
   reason?: string;
-  state: unknown;
+  state?: unknown;
+  /** Authoritative runtime checkpoint; transferred without cloning GameState on the UI thread. */
+  stateTransfer?: SimulationStateTransfer;
+  sourceStateRevision?: number;
   contentPackRegistry: ContentPackRegistry;
   includePayloadSha256?: boolean;
 }
@@ -25,6 +29,7 @@ interface SaveWorkerResponse {
   payloadSha256?: string;
   byteLength?: number;
   durationMs?: number;
+  sourceStateRevision?: number;
   summary?: {
     stateVersion: number;
     savedAt: number;
@@ -45,8 +50,14 @@ self.onmessage = async (event: MessageEvent<SaveWorkerRequest>) => {
   const startedAt = performance.now();
   try {
     const request = event.data;
-    const state = request.state as Record<string, any>;
-    const persistent = projectPersistentSaveState(request.state as GameState, request.contentPackRegistry);
+    if ((request.state === undefined) === (request.stateTransfer === undefined)) {
+      throw new Error("后台存档必须且只能提供一个权威状态来源");
+    }
+    const sourceState = request.stateTransfer
+      ? deserializeSimulationStateTransfer(request.stateTransfer)
+      : request.state as GameState;
+    const state = sourceState as unknown as Record<string, any>;
+    const persistent = projectPersistentSaveState(sourceState, request.contentPackRegistry);
     const serialized = serializeSaveEnvelopeToTransfer(persistent, {
       formatVersion: request.formatVersion,
       kind: request.kind,
@@ -62,6 +73,7 @@ self.onmessage = async (event: MessageEvent<SaveWorkerRequest>) => {
       ...(request.includePayloadSha256 ? { payloadSha256: await sha256Bytes(serialized.bytes) } : {}),
       byteLength: serialized.byteLength,
       durationMs: Math.max(0, performance.now() - startedAt),
+      ...(Number.isSafeInteger(request.sourceStateRevision) ? { sourceStateRevision: request.sourceStateRevision } : {}),
       summary: {
         stateVersion: Number.isFinite(state.version) ? Math.max(0, Math.floor(state.version)) : 0,
         savedAt: request.savedAt,
