@@ -15,7 +15,7 @@
 
 硬边界：上海节点必须继续由上海本机提供前端与 `/api`，不得改成香港反代或域名跳转。上海为 HTTP，前端必须继续拒绝云账号密码传输。
 
-> 当前生产状态（2026-08-11）：香港、上海 Web/API 均运行 `1.0.39-fb54f2148dd6`，构建 ID 为 `1.0.39+fb54f2148dd6`；上海下载页和 Android/Windows stable 保持 `1.0.38`。Web/API 直接代码回滚为 1.0.38；下载页直接回滚和香港公开 previous-stable 仍为完整 1.0.37。两地数据库继续独立使用 schema v7 / SQLite layout v2。香港 `/canary/previous/` 302 到不可变 `/canary/1.0.37-853ecdb12795/`，退役 1.0.36 固定路径返回 `410`。发布前备份、未激活目录复验、原子切换、真实云 PUT 观察、公网完整哈希、Range、缓存、6 场 Chrome 和回退 PWA 隔离证据见 [releases/1.0.39.md](./releases/1.0.39.md)。
+> 当前生产状态（2026-08-14）：香港、上海 Web/API 均运行 `1.0.42-c24e6247d257`，构建 ID 为 `1.0.42+c24e6247d257`；上海下载页和 Android/Windows stable 均为 `1.0.42`。发布代理控制目录含 `d885a9e…` 只读 stale keep-alive 热修，writer 请求不重试。两地数据库继续独立使用 schema v7 / SQLite layout v2；回滚只切代码和静态制品，不恢复数据库。香港 `/canary/previous/` 继续 302 到不可变 `/canary/1.0.37-853ecdb12795/`。完整备份、切换、原生、下载、代理和观察证据见 [releases/1.0.42.md](./releases/1.0.42.md)。
 
 > 1.0.39 API 优先 P0 已发布，1.0.38 Web/Android/Windows 无需清缓存或重装即可恢复上传。Release Agent 已分别创建并验证两节点快照，用各自备份副本合成验证 v46 稀疏普通/速通 main 与手动槽、原始正文/校验/revision、历史恢复、服务重启、v45 稠密兼容与非法值拒绝；普通/速通复核阈值独立、隐藏状态和永久冻结由完整远端服务测试与香港隔离副本覆盖。本版没有 schema/layout migration；回滚只切回 1.0.38 代码并重启，绝不恢复生产数据库。
 
@@ -38,7 +38,7 @@
 
 服务端绑定 `127.0.0.1:4320`，公网只通过 Nginx 的 `/api` 访问。仓库里的 systemd 和 Nginx 文件是模板，实际安装前必须对照目标节点，不能把香港 Origin 或证书路径直接覆盖到上海。
 
-香港、上海 Web/API 已切换到 `1.0.39-fb54f2148dd6`，上海下载站保持不可变目录 `download-site-1.0.38-351c649af9ee`；Web/API 构建为 `1.0.39+fb54f2148dd6` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍 302 到上海下载域名。香港 Web-only 稳定入口 `/canary/previous/` 按用户要求继续指向 `web-1.0.37-853ecdb12795`，使用当前 1.0.39 API。Android 1.0.38 SHA-256 为 `9e04137021c90400ed6b547fce0e982c2f3a737b58439ad27618b47841c825c6`，Windows 1.0.38 SHA-256 为 `79162042993d9f37445516a6e4cd46dbb1a7b837fc7df4b97ea21f2a3ecfd8e4`（Authenticode `NotSigned`），blockmap SHA-256 为 `f9d2d8192f5ad0337a4bf60904a0d582e0a3ead7a2d66c7ae6fed4be56d17156`。1.0.39 香港发布前备份为 3,174,580,224 字节、上海为 217,088 字节，均为 `0600` 并通过 `quick_check`、完整性和 schema v7/layout v2；Web/API 代码回滚目标为 1.0.38，下载页直接回滚为 1.0.37。公网健康、下载 9/9、Range、缓存头、当前/上一版 hashed asset、CORS、6 场浏览器 smoke 和 1.0.37 回退 PWA 隔离均已复验。两地服务 active、`NRestarts=0`；发布收口磁盘约为香港 79%、上海 85%，不得删除当前版、回滚版或未证明已异地归档的有效备份。完整证据见 [releases/1.0.39.md](./releases/1.0.39.md)。
+香港、上海 Web/API 已切换到 `1.0.42-c24e6247d257`，上海下载站为不可变目录 `download-site-1.0.42-c24e6247d257`；Web/API 构建为 `1.0.42+c24e6247d257` / GameState v46。两地继续使用云 schema v7 和 SQLite layout v2，代码回滚不得恢复数据库；香港 `/downloads/*` 仍 302 到上海下载域名。香港 Web-only 稳定入口 `/canary/previous/` 按用户要求继续指向 `web-1.0.37-853ecdb12795`。Android 1.0.42 APK SHA-256 为 `7a2450b21b23619004ed6b665f1ebe5067b5b158f0f53ce09bf1d8bb14864b95`；Windows setup SHA-256 为 `c837b5b3ca4aa6f6715349e7bdbfae162d71206976936e52f6b24e5bb8fcbe2d`，Authenticode `NotSigned`。1.0.42 香港发布前备份为 3,284,348,928 字节、上海为 393,216 字节，均为 `0600` 并通过 `quick_check`、schema v7/layout v2。公网健康、下载 9/9、Range、缓存、桌面/手机浏览器和 1.0.37 回退 PWA 隔离均已复验。两地 API `NRestarts=0`；发布收口磁盘约为香港 74%、上海 75%。完整证据见 [releases/1.0.42.md](./releases/1.0.42.md)。
 
 `1.0.13` 两节点发布都只切换 Web/API 代码，未执行数据库迁移。香港发布前后 Backup API 快照均通过 `quick_check`；前备份为 887,271,424 字节，后备份为 888,795,136 字节。上海发布前后备份均为 122,880 字节并通过 `quick_check`；发布前 SHA-256 为 `a8af0eec173e6f8aad36af09b7e6d8c56b2b00014d76efd53124ddfb81b7e6a7`，发布后为 `8cb0c7bbbb270ac804b7c16909fc1b4274d0b2aed34a4ae7f379f333596cd737`。上海 0 个账号、0 个主云档、24 条玩家记录和 23 条错误记录均未减少，服务 `NRestarts=0`。受限备份传输账号仍只用于异地备份，代码发布使用独立的 `ubuntu` 授权。
 
@@ -208,6 +208,10 @@ sudo dsp-idle-switch-release --rollback-last \
 `--rollback-last` 走同一备份证据、预热、单写锁、readiness、排队和优雅关闭流程，只回滚代码，绝不恢复、替换或初始化数据库。重复执行同一目标为 no-op，`switch.lock` 阻止两个切换器并行。测试故障注入只有显式设置 `DSP_ENABLE_RELEASE_FAULT_INJECTION=1` 才能启用，生产禁止设置。
 
 固定顺序为：验证备份证据 → 候选在备份克隆和 4390 端口达到 health/ready → `drain` 并等待在途写归零 → `hold` 并等待全部请求归零 → 停旧实例 → 验证单写锁空闲 → 启动新实例并等待 readiness → 发布软链与代理 generation。启动、readiness、Nginx reload 或 SQLite 锁失败时恢复旧 unit/upstream 和软链。代理队列默认 512，保护窗口和 Nginx API `proxy_read_timeout` 均为 300 秒；systemd `TimeoutStopSec` 为 90 秒。超过有界窗口时返回明确 503 与 `Retry-After`，不会无限占用内存。
+
+1.0.42 的代理控制提交 `d885a9e…` 修复 keep-alive 空闲 socket 复用时的只读 `ECONNRESET`：只有无请求体、非 writer 的 GET/HEAD 在尚未收到响应时可重试一次；PUT/POST/DELETE/PATCH、云存档和账号原子导入导出必须保持单次发送。`api-handoff-proxy.mjs` 的正式 SHA-256 为 `2f908b40b5a715bf290ee4b5aad55256eae25c1e642abd4bb2677ec90fc16dd0`。
+
+禁止为单独更新代理直接执行普通 `systemctl restart dsp-idle-api-handoff-proxy.service`：active API 对代理有 `Requires=`，普通 restart 会反向停止大库 writer 并触发数分钟冷启动。1.0.42 发布采用的受控流程是：先备份并逐字核验 active unit；临时装入只移除该 `Requires=` 的完整 unit；`daemon-reload` 后确认 API PID 不变且依赖确已移除；原子切换不可变控制目录并仅重启代理；等待 4330 开始监听并通过 health/ready；最后逐字恢复原 unit、再次 reload 并确认依赖、API PID、代理状态和哈希。任一步失败都要在依赖仍临时分离时先切回旧控制目录和旧代理，再恢复原 unit。临时 unit 不能留在 `/run` 或 `/etc`，也不能借此启动第二个 SQLite writer。
 
 执行 `--rollback-last` 前必须读取 `/var/lib/dsp-idle-cloud/release-state/previous-release`，确认两个目录存在且后端能读取当前 schema。数据库升级后不能把旧 schema 后端继续留作“一键回滚”目标；应先在当前数据库的一致性备份副本上用隔离端口完成兼容验证。
 
@@ -387,8 +391,8 @@ chmod 0600 backup-private.pem
 
 ## 10. 当前性能事项
 
-香港与上海 `1.0.39-fb54f2148dd6` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html`、`version.json` 与 `sw.js` 保持 no-cache；1.0.38 与 1.0.37 入口资源已进入共享 hashed-asset 回退区。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
+香港与上海 `1.0.42-c24e6247d257` 均为 JS/CSS 启用 gzip，hashed asset 保持 immutable，`index.html`、`version.json` 与 `sw.js` 保持 no-cache；1.0.38 与 1.0.37 入口资源继续位于共享 hashed-asset 回退区。主菜单不 preload `FactoryRuntime`、`flow-vendor`、`game-core` 或 `storage`，英文目录同样只在进入工厂后懒加载；页面加载、LCP 和传输体积按隐私分桶进入受保护后台。
 
 香港 layout v1 的 136.8 MB `app_state` 曾使每分钟持久化把 Node 推到约 1.6 GB并阻塞健康接口。layout v2 上线后 `app_state` 约 2.55 MB，云存档正文按修订独立写入；240 秒生产观察中健康接口最大 10.407 ms、`NRestarts=0`、RSS 约 133～162 MB。监控若再次出现内存或延迟上升，应分别检查 `app_state` 大小、`cloud_save_payloads` 行数与历史元数据唯一键数，不能只调大健康超时。
 
-Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理；当前 2 核 2 GB 对首版 Node + Nginx + SQLite 足够。1.0.39 发布前，香港把 3,174,580,224 字节一致性备份直接写入受保护对象存储，完整 SHA 与 `quick_check` 通过；隔离副本把根盘推到 87%，低于 90% 停止线，测试后删除并回到 79%。切换后的既有立即备份收敛为 `ready` 后才恢复 timers，没有在高流量下追加第二份手工大备份。后续大库发布仍必须在 COS 传输前同时预算源文件、目标对象缓存和即刻启动快照，不能只按最终净空间计算；超过 90% 时不得继续隔离启动或切换。当前收口磁盘约为香港 79%、上海 85%；任何旧本地数据库备份只有在受保护异地对象完整哈希匹配后才能解除，代码回滚仍不得恢复数据库。完整证据见 [releases/1.0.39.md](./releases/1.0.39.md)。
+Brotli 仍是可选后续项，应先用真实流量比较 CPU、缓存命中和传输节省。不要用“提高服务器配置”替代静态压缩、缓存和 chunk 体积治理。1.0.42 发布前，香港 3,284,348,928 字节一致性备份和上海 393,216 字节备份均通过完整 SHA、`quick_check`、schema v7/layout v2；香港大库冷启动实测约 181 秒，正式切换使用 300 秒 readiness 窗口。后续大库发布仍必须在对象存储传输前同时预算源文件、目标对象缓存和即刻启动快照，不能只按最终净空间计算；超过 90% 时不得继续隔离启动或切换。当前收口磁盘约为香港 74%、上海 75%；任何旧本地数据库备份只有在受保护异地对象完整哈希匹配后才能解除，代码回滚仍不得恢复数据库。完整证据见 [releases/1.0.42.md](./releases/1.0.42.md)。

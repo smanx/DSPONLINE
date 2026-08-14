@@ -1,22 +1,22 @@
 # DSP极简网络项目现状
 
-> **当前生产与开发基线（2026-08-14）**：香港已经发布 `1.0.41+2e43f5644241` P0 热修，云 revision 裁剪从同步全库正文扫描改为事务触及 checksum 的定向回收；维护锁已解除，telemetry 202 熔断仍独立保留。微型黑洞显式运行字段也已上线，但无法无歧义判断既有 `true/true` 是玩家主动暂停还是历史异常，因此不自动开启玩家黑洞。上海仍是原始 1.0.41，原生 stable 未随热修改变。完整生产证据见 [1.0.41 发布记录](./releases/1.0.41.md)。1.0.42 已把该香港热修源码作为运行时父级，禁止回退到原始 `32daa4f…`。
+> **当前生产与开发基线（2026-08-14）**：香港、上海 Web/API 与上海下载 stable 已统一发布 `1.0.42+c24e6247d257`；运行时源码为 `c24e6247d2572e54e30e173d3e16bfd85829b92f`，发布运维热修为 `d885a9e1e8870517b65a42f8a41c6179f93fbd51`。Android 为长期证书签名的 `1.0.42 / 1000042`，Windows setup 继续明确 `NotSigned`。GameState v46、envelope v2、云 schema v7、SQLite layout v2 不变；两地数据库独立且没有恢复或迁移，排行榜历史没有修改。香港 `/canary/previous/` 仍保留不可变 1.0.37。完整证据见 [1.0.42 发布记录](./releases/1.0.42.md)。
 
-> **方向变更（2026-07-31）**：量子物流网络当前以 `1.0.39 / GameState v46` 为 Web/API 发布基线。旧 v43 空间站实验存档若包含有效空间站资产会被拒绝加载，不能合并到量子共享库存；代码仍保留传统物流站 Mk.I→Mk.II 的兼容升级入口，供现有站点和本地批量升级测试使用。
+> **方向变更（2026-07-31，兼容边界延续至 1.0.42）**：量子物流网络当前以 GameState v46 为 Web/API 数据基线。旧 v43 空间站实验存档若包含有效空间站资产会被拒绝加载，不能合并到量子共享库存；代码仍保留传统物流站 Mk.I→Mk.II 的兼容升级入口，供现有站点和本地批量升级测试使用。
 
 > 基线日期：2026-08-13
 > 产品阶段：首个公网版本已上线，当前更准确的定位是“公开测试版”。
 > 事实来源：当前工作区代码、自动化测试、部署配置和线上只读检查。
 
-> `1.0.42` 开发侧已固定为运行时源码 `c24e6247d2572e54e30e173d3e16bfd85829b92f` / Build ID `1.0.42+c24e6247d257`。除保留 UI 全面复核外，本候选新增同一 writer 的 35 MiB 大档超时续租和可验证冲突恢复、增产剂 100 万预设与 1 亿上限、无限矿物速通正式榜标签、未提交时间扭曲预算到普通离线时间线的幂等恢复。Vitest 1,231/18、server 356/2、ops 55/6、native 24/24、Chromium 353/9、Firefox/WebKit 2/2、production-preview PWA 1/1，全部 0 失败；source 214/214、candidate 10/10、provenance 3/3。玩家附件只读 hash 未变且未进入 Git/制品；没有连接生产、写玩家存档或改排行榜历史。旧 `8056d2cb…` 候选已作废。GameState v46、envelope v2、云 schema v7、SQLite layout v2 均不升级；正式签名、真实设备和生产发布仍为 No-Go。详见 [开发总纲](./1.0.42_UI_REVIEW_DEVELOPMENT_PLAN.md)、[候选记录](./releases/1.0.42-candidate.md) 与 [Release Agent 交接](./RELEASE_HANDOFF_1.0.42.md)。
+> `1.0.42` 已正式发布。除 UI 全面复核外，本版新增同一 writer 的 35 MiB 大档超时续租和可验证冲突恢复、增产剂 100 万预设与 1 亿上限、无限矿物速通正式榜标签、未提交时间扭曲预算到普通离线时间线的幂等恢复。最终开发门禁为 Vitest 1,231/18、server 356/2、ops 55/6、native 24/24、Chromium 353/9、Firefox/WebKit 2/2、production-preview PWA 1/1，全部 0 失败；远端 server 为两节点各 356/2、Linux ops 各 59/2。观察期增加只读 stale keep-alive 安全重试后，ops 为 56/6、两种 Linux Node 运行时聚焦测试各 4/4。旧 `8056d2cb…` 候选已作废。详见 [开发总纲](./1.0.42_UI_REVIEW_DEVELOPMENT_PLAN.md)、[候选记录](./releases/1.0.42-candidate.md)、[Release Agent 交接](./RELEASE_HANDOFF_1.0.42.md) 与 [正式发布记录](./releases/1.0.42.md)。
 
 > `1.0.41` 初始开发候选固定为 `32daa4f9438095308e3e6be7a0055268abe01e66 / 1.0.41+32daa4f94380`，完成 48 MiB 保证云正文、云同步状态中心、快速/精确/放弃离线选择、排行榜窗口说明、端口自适应命中与原子连续拉线、中文输入保护及 1.0.40 No-Go 返修。该候选后来进入生产；香港又发布 `2e43f564…` P0 热修，所以上述 SHA 仅是初始 1.0.41 历史，不再是香港 current 或 1.0.42 父级。开发历史见 [1.0.41 大版本总纲](./1.0.41_MAJOR_DEVELOPMENT_PLAN.md)，最终生产事实见 [1.0.41 发布记录](./releases/1.0.41.md)。
 
-> `1.0.40-58d3e6f986ec` 已在真实发布门禁中永久判定 No-Go，从未成为生产 current；不得复用该 Build ID 或它的制品。线上 Web/API 保持 1.0.39，Android/Windows stable 保持 1.0.38。完整失败事实见 [1.0.40 No-Go 记录](./releases/1.0.40-no-go-2026-08-13.md)。
+> `1.0.40-58d3e6f986ec` 已在真实发布门禁中永久判定 No-Go，从未成为生产 current；不得复用该 Build ID 或它的制品。判定当时线上 Web/API 为 1.0.39、Android/Windows stable 为 1.0.38；当前版本以本文顶部状态为准。完整失败事实见 [1.0.40 No-Go 记录](./releases/1.0.40-no-go-2026-08-13.md)。
 
 > `1.0.40` 开发批次第 1 项已在隔离分支完成实现并通过完整门禁：匿名 `GET /api/leaderboard` 继续只返回公开 Top 100，新增认证只读 `GET /api/leaderboard/me` 在完整公开 submission 集合中返回当前账号真实名次，并区分缺普通主云档、缺相邻修订、59 秒窗口、计时不增长、有效零产出、复核等待、隐藏和限制。UI 将服务器认证成绩与本地 60 秒最佳值分栏，白糖未知显示 `--`，Top 100 外显示真实 `#N`。本项不改变存档、云 revision、submission、排行榜历史、GameState v46、envelope v2、云 schema v7 或 SQLite layout v2，尚未部署生产环境；开发证据见 [1.0.40 银河排行榜“未上榜”状态修复](./feedback/2026-08-12-1.0.40-银河排行榜未上榜-Bug.md)。
 
-> 2026-08-13 的 1.0.40 隔离开发分支已完成 [大版本开发总纲](./1.0.40_MAJOR_DEVELOPMENT_PLAN.md) 中 BASE、P0、P1、P2、P3 与开发侧 FINAL-01。固定运行时源码为 `58d3e6f986ec098061a0a2109e149e1065a12c48`，Build ID 为 `1.0.40+58d3e6f986ec`；Vitest 1180/18、server 343/2、ops 34/34、native 24/24、Chromium 327/2、Firefox/WebKit 2/2、生产预览 PWA 1/1，均 0 失败。Web/API/source、6 个候选制品、206 文件 manifest、SBOM 和 provenance 已复验；Android/Windows 仅为未签名诊断制品。这里描述的是尚未部署的开发候选；线上 Web/API 仍为 1.0.39，开发过程没有连接生产写入、覆盖玩家存档或修改排行榜历史。完整证据见 [1.0.40 候选记录](./releases/1.0.40-candidate.md) 和 [Release Agent 交接](./RELEASE_HANDOFF_1.0.40.md)。
+> 2026-08-13 的 1.0.40 隔离开发分支已完成 [大版本开发总纲](./1.0.40_MAJOR_DEVELOPMENT_PLAN.md) 中 BASE、P0、P1、P2、P3 与开发侧 FINAL-01。固定运行时源码为 `58d3e6f986ec098061a0a2109e149e1065a12c48`，Build ID 为 `1.0.40+58d3e6f986ec`；Vitest 1180/18、server 343/2、ops 34/34、native 24/24、Chromium 327/2、Firefox/WebKit 2/2、生产预览 PWA 1/1，均 0 失败。Web/API/source、6 个候选制品、206 文件 manifest、SBOM 和 provenance 已复验；Android/Windows 仅为未签名诊断制品。这里描述的是当时未部署且后来 No-Go 的开发候选；当前生产版本以本文顶部状态为准。完整证据见 [1.0.40 候选记录](./releases/1.0.40-candidate.md) 和 [Release Agent 交接](./RELEASE_HANDOFF_1.0.40.md)。
 
 > 1.0.40 本地急救保存补充了刷新写入链证明：页面生命周期的同步镜像使用独立 payload/metadata 键，只有 writerId、fencing token、逐键 revision、模式、savedAt、checksum 与持久租约全部连续时才自动提交；崩溃在两次 localStorage 写入之间、元数据损坏、其他标签页来源或候选 checksum/模式不一致时均保留 candidate/persisted 两份原文并要求玩家选择。可信刷新、半写崩溃、损坏候选、普通/速通槽位和租约接管 Chromium 13/13 通过；不会凭时间戳静默删除未知镜像。
 
@@ -40,7 +40,7 @@
 
 > 1.0.38 最终门禁为 Vitest 950/18、Playwright 280/11、server 70/2、ops 6/6、native 8/8、生产依赖审计 0，source/Web/API 161/161，下载 9/9、bundle 10/10。Android 使用批准长期证书并完成 API 36.1 模拟器 `1.0.37 → 1.0.38` 覆盖升级；Windows 继续 `NotSigned`。用户只对本候选明确豁免 Android 真机、低配 Windows、Windows 覆盖升级和约一小时后台/锁屏门禁，并接受 60 秒精确模拟 13.5～13.8 秒、移动 Canvas 最大帧 139ms、既有长窗口近似误差和 30 MiB 云上传上限的残余风险。生产备份、隔离启动、原子切换、完整下载哈希、Range/cache、6 场 Chrome、PWA、COSFS 缓存处置和回滚证据见 [1.0.38 正式发布记录](./releases/1.0.38.md)。
 
-> `1.0.37` 按用户要求继续作为香港公开 previous-stable 和上海下载页直接回滚基线，但不再是 Web/API 的直接代码回滚目标。其源码为 `853ecdb12795844c484b1415f8e72967a25e343d`，Build ID 为 `1.0.37+853ecdb12795`；`/canary/previous/` 指向不可变 `/canary/1.0.37-853ecdb12795/`，当前 1.0.39 worker、Cache Storage 和正式根页离线重开保持隔离。历史证据见 [1.0.37 正式发布记录](./releases/1.0.37.md)。
+> `1.0.37` 按用户要求继续作为香港公开 previous-stable 和历史下载回退基线，但不再是 Web/API 的直接代码回滚目标。其源码为 `853ecdb12795844c484b1415f8e72967a25e343d`，Build ID 为 `1.0.37+853ecdb12795`；`/canary/previous/` 指向不可变 `/canary/1.0.37-853ecdb12795/`，当前 1.0.42 worker、Cache Storage 和正式根页离线重开保持隔离。历史证据见 [1.0.37 正式发布记录](./releases/1.0.37.md)。
 
 > `1.0.36` 为更早历史稳定版，已不再是直接回滚或 previous-stable；其固定 fallback 路径返回 `410`。历史证据见 [1.0.36 正式发布记录](./releases/1.0.36.md)。
 
@@ -86,7 +86,7 @@
 
 > 2026-08-02 10:08-10:21 的本次复核：真实夹具 Canvas 探针 P50/P95 为 `0.114/0.261 ms`；多 Worker 只读探针 1/2/4/8 Worker 中位墙钟为 `117.09/62.47/36.75/23.44 ms`，不等于完整模拟收益。60 秒观察 + 300 秒合同验证未找到可安全封存的闭合产线，合同路径只下降约 `0.126%`，完整性能对比见 [PERFORMANCE_COMPARISON_1.0.22_CANDIDATE_2026-08-02.md](./PERFORMANCE_COMPARISON_1.0.22_CANDIDATE_2026-08-02.md)。在线/离线小时级和全量 E2E 长测仍是候选门禁，1.0.22 不得提前切换。
 
-> 当前量子物流基线仍是 GameState v46、envelope v2；共享库存使用规范十进制大整数，量子塔在五秒边界结算，传统路线和尾货保持兼容。上传、下载使用两个独立的全星区额度，基础吞吐为 `5000/min × 银河物流倍率² × 全部量子塔堆叠`，轨道采集器可作为只上传供应端接入，量子模式继续保留行星内运输机配送。香港/上海当前运行 1.0.41 的不同补丁 SHA，但量子数据结构一致；上海下载页与原生 stable 未随香港热修改变。
+> 当前量子物流基线仍是 GameState v46、envelope v2；共享库存使用规范十进制大整数，量子塔在五秒边界结算，传统路线和尾货保持兼容。上传、下载使用两个独立的全星区额度，基础吞吐为 `5000/min × 银河物流倍率² × 全部量子塔堆叠`，轨道采集器可作为只上传供应端接入，量子模式继续保留行星内运输机配送。香港/上海当前统一运行 1.0.42，量子数据结构没有迁移。
 
 > `1.0.20` 量子上传热修附带云存档兼容修复：供应塔送达物资可直接进入量子共享库存；服务端接受普通蓝图建筑遗留的 `quantumTarget: false`，客户端读取后在下一次保存时清理普通建筑字段，仅保留星际物流站字段。云上传把格式无效、完整性失败和体积过大分开报告；GameState、存档 envelope 和云 schema 均不升级。
 
@@ -108,7 +108,7 @@
 
 > 香港正式节点已按 verified backup → dry-run → stopped-service transaction → post-check 顺序完成一次排行榜完整性处置。只删除 1 条公开 submission 并写入 1 条内部限制；账号、主云档、历史正文和其他同名账号均未删除或改写。上海没有执行该数据处置。
 
-> 香港与上海线上 Web/API 当前为 `1.0.39-fb54f2148dd6`，公网 Build ID 为 `1.0.39+fb54f2148dd6`；上海下载站为不可变目录 `download-site-1.0.38-351c649af9ee`。两地服务和对应定时器 active、`NRestarts=0`。Web/API 直接代码回滚为 1.0.38；上海下载站直接回滚和香港公开 `/canary/previous/` 仍为不可变 1.0.37。两地发布前快照均为 `0600`、`quick_check=ok`、schema v7/layout v2；数据库没有跨节点复制、恢复、替换或初始化。完整证据见 [releases/1.0.39.md](./releases/1.0.39.md)。
+> 香港与上海线上 Web/API 当前为 `1.0.42-c24e6247d257`，公网 Build ID 为 `1.0.42+c24e6247d257`；上海下载站为不可变目录 `download-site-1.0.42-c24e6247d257`。两地服务和对应定时器 active、API `NRestarts=0`。香港公开 `/canary/previous/` 仍为不可变 1.0.37；代码回滚只切不可变目录，不能恢复数据库。两地发布前快照均为 `0600`、`quick_check=ok`、schema v7/layout v2；数据库没有跨节点复制、恢复、替换或初始化。完整证据见 [releases/1.0.42.md](./releases/1.0.42.md)。
 
 ### `1.0.16` 存档冻结修复（双节点已上线）
 
@@ -128,7 +128,7 @@
 
 > `1.0.7` 保留 1.0.6 的 v38 副产物与资源锚点，并移除建筑制造中心必要 WIP 的固定 100 万阻断；暂停、断电、重载和大时间步继续保留任务。历史审计见 [STABILITY_REVIEW_2026-07-26.md](./STABILITY_REVIEW_2026-07-26.md)。
 
-> 历史原生制品 Android `1.0.14 / 1000014` 曾发布到上海下载节点；当前稳定包为 Android `1.0.38 / 1000038`。旧版本兼容性继续由同包名、递增 versionCode 和长期证书连续性保护；1.0.38 的 Android 真机、低配 Windows、Windows 覆盖升级和约一小时后台/锁屏门禁由用户只对该候选豁免。1.0.39 未构建或发布新原生包；Windows 1.0.38 稳定测试包继续明确标注为 `NotSigned`。
+> 历史原生制品 Android `1.0.14 / 1000014` 曾发布到上海下载节点；当前稳定包为 Android `1.0.42 / 1000042`。旧版本兼容性继续由同包名、递增 versionCode 和长期证书连续性保护；批准长期证书、v2/v3 和 API 36.1 模拟器 1.0.38→1.0.42 覆盖升级通过。实体 Android 真机和低配 Windows 没有可用设备；Windows 1.0.42 稳定测试包继续明确标注为 `NotSigned`。
 
 ### `1.0.21` / v46 紧急稳定性与 P3-P6（双节点已上线）
 
@@ -198,12 +198,12 @@
 
 | 入口 | 定位 | 当前状态 | 云功能 |
 | --- | --- | --- | --- |
-| `https://dsponline.cn` | 香港正式入口 | 在线，HTTPS，指向 `hk-origin.example.invalid`，Web/API `1.0.39` | 开放 |
+| `https://dsponline.cn` | 香港正式入口 | 在线，HTTPS，指向 `hk-origin.example.invalid`，Web/API `1.0.42` | 开放 |
 | `https://www.dsponline.cn` | 正式别名 | 301 跳转到根域名 | 开放 |
 | `http://shanghai-node.example.invalid` | 上海旧节点与备用试玩入口 | 在线，由上海本机直接提供服务 | 前端主动禁用账号密码传输 |
-| Electron | Windows 桌面版 | `1.0.38` 未签名测试安装包已公开；下载页明确提示未知发布者 | 使用受限 HTTPS 主进程桥 |
-| Android | Android 7+ 应用 | `1.0.38 / 1000038` 签名 APK 已公开；实体真机门禁由用户豁免 | HTTPS 云功能开放；香港 `https://localhost` Origin 已验证 |
-| `https://download.dsponline.cn` | 上海客户端下载节点 | 在线，提供 Windows 1.0.38 测试包、Android 1.0.38 正式包与稳定更新清单 | 不承载云账号或玩家数据 |
+| Electron | Windows 桌面版 | `1.0.42` 未签名测试安装包已公开；下载页明确提示未知发布者 | 使用受限 HTTPS 主进程桥 |
+| Android | Android 7+ 应用 | `1.0.42 / 1000042` 长期证书签名 APK 已公开；模拟器覆盖升级通过，实体真机未实测 | HTTPS 云功能开放；香港 `https://localhost` Origin 已验证 |
+| `https://download.dsponline.cn` | 上海客户端下载节点 | 在线，提供 Windows 1.0.42 测试包、Android 1.0.42 正式包与稳定更新清单 | 不承载云账号或玩家数据 |
 | PWA | 可安装网页版 | manifest、离线壳和更新提示已接入 | 联网且使用 HTTPS 时可用 |
 | `http://127.0.0.1:4318` | 本地开发 | Vite 开发服务器 | `/api` 代理到 `127.0.0.1:4320` |
 
@@ -421,7 +421,7 @@
 
 ### 存档与在线服务
 
-- 当前 clean 发布源码、香港与上海生产均为 `GameState` v46；存档封装格式保持 v2。1.0.39 不升级 GameState、存档 envelope、云 schema 或 SQLite layout；旧实体、线路、库存、科研投入、在途路线、量子库存、制造 WIP、太阳帆和戴森计划均沿用 v46 兼容边界。
+- 当前 clean 发布源码、香港与上海生产均为 `GameState` v46；存档封装格式保持 v2。1.0.42 不升级 GameState、存档 envelope、云 schema 或 SQLite layout；旧实体、线路、库存、科研投入、在途路线、量子库存、制造 WIP、太阳帆和戴森计划均沿用 v46 兼容边界。
 - 自动保存选项为关闭、30/60/120 秒和 10 分钟，默认 30 秒；关闭周期保存不影响切后台、`pagehide`、卸载和返回主菜单的紧急保存。手机端存档摘要扫描降至 30 秒，全屏工作区或网页后台期间冻结底层画布快照更新。
 - 本地主存档、槽位和快照不再持久化 `productionHistory`，内存统计曲线仍照常运行并在刷新后重新积累。主档、备份、快照和三个槽位使用 IndexedDB；主存档先写入、读回并校验，成功后才通知界面，配额异常只会清理自动快照并重试一次，最终失败会持续提示玩家立即导出。
 - 本地主存档有校验和和上一份有效备份；自动快照最多 2 份、至少相隔 5 分钟，手动快照和 3 个手动槽位不会被自动清理。旧 localStorage 副本只有在 IndexedDB 读回一致后才删除；手动槽位与快照删除均要求连续两次确认并显示目标摘要。
@@ -457,8 +457,8 @@
 
 | 概念 | 当前值 | 用途 |
 | --- | --- | --- |
-| npm 应用版本 | clean 发布源码、香港与上海 Web/API 为 `1.0.39`；Windows 为 1.0.38，Android 正式包为 1.0.38 / 1000038 | 两类原生清单与文件由上海下载节点提供，本次未发布 1.0.39 原生包 |
-| 游戏状态版本 | clean 发布源码、香港与上海均为 `46` | 1.0.39 不升级 GameState，继续保留旧版本迁移链 |
+| npm 应用版本 | clean 运行时源码、香港与上海 Web/API、Windows 和 Android 均为 `1.0.42`；Android versionCode `1000042` | 两类原生清单与文件由上海下载节点提供 |
+| 游戏状态版本 | clean 运行时源码、香港与上海均为 `46` | 1.0.42 不升级 GameState，继续保留旧版本迁移链 |
 | 存档封装版本 | `2` | 校验和、元数据和导入导出格式 |
 | 云服务 schema | 工作区与线上 `7`，SQLite layout `2` | v7 增加唯一用户名；layout v2 拆分云存档正文 |
 | 本地身份 schema | `2` | 本地排行账本和可选云账号绑定，不属于 `GameState` |
@@ -467,9 +467,9 @@
 
 不要把“v33 存档状态”当作产品版本。每个正式发布都应先确定 SemVer，再生成可追溯构建 ID 和 Git 标签。
 
-香港和上海 Web/API 当前为 `1.0.39-fb54f2148dd6`，构建 ID 为 `1.0.39+fb54f2148dd6`。上海下载页和 Windows/Android 稳定清单均保持 `1.0.38`，Android versionCode 为 `1000038`。1.0.39 Web/API、备份、回滚与公网证据见 [releases/1.0.39.md](./releases/1.0.39.md)。
+香港和上海 Web/API 当前为 `1.0.42-c24e6247d257`，构建 ID 为 `1.0.42+c24e6247d257`。上海下载页和 Windows/Android 稳定清单均为 `1.0.42`，Android versionCode 为 `1000042`。备份、回滚、公网和原生证据见 [releases/1.0.42.md](./releases/1.0.42.md)。
 
-香港与上海 Web/API 直接代码回滚目标为 `1.0.38-351c649af9ee`；上海下载站直接回滚目标为 `download-site-1.0.37-853ecdb12795`。旧版安装包和目录继续保留。固定 Web/API 切换工具路径为 `/usr/local/sbin/dsp-idle-switch-release`，下载页回滚目标记录在 `/var/www/dsp-idle-downloads/release-state/previous-release`，回滚不得恢复数据库。两地 Nginx 应用规则均使用 40 MiB 上传边界、`version.json` no-cache 和 `/var/www/dsp-idle/shared/assets` 历史 hashed-asset 回退；香港 `/canary/previous/` 按用户要求继续指向不可变 1.0.37 Web，退役 1.0.36 fallback 返回 `410`。发布收口磁盘使用率约为香港 79%、上海 85%，继续按 80% 告警、90% 保护阈值监控。
+香港与上海 Web/API 代码回滚必须使用仍兼容 1 亿增产剂上限和速通 `resourceMode` 的不可变候选；不得直接切回旧验证器。1.0.37 继续作为用户指定的公开 Web previous-stable，旧版安装包和目录继续保留。固定 Web/API 切换工具路径为 `/usr/local/sbin/dsp-idle-switch-release`，下载页回滚目标记录在 `/var/www/dsp-idle-downloads/release-state/previous-release`，回滚不得恢复数据库。两地 Nginx 应用规则均使用 40 MiB 上传边界、`version.json` no-cache 和 `/var/www/dsp-idle/shared/assets` 历史 hashed-asset 回退；发布收口磁盘约为香港 74%、上海 75%，继续按 80% 告警、90% 保护阈值监控。
 
 首个公网源码快照冻结为 Git 提交 `9acd4460868a4328a1b5e8bb3afbe736c7857e09` 并标记 `v0.1.0`。该标签继续用于追溯原始线上源码；从 `v0.2.0` 起，正式发布使用“产品版本 + Git SHA”的确定性构建 ID。首版证据见 [releases/0.1.0.md](./releases/0.1.0.md)。
 
@@ -477,6 +477,7 @@
 
 | 检查 | 基线结果 |
 | --- | --- |
+| `1.0.42` / v46 正式发布 | runtime `c24e624…`、Build ID `1.0.42+c24e6247d257`；Vitest 1,231/18、server 356/2、ops 55/6、native 24/24、Chromium 353/9、Firefox/WebKit 2/2、PWA 1/1；远端 server 两节点各 356/2、Linux ops 各 59/2；代理热修后 ops 56/6、Linux Node 20/22 聚焦各 4/4；source 214/214、candidate 10/10、provenance 3/3，全部 0 失败 |
 | `1.0.40` / v46 开发候选 | 固定运行时 SHA `58d3e6f986ec…`；129 个 Vitest 文件通过/6 跳过，1180 项通过/18 项跳过；Chromium 327/2、Firefox/WebKit 2/2、生产预览 PWA 1/1；server 343/2、ops 34/34、native 24/24；206 文件 source manifest、6 个候选制品、CycloneDX 1.5 SBOM、3-subject provenance、类型检查、125 个运行时许可证、生产构建和根/server 生产依赖审计 0 通过。尚未部署；原生正式签名、实体设备、隔离 Linux 和生产备份副本仍是 Release Agent 门禁 |
 | `1.0.39` / v46 Web/API 正式发布 | 107 个测试文件通过、6 个跳过；950 项 Vitest 通过、18 项跳过；Playwright 282 项通过、11 项条件夹具跳过；服务端 75/2、运维 6/6、原生工具 8/8、163 文件 source manifest、2 文件 candidate manifest、Web 128、API 35、类型检查、128 个运行时许可证和生产构建通过；双节点备份、独立副本隔离、原子切换、真实云 PUT 观察、完整下载 9/9、Range/cache、当前/历史资源、6 场 Chrome 和 1.0.37 PWA 隔离通过；下载与 native stable 保持 1.0.38 |
 | `1.0.38` / v46 正式发布 | 107 个测试文件通过、6 个跳过；950 项 Vitest 通过、18 项跳过；Playwright 280 项通过、11 项条件夹具跳过；服务端 70/2、运维 6/6、原生工具 8/8、161 文件 source manifest、9 文件下载 manifest、10 文件 bundle、类型检查、128 个运行时许可证和生产构建通过；双节点、Android/Windows、下载页、备份、完整哈希、Range、缓存、上一版 chunk、6 场 Chrome smoke 和上一稳定版 PWA 隔离均通过；真机/低配 Windows/Windows 覆盖升级/后台门禁与交接性能残余风险由用户只对本候选明确豁免/接受 |
@@ -525,10 +526,10 @@
 | `0.8.1` / v32 正式回归 | 31 个文件 320/320 Vitest；119/119 Playwright；服务端 23/23；运维 5/5；生产构建通过 |
 | v32 缓存设置视觉门禁 | 桌面、经典手机、新版手机；80/100/125/150/200%；预设与自定义输入均通过 |
 | v32 生产内存门禁 | Chrome/360 各 30 分钟；强制 GC 活跃堆分别 +2.17 MiB / +1.87 MiB，DOM 与监听器均 0 增长 |
-| Vitest | 1.0.39 正式发布基线为 950 项通过、18 项显式跳过、0 失败 |
-| Playwright Chrome | 1.0.39 clean 正式源码全量回归为 282 项通过、11 项显式条件夹具跳过、0 失败 |
-| Node 云服务测试 | 当前 API 发布目录为 `api-1.0.39-fb54f2148dd6`；本地与两地未激活目录均为 75 项通过、2 项可选夹具跳过 |
-| 运维备份/恢复/Nginx/探针 | 本地、香港和上海发布目录均为 6/6 |
+| Vitest | 1.0.42 正式发布基线为 1,231 项通过、18 项显式跳过、0 失败 |
+| Playwright Chrome | 1.0.42 clean 运行时源码全量回归为 353 项通过、9 项显式条件夹具跳过、0 失败 |
+| Node 云服务测试 | 当前 API 发布目录为 `api-1.0.42-c24e6247d257`；本地与两地未激活目录均为 356 项通过、2 项可选夹具跳过 |
+| 运维备份/恢复/Nginx/探针 | 开发候选 55/6；代理热修后 56/6；两地 Linux 各 59/2，全部 0 失败 |
 | Vite 生产构建 | 通过 |
 | 桌面、手机竖屏、手机横屏 | 已进行视觉与交互检查 |
 | 手机新版阶段 0-3 focused E2E | 9/9 通过，并纳入 108 项全量回归 |

@@ -2,13 +2,15 @@
 
 > `1.0.42` 已基于香港最终 1.0.41 热修固定为 `c24e6247d2572e54e30e173d3e16bfd85829b92f / 1.0.42+c24e6247d257`。最终门禁：Vitest 1,231/18、server 356/2、ops 55/6、native 24/24、Chromium 353/9、Firefox/WebKit 2/2、production-preview PWA 1/1，均 0 失败；root/server production audit 0，125 个运行时许可证。production build 为 1,928 模块、startup 185,929 B gzip、menu 281,809 B、forbidden 0。API 162 文件临时 SQLite 启动、Android unsigned bundle/assemble/lint/zipalign、Windows PE/ASAR/48 MiB/4 进程隔离启动均通过。source 214/214、candidate 10/10、provenance 3/3。旧 `8056d2cb…` 候选只作历史诊断且不得发布。
 
+> **当前正式发布基线（2026-08-14）**：香港、上海 Web/API 和上海下载 stable 均为 `1.0.42+c24e6247d257`。两节点远端 server 各 356/2、Linux ops 各 59/2；正式 Android APK 使用批准长期证书并在 API 36.1 模拟器完成 1.0.38→1.0.42 覆盖，Windows setup 继续 `NotSigned`。观察期代理热修提交 `d885a9e…` 后，本地 ops 为 56/6，Linux Node 20/22 聚焦各 4/4；只读 stale socket 可重试一次，writer 不重试。生产事实见 [1.0.42 发布记录](./releases/1.0.42.md)。
+
 > `DSPIDLE-1041-HK-GC-HOTFIX` + `DSPIDLE-1041-BLACK-HOLE-STATE` 开发候选（2026-08-14）：根 `npm ci` 安装 456 包并报告 1 moderate/4 high 的全依赖审计项，server `npm ci` 安装 75 包且 0 漏洞；随后根/server `npm audit --omit=dev` 均为 0。typecheck、125 个运行时包许可证和 production build 通过，构建 1925 模块且 startup/menu 预算通过。Vitest 为 136 文件通过/6 文件跳过、1209/18；server 为 355/2；ops 为 55/6（6 条 Linux 专属）；完整 Chromium E2E 为 334/9（343 总项、909.7 秒）；全部 0 失败、0 超时。native clean 首轮因未生成 `android/app/src/main/assets/capacitor.plugins.json` 得到 22 通过/1 跳过/1 失败，先 build 再 `cap sync android` 后复跑为 23/1、0 失败；Android/Windows 不发布。所有服务端写测试使用合成账号与临时 SQLite，没有生产访问。
 
 > 黑洞基线证据来自独立 detached worktree，HEAD 精确为 `32daa4f9438095308e3e6be7a0055268abe01e66`；重新 `npm ci` 后同一 Chromium 保存链 1/1 通过，覆盖运行态 `false/true`、玩家暂停 `true/true`、缺字段安全态 `true/false` 的同步保存、Worker、IndexedDB、导入导出和云正文准备。因此没有复现 1.0.41 投影导致统一暂停，当前改动是 fail-closed 防回归，不是存量修复。云 GC 专项另以 8,287 个逻辑行、32 MiB 无关 direct 行证明启动只返回固定 161 字符投影、单行删除使用 SQLite 复合主键且候选工作量为 1；元数据错配、malformed alias、非 TEXT/BLOB alias、共享引用、最后引用、legacy direct、账号 delete、归档 replace 和 blob cleanup 后故障回滚均进入完整 server 门禁。
 
 > `1.0.41` 固定源码 `32daa4f9438095308e3e6be7a0055268abe01e66` 的开发侧最终门禁：typecheck；Vitest 136 文件通过/6 条件跳过、1208/18；server 347/2；ops 55/6（6 项仅真实 Linux）；native 24/24；Chromium 333/9；Firefox/WebKit 2/2；生产预览 PWA 1/1；production audit 根/server 均 0；125 个运行时包许可证；Web、162 文件 API 展开包、Windows unpacked、Android unsigned APK/AAB 均构建通过。Chromium 的 9 条跳过均为未提供真实玩家/终局夹具或开发服务器模式下的 PWA 条件项，PWA 已用生产预览单独 1/1 通过；本轮没有读取玩家存档。所有写入测试使用合成账号和临时 SQLite。由于本机没有 WSL/Docker，真实 systemd/Nginx、UID/GID、flock 和故障切换矩阵没有执行，不能把 Windows 结果记为发布通过。
 
-> **当前发布基线（2026-08-14）**：香港 Web/API 使用 `1.0.41+2e43f5644241`，上海 Web/API 使用原始 `1.0.41+32daa4f94380`；下载页与 Android/Windows stable 未随香港热修改变。两端仍使用 GameState v46、envelope v2、cloud schema v7 和 SQLite layout v2。完整香港生产记录见 [releases/1.0.41.md](./releases/1.0.41.md)。
+> **历史 1.0.41 发布基线（已由 1.0.42 取代）**：香港 Web/API 曾使用 `1.0.41+2e43f5644241`，上海曾使用原始 `1.0.41+32daa4f94380`。两端数据边界均为 GameState v46、envelope v2、cloud schema v7 和 SQLite layout v2。完整历史见 [releases/1.0.41.md](./releases/1.0.41.md)。
 
 > `1.0.39` API 热修在 2026-08-11 完成开发与正式发布门禁：typecheck、clean Vite build、Vitest 107 文件通过/6 文件跳过且 950 项通过/18 项跳过、服务端 75/2、运维 6/6、原生工具 8/8、128 个运行时许可证、根与 server 生产依赖审计 0。Playwright 最终完整全量为 282 通过/11 条显式条件夹具跳过/0 失败（293 总项）；首次既有用例瞬时超时后，目标与随后完整全量均通过。source 163/163、candidate 2/2、Web 128/128、API 35/35，以及两地发布前备份、各自副本隔离、原子切换、真实云 PUT、完整公网字节、Range/cache、6 场 Chrome 和 PWA 均通过。所有写入 smoke 仅使用合成账号与临时/备份副本 SQLite，不使用生产或玩家数据。
 
@@ -43,15 +45,15 @@
 | 层级 | 命令 | 当前规模 | 覆盖重点 |
 | --- | --- | ---: | --- |
 | 类型检查 | `npm run typecheck` | 全部前端 TS | 严格类型、Vite 配置 |
-| 单元/领域 | `npm test` | `1.0.39`：107 个文件通过、6 个跳过；950 项通过、18 项跳过 | 引擎暂停边界、递归制造守恒、Worker/稀疏存档与导入边界、单极磁石扩容、科研宏观账本、离线决策、纯挂机幂等与守恒、模式存档隔离、v1-v46 存档、传送带/物流索引 oracle 和云同步等 |
-| 浏览器 E2E | `npm run test:e2e` | `1.0.39`：282 项通过、11 项显式条件夹具跳过、0 失败 | Worker 槽位/快照、矿脉扩容、Canvas 有界矩阵、科技树横向输入/多字号、星图批量物流、离线决策、版本公告、速通、纯挂机恢复、v46 稀疏协议、模式隔离、新旧手机壳和 IndexedDB 回归 |
-| 云服务 | `npm run test:server` | `1.0.39`：75 项通过、2 项可选夹具跳过 | 用户名注册、模式化云槽、schema v3→v7、SQLite layout v1→v2、v35-v46 稀疏/稠密边界、治理指标、账号安全、模式化复核 revision、历史恢复保护、排行榜完整性和管理员保护 |
-| 运维工具 | `npm run test:ops` | 随 1.0.40 集成增长 | SQLite 一致性快照、异地恢复、Nginx、节点探针、发布备份证据、稳定交接代理、单写锁和切换故障回滚 |
-| 原生配置与发布工具 | `npm run test:native` | 8/8 | 社区更新源默认关闭、HTTPS 通道、Android/桌面更新清单、调试 APK 拒绝、显式发布基址、桌面包内元数据和静态下载页清单门禁 |
-| 第三方许可证 | `npm run licenses:check` | 128 个运行时包 | 根项目/云服务 lockfile、直接依赖通知、完整许可证文本和 public 法律文件一致性 |
-| 生产构建 | `npm run build` | clean `1.0.39+fb54f2148dd6` 构建通过 | `tsc -b`、Vite chunk、普通离线/宏观 Worker 和 PWA 资源；生产多 Worker 入口硬关闭 |
-| Windows setup | `npm run desktop:dist` | clean 1.0.38 setup；FileVersion/ProductVersion 1.0.38；隔离启动 4 个进程；`NotSigned` | Electron 启动、包内 Build ID、正式 API/更新地址和稳定清单 |
-| Android release | `npm run android:release` | clean 1.0.38 / 1000038；414 tasks；APK v2/v3、zipalign、批准证书和正式 URL 通过 | applicationId、versionCode、SDK、签名连续性、模拟器升级和稳定清单 |
+| 单元/领域 | `npm test` | `1.0.42`：1,231 项通过、18 项条件跳过、0 失败 | 引擎暂停边界、递归制造守恒、Worker/稀疏存档与导入边界、单极磁石扩容、科研宏观账本、离线决策、纯挂机幂等与守恒、模式存档隔离、v1-v46 存档、传送带/物流索引 oracle 和云同步等 |
+| 浏览器 E2E | `npm run test:e2e` | `1.0.42`：Chromium 353/9、Firefox/WebKit 2/2、0 失败 | 大档租约/冲突、时间扭曲恢复、增产剂上限、速通资源标签及完整既有回归 |
+| 云服务 | `npm run test:server` | `1.0.42`：356 项通过、2 项可选夹具跳过；两节点远端结果相同 | 云槽、schema/layout、原子写入、大正文、排行榜和恢复保护 |
+| 运维工具 | `npm run test:ops` | 候选 55/6；代理热修后 56/6；两节点 Linux 各 59/2 | SQLite 一致性快照、异地恢复、Nginx、节点探针、发布备份证据、稳定交接代理、单写锁和切换故障回滚 |
+| 原生配置与发布工具 | `npm run test:native` | 24/24 | 社区更新源默认关闭、HTTPS 通道、Android/桌面更新清单、调试 APK 拒绝、显式发布基址、桌面包内元数据和静态下载页清单门禁 |
+| 第三方许可证 | `npm run licenses:check` | 125 个运行时包 | 根项目/云服务 lockfile、直接依赖通知、完整许可证文本和 public 法律文件一致性 |
+| 生产构建 | `npm run build` | clean runtime `1.0.42+c24e6247d257` 构建通过 | `tsc -b`、Vite chunk、普通离线/宏观 Worker 和 PWA 资源；生产多 Worker 入口硬关闭 |
+| Windows setup | `npm run desktop:dist` | 1.0.42 setup；FileVersion/ProductVersion 1.0.42；隔离启动 4 个进程；`NotSigned` | Electron 启动、包内 Build ID、正式 API/更新地址和稳定清单 |
+| Android release | `npm run android:release` | 1.0.42 / 1000042；APK v2/v3、zipalign、批准证书和正式 URL 通过 | applicationId、versionCode、SDK、签名连续性、模拟器升级和稳定清单 |
 
 1.0.18 专项回归覆盖量子上传/下载独立全局预算、轨道采集器供应端、无量子塔时零额度、本地运输机兼容、逐物品 1 万至 100 亿容量、调低容量保留超额库存、五秒流量摘要、v44→v45 守恒迁移，以及英文、390×844 和 200% 字号量子库存界面。完整门禁和线上证据见 [releases/1.0.18.md](./releases/1.0.18.md)。
 
@@ -1188,9 +1190,9 @@ Android `1.0.18 / 1000018` 使用历史长期证书，APK v2/v3 通过，SHA-256
 
 用户只对 `1.0.37-853ecdb12795` 明确豁免 Android 真机、低配 Windows、`1.0.36 → 1.0.37` 覆盖升级和约一小时后台门禁，并接受端到端离线约 36.8 秒、30 天非关键估计误差约 81.5%、16x 关键误差上界 1.0、60 秒精确模拟约 12.75 秒的残余风险。不得把这些门禁记为通过，也不得沿用到后续候选。香港灰度时一次只读管理员大库聚合造成 106 条短暂 502/504；受控重启后 20/20 健康通过、`NRestarts=0`，确认稳定后才继续上海。完整生产证据见 [releases/1.0.37.md](./releases/1.0.37.md)。
 
-## 50. `1.0.41` 最终热修基线
+## 50. `1.0.41` 最终热修历史基线
 
-香港当前运行 `1.0.41+2e43f5644241`。该热修把云 revision 裁剪的同步全库正文 GC 改为定向 orphan cleanup，并强制微型黑洞两个运行布尔字段进入 v46 稀疏正文。1.0.42 的测试和制品必须以该提交为父级；原始 `32daa4f…` 不能继续作为最终基线。生产证据、备份与回滚边界见 [1.0.41 发布记录](./releases/1.0.41.md)。
+香港在 1.0.42 发布前运行 `1.0.41+2e43f5644241`。该热修把云 revision 裁剪的同步全库正文 GC 改为定向 orphan cleanup，并强制微型黑洞两个运行布尔字段进入 v46 稀疏正文。1.0.42 的测试和制品以该提交为父级；原始 `32daa4f…` 没有重新成为最终基线。历史证据见 [1.0.41 发布记录](./releases/1.0.41.md)。
 
 ## 51. `1.0.42` UI、恢复与规则补充回归
 
@@ -1209,3 +1211,11 @@ Android `1.0.18 / 1000018` 使用历史长期证书，APK v2/v3 通过，SHA-256
 - 原 1.0.42 UI 的动态安全区、移动原子导航、焦点/inert、Axe、80%～200% 字号、44px 触控、中文输入和教程 revision 全量回归。
 
 开发侧聚焦证据：typecheck 通过；相关 Vitest 273/273；server/security 60/2；Chromium 聚焦批次 150/1（151 总项），均 0 失败。最终全量为 Vitest 1,231/18、server 356/2、ops 55/6、native 24/24、Chromium 353/9、Firefox/WebKit 2/2、production-preview PWA 1/1，全部 0 失败；根/server 生产依赖审计 0。source manifest 214/214，candidate 10/10，provenance 3/3。完整制品、哈希、兼容边界和回滚方案见 [1.0.42 候选记录](./releases/1.0.42-candidate.md) 与 [Release Agent 交接](./RELEASE_HANDOFF_1.0.42.md)。
+
+## 52. `1.0.42` 正式发布与代理观察回归
+
+两地未激活 API 在各自临时 SQLite/备份边界内运行完整 server 356/2；Linux ops 为各 59/2。生产切换前分别验证 SQLite Backup API、完整 SHA-256、`quick_check`、schema v7/layout v2、独立 preflight 和单 writer。香港 3.2 GiB 大库冷启动实测约 181.060 秒；默认 180 秒首次切换自动恢复旧服务，确认候选兼容后使用 300 秒 readiness 重新执行成功。测试和发布没有向真实玩家账号写入合成数据。
+
+观察期发现 handoff proxy 的复用空闲 socket 可能在尚未收到上游响应时返回 `ECONNRESET`。提交 `d885a9e…` 增加一次严格只读重试，writer 仍单次发送；本地完整 ops 更新为 56/6，聚焦测试在 Windows 连续五轮 4/4、Linux Node 20 和 Node 22 各 4/4，均无失败/告警。两节点替换代理时活动 API PID 保持不变，systemd 原依赖逐字恢复，health/ready、公开版本、排行榜和 1.0.37 PWA 回退通过。
+
+正式 Android APK 使用批准长期证书，v2/v3、zipalign、包名/versionCode、正式 URL 和 API 36.1 模拟器 1.0.38→1.0.42 覆盖升级通过；Windows setup、blockmap、feed、ASAR Build ID、正式 URL、隔离启动和公网完整哈希通过，Authenticode 仍为 `NotSigned`。实体 Android、低配 Windows、iOS standalone 和实体读屏器未实测，必须保留为残余风险。完整证据见 [1.0.42 正式发布记录](./releases/1.0.42.md)。

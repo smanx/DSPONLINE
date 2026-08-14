@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "version": "1.0.42",
+  "buildId": "1.0.42+c24e6247d257",
+  "runtimeCommit": "c24e6247d2572e54e30e173d3e16bfd85829b92f",
+  "operationsCommit": "d885a9e1e8870517b65a42f8a41c6179f93fbd51",
+  "generatedAt": "2026-08-14T12:32:24.910Z",
+  "deploymentTarget": "/usr/local/lib/dsp-idle-release/1.0.42-c24e6247d257-proxy-d885a9e",
+  "scope": {
+    "retry": "One retry only for a bodyless non-writer GET or HEAD when a reused upstream keep-alive socket fails with ECONNRESET before any response",
+    "writers": "PUT, POST, DELETE, PATCH and atomic account export/import requests remain single-attempt",
+    "payload": "No request payload, cloud revision, checksum, database row or leaderboard record is modified"
+  },
+  "files": [
+    {
+      "path": "deploy/api-handoff-proxy.mjs",
+      "bytes": 20180,
+      "sha256": "2f908b40b5a715bf290ee4b5aad55256eae25c1e642abd4bb2677ec90fc16dd0"
+    },
+    {
+      "path": "deploy/api-handoff-proxy.test.mjs",
+      "bytes": 11269,
+      "sha256": "625225b2a97d67a5d8990267b7af2676ef1da231b43b384069362b761de52882"
+    }
+  ],
+  "verification": {
+    "windowsFocusedRuns": "5 x 4/4 pass",
+    "windowsOpsSuite": "56 pass, 6 Linux-only skip, 0 fail",
+    "linuxNode20": "4/4 pass",
+    "linuxNode22": "4/4 pass",
+    "deployment": "Both production nodes retained the existing API writer PID while only the proxy process was replaced"
+  },
+  "rollback": "Atomically repoint the control symlink to /usr/local/lib/dsp-idle-release/1.0.42-c24e6247d257 and replace only the proxy process; never restore the production database"
+}
