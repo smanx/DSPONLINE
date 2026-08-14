@@ -53,7 +53,9 @@ function getText(url, options = {}) {
       }));
       response.once("error", reject);
     });
-    request.setTimeout(15_000, () => request.destroy(new Error("test request timed out")));
+    request.setTimeout(15_000, () => request.destroy(new Error(
+      `test request timed out: ${options.method ?? "GET"} ${target.pathname}${target.search}`,
+    )));
     request.once("error", reject);
     request.end(body);
   });
@@ -178,6 +180,67 @@ test("holds requests during writer handoff and switches upstream without 502 or 
   } finally {
     await proxy.close();
     await Promise.all([close(oldServer), close(newServer)]);
+  }
+});
+
+test("retries one stale reused socket for a bodyless read but never retries a writer", async () => {
+  const requestsBySocket = new WeakMap();
+  let resetRead = false;
+  let writeAttempts = 0;
+  const upstream = http.createServer(async (request, response) => {
+    const count = (requestsBySocket.get(request.socket) ?? 0) + 1;
+    requestsBySocket.set(request.socket, count);
+    await consumeRequest(request);
+    if (request.url === "/api/health" && count === 2 && !resetRead) {
+      resetRead = true;
+      request.socket.destroy();
+      return;
+    }
+    if (request.url === "/api/cloud-save") {
+      writeAttempts += 1;
+      request.socket.destroy();
+      return;
+    }
+    response.writeHead(200, { "content-type": "text/plain" });
+    response.end("healthy");
+  });
+  const upstreamPort = await listen(upstream);
+  const stateFile = path.join(directory, "stale-socket-state.json");
+  const statusFile = path.join(directory, "stale-socket-status.json");
+  await writeApiProxyState(stateFile, {
+    version: 1,
+    generation: 1,
+    mode: "forward",
+    changedAt: Date.now(),
+    upstream: { host: "127.0.0.1", port: upstreamPort, slot: "blue", releaseId: "stale-socket" },
+  });
+  const proxyPort = await reservePort();
+  const warnings = [];
+  const proxy = createApiHandoffProxy({
+    stateFile,
+    statusFile,
+    port: proxyPort,
+    pollIntervalMs: 10,
+    maximumHoldMs: 5_000,
+    logger: { error() {}, warn(message, details) { warnings.push({ message, details }); } },
+  });
+  await proxy.start();
+  try {
+    const baseUrl = `http://127.0.0.1:${proxyPort}`;
+    assert.deepEqual(await getText(`${baseUrl}/api/health`), { status: 200, body: "healthy" });
+    assert.deepEqual(await getText(`${baseUrl}/api/health`), { status: 200, body: "healthy" });
+    assert.equal(proxy.status().retriedRequests, 1);
+    assert.equal(proxy.status().failedRequests, 0);
+    assert.equal(warnings.length, 1);
+
+    const write = await getText(`${baseUrl}/api/cloud-save`, { method: "PUT", body: "single-attempt" });
+    assert.equal(write.status, 503);
+    assert.equal(writeAttempts, 1);
+    assert.equal(proxy.status().retriedRequests, 1);
+    assert.equal(proxy.status().failedRequests, 1);
+  } finally {
+    await proxy.close();
+    await close(upstream);
   }
 });
 

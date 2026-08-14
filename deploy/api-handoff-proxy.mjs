@@ -51,8 +51,12 @@ async function atomicRename(source, destination) {
       await rename(source, destination);
       return;
     } catch (error) {
-      if (!retryable.has(error?.code) || attempt >= 20) throw error;
-      await new Promise((resolve) => setTimeout(resolve, Math.min(50, 5 + attempt * 2)));
+      if (!retryable.has(error?.code) || attempt >= 40) throw error;
+      // Windows can briefly lock the destination while the proxy poller reads
+      // it. Vary the delay so a writer does not repeatedly collide with the
+      // fixed polling cadence; Linux keeps the same atomic rename behavior.
+      const delayMs = Math.min(75, 5 + attempt * 2) + (attempt % 7);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
 }
@@ -196,6 +200,7 @@ export function createApiHandoffProxy({
     acceptedRequests: 0,
     completedRequests: 0,
     failedRequests: 0,
+    retriedRequests: 0,
     expiredRequests: 0,
     rejectedRequests: 0,
   };
@@ -230,6 +235,7 @@ export function createApiHandoffProxy({
     if (!immediate && statusTimer) return;
     const run = () => {
       statusTimer = null;
+      if (closing && !immediate) return;
       const value = statusValue();
       statusWrite = statusWrite
         .catch(() => undefined)
@@ -253,67 +259,100 @@ export function createApiHandoffProxy({
     clearTimeout(entry.timer);
     entry.cleanupQueueListeners?.();
     const selectedState = state;
+    const method = String(entry.request.method ?? "GET").toUpperCase();
+    const contentLength = entry.request.headers["content-length"];
+    const hasRequestBody = entry.request.headers["transfer-encoding"] !== undefined
+      || (contentLength !== undefined && (!/^\d+$/.test(String(contentLength)) || Number(contentLength) > 0));
+    // Node marks requests dispatched through a pooled keep-alive socket with
+    // reusedSocket. A peer can close that idle socket at the same instant the
+    // proxy reuses it, producing ECONNRESET before any response exists. Retry
+    // that exact race once for bodyless, non-writer GET/HEAD requests only.
+    // Mutations and atomic account exports remain strictly single-attempt.
+    const mayRetryStaleSocket = !entry.requiresWriter && !hasRequestBody && (method === "GET" || method === "HEAD");
     activeRequests += 1;
     if (entry.requiresWriter) activeWriterRequests += 1;
     persistStatus();
     let settled = false;
-    let upstreamResponded = false;
+    let activeUpstreamRequest = null;
+    let retryCount = 0;
+    const destroyActiveUpstream = () => activeUpstreamRequest?.destroy();
     const settle = (failed = false) => {
       if (settled) return;
       settled = true;
+      entry.request.removeListener("aborted", destroyActiveUpstream);
+      entry.request.removeListener("error", destroyActiveUpstream);
       finishActive(entry.requiresWriter, failed);
     };
-    const upstreamRequest = http.request({
-      host: selectedState.upstream.host,
-      port: selectedState.upstream.port,
-      method: entry.request.method,
-      path: entry.request.url,
-      headers: sanitizedRequestHeaders(entry.request.headers),
-      agent,
-    }, (upstreamResponse) => {
-      upstreamResponded = true;
-      const responseHeaders = sanitizedResponseHeaders(upstreamResponse.headers);
-      if (typeof upstreamResponse.statusMessage === "string" && upstreamResponse.statusMessage) {
-        entry.response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.statusMessage, responseHeaders);
-      } else {
-        entry.response.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders);
-      }
-      upstreamResponse.on("error", (error) => {
-        logger.error?.("handoff proxy upstream response failed", error);
+    const attempt = (retry = false) => {
+      if (settled || closing || entry.response.writableEnded || entry.response.destroyed) return;
+      let upstreamResponded = false;
+      const upstreamRequest = http.request({
+        host: selectedState.upstream.host,
+        port: selectedState.upstream.port,
+        method,
+        path: entry.request.url,
+        headers: sanitizedRequestHeaders(entry.request.headers),
+        agent,
+      }, (upstreamResponse) => {
+        upstreamResponded = true;
+        const responseHeaders = sanitizedResponseHeaders(upstreamResponse.headers);
+        if (typeof upstreamResponse.statusMessage === "string" && upstreamResponse.statusMessage) {
+          entry.response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.statusMessage, responseHeaders);
+        } else {
+          entry.response.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders);
+        }
+        upstreamResponse.on("error", (error) => {
+          logger.error?.("handoff proxy upstream response failed", error);
+          settle(true);
+          if (!entry.response.destroyed) entry.response.destroy(error);
+        });
+        upstreamResponse.pipe(entry.response);
+        entry.response.once("finish", () => settle(false));
+        entry.response.once("close", () => {
+          if (!entry.response.writableEnded) settle(true);
+        });
+      });
+      activeUpstreamRequest = upstreamRequest;
+      let connectionTimer = null;
+      const clearConnectionTimer = () => {
+        if (connectionTimer) clearTimeout(connectionTimer);
+        connectionTimer = null;
+      };
+      upstreamRequest.once("socket", (socket) => {
+        if (!socket.connecting) return;
+        connectionTimer = setTimeout(() => upstreamRequest.destroy(new Error("upstream connection timed out")), connectTimeoutMs);
+        connectionTimer.unref?.();
+        socket.once("connect", clearConnectionTimer);
+      });
+      upstreamRequest.once("response", clearConnectionTimer);
+      upstreamRequest.once("close", clearConnectionTimer);
+      upstreamRequest.once("error", (error) => {
+        clearConnectionTimer();
+        const staleKeepAliveRace = upstreamRequest.reusedSocket === true && error?.code === "ECONNRESET";
+        if (!upstreamResponded && staleKeepAliveRace && mayRetryStaleSocket && retryCount === 0
+          && !settled && !closing && !entry.response.writableEnded && !entry.response.destroyed) {
+          retryCount += 1;
+          counters.retriedRequests += 1;
+          persistStatus();
+          logger.warn?.("handoff proxy retried a stale upstream keep-alive socket", { method, code: error.code });
+          setImmediate(() => attempt(true));
+          return;
+        }
+        logger.error?.("handoff proxy upstream request failed", error);
         settle(true);
-        if (!entry.response.destroyed) entry.response.destroy(error);
+        if (!upstreamResponded) {
+          sendProxyFailure(entry.response, 503, "RELEASE_UPSTREAM_UNAVAILABLE", "服务正在安全切换，请稍后重试");
+        }
       });
-      upstreamResponse.pipe(entry.response);
-      entry.response.once("finish", () => settle(false));
-      entry.response.once("close", () => {
-        if (!entry.response.writableEnded) settle(true);
-      });
-    });
-    let connectionTimer = null;
-    const clearConnectionTimer = () => {
-      if (connectionTimer) clearTimeout(connectionTimer);
-      connectionTimer = null;
-    };
-    upstreamRequest.once("socket", (socket) => {
-      if (!socket.connecting) return;
-      connectionTimer = setTimeout(() => upstreamRequest.destroy(new Error("upstream connection timed out")), connectTimeoutMs);
-      connectionTimer.unref?.();
-      socket.once("connect", clearConnectionTimer);
-    });
-    upstreamRequest.once("response", clearConnectionTimer);
-    upstreamRequest.once("close", clearConnectionTimer);
-    upstreamRequest.once("error", (error) => {
-      clearConnectionTimer();
-      logger.error?.("handoff proxy upstream request failed", error);
-      settle(true);
-      if (!upstreamResponded) {
-        sendProxyFailure(entry.response, 503, "RELEASE_UPSTREAM_UNAVAILABLE", "服务正在安全切换，请稍后重试");
+      if (retry) upstreamRequest.end();
+      else {
+        entry.request.pipe(upstreamRequest);
+        entry.request.resume();
       }
-    });
-    entry.request.once("aborted", () => upstreamRequest.destroy());
-    entry.request.once("error", () => upstreamRequest.destroy());
-    entry.request.pipe(upstreamRequest);
-    entry.request.resume();
+    };
+    entry.request.once("aborted", destroyActiveUpstream);
+    entry.request.once("error", destroyActiveUpstream);
+    attempt(false);
   };
 
   const flushQueued = () => {
@@ -373,6 +412,7 @@ export function createApiHandoffProxy({
     applyingState = true;
     try {
       const candidate = await readApiProxyState(stateFile);
+      if (closing) return;
       if (state && candidate.generation < state.generation) {
         logger.error?.("handoff proxy ignored stale state generation", {
           current: state.generation,
