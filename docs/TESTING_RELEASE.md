@@ -1,6 +1,6 @@
 # 测试与发布基线
 
-> `1.0.42` 正在基于香港最终 1.0.41 热修重新固定候选。旧 `8056d2cb… / 1.0.42+8056d2cb0e1b` 的完整门禁与制品只作为历史诊断，不再满足当前运行时范围且不得发布。当前聚焦门禁为 typecheck、相关 Vitest 273/273、server/security 60/2、Chromium 150/1，均 0 失败；新的全量计数、构建预算、生产依赖审计、原生诊断件与不可变制品必须在新的 clean SHA 上从头生成，见本文第 51 节。
+> `1.0.42` 已基于香港最终 1.0.41 热修固定为 `c24e6247d2572e54e30e173d3e16bfd85829b92f / 1.0.42+c24e6247d257`。最终门禁：Vitest 1,231/18、server 356/2、ops 55/6、native 24/24、Chromium 353/9、Firefox/WebKit 2/2、production-preview PWA 1/1，均 0 失败；root/server production audit 0，125 个运行时许可证。production build 为 1,928 模块、startup 185,929 B gzip、menu 281,809 B、forbidden 0。API 162 文件临时 SQLite 启动、Android unsigned bundle/assemble/lint/zipalign、Windows PE/ASAR/48 MiB/4 进程隔离启动均通过。source 214/214、candidate 10/10、provenance 3/3。旧 `8056d2cb…` 候选只作历史诊断且不得发布。
 
 > `DSPIDLE-1041-HK-GC-HOTFIX` + `DSPIDLE-1041-BLACK-HOLE-STATE` 开发候选（2026-08-14）：根 `npm ci` 安装 456 包并报告 1 moderate/4 high 的全依赖审计项，server `npm ci` 安装 75 包且 0 漏洞；随后根/server `npm audit --omit=dev` 均为 0。typecheck、125 个运行时包许可证和 production build 通过，构建 1925 模块且 startup/menu 预算通过。Vitest 为 136 文件通过/6 文件跳过、1209/18；server 为 355/2；ops 为 55/6（6 条 Linux 专属）；完整 Chromium E2E 为 334/9（343 总项、909.7 秒）；全部 0 失败、0 超时。native clean 首轮因未生成 `android/app/src/main/assets/capacitor.plugins.json` 得到 22 通过/1 跳过/1 失败，先 build 再 `cap sync android` 后复跑为 23/1、0 失败；Android/Windows 不发布。所有服务端写测试使用合成账号与临时 SQLite，没有生产访问。
 
@@ -1194,7 +1194,7 @@ Android `1.0.18 / 1000018` 使用历史长期证书，APK v2/v3 通过，SHA-256
 
 ## 51. `1.0.42` UI、恢复与规则补充回归
 
-本版不升级 GameState v46、envelope v2、cloud schema v7 或 SQLite layout v2。旧 `8056d2cb…` 候选已作废；新的固定 SHA 和 Build ID 必须在完整门禁后生成。
+本版不升级 GameState v46、envelope v2、cloud schema v7 或 SQLite layout v2。旧 `8056d2cb…` 候选已作废；固定运行时 SHA 为 `c24e6247d2572e54e30e173d3e16bfd85829b92f`，Build ID 为 `1.0.42+c24e6247d257`。
 
 附件只读诊断确认玩家文件为 36,704,109 bytes（35.004 MiB），envelope v2、GameState v46 和 checksum 有效，含 27,153 个实体、48,917 条线路，无重复实体/线路 ID 或缺失端点；正式检查约 35.9 秒，足以超过 15 秒租约。附件不得提交仓库或用于写入测试，自动化必须运行时生成脱敏 35 MiB 状态。
 
@@ -1208,4 +1208,4 @@ Android `1.0.18 / 1000018` 使用历史长期证书，APK v2/v3 通过，SHA-256
 - 有限/无限矿物速通提交和公开标签；普通模式、手动槽、实验/极限状态仍拒绝，历史缺标签条目按 finite 展示。
 - 原 1.0.42 UI 的动态安全区、移动原子导航、焦点/inert、Axe、80%～200% 字号、44px 触控、中文输入和教程 revision 全量回归。
 
-开发侧聚焦证据：typecheck 通过；相关 Vitest 273/273；server/security 60/2；Chromium 聚焦批次 150/1（151 总项），均 0 失败。最终全量计数、构建预算、生产依赖审计、原生诊断件和不可变制品哈希将在固定 clean SHA 后写入候选记录。
+开发侧聚焦证据：typecheck 通过；相关 Vitest 273/273；server/security 60/2；Chromium 聚焦批次 150/1（151 总项），均 0 失败。最终全量为 Vitest 1,231/18、server 356/2、ops 55/6、native 24/24、Chromium 353/9、Firefox/WebKit 2/2、production-preview PWA 1/1，全部 0 失败；根/server 生产依赖审计 0。source manifest 214/214，candidate 10/10，provenance 3/3。完整制品、哈希、兼容边界和回滚方案见 [1.0.42 候选记录](./releases/1.0.42-candidate.md) 与 [Release Agent 交接](./RELEASE_HANDOFF_1.0.42.md)。

@@ -8,7 +8,7 @@
 > 产品阶段：首个公网版本已上线，当前更准确的定位是“公开测试版”。
 > 事实来源：当前工作区代码、自动化测试、部署配置和线上只读检查。
 
-> `1.0.42` 正在独立工作树重新收口。除保留原 UI 全面复核外，本候选新增：同一 writer 的 35 MiB 大档超时续租和可验证冲突恢复、增产剂 100 万预设与 1 亿上限、无限矿物速通正式榜标签、未提交时间扭曲预算到普通离线时间线的幂等恢复。玩家附件只做只读完整性/规模诊断，仓库测试使用运行时生成的脱敏大档；没有连接生产、写玩家存档或改排行榜历史。旧 `8056d2cb… / 1.0.42+8056d2cb0e1b` 候选已作废且不得复用；新的 SHA、Build ID、完整门禁和制品仍待从最终 clean 提交生成。GameState v46、envelope v2、云 schema v7、SQLite layout v2 均不升级。详见 [开发总纲](./1.0.42_UI_REVIEW_DEVELOPMENT_PLAN.md)。
+> `1.0.42` 开发侧已固定为运行时源码 `c24e6247d2572e54e30e173d3e16bfd85829b92f` / Build ID `1.0.42+c24e6247d257`。除保留 UI 全面复核外，本候选新增同一 writer 的 35 MiB 大档超时续租和可验证冲突恢复、增产剂 100 万预设与 1 亿上限、无限矿物速通正式榜标签、未提交时间扭曲预算到普通离线时间线的幂等恢复。Vitest 1,231/18、server 356/2、ops 55/6、native 24/24、Chromium 353/9、Firefox/WebKit 2/2、production-preview PWA 1/1，全部 0 失败；source 214/214、candidate 10/10、provenance 3/3。玩家附件只读 hash 未变且未进入 Git/制品；没有连接生产、写玩家存档或改排行榜历史。旧 `8056d2cb…` 候选已作废。GameState v46、envelope v2、云 schema v7、SQLite layout v2 均不升级；正式签名、真实设备和生产发布仍为 No-Go。详见 [开发总纲](./1.0.42_UI_REVIEW_DEVELOPMENT_PLAN.md)、[候选记录](./releases/1.0.42-candidate.md) 与 [Release Agent 交接](./RELEASE_HANDOFF_1.0.42.md)。
 
 > `1.0.41` 初始开发候选固定为 `32daa4f9438095308e3e6be7a0055268abe01e66 / 1.0.41+32daa4f94380`，完成 48 MiB 保证云正文、云同步状态中心、快速/精确/放弃离线选择、排行榜窗口说明、端口自适应命中与原子连续拉线、中文输入保护及 1.0.40 No-Go 返修。该候选后来进入生产；香港又发布 `2e43f564…` P0 热修，所以上述 SHA 仅是初始 1.0.41 历史，不再是香港 current 或 1.0.42 父级。开发历史见 [1.0.41 大版本总纲](./1.0.41_MAJOR_DEVELOPMENT_PLAN.md)，最终生产事实见 [1.0.41 发布记录](./releases/1.0.41.md)。
 
