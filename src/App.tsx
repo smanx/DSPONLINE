@@ -1160,6 +1160,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const durableRecoveryStageRequestRef = useRef<{ simulationSeconds: number; wallSeconds: number } | null>(null);
   const dispatchDurablePausedCommandRef = useRef<() => void>(() => undefined);
   const durablePrimarySaveInFlightRef = useRef(false);
+  // A pagehide/beforeunload callback cannot await the durable checkpoint
+  // barrier.  Once it starts, reject any *new* save/IDB enqueue so a queued
+  // visibility/native callback cannot promote a mirror after the lifecycle
+  // decision.  `pageshow` clears this for BFCache restores.
+  const lifecycleExitStartedRef = useRef(false);
   const simulationStateRevisionRef = useRef(loaded.runtimeRecovery?.stateRevision ?? 0);
   const simulationProjectionIndexRef = useRef<SimulationProjectionStateIndex>(createSimulationProjectionStateIndex(loaded.state));
   const simulationProjectionScopeRef = useRef<"default" | "full-top-level">("default");
@@ -2074,6 +2079,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     requestedState: GameState | undefined,
     kind: RuntimePersistenceKind,
   ): Promise<SaveGameResult> => {
+    if (lifecycleExitStartedRef.current) {
+      return { success: false, message: "页面正在退出，已保留 durable recovery 供下次精确恢复", code: "conflict" };
+    }
     if (durablePrimarySaveInFlightRef.current) {
       return { success: false, message: "已有 durable 主存档检查点正在进行，请稍候", code: "conflict" };
     }
@@ -2152,6 +2160,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     state?: GameState,
     kind: RuntimePersistenceKind = "other",
   ): Promise<SaveGameResult> => {
+    if (lifecycleExitStartedRef.current) {
+      return { success: false, message: "页面正在退出，已保留当前恢复边界", code: "conflict" };
+    }
     if (durableRecoveryLifecycleRef.current === "active") {
       return persistDurablePrimaryCheckpoint(state, kind);
     }
@@ -4058,11 +4069,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       : null;
     let lifecycleSaveStarted = false;
     const saveNow = () => {
+      if (lifecycleExitStartedRef.current) return;
       void persistPrimarySave(undefined, "lifecycle");
     };
-    const saveBeforeUnload = () => {
+    const saveBeforeUnload = (_event: Event) => {
       if (lifecycleSaveStarted) return;
       lifecycleSaveStarted = true;
+      // Mark the exit before checking recovery mode. A visibility/native
+      // callback may already be queued behind this synchronous event; it must
+      // not enqueue a new primary write after pagehide chose the recovery path.
+      lifecycleExitStartedRef.current = true;
       if (durableRecoveryLifecycleRef.current === "active") {
         // beforeunload/pagehide are synchronous and cannot await a checkpoint
         // or WAL finalize. Never overwrite the T0 primary with an emergency
@@ -4075,18 +4091,24 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       // authoritative checkpoint asynchronously.
       saveGame(stateWithSimulationDebt(latestAuthoritativeCheckpointRef.current), { emergencyMirror: true });
     };
-    const saveWhenHidden = () => { if (document.visibilityState === "hidden") saveNow(); };
+    const saveWhenHidden = () => { if (document.visibilityState === "hidden" && !lifecycleExitStartedRef.current) saveNow(); };
     const saveWhenNativeInactive = (event: Event) => {
-      if ((event as CustomEvent<{ isActive?: boolean }>).detail?.isActive === false) saveNow();
+      if (!lifecycleExitStartedRef.current && (event as CustomEvent<{ isActive?: boolean }>).detail?.isActive === false) saveNow();
+    };
+    const restoreFromBfcache = () => {
+      lifecycleExitStartedRef.current = false;
+      lifecycleSaveStarted = false;
     };
     window.addEventListener("beforeunload", saveBeforeUnload);
     window.addEventListener("pagehide", saveBeforeUnload);
+    window.addEventListener("pageshow", restoreFromBfcache);
     document.addEventListener("visibilitychange", saveWhenHidden);
     window.addEventListener(NATIVE_APP_STATE_EVENT, saveWhenNativeInactive);
     return () => {
       if (timer !== null) window.clearInterval(timer);
       window.removeEventListener("beforeunload", saveBeforeUnload);
       window.removeEventListener("pagehide", saveBeforeUnload);
+      window.removeEventListener("pageshow", restoreFromBfcache);
       document.removeEventListener("visibilitychange", saveWhenHidden);
       window.removeEventListener(NATIVE_APP_STATE_EVENT, saveWhenNativeInactive);
       // Dependency changes and in-app unmounts still save. During a real page
@@ -4094,7 +4116,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       // emergency candidate, so a second, newer cleanup save must not leave
       // that mirror stale and manufacture a conflict on reload.
       const controlledCommit = controlledReturnCommitRef.current;
-      if (!lifecycleSaveStarted && durableRecoveryLifecycleRef.current !== "active" &&
+      if (!lifecycleSaveStarted && !lifecycleExitStartedRef.current && durableRecoveryLifecycleRef.current !== "active" &&
         (!controlledCommit || !isCurrentPrimarySaveSource(controlledCommit))) {
         saveGame(stateWithSimulationDebt(latestAuthoritativeCheckpointRef.current));
       }

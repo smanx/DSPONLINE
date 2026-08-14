@@ -228,8 +228,9 @@ export async function finalizeSimulationRuntimeStartupRecovery(input: {
  * snapshot, slot, or new factory) has been promoted to a verified primary.
  * Those sources must never replay a WAL bound to the old primary, but they
  * also must not enter FactoryGame with durability silently disabled. The
- * checkpoint is intentionally generation 1/revision 0 because the promoted
- * payload already contains the complete state.
+ * checkpoint is intentionally generation 1/revision 1 because the promoted
+ * payload already contains the complete state and Worker bootstrap reserves
+ * revision zero for an uninstalled runtime.
  */
 export async function initializeSimulationRuntimeAfterVerifiedPrimary(input: {
   mode: SaveMode;

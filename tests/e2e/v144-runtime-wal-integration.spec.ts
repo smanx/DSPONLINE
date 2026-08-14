@@ -61,14 +61,25 @@ test("paused command WAL survives pagehide without promoting an emergency primar
   expect(beforeHide.pending).toBe(false);
   expect(beforeHide.finalized).toBe(true);
 
-  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: false })));
+  await page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: false }));
+    // A native/visibility callback can already be queued behind pagehide.
+    // The durable-active lifecycle guard must reject that late enqueue too.
+    window.dispatchEvent(new CustomEvent("dsp-native-app-state", { detail: { isActive: false } }));
+  });
   await page.waitForTimeout(250);
   const afterHideIdentity = await page.evaluate(async () => {
     const local = await import("/src/game/localSaveStore.ts");
     await local.flushLocalSaveWrites();
-    return local.getPrimaryLocalSaveRecoveryIdentity("normal");
+    return {
+      identity: local.getPrimaryLocalSaveRecoveryIdentity("normal"),
+      emergencyPayload: localStorage.getItem("dsp-idle-network.local-save-coordination.v1.emergency-mirror.normal.payload"),
+      emergencyMetadata: localStorage.getItem("dsp-idle-network.local-save-coordination.v1.emergency-mirror.normal.metadata"),
+    };
   });
-  expect(afterHideIdentity).toEqual(beforeHide.identity);
+  expect(afterHideIdentity.identity).toEqual(beforeHide.identity);
+  expect(afterHideIdentity.emergencyPayload).toBeNull();
+  expect(afterHideIdentity.emergencyMetadata).toBeNull();
 
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.locator(".start-menu")).toBeVisible({ timeout: 20_000 });
