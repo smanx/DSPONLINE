@@ -26,6 +26,7 @@ test("save Worker consumes an authoritative checkpoint without changing v2 envel
       byteLength?: number;
       payloadChecksum?: string;
       sourceStateRevision?: number;
+      sourceStateTransfer?: import("../../src/game/simulationRuntimeProtocol").SimulationStateTransfer;
       summary?: { stateChecksum?: string; integrity?: string };
       error?: string;
     }>((resolve, reject) => {
@@ -48,11 +49,15 @@ test("save Worker consumes an authoritative checkpoint without changing v2 envel
     });
     worker.terminate();
     if (response.error || !(response.bytes instanceof ArrayBuffer)) throw new Error(response.error ?? "missing save bytes");
+    if (!response.sourceStateTransfer) throw new Error("save Worker did not return checkpoint ownership");
     const raw = new TextDecoder().decode(response.bytes);
     const inspection = storage.inspectSave(raw);
     const compatibilityRaw = storage.serializeEnvelope(state, savedAt, "primary", undefined, registry, "main");
+    const returnedCheckpoint = structuredClone(response.sourceStateTransfer, { transfer: [response.sourceStateTransfer.buffer] });
+    const recovered = protocol.deserializeSimulationStateTransfer(returnedCheckpoint);
     return {
       sourceDetached: transfer.buffer.byteLength === 0,
+      returnedSourceDetachedAfterNextTransfer: response.sourceStateTransfer.buffer.byteLength === 0,
       originalByteLength,
       responseByteLength: response.byteLength,
       actualByteLength: response.bytes.byteLength,
@@ -63,16 +68,19 @@ test("save Worker consumes an authoritative checkpoint without changing v2 envel
       integrity: response.summary?.integrity,
       exactCompatibilityBytes: raw === compatibilityRaw,
       restoredInput: inspection.state?.entities[0]?.inputs.iron_ore,
+      recoveredInput: recovered.entities[0].inputs.iron_ore,
     };
   });
   expect(result).toMatchObject({
     sourceDetached: true,
+    returnedSourceDetachedAfterNextTransfer: true,
     sourceStateRevision: 73,
     valid: true,
     checksum: "valid",
     integrity: "valid",
     exactCompatibilityBytes: true,
     restoredInput: 137,
+    recoveredInput: 137,
   });
   expect(result.originalByteLength).toBeGreaterThan(0);
   expect(result.responseByteLength).toBe(result.actualByteLength);

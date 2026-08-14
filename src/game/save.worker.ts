@@ -30,6 +30,8 @@ interface SaveWorkerResponse {
   byteLength?: number;
   durationMs?: number;
   sourceStateRevision?: number;
+  /** Returned to the coordinator so the same owned buffer can roll recovery. */
+  sourceStateTransfer?: SimulationStateTransfer;
   summary?: {
     stateVersion: number;
     savedAt: number;
@@ -74,6 +76,7 @@ self.onmessage = async (event: MessageEvent<SaveWorkerRequest>) => {
       byteLength: serialized.byteLength,
       durationMs: Math.max(0, performance.now() - startedAt),
       ...(Number.isSafeInteger(request.sourceStateRevision) ? { sourceStateRevision: request.sourceStateRevision } : {}),
+      ...(request.stateTransfer ? { sourceStateTransfer: request.stateTransfer } : {}),
       summary: {
         stateVersion: Number.isFinite(state.version) ? Math.max(0, Math.floor(state.version)) : 0,
         savedAt: request.savedAt,
@@ -88,9 +91,14 @@ self.onmessage = async (event: MessageEvent<SaveWorkerRequest>) => {
         integrity: "valid",
       },
     } satisfies SaveWorkerResponse;
-    self.postMessage(response, [serialized.bytes]);
+    self.postMessage(response, [serialized.bytes, ...(request.stateTransfer ? [request.stateTransfer.buffer] : [])]);
   } catch (error) {
-    self.postMessage({ id: event.data.id, error: error instanceof Error ? error.message : "后台生成存档失败" } satisfies SaveWorkerResponse);
+    const sourceStateTransfer = event.data.stateTransfer;
+    self.postMessage({
+      id: event.data.id,
+      error: error instanceof Error ? error.message : "后台生成存档失败",
+      ...(sourceStateTransfer ? { sourceStateTransfer } : {}),
+    } satisfies SaveWorkerResponse, sourceStateTransfer ? [sourceStateTransfer.buffer] : []);
   }
 };
 
