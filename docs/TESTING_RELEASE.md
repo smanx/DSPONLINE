@@ -1306,7 +1306,7 @@ production-preview Chrome 的匿名活动行星为 106 节点，默认与 expand
 
 聚焦门禁覆盖默认字段省略、非默认/`null` 保留、中间空槽不折叠、尾部空槽裁剪、加载补足五槽、client/server 契约一致、dense/sparse 精确重载及 1,000 秒玩法哈希/逐字段等价。匿名 lean 语义夹具为 54,306 实体、97,834 条线路、21,186 座物流站，稀疏正文 29,175,494 bytes；它用于确定性兼容与守恒回归，不作为玩家同形容量证据。可选只读真实派生门禁在内存中做确定性 ID/reference remap，得到 54,306 实体、97,834 条线路、20,138 座物流站的独立 2x 形状，稀疏正文 58,857,707 bytes，低于 60 MiB。原只读玩家附件由 36,704,109 bytes 投影为 29,572,337 bytes；源文件 bytes、mtime 与 SHA-256 `cd2356ea2b9a90a47cfa32ed9533e7056bfc4202f6af777fc4f3b98faa9a81b1` 前后不变，附件未进入 Git 或制品。
 
-## 55. `1.0.44` IndexedDB catalog 与正文惰性读取开发门禁
+## 57. `1.0.44` IndexedDB catalog 与正文惰性读取开发门禁
 
 本开发项保持 IndexedDB version 2、`records` store、存档逻辑 key 与 `value: string` 正文格式不变。catalog side-record 必须在正文/revision 同一事务写入，且绑定精确 payload checksum、UTF-8 byte length 与 revision；单项序列化小于 4 KiB，当前匿名门禁总 catalog 为 398 bytes，小于 1 MiB。冷主页不得调用 `records.getAll()`、不得读取未选 payload、不得在主线程解析 MiB 级正文，idle raw cache 必须为 0。旧记录只允许按 key 顺序读入专用 Worker 做完整 `JSON.parse` 与 checksum，禁止 `indexOf`、花括号扫描或局部 JSON 近似；duplicate key、nested same-name、malformed/truncated 和 checksum-bound 同长度损坏均有专项回归。
 
