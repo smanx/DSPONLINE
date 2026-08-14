@@ -193,6 +193,7 @@ const loadStorageModule = async () => {
   contentPacks.applyContentPackRegistry(contentPacks.loadContentPackRegistry());
   return importWithRecovery(() => import("../game/storage"), "本地存档模块");
 };
+const loadSaveInspectionModule = () => importWithRecovery(() => import("../game/saveInspection"), "后台存档检查模块");
 type StorageModule = Awaited<ReturnType<typeof loadStorageModule>>;
 
 interface StartMenuProps {
@@ -354,6 +355,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   const [cloudDeleteRequest, setCloudDeleteRequest] = useState<(SaveDeleteTarget & { slot: CloudSaveSlot; metadata: CloudSaveMetadata }) | null>(null);
   const [speedrunCopyRequest, setSpeedrunCopyRequest] = useState<{ source: "main" | SaveSlotId; label: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const importInspectionGenerationRef = useRef(0);
   const offlineAbortRef = useRef<AbortController | null>(null);
   const offlineDecisionCancelRef = useRef<HTMLButtonElement>(null);
   const cloudUploadAbortRef = useRef<AbortController | null>(null);
@@ -477,6 +479,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   }, [cloudAuthAllowed, initialCloudAction]);
 
   useEffect(() => () => {
+    importInspectionGenerationRef.current += 1;
     offlineAbortRef.current?.abort();
     cloudUploadAbortRef.current?.abort();
   }, []);
@@ -903,18 +906,32 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
   };
 
   const readImportFile = async (file: File) => {
-    const storage = await loadStorageModule();
-    const raw = await file.text();
-    const inspection = storage.inspectSave(raw);
-    setImportRaw(raw);
-    setImportInspection(inspection);
-    setRescueConfirmation(false);
+    const generation = ++importInspectionGenerationRef.current;
+    setBusy(true);
     setView("import");
-    setMessage(inspection.valid
-      ? { tone: inspection.integrity === "valid" ? "ready" : "warning", text: inspection.integrity === "valid" ? "存档校验通过" : "存档将在导入时自动迁移" }
-      : inspection.repairable
-        ? { tone: "warning", text: "存档校验失败，但结构完整。请先备份原文件，再连续确认两次执行救援。" }
-        : { tone: "error", text: inspection.issues[0] ?? "存档格式无效" });
+    setImportRaw(null);
+    setImportInspection(null);
+    setRescueConfirmation(false);
+    setMessage({ tone: "busy", text: "正在后台检查存档完整性与兼容性…" });
+    try {
+      const [saveInspection, raw] = await Promise.all([loadSaveInspectionModule(), file.text()]);
+      const inspection = await saveInspection.inspectSaveInWorker(raw);
+      if (generation !== importInspectionGenerationRef.current) return;
+      setImportRaw(!inspection.valid && inspection.repairable ? raw : null);
+      setImportInspection(inspection);
+      setMessage(inspection.valid
+        ? { tone: inspection.integrity === "valid" ? "ready" : "warning", text: inspection.integrity === "valid" ? "存档校验通过" : "存档将在导入时自动迁移" }
+        : inspection.repairable
+          ? { tone: "warning", text: "存档校验失败，但结构完整。请先备份原文件，再连续确认两次执行救援。" }
+          : { tone: "error", text: inspection.issues[0] ?? "存档格式无效" });
+    } catch (error) {
+      if (generation !== importInspectionGenerationRef.current) return;
+      setImportRaw(null);
+      setImportInspection(null);
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "存档文件读取失败" });
+    } finally {
+      if (generation === importInspectionGenerationRef.current) setBusy(false);
+    }
   };
 
   const confirmImport = async () => {
@@ -1272,7 +1289,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       }
       const cloudSave = await downloadCloudSave(undefined, slot);
       if (!cloudSave) throw new Error(`云端槽位 ${slot} 为空`);
-      const inspection = storage.inspectSave(cloudSave.payload);
+      const inspection = await (await loadSaveInspectionModule()).inspectSaveInWorker(cloudSave.payload);
       if (!inspection.valid || !inspection.state) throw new Error(inspection.issues[0] ?? "云存档格式无效");
       if (inspection.mode !== "normal") throw new Error("云端槽位模式不是普通模式，已阻止写入普通槽位");
       const saveResult = await storage.saveGameSlotVerified(Number(slot) as SaveSlotId, inspection.state);
@@ -1299,7 +1316,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
         return;
       }
       const storage = await loadStorageModule();
-      const inspection = storage.inspectSave(cloudSave.payload);
+      const inspection = await (await loadSaveInspectionModule()).inspectSaveInWorker(cloudSave.payload);
       if (!inspection.valid || !inspection.state) {
         if (inspection.repairable && inspection.state) {
           setImportRaw(cloudSave.payload);
@@ -1342,7 +1359,7 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       const cloudSave = await downloadCloudSave(cloudConflict.remote.revision, cloudConflict.slot);
       if (!cloudSave) throw new Error("云端修订已不可用，请重新连接后再试");
       const storage = await loadStorageModule();
-      const inspection = storage.inspectSave(cloudSave.payload);
+      const inspection = await (await loadSaveInspectionModule()).inspectSaveInWorker(cloudSave.payload);
       if (!inspection.valid || !inspection.state) {
         if (inspection.repairable && inspection.state && cloudConflict.slot === "main") {
           setImportRaw(cloudSave.payload);

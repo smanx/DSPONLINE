@@ -1,5 +1,7 @@
 # 测试与发布基线
 
+> `1.0.43` 超大存档热修候选当前仅完成开发门禁，**未部署**：typecheck、production build 与 startup budget 通过；完整 Vitest 为 141 文件通过/6 跳过、1,238/18、0 失败；storage/mode/preview/coordination/store/large-save/release-note/tutorial 聚焦为 133/133；Chromium 新增返回保存专项 2/2。只读真实附件 36,704,109 bytes 的 `inspectSave` 为 437 ms（门禁 <5,000 ms），源 SHA-256 `cd2356ea…a81b1` 不变；v136 exact/gameplay hash `4215dbfa / 96f7e0b2` 不变。构建正常产出独立 save-inspection Worker，无 worker-entry 循环。未执行 SSH、生产写入、切流、下载页更新、正式签名或真实设备发布门禁。
+
 > `1.0.42` 已基于香港最终 1.0.41 热修固定为 `c24e6247d2572e54e30e173d3e16bfd85829b92f / 1.0.42+c24e6247d257`。最终门禁：Vitest 1,231/18、server 356/2、ops 55/6、native 24/24、Chromium 353/9、Firefox/WebKit 2/2、production-preview PWA 1/1，均 0 失败；root/server production audit 0，125 个运行时许可证。production build 为 1,928 模块、startup 185,929 B gzip、menu 281,809 B、forbidden 0。API 162 文件临时 SQLite 启动、Android unsigned bundle/assemble/lint/zipalign、Windows PE/ASAR/48 MiB/4 进程隔离启动均通过。source 214/214、candidate 10/10、provenance 3/3。旧 `8056d2cb…` 候选只作历史诊断且不得发布。
 
 > **当前正式发布基线（2026-08-14）**：香港、上海 Web/API 和上海下载 stable 均为 `1.0.42+c24e6247d257`。两节点远端 server 各 356/2、Linux ops 各 59/2；正式 Android APK 使用批准长期证书并在 API 36.1 模拟器完成 1.0.38→1.0.42 覆盖，Windows setup 继续 `NotSigned`。观察期代理热修提交 `d885a9e…` 后，本地 ops 为 56/6，Linux Node 20/22 聚焦各 4/4；只读 stale socket 可重试一次，writer 不重试。生产事实见 [1.0.42 发布记录](./releases/1.0.42.md)。
@@ -1219,3 +1221,19 @@ Android `1.0.18 / 1000018` 使用历史长期证书，APK v2/v3 通过，SHA-256
 观察期发现 handoff proxy 的复用空闲 socket 可能在尚未收到上游响应时返回 `ECONNRESET`。提交 `d885a9e…` 增加一次严格只读重试，writer 仍单次发送；本地完整 ops 更新为 56/6，聚焦测试在 Windows 连续五轮 4/4、Linux Node 20 和 Node 22 各 4/4，均无失败/告警。两节点替换代理时活动 API PID 保持不变，systemd 原依赖逐字恢复，health/ready、公开版本、排行榜和 1.0.37 PWA 回退通过。
 
 正式 Android APK 使用批准长期证书，v2/v3、zipalign、包名/versionCode、正式 URL 和 API 36.1 模拟器 1.0.38→1.0.42 覆盖升级通过；Windows setup、blockmap、feed、ASAR Build ID、正式 URL、隔离启动和公网完整哈希通过，Authenticode 仍为 `NotSigned`。实体 Android、低配 Windows、iOS standalone 和实体读屏器未实测，必须保留为残余风险。完整证据见 [1.0.42 正式发布记录](./releases/1.0.42.md)。
+
+## 53. `1.0.43` 超大存档导入、迁移与保存热修
+
+本版针对 36,704,109-byte 合法 v46/v2 玩家存档的 UI 冻结，不改变任何持久协议。原实现在线路迁移中对每条 belt 重复 `entities.find`，再用 `filter + belts.includes` 分区，玩家档约触发 49.23 亿次比较；序列化本身约 0.49 秒，并非主因。
+
+必须持续满足以下门禁：
+
+- 实体索引 first-match，且单独保留 first matching material-delivery hub；初始矿脉恢复后才建索引。
+- 物质投递端口先对所有 migrated belts 按顺序归一，再验证端点/行星；黑洞端口仅对有效候选按顺序占用。
+- 重复 belt id 不去重；缺端点、跨星球、错误 planet 与不同 tier 的逐 lane 退款保持原总量和施工件类型。
+- previous 主档只完整检查一次，自签但结构非法的正文不得覆盖有效 backup；legacy missing-checksum previous 仍须持久复制，但 `backupSaved` 保持 false。
+- 手动保存 stable flow 只增加一个 primary revision，backup 逐字等于旧 primary；稳定受控返回同样只写一次，保存等待期间状态推进时允许且必须补一次 cleanup。
+- 文件导入、菜单云恢复和工厂内云恢复在 Worker 完成 checksum/结构/迁移检查；请求代际阻止较早结果覆盖较新选择，Worker 不可用或 message clone 失败时回退完整同步检查。
+- 可选真实夹具必须只读，断言精确 bytes/SHA-256 前后不变，并设置有意义的 <5,000 ms 检查门禁；附件不得进入 Git、制品或写入测试。
+
+主菜单 `savePreview` 的完整 `JSON.parse` 语义在 1.0.43 保持不变。手写 partial scanner 无法安全复制重复 key、嵌套同名字段、截断正文和 fallback 顺序，因此可信 IndexedDB summary index/Worker projection 作为 1.0.44 独立设计，不混入本热修。

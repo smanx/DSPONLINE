@@ -5,6 +5,7 @@ import { addCanvasBookmark, addCanvasRegion, addDysonSwarmOrbit, advanceSimulati
 import { createProductionPlan } from "./planning";
 import { cancelDeferredOfflineGame, clearGameSlot, exportGame, exportGameSlot, finalizeDeferredOfflineGame, getSaveSlotSummaries, getSaveSnapshotSummaries, importGame, inspectSave, loadGame, loadGameDeferredOffline, loadGameSlot, loadGameSlotDeferredOffline, loadSaveSnapshot, migrateGame, repairSave, saveGame, saveGameSnapshot, saveGameSlot, saveGameVerified, saveVerifiedPayload, skipDeferredOfflineGame } from "./storage";
 import { getOfflineSimulationLimitSeconds } from "./endgame";
+import { computeSaveStateChecksum } from "./saveEnvelopeIntegrity";
 
 const SAVE_KEY = "dsp-idle-network.save.v1";
 
@@ -426,6 +427,157 @@ describe("game storage", () => {
     const reloaded = migrateGame(JSON.parse(JSON.stringify(migrated)))!;
     expect(reloaded.entities.find((entity) => entity.id === hub.id)?.deliverySlots).toEqual(migratedHub.deliverySlots);
     expect(reloaded.belts).toEqual(migrated.belts);
+  });
+
+  it("partitions invalid belts once and refunds every lane even when rejected ids repeat", () => {
+    const state = createInitialState(10_612);
+    const otherPlanetTarget = state.entities.find((entity) => entity.planetId !== "home")!;
+    const originalStock = {
+      mk1: state.construction.conveyor_belt_mk1 ?? 0,
+      mk2: state.construction.conveyor_belt_mk2 ?? 0,
+      mk3: state.construction.conveyor_belt_mk3 ?? 0,
+    };
+    const belt = (id: string, source: string, target: string, planetId: typeof state.activePlanetId, lanes: number, tier: 1 | 2 | 3 = 1) => ({
+      id,
+      planetId,
+      source,
+      target,
+      itemId: "iron_ore" as const,
+      lanes,
+      tier,
+      sorterTier: tier,
+      progress: 0,
+      priority: 0 as const,
+      stackSize: 1 as const,
+      monitorEnabled: false,
+      totalTransferred: 0,
+      congestion: 0,
+      lastFlow: 0,
+      routeMode: "auto" as const,
+    });
+    state.belts = [
+      belt("duplicate-belt-id", "vein_iron", "vein_copper", "home", 1),
+      belt("duplicate-belt-id", "missing-source", "vein_copper", "home", 2),
+      belt("duplicate-belt-id", "vein_iron", "missing-target", "home", 3),
+      belt("cross-planet", "vein_iron", otherPlanetTarget.id, "home", 4),
+      belt("wrong-belt-planet", "vein_iron", "vein_copper", "ashen", 5),
+      belt("missing-tier-two-target", "vein_iron", "missing-tier-two", "home", 6, 2),
+      belt("missing-tier-three-source", "missing-tier-three", "vein_copper", "home", 7, 3),
+    ];
+
+    const migrated = migrateGame(JSON.parse(JSON.stringify(state)))!;
+    expect(migrated.belts.map((entry) => entry.id)).toEqual(["duplicate-belt-id"]);
+    expect(migrated.construction.conveyor_belt_mk1).toBe(originalStock.mk1 + 14);
+    expect(migrated.construction.conveyor_belt_mk2).toBe(originalStock.mk2 + 6);
+    expect(migrated.construction.conveyor_belt_mk3).toBe(originalStock.mk3 + 7);
+  });
+
+  it("preserves ordered hub normalization and black-hole first-port ownership before refunding rejected belts", () => {
+    let state = createInitialState(10_613);
+    state.research.completedTechIds.push("basic_logistics", "material_delivery_logistics", "micro_black_hole_containment");
+    state.construction.material_delivery_hub = 1;
+    state.construction.micro_black_hole_connector = 1;
+    state = placeBuilding(state, "material_delivery_hub", { x: 240, y: 0 });
+    state = placeBuilding(state, "micro_black_hole_connector", { x: 480, y: 0 });
+    const hub = state.entities.find((entity) => entity.buildingId === "material_delivery_hub")!;
+    const blackHole = state.entities.find((entity) => entity.buildingId === "micro_black_hole_connector")!;
+    hub.deliverySlots = [
+      { itemId: "iron_ore", mode: "disabled" },
+      { itemId: "copper_ore", mode: "manual" },
+      { itemId: null, mode: "auto" },
+    ];
+    const originalStock = state.construction.conveyor_belt_mk1 ?? 0;
+    const belt = (id: string, source: string, target: string, itemId: "iron_ore" | "copper_ore" | "stone", lanes: number, targetPortIndex: 0 | 1 | 2) => ({
+      id,
+      planetId: "home" as const,
+      source,
+      target,
+      itemId,
+      lanes,
+      tier: 1 as const,
+      sorterTier: 1 as const,
+      progress: 0,
+      priority: 0 as const,
+      stackSize: 1 as const,
+      monitorEnabled: false,
+      totalTransferred: 0,
+      congestion: 0,
+      lastFlow: 0,
+      routeMode: "auto" as const,
+      targetPortIndex,
+    });
+    state.belts = [
+      // Although rejected later, the historical migration first lets this
+      // line claim/configure hub port 2. The following valid stone line then
+      // reuses that slot; changing pass order would alter persisted state.
+      belt("invalid-configures-hub", "missing-source", hub.id, "stone", 2, 2),
+      belt("disabled-hub-port", "vein_iron", hub.id, "iron_ore", 1, 0),
+      belt("manual-hub-port", "vein_copper", hub.id, "copper_ore", 1, 1),
+      belt("manual-hub-port-second", "vein_copper", hub.id, "copper_ore", 2, 1),
+      belt("configured-auto-port", "vein_stone", hub.id, "stone", 1, 2),
+      belt("no-compatible-hub-port", "vein_iron", hub.id, "iron_ore", 3, 2),
+      belt("duplicate-black-hole-id", "vein_iron", blackHole.id, "iron_ore", 1, 0),
+      belt("duplicate-black-hole-id", "vein_copper", blackHole.id, "copper_ore", 4, 0),
+    ];
+
+    const migrated = migrateGame(JSON.parse(JSON.stringify(state)))!;
+    const migratedHub = migrated.entities.find((entity) => entity.id === hub.id)!;
+    expect(migratedHub.deliverySlots).toEqual([
+      { itemId: null, mode: "disabled" },
+      { itemId: "copper_ore", mode: "manual" },
+      { itemId: "stone", mode: "auto" },
+    ]);
+    expect(migrated.belts.map((entry) => entry.id)).toEqual([
+      "manual-hub-port",
+      "manual-hub-port-second",
+      "configured-auto-port",
+      "duplicate-black-hole-id",
+    ]);
+    expect(migrated.construction.conveyor_belt_mk1).toBe(originalStock + 10);
+  });
+
+  it("keeps first-any and first-matching-hub duplicate entity lookup semantics", () => {
+    let state = createInitialState(10_614);
+    state.research.completedTechIds.push("basic_logistics", "material_delivery_logistics");
+    state.construction.material_delivery_hub = 1;
+    state = placeBuilding(state, "material_delivery_hub", { x: 240, y: 0 });
+    const firstOrdinary = state.entities.find((entity) => entity.id === "vein_copper")!;
+    const laterHub = state.entities.find((entity) => entity.buildingId === "material_delivery_hub")!;
+    firstOrdinary.id = "duplicate-target";
+    laterHub.id = "duplicate-target";
+    laterHub.deliverySlots = [
+      { itemId: null, mode: "auto" },
+      { itemId: null, mode: "auto" },
+      { itemId: null, mode: "auto" },
+    ];
+    const originalStock = state.construction.conveyor_belt_mk1 ?? 0;
+    state.belts = [{
+      id: "duplicate-target-line",
+      planetId: "home",
+      source: "vein_iron",
+      target: "duplicate-target",
+      itemId: "iron_ore",
+      lanes: 2,
+      tier: 1,
+      sorterTier: 1,
+      progress: 0,
+      priority: 0,
+      stackSize: 1,
+      monitorEnabled: false,
+      totalTransferred: 0,
+      congestion: 0,
+      lastFlow: 0,
+      routeMode: "auto",
+      targetPortIndex: 0,
+    }];
+
+    const migrated = migrateGame(JSON.parse(JSON.stringify(state)))!;
+    const duplicates = migrated.entities.filter((entity) => entity.id === "duplicate-target");
+    expect(duplicates).toHaveLength(2);
+    expect(duplicates[0].buildingId).not.toBe("material_delivery_hub");
+    expect(duplicates[1].deliverySlots?.[0]).toEqual({ itemId: "iron_ore", mode: "auto" });
+    expect(migrated.belts).toEqual([]);
+    expect(migrated.construction.conveyor_belt_mk1).toBe(originalStock + 2);
   });
 
   it("clamps malicious oversized belt bundles and refunds every removed physical belt", () => {
@@ -2383,6 +2535,38 @@ describe("game storage", () => {
       success: false,
       code: "verification",
     });
+  });
+
+  it("does not replace a valid backup with a self-checksummed but structurally invalid previous primary", async () => {
+    const validBackup = exportGame(createInitialState(20_001));
+    const malformedState = { version: 46, mode: "normal" };
+    const malformedRaw = JSON.stringify({
+      formatVersion: 2,
+      kind: "primary",
+      mode: "normal",
+      slot: "main",
+      savedAt: 123,
+      state: malformedState,
+      checksum: computeSaveStateChecksum(2, malformedState),
+    });
+    expect(inspectSave(malformedRaw).valid).toBe(false);
+    window.localStorage.setItem(`${SAVE_KEY}.backup`, validBackup);
+    window.localStorage.setItem(SAVE_KEY, malformedRaw);
+
+    const result = await saveGameVerified(createInitialState(20_002));
+    expect(result.success).toBe(true);
+    expect(window.localStorage.getItem(`${SAVE_KEY}.backup`)).toBe(validBackup);
+  });
+
+  it("durably copies a valid checksum-missing legacy previous primary but keeps backupSaved false", async () => {
+    const legacyState = createInitialState(20_003);
+    const legacyRaw = JSON.stringify({ savedAt: 456, state: legacyState });
+    expect(inspectSave(legacyRaw)).toMatchObject({ valid: true, checksum: "missing" });
+    window.localStorage.setItem(SAVE_KEY, legacyRaw);
+
+    const result = await saveGameVerified(createInitialState(20_004));
+    expect(result).toMatchObject({ success: true, backupSaved: false });
+    expect(window.localStorage.getItem(`${SAVE_KEY}.backup`)).toBe(legacyRaw);
   });
 
   it("keeps local save storage bounded across one thousand saves", () => {

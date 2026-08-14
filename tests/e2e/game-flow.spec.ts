@@ -5,7 +5,7 @@ async function installTestBootstrap(page: Page) {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
     if (new URLSearchParams(window.location.search).get("releaseNotesTest") !== "1") {
-      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.42");
+      window.localStorage.setItem("dsp-idle-network.release-notes.seen.v1", "2026-08-14-v1.0.43");
     }
   });
 }
@@ -220,7 +220,7 @@ test("dated release notes appear once and remain available from both settings sc
 
   await releaseNotes.getByRole("button", { name: "我知道了" }).click();
   await expect(releaseNotes).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-14-v1.0.42");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("dsp-idle-network.release-notes.seen.v1"))).toBe("2026-08-14-v1.0.43");
   await page.reload();
   await expect(releaseNotes).toHaveCount(0);
 
@@ -5106,14 +5106,31 @@ test("operations settings and local save slots persist across reload", async ({ 
 
   await page.waitForTimeout(2_000);
   await operations.locator(".operations-tabs").getByRole("tab", { name: "存档" }).click();
-  await operations.getByRole("button", { name: "立即保存" }).click();
-  const elapsedSeconds = await page.evaluate(async () => {
+  const beforeManualSave = await page.evaluate(async () => {
     const store = await import("/src/game/localSaveStore.ts");
-    const raw = store.getLocalSaveValue("dsp-idle-network.save.v1");
-    if (!raw) throw new Error("authoritative primary save is missing");
-    return JSON.parse(raw).state.elapsedSeconds as number;
+    await store.flushLocalSaveWrites();
+    return {
+      raw: await store.readPersistedLocalSaveValue("dsp-idle-network.save.v1"),
+      revision: store.getPrimaryLocalSaveRevision(),
+    };
   });
-  expect(elapsedSeconds).toBeGreaterThan(1.5);
+  expect(beforeManualSave.raw).not.toBeNull();
+  await operations.getByRole("button", { name: "立即保存" }).click();
+  await expect(page.locator(".game-notice")).toContainText("主存档已保存");
+  const afterManualSave = await page.evaluate(async () => {
+    const store = await import("/src/game/localSaveStore.ts");
+    await store.flushLocalSaveWrites();
+    const raw = await store.readPersistedLocalSaveValue("dsp-idle-network.save.v1");
+    if (!raw) throw new Error("authoritative primary save is missing");
+    return {
+      elapsedSeconds: JSON.parse(raw).state.elapsedSeconds as number,
+      revision: store.getPrimaryLocalSaveRevision(),
+      backup: await store.readPersistedLocalSaveValue("dsp-idle-network.save.v1.backup"),
+    };
+  });
+  expect(afterManualSave.elapsedSeconds).toBeGreaterThan(1.5);
+  expect(afterManualSave.revision).toBe(beforeManualSave.revision + 1);
+  expect(afterManualSave.backup).toBe(beforeManualSave.raw);
 
   await operations.getByLabel("保存到槽位 1").click();
   await expect(operations.locator(".save-slot").filter({ hasText: "本地槽位 1" })).toHaveClass(/save-slot--occupied/);

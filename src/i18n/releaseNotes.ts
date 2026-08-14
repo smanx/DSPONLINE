@@ -29,6 +29,35 @@ export interface LocalizedReleaseNotesUiCopy {
 
 const currentCopy = {
   date: { "zh-CN": "2026年8月14日", en: "August 14, 2026" },
+  title: { "zh-CN": "超大存档加载与保存紧急修复", en: "Large-save Loading and Saving Hotfix" },
+  summary: {
+    "zh-CN": "1.0.43 修复实体和传送带很多的超大存档在导入、进入工厂、保存和返回主页时长时间卡顿的问题，并保留原有存档校验、备份与异常线路退款语义。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
+    en: "Version 1.0.43 fixes long stalls while importing, entering, saving, and returning to the menu with very large entity-and-belt saves, while preserving existing validation, backup, and invalid-belt refund semantics. GameState v46, save envelope v2, cloud schema v7, and SQLite layout v2 remain unchanged.",
+  },
+  migrationTitle: { "zh-CN": "超大线路迁移改为线性处理", en: "Large belt migrations now scale linearly" },
+  migrationDescription: {
+    "zh-CN": "载入迁移使用一次实体索引和按顺序分区，避免每条线路重复扫描全部实体和线路；实体、线路、物流端口与黑洞端口的原始顺序和首条有效线路优先规则保持不变。",
+    en: "Load migration now builds one entity index and partitions belts in order instead of repeatedly scanning every entity and belt. Entity and belt order, logistics-port behavior, and first-valid black-hole connection precedence remain unchanged.",
+  },
+  importTitle: { "zh-CN": "导入与云端恢复不再冻结界面", en: "Imports and cloud restores no longer freeze the interface" },
+  importDescription: {
+    "zh-CN": "本地文件与云端存档检查移到后台线程，连续选择时只有最后一次请求可以提交结果；后台线程不可用时仍会回退到原有完整检查。",
+    en: "Local-file and cloud-save inspection now runs in a background worker, and only the latest selection may commit its result. Environments without worker support retain the original full-validation fallback.",
+  },
+  saveTitle: { "zh-CN": "立即保存与返回主页避免重复落盘", en: "Manual saves and menu returns avoid duplicate commits" },
+  saveDescription: {
+    "zh-CN": "立即保存只提交一次验证写入；返回主页只在已提交状态仍覆盖卸载瞬间状态时跳过清理保存，等待期间若游戏继续推进仍会补写最新状态。备份继续要求完整结构校验和逐字持久读回。",
+    en: "Save Now performs one verified commit. Returning to the menu skips cleanup persistence only when the committed source still covers the unmount state; if play advances while the save is pending, the latest state is still persisted. Backups continue to require full structural validation and exact durable read-back.",
+  },
+  compatibilityTitle: { "zh-CN": "存档与在线协议保持兼容", en: "Save and online protocols remain compatible" },
+  compatibilityDescription: {
+    "zh-CN": "不升级 GameState、存档封装、云服务或 IndexedDB 结构；模式、库存、checksum、原始数据、异常线路退款、物质投递枢纽与黑洞端口语义保持不变。",
+    en: "This hotfix does not upgrade GameState, the save envelope, cloud services, or IndexedDB layout. Mode, inventory, checksum, raw data, invalid-belt refunds, material-delivery hubs, and black-hole port semantics remain unchanged.",
+  },
+} as const;
+
+const release1042Copy = {
+  date: { "zh-CN": "2026年8月14日", en: "August 14, 2026" },
   title: { "zh-CN": "界面适配、存档恢复与规则更新", en: "Responsive UI, Save Recovery, and Rules Update" },
   summary: {
     "zh-CN": "1.0.42 在界面适配、移动导航、无障碍和中文输入优化之外，修复大存档首存误判跨标签冲突与未提交时间扭曲预算阻塞离线结算；增产剂缓存支持 100 万预设和最高 1 亿自定义值，无限矿物速通成绩可提交并带明确标签。GameState v46、存档 envelope v2、云 schema v7 与 SQLite layout v2 不变。",
@@ -195,25 +224,45 @@ function currentMessage(locale: AppLocale, key: keyof typeof currentCopy): strin
   return currentCopy[key][locale];
 }
 
+function release1042Message(locale: AppLocale, key: keyof typeof release1042Copy): string {
+  return release1042Copy[key][locale];
+}
+
 /** Stable-key release copy; current text does not use the legacy DOM translation bridge. */
 export function getCurrentReleaseNotes(locale: AppLocale): LocalizedReleaseNoteRecord {
   return {
-    id: "2026-08-14-v1.0.42",
+    id: "2026-08-14-v1.0.43",
     date: currentMessage(locale, "date"),
-    version: "1.0.42",
+    version: "1.0.43",
     title: currentMessage(locale, "title"),
     summary: currentMessage(locale, "summary"),
     items: [
-      { id: "dynamic-shell-safe-area", title: currentMessage(locale, "shellTitle"), description: currentMessage(locale, "shellDescription") },
-      { id: "atomic-mobile-navigation", title: currentMessage(locale, "navigationTitle"), description: currentMessage(locale, "navigationDescription") },
-      { id: "workspace-accessibility", title: currentMessage(locale, "accessibilityTitle"), description: currentMessage(locale, "accessibilityDescription") },
-      { id: "responsive-large-text", title: currentMessage(locale, "responsiveTitle"), description: currentMessage(locale, "responsiveDescription") },
-      { id: "stable-form-drafts", title: currentMessage(locale, "inputTitle"), description: currentMessage(locale, "inputDescription") },
-      { id: "version-and-preview-integrity", title: currentMessage(locale, "versionTitle"), description: currentMessage(locale, "versionDescription") },
-      { id: "large-local-save-recovery", title: currentMessage(locale, "largeSaveRecoveryTitle"), description: currentMessage(locale, "largeSaveRecoveryDescription") },
-      { id: "orphaned-time-warp-recovery", title: currentMessage(locale, "timeWarpRecoveryTitle"), description: currentMessage(locale, "timeWarpRecoveryDescription") },
-      { id: "proliferator-buffer-limit", title: currentMessage(locale, "proliferatorBufferTitle"), description: currentMessage(locale, "proliferatorBufferDescription") },
-      { id: "infinite-resource-speedrun", title: currentMessage(locale, "infiniteSpeedrunTitle"), description: currentMessage(locale, "infiniteSpeedrunDescription") },
+      { id: "linear-large-save-migration", title: currentMessage(locale, "migrationTitle"), description: currentMessage(locale, "migrationDescription") },
+      { id: "background-save-inspection", title: currentMessage(locale, "importTitle"), description: currentMessage(locale, "importDescription") },
+      { id: "single-save-commit", title: currentMessage(locale, "saveTitle"), description: currentMessage(locale, "saveDescription") },
+      { id: "save-compatibility", title: currentMessage(locale, "compatibilityTitle"), description: currentMessage(locale, "compatibilityDescription") },
+    ],
+  };
+}
+
+export function getReleaseNotes1042(locale: AppLocale): LocalizedReleaseNoteRecord {
+  return {
+    id: "2026-08-14-v1.0.42",
+    date: release1042Message(locale, "date"),
+    version: "1.0.42",
+    title: release1042Message(locale, "title"),
+    summary: release1042Message(locale, "summary"),
+    items: [
+      { id: "dynamic-shell-safe-area", title: release1042Message(locale, "shellTitle"), description: release1042Message(locale, "shellDescription") },
+      { id: "atomic-mobile-navigation", title: release1042Message(locale, "navigationTitle"), description: release1042Message(locale, "navigationDescription") },
+      { id: "workspace-accessibility", title: release1042Message(locale, "accessibilityTitle"), description: release1042Message(locale, "accessibilityDescription") },
+      { id: "responsive-large-text", title: release1042Message(locale, "responsiveTitle"), description: release1042Message(locale, "responsiveDescription") },
+      { id: "stable-form-drafts", title: release1042Message(locale, "inputTitle"), description: release1042Message(locale, "inputDescription") },
+      { id: "version-and-preview-integrity", title: release1042Message(locale, "versionTitle"), description: release1042Message(locale, "versionDescription") },
+      { id: "large-local-save-recovery", title: release1042Message(locale, "largeSaveRecoveryTitle"), description: release1042Message(locale, "largeSaveRecoveryDescription") },
+      { id: "orphaned-time-warp-recovery", title: release1042Message(locale, "timeWarpRecoveryTitle"), description: release1042Message(locale, "timeWarpRecoveryDescription") },
+      { id: "proliferator-buffer-limit", title: release1042Message(locale, "proliferatorBufferTitle"), description: release1042Message(locale, "proliferatorBufferDescription") },
+      { id: "infinite-resource-speedrun", title: release1042Message(locale, "infiniteSpeedrunTitle"), description: release1042Message(locale, "infiniteSpeedrunDescription") },
     ],
   };
 }

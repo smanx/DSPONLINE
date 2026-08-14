@@ -18,7 +18,7 @@ function memoryStorage(seed: Record<string, string> = {}) {
 describe("tutorial progress revision", () => {
   it("uses a content revision key independent from the application version", () => {
     expect(TUTORIAL_PROGRESS_KEY).toBe(`dspidle:tutorial-progress:${TUTORIAL_CONTENT_REVISION}`);
-    expect(TUTORIAL_PROGRESS_KEY).not.toContain("1.0.42");
+    expect(TUTORIAL_PROGRESS_KEY).not.toContain("1.0.43");
   });
 
   it("migrates the old tutorial key once and never overwrites current progress", () => {

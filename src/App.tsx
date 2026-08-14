@@ -257,7 +257,8 @@ import { planFactoryAutoLayout } from "./game/layout";
 import { createProductionPlan, removeProductionPlan, setProductionPlanRecipe, updateProductionPlan } from "./game/planning";
 import { getProductionLineLocations, type ProductionLineLocation } from "./game/productionLocator";
 import { getCampaignTask, getCampaignTaskRequirements, selectCampaignTask, syncCampaignProgress, type CampaignNavigation } from "./game/campaign";
-import { clearGameSlotVerified, clearSaveSnapshotVerified, clearSaveSnapshotsVerified, exportGame, getSaveSummariesInWorker, getSaveSlotSummaries, getSaveSnapshotSummaries, inspectSave, loadGameSlot, loadSaveSnapshot, repairSave, saveGame, saveGameSnapshotVerified, saveGameSlotVerified, saveGameVerified, serializeEnvelopeInWorker, type LoadedGame, type OfflineReport, type SaveGameResult, type SaveInspection, type SaveSlotId, type SaveSnapshotSummary } from "./game/storage";
+import { inspectSaveInWorker } from "./game/saveInspection";
+import { clearGameSlotVerified, clearSaveSnapshotVerified, clearSaveSnapshotsVerified, exportGame, getSaveSummariesInWorker, getSaveSlotSummaries, getSaveSnapshotSummaries, loadGameSlot, loadSaveSnapshot, repairSave, saveGame, saveGameSnapshotVerified, saveGameSlotVerified, saveGameVerified, serializeEnvelopeInWorker, type LoadedGame, type OfflineReport, type SaveGameResult, type SaveInspection, type SaveSlotId, type SaveSnapshotSummary } from "./game/storage";
 import { runAutomaticPerformanceReport, type AutomaticPerformanceReport } from "./game/benchmark";
 import { importBlueprintExchange, parseBlueprintExchange, serializeBlueprintExchange } from "./game/blueprintExchange";
 import { exportTextFile } from "./game/fileExport";
@@ -904,6 +905,14 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [interactionBursts, setInteractionBursts] = useState<InteractionBurst[]>([]);
   const [ctrlHeld, setCtrlHeld] = useState(false);
   const gameRef = useRef(game);
+  const controlledReturnCommitRef = useRef<{
+    game: GameState;
+    pendingSimulationSeconds: number;
+    pendingWallSeconds: number;
+    submissionId: number | null;
+    pendingViewportSignature: string;
+  } | null>(null);
+  const returnToMenuSaveInFlightRef = useRef(false);
   const latestCanvasGameRef = useRef(game);
   const lastCanvasPublishedGameRef = useRef(game);
   const canvasRenderSnapshotRef = useRef(canvasRenderSnapshot);
@@ -1501,6 +1510,32 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       },
     };
   }, []);
+
+  const currentPrimarySaveSource = useCallback(() => {
+    const submitted = simulationSubmissionRef.current;
+    const pendingViewportSignature = JSON.stringify([...pendingPlanetViewportRef.current.entries()].map(([planetId, pending]) => [
+      planetId,
+      pending.viewport.x,
+      pending.viewport.y,
+      pending.viewport.zoom,
+    ]));
+    return {
+      game: gameRef.current,
+      pendingSimulationSeconds: simulationPendingSecondsRef.current + (submitted?.simulationSeconds ?? 0),
+      pendingWallSeconds: simulationPendingWallSecondsRef.current + (submitted?.wallSeconds ?? 0),
+      submissionId: submitted?.id ?? null,
+      pendingViewportSignature,
+    };
+  }, []);
+
+  const isCurrentPrimarySaveSource = useCallback((expected: NonNullable<typeof controlledReturnCommitRef.current>): boolean => {
+    const current = currentPrimarySaveSource();
+    return current.game === expected.game &&
+      current.pendingSimulationSeconds === expected.pendingSimulationSeconds &&
+      current.pendingWallSeconds === expected.pendingWallSeconds &&
+      current.submissionId === expected.submissionId &&
+      current.pendingViewportSignature === expected.pendingViewportSignature;
+  }, [currentPrimarySaveSource]);
 
   const persistPrimarySave = useCallback(async (state?: GameState): Promise<SaveGameResult> => {
     const monitorSave = performanceMonitor.isActive();
@@ -2269,14 +2304,23 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [mobileNavigation.dismissModal, nextMobileShell]);
 
   const returnToMenuSafely = useCallback(async () => {
-    const result = await persistPrimarySave();
+    if (returnToMenuSaveInFlightRef.current) return;
+    returnToMenuSaveInFlightRef.current = true;
+    const source = currentPrimarySaveSource();
+    const result = await persistPrimarySave(stateWithSimulationDebt(source.game));
     if (!result.success) {
+      returnToMenuSaveInFlightRef.current = false;
       setNotice(result.message);
       playTone("alert");
       return;
     }
+    // Skip cleanup only while the exact authoritative state/debt/viewport
+    // source remains current. A Worker result or player command arriving while
+    // the durable write was in flight must still receive the final cleanup
+    // save, preserving the former no-progress-loss behavior.
+    controlledReturnCommitRef.current = source;
     onReturnToMenu();
-  }, [onReturnToMenu, persistPrimarySave, playTone]);
+  }, [currentPrimarySaveSource, onReturnToMenu, persistPrimarySave, playTone, stateWithSimulationDebt]);
 
   const spawnInteractionBurst = useCallback((x: number, y: number, label: string, tone: InteractionBurst["tone"] = "positive") => {
     const id = burstSequenceRef.current + 1;
@@ -2917,9 +2961,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       // exit the lifecycle handler already wrote the one authoritative
       // emergency candidate, so a second, newer cleanup save must not leave
       // that mirror stale and manufacture a conflict on reload.
-      if (!lifecycleSaveStarted) saveGame(stateWithSimulationDebt(gameRef.current));
+      const controlledCommit = controlledReturnCommitRef.current;
+      if (!lifecycleSaveStarted && (!controlledCommit || !isCurrentPrimarySaveSource(controlledCommit))) {
+        saveGame(stateWithSimulationDebt(gameRef.current));
+      }
     };
-  }, [game.settings.autosaveIntervalSeconds, persistPrimarySave, stateWithSimulationDebt]);
+  }, [game.settings.autosaveIntervalSeconds, isCurrentPrimarySaveSource, persistPrimarySave, stateWithSimulationDebt]);
 
   useEffect(() => {
     let active = true;
@@ -4159,6 +4206,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, []);
 
   const saveSummaryRefreshIdRef = useRef(0);
+  const saveImportInspectionGenerationRef = useRef(0);
   const refreshSaveData = useCallback(async () => {
     const refreshId = ++saveSummaryRefreshIdRef.current;
     const summaries = await getSaveSummariesInWorker(gameRef.current.mode);
@@ -4168,12 +4216,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, []);
 
   const manualSave = useCallback(async () => {
-    // Explicit user saves keep the existing immediate local mirror contract so
-    // the save panel can reflect the new runtime without waiting for the
-    // IndexedDB/Worker verification round trip. Automatic saves stay fully
-    // asynchronous through persistPrimarySave().
-    const immediate = saveGame(stateWithSimulationDebt(gameRef.current));
-    const result = immediate.success ? await persistPrimarySave() : immediate;
+    // A verified save already updates the in-memory index immediately and then
+    // waits for the durable exact read-back. Running the synchronous save first
+    // duplicated serialization, migration, and IndexedDB writes for large
+    // factories and could replace the true previous backup with the new state.
+    const state = stateWithSimulationDebt(gameRef.current);
+    const result = await persistPrimarySave(state);
     void refreshSaveData();
     setNotice(result.message);
     playTone(result.success ? "confirm" : "alert");
@@ -4193,23 +4241,37 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     });
   }, [playTone]);
 
-  const importSave = useCallback((raw: string) => {
-    const inspection = inspectSave(raw);
-    if ((!inspection.valid && !inspection.repairable) || !inspection.state) {
-      setNotice(`存档导入失败：${inspection.issues[0] ?? "文件格式或版本无效"}`);
-      playTone("alert");
-      return;
-    }
-    setImportPreview(inspection);
-    setPendingImportState(inspection.valid ? inspection.state : null);
-    setPendingImportRaw(raw);
+  const importSave = useCallback(async (raw: string) => {
+    const generation = ++saveImportInspectionGenerationRef.current;
+    setImportPreview(null);
+    setPendingImportState(null);
+    setPendingImportRaw(null);
     setImportRescueArmed(false);
-    setNotice(inspection.valid
-      ? inspection.integrity === "valid" ? "已读取存档，请确认导入" : "存档可迁移，请确认导入"
-      : "完整性校验失败但结构完整，可使用双确认救援");
+    setNotice("正在后台检查存档完整性与兼容性…");
+    try {
+      const inspection = await inspectSaveInWorker(raw);
+      if (generation !== saveImportInspectionGenerationRef.current) return;
+      if ((!inspection.valid && !inspection.repairable) || !inspection.state) {
+        setNotice(`存档导入失败：${inspection.issues[0] ?? "文件格式或版本无效"}`);
+        playTone("alert");
+        return;
+      }
+      setImportPreview(inspection);
+      setPendingImportState(inspection.valid ? inspection.state : null);
+      setPendingImportRaw(inspection.valid ? null : raw);
+      setImportRescueArmed(false);
+      setNotice(inspection.valid
+        ? inspection.integrity === "valid" ? "已读取存档，请确认导入" : "存档可迁移，请确认导入"
+        : "完整性校验失败但结构完整，可使用双确认救援");
+    } catch (error) {
+      if (generation !== saveImportInspectionGenerationRef.current) return;
+      setNotice(error instanceof Error ? `存档导入失败：${error.message}` : "存档导入失败：后台检查不可用");
+      playTone("alert");
+    }
   }, [playTone]);
 
   const cancelImport = useCallback(() => {
+    saveImportInspectionGenerationRef.current += 1;
     setImportPreview(null);
     setPendingImportState(null);
     setPendingImportRaw(null);
@@ -4285,7 +4347,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [importPreview, importRescueArmed, pendingImportRaw, persistPrimarySave, playTone, refreshSaveData, restoreGame]);
 
   const restoreCloudSave = useCallback(async (raw: string): Promise<{ success: boolean; message: string }> => {
-    const inspection = inspectSave(raw);
+    const inspection = await inspectSaveInWorker(raw);
     if (!inspection.valid || !inspection.state) {
       if (inspection.repairable && inspection.state) {
         setImportPreview(inspection);

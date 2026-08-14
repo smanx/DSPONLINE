@@ -27,7 +27,7 @@ import { createEndgameState, getOfflineSimulationLimitSeconds } from "./endgame"
 import { getInfiniteResearchCostBigInt, getInfiniteResearchMaximumLevel } from "./infiniteResearch";
 import { normalizeDecimalIntegerString } from "./quantityFormat";
 import { ACTIVITY_MATERIAL_IDS } from "./activity";
-import { computeSaveStateChecksum, inspectSaveEnvelopeChecksum } from "./saveEnvelopeIntegrity";
+import { computeSaveStateChecksum } from "./saveEnvelopeIntegrity";
 import {
   computeSavePayloadTextChecksum,
   decodeVerifiedSaveTransfer,
@@ -1044,15 +1044,16 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     ? saved.galaxy.seed
     : DEFAULT_GALAXY_SEED;
   const initial = createInitialState(savedSeed, saved.version < 20);
+  const initialResourceById = saved.version < 13
+    ? new Map(initial.entities.filter((entity) => entity.kind === "vein").map((entity) => [entity.id, entity] as const))
+    : null;
   const galaxy = normalizeGalaxyState(saved.version >= 20 ? saved.galaxy : { seed: initial.galaxy.seed }, saved.version < 20);
   const entities = saved.entities.map((entity: FactoryEntity) => {
     // `quantumTarget` was briefly written to every building by an older
     // client. Keep it only for interstellar stations; ordinary buildings
     // must not carry the extension back into the next cloud save.
     const { quantumTarget: _legacyQuantumTarget, ...entityWithoutLegacyQuantumTarget } = entity;
-    const currentResource = saved.version < 13
-      ? initial.entities.find((candidate) => candidate.kind === "vein" && candidate.id === entity.id)
-      : undefined;
+    const currentResource = initialResourceById?.get(entity.id);
     const legacyRelocation = currentResource
       ? { planetId: currentResource.planetId, position: currentResource.position }
       : undefined;
@@ -1261,8 +1262,20 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
       construction[sorterId] = 0;
     }
   }
+  // Preserve Array.find's historical first-match behavior for malformed saves
+  // with duplicate entity ids. Material hubs need their own first matching
+  // index because the legacy lookup included the building predicate.
+  const entityById = new Map<string, FactoryEntity>();
+  const materialDeliveryHubById = new Map<string, FactoryEntity>();
+  for (const entity of entities) {
+    if (!entityById.has(entity.id)) entityById.set(entity.id, entity);
+    if (entity.buildingId === "material_delivery_hub" && !materialDeliveryHubById.has(entity.id)) {
+      materialDeliveryHubById.set(entity.id, entity);
+    }
+  }
   const migratedBelts: BeltConnection[] = Array.isArray(saved.belts) ? saved.belts.map((belt: Record<string, any>) => {
-    const source = entities.find((entity) => entity.id === belt.source);
+    const source = entityById.get(belt.source);
+    const target = entityById.get(belt.target);
     const tier = saved.version >= 8 && validBeltTier(belt.tier) ? belt.tier : 1;
     const rawLanes = Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, nonNegativeInteger(belt.lanes) || 1));
     const lanes = Math.min(MAX_BELT_LANES, rawLanes);
@@ -1292,14 +1305,14 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
       lastFlow: typeof belt.lastFlow === "number" ? belt.lastFlow : 0,
       targetPortIndex: saved.version >= 34 &&
         (belt.targetPortIndex === 0 || belt.targetPortIndex === 1 || belt.targetPortIndex === 2) &&
-        (entities.find((entity) => entity.id === belt.target)?.buildingId === "micro_black_hole_connector" ||
-          saved.version >= 39 && entities.find((entity) => entity.id === belt.target)?.buildingId === "material_delivery_hub")
+        (target?.buildingId === "micro_black_hole_connector" ||
+          saved.version >= 39 && target?.buildingId === "material_delivery_hub")
         ? belt.targetPortIndex
         : undefined,
     } as BeltConnection;
   }) : [];
   for (const belt of migratedBelts) {
-    const target = entities.find((entity) => entity.id === belt.target && entity.buildingId === "material_delivery_hub");
+    const target = materialDeliveryHubById.get(belt.target);
     if (!target) continue;
     const slots = target.deliverySlots ?? normalizeMaterialDeliverySlots(target, saved.version);
     const requested = belt.targetPortIndex;
@@ -1318,28 +1331,34 @@ export function migrateGame(value: unknown, contentPackRegistry: ContentPackRegi
     target.deliveryItemIds = [...new Set(slots.flatMap((slot) => slot.itemId ? [slot.itemId] : []))];
   }
   const occupiedBlackHolePorts = new Set<string>();
-  const belts = migratedBelts.filter((belt) => {
-    const source = entities.find((entity) => entity.id === belt.source);
-    const target = entities.find((entity) => entity.id === belt.target);
-    if (!source || !target || source.planetId !== target.planetId || belt.planetId !== source.planetId) return false;
+  const belts: BeltConnection[] = [];
+  const rejectedBelts: BeltConnection[] = [];
+  for (const belt of migratedBelts) {
+    const source = entityById.get(belt.source);
+    const target = entityById.get(belt.target);
+    let accepted = Boolean(source && target && source.planetId === target.planetId && belt.planetId === source.planetId);
     // Ordinary machine lines are intentionally preserved even when a loaded
     // recipe currently does not accept their item. They may be a player-owned
     // temporarily disconnected route and have no persisted numbered port to
     // repair. Numbered delivery/black-hole ports below are authoritative and
     // can be validated without guessing player intent.
-    if (target.buildingId === "material_delivery_hub") {
-      if (belt.targetPortIndex === undefined) return false;
-      const slot = target.deliverySlots?.[belt.targetPortIndex];
-      return Boolean(slot && slot.mode !== "disabled" && slot.itemId === belt.itemId);
+    if (accepted && target!.buildingId === "material_delivery_hub") {
+      const slot = belt.targetPortIndex === undefined ? undefined : target!.deliverySlots?.[belt.targetPortIndex];
+      accepted = Boolean(slot && slot.mode !== "disabled" && slot.itemId === belt.itemId);
+    } else if (accepted && target!.buildingId !== "micro_black_hole_connector") {
+      accepted = belt.targetPortIndex === undefined;
+    } else if (accepted) {
+      if (belt.targetPortIndex === undefined) {
+        accepted = false;
+      } else {
+        const key = `${target!.id}:${belt.targetPortIndex}`;
+        accepted = !occupiedBlackHolePorts.has(key);
+        if (accepted) occupiedBlackHolePorts.add(key);
+      }
     }
-    if (target.buildingId !== "micro_black_hole_connector") return belt.targetPortIndex === undefined;
-    if (belt.targetPortIndex === undefined) return false;
-    const key = `${target.id}:${belt.targetPortIndex}`;
-    if (occupiedBlackHolePorts.has(key)) return false;
-    occupiedBlackHolePorts.add(key);
-    return true;
-  });
-  for (const belt of migratedBelts.filter((candidate) => !belts.includes(candidate))) {
+    (accepted ? belts : rejectedBelts).push(belt);
+  }
+  for (const belt of rejectedBelts) {
     const constructionId = getBeltConstructionId(belt.tier);
     construction[constructionId] = Math.min(Number.MAX_SAFE_INTEGER, (construction[constructionId] ?? 0) + belt.lanes);
   }
@@ -2421,8 +2440,12 @@ export function inspectSave(raw: string, contentPackRegistry?: ContentPackRegist
   if (typeof envelope.checksum === "string" && envelope.checksum.length > 0) {
     recordedChecksum = envelope.checksum;
     computedChecksum = computeSaveStateChecksum(formatVersion, envelope.state);
-    const legacyExpected = legacyChecksumFor(formatVersion, envelope.state);
-    checksum = envelope.checksum === computedChecksum || envelope.checksum === legacyExpected ? "valid" : "invalid";
+    // Current envelopes overwhelmingly use the exact state checksum. The
+    // legacy compatibility projection clones the complete state, so only pay
+    // that cost after the current checksum has actually failed.
+    checksum = envelope.checksum === computedChecksum || envelope.checksum === legacyChecksumFor(formatVersion, envelope.state)
+      ? "valid"
+      : "invalid";
   } else {
     issues.push("旧版存档没有完整性校验，导入后会自动补写");
   }
@@ -2896,10 +2919,11 @@ export function saveGame(state: GameState, options: { emergencyMirror?: boolean 
   }
 
   let backupSaved = false;
-  if (previous && inspectSave(previous).valid) {
+  const previousProof = previous ? inspectEnvelopeForBackup(previous) : null;
+  if (previousProof) {
     try {
-      setLocalSaveValue(backupKey, previous);
-      backupSaved = getLocalSaveValue(backupKey) === previous;
+      setLocalSaveValue(backupKey, previousProof.raw);
+      backupSaved = getLocalSaveValue(backupKey) === previousProof.raw;
     } catch {
       // The verified primary save has priority over its optional previous-version backup.
     }
@@ -2922,15 +2946,29 @@ async function verifyPersistedEnvelope(
   key: string,
   expectedRaw: string,
   workerVerification?: SaveTransferVerification,
+  exactEnvelopeProof?: ExactEnvelopeProof,
 ): Promise<boolean> {
   await flushLocalSaveWrites();
   const stored = await readPersistedLocalSaveValue(key);
   if (stored !== expectedRaw) return false;
   // The exact string read-back is the same byte sequence that the worker
   // already hashed. Avoid parsing the full 20+ MB state again on the UI thread.
-  if (workerVerification?.integrity === "valid") return true;
+  if (workerVerification?.integrity === "valid" || exactEnvelopeProof?.raw === expectedRaw) return true;
   const inspection = inspectSave(stored);
   return inspection.valid && inspection.checksum === "valid";
+}
+
+interface ExactEnvelopeProof {
+  raw: string;
+  checksumValid: boolean;
+}
+
+function inspectEnvelopeForBackup(raw: string): ExactEnvelopeProof | null {
+  const inspection = inspectSave(raw);
+  // Do not retain inspection.state while IndexedDB flushes a large backup.
+  // Structural validity has already been proven; exact raw identity plus the
+  // scalar checksum result is all durable read-back verification needs.
+  return inspection.valid ? { raw, checksumValid: inspection.checksum === "valid" } : null;
 }
 
 function matchesWorkerVerification(
@@ -3136,10 +3174,16 @@ async function saveGameVerifiedOnce(state: GameState): Promise<SaveGameResult> {
 
   const backupStartedAt = monotonicNow();
   let backupSaved = false;
-  if (previous && inspectSave(previous).valid) {
+  const previousProof = previous ? inspectEnvelopeForBackup(previous) : null;
+  if (previousProof) {
     try {
-      setLocalSaveValue(backupKey, previous);
-      backupSaved = await verifyPersistedEnvelope(backupKey, previous);
+      setLocalSaveValue(backupKey, previousProof.raw);
+      // The full inspection above is bound to `previous`; the durable exact
+      // read-back proves IndexedDB persisted those same bytes. Preserve the
+      // old result contract where a checksum-missing legacy backup is copied
+      // but does not report backupSaved=true.
+      const persistedExactly = await verifyPersistedEnvelope(backupKey, previousProof.raw, undefined, previousProof);
+      backupSaved = previousProof.checksumValid && persistedExactly;
     } catch {
       // The already verified primary remains authoritative.
     }
