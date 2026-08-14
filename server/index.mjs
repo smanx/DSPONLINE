@@ -88,9 +88,10 @@ import {
   receiveAccountArchiveRequest,
 } from "./account-archive-import.mjs";
 import {
+  auditCloudPayloadAliasReferences,
   deleteCloudPayload,
   deleteCloudPayloadsForUser,
-  garbageCollectCloudPayloadBlobs,
+  garbageCollectCloudPayloadBlobCandidates,
   initializeCloudPayloadStore,
   linkVerifiedCloudPayload,
   readCloudPayload,
@@ -1374,6 +1375,112 @@ function metadataOnlySaveRecord(save) {
   return metadata;
 }
 
+function cloudPayloadReferenceKey(userId, slot, revision) {
+  return `${userId}\u0000${slot}\u0000${revision}`;
+}
+
+function addCloudPayloadCleanupCandidate(candidates, reference) {
+  if (!reference || typeof reference.checksum !== "string" || !Number.isSafeInteger(reference.sizeBytes)) return;
+  const previousSize = candidates.get(reference.checksum);
+  if (previousSize !== undefined && previousSize !== reference.sizeBytes) {
+    const error = new Error("同一云正文地址的 alias 大小不一致");
+    error.code = "CLOUD_PAYLOAD_ALIAS_SIZE_MISMATCH";
+    throw error;
+  }
+  candidates.set(reference.checksum, reference.sizeBytes);
+}
+
+function buildCloudPayloadReferenceIndex(database) {
+  const startupAudit = auditCloudPayloadAliasReferences(database);
+  const references = new Map();
+  const counts = new Map();
+  for (const reference of startupAudit.references) {
+    references.set(
+      cloudPayloadReferenceKey(reference.userId, reference.slot, reference.revision),
+      reference,
+    );
+    counts.set(reference.checksum, (counts.get(reference.checksum) ?? 0) + 1);
+  }
+  return { references, counts, audit: startupAudit.audit };
+}
+
+function prepareCloudPayloadReferenceCommit(currentReferences, currentCounts, mutation, cleanupCandidates) {
+  const referenceChanges = new Map();
+  const countDeltas = new Map();
+  const referenceAt = (key) => referenceChanges.has(key) ? referenceChanges.get(key) : currentReferences.get(key);
+  const adjustCount = (checksum, delta) => {
+    countDeltas.set(checksum, (countDeltas.get(checksum) ?? 0) + delta);
+  };
+  const removeKey = (key) => {
+    const previous = referenceAt(key);
+    if (previous) {
+      addCloudPayloadCleanupCandidate(cleanupCandidates, previous);
+      adjustCount(previous.checksum, -1);
+    }
+    referenceChanges.set(key, null);
+  };
+  const removeUser = (userId) => {
+    for (const [key, reference] of currentReferences) {
+      if (reference.userId !== userId) continue;
+      removeKey(key);
+    }
+  };
+  for (const userId of mutation.replaceUserPayloads) removeUser(userId);
+  for (const userId of mutation.userDeletes) removeUser(userId);
+  for (const deletion of mutation.deletes.values()) {
+    removeKey(cloudPayloadReferenceKey(deletion.userId, deletion.slot, deletion.revision));
+  }
+  for (const write of [...mutation.writes.values(), ...mutation.fileWrites.values()]) {
+    const key = cloudPayloadReferenceKey(write.userId, write.slot, write.revision);
+    removeKey(key);
+    if (typeof write.checksum === "string" && /^[a-f0-9]{64}$/.test(write.checksum) &&
+      Number.isSafeInteger(write.sizeBytes) && write.sizeBytes >= 0) {
+      referenceChanges.set(key, {
+        userId: write.userId,
+        slot: write.slot,
+        revision: write.revision,
+        checksum: write.checksum,
+        sizeBytes: write.sizeBytes,
+      });
+      adjustCount(write.checksum, 1);
+    }
+  }
+  const projectedCounts = new Map();
+  for (const [checksum, delta] of countDeltas) {
+    const projected = (currentCounts.get(checksum) ?? 0) + delta;
+    if (!Number.isSafeInteger(projected) || projected < 0) {
+      const error = new Error("云正文引用索引计数不一致");
+      error.code = "CLOUD_PAYLOAD_REFERENCE_COUNT_INVALID";
+      throw error;
+    }
+    projectedCounts.set(checksum, projected);
+  }
+  return { referenceChanges, projectedCounts };
+}
+
+function cloudPayloadCandidateReferenceCounts(currentCounts, projectedCounts, candidates, referenceIndexComplete) {
+  const counts = new Map([...candidates.keys()].map((checksum) => [checksum, 0]));
+  if (referenceIndexComplete !== true) {
+    for (const checksum of counts.keys()) counts.set(checksum, 1);
+    return counts;
+  }
+  for (const checksum of counts.keys()) {
+    counts.set(checksum, projectedCounts.has(checksum) ? projectedCounts.get(checksum) : (currentCounts.get(checksum) ?? 0));
+  }
+  return counts;
+}
+
+function publishCloudPayloadReferenceCommit(references, counts, prepared) {
+  for (const [key, reference] of prepared.referenceChanges) {
+    if (reference) references.set(key, reference);
+    else references.delete(key);
+  }
+  for (const [checksum, count] of prepared.projectedCounts) {
+    if (count === 0) counts.delete(checksum);
+    else counts.set(checksum, count);
+  }
+}
+
 class SqliteStore extends AtomicStoreBase {
   constructor(file, faultInjector = null) {
     super(faultInjector);
@@ -1383,7 +1490,25 @@ class SqliteStore extends AtomicStoreBase {
     this.pendingCloudSaveWrites = new Map();
     this.pendingCloudSaveDeletes = new Map();
     this.pendingCloudSaveUserDeletes = new Set();
+    this.cloudPayloadReferenceIndex = new Map();
+    this.cloudPayloadReferenceCounts = new Map();
+    this.cloudPayloadReferenceAudit = {
+      complete: true,
+      scannedRows: 0,
+      aliasRows: 0,
+      directRows: 0,
+      invalidAliasRows: 0,
+      invalidStorageTypeRows: 0,
+      maximumProjectedCharacters: 161,
+    };
     this.runtimeStatePersistence = null;
+  }
+
+  rebuildCloudPayloadReferenceIndex() {
+    const rebuilt = buildCloudPayloadReferenceIndex(this.database);
+    this.cloudPayloadReferenceIndex = rebuilt.references;
+    this.cloudPayloadReferenceCounts = rebuilt.counts;
+    this.cloudPayloadReferenceAudit = rebuilt.audit;
   }
 
   async load() {
@@ -1404,6 +1529,7 @@ class SqliteStore extends AtomicStoreBase {
         appStateUpdatedAt: initialized.updatedAt,
         appStateFingerprint: runtimeAppStateFingerprint(initialized.payload),
       });
+      this.rebuildCloudPayloadReferenceIndex();
       return;
     }
     const parsed = JSON.parse(row.payload);
@@ -1416,6 +1542,7 @@ class SqliteStore extends AtomicStoreBase {
       });
       this.data = this.runtimeStatePersistence.hydrateState(normalized);
       row.payload = null;
+      this.rebuildCloudPayloadReferenceIndex();
       return;
     }
     row.payload = null;
@@ -1426,6 +1553,7 @@ class SqliteStore extends AtomicStoreBase {
       appStateUpdatedAt: migrated.updatedAt,
       appStateFingerprint: runtimeAppStateFingerprint(migrated.payload),
     });
+    this.rebuildCloudPayloadReferenceIndex();
   }
 
   async importLegacyData(source) {
@@ -1436,6 +1564,7 @@ class SqliteStore extends AtomicStoreBase {
       appStateUpdatedAt: migrated.updatedAt,
       appStateFingerprint: runtimeAppStateFingerprint(migrated.payload),
     });
+    this.rebuildCloudPayloadReferenceIndex();
   }
 
   createStandaloneMutation() {
@@ -1630,12 +1759,19 @@ class SqliteStore extends AtomicStoreBase {
     const payload = skipAppState ? null : JSON.stringify(candidate);
     const writeState = this.database.prepare("INSERT INTO app_state (id, payload, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at");
     let runtimeCommitResult = null;
+    const blobCleanupCandidates = new Map();
+    const nextCloudPayloadReferenceState = prepareCloudPayloadReferenceCommit(
+      this.cloudPayloadReferenceIndex,
+      this.cloudPayloadReferenceCounts,
+      mutation,
+      blobCleanupCandidates,
+    );
     this.database.transaction(() => {
       this.maybeInjectPersistenceFault("before-sqlite-transaction", context);
-      for (const userId of mutation.replaceUserPayloads) deleteCloudPayloadsForUser(this.database, userId);
-      for (const userId of mutation.userDeletes) deleteCloudPayloadsForUser(this.database, userId);
+      for (const userId of mutation.replaceUserPayloads) deleteCloudPayloadsForUser(this.database, userId, { blobCleanupCandidates });
+      for (const userId of mutation.userDeletes) deleteCloudPayloadsForUser(this.database, userId, { blobCleanupCandidates });
       this.maybeInjectPersistenceFault("after-user-payload-deletes", context);
-      for (const deletion of mutation.deletes.values()) deleteCloudPayload(this.database, deletion);
+      for (const deletion of mutation.deletes.values()) deleteCloudPayload(this.database, deletion, { blobCleanupCandidates });
       this.maybeInjectPersistenceFault("after-payload-deletes", context);
       for (const write of mutation.writes.values()) writeInspectedCloudPayload(this.database, write);
       const importedChecksums = new Set();
@@ -1662,10 +1798,25 @@ class SqliteStore extends AtomicStoreBase {
       if (!skipAppState) writeState.run(payload, Date.now());
       if (runtimePlan) runtimeCommitResult = this.runtimeStatePersistence.applyPlanInTransaction(runtimePlan, { operation, synchronizeAppState: !skipAppState });
       this.maybeInjectPersistenceFault("after-app-state-write", context);
-      if (mutation.replaceUserPayloads.size > 0 || mutation.userDeletes.size > 0 || mutation.deletes.size > 0) {
-        garbageCollectCloudPayloadBlobs(this.database);
+      if (blobCleanupCandidates.size > 0) {
+        garbageCollectCloudPayloadBlobCandidates(
+          this.database,
+          blobCleanupCandidates,
+          cloudPayloadCandidateReferenceCounts(
+            this.cloudPayloadReferenceCounts,
+            nextCloudPayloadReferenceState.projectedCounts,
+            blobCleanupCandidates,
+            this.cloudPayloadReferenceAudit.complete,
+          ),
+        );
+        this.maybeInjectPersistenceFault("after-payload-blob-cleanup", context);
       }
     })();
+    publishCloudPayloadReferenceCommit(
+      this.cloudPayloadReferenceIndex,
+      this.cloudPayloadReferenceCounts,
+      nextCloudPayloadReferenceState,
+    );
     if (runtimePlan) this.runtimeStatePersistence.observeCommitted(runtimePlan, runtimeCommitResult);
   }
 

@@ -258,6 +258,14 @@ sudo systemctl restart dsp-idle-cloud.service
 
 1.0.35 候选可配置 `DSP_CLOUD_BACKUP_WINDOW=HH:MM-HH:MM`、`DSP_CLOUD_PRUNE_INTERVAL_MS` 和 `DSP_CLOUD_REQUEST_TIMEOUT_MS`。部署前在生产备份副本上验证时间窗跨午夜、重复裁剪和中断恢复；正式节点先只读调用 `GET /api/admin/cloud-history/prune-preview`，确认保留最近 20 条及预览哈希。写入裁剪必须同时提交精确确认文字 `PRUNE_CLOUD_HISTORY` 和当前预览 ID；预览变化返回冲突后必须重新检查，不能复用旧确认。磁盘达到 80% 时停止非必要发布，达到 90% 时云存档 PUT 返回保护性 507，禁止通过删除数据库或未验证备份解除保护。
 
+### 香港 1.0.41 云裁剪 P0 热修边界
+
+`DSPIDLE-1041-HK-GC-HOTFIX` 只授权发布 Web/API 代码，不授权恢复、迁移、重写或手工编辑生产 SQLite。新 API 启动时会对 `cloud_save_payloads` 做一次固定前缀引用审计；这是逐逻辑行工作，但不选择 direct 正文、不调用正文长度，也不解析 blob。普通上传触发第 21 条历史裁剪时，只允许读取被删主键行的固定 alias、更新对应内存 refcount，并按 checksum 主键决定是否删除候选 blob。显式离线 `server/cloud-payload-maintenance.mjs gc` 的全量 alias/blob/正文校验语义保持不变，只能在既有维护流程和已验证备份边界中执行，不能作为在线 PUT 的同步步骤。
+
+如果启动审计发现 malformed alias 或 SQLite `typeof(payload) != 'text'`，自动 cleanup 会 fail-closed 并暂留 orphan；不得用手工 SQL 改成“完整”或直接删除 blob。Release 应在只读备份副本/临时 SQLite 上运行维护审计定位问题，再另行取得数据维护授权。`app_state` metadata checksum 与实际 alias 不一致时，以实际 alias 计入在线引用，metadata 不会被本热修改写。
+
+香港现有 `PUT /api/cloud-save` 维护锁必须保持到以下条件全部满足：不可变 Web/API 制品和 aggregate manifest 复算一致；未激活 API 使用临时 SQLite 通过 health/ready、共享 blob、21 次裁剪和故障回滚 smoke；正式切换后 readiness、backlog、WAL/磁盘、延迟和错误率完成约定观察；Release 明确解除锁。开发完成本身不是解锁授权。边缘可选 telemetry 熔断不改云存档正文，建议在解除锁后继续保留为可逆保护；只有观测证明误触发或另有批准时才移除。代码回滚只切回已验证 API/Web 制品，绝不恢复数据库。上海、下载页、Android 和 Windows 不在本热修发布范围。
+
 账号处置先用 `GET /api/admin/account?accountId=...` 核对精确账号摘要，再向 `POST /api/admin/account/action` 提交 `CONFIRM:<action>:<accountId>`。彻底注销还要求最近 24 小时内的已验证本机备份时间戳；不得用显示名、邮箱模糊匹配或直接编辑 SQLite。速通历史恢复只能离线运行 `server/speedrun-recovery.mjs`：先 dry-run 核对最新主云 revision、元数据/正文哈希、v46 速通身份和百万白糖事实；apply 前停止服务，并提供匹配 `quick_check` 备份及 `RECOVER_SPEEDRUN:<account>:<revision>`。该工具只写内部提交和最小化审计，不改云存档正文；完成后重启并复核一次，重复执行必须无变化。
 
 标准恢复工具禁止从非最新历史修订写榜，该限制不得为方便运营而放宽。只有用户明确提供目标显示名和展示时间、单独授权历史恢复，且只读检查证明唯一账号与唯一修订时，才可走例外审计流程：使用显示名哈希而非明文锁定目标；同时锁定 revision、完整正文 SHA-256、工厂身份、赛季、规则、v46、内容包为空、累计事实、权威小数秒和当前成绩数量；先创建完整 SQLite Backup API 快照和目标修订独立 `0600` 证据库，再在完整备份派生 guard 上执行同一离线事务与幂等复跑。生产 apply 必须停服务、使用乐观锁，且只允许增加目标 submission 和最小审计。人工口述的 `mm:ss` 只用于核对客户端 `Math.floor` 展示，数据库必须保存历史里程碑的权威小数秒，不能人为取整成更快成绩。公开运维记录不得包含显示名、账号 ID、工厂 ID、正文或存档哈希；已验证实例见 [2026-08-09 香港历史速通恢复记录](./releases/1.0.34-speedrun-recovery-2026-08-09.md)。

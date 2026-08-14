@@ -9,6 +9,7 @@ export const CLOUD_PAYLOAD_ALIAS_PREFIX = "\u001eDSPIDLE-CLOUD-PAYLOAD-ALIAS/V1/
 const CLOUD_PAYLOAD_ALIAS_SUFFIX = "\u001f";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const ALIAS_PATTERN = /^\u001eDSPIDLE-CLOUD-PAYLOAD-ALIAS\/V1\/([0-9a-f]{64})\/(0|[1-9][0-9]{0,15})\u001f$/;
+const CLOUD_PAYLOAD_ALIAS_PROJECTION_CHARACTERS = 161;
 const DEFAULT_SCAN_BATCH_SIZE = 1;
 
 export class CloudPayloadStoreError extends Error {
@@ -253,6 +254,125 @@ function resolveAlias(database, alias) {
   return validateResolvedBlob(readBlobRow(database, alias.checksum), alias);
 }
 
+function projectedAlias(row) {
+  if (!row) return null;
+  if (row.storageType !== "text") {
+    fail("CLOUD_PAYLOAD_ROW_INVALID", "Cloud payload row does not use SQLite TEXT storage");
+  }
+  if (row.prefix === null || row.prefix === undefined) return null;
+  if (typeof row.prefix !== "string") {
+    fail("CLOUD_PAYLOAD_ROW_INVALID", "Cloud payload row does not contain text");
+  }
+  return parseCloudPayloadAlias(row.prefix);
+}
+
+function addBlobCleanupCandidate(candidates, alias) {
+  if (!candidates || !alias) return;
+  if (!(candidates instanceof Map)) {
+    fail("CLOUD_PAYLOAD_CLEANUP_CANDIDATES_INVALID", "Cloud payload blob cleanup candidates must be a Map");
+  }
+  const previousSize = candidates.get(alias.checksum);
+  if (previousSize !== undefined && previousSize !== alias.sizeBytes) {
+    fail("CLOUD_PAYLOAD_ALIAS_SIZE_MISMATCH", "Deleted aliases sharing a checksum disagree on byte size");
+  }
+  candidates.set(alias.checksum, alias.sizeBytes);
+}
+
+function aliasProjectionSql(whereClause) {
+  return `
+    SELECT
+      typeof(payload) AS storageType,
+      CASE
+        WHEN typeof(payload) <> 'text' THEN NULL
+        WHEN substr(payload, 1, 1) = ? THEN substr(payload, 1, ?)
+        ELSE NULL
+      END AS prefix
+    FROM ${CLOUD_PAYLOAD_TABLE}
+    ${whereClause}
+  `;
+}
+
+/**
+ * Reads only the fixed-size alias representation for one primary-key row.
+ * Direct legacy payloads never execute the fixed-prefix projection and are not
+ * materialized. This helper exists for the server's in-memory alias index; it
+ * is deliberately not a replacement for readCloudPayload().
+ */
+export function readCloudPayloadAlias(database, input) {
+  assertDatabase(database);
+  const identity = validateIdentity(input ?? {});
+  const row = database.prepare(aliasProjectionSql("WHERE user_id = ? AND slot = ? AND revision = ?"))
+    .get(CLOUD_PAYLOAD_ALIAS_PREFIX[0], CLOUD_PAYLOAD_ALIAS_PROJECTION_CHARACTERS, identity.userId, identity.slot, identity.revision);
+  return projectedAlias(row);
+}
+
+/**
+ * Audits the actual fixed-prefix projection of every logical payload row for
+ * the server's startup reference index. Direct legacy bodies are never
+ * selected or measured. A malformed alias row makes the audit incomplete so
+ * online cleanup can retain every candidate conservatively; the explicit
+ * maintenance GC remains responsible for resolving and validating bodies.
+ */
+export function auditCloudPayloadAliasReferences(database) {
+  assertDatabase(database);
+  const rows = database.prepare(`
+    SELECT
+      user_id AS userId,
+      slot,
+      revision,
+      typeof(payload) AS storageType,
+      CASE
+        WHEN typeof(payload) <> 'text' THEN NULL
+        WHEN substr(payload, 1, 1) = ? THEN substr(payload, 1, ?)
+        ELSE NULL
+      END AS prefix
+    FROM ${CLOUD_PAYLOAD_TABLE}
+    ORDER BY user_id, slot, revision
+  `).iterate(CLOUD_PAYLOAD_ALIAS_PREFIX[0], CLOUD_PAYLOAD_ALIAS_PROJECTION_CHARACTERS);
+  const references = [];
+  const audit = {
+    complete: true,
+    scannedRows: 0,
+    aliasRows: 0,
+    directRows: 0,
+    invalidAliasRows: 0,
+    invalidStorageTypeRows: 0,
+    maximumProjectedCharacters: CLOUD_PAYLOAD_ALIAS_PROJECTION_CHARACTERS,
+  };
+  for (const row of rows) {
+    audit.scannedRows += 1;
+    if (row.storageType !== "text") {
+      audit.complete = false;
+      audit.invalidStorageTypeRows += 1;
+      continue;
+    }
+    if (row.prefix === null || row.prefix === undefined) {
+      audit.directRows += 1;
+      continue;
+    }
+    try {
+      const alias = projectedAlias(row);
+      if (!alias) {
+        audit.directRows += 1;
+        continue;
+      }
+      audit.aliasRows += 1;
+      references.push({
+        userId: row.userId,
+        slot: row.slot,
+        revision: sqliteSafeNumber(row.revision),
+        checksum: alias.checksum,
+        sizeBytes: alias.sizeBytes,
+      });
+    } catch (error) {
+      if (!(error instanceof CloudPayloadStoreError)) throw error;
+      audit.complete = false;
+      audit.invalidAliasRows += 1;
+    }
+  }
+  return { references, audit };
+}
+
 function ensureBlob(database, descriptor) {
   const existing = readBlobRow(database, descriptor.checksum);
   if (existing) {
@@ -373,19 +493,65 @@ export function readCloudPayload(database, input) {
   return alias ? resolveAlias(database, alias) : row.payload;
 }
 
-export function deleteCloudPayload(database, input) {
+export function deleteCloudPayload(database, input, options = {}) {
   requireOuterTransaction(database, "deleteCloudPayload");
   const identity = validateIdentity(input ?? {});
+  addBlobCleanupCandidate(options?.blobCleanupCandidates, readCloudPayloadAlias(database, identity));
   return database.prepare(`
     DELETE FROM ${CLOUD_PAYLOAD_TABLE}
     WHERE user_id = ? AND slot = ? AND revision = ?
   `).run(identity.userId, identity.slot, identity.revision).changes;
 }
 
-export function deleteCloudPayloadsForUser(database, userId) {
+export function deleteCloudPayloadsForUser(database, userId, options = {}) {
   requireOuterTransaction(database, "deleteCloudPayloadsForUser");
   validateUserId(userId);
+  const rows = database.prepare(aliasProjectionSql("WHERE user_id = ?"))
+    .iterate(CLOUD_PAYLOAD_ALIAS_PREFIX[0], CLOUD_PAYLOAD_ALIAS_PROJECTION_CHARACTERS, userId);
+  for (const row of rows) {
+    const alias = projectedAlias(row);
+    if (alias) addBlobCleanupCandidate(options?.blobCleanupCandidates, alias);
+  }
   return database.prepare(`DELETE FROM ${CLOUD_PAYLOAD_TABLE} WHERE user_id = ?`).run(userId).changes;
+}
+
+/**
+ * Online orphan cleanup for aliases touched by the current transaction only.
+ * The caller supplies reference counts from its transaction-local alias index;
+ * this function never scans cloud_save_payloads, enumerates unrelated blobs,
+ * or resolves blob bodies. The full maintenance GC below remains the audit
+ * path that scans and cryptographically validates every live reference.
+ */
+export function garbageCollectCloudPayloadBlobCandidates(database, candidates, remainingReferences = new Map()) {
+  requireOuterTransaction(database, "garbageCollectCloudPayloadBlobCandidates");
+  if (!(candidates instanceof Map) || !(remainingReferences instanceof Map)) {
+    fail("CLOUD_PAYLOAD_CLEANUP_CANDIDATES_INVALID", "Targeted cloud payload cleanup requires Map inputs");
+  }
+  const remove = database.prepare(`DELETE FROM ${CLOUD_PAYLOAD_BLOB_TABLE} WHERE checksum = ?`);
+  let referencedBlobs = 0;
+  let missingBlobs = 0;
+  let deletedBlobs = 0;
+  for (const [checksum, sizeBytes] of candidates) {
+    assertChecksum(checksum);
+    assertSizeBytes(sizeBytes);
+    const references = remainingReferences.get(checksum) ?? 0;
+    if (!Number.isSafeInteger(references) || references < 0) {
+      fail("CLOUD_PAYLOAD_REFERENCE_COUNT_INVALID", "Targeted cloud payload cleanup received an invalid reference count");
+    }
+    if (references > 0) {
+      referencedBlobs += 1;
+      continue;
+    }
+    const changes = remove.run(checksum).changes;
+    if (changes === 1) deletedBlobs += 1;
+    else missingBlobs += 1;
+  }
+  return {
+    candidateBlobs: candidates.size,
+    referencedBlobs,
+    missingBlobs,
+    deletedBlobs,
+  };
 }
 
 function normalizeBatchSize(value) {

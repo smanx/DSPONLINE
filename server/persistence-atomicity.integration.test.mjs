@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import Database from "better-sqlite3";
 import { createCloudServer } from "./index.mjs";
 import { collectCloudPayloadStoreStats, readCloudPayload } from "./cloud-payload-store.mjs";
 import { computeSaveStateChecksum } from "./save-integrity.mjs";
@@ -383,6 +384,70 @@ for (const [index, scenario] of SQLITE_FAILURE_SCENARIOS.entries()) {
   });
 }
 
+test("failed twenty-first upload rolls back targeted history cleanup and its reference counts", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "dsp-persistence-targeted-cleanup-rollback-"));
+  const databaseFile = path.join(directory, "cloud.sqlite");
+  const faults = createFaultController();
+  let running;
+  try {
+    running = await startServer(databaseFile, { persistenceFaultInjector: faults.injector });
+    const account = await register(running.baseUrl, "atomic_targeted_cleanup");
+    const committedPayloads = Array.from({ length: 20 }, (_, index) => createSavePayload("normal", 1_000 + index));
+    for (const [index, payload] of committedPayloads.entries()) {
+      const uploaded = await uploadJson(running.baseUrl, "/api/cloud-save", account.headers, payload, index);
+      assert.equal(uploaded.response.status, 200, JSON.stringify(uploaded.body));
+      assert.equal(uploaded.body.cloudSave.revision, index + 1);
+    }
+    const firstChecksum = sha256(committedPayloads[0]);
+    const storageBeforeFailure = payloadStoreStats(running.server);
+    assert.equal(running.server.store.cloudPayloadReferenceCounts.get(firstChecksum), 1);
+
+    const twentyFirst = createSavePayload("normal", 1_020);
+    faults.arm("after-payload-blob-cleanup", "SQLITE_IOERR");
+    const failed = await uploadJson(running.baseUrl, "/api/cloud-save", account.headers, twentyFirst, 20);
+    faults.disarm();
+    assert.equal(failed.response.status, 500, JSON.stringify(failed.body));
+    await assertCurrentSave(running, "/api/cloud-save", account.headers, committedPayloads[19], 20);
+    assert.deepEqual((await request(running.baseUrl, "/api/cloud-save/history", {
+      headers: account.headers,
+    })).body.history.map((entry) => entry.revision), Array.from({ length: 20 }, (_, index) => 20 - index));
+    assert.equal(readCloudPayload(running.server.store.database, {
+      userId: account.accountId,
+      slot: "main",
+      revision: 1,
+    }), committedPayloads[0]);
+    assert.equal(running.server.store.database.prepare(`
+      SELECT count(*) AS count FROM cloud_save_payload_blobs WHERE checksum = ?
+    `).get(firstChecksum).count, 1);
+    assert.equal(running.server.store.cloudPayloadReferenceCounts.get(firstChecksum), 1);
+    assert.deepEqual(payloadStoreStats(running.server), storageBeforeFailure, "failed cleanup must leave no metadata, alias, or blob ghost state");
+
+    class NonIterableReferenceIndex extends Map {
+      [Symbol.iterator]() {
+        throw new Error("ordinary history trim must not enumerate the global logical-row reference index");
+      }
+    }
+    running.server.store.cloudPayloadReferenceIndex = new NonIterableReferenceIndex(
+      running.server.store.cloudPayloadReferenceIndex,
+    );
+    const retried = await uploadJson(running.baseUrl, "/api/cloud-save", account.headers, twentyFirst, 20);
+    assert.equal(retried.response.status, 200, JSON.stringify(retried.body));
+    assert.equal(retried.body.cloudSave.revision, 21);
+    assert.equal(running.server.store.database.prepare(`
+      SELECT count(*) AS count FROM cloud_save_payloads
+      WHERE user_id = ? AND slot = 'main' AND revision = 1
+    `).get(account.accountId).count, 0);
+    assert.equal(running.server.store.database.prepare(`
+      SELECT count(*) AS count FROM cloud_save_payload_blobs WHERE checksum = ?
+    `).get(firstChecksum).count, 0);
+    assert.equal(running.server.store.cloudPayloadReferenceCounts.has(firstChecksum), false);
+  } finally {
+    faults.disarm();
+    await closeServer(running?.server);
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
 test("same expectedRevision concurrent PUTs produce one commit and one conflict", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "dsp-persistence-concurrent-"));
   const databaseFile = path.join(directory, "cloud.sqlite");
@@ -429,6 +494,205 @@ test("same expectedRevision concurrent PUTs produce one commit and one conflict"
   } finally {
     await closeServer(running?.server);
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("startup reference index follows actual shared aliases when surviving metadata disagrees", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "dsp-persistence-alias-metadata-disagreement-"));
+  const databaseFile = path.join(directory, "cloud.sqlite");
+  let running;
+  try {
+    running = await startServer(databaseFile);
+    const removedAccount = await register(running.baseUrl, "alias_metadata_removed");
+    const survivingAccount = await register(running.baseUrl, "alias_metadata_survivor");
+    const payload = createSavePayload("normal", 399);
+    const checksum = sha256(payload);
+    for (const account of [removedAccount, survivingAccount]) {
+      const uploaded = await uploadJson(running.baseUrl, "/api/cloud-save", account.headers, payload, 0);
+      assert.equal(uploaded.response.status, 200, JSON.stringify(uploaded.body));
+    }
+    assert.equal(payloadStoreStats(running.server).blobs.total, 1);
+    await closeServer(running.server);
+    running = null;
+
+    const database = new Database(databaseFile);
+    try {
+      const row = database.prepare("SELECT payload, updated_at AS updatedAt FROM app_state WHERE id = 1").get();
+      const state = JSON.parse(row.payload);
+      const mismatchedChecksum = "f".repeat(64);
+      assert.notEqual(mismatchedChecksum, checksum);
+      state.cloudSaves[survivingAccount.accountId].checksum = mismatchedChecksum;
+      for (const save of state.cloudSaveHistory[survivingAccount.accountId]) save.checksum = mismatchedChecksum;
+      database.prepare("UPDATE app_state SET payload = ?, updated_at = ? WHERE id = 1")
+        .run(JSON.stringify(state), row.updatedAt + 1);
+      const actualAlias = database.prepare(`
+        SELECT payload
+        FROM cloud_save_payloads
+        WHERE user_id = ? AND slot = 'main' AND revision = 1
+      `).get(survivingAccount.accountId).payload;
+      assert.ok(actualAlias.startsWith("\u001eDSPIDLE-CLOUD-PAYLOAD-ALIAS/V1/"));
+      assert.ok(actualAlias.includes(checksum));
+      assert.ok(!actualAlias.includes(mismatchedChecksum));
+    } finally {
+      database.close();
+    }
+
+    running = await startServer(databaseFile);
+    assert.deepEqual(running.server.store.cloudPayloadReferenceAudit, {
+      complete: true,
+      scannedRows: 2,
+      aliasRows: 2,
+      directRows: 0,
+      invalidAliasRows: 0,
+      invalidStorageTypeRows: 0,
+      maximumProjectedCharacters: 161,
+    });
+    assert.equal(running.server.store.cloudPayloadReferenceCounts.get(checksum), 2);
+    const deletedFirst = await request(running.baseUrl, "/api/cloud-save", {
+      method: "DELETE",
+      headers: removedAccount.headers,
+      body: JSON.stringify({ expectedRevision: 1, confirmation: "DELETE_CLOUD_SAVE:normal:main" }),
+    });
+    assert.equal(deletedFirst.response.status, 200, JSON.stringify(deletedFirst.body));
+    assert.equal(running.server.store.database.prepare(`
+      SELECT count(*) AS count FROM cloud_save_payload_blobs WHERE checksum = ?
+    `).get(checksum).count, 1, "the surviving actual alias must retain its shared blob");
+    assert.equal(running.server.store.cloudPayloadReferenceCounts.get(checksum), 1);
+    const loadedSurvivor = await request(running.baseUrl, "/api/cloud-save", { headers: survivingAccount.headers });
+    assert.equal(loadedSurvivor.response.status, 200, JSON.stringify(loadedSurvivor.body));
+    assert.equal(loadedSurvivor.body.cloudSave.payload, payload);
+    assert.equal(loadedSurvivor.body.cloudSave.checksum, "f".repeat(64), "metadata disagreement remains untouched");
+
+    const deletedLast = await request(running.baseUrl, "/api/cloud-save", {
+      method: "DELETE",
+      headers: survivingAccount.headers,
+      body: JSON.stringify({ expectedRevision: 1, confirmation: "DELETE_CLOUD_SAVE:normal:main" }),
+    });
+    assert.equal(deletedLast.response.status, 200, JSON.stringify(deletedLast.body));
+    assert.equal(running.server.store.database.prepare(`
+      SELECT count(*) AS count FROM cloud_save_payload_blobs WHERE checksum = ?
+    `).get(checksum).count, 0, "the final actual alias deletion must release its blob");
+    assert.equal(running.server.store.cloudPayloadReferenceCounts.has(checksum), false);
+  } finally {
+    await closeServer(running?.server);
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("incomplete startup alias audit makes unrelated automatic cleanup retain candidates", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "dsp-persistence-incomplete-alias-audit-"));
+  const databaseFile = path.join(directory, "cloud.sqlite");
+  let running;
+  try {
+    running = await startServer(databaseFile);
+    const account = await register(running.baseUrl, "alias_audit_fail_closed");
+    const payload = createSavePayload("normal", 400);
+    const checksum = sha256(payload);
+    const uploaded = await uploadJson(running.baseUrl, "/api/cloud-save", account.headers, payload, 0);
+    assert.equal(uploaded.response.status, 200, JSON.stringify(uploaded.body));
+    await closeServer(running.server);
+    running = null;
+
+    const database = new Database(databaseFile);
+    try {
+      database.prepare("INSERT INTO cloud_save_payloads VALUES (?, ?, ?, ?)")
+        .run("unrelated_malformed_alias", "main", 1, `\u001eDSPIDLE-CLOUD-PAYLOAD-ALIAS/V1/${"z".repeat(4 * 1024 * 1024)}`);
+    } finally {
+      database.close();
+    }
+
+    running = await startServer(databaseFile);
+    assert.deepEqual(running.server.store.cloudPayloadReferenceAudit, {
+      complete: false,
+      scannedRows: 2,
+      aliasRows: 1,
+      directRows: 0,
+      invalidAliasRows: 1,
+      invalidStorageTypeRows: 0,
+      maximumProjectedCharacters: 161,
+    });
+    assert.equal(running.server.store.cloudPayloadReferenceCounts.get(checksum), 1);
+    const deleted = await request(running.baseUrl, "/api/cloud-save", {
+      method: "DELETE",
+      headers: account.headers,
+      body: JSON.stringify({ expectedRevision: 1, confirmation: "DELETE_CLOUD_SAVE:normal:main" }),
+    });
+    assert.equal(deleted.response.status, 200, JSON.stringify(deleted.body));
+    assert.equal(running.server.store.database.prepare(`
+      SELECT count(*) AS count FROM cloud_save_payload_blobs WHERE checksum = ?
+    `).get(checksum).count, 1, "an incomplete audit must retain an otherwise orphaned cleanup candidate");
+    assert.equal(running.server.store.cloudPayloadReferenceCounts.has(checksum), false);
+    assert.equal(running.server.store.database.prepare(`
+      SELECT count(*) AS count FROM cloud_save_payloads WHERE user_id = 'unrelated_malformed_alias'
+    `).get().count, 1, "the unrelated malformed row must not be read or changed by the online delete");
+  } finally {
+    await closeServer(running?.server);
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("non-TEXT alias-shaped surviving row makes shared-blob cleanup fail closed", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "dsp-persistence-blob-typed-alias-audit-"));
+  const databaseFile = path.join(directory, "cloud.sqlite");
+  let running;
+  try {
+    running = await startServer(databaseFile);
+    const removedAccount = await register(running.baseUrl, "blob_alias_removed");
+    const payload = createSavePayload("normal", 401);
+    const checksum = sha256(payload);
+    const uploaded = await uploadJson(running.baseUrl, "/api/cloud-save", removedAccount.headers, payload, 0);
+    assert.equal(uploaded.response.status, 200, JSON.stringify(uploaded.body));
+    await closeServer(running.server);
+    running = null;
+
+    const database = new Database(databaseFile);
+    try {
+      const alias = database.prepare(`
+        SELECT payload FROM cloud_save_payloads
+        WHERE user_id = ? AND slot = 'main' AND revision = 1
+      `).get(removedAccount.accountId).payload;
+      assert.equal(typeof alias, "string");
+      assert.ok(alias.includes(checksum));
+      database.prepare(`
+        INSERT INTO cloud_save_payloads (user_id, slot, revision, payload)
+        VALUES ('corrupted_blob_survivor', 'main', 1, ?)
+      `).run(Buffer.from(alias, "utf8"));
+      assert.equal(database.prepare(`
+        SELECT typeof(payload) AS storageType FROM cloud_save_payloads
+        WHERE user_id = 'corrupted_blob_survivor' AND slot = 'main' AND revision = 1
+      `).get().storageType, "blob");
+    } finally {
+      database.close();
+    }
+
+    running = await startServer(databaseFile);
+    assert.deepEqual(running.server.store.cloudPayloadReferenceAudit, {
+      complete: false,
+      scannedRows: 2,
+      aliasRows: 1,
+      directRows: 0,
+      invalidAliasRows: 0,
+      invalidStorageTypeRows: 1,
+      maximumProjectedCharacters: 161,
+    });
+    const deleted = await request(running.baseUrl, "/api/cloud-save", {
+      method: "DELETE",
+      headers: removedAccount.headers,
+      body: JSON.stringify({ expectedRevision: 1, confirmation: "DELETE_CLOUD_SAVE:normal:main" }),
+    });
+    assert.equal(deleted.response.status, 200, JSON.stringify(deleted.body));
+    const retainedBlob = running.server.store.database.prepare(`
+      SELECT payload FROM cloud_save_payload_blobs WHERE checksum = ?
+    `).get(checksum);
+    assert.equal(retainedBlob?.payload, payload, "the corrupt surviving row must conservatively retain shared blob A");
+    assert.equal(running.server.store.cloudPayloadReferenceCounts.has(checksum), false);
+    assert.equal(running.server.store.database.prepare(`
+      SELECT typeof(payload) AS storageType FROM cloud_save_payloads
+      WHERE user_id = 'corrupted_blob_survivor' AND slot = 'main' AND revision = 1
+    `).get().storageType, "blob");
+  } finally {
+    await closeServer(running?.server);
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

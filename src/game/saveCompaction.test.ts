@@ -207,6 +207,78 @@ describe("v46 sparse save projection", () => {
     expect(inspection.state!.belts[0]).toMatchObject({ lanes: 1, tier: 1, sorterTier: 1, progress: 0, priority: 0, stackSize: 1, lastFlow: 0 });
   });
 
+  it("preserves explicit micro black hole operation intent while missing legacy flags stay safely paused", () => {
+    const state = createInitialState(1, false);
+    const makeBlackHole = (index: number, id: string, flags?: { paused: boolean; confirmed: boolean }) => {
+      const entity = structuredClone(state.entities[index]) as typeof state.entities[number] & Record<string, unknown>;
+      Object.assign(entity, {
+        id,
+        kind: "machine",
+        buildingId: "micro_black_hole_connector",
+        blackHolePorts: [0, 1, 2].map((portIndex) => ({ index: portIndex, totalDestroyed: "0" })),
+      });
+      if (flags) {
+        entity.blackHolePaused = flags.paused;
+        entity.blackHoleActivationConfirmed = flags.confirmed;
+      } else {
+        delete entity.blackHolePaused;
+        delete entity.blackHoleActivationConfirmed;
+      }
+      return entity;
+    };
+    const legacyMissing = makeBlackHole(2, "black-hole-legacy-missing");
+    state.entities = [
+      makeBlackHole(0, "black-hole-running", { paused: false, confirmed: true }),
+      makeBlackHole(1, "black-hole-player-paused", { paused: true, confirmed: true }),
+    ];
+    state.belts = [];
+
+    const raw = serializeEnvelope(state, 1_786_377_600_000);
+    const persisted = JSON.parse(raw) as { state: typeof state };
+    const persistedRunning = persisted.state.entities.find((entity) => entity.id === "black-hole-running")!;
+    const persistedPaused = persisted.state.entities.find((entity) => entity.id === "black-hole-player-paused")!;
+    expect(persistedRunning).toMatchObject({
+      blackHolePaused: false,
+      blackHoleActivationConfirmed: true,
+    });
+    expect(persistedPaused).toMatchObject({
+      blackHolePaused: true,
+      blackHoleActivationConfirmed: true,
+    });
+    for (const projected of [persistedRunning, persistedPaused]) {
+      expect(Object.prototype.hasOwnProperty.call(projected, "blackHolePaused")).toBe(true);
+      expect(Object.prototype.hasOwnProperty.call(projected, "blackHoleActivationConfirmed")).toBe(true);
+    }
+    const loaded = inspectSave(raw);
+    expect(loaded).toMatchObject({ valid: true, checksum: "valid", stateVersion: 46 });
+    expect(loaded.state!.entities.find((entity) => entity.id === "black-hole-running")).toMatchObject({
+      blackHolePaused: false,
+      blackHoleActivationConfirmed: true,
+    });
+    expect(loaded.state!.entities.find((entity) => entity.id === "black-hole-player-paused")).toMatchObject({
+      blackHolePaused: true,
+      blackHoleActivationConfirmed: true,
+    });
+    const legacyState = structuredClone(state);
+    legacyState.entities.push(legacyMissing);
+    const legacyEnvelope = {
+      formatVersion: 2,
+      kind: "primary",
+      mode: "normal",
+      slot: "main",
+      savedAt: 1_786_377_599_000,
+      state: legacyState,
+      checksum: computeSaveStateChecksum(2, legacyState),
+    };
+    const legacyLoaded = inspectSave(JSON.stringify(legacyEnvelope));
+    expect(legacyLoaded.valid).toBe(true);
+    expect(legacyLoaded.state!.entities.find((entity) => entity.id === "black-hole-legacy-missing")).toMatchObject({
+      blackHolePaused: true,
+      blackHoleActivationConfirmed: false,
+    });
+    expect(() => serializeEnvelope(legacyState, 1_786_377_600_001)).toThrow(/explicit pause and activation-confirmation state/);
+  });
+
   it("loads an uncompressed v46 envelope and keeps the next exact step identical after sparse round-trip", () => {
     const state = createInitialState(1, false);
     state.paused = false;

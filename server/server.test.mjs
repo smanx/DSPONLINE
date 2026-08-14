@@ -1341,8 +1341,18 @@ test("prunes detached SQLite payload rows with the twenty-revision history windo
     });
     const registered = await registerResponse.json();
     assert.equal(registerResponse.status, 201);
+    const unrelatedLarge = JSON.stringify({ directLegacy: "x".repeat(8 * 1024 * 1024) });
+    const unrelatedCorruptChecksum = createHash("sha256").update("original").digest("hex");
+    isolatedServer.store.database.prepare("INSERT INTO cloud_save_payloads VALUES (?, ?, ?, ?)")
+      .run("unrelated_large", "main", 1, unrelatedLarge);
+    isolatedServer.store.database.prepare("INSERT INTO cloud_save_payloads VALUES (?, ?, ?, ?)")
+      .run("unrelated_corrupt", "main", 1, "\u001eDSPIDLE-CLOUD-PAYLOAD-ALIAS/V1/malformed");
+    isolatedServer.store.database.prepare("INSERT INTO cloud_save_payload_blobs (checksum, size_bytes, payload) VALUES (?, ?, ?)")
+      .run(unrelatedCorruptChecksum, Buffer.byteLength("tampered"), "tampered");
+    const uploadedChecksums = [];
     for (let revision = 1; revision <= 21; revision += 1) {
       const payload = mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = revision; });
+      uploadedChecksums.push(createHash("sha256").update(payload).digest("hex"));
       const response = await fetch(`${isolatedBaseUrl}/api/cloud-save`, {
         method: "PUT",
         headers: { "content-type": "application/json", authorization: `Bearer ${registered.token}` },
@@ -1353,6 +1363,10 @@ test("prunes detached SQLite payload rows with the twenty-revision history windo
     assert.deepEqual(isolatedServer.store.data.cloudSaveHistory[registered.user.id].map((save) => save.revision), Array.from({ length: 20 }, (_, index) => index + 2));
     const rows = isolatedServer.store.database.prepare("SELECT revision FROM cloud_save_payloads WHERE user_id = ? AND slot = 'main' ORDER BY revision").all(registered.user.id);
     assert.deepEqual(rows.map((row) => row.revision), Array.from({ length: 20 }, (_, index) => index + 2));
+    assert.equal(isolatedServer.store.database.prepare("SELECT count(*) AS count FROM cloud_save_payload_blobs WHERE checksum = ?").get(uploadedChecksums[0]).count, 0);
+    assert.equal(isolatedServer.store.database.prepare("SELECT payload FROM cloud_save_payload_blobs WHERE checksum = ?").get(unrelatedCorruptChecksum).payload, "tampered");
+    assert.equal(isolatedServer.store.database.prepare("SELECT length(payload) AS size FROM cloud_save_payloads WHERE user_id = 'unrelated_large'").get().size, unrelatedLarge.length);
+    assert.equal(isolatedServer.store.database.prepare("SELECT payload FROM cloud_save_payloads WHERE user_id = 'unrelated_corrupt'").get().payload, "\u001eDSPIDLE-CLOUD-PAYLOAD-ALIAS/V1/malformed");
   } finally {
     if (isolatedServer?.listening) await new Promise((resolve) => isolatedServer.close(resolve));
     await rm(isolatedDirectory, { recursive: true, force: true });
@@ -2483,9 +2497,11 @@ test("deletes an account and all directly owned cloud data", async () => {
   const created = await request("/api/auth/register", { method: "POST", body: JSON.stringify({ username: "delete_pilot", password: "delete-pass-123", displayName: "待注销工程师" }) });
   assert.equal(created.response.status, 201);
   const deleteToken = created.body.token;
-  const saved = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${deleteToken}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
+  const deletePayload = mutateSavePayload(cloudPayload, (state) => { state.totalProduced.universe_matrix = 424_242; });
+  const deletePayloadChecksum = createHash("sha256").update(deletePayload).digest("hex");
+  const saved = await request("/api/cloud-save", { method: "PUT", headers: { authorization: `Bearer ${deleteToken}` }, body: JSON.stringify({ payload: deletePayload, expectedRevision: 0 }) });
   assert.equal(saved.response.status, 200);
-  const manualSaved = await request("/api/cloud-save?slot=1", { method: "PUT", headers: { authorization: `Bearer ${deleteToken}` }, body: JSON.stringify({ payload: cloudPayload, expectedRevision: 0 }) });
+  const manualSaved = await request("/api/cloud-save?slot=1", { method: "PUT", headers: { authorization: `Bearer ${deleteToken}` }, body: JSON.stringify({ payload: deletePayload, expectedRevision: 0 }) });
   assert.equal(manualSaved.response.status, 200);
 
   const rejected = await request("/api/account/delete", {
@@ -2504,6 +2520,7 @@ test("deletes an account and all directly owned cloud data", async () => {
   assert.equal(server.store.data.cloudSaves[created.body.user.id], undefined);
   assert.equal(server.store.data.cloudSaveSlots[created.body.user.id], undefined);
   assert.equal(server.store.database.prepare("SELECT count(*) AS count FROM cloud_save_payloads WHERE user_id = ?").get(created.body.user.id).count, 0);
+  assert.equal(server.store.database.prepare("SELECT count(*) AS count FROM cloud_save_payload_blobs WHERE checksum = ?").get(deletePayloadChecksum).count, 0);
   const expired = await request("/api/account", { headers: { authorization: `Bearer ${deleteToken}` } });
   assert.equal(expired.response.status, 401);
 });
