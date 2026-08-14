@@ -1,12 +1,16 @@
 import { expect, test } from "@playwright/test";
 import { createInitialState } from "../../src/game/engine";
+import { serializeEnvelope } from "../../src/game/storage";
 
 test("manual, autosave, and return publish ordered non-blocking persistence phases", async ({ page }) => {
   test.setTimeout(60_000);
   const state = createInitialState(44_145);
   state.paused = true;
   state.settings.autosaveIntervalSeconds = 30;
-  const raw = JSON.stringify({ savedAt: Date.now(), state });
+  // Use the real v46 envelope/checksum contract. A bare JSON object is
+  // intentionally rejected by loadGame(), which would silently seed a fresh
+  // (running) factory and make the Continue/Pause gate hang.
+  const raw = serializeEnvelope(state, Date.now());
 
   await page.addInitScript(({ saveRaw }) => {
     sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
@@ -66,8 +70,19 @@ test("manual, autosave, and return publish ordered non-blocking persistence phas
 
   // Change the immutable state identity so the scheduled save cannot take the
   // unchanged-save fast path and must exercise the delayed save Worker.
-  await page.getByLabel("继续模拟").click();
-  await page.getByLabel("暂停模拟").click();
+  // Legacy direct-bypass loads intentionally resume the factory after
+  // migration, even when the serialized fixture carried `paused: true`.
+  // Normalize both states without waiting on a label that is not rendered.
+  const resume = page.getByLabel("继续模拟");
+  const pause = page.getByLabel("暂停模拟");
+  if (await resume.isVisible()) {
+    await resume.click();
+    await expect(pause).toBeVisible();
+    await pause.click();
+  } else {
+    await expect(pause).toBeVisible();
+    await pause.click();
+  }
   await expect.poll(() => page.evaluate(() => {
     const events = (window as typeof window & {
       __DSP_RUNTIME_TRANSITIONS__?: { events: Array<{ phase: string; detail?: { kind?: string; phase?: string } }> };
