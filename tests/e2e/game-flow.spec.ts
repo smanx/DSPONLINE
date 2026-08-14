@@ -170,8 +170,22 @@ test("dated release notes appear once and remain available from both settings sc
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?menu=1&releaseNotesTest=1");
 
-  const releaseNotes = page.getByRole("dialog", { name: "界面适配、存档恢复与规则更新" });
+  const releaseNotes = page.locator(".release-notes-dialog");
   await expect(releaseNotes).toBeVisible();
+  await expect(releaseNotes).toHaveAttribute("aria-label", "超大存档加载与保存紧急修复");
+  await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.43");
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(4);
+  await expect(releaseNotes).toContainText("超大线路迁移改为线性处理");
+  await expect(releaseNotes).toContainText("导入与云端恢复不再冻结界面");
+  await expect(releaseNotes).toContainText("立即保存与返回主页避免重复落盘");
+  await expect(releaseNotes).toContainText("存档与在线协议保持兼容");
+
+  await releaseNotes.getByRole("button", { name: "查看历史版本" }).click();
+  const releaseHistory = releaseNotes.getByRole("navigation", { name: "版本列表" });
+  await expect(releaseHistory).toBeVisible();
+  await releaseHistory.getByRole("button", { name: /1\.0\.42 · 界面适配、存档恢复与规则更新/ }).click();
+  await expect(releaseNotes).toHaveAttribute("aria-label", "界面适配、存档恢复与规则更新");
+  await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.42");
   await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(10);
   await expect(releaseNotes).toContainText("工作区跟随真实顶栏与托盘");
   await expect(releaseNotes).toContainText("手机命令跳转一次完成");
@@ -183,12 +197,18 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(releaseNotes).toContainText("未提交时间扭曲预算可安全恢复");
   await expect(releaseNotes).toContainText("增产剂缓存上限扩展");
   await expect(releaseNotes).toContainText("无限矿物速通可进入正式榜");
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v142-1440.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v142-history-1440.png", fullPage: true });
+  await releaseNotes.getByRole("button", { name: "查看历史版本" }).click();
+  await releaseNotes.getByRole("button", { name: "返回当前版本" }).click();
+  await expect(releaseNotes).toHaveAttribute("aria-label", "超大存档加载与保存紧急修复");
+  await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.43");
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(4);
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v143-1440.png", fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await releaseNotes.locator(".release-notes-scroll li").last().scrollIntoViewIfNeeded();
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v142-390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v143-390.png", fullPage: true });
 
   await page.setViewportSize({ width: 360, height: 480 });
   await page.evaluate(() => {
@@ -211,7 +231,7 @@ test("dated release notes appear once and remain available from both settings sc
     return Boolean(scroll && summary && firstItem && footer && summary.bottom <= firstItem.top + 1 && scroll.bottom <= footer.top + 1);
   })).toBe(true);
   await expect.poll(() => releaseNotes.locator(".release-notes-scroll").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v142-360x480-font200.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v143-360x480-font200.png", fullPage: true });
   await page.evaluate(() => {
     document.documentElement.dataset.uiFontScale = "100";
     document.documentElement.style.setProperty("--ui-font-scale", "1");
@@ -227,6 +247,9 @@ test("dated release notes appear once and remain available from both settings sc
   await page.getByRole("button", { name: "游戏设置" }).click();
   await page.getByRole("button", { name: "查看2026年8月14日版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
+  await expect(releaseNotes).toHaveAttribute("aria-label", "超大存档加载与保存紧急修复");
+  await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.43");
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(4);
   await releaseNotes.getByLabel("关闭版本更新记录").click();
 
   await page.locator(".start-menu-primary").click();
@@ -236,9 +259,12 @@ test("dated release notes appear once and remain available from both settings sc
   await expect(operations.getByRole("button", { name: "查看版本更新记录" })).toBeVisible();
   await operations.getByRole("button", { name: "查看版本更新记录" }).click();
   await expect(releaseNotes).toBeVisible();
+  await expect(releaseNotes).toHaveAttribute("aria-label", "超大存档加载与保存紧急修复");
+  await expect(releaseNotes.locator(".release-notes-version strong")).toHaveText("1.0.43");
+  await expect(releaseNotes.locator(".release-notes-scroll li")).toHaveCount(4);
   await page.setViewportSize({ width: 844, height: 390 });
   await expect.poll(async () => releaseNotes.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v142-844x390.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/qa/release-notes-2026-08-14-v143-844x390.png", fullPage: true });
   await releaseNotes.getByLabel("关闭版本更新记录").click();
   await expect(operations).toBeVisible();
 });
