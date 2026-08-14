@@ -93,6 +93,18 @@ export function createDeferredTopLevelSimulationProjection(current: GameState): 
   };
 }
 
+/**
+ * Publish an exact UI mirror after durable replay without cloning every planet.
+ * The Worker remains authoritative for off-planet records; a later planet
+ * switch uses this same full-current-planet boundary for that destination.
+ */
+export function createFullCurrentPlanetSimulationProjection(current: GameState): SimulationProjection {
+  return {
+    ...createSimulationProjection(null, current, { includeDeferredTopLevel: true }),
+    requiresFullSnapshot: true,
+  };
+}
+
 function isSimulationProjectionBaseline(value: GameState | SimulationProjectionBaseline): value is SimulationProjectionBaseline {
   return "kind" in value && value.kind === "simulation-projection-baseline";
 }

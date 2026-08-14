@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createInitialState } from "./engine";
-import { applySimulationProjectionToState, captureSimulationProjectionBaseline, createDeferredTopLevelSimulationProjection, createSimulationProjection } from "./simulationProjection";
+import { applySimulationProjectionToState, captureSimulationProjectionBaseline, createDeferredTopLevelSimulationProjection, createFullCurrentPlanetSimulationProjection, createSimulationProjection } from "./simulationProjection";
 
 describe("simulation projection", () => {
   it("reports only changed runtime ids while preserving aggregate counts", () => {
@@ -137,5 +137,38 @@ describe("simulation projection", () => {
     expect(applied.dysonPlans).toEqual(authoritative.dysonPlans);
     expect(applied.entities).toBe(stale.entities);
     expect(applied.entities[0].progress).toBe(stale.entities[0].progress);
+  });
+
+  it("publishes an exact current planet and deferred top level after durable replay", () => {
+    const authoritative = createInitialState();
+    const frostEntity = { ...structuredClone(authoritative.entities[0]), id: "frost-recovered-node", planetId: "frost" as const };
+    authoritative.entities.push(frostEntity);
+    authoritative.activePlanetId = "frost";
+    authoritative.entities.find((entity) => entity.id === frostEntity.id)!.progress = 0.875;
+    authoritative.entities.find((entity) => entity.planetId === "home")!.progress = 0.75;
+    authoritative.productionHistory = [{
+      elapsedSeconds: 42,
+      productionPerMinute: { iron_ore: 99 },
+      consumptionPerMinute: {},
+      inventory: {},
+      generationKw: 0,
+      demandKw: 0,
+    }];
+    const stale = structuredClone(authoritative);
+    stale.activePlanetId = "home";
+    stale.entities.find((entity) => entity.id === frostEntity.id)!.progress = 0;
+    stale.entities.find((entity) => entity.planetId === "home")!.progress = 0.125;
+    stale.productionHistory = [];
+
+    const projection = createFullCurrentPlanetSimulationProjection(authoritative);
+    const applied = applySimulationProjectionToState(stale, projection).state;
+    expect(projection.requiresFullSnapshot).toBe(true);
+    expect(projection.changedEntityIds).toContain(frostEntity.id);
+    expect(projection.changedEntityIds).not.toContain(authoritative.entities.find((entity) => entity.planetId === "home")!.id);
+    expect(applied.activePlanetId).toBe("frost");
+    expect(applied.entities.find((entity) => entity.id === frostEntity.id)?.progress).toBe(0.875);
+    expect(applied.entities.find((entity) => entity.planetId === "home")?.progress).toBe(0.125);
+    expect(applied.productionHistory).toEqual(authoritative.productionHistory);
+    expect(applied.dysonPlans).toEqual(authoritative.dysonPlans);
   });
 });

@@ -4,7 +4,7 @@ import { applyContentPackRuntimeSnapshot, type ContentPackRuntimeSnapshot } from
 import { advancePersistentSimulationRuntime, advancePersistentSimulationRuntimeMulticore, createPersistentSimulationRuntime, createSimulationLookupContext, createSimulationProfiler, replacePersistentSimulationRuntimeState, type PersistentSimulationRuntime, type SimulationProfiler } from "./engine";
 import { BrowserMulticoreExecutor, planMulticoreSimulation, type MulticoreSimulationOptions } from "./multicoreSimulation";
 import type { GameState } from "./types";
-import { captureSimulationProjectionBaseline, createDeferredTopLevelSimulationProjection, createSimulationProjection, type SimulationProjection } from "./simulationProjection";
+import { captureSimulationProjectionBaseline, createDeferredTopLevelSimulationProjection, createFullCurrentPlanetSimulationProjection, createSimulationProjection, type SimulationProjection } from "./simulationProjection";
 import { createSimulationStateDelta, shouldUseSimulationDelta, type SimulationStateDelta } from "./simulationDelta";
 import { runTimeWarpApproximateSettlement, type TimeWarpApproximationReport } from "./offlineApproximation";
 import {
@@ -14,10 +14,17 @@ import {
   type SimulationCommandPatch,
   type SimulationStateTransfer,
 } from "./simulationRuntimeProtocol";
+import {
+  replaySimulationRuntimeDurableJournal,
+  SimulationRuntimeDurableReplayError,
+  type SimulationRuntimeDurableReplayPlan,
+  type SimulationRuntimeDurableReplayProgress,
+  type SimulationRuntimeDurableReplayResult,
+} from "./simulationRuntimeDurableReplay";
 
 export interface SimulationWorkerRequest {
   id: number;
-  kind?: "advance" | "checkpoint" | "sync-projection";
+  kind?: "advance" | "checkpoint" | "sync-projection" | "replay-durable";
   state?: GameState;
   /** One-time/bootstrap state; callers transfer the backing buffer. */
   stateTransfer?: SimulationStateTransfer;
@@ -34,6 +41,10 @@ export interface SimulationWorkerRequest {
   /** Use the guarded short-calibration macro path for pure-idle time warp. */
   approximate?: boolean;
   projectionScope?: "default" | "full-top-level";
+  /** Validated durable journal; accepted only with a transferred checkpoint. */
+  durableReplay?: SimulationRuntimeDurableReplayPlan;
+  /** MessagePort lets a long replay observe cancellation between RLE steps. */
+  durableReplayCancelPort?: MessagePort;
 }
 
 export interface SimulationWorkerResponse {
@@ -62,6 +73,11 @@ export interface SimulationWorkerResponse {
   timeWarpApproximation?: TimeWarpApproximationReport;
   checkpoint?: SimulationStateTransfer;
   commandApplied?: boolean;
+  durableReplayProgress?: SimulationRuntimeDurableReplayProgress;
+  durableReplayResult?: SimulationRuntimeDurableReplayResult;
+  durableReplayError?: { code: string; message: string };
+  /** Original checkpoint bytes, not the post-replay state; returned without parsing on main. */
+  sourceCheckpointTransfer?: SimulationStateTransfer;
 }
 
 let runtime: PersistentSimulationRuntime | null = null;
@@ -71,6 +87,82 @@ let multicoreExecutor: BrowserMulticoreExecutor | null = null;
 let multicoreExecutorWorkerCount = 0;
 let activeRegistrySnapshot: ContentPackRuntimeSnapshot | undefined;
 let simulationMessageQueue: Promise<void> = Promise.resolve();
+let runtimeInvalidated = false;
+
+function activateRuntimeRegistry(registry: ContentPackRuntimeSnapshot, profiler?: SimulationProfiler): void {
+  if (activeRegistryFingerprint === registry.fingerprint) return;
+  applyContentPackRuntimeSnapshot(registry);
+  activeRegistryFingerprint = registry.fingerprint;
+  activeRegistrySnapshot = registry;
+  // Registry changes rebuild catalog-dependent lookup state only. Inventories,
+  // route progress and production remain owned by the existing runtime.
+  if (runtime) replacePersistentSimulationRuntimeState(runtime, runtime.state, profiler);
+  multicoreExecutor?.setRegistry(registry);
+}
+
+interface AuthoritativeAdvanceResult {
+  result: { state: GameState; changed: boolean; cacheRebuilt: boolean };
+  multicorePlan: ReturnType<typeof requestMulticorePlan>;
+  multicoreUsed: boolean;
+  multicoreFallback: boolean;
+  timeWarpApproximation: TimeWarpApproximationReport | undefined;
+}
+
+async function advanceAuthoritativeRuntime(
+  simulationSeconds: number,
+  wallSeconds: number,
+  multicore: MulticoreSimulationOptions | undefined,
+  approximate: boolean,
+  profiler?: SimulationProfiler,
+): Promise<AuthoritativeAdvanceResult> {
+  if (!runtime) throw new Error("模拟运行时尚未初始化");
+  const multicorePlan = requestMulticorePlan(runtime.state, multicore);
+  let multicoreUsed = false;
+  let multicoreFallback = false;
+  let timeWarpApproximation: TimeWarpApproximationReport | undefined;
+  let result: { state: GameState; changed: boolean; cacheRebuilt: boolean };
+  if (approximate && runtime.state.timeWarp.enabled) {
+    if (multicoreExecutor) {
+      multicoreExecutor.terminate();
+      multicoreExecutor = null;
+      multicoreExecutorWorkerCount = 0;
+    }
+    const settled = runTimeWarpApproximateSettlement(runtime.state, simulationSeconds, wallSeconds);
+    timeWarpApproximation = settled.report;
+    replacePersistentSimulationRuntimeState(runtime, settled.state, profiler);
+    result = { state: runtime.state, changed: simulationSeconds > 0 || wallSeconds > 0, cacheRebuilt: true };
+  } else if (multicorePlan.enabled && multicorePlan.mode === "planet-phase") {
+    const baseline = structuredClone(runtime.state);
+    try {
+      if (!multicoreExecutor || multicoreExecutorWorkerCount !== multicorePlan.workerCount) {
+        multicoreExecutor?.terminate();
+        multicoreExecutor = new BrowserMulticoreExecutor(multicorePlan.workerCount, undefined, activeRegistrySnapshot);
+        multicoreExecutorWorkerCount = multicorePlan.workerCount;
+      }
+      multicoreExecutor.setRegistry(activeRegistrySnapshot);
+      result = await advancePersistentSimulationRuntimeMulticore(runtime, simulationSeconds, wallSeconds, multicoreExecutor, profiler);
+      multicoreUsed = true;
+    } catch (error) {
+      multicoreFallback = true;
+      if (multicoreExecutor) {
+        multicoreExecutor.terminate();
+        multicoreExecutor = null;
+        multicoreExecutorWorkerCount = 0;
+      }
+      replacePersistentSimulationRuntimeState(runtime, baseline, profiler);
+      result = advancePersistentSimulationRuntime(runtime, simulationSeconds, wallSeconds, profiler);
+      void error;
+    }
+  } else {
+    if (multicoreExecutor) {
+      multicoreExecutor.terminate();
+      multicoreExecutor = null;
+      multicoreExecutorWorkerCount = 0;
+    }
+    result = advancePersistentSimulationRuntime(runtime, simulationSeconds, wallSeconds, profiler);
+  }
+  return { result, multicorePlan, multicoreUsed, multicoreFallback, timeWarpApproximation };
+}
 
 // A content-pack update is a simulation boundary. Serialising requests here
 // prevents an older awaited planet-phase response from racing a newer state or
@@ -91,12 +183,155 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
     });
 };
 
+async function processDurableReplayRequest(
+  event: MessageEvent<SimulationWorkerRequest>,
+  receivedAt: number,
+): Promise<void> {
+  const { id, stateTransfer, stateRevision, registry, registryFingerprint, durableReplay, durableReplayCancelPort } = event.data;
+  let cancelled = false;
+  let returned = false;
+  durableReplayCancelPort?.addEventListener("message", () => { cancelled = true; });
+  durableReplayCancelPort?.start();
+  const returnSourceCheckpoint = (response: Omit<SimulationWorkerResponse, "id" | "durationMs">) => {
+    if (returned) return;
+    durableReplayCancelPort?.close();
+    const envelope: SimulationWorkerResponse = {
+      id,
+      durationMs: Math.max(0, performance.now() - receivedAt),
+      ...response,
+      ...(stateTransfer ? { sourceCheckpointTransfer: stateTransfer } : {}),
+    };
+    if (stateTransfer?.buffer instanceof ArrayBuffer && stateTransfer.buffer.byteLength === stateTransfer.byteLength) {
+      self.postMessage(envelope, [stateTransfer.buffer]);
+    } else {
+      self.postMessage(envelope);
+    }
+    returned = true;
+  };
+  try {
+    if (!stateTransfer || !durableReplay || !registry || registry.fingerprint !== registryFingerprint ||
+      stateRevision !== durableReplay.checkpointStateRevision) {
+      throw new SimulationRuntimeDurableReplayError("invalid-plan", "durable replay 缺少精确 checkpoint/registry/revision");
+    }
+    const state = deserializeSimulationStateTransfer(stateTransfer);
+    activateRuntimeRegistry(registry);
+    if (runtime) replacePersistentSimulationRuntimeState(runtime, state);
+    else runtime = createPersistentSimulationRuntime(state);
+    runtimeRevision = durableReplay.checkpointStateRevision;
+    runtimeInvalidated = false;
+
+    const executeStep = async (
+      baseStateRevision: number,
+      command: SimulationCommandPatch | null,
+      simulationSeconds: number,
+      wallSeconds: number,
+      multicore: MulticoreSimulationOptions | undefined,
+      approximate: boolean,
+      stepRegistry: ContentPackRuntimeSnapshot,
+    ): Promise<number> => {
+      activateRuntimeRegistry(stepRegistry);
+      if (!runtime || runtimeRevision !== baseStateRevision) {
+        throw new SimulationRuntimeDurableReplayError("revision-mismatch", "durable replay engine base revision 不匹配");
+      }
+      if (command) {
+        if (command.baseRevision !== runtimeRevision) {
+          throw new SimulationRuntimeDurableReplayError("revision-mismatch", "durable replay command revision 不匹配");
+        }
+        replacePersistentSimulationRuntimeState(runtime, applySimulationCommandPatch(runtime.state, command));
+        runtimeRevision += 1;
+      }
+      const advanced = await advanceAuthoritativeRuntime(simulationSeconds, wallSeconds, multicore, approximate);
+      if (advanced.result.changed) runtimeRevision += 1;
+      return runtimeRevision;
+    };
+
+    const replayResult = await replaySimulationRuntimeDurableJournal(durableReplay, {
+      executeIntent: (intent) => executeStep(
+        intent.baseStateRevision,
+        intent.command,
+        intent.simulationSeconds,
+        intent.wallSeconds,
+        intent.multicore,
+        intent.approximate,
+        intent.registry,
+      ),
+      executePassiveStep: (step) => executeStep(
+        step.baseStateRevision,
+        null,
+        step.simulationSeconds,
+        step.wallSeconds,
+        step.multicore,
+        step.approximate,
+        step.registry,
+      ),
+      isCancelled: () => cancelled,
+      yieldControl: () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
+      onProgress: (progress) => self.postMessage({
+        id,
+        changed: false,
+        durationMs: Math.max(0, performance.now() - receivedAt),
+        protocol: "projection",
+        stateRevision: runtimeRevision,
+        registryFingerprint: activeRegistryFingerprint ?? undefined,
+        durableReplayProgress: progress,
+      } satisfies SimulationWorkerResponse),
+    });
+    if (!runtime || runtimeRevision !== replayResult.finalStateRevision) {
+      throw new SimulationRuntimeDurableReplayError("revision-mismatch", "durable replay final revision 不匹配");
+    }
+    runtimeInvalidated = false;
+    returnSourceCheckpoint({
+      changed: true,
+      protocol: "projection",
+      stateRevision: runtimeRevision,
+      registryFingerprint: activeRegistryFingerprint ?? undefined,
+      projection: createFullCurrentPlanetSimulationProjection(runtime.state),
+      durableReplayResult: replayResult,
+    });
+  } catch (error) {
+    const replayError = error instanceof SimulationRuntimeDurableReplayError
+      ? error
+      : new SimulationRuntimeDurableReplayError("engine-failed", error instanceof Error ? error.message : "durable replay 失败");
+    // A failed replay may have mutated several records. Never let a later
+    // ordinary request observe or advance that partial runtime; only an exact
+    // bootstrap transfer may make this Worker authoritative again.
+    runtime = null;
+    runtimeRevision = 0;
+    runtimeInvalidated = true;
+    activeRegistryFingerprint = null;
+    activeRegistrySnapshot = undefined;
+    multicoreExecutor?.terminate();
+    multicoreExecutor = null;
+    multicoreExecutorWorkerCount = 0;
+    returnSourceCheckpoint({
+      changed: false,
+      protocol: "projection",
+      durableReplayError: { code: replayError.code, message: replayError.message },
+    });
+  }
+}
+
 async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequest>, receivedAt: number): Promise<void> {
+  if (event.data.kind === "replay-durable") {
+    await processDurableReplayRequest(event, receivedAt);
+    return;
+  }
   const { id, stateTransfer, simulationSeconds, wallSeconds, profile, registryFingerprint, registry, stateRevision } = event.data;
   const state = event.data.state ?? (stateTransfer ? deserializeSimulationStateTransfer(stateTransfer) : undefined);
   const profiler = profile ? createSimulationProfiler() : undefined;
   const reusedState = !state && Boolean(runtime);
   if (profiler && reusedState) profiler.persistentRuntimeHits += 1;
+  if (runtimeInvalidated && !state) {
+    self.postMessage({
+      id,
+      changed: false,
+      durationMs: Math.max(0, performance.now() - receivedAt),
+      needsState: true,
+      registryFingerprint: activeRegistryFingerprint ?? undefined,
+      registryError: "模拟 Worker 上一次恢复未完成，必须从精确 checkpoint 重建",
+    } satisfies SimulationWorkerResponse);
+    return;
+  }
   if (!registryFingerprint || activeRegistryFingerprint !== registryFingerprint) {
     if (!registry || registry.fingerprint !== registryFingerprint) {
       self.postMessage({
@@ -110,7 +345,7 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
       return;
     }
     try {
-      applyContentPackRuntimeSnapshot(registry);
+      activateRuntimeRegistry(registry, profiler);
     } catch (error) {
       self.postMessage({
         id,
@@ -122,18 +357,13 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
       } satisfies SimulationWorkerResponse);
       return;
     }
-    activeRegistryFingerprint = registryFingerprint;
-    activeRegistrySnapshot = registry;
-    // The entity state remains authoritative. Only the catalog-dependent lookup
-    // is rebuilt at this boundary; no inventory, route, or production progress is recreated.
-    if (runtime) replacePersistentSimulationRuntimeState(runtime, runtime.state, profiler);
-    multicoreExecutor?.setRegistry(registry);
   }
   const suppliedState = Boolean(state);
   if (state) {
     if (runtime) replacePersistentSimulationRuntimeState(runtime, state, profiler);
     else runtime = createPersistentSimulationRuntime(state, profiler);
     runtimeRevision = Math.max(runtimeRevision + 1, stateRevision ?? 0);
+    runtimeInvalidated = false;
   }
   if (!runtime) {
     self.postMessage({
@@ -141,7 +371,7 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
       changed: false,
       durationMs: Math.max(0, performance.now() - receivedAt),
       needsState: true,
-      registryFingerprint: activeRegistryFingerprint,
+      registryFingerprint: activeRegistryFingerprint ?? undefined,
     } satisfies SimulationWorkerResponse);
     return;
   }
@@ -218,51 +448,14 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
   const deltaBaseline = event.data.protocol === "delta" && !suppliedState ? structuredClone(previousState) : null;
   const projectionBaseline = commandProjectionBaseline ?? captureSimulationProjectionBaseline(previousState, { includeDeferredTopLevel });
   const previousRevision = runtimeRevision;
-  const multicorePlan = requestMulticorePlan(runtime.state, event.data.multicore);
-  let multicoreUsed = false;
-  let multicoreFallback = false;
-  let timeWarpApproximation: TimeWarpApproximationReport | undefined;
-  let result: { state: GameState; changed: boolean; cacheRebuilt: boolean };
-  if (event.data.approximate && runtime.state.timeWarp.enabled) {
-    if (multicoreExecutor) {
-      multicoreExecutor.terminate();
-      multicoreExecutor = null;
-      multicoreExecutorWorkerCount = 0;
-    }
-    const settled = runTimeWarpApproximateSettlement(runtime.state, simulationSeconds, wallSeconds);
-    timeWarpApproximation = settled.report;
-    replacePersistentSimulationRuntimeState(runtime, settled.state, profiler);
-    result = { state: runtime.state, changed: simulationSeconds > 0 || wallSeconds > 0, cacheRebuilt: true };
-  } else if (multicorePlan.enabled && multicorePlan.mode === "planet-phase") {
-    const baseline = structuredClone(runtime.state);
-    try {
-      if (!multicoreExecutor || multicoreExecutorWorkerCount !== multicorePlan.workerCount) {
-        multicoreExecutor?.terminate();
-        multicoreExecutor = new BrowserMulticoreExecutor(multicorePlan.workerCount, undefined, activeRegistrySnapshot);
-        multicoreExecutorWorkerCount = multicorePlan.workerCount;
-      }
-      multicoreExecutor.setRegistry(activeRegistrySnapshot);
-      result = await advancePersistentSimulationRuntimeMulticore(runtime, simulationSeconds, wallSeconds, multicoreExecutor, profiler);
-      multicoreUsed = true;
-    } catch (error) {
-      multicoreFallback = true;
-      if (multicoreExecutor) {
-        multicoreExecutor.terminate();
-        multicoreExecutor = null;
-        multicoreExecutorWorkerCount = 0;
-      }
-      replacePersistentSimulationRuntimeState(runtime, baseline, profiler);
-      result = advancePersistentSimulationRuntime(runtime, simulationSeconds, wallSeconds, profiler);
-      void error;
-    }
-  } else {
-    if (multicoreExecutor) {
-      multicoreExecutor.terminate();
-      multicoreExecutor = null;
-      multicoreExecutorWorkerCount = 0;
-    }
-    result = advancePersistentSimulationRuntime(runtime, simulationSeconds, wallSeconds, profiler);
-  }
+  const advanced = await advanceAuthoritativeRuntime(
+    simulationSeconds,
+    wallSeconds,
+    event.data.multicore,
+    event.data.approximate === true,
+    profiler,
+  );
+  const { result, multicorePlan, multicoreUsed, multicoreFallback, timeWarpApproximation } = advanced;
   if (result.changed) runtimeRevision += 1;
   if (profiler && result.cacheRebuilt) profiler.persistentRuntimeRebuilds += 1;
   const response: SimulationWorkerResponse = {
