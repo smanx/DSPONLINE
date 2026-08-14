@@ -1,9 +1,20 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { expect, test } from "@playwright/test";
 
 const LARGE_SAVE_FIXTURE = process.env.DSP_V144_LARGE_SAVE;
 const AUTHORITATIVE_LARGE_SAVE_SHA256 = "cd2356ea2b9a90a47cfa32ed9533e7056bfc4202f6af777fc4f3b98faa9a81b1";
+// This file can receive the private 35 MiB acceptance fixture through a page
+// argument. Never let Playwright copy that payload into diagnostics artifacts.
+test.use({ trace: "off", screenshot: "off", video: "off" });
+
+function outputFiles(root: string): Array<{ path: string; bytes: number }> {
+  if (!existsSync(root)) return [];
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    const path = `${root}/${entry.name}`;
+    return entry.isDirectory() ? outputFiles(path) : [{ path, bytes: statSync(path).size }];
+  });
+}
 
 test("authoritative Worker uses projection-only steady responses and exact ordered checkpoints", async ({ page }) => {
   await page.goto("/");
@@ -478,7 +489,7 @@ test("game runtime replays acknowledged slices after a Worker crash and remains 
   expect(saved.entities.length).toBeGreaterThan(0);
 });
 
-test("real large save keeps running frames and steady Worker payloads bounded", async ({ page }) => {
+test("real large save keeps running interactions and steady Worker payloads bounded", async ({ page }, testInfo) => {
   test.setTimeout(180_000);
   test.skip(!LARGE_SAVE_FIXTURE, "Set DSP_V144_LARGE_SAVE to run the read-only 1.0.44 acceptance fixture.");
   // Keep the attachment read-only while resetting only the envelope timestamp
@@ -589,30 +600,46 @@ test("real large save keeps running frames and steady Worker payloads bounded", 
   if (await continueButton.isVisible()) await continueButton.click({ timeout: 30_000 });
   await expect(page.getByLabel("暂停模拟")).toBeVisible();
   const continueLatencyMs = Date.now() - continueStartedAt;
-  const frameMetrics = await page.evaluate(async () => {
-    const frames: number[] = [];
-    const longTasks: number[] = [];
-    const observer = new PerformanceObserver((entries) => entries.getEntries().forEach((entry) => longTasks.push(entry.duration)));
-    try { observer.observe({ type: "longtask" }); } catch { /* optional metric */ }
-    const startedAt = performance.now();
-    let previousAt = startedAt;
-    await new Promise<void>((resolve) => {
+  await page.evaluate(() => {
+    const probe = new Promise<{ p95Ms: number; maxMs: number; longTaskMaxMs: number }>((resolve) => {
+      const frames: number[] = [];
+      const longTasks: number[] = [];
+      const observer = new PerformanceObserver((entries) => entries.getEntries().forEach((entry) => longTasks.push(entry.duration)));
+      try { observer.observe({ type: "longtask" }); } catch { /* optional metric */ }
+      const startedAt = performance.now();
+      let previousAt = startedAt;
       const sample = (now: number) => {
         frames.push(now - previousAt);
         previousAt = now;
-        if (now - startedAt >= 6_000) resolve();
-        else requestAnimationFrame(sample);
+        if (now - startedAt < 6_000) {
+          requestAnimationFrame(sample);
+          return;
+        }
+        observer.disconnect();
+        const sorted = [...frames].sort((left, right) => left - right);
+        resolve({
+          p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? 0,
+          maxMs: sorted.at(-1) ?? 0,
+          longTaskMaxMs: Math.max(0, ...longTasks),
+        });
       };
       requestAnimationFrame(sample);
     });
-    observer.disconnect();
-    const sorted = [...frames].sort((left, right) => left - right);
-    return {
-      p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? 0,
-      maxMs: sorted.at(-1) ?? 0,
-      longTaskMaxMs: Math.max(0, ...longTasks),
-    };
+    Object.assign(window, { __v144RunningInteractionProbe: probe });
   });
+  const pane = page.locator(".react-flow__pane");
+  const paneBox = await pane.boundingBox();
+  if (!paneBox) throw new Error("large-save canvas pane is not measurable");
+  const center = { x: paneBox.x + paneBox.width / 2, y: paneBox.y + paneBox.height / 2 };
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await page.mouse.move(center.x + 140, center.y + 90, { steps: 12 });
+  await page.mouse.up();
+  await page.mouse.wheel(0, -420);
+  await page.mouse.wheel(0, 280);
+  const frameMetrics = await page.evaluate(() => (
+    window as typeof window & { __v144RunningInteractionProbe: Promise<{ p95Ms: number; maxMs: number; longTaskMaxMs: number }> }
+  ).__v144RunningInteractionProbe);
   const pauseStartedAt = Date.now();
   await page.getByLabel("暂停模拟").click();
   await expect(page.getByLabel("继续模拟")).toBeVisible();
@@ -642,13 +669,23 @@ test("real large save keeps running frames and steady Worker payloads bounded", 
       current.maxMs = Math.max(current.maxMs, event.durationMs);
       phases[event.phase] = current;
     }
-    return { phases, counters: diagnostics?.counters ?? {} };
+    const secondPainted = (diagnostics?.events ?? [])
+      .filter((event) => event.phase === "second-painted-frame" && (event.transition === "resume" || event.transition === "pause"))
+      .map((event) => ({ transition: event.transition!, durationMs: event.durationMs }));
+    return { phases, counters: diagnostics?.counters ?? {}, secondPainted };
   });
   console.info("V144_LARGE_RUNTIME", JSON.stringify({ continueLatencyMs, pauseLatencyMs, ...frameMetrics, ...workerMetrics, transitionMetrics }));
-  expect(continueLatencyMs).toBeLessThan(1_000);
-  expect(pauseLatencyMs).toBeLessThan(1_000);
+  expect(continueLatencyMs).toBeLessThanOrEqual(100);
+  expect(pauseLatencyMs).toBeLessThanOrEqual(100);
+  expect(transitionMetrics.secondPainted.find((entry) => entry.transition === "resume")?.durationMs).toBeLessThanOrEqual(100);
+  expect(transitionMetrics.secondPainted.find((entry) => entry.transition === "pause")?.durationMs).toBeLessThanOrEqual(100);
   expect(frameMetrics.p95Ms).toBeLessThanOrEqual(20);
+  expect(frameMetrics.longTaskMaxMs).toBeLessThanOrEqual(100);
   expect(workerMetrics.projectionResponses).toBeGreaterThanOrEqual(2);
   expect(workerMetrics.fullStateResponses).toBe(0);
   expect(workerMetrics.lastProjectionBytes).toBeLessThanOrEqual(1024 * 1024);
+  expect(createHash("sha256").update(readFileSync(LARGE_SAVE_FIXTURE!, "utf8")).digest("hex")).toBe(AUTHORITATIVE_LARGE_SAVE_SHA256);
+  const leakedArtifacts = outputFiles(testInfo.outputDir).filter((artifact) =>
+    artifact.bytes >= sourceRaw.length || /\.(?:zip|webm|png|jpe?g)$/i.test(artifact.path));
+  expect(leakedArtifacts).toEqual([]);
 });
