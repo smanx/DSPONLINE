@@ -6,6 +6,7 @@ import { importWithRecovery } from "./game/dynamicImportRecovery";
 import type { LoadedGame } from "./game/storage";
 import { GameDialogProvider } from "./components/GameDialogProvider";
 import { LocalSaveWriterBanner } from "./components/LocalSaveWriterBanner";
+import { canBypassFactoryMenu } from "./game/factoryBypassPolicy";
 
 const FactoryRuntime = lazy(() => importWithRecovery(() => import("./FactoryRuntime"), "行星工厂模块"));
 
@@ -17,9 +18,15 @@ export function App() {
   const [bypassMenu] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     const forceMenu = params.get("menu") === "1";
-    let bypassMenu = params.get("factory") === "1";
-    try { bypassMenu ||= window.sessionStorage.getItem("dsp-idle-network.test-bypass-menu") === "1"; } catch { /* optional test flag */ }
-    return !forceMenu && bypassMenu;
+    let testSessionRequested = false;
+    try { testSessionRequested = window.sessionStorage.getItem("dsp-idle-network.test-bypass-menu") === "1"; } catch { /* optional test flag */ }
+    return canBypassFactoryMenu({
+      hostname: window.location.hostname,
+      developmentBuild: import.meta.env.DEV,
+      forceMenu,
+      queryRequested: params.get("factory") === "1",
+      testSessionRequested,
+    });
   });
   const [launch, setLaunch] = useState<{ id: number; loaded: LoadedGame } | null>(null);
   const [bypassLoading, setBypassLoading] = useState(bypassMenu);
