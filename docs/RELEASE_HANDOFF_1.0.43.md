@@ -8,6 +8,7 @@
 | 标题 | 35 MiB 超大存档导入、载入、保存与返回主页热修 |
 | 优先级 | P1；面向香港 1.0.43 hotfix 候选 |
 | 运行时提交 | `35ab5746baf3c14ef63f9230364ab60f324a4528` |
+| 发布测试契约返修 | `7d61726c1a1bae11a63ab2217d863a4cc7da7cbd` |
 | 直接父级 | `e905eaf2c9856db7f1f95ffb61b67cd0feb7ad5f` |
 | 分支 | `codex/1.0.43-large-save-hotfix-dev` |
 | 版本 | package/app `1.0.43`；Android `1.0.43 / 1000043` |
@@ -46,16 +47,17 @@
 - typecheck；完整 Vitest 1,238/18；server 356/2；native 24/24；licenses 125。
 - 本地 Chromium 聚焦 6/6，覆盖 manual revision/true backup、import Worker、current release/version、稳定 double-click return 和 in-flight simulation cleanup。
 - 独立 coordination/recovery 浏览器 19/19；真实附件浏览器旅程通过。
+- 发布公告返修单测 5/5、focused Chromium 1/1：当前 v143 四项、v142 历史十项、返回当前及菜单/游戏内两个设置重开入口均通过。
 - production build/startup budget 通过，包含独立 save-inspection worker；无循环 Worker chunk。
 - 玩家附件前后 bytes/SHA-256 不变；exact/gameplay differential hash 不变。
 
 ## Release Agent 后续强制步骤
 
 1. 只从本分支最终 clean tip 构建；核对 `dist/version.json` 为 `1.0.43+<final-sha>` 且不得含 `.dirty`。
-2. 复验外部 artifact manifest、Web/source 归档 SHA-256 和归档清单；不得复用任何旧 dirty `dist`。
+2. 复验外部 artifact manifest、Web/source 归档 SHA-256 和归档清单；不得复用任何旧 dirty `dist`。`D:\GameDev\DSPidle2-v143-release\1.0.43-a47eb33d0b84` 已因完整 Chromium 的过期公告断言判定作废，禁止上传或部署；只能选择新 final SHA 命名的替代候选。
 3. 如面向香港灰度，先创建并验证备份、未激活目录与独立 health/readiness，再走既有原子切换和回滚门禁。
 4. 如发布原生包，使用批准证书和正式 HTTPS 配置重新构建；开发工作树没有生成可发布签名包。
-5. 至少补跑完整 Chromium 全量、production-preview PWA 和目标设备 35 MiB 导入/保存/返回旅程；任何失败均为 No-Go。
+5. 在新不可变候选上独立重跑完整 Chromium 全量、production-preview PWA 和目标设备 35 MiB 导入/保存/返回旅程；当前 develop 交接不把完整 Chromium 记为通过，任何失败均为 No-Go。
 6. 只有得到单独生产授权后才能 SSH、部署、切流或更新下载页。本开发任务未做这些操作。
 
 ## 风险与回滚
