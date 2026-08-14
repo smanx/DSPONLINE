@@ -334,17 +334,20 @@ import {
 import type {
   SimulationRuntimeDurableAppHead,
 } from "./game/simulationRuntimeDurableAppState";
+import { createSimulationRuntimeDurablePrimaryCheckpoint } from "./game/simulationRuntimeDurableAppState";
 import type { SimulationRuntimeDurableOperationIntent } from "./game/simulationRuntimeDurableRecovery";
 import {
   advanceSimulationRuntimeDurableAppHead,
   createSimulationRuntimeDurableUnsignedIntent,
 } from "./game/simulationRuntimeDurableAppState";
 import {
+  clearSimulationRuntimeRecoveryInPersistenceWorker,
   finalizeSimulationRuntimeRecoveryIntentInPersistenceWorker,
+  initializeSimulationRuntimeRecoveryInPersistenceWorker,
   stageUnsignedSimulationRuntimeRecoveryIntentInPersistenceWorker,
 } from "./game/simulationRuntimeRecoveryPersistenceClient";
 import type { SimulationRuntimeStartupRecoveryBinding } from "./game/simulationRuntimeStartupRecovery";
-import { getLocalSaveWriterStatus } from "./game/localSaveStore";
+import { getLocalSaveWriterStatus, getPrimaryLocalSaveRecoveryIdentity } from "./game/localSaveStore";
 import { readMulticoreSimulationOptions, type MulticoreSimulationOptions } from "./game/multicoreSimulation";
 import { getOnboardingFocusTarget, getOnboardingStep, recordBasicOnboardingEvent, type OnboardingActionId } from "./game/onboarding";
 import { accumulateSimulationBudget, NORMAL_SIMULATION_SLICE_SECONDS, takeSimulationBudgetSlice } from "./game/simulationBudget";
@@ -1157,6 +1160,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const durableRecoveryStageInFlightRef = useRef(false);
   const durableRecoveryStageRequestRef = useRef<{ simulationSeconds: number; wallSeconds: number } | null>(null);
   const dispatchDurablePausedCommandRef = useRef<() => void>(() => undefined);
+  const durablePrimarySaveInFlightRef = useRef(false);
   const simulationStateRevisionRef = useRef(loaded.runtimeRecovery?.stateRevision ?? 0);
   const simulationProjectionIndexRef = useRef<SimulationProjectionStateIndex>(createSimulationProjectionStateIndex(loaded.state));
   const simulationProjectionScopeRef = useRef<"default" | "full-top-level">("default");
@@ -1521,6 +1525,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           : Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16).padStart(8, "0")).join(""));
         return synchronizeGalacticActivity(current, response.activity!, participantId);
       });
+      if (durableRecoveryLifecycleRef.current === "active" && gameRef.current.paused) {
+        queueMicrotask(() => dispatchDurablePausedCommandRef.current());
+      }
     };
     void refresh();
     const timer = window.setInterval(refresh, 60_000);
@@ -1864,7 +1871,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const dispatchSimulationCheckpoint = useCallback(() => {
     const pending = simulationCheckpointRequestRef.current;
-    if (!pending || pending.id !== null || simulationSubmissionRef.current || simulationRecoveryRef.current) return;
+    if (!pending || pending.id !== null || simulationSubmissionRef.current || durableRecoveryStageInFlightRef.current || simulationRecoveryRef.current) return;
     const worker = simulationWorkerRef.current;
     const confirmedState = lastSimulationResultRef.current;
     if (!worker || simulationWorkerDisabledRef.current || !confirmedState) {
@@ -2064,10 +2071,89 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       current.pendingViewportSignature === expected.pendingViewportSignature;
   }, [currentPrimarySaveSource]);
 
+  const persistDurablePrimaryCheckpoint = useCallback(async (
+    requestedState: GameState | undefined,
+    kind: RuntimePersistenceKind,
+  ): Promise<SaveGameResult> => {
+    if (durablePrimarySaveInFlightRef.current) {
+      return { success: false, message: "已有 durable 主存档检查点正在进行，请稍候", code: "conflict" };
+    }
+    durablePrimarySaveInFlightRef.current = true;
+    const startedAt = performance.now();
+    const progressId = runtimePersistenceProgressIdRef.current + 1;
+    runtimePersistenceProgressIdRef.current = progressId;
+    setRuntimePersistenceProgress({ id: progressId, kind, phase: "checkpoint", startedAt, message: "正在等待 durable 模拟检查点…" });
+    simulationSaveBarrierDepthRef.current += 1;
+    simulationCheckpointBarrierRef.current = true;
+    try {
+      const saveState = requestedState ?? await requestAuthoritativeSimulationCheckpoint();
+      setRuntimePersistenceProgress({ id: progressId, kind, phase: "serialize-write-readback", startedAt, message: "正在验证 T1 主存档并滚动 recovery…" });
+      const result = await saveGameVerified(saveState);
+      if (!result.success) {
+        setRuntimePersistenceProgress({ id: progressId, kind, phase: "failed", startedAt, message: result.message });
+        return result;
+      }
+      const mode = saveState.mode === "speedrun" ? "speedrun" : "normal";
+      const identity = getPrimaryLocalSaveRecoveryIdentity(mode);
+      const status = getLocalSaveWriterStatus();
+      const head = durableRecoveryHeadRef.current;
+      if (!identity || status.role !== "primary" || status.fencingToken < 1 || !head) {
+        throw new Error("T1 写入后未取得 durable identity/fence，已阻止继续模拟");
+      }
+      if (head.baseIdentity.mode !== mode) throw new Error("durable mode 与主存档不匹配");
+      const fence = { ownerId: status.writerId, fencingToken: status.fencingToken };
+      setRuntimePersistenceProgress({ id: progressId, kind, phase: "serialize-write-readback", startedAt, message: "正在清理旧 recovery head…" });
+      const cleared = await clearSimulationRuntimeRecoveryInPersistenceWorker({ mode, sessionId: head.sessionId }, fence);
+      if (!cleared.ok) throw new Error(cleared.message);
+      const checkpoint = createSimulationRuntimeDurablePrimaryCheckpoint({
+        baseIdentity: identity,
+        sessionId: `roll_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`,
+        stateRevision: simulationStateRevisionRef.current,
+        registry: contentPackRuntimeSnapshotRef.current,
+        committedAtMs: identity.savedAt,
+      });
+      const initialized = await initializeSimulationRuntimeRecoveryInPersistenceWorker(checkpoint, fence);
+      if (!initialized.result.ok) throw new Error(initialized.result.message);
+      durableRecoveryHeadRef.current = {
+        baseIdentity: checkpoint.baseIdentity,
+        sessionId: checkpoint.sessionId,
+        generation: checkpoint.generation,
+        sequence: checkpoint.lastSequence,
+        stateRevision: checkpoint.stateRevision,
+        registryFingerprint: checkpoint.registryFingerprint,
+      };
+      latestAuthoritativeCheckpointRef.current = saveState;
+      lastSimulationResultRef.current = saveState;
+      simulationReplayJournalRef.current = [];
+      setRuntimePersistenceProgress({ id: progressId, kind, phase: "complete", startedAt, message: "durable 主存档检查点已完成" });
+      return result;
+    } catch (error) {
+      const failure: SaveGameResult = { success: false, message: error instanceof Error ? error.message : "durable 主存档检查点失败", code: "unavailable" };
+      setRuntimePersistenceProgress({ id: progressId, kind, phase: "failed", startedAt, message: failure.message });
+      const stopped = setPaused(latestAuthoritativeCheckpointRef.current, true);
+      latestAuthoritativeCheckpointRef.current = stopped;
+      lastSimulationResultRef.current = stopped;
+      gameRef.current = stopped;
+      setGame(stopped);
+      setNotice(`${failure.message}；已暂停，旧 recovery 保留供重试`);
+      return failure;
+    } finally {
+      durablePrimarySaveInFlightRef.current = false;
+      simulationSaveBarrierDepthRef.current = Math.max(0, simulationSaveBarrierDepthRef.current - 1);
+      if (simulationSaveBarrierDepthRef.current === 0 && !simulationCheckpointRequestRef.current) {
+        simulationCheckpointBarrierRef.current = false;
+      }
+      window.setTimeout(() => setRuntimePersistenceProgress((current) => current?.id === progressId ? null : current), 8_000);
+    }
+  }, [requestAuthoritativeSimulationCheckpoint, saveGameVerified]);
+
   const persistPrimarySave = useCallback(async (
     state?: GameState,
     kind: RuntimePersistenceKind = "other",
   ): Promise<SaveGameResult> => {
+    if (durableRecoveryLifecycleRef.current === "active") {
+      return persistDurablePrimaryCheckpoint(state, kind);
+    }
     const monitorSave = performanceMonitor.isActive();
     const startedAt = performance.now();
     const progressId = runtimePersistenceProgressIdRef.current + 1;
@@ -3962,17 +4048,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   useEffect(() => {
     const timer = game.settings.autosaveIntervalSeconds > 0
       ? window.setInterval(() => {
-        // A durable T0/T1 session must not fall back to the legacy primary
-        // mirror before its ordered WAL barrier is wired. Keeping the old
-        // primary authoritative is safer than writing a newer state that can
-        // strand a staged intent.
-        if (durableRecoveryLifecycleRef.current === "active") return;
         void persistPrimarySave(undefined, "autosave");
       }, game.settings.autosaveIntervalSeconds * 1000)
       : null;
     let lifecycleSaveStarted = false;
     const saveNow = () => {
-      if (durableRecoveryLifecycleRef.current === "active") return;
       void persistPrimarySave(undefined, "lifecycle");
     };
     const saveBeforeUnload = () => {
@@ -4145,8 +4225,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   useEffect(() => {
     if (getNewAchievementIds(game).length === 0) return;
-    setGame((current) => unlockAchievements(current).state);
-  }, [game]);
+    commitGame((current) => unlockAchievements(current).state);
+  }, [commitGame, game]);
 
   useEffect(() => {
     const count = game.achievements.unlockedIds.length;
@@ -4160,8 +4240,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   useEffect(() => {
     const synced = syncCampaignProgress(game);
-    if (synced !== game) setGame(synced);
-  }, [game]);
+    if (synced !== game) commitGame(() => synced);
+  }, [commitGame, game]);
 
   useEffect(() => {
     const completed = game.campaign.completedTaskIds;
@@ -4268,7 +4348,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         setSelectedEntityIds([]);
         setSelectedBeltId(null);
         setSelectedBeltIds([]);
-        setGame((current) => dropCargoToTray(current));
+        commitGame((current) => dropCargoToTray(current));
       } else if (gameRef.current.timeWarp.enabled) {
         // The idle overlay owns the interaction surface. Do not let global
         // shortcuts mutate the hidden factory while it is active.
@@ -4311,11 +4391,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const onMiningStart = useCallback((entityId: string) => {
     if (miningTimerRef.current != null) window.clearInterval(miningTimerRef.current);
     setMiningEntityId(entityId);
-    setGame((current) => manualMine(current, entityId, 1));
+    commitGame((current) => manualMine(current, entityId, 1));
     miningTimerRef.current = window.setInterval(() => {
-      setGame((current) => manualMine(current, entityId, 1));
+      commitGame((current) => manualMine(current, entityId, 1));
     }, 320);
-  }, []);
+  }, [commitGame]);
 
   useEffect(() => {
     window.addEventListener("pointerup", onMiningStop);
@@ -4330,16 +4410,16 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [onMiningStop]);
 
   const onPickOutput = useCallback((entityId: string, itemId: ItemId) => {
-    setGame((current) => pickFromEntity(current, entityId, itemId));
-  }, []);
+    commitGame((current) => pickFromEntity(current, entityId, itemId));
+  }, [commitGame]);
 
   const onPickInput = useCallback((entityId: string, itemId: ItemId) => {
-    setGame((current) => pickFromEntityInput(current, entityId, itemId));
-  }, []);
+    commitGame((current) => pickFromEntityInput(current, entityId, itemId));
+  }, [commitGame]);
 
   const onDropCargo = useCallback((entityId: string) => {
-    setGame((current) => dropCargoToEntity(current, entityId));
-  }, []);
+    commitGame((current) => dropCargoToEntity(current, entityId));
+  }, [commitGame]);
 
   const onDropDraggedItem = useCallback((
     targetEntityId: string,
@@ -4347,12 +4427,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     sourceKind: DraggedItemSourceKind,
     sourceId?: string,
   ) => {
-    setGame((current) => sourceKind === "node" && sourceId
+    commitGame((current) => sourceKind === "node" && sourceId
       ? moveEntityOutputToEntity(current, sourceId, targetEntityId, itemId)
       : sourceKind === "node-input" && sourceId
         ? moveEntityInputToEntity(current, sourceId, targetEntityId, itemId)
         : moveTrayItemToEntity(current, targetEntityId, itemId));
-  }, []);
+  }, [commitGame]);
 
   const handleStowCargo = useCallback(() => {
     const before = gameRef.current;
@@ -4529,13 +4609,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const destinationViewport = gameRef.current.planetViewports[planetId] ?? { x: 510, y: 250, zoom: 0.84 };
     if (!gameRef.current.settings.reducedMotion) setPlanetTransition({ id: Date.now(), from: previousPlanetId, to: planetId });
     playTone("travel");
-    setGame((current) => {
+    commitGame((current) => {
       const withViewport = {
         ...current,
         planetViewports: { ...current.planetViewports, [current.activePlanetId]: leavingViewport },
       };
       const next = setActivePlanet(withViewport, planetId);
-      gameRef.current = next;
       return next;
     });
     selectedEntityIdsRef.current = [];
@@ -4565,12 +4644,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     } else {
       setNotice(`已切换至${getPlanetDisplayName(gameRef.current, planetId)}`);
     }
-  }, [flowStore, onMiningStop, playTone, setNodes, setViewport, updateConnectionDraft]);
+  }, [commitGame, flowStore, onMiningStop, playTone, setNodes, setViewport, updateConnectionDraft]);
 
   const onExploreSystem = useCallback((systemId: StarSystemId) => {
-    setGame((current) => exploreStarSystem(current, systemId));
+    commitGame((current) => exploreStarSystem(current, systemId));
     setNotice("恒星勘探任务已启动，星图会显示实时进度");
-  }, []);
+  }, [commitGame]);
 
   const onColonizePlanet = useCallback((planetId: PlanetId) => {
     const before = gameRef.current;
@@ -4621,13 +4700,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, []);
 
   const updateSettings = useCallback((settings: Partial<GameSettings>) => {
-    setGame((current) => ({ ...current, settings: { ...current.settings, ...settings } }));
+    commitGame((current) => ({ ...current, settings: { ...current.settings, ...settings } }));
     if (settings.theme) {
       setThemeMode(settings.theme);
       writeThemePreference(settings.theme);
     }
     if (settings.soundEnabled === true) playTone("confirm", true);
-  }, [playTone]);
+  }, [commitGame, playTone]);
 
   const updateRunLogPreference = useCallback((enabled: boolean) => {
     setShowRunLog(enabled);
@@ -4849,7 +4928,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     simulationWorkerDisabledRef.current = false;
     simulationSubmissionRef.current = null;
     lastSimulationResultRef.current = null;
-    simulationStateRevisionRef.current = 0;
+    simulationStateRevisionRef.current = durableRecoveryHeadRef.current?.stateRevision ?? 0;
     simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(state);
     latestAuthoritativeCheckpointRef.current = state;
     simulationReplayJournalRef.current = [];
@@ -5284,10 +5363,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [closeAllWorkspaces, focusBeltNetwork, focusEntityIds, focusPlacedEntity, mobileNavigation.goFactory, mobileNavigation.openSheet, navigateFromCampaign, nextMobileShell, onPlanetChange, openCampaign]);
 
   const onSelectCampaignTask = useCallback((taskId: CampaignTaskId) => {
-    setGame((current) => selectCampaignTask(current, taskId));
+    commitGame((current) => selectCampaignTask(current, taskId));
     setHighlightedTaskId(taskId);
     setFocusedBeltNetworkId(null);
-  }, []);
+  }, [commitGame]);
 
   const saveSummaryRefreshIdRef = useRef(0);
   const saveImportInspectionGenerationRef = useRef(0);
@@ -5606,9 +5685,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setContentPackRegistry(registry);
     // Re-render catalog-driven panels after the live registry changes.
     const contentPacks = getActiveContentPackReferences(registry);
-    setGame((current) => ({ ...current, contentPacks }));
+    commitGame((current) => ({ ...current, contentPacks }));
     return report;
-  }, []);
+  }, [commitGame]);
 
   const registerValidatedContentPack = useCallback(() => {
     if (!modValidation?.valid || !modValidation.manifest) {
@@ -8531,7 +8610,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onCraftFleet: handleQuickCraftFleet,
           onMissingCraft: handleMissingConstructionCraft,
           onDeleteConstruction: handleDeleteConstructionInventory,
-          onPickTray: (itemId) => setGame((current) => pickFromTray(current, itemId)),
+          onPickTray: (itemId) => commitGame((current) => pickFromTray(current, itemId)),
           onDropCargo: handleStowCargo,
           onDiscardTrayItems: (requests) => commitGame((current) => discardPlanetTrayItems(current, current.activePlanetId, requests)),
           onSetTrayItemLimit: (value) => commitGame((current) => setPlanetTrayItemLimit(current, current.activePlanetId, value)),
@@ -8696,9 +8775,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             if (dysonPlannerOpen) closeAllWorkspaces();
             else openCommandWorkspace("dyson");
           }}
-          onPickTray={(itemId) => setGame((current) => pickFromTray(current, itemId))}
+          onPickTray={(itemId) => commitGame((current) => pickFromTray(current, itemId))}
           onDropCargo={handleStowCargo}
-          onSetTrayItemLimit={(value) => setGame((current) => setPlanetTrayItemLimit(current, current.activePlanetId, value))}
+          onSetTrayItemLimit={(value) => commitGame((current) => setPlanetTrayItemLimit(current, current.activePlanetId, value))}
           onDiscardTrayItems={(requests) => commitGame((current) => discardPlanetTrayItems(current, current.activePlanetId, requests))}
           onDropDraggedItem={handleDraggedItemToTray}
         />
@@ -9403,8 +9482,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           }}
           onCraft={handleQuickCraftConstruction}
           onCraftItem={handleQuickCraftFleet}
-          onQueueCraftItem={(recipeId, batches) => setGame((current) => queueHandcraftRecipe(current, recipeId, batches))}
-          onCancelCraftQueue={(entryId) => setGame((current) => cancelHandcraftQueueEntry(current, entryId))}
+          onQueueCraftItem={(recipeId, batches) => commitGame((current) => queueHandcraftRecipe(current, recipeId, batches))}
+          onCancelCraftQueue={(entryId) => commitGame((current) => cancelHandcraftQueueEntry(current, entryId))}
           onRemoveEntity={handleRemoveEntity}
           onRemoveBelt={(beltId) => {
             commitGame((current) => removeBelt(current, beltId));
@@ -9533,20 +9612,20 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               recordBasicOnboardingEvent("research-selected");
             }}
             onPauseResearch={() => {
-              setGame((current) => pauseCurrentResearch(current));
+              commitGame((current) => pauseCurrentResearch(current));
               setNotice("科研已暂停，已投入矩阵与科技进度均已保留");
             }}
             onCancelResearch={() => {
-              setGame((current) => cancelCurrentResearch(current));
+              commitGame((current) => cancelCurrentResearch(current));
               setNotice("当前科研已取消，重新选择时会从已有进度继续");
             }}
             onResumeResearch={() => {
-              setGame((current) => resumePausedResearch(current));
+              commitGame((current) => resumePausedResearch(current));
               setNotice("已从保留进度继续科研");
             }}
-            onRemoveQueued={(techId) => setGame((current) => removeQueuedTechnology(current, techId))}
-            onSelectInfiniteResearch={(researchId: InfiniteResearchId) => setGame((current) => selectInfiniteResearch(current, researchId))}
-            onInfiniteResearchAutomation={(enabled) => setGame((current) => setInfiniteResearchAutomation(current, enabled))}
+            onRemoveQueued={(techId) => commitGame((current) => removeQueuedTechnology(current, techId))}
+            onSelectInfiniteResearch={(researchId: InfiniteResearchId) => commitGame((current) => selectInfiniteResearch(current, researchId))}
+            onInfiniteResearchAutomation={(enabled) => commitGame((current) => setInfiniteResearchAutomation(current, enabled))}
             onLayoutChange={(technologyLayout) => updateSettings({ technologyLayout })}
           />
         ) : null}
@@ -9678,11 +9757,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             game={observedGame}
             onSave={() => persistPrimarySave()}
             onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setDysonPlannerOpen(false)}
-            onAddLayer={(systemId) => setGame((current) => addDysonLayer(current, systemId))}
-            onAddStandardLayer={(systemId) => setGame((current) => createStandardDysonLayer(current, systemId))}
-            onSelectLayer={(systemId, layerId) => setGame((current) => setActiveDysonLayer(current, systemId, layerId))}
-            onOrbitChange={(systemId, layerId, orbit) => setGame((current) => setDysonLayerOrbit(current, systemId, layerId, orbit))}
-            onRemoveLayer={(systemId, layerId) => setGame((current) => removeDysonLayer(current, systemId, layerId))}
+            onAddLayer={(systemId) => commitGame((current) => addDysonLayer(current, systemId))}
+            onAddStandardLayer={(systemId) => commitGame((current) => createStandardDysonLayer(current, systemId))}
+            onSelectLayer={(systemId, layerId) => commitGame((current) => setActiveDysonLayer(current, systemId, layerId))}
+            onOrbitChange={(systemId, layerId, orbit) => commitGame((current) => setDysonLayerOrbit(current, systemId, layerId, orbit))}
+            onRemoveLayer={(systemId, layerId) => commitGame((current) => removeDysonLayer(current, systemId, layerId))}
             onPasteLayer={(systemId, template) => {
               const result = pasteDysonLayerTemplate(gameRef.current, systemId, template);
               if (result.error) {
@@ -9694,19 +9773,19 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               setNotice("壳层设计已作为新副本添加，施工进度从 0 开始");
               playTone("confirm");
             }}
-            onAddNode={(systemId, layerId, angle) => setGame((current) => addDysonNode(current, systemId, layerId, angle))}
-            onRemoveNode={(systemId, layerId, nodeId) => setGame((current) => removeDysonNode(current, systemId, layerId, nodeId))}
-            onConnectNodes={(systemId, layerId, sourceNodeId, targetNodeId) => setGame((current) => connectDysonNodes(current, systemId, layerId, sourceNodeId, targetNodeId))}
-            onAutoConnect={(systemId, layerId) => setGame((current) => autoConnectDysonLayer(current, systemId, layerId))}
-            onPlanShell={(systemId, layerId) => setGame((current) => planDysonShell(current, systemId, layerId))}
-            onClearShell={(systemId, layerId) => setGame((current) => clearDysonShells(current, systemId, layerId))}
-            onLaunchModeChange={(mode: DysonLaunchMode) => setGame((current) => setDysonLaunchMode(current, mode))}
-            onLaunchThrottleChange={(throttle: DysonLaunchThrottle) => setGame((current) => setDysonLaunchThrottle(current, throttle))}
-            onLaunchEnabledChange={(enabled) => setGame((current) => setDysonLaunchEnabled(current, enabled))}
-            onAddSwarmOrbit={(systemId) => setGame((current) => addDysonSwarmOrbit(current, systemId))}
-            onSelectSwarmOrbit={(systemId, orbitId) => setGame((current) => setActiveDysonSwarmOrbit(current, systemId, orbitId))}
-            onSwarmOrbitChange={(systemId, orbitId, changes) => setGame((current) => setDysonSwarmOrbit(current, systemId, orbitId, changes))}
-            onRemoveSwarmOrbit={(systemId, orbitId) => setGame((current) => removeDysonSwarmOrbit(current, systemId, orbitId))}
+            onAddNode={(systemId, layerId, angle) => commitGame((current) => addDysonNode(current, systemId, layerId, angle))}
+            onRemoveNode={(systemId, layerId, nodeId) => commitGame((current) => removeDysonNode(current, systemId, layerId, nodeId))}
+            onConnectNodes={(systemId, layerId, sourceNodeId, targetNodeId) => commitGame((current) => connectDysonNodes(current, systemId, layerId, sourceNodeId, targetNodeId))}
+            onAutoConnect={(systemId, layerId) => commitGame((current) => autoConnectDysonLayer(current, systemId, layerId))}
+            onPlanShell={(systemId, layerId) => commitGame((current) => planDysonShell(current, systemId, layerId))}
+            onClearShell={(systemId, layerId) => commitGame((current) => clearDysonShells(current, systemId, layerId))}
+            onLaunchModeChange={(mode: DysonLaunchMode) => commitGame((current) => setDysonLaunchMode(current, mode))}
+            onLaunchThrottleChange={(throttle: DysonLaunchThrottle) => commitGame((current) => setDysonLaunchThrottle(current, throttle))}
+            onLaunchEnabledChange={(enabled) => commitGame((current) => setDysonLaunchEnabled(current, enabled))}
+            onAddSwarmOrbit={(systemId) => commitGame((current) => addDysonSwarmOrbit(current, systemId))}
+            onSelectSwarmOrbit={(systemId, orbitId) => commitGame((current) => setActiveDysonSwarmOrbit(current, systemId, orbitId))}
+            onSwarmOrbitChange={(systemId, orbitId, changes) => commitGame((current) => setDysonSwarmOrbit(current, systemId, orbitId, changes))}
+            onRemoveSwarmOrbit={(systemId, orbitId) => commitGame((current) => removeDysonSwarmOrbit(current, systemId, orbitId))}
           />
         )) : null}
         {operationsOpen ? (
