@@ -99,6 +99,7 @@ import { retainLocalSavePayload, subscribeLocalSaveStorageStatus } from "../game
 import { createContentPackRuntimeSnapshot, loadContentPackRegistry } from "../game/contentPacks";
 import {
   finalizeSimulationRuntimeStartupRecovery,
+  initializeSimulationRuntimeAfterVerifiedPrimary,
   prepareSimulationRuntimeStartupRecovery,
   type SimulationRuntimeStartupRecoveryProgress,
 } from "../game/simulationRuntimeStartupRecovery";
@@ -555,6 +556,18 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
     } else {
       const saveResult = await activeStorage.saveGameVerified(state);
       if (!saveResult.success) throw new Error(saveResult.message);
+      const registry = createContentPackRuntimeSnapshot(loadContentPackRegistry());
+      const onRecoveryProgress = (progress: SimulationRuntimeStartupRecoveryProgress) => {
+        const count = progress.completedOperations !== undefined && progress.totalOperations !== undefined
+          ? `（${progress.completedOperations}/${progress.totalOperations}）`
+          : "";
+        setMessage({ tone: "busy", text: `${progress.message}${count}` });
+      };
+      runtimeRecovery = await initializeSimulationRuntimeAfterVerifiedPrimary({
+        mode: state.mode === "speedrun" ? "speedrun" : "normal",
+        registry,
+        onProgress: onRecoveryProgress,
+      });
     }
     const { runtimeRecoveryCandidate: _runtimeRecoveryCandidate, ...loadedWithoutCandidate } = loaded;
     trackAnalyticsEvent("game_enter");
@@ -893,9 +906,14 @@ export function StartMenu({ onEnterGame, onOpenReleaseNotes }: StartMenuProps) {
       state.settings = mergeMenuRuntimeSettings(state.settings, settings);
       const saveResult = await storage.saveGameVerified(state);
       if (!saveResult.success) throw new Error(saveResult.message);
+      const runtimeRecovery = await initializeSimulationRuntimeAfterVerifiedPrimary({
+        mode: newFactoryMode,
+        registry: createContentPackRuntimeSnapshot(loadContentPackRegistry()),
+        onProgress: (progress) => setMessage({ tone: "busy", text: progress.message }),
+      });
       trackAnalyticsEvent("new_game");
       trackAnalyticsEvent("game_enter");
-      onEnterGame({ state, offlineSeconds: 0, offlineReport: null, recovery: { source: "fresh", issues: [] } });
+      onEnterGame({ state, offlineSeconds: 0, offlineReport: null, recovery: { source: "fresh", issues: [] }, runtimeRecovery });
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "新工厂初始化失败" });
     } finally {

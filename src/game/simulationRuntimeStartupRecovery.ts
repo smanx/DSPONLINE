@@ -222,6 +222,49 @@ export async function finalizeSimulationRuntimeStartupRecovery(input: {
   };
 }
 
+/**
+ * Establish a fresh durable session after a non-primary source (backup,
+ * snapshot, slot, or new factory) has been promoted to a verified primary.
+ * Those sources must never replay a WAL bound to the old primary, but they
+ * also must not enter FactoryGame with durability silently disabled. The
+ * checkpoint is intentionally generation 1/revision 0 because the promoted
+ * payload already contains the complete state.
+ */
+export async function initializeSimulationRuntimeAfterVerifiedPrimary(input: {
+  mode: SaveMode;
+  registry: ContentPackRuntimeSnapshot;
+  onProgress?: (progress: SimulationRuntimeStartupRecoveryProgress) => void;
+}): Promise<SimulationRuntimeStartupRecoveryBinding> {
+  input.onProgress?.({ phase: "identity", message: "正在核对新主存档的 durable 身份…" });
+  await initializeLocalSaveStore();
+  const identity = getPrimaryLocalSaveRecoveryIdentity(input.mode);
+  if (!identity || identity.revision < 1 || identity.savedAt <= 0) {
+    throw new Error("新主存档已写入但 durable identity 尚未完成，已阻止进入游戏");
+  }
+  const fence = writerFenceOrThrow();
+  const checkpoint = createSimulationRuntimeDurablePrimaryCheckpoint({
+    baseIdentity: identity,
+    sessionId: createStartupSessionId(),
+    stateRevision: 0,
+    registry: input.registry,
+    committedAtMs: identity.savedAt,
+  });
+  input.onProgress?.({ phase: "initialize", message: "正在建立新的 durable recovery 基线…" });
+  const initialized = await initializeSimulationRuntimeRecoveryInPersistenceWorker(checkpoint, fence);
+  if (!initialized.result.ok) throw new Error(`${initialized.result.message}；主存档保持不变`);
+  const head = createSimulationRuntimeDurableAppHead(checkpoint, initialized.result.proof);
+  input.onProgress?.({ phase: "complete", message: "durable recovery 基线已验证" });
+  return {
+    status: "active",
+    baseIdentity: head.baseIdentity,
+    sessionId: head.sessionId,
+    generation: head.generation,
+    sequence: head.sequence,
+    stateRevision: head.stateRevision,
+    registryFingerprint: head.registryFingerprint,
+  };
+}
+
 const EXPECTED_EVENT: Partial<Record<SimulationRuntimeStartupRecoveryPhase, SimulationRuntimeStartupRecoveryEvent>> = {
   "selected-primary": "read-recovery",
   "recovery-read": "replay-recovery",
