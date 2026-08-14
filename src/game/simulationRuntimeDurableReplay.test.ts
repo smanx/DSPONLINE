@@ -30,7 +30,7 @@ const command = (baseRevision: number): SimulationCommandPatch => ({
 async function intent(
   sequence: number,
   baseStateRevision: number,
-  options: { simulationSeconds?: number; command?: SimulationCommandPatch | null } = {},
+  options: { simulationSeconds?: number; wallSeconds?: number; command?: SimulationCommandPatch | null } = {},
 ): Promise<SimulationRuntimeDurableOperationIntent> {
   const unsigned: Omit<SimulationRuntimeDurableOperationIntent, "intentSha256"> = {
     schemaVersion: 1,
@@ -40,7 +40,7 @@ async function intent(
     baseStateRevision,
     command: options.command ?? null,
     simulationSeconds: options.simulationSeconds ?? 1,
-    wallSeconds: options.simulationSeconds ?? 1,
+    wallSeconds: options.wallSeconds ?? options.simulationSeconds ?? 1,
     multicore: undefined,
     approximate: false,
     registry: createContentPackRuntimeSnapshot(createContentPackRegistry()),
@@ -50,11 +50,11 @@ async function intent(
 }
 
 async function fixture(): Promise<{ plan: SimulationRuntimeDurableReplayPlan; entries: SimulationRuntimeDurableJournalEntry[] }> {
-  const passive1 = await intent(1, 1, { simulationSeconds: 1 });
-  const passive2 = await intent(2, 2, { simulationSeconds: 1 });
-  const passive3 = await intent(3, 3, { simulationSeconds: 2 });
+  const passive1 = await intent(1, 1, { simulationSeconds: 1, wallSeconds: 0.5 });
+  const passive2 = await intent(2, 2, { simulationSeconds: 1, wallSeconds: 0.5 });
+  const passive3 = await intent(3, 3, { simulationSeconds: 2, wallSeconds: 1 });
   const atomic = await intent(4, 4, { simulationSeconds: 0, command: command(4) });
-  const pending = await intent(5, 5, { simulationSeconds: 3 });
+  const pending = await intent(5, 5, { simulationSeconds: 3, wallSeconds: 2 });
   let entries: SimulationRuntimeDurableJournalEntry[] = [];
   entries = await finalizeSimulationRuntimeDurableRecoveryIntent(entries, passive1, 2);
   entries = await finalizeSimulationRuntimeDurableRecoveryIntent(entries, passive2, 3);
@@ -113,6 +113,8 @@ describe("durable runtime Worker replay coordinator", () => {
       finalStateRevision: 6,
       completedOperations: 5,
       totalOperations: 5,
+      totalSimulationSeconds: 7,
+      totalWallSeconds: 4,
       pendingIntentSha256: plan.pendingIntent!.intentSha256,
       pendingResultStateRevision: 6,
     });

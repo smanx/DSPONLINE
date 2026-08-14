@@ -70,6 +70,10 @@ export interface SimulationRuntimeDurableReplayResult {
   finalStateRevision: number;
   completedOperations: number;
   totalOperations: number;
+  /** Exact engine time covered by the replayed, ordered intents. */
+  totalSimulationSeconds: number;
+  /** Exact wall-clock time already represented by those intents. */
+  totalWallSeconds: number;
   pendingIntentSha256: string | null;
   pendingResultStateRevision: number | null;
 }
@@ -165,6 +169,8 @@ export async function replaySimulationRuntimeDurableJournal(
   let sequence = plan.checkpointLastSequence;
   let revision = plan.checkpointStateRevision;
   let completedOperations = 0;
+  let totalSimulationSeconds = 0;
+  let totalWallSeconds = 0;
   const totalOperations = plan.entries.reduce((count, entry) => count + entryOperationCount(entry), 0) +
     (plan.pendingIntent ? 1 : 0);
   const publishProgress = () => {
@@ -205,6 +211,8 @@ export async function replaySimulationRuntimeDurableJournal(
         if (revision !== entry.resultStateRevision) {
           throw new SimulationRuntimeDurableReplayError("revision-mismatch", "durable atomic result revision 不匹配");
         }
+        totalSimulationSeconds += intent.simulationSeconds;
+        totalWallSeconds += intent.wallSeconds;
         await completeOperation();
         continue;
       }
@@ -234,6 +242,8 @@ export async function replaySimulationRuntimeDurableJournal(
         });
         sequence = stepSequence;
         stepSequence += 1;
+        totalSimulationSeconds += step.simulationSeconds;
+        totalWallSeconds += step.wallSeconds;
         await completeOperation();
       }
       if (sequence !== entry.lastSequence) {
@@ -261,6 +271,8 @@ export async function replaySimulationRuntimeDurableJournal(
       sequence = pending.sequence;
       pendingIntentSha256 = pending.intentSha256;
       pendingResultStateRevision = revision;
+      totalSimulationSeconds += pending.simulationSeconds;
+      totalWallSeconds += pending.wallSeconds;
       await completeOperation();
     }
     ensureNotCancelled(hooks);
@@ -269,6 +281,8 @@ export async function replaySimulationRuntimeDurableJournal(
       finalStateRevision: revision,
       completedOperations,
       totalOperations,
+      totalSimulationSeconds,
+      totalWallSeconds,
       pendingIntentSha256,
       pendingResultStateRevision,
     };
