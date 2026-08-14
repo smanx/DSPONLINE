@@ -785,6 +785,17 @@ interface SimulationReplayOperation {
   registry: ContentPackRuntimeSnapshot;
 }
 
+type RuntimePersistenceKind = "autosave" | "manual" | "pure-idle-stop" | "return" | "lifecycle" | "other";
+type RuntimePersistencePhase = "checkpoint" | "serialize-write-readback" | "complete" | "failed";
+
+interface RuntimePersistenceProgress {
+  id: number;
+  kind: RuntimePersistenceKind;
+  phase: RuntimePersistencePhase;
+  startedAt: number;
+  message: string;
+}
+
 function minerPlacementHint(buildingId: BuildingId): string {
   if (buildingId === "oil_extractor") return "原油萃取站需要部署在原油涌泉上";
   if (buildingId === "water_pump") return "抽水站需要部署在水或硫酸海洋上";
@@ -962,6 +973,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, [canvasRenderSnapshot.runtimeRevision, game.paused, nodes.length]);
   const [notice, setNotice] = useState<string | null>(null);
   const [saveFailure, setSaveFailure] = useState<SaveGameResult | null>(null);
+  const [runtimePersistenceProgress, setRuntimePersistenceProgress] = useState<RuntimePersistenceProgress | null>(null);
+  const runtimePersistenceProgressIdRef = useRef(0);
   const [eventHistory, setEventHistory] = useState<Array<{ id: number; text: string }>>([]);
   const [interactionBursts, setInteractionBursts] = useState<InteractionBurst[]>([]);
   const [ctrlHeld, setCtrlHeld] = useState(false);
@@ -1809,9 +1822,17 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       current.pendingViewportSignature === expected.pendingViewportSignature;
   }, [currentPrimarySaveSource]);
 
-  const persistPrimarySave = useCallback(async (state?: GameState): Promise<SaveGameResult> => {
+  const persistPrimarySave = useCallback(async (
+    state?: GameState,
+    kind: RuntimePersistenceKind = "other",
+  ): Promise<SaveGameResult> => {
     const monitorSave = performanceMonitor.isActive();
-    const startedAt = monitorSave ? performance.now() : 0;
+    const startedAt = performance.now();
+    const progressId = runtimePersistenceProgressIdRef.current + 1;
+    runtimePersistenceProgressIdRef.current = progressId;
+    if (kind === "autosave") beginRuntimeTransition("autosave");
+    else if (kind === "pure-idle-stop") beginRuntimeTransition("pure-idle-stop");
+    setRuntimePersistenceProgress({ id: progressId, kind, phase: "checkpoint", startedAt, message: "正在取得模拟检查点…" });
     const ownsBarrier = state === undefined;
     if (ownsBarrier) {
       simulationSaveBarrierDepthRef.current += 1;
@@ -1819,10 +1840,37 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }
     try {
       const saveState = state ?? await requestAuthoritativeSimulationCheckpoint();
+      recordRuntimeTransitionPhase("save-authoritative-checkpoint", startedAt, performance.now() - startedAt, { kind });
+      setRuntimePersistenceProgress({ id: progressId, kind, phase: "serialize-write-readback", startedAt, message: "正在序列化、写入并逐字复核存档…" });
       const result = await saveGameVerified(saveState);
-      if (monitorSave) performanceMonitor.recordSave({ durationMs: performance.now() - startedAt, bytes: result.bytes ?? 0, stages: result.timings ?? null });
+      const durationMs = performance.now() - startedAt;
+      if (monitorSave) performanceMonitor.recordSave({ durationMs, bytes: result.bytes ?? 0, stages: result.timings ?? null });
+      recordRuntimeTransitionPhase("save-serialize-idb-readback", startedAt, durationMs, {
+        kind,
+        success: result.success,
+        bytes: result.bytes ?? 0,
+        serializeMs: result.timings?.serializeMs ?? 0,
+        primaryWriteMs: result.timings?.primaryWriteMs ?? 0,
+      });
       setSaveFailure(result.success ? null : result);
+      setRuntimePersistenceProgress({
+        id: progressId,
+        kind,
+        phase: result.success ? "complete" : "failed",
+        startedAt,
+        message: result.success ? `存档已验证完成（${Math.round(durationMs)} ms）` : result.message,
+      });
+      if (kind === "autosave") completeRuntimeTransition("autosave", result.success ? "save-complete" : "save-failed", { durationMs });
+      else if (kind === "pure-idle-stop") completeRuntimeTransition("pure-idle-stop", result.success ? "save-complete" : "save-failed", { durationMs });
+      window.setTimeout(() => setRuntimePersistenceProgress((current) => current?.id === progressId ? null : current), result.success ? 2_000 : 8_000);
       return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "存档流程失败";
+      setRuntimePersistenceProgress({ id: progressId, kind, phase: "failed", startedAt, message });
+      if (kind === "autosave") completeRuntimeTransition("autosave", "save-failed");
+      else if (kind === "pure-idle-stop") completeRuntimeTransition("pure-idle-stop", "save-failed");
+      window.setTimeout(() => setRuntimePersistenceProgress((current) => current?.id === progressId ? null : current), 8_000);
+      throw error;
     } finally {
       if (ownsBarrier) {
         simulationSaveBarrierDepthRef.current = Math.max(0, simulationSaveBarrierDepthRef.current - 1);
@@ -2103,7 +2151,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         record.startedPaused,
       );
       setPureIdleRecoveryStatus("后台候选已验证，正在写入并重新读取主存档");
-      const saved = await persistPrimarySave(restored);
+      const saved = await persistPrimarySave(restored, "pure-idle-stop");
       if (!saved.success) {
         setPureIdleRecoveryContinueState(true);
         setPureIdleRecoveryStatus("后台普通离线候选有效，但主存档写入失败；恢复日志已保留");
@@ -2394,7 +2442,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           record.startedPaused,
         );
         setPureIdleRecoveryStatus("候选已序列化验证，正在写入并重新读取主存档");
-        const saved = await persistPrimarySave(restored);
+        const saved = await persistPrimarySave(restored, "pure-idle-stop");
         if (!saved.success) {
           setPureIdleRecoveryContinueState(true);
           setPureIdleRecoveryStatus("候选状态有效，但主存档写入失败；恢复日志已保留");
@@ -2437,51 +2485,59 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       }
       return;
     }
+    beginRuntimeTransition("pure-idle-stop");
     pureIdleStoppingRef.current = true;
     pureIdleActiveRef.current = false;
     setPureIdleActive(false);
-    setNotice("正在停止纯挂机；未提交切片不会计入收益");
+    setNotice("正在停止纯挂机：等待当前 Worker 切片到达安全边界…");
     // Let one already-running worker segment reach its safe boundary before
     // taking the final snapshot. The timer will not submit another segment.
     const waitStartedAt = performance.now();
-    while (simulationSubmissionRef.current && performance.now() - waitStartedAt < 750) {
+    while (simulationSubmissionRef.current && performance.now() - waitStartedAt < 10_000) {
       await new Promise<void>((resolve) => window.setTimeout(resolve, 25));
     }
-    let timedOut = false;
     if (simulationSubmissionRef.current) {
-      timedOut = true;
-      simulationWorkerRef.current?.terminate();
-      simulationWorkerRef.current = null;
-      simulationWorkerDisabledRef.current = false;
-      setSimulationWorkerActive(false);
-      simulationSubmissionRef.current = null;
-      lastSimulationResultRef.current = null;
-      setSimulationWorkerGeneration((generation) => generation + 1);
+      pureIdleStoppingRef.current = false;
+      pureIdleActiveRef.current = true;
+      setPureIdleActive(true);
+      setNotice("当前 Worker 切片 10 秒内未到达安全边界；未覆盖主存档，请稍后重试停止");
+      completeRuntimeTransition("pure-idle-stop", "worker-boundary-timeout");
+      return;
     }
     // Pending acceleration is only a scheduler budget. It has not reached a
     // deterministic commit and must never be synchronously replayed on the
     // main thread while the player is trying to stop.
     simulationPendingSecondsRef.current = 0;
     simulationPendingWallSecondsRef.current = 0;
+    simulationRetrySecondsRef.current = 0;
+    simulationRetryWallSecondsRef.current = 0;
     setTimeWarpPendingUi(0);
-    const next = timedOut
-      ? setPaused(setTimeWarpEnabled(gameRef.current, false), true)
-      : setTimeWarpEnabled(gameRef.current, false);
+    setNotice("正在停止纯挂机：取得 Worker 权威检查点…");
+    let authoritative: GameState;
+    try {
+      authoritative = await requestAuthoritativeSimulationCheckpoint();
+    } catch (error) {
+      pureIdleStoppingRef.current = false;
+      pureIdleActiveRef.current = true;
+      setPureIdleActive(true);
+      setNotice(error instanceof Error ? `无法取得权威检查点：${error.message}；主存档未覆盖` : "无法取得权威检查点；主存档未覆盖");
+      completeRuntimeTransition("pure-idle-stop", "checkpoint-failed");
+      return;
+    }
+    const next = setTimeWarpEnabled(authoritative, false);
     gameRef.current = next;
     setGame(next);
     setPureIdleStartedAt(null);
-    const result = await persistPrimarySave(next);
+    const result = await persistPrimarySave(next, "pure-idle-stop");
     if (!result.success) {
       setSaveFailure(result);
       setNotice("挂机结果尚未完成保存，请先导出当前进度");
       pureIdleStoppingRef.current = false;
       return;
     }
-    setNotice(timedOut
-      ? "纯挂机 Worker 未在安全窗口响应；未完成切片已丢弃，模拟已暂停且已完成存档校验"
-      : "纯挂机已停止，进度已校验保存");
+    setNotice("纯挂机已停止，Worker 权威进度已校验保存");
     pureIdleStoppingRef.current = false;
-  }, [initializePureIdleMacroClient, persistPrimarySave, persistPureIdleTransition, persistPureIdleWorkerFailure, setPureIdleRecoveryContinueState, settlePureIdleBackgroundRecovery]);
+  }, [initializePureIdleMacroClient, persistPrimarySave, persistPureIdleTransition, persistPureIdleWorkerFailure, requestAuthoritativeSimulationCheckpoint, setPureIdleRecoveryContinueState, settlePureIdleBackgroundRecovery]);
 
   const cancelPureIdleSettlement = useCallback(async () => {
     if (!pureIdleStoppingRef.current) return;
@@ -2551,7 +2607,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         { ...setTimeWarpEnabled(repaired, false), idleSettlement: finishIdleRun(repaired.idleSettlement) },
         record.startedPaused,
       );
-      const saved = await persistPrimarySave(restored);
+      const saved = await persistPrimarySave(restored, "pure-idle-stop");
       if (!saved.success) {
         setPureIdleRecoveryStatus("检查点有效，但主存档写入失败；恢复日志已保留");
         setNotice("无法恢复普通模拟，恢复日志和原主存档保持不变");
@@ -2595,7 +2651,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     if (returnToMenuSaveInFlightRef.current) return;
     returnToMenuSaveInFlightRef.current = true;
     const source = currentPrimarySaveSource();
-    const result = await persistPrimarySave();
+    const result = await persistPrimarySave(undefined, "return");
     if (!result.success) {
       returnToMenuSaveInFlightRef.current = false;
       setNotice(result.message);
@@ -3510,10 +3566,10 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   useEffect(() => {
     const timer = game.settings.autosaveIntervalSeconds > 0
-      ? window.setInterval(() => void persistPrimarySave(), game.settings.autosaveIntervalSeconds * 1000)
+      ? window.setInterval(() => void persistPrimarySave(undefined, "autosave"), game.settings.autosaveIntervalSeconds * 1000)
       : null;
     let lifecycleSaveStarted = false;
-    const saveNow = () => { void persistPrimarySave(); };
+    const saveNow = () => { void persistPrimarySave(undefined, "lifecycle"); };
     const saveBeforeUnload = () => {
       if (lifecycleSaveStarted) return;
       lifecycleSaveStarted = true;
@@ -4819,7 +4875,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     // waits for the durable exact read-back. Running the synchronous save first
     // duplicated serialization, migration, and IndexedDB writes for large
     // factories and could replace the true previous backup with the new state.
-    const result = await persistPrimarySave();
+    const result = await persistPrimarySave(undefined, "manual");
     void refreshSaveData();
     setNotice(result.message);
     playTone(result.success ? "confirm" : "alert");
@@ -7452,6 +7508,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       data-connection-hit-diameter={connectionHitDiameter}
       data-connect-expand-all={connectExpandAll ? "true" : "false"}
       data-full-realtime-simulation={fullRealtimeSimulation ? "true" : "false"}
+      data-persistence-kind={runtimePersistenceProgress?.kind ?? "idle"}
+      data-persistence-phase={runtimePersistenceProgress?.phase ?? "idle"}
       data-connection-active={connectionDraft ? "true" : "false"}
       data-connection-candidate-node={connectionCandidateNodeId ?? "none"}
       data-connection-full-logical-count={connectionFullLogicalCount}
@@ -8923,7 +8981,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         <header><Activity size={13} /><span>运行记录</span><button type="button" onClick={() => setEventHistory([])} title="清空运行记录" aria-label="清空运行记录"><X size={12} /></button></header>
         <div>{eventHistory.map((event) => <p key={event.id}>{event.text}</p>)}</div>
       </aside> : null}
-      {notice && (showRunLog || isPersistentNotice(notice)) ? <div className={`game-notice game-notice--${getNoticeTone(notice)}`} role="status" data-notice-tone={getNoticeTone(notice)}>{notice}</div> : null}
+      {runtimePersistenceProgress ? <div className={`game-notice game-notice--${runtimePersistenceProgress.phase === "failed" ? "danger" : runtimePersistenceProgress.phase === "complete" ? "success" : "warning"} runtime-persistence-progress`} role="status" data-persistence-progress>{runtimePersistenceProgress.message}</div>
+        : notice && (showRunLog || isPersistentNotice(notice)) ? <div className={`game-notice game-notice--${getNoticeTone(notice)}`} role="status" data-notice-tone={getNoticeTone(notice)}>{notice}</div> : null}
       {pureIdleActive ? <TimeWarpIdleOverlay
         game={observedGame}
         baselineGame={pureIdleRecoveryRef.current?.state ?? observedGame}

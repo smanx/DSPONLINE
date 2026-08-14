@@ -516,14 +516,14 @@ function SettingsPanel({ game, report, productionRefreshPreference, productionRe
           checked={fullRealtimeSimulation}
           label={locale === "en" ? "Full realtime refresh" : "完整实时刷新"}
           value={fullRealtimeSimulation
-            ? locale === "en" ? "All planets, history, and planning payloads" : "同步全星球与历史/规划数据"
+            ? locale === "en" ? "Live history and Dyson planning payloads" : "实时同步完整历史与戴森规划"
             : locale === "en" ? "Compact active-planet projection" : "仅同步活动行星紧凑投影"}
           icon={<Activity size={16} />}
           onChange={onFullRealtimeSimulationChange}
         />
         <p className={fullRealtimeSimulation ? "settings-warning" : "settings-help"}>{locale === "en"
-          ? "Device-only setting. Every simulation tick includes history and planning data; very large saves use substantially more memory and may stutter. Off by default."
-          : "只保存在当前设备；每个模拟切片都会同步历史与规划数据，超大存档会明显增加内存与卡顿。默认关闭。"}</p>
+          ? "Device-only setting. Every simulation tick includes complete production history and Dyson plans; very large saves use substantially more memory and may stutter. Entity telemetry remains active-planet scoped. Off by default."
+          : "只保存在当前设备；每个模拟切片都会同步完整生产历史与戴森规划，超大存档会明显增加内存与卡顿；建筑遥测仍只同步活动行星。默认关闭。"}</p>
         <div className="canvas-performance-feature-list" aria-label={canvasPerformanceCopy.ariaLabel}>
           {canvasPerformanceCopy.items.map(([id, label, scope]) => <ToggleSetting
             checked={canvasPerformanceFeatures[id]}

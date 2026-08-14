@@ -36,6 +36,7 @@ export function runtimeTransitionDiagnosticsEnabled(): boolean {
 export function beginRuntimeTransition(transition: RuntimeTransitionName): void {
   const diagnostics = state();
   if (!diagnostics) return;
+  if (diagnostics.active[transition] !== undefined) return;
   const startedAt = performance.now();
   diagnostics.active[transition] = startedAt;
   recordRuntimeTransitionPhase("transition-start", startedAt, 0, undefined, transition);
