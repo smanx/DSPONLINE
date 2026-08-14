@@ -518,8 +518,15 @@ test("release notes preserve close and acknowledge actions at 360 by 480 and 200
     document.documentElement.dataset.uiFontScale = "200";
     document.documentElement.style.setProperty("--ui-font-scale", "2");
   });
-  const dialog = page.getByRole("dialog", { name: /更新|版本/ });
+  const dialog = page.locator(".release-notes-dialog");
   await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveAttribute("aria-label", "超大存档加载与保存紧急修复");
+  await expect(dialog.locator(".release-notes-version strong")).toHaveText("1.0.43");
+  await expect(dialog.locator(".release-notes-scroll li")).toHaveCount(4);
+  await expect(dialog).toContainText("超大线路迁移改为线性处理");
+  await expect(dialog).toContainText("导入与云端恢复不再冻结界面");
+  await expect(dialog).toContainText("立即保存与返回主页避免重复落盘");
+  await expect(dialog).toContainText("存档与在线协议保持兼容");
   const close = dialog.getByRole("button", { name: /关闭/ }).first();
   const acknowledge = dialog.getByRole("button", { name: /我知道了|开始/ }).last();
   for (const action of [close, acknowledge]) {

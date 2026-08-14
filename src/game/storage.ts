@@ -4,12 +4,15 @@ import {
   DYSON_STRUCTURE_POWER_KW,
   DEFAULT_STATION_WARPER_TARGET,
   DEFAULT_PLANET_TRAY_ITEM_LIMIT,
+  DEFAULT_PROLIFERATOR_BUFFER_LIMIT,
   MAX_PLANET_TRAY_ITEM_LIMIT,
   MAX_BUILDING_BUFFER_LIMIT,
   MAX_BUILDING_STACK_COUNT,
   MAX_BELT_LANES,
   MAX_CONSTRUCTION_AUTOMATION_TARGET,
+  MAX_PROLIFERATOR_BUFFER_LIMIT,
   MIN_PLANET_TRAY_ITEM_LIMIT,
+  MIN_PROLIFERATOR_BUFFER_LIMIT,
   SOLAR_SAIL_POWER_KW,
   STATION_SLOT_COUNT,
   STATION_WARPER_CAPACITY_PER_BUILDING,
@@ -914,8 +917,8 @@ function normalizedBuildingBufferLimit(value: unknown): number {
 }
 
 function normalizedProliferatorBufferLimit(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return 600;
-  return Math.max(1, Math.min(100_000, Math.floor(value)));
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_PROLIFERATOR_BUFFER_LIMIT;
+  return Math.max(MIN_PROLIFERATOR_BUFFER_LIMIT, Math.min(MAX_PROLIFERATOR_BUFFER_LIMIT, Math.floor(value)));
 }
 
 function inferLegacyPlanet(entity: FactoryEntity): PlanetId {

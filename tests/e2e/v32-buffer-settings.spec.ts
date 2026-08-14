@@ -1,6 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import { selectSettingsCategory } from "./settings-helpers";
 
+const SAVE_KEY = "dsp-idle-network.save.v1";
+const BACKUP_KEY = `${SAVE_KEY}.backup`;
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("dsp-idle-network.test-bypass-menu", "1");
@@ -12,10 +15,10 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-async function openSettings(page: Page, mode: "desktop" | "legacy" | "next") {
+async function openSettings(page: Page, mode: "desktop" | "legacy" | "next", route?: string) {
   const viewport = mode === "desktop" ? { width: 1440, height: 900 } : { width: 390, height: 844 };
   await page.setViewportSize(viewport);
-  await page.goto(mode === "next" ? "/?mobileUi=next" : "/");
+  await page.goto(route ?? (mode === "next" ? "/?mobileUi=next" : "/"));
   await expect(page.locator(".game-shell")).toBeVisible();
   if (mode === "next") {
     await page.getByRole("button", { name: "更多", exact: true }).click();
@@ -32,7 +35,27 @@ async function openSettings(page: Page, mode: "desktop" | "legacy" | "next") {
 }
 
 test("building buffer presets and custom validation persist independently", async ({ page }) => {
-  const operations = await openSettings(page, "desktop");
+  let operations = await openSettings(page, "desktop", "/?storageMigration=production");
+
+  // Establish a durable primary before changing settings. The production
+  // contract is coordinated IndexedDB; the same-name localStorage value on a
+  // localhost DEV server is only a compatibility mirror and may lag the
+  // asynchronous Worker serialization used by verified manual saves.
+  await operations.getByRole("tab", { name: "存档" }).click();
+  const initialRevision = await page.evaluate(async () => {
+    const store = await import("/src/game/localSaveStore.ts");
+    await store.flushLocalSaveWrites();
+    return store.getPrimaryLocalSaveRevision();
+  });
+  await operations.getByRole("button", { name: "立即保存" }).click();
+  await expect.poll(() => page.evaluate(async () => {
+    const store = await import("/src/game/localSaveStore.ts");
+    await store.flushLocalSaveWrites();
+    return store.getPrimaryLocalSaveRevision();
+  })).toBe(initialRevision + 1);
+  await expect(page.locator(".game-notice")).toContainText("主存档已保存");
+
+  await operations.getByRole("tab", { name: "设置" }).click();
   await selectSettingsCategory(operations, "终局性能", "performance");
   const production = operations.locator(".settings-buffer-limit").filter({ hasText: "生产建筑缓存上限" });
   const logistics = operations.locator(".settings-buffer-limit").filter({ hasText: "仓储与物流建筑缓存上限" });
@@ -79,14 +102,110 @@ test("building buffer presets and custom validation persist independently", asyn
   await expect(logistics).toContainText("100,000/种");
 
   await operations.getByRole("tab", { name: "存档" }).click();
+  const beforeManualSave = await page.evaluate(async ({ saveKey }) => {
+    const store = await import("/src/game/localSaveStore.ts");
+    await store.flushLocalSaveWrites();
+    const raw = await store.readPersistedLocalSaveValue(saveKey);
+    if (!raw) throw new Error("authoritative primary save is missing before manual save");
+    return { raw, revision: store.getPrimaryLocalSaveRevision() };
+  }, { saveKey: SAVE_KEY });
   await operations.getByRole("button", { name: "立即保存" }).click();
-  const persisted = await page.evaluate(() => JSON.parse(window.localStorage.getItem("dsp-idle-network.save.v1")!).state.settings);
-  expect(persisted).toMatchObject({
+  await expect.poll(() => page.evaluate(async () => {
+    const store = await import("/src/game/localSaveStore.ts");
+    await store.flushLocalSaveWrites();
+    return store.getPrimaryLocalSaveRevision();
+  })).toBe(beforeManualSave.revision + 1);
+  await expect(page.locator(".game-notice")).toContainText("主存档已保存");
+
+  const afterManualSave = await page.evaluate(async ({ saveKey, backupKey }) => {
+    const store = await import("/src/game/localSaveStore.ts");
+    const coordination = await import("/src/game/localSaveCoordination.ts");
+    await store.flushLocalSaveWrites();
+    const raw = await store.readPersistedLocalSaveValue(saveKey);
+    if (!raw) throw new Error("authoritative primary save is missing after manual save");
+    const mirrorKeys = coordination.localSaveEmergencyMirrorKeys("normal");
+    return {
+      backend: store.getLocalSaveBackend(),
+      raw,
+      cacheRaw: store.getLocalSaveValue(saveKey),
+      backup: await store.readPersistedLocalSaveValue(backupKey),
+      revision: store.getPrimaryLocalSaveRevision(),
+      legacyMain: window.localStorage.getItem(saveKey),
+      emergencyPayload: window.localStorage.getItem(mirrorKeys.payload),
+      emergencyMetadata: window.localStorage.getItem(mirrorKeys.metadata),
+    };
+  }, { saveKey: SAVE_KEY, backupKey: BACKUP_KEY });
+  expect(afterManualSave.backend).toBe("indexeddb");
+  expect(afterManualSave.cacheRaw).toBe(afterManualSave.raw);
+  expect(afterManualSave.backup).toBe(beforeManualSave.raw);
+  expect(afterManualSave.revision).toBe(beforeManualSave.revision + 1);
+  expect(afterManualSave.legacyMain).toBeNull();
+  expect(afterManualSave.emergencyPayload).toBeNull();
+  expect(afterManualSave.emergencyMetadata).toBeNull();
+  expect(JSON.parse(afterManualSave.raw).state.settings).toMatchObject({
     productionBufferLimit: 100_000_000,
     logisticsBufferLimit: 100_000,
     beltBufferLimit: 100_000_000,
     proliferatorBufferLimit: 100_000_000,
   });
+
+  // Reload exercises the real pagehide emergency mirror and startup
+  // reconciliation path. The verified values must survive and the same-writer
+  // mirror must be cleared without producing a conflict.
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
+  await expect.poll(() => page.evaluate(async () => {
+    const coordination = await import("/src/game/localSaveCoordination.ts");
+    const mirrorKeys = coordination.localSaveEmergencyMirrorKeys("normal");
+    return {
+      payload: window.localStorage.getItem(mirrorKeys.payload) !== null,
+      metadata: window.localStorage.getItem(mirrorKeys.metadata) !== null,
+    };
+  })).toEqual({ payload: true, metadata: true });
+  await page.reload();
+  await expect(page.locator(".game-shell")).toBeVisible();
+  await expect(page.locator(".local-save-writer-banner--conflict")).toHaveCount(0);
+  await expect.poll(() => page.evaluate(async ({ saveKey }) => {
+    const store = await import("/src/game/localSaveStore.ts");
+    const coordination = await import("/src/game/localSaveCoordination.ts");
+    const mirrorKeys = coordination.localSaveEmergencyMirrorKeys("normal");
+    await store.flushLocalSaveWrites();
+    const raw = await store.readPersistedLocalSaveValue(saveKey);
+    if (!raw) return null;
+    return {
+      backend: store.getLocalSaveBackend(),
+      cacheMatches: store.getLocalSaveValue(saveKey) === raw,
+      settings: JSON.parse(raw).state.settings,
+      emergencyPayload: window.localStorage.getItem(mirrorKeys.payload),
+      emergencyMetadata: window.localStorage.getItem(mirrorKeys.metadata),
+    };
+  }, { saveKey: SAVE_KEY })).toMatchObject({
+    backend: "indexeddb",
+    cacheMatches: true,
+    settings: {
+      productionBufferLimit: 100_000_000,
+      logisticsBufferLimit: 100_000,
+      beltBufferLimit: 100_000_000,
+      proliferatorBufferLimit: 100_000_000,
+    },
+    emergencyPayload: null,
+    emergencyMetadata: null,
+  });
+
+  await page.getByLabel("打开设置").click();
+  operations = page.getByRole("dialog", { name: "运营中心" });
+  await expect(operations).toBeVisible();
+  await selectSettingsCategory(operations, "终局性能", "performance");
+  const reloadedProduction = operations.locator(".settings-buffer-limit").filter({ hasText: "生产建筑缓存上限" });
+  const reloadedLogistics = operations.locator(".settings-buffer-limit").filter({ hasText: "仓储与物流建筑缓存上限" });
+  const reloadedBelts = operations.locator(".settings-buffer-limit").filter({ hasText: "传送带转运额度上限" });
+  const reloadedProliferator = operations.locator(".settings-buffer-limit").filter({ hasText: "增产剂缓存上限" });
+  await expect(reloadedProduction.getByRole("button", { name: "自定义" })).toHaveAttribute("aria-pressed", "true");
+  await expect(reloadedProduction.getByLabel("生产建筑缓存上限自定义值")).toHaveValue("100000000");
+  await expect(reloadedLogistics.getByRole("button", { name: "10万", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(reloadedBelts.getByRole("button", { name: "自定义" })).toHaveAttribute("aria-pressed", "true");
+  await expect(reloadedBelts.getByLabel("传送带转运额度上限自定义值")).toHaveValue("100000000");
+  await expect(reloadedProliferator.getByRole("button", { name: "自定义" })).toHaveAttribute("aria-pressed", "true");
+  await expect(reloadedProliferator.getByLabel("增产剂缓存上限自定义值")).toHaveValue("100000000");
 });
 
 test("buffer controls fit desktop and both mobile settings from 80 to 200 percent font", async ({ page }) => {

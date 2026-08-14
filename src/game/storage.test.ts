@@ -904,15 +904,34 @@ describe("game storage", () => {
     const hostile = JSON.parse(JSON.stringify(migrated)) as Record<string, any>;
     hostile.settings.productionBufferLimit = -500;
     hostile.settings.logisticsBufferLimit = 999_999_999;
+    hostile.settings.proliferatorBufferLimit = 999_999_999;
     hostile.entities[0].inputs.iron_ore = 100_000_001;
     hostile.entities[0].outputs.iron_ore = 0;
     hostile.entities[0].minerCount = 100_000_001;
     const repaired = migrateGame(hostile)!;
     expect(repaired.settings.productionBufferLimit).toBe(1_000);
     expect(repaired.settings.logisticsBufferLimit).toBe(100_000_000);
+    expect(repaired.settings.proliferatorBufferLimit).toBe(100_000_000);
     expect(repaired.entities[0].inputs.iron_ore).toBe(100_000_001);
     expect(repaired.entities[0].outputs.iron_ore).toBe(0);
     expect(repaired.entities[0].minerCount).toBe(100_000_001);
+  });
+
+  it("keeps save migration aligned with the proliferator buffer limits accepted by gameplay settings", () => {
+    for (const [value, expected] of [
+      [undefined, 600],
+      ["invalid", 600],
+      [0, 1],
+      [1, 1],
+      [100_000_000, 100_000_000],
+      [100_000_001, 100_000_000],
+      [999_999_999, 100_000_000],
+    ] as const) {
+      const saved = JSON.parse(JSON.stringify(createInitialState())) as Record<string, any>;
+      if (value === undefined) delete saved.settings.proliferatorBufferLimit;
+      else saved.settings.proliferatorBufferLimit = value;
+      expect(migrateGame(saved)!.settings.proliferatorBufferLimit).toBe(expected);
+    }
   });
 
   it("round-trips historical safe stacks above one hundred million without truncating blueprints or buffers", () => {
