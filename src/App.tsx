@@ -371,6 +371,8 @@ import {
   type LatestFramePublisher,
 } from "./game/canvasConnectionPresentation";
 import {
+  CANVAS_STACK_PROXY_HEIGHT,
+  CANVAS_STACK_PROXY_WIDTH,
   canvasDetailProgress,
   canvasNodeIntersectsWorldRectangle,
   countVisibleCanvasNodes,
@@ -5766,8 +5768,21 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     alert.planetId === canvasGame.activePlanetId ? [alert.entityId] : [])), [alerts, canvasGame.activePlanetId]);
   const activeCriticalAlertEntityIds = useMemo(() => new Set(alerts.flatMap((alert) =>
     alert.planetId === canvasGame.activePlanetId && alert.severity === "critical" ? [alert.entityId] : [])), [alerts, canvasGame.activePlanetId]);
-  const canvasConnectedEntityIds = useMemo(() => new Set(activePlanetBelts.flatMap((belt) => [belt.source, belt.target])),
-    [canvasGame.activePlanetId, canvasRenderSnapshot.topologyRevision]);
+  const detailedCanvasBeltIds = useMemo(() => {
+    const ids = new Set(selectedBeltIdSet);
+    if (hoveredBeltId) ids.add(hoveredBeltId);
+    for (const id of focusedNetworkBeltIds) ids.add(id);
+    for (const id of taskHighlight.beltIds) ids.add(id);
+    for (const id of locatedProductionBeltIds) ids.add(id);
+    return ids;
+  }, [focusedNetworkBeltIds, hoveredBeltId, locatedProductionBeltIds, selectedBeltIdSet, taskHighlight.beltIds]);
+  const reactFlowBelts = useMemo(() => canvasBatchRendererEnabled
+    ? activePlanetBelts.filter((belt) => detailedCanvasBeltIds.has(belt.id))
+    : activePlanetBelts, [activePlanetBelts, canvasBatchRendererEnabled, detailedCanvasBeltIds]);
+  // The batched Canvas layer owns ordinary belt geometry. Only promoted
+  // ReactFlow edges need hidden stack proxies and their lightweight Handles.
+  const canvasConnectedEntityIds = useMemo(() => new Set(reactFlowBelts.flatMap((belt) => [belt.source, belt.target])),
+    [reactFlowBelts]);
   const canvasStackGrouping = useMemo(() => {
     if (connectionDraft && connectExpandAll) {
       canvasStackMembershipRef.current = new Map();
@@ -5884,6 +5899,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           stackMembershipTokenCompareCount += 1;
           stackMemberIdReferenceCount += stackPresentation.memberIds.length;
           const stackHidden = stackPresentation.hidden;
+          const stackGeometryHandlesRequired = canvasConnectedEntityIds.has(entity.id);
+          const nodeHidden = stackHidden && !stackGeometryHandlesRequired;
           const nodeDraggable = draggable && !stackHidden;
           const nodeSelectable = !stackHidden;
           const nodeFocusable = !stackHidden;
@@ -5902,7 +5919,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             previous.data.stackGroupId === stackPresentation.groupId && previous.data.stackCount === stackPresentation.count &&
             previous.data.stackAlertCount === stackPresentation.alertCount &&
             previous.data.stackCriticalAlertCount === stackPresentation.criticalAlertCount &&
-            previous.data.stackGeometryHandlesRequired === canvasConnectedEntityIds.has(entity.id) &&
+            previous.data.stackGeometryHandlesRequired === stackGeometryHandlesRequired && previous.hidden === nodeHidden &&
             previous.data.stackMembershipToken === stackPresentation.membershipToken);
           if (staticPresentation && staticPresentationStable && previous) {
             stableNodeCount += 1;
@@ -5927,12 +5944,18 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             const presentationSignature = ["static", entity.id, nodeDraggable, staticAlertActive,
               stackPresentation.groupId, stackPresentation.count, stackPresentation.hidden, stackPresentation.halo,
               stackPresentation.alertCount, stackPresentation.criticalAlertCount,
-              canvasConnectedEntityIds.has(entity.id),
+              stackGeometryHandlesRequired,
               stackPresentation.membershipToken].join(":");
             return {
               id: entity.id,
               type: entity.kind,
               position: { ...entity.position },
+              ...(stackHidden ? {
+                width: CANVAS_STACK_PROXY_WIDTH,
+                height: CANVAS_STACK_PROXY_HEIGHT,
+                initialWidth: CANVAS_STACK_PROXY_WIDTH,
+                initialHeight: CANVAS_STACK_PROXY_HEIGHT,
+              } : {}),
               measured: previous?.data.lod === "compact" && previous.data.stackHidden === stackPresentation.hidden ? previous.measured : undefined,
               data: {
                 ...commonNodeData,
@@ -5963,7 +5986,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
                 stackMemberIds: stackPresentation.memberIds,
                 stackAlertCount: stackPresentation.alertCount,
                 stackCriticalAlertCount: stackPresentation.criticalAlertCount,
-                stackGeometryHandlesRequired: canvasConnectedEntityIds.has(entity.id),
+                stackGeometryHandlesRequired,
                 connectionDraft: null,
                 connectionViewportFull: false,
                 acceptedInputItemIds,
@@ -5975,6 +5998,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               selectable: nodeSelectable,
               focusable: nodeFocusable,
               connectable: nodeConnectable,
+              hidden: nodeHidden,
               style: hiddenWrapperStyle,
               domAttributes: hiddenWrapperAttributes,
             } satisfies FactoryFlowNode;
@@ -6101,17 +6125,24 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             stackPresentation.halo,
             stackPresentation.alertCount,
             stackPresentation.criticalAlertCount,
-            canvasConnectedEntityIds.has(entity.id),
+            stackGeometryHandlesRequired,
             stackPresentation.membershipToken,
           ].join("|");
           if (previous?.data.visualSignature === visualSignature && previous.data.presentationSignature === presentationSignature &&
             previous.position.x === entity.position.x && previous.position.y === entity.position.y &&
             previous.selected === selected && previous.className === className && previous.draggable === nodeDraggable &&
-            previous.selectable === nodeSelectable && previous.focusable === nodeFocusable && previous.connectable === nodeConnectable) return previous;
+            previous.selectable === nodeSelectable && previous.focusable === nodeFocusable && previous.connectable === nodeConnectable &&
+            previous.hidden === nodeHidden) return previous;
           return {
             id: entity.id,
             type: entity.kind,
             position: { ...entity.position },
+            ...(stackHidden ? {
+              width: CANVAS_STACK_PROXY_WIDTH,
+              height: CANVAS_STACK_PROXY_HEIGHT,
+              initialWidth: CANVAS_STACK_PROXY_WIDTH,
+              initialHeight: CANVAS_STACK_PROXY_HEIGHT,
+            } : {}),
             measured: previous?.data.lod === lod && previous.data.stackHidden === stackPresentation.hidden ? previous.measured : undefined,
             data: {
               ...commonNodeData,
@@ -6140,7 +6171,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               stackMemberIds: stackPresentation.memberIds,
               stackAlertCount: stackPresentation.alertCount,
               stackCriticalAlertCount: stackPresentation.criticalAlertCount,
-              stackGeometryHandlesRequired: canvasConnectedEntityIds.has(entity.id),
+              stackGeometryHandlesRequired,
               connectionDraft: nodeConnectionDraft,
               connectionViewportFull,
               acceptedInputItemIds,
@@ -6152,6 +6183,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             selectable: nodeSelectable,
             focusable: nodeFocusable,
             connectable: nodeConnectable,
+            hidden: nodeHidden,
             style: hiddenWrapperStyle,
             domAttributes: hiddenWrapperAttributes,
           } satisfies FactoryFlowNode;
@@ -6234,8 +6266,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       id: node.id,
       x: node.position.x,
       y: node.position.y,
-      width: node.measured?.width ?? 256,
-      height: node.measured?.height ?? 180,
+      width: node.measured?.width ?? (node.data.stackHidden ? CANVAS_STACK_PROXY_WIDTH : 256),
+      height: node.measured?.height ?? (node.data.stackHidden ? CANVAS_STACK_PROXY_HEIGHT : 180),
     }));
     const centers = buildFactoryEdgeRouteCenters(canvasTopology, rects, largeFactoryMode);
     edgeRouteCacheRef.current = { topologyRevision: canvasTopology.revision, geometryRevision: canvasGeometryRevision, simplified: largeFactoryMode, centers };
@@ -6245,21 +6277,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     id: node.id,
     x: node.position.x,
     y: node.position.y,
-    width: node.measured?.width ?? 256,
-    height: node.measured?.height ?? 180,
+    width: node.measured?.width ?? (node.data.stackHidden ? CANVAS_STACK_PROXY_WIDTH : 256),
+    height: node.measured?.height ?? (node.data.stackHidden ? CANVAS_STACK_PROXY_HEIGHT : 180),
   })), [canvasGeometryRevision, canvasTopology.revision]);
-
-  const detailedCanvasBeltIds = useMemo(() => {
-    const ids = new Set(selectedBeltIdSet);
-    if (hoveredBeltId) ids.add(hoveredBeltId);
-    for (const id of focusedNetworkBeltIds) ids.add(id);
-    for (const id of taskHighlight.beltIds) ids.add(id);
-    for (const id of locatedProductionBeltIds) ids.add(id);
-    return ids;
-  }, [focusedNetworkBeltIds, hoveredBeltId, locatedProductionBeltIds, selectedBeltIdSet, taskHighlight.beltIds]);
-  const reactFlowBelts = useMemo(() => canvasBatchRendererEnabled
-    ? activePlanetBelts.filter((belt) => detailedCanvasBeltIds.has(belt.id))
-    : activePlanetBelts, [activePlanetBelts, canvasBatchRendererEnabled, detailedCanvasBeltIds]);
 
   const edges = useMemo<FactoryFlowEdge[]>(() => {
     const derivationStartedAt = performance.now();

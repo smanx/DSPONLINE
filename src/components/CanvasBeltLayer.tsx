@@ -171,5 +171,14 @@ export const CanvasBeltLayer = forwardRef<CanvasBeltLayerHandle, CanvasBeltLayer
     };
   }, [onUnavailable]);
 
-  return <canvas ref={canvasRef} className="canvas-belt-layer" aria-hidden="true" data-segments={batch.segments} />;
+  return <canvas
+    ref={canvasRef}
+    className="canvas-belt-layer"
+    aria-hidden="true"
+    data-segments={batch.segments}
+    data-first-source-x={batch.segments > 0 ? batch.positions[0] : undefined}
+    data-first-source-y={batch.segments > 0 ? batch.positions[1] : undefined}
+    data-first-target-x={batch.segments > 0 ? batch.positions[2] : undefined}
+    data-first-target-y={batch.segments > 0 ? batch.positions[3] : undefined}
+  />;
 });

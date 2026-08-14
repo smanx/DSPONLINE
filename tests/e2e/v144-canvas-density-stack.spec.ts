@@ -171,12 +171,28 @@ test("an exact 50-card stack paints one leader and glow while retaining hidden e
   await expect(shell).toHaveAttribute("data-canvas-detail-stage", "full");
   await expect(page.locator('.factory-node[data-heavy-card="true"]')).toHaveCount(7);
   await expect(page.locator('.react-flow__node[data-id^="anonymous-node-"] .factory-node[data-heavy-card="true"]')).toHaveCount(1);
-  await expect(page.locator(".factory-node-stack-proxy")).toHaveCount(49);
+  await expect(page.locator(".factory-node-stack-proxy")).toHaveCount(0);
   await expect(page.locator(".factory-node-stack-halo")).toHaveCount(1);
   await expect(page.locator(".factory-node-stack-badge")).toHaveCount(1);
   await expect(page.locator('.factory-node-stack-proxy[tabindex="0"]')).toHaveCount(0);
+  const beltCanvas = page.locator("canvas.canvas-belt-layer");
+  await expect(beltCanvas).toHaveAttribute("data-segments", "3");
+  await expect(beltCanvas).toHaveAttribute("data-first-source-x", "96");
+  await expect(beltCanvas).toHaveAttribute("data-first-source-y", "16");
+  await expect(beltCanvas).toHaveAttribute("data-first-target-x", "0");
+  await expect(beltCanvas).toHaveAttribute("data-first-target-y", "16");
+  await expect(page.locator(".react-flow__edge")).toHaveCount(0);
+  const hit = await page.evaluate(() => {
+    const pane = document.querySelector<HTMLElement>(".react-flow__pane")!;
+    const viewport = document.querySelector<HTMLElement>(".react-flow__viewport")!;
+    const bounds = pane.getBoundingClientRect();
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(viewport).transform);
+    return { x: bounds.left + matrix.e + 48 * matrix.a, y: bounds.top + matrix.f + 16 * matrix.d };
+  });
+  await page.mouse.move(hit.x, hit.y);
+  await expect(page.locator(".react-flow__edge")).toHaveCount(1);
   const hiddenWrappers = page.locator('.react-flow__node[data-stack-hidden-wrapper="true"]');
-  await expect(hiddenWrappers).toHaveCount(49);
+  await expect(hiddenWrappers).toHaveCount(1);
   expect(await hiddenWrappers.evaluateAll((nodes) => nodes.every((node) =>
     !node.hasAttribute("tabindex") && node.getAttribute("aria-hidden") === "true" &&
     getComputedStyle(node).pointerEvents === "none",
@@ -185,9 +201,10 @@ test("an exact 50-card stack paints one leader and glow while retaining hidden e
     (node as HTMLElement).focus();
     return document.activeElement !== node;
   })).toBe(true);
-  await expect(page.locator('.factory-node-stack-proxy[data-retains-edge-geometry="true"]')).toHaveCount(3);
+  await expect(page.locator('.factory-node-stack-proxy[data-retains-edge-geometry="true"]')).toHaveCount(1);
   expect(await page.locator(".factory-node-stack-proxy .react-flow__handle").count()).toBeGreaterThan(0);
-  await expect(page.locator(".react-flow__edge")).toHaveCount(3);
+  await page.mouse.click(hit.x, hit.y);
+  await expect(page.locator(".react-flow__edge.selected")).toHaveCount(1);
   expect(await page.locator(".factory-node-stack-proxy").evaluateAll((nodes) => nodes.every((node) => {
     const style = getComputedStyle(node);
     return style.opacity === "0" && style.pointerEvents === "none";
@@ -271,7 +288,8 @@ test("a 4213-visible exact stack derives linearly with bounded heavy DOM", async
   await expect.poll(async () => Number(await shell.getAttribute("data-canvas-visible-node-count"))).toBeGreaterThanOrEqual(4_213);
   await expect(page.locator('.factory-node[data-heavy-card="true"]')).toHaveCount(0);
   await expect(page.locator(".work-cycle")).toHaveCount(0);
-  await expect(page.locator(".factory-node-stack-proxy")).toHaveCount(4_212);
+  await expect(page.locator(".factory-node-stack-proxy")).toHaveCount(0);
+  await expect(page.locator('.react-flow__node[data-id^="anonymous-node-"]')).toHaveCount(1);
   await expect(page.locator(".factory-node-stack-halo")).toHaveCount(1);
   const pauseMs = await togglePauseAndMeasure(page, "继续模拟");
   await expect.poll(async () => Number(await canvas.getAttribute("data-changed-node-count"))).toBe(0);

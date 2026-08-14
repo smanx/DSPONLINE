@@ -10,6 +10,8 @@ export const CANVAS_DETAIL_COMPACT_ENTER_VISIBLE = 480;
 export const CANVAS_DETAIL_COMPACT_EXIT_VISIBLE = 360;
 export const CANVAS_STACK_ENTER_PX = 12;
 export const CANVAS_STACK_EXIT_PX = 18;
+export const CANVAS_STACK_PROXY_WIDTH = 96;
+export const CANVAS_STACK_PROXY_HEIGHT = 32;
 
 export interface CanvasDensityNode {
   id: string;

@@ -2702,9 +2702,12 @@ html[data-ui-font-scale="200"] .settings-group > header > small {
 
 .factory-flow-node--effects-static .factory-node,
 .factory-flow-node--effects-static .node-icon,
-.factory-flow-node--effects-static .status-dot {
+.factory-flow-node--effects-static .status-dot,
+.factory-flow-node--effects-static .factory-node-stack-halo {
   box-shadow: none !important;
   filter: none !important;
+  animation: none !important;
+  transition: none !important;
 }
 
 .factory-flow-node--effects-static .factory-node::before,
