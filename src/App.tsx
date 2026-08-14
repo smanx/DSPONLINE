@@ -5796,7 +5796,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     setNotice(`已展开重叠建筑 ${memberIds.indexOf(targetId) + 1}/${memberIds.length}`);
   }, [mobileNavigation, nextMobileShell]);
 
-  const commonNodeData = useMemo<Omit<FactoryNodeData, "visualSignature" | "presentationSignature" | "entity" | "status" | "powerFactor" | "resourceReserve" | "connectedInputItemIds" | "inputBeltCounts" | "outputBeltCounts" | "blackHolePortConnections" | "cycleRatePerSecond" | "lod" | "acceptedInputItemIds" | "producedOutputItemIds" | "connectionDraft" | "connectionViewportFull" | "dynamicEffects" | "presentationVisible" | "alertActive" | "stackHidden" | "stackHalo" | "stackCount" | "stackGroupId" | "stackMemberIds" | "stackAlertCount" | "stackCriticalAlertCount" | "stackGeometryHandlesRequired">>(() => {
+  const commonNodeData = useMemo<Omit<FactoryNodeData, "visualSignature" | "presentationSignature" | "entity" | "status" | "powerFactor" | "resourceReserve" | "connectedInputItemIds" | "inputBeltCounts" | "outputBeltCounts" | "blackHolePortConnections" | "cycleRatePerSecond" | "lod" | "acceptedInputItemIds" | "producedOutputItemIds" | "connectionDraft" | "connectionViewportFull" | "dynamicEffects" | "presentationVisible" | "alertActive" | "stackHidden" | "stackHalo" | "stackCount" | "stackGroupId" | "stackMembershipToken" | "stackMemberIds" | "stackAlertCount" | "stackCriticalAlertCount" | "stackGeometryHandlesRequired">>(() => {
     const technology = getTechnology(canvasGame.research.selectedTechId);
     const progress = technology ? canvasGame.research.progressByTech[technology.id] ?? {} : {};
     const planetProfile = getPlanetIndustrialProfile(canvasGame, canvasGame.activePlanetId);
@@ -5850,6 +5850,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
         let stableNodeCount = 0;
         let deferredNodeCount = 0;
         let dynamicNodeCount = 0;
+        let stackMembershipTokenCompareCount = 0;
+        let stackMemberIdReferenceCount = 0;
         const next = activePlanetEntities.map((entity) => {
           const previous = existing.get(entity.id);
           const selected = selectedEntityIdSet.has(entity.id);
@@ -5871,6 +5873,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             previous.data.entity.buildingId === entity.buildingId && previous.data.entity.resourceId === entity.resourceId);
           const stackPresentation = canvasStackGrouping.byNodeId.get(entity.id) ?? {
             groupId: null,
+            membershipToken: `${entity.id}:1`,
             memberIds: [entity.id],
             count: 1,
             hidden: false,
@@ -5878,18 +5881,29 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             alertCount: 0,
             criticalAlertCount: 0,
           };
+          stackMembershipTokenCompareCount += 1;
+          stackMemberIdReferenceCount += stackPresentation.memberIds.length;
+          const stackHidden = stackPresentation.hidden;
+          const nodeDraggable = draggable && !stackHidden;
+          const nodeSelectable = !stackHidden;
+          const nodeFocusable = !stackHidden;
+          const nodeConnectable = !stackHidden;
+          const hiddenWrapperStyle = stackHidden ? { pointerEvents: "none" as const } : undefined;
+          const hiddenWrapperAttributes = stackHidden
+            ? { "aria-hidden": true, "data-stack-hidden-wrapper": "true" }
+            : undefined;
           const staticAlertActive = stackPresentation.halo && stackPresentation.alertCount > 0;
           const staticPresentation = !forceDynamicPresentation && (!presentationVisible || canvasDetailStage === "compact");
           const staticPresentationStable = Boolean(previous && topologyStable && previous.data.lod === "compact" &&
             previous.data.alertActive === staticAlertActive &&
-            previous.draggable === draggable && previous.selected === selected &&
+            previous.draggable === nodeDraggable && previous.selectable === nodeSelectable &&
+            previous.focusable === nodeFocusable && previous.connectable === nodeConnectable && previous.selected === selected &&
             previous.data.stackHidden === stackPresentation.hidden && previous.data.stackHalo === stackPresentation.halo &&
             previous.data.stackGroupId === stackPresentation.groupId && previous.data.stackCount === stackPresentation.count &&
             previous.data.stackAlertCount === stackPresentation.alertCount &&
             previous.data.stackCriticalAlertCount === stackPresentation.criticalAlertCount &&
             previous.data.stackGeometryHandlesRequired === canvasConnectedEntityIds.has(entity.id) &&
-            previous.data.stackMemberIds.length === stackPresentation.memberIds.length &&
-            previous.data.stackMemberIds.every((id, index) => id === stackPresentation.memberIds[index]));
+            previous.data.stackMembershipToken === stackPresentation.membershipToken);
           if (staticPresentation && staticPresentationStable && previous) {
             stableNodeCount += 1;
             return previous;
@@ -5910,11 +5924,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               stackPresentation.halo ? "factory-flow-node--stack-halo" : undefined,
             ].filter(Boolean).join(" ");
             const stablePresentationVisible = previous?.data.lod === "compact" ? previous.data.presentationVisible : presentationVisible;
-            const presentationSignature = ["static", entity.id, draggable, staticAlertActive,
+            const presentationSignature = ["static", entity.id, nodeDraggable, staticAlertActive,
               stackPresentation.groupId, stackPresentation.count, stackPresentation.hidden, stackPresentation.halo,
               stackPresentation.alertCount, stackPresentation.criticalAlertCount,
               canvasConnectedEntityIds.has(entity.id),
-              stackPresentation.memberIds].join(":");
+              stackPresentation.membershipToken].join(":");
             return {
               id: entity.id,
               type: entity.kind,
@@ -5945,6 +5959,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
                 stackHalo: stackPresentation.halo,
                 stackCount: stackPresentation.count,
                 stackGroupId: stackPresentation.groupId,
+                stackMembershipToken: stackPresentation.membershipToken,
                 stackMemberIds: stackPresentation.memberIds,
                 stackAlertCount: stackPresentation.alertCount,
                 stackCriticalAlertCount: stackPresentation.criticalAlertCount,
@@ -5956,7 +5971,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               } as FactoryNodeData,
               selected,
               className,
-              draggable,
+              draggable: nodeDraggable,
+              selectable: nodeSelectable,
+              focusable: nodeFocusable,
+              connectable: nodeConnectable,
+              style: hiddenWrapperStyle,
+              domAttributes: hiddenWrapperAttributes,
             } satisfies FactoryFlowNode;
           }
           dynamicNodeCount += 1;
@@ -6082,11 +6102,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             stackPresentation.alertCount,
             stackPresentation.criticalAlertCount,
             canvasConnectedEntityIds.has(entity.id),
-            stackPresentation.memberIds,
+            stackPresentation.membershipToken,
           ].join("|");
           if (previous?.data.visualSignature === visualSignature && previous.data.presentationSignature === presentationSignature &&
             previous.position.x === entity.position.x && previous.position.y === entity.position.y &&
-            previous.selected === selected && previous.className === className && previous.draggable === draggable) return previous;
+            previous.selected === selected && previous.className === className && previous.draggable === nodeDraggable &&
+            previous.selectable === nodeSelectable && previous.focusable === nodeFocusable && previous.connectable === nodeConnectable) return previous;
           return {
             id: entity.id,
             type: entity.kind,
@@ -6115,6 +6136,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
               stackHalo: stackPresentation.halo,
               stackCount: stackPresentation.count,
               stackGroupId: stackPresentation.groupId,
+              stackMembershipToken: stackPresentation.membershipToken,
               stackMemberIds: stackPresentation.memberIds,
               stackAlertCount: stackPresentation.alertCount,
               stackCriticalAlertCount: stackPresentation.criticalAlertCount,
@@ -6126,7 +6148,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             } as unknown as FactoryNodeData,
             selected,
             className,
-            draggable,
+            draggable: nodeDraggable,
+            selectable: nodeSelectable,
+            focusable: nodeFocusable,
+            connectable: nodeConnectable,
+            style: hiddenWrapperStyle,
+            domAttributes: hiddenWrapperAttributes,
           } satisfies FactoryFlowNode;
         });
         const derivationMs = performance.now() - derivationStartedAt;
@@ -6138,6 +6165,8 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           canvasElement.dataset.stableNodeCount = String(stableNodeCount);
           canvasElement.dataset.deferredNodeCount = String(deferredNodeCount);
           canvasElement.dataset.changedNodeCount = String(changedNodeCount);
+          canvasElement.dataset.stackMembershipTokenCompareCount = String(stackMembershipTokenCompareCount);
+          canvasElement.dataset.stackMemberIdReferenceCount = String(stackMemberIdReferenceCount);
           canvasElement.dataset.projectionRuntimeRevision = String(canvasRenderSnapshot.runtimeRevision);
         }
         if (performanceMonitor.isActive()) {

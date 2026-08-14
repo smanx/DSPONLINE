@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { createBlueprint, createInitialState, placeBuilding } from "../../src/game/engine";
 import { selectSettingsCategory } from "./settings-helpers";
@@ -174,6 +175,16 @@ test("an exact 50-card stack paints one leader and glow while retaining hidden e
   await expect(page.locator(".factory-node-stack-halo")).toHaveCount(1);
   await expect(page.locator(".factory-node-stack-badge")).toHaveCount(1);
   await expect(page.locator('.factory-node-stack-proxy[tabindex="0"]')).toHaveCount(0);
+  const hiddenWrappers = page.locator('.react-flow__node[data-stack-hidden-wrapper="true"]');
+  await expect(hiddenWrappers).toHaveCount(49);
+  expect(await hiddenWrappers.evaluateAll((nodes) => nodes.every((node) =>
+    !node.hasAttribute("tabindex") && node.getAttribute("aria-hidden") === "true" &&
+    getComputedStyle(node).pointerEvents === "none",
+  ))).toBe(true);
+  expect(await hiddenWrappers.first().evaluate((node) => {
+    (node as HTMLElement).focus();
+    return document.activeElement !== node;
+  })).toBe(true);
   await expect(page.locator('.factory-node-stack-proxy[data-retains-edge-geometry="true"]')).toHaveCount(3);
   expect(await page.locator(".factory-node-stack-proxy .react-flow__handle").count()).toBeGreaterThan(0);
   await expect(page.locator(".react-flow__edge")).toHaveCount(3);
@@ -181,6 +192,18 @@ test("an exact 50-card stack paints one leader and glow while retaining hidden e
     const style = getComputedStyle(node);
     return style.opacity === "0" && style.pointerEvents === "none";
   }))).toBe(true);
+
+  const leader = page.locator('.react-flow__node[data-id="anonymous-node-0"]');
+  await leader.locator("article.factory-node").click({ position: { x: 12, y: 12 } });
+  await expect(leader).toHaveClass(/selected/);
+  await page.locator(".factory-node-stack-badge").focus();
+  await page.keyboard.press("Tab");
+  expect(await page.evaluate(() => document.activeElement?.closest('.react-flow__node[data-stack-hidden-wrapper="true"]') === null)).toBe(true);
+  const axe = await new AxeBuilder({ page })
+    .include(".factory-canvas")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(axe.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical")).toEqual([]);
 
   const before: string | null = null;
   await page.locator(".factory-node-stack-badge").focus();
@@ -239,21 +262,27 @@ test("auto detail keeps a 500-visible paused canvas static across continue and p
   await expect(settings.locator(".canvas-detail-diagnostics")).toContainText(String(await shell.getAttribute("data-canvas-visible-node-count")));
 });
 
-test("a 2000-visible canvas remains compact with bounded heavy DOM", async ({ page }) => {
+test("a 4213-visible exact stack derives linearly with bounded heavy DOM", async ({ page }) => {
   test.setTimeout(90_000);
-  await seedCanvas(page, { count: 2_000, exactStack: 2_000 });
+  await seedCanvas(page, { count: 4_213, exactStack: 4_213 });
   const shell = page.locator(".game-shell");
   const canvas = page.locator(".factory-canvas");
   await expect(shell).toHaveAttribute("data-canvas-detail-stage", "compact");
-  await expect.poll(async () => Number(await shell.getAttribute("data-canvas-visible-node-count"))).toBeGreaterThanOrEqual(2_000);
+  await expect.poll(async () => Number(await shell.getAttribute("data-canvas-visible-node-count"))).toBeGreaterThanOrEqual(4_213);
   await expect(page.locator('.factory-node[data-heavy-card="true"]')).toHaveCount(0);
   await expect(page.locator(".work-cycle")).toHaveCount(0);
-  await expect(page.locator(".factory-node-stack-proxy")).toHaveCount(1_999);
+  await expect(page.locator(".factory-node-stack-proxy")).toHaveCount(4_212);
   await expect(page.locator(".factory-node-stack-halo")).toHaveCount(1);
   const pauseMs = await togglePauseAndMeasure(page, "继续模拟");
   await expect.poll(async () => Number(await canvas.getAttribute("data-changed-node-count"))).toBe(0);
-  console.log("v144 2000-visible second-paint gate", JSON.stringify({ pauseMs, diagnostics: await canvas.evaluate((element) => ({ ...((element as HTMLElement).dataset) })) }));
-  if (process.env.DSP_E2E_USE_PREVIEW === "1") expect(pauseMs).toBeLessThanOrEqual(100);
+  const diagnostics = await canvas.evaluate((element) => ({ ...((element as HTMLElement).dataset) }));
+  expect(Number(diagnostics.stackMembershipTokenCompareCount)).toBeLessThanOrEqual(4_219);
+  expect(Number(diagnostics.stackMemberIdReferenceCount)).toBeLessThanOrEqual(4_219);
+  console.log("v144 4213-visible second-paint gate", JSON.stringify({ pauseMs, diagnostics }));
+  if (process.env.DSP_E2E_USE_PREVIEW === "1") {
+    expect(pauseMs).toBeLessThanOrEqual(100);
+    expect(Number(diagnostics.nodeDerivationMs)).toBeLessThanOrEqual(100);
+  }
 });
 
 test("multi-drag shares the exact-overlap policy and preserves relative layout", async ({ page }) => {

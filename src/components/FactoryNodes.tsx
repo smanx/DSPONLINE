@@ -111,6 +111,7 @@ export interface FactoryNodeData extends Record<string, unknown> {
   stackHalo: boolean;
   stackCount: number;
   stackGroupId: string | null;
+  stackMembershipToken: string;
   stackMemberIds: readonly string[];
   stackAlertCount: number;
   stackCriticalAlertCount: number;

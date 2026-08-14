@@ -21,6 +21,8 @@ export interface CanvasDensityNode {
 
 export interface CanvasStackPresentation {
   groupId: string | null;
+  /** Short group-wide identity computed once, never by rescanning members per node. */
+  membershipToken: string;
   memberIds: readonly string[];
   count: number;
   hidden: boolean;
@@ -106,6 +108,23 @@ interface MutableStackGroup {
   memberIds: string[];
 }
 
+const EMPTY_STACK_MEMBER_IDS: readonly string[] = Object.freeze([]);
+
+function stackMembershipToken(memberIds: readonly string[]): string {
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (const id of memberIds) {
+    for (let index = 0; index < id.length; index += 1) {
+      const code = id.charCodeAt(index);
+      first = Math.imul(first ^ code, 0x01000193);
+      second = Math.imul(second ^ code, 0x85ebca6b);
+    }
+    first = Math.imul(first ^ 0xff, 0x01000193);
+    second = Math.imul(second ^ 0xff, 0xc2b2ae35);
+  }
+  return `${memberIds[0] ?? "empty"}:${memberIds.length}:${(first >>> 0).toString(36)}${(second >>> 0).toString(36)}`;
+}
+
 /**
  * Groups only near-identical screen positions. A fixed-size spatial hash keeps
  * the pass linear for dense anonymous fixtures; protected interaction targets
@@ -162,11 +181,13 @@ export function groupCanvasNodeStacks(
   let groupCount = 0;
   let hiddenCount = 0;
   for (const group of groups) {
+    const membershipToken = stackMembershipToken(group.memberIds);
     for (const id of group.memberIds) membership.set(id, group.id);
     if (group.memberIds.length < 2) {
       const id = group.memberIds[0];
       if (id) byNodeId.set(id, {
         groupId: null,
+        membershipToken,
         memberIds: group.memberIds,
         count: 1,
         hidden: false,
@@ -187,7 +208,10 @@ export function groupCanvasNodeStacks(
       if (hidden) hiddenCount += 1;
       byNodeId.set(id, {
         groupId: group.id,
-        memberIds: group.memberIds,
+        membershipToken,
+        // Only visible/protected leaders expose the member list to the badge.
+        // Hidden geometry proxies never scan or retain the full group array.
+        memberIds: hidden ? EMPTY_STACK_MEMBER_IDS : group.memberIds,
         count: group.memberIds.length,
         hidden,
         halo: id === haloId,

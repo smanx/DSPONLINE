@@ -34,14 +34,16 @@ describe("visible-density canvas presentation", () => {
   });
 
   it("groups exact stacks in one spatial pass and preserves protected interaction leaders", () => {
-    const nodes = Array.from({ length: 2_000 }, (_, index) => ({ id: `stack-${index}`, x: 100, y: 200 }));
+    const nodes = Array.from({ length: 4_213 }, (_, index) => ({ id: `stack-${index}`, x: 100, y: 200 }));
     const startedAt = performance.now();
     const grouped = groupCanvasNodeStacks(nodes, 1, new Set(["stack-1777"]));
     expect(performance.now() - startedAt).toBeLessThan(50);
     expect(grouped.groupCount).toBe(1);
-    expect(grouped.hiddenCount).toBe(1_999);
-    expect(grouped.byNodeId.get("stack-1777")).toMatchObject({ hidden: false, halo: true, count: 2_000 });
-    expect(grouped.byNodeId.get("stack-0")).toMatchObject({ hidden: true, halo: false, count: 2_000 });
+    expect(grouped.hiddenCount).toBe(4_212);
+    expect(grouped.byNodeId.get("stack-1777")).toMatchObject({ hidden: false, halo: true, count: 4_213 });
+    expect(grouped.byNodeId.get("stack-1777")?.memberIds).toHaveLength(4_213);
+    expect(grouped.byNodeId.get("stack-0")).toMatchObject({ hidden: true, halo: false, count: 4_213, memberIds: [] });
+    expect(grouped.byNodeId.get("stack-0")?.membershipToken).toBe(grouped.byNodeId.get("stack-1777")?.membershipToken);
   });
 
   it("aggregates alerts from hidden members onto the sole stack leader", () => {
