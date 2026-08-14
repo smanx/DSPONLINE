@@ -1,4 +1,4 @@
-import type { ContentPackRuntimeSnapshot } from "./contentPacks";
+import { validateContentPackRuntimeSnapshot, type ContentPackRuntimeSnapshot } from "./contentPacks";
 import type { MulticoreSimulationOptions } from "./multicoreSimulation";
 import type { SimulationRuntimeRecoveryBaseIdentity } from "./simulationRuntimeRecovery";
 import type {
@@ -33,6 +33,12 @@ function assertSafeNonnegative(value: number, label: string): void {
   if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${label} 无效`);
 }
 
+function validBaseIdentity(value: SimulationRuntimeRecoveryBaseIdentity): boolean {
+  return (value.mode === "normal" || value.mode === "speedrun") && Number.isFinite(value.savedAt) && value.savedAt >= 0 &&
+    typeof value.checksum === "string" && value.checksum.length > 0 && value.checksum.length <= 256 &&
+    Number.isSafeInteger(value.revision) && value.revision >= 0;
+}
+
 export function createSimulationRuntimeDurablePrimaryCheckpoint(input: {
   baseIdentity: SimulationRuntimeRecoveryBaseIdentity;
   sessionId: string;
@@ -41,7 +47,12 @@ export function createSimulationRuntimeDurablePrimaryCheckpoint(input: {
   committedAtMs: number;
 }): SimulationRuntimeDurablePrimaryCheckpoint {
   assertSafeNonnegative(input.stateRevision, "runtime recovery state revision");
-  if (!input.sessionId) throw new Error("runtime recovery session id 缺失");
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(input.sessionId)) throw new Error("runtime recovery session id 无效");
+  if (!validBaseIdentity(input.baseIdentity)) throw new Error("runtime recovery base identity 无效");
+  if (!validateContentPackRuntimeSnapshot(input.registry) || input.registry.fingerprint.length === 0) {
+    throw new Error("runtime recovery registry 无效");
+  }
+  if (!Number.isFinite(input.committedAtMs) || input.committedAtMs < 0) throw new Error("runtime recovery commit time 无效");
   return {
     schemaVersion: 1,
     sessionId: input.sessionId,
@@ -114,6 +125,8 @@ export function advanceSimulationRuntimeDurableAppHead(
     intent.sequence !== head.sequence + 1 || intent.baseStateRevision !== head.stateRevision ||
     proof.sessionId !== intent.sessionId || proof.generation !== intent.generation ||
     proof.sequence !== intent.sequence || proof.intentSha256 !== intent.intentSha256 ||
+    proof.checkpointSource !== "primary" || proof.primaryStateChecksum !== head.baseIdentity.checksum ||
+    proof.primaryRevision !== head.baseIdentity.revision ||
     proof.pending || !proof.finalized || proof.resultStateRevision === undefined ||
     proof.stateRevision !== proof.resultStateRevision) {
     throw new Error("runtime recovery finalize proof 与 staged intent 不匹配");

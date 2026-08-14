@@ -70,5 +70,21 @@ describe("simulation runtime durable App head", () => {
     };
     expect(advanceSimulationRuntimeDurableAppHead(head, intent, proof)).toMatchObject({ sequence: 1, stateRevision: 4 });
     expect(() => advanceSimulationRuntimeDurableAppHead(head, intent, { ...proof, resultStateRevision: 5 })).toThrow(/不匹配/);
+    expect(() => advanceSimulationRuntimeDurableAppHead(head, intent, {
+      ...proof,
+      primaryStateChecksum: "wrong-primary",
+    })).toThrow(/不匹配/);
+  });
+
+  it("rejects malformed primary, registry and session metadata before initialization", () => {
+    expect(() => createSimulationRuntimeDurablePrimaryCheckpoint({
+      baseIdentity: { ...baseIdentity, checksum: "" }, sessionId: "valid", stateRevision: 0, registry, committedAtMs: 0,
+    })).toThrow(/base identity/);
+    expect(() => createSimulationRuntimeDurablePrimaryCheckpoint({
+      baseIdentity, sessionId: "invalid session", stateRevision: 0, registry, committedAtMs: 0,
+    })).toThrow(/session id/);
+    expect(() => createSimulationRuntimeDurablePrimaryCheckpoint({
+      baseIdentity, sessionId: "valid", stateRevision: 0, registry: { ...registry, fingerprint: "" }, committedAtMs: 0,
+    })).toThrow(/registry/);
   });
 });
