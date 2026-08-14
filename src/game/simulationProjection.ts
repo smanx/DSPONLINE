@@ -58,6 +58,41 @@ const EXCLUDED_TOP_LEVEL_PROJECTION_KEYS = new Set<keyof GameState>([
 
 const DEFERRED_TOP_LEVEL_PROJECTION_KEYS = new Set<keyof GameState>(["productionHistory", "dysonPlans"]);
 
+/**
+ * Force-refresh only the large top-level fields used by statistics and Dyson
+ * workspaces. Entity/belt arrays stay authoritative in the Worker and are not
+ * cloned, serialized or published to the canvas for this barrier.
+ */
+export function createDeferredTopLevelSimulationProjection(current: GameState): SimulationProjection {
+  const totalProduced = Object.values(current.totalProduced ?? {}).reduce((sum, value) => sum + Math.max(0, Number(value) || 0), 0);
+  return {
+    protocolVersion: 2,
+    elapsedSeconds: current.elapsedSeconds,
+    activePlanetId: current.activePlanetId,
+    changedEntityIds: [],
+    changedBeltIds: [],
+    changedEntities: [],
+    changedBelts: [],
+    entityColumns: {},
+    beltColumns: {},
+    entityRemovedFields: {},
+    beltRemovedFields: {},
+    topLevel: {
+      productionHistory: current.productionHistory,
+      dysonPlans: current.dysonPlans,
+    },
+    removedEntityIds: [],
+    removedBeltIds: [],
+    topologyChangedEntityIds: [],
+    topologyChangedBeltIds: [],
+    requiresFullSnapshot: false,
+    entityCount: current.entities.length,
+    beltCount: current.belts.length,
+    inFlightRouteCount: 0,
+    totalProduced,
+  };
+}
+
 function isSimulationProjectionBaseline(value: GameState | SimulationProjectionBaseline): value is SimulationProjectionBaseline {
   return "kind" in value && value.kind === "simulation-projection-baseline";
 }

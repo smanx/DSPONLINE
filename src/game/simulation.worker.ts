@@ -4,7 +4,7 @@ import { applyContentPackRuntimeSnapshot, type ContentPackRuntimeSnapshot } from
 import { advancePersistentSimulationRuntime, advancePersistentSimulationRuntimeMulticore, createPersistentSimulationRuntime, createSimulationLookupContext, createSimulationProfiler, replacePersistentSimulationRuntimeState, type PersistentSimulationRuntime, type SimulationProfiler } from "./engine";
 import { BrowserMulticoreExecutor, planMulticoreSimulation, type MulticoreSimulationOptions } from "./multicoreSimulation";
 import type { GameState } from "./types";
-import { captureSimulationProjectionBaseline, createSimulationProjection, type SimulationProjection } from "./simulationProjection";
+import { captureSimulationProjectionBaseline, createDeferredTopLevelSimulationProjection, createSimulationProjection, type SimulationProjection } from "./simulationProjection";
 import { createSimulationStateDelta, shouldUseSimulationDelta, type SimulationStateDelta } from "./simulationDelta";
 import { runTimeWarpApproximateSettlement, type TimeWarpApproximationReport } from "./offlineApproximation";
 import {
@@ -17,7 +17,7 @@ import {
 
 export interface SimulationWorkerRequest {
   id: number;
-  kind?: "advance" | "checkpoint";
+  kind?: "advance" | "checkpoint" | "sync-projection";
   state?: GameState;
   /** One-time/bootstrap state; callers transfer the backing buffer. */
   stateTransfer?: SimulationStateTransfer;
@@ -184,6 +184,30 @@ async function processSimulationRequest(event: MessageEvent<SimulationWorkerRequ
       registryFingerprint: activeRegistryFingerprint ?? undefined,
       checkpoint,
     } satisfies SimulationWorkerResponse, [checkpoint.buffer]);
+    return;
+  }
+  if (event.data.kind === "sync-projection") {
+    const projection = createDeferredTopLevelSimulationProjection(runtime.state);
+    const response: SimulationWorkerResponse = {
+      id,
+      // This is a forced publication even when no simulation field changed.
+      // The UI mirror may intentionally hold stale deferred top-level data.
+      changed: true,
+      commandApplied,
+      durationMs: Math.max(0, performance.now() - receivedAt),
+      protocol: "projection",
+      stateRevision: runtimeRevision,
+      registryFingerprint: activeRegistryFingerprint ?? undefined,
+      projection,
+    };
+    if (profile) {
+      try {
+        response.transferBytes = new TextEncoder().encode(JSON.stringify(response)).byteLength;
+      } catch {
+        response.transferBytes = 0;
+      }
+    }
+    self.postMessage(response);
     return;
   }
   const startedAt = performance.now();

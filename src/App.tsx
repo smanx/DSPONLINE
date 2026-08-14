@@ -591,8 +591,8 @@ applyContentPackRegistry(INITIAL_CONTENT_PACK_REGISTRY);
 const SIDEBAR_PREFERENCE_KEY = "dsp-idle-network.sidebar-preferences.v1";
 const LINE_FIND_PREFERENCE_KEY = "dsp-idle-network.line-find-mode.v1";
 
-function WorkspaceLoading() {
-  return <div className="workspace-loading" role="status"><i /><span>正在载入工作区</span></div>;
+function WorkspaceLoading({ label = "正在载入工作区" }: { label?: string }) {
+  return <div className="workspace-loading" role="status"><i /><span>{label}</span></div>;
 }
 
 function parseHandleItem(handle: string | null | undefined): ItemId | null {
@@ -873,6 +873,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [autoLayoutUndo, setAutoLayoutUndo] = useState<AutoLayoutUndoSnapshot | null>(null);
   const [technologyOpen, setTechnologyOpen] = useState(false);
   const [statisticsOpen, setStatisticsOpen] = useState(false);
+  const [authorityWorkspaceSync, setAuthorityWorkspaceSync] = useState<"statistics" | "dyson" | null>(null);
   const [statisticsFocusTab, setStatisticsFocusTab] = useState<StatisticsTab | null>(null);
   const [recipesOpen, setRecipesOpen] = useState(false);
   const [starMapOpen, setStarMapOpen] = useState(false);
@@ -975,6 +976,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const [saveFailure, setSaveFailure] = useState<SaveGameResult | null>(null);
   const [runtimePersistenceProgress, setRuntimePersistenceProgress] = useState<RuntimePersistenceProgress | null>(null);
   const runtimePersistenceProgressIdRef = useRef(0);
+  const authorityWorkspaceSyncIdRef = useRef(0);
   const [eventHistory, setEventHistory] = useState<Array<{ id: number; text: string }>>([]);
   const [interactionBursts, setInteractionBursts] = useState<InteractionBurst[]>([]);
   const [ctrlHeld, setCtrlHeld] = useState(false);
@@ -1081,6 +1083,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   const simulationCheckpointBarrierRef = useRef(false);
   const simulationSaveBarrierDepthRef = useRef(0);
   const simulationCheckpointRequestRef = useRef<{
+    mode: "checkpoint" | "deferred-top-level";
     id: number | null;
     promise: Promise<GameState>;
     resolve: (state: GameState) => void;
@@ -1659,7 +1662,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     const registrySnapshot = contentPackRuntimeSnapshotRef.current;
     const request: SimulationWorkerRequest = {
       id: simulationRequestIdRef.current + 1,
-      kind: "checkpoint",
+      kind: pending.mode === "checkpoint" ? "checkpoint" : "sync-projection",
       ...(command ? { command } : {}),
       simulationSeconds: 0,
       wallSeconds: 0,
@@ -1685,7 +1688,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
 
   const requestAuthoritativeSimulationCheckpoint = useCallback((): Promise<GameState> => {
     const existing = simulationCheckpointRequestRef.current;
-    if (existing) return existing.promise;
+    if (existing) {
+      return existing.mode === "checkpoint"
+        ? existing.promise
+        : existing.promise.then(() => requestAuthoritativeSimulationCheckpoint());
+    }
     if ((!simulationWorkerRef.current || simulationWorkerDisabledRef.current || !lastSimulationResultRef.current) && !simulationRecoveryRef.current) {
       return Promise.resolve(stateWithSimulationDebt(gameRef.current));
     }
@@ -1697,6 +1704,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     });
     simulationCheckpointBarrierRef.current = true;
     simulationCheckpointRequestRef.current = {
+      mode: "checkpoint",
       id: null,
       promise,
       resolve,
@@ -1709,22 +1717,40 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     return promise;
   }, [stateWithSimulationDebt]);
 
+  const requestAuthoritativeDeferredTopLevelProjection = useCallback((): Promise<GameState> => {
+    const existing = simulationCheckpointRequestRef.current;
+    if (existing) {
+      return existing.mode === "deferred-top-level"
+        ? existing.promise
+        : existing.promise.then(() => requestAuthoritativeDeferredTopLevelProjection());
+    }
+    if ((!simulationWorkerRef.current || simulationWorkerDisabledRef.current || !lastSimulationResultRef.current) && !simulationRecoveryRef.current) {
+      return Promise.resolve(gameRef.current);
+    }
+    let resolve!: (state: GameState) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<GameState>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    simulationCheckpointBarrierRef.current = true;
+    simulationCheckpointRequestRef.current = {
+      mode: "deferred-top-level",
+      id: null,
+      promise,
+      resolve,
+      reject,
+      baseState: null,
+      state: null,
+      command: null,
+    };
+    queueMicrotask(() => dispatchSimulationCheckpointRef.current());
+    return promise;
+  }, []);
+
   const refreshAuthoritativeUiMirror = useCallback(async (): Promise<void> => {
-    const checkpointWithDebt = await requestAuthoritativeSimulationCheckpoint();
-    const authoritative = simulationWorkerRef.current && !simulationWorkerDisabledRef.current
-      ? latestAuthoritativeCheckpointRef.current
-      : checkpointWithDebt;
-    const confirmedView = lastSimulationResultRef.current ?? authoritative;
-    const current = gameRef.current;
-    const pending = current === confirmedView
-      ? null
-      : createSimulationCommandPatch(confirmedView, current, simulationStateRevisionRef.current);
-    const next = pending ? applySimulationCommandPatch(authoritative, pending) : authoritative;
-    lastSimulationResultRef.current = authoritative;
-    simulationProjectionIndexRef.current = createSimulationProjectionStateIndex(authoritative);
-    gameRef.current = next;
-    setGame(next);
-  }, [requestAuthoritativeSimulationCheckpoint]);
+    await requestAuthoritativeDeferredTopLevelProjection();
+  }, [requestAuthoritativeDeferredTopLevelProjection]);
 
   const dispatchSimulationRecovery = useCallback(() => {
     const recovery = simulationRecoveryRef.current;
@@ -2769,6 +2795,57 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     worker.onmessage = (event: MessageEvent<SimulationWorkerResponse>) => {
       const checkpointRequest = simulationCheckpointRequestRef.current;
       if (checkpointRequest?.id === event.data.id) {
+        if (checkpointRequest.mode === "deferred-top-level") {
+          if (event.data.needsRegistry || event.data.registryError || event.data.needsState || event.data.needsResync ||
+            !event.data.projection || typeof event.data.stateRevision !== "number") {
+            simulationCheckpointRequestRef.current = null;
+            simulationCheckpointBarrierRef.current = simulationSaveBarrierDepthRef.current > 0;
+            checkpointRequest.reject(new Error(event.data.registryError ?? "Worker 无法提供权威工作区投影，请重试"));
+            return;
+          }
+          try {
+            const projectionStartedAt = performance.now();
+            const confirmedBase = checkpointRequest.state ?? gameRef.current;
+            const applied = applySimulationProjectionToState(
+              confirmedBase,
+              event.data.projection,
+              simulationProjectionIndexRef.current,
+            );
+            simulationStateRevisionRef.current = event.data.stateRevision;
+            simulationWorkerRegistryFingerprintRef.current = event.data.registryFingerprint ?? simulationWorkerRegistryFingerprintRef.current;
+            simulationProjectionIndexRef.current = applied.index;
+            lastSimulationResultRef.current = applied.state;
+            if (checkpointRequest.command) {
+              simulationReplayJournalRef.current.push({
+                command: checkpointRequest.command,
+                simulationSeconds: 0,
+                wallSeconds: 0,
+                multicore: undefined,
+                approximate: false,
+                registry: contentPackRuntimeSnapshotRef.current,
+              });
+            }
+            const current = gameRef.current;
+            const pending = current === confirmedBase
+              ? null
+              : createSimulationCommandPatch(confirmedBase, current, event.data.stateRevision);
+            const next = pending ? applySimulationCommandPatch(applied.state, pending) : applied.state;
+            gameRef.current = next;
+            setGame(next);
+            simulationCheckpointRequestRef.current = null;
+            simulationCheckpointBarrierRef.current = simulationSaveBarrierDepthRef.current > 0;
+            recordRuntimeTransitionPhase("workspace-authority-projection-apply", projectionStartedAt, performance.now() - projectionStartedAt, {
+              historySamples: event.data.projection.topLevel.productionHistory?.length ?? 0,
+              responseBytes: event.data.transferBytes ?? 0,
+            });
+            checkpointRequest.resolve(next);
+          } catch (error) {
+            simulationCheckpointRequestRef.current = null;
+            simulationCheckpointBarrierRef.current = simulationSaveBarrierDepthRef.current > 0;
+            checkpointRequest.reject(error instanceof Error ? error : new Error("权威工作区投影应用失败"));
+          }
+          return;
+        }
         if (event.data.needsRegistry || event.data.registryError || event.data.needsState || !event.data.checkpoint || typeof event.data.stateRevision !== "number") {
           simulationCheckpointRequestRef.current = null;
           simulationCheckpointBarrierRef.current = simulationSaveBarrierDepthRef.current > 0;
@@ -4266,12 +4343,13 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
   }, []);
 
   const openCommandWorkspace = useCallback(async (workspace: CommandWorkspace) => {
+    const authoritySyncId = authorityWorkspaceSyncIdRef.current + 1;
+    authorityWorkspaceSyncIdRef.current = authoritySyncId;
+    const requiresAuthoritySync = workspace === "statistics" || workspace === "dyson";
     setCommandPaletteOpen(false);
-    if (workspace === "statistics" || workspace === "dyson") {
-      setNotice("正在同步完整实时数据…");
-      await refreshAuthoritativeUiMirror();
-    }
     closeAllWorkspaces();
+    setAuthorityWorkspaceSync(requiresAuthoritySync ? workspace : null);
+    if (requiresAuthoritySync) setNotice("正在从模拟 Worker 同步权威历史与戴森规划…");
     setMobilePanel(null);
     if (workspace === "inspector" || workspace === "resources") {
       const sheet = workspace === "resources" ? "inventory" : "inspector";
@@ -4315,6 +4393,22 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       setGalaxyOpen(true);
       if (nextMobileShell) mobileNavigation.replaceModalWithWorkspace("galaxy");
       else mobileNavigation.openWorkspace("galaxy");
+    }
+    if (requiresAuthoritySync) {
+      try {
+        await refreshAuthoritativeUiMirror();
+        if (authorityWorkspaceSyncIdRef.current === authoritySyncId) {
+          setAuthorityWorkspaceSync(null);
+          setNotice("权威历史与戴森规划已同步");
+        }
+      } catch (error) {
+        if (authorityWorkspaceSyncIdRef.current === authoritySyncId) {
+          setAuthorityWorkspaceSync(null);
+          if (workspace === "statistics") setStatisticsOpen(false);
+          else setDysonPlannerOpen(false);
+          setNotice(error instanceof Error ? `${error.message}；工作区未打开，请重试` : "权威工作区同步失败，请重试");
+        }
+      }
     }
   }, [closeAllWorkspaces, mobileNavigation.openSheet, mobileNavigation.openWorkspace, mobileNavigation.replaceModalWithSheet, mobileNavigation.replaceModalWithWorkspace, nextMobileShell, refreshAuthoritativeUiMirror]);
 
@@ -8655,7 +8749,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onLayoutChange={(technologyLayout) => updateSettings({ technologyLayout })}
           />
         ) : null}
-        {statisticsOpen ? <StatisticsWorkspace
+        {statisticsOpen ? (authorityWorkspaceSync === "statistics" ? <WorkspaceLoading label="正在同步权威生产历史…" /> : <StatisticsWorkspace
           open
           game={observedGame}
           contentPackRuntimeSnapshot={contentPackRuntimeSnapshotRef.current}
@@ -8728,7 +8822,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onRenameCanvasBookmark={(bookmarkId, name) => commitGame((current) => renameCanvasBookmark(current, bookmarkId, name))}
           onOpenCanvasBookmark={openCanvasBookmark}
           onRemoveCanvasBookmark={(bookmarkId) => commitGame((current) => removeCanvasBookmark(current, bookmarkId))}
-        /> : null}
+        />) : null}
         {recipesOpen ? <RecipeWorkspace open game={observedGame} mobile={nextMobileShell} mobileSubview={mobileWorkspaceSubview} onMobileOpenDetail={mobileNavigation.openWorkspaceSubview} onMobileReplaceDetail={(subview) => mobileNavigation.replaceWorkspaceSubview(subview)} focusItemId={campaignFocusItemId} onClose={() => nextMobileShell ? mobileNavigation.requestBack() : setRecipesOpen(false)} onFocus={onRecipeFocusChange} onLocateProductionLine={locateProductionLine} /> : null}
         {campaignOpen ? (
           <CampaignWorkspace
@@ -8777,7 +8871,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
           onSetOutput={(entityId, portIndex, itemId) => commitGame((current) => setElevatorOutputItem(current, entityId, portIndex, itemId, 2))}
           onSetModuleCount={(systemId, module, count) => commitGame((current) => setSystemSpaceStationModuleCount(current, systemId, module, count))}
         /> : null}
-        {dysonPlannerOpen ? (
+        {dysonPlannerOpen ? (authorityWorkspaceSync === "dyson" ? <WorkspaceLoading label="正在同步权威戴森规划…" /> : (
           <DysonPlannerWorkspace
             open
             game={observedGame}
@@ -8813,7 +8907,7 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
             onSwarmOrbitChange={(systemId, orbitId, changes) => setGame((current) => setDysonSwarmOrbit(current, systemId, orbitId, changes))}
             onRemoveSwarmOrbit={(systemId, orbitId) => setGame((current) => removeDysonSwarmOrbit(current, systemId, orbitId))}
           />
-        ) : null}
+        )) : null}
         {operationsOpen ? (
           <OperationsWorkspace
             open

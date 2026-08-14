@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createInitialState } from "./engine";
-import { applySimulationProjectionToState, captureSimulationProjectionBaseline, createSimulationProjection } from "./simulationProjection";
+import { applySimulationProjectionToState, captureSimulationProjectionBaseline, createDeferredTopLevelSimulationProjection, createSimulationProjection } from "./simulationProjection";
 
 describe("simulation projection", () => {
   it("reports only changed runtime ids while preserving aggregate counts", () => {
@@ -113,5 +113,29 @@ describe("simulation projection", () => {
     expect(defaultProjection.topLevel).not.toHaveProperty("dysonPlans");
     expect(workspaceProjection.topLevel.productionHistory).toEqual(current.productionHistory);
     expect(workspaceProjection.topLevel.dysonPlans?.helios.structurePoints).toBe(123);
+  });
+
+  it("force-refreshes deferred workspaces without publishing any entity or belt record", () => {
+    const stale = createInitialState();
+    const authoritative = structuredClone(stale);
+    authoritative.productionHistory = [{
+      elapsedSeconds: 33,
+      productionPerMinute: { iron_ore: 44 },
+      consumptionPerMinute: {},
+      inventory: {},
+      generationKw: 0,
+      demandKw: 0,
+    }];
+    authoritative.dysonPlans.helios.structurePoints = 987;
+    authoritative.entities[0].progress = 0.875;
+    const projection = createDeferredTopLevelSimulationProjection(authoritative);
+    expect(projection.changedEntities).toEqual([]);
+    expect(projection.changedBelts).toEqual([]);
+    expect(Object.keys(projection.topLevel).sort()).toEqual(["dysonPlans", "productionHistory"]);
+    const applied = applySimulationProjectionToState(stale, projection).state;
+    expect(applied.productionHistory).toEqual(authoritative.productionHistory);
+    expect(applied.dysonPlans).toEqual(authoritative.dysonPlans);
+    expect(applied.entities).toBe(stale.entities);
+    expect(applied.entities[0].progress).toBe(stale.entities[0].progress);
   });
 });

@@ -108,9 +108,9 @@ test("authoritative Worker uses projection-only steady responses and exact order
       dysonEdited,
       commandCheckpointResponse.stateRevision as number,
     )!;
-    const dysonCheckpointResponse = await request({
+    const dysonProjectionResponse = await request({
       id: 5,
-      kind: "checkpoint",
+      kind: "sync-projection",
       command: dysonCommand,
       simulationSeconds: 0,
       wallSeconds: 0,
@@ -118,12 +118,23 @@ test("authoritative Worker uses projection-only steady responses and exact order
       protocol: "projection",
       stateRevision: commandCheckpointResponse.stateRevision,
     });
+    const dysonProjection = dysonProjectionResponse.projection as import("../../src/game/simulationProjection").SimulationProjection;
+    const dysonProjected = projectionModule.applySimulationProjectionToState(commandedCheckpoint, dysonProjection).state;
+    const dysonCheckpointResponse = await request({
+      id: 6,
+      kind: "checkpoint",
+      simulationSeconds: 0,
+      wallSeconds: 0,
+      registryFingerprint: registry.fingerprint,
+      protocol: "projection",
+      stateRevision: dysonProjectionResponse.stateRevision,
+    });
     const dysonCheckpoint = protocol.deserializeSimulationStateTransfer(
       dysonCheckpointResponse.checkpoint as import("../../src/game/simulationRuntimeProtocol").SimulationStateTransfer,
     );
     const staleCommand = { ...dysonCommand, baseRevision: 0 };
     const rejected = await request({
-      id: 6,
+      id: 7,
       kind: "advance",
       command: staleCommand,
       simulationSeconds: 1,
@@ -155,6 +166,11 @@ test("authoritative Worker uses projection-only steady responses and exact order
       commandLocked: commandedCheckpoint.entities[0].interactionLocked,
       commandReducedMotion: commandedCheckpoint.settings.reducedMotion,
       dysonRevision: dysonCheckpointResponse.stateRevision as number,
+      dysonProjectionHasState: "state" in dysonProjectionResponse,
+      dysonProjectionHasCheckpoint: "checkpoint" in dysonProjectionResponse,
+      dysonProjectionEntityCount: dysonProjection.changedEntities.length,
+      dysonProjectionTopLevelKeys: Object.keys(dysonProjection.topLevel).sort(),
+      dysonProjectedLayerCount: dysonProjected.dysonPlans.helios.layers.length,
       dysonLayerCount: dysonCheckpoint.dysonPlans.helios.layers.length,
       dysonStructurePoints: dysonCheckpoint.dysonPlans.helios.structurePoints,
       dysonStructureConserved: Object.values(dysonCheckpoint.dysonPlans).reduce((sum, plan) => sum + plan.structurePoints, 0) === dysonCheckpoint.dysonSphere.structurePoints,
@@ -181,6 +197,11 @@ test("authoritative Worker uses projection-only steady responses and exact order
   expect(result.commandLocked).toBe(true);
   expect(result.commandReducedMotion).toBe(true);
   expect(result.dysonRevision).toBe(4);
+  expect(result.dysonProjectionHasState).toBe(false);
+  expect(result.dysonProjectionHasCheckpoint).toBe(false);
+  expect(result.dysonProjectionEntityCount).toBe(0);
+  expect(result.dysonProjectionTopLevelKeys).toEqual(["dysonPlans", "productionHistory"]);
+  expect(result.dysonProjectedLayerCount).toBe(1);
   expect(result.dysonLayerCount).toBe(1);
   expect(result.dysonStructurePoints).toBe(137);
   expect(result.dysonStructureConserved).toBe(true);
