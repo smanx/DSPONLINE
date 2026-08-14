@@ -200,10 +200,11 @@ export async function finalizeSimulationRuntimeStartupRecovery(input: {
     baseIdentity: t1Identity,
     sessionId: createStartupSessionId(),
     // T1 absorbs the replayed journal into its primary payload, but the
-    // monotonic runtime revision must not reset to 1. Keeping the replay
-    // result revision prevents stale commands from an already-replayed tab
-    // from being accepted after startup rebase.
-    stateRevision: input.candidate.replayedStateRevision,
+    // monotonic runtime revision must not reset after a non-empty replay.
+    // Revision zero is reserved for an unbootstrapped Worker: its first exact
+    // state install becomes revision one, so the durable head must start at
+    // that same boundary.
+    stateRevision: Math.max(1, input.candidate.replayedStateRevision),
     registry: input.registry,
     committedAtMs: t1Identity.savedAt,
   });
@@ -245,7 +246,7 @@ export async function initializeSimulationRuntimeAfterVerifiedPrimary(input: {
   const checkpoint = createSimulationRuntimeDurablePrimaryCheckpoint({
     baseIdentity: identity,
     sessionId: createStartupSessionId(),
-    stateRevision: 0,
+    stateRevision: 1,
     registry: input.registry,
     committedAtMs: identity.savedAt,
   });

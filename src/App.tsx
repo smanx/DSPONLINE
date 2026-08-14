@@ -3026,7 +3026,11 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       return next;
     });
     if (durableRecoveryLifecycleRef.current === "active" && gameRef.current.paused) {
-      queueMicrotask(() => dispatchDurablePausedCommandRef.current());
+      // React may defer the functional updater until after the current
+      // microtask checkpoint. A zero-delay task observes the committed
+      // gameRef; the previous microtask could see the old state and silently
+      // leave a paused edit outside the WAL.
+      window.setTimeout(() => dispatchDurablePausedCommandRef.current(), 0);
     }
   }, []);
 
@@ -8401,6 +8405,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
       data-mobile-performance={mobilePerformanceMode ? "true" : "false"}
       data-simulation-paused={game.paused ? "true" : "false"}
       data-simulation-worker={simulationWorkerActive ? "active" : "fallback"}
+      data-runtime-recovery={durableRecoveryLifecycleRef.current}
+      data-runtime-recovery-sequence={durableRecoveryHeadRef.current?.sequence ?? -1}
+      data-runtime-recovery-revision={durableRecoveryHeadRef.current?.stateRevision ?? -1}
       data-production-refresh={productionRefreshPreference}
       data-production-refresh-ms={productionRefreshIntervalMs}
       data-difficulty={game.settings.difficulty}
