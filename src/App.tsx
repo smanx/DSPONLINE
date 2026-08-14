@@ -2094,6 +2094,12 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     simulationCheckpointBarrierRef.current = true;
     try {
       const saveState = requestedState ?? await requestAuthoritativeSimulationCheckpoint();
+      // The checkpoint Worker may resolve after pagehide. Do not turn that
+      // late result into a new primary/IDB transaction; T0 remains the exact
+      // recovery source for the next boot.
+      if (lifecycleExitStartedRef.current) {
+        return { success: false, message: "页面正在退出，已保留 durable recovery 供下次精确恢复", code: "conflict" };
+      }
       setRuntimePersistenceProgress({ id: progressId, kind, phase: "serialize-write-readback", startedAt, message: "正在验证 T1 主存档并滚动 recovery…" });
       const result = await saveGameVerified(saveState);
       if (!result.success) {
@@ -2181,6 +2187,9 @@ export function FactoryGame({ initialLoad, onReturnToMenu, onOpenReleaseNotes }:
     }
     try {
       const saveState = state ?? await requestAuthoritativeSimulationCheckpoint();
+      if (lifecycleExitStartedRef.current) {
+        return { success: false, message: "页面正在退出，已保留当前恢复边界", code: "conflict" };
+      }
       recordRuntimeTransitionPhase("save-authoritative-checkpoint", startedAt, performance.now() - startedAt, { kind });
       setRuntimePersistenceProgress({ id: progressId, kind, phase: "serialize-write-readback", startedAt, message: "正在序列化、写入并逐字复核存档…" });
       recordRuntimeTransitionPhase("persistence-phase", performance.now(), 0, { kind, phase: "serialize-write-readback" });
