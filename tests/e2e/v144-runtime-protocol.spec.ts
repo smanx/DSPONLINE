@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { expect, test } from "@playwright/test";
 
 const LARGE_SAVE_FIXTURE = process.env.DSP_V144_LARGE_SAVE;
+const AUTHORITATIVE_LARGE_SAVE_SHA256 = "cd2356ea2b9a90a47cfa32ed9533e7056bfc4202f6af777fc4f3b98faa9a81b1";
 
 test("authoritative Worker uses projection-only steady responses and exact ordered checkpoints", async ({ page }) => {
   await page.goto("/");
@@ -482,7 +484,9 @@ test("real large save keeps running frames and steady Worker payloads bounded", 
   // Keep the attachment read-only while resetting only the envelope timestamp
   // in the in-memory browser fixture. This isolates realtime simulation from
   // the separate one-day offline-settlement path.
-  const sourceEnvelope = JSON.parse(readFileSync(LARGE_SAVE_FIXTURE!, "utf8")) as {
+  const sourceRaw = readFileSync(LARGE_SAVE_FIXTURE!, "utf8");
+  expect(createHash("sha256").update(sourceRaw).digest("hex")).toBe(AUTHORITATIVE_LARGE_SAVE_SHA256);
+  const sourceEnvelope = JSON.parse(sourceRaw) as {
     state?: { activePlanetId?: string; entities?: Array<{ planetId?: string }>; belts?: unknown[] };
     activePlanetId?: string;
     entities?: Array<{ planetId?: string }>;
@@ -493,6 +497,7 @@ test("real large save keeps running frames and steady Worker payloads bounded", 
   const expectedActiveEntityCount = sourceState.entities?.filter((entity) => entity.planetId === expectedActivePlanetId).length ?? 0;
   const expectedEntityCount = sourceState.entities?.length ?? 0;
   const expectedBeltCount = sourceState.belts?.length ?? 0;
+  expect(expectedActiveEntityCount).toBe(4_213);
   const raw = JSON.stringify({ savedAt: Date.now(), state: sourceState });
 
   await page.addInitScript(() => {
@@ -573,6 +578,9 @@ test("real large save keeps running frames and steady Worker payloads bounded", 
     };
   });
   console.info("V144_LARGE_STORAGE", JSON.stringify(storageProbe));
+  expect(storageProbe.backend).toBe("indexeddb");
+  expect(storageProbe.cachedBytes).toBeGreaterThan(30 * 1024 * 1024);
+  expect(storageProbe.persistedBytes).toBe(storageProbe.cachedBytes);
   await expect(shell).toHaveAttribute("data-active-planet-node-count", String(expectedActiveEntityCount));
   expect(expectedEntityCount).toBeGreaterThan(0);
   expect(expectedBeltCount).toBeGreaterThan(0);
